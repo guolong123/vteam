@@ -1,0 +1,17 @@
+# T17 learnings/文档收口 + M3 证据汇总 — QA 验证
+
+日期：2026-08-07
+
+## 场景：证据完整
+
+| 检查项 | 结果 |
+|--------|------|
+| `.omo/notepads/phase2-task-chat/learnings.md` 追加 Phase 3 总结（不覆盖，仅 append） | ✓ 追加「Phase 3 Agent 与产出物（M3 里程碑）— 收口总结」，原 Phase 2 内容保留 |
+| `.omo/evidence/phase3-m3-summary.md` 存在且内容完整 | ✓ 103 行 / 7.7 KB，含功能清单（§7.6 A 12/12 B 5/5 C 4/4）+ 测试结果 + 端到端场景 + 证据索引 |
+| 门禁复验：server jest 281 tests 全绿 | ✓ 22 suites / 281 passed（--no-cache --runInBand --silent） |
+| 前端四页文件存在 | ✓ agents/users/roles/artifacts page.tsx |
+| Dock 7 项含「角色权限」 | ✓ nav-dock.tsx NAV_ITEMS 含 roles |
+
+## 结论
+
+PASS — 证据文件完整，learnings 追加不覆盖，M3 汇总格式仿 phase2-m2-summary.md。
