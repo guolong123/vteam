@@ -10,6 +10,8 @@ import {
   STATIC_AVAILABLE_MODELS,
 } from '../common/constants/agent.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import { resyncIdPrefix } from '../common/id-resync';
+import { ModelsService } from '../models/models.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WorkerClient } from '../workers/worker.client';
 import { WorkersService } from '../workers/workers.service';
@@ -40,6 +42,7 @@ type AgentRow = {
   prompt: string;
   baseAgentId: string | null;
   defaultModelId: string | null;
+  workerId: string | null;
   permissionScope: Prisma.JsonValue | null;
   createdAt: Date;
   updatedAt: Date;
@@ -74,13 +77,22 @@ export class AgentsService implements OnModuleInit {
     private readonly idGen: IdGeneratorService,
     private readonly workersService: WorkersService,
     private readonly workerClient: WorkerClient,
+    private readonly modelsService: ModelsService,
   ) {}
 
-  /** 进程启动对齐 agent 域前缀序号（重启续号，对齐 tasks.seedPrefix 模式）。 */
+  /**
+   * 进程启动对齐 agent 域前缀序号（重启续号）。
+   * 只统计 a_<数字> 行的最大序号，忽略 a_architect/a_product 等命名 id
+   * （原 findFirst orderBy id desc 取到命名 id → parseInt NaN → seed 失败 → 创建撞主键）。
+   */
   async onModuleInit(): Promise<void> {
-    await this.seedPrefix(ID_PREFIX.agent, this.prisma.agent);
-    await this.seedPrefix(ID_PREFIX.agentSkill, this.prisma.agentSkill);
-    await this.seedPrefix(ID_PREFIX.agentToolEffect, this.prisma.agentToolEffect);
+    await resyncIdPrefix(this.prisma.agent, ID_PREFIX.agent, this.idGen);
+    await resyncIdPrefix(this.prisma.agentSkill, ID_PREFIX.agentSkill, this.idGen);
+    await resyncIdPrefix(
+      this.prisma.agentToolEffect,
+      ID_PREFIX.agentToolEffect,
+      this.idGen,
+    );
   }
 
   /**
@@ -224,6 +236,7 @@ export class AgentsService implements OnModuleInit {
           ...(dto.defaultModelId !== undefined
             ? { defaultModelId: dto.defaultModelId }
             : {}),
+          ...(dto.workerId !== undefined ? { workerId: dto.workerId } : {}),
           ...(dto.permissionScope !== undefined
             ? { permissionScope: dto.permissionScope as Prisma.InputJsonValue }
             : {}),
@@ -264,13 +277,18 @@ export class AgentsService implements OnModuleInit {
   }
 
   /**
-   * GET /agents/:id/available-models：模型列表（FR-47，T11 动态化）。
-   * 经 Scheduler.assignWorker 取一个可用 worker → WorkerClient.listModels 返回 opencode
-   * 真实模型（id=`providerID/modelID`，D7）；无 worker / 请求失败 / 空列表 → 降级
-   * STATIC_AVAILABLE_MODELS 并标记 `source: 'fallback'`（14 篇 §3.5：worker 离线或换节点
-   * 时列表随之变化，静态仅兜底）。
+   * GET /agents/:id/available-models：模型列表（FR-47，C3 目录化）。
+   * 三路径（Metis P1-2 优先级写死）：
+   *   1. 目录优先——models 表 enabled=true（无在线 worker 也可查）；
+   *   2. pull 兜底——目录为空且 worker 在线 → WorkerClient.listModels（T11 原逻辑）；
+   *   3. STATIC fallback——两者皆空 → STATIC_AVAILABLE_MODELS 并标记 source: 'fallback'。
+   * 正常路径返回纯数组 [{id, name}]（前端 agents/page.tsx:1565-1574 双形态兼容）。
    */
   async getAvailableModels(_id: string): Promise<AvailableModelsResult> {
+    const catalog = await this.modelsService.listCatalogModels();
+    if (catalog.length > 0) {
+      return catalog;
+    }
     try {
       const workerId = await this.workersService.assignWorker();
       if (!workerId) return this.fallbackModels();
@@ -297,6 +315,7 @@ export class AgentsService implements OnModuleInit {
       prompt: agent.prompt,
       baseAgentId: agent.baseAgentId,
       defaultModelId: agent.defaultModelId,
+      workerId: agent.workerId,
       permissionScope: agent.permissionScope,
       skillIds: agent.skills.map((s) => s.skillId),
       toolEffects: agent.toolEffects.map((t) => ({
@@ -463,22 +482,5 @@ export class AgentsService implements OnModuleInit {
     const ps = Number(pageSize ?? 20);
     if (!Number.isFinite(ps)) return 20;
     return Math.min(Math.max(Math.floor(ps), 1), 100);
-  }
-
-  /** 对齐某前缀的起始序号（重启续号，last.id 非零填充格式则跳过）。 */
-  private async seedPrefix(
-    prefix: string,
-    model: { findFirst: (args: object) => Promise<{ id: string } | null> },
-  ): Promise<void> {
-    const last = await model.findFirst({
-      orderBy: { id: 'desc' },
-      select: { id: true },
-    });
-    if (last) {
-      const seq = parseInt(last.id.slice(prefix.length + 1), 10);
-      if (Number.isFinite(seq)) {
-        this.idGen.seed(prefix, seq);
-      }
-    }
   }
 }

@@ -78,19 +78,33 @@ describe('SessionLifecycleService', () => {
 
   describe('onModuleInit（ti 续号，重启防主键冲突）', () => {
     it('重启对齐 TaskGroupInstance 最大序号 → seed(ti, seq)', async () => {
-      prisma.taskGroupInstance.findFirst.mockResolvedValue({ id: 'ti_0000000004' });
+      prisma.taskGroupInstance.findMany.mockResolvedValue([
+        { id: 'ti_0000000004' },
+      ]);
 
       await service.onModuleInit();
 
-      expect(prisma.taskGroupInstance.findFirst).toHaveBeenCalledWith({
-        orderBy: { id: 'desc' },
+      expect(prisma.taskGroupInstance.findMany).toHaveBeenCalledWith({
+        where: { id: { startsWith: 'ti_' } },
         select: { id: true },
       });
       expect(idGen.seed).toHaveBeenCalledWith('ti', 4);
     });
 
+    it('混入命名 id（非 ti_<数字>）时只统计数字序号（不 seed 到命名 id）', async () => {
+      prisma.taskGroupInstance.findMany.mockResolvedValue([
+        { id: 'ti_0000000001' },
+        { id: 'ti_builtin_x' },
+        { id: 'ti_0000000003' },
+      ]);
+
+      await service.onModuleInit();
+
+      expect(idGen.seed).toHaveBeenCalledWith('ti', 3);
+    });
+
     it('库空（无 ti 行）→ 不 seed', async () => {
-      prisma.taskGroupInstance.findFirst.mockResolvedValue(null);
+      prisma.taskGroupInstance.findMany.mockResolvedValue([]);
 
       await service.onModuleInit();
 
@@ -98,7 +112,9 @@ describe('SessionLifecycleService', () => {
     });
 
     it('id 非法（非 ti_<数字> 形状）→ 不 seed', async () => {
-      prisma.taskGroupInstance.findFirst.mockResolvedValue({ id: 'ti_builtin_x' });
+      prisma.taskGroupInstance.findMany.mockResolvedValue([
+        { id: 'ti_builtin_x' },
+      ]);
 
       await service.onModuleInit();
 

@@ -73,6 +73,50 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
     });
   });
 
+  it('C2：WorkerCapabilitiesDto 支持可选 models（真实模型 id 列表，whitelist 不剔除）', () => {
+    const dto = new RegisterWorkerDto();
+    dto.workerId = 'w_0000000005';
+    dto.opencodeVersion = '1.18.15';
+    dto.capabilities = {
+      maxInstances: 1,
+      skills: [],
+      tools: [],
+      models: ['opencode-go/deepseek-v4-flash', 'opencode/glm-5.1'],
+    };
+    dto.load = { instances: 0 };
+
+    const wire = JSON.parse(JSON.stringify(dto));
+    expect(wire.capabilities).toEqual({
+      maxInstances: 1,
+      skills: [],
+      tools: [],
+      models: ['opencode-go/deepseek-v4-flash', 'opencode/glm-5.1'],
+    });
+  });
+
+  it('C2：RegisterWorkerDto 支持可选 defaultModelId（配置 WORKER_DEFAULT_MODEL 上报）', () => {
+    const dto = new RegisterWorkerDto();
+    dto.workerId = 'w_0000000006';
+    dto.opencodeVersion = '1.18.15';
+    dto.capabilities = { maxInstances: 1, skills: [], tools: [] };
+    dto.load = { instances: 0 };
+    dto.defaultModelId = 'opencode-go/deepseek-v4-flash';
+
+    const wire = JSON.parse(JSON.stringify(dto));
+    expect(wire.defaultModelId).toBe('opencode-go/deepseek-v4-flash');
+  });
+
+  it('C2：RegisterWorkerDto 未设 defaultModelId 时序列化不丢键（兼容旧 worker）', () => {
+    const dto = new RegisterWorkerDto();
+    dto.workerId = 'w_0000000007';
+    dto.opencodeVersion = '1.18.15';
+    dto.capabilities = { maxInstances: 1, skills: [], tools: [] };
+    dto.load = { instances: 0 };
+
+    const wire = JSON.parse(JSON.stringify(dto));
+    expect(wire.defaultModelId).toBeUndefined();
+  });
+
   it('HeartbeatWorkerDto 序列化后字段完整（workerId/load/health）', () => {
     const dto = new HeartbeatWorkerDto();
     dto.workerId = 'w_0000000001';

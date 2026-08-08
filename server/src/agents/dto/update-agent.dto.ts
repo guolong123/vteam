@@ -7,6 +7,7 @@ import {
   IsString,
   Matches,
   MaxLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { ToolEffectDto } from './create-agent.dto';
@@ -66,4 +67,14 @@ export class UpdateAgentDto {
     message: 'defaultModelId 需为 provider/model 格式（如 opencode-go/deepseek-v4-flash）',
   })
   defaultModelId?: string;
+
+  @ApiPropertyOptional({
+    description: '首选 worker id（软绑定，可空 null=自动调度；C6）',
+    example: 'wkr_0000000001',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  @ValidateIf((o) => o.workerId !== null)
+  workerId?: string | null;
 }

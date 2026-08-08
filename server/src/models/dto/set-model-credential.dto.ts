@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsArray,
   IsOptional,
   IsString,
   Matches,
@@ -37,4 +38,16 @@ export class SetModelCredentialDto {
   @MinLength(1)
   @MaxLength(64)
   providerID?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'C5 凭据下发定向 worker 列表（可选）：空/缺省 = 全量广播到所有在线 worker；非空 = 仅下发到指定 worker（enqueueCommand 精确下发）',
+    example: ['w_0000000001'],
+    isArray: true,
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  targetWorkerIds?: string[];
 }

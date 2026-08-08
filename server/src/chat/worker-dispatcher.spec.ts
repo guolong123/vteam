@@ -518,6 +518,162 @@ describe('WorkerDispatcher', () => {
   });
 
   // ------------------------------------------------------------------
+  // C7 模型解析优先级链（Agent→模板 baseAgentId 链→worker 默认→null）
+  // ------------------------------------------------------------------
+
+  describe('C7 模型解析优先级链', () => {
+    beforeEach(() => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: null,
+        instanceRef: null,
+      });
+      workersService.assignWorker.mockResolvedValue('w_0000000001');
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        capabilities: { maxInstances: 1 },
+      });
+      prisma.artifact.findMany.mockResolvedValue([]);
+      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_0001' });
+    });
+
+    it('Agent 显式 defaultModelId：assignWorker 携带 modelId 过滤 + createSession 用拆分模型', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      // 阶段 1 解析非空 → assignWorker 按模型过滤
+      expect(workersService.assignWorker).toHaveBeenCalledWith({
+        modelId: 'opencode-go/deepseek-v4-flash',
+      });
+      // 阶段 2 最终模型 = Agent 显式模型
+      expect(workerClient.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_0000000001' }),
+        { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+      );
+    });
+
+    it('Agent 未配 → 沿 baseAgentId 链（多层 clone）取最近非空模板默认模型', async () => {
+      prisma.agent.findUnique
+        .mockResolvedValueOnce({
+          id: 'a_clone2',
+          defaultModelId: null,
+          baseAgentId: 'a_clone1',
+          type: 'clone',
+        })
+        .mockResolvedValueOnce({
+          id: 'a_clone1',
+          defaultModelId: null,
+          baseAgentId: 'a_product',
+          type: 'clone',
+        })
+        .mockResolvedValueOnce({
+          id: 'a_product',
+          defaultModelId: 'opencode/glm-5.1',
+          baseAgentId: null,
+          type: 'template',
+        });
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      expect(workersService.assignWorker).toHaveBeenCalledWith({
+        modelId: 'opencode/glm-5.1',
+      });
+      expect(workerClient.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_0000000001' }),
+        { providerID: 'opencode', modelID: 'glm-5.1' },
+      );
+    });
+
+    it('Agent/模板均未配 → 跳过过滤 + 用执行 worker 的 defaultModelId 兜底', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: null,
+        baseAgentId: null,
+        type: 'template',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        capabilities: { maxInstances: 1 },
+        defaultModelId: 'opencode/deepseek-v4-pro',
+      });
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      // 解析为 null → assignWorker 不过滤（无参调用，回归现状）
+      expect(workersService.assignWorker).toHaveBeenCalledWith({});
+      // 阶段 2 用 worker 默认模型
+      expect(workerClient.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_0000000001' }),
+        { providerID: 'opencode', modelID: 'deepseek-v4-pro' },
+      );
+    });
+
+    it('全链无模型 + worker 无默认 → 最终模型 null（不指定，serve 默认）', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: null,
+        baseAgentId: null,
+        type: 'template',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        capabilities: { maxInstances: 1 },
+        defaultModelId: null,
+      });
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      expect(workerClient.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_0000000001' }),
+        null,
+      );
+    });
+
+    it('回归：绑定 offline worker 重分配时 assignWorker 仍携带模型过滤', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: 'w_offline',
+        instanceRef: 'ses_stale',
+      });
+      prisma.worker.findUnique
+        .mockResolvedValueOnce({ id: 'w_offline', status: 'offline', capabilities: {} })
+        .mockResolvedValueOnce({
+          id: 'w_online',
+          status: 'online',
+          capabilities: {},
+          defaultModelId: null,
+        });
+      workersService.assignWorker.mockResolvedValue('w_online');
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_online' });
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      // 解绑重分配的 assignWorker 同样带 modelId 过滤
+      expect(workersService.assignWorker).toHaveBeenCalledTimes(1);
+      expect(workersService.assignWorker).toHaveBeenCalledWith({
+        modelId: 'opencode-go/deepseek-v4-flash',
+      });
+      expect(workerClient.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_online' }),
+        { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+      );
+    });
+  });
+
+  // ------------------------------------------------------------------
   // dispatch：doclib 上下文注入（12 篇 §8）
   // ------------------------------------------------------------------
 

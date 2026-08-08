@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   forwardRef,
   Inject,
   Injectable,
@@ -11,11 +12,15 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { MODEL_ERRORS } from '../models/models.constants';
+import { ModelsService } from '../models/models.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { CredentialCryptoService } from '../common/credential-crypto.service';
 import { McpServersService } from '../mcp-servers/mcp-servers.service';
 import { McpStatusEntryDto } from '../mcp-servers/dto/mcp-status.dto';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
+import { UpdateWorkerModelDto } from './dto/update-worker-model.dto';
 import {
   WORKER_ERRORS,
   WORKER_HEARTBEAT_INTERVAL_MS,
@@ -42,16 +47,47 @@ export interface AssignmentRequirement {
   opencodeVersion?: string;
   /** 需要的并发实例槽位（默认 1） */
   instances?: number;
+  /**
+   * C7：要求的模型 id（`providerID/modelID`，对齐 models 目录 id 格式；省略则不过滤）。
+   * 候选 worker 须满足：availability 含该 enabled 模型 或 defaultModelId 匹配；从未上报
+   * （availability 无行）降级不受过滤约束（过渡期兼容）。
+   */
+  modelId?: string;
 }
 
 /** 下行命令 type 枚举（T4a 命令通道；09 §3.9 预留 {command?}，pull 模型心跳携带）。 */
 export const WORKER_COMMAND_TYPES = {
   /** 资源（skills/tools/mcp 配置）变更：worker 重拉 + 注入 + 重启（T4b/T4c 执行） */
   RELOAD_CONFIG: 'reload-config',
+  /**
+   * C5：模型凭据下发——worker 写 auth.json（XDG_DATA_HOME 覆盖）注入 + 重启生效。
+   * 命令一次有效（心跳取出即清空）；token 只经下行命令明文传输，不落 worker 日志。
+   */
+  MODEL_CREDENTIALS: 'model-credentials',
 } as const;
 
 export type WorkerCommandType =
   (typeof WORKER_COMMAND_TYPES)[keyof typeof WORKER_COMMAND_TYPES];
+
+/**
+ * C5：模型凭据下发条目（provider → 明文 API key，server 解密后经下行命令下发）。
+ * token 仅存在于下行命令（心跳取出即清空，一次性），worker 侧只写入 auth.json。
+ */
+export interface ModelCredentialEntry {
+  providerID: string;
+  key: string;
+}
+
+/**
+ * C5：model-credentials 命令负载（对齐 worker ModelCredentialsPayload）。
+ * targetWorkerIds 空 = 全量（定向走 enqueueCommand、全量走 broadcastCommand，
+ * worker 侧仅消费 providerKeys，targetWorkerIds 为元数据）。
+ */
+export interface ModelCredentialsPayload {
+  providerKeys: ModelCredentialEntry[];
+  /** 定向 worker id 列表；空 = 全量下发 */
+  targetWorkerIds?: string[];
+}
 
 /**
  * 心跳响应携带的下行命令（T4a）。
@@ -62,6 +98,8 @@ export interface WorkerCommand {
   type: WorkerCommandType;
   /** 资源版本号：T1/T2 变更时递增，worker 侧据此判断是否需重拉注入 */
   resourceVersion: string;
+  /** C5：model-credentials 命令携带的凭据负载（仅该 type 携带；reload-config 等不携带） */
+  payload?: ModelCredentialsPayload;
 }
 
 /** 原生 setInterval 句柄（不引入 @nestjs/schedule 依赖，等价 @Interval 语义）。 */
@@ -94,6 +132,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     @Inject(forwardRef(() => McpServersService))
     private readonly mcpServers: McpServersService,
+    // C5：解密 ModelCredential.credentialRef 组装 providerKeys（AES-256-GCM，C4 导出）
+    private readonly credentialCrypto: CredentialCryptoService,
+    // C3：worker 注册上报 capabilities.models 合并入库（upsert 目录 + availability）
+    private readonly modelsService: ModelsService,
   ) {}
 
   /**
@@ -132,15 +174,49 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       opencodeVersion: dto.opencodeVersion,
       capabilities: dto.capabilities as unknown as Prisma.InputJsonValue,
       load: dto.load as unknown as Prisma.InputJsonValue,
+      // C2：worker 上报默认模型——仅显式提供时更新（旧 worker 不携带时保留已有值，不误清 C8/PATCH 配置）
+      ...(dto.defaultModelId !== undefined
+        ? { defaultModelId: dto.defaultModelId || null }
+        : {}),
       status: WORKER_STATUS.ONLINE,
       tokenHash,
       lastHeartbeatAt: now,
     };
+    // B1（F3 CRITICAL 修复）：凭据循环重启防护——upsert 前查原状态，判断本次是
+    // 首次注册（原不存在）还是已在线 reRegister（serve 重启触发）。仅前者或
+    // 原 offline（离线恢复）时回放凭据，见下方回放条件注释。
+    const existing = await this.prisma.worker.findUnique({
+      where: { id: dto.workerId },
+      select: { status: true },
+    });
     const worker = await this.prisma.worker.upsert({
       where: { id: dto.workerId },
       create: { id: dto.workerId, ...data },
       update: data,
     });
+    // C3（P2-1 集成验收）：worker 上报 capabilities.models 合并入库——拆解
+    // providerID/modelID upsert 目录 + upsert availability。降级（未上报
+    // undefined）→ sync 返回 0 不触碰；失败不阻断注册（warn 可观测）。
+    try {
+      await this.modelsService.syncFromWorkerCapabilities(
+        worker.id,
+        dto.capabilities?.models,
+      );
+    } catch (e) {
+      this.logger.warn(
+        `worker ${worker.id} 模型能力合并入库失败（不阻断注册）: ${e}`,
+      );
+    }
+    // C5（R5）：新 worker 注册/重注册后回放全部未吊销凭据——补凭据保存后新注册
+    // worker 缺凭据的缺口（worker 离线期间入队的命令会丢弃，注册即对齐）。
+    // B1（F3 CRITICAL）：仅首次注册（原不存在）或原 offline 时回放——已在线 worker
+    // 的 reRegister（serve 重启触发）不回放，切断凭据→重启→reRegister→再回放
+    // 无限循环（F3 实测每 ~10s 重启一次，27+ 次循环）。与心跳路径 offline→online
+    // 回放语义一致：凭据只在首次上线或离线恢复时下发一次。
+    // 回放失败（解密错/DB 错）不阻断注册，只打 warn 日志。
+    if (!existing || existing.status === WORKER_STATUS.OFFLINE) {
+      await this.replayModelCredentials(worker.id);
+    }
     return {
       workerId: worker.id,
       heartbeatIntervalMs: WORKER_HEARTBEAT_INTERVAL_MS,
@@ -158,7 +234,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
   async heartbeat(id: string, dto: HeartbeatWorkerDto, token?: string) {
     const worker = await this.prisma.worker.findUnique({
       where: { id },
-      select: { id: true, tokenHash: true },
+      select: { id: true, tokenHash: true, status: true },
     });
     if (!worker) {
       throw new NotFoundException({
@@ -194,6 +270,13 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         lastHeartbeatAt,
       },
     });
+    // C5（R5）：worker 从 offline 恢复上线 → 回放未吊销凭据——补离线期间保存的
+    // 凭据（broadcastCommand 只覆盖在线 worker，离线 worker 恢复心跳时此处对齐）。
+    // 一直在线的心跳不重复回放（已下发过且 worker 侧幂等覆盖，避免每 10s 重启 serve）。
+    // 新状态 status 只可能为 online/degraded（永不等于 offline），仅需判断旧状态。
+    if (worker.status === WORKER_STATUS.OFFLINE) {
+      await this.replayModelCredentials(id);
+    }
     const commands = this.pendingCommands.get(id) ?? [];
     if (commands.length > 0) {
       this.pendingCommands.delete(id);
@@ -233,6 +316,68 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       this.enqueueCommand(worker.id, command);
     }
     return online.length;
+  }
+
+  /**
+   * C5：模型凭据下发（唯一化分发入口）。
+   * - targetWorkerIds 非空 → 定向：enqueueCommand 逐个精确下发（精确 workerId 语义）；
+   * - 空 → 全量：broadcastCommand 原样广播（不改 broadcastCommand 签名，空=全量无需过滤）。
+   * 返回下发目标 worker 数（定向=targetWorkerIds.length，全量=在线 worker 数）。
+   * token 只经下行命令明文传输（心跳取出即清空），不落本服务日志。
+   */
+  async dispatchModelCredentials(
+    providerKeys: ModelCredentialEntry[],
+    targetWorkerIds?: string[],
+  ): Promise<number> {
+    const command: WorkerCommand = {
+      type: WORKER_COMMAND_TYPES.MODEL_CREDENTIALS,
+      resourceVersion: 'model-credentials',
+      payload: {
+        providerKeys,
+        ...(targetWorkerIds && targetWorkerIds.length > 0 ? { targetWorkerIds } : {}),
+      },
+    };
+    if (targetWorkerIds && targetWorkerIds.length > 0) {
+      for (const id of targetWorkerIds) {
+        this.enqueueCommand(id, command);
+      }
+      return targetWorkerIds.length;
+    }
+    return this.broadcastCommand(command);
+  }
+
+  /**
+   * C5（R5）：回放全部未吊销凭据到指定 worker（注册/重注册后调用）。
+   * 查 ModelCredential revokedAt=null 行 → decrypt credentialRef 组装 providerKeys →
+   * enqueueCommand 下发（该 worker 下一次心跳携带并清空）。
+   * 无未吊销凭据 → 静默跳过；解密/查询失败 → warn 不阻断（worker 仍可注册成功）。
+   */
+  private async replayModelCredentials(workerId: string): Promise<void> {
+    try {
+      const active = await this.prisma.modelCredential.findMany({
+        where: { revokedAt: null },
+        select: { providerID: true, credentialRef: true },
+      });
+      if (active.length === 0) {
+        return;
+      }
+      const providerKeys = active.map((row) => ({
+        providerID: row.providerID,
+        key: this.credentialCrypto.decrypt(row.credentialRef),
+      }));
+      this.enqueueCommand(workerId, {
+        type: WORKER_COMMAND_TYPES.MODEL_CREDENTIALS,
+        resourceVersion: 'model-credentials',
+        payload: { providerKeys },
+      });
+      this.logger.log(
+        `模型凭据回放：worker=${workerId} providerKeys=${providerKeys.map((k) => k.providerID).join(', ')}`,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `模型凭据回放失败（不阻断注册）: worker=${workerId} ${(err as Error).message}`,
+      );
+    }
   }
 
   /**
@@ -282,6 +427,11 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     const need = Math.max(1, req.instances ?? 1);
     const candidates = await this.prisma.worker.findMany({
       where: { status: { not: WORKER_STATUS.OFFLINE } },
+      // C7：附带模型可用性（modelAvailabilities → 每个 enabled 模型），供 modelId 过滤；
+      // availability 无行（该 worker 从未上报）→ 降级不受过滤约束。
+      include: {
+        modelAvailabilities: { include: { model: { select: { enabled: true } } } },
+      },
     });
     const ranked = candidates
       .map((w) => ({ worker: w, capacity: this.remainingCapacity(w) }))
@@ -293,6 +443,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
           !req.opencodeVersion ||
           x.worker.opencodeVersion === req.opencodeVersion,
       )
+      .filter((x) => this.matchesModelRequirement(x.worker, req.modelId))
       .sort((a, b) => {
         const aOnline = a.worker.status === WORKER_STATUS.ONLINE ? 1 : 0;
         const bOnline = b.worker.status === WORKER_STATUS.ONLINE ? 1 : 0;
@@ -300,6 +451,36 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         return b.capacity - a.capacity;
       });
     return ranked[0]?.worker.id ?? null;
+  }
+
+  /**
+   * C7：worker 是否满足模型过滤（assignWorker 候选筛选）。
+   * - modelId 省略/空 → 不过滤（回归现状：未配模型 agent 可调度任意 worker）
+   * - worker.defaultModelId === modelId → 通过（默认模型匹配）
+   * - availability 无行（该 worker 从未上报模型能力）→ 通过（过渡期兼容降级）
+   * - 已上报但 availability 不含该 enabled 模型 → 排除
+   */
+  private matchesModelRequirement(
+    worker: {
+      defaultModelId: string | null;
+      modelAvailabilities?: Array<{
+        modelId: string;
+        model?: { enabled: boolean };
+      }>;
+    },
+    modelId: string | undefined,
+  ): boolean {
+    if (!modelId) {
+      return true;
+    }
+    if (worker.defaultModelId === modelId) {
+      return true;
+    }
+    const avail = worker.modelAvailabilities ?? [];
+    if (avail.length === 0) {
+      return true;
+    }
+    return avail.some((a) => a.modelId === modelId && a.model?.enabled !== false);
   }
 
   /** GET /workers：worker 列表（不含 tokenHash——敏感字段只存库不返回）。 */
@@ -320,6 +501,45 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       });
     }
     return this.toWorkerView(worker);
+  }
+
+  /**
+   * C8：PATCH /workers/:id 配置/清除 worker 默认模型（管理员显式配置通道，
+   * 区别于 C2 register 只显式上报才更新——本端点是确定性的覆写语义）。
+   * - worker 不存在 → 404 WORKER_NOT_FOUND；
+   * - defaultModelId 非空须存在于 models 目录且 enabled=true（findCatalogByRef 查
+   *   providerID/modelID @@unique，defaultModelId 即该格式）→ 否则 400 MODEL_NOT_FOUND；
+   * - null/缺省 → 清除/幂等跳过；返回更新后的 WorkerView（含 defaultModelId）。
+   */
+  async updateDefaultModel(id: string, dto: UpdateWorkerModelDto) {
+    const existing = await this.prisma.worker.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new NotFoundException({
+        code: WORKER_ERRORS.WORKER_NOT_FOUND,
+        message: `Worker ${id} 不存在`,
+      });
+    }
+    const { defaultModelId } = dto;
+    if (defaultModelId !== null && defaultModelId !== undefined && defaultModelId !== '') {
+      const catalog = await this.modelsService.findCatalogByRef(defaultModelId);
+      if (!catalog || catalog.enabled === false) {
+        throw new BadRequestException({
+          code: MODEL_ERRORS.MODEL_NOT_FOUND,
+          message: `默认模型 ${defaultModelId} 不存在于可用模型目录（或已停用）`,
+        });
+      }
+    }
+    const row = await this.prisma.worker.update({
+      where: { id },
+      data:
+        defaultModelId === undefined
+          ? {}
+          : { defaultModelId: defaultModelId || null },
+    });
+    return this.toWorkerView(row);
   }
 
   // ---- LifecycleManager 骨架（T10 WorkerDispatcher 接入 WorkerClient 后实现，本任务不接 T8） ----
@@ -372,6 +592,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     status: string;
     lastHeartbeatAt: Date | null;
     registeredAt: Date;
+    defaultModelId: string | null;
   }) {
     return {
       id: worker.id,
@@ -382,6 +603,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       status: worker.status,
       lastHeartbeatAt: worker.lastHeartbeatAt,
       registeredAt: worker.registeredAt,
+      defaultModelId: worker.defaultModelId,
       mcpStatus: this.workerMcpStatus.get(worker.id) ?? [],
     };
   }

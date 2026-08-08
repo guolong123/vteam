@@ -1,7 +1,9 @@
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
+import { PrismaService } from '../prisma/prisma.service';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
+import { UpdateWorkerModelDto } from './dto/update-worker-model.dto';
 import { WorkerTokenRequest } from './worker-token.guard';
 import { WorkersController } from './workers.controller';
 import { WorkersService } from './workers.service';
@@ -13,6 +15,7 @@ describe('WorkersController', () => {
     heartbeat: jest.Mock;
     findAll: jest.Mock;
     findOne: jest.Mock;
+    updateDefaultModel: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -21,6 +24,7 @@ describe('WorkersController', () => {
       heartbeat: jest.fn(),
       findAll: jest.fn(),
       findOne: jest.fn(),
+      updateDefaultModel: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -29,6 +33,8 @@ describe('WorkersController', () => {
         { provide: WorkersService, useValue: service },
         // 控制器方法级 @UseGuards(WorkerTokenGuard) 会在 compile 时实例化 guard
         { provide: ConfigService, useValue: { get: jest.fn() } },
+        // 方法级 @UseGuards(AdminGuard) 依赖 PrismaService（compile 时实例化 guard）
+        { provide: PrismaService, useValue: { user: { findUnique: jest.fn() } } },
       ],
     }).compile();
 
@@ -86,5 +92,29 @@ describe('WorkersController', () => {
 
     expect(await controller.findOne('w_0000000001')).toBe(detail);
     expect(service.findOne).toHaveBeenCalledWith('w_0000000001');
+  });
+
+  it('C8：PATCH /workers/:id 转发 updateDefaultModel（DTO 透传，AdminGuard 保护）', async () => {
+    const dto: UpdateWorkerModelDto = { defaultModelId: 'opencode-go/deepseek-v4-flash' };
+    const view = {
+      id: 'w_0000000001',
+      status: 'online',
+      defaultModelId: 'opencode-go/deepseek-v4-flash',
+    };
+    service.updateDefaultModel.mockResolvedValue(view);
+
+    const result = await controller.updateDefaultModel('w_0000000001', dto);
+
+    expect(service.updateDefaultModel).toHaveBeenCalledWith('w_0000000001', dto);
+    expect(result).toEqual(view);
+  });
+
+  it('C8：PATCH /workers/:id 支持 null（清除默认模型）', async () => {
+    const dto: UpdateWorkerModelDto = { defaultModelId: null };
+    service.updateDefaultModel.mockResolvedValue({ id: 'w_0000000001', defaultModelId: null });
+
+    await controller.updateDefaultModel('w_0000000001', dto);
+
+    expect(service.updateDefaultModel).toHaveBeenCalledWith('w_0000000001', { defaultModelId: null });
   });
 });

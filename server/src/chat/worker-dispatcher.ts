@@ -22,7 +22,7 @@ import { WORKER_STATUS } from '../workers/workers.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import { WorkerClient, WorkerEndpointRef, WorkerUnavailableException } from '../workers/worker.client';
 import { AgentStatusPayload, TaskCompletedPayload, WorkerEventIngress } from '../workers/worker-event.ingress';
-import { WorkersService } from '../workers/workers.service';
+import { AssignmentRequirement, WorkersService } from '../workers/workers.service';
 import { DispatchRequest, DispatchResult, MessageDispatcher } from './message-dispatcher';
 
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
@@ -30,6 +30,9 @@ const MESSAGE_ID_PREFIX = 'm';
 
 /** 首次 bind 的 instanceRef 占位（opencode 会话尚未创建；第二次 bind 写入真实 sessionId）。 */
 export const PENDING_INSTANCE_REF = 'pending';
+
+/** C7：baseAgentId 链向上遍历的最大深度（防御异常链/环导致的无限查询）。 */
+const MAX_BASE_AGENT_CHAIN_DEPTH = 20;
 
 /** 单文档正文截断上限（12 篇 §8.1：默认 32KB/文档，超出以摘要替代——本版直接截断）。 */
 export const DEFAULT_DOCLIB_MAX_BYTES = 32 * 1024;
@@ -391,9 +394,17 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         ? session.instanceRef
         : null;
 
+    // C7：模型解析优先级链（阶段 1，Agent→模板）。解析结果非空 → 作为 assignWorker 的
+    // modelId 过滤条件；为空（Agent/模板均未配模型）→ 跳过模型过滤（回归现状），
+    // 等 worker 选定后再用 worker.defaultModelId 兜底（阶段 2）。
+    const agentModelId = await this.resolveAgentModelId(target.agentId);
+    const assignmentReq: AssignmentRequirement = agentModelId
+      ? { modelId: agentModelId }
+      : {};
+
     if (!workerId || hasStalePending) {
       // 未绑定：调度分配 worker（D3 无可用 → 抛错，调用方报错不降级 mock）
-      workerId = await this.workersService.assignWorker();
+      workerId = await this.workersService.assignWorker(assignmentReq);
       if (!workerId) {
         throw new Error('无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）');
       }
@@ -405,13 +416,14 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       );
     }
 
-    // 2. Worker 行（capabilities 供 WorkerClient 解析 baseUrl/port；顺带校验复用 worker 在线性）。
+    // 2. Worker 行（capabilities 供 WorkerClient 解析 baseUrl/port；defaultModelId 供 C7
+    // 模型解析阶段 2 兜底；顺带校验复用 worker 在线性）。
     // 修复验收 e2e 缺陷：复用已绑定 worker 不校验在线 → offline worker 被复用 → fetch failed 首字超时。
     // offline（心跳超时标记）或行缺失 → 解绑 + 重新分配；未绑定分支 assignWorker 已过滤 offline，
     // 此检查只命中"复用已绑定"场景（复用语义保留：在线 worker 直接复用，见单测回归用例）。
     let workerRow = await this.prisma.worker.findUnique({
       where: { id: workerId },
-      select: { id: true, status: true, capabilities: true },
+      select: { id: true, status: true, capabilities: true, defaultModelId: true },
     });
     if (!workerRow || workerRow.status === WORKER_STATUS.OFFLINE) {
       const staleWorkerId = workerId;
@@ -420,13 +432,13 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
           `${workerRow ? '（offline）' : '（不存在）'}，解绑并重新分配 worker`,
       );
       await this.sessionLifecycle.unbindSession(target.sessionId);
-      workerId = await this.workersService.assignWorker();
+      workerId = await this.workersService.assignWorker(assignmentReq);
       if (!workerId) {
         throw new Error('无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）');
       }
       workerRow = await this.prisma.worker.findUnique({
         where: { id: workerId },
-        select: { id: true, status: true, capabilities: true },
+        select: { id: true, status: true, capabilities: true, defaultModelId: true },
       });
       if (!workerRow) {
         throw new Error(`worker ${workerId} 不存在`);
@@ -443,12 +455,9 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       capabilities: workerRow.capabilities,
     };
 
-    // 3. Agent 模型（defaultModelId `provider/model` → {providerID, modelID}；缺省不指定模型）
-    const agent = await this.prisma.agent.findUnique({
-      where: { id: target.agentId },
-      select: { id: true, defaultModelId: true },
-    });
-    const model = this.toModelSelection(agent?.defaultModelId);
+    // 3. C7 模型解析（阶段 2）：最终模型 = Agent/模板解析结果 ?? 执行 worker 默认模型 ?? null。
+    // `provider/model` → {providerID, modelID}；null 不指定模型（serve 默认）。
+    const model = this.toModelSelection(agentModelId ?? workerRow.defaultModelId ?? null);
 
     // 4. doclib 上下文注入（12 篇 §8：产出物清单 + 最新版本正文，32KB 截断；注入到 prompt 前）
     const doclib = await this.buildDoclibContext(taskId);
@@ -905,6 +914,33 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       where: { taskId, type: CHANNEL_TYPE.task_group },
       select: { id: true },
     });
+  }
+
+  /**
+   * C7：模型解析优先级链（阶段 1，Agent→模板）：Agent.defaultModelId 显式非空直接用；
+   * 否则沿 baseAgentId 链向上取最近非空 defaultModelId（模板默认；链可多层 clone of clone，
+   * 取自 type=template 祖先或任意非空 defaultModelId 祖先，seed 已预置模板模型）。
+   * 全链无配置 → null（不指定模型，由 worker 默认/serve 默认兜底）。
+   */
+  private async resolveAgentModelId(agentId: string): Promise<string | null> {
+    let currentId: string | null = agentId;
+    for (let depth = 0; currentId && depth < MAX_BASE_AGENT_CHAIN_DEPTH; depth++) {
+      const row = await this.prisma.agent.findUnique({
+        where: { id: currentId },
+        select: { id: true, defaultModelId: true, baseAgentId: true, type: true },
+      });
+      if (!row) {
+        return null;
+      }
+      if (row.defaultModelId) {
+        return row.defaultModelId;
+      }
+      if (!row.baseAgentId || row.type === 'template') {
+        return null;
+      }
+      currentId = row.baseAgentId;
+    }
+    return null;
   }
 
   /** Agent.defaultModelId（`provider/model`）→ opencode serve 模型选择；缺省/非法 → null。 */

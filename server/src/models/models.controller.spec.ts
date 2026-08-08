@@ -4,9 +4,14 @@ import { SetModelCredentialDto } from './dto/set-model-credential.dto';
 import { ModelsController } from './models.controller';
 import { ModelsService } from './models.service';
 
-describe('ModelsController（模型凭据端点）', () => {
+describe('ModelsController（目录 CRUD + 凭据端点）', () => {
   let controller: ModelsController;
   let service: {
+    findAll: jest.Mock;
+    findOne: jest.Mock;
+    create: jest.Mock;
+    update: jest.Mock;
+    remove: jest.Mock;
     setCredential: jest.Mock;
     getCredential: jest.Mock;
     revokeCredential: jest.Mock;
@@ -21,8 +26,23 @@ describe('ModelsController（模型凭据端点）', () => {
     createdAt: new Date('2026-08-08T00:00:00Z'),
   };
 
+  const modelRow = {
+    id: 'md_0000000001',
+    providerID: 'opencode-go',
+    modelID: 'deepseek-v4-flash',
+    name: 'DeepSeek V4 Flash',
+    enabled: true,
+    createdAt: new Date('2026-08-08T00:00:00Z'),
+    updatedAt: new Date('2026-08-08T00:00:00Z'),
+  };
+
   beforeEach(async () => {
     service = {
+      findAll: jest.fn(),
+      findOne: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      remove: jest.fn(),
       setCredential: jest.fn(),
       getCredential: jest.fn(),
       revokeCredential: jest.fn(),
@@ -41,6 +61,53 @@ describe('ModelsController（模型凭据端点）', () => {
     controller = module.get<ModelsController>(ModelsController);
   });
 
+  it('GET /models 转发 findAll（查询参数透传）', async () => {
+    service.findAll.mockResolvedValue({ items: [modelRow], total: 1, page: 1, pageSize: 20 });
+    const query = { enabled: true, name: 'deep' };
+
+    const result = await controller.findAll(query);
+
+    expect(service.findAll).toHaveBeenCalledWith(query);
+    expect(result).toMatchObject({ total: 1, items: [modelRow] });
+  });
+
+  it('GET /models/:id 转发 findOne', async () => {
+    service.findOne.mockResolvedValue(modelRow);
+
+    const result = await controller.findOne('md_0000000001');
+
+    expect(service.findOne).toHaveBeenCalledWith('md_0000000001');
+    expect(result).toEqual(modelRow);
+  });
+
+  it('POST /models 转发 create（DTO 透传）', async () => {
+    const dto = { providerID: 'opencode-go', modelID: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' };
+    service.create.mockResolvedValue(modelRow);
+
+    const result = await controller.create(dto);
+
+    expect(service.create).toHaveBeenCalledWith(dto);
+    expect(result).toEqual(modelRow);
+  });
+
+  it('PATCH /models/:id 转发 update', async () => {
+    const dto = { enabled: false };
+    service.update.mockResolvedValue({ ...modelRow, enabled: false });
+
+    const result = await controller.update('md_0000000001', dto);
+
+    expect(service.update).toHaveBeenCalledWith('md_0000000001', dto);
+    expect(result).toMatchObject({ enabled: false });
+  });
+
+  it('DELETE /models/:id 转发 remove', async () => {
+    service.remove.mockResolvedValue(undefined);
+
+    await controller.remove('md_0000000001');
+
+    expect(service.remove).toHaveBeenCalledWith('md_0000000001');
+  });
+
   it('POST /models/:id/credentials 转发 setCredential（token + providerID 传服务层加密）', async () => {
     const dto: SetModelCredentialDto = { token: 'sk-raw-token', providerID: 'opencode-go' };
     service.setCredential.mockResolvedValue(view);
@@ -51,6 +118,7 @@ describe('ModelsController（模型凭据端点）', () => {
       'md_0000000001',
       'sk-raw-token',
       'opencode-go',
+      undefined,
     );
     expect(result).toMatchObject({ configured: true, fingerprint: 'sk-a****89xz' });
     expect(JSON.stringify(result)).not.toContain('sk-raw-token');
@@ -65,6 +133,38 @@ describe('ModelsController（模型凭据端点）', () => {
     expect(service.setCredential).toHaveBeenCalledWith(
       'md_0000000001',
       'sk-raw-token',
+      undefined,
+      undefined,
+    );
+  });
+
+  it('C5：targetWorkerIds 透传服务层（定向下发）', async () => {
+    const dto: SetModelCredentialDto = {
+      token: 'sk-raw-token',
+      targetWorkerIds: ['w_0000000001'],
+    };
+    service.setCredential.mockResolvedValue(view);
+
+    await controller.setCredential('md_0000000001', dto);
+
+    expect(service.setCredential).toHaveBeenCalledWith(
+      'md_0000000001',
+      'sk-raw-token',
+      undefined,
+      ['w_0000000001'],
+    );
+  });
+
+  it('C5：targetWorkerIds 缺省时不携带（undefined → 全量下发）', async () => {
+    const dto: SetModelCredentialDto = { token: 'sk-raw-token' };
+    service.setCredential.mockResolvedValue(view);
+
+    await controller.setCredential('md_0000000001', dto);
+
+    expect(service.setCredential).toHaveBeenCalledWith(
+      'md_0000000001',
+      'sk-raw-token',
+      undefined,
       undefined,
     );
   });

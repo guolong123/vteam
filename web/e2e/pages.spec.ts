@@ -2,15 +2,15 @@ import { test, expect } from "@playwright/test";
 import { NAV_SHELL_TESTIDS, PAGE_SMOKE } from "./reference/testids";
 
 /**
- * 17 页 data-testid 断言（Phase 5 T9）
+ * 18 页 data-testid 断言（Phase 5 T9 + C6）
  * =============================================
- * - 覆盖 14 个实际路由（login 独立 spec；nav-cmdk/nav-hybrid/nav-rail 三变体
+ * - 覆盖 15 个实际路由（login 独立 spec；nav-cmdk/nav-hybrid/nav-rail 三变体
  *   由 AppShell 融合导航承载，每页断言 NAV_SHELL_TESTIDS 核心元素即覆盖其终态）
  * - 每页断言：root + 代表性 3-5 testid（PAGE_SMOKE）+ 数据行存在性（seed 数据事实）
  * - 条件渲染区块（skills 工具 Tab / tool-register 执行形态）按可达性分态断言
  * - 登录态：storageState（auth.setup.ts 真实表单登录 seed-admin）
  */
-test.describe("17 页 testid 断言（seed-admin 登录态）", () => {
+test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
   /** 融合导航核心元素（nav-hybrid 终态心智：NavTopBar + NavDock + CmdKPanel） */
   const NAV_CORE = ["app-shell", "rail-bar", "topbar", "cmdk-trigger"];
 
@@ -199,7 +199,7 @@ test.describe("17 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("install-command")).toContainText("docker run");
   });
 
-  test("17/17 worker-list /workers（列表 + 注册指引）", async ({ page }) => {
+  test("17/18 worker-list /workers（列表 + 注册指引）", async ({ page }) => {
     await page.goto("/workers");
     await expectNavShell(page);
     await expect(page.getByTestId("worker-list-root")).toBeVisible();
@@ -212,5 +212,19 @@ test.describe("17 页 testid 断言（seed-admin 登录态）", () => {
     // 注册指引受控展开（新增 Worker 按钮切换 guideOpen）
     await page.getByTestId("add-worker-button").click();
     await expect(page.getByTestId("worker-guide")).toBeVisible();
+  });
+
+  test("18/18 models-manage /models（模型目录管理）", async ({ page }) => {
+    await page.goto("/models");
+    await expectNavShell(page);
+    await expect(page.getByTestId("models-manage-root")).toBeVisible();
+    await expect(page.getByTestId("manage-toolbar")).toBeVisible();
+    await expect(page.getByTestId("model-search")).toBeVisible();
+    // 模型行（seed 预置 8 模型目录）
+    await expect(page.getByTestId("model-list")).toBeVisible();
+    await expect(page.getByTestId("model-item").first()).toBeVisible();
+    // 凭据配置区（目标模型 select + token 输入 + worker 多选）
+    await expect(page.getByTestId("credential-section")).toBeVisible();
+    await expect(page.getByTestId("model-credential-select")).toBeVisible();
   });
 });

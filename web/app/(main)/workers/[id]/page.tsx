@@ -15,9 +15,9 @@
  * - 布局/文案/token 对齐列表页（白卡片 + neutral 色板 + 共享 ./shared.tsx 定义）
  * - 铁律（T15）：无 fixed / 100vh / 100vw，高度由 AppShell main 接管，本页 flex:1 + overflowY auto
  */
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -38,6 +38,33 @@ import {
 } from "../shared";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
+
+/* ------------------------------ 模型卡 API 数据模型（C3/C8 契约） ------------------------------ */
+
+/** GET /models 目录条目（id=md_xxx 目录主键；providerID/modelID 为默认模型 ref 格式）。 */
+interface CatalogModelRow {
+  id: string;
+  providerID: string;
+  modelID: string;
+  name: string;
+  enabled: boolean;
+}
+
+/** GET /models 分页响应（兜底数据源 + 模型名映射）。 */
+interface ModelsPage {
+  items: CatalogModelRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** 模型 ref（providerID/modelID）拆解：含 `/` 按首个 `/` 拆；不含（旧自由字符串）providerID 归 opencode。 */
+function splitModelRef(ref: string): { providerID: string; modelID: string } {
+  const idx = ref.indexOf("/");
+  return idx > 0
+    ? { providerID: ref.slice(0, idx), modelID: ref.slice(idx + 1) }
+    : { providerID: "opencode", modelID: ref };
+}
 
 /* ------------------------------ 子组件 ------------------------------ */
 
@@ -136,7 +163,6 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 
 export default function WorkerDetailPage() {
   const params = useParams<{ id: string }>();
-  const router = useRouter();
   const token = useAuthStore((s) => s.token);
   const workerId = params.id;
 
@@ -155,6 +181,33 @@ export default function WorkerDetailPage() {
     /* 实时性：与列表页同频轮询（心跳周期 10s），捕捉状态翻转与 mcpStatus 刷新 */
     refetchInterval: 10_000,
   });
+
+  /* C8 模型卡：目录兜底数据源 + 模型名映射（capabilities.models 主选上报值） */
+  const { data: catalog } = useQuery({
+    queryKey: ["models", "catalog"],
+    queryFn: () =>
+      api.get<ModelsPage>("/models", { query: { page: 1, pageSize: 100 } }),
+    enabled: !!token,
+    staleTime: 60_000,
+  });
+
+  /* providerID/modelID ref → 目录产品名（缺失回退 modelID 末段） */
+  const catalogByRef = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of catalog?.items ?? []) {
+      map.set(`${row.providerID}/${row.modelID}`, row.name);
+    }
+    return map;
+  }, [catalog]);
+
+  /* 主选 capabilities.models（C2 已上报持久化，离线可查）；未上报/空 → 目录 enabled 模型兜底 */
+  const modelRefs = useMemo(
+    () =>
+      worker?.capabilities.models?.length
+        ? worker.capabilities.models
+        : (catalog?.items ?? []).map((m) => `${m.providerID}/${m.modelID}`),
+    [worker, catalog],
+  );
 
   if (!workerId) {
     return (
@@ -477,6 +530,89 @@ export default function WorkerDetailPage() {
               </div>
             ) : (
               <SectionEmpty text="该节点无 MCP 服务器状态上报" />
+            )}
+          </section>
+
+          {/* 可用模型卡（C8）：capabilities.models（C2 上报，注册/reload-config 后刷新）主选 +
+              目录 enabled 模型兜底；显示 provider + 模型名 + defaultModelId 匹配的「默认」徽章 */}
+          <section data-testid="worker-detail-models" style={cardStyle()}>
+            <SectionHeader icon="◉" title="可用模型" count={modelRefs.length} />
+            {modelRefs.length > 0 ? (
+              <div
+                data-testid="worker-model-list"
+                style={{ display: "flex", flexWrap: "wrap", gap: space.sm }}
+              >
+                {modelRefs.map((ref) => {
+                  const { providerID, modelID } = splitModelRef(ref);
+                  const isDefault = worker.defaultModelId === ref;
+                  const displayName = catalogByRef.get(ref) ?? modelID;
+                  return (
+                    <span
+                      key={ref}
+                      data-testid="worker-model-badge"
+                      data-model-id={ref}
+                      data-default={isDefault ? "true" : "false"}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: space.xs,
+                        padding: "2px 10px",
+                        borderRadius: radius.pill,
+                        backgroundColor: isDefault ? "#ECFDF5" : neutral[50],
+                        border: `1px solid ${isDefault ? "#A7F3D0" : neutral[200]}`,
+                        whiteSpace: "nowrap",
+                        ...baseFont,
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: fontSize.sm,
+                          color: isDefault ? "#059669" : neutral[500],
+                          fontWeight: 500,
+                        }}
+                      >
+                        {providerID}
+                      </span>
+                      <span
+                        aria-hidden
+                        style={{ fontSize: fontSize.sm, color: neutral[300] }}
+                      >
+                        /
+                      </span>
+                      <span
+                        style={{
+                          fontSize: fontSize.sm,
+                          color: neutral[800],
+                          fontWeight: 500,
+                          fontFamily: fontFamily.mono,
+                        }}
+                      >
+                        {displayName}
+                      </span>
+                      {isDefault && (
+                        <span
+                          data-testid="worker-model-default"
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            padding: "0 6px",
+                            borderRadius: radius.pill,
+                            backgroundColor: "#059669",
+                            color: "#FFFFFF",
+                            fontSize: fontSize.xs,
+                            fontWeight: 600,
+                            lineHeight: "18px",
+                          }}
+                        >
+                          默认
+                        </span>
+                      )}
+                    </span>
+                  );
+                })}
+              </div>
+            ) : (
+              <SectionEmpty text="该节点未上报可用模型" />
             )}
           </section>
         </div>

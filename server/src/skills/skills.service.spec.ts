@@ -30,7 +30,6 @@ describe('SkillsService', () => {
       count: jest.Mock;
       findMany: jest.Mock;
       findUnique: jest.Mock;
-      findFirst: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
     };
@@ -71,7 +70,6 @@ describe('SkillsService', () => {
         count: jest.fn(),
         findMany: jest.fn(),
         findUnique: jest.fn(),
-        findFirst: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
       },

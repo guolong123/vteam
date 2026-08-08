@@ -37,6 +37,12 @@ export class WorkerCapabilitiesDto {
   @IsOptional()
   @IsString()
   baseUrl?: string;
+
+  @ApiPropertyOptional({ description: 'C2：serve 实际可用模型 id 列表（listModels 上报，id 格式 providerID/modelID；失败缺省，C3 合并入库用）', type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  models?: string[];
 }
 
 /** worker 负载快照（对齐 schema Worker.load Json）。 */
@@ -76,4 +82,9 @@ export class RegisterWorkerDto {
   @ValidateNested()
   @Type(() => WorkerLoadDto)
   load: WorkerLoadDto;
+
+  @ApiPropertyOptional({ description: 'C2：worker 配置的默认模型（env WORKER_DEFAULT_MODEL，id 格式 providerID/modelID，C7 分派兜底）' })
+  @IsOptional()
+  @IsString()
+  defaultModelId?: string;
 }

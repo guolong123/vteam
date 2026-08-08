@@ -8,6 +8,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { TOOL_ERRORS } from '../common/constants/tool.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   WORKER_COMMAND_TYPES,
@@ -50,18 +51,13 @@ export class ToolsService implements OnModuleInit {
     private readonly workersService: WorkersService,
   ) {}
 
-  /** 进程启动对齐 tool 域前缀序号（重启续号，对齐 agents.seedPrefix 模式）。 */
+  /**
+   * 进程启动对齐 tool 域前缀序号（重启续号）。
+   * 只统计 tl_<数字> 行的最大序号，忽略 tl_builtin_* 命名 id
+   * （原 findFirst orderBy id desc 会被字典序更大的 tl_builtin_* 干扰 → parseInt NaN → seed 失败）。
+   */
   async onModuleInit(): Promise<void> {
-    const last = await this.prisma.tool.findFirst({
-      orderBy: { id: 'desc' },
-      select: { id: true },
-    });
-    if (last) {
-      const seq = parseInt(last.id.slice(TOOL_ID_PREFIX.length + 1), 10);
-      if (Number.isFinite(seq)) {
-        this.idGen.seed(TOOL_ID_PREFIX, seq);
-      }
-    }
+    await resyncIdPrefix(this.prisma.tool, TOOL_ID_PREFIX, this.idGen);
   }
 
   /**

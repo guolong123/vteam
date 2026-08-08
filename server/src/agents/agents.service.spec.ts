@@ -2,6 +2,7 @@ import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AGENT_ERRORS } from '../common/constants/agent.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import { ModelsService } from '../models/models.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WorkerClient } from '../workers/worker.client';
 import { WorkersService } from '../workers/workers.service';
@@ -14,6 +15,7 @@ describe('AgentsService', () => {
   let idGen: { nextId: jest.Mock; seed: jest.Mock };
   let workersService: { assignWorker: jest.Mock };
   let workerClient: { listModels: jest.Mock };
+  let modelsService: { listCatalogModels: jest.Mock };
   let prisma: {
     agent: {
       count: jest.Mock;
@@ -117,6 +119,10 @@ describe('AgentsService', () => {
     };
     workersService = { assignWorker: jest.fn() };
     workerClient = { listModels: jest.fn() };
+    // C3：available-models 目录优先——默认空目录走 pull 兜底（兼容既有测试语义），
+    // 目录优先路径由专门的用例显式 mock 非空目录。
+    modelsService = { listCatalogModels: jest.fn().mockResolvedValue([]) };
+    modelsService = { listCatalogModels: jest.fn() };
     prisma = {
       agent: {
         count: jest.fn(),
@@ -138,6 +144,7 @@ describe('AgentsService', () => {
         { provide: IdGeneratorService, useValue: idGen },
         { provide: WorkersService, useValue: workersService },
         { provide: WorkerClient, useValue: workerClient },
+        { provide: ModelsService, useValue: modelsService },
       ],
     }).compile();
 
@@ -183,6 +190,7 @@ describe('AgentsService', () => {
           'permissionScope',
           'skillIds',
           'toolEffects',
+          'workerId',
           'createdAt',
           'updatedAt',
         ].sort(),
@@ -685,7 +693,7 @@ describe('AgentsService', () => {
     });
   });
 
-  describe('getAvailableModels（GET /agents/:id/available-models，T11 动态化）', () => {
+  describe('getAvailableModels（GET /agents/:id/available-models，C3 目录优先三路径）', () => {
     /** WorkerClient.listModels 返回形状（含 providerID/modelID，对外只映射 {id, name}）。 */
     const liveModels = [
       {
@@ -702,7 +710,22 @@ describe('AgentsService', () => {
       },
     ];
 
-    it('有可用 worker：assignWorker → listModels 返回动态列表（纯数组契约）', async () => {
+    it('目录非空（enabled=true）→ 直接返回目录，不触发 assignWorker/listModels（无在线 worker 也可查）', async () => {
+      modelsService.listCatalogModels.mockResolvedValue([
+        { id: 'opencode-go/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+      ]);
+
+      const result = await service.getAvailableModels('a_product');
+
+      expect(workersService.assignWorker).not.toHaveBeenCalled();
+      expect(workerClient.listModels).not.toHaveBeenCalled();
+      expect(result).toEqual([
+        { id: 'opencode-go/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+      ]);
+    });
+
+    it('目录空 + worker 在线：pull 兜底 → listModels 返回动态列表（纯数组契约）', async () => {
+      modelsService.listCatalogModels.mockResolvedValue([]);
       workersService.assignWorker.mockResolvedValue('w_1');
       workerClient.listModels.mockResolvedValue(liveModels);
 
@@ -716,7 +739,8 @@ describe('AgentsService', () => {
       ]);
     });
 
-    it('无可用 worker → 降级 STATIC_AVAILABLE_MODELS + source=fallback', async () => {
+    it('目录空 + 无可用 worker → 降级 STATIC_AVAILABLE_MODELS + source=fallback', async () => {
+      modelsService.listCatalogModels.mockResolvedValue([]);
       workersService.assignWorker.mockResolvedValue(null);
 
       const result = (await service.getAvailableModels('a_product')) as {
@@ -733,7 +757,8 @@ describe('AgentsService', () => {
       expect(result.models.map((m) => m.id)).not.toContain('gpt-4o');
     });
 
-    it('listModels 异常 → 降级 STATIC_AVAILABLE_MODELS + source=fallback', async () => {
+    it('目录空 + listModels 异常 → 降级 STATIC_AVAILABLE_MODELS + source=fallback', async () => {
+      modelsService.listCatalogModels.mockResolvedValue([]);
       workersService.assignWorker.mockResolvedValue('w_1');
       workerClient.listModels.mockRejectedValue(new Error('worker 离线'));
 
@@ -746,7 +771,8 @@ describe('AgentsService', () => {
       expect(result.models.length).toBeGreaterThan(0);
     });
 
-    it('listModels 返回空列表 → 降级 STATIC_AVAILABLE_MODELS + source=fallback', async () => {
+    it('目录空 + listModels 返回空列表 → 降级 STATIC_AVAILABLE_MODELS + source=fallback', async () => {
+      modelsService.listCatalogModels.mockResolvedValue([]);
       workersService.assignWorker.mockResolvedValue('w_1');
       workerClient.listModels.mockResolvedValue([]);
 

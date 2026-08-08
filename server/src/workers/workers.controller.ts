@@ -3,14 +3,17 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
+import { AdminGuard } from '../users/admin.guard';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
+import { UpdateWorkerModelDto } from './dto/update-worker-model.dto';
 import {
   WorkerTokenGuard,
   WorkerTokenRequest,
@@ -67,5 +70,17 @@ export class WorkersController {
   @ApiOperation({ summary: 'worker 详情' })
   findOne(@Param('id') id: string) {
     return this.workers.findOne(id);
+  }
+
+  /**
+   * PATCH /api/v1/workers/:id：配置/清除 worker 默认模型（C8，AdminGuard）。
+   * body {defaultModelId: string | null}——须存在于 models 目录且 enabled（否则 400），
+   * null=清除；返回更新后的 WorkerView（含 defaultModelId）。
+   */
+  @Patch(':id')
+  @UseGuards(AdminGuard)
+  @ApiOperation({ summary: '配置 worker 默认模型（AdminGuard；null=清除）' })
+  updateDefaultModel(@Param('id') id: string, @Body() dto: UpdateWorkerModelDto) {
+    return this.workers.updateDefaultModel(id, dto);
   }
 }

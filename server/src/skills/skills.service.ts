@@ -8,6 +8,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { SKILL_ERRORS } from '../common/constants/skill.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   WORKER_COMMAND_TYPES,
@@ -52,18 +53,9 @@ export class SkillsService implements OnModuleInit {
     private readonly workersService: WorkersService,
   ) {}
 
-  /** 进程启动对齐 skill 域前缀序号（重启续号，对齐 agents.seedPrefix 模式）。 */
+  /** 进程启动对齐 skill 域前缀序号（重启续号，只统计 sk_<数字> 行）。 */
   async onModuleInit(): Promise<void> {
-    const last = await this.prisma.skill.findFirst({
-      orderBy: { id: 'desc' },
-      select: { id: true },
-    });
-    if (last) {
-      const seq = parseInt(last.id.slice(ID_PREFIX.length + 1), 10);
-      if (Number.isFinite(seq)) {
-        this.idGen.seed(ID_PREFIX, seq);
-      }
-    }
+    await resyncIdPrefix(this.prisma.skill, ID_PREFIX, this.idGen);
   }
 
   /**

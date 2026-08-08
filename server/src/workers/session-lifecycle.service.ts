@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { SESSION_STATUS } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 
 /** TaskGroupInstance 主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
@@ -39,24 +40,16 @@ export class SessionLifecycleService implements OnModuleInit {
   ) {}
 
   /**
-   * 进程启动对齐 TaskGroupInstance 域前缀序号（重启续号，同 tools/agents seed 模式）。
-   * 修复：`ti` 前缀原无续号 → 重启后计数器从 1 起，解绑重绑定（offline worker 修复路径）
-   * 创建新实例行时与库中软删旧行（removedAt 非空）主键冲突（Unique constraint PRIMARY）。
+   * 进程启动对齐 TaskGroupInstance 域前缀序号（重启续号）。
+   * 只统计 ti_<数字> 行的最大序号；原 findFirst orderBy id desc 若遇命名 id 会 parseInt NaN
+   * → seed 失败 → 解绑重绑定创建新实例行时与软删旧行主键冲突（Unique constraint PRIMARY）。
    */
   async onModuleInit(): Promise<void> {
-    const last = await this.prisma.taskGroupInstance.findFirst({
-      orderBy: { id: 'desc' },
-      select: { id: true },
-    });
-    if (last) {
-      const seq = parseInt(
-        last.id.slice(TASK_GROUP_INSTANCE_ID_PREFIX.length + 1),
-        10,
-      );
-      if (Number.isFinite(seq)) {
-        this.idGen.seed(TASK_GROUP_INSTANCE_ID_PREFIX, seq);
-      }
-    }
+    await resyncIdPrefix(
+      this.prisma.taskGroupInstance,
+      TASK_GROUP_INSTANCE_ID_PREFIX,
+      this.idGen,
+    );
   }
 
   /**

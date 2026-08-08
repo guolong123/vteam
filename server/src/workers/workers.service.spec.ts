@@ -5,6 +5,8 @@ import {
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
 import { McpServersService } from '../mcp-servers/mcp-servers.service';
+import { CredentialCryptoService } from '../common/credential-crypto.service';
+import { ModelsService } from '../models/models.service';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
 import {
@@ -32,8 +34,16 @@ describe('WorkersService', () => {
       update: jest.Mock;
       updateMany: jest.Mock;
     };
+    modelCredential: {
+      findMany: jest.Mock;
+    };
   };
   let mcpServers: { applyHeartbeatStatus: jest.Mock };
+  let credentialCrypto: { decrypt: jest.Mock };
+  let modelsService: {
+    syncFromWorkerCapabilities: jest.Mock;
+    findCatalogByRef: jest.Mock;
+  };
 
   /** 构造一个 Worker 行（prisma findMany/findUnique 返回值）。 */
   const workerRow = (overrides: Record<string, unknown> = {}) => ({
@@ -46,6 +56,7 @@ describe('WorkersService', () => {
     tokenHash: 'hashed-token',
     lastHeartbeatAt: new Date('2026-08-08T00:00:00Z'),
     registeredAt: new Date('2026-08-08T00:00:00Z'),
+    defaultModelId: null,
     ...overrides,
   });
 
@@ -70,14 +81,31 @@ describe('WorkersService', () => {
         update: jest.fn(),
         updateMany: jest.fn(),
       },
+      modelCredential: {
+        findMany: jest.fn(),
+      },
     };
 
     mcpServers = { applyHeartbeatStatus: jest.fn() };
+    credentialCrypto = { decrypt: jest.fn().mockReturnValue('sk-raw-token') };
+    modelsService = {
+      syncFromWorkerCapabilities: jest.fn().mockResolvedValue(2),
+      findCatalogByRef: jest.fn().mockResolvedValue({
+        id: 'md_0000000001',
+        providerID: 'opencode-go',
+        modelID: 'deepseek-v4-flash',
+        name: 'DeepSeek V4 Flash',
+        enabled: true,
+      }),
+    };
+    prisma.modelCredential.findMany.mockResolvedValue([]);
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         WorkersService,
         { provide: PrismaService, useValue: prisma },
         { provide: McpServersService, useValue: mcpServers },
+        { provide: CredentialCryptoService, useValue: credentialCrypto },
+        { provide: ModelsService, useValue: modelsService },
       ],
     }).compile();
 
@@ -126,6 +154,215 @@ describe('WorkersService', () => {
       });
       expect(args.create.id).toBe('w_0000000001');
       expect(result.workerId).toBe('w_0000000001');
+    });
+
+    it('C2：worker 上报 defaultModelId/models 时落库（capabilities 整块含 models，defaultModelId 独立列）', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      const dto = registerDto();
+      dto.capabilities = {
+        maxInstances: 5,
+        skills: [],
+        tools: [],
+        models: ['opencode-go/deepseek-v4-flash', 'opencode/glm-5.1'],
+      };
+      dto.defaultModelId = 'opencode-go/deepseek-v4-flash';
+
+      await service.register('secret-token', dto);
+
+      const [args] = prisma.worker.upsert.mock.calls[0];
+      expect(args.create.capabilities).toEqual({
+        maxInstances: 5,
+        skills: [],
+        tools: [],
+        models: ['opencode-go/deepseek-v4-flash', 'opencode/glm-5.1'],
+      });
+      expect(args.create.defaultModelId).toBe('opencode-go/deepseek-v4-flash');
+      expect(args.update.defaultModelId).toBe('opencode-go/deepseek-v4-flash');
+    });
+
+    it('C2：worker 未上报 defaultModelId 时不覆盖已有值（旧 worker 重注册不误清 C8/PATCH 配置）', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      const dto = registerDto();
+
+      await service.register('secret-token', dto);
+
+      const [args] = prisma.worker.upsert.mock.calls[0];
+      expect(args.create.defaultModelId).toBeUndefined();
+      expect(args.update.defaultModelId).toBeUndefined();
+    });
+
+    it('C3（集成验收）：worker 上报 capabilities.models → syncFromWorkerCapabilities 透传（目录 + availability 落库链路）', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      const dto = registerDto();
+      dto.capabilities = {
+        maxInstances: 5,
+        skills: [],
+        tools: [],
+        models: ['opencode-go/deepseek-v4-flash', 'opencode/glm-5.1'],
+      };
+
+      await service.register('secret-token', dto);
+
+      // 注册落库后调用合并入库（workerId + 原始 models 数组透传）
+      expect(modelsService.syncFromWorkerCapabilities).toHaveBeenCalledWith(
+        'w_0000000001',
+        ['opencode-go/deepseek-v4-flash', 'opencode/glm-5.1'],
+      );
+    });
+
+    it('C3：worker 未上报 models（降级缺省）→ syncFromWorkerCapabilities 仍调用但收到 undefined（保留旧数据）', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      const dto = registerDto();
+
+      await service.register('secret-token', dto);
+
+      expect(modelsService.syncFromWorkerCapabilities).toHaveBeenCalledWith(
+        'w_0000000001',
+        undefined,
+      );
+    });
+
+    it('C3：syncFromWorkerCapabilities 抛错不阻断注册（warn 可观测，worker 仍上线）', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      modelsService.syncFromWorkerCapabilities.mockRejectedValue(
+        new Error('DB down'),
+      );
+      const dto = registerDto();
+
+      const result = await service.register('secret-token', dto);
+
+      expect(result.workerId).toBe('w_0000000001');
+      expect(modelsService.syncFromWorkerCapabilities).toHaveBeenCalled();
+    });
+
+    it('C5（R5）：注册成功后回放全部未吊销凭据（decrypt + enqueueCommand）', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'opencode-go', credentialRef: 'iv:tag:data1' },
+        { providerID: 'opencode', credentialRef: 'iv:tag:data2' },
+      ]);
+      const dto = registerDto();
+
+      await service.register('secret-token', dto);
+
+      expect(prisma.modelCredential.findMany).toHaveBeenCalledWith({
+        where: { revokedAt: null },
+        select: { providerID: true, credentialRef: true },
+      });
+      expect(credentialCrypto.decrypt).toHaveBeenCalledWith('iv:tag:data1');
+      expect(credentialCrypto.decrypt).toHaveBeenCalledWith('iv:tag:data2');
+      expect(service['pendingCommands'].get('w_0000000001')).toEqual([
+        {
+          type: 'model-credentials',
+          resourceVersion: 'model-credentials',
+          payload: {
+            providerKeys: [
+              { providerID: 'opencode-go', key: 'sk-raw-token' },
+              { providerID: 'opencode', key: 'sk-raw-token' },
+            ],
+          },
+        },
+      ]);
+    });
+
+    it('C5（R5）：无未吊销凭据时注册不产生命令', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      const dto = registerDto();
+
+      await service.register('secret-token', dto);
+
+      expect(service['pendingCommands'].has('w_0000000001')).toBe(false);
+    });
+
+    it('B1：首次注册（原不存在）→ 回放未吊销凭据', async () => {
+      prisma.worker.findUnique.mockResolvedValue(null);
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'opencode-go', credentialRef: 'iv:tag:data1' },
+      ]);
+      const dto = registerDto();
+
+      await service.register('secret-token', dto);
+
+      expect(prisma.modelCredential.findMany).toHaveBeenCalled();
+      expect(service['pendingCommands'].get('w_0000000001')).toHaveLength(1);
+    });
+
+    it('B1：已在线 worker reRegister（serve 重启触发）→ 不回放，切断循环', async () => {
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: WORKER_STATUS.ONLINE,
+      });
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'opencode-go', credentialRef: 'iv:tag:data1' },
+      ]);
+      const dto = registerDto();
+
+      await service.register('secret-token', dto);
+
+      expect(prisma.modelCredential.findMany).not.toHaveBeenCalled();
+      expect(service['pendingCommands'].has('w_0000000001')).toBe(false);
+    });
+
+    it('B1：原 offline worker reRegister（离线恢复上线）→ 回放凭据', async () => {
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: WORKER_STATUS.OFFLINE,
+      });
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'opencode-go', credentialRef: 'iv:tag:data1' },
+      ]);
+      const dto = registerDto();
+
+      await service.register('secret-token', dto);
+
+      expect(prisma.modelCredential.findMany).toHaveBeenCalled();
+      expect(service['pendingCommands'].get('w_0000000001')).toHaveLength(1);
+    });
+
+    it('B1：循环不复现——首次注册回放一次，在线 reRegister 不再入队（幂等）', async () => {
+      // 首次注册：原不存在 → 回放入队 1 条
+      prisma.worker.findUnique.mockResolvedValueOnce(null);
+      // 凭据生效后 serve 重启触发 reRegister：worker 已在线 → 不回放
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: WORKER_STATUS.ONLINE,
+      });
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'opencode-go', credentialRef: 'iv:tag:data1' },
+      ]);
+      const dto = registerDto();
+
+      await service.register('secret-token', dto);
+      await service.register('secret-token', dto);
+
+      // 回放只发生一次（仅首次），reRegister 不产生新命令 → 命令不累积
+      expect(prisma.modelCredential.findMany).toHaveBeenCalledTimes(1);
+      expect(service['pendingCommands'].get('w_0000000001')).toHaveLength(1);
+    });
+
+    it('C5（R5）：回放失败（解密抛错）不阻断注册', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'opencode-go', credentialRef: 'bad-ref' },
+      ]);
+      credentialCrypto.decrypt.mockImplementation(() => {
+        throw new Error('decrypt failed');
+      });
+      const warnSpy = jest
+        .spyOn(service['logger'], 'warn')
+        .mockImplementation(() => {});
+      const dto = registerDto();
+
+      await expect(service.register('secret-token', dto)).resolves.toMatchObject({
+        workerId: 'w_0000000001',
+      });
+      expect(service['pendingCommands'].has('w_0000000001')).toBe(false);
+      warnSpy.mockRestore();
     });
   });
 
@@ -386,6 +623,58 @@ describe('WorkersService', () => {
       expect(result.commands).toBeUndefined();
       expect(service['pendingCommands'].get('w_0000000002')).toHaveLength(1);
     });
+
+    it('C5（R5）：worker 从 offline 恢复上线 → 回放未吊销凭据（离线期间保存的凭据补发）', async () => {
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        tokenHash: 'hashed-token',
+        status: WORKER_STATUS.OFFLINE,
+      });
+      prisma.worker.update.mockResolvedValue({});
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'opencode-go', credentialRef: 'iv:tag:data1' },
+      ]);
+      const dto: HeartbeatWorkerDto = {
+        workerId: 'w_0000000001',
+        load: { instances: 1 },
+        health: 'ok',
+      };
+
+      const result = await service.heartbeat('w_0000000001', dto);
+
+      expect(prisma.modelCredential.findMany).toHaveBeenCalledWith({
+        where: { revokedAt: null },
+        select: { providerID: true, credentialRef: true },
+      });
+      // 回放命令经本次心跳响应携带（取出即清空，一次有效）
+      expect(result.commands).toEqual([
+        {
+          type: 'model-credentials',
+          resourceVersion: 'model-credentials',
+          payload: {
+            providerKeys: [{ providerID: 'opencode-go', key: 'sk-raw-token' }],
+          },
+        },
+      ]);
+    });
+
+    it('C5（R5）：一直 online 的心跳不重复回放（避免每 10s 重启 serve）', async () => {
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        tokenHash: 'hashed-token',
+        status: WORKER_STATUS.ONLINE,
+      });
+      prisma.worker.update.mockResolvedValue({});
+      const dto: HeartbeatWorkerDto = {
+        workerId: 'w_0000000001',
+        load: { instances: 1 },
+        health: 'ok',
+      };
+
+      await service.heartbeat('w_0000000001', dto);
+
+      expect(prisma.modelCredential.findMany).not.toHaveBeenCalled();
+    });
   });
 
   describe('broadcastCommand（F1 MAJOR：资源变更广播 reload-config）', () => {
@@ -417,6 +706,81 @@ describe('WorkersService', () => {
 
       expect(n).toBe(0);
       expect(service['pendingCommands'].size).toBe(0);
+    });
+  });
+
+  describe('dispatchModelCredentials（C5 凭据下发：定向/全量唯一化分发）', () => {
+    const providerKeys = [{ providerID: 'opencode-go', key: 'sk-raw-token' }];
+
+    it('targetWorkerIds 非空 → 定向：enqueueCommand 逐个精确下发，返回目标数', async () => {
+      const spy = jest.spyOn(service, 'enqueueCommand');
+
+      const n = await service.dispatchModelCredentials(providerKeys, [
+        'w_0000000001',
+        'w_0000000002',
+      ]);
+
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(spy).toHaveBeenCalledWith('w_0000000001', {
+        type: 'model-credentials',
+        resourceVersion: 'model-credentials',
+        payload: {
+          providerKeys,
+          targetWorkerIds: ['w_0000000001', 'w_0000000002'],
+        },
+      });
+      expect(spy).toHaveBeenCalledWith('w_0000000002', expect.any(Object));
+      expect(n).toBe(2);
+    });
+
+    it('targetWorkerIds 为空数组 → 全量：broadcastCommand 原样广播（不改签名）', async () => {
+      const broadcastSpy = jest
+        .spyOn(service, 'broadcastCommand')
+        .mockResolvedValue(3);
+
+      const n = await service.dispatchModelCredentials(providerKeys, []);
+
+      expect(broadcastSpy).toHaveBeenCalledWith({
+        type: 'model-credentials',
+        resourceVersion: 'model-credentials',
+        payload: { providerKeys },
+      });
+      expect(n).toBe(3);
+    });
+
+    it('targetWorkerIds 缺省（undefined）→ 全量广播', async () => {
+      const broadcastSpy = jest
+        .spyOn(service, 'broadcastCommand')
+        .mockResolvedValue(5);
+
+      const n = await service.dispatchModelCredentials(providerKeys);
+
+      expect(n).toBe(5);
+    });
+
+    it('全量下发后心跳携带 model-credentials 命令且取出即清空（一次性）', async () => {
+      prisma.worker.findMany.mockResolvedValue([{ id: 'w_0000000001' }]);
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue({});
+
+      await service.dispatchModelCredentials(providerKeys);
+
+      const dto: HeartbeatWorkerDto = {
+        workerId: 'w_0000000001',
+        load: { instances: 1 },
+        health: 'ok',
+      };
+      const result = await service.heartbeat('w_0000000001', dto);
+      expect(result.commands).toEqual([
+        {
+          type: 'model-credentials',
+          resourceVersion: 'model-credentials',
+          payload: { providerKeys },
+        },
+      ]);
+
+      const second = await service.heartbeat('w_0000000001', dto);
+      expect(second.commands).toBeUndefined();
     });
   });
 
@@ -552,6 +916,103 @@ describe('WorkersService', () => {
 
       expect(workerId).toBeNull();
     });
+
+    it('C7 按模型过滤：availability 含该 enabled 模型 → 选中，不符模型被排除', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({
+          id: 'w_match',
+          modelAvailabilities: [
+            { modelId: 'opencode/deepseek-v4-pro', model: { enabled: true } },
+          ],
+        }),
+        workerRow({
+          id: 'w_nomatch',
+          modelAvailabilities: [
+            { modelId: 'opencode/glm-5.1', model: { enabled: true } },
+          ],
+        }),
+      ]);
+
+      const workerId = await service.assignWorker({
+        modelId: 'opencode/deepseek-v4-pro',
+      });
+
+      expect(workerId).toBe('w_match');
+    });
+
+    it('C7 按模型过滤：availability 不含该模型 → 排除（返回 null）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({
+          id: 'w_glm',
+          modelAvailabilities: [
+            { modelId: 'opencode/glm-5.1', model: { enabled: true } },
+          ],
+        }),
+      ]);
+
+      const workerId = await service.assignWorker({
+        modelId: 'opencode/deepseek-v4-pro',
+      });
+
+      expect(workerId).toBeNull();
+    });
+
+    it('C7 按模型过滤：availability 含该模型但 disabled → 排除', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({
+          id: 'w_disabled',
+          modelAvailabilities: [
+            { modelId: 'opencode/deepseek-v4-pro', model: { enabled: false } },
+          ],
+        }),
+      ]);
+
+      const workerId = await service.assignWorker({
+        modelId: 'opencode/deepseek-v4-pro',
+      });
+
+      expect(workerId).toBeNull();
+    });
+
+    it('C7 按模型过滤：从未上报（availability 无行）→ 降级不受过滤约束', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({ id: 'w_legacy' }),
+      ]);
+
+      const workerId = await service.assignWorker({
+        modelId: 'opencode/deepseek-v4-pro',
+      });
+
+      expect(workerId).toBe('w_legacy');
+    });
+
+    it('C7 按模型过滤：worker.defaultModelId === modelId → 通过（即便 availability 不符）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({
+          id: 'w_default',
+          defaultModelId: 'opencode/deepseek-v4-pro',
+          modelAvailabilities: [
+            { modelId: 'opencode/glm-5.1', model: { enabled: true } },
+          ],
+        }),
+      ]);
+
+      const workerId = await service.assignWorker({
+        modelId: 'opencode/deepseek-v4-pro',
+      });
+
+      expect(workerId).toBe('w_default');
+    });
+
+    it('C7 按模型过滤：modelId 未指定 → 不过滤（回归现状，availability 无关）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({ id: 'w_none' }),
+      ]);
+
+      const workerId = await service.assignWorker();
+
+      expect(workerId).toBe('w_none');
+    });
   });
 
   describe('列表/详情', () => {
@@ -570,6 +1031,19 @@ describe('WorkersService', () => {
         status: WORKER_STATUS.ONLINE,
         capabilities: { maxInstances: 5 },
       });
+    });
+
+    it('C8：toWorkerView 透出 defaultModelId（findAll/详情均含；null=未配置）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({ defaultModelId: 'opencode-go/deepseek-v4-flash' }),
+      ]);
+      prisma.worker.findUnique.mockResolvedValue(workerRow());
+
+      const rows = await service.findAll();
+      expect(rows[0].defaultModelId).toBe('opencode-go/deepseek-v4-flash');
+
+      const view = await service.findOne('w_0000000001');
+      expect(view.defaultModelId).toBeNull();
     });
 
     it('findOne 返回视图（含 lastHeartbeatAt/load/capabilities/opencodeVersion）', async () => {
@@ -634,6 +1108,105 @@ describe('WorkersService', () => {
       expect(rows[1].mcpStatus).toEqual([
         { serverName: 'gitee-ent', status: 'needs_auth' },
       ]);
+    });
+  });
+
+  describe('updateDefaultModel（C8 PATCH /workers/:id）', () => {
+    it('defaultModelId 在目录（enabled）→ 校验通过后落库，返回视图含新值', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue(
+        workerRow({ defaultModelId: 'opencode-go/deepseek-v4-flash' }),
+      );
+
+      const view = await service.updateDefaultModel('w_0000000001', {
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+
+      expect(modelsService.findCatalogByRef).toHaveBeenCalledWith(
+        'opencode-go/deepseek-v4-flash',
+      );
+      expect(prisma.worker.update).toHaveBeenCalledWith({
+        where: { id: 'w_0000000001' },
+        data: { defaultModelId: 'opencode-go/deepseek-v4-flash' },
+      });
+      expect(view.defaultModelId).toBe('opencode-go/deepseek-v4-flash');
+    });
+
+    it('defaultModelId 不在目录 → 400 MODEL_NOT_FOUND，不落库', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      modelsService.findCatalogByRef.mockResolvedValue(null);
+
+      await expect(
+        service.updateDefaultModel('w_0000000001', {
+          defaultModelId: 'opencode/unknown-model',
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'MODEL_NOT_FOUND' },
+      });
+      expect(prisma.worker.update).not.toHaveBeenCalled();
+    });
+
+    it('defaultModelId 在目录但 enabled=false → 400 MODEL_NOT_FOUND（停用模型不可设为默认）', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      modelsService.findCatalogByRef.mockResolvedValue({
+        id: 'md_0000000001',
+        providerID: 'opencode-go',
+        modelID: 'deepseek-v4-flash',
+        name: 'DeepSeek V4 Flash',
+        enabled: false,
+      });
+
+      await expect(
+        service.updateDefaultModel('w_0000000001', {
+          defaultModelId: 'opencode-go/deepseek-v4-flash',
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'MODEL_NOT_FOUND' },
+      });
+      expect(prisma.worker.update).not.toHaveBeenCalled();
+    });
+
+    it('null=清除默认模型（跳过目录校验，落库 null）', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue(workerRow());
+
+      const view = await service.updateDefaultModel('w_0000000001', {
+        defaultModelId: null,
+      });
+
+      expect(modelsService.findCatalogByRef).not.toHaveBeenCalled();
+      expect(prisma.worker.update).toHaveBeenCalledWith({
+        where: { id: 'w_0000000001' },
+        data: { defaultModelId: null },
+      });
+      expect(view.defaultModelId).toBeNull();
+    });
+
+    it('defaultModelId 缺省（undefined）→ 幂等跳过不更新', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue(
+        workerRow({ defaultModelId: 'opencode-go/deepseek-v4-flash' }),
+      );
+
+      const view = await service.updateDefaultModel('w_0000000001', {});
+
+      expect(prisma.worker.update).toHaveBeenCalledWith({
+        where: { id: 'w_0000000001' },
+        data: {},
+      });
+      expect(view.defaultModelId).toBe('opencode-go/deepseek-v4-flash');
+    });
+
+    it('worker 不存在 → 404 WORKER_NOT_FOUND，不校验目录', async () => {
+      prisma.worker.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.updateDefaultModel('w_unknown', {
+          defaultModelId: 'opencode-go/deepseek-v4-flash',
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(modelsService.findCatalogByRef).not.toHaveBeenCalled();
+      expect(prisma.worker.update).not.toHaveBeenCalled();
     });
   });
 

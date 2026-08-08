@@ -78,11 +78,15 @@ export interface WorkerItem {
     port?: number;
     /** opencode serve 对外基址（WORKER_ADVERTISE_HOST 语义）。 */
     baseUrl?: string;
+    /** C2：serve 实际可用模型 id 列表（providerID/modelID；注册/reload-config 后刷新）。 */
+    models?: string[];
   };
   load: { instances: number } | null;
   status: WorkerStatusKey;
   lastHeartbeatAt: string | null;
   registeredAt: string;
+  /** C8：worker 默认模型 id（providerID/modelID；C2 register 上报或 PATCH 配置，null=未配置）。 */
+  defaultModelId: string | null;
 }
 
 /** 心跳载荷中的单条 MCP 服务器状态（server McpStatusEntryDto，11 篇 §5.8 三态）。 */

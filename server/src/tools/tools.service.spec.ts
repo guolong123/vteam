@@ -19,7 +19,6 @@ describe('ToolsService', () => {
       findUnique: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
-      findFirst: jest.Mock;
     };
     user: { findUnique: jest.Mock };
     $transaction: jest.Mock;
@@ -66,7 +65,6 @@ describe('ToolsService', () => {
         findUnique: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
-        findFirst: jest.fn(),
       },
       user: { findUnique: jest.fn() },
       $transaction: jest.fn(),
@@ -85,21 +83,33 @@ describe('ToolsService', () => {
     service = module.get<ToolsService>(ToolsService);
   });
 
-  describe('onModuleInit（重启续号）', () => {
-    it('库内已有最大 id 时对齐 tool 前缀序号', async () => {
-      prisma.tool.findFirst.mockResolvedValue({ id: 'tl_0000000042' });
+  describe('onModuleInit（重启续号，忽略 tl_builtin_* 命名 id）', () => {
+    it('库内已有 tl_<数字> 最大 id 时对齐 tool 前缀序号', async () => {
+      prisma.tool.findMany.mockResolvedValue([{ id: 'tl_0000000042' }]);
 
       await service.onModuleInit();
 
-      expect(prisma.tool.findFirst).toHaveBeenCalledWith({
-        orderBy: { id: 'desc' },
+      expect(prisma.tool.findMany).toHaveBeenCalledWith({
+        where: { id: { startsWith: 'tl_' } },
         select: { id: true },
       });
       expect(idGen.seed).toHaveBeenCalledWith('tl', 42);
     });
 
+    it('混入 tl_builtin_* 命名 id 时仍按数字序号续号（不被字典序更大的命名 id 干扰）', async () => {
+      prisma.tool.findMany.mockResolvedValue([
+        { id: 'tl_0000000001' },
+        { id: 'tl_builtin_write' },
+        { id: 'tl_0000000010' },
+      ]);
+
+      await service.onModuleInit();
+
+      expect(idGen.seed).toHaveBeenCalledWith('tl', 10);
+    });
+
     it('空库/无记录时跳过续号', async () => {
-      prisma.tool.findFirst.mockResolvedValue(null);
+      prisma.tool.findMany.mockResolvedValue([]);
 
       await service.onModuleInit();
 
