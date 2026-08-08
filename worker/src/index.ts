@@ -21,7 +21,7 @@ import {
   sendHeartbeat,
   RegistryClientOptions,
 } from './client/registry-client';
-import { V1Driver } from './driver/v1-driver';
+import { V1Driver, DriverModelInfo } from './driver/v1-driver';
 import { GIT_TOOLS, installGitTools } from './git/git-tools';
 import { getLoad, onActiveSessionsIdle } from './instance-tracker';
 import { McpStatusProbe } from './mcp-status/mcp-status-probe';
@@ -36,6 +36,10 @@ import {
 import { OpencodeServer } from './runtime/opencode-server';
 import { InjectReport, ResourceInjector } from './resources/injector';
 import { RestartCoordinator } from './restart/restart-coordinator';
+import {
+  cleanupAuthJson,
+  writeAuthJson,
+} from './credentials/model-credential-injector';
 
 /** 无注入时的空报告（buildCapabilities/buildRegisterOptions 默认值；main() 总会传入真实报告）。 */
 const EMPTY_INJECT_REPORT: InjectReport = { skills: [], tools: [], mcpServers: [] };
@@ -67,15 +71,23 @@ export function onCommands(handler: CommandHandler): void {
   commandHandler = handler;
 }
 
-/** T4a：命令分派——reload-config 打入口日志 + 透传注册回调（T4b 注入 + T4c 重启执行）。 */
+/** T4a：命令分派——reload-config/model-credentials 打入口日志 + 透传注册回调（T4b 注入 + T4c 重启执行）。 */
 export function dispatchCommands(commands: WorkerCommand[]): void {
   if (!commands || commands.length === 0) {
     return;
   }
   for (const command of commands) {
-    if (command.type === 'reload-config') {
+    if (command.type === WORKER_COMMAND_TYPES.RELOAD_CONFIG) {
       console.log(
         `[worker] 收到命令 reload-config（resourceVersion=${command.resourceVersion}），分派注入+重启`,
+      );
+    }
+    if (command.type === WORKER_COMMAND_TYPES.MODEL_CREDENTIALS) {
+      // C5：只打 providerID 清单（token 绝不进日志，安全基线）
+      const providerIDs =
+        command.payload?.providerKeys?.map((k) => k.providerID).join(', ') ?? '';
+      console.log(
+        `[worker] 收到命令 model-credentials（providerKeys=[${providerIDs}]），分派 auth.json 注入+重启`,
       );
     }
   }
@@ -96,6 +108,61 @@ function printStartup(config: WorkerConfig, opencodeVersion: string): void {
   opencodeVersion     = ${opencodeVersion}`);
 }
 
+/** C2 模型探测重试选项（B2：空列表重试参数，options.delay 供单测注入跳过真实等待）。 */
+export interface ModelListProbeOptions {
+  /** 空列表额外重试次数（默认 3 次，延迟 1s/2s/4s 指数退避，总窗口 ~7s）。 */
+  retries?: number;
+  /** 首次重试延迟基数 ms（默认 1000；第 n 次重试延迟 = base * 2^n）。 */
+  retryDelayMs?: number;
+  /** 可注入 sleep（单测传 0ms 跳过真实等待；缺省 setTimeout）。 */
+  delay?: (ms: number) => Promise<void>;
+}
+
+const defaultDelay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * C2：探测 serve 真实模型列表并映射为上报格式（id 字符串列表，格式 providerID/modelID，
+ * 对齐 C1 目录 id 拆解约定）。
+ * B2 修复（F3）：serve 就绪瞬间 /api/model 可能返回空列表（serve 模型表仍在预热，F3 实测
+ * ~3s 后才返回完整模型）——空列表不再视为"已探测无模型"，而是"未就绪"：按 1s/2s/4s 指数
+ * 退避重试直到非空或重试耗尽。
+ * - 非空 → 返回 id 数组（正常上报）
+ * - 重试耗尽仍空 → 降级 undefined（不携带 models，不阻断注册）
+ * - listModels 抛错（serve 未就绪/端点不支持/网络错）→ 立即降级 undefined
+ * 独立导出便于单测 mock driver.listModels 的空/非空/抛错三态。
+ */
+export async function resolveModels(
+  lister: { listModels(): Promise<DriverModelInfo[]> },
+  options: ModelListProbeOptions = {},
+): Promise<string[] | undefined> {
+  const {
+    retries = 3,
+    retryDelayMs = 1000,
+    delay = defaultDelay,
+  } = options;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const raw = await lister.listModels();
+      if (raw.length > 0) {
+        return raw.map((m) => m.id);
+      }
+      if (attempt < retries) {
+        const backoffMs = retryDelayMs * 2 ** attempt;
+        console.warn(
+          `[worker] 模型列表探测为空（第 ${attempt + 1}/${retries + 1} 次，serve 可能仍在预热），${backoffMs}ms 后重试`,
+        );
+        await delay(backoffMs);
+      }
+    } catch (err) {
+      console.warn(`[worker] 模型列表探测失败（注册降级不带 models，不阻断注册）: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+  console.warn(`[worker] 模型列表探测 ${retries + 1} 次仍为空，注册降级不带 models（不阻断注册）`);
+  return undefined;
+}
+
 /**
  * T6：注册能力声明（T10 细化并发上限/技能清单；当前单实例 + 已注入的 git 工具族）。
  * F2 C2：serve 实际监听端口必须随注册上报——随机端口（OPENCODE_SERVE_PORT=0）场景下
@@ -104,12 +171,15 @@ function printStartup(config: WorkerConfig, opencodeVersion: string): void {
  * WORKER_ADVERTISE_HOST=http://worker，server resolveBaseUrl 优先读 baseUrl 直连）。
  * T9：接入注入器清单——skills 上报注入器实际注入的 skill 名，tools 合并内置 git 工具族
  * 与注入的自定义工具（去重）。
+ * C2：models 为 serve 真实模型 id 列表（resolveModels 结果）；undefined（探测失败）不携带。
+ * 异步化语义：与调用点（serve 就绪后）保持一致，供 registerCurrent/reRegister 链 await。
  */
-export function buildCapabilities(
+export async function buildCapabilities(
   port: number | null,
   advertiseHost: string,
   injected: InjectReport = EMPTY_INJECT_REPORT,
-): WorkerCapabilities {
+  models?: string[],
+): Promise<WorkerCapabilities> {
   const base = advertiseHost.replace(/\/+$/, '');
   const tools = [...new Set([...GIT_TOOLS.map((tool) => tool.name), ...injected.tools])];
   return {
@@ -118,6 +188,7 @@ export function buildCapabilities(
     tools,
     port: port ?? undefined,
     baseUrl: port !== null ? `${base}:${port}` : undefined,
+    ...(models !== undefined ? { models } : {}),
   };
 }
 
@@ -126,21 +197,26 @@ export function buildCapabilities(
  * serveServer.port 重新组装 → capabilities.baseUrl/port 随心跳后注册更新，server 才能连上新端口。
  * T9：injected 为最近一次注入报告（启动注入 + reload-config 重注入后更新），
  * 注册/reRegister 携带真实 skills/tools 清单，保证 worker 详情页数据非陈旧。
+ * C2：models 透传 buildCapabilities（resolveModels 结果，失败 undefined 不带）；
+ * defaultModelId 来自 config.defaultModelId（env WORKER_DEFAULT_MODEL），未配置不携带。
  */
-export function buildRegisterOptions(
+export async function buildRegisterOptions(
   config: WorkerConfig,
   port: number | null,
   serveVersion: string,
   cliVersion: string,
   injected: InjectReport = EMPTY_INJECT_REPORT,
-): RegistryClientOptions {
+  models?: string[],
+): Promise<RegistryClientOptions> {
+  const capabilities = await buildCapabilities(port, config.workerAdvertiseHost, injected, models);
   return {
     serverUrl: config.serverUrl,
     workerToken: config.workerToken,
     workerId: config.workerId,
     workerName: config.workerName,
     opencodeVersion: serveVersion !== 'unknown' ? serveVersion : cliVersion,
-    capabilities: buildCapabilities(port, config.workerAdvertiseHost, injected),
+    capabilities,
+    ...(config.defaultModelId ? { defaultModelId: config.defaultModelId } : {}),
   };
 }
 
@@ -195,20 +271,24 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
 
   // T6 注册（X-Worker-Token）：失败指数退避重试（1s/2s/4s/8s...封顶 30s），
   // 重试耗尽返回 null（由调用方决定退出或降级）。
-  const registerCurrent = (): Promise<RegisterResponse | null> =>
-    registerWorkerWithRetry(
-      buildRegisterOptions(
+  // C2：serve 就绪后先探测真实模型列表（resolveModels 失败降级 undefined，不带 models 不阻断注册）。
+  const registerCurrent = async (): Promise<RegisterResponse | null> => {
+    const models = await resolveModels(driver);
+    return registerWorkerWithRetry(
+      await buildRegisterOptions(
         config,
         serveServer.port,
         serveServer.version,
         opencodeVersion,
         lastInjectReport,
+        models,
       ),
       { logger: { warn: (message: string) => console.warn(`[worker] ${message}`) } },
     ).catch((err: Error) => {
       console.error(`[worker] 注册失败（重试耗尽）: ${err.message}`);
       return null;
     });
+  };
 
   // T4c：重启后重新注册——serve 随机端口重启后可能变化，用当前 port 重新组装注册选项；
   // 失败不退出（serve 已在新端口运行，server 连旧端口报 degraded，再次 reload-config 可修复）。
@@ -229,7 +309,13 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   // 有活跃会话则挂起，等会话归零后自动执行。
   const restartCoordinator = new RestartCoordinator({
     activeSessionCount: () => getLoad().instances,
-    restart: () => serveServer.restart(),
+    // B1 配套：serve 重启（随机端口可能变化）后须同步 driver.baseUrl——否则
+    // reRegister 的 resolveModels 探测打到旧端口 fetch failed，capabilities.models 恒空。
+    restart: async () => {
+      const baseUrl = await serveServer.restart();
+      driver.baseUrl = baseUrl;
+      return baseUrl;
+    },
     reRegister,
     logger: {
       info: (message: string) => console.log(`[worker] ${message}`),
@@ -240,6 +326,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
 
   // T4b：注册命令处理回调（T4a 挂载点）——reload-config 触发资源重拉 + 注入 +
   // T4c 重启判定（无活跃会话立即重启 serve 使新配置生效，有活跃会话则挂起）。
+  // C5：注入上一次 model-credentials 使用的数据目录（下次写入前 cleanup，不留存旧凭据明文）。
+  let injectedAuthDir: string | null = null;
   onCommands(async (commands) => {
     for (const command of commands) {
       if (command.type === WORKER_COMMAND_TYPES.RELOAD_CONFIG) {
@@ -258,6 +346,35 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
           }
         } catch (err) {
           console.warn(`[worker] reload-config 资源重注入失败: ${(err as Error).message}`);
+        }
+      }
+      if (command.type === WORKER_COMMAND_TYPES.MODEL_CREDENTIALS) {
+        const payload = command.payload;
+        if (!payload?.providerKeys) {
+          console.warn('[worker] model-credentials 命令缺少 providerKeys 负载，跳过注入');
+          continue;
+        }
+        try {
+          // 清理上一次注入目录（旧凭据明文不留存）→ 写新 auth.json（600 权限，路径随机化）
+          if (injectedAuthDir) {
+            cleanupAuthJson(injectedAuthDir);
+          }
+          const injected = writeAuthJson(payload.providerKeys);
+          injectedAuthDir = injected.dataDir;
+          // C5a 主选方案：进程级 env 覆盖 XDG_DATA_HOME——serve spawn env={...process.env}
+          // 自动继承（opencode-server.ts:282），无需改 spawnServe 签名；restart 后生效。
+          process.env.XDG_DATA_HOME = injected.dataDir;
+          console.log(
+            `[worker] model-credentials：auth.json 已注入 ${injected.authJsonPath}（providerKeys=${payload.providerKeys.length}），重启 serve 生效`,
+          );
+          const decision = await restartCoordinator.requestRestart(
+            'model-credentials（凭据注入）',
+          );
+          if (decision === 'pending') {
+            console.log('[worker] model-credentials：存在活跃会话，重启挂起（会话归零后自动执行）');
+          }
+        } catch (err) {
+          console.warn(`[worker] model-credentials 注入失败: ${(err as Error).message}`);
         }
       }
     }
@@ -307,6 +424,10 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         await eventSender.flush();
         if (serveServer.isRunning) {
           await serveServer.stop();
+        }
+        // C5：worker 退出时清理注入的 auth.json（明文 key 不留存，幂等）
+        if (injectedAuthDir) {
+          cleanupAuthJson(injectedAuthDir);
         }
       } finally {
         process.exit(0);

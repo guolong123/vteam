@@ -71,6 +71,7 @@ npm run dev            # tsx src/index.ts
 | `OPENCODE_SERVE_HOSTNAME` | 否 | `127.0.0.1` | opencode serve 绑定地址（D2：默认本地回环铁律；容器内设 `0.0.0.0` 供 server 容器访问） |
 | `WORKER_ADVERTISE_HOST` | 否 | `http://127.0.0.1` | worker 对 server 公布的 serve 基址主机（D2：随注册 capabilities.baseUrl 上报；容器 compose 设 `http://worker`） |
 | `GIT_SSH_KEY_PATH` | 否 | 空 | SSH 私钥路径（T5 git 凭证注入：GIT_SSH_COMMAND）；空 = 不注入 |
+| `WORKER_DEFAULT_MODEL` | 否 | 空 | worker 默认模型 id（C2：随注册上报，C7 分派兜底）；空 = 未配置不上报 |
 
 ## 目录结构
 

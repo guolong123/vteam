@@ -32,6 +32,11 @@ export interface WorkerCapabilities {
   skills: string[];
   tools: string[];
   /**
+   * C2：serve 实际可用模型 id 列表（listModels 成功上报，id 格式 providerID/modelID；
+   * listModels 失败降级缺省——server 侧 C3 据此合并入库，C7 调度按模型可用过滤）。
+   */
+  models?: string[];
+  /**
    * serve 实际监听端口（F2 C2：随机端口场景必须上报，否则 server 回退连死端口 4199）。
    * 对齐 server worker.client.ts resolveBaseUrl：capabilities.port → http://localhost:{port}。
    */
@@ -67,6 +72,8 @@ export interface RegisterWorkerPayload {
   opencodeVersion: string;
   capabilities: WorkerCapabilities;
   load: WorkerLoad;
+  /** C2：worker 配置的默认模型（env WORKER_DEFAULT_MODEL，可选；id 格式 providerID/modelID，C7 兜底用） */
+  defaultModelId?: string;
 }
 
 /** POST /workers/:id/heartbeat 请求体（对齐 server HeartbeatWorkerDto）。 */
@@ -81,10 +88,35 @@ export interface HeartbeatWorkerPayload {
 export const WORKER_COMMAND_TYPES = {
   /** 资源（skills/tools/mcp 配置）变更：重拉 + 注入 + 重启（T4b/T4c 执行） */
   RELOAD_CONFIG: 'reload-config',
+  /**
+   * C5：模型凭据下发——worker 写 auth.json（XDG_DATA_HOME 覆盖）注入 + 重启生效。
+   * 命令一次有效（心跳取出即清空）；token 只经下行命令明文传输，不落 worker 日志。
+   */
+  MODEL_CREDENTIALS: 'model-credentials',
 } as const;
 
 export type WorkerCommandType =
   (typeof WORKER_COMMAND_TYPES)[keyof typeof WORKER_COMMAND_TYPES];
+
+/**
+ * C5：模型凭据下发条目（provider → 明文 API key）。
+ * token 仅存在于下行命令（心跳取出即清空，一次性），worker 侧只写入 auth.json。
+ */
+export interface ModelCredentialEntry {
+  providerID: string;
+  key: string;
+}
+
+/**
+ * C5：model-credentials 命令负载（对齐 server ModelCredentialsPayload）。
+ * targetWorkerIds 空 = 全量（server 侧已按广播/定向分好——定向走 enqueueCommand、
+ * 全量走 broadcastCommand；worker 侧仅消费 providerKeys，targetWorkerIds 为元数据）。
+ */
+export interface ModelCredentialsPayload {
+  providerKeys: ModelCredentialEntry[];
+  /** 定向 worker id 列表；空 = 全量下发 */
+  targetWorkerIds?: string[];
+}
 
 /**
  * 心跳响应携带的下行命令（T4a，对齐 server WorkerCommand）。
@@ -94,6 +126,8 @@ export interface WorkerCommand {
   type: WorkerCommandType;
   /** 资源版本号：T1/T2 变更时递增，worker 侧据此判断是否需重拉注入 */
   resourceVersion: string;
+  /** C5：model-credentials 命令携带的凭据负载（仅该 type 携带；reload-config 等不携带） */
+  payload?: ModelCredentialsPayload;
 }
 
 /** POST /workers/:id/heartbeat 成功响应（对齐 server workers.service.ts heartbeat 返回）。 */

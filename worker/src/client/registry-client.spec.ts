@@ -63,6 +63,18 @@ describe('registerWorker（POST /api/v1/workers/register）', () => {
     expect(result).toEqual(serverResp);
   });
 
+  it('C2：defaultModelId 提供时透传注册体（未提供不携带）', async () => {
+    fetchMock.mockResolvedValue(okJson({ workerId: 'w_test-1', heartbeatIntervalMs: 10_000, serverTime: '' }));
+    await registerWorker({ ...REG_BASE, defaultModelId: 'opencode-go/deepseek-v4-flash' });
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    expect(body.defaultModelId).toBe('opencode-go/deepseek-v4-flash');
+
+    fetchMock.mockResolvedValue(okJson({ workerId: 'w_test-1', heartbeatIntervalMs: 10_000, serverTime: '' }));
+    await registerWorker(REG_BASE);
+    const body2 = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
+    expect(body2.defaultModelId).toBeUndefined();
+  });
+
   it('serverUrl 尾斜杠容忍（不产生 // 双斜杠）', async () => {
     fetchMock.mockResolvedValue(okJson({ workerId: 'w', heartbeatIntervalMs: 1000, serverTime: '' }));
     await registerWorker({ ...REG_BASE, serverUrl: 'http://localhost:3000/' });

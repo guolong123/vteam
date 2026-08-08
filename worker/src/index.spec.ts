@@ -6,7 +6,13 @@ import { WorkerConfig } from './config';
 import { GIT_TOOLS } from './git/git-tools';
 import { WorkerCommand } from './protocol/worker-protocol';
 import { InjectReport } from './resources/injector';
-import { buildCapabilities, buildRegisterOptions, dispatchCommands, onCommands } from './index';
+import {
+  buildCapabilities,
+  buildRegisterOptions,
+  dispatchCommands,
+  onCommands,
+  resolveModels,
+} from './index';
 
 /** 最小 WorkerConfig（buildRegisterOptions 全字段）。 */
 const CONFIG: WorkerConfig = {
@@ -22,58 +28,137 @@ const CONFIG: WorkerConfig = {
   gitSshKeyPath: '',
   workerAdvertiseHost: 'http://worker',
   opencodeServeHostname: '127.0.0.1',
+  defaultModelId: '',
 };
 
 describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
-  it('serve 启动后 port 已知：上报 port + baseUrl = advertiseHost:port', () => {
-    const caps = buildCapabilities(4199, 'http://worker');
+  it('serve 启动后 port 已知：上报 port + baseUrl = advertiseHost:port', async () => {
+    const caps = await buildCapabilities(4199, 'http://worker');
     expect(caps.port).toBe(4199);
     expect(caps.baseUrl).toBe('http://worker:4199');
   });
 
-  it('advertiseHost 尾斜杠容忍（容器 compose 写 http://worker/ 不产生双斜杠）', () => {
-    expect(buildCapabilities(4199, 'http://worker/').baseUrl).toBe('http://worker:4199');
-    expect(buildCapabilities(4199, 'http://worker').baseUrl).toBe('http://worker:4199');
+  it('advertiseHost 尾斜杠容忍（容器 compose 写 http://worker/ 不产生双斜杠）', async () => {
+    expect((await buildCapabilities(4199, 'http://worker/')).baseUrl).toBe('http://worker:4199');
+    expect((await buildCapabilities(4199, 'http://worker')).baseUrl).toBe('http://worker:4199');
   });
 
-  it('serve 未就绪（port=null）：不报 port/baseUrl（避免 server 连死地址）', () => {
-    const caps = buildCapabilities(null, 'http://worker');
+  it('serve 未就绪（port=null）：不报 port/baseUrl（避免 server 连死地址）', async () => {
+    const caps = await buildCapabilities(null, 'http://worker');
     expect(caps.port).toBeUndefined();
     expect(caps.baseUrl).toBeUndefined();
   });
 
-  it('本地默认 advertiseHost=http://127.0.0.1：baseUrl 指向回环', () => {
-    expect(buildCapabilities(4199, 'http://127.0.0.1').baseUrl).toBe('http://127.0.0.1:4199');
+  it('本地默认 advertiseHost=http://127.0.0.1：baseUrl 指向回环', async () => {
+    expect((await buildCapabilities(4199, 'http://127.0.0.1')).baseUrl).toBe('http://127.0.0.1:4199');
   });
 
-  it('T9：未注入时 skills 为空、tools 仅内置 git 工具族（7 个）', () => {
-    const caps = buildCapabilities(4199, 'http://worker');
+  it('T9：未注入时 skills 为空、tools 仅内置 git 工具族（7 个）', async () => {
+    const caps = await buildCapabilities(4199, 'http://worker');
     expect(caps.skills).toEqual([]);
     expect(caps.tools).toEqual(GIT_TOOLS.map((tool) => tool.name));
     expect(caps.tools).toHaveLength(7);
   });
 
-  it('T9：注入清单接入——skills 上报注入的 skill 名，tools 合并内置 git + 注入自定义工具', () => {
+  it('T9：注入清单接入——skills 上报注入的 skill 名，tools 合并内置 git + 注入自定义工具', async () => {
     const report: InjectReport = {
       skills: ['audit-log-analysis', 'review'],
       tools: ['jira-query', 'echo-hello'],
       mcpServers: ['gitee-ent'],
     };
-    const caps = buildCapabilities(4199, 'http://worker', report);
+    const caps = await buildCapabilities(4199, 'http://worker', report);
     expect(caps.skills).toEqual(['audit-log-analysis', 'review']);
     expect(caps.tools).toEqual([...GIT_TOOLS.map((t) => t.name), 'jira-query', 'echo-hello']);
   });
 
-  it('T9：注入工具与内置 git 工具同名时去重（不重复上报）', () => {
+  it('T9：注入工具与内置 git 工具同名时去重（不重复上报）', async () => {
     const report: InjectReport = {
       skills: [],
       tools: ['git_status', 'jira-query', 'git_clone'],
       mcpServers: [],
     };
-    const caps = buildCapabilities(4199, 'http://worker', report);
+    const caps = await buildCapabilities(4199, 'http://worker', report);
     const expected = [...new Set([...GIT_TOOLS.map((t) => t.name), 'git_status', 'jira-query', 'git_clone'])];
     expect(caps.tools).toEqual(expected);
     expect(caps.tools).toHaveLength(GIT_TOOLS.length + 1);
+  });
+
+  it('C2：传入 models 时 capabilities 携带真实模型 id 列表（providerID/modelID）', async () => {
+    const caps = await buildCapabilities(4199, 'http://worker', undefined, [
+      'opencode-go/deepseek-v4-flash',
+      'opencode/glm-5.1',
+    ]);
+    expect(caps.models).toEqual(['opencode-go/deepseek-v4-flash', 'opencode/glm-5.1']);
+  });
+
+  it('C2：models 为空数组时携带（已探测但无模型）；undefined（探测失败）不携带', async () => {
+    expect((await buildCapabilities(4199, 'http://worker', undefined, [])).models).toEqual([]);
+    expect((await buildCapabilities(4199, 'http://worker')).models).toBeUndefined();
+  });
+});
+
+describe('resolveModels（C2：serve 模型列表探测与降级）', () => {
+  it('成功：映射为 providerID/modelID 上报格式', async () => {
+    const models = await resolveModels({
+      listModels: async () => [
+        { id: 'opencode-go/deepseek-v4-flash', name: 'DeepSeek V4 Flash', providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+        { id: 'opencode/glm-5.1', name: 'GLM 5.1', providerID: 'opencode', modelID: 'glm-5.1' },
+      ],
+    });
+    expect(models).toEqual(['opencode-go/deepseek-v4-flash', 'opencode/glm-5.1']);
+  });
+
+  it('首次探测非空：只探测一次，不触发重试', async () => {
+    const listModels = jest.fn().mockResolvedValue([
+      { id: 'opencode-go/deepseek-v4-flash', name: 'D', providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+    ]);
+    const models = await resolveModels({ listModels }, { delay: async () => {} });
+    expect(models).toEqual(['opencode-go/deepseek-v4-flash']);
+    expect(listModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('B2 空列表重试：前两次为空，第三次非空 → 返回模型（serve 预热）', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const listModels = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { id: 'opencode-go/deepseek-v4-flash', name: 'D', providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+        ]);
+      const models = await resolveModels({ listModels }, { delay: async () => {} });
+      expect(models).toEqual(['opencode-go/deepseek-v4-flash']);
+      expect(listModels).toHaveBeenCalledTimes(3);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('B2 空列表重试耗尽：持续为空 → 降级 undefined（不阻断注册）', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const listModels = jest.fn().mockResolvedValue([]);
+      const models = await resolveModels({ listModels }, { retries: 2, delay: async () => {} });
+      expect(models).toBeUndefined();
+      expect(listModels).toHaveBeenCalledTimes(3); // 首次 + 2 次重试
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('失败（listModels 抛错）：立即降级返回 undefined（注册不阻断）', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const listModels = jest.fn().mockImplementation(async () => {
+        throw new Error('serve 未就绪');
+      });
+      const models = await resolveModels({ listModels }, { delay: async () => {} });
+      expect(models).toBeUndefined();
+      expect(listModels).toHaveBeenCalledTimes(1); // 抛错不重试
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
@@ -141,12 +226,54 @@ describe('T4a 命令分派（onCommands + dispatchCommands）', () => {
       expect.stringContaining('reload-config'),
     );
   });
+
+  it('C5：model-credentials 命令打 providerID 清单日志（不含 token）并透传回调', () => {
+    const handler = jest.fn();
+    onCommands(handler);
+    const commands: WorkerCommand[] = [
+      {
+        type: 'model-credentials',
+        resourceVersion: 'model-credentials',
+        payload: {
+          providerKeys: [
+            { providerID: 'opencode-go', key: 'sk-secret' },
+            { providerID: 'opencode', key: 'sk-secret-2' },
+          ],
+        },
+      },
+    ];
+
+    dispatchCommands(commands);
+
+    expect(handler).toHaveBeenCalledWith(commands);
+    const logArgs = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(logArgs).toContain('model-credentials');
+    expect(logArgs).toContain('opencode-go, opencode');
+    // 安全：token 绝不进日志
+    expect(logArgs).not.toContain('sk-secret');
+    expect(logArgs).not.toContain('sk-secret-2');
+  });
+
+  it('C5：model-credentials 命令缺 payload 时仍透传回调且日志不含敏感信息', () => {
+    const handler = jest.fn();
+    onCommands(handler);
+    const commands = [
+      { type: 'model-credentials', resourceVersion: 'model-credentials' },
+    ] as unknown as WorkerCommand[];
+
+    dispatchCommands(commands);
+
+    expect(handler).toHaveBeenCalledWith(commands);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('model-credentials'),
+    );
+  });
 });
 
 describe('buildRegisterOptions（T4c：重启后重新注册携带新端口）', () => {
-  it('端口变化 → capabilities.port/baseUrl 更新（重启后重新注册数据源）', () => {
-    const before = buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version');
-    const after = buildRegisterOptions(CONFIG, 53001, '1.18.15', 'cli-version');
+  it('端口变化 → capabilities.port/baseUrl 更新（重启后重新注册数据源）', async () => {
+    const before = await buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version');
+    const after = await buildRegisterOptions(CONFIG, 53001, '1.18.15', 'cli-version');
 
     expect(before.capabilities.port).toBe(4199);
     expect(before.capabilities.baseUrl).toBe('http://worker:4199');
@@ -156,32 +283,54 @@ describe('buildRegisterOptions（T4c：重启后重新注册携带新端口）',
     expect(after.workerId).toBe('w_host');
   });
 
-  it('serveVersion 非 unknown 优先，否则回退 CLI 版本', () => {
-    expect(buildRegisterOptions(CONFIG, null, '1.18.15', 'fallback').opencodeVersion).toBe('1.18.15');
-    expect(buildRegisterOptions(CONFIG, null, 'unknown', 'fallback').opencodeVersion).toBe('fallback');
+  it('serveVersion 非 unknown 优先，否则回退 CLI 版本', async () => {
+    expect((await buildRegisterOptions(CONFIG, null, '1.18.15', 'fallback')).opencodeVersion).toBe('1.18.15');
+    expect((await buildRegisterOptions(CONFIG, null, 'unknown', 'fallback')).opencodeVersion).toBe('fallback');
   });
 
-  it('serve 未就绪（port=null）：capabilities 不含 port/baseUrl（不报死地址）', () => {
-    const opts = buildRegisterOptions(CONFIG, null, 'unknown', 'cli-version');
+  it('serve 未就绪（port=null）：capabilities 不含 port/baseUrl（不报死地址）', async () => {
+    const opts = await buildRegisterOptions(CONFIG, null, 'unknown', 'cli-version');
     expect(opts.capabilities.port).toBeUndefined();
     expect(opts.capabilities.baseUrl).toBeUndefined();
   });
 
-  it('T9：注入报告透传——注册选项携带真实 skills/tools 清单（reload-config 后 reRegister 复用）', () => {
+  it('T9：注入报告透传——注册选项携带真实 skills/tools 清单（reload-config 后 reRegister 复用）', async () => {
     const report: InjectReport = {
       skills: ['audit-log-analysis'],
       tools: ['jira-query'],
       mcpServers: ['gitee-ent'],
     };
-    const opts = buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version', report);
+    const opts = await buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version', report);
     expect(opts.capabilities.skills).toEqual(['audit-log-analysis']);
     expect(opts.capabilities.tools).toEqual([...GIT_TOOLS.map((t) => t.name), 'jira-query']);
     expect(opts.capabilities.port).toBe(4199);
   });
 
-  it('T9：未传注入报告时默认空清单（skills=[]、tools 仅内置 git）', () => {
-    const opts = buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version');
+  it('T9：未传注入报告时默认空清单（skills=[]、tools 仅内置 git）', async () => {
+    const opts = await buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version');
     expect(opts.capabilities.skills).toEqual([]);
     expect(opts.capabilities.tools).toEqual(GIT_TOOLS.map((t) => t.name));
+  });
+
+  it('C2：models 透传——capabilities.models 携带真实模型 id 列表', async () => {
+    const opts = await buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version', undefined, [
+      'opencode-go/deepseek-v4-flash',
+    ]);
+    expect(opts.capabilities.models).toEqual(['opencode-go/deepseek-v4-flash']);
+  });
+
+  it('C2：defaultModelId 配置后随注册选项上报', async () => {
+    const opts = await buildRegisterOptions(
+      { ...CONFIG, defaultModelId: 'opencode-go/deepseek-v4-flash' },
+      4199,
+      '1.18.15',
+      'cli-version',
+    );
+    expect(opts.defaultModelId).toBe('opencode-go/deepseek-v4-flash');
+  });
+
+  it('C2：defaultModelId 未配置（空串）不携带', async () => {
+    const opts = await buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version');
+    expect(opts.defaultModelId).toBeUndefined();
   });
 });

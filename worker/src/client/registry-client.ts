@@ -52,6 +52,8 @@ export interface RegistryClientOptions {
   capabilities: WorkerCapabilities;
   /** 注册时负载快照（默认 { instances: 0 }） */
   load?: WorkerLoad;
+  /** C2：worker 默认模型 id（config.defaultModelId，env WORKER_DEFAULT_MODEL）；空不携带 */
+  defaultModelId?: string;
   /** fetch 注入点（测试用）；默认 globalThis.fetch */
   fetchImpl?: typeof fetch;
 }
@@ -100,6 +102,7 @@ export async function registerWorker(opts: RegistryClientOptions): Promise<Regis
     opencodeVersion: opts.opencodeVersion,
     capabilities: opts.capabilities,
     load: opts.load ?? { instances: 0 },
+    ...(opts.defaultModelId ? { defaultModelId: opts.defaultModelId } : {}),
   };
   const response = await fetchImpl(apiUrl(opts.serverUrl, '/workers/register'), {
     method: 'POST',

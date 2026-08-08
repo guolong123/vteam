@@ -33,6 +33,8 @@ export interface WorkerConfig {
   workerAdvertiseHost: string;
   /** opencode serve 绑定地址（D2：默认 127.0.0.1 保住本地铁律；容器内设 0.0.0.0 供 server 容器访问） */
   opencodeServeHostname: string;
+  /** C2：worker 默认模型（env WORKER_DEFAULT_MODEL，id 格式 providerID/modelID）；未设 = 不指定（serve 默认） */
+  defaultModelId?: string;
 }
 
 /** 解析非负整数配置项；缺省/空串回落默认值，非法值抛错。 */
@@ -72,5 +74,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     gitSshKeyPath: (env.GIT_SSH_KEY_PATH ?? '').trim(),
     workerAdvertiseHost: (env.WORKER_ADVERTISE_HOST ?? '').trim() || 'http://127.0.0.1',
     opencodeServeHostname: (env.OPENCODE_SERVE_HOSTNAME ?? '').trim() || '127.0.0.1',
+    defaultModelId: (env.WORKER_DEFAULT_MODEL ?? '').trim() || undefined,
   };
 }

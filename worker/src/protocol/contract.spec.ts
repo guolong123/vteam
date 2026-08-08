@@ -63,6 +63,48 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {
     expect(parsed.capabilities).toEqual({ maxInstances: 1, skills: [], tools: [] });
   });
 
+  it('C2：capabilities.models 序列化/反序列化后字段完整（真实模型列表上报）', () => {
+    const registration: RegisterWorkerPayload = {
+      workerId: 'w_0000000003',
+      opencodeVersion: '1.18.15',
+      capabilities: {
+        maxInstances: 1,
+        skills: [],
+        tools: [],
+        models: ['opencode-go/deepseek-v4-flash', 'opencode/glm-5.1'],
+      },
+      load: { instances: 0 },
+    };
+
+    const parsed = JSON.parse(JSON.stringify(registration)) as RegisterWorkerPayload;
+    expect(parsed.capabilities.models).toEqual(['opencode-go/deepseek-v4-flash', 'opencode/glm-5.1']);
+  });
+
+  it('C2：defaultModelId 序列化/反序列化后完整（配置 WORKER_DEFAULT_MODEL 上报链路）', () => {
+    const registration: RegisterWorkerPayload = {
+      workerId: 'w_0000000004',
+      opencodeVersion: '1.18.15',
+      capabilities: { maxInstances: 1, skills: [], tools: [] },
+      load: { instances: 0 },
+      defaultModelId: 'opencode-go/deepseek-v4-flash',
+    };
+
+    const parsed = JSON.parse(JSON.stringify(registration)) as RegisterWorkerPayload;
+    expect(parsed.defaultModelId).toBe('opencode-go/deepseek-v4-flash');
+  });
+
+  it('C2：defaultModelId 未配置时缺省（反序列化 undefined）', () => {
+    const registration: RegisterWorkerPayload = {
+      workerId: 'w_0000000005',
+      opencodeVersion: '1.18.15',
+      capabilities: { maxInstances: 1, skills: [], tools: [] },
+      load: { instances: 0 },
+    };
+
+    const parsed = JSON.parse(JSON.stringify(registration)) as RegisterWorkerPayload;
+    expect(parsed.defaultModelId).toBeUndefined();
+  });
+
   it('HeartbeatWorkerPayload 序列化/反序列化后字段完整（对齐 POST /workers/:id/heartbeat）', () => {
     const heartbeat: HeartbeatWorkerPayload = {
       workerId: 'w_0000000001',
@@ -119,5 +161,57 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {
 
     expect(parsed.type).toBe('reload-config');
     expect(parsed.resourceVersion).toBe('v2');
+  });
+
+  it('C5：model-credentials 命令携带 payload（providerKeys + 可选 targetWorkerIds），round-trip 完整', () => {
+    const command: WorkerCommand = {
+      type: WORKER_COMMAND_TYPES.MODEL_CREDENTIALS,
+      resourceVersion: 'model-credentials',
+      payload: {
+        providerKeys: [
+          { providerID: 'opencode-go', key: 'sk-a' },
+          { providerID: 'opencode', key: 'sk-b' },
+        ],
+        targetWorkerIds: ['w_0000000001'],
+      },
+    };
+
+    const parsed = JSON.parse(JSON.stringify(command)) as WorkerCommand;
+
+    expect(parsed.type).toBe('model-credentials');
+    expect(parsed.payload).toEqual({
+      providerKeys: [
+        { providerID: 'opencode-go', key: 'sk-a' },
+        { providerID: 'opencode', key: 'sk-b' },
+      ],
+      targetWorkerIds: ['w_0000000001'],
+    });
+  });
+
+  it('C5：model-credentials 命令 targetWorkerIds 缺省时 payload 不含该字段（全量语义）', () => {
+    const command: WorkerCommand = {
+      type: WORKER_COMMAND_TYPES.MODEL_CREDENTIALS,
+      resourceVersion: 'model-credentials',
+      payload: { providerKeys: [{ providerID: 'opencode-go', key: 'sk-a' }] },
+    };
+
+    const parsed = JSON.parse(JSON.stringify(command)) as WorkerCommand;
+
+    expect(parsed.payload?.providerKeys).toEqual([
+      { providerID: 'opencode-go', key: 'sk-a' },
+    ]);
+    expect(parsed.payload?.targetWorkerIds).toBeUndefined();
+  });
+
+  it('C5：reload-config 命令不携带 payload（向后兼容既有命令结构）', () => {
+    const command: WorkerCommand = {
+      type: WORKER_COMMAND_TYPES.RELOAD_CONFIG,
+      resourceVersion: 'v2',
+    };
+
+    const parsed = JSON.parse(JSON.stringify(command)) as WorkerCommand;
+
+    expect(parsed.type).toBe('reload-config');
+    expect(parsed.payload).toBeUndefined();
   });
 });
