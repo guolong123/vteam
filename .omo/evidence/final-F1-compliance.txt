@@ -1,0 +1,75 @@
+F1 Plan Compliance Audit — 审计报告
+=====================================
+日期: 2026-08-07 | 评审员: oracle (F1) | 计划: .omo/plans/agent-platform-phase0-1.md
+
+Must Have [5/5] | Must NOT Have [5/5] | VERDICT: APPROVE
+=============================================================
+
+── Must Have [5/5] ──────────────────────────────────────────
+
+[1/5] 前端样式与原型一致（styles.ts token 零改动、8 组件原样迁移、data-testid 保留）— PASS
+  证据:
+  - `diff <(sed -n '/export const/,$p' prototypes/_shared/styles.ts | sort) <(sed -n '/export const/,$p' web/src/theme/tokens.ts | sort)` → EXIT=0，diff 为空（token 零改动）
+  - 8 组件全部迁移至 web/src/components/ui/: agent-avatar / agent-badge / chat-bubble / empty-state / message-input / sidebar / status-badge / top-bar（与原型 components.tsx 8 组件一一对应）
+  - data-testid 值集合逐项一致：实现与原型均为 15 个值
+    (agent-avatar, agent-badge, chat-bubble×2, chat-bubble-author, empty-state, message-input, message-input-mentions, message-input-send, sidebar, sidebar-nav-${item.key}, sidebar-project, status-badge, topbar, topbar-user)
+  - 复用审计: .omo/evidence/task-8-tokens-diff.md（Task 8 已验证）
+
+[2/5] 后端模块对齐 08 篇 §3（Auth/Users/Projects/Realtime）— PASS
+  证据: server/src/ 含 auth/ users/ projects/ realtime/ + health/（terminus 健康检查）+ prisma/
+  模块边界与 08 篇 §3.1 Phase 1 范围一致（Tasks/Chat/Agents/SkillsTools/Workers/Permissions/Storage 为后续阶段未建）
+
+[3/5] Prisma 双 provider（MySQL + SQLite）— PASS
+  证据: server/prisma/schema.prisma datasource 声明 provider="sqlite"（本地验证库），注释明示双库兼容策略：
+  - Prisma ≥2.22 移除 provider 数组写法，故用「可移植类型」达成双库：String 列替代 enum、Json 列（SQLite 存 TEXT）、UTC DateTime、Boolean、无 @db.VarChar 等 MySQL 专属 native type
+  - 生产 MySQL 仅需将 provider 改为 "mysql" 并指向 MySQL 连接串
+  - model 19 个 + audit_logs 注释预留不建（规格「20 表」为含 audit_logs 口径，符合 15 篇 §3 标注）
+
+[4/5] 认证 JWT + bcrypt（FR-22）— PASS
+  证据: server/src/auth/auth.service.ts
+  - bcrypt.hash(password, BCRYPT_ROUNDS)（L77）+ bcrypt.compare（L119）密码哈希存储
+  - JwtService.signAsync 签发 access_token/refresh_token（L192/L196）
+  - jwt.strategy.ts（passport-jwt 策略）+ guards/ 全局守卫；单测 auth.service.spec.ts
+  - 运行证据: .omo/evidence/task-15-auth-curl.md（注册/登录/鉴权 curl 场景）、task-15-hash.md（$2b$ 前缀哈希非明文）
+
+[5/5] RealtimeModule SSE 基座（事件通道 + 游标语义）— PASS
+  证据: server/src/realtime/
+  - realtime.controller.ts: @Sse GET /api/v1/events，text/event-stream，支持 since 查询参数（EventSource lastEventId 语义），先补拉历史（id > since）后续接实时流
+  - realtime.service.ts: getEventsSince(since)（L71）游标续拉实现 + 事件广播
+  - 心跳保活（heartbeat 周期事件）
+  - 运行证据: .omo/evidence/task-18-sse.md、task-18-heartbeat.md
+
+── Must NOT Have [5/5] ──────────────────────────────────────
+
+[1/5] 不得随意改变原型样式/风格/布局 — PASS
+  证据: token 零 diff（见 Must Have 1）；data-testid 集合一致；无新增自定义样式体系（无 Tailwind/styled-components）
+
+[2/5] 不得引入 08 篇 §2 之外的新依赖 — PASS
+  证据: server/package.json 依赖 ⊆ 08 篇 §2.1 + 计划 Task 3 清单
+  (NestJS 全家桶 @nestjs/{common,core,config,jwt,passport,platform-express,swagger,terminus} + bcrypt + class-validator/transformer + passport-jwt + pino/pino-http + prisma + rxjs/reflect-metadata)
+  web/package.json 依赖: next/react/react-dom + @tanstack/react-query + zustand（08 篇 §2.1 前端状态选型）
+  无 WebSocket 依赖（无 ws/socket.io）
+
+[3/5] 不实现 Phase 2+ 功能（任务状态机、群聊落库、Agent、Worker 集成）— PASS
+  证据: server/src 业务代码 grep 无 Phase 2+ 实现；唯一命中为 realtime.service.ts L24 注释（"Phase 2 落地 chat.message.new 等"）为通道预留说明，非业务实现
+  web/src 无 websocket/状态机等实现
+
+[4/5] 不在本轮实现 git 凭证、产出物归档等后续阶段功能 — PASS
+  证据: 无 credential/archive 实现；projects/query-projects.dto.ts 中 'active'/'archived' 仅为 status 查询枚举字段预留（计划 Task 17 明示「FR-25 status 变更可留字段」），无归档业务逻辑
+
+[5/5] 不创建多租户/SSO/审计 API（下一版能力）— PASS
+  证据: 无 tenant/multi-tenant/sso/audit API 端点；audit_logs 仅在 schema 注释中标注预留不建（本版无审计模块/端点）
+
+── 关键证据文件检查 ─────────────────────────────────────────
+
+[OK] .omo/evidence/task-1-init.md          (Task 1 脚手架初始化)
+[OK] .omo/evidence/task-3-health.md        (Task 3 health 200)
+[OK] .omo/evidence/task-15-auth-curl.md    (Task 15 认证 curl 三场景)
+[OK] .omo/evidence/task-20-m1-flow.md      (Task 20 M1 联调)
+[OK] .omo/evidence/m0-m1-summary.md        (M0/M1 证据汇总)
+[OK] .omo/evidence/proto-parity/           (原型对比图: proto-login.png / impl-login.png / login-diff.png / project-list-diff.png / task-create-diff.png)
+     （prototype-parity-report.md 不存在，但任务允许「或 proto-parity/ 图」替代）
+
+── VERDICT ──────────────────────────────────────────────────
+
+Must Have [5/5] | Must NOT Have [5/5] | VERDICT: APPROVE

@@ -1,0 +1,1 @@
+T15 M3端到端：登录→/agents克隆→/artifacts?pid=p_seed_1三筛+验收徽章→看板入口跳转→accept闭环(409不可变)；Playwright全链路+0 console errors

@@ -1,0 +1,39 @@
+TASK 3: PRD 总纲与背景目标
+========================================
+文件: docs/agent-platform/01-背景与目标.md
+时间: 2026-08-06
+
+[1] 内容注入检查 (curl http://localhost:5177/@id/__x00__virtual:md-docs-content)
+    grep "01-背景与目标" -> 01-背景与目标   (PASS: key 存在)
+
+[2] frontmatter 检查
+    ---
+    title: 背景与目标
+    order: 1
+    kind: PRD
+    description: 产品背景、产品定位、产品目标、非目标与目标用户，作为 Agent 协作平台 PRD 的总纲
+    ---
+    (PASS: title/order=1/kind 均满足)
+
+[3] 必需章节 grep 断言 (grep -c "^## <章节>")
+    产品背景: 1   (PASS)
+    产品定位: 1   (PASS)
+    产品目标: 1   (PASS)
+    非目标:   1   (PASS)
+    目标用户: 1   (PASS)
+
+[4] 需求真相源对齐 (来源 .omo/plans/agent-platform-prd-prototypes.md Context/Interview Summary)
+    - 背景: 单会话持续沟通模式、多角色难以结构化组织          -> 已写入「产品背景」
+    - 定位: 基于 opencode 的多 Agent 协作控制平台             -> 已写入「产品定位」
+    - 核心能力: 任务群聊(@触发/@all/互相@)、私聊、产出物归档
+      (文本/文档/文件带版本)、Agent 配置(提示词/技能/工具/权限) -> 已写入「产品定位」
+    - 目标: 会话升级为项目制、产出可归档可追溯可复用          -> 已写入「产品目标」
+    - 非目标: 模型训练微调/通用聊天/不替代 opencode/多租户SaaS -> 已写入「非目标」
+    - 目标用户: 软件团队(产品/架构/开发/测试)、opencode 工程师 -> 已写入「目标用户」
+
+[5] Must NOT 自检
+    - 无架构图/ER 图/API 接口/代码        (PASS)
+    - 无未确认需求(阶段门禁/审批流)        (PASS)
+    - 技术底座仅愿景概述(提及 opencode 编程式驱动, 未展开) (PASS)
+
+VERDICT: PASS [5/5]

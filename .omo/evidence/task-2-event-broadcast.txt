@@ -1,0 +1,1 @@
+T2 artifact.submitted事件+ArtifactsMockConsumer：jest 8 suites/109 tests通过；simulateSubmission广播scope=task payload完整（spec验证）

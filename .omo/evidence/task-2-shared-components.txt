@@ -1,0 +1,28 @@
+T2 共享组件库冒烟验证（curl 结果）
+====================================
+日期: 2026-08-06
+md-docs 服务: http://localhost:5177 (cwd=/data/git-project/aiagents)
+
+[1] 原型自动注册（md-docs-protos 虚拟模块）:
+    import P0 from "/@fs/.../docs/agent-platform/prototypes/smoke-test/index.tsx"
+    ✓ smoke-test 原型被 collectProtos 自动发现
+
+[2] 原型编译（/@fs/.../smoke-test/index.tsx → HTTP 200）:
+    ✓ 共享组件相对导入 ../_shared/components 解析成功
+    ✓ 全部 8 个组件 + styles.ts 通过 vite 编译无错误
+
+[3] _shared 模块直接编译:
+    ✓ /@fs/.../_shared/components.tsx → HTTP 200
+    ✓ /@fs/.../_shared/styles.ts     → HTTP 200
+
+[4] 页面入口:
+    ✓ GET /                       → 200
+    ✓ GET /#/p/agent-platform/protos/smoke-test → 200
+
+[5] 关键结论（供 T8~T11 复用）:
+    - 原型 index.tsx 引用共享组件用: import { ... } from "../_shared/components"
+      （原型目录 = prototypes/<name>/，_shared 是同级兄弟，只用一级 .. 即可）
+    - 任务描述示例 "../../_shared/components" 实际多了一层
+      （若原型在 prototypes/<name>/sub/index.tsx 才需要两级）
+    - 禁止在 _shared/ 下建 index.tsx（会被误注册为原型）
+    - 设计 token 收敛在 _shared/styles.ts（roles/statusColors/space/radius/fontSize/neutral/...）

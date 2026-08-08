@@ -1,0 +1,1 @@
+T16全量门禁：server jest 22 suites/281 tests全绿+build exit 0；web tsc+build exit 0（Next 15.5.22 flaky ENOENT重试通过）

@@ -21,3 +21,19 @@ yarn-error.log*
 # IDE
 .idea/
 .vscode/
+
+# prisma sqlite database (do not commit dev.db)
+server/prisma/*.db
+server/prisma/*.db-journal
+
+# typescript build cache
+*.tsbuildinfo
+
+# test coverage
+coverage/
+
+# playwright mcp runtime artifacts (console logs / page snapshots / screenshots)
+.playwright-mcp/
+
+# evidence screenshots (kept in .omo/evidence but not versioned; .md/.txt evidence still tracked)
+.omo/evidence/**/*.png

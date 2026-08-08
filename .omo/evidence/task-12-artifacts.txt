@@ -1,0 +1,1 @@
+T12 /artifacts聚合页：Playwright artifact-row×3(含1已验收)+三筛select×2+验收徽章(data-accepted)+版本查看器；无pid重定向/projects；27/27 PASS

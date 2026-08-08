@@ -1,0 +1,29 @@
+Task 7: PRD 非功能需求与验收边界
+Date: 2026-08-06
+File: docs/agent-platform/05-非功能与验收边界.md (frontmatter order: 5)
+
+1. 内容注入检查:
+   curl http://localhost:5177/@id/__x00__virtual:md-docs-content
+   -> "/docs/agent-platform/05-非功能与验收边界.md" 命中 [PASS]
+
+2. 章节存在性 (grep '^## '):
+   - 非功能需求 (性能/安全/可用性/可扩展性/可维护性)
+   - 技术约束（平台愿景）: opencode 1.18.x + serve 地址可配置 / Node+TS / MySQL(SQLite) / Next.js
+   - 验收边界: 本迭代(PRD+原型) vs 完整平台 vs 后续迭代 三列边界表
+   - 风险与开放问题
+   4/4 章节 [PASS]
+
+3. 关键内容断言:
+   非功能需求 / 后续迭代 / SSO / 多租户 / 对象存储 / 分层上下文 / opencode serve 并发稳定性
+   / token 成本 / 死循环 / 结构化输出 [PASS]
+
+4. 研究教训引用:
+   AutoGen 群聊 token 爆炸 -> 风险表中 token 成本行
+   LangGraph 状态持久化是平台功能 -> 风险表 状态持久化行
+   per-agent 错误边界 -> 风险表 单 Agent 故障扩散行
+   框架不以进程退出表达错误 -> 风险表 错误表达方式行
+   CrewAI 上下文交接污染 -> 开放问题第 5 条 [PASS]
+
+5. Must NOT do 合规: 性能仅给目标值，无实现方案；技术约束标注为平台愿景；未改动其他文件 [PASS]
+
+RESULT: ALL PASS

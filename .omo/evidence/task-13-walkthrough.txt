@@ -1,0 +1,31 @@
+Task-13: 8 原型页面 playwright 走查结果
+=====================================================
+时间: 2026-08-06
+浏览器: chromium_headless_shell-1208 (playwright, executable_path 指定)
+视口: 1440x900
+服务: http://localhost:5177 (md-docs dev, host 0.0.0.0)
+
+## 走查矩阵
+| 原型 | URL (#/p/agent-platform/protos/<id>) | testid 通过 | console error |
+|------|--------------------------------------|-------------|---------------|
+| login | login | 3/3 | 0 |
+| project-list | project-list | 2/2 | 0 |
+| task-create | task-create | 3/3 | 0 |
+| task-board | task-board | 3/3 | 0 |
+| group-chat | group-chat | 3/3 | 0 |
+| dm-chat | dm-chat | 3/3 | 0 |
+| task-detail | task-detail | 3/3 | 0 |
+| agent-config | agent-config | 3/3 | 0 |
+
+## 文档/导航侧检查
+- 项目列表页加载: PASS (URL http://localhost:5177/)
+- docs-tree: 6/6 篇文档（背景与目标/用户与场景/任务与群聊协作/Agent 管理与产出物/非功能需求与验收边界/交互与页面设计）
+- doc-content: PASS（首个文档正文渲染：产品背景/任务即项目）
+- protos-nav: 8/8 原型导航项（登录/项目列表/任务创建/任务看板/任务群聊/私聊/任务详情/Agent 配置）
+- 06 文档原型嵌入: PASS（[data-testid=username] 在 06 文档内渲染，无 console error）
+- 文档切换: 点击文档树 4 篇均切换成功；直达 interaction-design PASS
+
+## 截图证据
+/tmp/opencode/shot-<proto-id>.png (8 张) + /tmp/opencode/shot-06-doc.png
+
+## 结论: 8 原型全部无 console error、关键元素存在，文档渲染与切换正常 ✅

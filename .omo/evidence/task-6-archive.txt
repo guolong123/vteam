@@ -1,0 +1,1 @@
+T6 Artifacts归档：POST归档v1→status:archived；同内容重复→status:duplicate(currentVersion不变)；新内容→v2；type筛选正确；sha256与sha256sum一致

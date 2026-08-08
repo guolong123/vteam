@@ -1,0 +1,1 @@
+T13入口改造：Playwright 看板artifacts-entry-button→/artifacts?pid=p_seed_1；项目卡project-artifacts-entry；群聊artifact-link；5/5 PASS

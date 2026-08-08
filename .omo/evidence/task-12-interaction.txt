@@ -1,0 +1,40 @@
+=== Task 12 验证: 06-交互与页面设计 ===
+[1] 内容注入端点 grep 06 key
+"/docs/agent-platform/06-交互与页面设计.md"
+PASS: 06 key 命中
+
+[2] 8 个页面与原型 id 对应（本地 grep）
+prototype id=login 出现 1 次
+prototype id=project-list 出现 1 次
+prototype id=task-create 出现 1 次
+prototype id=task-board 出现 1 次
+prototype id=group-chat 出现 1 次
+prototype id=dm-chat 出现 1 次
+prototype id=task-detail 出现 1 次
+prototype id=agent-config 出现 1 次
+
+[3] 核心交互关键词断言
+关键词[仅被 @ 的 Agent]: 5 次
+关键词[@all]: 2 次
+关键词[共用同一 session]: 1 次
+关键词[结论文本]: 4 次
+关键词[版本]: 6 次
+关键词[进行中]: 6 次
+关键词[待验收]: 4 次
+关键词[已完成]: 6 次
+关键词[已归档]: 3 次
+关键词[查看 Agent 会话]: 2 次
+关键词[不广播]: 2 次
+
+[4] mermaid 流程图存在
+1
+
+[5] 内嵌原型 URL 有效性
+原型 login: HTTP 200
+原型 project-list: HTTP 200
+原型 task-create: HTTP 200
+原型 task-board: HTTP 200
+原型 group-chat: HTTP 200
+原型 dm-chat: HTTP 200
+原型 task-detail: HTTP 200
+原型 agent-config: HTTP 200

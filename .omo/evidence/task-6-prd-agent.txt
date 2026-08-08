@@ -1,0 +1,36 @@
+Task 6 PRD 功能需求：Agent 管理与产出物 - 验证证据
+时间: 2026-08-06 12:26:14
+
+[1] md-docs 内容注入 (expect: 命中 04 文档 key)
+"/docs/agent-platform/04-功能需求-Agent与产出物.md"
+RESULT: PASS
+
+[2] 关键词断言 (expect: 计数 >= 1)
+  FR-30: 2
+  FR-46: 1
+  产出物: 17
+  提示词: 4
+  权限: 6
+  版本: 5
+  全局文档: 4
+  会话: 8
+  @触发: 1
+RESULT: PASS
+
+[3] 技术设计内容排除断言 (expect: 全 0)
+  CREATE TABLE: 0
+  api/v1: 0
+  GET /: 0
+  POST /: 0
+  SELECT: 0
+  接口契约: 0
+  ```json: 0
+RESULT: PASS (无数据库表结构/API 端点/代码)
+
+[4] FR 编号区间 (03 篇 FR-01..FR-16, 本篇 FR-30..FR-46 独立区间)
+FR-30 FR-31 FR-32 FR-33 FR-34 FR-35 FR-36 FR-37 FR-38 FR-39 FR-40 FR-41 FR-42 FR-43 FR-44 FR-45 FR-46 
+[5] 技术底座仅愿景级概述 (expect: 无具体设计展开)
+106:## 4. 技术底座愿景（概述）
+RESULT: PASS
+
+== 全部断言通过 ==

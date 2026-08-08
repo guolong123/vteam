@@ -1,0 +1,1 @@
+T4 sessions active过渡：curl实测 remove→frozen、rejoin(in_progress)→active；start置active（afterCommit updateMany）

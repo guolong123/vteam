@@ -1,0 +1,21 @@
+/**
+ * 群聊域错误码常量（对齐 09 篇 §3.5 Chat、10 篇 §4 触发机制）。
+ *
+ * 错误码命名沿用现有约定（大写 SNAKE，随异常响应的 code 字段返回）：
+ * - 频道/资源不存在 → 404
+ * - 归档任务频道发消息 → 409（MUST DO：TASK_ARCHIVED）
+ * - @ 解析非法（agent 不在团队 / type 非法 / 缺 agentId）→ 400
+ */
+export const CHAT_ERRORS = {
+  CHANNEL_NOT_FOUND: 'CHANNEL_NOT_FOUND',
+  TASK_NOT_FOUND: 'TASK_NOT_FOUND',
+  AGENT_NOT_FOUND: 'AGENT_NOT_FOUND',
+  TASK_ARCHIVED: 'TASK_ARCHIVED',
+  MENTION_AGENT_NOT_IN_TEAM: 'MENTION_AGENT_NOT_IN_TEAM',
+  MENTION_TYPE_INVALID: 'MENTION_TYPE_INVALID',
+  CHANNEL_TYPE_INVALID: 'CHANNEL_TYPE_INVALID',
+  MESSAGE_NOT_FOUND: 'MESSAGE_NOT_FOUND',
+  MESSAGE_NOT_USER: 'MESSAGE_NOT_USER',
+} as const;
+
+export type ChatErrorCode = (typeof CHAT_ERRORS)[keyof typeof CHAT_ERRORS];

@@ -1,0 +1,32 @@
+import { Module } from '@nestjs/common';
+import { ArtifactsModule } from '../artifacts/artifacts.module';
+import { RealtimeModule } from '../realtime/realtime.module';
+import { WorkersModule } from '../workers/workers.module';
+import { ChatController } from './chat.controller';
+import { ChatService } from './chat.service';
+import { MessageDispatcher } from './message-dispatcher';
+import { WorkerDispatcher } from './worker-dispatcher';
+
+/**
+ * 群聊模块（09 篇 §3.5 Chat；10 篇 消息/频道/触发机制）。
+ *
+ * - PrismaService 由全局 PrismaModule 提供；
+ * - RealtimeService + IdGeneratorService 由 RealtimeModule 导出（共享同一 id 生成器实例，
+ *   保证 'm'/'c' 前缀跨模块计数一致，ChatService.onModuleInit 重启续号）；
+ * - MessageDispatcher 抽象由 WorkerDispatcher 实现（Phase 4 真实分派：定位/分配 worker →
+ *   doclib 上下文注入 → WorkerClient 下发 → 自持轮询/ingress 回流落库 + 广播，18 篇 §8.3）；
+ *   原 MockDispatcher 代码保留不动（F4 零污染基线；F2 MINOR：删除 WORKER_MOCK_FALLBACK
+ *   仅注释的开关语义，避免误导——本类不实现该开关）。
+ * - imports：WorkersModule（WorkersService/WorkerClient/SessionLifecycleService）、
+ *   ArtifactsModule（ArtifactsService.onArtifactSubmitted 产出物归档）——均已有 exports。
+ */
+@Module({
+  imports: [RealtimeModule, WorkersModule, ArtifactsModule],
+  controllers: [ChatController],
+  providers: [
+    ChatService,
+    { provide: MessageDispatcher, useClass: WorkerDispatcher },
+  ],
+  exports: [ChatService],
+})
+export class ChatModule {}

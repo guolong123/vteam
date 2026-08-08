@@ -1,0 +1,74 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import {
+  IsArray,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+
+/** worker 能力声明（对齐 schema Worker.capabilities Json，T1 契约基座）。 */
+export class WorkerCapabilitiesDto {
+  @ApiProperty({ description: '最大可承载并发会话实例数' })
+  @IsInt()
+  @Min(0)
+  maxInstances: number;
+
+  @ApiProperty({ description: 'worker 启用的 skill 名列表', type: [String] })
+  @IsArray()
+  @IsString({ each: true })
+  skills: string[];
+
+  @ApiProperty({ description: 'worker 暴露的工具名列表', type: [String] })
+  @IsArray()
+  @IsString({ each: true })
+  tools: string[];
+
+  @ApiPropertyOptional({ description: 'serve 实际监听端口（F2 C2：随机端口上报，供 WorkerClient.resolveBaseUrl 直连）' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  port?: number;
+}
+
+/** worker 负载快照（对齐 schema Worker.load Json）。 */
+export class WorkerLoadDto {
+  @ApiProperty({ description: '当前并发会话实例数' })
+  @IsInt()
+  @Min(0)
+  instances: number;
+}
+
+/**
+ * POST /workers/register 请求体（架构决策 D1：全 push 三通道之注册，X-Worker-Token 鉴权）。
+ * workerId 为部署配置的全局唯一 id（w_ 前缀），opencodeVersion 供 server 版本兼容判断。
+ */
+export class RegisterWorkerDto {
+  @ApiProperty({ description: '部署配置的全局唯一 id（w_ 前缀）' })
+  @IsString()
+  @IsNotEmpty()
+  workerId: string;
+
+  @ApiPropertyOptional({ description: 'worker 显示名（可选）' })
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @ApiProperty({ description: 'opencode 版本号（serve --version）' })
+  @IsString()
+  @IsNotEmpty()
+  opencodeVersion: string;
+
+  @ApiProperty({ description: 'worker 能力声明', type: WorkerCapabilitiesDto })
+  @ValidateNested()
+  @Type(() => WorkerCapabilitiesDto)
+  capabilities: WorkerCapabilitiesDto;
+
+  @ApiProperty({ description: '注册时负载快照', type: WorkerLoadDto })
+  @ValidateNested()
+  @Type(() => WorkerLoadDto)
+  load: WorkerLoadDto;
+}

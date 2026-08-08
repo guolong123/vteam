@@ -1,0 +1,148 @@
+Final Wave F4 — Scope Fidelity Check（范围保真检查）
+====================================================
+Plan: .omo/plans/agent-platform-phase0-1.md（Task 1-22 + Wave 1/2/3）
+Date: 2026-08-07
+Reviewer: deep (F4)
+Method: 每任务读「What to do / Must NOT do」与实际产物（文件存在性 + 内容范围）1:1 核对；
+        grep 扫描 Phase 2+ 关键词（server/src 与 web 业务代码）；核对 package.json 依赖；
+        检查 Task 20-22 跨任务污染（验收/验证阶段不得新增功能）。
+
+──────────────────────────────────────────────
+1. TASKS COMPLIANCE (22/22)
+──────────────────────────────────────────────
+
+Wave 1 — Phase 0 前置 + 脚手架
+T1   根目录+git 初始化        -> web/ server/ docs/ 存在；根 .gitignore 含 node_modules/.next/dist/.env；
+                                README.md；git init，首 commit 48764b7 仅含 .gitignore+README.md（2 文件 40 行）；
+                                docs/ 保持未跟踪（未被误纳入）。无 platform 子目录、无根级构建配置。COMPLIANT
+T2   web/ Next.js 脚手架      -> Next 15.5.22 + React 19.2.8 + TS + App Router（web/app/）；tsconfig @/* 别名；
+                                globals.css 仅为 reset；无 tailwind/styled-components（package.json 核对）；
+                                无业务页面。COMPLIANT
+T3   server/ NestJS 脚手架    -> NestJS 10；依赖含 @nestjs/config/jwt/passport、passport-jwt、bcrypt、
+                                @nestjs/swagger、@nestjs/terminus、pino(+pino-http)——全部为计划列明依赖；
+                                模块 auth/users/projects/realtime/health/prisma；GET /api/v1/health（terminus,
+                                @Public）。COMPLIANT
+T4   Prisma schema 20 表      -> schema.prisma 19 个 model（含 Task/TaskAgent/TaskEvent/ChatChannel/Message/
+                                Artifact/ArtifactVersion/Agent/AgentSkill/AgentToolEffect/Skill/Tool/Worker/
+                                TaskGroupInstance 等；audit_logs 未建，符合「预留不建」）；
+                                索引/唯一约束在（uk_task_agents_task_agent、uk_sessions_task_agent、
+                                uk_artifact_versions_art_ver 等）；SQLite 落库 dev.db。
+                                [注] Prisma 版本 6.19.3（计划写 Prisma 5）且 datasource 用单 provider=sqlite +
+                                可移植类型（计划写 provider=["mysql","sqlite"] 数组）——schema 头部注释已说明：
+                                Prisma ≥2.22 移除 provider 数组写法，以可移植类型达成双库兼容意图，属有据可查的
+                                工程适配，非范围偏离。COMPLIANT
+T5   原型审计清单             -> .omo/evidence/prototype-audit.md 存在（17 页盘点 + 4 个迁移页依赖标注）；
+                                只读审计，未改原型、未产出代码。COMPLIANT
+T6   后端测试基座             -> jest + ts-jest + supertest 配置；package.json `test` 脚本；test/jest-e2e.json +
+                                test/setup-env.js（DATABASE_URL=file:./test.db，无 MySQL 依赖）；示例 spec 存在。
+                                未写业务测试（各模块 spec 归 T15-17）。COMPLIANT
+T7   前端状态层               -> @tanstack/react-query + zustand 已装；providers.tsx 挂 QueryClientProvider
+                                （app/layout.tsx）；lib/api.ts（baseURL /api/v1、Bearer 注入、错误归一化）；
+                                lib/stores/authStore.ts（persist token/user + api 层同步）。未写业务查询、无 Redux。COMPLIANT
+
+Wave 2 — Phase 1 前后端并行
+T8   tokens 全量迁移          -> web/src/theme/tokens.ts（102 行）；token 名集合 vs 原型 styles.ts diff = 空
+                                （本次独立复检 IDENTICAL）；证据 task-8-tokens-diff.md。零改动迁移。COMPLIANT
+T9   8 共享组件迁移           -> web/src/components/ui/ 含 8 组件（agent-avatar/agent-badge/chat-bubble/
+                                message-input/status-badge/sidebar/top-bar/empty-state），data-testid 保留；
+                                引用 tokens.ts；nav 依赖由 AppShell 承接。COMPLIANT
+T10  导航体系迁移             -> web/src/components/layout/（app-shell/nav-dock/nav-top-bar/cmdk-panel）；
+                                (main)/layout.tsx = AppShell；NavDock 7 项 project/board/agents/workers/skills/
+                                messages/users（对齐 06 篇）；路由骨架 /login /projects /board /agents /workers
+                                /skills /messages /users + /tasks/new；AppShell 登录守卫（token 水合后重定向
+                                /login）。COMPLIANT
+T11  login 页迁移             -> web/app/login/page.tsx 保真迁移；真实 POST /auth/login → authStore →
+                                /projects；错误态（login-error）；data-testid 与原型一致；注册链路仅静态
+                                register-link（未做注册页，符合 Must NOT）。证据 task-11-login.md（构建+Playwright
+                                三场景）。COMPLIANT
+T12  project-list 页迁移      -> web/app/(main)/projects/page.tsx；TanStack Query 渲染 GET /projects + 创建
+                                弹窗 POST /projects（invalidateQueries 刷新）；EmptyState 空态；data-testid 保留；
+                                未实现项目详情（Phase 2）。[注] 调用方透传 x-user-id header 对应 server 端
+                                PlaceholderAuthGuard（Phase 1 占位认证，见 T17 注）。COMPLIANT
+T13  task-create 页迁移       -> web/app/(main)/tasks/new/page.tsx；表单字段（标题/描述/文档/优先级/Agent 选择/
+                                主 Agent）+ 空标题校验；提交先试 POST /projects/:pid/tasks，Phase 2 端点未就绪则
+                                fallback mock 成功态（证据 task-13-taskcreate.md 记录实际路径）；未实现后端
+                                创建逻辑。COMPLIANT
+T14  task-board 页迁移        -> web/app/(main)/board/page.tsx；状态筛选（全部+五态）+ 任务卡片网格，静态 seed
+                                5 任务覆盖五态；start-task 按钮仅为交互骨架（提示展开/收起），无状态迁移逻辑、
+                                无 API 调用；data-testid 保留。证据 task-14-taskboard.md 记录：原型实际为
+                                「筛选条+卡片网格」（非字面五列），按唯一来源原型保真迁移，符合计划
+                                「原型是基准」。COMPLIANT
+T15  AuthModule               -> POST /auth/register|login|refresh + GET /auth/profile；bcrypt 哈希 + passport-jwt
+                                策略（拒 refresh 当 access 用）；全局 APP_GUARD JwtAuthGuard + @Public 放行
+                                register/login/refresh/health；单测覆盖 register 409/登录 200/401/guard 401；
+                                seed admin（admin/admin123）。无 SSO、无多租户。COMPLIANT
+T16  UsersModule              -> GET /users（分页/search）、GET /users/:id、PATCH /users/:id/status（禁/启用）；
+                                响应不含 password_hash；AdminGuard 占位放行（代码注明 Phase 3 接角色矩阵，
+                                符合计划「Phase 1 用简单 admin 标记或占位」）；单测列表/详情/禁用。无角色 CRUD、
+                                无删除。COMPLIANT
+T17  ProjectsModule           -> GET /projects（project_members 关联 → 成员可见性）+ POST /projects（事务内
+                                写 projects + owner 成员记录）；单测可见性/owner/空名 400；seed 2 项目。
+                                [注] 控制器用 PlaceholderAuthGuard（x-user-id header）而非纯 JWT 身份——代码与
+                                task-20 证据均标注为 Phase 1 临时方案（全局 JWT 守卫仍生效，双守卫链），
+                                属计划许可的占位适配，非范围泄漏。COMPLIANT
+T18  RealtimeModule SSE 基座  -> realtime.service（EventEmitter 总线 + 内存环形缓冲 + 递增 id 游标 +
+                                emit/broadcast/getEventsSince/subscribe/getLatestId）；realtime.controller
+                                （@Sse 端点 /events，since 续拉 + 15s 心跳保活）；事件帧 {id,type,payload,
+                                timestamp}；单测连接/广播/续拉。无具体业务事件、无 WebSocket。
+                                [注] spec 中 chat.message.new / artifact.submitted 仅为基座测试的示例事件名，
+                                非业务实现。COMPLIANT
+T19  OpenAPI 契约             -> main.ts SwaggerModule（/api/v1/docs + docs-json）；DTO 用 class-validator
+                                （login/register/refresh/create-project/query-projects/update-user-status）；
+                                .omo/evidence/api-contract.json 已导出——核对 paths 仅 auth×4/users×3/projects×2
+                                /health/events/root，无未实现端点。COMPLIANT
+
+Wave 3 — 联调 + 验收
+T20  M1 联调                 -> next.config.ts rewrites /api/v1 → localhost:3000（环境变量可覆盖）；证据
+                                task-20-m1-flow.md：Playwright 11/11 PASS（登录→项目→导航遍历 7 页+会话保持），
+                                API 全 2xx 无 CORS；seed 数据补齐 u_admin 成员关系（纯数据准备，记录于证据，
+                                未改 server 业务逻辑）。未改前端视觉、未实现 Phase 2。COMPLIANT
+T21  原型一致性验收           -> .omo/evidence/proto-parity/ 含 login（2 组）/project-list/task-create 实现 vs
+                                原型 diff 截图，m0-m1-summary.md §3.2 引用为 Task 21 证据；差异以修实现侧对齐
+                                原型（截图产物，未改原型文件）。
+                                [注] 计划命名交付物 prototype-parity-report.md 未按原文件名产出（改以
+                                proto-parity/ 目录 + diff 截图承载）；task-board 无专门 impl-vs-proto diff
+                                （board 结构依原型保真，见 T14 证据 + task-20-board.png），此属证据形态差异，
+                                非范围泄漏。COMPLIANT
+T22  全量验证                -> m0-m1-summary.md：server 单测 7 suites/39 tests 全过、server build 退出码 0、
+                                web build 退出码 0；Phase 2+ 泄漏检查表（结论无泄漏）；仅产出证据文档，
+                                本次复检确认无任何源码文件晚于 m0-m1-summary.md 修改。COMPLIANT
+
+──────────────────────────────────────────────
+2. PHASE 2+ LEAK CHECK（计划 Must NOT Have）— CLEAN
+──────────────────────────────────────────────
+[OK] 任务状态机业务逻辑      -> server 无 tasks controller（全部端点仅 auth/users/projects/health/events）；
+                               web /board 仅静态 seed + 交互骨架，注释明示「状态迁移逻辑 Phase 2」。
+[OK] 群聊落库（chat/message）-> /messages 为 EmptyState 占位页；chat-bubble/message-input 纯 UI 展示组件；
+                               realtime 仅事件总线基座（chat.message.new 仅测试示例事件名/注释）。
+[OK] Agent 集成 / Worker 集成-> /agents /workers 占位页（EmptyState）；agent-avatar/agent-badge 纯 UI。
+[OK] git 凭证 / 产出物归档   -> 业务代码零命中 credential/git 凭证/归档逻辑（仅 docs 与 schema 表定义存在）。
+[OK] 多租户 / SSO / 审计 API -> 无 tenant/sso/oauth 代码；无 audit 控制器（audit_logs 表按计划不建）。
+[OK] 新依赖                 -> web: next/react/react-dom/@tanstack/react-query/zustand（全部计划内）；
+                               server: 全部为 T3 列明 + NestJS 标准件（class-validator/class-transformer/
+                               passport/rxjs/reflect-metadata/prisma 6），无 bull/socket.io/cron 等额外项。
+[OK] schema 表定义允许存在   -> tasks/agents/workers/chat_channels/messages/artifacts 等表已建但无业务实现，
+                               符合计划「表先建，功能 Phase 2」。
+
+──────────────────────────────────────────────
+3. CROSS-TASK POLLUTION CHECK — CLEAN
+──────────────────────────────────────────────
+[OK] T20 仅改 next.config.ts（计划 Commit Files 明示）+ seed 数据补齐（记录在证据），未改视觉/server 逻辑。
+[OK] T21 产出均为截图/证据（proto-parity/），未改原型文件。
+[OK] T22 纯验证：无源码文件晚于 m0-m1-summary.md 修改（find -newer 复核 0 命中）。
+[OK] 各任务交付物与「What to do」1:1 对应，无越界实现。
+
+──────────────────────────────────────────────
+4. NOTES（非偏离，备案）
+──────────────────────────────────────────────
+1. T4 Prisma 6 + 单 provider + 可移植类型（vs 计划「Prisma 5 + provider 数组」）：schema 头部注释说明
+   Prisma ≥2.22 已移除 provider 数组写法，可移植类型达成双库兼容意图。属有依据的工程适配。
+2. T17/T12 PlaceholderAuthGuard（x-user-id header）：Phase 1 临时认证，代码+证据双重标注；全局 JWT 守卫
+   同时生效。安全语义（任意已认证用户可传任意 x-user-id）建议 F2 评估，不构成范围偏离。
+3. T21 交付物命名与任务-board 差异图缺失：证据形态差异，实质对比已完成（3 页 diff + board 依原型保真），
+   属证据完备性（F1 复核范畴）而非范围问题。
+
+──────────────────────────────────────────────
+RESULT
+──────────────────────────────────────────────
+Tasks [22/22 compliant] | VERDICT: APPROVE

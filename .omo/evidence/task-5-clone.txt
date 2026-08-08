@@ -1,0 +1,1 @@
+T5 Agents CRUD：clone血缘(baseAgentId=a_product)+解耦；PATCH模板403 PERMISSION_AGENT_READONLY；available-models静态3项

@@ -1,0 +1,1 @@
+T14筛选验证：GET /tasks/:id/artifacts?type=doc仅doc；?accepted=true/false按currentVersion过滤；pageSize分页；版本端点完整；种子数据3条(含1 accepted)

@@ -1,0 +1,413 @@
+// ------------------------------------------------------------------
+// AI Agent 协作平台数据模型 — Prisma schema（20 表）
+//
+// 唯一事实来源：docs/agent-platform/15-数据模型细化（ER图）.md
+//   §2  字段类型约定（字符串枚举 + Json 列，规避 SQLite 无原生 enum）
+//   §2.2 主键策略（VARCHAR(64) 域前缀 + 自增序号）
+//   §3  逐表字段定义（20 表全量）
+//   §4/§5 唯一约束与索引
+//
+// 双库兼容说明（08 篇 §6.2 / 15 篇 §2.1）：
+//   Prisma 自 2.22.0 起移除了 datasource provider 数组写法（provider = ["mysql","sqlite"]），
+//   同一 datasource 只能声明单一 provider。因此「双库兼容」通过**可移植类型**达成：
+//     - 状态/类型/优先级一律 String 列 + 应用层常量（不声明 Prisma enum）
+//     - Json 列统一 Prisma Json（SQLite 以 TEXT 存储）
+//     - 时间统一 UTC + DateTime
+//     - 布尔用 Boolean（SQLite 映射 INTEGER 0/1）
+//     - 不使用 @db.VarChar 等 MySQL 专属 native type（SQLite 会拒绝，破坏双库可移植）
+//   本地验证 provider = "sqlite"；生产 MySQL 时仅需把 provider 改为 "mysql" 并指向 MySQL 连接串。
+//
+// 约定：
+//   - 外键级联一律 ON DELETE RESTRICT（删除路径由服务层显式编排）
+//   - audit_logs 预留表【本版不建】
+// ------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ==================================================================
+// 认证 / 用户域
+// ==================================================================
+
+model User {
+  id           String   @id
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  displayName  String   @map("display_name")
+  email        String?  @unique
+  roleId       String   @map("role_id")
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  role           Role            @relation(fields: [roleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  projects       Project[]       @relation("UserProjects")
+  projectMembers ProjectMember[]
+  taskCreated    Task[]          @relation("TaskCreator")
+  agentsCreated  Agent[]         @relation("AgentCreator")
+
+  @@map("users")
+}
+
+model Role {
+  id          String   @id
+  name        String   @unique
+  permissions Json
+  scopes      Json
+  isBuiltin   Boolean  @default(false) @map("is_builtin")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  users User[]
+
+  @@map("roles")
+}
+
+// ==================================================================
+// 项目域
+// ==================================================================
+
+model Project {
+  id          String   @id
+  name        String
+  description String?
+  ownerId     String   @map("owner_id")
+  status      String   @default("active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  owner   User            @relation("UserProjects", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  members ProjectMember[]
+  tasks   Task[]
+
+  @@map("projects")
+}
+
+model ProjectMember {
+  id        String   @id
+  projectId String   @map("project_id")
+  userId    String   @map("user_id")
+  role      String
+  joinedAt  DateTime @default(now()) @map("joined_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([projectId, userId], map: "uk_project_members_pid_uid")
+  @@map("project_members")
+}
+
+// ==================================================================
+// 任务域
+// ==================================================================
+
+model Task {
+  id              String    @id
+  projectId       String    @map("project_id")
+  title           String
+  description     String?
+  priority        String    @default("medium")
+  status          String    @default("pending")
+  mainAgentId     String?   @map("main_agent_id")
+  backgroundDocs  Json?     @map("background_docs")
+  createdBy       String    @map("created_by")
+  version         Int       @default(0)
+  createdAt       DateTime  @default(now()) @map("created_at")
+  startedAt       DateTime? @map("started_at")
+  pendingReviewAt DateTime? @map("pending_review_at")
+  completedAt     DateTime? @map("completed_at")
+  archivedAt      DateTime? @map("archived_at")
+
+  project            Project             @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  creator            User                @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  mainAgent          Agent?              @relation("TaskMainAgent", fields: [mainAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  taskAgents         TaskAgent[]
+  taskEvents         TaskEvent[]
+  sessions           Session[]
+  chatChannels       ChatChannel[]
+  artifacts          Artifact[]
+  taskGroupInstances TaskGroupInstance[]
+
+  @@index([projectId, status], map: "idx_tasks_project_status")
+  @@map("tasks")
+}
+
+model TaskAgent {
+  id        String    @id
+  taskId    String    @map("task_id")
+  agentId   String    @map("agent_id")
+  joinedAt  DateTime  @default(now()) @map("joined_at")
+  removedAt DateTime? @map("removed_at")
+
+  task  Task  @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([taskId, agentId], map: "uk_task_agents_task_agent")
+  @@index([taskId, joinedAt], map: "idx_task_agents_task")
+  @@map("task_agents")
+}
+
+model TaskEvent {
+  id         String   @id
+  taskId     String   @map("task_id")
+  eventType  String   @map("event_type")
+  fromStatus String?  @map("from_status")
+  toStatus   String?  @map("to_status")
+  actorType  String   @map("actor_type")
+  actorId    String?  @map("actor_id")
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([taskId, createdAt], map: "idx_task_events_task_time")
+  @@map("task_events")
+}
+
+// ==================================================================
+// 会话域
+// ==================================================================
+
+model Session {
+  id          String    @id
+  taskId      String    @map("task_id")
+  agentId     String    @map("agent_id")
+  workerId    String?   @map("worker_id")
+  instanceRef String?   @map("instance_ref")
+  status      String    @default("created")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  task   Task    @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  agent  Agent   @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  worker Worker? @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([taskId, agentId], map: "uk_sessions_task_agent")
+  @@map("sessions")
+}
+
+// ==================================================================
+// 群聊域
+// ==================================================================
+
+model ChatChannel {
+  id        String   @id
+  type      String
+  taskId    String   @map("task_id")
+  agentId   String?  @map("agent_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  task     Task      @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  agent    Agent?    @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  messages Message[]
+
+  @@unique([taskId, agentId], map: "uk_channels_task_agent")
+  @@map("chat_channels")
+}
+
+model Message {
+  id         String   @id
+  channelId  String   @map("channel_id")
+  senderType String   @map("sender_type")
+  senderId   String?  @map("sender_id")
+  content    Json
+  mentions   Json?
+  status     String   @default("sent")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  channel ChatChannel @relation(fields: [channelId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([channelId, id], map: "idx_messages_channel_id")
+  @@map("messages")
+}
+
+// ==================================================================
+// 产出物域
+// ==================================================================
+
+model Artifact {
+  id             String   @id
+  taskId         String   @map("task_id")
+  type           String
+  title          String
+  currentVersion Int      @default(0) @map("current_version")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  task     Task              @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  versions ArtifactVersion[]
+
+  @@index([taskId, type], map: "idx_artifacts_task_type")
+  @@index([taskId], map: "idx_artifacts_task")
+  @@map("artifacts")
+}
+
+model ArtifactVersion {
+  id            String    @id
+  artifactId    String    @map("artifact_id")
+  version       Int
+  contentRef    String    @map("content_ref")
+  filePath      String?   @map("file_path")
+  sha256        String?
+  acceptedFlag  Boolean   @default(false) @map("accepted_flag")
+  authorAgentId String?   @map("author_agent_id")
+  changeNote    String?   @map("change_note")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  author   Agent?   @relation("ArtifactAuthor", fields: [authorAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([artifactId, version], map: "uk_artifact_versions_art_ver")
+  @@map("artifact_versions")
+}
+
+// ==================================================================
+// Agent 域
+// ==================================================================
+
+model Agent {
+  id              String    @id
+  name            String
+  type            String
+  baseAgentId     String?   @map("base_agent_id")
+  role            String?
+  prompt          String
+  defaultModelId  String?   @map("default_model_id")
+  permissionScope Json?     @map("permission_scope")
+  createdBy       String    @map("created_by")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  baseAgent         Agent?             @relation("AgentClone", fields: [baseAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  clones            Agent[]            @relation("AgentClone")
+  creator           User               @relation("AgentCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  skills            AgentSkill[]
+  toolEffects       AgentToolEffect[]
+  taskAgents        TaskAgent[]
+  sessions          Session[]
+  channels          ChatChannel[]
+  authoredArtifacts ArtifactVersion[]  @relation("ArtifactAuthor")
+  mainTasks         Task[]             @relation("TaskMainAgent")
+
+  @@map("agents")
+}
+
+model AgentSkill {
+  id        String   @id
+  agentId   String   @map("agent_id")
+  skillId   String   @map("skill_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  skill Skill @relation(fields: [skillId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([agentId, skillId], map: "uk_agent_skills_agent_skill")
+  @@map("agent_skills")
+}
+
+model AgentToolEffect {
+  id         String   @id
+  agentId    String   @map("agent_id")
+  toolAction String   @map("tool_action")
+  effect     String
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([agentId, toolAction], map: "uk_agent_tool_effects")
+  @@map("agent_tool_effects")
+}
+
+// ==================================================================
+// 技能工具域
+// ==================================================================
+
+model Skill {
+  id          String   @id
+  name        String   @unique
+  description String?
+  fileMeta    Json?    @map("file_meta")
+  enabled     Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  agentSkills AgentSkill[]
+
+  @@map("skills")
+}
+
+model Tool {
+  id          String   @id
+  name        String
+  action      String   @unique
+  source      String
+  execution   String
+  mcpServer   String?  @map("mcp_server")
+  schema      Json?
+  initCommand Json?    @map("init_command")
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("tools")
+}
+
+// ==================================================================
+// Worker 域
+// ==================================================================
+
+model Worker {
+  id              String    @id
+  name            String?
+  opencodeVersion String    @map("opencode_version")
+  capabilities    Json
+  load            Json?
+  status          String    @default("offline")
+  tokenHash       String?   @map("token_hash")
+  lastHeartbeatAt DateTime? @map("last_heartbeat_at")
+  registeredAt    DateTime  @default(now()) @map("registered_at")
+
+  sessions          Session[]
+  taskGroupInstances TaskGroupInstance[]
+
+  @@index([status, lastHeartbeatAt], map: "idx_workers_status_heartbeat")
+  @@map("workers")
+}
+
+model TaskGroupInstance {
+  id         String    @id
+  taskId     String    @map("task_id")
+  workerId   String    @map("worker_id")
+  instanceId String    @map("instance_id")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  removedAt  DateTime? @map("removed_at")
+
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  worker Worker @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("task_group_instances")
+}
+
+// ==================================================================
+// 实时事件域
+// ==================================================================
+
+model RealtimeEvent {
+  id        String   @id
+  type      String
+  scopeType String   @map("scope_type")
+  scopeId   String?  @map("scope_id")
+  projectId String?  @map("project_id")
+  payload   Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([scopeType, scopeId, id], map: "idx_realtime_events_scope_id")
+  @@index([projectId], map: "idx_realtime_events_project_id")
+  @@map("realtime_events")
+}

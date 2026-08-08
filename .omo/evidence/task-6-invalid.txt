@@ -1,0 +1,1 @@
+T6非法声明：type=bogus→400；text缺content/doc缺fileRef→400 INVALID_DECLARATION

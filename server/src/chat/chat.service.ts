@@ -1,0 +1,586 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import {
+  CHANNEL_TYPE,
+  EVENT_TYPES,
+  MESSAGE_STATUS,
+  SENDER_TYPE,
+} from '../common/constants/event.constants';
+import { TASK_STATUS } from '../common/constants/task.constants';
+import {
+  PROJECT_MEMBERSHIP_ERRORS,
+} from '../common/guards/project-membership.guard';
+import { IdGeneratorService } from '../common/id-generator';
+import { PrismaService } from '../prisma/prisma.service';
+import { RealtimeService } from '../realtime/realtime.service';
+import { CHAT_ERRORS } from './chat.constants';
+import { CreateDmChannelDto } from './dto/create-dm-channel.dto';
+import { CreateMessageDto, MentionInput } from './dto/create-message.dto';
+import { QueryMessagesDto } from './dto/query-messages.dto';
+import { MessageDispatcher } from './message-dispatcher';
+
+/** 消息主键前缀（15 篇 §2.2：m_<零填充序号>，数值序 == 字典序，兼作历史游标）。 */
+const MESSAGE_ID_PREFIX = 'm';
+const CHANNEL_ID_PREFIX = 'c';
+
+/** @ 触发结果（09 篇 §5.1 triggers[]）。 */
+export interface TriggerResult {
+  agentId: string;
+  sessionId: string | null;
+  status: 'dispatched' | 'no_session' | 'agent_removed';
+}
+
+/**
+ * @ 触发结果轮询条目（09 篇 §3.5 GET :id/trigger-results/:messageId）：
+ * 在 TriggerResult 基础上补 replyMessageId（该被 @ Agent 于原消息之后的回复消息 id）。
+ */
+export interface TriggerPollResult {
+  agentId: string;
+  status: 'dispatched' | 'no_session' | 'agent_removed';
+  replyMessageId?: string;
+}
+
+/** 频道行（含可选的 task / agent 关联，供 DTO 映射）。 */
+type ChannelRow = {
+  id: string;
+  type: string;
+  taskId: string;
+  agentId: string | null;
+  createdAt: Date;
+  task?: {
+    id: string;
+    title: string;
+    status: string;
+    projectId: string;
+  } | null;
+  agent?: { id: string; name: string; role: string | null } | null;
+};
+
+/** 消息行（messages 表；content/mentions 为 Json 列）。 */
+type MessageRow = {
+  id: string;
+  channelId: string;
+  senderType: string;
+  senderId: string | null;
+  content: Prisma.JsonValue;
+  mentions: Prisma.JsonValue | null;
+  status: string;
+  createdAt: Date;
+};
+
+const TEAM_AGENT_SELECT = {
+  agentId: true,
+  removedAt: true,
+} as const;
+
+const CHANNEL_TASK_SELECT = {
+  task: {
+    select: { id: true, title: true, status: true, projectId: true },
+  },
+  agent: { select: { id: true, name: true, role: true } },
+} as const;
+
+/**
+ * 群聊模块（09 篇 §3.5 Chat；10 篇 消息/频道/触发机制）。
+ *
+ * 端点：
+ * - GET    /channels?type=           调用者可访问频道列表（task_group + private）
+ * - GET    /channels/:id             频道信息（类型/关联任务/成员 Agent）
+ * - GET    /channels/:id/messages    历史游标分页（09 篇 §2.2/§6）
+ * - POST   /channels/:id/messages    发消息 8 步流程（09 篇 §5.1）
+ * - POST   /dm-channels              创建 private 私聊频道（FR-14）
+ *
+ * 权限：channel → taskId → projectId → project_members 校验（service 层，
+ * 路由参数是 :id 非 :pid，ProjectMembershipGuard 的 :id 反查为任务路由，
+ * 故本模块自行解析频道归属，对齐 realtime.controller 的 resolveProjectId 链路）。
+ */
+@Injectable()
+export class ChatService {
+  private readonly logger = new Logger(ChatService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly idGen: IdGeneratorService,
+    private readonly realtime: RealtimeService,
+    @Inject(MessageDispatcher)
+    private readonly dispatcher: MessageDispatcher,
+  ) {
+    // 接通分派回调（计划 §5.1：onLoading/onFinal/onError）——仅日志，行为不变：
+    // loading 广播 / 回复落库 + 广播均由分派器内部完成，此处不重复广播（否则改变
+    // 现有 8 步流程时序）。Phase 4 WorkerDispatcher 同一回调契约零改动替换。
+    this.dispatcher
+      .onLoading((e) =>
+        this.logger.debug(`agent ${e.agentId} loading(${e.phase}) task=${e.taskId}`),
+      )
+      .onFinal((e) =>
+        this.logger.debug(`agent ${e.agentId} final ${e.messageId} task=${e.taskId}`),
+      )
+      .onError((e) =>
+        this.logger.error(`agent ${e.agentId} reply failed: ${e.error} task=${e.taskId}`),
+      );
+  }
+
+  /** 进程启动：对齐库内 m_/c_ 前缀最大序号（重启续号，防主键冲突）。 */
+  async onModuleInit(): Promise<void> {
+    await this.seedPrefix(MESSAGE_ID_PREFIX, this.prisma.message);
+    await this.seedPrefix(CHANNEL_ID_PREFIX, this.prisma.chatChannel);
+  }
+
+  /**
+   * 频道列表：调用者可访问的频道（所属任务的项目 ∈ 调用者已加入项目），
+   * type 过滤（task_group/private）。返回 `{items, total}`（09 篇 §3.5）。
+   */
+  async findAccessibleChannels(userId: string, type?: string) {
+    if (type !== undefined && type !== CHANNEL_TYPE.task_group && type !== CHANNEL_TYPE.private) {
+      throw new BadRequestException({
+        code: CHAT_ERRORS.CHANNEL_TYPE_INVALID,
+        message: 'type 仅支持 task_group | private',
+      });
+    }
+    const memberships = await this.prisma.projectMember.findMany({
+      where: { userId },
+      select: { projectId: true },
+    });
+    const projectIds = memberships.map((m) => m.projectId);
+    const where: Prisma.ChatChannelWhereInput = {
+      task: { projectId: { in: projectIds } },
+      ...(type ? { type } : {}),
+    };
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.chatChannel.count({ where }),
+      this.prisma.chatChannel.findMany({
+        where,
+        include: CHANNEL_TASK_SELECT,
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+    return {
+      items: rows.map((row) => this.toChannelDto(row)),
+      total,
+    };
+  }
+
+  /** 频道详情：类型/关联任务 + 成员 Agent（任务团队未 removed 列表）。 */
+  async findOne(channelId: string, userId: string) {
+    const { channel } = await this.resolveChannelAccess(channelId, userId);
+    const teamRows = await this.prisma.taskAgent.findMany({
+      where: { taskId: channel.taskId, removedAt: null },
+      select: {
+        agentId: true,
+        agent: { select: { id: true, name: true, role: true } },
+      },
+    });
+    return {
+      ...this.toChannelDto(channel),
+      agentMembers: teamRows.map((r) => r.agent),
+    };
+  }
+
+  /**
+   * 消息历史游标分页（09 篇 §2.2/§3.5、10 篇 §6）：
+   * `WHERE channel_id=? AND id>cursor ORDER BY id ASC LIMIT ?`（命中 idx_messages_channel_id）；
+   * cursor 缺省 = 第一页（取最早 limit 条）；末页 nextCursor=null（取 limit+1 判断是否还有更多）。
+   */
+  async findMessages(channelId: string, userId: string, query: QueryMessagesDto) {
+    await this.resolveChannelAccess(channelId, userId);
+    const limit = this.normalizeLimit(query.limit);
+    const where: Prisma.MessageWhereInput = {
+      channelId,
+      ...(query.cursor ? { id: { gt: query.cursor } } : {}),
+    };
+    const rows = await this.prisma.message.findMany({
+      where,
+      orderBy: { id: 'asc' },
+      take: limit + 1,
+    });
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    return {
+      items: page.map((row) => this.toMessageDto(row)),
+      nextCursor: hasMore ? page[page.length - 1].id : null,
+    };
+  }
+
+  /**
+   * @ 触发结果轮询（09 篇 §3.5 GET :id/trigger-results/:messageId，前端 SSE 兜底）：
+   * 查原用户消息的 mentions，对每个被 @ Agent 返回 dispatch 状态 + 回复消息 id。
+   * 状态推导与 createMessage 的 resolveMentions 同源（removedAt/session 判定）；
+   * 实现选「直接查 messages 表推导」而非进程内内存映射：多实例部署下
+   * 其它实例分派的回复无法进内存映射，DB 推导无跨实例一致性问题且零状态管理。
+   * 404 MESSAGE_NOT_FOUND（消息不存在或非本频道）；400 MESSAGE_NOT_USER（非用户消息）。
+   */
+  async getTriggerResults(channelId: string, userId: string, messageId: string) {
+    const { channel } = await this.resolveChannelAccess(channelId, userId);
+    const message = await this.prisma.message.findUnique({
+      where: { id: messageId },
+    });
+    if (!message || message.channelId !== channelId) {
+      throw new NotFoundException({
+        code: CHAT_ERRORS.MESSAGE_NOT_FOUND,
+        message: '消息不存在',
+      });
+    }
+    if (message.senderType !== SENDER_TYPE.user) {
+      throw new BadRequestException({
+        code: CHAT_ERRORS.MESSAGE_NOT_USER,
+        message: '仅用户消息有 @ 触发结果',
+      });
+    }
+    const mentions = this.parseMentions(message.mentions);
+    if (mentions.length === 0) {
+      return { triggers: [] };
+    }
+
+    const teamRows = await this.prisma.taskAgent.findMany({
+      where: { taskId: channel.taskId },
+      select: TEAM_AGENT_SELECT,
+    });
+    const teamMap = new Map(teamRows.map((r) => [r.agentId, r]));
+
+    // 被 @ Agent 集合：agent 型直取；all 型展开为团队未移除全部
+    const agentIds = new Set<string>();
+    for (const m of mentions) {
+      if (m.type === 'agent' && m.agentId) {
+        agentIds.add(m.agentId);
+      } else if (m.type === 'all') {
+        for (const [agentId, row] of teamMap) {
+          if (!row.removedAt) agentIds.add(agentId);
+        }
+      }
+    }
+
+    const triggers: TriggerPollResult[] = [];
+    for (const agentId of agentIds) {
+      const row = teamMap.get(agentId);
+      const base = row
+        ? await this.buildTrigger(channel.taskId, agentId, row)
+        : { agentId, sessionId: null, status: 'agent_removed' as const };
+      // 回复：该 Agent 于原消息之后的回复消息（senderType=agent，id 升序取最早一条）
+      const reply = await this.prisma.message.findFirst({
+        where: {
+          channelId,
+          senderType: SENDER_TYPE.agent,
+          senderId: agentId,
+          createdAt: { gt: message.createdAt },
+        },
+        orderBy: { id: 'asc' },
+        select: { id: true },
+      });
+      triggers.push({
+        agentId,
+        status: base.status,
+        ...(reply ? { replyMessageId: reply.id } : {}),
+      });
+    }
+    return { triggers };
+  }
+
+  /** mentions 列（Json）安全解析：非数组 → 空数组；仅保留 type=agent|all 项（存储格式由 createMessage 保证）。 */
+  private parseMentions(mentions: Prisma.JsonValue | null): MentionInput[] {
+    if (!Array.isArray(mentions)) return [];
+    return mentions.filter(
+      (m): m is MentionInput =>
+        typeof m === 'object' &&
+        m !== null &&
+        ((m as MentionInput).type === 'agent' || (m as MentionInput).type === 'all'),
+    );
+  }
+
+  /**
+   * 发消息 8 步流程（09 篇 §5.1）：
+   * 1 权限校验 → 2 @ 解析 → 3 落库 → 4 广播 chat.message.new（频道）
+   * → 5 分派（MessageDispatcher，T10 MockDispatcher 异步回流）
+   * → 6 上下文注入（Phase 2 mock 跳过）。
+   * Loading（thinking→operating）与异步收敛（mock 回复落库 + 广播）由分派器内部完成
+   * （09 篇 §5.1：@ 触发同步返回受理，处理结果走 SSE；Phase 4 替换 WorkerDispatcher 零改动）。
+   * 响应 201 + `{message, triggers[]}`。
+   */
+  async createMessage(channelId: string, userId: string, dto: CreateMessageDto) {
+    // 1. 权限校验：频道存在 + 调用者为频道所属项目成员
+    const { channel, task } = await this.resolveChannelAccess(channelId, userId);
+    // 归档任务频道发消息 → 409（FR-05 归档后仅可查看）
+    if (task.status === TASK_STATUS.archived) {
+      throw new ConflictException({
+        code: CHAT_ERRORS.TASK_ARCHIVED,
+        message: '归档任务频道不允许发消息',
+      });
+    }
+
+    // 2. @ 解析：agentId 须在任务团队内（未 removed → dispatched / 无会话 → no_session；
+    //    已 removed → agent_removed；不在团队 → 400）；all 展开为团队全部未移除 Agent
+    const { mentionsStored, triggers } = await this.resolveMentions(
+      channel.taskId,
+      dto.mentions ?? [],
+    );
+
+    // 3. 落库（用户消息：senderType=user，status=sent，id=m_<序号>）
+    const message = await this.prisma.message.create({
+      data: {
+        id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+        channelId,
+        senderType: SENDER_TYPE.user,
+        senderId: userId,
+        content: { text: dto.text, parts: [] } as Prisma.InputJsonValue,
+        mentions: mentionsStored as Prisma.InputJsonValue,
+        status: MESSAGE_STATUS.sent,
+      },
+    });
+
+    // 4. 广播用户消息到频道订阅者（先落库后转发，08 篇 §7.3）
+    await this.realtime.broadcast(
+      EVENT_TYPES.CHAT_MESSAGE_NEW,
+      { message: this.toMessageDto(message) },
+      { type: 'channel', id: channelId },
+    );
+
+    // 5. 分派：仅 dispatched 目标下发；6. 上下文注入：Phase 2 mock 模式跳过（Phase 4 注入）。
+    //    fire-and-forget：201 同步返回受理（09 篇 §5.1「同步返回分派受理，处理结果走 SSE」），
+    //    回复时序（延迟 → loading 两阶段 → 落库 → 广播）由分派器异步完成。
+    const targets = triggers.filter((t) => t.status === 'dispatched');
+    void this.dispatcher
+      .dispatch({
+        messageId: message.id,
+        channelId,
+        taskId: channel.taskId,
+        text: dto.text,
+        targets: targets.map((t) => ({ agentId: t.agentId, sessionId: t.sessionId })),
+      })
+      .catch((err: Error) =>
+        this.logger.error(`dispatch failed: ${err.message}`, err.stack),
+      );
+
+    return {
+      message: this.toMessageDto(message),
+      triggers,
+    };
+  }
+
+  /**
+   * 创建 private 私聊频道（FR-14，09 篇 §3.5 POST /dm-channels）。
+   * task_id+agent_id 命 uk_channels_task_agent；重复创建幂等返回已有频道。
+   */
+  async createDmChannel(userId: string, dto: CreateDmChannelDto) {
+    const task = await this.prisma.task.findUnique({
+      where: { id: dto.taskId },
+      select: { projectId: true },
+    });
+    if (!task) {
+      throw new NotFoundException({
+        code: CHAT_ERRORS.TASK_NOT_FOUND,
+        message: '任务不存在',
+      });
+    }
+    // 权限：调用者须为任务所属项目成员
+    const member = await this.prisma.projectMember.findUnique({
+      where: { projectId_userId: { projectId: task.projectId, userId } },
+      select: { id: true },
+    });
+    if (!member) {
+      throw new ForbiddenException({
+        code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: '您不是该项目成员',
+      });
+    }
+    const agent = await this.prisma.agent.findUnique({
+      where: { id: dto.agentId },
+      select: { id: true },
+    });
+    if (!agent) {
+      throw new NotFoundException({
+        code: CHAT_ERRORS.AGENT_NOT_FOUND,
+        message: 'Agent 不存在',
+      });
+    }
+    // 幂等：uk_channels_task_agent 已存在则返回已有频道
+    const existing = await this.prisma.chatChannel.findUnique({
+      where: {
+        taskId_agentId: { taskId: dto.taskId, agentId: dto.agentId },
+      },
+      include: CHANNEL_TASK_SELECT,
+    });
+    if (existing) {
+      return this.toChannelDto(existing);
+    }
+    const channel = await this.prisma.chatChannel.create({
+      data: {
+        id: await this.idGen.nextId(CHANNEL_ID_PREFIX),
+        type: CHANNEL_TYPE.private,
+        taskId: dto.taskId,
+        agentId: dto.agentId,
+      },
+      include: CHANNEL_TASK_SELECT,
+    });
+    return this.toChannelDto(channel);
+  }
+
+  /**
+   * 频道访问解析（权限链路：channel → taskId → projectId → project_members）：
+   * 频道不存在 404 CHANNEL_NOT_FOUND；非项目成员 403 PERMISSION_PROJECT_NOT_MEMBER。
+   * 返回频道行 + 关联任务（projectId 供权限、status 供归档校验）。
+   */
+  private async resolveChannelAccess(channelId: string, userId: string): Promise<{
+    channel: ChannelRow;
+    task: { projectId: string; status: string };
+  }> {
+    const channel = await this.prisma.chatChannel.findUnique({
+      where: { id: channelId },
+      include: CHANNEL_TASK_SELECT,
+    });
+    if (!channel) {
+      throw new NotFoundException({
+        code: CHAT_ERRORS.CHANNEL_NOT_FOUND,
+        message: '频道不存在',
+      });
+    }
+    const member = await this.prisma.projectMember.findUnique({
+      where: { projectId_userId: { projectId: channel.task.projectId, userId } },
+      select: { id: true },
+    });
+    if (!member) {
+      throw new ForbiddenException({
+        code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: '您不是该项目成员',
+      });
+    }
+    return { channel, task: channel.task };
+  }
+
+  /**
+   * @ 解析（10 篇 §4.1 / 09 篇 §5.1 第 2 步）：
+   * - agent 型：agentId 必须在任务虚拟团队内（task_agents）——
+   *   未 removed → 按会话有无给 dispatched/no_session；已 removed → agent_removed；
+   *   不在团队 → 400 MENTION_AGENT_NOT_IN_TEAM；
+   * - all 型：展开为当前团队全部未移除 Agent；
+   * - type 非法 → 400 MENTION_TYPE_INVALID。
+   * 落库 mentions 保持提交原样（all 语义原样存储），解析结果经 triggers 返回。
+   */
+  private async resolveMentions(
+    taskId: string,
+    mentions: MentionInput[],
+  ): Promise<{ mentionsStored: MentionInput[]; triggers: TriggerResult[] }> {
+    const teamRows = await this.prisma.taskAgent.findMany({
+      where: { taskId },
+      select: TEAM_AGENT_SELECT,
+    });
+    const teamMap = new Map(teamRows.map((r) => [r.agentId, r]));
+    const triggers: TriggerResult[] = [];
+
+    for (const mention of mentions) {
+      if (mention.type === 'all') {
+        for (const [agentId, row] of teamMap) {
+          if (!row.removedAt) {
+            triggers.push(await this.buildTrigger(taskId, agentId, row));
+          }
+        }
+      } else if (mention.type === 'agent') {
+        if (!mention.agentId) {
+          throw new BadRequestException({
+            code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,
+            message: 'agent mention 缺少 agentId',
+          });
+        }
+        const row = teamMap.get(mention.agentId);
+        if (!row) {
+          throw new BadRequestException({
+            code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,
+            message: `Agent ${mention.agentId} 不在任务团队内`,
+          });
+        }
+        triggers.push(await this.buildTrigger(taskId, mention.agentId, row));
+      } else {
+        throw new BadRequestException({
+          code: CHAT_ERRORS.MENTION_TYPE_INVALID,
+          message: 'mentions 项 type 仅支持 agent | all',
+        });
+      }
+    }
+
+    return { mentionsStored: mentions, triggers };
+  }
+
+  /** 单个触发结果：已移除 → agent_removed；未移除查会话（uk_sessions_task_agent）定 dispatched/no_session。 */
+  private async buildTrigger(
+    taskId: string,
+    agentId: string,
+    row: { removedAt: Date | null },
+  ): Promise<TriggerResult> {
+    if (row.removedAt) {
+      return { agentId, sessionId: null, status: 'agent_removed' };
+    }
+    const session = await this.prisma.session.findFirst({
+      where: { taskId, agentId },
+      select: { id: true },
+    });
+    return {
+      agentId,
+      sessionId: session?.id ?? null,
+      status: session ? 'dispatched' : 'no_session',
+    };
+  }
+
+  /** 频道 DTO：id/type/taskId/agentId + 关联 task/agent + createdAt（ISO8601）。 */
+  private toChannelDto(row: ChannelRow) {
+    return {
+      id: row.id,
+      type: row.type,
+      taskId: row.taskId,
+      agentId: row.agentId,
+      task: row.task
+        ? {
+            id: row.task.id,
+            title: row.task.title,
+            status: row.task.status,
+            projectId: row.task.projectId,
+          }
+        : undefined,
+      agent: row.agent ? { id: row.agent.id, name: row.agent.name, role: row.agent.role } : undefined,
+      createdAt: row.createdAt.toISOString(),
+    };
+  }
+
+  /** 消息 DTO（09 篇 §2.4）：content/mentions 透传 Json；createdAt ISO8601。 */
+  private toMessageDto(row: MessageRow) {
+    return {
+      id: row.id,
+      channelId: row.channelId,
+      senderType: row.senderType,
+      senderId: row.senderId,
+      content: row.content,
+      mentions: row.mentions ?? [],
+      status: row.status,
+      createdAt: row.createdAt.toISOString(),
+    };
+  }
+
+  private normalizeLimit(limit?: number): number {
+    const l = Number(limit ?? 50);
+    if (!Number.isFinite(l)) return 50;
+    return Math.min(Math.max(Math.floor(l), 1), 100);
+  }
+
+  private async seedPrefix(
+    prefix: string,
+    model: {
+      findFirst(args: { orderBy: { id: 'desc' }; select: { id: true } }): Promise<{ id: string } | null>;
+    },
+  ): Promise<void> {
+    const last = await model.findFirst({
+      orderBy: { id: 'desc' },
+      select: { id: true },
+    });
+    if (last) {
+      const seq = parseInt(last.id.slice(prefix.length + 1), 10);
+      if (Number.isFinite(seq)) {
+        this.idGen.seed(prefix, seq);
+      }
+    }
+  }
+}

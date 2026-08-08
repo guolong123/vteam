@@ -1,0 +1,1 @@
+T3 GET /agents:type过滤+分页+扩展字段(skillIds/toolEffects/permissionScope/defaultModelId)；curl实测 items:2 total:4 12字段；GET /agents/a_product完整；404 AGENT_NOT_FOUND

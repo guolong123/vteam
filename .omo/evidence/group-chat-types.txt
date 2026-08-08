@@ -1,0 +1,39 @@
+== group-chat 消息类型扩展验证 (2026-08-06) ==
+  PASS  msg-thinking count=2
+  PASS  msg-thinking-pending 
+  PASS  msg-thinking-done 
+  PASS  msg-tool count=3
+  PASS  msg-tool-success 
+  PASS  msg-tool-running 
+  PASS  msg-tool-failed 
+  PASS  msg-tool-failed-text 
+  PASS  msg-error count=2
+  PASS  msg-error-retry 
+  PASS  msg-error-retry-text 
+  PASS  msg-error-retry-attempt 
+  PASS  msg-error-quota 
+  PASS  msg-error-quota-text 
+  PASS  msg-error-quota-upgrade 
+  PASS  msg-aborted 
+  PASS  msg-aborted-text 
+  PASS  loading-indicator count=5
+  PASS  keep:chat-message-list 
+  PASS  keep:member-item 
+  PASS  keep:message-input 
+  PASS  keep:task-info-panel 
+  PASS  keep:view-session-link 
+  PASS  keep:chat-bubble 
+  PASS  keep:mention-hint 
+  PASS  keep:rail-bar 
+  PASS  keep:topbar 
+  PASS  keep:cmdk-trigger 
+  PASS  chat-bubble-count count=10
+  PASS  member-item-count 
+  PASS  root-position-not-fixed position=relative
+  PASS  thinking-collapsed 
+  PASS  thinking-expanded 
+  PASS  cmdk-panel-default-closed count=0
+  PASS  cmdk-panel-opens-on-click count=1
+  PASS  console-no-error errors=[]
+
+== 36 PASS / 0 FAIL ==

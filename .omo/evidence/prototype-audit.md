@@ -1,0 +1,203 @@
+# 原型审计清单（Task 5）
+
+> 工作目录：`/data/git-project/aiagents`
+> 审计对象：`docs/agent-platform/prototypes/` 下 17 个页面 `index.tsx` + `_shared/` 三文件
+> 用途：Task 8-14 前端迁移的事实依据（只读审计，未改动任何原型文件）
+> 页面数校验：`ls docs/agent-platform/prototypes/*/index.tsx | wc -l` = **17**
+
+---
+
+## 0. 共享层基线（`_shared/`）
+
+### 0.1 `_shared/components.tsx`（8 个共享组件）
+
+| 组件 | data-testid（自带） | 依赖 token | 说明 |
+|------|---------------------|-----------|------|
+| `AgentAvatar` | `agent-avatar`（+`data-role`） | roles, space, radius, fontSize, fontFamily, shadow | 圆形头像，size sm/md/lg（28/36/44），右下角色点 |
+| `AgentBadge` | `agent-badge`（+`data-role`） | roles, roleText, space, radius, fontSize, fontFamily | 角色 pill 徽章 |
+| `ChatBubble` | `chat-bubble`（+`data-type`）、`chat-bubble-author` | roles, roleText, neutral, space, radius, fontSize, fontFamily, shadow | user/agent/system 三型；内部复用 AgentAvatar |
+| `MessageInput` | `message-input`、`message-input-mentions`、`message-input-send` | neutral, space, radius, fontSize, fontFamily, shadow；内部复用 AgentBadge | @提示 chips + 输入占位 + 发送按钮 |
+| `StatusBadge` | `status-badge`（+`data-status`） | statusColors, space, radius, fontSize, fontFamily | 任务四态徽章 |
+| `Sidebar` | `sidebar`、`sidebar-project`、`sidebar-nav-tasks`、`sidebar-nav-agents` | sidebarTheme, space, radius, fontSize, fontFamily | 深色侧边栏（已被 nav-hybrid 取代，**无页面使用**） |
+| `TopBar` | `topbar`、`topbar-user` | neutral, space, fontSize, fontFamily | 浅色顶栏（仅 nav-rail 变体使用） |
+| `EmptyState` | `empty-state` | neutral, space, radius, fontSize, fontFamily | 空状态（**17 页均未使用**） |
+
+### 0.2 `_shared/styles.ts`（102 行 token）
+
+- **语义色**：`roles`（4 角色）、`roleText`、`statusColors`（4 状态）
+- **中性色**：`neutral`（50~900）
+- **布局**：`space`（xs4/sm8/md12/lg16/xl24/xxl32）、`radius`（sm6/md10/lg14/pill999）、`fontSize`（xs11~xxl22）、`fontFamily`（body/display/mono）、`shadow`（sm/md/lg）、`sidebarTheme`
+
+### 0.3 `_shared/nav.tsx`（778 行，融合导航）
+
+导出一组（非 8 组件库，单独文件）：`NavDock`（`rail-bar`/`rail-icon`/`rail-panel`/`nav-item`）、`NavTopBar`（`topbar`/`cmdk-trigger`）、`CmdKPanel`（`cmdk-panel`/`cmdk-close`）、`type CmdKItem`。**Phase 1 的三页（project-list/task-create/task-board）及多数平台页复用此套导航。**
+
+---
+
+## 1. Phase 1 迁移页（4 页 · 完整依赖盘点）
+
+### 1.1 `login`（登录 · device: both）
+
+- **共享组件**：无（不引用 components.tsx / nav.tsx）
+- **Token**：`neutral, space, radius, fontSize, fontFamily, shadow`
+- **data-testid**（5）：`username`、`password`、`login-button`、`register-link`
+  （另有 root 容器但无 testid 包裹；文案区含 4 个角色色点）
+- **特殊布局**：桌面端左右分栏（左品牌区 420px + 右表单）；移动端品牌区折叠为顶栏（`compact` prop）。`BrandPanel` 用局部 `brandBg` 毛玻璃渐变常量。无 Cmd+K / Dock。
+
+### 1.2 `project-list`（项目列表 · device: desktop）
+
+- **共享组件**：`AgentAvatar`、`StatusBadge`
+- **共享导航**：`NavDock`（activeKey="project"）、`NavTopBar`、`CmdKPanel`、`CmdKItem`
+- **Token**：`neutral, space, radius, fontSize, fontFamily, shadow`（+`StatusKey`/`RoleKey` 类型）
+- **data-testid**（4）：`project-list-root`、`project-card`（+`data-project-id`）、`create-project-button`
+- **状态**：`useState` 管理 `cmdkOpen`（Cmd+K 受控开关，默认关闭）
+- **特殊布局**：root `height:100%; position:relative`；内容区 `paddingLeft:80px` 避让 Dock；卡片网格 `repeat(auto-fill,minmax(300px,1fr))`；成员 Agent 头像堆叠（负 margin）。
+
+### 1.3 `task-create`（创建任务 · device: desktop）
+
+- **共享组件**：`AgentAvatar`、`AgentBadge`
+- **共享导航**：`NavDock`（activeKey="board"）、`NavTopBar`、`CmdKPanel`、`CmdKItem`
+- **Token**：`neutral, roles, space, radius, fontSize, fontFamily, shadow`（+`RoleKey`）
+- **data-testid**（13）：`task-create-root`、`task-title`、`task-description`、`doc-upload`、`doc-upload-btn`、`doc-file`、`priority-select`、`agent-option`（+`data-role`/`data-checked`）、`main-agent-tag`、`selected-agents`、`create-task-button`、`create-hint`
+- **状态**：`useState` 管理 `cmdkOpen`；Agent 选择为静态勾选 mock（产品/开发已选，产品=主 Agent）
+- **特殊布局**：左任务表单（flex:1）+ 右 Agent 选择面板（width:300）；`RAIL_W=56`，内容区 `paddingLeft: RAIL_W+24=80`；「待开始」本地色 `pendingColor`（琥珀族，未入 statusColors）；文件类型色 `docTypeColors` 局部定义。
+
+### 1.4 `task-board`（任务看板 · device: desktop）
+
+- **共享组件**：`AgentAvatar`、`StatusBadge`
+- **共享导航**：`NavDock`（activeKey="board"，含任务状态统计子面板）、`NavTopBar`、`CmdKPanel`、`CmdKItem`
+- **Token**：`neutral, space, radius, fontSize, fontFamily, shadow`（+`RoleKey`/`StatusKey`）
+- **data-testid**（10）：`task-board-root`、`status-filter`、`status-filter-option`（+`data-key`/`data-active`）、`task-card`（+`data-task-id`/`data-status`）、`task-members`、`task-artifact-count`、`start-task-button`、`start-task-hint`、`status-badge`（WaitingBadge 复用 testid）
+- **状态**：`useState` 管理 `cmdkOpen` + 每卡 `hintOpen`（开始任务确认）
+- **特殊布局**：`BoardStatus = StatusKey | "待开始"`（5 态）；「待开始」本地 `WAITING_STATUS`（灰蓝 #475569，未入 statusColors），`WaitingBadge` 仿 StatusBadge 视觉并复用 `status-badge` testid；筛选条默认「全部」激活；Dock 子面板含任务状态分布统计。
+
+---
+
+## 2. 其余 13 页（概要盘点）
+
+### 2.1 `agent-config`（Agent 配置 · desktop）
+- 组件：`AgentAvatar`；导航：NavDock(agents)+NavTopBar+CmdKPanel+CmdKItem
+- Token：neutral, roles, roleText, space, radius, fontSize, fontFamily, shadow
+- testid（14）：agent-config-root, agent-list-item, clone-template-button, model-config, model-select, model-source-hint, permission-config, prompt-editor, skill-list, tool-effect-select, tool-permission-item, tool-permission-list, tool-toggle-item, tool-wildcard-row
+- 特殊：左 Agent 列表(320px)+右配置面板；工具权限矩阵（allow/ask/deny）；模型池 mock（FR-47）。
+
+### 2.2 `dm-chat`（私聊 · desktop）
+- 组件：AgentAvatar, AgentBadge, ChatBubble, MessageInput；导航：NavDock(messages)+NavTopBar+CmdKPanel
+- Token：roles, roleText, statusColors, neutral, space, radius, fontSize, fontFamily, shadow
+- testid（9）：dm-chat-root, dm-agent-info, chat-message-list, msg-thinking, msg-tool, msg-error, msg-error-action, loading-indicator, view-session-link
+- 特殊：消息类型扩展（thinking/tool/error/loading）对齐 opencode；scoped 动画 `dm-` 前缀；`errColors` 局部语义色。
+
+### 2.3 `group-chat`（群聊 · device: both）
+- 组件：AgentAvatar, ChatBubble, MessageInput, StatusBadge；导航：NavDock(messages)+NavTopBar+CmdKPanel
+- Token：roles, roleText, neutral, space, radius, fontSize, fontFamily, shadow
+- testid（14）：group-chat-root, members-panel, member-item, chat-message-list, mention-hint, task-info-panel, artifact-link, view-session-link, msg-thinking, msg-tool, msg-error, msg-aborted, loading-indicator
+- 特殊：三栏（成员面板196px | 消息区 | 任务面板268px）；@触发消息流；过程消息（thinking/tool/error/aborted/loading）；scoped 动画 `groupchat-` 前缀；移动端单栏。
+
+### 2.4 `nav-cmdk`（导航变体 B · desktop）
+- 组件：AgentAvatar, AgentBadge, StatusBadge；**无共享 nav**（自建 `CmdkTopBar`/`CmdKPanel`）
+- Token：neutral, roles, roleText, space, radius, fontSize, fontFamily, shadow
+- testid（8）：top-breadcrumb, cmdk-trigger, cmdk-panel, cmdk-search, cmdk-item, task-info-header, artifact-item, artifact-viewer
+- 特殊：无侧边栏；命令面板**默认可见**；内容=任务详情+文档库。
+
+### 2.5 `nav-hybrid`（导航融合版 · desktop）
+- 组件：AgentAvatar, ChatBubble, MessageInput, StatusBadge；**无共享 nav**（自建 `RailBar`/`CmdkTopBar`/`CmdKPanel`）
+- Token：neutral, roles, roleText, space, radius, fontSize, fontFamily, shadow
+- testid（15）：nav-hybrid-root, top-breadcrumb, cmdk-trigger, cmdk-panel, cmdk-search, cmdk-item, rail-bar, rail-icon, rail-panel, nav-item, chat-message-list, mention-hint, task-info-panel, artifact-link, view-session-link
+- 特殊：Dock(z-50) + Cmd+K(z-40) 融合共存；自建 railCss（CSS hover 展开）。
+
+### 2.6 `nav-rail`（导航变体 A · desktop）
+- 组件：AgentAvatar, ChatBubble, MessageInput, StatusBadge, **TopBar**；**无共享 nav**（自建 `RailBar`）
+- Token：neutral, roles, roleText, space, radius, fontSize, fontFamily, shadow
+- testid（9）：rail-bar, rail-icon, rail-panel, nav-item, chat-message-list, mention-hint, task-info-panel, artifact-link, view-session-link
+- 特殊：唯一使用共享组件 **TopBar** 的页面；纯 CSS hover Dock（无 JS 状态）。
+
+### 2.7 `role-permission`（角色与权限 · desktop）
+- 组件：无；导航：NavDock(users)+NavTopBar+CmdKPanel+CmdKItem
+- Token：neutral, space, radius, fontSize, fontFamily, shadow
+- testid（8）：role-permission-root, role-item, add-role-button, permission-matrix, permission-scope, scope-project-select, scope-inner-role-select, permission-note
+- 特殊：权限矩阵（8资源×6操作，✓/◐/✗）；`permCellTheme`/`roleThemes` 局部语义色；受控角色切换。
+
+### 2.8 `skills-tools-manage`（技能与工具 · desktop）
+- 组件：`AgentBadge`；导航：NavDock(skills)+NavTopBar+CmdKPanel+CmdKItem
+- Token：neutral, roleText, space, radius, fontSize, fontFamily, shadow
+- testid（20）：skills-tools-manage-root, manage-toolbar, manage-tabs, manage-tab, search-input, upload-skill-button, register-tool-button, register-mcp-button, manage-list, manage-hint, skill-item, skill-source, skill-status, tool-subtabs, tool-subtab, tool-item, tool-ready, tool-status, tool-kind, tool-dep-status, mcp-tool-item, mcp-tool-name, mcp-type, mcp-status, mcp-tool-status
+- 特殊：技能/工具二 Tab + 工具三子 Tab（内置/自定义/MCP）；多组局部语义色（sourceColors/enableColors/depStateColors/toolKindTheme/groupTheme/mcpTypeTheme/mcpStatusTheme）。
+
+### 2.9 `task-detail`（任务详情与文档库 · desktop）
+- 组件：AgentAvatar, AgentBadge, StatusBadge；导航：NavDock(board)+NavTopBar+CmdKPanel
+- Token：neutral, roles, roleText, space, radius, fontSize, fontFamily, shadow
+- testid（5）：task-detail-root, task-info-header, artifact-tab, artifact-item, artifact-viewer
+- 特殊：产出物三类（结论文本/文档/文件）+版本 append；局部 `artifactTypeTheme`。
+
+### 2.10 `tool-register`（注册工具 · desktop）
+- 组件：`AgentBadge`；导航：NavDock(skills)+NavTopBar+CmdKPanel+CmdKItem
+- Token：neutral, roleText, space, radius, fontSize, fontFamily, shadow
+- testid（56，全站最多）：tool-register-root, tool-register-card, tool-basic-section, tool-name-input, tool-desc-input, role-bind, execution-section, execution-type-list, execution-type, execution-config-panel, handler-code-editor, cli-mode-select, cli-mode-schema, cli-mode-free, cli-command-template, cli-free-config, cli-free-command, cli-free-whitelist, cli-free-timeout, cli-free-cwd, cli-init-hint, http-callback-url, mcp-type-select, mcp-type-option, mcp-command-input, mcp-cwd-input, mcp-env-input, mcp-init-hint, mcp-url-input, mcp-headers-input, mcp-oauth-toggle, mcp-schema-note, input-schema-section, input-schema-editor, output-schema-editor, cli-free-schema, binding-section, binding-cli-list, binding-cli-item, cli-output-parse, binding-http-list, binding-http-item, http-output-parse, binding-code-note, binding-mcp-note, init-section, init-hint, init-command-list, init-command-item, init-command-input, init-command-note, remove-init-command, add-init-command, tool-register-footer, register-tool-button, register-cancel-button
+- 特殊：5 区块表单（基础/执行方式/Schema/执行绑定/初始化命令）；4 种执行形态受控联动；CLI 双模式（schema/free）；受控输入极多。
+
+### 2.11 `user-management`（用户管理 · desktop）
+- 组件：无；导航：NavDock(users)+NavTopBar+CmdKPanel+CmdKItem
+- Token：neutral, space, radius, fontSize, fontFamily, shadow
+- testid（21）：user-management-root, user-stats, add-user-button, user-item, user-edit-button, user-toggle-button, user-reset-button, user-role-badge, user-status-badge, user-form-overlay, user-form-mask, user-form, user-form-close, username-input, user-email-input, user-password-input, user-role-select, user-project-select, user-form-cancel, user-form-submit, user-pool-hint
+- 特殊：统计条+用户表格+新增用户弹层（受控开关）；`roleTheme`/`statusTheme` 局部语义色；禁用状态本地切换。
+
+### 2.12 `worker-install`（新增 Worker · desktop）
+- 组件：无；导航：NavDock(workers)+NavTopBar+CmdKPanel+CmdKItem
+- Token：neutral, roleText, space, radius, fontSize, fontFamily, shadow
+- testid（17）：worker-install-root, install-wizard, install-config, server-url-input, worker-id-input, regenerate-worker-id-button, capability-config, install-method-section, install-method-tabs, install-method-tab, install-command-section, install-command, copy-command-button, install-steps, install-footer, install-confirm-button, install-cancel-button
+- 特殊：3 步安装向导（基础配置/安装方式/安装命令）；curl/docker 双 Tab；命令动态拼接。
+
+### 2.13 `worker-list`（Worker 节点管理 · desktop）
+- 组件：无；导航：NavDock(workers)+NavTopBar+CmdKPanel+CmdKItem
+- Token：neutral, space, radius, fontSize, fontFamily, shadow
+- testid（14）：worker-list-root, worker-stats, add-worker-button, worker-card, worker-status, worker-version, worker-capability, worker-load, worker-heartbeat, worker-actions, worker-detail-button, worker-restart-button, worker-offline-button, worker-pool-hint
+- 特殊：统计条+节点卡片网格；`workerStatusTheme` 局部语义色；CPU 负载进度条；在线呼吸动画（`workerpulse-` scoped）。
+
+---
+
+## 3. 汇总统计
+
+| 维度 | 值 |
+|------|-----|
+| 页面总数 | 17 |
+| 使用共享 `components.tsx` 的页 | 12（login/role-permission/user-management/worker-install/worker-list 共 5 页未用） |
+| 使用共享 `nav.tsx`（NavDock/NavTopBar/CmdKPanel）的页 | 13（nav-cmdk/nav-hybrid/nav-rail 3 页自建导航；login 无导航） |
+| 使用共享 `TopBar` 的页 | 仅 nav-rail |
+| 使用共享 `Sidebar` 的页 | 0（全站已弃用，被 NavDock 取代） |
+| 使用共享 `EmptyState` 的页 | 0 |
+| data-testid 条目（去重） | 全站 > 0（grep 命中 17 文件均 >0） |
+| data-testid 重数最多页 | tool-register（56） |
+
+### 共享组件使用矩阵（12 页 × 8 组件）
+
+| 页面 | AvAvatar | AvBadge | ChatBubble | MsgInput | StatusBadge | Sidebar | TopBar | EmptyState |
+|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| login | – | – | – | – | – | – | – | – |
+| project-list | ● | – | – | – | ● | – | – | – |
+| task-create | ● | ● | – | – | – | – | – | – |
+| task-board | ● | – | – | – | ● | – | – | – |
+| agent-config | ● | – | – | – | – | – | – | – |
+| dm-chat | ● | ● | ● | ● | – | – | – | – |
+| group-chat | ● | – | ● | ● | ● | – | – | – |
+| nav-cmdk | ● | ● | – | – | ● | – | – | – |
+| nav-hybrid | ● | – | ● | ● | ● | – | – | – |
+| nav-rail | ● | – | ● | ● | ● | – | ● | – |
+| role-permission | – | – | – | – | – | – | – | – |
+| skills-tools-manage | – | ● | – | – | – | – | – | – |
+| task-detail | ● | ● | – | – | ● | – | – | – |
+| tool-register | – | ● | – | – | – | – | – | – |
+| user-management | – | – | – | – | – | – | – | – |
+| worker-install | – | – | – | – | – | – | – | – |
+| worker-list | – | – | – | – | – | – | – | – |
+
+---
+
+## 4. Task 8-14 迁移要点（事实依据）
+
+1. **导航统一**：Phase 1 三页（project-list/task-create/task-board）均复用 `_shared/nav.tsx` 的 NavDock+NavTopBar+CmdKPanel，Cmd+K 一律用 `useState` 受控（默认关闭）。`Sidebar` 已全站废弃，勿迁移。
+2. **T15 铁律**：所有融合导航页 root = `height:100%; position:relative`，浮层 absolute，**零 fixed/100vh/100vw**；内容区 `paddingLeft: RAIL_W+24 = 80` 避让 Dock。
+3. **「待开始」5 态**：task-board 用 `WAITING_STATUS`（#475569 灰蓝）本地定义，未入 `statusColors`；task-create 用琥珀 `pendingColor`。迁移时需作为状态扩展，勿改 `_shared/styles.ts`。
+4. **局部语义色范式**：各页在「扩展 token」原则下于页面内定义具名语义色（如 permCellTheme、workerStatusTheme、mcpStatusTheme、errColors、docTypeColors），不扩散共享层。迁移时应保持此模式。
+5. **scoped 动画**：dm-chat(`dm-`)、group-chat(`groupchat-`)、skills-tools-manage(`stmmcp-`)、worker-list(`workerpulse-`)、nav-* (`nav*` 前缀) 均用 `@keyframes` 注入 `<style>`，需防污染。
+6. **导航变体三页**（nav-rail/nav-hybrid/nav-cmdk）为设计评审产物，自建导航，**不属于**融合导航最终形态，迁移时以 nav-hybrid 心智为终态。
+7. **Phase 1 边界**：login（无导航）+ project-list + task-create + task-board 四页为 Task 8-14 首批迁移对象，依赖如上完整盘点。

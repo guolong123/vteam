@@ -1,0 +1,44 @@
+F2 Code Quality Review — final verdict
+======================================
+Date: 2026-08-07
+Build [PASS] | Tests [39 pass/0 fail] | VERDICT: APPROVE
+
+Build / Test Gates
+------------------
+1. server tsc --noEmit        : exit 0  (PASS)
+2. server npm run test        : 7 suites / 39 tests passed, 0 failed (PASS)
+3. web npm run build          : exit 0, 14 static routes generated (PASS)
+
+Static Analysis (grep, server/src + web/src, 测试文件豁免)
+----------------------------------------------------------
+| Check                    | Result                     | Severity |
+|--------------------------|----------------------------|----------|
+| as any                   | 3 处 (server 生产代码)      | LOW      |
+| @ts-ignore/@ts-expect-err | 0 处                       | -        |
+| 空 catch                 | 0 处                       | -        |
+| console.log              | 0 处 (server+web 生产代码)  | -        |
+| 注释掉的旧代码           | 0 处 (仅有 JSDoc /** */)    | -        |
+| 未用 import/locals       | 0 处 (tsc --noUnusedLocals 验证通过) | -  |
+
+Findings
+--------
+1. [LOW, 非阻断] `as any` × 3 — 全部位于 JWT expiresIn 配置:
+   - server/src/auth/auth.service.ts:194,198 (signAsync options)
+   - server/src/auth/auth.module.ts:20 (JwtModule.registerAsync signOptions)
+   成因: @nestjs/jwt 的 expiresIn 类型为 ms 库 StringValue，与
+   ConfigService.get<string>() 返回的 string 不兼容，属已知框架类型
+   摩擦点。运行时值为纯字符串 ('2h'/'7d')，无安全或逻辑风险。
+2. [INFO, 非阻断] server tsconfig 为 NestJS 默认宽松配置
+   (strictNullChecks: false, noImplicitAny: false)，tsc 通过门槛较低。
+   本次评审通过临时追加 --noUnusedLocals --noUnusedParameters 复核，
+   未发现未用 import/变量/参数。
+3. [INFO] 已知例外(非缺陷): ProjectsModule 使用 PlaceholderAuthGuard
+   读取 x-user-id (Task 17 临时方案)。
+
+Conclusion
+----------
+未发现阻断性缺陷。39 项单测全绿，server/web 构建通过，静态检查
+无 @ts-ignore、空 catch、console.log 或注释残留代码；3 处 as any
+均为框架类型兼容的常规写法，不构成质量问题。
+
+VERDICT: APPROVE

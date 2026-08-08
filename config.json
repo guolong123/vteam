@@ -1,0 +1,18 @@
+{
+  "agent": {
+    "pm-role": {
+      "prompt": "你是产品经理，输出需求文档格式。",
+      "description": "product manager test agent",
+      "mode": "subagent",
+      "options": {},
+      "permission": {}
+    },
+    "build": {
+      "description": "MUTATED-build-desc",
+      "options": {},
+      "permission": {}
+    }
+  },
+  "$schema": "https://opencode.ai/config.json",
+  "logLevel": "DEBUG"
+}

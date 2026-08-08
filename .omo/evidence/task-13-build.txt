@@ -1,0 +1,69 @@
+Task-13: md-docs 构建与全量验证 — 证据
+=====================================================
+时间: 2026-08-06
+工作目录: /data/git-project/aiagents
+
+## 1. 构建
+命令: md-docs build --out-dir /tmp/site
+结果: EXIT:0
+产物: /tmp/site/index.html (1717B) + /tmp/site/assets/ (96 个文件)
+构建输出末尾:
+  [md-docs] 构建完成 → /tmp/site
+  EXIT:0
+（vite v8.2.0, 2344 modules transformed, 仅 chunk>500kB 性能提示，非错误）
+
+## 2. 内容注入（curl http://localhost:5177/@id/__x00__virtual:md-docs-content）
+6 篇文档 key 全部命中：
+  "/docs/agent-platform/01-背景与目标.md"
+  "/docs/agent-platform/02-用户与场景.md"
+  "/docs/agent-platform/03-功能需求-任务与群聊协作.md"
+  "/docs/agent-platform/04-功能需求-Agent与产出物.md"
+  "/docs/agent-platform/05-非功能与验收边界.md"
+  "/docs/agent-platform/06-交互与页面设计.md"
+_meta 生效："/docs/agent-platform/_meta.md" 含 frontmatter
+  name: Agent 协作平台 PRD / description / order: 1；未进入文档树（浏览器文档树仅 6 篇）
+
+## 3. 原型注册（curl http://localhost:5177/@id/__x00__virtual:md-docs-protos）
+8 个原型 import 全部命中（无 _shared）：
+  prototypes/login / project-list / task-create / task-board
+  prototypes/group-chat / dm-chat / task-detail / agent-config
+  （每个 id 在 import 映射中按 meta.id 匹配）
+
+## 4. playwright 走查（chromium_headless_shell-1208, 1440x900）
+原型 URL 全部 PASS：data-testid 存在 + console error = 0
+  login        3/3  (username/password/login-button)
+  project-list 2/2  (project-card/create-project-button)
+  task-create  3/3  (task-title/task-description/priority-select)
+  task-board   3/3  (task-card/task-members/task-artifact-count)
+  group-chat   3/3  (members-panel/member-item/chat-message-list)
+  dm-chat      3/3  (dm-agent-info/chat-message-list/view-session-link)
+  task-detail  3/3  (task-info-header/artifact-tab/artifact-item)
+  agent-config 3/3  (clone-template-button/prompt-editor/skill-list)
+文档侧：
+  docs-tree    6/6  项目视图文档树 6 篇文档
+  doc-content  PASS 文档正文渲染（产品背景/任务即项目）
+  protos-nav   8/8  原型 tab 导航 8 项
+  06 文档嵌入块：登录原型嵌入渲染 PASS（[data-testid=username] 在 06 文档内存在），console 无 error
+
+## 5. 命名一致性
+06 篇「1. 页面总览」表 8 个原型 ID（login/project-list/task-create/task-board/
+group-chat/dm-chat/task-detail/agent-config）与 8 个原型 meta.id 一一对应：
+  login=login, project-list=project-list, task-create=task-create,
+  task-board=task-board, group-chat=group-chat, dm-chat=dm-chat,
+  task-detail=task-detail, agent-config=agent-config  ✅
+（注：原型组件内 mock 数据另有内部 id 如 p1/T-1042/req-doc/pm-template，非 meta.id，不构成冲突）
+
+## 6. 发现问题与修复
+[BUG-1] 中文文档 id 的 hash 路由失效（正文不切换）
+  现象：点击文档树「交互与页面设计」后 URL 变为 #/p/agent-platform/docs/%E4%BA%A4...
+        （浏览器对中文 hash 自动 percent-encode），但正文仍显示第一篇文档。
+  根因：md-docs src/App.tsx parseHash() 取 docId = rest[rest.length-1] 后直接
+        findProjectDoc 匹配，未 decodeURIComponent；编码后的 id 匹配失败回退默认文档。
+  修复：在 6 篇文档 frontmatter 增加英文 id 字段（scanner.ts 支持 fm.id 覆盖文件名推断）：
+        01-bg-goals / 02-users-scenarios / 03-req-task-chat / 04-req-agent-artifacts
+        / 05-nonfunc-acceptance / 06-interaction-design
+  复验：点击 4 篇文档正文均切换 PASS；直达 #/p/agent-platform/docs/interaction-design PASS。
+  注：未改动 md-docs 工具源码（超出本仓库交付范围）；文档 id 变更不影响内容注入 key
+      （仍按文件名）与原型嵌入（按原型 meta.id）。
+
+## 结论：全部验证项通过，问题修复闭环 ✅

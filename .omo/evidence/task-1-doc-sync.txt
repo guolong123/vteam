@@ -1,0 +1,1 @@
+T1 18篇§7.4文档同步：§7.4无task-detail行，含/artifacts?pid=与/roles两行，§7.5 M3描述一致（F1审计确认）

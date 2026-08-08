@@ -1,0 +1,1 @@
+T7验收联动：mark-pending-review→accept→acceptedFlag=true；新内容append→409 ARTIFACT_ACCEPTED_IMMUTABLE；新title append→archived+任务退回in_progress

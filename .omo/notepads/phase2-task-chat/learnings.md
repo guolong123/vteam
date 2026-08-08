@@ -679,3 +679,17 @@
 - web：`npx tsc --noEmit` exit 0；`npm run build` exit 0（15 页面含 /agents /users /roles /artifacts）
 - Playwright 冒烟：/agents 只读+克隆闭环 / users CRUD / roles 矩阵+Dock 7 项 / artifacts 三筛+版本查看器+验收徽章 27/27 / 三入口跳转 5/5
 - M3 端到端（T15）：Agent 配置 → 创建任务选 Agent → 启动（sessions active）→ mock 产出 → 归档 → 聚合页 → mark-pending-review → accept → 验收徽章 + accepted_flag + 409 不可变，闭环跑通
+
+## SSE 实时刷新补全（/artifacts 聚合页，F1 遗留项修复）
+
+- 改动：`web/hooks/use-realtime.ts` EVENT 加 `ARTIFACT_SUBMITTED: "artifact.submitted"`（对齐后端 event.constants.ts:14，task scope）；新增 `ArtifactSubmittedEvent` payload 契约 `{taskId, type, title, content?, fileRef?}`；`UseRealtimeEventsOptions` 加 `onArtifactSubmitted` 回调 + switch case 分发（纯回调，无默认缓存行为）
+- `web/app/(main)/artifacts/page.tsx`：页面内 `useRealtimeEvents({ onArtifactSubmitted: () => refetch() })`——复用全局单例连接（use-sse 连接池，scope=all URL 全量接收），不新增连接；**scope 省略放行全部事件**，useRealtimeEvents 内部按 type 分发，onArtifactSubmitted 只在 artifact.submitted 匹配时触发，scope 前端过滤不影响
+- 聚合页语义：不做 taskId 过滤，任何任务产出物提交都 `refetch()` 刷新整个聚合列表（refetch 作用域为 ["artifacts", pid, ...] 当前 queryKey，与筛选联动一致）
+- 验证：`npx tsc --noEmit` exit 0；`npm run build` exit 0（/artifacts 5.35 kB 正常产出）
+
+## F2 MAJOR 修复：agents.service.ts PATCH 半更新语义（已完成）
+
+- **根因**：原 `update` 调 `createAssociations(rebuild=true)`，rebuild 分支**无条件 deleteMany agent_skills + agent_tool_effects** 再重建——前端 /agents 页保存只提交 `{prompt, defaultModelId, toolEffects}`（skillIds 为静态面板不提交）→ 每次保存 skillIds 关联被清空
+- **修复**：拆 `createAssociations`（仅 create/clone 全量新建，无 rebuild 参数）为 4 个私有方法——`createSkills`/`createToolEffects`（批量插入，去重逻辑保留）+ `replaceSkills`/`replaceToolEffects`（deleteMany + 复用 create）；`update` 内**按字段分别判断**：`dto.skillIds !== undefined` 才 replaceSkills、`dto.toolEffects !== undefined` 才 replaceToolEffects、都不传零触碰关联表
+- **spec**：agents.service.spec 补 3 用例（仅 toolEffects → skills 表零调用保留 / 仅 skillIds → toolEffects 表零调用保留 / 都传 → 两表各自 deleteMany+create），28 tests 全过
+- **验证**：`npx jest --no-cache src/agents --silent` 28/28 PASS；`npm run build` exit 0；schema/create 语义零改动

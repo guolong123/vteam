@@ -1,0 +1,12 @@
+# Task 1 Evidence: 项目脚手架与 md-docs 验证
+时间: 2026-08-06
+
+## 创建的文件
+- docs/agent-platform/_meta.md（frontmatter: name=Agent 协作平台 PRD, description=基于 opencode 的多 Agent 协作平台需求与原型, order=1）
+- docs/README.md（站点首页说明：6 篇 PRD + 8 原型页面）
+
+## 验证记录（追加）
+- curl http://localhost:5177/ → HTTP 200 ✓
+- curl /@id/__x00__virtual:md-docs-content → 包含 key "/docs/agent-platform/_meta.md" ✓（项目被识别）
+- content 含 frontmatter "name: Agent 协作平台 PRD" ✓
+- 注意：key 形如 "/docs/agent-platform/_meta.md"（带前导 /），grep 需用 '"/docs/agent-platform/' 模式
