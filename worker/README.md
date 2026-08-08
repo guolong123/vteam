@@ -68,6 +68,8 @@ npm run dev            # tsx src/index.ts
 | `HEARTBEAT_INTERVAL_MS` | 否 | `10000` | 心跳间隔 ms（server 30s=3 周期判 offline） |
 | `LOG_LEVEL` | 否 | `info` | 日志级别 |
 | `WORK_DIR` | 否 | `/tmp/keta-worker` | opencode serve 工作目录（T5：`.opencode/tools/` 注入落点） |
+| `OPENCODE_SERVE_HOSTNAME` | 否 | `127.0.0.1` | opencode serve 绑定地址（D2：默认本地回环铁律；容器内设 `0.0.0.0` 供 server 容器访问） |
+| `WORKER_ADVERTISE_HOST` | 否 | `http://127.0.0.1` | worker 对 server 公布的 serve 基址主机（D2：随注册 capabilities.baseUrl 上报；容器 compose 设 `http://worker`） |
 | `GIT_SSH_KEY_PATH` | 否 | 空 | SSH 私钥路径（T5 git 凭证注入：GIT_SSH_COMMAND）；空 = 不注入 |
 
 ## 目录结构

@@ -4,7 +4,8 @@
  * 从 docs/agent-platform/prototypes/group-chat/index.tsx 迁移：
  * - kind=retry：模型繁忙（APIError isRetryable:true → 琥珀重试中，RetryPart attempt）
  * - kind=quota：余额不足（insufficient_quota isRetryable:false → 红色升级引导）
- * data-testid=msg-error，token 引用统一走 src/theme/tokens.ts。
+ * data-testid=msg-error（+ quota 分支操作链接 msg-error-action，对齐 dm-chat 原型 :386），
+ * token 引用统一走 src/theme/tokens.ts。
  */
 "use client";
 import type { CSSProperties } from "react";
@@ -100,6 +101,7 @@ export function MsgError({ kind, author, role, detail, attempt, time, style, cla
             <span style={{ fontSize: fontSize.xs, color: theme.color }}>insufficient_quota · 不可重试</span>
             <span
               role="link"
+              data-testid="msg-error-action"
               aria-label="查看升级方案"
               style={{
                 marginLeft: "auto",

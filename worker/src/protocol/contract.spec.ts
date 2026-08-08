@@ -3,6 +3,8 @@ import {
   WorkerEventPayload,
   HeartbeatWorkerPayload,
   RegisterWorkerPayload,
+  WORKER_COMMAND_TYPES,
+  WorkerCommand,
 } from './worker-protocol';
 
 /**
@@ -91,8 +93,8 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {
     expect(parsed.seq).toBe(42);
   });
 
-  it('WorkerEventPayload.type 受 WorkerEventType 枚举约束（编译期），枚举 6 事件点号命名', () => {
-    expect(Object.values(WORKER_EVENT_TYPES)).toHaveLength(6);
+  it('WorkerEventPayload.type 受 WorkerEventType 枚举约束（编译期），枚举 7 事件点号命名', () => {
+    expect(Object.values(WORKER_EVENT_TYPES)).toHaveLength(7);
     for (const name of Object.values(WORKER_EVENT_TYPES)) {
       expect(name.includes('_')).toBe(false);
     }
@@ -104,5 +106,18 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {
       seq: 1,
     };
     expect(typed.type).toBe('task.completed');
+    expect(WORKER_EVENT_TYPES.GIT_OP).toBe('git.op');
+  });
+
+  it('T4a：WorkerCommand 序列化/反序列化后字段完整（对齐心跳响应 commands）', () => {
+    const command: WorkerCommand = {
+      type: WORKER_COMMAND_TYPES.RELOAD_CONFIG,
+      resourceVersion: 'v2',
+    };
+
+    const parsed = JSON.parse(JSON.stringify(command)) as WorkerCommand;
+
+    expect(parsed.type).toBe('reload-config');
+    expect(parsed.resourceVersion).toBe('v2');
   });
 });

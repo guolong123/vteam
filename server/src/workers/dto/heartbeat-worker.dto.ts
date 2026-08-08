@@ -1,6 +1,14 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsNotEmpty, IsString, ValidateNested } from 'class-validator';
+import {
+  IsArray,
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
+import { McpStatusEntryDto } from '../../mcp-servers/dto/mcp-status.dto';
 import { WorkerLoadDto } from './register-worker.dto';
 
 export const WORKER_HEALTH = {
@@ -28,4 +36,14 @@ export class HeartbeatWorkerDto {
   @ApiProperty({ description: '健康状态', enum: Object.values(WORKER_HEALTH) })
   @IsIn(Object.values(WORKER_HEALTH))
   health: WorkerHealth;
+
+  @ApiPropertyOptional({
+    description: 'MCP 服务器三态快照（T8c：worker 节流探测结果，可选）',
+    type: [McpStatusEntryDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => McpStatusEntryDto)
+  mcpStatus?: McpStatusEntryDto[];
 }

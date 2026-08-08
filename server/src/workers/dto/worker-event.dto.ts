@@ -13,6 +13,7 @@ export const WORKER_EVENT_TYPES = {
   MESSAGE_PART_DELTA: 'message.part.delta',
   AGENT_STATUS: 'agent.status',
   TASK_COMPLETED: 'task.completed',
+  GIT_OP: 'git.op',
 } as const;
 
 export type WorkerEventType = (typeof WORKER_EVENT_TYPES)[keyof typeof WORKER_EVENT_TYPES];

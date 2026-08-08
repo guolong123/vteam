@@ -15,7 +15,11 @@
 //     - 时间统一 UTC + DateTime
 //     - 布尔用 Boolean（SQLite 映射 INTEGER 0/1）
 //     - 不使用 @db.VarChar 等 MySQL 专属 native type（SQLite 会拒绝，破坏双库可移植）
-//   本地验证 provider = "sqlite"；生产 MySQL 时仅需把 provider 改为 "mysql" 并指向 MySQL 连接串。
+//   ⚠️ provider 当前为 "mysql"（生产目标，T2 迁移基线已生成于 migrations/）。
+//      本地开发两种方式（择一）：
+//        a) 推荐：本地 Docker 起 MySQL（DATABASE_URL 指向 localhost:3306，见 .env.example）
+//        b) 回退 SQLite：仅把 provider 改回 "sqlite"，DATABASE_URL="file:./dev.db"，
+//           再执行 `npx prisma db push` 重建本地库（dev.db 可随 seed 重建，数据非权威）
 //
 // 约定：
 //   - 外键级联一律 ON DELETE RESTRICT（删除路径由服务层显式编排）
@@ -27,7 +31,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -332,6 +336,10 @@ model Skill {
   id          String   @id
   name        String   @unique
   description String?
+  // SKILL.md 全文（T1 新增列：worker 注入需原文写出，DB 为唯一事实源）
+  // F3-1：@db.Text 承载长文档（VARCHAR(191) 导致 >191 字符 SKILL.md 落库 500）
+  // ⚠️ 不带 @default：MySQL TEXT 列禁止字面量默认值（P3018/1101），create 必传 content 无需 DB 默认
+  content     String   @db.Text
   fileMeta    Json?    @map("file_meta")
   enabled     Boolean  @default(false)
   createdAt   DateTime @default(now()) @map("created_at")
@@ -356,6 +364,25 @@ model Tool {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   @@map("tools")
+}
+
+// ==================================================================
+// MCP 服务器域（11 篇 §5.1 / §5.8：mcp_servers 实体，T8a）
+// ==================================================================
+
+model McpServer {
+  id        String   @id
+  name      String   @unique
+  type      String // local | remote（11 篇 §5.1 两型）
+  command   Json? // local：{command[], cwd?, environment?, timeout?}
+  url       String? // remote：合法 http(s) URL
+  headers   Json? // remote：{header: value}
+  oauth     Json? // remote：{clientId?, clientSecret?, scope?} 或 false（显式禁用）
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("mcp_servers")
 }
 
 // ==================================================================

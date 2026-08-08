@@ -49,22 +49,22 @@
 
 ## 任务分解（T0-T11 + F1-F4）
 
-- [ ] T0 Git 基线：.gitignore 补全（dev.db/tsbuildinfo/coverage/根 PNG 归置）→ remote 确认/创建 → feature/phase-5 分支 → 全量一次提交 → 推 ketabot → PR 基线
-- [ ] T1 Dockerfile 双镜像：next.config.ts standalone + rewrites 环境变量化 + server/Dockerfile + web/Dockerfile（含 static/public COPY）
-- [ ] T2 MySQL 迁移：schema provider 改 mysql + prisma migrate dev --name init 首次基线 + seed 在空 MySQL 跑通（shadow DB 权限）
-- [ ] T3 worker 网络调整 + worker Dockerfile：serve hostname env 化 + capabilities.baseUrl 上报（WORKER_ADVERTISE_HOST）+ worker/Dockerfile（npm i -g opencode-ai@1.18.15）
-- [ ] T4 skills-tools-manage 页迁移：web/app/(main)/skills/page.tsx 占位→全量（20 testid）
-- [ ] T5 tool-register 页迁移：T5a 独立路由+5 区块表单静态结构（~26 testid）→ T5b 4 执行形态+交互+数据对接（~30 testid）；前置探明后端 Tool CRUD API
-- [ ] T6 git.op 审计事件：修 installGitTools 接线 → spike 上报路径 → worker 上报 + server ingress git.op 分支 + task_events 落库（metadata Json：agent/repo_url/action/exit code）
-- [ ] T7 pino JSON 结构化日志：业务日志 JSON 化（nestjs-pino 或 logger 包装）
-- [ ] T8 性能计时脚本（3B 双线 + 可用性冒烟）：群聊≤1s/首字双线 15s-5s/会话流≤2s/4-6 Agent 并发 + ≥99.5% 冒烟，产出 JSON
-- [ ] T9 Playwright QA 套件：配置 + 17 页 testid 断言 + 性能 E2E
-- [ ] T10 原型终检：17 页三维度对比（token/布局/testid）+ 报告落盘 docs/ + 审计报告位置对齐
-- [ ] T11 docker compose 实跑 + 权限矩阵走查：四容器 up 全 healthy + 三守卫拦截验证 + 审计基线汇总
-- [ ] F1 计划合规审计（oracle）
-- [ ] F2 代码质量审计（oracle）
-- [ ] F3 QA：compose 实跑 + 性能计时 + 17 页断言 + 容器内真实会话（oracle/qa）
-- [ ] F4 零污染：git diff T0..HEAD 核算 + 工作区残留检查
+- [x] T0 Git 基线：.gitignore 补全（dev.db/tsbuildinfo/coverage/根 PNG 归置）→ remote 确认/创建 → feature/phase-5 分支 → 全量一次提交 → 推 ketabot → PR 基线
+- [x] T1 Dockerfile 双镜像：next.config.ts standalone + rewrites 环境变量化 + server/Dockerfile + web/Dockerfile（含 static/public COPY）
+- [x] T2 MySQL 迁移：schema provider 改 mysql + prisma migrate dev --name init 首次基线 + seed 在空 MySQL 跑通（shadow DB 权限）
+- [x] T3 worker 网络调整 + worker Dockerfile：serve hostname env 化 + capabilities.baseUrl 上报（WORKER_ADVERTISE_HOST）+ worker/Dockerfile（npm i -g opencode-ai@1.18.15）
+- [x] T4 skills-tools-manage 页迁移：web/app/(main)/skills/page.tsx 占位→全量（20 testid）
+- [x] T5 tool-register 页迁移：T5a 独立路由+5 区块表单静态结构（~26 testid）→ T5b 4 执行形态+交互+数据对接（~30 testid）；前置探明后端 Tool CRUD API
+- [x] T6 git.op 审计事件：修 installGitTools 接线 → spike 上报路径 → worker 上报 + server ingress git.op 分支 + task_events 落库（metadata Json：agent/repo_url/action/exit code）
+- [x] T7 pino JSON 结构化日志：业务日志 JSON 化（nestjs-pino 或 logger 包装）
+- [x] T8 性能计时脚本（3B 双线 + 可用性冒烟）：群聊≤1s/首字双线 15s-5s/会话流≤2s/4-6 Agent 并发 + ≥99.5% 冒烟，产出 JSON
+- [x] T9 Playwright QA 套件：配置 + 17 页 testid 断言 + 性能 E2E
+- [x] T10 原型终检：17 页三维度对比（token/布局/testid）+ 报告落盘 docs/ + 审计报告位置对齐
+- [x] T11 docker compose 实跑 + 权限矩阵走查：四容器 up 全 healthy + 三守卫拦截验证 + 审计基线汇总
+- [x] F1 计划合规审计（oracle）
+- [x] F2 代码质量审计（oracle）
+- [x] F3 QA：compose 实跑 + 性能计时 + 17 页断言 + 容器内真实会话（oracle/qa）
+- [x] F4 零污染：git diff T0..HEAD 核算 + 工作区残留检查
 
 ## 并行/串行依赖
 ```

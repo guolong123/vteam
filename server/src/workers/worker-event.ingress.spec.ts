@@ -1,4 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
+import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import {
@@ -24,8 +25,10 @@ describe('WorkerEventIngress', () => {
   let prisma: {
     worker: { findUnique: jest.Mock };
     session: { updateMany: jest.Mock; findFirst: jest.Mock };
+    taskEvent: { create: jest.Mock };
   };
   let realtime: { emit: jest.Mock };
+  let idGen: { nextId: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -34,11 +37,14 @@ describe('WorkerEventIngress', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findFirst: jest.fn().mockResolvedValue(null),
       },
+      taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
     };
     realtime = { emit: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
+    idGen = { nextId: jest.fn().mockResolvedValue('te_0000000042') };
     ingress = new WorkerEventIngress(
       prisma as unknown as PrismaService,
       realtime as unknown as RealtimeService,
+      idGen as unknown as IdGeneratorService,
     );
   });
 
@@ -304,6 +310,98 @@ describe('WorkerEventIngress', () => {
         throw new Error('callback boom');
       });
       const e = event('w_1', 'evw_10', 'task.completed', {});
+      await expect(ingress.handleEvent(e)).resolves.toBe(true);
+    });
+  });
+
+  describe('git.op → task_events 落库（T6 审计）', () => {
+    it('完整 payload → taskEvent.create（eventType=git.op + metadata Json）', async () => {
+      const e = event('w_1', 'evw_13', 'git.op', {
+        taskId: 't_1',
+        agentId: 'a_1',
+        action: 'git_clone',
+        repo_url: 'git@gitee.com:xishuhq/ketaops.git',
+        exit: 0,
+      });
+
+      expect(await ingress.handleEvent(e)).toBe(true);
+      expect(idGen.nextId).toHaveBeenCalledWith('te');
+      expect(prisma.taskEvent.create).toHaveBeenCalledWith({
+        data: {
+          id: 'te_0000000042',
+          taskId: 't_1',
+          eventType: 'git.op',
+          fromStatus: null,
+          toStatus: null,
+          actorType: 'agent',
+          actorId: 'a_1',
+          metadata: {
+            agent: 'a_1',
+            repo_url: 'git@gitee.com:xishuhq/ketaops.git',
+            action: 'git_clone',
+            exit: 0,
+          },
+        },
+      });
+      expect(realtime.emit).not.toHaveBeenCalled();
+    });
+
+    it('error 状态 → metadata 含 exit + error，exit=0 不被丢弃', async () => {
+      const e = event('w_1', 'evw_14', 'git.op', {
+        taskId: 't_1',
+        action: 'git_push',
+        repo_url: 'origin',
+        exit: 128,
+        error: 'git push failed (exit 128)',
+      });
+
+      await ingress.handleEvent(e);
+      expect(prisma.taskEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          actorId: null,
+          metadata: {
+            repo_url: 'origin',
+            action: 'git_push',
+            exit: 128,
+            error: 'git push failed (exit 128)',
+          },
+        }),
+      });
+    });
+
+    it('exit=0（成功操作）保留在 metadata', async () => {
+      const e = event('w_1', 'evw_15', 'git.op', {
+        taskId: 't_1',
+        action: 'git_status',
+        exit: 0,
+      });
+
+      await ingress.handleEvent(e);
+      expect(prisma.taskEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          metadata: { action: 'git_status', exit: 0 },
+        }),
+      });
+    });
+
+    it('缺 taskId/action → 跳过不落库（日志确认）', async () => {
+      const e = event('w_1', 'evw_16', 'git.op', {
+        action: 'git_status',
+        exit: 0,
+      });
+
+      expect(await ingress.handleEvent(e)).toBe(true);
+      expect(prisma.taskEvent.create).not.toHaveBeenCalled();
+    });
+
+    it('落库失败吞错记 warn，handleEvent 仍返回 true（controller 恒定 202）', async () => {
+      prisma.taskEvent.create.mockRejectedValueOnce(new Error('db down'));
+      const e = event('w_1', 'evw_17', 'git.op', {
+        taskId: 't_1',
+        action: 'git_fetch',
+        exit: 0,
+      });
+
       await expect(ingress.handleEvent(e)).resolves.toBe(true);
     });
   });

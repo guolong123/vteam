@@ -17,11 +17,12 @@
  * - 模板只读态：isTemplate = type === 'template'。后端 PATCH/DELETE 仅禁 template
  *   （403 PERMISSION_AGENT_READONLY），clone/custom 可写——克隆的意义就是编辑副本。
  * - 页面内扩展 token（仿原型 :156-170）：toolEffectMeta（allow/ask/deny 三态色）、
- *   toolSourceMeta（内置/自定义/MCP），不写 tokens.ts 基线。
- * - 技能面板静态展示勾选态（对齐原型「纯静态示意」）：skills 表无独立列表端点、
- *   agent_skills 对 skills.id 有外键约束（当前库无技能数据），故技能仅渲染不随 PATCH 提交。
- * - 工具 effect 可编辑：agent_tool_effects.toolAction 为自由字符串（无外键约束），
- *   PATCH 提交 toolEffects 重建关联；工具来源按命名启发式推断（含下划线 → MCP）。
+ *   toolSourceMeta（builtin/custom/mcp 真实 source 徽章色），不写 tokens.ts 基线。
+ * - 技能面板真实勾选（T7）：GET /skills?enabled=true 拉取技能库 → 勾选（skillIds 草稿）
+ *   → PATCH 提交 skillIds 重建 agent_skills；停用残留/池外 id 原样展示不丢。
+ * - 工具区目录驱动（T7）：GET /tools?enabled=true 为工具行数据源（action + 真实 source 徽章
+ *   + enabled 恒启用），effect 三态编辑 → PATCH 提交 toolEffects 重建 agent_tool_effects；
+ *   手动添加/停用残留 action 不在目录时按命名启发式兜底标注来源。
  * - 导航（NavTopBar/NavDock/CmdKPanel）由 AppShell 提供，本页仅渲染内容区。
  * - 铁律（T15）：无 fixed / 100vh / 100vw；新建弹窗 absolute 相对页面 root（flex:1 铺满）。
  */
@@ -83,7 +84,35 @@ interface AvailableModel {
 interface UpdateAgentPayload {
   prompt?: string;
   defaultModelId?: string;
+  /** 勾选技能 id 列表（重建 agent_skills 关联；显式传空数组 = 清空） */
+  skillIds?: string[];
+  /** 工具 effect 配置（重建 agent_tool_effects 关联） */
   toolEffects?: { toolAction: string; effect: string }[];
+}
+
+/** GET /skills 条目（对齐 SkillsService.findAll 返回；enabled=true 仅启用技能可供勾选）。 */
+interface ApiSkill {
+  id: string;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+}
+
+/** GET /tools 条目（对齐 ToolsService.findAll 返回；source 为注册推导/seed 内置）。 */
+interface ApiTool {
+  id: string;
+  name: string;
+  action: string;
+  source: "builtin" | "custom" | "mcp";
+  enabled: boolean;
+}
+
+/** 后端分页响应（skills/tools/agents 同构）。 */
+interface PageResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
 
 /* ------------------------------ 页面内扩展 token（仿原型 :156-170，不写 tokens.ts） ------------------------------ */
@@ -101,32 +130,30 @@ const toolEffectMeta: Record<
   deny: { label: "禁止", desc: "白名单排除", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
 };
 
-/** 工具来源徽章色。 */
-type ToolSourceKey = "内置" | "自定义" | "MCP";
-const toolSourceMeta: Record<ToolSourceKey, { color: string; bg: string; border: string }> = {
-  内置: { color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  自定义: { color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
-  MCP: { color: "#0891B2", bg: "#ECFEFF", border: "#A5F3FC" },
+/** 工具来源徽章色（真实 source 值：builtin/custom/mcp，来自 GET /tools）。 */
+type ToolSourceKey = "builtin" | "custom" | "mcp";
+const toolSourceMeta: Record<ToolSourceKey, { label: string; color: string; bg: string; border: string }> = {
+  builtin: { label: "内置", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
+  custom: { label: "自定义", color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
+  mcp: { label: "MCP", color: "#0891B2", bg: "#ECFEFF", border: "#A5F3FC" },
 };
 
-/** 技能池（对齐原型 skillPool；skills 表无列表端点，页面内静态兜底展示勾选态）。 */
-const SKILL_POOL = ["文档撰写", "需求拆解", "用例设计", "代码审查", "代码生成", "缺陷分析", "方案评审"];
-
-/** 基础内置工具 action（read/write/bash 等裸权限名）→ 来源=内置。 */
+/** 基础内置工具 action（read/write/bash 等裸权限名）→ 来源=内置（仅兜底：未在工具目录的 action）。 */
 const BUILTIN_TOOL_ACTIONS = new Set([
   "read", "write", "bash", "execute", "edit", "search", "grep", "glob", "list", "view",
 ]);
 
 /**
- * 工具来源启发式推断（后端 toolEffects 仅 toolAction+effect，无 source）：
+ * 工具来源推断（**兜底路径**）：主路径 = GET /tools 真实 source；
+ * 仅当 action 不在启用工具目录（手动添加的通配/残留）时使用：
  * - 基础裸权限名 → 内置
  * - 含下划线（<server>_<tool>，如 jira_query / github_create_issue）→ MCP
  * - 其余（含连字符等，如 jenkins-build）→ 自定义
  */
 function inferToolSource(action: string): ToolSourceKey {
-  if (BUILTIN_TOOL_ACTIONS.has(action)) return "内置";
-  if (action.includes("_")) return "MCP";
-  return "自定义";
+  if (BUILTIN_TOOL_ACTIONS.has(action)) return "builtin";
+  if (action.includes("_")) return "mcp";
+  return "custom";
 }
 
 /** 模型 id → 产品名（与后端 STATIC_AVAILABLE_MODELS 静态占位一致；未知 id 显示原始值）。 */
@@ -353,12 +380,14 @@ interface ToolEffectRow {
 
 interface ToolPermissionListProps {
   tools: ToolEffectRow[];
+  /** 启用工具目录（GET /tools?enabled=true）；action 命中目录 → 真实 source 徽章 */
+  catalog: ApiTool[];
   /** 模板只读：effect 切换 / 添加 / 删除 全部禁用 */
   readOnly: boolean;
   onChange: (next: ToolEffectRow[]) => void;
 }
 
-function ToolPermissionList({ tools, readOnly, onChange }: ToolPermissionListProps) {
+function ToolPermissionList({ tools, catalog, readOnly, onChange }: ToolPermissionListProps) {
   const [adding, setAdding] = useState(false);
   const [draftAction, setDraftAction] = useState("");
 
@@ -380,14 +409,27 @@ function ToolPermissionList({ tools, readOnly, onChange }: ToolPermissionListPro
     setAdding(false);
   };
 
+  // 行集合 = 目录工具（catalog，effect 取当前配置或默认 allow）+ 未收录 action（手动添加/残留，原 effect）
+  const catalogByAction = new Map(catalog.map((t) => [t.action, t]));
+  const rows: ToolEffectRow[] = [
+    ...catalog.map((t) => {
+      const existing = tools.find((r) => r.toolAction === t.action);
+      return { toolAction: t.action, effect: (existing?.effect ?? "allow") as ToolEffectKey };
+    }),
+    ...tools.filter((t) => !catalogByAction.has(t.toolAction)),
+  ];
+
   return (
     <div
       data-testid="tool-permission-list"
       style={{ display: "flex", flexDirection: "column", gap: space.sm }}
     >
-      {tools.map((tool) => {
+      {rows.map((tool) => {
         const effect = toolEffectMeta[tool.effect] ?? toolEffectMeta.allow;
-        const source = toolSourceMeta[inferToolSource(tool.toolAction)];
+        const inCatalog = catalogByAction.get(tool.toolAction);
+        // 真实 source 优先；未收录 action（手动添加/停用残留）启发式兜底
+        const sourceKey: ToolSourceKey = inCatalog ? inCatalog.source : inferToolSource(tool.toolAction);
+        const source = toolSourceMeta[sourceKey];
         return (
           <div
             key={tool.toolAction}
@@ -462,7 +504,7 @@ function ToolPermissionList({ tools, readOnly, onChange }: ToolPermissionListPro
                     borderRadius: radius.pill,
                   }}
                 >
-                  {inferToolSource(tool.toolAction)}
+                  {source.label}
                 </span>
               </div>
               <span style={{ fontSize: fontSize.xs }}>
@@ -685,6 +727,12 @@ interface ConfigPanelProps {
   readOnly: boolean;
   /** 可用模型列表（available-models） */
   models: AvailableModel[];
+  /** 已启用技能库（GET /skills?enabled=true，agent 勾选池） */
+  skills: ApiSkill[];
+  /** 启用工具目录（GET /tools?enabled=true，工具行 + 来源徽章） */
+  tools: ApiTool[];
+  /** 技能库加载中（降级提示文案） */
+  skillsPending: boolean;
   saving: boolean;
   saveError: string | null;
   onSave: (payload: UpdateAgentPayload) => void;
@@ -692,7 +740,7 @@ interface ConfigPanelProps {
   /** 当前已保存草稿回调（供页面保存时取最新值；由面板内部管理草稿） */
 }
 
-function ConfigPanel({ agent, readOnly, models, saving, saveError, onSave, onClone }: ConfigPanelProps) {
+function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, saving, saveError, onSave, onClone }: ConfigPanelProps) {
   const isTemplate = readOnly;
   const accent = isTemplate
     ? ROLE_COLORS[toAvatarRole(agent.role)]
@@ -701,6 +749,7 @@ function ConfigPanel({ agent, readOnly, models, saving, saveError, onSave, onClo
   // 草稿：挂载时从 agent 初始化（父级 key=agent.id 保证切换重挂载）
   const [promptDraft, setPromptDraft] = useState(agent.prompt ?? "");
   const [modelDraft, setModelDraft] = useState<string | null>(agent.defaultModelId ?? null);
+  const [skillDrafts, setSkillDrafts] = useState<string[]>(agent.skillIds);
   const [toolDrafts, setToolDrafts] = useState<ToolEffectRow[]>(
     agent.toolEffects.map((t) => ({
       toolAction: t.toolAction,
@@ -708,7 +757,27 @@ function ConfigPanel({ agent, readOnly, models, saving, saveError, onSave, onClo
     }))
   );
 
-  const activeSkillCount = agent.skillIds.filter((s) => SKILL_POOL.includes(s)).length;
+  // 工具目录加载完成后补入草稿（默认 allow）：目录 = agent 配置页工具行数据源，
+  // 空 agent 也应展示全部启用工具；已存在/用户已删除的 action 不覆盖。
+  useEffect(() => {
+    if (tools.length === 0) return;
+    setToolDrafts((prev) => {
+      const merged = [...prev];
+      for (const t of tools) {
+        if (!merged.some((r) => r.toolAction === t.action)) {
+          merged.push({ toolAction: t.action, effect: "allow" });
+        }
+      }
+      return merged;
+    });
+  }, [tools]);
+
+  const toggleSkill = (id: string) => {
+    if (readOnly) return;
+    setSkillDrafts((prev) =>
+      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
+    );
+  };
 
   const handleSave = () => {
     // template 仅允许保存 defaultModelId（后端 assertWritable 单字段放行）；其余字段只读不提交
@@ -717,6 +786,7 @@ function ConfigPanel({ agent, readOnly, models, saving, saveError, onSave, onClo
       : {
           prompt: promptDraft.trim(),
           defaultModelId: modelDraft ?? undefined,
+          skillIds: skillDrafts,
           toolEffects: toolDrafts.map((t) => ({ toolAction: t.toolAction, effect: t.effect })),
         };
     onSave(payload);
@@ -1022,7 +1092,7 @@ function ConfigPanel({ agent, readOnly, models, saving, saveError, onSave, onClo
         </div>
       </div>
 
-      {/* ③ 技能列表（静态展示勾选态，对齐原型纯静态示意；skills 无独立端点 + 外键约束故不提交） */}
+      {/* ③ 技能列表（GET /skills?enabled=true 真实勾选，提交 skillIds 重建关联） */}
       <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
         <div
           style={{
@@ -1035,79 +1105,100 @@ function ConfigPanel({ agent, readOnly, models, saving, saveError, onSave, onClo
             技能配置
           </span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            FR-34 · 已启用 {activeSkillCount}/{SKILL_POOL.length}
+            FR-34 · 已启用 {skillDrafts.length}/{skills.length}
           </span>
         </div>
-        <div
-          data-testid="skill-list"
-          style={{ display: "flex", flexWrap: "wrap", gap: space.sm }}
-        >
-          {SKILL_POOL.map((skill) => {
-            const checked = agent.skillIds.includes(skill);
-            return (
-              <label
-                key={skill}
-                data-skill={skill}
-                data-checked={checked ? "true" : "false"}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: space.xs,
-                  padding: `${space.xs}px ${space.sm + 2}px`,
-                  borderRadius: radius.pill,
-                  backgroundColor: checked ? "#EFF6FF" : neutral[50],
-                  border: `1px solid ${checked ? "#BFDBFE" : neutral[200]}`,
-                  color: checked ? "#2563EB" : neutral[500],
-                  fontSize: fontSize.sm,
-                  cursor: "default",
-                  fontFamily: fontFamily.body,
-                }}
-              >
-                <span
-                  aria-hidden
+        {skills.length === 0 ? (
+          <div
+            data-testid="skill-empty"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: space.sm,
+              padding: `${space.md}px`,
+              borderRadius: radius.md,
+              border: `1px dashed ${neutral[300]}`,
+              backgroundColor: neutral[50],
+              fontSize: fontSize.sm,
+              color: neutral[400],
+            }}
+          >
+            {skillsPending ? "技能库加载中…" : "技能库暂无已启用技能（可在技能管理页上传启用）"}
+          </div>
+        ) : (
+          <div
+            data-testid="skill-list"
+            style={{ display: "flex", flexWrap: "wrap", gap: space.sm }}
+          >
+            {skills.map((skill) => {
+              const checked = skillDrafts.includes(skill.id);
+              return (
+                <label
+                  key={skill.id}
+                  data-skill={skill.name}
+                  data-checked={checked ? "true" : "false"}
+                  onClick={readOnly ? undefined : () => toggleSkill(skill.id)}
                   style={{
-                    width: 14,
-                    height: 14,
-                    borderRadius: radius.sm,
-                    backgroundColor: checked ? "#2563EB" : "#FFFFFF",
-                    border: `1px solid ${checked ? "#2563EB" : neutral[300]}`,
                     display: "inline-flex",
                     alignItems: "center",
-                    justifyContent: "center",
-                    color: "#FFFFFF",
-                    fontSize: 10,
-                    lineHeight: 1,
+                    gap: space.xs,
+                    padding: `${space.xs}px ${space.sm + 2}px`,
+                    borderRadius: radius.pill,
+                    backgroundColor: checked ? "#EFF6FF" : neutral[50],
+                    border: `1px solid ${checked ? "#BFDBFE" : neutral[200]}`,
+                    color: checked ? "#2563EB" : neutral[500],
+                    fontSize: fontSize.sm,
+                    cursor: readOnly ? "default" : "pointer",
+                    userSelect: "none",
+                    fontFamily: fontFamily.body,
                   }}
                 >
-                  {checked ? "✓" : ""}
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 14,
+                      height: 14,
+                      borderRadius: radius.sm,
+                      backgroundColor: checked ? "#2563EB" : "#FFFFFF",
+                      border: `1px solid ${checked ? "#2563EB" : neutral[300]}`,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "#FFFFFF",
+                      fontSize: 10,
+                      lineHeight: 1,
+                    }}
+                  >
+                    {checked ? "✓" : ""}
+                  </span>
+                  {skill.name}
+                </label>
+              );
+            })}
+            {/* 池外技能（已勾选但不在启用技能库：停用残留/手动 id，原样展示保证数据不丢） */}
+            {skillDrafts
+              .filter((s) => !skills.some((sk) => sk.id === s))
+              .map((s) => (
+                <span
+                  key={s}
+                  data-skill={s}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    padding: `${space.xs}px ${space.sm + 2}px`,
+                    borderRadius: radius.pill,
+                    backgroundColor: "#EFF6FF",
+                    border: `1px solid #BFDBFE`,
+                    color: "#2563EB",
+                    fontSize: fontSize.sm,
+                    fontFamily: fontFamily.mono,
+                  }}
+                >
+                  {s}
                 </span>
-                {skill}
-              </label>
-            );
-          })}
-          {/* 池外技能（真实 skillId 未收录于池内时原样展示，保证数据不丢） */}
-          {agent.skillIds
-            .filter((s) => !SKILL_POOL.includes(s))
-            .map((s) => (
-              <span
-                key={s}
-                data-skill={s}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  padding: `${space.xs}px ${space.sm + 2}px`,
-                  borderRadius: radius.pill,
-                  backgroundColor: "#EFF6FF",
-                  border: `1px solid #BFDBFE`,
-                  color: "#2563EB",
-                  fontSize: fontSize.sm,
-                  fontFamily: fontFamily.mono,
-                }}
-              >
-                {s}
-              </span>
-            ))}
-        </div>
+              ))}
+          </div>
+        )}
       </div>
 
       {/* ④ 工具配置（开关 + 权限矩阵，可编辑 effect） */}
@@ -1146,6 +1237,7 @@ function ConfigPanel({ agent, readOnly, models, saving, saveError, onSave, onClo
         </div>
         <ToolPermissionList
           tools={toolDrafts}
+          catalog={tools}
           readOnly={isTemplate}
           onChange={setToolDrafts}
         />
@@ -1481,6 +1573,22 @@ export default function AgentConfigPage() {
     ? modelsQuery.data
     : (modelsQuery.data?.models ?? []);
 
+  // 技能库：GET /skills?enabled=true（仅启用技能可供 Agent 勾选，admin/成员语义一致）
+  const skillsQuery = useQuery({
+    queryKey: ["skills"],
+    queryFn: () => api.get<PageResponse<ApiSkill>>("/skills", { query: { page: 1, pageSize: 100, enabled: true } }),
+    enabled: !!userId,
+  });
+  const skills = skillsQuery.data?.items ?? [];
+
+  // 工具目录：GET /tools?enabled=true（T3 成员只读过滤保证停用工具不可见）
+  const toolsQuery = useQuery({
+    queryKey: ["tools"],
+    queryFn: () => api.get<PageResponse<ApiTool>>("/tools", { query: { page: 1, pageSize: 100, enabled: true } }),
+    enabled: !!userId,
+  });
+  const tools = toolsQuery.data?.items ?? [];
+
   // 选中 Agent：详情查询结果优先，未命中时回退列表条目（即时渲染）
   const selectedAgent: AgentItem | undefined =
     detailQuery.data ?? agents.find((a) => a.id === selectedId);
@@ -1640,6 +1748,9 @@ export default function AgentConfigPage() {
           agent={selectedAgent}
           readOnly={isTemplate}
           models={models}
+          skills={skills}
+          tools={tools}
+          skillsPending={skillsQuery.isPending}
           saving={saveMutation.isPending}
           saveError={saveError}
           onSave={(payload) => saveMutation.mutate({ id: selectedAgent.id, payload })}

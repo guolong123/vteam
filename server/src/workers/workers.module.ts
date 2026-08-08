@@ -1,4 +1,5 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
+import { McpServersModule } from '../mcp-servers/mcp-servers.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { SessionLifecycleService } from './session-lifecycle.service';
 import { WorkerClient } from './worker.client';
@@ -17,13 +18,15 @@ import { WorkersService } from './workers.service';
  * - Exports：WorkersService——T10 WorkerDispatcher / T12 Session.workerId 写入复用；
  *   WorkerClient——T10 WorkerDispatcher 下发 prompt 复用；
  *   SessionLifecycleService——T10 bindSessionToWorker / tasks.service 查询委托
- * - Imports：RealtimeModule（IdGeneratorService，ti_ 前缀续号与 t/s/m 同源）
+ * - Imports：RealtimeModule（IdGeneratorService，ti_ 前缀续号与 t/s/m 同源）；
+ *   forwardRef(McpServersModule)——McpServersService 亦反向依赖 WorkersService（F1 MAJOR
+ *   资源变更广播），双向模块依赖用 forwardRef 解环
  * - Controller：POST /workers/register、POST /workers/:id/heartbeat、GET /workers、GET /workers/:id；
  *   POST /worker/events（T9 事件回流，WorkerEventsController + WorkerEventIngress）
  * 已在 app.module.ts 注册。
  */
 @Module({
-  imports: [RealtimeModule],
+  imports: [RealtimeModule, forwardRef(() => McpServersModule)],
   controllers: [WorkersController, WorkerEventsController],
   providers: [
     WorkersService,

@@ -511,31 +511,57 @@ export default function TaskBoardPage() {
         <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>
           {projectName ? `${projectName} · 任务看板` : "任务看板"}
         </div>
-        {/* 产出物入口：看板标题右侧按钮 → 项目产出物页（Phase 3 产出物模块） */}
+        {/* 标题右侧操作：新建任务（主 CTA → /tasks/new?pid=，tasks/new 页读 URL ?pid=）+ 产出物入口（Phase 3） */}
         {pid && (
-          <button
-            type="button"
-            data-testid="artifacts-entry-button"
-            onClick={() => router.push(`/artifacts?pid=${pid}`)}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: space.xs,
-              padding: `${space.sm}px ${space.lg}px`,
-              borderRadius: radius.pill,
-              border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
-              color: neutral[700],
-              fontSize: fontSize.md,
-              fontWeight: 500,
-              cursor: "pointer",
-              transition: "border-color .15s ease, color .15s ease",
-              fontFamily: fontFamily.body,
-            }}
-          >
-            <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>▤</span>
-            产出物
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+            <button
+              type="button"
+              data-testid="create-task-button"
+              onClick={() => router.push(`/tasks/new?pid=${pid}`)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: space.xs,
+                padding: `${space.sm}px ${space.lg}px`,
+                borderRadius: radius.pill,
+                border: "none",
+                backgroundColor: "#2563EB",
+                color: "#FFFFFF",
+                fontSize: fontSize.md,
+                fontWeight: 500,
+                cursor: "pointer",
+                boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+                transition: "background-color .15s ease",
+                fontFamily: fontFamily.body,
+              }}
+            >
+              <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>＋</span>
+              新建任务
+            </button>
+            <button
+              type="button"
+              data-testid="artifacts-entry-button"
+              onClick={() => router.push(`/artifacts?pid=${pid}`)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: space.xs,
+                padding: `${space.sm}px ${space.lg}px`,
+                borderRadius: radius.pill,
+                border: `1px solid ${neutral[200]}`,
+                backgroundColor: "#FFFFFF",
+                color: neutral[700],
+                fontSize: fontSize.md,
+                fontWeight: 500,
+                cursor: "pointer",
+                transition: "border-color .15s ease, color .15s ease",
+                fontFamily: fontFamily.body,
+              }}
+            >
+              <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>▤</span>
+              产出物
+            </button>
+          </div>
         )}
       </div>
 
@@ -638,6 +664,34 @@ export default function TaskBoardPage() {
             description="该项目下还没有任务，创建任务后即可在看板查看"
             icon={<span aria-hidden>▤</span>}
             style={{ gridColumn: "1 / -1" }}
+            action={
+              pid && (
+                <button
+                  type="button"
+                  data-testid="empty-create-task-button"
+                  onClick={() => router.push(`/tasks/new?pid=${pid}`)}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: space.xs,
+                    marginTop: space.xs,
+                    padding: `${space.sm}px ${space.lg}px`,
+                    borderRadius: radius.pill,
+                    border: "none",
+                    backgroundColor: "#2563EB",
+                    color: "#FFFFFF",
+                    fontSize: fontSize.md,
+                    fontWeight: 500,
+                    cursor: "pointer",
+                    boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+                    fontFamily: fontFamily.body,
+                  }}
+                >
+                  <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>＋</span>
+                  新建任务
+                </button>
+              )
+            }
           />
         ) : (
           tasks.map((task) => (

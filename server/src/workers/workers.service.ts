@@ -1,4 +1,6 @@
 import {
+  forwardRef,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -10,6 +12,7 @@ import {
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { McpServersService } from '../mcp-servers/mcp-servers.service';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
 import {
@@ -40,6 +43,26 @@ export interface AssignmentRequirement {
   instances?: number;
 }
 
+/** 下行命令 type 枚举（T4a 命令通道；09 §3.9 预留 {command?}，pull 模型心跳携带）。 */
+export const WORKER_COMMAND_TYPES = {
+  /** 资源（skills/tools/mcp 配置）变更：worker 重拉 + 注入 + 重启（T4b/T4c 执行） */
+  RELOAD_CONFIG: 'reload-config',
+} as const;
+
+export type WorkerCommandType =
+  (typeof WORKER_COMMAND_TYPES)[keyof typeof WORKER_COMMAND_TYPES];
+
+/**
+ * 心跳响应携带的下行命令（T4a）。
+ * 设计为通用 commands 数组（复用点：AgentsModule 配置变更重启也走此通道，09 §3.7），
+ * 命令仅一次有效：心跳取出即清空，worker 离线期间的命令丢弃（上线后由注册/重拉对齐）。
+ */
+export interface WorkerCommand {
+  type: WorkerCommandType;
+  /** 资源版本号：T1/T2 变更时递增，worker 侧据此判断是否需重拉注入 */
+  resourceVersion: string;
+}
+
 /** 原生 setInterval 句柄（不引入 @nestjs/schedule 依赖，等价 @Interval 语义）。 */
 type HealthTimer = ReturnType<typeof setInterval>;
 
@@ -57,8 +80,14 @@ type HealthTimer = ReturnType<typeof setInterval>;
 export class WorkersService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WorkersService.name);
   private healthTimer?: HealthTimer;
+  /** T4a：待下发命令队列（workerId → commands），心跳取出即清空。 */
+  private readonly pendingCommands = new Map<string, WorkerCommand[]>();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(forwardRef(() => McpServersService))
+    private readonly mcpServers: McpServersService,
+  ) {}
 
   /**
    * 启动自愈（架构决策 T7 验收）：先扫描 `status != offline 且 lastHeartbeatAt 超过 30s`
@@ -143,6 +172,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       dto.health === 'degraded'
         ? WORKER_STATUS.DEGRADED
         : WORKER_STATUS.ONLINE;
+    // T8c：MCP 三态快照 → 内存状态存储（前端 GET /mcp-servers 合并展示）
+    if (dto.mcpStatus && dto.mcpStatus.length > 0) {
+      this.mcpServers.applyHeartbeatStatus(dto.mcpStatus);
+    }
     const lastHeartbeatAt = new Date();
     await this.prisma.worker.update({
       where: { id },
@@ -152,11 +185,45 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         lastHeartbeatAt,
       },
     });
+    const commands = this.pendingCommands.get(id) ?? [];
+    if (commands.length > 0) {
+      this.pendingCommands.delete(id);
+    }
     return {
       workerId: id,
       status,
       lastHeartbeatAt: lastHeartbeatAt.toISOString(),
+      ...(commands.length > 0 ? { commands } : {}),
     };
+  }
+
+  /**
+   * T4a：入队下行命令（pull 模型）。资源变更方（T1/T2 POST/PATCH 后）调用，
+   * 该 worker 下一次心跳时携带并清空（命令一次有效）。worker 离线期间入队
+   * 的命令在心跳恢复时照常下发；未注册的 workerId 入队不报错（上线后生效）。
+   */
+  enqueueCommand(workerId: string, command: WorkerCommand): void {
+    const existing = this.pendingCommands.get(workerId) ?? [];
+    existing.push(command);
+    this.pendingCommands.set(workerId, existing);
+  }
+
+  /**
+   * F1 MAJOR 修复：资源（skills/tools/mcp-servers）变更后的**广播**入口。
+   * enqueueCommand 是精确 workerId 语义（不支持 '*' 通配），本方法为上层提供
+   * 全量广播：查询全部在线 worker（status != offline）逐个入队——离线 worker 跳过
+   * （恢复上线后由注册/心跳对齐注入，09 §3.7），与 assignWorker 的候选集语义一致。
+   * 返回收到命令的 worker 数（调试/测试用；无在线 worker 时静默返回 0，不报错）。
+   */
+  async broadcastCommand(command: WorkerCommand): Promise<number> {
+    const online = await this.prisma.worker.findMany({
+      where: { status: { not: WORKER_STATUS.OFFLINE } },
+      select: { id: true },
+    });
+    for (const worker of online) {
+      this.enqueueCommand(worker.id, command);
+    }
+    return online.length;
   }
 
   /**

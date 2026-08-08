@@ -44,6 +44,8 @@ export interface OpencodeServerOptions {
   logBufferSize?: number;
   /** 端口冲突重试次数；默认 5 */
   portRetryCount?: number;
+  /** serve 绑定地址（D2：默认 env OPENCODE_SERVE_HOSTNAME ?? '127.0.0.1' 保住本地铁律；容器内设 0.0.0.0） */
+  serveHostname?: string;
   /** 日志输出；默认 console */
   logger?: Logger;
 }
@@ -53,10 +55,12 @@ const DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 30_000;
 const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 500;
 const DEFAULT_LOG_BUFFER_SIZE = 200;
 const DEFAULT_PORT_RETRY_COUNT = 5;
-/** D2 铁律：serve 必须只监听本机回环 */
-const SERVE_HOSTNAME = '127.0.0.1';
-/** serve 日志中实际监听地址的正则（`opencode server listening on http://...`） */
-const LISTENING_RE = /listening on http:\/\/127\.0\.0\.1:(\d+)/;
+/** D2 铁律：serve 默认只监听本机回环（容器内经 OPENCODE_SERVE_HOSTNAME=0.0.0.0 覆盖） */
+const DEFAULT_SERVE_HOSTNAME = '127.0.0.1';
+/** worker 内部访问 serve 的稳定地址：恒回环（serve 绑定 0.0.0.0 时同容器回环仍可达） */
+const LOOPBACK_HOSTNAME = '127.0.0.1';
+/** serve 日志中实际监听地址的正则（`opencode server listening on http://<host>:<port>`，host 不限定） */
+const LISTENING_RE = /listening on http:\/\/[^:\s/]+:(\d+)/;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -67,7 +71,7 @@ function isPortFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const server = net.createServer();
     server.once('error', () => resolve(false));
-    server.listen(port, SERVE_HOSTNAME, () => {
+    server.listen(port, LOOPBACK_HOSTNAME, () => {
       server.close(() => resolve(true));
     });
   });
@@ -78,7 +82,7 @@ function getRandomFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once('error', reject);
-    server.listen(0, SERVE_HOSTNAME, () => {
+    server.listen(0, LOOPBACK_HOSTNAME, () => {
       const address = server.address();
       const port = typeof address === 'object' && address !== null ? address.port : 0;
       server.close(() => resolve(port));
@@ -125,6 +129,7 @@ export class OpencodeServer {
       portRetryCount: DEFAULT_PORT_RETRY_COUNT,
       logger: console,
       ...options,
+      serveHostname: options.serveHostname ?? process.env.OPENCODE_SERVE_HOSTNAME ?? DEFAULT_SERVE_HOSTNAME,
     };
   }
 
@@ -181,9 +186,23 @@ export class OpencodeServer {
       await this.stop();
       throw err;
     }
-    this.baseUrlValue = `http://${SERVE_HOSTNAME}:${port}`;
+    this.baseUrlValue = `http://${LOOPBACK_HOSTNAME}:${port}`;
     this.options.logger?.info(`[opencode-server] serve 就绪: ${this.baseUrlValue} (pid=${proc.pid})`);
     return this.baseUrlValue;
+  }
+
+  /**
+   * T4c：重启 serve = stop + start 组合。
+   * 幂等语义：未运行（从未启动或已停止）时直接 start；运行中先 stop（进程组清理）
+   * 再 start（重新探测端口 + spawn + 健康检查）。
+   * ⚠️ 随机端口（port=0）场景重启后端口可能变化——调用方须据 serveServer.port
+   * 重新注册 capabilities.baseUrl/port（T4c index.ts reRegister 接线）。
+   */
+  async restart(timeoutMs = 3000): Promise<string> {
+    if (this.isRunning) {
+      await this.stop(timeoutMs);
+    }
+    return this.start();
   }
 
   /** 停止 serve：kill(-pid) 进程组 + 3s 后 SIGKILL 兜底，await 退出。 */
@@ -256,7 +275,7 @@ export class OpencodeServer {
       '--port',
       String(port),
       '--hostname',
-      SERVE_HOSTNAME,
+      this.options.serveHostname!,
       // D2 铁律：--pure 必带（去插件/MEMORY 注入/默认 agent），缺失将导致 input tokens 高达 7601
       '--pure',
     ];
@@ -286,7 +305,7 @@ export class OpencodeServer {
   private async waitForHealthy(port: number): Promise<void> {
     const timeoutMs = this.options.healthCheckTimeoutMs!;
     const intervalMs = this.options.healthCheckIntervalMs!;
-    const url = `http://${SERVE_HOSTNAME}:${port}/`;
+    const url = `http://${LOOPBACK_HOSTNAME}:${port}/`;
     const authHeader = this.buildAuthHeader();
     const deadline = Date.now() + timeoutMs;
     let lastError: unknown = null;

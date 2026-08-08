@@ -7,9 +7,11 @@ import type { NextConfig } from "next";
  * - 生产部署时可通过 NEXT_PUBLIC_API_BASE_URL 指向独立后端域名（见 lib/api.ts）。
  */
 const API_PROXY_TARGET =
-  process.env.API_PROXY_TARGET || "http://localhost:3000";
+  process.env.API_PROXY_TARGET ?? "http://localhost:3000";
 
 const nextConfig: NextConfig = {
+  // Docker 部署铁律（Phase 5 D4）：仅影响 next build 产物，与 dev 无冲突
+  output: "standalone",
   async rewrites() {
     return [
       {

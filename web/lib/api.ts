@@ -63,13 +63,19 @@ export async function request<T>(
   if (accessToken) {
     finalHeaders.Authorization = `Bearer ${accessToken}`;
   }
+  // multipart：FormData 不 JSON 序列化，且不设 Content-Type
+  // （浏览器自动携带 multipart/form-data; boundary=...，手设会导致 boundary 丢失 400）
+  const isFormData = body instanceof FormData;
+  if (isFormData) {
+    delete finalHeaders["Content-Type"];
+  }
 
   let resp: Response;
   try {
     resp = await fetch(url, {
       ...rest,
       headers: finalHeaders,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: isFormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch (err) {
     // 网络层失败（断网 / CORS / 后端不可达）

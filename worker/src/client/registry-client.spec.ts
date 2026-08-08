@@ -1,4 +1,5 @@
 import {
+  extractCommands,
   registerWorker,
   registerWorkerWithRetry,
   sendHeartbeat,
@@ -116,6 +117,118 @@ describe('sendHeartbeat（POST /api/v1/workers/:id/heartbeat）', () => {
     });
     const url = (fetchMock.mock.calls[0] as [string])[0];
     expect(url).toBe('http://localhost:3000/api/v1/workers/w%20a%2Fb/heartbeat');
+  });
+
+  it('T8c：带 mcpStatus 时 body 携带三态快照', async () => {
+    fetchMock.mockResolvedValue(
+      okJson({ workerId: 'w_test-1', status: 'online', lastHeartbeatAt: '' }),
+    );
+
+    await sendHeartbeat({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'dev-worker-token',
+      workerId: 'w_test-1',
+      load: { instances: 1 },
+      health: 'ok',
+      mcpStatus: [
+        { serverName: 'gitee-ent', status: 'connected' },
+        { serverName: 'test-bad-local', status: 'failed' },
+      ],
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      workerId: 'w_test-1',
+      load: { instances: 1 },
+      health: 'ok',
+      mcpStatus: [
+        { serverName: 'gitee-ent', status: 'connected' },
+        { serverName: 'test-bad-local', status: 'failed' },
+      ],
+    });
+  });
+
+  it('T8c：mcpStatus 为空数组时不携带该字段（兼容旧 server DTO 严格校验）', async () => {
+    fetchMock.mockResolvedValue(okJson({}));
+
+    await sendHeartbeat({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 't',
+      workerId: 'w_test-1',
+      load: { instances: 0 },
+      health: 'ok',
+      mcpStatus: [],
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      workerId: 'w_test-1',
+      load: { instances: 0 },
+      health: 'ok',
+    });
+  });
+
+  it('T4a：解析响应 body 中的 commands 下行命令', async () => {
+    fetchMock.mockResolvedValue(
+      okJson({
+        workerId: 'w_test-1',
+        status: 'online',
+        lastHeartbeatAt: '2026-08-08T00:00:00Z',
+        commands: [{ type: 'reload-config', resourceVersion: 'v3' }],
+      }),
+    );
+
+    const result = await sendHeartbeat({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'dev-worker-token',
+      workerId: 'w_test-1',
+      load: { instances: 1 },
+      health: 'ok',
+    });
+
+    expect(result).toMatchObject({
+      workerId: 'w_test-1',
+      status: 'online',
+      lastHeartbeatAt: '2026-08-08T00:00:00Z',
+    });
+    expect(result.commands).toEqual([
+      { type: 'reload-config', resourceVersion: 'v3' },
+    ]);
+  });
+
+  it('T4a：响应无 commands 时字段缺省（兼容旧 server 不带命令）', async () => {
+    fetchMock.mockResolvedValue(
+      okJson({ workerId: 'w_test-1', status: 'online', lastHeartbeatAt: '' }),
+    );
+
+    const result = await sendHeartbeat({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'dev-worker-token',
+      workerId: 'w_test-1',
+      load: { instances: 0 },
+      health: 'ok',
+    });
+
+    expect(result.commands).toBeUndefined();
+    expect(extractCommands(result)).toEqual([]);
+  });
+
+  it('T4a：extractCommands 提取命令数组（无命令返回空数组）', async () => {
+    expect(
+      extractCommands({
+        workerId: 'w',
+        status: 'online',
+        lastHeartbeatAt: '',
+      }),
+    ).toEqual([]);
+    expect(
+      extractCommands({
+        workerId: 'w',
+        status: 'online',
+        lastHeartbeatAt: '',
+        commands: [{ type: 'reload-config', resourceVersion: 'v1' }],
+      }),
+    ).toEqual([{ type: 'reload-config', resourceVersion: 'v1' }]);
   });
 });
 

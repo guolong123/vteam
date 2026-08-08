@@ -32,6 +32,11 @@ export class WorkerCapabilitiesDto {
   @IsInt()
   @Min(0)
   port?: number;
+
+  @ApiPropertyOptional({ description: 'serve 对 server 公布的基址（D2：WORKER_ADVERTISE_HOST:port，容器内 http://worker:port；resolveBaseUrl 优先读取）' })
+  @IsOptional()
+  @IsString()
+  baseUrl?: string;
 }
 
 /** worker 负载快照（对齐 schema Worker.load Json）。 */

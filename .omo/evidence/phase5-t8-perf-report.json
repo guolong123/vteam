@@ -1,0 +1,170 @@
+{
+  "timestamp": "2026-08-08T01:05:19.366Z",
+  "env": {
+    "serverUrl": "http://localhost:3000",
+    "webUrl": "http://localhost:3001",
+    "channelId": "c_0000000001",
+    "taskId": "t_0000000001",
+    "agents": [
+      "a_product",
+      "a_architect"
+    ]
+  },
+  "lines": {
+    "groupChat": {
+      "passLine": 1000,
+      "targetLine": 500
+    },
+    "firstToken": {
+      "passLine": 15000,
+      "targetLine": 5000
+    },
+    "sessionStream": {
+      "passLine": 2000,
+      "targetLine": null
+    },
+    "availability": {
+      "passLine": 99.5,
+      "targetLine": null
+    }
+  },
+  "results": {
+    "availability": {
+      "measured": 100,
+      "measuredUnit": "%",
+      "passLine": 99.5,
+      "targetLine": null,
+      "pass": true,
+      "checks": 20,
+      "success": 20,
+      "availabilityPct": 100,
+      "latenciesMs": [
+        9,
+        3,
+        2,
+        4,
+        5,
+        4,
+        3,
+        6,
+        3,
+        3,
+        4,
+        4,
+        3,
+        2,
+        2,
+        3,
+        3,
+        2,
+        2,
+        2
+      ],
+      "reconnect": {
+        "ok": true,
+        "since": "ev_0000000003",
+        "reconnectMs": 53,
+        "lastEventId": "ev_0000000022"
+      },
+      "note": "连续健康检查（GET /api/v1/health）+ SSE 断线后 since 续拉重连；纯 HTTP 零模型调用"
+    },
+    "groupChat": {
+      "measured": 31,
+      "measuredUnit": "ms",
+      "passLine": 1000,
+      "targetLine": 500,
+      "pass": true,
+      "target": true,
+      "samples": [
+        {
+          "sample": 1,
+          "latencyMs": 24,
+          "sseDeliveryMs": 14,
+          "messageId": "m_0000000015"
+        },
+        {
+          "sample": 2,
+          "latencyMs": 31,
+          "sseDeliveryMs": 17,
+          "messageId": "m_0000000016"
+        },
+        {
+          "sample": 3,
+          "latencyMs": 323,
+          "sseDeliveryMs": 312,
+          "messageId": "m_0000000017"
+        }
+      ],
+      "note": "POST 发出 → SSE chat.message.new 到达（无 @ 消息，零 opencode 调用）"
+    },
+    "sessionStream": {
+      "measured": 11,
+      "measuredUnit": "ms",
+      "passLine": 2000,
+      "targetLine": null,
+      "pass": true,
+      "connectMs": 7,
+      "firstEventMs": 11,
+      "incrementalMs": 15,
+      "note": "订阅建立（HTTP 发起）→ 首个业务事件到达；incrementalMs=新消息事件到达延迟"
+    },
+    "firstToken": {
+      "measured": 3179,
+      "measuredUnit": "ms",
+      "passLine": 15000,
+      "targetLine": 5000,
+      "pass": true,
+      "target": true,
+      "via": "poll",
+      "replyMessageId": "m_0000000020",
+      "userMessageId": "m_0000000019",
+      "triggers": [
+        {
+          "agentId": "a_product",
+          "sessionId": "s_0000000001",
+          "status": "dispatched"
+        }
+      ],
+      "note": "真实 opencode 调用 1 次；双线记录：passLine=15s(D8 决策 3B)、targetLine=5s(05 篇)，超目标线不阻断"
+    },
+    "parallelAgents": {
+      "concurrent": 4,
+      "dispatchedTargets": 2,
+      "accepted": 3,
+      "rejected": [
+        {
+          "index": 2,
+          "httpStatus": 400,
+          "messageId": null
+        }
+      ],
+      "isolation": {
+        "invalidMentionRejected": true,
+        "othersAccepted": true
+      },
+      "replies": [
+        {
+          "agentId": "a_product",
+          "replied": true,
+          "replyMessageId": "m_0000000024"
+        },
+        {
+          "agentId": "a_architect",
+          "replied": true,
+          "replyMessageId": "m_0000000025"
+        }
+      ],
+      "allReplied": true,
+      "pass": true,
+      "note": "并发 4 条（2 真实 @ + 1 非法 @ + 1 无 @），真实 opencode 调用 2 次；通过线=并发受理全部成功且失败隔离不串扰（回流情况见 replies）"
+    }
+  },
+  "summary": {
+    "groupChat": true,
+    "firstToken": true,
+    "sessionStream": true,
+    "parallelAgents": true,
+    "availability": true
+  },
+  "allPass": true
+}

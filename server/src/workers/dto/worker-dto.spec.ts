@@ -50,6 +50,29 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
     expect(wire.capabilities).toEqual({ maxInstances: 1, skills: [], tools: [], port: 53001 });
   });
 
+  it('WorkerCapabilitiesDto 支持可选 baseUrl（D2：容器内 http://worker:port 上报，whitelist 不剔除）', () => {
+    const dto = new RegisterWorkerDto();
+    dto.workerId = 'w_0000000004';
+    dto.opencodeVersion = '1.18.15';
+    dto.capabilities = {
+      maxInstances: 1,
+      skills: [],
+      tools: [],
+      port: 53001,
+      baseUrl: 'http://worker:53001',
+    };
+    dto.load = { instances: 0 };
+
+    const wire = JSON.parse(JSON.stringify(dto));
+    expect(wire.capabilities).toEqual({
+      maxInstances: 1,
+      skills: [],
+      tools: [],
+      port: 53001,
+      baseUrl: 'http://worker:53001',
+    });
+  });
+
   it('HeartbeatWorkerDto 序列化后字段完整（workerId/load/health）', () => {
     const dto = new HeartbeatWorkerDto();
     dto.workerId = 'w_0000000001';
@@ -61,6 +84,39 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
       load: { instances: 1 },
       health: 'degraded',
     });
+  });
+
+  it('T8c：HeartbeatWorkerDto 可选 mcpStatus（三态快照序列化完整）', () => {
+    const dto = new HeartbeatWorkerDto();
+    dto.workerId = 'w_0000000001';
+    dto.load = { instances: 1 };
+    dto.health = 'ok';
+    dto.mcpStatus = [
+      { serverName: 'gitee-ent', status: 'connected' },
+      { serverName: 'github-remote', status: 'needs_auth' },
+      { serverName: 'test-bad-local', status: 'failed' },
+    ];
+
+    expect(JSON.parse(JSON.stringify(dto))).toEqual({
+      workerId: 'w_0000000001',
+      load: { instances: 1 },
+      health: 'ok',
+      mcpStatus: [
+        { serverName: 'gitee-ent', status: 'connected' },
+        { serverName: 'github-remote', status: 'needs_auth' },
+        { serverName: 'test-bad-local', status: 'failed' },
+      ],
+    });
+  });
+
+  it('T8c：HeartbeatWorkerDto 未设 mcpStatus 时序列化不丢键（兼容旧 worker）', () => {
+    const dto = new HeartbeatWorkerDto();
+    dto.workerId = 'w_0000000001';
+    dto.load = { instances: 0 };
+    dto.health = 'ok';
+
+    const wire = JSON.parse(JSON.stringify(dto));
+    expect(wire.mcpStatus).toBeUndefined();
   });
 
   it('WorkerEventDto 序列化后字段完整（workerId/eventId/type/payload/seq）', () => {
@@ -80,11 +136,12 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
     });
   });
 
-  it('WORKER_EVENT_TYPES 6 事件点号命名（无下划线变体）', () => {
-    expect(Object.values(WORKER_EVENT_TYPES)).toHaveLength(6);
+  it('WORKER_EVENT_TYPES 7 事件点号命名（无下划线变体）', () => {
+    expect(Object.values(WORKER_EVENT_TYPES)).toHaveLength(7);
     for (const name of Object.values(WORKER_EVENT_TYPES)) {
       expect(name.includes('_')).toBe(false);
     }
+    expect(WORKER_EVENT_TYPES.GIT_OP).toBe('git.op');
   });
 
   it('worker 协议事件与 server EVENT_TYPES 同名事件值对齐', () => {

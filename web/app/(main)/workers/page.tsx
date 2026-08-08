@@ -25,6 +25,7 @@
  *   worker-pool-hint；注册指引为页面扩展：worker-guide。
  */
 import { useEffect, useState, type CSSProperties } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -684,31 +685,55 @@ export default function WorkersPage() {
             {items.length} 个节点 · 在线 {onlineCount} 个 · 新节点注册即自动入池
           </div>
         </div>
-        <button
-          type="button"
-          data-testid="add-worker-button"
-          data-open={guideOpen ? "true" : "false"}
-          aria-expanded={guideOpen}
-          onClick={() => setGuideOpen((v) => !v)}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: space.xs,
-            padding: `${space.sm + 2}px ${space.lg}px`,
-            borderRadius: radius.pill,
-            border: "none",
-            backgroundColor: "#2563EB",
-            color: "#FFFFFF",
-            fontSize: fontSize.md,
-            fontWeight: 500,
-            cursor: "pointer",
-            boxShadow: "0 6px 16px rgba(37,99,235,.3)",
-            fontFamily: fontFamily.body,
-          }}
-        >
-          <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1 }}>+</span>
-          新增 Worker
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+          <Link
+            href="/workers/install"
+            data-testid="install-worker-link"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: space.xs,
+              padding: `${space.sm + 2}px ${space.lg}px`,
+              borderRadius: radius.pill,
+              border: `1px solid ${neutral[300]}`,
+              backgroundColor: "#FFFFFF",
+              color: neutral[700],
+              fontSize: fontSize.md,
+              fontWeight: 500,
+              textDecoration: "none",
+              boxShadow: shadow.sm,
+              fontFamily: fontFamily.body,
+            }}
+          >
+            <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1 }}>⌥</span>
+            安装 Worker
+          </Link>
+          <button
+            type="button"
+            data-testid="add-worker-button"
+            data-open={guideOpen ? "true" : "false"}
+            aria-expanded={guideOpen}
+            onClick={() => setGuideOpen((v) => !v)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: space.xs,
+              padding: `${space.sm + 2}px ${space.lg}px`,
+              borderRadius: radius.pill,
+              border: "none",
+              backgroundColor: "#2563EB",
+              color: "#FFFFFF",
+              fontSize: fontSize.md,
+              fontWeight: 500,
+              cursor: "pointer",
+              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1 }}>+</span>
+            新增 Worker
+          </button>
+        </div>
       </div>
 
       {/* 注册指引（可折叠面板）：空态自动展开，也可手动开关 */}

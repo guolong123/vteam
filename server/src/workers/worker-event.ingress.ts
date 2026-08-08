@@ -1,4 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { IdGeneratorService } from '../common/id-generator';
 import {
   EVENT_TYPES,
   SESSION_STATUS,
@@ -41,6 +43,9 @@ export interface AgentStatusPayload {
 
 type TaskCompletedCallback = (payload: TaskCompletedPayload) => void;
 type AgentStatusCallback = (payload: AgentStatusPayload) => void;
+
+/** task_events 主键前缀（对齐 tasks.service ID_PREFIX.taskEvent，续号同源）。 */
+const TASK_EVENT_ID_PREFIX = 'te';
 
 /** 内存去重窗口上限（D4：seq 单调递增下保留最近 N 条即可覆盖连接内有序重发）。 */
 const DEDUP_WINDOW = 1000;
@@ -87,6 +92,7 @@ export class WorkerEventIngress {
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimeService,
+    private readonly idGen: IdGeneratorService,
   ) {}
 
   /** 订阅 task.completed 回流（T10 WorkerDispatcher 构造时注册：落库+广播+emitFinal）。 */
@@ -158,6 +164,9 @@ export class WorkerEventIngress {
           .then(() => true);
       case 'task.completed':
         return this.handleTaskCompleted(dto);
+      case 'git.op':
+        // T6：git 工具执行审计 → task_events 落库（metadata Json：agent/repo_url/action/exit）
+        return this.handleGitOp(dto);
     }
     return Promise.resolve(true);
   }
@@ -261,6 +270,59 @@ export class WorkerEventIngress {
       `[ingress] task.completed workerId=${dto.workerId} taskId=${payload.taskId ?? '-'} agentId=${payload.agentId ?? '-'}`,
     );
     this.notify(this.taskCompletedCallbacks, payload);
+    return true;
+  }
+
+  /**
+   * git.op：git 工具执行审计（17 篇 §8.2）→ task_events 落库。
+   * payload 解析：taskId/agentId/action/repo_url/exit/error；metadata Json 存
+   * agent/repo_url/action/exit/error，时间由 task_events.createdAt 承载。
+   * taskId 或 action 缺失 → 跳过（审计事件无主键无法落库）；落库失败吞错记 warn
+   * （对齐 session.updated 模式，controller 恒定 202，审计尽力而为）。
+   */
+  private async handleGitOp(dto: WorkerEventDto): Promise<boolean> {
+    const raw = dto.payload as Record<string, unknown>;
+    const taskId = this.str(raw.taskId);
+    const action = this.str(raw.action);
+    const agentId = this.str(raw.agentId);
+    const repoUrl = this.str(raw.repo_url);
+    const error = this.str(raw.error);
+    const exit = typeof raw.exit === 'number' ? raw.exit : undefined;
+
+    if (!taskId || !action) {
+      this.logger.debug(
+        `[ingress] git.op 缺 taskId/action，跳过（workerId=${dto.workerId}）`,
+      );
+      return true;
+    }
+    const metadata: Prisma.InputJsonValue = {
+      ...(agentId ? { agent: agentId } : {}),
+      ...(repoUrl ? { repo_url: repoUrl } : {}),
+      action,
+      ...(exit !== undefined ? { exit } : {}),
+      ...(error ? { error } : {}),
+    };
+    try {
+      await this.prisma.taskEvent.create({
+        data: {
+          id: await this.idGen.nextId(TASK_EVENT_ID_PREFIX),
+          taskId,
+          eventType: 'git.op',
+          fromStatus: null,
+          toStatus: null,
+          actorType: 'agent',
+          actorId: agentId ?? null,
+          metadata,
+        },
+      });
+      this.logger.log(
+        `[ingress] git.op 落库 taskId=${taskId} action=${action} exit=${exit ?? '-'} workerId=${dto.workerId}`,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[ingress] git.op 落库失败（taskId=${taskId} action=${action}）: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     return true;
   }
 

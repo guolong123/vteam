@@ -10,6 +10,10 @@ export interface User {
   username: string;
   displayName: string;
   email?: string;
+  /** 角色信息（后端 AuthUserView 返回；旧持久化数据可能缺失 → 可选，缺失时视为非 admin） */
+  roleId?: string;
+  roleName?: string;
+  enabled?: boolean;
 }
 
 interface AuthState {

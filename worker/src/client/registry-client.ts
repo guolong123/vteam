@@ -14,9 +14,12 @@
  */
 
 import {
+  HeartbeatResponse,
   HeartbeatWorkerPayload,
+  McpStatusEntry,
   RegisterWorkerPayload,
   WorkerCapabilities,
+  WorkerCommand,
   WorkerHealth,
   WorkerLoad,
 } from '../protocol/worker-protocol';
@@ -59,6 +62,8 @@ export interface HeartbeatOptions {
   workerId: string;
   load: WorkerLoad;
   health: WorkerHealth;
+  /** T8c：MCP 服务器三态快照（节流探测结果，可选） */
+  mcpStatus?: McpStatusEntry[];
   fetchImpl?: typeof fetch;
 }
 
@@ -113,13 +118,17 @@ export async function registerWorker(opts: RegistryClientOptions): Promise<Regis
 /**
  * POST {serverUrl}/api/v1/workers/{id}/heartbeat：单次心跳。
  * 失败抛错（网络错 / 非 2xx，404 = worker 未注册），由调用方定时器捕获记录。
+ * T4a：返回解析后的响应体（含可选 commands 下行命令），调用方据此分派处理。
  */
-export async function sendHeartbeat(opts: HeartbeatOptions): Promise<void> {
+export async function sendHeartbeat(opts: HeartbeatOptions): Promise<HeartbeatResponse> {
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
   const body: HeartbeatWorkerPayload = {
     workerId: opts.workerId,
     load: opts.load,
     health: opts.health,
+    ...(opts.mcpStatus !== undefined && opts.mcpStatus.length > 0
+      ? { mcpStatus: opts.mcpStatus }
+      : {}),
   };
   const response = await fetchImpl(
     apiUrl(opts.serverUrl, `/workers/${encodeURIComponent(opts.workerId)}/heartbeat`),
@@ -135,6 +144,12 @@ export async function sendHeartbeat(opts: HeartbeatOptions): Promise<void> {
   if (!response.ok) {
     throw new Error(`心跳失败: HTTP ${response.status} ${response.statusText}`);
   }
+  return (await response.json()) as HeartbeatResponse;
+}
+
+/** T4a：从心跳响应提取待执行命令（无命令返回空数组，兼容旧 server）。 */
+export function extractCommands(response: HeartbeatResponse): WorkerCommand[] {
+  return response.commands ?? [];
 }
 
 /**

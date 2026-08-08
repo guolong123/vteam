@@ -1,0 +1,127 @@
+# ============================================================
+# Phase 5 T11：docker compose 一键部署（D5 编排方案，Oracle 实测）
+#
+# 四服务 + 一个一次性 init 服务：
+#   db      mysql:8（volume + healthcheck，compose 网络内互通，不映射宿主端口）
+#   init    一次性：prisma migrate deploy + seed（service_completed_successfully 门控 server）
+#   server  NestJS（healthcheck /api/v1/health；宿主 13000 避开本地 dev 3000）
+#   web     Next.js standalone（build ARG 注入 API_PROXY_TARGET=http://server:3000；
+#           宿主 13001 避开本地 dev 3001）
+#   worker  opencode worker（X-Worker-Token 注册 + serve 0.0.0.0 + 上报 http://worker）
+#
+# 端口避开原则：本机本地 dev server 占 3000 / web dev 占 3001，relay-mysql 占 3306，
+# aiagents-mysql 占 3307，故 db 不映射、server→13000、web→13001。
+# 运行：docker compose up -d --build
+# 清理：docker compose down（保留 volume） / docker compose down -v（连数据一起删）
+# ============================================================
+
+name: aiagents
+
+services:
+  db:
+    image: mysql:8
+    container_name: aiagents-compose-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-aiagents-root}
+      MYSQL_DATABASE: aiagents
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      # mysqladmin ping 不校验凭据，仅探测 mysqld 存活（认证失败仍返回 alive）
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    networks:
+      - aiagents-net
+
+  # 一次性初始化：迁移基线 + 种子数据（server 依赖其成功完成）
+  init:
+    build: ./server
+    container_name: aiagents-compose-init
+    command: sh -c "npx prisma migrate deploy && npx prisma db seed"
+    environment: &server-env
+      DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD:-aiagents-root}@db:3306/aiagents
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - aiagents-net
+
+  server:
+    build: ./server
+    container_name: aiagents-compose-server
+    restart: unless-stopped
+    environment:
+      <<: *server-env
+      NODE_ENV: production
+      PORT: "3000"
+      JWT_SECRET: ${JWT_SECRET:-compose-dev-jwt-secret}
+      JWT_ACCESS_EXPIRES_IN: "2h"
+      JWT_REFRESH_EXPIRES_IN: "7d"
+      WORKER_TOKEN: ${WORKER_TOKEN:-compose-worker-token}
+    depends_on:
+      db:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      # node:22-alpine 无 curl/wget，用内置 fetch（node 18+ 全局可用）
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    ports:
+      - "13000:3000"
+    networks:
+      - aiagents-net
+
+  web:
+    build:
+      context: ./web
+      args:
+        # T1 铁律：rewrites 编译进 routes-manifest.json，运行时 env 无效，必须 build ARG 注入
+        API_PROXY_TARGET: http://server:3000
+    container_name: aiagents-compose-web
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      # standalone server.js 以 HOSTNAME env（容器自动=容器 ID）为监听地址，非 127.0.0.1；
+      # healthcheck 必须访问 $HOSTNAME 而非 loopback（node:22-alpine 无 curl，用内置 fetch）
+      test: ["CMD", "node", "-e", "fetch('http://'+process.env.HOSTNAME+':3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    ports:
+      - "13001:3000"
+    networks:
+      - aiagents-net
+
+  worker:
+    build: ./worker
+    container_name: aiagents-compose-worker
+    restart: unless-stopped
+    environment:
+      X_WORKER_TOKEN: ${WORKER_TOKEN:-compose-worker-token}
+      SERVER_URL: http://server:3000
+      WORKER_ID: w_compose_worker
+      OPENCODE_SERVE_HOSTNAME: 0.0.0.0
+      WORKER_ADVERTISE_HOST: http://worker
+    depends_on:
+      server:
+        condition: service_healthy
+    networks:
+      - aiagents-net
+
+volumes:
+  mysql_data:
+
+networks:
+  aiagents-net:
+    driver: bridge

@@ -105,8 +105,7 @@ async function main() {
 
   // 预置 4 类 template 角色 Agent（14 篇 §4.1 四类模板；role 与前端 task-create data-role 对齐）
   // type=template 只读；permissionScope 按 §4.1 默认权限范围最小化
-  const templateAgents = [
-    {
+  const templateAgents = [    {
       id: 'a_product',
       name: '产品经理',
       role: 'product',
@@ -154,11 +153,40 @@ async function main() {
     });
   }
 
+  // 预置 builtin 工具（11 篇 §3.1 内置工具集：bash/read/edit/write/grep/glob 等基础能力）。
+  // source=builtin 走 seed（POST /tools 只产 custom/mcp，见 tools.service.create）；
+  // action 列 @unique 即权限点（FR-48），内置工具注册即进入权限命名空间，默认 enabled=true。
+  const builtinTools = [
+    { name: 'Bash 命令', action: 'bash', description: '执行 shell 命令（有副作用，默认需确认）' },
+    { name: '读取文件', action: 'read', description: '读取文件内容' },
+    { name: '编辑文件', action: 'edit', description: '局部编辑已有文件' },
+    { name: '写入文件', action: 'write', description: '创建/覆盖文件' },
+    { name: '内容搜索', action: 'grep', description: '正则全文搜索文件内容' },
+    { name: '文件匹配', action: 'glob', description: '按 glob 模式查找文件' },
+  ];
+
+  for (const tool of builtinTools) {
+    await prisma.tool.upsert({
+      where: { action: tool.action },
+      update: {},
+      create: {
+        id: `tl_builtin_${tool.action}`,
+        name: tool.name,
+        action: tool.action,
+        source: 'builtin',
+        execution: 'code',
+        mcpServer: null,
+        enabled: true,
+      },
+    });
+  }
+
   console.log('Seed 完成：');
   console.log(`  - 角色：${adminRole.name} / ${memberRole.name}`);
   console.log(`  - 用户：admin(u_admin) / seed-admin(${admin.id}) / seed-member(u_seed_member)`);
   console.log(`  - 项目：${projects.map((p) => p.name).join('、')}（owner=seed-admin）`);
   console.log(`  - 模板 Agent：${templateAgents.map((a) => `${a.name}(${a.role})`).join('、')}（type=template）`);
+  console.log(`  - 内置工具：${builtinTools.map((t) => t.action).join('、')}（source=builtin）`);
   console.log(`  - 管理员密码：${ADMIN_PASSWORD}`);
   console.log(`  - 初始 admin 账号：admin / admin123`);
 }

@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
+import { McpServersService } from '../mcp-servers/mcp-servers.service';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
 import {
@@ -32,6 +33,7 @@ describe('WorkersService', () => {
       updateMany: jest.Mock;
     };
   };
+  let mcpServers: { applyHeartbeatStatus: jest.Mock };
 
   /** 构造一个 Worker 行（prisma findMany/findUnique 返回值）。 */
   const workerRow = (overrides: Record<string, unknown> = {}) => ({
@@ -70,10 +72,12 @@ describe('WorkersService', () => {
       },
     };
 
+    mcpServers = { applyHeartbeatStatus: jest.fn() };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         WorkersService,
         { provide: PrismaService, useValue: prisma },
+        { provide: McpServersService, useValue: mcpServers },
       ],
     }).compile();
 
@@ -169,6 +173,39 @@ describe('WorkersService', () => {
       );
     });
 
+    it('T8c：携带 mcpStatus 时透传 applyHeartbeatStatus 存储 MCP 三态', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue({});
+      const dto: HeartbeatWorkerDto = {
+        workerId: 'w_0000000001',
+        load: { instances: 1 },
+        health: 'ok',
+        mcpStatus: [
+          { serverName: 'gitee-ent', status: 'connected' },
+          { serverName: 'test-bad-local', status: 'failed' },
+        ],
+      };
+
+      await service.heartbeat('w_0000000001', dto);
+
+      expect(mcpServers.applyHeartbeatStatus).toHaveBeenCalledWith(dto.mcpStatus);
+      expect(prisma.worker.update).toHaveBeenCalled();
+    });
+
+    it('T8c：不携带 mcpStatus（旧 worker）不触发状态存储', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue({});
+      const dto: HeartbeatWorkerDto = {
+        workerId: 'w_0000000001',
+        load: { instances: 1 },
+        health: 'ok',
+      };
+
+      await service.heartbeat('w_0000000001', dto);
+
+      expect(mcpServers.applyHeartbeatStatus).not.toHaveBeenCalled();
+    });
+
     it('worker 未注册 → 404 WORKER_NOT_FOUND', async () => {
       prisma.worker.findUnique.mockResolvedValue(null);
       const dto: HeartbeatWorkerDto = {
@@ -228,10 +265,130 @@ describe('WorkersService', () => {
       );
       expect(prisma.worker.update).toHaveBeenCalled();
     });
+
+    it('T4a：无待执行命令时响应不携带 commands 字段', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue({});
+      const dto: HeartbeatWorkerDto = {
+        workerId: 'w_0000000001',
+        load: { instances: 1 },
+        health: 'ok',
+      };
+
+      const result = await service.heartbeat('w_0000000001', dto);
+
+      expect(result).toMatchObject({
+        workerId: 'w_0000000001',
+        status: WORKER_STATUS.ONLINE,
+        lastHeartbeatAt: expect.any(String),
+      });
+      expect(result.commands).toBeUndefined();
+    });
+
+    it('T4a：enqueueCommand 后心跳返回 commands，取出即清空（命令一次有效）', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue({});
+      const dto: HeartbeatWorkerDto = {
+        workerId: 'w_0000000001',
+        load: { instances: 1 },
+        health: 'ok',
+      };
+
+      service.enqueueCommand('w_0000000001', {
+        type: 'reload-config',
+        resourceVersion: 'v2',
+      });
+
+      const result = await service.heartbeat('w_0000000001', dto);
+      expect(result.commands).toEqual([
+        { type: 'reload-config', resourceVersion: 'v2' },
+      ]);
+
+      // 取出即清空：第二次心跳不再携带
+      const second = await service.heartbeat('w_0000000001', dto);
+      expect(second.commands).toBeUndefined();
+    });
+
+    it('T4a：多次入队累积为数组，一次心跳全部下发', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue({});
+      const dto: HeartbeatWorkerDto = {
+        workerId: 'w_0000000001',
+        load: { instances: 1 },
+        health: 'ok',
+      };
+
+      service.enqueueCommand('w_0000000001', {
+        type: 'reload-config',
+        resourceVersion: 'v1',
+      });
+      service.enqueueCommand('w_0000000001', {
+        type: 'reload-config',
+        resourceVersion: 'v2',
+      });
+
+      const result = await service.heartbeat('w_0000000001', dto);
+
+      expect(result.commands).toEqual([
+        { type: 'reload-config', resourceVersion: 'v1' },
+        { type: 'reload-config', resourceVersion: 'v2' },
+      ]);
+    });
+
+    it('T4a：不同 worker 的命令互不串扰', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue({});
+      const dto: HeartbeatWorkerDto = {
+        workerId: 'w_0000000001',
+        load: { instances: 1 },
+        health: 'ok',
+      };
+
+      service.enqueueCommand('w_0000000002', {
+        type: 'reload-config',
+        resourceVersion: 'v9',
+      });
+
+      const result = await service.heartbeat('w_0000000001', dto);
+
+      expect(result.commands).toBeUndefined();
+      expect(service['pendingCommands'].get('w_0000000002')).toHaveLength(1);
+    });
   });
 
-  describe('HealthChecker', () => {
-    it('仅更新过期行：where status != offline AND (lastHeartbeatAt IS NULL OR < now-30s)', async () => {
+  describe('broadcastCommand（F1 MAJOR：资源变更广播 reload-config）', () => {
+    const command = { type: 'reload-config' as const, resourceVersion: 'v3' };
+
+    it('对全部在线 worker 逐个入队，返回广播数', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_0000000001' },
+        { id: 'w_0000000002' },
+      ]);
+      const spy = jest.spyOn(service, 'enqueueCommand');
+
+      const n = await service.broadcastCommand(command);
+
+      expect(prisma.worker.findMany).toHaveBeenCalledWith({
+        where: { status: { not: WORKER_STATUS.OFFLINE } },
+        select: { id: true },
+      });
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(spy).toHaveBeenCalledWith('w_0000000001', command);
+      expect(spy).toHaveBeenCalledWith('w_0000000002', command);
+      expect(n).toBe(2);
+    });
+
+    it('无在线 worker 时静默返回 0 不报错', async () => {
+      prisma.worker.findMany.mockResolvedValue([]);
+
+      const n = await service.broadcastCommand(command);
+
+      expect(n).toBe(0);
+      expect(service['pendingCommands'].size).toBe(0);
+    });
+  });
+
+  describe('HealthChecker', () => {    it('仅更新过期行：where status != offline AND (lastHeartbeatAt IS NULL OR < now-30s)', async () => {
       prisma.worker.updateMany.mockResolvedValue({ count: 2 });
 
       const count = await service.markStaleWorkersOffline();

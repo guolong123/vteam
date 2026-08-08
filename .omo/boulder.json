@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "active_work_id": "phase5-ops-acceptance-f149f723",
+  "active_work_id": "skills-tools-redesign-266f698a",
   "works": {
     "agent-platform-prd-prototypes-7f290efc": {
       "work_id": "agent-platform-prd-prototypes-7f290efc",
@@ -450,9 +450,9 @@
       "work_id": "phase5-ops-acceptance-f149f723",
       "active_plan": "/data/git-project/aiagents/.omo/plans/phase5-ops-acceptance.md",
       "plan_name": "phase5-ops-acceptance",
-      "status": "active",
+      "status": "completed",
       "started_at": "2026-08-08T00:16:43.028Z",
-      "updated_at": "2026-08-08T00:16:43.028Z",
+      "updated_at": "2026-08-08T02:48:43.372Z",
       "session_ids": [
         "opencode:ses_02ad3f64dffeH0vEIATllKlxTn"
       ],
@@ -460,20 +460,54 @@
         "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct"
       },
       "agent": "atlas",
-      "task_sessions": {}
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "**任务管理页（/board）没有\"新建任务\"按钮**——原型 task-board 有（Cmd+K 操作组 :184 + 标题区应有按钮），实现页标题右侧只有\"产出物\"按钮（board/page.tsx:514-538），缺新建任务入口；且空状态\"暂无任务，创建任务后即可在看板查看\"是死胡同",
+          "session_id": "opencode:ses_020c96205ffeLU2GrTrNwprDiH",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "updated_at": "2026-08-08T02:48:43.372Z",
+          "started_at": "2026-08-08T02:48:43.372Z",
+          "status": "running"
+        }
+      },
+      "ended_at": "2026-08-08T02:25:44.672Z",
+      "elapsed_ms": 7741644
+    },
+    "skills-tools-redesign-266f698a": {
+      "work_id": "skills-tools-redesign-266f698a",
+      "active_plan": "/data/git-project/aiagents/.omo/plans/skills-tools-redesign.md",
+      "plan_name": "skills-tools-redesign",
+      "status": "completed",
+      "started_at": "2026-08-08T04:09:48.475Z",
+      "updated_at": "2026-08-08T07:50:25.051Z",
+      "session_ids": [
+        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn"
+      ],
+      "session_origins": {
+        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {},
+      "ended_at": "2026-08-08T07:50:25.051Z",
+      "elapsed_ms": 13236576
     }
   },
-  "active_plan": "/data/git-project/aiagents/.omo/plans/phase5-ops-acceptance.md",
-  "started_at": "2026-08-08T00:16:43.028Z",
-  "status": "active",
-  "updated_at": "2026-08-08T00:16:43.028Z",
+  "active_plan": "/data/git-project/aiagents/.omo/plans/skills-tools-redesign.md",
+  "started_at": "2026-08-08T04:09:48.475Z",
+  "status": "completed",
+  "updated_at": "2026-08-08T07:50:25.051Z",
   "session_ids": [
     "opencode:ses_02ad3f64dffeH0vEIATllKlxTn"
   ],
   "session_origins": {
     "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct"
   },
-  "plan_name": "phase5-ops-acceptance",
+  "plan_name": "skills-tools-redesign",
   "task_sessions": {},
-  "agent": "atlas"
+  "agent": "atlas",
+  "ended_at": "2026-08-08T07:50:25.051Z",
+  "elapsed_ms": 13236576
 }

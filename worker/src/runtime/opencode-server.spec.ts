@@ -158,6 +158,7 @@ interface NewServerOpts {
   healthCheckIntervalMs?: number;
   logBufferSize?: number;
   portRetryCount?: number;
+  serveHostname?: string;
   logger?: Logger;
 }
 
@@ -170,6 +171,7 @@ function newServer(opts: NewServerOpts): OpencodeServer {
     healthCheckIntervalMs: opts.healthCheckIntervalMs ?? 20,
     logBufferSize: opts.logBufferSize ?? 200,
     portRetryCount: opts.portRetryCount ?? 5,
+    serveHostname: opts.serveHostname,
     logger: opts.logger,
   });
 }
@@ -346,5 +348,99 @@ describe('OpencodeServer', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('实际监听端口 9999 与期望 4199 不一致'),
     );
+  });
+
+  it('D2：serveHostname 选项控制 --hostname 绑定地址，内部 baseUrl 仍恒回环', async () => {
+    const server = newServer({ port: 4199, serveHostname: '0.0.0.0' });
+    const baseUrl = await server.start();
+    expect(baseUrl).toBe('http://127.0.0.1:4199');
+    expect(mockedSpawn.mock.calls[0][1]).toEqual([
+      'serve',
+      '--port',
+      '4199',
+      '--hostname',
+      '0.0.0.0',
+      '--pure',
+    ]);
+  });
+
+  it('D2：serveHostname 缺省读 env OPENCODE_SERVE_HOSTNAME（容器内 0.0.0.0 覆盖本地默认）', async () => {
+    const prev = process.env.OPENCODE_SERVE_HOSTNAME;
+    process.env.OPENCODE_SERVE_HOSTNAME = '0.0.0.0';
+    try {
+      const server = newServer({ port: 4199 });
+      await server.start();
+      expect(mockedSpawn.mock.calls[0][1]).toContain('0.0.0.0');
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCODE_SERVE_HOSTNAME;
+      } else {
+        process.env.OPENCODE_SERVE_HOSTNAME = prev;
+      }
+    }
+  });
+
+  /** T4c restart：每次 spawn 返回新 FakeChild；kill(-pid) 按 pid 路由到对应 child。 */
+  function setupMultiChildSpawn(): FakeChild[] {
+    const children: FakeChild[] = [];
+    mockedSpawn.mockImplementation(() => {
+      const child = new FakeChild(6000 + children.length);
+      children.push(child);
+      return child;
+    });
+    killSpy.mockImplementation((pid: number, signal?: string | number) => {
+      const child = children.find((c) => -c.pid === pid);
+      if (!child || child.exitCode !== null) {
+        const err = new Error('kill ESRCH: no such process') as Error & { code: string };
+        err.code = 'ESRCH';
+        throw err;
+      }
+      child.kill(String(signal ?? 'SIGTERM'));
+      return true;
+    });
+    return children;
+  }
+
+  it('restart：运行中先 stop（SIGTERM 进程组）再 start，随机端口变化', async () => {
+    mockNetOnce([{ assignedPort: 53001 }, { assignedPort: 53002 }]);
+    const children = setupMultiChildSpawn();
+    const server = newServer({ port: 0 });
+
+    await server.start();
+    expect(server.port).toBe(53001);
+    expect(children).toHaveLength(1);
+
+    const newBaseUrl = await server.restart();
+    expect(newBaseUrl).toBe('http://127.0.0.1:53002');
+    expect(server.port).toBe(53002);
+    expect(server.isRunning).toBe(true);
+    // 两次 spawn（stop 后重新 start）+ 第一次进程组 SIGTERM 清理
+    expect(mockedSpawn).toHaveBeenCalledTimes(2);
+    expect(killSpy).toHaveBeenCalledWith(-6000, 'SIGTERM');
+  });
+
+  it('restart：已停止（未运行）时直接 start，不抛错', async () => {
+    mockNetOnce([{ assignedPort: 53011 }, { assignedPort: 53012 }]);
+    setupMultiChildSpawn();
+    const server = newServer({ port: 0 });
+
+    await server.start();
+    await server.stop();
+    expect(server.isRunning).toBe(false);
+
+    const baseUrl = await server.restart();
+    expect(server.isRunning).toBe(true);
+    expect(baseUrl).toBe('http://127.0.0.1:53012');
+    expect(mockedSpawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('restart：从未启动时直接 start（幂等入口，无 stop 副作用）', async () => {
+    mockNetOnce([{ assignedPort: 53021 }]);
+    const server = newServer({ port: 0 });
+    const baseUrl = await server.restart();
+    expect(baseUrl).toBe('http://127.0.0.1:53021');
+    expect(server.isRunning).toBe(true);
+    expect(mockedSpawn).toHaveBeenCalledTimes(1);
+    expect(killSpy).not.toHaveBeenCalled();
   });
 });

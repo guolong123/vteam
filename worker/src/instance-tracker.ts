@@ -10,6 +10,8 @@
  */
 
 let activeInstances = 0;
+/** T4c：活跃会话归零回调（单实例注册；归零瞬间执行挂起的 serve 重启）。 */
+let idleHandler: (() => void) | null = null;
 
 /** 会话创建 +1；返回当前活动实例数。 */
 export function trackInstanceStart(): number {
@@ -17,9 +19,20 @@ export function trackInstanceStart(): number {
   return activeInstances;
 }
 
-/** 会话结束（abort/完成） -1；下限钳制 0，返回当前活动实例数。 */
+/**
+ * T4c：注册活跃会话归零回调（传 null 注销）。
+ * index.ts 在此刻检查 RestartCoordinator 的 pendingRestart——「等会话归零后执行」。
+ */
+export function onActiveSessionsIdle(handler: (() => void) | null): void {
+  idleHandler = handler;
+}
+
+/** 会话结束（abort/完成） -1；下限钳制 0，返回当前活动实例数。归零时触发 idle 回调。 */
 export function trackInstanceEnd(): number {
   activeInstances = Math.max(0, activeInstances - 1);
+  if (activeInstances === 0 && idleHandler) {
+    idleHandler();
+  }
   return activeInstances;
 }
 

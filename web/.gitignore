@@ -13,6 +13,11 @@
 # testing
 /coverage
 
+# playwright（T9 QA 套件运行产物：storageState 含 token，不入库）
+/test-results/
+/playwright-report/
+/.auth/
+
 # next.js
 /.next/
 /out/

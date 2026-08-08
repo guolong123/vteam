@@ -29,6 +29,10 @@ export interface WorkerConfig {
   workDir: string;
   /** SSH 私钥路径（T5 git 凭证注入：GIT_SSH_KEY_PATH，D6 2B）；可选，空 = 不注入 GIT_SSH_COMMAND */
   gitSshKeyPath: string;
+  /** worker 对 server 公布的 serve 基址主机（D2：capabilities.baseUrl 上报用；容器 compose 设 http://worker） */
+  workerAdvertiseHost: string;
+  /** opencode serve 绑定地址（D2：默认 127.0.0.1 保住本地铁律；容器内设 0.0.0.0 供 server 容器访问） */
+  opencodeServeHostname: string;
 }
 
 /** 解析非负整数配置项；缺省/空串回落默认值，非法值抛错。 */
@@ -66,5 +70,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     logLevel: (env.LOG_LEVEL ?? '').trim() || 'info',
     workDir: (env.WORK_DIR ?? '').trim() || '/tmp/keta-worker',
     gitSshKeyPath: (env.GIT_SSH_KEY_PATH ?? '').trim(),
+    workerAdvertiseHost: (env.WORKER_ADVERTISE_HOST ?? '').trim() || 'http://127.0.0.1',
+    opencodeServeHostname: (env.OPENCODE_SERVE_HOSTNAME ?? '').trim() || '127.0.0.1',
   };
 }

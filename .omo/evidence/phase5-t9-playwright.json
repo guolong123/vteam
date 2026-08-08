@@ -1,0 +1,688 @@
+{
+  "config": {
+    "argv": [
+      "/home/keta/.nvm/versions/node/v22.22.1/bin/node",
+      "/data/git-project/aiagents/web/node_modules/.bin/playwright",
+      "test",
+      "--project=setup",
+      "--project=pages"
+    ],
+    "configFile": "/data/git-project/aiagents/web/playwright.config.ts",
+    "rootDir": "/data/git-project/aiagents/web/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/data/git-project/aiagents/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "setup",
+        "name": "setup",
+        "testDir": "/data/git-project/aiagents/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/auth\\.setup\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/data/git-project/aiagents/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "login",
+        "name": "login",
+        "testDir": "/data/git-project/aiagents/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/login\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/data/git-project/aiagents/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "pages",
+        "name": "pages",
+        "testDir": "/data/git-project/aiagents/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/pages\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/data/git-project/aiagents/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "perf",
+        "name": "perf",
+        "testDir": "/data/git-project/aiagents/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/perf\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/data/git-project/aiagents/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "guard",
+        "name": "guard",
+        "testDir": "/data/git-project/aiagents/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/guard\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list",
+        null
+      ],
+      [
+        "json",
+        {
+          "outputFile": "../.omo/evidence/phase5-t9-playwright.json"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.62.1",
+    "workers": 1,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "auth.setup.ts",
+      "file": "auth.setup.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "真实表单登录 seed-admin → storageState",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "setup",
+              "projectName": "setup",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 5401,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-08-08T06:20:49.134Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "17e3fe6f4d9d8bd79c6b-e1e904a976db5985c890",
+          "file": "auth.setup.ts",
+          "line": 12,
+          "column": 6
+        }
+      ]
+    },
+    {
+      "title": "pages.spec.ts",
+      "file": "pages.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "17 页 testid 断言（seed-admin 登录态）",
+          "file": "pages.spec.ts",
+          "line": 13,
+          "column": 6,
+          "specs": [
+            {
+              "title": "2/17 project-list /projects",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2765,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:20:55.590Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-e8e435cf618659f88600",
+              "file": "pages.spec.ts",
+              "line": 24,
+              "column": 7
+            },
+            {
+              "title": "3/17 task-create /tasks/new",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3806,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:20:58.637Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-5df80f9e077f4a727174",
+              "file": "pages.spec.ts",
+              "line": 32,
+              "column": 7
+            },
+            {
+              "title": "4/17 task-board /board?pid=p_seed_1",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2935,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:21:02.473Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-a437f95f7777d218ad5b",
+              "file": "pages.spec.ts",
+              "line": 42,
+              "column": 7
+            },
+            {
+              "title": "5/17 agent-config /agents",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3141,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:21:05.432Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-ddbc1babe7ba66bfa0b8",
+              "file": "pages.spec.ts",
+              "line": 51,
+              "column": 7
+            },
+            {
+              "title": "6/17 dm-chat /messages/c_0000000001",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 4520,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:21:08.589Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-9f79b595d3e676b0f74b",
+              "file": "pages.spec.ts",
+              "line": 60,
+              "column": 7
+            },
+            {
+              "title": "7/17 group-chat /tasks/t_0000000001",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 4065,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:21:13.129Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-193665b35b52c1d3c466",
+              "file": "pages.spec.ts",
+              "line": 74,
+              "column": 7
+            },
+            {
+              "title": "8-10/17 导航变体（AppShell 融合导航承载）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2619,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:21:17.212Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-7240cd8abc5b77aa4646",
+              "file": "pages.spec.ts",
+              "line": 84,
+              "column": 7
+            },
+            {
+              "title": "11/17 role-permission /roles",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3119,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:21:19.846Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-925274c2d954cc8af3cd",
+              "file": "pages.spec.ts",
+              "line": 103,
+              "column": 7
+            },
+            {
+              "title": "12/17 skills-tools-manage /skills（双 Tab + 工具三子 Tab）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3508,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:21:22.990Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-cc06a8e1d46ab68131d7",
+              "file": "pages.spec.ts",
+              "line": 112,
+              "column": 7
+            },
+            {
+              "title": "13/17 task-detail /artifacts?pid=p_seed_1（产出物聚合页）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "note",
+                      "description": "当前任务无产出物，artifact-row 跳过"
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3124,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:21:26.524Z",
+                      "annotations": [
+                        {
+                          "type": "note",
+                          "description": "当前任务无产出物，artifact-row 跳过"
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-81b669007e21fc7ac973",
+              "file": "pages.spec.ts",
+              "line": 129,
+              "column": 7
+            },
+            {
+              "title": "14/17 tool-register /tools/register（4 执行形态）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3893,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:21:29.671Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-eae97c9832583d8cb682",
+              "file": "pages.spec.ts",
+              "line": 145,
+              "column": 7
+            },
+            {
+              "title": "15/17 user-management /users",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3209,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:21:33.582Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-e2df1e2cc51c044750a2",
+              "file": "pages.spec.ts",
+              "line": 166,
+              "column": 7
+            },
+            {
+              "title": "16/17 worker-install /workers/install（独立路由 · 3 步安装向导）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3843,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:21:36.806Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-0bacc1b82ad1d1c3df84",
+              "file": "pages.spec.ts",
+              "line": 175,
+              "column": 7
+            },
+            {
+              "title": "17/17 worker-list /workers（列表 + 注册指引）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3637,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-08T06:21:40.665Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-d47ea8f329eaf4ad126d",
+              "file": "pages.spec.ts",
+              "line": 202,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-08-08T06:20:48.507Z",
+    "duration": 55981.469,
+    "expected": 15,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}
