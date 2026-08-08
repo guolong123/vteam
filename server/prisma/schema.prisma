@@ -283,6 +283,8 @@ model Agent {
   role            String?
   prompt          String
   defaultModelId  String?   @map("default_model_id")
+  // 首选 worker 软绑定（可空，null=自动调度；离线自动回退，Metis R1）
+  workerId        String?   @map("worker_id")
   permissionScope Json?     @map("permission_scope")
   createdBy       String    @map("created_by")
   createdAt       DateTime  @default(now()) @map("created_at")
@@ -367,6 +369,37 @@ model Tool {
 }
 
 // ==================================================================
+// 模型目录域（C1：models 目录 + worker 可用性映射；15 篇 §2.2 域前缀 md_）
+// ==================================================================
+
+model Model {
+  id           String    @id
+  providerID   String    @map("provider_id")
+  modelID      String    @map("model_id")
+  name         String
+  capabilities Json?
+  enabled      Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  workerAvailabilities WorkerModelAvailability[]
+
+  @@unique([providerID, modelID], map: "uk_models_provider_model")
+  @@map("models")
+}
+
+model WorkerModelAvailability {
+  workerId String @map("worker_id")
+  modelId  String @map("model_id")
+
+  worker Worker @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  model  Model  @relation(fields: [modelId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([workerId, modelId])
+  @@map("worker_model_availabilities")
+}
+
+// ==================================================================
 // MCP 服务器域（11 篇 §5.1 / §5.8：mcp_servers 实体，T8a）
 // ==================================================================
 
@@ -396,12 +429,15 @@ model Worker {
   capabilities    Json
   load            Json?
   status          String    @default("offline")
+  // worker 默认模型兜底（分派时 Agent 未配模型 → 用执行 worker 默认模型，C8）
+  defaultModelId  String?   @map("default_model_id")
   tokenHash       String?   @map("token_hash")
   lastHeartbeatAt DateTime? @map("last_heartbeat_at")
   registeredAt    DateTime  @default(now()) @map("registered_at")
 
-  sessions          Session[]
+  sessions           Session[]
   taskGroupInstances TaskGroupInstance[]
+  modelAvailabilities WorkerModelAvailability[]
 
   @@index([status, lastHeartbeatAt], map: "idx_workers_status_heartbeat")
   @@map("workers")

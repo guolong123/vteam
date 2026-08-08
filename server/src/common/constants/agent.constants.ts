@@ -32,3 +32,43 @@ export const STATIC_AVAILABLE_MODELS = [
   { id: 'kimi-k2.6', name: 'Kimi K2.6' },
   { id: 'qwen3.6-plus', name: 'Qwen 3.6 Plus' },
 ] as const;
+
+/**
+ * 模型目录 seed 行（C1：STATIC_AVAILABLE_MODELS → models 表预置，防空目录回归——Metis P1-2）。
+ * 域主键 `md_` 零填充序号（15 篇 §2.2，宽度对齐 IdGenerator.ID_PAD_WIDTH=10）。
+ * id 拆解：含 `/` → 按首个 `/` 拆 providerID/modelID；不含 → providerID 视为 opencode 默认 provider。
+ */
+export interface ModelSeedRow {
+  id: string;
+  providerID: string;
+  modelID: string;
+  name: string;
+  enabled: boolean;
+}
+
+export function buildModelSeedRows(): ModelSeedRow[] {
+  return STATIC_AVAILABLE_MODELS.map((m, idx) => {
+    const slash = m.id.indexOf('/');
+    const providerID = slash > 0 ? m.id.slice(0, slash) : 'opencode';
+    const modelID = slash > 0 ? m.id.slice(slash + 1) : m.id;
+    return {
+      id: `md_${String(idx + 1).padStart(10, '0')}`,
+      providerID,
+      modelID,
+      name: m.name,
+      enabled: true,
+    };
+  });
+}
+
+/**
+ * 四类模板默认模型（C1 seed 预置——模板只读 PATCH 403 堵死配置通道，只能 seed 预设，Metis R3）。
+ * 推荐映射：产品=通用对话、架构=推理、开发=代码、测试=推理（14 篇 §4.1 模型侧重；
+ * 值取 STATIC_AVAILABLE_MODELS 中的对应模型，`providerID/modelID` 格式与 D7 一致）。
+ */
+export const TEMPLATE_DEFAULT_MODELS: Record<string, string> = {
+  a_product: 'opencode/glm-5.1',
+  a_architect: 'opencode/deepseek-v4-pro',
+  a_developer: 'opencode-go/deepseek-v4-flash',
+  a_tester: 'opencode/glm-5.2',
+} as const;

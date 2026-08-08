@@ -1,5 +1,9 @@
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import {
+  buildModelSeedRows,
+  TEMPLATE_DEFAULT_MODELS,
+} from '../src/common/constants/agent.constants';
 
 /**
  * 种子脚本：为前端验收准备基础数据（FR-25 项目列表 / 创建）。
@@ -142,14 +146,26 @@ async function main() {
   for (const agent of templateAgents) {
     await prisma.agent.upsert({
       where: { id: agent.id },
-      update: {},
+      update: { defaultModelId: TEMPLATE_DEFAULT_MODELS[agent.id] ?? null },
       create: {
         ...agent,
         type: 'template',
         baseAgentId: null,
-        defaultModelId: null,
+        defaultModelId: TEMPLATE_DEFAULT_MODELS[agent.id] ?? null,
         createdBy: adminUser.id,
       },
+    });
+  }
+
+  // 预置模型目录（C1：STATIC_AVAILABLE_MODELS 8 模型 → models 表，防空目录回归）。
+  // 幂等：按 (providerID, modelID) 唯一键 upsert；域主键 md_ 零填充序号固定（seed 序号对齐
+  // buildModelSeedRows 的 idx+1，避免重复 seed 漂移）。
+  const modelRows = buildModelSeedRows();
+  for (const row of modelRows) {
+    await prisma.model.upsert({
+      where: { providerID_modelID: { providerID: row.providerID, modelID: row.modelID } },
+      update: {},
+      create: row,
     });
   }
 
@@ -187,6 +203,7 @@ async function main() {
   console.log(`  - 项目：${projects.map((p) => p.name).join('、')}（owner=seed-admin）`);
   console.log(`  - 模板 Agent：${templateAgents.map((a) => `${a.name}(${a.role})`).join('、')}（type=template）`);
   console.log(`  - 内置工具：${builtinTools.map((t) => t.action).join('、')}（source=builtin）`);
+  console.log(`  - 模型目录：${modelRows.length} 个模型（${modelRows.map((m) => m.modelID).join('、')}）`);
   console.log(`  - 管理员密码：${ADMIN_PASSWORD}`);
   console.log(`  - 初始 admin 账号：admin / admin123`);
 }
