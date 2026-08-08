@@ -83,4 +83,17 @@ describe('resyncIdPrefix（域主键续号：只统计前缀下纯数字序号�
     // seed 到 8 → 下一个 id 应为 md_0000000009
     expect(await idGen.nextId('md')).toBe('md_0000000009');
   });
+
+  it('mc_ 前缀 mixed id（模型凭据数字序号 + 命名 id）→ 取数字最大续号', async () => {
+    const { model } = mockModel([
+      { id: 'mc_0000000001' },
+      { id: 'mc_0000000017' },
+      { id: 'mc_legacy_named' }, // 命名 id 不参与续号
+    ]);
+
+    await resyncIdPrefix(model, 'mc', idGen);
+
+    // seed 到 17 → 下一个 id 应为 mc_0000000018
+    expect(await idGen.nextId('mc')).toBe('mc_0000000018');
+  });
 });

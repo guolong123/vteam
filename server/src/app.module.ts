@@ -16,6 +16,7 @@ import { WorkersModule } from './workers/workers.module';
 import { SkillsModule } from './skills/skills.module';
 import { ToolsModule } from './tools/tools.module';
 import { McpServersModule } from './mcp-servers/mcp-servers.module';
+import { ModelsModule } from './models/models.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
@@ -47,6 +48,7 @@ import { PrismaModule } from './prisma/prisma.module';
     SkillsModule,
     ToolsModule,
     McpServersModule,
+    ModelsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

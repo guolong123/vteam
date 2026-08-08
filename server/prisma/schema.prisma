@@ -400,6 +400,28 @@ model WorkerModelAvailability {
 }
 
 // ==================================================================
+// 模型凭据域（C4：provider token 加密存储；17 篇 §3.4 AES-256-GCM 基线）
+// ==================================================================
+
+model ModelCredential {
+  id            String    @id
+  // token 全局 provider 粒度（关键决策①）——凭据按 providerID 关联，不建 FK
+  // （models.provider_id 非唯一，逻辑关联经 ModelsService 查询 provider 解析）
+  providerID    String    @map("provider_id")
+  // AES-256-GCM 加密后的 token 引用（明文零接触：不进日志/审计事件/响应）
+  credentialRef String    @map("credential_ref")
+  // 脱敏标识（如 sk-****abc，fingerprint 不进日志/审计事件/响应）
+  fingerprint   String
+  // 软撤销（吊销 = 软删，保留审计轨迹；同 provider 重复 POST 覆盖更新时清除）
+  revokedAt     DateTime? @map("revoked_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@unique([providerID], map: "uk_model_credentials_provider")
+  @@map("model_credentials")
+}
+
+// ==================================================================
 // MCP 服务器域（11 篇 §5.1 / §5.8：mcp_servers 实体，T8a）
 // ==================================================================
 
