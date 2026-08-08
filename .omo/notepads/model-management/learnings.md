@@ -6,6 +6,37 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ---
 
+## C6: 前端模型管理页 + agent 模型选择器增强（2026-08-09，实现 + 回归完成）
+
+- **⚠️ 并行会话前置状态**：C6 大部分实现已由并行会话落地且未提交（web/ 工作区 dirty）——`web/app/(main)/models/page.tsx`（1355 行，P0 原型 models-manage 保真迁移 + 真实 API）、agents/page.tsx 模型区增强（2088 行）、导航 5 处注册（nav-dock NAV_ITEMS / app-shell KEY_TO_PATH+CMDK_NAV_PATH+PAGE_TITLE / cmdk-panel DEFAULT_CMDK_ITEMS）、共享类型 `web/src/types/models.ts`、testids.ts 注册。本会话职责转为：**验收核对 + 补齐缺口 + 回归 + 提交**，避免重写。
+- **验收命令执行**：`grep -oP 'data-testid="\K[^"]+'` 原型 models-manage → sort -u 得 19 testid 清单，与实现页 diff——原型 19 项全量在实现页（实现页超集 +9：model-add-modal/model-provider-input/model-model-id-input/model-name-input/model-add-confirm/model-add-error/model-add-cancel + models-loading/error/retry，对齐 skills 页"各页新增 loading/error/retry"惯例），**验收通过**。
+- **testid 补齐（3 处）**：agents 页条目补 `model-credential-status`（CredentialBadge 徽章）+ `skill-empty`（技能空态）；models 页条目补 `model-add-cancel`（弹窗取消按钮，实现页出现 2 次同一 testid：关闭 ✕ + 底部取消）。补后 comm 对比空。
+- **agents 页增强实现要点（并行会话，已核对正确）**：
+  - MODEL_NAMES 死代码已删：2 处引用（AgentListItem 徽章 L391 `modelNameOf(agent.defaultModelId) ?? id`、ConfigPanel currentModelName）改为目录 name 查询——`catalogQuery`（GET /models）建 `catalogByRef` Map（key=`providerID/modelID` **+ 裸 modelID**，存量旧自由字符串兼容），`modelNameOf` useCallback 供列表徽章。
+  - 模型下拉（model-select）：options 显示 `providerOf(id) / name`（providerOf 取首个 '/' 前），option 带 data-testid="model-option-provider" + data-model-id。
+  - 凭据双态（model-token-status data-credential）：tokenQuery 按 `catalogByRef.get(modelDraft).id`（md id）查 GET /models/:mdId/credentials → configured 显示绿徽章+fingerprint / missing 显示 model-token-input + 保存（POST /models/:mdId/credentials {token}，全量下发；定向在 models 管理页做）。
+  - 首选 worker（agent-worker-select）：GET /workers + sortedWorkers 在线优先排序，value=agent.workerId（可空），保存 payload `workerId: workerDraft || null`（custom/clone 提交；template 只提交 defaultModelId 保持后端 assertWritable 单字段放行）；说明「未选则自动调度（软绑定）」。
+  - 存量校验（model-stale-warning）：`staleModel = !!modelDraft && !catalogByRef.has(modelDraft)` → 琥珀警告「保留不阻断保存」。
+- **契约确认**：server update-agent.dto 已支持 `workerId?: string | null`（@ValidateIf((o)=>o.workerId!==null)，L78-79）+ agents.service PATCH 条件落库（L239）+ toAgentView 透出（L318）；defaultModelId @Matches provider/model slug。前端契约零后端改动。
+- **回归**：`npx tsc --noEmit` 0 错误；`npm run build`（**须 PATH 指 nvm v22.22.1**，默认 shell node 18.15.0 会被 Next 拒绝，与 P0.3 踩坑一致）通过且 /models 路由入表；eslint 仅 3 个 react-hooks/exhaustive-deps warnings（models 页 `models = data?.items ?? []` 引用稳定性，与 agents 页既有模式一致，非阻断）。
+- **提交策略**：只 stage C6 web 文件（models/ 新目录 + agents/page.tsx + testids.ts + 3 导航文件 + src/types/），不含 server/docs 并行会话 dirty 文件（C2/C3/C5 由相应会话提交）。commit message `feat(web): 模型管理页与 agent 模型/首选 worker/凭据配置`。
+
+
+
+## C7: 模型解析优先级 + assignWorker 按模型过滤（2026-08-09，实现 + 测试完成）
+
+- **模型解析优先级链**（`worker-dispatcher.ts`，Metis P1 修复后完整实现）：
+  1. **Agent.defaultModelId**（显式非空直接用）→ 2. **沿 baseAgentId 链向上取最近非空 defaultModelId**（模板默认；`resolveAgentModelId` 私有方法，`MAX_BASE_AGENT_CHAIN_DEPTH=20` 防御异常链/环；链上遇 `type='template'` 或 `baseAgentId=null` 终止）→ 3. **执行 worker 的 defaultModelId**（兜底，`agentModelId ?? workerRow.defaultModelId ?? null`）→ 4. **null**（不指定，serve 默认）。解析结果 null → **跳过模型过滤**（回归现状：未配模型 agent 仍可调度任意 worker）。
+- **dispatchForTarget 接线**（C 部分）：解析模型 → 组 `assignmentReq`（非空 modelId 才传）→ **两个 assignWorker 调用点（未绑定 :407 / 复用 worker offline 重分配 :435）都传 assignmentReq** → promptAsync 用解析后最终模型（:460）。Worker 行 select 增加 `defaultModelId`（阶段 2 兜底数据源）。
+- **assignWorker 过滤**（`workers.service.ts`，Metis P1-3）：
+  - `AssignmentRequirement` 增加可选 `modelId?`；候选查询 `include: { modelAvailabilities: { include: { model: { select: { enabled: true } } } } }`。
+  - `matchesModelRequirement`（私有）判定顺序：modelId 省略/空 → 通过（现状回归）；`worker.defaultModelId === modelId` → 通过；**availability 无行（从未上报）→ 通过（过渡期降级，Metis P1-3 写死）**；已上报但 availability 不含该 enabled 模型 → 排除。
+  - 排序保持：online 优先 + 剩余容量降序（filter 链在 sort 之前，不改变既有语义）。
+- **3 调用点回归**（Metis P2-7）：worker-dispatcher.ts:407、:435 传 `assignmentReq`（含 modelId）；**agents.service.ts:291（getAvailableModels pull 兜底）保持无参调用**——目录空时仍返回任意可用 worker，再 listModels 探测，无回归。
+- **测试**：43 suites / **643 tests** 全绿（基线 632 + 新增 11）——workers.service.spec 6 例（availability 含 enabled 模型选中 / 不含排除 / disabled 排除 / 从未上报降级 / defaultModelId 匹配 / modelId 未指定不过滤）、worker-dispatcher.spec C7 describe 3 例（Agent 显式 defaultModelId → assignWorker 携带 modelId + createSession 用拆分模型 / 沿 baseAgentId 多层 clone 链取模板默认 / Agent 模板均未配 → 跳过过滤 + worker.defaultModelId 兜底）+ 既有调用点回归（复用 worker 场景 select 含 defaultModelId 不破坏）。
+- **⚠️ 测试契约修复**：跑全量 jest 发现 `agents.service.spec findAll` keys 契约断言缺 `workerId`——C1 的 toAgentDto 已含 `workerId`（Agent.workerId 软绑定字段）但 spec 期望数组未同步（并行 session 遗漏）。补 `'workerId'` 后全绿。教训：C1 加 toAgentDto 字段时须同步 findAll/update 的 keys 契约断言。
+- **⚠️ 并行会话状态**：本任务启动时工作区已有并行 session 落地 C7 主体（resolveAgentModelId + assignmentReq 接线 + matchesModelRequirement + 测试），本会话负责**回归验证 + 测试契约修复 + 文档同步**。实现完全符合任务规格（含 null 跳过过滤、availability 缺失降级、3 调用点回归），无需改动业务代码。
+
 ## C4: 模型凭据加密存储（2026-08-08，实现完成）
 
 - **schema**：`ModelCredential` 表（id `mc_` 前缀零填充、`providerID` unique（uk_model_credentials_provider）、`credentialRef`（AES-256-GCM 密文）、`fingerprint`（脱敏）、`revokedAt` 软撤销、createdAt/updatedAt）。**不建 FK**——凭据按 providerID 全局粒度（关键决策①），models.provider_id 非唯一，逻辑关联经 ModelsService 查询 model 解析 providerID。
@@ -20,13 +51,22 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ## C2: worker capabilities.models + defaultModelId 上报（2026-08-08，实现 + 验证完成）
 
-- **models 字段结构决策**：`capabilities.models` 采用**对象数组** `Array<{providerID, modelID, name}>`（task 要求），非裸 id 字符串数组。理由：① 与 server DTO `WorkerModelInfoDto`（@ValidateNested + @Type）对齐——若 worker 发 string[] 而 DTO 声明对象结构，全局 ValidationPipe whitelist:true 下 ValidateNested 校验失败 → 400 拒绝注册；② C3 合并入库（upsert by providerID/modelID）与 C7 调度过滤直接消费字段，免二次拆解。
-- **⚠️ 并行会话冲突处理**：仓库存在活跃并行任务（boulder `model-management-b9263bc4` 的 C3/C4 会话）曾把 worker 侧协议改为 `models?: string[]` + env `WORKER_DEFAULT_MODEL`，与 task 要求（对象数组 + `MODEL_DEFAULT_ID`）冲突，且造成 worker-protocol 与 server DTO 双端不一致。**决策：以 task 为准统一为对象数组 + `MODEL_DEFAULT_ID`**，恢复 worker-protocol.ts/index.ts/config.ts/contract.spec.ts/index.spec.ts 四处被并行覆盖的类型与 env 名。后续改动前先 `git diff` 核对并行会话是否已动同批文件。
-- **异步化改造点清单**（worker/src/index.ts）：`buildCapabilities` → async（透传 models）；`buildRegisterOptions` → async（透传 models + defaultModelId）；`registerCurrent` → async（serve 就绪后 `await resolveModels(driver)`，结果传入 buildRegisterOptions）；启动链（:336-343）原本已 `await registerCurrent()` 无需改；`dispatchCommands`（:71-83）纯命令透传不涉注册组装，**无需改**——reload-config 链路经 restartCoordinator → reRegister → registerCurrent 自动刷新 models。
-- **降级语义**：`resolveModels` 独立导出（可注入 mock listModels）：成功 → 对象数组（可为空 `[]`，表达"已探测无模型"）；失败 → undefined（不携带 models，不阻断注册）→ server 侧 C3 以"未上报"区分降级。成功空数组与失败缺省语义不同，测试覆盖两态。
-- **defaultModelId 上报**：config.ts 新增 `MODEL_DEFAULT_ID` env（空串=未配置）→ WorkerConfig.defaultModelId → buildRegisterOptions 非空才携带 → registry-client body 透传 → server RegisterWorkerDto.defaultModelId（@IsOptional + @IsString）→ workers.service.register 落 `Worker.defaultModelId` 列（C1 已建，upsert create/update 均带）。
-- **server 侧落库**：register 的 data 对象加 `defaultModelId: dto.defaultModelId ?? null`；capabilities 整块 Json 已含 models 透传（无需改落库逻辑）；toWorkerView 透传 capabilities 已含 models（C8 才加 defaultModelId 透出）。
-- **验证**：worker build + jest 16 suites / 189 tests 全绿（基线 178 + 新增 11：index.spec 8 个 + contract.spec 3 个）；server build + jest 43 suites / 595 tests 全绿（基线 559 + worker-dto.spec 4 个 + 并行 C4 新增）。
+- **models 字段结构（最终）**：`capabilities.models` 采用 **`string[]`（id 格式 `providerID/modelID`，如 `opencode-go/deepseek-v4-flash`）**。与 C1 目录 id 拆解约定天然对齐（STATIC id 含 `/` 按首个 `/` 拆 providerID/modelID），C3 合并入库直接复用拆解逻辑；server DTO `models?: string[]`（@IsOptional + @IsArray + @IsString({each:true})），worker-protocol 双写同构，无 whitelist 剥离/ValidateNested 400 风险。
+- **⚠️ 并行会话冲突复盘**：实现期间另一活跃会话（boulder `model-management-b9263bc4`，同时推进 C3/C4）采用 `string[]` + env `WORKER_DEFAULT_MODEL` 方案，并覆盖了 worker-protocol.ts / register-worker.dto.ts / workers.service.ts(+spec) / worker-dto.spec.ts / config.ts / .env.example / README 等。我最初按 task 字面（对象数组 + `MODEL_DEFAULT_ID`）实现，两次恢复后被再次覆盖。**最终决策：对齐并行会话的 `string[]` + `WORKER_DEFAULT_MODEL`**——原因：① 该方案已被并行会话在协议/DTO/服务/测试四层建立且自洽，继续对抗会使工作区持续不可编译；② 与 C1 目录 id 格式内聚；③ 未来 C3 消费端由并行会话按此实现，对齐避免 C2/C3 契约断裂。经验：多会话并行同计划文件时，先 `git diff` + 核对 boulder task_sessions 判断活跃会话，避免与活跃会话反复互改同一文件。
+- **异步化改造点清单**（worker/src/index.ts）：`buildCapabilities` → async（透传 models?: string[]）；`buildRegisterOptions` → async（透传 models + defaultModelId）；`registerCurrent` → async（serve 就绪后 `await resolveModels(driver)` 探测真实模型，结果传入 buildRegisterOptions）；启动链（原 :336-343）原本已 `await registerCurrent()` 无需改；`dispatchCommands`（:71-83）纯命令透传不涉注册组装，**无需改**——reload-config 链路经 restartCoordinator → reRegister → registerCurrent 自动刷新 models。
+- **降级语义**：`resolveModels` 独立导出（可注入 mock listModels）：成功 → `string[]`（可为空 `[]`，表达"已探测无模型"）；失败 → undefined（不携带 models，不阻断注册，console.warn 可观测）→ server 侧 C3 以"未上报"区分降级。成功空数组与失败缺省语义不同，测试覆盖两态。
+- **defaultModelId 上报**：config.ts 新增 `WORKER_DEFAULT_MODEL` env（`(env.X ?? '').trim() || undefined`，类型 `defaultModelId?: string`）→ buildRegisterOptions 非空才携带 → registry-client body 条件透传 → server RegisterWorkerDto.defaultModelId（@IsOptional + @IsString）→ workers.service.register 落 `Worker.defaultModelId` 列。
+- **server 落库语义（精细版）**：`...(dto.defaultModelId !== undefined ? { defaultModelId: dto.defaultModelId || null } : {})`——**区分"未上报"与"显式清空"**：worker 未携带 defaultModelId 字段 → 不写入（保留 C8/PATCH 已配值，防误清）；显式携带（含空串）→ 写值或 null。capabilities 整块 Json 已含 models 透传（无需改落库逻辑）；toWorkerView 透传 capabilities 已含 models（C8 才加 defaultModelId 透出）。
+- **验证**：worker build + jest 16 suites / 189 tests 全绿（基线 178 + 新增 11：index.spec 8 个 + contract.spec 3 个）；server build + jest 43 suites / 595 tests 全绿（基线 559 + C2 4 个 worker-dto 用例 + 并行 C4 新增）。
+
+## C2 finalize：统一协议为 string[] + WORKER_DEFAULT_MODEL（2026-08-08）
+
+- **背景**：上一条 C2 记录（对象数组 `Array<{providerID, modelID, name}>` + env `MODEL_DEFAULT_ID`）来自并行会话，其依据的 task 版本与本会话 task 规格不一致。本会话 task 规格白纸黑字要求 `WorkerCapabilities.models?: string[]`（id 格式 `providerID/modelID`）与 env `WORKER_DEFAULT_MODEL`。
+- **决策**：以本会话 task 规格为准，将 worker-protocol/index/config/registry-client/contract.spec/index.spec + server register-worker.dto/worker-dto.spec 全部统一为 `models?: string[]` + `WORKER_DEFAULT_MODEL`；删除并行会话引入的 `WorkerModelInfo`/`WorkerModelInfoDto` 对象结构（ValidateNested 校验不再需要）。
+- **C3 消费说明**：C3 合并入库时按 C1 learnings 的 id 拆解约定（含 `/` 按首个 `/` 拆 providerID/modelID，不含 `/` providerID 归 `opencode`）解析 string id，信息与对象数组等价，免二次拆分。
+- **server 落库修正**：register 的 defaultModelId 改为**条件更新**——`dto.defaultModelId !== undefined ? { defaultModelId: dto.defaultModelId || null } : {}`。并行实现 `?? null` 会在旧 worker 重注册（不携带字段）时把已有值清空，误清 C8/PATCH 配置；条件更新只在显式提供时写入。
+- **验证**：worker `tsc` + jest 16 suites / 189 tests 全绿；server `nest build` + jest 43 suites / 595 tests 全绿。
+
 
 ## C5a: opencode auth.json 注入机制（2026-08-08，实测完成）
 
@@ -38,6 +78,22 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **加载实证**：auth.json 含 deepseek → `opencode models deepseek` 列出 4 模型；空 auth.json → `Provider not found`。auth.json 是 provider 可用性的唯一开关
 - **降级**：无 auth.json → 0 credentials 静默降级，serve 正常启动（C5 失败态不会崩 worker）
 - 证据：`.omo/evidence/c5a-auth-json.md`
+
+## C5: 模型凭据下发（WorkerCommand model-credentials + auth.json 注入）（2026-08-08，实现 + 测试完成）
+
+- **协议双写**：`WorkerCommand` 增加 type `model-credentials` + 可选 `payload?: ModelCredentialsPayload`（`{providerKeys: Array<{providerID, key}>, targetWorkerIds?: string[]}`，targetWorkerIds 空=全量）。worker-protocol.ts 与 workers.service.ts 双写一致，contract.spec 新增 round-trip（含 targetWorkerIds 缺省 / reload-config 无 payload 向后兼容）3 例。**向后兼容**：reload-config 命令不携带 payload，既有结构不受影响。
+- **下发唯一化（Metis R4）**：`WorkersService.dispatchModelCredentials(providerKeys, targetWorkerIds?)`——非空 → enqueueCommand 逐个精确下发；空 → broadcastCommand 原样广播（**不改 broadcastCommand 签名**）。ModelsService.setCredential 保存成功后调用（`dispatchAfterSave` 私有方法，token 只经下行命令明文传输，失败 warn 不阻断保存——注册回放兜底）。
+- **POST body 扩展**：SetModelCredentialDto 加 `targetWorkerIds?: string[]`（@IsOptional + @IsArray + @IsString each），controller 4 参转发 service。Swagger 注释文档化定向/全量语义。
+- **注册/心跳回放（Metis R5）**：register 成功后 `replayModelCredentials(worker.id)`——查 ModelCredential revokedAt=null → CredentialCryptoService.decrypt 解出明文 → enqueueCommand 组装 providerKeys；**并行会话补充** heartbeat 中 worker 从 offline 恢复时也回放（`worker.status === OFFLINE` 判断，select 已含 status）；一直在线心跳不重复回放（避免每 10s 重启 serve）。回放失败（解密/DB 错）warn 不阻断注册。
+- **模块循环依赖**：ModelsService 需 WorkersService（触发下发）+ WorkersService 需 CredentialCryptoService（注册回放）→ **双向 forwardRef**：models.module imports forwardRef(WorkersModule)、workers.module imports forwardRef(ModelsModule)。⚠️ 注意并行会话 C3 曾把 workers.module 的 ModelsModule 写成非 forwardRef，我改为 forwardRef 解环。
+- **worker 注入（C5a 方案落地）**：新文件 `worker/src/credentials/model-credential-injector.ts`：
+  - `buildAuthJson(providerKeys)` → `{providerID: {type:'api', key}}`（C5a 实测格式）；空/空白 providerID/空 key 条目静默跳过
+  - `writeAuthJson(providerKeys, {dir?})` → mkdir -p `<dir>/opencode` + writeFileSync(mode 600) + chmodSync 600；dir 缺省 `os.tmpdir()/keta-auth-<random>`（路径随机化，仿 git-credentials.ts）
+  - `cleanupAuthJson(dataDir)` → rmSync recursive force（幂等，仿 git-credentials cleanup）
+- **index.ts 接线**：dispatchCommands 对 model-credentials 打 providerID 清单日志（**token 绝不进日志**）；onCommands 回调处理——先 cleanup 上次注入目录（旧凭据明文不留存）→ writeAuthJson → `process.env.XDG_DATA_HOME = dataDir`（serve spawn env={...process.env} 自动继承，无需改 spawnServe 签名）→ restartCoordinator.requestRestart（活跃会话挂起）；**shutdown 时 cleanupAuthJson(injectedAuthDir) 兜底清理**（worker 退出明文 key 不留存，幂等）。
+- **验证**：worker build 通过 + jest **17 suites / 206 tests 全绿**（基线 189 + 新增 17：injector.spec 12、contract.spec 3、index.spec 2）；server build 通过 + jest **43 suites / 632 tests 全绿**（基线 595 + 新增 37，含并行会话 C3/heartbeat 回放 + 心跳恢复回放 2 例：offline 恢复回放 / 一直 online 不重复回放）。
+- **⚠️ 并行会话协作**：models.service.ts / workers.service.ts / agents.service.ts 被并行会话（C3）扩展（CRUD + available-models 接入 + heartbeat 回放），我基于其最新状态叠加 C5，未冲突。第一轮 server jest 出现 agents.service.spec TS2304（并行会话编辑中），等其完成后再跑即 630 全绿——**并行会话编辑窗口期测试失败属瞬时态**。
+- **F3 端到端待验证**：注册 token → 指定 worker 定向（targetWorkerIds）→ worker 心跳取命令 → 写 auth.json（600）→ restart → opencode serve 调模型成功；全量广播 + 新 worker 注册回放两条路径单测已覆盖。
 
 ## C1: 模型目录数据层（2026-08-08，实现完成）
 
@@ -91,3 +147,27 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **全量走查 18 页**：全部无 console 错误。⚠️ group-chat 首轮报 4 条 `ERR_NETWORK_CHANGED`（网络波动，非代码错误），单独重测 3 次全过。走查脚本注意：`page.remove_listener` 对 lambda 包装器会 KeyError，**每页用独立 context 即可**（context.close 自动清理监听）。
 - **第 5 处计数同步**：除计划内 4 处（06 清单表 / 18 审计报告 / 05 §3.1 / docs/README.md）外，`18-推进计划（分阶段实施）.md:40` 计划基线表也有「17 个原型页面」清单，已同步为 18 并补 models-manage（列在 agent-config 之后、role-permission 之前）。
 - **文档渲染验证**：dev server 热更新后 playwright 断言——06 篇清单表含 models-manage 行 + 「18 个原型」；05 篇 §3.1 交付表「18 个原型页面」+ 模型目录管理；原型 tab 显示「18 个原型」+ 模型目录管理。05 篇文档 id 是 `nonfunc-acceptance`（非 `non-functional`），走查 URL 需用正确 id。
+
+## C3: ModelsModule 目录服务（CRUD + worker 上报合并 + available-models 三路径，2026-08-09）
+
+- **并行会话对齐**：工作区存在活跃并行会话（boulder model-management-b9263bc4）同时推进 C3/C5，已写好 DTO（create/update/query-models）+ models.service CRUD + controller CRUD + WorkersModule import ModelsModule。本会话复用其实现，统一两处与任务规格差异：① 错误码 MODEL_ID_CONFLICT → **MODEL_EXISTS**（任务要求 409 MODEL_EXISTS，前端无引用可自由对齐）；② 方法名 mergeWorkerModels → **syncFromWorkerCapabilities(workerId, models[])**（任务验收点名该名；service 定义 + register 调用 + spec 三处同步改名）。
+- **ModelsService CRUD**（参照 mcp-servers 骨架）：
+  - `findAll`：enabled 过滤 + providerID/modelID/name contains 搜索 + 分页 {items,total,page,pageSize}（$transaction count+findMany）
+  - `create`：providerID+modelID 撞 @@unique → 先查后抛 409 MODEL_EXISTS（assertProviderModelAvailable，对齐 mcp-servers assertNameAvailable）；enabled 缺省 true；capabilities Json? 透传
+  - `update`：部分更新 {name?, capabilities?, enabled?, providerID?, modelID?}；改唯一键时按合并后最终值校验并**排除自身**
+  - `remove`：物理删除 + **先清 worker_model_availabilities 再删 model**（FK onDelete Restrict，非级联，需服务层显式编排）
+  - `onModuleInit`：md_ + mc_ 双前缀续号（resyncIdPrefix 复用）
+- **syncFromWorkerCapabilities（C3 核心集成点）**：worker 注册后 capabilities.models（string[]，providerID/modelID 格式）→ 逐条 splitModelId 拆解（含 `/` 按首个 `/` 拆，不含 → providerID=opencode）→ upsert 目录（findUnique 查存在复用，不存在 create name=modelID 默认）→ upsert availability（workerId_modelId 复合键 upsert）。**空数组/缺省 → 返回 0 不触碰目录**（C2 降级语义：未上报保留旧数据）。
+- **WorkersService.register 接线**：upsert worker 后调用 `syncFromWorkerCapabilities(worker.id, dto.capabilities?.models)`，**包 try-catch 失败不阻断注册**（warn 可观测）——放在 C5 replayModelCredentials 之前。模块：WorkersModule import ModelsModule（**单向无环，ModelsService 不反向依赖 WorkersService，普通 import 无需 forwardRef**，与并行会话结论一致）。
+- **getAvailableModels 三路径**（agents.service，Metis P1-2 优先级写死）：① 目录优先 listCatalogModels（enabled=true → [{id: providerID/modelID, name}]，无在线 worker 也可查）；② pull 兜底（目录空 + worker 在线 → WorkerClient.listModels）；③ STATIC fallback（两者皆空 → STATIC_AVAILABLE_MODELS + source:'fallback'）。返回结构保持纯数组 [{id,name}]（前端 agents/page.tsx 双形态兼容）。AgentsModule 新增 import ModelsModule。
+- **测试**：43 suites / **630 tests** 全绿（基线 595 + 新增 35）——models.service.spec（CRUD 12 + sync 2 + listCatalog 1 + onModuleInit 改造）、models.controller.spec（CRUD 端点 5）、workers.service.spec（**集成验收**：register 上报 models → sync 透传 workerId+models 断言 + 未上报 undefined 透传 + sync 抛错不阻断注册 3 个）、agents.service.spec（三路径 5：目录优先/pull 兜底/无 worker 降级/listModels 异常/空列表）。`nest build`（tsc）通过。
+- **⚠️ 提交注意**：工作区未提交改动混杂并行会话的 C5（workers.service MODEL_CREDENTIALS 命令 + replayModelCredentials + setCredential targetWorkerIds 参数）与 skills/tools 重构，本会话未执行 git commit——C3 提交 `feat(models): ModelsModule 目录服务与 available-models 接入` 需在并行会话协调后统一执行（避免把 C5 改动误带入 C3 commit）。
+
+## C3 finalize：模块依赖修正与测试基线校正（2026-08-08）
+
+- **⚠️ 模块依赖修正**：上一条 C3 记录写「ModelsModule 不反向依赖 WorkersService，单向 import 无需 forwardRef」——**与最终代码不符**。C5 落地后 ModelsModule 为「凭据保存后触发下发」在构造函数注入 `WorkersService`（dispatchAfterSave），ModelsService 亦被 WorkersService 依赖（注册回放 + 模型合并），**形成双向模块循环**：`models.module.ts: forwardRef(() => WorkersModule)` + `workers.module.ts: forwardRef(() => ModelsModule)`，**两边都必须 forwardRef**，任一缺失启动即报 Nest can't resolve dependencies。
+- **C3 接线点（register）**：upsert worker 后 `try { await this.modelsService.syncFromWorkerCapabilities(worker.id, dto.capabilities?.models) } catch { warn 不阻断 }`，位于 C5 replayModelCredentials 之前。
+- **available-models 三路径**（agents.service getAvailableModels）：目录优先 `modelsService.listCatalogModels()`（enabled=true，返回 `[{id: providerID/modelID, name}]`）→ 目录空且 worker 在线 pull 兜底 → 两者皆空 STATIC fallback；前端纯数组契约保持。
+- **jest 类型严格差异**：`npx tsc --noEmit` 通过但 jest（ts-jest 更严格）报 TS2367——heartbeat 中 `status !== WORKER_STATUS.OFFLINE` 因 status 类型为 `"online"|"degraded"`（与 offline 无重叠）。修复：简化条件为 `if (worker.status === WORKER_STATUS.OFFLINE)`（新状态恒非 offline，语义等价）。
+- **最终基线**：43 suites / **632 tests** 全绿（基线 595 + C3 新增 37）——models.service.spec idGen mock 改为按前缀生成（`nextId(prefix) => prefix_<seq>`），修正 sync 合并新建行 id 断言；workers.service.spec 补 ModelsService import；agents.service.spec 补 ModelsService mock + provider。`npm run build` 通过。
+- **DTO 校验**：`create-model.dto.ts` 导出 `MODEL_SLUG_PATTERN = /^[a-z0-9][a-z0-9-_.]*$/`（providerID/modelID slug，update 复用 import），query-models.dto enabled 布尔 transform 对齐 mcp-servers。全局 whitelist（main.ts）已启用，无需改。

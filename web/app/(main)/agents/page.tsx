@@ -26,12 +26,13 @@
  * - 导航（NavTopBar/NavDock/CmdKPanel）由 AppShell 提供，本页仅渲染内容区。
  * - 铁律（T15）：无 fixed / 100vh / 100vw；新建弹窗 absolute 相对页面 root（flex:1 铺满）。
  */
-import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { AgentAvatar } from "@/src/components/ui";
+import { type AvailableModel } from "@/src/types/models";
 import {
   type RoleKey,
   neutral,
@@ -57,6 +58,8 @@ interface AgentItem {
   prompt: string;
   baseAgentId: string | null;
   defaultModelId: string | null;
+  /** 首选 worker id（软绑定，可空 null=自动调度，C1/C6） */
+  workerId: string | null;
   permissionScope: Record<string, unknown> | null;
   /** 技能 id 数组（关联 skills 表） */
   skillIds: string[];
@@ -74,16 +77,12 @@ interface AgentsResponse {
   pageSize: number;
 }
 
-/** GET /agents/:id/available-models 条目（FR-47，Phase 3 静态占位）。 */
-interface AvailableModel {
-  id: string;
-  name: string;
-}
-
 /** PATCH /agents/:id 请求体（仅提交可编辑字段，不传则后端保持原值）。 */
 interface UpdateAgentPayload {
   prompt?: string;
   defaultModelId?: string;
+  /** 首选 worker id（软绑定；显式 null=自动调度） */
+  workerId?: string | null;
   /** 勾选技能 id 列表（重建 agent_skills 关联；显式传空数组 = 清空） */
   skillIds?: string[];
   /** 工具 effect 配置（重建 agent_tool_effects 关联） */
@@ -115,6 +114,34 @@ interface PageResponse<T> {
   pageSize: number;
 }
 
+/** GET /models 目录条目（C3 目录行；id=md_xxx，modelRef=providerID/modelID）。 */
+interface CatalogRow {
+  id: string;
+  providerID: string;
+  modelID: string;
+  name: string;
+  enabled: boolean;
+}
+
+/** GET /workers 条目（toWorkerView 子集：首选 worker 选择 + 在线态）。 */
+interface ApiWorkerRow {
+  id: string;
+  name: string | null;
+  status: string;
+}
+
+/** GET /models/:id/credentials（脱敏视图，绝无明文 token）。 */
+interface CredentialView {
+  configured: boolean;
+  fingerprint: string | null;
+}
+
+/** 模型 id（providerID/modelID）→ providerID（首个 '/' 前；无 '/' 原样返回）。 */
+function providerOf(modelRef: string): string {
+  const slash = modelRef.indexOf("/");
+  return slash > 0 ? modelRef.slice(0, slash) : modelRef;
+}
+
 /* ------------------------------ 页面内扩展 token（仿原型 :156-170，不写 tokens.ts） ------------------------------ */
 
 /** 工具 effect 三态（与 opencode PermissionV2 对齐）。 */
@@ -143,6 +170,51 @@ const BUILTIN_TOOL_ACTIONS = new Set([
   "read", "write", "bash", "execute", "edit", "search", "grep", "glob", "list", "view",
 ]);
 
+/** 凭据状态双态（与 models-manage 页内定义完全一致；"扩展 token"范式页面内定义）。 */
+const credentialTheme = {
+  configured: { label: "已配置", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
+  missing: { label: "未配置", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+} as const;
+
+/** 凭据状态徽章：已配置=绿 / 未配置=灰（仿 StatusBadge 视觉）。 */
+function CredentialBadge({ status }: { status: "configured" | "missing" }) {
+  const theme = credentialTheme[status];
+  return (
+    <span
+      data-testid="model-credential-status"
+      data-status={status}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: space.xs,
+        padding: `${space.xs}px ${space.sm + 2}px`,
+        borderRadius: radius.pill,
+        backgroundColor: theme.bg,
+        border: `1px solid ${theme.border}`,
+        color: theme.color,
+        fontSize: fontSize.sm,
+        fontWeight: 500,
+        lineHeight: 1.4,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+        fontFamily: fontFamily.body,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          backgroundColor: theme.color,
+          flexShrink: 0,
+        }}
+      />
+      {theme.label}
+    </span>
+  );
+}
+
 /**
  * 工具来源推断（**兜底路径**）：主路径 = GET /tools 真实 source；
  * 仅当 action 不在启用工具目录（手动添加的通配/残留）时使用：
@@ -156,12 +228,7 @@ function inferToolSource(action: string): ToolSourceKey {
   return "custom";
 }
 
-/** 模型 id → 产品名（与后端 STATIC_AVAILABLE_MODELS 静态占位一致；未知 id 显示原始值）。 */
-const MODEL_NAMES: Record<string, string> = {
-  "gpt-4o": "GPT-4o",
-  "claude-3-5-sonnet": "Claude 3.5 Sonnet",
-  "deepseek-v3": "DeepSeek V3",
-};
+/** 模型 id → 产品名（目录查询 modelNameById 提供；未知/存量 id 显示原始值）。 */
 
 /** Agent 类型 → 徽章文案（模板只读 / 自定义 / 克隆副本）。 */
 const TYPE_LABEL: Record<string, string> = {
@@ -210,10 +277,12 @@ function permissionRows(scope: Record<string, unknown> | null): { label: string;
 interface AgentListItemProps {
   agent: AgentItem;
   active: boolean;
+  /** 模型 id（providerID/modelID）→ 产品名（目录查询）；未知/存量 id 返回 undefined */
+  modelNameOf: (id: string) => string | undefined;
   onClick: () => void;
 }
 
-function AgentListItem({ agent, active, onClick }: AgentListItemProps) {
+function AgentListItem({ agent, active, modelNameOf, onClick }: AgentListItemProps) {
   const isTemplate = agent.type === "template";
   const roleKey = toAvatarRole(agent.role);
 
@@ -319,7 +388,7 @@ function AgentListItem({ agent, active, onClick }: AgentListItemProps) {
               borderRadius: radius.pill,
             }}
           >
-            {agent.defaultModelId ? (MODEL_NAMES[agent.defaultModelId] ?? agent.defaultModelId) : "未设置"}
+            {agent.defaultModelId ? (modelNameOf(agent.defaultModelId) ?? agent.defaultModelId) : "未设置"}
           </span>
         </div>
       </div>
@@ -725,7 +794,7 @@ interface ConfigPanelProps {
   agent: AgentItem;
   /** 是否只读（type=template） */
   readOnly: boolean;
-  /** 可用模型列表（available-models） */
+  /** 可用模型列表（available-models，目录读取） */
   models: AvailableModel[];
   /** 已启用技能库（GET /skills?enabled=true，agent 勾选池） */
   skills: ApiSkill[];
@@ -733,14 +802,19 @@ interface ConfigPanelProps {
   tools: ApiTool[];
   /** 技能库加载中（降级提示文案） */
   skillsPending: boolean;
+  /** 模型目录（GET /models）：名称查询 + 存量校验 + 凭据端点 md id 解析 */
+  catalogByRef: Map<string, CatalogRow>;
+  /** 可用 worker 列表（GET /workers，首选 worker 选择数据源） */
+  workers: ApiWorkerRow[];
   saving: boolean;
   saveError: string | null;
   onSave: (payload: UpdateAgentPayload) => void;
+  /** 保存模型凭据（POST /models/:mdId/credentials，页面级 mutation 统一 invalidate） */
+  onSaveToken: (payload: { modelId: string; token: string }) => void;
   onClone: () => void;
-  /** 当前已保存草稿回调（供页面保存时取最新值；由面板内部管理草稿） */
 }
 
-function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, saving, saveError, onSave, onClone }: ConfigPanelProps) {
+function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, catalogByRef, workers, saving, saveError, onSave, onSaveToken, onClone }: ConfigPanelProps) {
   const isTemplate = readOnly;
   const accent = isTemplate
     ? ROLE_COLORS[toAvatarRole(agent.role)]
@@ -749,6 +823,7 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, sa
   // 草稿：挂载时从 agent 初始化（父级 key=agent.id 保证切换重挂载）
   const [promptDraft, setPromptDraft] = useState(agent.prompt ?? "");
   const [modelDraft, setModelDraft] = useState<string | null>(agent.defaultModelId ?? null);
+  const [workerDraft, setWorkerDraft] = useState<string>(agent.workerId ?? "");
   const [skillDrafts, setSkillDrafts] = useState<string[]>(agent.skillIds);
   const [toolDrafts, setToolDrafts] = useState<ToolEffectRow[]>(
     agent.toolEffects.map((t) => ({
@@ -756,6 +831,20 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, sa
       effect: (toolEffectMeta[t.effect as ToolEffectKey] ? t.effect : "allow") as ToolEffectKey,
     }))
   );
+
+  // token 输入（POST /models/:mdId/credentials，type=password）
+  const [tokenInput, setTokenInput] = useState("");
+
+  // 凭据状态经目录行解析：modelDraft=providerID/modelID → catalogByRef 取 md id → GET 凭据端点；
+  // 存量 defaultModelId 不在目录（catalog 无行）→ 无端点可查，视同未配置
+  const selectedCatalog = modelDraft ? catalogByRef.get(modelDraft) : undefined;
+  const tokenQuery = useQuery({
+    queryKey: ["model-credential", selectedCatalog?.id],
+    queryFn: () => api.get<CredentialView>(`/models/${selectedCatalog!.id}/credentials`),
+    enabled: !!selectedCatalog,
+  });
+  const tokenConfigured = tokenQuery.data?.configured ?? false;
+  const tokenFingerprint = tokenQuery.data?.fingerprint ?? null;
 
   // 工具目录加载完成后补入草稿（默认 allow）：目录 = agent 配置页工具行数据源，
   // 空 agent 也应展示全部启用工具；已存在/用户已删除的 action 不覆盖。
@@ -786,6 +875,8 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, sa
       : {
           prompt: promptDraft.trim(),
           defaultModelId: modelDraft ?? undefined,
+          // 软绑定首选 worker：显式提交（空=自动调度，null 清除绑定），仅 custom/clone 可配
+          workerId: workerDraft || null,
           skillIds: skillDrafts,
           toolEffects: toolDrafts.map((t) => ({ toolAction: t.toolAction, effect: t.effect })),
         };
@@ -793,7 +884,19 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, sa
   };
 
   const currentModel = models.find((m) => m.id === modelDraft);
-  const currentModelName = currentModel?.name ?? (modelDraft ? (MODEL_NAMES[modelDraft] ?? modelDraft) : null);
+  const currentModelName =
+    currentModel?.name ??
+    (modelDraft ? (catalogByRef.get(modelDraft)?.name ?? modelDraft) : null);
+
+  // 存量兼容校验：defaultModelId 非空但不在目录（停用/遗留）→ 警告保留不阻断保存
+  const staleModel = !!modelDraft && !catalogByRef.has(modelDraft);
+
+  // 在线 worker 优先排序（首选 worker 选择器选项顺序）
+  const sortedWorkers = [...workers].sort((a, b) => {
+    if (a.status !== "offline" && b.status === "offline") return -1;
+    if (a.status === "offline" && b.status !== "offline") return 1;
+    return (a.name ?? a.id).localeCompare(b.name ?? b.id);
+  });
 
   return (
     <section
@@ -1063,18 +1166,175 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, sa
               borderRadius: radius.md,
               padding: `${space.xs}px ${space.sm}px`,
               cursor: "pointer",
-              width: 176,
+              width: 240,
               flexShrink: 0,
             }}
           >
             <option value="">未设置</option>
             {models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.name}
+              <option
+                key={model.id}
+                value={model.id}
+                data-testid="model-option-provider"
+                data-model-id={model.id}
+              >
+                {providerOf(model.id)} / {model.name}
               </option>
             ))}
           </select>
         </div>
+
+        {/* 模型凭据：已配置=绿徽章+fingerprint / 未配置=token 输入（P0.2 原型双态） */}
+        <div
+          data-testid="model-token-status"
+          data-credential={tokenConfigured ? "configured" : "missing"}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.md,
+            padding: space.md,
+            borderRadius: radius.md,
+            backgroundColor: neutral[50],
+            border: `1px solid ${neutral[200]}`,
+          }}
+        >
+          <CredentialBadge status={tokenConfigured ? "configured" : "missing"} />
+          {tokenConfigured ? (
+            <span
+              style={{
+                fontFamily: fontFamily.mono,
+                fontSize: fontSize.sm,
+                color: neutral[600],
+                letterSpacing: "0.02em",
+              }}
+            >
+              {tokenFingerprint}
+            </span>
+          ) : (
+            <>
+              <input
+                data-testid="model-token-input"
+                type="password"
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value)}
+                placeholder={
+                  selectedCatalog
+                    ? `输入 ${selectedCatalog.providerID} 的 API token（sk-…）`
+                    : "输入 API token（sk-…）"
+                }
+                aria-label="模型 API Token"
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  maxWidth: 320,
+                  padding: `${space.xs}px ${space.sm}px`,
+                  borderRadius: radius.md,
+                  border: `1px solid ${neutral[300]}`,
+                  backgroundColor: "#FFFFFF",
+                  fontSize: fontSize.sm,
+                  color: neutral[800],
+                  fontFamily: fontFamily.mono,
+                  outline: "none",
+                }}
+              />
+              <button
+                type="button"
+                disabled={!selectedCatalog || !tokenInput.trim()}
+                onClick={() =>
+                  selectedCatalog &&
+                  onSaveToken({ modelId: selectedCatalog.id, token: tokenInput.trim() })
+                }
+                style={{
+                  padding: `${space.xs + 1}px ${space.md}px`,
+                  borderRadius: radius.pill,
+                  border: "none",
+                  backgroundColor: "#2563EB",
+                  color: "#FFFFFF",
+                  fontSize: fontSize.xs,
+                  fontWeight: 500,
+                  cursor: !selectedCatalog || !tokenInput.trim() ? "default" : "pointer",
+                  opacity: !selectedCatalog || !tokenInput.trim() ? 0.6 : 1,
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                保存
+              </button>
+            </>
+          )}
+          <span style={{ marginLeft: "auto", fontSize: fontSize.xs, color: neutral[400] }}>
+            {tokenConfigured
+              ? "凭据已配置 · 按 provider 粒度生效（C4）"
+              : "保存后即时下发到 worker（C5）"}
+          </span>
+        </div>
+
+        {/* 首选 Worker：软绑定（C1 字段，可空 null=自动调度，离线自动回退） */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.md,
+            padding: space.md,
+            borderRadius: radius.md,
+            backgroundColor: neutral[50],
+            border: `1px solid ${neutral[200]}`,
+          }}
+        >
+          <span style={{ fontSize: fontSize.sm, color: neutral[600], flexShrink: 0 }}>
+            首选 Worker
+          </span>
+          <select
+            data-testid="agent-worker-select"
+            value={workerDraft}
+            disabled={readOnly}
+            onChange={(e) => setWorkerDraft(e.target.value)}
+            aria-label="首选 Worker（未选则自动调度）"
+            style={{
+              fontFamily: fontFamily.body,
+              fontSize: fontSize.sm,
+              color: neutral[800],
+              backgroundColor: "#FFFFFF",
+              border: `1px solid ${neutral[300]}`,
+              borderRadius: radius.md,
+              padding: `${space.xs}px ${space.sm}px`,
+              cursor: "pointer",
+              minWidth: 220,
+            }}
+          >
+            <option value="">自动调度（默认）</option>
+            {sortedWorkers.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name ?? w.id} · {w.status !== "offline" ? "在线" : "离线"}
+              </option>
+            ))}
+          </select>
+          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+            未选则自动调度到任意可用 worker（软绑定）
+          </span>
+        </div>
+
+        {/* 存量兼容警告：defaultModelId 不在目录（停用/遗留）→ 保留展示不阻断保存 */}
+        {staleModel && (
+          <div
+            data-testid="model-stale-warning"
+            role="alert"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: space.xs,
+              fontSize: fontSize.xs,
+              color: "#D97706",
+              backgroundColor: "#FFFBEB",
+              border: `1px solid #FDE68A`,
+              borderRadius: radius.md,
+              padding: `${space.sm}px ${space.md}px`,
+            }}
+          >
+            <span aria-hidden style={{ fontWeight: 700 }}>!</span>
+            当前默认模型不在模型目录中（可能已停用/遗留），保存后仍会保留该值，但新会话解析可能降级
+          </div>
+        )}
+
         <div
           data-testid="model-source-hint"
           style={{
@@ -1088,7 +1348,7 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, sa
           <span aria-hidden style={{ fontSize: fontSize.xs }}>
             ↗
           </span>
-          模型列表来自 opencode 接口动态获取
+          模型列表来自平台模型目录（worker 上报合并入库，C3）
         </div>
       </div>
 
@@ -1573,6 +1833,44 @@ export default function AgentConfigPage() {
     ? modelsQuery.data
     : (modelsQuery.data?.models ?? []);
 
+  // 模型目录：GET /models（名称查询 + 存量兼容校验 + 凭据端点 md id 解析；C3 目录）
+  const catalogQuery = useQuery({
+    queryKey: ["model-catalog"],
+    queryFn: () =>
+      api.get<PageResponse<CatalogRow>>("/models", { query: { page: 1, pageSize: 100 } }),
+    enabled: !!userId,
+  });
+  const catalogByRef = useMemo(() => {
+    const map = new Map<string, CatalogRow>();
+    for (const r of catalogQuery.data?.items ?? []) {
+      map.set(`${r.providerID}/${r.modelID}`, r);
+      // 存量 defaultModelId 可能是不含 '/' 的旧自由字符串 → 裸 modelID 也纳入兼容校验
+      map.set(r.modelID, r);
+    }
+    return map;
+  }, [catalogQuery.data]);
+  const modelNameOf = useCallback(
+    (id: string) => catalogByRef.get(id)?.name,
+    [catalogByRef]
+  );
+
+  // worker 列表：GET /workers（首选 worker 选择数据源，在线优先展示）
+  const workersQuery = useQuery({
+    queryKey: ["workers"],
+    queryFn: () => api.get<ApiWorkerRow[]>("/workers"),
+    enabled: !!userId,
+  });
+  const workers = workersQuery.data ?? [];
+
+  // 模型凭据保存：POST /models/:mdId/credentials（按 provider 粒度加密落库 C4 + 下发 C5）
+  const saveTokenMutation = useMutation({
+    mutationFn: ({ modelId, token }: { modelId: string; token: string }) =>
+      api.post(`/models/${modelId}/credentials`, { token }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["model-credential"] });
+    },
+  });
+
   // 技能库：GET /skills?enabled=true（仅启用技能可供 Agent 勾选，admin/成员语义一致）
   const skillsQuery = useQuery({
     queryKey: ["skills"],
@@ -1716,6 +2014,7 @@ export default function AgentConfigPage() {
               key={agent.id}
               agent={agent}
               active={agent.id === selectedId}
+              modelNameOf={modelNameOf}
               onClick={() => setSelectedId(agent.id)}
             />
           ))
@@ -1751,9 +2050,12 @@ export default function AgentConfigPage() {
           skills={skills}
           tools={tools}
           skillsPending={skillsQuery.isPending}
+          catalogByRef={catalogByRef}
+          workers={workers}
           saving={saveMutation.isPending}
           saveError={saveError}
           onSave={(payload) => saveMutation.mutate({ id: selectedAgent.id, payload })}
+          onSaveToken={(payload) => saveTokenMutation.mutate(payload)}
           onClone={() => cloneMutation.mutate(selectedAgent.id)}
         />
       ) : (
