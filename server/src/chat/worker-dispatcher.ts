@@ -18,6 +18,7 @@ import {
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { WORKER_STATUS } from '../workers/workers.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import { WorkerClient, WorkerEndpointRef, WorkerUnavailableException } from '../workers/worker.client';
 import { AgentStatusPayload, TaskCompletedPayload, WorkerEventIngress } from '../workers/worker-event.ingress';
@@ -404,13 +405,38 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       );
     }
 
-    // 2. Worker 行（capabilities 供 WorkerClient 解析 baseUrl/port）
-    const workerRow = await this.prisma.worker.findUnique({
+    // 2. Worker 行（capabilities 供 WorkerClient 解析 baseUrl/port；顺带校验复用 worker 在线性）。
+    // 修复验收 e2e 缺陷：复用已绑定 worker 不校验在线 → offline worker 被复用 → fetch failed 首字超时。
+    // offline（心跳超时标记）或行缺失 → 解绑 + 重新分配；未绑定分支 assignWorker 已过滤 offline，
+    // 此检查只命中"复用已绑定"场景（复用语义保留：在线 worker 直接复用，见单测回归用例）。
+    let workerRow = await this.prisma.worker.findUnique({
       where: { id: workerId },
-      select: { id: true, capabilities: true },
+      select: { id: true, status: true, capabilities: true },
     });
-    if (!workerRow) {
-      throw new Error(`worker ${workerId} 不存在`);
+    if (!workerRow || workerRow.status === WORKER_STATUS.OFFLINE) {
+      const staleWorkerId = workerId;
+      this.logger.warn(
+        `agent ${target.agentId} 绑定的 worker ${staleWorkerId} 不可用` +
+          `${workerRow ? '（offline）' : '（不存在）'}，解绑并重新分配 worker`,
+      );
+      await this.sessionLifecycle.unbindSession(target.sessionId);
+      workerId = await this.workersService.assignWorker();
+      if (!workerId) {
+        throw new Error('无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）');
+      }
+      workerRow = await this.prisma.worker.findUnique({
+        where: { id: workerId },
+        select: { id: true, status: true, capabilities: true },
+      });
+      if (!workerRow) {
+        throw new Error(`worker ${workerId} 不存在`);
+      }
+      opencodeSessionId = null;
+      await this.sessionLifecycle.bindSessionToWorker(
+        target.sessionId,
+        workerId,
+        PENDING_INSTANCE_REF,
+      );
     }
     const worker: WorkerEndpointRef = {
       id: workerId,

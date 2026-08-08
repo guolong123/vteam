@@ -13,6 +13,7 @@ import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { McpServersService } from '../mcp-servers/mcp-servers.service';
+import { McpStatusEntryDto } from '../mcp-servers/dto/mcp-status.dto';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
 import {
@@ -82,6 +83,12 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
   private healthTimer?: HealthTimer;
   /** T4a：待下发命令队列（workerId → commands），心跳取出即清空。 */
   private readonly pendingCommands = new Map<string, WorkerCommand[]>();
+  /**
+   * T9：worker 最近一次心跳上报的 MCP 三态（workerId → entries）。
+   * 按 worker 维度保存（区别于 mcp-servers 全局合并展示的 statusByServer），
+   * 供 worker 详情接口返回；worker 标记 offline 时同步清理（纯内存态，同 T8c）。
+   */
+  private readonly workerMcpStatus = new Map<string, McpStatusEntryDto[]>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -173,8 +180,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         ? WORKER_STATUS.DEGRADED
         : WORKER_STATUS.ONLINE;
     // T8c：MCP 三态快照 → 内存状态存储（前端 GET /mcp-servers 合并展示）
+    // T9：另按 workerId 关联保存，worker 详情接口返回（前端 worker 详情页展示）
     if (dto.mcpStatus && dto.mcpStatus.length > 0) {
       this.mcpServers.applyHeartbeatStatus(dto.mcpStatus);
+      this.workerMcpStatus.set(id, dto.mcpStatus);
     }
     const lastHeartbeatAt = new Date();
     await this.prisma.worker.update({
@@ -230,16 +239,29 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    * HealthChecker 核心：仅更新过期的行（`status != offline AND (lastHeartbeatAt IS NULL
    * OR lastHeartbeatAt < now-30s)`），不批量全扫。返回被标记 offline 的 worker 数。
    * 10s 周期 × 3 = 30s（09 篇 §5.3）。
+   * T9：先查过期 worker 列表，标记 offline 后同步清理其 workerMcpStatus 内存态
+   * （离线 worker 的详情页 MCP 状态不保留陈旧数据）。
    */
   async markStaleWorkersOffline(): Promise<number> {
     const cutoff = new Date(Date.now() - WORKER_OFFLINE_TIMEOUT_MS);
+    const where: Prisma.WorkerWhereInput = {
+      status: { not: WORKER_STATUS.OFFLINE },
+      OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: cutoff } }],
+    };
+    const stale = await this.prisma.worker.findMany({
+      where,
+      select: { id: true },
+    });
+    if (stale.length === 0) {
+      return 0;
+    }
     const result = await this.prisma.worker.updateMany({
-      where: {
-        status: { not: WORKER_STATUS.OFFLINE },
-        OR: [{ lastHeartbeatAt: null }, { lastHeartbeatAt: { lt: cutoff } }],
-      },
+      where,
       data: { status: WORKER_STATUS.OFFLINE },
     });
+    for (const worker of stale) {
+      this.workerMcpStatus.delete(worker.id);
+    }
     if (result.count > 0) {
       this.logger.log(
         `健康检查：${result.count} 个 worker 心跳超时标记 offline`,
@@ -340,7 +362,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     return (caps.maxInstances ?? 0) - (load.instances ?? 0);
   }
 
-  /** Worker 行 → 对外视图（剔除 tokenHash）。 */
+  /** Worker 行 → 对外视图（剔除 tokenHash；T9：合并该 worker 最近上报的 mcpStatus）。 */
   private toWorkerView(worker: {
     id: string;
     name: string | null;
@@ -360,6 +382,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       status: worker.status,
       lastHeartbeatAt: worker.lastHeartbeatAt,
       registeredAt: worker.registeredAt,
+      mcpStatus: this.workerMcpStatus.get(worker.id) ?? [],
     };
   }
 }

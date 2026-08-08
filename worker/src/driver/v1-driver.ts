@@ -146,6 +146,10 @@ export class V1Driver {
    * POST /session：创建 opencode 会话。
    * serve 实测返回 `{ id: "ses_..." }`（SDK 声明 {sessionID} 是错的根源），
    * 此处返回 sessionID 字符串供 T12 存 instanceRef 直接用。
+   * ⚠️ serve 契约（实测 opencode 1.18.15）：POST /session **拒收 model 字段**
+   * （带 model → 400，空 body → 200）——模型选择在 sendMessage（prompt_async）的
+   * input.model 时指定（该端点接受 model）。此处签名保留 `model?` 参数仅为兼容
+   * 调用方（server 侧 WorkerClient.createSession 同构），body 恒为 {}。
    * 接线点（F2 M4）：T10 会话执行接入后此处成功后调 trackInstanceStart()；
    * abort/完成（task.completed）处调 trackInstanceEnd()，驱动心跳 load 计数。
    */
@@ -153,7 +157,8 @@ export class V1Driver {
     const res = await this.request('/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(model ? { model: { ...model } } : {}),
+      // serve 1.18.15 拒收 model → 空 body（模型经 sendMessage 的 input.model 指定）
+      body: JSON.stringify({}),
     });
     const body = (await res.json()) as { id?: string; sessionID?: string };
     const sessionID = body.id ?? body.sessionID;

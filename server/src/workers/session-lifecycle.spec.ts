@@ -76,6 +76,36 @@ describe('SessionLifecycleService', () => {
     service = module.get<SessionLifecycleService>(SessionLifecycleService);
   });
 
+  describe('onModuleInit（ti 续号，重启防主键冲突）', () => {
+    it('重启对齐 TaskGroupInstance 最大序号 → seed(ti, seq)', async () => {
+      prisma.taskGroupInstance.findFirst.mockResolvedValue({ id: 'ti_0000000004' });
+
+      await service.onModuleInit();
+
+      expect(prisma.taskGroupInstance.findFirst).toHaveBeenCalledWith({
+        orderBy: { id: 'desc' },
+        select: { id: true },
+      });
+      expect(idGen.seed).toHaveBeenCalledWith('ti', 4);
+    });
+
+    it('库空（无 ti 行）→ 不 seed', async () => {
+      prisma.taskGroupInstance.findFirst.mockResolvedValue(null);
+
+      await service.onModuleInit();
+
+      expect(idGen.seed).not.toHaveBeenCalled();
+    });
+
+    it('id 非法（非 ti_<数字> 形状）→ 不 seed', async () => {
+      prisma.taskGroupInstance.findFirst.mockResolvedValue({ id: 'ti_builtin_x' });
+
+      await service.onModuleInit();
+
+      expect(idGen.seed).not.toHaveBeenCalled();
+    });
+  });
+
   describe('bindSessionToWorker', () => {
     it('首次 bind：Session 行写 workerId + instanceRef + status=active，TaskGroupInstance 落库（taskId 取 session）', async () => {
       const tx = mockBindTx({

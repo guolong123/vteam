@@ -17,15 +17,18 @@
  * - 注册指引（MUST DO）：折叠面板展示 X_WORKER_TOKEN 配置 + start.sh 部署步骤（内容取自
  *   worker/.env.example 与 worker/scripts/start.sh）；「新增 Worker」按钮（原型 add-worker-button）
  *   展开/收起面板——后端无新增端点，注册由 worker 进程 outbound 完成（"注册即入池"架构）。
- * - 操作按钮（查看详情/重启/下线）：保持原型占位（无 onClick）——后端无对应端点，
- *   T10 LifecycleManager 接入 WorkerClient 后实现（对齐 users 页"编辑按钮占位"模式）。
+ * - 操作按钮（查看详情/重启/下线）：查看详情已接线 → /workers/:id（T10 详情页）；
+ *   重启/下线保持 disabled + title 提示——后端无对应端点（T10 LifecycleManager 接入
+ *   WorkerClient 后放开），不实现假功能。
  * - data-testid 与原型一致：worker-list-root/worker-stats/add-worker-button/worker-card/
  *   worker-status/worker-version/worker-capability/worker-load/worker-heartbeat/
  *   worker-actions/worker-detail-button/worker-restart-button/worker-offline-button/
  *   worker-pool-hint；注册指引为页面扩展：worker-guide。
+ * - 状态主题/数据模型/状态徽章等共享定义见 ./shared.tsx（与详情页共用，防漂移）。
  */
 import { useEffect, useState, type CSSProperties } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -39,130 +42,26 @@ import {
   fontFamily,
   shadow,
 } from "@/src/theme/tokens";
+import {
+  WORKER_STATUS_LABEL,
+  workerStatusTheme,
+  loadColor,
+  pulseCss,
+  formatRelativeTime,
+  WorkerStatusBadge,
+  type WorkerItem,
+} from "./shared";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /** 轮询周期（ms）：与 worker 心跳周期（10s）同频，server 30s 判离线前可捕捉状态翻转。 */
 const POLL_INTERVAL_MS = 10_000;
 
-/* ------------------------------ Worker 状态主题（原型 :40-44 逐 token，未入 tokens.ts） ------------------------------
- * 后端三态（online/offline/degraded）映射原型三态（在线/离线/维护中），色值同族于
- * statusColors：绿=在线 / 琥珀=维护中（degraded）/ 红=离线。语义独立于任务四态，
- * 遵循"扩展 token"范式在页面内定义具名常量并注释原因，不扩散共享层。
- */
-const WORKER_STATUS_LABEL = {
-  online: "在线",
-  offline: "离线",
-  degraded: "维护中",
-} as const;
-
-type WorkerStatusKey = keyof typeof WORKER_STATUS_LABEL;
-type WorkerStatusLabel = (typeof WORKER_STATUS_LABEL)[WorkerStatusKey];
-
-const workerStatusTheme: Record<
-  WorkerStatusLabel,
-  { color: string; bg: string; border: string }
-> = {
-  在线: { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  维护中: { color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  离线: { color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
-};
-
-/** 负载档位色（原型 :47-51）：高（红）/ 中（琥珀）/ 低（绿） */
-function loadColor(pct: number): string {
-  if (pct >= 75) return "#DC2626";
-  if (pct >= 50) return "#D97706";
-  return "#10B981";
-}
-
-/** 呼吸动画（scoped：workerpulse 前缀避免污染其他页面） */
-const pulseCss = `
-@keyframes workerpulse-blink {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 currentColor; }
-  50% { opacity: .55; }
-}
-@keyframes workerpulse-ring {
-  0% { box-shadow: 0 0 0 0 rgba(16,185,129,.45); }
-  70% { box-shadow: 0 0 0 6px rgba(16,185,129,0); }
-  100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
-}
-`;
-
-/* ------------------------------ API 数据模型（T7 toWorkerView：不含 tokenHash） ------------------------------ */
-
-/** GET /workers 条目（对齐 schema Worker 对外视图）。 */
-interface WorkerItem {
-  id: string;
-  name: string | null;
-  opencodeVersion: string;
-  capabilities: { maxInstances: number; skills?: string[]; tools?: string[] };
-  load: { instances: number } | null;
-  status: WorkerStatusKey;
-  lastHeartbeatAt: string | null;
-  registeredAt: string;
-}
-
-/* ------------------------------ 相对时间（原型 heartbeat 字段"3 秒前"格式） ------------------------------ */
-
-/** ISO 时间 → 相对时间文案；null（从未上报）返回占位。 */
-function formatRelativeTime(iso: string | null, now: number): string {
-  if (!iso) return "从未上报";
-  const diff = Math.max(0, now - new Date(iso).getTime());
-  const s = Math.floor(diff / 1000);
-  if (s < 60) return `${s} 秒前`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m} 分钟前`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时前`;
-  return `${Math.floor(h / 24)} 天前`;
-}
-
 /* ------------------------------ 子组件 ------------------------------ */
-
-/** 状态徽章（worker 三态：在线 / 离线 / 维护中；在线带脉冲动画，原型 :167-204） */
-function WorkerStatusBadge({ status }: { status: WorkerStatusKey }) {
-  const label = WORKER_STATUS_LABEL[status];
-  const theme = workerStatusTheme[label];
-  return (
-    <span
-      data-testid="worker-status"
-      data-status={label}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: space.xs,
-        padding: `${space.xs - 1}px ${space.sm + 2}px`,
-        borderRadius: radius.pill,
-        backgroundColor: theme.bg,
-        border: `1px solid ${theme.border}`,
-        color: theme.color,
-        fontSize: fontSize.sm,
-        fontWeight: 500,
-        lineHeight: 1.4,
-        whiteSpace: "nowrap",
-        ...baseFont,
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: "50%",
-          backgroundColor: theme.color,
-          flexShrink: 0,
-          color: theme.color,
-          animation:
-            status === "online" ? "workerpulse-ring 1.6s ease-out infinite" : undefined,
-        }}
-      />
-      {label}
-    </span>
-  );
-}
 
 /** Worker 卡片：对齐 07 篇 11.2 注册字段 + 11.4 生命周期操作（原型 :207-456） */
 function WorkerCard({ worker, now }: { worker: WorkerItem; now: number }) {
+  const router = useRouter();
   const label = WORKER_STATUS_LABEL[worker.status];
   const theme = workerStatusTheme[label];
   const isOnline = worker.status === "online";
@@ -362,7 +261,7 @@ function WorkerCard({ worker, now }: { worker: WorkerItem; now: number }) {
         <span style={{ marginLeft: "auto", color: neutral[300] }}>♥ {isOnline ? "活跃" : "失联"}</span>
       </div>
 
-      {/* 操作：查看详情 / 重启 / 下线（原型占位；T10 LifecycleManager 接入 WorkerClient 后实现） */}
+      {/* 操作：查看详情（已接线 → /workers/:id）/ 重启 / 下线（后端无端点 → disabled + 提示） */}
       <div
         data-testid="worker-actions"
         style={{
@@ -377,6 +276,7 @@ function WorkerCard({ worker, now }: { worker: WorkerItem; now: number }) {
           type="button"
           data-testid="worker-detail-button"
           data-worker-id={worker.id}
+          onClick={() => router.push(`/workers/${worker.id}`)}
           style={{
             flex: 1,
             padding: `${space.sm - 1}px ${space.md}px`,
@@ -394,16 +294,17 @@ function WorkerCard({ worker, now }: { worker: WorkerItem; now: number }) {
         <button
           type="button"
           data-testid="worker-restart-button"
-          disabled={!isOnline}
+          disabled
+          title="后端未提供该操作（T10 LifecycleManager 接入后开放）"
           style={{
             flex: 1,
             padding: `${space.sm - 1}px ${space.md}px`,
             borderRadius: radius.md,
-            border: `1px solid ${isOnline ? neutral[300] : neutral[100]}`,
-            backgroundColor: isOnline ? neutral[50] : neutral[100],
-            color: isOnline ? neutral[700] : neutral[400],
+            border: `1px solid ${neutral[100]}`,
+            backgroundColor: neutral[100],
+            color: neutral[400],
             fontSize: fontSize.md,
-            cursor: isOnline ? "pointer" : "not-allowed",
+            cursor: "not-allowed",
             fontFamily: fontFamily.body,
           }}
         >
@@ -412,16 +313,17 @@ function WorkerCard({ worker, now }: { worker: WorkerItem; now: number }) {
         <button
           type="button"
           data-testid="worker-offline-button"
-          disabled={!isOnline}
+          disabled
+          title="后端未提供该操作（T10 LifecycleManager 接入后开放）"
           style={{
             flex: 1,
             padding: `${space.sm - 1}px ${space.md}px`,
             borderRadius: radius.md,
             border: "1px solid transparent",
-            backgroundColor: isOnline ? workerStatusTheme["离线"].bg : neutral[100],
-            color: isOnline ? workerStatusTheme["离线"].color : neutral[400],
+            backgroundColor: neutral[100],
+            color: neutral[400],
             fontSize: fontSize.md,
-            cursor: isOnline ? "pointer" : "not-allowed",
+            cursor: "not-allowed",
             fontFamily: fontFamily.body,
           }}
         >

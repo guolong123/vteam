@@ -48,15 +48,13 @@ describe('V1Driver.createSession', () => {
     expect(JSON.parse(init.body)).toEqual({});
   });
 
-  it('带 model 时 body 含 {model:{providerID,modelID}}（对齐 D7 格式）', async () => {
+  it('带 model 参数 → body 仍为 {}（serve 1.18.15 拒收 model，模型在 prompt_async 指定）', async () => {
     mockFetch.mockResolvedValue(jsonResponse({ id: 'ses_xyz' }));
     const driver = newDriver();
     await driver.createSession({ providerID: 'opencode-go', modelID: 'deepseek-v4-flash' });
 
     const [, init] = mockFetch.mock.calls[0];
-    expect(JSON.parse(init.body)).toEqual({
-      model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
-    });
+    expect(JSON.parse(init.body)).toEqual({});
   });
 
   it('响应同时兼容 {sessionID}（防御性，SDK 旧声明）', async () => {

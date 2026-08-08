@@ -299,6 +299,108 @@ describe('WorkerDispatcher', () => {
       );
     });
 
+    it('回归：绑定在线 worker（status=online）→ 直接复用，不重新分配/不解绑', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: 'w_0000000001',
+        instanceRef: 'ses_0001',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: 'online',
+        capabilities: {},
+      });
+      prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
+      prisma.artifact.findMany.mockResolvedValue([]);
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      expect(workersService.assignWorker).not.toHaveBeenCalled();
+      expect(sessionLifecycle.unbindSession).not.toHaveBeenCalled();
+      expect(sessionLifecycle.bindSessionToWorker).not.toHaveBeenCalled();
+      expect(workerClient.createSession).not.toHaveBeenCalled();
+      expect(workerClient.promptAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_0000000001' }),
+        'ses_0001',
+        expect.anything(),
+      );
+    });
+
+    it('修复：绑定 offline worker → 解绑 + 重新分配在线 worker（不复用离线节点）', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: 'w_offline',
+        instanceRef: 'ses_stale',
+      });
+      // 第一次查询命中绑定 worker（offline）→ 触发解绑重分配；第二次查询返回新 worker
+      prisma.worker.findUnique
+        .mockResolvedValueOnce({ id: 'w_offline', status: 'offline', capabilities: {} })
+        .mockResolvedValueOnce({ id: 'w_online', status: 'online', capabilities: {} });
+      workersService.assignWorker.mockResolvedValue('w_online');
+      prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
+      prisma.artifact.findMany.mockResolvedValue([]);
+      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_online' });
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      // 解绑被调用（释放离线 worker 绑定，Session 恢复 created）
+      expect(sessionLifecycle.unbindSession).toHaveBeenCalledWith('s_0000000001');
+      // 重新分配在线 worker
+      expect(workersService.assignWorker).toHaveBeenCalledTimes(1);
+      // 重新绑定（pending → 真实 instanceRef）
+      expect(sessionLifecycle.bindSessionToWorker).toHaveBeenNthCalledWith(
+        1,
+        's_0000000001',
+        'w_online',
+        PENDING_INSTANCE_REF,
+      );
+      expect(sessionLifecycle.bindSessionToWorker).toHaveBeenNthCalledWith(
+        2,
+        's_0000000001',
+        'w_online',
+        'ses_online',
+      );
+      // 下发到新 worker 的新会话，不复用离线 worker 的旧会话
+      expect(workerClient.promptAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_online' }),
+        'ses_online',
+        expect.anything(),
+      );
+      expect(workerClient.promptAsync).not.toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_offline' }),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('修复：绑定 worker 行缺失（已删除）→ 解绑 + 重新分配，无可用则报错', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: 'w_deleted',
+        instanceRef: 'ses_gone',
+      });
+      prisma.worker.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'w_online', status: 'online', capabilities: {} });
+      workersService.assignWorker.mockResolvedValue('w_online');
+      prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
+      prisma.artifact.findMany.mockResolvedValue([]);
+      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_online' });
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      expect(sessionLifecycle.unbindSession).toHaveBeenCalledWith('s_0000000001');
+      expect(workersService.assignWorker).toHaveBeenCalledTimes(1);
+      expect(workerClient.promptAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_online' }),
+        'ses_online',
+        expect.anything(),
+      );
+    });
+
     it('sessionId 为 null：emitError 且不触碰 worker 链路', async () => {
       const d = createDispatcher();
       const errors: unknown[] = [];

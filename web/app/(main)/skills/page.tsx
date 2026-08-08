@@ -23,7 +23,8 @@
  *   （TanStack Query，对齐 agents 页模式）；上传技能 → POST /skills multipart
  *   （FormData file=SKILL.md，name/description/version 由后端 frontmatter 解析）、
  *   启停 → skill PATCH /skills/:id/status / tool PATCH /tools/:id {enabled}、
- *   注册工具/MCP → POST /tools 弹窗；**无编辑端点**（09 §3.8 仅 status/启停，
+ *   注册工具 → 跳转 /tools/register 完整注册页（tool-register 原型保真迁移，5 区块表单）、
+ *   注册 MCP → POST /tools 弹窗（MCP server 注册无独立页面）；**无编辑端点**（09 §3.8 仅 status/启停，
  *   编辑功能已移除）；skills/tools 管理为 [admin] 专属 → 非 admin（roleName≠admin）
  *   成员只读：隐藏上传/注册/启停按钮，仅浏览列表。
  *   - 后端字段映射：Skill{name/description/fileMeta/enabled}（source 由 fileMeta 推导：
@@ -43,6 +44,7 @@
  * - 铁律（T15）：无 fixed / 100vh / 100vw；scoped 动画 stmmcp- 前缀防污染。
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -1131,6 +1133,10 @@ export default function SkillToolManagePage() {
    * roleName 取自登录响应 AuthUserView；旧持久化 user 无该字段 → 视为非 admin（只读）。 */
   const isAdmin = useAuthStore((s) => s.user?.roleName === "admin");
 
+  /* 「注册工具」跳转 /tools/register 完整注册页（原型保真迁移，5 区块表单）；
+   * 「注册 MCP」仍走本页弹窗（MCP server 注册无独立页面，与注册页内 MCP 执行形态语义不同） */
+  const router = useRouter();
+
   /* 二 Tab（受控）：技能 / 工具 */
   const [tab, setTab] = useState<TabKey>("skill");
 
@@ -1146,11 +1152,10 @@ export default function SkillToolManagePage() {
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  /* 注册弹窗（tool=自定义工具 source=custom；mcp=MCP 工具 source=mcp） */
-  const [registerKind, setRegisterKind] = useState<"tool" | "mcp" | null>(null);
+  /* 注册 MCP 弹窗（source=mcp）：工具注册已迁移至 /tools/register 独立页面，弹窗仅服务 MCP */
+  const [registerKind, setRegisterKind] = useState<"mcp" | null>(null);
   const [regName, setRegName] = useState("");
   const [regAction, setRegAction] = useState("");
-  const [regExecution, setRegExecution] = useState<"code" | "cli" | "http">("code");
   const [regMcpServer, setRegMcpServer] = useState("");
 
   useEffect(() => {
@@ -1293,18 +1298,16 @@ export default function SkillToolManagePage() {
     e.target.value = "";
   };
 
-  /* 注册工具 / 注册 MCP：打开注册弹窗（重置表单与错误态） */
-  const handleRegister = (kind: "tool" | "mcp") => {
+  /* 注册 MCP：打开注册弹窗（重置表单与错误态） */
+  const handleRegisterMcp = () => {
     registerMutation.reset();
     setRegName("");
     setRegAction("");
-    setRegExecution("code");
     setRegMcpServer("");
-    setRegisterKind(kind);
+    setRegisterKind("mcp");
   };
 
   const handleRegisterSubmit = () => {
-    if (!registerKind) return;
     const name = regName.trim();
     const action = regAction.trim() || name.toLowerCase().replace(/\s+/g, "-");
     if (!name || !/^[a-z0-9][a-z0-9-_.]*$/.test(action)) {
@@ -1314,10 +1317,9 @@ export default function SkillToolManagePage() {
     registerMutation.mutate({
       name,
       action,
-      source: registerKind === "mcp" ? "mcp" : "custom",
-      execution: registerKind === "mcp" ? "mcp" : regExecution,
-      mcpServer:
-        registerKind === "mcp" ? regMcpServer.trim() || "mcp-server" : undefined,
+      source: "mcp",
+      execution: "mcp",
+      mcpServer: regMcpServer.trim() || "mcp-server",
       enabled: true,
     });
   };
@@ -1508,7 +1510,8 @@ export default function SkillToolManagePage() {
             />
           </div>
 
-          {/* 右上操作：随 Tab 切换（上传技能 → POST /skills multipart；注册工具/MCP → POST /tools 弹窗）。
+          {/* 右上操作：随 Tab 切换（上传技能 → POST /skills multipart；注册工具 → 跳转
+           * /tools/register 完整注册页；注册 MCP → POST /tools 弹窗）。
            * [admin] 专属（09 §3.8）；成员只读不渲染操作入口。 */}
           <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginLeft: "auto" }}>
             {tab === "skill" && isAdmin && (
@@ -1536,11 +1539,11 @@ export default function SkillToolManagePage() {
             )}
             {tab === "tool" && isAdmin && (
               <>
-                {/* 注册工具 = 主入口（自定义工具来源） */}
+                {/* 注册工具 = 主入口（跳转完整注册页 /tools/register，原型保真 5 区块表单） */}
                 <button
                   type="button"
                   data-testid="register-tool-button"
-                  onClick={() => handleRegister("tool")}
+                  onClick={() => router.push("/tools/register")}
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
@@ -1560,11 +1563,11 @@ export default function SkillToolManagePage() {
                   <span aria-hidden>✚</span>
                   注册工具
                 </button>
-                {/* 注册 MCP = 工具来源之一（注册 MCP server 暴露工具） */}
+                {/* 注册 MCP = 工具来源之一（注册 MCP server 暴露工具，弹窗 POST /tools） */}
                 <button
                   type="button"
                   data-testid="register-mcp-button"
-                  onClick={() => handleRegister("mcp")}
+                  onClick={handleRegisterMcp}
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
@@ -1859,7 +1862,7 @@ export default function SkillToolManagePage() {
         </div>
       </div>
 
-      {/* 注册工具 / 注册 MCP 弹窗：POST /tools（复用 tool-register 载荷结构） */}
+      {/* 注册 MCP 弹窗：POST /tools（复用 tool-register 载荷结构，source/execution=mcp） */}
       {registerKind && (
         <div
           data-testid="register-modal-root"
@@ -1895,7 +1898,7 @@ export default function SkillToolManagePage() {
             }}
           >
             <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900] }}>
-              注册{registerKind === "mcp" ? " MCP" : "自定义"}工具
+              注册 MCP 工具
             </div>
             <ModalFieldRow label="工具名">
               <input
@@ -1917,31 +1920,16 @@ export default function SkillToolManagePage() {
                 style={{ ...modalInputStyle, fontFamily: fontFamily.mono }}
               />
             </ModalFieldRow>
-            {registerKind === "tool" ? (
-              <ModalFieldRow label="执行方式">
-                <select
-                  data-testid="register-execution-select"
-                  value={regExecution}
-                  onChange={(e) => setRegExecution(e.target.value as "code" | "cli" | "http")}
-                  style={{ ...modalInputStyle, cursor: "pointer" }}
-                >
-                  <option value="code">平台代码</option>
-                  <option value="cli">CLI 封装</option>
-                  <option value="http">HTTP 回调</option>
-                </select>
-              </ModalFieldRow>
-            ) : (
-              <ModalFieldRow label="MCP server 标识">
-                <input
-                  data-testid="register-mcp-server-input"
-                  value={regMcpServer}
-                  onChange={(e) => setRegMcpServer(e.target.value)}
-                  spellCheck={false}
-                  placeholder="如 filesystem"
-                  style={modalInputStyle}
-                />
-              </ModalFieldRow>
-            )}
+            <ModalFieldRow label="MCP server 标识">
+              <input
+                data-testid="register-mcp-server-input"
+                value={regMcpServer}
+                onChange={(e) => setRegMcpServer(e.target.value)}
+                spellCheck={false}
+                placeholder="如 filesystem"
+                style={modalInputStyle}
+              />
+            </ModalFieldRow>
             {registerMutation.isError && (
               <div
                 role="alert"

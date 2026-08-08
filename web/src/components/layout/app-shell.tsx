@@ -121,6 +121,8 @@ const EXTRA_PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   "/tasks/new": { title: "创建任务", subtitle: "提交需求，组建虚拟 AI 团队" },
   "/tasks/[id]": { title: "任务群聊", subtitle: "与任务团队实时协作" },
   "/messages/[id]": { title: "私聊", subtitle: "与 Agent 一对一对话" },
+  "/workers/[id]": { title: "Worker 详情", subtitle: "查看节点能力与运行状态" },
+  "/tools/register": { title: "注册工具", subtitle: "登记工具 manifest 并绑定执行方式" },
 };
 
 /** 命令面板「导航」组 label → 路由路径 */
@@ -146,7 +148,7 @@ const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   roles: { title: "角色权限", subtitle: "管理平台角色与权限矩阵" },
 };
 
-/** 动态段路由优先判定：/tasks/:id（非 /tasks/new）→ 任务群聊；/messages/:id → 私聊 */
+/** 动态段路由优先判定：/tasks/:id（非 /tasks/new）→ 任务群聊；/messages/:id → 私聊；/workers/:id → Worker 详情 */
 function resolvePageTitle(pathname: string): { title: string; subtitle: string } {
   const parts = pathname.split("/").filter(Boolean);
   if (parts[0] === "tasks" && parts.length === 2 && parts[1] !== "new") {
@@ -154,6 +156,9 @@ function resolvePageTitle(pathname: string): { title: string; subtitle: string }
   }
   if (parts[0] === "messages" && parts.length === 2) {
     return EXTRA_PAGE_TITLE["/messages/[id]"];
+  }
+  if (parts[0] === "workers" && parts.length === 2) {
+    return EXTRA_PAGE_TITLE["/workers/[id]"];
   }
   const exact = EXTRA_PAGE_TITLE[pathname];
   if (exact) return exact;

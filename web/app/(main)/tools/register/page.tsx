@@ -36,6 +36,7 @@
 import { useState, type CSSProperties } from "react";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
+import { useAuthStore } from "@/lib/stores/authStore";
 import {
   neutral,
   roleText,
@@ -61,12 +62,7 @@ interface InitCommand {
   note: string;
 }
 
-/** 默认预填一个示例初始化命令（安装 jcli = Jenkins CLI） */
-const DEFAULT_INIT_COMMAND: InitCommand = {
-  id: "cmd-default",
-  script: "# 安装 jcli（Jenkins CLI）\ncurl -fsSL https://example.com/install-jcli.sh | bash",
-  note: "工具依赖 Jenkins CLI，worker 首次执行前安装",
-};
+
 
 /* ------------------------------ 执行方式（4 种执行形态） ------------------------------
  * 工具 = 声明（schema）+ 执行（handler）两部分：schema 是接口声明（模型知道怎么调），
@@ -76,16 +72,6 @@ const DEFAULT_INIT_COMMAND: InitCommand = {
  */
 type ExecType = "code" | "cli" | "http" | "mcp";
 
-/** 平台代码执行示例（readOnly 编辑器占位内容，纯展示不执行） */
-const HANDLER_CODE_EXAMPLE = `export async function execute(input: Input, ctx: ToolContext) {
-  // 调平台 API：按输入 jobName 查询构建任务
-  const build = await ctx.api.query("ci", {
-    jobName: input.jobName,
-    buildNumber: input.buildNumber,
-  });
-  return { status: build.status, buildNumber: build.number };
-}`;
-
 const execTypes: { key: ExecType; label: string; icon: string; desc: string }[] = [
   { key: "code", label: "平台代码", icon: "⌘", desc: "内置 execute · 调平台 API / DB" },
   { key: "cli", label: "CLI 封装", icon: "⌥", desc: "args 拼 CLI 命令执行" },
@@ -94,25 +80,6 @@ const execTypes: { key: ExecType; label: string; icon: string; desc: string }[] 
 ];
 
 /* ------------------------------ Schema / 执行绑定 mock（对齐原型） ------------------------------ */
-
-/** 统一输入 Schema 示例（readOnly 编辑器占位，code/cli/http 共用，JSON Schema 格式） */
-const INPUT_SCHEMA_EXAMPLE = `{
-  "type": "object",
-  "properties": {
-    "jobName": { "type": "string", "description": "任务名" },
-    "buildNumber": { "type": "integer", "description": "构建号" }
-  },
-  "required": ["jobName"]
-}`;
-
-/** 输出 Schema 示例（可选，readOnly 编辑器占位，JSON Schema 格式） */
-const OUTPUT_SCHEMA_EXAMPLE = `{
-  "type": "object",
-  "properties": {
-    "status": { "type": "string" },
-    "buildNumber": { "type": "integer" }
-  }
-}`;
 
 /** CLI 自由调用：平台自动生成的极简输入 Schema（只读展示，与 opencode bash 工具同模式）。
  * opencode 工具强制要求 input schema（v2 Tool.make 的 input 必填、v1 tool() 的 args 必填），
@@ -397,22 +364,39 @@ function InitCommandRow({
 
 /* ------------------------------ 页面主组件 ------------------------------ */
 
-export default function ToolRegisterPage() {
-  /* 基础信息（受控，动态联动输入） */
-  const [toolName, setToolName] = useState("jira-query");
-  const [toolDesc, setToolDesc] = useState("按关键词查询 Jira 工单并返回结构化结果");
-  const [version, setVersion] = useState("v1.4.0");
+/** 页面根容器样式（正常表单与无权限提示共用，保证布局一致） */
+const rootStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  position: "relative",
+  display: "flex",
+  flexDirection: "column",
+  overflowY: "auto",
+  padding: `${space.xl}px ${space.xl}px ${space.xl}px 0`,
+  backgroundColor: neutral[50],
+  fontFamily: fontFamily.body,
+};
 
-  /* 绑定角色（受控多选：点击切换勾选态，data-bound 联动） */
+export default function ToolRegisterPage() {
+  /* 权限判定：工具注册为 [admin] 专属（09 §3.8），非 admin 显示无权限提示
+   * （对齐 skills 页 isAdmin 判断模式：roleName 取自登录响应 AuthUserView） */
+  const isAdmin = useAuthStore((s) => s.user?.roleName === "admin");
+
+  /* 基础信息（受控，动态联动输入；从空值起步，不预填示例模板） */
+  const [toolName, setToolName] = useState("");
+  const [toolDesc, setToolDesc] = useState("");
+  const [version, setVersion] = useState("");
+
+  /* 绑定角色（受控多选：点击切换勾选态，data-bound 联动；初始不预勾选） */
   const allRoles: RoleKey[] = ["product", "architect", "developer", "tester"];
-  const [boundRoles, setBoundRoles] = useState<RoleKey[]>(["product", "developer", "tester"]);
+  const [boundRoles, setBoundRoles] = useState<RoleKey[]>([]);
   const toggleRole = (r: RoleKey) =>
     setBoundRoles((prev) =>
       prev.includes(r) ? prev.filter((x) => x !== r) : [...prev, r],
     );
 
-  /* 初始化命令/脚本列表（受控，默认预填一个示例初始化命令） */
-  const [initCommands, setInitCommands] = useState<InitCommand[]>([DEFAULT_INIT_COMMAND]);
+  /* 初始化命令/脚本列表（受控，初始为空，用户自行添加） */
+  const [initCommands, setInitCommands] = useState<InitCommand[]>([]);
   const addInitCommand = () =>
     setInitCommands((prev) => [
       ...prev,
@@ -436,34 +420,33 @@ export default function ToolRegisterPage() {
    * schema（与 opencode bash 工具同模式，符合工具协议 —— input schema 必填），
    * 模型像 bash 一样自由传命令字符串。 */
   const [cliMode, setCliMode] = useState<"schema" | "free">("schema");
-  const [cliCommand, setCliCommand] = useState("jcli issue get {{jobName}} --limit {{buildNumber}}");
+  const [cliCommand, setCliCommand] = useState("");
   const [cliOutput, setCliOutput] = useState<"json" | "text">("json");
   /* 自由调用模式配置：命令前缀 + 白名单 + 执行约束（超时 / 工作目录） */
-  const [cliFreeCommand, setCliFreeCommand] = useState("jcli ");
-  const [cliFreeWhitelist, setCliFreeWhitelist] = useState("job search\nplugin list");
-  const [cliFreeTimeout, setCliFreeTimeout] = useState("60s");
+  const [cliFreeCommand, setCliFreeCommand] = useState("");
+  const [cliFreeWhitelist, setCliFreeWhitelist] = useState("");
+  const [cliFreeTimeout, setCliFreeTimeout] = useState("");
   const [cliFreeCwd, setCliFreeCwd] = useState("");
-  const [httpUrl, setHttpUrl] = useState("https://hooks.example.com/tools/jira-query");
+  const [httpUrl, setHttpUrl] = useState("");
   const [httpMethod, setHttpMethod] = useState<"POST" | "GET" | "PUT">("POST");
   const [httpOutput, setHttpOutput] = useState<"json" | "text">("json");
 
+  /* Schema / handler 编辑器（受控，从空值起步不预填示例；提交时合并进 inputSchema，
+   * 输出 Schema 当前版本仅作记录（后端 schema 单列无独立 output 槽位，不提交）） */
+  const [handlerCode, setHandlerCode] = useState("");
+  const [inputSchema, setInputSchema] = useState("");
+  const [outputSchema, setOutputSchema] = useState("");
+
   /* HTTP 执行绑定：参数 → 请求位置（query / body / path，受控 select，来自输入 Schema 的参数） */
-  const [httpLocs, setHttpLocs] = useState<Record<string, "query" | "body" | "path">>({
-    jobName: "query",
-    buildNumber: "body",
-  });
+  const [httpLocs, setHttpLocs] = useState<Record<string, "query" | "body" | "path">>({});
 
   /* MCP 接入配置（受控，对齐 mcp-register 的 Local/Remote 两套 schema） */
   const [mcpType, setMcpType] = useState<"local" | "remote">("local");
-  const [mcpCommand, setMcpCommand] = useState(
-    "npx -y @modelcontextprotocol/server-filesystem /data",
-  );
-  const [mcpCwd, setMcpCwd] = useState("/data");
-  const [mcpEnv, setMcpEnv] = useState("DATA_ROOT=/data\nLOG_LEVEL=info");
-  const [mcpUrl, setMcpUrl] = useState("https://mcp.example.com/jira");
-  const [mcpHeaders, setMcpHeaders] = useState(
-    "Authorization: Bearer {{token}}\nContent-Type: application/json",
-  );
+  const [mcpCommand, setMcpCommand] = useState("");
+  const [mcpCwd, setMcpCwd] = useState("");
+  const [mcpEnv, setMcpEnv] = useState("");
+  const [mcpUrl, setMcpUrl] = useState("");
+  const [mcpHeaders, setMcpHeaders] = useState("");
   const [mcpOauth, setMcpOauth] = useState(false);
 
   /* 注册结果：idle=未提交 / error=校验或 API 失败 / success=POST /tools 成功。
@@ -476,14 +459,20 @@ export default function ToolRegisterPage() {
   const ACTION_RE = /^[a-z0-9][a-z0-9-_.]*$/;
 
   const handleRegister = async () => {
-    /* 最小校验：工具名必填（其余字段均有默认值/示例占位） */
+    /* 校验一：工具名必填 + 长度 ≤64（对齐 CreateToolDto：name @IsString @MaxLength(64)） */
     const name = toolName.trim();
     if (!name) {
       setRegisterState("error");
       setRegisterError("注册失败：工具名不能为空，请填写工具名（标识符）。");
       return;
     }
-    /* action 由工具名推导（小写 + 空格转连字符）；不符合 slug 规范则前端拦截 */
+    if (name.length > 64) {
+      setRegisterState("error");
+      setRegisterError("注册失败：工具名长度不能超过 64 个字符。");
+      return;
+    }
+    /* 校验二：action 由工具名推导（小写 + 空格转连字符）；不符合 slug 规范则前端拦截
+     * （对齐 CreateToolDto @Matches：小写字母/数字/连字符/下划线/点开头，长度 ≤64） */
     const action = name.toLowerCase().replace(/\s+/g, "-");
     if (!ACTION_RE.test(action)) {
       setRegisterState("error");
@@ -492,17 +481,73 @@ export default function ToolRegisterPage() {
       );
       return;
     }
-    /* 输入 Schema：code/cli(schema)/http 解析示例 JSON；cli 自由调用用自动生成极简 schema；
-     * mcp 由 server 自带 schema 不传 */
+    /* 校验三：按执行形态的必填项（执行细节缺失的工具无法注入执行，前端先行拦截） */
+    if (execType === "cli" && cliMode === "schema" && !cliCommand.trim()) {
+      setRegisterState("error");
+      setRegisterError("注册失败：CLI 命令模板不能为空，请填写命令模板（如 jcli issue get {{jobName}}）。");
+      return;
+    }
+    if (execType === "cli" && cliMode === "free" && !cliFreeCommand.trim()) {
+      setRegisterState("error");
+      setRegisterError("注册失败：CLI 命令前缀不能为空，请填写自由调用的命令前缀。");
+      return;
+    }
+    if (execType === "http") {
+      if (!httpUrl.trim()) {
+        setRegisterState("error");
+        setRegisterError("注册失败：HTTP 回调 URL 不能为空，请填写回调地址。");
+        return;
+      }
+      if (!/^https?:\/\//.test(httpUrl.trim())) {
+        setRegisterState("error");
+        setRegisterError("注册失败：HTTP 回调 URL 需以 http(s):// 开头。");
+        return;
+      }
+    }
+    if (execType === "mcp") {
+      if (mcpType === "local" && !mcpCommand.trim()) {
+        setRegisterState("error");
+        setRegisterError("注册失败：MCP 启动命令不能为空，请填写 command（如 npx -y <server>）。");
+        return;
+      }
+      if (mcpType === "remote") {
+        if (!mcpUrl.trim()) {
+          setRegisterState("error");
+          setRegisterError("注册失败：MCP 服务 URL 不能为空，请填写远程服务器地址。");
+          return;
+        }
+        if (!/^https?:\/\//.test(mcpUrl.trim())) {
+          setRegisterState("error");
+          setRegisterError("注册失败：MCP 服务 URL 需以 http(s):// 开头。");
+          return;
+        }
+      }
+    }
+    /* 输入 Schema：code / cli(schema) / http 提交用户输入（cli 自由调用用自动生成的极简
+     * schema；mcp 由 server 自带 schema 不传）。留空 → schema = undefined（后端 CreateToolDto
+     * @IsOptional 允许，纯 CLI 自由调用可无 schema）；填了则必须合法 JSON，解析失败 → 拦截提交 */
     let schema: Record<string, unknown> | undefined;
     if (execType !== "mcp") {
       const raw =
-        execType === "cli" && cliMode === "free" ? CLI_FREE_SCHEMA_EXAMPLE : INPUT_SCHEMA_EXAMPLE;
-      try {
-        schema = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        schema = undefined;
+        execType === "cli" && cliMode === "free" ? CLI_FREE_SCHEMA_EXAMPLE : inputSchema.trim();
+      if (raw) {
+        try {
+          schema = JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+          setRegisterState("error");
+          setRegisterError("注册失败：输入 Schema 不是合法 JSON，请检查格式后重试。");
+          return;
+        }
       }
+    }
+    /* code 形态：handler 代码经输入 schema 顶层 x-execution.code 提交——worker 渲染器
+     * （resolveExecution）从该扩展键读取 code 执行体；后端无独立 code 字段，schema Json
+     * 是唯一落库通道（cli/http 的执行细节同走此约定） */
+    if (execType === "code" && handlerCode.trim()) {
+      schema = {
+        ...(schema ?? {}),
+        "x-execution": { code: handlerCode.trim() },
+      };
     }
     setRegistering(true);
     setRegisterState("idle");
@@ -540,20 +585,53 @@ export default function ToolRegisterPage() {
     tester: "测试",
   };
 
+  /* 非 admin：只读提示（不渲染注册表单；后端 AdminGuard 403 兜底不变） */
+  if (!isAdmin) {
+    return (
+      <div data-testid="tool-register-root" style={rootStyle}>
+        <div
+          style={{
+            maxWidth: 760,
+            margin: "0 auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: space.xl,
+          }}
+        >
+          <div
+            data-testid="register-forbidden"
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: space.md,
+              padding: `${space.xxl}px`,
+              borderRadius: radius.lg,
+              backgroundColor: "#FFFFFF",
+              border: `1px solid ${neutral[200]}`,
+              boxShadow: shadow.md,
+              textAlign: "center",
+              ...baseFont,
+            }}
+          >
+            <span aria-hidden style={{ fontSize: 32, lineHeight: 1 }}>🔒</span>
+            <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>
+              无权限访问
+            </div>
+            <div style={{ fontSize: fontSize.sm, color: neutral[500], lineHeight: 1.6 }}>
+              工具注册为管理员专属操作（09 §3.8）。当前账号为成员角色，仅可浏览技能与工具列表；
+              如需注册工具，请联系管理员开通权限。
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       data-testid="tool-register-root"
-      style={{
-        flex: 1,
-        minHeight: 0,
-        position: "relative",
-        display: "flex",
-        flexDirection: "column",
-        overflowY: "auto",
-        padding: `${space.xl}px ${space.xl}px ${space.xl}px 0`,
-        backgroundColor: neutral[50],
-        fontFamily: fontFamily.body,
-      }}
+      style={rootStyle}
     >
       <div
         style={{
@@ -610,6 +688,7 @@ export default function ToolRegisterPage() {
                   onChange={(e) => setVersion(e.target.value)}
                   style={{ ...inputStyle, cursor: "pointer" }}
                 >
+                  <option value="">未指定</option>
                   <option value="v1.4.0">v1.4.0</option>
                   <option value="v2.0.0">v2.0.0</option>
                 </select>
@@ -756,23 +835,23 @@ export default function ToolRegisterPage() {
                 border: `1px solid ${neutral[200]}`,
               }}
             >
-              {/* 2a. 平台代码：handler 代码编辑器占位 */}
+              {/* 2a. 平台代码：handler 代码编辑器（受控，空值起步；提交时经 schema.x-execution.code
+                   注入——worker 渲染器从该扩展键读取 code 执行体，后端无独立 code 字段） */}
               {execType === "code" && (
                 <>
                   <FieldRow label="处理函数（handler / execute）" hint="平台内置或上传的 execute 代码 · 可调平台 API / DB">
                     <textarea
                       data-testid="handler-code-editor"
-                      readOnly
                       rows={7}
                       spellCheck={false}
-                      value={HANDLER_CODE_EXAMPLE}
+                      value={handlerCode}
+                      onChange={(e) => setHandlerCode(e.target.value)}
+                      placeholder={`// export async function execute(input: Input, ctx: ToolContext) {\n//   const build = await ctx.api.query("ci", {\n//     jobName: input.jobName,\n//   });\n//   return { status: build.status };\n// }`}
                       style={{
                         ...inputStyle,
                         fontFamily: fontFamily.mono,
                         resize: "none",
                         lineHeight: 1.7,
-                        backgroundColor: neutral[100],
-                        cursor: "default",
                       }}
                     />
                   </FieldRow>
@@ -1314,34 +1393,32 @@ export default function ToolRegisterPage() {
                   <FieldRow label="输入 Schema（input）" hint="必填 · 模型调用时的入参声明">
                     <textarea
                       data-testid="input-schema-editor"
-                      readOnly
                       rows={8}
                       spellCheck={false}
-                      value={INPUT_SCHEMA_EXAMPLE}
+                      value={inputSchema}
+                      onChange={(e) => setInputSchema(e.target.value)}
+                      placeholder={`{\n  "type": "object",\n  "properties": {\n    "jobName": { "type": "string", "description": "任务名" }\n  },\n  "required": ["jobName"]\n}`}
                       style={{
                         ...inputStyle,
                         fontFamily: fontFamily.mono,
                         resize: "none",
                         lineHeight: 1.7,
-                        backgroundColor: neutral[100],
-                        cursor: "default",
                       }}
                     />
                   </FieldRow>
-                  <FieldRow label="输出 Schema（output）" hint="可选 · 工具返回给模型的结构化结果">
+                  <FieldRow label="输出 Schema（output）" hint="可选 · 工具返回给模型的结构化结果（当前版本仅作记录）">
                     <textarea
                       data-testid="output-schema-editor"
-                      readOnly
                       rows={8}
                       spellCheck={false}
-                      value={OUTPUT_SCHEMA_EXAMPLE}
+                      value={outputSchema}
+                      onChange={(e) => setOutputSchema(e.target.value)}
+                      placeholder={`{\n  "type": "object",\n  "properties": {\n    "status": { "type": "string" }\n  }\n}`}
                       style={{
                         ...inputStyle,
                         fontFamily: fontFamily.mono,
                         resize: "none",
                         lineHeight: 1.7,
-                        backgroundColor: neutral[100],
-                        cursor: "default",
                       }}
                     />
                   </FieldRow>

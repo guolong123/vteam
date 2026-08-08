@@ -206,6 +206,38 @@ describe('WorkersService', () => {
       expect(mcpServers.applyHeartbeatStatus).not.toHaveBeenCalled();
     });
 
+    it('T9：携带 mcpStatus 时按 workerId 关联保存（worker 详情接口可查）', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue({});
+      const dto: HeartbeatWorkerDto = {
+        workerId: 'w_0000000001',
+        load: { instances: 1 },
+        health: 'ok',
+        mcpStatus: [
+          { serverName: 'gitee-ent', status: 'connected' },
+          { serverName: 'test-bad-local', status: 'failed' },
+        ],
+      };
+
+      await service.heartbeat('w_0000000001', dto);
+
+      expect(service['workerMcpStatus'].get('w_0000000001')).toEqual(dto.mcpStatus);
+    });
+
+    it('T9：不携带 mcpStatus 时不写入该 worker 的关联状态（旧 worker 兼容）', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue({});
+      const dto: HeartbeatWorkerDto = {
+        workerId: 'w_0000000001',
+        load: { instances: 1 },
+        health: 'ok',
+      };
+
+      await service.heartbeat('w_0000000001', dto);
+
+      expect(service['workerMcpStatus'].has('w_0000000001')).toBe(false);
+    });
+
     it('worker 未注册 → 404 WORKER_NOT_FOUND', async () => {
       prisma.worker.findUnique.mockResolvedValue(null);
       const dto: HeartbeatWorkerDto = {
@@ -389,11 +421,22 @@ describe('WorkersService', () => {
   });
 
   describe('HealthChecker', () => {    it('仅更新过期行：where status != offline AND (lastHeartbeatAt IS NULL OR < now-30s)', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_0000000001' },
+        { id: 'w_0000000002' },
+      ]);
       prisma.worker.updateMany.mockResolvedValue({ count: 2 });
 
       const count = await service.markStaleWorkersOffline();
 
       expect(count).toBe(2);
+      // T9：先查过期 worker 列表（findMany 同 where 语义）
+      expect(prisma.worker.findMany).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          status: { not: WORKER_STATUS.OFFLINE },
+        }),
+        select: { id: true },
+      });
       const [args] = prisma.worker.updateMany.mock.calls[0];
       expect(args.where.status).toEqual({ not: WORKER_STATUS.OFFLINE });
       expect(args.where.OR[0]).toEqual({ lastHeartbeatAt: null });
@@ -402,6 +445,28 @@ describe('WorkersService', () => {
       expect(cutoff.getTime()).toBeLessThanOrEqual(Date.now() - WORKER_OFFLINE_TIMEOUT_MS + 100);
       expect(cutoff.getTime()).toBeGreaterThan(Date.now() - WORKER_OFFLINE_TIMEOUT_MS - 1000);
       expect(args.data).toEqual({ status: WORKER_STATUS.OFFLINE });
+    });
+
+    it('T9：无过期 worker 时不触发 updateMany，直接返回 0', async () => {
+      prisma.worker.findMany.mockResolvedValue([]);
+
+      const count = await service.markStaleWorkersOffline();
+
+      expect(count).toBe(0);
+      expect(prisma.worker.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('T9：标记 offline 时同步清理该 worker 的 mcpStatus 内存态', async () => {
+      prisma.worker.findMany.mockResolvedValue([{ id: 'w_0000000001' }]);
+      prisma.worker.updateMany.mockResolvedValue({ count: 1 });
+      service['workerMcpStatus'].set('w_0000000001', [
+        { serverName: 'gitee-ent', status: 'connected' },
+      ]);
+
+      const count = await service.markStaleWorkersOffline();
+
+      expect(count).toBe(1);
+      expect(service['workerMcpStatus'].has('w_0000000001')).toBe(false);
     });
 
     it('onModuleInit 启动自愈扫描并注册健康检查定时器（onModuleDestroy 清理）', async () => {
@@ -529,6 +594,46 @@ describe('WorkersService', () => {
       await expect(service.findOne('w_unknown')).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+
+    it('T9：findOne 详情返回该 worker 最近上报的 mcpStatus（关联内存态）', async () => {
+      prisma.worker.findUnique.mockResolvedValue(workerRow());
+      service['workerMcpStatus'].set('w_0000000001', [
+        { serverName: 'gitee-ent', status: 'connected' },
+        { serverName: 'test-bad-local', status: 'failed' },
+      ]);
+
+      const view = await service.findOne('w_0000000001');
+
+      expect(view.mcpStatus).toEqual([
+        { serverName: 'gitee-ent', status: 'connected' },
+        { serverName: 'test-bad-local', status: 'failed' },
+      ]);
+    });
+
+    it('T9：未上报 mcpStatus 的 worker 详情返回空数组', async () => {
+      prisma.worker.findUnique.mockResolvedValue(workerRow());
+
+      const view = await service.findOne('w_0000000001');
+
+      expect(view.mcpStatus).toEqual([]);
+    });
+
+    it('T9：findAll 列表同样合并每个 worker 的 mcpStatus', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({ id: 'w_0000000001' }),
+        workerRow({ id: 'w_0000000002' }),
+      ]);
+      service['workerMcpStatus'].set('w_0000000002', [
+        { serverName: 'gitee-ent', status: 'needs_auth' },
+      ]);
+
+      const rows = await service.findAll();
+
+      expect(rows[0].mcpStatus).toEqual([]);
+      expect(rows[1].mcpStatus).toEqual([
+        { serverName: 'gitee-ent', status: 'needs_auth' },
+      ]);
     });
   });
 

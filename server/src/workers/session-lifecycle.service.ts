@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { SESSION_STATUS } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
@@ -32,11 +32,32 @@ export type TaskGroupInstanceRow = {
  * - getInstancesByTask / getInstanceBySession：供 T10 WorkerDispatcher 调度复用与任务页查询。
  */
 @Injectable()
-export class SessionLifecycleService {
+export class SessionLifecycleService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly idGen: IdGeneratorService,
   ) {}
+
+  /**
+   * 进程启动对齐 TaskGroupInstance 域前缀序号（重启续号，同 tools/agents seed 模式）。
+   * 修复：`ti` 前缀原无续号 → 重启后计数器从 1 起，解绑重绑定（offline worker 修复路径）
+   * 创建新实例行时与库中软删旧行（removedAt 非空）主键冲突（Unique constraint PRIMARY）。
+   */
+  async onModuleInit(): Promise<void> {
+    const last = await this.prisma.taskGroupInstance.findFirst({
+      orderBy: { id: 'desc' },
+      select: { id: true },
+    });
+    if (last) {
+      const seq = parseInt(
+        last.id.slice(TASK_GROUP_INSTANCE_ID_PREFIX.length + 1),
+        10,
+      );
+      if (Number.isFinite(seq)) {
+        this.idGen.seed(TASK_GROUP_INSTANCE_ID_PREFIX, seq);
+      }
+    }
+  }
 
   /**
    * 绑定 Session → worker（T10 WorkerDispatcher 首次分派调用）。

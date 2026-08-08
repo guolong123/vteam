@@ -63,7 +63,7 @@ describe('WorkerClient', () => {
       expect(JSON.parse(String(init.body))).toEqual({});
     });
 
-    it('传入 model → body 为 { model: { providerID, modelID } }', async () => {
+    it('传入 model → body 仍为 {}（serve 1.18.15 拒收 model，模型在 prompt_async 指定）', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ json: async () => ({ id: 'ses_1' }) }));
 
@@ -73,9 +73,7 @@ describe('WorkerClient', () => {
       });
 
       const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect(JSON.parse(String(init.body))).toEqual({
-        model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
-      });
+      expect(JSON.parse(String(init.body))).toEqual({});
     });
 
     it('fetch 抛错 → WorkerUnavailableException（503 语义，带 workerId）', async () => {

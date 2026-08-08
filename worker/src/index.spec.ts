@@ -3,7 +3,9 @@
  * 仅测 buildCapabilities/buildRegisterOptions 纯函数；main() 由 require.main 守卫隔离，import 不触发 worker 启动。
  */
 import { WorkerConfig } from './config';
+import { GIT_TOOLS } from './git/git-tools';
 import { WorkerCommand } from './protocol/worker-protocol';
+import { InjectReport } from './resources/injector';
 import { buildCapabilities, buildRegisterOptions, dispatchCommands, onCommands } from './index';
 
 /** 最小 WorkerConfig（buildRegisterOptions 全字段）。 */
@@ -42,6 +44,36 @@ describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
 
   it('本地默认 advertiseHost=http://127.0.0.1：baseUrl 指向回环', () => {
     expect(buildCapabilities(4199, 'http://127.0.0.1').baseUrl).toBe('http://127.0.0.1:4199');
+  });
+
+  it('T9：未注入时 skills 为空、tools 仅内置 git 工具族（7 个）', () => {
+    const caps = buildCapabilities(4199, 'http://worker');
+    expect(caps.skills).toEqual([]);
+    expect(caps.tools).toEqual(GIT_TOOLS.map((tool) => tool.name));
+    expect(caps.tools).toHaveLength(7);
+  });
+
+  it('T9：注入清单接入——skills 上报注入的 skill 名，tools 合并内置 git + 注入自定义工具', () => {
+    const report: InjectReport = {
+      skills: ['audit-log-analysis', 'review'],
+      tools: ['jira-query', 'echo-hello'],
+      mcpServers: ['gitee-ent'],
+    };
+    const caps = buildCapabilities(4199, 'http://worker', report);
+    expect(caps.skills).toEqual(['audit-log-analysis', 'review']);
+    expect(caps.tools).toEqual([...GIT_TOOLS.map((t) => t.name), 'jira-query', 'echo-hello']);
+  });
+
+  it('T9：注入工具与内置 git 工具同名时去重（不重复上报）', () => {
+    const report: InjectReport = {
+      skills: [],
+      tools: ['git_status', 'jira-query', 'git_clone'],
+      mcpServers: [],
+    };
+    const caps = buildCapabilities(4199, 'http://worker', report);
+    const expected = [...new Set([...GIT_TOOLS.map((t) => t.name), 'git_status', 'jira-query', 'git_clone'])];
+    expect(caps.tools).toEqual(expected);
+    expect(caps.tools).toHaveLength(GIT_TOOLS.length + 1);
   });
 });
 
@@ -133,5 +165,23 @@ describe('buildRegisterOptions（T4c：重启后重新注册携带新端口）',
     const opts = buildRegisterOptions(CONFIG, null, 'unknown', 'cli-version');
     expect(opts.capabilities.port).toBeUndefined();
     expect(opts.capabilities.baseUrl).toBeUndefined();
+  });
+
+  it('T9：注入报告透传——注册选项携带真实 skills/tools 清单（reload-config 后 reRegister 复用）', () => {
+    const report: InjectReport = {
+      skills: ['audit-log-analysis'],
+      tools: ['jira-query'],
+      mcpServers: ['gitee-ent'],
+    };
+    const opts = buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version', report);
+    expect(opts.capabilities.skills).toEqual(['audit-log-analysis']);
+    expect(opts.capabilities.tools).toEqual([...GIT_TOOLS.map((t) => t.name), 'jira-query']);
+    expect(opts.capabilities.port).toBe(4199);
+  });
+
+  it('T9：未传注入报告时默认空清单（skills=[]、tools 仅内置 git）', () => {
+    const opts = buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version');
+    expect(opts.capabilities.skills).toEqual([]);
+    expect(opts.capabilities.tools).toEqual(GIT_TOOLS.map((t) => t.name));
   });
 });

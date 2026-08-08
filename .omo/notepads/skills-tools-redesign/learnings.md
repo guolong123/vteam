@@ -7,6 +7,57 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 ---
 
 
+## T10 worker 详情页 + 列表按钮接线（2026-08-08）
+
+### 共享层提取（web/app/(main)/workers/shared.tsx）
+- **worker 域专属定义从 page.tsx 提取为 shared.tsx**：WORKER_STATUS_LABEL/workerStatusTheme/loadColor/pulseCss/formatRelativeTime/WorkerStatusBadge/WorkerItem + 新增 WorkerDetail（含 mcpStatus: McpStatusEntry[]）、MCP_STATUS_THEME（三态，对齐 skills 页 mcpStatusTheme）、BUILTIN_GIT_TOOLS（git_clone/git_pull/git_fetch/git_status/git_diff/git_log/git_push，17 篇 §4.1 七工具）+ isBuiltinGitTool、cardStyle/SectionHeader 卡片基。列表页与详情页共用防漂移——worker 状态语义变更只改一处。
+- WorkerItem.capabilities 扩展 `port?/baseUrl?`（后端本就返回，列表页只是未声明）——可选字段不破坏现有使用。
+
+### 详情页 /workers/[id]/page.tsx
+- **GET /workers/:id + TanStack Query**，queryKey `["worker", workerId]`，refetchInterval 10s（与心跳同频，捕捉状态翻转与 mcpStatus 刷新）；1s tick 重算相对时间（对齐列表页模式）。
+- 六区块：basic（id/名称/状态徽章/注册/心跳）/ runtime（版本/端口/baseUrl/并发上限）/ load（instances + loadColor 进度条）/ skills（空态"该节点暂无已注入技能"）/ tools（ToolBadge 内置蓝系·自定义紫系，空态）/ mcp（McpStatusBadge 三态 ✅/✗/🔑，空态"该节点无 MCP 服务器状态上报"）。
+- 不存在的 id：isError → worker-detail-error（重试按钮）；无 id → "缺少 Worker ID"（对齐 tasks/[id] chat-loading/chat-error 模式）。
+- **⚠️ mcpStatus 防御（浏览器实测踩坑）**：旧后端（T9 前的 3000 进程）不返回 mcpStatus 字段 → `worker.mcpStatus.length` 抛 `Cannot read properties of undefined (reading 'length')` → 页面白屏 Application error。必须 `worker.mcpStatus?.length ?? 0` + `(worker.mcpStatus ?? []).map` 双保险。capabilities.skills/tools 同理已用 `?.length ?? 0`。
+
+### 列表页按钮接线（page.tsx）
+- 详情按钮：`onClick={() => router.push(\`/workers/${worker.id}\`)}`（WorkerCard 内 useRouter）。
+- 重启/下线：**保持 disabled 恒真 + title="后端未提供该操作（T10 LifecycleManager 接入后开放）"**——后端无端点，不实现假功能；原 `disabled={!isOnline}` 在线时可点但无 onClick 是"假可点"，已统一为恒禁用灰色。
+- e2e testid 全保留（worker-detail-button/worker-restart-button/worker-offline-button），disabled 不影响可见性断言。
+
+### app-shell 标题
+- EXTRA_PAGE_TITLE 补 `"/workers/[id]": { title: "Worker 详情", subtitle: "查看节点能力与运行状态" }`；resolvePageTitle 补 `parts[0]==="workers" && parts.length===2` 分支（在 tasks/messages 之后）。
+
+### 验证结果
+- `npx tsc --noEmit` ✓（两次）；`npm run build` ✓（/workers/[id] 生成 ƒ Dynamic）。
+- Playwright 独立脚本 16/16：列表→详情跳转 URL 一致、六区块可见、skills 空态/tools 7 内置徽章/mcp 空态（旧后端无 mcpStatus）、返回列表、不存在 id 错误态。
+- e2e pages.spec worker 3/3（含 worker-list 17/17 断言，修复后重跑确认无回归）。
+
+### 环境陷阱（新增）
+- **storageState 的 localStorage 绑定 origin**：`.auth/user.json` 的 localStorage 只在 `http://localhost:3001` 生效——独立脚本用 127.0.0.1 访问 → 未登录跳 /login（worker-card 不可见）。必须与 baseURL 同 host。
+- **后台 dev server 用 tmux 常驻**：bash 工具里 `nohup ... &` 启动的 next dev 在命令结束后被回收（日志有 200 但端口无监听）；`tmux new-session -d -s web-dev "<cmd>"` 稳定。build 污染 .next 后 500 需 kill-session + 重建（承 T5 教训）。
+- 验证脚本须放 web/ 下解析 node_modules（承 T6），验证完删除（t10-verify.cjs）。
+
+
+## T9 worker 能力上报完善 + server 详情增强（2026-08-08）
+
+### worker 侧：capabilities 上报真实 skills/tools（index.ts）
+- **签名扩展（非破坏）**：`buildCapabilities(port, advertiseHost, injected: InjectReport = EMPTY_INJECT_REPORT)`——第三个参数默认空报告，两参调用（旧测试/旧调用点）行为不变；`skills: injected.skills`、`tools: [...new Set([...GIT_TOOLS.map(t=>t.name), ...injected.tools])]`（内置 git 7 个 + 注入自定义工具，去重）。
+- **buildRegisterOptions 同步加第 5 参 injected**（透传给 buildCapabilities）。`EMPTY_INJECT_REPORT = {skills:[],tools:[],mcpServers:[]}` 模块级常量。
+- **main() 状态接线**：`let lastInjectReport: InjectReport`（模块作用域闭包）——**两个 injectAll 调用点都更新它**：① 启动 IIFE 注入成功后（注册前）；② reload-config 回调重注入成功后（重启的 reRegister 复用）。`registerCurrent` 每次组装注册选项读 `lastInjectReport` → reRegister 自然携带最新清单，资源变更后 worker 详情页数据非陈旧。
+- **reload-config 时序**：注入落盘 → 更新 report → requestRestart（执行/挂起）→ reRegister 读到新 report（挂起时会话归零后执行同样读到新值）——无需单独在 reRegister 里重新 injectAll。
+
+### server 侧：mcpStatus 按 worker 关联 + 详情返回（workers.service.ts）
+- **新增内存 Map** `workerMcpStatus: Map<workerId, McpStatusEntryDto[]>`——与 mcp-servers 全局 `statusByServer`（serverName → status 合并）**并存不冲突**：前者按 worker 维度（详情页用），后者全局合并（/mcp-servers 列表用）。心跳 `dto.mcpStatus.length>0` 时同时写两处。
+- **toWorkerView 加 `mcpStatus: this.workerMcpStatus.get(worker.id) ?? []`**——findAll/findOne 共用，未上报 → 空数组（前端展示兼容）。capabilities（含 skills/tools）本就经 Json 列返回，无需迁移。
+- **离线清理**：markStaleWorkersOffline 由"直接 updateMany"改为"**先 findMany 取过期 id 列表 → updateMany 标记 → 循环 delete workerMcpStatus**"（updateMany 不返回受影响 id，必须先查）。findMany 为空短路返回 0，不触发 updateMany。
+- **纯内存态**：无 DB 列/无 prisma schema 变更；server 重启后状态清空，待下轮心跳重填（同 T8c 语义）。
+
+### 测试
+- worker：**178/178**（173 基线 + 5：buildCapabilities 未注入/注入清单/去重 + buildRegisterOptions 透传/默认空）。
+- server：**541/541**（534 基线 + 7：markStaleWorkersOffline 空列表短路 + 清理 mcpStatus + heartbeat 关联/不携带 + findOne 详情/空数组 + findAll 合并）。
+- **spec 关键改动**：markStaleWorkersOffline 测试必须 mock `prisma.worker.findMany` 返回 stale 列表（新逻辑先查后更）；原 updateMany where 断言保留（findMany/updateMany 同 where 语义）。
+
+
 ## F1 MAJOR 修复：enqueueCommand 生产接线（2026-08-08）
 
 - **根因**：T4a 建了 `WorkersService.enqueueCommand(workerId, command)` 命令通道但无生产调用点——skills/tools/mcp-servers 的 POST/PATCH 变更后 worker 不重拉注入（worker 仅启动时 injectAll 一次）。
@@ -425,3 +476,155 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - server 全量 jest：**38 suites / 534 tests 全绿**（基线一致，skills.service.spec 18/18）。
 - `nest build`（clean dist）exit 0。
 - **实证**（tsx + PrismaClient，MySQL 3307 实库）：插入 563 字节 content（>191）→ upsert/findUnique/delete roundtrip 成功，len=563 原文无损，测试行已清理——VARCHAR(191) 时代必 500 的场景不再复现。
+
+## F4-2 修复：注册工具跳转 /tools/register 完整页 + 非 admin 权限门（2026-08-08）
+
+### 改动（3 文件，无新依赖、不改后端）
+- **skills/page.tsx**：「注册工具」按钮 `onClick` 从 `handleRegister("tool")` 改为 `router.push("/tools/register")`（`useRouter` from next/navigation，页面已是 client component）；「注册 MCP」保持弹窗。
+- **registerKind 收窄 `"tool" | "mcp" | null` → `"mcp" | null`**：弹窗仅服务 MCP，`handleRegister` 改 `handleRegisterMcp`（无参），`handleRegisterSubmit` 恒发 `{source:"mcp", execution:"mcp"}`；弹窗 JSX 移除 tool 分支（执行方式 select）与动态标题；**`regExecution` 状态整体删除**（收窄后无读取点，grep 确认后删）。
+- **tools/register/page.tsx 权限门**：`useAuthStore(s => s.user?.roleName === "admin")`（对齐 skills 页 isAdmin 模式）；根容器样式提取为模块级 `rootStyle` 常量供正常/无权限两个 return 共用（避免内联重复）；`if (!isAdmin)` 提前 return 无权限卡片（`data-testid="register-forbidden"`）——**hooks 顺序安全**：所有 useState/useMemo 在条件 return 之前执行。
+- **app-shell.tsx**：`EXTRA_PAGE_TITLE` 补 `"/tools/register"`（否则 resolvePageTitle 兜底「任务看板」标题）。**不加导航项**——skills 页按钮直达即闭环（任务优先简单方案）；Dock 无高亮（pathToKey 对 tools 段返回空 key）属可接受现状。
+
+### 验证结果（Playwright chromium channel=chrome + storageState .auth/user.json）
+- admin：skills 页工具 Tab → 点 register-tool-button → URL 变 /tools/register，5 区块（tool-basic/execution/input-schema/binding/init）+ 关键表单项全 count=1，register-modal-root 不出现 ✓
+- admin：register-mcp-button → 弹窗出现且含 register-mcp-server-input ✓（MCP 弹窗保持）
+- member：注入 member roleName 态访问 /tools/register → register-forbidden 可见、tool-register-card count=0 ✓（前端权限门只看 store.user.roleName，无需真实 token；后端 AdminGuard 403 兜底已有 T2 覆盖）
+- `npx tsc --noEmit` exit 0；`npm run build` exit 0。
+
+### 环境/脚本陷阱（新增）
+- **Playwright headless shell 缺失**：默认 `chromium.launch()` 报 Executable doesn't exist at ms-playwright/chromium_headless_shell-1234 → 必须 `chromium.launch({ channel: "chrome" })`（承 T8c 先例）。
+- **member 验证不必真实登录**：后端 API 未起时 auth/login 500；前端权限门判定只读 authStore.user.roleName，直接 `localStorage.setItem('agent-platform-auth', {state:{token, user:{roleName:'member'}}})` 注入即可验证渲染分支（页面不请求 API 时零依赖）。
+- 验证脚本用完即删（web/t7-register-nav.script.js 已清理）；dev server 用 `pkill -f "next dev --turbopack -p 3001"` + 按 pgrep PID kill 兜底，注意 pkill 命令自身会匹配残留。
+
+### 语义分叉（后续维护注意）
+- 「注册工具」= 自定义/内置工具完整注册（5 区块表单，走 /tools/register 页面）；「注册 MCP」= MCP 工具快速登记（弹窗 3 字段）。/tools/register 页内也有 MCP 执行形态（绑定已有 server 配置），与弹窗语义不同——skills 页按钮与页面内 MCP 区块并存是设计使然。
+
+
+## F4 工具注册页：移除模板预填 + 前端校验（2026-08-08）
+
+### 改动（仅 web/app/(main)/tools/register/page.tsx）
+- **预填清空**：toolName/toolDesc/cliCommand/cliFreeCommand/cliFreeWhitelist/cliFreeTimeout/httpUrl/mcpCommand/mcpCwd/mcpEnv/mcpUrl/mcpHeaders 全部 `""`；boundRoles→`[]`；initCommands→`[]`；httpLocs→`{}`；version→`""`（select 补 `<option value="">未指定</option>` 空选项）；**删 DEFAULT_INIT_COMMAND 常量**（保留「添加初始化命令」按钮）。
+- **Schema 编辑器决策**：input/output/cli-free-schema/handler-code 四处全部 `readOnly`（原型如此）→ 保留示例作为格式展示（计划决策 readOnly 保留），不入"预填值"范畴。
+- **校验扩展**（对齐 CreateToolDto）：name 必填（已有）+ **name 长度 ≤64**（@MaxLength(64)）；action slug 正则（已有）；**按形态必填**——cli+schema→cliCommand、cli+free→cliFreeCommand、http→httpUrl（+`^https?:\/\//` 格式）、mcp+local→mcpCommand、mcp+remote→mcpUrl（+http(s) 格式）；**schema JSON 解析失败 → 拦截提交**（原 try/catch 静默吞为 undefined，改为 setRegisterError"输入 Schema 不是合法 JSON" + return；raw 为空跳过校验）。
+- 错误展示沿用 registerState="error" + registerError 汇总文案模式（低风险最小实现，未加字段级红框）。
+
+### 验证
+- `npx tsc --noEmit` exit 0；`npm run build` exit 0（/tools/register 12 kB）。
+- **Playwright 实测 7/7 PASS**（chromium channel=chrome + 动态登录）：初始 4 项全空（name/desc/init-command 0 条/角色未勾选）→ 空提交拦截"工具名不能为空" → cli 缺 cliCommand 拦截 → 填最小字段（name+cliCommand）POST /tools 真实 **201 success**。测试数据 deleteMany 已清理。
+
+### 环境陷阱（新增）
+- **storageState .auth/user.json 的 JWT 会过期**（exp 2h）——重跑浏览器验证必须先 POST /auth/login 动态换 token，再用 `ctx.addInitScript` 覆写 localStorage `agent-platform-auth.state.token`，否则页面请求 401 无明确报错。
+- seed-admin 密码是 `Admin@123456`（seed.ts `ADMIN_PASSWORD` 常量），**不是** admin123（admin123 是初始 r_admin 用户，与 seed-admin 不是同一账号）。
+- Playwright headless shell 未安装：`chromium.launch({ channel: "chrome" })` 用系统 Chrome（承 T8c 模式）。
+
+
+## Schema/handler 编辑器 readOnly 修复（2026-08-08）
+
+### 以事实为准的决策链（code 形态 handler 代码存哪）
+- **后端无独立 code 字段**：Tool model 只有 name/action/source/execution/mcpServer/schema/initCommand/enabled；CreateToolDto 无 code。
+- **worker 消费点**：`worker/src/resources/injector.ts resolveExecution`（:318-323）从 **`schema["x-execution"].code`**（`readXExecution` :447-457 读顶层扩展键）取 code 执行体；缺失 → 工具不注入。cli/http 的执行细节（command/url）同走 x-execution 约定。
+- **结论**：handler 代码唯一落库通道 = 输入 schema 的 `x-execution.code`。code 形态提交时 `schema = { ...(parsedInputSchema ?? {}), "x-execution": { code: handlerCode.trim() } }`（handlerCode 非空才合并）。
+- **outputSchema 可编辑但不提交**：后端 schema 单列无独立 output 槽位，塞进 input 会污染 properties（模型误认 output 为入参）；opencode tool() 协议也不需要输出声明。UI 保留可编辑（用户构思记录），hint 注明"当前版本仅作记录"。
+
+### 页面改动（仅 web/app/(main)/tools/register/page.tsx）
+- 三个受控 state：handlerCode/inputSchema/outputSchema（初始 ""）；删除 HANDLER_CODE_EXAMPLE/INPUT_SCHEMA_EXAMPLE/OUTPUT_SCHEMA_EXAMPLE 常量（CLI_FREE_SCHEMA_EXAMPLE 保留——free 模式提交恒用它）。
+- 三处编辑器去 readOnly + 受控 + placeholder（handler 提示 `// export async function execute...`，schema 提示极简 JSON Schema）；cli-free-schema **保持 readOnly**。
+- handleRegister：`raw` 改为 `inputSchema.trim()`（free 模式仍用常量）；留空 → schema=undefined（后端 IsOptional）；JSON 解析失败拦截沿用。
+
+### 验证
+- `npx tsc --noEmit` ✓、`npm run build` ✓。
+- Playwright 独立脚本（channel chrome + storageState .auth/user.json）23/23：三编辑器可编辑/空值/placeholder、code 形态提交 schema=用户输入+x-execution.code（非示例）、cli 形态 schema=用户输入无 x-execution、留空 schema body 无该字段且成功、cli-free readOnly+极简 command 常量、非法 JSON 拦截且不发请求。
+- pages.spec 回归 15/15（14/17 tool-register 用例断言 testid 可见性，改 readOnly→可编辑零影响）。
+
+### 环境备忘
+- e2e 全链路需**后端真实运行**（auth.setup 走真实表单登录 → /projects → 代理 /api/v1 → 3000）：server 需 `npx nest build`（产物在 dist/src/main.js 非 dist/main.js）+ `node dist/src/main.js`（node 22，pino 兼容）；web dev 用 `npx next dev --turbopack -p 3001`（storageState origin=3001）。
+- Playwright launch 需 `channel: "chrome"`（默认 headless shell 1234 不存在，缓存只有 chromium-1208）。
+
+
+## 文档 19-worker-agent-任务关系梳理（2026-08-08）
+
+### 事实核对结论（写文档时逐行复核）
+- **assignWorker 调用方不传 req**：`dispatchForTarget` 调 `assignWorker()`（worker-dispatcher.ts:395）无参——`AssignmentRequirement`（opencodeVersion/instances）虽实现但当前走默认值（opencodeVersion 匹配/槽位需求实际未生效）。
+- **PENDING_INSTANCE_REF='pending'**（worker-dispatcher.ts:31）：首次 bind 占位 instanceRef；残留 pending 下次分派视为未绑定重新分配（F2 M5，:382-405）。
+- **degraded 语义**：心跳 health=degraded → 状态 degraded，仍在候选集但排序排后；30s 无心跳照常判 offline（离线判定不因 degraded 改变）。
+- **tokenHash 可选**：`String?`，`if (token && worker.tokenHash)` 才比对——未设 token 注册的 worker 心跳鉴权跳过。
+- **TaskGroupInstance 软删**：unbindSession 回滚时 `removedAt=now`，历史实例行保留（任务页查询依据）。
+- **调度局限根因链**：capabilities.skills 恒 []（T10 未接线）→ 调度无法按技能匹配（非实现缺失而是上报缺失）。
+- 文档编号：18 已被「推进计划」+「原型审计报告」两文件占用 → 新文档用 19。
+
+
+## F5 MAJOR 修复：dispatchForTarget 复用 offline worker 不校验（2026-08-08）
+
+### 根因
+- `WorkerDispatcher.dispatchForTarget` 复用 Session 已绑定 workerId 时**不校验 worker 在线性**：
+  仅 `!workerId || hasStalePending`（F2 M5）判断 → 历史绑定 w_local_1（offline）直接进连接步骤
+  → createSession/promptAsync `fetch failed` → `WorkerUnavailableException` → @ 首字回复永远超时（perf e2e 实证）。
+
+### 修复（server/src/chat/worker-dispatcher.ts，步骤 2 worker 行查询）
+- worker 行查询 `select` 加 `status`；`!workerRow || workerRow.status === WORKER_STATUS.OFFLINE`
+  → `unbindSession`（Session 恢复 created + 实例行软删）→ `assignWorker` 重新分配 → 二次查 worker 行
+  → `opencodeSessionId = null`（防旧 instanceRef 残留跳过 createSession）→ `bindSessionToWorker(pending)`。
+- **分支只命中"复用已绑定"**：未绑定分支的 assignWorker 已过滤 offline（workers.service assignWorker），
+  在线 worker 复用语义保留（D3 二次 @ 复用）；worker 行缺失（被删）同样走重分配。
+- 需 import `WORKER_STATUS` from '../workers/workers.constants'。
+
+### ⚠️ 连带根因：`ti` 前缀无续号（端到端实证暴露）
+- TaskGroupInstance 主键 `ti_<seq>` **从未被任何 service seed**（tools/agents/skills/artifacts/chat 都有 onModuleInit 续号）。
+- 修复路径引入"解绑→rebind 创建新实例行"，重启后 ti 计数器从 1 起 → 与库中软删旧行 `ti_0000000001`
+  → `Unique constraint failed on PRIMARY`。**修复**：SessionLifecycleService 加 `onModuleInit`
+  `findFirst orderBy id desc` → `seed('ti', seq)`（同 tools.service 模式；parseInt 非法 id 跳过）。
+- 教训：新增"创建行"执行路径前先确认该域主键生成器有重启续号。
+
+### 单测
+- worker-dispatcher.spec 新增 3：绑定 offline worker → 解绑+重分配（unbindSession+assignWorker+bind pending→真实、
+  promptAsync 用新 worker 不复用旧会话）；绑定在线 worker → 直接复用不重分配（回归）；worker 行缺失 → 解绑重分配。
+- session-lifecycle.spec 新增 3：onModuleInit seed(ti, seq) / 库空不 seed / 非法 id 不 seed。
+- server 全量 **547/547**（541 基线 + 6）；`nest build` exit 0。
+
+### 端到端实证（3000 重启 + w_perf_test 在线）
+- 日志实证核心修复：`绑定的 worker w_local_1 不可用（offline），解绑并重新分配 worker` → 重分配 w_perf_test，
+  **不再 fetch failed**；新实例行 `ti_0000000005`（w_perf_test）成功创建（续号生效）。
+- ⚠️ createSession HTTP 400 为**独立环境问题**：opencode serve 1.18.15 的 `POST /session` **拒收 `model` 字段**
+  （`{"model":{...}}` → 400 BadRequest，`{}` → 200），与 worker 在线性无关、任何 worker 都触发。
+  属 server WorkerClient↔serve 模型契约问题（不在本任务范围，MUST NOT 改 worker 侧）。
+- 实证后恢复 a_product.defaultModelId、session 已回滚 created（下次 @ 自动重分配，符合预期）。
+
+
+## F5-2 MAJOR 修复：createSession 去 model（POST /session 空 body，2026-08-08）
+
+### 根因（承 F5 实证的独立环境问题）
+- **serve 1.18.15 契约**：`POST /session` **拒收 `model` 字段**（带 model → 400 `{"_tag":"BadRequest"}`，
+  空 body → 200 `{id:"ses_..."}`）；`prompt_async` 带/不带 model 均 204。→ 模型选择只能在
+  prompt_async（sendMessage/promptAsync 的 `input.model`/`opts.model`）时指定，session 创建不选模型。
+- **受影响两处**（都直接把 model 塞进 POST /session body → 必 400 → @ 首字回复超时）：
+  ① `worker/src/driver/v1-driver.ts` `createSession`（worker 内部调用 serve）；
+  ② `server/src/workers/worker.client.ts` `createSession`（server→worker 直连 serve，@ 分派主链路）。
+
+### 修复（最小改动：保留签名，忽略 model）
+- 两处 `createSession` 的 `body` 改为恒 `JSON.stringify({})`；**签名保留 `model?` 参数**（调用方
+  worker-dispatcher.ts:473 `createSession(worker, model)` 不变），docstring 注明 serve 契约
+  （带 model → 400）防后续维护者误补回去。tsconfig 无 `noUnusedParameters`，未用参数不报错。
+- **prompt_async 链路零改动**：server `promptAsync` 的 `opts.model` 与 worker `sendMessage` 的
+  `input.model` 本就下发 model（serve 接受），worker-dispatcher.ts:515-519 `promptAsync(worker, sid, { model, ... })`
+  保留——模型选择完整链路在 prompt_async 时生效。
+
+### 单测（两处 createSession 请求体断言反转）
+- `worker/src/driver/v1-driver.spec.ts`：用例「带 model 时 body 含 {model}」→「带 model 参数 → body 仍为 {}
+  （serve 1.18.15 拒收 model，模型在 prompt_async 指定）」。
+- `server/src/workers/worker.client.spec.ts`：同构反转（传入 model → body 仍 {}）。
+- worker-dispatcher.spec.ts:212 的 `createSession` 调用断言**不改**（验证的是调用方传参，签名保留故仍成立）。
+
+### 验证结果
+- worker：`tsc` build ✓、jest **178/178**（基线）；server：`nest build` ✓、jest **547/547**（基线）。
+- **serve 契约实证**（w_perf_test :33809）：`POST /session` 带 model → **400**；空 body → **200**（返回 ses_...）；
+  `prompt_async` 带 model → **204**；abort 200 清理测试会话。
+- **端到端实证**（3000 重启加载新 dist + w_perf_test 在线）：POST `@a_product` 消息 → triggers dispatched →
+  session s_0000000001 `instanceRef` 从 pending 更新为**真实 `ses_01ef...`**、`workerId=w_perf_test`、`status=active`
+  （更新时间正是消息落库时刻）——createSession 200 不再 400。serve 会话可见 user 消息已下发（promptAsync 204 生效）、
+  assistant 占位无回复（free 模型不可达，符合任务预期「或至少 createSession 不再 400」）。
+
+### 环境备忘
+- 3000 server 是 detached 进程（PPID=1，`node dist/src/main.js`，cwd=server，走 server/.env）——重启：
+  `kill <pid>` + `cd server && nohup node dist/src/main.js > /tmp/aiagents-3000-fix.log 2>&1 &`，node 22 启动。
+- dispatch 成功路径**静默**（worker-dispatcher 仅 warn/error 打日志）——实证 createSession 是否成功须查 DB
+  session.instanceRef（非 pending 即成功），而非 grep 日志。

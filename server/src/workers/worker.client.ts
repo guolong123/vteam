@@ -92,6 +92,10 @@ export class WorkerClient {
    * POST /session：创建 opencode 会话。
    * serve 实际返回 `{ id: "ses_..." }`（SDK 声明 {sessionID} 是错的），此处映射为
    * `{ sessionID }` 契约，T10/T12 存 instanceRef 直接用。
+   * ⚠️ serve 契约（实测 opencode 1.18.15）：POST /session **拒收 model 字段**
+   * （带 model → 400，空 body → 200）——模型选择经 promptAsync 的 opts.model 指定。
+   * 签名保留 `model?` 参数仅为兼容调用方（worker-dispatcher.dispatchForTarget 传参），
+   * 请求体恒为 {}。
    */
   async createSession(
     worker: WorkerEndpointRef,
@@ -100,7 +104,8 @@ export class WorkerClient {
     const res = await this.request(worker, '/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(model ? { model } : {}),
+      // serve 1.18.15 拒收 model → 空 body（模型经 promptAsync 的 opts.model 指定）
+      body: JSON.stringify({}),
     });
     if (!res.ok) {
       throw new WorkerUnavailableException(worker.id, `createSession HTTP ${res.status}`);

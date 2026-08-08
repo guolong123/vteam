@@ -34,8 +34,11 @@ import {
   WORKER_COMMAND_TYPES,
 } from './protocol/worker-protocol';
 import { OpencodeServer } from './runtime/opencode-server';
-import { ResourceInjector } from './resources/injector';
+import { InjectReport, ResourceInjector } from './resources/injector';
 import { RestartCoordinator } from './restart/restart-coordinator';
+
+/** 无注入时的空报告（buildCapabilities/buildRegisterOptions 默认值；main() 总会传入真实报告）。 */
+const EMPTY_INJECT_REPORT: InjectReport = { skills: [], tools: [], mcpServers: [] };
 
 /** 探测 opencode CLI 版本（T3 前仅用于启动信息展示；失败不阻断启动）。 */
 export function detectOpencodeVersion(): string {
@@ -99,13 +102,20 @@ function printStartup(config: WorkerConfig, opencodeVersion: string): void {
  * server 侧 WorkerClient.resolveBaseUrl 读 capabilities.port，缺失会回退死端口 4199。
  * D2：另上报 capabilities.baseUrl = ${advertiseHost}:${port}（容器内 compose 设
  * WORKER_ADVERTISE_HOST=http://worker，server resolveBaseUrl 优先读 baseUrl 直连）。
+ * T9：接入注入器清单——skills 上报注入器实际注入的 skill 名，tools 合并内置 git 工具族
+ * 与注入的自定义工具（去重）。
  */
-export function buildCapabilities(port: number | null, advertiseHost: string): WorkerCapabilities {
+export function buildCapabilities(
+  port: number | null,
+  advertiseHost: string,
+  injected: InjectReport = EMPTY_INJECT_REPORT,
+): WorkerCapabilities {
   const base = advertiseHost.replace(/\/+$/, '');
+  const tools = [...new Set([...GIT_TOOLS.map((tool) => tool.name), ...injected.tools])];
   return {
     maxInstances: 1,
-    skills: [],
-    tools: GIT_TOOLS.map((tool) => tool.name),
+    skills: injected.skills,
+    tools,
     port: port ?? undefined,
     baseUrl: port !== null ? `${base}:${port}` : undefined,
   };
@@ -114,12 +124,15 @@ export function buildCapabilities(port: number | null, advertiseHost: string): W
 /**
  * T4c/T6：组装注册选项。T4c 重启后 serve 端口可能变化（随机端口），reRegister 用当前
  * serveServer.port 重新组装 → capabilities.baseUrl/port 随心跳后注册更新，server 才能连上新端口。
+ * T9：injected 为最近一次注入报告（启动注入 + reload-config 重注入后更新），
+ * 注册/reRegister 携带真实 skills/tools 清单，保证 worker 详情页数据非陈旧。
  */
 export function buildRegisterOptions(
   config: WorkerConfig,
   port: number | null,
   serveVersion: string,
   cliVersion: string,
+  injected: InjectReport = EMPTY_INJECT_REPORT,
 ): RegistryClientOptions {
   return {
     serverUrl: config.serverUrl,
@@ -127,7 +140,7 @@ export function buildRegisterOptions(
     workerId: config.workerId,
     workerName: config.workerName,
     opencodeVersion: serveVersion !== 'unknown' ? serveVersion : cliVersion,
-    capabilities: buildCapabilities(port, config.workerAdvertiseHost),
+    capabilities: buildCapabilities(port, config.workerAdvertiseHost, injected),
   };
 }
 
@@ -175,11 +188,22 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   let registeredWorkerId = '';
   let heartbeatIntervalMs = config.heartbeatIntervalMs;
 
+  // T9：最近一次注入报告（启动注入 + reload-config 重注入后更新）。
+  // 注册/reRegister 据此上报真实 skills/tools 清单——reload-config 后 reRegister 复用，
+  // 资源变更后 worker 详情页数据非陈旧。
+  let lastInjectReport: InjectReport = EMPTY_INJECT_REPORT;
+
   // T6 注册（X-Worker-Token）：失败指数退避重试（1s/2s/4s/8s...封顶 30s），
   // 重试耗尽返回 null（由调用方决定退出或降级）。
   const registerCurrent = (): Promise<RegisterResponse | null> =>
     registerWorkerWithRetry(
-      buildRegisterOptions(config, serveServer.port, serveServer.version, opencodeVersion),
+      buildRegisterOptions(
+        config,
+        serveServer.port,
+        serveServer.version,
+        opencodeVersion,
+        lastInjectReport,
+      ),
       { logger: { warn: (message: string) => console.warn(`[worker] ${message}`) } },
     ).catch((err: Error) => {
       console.error(`[worker] 注册失败（重试耗尽）: ${err.message}`);
@@ -221,6 +245,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       if (command.type === WORKER_COMMAND_TYPES.RELOAD_CONFIG) {
         try {
           const report = await injector.injectAll();
+          // T9：重注入后更新注入清单，重启后的 reRegister 上报最新 skills/tools
+          lastInjectReport = report;
           console.log(
             `[worker] reload-config：资源重注入完成（${report.skills.length} skills, ${report.tools.length} tools, ${report.mcpServers.length} mcp servers）`,
           );
@@ -295,6 +321,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   void (async () => {
     try {
       const report = await injector.injectAll();
+      // T9：首次注入清单作为注册时上报的真实 skills/tools
+      lastInjectReport = report;
       console.log(
         `[worker] 平台资源注入完成: ${report.skills.length} skills, ${report.tools.length} tools, ${report.mcpServers.length} mcp servers`,
       );
