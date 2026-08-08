@@ -2,8 +2,11 @@
  * 原型：Agent 配置
  * =============================================
  * 对应 PRD 04 篇「Agent 管理」：Agent 列表（4 预置角色模板 + 自定义示例）+ 配置面板（提示词/默认模型/技能/工具/权限范围五类配置项）+ 模板克隆入口。
- * - 默认模型（FR-47）：模型下拉为静态 mock（模型池 4 项），列表来源标注 opencode 接口动态获取；各角色模板带默认模型建议。
- * - 纯静态展示：勾选/开关/编辑均为示意，无交互逻辑。
+ * - 默认模型（FR-47）：模型下拉 mock 平台目录 enabled 模型（选项「provider / 模型名」，如
+ *   "opencode-go / DeepSeek V4 Flash"），来源标注模型目录（worker 上报合并入库）；
+ *   模型凭据行 mock 已配置（绿徽章 + 脱敏 fingerprint）/ 未配置（token 输入框）双态，
+ *   联动模型选择切换（受控，mock 不落库）；首选 Worker 软绑定（未选自动调度）。
+ * - 纯静态展示：勾选/开关/编辑均为示意，无交互逻辑（模型下拉联动凭据态除外）。
  * - 导航融合方案（T17）：深色 Sidebar 已替换为 NavDock 悬浮导航 + 浅色 NavTopBar + Cmd+K 命令面板，
  *   与 nav-hybrid 融合版心智一致（命令面板 z-40，Dock z-50，两者共存不冲突）。
  * - Cmd+K 面板为受控开关（T19）：useState 管理 cmdkOpen（初始关闭），trigger 打开，✕/遮罩点击/Esc 关闭。
@@ -45,22 +48,122 @@ interface AgentInfo {
   tools: string[];
   /** 权限范围（FR-36） */
   scope: string;
-  /** 默认模型（FR-47）：产品视角命名，来源 opencode 接口动态获取 */
+  /** 默认模型（FR-47）：模型目录 id（providerID/modelID），来源平台模型目录动态获取 */
   defaultModel: string;
 }
 
 const skillPool = ["文档撰写", "需求拆解", "用例设计", "代码审查", "代码生成", "缺陷分析", "方案评审"];
 
-/** 模型池（mock）：真实列表来自 opencode 接口，产品视角命名 */
-const modelPool = ["通用对话模型", "推理模型", "代码模型", "快速模型"] as const;
+/** 模型目录（mock）：对齐 models-manage 原型 8 项语义（providerID/modelID 与 STATIC_AVAILABLE_MODELS 同格式）；
+ * 凭据按 provider 粒度配置（C4/C5），agent 模型选择从目录拉取 enabled 模型（C6）。 */
+interface ModelCatalogItem {
+  /** 模型ID：providerID/modelID */
+  id: string;
+  /** providerID（凭据按 provider 粒度保存） */
+  provider: string;
+  /** 产品视角模型名（下拉「provider / 名称」展示） */
+  name: string;
+  note: string;
+  /** 停用模型不出现在 agent 选择下拉（对齐目录 enabled 语义） */
+  enabled: boolean;
+  /** 凭据状态：configured=已配置 token（仅展示脱敏 fingerprint）/ missing=未配置（展示输入框） */
+  credential: "configured" | "missing";
+  /** 脱敏 fingerprint（mock）：token 本身永不展示（17 篇 §5.4） */
+  fingerprint: string;
+}
 
-/** 各模型产品视角说明（展示用） */
-const modelNotes: Record<string, string> = {
-  "通用对话模型": "日常任务首选，均衡通用",
-  推理模型: "复杂分析与方案设计",
-  代码模型: "代码生成与审查优化",
-  快速模型: "简单任务低延迟响应",
-};
+const modelCatalog: ModelCatalogItem[] = [
+  {
+    id: "opencode-go/deepseek-v4-flash",
+    provider: "opencode-go",
+    name: "DeepSeek V4 Flash",
+    note: "轻量高速，日常任务默认",
+    enabled: true,
+    credential: "configured",
+    fingerprint: "sk-****d2k9",
+  },
+  {
+    id: "opencode-go/deepseek-v4-pro",
+    provider: "opencode-go",
+    name: "DeepSeek V4 Pro",
+    note: "复杂推理与长文分析",
+    enabled: true,
+    credential: "configured",
+    fingerprint: "sk-****p4r7",
+  },
+  {
+    id: "opencode-go/deepseek-v4-flash-free",
+    provider: "opencode-go",
+    name: "DeepSeek V4 Flash Free",
+    note: "免费档位，限速调用",
+    enabled: true,
+    credential: "configured",
+    fingerprint: "sk-****f9m3",
+  },
+  {
+    id: "zhipu/glm-5.1",
+    provider: "zhipu",
+    name: "GLM 5.1",
+    note: "中文理解与代码生成",
+    enabled: true,
+    credential: "missing",
+    fingerprint: "",
+  },
+  {
+    id: "openai/gpt-5.6-luna",
+    provider: "openai",
+    name: "GPT-5.6 Luna",
+    note: "多模态通用旗舰",
+    enabled: true,
+    credential: "configured",
+    fingerprint: "sk-****l5t1",
+  },
+  {
+    id: "xai/grok-4.5",
+    provider: "xai",
+    name: "Grok 4.5",
+    note: "实时信息与创意生成",
+    enabled: false,
+    credential: "missing",
+    fingerprint: "",
+  },
+  {
+    id: "moonshot/kimi-k2.6",
+    provider: "moonshot",
+    name: "Kimi K2.6",
+    note: "长上下文阅读助手",
+    enabled: true,
+    credential: "missing",
+    fingerprint: "",
+  },
+  {
+    id: "qwen/qwen3.6-plus",
+    provider: "qwen",
+    name: "Qwen 3.6 Plus",
+    note: "通用能力均衡，性价比高",
+    enabled: true,
+    credential: "configured",
+    fingerprint: "sk-****q7w6",
+  },
+];
+
+/* 凭据状态语义色（"扩展 token"范式页面内定义：语义独立于任务四态/角色色，与 models-manage 页内
+ * credentialTheme 完全一致，不扩散共享层） */
+const credentialTheme = {
+  configured: { label: "已配置", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
+  missing: { label: "未配置", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+} as const;
+
+/** 目录 lookup：按模型 id 取目录项（未知 id 兜底首个） */
+const modelById = (id: string): ModelCatalogItem =>
+  modelCatalog.find((m) => m.id === id) ?? modelCatalog[0];
+
+/** 首选 worker 池（mock）：未选 = 自动调度到任意可用 worker（软绑定，离线自动回退） */
+const workerPool = [
+  { id: "wkr-linux-01", name: "worker-linux-01", online: true },
+  { id: "wkr-linux-02", name: "worker-linux-02", online: true },
+  { id: "wkr-mac-01", name: "worker-mac-01", online: false },
+];
 
 const agentTemplates: AgentInfo[] = [
   {
@@ -72,7 +175,7 @@ const agentTemplates: AgentInfo[] = [
     skills: ["需求拆解", "文档撰写"],
     tools: ["读取文档库", "搜索", "读取仓库"],
     scope: "仅读取，可写任务文档库",
-    defaultModel: "通用对话模型",
+    defaultModel: "opencode-go/deepseek-v4-flash",
   },
   {
     id: "arch-template",
@@ -83,7 +186,7 @@ const agentTemplates: AgentInfo[] = [
     skills: ["方案评审", "代码审查"],
     tools: ["读取仓库", "搜索", "执行命令"],
     scope: "读取 + 写任务文档库",
-    defaultModel: "推理模型",
+    defaultModel: "opencode-go/deepseek-v4-pro",
   },
   {
     id: "dev-template",
@@ -94,7 +197,7 @@ const agentTemplates: AgentInfo[] = [
     skills: ["代码生成", "代码审查"],
     tools: ["读取仓库", "执行命令", "写入仓库"],
     scope: "读取 + 写任务文档库 + 提交代码",
-    defaultModel: "代码模型",
+    defaultModel: "zhipu/glm-5.1",
   },
   {
     id: "tester-template",
@@ -105,7 +208,7 @@ const agentTemplates: AgentInfo[] = [
     skills: ["用例设计", "缺陷分析"],
     tools: ["读取仓库", "执行命令"],
     scope: "仅读取，可写任务文档库",
-    defaultModel: "推理模型",
+    defaultModel: "opencode-go/deepseek-v4-pro",
   },
   {
     id: "custom-qa",
@@ -116,7 +219,7 @@ const agentTemplates: AgentInfo[] = [
     skills: ["代码审查", "缺陷分析"],
     tools: ["读取仓库", "执行命令"],
     scope: "仅读取，可写任务文档库",
-    defaultModel: "代码模型",
+    defaultModel: "zhipu/glm-5.1",
   },
 ];
 
@@ -137,6 +240,43 @@ const CMDK_ITEMS: CmdKItem[] = [
 ];
 
 /* ------------------------------ 子组件 ------------------------------ */
+
+/** 凭据状态徽章：已配置=绿 / 未配置=灰（仿 models-manage CredentialBadge 视觉，theme 页面内定义） */
+function CredentialBadge({ status }: { status: "configured" | "missing" }) {
+  const theme = credentialTheme[status];
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: space.xs,
+        padding: `${space.xs}px ${space.sm + 2}px`,
+        borderRadius: radius.pill,
+        backgroundColor: theme.bg,
+        border: `1px solid ${theme.border}`,
+        color: theme.color,
+        fontSize: fontSize.sm,
+        fontWeight: 500,
+        lineHeight: 1.4,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+        ...baseFont,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          backgroundColor: theme.color,
+          flexShrink: 0,
+        }}
+      />
+      {theme.label}
+    </span>
+  );
+}
 
 /** 工具权限模型：工具名即权限 action，effect ∈ {allow, ask, deny}（与 opencode PermissionV2 对齐） */
 type ToolEffectKey = "allow" | "ask" | "deny";
@@ -361,6 +501,10 @@ function ConfigPanel({ agent }: { agent: AgentInfo }) {
   const accent = isTemplate ? roles[agent.role as RoleKey].color : "#64748B";
   const activeSkills = new Set(agent.skills);
 
+  /* 默认模型选择（受控）：联动凭据行 已配置/未配置 双态展示（mock 不落库） */
+  const [selectedModelId, setSelectedModelId] = useState(agent.defaultModel);
+  const selectedModel = modelById(selectedModelId);
+
   return (
     <section
       style={{
@@ -527,12 +671,14 @@ function ConfigPanel({ agent }: { agent: AgentInfo }) {
               ◉
             </span>
             <span style={{ color: neutral[500] }}>当前</span>
-            <span style={{ color: neutral[800], fontWeight: 500 }}>{agent.defaultModel}</span>
-            <span style={{ color: neutral[400] }}>· {modelNotes[agent.defaultModel]}</span>
+            <span style={{ color: neutral[800], fontWeight: 500 }}>{selectedModel.name}</span>
+            <span style={{ color: neutral[400] }}>· {selectedModel.note}</span>
           </div>
           <select
             data-testid="model-select"
-            defaultValue={agent.defaultModel}
+            value={selectedModelId}
+            onChange={(e) => setSelectedModelId(e.target.value)}
+            aria-label="选择默认模型"
             style={{
               fontFamily: fontFamily.body,
               fontSize: fontSize.sm,
@@ -542,16 +688,140 @@ function ConfigPanel({ agent }: { agent: AgentInfo }) {
               borderRadius: radius.md,
               padding: `${space.xs}px ${space.sm}px`,
               cursor: "pointer",
-              width: 176,
+              width: 240,
             }}
           >
-            {modelPool.map((model) => (
-              <option key={model} value={model}>
-                {model}
+            {modelCatalog
+              .filter((m) => m.enabled)
+              .map((m) => (
+                <option
+                  key={m.id}
+                  value={m.id}
+                  data-testid="model-option-provider"
+                  data-model-id={m.id}
+                  data-credential={m.credential}
+                >
+                  {m.provider} / {m.name}
+                </option>
+              ))}
+          </select>
+        </div>
+
+        {/* 模型凭据：mock 已配置/未配置双态（联动模型选择）；token AES-256-GCM 加密落库，仅展示脱敏 fingerprint */}
+        <div
+          data-testid="model-token-status"
+          data-credential={selectedModel.credential}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.md,
+            padding: space.md,
+            borderRadius: radius.md,
+            backgroundColor: neutral[50],
+            border: `1px solid ${neutral[200]}`,
+          }}
+        >
+          <CredentialBadge status={selectedModel.credential} />
+          {selectedModel.credential === "configured" ? (
+            <span
+              style={{
+                fontFamily: fontFamily.mono,
+                fontSize: fontSize.sm,
+                color: neutral[600],
+                letterSpacing: "0.02em",
+              }}
+            >
+              {selectedModel.fingerprint}
+            </span>
+          ) : (
+            <>
+              <input
+                data-testid="model-token-input"
+                type="password"
+                placeholder={`输入 ${selectedModel.provider} 的 API token（sk-…）`}
+                aria-label="模型 API Token"
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  maxWidth: 320,
+                  padding: `${space.xs}px ${space.sm}px`,
+                  borderRadius: radius.md,
+                  border: `1px solid ${neutral[300]}`,
+                  backgroundColor: "#FFFFFF",
+                  fontSize: fontSize.sm,
+                  color: neutral[800],
+                  fontFamily: fontFamily.mono,
+                  outline: "none",
+                }}
+              />
+              <button
+                type="button"
+                style={{
+                  padding: `${space.xs + 1}px ${space.md}px`,
+                  borderRadius: radius.pill,
+                  border: "none",
+                  backgroundColor: "#2563EB",
+                  color: "#FFFFFF",
+                  fontSize: fontSize.xs,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                保存
+              </button>
+            </>
+          )}
+          <span style={{ marginLeft: "auto", fontSize: fontSize.xs, color: neutral[400] }}>
+            {selectedModel.credential === "configured"
+              ? "凭据已配置 · 按 provider 粒度生效（C4）"
+              : "保存后即时下发到 worker（C5）"}
+          </span>
+        </div>
+
+        {/* 首选 Worker：软绑定，未选则自动调度到任意可用 worker（离线自动回退） */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.md,
+            padding: space.md,
+            borderRadius: radius.md,
+            backgroundColor: neutral[50],
+            border: `1px solid ${neutral[200]}`,
+          }}
+        >
+          <span style={{ fontSize: fontSize.sm, color: neutral[600], flexShrink: 0 }}>
+            首选 Worker
+          </span>
+          <select
+            data-testid="agent-worker-select"
+            defaultValue=""
+            aria-label="首选 Worker（未选则自动调度）"
+            style={{
+              fontFamily: fontFamily.body,
+              fontSize: fontSize.sm,
+              color: neutral[800],
+              backgroundColor: "#FFFFFF",
+              border: `1px solid ${neutral[300]}`,
+              borderRadius: radius.md,
+              padding: `${space.xs}px ${space.sm}px`,
+              cursor: "pointer",
+              minWidth: 220,
+            }}
+          >
+            <option value="">自动调度（默认）</option>
+            {workerPool.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name} · {w.online ? "在线" : "离线"}
               </option>
             ))}
           </select>
+          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+            未选则自动调度到任意可用 worker（软绑定）
+          </span>
         </div>
+
         <div
           data-testid="model-source-hint"
           style={{
@@ -565,7 +835,7 @@ function ConfigPanel({ agent }: { agent: AgentInfo }) {
           <span aria-hidden style={{ fontSize: fontSize.xs }}>
             ↗
           </span>
-          模型列表来自 opencode 接口动态获取
+          模型列表来自平台模型目录（worker 上报合并入库，C3）
         </div>
       </div>
 
@@ -835,7 +1105,7 @@ function AgentListItem({ agent }: { agent: AgentInfo }) {
               borderRadius: radius.pill,
             }}
           >
-            {agent.defaultModel}
+            {modelById(agent.defaultModel).name}
           </span>
         </div>
       </div>
