@@ -628,3 +628,37 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   `kill <pid>` + `cd server && nohup node dist/src/main.js > /tmp/aiagents-3000-fix.log 2>&1 &`，node 22 启动。
 - dispatch 成功路径**静默**（worker-dispatcher 仅 warn/error 打日志）——实证 createSession 是否成功须查 DB
   session.instanceRef（非 pending 即成功），而非 grep 日志。
+
+
+## 域主键续号系统性缺陷修复：findFirst desc → resyncIdPrefix 前缀统计（2026-08-08）
+
+### 根因（已实证）
+- 各 service `onModuleInit` 续号用 `findFirst({ orderBy: { id: 'desc' } })` 取**字典序最大** id 行再 `parseInt`：
+  tools 表混 `tl_0000000001`（数字）+ `tl_builtin_*`（builtin 命名）时，字典序上 `tl_builtin_write` > `tl_0000000010`
+  （'b' > '0'）→ parseInt('builtin_write') = NaN → `Number.isFinite` false → **seed 不执行** → 计数器从 0 起
+  → 注册 ketacli 时 nextId 生成 `tl_0000000001` 撞库中已有主键 → **500 Unique constraint failed on PRIMARY**。
+- 同款逻辑 4 处：tools（已触发 500）/ agents（表有 `a_architect`/`a_product` 命名 id，创建 agent 撞主键风险）/
+  skills（当前纯数字）/ session-lifecycle（ti 前缀，当前纯数字）。
+
+### 修复（server/src/common/id-resync.ts 通用函数）
+- **`resyncIdPrefix(model, prefix, idGen)`**：`findMany({ where: { id: { startsWith: '<prefix>_' } }, select: { id: true } })`
+  取该前缀全部行 → JS 侧 `^\d+$` 严格匹配**纯数字**序号取 max（命名/builtin id 跳过）→ `max>0` 才 seed。
+  只统计该前缀下数字序号，天然忽略 `tl_builtin_*` / `a_architect` 等命名 id；空表/纯命名 → 不 seed → nextId 从 1 起。
+- **4 处调用点统一替换**（tools/agents/skills/session-lifecycle），agents 的 `seedPrefix` 私有方法删除
+  （onModuleInit 直接对 agent/agentSkill/agentToolEffect 三前缀各调一次 resyncIdPrefix）。
+- **类型技巧**：`ResyncIdModel` 接口 `findMany(args: {...}): Promise<unknown>`（method syntax → 参数 bivariance）——
+  Prisma delegate 泛型签名可直接赋给，函数内 `as Array<{id: string}>` 断言。不要用 `Promise<Array<{id: string}>>`
+  返回（Prisma 泛型实例化后返回完整对象数组，赋值给严格数组类型不兼容，会 TS 报错）。
+- **不用 parseInt 宽松解析**：`parseInt('1abc')`=1 会误判，用 `/^\d+$/` 先严格校验再 `Number(tail)`。
+
+### 单测
+- `id-resync.spec.ts` 5 个：查询参数断言（startsWith 前缀 + select id）/ 混合 `tl_数字`+`tl_builtin_*` 续到 11 /
+  纯命名 `a_architect` 不 seed nextId 从 1 / 空表不 seed / 前缀隔离（`a_` 统计不影响 `as_`/`ate_`）。
+- service spec：tools +1 混合场景用例、session-lifecycle +1 混合场景用例；onModuleInit 断言从 findFirst 改 findMany。
+- **验证**：`tsc --noEmit` ✓；jest **554/554**（547 基线 + 7）；`nest build` exit 0。
+
+### 教训
+- **续号逻辑必须只统计本前缀的数字序号**，绝不能 `orderBy id desc` 取"最大"——命名/builtin id 是合法存量数据
+  （seed 工具/模板 agent 用语义化 id），字典序与数值序混排时必然踩坑。新增"创建行"路径（F5 ti 前缀）前
+  先确认该域主键有续号（承 F5 教训），续号实现用 resyncIdPrefix 而非手写 findFirst。
+

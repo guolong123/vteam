@@ -6,22 +6,57 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ---
 
-## C6: 前端模型管理页 + agent 模型选择器增强（2026-08-09，实现 + 回归完成）
+## B2 修复：resolveModels 空列表重试（2026-08-09，实现 + 实证完成）
 
-- **⚠️ 并行会话前置状态**：C6 大部分实现已由并行会话落地且未提交（web/ 工作区 dirty）——`web/app/(main)/models/page.tsx`（1355 行，P0 原型 models-manage 保真迁移 + 真实 API）、agents/page.tsx 模型区增强（2088 行）、导航 5 处注册（nav-dock NAV_ITEMS / app-shell KEY_TO_PATH+CMDK_NAV_PATH+PAGE_TITLE / cmdk-panel DEFAULT_CMDK_ITEMS）、共享类型 `web/src/types/models.ts`、testids.ts 注册。本会话职责转为：**验收核对 + 补齐缺口 + 回归 + 提交**，避免重写。
-- **验收命令执行**：`grep -oP 'data-testid="\K[^"]+'` 原型 models-manage → sort -u 得 19 testid 清单，与实现页 diff——原型 19 项全量在实现页（实现页超集 +9：model-add-modal/model-provider-input/model-model-id-input/model-name-input/model-add-confirm/model-add-error/model-add-cancel + models-loading/error/retry，对齐 skills 页"各页新增 loading/error/retry"惯例），**验收通过**。
-- **testid 补齐（3 处）**：agents 页条目补 `model-credential-status`（CredentialBadge 徽章）+ `skill-empty`（技能空态）；models 页条目补 `model-add-cancel`（弹窗取消按钮，实现页出现 2 次同一 testid：关闭 ✕ + 底部取消）。补后 comm 对比空。
-- **agents 页增强实现要点（并行会话，已核对正确）**：
-  - MODEL_NAMES 死代码已删：2 处引用（AgentListItem 徽章 L391 `modelNameOf(agent.defaultModelId) ?? id`、ConfigPanel currentModelName）改为目录 name 查询——`catalogQuery`（GET /models）建 `catalogByRef` Map（key=`providerID/modelID` **+ 裸 modelID**，存量旧自由字符串兼容），`modelNameOf` useCallback 供列表徽章。
-  - 模型下拉（model-select）：options 显示 `providerOf(id) / name`（providerOf 取首个 '/' 前），option 带 data-testid="model-option-provider" + data-model-id。
-  - 凭据双态（model-token-status data-credential）：tokenQuery 按 `catalogByRef.get(modelDraft).id`（md id）查 GET /models/:mdId/credentials → configured 显示绿徽章+fingerprint / missing 显示 model-token-input + 保存（POST /models/:mdId/credentials {token}，全量下发；定向在 models 管理页做）。
-  - 首选 worker（agent-worker-select）：GET /workers + sortedWorkers 在线优先排序，value=agent.workerId（可空），保存 payload `workerId: workerDraft || null`（custom/clone 提交；template 只提交 defaultModelId 保持后端 assertWritable 单字段放行）；说明「未选则自动调度（软绑定）」。
-  - 存量校验（model-stale-warning）：`staleModel = !!modelDraft && !catalogByRef.has(modelDraft)` → 琥珀警告「保留不阻断保存」。
-- **契约确认**：server update-agent.dto 已支持 `workerId?: string | null`（@ValidateIf((o)=>o.workerId!==null)，L78-79）+ agents.service PATCH 条件落库（L239）+ toAgentView 透出（L318）；defaultModelId @Matches provider/model slug。前端契约零后端改动。
-- **回归**：`npx tsc --noEmit` 0 错误；`npm run build`（**须 PATH 指 nvm v22.22.1**，默认 shell node 18.15.0 会被 Next 拒绝，与 P0.3 踩坑一致）通过且 /models 路由入表；eslint 仅 3 个 react-hooks/exhaustive-deps warnings（models 页 `models = data?.items ?? []` 引用稳定性，与 agents 页既有模式一致，非阻断）。
-- **提交策略**：只 stage C6 web 文件（models/ 新目录 + agents/page.tsx + testids.ts + 3 导航文件 + src/types/），不含 server/docs 并行会话 dirty 文件（C2/C3/C5 由相应会话提交）。commit message `feat(web): 模型管理页与 agent 模型/首选 worker/凭据配置`。
+- **根因（F3 复现）**：`opencode serve` 健康检查通过（HTTP 200）≠ 模型列表就绪。容器内实测（真实凭据）：就绪 **303ms** 时 GET /api/model 返回 **0 模型**，**1573ms** 后才返回 **6212 个模型**。旧 resolveModels 单次调用拿到空数组 → 被当作"已探测无模型"上报 `capabilities.models=[]` → C3 availability 无行（详情页模型卡只能走目录兜底）。
+- **修复语义变更（重要）**：resolveModels 的空列表从"已探测无模型（返回 `[]`）"改为**"未就绪（重试）"**：
+  - 非空 → 返回 id 数组（正常上报）
+  - **空列表 → 1s/2s/4s 指数退避重试（默认 retries=3，总探测 4 次，窗口 ~7s）**，直到非空
+  - 重试耗尽仍空 → 降级 undefined（不携带 models，不阻断注册）
+  - listModels **抛错 → 立即降级 undefined**（不重试，serve 未就绪/端点不支持同现状）
+- **实现**（worker/src/index.ts）：`ModelListProbeOptions`（`retries`/`retryDelayMs`/`delay`）——`delay` 可注入（单测传 0ms 跳过真实等待，jest 不依赖 fake timers）；`resolveModels(lister, options)` 新增第三参。调用点 `registerCurrent` 不变（`resolveModels(driver)` 缺省选项）。
+- **单测**（index.spec.ts 5 例）：首次非空只探测 1 次 / 空→空→非空 第 3 次成功（断言 listModels 调用 3 次）/ 持续空重试耗尽 → undefined（retries=2 时调用 3 次）/ 抛错立即 undefined（调用 1 次不重试）/ 既有映射成功用例保留。worker jest **17 suites / 208 tests 全绿**（基线 206 + 新增 2）+ typecheck 通过。
+- **端到端实证**（compose 13000/13001 + worker 容器）：
+  - 复现：容器内 spawn serve（XDG_DATA_HOME 指向真实 auth.json）→ 就绪 303ms 空、1573ms 后 6212 模型，与 F3 现象一致
+  - 修复后：`npm run build` 产物 `docker cp` 覆盖容器 `/tmp/keta-worker/dist/index.js` + 预置 `/root/.local/share/opencode/auth.json`（真实凭据）→ `docker restart` → 日志：`模型列表探测为空（第 1/4 次，serve 可能仍在预热），1000ms 后重试` → **仅 1 次重试即非空** → 注册成功
+  - server 库核对：`workers.capabilities.models` **26 个** + `worker_model_availabilities` **26 行**（C3 合并链路完整生效）——修复前此场景 capabilities.models=[]、availability 无行
+- **⚠️ 环境坑**：
+  - 本机 `docker compose build worker` 拉不到 `node:22-alpine`（docker.io 网络超时）——改用 `npm run build` + `docker cp` 覆盖容器 dist，免重建镜像
+  - worker 容器内 serve 的 auth.json 是**测试假 token**（`sk-test-b1-token-0003`，provider 认证失败 → 0 模型），实证"非空"必须注入真实凭据（`/root/.local/share/opencode/auth.json`，serve 默认路径）；实证后 recreate 容器恢复基线
+  - bash 工具持久 shell 对后台 spawn（opencode serve）不友好——curl 无 `--max-time` 会挂死 shell；serve 启动用 `setsid` 脱离 + 所有网络命令带超时；容器内无 curl/python3（alpine），用 node 内置 fetch
 
 
+
+## C8: worker 默认模型配置 API + 详情页模型卡（2026-08-09，实现 + 验证完成）
+
+- **PATCH /workers/:id（全新端点，无路由冲突）**：`workers.controller.ts` 新增 `@Patch(':id')` + `@UseGuards(AdminGuard)`（前置全局 JwtAuthGuard 鉴权）→ `WorkersService.updateDefaultModel(id, dto)`。controller.spec 需补 `PrismaService` mock（AdminGuard compile 时实例化，依赖 user.findUnique——对齐 models.controller.spec 模式）。
+- **defaultModelId 格式关键点**：defaultModelId 是 **`providerID/modelID` 引用格式**（与 C2 worker 上报 id、C7 matchesModelRequirement 的 modelId 比较对象同构），**不是目录 `md_` 主键**——校验不能用 `ModelsService.findOne`，需按 @@unique(providerID, modelID) 查。新增 `ModelsService.findCatalogByRef(ref)`：复用私有 `splitModelId` 拆解约定（含 `/` 首个 `/` 拆，不含 providerID 归 opencode），select 含 enabled，返回完整行/ null。
+- **updateDefaultModel 语义（三态区分）**：`defaultModelId` 非空 → findCatalogByRef 校验（不存在 **或 enabled=false** → 400 MODEL_NOT_FOUND，任务要求校验拦截）；`null`/空串 → 清除（跳过校验，落库 null）；`undefined` → 幂等跳过（data={}）。返回 `toWorkerView`（更新后完整视图）。
+- **toWorkerView 扩展（Metis R11）**：入参类型与返回对象均加 `defaultModelId: string | null`——findAll/findOne/PATCH 三路径统一透出，前端详情页默认模型标识的数据源。⚠️ 测试 workerRow 需补 `defaultModelId: null` 默认值（toWorkerView 类型必填，jest 严格类型）。
+- **详情页模型卡（第 7 块）**：`workers/[id]/page.tsx` 新增 `worker-detail-models` section。数据源**主选 `capabilities.models`（C2 上报持久化，离线可查）**；未上报/空 → **目录兜底 `GET /models?pageSize=100`**（enabled 全量）。每个 badge 显示 `provider / 模型名`（模型名经 catalogByRef Map 映射 `providerID/modelID → name`，缺失回退 modelID 末段；**ref 拆解复用 splitModelRef 页面内工具**，不含 `/` 旧自由字符串 providerID 归 opencode）。`worker.defaultModelId === ref` 匹配 → 绿系徽章「默认」（`worker-model-default`，data-testid）。空态 → 本地 `SectionEmpty`（page.tsx:105 本地定义，非 shared.tsx——Metis R10 确认）。
+- **新 testid 注册**：`worker-detail-models` / `worker-model-badge` / `worker-model-default` 注册到 testids.ts **worker-list（2.13）条目**（worker 详情页无独立 PAGES 条目，其既有 testid 亦未单独注册——归入 worker-list 条目保持一致性）。badge 带 `data-model-id` + `data-default` 属性便于断言。
+- **Web 类型扩展**：`shared.tsx` WorkerItem 加 `defaultModelId: string | null` + `capabilities.models?: string[]`（WorkerDetail 经 extends 继承）。
+- **⚠️ 遗留清理**：移除 worker 详情页未使用的 `router`/`useRouter`（T13 迁移遗留，build lint 报 `no-unused-vars`）——顺手清理保持构建零新增警告。
+- **⚠️ web build 缓存坑**：`npm run build` 偶发 `Cannot find module '../chunks/ssr/[turbopack]_runtime.js'`（Collecting page data 阶段，.next 缓存损坏）——`rm -rf .next` 后重建即过，非代码问题。
+- **验证**：server `nest build` 通过 + jest **43 suites / 652 tests 全绿**（基线 643 + 新增 9：workers.service.spec 6（配置/不在目录 400/停用 400/null 清除/缺省跳过/404）+ toWorkerView 透出 1 + workers.controller.spec 2）；web `tsc --noEmit` 0 错误 + `npm run build` 通过（PATH 需 nvm v22.22.1），/workers/[id] 路由入表。
+
+
+## C6: 前端模型管理页 + agent 页模型选择器增强（2026-08-09，实现 + 验证完成）
+
+- **新增路由**：`web/app/(main)/models/page.tsx`（AppShell 内容区模式，root `models-manage-root` flex:1）——**导航 5 处注册**：nav-dock NAV_ITEMS 加 `{key:"models", label:"模型目录", icon:"◇"}`（第 4 位，worker 之后 skills 之前，图标 ◇ 不与现有冲突）；app-shell KEY_TO_PATH（models→/models，KEY_LOOKUP 自动反查）+ PAGE_TITLE（「模型目录 / 模型登记 / 凭据配置 / 启用停用」）+ CMDK_NAV_PATH（模型目录→/models）；cmdk-panel DEFAULT_CMDK_ITEMS 加「模型目录」导航项。Dock min-height 写死 360px 注释「7 图标」——8 图标时内容高度自然撑开（max-height calc(100% - xxl) 兜底），无需改。
+- **testid 一致性验收通过**：原型 models-manage 19 个 data-testid 全部在实现页出现（`grep -oP 'data-testid="[^"]+"' 原型 | sort -u` vs 实现 comm -23 为空）。新增反馈类 testid（models-loading/models-error/models-retry/model-add-modal/model-provider-input/model-model-id-input/model-name-input/model-add-confirm/model-add-error）已注册 testids.ts（auditPage "2.14 models-manage"）+ pages.spec.ts 新测试「18/18」（文件头 17→18）。
+- **模型页数据源**：GET /models 分页（pageSize=100 一次拉全量，agents 页同模式）→ 目录行（id=md_xxx）；**可用节点数 = 在线 worker（status≠offline）capabilities.models 含该模型 id 的计数**（无 availability API，worker 上报为近似源）；**凭据状态 = 每模型并发 GET /models/:id/credentials（Promise.all，单模型失败容错视同 missing）**——GET /models 不 join credential，页面级 queryKey=["model-credentials"] 一次拉全量 8 请求可接受。
+- **模型页权限**：isAdmin（roleName==='admin'）控制写操作——model-add-button 条件渲染（非 admin 隐藏，源码 testid 保留不影响 grep diff）、model-toggle disabled、model-credential-save disabled（空 token 也禁用）；后端 AdminGuard 403 兜底。凭据保存 POST /models/:id/credentials {token, targetWorkerIds?}（targetWorkerIds 非空才传，对齐 C5 定向/全量语义）；启用停用 PATCH /models/:id {enabled}。
+- **agents 页增强（P0.2 原型对齐）**：
+  - **MODEL_NAMES 死代码删除**：前置处理 :322（AgentListItem 默认模型徽章）与 :796（currentModelName）两处引用 → 新增 **GET /models 目录查询**（queryKey=["model-catalog"]）建 `catalogByRef`（Map 双键：`providerID/modelID` + 裸 modelID——存量 defaultModelId 可能是不含 '/' 的旧自由字符串，双键兼容校验）→ `modelNameOf`（useCallback）传给 AgentListItem。
+  - **AvailableModel 提取共享**：`web/src/types/models.ts`（agents 页私有定义移出；models 页不依赖它，未来 worker 详情卡可复用）。
+  - **模型下拉 provider 显示**：option 文本 `${providerOf(id)} / ${name}`（providerOf=首个 '/' 前，无 '/' 原样），加 data-testid="model-option-provider"+data-model-id（对齐 P0.2）；model-source-hint 文案改为「平台模型目录（worker 上报合并入库，C3）」。
+  - **token 输入（model-token-input + model-token-status 双态）**：⚠️ **凭据端点 :id 是目录行 md_xxx，而模型选择器 value 是 providerID/modelID——必须经 catalogByRef 解析 md id 才能 GET/POST /models/:id/credentials**；存量值不在目录（catalog 无行）→ 无端点可查视同未配置；保存 token 用页面级 mutation（POST 后 invalidate queryKey=["model-credential"]）。页面内新增 CredentialBadge（credentialTheme 与 models-manage 页内定义完全一致，"扩展 token"范式）。
+  - **首选 worker（agent-worker-select）**：agent.workerId 可空，选项=自动调度（默认）+ GET /workers（在线优先排序，name · 在线/离线）；保存提交 `workerId: workerDraft || null`（显式 null=自动调度）；**server 侧同步补 workerId 支持**——UpdateAgentDto 加 `workerId?: string | null`（@IsString + @ValidateIf(o => o.workerId !== null) 允许 null）、agents.service AgentRow + update data + toAgentDto 透出（C1 字段此前未透出/不可 PATCH）。
+  - **保存校验**：defaultModelId 非空但不在目录 → model-stale-warning 警告条（黄，不阻断保存，存量兼容）。
+- **验证**：web `npx tsc --noEmit` 0 错；`npm run build` 通过（/models 路由注册 9.17 kB）；server `nest build` 通过 + jest **43 suites / 643 tests 全绿**；e2e **pages 16/16 + login/guard 17 全绿**（新增 18/18 models 测试）。
+- **⚠️ 环境踩坑**：e2e 首轮 models 页 model-list 不可见——web dev 代理 /api/v1 → localhost:3000，而 3000 跑的是 **Aug08 旧 dist 实例**（无 /models 路由，404）；修复：`npm run build`（server）后 kill 旧进程重启 `node dist/src/main.js`（tmux api-dev 会话）。web dev server 旧 .next 缓存报 vendor-chunks MODULE_NOT_FOUND → `rm -rf .next` 重启（tmux web-dev2）。**C6 后 e2e 依赖后端含 ModelsModule 的最新 dist。**
+- **agent-config 原型 testid 对齐**：原型模型区 7 个（model-config/model-select/model-option-provider/model-token-status/model-token-input/agent-worker-select/model-source-hint）实现全含；P0.2 原型的「保存」按钮无 testid，实现沿用（保存按钮无独立 testid 不违反 diff 契约）。agents 页 CredentialBadge 复用 data-testid="model-credential-status"（与 models 页同 testid，e2e 按页路由隔离断言无冲突）；模型页新增 model-add-cancel 弹窗出现 2 次（关闭 ✕ + 底部取消），原型无此 testid 属实现新增。
 
 ## C7: 模型解析优先级 + assignWorker 按模型过滤（2026-08-09，实现 + 测试完成）
 
@@ -171,3 +206,14 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **jest 类型严格差异**：`npx tsc --noEmit` 通过但 jest（ts-jest 更严格）报 TS2367——heartbeat 中 `status !== WORKER_STATUS.OFFLINE` 因 status 类型为 `"online"|"degraded"`（与 offline 无重叠）。修复：简化条件为 `if (worker.status === WORKER_STATUS.OFFLINE)`（新状态恒非 offline，语义等价）。
 - **最终基线**：43 suites / **632 tests** 全绿（基线 595 + C3 新增 37）——models.service.spec idGen mock 改为按前缀生成（`nextId(prefix) => prefix_<seq>`），修正 sync 合并新建行 id 断言；workers.service.spec 补 ModelsService import；agents.service.spec 补 ModelsService mock + provider。`npm run build` 通过。
 - **DTO 校验**：`create-model.dto.ts` 导出 `MODEL_SLUG_PATTERN = /^[a-z0-9][a-z0-9-_.]*$/`（providerID/modelID slug，update 复用 import），query-models.dto enabled 布尔 transform 对齐 mcp-servers。全局 whitelist（main.ts）已启用，无需改。
+
+## B1（F3 CRITICAL）：凭据循环重启修复（2026-08-09，修复 + 实证完成）
+
+- **根因（F3 实证）**：`workers.service.ts register()` **无条件调用 `replayModelCredentials(workerId)`**——凭据命令 → worker 写 auth.json → serve restart → reRegister（走同一 register()）→ 再回放 → 无限循环。实测旧镜像保存凭据后 worker 每 ~10s 重启一次（27+ 次循环），worker 详情 capabilities.models 恒为空。心跳路径有 OFFLINE 保护（仅 offline→online 回放），register 路径没有。
+- **修复（`server/src/workers/workers.service.ts register()`）**：upsert 前先 `findUnique({ where: { id }, select: { status: true } })` 查原状态；回放条件改为 `if (!existing || existing.status === WORKER_STATUS.OFFLINE)`——仅首次注册（原不存在）或原 offline 时回放；已在线 worker 的 reRegister（serve 重启触发）**不回放**。与心跳路径语义一致：凭据只在 worker 首次上线或从离线恢复时下发一次。dispatchAfterSave（管理员保存后主动下发）保留不动。
+- **配套修复（`worker/src/index.ts` RestartCoordinator restart 回调）**：serve 重启（随机端口变化）后须同步 `driver.baseUrl = await serveServer.restart()` 的返回值——否则 reRegister 的 resolveModels 探测打到旧端口 `fetch failed`，capabilities.models 恒空。B2（空列表预热重试）只覆盖"空列表"，不覆盖"fetch 到死端口"。
+- **单测（`workers.service.spec.ts` register describe +4）**：① 首次注册（原不存在）→ 回放；② 已在线 reRegister → 不回放（modelCredential.findMany 不被调用）；③ 原 offline reRegister → 回放；④ 循环不复现（首次回放一次，在线 reRegister 不新增命令，命令不累积）。server jest **43 suites / 656 tests 全绿**（基线 652 + 4）。
+- **实证（compose 13000/13001 实库）**：旧镜像保存凭据 → worker 循环重启（server 日志"模型凭据回放"刷屏 + worker 连续 execute restart）→ DELETE 凭据循环即停（replay 查 revokedAt=null 返回空）→ 部署修复后 server 保存凭据 → 45s+ 仅 1 次凭据注入重启（dispatchAfterSave 预期行为，循环切断）→ capabilities.models 上报 **26 个真实模型**，worker 稳定 online。
+- **⚠️ docker cp 嵌套坑**：`docker cp <src>/dist <container>:/app/dist` 当目标已存在时**不会覆盖而是嵌套**成 `/app/dist/dist/...`（md5 不一致、容器仍跑旧代码）。正确姿势：`docker cp <src>/dist/. <container>:/app/dist/`（`.` 后缀强制覆盖内容）。且 compose worker 容器的实际工作目录是 **`/tmp/keta-worker`**（WORK_DIR），dist 拷贝目标是 `/tmp/keta-worker/dist` 而非 `/app/dist`。
+- **⚠️ compose 环境构建限制**：本机 docker build 拉取 docker/dockerfile:1 frontend 元数据超时（registry-1.docker.io 不可达），无法 `docker compose build`——用"本地 `npm run build` + `docker cp` + `docker compose restart`"绕过（server 容器 dist 路径 `/app/dist`，worker 容器 `/tmp/keta-worker/dist`）。
+- **⚠️ compose server 容器重启后 worker 状态**：server 容器 restart 会短暂中断 worker 心跳；markStaleWorkersOffline 仅在 status != offline 且 30s 未心跳时标 offline，worker 心跳间隔 10s，快速恢复不受影响。

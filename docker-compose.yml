@@ -41,7 +41,7 @@ services:
   init:
     build: ./server
     container_name: aiagents-compose-init
-    command: sh -c "npx prisma migrate deploy && npx prisma db seed"
+    command: sh -c "npx prisma migrate deploy && node dist/prisma/seed.js"
     environment: &server-env
       DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD:-aiagents-root}@db:3306/aiagents
     depends_on:
@@ -62,6 +62,7 @@ services:
       JWT_ACCESS_EXPIRES_IN: "2h"
       JWT_REFRESH_EXPIRES_IN: "7d"
       WORKER_TOKEN: ${WORKER_TOKEN:-compose-worker-token}
+      MODEL_CREDENTIAL_KEY: ${MODEL_CREDENTIAL_KEY:-05afa7cd6715894ce99c3bb544b19669bc8db103606809208ca7fa55175f35a1}
     depends_on:
       db:
         condition: service_healthy

@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "active_work_id": "skills-tools-redesign-266f698a",
+  "active_work_id": "model-management-b9263bc4",
   "works": {
     "agent-platform-prd-prototypes-7f290efc": {
       "work_id": "agent-platform-prd-prototypes-7f290efc",
@@ -499,27 +499,215 @@
       "task_sessions": {},
       "ended_at": "2026-08-08T07:50:25.051Z",
       "elapsed_ms": 13236576
+    },
+    "model-management-b9263bc4": {
+      "work_id": "model-management-b9263bc4",
+      "active_plan": "/data/git-project/aiagents/.omo/plans/model-management.md",
+      "plan_name": "model-management",
+      "status": "active",
+      "started_at": "2026-08-08T14:35:02.320Z",
+      "updated_at": "2026-08-08T18:27:51.930Z",
+      "session_ids": [
+        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn"
+      ],
+      "session_origins": {
+        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "`worker/src/index.ts`：",
+          "session_id": "opencode:ses_01df73a2effeOcOqIzsAo6DWLH",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "started_at": "2026-08-08T14:40:56.765Z",
+          "ended_at": "2026-08-08T16:05:09.994Z",
+          "elapsed_ms": 5053229,
+          "status": "completed",
+          "updated_at": "2026-08-08T16:05:09.994Z"
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "task_title": "增强 `docs/agent-platform/prototypes/agent-config/index.tsx` 模型区（凭据/token 输入 + provider 显示 + **首选 worker 选择**，保持 model-* testid 前缀）",
+          "session_id": "opencode:ses_01e29084dffeax80GGStK5mbmQ",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "updated_at": "2026-08-08T15:39:56.769Z",
+          "started_at": "2026-08-08T15:04:15.133Z",
+          "status": "completed",
+          "ended_at": "2026-08-08T15:39:56.769Z",
+          "elapsed_ms": 2141636
+        },
+        "todo:3": {
+          "task_key": "todo:3",
+          "task_label": "3",
+          "task_title": "原型验收：md-docs 注册 + 全量走查 + 文档同步",
+          "session_id": "opencode:ses_01df76327ffeSI0n20hVbVvzh5",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "started_at": "2026-08-08T15:56:51.433Z",
+          "status": "completed",
+          "updated_at": "2026-08-08T16:06:18.532Z",
+          "ended_at": "2026-08-08T16:06:18.532Z",
+          "elapsed_ms": 567099
+        },
+        "todo:6": {
+          "task_key": "todo:6",
+          "task_label": "6",
+          "task_title": "C3 目录服务：ModelsModule（CRUD + AdminGuard + worker 上报合并 + available-models 改读目录 + 集成验收）",
+          "session_id": "opencode:ses_01ddf26daffeQH1X5uGqgrcTWW",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "started_at": "2026-08-08T16:22:53.890Z",
+          "status": "completed",
+          "updated_at": "2026-08-08T16:27:43.565Z",
+          "ended_at": "2026-08-08T16:27:43.565Z",
+          "elapsed_ms": 289675
+        },
+        "todo:10": {
+          "task_key": "todo:10",
+          "task_label": "10",
+          "task_title": "C6 前端模型管理页 + agent 页模型选择器（与 P0 原型 testid 全保留对齐；**支持选择已有模型 + 显示 provider + 首选 worker**）",
+          "session_id": "opencode:ses_01dcb1842ffeLeQQ9Hna4ucXIg",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "started_at": "2026-08-08T16:44:33.961Z",
+          "ended_at": "2026-08-08T17:00:21.572Z",
+          "elapsed_ms": 947611,
+          "status": "completed",
+          "updated_at": "2026-08-08T17:00:21.572Z"
+        },
+        "todo:12": {
+          "task_key": "todo:12",
+          "task_label": "12",
+          "task_title": "C8 worker 默认模型配置 + worker 详情页模型卡（显示 provider + 默认模型标识）",
+          "session_id": "opencode:ses_01dbc1403ffeZI71g5txbI2ZiD",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-08-08T16:56:19.541Z",
+          "started_at": "2026-08-08T16:56:19.540Z",
+          "status": "completed",
+          "ended_at": "2026-08-08T16:56:19.541Z",
+          "elapsed_ms": 1
+        },
+        "final-wave:f1": {
+          "task_key": "final-wave:f1",
+          "task_label": "F1",
+          "task_title": "计划符合度审计（oracle）：逐 todo 对照 Scope/IN-OUT 与用户决策（provider 显示、worker 默认模型兜底、软绑定、定向下发、模型解析优先级）",
+          "session_id": "opencode:ses_01d6706fdffegJnTCAP2yidq6f",
+          "agent": "Sisyphus-Junior",
+          "category": "ultrabrain",
+          "started_at": "2026-08-08T17:06:05.038Z",
+          "status": "running",
+          "updated_at": "2026-08-08T18:27:51.931Z"
+        }
+      }
     }
   },
-  "active_plan": "/data/git-project/aiagents/.omo/plans/skills-tools-redesign.md",
-  "started_at": "2026-08-08T04:09:48.475Z",
-  "status": "completed",
-  "updated_at": "2026-08-08T09:40:33.754Z",
+  "active_plan": "/data/git-project/aiagents/.omo/plans/model-management.md",
+  "started_at": "2026-08-08T14:35:02.320Z",
+  "status": "active",
+  "updated_at": "2026-08-08T18:27:51.930Z",
   "session_ids": [
-    "opencode:ses_02ad3f64dffeH0vEIATllKlxTn",
-    "opencode:ses_01f415a0bffeCevaLR6UFke7Kd",
-    "opencode:ses_01f41414fffevLQ8Ney5Bz8CqJ",
-    "opencode:ses_01f412f06ffewhu6dB1yNrS5B2"
+    "opencode:ses_02ad3f64dffeH0vEIATllKlxTn"
   ],
   "session_origins": {
-    "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct",
-    "opencode:ses_01f415a0bffeCevaLR6UFke7Kd": "appended",
-    "opencode:ses_01f41414fffevLQ8Ney5Bz8CqJ": "appended",
-    "opencode:ses_01f412f06ffewhu6dB1yNrS5B2": "appended"
+    "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct"
   },
-  "plan_name": "skills-tools-redesign",
-  "task_sessions": {},
-  "agent": "atlas",
-  "ended_at": "2026-08-08T07:50:25.051Z",
-  "elapsed_ms": 13236576
+  "plan_name": "model-management",
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "`worker/src/index.ts`：",
+      "session_id": "opencode:ses_01df73a2effeOcOqIzsAo6DWLH",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "started_at": "2026-08-08T14:40:56.765Z",
+      "ended_at": "2026-08-08T16:05:09.994Z",
+      "elapsed_ms": 5053229,
+      "status": "completed",
+      "updated_at": "2026-08-08T16:05:09.994Z"
+    },
+    "todo:2": {
+      "task_key": "todo:2",
+      "task_label": "2",
+      "task_title": "增强 `docs/agent-platform/prototypes/agent-config/index.tsx` 模型区（凭据/token 输入 + provider 显示 + **首选 worker 选择**，保持 model-* testid 前缀）",
+      "session_id": "opencode:ses_01e29084dffeax80GGStK5mbmQ",
+      "agent": "Sisyphus-Junior",
+      "category": "visual-engineering",
+      "updated_at": "2026-08-08T15:39:56.769Z",
+      "started_at": "2026-08-08T15:04:15.133Z",
+      "status": "completed",
+      "ended_at": "2026-08-08T15:39:56.769Z",
+      "elapsed_ms": 2141636
+    },
+    "todo:3": {
+      "task_key": "todo:3",
+      "task_label": "3",
+      "task_title": "原型验收：md-docs 注册 + 全量走查 + 文档同步",
+      "session_id": "opencode:ses_01df76327ffeSI0n20hVbVvzh5",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "started_at": "2026-08-08T15:56:51.433Z",
+      "status": "completed",
+      "updated_at": "2026-08-08T16:06:18.532Z",
+      "ended_at": "2026-08-08T16:06:18.532Z",
+      "elapsed_ms": 567099
+    },
+    "todo:6": {
+      "task_key": "todo:6",
+      "task_label": "6",
+      "task_title": "C3 目录服务：ModelsModule（CRUD + AdminGuard + worker 上报合并 + available-models 改读目录 + 集成验收）",
+      "session_id": "opencode:ses_01ddf26daffeQH1X5uGqgrcTWW",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "started_at": "2026-08-08T16:22:53.890Z",
+      "status": "completed",
+      "updated_at": "2026-08-08T16:27:43.565Z",
+      "ended_at": "2026-08-08T16:27:43.565Z",
+      "elapsed_ms": 289675
+    },
+    "todo:10": {
+      "task_key": "todo:10",
+      "task_label": "10",
+      "task_title": "C6 前端模型管理页 + agent 页模型选择器（与 P0 原型 testid 全保留对齐；**支持选择已有模型 + 显示 provider + 首选 worker**）",
+      "session_id": "opencode:ses_01dcb1842ffeLeQQ9Hna4ucXIg",
+      "agent": "Sisyphus-Junior",
+      "category": "visual-engineering",
+      "started_at": "2026-08-08T16:44:33.961Z",
+      "ended_at": "2026-08-08T17:00:21.572Z",
+      "elapsed_ms": 947611,
+      "status": "completed",
+      "updated_at": "2026-08-08T17:00:21.572Z"
+    },
+    "todo:12": {
+      "task_key": "todo:12",
+      "task_label": "12",
+      "task_title": "C8 worker 默认模型配置 + worker 详情页模型卡（显示 provider + 默认模型标识）",
+      "session_id": "opencode:ses_01dbc1403ffeZI71g5txbI2ZiD",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-08-08T16:56:19.541Z",
+      "started_at": "2026-08-08T16:56:19.540Z",
+      "status": "completed",
+      "ended_at": "2026-08-08T16:56:19.541Z",
+      "elapsed_ms": 1
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "计划符合度审计（oracle）：逐 todo 对照 Scope/IN-OUT 与用户决策（provider 显示、worker 默认模型兜底、软绑定、定向下发、模型解析优先级）",
+      "session_id": "opencode:ses_01d6706fdffegJnTCAP2yidq6f",
+      "agent": "Sisyphus-Junior",
+      "category": "ultrabrain",
+      "started_at": "2026-08-08T17:06:05.038Z",
+      "status": "running",
+      "updated_at": "2026-08-08T18:27:51.931Z"
+    }
+  },
+  "agent": "atlas"
 }

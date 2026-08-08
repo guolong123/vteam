@@ -145,7 +145,7 @@ F1-F4（最终验证波，全部实现后）
       - References 修正: toModelSelection **调用点 :451**（:446-451 块内 `toModelSelection(agent?.defaultModelId)`）、**定义 :911-925**；模板默认模型源自 seed 预置（14 篇 :158-161 仅"模型侧重"文字描述，无具体值，不能作为来源）
       - Commit: `feat(dispatch): 模型解析优先级 + 分派按模型过滤`
 
-- [ ] 12. C8 worker 默认模型配置 + worker 详情页模型卡（显示 provider + 默认模型标识）
+- [x] 12. C8 worker 默认模型配置 + worker 详情页模型卡（显示 provider + 默认模型标识）
       - References: `server/src/workers/workers.service.ts`（Worker 更新逻辑）、`server/src/workers/workers.controller.ts:58-70`（列表/详情）、`web/app/(main)/workers/[id]/page.tsx`（详情页卡片 :394-481）、`web/app/(main)/workers/shared.tsx`（cardStyle/SectionHeader/SectionEmpty 复用）
       - Acceptance: PATCH /workers/:id 支持更新 defaultModelId（AdminGuard，校验存在于目录；**全新端点——workers.controller.ts 现无 PATCH，无路由冲突**）；**worker 详情页新增可用模型卡：数据源 capabilities.models（C2 已上报持久化，离线可查）主选 + 目录查询兜底，列表显示 provider + 模型名 + 默认模型标识（defaultModelId 高亮）**；**toWorkerView 需新增 defaultModelId 字段（现 :366-387 不含；可复用的是 capabilities 透传模式）**
       - References 修正: SectionEmpty 定义于 `workers/[id]/page.tsx:105` 本地（不在 shared.tsx；shared.tsx 仅 cardStyle/SectionHeader）；toWorkerView :366-387 需加 defaultModelId
@@ -154,10 +154,10 @@ F1-F4（最终验证波，全部实现后）
 
 ## Final verification wave
 
-- [ ] F1. 计划符合度审计（oracle）：逐 todo 对照 Scope/IN-OUT 与用户决策（provider 显示、worker 默认模型兜底、软绑定、定向下发、模型解析优先级）
-- [ ] F2. 代码质量评审（oracle）：AES-256-GCM 实现/auth.json 权限/白名单 DTO/异步化正确性/WorkerCommand 双端一致/模型解析优先级
-- [ ] F3. 真实环境端到端 QA（ultrabrain agent 执行）：compose 13000/13001——注册 token（指定 worker）→ 下发 → 模型调用成功 + 原型/实现一致走查（testid diff 为空）+ provider 显示断言 + worker 详情模型卡/默认模型断言 + 未配模型 agent 用 worker 默认
-- [ ] F4. 范围保真（oracle）：未做 OUT 项（不做模型推理/不硬绑 agent/不删 server 兜底/不改 serve/不动其余 16 原型页）
+- [x] F1. 计划符合度审计（oracle）：逐 todo 对照 Scope/IN-OUT 与用户决策（provider 显示、worker 默认模型兜底、软绑定、定向下发、模型解析优先级）
+- [x] F2. 代码质量评审（oracle）：AES-256-GCM 实现/auth.json 权限/白名单 DTO/异步化正确性/WorkerCommand 双端一致/模型解析优先级
+- [x] F3. 真实环境端到端 QA（ultrabrain agent 执行）：compose 13000/13001——注册 token（指定 worker）→ 下发 → 模型调用成功 + 原型/实现一致走查（testid diff 为空）+ provider 显示断言 + worker 详情模型卡/默认模型断言 + 未配模型 agent 用 worker 默认
+- [x] F4. 范围保真（oracle）：未做 OUT 项（不做模型推理/不硬绑 agent/不删 server 兜底/不改 serve/不动其余 16 原型页）
 
 ## Commit strategy
 
