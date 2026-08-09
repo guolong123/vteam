@@ -14,16 +14,15 @@
  * - 版本徽章 isV2：opencodeVersion 以 v2/2. 开头 → 紫色 V2Runtime 标注（对齐原型 v2.0.0-beta.1）。
  * - 实时性：worker.heartbeat SSE 需 T9 事件回流（未实现，server 当前不 emit）→ 轮询 10s
  *   （与心跳周期同频，refetchInterval）+ 1s tick 重算相对心跳时间。
- * - 注册指引（MUST DO）：折叠面板展示 X_WORKER_TOKEN 配置 + start.sh 部署步骤（内容取自
- *   worker/.env.example 与 worker/scripts/start.sh）；「新增 Worker」按钮（原型 add-worker-button）
- *   展开/收起面板——后端无新增端点，注册由 worker 进程 outbound 完成（"注册即入池"架构）。
+ * - 安装入口（单一）：「安装 Worker」Link → /workers/install（独立安装向导页）——后端无新增
+ *   端点，注册由 worker 进程 outbound 完成（"注册即入池"架构）。
  * - 操作按钮（查看详情/重启/下线）：查看详情已接线 → /workers/:id（T10 详情页）；
  *   重启/下线保持 disabled + title 提示——后端无对应端点（T10 LifecycleManager 接入
  *   WorkerClient 后放开），不实现假功能。
- * - data-testid 与原型一致：worker-list-root/worker-stats/add-worker-button/worker-card/
+ * - data-testid 与原型一致：worker-list-root/worker-stats/worker-card/
  *   worker-status/worker-version/worker-capability/worker-load/worker-heartbeat/
  *   worker-actions/worker-detail-button/worker-restart-button/worker-offline-button/
- *   worker-pool-hint；注册指引为页面扩展：worker-guide。
+ *   worker-pool-hint；安装入口为 install-worker-link。
  * - 状态主题/数据模型/状态徽章等共享定义见 ./shared.tsx（与详情页共用，防漂移）。
  */
 import { useEffect, useState, type CSSProperties } from "react";
@@ -334,136 +333,10 @@ function WorkerCard({ worker, now }: { worker: WorkerItem; now: number }) {
   );
 }
 
-/** 注册指引（MUST DO）：X_WORKER_TOKEN 配置 + start.sh 部署步骤（worker/.env.example + scripts/start.sh）。 */
-const GUIDE_STEPS: { title: string; body: string; code: string }[] = [
-  {
-    title: "配置 token",
-    body: "复制 .env.example 为 .env 并填写 X_WORKER_TOKEN——注册鉴权 token，需与 server 侧约定一致（对应 X-Worker-Token header）。",
-    code: "cd worker\ncp .env.example .env   # 填入 X_WORKER_TOKEN",
-  },
-  {
-    title: "安装构建",
-    body: "安装依赖并编译（Node >= 18，opencode CLI 需在 PATH 中）。",
-    code: "npm install\nnpm run build",
-  },
-  {
-    title: "启动注册",
-    body: "start.sh 自动校验 opencode CLI、加载 .env、构建缺省 dist 后启动；启动即向控制面注册（POST /workers/register），随后每 10s 上报心跳，30s 未上报自动标记离线。",
-    code: "./scripts/start.sh",
-  },
-];
-
-function WorkerGuide() {
-  return (
-    <div
-      data-testid="worker-guide"
-      style={{
-        marginBottom: space.lg,
-        borderRadius: radius.lg,
-        backgroundColor: "#FFFFFF",
-        border: `1px solid ${neutral[200]}`,
-        boxShadow: shadow.sm,
-        overflow: "hidden",
-        ...baseFont,
-      }}
-    >
-      {/* 头部 */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: space.sm,
-          padding: `${space.md}px ${space.lg}px`,
-          borderBottom: `1px solid ${neutral[200]}`,
-          backgroundColor: neutral[50],
-          fontSize: fontSize.md,
-          fontWeight: 600,
-          color: neutral[700],
-        }}
-      >
-        <span aria-hidden style={{ color: "#2563EB" }}>⚙</span>
-        部署指引 · 新节点注册即自动入池
-      </div>
-
-      {/* 步骤 */}
-      <div style={{ display: "flex", flexDirection: "column", gap: space.lg, padding: `${space.lg}px` }}>
-        {GUIDE_STEPS.map((step, i) => (
-          <div key={step.title} style={{ display: "flex", gap: space.md }}>
-            <span
-              aria-hidden
-              style={{
-                width: 24,
-                height: 24,
-                flexShrink: 0,
-                borderRadius: "50%",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                backgroundColor: "#EFF6FF",
-                border: `1px solid ${"#BFDBFE"}`,
-                color: "#2563EB",
-                fontSize: fontSize.sm,
-                fontWeight: 600,
-              }}
-            >
-              {i + 1}
-            </span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>
-                {step.title}
-              </div>
-              <div style={{ fontSize: fontSize.sm, color: neutral[400], lineHeight: 1.7, marginTop: 2 }}>
-                {step.body}
-              </div>
-              <pre
-                style={{
-                  marginTop: space.sm,
-                  marginBottom: 0,
-                  padding: `${space.sm}px ${space.md}px`,
-                  borderRadius: radius.md,
-                  backgroundColor: neutral[900],
-                  color: "#E2E8F0",
-                  fontSize: fontSize.sm,
-                  lineHeight: 1.7,
-                  overflowX: "auto",
-                  fontFamily: fontFamily.mono,
-                  whiteSpace: "pre",
-                }}
-              >
-                {step.code}
-              </pre>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* 底部说明：SERVER_URL 与心跳参数 */}
-      <div
-        style={{
-          padding: `${space.md}px ${space.lg}px`,
-          borderTop: `1px dashed ${neutral[200]}`,
-          fontSize: fontSize.sm,
-          color: neutral[400],
-          lineHeight: 1.7,
-          backgroundColor: neutral[50],
-        }}
-      >
-        <span style={{ fontWeight: 600, color: neutral[500] }}>参数说明</span> ·
-        SERVER_URL 指向控制面地址（缺省 http://localhost:3000）；HEARTBEAT_INTERVAL_MS 缺省
-        10000ms（server 30s=3 周期未收心跳判离线）；OPENCODE_SERVE_PORT=0 表示随机端口。
-        完整环境变量见 worker/.env.example。
-      </div>
-    </div>
-  );
-}
-
 /* ------------------------------ 页面主组件（AppShell 内容区） ------------------------------ */
 
 export default function WorkersPage() {
   const token = useAuthStore((s) => s.token);
-
-  /* 注册指引折叠面板受控开关：默认关闭；首次加载完成且无 worker 时自动展开 */
-  const [guideOpen, setGuideOpen] = useState(false);
 
   /* 1s tick：驱动各卡片相对心跳时间重算（数据本身由轮询刷新） */
   const [, setTick] = useState(0);
@@ -482,11 +355,6 @@ export default function WorkersPage() {
   });
 
   const items = data ?? [];
-
-  /* 首次加载完成且无 worker → 自动展开部署指引（空态下引导优先） */
-  useEffect(() => {
-    if (!isPending && items.length === 0) setGuideOpen(true);
-  }, [isPending, items.length]);
 
   const onlineCount = items.filter((w) => w.status === "online").length;
   const offlineCount = items.filter((w) => w.status === "offline").length;
@@ -570,7 +438,7 @@ export default function WorkersPage() {
         ))}
       </div>
 
-      {/* 操作行：「新增 Worker」按钮展开注册指引（11.4 水平扩容：新 worker 注册即入池） */}
+      {/* 操作行：唯一入口「安装 Worker」→ /workers/install（11.4 水平扩容：新 worker 注册即入池） */}
       <div
         style={{
           display: "flex",
@@ -587,59 +455,29 @@ export default function WorkersPage() {
             {items.length} 个节点 · 在线 {onlineCount} 个 · 新节点注册即自动入池
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-          <Link
-            href="/workers/install"
-            data-testid="install-worker-link"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: space.xs,
-              padding: `${space.sm + 2}px ${space.lg}px`,
-              borderRadius: radius.pill,
-              border: `1px solid ${neutral[300]}`,
-              backgroundColor: "#FFFFFF",
-              color: neutral[700],
-              fontSize: fontSize.md,
-              fontWeight: 500,
-              textDecoration: "none",
-              boxShadow: shadow.sm,
-              fontFamily: fontFamily.body,
-            }}
-          >
-            <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1 }}>⌥</span>
-            安装 Worker
-          </Link>
-          <button
-            type="button"
-            data-testid="add-worker-button"
-            data-open={guideOpen ? "true" : "false"}
-            aria-expanded={guideOpen}
-            onClick={() => setGuideOpen((v) => !v)}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: space.xs,
-              padding: `${space.sm + 2}px ${space.lg}px`,
-              borderRadius: radius.pill,
-              border: "none",
-              backgroundColor: "#2563EB",
-              color: "#FFFFFF",
-              fontSize: fontSize.md,
-              fontWeight: 500,
-              cursor: "pointer",
-              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
-              fontFamily: fontFamily.body,
-            }}
-          >
-            <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1 }}>+</span>
-            新增 Worker
-          </button>
-        </div>
+        <Link
+          href="/workers/install"
+          data-testid="install-worker-link"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: space.xs,
+            padding: `${space.sm + 2}px ${space.lg}px`,
+            borderRadius: radius.pill,
+            border: `1px solid ${neutral[300]}`,
+            backgroundColor: "#FFFFFF",
+            color: neutral[700],
+            fontSize: fontSize.md,
+            fontWeight: 500,
+            textDecoration: "none",
+            boxShadow: shadow.sm,
+            fontFamily: fontFamily.body,
+          }}
+        >
+          <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1 }}>⌥</span>
+          安装 Worker
+        </Link>
       </div>
-
-      {/* 注册指引（可折叠面板）：空态自动展开，也可手动开关 */}
-      {guideOpen && <WorkerGuide />}
 
       {/* Worker 卡片网格 / 空状态 */}
       {isPending ? (
@@ -690,7 +528,7 @@ export default function WorkersPage() {
       ) : items.length === 0 ? (
         <EmptyState
           title="暂无 Worker 节点"
-          description="部署并注册第一个 worker，节点注册即自动入池（见上方部署指引）"
+          description="点击右上角「安装 Worker」获取一键部署命令，节点注册即自动入池"
           icon={<span aria-hidden>⚙</span>}
         />
       ) : (

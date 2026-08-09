@@ -199,7 +199,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("install-command")).toContainText("docker run");
   });
 
-  test("17/18 worker-list /workers（列表 + 注册指引）", async ({ page }) => {
+  test("17/18 worker-list /workers（列表 + 唯一安装入口）", async ({ page }) => {
     await page.goto("/workers");
     await expectNavShell(page);
     await expect(page.getByTestId("worker-list-root")).toBeVisible();
@@ -207,11 +207,10 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     // worker-list：w_local_1 在线（seed 后注册）
     await expect(page.getByTestId("worker-card").first()).toBeVisible();
     await expect(page.getByTestId("worker-status").first()).toBeVisible();
-    // 安装入口：安装 Worker 链接（跳转独立安装向导）
+    // 唯一安装入口：安装 Worker 链接（跳转独立安装向导）；「新增 Worker」入口已移除
     await expect(page.getByTestId("install-worker-link")).toBeVisible();
-    // 注册指引受控展开（新增 Worker 按钮切换 guideOpen）
-    await page.getByTestId("add-worker-button").click();
-    await expect(page.getByTestId("worker-guide")).toBeVisible();
+    await expect(page.getByTestId("add-worker-button")).toHaveCount(0);
+    await expect(page.getByTestId("worker-guide")).toHaveCount(0);
   });
 
   test("18/18 models-manage /models（模型管理：双 Tab 模型目录 / Provider 管理）", async ({ page }) => {

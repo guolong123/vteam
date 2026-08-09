@@ -9,6 +9,9 @@
  * - 3 步安装向导：① 基础配置（serverUrl / workerId / 能力声明）→ ② 安装方式（curl / docker 双 Tab）
  *   → ③ 安装命令（mono 深色底 + 复制）+ 步骤说明；底部完成 / 取消 + 入池提示。
  * - 受控输入动态拼接命令（对齐原型：curl 一键脚本 / docker 环境变量注入）。
+ * - curl 下载地址动态化：脚本由控制面 web 静态服务提供（/install-worker.sh），下载 URL 与
+ *   serverUrl 默认值均取当前页面访问地址（window.location.origin，挂载后填充避免 SSR mismatch）——
+ *   不再硬编码 example 地址。
  * - 纯静态展示（不执行真实安装）；复制按钮为唯一增强交互：navigator.clipboard 写剪贴板
  *   （原型"复制"占位语义），失败静默降级。
  * - data-testid 与原型一致（17 个）：worker-install-root/install-wizard/install-config/
@@ -17,7 +20,7 @@
  *   install-command/copy-command-button/install-steps/install-footer/
  *   install-confirm-button/install-cancel-button。
  */
-import { useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import {
   neutral,
@@ -206,21 +209,33 @@ export default function WorkerInstallPage() {
   /* 安装方式 Tab（受控） */
   const [method, setMethod] = useState<InstallMethod>("curl");
 
+  /* 当前页面访问地址（origin）：挂载后填充（SSR 首帧不可读 window，避免 hydration mismatch），
+     curl 下载 URL 与 serverUrl 默认值的数据源 */
+  const [pageOrigin, setPageOrigin] = useState("");
+  useEffect(() => {
+    setPageOrigin(window.location.origin);
+  }, []);
+
   /* 参数配置（受控，动态拼接到命令展示） */
-  const [serverUrl, setServerUrl] = useState("http://platform:8080");
+  const [serverUrl, setServerUrl] = useState("");
   const [workerId, setWorkerId] = useState("worker-05");
   const [concurrency, setConcurrency] = useState(8);
   const [opencodeVersion, setOpencodeVersion] = useState("v2.0.0-beta.1");
 
-  /* 两种安装方式的命令（mock，对齐任务示例） */
-  const curlCommand = `curl -fsSL https://platform.example.com/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}`;
+  /* serverUrl 初始值跟随页面 origin（用户可手动修改） */
+  useEffect(() => {
+    setServerUrl((cur) => (cur ? cur : pageOrigin));
+  }, [pageOrigin]);
+
+  /* 两种安装方式的命令；curl 下载地址 = 当前 origin + /install-worker.sh */
+  const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}`;
   const dockerCommand = `docker run -d --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e CONCURRENCY=${concurrency} -e OPENCODE_VERSION=${opencodeVersion} -p 18080:18080 ketaops/opencode-worker:latest`;
 
   const command = method === "curl" ? curlCommand : dockerCommand;
 
   const curlSteps = [
     "在目标机器（任意网络位置，无需控制面反向可达）执行右侧 curl 命令",
-    "脚本自动下载 worker 二进制，写入配置并 POST /api/workers/register 注册",
+    "脚本自动拉取 worker 源码、安装依赖并写入配置（SERVER_URL / WORKER_ID / X_WORKER_TOKEN），启动后向控制面注册",
     "等待首次心跳（worker→控制面 SSE 通道），注册表出现后即自动入池调度",
   ];
 

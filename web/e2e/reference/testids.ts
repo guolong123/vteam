@@ -485,7 +485,7 @@ export const PAGES: PageTestidRef[] = [
     testids: [
       "worker-list-root",
       "worker-stats",
-      "add-worker-button",
+      "install-worker-link",
       "worker-card",
       "worker-status",
       "worker-version",
@@ -497,7 +497,6 @@ export const PAGES: PageTestidRef[] = [
       "worker-restart-button",
       "worker-offline-button",
       "worker-pool-hint",
-      "worker-guide",
       "worker-detail-models",
       "worker-model-badge",
       "worker-model-default",
@@ -568,7 +567,7 @@ export const PAGE_SMOKE: Record<string, string[]> = {
   "/artifacts": ["artifacts-root", "artifacts-filter-bar", "task-filter-select"],
   "/tools/register": ["tool-register-root", "tool-basic-section", "tool-name-input", "execution-section", "register-tool-button"],
   "/users": ["user-management-root", "user-stats", "user-item", "add-user-button"],
-  "/workers": ["worker-list-root", "worker-stats", "worker-card", "worker-guide", "worker-status"],
+  "/workers": ["worker-list-root", "worker-stats", "worker-card", "install-worker-link", "worker-status"],
   "/workers/install": ["worker-install-root", "install-wizard", "install-config", "install-method-tabs", "install-command", "copy-command-button", "install-footer"],
   "/models": ["models-manage-root", "manage-tabs", "manage-tab", "model-list", "model-item", "model-search", "provider-list"],
 };
