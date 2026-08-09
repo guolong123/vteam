@@ -32,7 +32,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { hasPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { AgentAvatar } from "@/src/components/ui";
+import { AgentAvatar, ConfirmDialog } from "@/src/components/ui";
 import { type AvailableModel } from "@/src/types/models";
 import {
   type RoleKey,
@@ -779,9 +779,17 @@ interface ConfigPanelProps {
   onClone: () => void;
   /** 是否具备 agents.create（克隆入口权限，对齐后端 PermissionGuard，REG-01） */
   canCreate: boolean;
+  /** 是否可删除（type≠template 且具备 agents.delete，UX-14；template 后端 403 兜底） */
+  canDelete: boolean;
+  /** 点击删除（打开二次确认弹窗，确认后才 DELETE） */
+  onDelete: () => void;
+  /** 删除进行中（ConfirmDialog submitting 状态） */
+  deleting: boolean;
+  /** 删除失败提示（DELETE 非 2xx 时展示） */
+  deleteError: string | null;
 }
 
-function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, catalogByRef, workers, saving, saveError, onSave, onSaveToken, onClone, canCreate }: ConfigPanelProps) {
+function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, catalogByRef, workers, saving, saveError, onSave, onSaveToken, onClone, canCreate, canDelete, onDelete, deleting, deleteError }: ConfigPanelProps) {
   const isTemplate = readOnly;
   const accent = isTemplate
     ? ROLE_COLORS[toAvatarRole(agent.role)]
@@ -957,6 +965,31 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexShrink: 0 }}>
+          {/* 删除入口（UX-14）：template 后端 403 只读 → 隐藏；custom/clone 且具备 agents.delete 才显示 */}
+          {canDelete && !isTemplate && (
+            <button
+              type="button"
+              data-testid="delete-agent-button"
+              data-agent-id={agent.id}
+              onClick={onDelete}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: space.xs,
+                padding: `${space.sm}px ${space.lg}px`,
+                borderRadius: radius.pill,
+                border: "1px solid #FECACA",
+                backgroundColor: "#FFFFFF",
+                color: "#DC2626",
+                fontSize: fontSize.md,
+                fontWeight: 500,
+                cursor: "pointer",
+                fontFamily: fontFamily.body,
+              }}
+            >
+              删除
+            </button>
+          )}
           {canCreate && (
             <button
               type="button"
@@ -1002,7 +1035,7 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
               fontFamily: fontFamily.body,
             }}
           >
-            {saving ? "保存中…" : "保存"}
+            {saving ? "保存中…" : "保存配置"}
           </button>
         </div>
       </div>
@@ -1029,6 +1062,28 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
         </div>
       )}
 
+      {/* 删除失败提示（UX-14：DELETE 非 2xx 时展示） */}
+      {deleteError && (
+        <div
+          data-testid="agent-delete-error"
+          role="alert"
+          style={{
+            fontSize: fontSize.sm,
+            color: "#DC2626",
+            display: "flex",
+            alignItems: "center",
+            gap: space.xs,
+            padding: `${space.sm}px ${space.md}px`,
+            borderRadius: radius.md,
+            backgroundColor: "#FEF2F2",
+            border: `1px solid #FECACA`,
+          }}
+        >
+          <span aria-hidden style={{ fontWeight: 700 }}>!</span>
+          {deleteError}
+        </div>
+      )}
+
       {/* ① 提示词编辑器（FR-33） */}
       <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
         <div
@@ -1042,7 +1097,7 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
             提示词配置
           </span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            FR-33 · 即时生效于后续会话
+            提示词 · 即时生效于后续会话
           </span>
         </div>
         <textarea
@@ -1083,10 +1138,10 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
           }}
         >
           <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>
-            默认模型
+            模型与工具配置
           </span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            FR-47 · 新会话默认使用
+            默认模型 · 凭据 · 首选 Worker
           </span>
         </div>
         <div
@@ -1206,34 +1261,34 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
                   outline: "none",
                 }}
               />
-              <button
-                type="button"
-                disabled={!selectedCatalog || !tokenInput.trim()}
-                onClick={() =>
-                  selectedCatalog &&
-                  onSaveToken({ modelId: selectedCatalog.id, token: tokenInput.trim() })
-                }
-                style={{
-                  padding: `${space.xs + 1}px ${space.md}px`,
-                  borderRadius: radius.pill,
-                  border: "none",
-                  backgroundColor: "#2563EB",
-                  color: "#FFFFFF",
-                  fontSize: fontSize.xs,
-                  fontWeight: 500,
-                  cursor: !selectedCatalog || !tokenInput.trim() ? "default" : "pointer",
-                  opacity: !selectedCatalog || !tokenInput.trim() ? 0.6 : 1,
-                  fontFamily: fontFamily.body,
-                }}
-              >
-                保存
-              </button>
+                <button
+                  type="button"
+                  disabled={!selectedCatalog || !tokenInput.trim()}
+                  onClick={() =>
+                    selectedCatalog &&
+                    onSaveToken({ modelId: selectedCatalog.id, token: tokenInput.trim() })
+                  }
+                  style={{
+                    padding: `${space.xs + 1}px ${space.md}px`,
+                    borderRadius: radius.pill,
+                    border: "none",
+                    backgroundColor: "#2563EB",
+                    color: "#FFFFFF",
+                    fontSize: fontSize.xs,
+                    fontWeight: 500,
+                    cursor: !selectedCatalog || !tokenInput.trim() ? "default" : "pointer",
+                    opacity: !selectedCatalog || !tokenInput.trim() ? 0.6 : 1,
+                    fontFamily: fontFamily.body,
+                  }}
+                >
+                  保存凭据
+                </button>
             </>
           )}
           <span style={{ marginLeft: "auto", fontSize: fontSize.xs, color: neutral[400] }}>
             {tokenConfigured
-              ? "凭据已配置 · 按 provider 粒度生效（C4）"
-              : "保存后即时下发到 worker（C5）"}
+              ? "凭据已配置 · 按服务商粒度生效"
+              : "保存后即时下发到 Worker"}
           </span>
         </div>
 
@@ -1317,7 +1372,7 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
           <span aria-hidden style={{ fontSize: fontSize.xs }}>
             ↗
           </span>
-          模型列表来自平台模型目录（worker 上报合并入库，C3）
+          模型列表来自平台模型目录（Worker 上报合并入库）
         </div>
       </div>
 
@@ -1334,7 +1389,7 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
             技能配置
           </span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            FR-34 · 已启用 {skillDrafts.length}/{skills.length}
+            技能 · 已启用 {skillDrafts.length}/{skills.length}
           </span>
         </div>
         {skills.length === 0 ? (
@@ -1443,7 +1498,7 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
             工具配置
           </span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            FR-35 · 停用后 Agent 无法调用
+            工具 · 停用后 Agent 无法调用
           </span>
         </div>
         <div
@@ -1481,7 +1536,7 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
             权限范围
           </span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            FR-36 · 超出范围的操作转交用户确认
+            权限 · 超出范围的操作转交用户确认
           </span>
         </div>
         <div
@@ -1625,7 +1680,7 @@ function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: Create
               新建自定义 Agent
             </div>
             <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>
-              完全自定义（FR-32），创建后可编辑提示词 / 模型 / 工具权限
+              完全自定义，创建后可编辑提示词 / 模型 / 工具权限
             </div>
           </div>
           <button
@@ -1760,11 +1815,15 @@ export default function AgentConfigPage() {
   const userId = user?.id;
   // 写操作权限（对齐后端 PermissionGuard agents.create，REG-01）：all:true / 矩阵 true 放行
   const canCreateAgent = hasPermission(user?.permissions, "agents", "create");
+  // 删除权限（对齐后端 PermissionGuard agents.delete，UX-14）；template 由 ConfigPanel 二次过滤
+  const canDeleteAgent = hasPermission(user?.permissions, "agents", "delete");
   const queryClient = useQueryClient();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // 列表：GET /agents（type 过滤 + 分页 + 扩展字段）
   const { data, isPending, isError, error, refetch } = useQuery({
@@ -1889,6 +1948,21 @@ export default function AgentConfigPage() {
       setCreateOpen(false);
       queryClient.invalidateQueries({ queryKey: ["agents"] });
       setSelectedId(created.id);
+    },
+  });
+
+  // 删除：DELETE /agents/:id → 刷新列表并清空选中（template 后端 403，UI 已隐藏入口）
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) =>
+      api.delete<{ deleted: boolean; id: string }>(`/agents/${id}`),
+    onSuccess: () => {
+      setDeleteError(null);
+      setDeleteConfirmOpen(false);
+      setSelectedId(null);
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
+    onError: (err) => {
+      setDeleteError(isApiError(err) ? err.message : "删除失败，请稍后重试");
     },
   });
 
@@ -2027,6 +2101,10 @@ export default function AgentConfigPage() {
           onSaveToken={(payload) => saveTokenMutation.mutate(payload)}
           onClone={() => cloneMutation.mutate(selectedAgent.id)}
           canCreate={canCreateAgent}
+          canDelete={canDeleteAgent}
+          deleting={deleteMutation.isPending}
+          onDelete={() => setDeleteConfirmOpen(true)}
+          deleteError={deleteError}
         />
       ) : (
         <div
@@ -2052,6 +2130,24 @@ export default function AgentConfigPage() {
         }
         onClose={() => setCreateOpen(false)}
         onSubmit={(payload) => createMutation.mutate(payload)}
+      />
+
+      {/* 删除 Agent 二次确认弹窗（UX-14：确认后才 DELETE，复用 confirm-delete-modal） */}
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        title="删除 Agent"
+        description={
+          selectedAgent
+            ? `确定删除 Agent「${selectedAgent.name}」？删除后不可恢复，关联的技能与工具配置将一并清除。`
+            : undefined
+        }
+        confirmLabel="确认删除"
+        pendingLabel="删除中…"
+        submitting={deleteMutation.isPending}
+        onClose={() => setDeleteConfirmOpen(false)}
+        onConfirm={() => {
+          if (selectedAgent) deleteMutation.mutate(selectedAgent.id);
+        }}
       />
     </div>
   );

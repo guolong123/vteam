@@ -715,3 +715,76 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - 与并行 session 的前端白名单同步（roles/page.tsx IMPLEMENTED_PERMISSIONS 7→10，含 workers.edit/skills.create/skills.edit）衔接一致：后端守卫改造完成，前端三格已从禁用灰格变为可勾选。
 - 后端验证（本 session）：`cd server && npx tsc --noEmit` **0 错误**；`npx jest` workers.controller.spec + skills.controller.spec + permission.guard.spec **3 suites / 26 tests PASS**。skills.controller.spec 已移除 AdminGuard override/import（controller 不再挂载），workers.controller.spec 注释/测试名同步更新为 workers.edit。
 - 未跑全量 jest / 未 build / 未启动 dev server（遵守执行范围防并行冲突）；admin.guard.spec 未改动（AdminGuard 本体零变更，其他资源模块仍使用）。
+
+## UX-16 修复完成：配置区提示文案去内部代号
+
+**问题**：`web/app/(main)/agents/page.tsx` 配置区提示文案含 FR-33/FR-34/FR-35/FR-36/FR-47/FR-32 及 C3/C4/C5 等内部代号，普通用户无法理解（qa-report-open-issues-2026-08-09.md:87）。
+
+**修改**（9 处用户可见文本，代号 → 区域功能名，保留 `· 说明` 格式）：
+| 位置 | 原文 | 改后 |
+|---|---|---|
+| :1045 | FR-33 · 即时生效于后续会话 | 提示词 · 即时生效于后续会话 |
+| :1089 | FR-47 · 新会话默认使用 | 默认模型 · 新会话默认使用 |
+| :1235 | 凭据已配置 · 按 provider 粒度生效（C4） | 凭据已配置 · 按服务商粒度生效 |
+| :1236 | 保存后即时下发到 worker（C5） | 保存后即时下发到 Worker |
+| :1320 | 模型列表来自平台模型目录（worker 上报合并入库，C3） | 模型列表来自平台模型目录（Worker 上报合并入库） |
+| :1337 | FR-34 · 已启用 x/y | 技能 · 已启用 x/y |
+| :1446 | FR-35 · 停用后 Agent 无法调用 | 工具 · 停用后 Agent 无法调用 |
+| :1484 | FR-36 · 超出范围的操作转交用户确认 | 权限 · 超出范围的操作转交用户确认 |
+| :1628 | 完全自定义（FR-32），创建后… | 完全自定义，创建后… |
+
+**保留**：6 处代码/JSX 注释中的代号（:62/:118/:1032/:1073/:1240/:1471/:1792/:1803/:1832）——开发可读，非用户可见。
+
+**验证**：`cd web && npx tsc --noEmit` → 0 错误。未启 dev server / 未跑浏览器（部署由 orchestrator 统一完成）。
+
+Tags: UX-16, i18n, ux-wording, agents-page
+
+## UX-05 修复：两个「保存」按钮区域标题与文案区分
+
+**问题**：`web/app/(main)/agents/page.tsx` 页头整体「保存」按钮与模型凭据「保存」按钮文案相同，且模型配置区标题「默认模型」未覆盖凭据/Worker 范围，用户无法区分保存作用域（qa-report-open-issues-2026-08-09.md:81）。
+
+**修改**（3 处，保持功能不变）：
+| 位置 | 原文 | 改后 |
+|---|---|---|
+| :1085-1089 | 标题「默认模型」/ 说明「默认模型 · 新会话默认使用」 | 标题「模型与工具配置」/ 说明「默认模型 · 凭据 · 首选 Worker」 |
+| :1005 | 页头保存按钮「保存」 | 「保存配置」（PATCH /agents/:id，提示词+模型整体保存） |
+| :1229 | token 凭据按钮「保存」 | 「保存凭据」（POST /models/:mdId/credentials） |
+
+**说明**：提示词区标题「提示词配置」已存在（:1042），未改动。区域标题（提示词配置 / 模型与工具配置）+ 按钮文案（保存配置 / 保存凭据）双重区分，消除作用域歧义。
+
+**验证**：`cd web && npx tsc --noEmit` → 0 错误。未启 dev server / 未跑浏览器（部署由 orchestrator 统一完成）。
+
+Tags: UX-05, ux-wording, agents-page
+
+## UX-14: Agent 无删除入口（前端补齐 DELETE 入口 + 二次确认 + 权限隐藏，2026-08-09）
+
+- **问题（QA 中，qa-report-open-issues-2026-08-09.md:85）**：后端 `DELETE /agents/:id`（agents.controller.ts:96-102，PermissionGuard + agents.delete）已存在，但 `web/app/(main)/agents/page.tsx` 未暴露删除入口——Agent 无法从前端删除。
+- **修复（单文件 page.tsx，前端仅）**：
+  1. `ConfigPanelProps` 新增 `canDelete: boolean`（type≠template 且具备 agents.delete）/ `onDelete: () => void` / `deleting: boolean`（ConfirmDialog submitting）/ `deleteError: string | null`；
+  2. ConfigPanel 头部操作区（与克隆/保存并列）新增「删除」按钮 `data-testid="delete-agent-button"`（红色描边 danger 风格，`{canDelete && !isTemplate && …}` 条件渲染——template 只读不显示，后端 403 兜底）；
+  3. 页面主组件 `const canDeleteAgent = hasPermission(user?.permissions, "agents", "delete")`（复用 hasPermission 三格式兼容，对齐后端 PermissionGuard）；
+  4. `deleteMutation`：DELETE /agents/:id → onSuccess 关弹窗 + `invalidateQueries(["agents"])` + `setSelectedId(null)`（useEffect 自动选中剩余第一项）；onError 展示 deleteError banner（`data-testid="agent-delete-error"`，沿用 saveError 样式，项目无 toast 机制）；
+  5. `<ConfirmDialog>`（复用 confirm-dialog.tsx，OBS-003 先例，默认 testid=confirm-delete → confirm-delete-modal）确认后才 DELETE，submitting 走 `deleting={deleteMutation.isPending}`。
+- **⚠️ 并行会话合并教训（第二次撞车）**：UX-05/UX-16（文案简化）并行 session 同时改同一文件，与 UX-14 删除入口改动高度重叠（删除按钮/deleteError banner/deleteMutation/ConfirmDialog/state/传参几乎全同）。处理：`git diff` 核对后**以并行实现为主体**，回退我造成的重复块（重复 deleteMutation、重复 canDeleteAgent 定义），仅保留差异部分（ConfigPanelProps 的 canDelete/onDelete/deleteError + 补并行版缺失的 `deleting` 传参——并行版自行补上后 tsc 通过）。经验：多会话并行改同一文件同一功能时，重叠不可避免，关键是**先 diff 后写、同名语义只留一套、补对方缺漏而非重写**。
+- **验证**：`cd web && npx tsc --noEmit` **0 错误**（EXIT 0）。未启动 dev server、未跑 playwright/build/jest（遵守执行范围防并行冲突，浏览器实测由 QA 阶段覆盖）。
+
+## UX-14 修复：Agent 删除入口（前端暴露 DELETE /agents/:id）
+
+**问题**：qa-report-open-issues-2026-08-09.md:85 —— 后端 `agents.controller.ts:96 @Delete(':id')` + `@RequirePermission('agents.delete')` 存在，但 `web/app/(main)/agents/page.tsx` 未暴露删除入口。
+
+**后端语义确认**：`agents.service.ts` 的 `remove()` 经 `assertWritable(type)` 校验 → **type=template 删除 403**（PERMISSION_AGENT_READONLY），仅 custom/clone 可删（含 agent_skills/agent_tool_effects 关联清理）。因此前端对 template 隐藏删除按钮（与 PATCH 只读语义一致）。
+
+**修改**（`web/app/(main)/agents/page.tsx`）：
+| 位置 | 内容 |
+|---|---|
+| :782-789 | ConfigPanelProps 新增 `canDelete` / `onDelete` / `deleting` / `deleteError` 四 prop |
+| :966-989 | 头部操作区删除按钮 `delete-agent-button`（danger outline 红，`canDelete && !isTemplate` 才显示） |
+| :1062-1082 | `agent-delete-error` alert（对齐 saveError 错误模式，DELETE 非 2xx 展示） |
+| :1819 | `canDeleteAgent = hasPermission(user?.permissions, "agents", "delete")`（对齐后端 PermissionGuard） |
+| :1825 | `deleteConfirmOpen` / `deleteError` state |
+| :1955-1970 | `deleteMutation`：DELETE /agents/:id → onSuccess 关闭弹窗 + invalidateQueries(["agents"]) + setSelectedId(null)（useEffect 自动回选首个）；onError 设置 deleteError |
+| :2135-2154 | ConfirmDialog（复用 confirm-delete-modal testid）：title「删除 Agent」+ description 含 Agent 名与不可恢复提示 + submitting=deleteMutation.isPending |
+
+**验证**：`cd web && npx tsc --noEmit` → 0 错误。未启 dev server / 未跑浏览器（部署由 orchestrator 统一完成）。
+
+Tags: UX-14, delete, agents-page, permissions
