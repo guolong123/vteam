@@ -105,8 +105,15 @@ interface Role {
   updatedAt: string;
 }
 
-/** 项目候选池 + 项目内角色候选池（对齐原型，静态池） */
-const projectPool = ["智能报表模块", "数据采集平台", "告警中心"];
+/** GET /projects 分页响应（仅取 id/name 供权限范围「指定项目」选择器，对齐 board 页同款类型） */
+interface ProjectsResponse {
+  items: { id: string; name: string }[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** 项目内角色候选池（对齐原型，静态池——项目内分工岗位，非项目实体） */
 const innerRolePool = ["产品经理", "架构师", "开发者", "测试", "验收"];
 
 /* ------------------------------ 数据映射 ------------------------------ */
@@ -304,11 +311,14 @@ function PermissionScope({
   value,
   theme,
   editable,
+  projects,
   onChange,
 }: {
   value: RoleScope;
   theme: RoleTheme;
   editable: boolean;
+  /** 真实项目候选池（GET /projects 驱动；选择值存项目 id，渲染 name） */
+  projects: { id: string; name: string }[];
   onChange?: (next: RoleScope) => void;
 }) {
   const [scopeType, setScopeType] = useState<"global" | "projects">(
@@ -320,14 +330,14 @@ function PermissionScope({
     onChange?.({ ...value, global: t === "global" });
   };
 
-  const toggleProject = (p: string) => {
+  const toggleProject = (p: { id: string; name: string }) => {
     if (!editable || !onChange) return;
-    const active = value.projects.includes(p);
+    const active = value.projects.includes(p.id) || value.projects.includes(p.name);
     onChange({
       ...value,
       projects: active
-        ? value.projects.filter((x) => x !== p)
-        : [...value.projects, p],
+        ? value.projects.filter((x) => x !== p.id && x !== p.name)
+        : [...value.projects, p.id],
     });
   };
 
@@ -418,37 +428,45 @@ function PermissionScope({
       >
         <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600] }}>指定项目（多选）</span>
         <div style={{ display: "flex", gap: space.sm, flexWrap: "wrap" }}>
-          {projectPool.map((p) => {
-            const active = value.projects.includes(p);
-            return (
-              <span
-                key={p}
-                data-project={p}
-                data-active={active ? "true" : "false"}
-                onClick={editable ? () => toggleProject(p) : undefined}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: space.xs,
-                  padding: `${space.xs + 1}px ${space.md}px`,
-                  borderRadius: radius.pill,
-                  border: `1px solid ${active ? theme.border : neutral[200]}`,
-                  backgroundColor: active ? theme.bg : "#FFFFFF",
-                  color: active ? theme.color : neutral[600],
-                  fontSize: fontSize.md,
-                  cursor: editable
-                    ? scopeType === "projects"
-                      ? "pointer"
-                      : "not-allowed"
-                    : "default",
-                  fontFamily: fontFamily.body,
-                }}
-              >
-                {active && <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>✓</span>}
-                {p}
-              </span>
-            );
-          })}
+          {projects.length === 0 ? (
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+              暂无可用项目（当前账号未加入任何项目）
+            </span>
+          ) : (
+            projects.map((p) => {
+              const active =
+                value.projects.includes(p.id) || value.projects.includes(p.name);
+              return (
+                <span
+                  key={p.id}
+                  data-project={p.id}
+                  data-project-name={p.name}
+                  data-active={active ? "true" : "false"}
+                  onClick={editable ? () => toggleProject(p) : undefined}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: space.xs,
+                    padding: `${space.xs + 1}px ${space.md}px`,
+                    borderRadius: radius.pill,
+                    border: `1px solid ${active ? theme.border : neutral[200]}`,
+                    backgroundColor: active ? theme.bg : "#FFFFFF",
+                    color: active ? theme.color : neutral[600],
+                    fontSize: fontSize.md,
+                    cursor: editable
+                      ? scopeType === "projects"
+                        ? "pointer"
+                        : "not-allowed"
+                      : "default",
+                    fontFamily: fontFamily.body,
+                  }}
+                >
+                  {active && <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>✓</span>}
+                  {p.name}
+                </span>
+              );
+            })
+          )}
         </div>
       </div>
 
@@ -790,7 +808,15 @@ export default function RolePermissionPage() {
     enabled: !!user?.id,
   });
 
+  /* 真实项目池（GET /projects，成员可见项目；与看板/产出物页同 key 同 queryFn，缓存共享） */
+  const { data: projectsData } = useQuery({
+    queryKey: ["projects"],
+    queryFn: () => api.get<ProjectsResponse>("/projects"),
+    enabled: !!user?.id,
+  });
+
   const rolesList = useMemo(() => data ?? [], [data]);
+  const projectOptions = useMemo(() => projectsData?.items ?? [], [projectsData]);
 
   /* 默认选中第一个角色（seed 顺序 admin 在前） */
   useEffect(() => {
@@ -1153,6 +1179,7 @@ export default function RolePermissionPage() {
                   value={draftScopes}
                   theme={theme}
                   editable={!activeRole.isBuiltin}
+                  projects={projectOptions}
                   onChange={(next) => setDraftScopes(next)}
                 />
               </div>

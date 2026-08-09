@@ -487,3 +487,38 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   - **handleSubmit 校验通过后清除（补防御，对齐 register 页 :81 `setError(null)` 先例）**：长度校验通过、调用 onSubmit 前 `setFormError(null)`——覆盖提交成功路径，即使未触发 onChange（如回车提交）也不残留；
   - 展示逻辑 `{formError || error ? ... : null}`、data-testid（user-form-error / user-reset-form-error）、disabled 表达式均不变。
 - **验证**：web `npx tsc --noEmit` 0 错误（nvm v22.22.1）；playwright 浏览器实测 `npx playwright test -c issue004.config.ts`（dev `env API_PROXY_TARGET=http://localhost:13001 npm run dev -- -p 3002`，channel chrome）2/2 PASS：短密码拦截 OK + 改 6 位错误消失 OK。验证脚本 web/e2e/issue004-verify.spec.ts + issue004.config.ts 已留档复用。
+
+## MOCK-02: 角色页「指定项目」选择器显示 3 个假项目（2026-08-09，实现 + tsc 验证完成）
+
+- **背景**：QA 报告 MOCK-02（高）——`web/app/(main)/roles/page.tsx` 硬编码 `projectPool = ["智能报表模块", "数据采集平台", "告警中心"]`（原型假名，DB 无对应项目），权限范围「指定项目」多选渲染这 3 个假项目，用户可为角色勾选不存在的项目。
+- **修复（单文件，只动选择器数据源）**：
+  1. **删除 projectPool 常量**，新增 `ProjectsResponse` 类型（`{items: [{id, name}], total, page, pageSize}`，对齐 board/page.tsx 同款类型）；
+  2. **新增 projects useQuery**：`queryKey: ["projects"]` + `GET /projects`（`enabled: !!user?.id`），`projectOptions = items ?? []`——**同 key 同 queryFn 与看板/产出物页缓存共享**（C10 教训的反面：共享而非污染）；`innerRolePool` 保留（项目内角色岗位，非项目实体，不属 MOCK-02）；
+  3. **PermissionScope 组件收 `projects: {id, name}[]` prop**：渲染 `p.name`，选择值存 `p.id`（真实项目 id，对齐任务规格）；`data-project={p.id}` + 新增 `data-project-name={p.name}` 便于断言；**空态提示**「暂无可用项目（当前账号未加入任何项目）」。
+- **⚠️ 存量回显兼容**：旧数据 scopes.projects 可能存了项目**名**（原型期假名或真实名）而非 id——active 判定与移除过滤均双匹配 `p.id || p.name`：假名（智能报表模块等）不匹配任何真实项目 → 自然不选中；真实名（AI 智能体平台）→ 仍能回显；toggle 移除时同时 filter 掉 id 与 name 两种形式，存量值可正常清除。seed 角色（admin `{global:true}` / member `{global:false}`）scopes.projects 为空，无存量风险。
+- **后端零改动**：`RolesService.update/create` 对 scopes 原样存取 JSON（无 projects 校验/映射），前端改存 id 无需服务端配合。
+- **e2e 零改动**：testids.ts 仅注册 `scope-project-select`（容器 testid），无假项目名/`data-project` 具体值断言。
+- **验证**：web `npx tsc --noEmit` 0 错误（nvm v22.22.1）。未跑浏览器实证（后续 QA 阶段覆盖，同 F3 模式）。
+
+## MOCK-03: Worker 安装向导默认假版本修复（2026-08-09，实现 + tsc + bash -n 验证完成）
+
+- **背景**：QA 报告 MOCK-03（高）——`workers/install/page.tsx` `opencodeVersion` 默认 `"v2.0.0-beta.1"`（原型遗留假版本，worker 侧**无 V2Runtime 实现**，v2 仅 07 篇调研计划），默认 curl 命令 `--opencode v2.0.0` 直接复制会安装不存在的版本；workerId 默认 "worker-05" 亦为示例值。
+- **版本真值确认**：真实版本 = **v1.18.15**（`worker/package.json` `@opencode-ai/sdk: 1.18.15`，QA 报告确认实际运行版本；install-worker.sh 的 `--opencode` 参数**仅提示校验**不装版本，脚本 clone 仓库源码走 `npm install`）。动态获取评估：install 页纯静态无 API 调用，后端 GET /workers 仅返回**已注册** worker 的 opencodeVersion——新装场景列表可能为空且版本参差，引入 API 依赖（含 token 401 风险，D6 坑）收益低 → 决策：**固定真实稳定版本号 + UI 标注**。
+- **修复（单文件 install/page.tsx + install-worker.sh 示例注释同步）**：
+  - `opencodeVersion` 默认 `v1.18.15`；下拉选项移除假版本 v2.0.0-beta.1（V2Runtime），保留 `v1.18.15（V1Runtime · 当前稳定）` 默认 + `v1.18.14（V1Runtime）` 备选；hint 由「v2 迁移只动 Worker 侧（11.5）」改为「与 worker 实际运行版本一致」。
+  - **workerId 初始随机化**：抽公共 `randomWorkerId()`（worker-XX 10-99）供初始值 + 「重新生成」按钮共用；初始值 useState("") + 挂载 effect 填充（**对齐 D6 pageOrigin 模式避免 hydration mismatch**——useState 初始化随机值会导致 SSR/CSR 首帧不一致；首帧空串毫秒级被覆盖可忽略）。
+  - `web/public/install-worker.sh` 头部用法示例 `--opencode v2.0.0-beta.1` → `v1.18.15`（文档与实现一致性）。
+- **验证**：web `npx tsc --noEmit` 0 错误（nvm v22.22.1）；`bash -n web/public/install-worker.sh` 通过。未跑浏览器实证（tsc + 语法校验已覆盖，浏览器实测由后续 QA 阶段覆盖）。
+
+## MOCK-01: 新建任务页预置 3 个假背景文档污染任务数据（2026-08-09，实现 + tsc + 浏览器实证完成）
+
+- **背景**：QA 报告 MOCK-01（严重）——`web/app/(main)/tasks/new/page.tsx` 硬编码 `mockDocs`（需求说明书.pdf / 历史工单数据.csv / 接口文档.docx），页面打开即显示 3 个从未上传的假文档，且 `handleCreate` 提交 `backgroundDocs: mockDocs.map(d => d.name)` → 假文档写入后端（线上任务 t_0000000003/0004 的 background_docs 已存有这 3 个假文档）。
+- **上传能力核查**：上传按钮 `doc-upload-btn` 注释明确「Phase 1 不实现真实选择」——**纯静态展示，无 input[type=file]、无 onChange、无 state**。按任务约束不新增上传功能（属新功能超出 MOCK-01 范围），仅去假数据。
+- **修复（单文件 page.tsx）**：
+  1. **删除 mockDocs 常量**（docTypeColors 保留——列表渲染 `doc.color` 仍引用，非死代码）；
+  2. **新增受控 state** `backgroundDocs: BackgroundDoc[]`（`{name,size,ext,color}`），初始 `[]`——列表由真实上传 state 驱动，无文件时不渲染 `doc-file` 条目；
+  3. **handleCreate 提交 `backgroundDocs: backgroundDocs.map(d => d.name)`**——无上传时恒为 `[]`，不再引用任何假常量；
+  4. ✕ 移除按钮从「纯示意」绑定真实 `onRemoveDoc(name)`（state 过滤，列表管理语义闭环，不算新增上传功能）；
+  5. 同步文件头/区块注释（mock 3 文件 → 真实列表初始空）。
+- **验证**：web `npx tsc --noEmit` 0 错误（nvm v22.22.1）；playwright 浏览器实证（dev `env API_PROXY_TARGET=http://localhost:13001 node_modules/.bin/next dev --turbopack -p 3002`，storageState 复用 `.auth/user.json` seed-admin，channel chrome）2 项 PASS：`doc-file` 元素计数 = 0（无预置）+ 拦截 POST `/api/v1/projects/*/tasks` 断言 `backgroundDocs=[]`。
+- **经验**：mock 数据污染真实提交链路的通用检查点——凡是提交 payload 里有「用户从未操作过就存在」的值，先查它是否来自硬编码常量而非 state；纯 mock 展示（无交互能力）与 mock 数据污染（提交）是两件事，前者可保留占位，后者必须拆掉。

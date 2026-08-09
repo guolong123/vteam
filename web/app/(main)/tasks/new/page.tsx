@@ -4,7 +4,7 @@
  * 任务创建页（Task 13 保真迁移）
  * =============================================
  * 唯一来源：docs/agent-platform/prototypes/task-create/index.tsx（device: desktop）。
- * - 左栏任务表单：标题* / 描述 / 背景文档上传（mock 3 文件）/ 优先级（低/中/高）+「待开始」提示条，对应 FR-01/FR-07。
+ * - 左栏任务表单：标题* / 描述 / 背景文档上传（真实文件列表，初始为空）/ 优先级（低/中/高）+「待开始」提示条，对应 FR-01/FR-07。
  * - 右栏 Agent 选择：勾选来自 GET /agents（T4，role ↔ data-role 一一对应）+ 主 Agent（默认产品经理，FR-19）+ 已选列表 + 创建按钮 + create-hint。
  * - 交互增强（原型为静态勾选，本页实现联动）：
  *   · Agent 卡片可点击勾选/取消，「已选 Agent / N 个」与徽章列表实时联动；
@@ -85,15 +85,17 @@ const ROLE_AGENT_ID: Record<RoleKey, string> = {
 /** 初始勾选（与原型截图一致：产品经理、开发者已勾选） */
 const INITIAL_CHECKED: RoleKey[] = ["product", "developer"];
 
-/* ------------------------------ Mock：背景文档（FR-17 上传入任务文档库，Phase 1 静态展示） ------------------------------ */
+/* ------------------------------ 背景文档（FR-17 上传入任务文档库，Phase 1 无真实上传能力，列表为受控 state 初始空） ------------------------------ */
 /** 文件类型语义色（图标底色，独立于角色/状态色避免语义混淆，本地收拢不散落） */
 const docTypeColors = { pdf: "#EF4444", csv: "#10B981", docx: "#3B82F6" } as const;
 
-const mockDocs: { name: string; size: string; ext: string; color: string }[] = [
-  { name: "需求说明书.pdf", size: "2.4 MB", ext: "PDF", color: docTypeColors.pdf },
-  { name: "历史工单数据.csv", size: "1.2 MB", ext: "CSV", color: docTypeColors.csv },
-  { name: "接口文档.docx", size: "868 KB", ext: "DOCX", color: docTypeColors.docx },
-];
+/** 背景文档条目（仅由真实上传产生；当前无上传能力，恒为空数组） */
+interface BackgroundDoc {
+  name: string;
+  size: string;
+  ext: string;
+  color: string;
+}
 
 /* ------------------------------ 「待开始」状态色（新状态未入共享 statusColors，本地收敛与琥珀同族） ------------------------------ */
 const pendingColor = "#D97706";
@@ -116,6 +118,8 @@ function TaskForm({
   priority,
   onPriorityChange,
   titleError,
+  docs,
+  onRemoveDoc,
 }: {
   title: string;
   onTitleChange: (v: string) => void;
@@ -124,6 +128,8 @@ function TaskForm({
   priority: Priority;
   onPriorityChange: (v: Priority) => void;
   titleError: string | null;
+  docs: BackgroundDoc[];
+  onRemoveDoc: (name: string) => void;
 }) {
   const fieldLabel: CSSProperties = {
     fontSize: fontSize.sm,
@@ -221,7 +227,7 @@ function TaskForm({
         />
       </div>
 
-      {/* 背景文档上传（FR-17：上传资料入任务文档库，参与 Agent 可见；Phase 1 静态示意） */}
+      {/* 背景文档上传（FR-17：上传资料入任务文档库，参与 Agent 可见；Phase 1 无真实选择能力，列表由真实上传 state 驱动） */}
       <div data-testid="doc-upload" style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
         <label style={fieldLabel}>背景文档</label>
 
@@ -256,9 +262,9 @@ function TaskForm({
           </span>
         </button>
 
-        {/* 已上传文件列表（mock 3 个：PDF / CSV / DOCX，含移除按钮示意） */}
+        {/* 已上传文件列表（真实上传 state 驱动，初始为空；仅渲染已存在文件） */}
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-          {mockDocs.map((doc) => (
+          {docs.map((doc) => (
             <div
               key={doc.name}
               data-testid="doc-file"
@@ -307,7 +313,9 @@ function TaskForm({
                 {doc.size}
               </span>
               <span
+                role="button"
                 aria-label={`移除 ${doc.name}`}
+                onClick={() => onRemoveDoc(doc.name)}
                 style={{
                   fontSize: fontSize.sm,
                   color: neutral[400],
@@ -724,6 +732,9 @@ export default function TaskCreatePage() {
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<Priority>("中");
 
+  // 背景文档：真实上传列表（Phase 1 无上传能力，初始为空，禁止预置假数据）
+  const [backgroundDocs, setBackgroundDocs] = useState<BackgroundDoc[]>([]);
+
   // Agent 选择：勾选集合 + 主 Agent（默认产品经理，FR-19）
   const [checkedAgents, setCheckedAgents] = useState<RoleKey[]>(INITIAL_CHECKED);
   const [mainAgent, setMainAgent] = useState<RoleKey>("product");
@@ -769,6 +780,11 @@ export default function TaskCreatePage() {
     });
   };
 
+  /** 移除背景文档（真实列表管理，仅影响本次创建提交） */
+  const handleRemoveDoc = (name: string) => {
+    setBackgroundDocs((prev) => prev.filter((d) => d.name !== name));
+  };
+
   /** 创建任务：空标题校验 → 真实 POST /projects/:pid/tasks，成功跳转任务详情，失败展示接口错误 */
   const handleCreate = async () => {
     if (!title.trim()) {
@@ -791,7 +807,7 @@ export default function TaskCreatePage() {
           priority: PRIORITY_API[priority],
           agentIds: checkedAgents.map(toAgentId),
           mainAgentId: toAgentId(mainAgent),
-          backgroundDocs: mockDocs.map((d) => d.name),
+          backgroundDocs: backgroundDocs.map((d) => d.name),
         }
       );
       setCreated(true);
@@ -836,6 +852,8 @@ export default function TaskCreatePage() {
           priority={priority}
           onPriorityChange={setPriority}
           titleError={titleError}
+          docs={backgroundDocs}
+          onRemoveDoc={handleRemoveDoc}
         />
         <AgentSelectPanel
           agentOptions={agentOptions}

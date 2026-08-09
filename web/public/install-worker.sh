@@ -4,7 +4,7 @@
 #
 # 用法（控制面安装向导页生成的命令）：
 #   curl -fsSL <控制面地址>/install-worker.sh | bash -s -- \
-#     --server http://<控制面地址> --worker-id my-worker-1 --concurrency 8 --opencode v2.0.0-beta.1
+#     --server http://<控制面地址> --worker-id my-worker-1 --concurrency 8 --opencode v1.18.15
 #
 # 流程：前置校验（git / node >= 18 / opencode CLI）→ 拉取 worker 源码 → npm install
 #   → 生成 .env（SERVER_URL / WORKER_ID）→ 校验 X_WORKER_TOKEN → 构建 → 启动

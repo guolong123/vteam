@@ -12,6 +12,9 @@
  * - curl 下载地址动态化：脚本由控制面 web 静态服务提供（/install-worker.sh），下载 URL 与
  *   serverUrl 默认值均取当前页面访问地址（window.location.origin，挂载后填充避免 SSR mismatch）——
  *   不再硬编码 example 地址。
+ * - 真实默认值（MOCK-03）：opencode 版本默认 v1.18.15（= worker/package.json @opencode-ai/sdk
+ *   实际版本，非原型假版本 v2.0.0-beta.1——worker 侧暂无 V2Runtime 实现，v2 仅调研计划，见 07 篇）；
+ *   workerId 初始随机生成（worker-XX，与「重新生成」按钮同源逻辑，替代示例值 worker-05）。
  * - 纯静态展示（不执行真实安装）；复制按钮为唯一增强交互：navigator.clipboard 写剪贴板
  *   （原型"复制"占位语义），失败静默降级。
  * - data-testid 与原型一致（17 个）：worker-install-root/install-wizard/install-config/
@@ -36,6 +39,12 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /** 安装方式 */
 type InstallMethod = "curl" | "docker";
+
+/** 生成随机 workerId（worker-XX，10-99；安装向导初始值 + 「重新生成」按钮共用） */
+function randomWorkerId(): string {
+  const rand = Math.floor(10 + Math.random() * 90);
+  return `worker-${String(rand).padStart(2, "0")}`;
+}
 
 /** 表单字段行：标签 + 说明 + 输入槽（原型 FieldRow） */
 function FieldRow({
@@ -218,14 +227,22 @@ export default function WorkerInstallPage() {
 
   /* 参数配置（受控，动态拼接到命令展示） */
   const [serverUrl, setServerUrl] = useState("");
-  const [workerId, setWorkerId] = useState("worker-05");
+  const [workerId, setWorkerId] = useState("");
   const [concurrency, setConcurrency] = useState(8);
-  const [opencodeVersion, setOpencodeVersion] = useState("v2.0.0-beta.1");
+  /* 默认值 = worker 实际运行的稳定版本（worker/package.json @opencode-ai/sdk 1.18.15），
+     非原型假版本 v2.0.0-beta.1（worker 侧暂无 V2Runtime 实现，v2 仅调研计划，见 07 篇） */
+  const [opencodeVersion, setOpencodeVersion] = useState("v1.18.15");
 
   /* serverUrl 初始值跟随页面 origin（用户可手动修改） */
   useEffect(() => {
     setServerUrl((cur) => (cur ? cur : pageOrigin));
   }, [pageOrigin]);
+
+  /* workerId 初始随机生成：SSR 首帧空串 → 挂载后填充（对齐 pageOrigin 模式避免 hydration mismatch，
+     替代原型示例值 worker-05，避免固定 id 多 worker 冲突） */
+  useEffect(() => {
+    setWorkerId(randomWorkerId());
+  }, []);
 
   /* 两种安装方式的命令；curl 下载地址 = 当前 origin + /install-worker.sh */
   const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}`;
@@ -255,8 +272,7 @@ export default function WorkerInstallPage() {
 
   /** 重新生成 workerId（原型占位按钮 → 真实随机，仍满足"自动生成可修改"语义） */
   const regenerateWorkerId = () => {
-    const rand = Math.floor(10 + Math.random() * 90);
-    setWorkerId(`worker-${String(rand).padStart(2, "0")}`);
+    setWorkerId(randomWorkerId());
   };
 
   return (
@@ -366,13 +382,13 @@ export default function WorkerInstallPage() {
                     ))}
                   </select>
                 </FieldRow>
-                <FieldRow label="opencode 版本" hint="v2 迁移只动 Worker 侧（11.5）">
+                <FieldRow label="opencode 版本" hint="与 worker 实际运行版本一致">
                   <select
                     value={opencodeVersion}
                     onChange={(e) => setOpencodeVersion(e.target.value)}
                     style={{ ...inputStyle, cursor: "pointer" }}
                   >
-                    <option value="v2.0.0-beta.1">v2.0.0-beta.1（V2Runtime）</option>
+                    <option value="v1.18.15">v1.18.15（V1Runtime · 当前稳定）</option>
                     <option value="v1.18.14">v1.18.14（V1Runtime）</option>
                   </select>
                 </FieldRow>
