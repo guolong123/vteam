@@ -28,3 +28,5 @@ export { TopBar } from "./top-bar";
 export type { TopBarProps } from "./top-bar";
 export { EmptyState } from "./empty-state";
 export type { EmptyStateProps } from "./empty-state";
+export { ConfirmDialog } from "./confirm-dialog";
+export type { ConfirmDialogProps } from "./confirm-dialog";

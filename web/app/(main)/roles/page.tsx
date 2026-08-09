@@ -31,7 +31,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { EmptyState } from "@/src/components/ui";
+import { EmptyState, ConfirmDialog } from "@/src/components/ui";
 import {
   neutral,
   space,
@@ -801,6 +801,8 @@ export default function RolePermissionPage() {
   const [errorHint, setErrorHint] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  /* 删除角色确认弹窗（OBS-003：删除后不可恢复，原生 window.confirm 换项目 Modal 二次确认） */
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["roles"],
@@ -918,10 +920,8 @@ export default function RolePermissionPage() {
 
   const handleDelete = () => {
     if (!activeRole) return;
-    if (!window.confirm(`确定删除角色「${roleLabel(activeRole)}」？删除后不可恢复。`)) {
-      return;
-    }
-    deleteMutation.mutate(activeRole.id);
+    /* OBS-003：删除不可恢复，先弹项目 Modal 二次确认，确认后才 DELETE */
+    setDeleteConfirmOpen(true);
   };
 
   const theme = activeRole ? roleThemeFor(activeRole) : roleThemes.custom;
@@ -1315,6 +1315,25 @@ export default function RolePermissionPage() {
         }
         onClose={() => setCreateOpen(false)}
         onSubmit={(payload) => createMutation.mutate(payload)}
+      />
+
+      {/* 删除角色二次确认弹窗（OBS-003：确认后才 DELETE） */}
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        title="删除角色"
+        description={
+          activeRole
+            ? `确定删除角色「${roleLabel(activeRole)}」？删除后不可恢复，持有该角色的用户将失去对应权限。`
+            : undefined
+        }
+        confirmLabel="确认删除"
+        pendingLabel="删除中…"
+        submitting={deleteMutation.isPending}
+        onClose={() => setDeleteConfirmOpen(false)}
+        onConfirm={() => {
+          if (activeRole) deleteMutation.mutate(activeRole.id);
+          setDeleteConfirmOpen(false);
+        }}
       />
     </div>
   );

@@ -30,7 +30,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { EmptyState } from "@/src/components/ui";
+import { EmptyState, ConfirmDialog } from "@/src/components/ui";
 import {
   neutral,
   space,
@@ -1093,6 +1093,8 @@ export default function UsersPage() {
   const [resetTarget, setResetTarget] = useState<UserItem | null>(null);
   /* 编辑用户弹层：target 非空即打开（ISSUE-002 修复） */
   const [editTarget, setEditTarget] = useState<UserItem | null>(null);
+  /* 禁用/启用二次确认弹窗：target 非空即打开（OBS-003：误触禁用会让用户立即失去登录能力） */
+  const [toggleTarget, setToggleTarget] = useState<UserItem | null>(null);
   /* 列表操作（禁用/启用）失败提示 */
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -1158,7 +1160,8 @@ export default function UsersPage() {
   });
 
   const handleToggle = (u: UserItem) => {
-    toggleMutation.mutate({ id: u.id, enabled: !u.enabled });
+    /* OBS-003：禁用/启用均为关键状态变更，先弹二次确认，确认后才 PATCH /users/:id/status */
+    setToggleTarget(u);
   };
 
   const handleCreate = (payload: CreateUserPayload) => {
@@ -1445,6 +1448,31 @@ export default function UsersPage() {
         error={updateMutation.isError ? (isApiError(updateMutation.error) ? updateMutation.error.message : "保存失败，请稍后重试") : null}
         onClose={() => setEditTarget(null)}
         onSubmit={handleUpdate}
+      />
+
+      {/* 禁用/启用二次确认弹窗（OBS-003：误触禁用会让用户立即失去登录能力，确认后才 PATCH） */}
+      <ConfirmDialog
+        testid="confirm-toggle"
+        open={toggleTarget !== null}
+        title={toggleTarget?.enabled ? "禁用该用户？" : "启用该用户？"}
+        description={
+          toggleTarget
+            ? toggleTarget.enabled
+              ? `禁用后「${toggleTarget.username}」将无法登录平台（可随时重新启用）。`
+              : `启用后「${toggleTarget.username}」可重新登录平台。`
+            : undefined
+        }
+        confirmLabel={toggleTarget?.enabled ? "确认禁用" : "确认启用"}
+        pendingLabel="处理中…"
+        danger={toggleTarget?.enabled ?? true}
+        submitting={toggleMutation.isPending}
+        onClose={() => setToggleTarget(null)}
+        onConfirm={() => {
+          if (toggleTarget) {
+            toggleMutation.mutate({ id: toggleTarget.id, enabled: !toggleTarget.enabled });
+          }
+          setToggleTarget(null);
+        }}
       />
     </div>
   );

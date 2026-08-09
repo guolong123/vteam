@@ -572,3 +572,18 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **验证**：curl 实测本地 nest watch（3000）GET /users → seed-admin `_count.projectMembers = 2`（真实数据）；playwright 浏览器实测（3004 dev + 注入 admin 登录态）用户列表 **seed-admin 行显示「2 所属项目」**（原恒 0）、seed-member「0」（真实）。web `npx tsc --noEmit` 0 错误。
 - **⚠️ 多 dev 实例踩坑**：两个 `next dev --turbopack` 共享 `.next` 目录会持续互踩产物（500 `Cannot find module chunks/ssr/[turbopack]_runtime.js`）——同仓库只能跑一个 dev（并行任务 3001 与验证用 3004 必须轮换，验证后已恢复 3001）。
 - **经验**：「兜底 0」模式（对齐 EMPTY_TASK_COUNT）在**字段有真实数据源但页面没用**时是 bug 而非兜底——MOCK 类检查点：先查后端关联/计数能力（Prisma `_count` 零成本），能算就透传，不能算才降级「—」；硬编码展示值必须逐项核对是否有可计算来源。
+
+---
+
+## F2: OBS-003 + UX-17 删除/禁用操作二次确认（2026-08-09，实现 + 浏览器实证完成）
+
+- **问题**：QA 报告 OBS-003【低】+ UX-17——Provider 凭据删除、角色删除、用户禁用均直接执行，无二次确认（凭据删除不可恢复，误触成本高）。
+- **方案（共享 ConfirmDialog 组件，三处复用）**：新建 `web/src/components/ui/confirm-dialog.tsx`（`@/src/components/ui` 出口导出，与 EmptyState 等共享组件同层）——结构对齐 reject-modal/user-form-overlay（铁律 T15：absolute 相对宿主 + 遮罩点击关闭 + Esc 关闭，无 fixed/100vh/100vw）；props：`open/testid/title/description/confirmLabel/pendingLabel/danger/submitting/onClose/onConfirm`；testid 前缀默认 `confirm-delete`（生成 `confirm-delete-modal`/`-cancel`/`-confirm`），用户禁用传 `testid="confirm-toggle"` 按上下文命名。danger 红色确认按钮（#DC2626，对齐 roles 页 delete-role-button 色系），非危险操作传 `danger={false}` 走蓝。
+- **三处接线（均 target 模式，确认后 mutate + 立即关闭，失败走既有错误展示）**：
+  1. `providers-tab.tsx`：`revokeTarget: string | null` state；`provider-delete-button` onClick 改 `setRevokeTarget(p.providerID)`；确认后 `revokeMutation.mutate(revokeTarget)`；删除失败仍走 D6 的 `provider-error-banner`（列表级，弹窗已关也能看见）。
+  2. `roles/page.tsx`：**删除原生 `window.confirm`（QA 无法验证且非项目 Modal 模式）**；`deleteConfirmOpen` state；`handleDelete` 只开弹窗；确认后 `deleteMutation.mutate(activeRole.id)`（确认时重读 activeRole，防弹窗期间角色切换）。
+  3. `users/page.tsx`：**决策：禁用/启用都加确认**（可逆但误触成本高——禁错人立即失去登录能力）；`toggleTarget: UserItem | null`；标题/文案/确认按钮随方向动态（「禁用该用户？」红 /「启用该用户？」蓝 `danger={toggleTarget?.enabled}`）；确认后 `toggleMutation.mutate({id, enabled: !enabled})`。
+- **验证**：web `npx tsc --noEmit` 0 错误；playwright 浏览器实测（chromium-1208 + 3001 dev + seed-admin 表单登录）**18/18 PASS 0 console error**——三场景各 6 断言：点操作按钮 → 弹窗出现（含目标名）→ 取消关闭且**零请求** → 再点确认 → **DELETE/PATCH 请求发出** + 弹窗关闭；roles 场景额外断言**未触发原生 window.confirm**（page.once('dialog') 监听）。
+- **⚠️ 实测环境安全策略**：所有写操作（DELETE 凭据/角色、PATCH /status）用 `page.route` 拦截 fulfill 200——只验证前端「确认后发出请求」逻辑，**不真删真禁**（opencode-go 凭据加密不可恢复；test 角色、T 用户均保持原状，实测后 API 复核 configured=True / enabled / 角色存在）。
+- **⚠️ /models 双 Tab 坑**：直接等 `providers-root` 超时——models 页默认 catalog tab，须先点 `manage-tab`（hasText Provider）切换再等 providers-root。
+- **经验**：三处同构的「标题+描述+取消/确认」弹窗 → 建共享组件优于页面内三份复制（E1「不泛化 UserFormModal」的例外判据：字段集/交互完全同构才泛化，此处成立）；二次确认弹窗的 testid 按上下文命名（delete vs toggle），QA 断言可按操作类型精确锁定。

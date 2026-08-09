@@ -33,6 +33,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
+import { ConfirmDialog } from "@/src/components/ui";
 import {
   neutral,
   space,
@@ -530,6 +531,8 @@ export default function ProvidersTab() {
   /* 配置弹窗（open=providerID，false=关闭） */
   const [configureOpen, setConfigureOpen] = useState<string | false>(false);
   const [configureError, setConfigureError] = useState<string | null>(null);
+  /* 删除凭据确认弹窗（target=providerID，非空即打开——OBS-003：删除不可恢复，需二次确认） */
+  const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
   /* 列表级操作错误（删除凭据失败时弹窗未开，configureError 无处渲染——独立 state，
    * 列表顶部渲染错误条；对齐 skills 页 notice 模式） */
   const [providerError, setProviderError] = useState<string | null>(null);
@@ -948,7 +951,7 @@ export default function ProvidersTab() {
                               label="删除"
                               onClick={() => {
                                 setProviderError(null);
-                                revokeMutation.mutate(p.providerID);
+                                setRevokeTarget(p.providerID);
                               }}
                               disabled={revokeMutation.isPending}
                             />
@@ -1009,6 +1012,25 @@ export default function ProvidersTab() {
           configuringProvider &&
           saveCredentialMutation.mutate({ providerID: configuringProvider, ...payload })
         }
+      />
+
+      {/* 删除凭据二次确认弹窗（OBS-003：凭据不可恢复，确认后才 DELETE） */}
+      <ConfirmDialog
+        open={revokeTarget !== null}
+        title="删除 Provider 凭据"
+        description={
+          revokeTarget
+            ? `确认删除 ${revokeTarget} 的凭据？删除后该 Provider 下的模型将无法调用，且不可恢复。`
+            : undefined
+        }
+        confirmLabel="确认删除"
+        pendingLabel="删除中…"
+        submitting={revokeMutation.isPending}
+        onClose={() => setRevokeTarget(null)}
+        onConfirm={() => {
+          if (revokeTarget) revokeMutation.mutate(revokeTarget);
+          setRevokeTarget(null);
+        }}
       />
     </div>
   );
