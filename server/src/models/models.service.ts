@@ -89,15 +89,18 @@ export class ModelsService implements OnModuleInit {
   // ==================================================================
 
   /**
-   * GET /models：enabled 过滤 + providerID/modelID/name 模糊搜索 + 分页。
-   * 返回 {items, total, page, pageSize}（对齐 mcp-servers/tools findAll 模式）。
+   * GET /models：enabled 过滤 + providerID/modelID/name 搜索 + 分页。
+   * ⚠️ providerID 精确匹配（根因 1）：contains 模糊匹配会让 `opencode` 误命中
+   * `opencode-go`，前端按 provider 解析模型 id 时取到错误 provider 的模型；
+   * modelID/name 保留 contains 搜索语义。返回 {items, total, page, pageSize}
+   * （对齐 mcp-servers/tools findAll 模式）。
    */
   async findAll(query: QueryModelsDto = {}) {
     const page = this.normalizePage(query.page);
     const pageSize = this.normalizePageSize(query.pageSize);
     const where = {
       enabled: query.enabled === undefined ? undefined : query.enabled,
-      providerID: query.providerID ? { contains: query.providerID } : undefined,
+      providerID: query.providerID ? query.providerID : undefined,
       modelID: query.modelID ? { contains: query.modelID } : undefined,
       name: query.name ? { contains: query.name } : undefined,
     };
@@ -106,7 +109,8 @@ export class ModelsService implements OnModuleInit {
       this.prisma.model.count({ where }),
       this.prisma.model.findMany({
         where,
-        orderBy: { createdAt: 'asc' },
+        // orderBy 加 id 第二键：同 createdAt 排序稳定（根因 2，前端取首个模型 id 不再漂移）
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
@@ -524,6 +528,34 @@ export class ModelsService implements OnModuleInit {
     });
     this.logger.log(
       `模型凭据吊销：model=${modelId} provider=${providerID} fingerprint=${row.fingerprint}`,
+    );
+    return this.toView(row);
+  }
+
+  /**
+   * DELETE /models/providers/:providerID/credentials：按 provider 粒度软撤销。
+   * - 直接以 providerID 查 ModelCredential，**不依赖 model 行存在**（修复
+   *   worker-only provider 目录无该 provider 模型时无法删凭据的问题）；
+   * - 凭据不存在 → 404 MODEL_CREDENTIAL_NOT_FOUND。
+   */
+  async revokeCredentialByProvider(
+    providerID: string,
+  ): Promise<ModelCredentialView> {
+    const existing = await this.prisma.modelCredential.findUnique({
+      where: { providerID },
+    });
+    if (!existing) {
+      throw new NotFoundException({
+        code: MODEL_ERRORS.MODEL_CREDENTIAL_NOT_FOUND,
+        message: `provider ${providerID} 尚未配置凭据`,
+      });
+    }
+    const row = await this.prisma.modelCredential.update({
+      where: { providerID },
+      data: { revokedAt: new Date() },
+    });
+    this.logger.log(
+      `模型凭据吊销（provider 粒度）：provider=${providerID} fingerprint=${row.fingerprint}`,
     );
     return this.toView(row);
   }

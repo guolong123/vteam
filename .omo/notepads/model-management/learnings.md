@@ -6,6 +6,38 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ---
 
+## D6: 修复「删除 provider 凭据失败错误不可见」（2026-08-09，实现 + 浏览器实证完成）
+
+- **用户反馈**：删除凭据失败时"点了没反应"——`revokeMutation.onError` 设置了 `setConfigureError(err.message)`，但 `configureError` 只在 ConfigureModal 内渲染（:944），弹窗 `open={configuringProvider !== undefined}` 仅依赖 `configureOpen`（:941）；删除失败时 configureOpen 为 null → 弹窗关闭 → 错误状态设置了但无处显示（静默失败）。
+- **方案 A（列表级内联错误条）落地**（providers-tab.tsx）：
+  1. 新增独立 `providerError: string | null` state（与 configureError 语义分离——configureError 是"配置弹窗错误"，删除错误走列表级）。3s 自动消失 useEffect（对齐 skills 页 notice 行为）。
+  2. `revokeMutation`：onSuccess 清空 providerError；onError 改设 providerError（**不再写 configureError**——原写法在弹窗未开时无效）。
+  3. 删除按钮 onClick 前置 `setProviderError(null)`（重试前清旧提示）。
+  4. 渲染：工具条与列表之间插入错误条（`provider-error-banner`，role=alert + ⚠ + 关闭按钮 `provider-error-dismiss` + 3s 自动消失；红系 #FEF2F2/#FECACA/#DC2626 对齐 skills 页 notice 错误态）。
+- **次要优化（顺手做）**：删除按钮条件 `status !== "missing"` → `status === "configured"`——"已撤销"（revoked）状态再点删除无意义（DELETE 幂等成功、且语义混乱），仅 configured 显示删除按钮。e2e 无该按钮点击断言，安全。
+- **⚠️ 验证路径坑（幂等 DELETE 无法自然触发 404）**：C12 的 `revokeCredentialByProvider` 是 findUnique 后 update revokedAt——**已软删记录重复 DELETE 仍成功（幂等）**，不存在 revokedAt=null 才删的语义。因此"先 API 直删 → 页面缓存过期 → 点删除 → 404"的路径不成立（第二次 DELETE 成功，无错误条）。浏览器实证改用 **playwright route 拦截** DELETE 返回 404（`page.route("**/api/v1/models/providers/*/credentials")` fulfill 404）——直接验证前端 onError → 错误条渲染逻辑，不依赖后端状态，更干净。
+- **实证结果**（chrome headless，web dev 3001）：rows=7、deleteButtons=1（仅 opencode-go configured）、revokedButtonHidden=true（zhipu revoked 无删除按钮）、点删除 → `provider-error-banner` 可见（文本含 MODEL_CREDENTIAL_NOT_FOUND）、dismiss 后消失、无 JS console 错误。截图 `.omo/evidence/` 未存（模型不支持读图，playwright 文本断言为准）。
+- **验证**：web `npx tsc --noEmit` 0 错误 + `npm run build` 通过（/models 9.52 kB）。⚠️ 环境坑：跑 build 前需 kill 3001 dev server + `rm -rf .next`（C11 教训），build 后 `node_modules/.bin/next dev --turbopack -p 3001` 重启（**npx/npm exec 的 `-p 3001` 会被解析成项目目录报错，必须直接调 .bin/next**）；dev 启动后首次编译 ~1.6s。
+
+---
+
+## C12: 修复「删除 provider 凭据」bug（2026-08-09，实现 + 验证完成）
+
+- **用户反馈**：① 删除凭据不生效；② 每次点击发出多个不同编号的 DELETE 请求。
+- **根因三连（explore 定位）**：
+  1. `models.service.ts findAll` providerID 用 **contains 模糊匹配**——`providerID=opencode` 命中 opencode + opencode-go 两 provider 的模型。
+  2. 前端 `resolveModelId` 每次裸 `GET /models?providerID=xxx` 取第一个匹配模型 id；后端 `orderBy createdAt asc` 同 createdAt 排序不稳定 → 每次点击解析到不同 model id → 多个不同编号 DELETE。
+  3. **设计错配**：凭据按 providerID 粒度存（ModelCredential.providerID unique），删除却按「某模型 id」路由（`DELETE /models/:id/credentials`）→ resolveModelId 是保底 hack；且 revokeMutation 无 onError → DELETE 404（MODEL_CREDENTIAL_NOT_FOUND）静默失败 → 删除不生效。
+- **后端改动**：
+  1. **新端点** `DELETE /models/providers/:providerID/credentials`（AdminGuard）——`ModelsService.revokeCredentialByProvider(providerID)` 直接按 providerID `findUnique` ModelCredential → 无则 404 MODEL_CREDENTIAL_NOT_FOUND，有则 `update revokedAt=new Date()`。**不查 model 行**（worker-only provider 无模型也能删）。静态段 `providers` 声明在 `@Delete(':id')` 之前（紧跟 @Get('providers') 之后，对齐既有顺序）。
+  2. **findAll providerID 改精确匹配**：`providerID: query.providerID ? query.providerID : undefined`（modelID/name 保留 contains 搜索）；`orderBy` 加第二键 `[{ createdAt: 'asc' }, { id: 'asc' }]` 保证同 createdAt 排序稳定。
+- **前端改动**（providers-tab.tsx）：`revokeMutation.mutationFn` 改直接 `api.delete(\`/models/providers/${providerID}/credentials\`)`——**删除 resolveModelId 调用**（saveCredentialMutation 仍用 resolveModelId，故保留）；补 `onError: setConfigureError(isApiError(err) ? err.message : "删除失败，请稍后重试")`（对齐 saveCredentialMutation onError 模式，杜绝静默失败）。
+- **⚠️ 路由顺序测试坑（沿用 C9）**：PATH_METADATA 定义在 `descriptor.value`（函数对象）上，读法 `Reflect.getMetadata(PATH_METADATA, ModelsController.prototype[method])`；声明顺序 = `Object.getOwnPropertyNames(prototype)` 顺序。新增断言 `providers/:providerID/credentials` 索引 < `:id` 索引。
+- **测试**：models.service.spec 新增 revokeCredentialByProvider 3 例（按 provider 直删不查 model / 无凭据 404 / model 不存在 worker-only 也能删）+ findAll 精确匹配与 orderBy 第二键断言更新；models.controller.spec 新增 2 例（转发 + DELETE 路由顺序）。**验证**：server `npm run build` 通过 + jest **43 suites / 668 tests 全绿**（基线 663 + 新增 5）；web `npx tsc --noEmit` 0 错误 + `npm run build` 通过。
+- **遗留（决策）**：POST 按 provider 保存凭据端点（`POST /models/providers/:providerID/credentials`）未做——用户问题聚焦删除，保存路径 resolveModelId 已被 findAll 精确匹配 + 稳定排序修复，不再每次漂移；如未来要支持 worker-only provider 配置凭据，可补该端点（body {token, targetWorkerIds?}）。
+
+---
+
 ## D5: Provider 列表"只有 opencode/opencode-go 两个 provider"问题修复（2026-08-09，实现 + 验证完成）
 
 - **根因（实证）**：`STATIC_AVAILABLE_MODELS` 8 个 seed 模型中 7 个**无 provider 前缀**（`deepseek-v4-pro`/`glm-5.1`/`glm-5.2`/`gpt-5.6-luna`/`grok-4.5`/`kimi-k2.6`/`qwen3.6-plus`）——`buildModelSeedRows`/`splitModelId` 首 `/` 拆不到 → 默认归 `opencode` → models 表 DISTINCT provider_id 只有 `opencode`/`opencode-go` 2 个 → `GET /models/providers` 聚合结果也只有 2 个 → Provider 页只有 2 行。

@@ -169,10 +169,10 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         expect.objectContaining({
           where: expect.objectContaining({
             enabled: true,
-            providerID: { contains: 'opencode' },
+            providerID: 'opencode',
             name: { contains: 'deep' },
           }),
-          orderBy: { createdAt: 'asc' },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
           skip: 0,
           take: 20,
         }),
@@ -764,6 +764,57 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       ).rejects.toMatchObject({
         response: { code: MODEL_ERRORS.MODEL_NOT_FOUND },
       });
+    });
+  });
+
+  describe('revokeCredentialByProvider（DELETE 按 provider 粒度软吊销）', () => {
+    it('有凭据：直接按 providerID 吊销，不查 model 行', async () => {
+      const now = new Date('2026-08-08T11:00:00Z');
+      jest.spyOn(global, 'Date').mockImplementation(() => now as never);
+      prisma.modelCredential.findUnique.mockResolvedValue(credentialRow);
+      prisma.modelCredential.update.mockResolvedValue({
+        ...credentialRow,
+        revokedAt: now,
+      });
+
+      const result = await service.revokeCredentialByProvider('opencode-go');
+
+      expect(prisma.model.findUnique).not.toHaveBeenCalled();
+      expect(prisma.modelCredential.findUnique).toHaveBeenCalledWith({
+        where: { providerID: 'opencode-go' },
+      });
+      expect(prisma.modelCredential.update).toHaveBeenCalledWith({
+        where: { providerID: 'opencode-go' },
+        data: { revokedAt: now },
+      });
+      expect(result).toMatchObject({ configured: false, revokedAt: now });
+      (global.Date as unknown as jest.Mock).mockRestore();
+    });
+
+    it('无凭据 → 404 MODEL_CREDENTIAL_NOT_FOUND（不触发 update）', async () => {
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.revokeCredentialByProvider('opencode'),
+      ).rejects.toMatchObject({
+        response: { code: MODEL_ERRORS.MODEL_CREDENTIAL_NOT_FOUND },
+      });
+      expect(prisma.modelCredential.update).not.toHaveBeenCalled();
+    });
+
+    it('model 不存在（worker-only provider）也能按 provider 删——不依赖 model 行', async () => {
+      prisma.model.findUnique.mockResolvedValue(null);
+      prisma.modelCredential.findUnique.mockResolvedValue(credentialRow);
+      prisma.modelCredential.update.mockResolvedValue({
+        ...credentialRow,
+        revokedAt: new Date('2026-08-08T12:00:00Z'),
+      });
+
+      const result = await service.revokeCredentialByProvider('opencode-go');
+
+      expect(prisma.model.findUnique).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ configured: false });
+      expect(prisma.modelCredential.update).toHaveBeenCalled();
     });
   });
 });

@@ -54,6 +54,20 @@ export class ModelsController {
     return this.modelsService.listProviders();
   }
 
+  /**
+   * 按 provider 吊销凭据（软撤销，AdminGuard）。
+   * DELETE /api/v1/models/providers/:providerID/credentials → 200 + 脱敏视图
+   *   凭据不存在 → 404 MODEL_CREDENTIAL_NOT_FOUND；
+   *   不依赖模型行存在（worker-only provider 也能删）；
+   *   静态段 providers 声明在 :id 之前（对齐 @Get('providers') 顺序）。
+   */
+  @Delete('providers/:providerID/credentials')
+  @UseGuards(AdminGuard)
+  @ApiOperation({ summary: '按 provider 吊销凭据（不依赖模型 id，AdminGuard）' })
+  revokeCredentialByProvider(@Param('providerID') providerID: string) {
+    return this.modelsService.revokeCredentialByProvider(providerID);
+  }
+
   /** GET /api/v1/models/:id → 200 + Model；不存在 → 404 MODEL_NOT_FOUND。 */
   @Get(':id')
   @ApiOperation({ summary: '模型目录详情' })

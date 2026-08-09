@@ -14,15 +14,17 @@
  * - 保存 → POST /models/:id/credentials {token, targetWorkerIds?}（用该 provider 下
  *   任一模型 id；targetWorkerIds 非空 → 定向 enqueueCommand，空 → 全量广播，C5）→
  *   成功后列表刷新 + 徽章变「已配置」。
- * - 删除凭据（provider-delete-button，admin 专属）→ DELETE /models/:id/credentials
- *   （revokedAt 软撤销）→ 徽章变「未配置」。
+ * - 删除凭据（provider-delete-button，admin 专属）→ DELETE
+ *   /models/providers/:providerID/credentials（按 provider 粒度直删，
+ *   revokedAt 软撤销，不依赖模型 id）→ 徽章变「未配置」。
  * - 数据源：GET /models/providers 后端聚合（C9：一次请求返回
  *   [{providerID, modelCount, configured, fingerprint, revokedAt}]）；GET /workers
  *   提供 worker 多选数据源（queryKey=["workers"] 与模型目录 Tab 共享，queryFn 相同
  *   无污染）。
- * - 保存/删除凭据需模型 id（providers 响应不含 id）：保底
+ * - 保存凭据需模型 id（providers 响应不含 id）：保底
  *   GET /models?providerID=xxx 取该 provider 首个模型 id（凭据按 provider 粒度，
- *   C4：同 provider 下任一模型 id 均可操作）。
+ *   C4：同 provider 下任一模型 id 均可操作）；删除凭据改按 provider 直删
+ *   （不再解析模型 id——修复每次删除取到不同模型 id 的 bug）。
  * - 权限：isAdmin（roleName==='admin'）控制配置/删除，成员只读（后端 AdminGuard 403 兜底）。
  * - 铁律（T15）：无 fixed / 100vh / 100vw；root flex:1 铺满（AppShell 提供导航）。
  */
@@ -528,6 +530,16 @@ export default function ProvidersTab() {
   /* 配置弹窗（open=providerID，false=关闭） */
   const [configureOpen, setConfigureOpen] = useState<string | false>(false);
   const [configureError, setConfigureError] = useState<string | null>(null);
+  /* 列表级操作错误（删除凭据失败时弹窗未开，configureError 无处渲染——独立 state，
+   * 列表顶部渲染错误条；对齐 skills 页 notice 模式） */
+  const [providerError, setProviderError] = useState<string | null>(null);
+
+  /* 列表级错误条 3s 自动消失（对齐 skills 页 notice 行为） */
+  useEffect(() => {
+    if (!providerError) return;
+    const timer = setTimeout(() => setProviderError(null), 3000);
+    return () => clearTimeout(timer);
+  }, [providerError]);
 
   /* Provider 聚合：GET /models/providers（C9 后端端点一次请求：
    * providerID + enabled 模型数 + 凭据状态三态 + 脱敏 fingerprint，成员只读） */
@@ -546,9 +558,10 @@ export default function ProvidersTab() {
   });
   const workers = workersQuery.data ?? [];
 
-  /* providers 响应不含模型 id（C9 只聚合计数/凭据态）——保存/删除凭据前保底解析
+  /* providers 响应不含模型 id（C9 只聚合计数/凭据态）——保存凭据前保底解析
    * 该 provider 首个模型 id（凭据按 provider 粒度，C4：同 provider 任一模型 id 均可）。
-   * providerID 走 contains 模糊匹配，取回后前端精确过滤防前缀误命中。 */
+   * providerID 走 contains 模糊匹配，取回后前端精确过滤防前缀误命中。
+   * （删除凭据已改按 provider 直删，不再走 resolveModelId——见 revokeMutation） */
   const resolveModelId = async (providerID: string): Promise<string> => {
     const res = await api.get<ModelsResponse>("/models", {
       query: { providerID, page: 1, pageSize: 100 },
@@ -590,15 +603,22 @@ export default function ProvidersTab() {
     },
   });
 
-  /* 吊销凭据：DELETE /models/:id/credentials（revokedAt 软撤销，admin 专属） */
+  /* 吊销凭据：DELETE /models/providers/:providerID/credentials
+   * 按 provider 粒度直删（revokedAt 软撤销，不依赖模型 id）——修复原先
+   * resolveModelId 每次裸 GET 取首个模型 id 导致每次 DELETE 命中不同模型 id、
+   * 且 DELETE 404 静默失败（无 onError）的问题。 */
   const revokeMutation = useMutation({
     mutationFn: (providerID: string) =>
-      resolveModelId(providerID).then((modelId) =>
-        api.delete<CredentialView>(`/models/${modelId}/credentials`)
+      api.delete<CredentialView>(
+        `/models/providers/${providerID}/credentials`
       ),
     onSuccess: () => {
+      setProviderError(null);
       queryClient.invalidateQueries({ queryKey: ["model-providers"] });
       queryClient.invalidateQueries({ queryKey: ["model-credentials"] });
+    },
+    onError: (err) => {
+      setProviderError(isApiError(err) ? err.message : "删除失败，请稍后重试");
     },
   });
 
@@ -664,6 +684,50 @@ export default function ProvidersTab() {
               凭证管理 · 按 Provider 粒度配置，支持同步到节点（worker）
             </span>
           </div>
+
+          {/* 列表级操作错误条（删除凭据失败；role=alert + 手动关闭，3s 自动消失） */}
+          {providerError && (
+            <div
+              data-testid="provider-error-banner"
+              role="alert"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: space.sm,
+                padding: `${space.sm + 2}px ${space.md}px`,
+                borderRadius: radius.md,
+                backgroundColor: "#FEF2F2",
+                border: "1px solid #FECACA",
+                color: "#DC2626",
+                fontSize: fontSize.sm,
+                fontWeight: 500,
+                fontFamily: fontFamily.body,
+              }}
+            >
+              <span aria-hidden style={{ fontWeight: 700 }}>
+                ⚠
+              </span>
+              <span style={{ flex: 1, minWidth: 0 }}>{providerError}</span>
+              <button
+                type="button"
+                data-testid="provider-error-dismiss"
+                aria-label="关闭错误提示"
+                onClick={() => setProviderError(null)}
+                style={{
+                  border: "none",
+                  background: "none",
+                  cursor: "pointer",
+                  color: "#DC2626",
+                  fontSize: fontSize.sm,
+                  fontWeight: 700,
+                  fontFamily: fontFamily.body,
+                  padding: "0 2px",
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          )}
 
           {/* 列表状态：loading / error */}
           {providersQuery.isPending ? (
@@ -878,11 +942,14 @@ export default function ProvidersTab() {
                             primary
                             onClick={() => setConfigureOpen(p.providerID)}
                           />
-                          {status !== "missing" && (
+                          {status === "configured" && (
                             <ActionButton
                               testid="provider-delete-button"
                               label="删除"
-                              onClick={() => revokeMutation.mutate(p.providerID)}
+                              onClick={() => {
+                                setProviderError(null);
+                                revokeMutation.mutate(p.providerID);
+                              }}
                               disabled={revokeMutation.isPending}
                             />
                           )}

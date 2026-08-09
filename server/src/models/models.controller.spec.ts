@@ -17,6 +17,7 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
     setCredential: jest.Mock;
     getCredential: jest.Mock;
     revokeCredential: jest.Mock;
+    revokeCredentialByProvider: jest.Mock;
   };
 
   const view = {
@@ -49,6 +50,7 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
       setCredential: jest.fn(),
       getCredential: jest.fn(),
       revokeCredential: jest.fn(),
+      revokeCredentialByProvider: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -228,5 +230,37 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
 
     expect(service.revokeCredential).toHaveBeenCalledWith('md_0000000001');
     expect(result).toMatchObject({ revokedAt: expect.any(Date) });
+  });
+
+  it('DELETE /models/providers/:providerID/credentials 转发 revokeCredentialByProvider', async () => {
+    service.revokeCredentialByProvider.mockResolvedValue({
+      ...view,
+      providerID: 'opencode-go',
+      revokedAt: new Date('2026-08-08T10:00:00Z'),
+    });
+
+    const result = await controller.revokeCredentialByProvider('opencode-go');
+
+    expect(service.revokeCredentialByProvider).toHaveBeenCalledWith('opencode-go');
+    expect(result).toMatchObject({ providerID: 'opencode-go', revokedAt: expect.any(Date) });
+  });
+
+  it('路由顺序：@Delete providers 静态段在 :id 参数段之前声明（不吞 providers/:providerID/credentials）', () => {
+    const pathOf = (method: string) =>
+      Reflect.getMetadata(
+        PATH_METADATA,
+        ModelsController.prototype[method],
+      ) as string;
+    const methodNames = Object.getOwnPropertyNames(
+      ModelsController.prototype,
+    ).filter((k) => k !== 'constructor');
+
+    const deleteProviderCredIdx = methodNames.findIndex(
+      (m) => pathOf(m) === 'providers/:providerID/credentials',
+    );
+    const deleteIdIdx = methodNames.findIndex((m) => pathOf(m) === ':id');
+    expect(deleteProviderCredIdx).toBeGreaterThan(-1);
+    expect(deleteIdIdx).toBeGreaterThan(-1);
+    expect(deleteProviderCredIdx).toBeLessThan(deleteIdIdx);
   });
 });
