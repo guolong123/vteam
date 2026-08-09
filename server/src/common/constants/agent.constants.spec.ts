@@ -5,10 +5,10 @@ import {
 } from './agent.constants';
 
 describe('模型目录 seed 预置（C1：STATIC_AVAILABLE_MODELS → models 表）', () => {
-  it('seed 行数与 STATIC_AVAILABLE_MODELS 一致（8 核心 + 26 worker 实测 opencode 免费 = 34 模型防空目录回归）', () => {
+  it('seed 行数与 STATIC_AVAILABLE_MODELS 一致（8 核心 + 8 worker 实测 opencode = 16 模型防空目录回归）', () => {
     const rows = buildModelSeedRows();
     expect(rows).toHaveLength(STATIC_AVAILABLE_MODELS.length);
-    expect(rows).toHaveLength(34);
+    expect(rows).toHaveLength(16);
   });
 
   it('每行均 enabled=true + md_ 零填充序号（唯一 id）', () => {
@@ -48,42 +48,24 @@ describe('模型目录 seed 预置（C1：STATIC_AVAILABLE_MODELS → models 表
     }
   });
 
-  it('CONF-01：模板默认模型均为 worker 实际可执行的 opencode/* 免费模型（w_compose_worker 实测上报清单）', () => {
-    // w_compose_worker capabilities.models 实测上报（B2/DB worker_model_availabilities 26 行）
+  it('CONF-01（修正）：模板默认模型均为 worker 节点 opencode models 实测可执行模型（8 个真实清单）', () => {
+    // w_compose_worker 节点 `opencode models` 实测（权威，仅 8 个；DB 上报的其余 18 个为假模型）
     const workerCapableModels = new Set([
-      'opencode/ling-3.0-tiny-free',
-      'opencode/deepseek-v4-flash-free',
-      'opencode/ling-3.0-flash-free',
-      'opencode/laguna-s-2.1-free',
-      'opencode/longcat-2.0-free',
-      'opencode/hy3-free',
-      'opencode/north-mini-code-free',
-      'opencode/nemotron-3-ultra-free',
-      'opencode/minimax-m3-free',
-      'opencode/ring-2.6-1t-free',
-      'opencode/mimo-v2.5-free',
-      'opencode/ling-2.6-flash-free',
-      'opencode/hy3-preview-free',
-      'opencode/qwen3.6-plus-free',
-      'opencode/mimo-v2-omni-free',
-      'opencode/mimo-v2-pro-free',
-      'opencode/nemotron-3-super-free',
-      'opencode/minimax-m2.5-free',
-      'opencode/glm-5-free',
-      'opencode/trinity-large-preview-free',
-      'opencode/kimi-k2.5-free',
-      'opencode/minimax-m2.1-free',
-      'opencode/glm-4.7-free',
-      'opencode/mimo-v2-flash-free',
       'opencode/big-pickle',
-      'opencode/grok-code',
+      'opencode/deepseek-v4-flash-free',
+      'opencode/laguna-s-2.1-free',
+      'opencode/ling-3.0-tiny-free',
+      'opencode/longcat-2.0-free',
+      'opencode/mimo-v2.5-free',
+      'opencode/nemotron-3-ultra-free',
+      'opencode/north-mini-code-free',
     ]);
-    expect(workerCapableModels.size).toBe(26);
-    // STATIC_AVAILABLE_MODELS 中 opencode/* 免费模型应与 worker 清单一致（目录=能力，防空缺）
+    expect(workerCapableModels.size).toBe(8);
+    // STATIC_AVAILABLE_MODELS 中 opencode/* 模型应与 worker 实测清单一致（目录=能力，防空缺）
     const staticOpencodeIds = STATIC_AVAILABLE_MODELS.filter((m) =>
       m.id.startsWith('opencode/'),
     ).map((m) => m.id);
-    expect(staticOpencodeIds.length).toBe(26);
+    expect(staticOpencodeIds.length).toBe(8);
     for (const id of staticOpencodeIds) {
       expect(workerCapableModels.has(id)).toBe(true);
     }

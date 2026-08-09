@@ -788,3 +788,17 @@ Tags: UX-05, ux-wording, agents-page
 **验证**：`cd web && npx tsc --noEmit` → 0 错误。未启 dev server / 未跑浏览器（部署由 orchestrator 统一完成）。
 
 Tags: UX-14, delete, agents-page, permissions
+
+---
+
+## E4-fix: CONF-01 修正——模板默认模型改用 worker 实测 8 个清单（2026-08-09，实现 + tsc + jest 验证完成）
+
+- **⚠️ 修正原因（E4 原修复有误）**：E4 以 **DB worker_model_availabilities 26 行**（worker capabilities.models 上报入库）为准选取模板默认模型，但**用户 worker 节点 `opencode models` 实测仅 8 个**——DB 中 18 个（ling-3.0-flash-free / hy3-free / minimax-m3-free / ring-2.6-1t-free / ling-2.6-flash-free / hy3-preview-free / qwen3.6-plus-free / mimo-v2-omni-free / mimo-v2-pro-free / nemotron-3-super-free / minimax-m2.5-free / glm-5-free / trinity-large-preview-free / kimi-k2.5-free / minimax-m2.1-free / glm-4.7-free / mimo-v2-flash-free / grok-code）为**假模型**（2026-08-08 18:14 同秒入库，来自当时 capabilities.models 上报）。**权威数据源 = worker 节点 `opencode models` 实测（8 个）**，不是 DB 上报表。
+- **真实 8 个（权威）**：`opencode/big-pickle`、`opencode/deepseek-v4-flash-free`、`opencode/laguna-s-2.1-free`、`opencode/ling-3.0-tiny-free`、`opencode/longcat-2.0-free`、`opencode/mimo-v2.5-free`、`opencode/nemotron-3-ultra-free`、`opencode/north-mini-code-free`。
+- **改动面（代码层，不部署/不重 seed——orchestrator 部署阶段统一清理 DB 假模型 + 重 seed）**：
+  1. `agent.constants.ts` STATIC_AVAILABLE_MODELS **34→16**：移除 18 个假 opencode/*-free 模型，保留 8 核心（md_1~8）+ 8 真实（md_9~16，按实测清单顺序排列）。
+  2. TEMPLATE_DEFAULT_MODELS 改实测清单内：产品→`opencode/ling-3.0-tiny-free`（轻量通用）、架构→`opencode/nemotron-3-ultra-free`（保留）、开发→`opencode/deepseek-v4-flash-free`（保留）、测试→`opencode/north-mini-code-free`（代码向穷举）。原 `glm-5-free`/`qwen3.6-plus-free` 是假模型，已换。
+  3. `agent.constants.spec.ts`：行数断言 34→16；CONF-01 契约从 26 清单改为 8 真实清单（hardcode 8 个 + size===8 双锁，**目录=worker 实测能力**防再脱节）。
+- **验证**：`cd server && npx tsc --noEmit` 0 错误；`npx jest src/common/constants/agent.constants.spec.ts --silent` 6/6 全绿。全仓 grep 无其他代码引用被移除的假模型。
+- **⚠️ 教训（铁律）**：模型清单以 **worker 节点 `opencode models` 实测**为权威，**DB worker_model_availabilities / capabilities.models 上报仅作参考**——上报可能含假模型/测试注入（同秒批量入库高度可疑），spec 契约断言必须锁定实测清单而非 DB 上报数。
+- **遗留（orchestrator 处理）**：DB 中 18 个假模型（worker_model_availabilities + models 表）需清理 + 重跑 seed 更新已入库模板 Agent defaultModelId（模板只读 PATCH 403，只能 seed 更新）。
