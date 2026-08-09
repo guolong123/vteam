@@ -1,3 +1,5 @@
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { EVENT_TYPES } from '../../common/constants/event.constants';
 import { HeartbeatWorkerDto } from './heartbeat-worker.dto';
 import { RegisterWorkerDto } from './register-worker.dto';
@@ -194,5 +196,35 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
     expect(WORKER_EVENT_TYPES.MESSAGE_PART_DELTA).toBe(EVENT_TYPES.MESSAGE_PART_DELTA);
     expect(WORKER_EVENT_TYPES.TASK_COMPLETED).toBe(EVENT_TYPES.TASK_COMPLETED);
     expect(WORKER_EVENT_TYPES.AGENT_STATUS).toBe(EVENT_TYPES.AGENT_STATUS);
+  });
+
+  describe('RegisterWorkerDto 必填校验（QA ISSUE-010 缺 capabilities 500）', () => {
+    const errorsOf = async (obj: object) =>
+      validate(plainToInstance(RegisterWorkerDto, obj));
+
+    const base = {
+      workerId: 'w_0000000001',
+      opencodeVersion: '1.18.14',
+      capabilities: { maxInstances: 1, skills: [], tools: [] },
+      load: { instances: 0 },
+    };
+
+    it('缺 capabilities → 校验失败（@IsNotEmpty，400 非 500）', async () => {
+      const { capabilities, ...rest } = base;
+      expect(await errorsOf(rest)).not.toHaveLength(0);
+    });
+
+    it('缺 load → 校验失败（@IsNotEmpty）', async () => {
+      const { load, ...rest } = base;
+      expect(await errorsOf(rest)).not.toHaveLength(0);
+    });
+
+    it('capabilities 为标量 → 校验失败（@IsObject）', async () => {
+      expect(await errorsOf({ ...base, capabilities: 'string' })).not.toHaveLength(0);
+    });
+
+    it('完整对象 → 校验通过', async () => {
+      expect(await errorsOf(base)).toHaveLength(0);
+    });
   });
 });

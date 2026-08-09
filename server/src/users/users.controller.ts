@@ -12,6 +12,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { AdminGuard } from './admin.guard';
 
@@ -56,6 +57,12 @@ export class UsersController {
   @ApiOperation({ summary: '禁用/启用用户（FR-22）' })
   updateStatus(@Param('id') id: string, @Body() dto: UpdateUserStatusDto) {
     return this.usersService.updateStatus(id, dto);
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: '更新用户信息（用户名/邮箱/角色，ISSUE-002 修复）' })
+  update(@Param('id') id: string, @Body() dto: UpdateUserDto) {
+    return this.usersService.update(id, dto);
   }
 
   @Post(':id/reset-password')

@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   IsArray,
   IsIn,
+  IsNotEmpty,
   IsObject,
   IsOptional,
   IsString,
@@ -32,6 +33,7 @@ export class ToolEffectDto {
 export class CreateAgentDto {
   @ApiProperty({ description: 'Agent 名称（自定义角色名）', maxLength: 64 })
   @IsString()
+  @IsNotEmpty()
   @MaxLength(64)
   name: string;
 

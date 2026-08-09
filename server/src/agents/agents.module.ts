@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PermissionGuard } from '../common/guards/permission.guard';
 import { ModelsModule } from '../models/models.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { WorkersModule } from '../workers/workers.module';
@@ -12,10 +13,12 @@ import { AgentsService } from './agents.service';
  * WorkersModule（T7/T8 已 export WorkersService + WorkerClient）：T11 available-models
  * 经 Scheduler.assignWorker + WorkerClient.listModels 动态获取。
  * ModelsModule（C3）：available-models 目录优先数据源（listCatalogModels，enabled=true）。
+ * PermissionGuard（ISSUE-006 权限矩阵）：方法级 @UseGuards(PermissionGuard) 依赖全局
+ * PrismaService + Reflector，本模块注册供编译期解析。
  */
 @Module({
   imports: [RealtimeModule, WorkersModule, ModelsModule],
   controllers: [AgentsController],
-  providers: [AgentsService],
+  providers: [AgentsService, PermissionGuard],
 })
 export class AgentsModule {}

@@ -9,8 +9,8 @@ import { AuthService } from './auth.service';
 const createMockPrisma = () => {
   const users: any[] = [];
   const roles = [
-    { id: 'r_admin', name: 'admin' },
-    { id: 'r_member', name: 'member' },
+    { id: 'r_admin', name: 'admin', permissions: { all: true } },
+    { id: 'r_member', name: 'member', permissions: { all: false } },
   ];
   // 为返回的用户附加 role 关系（对齐 service 的 include: { role: true }）
   const enrich = (u: any) =>
@@ -167,6 +167,15 @@ describe('AuthService', () => {
       expect(result.user.roleName).toBe(BUILTIN_ROLES.MEMBER);
       // user 摘要不含 password_hash
       expect(result.user).not.toHaveProperty('passwordHash');
+    });
+
+    it('user 摘要应携带角色 permissions（member 简写 {all:false}），供前端导航过滤', async () => {
+      const result = await service.login({
+        username: 'admin',
+        password: 'admin123',
+      });
+      // member 角色 permissions 原样透传（ISSUE-005 前端权限数据源）
+      expect(result.user.permissions).toEqual({ all: false });
     });
 
     it('错误密码应抛 401 AUTH_INVALID_CREDENTIALS', async () => {

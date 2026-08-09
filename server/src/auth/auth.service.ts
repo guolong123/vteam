@@ -24,6 +24,12 @@ export interface AuthUserView {
   roleId: string;
   roleName: string;
   enabled: boolean;
+  /**
+   * 角色权限（对齐 PermissionGuard 语义：`{all:true}` / `{all:false}` / 完整矩阵
+   * `{[resource]: {[action]: boolean}}`，见 users/roles.constants.ts）。
+   * 前端导航过滤 / 路由守卫以此为数据源（ISSUE-005）。
+   */
+  permissions: Record<string, unknown>;
 }
 
 export interface TokenPair {
@@ -207,7 +213,7 @@ export class AuthService {
     email?: string;
     roleId: string;
     enabled: boolean;
-    role: { name: string };
+    role: { name: string; permissions?: unknown };
   }): AuthUserView {
     return {
       id: user.id,
@@ -217,6 +223,8 @@ export class AuthService {
       roleId: user.roleId,
       roleName: user.role.name,
       enabled: user.enabled,
+      // 旧数据 role.permissions 可能缺失 → 空对象兜底（前端按「无权限」处理）
+      permissions: (user.role.permissions ?? {}) as Record<string, unknown>,
     };
   }
 }

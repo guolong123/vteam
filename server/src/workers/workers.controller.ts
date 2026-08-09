@@ -10,6 +10,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
+import { RequirePermission } from '../common/decorators/require-permission.decorator';
+import { PermissionGuard } from '../common/guards/permission.guard';
 import { AdminGuard } from '../users/admin.guard';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
@@ -24,7 +26,9 @@ import { WorkersService } from './workers.service';
  * Worker 控制面端点（T7）。
  * - POST /workers/register、POST /workers/:id/heartbeat：`@Public()` 跳过全局 JWT，
  *   改由 WorkerTokenGuard 做 X-Worker-Token 鉴权（D1：与用户 JWT 隔离）。
- * - GET /workers、GET /workers/:id：用户 JWT 保护（全局 JwtAuthGuard 默认生效）。
+ * - GET /workers、GET /workers/:id：用户 JWT + PermissionGuard（workers.view，
+ *   09 篇 §3.7 [admin]（运维可见 FR-26）；内置 member 简写 view 放行）。
+ * - PATCH /workers/:id：AdminGuard（写操作）。
  * 全局前缀 /api/v1（main.ts 已设置），故实际路由为 /api/v1/workers。
  */
 @ApiTags('workers')
@@ -58,15 +62,19 @@ export class WorkersController {
     return this.workers.heartbeat(id, dto, req.workerToken);
   }
 
-  /** GET /api/v1/workers：worker 列表（用户 JWT 保护）。 */
+  /** GET /api/v1/workers：worker 列表（用户 JWT + workers.view 权限）。 */
   @Get()
+  @UseGuards(PermissionGuard)
+  @RequirePermission('workers.view')
   @ApiOperation({ summary: 'worker 列表' })
   findAll() {
     return this.workers.findAll();
   }
 
-  /** GET /api/v1/workers/:id：worker 详情（用户 JWT 保护）。 */
+  /** GET /api/v1/workers/:id：worker 详情（用户 JWT + workers.view 权限）。 */
   @Get(':id')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('workers.view')
   @ApiOperation({ summary: 'worker 详情' })
   findOne(@Param('id') id: string) {
     return this.workers.findOne(id);

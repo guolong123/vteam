@@ -6,6 +6,27 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ---
 
+## E1: 修复「用户管理编辑按钮完全失效」（ISSUE-002，2026-08-09，实现 + 浏览器实证完成）
+
+- **根因（一行注释）**：`web/app/(main)/users/page.tsx` 文件头注释 :25 明写「编辑按钮：后端无 PATCH /users/:id → 保留原型占位（**无 onClick**）」——编辑按钮是纯占位，无 onClick、无弹窗、无请求。同行「重置密码」/「新增用户」正常（有完整弹窗链路）。
+- **后端（三段式补齐 PATCH 链路）**：
+  1. 新建 `dto/update-user.dto.ts`（UpdateUserDto）：username/displayName/email/roleId **全可选**（PATCH 部分更新语义）；email 支持 `string | null`——**null = 清空邮箱**（class-validator `@IsOptional()` 对 null 跳过校验，语义天然满足）。
+  2. `UsersService.update(id, dto)`：存在校验（404）→ username 变更时唯一冲突（`dto.username !== existing.username` 才查）→ email 变更且非 null 时唯一冲突 → roleId 提供时校验角色存在 → **data 仅组装提交的字段**（`...(dto.x !== undefined ? {x: dto.x} : {})`）→ **空 data（PATCH 空 body）幂等返回 `findOne(id)`**（防 Prisma 空更新抛 PrismaClientValidationError——内部错误而非业务 400）。
+  3. `UsersController @Patch(':id')` 声明在 `@Patch(':id/status')` 之后——`:id` 单段与 `:id/status` 双段互不吞，顺序无关但按「具体→一般」排可读性好。
+- **前端（对齐 ResetPasswordModal 的 target 模式，不泛化 UserFormModal）**：
+  - 新增独立 `EditUserModal`（`edit-user-*` testid 10 个）——「对照重置密码弹窗模式实现」任务要求字面落地；**不泛化 UserFormModal**（其 mode 分支会让新增弹窗回归风险上升，两弹窗字段集差异大：新增有密码、编辑有预填）。
+  - 预填：`useEffect [open, target]` 每次打开 setUsername(target.username) / setEmail(target.email ?? "") / setRoleId(target.roleId)。
+  - 提交 payload：`{username, displayName: username（兜底，与 create 一致）, email: 空串→null（清空语义）, roleId}`——email 空提交 null 而非 undefined，对齐后端「null=清空」。
+  - UsersPage：`editTarget: UserItem | null`（target 非空即打开，对齐 resetTarget 模式）+ `updateMutation`（PATCH → onSuccess 关闭 + invalidate ["users"]）+ `onEdit={setEditTarget}` 传给 UserRow。
+- **OBS-007 复核（无需改动）**：QA 报告称「新增用户弹窗缺角色选择」，但当前代码 `user-role-select` 角色按钮组已存在（GET /roles 驱动 + roleId 必填）——**QA 报告与代码基线不一致**（推测 QA 用受限用户测得 GET /roles 403 → 角色区空白被误判）。管理员视角实证 3 个角色按钮正常。
+- **测试**：users.service.spec 新增 6 例（部分更新字段落库 / username 冲突 / email null 清空 / roleId 不存在 400 / 空 body 幂等 / 404）→ 43 suites / **689 tests 全绿**（基线 668 + 21 含并行会话增量）+ nest build。⚠️ **spec 编辑坑**：把新 describe 插到 resetPassword describe 中间时吞掉了其「目标用户不存在抛 404」用例且少一个 `});`——先读清 describe 边界再插入。
+- **e2e**：reference/testids.ts user-management 条目注册 10 个 `edit-user-*`；pages.spec.ts 15/17 测试扩展：点编辑 → 弹窗 + 预填值 + 角色按钮 → 取消；新增用户弹窗角色按钮可见。**33/33 全绿**（1.2m）。
+- **浏览器实证**（playwright headless，chromium-1208 executablePath 显式指定——node_modules playwright 要 1234 版本但缓存只有 1208）：11/11 PASS——点编辑弹窗出现 → 预填用户名（prefilled=T）→ 3 角色按钮 + 1 选中 → 切角色 → 保存 → 弹窗关闭 + **列表刷新显示新用户名（T-edited，PATCH 真生效）** → 再编辑还原数据 → 新增弹窗角色选择 3 按钮 → 重置密码回归 → **0 console 错误**。
+- **⚠️ 实证脚本定位坑**：取行内用户名用 `row.locator("span", {hasText: /^[\w.-]+$/}).first()` 会命中**头像 span**（单大写字母）——头像（34px 圆形）与用户名（mono）同层级，用 `row.locator("div > div > div > span").first()` 精确取用户名。
+- **⚠️ 环境坑（复现）**：`sudo node dist/src/main.js` 会走系统 node **v18.15.0**（pino tracingChannel 崩）——必须 `sudo /home/keta/.nvm/versions/node/v22.22.1/bin/node dist/src/main.js` 绝对路径；本机 3000 后端（PID 属 root）改后端后需 sudo kill + 绝对路径重启；3001 web dev 与 build 仍遵循 C11 教训（kill + rm -rf .next 再 build，build 后 .bin/next dev --turbopack -p 3001 重启）。
+
+---
+
 ## D6: 修复「删除 provider 凭据失败错误不可见」（2026-08-09，实现 + 浏览器实证完成）
 
 - **用户反馈**：删除凭据失败时"点了没反应"——`revokeMutation.onError` 设置了 `setConfigureError(err.message)`，但 `configureError` 只在 ConfigureModal 内渲染（:944），弹窗 `open={configuringProvider !== undefined}` 仅依赖 `configureOpen`（:941）；删除失败时 configureOpen 为 null → 弹窗关闭 → 错误状态设置了但无处显示（静默失败）。
@@ -341,3 +362,73 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **e2e 同步**：pages.spec.ts 17/18 改为断言 `install-worker-link` 可见 + `add-worker-button`/`worker-guide` **toHaveCount(0)**（断言不存在元素，防回归）；testids.ts 2.13 worker-list 条目 `add-worker-button`→`install-worker-link`、删 `worker-guide`；PAGE_SMOKE /workers 同步。
 - **验证**：web `npx tsc --noEmit` 0 错误 + `npm run build` 通过（/workers 4.37 kB、/workers/install 4.21 kB）；playwright 实证：workers 页 install-worker-link=1 + add-worker-button=0 + worker-guide=0 + 7 worker 卡片；install 页 curl 命令 = `curl -fsSL http://localhost:3001/install-worker.sh | bash -s -- --server http://localhost:3001 --worker-id worker-05 ...`（动态 origin 无 example）+ serverUrl 默认 http://localhost:3001；`GET /install-worker.sh` 200；e2e pages 3 项（setup + 16/17 + 17/18）全绿（8.6s）。
 - **⚠️ 环境坑复现（C11 已知）**：生产 build 后 dev server ENOENT `_buildManifest.js.tmp`（.next 缓存损坏，持久 500）——修复：kill dev → `rm -rf .next` → 重启 dev（nohup 后台即可；tmux 会话 C-c 时 server 偶发整个销毁，nohup + 日志文件更稳）。
+
+---
+
+## QA-009/010/003: 后端校验缺陷修复（2026-08-09，实现 + 测试完成）
+
+- **背景**：QA 报告（qa-report-192-168-10-78-13001-2026-08-09.md）三类后端校验缺陷——① POST /agents {"name":"","type":"custom"} 返回 201；② POST /workers/register 缺 capabilities → Prisma upsert 收到 undefined → 500；③ Provider key "abc" 可保存成功。
+- **根因统一模式**：`@IsString()/@MaxLength()` 允许空串（empty string 是合法 string）、`@ValidateNested()/@Type()` 遇 undefined 直接跳过（不报错）→ 校验层放行，缺陷值穿透到 service/Prisma。
+- **修复**：
+  1. **CreateAgentDto.name + UpdateAgentDto.name** 补 `@IsNotEmpty()`（在 @IsString 后）→ 空名/显式空串 400。⚠️ `@IsOptional()` 只忽略 `undefined`/`null`，**不忽略空串**——UpdateAgentDto 补 @IsNotEmpty 后 `{name:""}` 仍被拒、缺省 name 仍可选，语义正确。
+  2. **RegisterWorkerDto.capabilities + load** 补 `@IsObject() + @IsNotEmpty()`（在 @ValidateNested 前）→ 缺字段 400 非 500。worker 侧 buildCapabilities 恒返回对象、load 恒为 `{instances}`（registry-client `load: opts.load ?? {instances:0}` 兜底），加必填不破坏真实 worker 注册。
+  3. **SetModelCredentialDto.token** 补 `@Matches(/^sk-[A-Za-z0-9_-]{8,}$/, {message:'token 需以 sk- 开头且至少 8 位…'})` → "abc"/无 sk- 前缀/过短 400。**决策**：用放宽版 `{8,}`（opencode 真实 token 均 sk- 前缀 + 长后缀；测试固定 token `sk-test-b1-token-0003`、`sk-raw-token` 均匹配）。
+- **测试范式（沿用 tasks.controller.spec DTO 校验 describe）**：`validate(plainToInstance(cls, obj))` 断言 errors 非空/为空，比 e2e 轻量且直击 class-validator 行为：
+  - agents.controller.spec 新增 5 例（create 空名/缺失/合法 + update 空串/缺省可选）
+  - worker-dto.spec 新增 4 例（缺 capabilities/缺 load/标量 capabilities/完整对象通过）
+  - models.controller.spec 新增 4 例（abc/无前缀/过短/合法）
+- **⚠️ 全量 jest 瞬时红坑**：并行会话编辑 users.service.ts/spec 期间跑全量 jest 会报 `users.service.spec.ts` **babel 解析错误（expect '}'）**——文件被半写入的瞬时态，非代码问题；等会话写完重跑即 43 suites / 687 tests 全绿（基线 668 + 本任务 13 + 并行会话 ISSUE-002 6）。
+- **验证**：`npm run build` 通过 + jest **43 suites / 687 tests 全绿**。
+- **顺手加固 CloneAgentDto.name**：同类缺口（显式 `{name:""}` clone 会创建空名副本）——补 `@IsNotEmpty()` + 2 测试（空串拒/缺省过）。最终 agents.controller.spec 7 例、worker-dto.spec 4 例、models.controller.spec 4 例，合计 **+15 tests**（668 → 683，含并行会话 ISSUE-002 后 689）。
+
+## E1: 修复 QA ISSUE-001 任务看板页头计数硬编码（2026-08-09，实现 + tsc 验证完成）
+
+- **用户反馈（QA ISSUE-001）**：`/board?pid=...` 页头显示「任务看板 **5 个任务** · 4 个 Agent 在线」，但 `GET /projects/:pid/tasks` 实际 `total: 1`，看板各列只渲染 1 个任务卡片；项目列表卡片（`_count.tasks`）与页头、API 三方数据互不一致。
+- **根因（精确定位）**：页头 subtitle 由 **AppShell 的 `PAGE_TITLE.board` 静态映射**提供（`web/src/components/layout/app-shell.tsx`），迁移时把原型 mock 值**原样硬编码**——原型 `docs/agent-platform/prototypes/task-board/index.tsx:349` 是 `subtitle={`${tasks.length} 个任务 · 4 个 Agent 在线`}`（tasks 为 mock 5 条），实现侧写成死字符串 `"5 个任务 · 4 个 Agent 在线"`，与真实数据完全脱节。**不是**看板页调错 API，board/page.tsx 的数据源（`["tasks", pid, status]` → `GET /projects/:pid/tasks`）本身就是对的，只有 AppShell 顶栏副标题写死。
+- **修复方案（AppShell 动态 subtitle）**：
+  1. `PAGE_TITLE.board.subtitle` 清空（死 mock 值删除），board 路由 subtitle 改由组件内动态组装。
+  2. AppShell 内 `isBoard = pathname.split("/")[1] === "board"` + effect 读 `?pid=`（`new URLSearchParams(window.location.search)`，对齐 board/page.tsx 既有模式，避开 `useSearchParams` 的 Suspense 边界问题）。
+  3. 两个 `useQuery`（QueryClientProvider 在 root layout，AppShell 可直接用）：
+     - `["board-tasks", pid]` → `GET /projects/:pid/tasks?page=1&pageSize=1` 取 **total**（与看板页同源，三方对照基准）；
+     - `["workers"]` → `GET /workers` 统计 **status !== 'offline'** 数量作为「Agent 在线」（**决策**：Agent 无在线态（agents.service 无 status 字段），Worker 才有 online/offline/degraded；「Agent 在线」映射为平台在线 worker 数，与 agents 页「在线优先」worker 语义一致）。queryKey `["workers"]` 与 agents 页同 key 同 queryFn → react-query **缓存共享非污染**（C10 教训的反面），跨页省一次请求。
+  4. subtitle = `${total} 个任务 · ${onlineCount} 个 Agent 在线`；数据未就绪（total/online 任一 undefined）→ 空字符串（NavTopBar 隐藏，避免闪烁错误数字）。
+  5. enabled 条件 `hydrated && !!token && isBoard`——登录水合完成 + 有 token 才发请求（AppShell 登录守卫同源判断）。
+- **⚠️ 环境坑（build 并发冲突）**：本任务与并行会话（ISSUE-002 users 页面开发）同时工作——web 的 `.next` 是共享的，**两个 `next build` 同时跑会互相覆盖 `.next` 导致 ENOENT（routes-manifest.json / *_client-reference-manifest.js copyfile 失败）**，且并行会话编辑中的 users/page.tsx 会在 tsc/build 中产生瞬时 type error（`UserRow` 缺 `onEdit` prop——并行会话已修复，重跑即过）。教训：并行会话活跃期间，验证 build 须**先等对方 build 结束再独占 `.next` 跑**，或干脆只跑 tsc（tsc 不写 `.next`，无冲突）。
+- **遗留观察**：项目列表卡片「{taskCount} 个任务 · **0 已完成**」的「已完成」计数（projects/page.tsx:161）仍是 `EMPTY_TASK_COUNT=0` 硬编码兜底（Phase 1 无统计端点），若项目含已完成任务会与 API 不一致——本次未处理（ISSUE-001 聚焦页头），后续可加任务状态计数端点或复用 tasks API 按 status 聚合。
+
+## ISSUE-006: 后端权限矩阵覆盖不全修复（2026-08-09，实现 + 单测 + 运行时实证完成）
+
+- **根因（QA 报告）**：AdminGuard 只挂在 users/roles 控制器；workers/models/skills 的 GET 仅依赖全局 JwtAuthGuard（登录即放行）；agents/projects 完全无守卫 → 受限用户（仅 3 个 view 权限点）可读 workers/models/skills、可 POST 创建 agents/projects（实测 201）。权限矩阵（8 资源 × 6 操作）实际只对 users/roles 生效。
+- **决策（方案 A：精细权限模型）**：设计文档 09 篇 §2.3 明确「PermissionsModule 按角色权限矩阵（资源×操作）拦截」+ roles.constants.ts 固定 8 资源（tasks/chats/artifacts/agents/workers/skills/users/roles）× 6 操作（view/create/edit/delete/review/manage）→ 实现通用 `PermissionGuard`（`server/src/common/guards/permission.guard.ts`）+ `@RequirePermission('resource.action')` 方法级装饰器。
+- **PermissionGuard 三种权限格式兼容**（对存量 seed 数据零迁移）：
+  1. `permissions.all === true`（seed admin 简写）→ 全放行；
+  2. `permissions.all === false`（seed member 简写）→ view 放行（成员只读）、写操作（create/edit/delete/manage）拒绝——对齐 09 篇「成员只读可见 + 写操作 [admin]」语义；
+  3. 完整矩阵 `{ [resource]: { [action]: boolean } }` → 严格按权限点（缺省 false）。QA 的自定义角色（48 权限点矩阵）即此格式。
+- **挂载范围（对齐 09 篇端点表）**：agents 全端点（view/create/edit/delete）；projects POST `projects.create`（8 矩阵无 projects 域 → admin/显式授权者放行、member 写拒绝）；workers GET 列表/详情 `workers.view`（09 §3.9 GET [admin]）、PATCH 保留 AdminGuard；skills GET 列表/content `skills.view`。**GET /projects 不加权限点**——09 §3.3 是 [project]（成员仅见已加入），service 层已按 userId 经 project_members 过滤，无越权语义。
+- **⚠️ skills GET 双通道关键设计**：skills GET 挂 `@Public() + WorkerOrJwtGuard + PermissionGuard`。WorkerOrJwtGuard 先做两选一鉴权（X-Worker-Token 通过 → 挂 `request.workerToken`；否则走 JWT → 挂 `request.user`）。PermissionGuard 首步检测 `request.workerToken` 存在即**放行**（D1：worker token 与用户 JWT 隔离，T4b worker 注入拉取无用户上下文）——不破坏 worker 拉取；用户通道则严格校验 skills.view。实测：worker token GET /skills/:id/content → 200，受限用户同端点 → 403。
+- **保持成员只读（非越权，不挂权限点）**：**models / tools / mcp-servers** 不在 8 资源矩阵（roles.constants.ts 固定 8 域，无 models/tools/mcp-servers 资源行），且 models.controller.ts 注释明示「GET（成员只读）不挂 AdminGuard——目录/凭据状态只读可见」、09 §3.8 tools GET 标记「成员只读可见」。**决策：保持成员只读，不做权限点校验**——QA 报告的 models.view 越权读是基于测试者假设的权限点，非设计语义。若未来要在矩阵中纳入这些资源，需先扩展 roles.constants.ts PERMISSION_RESOURCES。
+- **模块注册**：PermissionGuard 依赖 PrismaService + Reflector（均为全局提供），挂载方模块须在 providers 注册（agents/projects/workers/skills.module.ts 均加）。
+- **测试**：permission.guard.spec.ts 12 例（防御空标记/401/禁用/all:true/矩阵 true/矩阵 false 403/缺省资源 403/member 简写 view 放行 + 写拒绝/**workerToken 放行且不查用户**）+ skills.controller.spec overrideGuard(PermissionGuard)；**server 44 suites / 701 tests 全绿**（基线 689 + 新增）+ tsc 通过。
+- **运行时实证（compose 13000/13001 部署，curl 受限用户）**：GET /workers 403、GET /skills 403、GET /users 403、GET /agents 200（有 agents.view）、GET /projects 200（成员过滤）、GET /models 200（成员只读）；POST /agents 403 `FORBIDDEN_PERMISSION agents.create`、POST /projects 403；admin 全通（POST agents 201）；worker token GET /skills 200。测试用户已禁用、验证 agent 已删除，受限角色保留（被引用 409，与 QA 报告遗留一致）。
+- **⚠️ spec 陷阱**：permission.guard.spec.ts 的 `import { PrismaService } from '../prisma/...'` 少一级 `../`（spec 在 src/common/guards/，应为 `../../prisma/...`）会 TS2307 编译失败；给 controller 挂 PermissionGuard 后，该 controller 的 spec 必须 `overrideGuard(PermissionGuard)` 否则 compile 时 Nest 实例化守卫解析不到 PrismaService 报错。
+
+## ISSUE-005: 前端无权限感知修复（导航过滤 + 路由守卫 + 顶栏真实角色）（2026-08-09，实现 + tsc + jest + build + 浏览器实证完成）
+
+- **根因（QA 报告）**：受限用户（仅 tasks.view/chats.view/agents.view）登录后仍显示全部 8 项导航；直接访问 /users /roles /workers 等 URL 可进入页面（后端 403 兜底已生效但页面骨架暴露）；顶栏角色硬编码「项目管理员」（NavTopBar 默认值，AppShell 未传 userRole）。
+- **数据源决策**：探索确认**登录响应 AuthUserView 原不含 permissions**（auth.service.ts toUserView 只透传 id/username/displayName/email/roleId/roleName/enabled）→ **方案：后端 toUserView 增加 permissions 字段**（`(user.role.permissions ?? {})` 兜底空对象），login/profile 的 `include: { role: true }` 本就含 permissions Json（Prisma role: true 全字段），仅接口+转换函数两处改动。前端一次登录拿到权限，无需额外 GET /roles/:id 请求。
+- **前端权限判定工具（新建 web/lib/permissions.ts）**：`hasPermission(perms, resource, action='view')` + `isPlatformAdmin(perms)`，**三格式兼容对齐后端守卫语义**：`{all:true}` 全放行 / `{all:false}` 仅 view 放行（member 只读）/ 完整矩阵 `{[resource]:{[action]:bool}}` 精确匹配。isPlatformAdmin = all:true 或 `users.manage===true`（对齐 AdminGuard）。
+- **导航过滤映射（app-shell.tsx NAV_VISIBLE）**：对齐**后端实际守卫语义**（ISSUE-006 实证），不是简单按 8 资源矩阵全映射：
+  - 无权限点恒显示：project（GET /projects 成员过滤无权限点）、models（成员只读，models.controller 明示不挂 AdminGuard）、messages（chat.controller 无权限点仅 JWT）；
+  - agents/workers/skills → 矩阵 view 权限点（PermissionGuard）；
+  - users/roles → AdminGuard 语义（isPlatformAdmin）。
+  - **实测受限用户（tasks/chats/agents view）导航显示 4 项：project/agents/models/messages**；member（all:false）显示 6 项（+workers/skills，view 类只读放行）。
+- **路由守卫（app-shell.tsx ROUTE_GUARD）**：路由首段 → 判定（与导航同源，tools 段归 skills 资源）；无权限 → `router.replace(首个有权限导航的 KEY_TO_PATH)`（project 无权限点恒可进 → 落点 /projects）。AppShell 统一守卫（任务指定方案），复用既有 hydrated/token 登录守卫模式，effect 依赖 [hydrated, token, pathname, user, router]。
+- **Cmd+K 命令面板同步过滤**：DEFAULT_CMDK_ITEMS「导航」组与导航可见性同源过滤（label→CMDK_NAV_PATH→路由段→ROUTE_GUARD），被禁路由不可从命令面板唤起；「操作」组保留。cmdk-panel.tsx 的 DEFAULT_CMDK_ITEMS 由 const 改 export，layout/index.ts 同步导出。
+- **NavDock 非侵入扩展**：加 `items?: NavItem[]` 可选 prop（默认 NAV_ITEMS），收起态图标列 + 展开态列表两处 map 共用 navItems——组件保持通用无权限逻辑，过滤在 AppShell（有 authStore 上下文）。
+- **顶栏角色（OBS-008）**：AppShell 传 `userRole={user ? roleLabel(user.roleName) : undefined}`，ROLE_LABEL admin→管理员/member→成员（对齐 users 页），自定义角色显示原名；NavTopBar 默认「项目管理员」仅未登录兜底。
+- **旧持久化数据兼容**：authStore User.permissions 可选字段，旧 localStorage user 无 permissions → hasPermission 全 false → 导航全隐藏（保守安全）+ 受限路由全重定向。**副作用**：旧会话刷新后导航变少，重新登录即恢复（新登录响应带 permissions）——浏览器实证中实测到该行为（playwright 旧 storageState 登录后仅 3 项，重新表单登录后 8 项）。
+- **验证**：server 44 suites / 702 tests 全绿（auth.service.spec +1 例 permissions 透传）；web tsc 0 错误 + build 通过；浏览器实证（本地 nest 3000 + dev 3001 代理，API_PROXY_TARGET 默认 localhost:3000）：
+  - admin：8 项导航全显 + 顶栏「管理员」；
+  - 受限用户 restricted-qa（新建角色「受限观察员」矩阵格式，tasks/chats/agents view）：导航 4 项（project/agents/models/messages）+ 顶栏「受限观察员」；
+  - /users /workers 直达 → 重定向 /projects（重定向前页面瞬时数据请求被后端 403，双层防护）；/models 直达放行（成员只读）。
+- **⚠️ 环境坑**：localhost:3000 被 root 的旧 node 进程（PID 见当时 lsof，命令行含 dist/main 或 nest 旧实例）占用——`pkill -f nest` 杀不到（命令行不匹配），需 `sudo lsof -i :3000` 定位后 `sudo kill`；新 nest 用 `nohup npm run start`（nest start 先编译 dist 再启动，dist 即新代码）。dev 3001 在 prod build 后必现 ENOENT _buildManifest.js.tmp（C11 已知），`rm -rf .next` 重启即可。受限用户/角色创建走 API（POST /roles 矩阵 + POST /users），留在本地 dev DB。

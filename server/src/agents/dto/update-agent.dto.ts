@@ -2,6 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsNotEmpty,
   IsObject,
   IsOptional,
   IsString,
@@ -20,6 +21,7 @@ export class UpdateAgentDto {
   @ApiPropertyOptional({ description: 'Agent 名称', maxLength: 64 })
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(64)
   name?: string;
 

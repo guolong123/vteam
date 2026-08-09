@@ -1,5 +1,7 @@
 import { PATH_METADATA } from '@nestjs/common/constants';
 import { Test, TestingModule } from '@nestjs/testing';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { SetModelCredentialDto } from './dto/set-model-credential.dto';
 import { ModelsController } from './models.controller';
@@ -262,5 +264,26 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
     expect(deleteProviderCredIdx).toBeGreaterThan(-1);
     expect(deleteIdIdx).toBeGreaterThan(-1);
     expect(deleteProviderCredIdx).toBeLessThan(deleteIdIdx);
+  });
+
+  describe('DTO 校验（class-validator，QA ISSUE-003 token 格式）', () => {
+    const errorsOf = async (obj: object) =>
+      validate(plainToInstance(SetModelCredentialDto, obj));
+
+    it('token 非法格式（"abc"）→ 校验失败（需 sk- 前缀）', async () => {
+      expect(await errorsOf({ token: 'abc' })).not.toHaveLength(0);
+    });
+
+    it('token 缺 sk- 前缀 → 校验失败', async () => {
+      expect(await errorsOf({ token: 'raw-token-long' })).not.toHaveLength(0);
+    });
+
+    it('token 带 sk- 前缀但过短（<8 位）→ 校验失败', async () => {
+      expect(await errorsOf({ token: 'sk-ab' })).not.toHaveLength(0);
+    });
+
+    it('token 合法格式（sk- + 8 位以上）→ 校验通过', async () => {
+      expect(await errorsOf({ token: 'sk-raw-token' })).toHaveLength(0);
+    });
   });
 });

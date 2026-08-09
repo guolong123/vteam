@@ -25,6 +25,9 @@ export class SetModelCredentialDto {
   @MinLength(1)
   @MaxLength(4096)
   @Matches(/\S/, { message: 'token 不能为空白字符' })
+  @Matches(/^sk-[A-Za-z0-9_-]{8,}$/, {
+    message: 'token 需以 sk- 开头且至少 8 位（仅含字母/数字/下划线/连字符）',
+  })
   token: string;
 
   @ApiPropertyOptional({

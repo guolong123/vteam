@@ -1,4 +1,5 @@
 import { forwardRef, Module } from '@nestjs/common';
+import { PermissionGuard } from '../common/guards/permission.guard';
 import { McpServersModule } from '../mcp-servers/mcp-servers.module';
 import { ModelsModule } from '../models/models.module';
 import { RealtimeModule } from '../realtime/realtime.module';
@@ -26,6 +27,7 @@ import { WorkersService } from './workers.service';
  *   ModelsService 不反向依赖 WorkersService，单向 import 无需 forwardRef）
  * - Controller：POST /workers/register、POST /workers/:id/heartbeat、GET /workers、GET /workers/:id；
  *   POST /worker/events（T9 事件回流，WorkerEventsController + WorkerEventIngress）
+ * - PermissionGuard（ISSUE-006）：GET /workers 挂 workers.view，本模块注册供编译期解析。
  * 已在 app.module.ts 注册。
  */
 @Module({
@@ -43,6 +45,7 @@ import { WorkersService } from './workers.service';
     WorkerClient,
     SessionLifecycleService,
     WorkerEventIngress,
+    PermissionGuard,
   ],
   exports: [
     WorkersService,

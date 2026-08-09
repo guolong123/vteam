@@ -4,6 +4,7 @@ import {
   IsArray,
   IsInt,
   IsNotEmpty,
+  IsObject,
   IsOptional,
   IsString,
   Min,
@@ -74,11 +75,15 @@ export class RegisterWorkerDto {
   opencodeVersion: string;
 
   @ApiProperty({ description: 'worker 能力声明', type: WorkerCapabilitiesDto })
+  @IsObject()
+  @IsNotEmpty()
   @ValidateNested()
   @Type(() => WorkerCapabilitiesDto)
   capabilities: WorkerCapabilitiesDto;
 
   @ApiProperty({ description: '注册时负载快照', type: WorkerLoadDto })
+  @IsObject()
+  @IsNotEmpty()
   @ValidateNested()
   @Type(() => WorkerLoadDto)
   load: WorkerLoadDto;

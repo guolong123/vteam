@@ -24,6 +24,8 @@ import { memoryStorage } from 'multer';
 import { Request } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
 import { SKILL_ERRORS } from '../common/constants/skill.constants';
+import { RequirePermission } from '../common/decorators/require-permission.decorator';
+import { PermissionGuard } from '../common/guards/permission.guard';
 import { AdminGuard } from '../users/admin.guard';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { QuerySkillsDto } from './dto/query-skills.dto';
@@ -45,7 +47,9 @@ const SKILL_FILE_SIZE_LIMIT = 100 * 1024;
  * - PATCH /api/v1/skills/:id/status：{enabled} 启停专用端点
  * - 无 DELETE（09 §3.8 不提供；停用 enabled=false 替代物理删除）
  * 鉴权：全局 JwtAuthGuard（APP_GUARD）兜底认证；POST/PATCH 管理端点加 AdminGuard（复用 users/admin.guard.ts）；
- * 读取端点（GET /、GET /:id/content）挂 @Public() + WorkerOrJwtGuard——worker 可用 X-Worker-Token 拉取，用户走 JWT。
+ * 读取端点（GET /、GET /:id/content）挂 @Public() + WorkerOrJwtGuard + PermissionGuard——
+ * worker 可用 X-Worker-Token 拉取（WorkerOrJwtGuard 挂 request.workerToken，PermissionGuard 放行），
+ * 用户走 JWT + skills.view 权限点（ISSUE-006：8 资源矩阵「技能工具」行，受限角色无 skills.view 则 403）。
  */
 @ApiTags('skills')
 @ApiBearerAuth()
@@ -60,7 +64,8 @@ export class SkillsController {
    * worker（X-Worker-Token）拉取：service viewer 为空不强制过滤，显式带 enabled=true 即只取启用技能。
    */
   @Public()
-  @UseGuards(WorkerOrJwtGuard)
+  @UseGuards(WorkerOrJwtGuard, PermissionGuard)
+  @RequirePermission('skills.view')
   @Get()
   @ApiOperation({ summary: '技能列表（enabled 过滤 + 分页；成员只读可见已启用）' })
   findAll(@Query() query: QuerySkillsDto, @Req() req: Request) {
@@ -77,7 +82,8 @@ export class SkillsController {
    * 鉴权：X-Worker-Token 或用户 JWT 任一通过即可（skill 内容本身是下发到 worker/模型的指令文本）。
    */
   @Public()
-  @UseGuards(WorkerOrJwtGuard)
+  @UseGuards(WorkerOrJwtGuard, PermissionGuard)
+  @RequirePermission('skills.view')
   @Get(':id/content')
   @ApiOperation({ summary: '技能 SKILL.md 全文（worker 注入拉取）' })
   findContent(@Param('id') id: string) {

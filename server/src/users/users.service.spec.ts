@@ -227,4 +227,77 @@ describe('UsersService', () => {
       ).rejects.toThrow(NotFoundException);
     });
   });
+
+  describe('update（编辑用户，ISSUE-002 修复）', () => {
+    it('部分更新：仅提交的字段落库，返回不含哈希摘要', async () => {
+      prisma.user.findUnique
+        .mockResolvedValueOnce(userRow) // 目标用户存在
+        .mockResolvedValueOnce(null); // email 无冲突
+      prisma.role.findUnique.mockResolvedValue({ id: 'r_member', name: 'member' });
+      prisma.user.update.mockResolvedValue({
+        ...userRow,
+        email: 'new@test.com',
+        roleId: 'r_member',
+      });
+
+      const result = await service.update('usr_1', {
+        email: 'new@test.com',
+        roleId: 'r_member',
+      });
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'usr_1' },
+        data: { email: 'new@test.com', roleId: 'r_member' },
+        select: expect.any(Object),
+      });
+      expect(result).not.toHaveProperty('passwordHash');
+    });
+
+    it('username 变更与他人冲突抛 ConflictException（USERNAME_CONFLICT）', async () => {
+      prisma.user.findUnique
+        .mockResolvedValueOnce(userRow) // 目标用户存在
+        .mockResolvedValueOnce({ id: 'u_x', username: 'alice2' }); // username 被占用
+      await expect(
+        service.update('usr_1', { username: 'alice2' }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('email 传 null 清空邮箱（跳过唯一校验）', async () => {
+      prisma.user.findUnique.mockResolvedValue(userRow);
+      prisma.user.update.mockResolvedValue({ ...userRow, email: null });
+
+      await service.update('usr_1', { email: null });
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'usr_1' },
+        data: { email: null },
+        select: expect.any(Object),
+      });
+    });
+
+    it('roleId 指向的角色不存在抛 BadRequestException', async () => {
+      prisma.user.findUnique.mockResolvedValue(userRow);
+      prisma.role.findUnique.mockResolvedValue(null);
+      await expect(
+        service.update('usr_1', { roleId: 'r_ghost' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('PATCH 空 body 幂等返回当前用户（不触发空更新）', async () => {
+      prisma.user.findUnique.mockResolvedValue(userRow);
+      prisma.user.update.mockResolvedValue({});
+
+      const result = await service.update('usr_1', {});
+
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(result.username).toBe('alice');
+    });
+
+    it('目标用户不存在抛 404', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      await expect(
+        service.update('usr_missing', { username: 'alice' }),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
 });

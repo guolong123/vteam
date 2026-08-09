@@ -1,4 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { PrismaService } from '../prisma/prisma.service';
 import { AgentsController } from './agents.controller';
 import { AgentsService } from './agents.service';
 import { CloneAgentDto } from './dto/clone-agent.dto';
@@ -33,7 +36,12 @@ describe('AgentsController', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AgentsController],
-      providers: [{ provide: AgentsService, useValue: service }],
+      providers: [
+        { provide: AgentsService, useValue: service },
+        // 方法级 @UseGuards(PermissionGuard) 会在 compile 时实例化 guard，
+        // PermissionGuard 依赖全局 PrismaService，提供 mock 占位
+        { provide: PrismaService, useValue: { user: { findUnique: jest.fn() } } },
+      ],
     }).compile();
 
     controller = module.get<AgentsController>(AgentsController);
@@ -125,5 +133,40 @@ describe('AgentsController', () => {
 
     expect(service.getAvailableModels).toHaveBeenCalledWith('a_product');
     expect(result).toHaveLength(1);
+  });
+
+  describe('DTO 校验（class-validator，QA ISSUE-009 空名）', () => {
+    const errorsOf = async (cls: new () => object, obj: object) =>
+      validate(plainToInstance(cls, obj));
+
+    it('CreateAgentDto：name 空串 → 校验失败（@IsNotEmpty，空名 400 非 201）', async () => {
+      expect(await errorsOf(CreateAgentDto, { name: '', type: 'custom' })).not.toHaveLength(0);
+    });
+
+    it('CreateAgentDto：name 缺失 → 校验失败', async () => {
+      expect(await errorsOf(CreateAgentDto, { type: 'custom' })).not.toHaveLength(0);
+    });
+
+    it('CreateAgentDto：合法 name → 校验通过', async () => {
+      expect(
+        await errorsOf(CreateAgentDto, { name: '数据分析师', type: 'custom' }),
+      ).toHaveLength(0);
+    });
+
+    it('UpdateAgentDto：显式传空串 name → 校验失败（@IsNotEmpty）', async () => {
+      expect(await errorsOf(UpdateAgentDto, { name: '' })).not.toHaveLength(0);
+    });
+
+    it('UpdateAgentDto：不传 name → 校验通过（@IsOptional 保持可选）', async () => {
+      expect(await errorsOf(UpdateAgentDto, { prompt: 'x' })).toHaveLength(0);
+    });
+
+    it('CloneAgentDto：显式传空串 name → 校验失败（@IsNotEmpty）', async () => {
+      expect(await errorsOf(CloneAgentDto, { name: '' })).not.toHaveLength(0);
+    });
+
+    it('CloneAgentDto：不传 name → 校验通过（缺省源名称+副本）', async () => {
+      expect(await errorsOf(CloneAgentDto, {})).toHaveLength(0);
+    });
   });
 });

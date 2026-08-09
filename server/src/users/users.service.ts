@@ -8,6 +8,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 
 /** bcrypt 轮数：与 auth.service.register 保持一致 */
@@ -151,6 +152,67 @@ export class UsersService {
         roleId: role.id,
         enabled: true,
       },
+      select: SAFE_USER_SELECT,
+    });
+  }
+
+  /**
+   * 更新用户信息（ISSUE-002 修复：编辑用户名/邮箱/角色）。
+   * 仅更新提交的字段；username/email 变更时校验唯一冲突（排除自身）；
+   * email 传 null 表示清空；roleId 变更时校验角色存在。
+   */
+  async update(id: string, dto: UpdateUserDto) {
+    const existing = await this.prisma.user.findUnique({ where: { id } });
+    if (!existing) {
+      throw new NotFoundException(`用户 ${id} 不存在`);
+    }
+
+    if (dto.username !== undefined && dto.username !== existing.username) {
+      const conflict = await this.prisma.user.findUnique({
+        where: { username: dto.username },
+      });
+      if (conflict) {
+        throw new ConflictException({
+          code: 'USERNAME_CONFLICT',
+          message: `用户名 ${dto.username} 已被占用`,
+        });
+      }
+    }
+
+    if (dto.email !== undefined && dto.email !== existing.email && dto.email) {
+      const conflict = await this.prisma.user.findUnique({
+        where: { email: dto.email },
+      });
+      if (conflict) {
+        throw new ConflictException({
+          code: 'EMAIL_CONFLICT',
+          message: `邮箱 ${dto.email} 已被占用`,
+        });
+      }
+    }
+
+    if (dto.roleId !== undefined) {
+      const role = await this.prisma.role.findUnique({ where: { id: dto.roleId } });
+      if (!role) {
+        throw new BadRequestException(`角色 ${dto.roleId} 不存在`);
+      }
+    }
+
+    const data = {
+      ...(dto.username !== undefined ? { username: dto.username } : {}),
+      ...(dto.displayName !== undefined ? { displayName: dto.displayName } : {}),
+      ...(dto.email !== undefined ? { email: dto.email } : {}),
+      ...(dto.roleId !== undefined ? { roleId: dto.roleId } : {}),
+    };
+
+    // 空 data（PATCH 空 body）幂等返回当前用户，避免 Prisma 空更新报错
+    if (Object.keys(data).length === 0) {
+      return this.findOne(id);
+    }
+
+    return this.prisma.user.update({
+      where: { id },
+      data,
       select: SAFE_USER_SELECT,
     });
   }

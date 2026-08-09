@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { PermissionGuard } from '../common/guards/permission.guard';
 import { AdminGuard } from '../users/admin.guard';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { WorkersModule } from '../workers/workers.module';
@@ -12,12 +13,14 @@ import { SkillsService } from './skills.service';
  * （共享同一 id 生成器实例，与 tasks/chat/artifacts/agents 同源，skill 域前缀 sk_）。
  * AdminGuard 复用 users/admin.guard.ts（无状态：仅依赖全局 PrismaService），
  * 本模块单独注册为 provider 供 POST/PATCH 管理端点守卫使用；
- * WorkerOrJwtGuard 供 GET 读取端点双通道鉴权（worker X-Worker-Token / 用户 JWT，T4b）。
+ * WorkerOrJwtGuard 供 GET 读取端点双通道鉴权（worker X-Worker-Token / 用户 JWT，T4b）；
+ * PermissionGuard（ISSUE-006 权限矩阵）：GET /skills、/skills/:id/content 挂 skills.view，
+ * 本模块注册供编译期解析（PrismaService 由全局 PrismaModule 提供）。
  * WorkersModule：F1 MAJOR——技能变更（POST/PATCH）后经 WorkersService 广播 reload-config。
  */
 @Module({
   imports: [RealtimeModule, WorkersModule],
   controllers: [SkillsController],
-  providers: [SkillsService, AdminGuard, WorkerOrJwtGuard],
+  providers: [SkillsService, AdminGuard, WorkerOrJwtGuard, PermissionGuard],
 })
 export class SkillsModule {}
