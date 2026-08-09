@@ -1,7 +1,7 @@
-# syntax=docker/dockerfile:1
+# syntax=docker.ketaops.cc/docker/dockerfile:1
 
 # ---------- build：npm ci + next build（standalone 产物） ----------
-FROM node:22-alpine AS build
+FROM docker.ketaops.cc/library/node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -13,7 +13,7 @@ ENV API_PROXY_TARGET=$API_PROXY_TARGET
 RUN npm run build
 
 # ---------- runner：standalone 运行 ----------
-FROM node:22-alpine AS runner
+FROM docker.ketaops.cc/library/node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 # standalone 产物（server.js + 精简 node_modules）

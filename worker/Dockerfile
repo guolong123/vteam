@@ -3,7 +3,7 @@
 # opencode CLI = npm 包 opencode-ai@1.18.15（与宿主/SDK 版本一致，D4）。
 
 # ---- 阶段 1：build ----
-FROM node:22-alpine AS build
+FROM docker.ketaops.cc/library/node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -12,7 +12,7 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 # ---- 阶段 2：runner ----
-FROM node:22-alpine
+FROM docker.ketaops.cc/library/node:22-alpine
 # opencode CLI 全局安装（serve spawn 依赖，需在 PATH；npm 全局 bin 默认进 PATH）
 RUN npm i -g opencode-ai@1.18.15
 

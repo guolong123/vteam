@@ -1,13 +1,13 @@
-# syntax=docker/dockerfile:1
+# syntax=docker.ketaops.cc/docker/dockerfile:1
 
 # ---------- deps：安装全量依赖（含 devDeps，供 nest build / prisma generate） ----------
-FROM node:22-alpine AS deps
+FROM docker.ketaops.cc/library/node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
 # ---------- build：编译 NestJS 产物 + 生成 Prisma Client ----------
-FROM node:22-alpine AS build
+FROM docker.ketaops.cc/library/node:22-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -16,7 +16,7 @@ RUN npx prisma generate
 RUN npm run build
 
 # ---------- runner：生产运行（标准 NestJS 进程，非 standalone） ----------
-FROM node:22-alpine
+FROM docker.ketaops.cc/library/node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/dist ./dist
