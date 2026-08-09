@@ -24,11 +24,12 @@
  */
 import { useEffect, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useSSE } from "@/hooks/use-sse";
+import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import { AgentAvatar, EmptyState, StatusBadge } from "@/src/components/ui";
 import {
   type RoleKey,
@@ -204,17 +205,12 @@ const filters: StatusFilter[] = [
 /* ================================ 任务卡片 ================================ */
 interface TaskCardProps {
   task: TaskItem;
-  starting: boolean;
-  startError: string | null;
   onOpen: (taskId: string) => void;
-  onStart: (taskId: string) => void;
   /** 所属项目名（来自看板已查的 projects 缓存），渲染卡片项目徽章 */
   projectName?: string;
 }
 
-function TaskCard({ task, starting, startError, onOpen, onStart, projectName }: TaskCardProps) {
-  const isWaiting = task.status === "pending";
-  const showHint = starting || !!startError;
+function TaskCard({ task, onOpen, projectName }: TaskCardProps) {
   return (
     <section
       data-testid="task-card"
@@ -222,6 +218,7 @@ function TaskCard({ task, starting, startError, onOpen, onStart, projectName }: 
       data-status={toBoardStatus(task.status)}
       onClick={() => onOpen(task.id)}
       style={{
+        position: "relative",
         display: "flex",
         flexDirection: "column",
         gap: space.md,
@@ -327,67 +324,8 @@ function TaskCard({ task, starting, startError, onOpen, onStart, projectName }: 
         </span>
       </div>
 
-      {/* 待开始：开始任务（FR-18/19 真实调用 POST /tasks/:id/start） */}
-      {isWaiting && (
-        <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-          <button
-            type="button"
-            data-testid="start-task-button"
-            disabled={starting}
-            onClick={(e) => {
-              e.stopPropagation();
-              onStart(task.id);
-            }}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: space.xs,
-              padding: `${space.sm + 2}px ${space.lg}px`,
-              borderRadius: radius.md,
-              border: "none",
-              backgroundColor: WAITING_STATUS.color,
-              color: "#FFFFFF",
-              fontSize: fontSize.md,
-              fontWeight: 600,
-              cursor: starting ? "default" : "pointer",
-              opacity: starting ? 0.65 : 1,
-              fontFamily: fontFamily.body,
-              transition: "background-color .15s ease",
-            }}
-          >
-            <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>▶</span>
-            {starting ? "启动中…" : "开始任务"}
-          </button>
-          {showHint && (
-            <div
-              data-testid="start-task-hint"
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: space.xs,
-                padding: `${space.sm + 2}px ${space.md}px`,
-                borderRadius: radius.md,
-                backgroundColor: WAITING_STATUS.bg,
-                border: `1px solid ${WAITING_STATUS.border}`,
-                fontSize: fontSize.sm,
-                lineHeight: 1.6,
-                color: neutral[600],
-              }}
-            >
-              <div style={{ fontWeight: 600, color: WAITING_STATUS.color }}>
-                开始前检查
-              </div>
-              <div>未选择 Agent 将先弹出 Agent 选择；多 Agent 需指定主 Agent 作为任务负责人（默认产品经理）。</div>
-              {startError && (
-                <div role="alert" style={{ color: "#DC2626", fontWeight: 500 }}>
-                  {startError}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      {/* 状态流转操作（OBS-010：按状态渲染开始/提交验收/验收通过/驳回/归档，共享 TaskStatusActions） */}
+      <TaskStatusActions taskId={task.id} status={task.status} />
     </section>
   );
 }
@@ -402,10 +340,6 @@ export default function TaskBoardPage() {
   // pid：URL ?pid= 必填；无 pid 且已登录 → 重定向 /projects（effect 内读 window，避免 SSR 水合不一致）
   const [pid, setPid] = useState<string | null>(null);
   const [activeKey, setActiveKey] = useState("all");
-  const [startState, setStartState] = useState<{ taskId: string | null; error: string | null }>({
-    taskId: null,
-    error: null,
-  });
 
   useEffect(() => {
     const urlPid = new URLSearchParams(window.location.search).get("pid");
@@ -438,43 +372,6 @@ export default function TaskBoardPage() {
       }
     },
   });
-
-  const startMutation = useMutation({
-    mutationFn: (taskId: string) => api.post<TaskItem>(`/tasks/${taskId}/start`),
-    onMutate: async (taskId) => {
-      await queryClient.cancelQueries({ queryKey: ["tasks"] });
-      const snapshot = queryClient.getQueryData<TasksResponse>(tasksKey);
-      if (snapshot) {
-        // 乐观更新：待开始 → 进行中，卡上按钮即时消失
-        queryClient.setQueryData<TasksResponse>(tasksKey, {
-          ...snapshot,
-          items: snapshot.items.map((t) =>
-            t.id === taskId ? { ...t, status: "in_progress" as TaskApiStatus } : t
-          ),
-        });
-      }
-      return { snapshot };
-    },
-    onError: (err, taskId, context) => {
-      // 回滚乐观更新并展示失败原因
-      if (context?.snapshot) {
-        queryClient.setQueryData(tasksKey, context.snapshot);
-      }
-      setStartState({
-        taskId,
-        error: isApiError(err) ? err.message : "启动任务失败，请稍后重试",
-      });
-    },
-    onSuccess: () => setStartState({ taskId: null, error: null }),
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-    },
-  });
-
-  const handleStart = (taskId: string) => {
-    setStartState({ taskId, error: null });
-    startMutation.mutate(taskId);
-  };
 
   const tasks = data?.items ?? [];
 
@@ -698,10 +595,7 @@ export default function TaskBoardPage() {
             <TaskCard
               key={task.id}
               task={task}
-              starting={startState.taskId === task.id}
-              startError={startState.taskId === task.id ? startState.error : null}
               onOpen={(taskId) => router.push(`/tasks/${taskId}`)}
-              onStart={handleStart}
               projectName={projectName}
             />
           ))

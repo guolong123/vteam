@@ -565,6 +565,7 @@ export const PAGES: PageTestidRef[] = [
 /** 各页代表性断言 testid（T9 实际断言 3-5 个/页；数据行 testid 依赖 seed 数据） */
 export const PAGE_SMOKE: Record<string, string[]> = {
   "/login": ["username", "password", "login-button", "register-link"],
+  "/register": ["register-username", "register-displayname", "register-password", "register-submit", "register-login-link"],
   "/projects": ["project-list-root", "project-card", "create-project-button"],
   "/tasks/new": ["task-create-root", "task-title", "priority-select", "agent-option", "create-task-button"],
   "/board": ["task-board-root", "status-filter", "task-card", "status-badge"],

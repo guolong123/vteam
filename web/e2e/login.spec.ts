@@ -28,4 +28,31 @@ test.describe("1/17 login 登录页", () => {
     await page.getByTestId("login-button").click();
     await expect(page).toHaveURL(/\/projects/, { timeout: 15_000 });
   });
+
+  test("register-link → 跳转 /register（ISSUE-011 死链修复）", async ({ page }) => {
+    await page.goto("/login");
+    await page.getByTestId("register-link").click();
+    await expect(page).toHaveURL(/\/register/, { timeout: 15_000 });
+    await expect(page.getByTestId("register-username")).toBeVisible();
+    await expect(page.getByTestId("register-displayname")).toBeVisible();
+    await expect(page.getByTestId("register-password")).toBeVisible();
+    await expect(page.getByTestId("register-submit")).toBeVisible();
+    await expect(page.getByTestId("register-login-link")).toBeVisible();
+  });
+
+  test("register 前端校验：空表单 → 提示，不提交", async ({ page }) => {
+    await page.goto("/register");
+    await page.getByTestId("register-submit").click();
+    await expect(page.getByTestId("register-error")).toBeVisible();
+    await expect(page.getByTestId("register-error")).toContainText("请输入账号");
+  });
+
+  test("register 前端校验：密码不足 6 位 → 提示", async ({ page }) => {
+    await page.goto("/register");
+    await page.getByTestId("register-username").fill("e2e-check-user");
+    await page.getByTestId("register-displayname").fill("e2e");
+    await page.getByTestId("register-password").fill("123");
+    await page.getByTestId("register-submit").click();
+    await expect(page.getByTestId("register-error")).toContainText("密码至少 6 位");
+  });
 });

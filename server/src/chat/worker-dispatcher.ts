@@ -65,8 +65,13 @@ interface PollMessageShape {
     tokens?: unknown;
     cost?: number;
     time?: { start?: number };
+    /** step-finish(reason=error) 携带的模型错误详情（OBS-009：无凭据/401 时 serve 产出）。 */
+    error?: { name?: string; message?: string };
   }>;
 }
+
+/** OBS-009：模型调用失败时的兜底错误文案（serve 未携带具体错误信息时使用）。 */
+export const MODEL_FAILURE_FALLBACK_MESSAGE = '模型调用失败（serve 返回 error）';
 
 /**
  * F2 C1：step-finish(reason=stop) 完成判定（移植 worker prompt-await.ts findFinish）。
@@ -81,6 +86,30 @@ export function findFinish(messages: unknown[]): PollMessageShape['parts'][numbe
     for (const p of m.parts ?? []) {
       if (p.type === 'step-finish' && p.reason === 'stop') {
         return p;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * OBS-009 快速失败检测：模型调用失败（无凭据/401 等）时 serve 产出
+ * step-finish(reason=error)（或 error part）——findFinish 只认 reason=stop，
+ * 该形状此前被轮询忽略 → 静默等 120s 超时。本函数遍历 assistant 消息命中即返回
+ * 错误文案（error.message 优先，回退 part.text，再回退兜底文案）；无错误 → undefined。
+ */
+export function findError(messages: unknown[]): string | undefined {
+  for (const raw of messages) {
+    const m = raw as PollMessageShape;
+    if (m.info?.role !== 'assistant') {
+      continue;
+    }
+    for (const p of m.parts ?? []) {
+      if (p.type === 'step-finish' && p.reason === 'error') {
+        return p.error?.message || p.text || MODEL_FAILURE_FALLBACK_MESSAGE;
+      }
+      if (p.type === 'error') {
+        return p.error?.message || p.text || MODEL_FAILURE_FALLBACK_MESSAGE;
       }
     }
   }
@@ -801,6 +830,26 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
           `agent ${params.agentId} 首字出现${delta !== null ? `（dispatch 后 ${delta}ms）` : ''}`,
         );
       }
+      // OBS-009：step-finish(reason=error)/error part → 模型调用失败，立即 emitError +
+      // agent.error 广播快速返回（不再静默等到 dispatchTimeoutMs 超时才报错）。标记
+      // failedSessions 复用现有逻辑——迟到回流（ingress/轮询）跳过落库防双写。
+      const pollError = findError(fresh);
+      if (pollError !== undefined) {
+        this.pollCursors.set(params.sessionId, lastId ?? cursor);
+        this.clearPendingWatchdog(params.taskId, params.agentId);
+        this.failedSessions.add(params.sessionId);
+        const message = `agent 处理失败：${pollError}`;
+        this.logger.error(`agent ${params.agentId} ${message}`);
+        this.emitError({ taskId: params.taskId, agentId: params.agentId, error: message });
+        void this.broadcastAgentError({
+          taskId: params.taskId,
+          agentId: params.agentId,
+          level: 'retry',
+          errorType: 'model_error',
+          message,
+        });
+        return;
+      }
       if (findFinish(fresh)) {
         this.pollCursors.set(params.sessionId, lastId ?? cursor);
         this.clearPendingWatchdog(params.taskId, params.agentId);
@@ -962,6 +1011,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
 
   /** 回流 watchdog：超时（默认 120s）无回流 → emitError + 广播 agent.error（D8 总超时）。 */
   private startPendingWatchdog(taskId: string, agentId: string, sessionId: string): void {
+    // OBS-009：poll 已快速失败（step-finish error/error part，failedSessions 已标记）时
+    // 跳过注册——poll 首轮可能在 watchdog 注册前失败（dispatch 尾部竞态），此时无 timer 可清。
+    if (this.failedSessions.has(sessionId)) {
+      return;
+    }
     const key = `${taskId}:${agentId}`;
     const existing = this.pending.get(key);
     if (existing) {

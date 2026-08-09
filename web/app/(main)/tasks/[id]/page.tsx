@@ -34,6 +34,7 @@ import { useRealtimeEvents, type RealtimeChatMessage } from "@/hooks/use-realtim
 import type { AgentStatusEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
 import { AgentAvatar, ChatBubble, MessageInput, StatusBadge } from "@/src/components/ui";
 import type { MentionableAgent, SendMessagePayload } from "@/src/components/ui";
+import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import {
   LoadingIndicator,
   MsgError,
@@ -594,6 +595,7 @@ function TaskPanel({
     <aside
       data-testid="task-info-panel"
       style={{
+        position: "relative",
         width: 300,
         flexShrink: 0,
         borderLeft: `1px solid ${neutral[200]}`,
@@ -712,6 +714,14 @@ function TaskPanel({
             </button>
           )}
         </div>
+      </div>
+
+      {/* 状态流转操作（OBS-010：与看板同款按钮组，共享 TaskStatusActions） */}
+      <div>
+        <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600], marginBottom: space.sm }}>
+          任务操作
+        </div>
+        <TaskStatusActions taskId={task.id} status={task.status} />
       </div>
 
       {/* 查看 Agent 会话入口（占位） */}

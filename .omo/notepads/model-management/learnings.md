@@ -6,6 +6,19 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ---
 
+## E2: OBS-009 可观测性——模型调用失败快速报错（step-finish reason=error，2026-08-09，实现 + 测试完成）
+
+- **根因（已探索确认）**：`findFinish`（worker-dispatcher.ts:75-88）只认 assistant 消息的 `step-finish(reason=stop)`；模型调用失败（无真实凭据 → 401/error）时 serve 产出 `step-finish(reason=error)`（或 error part）→ findFinish 不匹配 → 自持轮询静默等到 `DISPATCH_TIMEOUT_MS=120s` 才报错。QA 实测用户等 35s 无回复且无任何错误提示。
+- **修复（两处）**：
+  1. **新增导出 `findError(messages)`**：与 findFinish 同款遍历（仅 assistant 消息），命中 `step-finish(reason=error)` 或 `type==='error'` part 即返回错误文案——`p.error?.message` 优先，回退 `p.text`，再回退兜底常量 `MODEL_FAILURE_FALLBACK_MESSAGE`。`PollMessageShape.parts[].error?: {name, message}` 新增字段（serve error part 形状）。
+  2. **`pollForCompletion` 轮询循环内**（findFinish 检测之前）对 `fresh`（cursor 之后新消息）做 `findError`——命中 → 立即 `clearPendingWatchdog` + `failedSessions.add` + `emitError({error: 'agent 处理失败：<serve 错误>'}）` + `broadcastAgentError({level:'retry', errorType:'model_error'})` + return（不等 120s）。
+- **⚠️ 竞态坑（测试发现）**：poll 首轮可能在 `startPendingWatchdog` 注册**之前**就快速失败（`void this.pollForCompletion()` 在 dispatch 尾部 watchdog 注册前并发执行）——此时 `clearPendingWatchdog` 扑空，watchdog 照常注册并在 120s 二次 emitError。**修复：`startPendingWatchdog` 开头加守卫 `if (this.failedSessions.has(sessionId)) return;`**（dispatch 已在 promptAsync 后重置 failedSessions，守卫只拦截本轮 poll 已快速失败的场景）。两条时序都被覆盖：poll 先失败（守卫跳过注册）或 watchdog 先注册（clearPendingWatchdog 清除）。
+- **保留语义**：正常完成（reason=stop）路径不变；120s 超时仍为兜底（serve 无响应/挂起）；快速失败后 failedSessions 标记 → 迟到回流（ingress/轮询 task.completed）跳过落库防双写。
+- **测试**：`findError` 单测（error.message 命中 / error part 命中 / 回退 text / user 不算 / stop 不算 / 无错误 undefined）+ 2 个集成用例（step-finish error 快速 fail 且 advance 120s 无双报错 + error part 命中且迟到回流跳过落库）。**验证**：server `nest build` 通过 + jest **44 suites / 705 tests 全绿**（基线 702 + 新增 3）。
+- **经验**：快速失败路径的「清除型守卫」（clearPendingWatchdog）与「注册前守卫」（startPendingWatchdog 的 failedSessions 检查）需成对实现——异步 void 并发路径上，清理时机可能晚于注册时机，只做清理不够。
+
+---
+
 ## E1: 修复「用户管理编辑按钮完全失效」（ISSUE-002，2026-08-09，实现 + 浏览器实证完成）
 
 - **根因（一行注释）**：`web/app/(main)/users/page.tsx` 文件头注释 :25 明写「编辑按钮：后端无 PATCH /users/:id → 保留原型占位（**无 onClick**）」——编辑按钮是纯占位，无 onClick、无弹窗、无请求。同行「重置密码」/「新增用户」正常（有完整弹窗链路）。
@@ -432,3 +445,27 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   - 受限用户 restricted-qa（新建角色「受限观察员」矩阵格式，tasks/chats/agents view）：导航 4 项（project/agents/models/messages）+ 顶栏「受限观察员」；
   - /users /workers 直达 → 重定向 /projects（重定向前页面瞬时数据请求被后端 403，双层防护）；/models 直达放行（成员只读）。
 - **⚠️ 环境坑**：localhost:3000 被 root 的旧 node 进程（PID 见当时 lsof，命令行含 dist/main 或 nest 旧实例）占用——`pkill -f nest` 杀不到（命令行不匹配），需 `sudo lsof -i :3000` 定位后 `sudo kill`；新 nest 用 `nohup npm run start`（nest start 先编译 dist 再启动，dist 即新代码）。dev 3001 在 prod build 后必现 ENOENT _buildManifest.js.tmp（C11 已知），`rm -rf .next` 重启即可。受限用户/角色创建走 API（POST /roles 矩阵 + POST /users），留在本地 dev DB。
+
+## F1: 修复「登录页立即注册死链」（ISSUE-011，2026-08-09，实现 + 浏览器实证完成）
+
+- **根因**：`web/app/login/page.tsx` register-link 是**纯 span**（无 onClick、无 Link）——死链；`/register`、`/signup` 路由均不存在（无注册页文件）。后端 `POST /auth/register` 全链路可用（QA 报告已证：注册→登录→refresh 全通过）。
+- **关键决策——注册返回结构决定跳转策略**：`AuthService.register()` 仅返回 `{id, username, displayName}`（**不含 token**，见 auth.service.ts:96-100）；`login()` 才返回 accessToken/refreshToken/user。因此注册成功后**不能直接登录**，走「跳 `/login?registered=1` → 登录页读 query 显示『注册成功，请登录』」协议。
+- **RegisterDto 字段（对齐注册页表单）**：username 必填 max64、password 必填 **min6** max128、displayName **必填** max128、email 可选 @IsEmail max255——前端注册页 4 字段全对齐，前端校验含「密码至少 6 位」+ 简单邮箱正则（`/^[^\s@]+@[^\s@]+\.[^\s@]+$/`，对齐后端 IsEmail 即时反馈）。
+- **共享组件提取（设计系统复用而非复制）**：从 login/page.tsx 提取 `web/src/components/auth/BrandPanel.tsx`——导出 BrandPanel / useIsMobile / pageBg / authCardStyle / authInputStyle / authSubmitStyle / authLabelStyle 七个共享件，登录/注册两页共用，**文案与样式零改动**（纯迁移，回归风险可控）。
+- **跨页面 query 协议注意（SSR 安全）**：注册成功提示不能放 useState 初始值读 `window.location.search`（SSR 时 window 未定义会崩）——必须 useEffect 内读取；且读完用 `history.replaceState` 清掉 `registered` 参数避免刷新重复提示。
+- **验证**：web `npx tsc --noEmit` 0 错误 + `npm run build` 通过（/register 1.79 kB 静态生成）；playwright 浏览器实证 **9/9 PASS**（register-link 跳转→注册页 6 testid→空表单校验→短密码校验→完整注册→跳 /login?registered=1→成功提示→新账号登录→/projects→去登录链接→已登录访问 /register 重定向 /projects），0 console error；e2e login.spec **7/7 全绿**（含新增 3 例：死链修复跳转 + 两例前端校验，均不提交表单避免污染 seed）。
+- **⚠️ 环境坑（沿用 C11/D6）**：build 前 kill 3001 dev + `rm -rf .next`；build 命令 5 分钟超时被杀但产物已完整（重跑增量秒过）；chromium 可执行路径是 `~/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome`（**linux64** 后缀，不是 linux）。
+- **测试数据清理**：curl 探测创建的用户（`__probe_probe__`）无 DELETE API，用 server 目录 `node -e` + PrismaClient `deleteMany({where:{username}})` 直删；浏览器注册的 `qa_issue011_*` 用户保留（真实注册验证产物，member 角色无害）。
+
+## F2: OBS-010 任务状态流转前端操作 UI（2026-08-09，实现 + tsc + build + 浏览器全链路实证完成）
+
+- **背景**：QA 报告 OBS-010（中）——看板卡片仅 pending 有「开始任务」，in_progress/pending_review/completed 无「提交验收/验收通过/驳回/归档」按钮；任务详情页 TaskPanel 纯静态无状态操作。后端五态端点完整（tasks.controller.ts:103-154：start / mark-pending-review / accept / reject（RejectTaskDto.reason 可选 max512）/ archive），前端零调用。
+- **共享组件（新建 web/src/components/tasks/task-status-actions.tsx）**：`TaskStatusActions({taskId, status})` 按五态渲染操作组（pending→start / in_progress→mark-pending-review / pending_review→accept+reject / completed→archive / archived 终态返回 null），board 卡片与详情页 TaskPanel 复用。组件内自持单 useMutation（mutationFn 按 action 拼 `/tasks/:id/:action`，reject 带 `{reason}`），onError 记错误、**onSettled 双失效 `["tasks"]` + `["task", id]` 缓存**（SSE task.status.changed 亦失效，双保险）。data-testid 对齐既有约定：start-task-button / start-task-hint / task-submit-review / task-accept / task-reject / task-archive / reject-modal / reject-reason-input / reject-confirm / reject-cancel。
+- **⚠️ 关键坑：按钮冒泡**——board 卡片 section 带 `onClick → router.push(/tasks/[id])`，共享组件按钮必须 `e.stopPropagation()`（board 原 start 按钮有，迁移时易漏），否则点击操作直接跳详情页中断流程。
+- **reject 原因弹窗**：复用项目 Modal 模式（absolute inset:0 相对宿主 + 遮罩点击关闭 + Esc 关闭，铁律 T15 无 fixed）——**宿主必须 position:relative**（board section 与 detail aside 均补上）；每次打开重置 reason；textarea maxLength 512 对齐 RejectTaskDto；确认提交后关闭弹窗，reason 空串转 undefined（不发空 body）。
+- **board 页瘦身**：原 startState/startMutation/handleStart（乐观更新 + 回滚）整体迁入共享组件，页面删除约 60 行；「开始前检查」hint（start-task-hint + 失败红字）保留在组件内（仅 pending 且 pending/error 时展示）。共享组件不做乐观更新（依赖 invalidate + SSE 刷新，本地延迟可忽略），换取两页通用性。
+- **验证**：web tsc 0 错误 + build 通过；playwright 浏览器实证 2/2 PASS（channel:"chrome" 用系统 Chrome，缓存只有 chromium-1208 而 playwright 期望 1234）：
+  - 看板卡片全生命周期：start → 提交验收 → 驳回（reject-modal 填原因→确认）→ 状态回 in_progress → 提交验收 → 验收通过 → 归档 → 卡片 data-status=已归档 且无操作按钮；
+  - 详情页 TaskPanel 同款按钮 + reject 弹窗（absolute 相对 aside 宿主）全链路通过；
+  - reject 带 reason 请求被后端接受（DTO 校验失败会 400 显示 task-action-error），task_events 无读取端点故 reason 落库仅由状态回退间接证明。
+- **⚠️ 环境坑（沿用 C11/D6/F1）**：next.config API_PROXY_TARGET 默认 localhost:3000（后端占 3000），QA 后端在 13001——验证 dev server 需 `env API_PROXY_TARGET=http://localhost:13001 npm run dev -- -p 3002`；playwright.config testMatch 白名单（pages/perf/guard...）不匹配任意新 spec 文件名 → 需临时独立 config（testDir ./e2e + testMatch 指定文件）跑验证脚本，跑完删除。种子任务 p_seed_1 仅 in_progress×1 + archived×1，全生命周期验证需先 POST /projects/p_seed_1/tasks 创建 pending 任务（agentIds 必填非空）。

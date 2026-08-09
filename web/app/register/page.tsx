@@ -1,21 +1,22 @@
 "use client";
 
 /**
- * 登录页（Task 11：原型保真迁移 + 真实认证）
+ * 注册页（ISSUE-011：登录页「立即注册」死链修复）
  * =====================================================
- * 平台级登录入口：左品牌区（Logo 占位 + 产品名 + 价值主张）+ 右登录表单。
- * - 保真迁移自 docs/agent-platform/prototypes/login/index.tsx（布局/样式/data-testid/文案零改动）。
- * - 接入真实认证：表单提交 → POST /api/v1/auth/login → token 存 authStore → 跳 /projects。
- * - 错误凭证：显示错误提示（与原型视觉语言一致），不跳转。
- * - 桌面分栏布局；移动端品牌区折叠为顶栏、表单单列。
- * - 全站浅色主题：品牌区用极浅渐变（白 → 极淡蓝 → 极淡紫，呼应 Logo 但压到极浅），登录表单区保持浅色 radial。
+ * 对齐登录页（login/page.tsx）布局与视觉语言：共享 BrandPanel 品牌区 +
+ * 白色表单卡片。字段对齐后端 RegisterDto：username / displayName 必填、
+ * password 必填且 >= 6 位、email 可选。
+ * - 提交 → POST /auth/register（后端 register 仅返回 {id, username,
+ *   displayName}，不含 token → 成功跳 /login?registered=1，登录页提示可登录）。
+ * - 校验：username / displayName 必填、password 长度 >= 6、email 格式。
+ * - 已登录用户直接进入工作区（对齐登录页）。
  */
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
-import { useAuthStore, type User } from "@/lib/stores/authStore";
+import { useAuthStore } from "@/lib/stores/authStore";
 import { neutral, space, fontSize, fontFamily } from "@/src/theme/tokens";
 import {
   BrandPanel,
@@ -24,25 +25,21 @@ import {
   authCardStyle,
   authInputStyle,
   authSubmitStyle,
+  authLabelStyle,
 } from "@/src/components/auth/BrandPanel";
 
-/** POST /auth/login 响应（Task 15：accessToken + refreshToken + user） */
-interface LoginResponse {
-  accessToken: string;
-  refreshToken: string;
-  user: User;
-}
+/** 简单邮箱格式校验（对齐后端 RegisterDto @IsEmail，前端即时反馈） */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function LoginForm() {
+function RegisterForm() {
   const router = useRouter();
-  const setAuth = useAuthStore((s) => s.setAuth);
 
   const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // 注册成功回跳协议：?registered=1 → 提示可登录（useEffect 读 URL，SSR 安全）
-  const [showRegistered, setShowRegistered] = useState(false);
 
   // 已登录用户直接进入工作区
   useEffect(() => {
@@ -52,37 +49,47 @@ function LoginForm() {
     }
   }, [router]);
 
-  // 注册成功回跳提示（客户端读取并清理 query，SSR 安全）
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("registered") === "1") {
-      setShowRegistered(true);
-      const url = new URL(window.location.href);
-      url.searchParams.delete("registered");
-      window.history.replaceState(null, "", url.toString());
-    }
-  }, []);
-
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (submitting) return;
 
-    if (!username.trim() || !password) {
-      setError("请输入账号和密码");
+    const name = username.trim();
+    const shown = displayName.trim();
+    const mail = email.trim();
+
+    if (!name) {
+      setError("请输入账号");
+      return;
+    }
+    if (!shown) {
+      setError("请输入展示名");
+      return;
+    }
+    if (!password) {
+      setError("请输入密码");
+      return;
+    }
+    if (password.length < 6) {
+      setError("密码至少 6 位");
+      return;
+    }
+    if (mail && !EMAIL_RE.test(mail)) {
+      setError("邮箱格式不正确");
       return;
     }
 
     setSubmitting(true);
     setError(null);
     try {
-      const res = await api.post<LoginResponse>("/auth/login", {
-        username: username.trim(),
+      await api.post("/auth/register", {
+        username: name,
+        displayName: shown,
         password,
+        email: mail || undefined,
       });
-      setAuth(res.accessToken, res.user);
-      router.push("/projects");
+      router.push("/login?registered=1");
     } catch (err) {
-      setError(isApiError(err) ? err.message : "登录失败，请稍后重试");
+      setError(isApiError(err) ? err.message : "注册失败，请稍后重试");
     } finally {
       setSubmitting(false);
     }
@@ -103,27 +110,24 @@ function LoginForm() {
       {/* 表单标题 */}
       <div>
         <div style={{ fontSize: fontSize.xxl, fontWeight: 700, color: neutral[900], fontFamily: fontFamily.display }}>
-          欢迎回来
+          创建账号
         </div>
         <div style={{ fontSize: fontSize.md, color: neutral[400], marginTop: space.xs }}>
-          登录以进入你的 AI 协作工作区
+          注册后即可进入你的 AI 协作工作区
         </div>
       </div>
 
-      {/* 账号 / 密码 */}
+      {/* 账号 / 展示名 / 密码 / 邮箱（可选） */}
       <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-          <label
-            htmlFor="login-username"
-            style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}
-          >
+          <label htmlFor="register-username" style={authLabelStyle}>
             账号
           </label>
           <input
-            id="login-username"
-            data-testid="username"
+            id="register-username"
+            data-testid="register-username"
             type="text"
-            placeholder="请输入账号"
+            placeholder="请输入账号（登录用，唯一）"
             autoComplete="username"
             aria-label="账号"
             value={username}
@@ -133,18 +137,32 @@ function LoginForm() {
           />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-          <label
-            htmlFor="login-password"
-            style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}
-          >
+          <label htmlFor="register-displayname" style={authLabelStyle}>
+            展示名
+          </label>
+          <input
+            id="register-displayname"
+            data-testid="register-displayname"
+            type="text"
+            placeholder="请输入展示名"
+            autoComplete="name"
+            aria-label="展示名"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            disabled={submitting}
+            style={authInputStyle}
+          />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+          <label htmlFor="register-password" style={authLabelStyle}>
             密码
           </label>
           <input
-            id="login-password"
-            data-testid="password"
+            id="register-password"
+            data-testid="register-password"
             type="password"
-            placeholder="请输入密码"
-            autoComplete="current-password"
+            placeholder="请输入密码（至少 6 位）"
+            autoComplete="new-password"
             aria-label="密码"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -152,30 +170,29 @@ function LoginForm() {
             style={authInputStyle}
           />
         </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+          <label htmlFor="register-email" style={authLabelStyle}>
+            邮箱（可选）
+          </label>
+          <input
+            id="register-email"
+            data-testid="register-email"
+            type="email"
+            placeholder="请输入邮箱（选填）"
+            autoComplete="email"
+            aria-label="邮箱"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={submitting}
+            style={authInputStyle}
+          />
+        </div>
       </div>
 
-      {/* 注册成功提示（注册页回跳 ?registered=1） */}
-      {showRegistered && (
-        <div
-          data-testid="register-success"
-          role="status"
-          style={{
-            fontSize: fontSize.sm,
-            color: "#059669",
-            display: "flex",
-            alignItems: "center",
-            gap: space.xs,
-          }}
-        >
-          <span aria-hidden style={{ fontWeight: 700 }}>✓</span>
-          注册成功，请使用新账号登录
-        </div>
-      )}
-
-      {/* 错误提示（与原型视觉语言一致：小字号 + 语义红） */}
+      {/* 错误提示（与登录页视觉语言一致：小字号 + 语义红） */}
       {error && (
         <div
-          data-testid="login-error"
+          data-testid="register-error"
           role="alert"
           style={{
             fontSize: fontSize.sm,
@@ -190,10 +207,10 @@ function LoginForm() {
         </div>
       )}
 
-      {/* 登录按钮 */}
+      {/* 注册按钮 */}
       <button
         type="submit"
-        data-testid="login-button"
+        data-testid="register-submit"
         disabled={submitting}
         style={{
           ...authSubmitStyle,
@@ -201,28 +218,28 @@ function LoginForm() {
           opacity: submitting ? 0.7 : 1,
         }}
       >
-        {submitting ? "登录中…" : "登录"}
+        {submitting ? "注册中…" : "注册"}
       </button>
 
-      {/* 注册入口（ISSUE-011：纯 span 死链 → Link /register） */}
+      {/* 登录入口 */}
       <div style={{ textAlign: "center", fontSize: fontSize.md, color: neutral[400] }}>
-        还没有账号？
+        已有账号？
         <Link
-          href="/register"
-          data-testid="register-link"
+          href="/login"
+          data-testid="register-login-link"
           style={{ color: "#2563EB", fontWeight: 500, marginLeft: space.xs, textDecoration: "none" }}
         >
-          立即注册
+          去登录
         </Link>
       </div>
     </form>
   );
 }
 
-export default function LoginPage() {
+export default function RegisterPage() {
   const isMobile = useIsMobile();
   return (
-    /* 全屏浅色渐变背景（白 → 浅灰 → 极浅蓝，与全站浅色主题协调）；表单白色卡片悬浮聚焦 */
+    /* 全屏浅色渐变背景（对齐登录页）；表单白色卡片悬浮聚焦 */
     <div
       style={{
         minHeight: "100vh",
@@ -249,9 +266,9 @@ export default function LoginPage() {
             padding: `${space.xl}px ${space.lg}px`,
           }}
         >
-          {/* 白色表单卡片：浅色背景下以细腻阴影浮现，聚焦登录操作 */}
+          {/* 白色表单卡片：浅色背景下以细腻阴影浮现，聚焦注册操作 */}
           <div style={authCardStyle}>
-            <LoginForm />
+            <RegisterForm />
           </div>
         </main>
         {/* 桌面端：左侧品牌区 */}

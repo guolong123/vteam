@@ -20,6 +20,7 @@ import {
   PENDING_INSTANCE_REF,
   POLL_INTERVAL_MS,
   aggregateText,
+  findError,
   findFinish,
   truncateUtf8,
   WorkerDispatcher,
@@ -1196,6 +1197,92 @@ describe('WorkerDispatcher', () => {
       expect(prisma.message.create).not.toHaveBeenCalled();
       jest.useRealTimers();
     });
+
+    it('OBS-009：step-finish(reason=error) 快速 fail——emitError+agent.error，不等 120s 超时', async () => {
+      jest.useFakeTimers();
+      pollSetup();
+      workerClient.getMessages
+        .mockResolvedValueOnce([
+          {
+            info: { role: 'assistant' },
+            parts: [{ type: 'text', text: '部分', time: { start: 1 } }],
+          },
+        ])
+        .mockResolvedValueOnce([
+          {
+            info: { role: 'assistant' },
+            parts: [
+              { type: 'text', text: '部分回复', time: { start: 1 } },
+              {
+                type: 'step-finish',
+                reason: 'error',
+                error: { name: 'AuthError', message: '401: 模型凭据无效' },
+              },
+            ],
+          },
+        ]);
+      const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
+
+      await d.dispatch(request);
+      await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+      await jest.advanceTimersByTimeAsync(0);
+
+      // 快速失败：emitError 立即触发（不 advance 到 DISPATCH_TIMEOUT_MS）
+      expect(errors).toEqual([
+        {
+          taskId: request.taskId,
+          agentId: 'a_product',
+          error: expect.stringMatching(/401: 模型凭据无效/),
+        },
+      ]);
+      // agent.error 广播（retry / model_error，对齐 watchdog 语义）
+      const agentError = realtime.broadcast.mock.calls.find(
+        (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
+      );
+      expect(agentError?.[1]).toEqual(
+        expect.objectContaining({ level: 'retry', errorType: 'model_error' }),
+      );
+      // 失败态无回复落库
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      // watchdog 已清除——再推 120s 不重复 emitError（无双报错）
+      await jest.advanceTimersByTimeAsync(DISPATCH_TIMEOUT_MS);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(errors).toHaveLength(1);
+      jest.useRealTimers();
+    });
+
+    it('OBS-009：error part 命中同样快速 fail；failedSessions 标记迟到回流跳过落库', async () => {
+      jest.useFakeTimers();
+      pollSetup();
+      workerClient.getMessages.mockResolvedValue([
+        {
+          info: { role: 'assistant' },
+          parts: [{ type: 'error', error: { message: 'provider 请求失败' } }],
+        },
+      ]);
+      const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
+
+      await d.dispatch(request);
+      await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(errors).toEqual([
+        expect.objectContaining({ error: expect.stringMatching(/provider 请求失败/) }),
+      ]);
+      // failedSessions 已标记——迟到 task.completed 跳过落库
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '迟到回复',
+      });
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      jest.useRealTimers();
+    });
   });
 
   // ------------------------------------------------------------------
@@ -1563,6 +1650,63 @@ describe('WorkerDispatcher', () => {
           },
         ]),
       ).toMatchObject({ reason: 'stop', tokens: { total: 1 } });
+    });
+
+    it('findError：assistant step-finish(reason=error)/error part 命中；user/stop/无错误返回 undefined', () => {
+      // step-finish(reason=error) 携带 error.message → 返回该文案
+      expect(
+        findError([
+          {
+            info: { role: 'assistant' },
+            parts: [
+              {
+                type: 'step-finish',
+                reason: 'error',
+                error: { name: 'AuthError', message: '401: 凭据无效' },
+              },
+            ],
+          },
+        ]),
+      ).toBe('401: 凭据无效');
+      // error part 命中
+      expect(
+        findError([
+          {
+            info: { role: 'assistant' },
+            parts: [{ type: 'error', error: { message: 'provider 请求失败' } }],
+          },
+        ]),
+      ).toBe('provider 请求失败');
+      // 无 error.message → 回退 part.text
+      expect(
+        findError([
+          {
+            info: { role: 'assistant' },
+            parts: [{ type: 'step-finish', reason: 'error', text: '模型超时' }],
+          },
+        ]),
+      ).toBe('模型超时');
+      // user 消息带 error 不算
+      expect(
+        findError([
+          { info: { role: 'user' }, parts: [{ type: 'step-finish', reason: 'error' }] },
+        ]),
+      ).toBeUndefined();
+      // reason=stop 不算
+      expect(
+        findError([
+          { info: { role: 'assistant' }, parts: [{ type: 'step-finish', reason: 'stop' }] },
+        ]),
+      ).toBeUndefined();
+      // 无错误消息 → undefined
+      expect(
+        findError([
+          {
+            info: { role: 'assistant' },
+            parts: [{ type: 'text', text: '正常回复' }],
+          },
+        ]),
+      ).toBeUndefined();
     });
 
     it('aggregateText：assistant 非 synthetic text 按时间升序串接；排除 user/synthetic', () => {
