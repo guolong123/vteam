@@ -30,6 +30,9 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       deleteMany: jest.Mock;
       upsert: jest.Mock;
     };
+    worker: {
+      findMany: jest.Mock;
+    };
     $transaction: jest.Mock;
   };
   let crypto: {
@@ -96,6 +99,9 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       workerModelAvailability: {
         deleteMany: jest.fn(),
         upsert: jest.fn(),
+      },
+      worker: {
+        findMany: jest.fn().mockResolvedValue([]),
       },
       $transaction: jest.fn(),
     };
@@ -293,6 +299,43 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       prisma.modelCredential.findMany.mockResolvedValue([]);
 
       expect(await service.listProviders()).toEqual([]);
+    });
+
+    it('D5：在线 worker 上报 capabilities.models → 拆 providerID union 补全（worker-only provider 出现 + modelCount 累加）', async () => {
+      prisma.model.groupBy.mockResolvedValue([
+        { providerID: 'opencode-go', _count: { _all: 1 } },
+      ]);
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.worker.findMany.mockResolvedValue([
+        {
+          capabilities: {
+            models: [
+              'opencode-go/deepseek-v4-flash',
+              'opencode-go/deepseek-v4-pro',
+              'deepseek/deepseek-v4-pro',
+              'zhipu/glm-5.1',
+            ],
+          },
+        },
+        {
+          // 第二个在线 worker：qwen 新 provider + deepseek 模型计数累加
+          capabilities: { models: ['qwen/qwen3.6-plus', 'deepseek/deepseek-v4-pro'] },
+        },
+      ]);
+
+      const result = await service.listProviders();
+
+      expect(prisma.worker.findMany).toHaveBeenCalledWith({
+        where: { status: { not: 'offline' } },
+        select: { capabilities: true },
+      });
+      // union：目录 opencode-go + worker 上报 deepseek/zhipu/qwen
+      expect(result.map((r) => r.providerID)).toEqual(['deepseek', 'opencode-go', 'qwen', 'zhipu']);
+      // modelCount = 目录 count + worker 上报计数（opencode-go: 1 + 2 = 3；deepseek 两个 worker 累加 = 2）
+      expect(result.find((r) => r.providerID === 'opencode-go')?.modelCount).toBe(3);
+      expect(result.find((r) => r.providerID === 'deepseek')?.modelCount).toBe(2);
+      expect(result.find((r) => r.providerID === 'zhipu')?.modelCount).toBe(1);
+      expect(result.find((r) => r.providerID === 'qwen')?.modelCount).toBe(1);
     });
   });
 
@@ -697,7 +740,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         where: { providerID: 'opencode-go' },
         data: { revokedAt: now },
       });
-      expect(result).toMatchObject({ configured: true, revokedAt: now });
+      expect(result).toMatchObject({ configured: false, revokedAt: now });
       (global.Date as unknown as jest.Mock).mockRestore();
     });
 

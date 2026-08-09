@@ -21,12 +21,20 @@ describe('模型目录 seed 预置（C1：STATIC_AVAILABLE_MODELS → models 表
     }
   });
 
-  it('id 拆解：含 / 按首段拆 providerID/modelID；不含视为 opencode 默认 provider', () => {
+  it('id 拆解：全部 seed 模型携带真实 provider 前缀（D5 规范化）', () => {
     const rows = buildModelSeedRows();
     const flash = rows.find((r) => r.modelID === 'deepseek-v4-flash');
     expect(flash).toMatchObject({ providerID: 'opencode-go', modelID: 'deepseek-v4-flash' });
     const pro = rows.find((r) => r.modelID === 'deepseek-v4-pro');
-    expect(pro).toMatchObject({ providerID: 'opencode', modelID: 'deepseek-v4-pro' });
+    expect(pro).toMatchObject({ providerID: 'deepseek', modelID: 'deepseek-v4-pro' });
+  });
+
+  it('D5：seed 模型覆盖 ≥4 个不同 provider（Provider 页不再只有 opencode/opencode-go）', () => {
+    const rows = buildModelSeedRows();
+    const providers = new Set(rows.map((r) => r.providerID));
+    expect(providers.size).toBeGreaterThanOrEqual(4);
+    expect(providers.has('deepseek')).toBe(true);
+    expect(providers.has('zhipu')).toBe(true);
   });
 
   it('四类模板默认模型均指向目录中存在的模型（providerID/modelID 格式）', () => {

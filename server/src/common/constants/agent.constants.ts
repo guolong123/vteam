@@ -21,16 +21,27 @@ export type AgentErrorCode = (typeof AGENT_ERRORS)[keyof typeof AGENT_ERRORS];
  * `provider/model` 格式，T10 拼 `-m <defaultModelId>` 直接用）。
  * 值来自本机 `opencode models` 实测可用模型（见 learnings），随 opencode 版本演进。
  * 正常路径经 WorkerClient.listModels 动态获取（worker 注册后返回真实模型列表）。
+ *
+ * D5：seed 模型 id 全部携带 provider 前缀（provider 前缀规范化）。原 7 个无前缀模型
+ * （deepseek-v4-pro/glm-5.1/glm-5.2/gpt-5.6-luna/grok-4.5/kimi-k2.6/qwen3.6-plus）按
+ * opencode models.dev 标准 providerID 补齐（本机 `opencode models` 无凭据时仅返回内置
+ * 免费模型，seed 中这些模型不在实测列表，采用 models.dev 标准 id 保证拆解与目录聚合正确）：
+ *   - deepseek-v4-pro → deepseek/deepseek-v4-pro
+ *   - glm-5.1 / glm-5.2 → zhipu/glm-5.1 / zhipu/glm-5.2
+ *   - gpt-5.6-luna → openai/gpt-5.6-luna
+ *   - grok-4.5 → xai/grok-4.5
+ *   - kimi-k2.6 → moonshot/kimi-k2.6
+ *   - qwen3.6-plus → qwen/qwen3.6-plus
  */
 export const STATIC_AVAILABLE_MODELS = [
   { id: 'opencode-go/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-  { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
-  { id: 'glm-5.1', name: 'GLM 5.1' },
-  { id: 'glm-5.2', name: 'GLM 5.2' },
-  { id: 'gpt-5.6-luna', name: 'GPT 5.6 Luna' },
-  { id: 'grok-4.5', name: 'Grok 4.5' },
-  { id: 'kimi-k2.6', name: 'Kimi K2.6' },
-  { id: 'qwen3.6-plus', name: 'Qwen 3.6 Plus' },
+  { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+  { id: 'zhipu/glm-5.1', name: 'GLM 5.1' },
+  { id: 'zhipu/glm-5.2', name: 'GLM 5.2' },
+  { id: 'openai/gpt-5.6-luna', name: 'GPT 5.6 Luna' },
+  { id: 'xai/grok-4.5', name: 'Grok 4.5' },
+  { id: 'moonshot/kimi-k2.6', name: 'Kimi K2.6' },
+  { id: 'qwen/qwen3.6-plus', name: 'Qwen 3.6 Plus' },
 ] as const;
 
 /**
@@ -67,8 +78,8 @@ export function buildModelSeedRows(): ModelSeedRow[] {
  * 值取 STATIC_AVAILABLE_MODELS 中的对应模型，`providerID/modelID` 格式与 D7 一致）。
  */
 export const TEMPLATE_DEFAULT_MODELS: Record<string, string> = {
-  a_product: 'opencode/glm-5.1',
-  a_architect: 'opencode/deepseek-v4-pro',
+  a_product: 'zhipu/glm-5.1',
+  a_architect: 'deepseek/deepseek-v4-pro',
   a_developer: 'opencode-go/deepseek-v4-flash',
-  a_tester: 'opencode/glm-5.2',
+  a_tester: 'zhipu/glm-5.2',
 } as const;

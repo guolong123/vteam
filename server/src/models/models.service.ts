@@ -13,6 +13,7 @@ import { CredentialCryptoService } from '../common/credential-crypto.service';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
+import { WORKER_STATUS } from '../workers/workers.constants';
 import { WorkersService } from '../workers/workers.service';
 import { MODEL_ERRORS } from './models.constants';
 import { CreateModelDto } from './dto/create-model.dto';
@@ -125,7 +126,11 @@ export class ModelsService implements OnModuleInit {
 
   /**
    * GET /models/providers：provider 聚合（Provider 页数据源）。
-   * - models 表按 providerID groupBy（enabled 过滤）取 modelCount（一次查询）；
+   * - 数据源 1：models 表按 providerID groupBy（enabled 过滤）取 modelCount（一次查询）；
+   * - 数据源 2：在线 worker 的 capabilities.models（string[]，id 格式 providerID/modelID）
+   *   拆 providerID union 补全——worker 配置凭据后上报的模型含新 provider，Provider 页自动出现
+   *   （D5：目录行与 worker 上报可能不同步，如 enabled=false 或尚未合并入库）；
+   * - modelCount 合并：目录 count + worker 上报该 provider 的模型数（worker-only provider 也能显示计数）；
    * - ModelCredential 全量按 providerID 建索引取凭据状态（表很小，二次查询内存合并）；
    * - configured = 存在且未 revoked；fingerprint 取库内已脱敏指纹（不回明文）；
    * - 排序：providerID 字典序（简单稳定）。
@@ -140,13 +145,47 @@ export class ModelsService implements OnModuleInit {
     const credByProvider = new Map(
       credentials.map((c) => [c.providerID, c]),
     );
-    return groups
-      .map((g) => {
-        const cred = credByProvider.get(g.providerID);
+
+    // D5 数据源 2：在线 worker（status != offline）capabilities.models 拆 providerID。
+    // modelCount 语义：目录 count 为主，worker 上报的该 provider 模型数累加（重复 id 不去重——
+    // 与「可用模型数」展示一致，worker 侧就是各自可用模型集合）。仅当目录无该 provider 时
+    // worker 计数也能让 provider 出现在结果中。
+    const onlineWorkers = await this.prisma.worker.findMany({
+      where: { status: { not: WORKER_STATUS.OFFLINE } },
+      select: { capabilities: true },
+    });
+    const workerCountByProvider = new Map<string, number>();
+    for (const w of onlineWorkers) {
+      const models = (w.capabilities as { models?: string[] } | null)?.models;
+      if (!Array.isArray(models)) {
+        continue;
+      }
+      for (const raw of models) {
+        if (!raw || typeof raw !== 'string') {
+          continue;
+        }
+        const { providerID } = this.splitModelId(raw);
+        workerCountByProvider.set(
+          providerID,
+          (workerCountByProvider.get(providerID) ?? 0) + 1,
+        );
+      }
+    }
+
+    const providerIds = new Set<string>([
+      ...groups.map((g) => g.providerID),
+      ...workerCountByProvider.keys(),
+    ]);
+    return [...providerIds]
+      .map((providerID) => {
+        const cred = credByProvider.get(providerID);
         const configured = !!cred && cred.revokedAt === null;
+        const catalogCount =
+          groups.find((g) => g.providerID === providerID)?._count._all ?? 0;
         return {
-          providerID: g.providerID,
-          modelCount: g._count._all,
+          providerID,
+          modelCount:
+            catalogCount + (workerCountByProvider.get(providerID) ?? 0),
           configured,
           fingerprint: configured ? (cred?.fingerprint ?? null) : null,
           revokedAt: cred?.revokedAt ?? null,
@@ -306,7 +345,8 @@ export class ModelsService implements OnModuleInit {
 
   /**
    * worker 上报 id 拆解（C1 learnings 约定）：含 `/` 按首个 `/` 拆 providerID/modelID；
-   * 不含 `/`（如 deepseek-v4-pro）providerID 归为 opencode 默认 provider。
+   * 不含 `/`（如 deepseek-v4-pro 旧自由字符串）providerID 归为 opencode 默认 provider——
+   * D5 后 seed 模型均携带前缀，该分支保留为存量/外部上报兼容路径。
    */
   private splitModelId(raw: string): { providerID: string; modelID: string } {
     const slash = raw.indexOf('/');
@@ -508,7 +548,7 @@ export class ModelsService implements OnModuleInit {
     return {
       id: row.id,
       providerID: row.providerID,
-      configured: true,
+      configured: row.revokedAt === null,
       fingerprint: row.fingerprint,
       revokedAt: row.revokedAt,
       createdAt: row.createdAt,

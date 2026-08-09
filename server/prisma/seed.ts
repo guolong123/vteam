@@ -160,6 +160,35 @@ async function main() {
   // 预置模型目录（C1：STATIC_AVAILABLE_MODELS 8 模型 → models 表，防空目录回归）。
   // 幂等：按 (providerID, modelID) 唯一键 upsert；域主键 md_ 零填充序号固定（seed 序号对齐
   // buildModelSeedRows 的 idx+1，避免重复 seed 漂移）。
+  //
+  // D5：清理旧无前缀 seed 残留——provider 前缀规范化（7 个模型从 opencode/<modelID> 迁移到
+  // 真实 providerID 前缀）前入库的行（providerID='opencode'）与新行唯一键不同，upsert 无法覆盖，
+  // 需显式删除（先删 worker_model_availabilities 外键行，再删 model，对齐 ModelsService.remove）。
+  const LEGACY_UNPREFIXED_MODEL_IDS = [
+    'deepseek-v4-pro',
+    'glm-5.1',
+    'glm-5.2',
+    'gpt-5.6-luna',
+    'grok-4.5',
+    'kimi-k2.6',
+    'qwen3.6-plus',
+  ];
+  const legacyModels = await prisma.model.findMany({
+    where: { providerID: 'opencode', modelID: { in: LEGACY_UNPREFIXED_MODEL_IDS } },
+    select: { id: true },
+  });
+  if (legacyModels.length > 0) {
+    await prisma.workerModelAvailability.deleteMany({
+      where: { modelId: { in: legacyModels.map((m) => m.id) } },
+    });
+    await prisma.model.deleteMany({
+      where: { id: { in: legacyModels.map((m) => m.id) } },
+    });
+    console.log(
+      `  - 清理旧无前缀 seed 模型：${legacyModels.length} 行（opencode/<modelID> → 真实 provider 前缀）`,
+    );
+  }
+
   const modelRows = buildModelSeedRows();
   for (const row of modelRows) {
     await prisma.model.upsert({
