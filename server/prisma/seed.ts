@@ -157,7 +157,8 @@ async function main() {
     });
   }
 
-  // 预置模型目录（C1：STATIC_AVAILABLE_MODELS 8 模型 → models 表，防空目录回归）。
+  // 预置模型目录（C1：STATIC_AVAILABLE_MODELS → models 表，防空目录回归；
+  // CONF-01 后含 worker 实测 opencode/* 免费模型，共 34 个）。
   // 幂等：按 (providerID, modelID) 唯一键 upsert；域主键 md_ 零填充序号固定（seed 序号对齐
   // buildModelSeedRows 的 idx+1，避免重复 seed 漂移）。
   //

@@ -64,8 +64,9 @@ services:
       JWT_ACCESS_EXPIRES_IN: "2h"
       JWT_REFRESH_EXPIRES_IN: "7d"
       WORKER_TOKEN: ${WORKER_TOKEN:-compose-worker-token}
-      # 模型 provider token 加密密钥（C4 AES-256-GCM，64 hex；生产必改，默认值仅本地 dev）
-      MODEL_CREDENTIAL_KEY: ${MODEL_CREDENTIAL_KEY:-05afa7cd6715894ce99c3bb544b19669bc8db103606809208ca7fa55175f35a1}
+      # 模型 provider token 加密密钥（C4 AES-256-GCM，32 字节/64 hex）。
+      # 必填校验：未设置即启动报错（拒绝公开默认值导致密钥泄露）。生成方式：openssl rand -hex 32
+      MODEL_CREDENTIAL_KEY: ${MODEL_CREDENTIAL_KEY:?MODEL_CREDENTIAL_KEY 未设置，请生成 32 字节随机密钥（openssl rand -hex 32）}
     depends_on:
       db:
         condition: service_healthy

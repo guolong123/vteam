@@ -6,6 +6,21 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ---
 
+## E4: CONF-01 修复——模板 Agent 默认模型与 worker 实际能力对齐（2026-08-09，实现 + 测试完成）
+
+- **问题（QA 严重）**：4 个模板 Agent 默认模型（zhipu/glm-5.1、deepseek/deepseek-v4-pro、opencode-go/deepseek-v4-flash、zhipu/glm-5.2）与 worker `w_compose_worker` 实际能力（**仅 26 个 opencode/* 免费模型**）交集为空 → 模板 Agent 默认模型创建任务 → dispatch 模型不匹配 → 无回复/insufficient_quota（OBS-009 配置层根因）。
+- **探索确认（权威数据源）**：DB 查询（compose db `worker_model_availabilities` 26 行 + `workers.capabilities.models` 26 个）确认 worker 实际可执行清单 = 26 个 `opencode/*` 免费模型（ling-3.0-tiny-free / deepseek-v4-flash-free / glm-5-free / nemotron-3-ultra-free / qwen3.6-plus-free / big-pickle / grok-code 等，`opencode` provider）。**worker 上报模型已 C3 合并入库**（models 表 md_9~md_34 全部 enabled，与上报顺序一一对应，md_1~8 为 seed 核心模型）。
+- **改动面**：
+  1. `agent.constants.ts` STATIC_AVAILABLE_MODELS **追加 26 个 opencode/* 免费模型**（顺序与 worker 上报/DB md_9~34 完全一致——保证 buildModelSeedRows 编号对齐、seed 幂等无主键冲突；新部署 create 用友好 name，已部署 DB 走 upsert update 保留原 name）。
+  2. TEMPLATE_DEFAULT_MODELS 改为 worker 可执行模型（保持 §4.1 语义侧重）：产品→`opencode/glm-5-free`（通用对话）、架构→`opencode/nemotron-3-ultra-free`（推理）、开发→`opencode/deepseek-v4-flash-free`（代码+快速，延续旧 DeepSeek 语义）、测试→`opencode/qwen3.6-plus-free`（通用强，穷举边界）。格式 `providerID/modelID` 不变（D7）。
+  3. `seed.ts` 引用常量自动生效（:149 update + :154 create 均取 TEMPLATE_DEFAULT_MODELS），仅更新注释 8→34。
+  4. `agent.constants.spec.ts`：`:8` 行数断言 8→34；**新增 CONF-01 契约断言**——模板默认模型与 STATIC_AVAILABLE_MODELS 中 opencode/* 模型均 ∈ worker 实测清单（spec 内硬编码 26 模型集合 + size===26 双锁，防"目录=能力"再脱节）。
+- **验证**：server `npx tsc --noEmit` 0 错误；`jest agent.constants.spec` 6/6 全绿（含新增 CONF-01 用例）；`jest agents.service.spec` 27/27 全绿（fallback 断言 `toContain opencode-go/deepseek-v4-flash` 保留，不受新增影响）。
+- **⚠️ 已存在 DB 模板 Agent 处理**：模板只读（PATCH 403）堵死配置通道，**DB 中已存在的 4 个模板 Agent defaultModelId 仍为旧值**（zhipu/deepseek 等）。**重 seed 机制 = seed.ts 幂等 upsert 的 update 分支**（:149 `update: { defaultModelId: TEMPLATE_DEFAULT_MODELS[agent.id] }`）——对已部署环境跑一次 `node dist/prisma/seed.js`（或 compose init 命令）即更新模板 defaultModelId；无独立迁移脚本，不重 seed 则旧值残留。
+- **⚠️ 编号对齐坑（后续加 opencode/* 模型的铁律）**：buildModelSeedRows 按 STATIC_AVAILABLE_MODELS 顺序生成 `md_${idx+1}`；若追加模型的顺序与已上报入库的 md_ 编号不一致，且该模型在目标 DB 不存在（走 create 分支），会与已占用的 md_ 主键冲突。**新增 worker 实测模型必须按上报顺序追加**（当前 md_9~34 与 worker capabilities.models 顺序一一对应）。
+
+---
+
 ## E3: 修复 MOCK-04 项目卡片「0 已完成」「0 个 Agent 成员」硬编码（2026-08-09，实现 + 浏览器实证完成）
 
 - **根因**：`web/app/(main)/projects/page.tsx` 三处 Phase 1 占位——`EMPTY_TASK_COUNT = 0` 写死「已完成」数、`EMPTY_MEMBERS: RoleKey[] = []` 空成员数组、aria-label 硬编码「0 个 Agent 成员」；后端 `GET /projects` 只返回 `taskCount`（总任务数），无状态聚合、无成员列表。
@@ -619,3 +634,21 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **hover/焦点态**：CSS 类 `.project-enter-btn`（注入 projectCardCss 同款 `<style>`）：hover → 背景 #1D4ED8 + 阴影加深（transition background-color/box-shadow，不动 layout 属性）；`:focus-visible` → 2px #2563EB outline（对齐卡片自身 focus 风格）。
 - **验证**：web `npx tsc --noEmit` 0 错误；playwright 实测（chromium-1208 executablePath 显式指定 + API 登录注入 zustand persist `agent-platform-auth` localStorage）**5/5 PASS 0 console error**：按钮可见文案「进入项目 →」、点击跳转 `/board?pid=<data-project-id>`（与卡片目标一致）、Tab 键盘聚焦 + Enter 触发跳转。截图 /tmp/opencode/ux18-enter-btn-hover.png 确认右下角定位、hover 深蓝生效、与产出物按钮/头像布局不拥挤。
 - **经验**：整卡可点击的卡片类组件必须有显式「进入」主按钮（可用性铁律，卡片可点只是增强）；主操作按钮放右下角 + 次级按钮左下角是低成本高辨识度的双入口布局；卡片内按钮必须 `stopPropagation`（否则卡片 onClick 与按钮 onClick 双触发，router.push 同目标虽无害但行为不纯）。
+
+## CFG-02: compose 移除 MODEL_CREDENTIAL_KEY 公开默认密钥（2026-08-09，配置修复完成）
+
+- **问题**：QA 报告 CFG-02【高】——`docker-compose.yml:68` `MODEL_CREDENTIAL_KEY: ${MODEL_CREDENTIAL_KEY:-05afa7cd...}` 把固定 AES-256-GCM 密钥明文写进仓库；生产若未覆盖该变量即用公开密钥加密所有 provider 凭据 → 密钥泄露 = 凭据可全量解密。
+- **方案（必填校验，禁用公开默认）**：改为 `${MODEL_CREDENTIAL_KEY:?MODEL_CREDENTIAL_KEY 未设置，请生成 32 字节随机密钥（openssl rand -hex 32）}`——compose 变量必填语法，未设置即 `docker compose up/config` 报错退出，杜绝静默回落公开默认。注释同步更新（生成方式 + 拒绝公开默认原因）。
+- **server 端无需改动（已内建防线）**：`server/src/common/credential-crypto.service.ts` 双重保护——① `parseKey` 校验必须 32 字节（64 hex / base64 / 32B utf8）；② NODE_ENV=production 且无 key → 构造抛错拒绝启动；非生产缺 key → 用显式标记的全零 `DEV_MODEL_CREDENTIAL_KEY` + logger.warn（可追溯）。**漏洞本质是 compose 提供了公开默认 → 覆盖了 server 的"production 缺 key 抛错"防线**，故修复点在 compose 而非 server。
+- **.env.example 无需改动**：`server/.env.example` 已有生成说明（`openssl rand -hex 32` / `openssl rand -base64 32` + 三种编码 + 缺失策略），本次仅补 compose 侧必填校验。
+- **验证**：`docker compose config --quiet` 双路径——① 未设置变量 → `error while interpolating ... required variable MODEL_CREDENTIAL_KEY is missing a value: ...未设置...`（预期报错 ✓）；② 设置 64 hex 后 → 通过（exit 0 ✓）。
+
+## CONF-01: 模板 Agent 默认模型改为 worker 实际可执行的 opencode/* 免费模型（2026-08-09，实现 + 验证完成）
+
+- **问题**：QA 报告 CONF-01【严重】——4 个模板 Agent 默认模型（`zhipu/glm-5.1`/`deepseek/deepseek-v4-pro`/`opencode-go/deepseek-v4-flash`/`zhipu/glm-5.2`）与 worker `w_compose_worker` 实际能力（**仅 `opencode/*` 26 个免费模型**，实测上报 capabilities.models）**交集为空** → 模板 Agent 用默认模型创建任务 → dispatch 模型不匹配 → 无回复 / insufficient_quota（**"@ Agent 无回复"配置层根因**，OBS-009）。
+- **实测确认 worker 能力清单**：compose DB（`aiagents-compose-db`）`worker_model_availabilities` 26 行全为 `provider_id='opencode'`（big-pickle / deepseek-v4-flash-free / glm-4.7-free / glm-5-free / grok-code / hy3-free / hy3-preview-free / kimi-k2.5-free / laguna-s-2.1-free / ling-2.6-flash-free / ling-3.0-flash-free / ling-3.0-tiny-free / longcat-2.0-free / mimo-v2-flash-free / mimo-v2-omni-free / mimo-v2-pro-free / mimo-v2.5-free / minimax-m2.1-free / minimax-m2.5-free / minimax-m3-free / nemotron-3-super-free / nemotron-3-ultra-free / north-mini-code-free / qwen3.6-plus-free / ring-2.6-1t-free / trinity-large-preview-free）；compose worker 容器内 `opencode models` 实测 8 个为其子集。**方案：STATIC_AVAILABLE_MODELS 追加全部 26 个 worker 实测 opencode/* 免费模型**（34 模型目录 = 8 核心 + 26 worker 能力，目录与 worker 能力全对齐），模板默认模型从中选 4 个（语义侧重保持：产品=通用对话 `opencode/glm-5-free`、架构=推理 `opencode/nemotron-3-ultra-free`、开发=代码 `opencode/deepseek-v4-flash-free`、测试=推理 `opencode/qwen3.6-plus-free`）。
+- **改动文件**：`server/src/common/constants/agent.constants.ts`（STATIC_AVAILABLE_MODELS +26、TEMPLATE_DEFAULT_MODELS 4 值全改）、`agent.constants.spec.ts`（行数断言 8→34、新增 CONF-01 断言：模板默认模型 ∈ worker 26 清单）、`server/prisma/seed.ts`（仅注释同步，代码零改动——模板 Agent 的 defaultModelId 与模型目录均引用 constants，**seed 重跑自动生效**，无需迁移）。
+- **已存在 DB 生效方式**：模板 Agent 只读（PATCH 403），defaultModelId 只能 seed 预设 → 重跑 `node dist/prisma/seed.js`（upsert update 分支按 id 覆盖 defaultModelId）即对已入库模板生效；新增 26 模型按 (providerID, modelID) 唯一键 upsert，已存在行命中 update 幂等不冲突。
+- **验证**：server `npx tsc --noEmit` 0 错误；`agent.constants.spec.ts` 6/6 PASS（含新 CONF-01 断言）。
+- **经验**：模型目录（seed）与 worker 实测能力必须**同一数据源对齐**——两套体系（8 核心凭据模型 vs 26 免费模型）并存且交集为空是配置层隐患的典型形态；修复以「目录=worker 能力全集」为锚，而非只改模板默认值（否则其他消费方仍可能引用空交集模型）。
+- **经验**：compose 变量必填用 `${VAR:?msg}`（非 `:-` 默认），报错信息可中文直接给运维指引；安全类默认值铁律——**宁可启动失败也不写公开默认**，生产密钥类变量一律必填校验或随机生成。
