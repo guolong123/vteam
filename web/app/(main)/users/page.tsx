@@ -1097,6 +1097,8 @@ export default function UsersPage() {
   const [toggleTarget, setToggleTarget] = useState<UserItem | null>(null);
   /* 列表操作（禁用/启用）失败提示 */
   const [actionError, setActionError] = useState<string | null>(null);
+  /* 搜索关键词（本地受控，UX-11：按用户名/显示名/邮箱前端过滤） */
+  const [keyword, setKeyword] = useState("");
 
   const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["users"],
@@ -1178,6 +1180,15 @@ export default function UsersPage() {
 
   const items = data?.items ?? [];
 
+  /* UX-11 搜索：按用户名/显示名/邮箱本地模糊过滤（关键词清空 = 全量） */
+  const kw = keyword.trim().toLowerCase();
+  const visibleItems =
+    kw === ""
+      ? items
+      : items.filter((u) =>
+          `${u.username} ${u.displayName} ${u.email ?? ""}`.toLowerCase().includes(kw)
+        );
+
   /* 统计条（对齐原型 4 卡；管理员/成员按角色名分组，已禁用按 enabled=false） */
   const stats = [
     { label: "总用户", value: data?.total ?? items.length, theme: { color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" } },
@@ -1252,14 +1263,54 @@ export default function UsersPage() {
         ))}
       </div>
 
-      {/* 操作行：「新增用户」按钮 */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: space.lg }}>
+      {/* 操作行：搜索框 + 「新增用户」按钮 */}
+      <div style={{ display: "flex", alignItems: "center", gap: space.lg, marginBottom: space.lg }}>
         <div>
           <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>账号列表</div>
           <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: 2 }}>
             {data?.total ?? items.length} 个账号 · 平台内置账号体系 · 成员在所属项目内协作
           </div>
         </div>
+
+        {/* 搜索框（按用户名/显示名/邮箱过滤，样式对齐模型页 model-search） */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.sm,
+            flex: 1,
+            minWidth: 220,
+            maxWidth: 320,
+            padding: `${space.sm}px ${space.md}px`,
+            borderRadius: radius.md,
+            backgroundColor: "#FFFFFF",
+            border: `1px solid ${neutral[200]}`,
+            boxShadow: shadow.sm,
+            marginLeft: "auto",
+          }}
+        >
+          <span aria-hidden style={{ fontSize: fontSize.lg, color: neutral[400], lineHeight: 1 }}>
+            ⌕
+          </span>
+          <input
+            data-testid="users-search"
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            placeholder="搜索用户名 / 邮箱…"
+            aria-label="搜索用户"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              border: "none",
+              outline: "none",
+              background: "transparent",
+              fontSize: fontSize.md,
+              color: neutral[800],
+              fontFamily: fontFamily.body,
+            }}
+          />
+        </div>
+
         <button
           type="button"
           data-testid="add-user-button"
@@ -1354,6 +1405,13 @@ export default function UsersPage() {
           description="创建第一个平台账号，开始分配角色与项目协作"
           icon={<span aria-hidden>☷</span>}
         />
+      ) : visibleItems.length === 0 ? (
+        /* UX-11：搜索无命中（复用 EmptyState，不带动作） */
+        <EmptyState
+          title="无匹配用户"
+          description="换个关键词试试，或清空搜索查看全部账号"
+          icon={<span aria-hidden>⌕</span>}
+        />
       ) : (
         <div
           style={{
@@ -1386,7 +1444,7 @@ export default function UsersPage() {
           </div>
 
           {/* 用户行 */}
-          {items.map((u) => (
+          {visibleItems.map((u) => (
             <UserRow
               key={u.id}
               user={u}

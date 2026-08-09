@@ -4,12 +4,13 @@
  * 消息中心 · 会话列表页（Phase 2 私聊能力 · FR-14）
  * =============================================
  * 会话列表：GET /channels（不带 type → task_group + private 全部），按 type 分组展示：
- * - 私聊（private）：Agent 头像/名/角色徽章 + 所属任务标题（副标题），点击进入 /messages/:id
+ * - 私聊（private）：Agent 头像/名/角色徽章（名=角色标签时徽章去重）+ 所属任务标题（副标题，不重复 Agent 名）
  * - 群聊（task_group）：任务标题 + 状态徽章 + 团队规模，点击进入 /messages/:id
  * 视觉对齐平台现有列表页（project-list 卡片范式）+ dm-chat 原型角色/状态语义。
  * 数据源：后端 ChatService.toChannelDto 已含 task/agent 关联（private 无需额外查 agents 表）。
  */
 import { useRouter } from "next/navigation";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -23,9 +24,31 @@ import {
   fontSize,
   fontFamily,
   shadow,
+  roles,
 } from "@/src/theme/tokens";
 
 const baseFont = { fontFamily: fontFamily.body } as const;
+
+/* ------------------------------ 搜索 / 类型筛选（前端本地过滤，列表已全量加载） ------------------------------ */
+
+/** 类型筛选（对齐看板 status-filter 模式）。 */
+const TYPE_FILTERS = [
+  { key: "all", label: "全部" },
+  { key: "group", label: "群聊" },
+  { key: "dm", label: "私聊" },
+] as const;
+
+type TypeFilterKey = (typeof TYPE_FILTERS)[number]["key"];
+
+/** 会话可搜索文本：title + subtitle + Agent 名（大小写不敏感模糊匹配）。 */
+function channelSearchText(channel: ChannelItem): string {
+  const isDm = channel.type === "private";
+  const title = isDm ? (channel.agent?.name ?? channel.agentId ?? "私聊") : (channel.task?.title ?? "群聊");
+  const subtitle = isDm
+    ? (channel.task?.title ?? "任务会话")
+    : `${channel.task?.status ? STATUS_LABEL[channel.task.status as TaskApiStatus] ?? "进行中" : "群聊"} · 任务会话`;
+  return `${title} ${subtitle} ${channel.agent?.name ?? ""}`.toLowerCase();
+}
 
 /* ------------------------------ API 数据模型（对齐后端 toChannelDto） ------------------------------ */
 
@@ -138,9 +161,12 @@ function ConversationItem({ channel }: { channel: ChannelItem }) {
   const isDm = channel.type === "private";
   const role = resolveRole(channel.agent, channel.agentId);
   const title = isDm ? (channel.agent?.name ?? channel.agentId ?? "私聊") : (channel.task?.title ?? "群聊");
+  /** 副标题聚焦任务/状态上下文，不再重复首行 Agent 名（UX-20 去冗余）。 */
   const subtitle = isDm
     ? (channel.task?.title ?? "任务会话")
     : `${channel.task?.status ? STATUS_LABEL[channel.task.status as TaskApiStatus] ?? "进行中" : "群聊"} · 任务会话`;
+  /** Agent 名本身即角色标签（如 seed 模板 Agent「开发者」）时，徽章与名字重复 → 隐藏徽章；自定义名保留。 */
+  const showRoleBadge = isDm && !!channel.agent?.name && channel.agent.name !== roles[role].label;
 
   return (
     <section
@@ -194,10 +220,10 @@ function ConversationItem({ channel }: { channel: ChannelItem }) {
           <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900], lineHeight: 1.4 }}>
             {title}
           </span>
-          {isDm ? <AgentBadge role={role} /> : renderStatusBadge(channel.task?.status ? STATUS_LABEL[channel.task.status as TaskApiStatus] ?? "进行中" : "待开始")}
+          {isDm ? (showRoleBadge ? <AgentBadge role={role} /> : null) : renderStatusBadge(channel.task?.status ? STATUS_LABEL[channel.task.status as TaskApiStatus] ?? "进行中" : "待开始")}
         </div>
         <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: 2, lineHeight: 1.5 }}>
-          {isDm ? `与 ${title} 的私聊 · ${subtitle}` : subtitle}
+          {subtitle}
         </div>
       </div>
 
@@ -262,6 +288,8 @@ function ConversationSection({
 
 export default function MessagesPage() {
   const user = useAuthStore((s) => s.user);
+  const [keyword, setKeyword] = useState("");
+  const [typeKey, setTypeKey] = useState<TypeFilterKey>("all");
   const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["channels"],
     queryFn: () => api.get<ChannelsResponse>("/channels"),
@@ -269,9 +297,20 @@ export default function MessagesPage() {
   });
 
   const items = data?.items ?? [];
+  const hasFilter = keyword.trim() !== "" || typeKey !== "all";
+
+  const filteredItems = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    return items.filter((c) => {
+      if (typeKey === "group" && c.type !== "task_group") return false;
+      if (typeKey === "dm" && c.type !== "private") return false;
+      return !kw || channelSearchText(c).includes(kw);
+    });
+  }, [items, keyword, typeKey]);
+
   // private 在上、task_group 在下（私聊为旁路入口，优先可见）
-  const dmChannels = items.filter((c) => c.type === "private");
-  const groupChannels = items.filter((c) => c.type === "task_group");
+  const dmChannels = filteredItems.filter((c) => c.type === "private");
+  const groupChannels = filteredItems.filter((c) => c.type === "task_group");
   const total = data?.total ?? items.length;
 
   return (
@@ -290,8 +329,85 @@ export default function MessagesPage() {
         <div>
           <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>会话列表</div>
           <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: 2 }}>
-            {total} 个会话 · 私聊与任务群聊
+            {hasFilter ? `${filteredItems.length} / ${total}` : total} 个会话 · 私聊与任务群聊
           </div>
+        </div>
+      </div>
+
+      {/* 搜索 + 类型筛选（前端本地过滤；样式对齐模型页 model-search / 看板 status-filter） */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: space.md,
+          flexWrap: "wrap",
+          marginBottom: space.lg,
+        }}
+      >
+        <div
+          data-testid="messages-search"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.sm,
+            flex: 1,
+            minWidth: 220,
+            maxWidth: 320,
+            padding: `${space.sm}px ${space.md}px`,
+            borderRadius: radius.md,
+            backgroundColor: "#FFFFFF",
+            border: `1px solid ${neutral[200]}`,
+            boxShadow: shadow.sm,
+          }}
+        >
+          <span aria-hidden style={{ fontSize: fontSize.lg, color: neutral[400], lineHeight: 1 }}>
+            ⌕
+          </span>
+          <input
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            placeholder="搜索会话 / Agent…"
+            aria-label="搜索会话"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              border: "none",
+              outline: "none",
+              background: "transparent",
+              fontSize: fontSize.md,
+              color: neutral[800],
+              fontFamily: fontFamily.body,
+            }}
+          />
+        </div>
+
+        <div data-testid="messages-type-filter" style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+          {TYPE_FILTERS.map((f) => {
+            const isActive = f.key === typeKey;
+            return (
+              <button
+                key={f.key}
+                type="button"
+                data-testid={`messages-filter-${f.key}`}
+                data-active={isActive ? "true" : "false"}
+                onClick={() => setTypeKey(f.key)}
+                style={{
+                  padding: `${space.sm}px ${space.lg}px`,
+                  borderRadius: radius.pill,
+                  border: `1px solid ${isActive ? "#2563EB" : neutral[200]}`,
+                  backgroundColor: isActive ? "#2563EB" : "#FFFFFF",
+                  color: isActive ? "#FFFFFF" : neutral[600],
+                  fontSize: fontSize.md,
+                  fontWeight: isActive ? 600 : 400,
+                  cursor: "pointer",
+                  fontFamily: fontFamily.body,
+                  transition: "background-color .15s ease, color .15s ease",
+                }}
+              >
+                {f.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -341,20 +457,39 @@ export default function MessagesPage() {
           description="创建任务生成群聊，或在任务群聊成员面板点击成员发起私聊"
           icon={<span aria-hidden>✉</span>}
         />
+      ) : filteredItems.length === 0 ? (
+        <div
+          data-testid="messages-no-match"
+          style={{
+            padding: `${space.xl}px`,
+            fontSize: fontSize.sm,
+            color: neutral[400],
+            textAlign: "center",
+            backgroundColor: "#FFFFFF",
+            border: `1px dashed ${neutral[200]}`,
+            borderRadius: radius.lg,
+          }}
+        >
+          无匹配会话
+        </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: space.xl }}>
-          <ConversationSection
-            title="私聊"
-            testid="conversation-section-dm"
-            channels={dmChannels}
-            emptyText="暂无私聊会话"
-          />
-          <ConversationSection
-            title="群聊"
-            testid="conversation-section-group"
-            channels={groupChannels}
-            emptyText="暂无群聊会话"
-          />
+          {(typeKey === "all" || typeKey === "dm") && (
+            <ConversationSection
+              title="私聊"
+              testid="conversation-section-dm"
+              channels={dmChannels}
+              emptyText="暂无私聊会话"
+            />
+          )}
+          {(typeKey === "all" || typeKey === "group") && (
+            <ConversationSection
+              title="群聊"
+              testid="conversation-section-group"
+              channels={groupChannels}
+              emptyText="暂无群聊会话"
+            />
+          )}
         </div>
       )}
     </div>

@@ -373,7 +373,11 @@ export default function TaskBoardPage() {
     },
   });
 
-  const tasks = data?.items ?? [];
+  // UX-13：all 视图后端 status=undefined 拉全部 → 前端过滤已归档任务（默认不显示归档）；
+  // 「已归档」筛选（status=archived）由后端按状态过滤，本过滤不生效，仍可查看归档任务。
+  const tasks = (data?.items ?? []).filter(
+    (t) => activeFilter.key !== "all" || t.status !== "archived"
+  );
 
   // 看板标题：?pid= 对应项目名（复用 projects 列表缓存，缺失时回退固定标题，不破坏布局）
   const projectName = useQuery({

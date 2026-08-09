@@ -93,6 +93,9 @@ const projectCardCss = `
 .project-card-clickable { cursor: pointer; transition: box-shadow .18s ease, border-color .18s ease; }
 .project-card-clickable:hover { box-shadow: ${shadow.md}; border-color: ${neutral[300]}; }
 .project-card-clickable:focus-visible { outline: 2px solid #2563EB; outline-offset: 2px; }
+.project-enter-btn { transition: background-color .15s ease, box-shadow .15s ease; }
+.project-enter-btn:hover { background-color: #1D4ED8; box-shadow: 0 8px 20px rgba(37,99,235,.4); }
+.project-enter-btn:focus-visible { outline: 2px solid #2563EB; outline-offset: 2px; }
 `;
 
 function ProjectCard({
@@ -175,6 +178,27 @@ function ProjectCard({
           <span style={{ marginLeft: space.xs, color: neutral[300] }}>·</span>
           <span style={{ color: "#059669" }}>{project.completedTaskCount} 已完成</span>
         </div>
+        {/* 成员 Agent 头像堆叠（MOCK-04：真实成员，agentMembers 来自项目任务团队去重） */}
+        <div style={{ display: "flex", alignItems: "center" }} aria-label={`${project.agentMembers.length} 个 Agent 成员`}>
+          {project.agentMembers.map((m, idx) => (
+            <span key={m.agentId} style={{ marginLeft: idx === 0 ? 0 : -space.sm - 2 }}>
+              <AgentAvatar role={toAvatarRole(m.role)} size="sm" />
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* 操作行（UX-18：明确「进入项目」主入口，右下角；产出物保持次级入口） */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          borderTop: `1px solid ${neutral[100]}`,
+          paddingTop: space.md,
+          marginTop: space.md,
+        }}
+      >
         {/* 次级入口：产出物（点击不冒泡，避免触发卡片主跳转 /board） */}
         <button
           type="button"
@@ -201,14 +225,34 @@ function ProjectCard({
           <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>▤</span>
           产出物
         </button>
-        {/* 成员 Agent 头像堆叠（MOCK-04：真实成员，agentMembers 来自项目任务团队去重） */}
-        <div style={{ display: "flex", alignItems: "center" }} aria-label={`${project.agentMembers.length} 个 Agent 成员`}>
-          {project.agentMembers.map((m, idx) => (
-            <span key={m.agentId} style={{ marginLeft: idx === 0 ? 0 : -space.sm - 2 }}>
-              <AgentAvatar role={toAvatarRole(m.role)} size="sm" />
-            </span>
-          ))}
-        </div>
+        {/* 主入口：进入项目（UX-18：与卡片 onClick 同目标 /board?pid=，stopPropagation 防双击跳转） */}
+        <button
+          type="button"
+          data-testid="project-enter-button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen?.();
+          }}
+          className="project-enter-btn"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: space.xs,
+            padding: `${space.sm}px ${space.lg}px`,
+            borderRadius: radius.pill,
+            border: "none",
+            backgroundColor: "#2563EB",
+            color: "#FFFFFF",
+            fontSize: fontSize.sm,
+            fontWeight: 500,
+            cursor: "pointer",
+            boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+            fontFamily: fontFamily.body,
+          }}
+        >
+          进入项目
+          <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>→</span>
+        </button>
       </div>
     </section>
   );
@@ -435,6 +479,8 @@ export default function ProjectsPage() {
   const queryClient = useQueryClient();
   const router = useRouter();
   const [modalOpen, setModalOpen] = useState(false);
+  /* 搜索关键词（本地受控，UX-11：按名称/描述前端过滤） */
+  const [keyword, setKeyword] = useState("");
 
   const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["projects"],
@@ -460,6 +506,13 @@ export default function ProjectsPage() {
   const projects = data?.items ?? [];
   const total = data?.total ?? projects.length;
 
+  /* UX-11 搜索：按项目名/描述本地模糊过滤（关键词清空 = 全量） */
+  const kw = keyword.trim().toLowerCase();
+  const visibleProjects =
+    kw === ""
+      ? projects
+      : projects.filter((p) => `${p.name} ${p.description ?? ""}`.toLowerCase().includes(kw));
+
   return (
     <div
       data-testid="project-list-root"
@@ -474,12 +527,12 @@ export default function ProjectsPage() {
       {/* 卡片 hover 交互样式（仅 cursor + 轻微阴影，不改布局/配色） */}
       <style>{projectCardCss}</style>
 
-      {/* 操作行：新建项目 */}
+      {/* 操作行：搜索框 + 新建项目 */}
       <div
         style={{
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
+          gap: space.lg,
           marginBottom: space.lg,
         }}
       >
@@ -491,6 +544,46 @@ export default function ProjectsPage() {
             {total} 个项目正在协作
           </div>
         </div>
+
+        {/* 搜索框（按项目名/描述过滤，样式对齐模型页 model-search） */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.sm,
+            flex: 1,
+            minWidth: 220,
+            maxWidth: 320,
+            padding: `${space.sm}px ${space.md}px`,
+            borderRadius: radius.md,
+            backgroundColor: "#FFFFFF",
+            border: `1px solid ${neutral[200]}`,
+            boxShadow: shadow.sm,
+            marginLeft: "auto",
+          }}
+        >
+          <span aria-hidden style={{ fontSize: fontSize.lg, color: neutral[400], lineHeight: 1 }}>
+            ⌕
+          </span>
+          <input
+            data-testid="projects-search"
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            placeholder="搜索项目名 / 描述…"
+            aria-label="搜索项目"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              border: "none",
+              outline: "none",
+              background: "transparent",
+              fontSize: fontSize.md,
+              color: neutral[800],
+              fontFamily: fontFamily.body,
+            }}
+          />
+        </div>
+
         <button
           type="button"
           data-testid="create-project-button"
@@ -587,6 +680,13 @@ export default function ProjectsPage() {
             </button>
           }
         />
+      ) : visibleProjects.length === 0 ? (
+        /* UX-11：搜索无命中（复用 EmptyState，不带动作） */
+        <EmptyState
+          title="无匹配项目"
+          description="换个关键词试试，或清空搜索查看全部项目"
+          icon={<span aria-hidden>⌕</span>}
+        />
       ) : (
         <div
           style={{
@@ -595,7 +695,7 @@ export default function ProjectsPage() {
             gap: space.lg,
           }}
         >
-          {projects.map((p) => (
+          {visibleProjects.map((p) => (
             <ProjectCard
               key={p.id}
               project={p}

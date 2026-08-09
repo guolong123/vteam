@@ -587,3 +587,35 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **⚠️ 实测环境安全策略**：所有写操作（DELETE 凭据/角色、PATCH /status）用 `page.route` 拦截 fulfill 200——只验证前端「确认后发出请求」逻辑，**不真删真禁**（opencode-go 凭据加密不可恢复；test 角色、T 用户均保持原状，实测后 API 复核 configured=True / enabled / 角色存在）。
 - **⚠️ /models 双 Tab 坑**：直接等 `providers-root` 超时——models 页默认 catalog tab，须先点 `manage-tab`（hasText Provider）切换再等 providers-root。
 - **经验**：三处同构的「标题+描述+取消/确认」弹窗 → 建共享组件优于页面内三份复制（E1「不泛化 UserFormModal」的例外判据：字段集/交互完全同构才泛化，此处成立）；二次确认弹窗的 testid 按上下文命名（delete vs toggle），QA 断言可按操作类型精确锁定。
+
+---
+
+## E4: 修复 UX-13 看板「全部」视图混入已归档任务（2026-08-09，实现 + 浏览器实证完成）
+
+- **根因**：`web/app/(main)/board/page.tsx:360-362`——all 筛选 `activeFilter.status` 为 undefined → 后端 `GET /projects/:pid/tasks?status=` 返回**全部状态含 archived**；渲染 `:376` `tasks = data?.items ?? []` 未过滤 → 归档任务混进「全部」视图。
+- **方案（前端过滤，查询逻辑不变）**：`:376` 改 `(data?.items ?? []).filter((t) => activeFilter.key !== "all" || t.status !== "archived")`——all 时排除 archived；其余 5 个筛选 status 有值走后端查询，前端 filter 直接放行（行为不变）；「已归档」筛选仍可查看。页头无任务计数显示（仅 `tasks.length === 0` 空态判断），计数无需同步。
+- **验证**：web `npx tsc --noEmit` 0 错误；浏览器实测（playwright 库 API 直连 chrome + 3001 dev + seed-admin 表单登录）：临时 `UPDATE tasks SET status='archived'`（t_0000000001，p_seed_1 唯一任务）→ all 视图 0 卡片（空态）→ 切「已归档」1 卡片 data-status=已归档 → 切回 all 0 卡片 → **0 console error**；实证后恢复 in_progress（改库 → 验证 → 恢复现场闭环）。
+- **⚠️ playwright 跑临时脚本的两条路**：① config 的 projects 全部 testMatch 白名单（auth/pages/perf/guard…），任意命名的新 spec 都跑不进 → 用 `node e2e/xxx.cjs` 直接 `require("@playwright/test").chromium.launch({channel:"chrome"})` 库 API 跑，绕过 test runner；② dev server 重启后立即跑（turbopack 无征兆退出是常态，复现第三次）。
+
+## [2026-08-09] UX-11：项目/用户列表加搜索框（QA 报告缺失项修复）
+
+- **需求**：项目列表/用户管理无搜索框，项目/用户多时无法检索（.gstack/qa-reports/qa-report-192-168-10-78-13001-2026-08-09.md:356）。
+- **改动（2 文件，纯前端本地过滤，后端零改动）**：
+  | 文件 | 改动 |
+  |---|---|
+  | `web/app/(main)/projects/page.tsx` | state `keyword` + 过滤 `visibleProjects`（name/description 模糊匹配，toLowerCase includes）；操作行「标题-搜索框-新建按钮」布局（搜索框 flex:1/maxWidth:320/marginLeft:auto）；渲染分支：`projects.length===0`→原「还没有项目」EmptyState，`visibleProjects.length===0`→新「无匹配项目」EmptyState（不带动作），否则网格渲染 visibleProjects |
+  | `web/app/(main)/users/page.tsx` | 同构：state `keyword` + `visibleItems`（username/displayName/email 匹配）；操作行加搜索框；`items.length===0`→原「暂无用户」，`visibleItems.length===0`→「无匹配用户」，列表行渲染 visibleItems |
+- **样式**：完全复用模型页 model-search 范式（⌕ 图标 + 白底圆角边框容器 + 透明背景 input，token 全走 neutral/space/radius/fontSize/shadow）。testid：`projects-search` / `users-search`。
+- **口径**：统计条（total / stats）保持全量不变，仅列表受过滤影响；搜索无命中用既有 EmptyState 组件（action 可选，不带动作）。
+- **验证**：`npx tsc --noEmit` 0 错误；playwright 临时 spec（playwright.verify.config.ts 继承 base 配置 + verify project）实测 3/3 PASS：登录 setup → projects 搜索「不存在的关键词」→ empty-state「无匹配项目」→ 清空恢复卡片 → users 同理。临时 spec/config 已验证后删除，不污染 e2e 套件。
+- **经验**：playwright project testMatch 精确匹配文件名，临时验证 spec 需临时 config（`-c` 指向）或放进既有 spec 正则覆盖范围；testDir 下不匹配任何 project testMatch 的文件直接报 "No tests found"。
+
+## UX-18: 项目卡片「进入项目」无明确入口提示（2026-08-09，实现 + 浏览器实证完成）
+
+- **问题**：QA 报告 UX-18【缺失提示】——项目列表卡片整卡可点但无任何按钮/文字提示「可进入」，用户需自行发现点卡片本体跳转 /board?pid=。
+- **方案（双入口，主按钮放右下角）**：`web/app/(main)/projects/page.tsx` ProjectCard 底部区域从单行改为两行：
+  1. 第一行（原样保留）：任务统计（左）+ 成员头像（右），borderTop 分隔；
+  2. 第二行（新增操作行）：左下「产出物」次级入口（outline 样式保留）+ 右下「进入项目」primary 按钮——`data-testid="project-enter-button"`，样式对齐「新建项目」primary（#2563EB + pill + 蓝阴影），字号 sm 略小于页头按钮（卡片内视觉层级），`stopPropagation + onOpen?.()`（与卡片 onClick 同目标，防冒泡重复跳转）。
+- **hover/焦点态**：CSS 类 `.project-enter-btn`（注入 projectCardCss 同款 `<style>`）：hover → 背景 #1D4ED8 + 阴影加深（transition background-color/box-shadow，不动 layout 属性）；`:focus-visible` → 2px #2563EB outline（对齐卡片自身 focus 风格）。
+- **验证**：web `npx tsc --noEmit` 0 错误；playwright 实测（chromium-1208 executablePath 显式指定 + API 登录注入 zustand persist `agent-platform-auth` localStorage）**5/5 PASS 0 console error**：按钮可见文案「进入项目 →」、点击跳转 `/board?pid=<data-project-id>`（与卡片目标一致）、Tab 键盘聚焦 + Enter 触发跳转。截图 /tmp/opencode/ux18-enter-btn-hover.png 确认右下角定位、hover 深蓝生效、与产出物按钮/头像布局不拥挤。
+- **经验**：整卡可点击的卡片类组件必须有显式「进入」主按钮（可用性铁律，卡片可点只是增强）；主操作按钮放右下角 + 次级按钮左下角是低成本高辨识度的双入口布局；卡片内按钮必须 `stopPropagation`（否则卡片 onClick 与按钮 onClick 双触发，router.push 同目标虽无害但行为不纯）。
