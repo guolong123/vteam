@@ -507,12 +507,14 @@ export const PAGES: PageTestidRef[] = [
     ],
   },
   {
-    auditPage: "2.14 models-manage（模型目录管理）",
+    auditPage: "2.14 models-manage（模型管理：模型目录 + Provider 凭证双 Tab）",
     route: "/models",
     root: "models-manage-root",
     testids: [
       "models-manage-root",
       "manage-toolbar",
+      "manage-tabs",
+      "manage-tab",
       "model-search",
       "model-list",
       "model-item",
@@ -525,13 +527,6 @@ export const PAGES: PageTestidRef[] = [
       "models-loading",
       "models-error",
       "models-retry",
-    ],
-  },
-  {
-    auditPage: "Provider 管理（凭证管理 + worker 同步）",
-    route: "/providers",
-    root: "providers-root",
-    testids: [
       "providers-root",
       "providers-toolbar",
       "provider-list",
@@ -575,6 +570,5 @@ export const PAGE_SMOKE: Record<string, string[]> = {
   "/users": ["user-management-root", "user-stats", "user-item", "add-user-button"],
   "/workers": ["worker-list-root", "worker-stats", "worker-card", "worker-guide", "worker-status"],
   "/workers/install": ["worker-install-root", "install-wizard", "install-config", "install-method-tabs", "install-command", "copy-command-button", "install-footer"],
-  "/models": ["models-manage-root", "model-list", "model-item", "model-search", "model-enabled-badge"],
-  "/providers": ["providers-root", "provider-list", "provider-item", "provider-credential-status", "provider-configure-button"],
+  "/models": ["models-manage-root", "manage-tabs", "manage-tab", "model-list", "model-item", "model-search", "provider-list"],
 };

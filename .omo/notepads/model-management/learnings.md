@@ -6,6 +6,25 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ---
 
+## D5: Provider 列表"只有 opencode/opencode-go 两个 provider"问题修复（2026-08-09，实现 + 验证完成）
+
+- **根因（实证）**：`STATIC_AVAILABLE_MODELS` 8 个 seed 模型中 7 个**无 provider 前缀**（`deepseek-v4-pro`/`glm-5.1`/`glm-5.2`/`gpt-5.6-luna`/`grok-4.5`/`kimi-k2.6`/`qwen3.6-plus`）——`buildModelSeedRows`/`splitModelId` 首 `/` 拆不到 → 默认归 `opencode` → models 表 DISTINCT provider_id 只有 `opencode`/`opencode-go` 2 个 → `GET /models/providers` 聚合结果也只有 2 个 → Provider 页只有 2 行。
+- **决策：provider 前缀采用 opencode models.dev 标准**（任务给定映射）：本机 `opencode models` 无凭据时只返回内置免费模型（opencode/big-pickle、gemma4/*、keta/* 等），seed 中这些模型不在实测列表，故按 models.dev 标准 id 补齐：
+  - `deepseek-v4-pro` → `deepseek/deepseek-v4-pro`
+  - `glm-5.1`/`glm-5.2` → `zhipu/glm-5.1`/`zhipu/glm-5.2`（GLM 属智谱）
+  - `gpt-5.6-luna` → `openai/gpt-5.6-luna`
+  - `grok-4.5` → `xai/grok-4.5`
+  - `kimi-k2.6` → `moonshot/kimi-k2.6`
+  - `qwen3.6-plus` → `qwen/qwen3.6-plus`
+- **改动面**：
+  1. `agent.constants.ts` STATIC_AVAILABLE_MODELS 全量携带前缀 + `TEMPLATE_DEFAULT_MODELS` 同步（a_product→zhipu/glm-5.1、a_architect→deepseek/deepseek-v4-pro、a_tester→zhipu/glm-5.2；a_developer 原 opencode-go/deepseek-v4-flash 不变）——模板默认模型必须指向目录中存在的模型，否则 agent.constants.spec 的 keys.has 断言挂。
+  2. `seed.ts` **清理旧无前缀残留**：provider 前缀规范化后旧行（providerID='opencode' AND modelID IN 7 legacy）与新行唯一键不同，upsert 无法覆盖 → seed 前先 deleteMany（**先删 worker_model_availabilities 外键行，再删 model**，对齐 ModelsService.remove 的 FK Restrict 约束）；实测清理 7 行。
+  3. `models.service.ts listProviders` **数据源 2（worker 上报合并）**：除 models 表 groupBy 外，追加在线 worker（status != offline）`capabilities.models`（string[]，拆 providerID）union——worker 配置凭据后上报的模型含新 provider，Provider 页自动出现；modelCount = 目录 count + worker 上报该 provider 模型数（worker-only provider 也能显示计数，重复 id 不特意去重——语义为"可用模型数"，与 worker 侧各自集合一致）。
+- **⚠️ 兼容路径保留**：`splitModelId` 不含 `/` 归 opencode 的分支保留（存量 agent defaultModelId/外部上报可能仍是旧自由字符串），D5 后 seed 不再产出无前缀行，该分支仅作兼容。
+- **验证**：server `nest build` 通过；jest **43 suites / 663 tests 全绿**（基线 661 + 新增 2：agent.constants.spec D5 provider≥4 断言、models.service.spec worker union 合并用例）；seed 实库重跑清理 7 行后 DISTINCT provider_id = **7 个**（deepseek/moonshot/openai/opencode-go/qwen/xai/zhipu）；`GET /models/providers`（admin token）返回 7 个 provider，模型数正确（zhipu=2 双模型）。
+
+---
+
 ## C10: Provider 页切换后端聚合数据源，消除前端聚合冗余（2026-08-09，实现 + 验证完成）
 
 - **背景**：Provider 页原先用「GET /models pageSize=100 全量分组 + 每 provider 并发 GET /models/:id/credentials」前端聚合（C6 期后端 providers 端点未交付时的并行时序误判）。C9 后端 `GET /models/providers` 交付后，切换为单一端点，**删除 2 个请求源**（modelsQuery 全量分组 + credentialsQuery 逐 provider 查凭据），保留 workersQuery（worker 多选数据源）。
@@ -14,6 +33,21 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **⚠️ queryKey 跨页共享陷阱**：原 credentialsQuery 用 `["model-credentials"]`（与 models 页共享，保存后两页凭据态一起刷新）；新 providersQuery 的 queryFn 是 GET /models/providers，**不能复用 ["model-credentials"]**——react-query 同 key 不同 queryFn 会互相污染缓存（models 页存 Map，providers 页存数组）。改用独立 key `["model-providers"]`，保存/吊销成功后**双 invalidate**：`["model-providers"]`（本页）+ `["model-credentials"]`（models 页共享的凭据态，保持跨页一致性）。
 - **渲染逻辑零变化**：providerID + 模型数（p.modelCount）+ 三态徽章（toStatus 从 ProviderSummary 直接判定：configured → 绿 / !configured && revokedAt → 琥珀 / 否则灰）+ fingerprint（configured 时显示 p.fingerprint，其余 "—"）；配置弹窗交互（worker 多选/保存/删除）未动。
 - **验证**：web `npx tsc --noEmit` 0 错误 + `npm run build` 通过（/providers 路由 7.87 kB）。后端零改动（C9 已交付）。
+
+---
+
+## C11: 模型管理单一入口（/models 双 Tab 合并 Provider 页）（2026-08-09，实现 + 验证完成）
+
+- **用户需求原话**：「主入口应该只有一个模型管理，进去后通过 tab 页管理两个页面，支持切换」——Provider 页与模型页合并为单一「模型管理」入口 + Tab 切换。
+- **方案**：`/models` 为主入口页，顶部 `manage-tabs`（对齐 skills 页双 Tab 模式：manage-tabs/manage-tab + TabKey state）双 Tab：**catalog（模型目录，默认）** / **providers（Provider 管理）**。`/providers` 路由保留为 server 组件 `redirect("/models")`（132 B 重定向页，URL 直达兼容）。
+- **Provider 视图迁移**：原 `providers/page.tsx`（949 行）主体原样迁移到新文件 `web/app/(main)/models/providers-tab.tsx`（export default ProvidersTab；app 目录非特殊文件名不生成路由，安全 colocate）；**全部 testid 保留**（providers-root/provider-list/provider-* 22 项 + 弹窗交互）。原 providers 页删除，改 8 行重定向页。
+- **models 页改造**：manage-toolbar 只放双 Tab + 搜索框（`tab === "catalog"` 条件渲染，providers tab 无搜索框）；计数徽章（X 个模型 · 已配置 Y/未配置 Z）从 toolbar 移到列表头「全部模型」行；model-hint 条件渲染（仅 catalog）；「凭证管理请前往 /providers」文案改为「切换到 Provider 管理 Tab」。
+- **数据源独立（无污染）**：catalog=["models"]+["model-credentials"]，providers=["model-providers"]；`["workers"]` 双 Tab 共享——**同 key 同 queryFn 的 react-query 是缓存共享而非污染**（C10 教训的反面：污染只发生在同 key 不同 queryFn）。保存/吊销凭据后仍双 invalidate（["model-providers"]+["model-credentials"]）保持跨 Tab 一致。
+- **导航精简 4 处**：nav-dock NAV_ITEMS 删 providers 项 + models label「模型目录」→「模型管理」；app-shell KEY_TO_PATH/CMDK_NAV_PATH/PAGE_TITLE 删 providers + models 标题改「模型管理 / 模型目录 · Provider 凭证管理」（**CMDK_NAV_PATH 与 cmdk-panel DEFAULT_CMDK_ITEMS 的 label 必须同步改**——handleCmdKSelect 以 label 查路径映射）；cmdk-panel DEFAULT_CMDK_ITEMS 删「Provider 管理」+「模型目录」→「模型管理」。
+- **e2e 同步**：pages.spec.ts「18/18 /models」测试改为双 Tab 全流程（manage-tabs 可见 + 2 个 manage-tab + catalog 断言 + 切 providers tab 断言列表/徽章/弹窗开合 + 切回）；原 /providers 测试改为「旧路由重定向」测试（`toHaveURL(/\/models$/)` + models-manage-root 可见）。testids.ts 合并两页审计条目为单个「2.14 models-manage（模型管理：模型目录 + Provider 凭证双 Tab）」38 项 + PAGE_SMOKE /models 更新（含 provider-list）、删 /providers 行。
+- **⚠️ e2e 弹窗 testid 重复**：provider-modal-cancel 出现 2 次（✕ + 底部取消），`.first()` 定位（沿用原 providers 测试写法）。
+- **验证**：`npx tsc --noEmit` 0 错误 + `npm run build` 通过（/models 9.35 kB、/providers 132 B 重定向页）；playwright 实证（channel=chrome）：登录 → /models 双 Tab（2 个 tab）→ catalog 默认 → 切 providers 7 个 provider 行 + 配置弹窗开合 → 切回 catalog → /providers 重定向 /models，**0 console 错误**；e2e pages 项目 **17/17 全绿**（41s）。
+- **⚠️ 环境坑（复现）**：生产 `npm run build` 与 dev server 共用 `.next` 目录——先 build 后 dev 会 ENOENT _buildManifest.js.tmp（dev 500）；修复：kill dev → `rm -rf .next` → 重启 `npm run dev`。dev server 与 build 不能并行跑同一工作区。
 
 ---
 

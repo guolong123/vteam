@@ -506,12 +506,14 @@
       "plan_name": "model-management",
       "status": "completed",
       "started_at": "2026-08-08T14:35:02.320Z",
-      "updated_at": "2026-08-08T18:33:54.550Z",
+      "updated_at": "2026-08-09T02:38:14.784Z",
       "session_ids": [
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn"
+        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn",
+        "opencode:ses_01b9d7231ffe5Mv9y6wcXuRJ66"
       ],
       "session_origins": {
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct"
+        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct",
+        "opencode:ses_01b9d7231ffe5Mv9y6wcXuRJ66": "appended"
       },
       "agent": "atlas",
       "task_sessions": {
@@ -612,12 +614,14 @@
   "active_plan": "/data/git-project/aiagents/.omo/plans/model-management.md",
   "started_at": "2026-08-08T14:35:02.320Z",
   "status": "completed",
-  "updated_at": "2026-08-08T18:33:54.550Z",
+  "updated_at": "2026-08-09T02:38:14.784Z",
   "session_ids": [
-    "opencode:ses_02ad3f64dffeH0vEIATllKlxTn"
+    "opencode:ses_02ad3f64dffeH0vEIATllKlxTn",
+    "opencode:ses_01b9d7231ffe5Mv9y6wcXuRJ66"
   ],
   "session_origins": {
-    "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct"
+    "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct",
+    "opencode:ses_01b9d7231ffe5Mv9y6wcXuRJ66": "appended"
   },
   "plan_name": "model-management",
   "task_sessions": {

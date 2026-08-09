@@ -1,17 +1,19 @@
 "use client";
 
 /**
- * 模型目录页（纯展示 —— 模型管理拆分后的「模型列表」页）
+ * 模型管理页（主入口 —— 双 Tab：模型目录 / Provider 管理）
  * =============================================
- * 用户需求：「模型列表只做展示」。凭证管理已拆分到 /providers（Provider 管理页）。
+ * 用户需求：「主入口应该只有一个模型管理，进去后通过 tab 页管理两个页面，支持切换」。
  *
- * - 保留展示：模型列表（provider 列 + 模型名称列 + 模型ID列 + 可用节点 +
- *   凭据状态徽章 + enabled 只读徽章）+ 搜索（model-search，本地受控）。
- * - 移除写操作：新增模型入口（model-add-button / 弹窗）、凭据配置区
- *   （credential-section）、启用/停用开关（model-toggle，改为 model-enabled-badge 只读徽章）。
- * - 数据源：GET /models（分页）→ 目录行；GET /workers → capabilities.models 统计
- *   「可用节点数」；GET /models/:id/credentials → 凭据状态（脱敏 fingerprint）。
- * - 权限：全读（成员只读，无写操作入口；后端 AdminGuard 兜底）。
+ * - Tab 1 模型目录（catalog）：纯展示列表（provider 列 + 模型名称列 + 模型ID列 +
+ *   可用节点 + 凭据状态徽章 + enabled 只读徽章）+ 搜索（model-search，本地受控）。
+ * - Tab 2 Provider 管理（providers）：凭证管理 + worker 同步，逻辑迁移自
+ *   providers-tab.tsx（原 /providers 页；/providers 路由已重定向到本页）。
+ * - Tab 切换：manage-tabs / manage-tab（对齐 skills 页双 Tab 模式，TabKey state）；
+ *   各 Tab 数据源独立 query（catalog=["models"]+["model-credentials"]，
+ *   providers=["model-providers"]；["workers"] 双 Tab 共享同 queryFn 无污染）。
+ * - 权限：模型目录全读（成员只读）；Provider 配置/删除 isAdmin 控制（后端
+ *   AdminGuard 兜底）。
  * - 铁律（T15）：无 fixed / 100vh / 100vw；root flex:1 铺满（AppShell 提供导航）。
  */
 import { useMemo, useState, type CSSProperties } from "react";
@@ -28,6 +30,7 @@ import {
   shadow,
 } from "@/src/theme/tokens";
 import type { ApiModel, ApiWorker, CredentialView, ModelsResponse } from "@/src/types/models";
+import ProvidersTab from "./providers-tab";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -273,10 +276,21 @@ function ModelRow({
 
 /* ================================ 页面主组件 ================================ */
 
+/** 双 Tab：模型目录（catalog）/ Provider 管理（providers） */
+type TabKey = "catalog" | "providers";
+
+const TABS: { key: TabKey; label: string; icon: string }[] = [
+  { key: "catalog", label: "模型目录", icon: "◇" },
+  { key: "providers", label: "Provider 管理", icon: "◈" },
+];
+
 export default function ModelsPage() {
   const user = useAuthStore((s) => s.user);
 
-  /* 搜索框（受控，按模型名 / provider / modelID 过滤） */
+  /* 双 Tab（受控，对齐 skills 页 manage-tabs/manage-tab 模式） */
+  const [tab, setTab] = useState<TabKey>("catalog");
+
+  /* 搜索框（受控，按模型名 / provider / modelID 过滤；仅模型目录 Tab 展示） */
   const [keyword, setKeyword] = useState("");
 
   /* 列表：GET /models（分页 pageSize=100 一次拉全量，对齐 agents 页模式） */
@@ -371,70 +385,105 @@ export default function ModelsPage() {
             gap: space.lg,
           }}
         >
-          {/* ① 工具条：标题 + 计数 + 搜索框 */}
+          {/* ① 工具条：双 Tab 切换 + 搜索框（仅模型目录 Tab） */}
           <div
             data-testid="manage-toolbar"
             style={{ display: "flex", alignItems: "center", gap: space.lg, flexWrap: "wrap" }}
           >
-            <span style={{ fontSize: fontSize.xl, fontWeight: 700, color: neutral[900] }}>
-              模型目录
-            </span>
-            <span
-              style={{
-                fontSize: fontSize.xs,
-                color: neutral[500],
-                backgroundColor: "#FFFFFF",
-                border: `1px solid ${neutral[200]}`,
-                borderRadius: radius.pill,
-                padding: "2px 10px",
-                fontFamily: fontFamily.mono,
-              }}
-            >
-              {models.length} 个模型 · 已配置 {configuredCount} / 未配置 {missingCount}
-            </span>
-
-            {/* 搜索框（按模型名 / provider / modelID 过滤） */}
+            {/* 双 Tab（受控切换，对齐 skills 页 manage-tabs/manage-tab 模式） */}
             <div
+              data-testid="manage-tabs"
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: space.sm,
-                flex: 1,
-                minWidth: 220,
-                maxWidth: 320,
-                padding: `${space.sm}px ${space.md}px`,
-                borderRadius: radius.md,
-                backgroundColor: "#FFFFFF",
+                gap: space.xs,
+                padding: space.xs,
+                borderRadius: radius.lg,
+                backgroundColor: neutral[100],
                 border: `1px solid ${neutral[200]}`,
-                boxShadow: shadow.sm,
-                marginLeft: "auto",
               }}
             >
-              <span aria-hidden style={{ fontSize: fontSize.lg, color: neutral[400], lineHeight: 1 }}>
-                ⌕
-              </span>
-              <input
-                data-testid="model-search"
-                value={keyword}
-                onChange={(e) => setKeyword(e.target.value)}
-                placeholder="搜索模型名 / provider…"
-                aria-label="搜索模型"
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  border: "none",
-                  outline: "none",
-                  background: "transparent",
-                  fontSize: fontSize.md,
-                  color: neutral[800],
-                  fontFamily: fontFamily.body,
-                }}
-              />
+              {TABS.map((t) => {
+                const active = tab === t.key;
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    data-testid="manage-tab"
+                    data-kind={t.key}
+                    data-active={active ? "true" : "false"}
+                    onClick={() => setTab(t.key)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: space.sm,
+                      padding: `${space.sm + 1}px ${space.lg}px`,
+                      borderRadius: radius.md,
+                      border: "none",
+                      backgroundColor: active ? "#FFFFFF" : "transparent",
+                      boxShadow: active ? shadow.sm : "none",
+                      cursor: "pointer",
+                      fontFamily: fontFamily.body,
+                      fontSize: fontSize.md,
+                      fontWeight: active ? 600 : 500,
+                      color: active ? neutral[900] : neutral[600],
+                    }}
+                  >
+                    <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>
+                      {t.icon}
+                    </span>
+                    {t.label}
+                  </button>
+                );
+              })}
             </div>
+
+            {/* 搜索框（按模型名 / provider / modelID 过滤；仅模型目录 Tab 展示） */}
+            {tab === "catalog" && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: space.sm,
+                  flex: 1,
+                  minWidth: 220,
+                  maxWidth: 320,
+                  padding: `${space.sm}px ${space.md}px`,
+                  borderRadius: radius.md,
+                  backgroundColor: "#FFFFFF",
+                  border: `1px solid ${neutral[200]}`,
+                  boxShadow: shadow.sm,
+                  marginLeft: "auto",
+                }}
+              >
+                <span aria-hidden style={{ fontSize: fontSize.lg, color: neutral[400], lineHeight: 1 }}>
+                  ⌕
+                </span>
+                <input
+                  data-testid="model-search"
+                  value={keyword}
+                  onChange={(e) => setKeyword(e.target.value)}
+                  placeholder="搜索模型名 / provider…"
+                  aria-label="搜索模型"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    border: "none",
+                    outline: "none",
+                    background: "transparent",
+                    fontSize: fontSize.md,
+                    color: neutral[800],
+                    fontFamily: fontFamily.body,
+                  }}
+                />
+              </div>
+            )}
           </div>
 
-          {/* 列表状态：loading / error */}
-          {modelsQuery.isPending ? (
+          {/* ② Tab 内容：模型目录（catalog） / Provider 管理（providers，独立视图组件） */}
+          {tab === "providers" ? (
+            <ProvidersTab />
+          ) : modelsQuery.isPending ? (
             <div
               data-testid="models-loading"
               style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}
@@ -503,8 +552,21 @@ export default function ModelsPage() {
                 <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900] }}>
                   全部模型
                 </span>
+                <span
+                  style={{
+                    fontSize: fontSize.xs,
+                    color: neutral[500],
+                    backgroundColor: neutral[50],
+                    border: `1px solid ${neutral[200]}`,
+                    borderRadius: radius.pill,
+                    padding: "2px 10px",
+                    fontFamily: fontFamily.mono,
+                  }}
+                >
+                  {models.length} 个模型 · 已配置 {configuredCount} / 未配置 {missingCount}
+                </span>
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-                  只读展示 · 凭证管理请前往 Provider 管理（/providers）
+                  只读展示 · 凭证管理请切换到「Provider 管理」Tab
                 </span>
                 {kw !== "" && (
                   <span
@@ -572,21 +634,23 @@ export default function ModelsPage() {
             </div>
           )}
 
-          {/* 底部说明 */}
-          <div
-            data-testid="model-hint"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: space.xs,
-              fontSize: fontSize.xs,
-              color: neutral[400],
-            }}
-          >
-            <span aria-hidden style={{ fontSize: fontSize.sm }}>◷</span>
-            模型解析优先级：Agent 显式配置 → 模板默认（baseAgentId 链）→ worker 默认模型 →
-            不指定（serve 默认）· 凭据保存后即时下发（C7 / C5）
-          </div>
+          {/* 底部说明（仅模型目录 Tab） */}
+          {tab === "catalog" && (
+            <div
+              data-testid="model-hint"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: space.xs,
+                fontSize: fontSize.xs,
+                color: neutral[400],
+              }}
+            >
+              <span aria-hidden style={{ fontSize: fontSize.sm }}>◷</span>
+              模型解析优先级：Agent 显式配置 → 模板默认（baseAgentId 链）→ worker 默认模型 →
+              不指定（serve 默认）· 凭据保存后即时下发（C7 / C5）
+            </div>
+          )}
         </div>
       </main>
     </div>

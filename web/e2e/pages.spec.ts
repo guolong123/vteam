@@ -214,29 +214,25 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("worker-guide")).toBeVisible();
   });
 
-  test("18/18 models-manage /models（模型目录，只读展示）", async ({ page }) => {
+  test("18/18 models-manage /models（模型管理：双 Tab 模型目录 / Provider 管理）", async ({ page }) => {
     await page.goto("/models");
     await expectNavShell(page);
     await expect(page.getByTestId("models-manage-root")).toBeVisible();
     await expect(page.getByTestId("manage-toolbar")).toBeVisible();
+    // 双 Tab（对齐 skills 页 manage-tabs/manage-tab 模式）
+    await expect(page.getByTestId("manage-tabs")).toBeVisible();
+    await expect(page.getByTestId("manage-tab")).toHaveCount(2);
+    // Tab 1 模型目录（catalog，默认）：搜索 + 列表 + 只读徽章
     await expect(page.getByTestId("model-search")).toBeVisible();
-    // 模型行（seed 预置 8 模型目录）
     await expect(page.getByTestId("model-list")).toBeVisible();
     await expect(page.getByTestId("model-item").first()).toBeVisible();
-    // 只读展示：enabled 徽章可见，无凭据配置区（凭证管理已拆分到 /providers）
     await expect(page.getByTestId("model-enabled-badge").first()).toBeVisible();
     await expect(page.getByTestId("credential-section")).toHaveCount(0);
-  });
-
-  test("Provider 管理 /providers（凭证管理 + worker 同步）", async ({ page }) => {
-    await page.goto("/providers");
-    await expectNavShell(page);
+    // Tab 2 Provider 管理（providers）：切换后 Provider 列表 + 凭据徽章可见
+    await page.getByTestId("manage-tab").filter({ hasText: "Provider 管理" }).click();
     await expect(page.getByTestId("providers-root")).toBeVisible();
-    await expect(page.getByTestId("providers-toolbar")).toBeVisible();
-    // Provider 行（按 providerID 聚合模型目录，seed 预置多 provider）
     await expect(page.getByTestId("provider-list")).toBeVisible();
     await expect(page.getByTestId("provider-item").first()).toBeVisible();
-    // 凭据状态徽章 + fingerprint 列
     await expect(page.getByTestId("provider-credential-status").first()).toBeVisible();
     await expect(page.getByTestId("provider-fingerprint").first()).toBeVisible();
     // 配置弹窗：点击配置 → provider 预填 + key 输入 + worker 多选（admin 会话）
@@ -246,5 +242,15 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("provider-modal-workers")).toBeVisible();
     await page.getByTestId("provider-modal-cancel").first().click();
     await expect(page.getByTestId("provider-config-modal")).toHaveCount(0);
+    // 切回模型目录 Tab
+    await page.getByTestId("manage-tab").filter({ hasText: "模型目录" }).click();
+    await expect(page.getByTestId("model-list")).toBeVisible();
+  });
+
+  test("旧路由 /providers 重定向到 /models（单一入口兼容）", async ({ page }) => {
+    await page.goto("/providers");
+    await expect(page).toHaveURL(/\/models$/);
+    await expectNavShell(page);
+    await expect(page.getByTestId("models-manage-root")).toBeVisible();
   });
 });
