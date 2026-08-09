@@ -6,6 +6,21 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ---
 
+## CONF-02: 权限矩阵「41 个未校验权限点」前端标注未启用（2026-08-09，实现 + tsc 验证完成）
+
+- **问题（QA 严重）**：`server` 全仓 grep `@RequirePermission` 实证仅 7 个权限点被后端校验——agents.view/create/edit/delete（agents.controller.ts 全 4 操作）+ projects.create（projects.controller.ts:43）+ skills.view（skills.controller.ts:68/86）+ workers.view（workers.controller.ts:68/77）。前端角色配置页 `web/app/(main)/roles/page.tsx` 渲染 8 资源 × 6 操作 = 48 格，其中 41 格勾选后无任何后端校验 → **权限配置 UI 与后端校验脱节**（给受限角色加 `workers.edit: true` 后 PATCH worker 仍 403，实证勾选不生效）。
+- **⚠️ 关键映射事实（projects.create 特殊性）**：后端校验 7 点中有 `projects.create`，但该权限点**不在前端矩阵**——前端 RESOURCES 8 项（tasks/chats/artifacts/agents/workers/skills/users/roles，对齐 roles.constants.ts PERMISSION_RESOURCES）不含 projects 资源。因此前端矩阵内实际命中白名单的仅 **6 格**（agents 4 + skills.view + workers.view），`projects.create` 保留在集合中仅供集中审计，渲染永不命中。
+- **方案（报告建议①：仅前端标注，禁改后端守卫体系）**：
+  1. `IMPLEMENTED_PERMISSIONS: ReadonlySet<string>` = 后端实际校验 7 点（含 projects.create 审计参考）。
+  2. `PermissionMatrix` 渲染：不在白名单的格子 → 灰显虚线格「—」+ `data-implemented="false"` + title「该权限点后端未启用，勾选不生效」+ 非 button（不可点击，不触发 onToggle）。
+  3. 整行资源无任何已启用点（tasks/chats/artifacts/users/roles 全行 6 格均未实现）→ 资源名后追加「未启用」pill 徽标。
+  4. `PermLegend` 图例加第 4 项「未启用」（灰色虚线格），与 ✓/◐/✗ 并列；矩阵下两处说明文案补充「灰色「—」格为后端未启用的权限点」。
+- **⚠️ 执行纪律（本次遵守）**：未动 server 任何守卫/常量；未启动 dev server / 不跑 playwright / 不 docker build——只做 `cd web && npx tsc --noEmit` 0 错误 + eslint 0 告警验证。
+- **⚠️ 并行会话竞争（本次踩坑）**：同一 CONF-02 任务有并行会话同时编辑本文件，曾出现两份 `IMPLEMENTED_PERMISSIONS` 重复声明 + `isPermissionImplemented(ri,ci)`/`implementedAllowCount`/`unimplBadgeStyle` 等并行实现（git diff 可见）。并行会话随后回滚其改动，最终磁盘 diff 仅保留本会话实现（tsc 重复声明错误消失）。**教训：并行改同一文件需先看 git status/diff 基线，edit 前重读文件确认无并发写入。**
+- **遗留（决策）**：`matrixToPermissions` 仍按矩阵值提交未实现格（若角色权限曾存 true 会原样提交）——后端不校验该点故无害，且任务明确"仅消除 UI 误导"；真正补后端校验为 CONF-03 单独处理。
+
+---
+
 ## E4: CONF-01 修复——模板 Agent 默认模型与 worker 实际能力对齐（2026-08-09，实现 + 测试完成）
 
 - **问题（QA 严重）**：4 个模板 Agent 默认模型（zhipu/glm-5.1、deepseek/deepseek-v4-pro、opencode-go/deepseek-v4-flash、zhipu/glm-5.2）与 worker `w_compose_worker` 实际能力（**仅 26 个 opencode/* 免费模型**）交集为空 → 模板 Agent 默认模型创建任务 → dispatch 模型不匹配 → 无回复/insufficient_quota（OBS-009 配置层根因）。
@@ -652,3 +667,18 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **验证**：server `npx tsc --noEmit` 0 错误；`agent.constants.spec.ts` 6/6 PASS（含新 CONF-01 断言）。
 - **经验**：模型目录（seed）与 worker 实测能力必须**同一数据源对齐**——两套体系（8 核心凭据模型 vs 26 免费模型）并存且交集为空是配置层隐患的典型形态；修复以「目录=worker 能力全集」为锚，而非只改模板默认值（否则其他消费方仍可能引用空交集模型）。
 - **经验**：compose 变量必填用 `${VAR:?msg}`（非 `:-` 默认），报错信息可中文直接给运维指引；安全类默认值铁律——**宁可启动失败也不写公开默认**，生产密钥类变量一律必填校验或随机生成。
+
+---
+
+## CONF-02: 权限矩阵 48 个权限点仅 7 个被后端校验——前端禁配未启用点（2026-08-09，方案①落地 + tsc 验证完成）
+
+- **问题（QA 严重）**：前端角色配置页渲染 8 资源 × 6 操作 = 48 个权限点可勾选，但后端 `@RequirePermission` 实际只使用 **7 个唯一权限点**（server grep 实证：agents.view/create/edit/delete、projects.create、skills.view、workers.view，共 15 处）。其余 41 个点（chats/artifacts/tasks 全部、users/roles 大部分、skills/workers/projects 大部分）勾选后无任何后端校验——实证给受限角色加 `workers.edit: true` 后 PATCH worker 仍 403（"需要 users:manage" AdminGuard）。**权限配置 UI 与后端校验严重脱节**。
+- **决策（方案①务实，方案②本期不做）**：后端按矩阵补齐 chats/artifacts/tasks 等守卫涉及大量控制器改造 + 权限语义设计，本期不做。前端将未实现的 41 个权限点**禁配 + 标注「未启用」**，仅消除"勾选不生效"的 UI 误导（⚠️ 仅 UI 层，不改后端守卫体系，CONF-03 单独处理）。
+- **实现（`web/app/(main)/roles/page.tsx`，由并行 session 落地主体、本会话调和收尾）**：
+  1. `IMPLEMENTED_PERMISSIONS` 白名单常量（ReadonlySet，7 个点，带来源注释：server grep RequirePermission 实证）。`projects.create` 在矩阵 8 资源中无 projects 行，永不命中，保留仅作集中审计参考。
+  2. `PermissionMatrix`：`isImplemented(rKey, aKey)` 判定白名单；集合外格子提前 return 渲染禁用灰格 `—`（`disabledCellStyle`：灰显 + 虚线占位 + cursor not-allowed + `data-implemented="false"` + title「该权限点后端未启用，勾选不生效」+ aria-label），**非 button 天然不可点击**。
+  3. 整行资源无任何已启用点（tasks/chats/artifacts/users/roles）→ 资源名后追加「未启用」徽章（`rowHasImplemented` 判定）。
+  4. `PermLegend` 新增「未启用」图例项（20px `—` 灰格）；CreateRoleModal 提示 + 页面底部说明文案同步补充「灰色「—」格为后端未启用的权限点，勾选不生效」。
+  5. **`matrixToPermissions` / `allowCount` 语义决策（保持原值提交）**：禁用格只影响渲染层，数据层仍保留原矩阵值（`data-perm={perm}`），保存时**仍提交原值**（非强制 false）——未启用点初始为 deny（blankMatrix/matrixFromPermissions 缺省），旧数据残留 true 亦无害（后端不校验）；allowCount 维持全矩阵统计（含未启用点），未做收紧，对齐报告「保留现有矩阵结构（testid permission-matrix、allowCount 统计对齐）」。
+- **验证**：web `npx tsc --noEmit` **0 错误**（EXIT 0）。未启动 dev server、未跑 playwright、未 build、未跑 jest（遵守执行范围防并行冲突）。
+- **⚠️ 并行会话撞车教训（重要）**：本任务与另一并行 session **同时**在改 `roles/page.tsx`——我按任务规格插入的 `IMPLEMENTED_PERMISSIONS`/`isPermissionImplemented`/`implementedAllowCount`/`unimplBadgeStyle` 与并行 session 已落地的实现（同名常量 + `disabledCellStyle`/`isImplemented`/`rowHasImplemented`）产生**重复定义**（tsc 必挂 Duplicate identifier）+ 未使用变量。处理：**以并行实现为主体，回退我造成的全部冲突块**（重复常量、未用辅助函数），`git diff` 确认最终 diff 只含并行实现。经验：多会话并行改同一文件时，落地前先 `git diff` 核对对方改动范围与命名，同语义只保留一套实现，避免重复定义与语义分叉。

@@ -87,6 +87,28 @@ const ACTIONS = [
   { key: "manage", label: "管理" },
 ] as const;
 
+/* ------------------------------ 后端已启用权限点（CONF-02 修复） ------------------------------
+ * QA 报告 CONF-02【严重】：48 个矩阵权限点仅 7 个被后端 @RequirePermission 校验，
+ * 其余 41 个勾选后无任何后端校验（权限配置 UI 与后端校验脱节）。
+ * 本集合 = 后端实际生效白名单（server grep RequirePermission 实证，2026-08-09）：
+ *   - agents.controller：view/create/edit/delete 全 4 操作
+ *   - projects.controller：仅 create（projects 资源不在本页 RESOURCES 8 项中，
+ *     故矩阵渲染永不命中，保留仅作集中审计参考）
+ *   - skills.controller / workers.controller：仅 view
+ * 矩阵渲染时：集合外的格子 disabled + 灰显 + tooltip「该权限点后端未启用」，
+ * 整行资源无任何已启用点（tasks/chats/artifacts/users/roles）→ 资源行标注「未启用」。
+ * ⚠️ 仅消除 UI 误导，禁止改后端守卫体系（CONF-03 单独处理）。
+ */
+const IMPLEMENTED_PERMISSIONS: ReadonlySet<string> = new Set([
+  "agents.view",
+  "agents.create",
+  "agents.edit",
+  "agents.delete",
+  "projects.create",
+  "skills.view",
+  "workers.view",
+]);
+
 /** 权限范围（对齐后端 Role.scopes 契约） */
 interface RoleScope {
   global: boolean;
@@ -188,7 +210,9 @@ function roleDesc(role: Role): string {
 
 /* ------------------------------ 子组件 ------------------------------ */
 
-/** 权限矩阵：行=资源，列=操作，格=✓/◐/✗；editable 时格子可点击循环 允许↔禁止 */
+/** 权限矩阵：行=资源，列=操作，格=✓/◐/✗；editable 时格子可点击循环 允许↔禁止。
+ * 后端未启用的权限点（不在 IMPLEMENTED_PERMISSIONS 白名单）渲染为禁用灰格「—」，
+ * 整行资源无任何已启用点 → 资源名后追加「未启用」徽标（CONF-02 修复）。 */
 function PermissionMatrix({
   matrix,
   editable,
@@ -222,6 +246,17 @@ function PermissionMatrix({
       borderRadius: radius.sm,
     };
   };
+  /* 后端未启用格：灰显 + 虚线占位 + 不可点（CONF-02） */
+  const disabledCellStyle: CSSProperties = {
+    color: neutral[300],
+    backgroundColor: neutral[50],
+    border: `1px dashed ${neutral[200]}`,
+    cursor: "not-allowed",
+  };
+  const isImplemented = (rKey: string, aKey: string) =>
+    IMPLEMENTED_PERMISSIONS.has(`${rKey}.${aKey}`);
+  const rowHasImplemented = (rKey: string) =>
+    ACTIONS.some((a) => IMPLEMENTED_PERMISSIONS.has(`${rKey}.${a.key}`));
 
   return (
     <div
@@ -257,10 +292,50 @@ function PermissionMatrix({
               >
                 <span aria-hidden style={{ marginRight: space.sm, color: neutral[400] }}>{r.icon}</span>
                 {r.label}
+                {!rowHasImplemented(r.key) && (
+                  <span
+                    title="该资源所有权限点后端均未启用"
+                    style={{
+                      marginLeft: space.sm,
+                      padding: "1px 8px",
+                      borderRadius: radius.pill,
+                      fontSize: fontSize.xs,
+                      fontWeight: 600,
+                      color: neutral[400],
+                      backgroundColor: neutral[100],
+                      border: `1px solid ${neutral[200]}`,
+                      verticalAlign: "middle",
+                    }}
+                  >
+                    未启用
+                  </span>
+                )}
               </td>
               {ACTIONS.map((a, ci) => {
                 const perm = matrix[ri]?.[ci] ?? "deny";
                 const cellStyle = cellBase(perm);
+                if (!isImplemented(r.key, a.key)) {
+                  return (
+                    <td
+                      key={a.key}
+                      style={{
+                        padding: `${space.xs}px ${space.xs}px`,
+                        textAlign: "center",
+                        borderBottom: `1px solid ${neutral[100]}`,
+                      }}
+                    >
+                      <span
+                        data-perm={perm}
+                        data-implemented="false"
+                        aria-label={`${r.label} ${a.label} 权限：后端未启用`}
+                        title="该权限点后端未启用，勾选不生效"
+                        style={{ ...cellStyle, ...disabledCellStyle }}
+                      >
+                        —
+                      </span>
+                    </td>
+                  );
+                }
                 return (
                   <td
                     key={a.key}
@@ -510,7 +585,7 @@ function PermissionScope({
   );
 }
 
-/** 权限格图例条（三态，对齐原型） */
+/** 权限格图例条（三态 + 后端未启用灰格，CONF-02） */
 function PermLegend() {
   return (
     <div
@@ -548,6 +623,26 @@ function PermLegend() {
           {k === "allow" ? "允许" : k === "partial" ? "部分允许" : "禁止"}
         </span>
       ))}
+      <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs }}>
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 20,
+            height: 20,
+            borderRadius: radius.sm,
+            fontSize: fontSize.sm,
+            fontWeight: 600,
+            color: neutral[300],
+            backgroundColor: neutral[50],
+            border: `1px dashed ${neutral[200]}`,
+          }}
+        >
+          —
+        </span>
+        未启用
+      </span>
     </div>
   );
 }
@@ -721,7 +816,7 @@ function CreateRoleModal({
           </div>
           <PermissionMatrix matrix={matrix} editable onToggle={toggle} />
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            点击格子切换 允许 / 禁止；未允许的操作将对该角色禁止
+            点击格子切换 允许 / 禁止；灰色「—」格为后端未启用的权限点，勾选不生效；未允许的操作将对该角色禁止
           </span>
         </div>
 
@@ -1167,6 +1262,7 @@ export default function RolePermissionPage() {
                   行 = 资源（对齐平台业务域：任务 / 群聊 / 产出物 / Agent 配置 / Worker 节点 / 技能工具 /
                   用户管理 / 权限配置）；列 = 操作（查看 / 创建 / 编辑 / 删除 / 验收 / 管理）
                   {!activeRole.isBuiltin && "；点击格子切换 允许 / 禁止"}
+                  ；灰色「—」格为后端未启用的权限点，勾选不生效
                 </span>
               </div>
 
