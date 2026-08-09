@@ -10,11 +10,15 @@
  * - 命令面板「导航」组选择 → 路由跳转；Esc / 遮罩 / ✕ 关闭
  * - 登录守卫：未登录（authStore.token 为空）跳转 /login
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { neutral, radius, fontSize, fontFamily } from "@/src/theme/tokens";
-import { NavDock, NavTopBar, CmdKPanel } from "./index";
+import { NavDock, NavTopBar, CmdKPanel, NAV_ITEMS, DEFAULT_CMDK_ITEMS } from "./index";
+import type { CmdKItem } from "./index";
+import { hasPermission, isPlatformAdmin, type RolePermissions } from "@/lib/permissions";
 import {
   useCanvasUIStore,
   type CanvasUIEffectKey,
@@ -138,10 +142,51 @@ const CMDK_NAV_PATH: Record<string, string> = {
   角色权限: "/roles",
 };
 
+/**
+ * 导航 key → 可见性判定（对齐后端守卫语义，ISSUE-005）：
+ * - 无条目的 key（project/models/messages）→ 后端无权限点（登录即可 / 成员只读），始终显示；
+ * - agents/workers/skills → 矩阵 view 权限点（PermissionGuard）；
+ * - users/roles → AdminGuard 语义（all:true 或 users.manage）。
+ */
+const NAV_VISIBLE: Record<string, (perms: RolePermissions) => boolean> = {
+  agents: (p) => hasPermission(p, "agents"),
+  workers: (p) => hasPermission(p, "workers"),
+  skills: (p) => hasPermission(p, "skills"),
+  users: isPlatformAdmin,
+  roles: isPlatformAdmin,
+};
+
+/** 路由首段 → 访问所需判定（与导航过滤同源；/tools 属 skills 资源；无条目 = 登录即可） */
+const ROUTE_GUARD: Record<string, (perms: RolePermissions) => boolean> = {
+  ...NAV_VISIBLE,
+  tools: (p) => hasPermission(p, "skills"),
+};
+
+/** 角色显示名（对齐 users 页 ROLE_LABEL：admin→管理员 / member→成员 / 其余原名） */
+const ROLE_LABEL: Record<string, string> = { admin: "管理员", member: "成员" };
+
+function roleLabel(name?: string): string {
+  return name ? (ROLE_LABEL[name] ?? name) : "";
+}
+
+/** GET /projects/:pid/tasks 分页响应（仅页头计数取 total，pageSize=1 最小化传输）。 */
+interface BoardTasksResponse {
+  items: unknown[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** GET /workers 条目（页头「Agent 在线」统计仅需 status：在线 = status !== 'offline'）。 */
+interface WorkerSummaryRow {
+  id: string;
+  status: string;
+}
+
 /** 页面标题（顶栏左侧，无面包屑时展示；对齐各页原型 NavTopBar） */
 const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   project: { title: "项目列表", subtitle: "选择项目进入 AI 协作工作区" },
-  board: { title: "任务看板", subtitle: "5 个任务 · 4 个 Agent 在线" },
+  board: { title: "任务看板", subtitle: "" },
   agents: { title: "Agent 管理", subtitle: "配置角色、技能与权限" },
   workers: { title: "Worker 节点", subtitle: "查看与管理 Worker 节点" },
   models: { title: "模型管理", subtitle: "模型目录 / Provider 凭证管理" },
@@ -206,6 +251,78 @@ export function AppShell({ children }: { children: ReactNode }) {
     }
   }, [hydrated, token, router]);
 
+  // 权限守卫（ISSUE-005）：无权限路由 → 重定向到首个有权限的导航目标，
+  // 不再渲染被禁模块骨架（后端 403 兜底之外的前端第一道闸）。
+  useEffect(() => {
+    if (!hydrated || !token || !user) return;
+    const seg = pathname.split("/")[1] ?? "";
+    const check = ROUTE_GUARD[seg];
+    if (!check || check(user.permissions)) return;
+    const fallback = NAV_ITEMS.find(
+      (item) =>
+        !NAV_VISIBLE[item.key] || NAV_VISIBLE[item.key](user.permissions),
+    )?.key;
+    router.replace(fallback ? KEY_TO_PATH[fallback] : "/projects");
+  }, [hydrated, token, pathname, user, router]);
+
+  // 导航过滤：受限用户仅显示有权限项；project/models/messages 无后端权限点恒显示
+  const visibleItems = useMemo(() => {
+    if (!user) return NAV_ITEMS;
+    return NAV_ITEMS.filter(
+      (item) =>
+        !NAV_VISIBLE[item.key] || NAV_VISIBLE[item.key](user.permissions),
+    );
+  }, [user]);
+
+  // Cmd+K「导航」组过滤：与导航可见性同源，被禁路由不可从命令面板唤起
+  const cmdkItems = useMemo<CmdKItem[] | undefined>(() => {
+    if (!user) return undefined;
+    return DEFAULT_CMDK_ITEMS.filter((item) => {
+      if (item.group !== "导航") return true;
+      const path = CMDK_NAV_PATH[item.label];
+      if (!path) return true;
+      const seg = path.split("/")[1] ?? "";
+      const check = ROUTE_GUARD[seg];
+      return !check || check(user.permissions);
+    });
+  }, [user]);
+
+  // /board 页头计数（ISSUE-001）：原 PAGE_TITLE.board subtitle 硬编码 mock 值
+  // （「5 个任务 · 4 个 Agent 在线」源自原型 mock），改为按 URL ?pid= 动态取数。
+  const isBoard = pathname.split("/")[1] === "board";
+  const [boardPid, setBoardPid] = useState<string | null>(null);
+  useEffect(() => {
+    if (pathname.split("/")[1] === "board") {
+      setBoardPid(new URLSearchParams(window.location.search).get("pid"));
+    } else {
+      setBoardPid(null);
+    }
+  }, [pathname]);
+
+  // 任务总数：GET /projects/:pid/tasks 的 total（与看板页同源，三方对照基准）
+  const boardTasks = useQuery({
+    queryKey: ["board-tasks", boardPid],
+    queryFn: () =>
+      api.get<BoardTasksResponse>(`/projects/${boardPid}/tasks`, {
+        query: { page: 1, pageSize: 1 },
+      }),
+    enabled: hydrated && !!token && isBoard && !!boardPid,
+  });
+  // Agent 在线数：平台在线 worker（status != offline，Agent 无在线态，Worker 为在线源）
+  const boardWorkers = useQuery({
+    queryKey: ["workers"],
+    queryFn: () => api.get<WorkerSummaryRow[]>("/workers"),
+    enabled: hydrated && !!token && isBoard,
+  });
+
+  const boardSubtitle = useMemo(() => {
+    if (!isBoard) return page.subtitle;
+    const total = boardTasks.data?.total;
+    const onlineCount = boardWorkers.data?.filter((w) => w.status !== "offline").length;
+    if (total === undefined || onlineCount === undefined) return "";
+    return `${total} 个任务 · ${onlineCount} 个 Agent 在线`;
+  }, [isBoard, page.subtitle, boardTasks.data, boardWorkers.data]);
+
   // Cmd+K / Ctrl+K 快捷键唤起命令面板
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -243,8 +360,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       {/* 顶栏（文档流顶部） */}
       <NavTopBar
         title={page.title}
-        subtitle={page.subtitle}
+        subtitle={boardSubtitle}
         userName={user?.displayName ?? "运营者"}
+        userRole={user ? roleLabel(user.roleName) : undefined}
         onCmdKClick={() => setCmdkOpen(true)}
       >
         {/* 全局效果下拉（头像右侧插槽，与登出按钮并排） */}
@@ -318,10 +436,15 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
 
       {/* 左侧 Dock 悬浮导航条（z-index 50，浮于命令面板遮罩之上） */}
-      <NavDock activeKey={activeKey} onNavClick={goto} />
+      <NavDock activeKey={activeKey} items={visibleItems} onNavClick={goto} />
 
       {/* Cmd+K 命令面板（受控开关） */}
-      <CmdKPanel open={cmdkOpen} onClose={() => setCmdkOpen(false)} onSelect={handleCmdKSelect} />
+      <CmdKPanel
+        open={cmdkOpen}
+        onClose={() => setCmdkOpen(false)}
+        onSelect={handleCmdKSelect}
+        items={cmdkItems}
+      />
     </div>
   );
 }

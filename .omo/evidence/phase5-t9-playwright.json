@@ -4,7 +4,9 @@
       "/home/keta/.nvm/versions/node/v22.22.1/bin/node",
       "/data/git-project/aiagents/web/node_modules/.bin/playwright",
       "test",
-      "e2e/pages.spec.ts"
+      "pages.spec.ts",
+      "login.spec.ts",
+      "guard.spec.ts"
     ],
     "configFile": "/data/git-project/aiagents/web/playwright.config.ts",
     "rootDir": "/data/git-project/aiagents/web/e2e",
@@ -151,12 +153,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 2776,
+                  "duration": 2635,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-08-09T03:25:14.896Z",
+                  "startTime": "2026-08-09T07:31:02.912Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -168,6 +170,125 @@
           "file": "auth.setup.ts",
           "line": 12,
           "column": 6
+        }
+      ]
+    },
+    {
+      "title": "login.spec.ts",
+      "file": "login.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "1/17 login 登录页",
+          "file": "login.spec.ts",
+          "line": 7,
+          "column": 6,
+          "specs": [
+            {
+              "title": "登录页元素齐全",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "login",
+                  "projectName": "login",
+                  "results": [
+                    {
+                      "workerIndex": 2,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1325,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:36.782Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "41d3fd2474a19feb00a1-71fffd8f8178d8947afc",
+              "file": "login.spec.ts",
+              "line": 8,
+              "column": 7
+            },
+            {
+              "title": "错误密码 → 登录失败提示",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "login",
+                  "projectName": "login",
+                  "results": [
+                    {
+                      "workerIndex": 2,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1386,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:38.434Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "41d3fd2474a19feb00a1-5a198ebabed71a69e792",
+              "file": "login.spec.ts",
+              "line": 16,
+              "column": 7
+            },
+            {
+              "title": "正确密码 → 跳转 /projects",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "login",
+                  "projectName": "login",
+                  "results": [
+                    {
+                      "workerIndex": 2,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2281,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:39.841Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "41d3fd2474a19feb00a1-07219588059c2aa248fb",
+              "file": "login.spec.ts",
+              "line": 24,
+              "column": 7
+            }
+          ]
         }
       ]
     },
@@ -197,15 +318,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 1850,
+                      "duration": 1676,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:18.904Z",
+                      "startTime": "2026-08-09T07:31:43.062Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -231,15 +352,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 2172,
+                      "duration": 1403,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:21.109Z",
+                      "startTime": "2026-08-09T07:31:45.053Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -265,15 +386,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 2149,
+                      "duration": 1454,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:23.315Z",
+                      "startTime": "2026-08-09T07:31:46.483Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -299,15 +420,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 2271,
+                      "duration": 1553,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:25.492Z",
+                      "startTime": "2026-08-09T07:31:47.963Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -333,15 +454,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 3282,
+                      "duration": 1642,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:27.787Z",
+                      "startTime": "2026-08-09T07:31:49.538Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -367,15 +488,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 3141,
+                      "duration": 1767,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:31.087Z",
+                      "startTime": "2026-08-09T07:31:51.198Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -401,15 +522,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 1800,
+                      "duration": 1697,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:34.247Z",
+                      "startTime": "2026-08-09T07:31:52.986Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -435,15 +556,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 2220,
+                      "duration": 1681,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:36.061Z",
+                      "startTime": "2026-08-09T07:31:54.702Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -469,15 +590,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 2685,
+                      "duration": 2025,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:38.302Z",
+                      "startTime": "2026-08-09T07:31:56.397Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -508,15 +629,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 2164,
+                      "duration": 1452,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:41.004Z",
+                      "startTime": "2026-08-09T07:31:58.439Z",
                       "annotations": [
                         {
                           "type": "note",
@@ -547,15 +668,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 2947,
+                      "duration": 2079,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:43.188Z",
+                      "startTime": "2026-08-09T07:31:59.909Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -581,15 +702,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 2068,
+                      "duration": 2094,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:46.152Z",
+                      "startTime": "2026-08-09T07:32:02.006Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -615,15 +736,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 2573,
+                      "duration": 2416,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:48.238Z",
+                      "startTime": "2026-08-09T07:32:04.119Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -633,11 +754,11 @@
               ],
               "id": "9bb6bb2ed574bebb3c58-a9f7e36dd7bd564fafd4",
               "file": "pages.spec.ts",
-              "line": 175,
+              "line": 186,
               "column": 7
             },
             {
-              "title": "17/18 worker-list /workers（列表 + 注册指引）",
+              "title": "17/18 worker-list /workers（列表 + 唯一安装入口）",
               "ok": true,
               "tags": [],
               "tests": [
@@ -649,15 +770,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 2952,
+                      "duration": 1571,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:50.828Z",
+                      "startTime": "2026-08-09T07:32:06.566Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -665,9 +786,9 @@
                   "status": "expected"
                 }
               ],
-              "id": "9bb6bb2ed574bebb3c58-08c745264b41c6c158cd",
+              "id": "9bb6bb2ed574bebb3c58-700dbc49475b6d46478a",
               "file": "pages.spec.ts",
-              "line": 202,
+              "line": 213,
               "column": 7
             },
             {
@@ -683,15 +804,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 2553,
+                      "duration": 3000,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:53.793Z",
+                      "startTime": "2026-08-09T07:32:08.156Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -701,7 +822,7 @@
               ],
               "id": "9bb6bb2ed574bebb3c58-6725ace2a6abdcc3d041",
               "file": "pages.spec.ts",
-              "line": 217,
+              "line": 227,
               "column": 7
             },
             {
@@ -717,15 +838,15 @@
                   "projectName": "pages",
                   "results": [
                     {
-                      "workerIndex": 1,
+                      "workerIndex": 3,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 1705,
+                      "duration": 2571,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-08-09T03:25:56.372Z",
+                      "startTime": "2026-08-09T07:32:11.170Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -735,8 +856,467 @@
               ],
               "id": "9bb6bb2ed574bebb3c58-a2954c30060b6d17ebfd",
               "file": "pages.spec.ts",
-              "line": 250,
+              "line": 260,
               "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "guard.spec.ts",
+      "file": "guard.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "未登录守卫",
+          "file": "guard.spec.ts",
+          "line": 7,
+          "column": 6,
+          "specs": [
+            {
+              "title": "未登录访问 /projects → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1705,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:06.802Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "744635278ff819b57657-2bdee24ed88617516edd",
+              "file": "guard.spec.ts",
+              "line": 25,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /board?pid=p_seed_1 → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1389,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:08.854Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "744635278ff819b57657-40e08e737661c61d292d",
+              "file": "guard.spec.ts",
+              "line": 25,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /tasks/new → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2695,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:10.260Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "744635278ff819b57657-022dff59c01e5cfceb22",
+              "file": "guard.spec.ts",
+              "line": 25,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /tasks/t_0000000001 → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2919,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:12.978Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "744635278ff819b57657-633804d055d44e3195f0",
+              "file": "guard.spec.ts",
+              "line": 25,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /agents → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2289,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:15.918Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "744635278ff819b57657-a013d9102f64a2ec4e80",
+              "file": "guard.spec.ts",
+              "line": 25,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /messages → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2003,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:18.231Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "744635278ff819b57657-71116f6e13aaa0d4d608",
+              "file": "guard.spec.ts",
+              "line": 25,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /messages/c_0000000001 → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3000,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:20.255Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "744635278ff819b57657-01d780cd17d6b2daaf33",
+              "file": "guard.spec.ts",
+              "line": 25,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /roles → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2211,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:23.269Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "744635278ff819b57657-0261840d18ed5d4ad3af",
+              "file": "guard.spec.ts",
+              "line": 25,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /skills → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2301,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:25.493Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "744635278ff819b57657-3758e7a2481db20090f9",
+              "file": "guard.spec.ts",
+              "line": 25,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /artifacts?pid=p_seed_1 → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2038,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:27.816Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "744635278ff819b57657-860402fec369c249e218",
+              "file": "guard.spec.ts",
+              "line": 25,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /tools/register → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2139,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:29.873Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "744635278ff819b57657-1c18d8dc23fa63ca2e77",
+              "file": "guard.spec.ts",
+              "line": 25,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /users → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1451,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:32.031Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "744635278ff819b57657-1fca9a180036f3260f98",
+              "file": "guard.spec.ts",
+              "line": 25,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /workers → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2165,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-08-09T07:31:33.496Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "744635278ff819b57657-aaca7c784fa042380d7b",
+              "file": "guard.spec.ts",
+              "line": 25,
+              "column": 9
             }
           ]
         }
@@ -745,9 +1325,9 @@
   ],
   "errors": [],
   "stats": {
-    "startTime": "2026-08-09T03:25:14.161Z",
-    "duration": 44230.915,
-    "expected": 17,
+    "startTime": "2026-08-09T07:31:02.160Z",
+    "duration": 71788.761,
+    "expected": 33,
     "skipped": 0,
     "unexpected": 0,
     "flaky": 0

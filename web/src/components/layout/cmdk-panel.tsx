@@ -41,7 +41,7 @@ export interface CmdKPanelProps {
   className?: string;
 }
 
-const DEFAULT_CMDK_ITEMS: CmdKItem[] = [
+export const DEFAULT_CMDK_ITEMS: CmdKItem[] = [
   { group: "导航", label: "切换项目", icon: "▤" },
   { group: "导航", label: "Agent 管理", icon: "◉" },
   { group: "导航", label: "Worker 节点", icon: "⚙" },

@@ -56,6 +56,8 @@ export interface NavDockProps {
   activeKey?: string;
   /** 展开面板中的项目名 */
   projectName?: string;
+  /** 导航项（默认 NAV_ITEMS；调用方可按权限过滤后传入，ISSUE-005） */
+  items?: NavItem[];
   /** 点击导航项回调（key 为导航项 key） */
   onNavClick?: (key: string) => void;
   /** 面板内底部扩展插槽（如成员列表 / 在线状态） */
@@ -198,18 +200,20 @@ const dockCss = navAnimStyle + `
 export function NavDock({
   activeKey,
   projectName = "Agent 协作平台",
+  items,
   onNavClick,
   children,
   style,
   className,
 }: NavDockProps) {
+  const navItems = items ?? NAV_ITEMS;
   return (
     <>
       <style>{dockCss}</style>
       <div data-testid="rail-bar" className={`navdock-dock${className ? ` ${className}` : ""}`} style={style}>
         {/* 收起态：图标列（hover 高亮 + Activity Bar 指示条） */}
         <div className="navdock-icons">
-          {NAV_ITEMS.map((item) => (
+          {navItems.map((item) => (
             <button
               key={item.key}
               type="button"
@@ -248,7 +252,7 @@ export function NavDock({
                 导航
               </div>
               <div className="navdock-nav">
-                {NAV_ITEMS.map((item) => (
+                {navItems.map((item) => (
                   <button
                     key={item.key}
                     type="button"

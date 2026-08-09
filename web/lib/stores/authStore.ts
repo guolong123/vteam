@@ -13,6 +13,11 @@ export interface User {
   /** 角色信息（后端 AuthUserView 返回；旧持久化数据可能缺失 → 可选，缺失时视为非 admin） */
   roleId?: string;
   roleName?: string;
+  /**
+   * 角色权限（后端 AuthUserView 透传 role.permissions；旧持久化数据可能缺失 →
+   * 可选，缺失时按「无权限」处理，导航全过滤、守卫拒绝受限路由）。
+   */
+  permissions?: Record<string, unknown>;
   enabled?: boolean;
 }
 

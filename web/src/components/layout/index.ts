@@ -11,5 +11,5 @@ export { NavDock, NAV_ITEMS } from "./nav-dock";
 export type { NavDockProps, NavItem } from "./nav-dock";
 export { NavTopBar } from "./nav-top-bar";
 export type { NavTopBarProps } from "./nav-top-bar";
-export { CmdKPanel } from "./cmdk-panel";
+export { CmdKPanel, DEFAULT_CMDK_ITEMS } from "./cmdk-panel";
 export type { CmdKPanelProps, CmdKItem } from "./cmdk-panel";

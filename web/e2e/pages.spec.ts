@@ -170,6 +170,17 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("user-stats")).toBeVisible();
     await expect(page.getByTestId("user-item").first()).toBeVisible();
     await expect(page.getByTestId("add-user-button")).toBeVisible();
+    // ISSUE-002：编辑按钮 → 弹窗出现且预填用户名 + 角色选择
+    await page.getByTestId("user-edit-button").first().click();
+    await expect(page.getByTestId("edit-user-overlay")).toBeVisible();
+    await expect(page.getByTestId("edit-username-input")).toHaveValue(/.+/);
+    await expect(page.getByTestId("edit-user-role-select").getByRole("button").first()).toBeVisible();
+    await page.getByTestId("edit-user-cancel").click();
+    // OBS-007：新增用户弹窗角色选择可见
+    await page.getByTestId("add-user-button").click();
+    await expect(page.getByTestId("user-form-overlay")).toBeVisible();
+    await expect(page.getByTestId("user-role-select").getByRole("button").first()).toBeVisible();
+    await page.getByTestId("user-form-cancel").click();
   });
 
   test("16/17 worker-install /workers/install（独立路由 · 3 步安装向导）", async ({ page }) => {

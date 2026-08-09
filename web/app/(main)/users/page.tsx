@@ -22,7 +22,8 @@
  *   user-role-select/user-form-cancel/user-form-submit。
  * - 弹层铁律（T15）：absolute + 零 fixed/vh/vw，宿主 position:relative（对齐 projects 页 CreateProjectModal）。
  * - 后端无「所属项目数」端点 → 列表展示兜底 0（对齐 project-list 页 EMPTY_TASK_COUNT 模式）。
- * - 编辑按钮：后端无 PATCH /users/:id → 保留原型占位（无 onClick）。
+ * - 编辑按钮：PATCH /users/:id（UpdateUserDto）→ 编辑弹层预填用户名/邮箱/角色，
+ *   保存后列表刷新（ISSUE-002 修复：原为无 onClick 占位）。
  */
 import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -196,11 +197,13 @@ function StatusBadge({ enabled }: { enabled: boolean }) {
 function UserRow({
   user,
   roleLabel: roleLabelOf,
+  onEdit,
   onToggle,
   onReset,
 }: {
   user: UserItem;
   roleLabel: string;
+  onEdit: (u: UserItem) => void;
   onToggle: (u: UserItem) => void;
   onReset: (u: UserItem) => void;
 }) {
@@ -273,6 +276,7 @@ function UserRow({
           type="button"
           data-testid="user-edit-button"
           data-user-id={user.id}
+          onClick={() => onEdit(user)}
           style={{
             padding: `${space.sm - 1}px ${space.md}px`,
             borderRadius: radius.md,
@@ -794,6 +798,266 @@ function ResetPasswordModal({ open, target, submitting, error, onClose, onSubmit
   );
 }
 
+/* ------------------------------ 编辑用户弹层（ISSUE-002 修复：预填用户名/邮箱/角色 → PATCH /users/:id） ------------------------------ */
+
+/** PATCH /users/:id 请求体（email null = 清空邮箱）。 */
+interface UpdateUserPayload {
+  username: string;
+  displayName: string;
+  email: string | null;
+  roleId: string;
+}
+
+interface EditUserModalProps {
+  open: boolean;
+  target: UserItem | null;
+  roles: RoleItem[];
+  submitting: boolean;
+  error: string | null;
+  onClose: () => void;
+  onSubmit: (userId: string, payload: UpdateUserPayload) => void;
+}
+
+function EditUserModal({ open, target, roles, submitting, error, onClose, onSubmit }: EditUserModalProps) {
+  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [roleId, setRoleId] = useState("");
+
+  // Esc 关闭
+  useEffect(() => {
+    if (!open) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [open, onClose]);
+
+  // 每次打开预填目标用户（对齐原型编辑语义：用户名/邮箱/角色可改，密码不在编辑范围）
+  useEffect(() => {
+    if (!open || !target) return;
+    setUsername(target.username);
+    setEmail(target.email ?? "");
+    setRoleId(target.roleId);
+  }, [open, target]);
+
+  if (!open || !target) return null;
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (submitting || !username.trim() || !roleId) return;
+    onSubmit(target.id, {
+      username: username.trim(),
+      displayName: username.trim(),
+      email: email.trim() ? email.trim() : null,
+      roleId,
+    });
+  };
+
+  return (
+    <div
+      data-testid="edit-user-overlay"
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 60,
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "center",
+        paddingTop: "10%",
+        ...baseFont,
+      }}
+    >
+      {/* 轻遮罩：点击关闭 */}
+      <div
+        aria-hidden
+        data-testid="edit-user-mask"
+        onClick={onClose}
+        style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }}
+      />
+
+      <form
+        data-testid="edit-user-form"
+        onSubmit={handleSubmit}
+        noValidate
+        style={{
+          position: "relative",
+          width: 520,
+          maxWidth: "calc(100% - 48px)",
+          display: "flex",
+          flexDirection: "column",
+          gap: space.md,
+          padding: `${space.xl}px`,
+          borderRadius: radius.lg,
+          backgroundColor: "#FFFFFF",
+          border: `1px solid ${neutral[200]}`,
+          boxShadow: shadow.lg,
+        }}
+      >
+        {/* 头部：标题 + 关闭 */}
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: space.md }}>
+          <div>
+            <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900], lineHeight: 1.3 }}>
+              编辑用户
+            </div>
+            <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: 2 }}>
+              修改账号「{target.username}」的信息（保存后立即生效）
+            </div>
+          </div>
+          <button
+            type="button"
+            data-testid="edit-user-close"
+            aria-label="关闭编辑用户弹层"
+            onClick={onClose}
+            style={{
+              width: 26,
+              height: 26,
+              flexShrink: 0,
+              borderRadius: "50%",
+              border: "none",
+              cursor: "pointer",
+              backgroundColor: "transparent",
+              color: neutral[400],
+              fontSize: fontSize.lg,
+              lineHeight: 1,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* 用户名 */}
+        <label style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>用户名</span>
+          <input
+            data-testid="edit-username-input"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            disabled={submitting}
+            style={formField}
+          />
+        </label>
+
+        {/* 邮箱 */}
+        <label style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>邮箱</span>
+          <input
+            data-testid="edit-user-email-input"
+            type="email"
+            placeholder="name@ketaops.cc"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={submitting}
+            style={formField}
+          />
+        </label>
+
+        {/* 角色选择（GET /roles 驱动按钮组，对齐新增用户弹层结构） */}
+        <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>角色</span>
+          <div data-testid="edit-user-role-select" style={{ display: "flex", gap: space.sm, flexWrap: "wrap" }}>
+            {roles.length === 0 ? (
+              <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>角色加载中…</span>
+            ) : (
+              roles.map((r) => {
+                const label = roleLabel(r.name);
+                const theme = resolveRoleTheme(label);
+                const active = roleId === r.id;
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    data-role={r.name}
+                    data-active={active ? "true" : "false"}
+                    onClick={() => setRoleId(r.id)}
+                    disabled={submitting}
+                    style={{
+                      flex: 1,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: space.xs,
+                      padding: `${space.sm}px ${space.md}px`,
+                      borderRadius: radius.md,
+                      border: `1px solid ${active ? theme.border : neutral[200]}`,
+                      backgroundColor: active ? theme.bg : "#FFFFFF",
+                      color: active ? theme.color : neutral[600],
+                      fontSize: fontSize.md,
+                      fontWeight: active ? 600 : 500,
+                      cursor: submitting ? "default" : "pointer",
+                      fontFamily: fontFamily.body,
+                    }}
+                  >
+                    <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>{theme.mark}</span>
+                    {label}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* 错误提示 */}
+        {error && (
+          <div
+            role="alert"
+            data-testid="edit-user-error"
+            style={{ fontSize: fontSize.sm, color: "#DC2626", display: "flex", alignItems: "center", gap: space.xs }}
+          >
+            <span aria-hidden style={{ fontWeight: 700 }}>!</span>
+            {error}
+          </div>
+        )}
+
+        {/* 底部：保存 / 取消 */}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm, marginTop: space.sm }}>
+          <button
+            type="button"
+            data-testid="edit-user-cancel"
+            onClick={onClose}
+            disabled={submitting}
+            style={{
+              padding: `${space.sm + 1}px ${space.lg}px`,
+              borderRadius: radius.pill,
+              border: `1px solid ${neutral[200]}`,
+              backgroundColor: "#FFFFFF",
+              color: neutral[600],
+              fontSize: fontSize.md,
+              cursor: submitting ? "default" : "pointer",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            取消
+          </button>
+          <button
+            type="submit"
+            data-testid="edit-user-submit"
+            disabled={submitting || !username.trim() || !roleId}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: space.xs,
+              padding: `${space.sm + 1}px ${space.lg}px`,
+              borderRadius: radius.pill,
+              border: "none",
+              backgroundColor: "#2563EB",
+              color: "#FFFFFF",
+              fontSize: fontSize.md,
+              fontWeight: 500,
+              cursor: submitting ? "default" : "pointer",
+              opacity: submitting || !username.trim() || !roleId ? 0.6 : 1,
+              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            {submitting ? "保存中…" : "保存修改"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 /* ------------------------------ 页面主组件（AppShell 内容区） ------------------------------ */
 
 export default function UsersPage() {
@@ -805,6 +1069,8 @@ export default function UsersPage() {
   const [formOpen, setFormOpen] = useState(false);
   /* 重置密码弹层：target 非空即打开 */
   const [resetTarget, setResetTarget] = useState<UserItem | null>(null);
+  /* 编辑用户弹层：target 非空即打开（ISSUE-002 修复） */
+  const [editTarget, setEditTarget] = useState<UserItem | null>(null);
   /* 列表操作（禁用/启用）失败提示 */
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -854,6 +1120,21 @@ export default function UsersPage() {
     },
   });
 
+  /* 编辑用户：PATCH /users/:id（ISSUE-002 修复） */
+  const updateMutation = useMutation({
+    mutationFn: (payload: { id: string } & UpdateUserPayload) =>
+      api.patch<UserItem>(`/users/${payload.id}`, {
+        username: payload.username,
+        displayName: payload.displayName,
+        email: payload.email,
+        roleId: payload.roleId,
+      }),
+    onSuccess: () => {
+      setEditTarget(null);
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+    },
+  });
+
   const handleToggle = (u: UserItem) => {
     toggleMutation.mutate({ id: u.id, enabled: !u.enabled });
   };
@@ -864,6 +1145,10 @@ export default function UsersPage() {
 
   const handleReset = (userId: string, newPassword: string) => {
     resetMutation.mutate({ id: userId, newPassword });
+  };
+
+  const handleUpdate = (userId: string, payload: UpdateUserPayload) => {
+    updateMutation.mutate({ id: userId, ...payload });
   };
 
   const items = data?.items ?? [];
@@ -1081,6 +1366,7 @@ export default function UsersPage() {
               key={u.id}
               user={u}
               roleLabel={resolveRoleLabel(u.roleId, roles)}
+              onEdit={setEditTarget}
               onToggle={handleToggle}
               onReset={setResetTarget}
             />
@@ -1126,6 +1412,17 @@ export default function UsersPage() {
         error={resetMutation.isError ? (isApiError(resetMutation.error) ? resetMutation.error.message : "重置失败，请稍后重试") : null}
         onClose={() => setResetTarget(null)}
         onSubmit={handleReset}
+      />
+
+      {/* 编辑用户弹层：target 非空即打开（ISSUE-002 修复） */}
+      <EditUserModal
+        open={editTarget !== null}
+        target={editTarget}
+        roles={roles}
+        submitting={updateMutation.isPending}
+        error={updateMutation.isError ? (isApiError(updateMutation.error) ? updateMutation.error.message : "保存失败，请稍后重试") : null}
+        onClose={() => setEditTarget(null)}
+        onSubmit={handleUpdate}
       />
     </div>
   );
