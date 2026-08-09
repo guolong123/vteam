@@ -37,6 +37,18 @@ export interface ModelCredentialView {
   createdAt: Date | null;
 }
 
+/** Provider 聚合视图（Provider 页数据源）：models 表按 providerID 聚合 + 凭据状态。 */
+export interface ProviderSummary {
+  providerID: string;
+  /** 该 provider 下 enabled 模型数（models 表 groupBy _count）。 */
+  modelCount: number;
+  /** ModelCredential 表该 provider 存在且未 revoked。 */
+  configured: boolean;
+  /** 已配置时返回库内脱敏指纹；未配置/已吊销为 null（明文零接触）。 */
+  fingerprint: string | null;
+  revokedAt: Date | null;
+}
+
 /**
  * 模型凭据服务（C4）：provider token 的 AES-256-GCM 加密存储 + 脱敏查询 + 软吊销。
  *
@@ -109,6 +121,38 @@ export class ModelsService implements OnModuleInit {
       this.throwNotFound(id);
     }
     return row;
+  }
+
+  /**
+   * GET /models/providers：provider 聚合（Provider 页数据源）。
+   * - models 表按 providerID groupBy（enabled 过滤）取 modelCount（一次查询）；
+   * - ModelCredential 全量按 providerID 建索引取凭据状态（表很小，二次查询内存合并）；
+   * - configured = 存在且未 revoked；fingerprint 取库内已脱敏指纹（不回明文）；
+   * - 排序：providerID 字典序（简单稳定）。
+   */
+  async listProviders(): Promise<ProviderSummary[]> {
+    const groups = await this.prisma.model.groupBy({
+      by: ['providerID'],
+      where: { enabled: true },
+      _count: { _all: true },
+    });
+    const credentials = await this.prisma.modelCredential.findMany();
+    const credByProvider = new Map(
+      credentials.map((c) => [c.providerID, c]),
+    );
+    return groups
+      .map((g) => {
+        const cred = credByProvider.get(g.providerID);
+        const configured = !!cred && cred.revokedAt === null;
+        return {
+          providerID: g.providerID,
+          modelCount: g._count._all,
+          configured,
+          fingerprint: configured ? (cred?.fingerprint ?? null) : null,
+          revokedAt: cred?.revokedAt ?? null,
+        };
+      })
+      .sort((a, b) => a.providerID.localeCompare(b.providerID));
   }
 
   /**

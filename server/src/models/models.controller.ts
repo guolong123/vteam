@@ -41,6 +41,19 @@ export class ModelsController {
     return this.modelsService.findAll(query);
   }
 
+  /**
+   * Provider 聚合列表（Provider 页数据源，成员只读）。
+   * GET /api/v1/models/providers → 200 + Array<{providerID, modelCount, configured, fingerprint, revokedAt}>
+   *   providerID 来自 models 表聚合（已有模型归属的 provider）；modelCount = enabled 模型数；
+   *   configured = ModelCredential 存在且未 revoked；fingerprint 仅脱敏指纹（无明文）。
+   *   声明在 :id 之前——NestJS 路由按声明顺序匹配，静态段必须先于参数段。
+   */
+  @Get('providers')
+  @ApiOperation({ summary: 'Provider 聚合列表（模型数 + 凭据状态，成员只读）' })
+  listProviders() {
+    return this.modelsService.listProviders();
+  }
+
   /** GET /api/v1/models/:id → 200 + Model；不存在 → 404 MODEL_NOT_FOUND。 */
   @Get(':id')
   @ApiOperation({ summary: '模型目录详情' })

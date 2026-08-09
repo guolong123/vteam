@@ -1,3 +1,4 @@
+import { PATH_METADATA } from '@nestjs/common/constants';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
 import { SetModelCredentialDto } from './dto/set-model-credential.dto';
@@ -12,6 +13,7 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
     create: jest.Mock;
     update: jest.Mock;
     remove: jest.Mock;
+    listProviders: jest.Mock;
     setCredential: jest.Mock;
     getCredential: jest.Mock;
     revokeCredential: jest.Mock;
@@ -43,6 +45,7 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
       create: jest.fn(),
       update: jest.fn(),
       remove: jest.fn(),
+      listProviders: jest.fn(),
       setCredential: jest.fn(),
       getCredential: jest.fn(),
       revokeCredential: jest.fn(),
@@ -78,6 +81,43 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
 
     expect(service.findOne).toHaveBeenCalledWith('md_0000000001');
     expect(result).toEqual(modelRow);
+  });
+
+  it('GET /models/providers 转发 listProviders（provider 聚合）', async () => {
+    service.listProviders.mockResolvedValue([
+      {
+        providerID: 'opencode-go',
+        modelCount: 5,
+        configured: true,
+        fingerprint: 'sk-a****89xz',
+        revokedAt: null,
+      },
+    ]);
+
+    const result = await controller.listProviders();
+
+    expect(service.listProviders).toHaveBeenCalled();
+    expect(result).toMatchObject([
+      { providerID: 'opencode-go', modelCount: 5, configured: true },
+    ]);
+  });
+
+  it('路由顺序：providers 静态段在 :id 参数段之前声明（避免被 :id 吞路由）', () => {
+    // @Get 的 PATH_METADATA 定义在 descriptor.value（函数对象）上，故直接读函数对象
+    const pathOf = (method: string) =>
+      Reflect.getMetadata(
+        PATH_METADATA,
+        ModelsController.prototype[method],
+      ) as string;
+    const methods = Object.getOwnPropertyNames(
+      ModelsController.prototype,
+    ).filter((k) => k !== 'constructor');
+
+    const providersIdx = methods.findIndex((m) => pathOf(m) === 'providers');
+    const idIdx = methods.findIndex((m) => pathOf(m) === ':id');
+    expect(providersIdx).toBeGreaterThan(-1);
+    expect(idIdx).toBeGreaterThan(-1);
+    expect(providersIdx).toBeLessThan(idIdx);
   });
 
   it('POST /models 转发 create（DTO 透传）', async () => {

@@ -18,6 +18,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       create: jest.Mock;
       update: jest.Mock;
       delete: jest.Mock;
+      groupBy: jest.Mock;
     };
     modelCredential: {
       findUnique: jest.Mock;
@@ -84,6 +85,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         create: jest.fn(),
         update: jest.fn(),
         delete: jest.fn(),
+        groupBy: jest.fn(),
       },
       modelCredential: {
         findUnique: jest.fn(),
@@ -207,6 +209,90 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       await expect(service.findOne('md_nonexistent')).rejects.toMatchObject({
         response: { code: MODEL_ERRORS.MODEL_NOT_FOUND },
       });
+    });
+  });
+
+  describe('listProviders（provider 聚合：模型数 + 凭据状态）', () => {
+    it('models groupBy + ModelCredential 合并：modelCount/configured/fingerprint/revokedAt + 字典序', async () => {
+      prisma.model.groupBy.mockResolvedValue([
+        { providerID: 'zhipu', _count: { _all: 3 } },
+        { providerID: 'opencode-go', _count: { _all: 5 } },
+        { providerID: 'opencode', _count: { _all: 2 } },
+      ]);
+      prisma.modelCredential.findMany.mockResolvedValue([
+        credentialRow, // opencode-go：已配置
+        {
+          ...credentialRow,
+          id: 'mc_0000000002',
+          providerID: 'opencode',
+          revokedAt: new Date('2026-08-01T00:00:00Z'),
+        },
+      ]);
+
+      const result = await service.listProviders();
+
+      expect(prisma.model.groupBy).toHaveBeenCalledWith({
+        by: ['providerID'],
+        where: { enabled: true },
+        _count: { _all: true },
+      });
+      expect(prisma.modelCredential.findMany).toHaveBeenCalled();
+      expect(result).toEqual([
+        {
+          providerID: 'opencode',
+          modelCount: 2,
+          configured: false,
+          fingerprint: null,
+          revokedAt: new Date('2026-08-01T00:00:00Z'),
+        },
+        {
+          providerID: 'opencode-go',
+          modelCount: 5,
+          configured: true,
+          fingerprint: 'sk-a****89xz',
+          revokedAt: null,
+        },
+        {
+          providerID: 'zhipu',
+          modelCount: 3,
+          configured: false,
+          fingerprint: null,
+          revokedAt: null,
+        },
+      ]);
+    });
+
+    it('凭据已吊销 → configured=false 且 fingerprint=null（吊销保留 revokedAt 轨迹）', async () => {
+      prisma.model.groupBy.mockResolvedValue([
+        { providerID: 'opencode', _count: { _all: 2 } },
+      ]);
+      prisma.modelCredential.findMany.mockResolvedValue([
+        {
+          ...credentialRow,
+          providerID: 'opencode',
+          fingerprint: 'sk-x****xxxx',
+          revokedAt: new Date('2026-08-02T00:00:00Z'),
+        },
+      ]);
+
+      const result = await service.listProviders();
+
+      expect(result).toEqual([
+        {
+          providerID: 'opencode',
+          modelCount: 2,
+          configured: false,
+          fingerprint: null,
+          revokedAt: new Date('2026-08-02T00:00:00Z'),
+        },
+      ]);
+    });
+
+    it('无模型/无凭据 → 空数组', async () => {
+      prisma.model.groupBy.mockResolvedValue([]);
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+
+      expect(await service.listProviders()).toEqual([]);
     });
   });
 

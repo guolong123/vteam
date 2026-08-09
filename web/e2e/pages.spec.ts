@@ -214,7 +214,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("worker-guide")).toBeVisible();
   });
 
-  test("18/18 models-manage /models（模型目录管理）", async ({ page }) => {
+  test("18/18 models-manage /models（模型目录，只读展示）", async ({ page }) => {
     await page.goto("/models");
     await expectNavShell(page);
     await expect(page.getByTestId("models-manage-root")).toBeVisible();
@@ -223,8 +223,28 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     // 模型行（seed 预置 8 模型目录）
     await expect(page.getByTestId("model-list")).toBeVisible();
     await expect(page.getByTestId("model-item").first()).toBeVisible();
-    // 凭据配置区（目标模型 select + token 输入 + worker 多选）
-    await expect(page.getByTestId("credential-section")).toBeVisible();
-    await expect(page.getByTestId("model-credential-select")).toBeVisible();
+    // 只读展示：enabled 徽章可见，无凭据配置区（凭证管理已拆分到 /providers）
+    await expect(page.getByTestId("model-enabled-badge").first()).toBeVisible();
+    await expect(page.getByTestId("credential-section")).toHaveCount(0);
+  });
+
+  test("Provider 管理 /providers（凭证管理 + worker 同步）", async ({ page }) => {
+    await page.goto("/providers");
+    await expectNavShell(page);
+    await expect(page.getByTestId("providers-root")).toBeVisible();
+    await expect(page.getByTestId("providers-toolbar")).toBeVisible();
+    // Provider 行（按 providerID 聚合模型目录，seed 预置多 provider）
+    await expect(page.getByTestId("provider-list")).toBeVisible();
+    await expect(page.getByTestId("provider-item").first()).toBeVisible();
+    // 凭据状态徽章 + fingerprint 列
+    await expect(page.getByTestId("provider-credential-status").first()).toBeVisible();
+    await expect(page.getByTestId("provider-fingerprint").first()).toBeVisible();
+    // 配置弹窗：点击配置 → provider 预填 + key 输入 + worker 多选（admin 会话）
+    await page.getByTestId("provider-configure-button").first().click();
+    await expect(page.getByTestId("provider-config-modal")).toBeVisible();
+    await expect(page.getByTestId("provider-modal-key-input")).toBeVisible();
+    await expect(page.getByTestId("provider-modal-workers")).toBeVisible();
+    await page.getByTestId("provider-modal-cancel").first().click();
+    await expect(page.getByTestId("provider-config-modal")).toHaveCount(0);
   });
 });

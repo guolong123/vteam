@@ -37,6 +37,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: "agents", label: "Agent 管理", icon: "◉" },
   { key: "workers", label: "Worker 节点", icon: "⚙" },
   { key: "models", label: "模型目录", icon: "◇" },
+  { key: "providers", label: "Provider 管理", icon: "◈" },
   { key: "skills", label: "技能与工具", icon: "◫" },
   { key: "messages", label: "消息中心", icon: "✉" },
   { key: "users", label: "用户管理", icon: "☷" },
