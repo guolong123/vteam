@@ -21,7 +21,7 @@
  *   user-form-overlay/user-form/username-input/user-email-input/user-password-input/
  *   user-role-select/user-form-cancel/user-form-submit。
  * - 弹层铁律（T15）：absolute + 零 fixed/vh/vw，宿主 position:relative（对齐 projects 页 CreateProjectModal）。
- * - 后端无「所属项目数」端点 → 列表展示兜底 0（对齐 project-list 页 EMPTY_TASK_COUNT 模式）。
+ * - 所属项目数：GET /users 返回 _count.projectMembers 真实计数（MOCK-05，原硬编码 0）。
  * - 编辑按钮：PATCH /users/:id（UpdateUserDto）→ 编辑弹层预填用户名/邮箱/角色，
  *   保存后列表刷新（ISSUE-002 修复：原为无 onClick 占位）。
  */
@@ -76,7 +76,7 @@ function roleLabel(name: string): string {
 
 /* ------------------------------ API 数据模型（T8 DTO / 09 篇 §3.2） ------------------------------ */
 
-/** GET /users 条目（SAFE_USER_SELECT：不含 passwordHash，含 roleId 与 enabled）。 */
+/** GET /users 条目（SAFE_USER_SELECT：不含 passwordHash，含 roleId、enabled 与 _count.projectMembers）。 */
 interface UserItem {
   id: string;
   username: string;
@@ -86,6 +86,8 @@ interface UserItem {
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
+  /** 所属项目数（findAll _count 关联统计，MOCK-05）。可选：findOne 等单用户端点不带。 */
+  _count?: { projectMembers: number };
 }
 
 /** GET /users 分页响应。 */
@@ -115,9 +117,6 @@ interface CreateUserPayload {
   email?: string;
   roleId: string;
 }
-
-/** 后端无「所属项目数」端点 → 0 为真实兜底值（对齐 project-list 页 EMPTY_TASK_COUNT 模式）。 */
-const EMPTY_PROJECT_COUNT = 0;
 
 /* ------------------------------ 角色 / 状态解析（列表行 + 统计条） ------------------------------ */
 
@@ -259,9 +258,9 @@ function UserRow({
         </div>
       </div>
 
-      {/* 所属项目数（后端无端点 → 兜底 0） */}
+      {/* 所属项目数（GET /users _count.projectMembers 真实计数，MOCK-05） */}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[700] }}>{EMPTY_PROJECT_COUNT}</div>
+        <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[700] }}>{user._count?.projectMembers ?? 0}</div>
         <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>所属项目</div>
       </div>
 

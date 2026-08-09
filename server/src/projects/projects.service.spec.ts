@@ -8,6 +8,8 @@ describe('ProjectsService', () => {
   let prisma: {
     projectMember: { count: jest.Mock; findMany: jest.Mock };
     project: { create: jest.Mock; findUnique: jest.Mock };
+    task: { create: jest.Mock; findUnique: jest.Mock; groupBy: jest.Mock };
+    taskAgent: { findMany: jest.Mock };
     projectMemberCreate: jest.Mock;
     $transaction: jest.Mock;
   };
@@ -19,6 +21,8 @@ describe('ProjectsService', () => {
     prisma = {
       projectMember: { count: jest.fn(), findMany: jest.fn() },
       project: { create: jest.fn(), findUnique: jest.fn() },
+      task: { create: jest.fn(), findUnique: jest.fn(), groupBy: jest.fn() },
+      taskAgent: { findMany: jest.fn() },
       projectMemberCreate: jest.fn(),
       $transaction: jest.fn(),
     };
@@ -51,6 +55,27 @@ describe('ProjectsService', () => {
         },
       ];
       prisma.$transaction.mockResolvedValue([1, memberRows]);
+      prisma.task.groupBy.mockResolvedValue([
+        { projectId: 'p_1', _count: { _all: 1 } },
+      ]);
+      prisma.taskAgent.findMany.mockResolvedValue([
+        {
+          task: { projectId: 'p_1' },
+          agentId: 'a_product',
+          agent: { id: 'a_product', name: '产品经理', role: 'product' },
+        },
+        {
+          task: { projectId: 'p_1' },
+          agentId: 'a_developer',
+          agent: { id: 'a_developer', name: '开发者', role: 'developer' },
+        },
+        // 同 Agent 在多个任务（历史任务）只算一次
+        {
+          task: { projectId: 'p_1' },
+          agentId: 'a_product',
+          agent: { id: 'a_product', name: '产品经理', role: 'product' },
+        },
+      ]);
 
       const result = await service.findAll(ownerId, { page: 1, pageSize: 20 });
 
@@ -62,6 +87,51 @@ describe('ProjectsService', () => {
         name: '成员项目',
         role: 'owner',
         taskCount: 2,
+        completedTaskCount: 1,
+      });
+      // agentMembers 去重：a_product 出现 2 次只保留 1 个，附角色供头像渲染
+      expect(result.items[0].agentMembers).toEqual([
+        { agentId: 'a_product', name: '产品经理', role: 'product' },
+        { agentId: 'a_developer', name: '开发者', role: 'developer' },
+      ]);
+      expect(prisma.task.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          by: ['projectId'],
+          where: {
+            projectId: { in: ['p_1'] },
+            status: { in: ['completed', 'archived'] },
+          },
+        }),
+      );
+    });
+
+    it('无成员任务/无 Agent 成员时统计回落 0 与空数组', async () => {
+      const memberRows = [
+        {
+          role: 'member',
+          project: {
+            id: 'p_2',
+            name: '空项目',
+            description: null,
+            ownerId,
+            status: 'active',
+            _count: { tasks: 0 },
+            createdAt: new Date('2026-08-06T00:00:00Z'),
+            updatedAt: new Date('2026-08-06T00:00:00Z'),
+          },
+        },
+      ];
+      prisma.$transaction.mockResolvedValue([1, memberRows]);
+      prisma.task.groupBy.mockResolvedValue([]);
+      prisma.taskAgent.findMany.mockResolvedValue([]);
+
+      const result = await service.findAll(ownerId, { page: 1, pageSize: 20 });
+
+      expect(result.items[0]).toMatchObject({
+        id: 'p_2',
+        taskCount: 0,
+        completedTaskCount: 0,
+        agentMembers: [],
       });
     });
 
@@ -75,6 +145,9 @@ describe('ProjectsService', () => {
 
       expect(result.total).toBe(0);
       expect(result.items).toHaveLength(0);
+      // 无项目时不发统计查询
+      expect(prisma.task.groupBy).not.toHaveBeenCalled();
+      expect(prisma.taskAgent.findMany).not.toHaveBeenCalled();
     });
   });
 

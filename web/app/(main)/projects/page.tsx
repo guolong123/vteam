@@ -40,8 +40,19 @@ interface Project {
   role: string;
   /** 该项目下任务数（FR-25：后端 _count 关联统计） */
   taskCount: number;
+  /** 已完成任务数（completed + archived，MOCK-04 后端聚合） */
+  completedTaskCount: number;
+  /** 项目 Agent 成员（任务团队未移除去重，MOCK-04） */
+  agentMembers: ProjectAgentMember[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** GET /projects agentMembers 条目（附角色供头像渲染）。 */
+interface ProjectAgentMember {
+  agentId: string;
+  name: string | null;
+  role: string | null;
 }
 
 /** GET /projects 分页响应（对齐 09 篇 §2 分页契约）。 */
@@ -64,8 +75,12 @@ const STATUS_MAP: Record<string, StatusKey> = {
   archived: "已归档",
 };
 
-/** 卡片任务统计（Phase 1 无任务统计端点，seed 项目无任务，0 为真实兜底值）。 */
-const EMPTY_TASK_COUNT = 0;
+const ROLE_KEYS: readonly RoleKey[] = ["product", "architect", "developer", "tester"];
+
+/** 后端 agent.role → AgentAvatar 可用 RoleKey（未知/自定义 → developer 兜底，对齐 agents 页）。 */
+function toAvatarRole(role: string | null): RoleKey {
+  return role && (ROLE_KEYS as readonly string[]).includes(role) ? (role as RoleKey) : "developer";
+}
 
 function statusKey(status: string): StatusKey {
   return STATUS_MAP[status] ?? "进行中";
@@ -155,10 +170,10 @@ function ProjectCard({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: space.xs, fontSize: fontSize.sm, color: neutral[400] }}>
-          <span aria-hidden style={{ fontWeight: 700, color: neutral[600] }}>{project.taskCount ?? EMPTY_TASK_COUNT}</span>
+          <span aria-hidden style={{ fontWeight: 700, color: neutral[600] }}>{project.taskCount}</span>
           个任务
           <span style={{ marginLeft: space.xs, color: neutral[300] }}>·</span>
-          <span style={{ color: "#059669" }}>{EMPTY_TASK_COUNT} 已完成</span>
+          <span style={{ color: "#059669" }}>{project.completedTaskCount} 已完成</span>
         </div>
         {/* 次级入口：产出物（点击不冒泡，避免触发卡片主跳转 /board） */}
         <button
@@ -186,11 +201,11 @@ function ProjectCard({
           <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>▤</span>
           产出物
         </button>
-        {/* 成员 Agent 头像堆叠（Phase 1 无成员列表端点，渲染空容器） */}
-        <div style={{ display: "flex", alignItems: "center" }} aria-label="0 个 Agent 成员">
-          {EMPTY_MEMBERS.map((role, idx) => (
-            <span key={role} style={{ marginLeft: idx === 0 ? 0 : -space.sm - 2 }}>
-              <AgentAvatar role={role} size="sm" />
+        {/* 成员 Agent 头像堆叠（MOCK-04：真实成员，agentMembers 来自项目任务团队去重） */}
+        <div style={{ display: "flex", alignItems: "center" }} aria-label={`${project.agentMembers.length} 个 Agent 成员`}>
+          {project.agentMembers.map((m, idx) => (
+            <span key={m.agentId} style={{ marginLeft: idx === 0 ? 0 : -space.sm - 2 }}>
+              <AgentAvatar role={toAvatarRole(m.role)} size="sm" />
             </span>
           ))}
         </div>
@@ -198,9 +213,6 @@ function ProjectCard({
     </section>
   );
 }
-
-/** 成员头像数据（Phase 1 无成员列表端点，[] 兜底保持布局）。 */
-const EMPTY_MEMBERS: RoleKey[] = [];
 
 /* ============================== 创建项目弹窗 ============================== */
 

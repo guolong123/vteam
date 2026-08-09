@@ -59,19 +59,12 @@ export interface MessageInputProps {
   className?: string;
 }
 
-/** 默认候选：对齐 seed 预置的 4 个 template Agent */
-const DEFAULT_MENTIONABLE: MentionableAgent[] = [
-  { id: "a_product", name: "产品经理", role: "product" },
-  { id: "a_architect", name: "架构师", role: "architect" },
-  { id: "a_developer", name: "开发者", role: "developer" },
-  { id: "a_tester", name: "测试", role: "tester" },
-];
-
 export function MessageInput({
   value,
   onChange,
   onSend,
-  mentionable = DEFAULT_MENTIONABLE,
+  /** 兜底为空：未显式传 mentionable 时 @ 无候选，绝不展示非团队成员的假 Agent */
+  mentionable = [],
   placeholder = "输入消息，@ 提及某个 Agent…",
   sending = false,
   style,

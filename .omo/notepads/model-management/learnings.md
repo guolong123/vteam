@@ -6,6 +6,22 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ---
 
+## E3: 修复 MOCK-04 项目卡片「0 已完成」「0 个 Agent 成员」硬编码（2026-08-09，实现 + 浏览器实证完成）
+
+- **根因**：`web/app/(main)/projects/page.tsx` 三处 Phase 1 占位——`EMPTY_TASK_COUNT = 0` 写死「已完成」数、`EMPTY_MEMBERS: RoleKey[] = []` 空成员数组、aria-label 硬编码「0 个 Agent 成员」；后端 `GET /projects` 只返回 `taskCount`（总任务数），无状态聚合、无成员列表。
+- **方案（后端聚合，一次到位，非前端 N+1）**：`ProjectsService.findAll` 扩展两个响应字段，各一次查询（无 N+1、无 tasks 端点分页截断问题）：
+  1. **`completedTaskCount`**：`prisma.task.groupBy({ by:['projectId'], where:{ projectId:{in}, status:{in:[completed, archived]} }, _count:{_all:true} })`——**「已完成」口径 = completed + archived**（归档是已完成终态，`TASK_TRANSITIONS.archive` 仅接受 completed；F3 的 6 个归档任务正确计入）。
+  2. **`agentMembers`**：`prisma.taskAgent.findMany({ where:{ task:{projectId:{in}}, removedAt:null }, select agent {id,name,role} })`——项目下所有任务团队**未移除** Agent，内存按 projectId 去重（同 Agent 多任务只算一次）；**附真实 role**（对齐 `chat.service findOne` 的 agentMembers 模式），前端头像渲染直接用 `toAvatarRole(role)`（未知/自定义 → developer 兜底，对齐 agents 页），无需静态 id→role 映射表。
+  - 空项目列表（`projectIds.length === 0`）短路跳过两个统计查询（spec 断言不调用）。
+- **前端**：`Project` 接口加 `completedTaskCount` + `agentMembers: ProjectAgentMember[]`（`{agentId, name, role}`）；删 `EMPTY_TASK_COUNT`/`EMPTY_MEMBERS` 两常量；卡片渲染 `{project.completedTaskCount} 已完成` + `aria-label={agentMembers.length} 个 Agent 成员` + 头像堆叠；`taskCount ?? 0` 兜底一并删除（后端恒返回数字）。
+- **验证**：server `nest build` 通过 + jest **44 suites / 707 tests 全绿**（基线 705 + 2 新用例：去重聚合断言含同 Agent 多任务只算一次 + 空项目回落 0/空数组 + 无项目不发统计查询）；web `npx tsc --noEmit` 0 错误。
+- **浏览器实证（playwright channel=chrome）**：临时改库 p_seed_1 任务 → completed → 登录 seed-admin → /projects → p_seed_1 卡片「1 已完成」+「2 个 Agent 成员」aria-label + 2 个头像（a_architect/a_product）；p_seed_2 空项目「0 已完成」+ 空成员容器；0 console error；**实证后恢复任务为 in_progress**（改库验证 → 恢复现场闭环）。
+- **⚠️ playwright 临时 spec 匹配坑**：`--project=pages` 的 `testMatch: /pages\.spec\.ts/` 只匹配该字面文件名——临时验证 spec 需命名 `e2e/mock04-pages.spec.ts`（含 "pages.spec.ts" 子串）才能跑进 pages 项目；测完删除。
+- **⚠️ 断言坑**：卡片「1 个任务」数字与文案跨元素（数字在独立 span aria-hidden 内）——`getByText("1 个任务")` 匹配不到，用 `card.toContainText(/1\s*个任务/)`（innerText 合并跨元素文本）；AgentAvatar 内部多层 span，数头像用 `:scope > span`；0 成员空容器尺寸 0 是 hidden，`toBeAttached` 而非 `toBeVisible`。
+- **⚠️ 环境坑（复现）**：3000 后端双实例（keta 用户 `--enable-source-maps` + root 无参）都被新 dist 覆盖重启；turbopack dev server 多次 playwright 连跑后无征兆退出（日志尾 `[?25h`，无错误）——重启用 `nohup node_modules/.bin/next dev --turbopack -p 3001` + `disown`（setsid 也退过）。
+
+---
+
 ## E2: OBS-009 可观测性——模型调用失败快速报错（step-finish reason=error，2026-08-09，实现 + 测试完成）
 
 - **根因（已探索确认）**：`findFinish`（worker-dispatcher.ts:75-88）只认 assistant 消息的 `step-finish(reason=stop)`；模型调用失败（无真实凭据 → 401/error）时 serve 产出 `step-finish(reason=error)`（或 error part）→ findFinish 不匹配 → 自持轮询静默等到 `DISPATCH_TIMEOUT_MS=120s` 才报错。QA 实测用户等 35s 无回复且无任何错误提示。
@@ -522,3 +538,37 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   5. 同步文件头/区块注释（mock 3 文件 → 真实列表初始空）。
 - **验证**：web `npx tsc --noEmit` 0 错误（nvm v22.22.1）；playwright 浏览器实证（dev `env API_PROXY_TARGET=http://localhost:13001 node_modules/.bin/next dev --turbopack -p 3002`，storageState 复用 `.auth/user.json` seed-admin，channel chrome）2 项 PASS：`doc-file` 元素计数 = 0（无预置）+ 拦截 POST `/api/v1/projects/*/tasks` 断言 `backgroundDocs=[]`。
 - **经验**：mock 数据污染真实提交链路的通用检查点——凡是提交 payload 里有「用户从未操作过就存在」的值，先查它是否来自硬编码常量而非 state；纯 mock 展示（无交互能力）与 mock 数据污染（提交）是两件事，前者可保留占位，后者必须拆掉。
+
+## MOCK-06: 群聊 @ 候选混入非团队假 Agent（2026-08-09，实现 + tsc 验证完成）
+
+- **背景**：QA 报告 MOCK-06（中）——`web/src/components/ui/message-input.tsx` `DEFAULT_MENTIONABLE` 硬编码 4 个模板 Agent（a_product/a_architect/a_developer/a_tester），未显式传 mentionable 的调用方 @ 面板会展示非团队成员的假 Agent（线上任务团队为「产品经理副本+开发者」时仍显示模板「产品经理」「测试」）。
+- **调用方全量核查**（`MessageInput` 全库仅 2 个真实调用方，均显式传参）：
+  1. `tasks/[id]/page.tsx:1153-1157`——`mentionable={mentionable}`（真实 `agentMembers`，来自 GET /channels/:id）✅ 已修（历史提交）；
+  2. `messages/[id]/page.tsx:740-744`——`mentionable={[]}`（私聊语义：无需手动 @，发送时自动附带主 Agent mention）✅；
+  3. `docs/agent-platform/prototypes/_shared/components.tsx` 的 MessageInput 是**独立原型展示组件**（不 import web 真实组件，默认 4 角色 chips 仅静态展示），非运行代码，不在线上。
+- **兜底策略决策**：两个调用方都传真实数据 → `DEFAULT_MENTIONABLE` 兜底实际从不命中，但保留假 Agent 模板是隐患（未来新调用方忘传即回归）。**删除 DEFAULT_MENTIONABLE 常量，默认参数改为 `mentionable = []`**——兜底为空数组（@ 无候选）比假 Agent 更安全：宁可不提示，不展示错误成员。
+- **修复**（单文件 message-input.tsx）：删除 :62-68 常量 + :74 默认值改 `[]`（附注释说明空兜底策略，防回归）。
+- **验证**：web `npx tsc --noEmit` 0 错误（nvm v22.22.1）。未跑浏览器实证（tsc 覆盖；线上 @ 面板行为由后续 QA 阶段覆盖，同 MOCK-03 模式）。
+- **经验**：默认参数里的「示例数据」是最隐蔽的 mock 污染源——组件级兜底常量（假用户/假成员/假列表）只要存在，任何新调用方忘传参就会把假数据带进真实链路。规则：**兜底值必须是空/保守值，真实数据一律由调用方显式传入**。
+
+## MOCK-07: Agent 工具配置区硬编码假工具行 jenkins-*（2026-08-09，实现 + tsc 验证完成）
+
+- **背景**：QA 报告 MOCK-07（低）——`web/app/(main)/agents/page.tsx` 工具配置区存在 `tool-wildcard-row`（:751-786）硬编码「jenkins-* → ask」静态示意行（注释「静态示意，对齐原型」），所有 Agent 详情工具权限列表都显示该行，用户误以为存在 jenkins-* 工具。
+- **真实数据源核查**：工具权限列表 `ToolPermissionList` 本就有真实驱动——`rows = catalog（GET /tools?enabled=true，真实 source 徽章）+ toolDrafts（agent.toolEffects，PATCH 提交）`，空态（tool-empty「暂无工具权限配置」）与「+ 添加工具」（tool-action-input → commitAdd）逻辑完整。wildcard 行是唯一与数据无关的纯假行 → **整块删除**（含 `data-testid="tool-wildcard-row"` 与容器注释）。
+- **修复**（单文件 page.tsx，4 处）：
+  1. 删除整个 tool-wildcard-row 块（jenkins-* → ask 静态示意）；
+  2. 「工具名即权限 action（如 jenkins-build），支持通配符批量授权（如 jenkins-*）」说明文案 → 泛化「工具名即权限 action，支持通配符批量授权」（去具体假工具示例）；
+  3. 添加工具输入框 placeholder「（如 github_create_issue / jenkins-build）」→「（如 my_custom_tool）」；
+  4. 文件头注释 + inferToolSource 兜底注释中的 jenkins-build 示例 → my-custom-tool（同步清理全文件残留）。
+- **验证**：`grep jenkins|tool-wildcard-row` 0 残留（jenkins 全文件清零）；web `npx tsc --noEmit` 0 错误（nvm v22.22.1）。
+- **经验**：原型保真迁移中「对齐原型」的静态示意行是低危但顽固的 mock 污染——它不污染提交链路（不进 payload），但污染展示链路（用户看到不存在的工具/功能）。规则：**凡是列表/矩阵类展示区，示意行必须由真实目录（GET /tools）或真实配置（toolEffects）驱动；帮助文案、placeholder、注释里的具体工具名示例一律泛化（my_custom_tool / my-custom-tool）**，避免任何「看起来像是系统已存在工具」的字样。
+
+## MOCK-05: 用户「所属项目数」硬编码 0 修复（2026-08-09，后端 + 前端 + jest + tsc + 浏览器实证完成）
+
+- **背景**：QA 报告 MOCK-05（中）——`web/app/(main)/users/page.tsx` `:119` `EMPTY_PROJECT_COUNT = 0`（注释「后端无端点 → 0 为真实兜底值」），`:264` 列表行恒显 0。QA 线上确认 zhangwei 实际拥有 wodeixiangmu 项目仍显示「0 所属项目」——硬编码 0 在用户有项目时是**误导**而非兜底。
+- **后端（users.service.ts findAll）**：`findMany` select 改为 `{ ...SAFE_USER_SELECT, _count: { select: { projectMembers: true } } }`（User 模型本就有 `projectMembers ProjectMember[]` 关联，Prisma `_count` 一条 SQL 计数）。**只动 findAll**——findOne/create/update 等单用户端点保持 SAFE_USER_SELECT 不变（`_count` 仅列表契约需要，最小侵入）。
+- **前端（users/page.tsx）**：`UserItem` 加可选 `_count?: { projectMembers: number }`（可选：findOne 端点不带）；**删除 `EMPTY_PROJECT_COUNT` 常量**；行渲染 `user._count?.projectMembers ?? 0`——0 现在是真实值（确实没加入项目）而非硬编码。同步更新文件头 :24 注释（原「后端无端点 → 兜底 0」）。
+- **测试**：users.service.spec 新增用例「附带所属项目数 _count.projectMembers」——断言 findMany select 含 `_count: { select: { projectMembers: true } }` + 响应透传真实计数。jest **44 suites / 707 tests 全绿**（基线 706 + 新增 1）。
+- **验证**：curl 实测本地 nest watch（3000）GET /users → seed-admin `_count.projectMembers = 2`（真实数据）；playwright 浏览器实测（3004 dev + 注入 admin 登录态）用户列表 **seed-admin 行显示「2 所属项目」**（原恒 0）、seed-member「0」（真实）。web `npx tsc --noEmit` 0 错误。
+- **⚠️ 多 dev 实例踩坑**：两个 `next dev --turbopack` 共享 `.next` 目录会持续互踩产物（500 `Cannot find module chunks/ssr/[turbopack]_runtime.js`）——同仓库只能跑一个 dev（并行任务 3001 与验证用 3004 必须轮换，验证后已恢复 3001）。
+- **经验**：「兜底 0」模式（对齐 EMPTY_TASK_COUNT）在**字段有真实数据源但页面没用**时是 bug 而非兜底——MOCK 类检查点：先查后端关联/计数能力（Prisma `_count` 零成本），能算就透传，不能算才降级「—」；硬编码展示值必须逐项核对是否有可计算来源。

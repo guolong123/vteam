@@ -6,7 +6,7 @@
  * 唯一来源：docs/agent-platform/prototypes/agent-config/index.tsx（布局/间距/文案/data-testid 零改动）。
  * - 左 Agent 列表（320px，data-testid=agent-list-item）+ 右 ConfigPanel 五块配置面板：
  *   提示词（prompt-editor）/ 默认模型（model-select）/ 技能（skill-list）/
- *   工具（tool-permission-list + tool-effect-select + tool-wildcard-row）/ 权限范围（permission-config）。
+ *   工具（tool-permission-list + tool-effect-select）/ 权限范围（permission-config）。
  * - 数据源：GET /api/v1/agents（type 过滤 + 分页 + 扩展字段）→ TanStack Query；
  *   选中 Agent → GET /api/v1/agents/:id 详情（列表条目已含扩展字段，详情查询保证选中态最新）。
  * - 交互：
@@ -220,7 +220,7 @@ function CredentialBadge({ status }: { status: "configured" | "missing" }) {
  * 仅当 action 不在启用工具目录（手动添加的通配/残留）时使用：
  * - 基础裸权限名 → 内置
  * - 含下划线（<server>_<tool>，如 jira_query / github_create_issue）→ MCP
- * - 其余（含连字符等，如 jenkins-build）→ 自定义
+ * - 其余（含连字符等，如 my-custom-tool）→ 自定义
  */
 function inferToolSource(action: string): ToolSourceKey {
   if (BUILTIN_TOOL_ACTIONS.has(action)) return "builtin";
@@ -682,7 +682,7 @@ function ToolPermissionList({ tools, catalog, readOnly, onChange }: ToolPermissi
               <input
                 data-testid="tool-action-input"
                 autoFocus
-                placeholder="工具 action（如 github_create_issue / jenkins-build）"
+                placeholder="工具 action（如 my_custom_tool）"
                 value={draftAction}
                 onChange={(e) => setDraftAction(e.target.value)}
                 onKeyDown={(e) => {
@@ -748,42 +748,6 @@ function ToolPermissionList({ tools, catalog, readOnly, onChange }: ToolPermissi
         </div>
       )}
 
-      {/* 通配符行：示例 jenkins-* → ask（静态示意，对齐原型） */}
-      <div
-        data-testid="tool-wildcard-row"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: space.sm,
-          padding: `${space.sm}px ${space.md}px`,
-          borderRadius: radius.md,
-          border: `1px dashed ${neutral[300]}`,
-          backgroundColor: neutral[50],
-          fontSize: fontSize.xs,
-          color: neutral[500],
-        }}
-      >
-        <span style={{ fontFamily: fontFamily.mono, fontWeight: 600, color: neutral[700] }}>
-          jenkins-*
-        </span>
-        <span aria-hidden style={{ color: neutral[300] }}>
-          →
-        </span>
-        <span
-          style={{
-            color: toolEffectMeta.ask.color,
-            backgroundColor: toolEffectMeta.ask.bg,
-            border: `1px solid ${toolEffectMeta.ask.border}`,
-            padding: "1px 6px",
-            borderRadius: radius.pill,
-            fontWeight: 500,
-            fontFamily: fontFamily.mono,
-          }}
-        >
-          ask
-        </span>
-        <span>可用通配符批量授权同类工具</span>
-      </div>
     </div>
   );
 }
@@ -1489,11 +1453,7 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
           <span aria-hidden style={{ color: accent, fontSize: fontSize.xs }}>
             ◈
           </span>
-          工具名即权限 action（如
-          <span style={{ fontFamily: fontFamily.mono, color: neutral[600] }}>jenkins-build</span>
-          ），支持通配符批量授权（如
-          <span style={{ fontFamily: fontFamily.mono, color: neutral[600] }}>jenkins-*</span>
-          ）
+          工具名即权限 action，支持通配符批量授权
         </div>
         <ToolPermissionList
           tools={toolDrafts}

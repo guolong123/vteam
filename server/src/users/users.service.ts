@@ -45,6 +45,7 @@ export class UsersService {
   /**
    * 分页列表（对齐 09 篇 §2.2：page/pageSize 默认 1/20，上限 100）。
    * search 对 username / displayName 做模糊匹配。响应不含 password_hash。
+   * 附带所属项目数 _count.projectMembers（MOCK-05：真实计数，非前端硬编码 0）。
    */
   async findAll(page = 1, pageSize = DEFAULT_PAGE_SIZE, search?: string) {
     const safePage = page >= 1 ? page : 1;
@@ -63,7 +64,10 @@ export class UsersService {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.user.findMany({
         where,
-        select: SAFE_USER_SELECT,
+        select: {
+          ...SAFE_USER_SELECT,
+          _count: { select: { projectMembers: true } },
+        },
         skip: (safePage - 1) * safePageSize,
         take: safePageSize,
         orderBy: { createdAt: 'desc' },
