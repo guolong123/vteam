@@ -10,12 +10,12 @@
  * 数据源：后端 ChatService.toChannelDto 已含 task/agent 关联（private 无需额外查 agents 表）。
  */
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState, type CSSProperties } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { AgentAvatar, AgentBadge, EmptyState, StatusBadge } from "@/src/components/ui";
+import { AgentAvatar, AgentBadge, ConfirmDialog, EmptyState, StatusBadge } from "@/src/components/ui";
 import type { RoleKey, StatusKey } from "@/src/theme/tokens";
 import {
   neutral,
@@ -58,6 +58,10 @@ interface ChannelItem {
   type: "task_group" | "private";
   taskId: string;
   agentId: string | null;
+  /** UX-09：置顶标记（列表置顶会话优先展示） */
+  pinned: boolean;
+  /** UX-09：最后读取时间（ISO8601；null = 从未标记已读） */
+  lastReadAt: string | null;
   task?: { id: string; title: string; status: string; projectId: string } | null;
   agent?: { id: string; name: string; role: string | null } | null;
   createdAt: string;
@@ -156,7 +160,17 @@ function renderStatusBadge(status: string) {
 
 /* ============================== 会话条目 ============================== */
 
-function ConversationItem({ channel }: { channel: ChannelItem }) {
+function ConversationItem({
+  channel,
+  onDelete,
+  onTogglePin,
+  onMarkRead,
+}: {
+  channel: ChannelItem;
+  onDelete: (channel: ChannelItem) => void;
+  onTogglePin: (channel: ChannelItem) => void;
+  onMarkRead: (channel: ChannelItem) => void;
+}) {
   const router = useRouter();
   const isDm = channel.type === "private";
   const role = resolveRole(channel.agent, channel.agentId);
@@ -168,11 +182,28 @@ function ConversationItem({ channel }: { channel: ChannelItem }) {
   /** Agent 名本身即角色标签（如 seed 模板 Agent「开发者」）时，徽章与名字重复 → 隐藏徽章；自定义名保留。 */
   const showRoleBadge = isDm && !!channel.agent?.name && channel.agent.name !== roles[role].label;
 
+  /** 会话操作按钮（UX-09：置顶/标记已读/删除）——统一阻止冒泡，避免触发整卡跳转。 */
+  const actionButtonStyle: CSSProperties = {
+    padding: `${space.xs}px ${space.sm + 2}px`,
+    borderRadius: radius.pill,
+    border: `1px solid ${channel.pinned ? "#2563EB" : neutral[200]}`,
+    backgroundColor: channel.pinned ? "#2563EB" : "#FFFFFF",
+    color: channel.pinned ? "#FFFFFF" : neutral[600],
+    fontSize: fontSize.xs,
+    fontWeight: 500,
+    lineHeight: 1.4,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    fontFamily: fontFamily.body,
+    transition: "background-color .15s ease, color .15s ease, border-color .15s ease",
+  };
+
   return (
     <section
       data-testid="conversation-item"
       data-channel-id={channel.id}
       data-type={isDm ? "dm" : "group"}
+      data-pinned={channel.pinned ? "true" : "false"}
       role="button"
       tabIndex={0}
       onClick={() => router.push(`/messages/${channel.id}`)}
@@ -185,8 +216,8 @@ function ConversationItem({ channel }: { channel: ChannelItem }) {
         gap: space.md,
         padding: `${space.lg}px ${space.xl}px`,
         borderRadius: radius.lg,
-        backgroundColor: "#FFFFFF",
-        border: `1px solid ${neutral[200]}`,
+        backgroundColor: channel.pinned ? "#EFF6FF" : "#FFFFFF",
+        border: `1px solid ${channel.pinned ? "#BFDBFE" : neutral[200]}`,
         boxShadow: shadow.sm,
         cursor: "pointer",
         transition: "border-color .15s ease, box-shadow .15s ease",
@@ -227,6 +258,52 @@ function ConversationItem({ channel }: { channel: ChannelItem }) {
         </div>
       </div>
 
+      {/* UX-09 会话操作：置顶 / 标记已读 / 删除 */}
+      <div
+        data-testid="conversation-actions"
+        style={{ display: "flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          data-testid="conversation-pin-button"
+          data-pinned={channel.pinned ? "true" : "false"}
+          onClick={() => onTogglePin(channel)}
+          title={channel.pinned ? "取消置顶" : "置顶会话"}
+          style={actionButtonStyle}
+        >
+          {channel.pinned ? "已置顶" : "置顶"}
+        </button>
+        <button
+          type="button"
+          data-testid="conversation-read-button"
+          onClick={() => onMarkRead(channel)}
+          title="标记已读"
+          style={{
+            ...actionButtonStyle,
+            borderColor: neutral[200],
+            backgroundColor: "#FFFFFF",
+            color: neutral[600],
+          }}
+        >
+          已读
+        </button>
+        <button
+          type="button"
+          data-testid="conversation-delete-button"
+          onClick={() => onDelete(channel)}
+          title="删除会话"
+          style={{
+            ...actionButtonStyle,
+            borderColor: "#FECACA",
+            backgroundColor: "#FFFFFF",
+            color: "#DC2626",
+          }}
+        >
+          删除
+        </button>
+      </div>
+
       <span aria-hidden style={{ color: "#2563EB", fontSize: fontSize.lg, lineHeight: 1, flexShrink: 0 }}>
         ›
       </span>
@@ -241,11 +318,17 @@ function ConversationSection({
   channels,
   emptyText,
   testid,
+  onDelete,
+  onTogglePin,
+  onMarkRead,
 }: {
   title: string;
   channels: ChannelItem[];
   emptyText: string;
   testid: string;
+  onDelete: (channel: ChannelItem) => void;
+  onTogglePin: (channel: ChannelItem) => void;
+  onMarkRead: (channel: ChannelItem) => void;
 }) {
   return (
     <section data-testid={testid} style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
@@ -278,7 +361,15 @@ function ConversationSection({
           {emptyText}
         </div>
       ) : (
-        channels.map((c) => <ConversationItem key={c.id} channel={c} />)
+        channels.map((c) => (
+          <ConversationItem
+            key={c.id}
+            channel={c}
+            onDelete={onDelete}
+            onTogglePin={onTogglePin}
+            onMarkRead={onMarkRead}
+          />
+        ))
       )}
     </section>
   );
@@ -290,10 +381,37 @@ export default function MessagesPage() {
   const user = useAuthStore((s) => s.user);
   const [keyword, setKeyword] = useState("");
   const [typeKey, setTypeKey] = useState<TypeFilterKey>("all");
+  const queryClient = useQueryClient();
   const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ["channels"],
     queryFn: () => api.get<ChannelsResponse>("/channels"),
     enabled: !!user?.id,
+  });
+
+  /* ------------------------------ UX-09 会话操作（删除/置顶/标记已读） ------------------------------ */
+
+  /** 待删除会话（ConfirmDialog 目标；null = 弹窗关闭）。 */
+  const [deleteTarget, setDeleteTarget] = useState<ChannelItem | null>(null);
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) =>
+      api.delete<{ id: string; deletedAt: string }>(`/channels/${id}`),
+    onSuccess: () => {
+      setDeleteTarget(null);
+      queryClient.invalidateQueries({ queryKey: ["channels"] });
+    },
+  });
+
+  const pinMutation = useMutation({
+    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
+      api.patch<ChannelItem>(`/channels/${id}`, { pinned }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["channels"] }),
+  });
+
+  const readMutation = useMutation({
+    mutationFn: (id: string) =>
+      api.patch<{ id: string; lastReadAt: string }>(`/channels/${id}/read`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["channels"] }),
   });
 
   const items = data?.items ?? [];
@@ -321,6 +439,7 @@ export default function MessagesPage() {
         display: "flex",
         flexDirection: "column",
         padding: `${space.xl}px ${space.xl}px ${space.xl}px 0`,
+        position: "relative",
         fontFamily: fontFamily.body,
       }}
     >
@@ -480,6 +599,9 @@ export default function MessagesPage() {
               testid="conversation-section-dm"
               channels={dmChannels}
               emptyText="暂无私聊会话"
+              onDelete={(c) => setDeleteTarget(c)}
+              onTogglePin={(c) => pinMutation.mutate({ id: c.id, pinned: !c.pinned })}
+              onMarkRead={(c) => readMutation.mutate(c.id)}
             />
           )}
           {(typeKey === "all" || typeKey === "group") && (
@@ -488,10 +610,35 @@ export default function MessagesPage() {
               testid="conversation-section-group"
               channels={groupChannels}
               emptyText="暂无群聊会话"
+              onDelete={(c) => setDeleteTarget(c)}
+              onTogglePin={(c) => pinMutation.mutate({ id: c.id, pinned: !c.pinned })}
+              onMarkRead={(c) => readMutation.mutate(c.id)}
             />
           )}
         </div>
       )}
+
+      {/* UX-09 删除会话二次确认弹窗（复用 confirm-delete-modal，确认后才 DELETE） */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="删除会话"
+        description={
+          deleteTarget
+            ? `确定删除「${
+                deleteTarget.type === "private"
+                  ? (deleteTarget.agent?.name ?? deleteTarget.agentId ?? "私聊")
+                  : (deleteTarget.task?.title ?? "群聊")
+              }」会话？删除后该会话将从消息中心移除，历史消息不再显示。`
+            : undefined
+        }
+        confirmLabel="确认删除"
+        pendingLabel="删除中…"
+        submitting={deleteMutation.isPending}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
+        }}
+      />
     </div>
   );
 }

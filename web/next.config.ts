@@ -18,6 +18,11 @@ const nextConfig: NextConfig = {
         source: "/api/v1/:path*",
         destination: `${API_PROXY_TARGET}/api/v1/:path*`,
       },
+      // 上传文件静态访问：/uploads/* → server 静态服务（uploads 目录磁盘存储，见 server/src/uploads）
+      {
+        source: "/uploads/:path*",
+        destination: `${API_PROXY_TARGET}/uploads/:path*`,
+      },
     ];
   },
 };

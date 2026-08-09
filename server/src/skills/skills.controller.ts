@@ -28,6 +28,7 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { QuerySkillsDto } from './dto/query-skills.dto';
+import { UpdateSkillDto } from './dto/update-skill.dto';
 import { UpdateSkillStatusDto } from './dto/update-skill-status.dto';
 import {
   parseSkillMarkdown,
@@ -44,6 +45,8 @@ const SKILL_FILE_SIZE_LIMIT = 100 * 1024;
  * - GET /api/v1/skills：enabled 过滤 + 分页；成员只读可见已启用，admin 全量
  * - GET /api/v1/skills/:id/content：SKILL.md 全文（T4b worker 注入拉取；X-Worker-Token 或用户 JWT）
  * - PATCH /api/v1/skills/:id/status：{enabled} 启停专用端点
+ * - PATCH /api/v1/skills/:id：{name?, description?, content?} 编辑元信息/内容（UX-15，JSON body，
+ *   name/description 同步重写 content frontmatter，维持 DB 列与注入原文一致）
  * - 无 DELETE（09 §3.8 不提供；停用 enabled=false 替代物理删除）
  * 鉴权：全局 JwtAuthGuard（APP_GUARD）兜底认证；写端点挂 PermissionGuard +
  * 同资源权限点（POST → skills.create、PATCH status → skills.edit，CONF-03 读写守卫
@@ -125,6 +128,21 @@ export class SkillsController {
     const raw = file.buffer.toString('utf-8');
     const { frontmatter, content } = parseSkillMarkdown(raw);
     return this.skillsService.create({ frontmatter, content, file });
+  }
+
+  /**
+   * 编辑技能（UX-15：元信息 + 内容，JSON body 非 multipart）。
+   * PATCH /api/v1/skills/:id {name?, description?, content?} → 200 + Skill 对象；
+   * 全空 → 400 SKILL_UPDATE_EMPTY；不存在 → 404 SKILL_NOT_FOUND；
+   * name 重复（排除自身）→ 409 SKILL_NAME_EXISTS；content 非法 → 400 SKILL_FRONTMATTER_INVALID。
+   * name/description 更新会同步重写 content frontmatter，维持注入原文与列表元信息一致。
+   */
+  @Patch(':id')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('skills.edit')
+  @ApiOperation({ summary: '编辑技能元信息/内容（{name?, description?, content?}，skills.edit）' })
+  update(@Param('id') id: string, @Body() dto: UpdateSkillDto) {
+    return this.skillsService.update(id, dto);
   }
 
   /**

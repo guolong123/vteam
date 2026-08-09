@@ -93,6 +93,16 @@ export const WORKER_COMMAND_TYPES = {
    * 命令一次有效（心跳取出即清空）；token 只经下行命令明文传输，不落 worker 日志。
    */
   MODEL_CREDENTIALS: 'model-credentials',
+  /**
+   * UX-01：管理员远程重启（对齐 server WORKER_COMMAND_TYPES.RESTART）——经
+   * RestartCoordinator 重启 serve（无活跃会话立即 + reRegister，有则挂起）。
+   */
+  RESTART: 'restart',
+  /**
+   * UX-01：管理员远程下线（对齐 server WORKER_COMMAND_TYPES.SHUTDOWN）——优雅
+   * 退出进程（停心跳 + flush 事件 + stop serve + exit），心跳停止后 server 标 offline。
+   */
+  SHUTDOWN: 'shutdown',
 } as const;
 
 export type WorkerCommandType =

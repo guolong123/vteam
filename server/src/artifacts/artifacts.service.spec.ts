@@ -749,5 +749,63 @@ describe('ArtifactsService', () => {
         service.findVersion('art_0000000001', 99),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
+
+    it('FILE-02：doc/file 版本（filePath 非空）→ 附加归一化 fileUrl/fileName/fileExt（size 缺省不读盘）', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue({
+        id: 'artv_0000000002',
+        artifactId: 'art_0000000001',
+        version: 2,
+        contentRef: '/data/workspace/tasks/t_1/api-doc.PDF',
+        filePath: '/data/workspace/tasks/t_1/api-doc.PDF',
+        sha256: 'h2',
+        acceptedFlag: false,
+        authorAgentId: 'a_product',
+        changeNote: null,
+        createdAt: FIXED_DATE,
+      });
+
+      const result = await service.findVersion('art_0000000001', 2) as Record<
+        string,
+        unknown
+      >;
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          version: 2,
+          contentRef: '/data/workspace/tasks/t_1/api-doc.PDF',
+          filePath: '/data/workspace/tasks/t_1/api-doc.PDF',
+          // 原始路径 → 归一化为 /uploads/<basename>（浏览器可访问），派生扩展名
+          fileUrl: '/uploads/api-doc.PDF',
+          fileName: 'api-doc.PDF',
+          fileExt: 'pdf',
+        }),
+      );
+      expect(result.fileSize).toBeNull();
+    });
+
+    it('FILE-02：text 版本（filePath=null）→ 不附加 fileUrl 派生字段', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue({
+        id: 'artv_0000000001',
+        artifactId: 'art_0000000001',
+        version: 1,
+        contentRef: '结论正文',
+        filePath: null,
+        sha256: 'h1',
+        acceptedFlag: false,
+        authorAgentId: null,
+        changeNote: null,
+        createdAt: FIXED_DATE,
+      });
+
+      const result = (await service.findVersion(
+        'art_0000000001',
+        1,
+      )) as Record<string, unknown>;
+
+      expect(result.fileUrl).toBeUndefined();
+      expect(result.fileName).toBeUndefined();
+      expect(result.fileExt).toBeUndefined();
+      expect(result.contentRef).toBe('结论正文');
+    });
   });
 });

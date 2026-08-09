@@ -24,9 +24,10 @@
  *   （FormData file=SKILL.md，name/description/version 由后端 frontmatter 解析）、
  *   启停 → skill PATCH /skills/:id/status / tool PATCH /tools/:id {enabled}、
  *   注册工具 → 跳转 /tools/register 完整注册页（tool-register 原型保真迁移，5 区块表单）、
- *   注册 MCP → POST /tools 弹窗（MCP server 注册无独立页面）；**无编辑端点**（09 §3.8 仅 status/启停，
- *   编辑功能已移除）；skills/tools 管理为 [admin] 专属 → 非 admin（roleName≠admin）
- *   成员只读：隐藏上传/注册/启停按钮，仅浏览列表。
+ *   注册 MCP → POST /tools 弹窗（MCP server 注册无独立页面）；技能编辑 → PATCH /skills/:id
+ *   {name?, description?, content?} 弹窗（UX-15 补齐：编辑元信息 + SKILL.md 全文，
+ *   name/description 变更后端同步重写 content frontmatter）；skills/tools 管理为 [admin] 专属 → 非 admin
+ *   （roleName≠admin）成员只读：隐藏上传/注册/编辑/启停按钮，仅浏览列表。
  *   - 后端字段映射：Skill{name/description/fileMeta/enabled}（source 由 fileMeta 推导：
  *     有 fileMeta=上传 / 无=内置；version 读 fileMeta.version 缺省 v1；roles 后端无绑定
  *     信息 → 显示「未绑定」）。
@@ -434,7 +435,7 @@ function VersionPill({ version }: { version: string }) {
 
 /**
  * 列表项操作按钮（启停真实 API：skill → PATCH /skills/:id/status、tool → PATCH /tools/:id，
- * 见页面主组件 mutations；09 §3.8 无编辑端点 → 无编辑按钮）
+ * 编辑真实 API：skill → PATCH /skills/:id（UX-15），见页面主组件 mutations）
  */
 function ActionButton({
   label,
@@ -472,10 +473,12 @@ function ActionButton({
 /** 技能行卡片：图标 + 名称/版本/描述（左），角色 + 来源 + 状态 + 操作（右） */
 function SkillItemRow({
   s,
+  onEdit,
   onToggle,
   canManage,
 }: {
   s: SkillItem;
+  onEdit: () => void;
   onToggle: () => void;
   canManage: boolean;
 }) {
@@ -566,6 +569,11 @@ function SkillItemRow({
       {/* 操作（[admin] 专属；成员只读不渲染） */}
       {canManage && (
         <div style={{ display: "flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
+          <ActionButton
+            label="编辑"
+            onClick={onEdit}
+            testid="skill-edit-button"
+          />
           <ActionButton
             label={s.enabled === "启用" ? "停用" : "启用"}
             danger={s.enabled === "启用"}
@@ -1274,6 +1282,27 @@ export default function SkillToolManagePage() {
     onError: (err) => showNotice("error", isApiError(err) ? err.message : "注册失败，请稍后重试"),
   });
 
+  /* 编辑技能：PATCH /skills/:id {name?, description?, content?}（UX-15；name/description 变更
+   * 后端同步重写 content frontmatter）→ 刷新技能列表并关闭弹窗 */
+  const editMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: { name: string; description: string; content: string } }) =>
+      api.patch<ApiSkill>(`/skills/${id}`, payload),
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({ queryKey: ["skills"] });
+      setEditingSkill(null);
+      showNotice("success", `技能「${updated.name}」保存成功`);
+    },
+    onError: (err) => showNotice("error", isApiError(err) ? err.message : "保存失败，请稍后重试"),
+  });
+
+  /* 编辑弹窗 state：editingSkill=目标行；editContent 打开时经 GET /skills/:id/content 拉取
+   * （列表接口不含 content 字段），editLoading 期间禁用保存 */
+  const [editingSkill, setEditingSkill] = useState<SkillItem | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editContent, setEditContent] = useState("");
+  const [editLoading, setEditLoading] = useState(false);
+
   /* 启停：PATCH 真实落库（currentlyEnabled=当前启用态，目标为取反） */
   const handleToggleEnabled = (
     kind: "skill" | "tool",
@@ -1321,6 +1350,39 @@ export default function SkillToolManagePage() {
       execution: "mcp",
       mcpServer: regMcpServer.trim() || "mcp-server",
       enabled: true,
+    });
+  };
+
+  /* 打开编辑弹窗：重置错误态 + 预填 name/description + 拉取 SKILL.md 全文填充 content */
+  const handleOpenEdit = (s: SkillItem) => {
+    editMutation.reset();
+    setEditingSkill(s);
+    setEditName(s.name);
+    // 列表 desc 以「—」占位描述为 null 的技能，编辑回填时还原为空串
+    const raw = skillsQuery.data?.items.find((x) => x.id === s.id);
+    setEditDescription(raw?.description ?? "");
+    setEditContent("");
+    setEditLoading(true);
+    api
+      .get<{ id: string; name: string; content: string }>(`/skills/${s.id}/content`)
+      .then((res) => setEditContent(res.content))
+      .catch((err) =>
+        showNotice("error", isApiError(err) ? err.message : "加载技能内容失败")
+      )
+      .finally(() => setEditLoading(false));
+  };
+
+  /* 保存编辑：name 需为小写 slug（与后端 assertSkillName 一致），三个字段全量提交 */
+  const handleEditSubmit = () => {
+    const name = editName.trim();
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
+      showNotice("error", "技能名需为小写 slug（如 git-ops）");
+      return;
+    }
+    if (!editingSkill) return;
+    editMutation.mutate({
+      id: editingSkill.id,
+      payload: { name, description: editDescription.trim(), content: editContent },
     });
   };
 
@@ -1697,6 +1759,7 @@ export default function SkillToolManagePage() {
                 <SkillItemRow
                   key={s.id}
                   s={s}
+                  onEdit={() => handleOpenEdit(s)}
                   onToggle={() => handleToggleEnabled("skill", s.id, s.enabled === "启用")}
                   canManage={isAdmin}
                 />
@@ -1986,6 +2049,150 @@ export default function SkillToolManagePage() {
                 }}
               >
                 {registerMutation.isPending ? "注册中…" : "注册"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 编辑技能弹窗（UX-15）：name/description 输入 + SKILL.md 全文 textarea，PATCH /skills/:id。
+       * 列表接口不含 content → 打开时 GET /skills/:id/content 拉取原文预填。 */}
+      {editingSkill && (
+        <div
+          data-testid="edit-skill-modal-root"
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 40,
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            paddingTop: "8%",
+          }}
+        >
+          <div
+            aria-hidden
+            onClick={() => setEditingSkill(null)}
+            style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }}
+          />
+          <div
+            style={{
+              position: "relative",
+              width: 560,
+              maxWidth: "calc(100% - 48px)",
+              maxHeight: "70vh",
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+              gap: space.lg,
+              padding: `${space.xl}px`,
+              borderRadius: radius.lg,
+              backgroundColor: "#FFFFFF",
+              border: `1px solid ${neutral[200]}`,
+              boxShadow: shadow.lg,
+              fontFamily: fontFamily.body,
+            }}
+          >
+            <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900] }}>
+              编辑技能 {editingSkill.name}
+            </div>
+            <ModalFieldRow label="技能名（小写 slug）">
+              <input
+                data-testid="edit-skill-name-input"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                spellCheck={false}
+                placeholder="如 git-ops"
+                style={{ ...modalInputStyle, fontFamily: fontFamily.mono }}
+              />
+            </ModalFieldRow>
+            <ModalFieldRow label="描述">
+              <input
+                data-testid="edit-skill-desc-input"
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                placeholder="技能用途说明"
+                style={modalInputStyle}
+              />
+            </ModalFieldRow>
+            <ModalFieldRow label="SKILL.md 内容">
+              <textarea
+                data-testid="edit-skill-content-input"
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                disabled={editLoading}
+                rows={14}
+                spellCheck={false}
+                placeholder={editLoading ? "加载中…" : "---\nname: git-ops\n---\n技能正文"}
+                style={{
+                  ...modalInputStyle,
+                  fontFamily: fontFamily.mono,
+                  lineHeight: 1.5,
+                  resize: "vertical",
+                }}
+              />
+            </ModalFieldRow>
+            <div style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.6 }}>
+              修改「技能名/描述」会同步写入 SKILL.md 的 frontmatter；内容可直接编辑全文（需保留 ---
+              frontmatter 块）。
+            </div>
+            {editMutation.isError && (
+              <div
+                role="alert"
+                style={{
+                  padding: `${space.sm}px ${space.md}px`,
+                  borderRadius: radius.md,
+                  backgroundColor: "#FEF2F2",
+                  border: "1px solid #FECACA",
+                  color: "#DC2626",
+                  fontSize: fontSize.sm,
+                  lineHeight: 1.6,
+                }}
+              >
+                {isApiError(editMutation.error)
+                  ? editMutation.error.message
+                  : "保存失败，请稍后重试"}
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
+              <button
+                type="button"
+                data-testid="edit-skill-modal-cancel"
+                onClick={() => setEditingSkill(null)}
+                disabled={editMutation.isPending}
+                style={{
+                  padding: `${space.sm}px ${space.lg}px`,
+                  borderRadius: radius.md,
+                  border: `1px solid ${neutral[200]}`,
+                  backgroundColor: "#FFFFFF",
+                  color: neutral[600],
+                  fontSize: fontSize.md,
+                  cursor: editMutation.isPending ? "default" : "pointer",
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="edit-skill-confirm-button"
+                disabled={editMutation.isPending || editLoading}
+                onClick={handleEditSubmit}
+                style={{
+                  padding: `${space.sm}px ${space.lg}px`,
+                  borderRadius: radius.md,
+                  border: "none",
+                  backgroundColor: "#2563EB",
+                  color: "#FFFFFF",
+                  fontSize: fontSize.md,
+                  fontWeight: 500,
+                  cursor: editMutation.isPending || editLoading ? "default" : "pointer",
+                  opacity: editMutation.isPending || editLoading ? 0.6 : 1,
+                  boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                {editMutation.isPending ? "保存中…" : "保存"}
               </button>
             </div>
           </div>

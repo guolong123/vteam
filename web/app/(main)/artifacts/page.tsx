@@ -17,11 +17,15 @@
  * - 版本查看器：点击行展开（inline 文档流，无浮层）→ GET /artifacts/:id 拿版本列表 →
  *   版本切换 `‹ v2 v1 ›`（当前/选中版高亮）→ GET /artifacts/:id/versions/:version 详情 →
  *   版本时间线（v2 · 时间 → v1 · 时间，当前版本在前）。
+ * - 文件视图（FILE-02）：doc/file 版本渲染可点击下载链接/按钮（href=后端归一化 fileUrl，
+ *   同源 /uploads/ 触发 download）+ 图片类型（png/jpg/jpeg/gif）内嵌预览 + 扩展名/大小徽章；
+ *   不可访问引用（原始路径未归一化）降级为纯文本展示。
  * - 空态：无任务 / 无产出物 → EmptyState。
  * - 页面内扩展 token（artifactTypeTheme + 验收状态色 + 作者角色解析），不动 tokens.ts 基线。
  * - data-testid：artifacts-root / artifacts-title / artifacts-filter-bar / task-filter-select /
  *   type-filter-option / accepted-filter-option / artifact-row / artifact-type-badge /
  *   artifact-accepted-badge / artifact-viewer / artifact-version-switch /
+ *   artifact-file-link / artifact-file-download / artifact-image-preview / artifact-file-badge /
  *   artifact-version-timeline / artifacts-loading / artifacts-error / artifacts-retry。
  */
 import { useEffect, useState, type CSSProperties } from "react";
@@ -163,6 +167,11 @@ interface ArtifactVersionDto {
   authorAgentId: string | null;
   changeNote: string | null;
   createdAt: string;
+  /** FILE-02：doc/file 版本后端归一化派生（可访问 URL / 展示名 / 扩展名 / 磁盘字节数）。 */
+  fileUrl?: string;
+  fileName?: string;
+  fileExt?: string;
+  fileSize?: number | null;
 }
 
 /** GET /artifacts/:id：产出物详情 + 全版本列表（升序）。 */
@@ -184,6 +193,30 @@ function formatTime(iso: string): string {
   if (Number.isNaN(d.getTime())) return iso;
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** 字节数 → 人类可读（B/KB/MB）；null/非法 → null（不显示大小徽章）。 */
+function formatBytes(bytes: number | null | undefined): string | null {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return null;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 从 URL/路径提取小写扩展名（`/uploads/a.PDF` → `pdf`；无扩展名 → 空串）。 */
+function extractExtFromUrl(ref: string): string {
+  const base = ref.split(/[\\/]/).pop() ?? "";
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0 || dot === base.length - 1) return "";
+  return base.slice(dot + 1).toLowerCase();
+}
+
+/** 可内嵌预览的图片扩展名（png/jpg/jpeg/gif，其余类型仅链接/下载）。 */
+const PREVIEW_IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif"]);
+
+/** 引用是否可被浏览器访问（控制面静态服务 /uploads/ 或完整 http(s) URL）。 */
+function isAccessibleFileRef(ref: string): boolean {
+  return ref.startsWith("/uploads/") || /^https?:\/\//i.test(ref);
 }
 
 /** authorAgentId（如 a_product）→ RoleKey；未知/自定义 Agent 返回 null（渲染「系统」）。 */
@@ -277,6 +310,147 @@ function AuthorCell({ authorAgentId }: { authorAgentId: string | null }) {
       <AgentAvatar role={role} size="sm" dot={false} style={{ width: 18, height: 18, fontSize: 8 }} />
       <span style={{ color: roleText[role], fontWeight: 500, fontSize: fontSize.xs }}>{roles[role].label}</span>
     </span>
+  );
+}
+
+/* ------------------------------ 文件视图（doc/file 产出物，FILE-02） ------------------------------ */
+/**
+ * doc/file 版本内容区：可访问引用 → 图片内嵌预览 + 下载链接/按钮 + 扩展名/大小徽章；
+ * 不可访问引用（原始路径未归一化）→ 降级为旧纯文本展示。
+ */
+function ArtifactFileView({ version }: { version: ArtifactVersionDto }) {
+  const fileUrl = version.fileUrl ?? version.contentRef;
+  const ext = version.fileExt || extractExtFromUrl(fileUrl);
+  const displayName =
+    version.fileName || fileUrl.split(/[\\/]/).pop() || fileUrl;
+  const sizeLabel = formatBytes(version.fileSize ?? null);
+  const accessible = isAccessibleFileRef(fileUrl);
+  const isImage = PREVIEW_IMAGE_EXTS.has(ext);
+  // 同源 /uploads/ 引用可触发浏览器 download；外部 URL download 无效 → 仅新标签打开
+  const canDownload = fileUrl.startsWith("/uploads/");
+
+  if (!accessible) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, fontSize: fontSize.sm, color: neutral[500] }}>
+          <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>▤</span>
+          文件引用：{version.filePath ?? version.contentRef}
+        </span>
+        {version.sha256 && (
+          <span style={{ fontSize: fontSize.xs, color: neutral[400], fontFamily: fontFamily.mono }}>
+            sha256: {version.sha256.slice(0, 16)}…
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
+      {isImage && (
+        <img
+          data-testid="artifact-image-preview"
+          src={fileUrl}
+          alt={displayName}
+          loading="lazy"
+          style={{
+            maxWidth: "100%",
+            maxHeight: 240,
+            objectFit: "contain",
+            borderRadius: radius.md,
+            border: `1px solid ${neutral[200]}`,
+            backgroundColor: neutral[50],
+          }}
+        />
+      )}
+      <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+        <a
+          data-testid="artifact-file-link"
+          href={fileUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: space.xs,
+            color: "#2563EB",
+            fontSize: fontSize.sm,
+            fontWeight: 500,
+            textDecoration: "none",
+            fontFamily: fontFamily.body,
+          }}
+        >
+          <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>▤</span>
+          {displayName}
+        </a>
+        {ext && (
+          <span
+            data-testid="artifact-file-badge"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: `1px ${space.sm}px`,
+              borderRadius: radius.sm,
+              backgroundColor: "#EFF6FF",
+              border: "1px solid #BFDBFE",
+              color: "#2563EB",
+              fontSize: fontSize.xs,
+              fontWeight: 500,
+              fontFamily: fontFamily.body,
+            }}
+          >
+            {ext.toUpperCase()}
+          </span>
+        )}
+        {sizeLabel && (
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: `1px ${space.sm}px`,
+              borderRadius: radius.sm,
+              backgroundColor: neutral[50],
+              border: `1px solid ${neutral[200]}`,
+              color: neutral[500],
+              fontSize: fontSize.xs,
+              fontFamily: fontFamily.mono,
+            }}
+          >
+            {sizeLabel}
+          </span>
+        )}
+        <a
+          data-testid="artifact-file-download"
+          href={fileUrl}
+          {...(canDownload ? { download: true } : {})}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: space.xs,
+            padding: `3px ${space.md}px`,
+            borderRadius: radius.sm,
+            border: "none",
+            backgroundColor: "#2563EB",
+            color: "#FFFFFF",
+            fontSize: fontSize.sm,
+            fontWeight: 500,
+            textDecoration: "none",
+            cursor: "pointer",
+            fontFamily: fontFamily.body,
+          }}
+        >
+          <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>↓</span>
+          下载
+        </a>
+      </div>
+      {version.sha256 && (
+        <span style={{ fontSize: fontSize.xs, color: neutral[400], fontFamily: fontFamily.mono }}>
+          sha256: {version.sha256.slice(0, 16)}…
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -427,7 +601,7 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
         </div>
       </div>
 
-      {/* 内容区：text → contentRef 正文预览；doc/file → 文件引用（不做真实拉取/下载） */}
+      {/* 内容区：text → contentRef 正文预览；doc/file → 可访问文件视图（链接/下载/图片预览，FILE-02） */}
       <div
         style={{
           minHeight: 96,
@@ -451,17 +625,7 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
           type === "text" ? (
             versionQuery.data.contentRef
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, fontSize: fontSize.sm, color: neutral[500] }}>
-                <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>▤</span>
-                文件引用：{versionQuery.data.filePath ?? versionQuery.data.contentRef}
-              </span>
-              {versionQuery.data.sha256 && (
-                <span style={{ fontSize: fontSize.xs, color: neutral[400], fontFamily: fontFamily.mono }}>
-                  sha256: {versionQuery.data.sha256.slice(0, 16)}…
-                </span>
-              )}
-            </div>
+            <ArtifactFileView version={versionQuery.data} />
           )
         ) : null}
       </div>

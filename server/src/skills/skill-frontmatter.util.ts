@@ -145,6 +145,72 @@ function parseYamlSimple(lines: string[]): SkillFrontmatter {
   return fm as SkillFrontmatter;
 }
 
+/**
+ * 重写 SKILL.md frontmatter 中单个字段（UX-15 PATCH /skills/:id 编辑元信息时同步，
+ * 维持「DB name/description 列 = content frontmatter」不变量——worker 注入用 content 原文，
+ * 若列与 frontmatter 脱钩会导致注入的 SKILL.md 名与列表展示名不一致）。
+ *
+ * 覆盖三种写法（与 parseYamlSimple 对称）：
+ * - 标量：`key: value`（含 `"quoted"`，替换整行）
+ * - 块标量：`key: |` / `key: >`（value 为 null 时连续行整块删除）
+ * - 缺省：frontmatter 内无该字段 → 在结束 `---` 前追加 `key: value`
+ *
+ * value 为 null/空串表示删除该字段；raw 非合法 SKILL.md（无 `---` 块）时原样返回
+ * （PATCH content 校验已保证其合法，此处兜底不抛错）。
+ */
+export function rewriteFrontmatterField(
+  raw: string,
+  key: 'name' | 'description',
+  value: string | null,
+): string {
+  const lines = raw.split(/\r?\n/);
+  if (lines[0]?.trim() !== '---') return raw;
+  let end = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') {
+      end = i;
+      break;
+    }
+  }
+  if (end === -1) return raw;
+
+  // 找到 key 起始行（target=-1 表示 frontmatter 内缺省）
+  let target = -1;
+  for (let i = 1; i < end; i++) {
+    if (lines[i].trimStart().startsWith(`${key}:`)) {
+      target = i;
+      break;
+    }
+  }
+
+  const isEmpty = value === null || value.trim() === '';
+
+  // 删除：连块标量续行（后续以空格/制表符缩进的行）整块移除
+  if (isEmpty) {
+    if (target === -1) return raw;
+    let last = target;
+    let j = target + 1;
+    while (j < end && /^[ \t]/.test(lines[j])) {
+      last = j;
+      j++;
+    }
+    return [...lines.slice(0, target), ...lines.slice(last + 1)].join('\n');
+  }
+
+  const line = `${key}: ${value}`;
+  if (target === -1) {
+    // 追加到 frontmatter 块末尾（结束 --- 之前）
+    return [...lines.slice(0, end), line, ...lines.slice(end)].join('\n');
+  }
+  let last = target;
+  let j = target + 1;
+  while (j < end && /^[ \t]/.test(lines[j])) {
+    last = j;
+    j++;
+  }
+  return [...lines.slice(0, target), line, ...lines.slice(last + 1)].join('\n');
+}
+
 /** frontmatter name 字段校验：必填 + 命名规范 + 长度上限。非法 → 400 SKILL_FRONTMATTER_INVALID。 */
 export function assertSkillName(frontmatter: SkillFrontmatter): string {
   const name = frontmatter.name?.trim() ?? '';

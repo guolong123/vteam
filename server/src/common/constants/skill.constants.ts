@@ -16,6 +16,8 @@ export const SKILL_ERRORS = {
   SKILL_FILE_REQUIRED: 'SKILL_FILE_REQUIRED',
   /** SKILL.md frontmatter 缺失/结束标记缺失/name 缺省或格式非法 → 400。 */
   SKILL_FRONTMATTER_INVALID: 'SKILL_FRONTMATTER_INVALID',
+  /** PATCH /skills/:id 请求体未携带任何可更新字段 → 400（UX-15）。 */
+  SKILL_UPDATE_EMPTY: 'SKILL_UPDATE_EMPTY',
 } as const;
 
 export type SkillErrorCode = (typeof SKILL_ERRORS)[keyof typeof SKILL_ERRORS];

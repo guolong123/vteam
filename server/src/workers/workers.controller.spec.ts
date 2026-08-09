@@ -16,6 +16,8 @@ describe('WorkersController', () => {
     findAll: jest.Mock;
     findOne: jest.Mock;
     updateDefaultModel: jest.Mock;
+    requestRestart: jest.Mock;
+    requestShutdown: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -25,6 +27,8 @@ describe('WorkersController', () => {
       findAll: jest.fn(),
       findOne: jest.fn(),
       updateDefaultModel: jest.fn(),
+      requestRestart: jest.fn(),
+      requestShutdown: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -116,5 +120,32 @@ describe('WorkersController', () => {
     await controller.updateDefaultModel('w_0000000001', dto);
 
     expect(service.updateDefaultModel).toHaveBeenCalledWith('w_0000000001', { defaultModelId: null });
+  });
+
+  it('UX-01：POST /workers/:id/restart 转发 requestRestart（workers.edit 保护）', async () => {
+    service.requestRestart.mockResolvedValue({
+      workerId: 'w_0000000001',
+      command: 'restart',
+      queued: true,
+    });
+
+    const result = await controller.requestRestart('w_0000000001');
+
+    expect(service.requestRestart).toHaveBeenCalledWith('w_0000000001');
+    expect(result).toMatchObject({ workerId: 'w_0000000001', command: 'restart' });
+  });
+
+  it('UX-01：POST /workers/:id/shutdown 转发 requestShutdown（workers.edit 保护）', async () => {
+    service.requestShutdown.mockResolvedValue({
+      workerId: 'w_0000000001',
+      command: 'shutdown',
+      queued: true,
+      status: 'offline',
+    });
+
+    const result = await controller.requestShutdown('w_0000000001');
+
+    expect(service.requestShutdown).toHaveBeenCalledWith('w_0000000001');
+    expect(result).toMatchObject({ workerId: 'w_0000000001', status: 'offline' });
   });
 });

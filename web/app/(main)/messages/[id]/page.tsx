@@ -298,6 +298,15 @@ function DmMessageList({
             author={msg.senderType === "user" ? undefined : author}
             role={msg.senderType === "user" ? undefined : role}
             time={formatTime(msg.createdAt)}
+            attachment={
+              msg.attachmentUrl
+                ? {
+                    url: msg.attachmentUrl,
+                    name: msg.attachmentName ?? msg.attachmentUrl,
+                    ext: msg.attachmentType ?? "",
+                  }
+                : undefined
+            }
           />
         );
       })}
@@ -548,6 +557,14 @@ export default function DmChatPage() {
         mentions: mainAgent && agentMembers.some((a) => a.id === mainAgent.id)
           ? [{ type: "agent" as const, agentId: mainAgent.id }]
           : [],
+        // UX-10 附件：MessageInput 已先 POST /uploads 拿 url，随消息提交三字段
+        ...(payload.attachment
+          ? {
+              attachmentUrl: payload.attachment.url,
+              attachmentName: payload.attachment.name,
+              attachmentType: payload.attachment.ext,
+            }
+          : {}),
       }),
     onSuccess: () => {
       setInput("");

@@ -28,4 +28,24 @@ export class CreateMessageDto {
   @IsOptional()
   @IsArray()
   mentions?: MentionInput[];
+
+  // UX-10 群聊附件：客户端先 POST /uploads（multipart file）拿 {url,name,size,ext}，
+  // 再随消息提交附件三字段。三者一起出现（服务端不单独校验 URL 可访问性，
+  // 静态服务 /uploads/* 由 main.ts 挂载，上传白名单已兜底类型/大小）。
+  @ApiPropertyOptional({
+    description: '附件可访问 URL（POST /uploads 返回的相对路径，如 /uploads/<uuid>.png）',
+  })
+  @IsOptional()
+  @IsString()
+  attachmentUrl?: string;
+
+  @ApiPropertyOptional({ description: '附件原始文件名（含扩展名）' })
+  @IsOptional()
+  @IsString()
+  attachmentName?: string;
+
+  @ApiPropertyOptional({ description: '附件扩展名（小写，如 png/pdf，供前端判定图片内嵌或文件下载）' })
+  @IsOptional()
+  @IsString()
+  attachmentType?: string;
 }

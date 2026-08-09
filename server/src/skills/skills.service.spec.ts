@@ -334,6 +334,160 @@ describe('SkillsService', () => {
     });
   });
 
+  describe('update（PATCH /skills/:id 编辑元信息/内容，UX-15）', () => {
+    const contentWithDesc =
+      '---\nname: git-ops\ndescription: 新描述\n---\n# git-ops';
+
+    it('更新 name + description：校验唯一性（排除自身）并同步重写 content frontmatter', async () => {
+      prisma.skill.findUnique
+        .mockResolvedValueOnce(skillRow) // 查 id
+        .mockResolvedValueOnce(null); // 查 name 无冲突
+      prisma.skill.update.mockResolvedValue({
+        ...skillRow,
+        name: 'git-ops-v2',
+        description: '新描述',
+        content: contentWithDesc.replace('git-ops', 'git-ops-v2'),
+      });
+
+      const result = await service.update('sk_0000000001', {
+        name: 'git-ops-v2',
+        description: '新描述',
+      });
+
+      expect(prisma.skill.findUnique).toHaveBeenNthCalledWith(1, {
+        where: { id: 'sk_0000000001' },
+      });
+      expect(prisma.skill.findUnique).toHaveBeenNthCalledWith(2, {
+        where: { name: 'git-ops-v2' },
+      });
+      expect(prisma.skill.update).toHaveBeenCalledWith({
+        where: { id: 'sk_0000000001' },
+        data: {
+          name: 'git-ops-v2',
+          description: '新描述',
+          content: '---\nname: git-ops-v2\ndescription: 新描述\n---\n# git-ops',
+        },
+      });
+      expect(result).toMatchObject({ name: 'git-ops-v2' });
+    });
+
+    it('frontmatter 无 description 时重写会追加该字段', async () => {
+      prisma.skill.findUnique
+        .mockResolvedValueOnce(skillRow)
+        .mockResolvedValueOnce(null);
+      prisma.skill.update.mockResolvedValue(skillRow);
+
+      await service.update('sk_0000000001', { description: '追加描述' });
+
+      expect(prisma.skill.update).toHaveBeenCalledWith({
+        where: { id: 'sk_0000000001' },
+        data: {
+          name: 'git-ops',
+          description: '追加描述',
+          content: '---\nname: git-ops\ndescription: 追加描述\n---\n# git-ops',
+        },
+      });
+    });
+
+    it('更新 content：校验合法并反向同步 name/description 列', async () => {
+      prisma.skill.findUnique.mockResolvedValueOnce(skillRow); // 仅 id 查（name 未变不查重）
+      const newContent =
+        '---\nname: git-ops\nversion: 2.0.0\ndescription: 从内容同步\n---\n正文';
+      prisma.skill.update.mockResolvedValue({
+        ...skillRow,
+        description: '从内容同步',
+        content: newContent,
+      });
+
+      await service.update('sk_0000000001', { content: newContent });
+
+      expect(prisma.skill.update).toHaveBeenCalledWith({
+        where: { id: 'sk_0000000001' },
+        data: { name: 'git-ops', description: '从内容同步', content: newContent },
+      });
+    });
+
+    it('F1 MAJOR：编辑落库成功后广播 reload-config', async () => {
+      prisma.skill.findUnique
+        .mockResolvedValueOnce(skillRow)
+        .mockResolvedValueOnce(null);
+      prisma.skill.update.mockResolvedValue(skillRow);
+
+      await service.update('sk_0000000001', { name: 'git-ops-v2' });
+
+      expect(workersService.broadcastCommand).toHaveBeenCalledWith({
+        type: 'reload-config',
+        resourceVersion: expect.any(String),
+      });
+    });
+
+    it('全空请求体 → 400 SKILL_UPDATE_EMPTY（不查库不落库）', async () => {
+      await expect(service.update('sk_0000000001', {})).rejects.toMatchObject({
+        response: { code: SKILL_ERRORS.SKILL_UPDATE_EMPTY },
+      });
+      expect(prisma.skill.findUnique).not.toHaveBeenCalled();
+      expect(prisma.skill.update).not.toHaveBeenCalled();
+    });
+
+    it('技能不存在 → 404 SKILL_NOT_FOUND', async () => {
+      prisma.skill.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.update('sk_ghost', { description: 'x' }),
+      ).rejects.toMatchObject({
+        response: { code: SKILL_ERRORS.SKILL_NOT_FOUND },
+      });
+      expect(prisma.skill.update).not.toHaveBeenCalled();
+    });
+
+    it('name 与现有技能冲突 → 409 SKILL_NAME_EXISTS（排除自身）', async () => {
+      prisma.skill.findUnique
+        .mockResolvedValueOnce(skillRow) // 查 id
+        .mockResolvedValueOnce({ id: 'sk_other', name: 'git-ops-v2' }); // 查 name 命中其他
+
+      await expect(
+        service.update('sk_0000000001', { name: 'git-ops-v2' }),
+      ).rejects.toMatchObject({
+        response: { code: SKILL_ERRORS.SKILL_NAME_EXISTS },
+      });
+      expect(prisma.skill.update).not.toHaveBeenCalled();
+    });
+
+    it('name 改为自身当前值 → 不查重直接落库', async () => {
+      prisma.skill.findUnique.mockResolvedValueOnce(skillRow); // 仅 id 查
+      prisma.skill.update.mockResolvedValue(skillRow);
+
+      await service.update('sk_0000000001', { name: 'git-ops' });
+
+      expect(prisma.skill.findUnique).toHaveBeenCalledTimes(1);
+      expect(prisma.skill.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ name: 'git-ops' }) }),
+      );
+    });
+
+    it('name 格式非法 → 400 SKILL_FRONTMATTER_INVALID（不落库）', async () => {
+      prisma.skill.findUnique.mockResolvedValueOnce(skillRow);
+
+      await expect(
+        service.update('sk_0000000001', { name: 'Git Ops' }),
+      ).rejects.toMatchObject({
+        response: { code: SKILL_ERRORS.SKILL_FRONTMATTER_INVALID },
+      });
+      expect(prisma.skill.update).not.toHaveBeenCalled();
+    });
+
+    it('content 非合法 SKILL.md → 400 SKILL_FRONTMATTER_INVALID（不落库）', async () => {
+      prisma.skill.findUnique.mockResolvedValueOnce(skillRow);
+
+      await expect(
+        service.update('sk_0000000001', { content: '纯文本无 frontmatter' }),
+      ).rejects.toMatchObject({
+        response: { code: SKILL_ERRORS.SKILL_FRONTMATTER_INVALID },
+      });
+      expect(prisma.skill.update).not.toHaveBeenCalled();
+    });
+  });
+
   it('create 非法入参（frontmatter 为 null 时 name 缺省）不抛 500', async () => {
     await expect(
       service.create(makeInput({ frontmatter: { name: undefined } })),

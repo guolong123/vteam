@@ -92,4 +92,29 @@ export class WorkersController {
   updateDefaultModel(@Param('id') id: string, @Body() dto: UpdateWorkerModelDto) {
     return this.workers.updateDefaultModel(id, dto);
   }
+
+  /**
+   * POST /api/v1/workers/:id/restart：远程重启（UX-01，workers.edit）。
+   * worker 独立进程/容器，server 无进程控制能力——命令经心跳下行下发，
+   * worker 侧 RestartCoordinator 重启 serve（无活跃会话立即、有则挂起）。
+   */
+  @Post(':id/restart')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('workers.edit')
+  @ApiOperation({ summary: '重启 worker（workers.edit；经心跳命令下发）' })
+  requestRestart(@Param('id') id: string) {
+    return this.workers.requestRestart(id);
+  }
+
+  /**
+   * POST /api/v1/workers/:id/shutdown：远程下线（UX-01，workers.edit）。
+   * 立即标 offline（调度器停止分配）+ 心跳命令触发 worker 优雅退出。
+   */
+  @Post(':id/shutdown')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('workers.edit')
+  @ApiOperation({ summary: '下线 worker（workers.edit；立即标 offline + 心跳命令下发）' })
+  requestShutdown(@Param('id') id: string) {
+    return this.workers.requestShutdown(id);
+  }
 }

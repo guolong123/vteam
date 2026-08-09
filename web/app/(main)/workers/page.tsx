@@ -17,8 +17,10 @@
  * - 安装入口（单一）：「安装 Worker」Link → /workers/install（独立安装向导页）——后端无新增
  *   端点，注册由 worker 进程 outbound 完成（"注册即入池"架构）。
  * - 操作按钮（查看详情/重启/下线）：查看详情已接线 → /workers/:id（T10 详情页）；
- *   重启/下线保持 disabled + title 提示——后端无对应端点（T10 LifecycleManager 接入
- *   WorkerClient 后放开），不实现假功能。
+ *   重启/下线（UX-01）：后端新增 POST /workers/:id/restart、POST /workers/:id/shutdown
+ *   ——worker 独立进程/容器，命令经心跳下行（T4a），重启由 worker 侧 RestartCoordinator
+ *   执行、下线为立即标 offline + worker 优雅退出。按钮按 workers.edit 权限可用，
+ *   offline 节点禁用（命令无心跳可取），busy 态显示进行中 + 页级错误条反馈。
  * - data-testid 与原型一致：worker-list-root/worker-stats/worker-card/
  *   worker-status/worker-version/worker-capability/worker-load/worker-heartbeat/
  *   worker-actions/worker-detail-button/worker-restart-button/worker-offline-button/
@@ -28,9 +30,10 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
+import { hasPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { EmptyState } from "@/src/components/ui";
 import {
@@ -59,11 +62,28 @@ const POLL_INTERVAL_MS = 10_000;
 /* ------------------------------ 子组件 ------------------------------ */
 
 /** Worker 卡片：对齐 07 篇 11.2 注册字段 + 11.4 生命周期操作（原型 :207-456） */
-function WorkerCard({ worker, now }: { worker: WorkerItem; now: number }) {
+function WorkerCard({
+  worker,
+  now,
+  canEdit,
+  busy,
+  onRestart,
+  onShutdown,
+}: {
+  worker: WorkerItem;
+  now: number;
+  /** workers.edit 权限（对齐后端 PermissionGuard；false 时操作按钮禁用 + 提示） */
+  canEdit: boolean;
+  /** 当前进行中的操作（同一卡片任一操作 busy 时两个按钮均禁用防并发） */
+  busy: { workerId: string; action: "restart" | "shutdown" } | null;
+  onRestart: (id: string) => void;
+  onShutdown: (id: string) => void;
+}) {
   const router = useRouter();
   const label = WORKER_STATUS_LABEL[worker.status];
   const theme = workerStatusTheme[label];
   const isOnline = worker.status === "online";
+  const isOffline = worker.status === "offline";
 
   /* 能力声明（11.2）：并发上限 + skill/tool 数量 */
   const maxInstances = worker.capabilities.maxInstances ?? 0;
@@ -76,6 +96,19 @@ function WorkerCard({ worker, now }: { worker: WorkerItem; now: number }) {
 
   /* v2 标识：版本号 v2.x / 2.x 开头（对齐原型 v2.0.0-beta.1 → V2Runtime） */
   const isV2 = /^v?2\./.test(worker.opencodeVersion);
+
+  /* UX-01 操作可用性：workers.edit 权限 + 非 offline（命令需心跳下发）+ 非 busy */
+  const isBusy = busy?.workerId === worker.id;
+  const restartBusy = isBusy && busy?.action === "restart";
+  const shutdownBusy = isBusy && busy?.action === "shutdown";
+  const opsDisabled = !canEdit || isOffline || isBusy;
+  const opsTitle = !canEdit
+    ? "无 workers.edit 权限"
+    : isOffline
+      ? "节点已离线，命令无法经心跳下发"
+      : isBusy
+        ? "操作进行中…"
+        : "重启节点：经心跳命令下发，无活跃会话立即重启 serve";
 
   const card: CSSProperties = {
     display: "flex",
@@ -260,7 +293,7 @@ function WorkerCard({ worker, now }: { worker: WorkerItem; now: number }) {
         <span style={{ marginLeft: "auto", color: neutral[300] }}>♥ {isOnline ? "活跃" : "失联"}</span>
       </div>
 
-      {/* 操作：查看详情（已接线 → /workers/:id）/ 重启 / 下线（后端无端点 → disabled + 提示） */}
+      {/* 操作：查看详情（→ /workers/:id）/ 重启 / 下线（UX-01 真实调用，workers.edit 权限） */}
       <div
         data-testid="worker-actions"
         style={{
@@ -293,40 +326,44 @@ function WorkerCard({ worker, now }: { worker: WorkerItem; now: number }) {
         <button
           type="button"
           data-testid="worker-restart-button"
-          disabled
-          title="后端未提供该操作（T10 LifecycleManager 接入后开放）"
+          data-worker-id={worker.id}
+          disabled={opsDisabled}
+          title={opsTitle}
+          onClick={() => onRestart(worker.id)}
           style={{
             flex: 1,
             padding: `${space.sm - 1}px ${space.md}px`,
             borderRadius: radius.md,
-            border: `1px solid ${neutral[100]}`,
-            backgroundColor: neutral[100],
-            color: neutral[400],
+            border: `1px solid ${opsDisabled ? neutral[100] : neutral[200]}`,
+            backgroundColor: opsDisabled ? neutral[100] : "#FFFFFF",
+            color: opsDisabled ? neutral[400] : neutral[700],
             fontSize: fontSize.md,
-            cursor: "not-allowed",
+            cursor: opsDisabled ? "not-allowed" : "pointer",
             fontFamily: fontFamily.body,
           }}
         >
-          重启
+          {restartBusy ? "重启中…" : "重启"}
         </button>
         <button
           type="button"
           data-testid="worker-offline-button"
-          disabled
-          title="后端未提供该操作（T10 LifecycleManager 接入后开放）"
+          data-worker-id={worker.id}
+          disabled={opsDisabled}
+          title={opsTitle}
+          onClick={() => onShutdown(worker.id)}
           style={{
             flex: 1,
             padding: `${space.sm - 1}px ${space.md}px`,
             borderRadius: radius.md,
-            border: "1px solid transparent",
-            backgroundColor: neutral[100],
-            color: neutral[400],
+            border: `1px solid ${opsDisabled ? "transparent" : "#FECACA"}`,
+            backgroundColor: opsDisabled ? neutral[100] : "#FEF2F2",
+            color: opsDisabled ? neutral[400] : "#DC2626",
             fontSize: fontSize.md,
-            cursor: "not-allowed",
+            cursor: opsDisabled ? "not-allowed" : "pointer",
             fontFamily: fontFamily.body,
           }}
         >
-          下线
+          {shutdownBusy ? "下线中…" : "下线"}
         </button>
       </div>
     </section>
@@ -337,6 +374,8 @@ function WorkerCard({ worker, now }: { worker: WorkerItem; now: number }) {
 
 export default function WorkersPage() {
   const token = useAuthStore((s) => s.token);
+  const user = useAuthStore((s) => s.user);
+  const queryClient = useQueryClient();
 
   /* 1s tick：驱动各卡片相对心跳时间重算（数据本身由轮询刷新） */
   const [, setTick] = useState(0);
@@ -352,6 +391,54 @@ export default function WorkersPage() {
     enabled: !!token,
     /* 实时性：worker.heartbeat SSE 需 T9 事件回流（未实现）→ 轮询与心跳周期同频 */
     refetchInterval: POLL_INTERVAL_MS,
+  });
+
+  /* UX-01：重启/下线操作权限（对齐后端 PermissionGuard workers.edit） */
+  const canEditWorker = hasPermission(user?.permissions, "workers", "edit");
+
+  /* 操作中的 worker（防并发：同一卡片任一操作 busy 时两按钮均禁用） */
+  const [busyWorker, setBusyWorker] = useState<{
+    workerId: string;
+    action: "restart" | "shutdown";
+  } | null>(null);
+  /* 操作错误提示（页级，3s 自动消失，对齐 skills 页 notice 模式） */
+  const [actionError, setActionError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!actionError) return;
+    const timer = setTimeout(() => setActionError(null), 3000);
+    return () => clearTimeout(timer);
+  }, [actionError]);
+
+  /* 重启：POST /workers/:id/restart → 命令经心跳下发，worker 侧重启 serve */
+  const restartMutation = useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ workerId: string; queued: boolean }>(`/workers/${id}/restart`),
+    onMutate: (id) => setBusyWorker({ workerId: id, action: "restart" }),
+    onSuccess: () => {
+      setBusyWorker(null);
+      setActionError(null);
+      queryClient.invalidateQueries({ queryKey: ["workers"] });
+    },
+    onError: (err) => {
+      setBusyWorker(null);
+      setActionError(isApiError(err) ? err.message : "重启失败，请稍后重试");
+    },
+  });
+
+  /* 下线：POST /workers/:id/shutdown → 立即标 offline + 心跳命令触发 worker 退出 */
+  const shutdownMutation = useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ workerId: string; queued: boolean }>(`/workers/${id}/shutdown`),
+    onMutate: (id) => setBusyWorker({ workerId: id, action: "shutdown" }),
+    onSuccess: () => {
+      setBusyWorker(null);
+      setActionError(null);
+      queryClient.invalidateQueries({ queryKey: ["workers"] });
+    },
+    onError: (err) => {
+      setBusyWorker(null);
+      setActionError(isApiError(err) ? err.message : "下线失败，请稍后重试");
+    },
   });
 
   const items = data ?? [];
@@ -437,6 +524,47 @@ export default function WorkersPage() {
           </div>
         ))}
       </div>
+
+      {/* UX-01：重启/下线操作错误条（页级，role=alert + 关闭按钮，3s 自动消失） */}
+      {actionError && (
+        <div
+          data-testid="worker-action-error"
+          role="alert"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.sm,
+            marginBottom: space.lg,
+            padding: `${space.sm}px ${space.md}px`,
+            borderRadius: radius.md,
+            backgroundColor: "#FEF2F2",
+            border: `1px solid #FECACA`,
+            color: "#DC2626",
+            fontSize: fontSize.sm,
+            fontFamily: fontFamily.body,
+          }}
+        >
+          <span aria-hidden style={{ flexShrink: 0 }}>⚠</span>
+          <span style={{ flex: 1, minWidth: 0 }}>{actionError}</span>
+          <button
+            type="button"
+            data-testid="worker-action-error-dismiss"
+            aria-label="关闭提示"
+            onClick={() => setActionError(null)}
+            style={{
+              flexShrink: 0,
+              border: "none",
+              background: "transparent",
+              color: neutral[400],
+              fontSize: fontSize.sm,
+              cursor: "pointer",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* 操作行：唯一入口「安装 Worker」→ /workers/install（11.4 水平扩容：新 worker 注册即入池） */}
       <div
@@ -540,7 +668,15 @@ export default function WorkersPage() {
           }}
         >
           {items.map((w) => (
-            <WorkerCard key={w.id} worker={w} now={now} />
+            <WorkerCard
+              key={w.id}
+              worker={w}
+              now={now}
+              canEdit={canEditWorker}
+              busy={busyWorker}
+              onRestart={(id) => restartMutation.mutate(id)}
+              onShutdown={(id) => shutdownMutation.mutate(id)}
+            />
           ))}
         </div>
       )}

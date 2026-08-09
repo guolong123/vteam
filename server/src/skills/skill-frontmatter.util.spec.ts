@@ -3,6 +3,7 @@ import { SKILL_ERRORS } from '../common/constants/skill.constants';
 import {
   assertSkillName,
   parseSkillMarkdown,
+  rewriteFrontmatterField,
 } from './skill-frontmatter.util';
 
 describe('parseSkillMarkdown（SKILL.md frontmatter 解析）', () => {
@@ -86,6 +87,60 @@ describe('parseSkillMarkdown（SKILL.md frontmatter 解析）', () => {
     const { frontmatter } = parseSkillMarkdown(raw);
 
     expect(frontmatter.name).toBe('git-ops');
+  });
+});
+
+describe('rewriteFrontmatterField（PATCH 编辑元信息时同步重写 content frontmatter）', () => {
+  it('标量 name 已存在 → 整行替换（其余行原样保留）', () => {
+    const raw = '---\nname: git-ops\nversion: 1.0.0\n---\n# git-ops';
+
+    const out = rewriteFrontmatterField(raw, 'name', 'git-ops-v2');
+
+    expect(out).toBe('---\nname: git-ops-v2\nversion: 1.0.0\n---\n# git-ops');
+  });
+
+  it('description 为块标量 → 替换整块（含缩进续行）', () => {
+    const raw = [
+      '---',
+      'name: git-ops',
+      'description: |',
+      '  第一行',
+      '  第二行',
+      '---',
+      '# git-ops',
+    ].join('\n');
+
+    const out = rewriteFrontmatterField(raw, 'description', '新描述');
+
+    expect(out).toBe('---\nname: git-ops\ndescription: 新描述\n---\n# git-ops');
+  });
+
+  it('frontmatter 内缺省字段 → 追加到结束 --- 之前', () => {
+    const raw = '---\nname: git-ops\n---\n# git-ops';
+
+    const out = rewriteFrontmatterField(raw, 'description', '新描述');
+
+    expect(out).toBe('---\nname: git-ops\ndescription: 新描述\n---\n# git-ops');
+  });
+
+  it('value 为 null → 删除该字段（连块标量续行）', () => {
+    const raw = '---\nname: git-ops\ndescription: |\n  说明\n---\n';
+
+    const out = rewriteFrontmatterField(raw, 'description', null);
+
+    expect(out).toBe('---\nname: git-ops\n---\n');
+  });
+
+  it('value 为 null 且字段本身缺省 → 原样返回', () => {
+    const raw = '---\nname: git-ops\n---\n';
+
+    expect(rewriteFrontmatterField(raw, 'description', null)).toBe(raw);
+  });
+
+  it('非合法 SKILL.md（首行非 ---）→ 原样返回不抛错', () => {
+    const raw = '# 纯 markdown';
+
+    expect(rewriteFrontmatterField(raw, 'name', 'git-ops')).toBe(raw);
   });
 });
 

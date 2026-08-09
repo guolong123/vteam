@@ -6,6 +6,47 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ---
 
+## FILE-01: 创建任务「上传背景文档」占位按钮接入真实上传（2026-08-09，实现 + tsc 验证完成）
+
+- **问题（QA 报告）**：`doc-upload-btn` 无 onClick（注释「Phase 1 不实现真实选择」），点击无反应 → backgroundDocs 恒空 → 任务无背景文档上下文。QA 报告 FILE-01 行（原判「无需修复/Phase 2」，本次按任务收尾补齐）。
+- **前置基础（已就绪，无需新增后端）**：`POST /api/v1/uploads`（multipart 字段 `file`，JwtAuthGuard 全局鉴权）→ 201 `{url, name, size, ext}`（`url=/uploads/<UUID.ext>`，`size` 字节）；`GET /uploads/*` 静态可访问；白名单扩展名（pdf/doc/docx/xls/xlsx/csv/png/jpg/jpeg/gif/md/txt）+ 10MB 上限。
+- **后端零改动确认**：`CreateTaskDto.backgroundDocs?: unknown[]` 本就是任意 Json 数组（存 `tasks.background_docs` Json 列），对象数组 `[{name, url}]` 直接兼容——**无需调整字段语义**。`tasks.service.ts` start() 私信消费逻辑（:542-549）对每元素「object 有 name 取 name，否则 String(d)」，传 `{name, url}` 后启动私信正确展示文档名。测试基线已有 `backgroundDocs: [{ name: 'd' }]` 对象数组用例。
+- **worker 注入评估**：worker 侧（worker/src）**无 backgroundDocs 引用**（grep 确认）——背景文档仅是任务元数据，经启动私信把文档名提示给主 Agent；worker 资源注入只处理 skills/tools/mcpServers。**当前传 URL 仅为存引用**（落库后未来可经 GET /uploads/* 拉取内容），符合任务「仅存引用传 URL 即可」的评估结论。
+- **前端实现**（`web/app/(main)/tasks/new/page.tsx`）：
+  1. `BackgroundDoc` 加 `url` 字段；新增 `UploadedFileMeta` 接口 + `formatFileSize(bytes)`（KB 取整/MB 一位小数，对齐原型 mockDocs "868 KB"/"2.4 MB"）+ `colorOf(ext)`（docTypeColors 命中用之，否则 `DEFAULT_DOC_COLOR #64748B` 兜底——白名单 12 种 ext 仅 3 种有色，无兜底会白底白字）。
+  2. `TaskForm`：内部 `fileInputRef` + hidden `<input data-testid="doc-file-input">`（accept 对齐上传白名单，onChange 上抛 File 并重置 value 允许重选同文件）；`doc-upload-btn` 加 `onClick` + `disabled={uploading}`（文案「上传中…」+ opacity 0.7）；上传错误条 `doc-upload-error`（role=alert + 关闭按钮 `doc-upload-error-dismiss`，红系配色对齐 create-error）。
+  3. 文件列表行 testid `doc-file` → **`doc-file-item`**（key 由 `doc.name` 改 `doc.url`——UUID 文件名唯一，同名文件不冲突）；移除按钮加 `data-testid="doc-file-remove"`，`onRemoveDoc(url)` 按 url 过滤。
+  4. 页面 `uploadMutation`（POST /uploads FormData，复用 api.ts 对 FormData 不设 Content-Type 的分支）→ onSuccess 转 `{name, size: formatFileSize, ext: toUpperCase(), color, url}` 入列表；onError `isApiError` 展示。
+  5. **提交 payload**：`backgroundDocs.map(d => d.name)` → `backgroundDocs.map(d => ({ name: d.name, url: d.url }))`。
+- **e2e 同步**：`web/e2e/reference/testids.ts` 1.3 task-create 条目 `doc-file` → `doc-file-input`/`doc-file-item`/`doc-file-remove`/`doc-upload-error`/`doc-upload-error-dismiss`（原 `doc-file` 仅在审计注册、无实际断言，安全替换）。
+- **⚠️ 并行会话竞争**：工作区存在大量并行会话未提交改动（server chat/skills/workers/*、schema.prisma、web messages/skills/workers/* 等）——本次仅动 web tasks/new/page.tsx + testids.ts + notepad 三个文件；server tsc 未跑（后端零改动，命中并行中间态无意义）。web `npx tsc --noEmit` **0 错误**。
+- **遗留（决策）**：拖拽上传（drop handler）未实现——按钮文案含「拖拽」但仅支持点击选文件，与原型「点击或拖拽」文案存在轻微偏差（Phase 2 可补 drag/drop）；未做上传中预览缩略图（仅显示文件名/大小/扩展名角标）。
+
+---
+
+## UX-01: Worker 重启/下线按钮从永久禁用变为真实可用（2026-08-09，实现 + 测试完成）
+
+- **问题（QA 报告）**：workers 页「重启」「下线」按钮永久 disabled（注释「后端无端点」）。QA 报告 .gstack/qa-reports/qa-report-open-issues-2026-08-09.md UX-01 行。
+- **设计决策（关键探索结论）**：worker 是**独立容器/进程**（opencode serve），server **无进程控制能力**——但已有 **T4a WorkerCommand 下行命令通道**（server `enqueueCommand` → worker 心跳时 `pendingCommands` 取出 → 心跳响应携带 commands → worker `dispatchCommands` → `onCommands` 回调执行）。**方案：复用该通道，不引入新协议**。worker 侧已具备两块可复用能力：
+  1. **T4c RestartCoordinator**：`requestRestart()` 无活跃会话立即重启 serve + reRegister（更新 baseUrl/port），有活跃会话挂起等归零——重启命令直接复用它。
+  2. **优雅退出 shutdown**（SIGTERM/SIGINT 收口：停心跳 → flush 事件 → stop serve → exit）——下线命令直接调它。
+- **后端（workers.service + controller）**：
+  - `WORKER_COMMAND_TYPES` 新增 `RESTART: 'restart'`、`SHUTDOWN: 'shutdown'`。
+  - `requestRestart(id)`：findUnique 校验（404 WORKER_NOT_FOUND）→ `enqueueCommand({type:'restart', resourceVersion:'remote-restart'})` → 返回 `{workerId, command, queued:true}`。**不改状态**（重启期间心跳中断 30s 判离线属正常，reRegister 后恢复）。
+  - `requestShutdown(id)`：**双管齐下**——① 立即 `update status=offline`（调度器 `assignWorker` 的 `status != offline` 过滤立刻停止分配 + 前端列表即时反映）；② `enqueueCommand({type:'shutdown'})` → worker 收到后优雅退出（进程退出 → 心跳停止 → **不会再刷回 online**，30s 健康检查兜底）。同步清理该 worker 的 `workerMcpStatus` 内存态（对齐 markStaleWorkersOffline 行为）。
+  - controller：`POST :id/restart` / `POST :id/shutdown`，`@UseGuards(PermissionGuard) + @RequirePermission('workers.edit')`（CONF-03 读写同资源权限点；双段路由不与 `:id` 单段冲突）。
+- **worker 侧（双写铁律）**：`worker-protocol.ts` WORKER_COMMAND_TYPES **必须与 server 同步新增**（T1 契约双写，contract.spec 靠 JSON 互通不锁枚举值）——只改 server 不改 worker 会导致命令 type 无法匹配。`index.ts`：dispatchCommands 打日志分支（RESTART「远程重启」/ SHUTDOWN「优雅退出」）+ onCommands handler 新增分支——RESTART → `restartCoordinator.requestRestart('远程重启')`（pending 打日志）；SHUTDOWN → `shutdown('remote-shutdown')`（main() 闭包内可直接引用，防重入由 shuttingDown 保证）。
+- **前端（workers/page.tsx）**：
+  - 权限：`hasPermission(user?.permissions, "workers", "edit")`（对齐后端 PermissionGuard）。
+  - 操作可用性：**offline 禁用**（命令需心跳下发，offline 无心跳可取命令）+ busy 防并发（同一卡片任一操作进行中两按钮均禁用）。
+  - 两个 `useMutation`（restart/shutdown）：onMutate 设 busy → onSuccess `invalidateQueries(["workers"])`（10s 轮询外立即刷新）→ onError 设页级错误条（`worker-action-error`，role=alert + 关闭按钮 + 3s 自动消失，对齐 skills 页 notice/providerError 模式）。
+  - busy 态按钮文字「重启中…/下线中…」；offline/无权限 disabled + title 解释原因。
+- **验证**：server `npx tsc --noEmit` **workers 文件 0 错误**（唯一报错来自**并行会话**的 `chat.service.spec.ts` 中间态 TS2739——非本任务文件）；jest workers.service.spec + workers.controller.spec **81/81 全绿**（新增 service 6 例：restart 入队/404、shutdown 入队+标 offline/404、mcpStatus 清理、restart 命令心跳取出即清空 + controller 2 例转发）；worker `npm run typecheck` 0 错误 + jest index.spec **30/30**（新增 restart/shutdown 透传 2 例）；web `npx tsc --noEmit` 0 错误。
+- **⚠️ 并行会话竞争（复现）**：本工作区存在并行会话正在改 chat/skills 模块（`git status` 可见 chat.service.spec.ts/chat.service.ts/skills.*/schema.prisma/app.module.ts/main.ts 未提交改动）——server 项目级 tsc 会命中其中间态错误。**验证自己的改动用 git status 先区分文件归属，再对非本任务文件的报错向用户说明，不代改。**
+- **遗留（决策）**：offline worker 调用 restart/shutdown API 时命令会**排队**（恢复上线后由心跳取出执行）——这是「离线期间操作补发」语义，前端按钮已禁用该入口，API 层保留幂等不报错。
+
+---
+
 ## CONF-02: 权限矩阵「41 个未校验权限点」前端标注未启用（2026-08-09，实现 + tsc 验证完成）
 
 - **问题（QA 严重）**：`server` 全仓 grep `@RequirePermission` 实证仅 7 个权限点被后端校验——agents.view/create/edit/delete（agents.controller.ts 全 4 操作）+ projects.create（projects.controller.ts:43）+ skills.view（skills.controller.ts:68/86）+ workers.view（workers.controller.ts:68/77）。前端角色配置页 `web/app/(main)/roles/page.tsx` 渲染 8 资源 × 6 操作 = 48 格，其中 41 格勾选后无任何后端校验 → **权限配置 UI 与后端校验脱节**（给受限角色加 `workers.edit: true` 后 PATCH worker 仍 403，实证勾选不生效）。
@@ -802,3 +843,107 @@ Tags: UX-14, delete, agents-page, permissions
 - **验证**：`cd server && npx tsc --noEmit` 0 错误；`npx jest src/common/constants/agent.constants.spec.ts --silent` 6/6 全绿。全仓 grep 无其他代码引用被移除的假模型。
 - **⚠️ 教训（铁律）**：模型清单以 **worker 节点 `opencode models` 实测**为权威，**DB worker_model_availabilities / capabilities.models 上报仅作参考**——上报可能含假模型/测试注入（同秒批量入库高度可疑），spec 契约断言必须锁定实测清单而非 DB 上报数。
 - **遗留（orchestrator 处理）**：DB 中 18 个假模型（worker_model_availabilities + models 表）需清理 + 重跑 seed 更新已入库模板 Agent defaultModelId（模板只读 PATCH 403，只能 seed 更新）。
+
+## FILE-00: 文件存储基础能力（统一上传 + 静态服务，FILE-01/02、UX-10 共享基础，2026-08-09）
+
+- **方案选优（web/public vs server uploads）**：选 **server uploads + ServeStaticModule 挂载 + web rewrite**。理由：① server 独立持有文件，读/写同源（main.ts useStaticAssets 与 multer destination 共用 `resolveUploadDir()`），与 Next build 产物（web/public 会在 build 时复制进 .next/standalone，运行时写入不生效）解耦；② 与现有 API 代理模式一致——web/next.config.ts 增加 `/uploads/:path*` → `API_PROXY_TARGET/uploads/:path*` rewrite（同 /api/v1 模式），dev/prod 均同源访问；③ 目录可由 `UPLOAD_DIR` 环境变量覆盖（默认 `server/uploads/`）。
+- **新增模块 `server/src/uploads/`**：`uploads.constants.ts`（UPLOAD_ERRORS / ALLOWED_EXTENSIONS 12 种 / FILE_SIZE_LIMIT=10MB / resolveUploadDir）、`uploads.service.ts`（FileStorageService：静态 buildMulterOptions/assertAllowed/extractExtension/generateFilename + 实例 describe）、`uploads.controller.ts`（POST /api/v1/uploads）、`uploads.module.ts`（exports FileStorageService 供 FILE-01/02、UX-10 复用）。
+- **关键设计**：① 文件名 `UUID.<ext>`（crypto.randomUUID + 保留小写扩展名，杜绝重名/路径穿越）；② **类型校验以扩展名白名单为准而非 mimetype**——浏览器/工具常把不同类型统一上报为 application/octet-stream，扩展名才是可控类型信号（返回 ext 与校验同源）；③ 大小限制走 multer limits → Nest 413（与 skills 上传同款机制，skills.controller.ts 先例）；④ 类型拒绝在 fileFilter 抛 BadRequestException({code: UPLOAD_FILE_TYPE_NOT_ALLOWED})，缺文件 400 UPLOAD_FILE_REQUIRED；⑤ 返回 `{url:'/uploads/<filename>', name, size, ext}`。
+- **multer 类型**：multer 2.x 无自带 .d.ts，@types/multer 未安装；因 tsconfig `noImplicitAny:false`，`import { diskStorage } from 'multer'` 隐式 any 可编译（skills.controller.ts 的 memoryStorage 同款先例），无需新增依赖。fileFilter 参数类型复用 @nestjs/platform-express MulterOptions 内联结构。
+- **验证**：`cd server && npx tsc --noEmit` 排除并行 session 正在修改的 chat.service.ts/chat.controller.ts 后 0 错误；`npx jest src/uploads` 26/26 全绿（service spec 覆盖 extractExtension/generateFilename/assertAllowed/fileFilter cb 语义/describe；controller spec 覆盖 describe 透传/缺文件 400）；`cd web && npx tsc --noEmit` next.config 0 错误。
+- **⚠️ 并行冲突提醒**：本次执行中发现 chat.service.ts/chat.controller.ts 正被并行 session 编辑产生临时语法错误，tsc 全量红——验证时按文件过滤，不属本次改动。
+- **遗留（下游任务衔接）**：FILE-01/02 背景文档/产出物上传、UX-10 群聊附件可注入 FileStorageService 复用 buildMulterOptions/describe；POST /uploads 当前仅全局 JWT 鉴权，如后续需按资源收口可加 PermissionGuard；worker 上报的 artifact fileRef（12 篇 §3.1）与浏览器上传 /uploads URL 是两条路径，FILE-02 需定义 fileRef 归一策略。
+
+Tags: file-storage, uploads, multer, static-assets, FILE-00
+
+---
+
+## UX-09: 消息中心会话管理——删除/置顶/标记已读（后端 3 端点 + 前端操作 + schema 迁移，2026-08-09）
+
+- **问题**：QA 报告 UX-09【中】——会话无删除/置顶/标记已读操作；后端 `chat.controller.ts` 无对应端点（GET/POST 仅 5 个）。
+- **Schema 变更（ChatChannel 加 3 字段，channel 级简化）**：`pinned Boolean @default(false)`、`lastReadAt DateTime? @map("last_read_at")`、`deletedAt DateTime? @map("deleted_at")`。**评估结论**：用户级置顶/已读需 ChannelUser/MessageRead 关联表，任务明确"尽量简单"→ 用 channel 级标记（共享群聊会互相影响，演示平台可接受）。
+- **后端（chat.controller + chat.service + dto/update-channel.dto.ts）**：
+  1. `DELETE /channels/:id` → **soft delete**（deletedAt=now），列表隐藏 + 已删除频道 resolveChannelAccess 404（幂等）；非项目成员 403。返回 `{id, deletedAt}`。
+  2. `PATCH /channels/:id {pinned}` → update pinned，返回频道 DTO；列表 `orderBy: [{pinned:'desc'},{createdAt:'desc'}]`（置顶优先）。
+  3. `PATCH /channels/:id/read` → lastReadAt=now，返回 `{id, lastReadAt}`。
+  4. **DM 复活语义**：`createDmChannel` 幂等命中已 soft delete 的 private 频道时 update 复活（deletedAt=null 复用原记录）——否则 `@@unique([taskId,agentId])` 唯一键冲突导致无法重建。
+  5. `toChannelDto` 透传 pinned/lastReadAt；`findAccessibleChannels` where 加 `deletedAt: null`；`resolveChannelAccess` 加 `channel.deletedAt` 404 检查。
+- **前端（web/app/(main)/messages/page.tsx）**：ChannelItem 加 pinned/lastReadAt；ConversationItem 右侧操作组（`conversation-pin-button` / `conversation-read-button` / `conversation-delete-button`，外层 div stopPropagation 防触发整卡跳转）；置顶态卡片浅蓝（#EFF6FF/#BFDBFE）；页面级 deleteMutation/pinMutation/readMutation 均 `invalidateQueries(["channels"])`；删除走 ConfirmDialog（OBS-003 先例，复用 confirm-delete-modal，title「删除会话」）。
+- **验证**：`cd server && npx tsc --noEmit` 0 错误（排除并行 session 新建的 uploads.service.spec.ts 既有错误）；`npx jest chat` **3 suites / 104 tests 全绿**（chat.service.spec 40 个含新增 removeChannel/updateChannelPinned/markChannelRead 各 2-3 用例 + DM 复活用例）；`cd web && npx tsc --noEmit` 0 错误。未跑迁移（orchestrator 部署阶段 prisma migrate）+ 未部署（遵守执行范围）。
+- **经验**：① **编辑插入方法时 oldString 若含目标方法 JSDoc 开头，newString 必须补回被吞的 JSDoc 前几行**（本次吞掉 resolveChannelAccess 的 `/**`+首行，tsc 报语法错误定位到 489 行）——Edit 的 oldString 是整段替换，易截断相邻 JSDoc；② soft delete + `@@unique` 复合键冲突必须显式处理"复活"分支，否则删除的 DM 无法重建；③ 删除语义与共享频道现实冲突（channel 级 deletedAt 删所有成员可见性）——任务明确简化优先，文档标注即可。
+- **遗留（orchestrator）**：schema.prisma 3 新字段需 `prisma migrate` 生成迁移 + 部署；DB 既有 chat_channels 行 pinned=false / lastReadAt=NULL / deletedAt=NULL 由 default 兜底。
+
+Tags: UX-09, chat, channel-management, soft-delete, prisma-migration
+
+## UX-15: 技能编辑（后端 PATCH /skills/:id + 前端编辑弹窗，2026-08-09，实现 + tsc + jest 验证完成）
+
+- **问题（qa-report-open-issues-2026-08-09.md:96，原标"无需修复"）**：技能仅有启停/上传覆盖，无编辑入口。收尾补齐。
+- **后端（JSON body，非 multipart）**：
+  - `PATCH /skills/:id` → `UpdateSkillDto {name?, description?, content?}`（全空 → 400 `SKILL_UPDATE_EMPTY`，新增错误码）。
+  - `SkillsService.update(id, dto)`：404 查无 → name 走 `assertSkillName`（400 FRONTMATTER_INVALID）+ 唯一性（`assertNameFree` 增加 `excludeId` 排除自身，409）；content 走 `parseSkillMarkdown` 校验合法后落库原文。
+  - **一致性不变量「DB 列 = content frontmatter」**（worker 注入读 content 原文，若列与 frontmatter 脱钩会导致注入 SKILL.md 名与列表展示名不一致）：显式提供的 name/description 用新工具函数 `rewriteFrontmatterField(content, key, value)` 同步重写 content frontmatter（支持标量替换 / 块标量整块删除 / 缺省追加，`skill-frontmatter.util.ts`）；只更新 content 时 name/description 列反向取 content frontmatter 解析值。
+  - 编辑落库后同样 `broadcastReloadConfig`（F1 MAJOR 闭环）。
+  - 权限：`@RequirePermission('skills.edit')`（与 PATCH status 同点，admin 专属）。路由 `@Patch(':id')` 与既有 `@Patch(':id/status')` 路径段数不同不冲突。
+- **前端（`web/app/(main)/skills/page.tsx`）**：技能行操作区加「编辑」按钮（`skill-edit-button`，仅 admin）；弹窗 `edit-skill-modal-root`（name/desc 输入 + SKILL.md 全文 textarea，mono）→ PATCH /skills/:id；列表接口不含 content → 打开时 `GET /skills/:id/content` 拉取预填（editLoading 禁用保存）；保存校验 name slug 与后端 assertSkillName 一致。
+- **验证**：`cd server && npx tsc --noEmit` 0 错误；`npx jest src/skills --silent` **3 suites / 54 tests 全绿**（service 新增 update 10 用例、controller 1 用例、frontmatter util 新增 rewriteFrontmatterField 6 用例）；`cd web && npx tsc --noEmit` 0 错误（**排除并行 session 未提交改动的 `web/app/(main)/messages/page.tsx` 2 个 TS2739**——stash 该文件后 tsc 0 错误证明非本次引入，已 pop 还原，勿触碰）。
+- **经验**：① `assertNameFree` 由 `if (existing)` 改为 `if (existing && (excludeId===undefined || existing.id!==excludeId))`——若写成 `existing.id !== excludeId`，create（excludeId undefined + mock 无 id）会误判相等放行同名，既有 create 用例立即暴露；② PATCH 元信息编辑必须同步 content frontmatter（不变量），否则「改列不改注入原文」造成列表与 worker 注入脱钩；③ 并行 session 改动同一仓库其他文件时，验收前用 `git stash push -- <file>` 单文件暂存定位既有错误归属。
+
+Tags: UX-15, skills, patch-endpoint, frontmatter-rewrite, frontend-modal
+
+---
+
+## FILE-02: doc/file 产出物查看/下载（收尾补齐，2026-08-09，实现 + tsc + jest 验证完成）
+
+- **问题（qa-report-open-issues-2026-08-09.md FILE-02）**：doc/file 产出物仅显示「文件引用：{contentRef/filePath} + sha256」纯文本，不可查看/下载。
+- **现状确认**：Artifact doc/file 的 `contentRef`/`filePath` 存 `submission.fileRef`——浏览器上传路径（POST /uploads 返回的 `/uploads/<filename>`，web rewrite 可达）与 worker 上报路径（12 篇 §3.1「worker 工作区文件引用 URL」，实测可能为原始路径/纯文件名）两条来源。数据无 size 字段（仅 contentRef/filePath/sha256）。
+- **后端归一化（`server/src/uploads/uploads.service.ts` FileStorageService 新增静态方法，文件域知识收敛在 uploads）**：
+  1. `normalizeFileRef(ref)`：`/uploads/` 前缀或 http(s):// 完整 URL → 原样；其他（worker 原始路径/纯文件名）→ 提取 basename 归一为 `/uploads/<basename>`（控制面已落盘 uploads 时可达；无扩展名/空串 → 原样不伪造 URL）。
+  2. `describeFileRef(fileUrl)`：派生 `{name, ext, size}`；`/uploads/` 前缀经 `statSync(join(resolveUploadDir(), base))` 读磁盘 size（文件缺失 → null，前端不显示大小徽章）；外部 URL 不读本地磁盘 size=null。
+  3. `artifacts.service.toVersionDto`：doc/file（`filePath` 非空）追加 `fileUrl/fileName/fileExt/fileSize` 派生字段，`contentRef/filePath` 原样不动（契约向后兼容，text 版本不附加）。
+- **前端（`web/app/(main)/artifacts/page.tsx`）**：新增 `ArtifactFileView` 组件替换 doc/file 纯文本分支——可访问引用（/uploads/ 或 http(s)）渲染：图片类型（png/jpg/jpeg/gif）内嵌 `<img>` 预览（`artifact-image-preview`）+ 文件名链接（`artifact-file-link`，target=_blank）+ 扩展名/大小徽章（`artifact-file-badge`）+ 下载按钮（`artifact-file-download`，同源 /uploads/ 触发 download）+ sha256；不可访问引用降级为旧纯文本展示。
+- **测试**：`uploads.service.spec.ts` 新增 normalizeFileRef 6 用例 + describeFileRef 4 用例（statSync 经 `import * as fs from 'node:fs'` spy，`'fs'`/`'node:fs'` 解析同一核心模块对象，spy 生效）；`artifacts.service.spec.ts` 新增 doc/file 版本归一化 + text 版本不附加 2 用例。
+- **验证**：`cd server && npx tsc --noEmit` 0 错误；`npx jest src/uploads src/artifacts` **5 suites / 69 tests 全绿**（含并行 session 的 PermissionGuard controller 用例）；`cd web && npx tsc --noEmit` 0 错误。未部署/未起 dev server（遵守执行范围）。
+- **经验**：① 文件域知识（扩展名/大小/上传目录）收敛在 `FileStorageService` 静态方法，artifacts.service 直接 import 复用，避免跨模块 DI 缠绕（uploads 不依赖 artifacts，无循环）；② 产出物 `filePath` 非空恰为 doc/file 的天然判别（text 恒为 null），无需给 toVersionDto 传 type；③ `node:fs` 与 `fs` 在 jest/Node 解析为同一模块对象，spyOn 均生效；④ **并行 session 冲突**：artifacts.controller.ts/spec.ts 同时被并行 session 加 PermissionGuard（CONF-02），本次 jest 首次跑 controller spec 报 PrismaService 未解析为并行 session 的中间状态，其后补齐 mock 后通过——跨 session 协作时先验证改动归属再判断失败。
+
+Tags: FILE-02, artifacts, file-ref-normalize, uploads, file-download, image-preview
+
+---
+
+## UX-10: 群聊附件/图片上传（收尾阶段补齐，2026-08-09，实现 + 测试完成）
+
+- **问题（QA 报告）**：群聊只能发文字，不能发文件/图片。QA 报告 .gstack/qa-reports/qa-report-open-issues-2026-08-09.md UX-10 行。
+- **背景（文件存储基础已就绪，上一任务交付）**：`POST /api/v1/uploads`（multipart file 字段，diskStorage，扩展名白名单 pdf/doc/docx/xls/xlsx/csv/png/jpg/jpeg/gif/md/txt，10MB）→ `{url,name,size,ext}`；`GET /uploads/*` 静态可达（main.ts useStaticAssets + web next.config rewrite `/uploads/:path*` → API_PROXY_TARGET）。
+- **后端改动（schema 改动允许，不实际迁移）**：
+  1. `schema.prisma` Message 模型加 3 可空字段：`attachmentUrl String? @map("attachment_url")` / `attachmentName` / `attachmentType`——**改了 schema 必须 `npx prisma generate` 让 client 类型带上新字段**（否则 tsc 报 create data 属性不存在；generate 是本地代码生成，非迁移）。
+  2. `CreateMessageDto` 加可选 `attachmentUrl` / `attachmentName` / `attachmentType`（均 @IsString + @IsOptional）——**不单独校验 URL 可访问性**（上传白名单已兜底类型/大小，静态服务由 main.ts 挂载）。
+  3. `chat.service.ts`：MessageRow 类型加 3 字段；`createMessage` 落库**条件展开** `...(dto.attachmentUrl ? {attachmentUrl, attachmentName: dto.attachmentName ?? null, attachmentType: dto.attachmentType ?? null} : {})`（无附件消息不携带，避免旧测试精确断言 message.create 参数失败）；`toMessageDto` 恒透出 3 字段（无附件为 null，前端气泡渲染数据源）。
+  4. **其他 message.create 调用点（mock/worker-dispatcher、tasks.service 系统消息）不需要改**——新字段可空，条件展开只在用户消息发送处。
+- **前端（message-input.tsx + ChatBubble 共享组件，群聊/私聊两页自动获得能力）**：
+  1. `MessageInput`：新增隐藏 file input（`message-attach-input`）+ 附件按钮（`message-attach-button`，SVG 回形针非 emoji）→ 选文件 → **客户端先行校验**（扩展名白名单 ALLOWED_ATTACHMENT_EXTS 对齐后端 + 10MB 上限，避免无提示 413）→ `FormData` 经 `api.post("/uploads", form)`（api.ts 已支持 FormData 自动去 Content-Type，浏览器带 boundary）→ 存 `pendingAttachment`（{url,name,size,ext}）→ 待发送预览（`message-attach-preview` + 移除按钮 `message-attach-remove`）+ 上传错误条（`message-attach-error` role=alert）。**上传后必须重置 `e.target.value=""`**——否则重选同名文件不触发 onChange。
+  2. `SendMessagePayload` 加 `attachment?: MessageAttachment`；**handleSend 允许纯附件无文本发送**（`if ((!text && !pendingAttachment) || sending || attaching) return`）——纯图片/文件消息可用；发送中 + 上传中均禁用按钮。
+  3. `ChatBubble` 加 `attachment?: ChatBubbleAttachment`（{url,name,size?,ext}）prop + 新 `AttachmentCard` 子组件：图片（png/jpg/jpeg/gif）→ `<img data-testid="attachment-image">` 内嵌预览；其他 → `<a data-testid="attachment-file" download>` 文件下载链接（文件名 + 大小格式化为 KB/MB）；外层容器 `message-attachment`。**纯附件消息（text 为空）不渲染空文本气泡**——`hasText = text.trim().length > 0`，气泡 div 仅 hasText 时渲染，附件卡片独立于气泡外挂（flex column 内）。
+  4. 群聊页（tasks/[id]）与私聊页（messages/[id]）sendMutation 条件展开提交附件三字段 + 消息渲染 `attachment={msg.attachmentUrl ? {url, name: msg.attachmentName ?? msg.attachmentUrl, ext: msg.attachmentType ?? ""} : undefined}`。`RealtimeChatMessage` 类型加 `attachmentUrl?/attachmentName?/attachmentType?`（可空）。
+- **⚠️ 前端渲染坑**：附件 `size` 后端 DTO **不透出**（Message 表无 size 列），上传后消息里文件链接不显示大小——ChatBubbleAttachment.size 设计为可选，向后兼容；如需显示大小需 schema 再加列（本期不做）。
+- **测试**：chat.service.spec 新增 2 用例（带附件：message.create 收到 attachment 三字段 + 响应 DTO 透出 + dispatcher 空目标不受影响；无附件：data 不带 attachmentUrl 字段 + 响应透出 null）+ messageRow fixture 加 3 字段默认 null。**验证**：server `npx tsc --noEmit` **chat/uploads 文件 0 错误**（项目级仅剩并行 session 的 artifacts.service.spec.ts 4 个 fileSize/fileUrl 中间态错误，非本任务文件）；`npx jest chat` **3 suites / 106 tests 全绿**（基线 104 + 新增 2）；web `npx tsc --noEmit` 0 错误。未部署/未起 dev server/未跑浏览器（遵守执行范围）。
+- **⚠️ 并行 session 竞争（复现）**：artifacts.service.spec.ts 由并行 session 正在改造（fileSize/fileUrl/fileName/fileExt 属性报 TS2339 中间态），server 项目级 tsc 4 个错误全部归属该文件——`grep chat|uploads` 过滤验证自己的改动 0 错误即可，不代改他人文件。
+
+Tags: UX-10, chat-attachment, uploads, message-input, chat-bubble, image-preview
+
+---
+
+## CONF-02 方案②补齐：tasks/chats/artifacts 后端矩阵守卫落地（2026-08-09，实现 + spec + tsc 验证完成）
+
+- **背景（QA 报告 CONF-02 行，方案②）**：CONF-02 方案①仅前端白名单禁配未启用点（41 个）；本次补齐后端守卫，使受限矩阵勾选后真实生效。已实现 10 点（agents 4 + projects.create + skills 3 + workers 2），本次补 tasks/chats/artifacts 三资源，白名单 10 → **20 点**。
+- **权限点映射（对齐 09 篇端点表 + 语义收敛，不破坏既有数据级隔离）**：
+  - `tasks.controller`（类级 ProjectMembershipGuard 成员过滤保留，方法级叠加 PermissionGuard）：GET 列表/详情 → `tasks.view`；POST 创建 → `tasks.create`；PATCH 编辑 / team / start / mark-pending-review / archive → `tasks.edit`；accept / reject → `tasks.review`（验收专属点，对齐原型「验收员」自定义角色组合）。
+  - `chat.controller`（service 层 channel→task→project_members 校验保留）：GET channels / :id / messages / trigger-results → `chats.view`；POST messages / dm-channels → `chats.create`；PATCH :id（置顶）→ `chats.edit`；DELETE :id → `chats.delete`；**PATCH :id/read（标记已读）→ `chats.view`**——lastReadAt 是个人阅读状态非资源写操作，归读操作延伸，避免 member 只读用户被误拒（UX-09 功能保留）。
+  - `artifacts.controller`（任务成员访问保留）：GET 列表/详情/版本 → `artifacts.view`；POST 旁路补充提交 → `artifacts.create`。
+- **users/roles 决策：保持 AdminGuard 不变，不叠加矩阵权限点**——09 篇 §3.2/§3.7 标注 `[admin]`（用户列表/角色配置属管理域），若挂 `users.view`/`roles.view`，member 简写（all:false）会 view 放行 → **成员可读用户列表/角色矩阵，违反设计语义且泄露权限配置**。前端 users/roles 行维持「未启用」标注。
+- **关键约束验证（PermissionGuard 三格式，逻辑零改动）**：admin（all:true）全放行；member（all:false）view 放行 / 写拒（tasks.create 等 403）——与 09 篇「成员只读可见 + 写操作 [admin]」一致；受限矩阵无对应点 → 403 `FORBIDDEN_PERMISSION`，勾选后真实生效。
+- **模块注册**：tasks/chat/artifacts 三模块 providers 各加 `PermissionGuard`（依赖全局 PrismaService + Reflector，沿用 ISSUE-006 模式）。⚠️ controller 挂 PermissionGuard 后其 spec 必须 `.overrideGuard(PermissionGuard).useValue({canActivate: () => true})`，否则 compile 时 Nest 实例化守卫解析不到 PrismaService 报错（ISSUE-006 已记，本次复验）。
+- **前端同步（roles/page.tsx IMPLEMENTED_PERMISSIONS 10 → 20）**：新增 tasks.view/create/edit/review、chats.view/create/edit/delete、artifacts.view/create；`rowHasImplemented` 动态判定 → tasks/chats/artifacts 三行「未启用」徽章自动消失。注释块更新为完整 20 点映射清单（含 users/roles 保持 AdminGuard 的说明）。
+- **spec 更新**：tasks.controller.spec 加 PermissionGuard override + 4 条守卫元数据断言（`Reflect.getMetadata(REQUIRE_PERMISSION_KEY, handler)`：view×2/create×1/edit×5/review×2）；artifacts.controller.spec 加 override + 2 条断言（view×3/create×1）。chat 无 controller.spec（service spec 不触守卫）。
+- **验证**：`npx jest` tasks.controller.spec + artifacts.controller.spec + permission.guard.spec **3 suites / 37 tests 全绿** + chat.service.spec 42 全绿；`cd server && npx tsc --noEmit` 0 错误（排除并行 session FILE-02 的 artifacts.service.spec.ts 4 个 TS2339 中间态错误，见 UX-10 条目）；`cd web && npx tsc --noEmit` 0 错误。未部署/未跑全量 jest（遵守执行范围防并行冲突）。
+- **经验**：① 读操作语义要按「读/写」本质判定而非 HTTP 动词——PATCH :id/read（已读）归 view 而非 edit，避免破坏 member 基础功能；② users/roles 的 view 权限点与 AdminGuard 语义冲突时**不叠加**（09 篇 [admin] 优先），前端对应行保持未启用即可；③ 验收类操作（accept/reject）用独立 `*.review` 点而非 edit，让「验收员」角色可组合（原型 member 矩阵 tasks 行 review=✓）；④ 并行 session 改同一仓库时，tsc 错误按文件归属过滤验证（`grep <自己文件>` 0 错误即可），不代改他人半成品。
+
+Tags: CONF-02, permission-guard, tasks, chats, artifacts, permission-matrix

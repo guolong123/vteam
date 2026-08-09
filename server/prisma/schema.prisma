@@ -201,11 +201,16 @@ model Session {
 // ==================================================================
 
 model ChatChannel {
-  id        String   @id
-  type      String
-  taskId    String   @map("task_id")
-  agentId   String?  @map("agent_id")
-  createdAt DateTime @default(now()) @map("created_at")
+  id         String    @id
+  type       String
+  taskId     String    @map("task_id")
+  agentId    String?   @map("agent_id")
+  // UX-09 会话管理（channel 级简化：置顶/已读为频道级标记，非用户粒度——演示平台可接受；
+  // 用户级置顶/已读需 ChannelUser 关联表，评估后本期不做）
+  pinned     Boolean   @default(false)
+  lastReadAt DateTime? @map("last_read_at")
+  deletedAt  DateTime? @map("deleted_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
 
   task     Task      @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent    Agent?    @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -222,6 +227,10 @@ model Message {
   senderId   String?  @map("sender_id")
   content    Json
   mentions   Json?
+  // UX-10 群聊附件：客户端先 POST /uploads 拿 url，随消息提交（图片/文档均可）
+  attachmentUrl    String?  @map("attachment_url")
+  attachmentName   String?  @map("attachment_name")
+  attachmentType   String?  @map("attachment_type")
   status     String   @default("sent")
   createdAt  DateTime @default(now()) @map("created_at")
 

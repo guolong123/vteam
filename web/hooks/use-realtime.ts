@@ -52,6 +52,10 @@ export interface RealtimeChatMessage {
   senderId: string | null;
   content: RealtimeMessageContent;
   mentions: unknown[];
+  /** UX-10 附件（客户端先 POST /uploads 拿 url 随消息提交；无附件为 null） */
+  attachmentUrl?: string | null;
+  attachmentName?: string | null;
+  attachmentType?: string | null;
   status: string;
   createdAt: string;
 }

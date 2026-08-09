@@ -21,7 +21,7 @@ import { MessageDispatcher } from './message-dispatcher';
 describe('ChatService', () => {
   let service: ChatService;
   let prisma: {
-    chatChannel: { findUnique: jest.Mock; findMany: jest.Mock; count: jest.Mock; create: jest.Mock };
+    chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock; count: jest.Mock; create: jest.Mock; update: jest.Mock };
     message: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock; findUnique: jest.Mock };
     task: { findUnique: jest.Mock };
     projectMember: { findMany: jest.Mock; findUnique: jest.Mock };
@@ -48,6 +48,9 @@ describe('ChatService', () => {
     type: CHANNEL_TYPE.task_group,
     taskId,
     agentId: null,
+    pinned: false,
+    lastReadAt: null,
+    deletedAt: null,
     createdAt: new Date('2026-08-07T00:00:00Z'),
     task: { id: taskId, title: '任务标题', status: 'pending', projectId: 'p_seed_1' },
     agent: null,
@@ -61,6 +64,9 @@ describe('ChatService', () => {
     senderId: userId,
     content: { text: '你好', parts: [] },
     mentions: [],
+    attachmentUrl: null,
+    attachmentName: null,
+    attachmentType: null,
     status: MESSAGE_STATUS.sent,
     createdAt: new Date('2026-08-07T00:00:00Z'),
     ...overrides,
@@ -82,9 +88,11 @@ describe('ChatService', () => {
     prisma = {
       chatChannel: {
         findUnique: jest.fn(),
+        findFirst: jest.fn(),
         findMany: jest.fn(),
         count: jest.fn(),
         create: jest.fn(),
+        update: jest.fn(),
       },
       message: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn() },
       task: { findUnique: jest.fn() },
@@ -189,6 +197,65 @@ describe('ChatService', () => {
         expect.objectContaining({ targets: [] }),
       );
       expect(realtime.broadcast).toHaveBeenCalledTimes(1);
+    });
+
+    it('UX-10 带附件：attachmentUrl/Name/Type 落库 + 响应透出（分发/广播不受影响）', async () => {
+      allowAccess();
+      prisma.taskAgent.findMany.mockResolvedValue([]);
+      idGen.nextId.mockResolvedValue('m_0000000001');
+      prisma.message.create.mockResolvedValue(
+        messageRow({
+          attachmentUrl: '/uploads/abc.png',
+          attachmentName: '架构图.png',
+          attachmentType: 'png',
+        }),
+      );
+
+      const dto = {
+        text: '见图',
+        attachmentUrl: '/uploads/abc.png',
+        attachmentName: '架构图.png',
+        attachmentType: 'png',
+      };
+      const result = await service.createMessage(channelId, userId, dto as any);
+
+      // 落库：附件三字段随消息写入（无附件消息不携带——条件展开）
+      expect(prisma.message.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          attachmentUrl: '/uploads/abc.png',
+          attachmentName: '架构图.png',
+          attachmentType: 'png',
+        }),
+      });
+      // 响应 DTO 透出附件（前端气泡渲染数据源）
+      expect(result.message).toMatchObject({
+        attachmentUrl: '/uploads/abc.png',
+        attachmentName: '架构图.png',
+        attachmentType: 'png',
+      });
+      expect(dispatcher.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ targets: [] }),
+      );
+    });
+
+    it('UX-10 无附件：落库 data 不带附件字段，响应透出 null', async () => {
+      allowAccess();
+      prisma.taskAgent.findMany.mockResolvedValue([]);
+      idGen.nextId.mockResolvedValue('m_0000000001');
+      prisma.message.create.mockResolvedValue(messageRow());
+
+      const result = await service.createMessage(channelId, userId, { text: '纯文字' } as any);
+
+      expect(prisma.message.create).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          data: expect.objectContaining({ attachmentUrl: expect.anything() }),
+        }),
+      );
+      expect(result.message).toMatchObject({
+        attachmentUrl: null,
+        attachmentName: null,
+        attachmentType: null,
+      });
     });
 
     it('归档任务频道发消息 → 409 TASK_ARCHIVED（不落库不广播）', async () => {
@@ -626,10 +693,12 @@ describe('ChatService', () => {
       expect(prisma.chatChannel.findMany).toHaveBeenCalledWith({
         where: {
           task: { projectId: { in: ['p_seed_1', 'p_seed_2'] } },
+          // UX-09：已删除会话隐藏
+          deletedAt: null,
           type: 'task_group',
         },
         include: expect.anything(),
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ pinned: 'desc' }, { createdAt: 'desc' }],
       });
       expect(result.total).toBe(1);
       expect(result.items).toHaveLength(2);
@@ -732,6 +801,31 @@ describe('ChatService', () => {
       expect(result).toMatchObject({ id: channelId, type: 'private' });
     });
 
+    it('已 soft delete 的私聊频道 → 复活（deletedAt 置空，复用原记录）', async () => {
+      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_seed_1' });
+      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+      prisma.agent.findUnique.mockResolvedValue({ id: 'a_product' });
+      prisma.chatChannel.findUnique.mockResolvedValue(
+        channelRow({ type: 'private', agentId: 'a_product', deletedAt: new Date('2026-08-08T00:00:00Z') }),
+      );
+      prisma.chatChannel.update.mockResolvedValue(
+        channelRow({ type: 'private', agentId: 'a_product' }),
+      );
+
+      const result = await service.createDmChannel(userId, {
+        taskId,
+        agentId: 'a_product',
+      });
+
+      expect(prisma.chatChannel.update).toHaveBeenCalledWith({
+        where: { id: channelId },
+        data: { deletedAt: null },
+        include: expect.anything(),
+      });
+      expect(prisma.chatChannel.create).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ id: channelId, type: 'private' });
+    });
+
     it('任务不存在 → 404 TASK_NOT_FOUND', async () => {
       prisma.task.findUnique.mockResolvedValue(null);
 
@@ -774,6 +868,127 @@ describe('ChatService', () => {
         });
       }
       expect(prisma.chatChannel.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('removeChannel（UX-09 删除会话）', () => {
+    it('soft delete：deletedAt 置当前时间，返回 {id, deletedAt}', async () => {
+      allowAccess();
+      const deletedAt = new Date('2026-08-09T00:00:00Z');
+      prisma.chatChannel.update.mockResolvedValue({ id: channelId, deletedAt });
+
+      const result = await service.removeChannel(channelId, userId);
+
+      expect(prisma.chatChannel.update).toHaveBeenCalledWith({
+        where: { id: channelId },
+        data: { deletedAt: expect.any(Date) },
+        select: { id: true, deletedAt: true },
+      });
+      expect(result).toEqual({
+        id: channelId,
+        deletedAt: deletedAt.toISOString(),
+      });
+    });
+
+    it('已删除频道（deletedAt 非空）→ 404 CHANNEL_NOT_FOUND（幂等）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue(
+        channelRow({ deletedAt: new Date('2026-08-08T00:00:00Z') }),
+      );
+
+      await expect(
+        service.removeChannel(channelId, userId),
+      ).rejects.toThrow(NotFoundException);
+      try {
+        await service.removeChannel(channelId, userId);
+        fail('应抛出 NotFoundException');
+      } catch (e) {
+        expect((e as NotFoundException).getResponse()).toMatchObject({
+          code: CHAT_ERRORS.CHANNEL_NOT_FOUND,
+        });
+      }
+      expect(prisma.chatChannel.update).not.toHaveBeenCalled();
+    });
+
+    it('非项目成员 → 403 PERMISSION_PROJECT_NOT_MEMBER（不执行删除）', async () => {
+      allowAccess();
+      prisma.projectMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.removeChannel(channelId, userId),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.chatChannel.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateChannelPinned（UX-09 置顶/取消置顶）', () => {
+    it('置顶 true：update pinned=true，返回频道 DTO 带 pinned', async () => {
+      allowAccess();
+      prisma.chatChannel.update.mockResolvedValue(channelRow({ pinned: true }));
+
+      const result = await service.updateChannelPinned(channelId, userId, true);
+
+      expect(prisma.chatChannel.update).toHaveBeenCalledWith({
+        where: { id: channelId },
+        data: { pinned: true },
+        include: expect.anything(),
+      });
+      expect(result).toMatchObject({ id: channelId, pinned: true });
+    });
+
+    it('取消置顶 false：update pinned=false，返回频道 DTO', async () => {
+      allowAccess();
+      prisma.chatChannel.update.mockResolvedValue(channelRow({ pinned: false }));
+
+      const result = await service.updateChannelPinned(channelId, userId, false);
+
+      expect(prisma.chatChannel.update).toHaveBeenCalledWith({
+        where: { id: channelId },
+        data: { pinned: false },
+        include: expect.anything(),
+      });
+      expect(result).toMatchObject({ id: channelId, pinned: false });
+    });
+
+    it('已删除频道 → 404（不可置顶）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue(
+        channelRow({ deletedAt: new Date('2026-08-08T00:00:00Z') }),
+      );
+
+      await expect(
+        service.updateChannelPinned(channelId, userId, true),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.chatChannel.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('markChannelRead（UX-09 标记已读）', () => {
+    it('lastReadAt 置当前时间，返回 {id, lastReadAt}', async () => {
+      allowAccess();
+      const lastReadAt = new Date('2026-08-09T01:00:00Z');
+      prisma.chatChannel.update.mockResolvedValue({ id: channelId, lastReadAt });
+
+      const result = await service.markChannelRead(channelId, userId);
+
+      expect(prisma.chatChannel.update).toHaveBeenCalledWith({
+        where: { id: channelId },
+        data: { lastReadAt: expect.any(Date) },
+        select: { id: true, lastReadAt: true },
+      });
+      expect(result).toEqual({
+        id: channelId,
+        lastReadAt: lastReadAt.toISOString(),
+      });
+    });
+
+    it('已删除频道 → 404（不可标记已读）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue(
+        channelRow({ deletedAt: new Date('2026-08-08T00:00:00Z') }),
+      );
+
+      await expect(
+        service.markChannelRead(channelId, userId),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.chatChannel.update).not.toHaveBeenCalled();
     });
   });
 });

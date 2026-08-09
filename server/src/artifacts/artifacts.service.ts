@@ -13,6 +13,7 @@ import { ACTOR_TYPE, EVENT_TYPES } from '../common/constants/event.constants';
 import { TASK_STATUS } from '../common/constants/task.constants';
 import { ARTIFACT_ERRORS, ARTIFACT_TYPES } from './artifacts.constants';
 import { QueryArtifactsDto } from './dto/artifact.dto';
+import { FileStorageService } from '../uploads/uploads.service';
 
 /** 产出物域主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
 const ID_PREFIX = {
@@ -372,7 +373,7 @@ export class ArtifactsService implements OnModuleInit {
     };
   }
 
-  /** ArtifactVersionDto（id/version/contentRef/filePath/sha256/acceptedFlag/authorAgentId/changeNote/createdAt）。 */
+  /** ArtifactVersionDto（id/version/contentRef/filePath/sha256/acceptedFlag/authorAgentId/changeNote/createdAt；doc/file 追加 fileUrl/fileName/fileExt/fileSize）。 */
   private toVersionDto(v: {
     id: string;
     artifactId: string;
@@ -385,7 +386,7 @@ export class ArtifactsService implements OnModuleInit {
     changeNote: string | null;
     createdAt: Date;
   }) {
-    return {
+    const dto = {
       id: v.id,
       artifactId: v.artifactId,
       version: v.version,
@@ -397,6 +398,19 @@ export class ArtifactsService implements OnModuleInit {
       changeNote: v.changeNote,
       createdAt: v.createdAt.toISOString(),
     };
+    // FILE-02：doc/file（filePath 非空）→ fileRef 归一化为可访问 URL + 派生展示元数据
+    if (v.filePath) {
+      const fileUrl = FileStorageService.normalizeFileRef(v.contentRef);
+      const meta = FileStorageService.describeFileRef(fileUrl);
+      return {
+        ...dto,
+        fileUrl,
+        fileName: meta.name,
+        fileExt: meta.ext,
+        fileSize: meta.size,
+      };
+    }
+    return dto;
   }
 
   private normalizePage(page?: number): number {

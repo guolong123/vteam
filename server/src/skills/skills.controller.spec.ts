@@ -4,6 +4,7 @@ import { SKILL_ERRORS } from '../common/constants/skill.constants';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { QuerySkillsDto } from './dto/query-skills.dto';
+import { UpdateSkillDto } from './dto/update-skill.dto';
 import { UpdateSkillStatusDto } from './dto/update-skill-status.dto';
 import { UploadedSkillFile } from './skill-frontmatter.util';
 import { SkillsController } from './skills.controller';
@@ -28,6 +29,7 @@ describe('SkillsController', () => {
     findAll: jest.Mock;
     create: jest.Mock;
     updateStatus: jest.Mock;
+    update: jest.Mock;
     findContent: jest.Mock;
   };
 
@@ -36,6 +38,7 @@ describe('SkillsController', () => {
       findAll: jest.fn(),
       create: jest.fn(),
       updateStatus: jest.fn(),
+      update: jest.fn(),
       findContent: jest.fn(),
     };
 
@@ -150,6 +153,24 @@ describe('SkillsController', () => {
 
     expect(service.updateStatus).toHaveBeenCalledWith('sk_0000000001', true);
     expect(result).toMatchObject({ enabled: true });
+  });
+
+  it('PATCH /skills/:id 转发 update（name/description/content，UX-15）', async () => {
+    service.update.mockResolvedValue({
+      id: 'sk_0000000001',
+      name: 'git-ops-v2',
+      description: '新描述',
+    });
+
+    const dto: UpdateSkillDto = {
+      name: 'git-ops-v2',
+      description: '新描述',
+      content: '---\nname: git-ops-v2\n---\n# git-ops-v2',
+    };
+    const result = await controller.update('sk_0000000001', dto);
+
+    expect(service.update).toHaveBeenCalledWith('sk_0000000001', dto);
+    expect(result).toMatchObject({ name: 'git-ops-v2' });
   });
 
   it('GET /skills/:id/content 转发 findContent（worker 注入拉取）', async () => {

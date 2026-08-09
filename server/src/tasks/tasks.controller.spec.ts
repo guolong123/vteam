@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
+import { REQUIRE_PERMISSION_KEY } from '../common/decorators/require-permission.decorator';
+import { PermissionGuard } from '../common/guards/permission.guard';
 import { ProjectMembershipGuard } from '../common/guards/project-membership.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTaskDto } from './dto/create-task.dto';
@@ -50,10 +52,14 @@ describe('TasksController', () => {
           useValue: {
             projectMember: { findUnique: jest.fn() },
             task: { findUnique: jest.fn() },
+            user: { findUnique: jest.fn() },
           },
         },
       ],
-    }).compile();
+    })
+      .overrideGuard(PermissionGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get<TasksController>(TasksController);
   });
@@ -271,6 +277,33 @@ describe('TasksController', () => {
       expect(
         await errorsOf(UpdateTeamDto, { removeAgentIds: [42] }),
       ).not.toHaveLength(0);
+    });
+  });
+
+  describe('权限点守卫（CONF-02 方案②补齐矩阵守卫）', () => {
+    const permOf = (handler: (...args: unknown[]) => unknown) =>
+      Reflect.getMetadata(REQUIRE_PERMISSION_KEY, handler);
+
+    it('读端点挂 tasks.view（列表/详情）', () => {
+      expect(permOf(controller.findAll)).toBe('tasks.view');
+      expect(permOf(controller.findOne)).toBe('tasks.view');
+    });
+
+    it('创建端点挂 tasks.create', () => {
+      expect(permOf(controller.create)).toBe('tasks.create');
+    });
+
+    it('编辑类端点挂 tasks.edit（update/team/start/mark-pending-review/archive）', () => {
+      expect(permOf(controller.update)).toBe('tasks.edit');
+      expect(permOf(controller.updateTeam)).toBe('tasks.edit');
+      expect(permOf(controller.start)).toBe('tasks.edit');
+      expect(permOf(controller.markPendingReview)).toBe('tasks.edit');
+      expect(permOf(controller.archive)).toBe('tasks.edit');
+    });
+
+    it('验收类端点挂 tasks.review（accept/reject）', () => {
+      expect(permOf(controller.accept)).toBe('tasks.review');
+      expect(permOf(controller.reject)).toBe('tasks.review');
     });
   });
 });

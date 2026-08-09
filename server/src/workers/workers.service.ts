@@ -64,6 +64,18 @@ export const WORKER_COMMAND_TYPES = {
    * 命令一次有效（心跳取出即清空）；token 只经下行命令明文传输，不落 worker 日志。
    */
   MODEL_CREDENTIALS: 'model-credentials',
+  /**
+   * UX-01：管理员远程重启——worker 心跳取出后经 RestartCoordinator 重启 serve
+   * （无活跃会话立即执行 + reRegister，有活跃会话挂起等归零）。worker 是独立
+   * 进程/容器，server 无进程控制能力，命令经心跳下行（T4a pull 模型）落地。
+   */
+  RESTART: 'restart',
+  /**
+   * UX-01：管理员远程下线——server 立即标 offline（调度器停止分配），命令经心跳
+   * 下发后 worker 优雅退出进程（停心跳 + flush 事件 + stop serve + exit）；进程
+   * 退出后心跳停止，30s 健康检查兜底维持 offline。
+   */
+  SHUTDOWN: 'shutdown',
 } as const;
 
 export type WorkerCommandType =
@@ -540,6 +552,71 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
           : { defaultModelId: defaultModelId || null },
     });
     return this.toWorkerView(row);
+  }
+
+  /**
+   * UX-01：POST /workers/:id/restart 远程重启（workers.edit 保护）。
+   * worker 独立进程/容器，server 无进程控制能力——命令经 T4a 心跳下行通道下发，
+   * worker 侧 RestartCoordinator 执行真实 serve 重启 + reRegister。worker 不存在
+   * → 404 WORKER_NOT_FOUND。命令一次有效（心跳取出即清空）；offline worker 命令
+   * 排队（恢复上线后由心跳取出执行）。返回命令入队确认，不含状态变更。
+   */
+  async requestRestart(id: string) {
+    const worker = await this.prisma.worker.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!worker) {
+      throw new NotFoundException({
+        code: WORKER_ERRORS.WORKER_NOT_FOUND,
+        message: `Worker ${id} 不存在`,
+      });
+    }
+    this.enqueueCommand(id, {
+      type: WORKER_COMMAND_TYPES.RESTART,
+      resourceVersion: 'remote-restart',
+    });
+    return {
+      workerId: id,
+      command: WORKER_COMMAND_TYPES.RESTART,
+      queued: true,
+    };
+  }
+
+  /**
+   * UX-01：POST /workers/:id/shutdown 远程下线（workers.edit 保护）。
+   * 双管齐下：① 立即标 offline——调度器（assignWorker status != offline 过滤）
+   * 停止分配新任务、前端列表即时反映；② enqueueCommand SHUTDOWN——worker 心跳
+   * 取出后优雅退出进程（停心跳 + flush 事件 + stop serve + exit），进程退出后
+   * 心跳停止不会再刷回 online（30s 健康检查兜底维持 offline）。
+   * worker 不存在 → 404 WORKER_NOT_FOUND；同步清理该 worker 的 mcpStatus 内存态。
+   */
+  async requestShutdown(id: string) {
+    const worker = await this.prisma.worker.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!worker) {
+      throw new NotFoundException({
+        code: WORKER_ERRORS.WORKER_NOT_FOUND,
+        message: `Worker ${id} 不存在`,
+      });
+    }
+    this.enqueueCommand(id, {
+      type: WORKER_COMMAND_TYPES.SHUTDOWN,
+      resourceVersion: 'remote-shutdown',
+    });
+    await this.prisma.worker.update({
+      where: { id },
+      data: { status: WORKER_STATUS.OFFLINE },
+    });
+    this.workerMcpStatus.delete(id);
+    return {
+      workerId: id,
+      command: WORKER_COMMAND_TYPES.SHUTDOWN,
+      queued: true,
+      status: WORKER_STATUS.OFFLINE,
+    };
   }
 
   // ---- LifecycleManager 骨架（T10 WorkerDispatcher 接入 WorkerClient 后实现，本任务不接 T8） ----

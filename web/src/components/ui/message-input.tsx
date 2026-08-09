@@ -13,6 +13,7 @@
 "use client";
 import { useMemo, useRef, useState } from "react";
 import type { CSSProperties, ChangeEvent, KeyboardEvent, MouseEvent } from "react";
+import { api } from "@/lib/api";
 import {
   type RoleKey,
   roles,
@@ -37,10 +38,44 @@ export interface MentionableAgent {
 /** 已插入文本的 mention 记录（T13 落库 / 分派时按 id 解析） */
 export type MessageMention = MentionableAgent;
 
-/** onSend 载荷：消息文本 + 被 @ 的 agent 列表 */
+/** UX-10 附件元数据（对齐 POST /uploads 响应 {url,name,size,ext}）。 */
+export interface MessageAttachment {
+  url: string;
+  name: string;
+  size: number;
+  ext: string;
+}
+
+/** onSend 载荷：消息文本 + 被 @ 的 agent 列表 + 可选附件（先 POST /uploads 后随消息提交） */
 export interface SendMessagePayload {
   text: string;
   mentions: MessageMention[];
+  attachment?: MessageAttachment;
+}
+
+/** 附件扩展名白名单（对齐后端 uploads.constants ALLOWED_EXTENSIONS，客户端先行拦截提示）。 */
+const ALLOWED_ATTACHMENT_EXTS = [
+  "pdf",
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "csv",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "md",
+  "txt",
+];
+
+/** 单文件大小上限（对齐后端 FILE_SIZE_LIMIT 10MB，客户端先行拦截避免 413）。 */
+const ATTACHMENT_SIZE_LIMIT = 10 * 1024 * 1024;
+
+function attachmentExt(name: string): string {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0 || dot === name.length - 1) return "";
+  return name.slice(dot + 1).toLowerCase();
 }
 
 export interface MessageInputProps {
@@ -48,7 +83,7 @@ export interface MessageInputProps {
   value: string;
   /** 输入变更回调（父组件维护 value） */
   onChange: (value: string) => void;
-  /** 发送回调（Enter / 点击发送按钮触发；文本为空时不触发） */
+  /** 发送回调（Enter / 点击发送按钮触发；文本与附件均空时不触发） */
   onSend?: (payload: SendMessagePayload) => void | Promise<void>;
   /** 可 @ 的 Agent 列表（输入 @ 时作为候选弹出） */
   mentionable?: MentionableAgent[];
@@ -71,10 +106,58 @@ export function MessageInput({
   className,
 }: MessageInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   /** 候选触发位置：mentionAt = value 中 `@` 的索引（null = 未触发候选） */
   const [mentionAt, setMentionAt] = useState<number | null>(null);
   const [mentionQuery, setMentionQuery] = useState("");
+
+  // UX-10 附件状态：pendingAttachment（待发送附件）/ attaching（上传中）/ attachError（上传失败提示）
+  const [pendingAttachment, setPendingAttachment] = useState<MessageAttachment | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
+
+  /** 附件按钮点击：触发隐藏 file input */
+  const handlePickFile = () => {
+    if (attaching || sending) return;
+    fileInputRef.current?.click();
+  };
+
+  /** 选文件 → 客户端校验 → POST /uploads → 存待发送附件 */
+  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // 重置 input value：允许重选同名文件重复触发 onChange
+    e.target.value = "";
+    if (!file) return;
+    const ext = attachmentExt(file.name);
+    if (!ext || !(ALLOWED_ATTACHMENT_EXTS as readonly string[]).includes(ext)) {
+      setAttachError(`不支持 ${ext || "无扩展名"} 文件，仅支持 ${ALLOWED_ATTACHMENT_EXTS.join("/")}`);
+      return;
+    }
+    if (file.size > ATTACHMENT_SIZE_LIMIT) {
+      setAttachError("文件超过 10MB 上限");
+      return;
+    }
+    setAttachError(null);
+    setAttaching(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const meta = await api.post<MessageAttachment>("/uploads", form);
+      setPendingAttachment(meta);
+    } catch (err) {
+      setAttachError(
+        err instanceof Error ? err.message : "文件上传失败，请稍后重试",
+      );
+    } finally {
+      setAttaching(false);
+    }
+  };
+
+  const removeAttachment = () => {
+    setPendingAttachment(null);
+    setAttachError(null);
+  };
 
   /** 候选列表：@ 触发且过滤后非空才展示 */
   const candidates = useMemo(() => {
@@ -127,8 +210,13 @@ export function MessageInput({
 
   const handleSend = () => {
     const text = value.trim();
-    if (!text || sending) return;
-    void onSend?.({ text, mentions: extractMentions(value) });
+    // UX-10：文本为空但已选附件也可发送（纯图片/文件消息）
+    if ((!text && !pendingAttachment) || sending || attaching) return;
+    void onSend?.({
+      text,
+      mentions: extractMentions(value),
+      ...(pendingAttachment ? { attachment: pendingAttachment } : {}),
+    });
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -250,13 +338,117 @@ export function MessageInput({
           ...baseFont,
         }}
       />
-      {/* 操作行：发送按钮 */}
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+      {/* 操作行：附件按钮 + 发送按钮 */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0, flex: 1 }}>
+          {/* 隐藏 file input（附件按钮触发；accept 限定白名单扩展名，服务端兜底） */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            data-testid="message-attach-input"
+            style={{ display: "none" }}
+            onChange={handleFileChange}
+          />
+          <button
+            type="button"
+            data-testid="message-attach-button"
+            onClick={handlePickFile}
+            disabled={attaching || sending}
+            title={attaching ? "上传中…" : "添加附件（图片/文档）"}
+            aria-label="添加附件"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 34,
+              height: 34,
+              borderRadius: radius.pill,
+              border: `1px solid ${neutral[200]}`,
+              backgroundColor: "#FFFFFF",
+              color: attaching ? neutral[300] : neutral[600],
+              fontSize: fontSize.md,
+              cursor: attaching || sending ? "default" : "pointer",
+              opacity: attaching || sending ? 0.6 : 1,
+              fontFamily: fontFamily.body,
+            }}
+          >
+            {attaching ? "…" : (
+              <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+              </svg>
+            )}
+          </button>
+          {/* 待发送附件预览（可移除） */}
+          {pendingAttachment && (
+            <span
+              data-testid="message-attach-preview"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: space.sm,
+                maxWidth: "100%",
+                padding: `${space.xs}px ${space.sm}px`,
+                borderRadius: radius.pill,
+                backgroundColor: neutral[100],
+                color: neutral[700],
+                fontSize: fontSize.sm,
+                ...baseFont,
+              }}
+            >
+              <span
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  maxWidth: 180,
+                }}
+              >
+                {pendingAttachment.name}
+              </span>
+              <button
+                type="button"
+                data-testid="message-attach-remove"
+                onClick={removeAttachment}
+                title="移除附件"
+                aria-label="移除附件"
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: neutral[400],
+                  cursor: "pointer",
+                  fontSize: fontSize.md,
+                  lineHeight: 1,
+                  padding: 0,
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                ×
+              </button>
+            </span>
+          )}
+          {/* 上传失败提示（客户端校验 / POST /uploads 失败） */}
+          {attachError && (
+            <span
+              data-testid="message-attach-error"
+              role="alert"
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                color: "#DC2626",
+                fontSize: fontSize.xs,
+                ...baseFont,
+              }}
+            >
+              {attachError}
+            </span>
+          )}
+        </div>
         <button
           type="button"
           data-testid="message-input-send"
           onClick={handleSend}
-          disabled={sending || !value.trim()}
+          disabled={sending || (!value.trim() && !pendingAttachment) || attaching}
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -268,8 +460,8 @@ export function MessageInput({
             fontSize: fontSize.md,
             fontWeight: 500,
             border: "none",
-            cursor: sending || !value.trim() ? "not-allowed" : "pointer",
-            opacity: sending || !value.trim() ? 0.5 : 1,
+            cursor: sending || (!value.trim() && !pendingAttachment) || attaching ? "not-allowed" : "pointer",
+            opacity: sending || (!value.trim() && !pendingAttachment) || attaching ? 0.5 : 1,
             ...baseFont,
           }}
         >

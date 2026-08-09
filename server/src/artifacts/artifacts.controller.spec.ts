@@ -1,4 +1,7 @@
 import { Test } from '@nestjs/testing';
+import { REQUIRE_PERMISSION_KEY } from '../common/decorators/require-permission.decorator';
+import { PermissionGuard } from '../common/guards/permission.guard';
+import { PrismaService } from '../prisma/prisma.service';
 import { ArtifactsController } from './artifacts.controller';
 import { ArtifactsService } from './artifacts.service';
 
@@ -15,8 +18,17 @@ describe('ArtifactsController', () => {
     jest.clearAllMocks();
     const moduleRef = await Test.createTestingModule({
       controllers: [ArtifactsController],
-      providers: [{ provide: ArtifactsService, useValue: service }],
-    }).compile();
+      providers: [
+        { provide: ArtifactsService, useValue: service },
+        {
+          provide: PrismaService,
+          useValue: { user: { findUnique: jest.fn() } },
+        },
+      ],
+    })
+      .overrideGuard(PermissionGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
     controller = moduleRef.get(ArtifactsController);
   });
 
@@ -65,6 +77,21 @@ describe('ArtifactsController', () => {
       title: '验收结论',
       content: '通过',
       fileRef: undefined,
+    });
+  });
+
+  describe('权限点守卫（CONF-02 方案②补齐矩阵守卫）', () => {
+    const permOf = (handler: (...args: unknown[]) => unknown) =>
+      Reflect.getMetadata(REQUIRE_PERMISSION_KEY, handler);
+
+    it('读端点挂 artifacts.view（列表/详情/版本）', () => {
+      expect(permOf(controller.findByTask)).toBe('artifacts.view');
+      expect(permOf(controller.findOne)).toBe('artifacts.view');
+      expect(permOf(controller.findVersion)).toBe('artifacts.view');
+    });
+
+    it('旁路补充提交挂 artifacts.create', () => {
+      expect(permOf(controller.append)).toBe('artifacts.create');
     });
   });
 });

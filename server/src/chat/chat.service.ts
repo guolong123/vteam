@@ -54,6 +54,9 @@ type ChannelRow = {
   type: string;
   taskId: string;
   agentId: string | null;
+  pinned: boolean;
+  lastReadAt: Date | null;
+  deletedAt: Date | null;
   createdAt: Date;
   task?: {
     id: string;
@@ -64,7 +67,7 @@ type ChannelRow = {
   agent?: { id: string; name: string; role: string | null } | null;
 };
 
-/** 消息行（messages 表；content/mentions 为 Json 列）。 */
+/** 消息行（messages 表；content/mentions 为 Json 列，附件三字段可空）。 */
 type MessageRow = {
   id: string;
   channelId: string;
@@ -72,6 +75,9 @@ type MessageRow = {
   senderId: string | null;
   content: Prisma.JsonValue;
   mentions: Prisma.JsonValue | null;
+  attachmentUrl: string | null;
+  attachmentName: string | null;
+  attachmentType: string | null;
   status: string;
   createdAt: Date;
 };
@@ -97,6 +103,9 @@ const CHANNEL_TASK_SELECT = {
  * - GET    /channels/:id/messages    历史游标分页（09 篇 §2.2/§6）
  * - POST   /channels/:id/messages    发消息 8 步流程（09 篇 §5.1）
  * - POST   /dm-channels              创建 private 私聊频道（FR-14）
+ * - DELETE /channels/:id             删除会话（UX-09 soft delete：deletedAt 置当前时间）
+ * - PATCH  /channels/:id             置顶/取消置顶（UX-09 {pinned: boolean}）
+ * - PATCH  /channels/:id/read        标记已读（UX-09 lastReadAt=now，channel 级简化）
  *
  * 权限：channel → taskId → projectId → project_members 校验（service 层，
  * 路由参数是 :id 非 :pid，ProjectMembershipGuard 的 :id 反查为任务路由，
@@ -152,6 +161,8 @@ export class ChatService {
     const projectIds = memberships.map((m) => m.projectId);
     const where: Prisma.ChatChannelWhereInput = {
       task: { projectId: { in: projectIds } },
+      // UX-09：已删除会话（deletedAt 非空）从列表隐藏（soft delete）
+      deletedAt: null,
       ...(type ? { type } : {}),
     };
     const [total, rows] = await this.prisma.$transaction([
@@ -159,7 +170,8 @@ export class ChatService {
       this.prisma.chatChannel.findMany({
         where,
         include: CHANNEL_TASK_SELECT,
-        orderBy: { createdAt: 'desc' },
+        // UX-09：置顶会话优先，其次按创建时间倒序
+        orderBy: [{ pinned: 'desc' }, { createdAt: 'desc' }],
       }),
     ]);
     return {
@@ -321,7 +333,8 @@ export class ChatService {
       dto.mentions ?? [],
     );
 
-    // 3. 落库（用户消息：senderType=user，status=sent，id=m_<序号>）
+    // 3. 落库（用户消息：senderType=user，status=sent，id=m_<序号>；
+    //    UX-10：附件三字段可选，客户端已先 POST /uploads 拿到可访问 URL）
     const message = await this.prisma.message.create({
       data: {
         id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
@@ -331,6 +344,13 @@ export class ChatService {
         content: { text: dto.text, parts: [] } as Prisma.InputJsonValue,
         mentions: mentionsStored as Prisma.InputJsonValue,
         status: MESSAGE_STATUS.sent,
+        ...(dto.attachmentUrl
+          ? {
+              attachmentUrl: dto.attachmentUrl,
+              attachmentName: dto.attachmentName ?? null,
+              attachmentType: dto.attachmentType ?? null,
+            }
+          : {}),
       },
     });
 
@@ -407,6 +427,15 @@ export class ChatService {
       include: CHANNEL_TASK_SELECT,
     });
     if (existing) {
+      // UX-09：已 soft delete 的私聊频道 → 复活（deletedAt 置空，复用原记录，避开唯一键冲突）
+      if (existing.deletedAt) {
+        const revived = await this.prisma.chatChannel.update({
+          where: { id: existing.id },
+          data: { deletedAt: null },
+          include: CHANNEL_TASK_SELECT,
+        });
+        return this.toChannelDto(revived);
+      }
       return this.toChannelDto(existing);
     }
     const channel = await this.prisma.chatChannel.create({
@@ -422,8 +451,56 @@ export class ChatService {
   }
 
   /**
+   * 删除会话（UX-09 soft delete）：deletedAt 置当前时间，频道从列表隐藏、不可再访问。
+   * 权限经 resolveChannelAccess（已删除频道 → 404）；重复删除同频道 → 404（幂等）。
+   */
+  async removeChannel(channelId: string, userId: string) {
+    await this.resolveChannelAccess(channelId, userId);
+    const updated = await this.prisma.chatChannel.update({
+      where: { id: channelId },
+      data: { deletedAt: new Date() },
+      select: { id: true, deletedAt: true },
+    });
+    return {
+      id: updated.id,
+      deletedAt: updated.deletedAt.toISOString(),
+    };
+  }
+
+  /**
+   * 置顶/取消置顶（UX-09 PATCH /channels/:id {pinned}）：
+   * pinned=true 置顶（列表排序优先），false 取消；返回更新后频道 DTO。
+   */
+  async updateChannelPinned(channelId: string, userId: string, pinned: boolean) {
+    await this.resolveChannelAccess(channelId, userId);
+    const updated = await this.prisma.chatChannel.update({
+      where: { id: channelId },
+      data: { pinned },
+      include: CHANNEL_TASK_SELECT,
+    });
+    return this.toChannelDto(updated);
+  }
+
+  /**
+   * 标记已读（UX-09 PATCH /channels/:id/read）：lastReadAt 置当前时间。
+   * channel 级简化（非用户粒度——共享群聊的用户级已读需 MessageRead 关联表，评估后本期不做）。
+   */
+  async markChannelRead(channelId: string, userId: string) {
+    await this.resolveChannelAccess(channelId, userId);
+    const updated = await this.prisma.chatChannel.update({
+      where: { id: channelId },
+      data: { lastReadAt: new Date() },
+      select: { id: true, lastReadAt: true },
+    });
+    return {
+      id: updated.id,
+      lastReadAt: updated.lastReadAt.toISOString(),
+    };
+  }
+
+  /**
    * 频道访问解析（权限链路：channel → taskId → projectId → project_members）：
-   * 频道不存在 404 CHANNEL_NOT_FOUND；非项目成员 403 PERMISSION_PROJECT_NOT_MEMBER。
+   * 频道不存在或已删除 404 CHANNEL_NOT_FOUND；非项目成员 403 PERMISSION_PROJECT_NOT_MEMBER。
    * 返回频道行 + 关联任务（projectId 供权限、status 供归档校验）。
    */
   private async resolveChannelAccess(channelId: string, userId: string): Promise<{
@@ -434,7 +511,7 @@ export class ChatService {
       where: { id: channelId },
       include: CHANNEL_TASK_SELECT,
     });
-    if (!channel) {
+    if (!channel || channel.deletedAt) {
       throw new NotFoundException({
         code: CHAT_ERRORS.CHANNEL_NOT_FOUND,
         message: '频道不存在',
@@ -526,13 +603,15 @@ export class ChatService {
     };
   }
 
-  /** 频道 DTO：id/type/taskId/agentId + 关联 task/agent + createdAt（ISO8601）。 */
+  /** 频道 DTO：id/type/taskId/agentId + 关联 task/agent + pinned/lastReadAt + createdAt（ISO8601）。 */
   private toChannelDto(row: ChannelRow) {
     return {
       id: row.id,
       type: row.type,
       taskId: row.taskId,
       agentId: row.agentId,
+      pinned: row.pinned,
+      lastReadAt: row.lastReadAt ? row.lastReadAt.toISOString() : null,
       task: row.task
         ? {
             id: row.task.id,
@@ -546,7 +625,7 @@ export class ChatService {
     };
   }
 
-  /** 消息 DTO（09 篇 §2.4）：content/mentions 透传 Json；createdAt ISO8601。 */
+  /** 消息 DTO（09 篇 §2.4）：content/mentions 透传 Json；createdAt ISO8601；附件三字段透出（可空）。 */
   private toMessageDto(row: MessageRow) {
     return {
       id: row.id,
@@ -555,6 +634,9 @@ export class ChatService {
       senderId: row.senderId,
       content: row.content,
       mentions: row.mentions ?? [],
+      attachmentUrl: row.attachmentUrl,
+      attachmentName: row.attachmentName,
+      attachmentType: row.attachmentType,
       status: row.status,
       createdAt: row.createdAt.toISOString(),
     };

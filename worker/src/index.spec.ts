@@ -268,6 +268,36 @@ describe('T4a 命令分派（onCommands + dispatchCommands）', () => {
       expect.stringContaining('model-credentials'),
     );
   });
+
+  it('UX-01：restart 命令打远程重启日志并透传回调（RESTART 分支）', () => {
+    const handler = jest.fn();
+    onCommands(handler);
+    const commands: WorkerCommand[] = [
+      { type: 'restart', resourceVersion: 'remote-restart' },
+    ];
+
+    dispatchCommands(commands);
+
+    expect(handler).toHaveBeenCalledWith(commands);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('restart'),
+    );
+  });
+
+  it('UX-01：shutdown 命令打优雅退出日志并透传回调（SHUTDOWN 分支）', () => {
+    const handler = jest.fn();
+    onCommands(handler);
+    const commands: WorkerCommand[] = [
+      { type: 'shutdown', resourceVersion: 'remote-shutdown' },
+    ];
+
+    dispatchCommands(commands);
+
+    expect(handler).toHaveBeenCalledWith(commands);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('shutdown'),
+    );
+  });
 });
 
 describe('buildRegisterOptions（T4c：重启后重新注册携带新端口）', () => {

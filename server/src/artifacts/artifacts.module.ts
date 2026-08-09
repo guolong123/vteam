@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PermissionGuard } from '../common/guards/permission.guard';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { ArtifactsController } from './artifacts.controller';
 import { ArtifactsMockConsumer } from './artifacts-mock-consumer';
@@ -12,11 +13,12 @@ import { ArtifactsService } from './artifacts.service';
  * - ArtifactsMockConsumer 模拟 Phase 4 worker 归档回流（simulateSubmission 触发式广播
  *   `artifact.submitted`），本任务只广播不落库；T6 归档链路消费事件后落库，
  *   T14 测试经此触发事件。
+ * - PermissionGuard（CONF-02 方案②补齐矩阵守卫）：端点叠加 artifacts.view/create。
  */
 @Module({
   imports: [RealtimeModule],
   controllers: [ArtifactsController],
-  providers: [ArtifactsService, ArtifactsMockConsumer],
+  providers: [ArtifactsService, ArtifactsMockConsumer, PermissionGuard],
   exports: [ArtifactsService, ArtifactsMockConsumer],
 })
 export class ArtifactsModule {}

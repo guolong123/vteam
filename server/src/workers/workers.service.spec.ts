@@ -1210,6 +1210,99 @@ describe('WorkersService', () => {
     });
   });
 
+  describe('UX-01 远程生命周期（requestRestart/requestShutdown）', () => {
+    it('requestRestart：worker 存在 → enqueueCommand restart（一次有效，心跳取出执行）', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+
+      const result = await service.requestRestart('w_0000000001');
+
+      expect(service['pendingCommands'].get('w_0000000001')).toEqual([
+        { type: 'restart', resourceVersion: 'remote-restart' },
+      ]);
+      expect(result).toEqual({
+        workerId: 'w_0000000001',
+        command: 'restart',
+        queued: true,
+      });
+    });
+
+    it('requestRestart：worker 不存在 → 404 WORKER_NOT_FOUND，不入队', async () => {
+      prisma.worker.findUnique.mockResolvedValue(null);
+
+      await expect(service.requestRestart('w_unknown')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(service['pendingCommands'].has('w_unknown')).toBe(false);
+    });
+
+    it('requestShutdown：worker 存在 → enqueueCommand shutdown + 立即标 offline，返回确认', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue(
+        workerRow({ status: WORKER_STATUS.OFFLINE }),
+      );
+
+      const result = await service.requestShutdown('w_0000000001');
+
+      expect(service['pendingCommands'].get('w_0000000001')).toEqual([
+        { type: 'shutdown', resourceVersion: 'remote-shutdown' },
+      ]);
+      expect(prisma.worker.update).toHaveBeenCalledWith({
+        where: { id: 'w_0000000001' },
+        data: { status: WORKER_STATUS.OFFLINE },
+      });
+      expect(result).toEqual({
+        workerId: 'w_0000000001',
+        command: 'shutdown',
+        queued: true,
+        status: WORKER_STATUS.OFFLINE,
+      });
+    });
+
+    it('requestShutdown：worker 不存在 → 404，不入队不更新', async () => {
+      prisma.worker.findUnique.mockResolvedValue(null);
+
+      await expect(service.requestShutdown('w_unknown')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(service['pendingCommands'].has('w_unknown')).toBe(false);
+      expect(prisma.worker.update).not.toHaveBeenCalled();
+    });
+
+    it('requestShutdown：标记 offline 时同步清理该 worker 的 mcpStatus 内存态', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue(
+        workerRow({ status: WORKER_STATUS.OFFLINE }),
+      );
+      service['workerMcpStatus'].set('w_0000000001', [
+        { serverName: 'gitee-ent', status: 'connected' },
+      ]);
+
+      await service.requestShutdown('w_0000000001');
+
+      expect(service['workerMcpStatus'].has('w_0000000001')).toBe(false);
+    });
+
+    it('requestRestart 命令经心跳取出即清空（一次有效，与 reload-config 同通道）', async () => {
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001' });
+      prisma.worker.update.mockResolvedValue({});
+
+      await service.requestRestart('w_0000000001');
+
+      const dto: HeartbeatWorkerDto = {
+        workerId: 'w_0000000001',
+        load: { instances: 1 },
+        health: 'ok',
+      };
+      const result = await service.heartbeat('w_0000000001', dto);
+      expect(result.commands).toEqual([
+        { type: 'restart', resourceVersion: 'remote-restart' },
+      ]);
+
+      const second = await service.heartbeat('w_0000000001', dto);
+      expect(second.commands).toBeUndefined();
+    });
+  });
+
   describe('LifecycleManager 骨架', () => {
     it.each(['createInstance', 'abortSession', 'dispatchPrompt'] as const)(
       '%s 抛出 NotImplementedException（T10 接 WorkerClient 前不实现）',

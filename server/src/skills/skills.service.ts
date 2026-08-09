@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -15,8 +16,11 @@ import {
   WorkersService,
 } from '../workers/workers.service';
 import { QuerySkillsDto } from './dto/query-skills.dto';
+import { UpdateSkillDto } from './dto/update-skill.dto';
 import {
   assertSkillName,
+  parseSkillMarkdown,
+  rewriteFrontmatterField,
   SkillFrontmatter,
   UploadedSkillFile,
 } from './skill-frontmatter.util';
@@ -148,6 +152,70 @@ export class SkillsService implements OnModuleInit {
   }
 
   /**
+   * PATCH /skills/:id：编辑技能元信息与内容（UX-15，JSON body）。
+   * - 全空请求体 → 400 SKILL_UPDATE_EMPTY；技能不存在 → 404 SKILL_NOT_FOUND
+   * - name：assertSkillName 校验（400 SKILL_FRONTMATTER_INVALID）+ 唯一性（排除自身，409 SKILL_NAME_EXISTS）
+   * - content：parseSkillMarkdown 校验为合法 SKILL.md（400 SKILL_FRONTMATTER_INVALID）后落库原文
+   * - 一致性（不变量「DB 列 = content frontmatter」）：显式提供的 name/description 用
+   *   rewriteFrontmatterField 同步重写 content frontmatter；未显式提供但更新了 content 时，
+   *   name/description 列反向取 content frontmatter 解析值。
+   */
+  async update(id: string, dto: UpdateSkillDto) {
+    if (
+      dto.name === undefined &&
+      dto.description === undefined &&
+      dto.content === undefined
+    ) {
+      throw new BadRequestException({
+        code: SKILL_ERRORS.SKILL_UPDATE_EMPTY,
+        message: '无可更新字段（name/description/content 至少提供一个）',
+      });
+    }
+    const existing = await this.prisma.skill.findUnique({ where: { id } });
+    if (!existing) {
+      this.throwNotFound(id);
+    }
+
+    let content = existing.content;
+    let parsedFrontmatter: SkillFrontmatter | undefined;
+    if (dto.content !== undefined) {
+      parsedFrontmatter = parseSkillMarkdown(dto.content).frontmatter;
+      content = dto.content;
+    }
+
+    const name =
+      dto.name !== undefined
+        ? assertSkillName({ name: dto.name })
+        : parsedFrontmatter?.name
+          ? assertSkillName(parsedFrontmatter)
+          : existing.name;
+    if (name !== existing.name) {
+      await this.assertNameFree(name, id);
+    }
+
+    const description =
+      dto.description !== undefined
+        ? dto.description.trim() || null
+        : parsedFrontmatter
+          ? parsedFrontmatter.description?.trim() || null
+          : existing.description;
+
+    if (dto.name !== undefined) {
+      content = rewriteFrontmatterField(content, 'name', name);
+    }
+    if (dto.description !== undefined) {
+      content = rewriteFrontmatterField(content, 'description', description);
+    }
+
+    const updated = await this.prisma.skill.update({
+      where: { id },
+      data: { name, description, content },
+    });
+    await this.broadcastReloadConfig();
+    return updated;
+  }
+
+  /**
    * GET /skills/:id/content：SKILL.md 全文拉取（T4b worker 注入需原文写出——
    * 分布式 worker 无法读 server 本地盘，DB content 列为唯一事实源）。
    * 返回 {id, name, content}；不存在 → 404 SKILL_NOT_FOUND。
@@ -196,10 +264,10 @@ export class SkillsService implements OnModuleInit {
     }
   }
 
-  /** name 唯一预检：已存在同名技能 → 409 SKILL_NAME_EXISTS。 */
-  private async assertNameFree(name: string): Promise<void> {
+  /** name 唯一预检：已存在同名技能 → 409 SKILL_NAME_EXISTS。excludeId 用于 update 排除自身。 */
+  private async assertNameFree(name: string, excludeId?: string): Promise<void> {
     const existing = await this.prisma.skill.findUnique({ where: { name } });
-    if (existing) {
+    if (existing && (excludeId === undefined || existing.id !== excludeId)) {
       this.throwNameExists(name);
     }
   }

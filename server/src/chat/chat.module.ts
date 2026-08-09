@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ArtifactsModule } from '../artifacts/artifacts.module';
+import { PermissionGuard } from '../common/guards/permission.guard';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { WorkersModule } from '../workers/workers.module';
 import { ChatController } from './chat.controller';
@@ -19,12 +20,15 @@ import { WorkerDispatcher } from './worker-dispatcher';
  *   仅注释的开关语义，避免误导——本类不实现该开关）。
  * - imports：WorkersModule（WorkersService/WorkerClient/SessionLifecycleService）、
  *   ArtifactsModule（ArtifactsService.onArtifactSubmitted 产出物归档）——均已有 exports。
+ * - PermissionGuard（CONF-02 方案②补齐矩阵守卫）：端点叠加 chats.view/create/edit/delete，
+ *   频道成员校验在 service 层（channel → taskId → projectId → project_members）。
  */
 @Module({
   imports: [RealtimeModule, WorkersModule, ArtifactsModule],
   controllers: [ChatController],
   providers: [
     ChatService,
+    PermissionGuard,
     { provide: MessageDispatcher, useClass: WorkerDispatcher },
   ],
   exports: [ChatService],

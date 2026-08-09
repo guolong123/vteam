@@ -16,9 +16,9 @@
  *   (main) 布局提供，本页仅渲染内容区；data-testid 与原型一致。
  * - 铁律（T15）：无 fixed / 100vh / 100vw，高度由 AppShell main（flex column + overflow auto）接管。
  */
-import { useState, type CSSProperties } from "react";
+import { useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { AgentAvatar, AgentBadge } from "@/src/components/ui";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -85,16 +85,44 @@ const ROLE_AGENT_ID: Record<RoleKey, string> = {
 /** 初始勾选（与原型截图一致：产品经理、开发者已勾选） */
 const INITIAL_CHECKED: RoleKey[] = ["product", "developer"];
 
-/* ------------------------------ 背景文档（FR-17 上传入任务文档库，Phase 1 无真实上传能力，列表为受控 state 初始空） ------------------------------ */
+/* ------------------------------ 背景文档（FR-17 上传入任务文档库：POST /uploads 真实上传 → {name, url} 列表） ------------------------------ */
 /** 文件类型语义色（图标底色，独立于角色/状态色避免语义混淆，本地收拢不散落） */
 const docTypeColors = { pdf: "#EF4444", csv: "#10B981", docx: "#3B82F6" } as const;
 
-/** 背景文档条目（仅由真实上传产生；当前无上传能力，恒为空数组） */
+/** 未在语义色表内的扩展名兜底色（中性 slate，避免白底白字）。 */
+const DEFAULT_DOC_COLOR = "#64748B";
+
+/** POST /uploads 响应（server FileStorageService.describe：{url, name, size, ext}，size 为字节）。 */
+interface UploadedFileMeta {
+  url: string;
+  name: string;
+  size: number;
+  ext: string;
+}
+
+/** 背景文档条目（仅由真实上传产生：POST /uploads 成功后入列表）。 */
 interface BackgroundDoc {
   name: string;
+  /** 可读文件大小（"868 KB"/"2.4 MB"，原型 mock 同格式）。 */
   size: string;
+  /** 大写扩展名（图标角标文案，如 PDF/CSV/DOCX）。 */
   ext: string;
+  /** 扩展名语义底色。 */
   color: string;
+  /** /uploads/* 可访问 URL（提交任务时随 backgroundDocs 落库，供 Agent 拉取）。 */
+  url: string;
+}
+
+/** 字节 → 可读大小（KB 取整、MB 一位小数，对齐原型 mockDocs 文案格式）。 */
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 扩展名（小写）→ 图标底色（命中语义色表用之，否则中性兜底）。 */
+function colorOf(ext: string): string {
+  return docTypeColors[ext as keyof typeof docTypeColors] ?? DEFAULT_DOC_COLOR;
 }
 
 /* ------------------------------ 「待开始」状态色（新状态未入共享 statusColors，本地收敛与琥珀同族） ------------------------------ */
@@ -120,6 +148,10 @@ function TaskForm({
   titleError,
   docs,
   onRemoveDoc,
+  uploading,
+  uploadError,
+  onUploadFile,
+  onDismissUploadError,
 }: {
   title: string;
   onTitleChange: (v: string) => void;
@@ -129,8 +161,13 @@ function TaskForm({
   onPriorityChange: (v: Priority) => void;
   titleError: string | null;
   docs: BackgroundDoc[];
-  onRemoveDoc: (name: string) => void;
+  onRemoveDoc: (url: string) => void;
+  uploading: boolean;
+  uploadError: string | null;
+  onUploadFile: (file: File) => void;
+  onDismissUploadError: () => void;
 }) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const fieldLabel: CSSProperties = {
     fontSize: fontSize.sm,
     fontWeight: 500,
@@ -227,15 +264,17 @@ function TaskForm({
         />
       </div>
 
-      {/* 背景文档上传（FR-17：上传资料入任务文档库，参与 Agent 可见；Phase 1 无真实选择能力，列表由真实上传 state 驱动） */}
+      {/* 背景文档上传（FR-17：POST /uploads 真实上传 → 文档入任务文档库供 Agent 查看） */}
       <div data-testid="doc-upload" style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
         <label style={fieldLabel}>背景文档</label>
 
-        {/* 上传入口：虚线框 + 上传图标 + 文案（Phase 1 不实现真实选择） */}
+        {/* 上传入口：虚线框 + 上传图标 + 文案（点击触发隐藏 file input → POST /uploads） */}
         <button
           type="button"
           data-testid="doc-upload-btn"
           aria-label="上传背景文档"
+          disabled={uploading}
+          onClick={() => fileInputRef.current?.click()}
           style={{
             display: "flex",
             flexDirection: "column",
@@ -247,7 +286,8 @@ function TaskForm({
             border: `1.5px dashed ${neutral[300]}`,
             backgroundColor: neutral[50],
             color: neutral[500],
-            cursor: "pointer",
+            cursor: uploading ? "default" : "pointer",
+            opacity: uploading ? 0.7 : 1,
             fontFamily: fontFamily.body,
           }}
         >
@@ -255,19 +295,74 @@ function TaskForm({
             ↑
           </span>
           <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[600] }}>
-            点击或拖拽上传背景文档
+            {uploading ? "上传中…" : "点击或拖拽上传背景文档"}
           </span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
             支持 PDF / Word / CSV，文件将沉淀到任务文档库供 Agent 查看
           </span>
         </button>
 
+        {/* 隐藏文件选择（doc-upload-btn 触发；选中后 POST /uploads multipart，返回 {url,name,size,ext}） */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          data-testid="doc-file-input"
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.gif,.md,.txt"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) onUploadFile(file);
+            e.target.value = "";
+          }}
+          style={{ display: "none" }}
+        />
+
+        {/* 上传失败（接口错误，isApiError） */}
+        {uploadError && (
+          <div
+            data-testid="doc-upload-error"
+            role="alert"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: space.sm,
+              padding: `${space.md}px ${space.lg}px`,
+              borderRadius: radius.md,
+              backgroundColor: "#FEF2F2",
+              border: "1px solid #FECACA",
+              fontSize: fontSize.sm,
+              color: "#B91C1C",
+              lineHeight: 1.6,
+            }}
+          >
+            <span aria-hidden style={{ flexShrink: 0 }}>!</span>
+            <span style={{ flex: 1, minWidth: 0 }}>{uploadError}</span>
+            <button
+              type="button"
+              data-testid="doc-upload-error-dismiss"
+              aria-label="关闭上传错误提示"
+              onClick={onDismissUploadError}
+              style={{
+                border: "none",
+                background: "none",
+                fontSize: fontSize.sm,
+                color: neutral[400],
+                cursor: "pointer",
+                padding: space.xs,
+                flexShrink: 0,
+                fontFamily: fontFamily.body,
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* 已上传文件列表（真实上传 state 驱动，初始为空；仅渲染已存在文件） */}
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           {docs.map((doc) => (
             <div
-              key={doc.name}
-              data-testid="doc-file"
+              key={doc.url}
+              data-testid="doc-file-item"
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -314,8 +409,9 @@ function TaskForm({
               </span>
               <span
                 role="button"
+                data-testid="doc-file-remove"
                 aria-label={`移除 ${doc.name}`}
-                onClick={() => onRemoveDoc(doc.name)}
+                onClick={() => onRemoveDoc(doc.url)}
                 style={{
                   fontSize: fontSize.sm,
                   color: neutral[400],
@@ -732,8 +828,32 @@ export default function TaskCreatePage() {
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<Priority>("中");
 
-  // 背景文档：真实上传列表（Phase 1 无上传能力，初始为空，禁止预置假数据）
+  // 背景文档：真实上传列表（POST /uploads 成功后入列，禁止预置假数据）
   const [backgroundDocs, setBackgroundDocs] = useState<BackgroundDoc[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // 上传：POST /uploads multipart（file 字段）→ {url,name,size,ext} → 加入背景文档列表
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return api.post<UploadedFileMeta>("/uploads", fd);
+    },
+    onSuccess: (meta) => {
+      setBackgroundDocs((prev) => [
+        ...prev,
+        {
+          name: meta.name,
+          size: formatFileSize(meta.size),
+          ext: meta.ext.toUpperCase(),
+          color: colorOf(meta.ext),
+          url: meta.url,
+        },
+      ]);
+    },
+    onError: (err) =>
+      setUploadError(isApiError(err) ? err.message : "文档上传失败，请稍后重试"),
+  });
 
   // Agent 选择：勾选集合 + 主 Agent（默认产品经理，FR-19）
   const [checkedAgents, setCheckedAgents] = useState<RoleKey[]>(INITIAL_CHECKED);
@@ -780,9 +900,9 @@ export default function TaskCreatePage() {
     });
   };
 
-  /** 移除背景文档（真实列表管理，仅影响本次创建提交） */
-  const handleRemoveDoc = (name: string) => {
-    setBackgroundDocs((prev) => prev.filter((d) => d.name !== name));
+  /** 移除背景文档（按 url 唯一标识，同名文件互不干扰；仅影响本次创建提交） */
+  const handleRemoveDoc = (url: string) => {
+    setBackgroundDocs((prev) => prev.filter((d) => d.url !== url));
   };
 
   /** 创建任务：空标题校验 → 真实 POST /projects/:pid/tasks，成功跳转任务详情，失败展示接口错误 */
@@ -807,7 +927,7 @@ export default function TaskCreatePage() {
           priority: PRIORITY_API[priority],
           agentIds: checkedAgents.map(toAgentId),
           mainAgentId: toAgentId(mainAgent),
-          backgroundDocs: backgroundDocs.map((d) => d.name),
+          backgroundDocs: backgroundDocs.map((d) => ({ name: d.name, url: d.url })),
         }
       );
       setCreated(true);
@@ -854,6 +974,13 @@ export default function TaskCreatePage() {
           titleError={titleError}
           docs={backgroundDocs}
           onRemoveDoc={handleRemoveDoc}
+          uploading={uploadMutation.isPending}
+          uploadError={uploadError}
+          onUploadFile={(file) => {
+            setUploadError(null);
+            uploadMutation.mutate(file);
+          }}
+          onDismissUploadError={() => setUploadError(null)}
         />
         <AgentSelectPanel
           agentOptions={agentOptions}

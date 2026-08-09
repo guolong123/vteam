@@ -87,21 +87,37 @@ const ACTIONS = [
   { key: "manage", label: "管理" },
 ] as const;
 
-/* ------------------------------ 后端已启用权限点（CONF-02 修复） ------------------------------
+/* ------------------------------ 后端已启用权限点（CONF-02 修复 + 方案②补齐） ------------------------------
  * QA 报告 CONF-02【严重】：48 个矩阵权限点仅 7 个被后端 @RequirePermission 校验，
  * 其余 41 个勾选后无任何后端校验（权限配置 UI 与后端校验脱节）。
  * 本集合 = 后端实际生效白名单（server grep RequirePermission 实证，2026-08-09）：
+ *   - tasks.controller：view（GET 列表/详情）/ create（POST 创建）/ edit（PATCH 编辑、
+ *     team/start/mark-pending-review/archive）/ review（accept/reject 验收）
+ *   - chats.controller：view（GET 频道/消息/触发轮询 + PATCH read 个人已读）/ create（POST
+ *     消息 + dm-channels）/ edit（PATCH 置顶）/ delete（DELETE 会话）
+ *   - artifacts.controller：view（GET 列表/详情/版本）/ create（POST 旁路补充提交）
  *   - agents.controller：view/create/edit/delete 全 4 操作
  *   - projects.controller：仅 create（projects 资源不在本页 RESOURCES 8 项中，
  *     故矩阵渲染永不命中，保留仅作集中审计参考）
  *   - workers.controller：view / edit（GET workers.view、PATCH workers.edit，CONF-03 读写守卫同资源权限点）
  *   - skills.controller：view / create / edit（GET skills.view、POST skills.create、
  *     PATCH status skills.edit，CONF-03 读写守卫同资源权限点）
+ * users/roles 资源仍由 AdminGuard 管控（09 篇 [admin] 语义，无矩阵权限点），保持未启用。
  * 矩阵渲染时：集合外的格子 disabled + 灰显 + tooltip「该权限点后端未启用」，
- * 整行资源无任何已启用点（tasks/chats/artifacts/users/roles）→ 资源行标注「未启用」。
- * ⚠️ 仅消除 UI 误导（CONF-03 已修复后端守卫语义：workers/skills 写操作改为对应资源权限点）。
+ * ⚠️ 仅消除 UI 误导（CONF-03 已修复后端守卫语义：workers/skills 写操作改为对应资源权限点；
+ * CONF-02 方案②补齐 tasks/chats/artifacts 守卫后解锁对应权限点）。
  */
 const IMPLEMENTED_PERMISSIONS: ReadonlySet<string> = new Set([
+  "tasks.view",
+  "tasks.create",
+  "tasks.edit",
+  "tasks.review",
+  "chats.view",
+  "chats.create",
+  "chats.edit",
+  "chats.delete",
+  "artifacts.view",
+  "artifacts.create",
   "agents.view",
   "agents.create",
   "agents.edit",

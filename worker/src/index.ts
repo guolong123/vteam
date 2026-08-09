@@ -90,6 +90,16 @@ export function dispatchCommands(commands: WorkerCommand[]): void {
         `[worker] 收到命令 model-credentials（providerKeys=[${providerIDs}]），分派 auth.json 注入+重启`,
       );
     }
+    if (command.type === WORKER_COMMAND_TYPES.RESTART) {
+      console.log(
+        `[worker] 收到命令 restart（resourceVersion=${command.resourceVersion}），分派远程重启`,
+      );
+    }
+    if (command.type === WORKER_COMMAND_TYPES.SHUTDOWN) {
+      console.log(
+        `[worker] 收到命令 shutdown（resourceVersion=${command.resourceVersion}），分派优雅退出`,
+      );
+    }
   }
   void commandHandler?.(commands);
 }
@@ -376,6 +386,22 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         } catch (err) {
           console.warn(`[worker] model-credentials 注入失败: ${(err as Error).message}`);
         }
+      }
+      if (command.type === WORKER_COMMAND_TYPES.RESTART) {
+        // UX-01：管理员远程重启——复用 T4c 重启协调器（无活跃会话立即重启 serve +
+        // reRegister 更新 baseUrl/port，有活跃会话挂起等归零）。
+        const decision = await restartCoordinator.requestRestart(
+          `远程重启（resourceVersion=${command.resourceVersion}）`,
+        );
+        if (decision === 'pending') {
+          console.log('[worker] restart 命令：存在活跃会话，重启挂起（会话归零后自动执行）');
+        }
+      }
+      if (command.type === WORKER_COMMAND_TYPES.SHUTDOWN) {
+        // UX-01：管理员远程下线——复用优雅退出流程（停心跳 + flush 事件 + stop
+        // serve + exit）；进程退出后心跳停止，server 30s 健康检查维持 offline。
+        console.log('[worker] shutdown 命令：优雅退出中（停心跳 + flush 事件 + stop serve）');
+        shutdown('remote-shutdown');
       }
     }
   });

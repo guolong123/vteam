@@ -22,6 +22,14 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 export type ChatMessageType = "user" | "agent" | "system";
 
+/** UX-10 附件元数据（后端 toMessageDto 附件三字段 + POST /uploads 响应 size）。 */
+export interface ChatBubbleAttachment {
+  url: string;
+  name: string;
+  size?: number;
+  ext: string;
+}
+
 export interface ChatBubbleProps {
   text: string;
   type?: ChatMessageType;
@@ -31,8 +39,19 @@ export interface ChatBubbleProps {
   role?: RoleKey;
   /** 可选时间戳 */
   time?: string;
+  /** UX-10 附件：图片内嵌预览（attachment-image）/ 文件下载链接（attachment-file） */
+  attachment?: ChatBubbleAttachment;
   style?: CSSProperties;
   className?: string;
+}
+
+/** 图片附件判定：扩展名 ∈ 浏览器可内嵌渲染的图片集（其余走文件下载）。 */
+const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif"];
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export function ChatBubble({
@@ -41,6 +60,7 @@ export function ChatBubble({
   author,
   role,
   time,
+  attachment,
   style,
   className,
 }: ChatBubbleProps) {
@@ -87,6 +107,7 @@ export function ChatBubble({
   }
 
   const showHeader = !isUser && (author || roleTheme);
+  const hasText = text.trim().length > 0;
   return (
     <div
       data-testid="chat-bubble"
@@ -131,29 +152,139 @@ export function ChatBubble({
             {time ? ` · ${time}` : ""}
           </span>
         )}
-        <div
-          style={
-            isUser
-              ? {
-                  ...bubbleBase,
-                  backgroundColor: "#2563EB",
-                  color: "#FFFFFF",
-                  borderTopRightRadius: radius.sm,
-                  boxShadow: shadow.sm,
-                }
-              : {
-                  ...bubbleBase,
-                  backgroundColor: "#FFFFFF",
-                  color: neutral[800],
-                  border: `1px solid ${neutral[200]}`,
-                  borderTopLeftRadius: radius.sm,
-                  boxShadow: shadow.sm,
-                }
-          }
-        >
-          {text}
-        </div>
+        {hasText && (
+          <div
+            style={
+              isUser
+                ? {
+                    ...bubbleBase,
+                    backgroundColor: "#2563EB",
+                    color: "#FFFFFF",
+                    borderTopRightRadius: radius.sm,
+                    boxShadow: shadow.sm,
+                  }
+                : {
+                    ...bubbleBase,
+                    backgroundColor: "#FFFFFF",
+                    color: neutral[800],
+                    border: `1px solid ${neutral[200]}`,
+                    borderTopLeftRadius: radius.sm,
+                    boxShadow: shadow.sm,
+                  }
+            }
+          >
+            {text}
+          </div>
+        )}
+        {attachment && (
+          <AttachmentCard attachment={attachment} isUser={isUser} />
+        )}
       </div>
+    </div>
+  );
+}
+
+/** 附件卡片：图片内嵌预览（attachment-image）/ 文件下载链接（attachment-file），包 message-attachment。 */
+function AttachmentCard({
+  attachment,
+  isUser,
+}: {
+  attachment: ChatBubbleAttachment;
+  isUser: boolean;
+}) {
+  const isImage = (IMAGE_EXTS as readonly string[]).includes(
+    attachment.ext.toLowerCase(),
+  );
+  return (
+    <div
+      data-testid="message-attachment"
+      style={{
+        marginTop: space.sm,
+        borderRadius: radius.md,
+        overflow: "hidden",
+        backgroundColor: isUser ? "rgba(255,255,255,0.12)" : neutral[50],
+        border: isUser ? "none" : `1px solid ${neutral[200]}`,
+        ...baseFont,
+      }}
+    >
+      {isImage ? (
+        <img
+          data-testid="attachment-image"
+          src={attachment.url}
+          alt={attachment.name}
+          style={{
+            display: "block",
+            width: "100%",
+            maxHeight: 280,
+            objectFit: "cover",
+            borderRadius: radius.md,
+          }}
+        />
+      ) : (
+        <a
+          data-testid="attachment-file"
+          href={attachment.url}
+          download={attachment.name}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={attachment.name}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.sm,
+            padding: `${space.sm}px ${space.md}px`,
+            color: isUser ? "#FFFFFF" : "#2563EB",
+            fontSize: fontSize.sm,
+            fontWeight: 500,
+            textDecoration: "none",
+            wordBreak: "break-all",
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              flexShrink: 0,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 28,
+              height: 28,
+              borderRadius: radius.sm,
+              backgroundColor: isUser ? "rgba(255,255,255,0.2)" : "#DBEAFE",
+              color: "#2563EB",
+              fontSize: fontSize.xs,
+              fontWeight: 600,
+            }}
+          >
+            {attachment.ext.slice(0, 3).toUpperCase()}
+          </span>
+          <span style={{ minWidth: 0 }}>
+            <span
+              style={{
+                display: "block",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                lineHeight: 1.4,
+              }}
+            >
+              {attachment.name}
+            </span>
+            {typeof attachment.size === "number" && (
+              <span
+                style={{
+                  display: "block",
+                  fontSize: fontSize.xs,
+                  color: isUser ? "rgba(255,255,255,0.75)" : neutral[400],
+                  lineHeight: 1.4,
+                }}
+              >
+                {formatFileSize(attachment.size)}
+              </span>
+            )}
+          </span>
+        </a>
+      )}
     </div>
   );
 }
