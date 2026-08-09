@@ -12,7 +12,6 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
-import { AdminGuard } from '../users/admin.guard';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
 import { UpdateWorkerModelDto } from './dto/update-worker-model.dto';
@@ -28,7 +27,8 @@ import { WorkersService } from './workers.service';
  *   改由 WorkerTokenGuard 做 X-Worker-Token 鉴权（D1：与用户 JWT 隔离）。
  * - GET /workers、GET /workers/:id：用户 JWT + PermissionGuard（workers.view，
  *   09 篇 §3.7 [admin]（运维可见 FR-26）；内置 member 简写 view 放行）。
- * - PATCH /workers/:id：AdminGuard（写操作）。
+ * - PATCH /workers/:id：用户 JWT + PermissionGuard（workers.edit，CONF-03 读写守卫
+ *   同资源权限点，替代原 AdminGuard 的 users.manage 语义倒挂）。
  * 全局前缀 /api/v1（main.ts 已设置），故实际路由为 /api/v1/workers。
  */
 @ApiTags('workers')
@@ -81,13 +81,14 @@ export class WorkersController {
   }
 
   /**
-   * PATCH /api/v1/workers/:id：配置/清除 worker 默认模型（C8，AdminGuard）。
+   * PATCH /api/v1/workers/:id：配置/清除 worker 默认模型（C8，workers.edit）。
    * body {defaultModelId: string | null}——须存在于 models 目录且 enabled（否则 400），
    * null=清除；返回更新后的 WorkerView（含 defaultModelId）。
    */
   @Patch(':id')
-  @UseGuards(AdminGuard)
-  @ApiOperation({ summary: '配置 worker 默认模型（AdminGuard；null=清除）' })
+  @UseGuards(PermissionGuard)
+  @RequirePermission('workers.edit')
+  @ApiOperation({ summary: '配置 worker 默认模型（workers.edit；null=清除）' })
   updateDefaultModel(@Param('id') id: string, @Body() dto: UpdateWorkerModelDto) {
     return this.workers.updateDefaultModel(id, dto);
   }

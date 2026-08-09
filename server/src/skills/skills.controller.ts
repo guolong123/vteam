@@ -26,7 +26,6 @@ import { Public } from '../auth/decorators/public.decorator';
 import { SKILL_ERRORS } from '../common/constants/skill.constants';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
-import { AdminGuard } from '../users/admin.guard';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { QuerySkillsDto } from './dto/query-skills.dto';
 import { UpdateSkillStatusDto } from './dto/update-skill-status.dto';
@@ -46,7 +45,9 @@ const SKILL_FILE_SIZE_LIMIT = 100 * 1024;
  * - GET /api/v1/skills/:id/content：SKILL.md 全文（T4b worker 注入拉取；X-Worker-Token 或用户 JWT）
  * - PATCH /api/v1/skills/:id/status：{enabled} 启停专用端点
  * - 无 DELETE（09 §3.8 不提供；停用 enabled=false 替代物理删除）
- * 鉴权：全局 JwtAuthGuard（APP_GUARD）兜底认证；POST/PATCH 管理端点加 AdminGuard（复用 users/admin.guard.ts）；
+ * 鉴权：全局 JwtAuthGuard（APP_GUARD）兜底认证；写端点挂 PermissionGuard +
+ * 同资源权限点（POST → skills.create、PATCH status → skills.edit，CONF-03 读写守卫
+ * 语义一致，替代原 AdminGuard 的 users.manage 语义倒挂）；
  * 读取端点（GET /、GET /:id/content）挂 @Public() + WorkerOrJwtGuard + PermissionGuard——
  * worker 可用 X-Worker-Token 拉取（WorkerOrJwtGuard 挂 request.workerToken，PermissionGuard 放行），
  * 用户走 JWT + skills.view 权限点（ISSUE-006：8 资源矩阵「技能工具」行，受限角色无 skills.view 则 403）。
@@ -97,7 +98,8 @@ export class SkillsController {
    * name 重复 → 409 SKILL_NAME_EXISTS。
    */
   @Post()
-  @UseGuards(AdminGuard)
+  @UseGuards(PermissionGuard)
+  @RequirePermission('skills.create')
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -130,8 +132,9 @@ export class SkillsController {
    * PATCH /api/v1/skills/:id/status {enabled} → 200 + Skill 对象；不存在 → 404 SKILL_NOT_FOUND。
    */
   @Patch(':id/status')
-  @UseGuards(AdminGuard)
-  @ApiOperation({ summary: '启用/停用技能（{enabled}，替代物理删除）' })
+  @UseGuards(PermissionGuard)
+  @RequirePermission('skills.edit')
+  @ApiOperation({ summary: '启用/停用技能（{enabled}，skills.edit；替代物理删除）' })
   updateStatus(
     @Param('id') id: string,
     @Body() dto: UpdateSkillStatusDto,

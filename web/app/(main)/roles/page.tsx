@@ -94,10 +94,12 @@ const ACTIONS = [
  *   - agents.controller：view/create/edit/delete 全 4 操作
  *   - projects.controller：仅 create（projects 资源不在本页 RESOURCES 8 项中，
  *     故矩阵渲染永不命中，保留仅作集中审计参考）
- *   - skills.controller / workers.controller：仅 view
+ *   - workers.controller：view / edit（GET workers.view、PATCH workers.edit，CONF-03 读写守卫同资源权限点）
+ *   - skills.controller：view / create / edit（GET skills.view、POST skills.create、
+ *     PATCH status skills.edit，CONF-03 读写守卫同资源权限点）
  * 矩阵渲染时：集合外的格子 disabled + 灰显 + tooltip「该权限点后端未启用」，
  * 整行资源无任何已启用点（tasks/chats/artifacts/users/roles）→ 资源行标注「未启用」。
- * ⚠️ 仅消除 UI 误导，禁止改后端守卫体系（CONF-03 单独处理）。
+ * ⚠️ 仅消除 UI 误导（CONF-03 已修复后端守卫语义：workers/skills 写操作改为对应资源权限点）。
  */
 const IMPLEMENTED_PERMISSIONS: ReadonlySet<string> = new Set([
   "agents.view",
@@ -106,7 +108,10 @@ const IMPLEMENTED_PERMISSIONS: ReadonlySet<string> = new Set([
   "agents.delete",
   "projects.create",
   "skills.view",
+  "skills.create",
+  "skills.edit",
   "workers.view",
+  "workers.edit",
 ]);
 
 /** 权限范围（对齐后端 Role.scopes 契约） */

@@ -33,7 +33,7 @@ describe('WorkersController', () => {
         { provide: WorkersService, useValue: service },
         // 控制器方法级 @UseGuards(WorkerTokenGuard) 会在 compile 时实例化 guard
         { provide: ConfigService, useValue: { get: jest.fn() } },
-        // 方法级 @UseGuards(AdminGuard) 依赖 PrismaService（compile 时实例化 guard）
+        // 方法级 @UseGuards(PermissionGuard) 依赖 PrismaService + Reflector（compile 时实例化 guard）
         { provide: PrismaService, useValue: { user: { findUnique: jest.fn() } } },
       ],
     }).compile();
@@ -94,7 +94,7 @@ describe('WorkersController', () => {
     expect(service.findOne).toHaveBeenCalledWith('w_0000000001');
   });
 
-  it('C8：PATCH /workers/:id 转发 updateDefaultModel（DTO 透传，AdminGuard 保护）', async () => {
+  it('C8：PATCH /workers/:id 转发 updateDefaultModel（DTO 透传，workers.edit 保护）', async () => {
     const dto: UpdateWorkerModelDto = { defaultModelId: 'opencode-go/deepseek-v4-flash' };
     const view = {
       id: 'w_0000000001',

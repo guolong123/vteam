@@ -2,7 +2,6 @@ import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { SKILL_ERRORS } from '../common/constants/skill.constants';
 import { PermissionGuard } from '../common/guards/permission.guard';
-import { AdminGuard } from '../users/admin.guard';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
 import { QuerySkillsDto } from './dto/query-skills.dto';
 import { UpdateSkillStatusDto } from './dto/update-skill-status.dto';
@@ -44,8 +43,6 @@ describe('SkillsController', () => {
       controllers: [SkillsController],
       providers: [{ provide: SkillsService, useValue: service }],
     })
-      .overrideGuard(AdminGuard)
-      .useValue({ canActivate: () => true })
       .overrideGuard(WorkerOrJwtGuard)
       .useValue({ canActivate: () => true })
       .overrideGuard(PermissionGuard)

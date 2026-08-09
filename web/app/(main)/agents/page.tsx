@@ -30,6 +30,7 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties, type For
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
+import { hasPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { AgentAvatar } from "@/src/components/ui";
 import { type AvailableModel } from "@/src/types/models";
@@ -776,9 +777,11 @@ interface ConfigPanelProps {
   /** 保存模型凭据（POST /models/:mdId/credentials，页面级 mutation 统一 invalidate） */
   onSaveToken: (payload: { modelId: string; token: string }) => void;
   onClone: () => void;
+  /** 是否具备 agents.create（克隆入口权限，对齐后端 PermissionGuard，REG-01） */
+  canCreate: boolean;
 }
 
-function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, catalogByRef, workers, saving, saveError, onSave, onSaveToken, onClone }: ConfigPanelProps) {
+function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, catalogByRef, workers, saving, saveError, onSave, onSaveToken, onClone, canCreate }: ConfigPanelProps) {
   const isTemplate = readOnly;
   const accent = isTemplate
     ? ROLE_COLORS[toAvatarRole(agent.role)]
@@ -954,28 +957,30 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexShrink: 0 }}>
-          <button
-            type="button"
-            data-testid="clone-template-button"
-            data-agent-id={agent.id}
-            onClick={onClone}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: space.xs,
-              padding: `${space.sm}px ${space.lg}px`,
-              borderRadius: radius.pill,
-              border: `1px solid ${accent}`,
-              backgroundColor: "#FFFFFF",
-              color: accent,
-              fontSize: fontSize.md,
-              fontWeight: 500,
-              cursor: "pointer",
-              fontFamily: fontFamily.body,
-            }}
-          >
-            ⧉ 克隆此 Agent
-          </button>
+          {canCreate && (
+            <button
+              type="button"
+              data-testid="clone-template-button"
+              data-agent-id={agent.id}
+              onClick={onClone}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: space.xs,
+                padding: `${space.sm}px ${space.lg}px`,
+                borderRadius: radius.pill,
+                border: `1px solid ${accent}`,
+                backgroundColor: "#FFFFFF",
+                color: accent,
+                fontSize: fontSize.md,
+                fontWeight: 500,
+                cursor: "pointer",
+                fontFamily: fontFamily.body,
+              }}
+            >
+              ⧉ 克隆此 Agent
+            </button>
+          )}
           <button
             type="button"
             data-testid="save-agent-button"
@@ -1753,6 +1758,8 @@ function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: Create
 export default function AgentConfigPage() {
   const user = useAuthStore((s) => s.user);
   const userId = user?.id;
+  // 写操作权限（对齐后端 PermissionGuard agents.create，REG-01）：all:true / 矩阵 true 放行
+  const canCreateAgent = hasPermission(user?.permissions, "agents", "create");
   const queryClient = useQueryClient();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1980,24 +1987,26 @@ export default function AgentConfigPage() {
           ))
         )}
 
-        <button
-          type="button"
-          data-testid="create-agent-button"
-          onClick={() => setCreateOpen(true)}
-          style={{
-            width: "100%",
-            cursor: "pointer",
-            border: `1px dashed ${neutral[300]}`,
-            borderRadius: radius.md,
-            backgroundColor: "transparent",
-            padding: space.md,
-            color: neutral[500],
-            fontSize: fontSize.md,
-            fontFamily: fontFamily.body,
-          }}
-        >
-          + 新建自定义 Agent
-        </button>
+        {canCreateAgent && (
+          <button
+            type="button"
+            data-testid="create-agent-button"
+            onClick={() => setCreateOpen(true)}
+            style={{
+              width: "100%",
+              cursor: "pointer",
+              border: `1px dashed ${neutral[300]}`,
+              borderRadius: radius.md,
+              backgroundColor: "transparent",
+              padding: space.md,
+              color: neutral[500],
+              fontSize: fontSize.md,
+              fontFamily: fontFamily.body,
+            }}
+          >
+            + 新建自定义 Agent
+          </button>
+        )}
       </div>
 
       {/* 右：配置面板 */}
@@ -2017,6 +2026,7 @@ export default function AgentConfigPage() {
           onSave={(payload) => saveMutation.mutate({ id: selectedAgent.id, payload })}
           onSaveToken={(payload) => saveTokenMutation.mutate(payload)}
           onClone={() => cloneMutation.mutate(selectedAgent.id)}
+          canCreate={canCreateAgent}
         />
       ) : (
         <div

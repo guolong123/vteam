@@ -682,3 +682,36 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   5. **`matrixToPermissions` / `allowCount` 语义决策（保持原值提交）**：禁用格只影响渲染层，数据层仍保留原矩阵值（`data-perm={perm}`），保存时**仍提交原值**（非强制 false）——未启用点初始为 deny（blankMatrix/matrixFromPermissions 缺省），旧数据残留 true 亦无害（后端不校验）；allowCount 维持全矩阵统计（含未启用点），未做收紧，对齐报告「保留现有矩阵结构（testid permission-matrix、allowCount 统计对齐）」。
 - **验证**：web `npx tsc --noEmit` **0 错误**（EXIT 0）。未启动 dev server、未跑 playwright、未 build、未跑 jest（遵守执行范围防并行冲突）。
 - **⚠️ 并行会话撞车教训（重要）**：本任务与另一并行 session **同时**在改 `roles/page.tsx`——我按任务规格插入的 `IMPLEMENTED_PERMISSIONS`/`isPermissionImplemented`/`implementedAllowCount`/`unimplBadgeStyle` 与并行 session 已落地的实现（同名常量 + `disabledCellStyle`/`isImplemented`/`rowHasImplemented`）产生**重复定义**（tsc 必挂 Duplicate identifier）+ 未使用变量。处理：**以并行实现为主体，回退我造成的全部冲突块**（重复常量、未用辅助函数），`git diff` 确认最终 diff 只含并行实现。经验：多会话并行改同一文件时，落地前先 `git diff` 核对对方改动范围与命名，同语义只保留一套实现，避免重复定义与语义分叉。
+
+## REG-01: 克隆 Agent / 新建自定义按钮未按权限隐藏（2026-08-09，前端 + tsc 验证完成）
+
+- **问题（QA 中）**：`web/app/(main)/agents/page.tsx` 「克隆此 Agent」（clone-template-button）与「+ 新建自定义 Agent」（create-agent-button）对无 `agents.create` 权限的受限用户仍可见——后端 `POST /agents/:id/clone` 已挂 PermissionGuard（agents.create）会 403 拦截（数据安全闭环 OK），但前端入口未隐藏，受限用户点击后仅 console 403 无错误提示。
+- **修复（单文件 page.tsx，4 处）**：
+  1. `ConfigPanelProps` 新增 `canCreate: boolean`（带 JSDoc 对齐文件内 prop 文档约定）；
+  2. ConfigPanel 内克隆按钮（原 956-978 行）包 `{canCreate && <button …>}` 条件渲染——**隐藏优先**（任务要求优先隐藏而非点击报错）；
+  3. 页面主组件 `const canCreateAgent = hasPermission(user?.permissions, "agents", "create")`（user 来自 authStore，ISSUE-005 登录响应已透传 permissions）；
+  4. ConfigPanel 调用处传 `canCreate={canCreateAgent}` + 新建按钮（原 1983-2000 行）同样包条件渲染。
+- **语义对齐**：`hasPermission` 三格式兼容（`all:true` 全放行 / `all:false` 仅 view / 矩阵精确）——admin 与 agents.create=true 角色均正常显示按钮，member（all:false）与受限矩阵（无 agents.create）自动隐藏，与后端 PermissionGuard 判定一致。
+- **范围决策**：编辑/删除入口（保存按钮 save-agent-button、effect 增删）本次不动——task 明确「聚焦克隆 + 新建，编辑/删除若已有控制则保持」；模板只读保护（type=template 表单禁用）是既有行为不涉及。
+- **验证**：`cd web && npx tsc --noEmit` **0 错误**（EXIT 0）。未启动 dev server、未跑 playwright/build/jest（遵守执行范围防并行冲突，浏览器实测由 QA 阶段覆盖）。
+
+## CONF-03: workers/skills 写守卫与读守卫语义不一致（2026-08-09，后端守卫 + 前端白名单同步 + tsc/spec 验证）
+
+- **问题（QA 中）**：同资源读写守卫语义不一致——`workers.controller.ts` PATCH /workers/:id 挂 AdminGuard（要求 `users.manage`）、`skills.controller.ts` POST /skills 与 PATCH /skills/:id/status 亦挂 AdminGuard；而读操作（GET /workers、GET /skills）挂 PermissionGuard（workers.view / skills.view）。后果：**「Worker 管理员」角色（有 workers.view 权限点）不能管理 Worker**（PATCH 403 需 users.manage），而**「用户管理员」（有 users.manage）反而能管理 Worker**——权限语义倒挂；矩阵里 workers.edit / skills.create / skills.edit 勾选无后端校验。
+- **修复（仅后端守卫 + 前端白名单，未动服务层）**：
+  1. `workers.controller.ts` PATCH → `PermissionGuard + @RequirePermission('workers.edit')`（移除 AdminGuard import）；
+  2. `skills.controller.ts` POST → `PermissionGuard + @RequirePermission('skills.create')`、PATCH status → `PermissionGuard + @RequirePermission('skills.edit')`（移除 AdminGuard import）。
+- **语义验证（PermissionGuard 逻辑，见 permission.guard.spec.ts 既有覆盖）**：
+  - admin（permissions.all=true）PATCH worker/skill 仍全放行（guard 第 100-102 行）；
+  - member（all:false）写操作拒绝（action≠view → 403 FORBIDDEN_PERMISSION）；
+  - 受限矩阵无 workers.edit/skills.create/skills.edit → 403；勾选后真实生效（CONF-02 白名单同步解锁）；
+  - workerToken 通道：PATCH 走全局 JWT（无 @Public），不涉及 WorkerOrJwtGuard/worker 通道，D1 隔离不受影响。
+- **前端白名单同步**（CONF-02 的 roles/page.tsx `IMPLEMENTED_PERMISSIONS` 7→10 项）：新增 `workers.edit`、`skills.create`、`skills.edit`——三格从禁用灰格变为可勾选，注释同步更新（workers：view/edit；skills：view/create/edit）。
+- **范围决策**：`skills.module.ts` 中 AdminGuard provider 保留未移除（models/mcp-servers/tools/users/roles 模块仍使用，skills 内成为无害 dead provider，最小 diff 防并行冲突）；其他资源的 AdminGuard（models/mcp/tools）不在本任务范围（CONF-03 仅覆盖 workers/skills 两控制器）。
+- **验证**：`cd server && npx tsc --noEmit` **0 错误**（EXIT 0）；`npx jest` workers.controller.spec + skills.controller.spec + permission.guard.spec + admin.guard.spec **4 suites / 32 tests PASS**；`cd web && npx tsc --noEmit` **0 错误**（EXIT 0）。未启动 dev server、未跑全量 jest/build/playwright（遵守执行范围防并行冲突）。
+
+## CONF-03 后端落地确认（2026-08-09，本 session 补充）
+
+- 与并行 session 的前端白名单同步（roles/page.tsx IMPLEMENTED_PERMISSIONS 7→10，含 workers.edit/skills.create/skills.edit）衔接一致：后端守卫改造完成，前端三格已从禁用灰格变为可勾选。
+- 后端验证（本 session）：`cd server && npx tsc --noEmit` **0 错误**；`npx jest` workers.controller.spec + skills.controller.spec + permission.guard.spec **3 suites / 26 tests PASS**。skills.controller.spec 已移除 AdminGuard override/import（controller 不再挂载），workers.controller.spec 注释/测试名同步更新为 workers.edit。
+- 未跑全量 jest / 未 build / 未启动 dev server（遵守执行范围防并行冲突）；admin.guard.spec 未改动（AdminGuard 本体零变更，其他资源模块仍使用）。
