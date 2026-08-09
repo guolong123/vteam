@@ -40,6 +40,20 @@ const createMockPrisma = () => {
         users.push(user);
         return user;
       }),
+      findFirst: jest.fn(async ({ where }: any) => {
+        if (where.resetToken !== undefined) {
+          return enrich(
+            users.find((u) => u.resetToken === where.resetToken) ?? null,
+          );
+        }
+        return null;
+      }),
+      update: jest.fn(async ({ where, data }: any) => {
+        const idx = users.findIndex((u) => u.id === where.id);
+        if (idx === -1) return null;
+        users[idx] = { ...users[idx], ...data };
+        return users[idx];
+      }),
     },
     role: {
       findUnique: jest.fn(async ({ where }: any) => {
@@ -243,6 +257,128 @@ describe('AuthService', () => {
         service.refresh({ refreshToken: 'bad-token' }),
       ).rejects.toMatchObject({
         response: { code: AUTH_ERRORS.REFRESH_INVALID },
+      });
+    });
+  });
+
+  describe('forgotPassword', () => {
+    beforeEach(async () => {
+      await service.register({
+        username: 'forgot-user',
+        password: 'secret123',
+        displayName: 'Forgot',
+        email: 'forgot@x.com',
+      });
+    });
+
+    it('按用户名命中应生成一次性 token 并落库（含过期时间）', async () => {
+      const result = await service.forgotPassword({ account: 'forgot-user' });
+      expect(result.resetToken).toMatch(/^[0-9a-f]{64}$/);
+      expect(result.expiresAt.getTime()).toBeGreaterThan(Date.now());
+      const stored = prisma._store.find((u) => u.username === 'forgot-user');
+      expect(stored.resetToken).toBe(result.resetToken);
+      expect(stored.resetTokenExpires).toEqual(result.expiresAt);
+    });
+
+    it('按邮箱命中应生成 token', async () => {
+      const result = await service.forgotPassword({ account: 'forgot@x.com' });
+      expect(result.resetToken).toBeTruthy();
+      const stored = prisma._store.find((u) => u.username === 'forgot-user');
+      expect(stored.resetToken).toBe(result.resetToken);
+    });
+
+    it('账号不存在应抛 404 AUTH_USER_NOT_FOUND', async () => {
+      await expect(
+        service.forgotPassword({ account: 'nobody' }),
+      ).rejects.toMatchObject({
+        response: { code: AUTH_ERRORS.USER_NOT_FOUND },
+      });
+    });
+  });
+
+  describe('resetPassword', () => {
+    beforeEach(async () => {
+      await service.register({
+        username: 'reset-user',
+        password: 'old-pass-123',
+        displayName: 'Reset',
+      });
+    });
+
+    async function issueTokenFor(username: string) {
+      await service.forgotPassword({ account: username });
+      return prisma._store.find((u) => u.username === username);
+    }
+
+    it('有效 token 应重置密码为 bcrypt 哈希并清除 token', async () => {
+      const user = await issueTokenFor('reset-user');
+      const result = await service.resetPassword({
+        token: user.resetToken,
+        newPassword: 'new-pass-456',
+      });
+      expect(result).toEqual({ ok: true });
+      const stored = prisma._store.find((u) => u.username === 'reset-user');
+      expect(stored.passwordHash).not.toBe('new-pass-456');
+      expect(await bcrypt.compare('new-pass-456', stored.passwordHash)).toBe(
+        true,
+      );
+      expect(stored.resetToken).toBeNull();
+      expect(stored.resetTokenExpires).toBeNull();
+    });
+
+    it('重置后旧密码不再可用、新密码可登录', async () => {
+      const user = await issueTokenFor('reset-user');
+      await service.resetPassword({
+        token: user.resetToken,
+        newPassword: 'brand-new-789',
+      });
+      await expect(
+        service.login({ username: 'reset-user', password: 'old-pass-123' }),
+      ).rejects.toMatchObject({
+        response: { code: AUTH_ERRORS.INVALID_CREDENTIALS },
+      });
+      const ok = await service.login({
+        username: 'reset-user',
+        password: 'brand-new-789',
+      });
+      expect(ok.user.username).toBe('reset-user');
+    });
+
+    it('无效 token 应抛 401 AUTH_RESET_TOKEN_INVALID', async () => {
+      await expect(
+        service.resetPassword({ token: 'bad-token', newPassword: 'newpass123' }),
+      ).rejects.toMatchObject({
+        response: { code: AUTH_ERRORS.RESET_TOKEN_INVALID },
+      });
+    });
+
+    it('过期 token 应抛 401 AUTH_RESET_TOKEN_INVALID', async () => {
+      const user = await issueTokenFor('reset-user');
+      prisma._store.find((u) => u.username === 'reset-user').resetTokenExpires =
+        new Date(Date.now() - 60_000);
+      await expect(
+        service.resetPassword({
+          token: user.resetToken,
+          newPassword: 'newpass123',
+        }),
+      ).rejects.toMatchObject({
+        response: { code: AUTH_ERRORS.RESET_TOKEN_INVALID },
+      });
+    });
+
+    it('同一 token 二次使用应抛 401（成功后已清除）', async () => {
+      const user = await issueTokenFor('reset-user');
+      await service.resetPassword({
+        token: user.resetToken,
+        newPassword: 'new-pass-456',
+      });
+      await expect(
+        service.resetPassword({
+          token: user.resetToken,
+          newPassword: 'another-pass',
+        }),
+      ).rejects.toMatchObject({
+        response: { code: AUTH_ERRORS.RESET_TOKEN_INVALID },
       });
     });
   });

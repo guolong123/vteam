@@ -1,19 +1,25 @@
 import {
   ConflictException,
   Injectable,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { randomBytes } from 'node:crypto';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { AUTH_ERRORS, BUILTIN_ROLES, JWT_TOKEN_TYPE } from './auth.constants';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 
 const BCRYPT_ROUNDS = 10;
+/** 重置 token 有效期（30 分钟，内网手动传递可接受） */
+const RESET_TOKEN_TTL_MS = 30 * 60 * 1000;
 
 /** 登录/刷新成功返回的用户摘要（不含 password_hash） */
 export interface AuthUserView {
@@ -181,6 +187,59 @@ export class AuthService {
       });
     }
     return this.signTokens(user.id, user.username, user.roleId);
+  }
+
+  /** POST /auth/forgot-password：按用户名/邮箱生成一次性重置 token（内网手动传递，无邮件服务） */
+  async forgotPassword(dto: ForgotPasswordDto): Promise<{
+    resetToken: string;
+    expiresAt: Date;
+  }> {
+    let user = await this.prisma.user.findUnique({
+      where: { username: dto.account },
+    });
+    if (!user) {
+      user = await this.prisma.user.findUnique({
+        where: { email: dto.account },
+      });
+    }
+    if (!user) {
+      throw new NotFoundException({
+        code: AUTH_ERRORS.USER_NOT_FOUND,
+        message: '账号不存在',
+      });
+    }
+
+    const resetToken = randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { resetToken, resetTokenExpires: expiresAt },
+    });
+    return { resetToken, expiresAt };
+  }
+
+  /** POST /auth/reset-password：校验一次性 token 并重置密码（成功后清除 token） */
+  async resetPassword(dto: ResetPasswordDto): Promise<{ ok: true }> {
+    const user = await this.prisma.user.findFirst({
+      where: { resetToken: dto.token },
+    });
+    if (
+      !user ||
+      !user.resetTokenExpires ||
+      user.resetTokenExpires.getTime() < Date.now()
+    ) {
+      throw new UnauthorizedException({
+        code: AUTH_ERRORS.RESET_TOKEN_INVALID,
+        message: '重置 token 无效或已过期',
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash, resetToken: null, resetTokenExpires: null },
+    });
+    return { ok: true };
   }
 
   /** 签发 access（短时效，默认 2h）+ refresh（默认 7d） */

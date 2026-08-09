@@ -47,6 +47,10 @@ model User {
   email        String?  @unique
   roleId       String   @map("role_id")
   enabled      Boolean  @default(true)
+  /// 忘记密码一次性重置 token（内网手动传递，无邮件服务），用后即清
+  resetToken         String?   @map("reset_token")
+  /// 重置 token 过期时间（生成后 30 分钟内有效）
+  resetTokenExpires  DateTime? @map("reset_token_expires")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 

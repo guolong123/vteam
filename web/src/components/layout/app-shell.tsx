@@ -24,6 +24,12 @@ import {
   type CanvasUIEffectKey,
 } from "@/src/components/canvasui/store";
 
+/**
+ * 演示模式开关（UX-04）：页面效果下拉默认隐藏，仅当 URL ?fx=on 或
+ * localStorage 键值开启演示模式时显示；CanvasUI 效果应用逻辑不变。
+ */
+const FX_DEMO_STORAGE_KEY = "canvasui.demo-mode";
+
 /** 全局 Canvas UI 效果下拉分组（与 store 的效果键对应）。 */
 const CANVASUI_GROUPS: {
   label: string;
@@ -227,6 +233,16 @@ export function AppShell({ children }: { children: ReactNode }) {
   const effect = useCanvasUIStore((s) => s.effect);
   const setEffect = useCanvasUIStore((s) => s.setEffect);
   const [cmdkOpen, setCmdkOpen] = useState(false);
+  // UX-04：页面效果下拉默认隐藏，仅演示模式（?fx=on 或 localStorage 开关）显示
+  const [fxDemo, setFxDemo] = useState(false);
+
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search);
+    const urlOn = search.get("fx") === "on";
+    const lsOn = window.localStorage.getItem(FX_DEMO_STORAGE_KEY) === "1";
+    if (urlOn) window.localStorage.setItem(FX_DEMO_STORAGE_KEY, "1");
+    setFxDemo(urlOn || lsOn);
+  }, []);
 
   const activeKey = pathToKey(pathname);
   const page = resolvePageTitle(pathname);
@@ -365,36 +381,38 @@ export function AppShell({ children }: { children: ReactNode }) {
         userRole={user ? roleLabel(user.roleName) : undefined}
         onCmdKClick={() => setCmdkOpen(true)}
       >
-        {/* 全局效果下拉（头像右侧插槽，与登出按钮并排） */}
-        <select
-          data-testid="canvasui-select"
-          aria-label="页面效果"
-          value={effect}
-          onChange={(e) => setEffect(e.target.value as CanvasUIEffectKey)}
-          style={{
-            maxWidth: 120,
-            padding: "6px 8px",
-            borderRadius: radius.md,
-            border: `1px solid ${neutral[200]}`,
-            backgroundColor: "#FFFFFF",
-            color: neutral[600],
-            fontSize: fontSize.sm,
-            fontWeight: 500,
-            cursor: "pointer",
-            fontFamily: fontFamily.body,
-          }}
-        >
-          {CANVASUI_GROUPS.map((group) => (
-            <optgroup key={group.label} label={group.label}>
-              {group.items.map((item) => (
-                <option key={item.key} value={item.key}>
-                  {item.label}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-          <option value="none">关闭</option>
-        </select>
+        {/* 全局效果下拉（头像右侧插槽，与登出按钮并排）— UX-04：仅演示模式显示 */}
+        {fxDemo && (
+          <select
+            data-testid="canvasui-select"
+            aria-label="页面效果"
+            value={effect}
+            onChange={(e) => setEffect(e.target.value as CanvasUIEffectKey)}
+            style={{
+              maxWidth: 120,
+              padding: "6px 8px",
+              borderRadius: radius.md,
+              border: `1px solid ${neutral[200]}`,
+              backgroundColor: "#FFFFFF",
+              color: neutral[600],
+              fontSize: fontSize.sm,
+              fontWeight: 500,
+              cursor: "pointer",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            {CANVASUI_GROUPS.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.items.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+            <option value="none">关闭</option>
+          </select>
+        )}
         {/* 登出按钮（头像右侧插槽）：清空认证态并回到登录页 */}
         <button
           type="button"

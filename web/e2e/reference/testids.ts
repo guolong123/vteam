@@ -49,7 +49,25 @@ export const PAGES: PageTestidRef[] = [
     auditPage: "1.1 login（登录）",
     route: "/login",
     root: "username",
-    testids: ["username", "password", "login-button", "register-link", "login-error"],
+    testids: [
+      "username",
+      "password",
+      "remember-me",
+      "forgot-password-link",
+      "login-button",
+      "register-link",
+      "login-error",
+      "forgot-account",
+      "forgot-submit",
+      "forgot-error",
+      "reset-token-input",
+      "reset-new-password",
+      "reset-confirm-password",
+      "reset-submit",
+      "reset-error",
+      "reset-success",
+      "back-to-login",
+    ],
   },
   {
     auditPage: "1.2 project-list（项目列表）",
@@ -568,7 +586,7 @@ export const PAGES: PageTestidRef[] = [
 
 /** 各页代表性断言 testid（T9 实际断言 3-5 个/页；数据行 testid 依赖 seed 数据） */
 export const PAGE_SMOKE: Record<string, string[]> = {
-  "/login": ["username", "password", "login-button", "register-link"],
+  "/login": ["username", "password", "remember-me", "forgot-password-link", "login-button", "register-link"],
   "/register": ["register-username", "register-displayname", "register-password", "register-submit", "register-login-link"],
   "/projects": ["project-list-root", "project-card", "create-project-button"],
   "/tasks/new": ["task-create-root", "task-title", "priority-select", "agent-option", "create-task-button"],

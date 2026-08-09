@@ -5,8 +5,11 @@
  * =============================================
  * 用户需求：「主入口应该只有一个模型管理，进去后通过 tab 页管理两个页面，支持切换」。
  *
- * - Tab 1 模型目录（catalog）：纯展示列表（provider 列 + 模型名称列 + 模型ID列 +
- *   可用节点 + 凭据状态徽章 + enabled 只读徽章）+ 搜索（model-search，本地受控）。
+ * - Tab 1 模型目录（catalog）：列表（provider 列 + 模型名称列 + 模型ID列 +
+ *   可用节点 + 凭据状态徽章 + enabled 只读徽章）+ 搜索（model-search，本地受控）+
+ *   行内「配置凭据」操作（admin 专属，复用 Provider Tab 的 ConfigureModal，CFG-04/
+ *   UX-06：同 provider 模型直接配置 token，无需切 Tab；保存后 invalidate
+ *   ["models"]/["workers"] 等实现可用节点联动）。
  * - Tab 2 Provider 管理（providers）：凭证管理 + worker 同步，逻辑迁移自
  *   providers-tab.tsx（原 /providers 页；/providers 路由已重定向到本页）。
  * - Tab 切换：manage-tabs / manage-tab（对齐 skills 页双 Tab 模式，TabKey state）；
@@ -17,7 +20,7 @@
  * - 铁律（T15）：无 fixed / 100vh / 100vw；root flex:1 铺满（AppShell 提供导航）。
  */
 import { useMemo, useState, type CSSProperties } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
@@ -30,7 +33,7 @@ import {
   shadow,
 } from "@/src/theme/tokens";
 import type { ApiModel, ApiWorker, CredentialView, ModelsResponse } from "@/src/types/models";
-import ProvidersTab from "./providers-tab";
+import ProvidersTab, { ActionButton, ConfigureModal } from "./providers-tab";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -125,12 +128,14 @@ function EnabledBadge({ enabled }: { enabled: boolean }) {
   );
 }
 
-/** 模型行卡片：provider 列 + 名称列 + 模型ID列 + 可用节点 + 凭据状态 + 启用状态（只读）。 */
+/** 模型行卡片：provider 列 + 名称列 + 模型ID列 + 可用节点 + 凭据状态 + 启用状态 + 配置凭据操作（admin）。 */
 function ModelRow({
   m,
   nodes,
   credential,
   enabled,
+  isAdmin,
+  onConfigure,
 }: {
   /** 目录行（id=md_xxx；展示 id 用 providerID/modelID 组合） */
   m: ApiModel;
@@ -138,6 +143,9 @@ function ModelRow({
   nodes: number;
   credential: CredentialStatus;
   enabled: boolean;
+  /** admin 专属：行内「配置/更新凭据」按钮（复用 Provider Tab 的 ConfigureModal，CFG-04） */
+  isAdmin: boolean;
+  onConfigure: (providerID: string) => void;
 }) {
   const modelRef = `${m.providerID}/${m.modelID}`;
   return (
@@ -270,6 +278,25 @@ function ModelRow({
       <div style={{ width: 72, flexShrink: 0, display: "flex", justifyContent: "center" }}>
         <EnabledBadge enabled={enabled} />
       </div>
+
+      {/* 操作列：配置凭据（admin 专属，复用 Provider Tab ConfigureModal，CFG-04/UX-06） */}
+      <div
+        style={{
+          width: 110,
+          flexShrink: 0,
+          display: "flex",
+          justifyContent: "flex-end",
+        }}
+      >
+        {isAdmin && (
+          <ActionButton
+            testid="model-configure-button"
+            label={credential === "configured" ? "更新凭据" : "配置"}
+            primary
+            onClick={() => onConfigure(m.providerID)}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -286,12 +313,19 @@ const TABS: { key: TabKey; label: string; icon: string }[] = [
 
 export default function ModelsPage() {
   const user = useAuthStore((s) => s.user);
+  const isAdmin = user?.roleName === "admin";
+  const queryClient = useQueryClient();
 
   /* 双 Tab（受控，对齐 skills 页 manage-tabs/manage-tab 模式） */
   const [tab, setTab] = useState<TabKey>("catalog");
 
   /* 搜索框（受控，按模型名 / provider / modelID 过滤；仅模型目录 Tab 展示） */
   const [keyword, setKeyword] = useState("");
+
+  /* 目录行「配置凭据」弹窗（open=providerID，false=关闭；复用 Provider Tab 的
+   * ConfigureModal 与保存逻辑，CFG-04——同 provider 模型直接配置 token，无需切 Tab） */
+  const [configureOpen, setConfigureOpen] = useState<string | false>(false);
+  const [configureError, setConfigureError] = useState<string | null>(null);
 
   /* 列表：GET /models（分页 pageSize=100 一次拉全量，对齐 agents 页模式） */
   const modelsQuery = useQuery({
@@ -341,6 +375,42 @@ export default function ModelsPage() {
   });
   const credentialOf = (m: ApiModel): CredentialStatus =>
     credentialsQuery.data?.get(m.id)?.configured ? "configured" : "missing";
+
+  /* 保存凭据：POST /models/:id/credentials（目录行已含全量模型，model id 直接从列表
+   * 解析首个 provider 匹配项——凭据按 provider 粒度 C4，同 provider 任一模型 id 均可；
+   * 无需像 Provider Tab 那样保底 GET /models 再解析）
+   * 指定 worker → 定向 enqueueCommand；未选 → 全量 broadcastCommand（C5） */
+  const saveCredentialMutation = useMutation({
+    mutationFn: ({
+      providerID,
+      token,
+      targetWorkerIds,
+    }: {
+      providerID: string;
+      token: string;
+      targetWorkerIds?: string[];
+    }) => {
+      const modelId = models.find((m) => m.providerID === providerID)?.id;
+      if (!modelId) throw new Error(`provider ${providerID} 无可用模型`);
+      return api.post<CredentialView>(`/models/${modelId}/credentials`, {
+        token,
+        ...(targetWorkerIds && targetWorkerIds.length > 0 ? { targetWorkerIds } : {}),
+      });
+    },
+    onSuccess: () => {
+      setConfigureOpen(false);
+      setConfigureError(null);
+      /* 可用节点联动：worker 收到凭据后重新上报模型能力（capabilities.models），
+       * invalidate ["workers"] 刷新节点计数；目录/凭据态跨 Tab 缓存一并失效 */
+      queryClient.invalidateQueries({ queryKey: ["models"] });
+      queryClient.invalidateQueries({ queryKey: ["model-credentials"] });
+      queryClient.invalidateQueries({ queryKey: ["model-providers"] });
+      queryClient.invalidateQueries({ queryKey: ["workers"] });
+    },
+    onError: (err) => {
+      setConfigureError(isApiError(err) ? err.message : "保存失败，请稍后重试");
+    },
+  });
 
   const kw = keyword.trim().toLowerCase();
   const filtered =
@@ -566,7 +636,7 @@ export default function ModelsPage() {
                   {models.length} 个模型 · 已配置 {configuredCount} / 未配置 {missingCount}
                 </span>
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-                  只读展示 · 凭证管理请切换到「Provider 管理」Tab
+                  凭据按 provider 粒度配置 · 可点行内「配置」或切到「Provider 管理」Tab
                 </span>
                 {kw !== "" && (
                   <span
@@ -605,6 +675,7 @@ export default function ModelsPage() {
                 <span style={{ width: 72, flexShrink: 0 }}>可用节点</span>
                 <span style={{ width: 88, flexShrink: 0 }}>凭据状态</span>
                 <span style={{ width: 72, flexShrink: 0 }}>启用</span>
+                <span style={{ width: 110, flexShrink: 0, textAlign: "right" }}>操作</span>
               </div>
 
               {/* 模型行 */}
@@ -615,6 +686,8 @@ export default function ModelsPage() {
                   nodes={nodeCountByModel.get(`${m.providerID}/${m.modelID}`) ?? 0}
                   credential={credentialOf(m)}
                   enabled={m.enabled}
+                  isAdmin={isAdmin}
+                  onConfigure={setConfigureOpen}
                 />
               ))}
 
@@ -653,6 +726,23 @@ export default function ModelsPage() {
           )}
         </div>
       </main>
+
+      {/* 目录行「配置凭据」弹窗（admin 专属；复用 Provider Tab 的 ConfigureModal，CFG-04） */}
+      <ConfigureModal
+        open={configureOpen !== false}
+        provider={configureOpen === false ? "" : configureOpen}
+        submitting={saveCredentialMutation.isPending}
+        error={configureError}
+        workers={workers}
+        onClose={() => {
+          setConfigureOpen(false);
+          setConfigureError(null);
+        }}
+        onSubmit={(payload) =>
+          configureOpen !== false &&
+          saveCredentialMutation.mutate({ providerID: configureOpen, ...payload })
+        }
+      />
     </div>
   );
 }

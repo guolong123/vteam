@@ -947,3 +947,63 @@ Tags: UX-10, chat-attachment, uploads, message-input, chat-bubble, image-preview
 - **经验**：① 读操作语义要按「读/写」本质判定而非 HTTP 动词——PATCH :id/read（已读）归 view 而非 edit，避免破坏 member 基础功能；② users/roles 的 view 权限点与 AdminGuard 语义冲突时**不叠加**（09 篇 [admin] 优先），前端对应行保持未启用即可；③ 验收类操作（accept/reject）用独立 `*.review` 点而非 edit，让「验收员」角色可组合（原型 member 矩阵 tasks 行 review=✓）；④ 并行 session 改同一仓库时，tsc 错误按文件归属过滤验证（`grep <自己文件>` 0 错误即可），不代改他人半成品。
 
 Tags: CONF-02, permission-guard, tasks, chats, artifacts, permission-matrix
+
+---
+
+## UX-04 收尾：页面效果下拉默认隐藏（演示模式 ?fx=on / localStorage 开关，2026-08-09）
+
+- **背景（QA 报告 UX-04 行）**：29 种 CanvasUI 视觉特效下拉常驻顶栏（app-shell.tsx 头像右侧插槽），非演示场景属多余控件。原报告标「无需修复（演示平台功能，设计保留）」，本次按任务要求收尾补齐，采用**方案 A：默认隐藏 + 显式开启**（保留全部 29 种特效能力，仅控制控件可见性）。
+- **实现（单文件 web/src/components/layout/app-shell.tsx）**：
+  1. 模块常量 `FX_DEMO_STORAGE_KEY = "canvasui.demo-mode"`；
+  2. 组件内 `fxDemo` state + 空依赖 effect：读 `URLSearchParams(window.location.search).get("fx") === "on"` 或 localStorage 键值 `"1"`；**URL 命中时回写 localStorage**——演示模式一次开启、后续页面/会话保持，无需每次带参数；
+  3. `canvasui-select` 下拉外包 `{fxDemo && (...)}`：普通用户不渲染（DOM 中彻底消失，非 display:none），演示模式下 data-testid/aria-label/29 组选项原样保留。
+- **零改动点**：`useCanvasUIStore` effect 状态（227-235 行消费处）、`setEffect` 应用逻辑、CANVASUI_GROUPS 分组、`CanvasUIEffectKey` 类型全部不变——功能零回归。
+- **验证**：`cd web && npx tsc --noEmit` **0 错误**。未部署/未起 dev server/未跑浏览器（遵守执行范围）。
+- **经验**：① 演示性功能收窄优先「默认隐藏 + 显式开关」而非删减选项——保功能降干扰，符合演示平台定位；② 开关用 URL 参数 + localStorage 双通道：URL 适合演示直达（可分享链接），localStorage 持久会话，二者取或且 URL 优先回写；③ 用条件渲染（不渲染）而非 CSS 隐藏，避免隐藏控件进入可访问性树（screen reader 读到无用 select）。
+
+Tags: UX-04, canvasui, app-shell, demo-mode, visibility-gate
+
+---
+
+## CFG-04 + UX-06: 模型目录 Tab 增加「配置凭据」行内操作（2026-08-09，实现 + tsc 验证完成）
+
+- **问题（QA 报告）**：CFG-04（低）模型目录与 Provider Tab 割裂——目录 Tab 显示凭据状态但无操作入口（提示"切 Tab"），配置后「可用节点」不联动；UX-06（低）目录 Tab 纯只读，无任何可操作控件。原 QA 判「设计决策无需修复」，本次按收尾任务补齐。
+- **方案评估（选体验最好的）**：任务给出两选项——① 目录行加「配置」按钮直接打开配置弹窗（无需切 Tab）；② 「管理」按钮跳转 Provider Tab 并定位 provider。选 ①：ConfigureModal 已在 providers-tab.tsx 内实现且 props 完备（open/provider/submitting/error/workers/onClose/onSubmit），导出复用成本最低、体验最好（少一次 Tab 切换 + 定位逻辑）。
+- **复用改造（providers-tab.tsx，仅 2 行）**：`function ActionButton` → `export function ActionButton`；`function ConfigureModal` → `export function ConfigureModal`（带一行导出说明注释）。**零行为改动**——Provider Tab 自身用法不变，导出不改变组件语义。
+- **目录 Tab 改造（models/page.tsx）**：
+  1. ModelRow 新增 `isAdmin` + `onConfigure` props；行尾加操作列（宽 110 flex-end，**外层 div 恒渲染**——对齐 providers-tab 表头恒渲染惯例，非 admin 时列不错位），admin 才渲染 `<ActionButton testid="model-configure-button">`（label：configured→「更新凭据」/ 否则「配置」，primary 蓝底，复用 providers-tab 的 ActionButton 视觉完全一致）。
+  2. 表头行加「操作」列（width 110, textAlign right）；列表头提示文案「只读展示 · 凭证管理请切换到 Provider 管理 Tab」→「凭据按 provider 粒度配置 · 可点行内「配置」或切到 Provider 管理 Tab」（原提示随只读设计消失，误导文案同步清理）。
+  3. 页面新增 `configureOpen: string | false` + `configureError: string | null` + `saveCredentialMutation`：**model id 直接从 models 全量列表 `find(providerID 匹配)?.id` 解析**（目录已一次拉全量，无需像 Provider Tab 的 resolveModelId 那样保底 GET /models 再二次精确过滤——零额外请求）；POST /models/:id/credentials 同 payload（token + targetWorkerIds?，C5 定向/广播语义不变）。
+  4. **可用节点联动**：onSuccess 四连 invalidate——`["models"]`（任务字面要求）+ `["model-credentials"]`（目录凭据态）+ `["model-providers"]`（Provider Tab 聚合）+ `["workers"]`（**真正驱动节点数刷新的 key**：nodeCountByModel 由 workersQuery 的 capabilities.models 计算，worker 收到凭据后重新上报模型能力才变化——只 invalidate ["models"] 不会让节点数变，必须带 ["workers"]）。onError → configureError（弹窗内渲染，对齐 Provider Tab 模式）。
+  5. 页面 root（position: relative）内、main 之后渲染 `<ConfigureModal>`：open=configureOpen !== false；onSubmit 传 `{providerID: configureOpen, ...payload}`；弹窗 zIndex 40 + inset 0 覆盖全页（root 已有 position: relative，无需改）。
+- **权限**：isAdmin（roleName==='admin'）控制行内按钮渲染，非 admin 目录保持只读（后端 AdminGuard 403 兜底，与 Provider Tab 一致）。
+- **⚠️ 类型细节**：`onConfigure={setConfigureOpen}` 直接传 Dispatch 可用（参数逆变：SetStateAction<string|false> 接受 string，可赋给 (string)=>void），无需包一层箭头函数。
+- **⚠️ 并行会话竞争（复现）**：git status/diff 显示本工作区并行会话正在改 schema.prisma/auth.constants.ts/auth.service.ts/app-shell.tsx 等——本次仅动 web/app/(main)/models/ 下 2 文件 + notepad，不碰他人文件；tsc 对并行中间态文件（app-shell.tsx 有未提交改动）仍 0 错误，未受影响。
+- **验证**：`cd web && npx tsc --noEmit` **0 错误**。未 docker build/未部署/未起 dev server/未跑浏览器/未跑 jest（遵守执行范围）。
+- **遗留（决策）**：行内按钮仅「配置/更新凭据」，未加「删除凭据」——删除属破坏性操作且 Provider Tab 已有二次确认弹窗（OBS-003 语义），目录行只提供高频正向操作；数据-testid 按任务要求用 `model-configure-button`（备选 `model-manage-button` 未用——方案 ① 不需要跳转）。
+
+Tags: CFG-04, UX-06, models-page, providers-tab, configure-modal, credential, invalidate
+
+---
+
+## UX-12: 登录页记住我/忘记密码（收尾补齐，2026-08-10，实现 + tsc + jest 验证完成）
+
+- **问题（QA 报告 .gstack/qa-reports/qa-report-open-issues-2026-08-09.md:94 UX-12 行）**：登录页仅账号/密码/登录/注册，无「记住我」「忘记密码」。收尾补齐。
+- **方案确认**：记住我 = 勾选存 localStorage（跨会话）/未勾选存 sessionStorage（会话级）；忘记密码走方案 a 完整闭环（内网无邮件，token 手动传递）：forgot-password 生成一次性 token 存 User 表（resetToken/resetTokenExpires，30 分钟）→ 返回 token 直接展示给用户 → reset-password 用 token 换新密码，成功后清 token。
+- **后端（server/src/auth）**：
+  1. `schema.prisma` User 加 2 字段：`resetToken String? @map("reset_token")` + `resetTokenExpires DateTime? @map("reset_token_expires")`——**改 schema 必须 `npx prisma generate`**（本地代码生成非迁移），否则 tsc 报 create/update data 属性不存在。
+  2. `auth.constants.ts` AUTH_ERRORS 加 `USER_NOT_FOUND: 'AUTH_USER_NOT_FOUND'`、`RESET_TOKEN_INVALID: 'AUTH_RESET_TOKEN_INVALID'`。
+  3. 新 dto：`forgot-password.dto.ts`（account 字符串，用户名或邮箱二选一）+ `reset-password.dto.ts`（token + newPassword 对齐 RegisterDto min6）。
+  4. `auth.service.ts`：`forgotPassword` 按 username 再 email 两次 findUnique 查用户（**复用一个 `let` 变量，不引 findFirst**，mock 无需扩展 findFirst；`randomBytes(32).toString('hex')` 64 位 hex token）→ 404 USER_NOT_FOUND（不存在泄露账号信息内网可接受）→ update 落 token + expiresAt 返回 `{resetToken, expiresAt}`；`resetPassword` 用 `findFirst({where:{resetToken}})`（**此路径必须 findFirst**，resetToken 非唯一索引）→ 校验存在 + 未过期（`getTime() < Date.now()`）→ bcrypt 重哈希 + update 清 token → 返回 `{ok:true}`。无效/过期 → 401 RESET_TOKEN_INVALID。
+  5. `auth.controller.ts` 两个 `@Public()` POST 端点（@HttpCode OK），放 refresh 之后。
+- **前端「记住我」核心（web/lib/stores/authStore.ts）**：zustand persist 的 storage 固定为一个 **dualStorage 包装器**（`StateStorage` 实现 getItem/setItem/removeItem），由**模块级 `persistMode` 变量**决定每次写入落在 localStorage 还是 sessionStorage：
+  - `getItem`：localStorage 优先再 sessionStorage 兜底——未记住我同 tab 刷新也能水合恢复会话；
+  - `setItem`：写入当前模式 active storage 并 `inactive.removeItem(name)` 清对立 storage 旧数据（防脏 token 残留）；
+  - `removeItem`：两个 storage 都清——logout 时 persist 对 token/user 归 null 的 partialize 结果等于默认值会走 removeItem，自动满足「退出登录清理两者」。
+  - `setPersistMode(remember)` action 改模块级变量，登录提交前调用再 setAuth（persist 写入已用目标模式）。key 保持 `"agent-platform-auth"` 不变（web/e2e/perf.spec.ts:19 直读 localStorage 该 key 不受影响）。
+- **前端登录页（web/app/login/page.tsx）**：LoginForm 加 `mode: "login" | "forgot" | "reset"` 三态切换（同页内切换视图，不弹 modal）；login 态密码下加「记住我」checkbox（`remember-me`，默认勾选保持既有「默认持久化」行为）+「忘记密码？」按钮（`forgot-password-link`）；forgot 态 account 输入（`forgot-account`）→ POST /auth/forgot-password → 返回 token 预填进 reset 态（`reset-token-input`）+ 新密码/确认密码（`reset-new-password`/`reset-confirm-password`，校验 ≥6 位 + 两次一致）→ POST /auth/reset-password → 成功回 login 态显示绿色提示（`reset-success`）「密码重置成功，请使用新密码登录」。两非登录态均有「返回登录」按钮（`back-to-login`）。错误 testid 分态：`forgot-error`/`reset-error`。
+- **测试（auth.service.spec.ts）**：mock 加 `findFirst`（resetToken 匹配）+ `update`（按 id 就地改数组元素）；新增 9 用例（forgot：按用户名命中/按邮箱命中/404；reset：有效 token 重置为 bcrypt 哈希并清 token/旧密码失效新密码可登录/无效 token 401/过期 token 401/同一 token 二次使用 401）。
+- **验证**：`cd server && npx tsc --noEmit` **0 错误**；`npx jest src/auth` **2 suites / 21 tests 全绿**（基线 12 + 新增 9）；`cd web && npx tsc --noEmit` **0 错误**。未跑迁移（orchestrator 部署阶段 prisma migrate）、未部署、未起 dev server、未跑浏览器、未跑全量 jest（遵守执行范围）。schema 新增 2 字段由部署期迁移落地，既有行默认 NULL 兜底。
+- **经验**：① zustand persist 动态切换 storage 的最简实现 = 固定一个 `StateStorage` 包装器 + 模块级模式变量控制写入目标（比 `persist.setOptions({storage})` 切换更稳：写入时机统一、可同时清对立 storage）；② persist 对「partialize 结果等于默认值」的 set 会调 removeItem 而非 setItem——logout 天然清 storage，无需手动清；③ forgot-password 查用户用「两次 findUnique（username 再 email）」而非 findFirst(OR)——贴近既有 mock（findUnique 已支持三 key），OR/findFirst 需扩 mock；reset-password 必须 findFirst（token 非唯一）；④ 校验字段 null 处理：`!user.resetTokenExpires` 显式判空防旧行 `null.getTime()` 崩。
+
+Tags: UX-12, remember-me, forgot-password, reset-token, dual-storage, login-page

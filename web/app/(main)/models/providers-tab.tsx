@@ -119,7 +119,7 @@ function CredentialBadge({ status }: { status: CredentialStatus }) {
 }
 
 /** 轻量按钮：次级（边框白底）与主操作（蓝底）共用。 */
-function ActionButton({
+export function ActionButton({
   testid,
   label,
   onClick,
@@ -172,7 +172,8 @@ interface ConfigureModalProps {
   onSubmit: (payload: { token: string; targetWorkerIds?: string[] }) => void;
 }
 
-function ConfigureModal({
+/** 导出供模型目录 Tab 复用（CFG-04：目录行「配置凭据」直接打开同一弹窗，无需切 Tab）。 */
+export function ConfigureModal({
   open,
   provider,
   submitting,
