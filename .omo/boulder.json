@@ -504,9 +504,9 @@
       "work_id": "model-management-b9263bc4",
       "active_plan": "/data/git-project/aiagents/.omo/plans/model-management.md",
       "plan_name": "model-management",
-      "status": "active",
+      "status": "completed",
       "started_at": "2026-08-08T14:35:02.320Z",
-      "updated_at": "2026-08-08T18:27:51.930Z",
+      "updated_at": "2026-08-08T18:33:54.550Z",
       "session_ids": [
         "opencode:ses_02ad3f64dffeH0vEIATllKlxTn"
       ],
@@ -604,13 +604,15 @@
           "status": "running",
           "updated_at": "2026-08-08T18:27:51.931Z"
         }
-      }
+      },
+      "ended_at": "2026-08-08T18:33:54.550Z",
+      "elapsed_ms": 14332230
     }
   },
   "active_plan": "/data/git-project/aiagents/.omo/plans/model-management.md",
   "started_at": "2026-08-08T14:35:02.320Z",
-  "status": "active",
-  "updated_at": "2026-08-08T18:27:51.930Z",
+  "status": "completed",
+  "updated_at": "2026-08-08T18:33:54.550Z",
   "session_ids": [
     "opencode:ses_02ad3f64dffeH0vEIATllKlxTn"
   ],
@@ -709,5 +711,7 @@
       "updated_at": "2026-08-08T18:27:51.931Z"
     }
   },
-  "agent": "atlas"
+  "agent": "atlas",
+  "ended_at": "2026-08-08T18:33:54.550Z",
+  "elapsed_ms": 14332230
 }

@@ -6,6 +6,26 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 
 ---
 
+## C10: Provider 页切换后端聚合数据源，消除前端聚合冗余（2026-08-09，实现 + 验证完成）
+
+- **背景**：Provider 页原先用「GET /models pageSize=100 全量分组 + 每 provider 并发 GET /models/:id/credentials」前端聚合（C6 期后端 providers 端点未交付时的并行时序误判）。C9 后端 `GET /models/providers` 交付后，切换为单一端点，**删除 2 个请求源**（modelsQuery 全量分组 + credentialsQuery 逐 provider 查凭据），保留 workersQuery（worker 多选数据源）。
+- **类型**：`web/src/types/models.ts` 新增 `ProviderSummary {providerID, modelCount, configured, fingerprint, revokedAt}`（与后端 listProviders 响应字段一一对应）。
+- **⚠️ 模型 id 闭环（保存/删除凭据的关键）**：C9 providers 响应**不含模型 id**（只聚合计数/凭据态）——保存 POST /models/:id/credentials 与吊销 DELETE 仍需目录行 md_ id。保底方案 `resolveModelId(providerID)`：`GET /models?providerID=<p>&pageSize=100` → 前端**精确 filter `m.providerID === providerID` 取首个**（⚠️ 后端 providerID 是 contains 模糊匹配，`opencode` 会误命中 `opencode-go`，必须前端二次精确过滤防前缀误命中），再 POST/DELETE `/models/<md_id>/credentials`。凭据按 provider 粒度（C4），任一模型 id 均可操作，不要求 enabled。
+- **⚠️ queryKey 跨页共享陷阱**：原 credentialsQuery 用 `["model-credentials"]`（与 models 页共享，保存后两页凭据态一起刷新）；新 providersQuery 的 queryFn 是 GET /models/providers，**不能复用 ["model-credentials"]**——react-query 同 key 不同 queryFn 会互相污染缓存（models 页存 Map，providers 页存数组）。改用独立 key `["model-providers"]`，保存/吊销成功后**双 invalidate**：`["model-providers"]`（本页）+ `["model-credentials"]`（models 页共享的凭据态，保持跨页一致性）。
+- **渲染逻辑零变化**：providerID + 模型数（p.modelCount）+ 三态徽章（toStatus 从 ProviderSummary 直接判定：configured → 绿 / !configured && revokedAt → 琥珀 / 否则灰）+ fingerprint（configured 时显示 p.fingerprint，其余 "—"）；配置弹窗交互（worker 多选/保存/删除）未动。
+- **验证**：web `npx tsc --noEmit` 0 错误 + `npm run build` 通过（/providers 路由 7.87 kB）。后端零改动（C9 已交付）。
+
+---
+
+
+- **端点**：`GET /api/v1/models/providers`（成员只读，不挂 AdminGuard，与 GET /models 一致）。返回 `Array<{providerID, modelCount, configured, fingerprint, revokedAt}>`，Provider 页数据源（模型页纯展示）。
+- **service 实现**（`ModelsService.listProviders()`，两次查询内存合并）：① `prisma.model.groupBy({by:['providerID'], where:{enabled:true}, _count:{_all:true}})` 一次取 provider + enabled 模型数；② `modelCredential.findMany()` 全量按 providerID 建 Map 取凭据状态（表很小，无复杂 join）。`configured = 存在且 revokedAt===null`；`fingerprint` 取库内已脱敏指纹，**未配置/已吊销时为 null**（明文零接触）；排序 providerID 字典序（简单稳定）。
+- **⚠️ modelCount 语义**：groupBy 的 where 必须带 `enabled:true`——任务要求"该 provider 下 enabled 模型数"，与目录列表 enabled 过滤语义一致。
+- **⚠️ 路由顺序关键点**：`providers` 静态段必须在 `@Get(':id')` 之前声明（NestJS 按声明顺序匹配，否则 GET /models/providers 被 :id 拦截 404）。插在 findAll 之后、findOne 之前。
+- **⚠️ 测试路由顺序的 metadata 读取坑**：NestJS `@Get('providers')` 的 PATH_METADATA 定义在 **`descriptor.value`（函数对象）** 上，不是 `prototype+key`。读法必须是 `Reflect.getMetadata(PATH_METADATA, ModelsController.prototype[method])`（第二参传函数对象、无第三参）——用 `(proto, method)` 三参读法恒返回 undefined（本任务踩坑后修正）。声明顺序 = `Object.getOwnPropertyNames(prototype)` 顺序（排除 constructor），断言 `providers` 索引 < `:id` 索引。
+- **mock 扩展**：`models.service.spec` 的 prisma.model mock 需补 `groupBy: jest.fn()`（groupBy 返回形如 `[{providerID, _count:{_all:n}}]`）。
+- **验证**：`npm run build` 通过 + jest **43 suites / 661 tests 全绿**（基线 656 + 新增 5：service.spec listProviders 3 例（聚合/吊销 configured=false+fingerprint=null/空）、controller.spec 2 例（转发 + 路由顺序））。
+
 ## B2 修复：resolveModels 空列表重试（2026-08-09，实现 + 实证完成）
 
 - **根因（F3 复现）**：`opencode serve` 健康检查通过（HTTP 200）≠ 模型列表就绪。容器内实测（真实凭据）：就绪 **303ms** 时 GET /api/model 返回 **0 模型**，**1573ms** 后才返回 **6212 个模型**。旧 resolveModels 单次调用拿到空数组 → 被当作"已探测无模型"上报 `capabilities.models=[]` → C3 availability 无行（详情页模型卡只能走目录兜底）。
@@ -217,3 +237,23 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **⚠️ docker cp 嵌套坑**：`docker cp <src>/dist <container>:/app/dist` 当目标已存在时**不会覆盖而是嵌套**成 `/app/dist/dist/...`（md5 不一致、容器仍跑旧代码）。正确姿势：`docker cp <src>/dist/. <container>:/app/dist/`（`.` 后缀强制覆盖内容）。且 compose worker 容器的实际工作目录是 **`/tmp/keta-worker`**（WORK_DIR），dist 拷贝目标是 `/tmp/keta-worker/dist` 而非 `/app/dist`。
 - **⚠️ compose 环境构建限制**：本机 docker build 拉取 docker/dockerfile:1 frontend 元数据超时（registry-1.docker.io 不可达），无法 `docker compose build`——用"本地 `npm run build` + `docker cp` + `docker compose restart`"绕过（server 容器 dist 路径 `/app/dist`，worker 容器 `/tmp/keta-worker/dist`）。
 - **⚠️ compose server 容器重启后 worker 状态**：server 容器 restart 会短暂中断 worker 心跳；markStaleWorkersOffline 仅在 status != offline 且 30s 未心跳时标 offline，worker 心跳间隔 10s，快速恢复不受影响。
+
+## C6 拆分：Provider 管理页 + 模型列表页（纯展示）（2026-08-09，实现完成）
+
+- **用户需求原话**：「模型列表不太对，应该不是新增模型，而是新增凭证，新增时要选择provider，输入key就好了。要有专门的凭证管理，可以列出所有的provider，已经配置凭证的显示已配置状态。点击配置弹出输入框。provider支持同步到节点。也就是现有的模型管理要分成2个页面，provider列表和模型列表，模型列表只做展示」
+- **决策：前端聚合替代后端 providers 端点**——任务计划依赖「后端 GET /models/providers 聚合端点（并行任务）」，但该并行任务未交付（controller/service 无 providers 方法，spec 中 providers 仅为 Nest 测试 providers 数组）。采用前端聚合：`GET /models?pageSize=100` 拉全量 → 按 providerID 分组（Map 聚合）→ 每 provider 用**首个模型 id** 查 `GET /models/:id/credentials`（凭据按 provider 粒度 C4，同 provider 下任一模型 id 均可查询）。零后端改动、非侵入，规避 server 回归风险。
+- **新页面 `web/app/(main)/providers/page.tsx`（/providers，Provider 管理）**：
+  - 列表行 = providerID + 模型数 + 凭据状态徽章（**三态**：已配置绿 / 未配置灰 / 已撤销琥珀——`configured=true` 优先，否则 `revokedAt` 非空 → revoked）+ fingerprint（仅已配置显示）
+  - 配置弹窗：provider 预填只读 + key 输入（password）+ 同步到节点（worker 多选，未选=全部广播 C5）+ 保存 → POST /models/:id/credentials {token, targetWorkerIds?}
+  - 删除凭据（已配置/已撤销时显示）→ DELETE → 软撤销 revokedAt → 徽章变未配置
+  - isAdmin 控制配置/删除；成员只读（无操作列）
+  - 新增 testid 22 项：providers-root/toolbar/list/item/id/model-count/credential-status/fingerprint/configure-button/delete-button/config-modal/modal-provider/modal-key-input/modal-select-all/modal-workers/modal-save/modal-cancel/modal-error/hint/loading/error/retry
+- **模型页 `web/app/(main)/models/page.tsx` 重构为纯展示**：
+  - 移除：新增模型弹窗（CreateModelModal + model-add-button）、凭据配置区（credential-section + model-credential-* 全部）、启停开关（ToggleSwitch + model-toggle）
+  - 保留：搜索 + 模型列表（provider/名称/模型ID/可用节点/凭据状态徽章）+ model-hint
+  - enabled 改为**只读徽章 model-enabled-badge**（已启用蓝/已停用灰，替代写操作开关）
+  - 共享类型提取到 `web/src/types/models.ts`（ApiModel/ModelsResponse/ApiWorker/CredentialView，原页面私有）
+- **导航注册 5 处**：nav-dock NAV_ITEMS（models 后插入 providers，9 项——icons 区 overflow-y:auto 兜底不溢出）+ app-shell KEY_TO_PATH + PAGE_TITLE（models subtitle 改「模型目录只读展示」，providers 新增「凭证管理与节点同步」）+ CMDK_NAV_PATH + cmdk-panel DEFAULT_CMDK_ITEMS
+- **e2e 同步**：pages.spec.ts /models 测试移除 credential-section 断言（改 model-enabled-badge + credential-section toHaveCount(0) 反断言）+ 新增 /providers 测试（列表 + 徽章 + 弹窗开合）；testids.ts models 审计页 testid 精简为 14 项展示类 + 新增 providers 审计页 22 项 + PAGE_SMOKE 双页更新
+- **⚠️ TS 陷阱**：`useState(false)` 推断 boolean，存 providerID 字符串报 TS2367/TS2345——需 `useState<string | false>(false)`（双语义状态：false=关闭 / 字符串=open 的 providerID）
+- **验证**：`npx tsc --noEmit` 通过 + `npm run build` 通过（/providers 路由生成）。e2e 未实跑（需 dev server + 后端），build 门已过
