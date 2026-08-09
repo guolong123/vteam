@@ -7,7 +7,8 @@
 #   server  NestJS（healthcheck /api/v1/health；宿主 13000 避开本地 dev 3000）
 #   web     Next.js standalone（build ARG 注入 API_PROXY_TARGET=http://server:3000；
 #           宿主 13001 避开本地 dev 3001）
-#   worker  opencode worker（X-Worker-Token 注册 + serve 0.0.0.0 + 上报 http://worker）
+#   worker  opencode worker（X-Worker-Token 注册 + serve 0.0.0.0 + 上报 http://worker；
+#           模型管理：WORKER_DEFAULT_MODEL 默认模型兜底 + 凭据下发注入 auth.json）
 #
 # 端口避开原则：本机本地 dev server 占 3000 / web dev 占 3001，relay-mysql 占 3306，
 # aiagents-mysql 占 3307，故 db 不映射、server→13000、web→13001。
@@ -38,6 +39,7 @@ services:
       - aiagents-net
 
   # 一次性初始化：迁移基线 + 种子数据（server 依赖其成功完成）
+  # seed 用编译产物 node dist/prisma/seed.js（npm run build 产出；runner 镜像无源码不能 ts-node）
   init:
     build: ./server
     container_name: aiagents-compose-init
@@ -62,6 +64,7 @@ services:
       JWT_ACCESS_EXPIRES_IN: "2h"
       JWT_REFRESH_EXPIRES_IN: "7d"
       WORKER_TOKEN: ${WORKER_TOKEN:-compose-worker-token}
+      # 模型 provider token 加密密钥（C4 AES-256-GCM，64 hex；生产必改，默认值仅本地 dev）
       MODEL_CREDENTIAL_KEY: ${MODEL_CREDENTIAL_KEY:-05afa7cd6715894ce99c3bb544b19669bc8db103606809208ca7fa55175f35a1}
     depends_on:
       db:
@@ -114,6 +117,8 @@ services:
       WORKER_ID: w_compose_worker
       OPENCODE_SERVE_HOSTNAME: 0.0.0.0
       WORKER_ADVERTISE_HOST: http://worker
+      # worker 默认模型兜底（C2 新增，Agent 未配模型时用，C7 模型解析优先级第 3 级）；空 = 不指定（serve 默认）
+      WORKER_DEFAULT_MODEL: ${WORKER_DEFAULT_MODEL:-}
     depends_on:
       server:
         condition: service_healthy

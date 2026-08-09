@@ -257,3 +257,11 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **e2e 同步**：pages.spec.ts /models 测试移除 credential-section 断言（改 model-enabled-badge + credential-section toHaveCount(0) 反断言）+ 新增 /providers 测试（列表 + 徽章 + 弹窗开合）；testids.ts models 审计页 testid 精简为 14 项展示类 + 新增 providers 审计页 22 项 + PAGE_SMOKE 双页更新
 - **⚠️ TS 陷阱**：`useState(false)` 推断 boolean，存 providerID 字符串报 TS2367/TS2345——需 `useState<string | false>(false)`（双语义状态：false=关闭 / 字符串=open 的 providerID）
 - **验证**：`npx tsc --noEmit` 通过 + `npm run build` 通过（/providers 路由生成）。e2e 未实跑（需 dev server + 后端），build 门已过
+
+## D4: docker-compose 配置层对齐（WORKER_DEFAULT_MODEL + 注释同步）（2026-08-09，完成）
+
+- **worker service 补 WORKER_DEFAULT_MODEL（C2 新增）**：environment 加 `WORKER_DEFAULT_MODEL: ${WORKER_DEFAULT_MODEL:-}`（可空占位，未设 = 空串，worker/src/config.ts:77 `(env.X ?? '').trim() || undefined` → 不指定、serve 默认）。注释说明：worker 默认模型兜底（Agent 未配模型时用，C7 模型解析优先级第 3 级）。已实测：未设 → `""`、设 `opencode-go/deepseek-v4-flash` → 透传。
+- **init seed 注释**：说明用编译产物 `node dist/prisma/seed.js`（`npm run build` 产出；runner 镜像无源码不能 ts-node）——对齐 F3 修复（D1 原用 `npx prisma db seed` ts-node 编译失败）。
+- **server MODEL_CREDENTIAL_KEY 注释**：模型 provider token 加密密钥（C4 AES-256-GCM，64 hex；生产必改，默认值仅本地 dev）。默认 dev key `05afa7cd...` 保留不动。
+- **文件头注释**：worker 行补模型管理功能说明（WORKER_DEFAULT_MODEL 兜底 + 凭据下发注入 auth.json）。
+- **验证**：`docker compose config` 通过（YAML 合法 + env 解析正确，无未定义变量警告）；未重建镜像（仅配置层更新，`docker compose up -d --build` 生效）。四服务 + init 结构未动，未加新服务。
