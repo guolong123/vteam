@@ -469,3 +469,21 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   - 详情页 TaskPanel 同款按钮 + reject 弹窗（absolute 相对 aside 宿主）全链路通过；
   - reject 带 reason 请求被后端接受（DTO 校验失败会 400 显示 task-action-error），task_events 无读取端点故 reason 落库仅由状态回退间接证明。
 - **⚠️ 环境坑（沿用 C11/D6/F1）**：next.config API_PROXY_TARGET 默认 localhost:3000（后端占 3000），QA 后端在 13001——验证 dev server 需 `env API_PROXY_TARGET=http://localhost:13001 npm run dev -- -p 3002`；playwright.config testMatch 白名单（pages/perf/guard...）不匹配任意新 spec 文件名 → 需临时独立 config（testDir ./e2e + testMatch 指定文件）跑验证脚本，跑完删除。种子任务 p_seed_1 仅 in_progress×1 + archived×1，全生命周期验证需先 POST /projects/p_seed_1/tasks 创建 pending 任务（agentIds 必填非空）。
+
+## F3: ISSUE-004 创建/重置用户密码长度校验（2026-08-09，前端 UX 补齐，实现 + tsc 验证完成）
+
+- **背景**：QA 报告 ISSUE-004（中）——/users 新增用户弹窗（user-form）输入 3 位密码时「创建用户」按钮已可点击（无前端长度校验），后端 `CreateUserDto @MinLength(6)` 已兜底（400 拦截），纯补前端 UX。
+- **根因定位**：`web/app/(main)/users/page.tsx` 新增用户弹窗 handleSubmit 仅 `if (!username.trim() || !password || !roleId) return;`（仅非空），按钮 `disabled` 表达式同样仅非空；占位符已写「至少 6 位」但无校验。**重置密码弹窗**（reset-password-input）同样缺失。
+- **修复模式（对齐 F1 register 页先例，不引入新模式）**：register 页是「提交时 `if (password.length < 6) { setError("密码至少 6 位"); }` + 内联错误提示」，按钮 `disabled={submitting}` 不做长度拦截（保持可点击以触发错误提示）——users 页两个弹窗完全同构实现：
+  - **error 是 prop（来自父组件 mutation API 错误）**，本地校验错误不能复用 prop——各弹窗新增本地 `formError` state（自解释命名，不加注释），handleSubmit 中 `password.length < 6` 时 `setFormError("密码至少 6 位")` 并 return（不发起 onSubmit）；错误展示区 `{formError || error ? ... : null}`（本地校验优先，其次 API 错误）；每次打开弹窗重置时 `setFormError(null)`。
+  - 新增用户弹窗（user-form-submit）与重置密码弹窗（user-reset-submit）两处都补齐，data-testid 分别 user-form-error / user-reset-form-error。
+- **验证**：web `npx tsc --noEmit` 0 错误（PATH nvm v22.22.1）。未跑浏览器实证（任务范围：tsc + 代码校验，浏览器实测由后续 QA 阶段覆盖）。
+
+## F4: ISSUE-004 缺陷修复——formError 随输入清除（2026-08-09，浏览器实测 2/2 PASS）
+
+- **背景**：F3 实现后浏览器实测发现残留缺陷——3 位密码提交 → `user-form-error` 显示「密码至少 6 位」（✅），但改为 6 位密码后错误**仍显示**（toBeHidden 断言 20× visible）。根因：`formError` 只在打开弹窗时 `setFormError(null)`，受控表单输入变化（onChange）不清除 → 旧错误残留。
+- **修复（两弹窗 UserFormModal / ResetPasswordModal 同构，单文件 web/app/(main)/users/page.tsx）**：
+  - **onChange 清除（主方案）**：密码输入 `onChange={(e) => { setPassword(e.target.value); setFormError(null); }}`——输入即消错，UX 最直觉；
+  - **handleSubmit 校验通过后清除（补防御，对齐 register 页 :81 `setError(null)` 先例）**：长度校验通过、调用 onSubmit 前 `setFormError(null)`——覆盖提交成功路径，即使未触发 onChange（如回车提交）也不残留；
+  - 展示逻辑 `{formError || error ? ... : null}`、data-testid（user-form-error / user-reset-form-error）、disabled 表达式均不变。
+- **验证**：web `npx tsc --noEmit` 0 错误（nvm v22.22.1）；playwright 浏览器实测 `npx playwright test -c issue004.config.ts`（dev `env API_PROXY_TARGET=http://localhost:13001 npm run dev -- -p 3002`，channel chrome）2/2 PASS：短密码拦截 OK + 改 6 位错误消失 OK。验证脚本 web/e2e/issue004-verify.spec.ts + issue004.config.ts 已留档复用。

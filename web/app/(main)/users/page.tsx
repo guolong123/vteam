@@ -361,6 +361,7 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [roleId, setRoleId] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Esc 关闭
   useEffect(() => {
@@ -378,6 +379,7 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
     setUsername("");
     setEmail("");
     setPassword("");
+    setFormError(null);
     setRoleId(
       roles.find((r) => r.name === "member")?.id ?? roles[0]?.id ?? ""
     );
@@ -389,6 +391,11 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
     e.preventDefault();
     if (submitting) return;
     if (!username.trim() || !password || !roleId) return;
+    if (password.length < 6) {
+      setFormError("密码至少 6 位");
+      return;
+    }
+    setFormError(null);
     onSubmit({
       username: username.trim(),
       password,
@@ -506,7 +513,10 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
             type="password"
             placeholder="至少 6 位，首次登录后可修改"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setFormError(null);
+            }}
             disabled={submitting}
             style={formField}
           />
@@ -560,17 +570,17 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
           </span>
         </div>
 
-        {/* 错误提示 */}
-        {error && (
+        {/* 错误提示（本地校验优先，其次 API 错误） */}
+        {formError || error ? (
           <div
             role="alert"
             data-testid="user-form-error"
             style={{ fontSize: fontSize.sm, color: "#DC2626", display: "flex", alignItems: "center", gap: space.xs }}
           >
             <span aria-hidden style={{ fontWeight: 700 }}>!</span>
-            {error}
+            {formError || error}
           </div>
-        )}
+        ) : null}
 
         {/* 底部：创建 / 取消 */}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm, marginTop: space.sm }}>
@@ -634,6 +644,7 @@ interface ResetPasswordModalProps {
 
 function ResetPasswordModal({ open, target, submitting, error, onClose, onSubmit }: ResetPasswordModalProps) {
   const [newPassword, setNewPassword] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Esc 关闭
   useEffect(() => {
@@ -647,7 +658,10 @@ function ResetPasswordModal({ open, target, submitting, error, onClose, onSubmit
 
   // 每次打开清空
   useEffect(() => {
-    if (open) setNewPassword("");
+    if (open) {
+      setNewPassword("");
+      setFormError(null);
+    }
   }, [open]);
 
   if (!open || !target) return null;
@@ -655,6 +669,11 @@ function ResetPasswordModal({ open, target, submitting, error, onClose, onSubmit
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (submitting || !newPassword) return;
+    if (newPassword.length < 6) {
+      setFormError("密码至少 6 位");
+      return;
+    }
+    setFormError(null);
     onSubmit(target.id, newPassword);
   };
 
@@ -734,21 +753,25 @@ function ResetPasswordModal({ open, target, submitting, error, onClose, onSubmit
             type="password"
             placeholder="至少 6 位"
             value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
+            onChange={(e) => {
+              setNewPassword(e.target.value);
+              setFormError(null);
+            }}
             disabled={submitting}
             style={formField}
           />
         </label>
 
-        {error && (
+        {formError || error ? (
           <div
             role="alert"
+            data-testid="user-reset-form-error"
             style={{ fontSize: fontSize.sm, color: "#DC2626", display: "flex", alignItems: "center", gap: space.xs }}
           >
             <span aria-hidden style={{ fontWeight: 700 }}>!</span>
-            {error}
+            {formError || error}
           </div>
-        )}
+        ) : null}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm, marginTop: space.sm }}>
           <button
