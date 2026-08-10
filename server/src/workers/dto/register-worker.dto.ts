@@ -44,6 +44,12 @@ export class WorkerCapabilitiesDto {
   @IsArray()
   @IsString({ each: true })
   models?: string[];
+
+  @ApiPropertyOptional({ description: 'T10：worker 执行端点端口（方案 A POST /execute；server 据此发现执行端点下发 prompt，缺省回退 serve origin + 4198）' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  execPort?: number;
 }
 
 /** worker 负载快照（对齐 schema Worker.load Json）。 */

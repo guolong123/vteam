@@ -75,6 +75,29 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
     });
   });
 
+  it('T10：WorkerCapabilitiesDto 支持可选 execPort（执行端点端口上报，whitelist 不剔除）', () => {
+    const dto = new RegisterWorkerDto();
+    dto.workerId = 'w_0000000008';
+    dto.opencodeVersion = '1.18.15';
+    dto.capabilities = {
+      maxInstances: 1,
+      skills: [],
+      tools: [],
+      port: 53001,
+      execPort: 4198,
+    };
+    dto.load = { instances: 0 };
+
+    const wire = JSON.parse(JSON.stringify(dto));
+    expect(wire.capabilities).toEqual({
+      maxInstances: 1,
+      skills: [],
+      tools: [],
+      port: 53001,
+      execPort: 4198,
+    });
+  });
+
   it('C2：WorkerCapabilitiesDto 支持可选 models（真实模型 id 列表，whitelist 不剔除）', () => {
     const dto = new RegisterWorkerDto();
     dto.workerId = 'w_0000000005';
