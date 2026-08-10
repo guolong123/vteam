@@ -466,6 +466,37 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
       });
     });
 
+    it('since=latest 时以最新已落库事件 id 为游标，仅返回其后新事件（首连跳过历史）', async () => {
+      prisma.realtimeEvent.findFirst.mockResolvedValue({ id: 'ev_0000000004' });
+      prisma.realtimeEvent.findMany.mockResolvedValue([
+        row('ev_0000000005', 'task.status.changed'),
+      ]);
+
+      const events = await service.getEventsSince('latest');
+
+      expect(prisma.realtimeEvent.findFirst).toHaveBeenCalledWith({
+        orderBy: { id: 'desc' },
+        select: { id: true },
+      });
+      expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
+        where: { id: { gt: 'ev_0000000004' } },
+        orderBy: { id: 'asc' },
+      });
+      expect(events.map((e) => e.id)).toEqual(['ev_0000000005']);
+    });
+
+    it('since=latest 且库空时不过滤 DB 查询（findMany 自然返回空）', async () => {
+      prisma.realtimeEvent.findFirst.mockResolvedValue(null);
+
+      const events = await service.getEventsSince('latest');
+
+      expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
+        where: {},
+        orderBy: { id: 'asc' },
+      });
+      expect(events).toEqual([]);
+    });
+
     it('DB 行映射为事件帧：createdAt → ISO8601 timestamp', async () => {
       prisma.realtimeEvent.findMany.mockResolvedValue([
         row(

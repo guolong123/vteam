@@ -38,6 +38,8 @@ interface SharedConnection {
   refCount: number;
   /** 连接级游标：断线重建时拼 since=<lastId> 补拉，补拉事件重放给全部订阅者。 */
   lastId: string;
+  /** 首连是否跳过历史重放（连接级语义，由首个订阅者创建连接时决定）。 */
+  skipHistory: boolean;
   retryTimer: ReturnType<typeof setTimeout> | null;
   closeTimer: ReturnType<typeof setTimeout> | null;
 }
@@ -85,11 +87,17 @@ export function matchesScope(ev: SSEEvent<unknown>, scopeStr?: string): boolean 
   });
 }
 
-/** 建立 / 重建连接（重连 URL 携带连接级 lastId 补拉断线期事件）。 */
+/** 建立 / 重建连接（首连按 skipHistory 决定是否跳过历史；重连 URL 携带连接级 lastId 补拉断线期事件）。 */
 function connect(conn: SharedConnection): void {
   const token = conn.key.split("|")[0];
   const params = new URLSearchParams({ token, scope: "all" });
-  if (conn.lastId) params.set("since", conn.lastId);
+  if (conn.lastId) {
+    params.set("since", conn.lastId);
+  } else if (conn.skipHistory) {
+    // 首连跳过历史重放：since=latest 令服务端仅推送连接时刻之后的新事件
+    // （历史数据由各页 REST 加载，SSE 只负责实时增量，见 useSSE 文档）
+    params.set("since", "latest");
+  }
 
   conn.es = new EventSource(`/api/v1/events?${params.toString()}`);
 
@@ -132,15 +140,22 @@ export interface UseSSEOptions<T = unknown> {
   onEvent: (event: SSEEvent<T>) => void;
   /** 是否启用连接，默认 true。false 时不注册订阅。 */
   enabled?: boolean;
+  /** 首连是否跳过历史重放（默认 true）：true 时首连 URL 携带 since=latest，
+   *  服务端仅从连接时刻开始推送新事件（历史由各页 REST 加载，SSE 仅实时增量，
+   *  避免首连重放全部历史事件触发整页缓存失效刷请求）；断线重连仍按连接级
+   *  lastId 补拉断线期事件。连接为全站单例，连接级行为由首个订阅者创建时决定。 */
+  skipHistory?: boolean;
 }
 
 /**
  * 前端 SSE 订阅 hook（Phase 2 实时更新基础设施，全站单例连接）。
  *
- * 连接：GET /api/v1/events?token=<authToken>&scope=all&since=<lastId>
+ * 连接：GET /api/v1/events?token=<authToken>&scope=all&since=<lastId|latest>
  *  - token 通过 query 传递（EventSource 无法设置 header），走 next.config 同源代理
  *  - scope 恒为 all（全量订阅 + 后端按用户可见项目过滤权限）；
  *    options.scope 仅作前端过滤规则（见 matchesScope），语义从「URL scope」变为「过滤规则」
+ *  - 首连默认 since=latest（skipHistory 可关）：服务端跳过历史重放，仅推送连接时刻之后的新事件，
+ *    避免首连重放全部历史触发各页缓存失效刷请求；历史数据由各页 REST 加载，SSE 只做实时增量
  *  - 原生 EventSource 自动重连不带 since 补拉（服务端只读 ?since=），
  *    故 onerror 时关闭并按固定延迟重建，URL 显式携带连接级游标补拉断线期事件
  *
@@ -151,7 +166,7 @@ export interface UseSSEOptions<T = unknown> {
  * 新连接按新 token 建立；enabled=false / !token 时不注册。
  */
 export function useSSE<T = unknown>(options: UseSSEOptions<T>): void {
-  const { onEvent, enabled = true } = options;
+  const { onEvent, enabled = true, skipHistory = true } = options;
   const token = useAuthStore((s) => s.token);
 
   // 回调与过滤规则存 ref：父组件 re-render 不重建连接、不重注册 listener
@@ -172,6 +187,7 @@ export function useSSE<T = unknown>(options: UseSSEOptions<T>): void {
         listeners: new Set(),
         refCount: 0,
         lastId: "",
+        skipHistory,
         retryTimer: null,
         closeTimer: null,
       };

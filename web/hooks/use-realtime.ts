@@ -147,6 +147,8 @@ export interface UseRealtimeEventsOptions {
   scope?: string;
   /** 是否启用连接（透传 useSSE），默认 true。 */
   enabled?: boolean;
+  /** 首连是否跳过历史重放（透传 useSSE，默认 true）：历史由 REST 加载，SSE 仅实时增量。 */
+  skipHistory?: boolean;
   /** chat.message.new：默认已追加消息缓存，回调供页面额外处理（如滚动到底）。 */
   onMessage?: (payload: ChatMessageEvent, event: SSEEvent<ChatMessageEvent>) => void;
   /** task.status.changed：默认已 invalidate ['tasks']，回调供页面额外处理。 */
@@ -173,6 +175,7 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
   const {
     scope,
     enabled = true,
+    skipHistory = true,
     onMessage,
     onTaskStatusChanged,
     onAgentLoading,
@@ -187,6 +190,7 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
   useSSE<unknown>({
     scope: "all",
     enabled,
+    skipHistory,
     onEvent: (ev) => {
       if (!matchesScope(ev, scope)) return;
       switch (ev.type) {

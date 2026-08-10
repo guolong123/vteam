@@ -157,7 +157,9 @@ export class RealtimeService implements OnModuleInit {
 
   /**
    * 以 DB 为准返回 id 大于 since 的历史事件（断线续拉，09 篇 §4.4）。
-   * since 未指定时返回 scope 下的全部事件；scope 未指定时不过滤。
+   * since 未指定时返回 scope 下的全部事件；since === 'latest' 时跳过历史重放，
+   * 以当前最新已落库事件 id 为游标，仅返回其后新产生的事件（首连只订阅增量用，
+   * 连接建立期间的竞态事件由 controller 续拉缓冲 + 去重兜底）；scope 未指定时不过滤。
    * 多 scope 以 OR 组合查询（任一 scope 命中即返回）。
    */
   async getEventsSince(
@@ -169,7 +171,16 @@ export class RealtimeService implements OnModuleInit {
       scopes,
       visibleProjectIds,
     );
-    if (since !== undefined && since !== null && since !== '') {
+    if (since === 'latest') {
+      const latest = await this.prisma.realtimeEvent.findFirst({
+        orderBy: { id: 'desc' },
+        select: { id: true },
+      });
+      if (latest) {
+        where.id = { gt: latest.id };
+      }
+      // 库空（无最新 id）→ 不设 id 条件，findMany 自然返回空，仅收之后新事件
+    } else if (since !== undefined && since !== null && since !== '') {
       where.id = { gt: since };
     }
     const rows = await this.prisma.realtimeEvent.findMany({

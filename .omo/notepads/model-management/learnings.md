@@ -1041,3 +1041,22 @@ Tags: CONF-01, fake-models, syncFromWorkerCapabilities, resolveModels, stability
 - **验证**：`cd worker && npm run typecheck` **0 错误**；`npx jest`（worker 全量）**17 suites / 214 tests 全绿**（基线 212 + 新增 2）。未 docker build / 未部署 / 未跑浏览器（遵守执行范围）。
 - **遗留（orchestrator 统一负责）**：部署 + DB 清理（删除 18 个 deprecated 的 availability + 目录记录）由 orchestrator 完成；本修复保证后续注册 deprecated 不再回流。
 - **经验**：① serve `/api/model` 的 `status` 字段是模型可用性的**权威判据**（active/deprecated），CLI 显示 8 个 = 只过滤 active 的结果——数据源出口（driver.listModels）过滤是唯一收敛点，server 侧清理/worker 侧稳定性都是下游防御；② 过滤时 `status === undefined` 视为可用保留是必要的兼容分支（旧 serve 版本无该字段，严格 `=== 'active'` 会误杀全部模型导致 capabilities.models 恒空）。
+
+---
+
+## SSE 首连历史重放刷请求修复（2026-08-10，代码 + tsc + 单 spec 验证完成，未部署）
+
+- **问题（用户实测）**：进入看板/任务页触发数百次 `GET /projects/:pid/tasks?page=1&pageSize=100`。
+- **根因（docker 实测确认）**：
+  1. **server** `realtime.service.getEventsSince`（realtime.service.ts）：`since` 未传时返回**全部历史事件**（实测 ev_17~374，含 145 个 task.status.changed + 142 个 chat.message.new）。
+  2. **前端 useSSE**（web/hooks/use-sse.ts:90-94）：首连 `conn.lastId` 为空 → **不传 since** → server 重放全部历史 → `onmessage` 逐条分发。
+  3. **前端 useRealtimeEvents**（use-realtime.ts:202）：每个历史 `task.status.changed` 都 `invalidateQueries(["tasks"])` → 145 次 invalidate → 看板/详情页刷几百个请求。调用方：board（useSSE scope=global）、tasks/[id] + messages/[id] + artifacts（useRealtimeEvents）——**全部都不需要历史重放**（数据从 REST 加载，SSE 仅实时增量）。
+- **修复（方案 C：server 特殊值 + 方案 A 前端选项组合）**：
+  1. **server** `getEventsSince` 支持 `since === 'latest'` 特殊值：先 `findFirst({orderBy:{id:'desc'},select:{id:true}})` 查当前最新已落库事件 id 为游标，`where.id = { gt: latest.id }` 仅返回其后新事件；库空不设 id 条件（findMany 自然返回空）。controller 原样透传 `since`（现有 `since !== ''` 判断已放行 'latest'），无需改 controller 逻辑，仅更新 `@ApiQuery` swagger 文档。连接建立期间的竞态事件由 controller 既有「续拉期 liveBuffer + 去重」兜底，不丢不重。
+  2. **前端 useSSE** 新增 `skipHistory?: boolean`（默认 **true**）：`SharedConnection` 增加 `skipHistory` 字段（连接级语义，由首个订阅者创建连接时决定，后订阅者共享）；`connect()` 首连 `lastId` 为空且 skipHistory 时 URL 携带 `since=latest`，断线重连仍用 `conn.lastId` 补拉（保留既有逻辑）。`skipHistory` 只在首次建立连接时读取，不进 useEffect 依赖（与 scope 的 ref 机制不同——scope 需每次过滤读最新，skipHistory 仅建立时用一次）。
+  3. **前端 useRealtimeEvents** `UseRealtimeEventsOptions` 增加 `skipHistory?: boolean`（默认 true）透传 useSSE。**4 个调用方零改动**（默认即跳过历史）。
+- **测试**：server realtime.service.spec 新增 2 用例——① `since=latest` 时 findFirst 查最新 id 并 findMany `gt` 该 id（mock findFirst 返回 ev_0000000004 → 断言仅返回 ev_0000000005）；② 库空（findFirst null）时不设 id 过滤（findMany where {} 自然空）。web 端 use-sse 无 spec 文件（glob 确认仅 use-sse.ts 本身），行为由「首连 URL 带 since=latest + 重连带 lastId」逻辑保证，无可测。
+- **验证**：`cd server && npx tsc --noEmit` **0 错误**；`npx jest src/realtime/realtime.service.spec.ts` **33/33 全绿**（基线 31 + 新增 2）；`cd web && npx tsc --noEmit` **0 错误**。未 docker build / 未部署 / 未起 dev server / 未跑浏览器 / 未跑全量 jest（遵守执行范围）。
+- **经验**：① SSE 首连「不传 since = 全量重放」是隐患——历史事件数量随运行时间线性增长，重放进 React Query 桥（invalidateQueries）会放大成请求风暴；「历史走 REST、SSE 只做增量」的原则下首连必须显式携带游标；② 断线补拉（since=<lastId>）与首连跳过历史（since=latest）是两个正交语义，前者对离线恢复有价值，后者是默认增量策略，二者可共存于同一 `since` 参数（特殊值 latest 不破坏既有游标语义）；③ 单例连接池的**连接级选项**（skipHistory）由首个订阅者决定、后订阅者共享，是比「每个订阅者各连各的」更省资源的正确粒度。
+
+Tags: SSE, realtime, history-replay, since=latest, skipHistory, request-storm, invalidateQueries

@@ -66,7 +66,7 @@ export class RealtimeController {
     name: 'since',
     required: false,
     description:
-      '断线续拉游标：返回 id 大于 since 的历史事件后续接实时流（对应 EventSource lastEventId）',
+      '断线续拉游标：返回 id 大于 since 的历史事件后续接实时流（对应 EventSource lastEventId）；特殊值 latest = 跳过历史重放，仅从连接时刻起推送新事件（首连只订阅增量用）',
   })
   async events(
     @Query('since') since?: string,
