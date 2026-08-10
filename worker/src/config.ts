@@ -35,6 +35,11 @@ export interface WorkerConfig {
   opencodeServeHostname: string;
   /** C2：worker 默认模型（env WORKER_DEFAULT_MODEL，id 格式 providerID/modelID）；未设 = 不指定（serve 默认） */
   defaultModelId?: string;
+  /**
+   * T10：执行端点端口（env WORKER_EXEC_PORT，node:http POST /execute，与 serve 端口解耦）。
+   * 随注册 capabilities.execPort 上报，server 据此发现执行端点；默认 4198。
+   */
+  workerExecPort: number;
 }
 
 /** 解析非负整数配置项；缺省/空串回落默认值，非法值抛错。 */
@@ -75,5 +80,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     workerAdvertiseHost: (env.WORKER_ADVERTISE_HOST ?? '').trim() || 'http://127.0.0.1',
     opencodeServeHostname: (env.OPENCODE_SERVE_HOSTNAME ?? '').trim() || '127.0.0.1',
     defaultModelId: (env.WORKER_DEFAULT_MODEL ?? '').trim() || undefined,
+    workerExecPort: parseNonNegativeInt('WORKER_EXEC_PORT', env.WORKER_EXEC_PORT, 4198),
   };
 }

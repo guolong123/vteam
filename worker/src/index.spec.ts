@@ -29,6 +29,7 @@ const CONFIG: WorkerConfig = {
   workerAdvertiseHost: 'http://worker',
   opencodeServeHostname: '127.0.0.1',
   defaultModelId: '',
+  workerExecPort: 4198,
 };
 
 describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
@@ -94,6 +95,15 @@ describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
   it('C2：models 为空数组时携带（已探测但无模型）；undefined（探测失败）不携带', async () => {
     expect((await buildCapabilities(4199, 'http://worker', undefined, [])).models).toEqual([]);
     expect((await buildCapabilities(4199, 'http://worker')).models).toBeUndefined();
+  });
+
+  it('T10：传入 execPort 时 capabilities 携带执行端点端口（server 据此发现执行端点）', async () => {
+    const caps = await buildCapabilities(4199, 'http://worker', undefined, undefined, 4198);
+    expect(caps.execPort).toBe(4198);
+  });
+
+  it('T10：execPort 未传（端点启动失败）时不携带（server 不连不可用端点）', async () => {
+    expect((await buildCapabilities(4199, 'http://worker')).execPort).toBeUndefined();
   });
 });
 
@@ -409,5 +419,33 @@ describe('buildRegisterOptions（T4c：重启后重新注册携带新端口）',
   it('C2：defaultModelId 未配置（空串）不携带', async () => {
     const opts = await buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version');
     expect(opts.defaultModelId).toBeUndefined();
+  });
+
+  it('T10：execPort 显式传入 → capabilities.execPort 上报（server 据此发现执行端点）', async () => {
+    const opts = await buildRegisterOptions(
+      CONFIG,
+      4199,
+      '1.18.15',
+      'cli-version',
+      undefined,
+      undefined,
+      4198,
+    );
+    expect(opts.capabilities.execPort).toBe(4198);
+  });
+
+  it('T10：execPort 缺省/undefined（端点启动失败）→ 注册不带 execPort', async () => {
+    const opts = await buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version');
+    expect(opts.capabilities.execPort).toBeUndefined();
+    const overridden = await buildRegisterOptions(
+      CONFIG,
+      4199,
+      '1.18.15',
+      'cli-version',
+      undefined,
+      undefined,
+      undefined,
+    );
+    expect(overridden.capabilities.execPort).toBeUndefined();
   });
 });

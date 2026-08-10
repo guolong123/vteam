@@ -34,6 +34,7 @@ import {
   WORKER_COMMAND_TYPES,
 } from './protocol/worker-protocol';
 import { OpencodeServer } from './runtime/opencode-server';
+import { ExecServer } from './exec/exec-server';
 import { InjectReport, ResourceInjector } from './resources/injector';
 import { RestartCoordinator } from './restart/restart-coordinator';
 import {
@@ -219,6 +220,8 @@ export async function resolveModels(
  * T9：接入注入器清单——skills 上报注入器实际注入的 skill 名，tools 合并内置 git 工具族
  * 与注入的自定义工具（去重）。
  * C2：models 为 serve 真实模型 id 列表（resolveModels 结果）；undefined（探测失败）不携带。
+ * T10：execPort 为执行端点端口（config.workerExecPort；端点启动失败时传 undefined 不上报，
+ * server 不会连到不可用端点）。
  * 异步化语义：与调用点（serve 就绪后）保持一致，供 registerCurrent/reRegister 链 await。
  */
 export async function buildCapabilities(
@@ -226,6 +229,7 @@ export async function buildCapabilities(
   advertiseHost: string,
   injected: InjectReport = EMPTY_INJECT_REPORT,
   models?: string[],
+  execPort?: number,
 ): Promise<WorkerCapabilities> {
   const base = advertiseHost.replace(/\/+$/, '');
   const tools = [...new Set([...GIT_TOOLS.map((tool) => tool.name), ...injected.tools])];
@@ -236,6 +240,7 @@ export async function buildCapabilities(
     port: port ?? undefined,
     baseUrl: port !== null ? `${base}:${port}` : undefined,
     ...(models !== undefined ? { models } : {}),
+    ...(execPort !== undefined ? { execPort } : {}),
   };
 }
 
@@ -254,8 +259,9 @@ export async function buildRegisterOptions(
   cliVersion: string,
   injected: InjectReport = EMPTY_INJECT_REPORT,
   models?: string[],
+  execPort?: number,
 ): Promise<RegistryClientOptions> {
-  const capabilities = await buildCapabilities(port, config.workerAdvertiseHost, injected, models);
+  const capabilities = await buildCapabilities(port, config.workerAdvertiseHost, injected, models, execPort);
   return {
     serverUrl: config.serverUrl,
     workerToken: config.workerToken,
@@ -330,6 +336,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         opencodeVersion,
         lastInjectReport,
         models,
+        execPort,
       ),
       { logger: { warn: (message: string) => console.warn(`[worker] ${message}`) } },
     ).catch((err: Error) => {
@@ -465,6 +472,17 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     workerToken: config.workerToken,
   });
 
+  // T10：执行端点——独立 HTTP server（node:http，POST /execute，固定端口
+  // WORKER_EXEC_PORT 默认 4198），与 serve 端口解耦；随注册 capabilities.execPort
+  // 上报，server 据此发现执行端点下发 prompt（方案 A：worker 主动推）。
+  const execServer = new ExecServer({
+    port: config.workerExecPort,
+    driver,
+    sender: eventSender,
+  });
+  // T10：执行端点上报端口（start 成功 = 实际监听端口；失败置 undefined，注册不带 execPort）
+  let execPort: number | undefined = config.workerExecPort;
+
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   const stopHeartbeat = (): void => {
     if (heartbeatTimer !== null) {
@@ -486,6 +504,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       try {
         stopHeartbeat();
         await eventSender.flush();
+        await execServer.stop();
         if (serveServer.isRunning) {
           await serveServer.stop();
         }
@@ -522,6 +541,20 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       // T4：serve 就绪后注入实际 baseUrl（随机端口场景，driver 后续请求才有目标地址）
       driver.baseUrl = baseUrl;
       console.log(`[worker] opencode serve 就绪: ${baseUrl} (pid=${serveServer.pid})`);
+
+      // T10：执行端点启动（node:http POST /execute，固定端口）。失败仅记录日志并
+      // 置 execPort=undefined（注册不带 execPort，server 不会连到不可用端点），
+      // 不阻断 serve/注册/心跳主链。
+      try {
+        const bound = await execServer.start();
+        execPort = bound;
+        console.log(`[worker] 执行端点就绪: POST http://127.0.0.1:${bound}/execute`);
+      } catch (err) {
+        execPort = undefined;
+        console.warn(
+          `[worker] 执行端点启动失败（capabilities 不报 execPort）: ${(err as Error).message}`,
+        );
+      }
 
       // T6 注册（X-Worker-Token）：失败指数退避重试（1s/2s/4s/8s...封顶 30s），
       // 重试耗尽仍失败 → 清理 serve 进程组并退出（无法成为可用 worker）。

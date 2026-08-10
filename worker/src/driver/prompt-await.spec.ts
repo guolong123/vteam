@@ -17,6 +17,7 @@ import {
   aggregateText,
   findFinish,
   CompletionTimeoutError,
+  MessageDeltaTracker,
 } from './prompt-await';
 import { V1Driver, ServeMessage, ServePart } from './v1-driver';
 
@@ -180,5 +181,51 @@ describe('sendAndAwait', () => {
     const result = await sendAndAwait(driver, 'ses_1', input, { timeoutMs: 1000, pollMs: 5 });
     expect(sendMessage).toHaveBeenCalledWith('ses_1', input);
     expect(result.text).toBe('ok');
+  });
+});
+
+describe('MessageDeltaTracker（T10：增量上送去重）', () => {
+  it('首次轮询：返回全部消息的 parts（按消息扁平拼接）', () => {
+    const tracker = new MessageDeltaTracker();
+    const msgs = [
+      asstMsg('a1', [textPart('A', 100)]),
+      asstMsg('a2', [textPart('B', 200), textPart('C', 300)]),
+    ];
+    const fresh = tracker.extractNewParts(msgs);
+    expect(fresh).toHaveLength(3);
+    expect(fresh.map((p) => p.text)).toEqual(['A', 'B', 'C']);
+  });
+
+  it('同消息重复轮询：不重复上送（serve 累积列表，按消息 id 去重）', () => {
+    const tracker = new MessageDeltaTracker();
+    const msg = asstMsg('a1', [textPart('A', 100)]);
+    expect(tracker.extractNewParts([msg])).toHaveLength(1);
+    expect(tracker.extractNewParts([msg])).toHaveLength(0);
+    expect(tracker.extractNewParts([msg])).toHaveLength(0);
+  });
+
+  it('后续轮询出现新消息：只送新增消息的 parts', () => {
+    const tracker = new MessageDeltaTracker();
+    tracker.extractNewParts([asstMsg('a1', [textPart('A', 100)])]);
+    const fresh = tracker.extractNewParts([
+      asstMsg('a1', [textPart('A', 100)]),
+      asstMsg('a2', [textPart('B', 200)]),
+    ]);
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]?.text).toBe('B');
+  });
+
+  it('消息无 id 的条目跳过（不参与去重也不上送）', () => {
+    const tracker = new MessageDeltaTracker();
+    const noId = { info: { id: '', role: 'assistant' }, parts: [textPart('X', 1)] } as ServeMessage;
+    expect(tracker.extractNewParts([noId])).toHaveLength(0);
+  });
+
+  it('reset 清空已上送集合（多轮执行复用实例时隔离）', () => {
+    const tracker = new MessageDeltaTracker();
+    const msg = asstMsg('a1', [textPart('A', 100)]);
+    expect(tracker.extractNewParts([msg])).toHaveLength(1);
+    tracker.reset();
+    expect(tracker.extractNewParts([msg])).toHaveLength(1);
   });
 });

@@ -156,3 +156,32 @@ export async function sendAndAwait(
   await driver.sendMessage(sessionID, input);
   return awaitCompletion(driver, sessionID, options);
 }
+
+/**
+ * T10：消息增量去重——挂在 awaitCompletion 的 onPoll 上提取「新增消息」的 parts。
+ * serve 轮询返回整个会话的**累积列表**（非增量），同一 message id 在后续轮询中
+ * 可能被逐步补全 parts；本辅助按 message id 粗粒度去重（任务约定：与上次已上送
+ * 的消息 id 对比，只送新增），保证 message.part.delta 事件不重复上送整批历史。
+ */
+export class MessageDeltaTracker {
+  private readonly sentIds = new Set<string>();
+
+  /** 返回本轮 messages 中此前未上送过的消息的 parts（扁平拼接）；无新增返回空数组。 */
+  extractNewParts(messages: ServeMessage[]): ServePart[] {
+    const fresh: ServePart[] = [];
+    for (const m of messages) {
+      const id = m.info?.id;
+      if (!id || this.sentIds.has(id)) {
+        continue;
+      }
+      this.sentIds.add(id);
+      fresh.push(...(m.parts ?? []));
+    }
+    return fresh;
+  }
+
+  /** 重置已上送集合（多轮执行复用同一实例时隔离）。 */
+  reset(): void {
+    this.sentIds.clear();
+  }
+}

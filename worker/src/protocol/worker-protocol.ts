@@ -46,6 +46,11 @@ export interface WorkerCapabilities {
    * 对齐 server worker.client.ts resolveBaseUrl：capabilities.baseUrl 优先于 port。
    */
   baseUrl?: string;
+  /**
+   * T10：worker 执行端点端口（POST /execute，node:http 独立监听，env WORKER_EXEC_PORT 默认 4198）。
+   * 随注册上报——server 据此发现 worker 执行端点（方案 A：server 下发 prompt → worker 驱动 serve 主动上送事件）。
+   */
+  execPort?: number;
 }
 
 /** 负载快照（对齐 schema Worker.load Json 与 server WorkerLoadDto）。 */
