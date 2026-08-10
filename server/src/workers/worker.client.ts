@@ -29,6 +29,12 @@ export class WorkerUnavailableException extends ServiceUnavailableException {
 
 /** opencode serve 默认地址（计划 D2：随机端口，`--port 0` 时未知 → 约定默认 4199）。 */
 export const DEFAULT_WORKER_BASE_URL = 'http://localhost:4199';
+/**
+ * 方案 A：worker 执行端点默认端口（对齐 worker config WORKER_EXEC_PORT=4198）。
+ * 执行端点是独立于 serve 的 node:http 端口（POST /execute），server 侧在
+ * capabilities.execBaseUrl 缺失时以 serve 基址 origin + ':' + execPort 拼接发现。
+ */
+export const DEFAULT_EXEC_PORT = 4198;
 /** 单次 HTTP 请求超时：prompt_async 为异步 204 快速返回，getMessages 轮询稍慢，15s 兜底防悬挂。 */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -60,6 +66,31 @@ export interface WorkerModel {
   name: string;
   providerID: string;
   modelID: string;
+}
+
+/**
+ * 方案 A：POST /execute 请求体（对齐 worker exec-server.ts ExecuteRequestPayload）。
+ * worker 执行端点收到后立即 202 {accepted:true}（fire-and-forget），异步驱动 serve 并
+ * 上送事件（session.updated/message.part.delta/task.completed/agent.status）；回复经
+ * server ingress 回流落库，本客户端只保证「已受理」。
+ */
+export interface ExecuteOptions {
+  /** 消息 parts（必填，透传 worker 执行端点）。 */
+  parts: unknown[];
+  /** 模型选择（opencode serve 格式 { providerID, modelID }）。 */
+  model?: { providerID: string; modelID: string } | null;
+  /** opencode agent 名（可选，缺省 serve 默认 agent）。 */
+  agent?: string;
+  /** 工作目录。 */
+  directory?: string;
+  /** 平台 Task 主键（t_ 前缀），事件回流透传。 */
+  taskId?: string;
+  /** Agent id（a_ 前缀），事件回流透传。 */
+  agentId?: string;
+  /** 消息来源频道 id，事件回流透传（server 据此群聊优先回结论）。 */
+  channelId?: string;
+  /** opencode 会话 id（ses_ 前缀，复用 serve 会话）；缺省则 worker 执行端点新建。 */
+  sessionId?: string;
 }
 
 /**
@@ -154,6 +185,34 @@ export class WorkerClient {
   }
 
   /**
+   * 方案 A：POST /execute（worker 独立执行端点，fire-and-forget，202 accepted 即成功）。
+   * - URL：capabilities.execBaseUrl（完整执行端点基址）→ 否则 serve 基址 origin + ':' +
+   *   capabilities.execPort（缺省 DEFAULT_EXEC_PORT=4198）拼接——执行端点与 serve 是
+   *   不同端口（worker 独立 node:http 监听），不能复用 serve baseUrl 直连；
+   * - body：完整 ExecuteOptions（parts/model/agent/directory/taskId/agentId/channelId/
+   *   sessionId），事件回流经 ingress 落库，server 不再自持轮询。
+   */
+  async execute(worker: WorkerEndpointRef, opts: ExecuteOptions): Promise<void> {
+    const res = await this.requestExec(worker, '/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...(opts.model ? { model: { ...opts.model } } : {}),
+        ...(opts.agent ? { agent: opts.agent } : {}),
+        ...(opts.taskId ? { taskId: opts.taskId } : {}),
+        ...(opts.agentId ? { agentId: opts.agentId } : {}),
+        ...(opts.channelId ? { channelId: opts.channelId } : {}),
+        ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+        ...(opts.directory ? { directory: opts.directory } : {}),
+        parts: opts.parts,
+      }),
+    });
+    if (!res.ok) {
+      throw new WorkerUnavailableException(worker.id, `execute HTTP ${res.status}`);
+    }
+  }
+
+  /**
    * GET /api/model：动态模型列表（实测 opencode 1.18.x 端点，返回
    * `{ location, data: [{id, providerID, family, name, ...}] }`）。
    * 旧版 serve 无该端点（404）→ 回退 capabilities.models（T11 之前由 worker 上报）或空数组。
@@ -220,12 +279,33 @@ export class WorkerClient {
     }
   }
 
-  /** 统一请求入口：拼 baseUrl、注入 Basic Auth、超时控制、错误归类。 */
+  /** 统一请求入口：拼 serve baseUrl、注入 Basic Auth、超时控制、错误归类。 */
   private async request(
     worker: WorkerEndpointRef,
     path: string,
     init: RequestInit = {},
     timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
+  ): Promise<Response> {
+    return this.requestToUrl(this.resolveBaseUrl(worker), worker.id, path, init, timeoutMs);
+  }
+
+  /** 执行端点请求入口（方案 A：与 serve 不同端口，独立解析执行端点基址）。 */
+  private async requestExec(
+    worker: WorkerEndpointRef,
+    path: string,
+    init: RequestInit = {},
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
+  ): Promise<Response> {
+    return this.requestToUrl(this.resolveExecBaseUrl(worker), worker.id, path, init, timeoutMs);
+  }
+
+  /** 核心请求：指定 baseUrl + 注入 Basic Auth + 超时控制 + 错误归一（503 带 workerId）。 */
+  private async requestToUrl(
+    baseUrl: string,
+    workerId: string,
+    path: string,
+    init: RequestInit,
+    timeoutMs: number,
   ): Promise<Response> {
     const headers = new Headers(init.headers);
     const auth = this.buildAuthHeader();
@@ -235,13 +315,13 @@ export class WorkerClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      return await fetch(`${this.resolveBaseUrl(worker)}${path}`, {
+      return await fetch(`${baseUrl}${path}`, {
         ...init,
         headers,
         signal: controller.signal,
       });
     } catch (err) {
-      throw new WorkerUnavailableException(worker.id, this.describeError(err));
+      throw new WorkerUnavailableException(workerId, this.describeError(err));
     } finally {
       clearTimeout(timer);
     }
@@ -257,6 +337,46 @@ export class WorkerClient {
       return `http://localhost:${caps.port}`;
     }
     return this.baseUrlFallback;
+  }
+
+  /**
+   * 执行端点基址解析（方案 A）：capabilities.execBaseUrl（完整基址，如
+   * `http://worker:4198`）优先 → 否则 serve 基址 origin + ':' + capabilities.execPort
+   * （缺省 DEFAULT_EXEC_PORT=4198）拼接。执行端点与 serve 是不同端口（worker 独立
+   * node:http 监听），不能复用 serve baseUrl 直连。
+   */
+  private resolveExecBaseUrl(worker: WorkerEndpointRef): string {
+    const caps = (worker.capabilities ?? {}) as Record<string, unknown>;
+    if (typeof caps.execBaseUrl === 'string' && caps.execBaseUrl) {
+      return caps.execBaseUrl.replace(/\/+$/, '');
+    }
+    const execPort =
+      typeof caps.execPort === 'number' && caps.execPort > 0
+        ? caps.execPort
+        : DEFAULT_EXEC_PORT;
+    return `${this.resolveServeOrigin(worker)}:${execPort}`;
+  }
+
+  /** serve 基址 origin（protocol://host，不含端口）：baseUrl → capabilities.port → 回退。 */
+  private resolveServeOrigin(worker: WorkerEndpointRef): string {
+    const caps = (worker.capabilities ?? {}) as Record<string, unknown>;
+    const raw =
+      typeof caps.baseUrl === 'string' && caps.baseUrl
+        ? caps.baseUrl
+        : typeof caps.port === 'number'
+          ? `http://localhost:${caps.port}`
+          : this.baseUrlFallback;
+    try {
+      const url = new URL(raw);
+      if (url.hostname) {
+        return `${url.protocol}//${url.hostname}`;
+      }
+    } catch {
+      // 落入下方裸 host 分支
+    }
+    const noScheme = raw.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '');
+    const host = noScheme.split('/')[0].split(':')[0];
+    return `http://${host}`;
   }
 
   /** Basic Auth 头：password 为空（默认）→ 不鉴权；否则 `Basic base64(opencode:<password>)`。 */

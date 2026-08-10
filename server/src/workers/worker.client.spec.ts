@@ -1,5 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import {
+  DEFAULT_EXEC_PORT,
   DEFAULT_REQUEST_TIMEOUT_MS,
   WorkerClient,
   WorkerUnavailableException,
@@ -146,6 +147,99 @@ describe('WorkerClient', () => {
       await expect(
         client.promptAsync(worker, 'ses_1', { parts: [] }),
       ).rejects.toMatchObject({ workerId: 'w_00001' });
+    });
+  });
+
+  describe('execute（方案 A：worker 执行端点 POST /execute）', () => {
+    const execWorker = {
+      id: 'w_1',
+      capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 },
+    };
+
+    it('202 → resolve；URL = serve origin + execPort 拼接，body 含完整 payload', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ ok: true, status: 202 }));
+
+      await expect(
+        client.execute(execWorker, {
+          parts: [{ type: 'text', text: 'hi' }],
+          model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+          agent: 'build',
+          directory: '/tmp/tasks/t_1',
+          taskId: 't_1',
+          agentId: 'a_1',
+          channelId: 'c_1',
+          sessionId: 'ses_1',
+        }),
+      ).resolves.toBeUndefined();
+
+      const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('http://worker:4198/execute');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(String(init.body))).toEqual({
+        model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+        agent: 'build',
+        taskId: 't_1',
+        agentId: 'a_1',
+        channelId: 'c_1',
+        sessionId: 'ses_1',
+        directory: '/tmp/tasks/t_1',
+        parts: [{ type: 'text', text: 'hi' }],
+      });
+    });
+
+    it('capabilities.execBaseUrl 优先（worker 上报完整执行端点基址，绕过拼接）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ ok: true, status: 202 }));
+      const workerWithExecBase = {
+        id: 'w_1',
+        capabilities: { execBaseUrl: 'http://worker:4198' },
+      };
+
+      await client.execute(workerWithExecBase, { parts: [{ type: 'text', text: 'x' }] });
+
+      const [url] = mockFetch.mock.calls[0] as [string];
+      expect(url).toBe('http://worker:4198/execute');
+    });
+
+    it('execPort 缺失 → 缺省 4198（对齐 worker WORKER_EXEC_PORT）；仅 parts 也 2xx', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ ok: true, status: 202 }));
+      const workerNoExecPort = { id: 'w_1', capabilities: { baseUrl: 'http://worker:46267' } };
+
+      await client.execute(workerNoExecPort, { parts: [{ type: 'text', text: 'x' }] });
+
+      const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(`http://worker:${DEFAULT_EXEC_PORT}/execute`);
+      expect(JSON.parse(String(init.body))).toEqual({ parts: [{ type: 'text', text: 'x' }] });
+    });
+
+    it('baseUrl 缺失 → WORKER_BASE_URL 回退 origin 拼接 execPort', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ ok: true, status: 202 }));
+
+      await client.execute(worker, { parts: [{ type: 'text', text: 'x' }] });
+
+      const [url] = mockFetch.mock.calls[0] as [string];
+      expect(url).toBe(`http://localhost:${DEFAULT_EXEC_PORT}/execute`);
+    });
+
+    it('HTTP 非 2xx → WorkerUnavailableException（503，带 workerId）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ ok: false, status: 500 }));
+
+      await expect(
+        client.execute(execWorker, { parts: [] }),
+      ).rejects.toMatchObject({ workerId: 'w_1', status: 503 });
+    });
+
+    it('fetch 抛错 → WorkerUnavailableException（503，带 workerId）', async () => {
+      const client = makeClient();
+      mockFetch.mockRejectedValue(new TypeError('ECONNREFUSED'));
+
+      await expect(
+        client.execute(execWorker, { parts: [] }),
+      ).rejects.toMatchObject({ workerId: 'w_1', status: 503 });
     });
   });
 

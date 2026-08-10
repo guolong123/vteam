@@ -401,7 +401,8 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
    *   首次 bind（instanceRef 占位 pending）→ 2 查 Worker 行（capabilities）→
    *   3 Agent.defaultModelId → {providerID, modelID} → 4 doclib 上下文注入拼 prompt →
    *   5 loading(thinking) → 6 createSession（未创建时）→ bind 更新真实 instanceRef →
-   *   7 promptAsync → 8 loading(operating) + 回流超时 watchdog。
+   *   7 execute（方案 A：调 worker 执行端点 POST /execute，202 即成功，不启动自持轮询）→
+   *   8 loading(operating) + 回流超时 watchdog。
    */
   private async dispatchForTarget(
     request: DispatchRequest,
@@ -546,61 +547,29 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       }
     }
 
-    // F3 MAJOR-1 残留修复（基线时序）：在 promptAsync **之前**取 poll 基线 cursor。
-    // 根因：promptAsync 返回 204 后 ~58ms serve 即创建本次回复的 assistant 占位消息
-    // （parts=[]）；若首轮基线在 promptAsync 之后取，lastId 恰好落在占位上 →
-    // messagesAfter(cursor) 永空 → 永不命中 step-finish（m_37 120s 超时）。前置取基线时
-    // serve 尚未创建占位，cursor 落在上一轮最后一条消息（复用会话）或 null（首次会话，
-    // messagesAfter(null) 返回全部，对齐 F3 首次链路不回归）。
-    // getMessages 失败（worker 暂不可达）→ 传 undefined（未提供）→ 轮询回退既有游标/
-    // 兜底首轮自取（跳过空占位，见 baselineId），不阻断 dispatch。
-    let baselineCursor: string | null | undefined;
-    try {
-      const preMessages = await this.workerClient.getMessages(worker, opencodeSessionId);
-      baselineCursor = this.lastMessageId(preMessages);
-    } catch (err) {
-      this.logger.warn(
-        `agent ${target.agentId} 前置基线 getMessages 失败，轮询将兜底自取基线: ${this.describeError(err)}`,
-      );
-      baselineCursor = undefined;
-    }
-
-    // 7. 下发 prompt（fire-and-forget，worker 异步处理；回复经自持轮询/ingress 回流）。
+    // 7. 下发执行（方案 A：fire-and-forget 调 worker 执行端点 POST /execute，202 accepted
+    // 即成功——worker 异步驱动 serve 并上送事件；回复经 ingress task.completed 回流
+    // （handleTaskCompleted 落库+广播+emitFinal），server 不再自持轮询。
+    // 自持轮询 pollForCompletion 方案 A 后不再调用（代码保留作兜底/测试，见方法注释）。
     // F3 MINOR-3：工作目录隔离——directory 指向任务级独立工作目录
     // （<WORK_DIR>/tasks/<taskId>，mkdir -p 保证存在），防模型在仓库根写文件污染（F4）。
     const taskWorkDir = await this.ensureTaskWorkDir(taskId);
-    await this.workerClient.promptAsync(worker, opencodeSessionId, {
-      model,
+    await this.workerClient.execute(worker, {
       parts: [{ type: 'text', text: prompt }],
+      model,
       directory: taskWorkDir,
+      taskId,
+      agentId: target.agentId,
+      channelId: request.channelId,
+      sessionId: opencodeSessionId,
     });
 
     // F3 MAJOR-1：新一轮 dispatch 重置该会话的幂等/失败标记——复用同一 sessionId 时，
     // 上一轮已落库（completedSessions）或超时（failedSessions）的标记会阻塞本轮回复
     // 回流（静默失败，F3 QA 实测）。重置后本轮回复可重新落库；completedSessions 仍
-    // 防同一轮 ingress/轮询双通道双写（双通道竞态发生在重置之后，防护不破坏）。
+    // 防同一轮 ingress 双通道双写（方案 A 后唯一回流通道，防护不破坏）。
     this.completedSessions.delete(target.sessionId);
     this.failedSessions.delete(target.sessionId);
-
-    // F2 C1（CRITICAL）：自持轮询完成判定——server 侧主动拉取 getMessages，命中
-    // step-finish(reason=stop) → handleTaskCompleted 落库+广播+emitFinal（不依赖 worker
-    // 侧 EventSender 上送 task.completed——当前无生产代码产生该事件）。与 ingress 回调
-    // 双通道经 completedSessions 幂等。baselineCursor = promptAsync 前基线（F3 残留修复）。
-    void this.pollForCompletion({
-      worker,
-      opencodeSessionId,
-      taskId,
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      // F4 回流频道透传：消息来源频道（request.channelId）随轮询回流带至
-      // handleTaskCompleted，resolveChannel 群聊优先——用户在群聊频道 @agent 时
-      // 回复回流群聊而非 DM（此前仅靠 taskId+agentId 猜测频道 → 落 DM 的 Bug）。
-      channelId: request.channelId,
-      startedAt: Date.now(), // F3 MINOR-3：首字延迟统计起点（prompt 下发后）
-      baselineCursor,
-    }).catch((err: unknown) =>
-      this.logger.error(`自持轮询异常: ${this.describeError(err)}`),
-    );
 
     // 8. loading(operating)（工具执行阶段，FR-20）→ 回流超时 watchdog
     await this.realtime.broadcast(
@@ -808,6 +777,8 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
    * 时不误命中上一次会话的 step-finish）→ handlePolledCompletion 落库+广播+emitFinal。
    * 默认超时（dispatchTimeoutMs）→ failedSessions 标记防迟到回流；emitError 由 watchdog
    * 统一触发（避免双 emitError）。
+   * ⚠️ 方案 A：dispatch 主链路已切换为调 worker 执行端点 POST /execute + ingress 事件回流，
+   * **dispatch 不再调用本方法**。本方法保留仅作兜底/测试路径（单测直接调用验证轮询语义）。
    */
   private async pollForCompletion(params: {
     worker: WorkerEndpointRef;

@@ -49,6 +49,7 @@ describe('WorkerDispatcher', () => {
     createSession: jest.Mock;
     promptAsync: jest.Mock;
     getMessages: jest.Mock;
+    execute: jest.Mock;
   };
   let sessionLifecycle: { bindSessionToWorker: jest.Mock; unbindSession: jest.Mock };
   let artifactsService: { onArtifactSubmitted: jest.Mock };
@@ -115,6 +116,8 @@ describe('WorkerDispatcher', () => {
       promptAsync: jest.fn().mockResolvedValue(undefined),
       // F2 C1：dispatch 启动自持轮询（后台），默认永不完成（[]）→ 超时路径不进断言
       getMessages: jest.fn().mockResolvedValue([]),
+      // 方案 A：dispatch 调 worker 执行端点 POST /execute（202 即成功，fire-and-forget）
+      execute: jest.fn().mockResolvedValue(undefined),
     };
     sessionLifecycle = {
       bindSessionToWorker: jest.fn(),
@@ -227,15 +230,21 @@ describe('WorkerDispatcher', () => {
         { id: 'w_0000000001', capabilities: { maxInstances: 1 } },
         { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
       );
-      // 下发 prompt（parts text）
-      expect(workerClient.promptAsync).toHaveBeenCalledWith(
+      // 下发执行（方案 A：POST /execute，fire-and-forget，202 即成功；不再自持轮询）
+      expect(workerClient.execute).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_0000000001' }),
-        'ses_0001',
         expect.objectContaining({
           model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
           parts: [{ type: 'text', text: request.text }],
+          taskId: request.taskId,
+          agentId: 'a_product',
+          channelId: request.channelId,
+          sessionId: 'ses_0001',
         }),
       );
+      // 方案 A：dispatch 不再直连 serve（promptAsync 停用），不启动自持轮询
+      expect(workerClient.promptAsync).not.toHaveBeenCalled();
+      expect(workerClient.getMessages).not.toHaveBeenCalled();
     });
 
     it('loading 时序：thinking → operating 两阶段广播 + onLoading 回调', async () => {
@@ -286,6 +295,7 @@ describe('WorkerDispatcher', () => {
       ]);
       expect(workerClient.createSession).not.toHaveBeenCalled();
       expect(workerClient.promptAsync).not.toHaveBeenCalled();
+      expect(workerClient.execute).not.toHaveBeenCalled();
       expect(
         realtime.broadcast.mock.calls.some(
           (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
@@ -306,10 +316,14 @@ describe('WorkerDispatcher', () => {
       expect(workersService.assignWorker).not.toHaveBeenCalled();
       expect(workerClient.createSession).not.toHaveBeenCalled();
       expect(sessionLifecycle.bindSessionToWorker).not.toHaveBeenCalled();
-      expect(workerClient.promptAsync).toHaveBeenCalledWith(
+      expect(workerClient.execute).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_0000000001' }),
-        'ses_0001',
-        expect.anything(),
+        expect.objectContaining({
+          sessionId: 'ses_0001',
+          taskId: request.taskId,
+          agentId: 'a_product',
+          channelId: request.channelId,
+        }),
       );
     });
 
@@ -334,10 +348,9 @@ describe('WorkerDispatcher', () => {
       expect(sessionLifecycle.unbindSession).not.toHaveBeenCalled();
       expect(sessionLifecycle.bindSessionToWorker).not.toHaveBeenCalled();
       expect(workerClient.createSession).not.toHaveBeenCalled();
-      expect(workerClient.promptAsync).toHaveBeenCalledWith(
+      expect(workerClient.execute).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_0000000001' }),
-        'ses_0001',
-        expect.anything(),
+        expect.objectContaining({ sessionId: 'ses_0001' }),
       );
     });
 
@@ -377,14 +390,12 @@ describe('WorkerDispatcher', () => {
         'ses_online',
       );
       // 下发到新 worker 的新会话，不复用离线 worker 的旧会话
-      expect(workerClient.promptAsync).toHaveBeenCalledWith(
+      expect(workerClient.execute).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_online' }),
-        'ses_online',
-        expect.anything(),
+        expect.objectContaining({ sessionId: 'ses_online' }),
       );
-      expect(workerClient.promptAsync).not.toHaveBeenCalledWith(
+      expect(workerClient.execute).not.toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_offline' }),
-        expect.anything(),
         expect.anything(),
       );
     });
@@ -408,10 +419,9 @@ describe('WorkerDispatcher', () => {
 
       expect(sessionLifecycle.unbindSession).toHaveBeenCalledWith('s_0000000001');
       expect(workersService.assignWorker).toHaveBeenCalledTimes(1);
-      expect(workerClient.promptAsync).toHaveBeenCalledWith(
+      expect(workerClient.execute).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_online' }),
-        'ses_online',
-        expect.anything(),
+        expect.objectContaining({ sessionId: 'ses_online' }),
       );
     });
 
@@ -465,6 +475,7 @@ describe('WorkerDispatcher', () => {
       );
       expect(errors).toHaveLength(1);
       expect(workerClient.promptAsync).not.toHaveBeenCalled();
+      expect(workerClient.execute).not.toHaveBeenCalled();
     });
 
     it('F2 M5：残留 pending 绑定（上次分派中断）→ 视为未绑定重新分配 worker', async () => {
@@ -496,10 +507,9 @@ describe('WorkerDispatcher', () => {
         'w_fresh',
         'ses_fresh',
       );
-      expect(workerClient.promptAsync).toHaveBeenCalledWith(
+      expect(workerClient.execute).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'w_fresh' }),
-        'ses_fresh',
-        expect.anything(),
+        expect.objectContaining({ sessionId: 'ses_fresh' }),
       );
     });
 
@@ -522,11 +532,10 @@ describe('WorkerDispatcher', () => {
       expect(errors).toHaveLength(1);
       expect(errors[0]).toEqual(expect.objectContaining({ agentId: 'a_product' }));
       // 第二个目标正常下发
-      expect(workerClient.promptAsync).toHaveBeenCalledTimes(1);
-      expect(workerClient.promptAsync).toHaveBeenCalledWith(
+      expect(workerClient.execute).toHaveBeenCalledTimes(1);
+      expect(workerClient.execute).toHaveBeenCalledWith(
         expect.anything(),
-        'ses_0001',
-        expect.anything(),
+        expect.objectContaining({ sessionId: 'ses_0001' }),
       );
     });
   });
@@ -722,8 +731,10 @@ describe('WorkerDispatcher', () => {
 
       await d.dispatch(request);
 
-      const promptArgs = workerClient.promptAsync.mock.calls[0][2];
-      const promptText = promptArgs.parts[0].text as string;
+      const promptArgs = workerClient.execute.mock.calls[0][1] as {
+        parts: Array<{ text: string }>;
+      };
+      const promptText = promptArgs.parts[0].text;
       expect(promptText).toContain('<doclib>');
       expect(promptText).toContain('需求文档');
       expect(promptText).toContain('version="v3"');
@@ -738,7 +749,9 @@ describe('WorkerDispatcher', () => {
 
       await d.dispatch(request);
 
-      const promptText = workerClient.promptAsync.mock.calls[0][2].parts[0].text;
+      const promptText = (
+        workerClient.execute.mock.calls[0][1] as { parts: Array<{ text: string }> }
+      ).parts[0].text;
       expect(promptText).toBe(request.text);
     });
 
@@ -764,7 +777,9 @@ describe('WorkerDispatcher', () => {
 
       await d.dispatch(request);
 
-      const promptText = workerClient.promptAsync.mock.calls[0][2].parts[0].text as string;
+      const promptText = (
+        workerClient.execute.mock.calls[0][1] as { parts: Array<{ text: string }> }
+      ).parts[0].text;
       expect(promptText).toContain('<doclib>');
       expect(promptText).toMatch(/<\/doclib>\n\n你好，请处理/);
     });
@@ -1206,7 +1221,17 @@ describe('WorkerDispatcher', () => {
       const finals: unknown[] = [];
       d.onFinal((e) => finals.push(e));
 
-      await d.dispatch(request);
+      // 方案 A：dispatch 不再启动自持轮询——直接调 pollForCompletion 验证兜底/测试路径
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+        baselineCursor: null,
+      });
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
@@ -1256,7 +1281,17 @@ describe('WorkerDispatcher', () => {
         ]);
       const d = createDispatcher();
 
-      await d.dispatch(request);
+      // 方案 A：dispatch 不再启动自持轮询——直接调 pollForCompletion 验证兜底/测试路径
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+        baselineCursor: null,
+      });
       // ingress 通道先回流落库（poll 尚在 sleep 等待下一轮）
       await d.handleTaskCompleted({
         taskId: request.taskId,
@@ -1266,6 +1301,7 @@ describe('WorkerDispatcher', () => {
       });
       expect(prisma.message.create).toHaveBeenCalledTimes(1);
 
+      await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
@@ -1328,7 +1364,17 @@ describe('WorkerDispatcher', () => {
       const errors: unknown[] = [];
       d.onError((e) => errors.push(e));
 
-      await d.dispatch(request);
+      // 方案 A：dispatch 不再启动自持轮询——直接调 pollForCompletion 验证兜底/测试路径
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+        baselineCursor: null,
+      });
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
@@ -1369,7 +1415,17 @@ describe('WorkerDispatcher', () => {
       const errors: unknown[] = [];
       d.onError((e) => errors.push(e));
 
-      await d.dispatch(request);
+      // 方案 A：dispatch 不再启动自持轮询——直接调 pollForCompletion 验证兜底/测试路径
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+        baselineCursor: null,
+      });
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
@@ -1421,7 +1477,17 @@ describe('WorkerDispatcher', () => {
       const finals: unknown[] = [];
       d.onFinal((e) => finals.push(e));
 
-      await d.dispatch(request);
+      // 方案 A：dispatch 不再启动自持轮询——直接调 pollForCompletion 验证兜底/测试路径
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+        baselineCursor: null,
+      });
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
@@ -1479,7 +1545,17 @@ describe('WorkerDispatcher', () => {
         ]);
       const d = createDispatcher();
 
-      await d.dispatch(request);
+      // 方案 A：dispatch 不再启动自持轮询——直接调 pollForCompletion 验证兜底/测试路径
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+        baselineCursor: null,
+      });
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
@@ -1547,7 +1623,18 @@ describe('WorkerDispatcher', () => {
       const finals: unknown[] = [];
       d.onFinal((e) => finals.push(e));
 
-      await d.dispatch(request);
+      // 方案 A：dispatch 不再启动自持轮询——直接调 pollForCompletion 验证兜底/测试路径。
+      // baselineCursor='msg_1' 模拟 dispatch 前置基线（历史最后消息 id，见原注释）
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+        baselineCursor: 'msg_1',
+      });
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
@@ -1580,12 +1667,23 @@ describe('WorkerDispatcher', () => {
         ]);
       const d = createDispatcher();
 
-      await d.dispatch(request);
+      // 方案 A：dispatch 不再启动自持轮询——直接调 pollForCompletion 验证兜底/测试路径
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+        baselineCursor: null,
+      });
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
       expect(prisma.message.create).toHaveBeenCalledTimes(1);
 
       // 第二轮：复用同一 sessionId（completedSessions 已含 s_0000000001）。
+      // dispatch 重置幂等标记（方案 A 主链路只发 execute，回复经事件回流）；
       // poll 首轮（cursor=msg_1 已存在）无新消息 → 次轮出现新回复
       workerClient.getMessages
         .mockResolvedValueOnce([
@@ -1609,6 +1707,15 @@ describe('WorkerDispatcher', () => {
           },
         ]);
       await d.dispatch(request);
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+      });
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
@@ -1661,7 +1768,19 @@ describe('WorkerDispatcher', () => {
       const finals: unknown[] = [];
       d.onFinal((e) => finals.push(e));
 
-      await d.dispatch(request);
+      // 方案 A：dispatch 不再启动自持轮询——直接调 pollForCompletion 验证兜底/测试路径。
+      // baselineCursor='msg_1' 模拟 dispatch 前置基线（历史最后消息 id）
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+        baselineCursor: 'msg_1',
+      });
+      await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
@@ -1697,7 +1816,18 @@ describe('WorkerDispatcher', () => {
       const finals: unknown[] = [];
       d.onFinal((e) => finals.push(e));
 
-      await d.dispatch(request);
+      // 方案 A：dispatch 不再启动自持轮询——直接调 pollForCompletion 验证兜底/测试路径。
+      // baselineCursor=null（新会话无历史，等效 dispatch 前置基线取到 null）
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+        baselineCursor: null,
+      });
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
@@ -1748,7 +1878,17 @@ describe('WorkerDispatcher', () => {
         ]);
       const d = createDispatcher();
 
-      await d.dispatch(request);
+      // 方案 A：dispatch 不再启动自持轮询——直接调 pollForCompletion 验证兜底/测试路径
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+        baselineCursor: null,
+      });
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
@@ -1778,7 +1918,17 @@ describe('WorkerDispatcher', () => {
         ]);
       const d = createDispatcher();
 
-      await d.dispatch(request);
+      // 方案 A：dispatch 不再启动自持轮询——直接调 pollForCompletion 验证兜底/测试路径
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+        baselineCursor: null,
+      });
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
@@ -1802,9 +1952,9 @@ describe('WorkerDispatcher', () => {
 
       await d.dispatch(request);
 
-      const promptArgs = workerClient.promptAsync.mock.calls[0][2];
+      const execArgs = workerClient.execute.mock.calls[0][1] as { directory: string };
       const expectedDir = path.join(workRoot, 'tasks', request.taskId);
-      expect(promptArgs.directory).toBe(expectedDir);
+      expect(execArgs.directory).toBe(expectedDir);
       // mkdir -p 已保证目录存在
       expect(fs.existsSync(expectedDir)).toBe(true);
     });
@@ -1840,8 +1990,10 @@ describe('WorkerDispatcher', () => {
     };
 
     const dispatchedPrompt = (): string => {
-      const args = workerClient.promptAsync.mock.calls[0][2];
-      return (args.parts as Array<{ type: string; text: string }>)[0].text;
+      const args = workerClient.execute.mock.calls[0][1] as {
+        parts: Array<{ type: string; text: string }>;
+      };
+      return args.parts[0].text;
     };
 
     it('群聊历史注入：用户+agent 历史按时间序随 prompt 下发，当前触发消息内容不重复', async () => {
