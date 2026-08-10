@@ -914,7 +914,7 @@ describe('WorkerDispatcher', () => {
         where: {
           taskId_agentId: { taskId: request.taskId, agentId: 'a_product' },
         },
-        select: { id: true },
+        select: { id: true, type: true },
       });
       expect(prisma.chatChannel.findFirst).not.toHaveBeenCalled();
       expect(prisma.message.create).toHaveBeenCalledWith(
@@ -1037,6 +1037,75 @@ describe('WorkerDispatcher', () => {
 
       expect(prisma.message.create).not.toHaveBeenCalled();
       expect(prisma.session.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('F3 缺陷①：task_group 终态化 → content.parts 只含结论 text（reasoning/tool 被过滤）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue(null);
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: request.channelId,
+        type: CHANNEL_TYPE.task_group,
+      });
+      prisma.message.create.mockResolvedValue(messageRow());
+      const d = createDispatcher();
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '结论',
+        parts: [
+          { type: 'text', text: '结论' },
+          { type: 'reasoning', text: '思考过程', synthetic: true },
+          { type: 'tool', name: 'read', input: 'x', output: 'y', synthetic: true },
+        ],
+      });
+
+      // 终态化落库 parts 与 delta 路径（extractConclusionParts）行为一致：reasoning/tool 剔除
+      expect(prisma.message.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          content: {
+            text: '结论',
+            parts: [{ type: 'text', text: '结论' }],
+          },
+          status: MESSAGE_STATUS.sent,
+        }),
+      });
+    });
+
+    it('F3 缺陷①：private 终态化 → parts 全量保留（reasoning/tool 前端折叠展示）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        taskId: request.taskId,
+        type: CHANNEL_TYPE.private,
+      });
+      prisma.message.create.mockResolvedValue(messageRow());
+      const d = createDispatcher();
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '结论',
+        parts: [
+          { type: 'text', text: '结论' },
+          { type: 'reasoning', text: '思考过程', synthetic: true },
+          { type: 'tool', name: 'read', input: 'x', output: 'y', synthetic: true },
+        ],
+      });
+
+      expect(prisma.message.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          channelId: 'c_dm',
+          content: {
+            text: '结论',
+            parts: [
+              { type: 'text', text: '结论' },
+              { type: 'reasoning', text: '思考过程', synthetic: true },
+              { type: 'tool', name: 'read', input: 'x', output: 'y', synthetic: true },
+            ],
+          },
+        }),
+      });
     });
   });
 
@@ -1652,7 +1721,7 @@ describe('WorkerDispatcher', () => {
       // preferred 频道命中（taskId 匹配）→ 不执行 taskId_agentId DM 查询
       expect(prisma.chatChannel.findUnique).toHaveBeenCalledWith({
         where: { id: request.channelId },
-        select: { id: true, taskId: true },
+        select: { id: true, taskId: true, type: true },
       });
       expect(
         prisma.chatChannel.findUnique.mock.calls.some((c) => c[0]?.where?.taskId_agentId),
@@ -1714,7 +1783,7 @@ describe('WorkerDispatcher', () => {
       );
       expect(prisma.chatChannel.findUnique).toHaveBeenCalledWith({
         where: { taskId_agentId: { taskId: request.taskId, agentId: 'a_product' } },
-        select: { id: true },
+        select: { id: true, type: true },
       });
       jest.useRealTimers();
     });

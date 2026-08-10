@@ -312,7 +312,7 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     // （preferred 分支按 channelId 直查命中，而非回退 DM taskId_agentId 查询）
     expect(prisma.chatChannel.findUnique).toHaveBeenLastCalledWith({
       where: { id: request.channelId },
-      select: { id: true, taskId: true },
+      select: { id: true, taskId: true, type: true },
     });
     expect(prisma.message.update).toHaveBeenCalledWith({
       where: { id: 'm_stream' },

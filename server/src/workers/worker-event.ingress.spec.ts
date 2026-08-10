@@ -30,7 +30,7 @@ describe('WorkerEventIngress', () => {
   let ingress: WorkerEventIngress;
   let prisma: {
     worker: { findUnique: jest.Mock };
-    session: { updateMany: jest.Mock; findFirst: jest.Mock; findUnique: jest.Mock };
+    session: { updateMany: jest.Mock; findFirst: jest.Mock; findUnique: jest.Mock; findMany: jest.Mock };
     taskEvent: { create: jest.Mock };
     chatChannel: { findUnique: jest.Mock };
     message: { findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
@@ -41,11 +41,12 @@ describe('WorkerEventIngress', () => {
   beforeEach(() => {
     prisma = {
       worker: { findUnique: jest.fn().mockResolvedValue({ id: 'registered' }) },
-      session: {
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findFirst: jest.fn().mockResolvedValue(null),
-        findUnique: jest.fn().mockResolvedValue(null),
-      },
+    session: {
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findFirst: jest.fn().mockResolvedValue(null),
+      findUnique: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
       taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
       chatChannel: { findUnique: jest.fn() },
       message: {
@@ -493,6 +494,148 @@ describe('WorkerEventIngress', () => {
       expect(activityPayloads).toEqual([
         { type: 'session.updated', sessionId: 's_mapped', taskId: 't_1', status: 'running' },
       ]);
+    });
+  });
+
+  describe('F3 缺陷②：ses_ 新会话反查失败 → 回写 running session 的 instanceRef', () => {
+    it('回写唯一 running session → idle 能以平台主键落库（状态收敛 running → idle）', async () => {
+      // 反查（findFirst by instanceRef）失败：instanceRef 仍指向旧会话（worker 404 重建）
+      prisma.session.findFirst.mockResolvedValue(null);
+      // worker w_1 唯一 running 会话 s_old（instanceRef 为旧值 ses_stale）
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_old', instanceRef: 'ses_stale' },
+      ]);
+
+      const e = event('w_1', 'evw_f3_1', 'session.updated', {
+        taskId: 't_1',
+        sessionId: 'ses_new',
+        status: 'idle',
+      });
+      expect(await ingress.handleEvent(e)).toBe(true);
+
+      // findMany：按 workerId + running 定位唯一会话
+      expect(prisma.session.findMany).toHaveBeenCalledWith({
+        where: { workerId: 'w_1', status: 'running' },
+        select: { id: true, instanceRef: true },
+      });
+      // 回写 instanceRef → 新会话 id（幂等 where：仅 instanceRef != 新值时写）
+      expect(prisma.session.updateMany).toHaveBeenCalledWith({
+        where: { id: 's_old', status: 'running', instanceRef: { not: 'ses_new' } },
+        data: { instanceRef: 'ses_new' },
+      });
+      // idle 以平台主键落库
+      expect(prisma.session.updateMany).toHaveBeenCalledWith({
+        where: { id: 's_old', status: { not: 'idle' } },
+        data: { status: 'idle' },
+      });
+      // emit/activity 通知用平台主键
+      expect(realtime.emit).toHaveBeenCalledWith(
+        'session.updated',
+        { sessionId: 's_old', status: 'idle', workerId: 'w_1' },
+        { type: 'task', id: 't_1' },
+      );
+    });
+
+    it('s_ 前缀直接透传：不触发 findFirst 反查与 findMany 回写', async () => {
+      const e = event('w_1', 'evw_f3_2', 'session.updated', {
+        sessionId: 's_1',
+        status: 'idle',
+      });
+      expect(await ingress.handleEvent(e)).toBe(true);
+
+      expect(prisma.session.findFirst).not.toHaveBeenCalled();
+      expect(prisma.session.findMany).not.toHaveBeenCalled();
+      expect(prisma.session.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.session.updateMany).toHaveBeenCalledWith({
+        where: { id: 's_1', status: { not: 'idle' } },
+        data: { status: 'idle' },
+      });
+    });
+
+    it('反查命中（instanceRef 已是新值）→ 不回写，直接返回平台主键', async () => {
+      prisma.session.findFirst.mockResolvedValue({ id: 's_mapped' });
+
+      const e = event('w_1', 'evw_f3_3', 'session.updated', {
+        sessionId: 'ses_new',
+        status: 'running',
+      });
+      expect(await ingress.handleEvent(e)).toBe(true);
+
+      expect(prisma.session.findMany).not.toHaveBeenCalled();
+      // 只做状态更新，无 instanceRef 回写
+      expect(prisma.session.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.session.updateMany).toHaveBeenCalledWith({
+        where: { id: 's_mapped', status: { not: 'running' } },
+        data: { status: 'running' },
+      });
+    });
+
+    it('回写分支 instanceRef 已是新值 → 幂等，不重复 updateMany', async () => {
+      prisma.session.findFirst.mockResolvedValue(null);
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_old', instanceRef: 'ses_new' },
+      ]);
+
+      const e = event('w_1', 'evw_f3_4', 'session.updated', {
+        sessionId: 'ses_new',
+        status: 'idle',
+      });
+      expect(await ingress.handleEvent(e)).toBe(true);
+
+      // 仅状态更新 1 次，无 instanceRef 回写
+      expect(prisma.session.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.session.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: { instanceRef: 'ses_new' } }),
+      );
+      expect(prisma.session.updateMany).toHaveBeenCalledWith({
+        where: { id: 's_old', status: { not: 'idle' } },
+        data: { status: 'idle' },
+      });
+    });
+
+    it('同 worker 多个 running 会话 → 不唯一，放弃回写（不误写）', async () => {
+      prisma.session.findFirst.mockResolvedValue(null);
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_a', instanceRef: 'ses_a' },
+        { id: 's_b', instanceRef: 'ses_b' },
+      ]);
+
+      const e = event('w_1', 'evw_f3_5', 'session.updated', {
+        sessionId: 'ses_new',
+        status: 'idle',
+      });
+      expect(await ingress.handleEvent(e)).toBe(true);
+
+      // 无回写且 sessionId 解析失败 → 状态不落库，emit sessionId=null
+      expect(prisma.session.updateMany).not.toHaveBeenCalled();
+      expect(realtime.emit).toHaveBeenCalledWith(
+        'session.updated',
+        { sessionId: null, status: 'idle', workerId: 'w_1' },
+        { type: 'global' },
+      );
+    });
+
+    it('task.completed 也触发回写：回调 sessionId 为平台主键（后续落库/反查命中）', async () => {
+      prisma.session.findFirst.mockResolvedValue(null);
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_old', instanceRef: 'ses_stale' },
+      ]);
+      const cbs: TaskCompletedPayload[] = [];
+      ingress.onTaskCompleted((p) => cbs.push(p));
+
+      const e = event('w_1', 'evw_f3_6', 'task.completed', {
+        taskId: 't_1',
+        agentId: 'a_1',
+        sessionId: 'ses_new',
+        text: '完成',
+      });
+      expect(await ingress.handleEvent(e)).toBe(true);
+
+      expect(prisma.session.updateMany).toHaveBeenCalledWith({
+        where: { id: 's_old', status: 'running', instanceRef: { not: 'ses_new' } },
+        data: { instanceRef: 'ses_new' },
+      });
+      expect(cbs[0]).toMatchObject({ sessionId: 's_old' });
     });
   });
 

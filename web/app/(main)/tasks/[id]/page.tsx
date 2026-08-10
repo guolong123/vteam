@@ -493,7 +493,16 @@ function MessageList({
         const agent = msg.senderId ? agentMap.get(msg.senderId) : undefined;
         const role = agent?.role ?? (msg.senderId ? toRole(msg.senderId) : null) ?? "developer";
         const author = agent?.name ?? msg.senderId ?? "";
-        const parts = Array.isArray(msg.content.parts) ? (msg.content.parts as unknown[]) : [];
+
+        // 群聊结论防御：初始加载（GET messages）同样只保留 text 结论 part——与
+        // onMessagePartDelta 兜底一致（reasoning/tool 不渲染折叠卡片；后端终态化
+        // 已滤，此处防御历史/残留数据，F3 缺陷①）
+        const parts = Array.isArray(msg.content.parts)
+          ? (msg.content.parts as unknown[]).filter(
+              (p) => (p as { type?: string; synthetic?: boolean }).type === "text"
+                && !(p as { type?: string; synthetic?: boolean }).synthetic,
+            )
+          : [];
 
         // Agent 消息：parts 过程片段（thinking/tool/error/aborted）+ 正文置底（MsgParts，T14）；
         // status=processing 为流式中间态（message.part.delta 累积），正文走「生成中」流式块

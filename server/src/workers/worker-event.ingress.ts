@@ -13,6 +13,7 @@ import { RealtimeScope } from '../realtime/realtime.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WorkerEventDto } from './dto/worker-event.dto';
 import { WORKER_ERRORS } from './workers.constants';
+import { concatText, extractConclusionParts, normalizeParts } from '../chat/message-parts';
 
 /** task.completed 回流负载（worker 侧 step-finish 实测字段，T10 WorkerDispatcher 消费）。
  * sessionId 语义：平台 Session 主键（s_ 前缀）；worker 若误上报 opencode 会话 id
@@ -286,7 +287,7 @@ export class WorkerEventIngress {
    *  target.sessionId=s_ 注册，域不一致会导致首字 watchdog 永不清除）。 */
   private async handleSessionUpdated(dto: WorkerEventDto): Promise<void> {
     const raw = dto.payload as { sessionId?: unknown; status?: unknown; taskId?: unknown };
-    const sessionId = await this.resolvePlatformSessionId(this.str(raw.sessionId));
+    const sessionId = await this.resolvePlatformSessionId(this.str(raw.sessionId), dto.workerId);
     const mapped = this.mapSessionStatus(raw.status);
     if (sessionId && mapped) {
       // updateMany 幂等：status 已一致时不产生更新（不抛）。
@@ -356,7 +357,10 @@ export class WorkerEventIngress {
     this.notify(this.agentStatusCallbacks, payload);
     // 判死 watchdog：agent 状态上报即活动（thinking/operating 均刷新 idle 计时）
     // wave1 对齐：sessionId 反查为平台主键（与 dispatcher watchdog 注册域一致）
-    const activitySessionId = await this.resolvePlatformSessionId(this.str(payload.sessionId));
+    const activitySessionId = await this.resolvePlatformSessionId(
+      this.str(payload.sessionId),
+      dto.workerId,
+    );
     this.notify(this.sessionActivityCallbacks, {
       type: 'agent.status',
       sessionId: activitySessionId,
@@ -382,7 +386,7 @@ export class WorkerEventIngress {
     const channelId = this.str(raw.channelId);
     // wave1 对齐：worker 上送 sessionId 为 opencode 会话 id（ses_ 前缀）→ 反查平台
     // Session 主键后再用于 agentId 反查/activity 通知（域一致才与 dispatcher watchdog 匹配）。
-    const sessionId = await this.resolvePlatformSessionId(this.str(raw.sessionId));
+    const sessionId = await this.resolvePlatformSessionId(this.str(raw.sessionId), dto.workerId);
     let agentId = this.str(raw.agentId);
     if (!channelId) {
       this.logger.debug(
@@ -408,8 +412,8 @@ export class WorkerEventIngress {
     }
     const isPrivate = channel.type === CHANNEL_TYPE.private;
     const kept = isPrivate
-      ? this.normalizeParts(raw.parts)
-      : this.extractConclusionParts(raw.parts);
+      ? normalizeParts(raw.parts)
+      : extractConclusionParts(raw.parts);
     if (kept.length === 0) {
       // 无保留 parts（如 task_group 收到纯 reasoning/tool delta）→ 中间态无结论，不落库不广播
       this.logger.debug(
@@ -436,7 +440,7 @@ export class WorkerEventIngress {
         where: { id: existing.id },
         data: {
           content: {
-            text: this.concatText(merged),
+            text: concatText(merged),
             parts: merged,
           } as Prisma.InputJsonValue,
         },
@@ -452,7 +456,7 @@ export class WorkerEventIngress {
           senderType: SENDER_TYPE.agent,
           senderId: agentId ?? null,
           content: {
-            text: this.concatText(kept),
+            text: concatText(kept),
             parts: kept,
           } as Prisma.InputJsonValue,
           mentions: null,
@@ -488,8 +492,9 @@ export class WorkerEventIngress {
     const raw = dto.payload as Record<string, unknown>;
     // wave1 对齐：sessionId 统一经 resolvePlatformSessionId 归一（s_ 前缀透传；ses_ 前缀
     // opencode 会话 id 经 instanceRef 反查映射；查不到留空，由回调内 sessionId 反查 agentId
-    // 的兜底逻辑接管）。
-    const sessionId = await this.resolvePlatformSessionId(this.str(raw.sessionId));
+    // 的兜底逻辑接管）。F3 缺陷②：ses_ 反查未命中（worker 404 重建新会话）→ 回写
+    // instanceRef 后返回平台主键，保证回调侧 sessionId 反查 agentId 也能命中。
+    const sessionId = await this.resolvePlatformSessionId(this.str(raw.sessionId), dto.workerId);
     const payload: TaskCompletedPayload = {
       taskId: this.str(raw.taskId),
       agentId: this.str(raw.agentId),
@@ -612,31 +617,6 @@ export class WorkerEventIngress {
     return typeof value === 'string' ? value : undefined;
   }
 
-  /** 归一化 parts：非数组 → []；剔除 null/非对象条目。 */
-  private normalizeParts(parts: unknown): Array<Record<string, unknown>> {
-    if (!Array.isArray(parts)) {
-      return [];
-    }
-    return parts.filter(
-      (p): p is Record<string, unknown> => p !== null && typeof p === 'object',
-    );
-  }
-
-  /** 结论性 parts（群聊只保留此子集）：type==='text' && 非 synthetic（reasoning/tool 排除）。 */
-  private extractConclusionParts(parts: unknown): Array<Record<string, unknown>> {
-    return this.normalizeParts(parts).filter(
-      (p) => p.type === 'text' && !p.synthetic,
-    );
-  }
-
-  /** 从 parts 拼接结论文本：type==='text' 且非 synthetic 的 part.text 顺序串接。 */
-  private concatText(parts: unknown[]): string {
-    return (parts as Array<Record<string, unknown>>)
-      .filter((p) => p.type === 'text' && !p.synthetic)
-      .map((p) => (typeof p.text === 'string' ? p.text : ''))
-      .join('');
-  }
-
   /** 消息 DTO（对齐 worker-dispatcher.toMessageDto）：content/mentions 透传 Json。 */
   private toMessageDto(row: MessageRow) {
     return {
@@ -675,9 +655,15 @@ export class WorkerEventIngress {
    * wave1 对齐：把 worker 回流事件的 sessionId 归一为平台 Session 主键——已 s_ 前缀
    * 直接透传（无反查开销）；ses_ 前缀（opencode 会话 id，worker 执行端点透传 dispatch
    * 下发的 sessionId）经 instanceRef 反查映射；其他/缺失 → undefined（调用方兜底）。
+   *
+   * F3 缺陷②回写副作用：ses_ 前缀反查**未命中**——worker 端 404 重建了新 opencode 会话
+   * （45e0fdf，instanceRef 仍指向旧值）→ 将该 worker 正在运行的**唯一** Session 的
+   * instanceRef 回写为新会话 id（幂等），返回该 Session 平台主键。否则 worker 上送
+   * session.updated(idle) 时反查失败 → idle 无法落库 → session 永久卡 running。
    */
   private async resolvePlatformSessionId(
     sessionId: string | undefined,
+    workerId?: string,
   ): Promise<string | undefined> {
     if (!sessionId) {
       return undefined;
@@ -685,7 +671,55 @@ export class WorkerEventIngress {
     if (sessionId.startsWith('s_')) {
       return sessionId;
     }
-    return this.resolveSessionIdByInstanceRef(sessionId);
+    const platformId = await this.resolveSessionIdByInstanceRef(sessionId);
+    if (platformId) {
+      return platformId;
+    }
+    if (!workerId) {
+      return undefined;
+    }
+    return this.adoptNewInstanceRef(sessionId, workerId);
+  }
+
+  /**
+   * F3 缺陷②回写：worker 端 404 重建的新 opencode 会话 id（ses_ 前缀且 instanceRef 反查
+   * 未命中）→ 将该 worker 正在运行的**唯一** Session 的 instanceRef 更新为新会话 id。
+   * 唯一命中 → 返回平台主键（s_ 前缀）并回写；不唯一/未命中 → undefined（不误写）。
+   * 幂等：instanceRef 已是新值（此前已回写）→ 不重复 updateMany。
+   */
+  private async adoptNewInstanceRef(
+    newRef: string,
+    workerId: string,
+  ): Promise<string | undefined> {
+    const running = await this.prisma.session.findMany({
+      where: { workerId, status: SESSION_STATUS.running },
+      select: { id: true, instanceRef: true },
+    });
+    if (running.length !== 1) {
+      // 同 worker 多会话并发或无 running 会话 → 无法可靠定位，放弃回写（现状行为）
+      return undefined;
+    }
+    const session = running[0];
+    if (session.instanceRef !== newRef) {
+      try {
+        await this.prisma.session.updateMany({
+          where: {
+            id: session.id,
+            status: SESSION_STATUS.running,
+            instanceRef: { not: newRef },
+          },
+          data: { instanceRef: newRef },
+        });
+        this.logger.log(
+          `[ingress] 回写 session ${session.id} instanceRef → ${newRef}（worker 404 重建新会话，workerId=${workerId}）`,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `[ingress] session ${session.id} instanceRef 回写失败: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return session.id;
   }
 
   /** 通知全部注册回调（对齐 MessageDispatcher.notify：异常被吞，订阅者失败不影响主流程）。 */

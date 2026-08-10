@@ -30,6 +30,7 @@ import {
 } from '../workers/worker-event.ingress';
 import { AssignmentRequirement, WorkersService } from '../workers/workers.service';
 import { DispatchRequest, DispatchResult, MessageDispatcher } from './message-dispatcher';
+import { extractConclusionParts, normalizeParts } from './message-parts';
 
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
 const MESSAGE_ID_PREFIX = 'm';
@@ -697,9 +698,17 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         // 终态化（任务 3 定稿）：delta 流式期间创建的 processing 消息 → 更新为 sent +
         // 内容最终化，避免双消息（收到确认 + 流式内容两处落库）；无 processing 消息
         // （无 delta 直接完成）→ 走现有 create 落库路径保持兼容。
+        // F3 缺陷①：终态化路径与 delta 路径行为必须一致——task_group 只保留结论性
+        // text part（reasoning/tool 剔除，防群聊渲染折叠卡片）；private 全量保留
+        // （前端折叠展示 reasoning）。
+        const rawParts = Array.isArray(payload.parts) ? payload.parts : [];
+        const finalParts =
+          channel.type === CHANNEL_TYPE.private
+            ? normalizeParts(rawParts)
+            : extractConclusionParts(rawParts);
         const finalContent = {
           text,
-          parts: Array.isArray(payload.parts) ? payload.parts : [],
+          parts: finalParts,
         } as Prisma.InputJsonValue;
         const processingRow = await this.prisma.message.findFirst({
           where: {
@@ -1113,7 +1122,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     if (preferredChannelId) {
       const preferred = await this.prisma.chatChannel.findUnique({
         where: { id: preferredChannelId },
-        select: { id: true, taskId: true },
+        select: { id: true, taskId: true, type: true },
       });
       if (preferred?.taskId === taskId) {
         return preferred;
@@ -1121,14 +1130,14 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     }
     const dm = await this.prisma.chatChannel.findUnique({
       where: { taskId_agentId: { taskId, agentId } },
-      select: { id: true },
+      select: { id: true, type: true },
     });
     if (dm) {
       return dm;
     }
     return this.prisma.chatChannel.findFirst({
       where: { taskId, type: CHANNEL_TYPE.task_group },
-      select: { id: true },
+      select: { id: true, type: true },
     });
   }
 
