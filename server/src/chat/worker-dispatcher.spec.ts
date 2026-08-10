@@ -13,6 +13,7 @@ import { WorkerClient, WorkerUnavailableException } from '../workers/worker.clie
 import { WorkerEventIngress } from '../workers/worker-event.ingress';
 import { WorkersService } from '../workers/workers.service';
 import {
+  DEFAULT_CHAT_HISTORY_MAX_BYTES,
   DEFAULT_DOCLIB_MAX_BYTES,
   DISPATCH_TIMEOUT_MS,
   escapeXml,
@@ -33,7 +34,12 @@ describe('WorkerDispatcher', () => {
     agent: { findUnique: jest.Mock };
     artifact: { findMany: jest.Mock };
     artifactVersion: { findMany: jest.Mock };
-    message: { create: jest.Mock };
+    message: {
+      create: jest.Mock;
+      findMany: jest.Mock;
+      findFirst: jest.Mock;
+      update: jest.Mock;
+    };
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
   };
   let idGen: { nextId: jest.Mock };
@@ -91,7 +97,14 @@ describe('WorkerDispatcher', () => {
       agent: { findUnique: jest.fn() },
       artifact: { findMany: jest.fn() },
       artifactVersion: { findMany: jest.fn() },
-      message: { create: jest.fn() },
+      // 默认空历史（dispatch 新增群聊历史查询；未注入 → 既有测试 prompt 行为不变）
+      message: {
+        create: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        // 默认无 processing 流式消息 → handleTaskCompleted 走 create 落库路径（兼容既有测试）
+        findFirst: jest.fn().mockResolvedValue(null),
+        update: jest.fn(),
+      },
       chatChannel: { findUnique: jest.fn(), findFirst: jest.fn() },
     };
     idGen = { nextId: jest.fn().mockResolvedValue('m_0000000002') };
@@ -920,6 +933,73 @@ describe('WorkerDispatcher', () => {
       expect(prisma.chatChannel.findUnique.mock.calls.some((c) => c[0]?.where?.id)).toBe(false);
     });
 
+    it('终态化：流式期间存在 processing 消息 → task.completed 更新为 sent（不新建，避免双消息）', async () => {
+      prisma.message.findFirst.mockResolvedValue({
+        id: 'm_stream_1',
+        content: { text: '部分', parts: [{ type: 'text', text: '部分', synthetic: false }] },
+      });
+      prisma.message.update.mockResolvedValue({
+        id: 'm_stream_1',
+        channelId: request.channelId,
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_product',
+        content: { text: '最终', parts: [{ type: 'text', text: '最终' }] },
+        mentions: null,
+        status: MESSAGE_STATUS.sent,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+      const d = createDispatcher();
+      const finals: unknown[] = [];
+      d.onFinal((e) => finals.push(e));
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '最终',
+        parts: [{ type: 'text', text: '最终' }],
+      });
+
+      // 不新建：查找 processing 消息 → update 为 sent 终态（内容最终化）
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(prisma.message.findFirst).toHaveBeenCalledWith({
+        where: {
+          channelId: request.channelId,
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_product',
+          status: MESSAGE_STATUS.processing,
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_stream_1' },
+        data: {
+          content: { text: '最终', parts: [{ type: 'text', text: '最终' }] },
+          status: MESSAGE_STATUS.sent,
+        },
+      });
+      // 广播 chat.message.new + emitFinal（用终态化后的消息）
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        {
+          message: expect.objectContaining({
+            id: 'm_stream_1',
+            status: MESSAGE_STATUS.sent,
+          }),
+        },
+        { type: 'channel', id: request.channelId },
+      );
+      expect(finals).toEqual([
+        {
+          taskId: request.taskId,
+          agentId: 'a_product',
+          messageId: 'm_stream_1',
+          text: '最终',
+        },
+      ]);
+    });
+
     it('缺少 taskId/agentId：不落库不崩溃', async () => {
       const d = createDispatcher();
 
@@ -1740,6 +1820,182 @@ describe('WorkerDispatcher', () => {
       );
       const configured = createDispatcher();
       expect(configured.dispatchTimeoutMs).toBe(30_000);
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // 群聊历史注入：@agent 触发时携带来源频道历史（含未 @agent 消息）
+  // ------------------------------------------------------------------
+
+  describe('F5：群聊历史注入（@agent 携带频道历史）', () => {
+    const dispatchSetup = () => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: 'w_0000000001',
+        instanceRef: 'ses_0001',
+      });
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001', capabilities: {} });
+      prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
+      prisma.artifact.findMany.mockResolvedValue([]);
+    };
+
+    const dispatchedPrompt = (): string => {
+      const args = workerClient.promptAsync.mock.calls[0][2];
+      return (args.parts as Array<{ type: string; text: string }>)[0].text;
+    };
+
+    it('群聊历史注入：用户+agent 历史按时间序随 prompt 下发，当前触发消息内容不重复', async () => {
+      prisma.message.findMany.mockResolvedValue([
+        {
+          id: 'm_0000000002',
+          senderType: SENDER_TYPE.user,
+          senderId: 'u_0000000001',
+          content: { text: '群聊里聊过需求细节', parts: [] },
+          createdAt: new Date('2026-08-07T00:00:01Z'),
+        },
+        {
+          id: 'm_0000000003',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_product',
+          content: { text: 'agent 之前的结论', parts: [] },
+          createdAt: new Date('2026-08-07T00:00:02Z'),
+        },
+        // 当前触发消息混入历史（mock 不区分，实现需按 request.messageId 排除）
+        {
+          id: request.messageId,
+          senderType: SENDER_TYPE.user,
+          senderId: 'u_0000000001',
+          content: { text: '触发消息内容', parts: [] },
+          createdAt: new Date('2026-08-07T00:00:03Z'),
+        },
+      ]);
+      dispatchSetup();
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      const prompt = dispatchedPrompt();
+      expect(prompt).toContain('[群聊历史消息]');
+      expect(prompt).toContain('用户: 群聊里聊过需求细节');
+      expect(prompt).toContain('Agent: agent 之前的结论');
+      // 当前消息 request.text 在历史块之后
+      expect(prompt.indexOf(request.text)).toBeGreaterThan(prompt.indexOf('群聊里聊过需求细节'));
+      // 触发消息作为历史被排除，不重复注入
+      expect(prompt).not.toContain('触发消息内容');
+    });
+
+    it('排除当前消息：历史 mock 含触发消息 → 不注入它', async () => {
+      prisma.message.findMany.mockResolvedValue([
+        {
+          id: request.messageId,
+          senderType: SENDER_TYPE.user,
+          senderId: 'u_0000000001',
+          content: { text: '触发消息内容', parts: [] },
+          createdAt: new Date('2026-08-07T00:00:01Z'),
+        },
+        {
+          id: 'm_0000000004',
+          senderType: SENDER_TYPE.user,
+          senderId: 'u_0000000001',
+          content: { text: '正常历史消息', parts: [] },
+          createdAt: new Date('2026-08-07T00:00:02Z'),
+        },
+      ]);
+      dispatchSetup();
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      const prompt = dispatchedPrompt();
+      expect(prompt).not.toContain('触发消息内容');
+      expect(prompt).toContain('用户: 正常历史消息');
+    });
+
+    it('空历史：findMany 返回 [] → prompt 保持现状（无历史块，doclib + request.text）', async () => {
+      dispatchSetup();
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      // 查询条件：来源频道 + sent + 排除当前触发消息，时间升序
+      expect(prisma.message.findMany).toHaveBeenCalledWith({
+        where: {
+          channelId: request.channelId,
+          status: MESSAGE_STATUS.sent,
+          NOT: { id: request.messageId },
+        },
+        select: { id: true, senderType: true, content: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      const prompt = dispatchedPrompt();
+      expect(prompt).toBe(request.text);
+      expect(prompt).not.toContain('[群聊历史消息]');
+    });
+
+    it('截断：超长历史按 chatHistoryMaxBytes 总量截断（保前缀，丢弃超限后续条目）', async () => {
+      config.get.mockImplementation((key: string) =>
+        key === 'CHAT_HISTORY_MAX_BYTES' ? 100 : key === 'WORK_DIR' ? workRoot : undefined,
+      );
+      prisma.message.findMany.mockResolvedValue([
+        {
+          id: 'm_0000000002',
+          senderType: SENDER_TYPE.user,
+          senderId: 'u_0000000001',
+          content: { text: 'A'.repeat(50), parts: [] },
+          createdAt: new Date('2026-08-07T00:00:01Z'),
+        },
+        {
+          id: 'm_0000000003',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_product',
+          content: { text: 'B'.repeat(50), parts: [] },
+          createdAt: new Date('2026-08-07T00:00:02Z'),
+        },
+      ]);
+      dispatchSetup();
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      const prompt = dispatchedPrompt();
+      expect(prompt).toContain('用户: ' + 'A'.repeat(50));
+      expect(prompt).not.toContain('B'.repeat(50));
+      expect(DEFAULT_CHAT_HISTORY_MAX_BYTES).toBe(32 * 1024);
+    });
+
+    it('结构异常消息（content 缺失 text/非对象）→ 跳过不抛错，正常消息仍注入', async () => {
+      prisma.message.findMany.mockResolvedValue([
+        {
+          id: 'm_0000000002',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_product',
+          content: { parts: [] }, // content.text 缺失
+          createdAt: new Date('2026-08-07T00:00:01Z'),
+        },
+        {
+          id: 'm_0000000003',
+          senderType: SENDER_TYPE.user,
+          senderId: 'u_0000000001',
+          content: 42, // content 非对象
+          createdAt: new Date('2026-08-07T00:00:02Z'),
+        },
+        {
+          id: 'm_0000000004',
+          senderType: SENDER_TYPE.user,
+          senderId: 'u_0000000001',
+          content: { text: '正常消息', parts: [] },
+          createdAt: new Date('2026-08-07T00:00:03Z'),
+        },
+      ]);
+      dispatchSetup();
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      const prompt = dispatchedPrompt();
+      expect(prompt).toContain('用户: 正常消息');
+      expect(prompt).not.toContain('agent 之前'); // 异常条目不注入
+      expect(prompt).not.toContain('42');
     });
   });
 

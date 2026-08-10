@@ -2,7 +2,10 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { IdGeneratorService } from '../common/id-generator';
 import {
+  CHANNEL_TYPE,
   EVENT_TYPES,
+  MESSAGE_STATUS,
+  SENDER_TYPE,
   SESSION_STATUS,
 } from '../common/constants/event.constants';
 import { PrismaService } from '../prisma/prisma.service';
@@ -47,17 +50,48 @@ export interface AgentStatusPayload {
   [key: string]: unknown;
 }
 
+/**
+ * message.part.delta 回流负载（方案 A worker 主动推，worker 执行端点协议契约）：
+ * `{taskId, agentId, sessionId, channelId, parts, status: 'streaming'}`。
+ * channelId 语义 = 消息来源频道（resolveChannel 已支持 preferredChannelId）；
+ * parts 为流式增量 part 数组（type=text/reasoning/tool 等，对齐 opencode part 形状）。
+ */
+export interface MessagePartDeltaPayload {
+  taskId?: string;
+  agentId?: string;
+  sessionId?: string;
+  channelId?: string;
+  parts?: unknown;
+  status?: string;
+  [key: string]: unknown;
+}
+
 type TaskCompletedCallback = (payload: TaskCompletedPayload) => void;
 type AgentStatusCallback = (payload: AgentStatusPayload) => void;
 
 /** task_events 主键前缀（对齐 tasks.service ID_PREFIX.taskEvent，续号同源）。 */
 const TASK_EVENT_ID_PREFIX = 'te';
 
+/** 流式消息主键前缀（与 ChatService/WorkerDispatcher 共享 IdGeneratorService 的 'm' 计数）。 */
+const MESSAGE_ID_PREFIX = 'm';
+
 /** 内存去重窗口上限（D4：seq 单调递增下保留最近 N 条即可覆盖连接内有序重发）。 */
 const DEDUP_WINDOW = 1000;
 
 /** Session.status 允许的流转值（SESSION_STATUS.created 为 bind 前初始态，worker 不回流该值）。 */
 const SESSION_STATUS_ALLOWED: Set<string> = new Set(Object.values(SESSION_STATUS));
+
+/** 消息行（messages 表；content/mentions 为 Json 列），对齐 worker-dispatcher 的 MessageRow 契约。 */
+type MessageRow = {
+  id: string;
+  channelId: string;
+  senderType: string;
+  senderId: string | null;
+  content: Prisma.JsonValue;
+  mentions: Prisma.JsonValue | null;
+  status: string;
+  createdAt: Date;
+};
 
 /**
  * Worker 事件回流入口（T9，架构决策 D1 全 push 三通道之事件回调）。
@@ -72,8 +106,8 @@ const SESSION_STATUS_ALLOWED: Set<string> = new Set(Object.values(SESSION_STATUS
  * - worker.heartbeat → 忽略（心跳走单独端点 POST /workers/:id/heartbeat）
  * - instance.created → 仅日志确认（TaskGroupInstance 已在 T12 bindSessionToWorker 时落库）
  * - session.updated → 更新 Session.status + emit `session.updated`（RealtimeService 先落库后广播）
- * - message.part.delta → 不落库不广播（D2：流式中间态不进统一事件流，前端按需
- *   /sessions/:id/stream），仅 debug 日志
+ * - message.part.delta → 流式中间态累积落库（processing 消息，private 全量 parts /
+ *   task_group 仅结论 text）+ emit `message.part.delta`（scope=channel）
  * - agent.status → emit `agent.loading` / `agent.error`（映射 phase/status/error）+ onAgentStatus 回调
  * - task.completed → 最高优先级：解析 payload → onTaskCompleted 回调（T10 注册做
  *   落库+广播+emitFinal）；Ingress 自身不 emit task.completed
@@ -155,11 +189,15 @@ export class WorkerEventIngress {
           })
           .then(() => true);
       case 'message.part.delta':
-        // D2：流式中间态不进统一事件流（前端按需经 /sessions/:id/stream），不落库不广播
-        this.logger.debug(
-          `[ingress] 忽略 message.part.delta（流式中间态，workerId=${dto.workerId} seq=${dto.seq}）`,
-        );
-        break;
+        // Phase 4 流式（方案 A worker 主动推）：累积落库 processing 消息 + 广播
+        // MESSAGE_PART_DELTA（scope=channel）；异常吞错不阻断（事件回流尽力而为）。
+        return this.handleMessagePartDelta(dto)
+          .catch((err: unknown) => {
+            this.logger.error(
+              `[ingress] message.part.delta 处理失败: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          })
+          .then(() => true);
       case 'agent.status':
         return this.handleAgentStatus(dto)
           .catch((err: unknown) => {
@@ -243,6 +281,109 @@ export class WorkerEventIngress {
       );
     }
     this.notify(this.agentStatusCallbacks, payload);
+  }
+
+  /**
+   * message.part.delta：流式中间态累积落库 + 广播 MESSAGE_PART_DELTA（方案 A worker 主动推）。
+   * - 解析 channelId → 查 chatChannel.type：
+   *   - private：全量 parts 落库（含 reasoning/tool/text）；
+   *   - task_group：只累积结论性 parts（type=text 且非 synthetic，reasoning/tool 不落库）；
+   * - 定位该会话最新一条 status=processing 的 agent 消息 → 累积更新其 content
+   *   （parts 追加 + text 重新拼接）；无 processing 消息 → 新建（status=processing）。
+   *   Message 表无 sessionId 列，以 channelId+senderId 唯一定位——同一 agent 在频道内
+   *   同时仅一条流式消息（历史教训：每 delta 新建消息会撑爆 DB，必须聚合累积）。
+   * - 广播 payload：`{message: toMessageDto(最新消息), delta: <本次新增 parts>}`，scope=channel。
+   */
+  private async handleMessagePartDelta(dto: WorkerEventDto): Promise<boolean> {
+    const raw = dto.payload as MessagePartDeltaPayload;
+    const channelId = this.str(raw.channelId);
+    const sessionId = this.str(raw.sessionId);
+    let agentId = this.str(raw.agentId);
+    if (!channelId) {
+      this.logger.debug(
+        `[ingress] message.part.delta 缺 channelId，跳过（workerId=${dto.workerId}）`,
+      );
+      return true;
+    }
+    const channel = await this.prisma.chatChannel.findUnique({
+      where: { id: channelId },
+      select: { id: true, type: true },
+    });
+    if (!channel) {
+      this.logger.debug(`[ingress] message.part.delta 频道 ${channelId} 不存在，跳过`);
+      return true;
+    }
+    // payload.agentId 缺失 → 经 sessionId 反查 Session.agentId（定位流式消息归属）
+    if (!agentId && sessionId) {
+      const session = await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { agentId: true },
+      });
+      agentId = session?.agentId;
+    }
+    const isPrivate = channel.type === CHANNEL_TYPE.private;
+    const kept = isPrivate
+      ? this.normalizeParts(raw.parts)
+      : this.extractConclusionParts(raw.parts);
+    if (kept.length === 0) {
+      // 无保留 parts（如 task_group 收到纯 reasoning/tool delta）→ 中间态无结论，不落库不广播
+      this.logger.debug(
+        `[ingress] message.part.delta 无保留 parts，跳过（channel=${channelId} type=${channel.type}）`,
+      );
+      return true;
+    }
+    const existing = await this.prisma.message.findFirst({
+      where: {
+        channelId,
+        senderType: SENDER_TYPE.agent,
+        status: MESSAGE_STATUS.processing,
+        ...(agentId ? { senderId: agentId } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, content: true },
+    });
+    let row: MessageRow;
+    if (existing) {
+      const oldContent = (existing.content ?? {}) as Record<string, unknown>;
+      const oldParts = Array.isArray(oldContent.parts) ? oldContent.parts : [];
+      const merged = [...oldParts, ...kept];
+      row = await this.prisma.message.update({
+        where: { id: existing.id },
+        data: {
+          content: {
+            text: this.concatText(merged),
+            parts: merged,
+          } as Prisma.InputJsonValue,
+        },
+      });
+      this.logger.debug(
+        `[ingress] message.part.delta 累积更新 message=${existing.id} parts=${kept.length}（workerId=${dto.workerId}）`,
+      );
+    } else {
+      row = await this.prisma.message.create({
+        data: {
+          id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+          channelId,
+          senderType: SENDER_TYPE.agent,
+          senderId: agentId ?? null,
+          content: {
+            text: this.concatText(kept),
+            parts: kept,
+          } as Prisma.InputJsonValue,
+          mentions: null,
+          status: MESSAGE_STATUS.processing,
+        },
+      });
+      this.logger.debug(
+        `[ingress] message.part.delta 新建 processing message=${row.id} parts=${kept.length}（workerId=${dto.workerId}）`,
+      );
+    }
+    await this.realtime.emit(
+      EVENT_TYPES.MESSAGE_PART_DELTA,
+      { message: this.toMessageDto(row), delta: kept },
+      { type: 'channel', id: channelId },
+    );
+    return true;
   }
 
   /**
@@ -371,6 +512,45 @@ export class WorkerEventIngress {
 
   private str(value: unknown): string | undefined {
     return typeof value === 'string' ? value : undefined;
+  }
+
+  /** 归一化 parts：非数组 → []；剔除 null/非对象条目。 */
+  private normalizeParts(parts: unknown): Array<Record<string, unknown>> {
+    if (!Array.isArray(parts)) {
+      return [];
+    }
+    return parts.filter(
+      (p): p is Record<string, unknown> => p !== null && typeof p === 'object',
+    );
+  }
+
+  /** 结论性 parts（群聊只保留此子集）：type==='text' && 非 synthetic（reasoning/tool 排除）。 */
+  private extractConclusionParts(parts: unknown): Array<Record<string, unknown>> {
+    return this.normalizeParts(parts).filter(
+      (p) => p.type === 'text' && !p.synthetic,
+    );
+  }
+
+  /** 从 parts 拼接结论文本：type==='text' 且非 synthetic 的 part.text 顺序串接。 */
+  private concatText(parts: unknown[]): string {
+    return (parts as Array<Record<string, unknown>>)
+      .filter((p) => p.type === 'text' && !p.synthetic)
+      .map((p) => (typeof p.text === 'string' ? p.text : ''))
+      .join('');
+  }
+
+  /** 消息 DTO（对齐 worker-dispatcher.toMessageDto）：content/mentions 透传 Json。 */
+  private toMessageDto(row: MessageRow) {
+    return {
+      id: row.id,
+      channelId: row.channelId,
+      senderType: row.senderType,
+      senderId: row.senderId,
+      content: row.content,
+      mentions: row.mentions ?? [],
+      status: row.status,
+      createdAt: row.createdAt.toISOString(),
+    };
   }
 
   /** F2 M2：校验 workerId 已注册（Worker 表存在）；未注册事件在 handleEvent 入口被 404 拒绝。 */

@@ -52,6 +52,9 @@ export type SenderType = (typeof SENDER_TYPE)[keyof typeof SENDER_TYPE];
 export const SESSION_STATUS = {
   created: 'created',
   active: 'active',
+  /** Phase 4 流式：任务执行中（worker 回流 running/idle，任务在跑 / 等待下一条消息）。 */
+  running: 'running',
+  idle: 'idle',
   frozen: 'frozen',
   archived: 'archived',
 } as const;

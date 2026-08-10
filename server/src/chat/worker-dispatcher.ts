@@ -38,6 +38,8 @@ const MAX_BASE_AGENT_CHAIN_DEPTH = 20;
 export const DEFAULT_DOCLIB_MAX_BYTES = 32 * 1024;
 /** doclib 块整体大小上限（多产出物防御：正常场景 32KB/文档 × 少量文档远低于此）。 */
 export const DEFAULT_DOCLIB_TOTAL_BYTES = 128 * 1024;
+/** 群聊历史上下文注入上限（对齐 doclib 单文档 32KB 语义：按条截断 + 总量截断，防超长 prompt）。 */
+export const DEFAULT_CHAT_HISTORY_MAX_BYTES = 32 * 1024;
 
 /**
  * 分派后等待回流的默认超时（D8 总超时；F3 MINOR-3：架构师 5 轮 tool 调用实测 72s > 60s，
@@ -278,6 +280,8 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
   /** doclib 注入上限（12 篇 §8.3 可配；公开字段便于测试覆盖）。 */
   public doclibMaxBytes: number;
   public doclibTotalBytes: number;
+  /** 群聊历史注入上限（对齐 doclib 32KB 语义；公开字段便于测试覆盖）。 */
+  public chatHistoryMaxBytes: number;
 
   /** 待回流 watchdog：`${taskId}:${agentId}` → 定时器（默认 120s 超时 emitError）。 */
   private readonly pending = new Map<string, PendingDispatch>();
@@ -317,6 +321,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       typeof totalBytes === 'number' && totalBytes > 0
         ? totalBytes
         : DEFAULT_DOCLIB_TOTAL_BYTES;
+    const historyBytes = config.get<number>('CHAT_HISTORY_MAX_BYTES');
+    this.chatHistoryMaxBytes =
+      typeof historyBytes === 'number' && historyBytes > 0
+        ? historyBytes
+        : DEFAULT_CHAT_HISTORY_MAX_BYTES;
     // F3 MINOR-3：回流超时可配（DISPATCH_TIMEOUT_MS），缺省 120s（复杂任务多轮 tool 调用）
     const timeoutMs = config.get<number>('DISPATCH_TIMEOUT_MS');
     this.dispatchTimeoutMs =
@@ -488,9 +497,19 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // `provider/model` → {providerID, modelID}；null 不指定模型（serve 默认）。
     const model = this.toModelSelection(agentModelId ?? workerRow.defaultModelId ?? null);
 
-    // 4. doclib 上下文注入（12 篇 §8：产出物清单 + 最新版本正文，32KB 截断；注入到 prompt 前）
+    // 4. 上下文注入（doclib 产出物 12 篇 §8 + 来源频道群聊历史，均注入 prompt 前：
+    // doclib 在前、历史在后、当前消息最后；两段皆为空 → prompt 保持 request.text 现状）
     const doclib = await this.buildDoclibContext(taskId);
-    const prompt = doclib ? `${doclib}\n\n${request.text}` : request.text;
+    const history = await this.buildChatHistoryContext(request.channelId, request.messageId);
+    const promptBlocks: string[] = [];
+    if (doclib) {
+      promptBlocks.push(doclib);
+    }
+    if (history) {
+      promptBlocks.push(history);
+    }
+    promptBlocks.push(request.text);
+    const prompt = promptBlocks.join('\n\n');
 
     // 5. loading(thinking)（对齐 MockDispatcher :158-162）
     await this.realtime.broadcast(
@@ -648,20 +667,44 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     const channel = await this.resolveChannel(taskId, agentId, channelId);
     if (channel) {
       try {
-        const message = await this.prisma.message.create({
-          data: {
-            id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+        // 终态化（任务 3 定稿）：delta 流式期间创建的 processing 消息 → 更新为 sent +
+        // 内容最终化，避免双消息（收到确认 + 流式内容两处落库）；无 processing 消息
+        // （无 delta 直接完成）→ 走现有 create 落库路径保持兼容。
+        const finalContent = {
+          text,
+          parts: Array.isArray(payload.parts) ? payload.parts : [],
+        } as Prisma.InputJsonValue;
+        const processingRow = await this.prisma.message.findFirst({
+          where: {
             channelId: channel.id,
             senderType: SENDER_TYPE.agent,
             senderId: agentId,
-            content: {
-              text,
-              parts: Array.isArray(payload.parts) ? payload.parts : [],
-            } as Prisma.InputJsonValue,
-            mentions: null,
-            status: MESSAGE_STATUS.sent,
+            status: MESSAGE_STATUS.processing,
           },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
         });
+        const message = processingRow
+          ? await this.prisma.message.update({
+              where: { id: processingRow.id },
+              data: { content: finalContent, status: MESSAGE_STATUS.sent },
+            })
+          : await this.prisma.message.create({
+              data: {
+                id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+                channelId: channel.id,
+                senderType: SENDER_TYPE.agent,
+                senderId: agentId,
+                content: finalContent,
+                mentions: null,
+                status: MESSAGE_STATUS.sent,
+              },
+            });
+        if (processingRow) {
+          this.logger.log(
+            `agent ${agentId} 流式消息终态化 message=${processingRow.id} → sent`,
+          );
+        }
         // F2 C1：落库成功即标记已完成（ingress/轮询双通道后续到达直接跳过，防重复落库）
         if (sessionId) {
           this.completedSessions.add(sessionId);
@@ -959,6 +1002,77 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       return `${head.trimEnd()}\n</doclib>`;
     }
     return truncated;
+  }
+
+  /**
+   * 群聊历史上下文组装（新需求：@agent 触发时带上来源频道 sent 历史，含未 @agent 的消息）：
+   * ① 查询 channelId 频道 status=sent 历史（排除当前触发消息，避免重复），时间升序；
+   * ② 每条取 content.text（用户=正文；agent=已排除 reasoning 的结论性文本），标注发言者；
+   * ③ 按条累加 + 总量截断（对齐 doclib 32KB 语义，防超长 prompt）；空历史 → 空串（不注入）。
+   */
+  private async buildChatHistoryContext(
+    channelId: string,
+    excludeMessageId: string,
+  ): Promise<string> {
+    const messages = await this.prisma.message.findMany({
+      where: {
+        channelId,
+        status: MESSAGE_STATUS.sent,
+        NOT: { id: excludeMessageId },
+      },
+      select: { id: true, senderType: true, content: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (messages.length === 0) {
+      return '';
+    }
+    const lines: string[] = [];
+    let totalBytes = 0;
+    for (const m of messages) {
+      // 防御：查询 where 已排除触发消息，此处按 id 再滤一次（测试/mock 场景下 NOT 不生效）
+      if (m.id === excludeMessageId) {
+        continue;
+      }
+      const text = this.extractHistoryMessageText(m.content);
+      if (!text) {
+        continue;
+      }
+      const line = `${this.historySpeakerLabel(m.senderType)}: ${text}`;
+      const lineBytes = Buffer.byteLength(line, 'utf8');
+      if (totalBytes + lineBytes > this.chatHistoryMaxBytes) {
+        // 超总量：首条即超限 → 单条截断注入保前缀；否则停止追加保留已有前缀
+        if (lines.length === 0) {
+          lines.push(truncateUtf8(line, this.chatHistoryMaxBytes));
+        }
+        break;
+      }
+      lines.push(line);
+      totalBytes += lineBytes;
+    }
+    if (lines.length === 0) {
+      return '';
+    }
+    return `[群聊历史消息]\n${lines.join('\n')}`;
+  }
+
+  /** 从消息 content（Prisma Json）提取结论性文本：非对象/缺 text/非字符串 → undefined（跳过不抛错）。 */
+  private extractHistoryMessageText(content: Prisma.JsonValue): string | undefined {
+    if (!content || typeof content !== 'object' || Array.isArray(content)) {
+      return undefined;
+    }
+    const text = (content as Record<string, unknown>).text;
+    return typeof text === 'string' && text.trim() ? text : undefined;
+  }
+
+  /** 历史消息发言者标注：用户 → 用户，agent → Agent，其他（system 等）→ 系统。 */
+  private historySpeakerLabel(senderType: string): string {
+    if (senderType === SENDER_TYPE.user) {
+      return '用户';
+    }
+    if (senderType === SENDER_TYPE.agent) {
+      return 'Agent';
+    }
+    return '系统';
   }
 
   /**
