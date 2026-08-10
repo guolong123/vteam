@@ -18,12 +18,14 @@
 import * as http from 'http';
 import { EventSender } from '../client/event-client';
 import {
+  CompletionResult,
   CompletionTimeoutError,
   MessageDeltaTracker,
   sendAndAwait,
 } from '../driver/prompt-await';
 import {
   DriverModelRef,
+  DriverRequestError,
   Logger,
   ServeMessage,
   V1Driver,
@@ -228,7 +230,7 @@ export class ExecServer {
       if (!opencodeSessionId) {
         opencodeSessionId = await this.driver.createSession(payload.model);
       }
-      const ctx = {
+      const ctx: Record<string, string | undefined> = {
         taskId: payload.taskId,
         agentId: payload.agentId,
         channelId: payload.channelId,
@@ -239,24 +241,23 @@ export class ExecServer {
         status: 'running',
       });
 
-      const tracker = new MessageDeltaTracker();
-      const result = await sendAndAwait(
-        this.driver,
-        opencodeSessionId,
-        {
-          model: payload.model ?? null,
-          agent: payload.agent,
-          parts: normalizeParts(payload.prompt),
-          directory: payload.directory,
-        },
-        {
-          firstTokenTimeoutMs: this.firstTokenTimeoutMs,
-          pollMs: this.pollMs,
-          onPoll: (messages: ServeMessage[], _elapsedMs: number) => {
-            void this.sendDelta(ctx, tracker, messages);
-          },
-        },
-      );
+      let result: CompletionResult;
+      try {
+        result = await this.runSendAndAwait(payload, opencodeSessionId, ctx);
+      } catch (err) {
+        if (this.isSessionNotFound(err) && payload.sessionId) {
+          // 复用会话失效（serve 重启/容器重建后旧 ses_ 会话丢失，prompt_async 404）：
+          // 自动 createSession 新建会话并重试一次；新建也失败 → 外层 error 收敛。
+          this.logger.warn(
+            `[exec] 复用会话 ${opencodeSessionId} 不存在（HTTP 404），新建会话重试一次`,
+          );
+          opencodeSessionId = await this.driver.createSession(payload.model);
+          ctx.sessionId = opencodeSessionId;
+          result = await this.runSendAndAwait(payload, opencodeSessionId, ctx);
+        } else {
+          throw err;
+        }
+      }
 
       await this.sender.send(WORKER_EVENT_TYPES.SESSION_UPDATED, {
         ...ctx,
@@ -293,6 +294,37 @@ export class ExecServer {
     } finally {
       trackInstanceEnd();
     }
+  }
+
+  /** 会话失效判定：DriverRequestError 且 HTTP 404（serve 重启后旧 ses_ 会话不存在）。 */
+  private isSessionNotFound(err: unknown): boolean {
+    return err instanceof DriverRequestError && err.status === 404;
+  }
+
+  /** sendAndAwait 封装：sendMessage → awaitCompletion（onPoll 增量上送 delta）。 */
+  private async runSendAndAwait(
+    payload: ExecuteRequestPayload,
+    sessionID: string,
+    ctx: Record<string, string | undefined>,
+  ): Promise<CompletionResult> {
+    const tracker = new MessageDeltaTracker();
+    return sendAndAwait(
+      this.driver,
+      sessionID,
+      {
+        model: payload.model ?? null,
+        agent: payload.agent,
+        parts: normalizeParts(payload.prompt),
+        directory: payload.directory,
+      },
+      {
+        firstTokenTimeoutMs: this.firstTokenTimeoutMs,
+        pollMs: this.pollMs,
+        onPoll: (messages: ServeMessage[], _elapsedMs: number) => {
+          void this.sendDelta(ctx, tracker, messages);
+        },
+      },
+    );
   }
 
   /** onPoll 钩子：增量上送 message.part.delta（按消息 id 去重，只送新增 parts）。 */

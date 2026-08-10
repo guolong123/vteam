@@ -17,6 +17,7 @@ import {
   V1Driver,
   ServeMessage,
   ServePart,
+  DriverRequestError,
 } from '../driver/v1-driver';
 import { getLoad, resetInstanceCount } from '../instance-tracker';
 import { ExecServer } from './exec-server';
@@ -168,16 +169,101 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
   });
 
   it('复用会话：请求带 sessionId 时不 createSession（端点按 opencode 会话 id 区分）', async () => {
-    const { driver, createSession } = mockDriver();
+    const { driver, createSession, sendMessage } = mockDriver();
     const { sender, sent } = createSender();
     const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
     const bound = await exec.start();
     try {
       await postExecute(bound, { taskId: 't_1', sessionId: 'ses_existing', prompt: 'go' });
       await waitFor(() => sent.length >= 4);
+      // 无 404 → 不重建：createSession 不调用、sendMessage 仅一次且用原 id（回归）
       expect(createSession).not.toHaveBeenCalled();
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith('ses_existing', expect.anything());
       // 事件 sessionId = 复用的会话 id
       expect(sent[0].payload.sessionId).toBe('ses_existing');
+      const completed = sent.find((s) => s.type === 'task.completed');
+      expect(completed?.payload.sessionId).toBe('ses_existing');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('复用会话 404（serve 重启后旧会话丢失）→ 自动 createSession 新建 → 重试成功，事件用新 sessionId', async () => {
+    const { driver, createSession, sendMessage } = mockDriver();
+    createSession.mockResolvedValue('ses_new');
+    sendMessage
+      .mockRejectedValueOnce(new DriverRequestError('prompt_async HTTP 404', 404))
+      .mockResolvedValue(undefined);
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', sessionId: 'ses_existing', prompt: 'go' });
+      await waitFor(() => sent.length >= 4);
+      // 404 后重建会话重试一次
+      expect(createSession).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      expect(sendMessage).toHaveBeenCalledWith('ses_existing', expect.anything());
+      expect(sendMessage).toHaveBeenLastCalledWith('ses_new', expect.anything());
+      // 终态事件 sessionId = 新会话 id
+      const idle = sent.find((s) => s.type === 'session.updated' && s.payload.status === 'idle');
+      expect(idle?.payload.sessionId).toBe('ses_new');
+      const completed = sent.find((s) => s.type === 'task.completed');
+      expect(completed?.payload).toMatchObject({ sessionId: 'ses_new', text: 'Hello' });
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('复用会话 404 → 回退 createSession 也失败 → agent.status(error) + session.updated(failed)', async () => {
+    const { driver, createSession, sendMessage } = mockDriver();
+    createSession.mockRejectedValue(new Error('serve 未就绪'));
+    sendMessage.mockRejectedValue(new DriverRequestError('prompt_async HTTP 404', 404));
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_existing', prompt: 'go' });
+      await waitFor(() => sent.length >= 3);
+      // createSession 失败 → 不重试 sendMessage，直接走 error 收敛（sessionId 仍为复用的旧 id）
+      expect(createSession).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      const terminal = sent.filter((s) => s.type !== 'message.part.delta');
+      expect(terminal.map((s) => s.type)).toEqual([
+        'session.updated',
+        'agent.status',
+        'session.updated',
+      ]);
+      expect(terminal[0].payload).toMatchObject({ sessionId: 'ses_existing', status: 'running' });
+      expect(terminal[1].payload).toMatchObject({ sessionId: 'ses_existing', status: 'error' });
+      expect(String(terminal[1].payload.error)).toContain('serve 未就绪');
+      expect(terminal[2].payload).toMatchObject({ sessionId: 'ses_existing', status: 'failed' });
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('无 sessionId 新建场景：sendMessage 404 不触发重建（createSession 仅一次）→ error + failed', async () => {
+    const { driver, createSession, sendMessage } = mockDriver();
+    sendMessage.mockRejectedValue(new DriverRequestError('prompt_async HTTP 404', 404));
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', prompt: 'go' });
+      await waitFor(() => sent.length >= 3);
+      expect(createSession).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith('ses_1', expect.anything());
+      const terminal = sent.filter((s) => s.type !== 'message.part.delta');
+      expect(terminal.map((s) => s.type)).toEqual([
+        'session.updated',
+        'agent.status',
+        'session.updated',
+      ]);
+      expect(terminal[1].payload.status).toBe('error');
+      expect(terminal[2].payload).toMatchObject({ sessionId: 'ses_1', status: 'failed' });
     } finally {
       await exec.stop();
     }
