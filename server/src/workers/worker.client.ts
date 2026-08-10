@@ -73,10 +73,12 @@ export interface WorkerModel {
  * worker 执行端点收到后立即 202 {accepted:true}（fire-and-forget），异步驱动 serve 并
  * 上送事件（session.updated/message.part.delta/task.completed/agent.status）；回复经
  * server ingress 回流落库，本客户端只保证「已受理」。
+ * ⚠️ 字段名与 worker ExecuteRequestPayload.prompt 一一对应（worker 执行端点校验
+ * `payload.prompt`，发送 `parts` 会 400「缺少必填字段 prompt」——wave1 对齐修复）。
  */
 export interface ExecuteOptions {
-  /** 消息 parts（必填，透传 worker 执行端点）。 */
-  parts: unknown[];
+  /** 提示内容：字符串（worker 归一为单 text part）或 parts 数组（透传 serve）。 */
+  prompt: string | unknown[];
   /** 模型选择（opencode serve 格式 { providerID, modelID }）。 */
   model?: { providerID: string; modelID: string } | null;
   /** opencode agent 名（可选，缺省 serve 默认 agent）。 */
@@ -189,7 +191,7 @@ export class WorkerClient {
    * - URL：capabilities.execBaseUrl（完整执行端点基址）→ 否则 serve 基址 origin + ':' +
    *   capabilities.execPort（缺省 DEFAULT_EXEC_PORT=4198）拼接——执行端点与 serve 是
    *   不同端口（worker 独立 node:http 监听），不能复用 serve baseUrl 直连；
-   * - body：完整 ExecuteOptions（parts/model/agent/directory/taskId/agentId/channelId/
+   * - body：完整 ExecuteOptions（prompt/model/agent/directory/taskId/agentId/channelId/
    *   sessionId），事件回流经 ingress 落库，server 不再自持轮询。
    */
   async execute(worker: WorkerEndpointRef, opts: ExecuteOptions): Promise<void> {
@@ -204,7 +206,8 @@ export class WorkerClient {
         ...(opts.channelId ? { channelId: opts.channelId } : {}),
         ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
         ...(opts.directory ? { directory: opts.directory } : {}),
-        parts: opts.parts,
+        // 对齐 worker ExecuteRequestPayload.prompt（worker 执行端点校验该字段）
+        prompt: opts.prompt,
       }),
     });
     if (!res.ok) {

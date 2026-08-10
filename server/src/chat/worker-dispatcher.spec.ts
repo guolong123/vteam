@@ -250,7 +250,7 @@ describe('WorkerDispatcher', () => {
         expect.objectContaining({ id: 'w_0000000001' }),
         expect.objectContaining({
           model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
-          parts: [{ type: 'text', text: request.text }],
+          prompt: [{ type: 'text', text: request.text }],
           taskId: request.taskId,
           agentId: 'a_product',
           channelId: request.channelId,
@@ -747,9 +747,9 @@ describe('WorkerDispatcher', () => {
       await d.dispatch(request);
 
       const promptArgs = workerClient.execute.mock.calls[0][1] as {
-        parts: Array<{ text: string }>;
+        prompt: Array<{ text: string }>;
       };
-      const promptText = promptArgs.parts[0].text;
+      const promptText = promptArgs.prompt[0].text;
       expect(promptText).toContain('<doclib>');
       expect(promptText).toContain('需求文档');
       expect(promptText).toContain('version="v3"');
@@ -765,8 +765,8 @@ describe('WorkerDispatcher', () => {
       await d.dispatch(request);
 
       const promptText = (
-        workerClient.execute.mock.calls[0][1] as { parts: Array<{ text: string }> }
-      ).parts[0].text;
+        workerClient.execute.mock.calls[0][1] as { prompt: Array<{ text: string }> }
+      ).prompt[0].text;
       expect(promptText).toBe(request.text);
     });
 
@@ -793,8 +793,8 @@ describe('WorkerDispatcher', () => {
       await d.dispatch(request);
 
       const promptText = (
-        workerClient.execute.mock.calls[0][1] as { parts: Array<{ text: string }> }
-      ).parts[0].text;
+        workerClient.execute.mock.calls[0][1] as { prompt: Array<{ text: string }> }
+      ).prompt[0].text;
       expect(promptText).toContain('<doclib>');
       expect(promptText).toMatch(/<\/doclib>\n\n你好，请处理/);
     });
@@ -2160,9 +2160,9 @@ describe('WorkerDispatcher', () => {
 
     const dispatchedPrompt = (): string => {
       const args = workerClient.execute.mock.calls[0][1] as {
-        parts: Array<{ type: string; text: string }>;
+        prompt: Array<{ type: string; text: string }>;
       };
-      return args.parts[0].text;
+      return args.prompt[0].text;
     };
 
     it('群聊历史注入：用户+agent 历史按时间序随 prompt 下发，当前触发消息内容不重复', async () => {

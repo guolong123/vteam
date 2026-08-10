@@ -613,7 +613,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // （<WORK_DIR>/tasks/<taskId>，mkdir -p 保证存在），防模型在仓库根写文件污染（F4）。
     const taskWorkDir = await this.ensureTaskWorkDir(taskId);
     await this.workerClient.execute(worker, {
-      parts: [{ type: 'text', text: prompt }],
+      prompt: [{ type: 'text', text: prompt }],
       model,
       directory: taskWorkDir,
       taskId,

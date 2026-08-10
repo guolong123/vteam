@@ -460,6 +460,40 @@ describe('WorkerEventIngress', () => {
         );
       }
     });
+
+    it('wave1 对齐：worker 上送 ses_ 前缀 sessionId → 经 instanceRef 映射为平台主键再落库/emit/活动通知', async () => {
+      prisma.session.findFirst.mockResolvedValue({ id: 's_mapped' });
+      const activityPayloads: SessionActivityPayload[] = [];
+      ingress.onSessionActivity((p) => activityPayloads.push(p));
+
+      const e = event('w_1', 'evw_sesmap', 'session.updated', {
+        taskId: 't_1',
+        agentId: 'a_1',
+        sessionId: 'ses_xxx',
+        channelId: 'c_1',
+        status: 'running',
+      });
+      expect(await ingress.handleEvent(e)).toBe(true);
+
+      expect(prisma.session.findFirst).toHaveBeenCalledWith({
+        where: { instanceRef: 'ses_xxx' },
+        select: { id: true },
+      });
+      // 落库用平台主键（非 ses_，否则永远匹配不到 Session 行）
+      expect(prisma.session.updateMany).toHaveBeenCalledWith({
+        where: { id: 's_mapped', status: { not: 'running' } },
+        data: { status: 'running' },
+      });
+      expect(realtime.emit).toHaveBeenCalledWith(
+        'session.updated',
+        { sessionId: 's_mapped', status: 'running', workerId: 'w_1' },
+        { type: 'task', id: 't_1' },
+      );
+      // activity 通知用平台主键（dispatcher watchdog 以 target.sessionId=s_ 注册）
+      expect(activityPayloads).toEqual([
+        { type: 'session.updated', sessionId: 's_mapped', taskId: 't_1', status: 'running' },
+      ]);
+    });
   });
 
   describe('agent.status → emit agent.loading / agent.error', () => {
@@ -584,6 +618,22 @@ describe('WorkerEventIngress', () => {
       await ingress.handleEvent(e);
 
       expect(cbs[0]).toMatchObject({ sessionId: undefined });
+    });
+
+    it('wave1 对齐：task.completed 上送 channelId → 回调透传（resolveChannel 群聊优先依赖）', async () => {
+      const cbs: TaskCompletedPayload[] = [];
+      ingress.onTaskCompleted((p) => cbs.push(p));
+
+      const e = event('w_1', 'evw_13', 'task.completed', {
+        taskId: 't_1',
+        agentId: 'a_1',
+        sessionId: 's_1',
+        channelId: 'c_group',
+        text: '完成',
+      });
+      await ingress.handleEvent(e);
+
+      expect(cbs[0]).toMatchObject({ channelId: 'c_group' });
     });
 
     it('onAgentStatus：agent.status 触发注册回调', async () => {

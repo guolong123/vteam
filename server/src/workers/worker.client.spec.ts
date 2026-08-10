@@ -162,7 +162,7 @@ describe('WorkerClient', () => {
 
       await expect(
         client.execute(execWorker, {
-          parts: [{ type: 'text', text: 'hi' }],
+          prompt: [{ type: 'text', text: 'hi' }],
           model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
           agent: 'build',
           directory: '/tmp/tasks/t_1',
@@ -184,7 +184,7 @@ describe('WorkerClient', () => {
         channelId: 'c_1',
         sessionId: 'ses_1',
         directory: '/tmp/tasks/t_1',
-        parts: [{ type: 'text', text: 'hi' }],
+        prompt: [{ type: 'text', text: 'hi' }],
       });
     });
 
@@ -196,29 +196,29 @@ describe('WorkerClient', () => {
         capabilities: { execBaseUrl: 'http://worker:4198' },
       };
 
-      await client.execute(workerWithExecBase, { parts: [{ type: 'text', text: 'x' }] });
+      await client.execute(workerWithExecBase, { prompt: [{ type: 'text', text: 'x' }] });
 
       const [url] = mockFetch.mock.calls[0] as [string];
       expect(url).toBe('http://worker:4198/execute');
     });
 
-    it('execPort 缺失 → 缺省 4198（对齐 worker WORKER_EXEC_PORT）；仅 parts 也 2xx', async () => {
+    it('execPort 缺失 → 缺省 4198（对齐 worker WORKER_EXEC_PORT）；仅 prompt 也 2xx', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ ok: true, status: 202 }));
       const workerNoExecPort = { id: 'w_1', capabilities: { baseUrl: 'http://worker:46267' } };
 
-      await client.execute(workerNoExecPort, { parts: [{ type: 'text', text: 'x' }] });
+      await client.execute(workerNoExecPort, { prompt: [{ type: 'text', text: 'x' }] });
 
       const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
       expect(url).toBe(`http://worker:${DEFAULT_EXEC_PORT}/execute`);
-      expect(JSON.parse(String(init.body))).toEqual({ parts: [{ type: 'text', text: 'x' }] });
+      expect(JSON.parse(String(init.body))).toEqual({ prompt: [{ type: 'text', text: 'x' }] });
     });
 
     it('baseUrl 缺失 → WORKER_BASE_URL 回退 origin 拼接 execPort', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ ok: true, status: 202 }));
 
-      await client.execute(worker, { parts: [{ type: 'text', text: 'x' }] });
+      await client.execute(worker, { prompt: [{ type: 'text', text: 'x' }] });
 
       const [url] = mockFetch.mock.calls[0] as [string];
       expect(url).toBe(`http://localhost:${DEFAULT_EXEC_PORT}/execute`);
@@ -229,7 +229,7 @@ describe('WorkerClient', () => {
       mockFetch.mockResolvedValue(response({ ok: false, status: 500 }));
 
       await expect(
-        client.execute(execWorker, { parts: [] }),
+        client.execute(execWorker, { prompt: [] }),
       ).rejects.toMatchObject({ workerId: 'w_1', status: 503 });
     });
 
@@ -238,7 +238,7 @@ describe('WorkerClient', () => {
       mockFetch.mockRejectedValue(new TypeError('ECONNREFUSED'));
 
       await expect(
-        client.execute(execWorker, { parts: [] }),
+        client.execute(execWorker, { prompt: [] }),
       ).rejects.toMatchObject({ workerId: 'w_1', status: 503 });
     });
   });

@@ -41,6 +41,8 @@ export interface AgentStatusPayload {
   taskId?: string;
   agentId?: string;
   sessionId?: string;
+  /** 消息来源频道 id（worker 上送透传；ingress 不消费，回调/前端映射链透传）。 */
+  channelId?: string;
   /** 进行中阶段：thinking → operating（FR-20 两阶段指示器）。 */
   phase?: string;
   /** loading=进行中 / error=失败（缺省按 loading 处理）。 */
@@ -277,15 +279,16 @@ export class WorkerEventIngress {
 
   // ---- 语义转换 ----
 
-  /** session.updated：更新 Session.status（合法值映射）+ emit session.updated。 */
+  /** session.updated：更新 Session.status（合法值映射）+ emit session.updated。
+   *  wave1 对齐：worker 上送 sessionId 为 opencode 会话 id（ses_ 前缀，exec-server.ts
+   *  透传 dispatch 下发值）——先经 instanceRef 反查为平台 Session 主键（s_ 前缀），
+   *  后续 updateMany/emit/activity 通知统一用平台主键（dispatcher watchdog 以
+   *  target.sessionId=s_ 注册，域不一致会导致首字 watchdog 永不清除）。 */
   private async handleSessionUpdated(dto: WorkerEventDto): Promise<void> {
-    const { sessionId, status, taskId } = dto.payload as {
-      sessionId?: unknown;
-      status?: unknown;
-      taskId?: unknown;
-    };
-    const mapped = this.mapSessionStatus(status);
-    if (typeof sessionId === 'string' && sessionId && mapped) {
+    const raw = dto.payload as { sessionId?: unknown; status?: unknown; taskId?: unknown };
+    const sessionId = await this.resolvePlatformSessionId(this.str(raw.sessionId));
+    const mapped = this.mapSessionStatus(raw.status);
+    if (sessionId && mapped) {
       // updateMany 幂等：status 已一致时不产生更新（不抛）。
       // DB 更新失败仅记 warn，不阻断 emit——事件流转优先（前端感知），落库终态由 T10/重放兜底。
       try {
@@ -307,19 +310,19 @@ export class WorkerEventIngress {
     await this.realtime.emit(
       EVENT_TYPES.SESSION_UPDATED,
       {
-        sessionId: typeof sessionId === 'string' ? sessionId : null,
-        status: mapped ?? (typeof status === 'string' ? status : null),
+        sessionId: sessionId ?? null,
+        status: mapped ?? (typeof raw.status === 'string' ? raw.status : null),
         workerId: dto.workerId,
       },
-      this.scopeOf(taskId),
+      this.scopeOf(raw.taskId),
     );
     // 判死 watchdog：session 状态流转即活动事件（running 刷新 idle 计时/非 running 结束追踪）
-    if (mapped && typeof sessionId === 'string' && sessionId) {
+    if (mapped && sessionId) {
       this.touchSessionActivity({ type: 'session.updated', sessionId });
       this.notify(this.sessionActivityCallbacks, {
         type: 'session.updated',
         sessionId,
-        taskId: typeof taskId === 'string' ? taskId : undefined,
+        taskId: this.str(raw.taskId),
         status: mapped,
       });
     }
@@ -352,9 +355,11 @@ export class WorkerEventIngress {
     }
     this.notify(this.agentStatusCallbacks, payload);
     // 判死 watchdog：agent 状态上报即活动（thinking/operating 均刷新 idle 计时）
+    // wave1 对齐：sessionId 反查为平台主键（与 dispatcher watchdog 注册域一致）
+    const activitySessionId = await this.resolvePlatformSessionId(this.str(payload.sessionId));
     this.notify(this.sessionActivityCallbacks, {
       type: 'agent.status',
-      sessionId: payload.sessionId,
+      sessionId: activitySessionId,
       taskId: payload.taskId,
       agentId: payload.agentId,
       status: payload.status,
@@ -375,7 +380,9 @@ export class WorkerEventIngress {
   private async handleMessagePartDelta(dto: WorkerEventDto): Promise<boolean> {
     const raw = dto.payload as MessagePartDeltaPayload;
     const channelId = this.str(raw.channelId);
-    const sessionId = this.str(raw.sessionId);
+    // wave1 对齐：worker 上送 sessionId 为 opencode 会话 id（ses_ 前缀）→ 反查平台
+    // Session 主键后再用于 agentId 反查/activity 通知（域一致才与 dispatcher watchdog 匹配）。
+    const sessionId = await this.resolvePlatformSessionId(this.str(raw.sessionId));
     let agentId = this.str(raw.agentId);
     if (!channelId) {
       this.logger.debug(
@@ -391,7 +398,7 @@ export class WorkerEventIngress {
       this.logger.debug(`[ingress] message.part.delta 频道 ${channelId} 不存在，跳过`);
       return true;
     }
-    // payload.agentId 缺失 → 经 sessionId 反查 Session.agentId（定位流式消息归属）
+    // payload.agentId 缺失 → 经 sessionId（平台主键）反查 Session.agentId（定位流式消息归属）
     if (!agentId && sessionId) {
       const session = await this.prisma.session.findUnique({
         where: { id: sessionId },
@@ -479,20 +486,17 @@ export class WorkerEventIngress {
    */
   private async handleTaskCompleted(dto: WorkerEventDto): Promise<boolean> {
     const raw = dto.payload as Record<string, unknown>;
-    // F2 MINOR：payload.sessionId 语义=平台 Session 主键（s_ 前缀）。worker 侧若误上报
-    // opencode 会话 id（ses_ 前缀），经 Session.instanceRef 反查映射（查不到留空，
-    // 由回调内 sessionId 反查 agentId 的兜底逻辑接管）。
-    let sessionId = this.str(raw.sessionId);
-    if (sessionId && !sessionId.startsWith('s_')) {
-      this.logger.warn(
-        `[ingress] task.completed sessionId=${sessionId} 非平台 Session 主键（s_ 前缀），尝试经 instanceRef 映射`,
-      );
-      sessionId = await this.resolveSessionIdByInstanceRef(sessionId);
-    }
+    // wave1 对齐：sessionId 统一经 resolvePlatformSessionId 归一（s_ 前缀透传；ses_ 前缀
+    // opencode 会话 id 经 instanceRef 反查映射；查不到留空，由回调内 sessionId 反查 agentId
+    // 的兜底逻辑接管）。
+    const sessionId = await this.resolvePlatformSessionId(this.str(raw.sessionId));
     const payload: TaskCompletedPayload = {
       taskId: this.str(raw.taskId),
       agentId: this.str(raw.agentId),
       sessionId,
+      // wave1 对齐：channelId 透传（worker 执行端点 ctx 上送）——dispatcher
+      // resolveChannel 群聊优先依赖它（1320cbe）；此前 ingress 丢弃导致群聊回复误落私聊。
+      channelId: this.str(raw.channelId),
       text: this.str(raw.text),
       parts: raw.parts,
       tokens: raw.tokens,
@@ -665,6 +669,23 @@ export class WorkerEventIngress {
       select: { id: true },
     });
     return session?.id;
+  }
+
+  /**
+   * wave1 对齐：把 worker 回流事件的 sessionId 归一为平台 Session 主键——已 s_ 前缀
+   * 直接透传（无反查开销）；ses_ 前缀（opencode 会话 id，worker 执行端点透传 dispatch
+   * 下发的 sessionId）经 instanceRef 反查映射；其他/缺失 → undefined（调用方兜底）。
+   */
+  private async resolvePlatformSessionId(
+    sessionId: string | undefined,
+  ): Promise<string | undefined> {
+    if (!sessionId) {
+      return undefined;
+    }
+    if (sessionId.startsWith('s_')) {
+      return sessionId;
+    }
+    return this.resolveSessionIdByInstanceRef(sessionId);
   }
 
   /** 通知全部注册回调（对齐 MessageDispatcher.notify：异常被吞，订阅者失败不影响主流程）。 */
