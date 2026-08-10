@@ -163,10 +163,79 @@ describe('V1Driver.abort / listModels / isHealthy', () => {
     const driver = newDriver();
     const models = await driver.listModels();
     expect(models).toEqual([
-      { id: 'opencode-go/deepseek-v4-flash', name: 'DeepSeek V4 Flash', providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
-      { id: 'ollama-local/qwen3.5', name: 'Qwen 3.5', providerID: 'ollama-local', modelID: 'qwen3.5' },
+      { id: 'opencode-go/deepseek-v4-flash', name: 'DeepSeek V4 Flash', providerID: 'opencode-go', modelID: 'deepseek-v4-flash', status: undefined },
+      { id: 'ollama-local/qwen3.5', name: 'Qwen 3.5', providerID: 'ollama-local', modelID: 'qwen3.5', status: undefined },
     ]);
     expect(mockFetch.mock.calls[0][0]).toBe('http://127.0.0.1:4199/api/model');
+  });
+
+  it('listModels：过滤 deprecated，仅保留 status=active（CONF-01：26 个含 deprecated → 8 个 active）', async () => {
+    const activeModels = [
+      'ling-3.0-tiny-free',
+      'deepseek-v4-flash-free',
+      'laguna-s-2.1-free',
+      'longcat-2.0-free',
+      'north-mini-code-free',
+      'nemotron-3-ultra-free',
+      'mimo-v2.5-free',
+      'big-pickle',
+    ];
+    const deprecatedModels = [
+      'ling-3.0-flash-free',
+      'hy3-free',
+      'minimax-m3-free',
+      'ring-2.6-1t-free',
+      'ling-2.6-flash-free',
+      'hy3-preview-free',
+      'qwen3.6-plus-free',
+      'mimo-v2-omni-free',
+      'mimo-v2-pro-free',
+      'nemotron-3-super-free',
+      'minimax-m2.5-free',
+      'glm-5-free',
+      'trinity-large-preview-free',
+      'kimi-k2.5-free',
+      'minimax-m2.1-free',
+      'glm-4.7-free',
+      'mimo-v2-flash-free',
+      'grok-code',
+    ];
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        location: 'local',
+        data: [
+          ...activeModels.map((id) => ({ id, providerID: 'opencode', name: id, status: 'active' })),
+          ...deprecatedModels.map((id) => ({ id, providerID: 'opencode', name: id, status: 'deprecated' })),
+        ],
+      }),
+    );
+    const driver = newDriver();
+    const models = await driver.listModels();
+    expect(models).toHaveLength(8);
+    expect(models.every((m) => m.status === 'active')).toBe(true);
+    expect(models.map((m) => m.modelID).sort()).toEqual([...activeModels].sort());
+  });
+
+  it('listModels：status 缺失（旧版 serve）→ 视为可用保留，不误杀', async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        location: 'local',
+        data: [
+          { id: 'deepseek-v4-flash', providerID: 'opencode-go', name: 'DeepSeek V4 Flash' },
+          { id: 'grok-code', providerID: 'opencode', name: 'Grok Code', status: 'deprecated' },
+        ],
+      }),
+    );
+    const driver = newDriver();
+    const models = await driver.listModels();
+    expect(models).toHaveLength(1);
+    expect(models[0]).toEqual({
+      id: 'opencode-go/deepseek-v4-flash',
+      name: 'DeepSeek V4 Flash',
+      providerID: 'opencode-go',
+      modelID: 'deepseek-v4-flash',
+      status: undefined,
+    });
   });
 
   it('isHealthy：2xx → true；非 2xx → false；网络错 → false（不抛异常）', async () => {

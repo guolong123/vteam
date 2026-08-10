@@ -1025,3 +1025,19 @@ Tags: UX-12, remember-me, forgot-password, reset-token, dual-storage, login-page
 - **经验**：① serve /api/model 预热期不止返回空列表，还会返回**非空假列表**——"非空即权威"假设不成立，需稳定性确认（连续 N 次一致）而非仅空列表重试；② server 侧 worker 上报合并应具备**幂等收敛语义**（上报=权威快照，清理未上报项），而不只是追加 upsert，否则假数据一旦进入就在每次注册时被"重放"；③ 清理范围保守原则：只清理 worker-availability 关联，不误删 model 目录（人工条目与 seed 条目无 worker 关联不能删）。
 
 Tags: CONF-01, fake-models, syncFromWorkerCapabilities, resolveModels, stability-check, sync-cleanup
+
+---
+
+## CONF-01（第五次，最终根因）: worker 上报过滤 deprecated 模型（2026-08-10，代码 + typecheck + jest 验证完成，未部署）
+
+- **问题（用户第 5 次质疑"不存在的 free 模型"）**：worker `serve /api/model` 返回 **26 个 opencode/* 模型 = 8 个 `status: active` + 18 个 `status: deprecated`**；`opencode models` CLI / provider 接口只认 active（8 个）。此前 4 次修复（STATIC 收敛 / DB 清理 / stability / sync 清理）均为治标——**deprecated 模型每次 worker 注册都重新上报回流**（CLI 是权威数据源，`/api/model` 未过滤 status）。
+- **根因**：`v1-driver.ts listModels`（:221-233）解析 `/api/model` 时 `data.map` **未过滤 status**，deprecated 模型与 active 一并进入 `resolveModels` → 上报 → `syncFromWorkerCapabilities` 重复入库。
+- **修复（数据源出口统一，任务推荐方案）**：
+  1. `DriverModelInfo` 加可选 `status?: string` 字段（透传 serve 模型状态）。
+  2. `listModels` **先 map（透传 status）再 filter `m.status === undefined || m.status === 'active'`**——只保留 active；**status 缺失（旧版 serve）视为可用保留**（防误杀，兼容无 status 字段的旧 serve 版本）；deprecated 在数据源出口即被剔除，不再进入 resolveModels/上报链路。
+  3. 保持 `resolveModels` stability=2 稳定性校验不变（过滤发生在 driver 层，resolveModels 无感知，index.spec 既有 mock lister 用例零改动）。
+- **server 侧联动**：`syncFromWorkerCapabilities` 已有同步清理（notIn 删除未再上报项）——worker 上报 8 个 active 时，18 个 deprecated 的 availability 自动清理（已有逻辑生效，无需改动）。
+- **测试**：v1-driver.spec 新增 2 例——① 26 个模型（8 active + 18 deprecated，用任务实测模型名）→ 过滤后 **8 个且全 status=active**；② status 缺失（旧版 serve）→ 视为可用保留不误杀。既有 listModels 用例断言补 `status: undefined`（jest toEqual 忽略 undefined 属性，向后兼容）。
+- **验证**：`cd worker && npm run typecheck` **0 错误**；`npx jest`（worker 全量）**17 suites / 214 tests 全绿**（基线 212 + 新增 2）。未 docker build / 未部署 / 未跑浏览器（遵守执行范围）。
+- **遗留（orchestrator 统一负责）**：部署 + DB 清理（删除 18 个 deprecated 的 availability + 目录记录）由 orchestrator 完成；本修复保证后续注册 deprecated 不再回流。
+- **经验**：① serve `/api/model` 的 `status` 字段是模型可用性的**权威判据**（active/deprecated），CLI 显示 8 个 = 只过滤 active 的结果——数据源出口（driver.listModels）过滤是唯一收敛点，server 侧清理/worker 侧稳定性都是下游防御；② 过滤时 `status === undefined` 视为可用保留是必要的兼容分支（旧 serve 版本无该字段，严格 `=== 'active'` 会误杀全部模型导致 capabilities.models 恒空）。

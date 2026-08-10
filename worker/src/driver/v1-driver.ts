@@ -60,6 +60,8 @@ export interface DriverModelInfo {
   name: string;
   providerID: string;
   modelID: string;
+  /** serve 模型状态（active/deprecated）；旧版 serve 可能缺失 → 可选，缺失视为可用（CONF-01 过滤依据）。 */
+  status?: string;
 }
 
 /** step-finish 的 tokens 字段（实测含 total；SDK 类型声明缺 total，此处补全）。 */
@@ -214,22 +216,29 @@ export class V1Driver {
 
   /**
    * GET /api/model：动态模型列表（实测 opencode 1.18.x 端点，返回
-   * `{ location, data: [{id, providerID, family, name, cost...}] }`）。
+   * `{ location, data: [{id, providerID, family, name, status, cost...}] }`）。
    * id 映射为 providerID/modelID（对齐 D7/T11 的 defaultModelId 格式；
    * F2 MINOR：?? '' 兜底与 server worker.client.ts listModels 统一）。
+   * CONF-01（第五次修复）：serve /api/model 返回 active + deprecated 混合列表
+   * （实测 26 = 8 active + 18 deprecated），而 opencode models CLI / provider 接口只认
+   * active——在此统一过滤（数据源出口），仅保留 status === 'active'；status 缺失的
+   * 旧版 serve 视为可用（防误杀），后续 deprecated 不再回流上报。
    */
   async listModels(): Promise<DriverModelInfo[]> {
     const res = await this.request('/api/model');
     const body = (await res.json()) as {
-      data?: Array<{ id?: string; providerID?: string; name?: string }>;
+      data?: Array<{ id?: string; providerID?: string; name?: string; status?: string }>;
     };
     const data = body.data ?? [];
-    return data.map((m) => ({
-      id: `${m.providerID ?? ''}/${m.id ?? ''}`,
-      name: m.name ?? m.id ?? '',
-      providerID: m.providerID ?? '',
-      modelID: m.id ?? '',
-    }));
+    return data
+      .map((m) => ({
+        id: `${m.providerID ?? ''}/${m.id ?? ''}`,
+        name: m.name ?? m.id ?? '',
+        providerID: m.providerID ?? '',
+        modelID: m.id ?? '',
+        status: m.status,
+      }))
+      .filter((m) => m.status === undefined || m.status === 'active');
   }
 
   /** GET /：健康检查（2xx → 在线；网络错/非 2xx → false，不抛异常）。 */
