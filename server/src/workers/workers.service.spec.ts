@@ -917,18 +917,28 @@ describe('WorkersService', () => {
       expect(workerId).toBeNull();
     });
 
-    it('C7 按模型过滤：availability 含该 enabled 模型 → 选中，不符模型被排除', async () => {
+    it('C7 按模型过滤：availability 关联模型 providerID/modelID 匹配 → 选中，不符模型被排除', async () => {
       prisma.worker.findMany.mockResolvedValue([
         workerRow({
           id: 'w_match',
           modelAvailabilities: [
-            { modelId: 'opencode/deepseek-v4-pro', model: { enabled: true } },
+            {
+              modelId: 'md_0000000010',
+              model: {
+                enabled: true,
+                providerID: 'opencode',
+                modelID: 'deepseek-v4-pro',
+              },
+            },
           ],
         }),
         workerRow({
           id: 'w_nomatch',
           modelAvailabilities: [
-            { modelId: 'opencode/glm-5.1', model: { enabled: true } },
+            {
+              modelId: 'md_0000000011',
+              model: { enabled: true, providerID: 'opencode', modelID: 'glm-5.1' },
+            },
           ],
         }),
       ]);
@@ -938,14 +948,30 @@ describe('WorkersService', () => {
       });
 
       expect(workerId).toBe('w_match');
+      // include 须带回 model.providerID/modelID（过滤按 provider/model 拼接，md_ 主键不可比对）
+      expect(prisma.worker.findMany).toHaveBeenCalledWith({
+        where: { status: { not: WORKER_STATUS.OFFLINE } },
+        include: {
+          modelAvailabilities: {
+            include: {
+              model: {
+                select: { enabled: true, providerID: true, modelID: true },
+              },
+            },
+          },
+        },
+      });
     });
 
-    it('C7 按模型过滤：availability 不含该模型 → 排除（返回 null）', async () => {
+    it('C7 按模型过滤：availability 不含该模型（provider/model 不匹配）→ 排除（返回 null）', async () => {
       prisma.worker.findMany.mockResolvedValue([
         workerRow({
           id: 'w_glm',
           modelAvailabilities: [
-            { modelId: 'opencode/glm-5.1', model: { enabled: true } },
+            {
+              modelId: 'md_0000000011',
+              model: { enabled: true, providerID: 'opencode', modelID: 'glm-5.1' },
+            },
           ],
         }),
       ]);
@@ -957,12 +983,19 @@ describe('WorkersService', () => {
       expect(workerId).toBeNull();
     });
 
-    it('C7 按模型过滤：availability 含该模型但 disabled → 排除', async () => {
+    it('C7 按模型过滤：availability 关联模型匹配但 enabled=false → 排除', async () => {
       prisma.worker.findMany.mockResolvedValue([
         workerRow({
           id: 'w_disabled',
           modelAvailabilities: [
-            { modelId: 'opencode/deepseek-v4-pro', model: { enabled: false } },
+            {
+              modelId: 'md_0000000010',
+              model: {
+                enabled: false,
+                providerID: 'opencode',
+                modelID: 'deepseek-v4-pro',
+              },
+            },
           ],
         }),
       ]);
@@ -992,7 +1025,10 @@ describe('WorkersService', () => {
           id: 'w_default',
           defaultModelId: 'opencode/deepseek-v4-pro',
           modelAvailabilities: [
-            { modelId: 'opencode/glm-5.1', model: { enabled: true } },
+            {
+              modelId: 'md_0000000011',
+              model: { enabled: true, providerID: 'opencode', modelID: 'glm-5.1' },
+            },
           ],
         }),
       ]);

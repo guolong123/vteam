@@ -441,8 +441,14 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       where: { status: { not: WORKER_STATUS.OFFLINE } },
       // C7：附带模型可用性（modelAvailabilities → 每个 enabled 模型），供 modelId 过滤；
       // availability 无行（该 worker 从未上报）→ 降级不受过滤约束。
+      // model 需带回 providerID/modelID：availability.modelId 是 models 主键（md_），
+      // 模型过滤按 `providerID/modelID` 拼接匹配（见 matchesModelRequirement）。
       include: {
-        modelAvailabilities: { include: { model: { select: { enabled: true } } } },
+        modelAvailabilities: {
+          include: {
+            model: { select: { enabled: true, providerID: true, modelID: true } },
+          },
+        },
       },
     });
     const ranked = candidates
@@ -470,14 +476,15 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    * - modelId 省略/空 → 不过滤（回归现状：未配模型 agent 可调度任意 worker）
    * - worker.defaultModelId === modelId → 通过（默认模型匹配）
    * - availability 无行（该 worker 从未上报模型能力）→ 通过（过渡期兼容降级）
-   * - 已上报但 availability 不含该 enabled 模型 → 排除
+   * - 已上报：availability 关联 Model 的 `providerID/modelID` 与 modelId 一致且 enabled → 通过
+   *   （availability.modelId 是 models 表 md_ 主键，不可直接比对，须经关联 model 拼接 provider/model）
    */
   private matchesModelRequirement(
     worker: {
       defaultModelId: string | null;
       modelAvailabilities?: Array<{
         modelId: string;
-        model?: { enabled: boolean };
+        model?: { enabled: boolean; providerID?: string; modelID?: string };
       }>;
     },
     modelId: string | undefined,
@@ -492,7 +499,11 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     if (avail.length === 0) {
       return true;
     }
-    return avail.some((a) => a.modelId === modelId && a.model?.enabled !== false);
+    return avail.some(
+      (a) =>
+        a.model?.enabled !== false &&
+        `${a.model?.providerID}/${a.model?.modelID}` === modelId,
+    );
   }
 
   /** GET /workers：worker 列表（不含 tokenHash——敏感字段只存库不返回）。 */
