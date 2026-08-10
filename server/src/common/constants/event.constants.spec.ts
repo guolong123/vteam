@@ -45,7 +45,7 @@ describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 �
     expect(SENDER_TYPE).toEqual({ user: 'user', agent: 'agent', system: 'system' });
   });
 
-  it('SESSION_STATUS 六态', () => {
+  it('SESSION_STATUS 七态', () => {
     expect(SESSION_STATUS).toEqual({
       created: 'created',
       active: 'active',
@@ -53,6 +53,7 @@ describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 �
       idle: 'idle',
       frozen: 'frozen',
       archived: 'archived',
+      failed: 'failed',
     });
   });
 

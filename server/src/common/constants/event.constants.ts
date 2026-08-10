@@ -57,6 +57,8 @@ export const SESSION_STATUS = {
   idle: 'idle',
   frozen: 'frozen',
   archived: 'archived',
+  /** 判死终态：watchdog 首字超时/空闲无输出判死时由 server 侧写入（worker 不回流该值）。 */
+  failed: 'failed',
 } as const;
 
 export type SessionStatus = (typeof SESSION_STATUS)[keyof typeof SESSION_STATUS];

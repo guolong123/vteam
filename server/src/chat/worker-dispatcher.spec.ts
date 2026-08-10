@@ -13,9 +13,12 @@ import { WorkerClient, WorkerUnavailableException } from '../workers/worker.clie
 import { WorkerEventIngress } from '../workers/worker-event.ingress';
 import { WorkersService } from '../workers/workers.service';
 import {
+  DEFAULT_AGENT_IDLE_TIMEOUT_MS,
   DEFAULT_CHAT_HISTORY_MAX_BYTES,
   DEFAULT_DOCLIB_MAX_BYTES,
+  DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
   DISPATCH_TIMEOUT_MS,
+  IDLE_SCAN_INTERVAL_MS,
   escapeXml,
   extractArtifacts,
   PENDING_INSTANCE_REF,
@@ -29,7 +32,7 @@ import {
 
 describe('WorkerDispatcher', () => {
   let prisma: {
-    session: { findUnique: jest.Mock };
+    session: { findUnique: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
     worker: { findUnique: jest.Mock };
     agent: { findUnique: jest.Mock };
     artifact: { findMany: jest.Mock };
@@ -54,7 +57,11 @@ describe('WorkerDispatcher', () => {
   let sessionLifecycle: { bindSessionToWorker: jest.Mock; unbindSession: jest.Mock };
   let artifactsService: { onArtifactSubmitted: jest.Mock };
   let config: { get: jest.Mock };
-  let ingress: { onTaskCompleted: jest.Mock; onAgentStatus: jest.Mock };
+  let ingress: {
+    onTaskCompleted: jest.Mock;
+    onAgentStatus: jest.Mock;
+    onSessionActivity: jest.Mock;
+  };
   /** F3 MINOR-3：每次测试独立的临时任务工作目录根（config WORK_DIR 指向），afterEach 清理。 */
   let workRoot: string;
 
@@ -93,7 +100,12 @@ describe('WorkerDispatcher', () => {
 
   beforeEach(() => {
     prisma = {
-      session: { findUnique: jest.fn() },
+      session: {
+        findUnique: jest.fn(),
+        // 空闲判死路径（scanIdleSessions）会 update(status=failed)；默认未触发
+        update: jest.fn().mockResolvedValue({ id: 's_0000000001' }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       worker: { findUnique: jest.fn() },
       agent: { findUnique: jest.fn() },
       artifact: { findMany: jest.fn() },
@@ -132,6 +144,7 @@ describe('WorkerDispatcher', () => {
     ingress = {
       onTaskCompleted: jest.fn().mockReturnThis(),
       onAgentStatus: jest.fn().mockReturnThis(),
+      onSessionActivity: jest.fn().mockReturnThis(),
     };
   });
 
@@ -148,10 +161,12 @@ describe('WorkerDispatcher', () => {
   // ------------------------------------------------------------------
 
   describe('构造时向 WorkerEventIngress 注册回流回调（T9 接线）', () => {
-    it('注册 onTaskCompleted + onAgentStatus', () => {
+    it('注册 onTaskCompleted + onAgentStatus + onSessionActivity', () => {
       createDispatcher();
       expect(ingress.onTaskCompleted).toHaveBeenCalledTimes(1);
       expect(ingress.onAgentStatus).toHaveBeenCalledTimes(1);
+      // 判死 watchdog：ingress 活动事件通知回调（清除首字 watchdog + 刷新 idle 计时）
+      expect(ingress.onSessionActivity).toHaveBeenCalledTimes(1);
     });
 
     it('ingress 触发 task.completed 回调 → 回流落库+广播+emitFinal（D5 归 WorkerDispatcher）', async () => {
@@ -1106,12 +1121,11 @@ describe('WorkerDispatcher', () => {
   });
 
   // ------------------------------------------------------------------
-  // 超时 watchdog（D8：60s 无回流 → emitError）
+  // 判死 watchdog（方案 A：首字超时 + 空闲判死）
   // ------------------------------------------------------------------
 
-  describe('回流超时 watchdog', () => {
-    it('60s 无回流：emitError + 广播 agent.error（retry 层）', async () => {
-      jest.useFakeTimers();
+  describe('判死 watchdog（首字超时 60s + 空闲判死 30min）', () => {
+    const dispatchSetup = () => {
       prisma.session.findUnique.mockResolvedValue({
         id: 's_0000000001',
         workerId: 'w_0000000001',
@@ -1120,6 +1134,11 @@ describe('WorkerDispatcher', () => {
       prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001', capabilities: {} });
       prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
       prisma.artifact.findMany.mockResolvedValue([]);
+    };
+
+    it('dispatch 后 60s 无事件回流 → emitError「无响应」+ 广播 agent.error（first_token_timeout）', async () => {
+      jest.useFakeTimers();
+      dispatchSetup();
       const d = createDispatcher();
       const errors: unknown[] = [];
       d.onError((e) => errors.push(e));
@@ -1127,35 +1146,46 @@ describe('WorkerDispatcher', () => {
       await d.dispatch(request);
       expect(errors).toHaveLength(0);
 
-      await jest.advanceTimersByTimeAsync(DISPATCH_TIMEOUT_MS);
+      await jest.advanceTimersByTimeAsync(DEFAULT_FIRST_TOKEN_TIMEOUT_MS);
       await jest.advanceTimersByTimeAsync(0);
 
       expect(errors).toEqual([
         {
           taskId: request.taskId,
           agentId: 'a_product',
-          error: expect.stringMatching(/超时/),
+          error: expect.stringMatching(/无响应/),
         },
       ]);
       const agentError = realtime.broadcast.mock.calls.find(
         (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
       );
       expect(agentError?.[1]).toEqual(
-        expect.objectContaining({ level: 'retry', errorType: 'dispatch_timeout' }),
+        expect.objectContaining({ level: 'retry', errorType: 'first_token_timeout' }),
       );
       jest.useRealTimers();
     });
 
-    it('回流成功：清除 60s 超时 watchdog，不再 emitError', async () => {
+    it('60s 内收到 session.updated(running) → 首字 watchdog 清除，不再 emitError', async () => {
       jest.useFakeTimers();
-      prisma.session.findUnique.mockResolvedValue({
-        id: 's_0000000001',
-        workerId: 'w_0000000001',
-        instanceRef: 'ses_0001',
-      });
-      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001', capabilities: {} });
-      prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
-      prisma.artifact.findMany.mockResolvedValue([]);
+      dispatchSetup();
+      const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
+
+      await d.dispatch(request); // 启动首字 watchdog
+      // ingress 活动回调：session.updated(running) 到达（模型已开始产出）
+      const activityCb = ingress.onSessionActivity.mock.calls[0][0];
+      activityCb({ type: 'session.updated', sessionId: 's_0000000001', status: 'running' });
+      await jest.advanceTimersByTimeAsync(DEFAULT_FIRST_TOKEN_TIMEOUT_MS + 1000);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(errors).toHaveLength(0);
+      jest.useRealTimers();
+    });
+
+    it('回流成功（task.completed）：清除首字 watchdog，不再 emitError', async () => {
+      jest.useFakeTimers();
+      dispatchSetup();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: request.channelId });
       prisma.message.create.mockResolvedValue(messageRow());
       const d = createDispatcher();
@@ -1168,9 +1198,126 @@ describe('WorkerDispatcher', () => {
         agentId: 'a_product',
         text: '已完成',
       });
-      await jest.advanceTimersByTimeAsync(DISPATCH_TIMEOUT_MS + 1000);
+      await jest.advanceTimersByTimeAsync(DEFAULT_FIRST_TOKEN_TIMEOUT_MS + 1000);
 
       expect(errors).toHaveLength(0);
+      jest.useRealTimers();
+    });
+
+    it('running 后空闲 30min（无 delta）→ 判死：session failed + agent.error', async () => {
+      jest.useFakeTimers();
+      // dispatch 的会话查询（workerId/instanceRef）
+      prisma.session.findUnique
+        .mockResolvedValueOnce({
+          id: 's_0000000001',
+          workerId: 'w_0000000001',
+          instanceRef: 'ses_0001',
+        })
+        // 空闲判死扫描的状态查询（running）
+        .mockResolvedValue({
+          id: 's_0000000001',
+          status: 'running',
+          taskId: request.taskId,
+          agentId: 'a_product',
+        });
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001', capabilities: {} });
+      prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
+      prisma.artifact.findMany.mockResolvedValue([]);
+      const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
+
+      await d.dispatch(request);
+      // 首个事件：session.updated(running) 清除首字 watchdog，进入空闲判死追踪
+      const activityCb = ingress.onSessionActivity.mock.calls[0][0];
+      activityCb({ type: 'session.updated', sessionId: 's_0000000001', status: 'running' });
+      expect(errors).toHaveLength(0);
+
+      // 推进超过 idle 超时 + 一个扫描周期（触发 interval 回调）
+      await jest.advanceTimersByTimeAsync(
+        DEFAULT_AGENT_IDLE_TIMEOUT_MS + IDLE_SCAN_INTERVAL_MS + 1000,
+      );
+      await jest.advanceTimersByTimeAsync(0);
+
+      // 判死：session 标 failed
+      expect(prisma.session.update).toHaveBeenCalledWith({
+        where: { id: 's_0000000001' },
+        data: { status: 'failed' },
+      });
+      expect(errors).toEqual([
+        {
+          taskId: request.taskId,
+          agentId: 'a_product',
+          error: expect.stringMatching(/已判死/),
+        },
+      ]);
+      const agentError = realtime.broadcast.mock.calls.find(
+        (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
+      );
+      expect(agentError?.[1]).toEqual(
+        expect.objectContaining({ level: 'retry', errorType: 'agent_idle_timeout' }),
+      );
+      jest.useRealTimers();
+    });
+
+    it('空闲期间有 delta（有活动）→ 刷新计时，不判死不误杀', async () => {
+      jest.useFakeTimers();
+      prisma.session.findUnique
+        .mockResolvedValueOnce({
+          id: 's_0000000001',
+          workerId: 'w_0000000001',
+          instanceRef: 'ses_0001',
+        })
+        .mockResolvedValue({
+          id: 's_0000000001',
+          status: 'running',
+          taskId: request.taskId,
+          agentId: 'a_product',
+        });
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001', capabilities: {} });
+      prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
+      prisma.artifact.findMany.mockResolvedValue([]);
+      const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
+
+      await d.dispatch(request);
+      const activityCb = ingress.onSessionActivity.mock.calls[0][0];
+      activityCb({ type: 'session.updated', sessionId: 's_0000000001', status: 'running' });
+
+      // 推进接近 idle 超时（未到）
+      await jest.advanceTimersByTimeAsync(DEFAULT_AGENT_IDLE_TIMEOUT_MS - 5000);
+      // 中途 delta 到达 → 刷新 lastActivityAt（有活动不误杀）
+      activityCb({ type: 'message.part.delta', sessionId: 's_0000000001' });
+      // 再推进一个扫描周期（此时距 delta 仅 65s，远未到 30min）
+      await jest.advanceTimersByTimeAsync(IDLE_SCAN_INTERVAL_MS + 5000);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(prisma.session.update).not.toHaveBeenCalled();
+      expect(errors).toHaveLength(0);
+      const agentError = realtime.broadcast.mock.calls.find(
+        (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
+      );
+      expect(agentError).toBeUndefined();
+      jest.useRealTimers();
+    });
+
+    it('回归：旧 120s 完成超时语义移除——文案不再含「处理超时（120s」', async () => {
+      jest.useFakeTimers();
+      dispatchSetup();
+      const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
+
+      await d.dispatch(request);
+      await jest.advanceTimersByTimeAsync(DEFAULT_FIRST_TOKEN_TIMEOUT_MS);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toEqual(
+        expect.objectContaining({ error: expect.stringMatching(/无响应/) }),
+      );
+      expect(JSON.stringify(errors)).not.toContain('处理超时（120s');
       jest.useRealTimers();
     });
   });
@@ -1310,7 +1457,7 @@ describe('WorkerDispatcher', () => {
       jest.useRealTimers();
     });
 
-    it('60s 无 step-finish：轮询超时标记失败；watchdog emitError；迟到回流跳过落库', async () => {
+    it('60s 无 step-finish：首字 watchdog emitError；迟到回流跳过落库', async () => {
       jest.useFakeTimers();
       pollSetup();
       const d = createDispatcher();
@@ -1318,13 +1465,13 @@ describe('WorkerDispatcher', () => {
       d.onError((e) => errors.push(e));
 
       await d.dispatch(request);
-      await jest.advanceTimersByTimeAsync(DISPATCH_TIMEOUT_MS + 1000);
+      await jest.advanceTimersByTimeAsync(DEFAULT_FIRST_TOKEN_TIMEOUT_MS + 1000);
       await jest.advanceTimersByTimeAsync(0);
 
-      // watchdog emitError（轮询不重复 emit）
+      // 首字 watchdog emitError（模型无响应）
       expect(errors).toHaveLength(1);
       expect(errors[0]).toEqual(
-        expect.objectContaining({ error: expect.stringMatching(/超时/) }),
+        expect.objectContaining({ error: expect.stringMatching(/无响应/) }),
       );
       // 迟到回流（ingress/轮询）跳过落库仅记日志
       await d.handleTaskCompleted({
@@ -1395,8 +1542,8 @@ describe('WorkerDispatcher', () => {
       );
       // 失败态无回复落库
       expect(prisma.message.create).not.toHaveBeenCalled();
-      // watchdog 已清除——再推 120s 不重复 emitError（无双报错）
-      await jest.advanceTimersByTimeAsync(DISPATCH_TIMEOUT_MS);
+      // watchdog 已清除——再推 60s 不重复 emitError（无双报错）
+      await jest.advanceTimersByTimeAsync(DEFAULT_FIRST_TOKEN_TIMEOUT_MS);
       await jest.advanceTimersByTimeAsync(0);
       expect(errors).toHaveLength(1);
       jest.useRealTimers();
@@ -1970,6 +2117,28 @@ describe('WorkerDispatcher', () => {
       );
       const configured = createDispatcher();
       expect(configured.dispatchTimeoutMs).toBe(30_000);
+    });
+
+    it('判死超时默认值：首字 60s / 空闲 30min，env FIRST_TOKEN_TIMEOUT_MS / AGENT_IDLE_TIMEOUT_MS 可配', async () => {
+      expect(DEFAULT_FIRST_TOKEN_TIMEOUT_MS).toBe(60_000);
+      expect(DEFAULT_AGENT_IDLE_TIMEOUT_MS).toBe(30 * 60_000);
+      // 默认
+      const d = createDispatcher();
+      expect(d.firstTokenTimeoutMs).toBe(DEFAULT_FIRST_TOKEN_TIMEOUT_MS);
+      expect(d.agentIdleTimeoutMs).toBe(DEFAULT_AGENT_IDLE_TIMEOUT_MS);
+      // env 可配 → 覆盖默认
+      config.get.mockImplementation((key: string) =>
+        key === 'FIRST_TOKEN_TIMEOUT_MS'
+          ? 10_000
+          : key === 'AGENT_IDLE_TIMEOUT_MS'
+            ? 5 * 60_000
+            : key === 'WORK_DIR'
+              ? workRoot
+              : undefined,
+      );
+      const configured = createDispatcher();
+      expect(configured.firstTokenTimeoutMs).toBe(10_000);
+      expect(configured.agentIdleTimeoutMs).toBe(5 * 60_000);
     });
   });
 

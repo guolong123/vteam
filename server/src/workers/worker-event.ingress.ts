@@ -51,6 +51,21 @@ export interface AgentStatusPayload {
 }
 
 /**
+ * 会话活动事件负载（任务 5 判死 watchdog 数据源）：
+ * 每次会话收到回流事件时通知订阅者（WorkerDispatcher）——用于清除首字超时
+ * watchdog（任何事件都算「有响应」）与维护 running 会话集合。
+ */
+export interface ActivityPayload {
+  sessionId: string;
+  taskId?: string;
+  agentId?: string;
+  /** 活动来源事件类型。 */
+  kind: 'delta' | 'session.updated' | 'task.completed' | 'agent.status';
+  /** session.updated 时的原始 status（running/idle 等，判 running 进入/离开用）。 */
+  status?: string;
+}
+
+/**
  * message.part.delta 回流负载（方案 A worker 主动推，worker 执行端点协议契约）：
  * `{taskId, agentId, sessionId, channelId, parts, status: 'streaming'}`。
  * channelId 语义 = 消息来源频道（resolveChannel 已支持 preferredChannelId）；
@@ -66,8 +81,25 @@ export interface MessagePartDeltaPayload {
   [key: string]: unknown;
 }
 
+/**
+ * 会话活动事件通知负载（判死 watchdog 消费，T10 WorkerDispatcher 注册 onSessionActivity）：
+ * 任何「worker 开始/正在产出」的回流事件（session.updated(running) / message.part.delta /
+ * agent.status / task.completed）都会触发——dispatcher 据此清除首字超时 watchdog +
+ * 刷新空闲判死计时。`type` 为原始事件类型；session.updated 时 `status` 携带目标状态。
+ */
+export interface SessionActivityPayload {
+  type?: string;
+  taskId?: string;
+  agentId?: string;
+  sessionId?: string;
+  status?: string;
+  [key: string]: unknown;
+}
+
 type TaskCompletedCallback = (payload: TaskCompletedPayload) => void;
 type AgentStatusCallback = (payload: AgentStatusPayload) => void;
+type ActivityCallback = (payload: ActivityPayload) => void;
+type SessionActivityCallback = (payload: SessionActivityPayload) => void;
 
 /** task_events 主键前缀（对齐 tasks.service ID_PREFIX.taskEvent，续号同源）。 */
 const TASK_EVENT_ID_PREFIX = 'te';
@@ -128,6 +160,12 @@ export class WorkerEventIngress {
 
   private readonly taskCompletedCallbacks: TaskCompletedCallback[] = [];
   private readonly agentStatusCallbacks: AgentStatusCallback[] = [];
+  private readonly sessionActivityCallbacks: SessionActivityCallback[] = [];
+
+  /** 会话最近输出活动时间（sessionId → Date.now()，空闲判死数据源）。
+   *  仅 delta/task.completed/session.updated 三类「输出活动」刷新；agent.status
+   *  只通知订阅者不清计时（不构成持续输出，防 worker 仅上送状态变化不产字误保活）。 */
+  private readonly sessionActivity = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -145,6 +183,28 @@ export class WorkerEventIngress {
   onAgentStatus(cb: AgentStatusCallback): this {
     this.agentStatusCallbacks.push(cb);
     return this;
+  }
+
+  /**
+   * 订阅会话活动事件（判死 watchdog：T10 WorkerDispatcher 构造时注册）——任何开始/正在
+   * 产出的回流事件（session.updated / message.part.delta / agent.status / task.completed）
+   * 都经此通知，dispatcher 据此清除首字超时 watchdog 并刷新空闲判死计时。
+   */
+  onSessionActivity(cb: SessionActivityCallback): this {
+    this.sessionActivityCallbacks.push(cb);
+    return this;
+  }
+
+  /** 查询会话最近输出活动时间（未记录 → undefined）。 */
+  getLastActivity(sessionId: string): number | undefined {
+    return this.sessionActivity.get(sessionId);
+  }
+
+  /** 刷新会话输出活动时间（空闲判死计时器；有 sessionId 才记录）。 */
+  private touchSessionActivity(payload: SessionActivityPayload): void {
+    if (typeof payload.sessionId === 'string' && payload.sessionId) {
+      this.sessionActivity.set(payload.sessionId, Date.now());
+    }
   }
 
   /**
@@ -253,6 +313,16 @@ export class WorkerEventIngress {
       },
       this.scopeOf(taskId),
     );
+    // 判死 watchdog：session 状态流转即活动事件（running 刷新 idle 计时/非 running 结束追踪）
+    if (mapped && typeof sessionId === 'string' && sessionId) {
+      this.touchSessionActivity({ type: 'session.updated', sessionId });
+      this.notify(this.sessionActivityCallbacks, {
+        type: 'session.updated',
+        sessionId,
+        taskId: typeof taskId === 'string' ? taskId : undefined,
+        status: mapped,
+      });
+    }
   }
 
   /** agent.status：status=error/带 error → emit agent.error；否则 emit agent.loading（phase 透传）。 */
@@ -281,6 +351,14 @@ export class WorkerEventIngress {
       );
     }
     this.notify(this.agentStatusCallbacks, payload);
+    // 判死 watchdog：agent 状态上报即活动（thinking/operating 均刷新 idle 计时）
+    this.notify(this.sessionActivityCallbacks, {
+      type: 'agent.status',
+      sessionId: payload.sessionId,
+      taskId: payload.taskId,
+      agentId: payload.agentId,
+      status: payload.status,
+    });
   }
 
   /**
@@ -383,6 +461,14 @@ export class WorkerEventIngress {
       { message: this.toMessageDto(row), delta: kept },
       { type: 'channel', id: channelId },
     );
+    // 判死 watchdog：delta 落库+广播成功 = 活跃输出 → 刷新 idle 计时（有活动不误杀）
+    this.touchSessionActivity({ type: 'message.part.delta', sessionId });
+    this.notify(this.sessionActivityCallbacks, {
+      type: 'message.part.delta',
+      sessionId,
+      taskId: this.str(raw.taskId),
+      agentId: agentId ?? this.str(raw.agentId),
+    });
     return true;
   }
 
@@ -416,6 +502,14 @@ export class WorkerEventIngress {
     this.logger.log(
       `[ingress] task.completed workerId=${dto.workerId} taskId=${payload.taskId ?? '-'} agentId=${payload.agentId ?? '-'}`,
     );
+    // 判死 watchdog：完成回流 = 本轮结束（dispatcher 停止 idle 追踪，防完成后再误判死）
+    this.touchSessionActivity({ type: 'task.completed', sessionId: payload.sessionId });
+    this.notify(this.sessionActivityCallbacks, {
+      type: 'task.completed',
+      sessionId: payload.sessionId,
+      taskId: payload.taskId,
+      agentId: payload.agentId,
+    });
     this.notify(this.taskCompletedCallbacks, payload);
     return true;
   }

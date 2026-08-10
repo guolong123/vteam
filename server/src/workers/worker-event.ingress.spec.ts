@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import {
   AgentStatusPayload,
+  SessionActivityPayload,
   TaskCompletedPayload,
   WorkerEventIngress,
 } from './worker-event.ingress';
@@ -608,6 +609,128 @@ describe('WorkerEventIngress', () => {
     });
   });
 
+  describe('onSessionActivity：判死 watchdog 会话活动通知', () => {
+    const activityPayloads: SessionActivityPayload[] = [];
+
+    beforeEach(() => {
+      activityPayloads.length = 0;
+      ingress.onSessionActivity((p) => activityPayloads.push(p));
+    });
+
+    it('session.updated 合法状态（running）→ 触发活动通知（type/status/sessionId/taskId）', async () => {
+      await ingress.handleEvent(
+        event('w_1', 'evw_a1', 'session.updated', {
+          sessionId: 's_1',
+          status: 'running',
+          taskId: 't_1',
+        }),
+      );
+      expect(activityPayloads).toEqual([
+        {
+          type: 'session.updated',
+          sessionId: 's_1',
+          taskId: 't_1',
+          status: 'running',
+        },
+      ]);
+    });
+
+    it('session.updated 非法状态（不更新 DB）→ 不触发活动通知', async () => {
+      await ingress.handleEvent(
+        event('w_1', 'evw_a2', 'session.updated', {
+          sessionId: 's_1',
+          status: 'suspended',
+        }),
+      );
+      expect(activityPayloads).toHaveLength(0);
+    });
+
+    it('message.part.delta 成功处理 → 触发活动通知（刷新 idle 计时）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({ id: 'c_dm', type: 'private' });
+      prisma.message.create.mockResolvedValue({
+        id: 'm_delta',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: '你好', parts: [{ type: 'text', text: '你好', synthetic: false }] },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+      await ingress.handleEvent(
+        event('w_1', 'evw_a3', 'message.part.delta', {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '你好', synthetic: false }],
+        }),
+      );
+      expect(activityPayloads).toEqual([
+        {
+          type: 'message.part.delta',
+          sessionId: 's_1',
+          taskId: 't_1',
+          agentId: 'a_1',
+        },
+      ]);
+    });
+
+    it('agent.status → 触发活动通知', async () => {
+      await ingress.handleEvent(
+        event('w_1', 'evw_a4', 'agent.status', {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          phase: 'operating',
+        }),
+      );
+      expect(activityPayloads).toEqual([
+        {
+          type: 'agent.status',
+          sessionId: 's_1',
+          taskId: 't_1',
+          agentId: 'a_1',
+          status: undefined,
+        },
+      ]);
+    });
+
+    it('task.completed → 触发活动通知（本轮结束，dispatcher 停止 idle 追踪）', async () => {
+      await ingress.handleEvent(
+        event('w_1', 'evw_a5', 'task.completed', {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          text: '完成',
+        }),
+      );
+      expect(activityPayloads).toEqual([
+        {
+          type: 'task.completed',
+          sessionId: 's_1',
+          taskId: 't_1',
+          agentId: 'a_1',
+        },
+      ]);
+    });
+
+    it('活动回调抛异常被吞，不影响事件处理', async () => {
+      const thrower = jest.fn(() => {
+        throw new Error('activity boom');
+      });
+      ingress.onSessionActivity(thrower);
+      await expect(
+        ingress.handleEvent(
+          event('w_1', 'evw_a6', 'session.updated', {
+            sessionId: 's_1',
+            status: 'running',
+          }),
+        ),
+      ).resolves.toBe(true);
+    });
+  });
+
   describe('git.op → task_events 落库（T6 审计）', () => {
     it('完整 payload → taskEvent.create（eventType=git.op + metadata Json）', async () => {
       const e = event('w_1', 'evw_13', 'git.op', {
@@ -697,6 +820,108 @@ describe('WorkerEventIngress', () => {
       });
 
       await expect(ingress.handleEvent(e)).resolves.toBe(true);
+    });
+  });
+
+  describe('判死 watchdog 活动源（onSessionActivity + sessionActivity 刷新）', () => {
+    it('session.updated：通知回调（含 status/taskId）+ 刷新 lastActivity', async () => {
+      const acts: Array<Record<string, unknown>> = [];
+      ingress.onSessionActivity((p) => acts.push(p));
+      const e = event('w_1', 'evw_act1', 'session.updated', {
+        sessionId: 's_1',
+        status: 'running',
+        taskId: 't_1',
+      });
+
+      expect(await ingress.handleEvent(e)).toBe(true);
+      expect(acts).toEqual([
+        { type: 'session.updated', sessionId: 's_1', taskId: 't_1', status: 'running' },
+      ]);
+      expect(ingress.getLastActivity('s_1')).toBeDefined();
+    });
+
+    it('message.part.delta：通知回调 + 刷新 lastActivity（输出活动）', async () => {
+      const acts: Array<Record<string, unknown>> = [];
+      ingress.onSessionActivity((p) => acts.push(p));
+      prisma.chatChannel.findUnique.mockResolvedValue({ id: 'c_dm', type: 'private' });
+      prisma.message.create.mockResolvedValue({
+        id: 'm_act1',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: '你好', parts: [{ type: 'text', text: '你好', synthetic: false }] },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+
+      expect(
+        await ingress.handleEvent(
+          event('w_1', 'evw_act2', 'message.part.delta', {
+            taskId: 't_1',
+            agentId: 'a_1',
+            sessionId: 's_1',
+            channelId: 'c_dm',
+            parts: [{ type: 'text', text: '你好', synthetic: false }],
+            status: 'streaming',
+          }),
+        ),
+      ).toBe(true);
+      expect(acts).toEqual([
+        {
+          type: 'message.part.delta',
+          sessionId: 's_1',
+          taskId: 't_1',
+          agentId: 'a_1',
+        },
+      ]);
+      expect(ingress.getLastActivity('s_1')).toBeDefined();
+    });
+
+    it('task.completed：通知回调 + 刷新 lastActivity（本轮结束）', async () => {
+      const acts: Array<Record<string, unknown>> = [];
+      ingress.onSessionActivity((p) => acts.push(p));
+      const e = event('w_1', 'evw_act3', 'task.completed', {
+        taskId: 't_1',
+        agentId: 'a_1',
+        sessionId: 's_1',
+        text: '完成',
+      });
+
+      expect(await ingress.handleEvent(e)).toBe(true);
+      expect(acts).toEqual([
+        { type: 'task.completed', sessionId: 's_1', taskId: 't_1', agentId: 'a_1' },
+      ]);
+      expect(ingress.getLastActivity('s_1')).toBeDefined();
+    });
+
+    it('agent.status：通知回调但不清计时（不刷新 lastActivity，防状态上报保活）', async () => {
+      const acts: Array<Record<string, unknown>> = [];
+      ingress.onSessionActivity((p) => acts.push(p));
+      // 先有一次输出活动（session.updated）建立 lastActivity 基线
+      await ingress.handleEvent(
+        event('w_1', 'evw_act4', 'session.updated', {
+          sessionId: 's_1',
+          status: 'running',
+        }),
+      );
+      const baseline = ingress.getLastActivity('s_1');
+      expect(baseline).toBeDefined();
+
+      await ingress.handleEvent(
+        event('w_1', 'evw_act5', 'agent.status', {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          phase: 'operating',
+        }),
+      );
+      expect(acts).toHaveLength(2);
+      expect(acts[1]).toEqual(
+        expect.objectContaining({ type: 'agent.status', sessionId: 's_1' }),
+      );
+      // agent.status 只通知不清计时——lastActivity 保持 session.updated 时的值
+      expect(ingress.getLastActivity('s_1')).toBe(baseline);
     });
   });
 });

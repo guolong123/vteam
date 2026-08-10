@@ -14,6 +14,7 @@ import {
   EVENT_TYPES,
   MESSAGE_STATUS,
   SENDER_TYPE,
+  SESSION_STATUS,
 } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
@@ -21,7 +22,12 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import { WorkerClient, WorkerEndpointRef, WorkerUnavailableException } from '../workers/worker.client';
-import { AgentStatusPayload, TaskCompletedPayload, WorkerEventIngress } from '../workers/worker-event.ingress';
+import {
+  AgentStatusPayload,
+  SessionActivityPayload,
+  TaskCompletedPayload,
+  WorkerEventIngress,
+} from '../workers/worker-event.ingress';
 import { AssignmentRequirement, WorkersService } from '../workers/workers.service';
 import { DispatchRequest, DispatchResult, MessageDispatcher } from './message-dispatcher';
 
@@ -47,6 +53,21 @@ export const DEFAULT_CHAT_HISTORY_MAX_BYTES = 32 * 1024;
  * 配置项默认值（实例字段 dispatchTimeoutMs 从 ConfigService 读取，缺省回落本值）。
  */
 export const DISPATCH_TIMEOUT_MS = 120_000;
+
+/**
+ * 首字超时（方案 A watchdog 语义）：dispatch 调 worker 执行端点后，若 FIRST_TOKEN_TIMEOUT_MS
+ * 内无任何事件回流（无 session.updated(running)/delta/task.completed/agent.status）→ 判
+ * 「模型完全没响应」：emitError + agent.error 广播。只判「是否开始产出」，完成无时间上限
+ * （长期任务由 worker 自行推进，完成经 task.completed 回流）。env FIRST_TOKEN_TIMEOUT_MS 可配。
+ */
+export const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 60_000;
+
+/** 空闲判死：session 进入 running 后无任何输出活动（delta/agent.status/task.completed）超时 →
+ *  判死（session 标 failed + agent.error）。env AGENT_IDLE_TIMEOUT_MS 可配。 */
+export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 30 * 60_000;
+
+/** 空闲判死扫描周期（定期遍历 lastActivityAt，检查超时会话）。 */
+export const IDLE_SCAN_INTERVAL_MS = 60_000;
 
 /** F3 MINOR-3：任务工作目录根（env WORK_DIR，默认 /tmp/keta-worker-tasks）。
  *  任务级独立工作目录 = <根>/tasks/<taskId>（server 侧 mkdir -p 保证存在），
@@ -211,6 +232,8 @@ export function extractArtifacts(text: string): Array<Record<string, unknown>> {
 interface PendingDispatch {
   taskId: string;
   agentId: string;
+  /** 平台 Session 主键（活动事件回调据此反查首字 watchdog）。 */
+  sessionId: string;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -283,8 +306,17 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
   /** 群聊历史注入上限（对齐 doclib 32KB 语义；公开字段便于测试覆盖）。 */
   public chatHistoryMaxBytes: number;
 
-  /** 待回流 watchdog：`${taskId}:${agentId}` → 定时器（默认 120s 超时 emitError）。 */
+  /** 待回流 watchdog：`${taskId}:${agentId}` → 定时器（首字超时：默认 60s 无首个事件 emitError）。 */
   private readonly pending = new Map<string, PendingDispatch>();
+
+  /** sessionId → watchdog key 反查（ingress 活动事件回调按 sessionId 清除首字 watchdog）。 */
+  private readonly pendingBySession = new Map<string, string>();
+
+  /** sessionId → 最近一次输出活动时间戳（空闲判死依据，ingress 活动事件刷新）。 */
+  private readonly lastActivityAt = new Map<string, number>();
+
+  /** 空闲判死扫描定时器（惰性启动：首个 dispatch 注册 watchdog 时）。 */
+  private idleScanTimer: ReturnType<typeof setInterval> | null = null;
 
   /** F2 C1 幂等：已落库回流的会话（自持轮询与 ingress task.completed 双通道防重）。
    *  F3 MAJOR-1：新一轮 dispatch 会清除目标会话标记（跨轮回流允许），仍防同轮双写。 */
@@ -294,6 +326,10 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
 
   /** F3 MINOR-3：回流超时 ms（env DISPATCH_TIMEOUT_MS，缺省 DISPATCH_TIMEOUT_MS=120s）。 */
   public dispatchTimeoutMs: number;
+  /** 首字超时 ms（env FIRST_TOKEN_TIMEOUT_MS，缺省 60s）：dispatch 后无首个事件回流 → emitError。 */
+  public firstTokenTimeoutMs: number;
+  /** 空闲判死 ms（env AGENT_IDLE_TIMEOUT_MS，缺省 30min）：running 后无输出活动超时 → 判死。 */
+  public agentIdleTimeoutMs: number;
   /** F3 MINOR-3：任务工作目录根（env WORK_DIR，缺省 /tmp/keta-worker-tasks）。 */
   public taskWorkDirRoot: string;
   /** F3 MAJOR-1：增量 poll 游标（sessionId → 已消费到的最新消息 id），复用会话跨轮续接。 */
@@ -332,6 +368,18 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       typeof timeoutMs === 'number' && timeoutMs > 0
         ? timeoutMs
         : DISPATCH_TIMEOUT_MS;
+    // 首字超时（FIRST_TOKEN_TIMEOUT_MS，缺省 60s）——只判「dispatch 后是否开始产出」
+    const firstToken = config.get<number>('FIRST_TOKEN_TIMEOUT_MS');
+    this.firstTokenTimeoutMs =
+      typeof firstToken === 'number' && firstToken > 0
+        ? firstToken
+        : DEFAULT_FIRST_TOKEN_TIMEOUT_MS;
+    // 空闲判死（AGENT_IDLE_TIMEOUT_MS，缺省 30min）——running 后无输出活动超时判死
+    const idleTimeout = config.get<number>('AGENT_IDLE_TIMEOUT_MS');
+    this.agentIdleTimeoutMs =
+      typeof idleTimeout === 'number' && idleTimeout > 0
+        ? idleTimeout
+        : DEFAULT_AGENT_IDLE_TIMEOUT_MS;
     // F3 MINOR-3：任务工作目录根（WORK_DIR），任务目录 = <根>/tasks/<taskId>
     const workDir = config.get<string>('WORK_DIR');
     this.taskWorkDirRoot =
@@ -347,6 +395,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     ingress.onAgentStatus((payload) => {
       void this.handleAgentStatus(payload);
     });
+    // 判死 watchdog：ingress 活动事件通知（session.updated/delta/agent.status/task.completed）
+    // → 清除首字 watchdog + 刷新空闲判死计时
+    ingress.onSessionActivity((payload) => {
+      this.handleSessionActivity(payload);
+    });
   }
 
   onModuleDestroy(): void {
@@ -354,6 +407,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       clearTimeout(p.timer);
     }
     this.pending.clear();
+    this.pendingBySession.clear();
+    if (this.idleScanTimer) {
+      clearInterval(this.idleScanTimer);
+      this.idleScanTimer = null;
+    }
   }
 
   // ------------------------------------------------------------------
@@ -1118,10 +1176,15 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     };
   }
 
-  /** 回流 watchdog：超时（默认 120s）无回流 → emitError + 广播 agent.error（D8 总超时）。 */
+  /**
+   * 首字超时 watchdog（方案 A 语义）：dispatch 调 worker 执行端点后，FIRST_TOKEN_TIMEOUT_MS
+   * 内无任何事件回流（无 session.updated/delta/task.completed/agent.status）→ emitError +
+   * 广播 agent.error（模型完全没响应）。收到首个事件（ingress activity 回调）即清除——只判
+   * 「是否开始产出」，完成无时间上限（长期任务由 worker 推进，完成经 task.completed 回流）。
+   * 同时记录 lastActivityAt 作为空闲判死追踪起点（活动事件刷新，超 AGENT_IDLE_TIMEOUT_MS
+   * 判死）。OBS-009：poll 已快速失败（failedSessions 已标记）时跳过注册。
+   */
   private startPendingWatchdog(taskId: string, agentId: string, sessionId: string): void {
-    // OBS-009：poll 已快速失败（step-finish error/error part，failedSessions 已标记）时
-    // 跳过注册——poll 首轮可能在 watchdog 注册前失败（dispatch 尾部竞态），此时无 timer 可清。
     if (this.failedSessions.has(sessionId)) {
       return;
     }
@@ -1129,24 +1192,134 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     const existing = this.pending.get(key);
     if (existing) {
       clearTimeout(existing.timer);
+      this.pendingBySession.delete(existing.sessionId);
     }
     const timer = setTimeout(() => {
       this.pending.delete(key);
+      this.pendingBySession.delete(sessionId);
       // F2 MINOR：超时标记失败会话——迟到的回流（ingress/轮询）跳过落库仅记日志
       this.failedSessions.add(sessionId);
-      const error = `worker 处理超时（${this.dispatchTimeoutMs / 1000}s 未回流），请稍后重试或检查 worker 状态`;
+      this.lastActivityAt.delete(sessionId);
+      const error = `agent 无响应（${this.firstTokenTimeoutMs / 1000}s 无事件回流），请稍后重试或检查 worker 状态`;
       this.logger.error(`agent ${agentId} ${error}`);
       this.emitError({ taskId, agentId, error });
       void this.broadcastAgentError({
         taskId,
         agentId,
+        sessionId,
         level: 'retry',
-        errorType: 'dispatch_timeout',
+        errorType: 'first_token_timeout',
         message: error,
       });
-    }, this.dispatchTimeoutMs);
+    }, this.firstTokenTimeoutMs);
     timer.unref?.();
-    this.pending.set(key, { taskId, agentId, timer });
+    this.pending.set(key, { taskId, agentId, sessionId, timer });
+    this.pendingBySession.set(sessionId, key);
+    // 空闲判死追踪起点（活动事件经 handleSessionActivity 刷新）
+    this.lastActivityAt.set(sessionId, Date.now());
+    this.startIdleScan();
+  }
+
+  /**
+   * ingress 活动事件通知处理（onSessionActivity 回调）：
+   * - 任意首个事件到达 → 清除首字 watchdog（模型已开始产出，不再等 60s 无响应）；
+   * - task.completed / session 进入非 running 态 → 本轮结束，退出空闲判死追踪；
+   * - 其余活动事件（delta / agent.status / session.updated(running)）→ 刷新 lastActivityAt。
+   */
+  private handleSessionActivity(payload: SessionActivityPayload): void {
+    const { sessionId } = payload;
+    if (!sessionId) {
+      return;
+    }
+    this.clearPendingWatchdogBySession(sessionId);
+    if (
+      payload.type === 'task.completed' ||
+      (payload.type === 'session.updated' &&
+        payload.status &&
+        payload.status !== SESSION_STATUS.running)
+    ) {
+      this.lastActivityAt.delete(sessionId);
+      return;
+    }
+    this.lastActivityAt.set(sessionId, Date.now());
+  }
+
+  /** 惰性启动空闲判死扫描（setInterval 周期遍历 lastActivityAt；unref 防阻塞进程退出）。 */
+  private startIdleScan(): void {
+    if (this.idleScanTimer) {
+      return;
+    }
+    this.idleScanTimer = setInterval(() => {
+      void this.scanIdleSessions().catch((err: unknown) =>
+        this.logger.error(`空闲判死扫描失败: ${this.describeError(err)}`),
+      );
+    }, IDLE_SCAN_INTERVAL_MS);
+    this.idleScanTimer.unref?.();
+  }
+
+  /**
+   * 空闲判死扫描：遍历 lastActivityAt，跳过仍等首事件（pendingBySession 命中）的会话；
+   * 超 AGENT_IDLE_TIMEOUT_MS 无活动 → 查 Session.status，仅 running 判死（failed + emitError
+   * + 广播 agent.error）；非 running（idle/完成/冻结）→ 退出追踪不判死（防误杀）。
+   */
+  private async scanIdleSessions(): Promise<void> {
+    const now = Date.now();
+    const stale: string[] = [];
+    for (const [sessionId, lastAt] of this.lastActivityAt) {
+      if (this.pendingBySession.has(sessionId)) {
+        continue;
+      }
+      if (now - lastAt <= this.agentIdleTimeoutMs) {
+        continue;
+      }
+      stale.push(sessionId);
+    }
+    for (const sessionId of stale) {
+      await this.markSessionIdleDead(sessionId);
+    }
+  }
+
+  /** 单会话空闲判死：查 DB 状态（仅 running 判死）→ failed + emitError + 广播 agent.error。 */
+  private async markSessionIdleDead(sessionId: string): Promise<void> {
+    try {
+      const row = await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { status: true, taskId: true, agentId: true },
+      });
+      if (!row) {
+        this.lastActivityAt.delete(sessionId);
+        return;
+      }
+      if (row.status !== SESSION_STATUS.running) {
+        this.lastActivityAt.delete(sessionId);
+        return;
+      }
+      await this.prisma.session.update({
+        where: { id: sessionId },
+        data: { status: SESSION_STATUS.failed },
+      });
+      this.failedSessions.add(sessionId);
+      this.lastActivityAt.delete(sessionId);
+      const taskId = row.taskId ?? '';
+      const agentId = row.agentId ?? '';
+      const error = `agent 长时间无活动（超过 ${this.agentIdleTimeoutMs / 60000}min），已判死`;
+      this.logger.error(`session ${sessionId} ${error}`);
+      if (taskId && agentId) {
+        this.emitError({ taskId, agentId, error });
+        void this.broadcastAgentError({
+          taskId,
+          agentId,
+          sessionId,
+          level: 'retry',
+          errorType: 'agent_idle_timeout',
+          message: error,
+        });
+      }
+    } catch (err) {
+      this.logger.error(
+        `session ${sessionId} 空闲判死失败: ${this.describeError(err)}`,
+      );
+    }
   }
 
   // ------------------------------------------------------------------
@@ -1224,7 +1397,22 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     if (existing) {
       clearTimeout(existing.timer);
       this.pending.delete(`${taskId}:${agentId}`);
+      this.pendingBySession.delete(existing.sessionId);
     }
+  }
+
+  /** 按平台 sessionId 清除首字 watchdog（ingress 活动事件回调路径，taskId/agentId 未知）。 */
+  private clearPendingWatchdogBySession(sessionId: string): void {
+    const key = this.pendingBySession.get(sessionId);
+    if (!key) {
+      return;
+    }
+    const existing = this.pending.get(key);
+    if (existing) {
+      clearTimeout(existing.timer);
+      this.pending.delete(key);
+    }
+    this.pendingBySession.delete(sessionId);
   }
 
   /** 广播 agent.error（FR-21，scope=task）；广播异常吞掉不阻断主流程。 */
