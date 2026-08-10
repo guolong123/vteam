@@ -43,6 +43,7 @@ type AgentRow = {
   baseAgentId: string | null;
   defaultModelId: string | null;
   workerId: string | null;
+  ackMessage: string | null;
   permissionScope: Prisma.JsonValue | null;
   createdAt: Date;
   updatedAt: Date;
@@ -151,6 +152,7 @@ export class AgentsService implements OnModuleInit {
           prompt: dto.prompt ?? '',
           baseAgentId: null,
           defaultModelId: dto.defaultModelId ?? null,
+          ackMessage: dto.ackMessage ?? null,
           permissionScope: dto.permissionScope
             ? (dto.permissionScope as Prisma.InputJsonValue)
             : undefined,
@@ -195,6 +197,7 @@ export class AgentsService implements OnModuleInit {
           role: source.role,
           prompt: source.prompt,
           defaultModelId: source.defaultModelId,
+          ackMessage: source.ackMessage,
           permissionScope: source.permissionScope as Prisma.InputJsonValue | undefined,
           createdBy: userId,
         },
@@ -237,6 +240,7 @@ export class AgentsService implements OnModuleInit {
             ? { defaultModelId: dto.defaultModelId }
             : {}),
           ...(dto.workerId !== undefined ? { workerId: dto.workerId } : {}),
+          ...(dto.ackMessage !== undefined ? { ackMessage: dto.ackMessage } : {}),
           ...(dto.permissionScope !== undefined
             ? { permissionScope: dto.permissionScope as Prisma.InputJsonValue }
             : {}),
@@ -316,6 +320,7 @@ export class AgentsService implements OnModuleInit {
       baseAgentId: agent.baseAgentId,
       defaultModelId: agent.defaultModelId,
       workerId: agent.workerId,
+      ackMessage: agent.ackMessage,
       permissionScope: agent.permissionScope,
       skillIds: agent.skills.map((s) => s.skillId),
       toolEffects: agent.toolEffects.map((t) => ({
@@ -451,7 +456,10 @@ export class AgentsService implements OnModuleInit {
     }
   }
 
-  /** template 仅放行 defaultModelId 单字段更新（其余字段任一出现即视为越权）。 */
+  /**
+   * template 仅放行 defaultModelId/ackMessage 单字段更新（其余字段任一出现即视为越权）。
+   * defaultModelId=模型属部署环境适配；ackMessage=收到确认文案属部署适配，均可由部署方调整。
+   */
   private isModelOnlyUpdate(dto: UpdateAgentDto): boolean {
     const fields = [
       dto.name,
@@ -462,7 +470,10 @@ export class AgentsService implements OnModuleInit {
       dto.toolEffects,
     ];
     const hasOtherField = fields.some((f) => f !== undefined);
-    return !hasOtherField && dto.defaultModelId !== undefined;
+    return (
+      !hasOtherField &&
+      (dto.defaultModelId !== undefined || dto.ackMessage !== undefined)
+    );
   }
 
   /** 404：AGENT_NOT_FOUND（AGENT_ERRORS，值跨域一致）。 */

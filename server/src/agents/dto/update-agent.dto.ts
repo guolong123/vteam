@@ -79,4 +79,16 @@ export class UpdateAgentDto {
   @IsString()
   @ValidateIf((o) => o.workerId !== null)
   workerId?: string | null;
+
+  @ApiPropertyOptional({
+    description: '群聊 @Agent 收到确认文案（null=清空，落库用 DEFAULT_ACK_MESSAGE；模板 Agent 也放行）',
+    example: '收到，正在处理…',
+    maxLength: 200,
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  @ValidateIf((o) => o.ackMessage !== null)
+  ackMessage?: string | null;
 }

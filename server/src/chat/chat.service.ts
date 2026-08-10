@@ -21,7 +21,7 @@ import {
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { CHAT_ERRORS } from './chat.constants';
+import { CHAT_ERRORS, DEFAULT_ACK_MESSAGE } from './chat.constants';
 import { CreateDmChannelDto } from './dto/create-dm-channel.dto';
 import { CreateMessageDto, MentionInput } from './dto/create-message.dto';
 import { QueryMessagesDto } from './dto/query-messages.dto';
@@ -377,10 +377,49 @@ export class ChatService {
         this.logger.error(`dispatch failed: ${err.message}`, err.stack),
       );
 
+    // 5.5 收到确认（ACK）：dispatch 后立即为每个 dispatched 目标落库 agent「收到」消息
+    //    （text=agent.ackMessage 或 DEFAULT_ACK_MESSAGE；mentions=null 不会递归触发 dispatch）
+    await this.acknowledge(channelId, targets.map((t) => t.agentId));
+
     return {
       message: this.toMessageDto(message),
       triggers,
     };
+  }
+
+  /**
+   * 收到确认（ACK）：@Agent 消息响应同步返回受理，DB 立即落库 agent「收到」消息。
+   * 每个 dispatched 目标各落一条（senderType=agent，mentions=null 防递归触发 dispatch）；
+   * text=agent.ackMessage 配置或 DEFAULT_ACK_MESSAGE 默认；先落库后广播（08 篇 §7.3）。
+   */
+  private async acknowledge(channelId: string, agentIds: string[]): Promise<void> {
+    const ids = [...new Set(agentIds)];
+    if (ids.length === 0) return;
+    const rows = await this.prisma.agent.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, ackMessage: true },
+    });
+    for (const row of rows) {
+      const ack = await this.prisma.message.create({
+        data: {
+          id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+          channelId,
+          senderType: SENDER_TYPE.agent,
+          senderId: row.id,
+          content: {
+            text: row.ackMessage ?? DEFAULT_ACK_MESSAGE,
+            parts: [],
+          } as Prisma.InputJsonValue,
+          mentions: null,
+          status: MESSAGE_STATUS.sent,
+        },
+      });
+      await this.realtime.broadcast(
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        { message: this.toMessageDto(ack) },
+        { type: 'channel', id: channelId },
+      );
+    }
   }
 
   /**

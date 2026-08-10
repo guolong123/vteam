@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { DEFAULT_ACK_MESSAGE } from '../src/chat/chat.constants';
 import {
   buildModelSeedRows,
   TEMPLATE_DEFAULT_MODELS,
@@ -113,6 +114,7 @@ async function main() {
       id: 'a_product',
       name: '产品经理',
       role: 'product',
+      ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '以产品经理视角拆解需求：整理业务背景、拆解用户故事，输出需求文档与验收标准。默认项目内只读 + 文档库读写。',
       permissionScope: { projects: '*', write: false, doclibOnly: true },
@@ -121,6 +123,7 @@ async function main() {
       id: 'a_architect',
       name: '架构师',
       role: 'architect',
+      ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '负责技术方案设计与推演：权衡取舍，输出设计文档与关键决策记录。默认项目内只读。',
       permissionScope: { projects: '*', write: false },
@@ -129,6 +132,7 @@ async function main() {
       id: 'a_developer',
       name: '开发者',
       role: 'developer',
+      ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '负责编码实现与问题排查：编写实现代码并给出说明。默认项目读写，写操作需成员确认。',
       permissionScope: { projects: '*', write: true, ask: true },
@@ -137,6 +141,7 @@ async function main() {
       id: 'a_tester',
       name: '测试',
       role: 'tester',
+      ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '负责用例设计与缺陷验证：穷举边界场景，输出验证结论与缺陷报告。默认项目内只读 + 文档库读写。',
       permissionScope: { projects: '*', write: false, doclibOnly: true },
@@ -238,9 +243,14 @@ async function main() {
   console.log(`  - 初始 admin 账号：admin / admin123`);
 }
 
-main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+// 直接执行（npm run seed）时自动运行；被测试 import 时由测试手动 await main()。
+if (require.main === module) {
+  main()
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    })
+    .finally(() => prisma.$disconnect());
+}
+
+export { main };

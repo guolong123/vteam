@@ -298,6 +298,8 @@ model Agent {
   defaultModelId  String?   @map("default_model_id")
   // 首选 worker 软绑定（可空，null=自动调度；离线自动回退，Metis R1）
   workerId        String?   @map("worker_id")
+  // 群聊 @Agent 收到确认文案（可空，null → 落库用 DEFAULT_ACK_MESSAGE 默认文案）
+  ackMessage      String?   @map("ack_message")
   permissionScope Json?     @map("permission_scope")
   createdBy       String    @map("created_by")
   createdAt       DateTime  @default(now()) @map("created_at")

@@ -14,7 +14,7 @@ import {
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { CHAT_ERRORS } from './chat.constants';
+import { CHAT_ERRORS, DEFAULT_ACK_MESSAGE } from './chat.constants';
 import { ChatService } from './chat.service';
 import { MessageDispatcher } from './message-dispatcher';
 
@@ -27,7 +27,7 @@ describe('ChatService', () => {
     projectMember: { findMany: jest.Mock; findUnique: jest.Mock };
     taskAgent: { findMany: jest.Mock; findFirst: jest.Mock };
     session: { findFirst: jest.Mock };
-    agent: { findUnique: jest.Mock };
+    agent: { findUnique: jest.Mock; findMany: jest.Mock };
     $transaction: jest.Mock;
   };
   let idGen: { nextId: jest.Mock; seed: jest.Mock };
@@ -99,7 +99,7 @@ describe('ChatService', () => {
       projectMember: { findMany: jest.fn(), findUnique: jest.fn() },
       taskAgent: { findMany: jest.fn(), findFirst: jest.fn() },
       session: { findFirst: jest.fn() },
-      agent: { findUnique: jest.fn() },
+      agent: { findUnique: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(),
     };
     idGen = { nextId: jest.fn(), seed: jest.fn() };
@@ -131,14 +131,19 @@ describe('ChatService', () => {
       expect(dispatcher.onError).toHaveBeenCalledTimes(1);
     });
 
-    it('发消息全流程：权限→@解析→落库→广播→分派受理，返回 {message, triggers}（回复异步回流）', async () => {
+    it('发消息全流程：权限→@解析→落库→广播→分派受理→收到确认落库，返回 {message, triggers}（回复异步回流）', async () => {
       allowAccess();
       prisma.taskAgent.findMany.mockResolvedValue([
         { agentId: 'a_product', removedAt: null },
       ]);
       prisma.session.findFirst.mockResolvedValue({ id: 's_0000000001' });
       idGen.nextId.mockResolvedValue('m_0000000001');
-      prisma.message.create.mockResolvedValue(messageRow());
+      prisma.message.create
+        .mockResolvedValueOnce(messageRow())
+        .mockResolvedValueOnce(
+          messageRow({ senderType: SENDER_TYPE.agent, senderId: 'a_product' }),
+        );
+      prisma.agent.findMany.mockResolvedValue([{ id: 'a_product', ackMessage: null }]);
       dispatcher.dispatch.mockResolvedValue({
         replies: [{ agentId: 'a_product', text: '需求已明确' }],
       });
@@ -146,8 +151,8 @@ describe('ChatService', () => {
       const dto = { text: '你好', mentions: [{ type: 'agent', agentId: 'a_product' }] };
       const result = await service.createMessage(channelId, userId, dto as any);
 
-      // 3. 落库：仅用户消息（agent 回复由分派器异步落库，此处不重复）
-      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      // 3. 落库：用户消息 + agent「收到」确认消息（回复由分派器异步落库，此处不重复）
+      expect(prisma.message.create).toHaveBeenCalledTimes(2);
       expect(prisma.message.create).toHaveBeenCalledWith({
         data: {
           id: 'm_0000000001',
@@ -159,12 +164,34 @@ describe('ChatService', () => {
           status: MESSAGE_STATUS.sent,
         },
       });
+      // 5.5 「收到」确认：senderType=agent、无 mentions（防递归）、ackMessage 空 → 默认文案
+      const ackData = prisma.message.create.mock.calls[1][0].data;
+      expect(ackData).toMatchObject({
+        channelId,
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_product',
+        content: { text: DEFAULT_ACK_MESSAGE, parts: [] },
+        mentions: null,
+        status: MESSAGE_STATUS.sent,
+      });
 
-      // 4. 仅广播用户消息（loading/回复由分派器广播）
-      expect(realtime.broadcast).toHaveBeenCalledTimes(1);
-      expect(realtime.broadcast).toHaveBeenCalledWith(
+      // 4. 广播用户消息 + ACK（loading/回复由分派器广播）
+      expect(realtime.broadcast).toHaveBeenCalledTimes(2);
+      expect(realtime.broadcast).toHaveBeenNthCalledWith(
+        1,
         EVENT_TYPES.CHAT_MESSAGE_NEW,
         { message: expect.objectContaining({ id: 'm_0000000001', senderType: 'user' }) },
+        { type: 'channel', id: channelId },
+      );
+      expect(realtime.broadcast).toHaveBeenNthCalledWith(
+        2,
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        {
+          message: expect.objectContaining({
+            senderType: SENDER_TYPE.agent,
+            senderId: 'a_product',
+          }),
+        },
         { type: 'channel', id: channelId },
       );
 
@@ -182,6 +209,60 @@ describe('ChatService', () => {
       expect(result.triggers).toEqual([
         { agentId: 'a_product', sessionId: 's_0000000001', status: 'dispatched' },
       ]);
+    });
+
+    it('agent 配置 ackMessage → 「收到」消息用配置文案（不走默认）', async () => {
+      allowAccess();
+      prisma.taskAgent.findMany.mockResolvedValue([
+        { agentId: 'a_product', removedAt: null },
+      ]);
+      prisma.session.findFirst.mockResolvedValue({ id: 's_1' });
+      prisma.agent.findMany.mockResolvedValue([
+        { id: 'a_product', ackMessage: '收到，马上处理' },
+      ]);
+      prisma.message.create.mockResolvedValue(messageRow());
+
+      await service.createMessage(channelId, userId, {
+        text: '你好',
+        mentions: [{ type: 'agent', agentId: 'a_product' }],
+      } as any);
+
+      const ackData = prisma.message.create.mock.calls[1][0].data;
+      expect(ackData).toMatchObject({
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_product',
+        content: { text: '收到，马上处理', parts: [] },
+        mentions: null,
+        status: MESSAGE_STATUS.sent,
+      });
+    });
+
+    it('多目标 @（{type:all} 展开全部）→ 每个 dispatched 目标各落一条「收到」消息', async () => {
+      allowAccess();
+      prisma.taskAgent.findMany.mockResolvedValue([
+        { agentId: 'a_product', removedAt: null },
+        { agentId: 'a_architect', removedAt: null },
+      ]);
+      prisma.session.findFirst.mockResolvedValue({ id: 's_1' });
+      prisma.agent.findMany.mockResolvedValue([
+        { id: 'a_product', ackMessage: null },
+        { id: 'a_architect', ackMessage: null },
+      ]);
+      prisma.message.create.mockResolvedValue(messageRow());
+
+      const result = await service.createMessage(channelId, userId, {
+        text: '大家好',
+        mentions: [{ type: 'all' }],
+      } as any);
+
+      // 1 用户消息 + 每目标 1 条 ACK = 3 次落库；2 个 ACK 各对应一个目标
+      expect(prisma.message.create).toHaveBeenCalledTimes(3);
+      const ackSenders = prisma.message.create.mock.calls
+        .slice(1)
+        .map((call) => call[0].data.senderId)
+        .sort();
+      expect(ackSenders).toEqual(['a_architect', 'a_product']);
+      expect(result.triggers).toHaveLength(2);
     });
 
     it('无 mentions：triggers 为空、dispatcher 空目标、仅广播用户消息', async () => {
