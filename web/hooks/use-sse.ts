@@ -50,10 +50,11 @@ const pool = new Map<string, SharedConnection>();
  * 前端 scope 过滤规则（原 URL scope 语义保留为过滤规则；连接 URL 恒 scope=all）。
  * - 缺省 / 空 / "all" → 放行所有事件
  * - 逗号分隔多 scope，任一命中即放行：
- *   - `channel:<id>` → chat.message.new 且 payload.message.channelId === id
- * - `task:<id>`    → agent.loading / agent.error / team.changed / agent.status / session.updated
- *                   且 payload.taskId === id（agent.status/session.updated 为 T14 新增：真实 worker
- *                   回流后展示 Agent 会话运行状态）
+ *   - `channel:<id>` → chat.message.new / message.part.delta 且 payload.message.channelId === id
+ *                      （message.part.delta 为方案 A 流式增量事件，scope=channel）
+ * - `task:<id>`    → agent.loading / agent.error / team.changed / agent.status 且 payload.taskId === id；
+ *                    session.updated 例外无条件放行——后端 payload 仅 {sessionId, status, workerId}
+ *                    不含 taskId，无法按 id 过滤，由页面经 sessionId→agentId 映射 + 团队成员集合二次过滤
  *   - `global`       → task.status.changed（09 篇 §4.1 全局广播）
  * 供 useSSE（传 scope 的调用方，如看板页 'global'）与 useRealtimeEvents（options.scope）共用。
  */
@@ -72,14 +73,17 @@ export function matchesScope(ev: SSEEvent<unknown>, scopeStr?: string): boolean 
     if (scope.startsWith("channel:")) {
       const id = scope.slice("channel:".length);
       return (
-        ev.type === "chat.message.new" &&
+        (ev.type === "chat.message.new" || ev.type === "message.part.delta") &&
         (ev.payload as { message?: { channelId?: string } })?.message?.channelId === id
       );
     }
     if (scope.startsWith("task:")) {
       const id = scope.slice("task:".length);
+      // session.updated payload 无 taskId（仅 {sessionId, status, workerId}），无法按 id 过滤，
+      // 无条件放行——页面回调经 sessionId→agentId 映射 + 团队成员集合二次过滤，串扰被兜底。
+      if (ev.type === "session.updated") return true;
       return (
-        ["agent.loading", "agent.error", "team.changed", "agent.status", "session.updated"].includes(ev.type) &&
+        ["agent.loading", "agent.error", "team.changed", "agent.status"].includes(ev.type) &&
         (ev.payload as { taskId?: string })?.taskId === id
       );
     }

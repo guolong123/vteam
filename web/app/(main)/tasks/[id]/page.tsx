@@ -31,7 +31,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useRealtimeEvents, type RealtimeChatMessage } from "@/hooks/use-realtime";
-import type { AgentStatusEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
+import type { AgentStatusEvent, MessagePartDeltaEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
 import { AgentAvatar, ChatBubble, MessageInput, StatusBadge } from "@/src/components/ui";
 import type { MentionableAgent, SendMessagePayload } from "@/src/components/ui";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
@@ -56,6 +56,7 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 /** scoped CSS 动画（groupchat- 前缀防污染，对齐原型 groupchatCss） */
 const groupchatCss = `
 @keyframes groupchat-pulse { 0%, 100% { opacity: .3 } 50% { opacity: 1 } }
+@keyframes groupchat-spin { to { transform: rotate(360deg) } }
 `;
 
 /* ------------------------------ API 数据模型（对齐 T6/T10 DTO） ------------------------------ */
@@ -193,16 +194,19 @@ function renderStatusBadge(status: string) {
   return status === "待开始" ? <WaitingBadge /> : <StatusBadge status={status as StatusKey} />;
 }
 
-/* ================================ 成员面板（196px，对齐原型） ================================ */
+/* ================================ 成员面板（224px，对齐原型） ================================ */
 function MembersPanel({
   agents,
   loadingAgentIds,
+  sessionStatusByAgent,
   startingAgentId,
   onStartDm,
   dmError,
 }: {
   agents: { id: string; name: string; role: RoleKey }[];
   loadingAgentIds: Set<string>;
+  /** agentId → session.updated status（running=工作中 / idle=空闲，其余状态走现状） */
+  sessionStatusByAgent: Record<string, string>;
   startingAgentId: string | null;
   onStartDm: (agentId: string) => void;
   dmError: string | null;
@@ -235,6 +239,18 @@ function MembersPanel({
         {agents.map((a) => {
           const processing = loadingAgentIds.has(a.id);
           const starting = startingAgentId === a.id;
+          const sessionStatus = sessionStatusByAgent[a.id];
+          const working = sessionStatus === "running";
+          const idle = sessionStatus === "idle";
+          const statusText = starting
+            ? "创建中…"
+            : processing
+              ? "处理中"
+              : working
+                ? "工作中"
+                : idle
+                  ? "空闲"
+                  : "就绪";
           return (
             <div
               key={a.id}
@@ -258,7 +274,7 @@ function MembersPanel({
                 padding: `${space.sm}px ${space.sm}px`,
                 borderRadius: radius.md,
                 border: "none",
-                background: starting ? neutral[100] : "transparent",
+                background: starting || working ? neutral[100] : "transparent",
                 textAlign: "left",
                 fontFamily: fontFamily.body,
                 cursor: starting ? "default" : "pointer",
@@ -266,10 +282,10 @@ function MembersPanel({
                 transition: "background-color .15s ease, opacity .15s ease",
               }}
               onMouseEnter={(e) => {
-                if (!starting) e.currentTarget.style.backgroundColor = neutral[100];
+                if (!starting && !working) e.currentTarget.style.backgroundColor = neutral[100];
               }}
               onMouseLeave={(e) => {
-                if (!starting) e.currentTarget.style.backgroundColor = "transparent";
+                if (!starting && !working) e.currentTarget.style.backgroundColor = "transparent";
               }}
             >
               <AgentAvatar role={a.role} size="sm" />
@@ -300,7 +316,36 @@ function MembersPanel({
                       }}
                     />
                   )}
-                  {starting ? "创建中…" : processing ? "处理中" : "在线"}
+                  {working && (
+                    <span
+                      aria-hidden
+                      style={{
+                        display: "inline-block",
+                        width: 10,
+                        height: 10,
+                        borderRadius: "50%",
+                        border: "2px solid #BFDBFE",
+                        borderTopColor: "#2563EB",
+                        marginRight: space.xs,
+                        verticalAlign: "-2px",
+                        animation: "groupchat-spin .8s linear infinite",
+                      }}
+                    />
+                  )}
+                  {idle && (
+                    <span
+                      aria-hidden
+                      style={{
+                        display: "inline-block",
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        backgroundColor: neutral[400],
+                        marginRight: space.xs - 1,
+                      }}
+                    />
+                  )}
+                  {statusText}
                 </span>
               </span>
               <span style={{ color: "#2563EB", fontSize: fontSize.lg, lineHeight: 1 }} aria-hidden>
@@ -450,7 +495,8 @@ function MessageList({
         const author = agent?.name ?? msg.senderId ?? "";
         const parts = Array.isArray(msg.content.parts) ? (msg.content.parts as unknown[]) : [];
 
-        // Agent 消息：parts 过程片段（thinking/tool/error/aborted）+ 正文置底（MsgParts，T14）
+        // Agent 消息：parts 过程片段（thinking/tool/error/aborted）+ 正文置底（MsgParts，T14）；
+        // status=processing 为流式中间态（message.part.delta 累积），正文走「生成中」流式块
         if (msg.senderType === "agent") {
           return (
             <MsgParts
@@ -460,6 +506,7 @@ function MessageList({
               author={author}
               role={role}
               time={formatTime(msg.createdAt)}
+              streaming={msg.status === "processing"}
             />
           );
         }
@@ -792,8 +839,11 @@ export default function TaskChatPage() {
   const [loadingByAgent, setLoadingByAgent] = useState<Record<string, string>>({});
   // agent.error：agentId → errorType（展示错误态）
   const [errorByAgent, setErrorByAgent] = useState<Record<string, string>>({});
-  // 会话状态：agentId → session.updated status（active=运行中 / frozen|archived=已结束，T14）
+  // 会话状态：agentId → session.updated status（running=工作中 / idle=空闲 / frozen|archived=已结束）
   const [sessionByAgent, setSessionByAgent] = useState<Record<string, string>>({});
+  // sessionId → agentId 映射（session.updated payload 仅 {sessionId, status, workerId}，无 agentId，
+  // 须经 agent.loading/agent.status 事件（payload 带 sessionId+agentId）建立后再关联成员）
+  const agentIdBySessionRef = useRef<Record<string, string>>({});
   const [loadingMore, setLoadingMore] = useState(false);
   // 发起私聊失败提示（members-panel 底部说明区）
   const [dmError, setDmError] = useState<string | null>(null);
@@ -882,8 +932,10 @@ export default function TaskChatPage() {
           delete next[m.senderId!];
           return next;
         });
+        // active（bind 初始态）/ running（执行中）在回复到达时一并收敛（执行已结束）
         setSessionByAgent((prev) => {
-          if (prev[m.senderId!] !== "active") return prev;
+          const st = prev[m.senderId!];
+          if (st !== "active" && st !== "running") return prev;
           const next = { ...prev };
           delete next[m.senderId!];
           return next;
@@ -891,9 +943,14 @@ export default function TaskChatPage() {
       }
     },
     onAgentLoading: (payload) => {
+      // agent.loading 实际 payload 含 sessionId（ingress 透传 worker 负载）→ 建立会话映射
+      const sessionId = (payload as { sessionId?: string | null }).sessionId;
+      if (sessionId) agentIdBySessionRef.current[sessionId] = payload.agentId;
       setLoadingByAgent((prev) => ({ ...prev, [payload.agentId]: payload.phase }));
     },
     onAgentError: (payload) => {
+      const sessionId = (payload as { sessionId?: string | null }).sessionId;
+      if (sessionId) agentIdBySessionRef.current[sessionId] = payload.agentId;
       setErrorByAgent((prev) => ({ ...prev, [payload.agentId]: payload.errorType }));
     },
     onAgentStatus: (payload: AgentStatusEvent) => {
@@ -901,6 +958,7 @@ export default function TaskChatPage() {
       if (payload.taskId && payload.taskId !== taskId) return;
       const agentId = payload.agentId;
       if (!agentId) return;
+      if (payload.sessionId) agentIdBySessionRef.current[payload.sessionId] = agentId;
       if (payload.status === "running") {
         setLoadingByAgent((prev) => ({ ...prev, [agentId]: "operating" }));
       } else if (payload.status === "completed" || payload.status === "failed") {
@@ -913,9 +971,11 @@ export default function TaskChatPage() {
       }
     },
     onSessionUpdated: (payload: SessionUpdatedEvent) => {
-      // session.updated 展示 Agent 会话状态：active=运行中，frozen|archived=已结束
-      if (payload.taskId && payload.taskId !== taskId) return;
-      const agentId = payload.agentId;
+      // session.updated payload 仅 {sessionId, status, workerId}（无 agentId/taskId），
+      // 且 task scope 无条件放行（跨任务串扰）——经映射解析归属；解析不到（首次执行
+      // 映射未建）丢弃，后续 agent.loading 事件会补建映射，idle/终态事件可命中
+      if (!payload.sessionId) return;
+      const agentId = agentIdBySessionRef.current[payload.sessionId];
       if (!agentId) return;
       setSessionByAgent((prev) => ({ ...prev, [agentId]: payload.status }));
       if (payload.status === "frozen" || payload.status === "archived") {
@@ -926,6 +986,31 @@ export default function TaskChatPage() {
           return next;
         });
       }
+    },
+    onMessagePartDelta: (payload: MessagePartDeltaEvent) => {
+      scrollToBottom();
+      const m = payload.message;
+      // 群聊结论防御：仅保留 text 结论 part（后端 extractConclusionParts 已滤 reasoning/tool，
+      // 此处兜底——delta 带非 text parts 时也绝不渲染过程片段）
+      const parts = Array.isArray(m.content.parts)
+        ? (m.content.parts as unknown[]).filter(
+            (p) => (p as { type?: string; synthetic?: boolean }).type === "text"
+              && !(p as { type?: string; synthetic?: boolean }).synthetic,
+          )
+        : [];
+      const text = parts
+        .map((p) => (p as { text?: string }).text ?? "")
+        .join("") || (m.content.text ?? "");
+      queryClient.setQueryData<MessagesResponse>(["channel", channelId, "messages"], (old) => {
+        if (!old) return old;
+        const idx = old.items.findIndex((x) => x.id === m.id);
+        const merged = { ...m, content: { text, parts } };
+        if (idx === -1) return { ...old, items: [...old.items, merged] };
+        if (old.items[idx].status !== "processing") return old; // 终态优先：重放不覆盖
+        const items = [...old.items];
+        items[idx] = merged;
+        return { ...old, items };
+      });
     },
     onTeamChanged: (payload) => {
       if (payload.taskId === taskId) {
@@ -971,11 +1056,11 @@ export default function TaskChatPage() {
       }
       return next ?? prev;
     });
-    // 会话状态残留收敛：历史最后一条是 agent 回复 → 该 Agent 会话已结束（active 状态清除）
+    // 会话状态残留收敛：历史最后一条是 agent 回复 → 该 Agent 会话已结束（active/running 状态清除）
     setSessionByAgent((prev) => {
       let next: Record<string, string> | null = null;
       for (const [agentId, m] of lastByAgent) {
-        if (m.senderType === "agent" && prev[agentId] === "active") {
+        if (m.senderType === "agent" && (prev[agentId] === "active" || prev[agentId] === "running")) {
           if (!next) next = { ...prev };
           delete next[agentId];
         }
@@ -1079,10 +1164,10 @@ export default function TaskChatPage() {
     };
   }, [errorByAgent, agentMap]);
 
-  /** 会话运行状态条（T14）：session.updated status=active 的 Agent →「XX 会话运行中…」 */
+  /** 会话运行状态条（T14）：session.updated status=active/running 的 Agent →「XX 会话运行中…」 */
   const sessionLabel = useMemo(() => {
     const entries = Object.entries(sessionByAgent).filter(
-      ([agentId, status]) => status === "active" && !(agentId in loadingByAgent),
+      ([agentId, status]) => (status === "active" || status === "running") && !(agentId in loadingByAgent),
     );
     if (entries.length === 0) return null;
     const [agentId] = entries[0];
@@ -1141,6 +1226,7 @@ export default function TaskChatPage() {
       <MembersPanel
         agents={agentMembers}
         loadingAgentIds={loadingAgentIds}
+        sessionStatusByAgent={sessionByAgent}
         startingAgentId={startDmMutation.isPending ? (startDmMutation.variables ?? null) : null}
         onStartDm={handleStartDm}
         dmError={dmError}

@@ -16,7 +16,7 @@
  * 事件在 useSSE 层以连接级游标补拉重放给全部订阅者；本 hook 用 matchesScope 按
  * options.scope 前端过滤后分发（scope 支持逗号分隔多段，如 "channel:c1,task:t1,global"）。
  * 同一事件可能命中多个订阅实例，各页面回调内仍须按 payload.taskId / payload.channelId
- * 二次过滤（不能丢）；补拉重放的消息由 appendMessage 幂等去重兜底，安全。
+ * 二次过滤（不能丢）；补拉重放的消息由 upsertMessage 幂等去重兜底，安全。
  */
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useSSE, matchesScope, type SSEEvent } from "@/hooks/use-sse";
@@ -30,6 +30,7 @@ const EVENT = {
   TEAM_CHANGED: "team.changed",
   ARTIFACT_SUBMITTED: "artifact.submitted",
   SESSION_UPDATED: "session.updated",
+  MESSAGE_PART_DELTA: "message.part.delta",
   AGENT_STATUS: "agent.status",
 } as const;
 
@@ -108,16 +109,24 @@ export interface ArtifactSubmittedEvent {
 }
 
 /**
- * session.updated 事件 payload（对齐 EVENT_TYPES.SESSION_UPDATED，T1 契约；worker 回流后 emit）。
- * status 对齐 SESSION_STATUS：created / active / frozen / archived。
- * - active（运行中）→ 页面展示「Agent 会话运行中」指示
- * - frozen / archived → 会话终止，收敛 loading 指示器
+ * session.updated 事件 payload（对齐 EVENT_TYPES.SESSION_UPDATED 实际 emit，方案 A worker 回流）。
+ * 注意：后端 emit 仅含 {sessionId, status, workerId}——不含 taskId/agentId，前端无法直接定位
+ * 所属 Agent，须经 agent.loading / agent.status 事件（payload 带 sessionId+agentId）建立
+ * sessionId→agentId 映射后再更新成员状态（页面回调内过滤）。
+ * status 对齐 SESSION_STATUS：running（任务执行中）→「工作中」；idle（等待下一条消息）→「空闲」；
+ * active 为 bind 后初始态；frozen / archived 为会话终止。
  */
 export interface SessionUpdatedEvent {
-  sessionId: string;
-  taskId?: string | null;
-  agentId?: string | null;
+  sessionId: string | null;
   status: string;
+  workerId: string;
+}
+
+/** message.part.delta 事件 payload（对齐 worker-event.ingress handleMessagePartDelta 广播）：
+ *  message = 累积后的最新消息（toMessageDto，status=processing），delta = 本次新增 parts。 */
+export interface MessagePartDeltaEvent {
+  message: RealtimeChatMessage;
+  delta: unknown[];
 }
 
 /**
@@ -161,10 +170,12 @@ export interface UseRealtimeEventsOptions {
   onTeamChanged?: (payload: TeamChangedEvent, event: SSEEvent<TeamChangedEvent>) => void;
   /** artifact.submitted：页面收到产出物提交事件后刷新聚合列表（如 /artifacts 页）。 */
   onArtifactSubmitted?: (payload: ArtifactSubmittedEvent, event: SSEEvent<ArtifactSubmittedEvent>) => void;
-  /** session.updated：页面按 sessionId/agentId 展示 Agent 会话状态（运行中/已完成/已归档）。 */
+  /** session.updated：页面按 sessionId→agentId 映射更新成员会话状态（payload 无 agentId）。 */
   onSessionUpdated?: (payload: SessionUpdatedEvent, event: SSEEvent<SessionUpdatedEvent>) => void;
   /** agent.status：页面按 agentId 收敛 loading（status=running 开始 / completed|failed 结束）。 */
   onAgentStatus?: (payload: AgentStatusEvent, event: SSEEvent<AgentStatusEvent>) => void;
+  /** message.part.delta：默认已按 id 更新消息缓存（processing 才替换），回调供页面额外处理（如滚到底）。 */
+  onMessagePartDelta?: (payload: MessagePartDeltaEvent, event: SSEEvent<MessagePartDeltaEvent>) => void;
 }
 
 /**
@@ -184,6 +195,7 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
     onArtifactSubmitted,
     onSessionUpdated,
     onAgentStatus,
+    onMessagePartDelta,
   } = options;
   const queryClient = useQueryClient();
 
@@ -196,7 +208,7 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
       switch (ev.type) {
         case EVENT.CHAT_MESSAGE_NEW: {
           const payload = ev.payload as ChatMessageEvent;
-          appendMessage(queryClient, payload.message);
+          upsertMessage(queryClient, payload.message);
           onMessage?.(payload, ev as SSEEvent<ChatMessageEvent>);
           break;
         }
@@ -225,22 +237,36 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
         case EVENT.AGENT_STATUS:
           onAgentStatus?.(ev.payload as AgentStatusEvent, ev as SSEEvent<AgentStatusEvent>);
           break;
+        case EVENT.MESSAGE_PART_DELTA: {
+          const payload = ev.payload as MessagePartDeltaEvent;
+          upsertMessage(queryClient, payload.message);
+          onMessagePartDelta?.(payload, ev as SSEEvent<MessagePartDeltaEvent>);
+          break;
+        }
       }
     },
   });
 }
 
 /**
- * 消息追加（幂等）：SSE 断线重连经 since 补拉可能重复投递同一事件，按 id 去重；
- * 无既有缓存（页面尚未加载历史）时不凭空创建，交由页面 onMessage 自行处理。
+ * 消息 upsert（幂等 + 终态优先）：
+ * - 同 id 已存在且缓存为 processing（流式中）→ 替换为新消息（delta 累积内容 / 最终 sent 终态化）；
+ * - 同 id 已存在且缓存非 processing（已终态）→ 跳过——断线重放的历史 delta 比当前内容旧，
+ *   不得覆盖终态（终态由 chat.message.new 或后续 delta 写入）；
+ * - 不存在 → 追加末尾（processing 消息先于最终回复出现，时间上即最新）。
+ * 无既有缓存时不凭空创建，交由页面 onMessage/onMessagePartDelta 自行处理。
  */
-function appendMessage(queryClient: QueryClient, message: RealtimeChatMessage): void {
+function upsertMessage(queryClient: QueryClient, message: RealtimeChatMessage): void {
   queryClient.setQueryData<ChannelMessagesCache>(
     ["channel", message.channelId, "messages"],
     (old) => {
       if (!old) return old; // 无缓存：不创建，避免与页面首次 fetch 竞争
-      if (old.items.some((m) => m.id === message.id)) return old; // 幂等去重
-      return { ...old, items: [...old.items, message] };
+      const idx = old.items.findIndex((m) => m.id === message.id);
+      if (idx === -1) return { ...old, items: [...old.items, message] };
+      if (old.items[idx].status !== "processing") return old; // 终态优先：补拉重放不覆盖
+      const items = [...old.items];
+      items[idx] = message;
+      return { ...old, items };
     },
   );
 }

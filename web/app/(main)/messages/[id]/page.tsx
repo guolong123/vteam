@@ -24,7 +24,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useRealtimeEvents, type RealtimeChatMessage } from "@/hooks/use-realtime";
-import type { AgentStatusEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
+import type { AgentStatusEvent, MessagePartDeltaEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
 import { AgentAvatar, AgentBadge, ChatBubble, MessageInput } from "@/src/components/ui";
 import type { SendMessagePayload } from "@/src/components/ui";
 import {
@@ -270,7 +270,8 @@ function DmMessageList({
         const author = agent?.name ?? msg.senderId ?? "";
         const parts = Array.isArray(msg.content.parts) ? (msg.content.parts as unknown[]) : [];
 
-        // Agent 消息：parts 过程片段（thinking/tool/error/aborted）+ 正文置底（MsgParts，T14）
+        // Agent 消息：parts 过程片段（thinking/tool/error/aborted）+ 正文置底（MsgParts，T14）；
+        // status=processing 为流式中间态（message.part.delta 累积），正文走「生成中」流式块
         if (msg.senderType === "agent") {
           return (
             <MsgParts
@@ -280,6 +281,7 @@ function DmMessageList({
               author={author}
               role={role}
               time={formatTime(msg.createdAt)}
+              streaming={msg.status === "processing"}
             />
           );
         }
@@ -369,8 +371,12 @@ export default function DmChatPage() {
   const [loadingByAgent, setLoadingByAgent] = useState<Record<string, string>>({});
   // agent.error：agentId → errorType
   const [errorByAgent, setErrorByAgent] = useState<Record<string, string>>({});
-  // 会话状态：agentId → session.updated status（active=运行中 / frozen|archived=已结束，T14）
+  // 会话状态：agentId → session.updated status（active/running=运行中 / frozen|archived=已结束，T14）
   const [sessionByAgent, setSessionByAgent] = useState<Record<string, string>>({});
+  // sessionId → agentId 映射（session.updated payload 仅 {sessionId, status, workerId} 无 agentId，
+  // 且 task scope 对 session.updated 无条件放行——须经 agent.loading/agent.status 事件建映射，
+  // 解析归属为主 Agent 才更新，防跨任务串扰污染本页状态）
+  const agentIdBySessionRef = useRef<Record<string, string>>({});
   const [loadingMore, setLoadingMore] = useState(false);
 
   /* ---------- 1. 频道详情：channel（agent/task）+ agentMembers（任务团队） ---------- */
@@ -417,7 +423,9 @@ export default function DmChatPage() {
   const headerName = mainAgent?.name ?? channel?.task?.title ?? "私聊会话";
   const headerRole = mainAgent?.role ?? "developer";
   const meta = channel?.task?.title ? `正在协作「${channel.task.title}」` : "正在与 Agent 协作";
-  const headerStatus = mainAgent && (mainAgent.id in loadingByAgent || sessionByAgent[mainAgent.id] === "active")
+  const headerStatus = mainAgent && (mainAgent.id in loadingByAgent
+    || sessionByAgent[mainAgent.id] === "active"
+    || sessionByAgent[mainAgent.id] === "running")
     ? "处理中"
     : "在线";
 
@@ -456,8 +464,10 @@ export default function DmChatPage() {
           delete next[m.senderId!];
           return next;
         });
+        // active（bind 初始态）/ running（执行中）在回复到达时一并收敛（执行已结束）
         setSessionByAgent((prev) => {
-          if (prev[m.senderId!] !== "active") return prev;
+          const st = prev[m.senderId!];
+          if (st !== "active" && st !== "running") return prev;
           const next = { ...prev };
           delete next[m.senderId!];
           return next;
@@ -465,9 +475,14 @@ export default function DmChatPage() {
       }
     },
     onAgentLoading: (payload) => {
+      // agent.loading 实际 payload 含 sessionId（ingress 透传 worker 负载）→ 建立会话映射
+      const sessionId = (payload as { sessionId?: string | null }).sessionId;
+      if (sessionId) agentIdBySessionRef.current[sessionId] = payload.agentId;
       setLoadingByAgent((prev) => ({ ...prev, [payload.agentId]: payload.phase }));
     },
     onAgentError: (payload) => {
+      const sessionId = (payload as { sessionId?: string | null }).sessionId;
+      if (sessionId) agentIdBySessionRef.current[sessionId] = payload.agentId;
       setErrorByAgent((prev) => ({ ...prev, [payload.agentId]: payload.errorType }));
     },
     onAgentStatus: (payload: AgentStatusEvent) => {
@@ -475,6 +490,7 @@ export default function DmChatPage() {
       if (payload.taskId && channel?.taskId && payload.taskId !== channel.taskId) return;
       const agentId = payload.agentId;
       if (!agentId) return;
+      if (payload.sessionId) agentIdBySessionRef.current[payload.sessionId] = agentId;
       if (payload.status === "running") {
         setLoadingByAgent((prev) => ({ ...prev, [agentId]: "operating" }));
       } else if (payload.status === "completed" || payload.status === "failed") {
@@ -487,19 +503,25 @@ export default function DmChatPage() {
       }
     },
     onSessionUpdated: (payload: SessionUpdatedEvent) => {
-      // session.updated 展示 Agent 会话状态：active=运行中，frozen|archived=已结束
-      if (payload.taskId && channel?.taskId && payload.taskId !== channel.taskId) return;
-      const agentId = payload.agentId;
-      if (!agentId) return;
-      setSessionByAgent((prev) => ({ ...prev, [agentId]: payload.status }));
+      // session.updated payload 仅 {sessionId, status, workerId}（无 agentId/taskId），且 task scope
+      // 无条件放行（跨任务串扰）——经映射解析归属，仅当属于本页主 Agent 才更新状态
+      if (!payload.sessionId || !mainAgent) return;
+      const agentId = agentIdBySessionRef.current[payload.sessionId];
+      if (agentId !== mainAgent.id) return;
+      setSessionByAgent((prev) => ({ ...prev, [mainAgent.id]: payload.status }));
       if (payload.status === "frozen" || payload.status === "archived") {
         setLoadingByAgent((prev) => {
-          if (!(agentId in prev)) return prev;
+          if (!(mainAgent.id in prev)) return prev;
           const next = { ...prev };
-          delete next[agentId];
+          delete next[mainAgent.id];
           return next;
         });
       }
+    },
+    onMessagePartDelta: (payload: MessagePartDeltaEvent) => {
+      // 私聊全量 parts（reasoning/tool/text 流式增量）：缓存 upsert 已由 hook 默认完成，
+      // 页面仅需滚到底（processing 消息插入/更新后展示最新内容）
+      scrollToBottom();
     },
   });
 
@@ -534,11 +556,11 @@ export default function DmChatPage() {
       }
       return next ?? prev;
     });
-    // 会话状态残留收敛：历史最后一条是 agent 回复 → 该 Agent 会话已结束（active 状态清除）
+    // 会话状态残留收敛：历史最后一条是 agent 回复 → 该 Agent 会话已结束（active/running 状态清除）
     setSessionByAgent((prev) => {
       let next: Record<string, string> | null = null;
       for (const [agentId, m] of lastByAgent) {
-        if (m.senderType === "agent" && prev[agentId] === "active") {
+        if (m.senderType === "agent" && (prev[agentId] === "active" || prev[agentId] === "running")) {
           if (!next) next = { ...prev };
           delete next[agentId];
         }
@@ -619,10 +641,10 @@ export default function DmChatPage() {
     };
   }, [errorByAgent, agentMap]);
 
-  /** 会话运行状态条（T14）：session.updated status=active 的 Agent →「XX 会话运行中…」 */
+  /** 会话运行状态条（T14）：session.updated status=active/running 的 Agent →「XX 会话运行中…」 */
   const sessionLabel = useMemo(() => {
     const entries = Object.entries(sessionByAgent).filter(
-      ([agentId, status]) => status === "active" && !(agentId in loadingByAgent),
+      ([agentId, status]) => (status === "active" || status === "running") && !(agentId in loadingByAgent),
     );
     if (entries.length === 0) return null;
     const [agentId] = entries[0];

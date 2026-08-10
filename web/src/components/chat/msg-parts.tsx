@@ -7,7 +7,9 @@
  * - error              → MsgError（消息级错误）
  * - aborted            → MsgAborted（灰「已中断」）；按 10 篇 §2.3：中断时其余
  *                       未完成 Part 不渲染，仅显示中断灰条
- * - text               → 正文（ChatBubble agent 型，置底作为最终结论）
+ * - text               → 正文（ChatBubble agent 型，置底作为最终结论）；
+ *                        streaming（status=processing）时正文改流式块渲染 + 「生成中」指示，
+ *                        终态（sent）消息由 chat.message.new 替换后自动切换回 ChatBubble
  * - 其余类型（step-start/step-finish/patch 等内部片段）不渲染（FR-10 边界）
  * 正文兜底：parts 无 text 片段时回退 content.text（T10 落库格式 { text, parts }，
  * 两者可能其一为空）；parts 全空时退化为普通 ChatBubble（Phase 2 mock 形态）。
@@ -16,12 +18,15 @@
  */
 "use client";
 import type { CSSProperties } from "react";
-import { type RoleKey, space } from "@/src/theme/tokens";
+import { type RoleKey, neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
 import { ChatBubble } from "@/src/components/ui";
+import { LoadingDots } from "./loading-indicator";
 import { MsgThinking } from "./msg-thinking";
 import { MsgTool } from "./msg-tool";
 import { MsgError } from "./msg-error";
 import { MsgAborted } from "./msg-aborted";
+
+const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /** 前端认识的 part 字段（后端 parts Json 透传，宽松读取防御未知字段）。 */
 export interface PartShape {
@@ -44,12 +49,14 @@ export interface MsgPartsProps {
   author: string;
   role: RoleKey;
   time?: string;
+  /** 流式中（消息 status=processing）：正文按流式块渲染 + 尾部「生成中」指示。 */
+  streaming?: boolean;
   style?: CSSProperties;
   className?: string;
 }
 
 /** Agent 消息片段渲染：过程片段（thinking/tool/error/aborted）+ 正文置底。 */
-export function MsgParts({ parts, bodyText, author, role, time, style, className }: MsgPartsProps) {
+export function MsgParts({ parts, bodyText, author, role, time, streaming, style, className }: MsgPartsProps) {
   const list = parts as PartShape[];
 
   // 中断独占：aborted 时其余未完成 Part 不渲染（10 篇 §2.3）
@@ -111,7 +118,43 @@ export function MsgParts({ parts, bodyText, author, role, time, style, className
         return null;
       })}
       {body ? (
-        <ChatBubble text={body} type="agent" author={author} role={role} time={time} />
+        streaming ? (
+          <div
+            data-testid="msg-streaming"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: space.sm,
+              maxWidth: "78%",
+              alignSelf: "flex-start",
+              padding: `${space.sm}px ${space.md}px`,
+              borderRadius: radius.md,
+              backgroundColor: "#FFFFFF",
+              border: `1px solid ${neutral[200]}`,
+              ...baseFont,
+            }}
+          >
+            <span
+              style={{
+                flex: 1,
+                minWidth: 0,
+                fontSize: fontSize.md,
+                color: neutral[700],
+                lineHeight: 1.6,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+            >
+              {body}
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
+              <LoadingDots color={neutral[400]} testid="msg-streaming-dots" />
+              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>生成中</span>
+            </span>
+          </div>
+        ) : (
+          <ChatBubble text={body} type="agent" author={author} role={role} time={time} />
+        )
       ) : null}
     </div>
   );
