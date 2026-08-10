@@ -18,6 +18,12 @@ export interface TaskCompletedPayload {
   taskId?: string;
   agentId?: string;
   sessionId?: string;
+  /**
+   * 消息来源频道 id（DispatchRequest.channelId 透传）。轮询回流路径携带，供
+   * resolveChannel 群聊优先（用户在群聊频道 @agent → 回复回流群聊而非 DM）。
+   * ingress task.completed 回调路径（worker 不上报）缺省，保持现状 DM 优先行为。
+   */
+  channelId?: string;
   text?: string;
   parts?: unknown;
   tokens?: unknown;

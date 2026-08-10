@@ -573,6 +573,10 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       taskId,
       agentId: target.agentId,
       sessionId: target.sessionId,
+      // F4 回流频道透传：消息来源频道（request.channelId）随轮询回流带至
+      // handleTaskCompleted，resolveChannel 群聊优先——用户在群聊频道 @agent 时
+      // 回复回流群聊而非 DM（此前仅靠 taskId+agentId 猜测频道 → 落 DM 的 Bug）。
+      channelId: request.channelId,
       startedAt: Date.now(), // F3 MINOR-3：首字延迟统计起点（prompt 下发后）
       baselineCursor,
     }).catch((err: unknown) =>
@@ -605,7 +609,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
    * → 5 产出物归档（artifacts 声明 → ArtifactsService.append，12 篇 §5）。
    */
   async handleTaskCompleted(payload: TaskCompletedPayload): Promise<void> {
-    const { taskId, sessionId } = payload;
+    const { taskId, sessionId, channelId } = payload;
     if (!taskId) {
       this.logger.error(`task.completed 缺少 taskId，无法处理：${JSON.stringify(payload)}`);
       return;
@@ -641,7 +645,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     const text = payload.text ?? '';
 
     // 2~4. 落库 + 广播 + emitFinal（频道缺失时跳过落库，产出物仍归档）
-    const channel = await this.resolveChannel(taskId, agentId);
+    const channel = await this.resolveChannel(taskId, agentId, channelId);
     if (channel) {
       try {
         const message = await this.prisma.message.create({
@@ -768,6 +772,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     taskId: string;
     agentId: string;
     sessionId: string;
+    /**
+     * F4 消息来源频道（DispatchRequest.channelId 透传）：轮询回流时作为
+     * preferredChannelId 交 resolveChannel 群聊优先（用户实际触发的路径）。
+     */
+    channelId?: string;
     startedAt?: number;
     /**
      * F3 MAJOR-1 残留修复：promptAsync 前基线 cursor（dispatch 前置取定，此时 serve
@@ -872,7 +881,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
    *  F3 MAJOR-2：从回复文本提取产出物声明（12 篇 §3.1/§8.2）——原 poll 路径不携带
    *  artifacts 字段，归档循环拿到空数组（M4「产出物自动归档」不可用）；无声明 → 空数组。 */
   private async handlePolledCompletion(
-    params: { taskId: string; agentId: string; sessionId: string },
+    params: { taskId: string; agentId: string; sessionId: string; channelId?: string },
     messages: unknown[],
   ): Promise<void> {
     if (this.failedSessions.has(params.sessionId)) {
@@ -889,6 +898,8 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       taskId: params.taskId,
       agentId: params.agentId,
       sessionId: params.sessionId,
+      // F4 回流频道透传：消息来源频道随 payload 交 handleTaskCompleted → resolveChannel
+      channelId: params.channelId,
       text,
       parts: (messages as PollMessageShape[]).flatMap((m) => m.parts ?? []),
       tokens: finish?.tokens,
@@ -950,8 +961,21 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     return truncated;
   }
 
-  /** 定位回流目标频道：私聊频道（taskId+agentId 唯一）→ 群聊频道（taskId）回退。 */
-  private async resolveChannel(taskId: string, agentId: string) {
+  /**
+   * 定位回流目标频道：preferredChannelId（消息来源频道，如群聊）存在且 taskId 匹配 →
+   * 优先采用（用户在群聊频道 @agent 时回复回流群聊而非 DM）；否则回退私聊频道
+   * （taskId+agentId 唯一）→ 群聊频道（taskId）。
+   */
+  private async resolveChannel(taskId: string, agentId: string, preferredChannelId?: string) {
+    if (preferredChannelId) {
+      const preferred = await this.prisma.chatChannel.findUnique({
+        where: { id: preferredChannelId },
+        select: { id: true, taskId: true },
+      });
+      if (preferred?.taskId === taskId) {
+        return preferred;
+      }
+    }
     const dm = await this.prisma.chatChannel.findUnique({
       where: { taskId_agentId: { taskId, agentId } },
       select: { id: true },

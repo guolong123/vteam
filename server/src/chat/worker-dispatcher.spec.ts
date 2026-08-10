@@ -897,6 +897,29 @@ describe('WorkerDispatcher', () => {
       expect(errors).toHaveLength(1);
     });
 
+    it('payload 无 channelId（ingress 回调路径）→ 不查 preferred，DM 优先（保持现状）', async () => {
+      prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
+        if (where?.taskId_agentId) return Promise.resolve({ id: 'c_dm' });
+        return Promise.resolve(null);
+      });
+      const d = createDispatcher();
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        text: 'ingress 回复',
+      });
+
+      // 落 DM（无 preferredChannelId 时 DM 优先，现状不变）
+      expect(prisma.message.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ channelId: 'c_dm' }),
+        }),
+      );
+      // 从未执行 preferred（findUnique by id）查询
+      expect(prisma.chatChannel.findUnique.mock.calls.some((c) => c[0]?.where?.id)).toBe(false);
+    });
+
     it('缺少 taskId/agentId：不落库不崩溃', async () => {
       const d = createDispatcher();
 
@@ -1281,6 +1304,115 @@ describe('WorkerDispatcher', () => {
         text: '迟到回复',
       });
       expect(prisma.message.create).not.toHaveBeenCalled();
+      jest.useRealTimers();
+    });
+
+    it('群聊场景：request.channelId 为群聊频道且存在 DM → 轮询回流落群聊（preferred 命中 taskId 匹配，不用 taskId_agentId DM）', async () => {
+      jest.useFakeTimers();
+      pollSetup();
+      // 群聊频道（request.channelId）存在且 taskId 匹配；同时存在 DM 频道（c_dm）
+      prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
+        if (where?.id) return Promise.resolve({ id: where.id, taskId: request.taskId });
+        if (where?.taskId_agentId) return Promise.resolve({ id: 'c_dm' });
+        return Promise.resolve(null);
+      });
+      workerClient.getMessages
+        .mockResolvedValueOnce([
+          {
+            info: { role: 'assistant' },
+            parts: [{ type: 'text', text: '部分', time: { start: 1 } }],
+          },
+        ])
+        .mockResolvedValueOnce([
+          {
+            info: { role: 'assistant' },
+            parts: [
+              { type: 'text', text: '完整回复', time: { start: 1 } },
+              {
+                type: 'step-finish',
+                reason: 'stop',
+                tokens: { total: 10 },
+                cost: 0.1,
+              },
+            ],
+          },
+        ]);
+      const d = createDispatcher();
+      const finals: unknown[] = [];
+      d.onFinal((e) => finals.push(e));
+
+      await d.dispatch(request);
+      await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+      await jest.advanceTimersByTimeAsync(0);
+
+      // 回复落群聊频道（消息来源频道），而非 DM
+      expect(prisma.message.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ channelId: request.channelId }),
+        }),
+      );
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        expect.anything(),
+        { type: 'channel', id: request.channelId },
+      );
+      // preferred 频道命中（taskId 匹配）→ 不执行 taskId_agentId DM 查询
+      expect(prisma.chatChannel.findUnique).toHaveBeenCalledWith({
+        where: { id: request.channelId },
+        select: { id: true, taskId: true },
+      });
+      expect(
+        prisma.chatChannel.findUnique.mock.calls.some((c) => c[0]?.where?.taskId_agentId),
+      ).toBe(false);
+      jest.useRealTimers();
+    });
+
+    it('防御：preferredChannelId 存在但 taskId 不匹配 → 回退 DM（存在）落 DM', async () => {
+      jest.useFakeTimers();
+      pollSetup();
+      // preferred 频道 taskId 不匹配（t_other）；DM 频道存在 → 回退 DM
+      prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
+        if (where?.id) return Promise.resolve({ id: where.id, taskId: 't_other' });
+        if (where?.taskId_agentId) return Promise.resolve({ id: 'c_dm' });
+        return Promise.resolve(null);
+      });
+      workerClient.getMessages
+        .mockResolvedValueOnce([
+          {
+            info: { role: 'assistant' },
+            parts: [{ type: 'text', text: '部分', time: { start: 1 } }],
+          },
+        ])
+        .mockResolvedValueOnce([
+          {
+            info: { role: 'assistant' },
+            parts: [
+              { type: 'text', text: '完整回复', time: { start: 1 } },
+              {
+                type: 'step-finish',
+                reason: 'stop',
+                tokens: { total: 10 },
+                cost: 0.1,
+              },
+            ],
+          },
+        ]);
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+      await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+      await jest.advanceTimersByTimeAsync(0);
+
+      // 回退 DM（taskId_agentId 命中）→ 回复落 DM
+      expect(prisma.message.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ channelId: 'c_dm' }),
+        }),
+      );
+      expect(prisma.chatChannel.findUnique).toHaveBeenCalledWith({
+        where: { taskId_agentId: { taskId: request.taskId, agentId: 'a_product' } },
+        select: { id: true },
+      });
       jest.useRealTimers();
     });
   });
