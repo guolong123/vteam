@@ -58,8 +58,11 @@ export interface ExecServerOptions {
   driver: V1Driver;
   /** 事件上送通道（进程内 EventSender 单例）。 */
   sender: EventSender;
-  /** 单次执行总超时 ms（awaitCompletion 超时，超时 abort + 上送 error）；默认 60000。 */
-  timeoutMs?: number;
+  /**
+   * 首字超时 ms（awaitCompletion 首字超时：时限内模型无输出 → abort + 上送 error）；
+   * 默认 120000（env WORKER_FIRST_TOKEN_TIMEOUT_MS 可配）。首字出现后无完成超时。
+   */
+  firstTokenTimeoutMs?: number;
   /** 完成判定轮询间隔 ms（透传 awaitCompletion；缺省其默认 500）。 */
   pollMs?: number;
   /** 请求体大小上限 bytes；默认 1MB。 */
@@ -110,7 +113,7 @@ export class ExecServer {
   private readonly port: number;
   private readonly driver: V1Driver;
   private readonly sender: EventSender;
-  private readonly timeoutMs: number;
+  private readonly firstTokenTimeoutMs: number;
   private readonly pollMs: number;
   private readonly maxBodyBytes: number;
   private readonly logger: Logger;
@@ -120,7 +123,7 @@ export class ExecServer {
     this.port = options.port;
     this.driver = options.driver;
     this.sender = options.sender;
-    this.timeoutMs = options.timeoutMs ?? 60_000;
+    this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? 120_000;
     this.pollMs = options.pollMs ?? 500;
     this.maxBodyBytes = options.maxBodyBytes ?? 1024 * 1024;
     this.logger = options.logger ?? console;
@@ -215,7 +218,7 @@ export class ExecServer {
 
   /**
    * fire-and-forget 执行：驱动 serve + 事件按序上送 + trackInstance 计数。
-   * 所有错误路径（createSession/sendMessage 失败、awaitCompletion 超时/异常）统一
+   * 所有错误路径（createSession/sendMessage 失败、awaitCompletion 首字超时/异常）统一
    * 收敛为 error 事件 + session.updated(failed)；绝不向上抛（异步任务无捕获方）。
    */
   private async runExecution(payload: ExecuteRequestPayload): Promise<void> {
@@ -247,7 +250,7 @@ export class ExecServer {
           directory: payload.directory,
         },
         {
-          timeoutMs: this.timeoutMs,
+          firstTokenTimeoutMs: this.firstTokenTimeoutMs,
           pollMs: this.pollMs,
           onPoll: (messages: ServeMessage[], _elapsedMs: number) => {
             void this.sendDelta(ctx, tracker, messages);
@@ -278,7 +281,7 @@ export class ExecServer {
         sessionId: opencodeSessionId,
         channelId: payload.channelId,
         status: 'error',
-        error: err instanceof CompletionTimeoutError ? `执行超时：${message}` : message,
+        error: err instanceof CompletionTimeoutError ? `执行失败：${message}` : message,
       });
       await this.sender.send(WORKER_EVENT_TYPES.SESSION_UPDATED, {
         taskId: payload.taskId,

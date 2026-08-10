@@ -40,6 +40,11 @@ export interface WorkerConfig {
    * 随注册 capabilities.execPort 上报，server 据此发现执行端点；默认 4198。
    */
   workerExecPort: number;
+  /**
+   * T10：执行端点首字超时 ms（env WORKER_FIRST_TOKEN_TIMEOUT_MS，awaitCompletion
+   * 首字超时——时限内模型无输出即 abort）；默认 120000。首字出现后无完成超时。
+   */
+  workerFirstTokenTimeoutMs: number;
 }
 
 /** 解析非负整数配置项；缺省/空串回落默认值，非法值抛错。 */
@@ -81,5 +86,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     opencodeServeHostname: (env.OPENCODE_SERVE_HOSTNAME ?? '').trim() || '127.0.0.1',
     defaultModelId: (env.WORKER_DEFAULT_MODEL ?? '').trim() || undefined,
     workerExecPort: parseNonNegativeInt('WORKER_EXEC_PORT', env.WORKER_EXEC_PORT, 4198),
+    workerFirstTokenTimeoutMs: parseNonNegativeInt(
+      'WORKER_FIRST_TOKEN_TIMEOUT_MS',
+      env.WORKER_FIRST_TOKEN_TIMEOUT_MS,
+      120000,
+    ),
   };
 }

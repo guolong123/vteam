@@ -9,14 +9,21 @@
  * 文本聚合：按 messageID 分组 → 过滤 type=text（排除 synthetic 合成文本，工具
  * 调用占位非模型输出）→ 按 part.time.start 时间戳排序 → 串接（D2 多段拼接规则）。
  *
- * 超时：调 abort + 抛 CompletionTimeoutError（携带已收集文本，调用方可展示部分回复）。
+ * 超时：**首字超时**（第一个非空 assistant text part 在 firstTokenTimeoutMs 内未出现
+ * → 调 abort + 抛 CompletionTimeoutError，携带已收集文本）。首字出现后**无完成超时**
+ * （长期任务持续轮询到 step-finish，判死由上层 server AGENT_IDLE_TIMEOUT_MS 负责，
+ * worker 只管「有活动就继续」）——只有「模型完全没响应」才报错。
  */
 
 import { V1Driver, ServeMessage, ServePart, ServeTokens } from './v1-driver';
 
 export interface AwaitCompletionOptions {
-  /** 总超时 ms；默认 60000（计划 D8 总超时 60s + abort） */
-  timeoutMs?: number;
+  /**
+   * 首字超时 ms（第一个非空 assistant text part 在此时限内未出现 → abort + 抛
+   * CompletionTimeoutError）；默认 120000（对齐 server FIRST_TOKEN_TIMEOUT_MS 语义）。
+   * 首字出现后无完成超时（持续等待 step-finish，不 abort）。
+   */
+  firstTokenTimeoutMs?: number;
   /** 轮询间隔 ms；默认 500（计划 D8） */
   pollMs?: number;
   /** 每次轮询后的回调（调试/进度上报用，T6 事件上送可在此挂钩） */
@@ -35,14 +42,14 @@ export interface CompletionResult {
   cost?: number;
 }
 
-/** 轮询超时（60s 未出现 step-finish(reason=stop)），已 abort + 携带部分回复。 */
+/** 首字超时（firstTokenTimeoutMs 内未出现第一个非空 assistant text part），已 abort + 携带部分回复。 */
 export class CompletionTimeoutError extends Error {
   readonly sessionID: string;
   readonly result: CompletionResult;
 
   constructor(sessionID: string, result: CompletionResult) {
     super(
-      `[prompt-await] 会话 ${sessionID} 等待完成超时（60s 内未收到 step-finish(reason=stop)）`,
+      `[prompt-await] 会话 ${sessionID} 等待首字超时（未在时限内收到模型首字输出，可能模型无响应或会话挂起）`,
     );
     this.name = 'CompletionTimeoutError';
     this.sessionID = sessionID;
@@ -108,27 +115,51 @@ function buildResult(messages: ServeMessage[]): CompletionResult {
   };
 }
 
+/** 首字判定：存在任一非空（trim 后非空）assistant text part（排除 synthetic 合成文本）。 */
+function hasFirstToken(messages: ServeMessage[]): boolean {
+  for (const m of messages) {
+    if (m.info?.role !== 'assistant') {
+      continue;
+    }
+    for (const p of m.parts ?? []) {
+      if (p.type === 'text' && !p.synthetic && (p.text ?? '').trim() !== '') {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
- * 轮询等待会话完成：默认 500ms 间隔 / 60s 总超时。
- * 完成 → 返回聚合结果；超时 → abort + 抛 CompletionTimeoutError（带已收集文本）。
+ * 轮询等待会话完成：默认 500ms 间隔 / 120s 首字超时。
+ * 完成（step-finish）→ 返回聚合结果；首字超时（时限内无模型输出）→ abort + 抛
+ * CompletionTimeoutError（带已收集文本）。首字出现后**无完成超时**——持续轮询到
+ * step-finish，长期任务（模型思考/长输出）不被误杀，判死由上层 server 空闲超时负责。
  */
 export async function awaitCompletion(
   driver: V1Driver,
   sessionID: string,
   options: AwaitCompletionOptions = {},
 ): Promise<CompletionResult> {
-  const { timeoutMs = 60_000, pollMs = 500, onPoll } = options;
+  const { firstTokenTimeoutMs = 120_000, pollMs = 500, onPoll } = options;
   const startedAt = Date.now();
-  const deadline = startedAt + timeoutMs;
+  let firstTokenAt: number | null = null;
   let collected: ServeMessage[] = [];
 
   let finish: ServePart | undefined;
-  while (Date.now() < deadline) {
+  while (true) {
     const messages = await driver.getMessages(sessionID);
     collected = mergeMessages(collected, messages);
     onPoll?.(messages, Date.now() - startedAt);
     finish = findFinish(collected);
     if (finish) {
+      break;
+    }
+    if (firstTokenAt === null && hasFirstToken(collected)) {
+      firstTokenAt = Date.now();
+    }
+    // 首字出现后无完成超时（继续轮询，判死由上层负责）；仅「时限内首字未出现」才 abort。
+    if (firstTokenAt === null && Date.now() - startedAt >= firstTokenTimeoutMs) {
       break;
     }
     await sleep(pollMs);

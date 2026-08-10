@@ -30,6 +30,7 @@ const CONFIG: WorkerConfig = {
   opencodeServeHostname: '127.0.0.1',
   defaultModelId: '',
   workerExecPort: 4198,
+  workerFirstTokenTimeoutMs: 120000,
 };
 
 describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {

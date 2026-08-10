@@ -72,6 +72,8 @@ npm run dev            # tsx src/index.ts
 | `WORKER_ADVERTISE_HOST` | 否 | `http://127.0.0.1` | worker 对 server 公布的 serve 基址主机（D2：随注册 capabilities.baseUrl 上报；容器 compose 设 `http://worker`） |
 | `GIT_SSH_KEY_PATH` | 否 | 空 | SSH 私钥路径（T5 git 凭证注入：GIT_SSH_COMMAND）；空 = 不注入 |
 | `WORKER_DEFAULT_MODEL` | 否 | 空 | worker 默认模型 id（C2：随注册上报，C7 分派兜底）；空 = 未配置不上报 |
+| `WORKER_EXEC_PORT` | 否 | `4198` | T10 执行端点端口（node:http POST /execute，与 serve 端口解耦） |
+| `WORKER_FIRST_TOKEN_TIMEOUT_MS` | 否 | `120000` | T10 执行端点首字超时 ms（模型时限内无首字输出即 abort；首字出现后无完成超时，长期任务持续等待） |
 
 ## 目录结构
 

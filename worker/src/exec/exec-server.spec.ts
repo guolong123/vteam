@@ -6,7 +6,7 @@
  * - /execute 返回 202 {accepted:true} 且驱动 serve（createSession + sendMessage + awaitCompletion）
  * - 事件按序上送：session.updated(running) → message.part.delta（增量去重）→
  *   session.updated(idle) → task.completed
- * - 失败路径：awaitCompletion 超时 → agent.status(error) + session.updated(failed) + abort
+ * - 失败路径：awaitCompletion 首字超时 → agent.status(error) + session.updated(failed) + abort
  * - trackInstance 计数增减（执行期间 = 1，完成后归零）
  * - 请求校验：非 /execute 404、非 POST 405、缺 prompt 400
  */
@@ -47,7 +47,7 @@ const FINISH_MSGS_2: ServeMessage[] = [
   asstMsg('a2', [textPart(' done'), stepFinishPart()]),
 ];
 
-/** 永无 step-finish（超时路径）。 */
+/** 永无首字（仅 step-start，无 text part → 首字超时路径）。 */
 const STEP_START_ONLY: ServeMessage[] = [
   asstMsg('a1', [{ id: 'p_start', type: 'step-start' }]),
 ];
@@ -148,7 +148,7 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
   it('202 立即返回 + 驱动 serve（无 sessionId → createSession；parts 字符串归一）', async () => {
     const { driver, createSession, sendMessage } = mockDriver();
     const { sender, sent } = createSender();
-    const exec = new ExecServer({ port: 0, driver, sender, timeoutMs: 1000, logger: SILENT_LOGGER });
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
     const bound = await exec.start();
     try {
       const res = await postExecute(bound, { taskId: 't_1', prompt: 'hello' });
@@ -170,7 +170,7 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
   it('复用会话：请求带 sessionId 时不 createSession（端点按 opencode 会话 id 区分）', async () => {
     const { driver, createSession } = mockDriver();
     const { sender, sent } = createSender();
-    const exec = new ExecServer({ port: 0, driver, sender, timeoutMs: 1000, logger: SILENT_LOGGER });
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
     const bound = await exec.start();
     try {
       await postExecute(bound, { taskId: 't_1', sessionId: 'ses_existing', prompt: 'go' });
@@ -189,7 +189,7 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
       .mockResolvedValueOnce(PARTIAL_MSGS)
       .mockResolvedValueOnce(FINISH_MSGS_2);
     const { sender, sent } = createSender();
-    const exec = new ExecServer({ port: 0, driver, sender, timeoutMs: 1000, pollMs: 5, logger: SILENT_LOGGER });
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, pollMs: 5, logger: SILENT_LOGGER });
     const bound = await exec.start();
     try {
       await postExecute(bound, { taskId: 't_1', agentId: 'a_1', channelId: 'ch_1', prompt: 'go' });
@@ -228,11 +228,11 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     }
   });
 
-  it('失败路径（awaitCompletion 超时）→ agent.status(error) + session.updated(failed) + abort', async () => {
+  it('失败路径（awaitCompletion 首字超时）→ agent.status(error) + session.updated(failed) + abort', async () => {
     const { driver, getMessages, abort } = mockDriver();
     getMessages.mockResolvedValue(STEP_START_ONLY);
     const { sender, sent } = createSender();
-    const exec = new ExecServer({ port: 0, driver, sender, timeoutMs: 60, pollMs: 5, logger: SILENT_LOGGER });
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 60, pollMs: 5, logger: SILENT_LOGGER });
     const bound = await exec.start();
     try {
       await postExecute(bound, { taskId: 't_1', agentId: 'a_1', prompt: 'go' });
@@ -263,7 +263,7 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     const { driver, createSession } = mockDriver();
     createSession.mockRejectedValue(new Error('serve 未就绪'));
     const { sender, sent } = createSender();
-    const exec = new ExecServer({ port: 0, driver, sender, timeoutMs: 1000, logger: SILENT_LOGGER });
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
     const bound = await exec.start();
     try {
       await postExecute(bound, { taskId: 't_1', prompt: 'go' });
@@ -284,7 +284,7 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
       return FINISH_MSGS;
     });
     const { sender, sent } = createSender();
-    const exec = new ExecServer({ port: 0, driver, sender, timeoutMs: 1000, logger: SILENT_LOGGER });
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
     const bound = await exec.start();
     try {
       expect(getLoad().instances).toBe(0);
@@ -300,7 +300,7 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
   it('请求校验：非 /execute 404、非 POST 405、缺 prompt 400', async () => {
     const { driver } = mockDriver();
     const { sender } = createSender();
-    const exec = new ExecServer({ port: 0, driver, sender, timeoutMs: 1000, logger: SILENT_LOGGER });
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
     const bound = await exec.start();
     try {
       const notFound = await new Promise<number>((resolve, reject) => {

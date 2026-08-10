@@ -479,6 +479,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     port: config.workerExecPort,
     driver,
     sender: eventSender,
+    firstTokenTimeoutMs: config.workerFirstTokenTimeoutMs,
   });
   // T10：执行端点上报端口（start 成功 = 实际监听端口；失败置 undefined，注册不带 execPort）
   let execPort: number | undefined = config.workerExecPort;

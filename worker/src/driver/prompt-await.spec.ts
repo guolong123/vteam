@@ -4,7 +4,8 @@
  * mock V1Driver，覆盖：
  * - 完成判定：assistant 消息含 step-finish(reason=stop) → 返回文本/tokens/cost
  * - 无 step-finish 持续轮询（getMessages 多次调用）
- * - 超时 → abort 被调用 + CompletionTimeoutError 携带部分文本
+ * - 首字超时 → abort 被调用 + CompletionTimeoutError 携带已收集消息
+ * - 首字出现后无完成超时（超过 firstTokenTimeoutMs 总时长仍等待 step-finish，不 abort）
  * - abort 后消息只有 step-start+reasoning（无 step-finish）不误判为完整回复
  * - 文本聚合：多段按时间排序、messageID 分组、排除 synthetic 合成文本
  * - findFinish：user 消息带 step-finish 不判定（必须 assistant）
@@ -113,7 +114,7 @@ describe('awaitCompletion', () => {
       asstMsg('a1', [textPart('Hello!', 200), stepFinishPart({ cost: 0.25, tokens: { input: 50, output: 8 } })]),
     ]);
 
-    const result = await awaitCompletion(driver, 'ses_1', { timeoutMs: 1000, pollMs: 5 });
+    const result = await awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 1000, pollMs: 5 });
     expect(result.text).toBe('Hello!');
     expect(result.cost).toBe(0.25);
     expect(result.tokens).toEqual({ input: 50, output: 8 });
@@ -127,24 +128,41 @@ describe('awaitCompletion', () => {
       .mockResolvedValueOnce([asstMsg('a1', [{ id: 'p1', type: 'step-start' }])])
       .mockResolvedValueOnce([asstMsg('a1', [textPart('done', 100), stepFinishPart()])]);
 
-    const result = await awaitCompletion(driver, 'ses_1', { timeoutMs: 1000, pollMs: 5 });
+    const result = await awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 1000, pollMs: 5 });
     expect(result.text).toBe('done');
     expect(getMessages).toHaveBeenCalledTimes(3);
   });
 
-  it('超时（无 step-finish）→ abort 被调用 + CompletionTimeoutError 携带部分文本', async () => {
+  it('首字超时（时限内无模型输出）→ abort 被调用 + CompletionTimeoutError 携带已收集消息', async () => {
     const { driver, getMessages, abort } = mockDriver();
-    // abort 后消息只有 step-start+reasoning（D2：无 step-finish 不应误判为完整回复）
-    getMessages.mockResolvedValue([asstMsg('a1', [{ id: 'p1', type: 'step-start' }, textPart('partial', 100)])]);
+    // 只有 step-start（无任何 text part）→ 首字永不出现 → 首字超时
+    getMessages.mockResolvedValue([asstMsg('a1', [{ id: 'p1', type: 'step-start' }])]);
 
-    const promise = awaitCompletion(driver, 'ses_1', { timeoutMs: 40, pollMs: 5 });
+    const promise = awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 40, pollMs: 5 });
     await expect(promise).rejects.toBeInstanceOf(CompletionTimeoutError);
-    await expect(promise).rejects.toThrow(/等待完成超时/);
+    await expect(promise).rejects.toThrow(/等待首字超时/);
     expect(abort).toHaveBeenCalledWith('ses_1');
-    // 错误携带已收集文本（部分回复可展示）
+    // 错误携带已收集消息（无首字 → 无文本）
     const err = (await promise.catch((e: unknown) => e)) as CompletionTimeoutError;
-    expect(err.result.text).toBe('partial');
+    expect(err.result.text).toBe('');
     expect(err.sessionID).toBe('ses_1');
+  });
+
+  it('首字出现后无完成超时：超过 firstTokenTimeoutMs 总时长仍持续轮询直到 step-finish（不 abort）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    let calls = 0;
+    getMessages.mockImplementation(async () => {
+      calls += 1;
+      if (calls <= 3) return [asstMsg('a1', [])];                     // 前 3 轮无内容（首字未出现）
+      if (calls <= 40) return [asstMsg('a1', [textPart('x', 100)])];  // 首字出现后长轮询（远超总时限）
+      return [asstMsg('a1', [textPart('x', 100), stepFinishPart()])]; // 最终完成
+    });
+
+    const promise = awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 60, pollMs: 5 });
+    await expect(promise).resolves.toMatchObject({ text: 'x' });
+    expect(abort).not.toHaveBeenCalled();
+    // 首字（约 20ms 出现）后继续轮询 30+ 轮，远超 60ms 总时限，未被误杀
+    expect(calls).toBeGreaterThan(10);
   });
 
   it('超时后 abort 失败不掩盖超时错误（双保险中 HTTP abort 已尽力）', async () => {
@@ -153,7 +171,7 @@ describe('awaitCompletion', () => {
     abort.mockRejectedValue(new Error('abort HTTP 500'));
 
     await expect(
-      awaitCompletion(driver, 'ses_1', { timeoutMs: 40, pollMs: 5 }),
+      awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 40, pollMs: 5 }),
     ).rejects.toBeInstanceOf(CompletionTimeoutError);
   });
 
@@ -164,7 +182,7 @@ describe('awaitCompletion', () => {
       .mockResolvedValueOnce([asstMsg('a1', [stepFinishPart()])]);
     const onPoll = jest.fn();
 
-    await awaitCompletion(driver, 'ses_1', { timeoutMs: 1000, pollMs: 5, onPoll });
+    await awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 1000, pollMs: 5, onPoll });
     expect(onPoll).toHaveBeenCalledTimes(2);
     expect(onPoll.mock.calls[1][0]).toHaveLength(1);
     expect(onPoll.mock.calls[1][1]).toBeGreaterThanOrEqual(0);
@@ -178,7 +196,7 @@ describe('sendAndAwait', () => {
     getMessages.mockResolvedValue([asstMsg('a1', [textPart('ok', 100), stepFinishPart()])]);
 
     const input = { parts: [{ type: 'text', text: 'go' }], directory: '/tmp' };
-    const result = await sendAndAwait(driver, 'ses_1', input, { timeoutMs: 1000, pollMs: 5 });
+    const result = await sendAndAwait(driver, 'ses_1', input, { firstTokenTimeoutMs: 1000, pollMs: 5 });
     expect(sendMessage).toHaveBeenCalledWith('ses_1', input);
     expect(result.text).toBe('ok');
   });
