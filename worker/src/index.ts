@@ -126,9 +126,21 @@ export interface ModelListProbeOptions {
   retryDelayMs?: number;
   /** 可注入 sleep（单测传 0ms 跳过真实等待；缺省 setTimeout）。 */
   delay?: (ms: number) => Promise<void>;
+  /** C3 稳定性确认：同一非空列表需连续出现 stability 次才上报（默认 1=首次非空即上报，兼容旧行为）。 */
+  stability?: number;
 }
 
 const defaultDelay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** C3 稳定性辅助：两批模型 id 是否一致（顺序无关）。 */
+function sameModelIds(a: string[], b: string[] | null): boolean {
+  if (!b || a.length !== b.length) {
+    return false;
+  }
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return sortedA.every((id, i) => id === sortedB[i]);
+}
 
 /**
  * C2：探测 serve 真实模型列表并映射为上报格式（id 字符串列表，格式 providerID/modelID，
@@ -136,8 +148,11 @@ const defaultDelay = (ms: number) => new Promise<void>((resolve) => setTimeout(r
  * B2 修复（F3）：serve 就绪瞬间 /api/model 可能返回空列表（serve 模型表仍在预热，F3 实测
  * ~3s 后才返回完整模型）——空列表不再视为"已探测无模型"，而是"未就绪"：按 1s/2s/4s 指数
  * 退避重试直到非空或重试耗尽。
- * - 非空 → 返回 id 数组（正常上报）
- * - 重试耗尽仍空 → 降级 undefined（不携带 models，不阻断注册）
+ * C3 修复（CONF-01）：预热期 /api/model 除空列表外还可能返回中间态假模型列表（实测 25 个
+ * 假模型），稳定性校验（options.stability > 1）要求同一列表连续 N 次探测一致才上报，
+ * 不一致时重置计数继续探测，耗尽仍不稳定 → 降级 undefined（宁可不带 models 也不上报假列表）。
+ * - 非空且通过稳定性确认 → 返回 id 数组（正常上报）
+ * - 重试耗尽仍空/不稳定 → 降级 undefined（不携带 models，不阻断注册）
  * - listModels 抛错（serve 未就绪/端点不支持/网络错）→ 立即降级 undefined
  * 独立导出便于单测 mock driver.listModels 的空/非空/抛错三态。
  */
@@ -149,27 +164,49 @@ export async function resolveModels(
     retries = 3,
     retryDelayMs = 1000,
     delay = defaultDelay,
+    stability = 1,
   } = options;
 
+  let lastIds: string[] | null = null;
+  let stableCount = 0;
+
   for (let attempt = 0; attempt <= retries; attempt++) {
+    let raw: DriverModelInfo[];
     try {
-      const raw = await lister.listModels();
-      if (raw.length > 0) {
-        return raw.map((m) => m.id);
-      }
-      if (attempt < retries) {
-        const backoffMs = retryDelayMs * 2 ** attempt;
-        console.warn(
-          `[worker] 模型列表探测为空（第 ${attempt + 1}/${retries + 1} 次，serve 可能仍在预热），${backoffMs}ms 后重试`,
-        );
-        await delay(backoffMs);
-      }
+      raw = await lister.listModels();
     } catch (err) {
       console.warn(`[worker] 模型列表探测失败（注册降级不带 models，不阻断注册）: ${(err as Error).message}`);
       return undefined;
     }
+
+    if (raw.length > 0) {
+      const ids = raw.map((m) => m.id);
+      if (stability <= 1) {
+        return ids;
+      }
+      if (sameModelIds(ids, lastIds)) {
+        stableCount++;
+      } else {
+        stableCount = 1;
+        lastIds = ids;
+      }
+      if (stableCount >= stability) {
+        return ids;
+      }
+    } else {
+      lastIds = null;
+      stableCount = 0;
+    }
+
+    if (attempt < retries) {
+      const backoffMs = retryDelayMs * 2 ** attempt;
+      console.warn(
+        `[worker] 模型列表探测未稳定（第 ${attempt + 1}/${retries + 1} 次，serve 可能仍在预热），${backoffMs}ms 后重试`,
+      );
+      await delay(backoffMs);
+    }
   }
-  console.warn(`[worker] 模型列表探测 ${retries + 1} 次仍为空，注册降级不带 models（不阻断注册）`);
+  console.warn(`[worker] 模型列表探测 ${retries + 1} 次仍未获得稳定列表，注册降级不带 models（不阻断注册）`);
   return undefined;
 }
 
@@ -282,8 +319,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   // T6 注册（X-Worker-Token）：失败指数退避重试（1s/2s/4s/8s...封顶 30s），
   // 重试耗尽返回 null（由调用方决定退出或降级）。
   // C2：serve 就绪后先探测真实模型列表（resolveModels 失败降级 undefined，不带 models 不阻断注册）。
+  // C3（CONF-01）：stability=2——预热期中间态假模型列表需连续 2 次探测一致才上报，杜绝假模型回流。
   const registerCurrent = async (): Promise<RegisterResponse | null> => {
-    const models = await resolveModels(driver);
+    const models = await resolveModels(driver, { stability: 2 });
     return registerWorkerWithRetry(
       await buildRegisterOptions(
         config,

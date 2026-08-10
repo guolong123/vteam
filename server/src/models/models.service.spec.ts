@@ -459,17 +459,18 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     });
   });
 
-  describe('syncFromWorkerCapabilities（worker 上报合并入库）', () => {
+  describe('syncFromWorkerCapabilities（worker 上报合并入库 + 同步清理）', () => {
     it('上报 models → 逐条拆解 upsert 目录 + upsert availability，返回合并条数', async () => {
       prisma.model.findUnique
-        .mockResolvedValueOnce(null) // 'opencode-go/deepseek-v4-flash' 目录不存在 → 新建
-        .mockResolvedValueOnce({ id: 'md_0000000001' }); // 'opencode/glm-5.1' 已存在 → 复用
+        .mockResolvedValueOnce(null) // 'opencode-go/deepseek-v4-flash' 目录不存在 → 新建 md_0000000001
+        .mockResolvedValueOnce({ id: 'md_0000000002' }); // 'opencode/glm-5.1' 已存在 → 复用 md_0000000002
       prisma.model.create.mockResolvedValue({
         ...modelRowFull,
         id: 'md_0000000001',
         modelID: 'deepseek-v4-flash',
       });
       prisma.workerModelAvailability.upsert.mockResolvedValue({});
+      prisma.workerModelAvailability.deleteMany.mockResolvedValue({ count: 0 });
 
       const n = await service.syncFromWorkerCapabilities('w_0000000001', [
         'opencode-go/deepseek-v4-flash',
@@ -496,12 +497,59 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         create: { workerId: 'w_0000000001', modelId: 'md_0000000001' },
         update: {},
       });
+      // 同步清理：删除该 worker 不在本次上报列表中的旧 availability
+      expect(prisma.workerModelAvailability.deleteMany).toHaveBeenCalledWith({
+        where: {
+          workerId: 'w_0000000001',
+          modelId: { notIn: ['md_0000000001', 'md_0000000002'] },
+        },
+      });
+    });
+
+    it('CONF-01：上报最新 8 个真实模型时，删除该 worker 不再上报的假模型 availability', async () => {
+      // worker 实测真实模型（opencode models 权威列表）
+      const realModelRefs = [
+        'big-pickle/big-pickle',
+        'opencode-go/deepseek-v4-flash-free',
+        'opencode-go/laguna-s-2.1-free',
+        'opencode-go/ling-3.0-tiny-free',
+        'opencode-go/longcat-2.0-free',
+        'opencode-go/mimo-v2.5-free',
+        'opencode-go/nemotron-3-ultra-free',
+        'opencode-go/north-mini-code-free',
+      ];
+      // 目录均不存在 → 新建，catalogId = md_<modelID>
+      prisma.model.findUnique.mockResolvedValue(null);
+      prisma.model.create.mockImplementation(async ({ data }) => ({
+        ...modelRowFull,
+        id: `md_${data.modelID}`,
+      }));
+      prisma.workerModelAvailability.upsert.mockResolvedValue({});
+      // 上次上报 25 个，本次 8 个 → 17 个假模型 availability 被清理
+      prisma.workerModelAvailability.deleteMany.mockResolvedValue({ count: 17 });
+
+      const n = await service.syncFromWorkerCapabilities(
+        'w_0000000001',
+        realModelRefs,
+      );
+
+      expect(n).toBe(8);
+      expect(prisma.workerModelAvailability.upsert).toHaveBeenCalledTimes(8);
+      expect(prisma.workerModelAvailability.deleteMany).toHaveBeenCalledWith({
+        where: {
+          workerId: 'w_0000000001',
+          modelId: {
+            notIn: realModelRefs.map((ref) => `md_${ref.split('/')[1]}`),
+          },
+        },
+      });
     });
 
     it('缺省/空数组 → 返回 0 不触碰目录（降级未上报保留旧数据）', async () => {
       expect(await service.syncFromWorkerCapabilities('w_0000000001', [])).toBe(0);
       expect(prisma.model.findUnique).not.toHaveBeenCalled();
       expect(prisma.workerModelAvailability.upsert).not.toHaveBeenCalled();
+      expect(prisma.workerModelAvailability.deleteMany).not.toHaveBeenCalled();
     });
   });
 

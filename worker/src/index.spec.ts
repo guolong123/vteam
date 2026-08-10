@@ -160,6 +160,53 @@ describe('resolveModels（C2：serve 模型列表探测与降级）', () => {
       warnSpy.mockRestore();
     }
   });
+
+  it('C3 稳定性校验：预热中间态假列表变化后，连续 stability 次一致才上报真实列表', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // 探测序列：假列表（中间态）→ 真实列表 ×2 → 第 2/3 次一致，通过稳定性确认
+      const listModels = jest
+        .fn()
+        .mockResolvedValueOnce([
+          { id: 'opencode-go/ling-3.0-flash-free', name: '假', providerID: 'opencode-go', modelID: 'ling-3.0-flash-free' },
+          { id: 'opencode-go/hy3-free', name: '假', providerID: 'opencode-go', modelID: 'hy3-free' },
+        ])
+        .mockResolvedValueOnce([
+          { id: 'opencode-go/deepseek-v4-flash-free', name: '真', providerID: 'opencode-go', modelID: 'deepseek-v4-flash-free' },
+        ])
+        .mockResolvedValueOnce([
+          { id: 'opencode-go/deepseek-v4-flash-free', name: '真', providerID: 'opencode-go', modelID: 'deepseek-v4-flash-free' },
+        ]);
+      const models = await resolveModels(
+        { listModels },
+        { stability: 2, delay: async () => {} },
+      );
+      expect(models).toEqual(['opencode-go/deepseek-v4-flash-free']);
+      expect(listModels).toHaveBeenCalledTimes(3);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('C3 稳定性校验：探测始终不一致 → 降级 undefined（宁可不带 models 也不上报假列表）', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const listModels = jest
+        .fn()
+        .mockResolvedValueOnce([{ id: 'a/fake-1', name: 'x', providerID: 'a', modelID: 'fake-1' }])
+        .mockResolvedValueOnce([{ id: 'a/fake-2', name: 'x', providerID: 'a', modelID: 'fake-2' }])
+        .mockResolvedValueOnce([{ id: 'a/fake-3', name: 'x', providerID: 'a', modelID: 'fake-3' }])
+        .mockResolvedValueOnce([{ id: 'a/fake-4', name: 'x', providerID: 'a', modelID: 'fake-4' }]);
+      const models = await resolveModels(
+        { listModels },
+        { stability: 2, retries: 3, delay: async () => {} },
+      );
+      expect(models).toBeUndefined();
+      expect(listModels).toHaveBeenCalledTimes(4);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
 
 describe('T4a 命令分派（onCommands + dispatchCommands）', () => {

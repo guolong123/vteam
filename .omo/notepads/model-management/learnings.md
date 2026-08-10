@@ -1007,3 +1007,21 @@ Tags: CFG-04, UX-06, models-page, providers-tab, configure-modal, credential, in
 - **经验**：① zustand persist 动态切换 storage 的最简实现 = 固定一个 `StateStorage` 包装器 + 模块级模式变量控制写入目标（比 `persist.setOptions({storage})` 切换更稳：写入时机统一、可同时清对立 storage）；② persist 对「partialize 结果等于默认值」的 set 会调 removeItem 而非 setItem——logout 天然清 storage，无需手动清；③ forgot-password 查用户用「两次 findUnique（username 再 email）」而非 findFirst(OR)——贴近既有 mock（findUnique 已支持三 key），OR/findFirst 需扩 mock；reset-password 必须 findFirst（token 非唯一）；④ 校验字段 null 处理：`!user.resetTokenExpires` 显式判空防旧行 `null.getTime()` 崩。
 
 Tags: UX-12, remember-me, forgot-password, reset-token, dual-storage, login-page
+
+---
+
+## CONF-01（第三次）: 假模型反复入库根因修复（2026-08-10，代码 + tsc + jest 验证完成，未部署）
+
+- **问题**：18 个假模型（ling-3.0-flash-free/hy3-free/glm-5-free/qwen3.6-plus-free 等）在 worker 每次重启注册时反复写入 DB。worker 容器 `opencode models` 实测仅 8 个真实模型，但注册时（2026-08-09 16:22:50）上报 25 个——serve /api/model 预热期中间态返回假模型列表。
+- **根因（两层）**：
+  1. **server 侧** `syncFromWorkerCapabilities`（models.service.ts）无条件 upsert：`for (raw of modelIds) { upsertCatalogModel + availability.upsert }`，无真实性校验、无旧数据清理——上报什么就入库什么，假模型随每次注册反复回流。
+  2. **worker 侧** `resolveModels`（worker/src/index.ts）只要探测到**非空**列表就上报（B2 只处理了"空=未就绪"场景），预热中间态的假列表同样被视为权威结果。
+- **修复**：
+  1. **server `syncFromWorkerCapabilities` 增加同步清理语义**：本次上报即该 worker 当前权威列表——收集 catalogIds 后 `deleteMany({ workerId, modelId: { notIn: [...new Set(catalogIds)] } })`，上次上报但本次未再出现的假模型 availability 一并删除（上报 8 个时，旧 25 个中的 17 个假 availability 被清理）。`notIn` 去重防同一模型重复上报产生重复值；`modelIds` 空/缺省仍返回 0 不触碰（降级语义保留旧数据）。**只清理 availability，不删 model 目录**（目录可能有人工条目，误删风险大）。
+  2. **worker `resolveModels` 增加稳定性校验**：新增 `stability` 选项（默认 1=旧行为兼容现有测试），同一非空列表需**连续 N 次探测一致**才上报，不一致重置计数继续探测；`registerCurrent` 传入 `stability: 2`——预热假列表（首次）与真实列表（稳定后）不一致，第二次稳定才上报，杜绝假列表回流；探测耗尽仍不稳定 → 降级 undefined（宁可不带 models 也不上报假列表）。
+- **测试**：server models.service.spec 新增「上报最新 8 个真实模型时，删除该 worker 不再上报的假模型 availability」用例（deleteMany notIn 断言 8 个 catalogId，返回 count 17）；worker index.spec 新增「预热假列表变化后连续 stability 次一致才上报真实列表」「探测始终不一致 → 降级 undefined」两用例。
+- **验证**：`cd server && npx tsc --noEmit` **0 错误**；`npx jest models.service.spec` **37/37 全绿**；`cd worker && npm run typecheck` **0 错误**；`npx jest`（worker）**17 suites / 212 tests 全绿**。未 docker build/未部署/未跑全量 jest（遵守执行范围）。
+- **遗留（orchestrator 负责）**：部署后清理 DB 中已存在的 18 个假模型 availability + 目录记录；模板 Agent 默认模型已收敛到 8 个真实模型，本次修复确保假模型不再回流。
+- **经验**：① serve /api/model 预热期不止返回空列表，还会返回**非空假列表**——"非空即权威"假设不成立，需稳定性确认（连续 N 次一致）而非仅空列表重试；② server 侧 worker 上报合并应具备**幂等收敛语义**（上报=权威快照，清理未上报项），而不只是追加 upsert，否则假数据一旦进入就在每次注册时被"重放"；③ 清理范围保守原则：只清理 worker-availability 关联，不误删 model 目录（人工条目与 seed 条目无 worker 关联不能删）。
+
+Tags: CONF-01, fake-models, syncFromWorkerCapabilities, resolveModels, stability-check, sync-cleanup

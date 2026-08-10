@@ -278,6 +278,9 @@ export class ModelsService implements OnModuleInit {
   /**
    * C3 核心集成：worker 注册/重注册上报 capabilities.models（string[]，id 格式 providerID/modelID）
    * → 逐条拆解 upsert 目录 + upsert WorkerModelAvailability（workerId+modelId 复合键）。
+   * CONF-01 修复（第三次）：增加同步清理语义——本次上报即该 worker 当前权威模型列表，
+   * 上次上报但本次未再出现的模型 availability（serve 预热期中间态假模型）一并删除，
+   * 防止假模型在 worker 重启注册时反复回流入库。
    * 返回实际合并条数；modelIds 为空/缺省（undefined 降级未上报）→ 0（不触碰目录，保留旧数据）。
    */
   async syncFromWorkerCapabilities(
@@ -288,12 +291,14 @@ export class ModelsService implements OnModuleInit {
       return 0;
     }
     let merged = 0;
+    const catalogIds: string[] = [];
     for (const raw of modelIds) {
       if (!raw || typeof raw !== 'string') {
         continue;
       }
       const { providerID, modelID } = this.splitModelId(raw);
       const catalogId = await this.upsertCatalogModel(providerID, modelID);
+      catalogIds.push(catalogId);
       await this.prisma.workerModelAvailability.upsert({
         where: { workerId_modelId: { workerId, modelId: catalogId } },
         create: { workerId, modelId: catalogId },
@@ -302,8 +307,13 @@ export class ModelsService implements OnModuleInit {
       merged++;
     }
     if (merged > 0) {
+      // 同步清理：删除该 worker 本次未再上报的旧 availability（假模型随最新列表移除）。
+      // catalogIds 去重：同一模型重复上报时 notIn 避免重复值。
+      const removed = await this.prisma.workerModelAvailability.deleteMany({
+        where: { workerId, modelId: { notIn: [...new Set(catalogIds)] } },
+      });
       this.logger.log(
-        `worker ${workerId} 上报模型合并入库：${merged} 个（目录 + availability）`,
+        `worker ${workerId} 上报模型合并入库：${merged} 个（目录 + availability），清理未再上报的旧 availability ${removed.count} 条`,
       );
     }
     return merged;
