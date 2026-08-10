@@ -276,8 +276,10 @@ export class V1Driver {
         signal: controller.signal,
       });
       // 统一 2xx 校验（D2：prompt_async 204/200 均算成功）
+      // status 必须透传：exec-server 的 isSessionNotFound 依赖 err.status === 404
+      // 判定会话失效（serve 重启后旧 ses_ 会话不存在）并自动重建会话（45e0fdf）。
       if (!res.ok) {
-        throw new DriverRequestError(`[v1-driver] ${path} HTTP ${res.status}`);
+        throw new DriverRequestError(`[v1-driver] ${path} HTTP ${res.status}`, res.status);
       }
       return res;
     } catch (err) {

@@ -108,12 +108,20 @@ describe('V1Driver.sendMessage', () => {
     });
   });
 
-  it('非 2xx → DriverRequestError（带 HTTP 状态）', async () => {
+  it('非 2xx → DriverRequestError（带 HTTP 状态，err.status 透传）', async () => {
     mockFetch.mockResolvedValue(jsonResponse({ error: 'bad' }, 400));
     const driver = newDriver();
     await expect(
       driver.sendMessage('ses_1', { parts: [] }),
-    ).rejects.toThrow(/HTTP 400/);
+    ).rejects.toMatchObject({ message: expect.stringMatching(/HTTP 400/), status: 400 });
+  });
+
+  it('404 → err.status === 404（exec-server isSessionNotFound 会话失效重建判定依赖）', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({}, 404));
+    const driver = newDriver();
+    await expect(
+      driver.sendMessage('ses_stale', { parts: [] }),
+    ).rejects.toMatchObject({ status: 404 });
   });
 });
 
