@@ -57,6 +57,8 @@ interface AgentItem {
   /** template（只读）/ custom（自定义）/ clone（克隆副本，可写） */
   type: string;
   prompt: string;
+  /** 群聊 @Agent 收到确认文案（null=未定制，后端用默认文案；模板 Agent 也放行部署适配） */
+  ackMessage: string | null;
   baseAgentId: string | null;
   defaultModelId: string | null;
   /** 首选 worker id（软绑定，可空 null=自动调度，C1/C6） */
@@ -81,6 +83,8 @@ interface AgentsResponse {
 /** PATCH /agents/:id 请求体（仅提交可编辑字段，不传则后端保持原值）。 */
 interface UpdateAgentPayload {
   prompt?: string;
+  /** 群聊 @Agent 收到确认文案（空字符串提交 null=后端用默认文案；模板 Agent 也放行） */
+  ackMessage?: string | null;
   defaultModelId?: string;
   /** 首选 worker id（软绑定；显式 null=自动调度） */
   workerId?: string | null;
@@ -797,6 +801,7 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
 
   // 草稿：挂载时从 agent 初始化（父级 key=agent.id 保证切换重挂载）
   const [promptDraft, setPromptDraft] = useState(agent.prompt ?? "");
+  const [ackMessageDraft, setAckMessageDraft] = useState(agent.ackMessage ?? "");
   const [modelDraft, setModelDraft] = useState<string | null>(agent.defaultModelId ?? null);
   const [workerDraft, setWorkerDraft] = useState<string>(agent.workerId ?? "");
   const [skillDrafts, setSkillDrafts] = useState<string[]>(agent.skillIds);
@@ -844,9 +849,13 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
   };
 
   const handleSave = () => {
-    // template 仅允许保存 defaultModelId（后端 assertWritable 单字段放行）；其余字段只读不提交
+    // template 仅允许保存 defaultModelId + ackMessage（后端 assertWritable 单字段放行）；
+    // ackMessage 属部署适配字段（收到确认文案），模板也放行；空=null 落库用默认文案
     const payload: UpdateAgentPayload = isTemplate
-      ? { defaultModelId: modelDraft ?? undefined }
+      ? {
+          defaultModelId: modelDraft ?? undefined,
+          ackMessage: ackMessageDraft.trim() || null,
+        }
       : {
           prompt: promptDraft.trim(),
           defaultModelId: modelDraft ?? undefined,
@@ -854,6 +863,7 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
           workerId: workerDraft || null,
           skillIds: skillDrafts,
           toolEffects: toolDrafts.map((t) => ({ toolAction: t.toolAction, effect: t.effect })),
+          ackMessage: ackMessageDraft.trim() || null,
         };
     onSave(payload);
   };
@@ -1123,6 +1133,49 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
             outline: "none",
           }}
         />
+      </div>
+
+      {/* ①b 收到确认文案：群聊 @Agent 被调用时的自动回复（空=null 用默认文案；模板 Agent 也放行=部署适配） */}
+      <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>
+            收到确认文案
+          </span>
+          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+            群聊 @Agent 被调用时自动回复
+          </span>
+        </div>
+        <textarea
+          data-testid="ack-message-editor"
+          rows={2}
+          spellCheck={false}
+          value={ackMessageDraft}
+          onChange={(e) => setAckMessageDraft(e.target.value)}
+          placeholder="收到，正在处理…"
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            resize: "none",
+            border: `1px solid ${neutral[200]}`,
+            borderRadius: radius.md,
+            backgroundColor: "#FFFFFF",
+            padding: space.md,
+            fontSize: fontSize.md,
+            lineHeight: 1.6,
+            color: neutral[700],
+            fontFamily: fontFamily.mono,
+            outline: "none",
+          }}
+        />
+        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+          {isTemplate ? "模板允许调整该文案（部署适配字段）" : "留空则使用默认文案「收到，正在处理…」"}
+        </span>
       </div>
 
       {/* ② 默认模型配置（FR-47） */}
