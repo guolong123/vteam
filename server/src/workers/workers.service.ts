@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { TASK_STATUS } from '../common/constants/task.constants';
 import { MODEL_ERRORS } from '../models/models.constants';
 import { ModelsService } from '../models/models.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -40,6 +41,9 @@ interface WorkerCapabilitiesShape {
 interface WorkerLoadShape {
   instances: number;
 }
+
+/** P5：心跳 token 校验缓存 TTL ms（30s = 3 次心跳窗口，token 轮换后 30s 内旧结果过期）。 */
+const TOKEN_CHECK_TTL_MS = 30_000;
 
 /** 调度需求声明（T10 WorkerDispatcher 分派时传入）。 */
 export interface AssignmentRequirement {
@@ -76,6 +80,12 @@ export const WORKER_COMMAND_TYPES = {
    * 退出后心跳停止，30s 健康检查兜底维持 offline。
    */
   SHUTDOWN: 'shutdown',
+  /**
+   * 仓库凭证下发——worker 幂等写 ~/.keta-git-creds.json（600 权限，**不重启 serve**，
+   * git 工具每次执行读文件）。命令一次有效（心跳取出即清空）；key 只经下行命令
+   * 明文传输，不落 worker 日志。按 worker 承载活跃 agent 的授权仓库过滤打包。
+   */
+  GIT_CREDENTIALS: 'git-credentials',
 } as const;
 
 export type WorkerCommandType =
@@ -102,6 +112,30 @@ export interface ModelCredentialsPayload {
 }
 
 /**
+ * 仓库凭证下发条目（repoUrl → 明文 SSH 私钥/HTTPS token，server 解密后经下行命令下发）。
+ * 凭证面=worker 级：同 worker 承载的活跃 agent 共享已下发凭证（工具层按 repoUrl 白名单校验）。
+ */
+export interface GitCredentialEntry {
+  repoUrl: string;
+  authType: string;
+  key: string;
+  /** 脱敏标识（透传，worker 落盘供审计比对，不含明文）。 */
+  fingerprint: string;
+  /** 该仓库在 worker 凭证面上的最高授权权限（write > read；push 工具据此校验 write）。 */
+  permission?: string;
+}
+
+/**
+ * git-credentials 命令负载（对齐 worker GitCredentialsPayload，todo 3 双写）。
+ * targetWorkerIds 空 = 全量；credentials 为空数组 = 清下发（吊销后 worker 移除条目）。
+ */
+export interface GitCredentialsPayload {
+  credentials: GitCredentialEntry[];
+  /** 定向 worker id 列表；空 = 全量下发 */
+  targetWorkerIds?: string[];
+}
+
+/**
  * 心跳响应携带的下行命令（T4a）。
  * 设计为通用 commands 数组（复用点：AgentsModule 配置变更重启也走此通道，09 §3.7），
  * 命令仅一次有效：心跳取出即清空，worker 离线期间的命令丢弃（上线后由注册/重拉对齐）。
@@ -110,8 +144,8 @@ export interface WorkerCommand {
   type: WorkerCommandType;
   /** 资源版本号：T1/T2 变更时递增，worker 侧据此判断是否需重拉注入 */
   resourceVersion: string;
-  /** C5：model-credentials 命令携带的凭据负载（仅该 type 携带；reload-config 等不携带） */
-  payload?: ModelCredentialsPayload;
+  /** 命令负载：model-credentials 或 git-credentials 携带（其余 type 不携带） */
+  payload?: ModelCredentialsPayload | GitCredentialsPayload;
 }
 
 /** 原生 setInterval 句柄（不引入 @nestjs/schedule 依赖，等价 @Interval 语义）。 */
@@ -139,6 +173,13 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    * 供 worker 详情接口返回；worker 标记 offline 时同步清理（纯内存态，同 T8c）。
    */
   private readonly workerMcpStatus = new Map<string, McpStatusEntryDto[]>();
+
+  /** P5：心跳 token 校验结果缓存（workerId → 指纹+结果+时间）——避免每 10s 心跳重复
+   *  bcrypt（CPU 密集，多 worker 并发/注册风暴时拖垮 DB 连接池，P5 心跳不稳定根因之一）。 */
+  private readonly tokenCheckCache = new Map<
+    string,
+    { tokenHash: string; match: boolean; at: number }
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -194,13 +235,11 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       tokenHash,
       lastHeartbeatAt: now,
     };
-    // B1（F3 CRITICAL 修复）：凭据循环重启防护——upsert 前查原状态，判断本次是
-    // 首次注册（原不存在）还是已在线 reRegister（serve 重启触发）。仅前者或
-    // 原 offline（离线恢复）时回放凭据，见下方回放条件注释。
-    const existing = await this.prisma.worker.findUnique({
-      where: { id: dto.workerId },
-      select: { status: true },
-    });
+    // C5b（容器重启凭据恢复）：worker 每次 register 都无条件回放全部未吊销凭据。
+    // 容器重启后 auth.json 已被 worker 退出时 cleanupAuthJson 删除（明文零留存），
+    // 但 DB worker 行 status 可能仍是 ONLINE（心跳 30s 才判 offline，重启注册远早于
+    // 该窗口）→ 依赖 `existing.status === OFFLINE` 判断会漏回放 → opencode-go 等
+    // 付费模型凭据永不恢复。故此处不再按状态区分，每次启动都回放。
     const worker = await this.prisma.worker.upsert({
       where: { id: dto.workerId },
       create: { id: dto.workerId, ...data },
@@ -219,16 +258,13 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         `worker ${worker.id} 模型能力合并入库失败（不阻断注册）: ${e}`,
       );
     }
-    // C5（R5）：新 worker 注册/重注册后回放全部未吊销凭据——补凭据保存后新注册
-    // worker 缺凭据的缺口（worker 离线期间入队的命令会丢弃，注册即对齐）。
-    // B1（F3 CRITICAL）：仅首次注册（原不存在）或原 offline 时回放——已在线 worker
-    // 的 reRegister（serve 重启触发）不回放，切断凭据→重启→reRegister→再回放
-    // 无限循环（F3 实测每 ~10s 重启一次，27+ 次循环）。与心跳路径 offline→online
-    // 回放语义一致：凭据只在首次上线或离线恢复时下发一次。
-    // 回放失败（解密错/DB 错）不阻断注册，只打 warn 日志。
-    if (!existing || existing.status === WORKER_STATUS.OFFLINE) {
-      await this.replayModelCredentials(worker.id);
-    }
+    // C5（R5）：注册后回放全部未吊销凭据。无条件调用（见上方 C5b 说明：容器重启
+    // 后 auth.json 已被删除且 DB status 仍 ONLINE，必须每次启动回放）。回放失败
+    // （解密错/DB 错）不阻断注册，只打 warn 日志。
+    await this.replayModelCredentials(worker.id);
+    // 仓库凭证同理由：容器重启后 ~/.keta-git-creds.json 已随 homedir 消失（若容器
+    // 重建）或 worker 侧退出清理，注册时一并回放当前活跃 agent 授权凭证。
+    await this.replayGitCredentials(worker.id);
     return {
       workerId: worker.id,
       heartbeatIntervalMs: WORKER_HEARTBEAT_INTERVAL_MS,
@@ -255,12 +291,33 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       });
     }
     if (token && worker.tokenHash) {
-      const match = await bcrypt.compare(token, worker.tokenHash);
-      if (!match) {
-        throw new UnauthorizedException({
-          code: WORKER_ERRORS.TOKEN_INVALID,
-          message: `X-Worker-Token 与 worker ${id} 注册 token 不匹配`,
+      // P5：bcrypt 结果缓存（tokenHash 未变且 TTL 内复用）——worker 每 10s 心跳一次，
+      // 免去每次 CPU 密集 bcrypt；token 轮换后 worker 重新注册更新 tokenHash → 指纹失效。
+      const cached = this.tokenCheckCache.get(id);
+      if (
+        cached &&
+        cached.tokenHash === worker.tokenHash &&
+        Date.now() - cached.at < TOKEN_CHECK_TTL_MS
+      ) {
+        if (!cached.match) {
+          throw new UnauthorizedException({
+            code: WORKER_ERRORS.TOKEN_INVALID,
+            message: `X-Worker-Token 与 worker ${id} 注册 token 不匹配`,
+          });
+        }
+      } else {
+        const match = await bcrypt.compare(token, worker.tokenHash);
+        this.tokenCheckCache.set(id, {
+          tokenHash: worker.tokenHash,
+          match,
+          at: Date.now(),
         });
+        if (!match) {
+          throw new UnauthorizedException({
+            code: WORKER_ERRORS.TOKEN_INVALID,
+            message: `X-Worker-Token 与 worker ${id} 注册 token 不匹配`,
+          });
+        }
       }
     }
     const status =
@@ -288,6 +345,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     // 新状态 status 只可能为 online/degraded（永不等于 offline），仅需判断旧状态。
     if (worker.status === WORKER_STATUS.OFFLINE) {
       await this.replayModelCredentials(id);
+      await this.replayGitCredentials(id);
     }
     const commands = this.pendingCommands.get(id) ?? [];
     if (commands.length > 0) {
@@ -390,6 +448,140 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         `模型凭据回放失败（不阻断注册）: worker=${workerId} ${(err as Error).message}`,
       );
     }
+  }
+
+  /**
+   * 仓库凭证下发（唯一化分发入口，凭证面=worker 级）。
+   * - 活跃 agent 判定：taskAgent.removedAt=null 且关联 task 未终态（completed/archived，
+   *   沿用 tasks 模块 TASK_STATUS 常量）——worker 单容器承载多任务多 agent，按活跃
+   *   task 关联过滤，避免向已结束任务的 agent 下发凭证；
+   * - 收集这些 agent 被授权且未吊销的 repoUrl 集合 → 过滤未吊销 GitCredential →
+   *   解密 key 明文打包 GitCredentialsPayload → 对每个目标 worker enqueueCommand
+   *   （**查库 orderBy repoUrl asc 保证幂等对比稳定**）；
+   * - 目标 worker：targetWorkerIds 非空 → 定向；空 → 在线 worker（status != offline）；
+   * - 返回下发目标 worker 数。key 明文只进命令 payload 内存，不落本服务日志。
+   */
+  async dispatchGitCredentials(targetWorkerIds?: string[]): Promise<number> {
+    let workerIds: string[];
+    if (targetWorkerIds && targetWorkerIds.length > 0) {
+      workerIds = [...targetWorkerIds];
+    } else {
+      const online = await this.prisma.worker.findMany({
+        where: { status: { not: WORKER_STATUS.OFFLINE } },
+        select: { id: true },
+      });
+      workerIds = online.map((w) => w.id);
+    }
+    if (workerIds.length === 0) {
+      return 0;
+    }
+    const repoUrls = await this.resolveWorkerActiveRepoUrls();
+    const credentials = await this.buildGitCredentialsPayload(repoUrls);
+    if (credentials === null) {
+      // 从未配置任何 git 凭证 → 无命令可下发（对齐模型凭据「无未吊销凭据跳过」语义）
+      return 0;
+    }
+    const command: WorkerCommand = {
+      type: WORKER_COMMAND_TYPES.GIT_CREDENTIALS,
+      resourceVersion: 'git-credentials',
+      payload: {
+        credentials,
+        ...(targetWorkerIds && targetWorkerIds.length > 0
+          ? { targetWorkerIds }
+          : {}),
+      },
+    };
+    for (const id of workerIds) {
+      this.enqueueCommand(id, command);
+    }
+    this.logger.log(
+      `git 凭证下发：worker=${workerIds.length} 个 credentials=${credentials.length}`,
+    );
+    return workerIds.length;
+  }
+
+  /**
+   * 仓库凭证回放（注册/重注册、offline→online 心跳恢复时调用，仿 replayModelCredentials）。
+   * 定向到单个 worker 复用 dispatchGitCredentials 的活跃 agent 过滤打包逻辑；
+   * 失败不阻断注册/心跳，只打 warn。
+   */
+  async replayGitCredentials(workerId: string): Promise<void> {
+    try {
+      await this.dispatchGitCredentials([workerId]);
+    } catch (err) {
+      this.logger.warn(
+        `git 凭证回放失败（不阻断）: worker=${workerId} ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * 活跃 agent 授权仓库解析（dispatch/replay 复用）：
+   * ① taskAgent（removedAt=null）+ 关联 task 未终态（status ∉ {completed, archived}）
+   *    → 活跃 agent 集合（distinct agentId）；
+   * ② 这些 agent 的未吊销 GitRepoGrant → repoUrl → 最高权限映射（write > read）。
+   * 返回空 Map → 无任何授权仓库（打包结果为 credentials=[]，仍下发清 worker 侧条目）。
+   */
+  private async resolveWorkerActiveRepoUrls(): Promise<Map<string, string>> {
+    const activeTaskAgents = await this.prisma.taskAgent.findMany({
+      where: {
+        removedAt: null,
+        task: {
+          status: { notIn: [TASK_STATUS.completed, TASK_STATUS.archived] },
+        },
+      },
+      select: { agentId: true },
+      distinct: ['agentId'],
+    });
+    if (activeTaskAgents.length === 0) {
+      return new Map();
+    }
+    const agentIds = activeTaskAgents.map((t) => t.agentId);
+    const grants = await this.prisma.gitRepoGrant.findMany({
+      where: { agentId: { in: agentIds }, revokedAt: null },
+      select: { repoUrl: true, permission: true },
+    });
+    // 同一仓库多 agent 授权时取最高权限（write > read），凭证面=worker 级语义。
+    const permByRepo = new Map<string, string>();
+    for (const g of grants) {
+      const current = permByRepo.get(g.repoUrl);
+      if (g.permission === 'write' || !current) {
+        permByRepo.set(g.repoUrl, g.permission);
+      }
+    }
+    return permByRepo;
+  }
+
+  /**
+   * 仓库凭证 → 解密打包（orderBy repoUrl asc 幂等；内存过滤到授权集合）。
+   * 返回 null 表示从未配置任何凭证（调用方跳过下发）；返回空数组表示有凭证但
+   * 全部已吊销/当前活跃 agent 无授权（下发空 payload 清 worker 侧条目——含吊销场景）。
+   * key 明文仅存在于返回数组（进命令 payload），不落日志。
+   * permission 取授权映射中该仓库的最高权限（push 工具 write 校验依赖）。
+   */
+  private async buildGitCredentialsPayload(
+    repoPerm: Map<string, string>,
+  ): Promise<GitCredentialEntry[] | null> {
+    // 从未配置任何凭证（含已吊销历史行）→ 跳过下发（避免无意义命令风暴）。
+    // 与「有行但全部 revokedAt≠null」区分：后者必须下发空数组清 worker 侧残留明文。
+    const totalCount = await this.prisma.gitCredential.count();
+    if (totalCount === 0) {
+      return null;
+    }
+    const rows = await this.prisma.gitCredential.findMany({
+      where: { revokedAt: null },
+      orderBy: [{ repoUrl: 'asc' }],
+      select: { repoUrl: true, authType: true, credentialRef: true, fingerprint: true },
+    });
+    return rows
+      .filter((row) => repoPerm.has(row.repoUrl))
+      .map((row) => ({
+        repoUrl: row.repoUrl,
+        authType: row.authType,
+        key: this.credentialCrypto.decrypt(row.credentialRef),
+        fingerprint: row.fingerprint,
+        permission: repoPerm.get(row.repoUrl),
+      }));
   }
 
   /**
