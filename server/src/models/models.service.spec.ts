@@ -26,6 +26,12 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       create: jest.Mock;
       update: jest.Mock;
     };
+    gitCredential: {
+      findMany: jest.Mock;
+    };
+    gitRepoGrant: {
+      findMany: jest.Mock;
+    };
     workerModelAvailability: {
       deleteMany: jest.Mock;
       upsert: jest.Mock;
@@ -96,6 +102,12 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         create: jest.fn(),
         update: jest.fn(),
       },
+      gitCredential: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      gitRepoGrant: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       workerModelAvailability: {
         deleteMany: jest.fn(),
         upsert: jest.fn(),
@@ -137,6 +149,9 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         { id: 'mc_0000000042' },
         { id: 'mc_builtin_x' },
       ]);
+      // git 凭证域（onModuleInit 亦对齐 gc_/gr_ 前缀，todo 1 挂接）
+      prisma.gitCredential.findMany.mockResolvedValue([]);
+      prisma.gitRepoGrant.findMany.mockResolvedValue([]);
 
       await service.onModuleInit();
 

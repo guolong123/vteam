@@ -82,6 +82,8 @@ export class ModelsService implements OnModuleInit {
       MODEL_CREDENTIAL_ID_PREFIX,
       this.idGen,
     );
+    await resyncIdPrefix(this.prisma.gitCredential, 'gc', this.idGen);
+    await resyncIdPrefix(this.prisma.gitRepoGrant, 'gr', this.idGen);
   }
 
   // ==================================================================
