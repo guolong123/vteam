@@ -13,6 +13,9 @@
  */
 
 import { spawnSync } from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { loadConfig, WorkerConfig } from './config';
 import { EventSender } from './client/event-client';
 import {
@@ -23,9 +26,19 @@ import {
 } from './client/registry-client';
 import { V1Driver, DriverModelInfo } from './driver/v1-driver';
 import { GIT_TOOLS, installGitTools } from './git/git-tools';
+import {
+  GitCredentialEntry,
+  GIT_CREDS_FILE,
+  GitCredsResult,
+  buildGitCredsFile,
+  isValidGitCredEntry,
+  writeGitCredsFile,
+} from './git/git-credential-injector';
 import { getLoad, onActiveSessionsIdle } from './instance-tracker';
 import { McpStatusProbe } from './mcp-status/mcp-status-probe';
 import {
+  GitCredentialsPayload,
+  ModelCredentialsPayload,
   WorkerCapabilities,
   WorkerCommand,
   WorkerCommandType,
@@ -36,9 +49,15 @@ import {
 import { OpencodeServer } from './runtime/opencode-server';
 import { ExecServer } from './exec/exec-server';
 import { InjectReport, ResourceInjector } from './resources/injector';
-import { RestartCoordinator } from './restart/restart-coordinator';
 import {
+  RestartCoordinator,
+  RestartDecision,
+} from './restart/restart-coordinator';
+import {
+  AuthJsonResult,
+  buildAuthJson,
   cleanupAuthJson,
+  ModelCredentialEntry,
   writeAuthJson,
 } from './credentials/model-credential-injector';
 
@@ -85,10 +104,20 @@ export function dispatchCommands(commands: WorkerCommand[]): void {
     }
     if (command.type === WORKER_COMMAND_TYPES.MODEL_CREDENTIALS) {
       // C5：只打 providerID 清单（token 绝不进日志，安全基线）
+      const modelPayload = command.payload as ModelCredentialsPayload | undefined;
       const providerIDs =
-        command.payload?.providerKeys?.map((k) => k.providerID).join(', ') ?? '';
+        modelPayload?.providerKeys?.map((k) => k.providerID).join(', ') ?? '';
       console.log(
         `[worker] 收到命令 model-credentials（providerKeys=[${providerIDs}]），分派 auth.json 注入+重启`,
+      );
+    }
+    if (command.type === WORKER_COMMAND_TYPES.GIT_CREDENTIALS) {
+      // 只打 repoUrl 清单（key 明文绝不进日志，安全基线）
+      const gitPayload = command.payload as GitCredentialsPayload | undefined;
+      const repoUrls =
+        gitPayload?.credentials?.map((c) => c.repoUrl).join(', ') ?? '';
+      console.log(
+        `[worker] 收到命令 git-credentials（repoUrls=[${repoUrls}]），分派凭证文件写入`,
       );
     }
     if (command.type === WORKER_COMMAND_TYPES.RESTART) {
@@ -105,6 +134,117 @@ export function dispatchCommands(commands: WorkerCommand[]): void {
   void commandHandler?.(commands);
 }
 
+/** handleModelCredentials 的依赖注入面（单测可 mock 文件 IO 与重启协调）。 */
+export interface ModelCredentialsHandlingDeps {
+  /** 读取 auth.json 现有内容（不存在/读取失败 → null）。 */
+  readContent: (authJsonPath: string) => Promise<string | null>;
+  writeAuthJson: (providerKeys: ModelCredentialEntry[]) => AuthJsonResult;
+  cleanupAuthJson: (authJsonPath: string) => void;
+  requestRestart: (reason: string) => Promise<RestartDecision>;
+  log: (message: string) => void;
+  warn: (message: string) => void;
+}
+
+/** 兜底读取路径：opencode 1.18.16 固定读 $HOME/.local/share/opencode/auth.json。 */
+export const DEFAULT_AUTH_JSON_PATH = path.join(
+  os.homedir(),
+  '.local',
+  'share',
+  'opencode',
+  'auth.json',
+);
+
+/**
+ * F3 防循环：model-credentials 命令幂等注入。
+ * 用 buildAuthJson 生成新内容与现有 auth.json 内容对比（不重复实现序列化逻辑）：
+ * - 相同 → 跳过写盘 + 不重启 serve（server 无条件回放场景下切断
+ *   “重启 → reRegister → 回放 → 心跳 → 再重启”无限循环）
+ * - 不同/缺失 → cleanup 旧文件 → 写新 auth.json → 重启 serve（凭据变更/容器重启后恢复）
+ * 返回 { changed, authJsonPath }（authJsonPath 供调用方后续 cleanup）。
+ */
+export async function handleModelCredentials(
+  providerKeys: ModelCredentialEntry[],
+  injectedAuthJsonPath: string | null,
+  deps: ModelCredentialsHandlingDeps,
+): Promise<{ changed: boolean; authJsonPath: string }> {
+  // 处理前读取现有 auth.json 内容：优先已记录注入路径，兜底默认路径（容器重启后
+  // injectedAuthJsonPath 为 null，但 auth.json 可能仍在默认路径 → 靠内容对比判幂等）。
+  const existingPath = injectedAuthJsonPath ?? DEFAULT_AUTH_JSON_PATH;
+  const existingContent = await deps.readContent(existingPath);
+  // 生成新内容（不落盘先对比）
+  const newContent = buildAuthJson(providerKeys);
+  if (existingContent === newContent) {
+    deps.log('[worker] model-credentials：凭据未变化，跳过注入与重启');
+    return { changed: false, authJsonPath: existingPath };
+  }
+  // 内容变化/缺失：保留现有逻辑——清理上一次注入的 auth.json → 写新 → 重启 serve
+  if (injectedAuthJsonPath) {
+    deps.cleanupAuthJson(injectedAuthJsonPath);
+  }
+  const injected = deps.writeAuthJson(providerKeys);
+  deps.log(
+    `[worker] model-credentials：auth.json 已注入 ${injected.authJsonPath}（providerKeys=${providerKeys.length}），重启 serve 生效`,
+  );
+  const decision = await deps.requestRestart('model-credentials（凭据注入）');
+  if (decision === 'pending') {
+    deps.log('[worker] model-credentials：存在活跃会话，重启挂起（会话归零后自动执行）');
+  }
+  return { changed: true, authJsonPath: injected.authJsonPath };
+}
+
+/** handleGitCredentials 的依赖注入面（单测可 mock 文件 IO）。 */
+export interface GitCredentialsHandlingDeps {
+  /** 读取凭证文件现有内容（不存在/读取失败 → null）。 */
+  readContent: (filePath: string) => Promise<string | null>;
+  /** 写凭证文件（600 权限落盘，仿 writeGitCredsFile）。 */
+  writeContent: (entries: GitCredentialEntry[]) => GitCredsResult;
+  log: (message: string) => void;
+  warn: (message: string) => void;
+}
+
+/** 从现有文件内容提取 updatedAt（解析失败/缺失 → undefined，幂等对比复用）。 */
+function extractUpdatedAt(content: string): string | undefined {
+  try {
+    const parsed = JSON.parse(content) as { updatedAt?: unknown };
+    return typeof parsed?.updatedAt === 'string' ? parsed.updatedAt : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * git-credentials 命令幂等落盘。与 model-credentials 的关键区别：**不重启 serve**
+ * （git 工具每次执行读文件取凭证，写盘即生效）。逻辑：读现有文件内容 → 复用其
+ * updatedAt 重建新内容（credentials 一致 → 输出完全一致）→ 一致则跳过写盘（幂等，
+ * mtime 不变）；否则写盘（内容变化/缺失）。返回 { changed, path }。
+ */
+export async function handleGitCredentials(
+  entries: GitCredentialEntry[],
+  deps: GitCredentialsHandlingDeps,
+): Promise<{ changed: boolean; path: string }> {
+  const existingPath = GIT_CREDS_FILE;
+  if (!Array.isArray(entries)) {
+    deps.warn('[worker] git-credentials：credentials 负载缺失，跳过写入');
+    return { changed: false, path: existingPath };
+  }
+  const existingContent = await deps.readContent(existingPath);
+  const newContent = buildGitCredsFile(
+    entries,
+    existingContent ? extractUpdatedAt(existingContent) : undefined,
+  );
+  if (existingContent === newContent) {
+    deps.log('[worker] git-credentials：凭证文件未变化，跳过写入');
+    return { changed: false, path: existingPath };
+  }
+  const validCount = entries.filter(isValidGitCredEntry).length;
+  if (validCount === 0 && entries.length > 0) {
+    deps.warn('[worker] git-credentials：条目全部无效（空 repoUrl/key 已过滤）');
+  }
+  const result = deps.writeContent(entries);
+  deps.log(`[worker] git-credentials：凭证文件已更新（${validCount} 条）`);
+  return { changed: true, path: result.path };
+}
+
 function printStartup(config: WorkerConfig, opencodeVersion: string): void {
   console.log(`[worker] 启动中:
   workerId            = ${config.workerId}
@@ -115,6 +255,7 @@ function printStartup(config: WorkerConfig, opencodeVersion: string): void {
   opencodeServeHost   = ${config.opencodeServeHostname}
   workerAdvertiseHost = ${config.workerAdvertiseHost}
   heartbeatIntervalMs = ${config.heartbeatIntervalMs}
+  workerMaxInstances  = ${config.workerMaxInstances}
   logLevel            = ${config.logLevel}
   opencodeVersion     = ${opencodeVersion}`);
 }
@@ -222,6 +363,9 @@ export async function resolveModels(
  * C2：models 为 serve 真实模型 id 列表（resolveModels 结果）；undefined（探测失败）不携带。
  * T10：execPort 为执行端点端口（config.workerExecPort；端点启动失败时传 undefined 不上报，
  * server 不会连到不可用端点）。
+ * F4：maxInstances 并发上限配置化——由调用方传入 config.workerMaxInstances（env
+ * WORKER_MAX_INSTANCES，默认 5），替代原硬编码 1（单实例导致长任务执行期间新消息
+ * 全部被拒"无可用 worker"）；serve 实测支持多 session 并行。
  * 异步化语义：与调用点（serve 就绪后）保持一致，供 registerCurrent/reRegister 链 await。
  */
 export async function buildCapabilities(
@@ -230,11 +374,12 @@ export async function buildCapabilities(
   injected: InjectReport = EMPTY_INJECT_REPORT,
   models?: string[],
   execPort?: number,
+  maxInstances = 5,
 ): Promise<WorkerCapabilities> {
   const base = advertiseHost.replace(/\/+$/, '');
   const tools = [...new Set([...GIT_TOOLS.map((tool) => tool.name), ...injected.tools])];
   return {
-    maxInstances: 1,
+    maxInstances,
     skills: injected.skills,
     tools,
     port: port ?? undefined,
@@ -261,7 +406,14 @@ export async function buildRegisterOptions(
   models?: string[],
   execPort?: number,
 ): Promise<RegistryClientOptions> {
-  const capabilities = await buildCapabilities(port, config.workerAdvertiseHost, injected, models, execPort);
+  const capabilities = await buildCapabilities(
+    port,
+    config.workerAdvertiseHost,
+    injected,
+    models,
+    execPort,
+    config.workerMaxInstances,
+  );
   return {
     serverUrl: config.serverUrl,
     workerToken: config.workerToken,
@@ -381,8 +533,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
 
   // T4b：注册命令处理回调（T4a 挂载点）——reload-config 触发资源重拉 + 注入 +
   // T4c 重启判定（无活跃会话立即重启 serve 使新配置生效，有活跃会话则挂起）。
-  // C5：注入上一次 model-credentials 使用的数据目录（下次写入前 cleanup，不留存旧凭据明文）。
-  let injectedAuthDir: string | null = null;
+  // C5b：记录上一次注入的 auth.json 路径（下次写入前 cleanup，不留存旧凭据明文）。
+  let injectedAuthJsonPath: string | null = null;
   onCommands(async (commands) => {
     for (const command of commands) {
       if (command.type === WORKER_COMMAND_TYPES.RELOAD_CONFIG) {
@@ -404,32 +556,61 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         }
       }
       if (command.type === WORKER_COMMAND_TYPES.MODEL_CREDENTIALS) {
-        const payload = command.payload;
+        const payload = command.payload as ModelCredentialsPayload | undefined;
         if (!payload?.providerKeys) {
           console.warn('[worker] model-credentials 命令缺少 providerKeys 负载，跳过注入');
           continue;
         }
         try {
-          // 清理上一次注入目录（旧凭据明文不留存）→ 写新 auth.json（600 权限，路径随机化）
-          if (injectedAuthDir) {
-            cleanupAuthJson(injectedAuthDir);
-          }
-          const injected = writeAuthJson(payload.providerKeys);
-          injectedAuthDir = injected.dataDir;
-          // C5a 主选方案：进程级 env 覆盖 XDG_DATA_HOME——serve spawn env={...process.env}
-          // 自动继承（opencode-server.ts:282），无需改 spawnServe 签名；restart 后生效。
-          process.env.XDG_DATA_HOME = injected.dataDir;
-          console.log(
-            `[worker] model-credentials：auth.json 已注入 ${injected.authJsonPath}（providerKeys=${payload.providerKeys.length}），重启 serve 生效`,
-          );
-          const decision = await restartCoordinator.requestRestart(
-            'model-credentials（凭据注入）',
-          );
-          if (decision === 'pending') {
-            console.log('[worker] model-credentials：存在活跃会话，重启挂起（会话归零后自动执行）');
-          }
+          // F3 防循环：内容幂等注入——auth.json 内容未变化时跳过写盘与重启 serve，
+          // 切断“server 无条件回放 → 重启 → reRegister → 回放 → 再重启”无限循环。
+          injectedAuthJsonPath = (
+            await handleModelCredentials(
+              payload.providerKeys,
+              injectedAuthJsonPath,
+              {
+                readContent: async (authJsonPath) => {
+                  try {
+                    return await fs.promises.readFile(authJsonPath, 'utf8');
+                  } catch {
+                    return null;
+                  }
+                },
+                writeAuthJson,
+                cleanupAuthJson,
+                requestRestart: (reason) =>
+                  restartCoordinator.requestRestart(reason),
+                log: (message) => console.log(message),
+                warn: (message) => console.warn(message),
+              },
+            )
+          ).authJsonPath;
         } catch (err) {
           console.warn(`[worker] model-credentials 注入失败: ${(err as Error).message}`);
+        }
+      }
+      if (command.type === WORKER_COMMAND_TYPES.GIT_CREDENTIALS) {
+        const payload = command.payload as GitCredentialsPayload | undefined;
+        if (!payload?.credentials) {
+          console.warn('[worker] git-credentials 命令缺少 credentials 负载，跳过写入');
+          continue;
+        }
+        try {
+          // 与 model-credentials 关键区别：写盘即生效（git 工具每次执行读文件），不重启 serve。
+          await handleGitCredentials(payload.credentials, {
+            readContent: async (filePath) => {
+              try {
+                return await fs.promises.readFile(filePath, 'utf8');
+              } catch {
+                return null;
+              }
+            },
+            writeContent: (entries) => writeGitCredsFile(entries),
+            log: (message) => console.log(message),
+            warn: (message) => console.warn(message),
+          });
+        } catch (err) {
+          console.warn(`[worker] git-credentials 注入失败: ${(err as Error).message}`);
         }
       }
       if (command.type === WORKER_COMMAND_TYPES.RESTART) {
@@ -479,7 +660,12 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     port: config.workerExecPort,
     driver,
     sender: eventSender,
+    workerToken: config.workerToken,
     firstTokenTimeoutMs: config.workerFirstTokenTimeoutMs,
+    // T17：serve 日志模型错误检测数据源——awaitCompletion 每轮轮询读 recentErrors()，
+    // 命中模型 API 错误关键词（Rate limit/Free usage 等只写 stderr 不透传
+    // message.info.error）时提前 abort + 抛错（错误文本透传前端，不再空等首字超时）
+    serveErrorReader: () => serveServer.recentErrors(),
   });
   // T10：执行端点上报端口（start 成功 = 实际监听端口；失败置 undefined，注册不带 execPort）
   let execPort: number | undefined = config.workerExecPort;
@@ -509,9 +695,10 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         if (serveServer.isRunning) {
           await serveServer.stop();
         }
-        // C5：worker 退出时清理注入的 auth.json（明文 key 不留存，幂等）
-        if (injectedAuthDir) {
-          cleanupAuthJson(injectedAuthDir);
+        // C5b：worker 退出时清理注入的 auth.json（明文 key 不留存，幂等；
+        // 只删 auth.json 文件，不删 $HOME/.local/share/opencode 目录——内含 opencode.db）
+        if (injectedAuthJsonPath) {
+          cleanupAuthJson(injectedAuthJsonPath);
         }
       } finally {
         process.exit(0);

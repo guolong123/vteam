@@ -1,6 +1,6 @@
 # worker 镜像（Phase 5 T3，D4 Oracle 实测方案）。
 # 双阶段：build（TS 编译）→ runner（全局安装 opencode CLI + 运行 dist）。
-# opencode CLI = npm 包 opencode-ai@1.18.15（与宿主/SDK 版本一致，D4）。
+# opencode CLI = npm 包 opencode-ai@1.18.16（与宿主/SDK 版本一致，D4）。
 
 # ---- 阶段 1：build ----
 FROM docker.ketaops.cc/library/node:22-alpine AS build
@@ -14,7 +14,11 @@ RUN npm run build && npm prune --omit=dev
 # ---- 阶段 2：runner ----
 FROM docker.ketaops.cc/library/node:22-alpine
 # opencode CLI 全局安装（serve spawn 依赖，需在 PATH；npm 全局 bin 默认进 PATH）
-RUN npm i -g opencode-ai@1.18.15
+RUN npm i -g opencode-ai@1.18.16
+
+# git 工具执行依赖（todo 4：runGit / GIT_SSH_COMMAND / GIT_ASKPASS 依赖容器内二进制；
+# node:22-alpine 基础镜像不含 git/ssh）
+RUN apk add --no-cache git openssh-client
 
 # git 工具注入落点（.opencode/tools/，T5）+ serve 工作目录；与 config WORK_DIR 默认一致
 WORKDIR /tmp/keta-worker

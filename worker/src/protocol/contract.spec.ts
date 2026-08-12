@@ -5,6 +5,8 @@ import {
   RegisterWorkerPayload,
   WORKER_COMMAND_TYPES,
   WorkerCommand,
+  ModelCredentialsPayload,
+  GitCredentialsPayload,
 } from './worker-protocol';
 
 /**
@@ -197,10 +199,79 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {
 
     const parsed = JSON.parse(JSON.stringify(command)) as WorkerCommand;
 
-    expect(parsed.payload?.providerKeys).toEqual([
+    expect(parsed.type).toBe('model-credentials');
+    const modelPayload = parsed.payload as ModelCredentialsPayload | undefined;
+    expect(modelPayload?.providerKeys).toEqual([
       { providerID: 'opencode-go', key: 'sk-a' },
     ]);
-    expect(parsed.payload?.targetWorkerIds).toBeUndefined();
+    expect(modelPayload?.targetWorkerIds).toBeUndefined();
+  });
+
+  it('git-credentials：命令携带 payload（credentials + 可选 targetWorkerIds），round-trip 完整', () => {
+    const command: WorkerCommand = {
+      type: WORKER_COMMAND_TYPES.GIT_CREDENTIALS,
+      resourceVersion: 'git-credentials',
+      payload: {
+        credentials: [
+          {
+            repoUrl: 'git@github.com:xishuhq/aiagents.git',
+            authType: 'ssh_key',
+            key: '-----BEGIN OPENSSH PRIVATE KEY-----',
+            fingerprint: 'sha256:abcd1234',
+          },
+          {
+            repoUrl: 'https://github.com/xishuhq/tools.git',
+            authType: 'https_token',
+            key: 'ghp_secret',
+            fingerprint: 'ghp_s****ret',
+          },
+        ],
+        targetWorkerIds: ['w_0000000001'],
+      },
+    };
+
+    const parsed = JSON.parse(JSON.stringify(command)) as WorkerCommand;
+
+    expect(parsed.type).toBe('git-credentials');
+    const gitPayload = parsed.payload as GitCredentialsPayload | undefined;
+    expect(gitPayload?.credentials).toEqual([
+      {
+        repoUrl: 'git@github.com:xishuhq/aiagents.git',
+        authType: 'ssh_key',
+        key: '-----BEGIN OPENSSH PRIVATE KEY-----',
+        fingerprint: 'sha256:abcd1234',
+      },
+      {
+        repoUrl: 'https://github.com/xishuhq/tools.git',
+        authType: 'https_token',
+        key: 'ghp_secret',
+        fingerprint: 'ghp_s****ret',
+      },
+    ]);
+    expect(gitPayload?.targetWorkerIds).toEqual(['w_0000000001']);
+  });
+
+  it('git-credentials：targetWorkerIds 缺省时 payload 不含该字段（全量语义）', () => {
+    const command: WorkerCommand = {
+      type: WORKER_COMMAND_TYPES.GIT_CREDENTIALS,
+      resourceVersion: 'git-credentials',
+      payload: {
+        credentials: [
+          {
+            repoUrl: 'https://github.com/xishuhq/tools.git',
+            authType: 'https_token',
+            key: 'ghp_secret',
+            fingerprint: 'ghp_s****ret',
+          },
+        ],
+      },
+    };
+
+    const parsed = JSON.parse(JSON.stringify(command)) as WorkerCommand;
+
+    const gitPayload = parsed.payload as GitCredentialsPayload | undefined;
+    expect(gitPayload?.credentials).toHaveLength(1);
+    expect(gitPayload?.targetWorkerIds).toBeUndefined();
   });
 
   it('C5：reload-config 命令不携带 payload（向后兼容既有命令结构）', () => {

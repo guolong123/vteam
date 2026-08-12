@@ -4,12 +4,21 @@
  */
 import { WorkerConfig } from './config';
 import { GIT_TOOLS } from './git/git-tools';
+import {
+  buildGitCredsFile,
+  GIT_CREDS_FILE,
+  GitCredentialEntry,
+} from './git/git-credential-injector';
 import { WorkerCommand } from './protocol/worker-protocol';
 import { InjectReport } from './resources/injector';
+import { buildAuthJson } from './credentials/model-credential-injector';
 import {
   buildCapabilities,
   buildRegisterOptions,
   dispatchCommands,
+  DEFAULT_AUTH_JSON_PATH,
+  handleGitCredentials,
+  handleModelCredentials,
   onCommands,
   resolveModels,
 } from './index';
@@ -31,6 +40,7 @@ const CONFIG: WorkerConfig = {
   defaultModelId: '',
   workerExecPort: 4198,
   workerFirstTokenTimeoutMs: 120000,
+  workerMaxInstances: 5,
 };
 
 describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
@@ -105,6 +115,14 @@ describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
 
   it('T10：execPort 未传（端点启动失败）时不携带（server 不连不可用端点）', async () => {
     expect((await buildCapabilities(4199, 'http://worker')).execPort).toBeUndefined();
+  });
+
+  it('F4：未传 maxInstances 时默认 5（并发上限配置化兜底）', async () => {
+    expect((await buildCapabilities(4199, 'http://worker')).maxInstances).toBe(5);
+  });
+
+  it('F4：显式传入 maxInstances 时按传入值上报（替代硬编码 1）', async () => {
+    expect((await buildCapabilities(4199, 'http://worker', undefined, undefined, undefined, 3)).maxInstances).toBe(3);
   });
 });
 
@@ -327,6 +345,60 @@ describe('T4a 命令分派（onCommands + dispatchCommands）', () => {
     );
   });
 
+  it('git-credentials 命令打 repoUrl 清单日志（不含 key 明文）并透传回调', () => {
+    const handler = jest.fn();
+    onCommands(handler);
+    const commands: WorkerCommand[] = [
+      {
+        type: 'git-credentials',
+        resourceVersion: 'git-credentials',
+        payload: {
+          credentials: [
+            {
+              repoUrl: 'git@github.com:xishuhq/aiagents.git',
+              authType: 'ssh_key',
+              key: '-----BEGIN OPENSSH PRIVATE KEY-----\nsecret',
+              fingerprint: 'sha256:abcd',
+            },
+            {
+              repoUrl: 'https://github.com/xishuhq/tools.git',
+              authType: 'https_token',
+              key: 'ghp_topsecret',
+              fingerprint: 'ghp_t****et',
+            },
+          ],
+        },
+      },
+    ];
+
+    dispatchCommands(commands);
+
+    expect(handler).toHaveBeenCalledWith(commands);
+    const logArgs = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(logArgs).toContain('git-credentials');
+    expect(logArgs).toContain(
+      'git@github.com:xishuhq/aiagents.git, https://github.com/xishuhq/tools.git',
+    );
+    // 安全：key 明文绝不进日志
+    expect(logArgs).not.toContain('secret');
+    expect(logArgs).not.toContain('ghp_topsecret');
+  });
+
+  it('git-credentials 命令缺 payload 时仍透传回调且日志不含敏感信息', () => {
+    const handler = jest.fn();
+    onCommands(handler);
+    const commands = [
+      { type: 'git-credentials', resourceVersion: 'git-credentials' },
+    ] as unknown as WorkerCommand[];
+
+    dispatchCommands(commands);
+
+    expect(handler).toHaveBeenCalledWith(commands);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('git-credentials'),
+    );
+  });
+
   it('UX-01：restart 命令打远程重启日志并透传回调（RESTART 分支）', () => {
     const handler = jest.fn();
     onCommands(handler);
@@ -355,6 +427,190 @@ describe('T4a 命令分派（onCommands + dispatchCommands）', () => {
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining('shutdown'),
     );
+  });
+});
+
+describe('handleModelCredentials（F3 防循环：auth.json 内容幂等）', () => {
+  const KEY = [{ providerID: 'opencode-go', key: 'sk-secret' }];
+
+  function makeDeps() {
+    return {
+      readContent: jest.fn<Promise<string | null>, [string]>(),
+      writeAuthJson: jest.fn().mockReturnValue({
+        authJsonPath: DEFAULT_AUTH_JSON_PATH,
+      }),
+      cleanupAuthJson: jest.fn(),
+      requestRestart: jest.fn().mockResolvedValue('executed'),
+      log: jest.fn(),
+      warn: jest.fn(),
+    };
+  }
+
+  it('现有 auth.json 内容与新内容相同 → 不写盘、不重启 serve（切断回放循环）', async () => {
+    const deps = makeDeps();
+    deps.readContent.mockResolvedValue(buildAuthJson(KEY));
+
+    const result = await handleModelCredentials(KEY, DEFAULT_AUTH_JSON_PATH, deps);
+
+    expect(deps.writeAuthJson).not.toHaveBeenCalled();
+    expect(deps.cleanupAuthJson).not.toHaveBeenCalled();
+    expect(deps.requestRestart).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(deps.log).toHaveBeenCalledWith(
+      expect.stringContaining('凭据未变化，跳过注入与重启'),
+    );
+  });
+
+  it('现有 auth.json 内容不同 → 清理旧文件 + 写盘 + 重启 serve（凭据变更）', async () => {
+    const deps = makeDeps();
+    deps.readContent.mockResolvedValue(
+      buildAuthJson([{ providerID: 'opencode-go', key: 'sk-old-secret' }]),
+    );
+
+    const result = await handleModelCredentials(KEY, DEFAULT_AUTH_JSON_PATH, deps);
+
+    expect(deps.writeAuthJson).toHaveBeenCalledWith(KEY);
+    expect(deps.cleanupAuthJson).toHaveBeenCalledWith(DEFAULT_AUTH_JSON_PATH);
+    expect(deps.requestRestart).toHaveBeenCalledWith(
+      expect.stringContaining('model-credentials'),
+    );
+    expect(result.changed).toBe(true);
+  });
+
+  it('无现有 auth.json（容器重启后）→ 写盘 + 重启 serve（恢复路径，不清理）', async () => {
+    const deps = makeDeps();
+    deps.readContent.mockResolvedValue(null);
+
+    const result = await handleModelCredentials(KEY, null, deps);
+
+    expect(deps.writeAuthJson).toHaveBeenCalledWith(KEY);
+    expect(deps.cleanupAuthJson).not.toHaveBeenCalled();
+    expect(deps.requestRestart).toHaveBeenCalledWith(
+      expect.stringContaining('model-credentials'),
+    );
+    expect(result.changed).toBe(true);
+    expect(result.authJsonPath).toBe(DEFAULT_AUTH_JSON_PATH);
+  });
+});
+
+describe('handleGitCredentials（todo 3：凭证文件幂等落盘，不重启 serve）', () => {
+  const KEY: GitCredentialEntry[] = [
+    {
+      repoUrl: 'git@github.com:xishuhq/aiagents.git',
+      authType: 'ssh_key',
+      key: '-----BEGIN OPENSSH PRIVATE KEY-----\nsecret',
+      fingerprint: 'sha256:abcd',
+    },
+    {
+      repoUrl: 'https://github.com/xishuhq/tools.git',
+      authType: 'https_token',
+      key: 'ghp_topsecret',
+      fingerprint: 'ghp_t****et',
+    },
+  ];
+
+  function makeDeps() {
+    return {
+      readContent: jest.fn<Promise<string | null>, [string]>(),
+      writeContent: jest.fn().mockReturnValue({ path: GIT_CREDS_FILE }),
+      log: jest.fn(),
+      warn: jest.fn(),
+    };
+  }
+
+  it('现有凭证文件内容不同 → 写盘 + 更新日志（凭证变更，不重启 serve）', async () => {
+    const deps = makeDeps();
+    deps.readContent.mockResolvedValue(
+      buildGitCredsFile(
+        [
+          {
+            repoUrl: 'https://github.com/xishuhq/old.git',
+            authType: 'https_token',
+            key: 'ghp_oldsecret',
+            fingerprint: 'ghp_o****et',
+          },
+        ],
+        '2026-08-12T08:00:00.000Z',
+      ),
+    );
+
+    const result = await handleGitCredentials(KEY, deps);
+
+    expect(deps.writeContent).toHaveBeenCalledWith(KEY);
+    expect(result.changed).toBe(true);
+    expect(result.path).toBe(GIT_CREDS_FILE);
+    expect(deps.log).toHaveBeenCalledWith(
+      expect.stringContaining('凭证文件已更新（2 条）'),
+    );
+    // 关键断言：deps 无 requestRestart（git 工具每次执行读文件，写盘即生效，不重启 serve）
+    expect((deps as Record<string, unknown>).requestRestart).toBeUndefined();
+  });
+
+  it('幂等：现有内容一致（复用 updatedAt）→ 不写盘、mtime 不变', async () => {
+    const deps = makeDeps();
+    deps.readContent.mockResolvedValue(
+      buildGitCredsFile(KEY, '2026-08-12T08:00:00.000Z'),
+    );
+
+    const result = await handleGitCredentials(KEY, deps);
+
+    expect(deps.writeContent).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(deps.log).toHaveBeenCalledWith(
+      expect.stringContaining('凭证文件未变化，跳过写入'),
+    );
+  });
+
+  it('无现有凭证文件（容器重启后）→ 写盘（恢复路径）', async () => {
+    const deps = makeDeps();
+    deps.readContent.mockResolvedValue(null);
+
+    const result = await handleGitCredentials(KEY, deps);
+
+    expect(deps.writeContent).toHaveBeenCalledWith(KEY);
+    expect(result.changed).toBe(true);
+  });
+
+  it('credentials 负载缺失（非数组）→ warn 跳过，不写盘', async () => {
+    const deps = makeDeps();
+
+    const result = await handleGitCredentials(
+      undefined as unknown as GitCredentialEntry[],
+      deps,
+    );
+
+    expect(deps.warn).toHaveBeenCalledWith(
+      expect.stringContaining('credentials 负载缺失'),
+    );
+    expect(deps.writeContent).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+  });
+
+  it('条目全部无效（空 repoUrl/key）→ 仍写盘但 warn 提示已过滤', async () => {
+    const deps = makeDeps();
+    deps.readContent.mockResolvedValue(null);
+    const dirty = [
+      { repoUrl: '  ', authType: 'ssh_key', key: 'sk', fingerprint: '' },
+    ] as GitCredentialEntry[];
+
+    const result = await handleGitCredentials(dirty, deps);
+
+    expect(deps.warn).toHaveBeenCalledWith(
+      expect.stringContaining('条目全部无效'),
+    );
+    expect(deps.writeContent).toHaveBeenCalledWith(dirty);
+    expect(result.changed).toBe(true);
+  });
+
+  it('空数组 → 写空 credentials 数组（清下发语义）', async () => {
+    const deps = makeDeps();
+    deps.readContent.mockResolvedValue(null);
+
+    const result = await handleGitCredentials([], deps);
+
+    expect(deps.writeContent).toHaveBeenCalledWith([]);
+    expect(result.changed).toBe(true);
+    expect(deps.warn).not.toHaveBeenCalled();
   });
 });
 
@@ -448,5 +704,20 @@ describe('buildRegisterOptions（T4c：重启后重新注册携带新端口）',
       undefined,
     );
     expect(overridden.capabilities.execPort).toBeUndefined();
+  });
+
+  it('F4：capabilities.maxInstances 取 config.workerMaxInstances（默认配置 5）', async () => {
+    const opts = await buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version');
+    expect(opts.capabilities.maxInstances).toBe(5);
+  });
+
+  it('F4：config.workerMaxInstances 覆盖（env WORKER_MAX_INSTANCES=3 → 上报 3）', async () => {
+    const opts = await buildRegisterOptions(
+      { ...CONFIG, workerMaxInstances: 3 },
+      4199,
+      '1.18.15',
+      'cli-version',
+    );
+    expect(opts.capabilities.maxInstances).toBe(3);
   });
 });

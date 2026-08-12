@@ -94,7 +94,8 @@ export const WORKER_COMMAND_TYPES = {
   /** 资源（skills/tools/mcp 配置）变更：重拉 + 注入 + 重启（T4b/T4c 执行） */
   RELOAD_CONFIG: 'reload-config',
   /**
-   * C5：模型凭据下发——worker 写 auth.json（XDG_DATA_HOME 覆盖）注入 + 重启生效。
+   * C5b：模型凭据下发——worker 写 $HOME/.local/share/opencode/auth.json
+   * （opencode 1.18.16 实测固定读取路径，XDG_DATA_HOME 不参与）注入 + 重启生效。
    * 命令一次有效（心跳取出即清空）；token 只经下行命令明文传输，不落 worker 日志。
    */
   MODEL_CREDENTIALS: 'model-credentials',
@@ -108,6 +109,12 @@ export const WORKER_COMMAND_TYPES = {
    * 退出进程（停心跳 + flush 事件 + stop serve + exit），心跳停止后 server 标 offline。
    */
   SHUTDOWN: 'shutdown',
+  /**
+   * 仓库凭证下发——worker 幂等写 ~/.keta-git-creds.json（600 权限，**不重启 serve**，
+   * git 工具每次执行读文件）。命令一次有效（心跳取出即清空）；key 只经下行命令
+   * 明文传输，不落 worker 日志。按 worker 承载活跃 agent 的授权仓库过滤打包。
+   */
+  GIT_CREDENTIALS: 'git-credentials',
 } as const;
 
 export type WorkerCommandType =
@@ -134,6 +141,33 @@ export interface ModelCredentialsPayload {
 }
 
 /**
+ * 仓库凭证下发条目（repoUrl → 明文 SSH 私钥/HTTPS token，来自下行 git-credentials 命令）。
+ * 凭证面=worker 级：同 worker 承载的活跃 agent 共享已下发凭证（工具层按 repoUrl 白名单校验）。
+ * key 仅存在于下行命令（心跳取出即清空，一次性），worker 侧只写入 .keta-git-creds.json。
+ */
+export interface GitCredentialEntry {
+  repoUrl: string;
+  /** 认证类型：ssh_key=SSH 私钥、https_token=HTTPS token（对齐 server GitCredentialEntry.authType）。 */
+  authType: 'ssh_key' | 'https_token';
+  /** 明文 SSH 私钥或 HTTPS token（600 权限落盘，绝不进日志）。 */
+  key: string;
+  /** 脱敏标识（透传，worker 落盘供审计比对，不含明文）。 */
+  fingerprint: string;
+  /** 该仓库在 worker 凭证面上的最高授权权限（write > read；git.ts push 工具据此校验 write）。 */
+  permission?: string;
+}
+
+/**
+ * git-credentials 命令负载（对齐 server GitCredentialsPayload，todo 3 双写）。
+ * targetWorkerIds 空 = 全量；credentials 为空数组 = 清下发（吊销后 worker 移除条目）。
+ */
+export interface GitCredentialsPayload {
+  credentials: GitCredentialEntry[];
+  /** 定向 worker id 列表；空 = 全量下发 */
+  targetWorkerIds?: string[];
+}
+
+/**
  * 心跳响应携带的下行命令（T4a，对齐 server WorkerCommand）。
  * 设计为通用 commands 数组（复用点：AgentsModule 配置变更重启也走此通道）。
  */
@@ -141,8 +175,8 @@ export interface WorkerCommand {
   type: WorkerCommandType;
   /** 资源版本号：T1/T2 变更时递增，worker 侧据此判断是否需重拉注入 */
   resourceVersion: string;
-  /** C5：model-credentials 命令携带的凭据负载（仅该 type 携带；reload-config 等不携带） */
-  payload?: ModelCredentialsPayload;
+  /** C5/T6：model-credentials 或 git-credentials 命令携带的凭据负载（仅该两 type 携带；reload-config 等不携带） */
+  payload?: ModelCredentialsPayload | GitCredentialsPayload;
 }
 
 /** POST /workers/:id/heartbeat 成功响应（对齐 server workers.service.ts heartbeat 返回）。 */
