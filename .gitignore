@@ -38,3 +38,6 @@ coverage/
 # evidence screenshots (kept in .omo/evidence but not versioned; .md/.txt evidence still tracked)
 .omo/evidence/**/*.png
 .gstack/
+
+# session snapshots (run-continuation JSON, not versioned)
+.omo/run-continuation/
