@@ -137,8 +137,8 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {
     expect(parsed.seq).toBe(42);
   });
 
-  it('WorkerEventPayload.type 受 WorkerEventType 枚举约束（编译期），枚举 7 事件点号命名', () => {
-    expect(Object.values(WORKER_EVENT_TYPES)).toHaveLength(7);
+  it('WorkerEventPayload.type 受 WorkerEventType 枚举约束（编译期），枚举 9 事件点号命名', () => {
+    expect(Object.values(WORKER_EVENT_TYPES)).toHaveLength(9);
     for (const name of Object.values(WORKER_EVENT_TYPES)) {
       expect(name.includes('_')).toBe(false);
     }
@@ -151,6 +151,8 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {
     };
     expect(typed.type).toBe('task.completed');
     expect(WORKER_EVENT_TYPES.GIT_OP).toBe('git.op');
+    expect(WORKER_EVENT_TYPES.SESSION_QUESTION).toBe('session.question');
+    expect(WORKER_EVENT_TYPES.SESSION_PERMISSION).toBe('session.permission');
   });
 
   it('T4a：WorkerCommand 序列化/反序列化后字段完整（对齐心跳响应 commands）', () => {

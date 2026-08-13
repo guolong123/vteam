@@ -1,27 +1,27 @@
 /**
- * C5：模型凭据 auth.json 注入器（C5a 实测结论写死于此）。
+ * C5b：模型凭据 auth.json 注入器（opencode 1.18.16 实测路径结论写死于此）。
  *
- * 注入通道：worker 进程设置 `XDG_DATA_HOME=<worker-data-dir>` + 写
- * `<data-dir>/opencode/auth.json`（600 权限）——opencode serve 启动时读取
- * `$XDG_DATA_HOME/opencode/auth.json`（优先级高于 `$HOME/.local/share`，C5a 实验 3
- * 决定性证据）；serve 为 spawn 子进程且 env=`{...process.env}`（opencode-server.ts:282），
- * 设置一次进程级 env 即自动继承，无需改 spawnServe 签名。
+ * 注入通道：worker 直接写 `$HOME/.local/share/opencode/auth.json`（600 权限）。
+ * opencode 1.18.16 实测凭据**固定**读该路径（`opencode auth list` 只认
+ * `~/.local/share/opencode/auth.json`），`XDG_DATA_HOME` 不参与 auth.json 查找
+ * （C5a 旧结论失效）。serve 为 spawn 子进程且 env=`{...process.env}`，继承 HOME
+ * 即可读到同一路径，无需设置任何额外环境变量。
  *
- * 格式（C5a 实测）：`{ providerID: { type: 'api', key } }`。
- * token 为明文写入（C5a 确认权限 600 是唯一防线），路径随机化 + 用完 cleanup
- * （先例 git-credentials.ts:74-97：临时文件 600 + cleanup 幂等）。
+ * 格式（实测）：`{ providerID: { type: 'api', key } }`。
+ * token 为明文写入（权限 600 是唯一防线），退出/下次写入前 cleanup 删除文件
+ * （明文 key 零留存；只删 auth.json 文件，不删 $HOME/.local/share/opencode 目录
+ * —— 内含 opencode.db 会话库）。
  */
 
-import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-/** auth.json 数据目录前缀（仿 git-credentials.ts TEMP_KEY_PREFIX 路径随机化约定）。 */
-export const AUTH_DIR_PREFIX = 'keta-auth-';
-
-/** auth.json 文件权限（仅属主读写，C5a 安全基线——明文 key 的唯一防线）。 */
+/** auth.json 文件权限（仅属主读写，明文 key 的唯一防线）。 */
 export const AUTH_FILE_MODE = 0o600;
+
+/** $HOME/.local/share/opencode（auth.json 所在目录，opencode 1.18.16 实测固定读取位置）。 */
+const OPENCODE_DATA_REL = ['.local', 'share', 'opencode'];
 
 /** 单条凭据（provider → 明文 API key，来自下行 model-credentials 命令）。 */
 export interface ModelCredentialEntry {
@@ -29,16 +29,14 @@ export interface ModelCredentialEntry {
   key: string;
 }
 
-/** 注入结果（供调用方设置 XDG_DATA_HOME + 后续 cleanup）。 */
+/** 注入结果（供调用方后续 cleanup）。 */
 export interface AuthJsonResult {
-  /** worker 数据目录（XDG_DATA_HOME 注入目标，opencode/auth.json 在其下） */
-  dataDir: string;
-  /** auth.json 完整路径 */
+  /** auth.json 完整路径（= $HOME/.local/share/opencode/auth.json） */
   authJsonPath: string;
 }
 
 /**
- * 组装 auth.json 内容（C5a 实测格式 `{providerID: {type:'api', key}}`）。
+ * 组装 auth.json 内容（实测格式 `{providerID: {type:'api', key}}`）。
  * 空/空白 providerID 或空 key 的条目静默跳过（防御脏负载，不产生非法 JSON）。
  */
 export function buildAuthJson(providerKeys: ModelCredentialEntry[]): string {
@@ -53,36 +51,36 @@ export function buildAuthJson(providerKeys: ModelCredentialEntry[]): string {
 }
 
 /**
- * 写 auth.json：mkdir -p `<dir>/opencode` + writeFileSync（mode 600）+ chmodSync 兜底
- * （仿 git-credentials.ts createTempKey 双保险）。dir 缺省 = os.tmpdir()/keta-auth-<random>
- * （路径随机化，避免固定路径被预知/串扰）。返回 dataDir + authJsonPath。
+ * 写 auth.json 到 `$HOME/.local/share/opencode/auth.json`（opencode 1.18.16 实测
+ * 固定读取路径）：写前 mkdir -p（含 log 子目录，serve 启动写
+ * `$HOME/.local/share/opencode/log/opencode.log`，缺失会 FileSystem.open 崩溃 →
+ * serve 退出 → worker 重启换端口循环）+ writeFileSync（mode 600）+ chmodSync 兜底
+ * （仿 git-credentials.ts createTempKey 双保险）。返回 { authJsonPath }。
  */
-export function writeAuthJson(
-  providerKeys: ModelCredentialEntry[],
-  options: { dir?: string } = {},
-): AuthJsonResult {
-  const dataDir =
-    options.dir ??
-    path.join(os.tmpdir(), `${AUTH_DIR_PREFIX}${crypto.randomBytes(16).toString('hex')}`);
-  const authJsonPath = path.join(dataDir, 'opencode', 'auth.json');
-  fs.mkdirSync(path.dirname(authJsonPath), { recursive: true });
+export function writeAuthJson(providerKeys: ModelCredentialEntry[]): AuthJsonResult {
+  const opencodeDataDir = path.join(os.homedir(), ...OPENCODE_DATA_REL);
+  const authJsonPath = path.join(opencodeDataDir, 'auth.json');
+  fs.mkdirSync(opencodeDataDir, { recursive: true });
+  fs.mkdirSync(path.join(opencodeDataDir, 'log'), { recursive: true });
   fs.writeFileSync(authJsonPath, buildAuthJson(providerKeys), {
     mode: AUTH_FILE_MODE,
   });
   fs.chmodSync(authJsonPath, AUTH_FILE_MODE);
-  return { dataDir, authJsonPath };
+  return { authJsonPath };
 }
 
 /**
- * 删除凭据数据目录（幂等：不存在静默忽略；仿 git-credentials.ts cleanup）。
+ * 删除 auth.json 文件（幂等：不存在静默忽略；仿 git-credentials.ts cleanup）。
+ * 只删文件本身，**不删** $HOME/.local/share/opencode 目录（内含 opencode.db
+ * 会话库，误删会导致 serve 会话状态丢失）。
  * serve 已读取 auth.json 后调用（凭据进内存后落盘明文不留存）。
  */
-export function cleanupAuthJson(dataDir: string): void {
-  if (!dataDir) {
+export function cleanupAuthJson(authJsonPath: string): void {
+  if (!authJsonPath) {
     return;
   }
   try {
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(authJsonPath, { force: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       throw error;

@@ -61,6 +61,12 @@ const DEFAULT_SERVE_HOSTNAME = '127.0.0.1';
 const LOOPBACK_HOSTNAME = '127.0.0.1';
 /** serve 日志中实际监听地址的正则（`opencode server listening on http://<host>:<port>`，host 不限定） */
 const LISTENING_RE = /listening on http:\/\/[^:\s/]+:(\d+)/;
+/**
+ * T17：serve 日志中的模型调用错误关键词。serve 对部分 APIError（Rate limit exceeded /
+ * Free usage exceeded 等）只写 stderr（`message="stream error" ... error.error="AI_APICallError: ..."`）
+ * 不透传 message.info.error——worker 靠 recentErrors() 感知提前失败，不再空等首字超时。
+ */
+const SERVE_ERROR_KEYWORDS = /stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -156,6 +162,17 @@ export class OpencodeServer {
   /** 最近日志（环形缓冲副本），供启动失败/调试查看。 */
   get recentLogs(): string[] {
     return [...this.logs];
+  }
+
+  /**
+   * T17：最近模型错误日志（serve stderr 中匹配模型 API 错误关键词的行，环形缓冲副本，
+   * 保留最近 limit 条）。serve 对部分 APIError（Rate limit exceeded / Free usage exceeded
+   * 等）只写 stderr（`message="stream error" ... error.error="AI_APICallError: ..."`）不透传
+   * message.info.error——awaitCompletion 经 serveErrorReader 读取本方法结果，匹配时提前
+   * abort + 抛错（错误文本透传前端），不再空等首字超时（120s+）。
+   */
+  recentErrors(limit = 5): string[] {
+    return this.logs.filter((line) => SERVE_ERROR_KEYWORDS.test(line)).slice(-limit);
   }
 
   /** F2 M3：spawn 异步失败错误（如 opencode 不在 PATH 时的 ENOENT）；无失败为 null。 */

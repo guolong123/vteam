@@ -18,7 +18,10 @@ RUN npm i -g opencode-ai@1.18.16
 
 # git 工具执行依赖（todo 4：runGit / GIT_SSH_COMMAND / GIT_ASKPASS 依赖容器内二进制；
 # node:22-alpine 基础镜像不含 git/ssh）
-RUN apk add --no-cache git openssh-client
+# 常用命令预装：python3/pip3（Agent 跑脚本/数据分析）、curl（HTTP 请求）、jq（JSON 处理）、
+# bash（alpine 默认 sh，Agent 脚本常依赖 bash）、wget（下载）。git/openssh-client 为 git 工具链路保留。
+RUN apk add --no-cache git openssh-client \
+    python3 py3-pip curl jq bash wget
 
 # git 工具注入落点（.opencode/tools/，T5）+ serve 工作目录；与 config WORK_DIR 默认一致
 WORKDIR /tmp/keta-worker

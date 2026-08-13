@@ -1,13 +1,13 @@
 /**
- * model-credential-injector 单测（C5）：auth.json 格式（C5a 实测 {providerID:{type:'api',key}}）、
- * 600 权限、路径随机化、cleanup 幂等。
+ * model-credential-injector 单测（C5b）：auth.json 格式（{providerID:{type:'api',key}}）、
+ * 600 权限、固定写入 $HOME/.local/share/opencode/auth.json（opencode 1.18.16 实测路径）、
+ * cleanup 幂等且只删 auth.json 文件不删目录。
  */
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
   AUTH_FILE_MODE,
-  AUTH_DIR_PREFIX,
   AuthJsonResult,
   buildAuthJson,
   cleanupAuthJson,
@@ -15,14 +15,32 @@ import {
   writeAuthJson,
 } from './model-credential-injector';
 
-/** 用临时目录隔离真实 os.tmpdir（测试不触碰真实 tmp 残留）。 */
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'keta-injector-test-'));
-
-afterAll(() => {
-  cleanupAuthJson(TMP);
+// os.homedir 在 Node 中是只读 getter，jest.spyOn 无法替换 → 模块级部分 mock
+// （默认代理真实实现，beforeAll 再 mockReturnValue 指向临时 HOME）。
+jest.mock('os', () => {
+  const actual = jest.requireActual('os') as typeof os;
+  return { ...actual, homedir: jest.fn(actual.homedir) };
 });
 
-describe('buildAuthJson（C5a 实测格式 {providerID:{type:"api",key}}）', () => {
+/** 用临时目录 mock os.homedir()（测试不触碰真实 $HOME）。 */
+const TMP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'keta-injector-test-'));
+const AUTH_JSON_PATH = path.join(TMP_HOME, '.local', 'share', 'opencode', 'auth.json');
+const OPENCODE_DATA_DIR = path.dirname(AUTH_JSON_PATH);
+
+beforeAll(() => {
+  (os.homedir as jest.Mock).mockReturnValue(TMP_HOME);
+});
+
+afterEach(() => {
+  cleanupAuthJson(AUTH_JSON_PATH);
+});
+
+afterAll(() => {
+  (os.homedir as jest.Mock).mockRestore();
+  fs.rmSync(TMP_HOME, { recursive: true, force: true });
+});
+
+describe('buildAuthJson（实测格式 {providerID:{type:"api",key}}）', () => {
   it('单凭据 → 标准格式 map', () => {
     const json = buildAuthJson([{ providerID: 'opencode-go', key: 'sk-secret' }]);
     expect(JSON.parse(json)).toEqual({
@@ -56,15 +74,10 @@ describe('buildAuthJson（C5a 实测格式 {providerID:{type:"api",key}}）', ()
   });
 });
 
-describe('writeAuthJson（600 权限 + 随机路径 + 目录结构）', () => {
-  it('写入 <dir>/opencode/auth.json，权限 600，内容正确', () => {
-    const result = writeAuthJson(
-      [{ providerID: 'deepseek', key: 'sk-123' }],
-      { dir: TMP },
-    );
-    expect(path.basename(result.authJsonPath)).toBe('auth.json');
-    expect(path.basename(path.dirname(result.authJsonPath))).toBe('opencode');
-    expect(result.dataDir).toBe(TMP);
+describe('writeAuthJson（600 权限 + 固定 $HOME/.local/share/opencode 路径）', () => {
+  it('写入 $HOME/.local/share/opencode/auth.json，权限 600，内容正确', () => {
+    const result = writeAuthJson([{ providerID: 'deepseek', key: 'sk-123' }]);
+    expect(result.authJsonPath).toBe(AUTH_JSON_PATH);
     expect(fs.existsSync(result.authJsonPath)).toBe(true);
     expect(JSON.parse(fs.readFileSync(result.authJsonPath, 'utf8'))).toEqual({
       deepseek: { type: 'api', key: 'sk-123' },
@@ -72,56 +85,49 @@ describe('writeAuthJson（600 权限 + 随机路径 + 目录结构）', () => {
   });
 
   it('文件权限 = 0o600（仅属主读写，明文 key 唯一防线）', () => {
-    const result = writeAuthJson([{ providerID: 'x', key: 'sk' }], { dir: TMP });
+    const result = writeAuthJson([{ providerID: 'x', key: 'sk' }]);
     const mode = fs.statSync(result.authJsonPath).mode & 0o777;
     expect(mode).toBe(AUTH_FILE_MODE);
   });
 
-  it('dir 缺省时路径随机化（每次调用独立目录 + keta-auth- 前缀）', () => {
-    const a = writeAuthJson([{ providerID: 'x', key: 'sk' }]);
-    const b = writeAuthJson([{ providerID: 'x', key: 'sk' }]);
-    try {
-      expect(a.dataDir).not.toBe(b.dataDir);
-      expect(path.basename(a.dataDir)).toMatch(new RegExp(`^${AUTH_DIR_PREFIX}`));
-      expect(path.basename(b.dataDir)).toMatch(new RegExp(`^${AUTH_DIR_PREFIX}`));
-      expect(fs.existsSync(a.authJsonPath)).toBe(true);
-    } finally {
-      cleanupAuthJson(a.dataDir);
-      cleanupAuthJson(b.dataDir);
-    }
+  it('写前自动 mkdir -p $HOME/.local/share/opencode/（目录缺失也能写）', () => {
+    fs.rmSync(TMP_HOME, { recursive: true, force: true });
+    const result = writeAuthJson([{ providerID: 'x', key: 'sk' }]);
+    expect(result.authJsonPath).toBe(AUTH_JSON_PATH);
+    expect(fs.existsSync(result.authJsonPath)).toBe(true);
   });
 
-  it('同目录重复写覆盖旧内容（新凭据替换旧凭据）', () => {
-    const first = writeAuthJson([{ providerID: 'a', key: 'sk-old' }], { dir: TMP });
-    const second = writeAuthJson([{ providerID: 'a', key: 'sk-new' }], { dir: TMP });
-    expect(first.authJsonPath).toBe(second.authJsonPath);
+  it('固定路径重复写覆盖旧内容（新凭据替换旧凭据）', () => {
+    writeAuthJson([{ providerID: 'a', key: 'sk-old' }]);
+    const second = writeAuthJson([{ providerID: 'a', key: 'sk-new' }]);
+    expect(second.authJsonPath).toBe(AUTH_JSON_PATH);
     expect(JSON.parse(fs.readFileSync(second.authJsonPath, 'utf8'))).toEqual({
       a: { type: 'api', key: 'sk-new' },
     });
   });
 });
 
-describe('cleanupAuthJson（幂等删除）', () => {
-  it('删除整个凭据数据目录（opencode/auth.json 一并清理）', () => {
-    const result = writeAuthJson([{ providerID: 'a', key: 'sk' }], { dir: TMP });
-    cleanupAuthJson(result.dataDir);
+describe('cleanupAuthJson（幂等删除，只删 auth.json 文件不删目录）', () => {
+  it('删除 auth.json 文件但保留 $HOME/.local/share/opencode 目录（含 opencode.db 会话库）', () => {
+    const result = writeAuthJson([{ providerID: 'a', key: 'sk' }]);
+    expect(fs.existsSync(result.authJsonPath)).toBe(true);
+    cleanupAuthJson(result.authJsonPath);
     expect(fs.existsSync(result.authJsonPath)).toBe(false);
-    expect(fs.existsSync(result.dataDir)).toBe(false);
+    expect(fs.existsSync(OPENCODE_DATA_DIR)).toBe(true);
   });
 
-  it('目录不存在时静默忽略（幂等，不抛错）', () => {
+  it('文件不存在时静默忽略（幂等，不抛错）', () => {
     expect(() =>
-      cleanupAuthJson(path.join(TMP, 'does-not-exist')),
+      cleanupAuthJson(path.join(TMP_HOME, 'no-such-auth.json')),
     ).not.toThrow();
   });
 
-  it('空 dataDir 静默忽略', () => {
+  it('空路径静默忽略', () => {
     expect(() => cleanupAuthJson('')).not.toThrow();
   });
 });
 
 /** 类型/工具存在性编译断言（防重构漏导出）。 */
 export function _typeGuard(result: AuthJsonResult): void {
-  void result.dataDir;
   void result.authJsonPath;
 }

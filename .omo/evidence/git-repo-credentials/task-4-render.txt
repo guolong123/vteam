@@ -1,0 +1,47 @@
+# todo 4 验证证据：注入 git.ts 凭证注入升级 + 授权校验
+# 验证时间: 2026-08-12  验证目录: /data/git-project/aiagents/worker
+
+## 1. tsc --noEmit（worker）
+$ cd /data/git-project/aiagents/worker && npx tsc --noEmit
+TSC_EXIT=0
+（无任何类型错误输出）
+
+## 2. 渲染产物语法核验（transpileModule）
+$ npx tsx -e "import {renderGitToolsFile} from './src/git/git-tools'; import * as ts from 'typescript';
+   const c=renderGitToolsFile(); const r=ts.transpileModule(c,{reportDiagnostics:true,
+   compilerOptions:{target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.CommonJS}});
+   const errs=(r.diagnostics||[]).filter(d=>d.category===ts.DiagnosticCategory.Error); ..."
+RENDER_OK 7321 bytes
+
+## 3. 渲染产物内容关键字核验
+$ npx tsx -e 'import {renderGitToolsFile} from "./src/git/git-tools"; const c=renderGitToolsFile();
+   ["keta-git-creds.json","GIT_SSH_COMMAND","GIT_ASKPASS","permission !== \\"write\\""].map(k=>[k,c.includes(k)])'
+"keta-git-creds.json"              => true
+"GIT_SSH_COMMAND"                  => true
+"GIT_ASKPASS"                      => true
+"permission !== \"write\""         => true
+
+## 4. 渲染产物结构（自包含，不 import worker 源码）
+- GIT_CREDS_FILE = path.join(os.homedir(), ".keta-git-creds.json")（内联常量）
+- normalizeRepoUrl / loadCredential / writeTempKey / writeAskpass / cleanupTemp / buildGitEnv /
+  runGit / cwdOrigin / _buildGitArgs 经 toString() 内联（实现=渲染产物同源）
+- loadCredential：白名单匹配 normalizeRepoUrl(entry.repoUrl)===normalizeRepoUrl(repoUrl)，
+  无匹配抛「仓库未授权或凭证缺失」（错误信息不含明文 key，中文经 esbuild 转译为 \uXXXX 等价字符串）
+- push guard：`if (entry.permission !== "write") throw ...`（git_push 仅 write 授权）
+- clone/pull/fetch/push（远端工具）：loadCredential → buildGitEnv → spawn → try/finally cleanupTemp
+- status/diff/log（本地只读）：_buildGitArgs → runGit，不加载凭证
+- 7 工具名 git_clone/git_pull/git_fetch/git_status/git_diff/git_log/git_push 保持；git_push defaultEffect=ask 保持；
+  installGitTools 签名不变；git_clone 描述「需平台仓库授权」、git_push「需平台 write 授权，默认 ask 确认流」
+- HTTPS askpass 脚本 token 单引号转义（' → '\''）；SSH 临时 key 0o600 权限
+
+## 5. Dockerfile 确认（worker/Dockerfile）
+:21 RUN apk add --no-cache git openssh-client（node:22-alpine 无 git/ssh，runGit/GIT_SSH_COMMAND 依赖）
+
+## 6. 测试（git-tools.spec.ts，含于 21 suites / 334 tests 全绿）
+渲染断言（keta-git-creds.json / GIT_SSH_COMMAND / GIT_ASKPASS / permission write 校验）+
+辅助函数单测（normalizeRepoUrl 去 .git、含单引号 token 转义）
+
+## 结论
+todo 4 完整且测试通过：白名单校验、SSH GIT_SSH_COMMAND / HTTPS GIT_ASKPASS 双分支注入、
+push write 授权校验、try/finally 清理、工具自包含（不 import worker 源码）、7 工具名与默认 effect 不变、
+Dockerfile git+openssh-client 全部满足计划契约（.omo/plans/git-repo-credentials.md todo 4）。

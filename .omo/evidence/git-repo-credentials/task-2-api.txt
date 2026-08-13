@@ -1,0 +1,129 @@
+# Task 2 QA Evidence — server git-repos 模块（CRUD + 加密存储 + 授权维护 + 按 worker 过滤下行）
+
+计划：`.omo/plans/git-repo-credentials.md` todo 2
+时间：2026-08-12
+分支：待 commit（feature/git-repo-credentials）
+
+## 1. TypeScript 编译（server/）
+
+```
+$ npx prisma generate   # 成功（client 含 gitCredential/gitRepoGrant）
+$ npx tsc --noEmit
+TSC_EXIT=0              # 0 错误
+```
+
+## 2. 单元测试（server/，jest）
+
+### 2.1 `npx jest --runInBand src/git-repos/`
+```
+PASS src/git-repos/git-repos.service.spec.ts
+PASS src/git-repos/git-repos.controller.spec.ts
+Test Suites: 2 passed, 2 total
+Tests:       30 passed, 30 total
+```
+覆盖：
+- normalizeRepoUrl：ssh git@ 去 .git、`.GIT` 大写后缀、https 协议小写、trim
+- findAll：脱敏无 key/credentialRef 字段、grantedAgents 拼 agent 名
+- create：加密+指纹+授权落库、write 缺省 effect→ask、未吊销重复 409、已吊销覆盖激活、
+  authType 非法 400、授权 agent 不存在 400、dispatch 触发、dispatch 失败不阻断
+- update：key 重加密 + 授权全量覆盖（软撤旧+建新）、不存在/已吊销 404
+- remove：软撤凭证+授权+dispatch、404
+- onModuleInit：gc_/gr_ 前缀续号
+- controller：GET 不挂 AdminGuard（成员只读）、POST/PATCH/DELETE 挂 AdminGuard、
+  DTO 校验（authType 非法/repoUrl 空/key 空/嵌套 permission 越界/全缺省合法）、404 透传
+
+### 2.2 `npx jest --runInBand src/workers/workers.service.spec.ts`
+```
+Test Suites: 1 passed, 1 total
+Tests:       80 passed, 80 total
+```
+新增用例：
+- dispatchGitCredentials 全量：在线 worker 入队、活跃 agent（taskAgent.removedAt=null +
+  task 未终态）过滤、查库 orderBy repoUrl asc、解密打包
+- 定向 targetWorkerIds：payload 带 targetWorkerIds
+- 无活跃 agent 授权 → credentials=[] 仍下发（清 worker 侧条目）
+- 从未配置凭证 → 不下发命令（对齐模型凭据跳过语义）
+- 无在线 worker → 0 不入队
+- replayGitCredentials：定向单 worker、解密失败 warn 不阻断、正常入队
+
+### 2.3 全量回归 `npx jest --runInBand`
+```
+Test Suites: 52 passed, 52 total
+Tests:       990 passed, 990 total
+```
+（含修复 todo 1 遗留：models.service.spec 的 prisma mock 补 gitCredential/gitRepoGrant，
+  onModuleInit 挂接 gc_/gr_ resyncIdPrefix）
+
+## 3. 手动 API 冒烟（docker-compose server 重建后，admin/admin123）
+
+### 3.0 部署
+```
+$ docker-compose up -d --build server   # 成功（build 阶段 npx prisma generate → client 含新模型）
+health=200                              # 健康检查
+GET /api/v1/git-repos → []              # 空列表，模块生效
+```
+
+### 3.1 POST 创建（SSH 私钥 + 授权 a_tester read/allow）
+```
+POST /api/v1/git-repos
+{repoUrl:"git@gitee.com:xishuhq/test-repo.git",authType:"ssh_key",
+ key:"-----BEGIN OPENSSH PRIVATE KEY-----\nMOCK\n-----END OPENSSH PRIVATE KEY-----",
+ grantedAgents:[{agentId:"a_tester",permission:"read",effect:"allow"}]}
+→ 200 {
+  "id":"gc_0000000001","repoUrl":"git@gitee.com:xishuhq/test-repo",  # 去 .git
+  "authType":"ssh_key","fingerprint":"----****----",                  # 脱敏
+  "revokedAt":null,"createdAt":"2026-08-12T03:43:30.832Z",
+  "grantedAgents":[{"agentId":"a_tester","name":"测试","permission":"read","effect":"allow"}]}
+key 明文泄漏检查：响应 grep MOCK → 0 命中
+```
+
+### 3.2 GET 列表
+```
+GET /api/v1/git-repos → 含 gc_0000000001 + grantedAgents（name=测试，read/allow）
+```
+
+### 3.3 唯一约束 & 参数校验
+```
+重复 POST 同 repoUrl+authType → 409 REPO_EXISTS
+POST authType=plain → 400
+```
+
+### 3.4 DB 落库（AES-256-GCM 密文 + fingerprint，无明文）
+```
+mysql> SELECT id,repo_url,auth_type,LEFT(credential_ref,20),fingerprint,created_by,revoked_at FROM git_credentials;
+gc_0000000001  git@gitee.com:xishuhq/test-repo  ssh_key  282fda820ee1fcb0e509  ----****----  u_admin  NULL
+mysql> SELECT id,agent_id,repo_url,permission,effect,granted_by,revoked_at FROM git_repo_grants;
+gr_0000000001  a_tester  git@gitee.com:xishuhq/test-repo  read  allow  u_admin  NULL
+```
+
+### 3.5 DELETE 软撤销
+```
+DELETE /api/v1/git-repos/gc_0000000001 → {"id":"gc_0000000001","revokedAt":"2026-08-12T03:44:04.961Z"}
+再次 GET → []
+DB：git_credentials.revoked_at 与 git_repo_grants.revoked_at 均已置（凭证+授权双软撤）
+已吊销 id 再 DELETE → 404
+```
+
+### 3.6 PATCH 重加密 + 授权全量覆盖（补充冒烟）
+```
+POST https_token 仓库 → write 授权缺省 effect → ask（write→ask 缺省生效）
+PATCH {key:"ghp_updatedtoken123",grantedAgents:[{agentId:"a_developer","permission":"read"}]}
+→ fingerprint 更新为 ghp_****n123；grantedAgents 全量覆盖为 a_developer read/allow
+DELETE 清理 → []（测试数据已清理）
+```
+
+### 3.7 dispatchGitCredentials 真实触发（server 日志）
+```
+[WorkersService] "git 凭证下发：worker=1 个 credentials=1"   # POST/PATCH 各触发一次
+日志无 key 明文（仅数量），authorization header [Redacted]
+```
+
+## 4. 结论
+
+todo 2 全部验收通过：
+- [x] tsc --noEmit 0 错误
+- [x] src/git-repos/ 30 测试全绿
+- [x] workers.service.spec 80 测试全绿（含 dispatch/replay 用例）
+- [x] 全量回归 990 测试全绿
+- [x] POST/GET/DELETE 冒烟通过（含 409/400/404、DB 密文、软撤、dispatch 触发）
+- [x] 容器重建后健康检查 200，prisma client 含新模型（build 阶段 prisma generate）

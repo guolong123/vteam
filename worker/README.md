@@ -74,6 +74,7 @@ npm run dev            # tsx src/index.ts
 | `WORKER_DEFAULT_MODEL` | 否 | 空 | worker 默认模型 id（C2：随注册上报，C7 分派兜底）；空 = 未配置不上报 |
 | `WORKER_EXEC_PORT` | 否 | `4198` | T10 执行端点端口（node:http POST /execute，与 serve 端口解耦） |
 | `WORKER_FIRST_TOKEN_TIMEOUT_MS` | 否 | `120000` | T10 执行端点首字超时 ms（模型时限内无首字输出即 abort；首字出现后无完成超时，长期任务持续等待） |
+| `WORKER_MAX_INSTANCES` | 否 | `5` | worker 最大并发会话数（随注册 capabilities.maxInstances 上报，server 容量调度 capacity = maxInstances - load.instances 据此分派）；serve 支持多 session 并行，长任务执行中仍可调度新消息；≤0/非法值兜底 5 |
 
 ## 目录结构
 

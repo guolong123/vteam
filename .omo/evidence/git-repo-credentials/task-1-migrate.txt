@@ -1,0 +1,65 @@
+# task-1-migrate.txt — GitCredential + GitRepoGrant schema 迁移证据
+# 日期: 2026-08-12 11:22:25  分支: master
+
+==================================================================
+## 1) prisma migrate dev --name git_repo_credentials（宿主机 server/，DATABASE_URL→aiagents-compose-db）
+==================================================================
+cmd: DATABASE_URL="mysql://root:aiagents-root@172.24.0.2:3306/aiagents" npx prisma migrate dev --name git_repo_credentials
+--- output ---
+Applying migration `20260812032006_git_repo_credentials`
+The following migration(s) have been created and applied from new schema changes:
+prisma/migrations/
+  └─ 20260812032006_git_repo_credentials/
+    └─ migration.sql
+Your database is now in sync with your schema.
+✔ Generated Prisma Client (v6.19.3)
+
+==================================================================
+## 2) npx prisma validate（server/ 目录）
+==================================================================
+The schema at prisma/schema.prisma is valid 🚀
+
+==================================================================
+## 3) npx tsc --noEmit（server/ 目录）
+==================================================================
+TSC_EXIT=0
+
+==================================================================
+## 4) SHOW COLUMNS FROM aiagents.git_credentials（期望 9 列）
+==================================================================
+id	varchar(191)	NO	PRI	NULL	
+repo_url	varchar(191)	NO	MUL	NULL	
+auth_type	varchar(191)	NO		NULL	
+credential_ref	text	NO		NULL	
+fingerprint	varchar(191)	NO		NULL	
+created_by	varchar(191)	NO		NULL	
+created_at	datetime(3)	NO		CURRENT_TIMESTAMP(3)	DEFAULT_GENERATED
+updated_at	datetime(3)	NO		NULL	
+revoked_at	datetime(3)	YES		NULL	
+COLUMN_COUNT=9
+
+==================================================================
+## 5) SHOW COLUMNS FROM aiagents.git_repo_grants（期望 8 列）
+==================================================================
+id	varchar(191)	NO	PRI	NULL	
+agent_id	varchar(191)	NO	MUL	NULL	
+repo_url	varchar(191)	NO	MUL	NULL	
+permission	varchar(191)	NO		NULL	
+effect	varchar(191)	NO		NULL	
+granted_by	varchar(191)	NO		NULL	
+granted_at	datetime(3)	NO		CURRENT_TIMESTAMP(3)	DEFAULT_GENERATED
+revoked_at	datetime(3)	YES		NULL	
+COLUMN_COUNT=8
+
+==================================================================
+## 6) SHOW INDEX FROM aiagents.git_credentials（期望含 uk_git_credentials_repo_auth）
+==================================================================
+PRIMARY
+uk_git_credentials_repo_auth
+uk_git_credentials_repo_auth
+
+==================================================================
+## 7) _prisma_migrations 计数（迁移前 9 条，迁移后 10 条=增加 1）
+==================================================================
+total=10
+latest=20260812032006_git_repo_credentials

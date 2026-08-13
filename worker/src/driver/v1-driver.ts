@@ -9,7 +9,8 @@
  *    - POST /session/{id}/prompt_async?directory=...，body {model?, agent?, parts}，2xx=成功（实测 204）
  *    - GET /session/{id}/message → Array<{info, parts}>（poll 完成判定用）
  *    - POST /session/{id}/abort
- *    - GET /api/model → {data:[{id, providerID, name}]}
+ *    - GET /provider → {all:[{id, key, models:{<modelID>:{name}}}]}（listModels 主数据源）
+ *    - GET /api/model → {data:[{id, providerID, name, status}]}（listModels 回退路径）
  *    - GET / 健康检查
  * 3. **鉴权**：Basic Auth username=opencode，密码=config.serverPassword（空=不鉴权）。
  * 4. **请求超时**：AbortController 15s 兜底防悬挂（prompt_async 为异步 204 快速返回）。
@@ -52,15 +53,25 @@ export interface SendMessageInput {
   parts: unknown[];
   /** 工作目录（query 参数，D2：directory 是 prompt_async 的 query 参数） */
   directory?: string;
+  /**
+   * P7：顶层 system 字段（opencode prompt_async 契约）——注入系统提示（产出物协议/
+   * @机制等），serve 将其拼入 LLM system message（role:system），不混入 user 消息，
+   * 不会出现在会话回复/聊天记录中（区别于拼进 parts 文本）。
+   */
+  system?: string;
 }
 
-/** 模型列表项（对齐 GET /api/model data 项；id=providerID/modelID）。 */
+/** 模型列表项（id=providerID/modelID）。 */
 export interface DriverModelInfo {
   id: string;
   name: string;
   providerID: string;
   modelID: string;
-  /** serve 模型状态（active/deprecated）；旧版 serve 可能缺失 → 可选，缺失视为可用（CONF-01 过滤依据）。 */
+  /**
+   * serve 模型状态（active/deprecated）；旧版 serve 可能缺失 → 可选，缺失视为可用。
+   * 主路径（/provider 凭据认证）统一上报 'active'；/api/model 回退路径沿用
+   * serve 返回的 status（CONF-01 过滤依据）。
+   */
   status?: string;
 }
 
@@ -104,6 +115,37 @@ export interface ServeMessage {
     [key: string]: unknown;
   };
   parts: ServePart[];
+}
+
+/** GET /api/session/{id}/question data 元素（serve v2，QuestionV2Request）。 */
+export interface ServeQuestionRequest {
+  id: string;
+  sessionID: string;
+  questions: Array<{
+    question: string;
+    header: string;
+    options: Array<{ label: string; description: string }>;
+    multiple?: boolean;
+    custom?: boolean;
+  }>;
+  tool?: { messageID: string; callID: string };
+}
+
+/** GET /permission 元素（serve v1 全局端点，PermissionV1Request）——兼容 v2 PermissionV2Request 字段。 */
+export interface ServePermissionRequest {
+  id: string;
+  sessionID: string;
+  /** v2 字段名（/api/session/{id}/permission）：action 名。 */
+  action?: string;
+  /** v2 字段名：资源模式数组。 */
+  resources?: string[];
+  /** v1 字段名（/permission）：action 名（如 external_directory/bash）。 */
+  permission?: string;
+  /** v1 字段名（/permission）：资源模式数组（如 ["/etc/*"]）。 */
+  patterns?: string[];
+  save?: string[];
+  metadata?: Record<string, unknown>;
+  source?: unknown;
 }
 
 /** 默认请求超时 ms（计划 D8 宽松验收 15s）。 */
@@ -189,6 +231,7 @@ export class V1Driver {
         body: JSON.stringify({
           ...(input.model ? { model: { ...input.model } } : {}),
           ...(input.agent ? { agent: input.agent } : {}),
+          ...(input.system ? { system: input.system } : {}),
           parts: input.parts,
         }),
       },
@@ -206,6 +249,104 @@ export class V1Driver {
     return Array.isArray(body) ? body : (body.data ?? []);
   }
 
+  /**
+   * GET /question：列出该会话 pending 的 question 请求（serve v1 全局端点，实测有效）。
+   *
+   * ⚠️ 关键实证（opencode 1.18.16）：模型提问（AskInput/question 工具）走 **v1 Question
+   * 通道**，pending 列表在全局 `GET /question`（返回数组，元素含 `sessionID`，requestId 为
+   * `que_` 前缀，`tool:{messageID, callID}` 关联 tool part）。**v2 `GET /api/session/{id}/question`
+   * 是独立 QuestionRequest 通道，实测始终返回 `{"data":[]}`**（即使会话存在 running 的
+   * question part），若用它做检测 question 永不触发（线上 Bug1 根因）。此处按 sessionID 过滤
+   * v1 全局列表，只返回当前会话的 pending question。
+   */
+  async listQuestions(sessionID: string): Promise<ServeQuestionRequest[]> {
+    const res = await this.request(`/question`);
+    const body = (await res.json()) as ServeQuestionRequest[] | { data?: ServeQuestionRequest[] };
+    const all = Array.isArray(body) ? body : (body.data ?? []);
+    return all.filter((q) => q.sessionID === sessionID);
+  }
+
+  /**
+   * POST /question/{requestID}/reply：回答 question 请求（serve v1 端点，实测生效）。
+   * body `{answers: Array<Array<string>>}`——answers 顺序对应 questions，每项为选中 label 数组；
+   * 2xx=成功（实测 200，返回 true）。requestID 为 serve 下发的 id（que_ 前缀）。
+   * ⚠️ v2 `POST /api/session/{id}/question/{requestID}/reply` 实测返回 404
+   * （QuestionNotFoundError，v2 通道不含 v1 question），故必须走 v1 端点。
+   */
+  async replyQuestion(sessionID: string, requestID: string, answers: string[][]): Promise<void> {
+    const res = await this.request(`/question/${encodeURIComponent(requestID)}/reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers }),
+    });
+    this.logger.info(`[v1-driver] replyQuestion -> ${sessionID}/${requestID} (HTTP ${res.status})`);
+  }
+
+  /**
+   * POST /question/{requestID}/reject：拒绝 question 请求（serve v1 端点，实测存在）。
+   * 用户点「拒绝」时调用（serve 将 part 置为 status=error + "The user dismissed this
+   * question"，deferred 结束）。requestID 不存在时返回 404 QuestionNotFoundError。
+   */
+  async rejectQuestion(sessionID: string, requestID: string): Promise<void> {
+    const res = await this.request(`/question/${encodeURIComponent(requestID)}/reject`, {
+      method: 'POST',
+    });
+    this.logger.info(`[v1-driver] rejectQuestion -> ${sessionID}/${requestID} (HTTP ${res.status})`);
+  }
+
+  /**
+   * GET /permission：列出该会话 pending 的权限请求（serve v1 全局端点，实测有效）。
+   *
+   * ⚠️ 关键实证（opencode 1.18.16）：工具权限确认（bash/read 读外部目录等）走 **v1
+   * Permission 通道**，pending 列表在全局 `GET /permission`（返回数组，元素含
+   * `sessionID`，id 为 `per_` 前缀，`permission` 为 action 名，`patterns` 为资源模式，
+   * `tool:{messageID, callID}` 关联 tool part）。**v2 `GET /api/session/{id}/permission`
+   * 是独立 PermissionV2Request 通道，实测始终返回 `{"data":[]}`**（即使会话存在 running
+   * 的 permission part），若用它做检测权限永不触发（线上 Bug2 根因，与 Bug1 question
+   * 对称）。此处按 sessionID 过滤 v1 全局列表，只返回当前会话的 pending 权限，并把
+   * v1 字段 `permission`/`patterns` 归一为 `action`/`resources`（detector 消费统一字段）。
+   */
+  async listPermissions(sessionID: string): Promise<ServePermissionRequest[]> {
+    const res = await this.request(`/permission`);
+    const body = (await res.json()) as ServePermissionRequest[] | { data?: ServePermissionRequest[] };
+    const all = Array.isArray(body) ? body : (body.data ?? []);
+    return all
+      .filter((p) => p.sessionID === sessionID)
+      .map((p) => ({
+        id: p.id,
+        sessionID: p.sessionID,
+        action: p.action ?? p.permission ?? '',
+        resources: p.resources ?? p.patterns ?? [],
+        save: p.save,
+        metadata: p.metadata,
+        source: p.source,
+      }));
+  }
+
+  /**
+   * POST /permission/{requestID}/reply：回复权限确认（serve v1 全局端点，实测有效）。
+   * body `{reply: "once"|"always"|"reject"}`；2xx=成功（实测 200，返回 `true`）。
+   * ⚠️ v2 端点 `/api/session/{id}/permission/{requestID}/reply` 实测返回 404
+   * （PermissionNotFoundError——v1 通道的权限请求 v2 端点不识别，与 Bug2 listPermissions
+   * 对称），v1 端点 `/session/{id}/permissions/{permissionID}` 同样 404，故必须走 v1 全局
+   * 端点 `/permission/{requestID}/reply`。permissionID 须为 serve 下发 id（per_ 前缀）。
+   */
+  async replyPermission(
+    sessionID: string,
+    permissionID: string,
+    response: 'once' | 'always' | 'reject',
+  ): Promise<void> {
+    const res = await this.request(
+      `/permission/${encodeURIComponent(permissionID)}/reply`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reply: response }),
+      },
+    );
+    this.logger.info(`[v1-driver] replyPermission -> ${sessionID}/${permissionID}=${response} (HTTP ${res.status})`);
+  }
+
   /** POST /session/{id}/abort：中止会话（D2：abort 后消息无 step-finish，完成判定不能是"有消息"）。 */
   async abort(sessionID: string): Promise<void> {
     const res = await this.request(`/session/${encodeURIComponent(sessionID)}/abort`, {
@@ -215,16 +356,55 @@ export class V1Driver {
   }
 
   /**
-   * GET /api/model：动态模型列表（实测 opencode 1.18.x 端点，返回
-   * `{ location, data: [{id, providerID, family, name, status, cost...}] }`）。
-   * id 映射为 providerID/modelID（对齐 D7/T11 的 defaultModelId 格式；
-   * F2 MINOR：?? '' 兜底与 server worker.client.ts listModels 统一）。
-   * CONF-01（第五次修复）：serve /api/model 返回 active + deprecated 混合列表
-   * （实测 26 = 8 active + 18 deprecated），而 opencode models CLI / provider 接口只认
-   * active——在此统一过滤（数据源出口），仅保留 status === 'active'；status 缺失的
-   * 旧版 serve 视为可用（防误杀），后续 deprecated 不再回流上报。
+   * GET /provider：以"provider 有 key（凭据）+ opencode 免费内置"为上报依据。
+   * 替代 /api/model active 过滤——serve 的 /api/model 只把 7 个免费 opencode 模型标
+   * active，opencode-go 等有凭据 provider 的 18 个模型不在 active 列表（即使凭据已
+   * 注入），导致 worker availability 漏报、assignWorker 模型过滤命中不了。
+   * 实测 /provider 返回 `{all: [{id, name, source, env, key, options, models: {...}}]}`：
+   * - provider.key 非空（已配凭据）→ 其 models 全部可用（凭据认证=可用）
+   * - provider.id === 'opencode' 且无 key（免费内置）→ models 可用（免费模型）
+   * - 其他无 key 的 provider（anthropic/openai 等未配凭据）→ 不收集（无凭据不可用）
+   * 统一输出 status='active'（上报即视为可用）；/provider 失败（网络错/旧版 serve
+   * 404）→ 回退 /api/model 逻辑（status===active 过滤，兼容旧版 serve，不阻断上报）。
    */
   async listModels(): Promise<DriverModelInfo[]> {
+    try {
+      const res = await this.request('/provider');
+      if (!res.ok) {
+        throw new DriverRequestError(`[v1-driver] /provider HTTP ${res.status}`, res.status);
+      }
+      const body = (await res.json()) as {
+        all?: Array<{
+          id?: string;
+          key?: string;
+          models?: Record<string, { name?: string }>;
+        }>;
+      };
+      const models: DriverModelInfo[] = [];
+      for (const provider of body.all ?? []) {
+        const hasKey = typeof provider.key === 'string' && provider.key.length > 0;
+        if (!hasKey && provider.id !== 'opencode') {
+          continue;
+        }
+        const providerID = provider.id ?? '';
+        for (const [modelID, model] of Object.entries(provider.models ?? {})) {
+          models.push({
+            id: `${providerID}/${modelID}`,
+            name: (model && model.name) || modelID,
+            providerID,
+            modelID,
+            status: 'active',
+          });
+        }
+      }
+      return models;
+    } catch {
+      return this.listModelsFromApiModel();
+    }
+  }
+
+  /** /api/model 回退路径：映射 id=providerID/modelID + status===active（缺失视为可用）过滤。 */
+  private async listModelsFromApiModel(): Promise<DriverModelInfo[]> {
     const res = await this.request('/api/model');
     const body = (await res.json()) as {
       data?: Array<{ id?: string; providerID?: string; name?: string; status?: string }>;

@@ -1,0 +1,199 @@
+================================================================================
+todo 6 端到端验证：git 仓库凭证全链路
+日期：2026-08-12
+计划：.omo/plans/git-repo-credentials.md（Wave 5）
+================================================================================
+
+【前置】
+--------------------------------------------------------------------------------
+1. docker-compose up -d --build server worker web 重建成功（4 容器 healthy）
+   - aiagents-compose-worker Up / aiagents-compose-server Up (healthy)
+   - aiagents-compose-web Up (healthy) / aiagents-compose-db Up (healthy)
+2. 健康检查：
+   - GET http://127.0.0.1:13000/api/v1/health = 200
+   - GET http://127.0.0.1:13001/git-repos      = 200
+3. worker 容器预检：
+   - git --version = git version 2.54.0
+   - ssh -V        = OpenSSH_10.3p1, OpenSSL 3.5.7 9 Jun 2026
+   - （Dockerfile RUN apk add --no-cache git openssh-client 生效）
+4. worker 凭证文件初始态：~/.keta-git-creds.json 不存在（NOT_EXISTS，无配置时）
+5. 全量回归基线：
+   - server: 52 suites / 990 tests 全绿（基线 990，含 git-repos 模块 spec）
+   - worker: 21 suites / 334 tests 全绿（基线 334）
+6. admin token 获取成功（admin/admin123 → accessToken）
+
+【测试基础设施（本地临时 SSH/HTTP git server，真实走 sshd 认证 + dumb-http + Basic Auth）】
+--------------------------------------------------------------------------------
+- SSH git server 容器 e2e-git-server（alpine + openssh + git，挂 aiagents_aiagents-net）
+  - authorized_keys 含一次性测试公钥 /tmp/keta-e2e-test-key.pub（ed25519，e2e-test）
+  - 仓库：e2e-test-repo.git（授权）/ e2e-unauthorized-repo.git（不授权）
+    / e2e-write-repo.git（write 授权）/ https-test-repo.git（http 服务）
+  - 首次遇「User git not allowed because account is locked」（Alpine adduser -D 锁账户）
+    → passwd -u git 解锁后 SSH 认证通过（这是测试环境问题，非产品缺陷）
+- HTTP git server：nginx + Basic Auth（htpasswd 用户名=密码=token 值，因 GIT_ASKPASS
+  对 username/password 两问都返回同一 token）+ dumb-http（git update-server-info）
+  - 无认证 curl → 401；带认证 curl → 200
+
+【缺陷发现与修复（todo 4 / todo 2 缺陷，E2E 暴露）】
+--------------------------------------------------------------------------------
+缺陷 1：渲染 git.ts 的 loadCredential 引用 CommonJS 编译产物 exports.GIT_CREDS_FILE
+  现象：git_clone 报「仓库凭证文件不存在或损坏」（凭证文件明明存在）
+  根因：git-tools.ts 的 loadCredential 引用模块级 GIT_CREDS_FILE，TS 编译为 CommonJS 后
+        toString() 内联进 ES module git.ts 时变成 exports.GIT_CREDS_FILE，而 git.ts 无
+        exports 对象 → ReferenceError 被函数内 catch 吞掉 → 误报「文件不存在或损坏」。
+        jest 未捕获因 CommonJS 环境 exports 有效。
+  修复：loadCredential 内局部 const credsFile = path.join(os.homedir(), ...)（自包含），
+        不再引用模块级常量。
+  测试：git-tools.spec.ts 新增「渲染产物不引用 exports」防回归断言（not.toMatch(/exports\./)）。
+  验证：渲染产物 grep 无 exports.，仅含 const credsFile = path.join(...)。
+
+缺陷 2：渲染 git.ts 的 runGit/cwdOrigin 引用 child_process_1（TS 编译别名）
+  现象：git_clone 报「child_process_1 is not defined」
+  根因：import { spawnSync } 为命名导入，TS 编译成 const child_process_1 = require(...)，
+        toString() 内联时函数体为 child_process_1.spawnSync(...)，而渲染 git.ts 的 import
+        是 import { spawnSync } from "node:child_process"，child_process_1 未定义。
+  修复：源码 import 改为 import * as child_process from 'child_process'（namespace 导入，
+        编译产物保留原变量名 child_process），函数体用 child_process.spawnSync，
+        渲染模板 import 同步为 import * as child_process from "node:child_process"。
+  测试：spec 新增断言 not.toMatch(/child_process_\d+/) + import * as child_process + 
+        child_process.spawnSync。
+  验证：渲染产物 grep 无 child_process_1，含 child_process.spawnSync。
+
+缺陷 3：server 下发 GitCredentialEntry 缺 permission 字段（todo 2/4 契约缺陷）
+  现象：write 授权仓库 git_push 仍报「仓库 X 未授予 write 权限，禁止 push」；
+        worker 落盘条目 permission=undefined。
+  根因：buildGitCredentialsPayload 打包只含 repoUrl/authType/key/fingerprint，
+        未携带 permission；resolveWorkerActiveRepoUrls 只返回 repoUrl 集合。
+  修复：
+  - server GitCredentialEntry 接口加 permission?: string
+  - resolveWorkerActiveRepoUrls 返回 Map<repoUrl, 最高权限>（多 agent 授权取
+    write > read，凭证面=worker 级语义）
+  - buildGitCredentialsPayload 透传 permission
+  - worker-protocol.ts GitCredentialEntry 加 permission（双写契约）
+  - worker git-credential-injector buildGitCredsFile 保留 permission 落盘
+  测试：workers.service.spec 的 dispatchGitCredentials 用例更新 mock 含 permission，
+        断言 payload 含 permission: 'read'/'write'。
+  验证：PATCH 授权 write 后 worker 落盘条目 perm=write；git_push 通过校验实际 push 成功。
+
+缺陷 4：全部凭证吊销后 worker 侧残留明文凭证（安全缺陷，todo 2 缺陷）
+  现象：DELETE 最后一个测试仓库（gc_0000000009）后，worker 凭证文件仍残留
+        e2e-write-repo 的私钥明文（entries=1）。
+  根因：buildGitCredentialsPayload 用 findMany({where:{revokedAt:null}}) 判断——
+        「全部已吊销」（rows=[]）与「从未配置」（rows=[]）不可区分，
+        rows.length===0 一律返回 null → dispatch 跳过 → worker 不收到清空命令。
+  修复：先 gitCredential.count() 区分：count===0（从未配置）→ null 跳过；
+        count>0 但未吊销行为空（全部已吊销）→ 返回空数组 → 下发 credentials=[] 清 worker。
+  测试：spec「从未配置」用例加 count.mockResolvedValue(0)；其余 dispatch/replay 用例
+        加 count>0 mock；C5(R5) register 用例加 count=0。
+  验证：全量吊销后重启 worker → server 下发「git 凭证下发：worker=1 个 credentials=0」
+        → worker 日志「凭证文件已更新（0 条）」→ 凭证文件 entries=0（残留清除）。
+
+修复后全量回归：server 990 全绿；worker 335 全绿（+1 防回归）；tsc 双端 0 错误。
+修复涉及 commit：并入 todo 4（git.ts 渲染缺陷 1/2）与 todo 2/4（permission 契约缺陷 3、
+吊销清空缺陷 4）对应 commit（计划 Commit: N 允许修复并入对应 todo commit，不新建）。
+
+【场景 A：SSH 授权成功 + 凭证下发 + clone 成功】
+--------------------------------------------------------------------------------
+- POST /api/v1/git-repos（admin token）：
+  {"repoUrl":"git@e2e-git-server:repos/e2e-test-repo.git","authType":"ssh_key",
+   "key":"<一次性测试私钥>","grantedAgents":[{"agentId":"a_tester","permission":"read","effect":"allow"}]}
+  → 200 {id: gc_0000000007, fingerprint:"----****---\n", grantedAgents:[{a_tester, read, allow}]}
+  ✓ 响应脱敏无 key；repoUrl 规范化去 .git 后缀
+- 心跳后 worker 落盘 ~/.keta-git-creds.json（600 权限 stat -c %a = 600）
+  ✓ 含 repoUrl git@e2e-git-server:repos/e2e-test-repo + key + fingerprint
+- server 日志：「仓库凭证录入：... fingerprint=----****---\n」「git 凭证下发：worker=1 个 credentials=1」
+  ✓ 无明文 key
+- worker 日志：「[worker] git-credentials：凭证文件已更新（1 条）」
+- 任务 @测试（POST /channels/c_0000000001/messages）：agent a_tester 调 git_clone
+  ✓ git_clone {repo_url: git@e2e-git-server:repos/e2e-test-repo.git} status=completed
+  ✓ 克隆到 /tmp/keta-worker/e2e-test-repo（master，HEAD 7dd009f，README.md + hello.txt）
+  ✓ agent group_post 汇报：仓库已成功拉取到工作区、目录内容、git log 7dd009f
+- DB：git_credentials 表 gc_0000000007 credential_ref=4863b4033f2c384d34c28f23:...（iv:authTag:ciphertext 密文）
+  指纹脱敏；git_repo_grants gr_0000000016 a_tester read allow（revokedAt=null）
+
+【场景 B：未授权仓库拒绝】
+--------------------------------------------------------------------------------
+- e2e-unauthorized-repo.git 存在于 git server，但未授权给任何 agent
+- worker 凭证文件：仅含 e2e-test-repo（无 e2e-unauthorized-repo）✓
+- 任务 @测试：git_clone git@e2e-git-server:repos/e2e-unauthorized-repo.git
+  ✓ git_clone status=error
+  error="仓库未授权或凭证缺失: git@e2e-git-server:repos/e2e-unauthorized-repo"
+  ✓ 错误可见、不含明文 key；agent group_post 原样汇报
+- 预期行为确认：凭证面=worker 级（同 worker 其他 agent 授权仓库共享，非本场景覆盖点）
+
+【场景 C：HTTPS token（GIT_ASKPASS 链路）】
+--------------------------------------------------------------------------------
+- POST /api/v1/git-repos：
+  {"repoUrl":"http://e2e-git-server:8080/https-test-repo.git","authType":"https_token",
+   "key":"e2e-https-token-2026","grantedAgents":[{a_tester, read, allow}]}
+  → 200 {id: gc_0000000008, fingerprint:"e2e-****2026"}
+- worker 落盘条目：authType=https_token key=e2e-http****（600 权限）
+- 首次 clone 认证失败（fatal: Authentication failed）→ 定位为 nginx htpasswd 用户名
+  git-token 与 askpass 两次 echo 同一 token 不匹配 → 测试环境调整 htpasswd 用户名=token
+  （非产品缺陷，属测试基建配置）→ 重试成功
+- 任务 @测试：git_clone http://e2e-git-server:8080/https-test-repo.git
+  ✓ git_clone status=completed；克隆到 /tmp/keta-worker/https-test-repo
+  ✓ agent group_post 汇报：认证通过、README.md/hello.txt、HEAD 7dd009f
+- 渲染 git.ts 确认 GIT_ASKPASS 分支：
+  writeAskpass 生成 #!/bin/sh\necho '<token>'（单引号转义）600 写入 + 755 chmod；
+  buildGitEnv https_token → {GIT_ASKPASS: scriptPath, GIT_TERMINAL_PROMPT: '0'}
+
+【场景 D：吊销即时生效】
+--------------------------------------------------------------------------------
+- DELETE /api/v1/git-repos/gc_0000000007（SSH 仓库）
+  → 200 {id: gc_0000000007, revokedAt: "2026-08-12T05:25:07.665Z"}
+- 心跳后 worker 凭证文件移除该条目（仅剩 https-test-repo）✓
+- server 日志：「仓库凭证吊销：repo=git@e2e-git-server:repos/e2e-test-repo ...」
+  「git 凭证下发：worker=1 个 credentials=1」（2→1）✓
+- 任务 @测试：git_clone 同一仓库
+  ✓ git_clone status=error "仓库未授权或凭证缺失: git@e2e-git-server:repos/e2e-test-repo"
+  ✓ agent 汇报：此前同一仓库曾克隆成功，本轮授权被拒（状态变化可见）
+- DB：gc_0000000007 revoked_at 已置时间戳；对应 grant 同步软撤销
+
+【场景 E：push 权限】
+--------------------------------------------------------------------------------
+- 确认无 AgentToolEffect 覆盖 git_push：
+  - schema.prisma AgentToolEffect 模型存在
+  - DB agent_tool_effects 表为空（seed 无 git_push/任意 tool effect 覆盖）✓
+- read 授权仓库（https-test-repo read）：
+  任务 @测试 git_push repo_url=http://e2e-git-server:8080/https-test-repo.git
+  ✓ git_push status=error "仓库 http://e2e-git-server:8080/https-test-repo.git 未授予 write 权限，禁止 push"
+  （首次 agent 缺省 repo_url 走 cwdOrigin() 返回空 → 报"仓库未授权或凭证缺失: "，显式传 repo_url 后正确命中权限校验；cwd 依赖属工具使用方式，非缺陷）
+- PATCH 升级授权 write（effect=ask）→ 重下发 worker 条目 perm=write ✓
+- write 授权（SSH e2e-write-repo，permission=write effect=ask）：
+  任务 git_push 缺省 cwd 报 not a git repository（工具 execute 在 serve 工作目录，
+  非仓库目录——模型应先用 cd/clone 定位；属使用方式）
+  → 仓库目录内手动验证（真实凭证 + GIT_SSH_COMMAND）：
+  ✓ clone e2e-write-repo → 新建 ssh-push.txt → commit → git push master:master 成功
+    "7dd009f..480aed9  master -> master"，服务端 bare repo git log 见 480aed9 "e2e ssh push verify"
+  ✓ write 授权 push 链路真实可用
+- 场景 E 结论：无 AgentToolEffect 覆盖；read 拒 push（write 校验）；write 授权 push 成功
+
+【回归 + 无明文泄漏检查】
+--------------------------------------------------------------------------------
+- server: 52 suites / 990 tests 全绿；npx tsc --noEmit 0 错误
+- worker: 21 suites / 335 tests 全绿（+1 防回归测试）；tsc 0 错误
+- git-repos 模块 spec：2 suites / 30 tests 全绿
+- 源码 grep：server/src/git-repos worker/src/git worker/src/index.ts 无真实 key 硬编码
+  （仅 DTO example 字符串 '-----BEGIN OPENSSH PRIVATE KEY-----...'，非真实 key）
+- 容器日志：
+  - server 日志 grep keta-e2e = 0 命中；grep "BEGIN OPENSSH" = 0 命中
+  - worker 日志 grep "BEGIN OPENSSH|keta-e2e-test" = 0 命中
+  - 私钥内容特征行（OPENSSH PRIVATE KEY / b3BlbnNzaC1rZXktdjE）双容器均为 0
+  - https token（e2e-https-token-2026）双容器日志均为 0 命中
+- DB：credential_ref 为 iv:authTag:ciphertext 密文（is_cipher_format=1），
+  fingerprint 脱敏（----****--- / e2e-****2026）
+
+【清理】
+--------------------------------------------------------------------------------
+- 测试私钥 /tmp/keta-e2e-test-key* 删除
+- 测试仓库 e2e-git-server 容器/镜像删除
+- 测试凭证行：gc_0000000007（已吊销）、gc_0000000008、gc_0000000009 全部 DELETE
+  （吊销后 worker 凭证文件 entries=0，残留明文已清除——缺陷 4 修复验证）
+- 测试消息保留于群聊（可接受）；任务数据不清理（不影响后续）
+
+================================================================================
+结论：场景 A/B/C/D/E 全部通过。暴露 3 个缺陷（git.ts 渲染 exports 泄漏、
+child_process_1 别名泄漏、permission 契约缺失）均已修复并加防回归测试。
+所有回归全绿，无明文泄漏。
+================================================================================

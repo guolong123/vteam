@@ -15,7 +15,7 @@
     "test": "jest --runInBand"
   },
   "dependencies": {
-    "@opencode-ai/sdk": "1.18.15"
+    "@opencode-ai/sdk": "1.18.16"
   },
   "devDependencies": {
     "@types/jest": "^29.5.2",

@@ -1,0 +1,125 @@
+=====================================================================
+F3 真实手动 QA（real manual QA）— git 仓库凭证功能浏览器全链路走查
+日期：2026-08-12
+计划：.omo/plans/git-repo-credentials.md（F3 最终验证波）
+=====================================================================
+
+【执行方式】
+- 真实浏览器：Playwright 1.62.1 + headless Chromium（web/node_modules），
+  驱动 http://127.0.0.1:13001（Next.js 纯客户端渲染）
+- 视口 1440x900（真实浏览器视口，规避 task-5 遗留的 <900px 窄视口 NavDock 遮挡问题）
+- 登录：admin/admin123（admin 角色）/ seed-member/Admin@123456（member 角色，只读验证）
+- 一次性测试私钥：临时生成 ed25519（/tmp/opencode/f3/f3-e2e-test-key，测完已删）
+- 每步截图已落盘，路径见各步
+
+【UI 走查 10 步结果】
+---------------------------------------------------------------------
+1. 登录 admin + nav 入口：
+   PASS | 登录 admin 成功（url=/projects）
+   PASS | 左侧 dock 展开出现「仓库管理」（⌗ 图标，rail-icon + panel nav-item 均存在）
+   PASS | 点击 nav「仓库管理」→ 跳转 /git-repos，dock 高亮 data-active=true（「⌗仓库管理」）
+         截图 .omo/evidence/git-repo-credentials/f3-01-nav-dock.png
+
+2. 空态 + 计数徽章：
+   PASS | 计数徽章「0 个仓库 · 已授权 0 个 Agent」；列表空态「暂无仓库，点右上角「新增仓库」…」；
+         admin 可见「新增仓库」按钮
+         截图 f3-02-empty-state.png
+
+3. 新增仓库弹窗结构：
+   PASS | 标题「新增仓库」，repoUrl 输入框存在，authType 下拉默认 ssh_key，
+         SSH 模式 key 为 TEXTAREA（粘贴私钥），授权 Agent 多选 4 个 checkbox
+         （架构师/开发者/产品/测试），未授权时「写权限」副复选框 disabled
+         截图 f3-03-create-modal-ssh.png
+   PASS | authType 切换 HTTPS Token → key 变 INPUT type=password（粘贴 token）
+         截图 f3-03-create-modal-https.png
+
+4. SSH 模式新增成功：
+   PASS | 填 git@e2e.local:e2e-test-repo.git + 测试私钥 + 勾「测试」agent + 勾写权限 → 保存
+         列表行：url 规范化去 .git（git@e2e.local:e2e-test-repo）、SSH 蓝色徽章、
+         fingerprint「----****----」脱敏、授权 tag「测试 + write」、状态「已配置」、
+         计数「1 个仓库 · 已授权 1 个 Agent」
+         截图 f3-04-ssh-created.png
+
+5. HTTPS 模式失败路径：
+   PASS | 空 token 被拒：填 repoUrl 不填 key → 保存按钮 disabled（前端校验拦截）
+         截图 f3-05-https-empty-token.png
+   PASS | 占位 token 保存成功（平台无法远程校验 token 真实性=设计行为，token 有效性
+         在 git 操作时验证；此处如实记录，非缺陷）→ HTTPS 紫色徽章行出现，计数 2
+         截图 f3-05-https-created.png
+   PASS | 重复 repoUrl → 409 REPO_EXISTS，弹窗错误提示
+         「!仓库 https://gitee.com/xishuhq/f3-https-test 的 https_token 凭证已存在」
+         截图 f3-05-https-repo-exists-error.png
+
+6. 编辑授权：
+   PASS | 点「配置」→ 弹窗「配置仓库授权」，repoUrl/authType disabled 预填、
+         key 留空、授权回显「测试」勾选 + write（grantedAgents 反填正确）
+         截图 f3-06-edit-prefill.png
+   PASS | 取消写权限（key 留空仅改授权）→ 保存 → tag 变「测试 read」，perm=read
+         截图 f3-06-edit-after.png
+
+7. 删除：
+   PASS | 点「删除」→ ConfirmDialog「删除仓库凭证」，描述含 repoUrl + 「不可恢复」警告
+         截图 f3-07-delete-confirm.png
+   PASS | 确认 → 行消失；连续删除 2 个仓库后计数归「0 个仓库 · 已授权 0 个 Agent」，
+         回到空态
+         截图 f3-07-all-deleted.png
+
+8. member 只读：
+   PASS | 退出 admin（清 localStorage 会话）→ 登录 seed-member → /git-repos
+         列表可见 2 个仓库（repoUrl + 授权 tag），但无「新增仓库」按钮、
+         行内无「配置」「删除」按钮、右上说明「成员只读 · 配置需管理员权限」
+         截图 f3-08-member-readonly.png
+
+9. Cmd+K 命令面板：
+   PASS | Ctrl+K 打开面板（cmdk-panel）；搜索「仓库管理」→ 导航组出现「⌗仓库管理」入口
+         截图 f3-09-cmdk-open.png / f3-09-cmdk-search.png
+   PASS | 点击入口 → 跳转 /git-repos
+         截图 f3-09-cmdk-navigated.png
+
+10. 后端联动复核（独立于 todo 6）：
+   PASS | worker 凭证文件含 repoUrl：UI 创建仓库后 server 日志
+         「git 凭证下发：worker=1 个 credentials=1」+ worker「凭证文件已更新（1 条）」；
+         独立重建 git@e2e.local:f3-backend-check 后 cat 文件确认含该 repoUrl +
+         key + fingerprint + permission=read（600 权限 -rw-------）
+   PASS | DB 密文 + 脱敏指纹：git_credentials 行 credential_ref=
+         ff15203253be74ce396eabe2:305ffd925f…（iv:authTag:ciphertext 密文格式），
+         fingerprint=----****----（脱敏）；git_repo_grants a_tester read allow
+   PASS | 日志无明文：server/worker 全量日志 grep BEGIN OPENSSH / glpat-F3Placeholder /
+         PRIVATE KEY / f3-e2e-test = 0 命中；server 日志 authorization=[Redacted]、
+         fingerprint 均脱敏
+
+【清理确认】
+---------------------------------------------------------------------
+- 临时私钥 /tmp/opencode/f3/f3-e2e-test-key(.pub) 已删除
+- worker 凭证文件清空：~/.keta-git-creds.json → {"credentials":[]}（entries=0，600 权限）
+  （DELETE 后随心跳周期 ~30s 自动清空，与 todo 6 缺陷4 修复一致）
+- DB：git_credentials WHERE revoked_at IS NULL = 0（无未吊销残留）；
+      GET /api/v1/git-repos = [] 空数组
+
+【最终结论】
+---------------------------------------------------------------------
+VERDICT: PASS — F3 真实浏览器 UI 全链路 10 步全部通过，截图 16 张证据完备。
+UI 与计划 §todo5 完全一致：nav 入口/空态/弹窗（SSH⇄HTTPS 切换）/SSH 创建/
+失败路径（空 token 前端拒绝 + 409 错误提示）/编辑预填回显/删除确认/成员只读/
+Cmd+K 入口/后端密文+脱敏+无明文日志，均符合预期，未发现 F3 阻断性缺陷。
+
+【UI 缺陷/观察项】
+---------------------------------------------------------------------
+严重级别说明：均为「观察/信息」级，无 P0-P2 缺陷。
+- [观察] HTTPS token 无真实性校验：占位 token 可保存成功（平台无法远程校验 token
+  有效性，token 在 git 操作时由远端验证）。建议后续迭代可加「保存时可选连通性探测」，
+  非本计划范围（17 篇 §3.4 明文零接触约束下不做回调探测）。
+- [观察] worker 凭证清空依赖心跳周期（~30s）：DELETE 后 worker 文件延迟约一个心跳
+  周期才归零（06:21:27 删除 → 06:21:33 清空）。异步架构设计行为，非缺陷；若需即时
+  可调小心跳间隔。
+- [既有遗留] task-5 §8 记录的 <900px 窄视口 NavDock(z-50) 遮挡弹窗(z-40) 问题仍存在，
+  真实浏览器 1440px 视口下无影响，非本次 F3 范围。
+
+【截图清单】（16 张，.omo/evidence/git-repo-credentials/）
+f3-01-nav-dock.png / f3-02-empty-state.png / f3-03-create-modal-ssh.png /
+f3-03-create-modal-https.png / f3-04-ssh-created.png / f3-05-https-empty-token.png /
+f3-05-https-created.png / f3-05-https-repo-exists-error.png / f3-06-edit-prefill.png /
+f3-06-edit-after.png / f3-07-delete-confirm.png / f3-07-all-deleted.png /
+f3-08-member-readonly.png / f3-09-cmdk-open.png / f3-09-cmdk-search.png /
+f3-09-cmdk-navigated.png
+=====================================================================

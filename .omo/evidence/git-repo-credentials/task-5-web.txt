@@ -1,0 +1,134 @@
+=====================================================================
+TODO 5 WEB 仓库管理页 — 验证证据
+=====================================================================
+时间：2026-08-12
+SCOPE：仅 web/ + 一处必要的 server bug 修复（详见 §6）
+=====================================================================
+
+---------------------------------------------------------------------
+§1 代码改动文件
+---------------------------------------------------------------------
+- web/src/components/layout/nav-dock.tsx        NAV_ITEMS 加 { key:"git-repos", label:"仓库管理", icon:"⌗" }（models 后）
+- web/src/components/layout/app-shell.tsx       KEY_TO_PATH / CMDK_NAV_PATH / PAGE_TITLE 三处同步
+- web/src/components/layout/cmdk-panel.tsx      DEFAULT_CMDK_ITEMS 导航组加「仓库管理」（Cmd+K 入口，硬编码列表必须追加）
+- web/src/types/git-repos.ts                    新建：GitRepoView / GitGrantView / Create/UpdateGitRepoPayload / ApiAgent / AgentsResponse
+- web/app/(main)/git-repos/page.tsx             新建：列表 + GitRepoModal（新建/编辑）+ ConfirmDialog 删除
+- server/src/git-repos/git-repos.service.ts     修复：createGrants 前物理清理已软撤占位行（PATCH 授权重建 500 bug）
+- server/src/git-repos/git-repos.service.spec.ts 同步：mock 加 deleteMany + 断言
+
+---------------------------------------------------------------------
+§2 类型校验与构建
+---------------------------------------------------------------------
+$ cd web && npx tsc --noEmit
+  TSC_EXIT=0   （0 错误）
+
+$ npx next build
+  ✓ Generating static pages (22/22)
+  Route (app):
+  ├ ○ /git-repos   7.24 kB   127 kB      ← 新路由成功生成
+  仅既有 warning（models/providers-tab exhaustive-deps、chat-bubble img），无新增 error
+
+$ cd server && npx tsc --noEmit
+  TSC_EXIT=0
+
+$ cd server && npx jest --runInBand src/git-repos/
+  Test Suites: 2 passed, 2 total
+  Tests:       30 passed, 30 total
+
+---------------------------------------------------------------------
+§3 部署验证
+---------------------------------------------------------------------
+$ docker-compose up -d --build web（web 端口 13001；server 13000 映射确认自 docker-compose.yml）
+  Container aiagents-compose-web  Recreated → Started
+
+$ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:13001/git-repos
+  200
+
+页面为纯客户端渲染（useAuthStore 等 client 钩子触发 BAILOUT_TO_CLIENT_SIDE_RENDERING），
+SSR HTML 只见壳；渲染内容由浏览器实测（§4）。
+
+---------------------------------------------------------------------
+§4 端到端 UI 冒烟（Playwright，127.0.0.1:13001）
+---------------------------------------------------------------------
+4.1 登录（admin/admin123）→ nav：
+    - dock 图标列与展开面板均出现「仓库管理」（⌗，位于模型管理后 / 技能与工具前）
+    - 点击 dock「仓库管理」→ 跳转 /git-repos，dock 高亮 active=true，顶栏标题「仓库管理 · git 仓库凭证与 Agent 授权」
+
+4.2 空态页：
+    - 计数徽章「0 个仓库 · 已授权 0 个 Agent」；说明「凭证加密存储 · 按活跃 Agent 过滤下发到 Worker」
+    - admin 可见「新增仓库」按钮；白卡容器 + 表头行（仓库地址/认证方式/指纹/授权 Agent/状态/操作）+ 空态文案
+    - 截图 git-repos-empty.png（look_at 复核：表头含「授权 Agent」列）
+
+4.3 新增（POST /git-repos）：
+    - 弹窗「新增仓库」：repoUrl 输入 + 认证方式下拉（SSH 私钥默认/HTTPS Token）+ SSH 私钥 textarea + 授权 Agent 多选（4 个 agent 各行：授权复选框 + 「写权限」副复选框 disabled 态）
+    - 填 git@gitee.com:xishuhq/ui-e2e-test.git + fake 私钥；勾选「测试」+ 写权限 → 保存
+    - 列表出现行：repoUrl（mono，已去 .git 后缀）、SSH 徽章、fingerprint `----****----`（脱敏）、授权 tag「测试 + write」、状态「已配置」、配置/删除按钮
+
+4.4 配置（PATCH /git-repos/:id）：
+    - 弹窗「配置仓库授权」（说明「key 留空 = 保留原凭证，仅更新 Agent 授权」）
+    - 预填校验：repoUrl/authType disabled、key 留空、a_tester 已勾选 + 写权限（grantedAgents 反填正确）
+    - 取消 a_tester 写权限 + 勾选 a_developer 写权限 → 保存
+    - 行更新：授权 tag =「测试 read」+「开发者 write」（PATCH 全量覆盖生效）
+
+4.5 删除（DELETE /git-repos/:id）：
+    - ConfirmDialog「删除仓库凭证」（描述含 repoUrl + 不可恢复警告）
+    - 确认 → 行消失、回到空态、计数归 0
+
+4.6 Cmd+K 命令面板：
+    - 入口存在：导航组「仓库管理」（⌗，模型管理与技能与工具之间）—— 初次构建缺入口，
+      根因 DEFAULT_CMDK_ITEMS 为硬编码列表，补 cmdk-panel.tsx 后重建生效
+    - 从 /projects 打开 Cmd+K → 点击「仓库管理」→ 跳转 /git-repos 成功
+
+4.7 成员只读（seed-member / Admin@123456）：
+    - 无「新增仓库」按钮；说明文案「成员只读 · 配置需管理员权限」；空态「请管理员配置 git 仓库凭证」
+    - 有仓库数据时：列表可见（repoUrl + 授权 tag「测试read」），但行内无「配置」「删除」按钮
+    - 截图 git-repos-member-readonly.png
+
+---------------------------------------------------------------------
+§5 server API 冒烟（curl + admin token，13000）
+---------------------------------------------------------------------
+POST  /api/v1/git-repos  {repoUrl, authType:ssh_key, key, grantedAgents:[a_tester read/allow, a_developer write/ask]}
+  → 201 {id:gc_..., repoUrl: 规范化去.git, authType, fingerprint:"----****----", grantedAgents:[{agentId,name,permission,effect}]}
+  HAS_KEY_FIELD = False（响应无 key/credentialRef 明文）
+
+GET   /api/v1/git-repos
+  → 含该仓库行，grantedAgents 带 name（join Agent）
+
+PATCH /api/v1/git-repos/:id  {grantedAgents:[a_tester write/ask, a_developer read/allow]}
+  → 200，授权全量覆盖（先软撤旧 + 建新）
+  二次 PATCH（全量覆盖仅 a_developer read/allow）→ 200（幂等重建）
+
+DELETE /api/v1/git-repos/:id
+  → {id, revokedAt}；GET 后该仓库消失
+
+member GET /api/v1/git-repos → 200（成员只读）
+
+---------------------------------------------------------------------
+§6 越界修复：server PATCH 授权重建 500（TODO 2 遗留缺陷）
+---------------------------------------------------------------------
+现象：PATCH /git-repos/:id 更新授权 → 500 "Unique constraint failed on uk_git_repo_grants_agent_repo"
+根因：GitRepoGrant 唯一约束 @@unique([agentId, repoUrl]) 不含 revokedAt；授权全量覆盖流程
+      「updateMany 软撤旧授权 → createGrants createMany 新授权」时，软撤行仍占唯一索引，
+      同一 agent+repo 的新行 createMany 撞约束 → 500（POST 覆盖激活历史仓库同样命中）。
+      spec 因 mock prisma 未暴露 DB 约束而未捕获。
+修复：createGrants 在 createMany 前 deleteMany 该 repoUrl 下已软撤占位行（revokedAt != null）。
+      update 授权重建与 create 覆盖激活两条路径统一受益；DELETE 软撤销语义不受影响。
+验证：server tsc 0 错误 + 30 个 spec 全绿；重建 server 后 PATCH 两次覆盖重建均 200。
+说明：此修复属同一需求（git-repo-credentials）范围，阻塞本任务 VERIFY 核心步骤
+      （PATCH 更新授权冒烟），已最小化改动并同步 spec，特此披露。
+
+---------------------------------------------------------------------
+§7 铁律复核
+---------------------------------------------------------------------
+- 无 fixed/100vh/100vw；root flex:1；token 引用 @/src/theme/tokens；页面内扩展 authType 徽章（SSH 蓝/HTTPS 紫）
+- 无明文 key 展示：输入 password/textarea 受控，回显仅 fingerprint（服务端响应亦无 key 字段）
+- 无新装 UI 库（纯内联 style + 现有 ConfirmDialog/ActionButton 范式）；未改 models 页
+- GET /agents 复用现有分页响应（{items:[{id,name,role}]}），ApiAgent 定义于 git-repos.ts（无现成 agents 类型文件）
+
+---------------------------------------------------------------------
+§8 遗留说明
+---------------------------------------------------------------------
+- 弹窗/交互在窄视口（<900px）与 NavDock P8 热区/展开面板重叠时，Playwright 需绕过遮挡层点击
+  （用 JS 触发）。这是既有 NavDock z-index(50) 高于弹窗(z-40) 的全局交互问题，非本页特有，
+  真实浏览器视口（≥1280）下无此问题；未在本次 SCOPE 内改动 NavDock。
+- 测试数据已全部清理（git_credentials 无未吊销残留，GET /git-repos 为空数组）。

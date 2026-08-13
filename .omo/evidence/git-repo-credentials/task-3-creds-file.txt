@@ -1,0 +1,38 @@
+# todo 3 验证证据：worker git-credentials 命令消费 + 幂等落盘凭证文件
+# 验证时间: 2026-08-12  验证目录: /data/git-project/aiagents/worker
+
+## 1. tsc --noEmit（worker）
+$ cd /data/git-project/aiagents/worker && npx tsc --noEmit
+TSC_EXIT=0
+（无任何类型错误输出）
+
+## 2. jest 全量（worker）
+$ npx jest --runInBand
+Test Suites: 21 passed, 21 total
+Tests:       334 passed, 334 total
+Snapshots:   0 total
+Time:        15.577 s
+
+重点关注 spec（均 PASS，含于 21 suites）：
+- src/git/git-credential-injector.spec.ts（buildGitCredsFile 排序/过滤、write 600 权限、read 不存在→null、cleanup 幂等）
+- src/index.spec.ts（:348 git-credentials 命令分支日志；:387 缺 payload 透传；:496-609 handleGitCredentials
+  幂等复用 updatedAt→mtime 不变、更新写盘、乱序输入幂等、空负载跳过）
+- src/protocol/contract.spec.ts（:210/:254 GIT_CREDENTIALS 命令 round-trip + targetWorkerIds 缺省语义）
+
+## 3. 落盘实现核验（git-credential-injector.ts）
+- GIT_CREDS_FILE = $HOME/.keta-git-creds.json（:21）
+- buildGitCredsFile：先按 repoUrl localeCompare 升序排序 → {version:1, updatedAt, credentials}；空/非法条目过滤（:57-71）
+- writeGitCredsFile：writeFileSync mode 0o600 + chmodSync 0o600 双保险（:79-88）
+- readGitCredsFile：不存在/解析失败 → null（:93-99）
+- cleanupGitCredsFile：rmSync force 幂等（:102-113）
+- index.ts handleGitCredentials（:221-246）：读现有文件 → 复用 updatedAt 重建内容 → 内容一致跳过写盘（幂等）
+  → 不一致写盘 + 日志「凭证文件已更新（N 条）」；不重启 serve（与 model-credentials 关键区别）
+- 写盘日志不含明文 key（仅 repoUrl 清单 + 条数，index.ts:120/:244）
+
+## 4. Dockerfile 确认（worker/Dockerfile）
+:21 RUN apk add --no-cache git openssh-client
+位于 :17 RUN npm i -g opencode-ai@1.18.16 之后 ✓（todo 4 前置：容器内 git/ssh 二进制）
+
+## 结论
+todo 3 完整且测试通过：幂等对比（乱序输入→稳定排序输出）、600 权限落盘、空负载跳过、
+不重启 serve、无明文 key 泄漏日志 全部满足计划契约（.omo/plans/git-repo-credentials.md todo 3）。

@@ -45,6 +45,13 @@ export interface WorkerConfig {
    * 首字超时——时限内模型无输出即 abort）；默认 120000。首字出现后无完成超时。
    */
   workerFirstTokenTimeoutMs: number;
+  /**
+   * worker 最大并发会话数（env WORKER_MAX_INSTANCES，随注册 capabilities.maxInstances
+   * 上报，server 容量调度 capacity = maxInstances - load.instances 据此分派）。
+   * 默认 5——serve 实测支持多 session 并行；长任务（模型思考/限流重试）执行中
+   * 仍可调度新消息。配置为 ≤0 等非法值兜底默认值。
+   */
+  workerMaxInstances: number;
 }
 
 /** 解析非负整数配置项；缺省/空串回落默认值，非法值抛错。 */
@@ -55,6 +62,23 @@ function parseNonNegativeInt(name: string, raw: string | undefined, fallback: nu
   const value = Number(raw);
   if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
     throw new Error(`[config] ${name} 必须是非负整数，收到: "${raw}"`);
+  }
+  return value;
+}
+
+/**
+ * 解析正整数配置项（必须 ≥ 1）；缺省/空串回落默认值。
+ * 非法值（NaN/非整数/≤0）不抛错，兜底默认值并打 warn——并发上限误配成 ≤0/NaN 会
+ * 回归单实例行为，兜底比抛错更利于运维自愈；区别于 parseNonNegativeInt 的抛错语义。
+ */
+function parsePositiveInt(name: string, raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === '') {
+    return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 1 || !Number.isInteger(value)) {
+    console.warn(`[config] ${name} 非法值 "${raw}"（须为 ≥1 的整数），回落默认 ${fallback}`);
+    return fallback;
   }
   return value;
 }
@@ -91,5 +115,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
       env.WORKER_FIRST_TOKEN_TIMEOUT_MS,
       120000,
     ),
+    workerMaxInstances: parsePositiveInt('WORKER_MAX_INSTANCES', env.WORKER_MAX_INSTANCES, 5),
   };
 }

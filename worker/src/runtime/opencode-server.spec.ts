@@ -340,6 +340,43 @@ describe('OpencodeServer', () => {
     expect(logs[logs.length - 1]).toBe('line-6');
   });
 
+  it('recentErrors：过滤模型错误关键词日志行，保留最近 limit 条（正常日志不返回）', async () => {
+    const server = newServer({ port: 4199 });
+    await server.start();
+    fakeProc.stderr.emit(
+      'data',
+      Buffer.from(
+        'message="stream error" error.error="AI_APICallError: Rate limit exceeded."\n' +
+          'message="session created"\n' +
+          'message="stream error" error.error="AI_APICallError: Free usage exceeded."\n',
+      ),
+    );
+    const errors = server.recentErrors();
+    expect(errors).toHaveLength(2);
+    expect(errors[0]).toContain('Rate limit exceeded');
+    expect(errors[1]).toContain('Free usage exceeded');
+  });
+
+  it('recentErrors：limit 截断保留最近 N 条；无错误日志返回空数组', async () => {
+    const server = newServer({ port: 4199 });
+    await server.start();
+    fakeProc.stderr.emit(
+      'data',
+      Buffer.from(
+        'message="stream error" error.error="AI_APICallError: Rate limit exceeded."\n' +
+          'message="stream error" error.error="AI_APICallError: quota exceeded"\n' +
+          'message="stream error" error.error="AI_APICallError: 429 Too Many Requests"\n',
+      ),
+    );
+    expect(server.recentErrors(2)).toHaveLength(2);
+    expect(server.recentErrors(2)[1]).toContain('429');
+    // 正常日志（无错误关键词）→ 空
+    const clean = newServer({ port: 4199 });
+    await clean.start();
+    fakeProc.stdout.emit('data', Buffer.from('opencode server ready\n'));
+    expect(clean.recentErrors()).toHaveLength(0);
+  });
+
   it('listening 端口与期望不一致时告警', async () => {
     const logger = makeLogger();
     const server = newServer({ port: 4199, logger });

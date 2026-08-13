@@ -19,6 +19,9 @@ export const WORKER_EVENT_TYPES = {
   TASK_COMPLETED: 'task.completed',
   /** T6：git 工具执行审计（17 篇 §8.2：eventType=git.op，metadata=agent/repo_url/action/结果）。 */
   GIT_OP: 'git.op',
+  /** 模型 question / 工具权限确认待用户处理：worker 轮询检测到 pending 后上送（不 abort，serve 继续等）。 */
+  SESSION_QUESTION: 'session.question',
+  SESSION_PERMISSION: 'session.permission',
 } as const;
 
 export type WorkerEventType = (typeof WORKER_EVENT_TYPES)[keyof typeof WORKER_EVENT_TYPES];
@@ -195,4 +198,46 @@ export interface WorkerEventPayload {
   type: WorkerEventType;
   payload: Record<string, unknown>;
   seq: number;
+}
+
+/** serve question 选项（GET /api/session/{id}/question data[].questions[].options）。 */
+export interface SessionQuestionOption {
+  label: string;
+  description: string;
+}
+
+/** serve question 单条（对齐 QuestionV2Info：question/header/options/multiple?/custom?）。 */
+export interface SessionQuestionInfo {
+  question: string;
+  header: string;
+  options: SessionQuestionOption[];
+  multiple?: boolean;
+  custom?: boolean;
+}
+
+/** session.question 事件负载（server AgentQuestion.content.questions 透传形状）。 */
+export interface SessionQuestionPayload {
+  /** opencode 会话 id（ses_ 前缀，server 经 instanceRef 反查平台 Session）。 */
+  sessionId: string;
+  /** serve question request id（que_ 前缀，reply 时回传）。 */
+  requestId: string;
+  taskId?: string;
+  agentId?: string;
+  questions: SessionQuestionInfo[];
+}
+
+/** session.permission 事件负载（server AgentQuestion.content.permission 透传形状）。 */
+export interface SessionPermissionPayload {
+  /** opencode 会话 id（ses_ 前缀，server 经 instanceRef 反查平台 Session）。 */
+  sessionId: string;
+  /** serve permission request id（per_ 前缀，reply 时回传）。 */
+  permissionId: string;
+  taskId?: string;
+  agentId?: string;
+  /** 权限类型（对齐 PermissionV2Request.action，如 bash/edit/webfetch）。 */
+  type: string;
+  /** 权限目标 pattern（对齐 PermissionV2Request.resources，如 /data/*）。 */
+  pattern?: string | string[];
+  /** 权限标题（对齐 Permission.title）。 */
+  title: string;
 }
