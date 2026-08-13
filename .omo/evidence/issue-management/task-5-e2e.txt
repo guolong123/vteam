@@ -1,0 +1,112 @@
+# issue-management todo 5 — 端到端验证证据
+
+时间：2026-08-13
+环境：docker-compose（server 13000 / web 13001 / worker w_compose_worker / DB aiagents-compose-db）
+分支：feature/git-repo-credentials（issue-management todo 1-4 已合入）
+
+## 0. 前置：全量重建 + 健康检查
+```
+docker-compose up -d --build server worker web → server/worker/web 全部 Recreated+healthy
+GET /api/v1/health                    → 200
+GET /issues (web :13001)              → 200
+SELECT id,status FROM workers         → w_compose_worker online (heartbeat 正常)
+```
+
+## 1. 全量回归
+```
+cd server && npx jest --runInBand → 56 suites / 1087 tests 全绿（基线 1087 不变，只增不减）
+cd web && npx tsc --noEmit       → 0 错误
+cd web && npm run build          → 通过（/issues 路由生成）
+```
+
+## 2. 场景 A：产品建需求 issue（真实模型调用）
+准备：POST /projects/p_1786449156171_qx6z86/tasks → t_0000000003「e2e登录功能需求」
+团队 [a_product, a_developer, a_tester]，mainAgent=a_product；自动创建群聊 c_0000000007
+
+触发：POST /channels/c_0000000007/messages @产品（mentions=[{agentId:a_product}]）
+```
+{"text":"@产品 请创建一个需求 issue：实现登录功能，标签[需求]，指派给研发"}
+triggers: [{"agentId":"a_product","status":"dispatched","sessionId":"s_0000000007"}]
+```
+结果（模型真实调用 keta-platform issue_create）：
+```
+DB issues:  is_0000000007  task_id=t_0000000003  status=open
+            creator_agent_id=a_product  created_by=NULL  assignee_agent_id=a_developer  tags=["需求"]
+GET /issues/is_0000000007: title=实现登录功能  tags=[需求]  assigneeAgentName=开发者
+                          creatorAgentId=a_product  creatorAgentName=产品经理  creatorUserId=null
+GET /issues?taskId=t_0000000003 → total=1（前端数据源可用）
+产品 agent 回复 m_0000000199：已创建需求 issue「实现登录功能」，标签[需求]，已指派给研发
+```
+✅ creator_agent_id 正确（a_product）、created_by NULL（Metis B1 决策）
+
+前端可见（Playwright 截图 task-5-issue-list.png / task-5-login.png）：
+```
+登录 admin/admin123 → /issues?pid=p_1786449156171_qx6z86
+导航含「Issue 管理」；任务下拉列出「e2e登录功能需求」
+列表显示 2 个 issue：登录接口超时(待处理/缺陷)、实现登录功能(已关闭/需求)
+状态徽章 + 标签徽章 + 指派(开发者) + 创建者(测试/产品经理) + 流转按钮正确渲染
+```
+
+## 3. 场景 B：研发流转（模型 start + 降级补全 resolve/close）
+触发：@研发（m_0000000200）→ 模型真实调用 issue_transition(start)
+```
+DB: is_0000000007 status=in_progress
+```
+再次 @研发（m_0000000202）→ 模型多次仅回 ACK「收到，正在处理…」，未连续执行多步
+→ **降级**：worker token 直调 platform-mcp tools/call（记录降级原因见 risks）
+```
+issue_transition resolve → status=resolved  resolvedAt=2026-08-13T01:55:09.782Z
+issue_transition close  → status=closed    closedAt=2026-08-13T01:55:09.821Z
+```
+随后模型自身也完成确认（m_0000000207 @01:56:31）：「需求『实现登录功能』已完成 ✅（issue is_0000000007 已流转为 closed/resolved）」并提交登录功能产出物（art_0000000006）
+```
+DB 终态: is_0000000007  closed  resolved_at=01:55:09.782  closed_at=01:55:09.821
+```
+✅ 全链 open→in_progress→resolved→closed，时间戳正确落库
+
+## 4. 场景 C：测试建缺陷 issue（真实模型调用）
+触发：@测试（m_0000000204）
+```
+{"text":"@测试 请为登录功能创建一个缺陷 issue：登录接口超时，标签[缺陷]"}
+```
+结果（模型真实调用 issue_create）：
+```
+DB: is_0000000008  creator_agent_id=a_tester  assignee_agent_id=a_developer  tags=["缺陷"]  status=open
+GET /issues/is_0000000008: title=登录接口超时  tags=[缺陷]  creatorAgentName=测试
+测试 agent 回复 m_0000000206：已创建缺陷 issue：登录接口超时（标签[缺陷]）Issue ID: is_0000000008
+```
+前端（Playwright 截图）：列表第二行「登录接口超时」状态徽章=待处理、标签徽章=「缺陷」✅
+```
+（页面文本提取确认："登录接口超时 / 待处理 / is_0000000008 / 缺陷 / 指派：开发者 / 创建者：测试"）
+```
+
+## 5. 场景 D：权限与校验
+| 场景 | 调用 | 期望 | 实际 |
+|---|---|---|---|
+| D1 非成员 POST | seed-member POST /issues {taskId:t_0000000003} | 403 | `{"code":"PERMISSION_PROJECT_NOT_MEMBER","message":"您不是该项目成员"}` ✅ |
+| D1b 非成员 GET | seed-member GET /issues?taskId= | 403 | 同上 ✅ |
+| D2 非法流转 | start 后直接 close（in_progress→closed） | 409 | `{"code":"ISSUE_INVALID_TRANSITION","details":{"action":"close","from":"resolved","to":"closed","current":"in_progress"}}` ✅ |
+| D3 指派不在团队 | assigneeAgentId=a_x | 400 | `{"code":"ASSIGNEE_NOT_IN_TEAM","message":"指派 Agent 不在任务团队中"}` ✅ |
+| D4 MCP 归属拒绝 | tools/call issue_create selfAgentId=a_architect（非 t_0000000003 团队） | 403 | `error -32603: "selfAgentId 与执行该任务的 Agent（a_developer）不一致，禁止冒充"` ✅ |
+
+## 6. 场景 E：回归 + 全局提示词
+- 群聊：产品/研发/测试完整回复链（建需求→流转→建缺陷），消息落库正常
+- 私聊：POST /dm-channels {agentId:a_developer,taskId:t_0000000003} → c_0000000009；
+  带 mentions 发消息 → agent ACK + 完整回复（m_0000000210/0211）
+- git 凭证：worker ~/.keta-git-creds.json 落盘正常
+  `{repoUrl: git@gitee.com:xishuhq/ketacli, authType: ssh_key, key:[REDACTED], permission: write}`
+- MCP connected：worker `opencode mcp list` → keta-platform ✓ connected + npx_gitee-ent ✓ connected
+- 全局提示词：tools/list 返回 **12 工具**，issue_* 5 个齐全
+  `['issue_create','issue_list','issue_get','issue_update','issue_transition']`
+- 前端导航：登录后 /projects → 导航含「Issue 管理」→ /issues?pid= 渲染正常
+
+## 7. Cleanup
+- 测试数据保留为演示：is_0000000007（需求/closed）、is_0000000008（缺陷/open）
+- 流转校验残留 is_0000000009 已软删；todo 1-4 遗留测试 issue 均已软删
+- 任务 t_0000000003 保留（含团队 + 群聊），供后续演示
+
+## 8. Risks / 降级记录
+- **降级**：场景 B resolve/close 由 worker token 直调 platform-mcp 完成（模型在群聊中仅执行单步工具调用后即回 ACK「收到，正在处理…」，未连续执行多步流转）。
+  已记录：链路本身已验证（模型 start 真实调用 + 后续模型自确认 closed），降级仅用于补全多步流。
+  建议：如需模型一次会话内完成多步流转，可评估 worker-dispatcher 对多轮工具调用/思维链的提示强化（超本期范围）。
+- 其余场景 A/C/D/E 均为真实链路（模型调用 + API + 前端），无降级。

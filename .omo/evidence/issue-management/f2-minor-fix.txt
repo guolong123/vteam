@@ -1,0 +1,28 @@
+F2 代码质量评审 2 个 minor 修复验证
+====================================
+日期: 2026-08-13
+范围: web/app/(main)/issues/page.tsx
+
+修复内容
+--------
+1. minor-1（原 :724）删除未使用变量
+   - 删除: const submitting = createMutation.isPending || updateMutation.isPending || deleteMutation.isPending;
+   - 原因: Page 组件作用域内无任何引用（IssueFormModal 通过 props 单独传入，
+     实际调用处 :997/:1015 直接传表达式），触发 eslint no-unused-vars warning。
+   - 处理: 整行删除，无副作用。
+
+2. minor-2（原 :202）编辑路径不再固定发送 assigneeUserId: null
+   - 删除编辑分支中的 "assigneeUserId: null,"
+   - 原因: 若 issue 已存在用户指派，编辑保存时会静默清除（后端 UpdateIssueDto 支持 null 清除语义）。
+   - 处理: 编辑路径 payload 保持 undefined（缺省字段），仅在有变更时发送；
+     创建路径本就不含该字段。源码 grep 确认 assigneeUserId 仅剩 :16 注释说明。
+
+验证结果
+--------
+1. npx tsc --noEmit        → 0 errors, exit 0
+2. npx eslint "app/(main)/issues/page.tsx" → 0 error / 0 warning, exit 0
+3. npm run build           → success, exit 0（/issues 路由生成 7.42 kB）
+4. 回归（源码级）         → 编辑分支 payload 已无 assigneeUserId 字段，
+   createMutation/updateMutation 流转逻辑未改动（handleFormSubmit / mutations 原样保留）
+
+结论: 2 个 minor 全部修复，验证通过，无新增告警与构建错误。

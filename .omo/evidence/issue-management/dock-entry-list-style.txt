@@ -1,0 +1,65 @@
+# Dock 取消 Issue 入口 + Issue 列表样式优化 — 验证记录
+
+日期：2026-08-13
+范围：nav-dock.tsx（删 1 行）+ issues/page.tsx（列表行布局）
+
+## 代码变更
+
+### 1. web/src/components/layout/nav-dock.tsx
+- 删除 NAV_ITEMS 中 `{ key: "issues", label: "Issue 管理", icon: "☰" }`（原 :37，位于 project 之后）。
+- 未改动 app-shell.tsx：KEY_TO_PATH `issues: "/issues"`（:103）、CMDK_NAV_PATH `Issue 管理`（:144）、PAGE_TITLE issues 项（:200）均保留 → Cmd+K 入口与 /issues 路由高亮/跳转不受影响。
+- 无残留引用（grep `issues` in src/components/layout 仅剩 app-shell 的上述保留项）。
+
+### 2. web/app/(main)/issues/page.tsx IssueRow 列表行布局（原 :430-518）
+- 第一行：标题 + tags 徽章 + 状态徽章 + id（原独立 tags 行 :485-491 移入第一行标题之后、状态徽章之前；容器已带 flexWrap: wrap 保证窄屏换行）。
+- 第二行（新增）：描述渲染，仅在有值时显示：
+  ```jsx
+  {issue.description && (
+    <div data-testid="issue-description" style={{ fontSize: fontSize.md, color: neutral[600], whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+      {issue.description}
+    </div>
+  )}
+  ```
+- 第三行：元信息行（task/assignee/creator/时间）保持不变。
+- 主列 gap 保持 space.sm。
+
+## 构建验证
+
+- `cd web && npx tsc --noEmit` → 0 错误，退出码 0。
+- `cd web && npm run build` → 通过，`/issues` 路由生成（7.46 kB）。
+
+## 部署
+
+- `docker-compose up -d --build web` → 成功，web 容器启动。
+
+## 浏览器验证（Playwright，admin/admin123，http://localhost:13001）
+
+### 1. Dock 无「Issue 管理」
+- /projects 页 dock 图标列（rail-icons）与展开面板（rail-panel 导航组）均无 ☰ issue 项；图标顺序：项目/Agent 管理/Worker 节点/模型管理/仓库管理/技能与工具/消息中心/用户管理/角色权限。
+
+### 2. 项目卡片「Issue 管理」按钮仍可用
+- 点击项目卡片「Issue 管理」→ 跳转 `/issues?pid=p_1786519175898_sfowkg` 成功。
+
+### 3. /issues 列表新样式
+- 选择任务「ketacli测试」后新建 issue（标题「实现登录功能」、描述「实现用户登录与鉴权，支持记住我」、标签「需求,优化」）。
+- 列表 DOM 结构确认（IssueRow 渲染顺序）：
+  1. 第一行容器：`实现登录功能` [issue-title] → tags 徽章组 [issue-tags]（`需求`、`优化`）→ 状态徽章 `待处理` [issue-status-badge] → id `is_0000000013`
+  2. 第二行：`实现用户登录与鉴权，支持记住我` [issue-description]（新渲染）
+  3. 第三行：`▤ ketacli测试 · 指派：— · 创建者：admin · 2026-08-13 10:59`
+- 描述在第二行、tags 与标题同一行，符合预期。
+
+### 4. Cmd+K 入口
+- 打开命令面板 → 导航组仍有「Issue 管理」（图标 ☰）→ 点击跳转 `/issues?pid=...` 成功（KEY_TO_PATH 保留生效）。
+
+### 5. 回归
+- 编辑：修改标题为「实现登录功能（含鉴权）」→ 保存成功，tags 徽章与描述保留。
+- 流转：点击「开始处理」→ 状态徽章变「进行中」。
+- 删除：删除弹窗 → 确认删除 → 列表回到「暂无 Issue」（软删，不影响任务）。
+- /board：项目卡片「进入项目」→ `/board?pid=...` 正常，产出物按钮在。
+- /artifacts：board 页「产出物」→ `/artifacts?pid=...` 正常。
+
+## 测试数据清理
+- 验证用 issue（is_0000000013，ketacli测试任务）已软删，无残留数据。
+
+## 结论
+PASS — 两个调整均实现并验证通过。SCOPE 外文件未改动。

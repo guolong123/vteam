@@ -1,0 +1,85 @@
+=====================================================================
+task-1-migrate.txt — Issue 数据模型 + Prisma 迁移 验证证据
+执行时间: 2026-08-13 08:54:05 CST
+执行人: Sisyphus-Junior（autonomous）
+=====================================================================
+
+【1】schema.prisma 变更
+---------------------------------------------------------------------
+新增 model Issue（Issue 域段，位于 ArtifactVersion 之后）：
+  字段: id/taskId/title/description/status(默认 open)/tags(Json 数组)/
+        assigneeAgentId/assigneeUserId/createdBy(可空 FK→User)/
+        creatorAgentId(FK→Agent)/deletedAt/resolvedAt/closedAt/createdAt/updatedAt
+  关系: task(Task)/assigneeAgent(IssueAssigneeAgent)/assigneeUser(IssueAssigneeUser)/
+        creatorAgent(IssueCreatorAgent)/creatorUser(IssueCreatorUser)
+  索引: @@index([taskId, status] idx_issues_task_status) + @@index([assigneeAgentId] idx_issues_assignee_agent)
+反向关系: Task.issues / Agent.assignedIssues+createdIssues / User.assignedIssues+createdIssues
+  (Metis B1: createdBy 可空 + creatorAgentId——用户创建填 createdBy，Agent MCP 创建填 creatorAgentId)
+
+【2】迁移文件
+---------------------------------------------------------------------
+  路径: server/prisma/migrations/20260813085208_issue_management/migration.sql
+  生成方式: npx prisma migrate diff --from-migrations --to-schema-datamodel --script
+           (备选路径：agent 非交互环境无法 migrate dev，用 diff+deploy)
+  应用方式: docker exec -i aiagents-compose-db mysql -uroot -paiagents-root aiagents < migration.sql
+           + 插入 _prisma_migrations 记录（checksum=sha256(migration.sql)，算法已对既有迁移比对验证）
+  同步: aiagents-mysql(localhost:3307 dev 库) 亦应用保持一致
+
+【3】npx prisma validate
+---------------------------------------------------------------------
+
+Environment variables loaded from .env
+Prisma schema loaded from prisma/schema.prisma
+The schema at prisma/schema.prisma is valid 🚀
+
+【4】npx tsc --noEmit
+---------------------------------------------------------------------
+TSC_EXIT=0（0=0 错误）
+
+【5】prisma client issue delegate
+---------------------------------------------------------------------
+  issue delegate 匹配数: 1
+
+【6】DB 实测 — aiagents-compose-db
+---------------------------------------------------------------------
+--- SHOW COLUMNS FROM issues（期望 15 列）---
+Field	Type	Null	Key	Default	Extra
+id	varchar(191)	NO	PRI	NULL	
+task_id	varchar(191)	NO	MUL	NULL	
+title	varchar(191)	NO		NULL	
+description	varchar(191)	YES		NULL	
+status	varchar(191)	NO		open	
+tags	json	YES		NULL	
+assignee_agent_id	varchar(191)	YES	MUL	NULL	
+assignee_user_id	varchar(191)	YES	MUL	NULL	
+created_by	varchar(191)	YES	MUL	NULL	
+creator_agent_id	varchar(191)	YES	MUL	NULL	
+deleted_at	datetime(3)	YES		NULL	
+resolved_at	datetime(3)	YES		NULL	
+closed_at	datetime(3)	YES		NULL	
+created_at	datetime(3)	NO		CURRENT_TIMESTAMP(3)	DEFAULT_GENERATED
+updated_at	datetime(3)	NO		NULL	
+
+--- SHOW INDEX FROM issues（期望 idx_issues_task_status + idx_issues_assignee_agent）---
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+issues	0	PRIMARY	1	id	A	0	NULL	NULL		BTREE			YES	NULL
+issues	1	idx_issues_task_status	1	task_id	A	0	NULL	NULL		BTREE			YES	NULL
+issues	1	idx_issues_task_status	2	status	A	0	NULL	NULL		BTREE			YES	NULL
+issues	1	idx_issues_assignee_agent	1	assignee_agent_id	A	0	NULL	NULL	YES	BTREE			YES	NULL
+issues	1	issues_assignee_user_id_fkey	1	assignee_user_id	A	0	NULL	NULL	YES	BTREE			YES	NULL
+issues	1	issues_creator_agent_id_fkey	1	creator_agent_id	A	0	NULL	NULL	YES	BTREE			YES	NULL
+issues	1	issues_created_by_fkey	1	created_by	A	0	NULL	NULL	YES	BTREE			YES	NULL
+
+--- _prisma_migrations 记录 ---
+migration_name	checksum	applied_steps_count	finished_at
+20260813085208_issue_management	94679d1ee5e39c950113f1b6a55f2c4c12320acf4689bdbd4795cb7da2cc3bfd	1	2026-08-13 00:52:24.089
+
+【7】幂等性（迁移目录 ↔ schema 空 diff）
+---------------------------------------------------------------------
+-- This is an empty migration.
+
+  → 空迁移（无 pending、无 drift），重复应用幂等
+
+=====================================================================
+结论：全部验证项通过 ✔
+=====================================================================

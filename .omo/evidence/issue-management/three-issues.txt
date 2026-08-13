@@ -1,0 +1,72 @@
+================================================================================
+三个 issue 需求验证证据（选择任务默认全部 / 聊天页待办 Issue 区 / 操作按钮一行）
+日期：2026-08-13
+工作区：/data/git-project/aiagents
+================================================================================
+
+## 改动文件
+- server/src/issues/dto/query-issues.dto.ts   —— taskId 改可选 + 新增 projectId
+- server/src/issues/issues.constants.ts        —— 新增 ISSUE_FILTER_REQUIRED / PROJECT_NOT_FOUND 错误码
+- server/src/issues/issues.service.ts          —— findAll 二选一过滤 + assertProjectMember
+- server/src/issues/issues.controller.spec.ts  —— QueryIssuesDto 校验用例更新
+- server/src/issues/issues.service.spec.ts     —— findAll projectId 4 个新用例
+- web/app/(main)/issues/page.tsx               —— 默认全部任务(projectId 查询) + 操作列横排 + 空态/表头动态
+- web/app/(main)/tasks/[id]/page.tsx           —— TaskPanel 待办 Issue 区（查询/排序/渲染）
+（web/src/components/tasks/issue-status-actions.tsx 内部已是 flex row + wrap，无需改动）
+
+## 1. 静态验证
+- server:  npx tsc --noEmit              → 0 错误
+- server:  npx jest --runInBand src/issues/ → 2 suites / 57 tests 全绿（含 projectId 4 新用例）
+- web:     npx tsc --noEmit              → 0 错误
+- web:     npm run build                 → 通过
+- lsp_diagnostics：3 个改动文件均无诊断
+
+## 2. 部署
+docker-compose up -d --build server web  → aiagents-compose-server/web healthy
+
+## 3. API 级验证（需求1 后端）
+- GET /issues（无 taskId/projectId）        → 400 ISSUE_FILTER_REQUIRED
+- GET /issues?projectId=p_nonexist          → 404 PROJECT_NOT_FOUND
+- GET /issues?projectId=<c测试项目>          → 200，total=10（跨 2 个任务全部 issue，
+  taskTitle 正确显示所属任务："测试任务" 6 条 + "e2e登录功能需求" 4 条）
+- GET /issues?taskId=t_0000000001           → 200，仅该任务 6 条（回归）
+
+## 4. 浏览器手动 QA（Playwright，admin/admin123，:13001）
+### 需求1：/issues?pid=p_1786449156171_qx6z86
+- 任务下拉默认选中「全部任务」；表头「项目 Issue」+「10 个 issue」
+- 列表展示跨 2 个任务的全部 10 条 issue，每行第二行元信息显示所属任务标题
+  （▤测试任务 / ▤e2e登录功能需求）
+- 选中具体任务「测试任务」→ 表头变「任务 Issue」、仅 6 条该任务 issue、出现「新建 Issue」按钮
+
+### 需求2：/tasks/t_0000000001（任务「测试任务」，6 个 issue：3 open + 1 in_progress + 1 resolved + 1 closed）
+- 右侧操作栏出现「待办 Issue」区
+- 展示 5 条（前 5），排序正确：待处理×3 → 进行中×1 → 已解决×1（closed 被排后未展示）
+- 显示「☰ 更多 1 个 →」按钮（6-5=1）
+- 点击「更多 1 个 →」→ 跳转 /issues?pid=p_1786449156171_qx6z86 ✓
+
+### 需求3：issue 列表操作按钮
+- 操作列 flexDirection: row；「✎ 编辑」「✕ 删除」「重新打开」三按钮同一行
+  （DOM 测量：y 坐标均 212，操作列高 30px 单行）
+
+### 需求2补充（空态 / 边界）
+- /tasks/t_0000000002（无 issue 任务）→ 「待办 Issue」区显示占位「暂无待办 issue」，0 条、无「更多」按钮
+- /tasks/t_0000000003（2 条：open + closed）→ 展示 2 条，open「待处理」在前、closed「已关闭」在后，≤5 无「更多」按钮
+
+### 回归
+- 状态筛选「待处理」→ 3 条（全部 open）；切回「全部状态」恢复
+- 流转：e2e-任务1-开放A 点「开始处理」→ 状态变 in_progress、徽章「进行中」、
+  按钮组更新为「标记解决/退回」✓
+- 编辑：e2e-任务1-开放B 点「编辑」改标题 → 列表标题即时更新 ✓
+- 删除：e2e-任务1-开放C 删除 → ConfirmDialog 确认后从列表消失、计数 6→5 ✓
+- 浏览器 console 0 errors / 0 warnings
+
+## 5. 截图
+- .omo/evidence/issue-management/three-issues-req1-alltasks.png  —— 需求1+3：项目全部任务列表 + 操作按钮一行
+- .omo/evidence/issue-management/three-issues-req2-todo.png      —— 需求2：聊天页右侧「待办 Issue」区
+
+## 6. 数据清理
+e2e 测试创建的 8 个 issue（is_0000000014~0021）已全部软删清理（1 个经 UI 删除 + 7 个经 API 删除）。
+
+## 风险
+- 无。新增 projectId 过滤是向后兼容增强（taskId 路径行为不变）；
+  校验按项目成员（project_members），与任务路径校验语义一致。

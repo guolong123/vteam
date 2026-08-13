@@ -1,0 +1,48 @@
+# Project Card「Issue 管理」入口 — 验证证据
+
+## 需求
+项目列表页的项目卡片上增加「Issue 管理」入口链接（nav 有 ☰ 入口但项目卡片没有直达链接）。
+
+## 改动（web/app/(main)/projects/page.tsx）
+1. `ProjectCard` props 增加 `onIssues?: () => void`（仿 onArtifacts，JSDoc 标注 stopPropagation 防卡片主跳转）
+2. 次级入口区（产出物按钮旁，L231-256）新增「Issue 管理」按钮：
+   - data-testid="project-issues-entry"
+   - onClick: `e.stopPropagation(); onIssues?.();`
+   - 样式与产出物按钮一致（padding xs/sm+2、radius.pill、border neutral[200]、bg #FFFFFF、color neutral[600]、fontSize xs、fontWeight 500）
+   - 图标 ☰
+3. 使用处（L732 附近）加 `onIssues={() => router.push(`/issues?pid=${p.id}`)}`
+
+## 验证结果
+
+### 1. TypeScript
+```
+cd web && npx tsc --noEmit → 0 错误
+```
+
+### 2. Build
+```
+npm run build → 通过
+Route /projects 5.59 kB | /issues 7.42 kB（均正常生成）
+```
+
+### 3. 部署 + 浏览器验证（:13001，admin/admin123）
+`docker-compose up -d --build web` → aiagents-compose-web Started (healthy)
+
+| 检查项 | 结果 | 证据 |
+|---|---|---|
+| 项目卡片出现「Issue 管理」按钮（产出物旁） | ✅ PASS | snapshot 两卡片均有「产出物 / Issue 管理 / 进入项目」三按钮 |
+| 点击 → 跳转 /issues?pid=<项目 id> | ✅ PASS | 点击 project-issues-entry → `http://localhost:13001/issues?pid=p_1786519175898_sfowkg` |
+| Issues 页面加载（任务下拉+状态过滤） | ✅ PASS | 任务下拉含「ketacli测试」选项，状态下拉含 4 状态 |
+| stopPropagation 生效（不触发 /board） | ✅ PASS | 跳转 URL 为 /issues 而非 /board |
+| 回归：产出物入口 | ✅ PASS | project-artifacts-entry → `/artifacts?pid=p_1786519175898_sfowkg` |
+| 回归：进入项目按钮 | ✅ PASS | project-enter-button → `/board?pid=p_1786519175898_sfowkg` |
+
+注：browse 的 @ref 坐标点击曾误触卡片主跳转（按钮较小、坐标偏差），改用精确 CSS selector（data-testid）点击后全部通过 —— 说明按钮行为正确，非代码问题。
+
+### 截图
+- project-issue-entry-projects.png（项目列表页，含「Issue 管理」按钮）
+- project-issue-entry-annotated.png（标注快照）
+- project-issue-entry-issues-page.png（跳转后的 Issues 页面）
+
+## 结论
+DONE — 功能验证全部通过，回归无影响。SCOPE 限定 projects/page.tsx。

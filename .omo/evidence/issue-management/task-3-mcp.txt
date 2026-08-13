@@ -1,0 +1,86 @@
+# Task 3 Evidence — 内置 issue MCP 工具（todo 3）
+
+日期：2026-08-13
+
+## VERIFY 1：tsc --noEmit
+```
+$ npx tsc --noEmit
+TSC_EXIT=0
+```
+✅ 0 错误
+
+## VERIFY 2：定向 jest（platform-mcp + issues）
+```
+$ npx jest --runInBand src/platform-mcp/ src/issues/
+Test Suites: 4 passed, 4 total
+Tests:       126 passed, 126 total
+```
+✅ 全绿（含新增 issue 工具用例：platform-mcp.service.spec.ts 6 个、issues.service.spec.ts 14 个）
+
+## VERIFY 3：全量回归
+```
+$ npx jest --runInBand
+Test Suites: 56 passed, 56 total
+Tests:       1087 passed, 1087 total
+```
+✅ 基线 1066 + 新增 21 = 1087，只增不减
+
+## VERIFY 4：GLOBAL_SYSTEM_INSTRUCTIONS 断言
+```
+$ grep -c "issue_create" src/chat/worker-dispatcher.ts
+1
+$ grep -c "issue_list\|issue_get\|issue_update\|issue_transition" src/chat/worker-dispatcher.ts
+1
+```
+✅ worker-dispatcher.spec.ts 断言 `execArgs.system` 含 `issue_create`（全量回归已含）
+
+## VERIFY 5：部署 + 端到端预演
+
+```
+$ docker compose up -d --build server   # init 迁移 Exited(成功) → server healthy
+$ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:13000/api/v1/health
+200
+```
+
+### 5a. worker 容器 opencode mcp list
+```
+$ docker exec -w /data/keta-worker aiagents-compose-worker opencode mcp list
+●  ✓ keta-platform connected   http://server:3000/api/v1/platform-mcp
+●  ✓ npx_gitee-ent connected
+```
+✅ keta-platform connected（opencode.json mcp 节已注入，headers 含 x-worker-id/x-worker-token）
+
+### 5b. tools/list 含 5 个 issue 工具
+```
+total tools: 12
+issue tools present: ['issue_create', 'issue_list', 'issue_get', 'issue_update', 'issue_transition']
+issue_create schema: {"type":"object","properties":{taskId,selfAgentId,title,description,tags(array),assigneeAgentId},"required":["taskId","selfAgentId","title"]}
+```
+
+### 5c. 实测 issue_create（tools/call，x-worker-id=w_compose_worker + worker token + selfAgentId=a_architect）
+```
+→ {"id":"is_0000000005","taskId":"t_0000000001","title":"MCP 实测 issue","status":"open",
+   "tags":["需求","MCP"],"assigneeAgentId":"a_tester","creatorAgentId":"a_architect","creatorUserId":null}
+```
+DB 落库（mysql issues 表）：
+```
+id=t_is_0000000005  status=open  assignee_agent_id=a_tester  creator_agent_id=a_architect  created_by=NULL  deleted_at=NULL
+```
+✅ creator_agent_id=agentId，created_by=NULL（Metis B1）
+
+### 5d. issue_list / issue_get / issue_update / issue_transition 端到端
+- issue_list(status=open) → 数组含 is_0000000005
+- issue_get(is_0000000005) → 详情 DTO
+- issue_update(title="MCP 实测 issue（已更新）") → 生效
+- issue_transition(start) → status=in_progress
+
+### 5e. 错误路径（防冒充 403）
+```
+issue_create(taskId=t_0000000002, selfAgentId=a_tester) →
+  error: "selfAgentId 与执行该任务的 Agent（a_developer）不一致，禁止冒充"
+```
+✅ 三参数归属校验拦截
+
+## Cleanup
+- 测试 issue is_0000000005 已软删（deleted_at 置位，与 remove 语义一致）
+

@@ -9,7 +9,7 @@
  *
  * 铁律（T15）：浮层 position: absolute 相对宿主容器（宿主需 position: relative）。
  */
-import { useState, type CSSProperties, type ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
@@ -34,7 +34,6 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   { key: "project", label: "项目", icon: "▤" },
-  { key: "issues", label: "Issue 管理", icon: "☰" },
   { key: "agents", label: "Agent 管理", icon: "◉" },
   { key: "workers", label: "Worker 节点", icon: "⚙" },
   { key: "models", label: "模型管理", icon: "◇" },
@@ -77,11 +76,11 @@ const dockCss = navAnimStyle + `
   width: ${RAIL_W}px;
   display: flex;
   align-items: stretch;
-  /* 触边安全网：不超高宿主 100% 减上下安全边距，胶囊圆角永不被容器裁剪 */
+  /* 触边安全网：不超高宿主 100% 减上下安全边距，小圆角长方形永不被容器裁剪 */
   max-height: calc(100% - ${space.xxl}px);
   /* 收起态内容高度基线（7 图标 ≈360px），min() 保证小视口不超 max-height（CSS2.1 §10.7 冲突时 max 失效） */
   min-height: min(360px, calc(100% - 32px));
-  border-radius: ${radius.pill}px;
+  border-radius: ${radius.lg}px;
   background: rgba(255,255,255,.72);
   border: 1px solid rgba(15,23,42,.08);
   backdrop-filter: blur(14px) saturate(1.4);
@@ -91,8 +90,7 @@ const dockCss = navAnimStyle + `
   overflow: hidden;
   transition: width .28s cubic-bezier(.22,1,.36,1), min-height .28s cubic-bezier(.22,1,.36,1), box-shadow .28s ease;
 }
-.navdock-dock:hover,
-.navdock-dock.navdock-expanded {
+.navdock-dock:hover {
   width: ${RAIL_OPEN_W}px;
   /* 展开态 440，小视口自动取 calc(100% - 32px)，min-height 永不超 max-height 封顶 */
   min-height: min(440px, calc(100% - 32px));
@@ -153,8 +151,7 @@ const dockCss = navAnimStyle + `
   transition: width .28s cubic-bezier(.22,1,.36,1), opacity .18s ease .06s;
   border-left: 1px solid rgba(15,23,42,.06);
 }
-.navdock-dock:hover .navdock-panel,
-.navdock-dock.navdock-expanded .navdock-panel {
+.navdock-dock:hover .navdock-panel {
   width: ${PANEL_W}px;
   opacity: 1;
 }
@@ -199,26 +196,6 @@ const dockCss = navAnimStyle + `
   flex-direction: column;
   gap: ${space.xs + 2}px;
 }
-/* P8：收起态持续命中热区——dock 收起仅 56px（x∈[12,68]），nav-item 命中点 x≈150 在 dock 外，
-   纯 :hover 需鼠标先落在 dock 上才展开（几何死锁）。此热区为 dock 兄弟元素，绝对定位覆盖
-   x∈[68,260] 与 dock 同高：hover 触发展开（navdock-expanded），dock 展开后经
-   .navdock-dock:hover ~ .navdock-hitzone 置 pointer-events:none，让位 panel 内 nav-item 可点。 */
-.navdock-hitzone {
-  position: absolute;
-  left: ${RAIL_W + 12}px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: ${PANEL_W}px;
-  /* 与 dock 收起态同高约束（nav-item 中心 y 始终落于热区内） */
-  max-height: calc(100% - ${space.xxl}px);
-  min-height: min(360px, calc(100% - 32px));
-  background: transparent;
-  z-index: 50;
-  pointer-events: auto;
-}
-.navdock-dock:hover ~ .navdock-hitzone {
-  pointer-events: none;
-}
 `;
 
 export function NavDock({
@@ -231,15 +208,14 @@ export function NavDock({
   className,
 }: NavDockProps) {
   const navItems = items ?? NAV_ITEMS;
-  // P8：热区 hover 触发展开（dock 自身 :hover 保底：鼠标移入展开态 dock 后热区 mouseleave
-  // 仅移除 expanded 类，dock:hover 命中 → 展开态保持，nav-item 可点）
-  const [expanded, setExpanded] = useState(false);
+  // 展开态完全由 CSS :hover 驱动（.navdock-dock:hover）：鼠标移入 dock 胶囊本体（56px）即展开，
+  // 移出 dock（含展开后的 panel）即收起。无热区，从内容区移向 dock 途中不触发展开。
   return (
     <>
       <style>{dockCss}</style>
       <div
         data-testid="rail-bar"
-        className={`navdock-dock${expanded ? " navdock-expanded" : ""}${className ? ` ${className}` : ""}`}
+        className={`navdock-dock${className ? ` ${className}` : ""}`}
         style={style}
       >
         {/* 收起态：图标列（hover 高亮 + Activity Bar 指示条） */}
@@ -306,15 +282,6 @@ export function NavDock({
           </div>
         </div>
       </div>
-
-      {/* P8：收起态持续命中热区（dock 兄弟，覆盖 x∈[68,260]，hover 展开；展开后 CSS 置
-          pointer-events:none，鼠标穿透命中 panel 内 nav-item） */}
-      <div
-        data-testid="navdock-hitzone"
-        className="navdock-hitzone"
-        onMouseEnter={() => setExpanded(true)}
-        onMouseLeave={() => setExpanded(false)}
-      />
     </>
   );
 }

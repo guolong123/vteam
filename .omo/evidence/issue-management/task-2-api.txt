@@ -1,0 +1,41 @@
+# issue-management todo 2 — server issues 模块验证证据
+
+时间：2026-08-13
+模块：server/src/issues/（CRUD + 状态流转 + 任务成员权限）
+环境：docker-compose（server 13000，DB aiagents-compose-db）
+
+## 1. TypeScript 编译
+`cd server && npx tsc --noEmit` → 0 错误（EXIT=0）
+
+## 2. 新增单测
+`npx jest --runInBand src/issues/` → 2 suites / 39 tests 全绿
+- issues.service.spec.ts：create（任务不存在 404 / 归档 409 / 非成员 403 / 指派不在团队 400 / tags+createdBy 落库）
+  createByAgent（agent 团队校验 / creatorAgentId+createdBy null）；findAll 过滤分页；findOne 404+软删不可见；
+  update（编辑 / assignee 重新校验 400 / null 清除）；transition 全迁移 + 时间戳 + 非法 409 + 幂等；remove 软删
+- issues.controller.spec.ts：6 端点路由转发（req.user.id）；DTO 校验（action 非法 400 / tags 非数组 400 / taskId 必填）；
+  守卫断言：类级无 AdminGuard / 无 ProjectMembershipGuard（Metis M2）
+
+## 3. 全量回归
+`npx jest --runInBand` → 56 suites / 1066 tests 全绿（基线 1027 + 新增 39，只增不减）
+
+## 4. 手动 API 冒烟（curl + admin/admin123 token）
+POST /api/v1/issues {taskId:t_0000000001,title:"测试 issue",tags:["需求"],assigneeAgentId:a_developer}
+  → 201 is_0000000001：status=open, creatorUserId=u_admin, assigneeAgentName=开发者, taskTitle=测试任务
+GET /api/v1/issues?taskId=t_0000000001 → total=1 含该 issue + taskTitle
+transition 全链：
+  start  → in_progress (resolvedAt=null)
+  resolve → resolved (resolvedAt=2026-08-13T01:10:13.520Z)
+  close  → closed (closedAt=2026-08-13T01:10:13.595Z)
+  reopen → open (resolvedAt=null, closedAt=null)
+  reject（in_progress→open，resolvedAt 清）复测通过
+非法流转：in_progress 直接 close → 409 {"code":"ISSUE_INVALID_TRANSITION","details":{"action":"close","from":"resolved","to":"closed","current":"in_progress"}}
+action=bogus → 400 "action must be one of the following values: start, resolve, close, reopen, reject"
+指派不在团队 assigneeAgentId=a_x → 400 {"code":"ASSIGNEE_NOT_IN_TEAM"}
+任务不存在 taskId=t_nonexist → 404 {"code":"ISSUE_TASK_NOT_FOUND"}
+归档任务（临时置 archived 后测）→ 409 {"code":"ISSUE_TASK_ARCHIVED"}（测完恢复 pending）
+非任务成员 seed-member → 403 {"code":"PERMISSION_PROJECT_NOT_MEMBER"}
+PATCH {title:"测试 issue(已编辑)",tags:["需求","缺陷"],assigneeAgentId:null} → 生效（清指派）
+DELETE → {"id":"is_0000000001","deleted":true}；软删后 GET 详情 404；列表 total=0；DB deleted_at 非空（soft_deleted=1）
+
+## 5. DB 终态
+issues 表 4 条测试行全部软删（无未删残留）；tasks 状态已恢复

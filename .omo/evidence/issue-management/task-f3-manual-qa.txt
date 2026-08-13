@@ -1,0 +1,52 @@
+# F3 Real Manual QA — issue-management 真实浏览器 UI 走查
+
+- 日期：2026-08-13
+- 执行方式：Playwright MCP 无头浏览器（真实登录 + 点击流转 + 截图）
+- 环境：web http://127.0.0.1:13001（aiagents-compose-web，docker） / server http://127.0.0.1:13000/api/v1
+- 测试账号：admin/admin123（平台管理员）、seed-member/Admin@123456（member，未加入项目）
+- 任务：t_0000000003「e2e登录功能需求」（项目 p_1786449156171_qx6z86「c测试项目」）
+- 前提：issues 表在 F3 前被重置（0 条），已用 API 重建演示数据：
+  - is_0000000010「e2e登录功能需求」tags=[需求] assignee=a_developer → 流转至 closed
+  - is_0000000011「e2e登录缺陷」tags=[缺陷] assignee=a_tester → open
+  - 与库中原有 is_0000000007（需求/closed）、is_0000000008（缺陷/open）共同构成 4 条列表
+
+## 结果汇总
+
+| # | 步骤 | 结果 | 证据 |
+|---|------|------|------|
+| 1 | 登录 admin → 左侧 nav 出现「Issue 管理」☰ | ✅ PASS | f3-01-nav-issue.png |
+| 2 | 直接访问 /issues（无 pid）→ 自动跳 /projects | ✅ PASS | 实测 URL 重定向至 /projects |
+| 3 | /issues?pid=<项目id>：任务下拉 t_0000000003 + issue 列表（状态/标签徽章/指派/创建者/流转按钮） | ✅ PASS | f3-03-issue-list.png |
+| 4 | 新建 issue（title+tags=需求+指派开发者）→ 列表出现，open 徽章 | ✅ PASS | f3-04-create-ok.png（is_0000000012） |
+| 5 | 流转 start→in_progress→resolve→resolved→close→closed→reopen→open（按钮随状态变化） | ✅ PASS | f3-05-flow-back-open.png（is_0000000012 全链路） |
+| 6 | 编辑 title/tags → 生效 | ✅ PASS | f3-06-edit-ok.png（标题改 + tags=需求,优化） |
+| 7 | 删除 → ConfirmDialog（alertdialog）→ 确认 → 列表消失（软删，详情 404） | ✅ PASS | f3-07-delete-confirm.png / f3-08-deleted.png |
+| 8 | seed-member 只读：非项目成员访问 issue 页 → API 403（后端兜底），任务下拉为空，无任何操作按钮 | ✅ PASS | f3-09-member-readonly.png |
+| 9 | Cmd+K 搜索「Issue 管理」→ 有入口可跳转 | ✅ PASS（修复后） | f3-10-cmdk-fixed.png；初次 FAIL→修复见下 |
+| 10 | 回归 /models /agents /skills 导航正常 | ✅ PASS | 实测 3 路由均 200 无重定向 |
+
+## 发现的 UI 缺陷（1 项，已修复）
+
+### cmd-panel.tsx DEFAULT_CMDK_ITEMS 缺「Issue 管理」导航项（Minor，已修复）
+- 现象：Cmd+K 命令面板的「导航」组没有「Issue 管理」入口，搜索 "Issue" →「无匹配命令」。
+  而左侧 Dock（nav-dock NAV_ITEMS）有该入口，`CMDK_NAV_PATH`（app-shell.tsx:142）也含 `"Issue 管理": "/issues"`。
+  根因：`web/src/components/layout/cmdk-panel.tsx` 第 44-57 行 `DEFAULT_CMDK_ITEMS` 数组遗漏该导航项，
+  命令面板的「导航」组直接由该数组渲染（app-shell cmdkItems 过滤只做权限过滤，不补缺失项）。
+- 影响：命令面板与 Dock 导航不一致；用户无法通过 Cmd+K 搜索跳转 Issue 管理（需经项目内进入）。
+  不影响 issue CRUD 主流程，故定级 Minor。
+- 修复：在 DEFAULT_CMDK_ITEMS「导航」组首项「切换项目」后插入 `{ group: "导航", label: "Issue 管理", icon: "☰" }`。
+- 验证：
+  - `web/npx tsc --noEmit` → 0 错误
+  - 重新构建 docker 镜像 `aiagents-web` + `docker compose up -d web` → web 200
+  - 真实浏览器重测：Cmd+K 面板显示「Issue 管理」，搜索 "Issue" → MATCH，点击可跳转（无 pid 时按步骤2 重定向 /projects，行为正确）
+- 说明：playwright e2e 全部失败系环境问题（playwright.config.ts baseURL 为 localhost:3001，本地无 3001 dev server；web 实际跑 docker 13001），与本次改动无关。
+
+## 清理
+- F3 临时创建的 issue：is_0000000010、is_0000000011 已 API 软删（deletedAt 落库）。
+- F3 走查创建的 is_0000000012（新建→全流转→编辑→删除）已在步骤 7 中软删。
+- 恢复后 t_0000000003 列表 = 原始演示数据：is_0000000007（实现登录功能/closed）+ is_0000000008（登录接口超时/open）。
+- 截图已归档至 .omo/evidence/issue-management/f3-*.png；临时 md 快照已清理。
+
+## 结论
+F3 真实 UI 走查 **10/10 PASS**（含 1 项 Minor 缺陷已修复验证）。issue-management 功能真实浏览器全流程
+（导航→列表→创建→流转→编辑→删除→权限→Cmd+K→回归）可用，无 Block/Major 缺陷。
