@@ -20,6 +20,8 @@ import { McpServersModule } from './mcp-servers/mcp-servers.module';
 import { ModelsModule } from './models/models.module';
 import { GitReposModule } from './git-repos/git-repos.module';
 import { PlatformMcpModule } from './platform-mcp/platform-mcp.module';
+import { QuestionsModule } from './questions/questions.module';
+import { IssuesModule } from './issues/issues.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
@@ -55,6 +57,8 @@ import { PrismaModule } from './prisma/prisma.module';
     ModelsModule,
     GitReposModule,
     PlatformMcpModule,
+    QuestionsModule,
+    IssuesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
