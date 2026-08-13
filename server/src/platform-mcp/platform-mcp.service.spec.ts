@@ -822,8 +822,8 @@ describe('PlatformMcpService', () => {
       id: 'm_0000000200',
       channelId,
       senderType: SENDER_TYPE.agent,
-      senderId: 'a_tester',
-      senderInstanceId: 'ta_tester',
+      senderId: 'a_sender',
+      senderInstanceId: 'ta_sender',
       content: { text: '@测试 请查看这个文件', parts: [] },
       mentions: [
         {
@@ -840,19 +840,30 @@ describe('PlatformMcpService', () => {
       createdAt: new Date('2026-08-07T00:00:00Z'),
     };
 
-    /** 目标实例行 mock：ta_tester → a_tester/别名 测试（消息 sender + mentions 归属依据）。 */
-    const mockTargetInstance = () => {
-      prisma.taskAgent.findFirst.mockResolvedValue({
-        agentId: 'a_tester',
-        alias: null,
-        agent: { id: 'a_tester', name: '测试' },
+    /**
+     * taskAgent.findFirst 分流：目标实例 ta_tester → a_tester/别名 测试（@ 目标、mentions
+     * 归属依据）；发送者实例 ta_sender → a_sender（senderId/senderInstanceId 落库归属依据）。
+     */
+    const mockTaskAgentRows = () => {
+      prisma.taskAgent.findFirst.mockImplementation((args: { where: { id?: string } }) => {
+        if (args.where.id === 'ta_sender') {
+          return Promise.resolve({ agentId: 'a_sender' });
+        }
+        if (args.where.id === 'ta_tester') {
+          return Promise.resolve({
+            agentId: 'a_tester',
+            alias: null,
+            agent: { id: 'a_tester', name: '测试' },
+          });
+        }
+        return Promise.resolve(null);
       });
     };
 
-    it('落库 agent 消息（sender=目标实例：senderId=目标 agent id、senderInstanceId=目标实例 id、mentions 含目标实例）+ 广播 + 触发目标实例 dispatch + 返回结构', async () => {
+    it('落库 agent 消息（sender=发送者：senderId=发送者 agent id、senderInstanceId=selfInstanceId、mentions 含目标实例）+ 广播 + 触发目标实例 dispatch + 返回结构', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
-      mockTargetInstance();
+      mockTaskAgentRows();
       idGen.nextId.mockResolvedValue('m_0000000200');
       prisma.message.create.mockResolvedValue(createdMessage);
 
@@ -869,8 +880,8 @@ describe('PlatformMcpService', () => {
           id: 'm_0000000200',
           channelId,
           senderType: SENDER_TYPE.agent,
-          senderId: 'a_tester',
-          senderInstanceId: 'ta_tester',
+          senderId: 'a_sender',
+          senderInstanceId: 'ta_sender',
           content: { text: '@测试 请查看这个文件', parts: [] },
           mentions: [
             {
@@ -938,7 +949,7 @@ describe('PlatformMcpService', () => {
     it('目标实例无会话 → dispatchAgentMention 抛错向上传播（模型可见，消息已落库广播）', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
-      mockTargetInstance();
+      mockTaskAgentRows();
       idGen.nextId.mockResolvedValue('m_0000000200');
       prisma.message.create.mockResolvedValue(createdMessage);
       workerDispatcher.dispatchAgentMention.mockRejectedValue(

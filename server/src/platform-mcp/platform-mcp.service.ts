@@ -317,12 +317,14 @@ export class PlatformMcpService {
 
   /**
    * FR-13：notify_agent——向任务内的另一个实例定向发送消息并触发其执行（agent 互 @）。
-   * T4 完整实例语义：目标按 targetInstanceId（@开发者-2 必须命中开发者-2 实例，不再取
-   * 同 agent 首个实例）。@目标实例别名 text、落库消息 sender=目标实例（senderId=目标
-   * agent id（查实例行）、senderInstanceId=targetInstanceId）、mentions 含目标实例
-   * （instanceId+agentId+name）。
+   * 触发语义：目标按 targetInstanceId（@开发者-2 必须命中开发者-2 实例，不再取
+   * 同 agent 首个实例）。
+   * 显示语义（对齐 group_post 普通消息）：消息是**发送者**的发言（@目标）——落库
+   * senderId=发送者 agent id（从 selfInstanceId 实例行解析，兼容 agent id 直传）、
+   * senderInstanceId=selfInstanceId；mentions 含目标实例（instanceId+agentId+name）
+   * 仅表示 @ 归属，目标实例被 dispatchAgentMention 触发。
    * 1. 归属校验（selfInstanceId 与 session.taskAgentId 一致）+ 定位任务群聊频道（对齐 groupPost）。
-   * 2. 落库一条 agent 消息 → 广播 chat.message.new（先落库后广播）。
+   * 2. 落库一条 agent 消息（sender=发送者、@目标）→ 广播 chat.message.new（先落库后广播）。
    * 3. 调 WorkerDispatcher.dispatchAgentMention 触发目标实例的 dispatch 全链路
    *    （assignWorker → createSession/bind → execute → 回复经 task.completed 回流群聊）。
    * 目标实例无会话 → dispatchAgentMention 抛错 → 工具调用返回错误（模型可见）。
@@ -361,14 +363,15 @@ export class PlatformMcpService {
     }
     const targetAgentId = targetInstance.agentId;
     const targetName = targetInstance.alias ?? targetInstance.agent.name ?? targetAgentId;
+    const senderAgentId = await this.resolveSenderAgentId(args.taskId, args.selfInstanceId);
     const text = `@${targetName} ${args.content}`;
     const message = await this.prisma.message.create({
       data: {
         id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
         channelId: channel.id,
         senderType: SENDER_TYPE.agent,
-        senderId: targetAgentId,
-        senderInstanceId: args.targetInstanceId,
+        senderId: senderAgentId,
+        senderInstanceId: args.selfInstanceId,
         content: { text, parts: [] } as Prisma.InputJsonValue,
         mentions: [
           {
