@@ -100,6 +100,7 @@ const CONTENT_LEFT_PAD = RAIL_W + 24;
 /** 导航 key → 路由路径（与 NAV_ITEMS 对齐） */
 const KEY_TO_PATH: Record<string, string> = {
   project: "/projects",
+  issues: "/issues",
   agents: "/agents",
   workers: "/workers",
   models: "/models",
@@ -140,6 +141,7 @@ const EXTRA_PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
 /** 命令面板「导航」组 label → 路由路径 */
 const CMDK_NAV_PATH: Record<string, string> = {
   切换项目: "/projects",
+  "Issue 管理": "/issues",
   "Agent 管理": "/agents",
   "Worker 节点": "/workers",
   模型管理: "/models",
@@ -195,6 +197,7 @@ interface WorkerSummaryRow {
 const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   project: { title: "项目列表", subtitle: "选择项目进入 AI 协作工作区" },
   board: { title: "任务看板", subtitle: "" },
+  issues: { title: "Issue 管理", subtitle: "任务内 issue 协作与状态流转" },
   agents: { title: "Agent 管理", subtitle: "配置角色、技能与权限" },
   workers: { title: "Worker 节点", subtitle: "查看与管理 Worker 节点" },
   models: { title: "模型管理", subtitle: "模型目录 / Provider 凭证管理" },

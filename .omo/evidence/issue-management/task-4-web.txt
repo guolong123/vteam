@@ -1,0 +1,103 @@
+# Issue 管理页（todo 4）验证证据
+
+日期：2026-08-13
+分支：feature/git-repo-credentials（含 947e94c todo2 提交后继续 todo4）
+范围：仅 web/（nav-dock、app-shell、types/issues、issue-status-actions、issues/page）
+
+## 1. 静态验证
+
+### 1.1 TypeScript
+```
+$ cd web && npx tsc --noEmit
+EXIT: 0   （0 错误）
+```
+
+### 1.2 生产构建
+```
+$ cd web && npm run build
+输出包含：└ ○ /issues    7.43 kB   127 kB   （/issues 路由已生成）
+Build 通过，无错误。
+```
+
+## 2. 部署
+```
+$ docker compose up -d --build web
+aiagents-compose-web Recreated / Started（healthcheck healthy）
+$ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:13001/issues
+200
+```
+
+## 3. UI 验证（Playwright headless，登录 admin/admin123）
+
+测试项目：p_1786449156171_qx6z86（u_admin 成员，含任务 t_0000000001「测试任务」）
+数据库确认：SELECT id,name FROM aiagents.projects → p_1786449156171_qx6z86 为 LIMIT 1 首个项目；
+SELECT id,title,status FROM aiagents.tasks → t_0000000001 属该项目。
+
+### 3.1 导航入口（✅）
+- 登录后 /projects：dock 出现「Issue 管理」（☰），位于「项目」之后、「Agent 管理」之前
+- 展开面板导航列表含「Issue 管理 ☰」
+- 顶栏标题「Issue 管理 / 任务内 issue 协作与状态流转」
+
+### 3.2 无 pid 重定向（✅）
+- 直接访问 /issues → 自动重定向 /projects（effect 读 window.location.search 无 pid）
+- nav 点击 /issues 亦回到 /projects（无 pid 语义正确）
+
+### 3.3 带 pid 任务下拉（✅）
+- /issues?pid=p_1786449156171_qx6z86 → 任务下拉加载「测试任务」
+- 状态下拉：全部状态/待处理/进行中/已解决/已关闭
+- 未选任务空态「请先选择项目与任务」正确显示
+
+### 3.4 选任务列表加载（✅）
+- 选择「测试任务」→ GET /issues?taskId= 列表加载
+- 遗留数据 is_0000000005「MCP 实测 issue」：状态徽章 + tags 徽章「需求」「MCP」+ 指派「测试」+ 创建者「架构师」+ 任务标题 + 时间
+- 新建 Issue 按钮随已选任务出现
+
+### 3.5 新建 issue（✅）
+- 点击「新建 Issue」→ 弹窗（标题*/描述/标签/指派 Agent 下拉：产品经理/架构师/开发者/测试）
+- 填 title=登录页适配深色模式、tags=需求、指派=开发者（developer）→ 提交
+- 列表出现 is_0000000006：状态徽章「待处理」(open) + tags 徽章「需求」+ 指派「开发者」+ 创建者「admin」
+- DB：created_by=u_admin、creator_agent_id=NULL（web 创建路径正确）
+
+### 3.6 状态流转全链（✅）
+- open → 点击「开始处理」→ in_progress（徽章「进行中」，按钮变「标记解决」+「退回」）
+- 点击「标记解决」→ resolved（徽章「已解决」，按钮变「关闭」）
+- 点击「关闭」→ closed（徽章「已关闭」，按钮变「重新打开」）
+- 点击「重新打开」→ open（徽章「待处理」，按钮变「开始处理」）
+- DB：is_0000000006 status=open、resolved_at/closed_at=NULL（reopen 清空时间戳，符合服务端语义）
+- 非法流转按钮不渲染：每个状态仅显示可执行动作
+
+### 3.7 编辑（✅）
+- 编辑弹窗预填 title/description/tags=需求/指派=开发者
+- 修改 title=登录页适配深色模式（已修改）、tags=需求,优化 → 保存
+- 列表生效：新 title + tags 徽章「需求」「优化」
+- 指派 Agent 下拉「开发者」选项预选正确
+
+### 3.8 删除（✅）
+- 点击「✕ 删除」→ ConfirmDialog「删除 Issue「登录页适配深色模式（已修改）」？」
+- 确认删除 → 列表消失（空态「暂无 Issue」）
+- DB：is_0000000006 deleted_at=2026-08-13 01:34:27（软删，status 保持 open）
+
+### 3.9 状态筛选联动（✅）
+- 筛选「进行中」→ 列表空（仅待处理 issue 被正确过滤）
+- 切回「全部状态」→ 列表恢复
+
+### 3.10 导航回归（✅）
+- dock 点击「模型管理」→ /models 正常打开
+- dock 点击「Agent 管理」→ /agents 正常打开
+- 重新访问 /issues?pid= → 任务下拉重新加载，选任务后列表恢复
+- 其余导航项（项目/Worker/技能等）未受影响
+
+## 4. 截图留档（.omo/evidence/issue-management/）
+- issue-list.png        列表（新建后，open 徽章 + tags 徽章）
+- issue-create-modal.png  创建弹窗
+- issue-closed.png      流转至 closed 状态（「重新打开」按钮可见）
+- issue-edited.png      编辑后（title 已改 + tags 需求/优化）
+- issue-delete-modal.png 删除 ConfirmDialog
+- issue-empty.png       删除后空态
+
+## 5. 回归
+- 导航其他项（models/agents）正常 ✅
+- 无固定/fixed/100vh 布局违规（弹窗 absolute 相对宿主，T15）✅
+
+## 结论
+todo 4 全部验收点通过。
