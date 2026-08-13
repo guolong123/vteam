@@ -186,7 +186,11 @@ describe('IssuesService', () => {
 
     it('成功：creatorAgentId=agentId、createdBy=null（Metis B1）', async () => {
       prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
-      prisma.taskAgent.findFirst.mockResolvedValue({ removedAt: null });
+      prisma.taskAgent.findFirst.mockResolvedValue({
+        removedAt: null,
+        id: 'ta_0000000001',
+        agentId: 'a_product',
+      });
       prisma.issue.create.mockResolvedValue({ id: 'is_0000000001' });
       prisma.issue.findUnique.mockResolvedValue(
         makeRow({
@@ -215,6 +219,60 @@ describe('IssuesService', () => {
         creatorAgentName: '产品经理',
         creatorUserId: null,
       });
+    });
+
+    it('实例 id（ta_ 前缀）：按 task_agents.id 团队校验，creatorAgentId 落真实模板 agent id', async () => {
+      prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
+      prisma.taskAgent.findFirst.mockResolvedValue({
+        removedAt: null,
+        id: 'ta_dev_1',
+        agentId: 'a_developer',
+      });
+      prisma.issue.create.mockResolvedValue({ id: 'is_0000000002' });
+      prisma.issue.findUnique.mockResolvedValue(
+        makeRow({
+          createdBy: null,
+          creatorAgentId: 'a_developer',
+          creatorAgent: { name: '开发者' },
+          assigneeInstanceId: 'ta_dev_2',
+        }),
+      );
+
+      const out = await service.createByAgent('ta_dev_1', 't_0000000001', {
+        ...base,
+        assigneeInstanceId: 'ta_dev_2',
+      } as any);
+
+      // 团队校验按实例 id（task_agents.id），而非 agent_id 列
+      expect(prisma.taskAgent.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { taskId: 't_0000000001', id: 'ta_dev_1' },
+        }),
+      );
+      // creatorAgentId 落真实模板 agent id（非 selfInstanceId 原文），assigneeInstanceId 精确落库
+      expect(prisma.issue.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            createdBy: null,
+            creatorAgentId: 'a_developer',
+            assigneeInstanceId: 'ta_dev_2',
+          }),
+        }),
+      );
+      expect(out).toMatchObject({
+        creatorAgentId: 'a_developer',
+        creatorAgentName: '开发者',
+        assigneeInstanceId: 'ta_dev_2',
+      });
+    });
+
+    it('实例 id（ta_ 前缀）不在任务团队 → 403，不落库', async () => {
+      prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
+      prisma.taskAgent.findFirst.mockResolvedValue(null);
+      await expect(
+        service.createByAgent('ta_not_member', 't_0000000001', base as any),
+      ).rejects.toMatchObject({ response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' } });
+      expect(prisma.issue.create).not.toHaveBeenCalled();
     });
   });
 
@@ -689,6 +747,27 @@ describe('IssuesService', () => {
           }),
         );
       });
+
+      it('实例 id（ta_ 前缀）：团队校验按 task_agents.id 通过', async () => {
+        prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
+        prisma.taskAgent.findFirst.mockResolvedValue({
+          removedAt: null,
+          id: 'ta_dev_1',
+          agentId: 'a_developer',
+        });
+        prisma.issue.findMany.mockResolvedValue([makeRow()]);
+
+        const out = await service.findAllByAgent('ta_dev_1', 't_0000000001');
+
+        expect(prisma.taskAgent.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { taskId: 't_0000000001', id: 'ta_dev_1' },
+          }),
+        );
+        expect(out).toEqual([
+          expect.objectContaining({ id: 'is_0000000001' }),
+        ]);
+      });
     });
 
     describe('findOneByAgent', () => {
@@ -840,6 +919,31 @@ describe('IssuesService', () => {
           ),
         ).rejects.toMatchObject({ response: { code: 'ISSUE_NOT_FOUND' } });
         expect(prisma.issue.update).not.toHaveBeenCalled();
+      });
+
+      it('实例 id（ta_ 前缀）：团队校验按 task_agents.id 通过并流转', async () => {
+        prisma.issue.findUnique.mockResolvedValue(makeRow({ status: 'open' }));
+        prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
+        prisma.taskAgent.findFirst.mockResolvedValue({
+          removedAt: null,
+          id: 'ta_dev_1',
+          agentId: 'a_developer',
+        });
+        prisma.issue.update.mockResolvedValue(makeRow({ status: 'in_progress' }));
+
+        const out = await service.transitionByAgent(
+          'ta_dev_1',
+          't_0000000001',
+          'is_0000000001',
+          'start',
+        );
+
+        expect(prisma.taskAgent.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { taskId: 't_0000000001', id: 'ta_dev_1' },
+          }),
+        );
+        expect(out.status).toBe('in_progress');
       });
     });
   });

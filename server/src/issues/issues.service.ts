@@ -112,13 +112,33 @@ export class IssuesService implements OnModuleInit {
   }
 
   /**
-   * MCP 路径成员校验（无 userId，Metis B1）：agent 须是任务团队成员
-   * （task_agents 含 agentId 且未 removed）。返回任务状态供归档判定。
+   * MCP 归属解析助手（统一实例化）：ref 为任务实例 id（ta_ 前缀）→ 按
+   * task_agents.id（实例行）匹配；否则为模板 agent id（a_ 前缀，存量调用兼容）→
+   * 按 task_agents.agent_id 匹配。返回实例行（含真实模板 agent id），未命中返回 null。
+   * 所有 agent 侧方法（assert/create/findAll/findOne/update/transition）经此前缀分流，
+   * 避免散落 startsWith 判断。
+   */
+  private async resolveAgentInstance(
+    taskId: string,
+    ref: string,
+  ): Promise<{ id: string; agentId: string; removedAt: Date | null } | null> {
+    return this.prisma.taskAgent.findFirst({
+      where: ref.startsWith('ta_')
+        ? { taskId, id: ref }
+        : { taskId, agentId: ref },
+      select: { id: true, agentId: true, removedAt: true },
+    });
+  }
+
+  /**
+   * MCP 路径成员校验（无 userId，Metis B1）：agentRef（任务实例 id ta_ 前缀或模板
+   * agent id，兼容）须是任务团队成员（task_agents 未 removed）。返回任务状态 + 真实
+   * 模板 agent id（从实例行解析，供 creatorAgentId 落库）。
    */
   private async assertAgentTaskMember(
     taskId: string,
-    agentId: string,
-  ): Promise<{ status: string }> {
+    agentRef: string,
+  ): Promise<{ status: string; agentId: string }> {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: { status: true },
@@ -129,35 +149,27 @@ export class IssuesService implements OnModuleInit {
         message: '任务不存在',
       });
     }
-    const ta = await this.prisma.taskAgent.findFirst({
-      where: { taskId, agentId },
-      select: { removedAt: true },
-    });
+    const ta = await this.resolveAgentInstance(taskId, agentRef);
     if (!ta || ta.removedAt) {
       throw new ForbiddenException({
         code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
         message: 'Agent 不是该任务团队成员',
       });
     }
-    return task;
+    return { status: task.status, agentId: ta.agentId };
   }
 
   /**
    * 指派须在任务团队未 removed（400 ASSIGNEE_NOT_IN_TEAM）；null/undefined 跳过。
-   * T4 实例语义：assigneeRef 为实例 id（ta_ 前缀）→ 按 taskAgentId 校验；否则按
-   * agentId 校验（用户路径仍按 Agent 指派，兼容）。前缀由任务实例 id 固定 `ta_` 判定。
+   * assigneeRef 为实例 id（ta_ 前缀）→ 按 task_agents.id 校验；否则按 agentId 校验
+   * （用户路径仍按 Agent 指派，兼容）。前缀分流统一走 resolveAgentInstance。
    */
   private async assertAssigneeInTeam(
     taskId: string,
     assigneeRef?: string | null,
   ): Promise<void> {
     if (!assigneeRef) return;
-    const ta = await this.prisma.taskAgent.findFirst({
-      where: assigneeRef.startsWith('ta_')
-        ? { taskId, id: assigneeRef }
-        : { taskId, agentId: assigneeRef },
-      select: { removedAt: true },
-    });
+    const ta = await this.resolveAgentInstance(taskId, assigneeRef);
     if (!ta || ta.removedAt) {
       throw new BadRequestException({
         code: ISSUE_ERRORS.ASSIGNEE_NOT_IN_TEAM,
@@ -218,16 +230,21 @@ export class IssuesService implements OnModuleInit {
     );
   }
 
-  /** MCP 专用创建：无 userId，creatorAgentId=agentId（createdBy 留空，Metis B1）。 */
-  async createByAgent(agentId: string, taskId: string, dto: CreateIssueDto) {
-    if (!agentId) {
+  /**
+   * MCP 专用创建：无 userId；agentRef 为调用方任务实例 id（ta_ 前缀，platform-mcp
+   * 传 selfInstanceId）或模板 agent id（存量兼容）。creatorAgentId 落真实模板 agent id
+   * （从实例行解析，非实例 id——外键指向 agents 表），createdBy 留空（Metis B1）。
+   */
+  async createByAgent(agentRef: string, taskId: string, dto: CreateIssueDto) {
+    if (!agentRef) {
       throw new BadRequestException({
         code: ISSUE_ERRORS.ISSUE_CREATOR_REQUIRED,
         message: 'Agent 创建缺少 creatorAgentId',
       });
     }
-    const task = await this.assertAgentTaskMember(taskId, agentId);
-    if (task.status === TASK_STATUS.archived) {
+    const { status, agentId: creatorAgentId } =
+      await this.assertAgentTaskMember(taskId, agentRef);
+    if (status === TASK_STATUS.archived) {
       throw new ConflictException({
         code: ISSUE_ERRORS.ISSUE_TASK_ARCHIVED,
         message: '任务已归档，不可创建 issue',
@@ -250,7 +267,7 @@ export class IssuesService implements OnModuleInit {
         assigneeInstanceId: dto.assigneeInstanceId ?? null,
         assigneeUserId: dto.assigneeUserId ?? null,
         createdBy: null,
-        creatorAgentId: agentId,
+        creatorAgentId,
       },
     });
     return this.toIssueDto(
@@ -407,15 +424,16 @@ export class IssuesService implements OnModuleInit {
   // ---------------------------------------------------------------------------
 
   /**
-   * MCP 专用列表：agent 在任务团队 → 返回该任务全部 issue 的 DTO 数组
+   * MCP 专用列表：agentRef（实例 id ta_ 或模板 agent id）在任务团队 → 返回该任务
+   * 全部 issue 的 DTO 数组
    * （status 可选过滤，不含软删；对齐 findAll 的筛选语义，无分页——MCP 模型直读）。
    */
   async findAllByAgent(
-    agentId: string,
+    agentRef: string,
     taskId: string,
     status?: string,
   ) {
-    await this.assertAgentTaskMember(taskId, agentId);
+    await this.assertAgentTaskMember(taskId, agentRef);
     const where: Prisma.IssueWhereInput = {
       taskId,
       deletedAt: null,
@@ -429,24 +447,24 @@ export class IssuesService implements OnModuleInit {
     return rows.map((row) => this.toIssueDto(row));
   }
 
-  /** MCP 专用详情：issue 属于该 taskId（404 否则）→ agent 在任务团队（403 否则）。 */
-  async findOneByAgent(agentId: string, taskId: string, issueId: string) {
+  /** MCP 专用详情：issue 属于该 taskId（404 否则）→ agentRef 在任务团队（403 否则）。 */
+  async findOneByAgent(agentRef: string, taskId: string, issueId: string) {
     const issue = await this.findIssue(issueId);
     this.assertIssueInTask(issue, taskId);
-    await this.assertAgentTaskMember(taskId, agentId);
+    await this.assertAgentTaskMember(taskId, agentRef);
     return this.toIssueDto(issue);
   }
 
   /** MCP 专用更新：校验同 findOneByAgent；assigneeInstanceId/assigneeAgentId 变更重新团队校验。 */
   async updateByAgent(
-    agentId: string,
+    agentRef: string,
     taskId: string,
     issueId: string,
     dto: UpdateIssueDto,
   ) {
     const issue = await this.findIssue(issueId);
     this.assertIssueInTask(issue, taskId);
-    await this.assertAgentTaskMember(taskId, agentId);
+    await this.assertAgentTaskMember(taskId, agentRef);
     if (dto.assigneeInstanceId !== undefined) {
       await this.assertAssigneeInTeam(taskId, dto.assigneeInstanceId);
     }
@@ -465,14 +483,14 @@ export class IssuesService implements OnModuleInit {
 
   /** MCP 专用状态流转：校验同 findOneByAgent；核心复用 applyTransition。 */
   async transitionByAgent(
-    agentId: string,
+    agentRef: string,
     taskId: string,
     issueId: string,
     action: IssueTransitionAction,
   ) {
     const issue = await this.findIssue(issueId);
     this.assertIssueInTask(issue, taskId);
-    await this.assertAgentTaskMember(taskId, agentId);
+    await this.assertAgentTaskMember(taskId, agentRef);
     return this.applyTransition(issue, action);
   }
 
