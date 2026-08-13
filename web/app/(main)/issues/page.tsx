@@ -11,9 +11,9 @@
  * - 数据源：
  *   · useQuery(["issues", taskId, status]) → GET /issues?taskId=&status=（选中任务后）
  *   · GET /projects/:pid/tasks → 任务筛选下拉
- *   · useQuery(["agents"]) → GET /agents（指派 agent 下拉）
+ *   · GET /tasks/:id → 团队实例（T5 指派下拉按实例：开发者-1/开发者-2 分开，提交 assigneeInstanceId）
  *   · 省略 GET /users 指派用户下拉——users 端点挂 AdminGuard（成员 403），
- *     assigneeUserId 仅经后端 DTO 透传支持，UI 仅保留 agent 指派。
+ *     assigneeUserId 仅经后端 DTO 透传支持，UI 仅保留成员实例指派。
  * - 工具条：任务筛选下拉 + 状态筛选下拉 + 新建按钮（已选任务即显示，
  *   成员可建——issue 是任务内协作，后端经 task.projectId 校验任务成员）。
  * - 状态流转：独立 IssueStatusActions（禁止复用 Task 的 start/reject 常量，
@@ -22,7 +22,7 @@
  * - 风格对齐 models/skills 管理页（白卡 + 徽章 + 弹窗 + token 引用，
  *   铁律 T15：无 fixed / 100vh / 100vw，弹窗 absolute 相对宿主）。
  */
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -30,7 +30,7 @@ import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { ConfirmDialog, EmptyState } from "@/src/components/ui";
 import { IssueStatusActions } from "@/src/components/tasks/issue-status-actions";
-import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
+import { neutral, space, radius, fontSize, fontFamily, shadow, roles, type RoleKey } from "@/src/theme/tokens";
 import type {
   CreateIssuePayload,
   IssueItem,
@@ -145,6 +145,7 @@ interface IssueFormModalProps {
   /** 非空 = 编辑（预填）；null = 创建 */
   editing: IssueItem | null;
   taskId: string;
+  /** 指派候选：任务团队实例（T5：{id:实例 id, name:别名, role}，开发者-1/开发者-2 分开）。 */
   agents: { id: string; name: string; role: string | null }[];
   submitting: boolean;
   error: string | null;
@@ -156,7 +157,7 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState("");
-  const [assigneeAgentId, setAssigneeAgentId] = useState("");
+  const [assigneeInstanceId, setAssigneeInstanceId] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
 
   // Esc 关闭（对齐 user-form-overlay 模式）
@@ -169,13 +170,13 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
     return () => window.removeEventListener("keydown", handleKey);
   }, [open, onClose]);
 
-  // 每次打开重置表单：编辑预填，创建清空
+  // 每次打开重置表单：编辑预填（T5：优先实例 id，兼容旧 agentId 数据），创建清空
   useEffect(() => {
     if (!open) return;
     setTitle(editing?.title ?? "");
     setDescription(editing?.description ?? "");
     setTags((editing?.tags ?? []).join(", "));
-    setAssigneeAgentId(editing?.assigneeAgentId ?? "");
+    setAssigneeInstanceId(editing?.assigneeInstanceId ?? editing?.assigneeAgentId ?? "");
     setFormError(null);
   }, [open, editing]);
 
@@ -198,8 +199,7 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
         title: title.trim(),
         description: description.trim() ? description.trim() : null,
         tags: tagList,
-        assigneeAgentId: assigneeAgentId || null,
-        assigneeUserId: null,
+        assigneeInstanceId: assigneeInstanceId || null,
       });
     } else {
       onSubmit({
@@ -207,7 +207,7 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
         title: title.trim(),
         description: description.trim() ? description.trim() : undefined,
         tags: tagList,
-        assigneeAgentId: assigneeAgentId || undefined,
+        assigneeInstanceId: assigneeInstanceId || undefined,
       });
     }
   };
@@ -340,11 +340,11 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
         </label>
 
         <label style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-          <span style={{ fontSize: fontSize.md, fontWeight: 500, color: neutral[700] }}>指派 Agent</span>
+          <span style={{ fontSize: fontSize.md, fontWeight: 500, color: neutral[700] }}>指派成员</span>
           <select
             data-testid="issue-assignee-select"
-            value={assigneeAgentId}
-            onChange={(e) => setAssigneeAgentId(e.target.value)}
+            value={assigneeInstanceId}
+            onChange={(e) => setAssigneeInstanceId(e.target.value)}
             style={{
               width: "100%",
               boxSizing: "border-box",
@@ -359,10 +359,11 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
             }}
           >
             <option value="">不指派</option>
+            {/* T5：按实例列出（别名唯一标识，@开发者-1 与 @开发者-2 分开），value=实例 id */}
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
-                {a.role ? `（${a.role}）` : ""}
+                {a.role ? `（${roles[a.role as RoleKey]?.label ?? a.role}）` : ""}
               </option>
             ))}
           </select>
@@ -428,8 +429,14 @@ interface IssueRowProps {
   onDelete: (issue: IssueItem) => void;
 }
 
-function IssueRow({ issue, onEdit, onDelete }: IssueRowProps) {
-  const assignee = issue.assigneeAgentName ?? issue.assigneeUserName;
+function IssueRow({ issue, agents, onEdit, onDelete }: IssueRowProps) {
+  // T5：指派实例展示别名（agents=任务实例列表）；存量/未命中回退 agent/user 名
+  const assigneeInst = issue.assigneeInstanceId
+    ? agents.find((a) => a.id === issue.assigneeInstanceId)
+    : undefined;
+  const assignee = assigneeInst
+    ? `${assigneeInst.name}${assigneeInst.role ? `（${roles[assigneeInst.role as RoleKey]?.label ?? assigneeInst.role}）` : ""}`
+    : (issue.assigneeAgentName ?? issue.assigneeUserName);
   const creator = issue.creatorUserName ?? issue.creatorAgentName ?? issue.creatorUserId;
   return (
     <div
@@ -471,6 +478,13 @@ function IssueRow({ issue, onEdit, onDelete }: IssueRowProps) {
           >
             {issue.title}
           </span>
+          {issue.tags.length > 0 && (
+            <span data-testid="issue-tags" style={{ display: "inline-flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+              {issue.tags.map((tag, idx) => (
+                <TagBadge key={`${tag}-${idx}`} tag={tag} idx={idx} />
+              ))}
+            </span>
+          )}
           <IssueStatusBadge status={issue.status} />
           <span
             style={{
@@ -483,11 +497,17 @@ function IssueRow({ issue, onEdit, onDelete }: IssueRowProps) {
           </span>
         </div>
 
-        {issue.tags.length > 0 && (
-          <div data-testid="issue-tags" style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
-            {issue.tags.map((tag, idx) => (
-              <TagBadge key={`${tag}-${idx}`} tag={tag} idx={idx} />
-            ))}
+        {issue.description && (
+          <div
+            data-testid="issue-description"
+            style={{
+              fontSize: fontSize.md,
+              color: neutral[600],
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {issue.description}
           </div>
         )}
 
@@ -518,13 +538,15 @@ function IssueRow({ issue, onEdit, onDelete }: IssueRowProps) {
         </div>
       </div>
 
-      {/* 操作列：编辑 / 删除 + 状态流转按钮组 */}
+      {/* 操作列：编辑 / 删除 + 状态流转按钮组（横向一行，窄屏换行） */}
       <div
         style={{
           flexShrink: 0,
           display: "flex",
-          flexDirection: "column",
-          alignItems: "flex-end",
+          flexDirection: "row",
+          alignItems: "center",
+          flexWrap: "wrap",
+          justifyContent: "flex-end",
           gap: space.sm,
         }}
       >
@@ -594,11 +616,15 @@ interface TasksResponse {
   pageSize: number;
 }
 
-interface AgentsResponse {
-  items: { id: string; name: string; role: string | null }[];
-  total: number;
-  page: number;
-  pageSize: number;
+/** GET /tasks/:id → instances 条目（T5 指派候选：实例 id + 别名 + 角色）。 */
+interface TaskAssigneeOption {
+  id: string;
+  agentId: string;
+  alias: string | null;
+  seq: number;
+  name: string;
+  role: string | null;
+  main: boolean;
 }
 
 type StatusFilterKey = "all" | IssueStatus;
@@ -652,30 +678,40 @@ export default function IssuesPage() {
     setStatusFilter("all");
   }, [pid]);
 
-  // issue 列表：GET /issues?taskId=&status=（选中任务后启用）
+  // issue 列表：默认「全部任务」→ 按项目过滤（GET /issues?projectId=）；选中具体任务 → 按任务过滤
   const issuesQuery = useQuery({
-    queryKey: ["issues", taskId, statusFilter],
+    queryKey: ["issues", taskId, statusFilter, pid],
     queryFn: () =>
       api.get<IssuesResponse>("/issues", {
         query: {
-          taskId,
+          ...(taskId ? { taskId } : { projectId: pid ?? undefined }),
           status: statusFilter === "all" ? undefined : statusFilter,
           page: 1,
           pageSize: 100,
         },
       }),
-    enabled: !!taskId,
+    enabled: !!pid,
   });
   const issues = issuesQuery.data?.items ?? [];
 
-  // 指派 agent 下拉：GET /agents（agents.view 权限；失败降级为空下拉不阻断列表）
-  const agentsQuery = useQuery({
-    queryKey: ["agents"],
-    queryFn: () => api.get<AgentsResponse>("/agents", { query: { page: 1, pageSize: 100 } }),
-    enabled: !!user,
+  // 指派成员下拉（T5 实例化）：数据源 = 任务团队实例（GET /tasks/:id → instances，
+  // 同角色多实例分开列出 开发者-1/开发者-2）。编辑时用 issue.taskId（任务筛选中可为空）。
+  const assigneeTaskId = taskId || editing?.taskId || "";
+  const taskDetailQuery = useQuery({
+    queryKey: ["task", assigneeTaskId],
+    queryFn: () => api.get<{ instances: TaskAssigneeOption[] }>(`/tasks/${assigneeTaskId}`),
+    enabled: !!assigneeTaskId,
     retry: false,
   });
-  const agents = agentsQuery.data?.items ?? [];
+  const assigneeAgents: { id: string; name: string; role: string | null }[] = useMemo(
+    () =>
+      (taskDetailQuery.data?.instances ?? []).map((i) => ({
+        id: i.id,
+        name: i.alias ?? i.name,
+        role: i.role,
+      })),
+    [taskDetailQuery.data],
+  );
 
   // 创建：POST /issues
   const createMutation = useMutation({
@@ -720,8 +756,6 @@ export default function IssuesPage() {
       createMutation.mutate(payload as CreateIssuePayload);
     }
   };
-
-  const submitting = createMutation.isPending || updateMutation.isPending || deleteMutation.isPending;
 
   return (
     <div
@@ -778,7 +812,7 @@ export default function IssuesPage() {
                   cursor: "pointer",
                 }}
               >
-                <option value="">{tasksQuery.isPending ? "任务加载中…" : "选择任务"}</option>
+                <option value="">{tasksQuery.isPending ? "任务加载中…" : "全部任务"}</option>
                 {tasks.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.title}
@@ -856,9 +890,9 @@ export default function IssuesPage() {
             )}
           </div>
 
-          {/* ② 列表区 */}
-          {!taskId ? (
-            /* 未选任务：引导选择（空态） */
+          {/* ② 列表区：未选项目引导（pid 缺失通常已重定向 /projects）；默认「全部任务」直接展示列表 */}
+          {!pid ? (
+            /* 未选项目：引导选择（空态） */
             <div
               data-testid="issues-no-task"
               style={{
@@ -875,9 +909,9 @@ export default function IssuesPage() {
               }}
             >
               <span aria-hidden style={{ fontSize: 26, color: neutral[300] }}>☰</span>
-              <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[700] }}>请先选择项目与任务</div>
+              <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[700] }}>请先选择项目</div>
               <div style={{ fontSize: fontSize.md, color: neutral[400] }}>
-                从上方任务下拉选择任务后，即可查看与管理该任务的 issue
+                从项目卡片进入 Issue 管理，即可查看与管理该项目所有任务的 issue
               </div>
             </div>
           ) : issuesQuery.isPending ? (
@@ -946,7 +980,7 @@ export default function IssuesPage() {
                   padding: `${space.sm}px ${space.md}px`,
                 }}
               >
-                <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900] }}>任务 Issue</span>
+                <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900] }}>{taskId ? "任务 Issue" : "项目 Issue"}</span>
                 <span
                   style={{
                     fontSize: fontSize.xs,
@@ -961,7 +995,7 @@ export default function IssuesPage() {
                   {issuesQuery.data?.total ?? 0} 个 issue
                 </span>
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-                  {tasks.find((t) => t.id === taskId)?.title ?? taskId}
+                  {taskId ? (tasks.find((t) => t.id === taskId)?.title ?? taskId) : "全部任务"}
                 </span>
               </div>
 
@@ -969,7 +1003,7 @@ export default function IssuesPage() {
                 <IssueRow
                   key={issue.id}
                   issue={issue}
-                  agents={agents}
+                  agents={assigneeAgents}
                   onEdit={(i) => {
                     setEditing(i);
                     setFormError(null);
@@ -982,7 +1016,7 @@ export default function IssuesPage() {
               {issues.length === 0 && (
                 <EmptyState
                   title="暂无 Issue"
-                  description="该任务还没有 issue，点击「新建 Issue」创建第一条（如需求 / 缺陷）"
+                  description={taskId ? "该任务还没有 issue，点击「新建 Issue」创建第一条（如需求 / 缺陷）" : "该项目还没有 issue"}
                   icon={<span aria-hidden>☰</span>}
                 />
               )}
@@ -996,7 +1030,7 @@ export default function IssuesPage() {
         open={formOpen}
         editing={editing}
         taskId={taskId}
-        agents={agents}
+        agents={assigneeAgents}
         submitting={createMutation.isPending || updateMutation.isPending}
         error={formError}
         onClose={() => {

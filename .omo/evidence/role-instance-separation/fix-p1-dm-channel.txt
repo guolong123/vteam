@@ -1,0 +1,105 @@
+F3 P1 缺陷修复（私聊频道按实例精确落库）· 证据
+==============================================
+日期：2026-08-13
+修复：resolveChannel + privateTarget 按 taskAgentId 精确匹配私聊频道，缺省回退 agentId
+附带：toMessageDto 补 senderInstanceId（platform-mcp）；前端 onSessionUpdated 状态 key 按实例
+
+一、缺陷根因
+------------
+F3 实测（t_0000000011）：开发者-2 的流式处理/终态回复被写入开发者-1 私聊频道
+c_0000000025（sender_instance_id=ta_0000000035），开发者-2 私聊 c_0000000026 0 条。
+存量任务 t_0000000009 同样存在（T6 遗留）。
+
+根因（F2 审查 + F3 复现双重定位）：
+1) server/src/chat/worker-dispatcher.ts resolveChannel（原 :1757-1774）
+   chatChannel.findFirst({taskId, agentId}) 无 taskAgentId 维度——同 agent 多实例时
+   findFirst 命中最早创建的实例频道（c_25 开发者-1），终态回复/失败消息串扰。
+2) server/src/workers/worker-event.ingress.ts handleMessagePartDelta privateTarget
+   （原 :504-509）同样 chatChannel.findFirst({taskId, agentId})——流式中间态串扰。
+T6 修复 B 只让 createDmChannel 按 taskAgentId 幂等（频道创建独立），
+但消息落库的频道定位仍按 agentId findFirst，未按 taskAgentId 精确命中各自频道。
+
+二、修复 diff 摘要
+------------------
+1. server/src/chat/worker-dispatcher.ts
+   - resolveChannel(taskId, agentId, taskAgentId?)：taskAgentId 存在 → findFirst
+     {taskId, taskAgentId} 精确匹配；缺失 → {taskId, agentId} 回退（存量兼容）；
+     均未命中 → 群聊频道兜底。
+   - handleTaskCompleted：sessionId 反查 session 额外提取 sessionTaskAgentId
+     （session.taskAgentId ?? undefined），resolveChannel 传入——终态回复按实例落库。
+   - failProcessingMessage：payload.sessionId 反查 session.taskAgentId 传入
+     resolveChannel——失败消息按实例落库。
+2. server/src/workers/worker-event.ingress.ts
+   - privateTarget：deltaSenderInstanceId（已从 session 反查 taskAgentId）非空 →
+     findFirst {taskId, taskAgentId} 精确匹配；NULL → {taskId, agentId} 回退——
+     流式中间态按实例落库。
+3. server/src/platform-mcp/platform-mcp.service.ts
+   - toMessageDto：row 类型补 senderInstanceId，DTO 透出 senderInstanceId
+     （对齐 ChatService.toMessageDto，实时广播与历史补拉展示一致）。
+4. web/app/(main)/tasks/[id]/page.tsx
+   - 新增 instanceIdBySessionRef（sessionId → instanceId 映射，随 agent.loading/
+     agent.error/agent.status 事件填充）。
+   - onSessionUpdated：状态 key 由 agentId 改 instanceId ?? agentId，清 loading
+     同样按实例 key——session.updated(idle) 精确收敛目标实例（同 agent 多实例
+     不再因 agentId 共用 key 收敛错位）。
+   - MembersPanel：sessionStatusByAgent 读取兼容 instanceId ?? agentId。
+
+不修（记录 learnings）：P3 类——seq 并发撞键无重试、forwardToGroup 死代码、
+createDmChannel 回退并发重复频道（非验收项）。
+
+三、回归测试（新增 3 用例）
+--------------------------
+1. worker-dispatcher.spec.ts「F3 P1：session 绑实例 → resolveChannel 按 taskAgentId
+   精确匹配（同 agent 多实例各自频道）」——断言 findFirst({taskId, taskAgentId}) +
+   落库 channelId=c_dev2、senderInstanceId=ta_dev_2。
+2. worker-dispatcher.spec.ts「F3 P1：存量会话 taskAgentId NULL → resolveChannel
+   回退 agentId 首实例（存量兼容）」——断言 findFirst({taskId, agentId})。
+3. worker-event.ingress.spec.ts「F3 P1：流式 delta 会话绑实例 → privateTarget 按
+   taskAgentId 精确匹配」——断言 findFirst({taskId, taskAgentId}) + 落库 c_dev2。
+另更新 worker-dispatcher.integration.spec.ts 断言（session 绑实例 ta_0000000001 →
+按 taskAgentId 精确匹配）。
+
+四、验证结果
+------------
+1. server `npx tsc --noEmit` → 0 错误
+2. `npx jest src/chat src/workers/worker-event.ingress.spec.ts src/platform-mcp`
+   → 7 suites / 302 tests 全过
+3. 全量 `npx jest` → 56 suites / 1117 tests 全过（1114 + 3 新增）
+4. web `npx tsc --noEmit` → 0 错误；`npm run build` → 通过（23 routes）
+
+五、真实部署复测（docker compose up -d --build server web + worker restart）
+---------------------------------------------------------------------------
+环境：:13001 web / :13000 server，任务 t_0000000011（F3 数据保留）
+实例：ta_0000000034 开发者-1 / ta_0000000035 开发者-2
+频道：c_0000000025 private(ta_34) / c_0000000026 private(ta_35)
+
+修复前基线（重建前查库）：
+  c_0000000025 混入 ta_0000000035 1 条（m_262，F3 遗留），c_0000000026 0 条。
+
+复测流程（每步均真实触发 worker 执行 + 查库 + 浏览器观察）：
+1. @开发者-2（mention instanceId=ta_35）→ dispatch s_35 →
+   m_265 落库 c_26（sent，ta_35）✓
+2. @开发者-1（instanceId=ta_34）→ dispatch s_34 →
+   m_269 落库 c_25（sent，ta_34），c_26 无 ta_34 消息 ✓
+3. @开发者-2 流式验证 → delta 阶段查库 m_273 processing 落库 c_26 ✓
+   终态化后 m_273 → sent 仍在 c_26 ✓（从未落 c_25）
+4. SSE loading 收敛：浏览器 @开发者-2 后成员面板仅「开发者-2#2 处理中」，
+   开发者-1 保持「就绪」（无串扰），执行结束后「处理中」→「空闲」收敛 ✓
+
+查库终验（核心验收）：
+  SELECT channel_id, sender_instance_id FROM messages
+    WHERE sender_instance_id='ta_0000000035' AND channel_id IN ('c_25','c_26');
+  → c_25: 1 条（m_262 修复前遗留）；c_26: 3 条（m_265/m_273/m_277 全部修复后写入）
+  → 修复后开发者-2 全部私聊消息精确落库 c_26，c_25 零新增污染 ✓
+
+六、截图清单（/tmp/opencode/fix-p1-shots/）
+-------------------------------------------
+c25-dev1-dm.png      开发者-1 私聊页（c_25，无开发者-2 新内容）
+c26-dev2-dm.png      开发者-2 私聊页（c_26，含自身 P1 复测流式回复）
+sse-converged.png    群聊页成员面板：@开发者-2 收敛后「空闲」、开发者-1「就绪」
+
+七、结论
+--------
+P1 验收级缺陷已修复：终态回复（handleTaskCompleted）、失败消息（failProcessingMessage）、
+流式中间态（ingress privateTarget）三路落库均按 taskAgentId 精确匹配各自实例私聊频道；
+存量会话/频道（taskAgentId NULL）走 agentId 回退保持兼容。F2/F3 重审与 F4 验收可继续。

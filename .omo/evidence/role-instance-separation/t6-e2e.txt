@@ -1,0 +1,135 @@
+T6 端到端验证（角色/实例分离）· 证据
+=====================================
+日期：2026-08-13
+范围：部署重建 + 双开发者全链路实测 + 4 项验收级缺陷修复 + 回归
+
+一、部署重建
+------------
+- `docker compose up -d --build server web` 重建成功（init 保持，seed 5 模板 agent 落库）
+- :13001 web / :13000 server 均 healthy（HTTP 200）
+- worker 重启适配新 server，心跳正常（POST /workers/:id/heartbeat 201）
+- seed 后模板 agent：a_product/a_project_manager/a_architect/a_developer/a_tester（type=template）
+- 账号：seed-admin/Admin@123456（项目 p_seed_1）
+
+二、端到端场景逐项结果
+----------------------
+场景 1-2 创建双开发者任务 + 详情页成员面板：
+  ✓ 创建页默认主 Agent=项目经理（inst-project_manager-1），添加开发者第二实例 → 开发者-1/开发者-2
+  ✓ 创建成功 t_0000000006 → 成员面板三实例独立展示：
+    [开发者-1 #1 | 开发者-2 #2 | 项目经理-1 ★主 Agent #1]，主 Agent 徽章数=1
+  ✓ 查库：task_agents 三行（ta_15=开发者-1 seq1 / ta_16=开发者-2 seq2 / ta_14=项目经理-1）
+  ✓ 查库：sessions 三会话各自绑 task_agent_id（s_15→ta_15 / s_16→ta_16 / s_14→ta_14）
+  截图：/tmp/opencode/t6-shots/01-create-page.png, 02-members-panel.png
+
+场景 3 群聊 @ 双开发者（修复前缺陷实证 + 修复后验证）：
+  ✗ 修复前：@开发者-2(ta_16) 错误触发 s_15（开发者-1 会话）——resolveMentions 按 agentId 建
+    Map 同 agent 多实例被覆盖（缺陷 A）
+  ✓ 修复后（t_0000000008）：@开发者-1 → s_25(ta_25)、@开发者-2 → s_26(ta_26) 各自会话
+  ✓ 查库：ACK 消息 sender_instance_id 精确落库（m_223→ta_25 / m_225→ta_26）
+  ✓ worker 实测：开发者-2 回复落库 sender_instance_id=ta_29，无串扰
+  截图：/tmp/opencode/t6-shots/12-mention-candidates.png（@ 候选按实例分列）
+
+场景 4 私聊独立性（修复前缺陷实证 + 修复后验证）：
+  ✗ 修复前：createDmChannel 按 (taskId, agentId) 幂等——双开发者共用 c_14（缺陷 B）
+  ✓ 修复后：开发者-1 → c_17(ta_25)、开发者-2 → c_18(ta_26) 两个独立频道；幂等重试返回已有
+  ✓ UI：t_0000000009 点击开发者-1 → c_20(ta_28)、开发者-2 → c_21(ta_29) 两频道独立
+  ✓ 查库：chat_channels.task_agent_id 两行不同；存量旧频道 c_14 task_agent_id=NULL（未回填，决策 3）
+  截图：/tmp/opencode/t6-shots/15-dm-dev1.png, 16-dm-dev2.png
+
+场景 5 issue 指派：
+  ✓ 指派下拉按实例分列：[不指派 | 开发者-1（开发者）(ta_28) | 开发者-2（开发者）(ta_29) | 项目经理-1（项目经理）(ta_27)]
+  ✓ 指派开发者-2 → value=ta_29，列表显示「指派：开发者-2（开发者）」
+  ✓ 查库：issues.assignee_instance_id=ta_0000000029 精确落库
+  截图：/tmp/opencode/t6-shots/13-issue-assignee.png, 14-issue-list.png
+
+场景 6 SSE loading 仅目标实例：
+  ✓ @开发者-2 后成员面板：[开发者-1 工作中 | 开发者-2 处理中 | 项目经理-1 就绪]
+    ——仅开发者-2 loading（修复 C：ingress/dispatcher 广播带 instanceId，前端按实例消费）；
+    开发者-1「工作中」为其自身会话 running 状态（前序 @ 触发遗留），非 loading 串扰
+  ✓ 查库：t9 群聊全部 agent 消息 sender_instance_id=ta_29（仅目标实例）
+  截图：/tmp/opencode/t6-shots/17-sse-loading.png, 18-sse-converged.png
+
+场景 7 主 Agent 职责注入（真实部署 worker opencode 会话实证）：
+  ✓ 项目经理-1（主实例 ta_24）system 含【主 Agent 职责】段落 +
+    【你的身份】你是本任务的 项目经理-1（实例 id: ta_0000000024）+ 团队段主标注
+  ✓ 开发者-1（非主 ta_25）system 不含【主 Agent 职责】，身份段正确（开发者-1/ta_25），
+    团队段保留主标注（项目经理-1 —— 主 Agent）
+  ✓ start 后任务 status=in_progress、main_agent_instance_id=ta_24 保留
+
+场景 8 回归：
+  ✓ 存量任务 t5 详情页正常渲染（全栈开发★主 + 项目经理-1），instances 返回
+  ✓ 单开发者任务 t10 创建成功（2 实例）、@开发者-1 无 instanceId 兼容路径 → ta_31 第一实例
+  ✓ 存量任务私聊无 taskAgentId 入参 → 回退第一实例 ta_13（新频道 c_23 带 taskAgentId）
+  ✓ 存量旧频道 c_14（task_agent_id=NULL）DTO 返回 taskAgentId=null，前端兼容
+  截图：/tmp/opencode/t6-shots/19-regress-legacy-task.png, 20-regress-single-dev.png
+
+三、缺陷修复摘要（验收级，4 项）
+--------------------------------
+修复 A（@ 歧义）——resolveMentions 按 instanceId 解析
+  - server/src/chat/chat.service.ts：resolveMentions 优先按 mention.instanceId 匹配实例行，
+    缺省回退 agentId（未移除优先→任意状态兜底判 agent_removed）；buildTrigger 按
+    taskAgentId 查会话（不再按 agentId 撞首条）；getTriggerResults 同源修正
+  - server/src/chat/dto/create-message.dto.ts：MentionInput 加 instanceId?
+  - 行为：@开发者-1 与 @开发者-2 各自触发自身会话（查库实证）
+
+修复 B（私聊复用）——createDmChannel 按 taskAgentId 幂等
+  - server/src/chat/chat.service.ts：dto.taskAgentId 存在按 (taskId, taskAgentId) 幂等+落库，
+    缺省回退该 agent 第一实例；toChannelDto 输出 taskAgentId
+  - server/src/chat/dto/create-dm-channel.dto.ts：加 taskAgentId?
+  - web/app/(main)/tasks/[id]/page.tsx：onStartDm 传 taskAgentId（实例 id）
+  - web/app/(main)/messages/[id]/page.tsx：mainAgent 优先 channel.taskAgentId 精确命中实例
+  - 行为：双开发者各自独立私聊频道（查库+UI 实证）
+
+修复 C（SSE loading 共享）——按实例广播/消费
+  - server/src/chat/worker-dispatcher.ts：dispatchForTarget loading(thinking/operating)
+    广播带 instanceId（session.taskAgentId）；dispatchAgentMention targets 带 instanceId
+  - server/src/chat/message-dispatcher.ts：DispatchTarget/DispatcherLoadingEvent 加 instanceId?
+  - server/src/workers/worker-event.ingress.ts：handleAgentStatus emit agent.loading/error 带
+    instanceId（session 反查 taskAgentId）
+  - web/app/(main)/tasks/[id]/page.tsx：loading/error/status key = instanceId ?? agentId，
+    nameByStateKey 反查别名，MessageList 按 senderInstanceId 精确渲染 sender
+  - web/hooks/use-realtime.ts：AgentLoadingEvent/AgentErrorEvent/AgentStatusEvent/
+    RealtimeChatMessage 加 instanceId/senderInstanceId
+  - 行为：@单实例仅该实例 loading（UI+查库实证）
+
+修复 D（senderInstanceId 落库）——消息精确归属实例
+  - server/src/chat/chat.service.ts：acknowledge 落 senderInstanceId（按目标实例）；
+    toMessageDto 输出 senderInstanceId
+  - server/src/chat/worker-dispatcher.ts：handleTaskCompleted 回复落库 senderInstanceId
+    （executionRef=session.taskAgentId）
+  - server/src/workers/worker-event.ingress.ts：message.part.delta processing 消息落
+    senderInstanceId
+  - 行为：ACK/回复/流式消息 sender_instance_id 精确落库（查库实证）
+
+不修复（非验收项）：实例级 prompt/模型覆盖（决策 2）、存量数据回填（决策 3）、
+旧参数兼容恢复（决策 4）——存量任务/频道保持 NULL taskAgentId 兼容路径。
+
+四、回归验证
+------------
+- server: `npx tsc --noEmit` 0 错误
+- server: `npx jest` 全量 56 suites / 1108 tests 全过（含更新后的 chat.service.spec、
+  worker-dispatcher.spec 新契约断言）
+- web: `npx tsc --noEmit` 0 错误；`npm run build` 通过（23 routes）
+- 部署容器重建后 UI 实测：JS 错误 0（全部页面）
+
+五、截图清单（/tmp/opencode/t6-shots/）
+---------------------------------------
+01-create-page.png          创建页（双开发者实例 + 主 Agent 在项目经理）
+02-members-panel.png        成员面板三实例（修复前任务 t6）
+10-create-two-devs.png      修复后创建页（开发者-1/2）
+11-members-panel.png        修复后成员面板三实例独立
+12-mention-candidates.png   @ 候选按实例分列（开发者-1/开发者-2/项目经理-1）
+13-issue-assignee.png       issue 指派下拉按实例
+14-issue-list.png           issue 列表显示实例别名
+15-dm-dev1.png              开发者-1 私聊（c_20）
+16-dm-dev2.png              开发者-2 私聊（c_21，独立频道）
+17-sse-loading.png          SSE loading 仅开发者-2 处理中
+18-sse-converged.png        SSE 回复收敛后
+19-regress-legacy-task.png  存量任务 t5 详情页
+20-regress-single-dev.png   单开发者任务 t10 详情页
+
+六、测试数据（保留供复现）
+--------------------------
+任务：t_0000000006（修复前）、t_0000000008（API 双开发者）、t_0000000009（UI 双开发者）、
+      t_0000000010（单开发者回归）
+实例：ta_24~ta_31；频道：c_16~c_23；issue：is_0000000023（指派 ta_29）

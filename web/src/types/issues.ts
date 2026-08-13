@@ -22,6 +22,8 @@ export interface IssueItem {
   tags: string[];
   assigneeAgentId: string | null;
   assigneeAgentName: string | null;
+  /** T5：指派到任务实例（ta_ 前缀；assigneeAgentName 为模板 agent 名，实例别名前端映射）。 */
+  assigneeInstanceId: string | null;
   assigneeUserId: string | null;
   assigneeUserName: string | null;
   creatorAgentId: string | null;
@@ -47,6 +49,9 @@ export interface CreateIssuePayload {
   title: string;
   description?: string;
   tags?: string[];
+  /** T5：指派到任务实例（ta_ 前缀，后端 assertAssigneeInTeam 按前缀分流校验）。 */
+  assigneeInstanceId?: string;
+  /** 存量兼容：模板 agent 指派（新 UI 不再产生，保留给既有调用方）。 */
   assigneeAgentId?: string;
   assigneeUserId?: string;
 }
@@ -56,6 +61,7 @@ export interface UpdateIssuePayload {
   title?: string;
   description?: string | null;
   tags?: string[];
+  assigneeInstanceId?: string | null;
   assigneeAgentId?: string | null;
   assigneeUserId?: string | null;
 }

@@ -24,14 +24,16 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useRealtimeEvents, type RealtimeChatMessage } from "@/hooks/use-realtime";
-import type { AgentStatusEvent, MessagePartDeltaEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
+import type { AgentStatusEvent, MessagePartDeltaEvent, RealtimeQuestionEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
 import { AgentAvatar, AgentBadge, ChatBubble, MessageInput } from "@/src/components/ui";
 import type { SendMessagePayload } from "@/src/components/ui";
 import {
   LoadingIndicator,
   MsgError,
   MsgParts,
+  QuestionModal,
 } from "@/src/components/chat";
+import type { QuestionModalData } from "@/src/components/chat";
 import {
   type RoleKey,
   neutral,
@@ -43,6 +45,9 @@ import {
 } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
+
+/** P4：processing 消息超时兜底阈值（worker abort 后无 SSE 事件回流时，超过此阈值渲染失败形态） */
+const PROCESSING_TIMEOUT_MS = 180_000;
 
 /** scoped CSS 动画（dm- 前缀防污染，对齐原型 dmAnimCss 的三连点弹跳） */
 const dmCss = `
@@ -57,10 +62,23 @@ interface ChannelDetail {
   type: "task_group" | "private";
   taskId: string;
   agentId: string | null;
+  /** 私聊频道绑定的任务实例 id（ta_ 前缀；后端 toChannelDto 未输出，可选防御）。 */
+  taskAgentId?: string | null;
   task?: { id: string; title: string; status: string; projectId: string } | null;
   agent?: { id: string; name: string; role: string | null } | null;
   agentMembers: { id: string; name: string; role: string | null }[];
   createdAt: string;
+}
+
+/** GET /tasks/:id 的 instances 条目（T5：实例列表，alias 展示唯一标识）。 */
+interface TaskInstance {
+  id: string;
+  agentId: string;
+  alias: string | null;
+  seq: number;
+  name: string;
+  role: string | null;
+  main: boolean;
 }
 
 /** GET /channels/:id/messages 游标分页响应（对齐 use-realtime ChannelMessagesCache 结构）。 */
@@ -69,15 +87,32 @@ interface MessagesResponse {
   nextCursor: string | null;
 }
 
+/** GET /channels?type=task_group 条目（后端 ChatService.toChannelDto，含 taskId 可匹配任务，tasks 页同款）。 */
+interface ChannelItem {
+  id: string;
+  type: string;
+  taskId: string;
+  agentId: string | null;
+  task?: {
+    id: string;
+    title: string;
+    status: string;
+    projectId: string;
+  } | null;
+  agent?: { id: string; name: string; role: string | null } | null;
+  createdAt: string;
+}
+
 /** seed 模板 Agent id → 角色 key（对齐 board AGENT_ID_ROLE）。 */
 const AGENT_ID_ROLE: Record<string, RoleKey> = {
   a_product: "product",
+  a_project_manager: "project_manager",
   a_architect: "architect",
   a_developer: "developer",
   a_tester: "tester",
 };
 
-const ROLE_KEYS: readonly RoleKey[] = ["product", "architect", "developer", "tester"];
+const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
 
 /** agent id / role 字符串 → RoleKey（未知/自定义跳过）。 */
 function toRole(input: string): RoleKey | null {
@@ -192,6 +227,80 @@ function AgentInfoBar({
   );
 }
 
+/* ================================ 群聊上下文区（私聊对话起点：群聊里 @agent 的用户消息） ================================ */
+
+function GroupContextBar({
+  messages,
+  userId,
+  myName,
+}: {
+  messages: RealtimeChatMessage[];
+  userId: string;
+  myName: string;
+}) {
+  if (messages.length === 0) return null;
+  return (
+    <div
+      data-testid="group-context"
+      style={{
+        flexShrink: 0,
+        display: "flex",
+        flexDirection: "column",
+        gap: space.sm,
+        padding: `${space.md}px ${space.xl}px`,
+        backgroundColor: "#FFFFFF",
+        borderBottom: `1px solid ${neutral[200]}`,
+        ...baseFont,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+        <span style={{ fontSize: fontSize.xs, fontWeight: 600, color: neutral[400] }}>群聊上下文</span>
+        <span style={{ flex: 1, height: 1, backgroundColor: neutral[100] }} />
+      </div>
+      {messages.map((msg) => (
+        <div
+          key={msg.id}
+          data-testid="group-context-item"
+          style={{ display: "flex", alignItems: "flex-start", gap: space.sm, minWidth: 0 }}
+        >
+          <span
+            style={{
+              flexShrink: 0,
+              fontSize: fontSize.xs,
+              color: neutral[500],
+              backgroundColor: neutral[100],
+              borderRadius: radius.sm,
+              padding: `${2}px ${space.sm}px`,
+              lineHeight: 1.6,
+            }}
+          >
+            来自群聊
+          </span>
+          <span style={{ flexShrink: 0, fontSize: fontSize.sm, fontWeight: 600, color: neutral[900] }}>
+            {msg.senderId === userId ? myName : msg.senderId ?? "我"}
+          </span>
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: fontSize.sm,
+              color: neutral[600],
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {msg.content.text ?? ""}
+          </span>
+          <span style={{ flexShrink: 0, fontSize: fontSize.xs, color: neutral[400] }}>
+            {formatTime(msg.createdAt)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ================================ 消息列表（游标分页 + 过程消息渲染，复用 T13 模式） ================================ */
 
 function DmMessageList({
@@ -215,6 +324,13 @@ function DmMessageList({
   sessionLabel: string | null;
   listRef: React.RefObject<HTMLDivElement | null>;
 }) {
+  // P4：超时兜底时钟——processing 消息无 SSE 回流时页面静止，周期 tick 强制重渲染，
+  // 让超过 PROCESSING_TIMEOUT_MS 的消息自动切换为失败形态
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 30_000);
+    return () => clearInterval(t);
+  }, []);
   return (
     <div
       data-testid="chat-message-list"
@@ -273,6 +389,51 @@ function DmMessageList({
         // Agent 消息：parts 过程片段（thinking/tool/error/aborted）+ 正文置底（MsgParts，T14）；
         // status=processing 为流式中间态（message.part.delta 累积），正文走「生成中」流式块
         if (msg.senderType === "agent") {
+          // P4 超时兜底：processing 超过阈值（worker abort 后无事件回流）→ 视觉降级失败形态，
+          // 不再显示流式「生成中」；不修改 SSE 状态管理，仅渲染层判定
+          const processing = msg.status === "processing";
+          const timedOut =
+            processing && Date.now() - new Date(msg.createdAt).getTime() > PROCESSING_TIMEOUT_MS;
+          if (timedOut) {
+            return (
+              <div
+                key={msg.id}
+                data-testid="msg-timeout"
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: space.sm,
+                  maxWidth: "78%",
+                  alignSelf: "flex-start",
+                  ...baseFont,
+                }}
+              >
+                {role && <AgentAvatar role={role} size="sm" dot={false} style={{ marginTop: 2 }} />}
+                <div
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    padding: space.md,
+                    borderRadius: radius.md,
+                    backgroundColor: "#FEF2F2",
+                    border: "1px solid #FECACA",
+                    boxShadow: shadow.sm,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+                    <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1, color: "#B91C1C" }}>⚠</span>
+                    <span style={{ fontSize: fontSize.md, color: "#B91C1C", fontWeight: 600 }}>
+                      Agent 处理超时/失败
+                    </span>
+                  </div>
+                  <div style={{ fontSize: fontSize.xs, color: neutral[500], marginTop: space.sm }}>
+                    {author && <span>{author}</span>}
+                    <span style={{ color: neutral[400] }}> · {formatTime(msg.createdAt)}</span>
+                  </div>
+                </div>
+              </div>
+            );
+          }
           return (
             <MsgParts
               key={msg.id}
@@ -281,7 +442,7 @@ function DmMessageList({
               author={author}
               role={role}
               time={formatTime(msg.createdAt)}
-              streaming={msg.status === "processing"}
+              streaming={processing}
             />
           );
         }
@@ -369,7 +530,7 @@ export default function DmChatPage() {
   const [input, setInput] = useState("");
   // Loading 两阶段：agentId → phase（thinking/operating）
   const [loadingByAgent, setLoadingByAgent] = useState<Record<string, string>>({});
-  // agent.error：agentId → errorType
+  // agent.error：agentId → 错误文本（error 优先，缺省 errorType/message；展示错误态）
   const [errorByAgent, setErrorByAgent] = useState<Record<string, string>>({});
   // 会话状态：agentId → session.updated status（active/running=运行中 / frozen|archived=已结束，T14）
   const [sessionByAgent, setSessionByAgent] = useState<Record<string, string>>({});
@@ -378,6 +539,13 @@ export default function DmChatPage() {
   // 解析归属为主 Agent 才更新，防跨任务串扰污染本页状态）
   const agentIdBySessionRef = useRef<Record<string, string>>({});
   const [loadingMore, setLoadingMore] = useState(false);
+  // 群聊上下文：groupId = 与私聊同 task 的群聊频道 id（经 GET /channels?type=task_group 匹配）
+  const [groupId, setGroupId] = useState<string | null>(null);
+  // 群聊频道最近 user 消息（limit 5，含 @agent 触发消息，SSE 实时追加）
+  const [groupContextMessages, setGroupContextMessages] = useState<RealtimeChatMessage[]>([]);
+  // Agent 提问/权限确认弹窗：SSE agent.question 事件 / 进入页补拉设置（resolved 事件收敛关闭）
+  const [pendingQuestion, setPendingQuestion] = useState<QuestionModalData | null>(null);
+  const [questionSubmitting, setQuestionSubmitting] = useState(false);
 
   /* ---------- 1. 频道详情：channel（agent/task）+ agentMembers（任务团队） ---------- */
   const channelQuery = useQuery({
@@ -387,6 +555,15 @@ export default function DmChatPage() {
   });
   const channel = channelQuery.data;
 
+  /* ---------- 1.5 任务详情：instances（T5 私聊对象按实例解析——别名/实例 id 展示） ---------- */
+  const taskQuery = useQuery({
+    queryKey: ["task", channel?.taskId ?? ""],
+    queryFn: () => api.get<{ id: string; instances?: TaskInstance[] }>(`/tasks/${channel?.taskId}`),
+    enabled: !!channel?.taskId && !!user?.id,
+    retry: false,
+  });
+  const taskInstances = taskQuery.data?.instances ?? [];
+
   /* ---------- 2. 消息历史：queryKey 与 use-realtime 追加 key 一致（['channel', id, 'messages']） ---------- */
   const messagesQuery = useQuery({
     queryKey: ["channel", channelId, "messages"],
@@ -394,11 +571,66 @@ export default function DmChatPage() {
     enabled: !!channelId && !!user?.id && !!channelQuery.data,
   });
 
-  /** 主 Agent（私聊对象）：private 频道 channel.agent；task_group 直达降级为任务标题。 */
-  const mainAgent = useMemo(
-    () => (channel?.agent ? { id: channel.agent.id, name: channel.agent.name, role: resolveRole(channel.agent, channel.agent.id) } : null),
-    [channel],
-  );
+  /* ---------- 2.5 群聊上下文：GET /channels?type=task_group 按 taskId 匹配群聊频道（tasks 页同款） ---------- */
+  const channelsQuery = useQuery({
+    queryKey: ["channels", "task_group"],
+    queryFn: () => api.get<{ items: ChannelItem[]; total: number }>("/channels", { query: { type: "task_group" } }),
+    enabled: !!user?.id && !!channel?.taskId,
+  });
+  useEffect(() => {
+    if (!channelsQuery.data) return;
+    const g = channelsQuery.data.items.find((c) => c.taskId === channel?.taskId) ?? null;
+    setGroupId((prev) => (prev === g?.id ? prev : (g?.id ?? null)));
+  }, [channelsQuery.data, channel?.taskId]);
+
+  /* ---------- 2.6 群聊上下文：群聊频道最近 user 消息（limit 5，queryKey 加 "context" 与主列表 limit=50 隔离） ---------- */
+  const groupMessagesQuery = useQuery({
+    queryKey: ["channel", groupId ?? "", "messages", "context"],
+    queryFn: () => api.get<MessagesResponse>(`/channels/${groupId}/messages`, { query: { limit: 5 } }),
+    enabled: !!groupId && !!user?.id,
+  });
+
+  /* ---------- 2.7 Agent 提问/权限确认补拉：进入页面/刷新时恢复未处理弹窗（落库持久化） ---------- */
+  const questionsQuery = useQuery({
+    queryKey: ["questions", channel?.taskId ?? "", "pending"],
+    queryFn: () => api.get<QuestionModalData[]>(`/questions`, { query: { taskId: channel?.taskId ?? "", status: "pending" } }),
+    enabled: !!channel?.taskId && !!user?.id,
+  });
+  useEffect(() => {
+    const pending = questionsQuery.data;
+    if (!pending || pending.length === 0) return;
+    setPendingQuestion((prev) => prev ?? pending[0]);
+  }, [questionsQuery.data]);
+  // 初始/刷新同步：查询结果过滤 user 消息 → 上下文区；与 onMessage 实时追加合并去重（取最近 5 条）
+  useEffect(() => {
+    const items = groupMessagesQuery.data?.items ?? [];
+    const userMsgs = items.filter((m) => m.senderType === "user");
+    if (userMsgs.length === 0) return;
+    setGroupContextMessages((prev) => {
+      const merged = [...userMsgs, ...prev.filter((p) => !userMsgs.some((u) => u.id === p.id))];
+      if (merged.length === prev.length && merged.every((m, i) => m.id === prev[i]?.id)) return prev;
+      return merged.slice(-5);
+    });
+  }, [groupMessagesQuery.data]);
+
+  /**
+   * 主 Agent（私聊对象）：private 频道 channel.agent（agent id）→ 从任务 instances 匹配
+   * T6 实例语义：channel.taskAgentId 精确命中实例（同 agent 多实例各自私聊独立，
+   * 不再 find 首实例串扰）；taskAgentId 缺省（存量频道）回退该 agent 第一个实例。
+   * instances 未就绪/未命中时回退 channel.agent 原始信息。task_group 直达降级为任务标题。
+   */
+  const mainAgent = useMemo(() => {
+    if (!channel?.agent) return null;
+    const inst = channel.taskAgentId
+      ? taskInstances.find((i) => i.id === channel.taskAgentId)
+      : taskInstances.find((i) => i.agentId === channel.agent?.id);
+    return {
+      id: channel.agent.id,
+      name: inst ? (inst.alias ?? inst.name) : channel.agent.name,
+      role: resolveRole(channel.agent, channel.agent.id),
+      ...(inst ? { instanceId: inst.id } : {}),
+    };
+  }, [channel, taskInstances]);
 
   /** 团队 Agent（mention 合法性判定 + agentMap 名映射）。 */
   const agentMembers = useMemo(() => {
@@ -437,10 +669,12 @@ export default function DmChatPage() {
 
   /* ---------- 3. SSE 实时（单连接多 scope，逗号分隔） ---------- */
   // channel 段恒有；task 段仅当 channel?.taskId 存在时加入（channel 异步加载后才有）；
+  // group 段仅当群聊频道匹配到（groupId 就绪）时加入——群聊新 user 消息实时进上下文区；
   // filter(Boolean) 剔除空段，避免 scope 出现 ",task:" 或尾逗号。
   const realtimeScope = [
     `channel:${channelId}`,
     channel?.taskId ? `task:${channel?.taskId}` : null,
+    groupId ? `channel:${groupId}` : null,
   ]
     .filter(Boolean)
     .join(",");
@@ -450,6 +684,13 @@ export default function DmChatPage() {
     onMessage: (payload) => {
       scrollToBottom();
       const m = payload.message;
+      // 群聊上下文实时更新：群聊频道新 user 消息（含 @agent 触发）→ 上下文区（limit 5）
+      if (groupId && m.channelId === groupId && m.senderType === "user") {
+        setGroupContextMessages((prev) => {
+          if (prev.some((p) => p.id === m.id)) return prev;
+          return [...prev, m].slice(-5);
+        });
+      }
       // agent 回复到达 → 清除该 Agent 的 loading/error（多 scope 连接补拉顺序不定，须在收到回复时即生效）
       if (m.senderType === "agent" && m.senderId) {
         setLoadingByAgent((prev) => {
@@ -481,9 +722,12 @@ export default function DmChatPage() {
       setLoadingByAgent((prev) => ({ ...prev, [payload.agentId]: payload.phase }));
     },
     onAgentError: (payload) => {
-      const sessionId = (payload as { sessionId?: string | null }).sessionId;
-      if (sessionId) agentIdBySessionRef.current[sessionId] = payload.agentId;
-      setErrorByAgent((prev) => ({ ...prev, [payload.agentId]: payload.errorType }));
+      const p = payload as { sessionId?: string | null; error?: unknown; errorType?: unknown; message?: unknown };
+      if (p.sessionId) agentIdBySessionRef.current[p.sessionId] = payload.agentId;
+      const detail = [p.error, p.message, p.errorType]
+        .map((x) => (typeof x === "string" && x.trim() ? x.trim() : null))
+        .find(Boolean) ?? "agent error";
+      setErrorByAgent((prev) => ({ ...prev, [payload.agentId]: detail }));
     },
     onAgentStatus: (payload: AgentStatusEvent) => {
       // agent.status 终结态收敛：running 开始 / completed|failed 结束（与 agent.loading 同 task scope）
@@ -523,61 +767,136 @@ export default function DmChatPage() {
       // 页面仅需滚到底（processing 消息插入/更新后展示最新内容）
       scrollToBottom();
     },
+    onAgentQuestion: (payload: RealtimeQuestionEvent) => {
+      // 模型提问/权限确认到达 → 弹窗；resolved=true（已回复收敛事件）→ 关闭
+      if (payload.resolved) {
+        setPendingQuestion((prev) =>
+          prev && prev.id === payload.question.id ? null : prev,
+        );
+        return;
+      }
+      if (payload.question.status !== "pending") return;
+      if (payload.taskId && channel?.taskId && payload.taskId !== channel.taskId) return;
+      setPendingQuestion({
+        id: payload.question.id,
+        requestId: payload.question.requestId,
+        kind: payload.question.kind,
+        content: payload.question.content,
+        status: payload.question.status,
+        taskId: payload.question.taskId,
+        agentId: payload.question.agentId,
+      });
+    },
   });
+
+  /* ---------- 4.5 Agent 提问/权限确认回复：POST /questions/:id/reply ---------- */
+  const questionReplyMutation = useMutation({
+    mutationFn: (payload: { answers?: string[][] | null; response?: "once" | "always" | "reject" }) =>
+      api.post(`/questions/${pendingQuestion?.id}/reply`, payload),
+    onSuccess: () => {
+      setPendingQuestion(null);
+      setQuestionSubmitting(false);
+      queryClient.invalidateQueries({ queryKey: ["questions"] });
+    },
+    onError: (err) => {
+      setQuestionSubmitting(false);
+      // 僵尸/超期权限：serve 已无该请求（410 QUESTION_EXPIRED）→ 关闭弹窗 + 刷新列表（不无限卡）
+      if (isApiError(err) && (err.status === 410 || err.code === "QUESTION_EXPIRED")) {
+        setPendingQuestion(null);
+        queryClient.invalidateQueries({ queryKey: ["questions"] });
+      }
+    },
+  });
+  const handleQuestionSubmit = (payload: { answers?: string[][] | null; response?: "once" | "always" | "reject" }) => {
+    if (!pendingQuestion) return;
+    setQuestionSubmitting(true);
+    questionReplyMutation.mutate(payload);
+  };
 
   /** 历史 loading 收敛：首连补拉会重放历史 loading（task scope）与回复（channel scope），
    *  两连接顺序不定可能导致「回复先收敛、loading 后设置」→ 恒「处理中」。
    *  依赖 loadingByAgent/errorByAgent：无论 loading 重放在历史回复之前还是之后到达，
-   *  只要最终状态里某 Agent 的历史最后一条是 agent 回复，其残留 loading/error 一律清除。 */
+   *  只要最终状态里某 Agent 的历史最后一条是 agent 回复，其残留 loading/error 一律清除。
+   *  例外：历史最后一条是 status=processing 的 agent 消息（流式中间态，仍在生成）——
+   *  刷新后内存状态（loadingByAgent/sessionByAgent）清空，server 无从通过 SSE 补推，
+   *  须从历史消息恢复：① 主动为该 Agent 设置 loading=operating（AgentInfoBar 显示「处理中」），
+   *  ② 且不参与下列收敛（processing 说明还在生成，残留状态不应被误清）。
+   *  ⚠️ 仅首连执行一次（historySettledRef）：若依赖 loadingByAgent/sessionByAgent 反复
+   *  触发，Agent 执行中的新状态（agent.loading / session.updated running）会被历史消息
+   *  误清 → 执行中不显示「处理中/工作中」。 */
+  const historySettledRef = useRef(false);
   useEffect(() => {
-    if (!messagesQuery.isSuccess) return;
+    if (!messagesQuery.isSuccess || historySettledRef.current) return;
+    historySettledRef.current = true;
     const items = messagesQuery.data?.items ?? [];
     const lastByAgent = new Map<string, RealtimeChatMessage>();
     for (const m of items) {
       if (m.senderId) lastByAgent.set(m.senderId, m);
     }
+    // ① 刷新恢复：历史最后一条 agent 消息 status=processing（流式中间态）→ 该 Agent 正在运行，
+    //    设置 loading=operating 从 server 恢复运行状态（刷新后内存清空）
     setLoadingByAgent((prev) => {
       let next: Record<string, string> | null = null;
       for (const [agentId, m] of lastByAgent) {
-        if (m.senderType === "agent" && agentId in prev) {
+        if (m.senderType === "agent" && m.status === "processing" && !(agentId in prev)) {
+          if (!next) next = { ...prev };
+          next[agentId] = "operating";
+        }
+      }
+      return next ?? prev;
+    });
+    // ② loading 残留收敛：历史最后一条是终态 agent 回复（非 processing）→ 清除残留 loading
+    setLoadingByAgent((prev) => {
+      let next: Record<string, string> | null = null;
+      for (const [agentId, m] of lastByAgent) {
+        if (m.senderType === "agent" && m.status !== "processing" && agentId in prev) {
           if (!next) next = { ...prev };
           delete next[agentId];
         }
       }
       return next ?? prev;
     });
+    // ③ error 残留收敛：同上，processing（生成中）不参与收敛
     setErrorByAgent((prev) => {
       let next: Record<string, string> | null = null;
       for (const [agentId, m] of lastByAgent) {
-        if (m.senderType === "agent" && agentId in prev) {
+        if (m.senderType === "agent" && m.status !== "processing" && agentId in prev) {
           if (!next) next = { ...prev };
           delete next[agentId];
         }
       }
       return next ?? prev;
     });
-    // 会话状态残留收敛：历史最后一条是 agent 回复 → 该 Agent 会话已结束（active/running 状态清除）
+    // ④ 会话状态残留收敛：历史最后一条是终态 agent 回复 → 该 Agent 会话已结束（active/running 清除）；
+    //    processing（生成中）例外保留，与 ① 的 loading=operating 语义一致
     setSessionByAgent((prev) => {
       let next: Record<string, string> | null = null;
       for (const [agentId, m] of lastByAgent) {
-        if (m.senderType === "agent" && (prev[agentId] === "active" || prev[agentId] === "running")) {
+        if (m.senderType === "agent" && m.status !== "processing" && (prev[agentId] === "active" || prev[agentId] === "running")) {
           if (!next) next = { ...prev };
           delete next[agentId];
         }
       }
       return next ?? prev;
     });
-  }, [messagesQuery.isSuccess, messagesQuery.data, loadingByAgent, errorByAgent, sessionByAgent]);
+  }, [messagesQuery.isSuccess, messagesQuery.data]);
 
   /* ---------- 4. 发送：POST /channels/:id/messages ---------- */
   // 私聊语义：无需手动 @（mentionable=[]），自动附带主 Agent 的 mention；
   // 仅当其仍在任务团队（agentMembers）内才附加，避免 400 MENTION_AGENT_NOT_IN_TEAM。
+  // T5：mentions 附带主实例 instanceId（后端按 agentId 解析，instanceId 原样落库供展示）。
   const sendMutation = useMutation({
     mutationFn: (payload: SendMessagePayload) =>
       api.post(`/channels/${channelId}/messages`, {
         text: payload.text,
         mentions: mainAgent && agentMembers.some((a) => a.id === mainAgent.id)
-          ? [{ type: "agent" as const, agentId: mainAgent.id }]
+          ? [
+              {
+                type: "agent" as const,
+                agentId: mainAgent.id,
+                ...(mainAgent.instanceId ? { instanceId: mainAgent.instanceId } : {}),
+              },
+            ]
           : [],
         // UX-10 附件：MessageInput 已先 POST /uploads 拿 url，随消息提交三字段
         ...(payload.attachment
@@ -628,16 +947,20 @@ export default function DmChatPage() {
     return phase === "operating" ? `${name} 操作中` : `${name} 思考中`;
   }, [loadingByAgent, agentMap]);
 
-  /** agent.error → 错误态（isRetryable 类型 → 琥珀重试，其余 → 红色升级引导）。 */
+  /** agent.error → 错误态（凭据/配额类硬错误 → 红色升级引导；模型繁忙/超时 → 琥珀重试）。 */
   const errorLabel = useMemo<{ kind: "retry" | "quota"; detail: string } | null>(() => {
     const entries = Object.entries(errorByAgent);
     if (entries.length === 0) return null;
-    const [agentId, errorType] = entries[0];
+    const [agentId, detail] = entries[0];
     const name = agentMap.get(agentId)?.name ?? agentId;
-    const isRetryable = ["auth_failed", "model_busy", "context_overflow"].includes(errorType);
+    const d = detail.toLowerCase();
+    // 可重试：模型繁忙/限流/超时/上下文溢出；凭据/配额/计费类硬错误不可重试（走升级引导）
+    const isRetryable =
+      /model_busy|rate.?limit|timeout|context.?overflow|busy|unavailable|try again/i.test(d) &&
+      !/invalid api key|unauthorized|401|quota|insufficient|billing|credential/i.test(d);
     return {
       kind: isRetryable ? "retry" : "quota",
-      detail: isRetryable ? `${name} 处理失败（模型繁忙），自动重试中` : `${name} 处理失败（${errorType}）`,
+      detail: isRetryable ? `${name} 处理失败（模型繁忙），自动重试中` : `${name} 处理失败：${detail}`,
     };
   }, [errorByAgent, agentMap]);
 
@@ -730,6 +1053,13 @@ export default function DmChatPage() {
         backHref={channel?.taskId ? `/tasks/${channel.taskId}` : undefined}
       />
 
+      {/* 群聊上下文区：群聊里 @agent 触发的 user 消息（对话起点）；空态（无群聊频道/user 消息）不渲染 */}
+      <GroupContextBar
+        messages={groupContextMessages}
+        userId={user?.id ?? ""}
+        myName={user?.username ?? "我"}
+      />
+
       <DmMessageList
         messages={messages}
         nextCursor={messagesQuery.data?.nextCursor ?? null}
@@ -742,7 +1072,7 @@ export default function DmChatPage() {
         listRef={listRef}
       />
 
-      {/* Footer（对齐原型 DmFooter）：查看历史会话入口 + 简化输入框 */}
+      {/* Footer（对齐原型 DmFooter）：简化输入框 */}
       <div
         style={{
           flexShrink: 0,
@@ -751,31 +1081,6 @@ export default function DmChatPage() {
           ...baseFont,
         }}
       >
-        <div style={{ display: "flex", justifyContent: "center", paddingTop: space.md }}>
-          <span
-            data-testid="view-session-link"
-            role="link"
-            aria-label="查看历史会话"
-            title="会话面板（Phase 3）"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: space.xs,
-              padding: `${space.sm}px ${space.lg}px`,
-              borderRadius: radius.pill,
-              border: `1px solid ${neutral[200]}`,
-              backgroundColor: neutral[50],
-              color: neutral[600],
-              fontSize: fontSize.sm,
-              fontWeight: 500,
-              cursor: "pointer",
-              boxShadow: shadow.sm,
-            }}
-          >
-            查看历史会话
-            <span aria-hidden>↗</span>
-          </span>
-        </div>
         <MessageInput
           value={input}
           onChange={setInput}
@@ -786,6 +1091,15 @@ export default function DmChatPage() {
           style={{ border: "none", borderTop: `1px solid ${neutral[200]}`, borderRadius: 0 }}
         />
       </div>
+
+      {/* Agent 提问/权限确认弹窗（absolute 相对宿主，不阻塞消息流） */}
+      <QuestionModal
+        open={!!pendingQuestion}
+        question={pendingQuestion}
+        submitting={questionSubmitting}
+        onClose={() => setPendingQuestion(null)}
+        onSubmit={handleQuestionSubmit}
+      />
     </div>
   );
 }

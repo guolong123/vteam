@@ -1,0 +1,234 @@
+T1 Schema 迁移实证 — 角色/实例分离
+====================================
+日期：2026-08-13
+执行方式：手动 SQL 落库（docker exec aiagents-compose-db mysql）+ _prisma_migrations 记录
+说明：本地 .env DATABASE_URL=localhost:3307 无监听（容器未映射宿主端口），
+      按任务预案走 docker exec 手动执行 migration.sql 后再 prisma generate。
+
+--------------------------------------------------------------------
+1. 迁移 SQL 摘要
+--------------------------------------------------------------------
+server/prisma/migrations/20260813130000_role_instance_separation/migration.sql
+
+ALTER TABLE task_agents ADD COLUMN alias VARCHAR(191) NULL;
+ALTER TABLE task_agents ADD COLUMN seq INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE task_agents DROP INDEX uk_task_agents_task_agent;
+ALTER TABLE task_agents ADD UNIQUE INDEX uk_task_agents_task_agent_seq(task_id, agent_id, seq);
+
+ALTER TABLE sessions ADD COLUMN task_agent_id VARCHAR(191) NULL;
+-- 唯一约束 [taskId, agentId] → [taskId, taskAgentId]（同名索引）
+-- 注意：task_id 首列同时支撑 task_id 外键、agent_id 外键绑定原复合索引（ERROR 1553），
+--       必须 先建独立 task_id/agent_id 索引 → DROP FOREIGN KEY → 换 UNIQUE → 重建外键
+ALTER TABLE sessions ADD INDEX idx_sessions_task_id(task_id);
+ALTER TABLE sessions ADD INDEX idx_sessions_agent_id(agent_id);
+ALTER TABLE sessions DROP FOREIGN KEY sessions_agent_id_fkey;
+ALTER TABLE sessions DROP INDEX uk_sessions_task_agent;
+ALTER TABLE sessions ADD UNIQUE INDEX uk_sessions_task_agent(task_id, task_agent_id);
+ALTER TABLE sessions ADD CONSTRAINT sessions_agent_id_fkey FOREIGN KEY (agent_id)
+  REFERENCES agents(id) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+ALTER TABLE chat_channels ADD COLUMN task_agent_id VARCHAR(191) NULL;
+ALTER TABLE chat_channels ADD INDEX idx_channels_task_id(task_id);
+ALTER TABLE chat_channels ADD INDEX idx_channels_agent_id(agent_id);
+ALTER TABLE chat_channels DROP FOREIGN KEY chat_channels_agent_id_fkey;
+ALTER TABLE chat_channels DROP INDEX uk_channels_task_agent;
+ALTER TABLE chat_channels ADD UNIQUE INDEX uk_channels_task_agent(task_id, task_agent_id);
+ALTER TABLE chat_channels ADD CONSTRAINT chat_channels_agent_id_fkey FOREIGN KEY (agent_id)
+  REFERENCES agents(id) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+ALTER TABLE messages ADD COLUMN sender_instance_id VARCHAR(191) NULL;
+ALTER TABLE tasks ADD COLUMN main_agent_instance_id VARCHAR(191) NULL;
+ALTER TABLE issues ADD COLUMN assignee_instance_id VARCHAR(191) NULL;
+
+迁移已记录至 _prisma_migrations（migration_name=20260813130000_role_instance_separation，
+checksum=15455e1fbeaa6e2b7fb8f92d2cbc57c91fdd6c21ad9a450005581609e84718ea）。
+
+--------------------------------------------------------------------
+2. SHOW COLUMNS 实证（新列全部存在）
+--------------------------------------------------------------------
+task_agents:    alias varchar(191) NULL / seq int NOT NULL DEFAULT 1
+sessions:       task_agent_id varchar(191) NULL
+chat_channels:  task_agent_id varchar(191) NULL
+messages:       sender_instance_id varchar(191) NULL
+tasks:          main_agent_instance_id varchar(191) NULL
+issues:         assignee_instance_id varchar(191) NULL
+
+完整 SHOW COLUMNS/INDEX 输出见下文附录（docker exec 实测输出）。
+
+--------------------------------------------------------------------
+3. SHOW INDEX 约束实证
+--------------------------------------------------------------------
+task_agents 索引：
+  uk_task_agents_task_agent_seq (task_id, agent_id, seq)  ← 新三维唯一键，旧 uk_task_agents_task_agent 已移除
+  idx_task_agents_task (task_id, joined_at)
+  task_agents_agent_id_fkey (agent_id)
+
+sessions 索引：
+  uk_sessions_task_agent (task_id, task_agent_id)          ← 换为实例维度，旧 (task_id, agent_id) 已移除
+  idx_sessions_agent_id (agent_id)                         ← 独立外键支撑
+  idx_sessions_task_id (task_id)                           ← 独立外键支撑
+  sessions_worker_id_fkey (worker_id)
+  外键 sessions_agent_id_fkey / sessions_task_id_fkey 完好
+
+chat_channels 索引：
+  uk_channels_task_agent (task_id, task_agent_id)          ← 换为实例维度，旧 (task_id, agent_id) 已移除
+  idx_channels_task_id (task_id)
+  idx_channels_agent_id (agent_id)
+  外键 chat_channels_agent_id_fkey / chat_channels_task_id_fkey 完好
+
+--------------------------------------------------------------------
+4. 插值实证（唯一约束语义）
+--------------------------------------------------------------------
+场景：同 task 同 agent 双实例（seq=1/2 成功）+ 重复 seq 冲突（1062）
+
+1) 插入 seq=2 第二个实例（开发者-2）→ 成功：
+INSERT INTO task_agents (id, task_id, agent_id, alias, seq)
+VALUES ('ta_test_seq2', 't_0000000001', 'a_developer', '开发者-2', 2);
+→ 无报错
+
+SELECT ... WHERE task_id='t_0000000001' AND agent_id='a_developer' ORDER BY seq;
+id	          task_id         agent_id     alias         seq
+ta_0000000002  t_0000000001    a_developer  NULL          1
+ta_test_seq2   t_0000000001    a_developer  开发者-2       2
+→ 同一 agent 双实例成功（唯一键从 [taskId, agentId] 放开为 [taskId, agentId, seq]）
+
+2) 重复 seq 插入 → 唯一冲突：
+INSERT INTO task_agents (id, task_id, agent_id, alias, seq)
+VALUES ('ta_test_dup', 't_0000000001', 'a_developer', '开发者-dup', 2);
+→ ERROR 1062 (23000): Duplicate entry 't_0000000001-a_developer-2'
+  for key 'task_agents.uk_task_agents_task_agent_seq'
+→ 唯一约束 uk_task_agents_task_agent_seq 生效
+
+3) 清理：DELETE FROM task_agents WHERE id IN ('ta_test_seq2','ta_test_dup');
+→ remaining_test_rows = 0（无脏数据）
+
+--------------------------------------------------------------------
+5. tsc / jest / prisma generate 验证
+--------------------------------------------------------------------
+cd server && npx tsc --noEmit → 0 错误
+npx prisma generate → 通过
+npx jest（全量）→ 56 suites / 1099 tests 全部通过
+
+说明：唯一键语义变更（taskId_agentId → taskId_agentId_seq / taskAgentId）直接破坏了
+6 处现有查询的编译，已做最小语义等价适配（findUnique→findFirst / taskAgent.update→updateMany /
+session.create 补 taskAgentId=ta.id），并同步更新了 6 个 spec 的 mock 与断言
+（tasks/issues/chat/worker-dispatcher/integration/ingress）。未引入任何实例化业务逻辑
+（seq 生成、alias 默认、mainAgentInstanceId 判定等留待 T2-T5）。
+
+--------------------------------------------------------------------
+附录：docker exec 完整 SHOW COLUMNS / SHOW INDEX 输出
+--------------------------------------------------------------------
+x
+--- task_agents columns ---
+Field	Type	Null	Key	Default	Extra
+id	varchar(191)	NO	PRI	NULL	
+task_id	varchar(191)	NO	MUL	NULL	
+agent_id	varchar(191)	NO	MUL	NULL	
+joined_at	datetime(3)	NO		CURRENT_TIMESTAMP(3)	DEFAULT_GENERATED
+removed_at	datetime(3)	YES		NULL	
+alias	varchar(191)	YES		NULL	
+seq	int	NO		1	
+x
+--- sessions columns ---
+Field	Type	Null	Key	Default	Extra
+id	varchar(191)	NO	PRI	NULL	
+task_id	varchar(191)	NO	MUL	NULL	
+agent_id	varchar(191)	NO	MUL	NULL	
+worker_id	varchar(191)	YES	MUL	NULL	
+instance_ref	varchar(191)	YES		NULL	
+status	varchar(191)	NO		created	
+created_at	datetime(3)	NO		CURRENT_TIMESTAMP(3)	DEFAULT_GENERATED
+updated_at	datetime(3)	NO		NULL	
+task_agent_id	varchar(191)	YES		NULL	
+x
+--- chat_channels columns ---
+Field	Type	Null	Key	Default	Extra
+id	varchar(191)	NO	PRI	NULL	
+type	varchar(191)	NO		NULL	
+task_id	varchar(191)	NO	MUL	NULL	
+agent_id	varchar(191)	YES	MUL	NULL	
+created_at	datetime(3)	NO		CURRENT_TIMESTAMP(3)	DEFAULT_GENERATED
+deleted_at	datetime(3)	YES		NULL	
+last_read_at	datetime(3)	YES		NULL	
+pinned	tinyint(1)	NO		0	
+task_agent_id	varchar(191)	YES		NULL	
+x
+--- messages columns ---
+Field	Type	Null	Key	Default	Extra
+id	varchar(191)	NO	PRI	NULL	
+channel_id	varchar(191)	NO	MUL	NULL	
+sender_type	varchar(191)	NO		NULL	
+sender_id	varchar(191)	YES		NULL	
+content	json	NO		NULL	
+mentions	json	YES		NULL	
+status	varchar(191)	NO		sent	
+created_at	datetime(3)	NO		CURRENT_TIMESTAMP(3)	DEFAULT_GENERATED
+attachment_name	varchar(191)	YES		NULL	
+attachment_type	varchar(191)	YES		NULL	
+attachment_url	varchar(191)	YES		NULL	
+sender_instance_id	varchar(191)	YES		NULL	
+x
+--- tasks columns ---
+Field	Type	Null	Key	Default	Extra
+id	varchar(191)	NO	PRI	NULL	
+project_id	varchar(191)	NO	MUL	NULL	
+title	varchar(191)	NO		NULL	
+description	varchar(191)	YES		NULL	
+priority	varchar(191)	NO		medium	
+status	varchar(191)	NO		pending	
+main_agent_id	varchar(191)	YES	MUL	NULL	
+background_docs	json	YES		NULL	
+created_by	varchar(191)	NO	MUL	NULL	
+version	int	NO		0	
+created_at	datetime(3)	NO		CURRENT_TIMESTAMP(3)	DEFAULT_GENERATED
+started_at	datetime(3)	YES		NULL	
+pending_review_at	datetime(3)	YES		NULL	
+completed_at	datetime(3)	YES		NULL	
+archived_at	datetime(3)	YES		NULL	
+main_agent_instance_id	varchar(191)	YES		NULL	
+x
+--- issues columns ---
+Field	Type	Null	Key	Default	Extra
+id	varchar(191)	NO	PRI	NULL	
+task_id	varchar(191)	NO	MUL	NULL	
+title	varchar(191)	NO		NULL	
+description	varchar(191)	YES		NULL	
+status	varchar(191)	NO		open	
+tags	json	YES		NULL	
+assignee_agent_id	varchar(191)	YES	MUL	NULL	
+assignee_user_id	varchar(191)	YES	MUL	NULL	
+created_by	varchar(191)	YES	MUL	NULL	
+creator_agent_id	varchar(191)	YES	MUL	NULL	
+deleted_at	datetime(3)	YES		NULL	
+resolved_at	datetime(3)	YES		NULL	
+closed_at	datetime(3)	YES		NULL	
+created_at	datetime(3)	NO		CURRENT_TIMESTAMP(3)	DEFAULT_GENERATED
+updated_at	datetime(3)	NO		NULL	
+assignee_instance_id	varchar(191)	YES		NULL	
+x
+--- task_agents indexes ---
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+task_agents	0	PRIMARY	1	id	A	8	NULL	NULL		BTREE			YES	NULL
+task_agents	0	uk_task_agents_task_agent_seq	1	task_id	A	3	NULL	NULL		BTREE			YES	NULL
+task_agents	0	uk_task_agents_task_agent_seq	2	agent_id	A	9	NULL	NULL		BTREE			YES	NULL
+task_agents	0	uk_task_agents_task_agent_seq	3	seq	A	9	NULL	NULL		BTREE			YES	NULL
+task_agents	1	idx_task_agents_task	1	task_id	A	3	NULL	NULL		BTREE			YES	NULL
+task_agents	1	idx_task_agents_task	2	joined_at	A	8	NULL	NULL		BTREE			YES	NULL
+task_agents	1	task_agents_agent_id_fkey	1	agent_id	A	4	NULL	NULL		BTREE			YES	NULL
+x
+--- sessions indexes ---
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+sessions	0	PRIMARY	1	id	A	9	NULL	NULL		BTREE			YES	NULL
+sessions	0	uk_sessions_task_agent	1	task_id	A	3	NULL	NULL		BTREE			YES	NULL
+sessions	0	uk_sessions_task_agent	2	task_agent_id	A	3	NULL	NULL	YES	BTREE			YES	NULL
+sessions	1	sessions_worker_id_fkey	1	worker_id	A	1	NULL	NULL	YES	BTREE			YES	NULL
+sessions	1	idx_sessions_agent_id	1	agent_id	A	4	NULL	NULL		BTREE			YES	NULL
+sessions	1	idx_sessions_task_id	1	task_id	A	3	NULL	NULL		BTREE			YES	NULL
+x
+--- chat_channels indexes ---
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+chat_channels	0	PRIMARY	1	id	A	8	NULL	NULL		BTREE			YES	NULL
+chat_channels	0	uk_channels_task_agent	1	task_id	A	3	NULL	NULL		BTREE			YES	NULL
+chat_channels	0	uk_channels_task_agent	2	task_agent_id	A	3	NULL	NULL	YES	BTREE			YES	NULL
+chat_channels	1	idx_channels_task_id	1	task_id	A	3	NULL	NULL		BTREE			YES	NULL
+chat_channels	1	idx_channels_agent_id	1	agent_id	A	5	NULL	NULL	YES	BTREE			YES	NULL

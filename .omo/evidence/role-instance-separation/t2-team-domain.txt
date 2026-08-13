@@ -1,0 +1,75 @@
+T2 团队域改造 —— 证据
+============================================================
+日期：2026-08-13
+目标：tasks 模块从"agentId 列表"升级为"实例列表"（角色/实例分离 T2）
+范围：server/src/tasks（service + DTO + spec）；不动 worker-dispatcher/platform-mcp/前端
+
+一、DTO 契约变更
+------------------------------------------------------------
+create-task.dto.ts：
+  - agentIds: string[]  →  agents: TaskAgentInput[]（{agentId, alias?}，agentId 可重复 = 多实例）
+  - 新增 mainAgentInstanceId?: string（主实例，决策依据；须属于本次创建实例集合）
+  - mainAgentId?: string 保留兼容映射（mainAgentInstanceId 缺省时按 mainAgentId 映射到该 agent 第一个实例）
+  - 注释更新 FR-08 语义（默认别名 `<角色中文名>-<seq>`）
+update-task.dto.ts：
+  - 新增 mainAgentInstanceId?: string | null（服务层校验须为团队内实例）
+  - mainAgentId 保留兼容（未传 mainAgentInstanceId 时映射到该 agent 第一个实例）
+update-team.dto.ts：
+  - addAgentIds/removeAgentIds → addInstances?: TaskAgentInput[] / removeInstanceIds?: string[]
+  - 移除按实例 id；新增实例 agentId 可重复（seq 服务端生成）
+
+二、tasks.service 逻辑变更
+------------------------------------------------------------
+1) 查询 include 统一 TASK_AGENTS_INCLUDE = taskAgents.include.agent{id,name,role}
+   （findAll/findOne/update/updateTeam/transition 全部替换；TaskRow.taskAgents 升级为 TaskAgentInstance[]）
+2) ROLE_LABELS 角色中文名映射（product=产品经理/project_manager=项目经理/architect=架构师/
+   developer=开发者/tester=测试；未知角色用 agent.name）
+3) create：事务内每个 agents 项 → taskAgent.aggregate(_max.seq, where taskId+agentId) 计算
+   seq = max+1（防并发重号，唯一键 uk_task_agents_task_agent_seq 兜底）→ taskAgent.create(alias 默认
+   `<角色中文名>-<seq>`, seq) → session.create 绑 taskAgentId；主实例解析入参优先 → mainAgentId 映射
+   第一实例 → null；校验 mainAgentInstanceId ∈ 创建实例集合；task.create 先置 null 再 tx.task.update
+   写入 mainAgentId+mainAgentInstanceId；事务后重查返回 toTaskDto
+4) updateTeam：addInstances 每实例创建（seq 生成）+ Session（joinStatus：in_progress→active/
+   pending→created 保留）；removeInstanceIds 按实例 id 写 removedAt + 冻结该实例 session；
+   主实例被移除 → task.update 清空 mainAgentId+mainAgentInstanceId；系统消息按实例 alias；
+   广播 team.changed payload = {taskId, action, instanceId, agentId, alias}（含 instanceId+alias）
+5) start：preflight 团队实例非空 + mainAgentInstanceId 非空（原 mainAgentId 改）；privateChannel
+   查找按 taskAgentId（原 taskId+agentId）；sysMessage/privateMessage 主实例默认别名；
+   团队分工用实例别名列表
+6) update：mainAgentInstanceId 校验须为团队内实例并同步 mainAgentId；mainAgentId 兼容映射到第一个实例
+7) toTaskDto：新增 instances=[{id, agentId, alias, seq, name, role, main}]（按 (agentId,seq) 稳定排序，
+   main = id===mainAgentInstanceId）；mainAgentId 保留（渲染兜底）；mainAgentInstanceId 新增；
+   teamAgentIds 保留（按 taskAgents 原始顺序，未 removed 过滤）
+8) teamAgentIdsOf → teamInstancesOf（返回实例对象数组）+ defaultAlias + createInstances（create/updateTeam 共用）
+
+三、验证结果
+------------------------------------------------------------
+1) npx tsc --noEmit → 0 错误
+2) npx jest src/tasks/tasks.service.spec.ts src/tasks/tasks.controller.spec.ts → 2 suites / 72 tests 全过
+3) npx jest（全量）→ 56 suites / 1103 tests 全过
+4) 落库实证（真实 MySQL，临时集成用例 + docker exec 外部查库）：
+   DTO 断言：instances 长度 3；开发者两实例 seq=[1,2] alias=[开发者-1,开发者-2]；
+             项目经理 seq=1 alias=项目经理-1 main=true；mainAgentInstanceId=项目经理实例
+   task_agents（docker exec mysql，--default-character-set=utf8mb4）：
+     t_0000000004  a_developer  开发者-1  1
+     t_0000000004  a_developer  开发者-2  2
+     t_0000000004  a_project_manager  项目经理-1  1
+   sessions（3 行，各绑实例）：
+     s_0000000010 → ta_0000000010 (a_developer)
+     s_0000000011 → ta_0000000011 (a_developer)
+     s_0000000012 → ta_0000000012 (a_project_manager)
+   tasks：main_agent_id=a_project_manager  main_agent_instance_id=ta_0000000012  status=pending
+   实证后已清理测试数据（task_agents/sessions/task_events/chat_channels/tasks 均删净）
+
+四、回归确认（单实例任务行为与改造前一致）
+------------------------------------------------------------
+- 单实例任务：agents 一项 → seq=1、alias=`<角色中文名>-1`、mainAgentInstanceId=该实例、mainAgentId=其 agent
+- spec 中"mainAgentId 兼容映射 / mainAgentInstanceId 缺省按 mainAgentId 映射"用例覆盖
+- 存量行：task_agents seq=1 保留、sessions task_agent_id NULL 保留（不做回填）
+
+五、风险与备注
+------------------------------------------------------------
+- 存量任务 mainAgentInstanceId 为 NULL：start 前置校验改为 mainAgentInstanceId 非空，旧任务直接 start
+  将 400 MAIN_AGENT_NOT_SET（不兼容、不回填，按用户已确认决策）
+- 广播 team.changed payload 增加 instanceId/alias 字段（保留 agentId 兼容）；消费方 T3 按实例语义
+- instances 排序按 (agentId,seq)；teamAgentIds 保持原始顺序（兼容字段，避免破坏既有消费顺序假设）

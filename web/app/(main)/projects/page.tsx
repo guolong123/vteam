@@ -75,7 +75,7 @@ const STATUS_MAP: Record<string, StatusKey> = {
   archived: "已归档",
 };
 
-const ROLE_KEYS: readonly RoleKey[] = ["product", "architect", "developer", "tester"];
+const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
 
 /** 后端 agent.role → AgentAvatar 可用 RoleKey（未知/自定义 → developer 兜底，对齐 agents 页）。 */
 function toAvatarRole(role: string | null): RoleKey {
@@ -102,11 +102,14 @@ function ProjectCard({
   project,
   onOpen,
   onArtifacts,
+  onIssues,
 }: {
   project: Project;
   onOpen?: () => void;
   /** 次级入口：产出物页（stopPropagation 防触发卡片主跳转） */
   onArtifacts?: () => void;
+  /** 次级入口：Issue 管理页（stopPropagation 防触发卡片主跳转） */
+  onIssues?: () => void;
 }) {
   const card: CSSProperties = {
     display: "flex",
@@ -224,6 +227,32 @@ function ProjectCard({
         >
           <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>▤</span>
           产出物
+        </button>
+        {/* 次级入口：Issue 管理（点击不冒泡，避免触发卡片主跳转 /board） */}
+        <button
+          type="button"
+          data-testid="project-issues-entry"
+          onClick={(e) => {
+            e.stopPropagation();
+            onIssues?.();
+          }}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: space.xs,
+            padding: `${space.xs}px ${space.sm + 2}px`,
+            borderRadius: radius.pill,
+            border: `1px solid ${neutral[200]}`,
+            backgroundColor: "#FFFFFF",
+            color: neutral[600],
+            fontSize: fontSize.xs,
+            fontWeight: 500,
+            cursor: "pointer",
+            fontFamily: fontFamily.body,
+          }}
+        >
+          <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>☰</span>
+          Issue 管理
         </button>
         {/* 主入口：进入项目（UX-18：与卡片 onClick 同目标 /board?pid=，stopPropagation 防双击跳转） */}
         <button
@@ -701,6 +730,7 @@ export default function ProjectsPage() {
               project={p}
               onOpen={() => router.push(`/board?pid=${p.id}`)}
               onArtifacts={() => router.push(`/artifacts?pid=${p.id}`)}
+              onIssues={() => router.push(`/issues?pid=${p.id}`)}
             />
           ))}
         </div>

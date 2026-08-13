@@ -157,8 +157,9 @@ describe('IssuesController', () => {
       }
     });
 
-    it('QueryIssuesDto：taskId 必填、status 枚举、page/pageSize 正整数', async () => {
-      expect(await errorsOf(QueryIssuesDto, {})).not.toHaveLength(0);
+    it('QueryIssuesDto：taskId 可选、projectId 可选、status 枚举、page/pageSize 正整数', async () => {
+      expect(await errorsOf(QueryIssuesDto, {})).toHaveLength(0); // taskId/projectId 均可选，二选一由 service 校验
+      expect(await errorsOf(QueryIssuesDto, { projectId: 'p_1' })).toHaveLength(0);
       expect(
         await errorsOf(QueryIssuesDto, { taskId: 't_1', status: 'bogus' }),
       ).not.toHaveLength(0);

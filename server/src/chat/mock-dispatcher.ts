@@ -36,15 +36,19 @@ export function hashText(text: string): number {
 }
 
 /**
- * 四类角色确定性回复模板（16 篇 §3~§6 角色定位 + 14 篇 §4.1）：
+ * 五类角色确定性回复模板（16 篇 §3~§6 角色定位 + 14 篇 §4.1 + 项目经理新增）：
  * 固定文案不随机，每条 2 句；模板数组按输入哈希确定选一条 → 同输入同输出（可断言）。
- * role 从 agentId 解析（seed 契约 a_<role>：a_product/a_architect/a_developer/a_tester），
+ * role 从 agentId 解析（seed 契约 a_<role>：a_product/a_project_manager/a_architect/a_developer/a_tester），
  * 未知角色走 DEFAULT_REPLY_TEMPLATES 兜底。
  */
 const ROLE_REPLY_TEMPLATES: Record<string, string[]> = {
   product: [
     '需求已明确，输出需求文档要点与验收标准：已按功能边界拆解需求，整理为可执行的条目清单。',
     '收到需求说明，正在梳理功能优先级与验收标准，稍后输出完整需求文档。',
+  ],
+  project_manager: [
+    '项目计划已排定，输出工作项清单与里程碑：已按依赖拆分任务并指派责任人，稍后在群聊同步进度。',
+    '收到，已更新项目进度与待办，正在协调各角色衔接产出，必要时在群聊提示推进。',
   ],
   architect: [
     '技术方案评估完成，输出设计文档与方案评审结论：已权衡可选方案，确定推荐实现路径。',

@@ -67,6 +67,11 @@ services:
       # 模型 provider token 加密密钥（C4 AES-256-GCM，32 字节/64 hex）。
       # 必填校验：未设置即启动报错（拒绝公开默认值导致密钥泄露）。生成方式：openssl rand -hex 32
       MODEL_CREDENTIAL_KEY: ${MODEL_CREDENTIAL_KEY:?MODEL_CREDENTIAL_KEY 未设置，请生成 32 字节随机密钥（openssl rand -hex 32）}
+      # 首字超时（server dispatcher watchdog）：dispatch 后 FIRST_TOKEN_TIMEOUT_MS 内无任何
+      # 事件回流 → 判「agent 无响应」。180s ≥ worker 首字超时 120s + 余量——复杂任务长思考
+      # 不因 60s 默认值被误报；env 可配。worker 成功路径已主动上报 agent.status(loading)
+      # 清除本 watchdog（B 方案），此值作为兜底防线。
+      FIRST_TOKEN_TIMEOUT_MS: "180000"
     depends_on:
       db:
         condition: service_healthy
@@ -81,6 +86,10 @@ services:
       start_period: 20s
     ports:
       - "13000:3000"
+    volumes:
+      # P2 产出物落盘持久化：Agent 文档/文件产出物存 /app/uploads（server 静态服务挂载点），
+      # 容器重建不丢文件（DB 元数据与磁盘文件一致；未挂载时 down 后文件丢失、前端降级纯文本）
+      - uploads_data:/app/uploads
     networks:
       - aiagents-net
 
@@ -117,17 +126,43 @@ services:
       SERVER_URL: http://server:3000
       WORKER_ID: w_compose_worker
       OPENCODE_SERVE_HOSTNAME: 0.0.0.0
+      # 固定 opencode serve 端口（不再随机；容器内 4000）
+      OPENCODE_SERVE_PORT: "4000"
       WORKER_ADVERTISE_HOST: http://worker
       # worker 默认模型兜底（C2 新增，Agent 未配模型时用，C7 模型解析优先级第 3 级）；空 = 不指定（serve 默认）
       WORKER_DEFAULT_MODEL: ${WORKER_DEFAULT_MODEL:-}
+      # 首字超时（worker awaitCompletion）：模型时限内无 text/reasoning 输出即 abort。
+      # 对齐 server FIRST_TOKEN_TIMEOUT_MS=180s（compose 同步放宽），防长思考任务被 worker
+      # 侧提前 abort（server 侧先误报、worker 侧再误杀的竞态）。
+      WORKER_FIRST_TOKEN_TIMEOUT_MS: "180000"
+      # 持久化工作目录：serve cwd + .opencode/tools|skills 注入落点 + agent 工作区
+      #（git clone 的仓库、任务文件）。改挂载卷路径，容器重建不丢（worker 启动时
+      # installGitTools/injector 会在空卷上自动重建 .opencode；镜像内 /tmp/keta-worker
+      # 的 dist/node_modules 不受影响，WORKDIR 未变）。
+      WORK_DIR: /data/keta-worker
     depends_on:
       server:
         condition: service_healthy
+    ports:
+      # serve 容器内 4000 → 宿主机 14000，浏览器访问 http://localhost:14000
+      - "14000:4000"
+    volumes:
+      # 工作目录持久化：serve cwd、.opencode 注入、git clone 的仓库与任务文件
+      - worker_work:/data/keta-worker
+      # 用户目录（HOME=/root）持久化：opencode.db 会话库（session.instanceRef 指向的
+      # opencode 会话重建后不 404）、auth.json 模型凭据、.keta-git-creds.json、log、repos
+      - worker_home:/root
     networks:
       - aiagents-net
 
 volumes:
   mysql_data:
+  # P2：server 产出物落盘持久化（Agent 文档/文件，见 server 服务 volumes 挂载）
+  uploads_data:
+  # worker 工作目录持久化（serve cwd、.opencode 注入、git clone 的仓库、任务文件）
+  worker_work:
+  # worker 用户目录（HOME）持久化（opencode.db 会话库、auth.json 模型凭据、.keta-git-creds.json）
+  worker_home:
 
 networks:
   aiagents-net:

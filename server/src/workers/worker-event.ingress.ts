@@ -22,6 +22,8 @@ export interface TaskCompletedPayload {
   taskId?: string;
   agentId?: string;
   sessionId?: string;
+  /** 执行注册注销用（dispatcher unregisterExecution 需定位 worker:task 活跃记录）。 */
+  workerId?: string;
   /**
    * 消息来源频道 id（DispatchRequest.channelId 透传）。轮询回流路径携带，供
    * resolveChannel 群聊优先（用户在群聊频道 @agent → 回复回流群聊而非 DM）。
@@ -81,6 +83,31 @@ export interface MessagePartDeltaPayload {
   channelId?: string;
   parts?: unknown;
   status?: string;
+  [key: string]: unknown;
+}
+
+/** session.question 回流负载（worker 检测 serve pending question 后上送）。
+ * sessionId 语义 = opencode 会话 id（ses_ 前缀，ingress 经 instanceRef 反查平台主键）；
+ * requestId = serve question 请求 id（que_ 前缀，AgentQuestion.requestId 唯一键）。 */
+export interface SessionQuestionPayload {
+  sessionId?: string;
+  requestId?: string;
+  taskId?: string;
+  agentId?: string;
+  questions?: unknown;
+  [key: string]: unknown;
+}
+
+/** session.permission 回流负载（worker 检测 serve pending 权限请求后上送）。
+ * permissionId = serve 权限请求 id（per_ 前缀，AgentQuestion.requestId 唯一键）。 */
+export interface SessionPermissionPayload {
+  sessionId?: string;
+  permissionId?: string;
+  taskId?: string;
+  agentId?: string;
+  type?: string;
+  pattern?: string | string[];
+  title?: string;
   [key: string]: unknown;
 }
 
@@ -274,6 +301,17 @@ export class WorkerEventIngress {
       case 'git.op':
         // T6：git 工具执行审计 → task_events 落库（metadata Json：agent/repo_url/action/exit）
         return this.handleGitOp(dto);
+      case 'session.question':
+      case 'session.permission':
+        // 模型提问/工具权限确认：AgentQuestion 落库 + emit AGENT_QUESTION（scope=task），
+        // 前端会话页弹窗；异常吞错不阻断（事件回流尽力而为）。
+        return this.handleAgentQuestion(dto)
+          .catch((err: unknown) => {
+            this.logger.error(
+              `[ingress] ${dto.type} 处理失败: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          })
+          .then(() => true);
     }
     return Promise.resolve(true);
   }
@@ -286,8 +324,18 @@ export class WorkerEventIngress {
    *  后续 updateMany/emit/activity 通知统一用平台主键（dispatcher watchdog 以
    *  target.sessionId=s_ 注册，域不一致会导致首字 watchdog 永不清除）。 */
   private async handleSessionUpdated(dto: WorkerEventDto): Promise<void> {
-    const raw = dto.payload as { sessionId?: unknown; status?: unknown; taskId?: unknown };
-    const sessionId = await this.resolvePlatformSessionId(this.str(raw.sessionId), dto.workerId);
+    const raw = dto.payload as {
+      sessionId?: unknown;
+      status?: unknown;
+      taskId?: unknown;
+      agentId?: unknown;
+    };
+    const sessionId = await this.resolvePlatformSessionId(
+      this.str(raw.sessionId),
+      dto.workerId,
+      this.str(raw.taskId),
+      this.str(raw.agentId),
+    );
     const mapped = this.mapSessionStatus(raw.status);
     if (sessionId && mapped) {
       // updateMany 幂等：status 已一致时不产生更新（不抛）。
@@ -332,10 +380,27 @@ export class WorkerEventIngress {
   /** agent.status：status=error/带 error → emit agent.error；否则 emit agent.loading（phase 透传）。 */
   private async handleAgentStatus(dto: WorkerEventDto): Promise<void> {
     const payload = dto.payload as AgentStatusPayload;
+    // T6 实例语义：反查会话实例 id（taskAgentId），emit 载荷带 instanceId——
+    // 同 agent 多实例各自 loading，前端按实例消费不再全体 loading。
+    const platformSessionId = await this.resolvePlatformSessionId(
+      this.str(payload.sessionId),
+      dto.workerId,
+      payload.taskId,
+      payload.agentId,
+    );
+    let instanceId: string | null | undefined;
+    if (platformSessionId) {
+      const sessionRow = await this.prisma.session.findUnique({
+        where: { id: platformSessionId },
+        select: { taskAgentId: true },
+      });
+      instanceId = sessionRow?.taskAgentId ?? null;
+    }
     const base = {
       taskId: payload.taskId,
       agentId: payload.agentId,
-      sessionId: payload.sessionId,
+      instanceId,
+      sessionId: platformSessionId ?? payload.sessionId,
       workerId: dto.workerId,
     };
     const isError =
@@ -344,7 +409,7 @@ export class WorkerEventIngress {
     if (isError) {
       await this.realtime.emit(
         EVENT_TYPES.AGENT_ERROR,
-        { ...base, error: payload.error ?? 'agent error' },
+        { ...base, error: payload.error ?? 'agent error', errorType: this.inferErrorType(payload.error) },
         this.scopeOf(payload.taskId),
       );
     } else {
@@ -354,27 +419,33 @@ export class WorkerEventIngress {
         this.scopeOf(payload.taskId),
       );
     }
-    this.notify(this.agentStatusCallbacks, payload);
+    this.notify(this.agentStatusCallbacks, { ...payload, workerId: dto.workerId });
     // 判死 watchdog：agent 状态上报即活动（thinking/operating 均刷新 idle 计时）
     // wave1 对齐：sessionId 反查为平台主键（与 dispatcher watchdog 注册域一致）
-    const activitySessionId = await this.resolvePlatformSessionId(
-      this.str(payload.sessionId),
-      dto.workerId,
-    );
     this.notify(this.sessionActivityCallbacks, {
       type: 'agent.status',
-      sessionId: activitySessionId,
+      sessionId: platformSessionId,
       taskId: payload.taskId,
       agentId: payload.agentId,
       status: payload.status,
     });
   }
 
+  /** 从错误文本推断 errorType（前端分类依据；推断不出缺省 model_error，保持向后兼容）。 */
+  private inferErrorType(error?: string): string {
+    const e = (error ?? '').toLowerCase();
+    if (/invalid api key|unauthorized|401|credential/.test(e)) return 'auth_failed';
+    if (/quota|insufficient|billing/.test(e)) return 'quota_exceeded';
+    if (/timeout|model_busy|busy|rate.?limit|overloaded|try again/.test(e)) return 'model_busy';
+    return 'model_error';
+  }
+
   /**
    * message.part.delta：流式中间态累积落库 + 广播 MESSAGE_PART_DELTA（方案 A worker 主动推）。
-   * - 解析 channelId → 查 chatChannel.type：
-   *   - private：全量 parts 落库（含 reasoning/tool/text）；
-   *   - task_group：只累积结论性 parts（type=text 且非 synthetic，reasoning/tool 不落库）；
+   * - **目标频道 = agent 的 private 会话频道（内心独白）**：群聊 @ 触发的处理过程（含
+   *   reasoning/tool/text）统一落该 agent 的 private 频道，私聊页流式展示完整独白；
+   *   群聊只显示最终结果（task.completed 转发），不显示处理过程。private 频道反查
+   *   失败（任务无该 agent 私聊）→ 回退来源 channelId。
    * - 定位该会话最新一条 status=processing 的 agent 消息 → 累积更新其 content
    *   （parts 追加 + text 重新拼接）；无 processing 消息 → 新建（status=processing）。
    *   Message 表无 sessionId 列，以 channelId+senderId 唯一定位——同一 agent 在频道内
@@ -383,23 +454,41 @@ export class WorkerEventIngress {
    */
   private async handleMessagePartDelta(dto: WorkerEventDto): Promise<boolean> {
     const raw = dto.payload as MessagePartDeltaPayload;
-    const channelId = this.str(raw.channelId);
+    const sourceChannelId = this.str(raw.channelId);
+    const taskId = this.str(raw.taskId);
     // wave1 对齐：worker 上送 sessionId 为 opencode 会话 id（ses_ 前缀）→ 反查平台
     // Session 主键后再用于 agentId 反查/activity 通知（域一致才与 dispatcher watchdog 匹配）。
-    const sessionId = await this.resolvePlatformSessionId(this.str(raw.sessionId), dto.workerId);
+    const sessionId = await this.resolvePlatformSessionId(
+      this.str(raw.sessionId),
+      dto.workerId,
+      taskId,
+      this.str(raw.agentId),
+    );
+    // T6 实例语义：processing 消息落 senderInstanceId（会话 taskAgentId），
+    // 同 agent 多实例流式内容精确归属（终态化 handleTaskCompleted 已按实例落库）
+    let deltaSenderInstanceId: string | null | undefined;
+    if (sessionId) {
+      const sRow = await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { taskAgentId: true },
+      });
+      deltaSenderInstanceId = sRow?.taskAgentId ?? null;
+    }
     let agentId = this.str(raw.agentId);
-    if (!channelId) {
+    if (!sourceChannelId) {
       this.logger.debug(
         `[ingress] message.part.delta 缺 channelId，跳过（workerId=${dto.workerId}）`,
       );
       return true;
     }
-    const channel = await this.prisma.chatChannel.findUnique({
-      where: { id: channelId },
+    const source = await this.prisma.chatChannel.findUnique({
+      where: { id: sourceChannelId },
       select: { id: true, type: true },
     });
-    if (!channel) {
-      this.logger.debug(`[ingress] message.part.delta 频道 ${channelId} 不存在，跳过`);
+    if (!source) {
+      this.logger.debug(
+        `[ingress] message.part.delta 频道 ${sourceChannelId} 不存在，跳过`,
+      );
       return true;
     }
     // payload.agentId 缺失 → 经 sessionId（平台主键）反查 Session.agentId（定位流式消息归属）
@@ -410,14 +499,36 @@ export class WorkerEventIngress {
       });
       agentId = session?.agentId;
     }
-    const isPrivate = channel.type === CHANNEL_TYPE.private;
-    const kept = isPrivate
-      ? normalizeParts(raw.parts)
-      : extractConclusionParts(raw.parts);
-    if (kept.length === 0) {
-      // 无保留 parts（如 task_group 收到纯 reasoning/tool delta）→ 中间态无结论，不落库不广播
+    // 群聊触发（来源 task_group）→ 处理过程落该 agent 的 private 会话频道（内心独白）；
+    // 私聊触发来源本就是 private，反查结果一致。反查失败回退来源频道（兼容无私聊场景）。
+    // F3 P1 修复：同 agent 多实例按 taskAgentId 精确匹配各自私聊频道（deltaSenderInstanceId
+    // 已从 session 反查）；存量会话 taskAgentId NULL → 回退 agentId 首实例兼容。
+    const privateTarget =
+      taskId && agentId
+        ? await this.prisma.chatChannel.findFirst({
+            where: deltaSenderInstanceId
+              ? { taskId, taskAgentId: deltaSenderInstanceId }
+              : { taskId, agentId },
+            select: { id: true, type: true },
+          })
+        : null;
+    // 群聊回复只经 MCP group_post 工具直发：群聊触发的流式处理过程仅落该 agent 的
+    // private 会话频道（内心独白）；任务未创建该 agent private 频道（如仅 task_group
+    // 一个频道）→ 跳过落库，不把流式中间态写进群聊（曾致群聊每人 3 条：
+    // ACK / 流式处理过程 / 工具直发）。私聊来源或有 private 频道时行为不变。
+    if (source.type === CHANNEL_TYPE.task_group && privateTarget === null) {
       this.logger.debug(
-        `[ingress] message.part.delta 无保留 parts，跳过（channel=${channelId} type=${channel.type}）`,
+        `[ingress] message.part.delta 群聊触发且无 private 频道，跳过落库（taskId=${taskId} agentId=${agentId ?? '-'}）`,
+      );
+      return true;
+    }
+    const target = privateTarget ?? source;
+    const channelId = target.id;
+    const kept = normalizeParts(raw.parts);
+    if (kept.length === 0) {
+      // 无保留 parts（纯非对象条目）→ 中间态无内容，不落库不广播
+      this.logger.debug(
+        `[ingress] message.part.delta 无保留 parts，跳过（channel=${channelId}）`,
       );
       return true;
     }
@@ -455,6 +566,7 @@ export class WorkerEventIngress {
           channelId,
           senderType: SENDER_TYPE.agent,
           senderId: agentId ?? null,
+          senderInstanceId: deltaSenderInstanceId ?? null,
           content: {
             text: concatText(kept),
             parts: kept,
@@ -477,7 +589,7 @@ export class WorkerEventIngress {
     this.notify(this.sessionActivityCallbacks, {
       type: 'message.part.delta',
       sessionId,
-      taskId: this.str(raw.taskId),
+      taskId,
       agentId: agentId ?? this.str(raw.agentId),
     });
     return true;
@@ -494,11 +606,18 @@ export class WorkerEventIngress {
     // opencode 会话 id 经 instanceRef 反查映射；查不到留空，由回调内 sessionId 反查 agentId
     // 的兜底逻辑接管）。F3 缺陷②：ses_ 反查未命中（worker 404 重建新会话）→ 回写
     // instanceRef 后返回平台主键，保证回调侧 sessionId 反查 agentId 也能命中。
-    const sessionId = await this.resolvePlatformSessionId(this.str(raw.sessionId), dto.workerId);
+    const sessionId = await this.resolvePlatformSessionId(
+      this.str(raw.sessionId),
+      dto.workerId,
+      this.str(raw.taskId),
+      this.str(raw.agentId),
+    );
     const payload: TaskCompletedPayload = {
       taskId: this.str(raw.taskId),
       agentId: this.str(raw.agentId),
       sessionId,
+      // 执行注册注销用（dispatcher unregisterExecution 需定位 worker:task 活跃记录）
+      workerId: dto.workerId,
       // wave1 对齐：channelId 透传（worker 执行端点 ctx 上送）——dispatcher
       // resolveChannel 群聊优先依赖它（1320cbe）；此前 ingress 丢弃导致群聊回复误落私聊。
       channelId: this.str(raw.channelId),
@@ -573,6 +692,117 @@ export class WorkerEventIngress {
         `[ingress] git.op 落库失败（taskId=${taskId} action=${action}）: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+    return true;
+  }
+
+  /**
+   * session.question / session.permission：模型提问或工具权限确认 → AgentQuestion 落库 + emit。
+   * - requestId（kind=question）/ permissionId（kind=permission）为 AgentQuestion.requestId 唯一键；
+   *   upsert 幂等：已存在且非 pending（已答复/拒绝）→ 跳过（不覆盖终态）；pending → 更新 content。
+   * - sessionId 统一经 resolvePlatformSessionId 归一为平台主键（s_ 前缀）落库；taskId/agentId 缺失时
+   *   从 Session 反查（worker 事件透传的 ses_ 会话 id 反查命中率更高，反查不到用 payload 值）。
+   * - emit AGENT_QUESTION（scope=task）：payload = AgentQuestion DTO + taskId/agentId，前端弹窗。
+   */
+  private async handleAgentQuestion(dto: WorkerEventDto): Promise<boolean> {
+    const raw = dto.payload as SessionQuestionPayload & SessionPermissionPayload;
+    const kind = dto.type === 'session.question' ? 'question' : 'permission';
+    const requestId =
+      kind === 'question' ? this.str(raw.requestId) : this.str(raw.permissionId);
+    if (!requestId) {
+      this.logger.debug(
+        `[ingress] ${dto.type} 缺 ${kind === 'question' ? 'requestId' : 'permissionId'}，跳过（workerId=${dto.workerId}）`,
+      );
+      return true;
+    }
+    // sessionId 归一：s_ 前缀直接透传；ses_ 前缀（opencode 会话 id）经 instanceRef 反查平台
+    // 主键。反查失败**不丢弃**——落库保留原始 ses_ id（reply 时直接传给 worker 调 serve），
+    // taskId/agentId 用 payload 值（worker 上送透传）。同 worker 多 running 会话时反查不唯一
+    // 会失败（adoptNewInstanceRef 放弃回写），此时必须走 payload 兜底，否则事件静默丢失。
+    const sessionId = await this.resolvePlatformSessionId(
+      this.str(raw.sessionId),
+      dto.workerId,
+      this.str(raw.taskId),
+      this.str(raw.agentId),
+    );
+    const storeSessionId = sessionId ?? this.str(raw.sessionId);
+    if (!storeSessionId) {
+      this.logger.debug(
+        `[ingress] ${dto.type} 会话 ${this.str(raw.sessionId) ?? '-'} 缺失，跳过（workerId=${dto.workerId}）`,
+      );
+      return true;
+    }
+    let taskId = this.str(raw.taskId);
+    let agentId = this.str(raw.agentId);
+    if (sessionId && (!taskId || !agentId)) {
+      const session = await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { taskId: true, agentId: true },
+      });
+      taskId = taskId ?? session?.taskId;
+      agentId = agentId ?? session?.agentId;
+    }
+    const content: Prisma.InputJsonValue =
+      kind === 'question'
+        ? { questions: Array.isArray(raw.questions) ? raw.questions : [] }
+        : {
+            title: this.str(raw.title) ?? raw.type ?? 'permission',
+            pattern: raw.pattern ?? null,
+            type: raw.type ?? '',
+          };
+    const existing = await this.prisma.agentQuestion.findUnique({
+      where: { requestId },
+      select: { id: true, status: true },
+    });
+    if (existing && existing.status !== 'pending') {
+      this.logger.debug(
+        `[ingress] ${dto.type} requestId=${requestId} 已终态（${existing.status}），跳过重复上报`,
+      );
+      return true;
+    }
+    let row: { id: string; status: string };
+    if (existing) {
+      row = await this.prisma.agentQuestion.update({
+        where: { id: existing.id },
+        data: { content },
+        select: { id: true, status: true },
+      });
+    } else {
+      row = await this.prisma.agentQuestion.create({
+        data: {
+          id: await this.idGen.nextId('aq'),
+          requestId,
+          sessionId: storeSessionId,
+          taskId: taskId ?? '',
+          agentId: agentId ?? '',
+          kind,
+          content,
+          status: 'pending',
+        },
+        select: { id: true, status: true },
+      });
+    }
+    this.logger.log(
+      `[ingress] ${dto.type} 落库 requestId=${requestId} session=${storeSessionId} kind=${kind}（workerId=${dto.workerId}）`,
+    );
+    await this.realtime.emit(
+      EVENT_TYPES.AGENT_QUESTION,
+      {
+        question: {
+          id: row.id,
+          requestId,
+          sessionId: storeSessionId,
+          taskId: taskId ?? null,
+          agentId: agentId ?? null,
+          kind,
+          content,
+          status: row.status,
+        },
+        taskId: taskId ?? null,
+        agentId: agentId ?? null,
+        sessionId: storeSessionId,
+      },
+      this.scopeOf(taskId),
+    );
     return true;
   }
 
@@ -660,10 +890,18 @@ export class WorkerEventIngress {
    * （45e0fdf，instanceRef 仍指向旧值）→ 将该 worker 正在运行的**唯一** Session 的
    * instanceRef 回写为新会话 id（幂等），返回该 Session 平台主键。否则 worker 上送
    * session.updated(idle) 时反查失败 → idle 无法落库 → session 永久卡 running。
+   *
+   * Bug2 修复（多 running 会话时唯一性兜底失败）：同 worker 存在多个 running Session 时
+   * adoptNewInstanceRef 无法可靠定位会放弃回写 → instanceRef 永为旧值 → 每次 dispatch
+   * 复用旧值 404 → 每次重建新会话（线上 Bug2 根因）。此处增加 taskId/agentId 精确兜底
+   * （worker 事件 payload 恒携带 taskId/agentId，Session 表同 task+agent 唯一）——按
+   * `{workerId, taskId, agentId}` 定位并回写，保证 404 重建后新 instanceRef 落库、后续复用。
    */
   private async resolvePlatformSessionId(
     sessionId: string | undefined,
     workerId?: string,
+    taskId?: string,
+    agentId?: string,
   ): Promise<string | undefined> {
     if (!sessionId) {
       return undefined;
@@ -678,7 +916,12 @@ export class WorkerEventIngress {
     if (!workerId) {
       return undefined;
     }
-    return this.adoptNewInstanceRef(sessionId, workerId);
+    const adopted = await this.adoptNewInstanceRef(sessionId, workerId);
+    if (adopted) {
+      return adopted;
+    }
+    // 唯一 running 定位失败 → 用 taskId/agentId 精确兜底（同 task+agent 会话唯一）
+    return this.adoptNewInstanceRefByTask(sessionId, workerId, taskId, agentId);
   }
 
   /**
@@ -718,6 +961,44 @@ export class WorkerEventIngress {
           `[ingress] session ${session.id} instanceRef 回写失败: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+    }
+    return session.id;
+  }
+
+  /**
+   * Bug2 修复：adoptNewInstanceRef 唯一 running 兜底失效时的 taskId/agentId 精确回写。
+   * 同 worker 多 running 会话时唯一性定位失败 → 按事件携带的 `{workerId, taskId, agentId}`
+   * 定位（Session 表同 task+agent 唯一，buildTrigger 保证）→ 回写 instanceRef = 新会话 id。
+   * 返回平台主键供调用方继续；无 taskId/未命中 → undefined（不误写）。
+   */
+  private async adoptNewInstanceRefByTask(
+    newRef: string,
+    workerId: string,
+    taskId?: string,
+    agentId?: string,
+  ): Promise<string | undefined> {
+    if (!taskId) {
+      return undefined;
+    }
+    const session = await this.prisma.session.findFirst({
+      where: { workerId, taskId, ...(agentId ? { agentId } : {}) },
+      select: { id: true, instanceRef: true },
+    });
+    if (!session || session.instanceRef === newRef) {
+      return session?.id;
+    }
+    try {
+      await this.prisma.session.updateMany({
+        where: { id: session.id, instanceRef: { not: newRef } },
+        data: { instanceRef: newRef },
+      });
+      this.logger.log(
+        `[ingress] 回写 session ${session.id} instanceRef → ${newRef}（404 重建新会话，taskId=${taskId} workerId=${workerId}）`,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[ingress] session ${session.id} instanceRef 回写失败: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     return session.id;
   }

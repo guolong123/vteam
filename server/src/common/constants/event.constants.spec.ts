@@ -8,7 +8,7 @@ import {
 } from './event.constants';
 
 describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 篇；Phase 4 worker 回流扩展，T1）', () => {
-  it('EVENT_TYPES 含 11 个事件，事件名一律点号分隔（无下划线变体）', () => {
+  it('EVENT_TYPES 含 12 个事件，事件名一律点号分隔（无下划线变体）', () => {
     expect(EVENT_TYPES.CHAT_MESSAGE_NEW).toBe('chat.message.new');
     expect(EVENT_TYPES.AGENT_LOADING).toBe('agent.loading');
     expect(EVENT_TYPES.AGENT_ERROR).toBe('agent.error');
@@ -20,7 +20,8 @@ describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 �
     expect(EVENT_TYPES.TASK_COMPLETED).toBe('task.completed');
     expect(EVENT_TYPES.AGENT_STATUS).toBe('agent.status');
     expect(EVENT_TYPES.WORKER_HEARTBEAT).toBe('worker.heartbeat');
-    expect(Object.values(EVENT_TYPES)).toHaveLength(11);
+    expect(EVENT_TYPES.AGENT_QUESTION).toBe('agent.question');
+    expect(Object.values(EVENT_TYPES)).toHaveLength(12);
     for (const name of Object.values(EVENT_TYPES)) {
       expect(name.includes('_')).toBe(false);
     }

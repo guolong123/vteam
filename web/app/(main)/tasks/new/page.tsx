@@ -5,10 +5,12 @@
  * =============================================
  * 唯一来源：docs/agent-platform/prototypes/task-create/index.tsx（device: desktop）。
  * - 左栏任务表单：标题* / 描述 / 背景文档上传（真实文件列表，初始为空）/ 优先级（低/中/高）+「待开始」提示条，对应 FR-01/FR-07。
- * - 右栏 Agent 选择：勾选来自 GET /agents（T4，role ↔ data-role 一一对应）+ 主 Agent（默认产品经理，FR-19）+ 已选列表 + 创建按钮 + create-hint。
+ * - 右栏 Agent 选择（T5 实例化）：角色卡片 = 实例列表 + 添加按钮（同一角色可多实例，
+ *   默认别名 <角色中文名>-<seq>，行内可改名/移除）+ 主 Agent 下拉（默认项目经理，决策 1）
+ *   + 已选实例徽章 + 创建按钮 + create-hint。
  * - 交互增强（原型为静态勾选，本页实现联动）：
- *   · Agent 卡片可点击勾选/取消，「已选 Agent / N 个」与徽章列表实时联动；
- *   · 主 Agent 保持有效：取消勾选当前主 Agent → 自动转移至第一个勾选角色；
+ *   · 启用/停用角色（勾选切换）、添加实例（seq 自动递增）、行内改名、移除实例；
+ *   · 主 Agent 保持有效：移除/停用当前主实例 → 自动转移（优先级：项目经理 → 产品 → 其余角色）；
  *   · 创建按钮校验空标题（红色提示，与原型视觉语言一致），再提交。
  * - 提交：真实 POST /api/v1/projects/:pid/tasks（pid 取 URL ?pid=，缺省 seed 项目 p_seed_1）。
  *   成功 → router.push(/tasks/:id) 跳转任务详情（T13 路由）；失败 → isApiError 展示错误（09 篇 §3.4 契约）。
@@ -16,10 +18,10 @@
  *   (main) 布局提供，本页仅渲染内容区；data-testid 与原型一致。
  * - 铁律（T15）：无 fixed / 100vh / 100vw，高度由 AppShell main（flex column + overflow auto）接管。
  */
-import { useRef, useState, type CSSProperties } from "react";
+import { useCallback, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { AgentAvatar, AgentBadge } from "@/src/components/ui";
+import { AgentAvatar } from "@/src/components/ui";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
@@ -27,6 +29,7 @@ import {
   type RoleKey,
   neutral,
   roles,
+  roleText,
   space,
   radius,
   fontSize,
@@ -44,7 +47,7 @@ function getProjectId(): string {
   return new URLSearchParams(window.location.search).get("pid") || DEFAULT_PID;
 }
 
-/* ------------------------------ Agent 选择（勾选状态受控，初始对齐原型静态态：产品/开发已选，产品=主 Agent） ------------------------------ */
+/* ------------------------------ Agent 选择（T5 实例列表：角色 → 实例，初始 项目经理+开发者 各 1 实例，主 Agent=项目经理） ------------------------------ */
 interface AgentOption {
   id: string;
   name: string;
@@ -69,21 +72,66 @@ interface AgentsResponse {
 /** 角色固定描述（原型文案，视觉唯一来源；Agent.prompt 缺失时兜底，避免截断变味） */
 const FIXED_DESC: Record<RoleKey, string> = {
   product: "需求拆解与验收标准",
+  project_manager: "项目组织与进度推进",
   architect: "技术方案与架构设计",
   developer: "编码实现与自测",
   tester: "用例设计与质量验收",
 };
 
-/** seed 模板 Agent 角色 → id 兜底（T14 预置 a_product/a_architect/a_developer/a_tester，API 未就绪时提交不中断） */
+/** seed 模板 Agent 角色 → id 兜底（T14 预置 a_product/a_project_manager/a_architect/a_developer/a_tester，API 未就绪时提交不中断） */
 const ROLE_AGENT_ID: Record<RoleKey, string> = {
   product: "a_product",
+  project_manager: "a_project_manager",
   architect: "a_architect",
   developer: "a_developer",
   tester: "a_tester",
 };
 
-/** 初始勾选（与原型截图一致：产品经理、开发者已勾选） */
-const INITIAL_CHECKED: RoleKey[] = ["product", "developer"];
+/** 初始启用角色（决策 1：默认主 Agent=项目经理；项目经理+开发者各预置 1 实例） */
+const INITIAL_ROLES: RoleKey[] = ["project_manager", "developer"];
+
+/** 主实例转移优先级（FR-19 保留语义：项目经理 → 产品 → 其余角色） */
+const MAIN_TRANSFER_ORDER: RoleKey[] = ["project_manager", "product", "architect", "developer", "tester"];
+
+/** 角色展示顺序（卡片渲染/提交 agents 顺序一致，实例按序聚合） */
+const ROLE_ORDER: RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
+
+/**
+ * 实例草稿（T5 角色/实例分离）：
+ * - key：本地临时唯一标识（实例 id 由服务端生成，创建前不可知）
+ * - agentId：模板 agent id（seed 预置兜底，提交时用 GET /agents 返回覆盖）
+ * - alias：实例别名（默认 `<角色中文名>-<seq>`，行内可改名）
+ * - seq：同角色内序号（服务端生成逻辑同步：该 agent 已用最大 seq + 1）
+ */
+interface InstanceDraft {
+  key: string;
+  agentId: string;
+  alias: string;
+  seq: number;
+  /** 所属角色（展平后主题色/徽章/提交聚合用）。 */
+  roleKey: RoleKey;
+}
+
+/** 角色 → 实例列表（仅含已启用角色；同角色多实例 = 多开发者等） */
+type InstancesByRole = Partial<Record<RoleKey, InstanceDraft[]>>;
+
+/** 默认别名（与后端 seq 生成规则一致：<角色中文名>-<seq>） */
+function defaultAliasOf(role: RoleKey, seq: number): string {
+  return `${roles[role].label}-${seq}`;
+}
+
+/** 展平全部实例（按角色顺序）。 */
+function allInstancesOf(instancesByRole: InstancesByRole): InstanceDraft[] {
+  return ROLE_ORDER.flatMap((role) => instancesByRole[role] ?? []);
+}
+
+/** 实例所在角色（未找到返回 null）。 */
+function findRoleOf(instancesByRole: InstancesByRole, key: string): RoleKey | null {
+  for (const role of ROLE_ORDER) {
+    if ((instancesByRole[role] ?? []).some((i) => i.key === key)) return role;
+  }
+  return null;
+}
 
 /* ------------------------------ 背景文档（FR-17 上传入任务文档库：POST /uploads 真实上传 → {name, url} 列表） ------------------------------ */
 /** 文件类型语义色（图标底色，独立于角色/状态色避免语义混淆，本地收拢不散落） */
@@ -472,140 +520,295 @@ function TaskForm({
   );
 }
 
-/* ================================ 右栏：Agent 选择区 ================================ */
-function AgentOptionCard({
+/* ================================ 右栏：Agent 选择区（T5 实例化：角色卡片 → 实例列表） ================================ */
+function RoleInstanceCard({
   role,
-  desc,
-  checked,
-  isMain,
-  onToggle,
+  instances,
+  mainKey,
+  onToggleRole,
+  onAddInstance,
+  onRenameInstance,
+  onRemoveInstance,
+  onSetMain,
 }: {
   role: RoleKey;
-  desc: string;
-  checked: boolean;
-  isMain: boolean;
-  onToggle: () => void;
+  instances: InstanceDraft[];
+  mainKey: string | null;
+  onToggleRole: (role: RoleKey) => void;
+  onAddInstance: (role: RoleKey) => void;
+  onRenameInstance: (key: string, alias: string) => void;
+  onRemoveInstance: (key: string) => void;
+  onSetMain: (key: string) => void;
 }) {
-  const theme = roles[role];
+  // 防御：role 非法/缺失时兜底 developer 主题（roles[非法] undefined → theme.label 崩溃）
+  const theme = roles[role] ?? roles.developer;
+  const enabled = instances.length > 0;
   return (
     <div
-      data-testid="agent-option"
+      data-testid="role-card"
       data-role={role}
-      data-checked={checked ? "true" : "false"}
-      role="checkbox"
-      aria-checked={checked}
-      aria-label={`${theme.label}${isMain ? "（主 Agent）" : ""}`}
-      onClick={onToggle}
+      data-enabled={enabled ? "true" : "false"}
       style={{
         display: "flex",
-        alignItems: "center",
-        gap: space.md,
+        flexDirection: "column",
+        gap: space.sm,
         padding: `${space.md}px ${space.lg}px`,
         borderRadius: radius.md,
-        backgroundColor: checked ? theme.bg : "#FFFFFF",
-        border: `1px solid ${checked ? theme.border : neutral[200]}`,
-        boxShadow: checked ? shadow.sm : undefined,
-        cursor: "pointer",
+        backgroundColor: enabled ? theme.bg : "#FFFFFF",
+        border: `1px solid ${enabled ? theme.border : neutral[200]}`,
+        boxShadow: enabled ? shadow.sm : undefined,
         transition: "border-color .15s ease, background-color .15s ease",
       }}
     >
-      <AgentAvatar role={role} size="md" />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: fontSize.md,
-              fontWeight: 600,
-              color: neutral[800],
-              whiteSpace: "nowrap",
-            }}
-          >
-            {theme.label}
-          </div>
-          {/* 主 Agent（任务负责人）徽章：多选时须指定，默认产品经理（FR-19）；颜色跟随主 Agent 角色 */}
-          {isMain ? (
-            <span
-              data-testid="main-agent-tag"
+      {/* 卡片头部：角色名 + 启用勾选 + 描述 */}
+      <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
+        <AgentAvatar role={role} size="md" />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
+            <div
               style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 2,
-                padding: "1px 7px",
-                borderRadius: radius.pill,
-                backgroundColor: theme.color,
-                color: "#FFFFFF",
-                fontSize: fontSize.xs,
+                fontSize: fontSize.md,
                 fontWeight: 600,
-                lineHeight: "16px",
-                flexShrink: 0,
+                color: neutral[800],
+                whiteSpace: "nowrap",
               }}
             >
-              ★ 主 Agent
+              {theme.label}
+            </div>
+            <span
+              style={{
+                fontSize: fontSize.xs,
+                color: neutral[400],
+                backgroundColor: "#FFFFFF",
+                border: `1px solid ${neutral[200]}`,
+                borderRadius: radius.pill,
+                padding: "1px 8px",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {enabled ? `${instances.length} 个实例` : "未启用"}
             </span>
-          ) : null}
+          </div>
+          <div
+            style={{
+              fontSize: fontSize.xs,
+              color: neutral[400],
+              marginTop: 2,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {FIXED_DESC[role]}
+          </div>
         </div>
-        <div
+        {/* 启用/停用勾选（取消勾选 = 移除该角色全部实例；主实例在其中则自动转移） */}
+        <span
+          role="checkbox"
+          aria-checked={enabled}
+          aria-label={`${enabled ? "停用" : "启用"}${theme.label}`}
+          data-testid="role-toggle"
+          onClick={() => onToggleRole(role)}
           style={{
-            fontSize: fontSize.xs,
-            color: neutral[400],
-            marginTop: 2,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
+            width: 20,
+            height: 20,
+            borderRadius: radius.sm,
+            border: `1.5px solid ${enabled ? theme.color : neutral[300]}`,
+            backgroundColor: enabled ? theme.color : "#FFFFFF",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#FFFFFF",
+            fontSize: fontSize.sm,
+            fontWeight: 700,
+            flexShrink: 0,
+            cursor: "pointer",
           }}
         >
-          {desc}
-        </div>
+          {enabled ? "✓" : ""}
+        </span>
       </div>
-      {/* 勾选框 */}
-      <span
-        aria-hidden
+
+      {/* 实例列表：每实例一行（角色色点 + 别名 input + 序号 + 主标记 + 移除） */}
+      {enabled && (
+        <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+          {instances.map((inst) => {
+            const isMain = inst.key === mainKey;
+            return (
+              <div
+                key={inst.key}
+                data-testid="instance-row"
+                data-instance-key={inst.key}
+                data-main={isMain ? "true" : "false"}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: space.sm,
+                  padding: `${space.xs}px ${space.sm}px`,
+                  borderRadius: radius.md,
+                  backgroundColor: "#FFFFFF",
+                  border: `1px solid ${isMain ? theme.border : neutral[200]}`,
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    backgroundColor: theme.color,
+                    flexShrink: 0,
+                  }}
+                />
+                <input
+                  data-testid="instance-alias-input"
+                  value={inst.alias}
+                  aria-label={`${theme.label}实例 ${inst.seq} 别名`}
+                  onChange={(e) => onRenameInstance(inst.key, e.target.value)}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    border: "none",
+                    outline: "none",
+                    background: "transparent",
+                    fontSize: fontSize.md,
+                    fontWeight: 500,
+                    color: neutral[800],
+                    fontFamily: fontFamily.body,
+                    padding: `${space.xs}px 0`,
+                  }}
+                />
+                <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>#{inst.seq}</span>
+                {isMain ? (
+                  <span
+                    data-testid="main-agent-tag"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 2,
+                      padding: "1px 7px",
+                      borderRadius: radius.pill,
+                      backgroundColor: theme.color,
+                      color: "#FFFFFF",
+                      fontSize: fontSize.xs,
+                      fontWeight: 600,
+                      lineHeight: "16px",
+                      flexShrink: 0,
+                    }}
+                  >
+                    ★ 主 Agent
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="instance-set-main"
+                    aria-label={`设 ${inst.alias} 为主 Agent`}
+                    onClick={() => onSetMain(inst.key)}
+                    style={{
+                      border: "none",
+                      background: "none",
+                      fontSize: fontSize.sm,
+                      color: neutral[300],
+                      cursor: "pointer",
+                      padding: space.xs,
+                      flexShrink: 0,
+                      fontFamily: fontFamily.body,
+                    }}
+                  >
+                    ☆
+                  </button>
+                )}
+                <button
+                  type="button"
+                  data-testid="instance-remove"
+                  aria-label={`移除 ${inst.alias}`}
+                  onClick={() => onRemoveInstance(inst.key)}
+                  style={{
+                    border: "none",
+                    background: "none",
+                    fontSize: fontSize.sm,
+                    color: neutral[400],
+                    cursor: "pointer",
+                    padding: space.xs,
+                    flexShrink: 0,
+                    fontFamily: fontFamily.body,
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 添加实例：虚线按钮（对齐 doc-upload-btn 视觉语言：1.5px dashed） */}
+      <button
+        type="button"
+        data-testid="add-instance-btn"
+        aria-label={`添加${theme.label}实例`}
+        onClick={() => onAddInstance(role)}
         style={{
-          width: 20,
-          height: 20,
-          borderRadius: radius.sm,
-          border: `1.5px solid ${checked ? theme.color : neutral[300]}`,
-          backgroundColor: checked ? theme.color : "#FFFFFF",
-          display: "inline-flex",
+          display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          color: "#FFFFFF",
+          gap: space.xs,
+          padding: `${space.sm - 1}px ${space.md}px`,
+          borderRadius: radius.md,
+          border: `1.5px dashed ${theme.border}`,
+          backgroundColor: "rgba(255,255,255,.6)",
+          color: theme.color,
           fontSize: fontSize.sm,
-          fontWeight: 700,
-          flexShrink: 0,
+          fontWeight: 500,
+          cursor: "pointer",
+          fontFamily: fontFamily.body,
         }}
       >
-        {checked ? "✓" : ""}
-      </span>
+        <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>＋</span>
+        添加{theme.label}实例
+      </button>
     </div>
   );
 }
 
 function AgentSelectPanel({
-  agentOptions,
   agentsLoading,
   agentsError,
   onRetryAgents,
-  checkedAgents,
-  mainAgent,
-  onToggleAgent,
+  instancesByRole,
+  mainKey,
+  mainRole,
+  allInstances,
+  onToggleRole,
+  onAddInstance,
+  onRenameInstance,
+  onRemoveInstance,
+  onSetMain,
+  onSelectMain,
   submitting,
   created,
   createError,
   onCreate,
 }: {
-  agentOptions: AgentOption[];
   agentsLoading: boolean;
   agentsError: boolean;
   onRetryAgents: () => void;
-  checkedAgents: RoleKey[];
-  mainAgent: RoleKey;
-  onToggleAgent: (role: RoleKey) => void;
+  instancesByRole: InstancesByRole;
+  mainKey: string | null;
+  mainRole: RoleKey | null;
+  allInstances: InstanceDraft[];
+  onToggleRole: (role: RoleKey) => void;
+  onAddInstance: (role: RoleKey) => void;
+  onRenameInstance: (key: string, alias: string) => void;
+  onRemoveInstance: (key: string) => void;
+  onSetMain: (key: string) => void;
+  onSelectMain: (key: string) => void;
   submitting: boolean;
   created: boolean;
   createError: string | null;
   onCreate: () => void;
 }) {
+  const mainTheme = mainRole ? roles[mainRole] ?? roles.developer : null;
   return (
     <section
       style={{
@@ -635,9 +838,9 @@ function AgentSelectPanel({
             选择协作 Agent
           </div>
           <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs, lineHeight: 1.6 }}>
-            勾选参与任务的角色，可多选。多选时需指定{" "}
+            同一角色可添加多个实例（如 开发者-1 / 开发者-2）。多选时需指定{" "}
             <span style={{ fontWeight: 600, color: neutral[600] }}>主 Agent</span>{" "}
-            作为任务负责人；简单任务可单选一个 Agent。
+            作为任务负责人；简单任务可只启用一个角色。
           </div>
         </div>
         {agentsLoading ? (
@@ -671,20 +874,72 @@ function AgentSelectPanel({
             </button>
           </div>
         ) : (
-          agentOptions.map((option) => (
-            <AgentOptionCard
-              key={option.id}
-              role={option.role}
-              desc={option.desc}
-              checked={checkedAgents.includes(option.role)}
-              isMain={option.role === mainAgent}
-              onToggle={() => onToggleAgent(option.role)}
+          ROLE_ORDER.map((role) => (
+            <RoleInstanceCard
+              key={role}
+              role={role}
+              instances={instancesByRole[role] ?? []}
+              mainKey={mainKey}
+              onToggleRole={onToggleRole}
+              onAddInstance={onAddInstance}
+              onRenameInstance={onRenameInstance}
+              onRemoveInstance={onRemoveInstance}
+              onSetMain={onSetMain}
             />
           ))
         )}
       </div>
 
-      {/* 已选 Agent 列表 */}
+      {/* 主 Agent 选择：从实例列表选择（显示实例别名+角色） */}
+      <div
+        style={{
+          padding: space.xl,
+          borderRadius: radius.lg,
+          backgroundColor: "#FFFFFF",
+          border: `1px solid ${neutral[200]}`,
+          boxShadow: shadow.sm,
+          display: "flex",
+          flexDirection: "column",
+          gap: space.md,
+        }}
+      >
+        <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[700] }}>主 Agent</div>
+        <div style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.5 }}>
+          默认项目经理；任务负责人将承担主 Agent 职责（启动后注入职责指令）。
+        </div>
+        <select
+          data-testid="main-agent-select"
+          value={mainKey ?? ""}
+          disabled={allInstances.length === 0}
+          onChange={(e) => onSelectMain(e.target.value)}
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            padding: `${space.md}px ${space.lg}px`,
+            borderRadius: radius.md,
+            border: `1px solid ${mainTheme ? mainTheme.border : neutral[200]}`,
+            backgroundColor: mainTheme ? mainTheme.bg : "#FFFFFF",
+            color: neutral[800],
+            fontSize: fontSize.md,
+            fontWeight: 500,
+            outline: "none",
+            cursor: "pointer",
+            fontFamily: fontFamily.body,
+          }}
+        >
+          {allInstances.length === 0 && <option value="">未启用角色</option>}
+          {allInstances.map((inst) => {
+            const theme = roles[inst.roleKey] ?? roles.developer;
+            return (
+              <option key={inst.key} value={inst.key}>
+                {inst.alias}（{theme.label}）
+              </option>
+            );
+          })}
+        </select>
+      </div>
+
+      {/* 已选实例列表 */}
       <div
         data-testid="selected-agents"
         style={{
@@ -708,15 +963,52 @@ function AgentSelectPanel({
             color: neutral[700],
           }}
         >
-          <span>已选 Agent</span>
+          <span>已选实例</span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400], fontWeight: 400 }}>
-            {checkedAgents.length} 个
+            {allInstances.length} 个
           </span>
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: space.sm }}>
-          {checkedAgents.map((role) => (
-            <AgentBadge key={role} role={role} />
-          ))}
+          {allInstances.map((inst) => {
+            const theme = roles[inst.roleKey] ?? roles.developer;
+            const isMain = inst.key === mainKey;
+            return (
+              <span
+                key={inst.key}
+                data-testid="selected-instance"
+                data-main={isMain ? "true" : "false"}
+                title={isMain ? `${inst.alias}（主 Agent）` : inst.alias}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: space.xs,
+                  padding: `${space.xs - 1}px ${space.sm}px`,
+                  borderRadius: radius.pill,
+                  backgroundColor: theme.bg,
+                  border: `1px solid ${theme.border}`,
+                  color: roleText[inst.roleKey] ?? roleText.developer,
+                  fontSize: fontSize.sm,
+                  fontWeight: 500,
+                  lineHeight: 1.4,
+                  whiteSpace: "nowrap",
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    backgroundColor: theme.color,
+                    flexShrink: 0,
+                  }}
+                />
+                {inst.alias}
+                {isMain && <span aria-hidden>★</span>}
+              </span>
+            );
+          })}
         </div>
       </div>
 
@@ -855,9 +1147,124 @@ export default function TaskCreatePage() {
       setUploadError(isApiError(err) ? err.message : "文档上传失败，请稍后重试"),
   });
 
-  // Agent 选择：勾选集合 + 主 Agent（默认产品经理，FR-19）
-  const [checkedAgents, setCheckedAgents] = useState<RoleKey[]>(INITIAL_CHECKED);
-  const [mainAgent, setMainAgent] = useState<RoleKey>("product");
+  // Agent 选择（T5 实例化）：角色 → 实例列表 + 主实例 key。
+  // 初始状态（决策 1）：项目经理 + 开发者各 1 实例，主 Agent = 项目经理实例。
+  const [instancesByRole, setInstancesByRole] = useState<InstancesByRole>(() => {
+    const initial: InstancesByRole = {};
+    for (const role of INITIAL_ROLES) {
+      initial[role] = [
+        {
+          key: `inst-${role}-1`,
+          agentId: ROLE_AGENT_ID[role],
+          alias: defaultAliasOf(role, 1),
+          seq: 1,
+          roleKey: role,
+        },
+      ];
+    }
+    return initial;
+  });
+  const [mainKey, setMainKey] = useState<string | null>("inst-project_manager-1");
+
+  /** 本地临时 key 自增器（实例 id 服务端生成，前端仅需本地唯一） */
+  const keySeqRef = useRef(10);
+  const nextKey = () => `inst-local-${keySeqRef.current++}`;
+
+  /** 全部实例（按角色展示顺序聚合；提交顺序/主 Agent 下拉/已选徽章共用） */
+  const allInstances: InstanceDraft[] = useMemo(
+    () => ROLE_ORDER.flatMap((role) => instancesByRole[role] ?? []),
+    [instancesByRole],
+  );
+  /** 主实例（未设置时 null） */
+  const mainInstance = useMemo(
+    () => allInstances.find((i) => i.key === mainKey) ?? null,
+    [allInstances, mainKey],
+  );
+
+  /** 主实例转移（FR-19 保留）：按优先级 项目经理 → 产品 → 其余角色，取第一个剩余实例 */
+  const transferMainKey = useCallback(
+    (rolesByKey: InstancesByRole, excludeKey?: string): string | null => {
+      for (const role of MAIN_TRANSFER_ORDER) {
+        const insts = rolesByKey[role];
+        if (insts && insts.length > 0) {
+          const first = insts.find((i) => i.key !== excludeKey) ?? insts[0];
+          if (first) return first.key;
+        }
+      }
+      return null;
+    },
+    [],
+  );
+
+  /** 启用/停用角色：停用 = 移除该角色全部实例；主实例在其中 → 自动转移 */
+  const handleToggleRole = (role: RoleKey) => {
+    setInstancesByRole((prev) => {
+      const enabled = (prev[role] ?? []).length > 0;
+      const next: InstancesByRole = enabled
+        ? { ...prev, [role]: [] }
+        : {
+            ...prev,
+            [role]: [
+              {
+                key: nextKey(),
+                agentId: ROLE_AGENT_ID[role],
+                alias: defaultAliasOf(role, 1),
+                seq: 1,
+                roleKey: role,
+              },
+            ],
+          };
+      // 停用导致主实例消失 → 按优先级转移
+      if (mainKey && !allInstancesOf(next).some((i) => i.key === mainKey)) {
+        setMainKey(transferMainKey(next));
+      }
+      return next;
+    });
+  };
+
+  /** 添加实例：seq = 该角色已用最大 seq + 1，默认别名 <角色中文名>-<seq> */
+  const handleAddInstance = (role: RoleKey) => {
+    setInstancesByRole((prev) => {
+      const list = prev[role] ?? [];
+      const maxSeq = list.reduce((m, i) => Math.max(m, i.seq), 0);
+      const seq = maxSeq + 1;
+      return {
+        ...prev,
+        [role]: [
+          ...list,
+          { key: nextKey(), agentId: ROLE_AGENT_ID[role], alias: defaultAliasOf(role, seq), seq, roleKey: role },
+        ],
+      };
+    });
+  };
+
+  /** 行内改名（alias 输入受控） */
+  const handleRenameInstance = (key: string, alias: string) => {
+    setInstancesByRole((prev) => {
+      const role = findRoleOf(prev, key);
+      if (!role) return prev;
+      return {
+        ...prev,
+        [role]: (prev[role] ?? []).map((i) => (i.key === key ? { ...i, alias } : i)),
+      };
+    });
+  };
+
+  /** 移除实例：主实例被移除 → 自动转移（优先级 project_manager → product → 其余） */
+  const handleRemoveInstance = (key: string) => {
+    setInstancesByRole((prev) => {
+      const role = findRoleOf(prev, key);
+      if (!role) return prev;
+      const next = { ...prev, [role]: (prev[role] ?? []).filter((i) => i.key !== key) };
+      if (key === mainKey) setMainKey(transferMainKey(next, key));
+      return next;
+    });
+  };
+
+  /** 设为主实例（行内 ☆ 或下拉） */
+  const handleSetMain = (key: string) => {
+    if (allInstances.some((i) => i.key === key)) setMainKey(key);
+  };
 
   // 提交状态
   const [titleError, setTitleError] = useState<string | null>(null);
@@ -882,23 +1289,6 @@ export default function TaskCreatePage() {
     role: a.role as RoleKey,
     desc: FIXED_DESC[a.role as RoleKey] ?? a.prompt?.slice(0, 30) ?? "",
   }));
-
-  /** 勾选切换：同步 checkedAgents；主 Agent 保持有效（取消当前主 Agent → 转移第一个勾选） */
-  const handleToggleAgent = (role: RoleKey) => {
-    setCheckedAgents((prev) => {
-      let next: RoleKey[];
-      if (prev.includes(role)) {
-        next = prev.filter((r) => r !== role);
-      } else {
-        next = [...prev, role];
-      }
-      // 主 Agent 跟随：当前主 Agent 被取消或集合为空时转移
-      if (!next.includes(mainAgent)) {
-        setMainAgent(next[0] ?? role);
-      }
-      return next;
-    });
-  };
 
   /** 移除背景文档（按 url 唯一标识，同名文件互不干扰；仅影响本次创建提交） */
   const handleRemoveDoc = (url: string) => {
@@ -925,8 +1315,16 @@ export default function TaskCreatePage() {
           title: title.trim(),
           description: description || undefined,
           priority: PRIORITY_API[priority],
-          agentIds: checkedAgents.map(toAgentId),
-          mainAgentId: toAgentId(mainAgent),
+          // T5 实例化契约：agents 可重复 agentId（=多实例）；alias 仅显式改名时提交（服务端缺省生成）
+          agents: allInstances.map((inst) => ({
+            agentId: toAgentId(inst.roleKey),
+            ...(inst.alias !== defaultAliasOf(inst.roleKey, inst.seq)
+              ? { alias: inst.alias }
+              : {}),
+          })),
+          // 主实例：实例 id 由服务端生成，前端无法预知——传 mainAgentId 由服务端映射该 agent 第一实例
+          //（决策 1：默认主 Agent=项目经理；用户改主实例别名不影响——按 agent 映射）
+          mainAgentId: mainInstance ? toAgentId(mainInstance.roleKey) : undefined,
           backgroundDocs: backgroundDocs.map((d) => ({ name: d.name, url: d.url })),
         }
       );
@@ -983,13 +1381,19 @@ export default function TaskCreatePage() {
           onDismissUploadError={() => setUploadError(null)}
         />
         <AgentSelectPanel
-          agentOptions={agentOptions}
           agentsLoading={agentsLoading}
           agentsError={agentsError}
           onRetryAgents={() => refetchAgents()}
-          checkedAgents={checkedAgents}
-          mainAgent={mainAgent}
-          onToggleAgent={handleToggleAgent}
+          instancesByRole={instancesByRole}
+          mainKey={mainKey}
+          mainRole={mainInstance?.roleKey ?? null}
+          allInstances={allInstances}
+          onToggleRole={handleToggleRole}
+          onAddInstance={handleAddInstance}
+          onRenameInstance={handleRenameInstance}
+          onRemoveInstance={handleRemoveInstance}
+          onSetMain={handleSetMain}
+          onSelectMain={handleSetMain}
           submitting={submitting}
           created={created}
           createError={createError}

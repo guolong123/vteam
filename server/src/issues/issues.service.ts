@@ -21,6 +21,7 @@ import {
   ISSUE_ERRORS,
   ISSUE_STATUS,
   ISSUE_TRANSITIONS,
+  IssueTransitionAction,
 } from './issues.constants';
 
 /** Issue 域主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
@@ -86,6 +87,30 @@ export class IssuesService implements OnModuleInit {
     return task;
   }
 
+  /** 项目路径成员校验（GET /issues projectId 过滤用）：项目存在（404）→ 调用者是项目成员（403）。 */
+  private async assertProjectMember(projectId: string, userId: string): Promise<void> {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true },
+    });
+    if (!project) {
+      throw new NotFoundException({
+        code: ISSUE_ERRORS.PROJECT_NOT_FOUND,
+        message: '项目不存在',
+      });
+    }
+    const member = await this.prisma.projectMember.findUnique({
+      where: { projectId_userId: { projectId, userId } },
+      select: { id: true },
+    });
+    if (!member) {
+      throw new ForbiddenException({
+        code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: '您不是该项目成员',
+      });
+    }
+  }
+
   /**
    * MCP 路径成员校验（无 userId，Metis B1）：agent 须是任务团队成员
    * （task_agents 含 agentId 且未 removed）。返回任务状态供归档判定。
@@ -104,8 +129,8 @@ export class IssuesService implements OnModuleInit {
         message: '任务不存在',
       });
     }
-    const ta = await this.prisma.taskAgent.findUnique({
-      where: { taskId_agentId: { taskId, agentId } },
+    const ta = await this.prisma.taskAgent.findFirst({
+      where: { taskId, agentId },
       select: { removedAt: true },
     });
     if (!ta || ta.removedAt) {
@@ -117,14 +142,20 @@ export class IssuesService implements OnModuleInit {
     return task;
   }
 
-  /** 指派 Agent 须在任务团队未 removed（400 ASSIGNEE_NOT_IN_TEAM）；null 跳过。 */
+  /**
+   * 指派须在任务团队未 removed（400 ASSIGNEE_NOT_IN_TEAM）；null/undefined 跳过。
+   * T4 实例语义：assigneeRef 为实例 id（ta_ 前缀）→ 按 taskAgentId 校验；否则按
+   * agentId 校验（用户路径仍按 Agent 指派，兼容）。前缀由任务实例 id 固定 `ta_` 判定。
+   */
   private async assertAssigneeInTeam(
     taskId: string,
-    assigneeAgentId: string | null | undefined,
+    assigneeRef?: string | null,
   ): Promise<void> {
-    if (!assigneeAgentId) return;
-    const ta = await this.prisma.taskAgent.findUnique({
-      where: { taskId_agentId: { taskId, agentId: assigneeAgentId } },
+    if (!assigneeRef) return;
+    const ta = await this.prisma.taskAgent.findFirst({
+      where: assigneeRef.startsWith('ta_')
+        ? { taskId, id: assigneeRef }
+        : { taskId, agentId: assigneeRef },
       select: { removedAt: true },
     });
     if (!ta || ta.removedAt) {
@@ -159,7 +190,10 @@ export class IssuesService implements OnModuleInit {
         message: '任务已归档，不可创建 issue',
       });
     }
-    await this.assertAssigneeInTeam(dto.taskId, dto.assigneeAgentId);
+    await this.assertAssigneeInTeam(
+      dto.taskId,
+      dto.assigneeInstanceId ?? dto.assigneeAgentId,
+    );
 
     const issue = await this.prisma.issue.create({
       data: {
@@ -170,6 +204,7 @@ export class IssuesService implements OnModuleInit {
         status: ISSUE_STATUS.open,
         tags: (dto.tags ?? []) as Prisma.InputJsonValue,
         assigneeAgentId: dto.assigneeAgentId ?? null,
+        assigneeInstanceId: dto.assigneeInstanceId ?? null,
         assigneeUserId: dto.assigneeUserId ?? null,
         createdBy: userId,
         creatorAgentId: null,
@@ -198,7 +233,10 @@ export class IssuesService implements OnModuleInit {
         message: '任务已归档，不可创建 issue',
       });
     }
-    await this.assertAssigneeInTeam(taskId, dto.assigneeAgentId);
+    await this.assertAssigneeInTeam(
+      taskId,
+      dto.assigneeInstanceId ?? dto.assigneeAgentId,
+    );
 
     const issue = await this.prisma.issue.create({
       data: {
@@ -209,6 +247,7 @@ export class IssuesService implements OnModuleInit {
         status: ISSUE_STATUS.open,
         tags: (dto.tags ?? []) as Prisma.InputJsonValue,
         assigneeAgentId: dto.assigneeAgentId ?? null,
+        assigneeInstanceId: dto.assigneeInstanceId ?? null,
         assigneeUserId: dto.assigneeUserId ?? null,
         createdBy: null,
         creatorAgentId: agentId,
@@ -222,14 +261,25 @@ export class IssuesService implements OnModuleInit {
     );
   }
 
-  /** GET /issues：按任务过滤 + status/assigneeAgentId 筛选 + 分页（不含软删）。 */
+  /** GET /issues：taskId 或 projectId 二选一过滤（均缺 → 400）+ status/assigneeAgentId 筛选 + 分页（不含软删）。 */
   async findAll(query: QueryIssuesDto, userId: string) {
-    await this.assertTaskMember(query.taskId, userId);
     const page = this.normalizePage(query.page);
     const pageSize = this.normalizePageSize(query.pageSize);
-    const where: Prisma.IssueWhereInput = {
-      taskId: query.taskId,
-      deletedAt: null,
+    let where: Prisma.IssueWhereInput = { deletedAt: null };
+    if (query.taskId) {
+      await this.assertTaskMember(query.taskId, userId);
+      where.taskId = query.taskId;
+    } else if (query.projectId) {
+      await this.assertProjectMember(query.projectId, userId);
+      where.task = { projectId: query.projectId };
+    } else {
+      throw new BadRequestException({
+        code: ISSUE_ERRORS.ISSUE_FILTER_REQUIRED,
+        message: '缺少过滤条件：taskId 或 projectId 至少提供一个',
+      });
+    }
+    where = {
+      ...where,
       ...(query.status ? { status: query.status } : {}),
       ...(query.assigneeAgentId
         ? { assigneeAgentId: query.assigneeAgentId }
@@ -266,26 +316,14 @@ export class IssuesService implements OnModuleInit {
   async update(id: string, userId: string, dto: UpdateIssueDto) {
     const issue = await this.findIssue(id);
     await this.assertTaskMember(issue.taskId, userId);
+    if (dto.assigneeInstanceId !== undefined) {
+      await this.assertAssigneeInTeam(issue.taskId, dto.assigneeInstanceId);
+    }
     if (dto.assigneeAgentId !== undefined) {
       await this.assertAssigneeInTeam(issue.taskId, dto.assigneeAgentId);
     }
 
-    const data: Prisma.IssueUncheckedUpdateInput = {};
-    if (dto.title !== undefined) {
-      data.title = dto.title.trim();
-    }
-    if (dto.description !== undefined) {
-      data.description = dto.description?.trim() || null;
-    }
-    if (dto.tags !== undefined) {
-      data.tags = dto.tags as Prisma.InputJsonValue;
-    }
-    if (dto.assigneeAgentId !== undefined) {
-      data.assigneeAgentId = dto.assigneeAgentId;
-    }
-    if (dto.assigneeUserId !== undefined) {
-      data.assigneeUserId = dto.assigneeUserId;
-    }
+    const data = this.buildUpdateData(dto);
 
     const updated = await this.prisma.issue.update({
       where: { id },
@@ -296,15 +334,25 @@ export class IssuesService implements OnModuleInit {
   }
 
   /**
-   * POST /issues/:id/transition：状态流转。
+   * POST /issues/:id/transition：状态流转（用户/MCP 共用核心）。
    * 迁移表驱动（from 不匹配 → 409 ISSUE_INVALID_TRANSITION；已处目标态幂等 200）；
    * 时间戳语义：resolve 置 resolvedAt、close 置 closedAt、reopen 清两者、reject 清 resolvedAt。
    */
   async transition(id: string, userId: string, dto: TransitionIssueDto) {
     const issue = await this.findIssue(id);
     await this.assertTaskMember(issue.taskId, userId);
+    return this.applyTransition(issue, dto.action as IssueTransitionAction);
+  }
 
-    const { from, to } = ISSUE_TRANSITIONS[dto.action];
+  /**
+   * 状态流转核心（transition / transitionByAgent 共用）：成员校验已由调用方完成。
+   * 幂等（已处目标态直接返回当前 DTO）+ 非法迁移 409 + 时间戳语义。
+   */
+  private async applyTransition(
+    issue: IssueRow,
+    action: IssueTransitionAction,
+  ) {
+    const { from, to } = ISSUE_TRANSITIONS[action];
     if (issue.status === to) {
       return this.toIssueDto(issue);
     }
@@ -313,7 +361,7 @@ export class IssuesService implements OnModuleInit {
         code: ISSUE_ERRORS.ISSUE_INVALID_TRANSITION,
         message: 'Issue 状态流转不合法',
         details: {
-          action: dto.action,
+          action,
           from,
           to,
           current: issue.status,
@@ -323,19 +371,19 @@ export class IssuesService implements OnModuleInit {
 
     const now = new Date();
     const data: Prisma.IssueUncheckedUpdateInput = { status: to };
-    if (dto.action === 'resolve') {
+    if (action === 'resolve') {
       data.resolvedAt = now;
-    } else if (dto.action === 'close') {
+    } else if (action === 'close') {
       data.closedAt = now;
-    } else if (dto.action === 'reopen') {
+    } else if (action === 'reopen') {
       data.resolvedAt = null;
       data.closedAt = null;
-    } else if (dto.action === 'reject') {
+    } else if (action === 'reject') {
       data.resolvedAt = null;
     }
 
     const updated = await this.prisma.issue.update({
-      where: { id },
+      where: { id: issue.id },
       data,
       include: ISSUE_INCLUDE,
     });
@@ -353,6 +401,115 @@ export class IssuesService implements OnModuleInit {
     return { id, deleted: true };
   }
 
+  // ---------------------------------------------------------------------------
+  // MCP 专用方法（platform-mcp issue_* 工具，无 userId，Metis B1/B2）：
+  // 归属校验 = agent 须在任务团队（assertAgentTaskMember）+ issue 属于该 taskId。
+  // ---------------------------------------------------------------------------
+
+  /**
+   * MCP 专用列表：agent 在任务团队 → 返回该任务全部 issue 的 DTO 数组
+   * （status 可选过滤，不含软删；对齐 findAll 的筛选语义，无分页——MCP 模型直读）。
+   */
+  async findAllByAgent(
+    agentId: string,
+    taskId: string,
+    status?: string,
+  ) {
+    await this.assertAgentTaskMember(taskId, agentId);
+    const where: Prisma.IssueWhereInput = {
+      taskId,
+      deletedAt: null,
+      ...(status ? { status } : {}),
+    };
+    const rows = await this.prisma.issue.findMany({
+      where,
+      include: ISSUE_INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => this.toIssueDto(row));
+  }
+
+  /** MCP 专用详情：issue 属于该 taskId（404 否则）→ agent 在任务团队（403 否则）。 */
+  async findOneByAgent(agentId: string, taskId: string, issueId: string) {
+    const issue = await this.findIssue(issueId);
+    this.assertIssueInTask(issue, taskId);
+    await this.assertAgentTaskMember(taskId, agentId);
+    return this.toIssueDto(issue);
+  }
+
+  /** MCP 专用更新：校验同 findOneByAgent；assigneeInstanceId/assigneeAgentId 变更重新团队校验。 */
+  async updateByAgent(
+    agentId: string,
+    taskId: string,
+    issueId: string,
+    dto: UpdateIssueDto,
+  ) {
+    const issue = await this.findIssue(issueId);
+    this.assertIssueInTask(issue, taskId);
+    await this.assertAgentTaskMember(taskId, agentId);
+    if (dto.assigneeInstanceId !== undefined) {
+      await this.assertAssigneeInTeam(taskId, dto.assigneeInstanceId);
+    }
+    if (dto.assigneeAgentId !== undefined) {
+      await this.assertAssigneeInTeam(taskId, dto.assigneeAgentId);
+    }
+
+    const data = this.buildUpdateData(dto);
+    const updated = await this.prisma.issue.update({
+      where: { id: issueId },
+      data,
+      include: ISSUE_INCLUDE,
+    });
+    return this.toIssueDto(updated);
+  }
+
+  /** MCP 专用状态流转：校验同 findOneByAgent；核心复用 applyTransition。 */
+  async transitionByAgent(
+    agentId: string,
+    taskId: string,
+    issueId: string,
+    action: IssueTransitionAction,
+  ) {
+    const issue = await this.findIssue(issueId);
+    this.assertIssueInTask(issue, taskId);
+    await this.assertAgentTaskMember(taskId, agentId);
+    return this.applyTransition(issue, action);
+  }
+
+  /** issue 不属于指定任务 → 404（防跨任务越权读取/操作）。 */
+  private assertIssueInTask(issue: IssueRow, taskId: string): void {
+    if (issue.taskId !== taskId) {
+      throw new NotFoundException({
+        code: ISSUE_ERRORS.ISSUE_NOT_FOUND,
+        message: `Issue ${issue.id} 不属于任务 ${taskId}`,
+      });
+    }
+  }
+
+  /** PATCH 字段组装（update / updateByAgent 共用）：title trim、description 空串归一 null。 */
+  private buildUpdateData(dto: UpdateIssueDto): Prisma.IssueUncheckedUpdateInput {
+    const data: Prisma.IssueUncheckedUpdateInput = {};
+    if (dto.title !== undefined) {
+      data.title = dto.title.trim();
+    }
+    if (dto.description !== undefined) {
+      data.description = dto.description?.trim() || null;
+    }
+    if (dto.tags !== undefined) {
+      data.tags = dto.tags as Prisma.InputJsonValue;
+    }
+    if (dto.assigneeAgentId !== undefined) {
+      data.assigneeAgentId = dto.assigneeAgentId;
+    }
+    if (dto.assigneeInstanceId !== undefined) {
+      data.assigneeInstanceId = dto.assigneeInstanceId;
+    }
+    if (dto.assigneeUserId !== undefined) {
+      data.assigneeUserId = dto.assigneeUserId;
+    }
+    return data;
+  }
+
   /** Issue DTO（含 task 标题 + 指派/创建者名，agent/user 二选一）。 */
   private toIssueDto(row: IssueRow) {
     return {
@@ -365,6 +522,7 @@ export class IssuesService implements OnModuleInit {
       tags: this.toTags(row.tags),
       assigneeAgentId: row.assigneeAgentId,
       assigneeAgentName: row.assigneeAgent?.name ?? null,
+      assigneeInstanceId: row.assigneeInstanceId,
       assigneeUserId: row.assigneeUserId,
       assigneeUserName: row.assigneeUser?.username ?? null,
       creatorAgentId: row.creatorAgentId,

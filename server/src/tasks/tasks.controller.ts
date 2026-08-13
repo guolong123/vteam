@@ -71,7 +71,7 @@ export class TasksController {
   }
 
   /**
-   * 任务详情（含 teamAgentIds、backgroundDocs）。
+   * 任务详情（含 teamAgentIds、instances、backgroundDocs）。
    * GET /api/v1/tasks/:id
    */
   @Get('tasks/:id')
@@ -95,7 +95,8 @@ export class TasksController {
   }
 
   /**
-   * 团队调整（FR-02，14 篇 §5.3）：`{addAgentIds[], removeAgentIds[]}`。
+   * 团队调整（FR-02，14 篇 §5.3；角色/实例分离 T2）：`{addInstances[], removeInstanceIds[]}`。
+   * addInstances 新增实例（agentId 可重复，服务端生成 seq）；removeInstanceIds 按实例 id 移除。
    * 仅 pending/in_progress 合法；移除后会话冻结、产出物保留、群聊发系统消息。
    * POST /api/v1/tasks/:id/team
    */

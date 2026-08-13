@@ -31,9 +31,11 @@ import { MessageDispatcher } from './message-dispatcher';
 const MESSAGE_ID_PREFIX = 'm';
 const CHANNEL_ID_PREFIX = 'c';
 
-/** @ 触发结果（09 篇 §5.1 triggers[]）。 */
+/** @ 触发结果（09 篇 §5.1 triggers[]）。T6 实例语义：instanceId 为目标实例 id（同 agent
+ * 多实例时区分触发目标，前端按实例收敛 loading）。 */
 export interface TriggerResult {
   agentId: string;
+  instanceId?: string | null;
   sessionId: string | null;
   status: 'dispatched' | 'no_session' | 'agent_removed';
 }
@@ -44,6 +46,7 @@ export interface TriggerResult {
  */
 export interface TriggerPollResult {
   agentId: string;
+  instanceId?: string | null;
   status: 'dispatched' | 'no_session' | 'agent_removed';
   replyMessageId?: string;
 }
@@ -54,6 +57,7 @@ type ChannelRow = {
   type: string;
   taskId: string;
   agentId: string | null;
+  taskAgentId?: string | null;
   pinned: boolean;
   lastReadAt: Date | null;
   deletedAt: Date | null;
@@ -63,6 +67,8 @@ type ChannelRow = {
     title: string;
     status: string;
     projectId: string;
+    mainAgentInstanceId?: string | null;
+    mainAgentId?: string | null;
   } | null;
   agent?: { id: string; name: string; role: string | null } | null;
 };
@@ -73,6 +79,7 @@ type MessageRow = {
   channelId: string;
   senderType: string;
   senderId: string | null;
+  senderInstanceId?: string | null;
   content: Prisma.JsonValue;
   mentions: Prisma.JsonValue | null;
   attachmentUrl: string | null;
@@ -83,13 +90,22 @@ type MessageRow = {
 };
 
 const TEAM_AGENT_SELECT = {
+  id: true,
   agentId: true,
   removedAt: true,
 } as const;
 
 const CHANNEL_TASK_SELECT = {
   task: {
-    select: { id: true, title: true, status: true, projectId: true },
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      projectId: true,
+      // T8 群聊无 @ 自动路由主实例：随频道访问解析一并取主实例字段，免二次查库
+      mainAgentInstanceId: true,
+      mainAgentId: true,
+    },
   },
   agent: { select: { id: true, name: true, role: true } },
 } as const;
@@ -198,25 +214,28 @@ export class ChatService {
 
   /**
    * 消息历史游标分页（09 篇 §2.2/§3.5、10 篇 §6）：
-   * `WHERE channel_id=? AND id>cursor ORDER BY id ASC LIMIT ?`（命中 idx_messages_channel_id）；
-   * cursor 缺省 = 第一页（取最早 limit 条）；末页 nextCursor=null（取 limit+1 判断是否还有更多）。
+   * `WHERE channel_id=? AND id<cursor ORDER BY id DESC LIMIT ?`（命中 idx_messages_channel_id）——
+   * 首页（cursor 缺省）取**最新** limit 条；cursor = 上页最早一条 id，下一页取更老；
+   * items 返回时反转回 id 升序（时间正序，前端直接渲染）；末页 nextCursor=null（取 limit+1 判断是否还有更多）。
    */
   async findMessages(channelId: string, userId: string, query: QueryMessagesDto) {
     await this.resolveChannelAccess(channelId, userId);
     const limit = this.normalizeLimit(query.limit);
     const where: Prisma.MessageWhereInput = {
       channelId,
-      ...(query.cursor ? { id: { gt: query.cursor } } : {}),
+      ...(query.cursor ? { id: { lt: query.cursor } } : {}),
     };
     const rows = await this.prisma.message.findMany({
       where,
-      orderBy: { id: 'asc' },
+      orderBy: { id: 'desc' },
       take: limit + 1,
     });
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
     return {
-      items: page.map((row) => this.toMessageDto(row)),
+      // page 为 id 降序（最新优先），反转回升序供前端时间正序渲染
+      items: [...page].reverse().map((row) => this.toMessageDto(row)),
+      // 当前页最早一条 id（降序下为 page 末项），供下一页取更老
       nextCursor: hasMore ? page[page.length - 1].id : null,
     };
   }
@@ -255,39 +274,50 @@ export class ChatService {
       where: { taskId: channel.taskId },
       select: TEAM_AGENT_SELECT,
     });
-    const teamMap = new Map(teamRows.map((r) => [r.agentId, r]));
 
-    // 被 @ Agent 集合：agent 型直取；all 型展开为团队未移除全部
-    const agentIds = new Set<string>();
+    // 被 @ Agent 集合：agent 型直取（带 instanceId 精确到实例）；all 型展开为团队未移除全部实例
+    const targetRows: { id: string; agentId: string; removedAt: Date | null }[] = [];
     for (const m of mentions) {
       if (m.type === 'agent' && m.agentId) {
-        agentIds.add(m.agentId);
+        const row = m.instanceId
+          ? teamRows.find((r) => r.id === m.instanceId)
+          : teamRows.find((r) => r.agentId === m.agentId && !r.removedAt)
+            ?? teamRows.find((r) => r.agentId === m.agentId);
+        if (row) targetRows.push(row);
       } else if (m.type === 'all') {
-        for (const [agentId, row] of teamMap) {
-          if (!row.removedAt) agentIds.add(agentId);
+        for (const row of teamRows) {
+          if (!row.removedAt) targetRows.push(row);
         }
       }
     }
 
     const triggers: TriggerPollResult[] = [];
-    for (const agentId of agentIds) {
-      const row = teamMap.get(agentId);
-      const base = row
-        ? await this.buildTrigger(channel.taskId, agentId, row)
-        : { agentId, sessionId: null, status: 'agent_removed' as const };
-      // 回复：该 Agent 于原消息之后的回复消息（senderType=agent，id 升序取最早一条）
+    for (const row of targetRows) {
+      const agentId = row.agentId;
+      const instanceId = row.id;
+      const base = await this.buildTrigger(channel.taskId, row);
+      // 回复：该实例（agentId+instanceId 定位）于原消息之后的回复消息（senderType=agent，id 升序取最早一条）
       const reply = await this.prisma.message.findFirst({
         where: {
           channelId,
           senderType: SENDER_TYPE.agent,
           senderId: agentId,
           createdAt: { gt: message.createdAt },
+          ...(instanceId
+            ? {
+                OR: [
+                  { senderInstanceId: instanceId },
+                  { senderInstanceId: null },
+                ],
+              }
+            : {}),
         },
         orderBy: { id: 'asc' },
         select: { id: true },
       });
       triggers.push({
         agentId,
+        instanceId,
         status: base.status,
         ...(reply ? { replyMessageId: reply.id } : {}),
       });
@@ -333,6 +363,16 @@ export class ChatService {
       dto.mentions ?? [],
     );
 
+    // 2.5 T8 群聊无 @ 自动路由主实例：频道为 task_group 且用户未 @ 任何人（triggers 空）
+    //    → 解析任务主实例并追加 trigger（mainAgentInstanceId 优先，回退 mainAgentId 第一
+    //    未移除实例）；主实例已 removed/无主实例 → 不触发。有 @ 消息不叠加（保持 @ 语义）。
+    if (channel.type === CHANNEL_TYPE.task_group && triggers.length === 0) {
+      const mainTrigger = await this.buildMainAgentTrigger(channel.taskId, task);
+      if (mainTrigger) {
+        triggers.push(mainTrigger);
+      }
+    }
+
     // 3. 落库（用户消息：senderType=user，status=sent，id=m_<序号>；
     //    UX-10：附件三字段可选，客户端已先 POST /uploads 拿到可访问 URL）
     const message = await this.prisma.message.create({
@@ -371,7 +411,11 @@ export class ChatService {
         channelId,
         taskId: channel.taskId,
         text: dto.text,
-        targets: targets.map((t) => ({ agentId: t.agentId, sessionId: t.sessionId })),
+        targets: targets.map((t) => ({
+          agentId: t.agentId,
+          instanceId: t.instanceId,
+          sessionId: t.sessionId,
+        })),
       })
       .catch((err: Error) =>
         this.logger.error(`dispatch failed: ${err.message}`, err.stack),
@@ -379,7 +423,10 @@ export class ChatService {
 
     // 5.5 收到确认（ACK）：dispatch 后立即为每个 dispatched 目标落库 agent「收到」消息
     //    （text=agent.ackMessage 或 DEFAULT_ACK_MESSAGE；mentions=null 不会递归触发 dispatch）
-    await this.acknowledge(channelId, targets.map((t) => t.agentId));
+    await this.acknowledge(
+      channelId,
+      targets.map((t) => ({ agentId: t.agentId, instanceId: t.instanceId })),
+    );
 
     return {
       message: this.toMessageDto(message),
@@ -392,20 +439,25 @@ export class ChatService {
    * 每个 dispatched 目标各落一条（senderType=agent，mentions=null 防递归触发 dispatch）；
    * text=agent.ackMessage 配置或 DEFAULT_ACK_MESSAGE 默认；先落库后广播（08 篇 §7.3）。
    */
-  private async acknowledge(channelId: string, agentIds: string[]): Promise<void> {
-    const ids = [...new Set(agentIds)];
+  private async acknowledge(
+    channelId: string,
+    targets: { agentId: string; instanceId?: string | null }[],
+  ): Promise<void> {
+    const ids = [...new Set(targets.map((t) => t.agentId))];
     if (ids.length === 0) return;
     const rows = await this.prisma.agent.findMany({
       where: { id: { in: ids } },
       select: { id: true, ackMessage: true },
     });
     for (const row of rows) {
+      const target = targets.find((t) => t.agentId === row.id);
       const ack = await this.prisma.message.create({
         data: {
           id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
           channelId,
           senderType: SENDER_TYPE.agent,
           senderId: row.id,
+          senderInstanceId: target?.instanceId ?? null,
           content: {
             text: row.ackMessage ?? DEFAULT_ACK_MESSAGE,
             parts: [],
@@ -424,7 +476,8 @@ export class ChatService {
 
   /**
    * 创建 private 私聊频道（FR-14，09 篇 §3.5 POST /dm-channels）。
-   * task_id+agent_id 命 uk_channels_task_agent；重复创建幂等返回已有频道。
+   * T6 实例语义：dto.taskAgentId 存在 → 按 (taskId, taskAgentId) 幂等（uk_channels_task_agent），
+   * 同 agent 多实例各自独立频道；缺省回退 (taskId, agentId)（单实例/存量兼容）。
    */
   async createDmChannel(userId: string, dto: CreateDmChannelDto) {
     const task = await this.prisma.task.findUnique({
@@ -458,11 +511,21 @@ export class ChatService {
         message: 'Agent 不存在',
       });
     }
-    // 幂等：uk_channels_task_agent 已存在则返回已有频道
-    const existing = await this.prisma.chatChannel.findUnique({
-      where: {
-        taskId_agentId: { taskId: dto.taskId, agentId: dto.agentId },
-      },
+    // T6 实例语义：taskAgentId 缺省回退该 agent 第一实例（存量客户端/单实例任务兼容）
+    let taskAgentId = dto.taskAgentId;
+    if (!taskAgentId) {
+      const fallback = await this.prisma.taskAgent.findFirst({
+        where: { taskId: dto.taskId, agentId: dto.agentId, removedAt: null },
+        orderBy: { seq: 'asc' },
+        select: { id: true },
+      });
+      taskAgentId = fallback?.id ?? null;
+    }
+    // 幂等：同任务同实例私聊频道已存在则返回已有频道（T6：同 agent 多实例各自独立）
+    const existing = await this.prisma.chatChannel.findFirst({
+      where: taskAgentId
+        ? { taskId: dto.taskId, taskAgentId }
+        : { taskId: dto.taskId, agentId: dto.agentId, taskAgentId: null },
       include: CHANNEL_TASK_SELECT,
     });
     if (existing) {
@@ -483,6 +546,7 @@ export class ChatService {
         type: CHANNEL_TYPE.private,
         taskId: dto.taskId,
         agentId: dto.agentId,
+        ...(taskAgentId ? { taskAgentId } : {}),
       },
       include: CHANNEL_TASK_SELECT,
     });
@@ -544,7 +608,12 @@ export class ChatService {
    */
   private async resolveChannelAccess(channelId: string, userId: string): Promise<{
     channel: ChannelRow;
-    task: { projectId: string; status: string };
+    task: {
+      projectId: string;
+      status: string;
+      mainAgentInstanceId?: string | null;
+      mainAgentId?: string | null;
+    };
   }> {
     const channel = await this.prisma.chatChannel.findUnique({
       where: { id: channelId },
@@ -586,14 +655,13 @@ export class ChatService {
       where: { taskId },
       select: TEAM_AGENT_SELECT,
     });
-    const teamMap = new Map(teamRows.map((r) => [r.agentId, r]));
     const triggers: TriggerResult[] = [];
 
     for (const mention of mentions) {
       if (mention.type === 'all') {
-        for (const [agentId, row] of teamMap) {
+        for (const row of teamRows) {
           if (!row.removedAt) {
-            triggers.push(await this.buildTrigger(taskId, agentId, row));
+            triggers.push(await this.buildTrigger(taskId, row));
           }
         }
       } else if (mention.type === 'agent') {
@@ -603,14 +671,20 @@ export class ChatService {
             message: 'agent mention 缺少 agentId',
           });
         }
-        const row = teamMap.get(mention.agentId);
+        // T6 实例语义：mention 携带 instanceId → 按实例精确解析（同 agent 多实例
+        // 各自触发自身会话）；缺省 → 回退该 agent 第一个未移除实例，若该 agent 已无
+        // 未移除实例则命中任意状态实例（交 buildTrigger 判 agent_removed，单实例/存量兼容）。
+        const row = mention.instanceId
+          ? teamRows.find((r) => r.id === mention.instanceId)
+          : teamRows.find((r) => r.agentId === mention.agentId && !r.removedAt)
+            ?? teamRows.find((r) => r.agentId === mention.agentId);
         if (!row) {
           throw new BadRequestException({
             code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,
             message: `Agent ${mention.agentId} 不在任务团队内`,
           });
         }
-        triggers.push(await this.buildTrigger(taskId, mention.agentId, row));
+        triggers.push(await this.buildTrigger(taskId, row));
       } else {
         throw new BadRequestException({
           code: CHAT_ERRORS.MENTION_TYPE_INVALID,
@@ -625,30 +699,62 @@ export class ChatService {
   /** 单个触发结果：已移除 → agent_removed；未移除查会话（uk_sessions_task_agent）定 dispatched/no_session。 */
   private async buildTrigger(
     taskId: string,
-    agentId: string,
-    row: { removedAt: Date | null },
+    row: { id: string; agentId: string; removedAt: Date | null },
   ): Promise<TriggerResult> {
     if (row.removedAt) {
-      return { agentId, sessionId: null, status: 'agent_removed' };
+      return { agentId: row.agentId, instanceId: row.id, sessionId: null, status: 'agent_removed' };
     }
+    // T6 实例语义：按 taskAgentId 定位会话（同 agent 多实例会话独立，不再按 agentId 撞首条）
     const session = await this.prisma.session.findFirst({
-      where: { taskId, agentId },
+      where: { taskId, taskAgentId: row.id },
       select: { id: true },
     });
     return {
-      agentId,
+      agentId: row.agentId,
+      instanceId: row.id,
       sessionId: session?.id ?? null,
       status: session ? 'dispatched' : 'no_session',
     };
   }
 
-  /** 频道 DTO：id/type/taskId/agentId + 关联 task/agent + pinned/lastReadAt + createdAt（ISO8601）。 */
+  /**
+   * T8 群聊无 @ 自动路由主实例（createMessage 步骤 2.5）：
+   * - task.mainAgentInstanceId 优先 → 查该实例行（须在任务团队内）；
+   * - 缺省回退 task.mainAgentId → 该 agent 第一个未移除实例（seq 升序）；
+   * - 实例不存在 / 已 removed / 任务无主实例配置 → 返回 null（triggers 保持空，不触发）；
+   * 命中未移除实例 → 复用 buildTrigger（按 taskAgentId 查会话 → dispatched/no_session）。
+   */
+  private async buildMainAgentTrigger(
+    taskId: string,
+    task: { mainAgentInstanceId?: string | null; mainAgentId?: string | null },
+  ): Promise<TriggerResult | null> {
+    let row: { id: string; agentId: string; removedAt: Date | null } | null = null;
+    if (task.mainAgentInstanceId) {
+      row = await this.prisma.taskAgent.findFirst({
+        where: { id: task.mainAgentInstanceId, taskId },
+        select: TEAM_AGENT_SELECT,
+      });
+    } else if (task.mainAgentId) {
+      row = await this.prisma.taskAgent.findFirst({
+        where: { taskId, agentId: task.mainAgentId, removedAt: null },
+        orderBy: { seq: 'asc' },
+        select: TEAM_AGENT_SELECT,
+      });
+    }
+    if (!row || row.removedAt) {
+      return null;
+    }
+    return this.buildTrigger(taskId, row);
+  }
+
+  /** 频道 DTO：id/type/taskId/agentId/taskAgentId + 关联 task/agent + pinned/lastReadAt + createdAt（ISO8601）。 */
   private toChannelDto(row: ChannelRow) {
     return {
       id: row.id,
       type: row.type,
       taskId: row.taskId,
       agentId: row.agentId,
+      taskAgentId: row.taskAgentId ?? null,
       pinned: row.pinned,
       lastReadAt: row.lastReadAt ? row.lastReadAt.toISOString() : null,
       task: row.task
@@ -671,6 +777,7 @@ export class ChatService {
       channelId: row.channelId,
       senderType: row.senderType,
       senderId: row.senderId,
+      senderInstanceId: row.senderInstanceId ?? null,
       content: row.content,
       mentions: row.mentions ?? [],
       attachmentUrl: row.attachmentUrl,

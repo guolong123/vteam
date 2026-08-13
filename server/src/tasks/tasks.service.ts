@@ -40,7 +40,35 @@ const ID_PREFIX = {
   session: 's',
 } as const;
 
-/** 任务行 + 团队关系（teamAgentIds 派生源）。 */
+/** 角色中文名映射（seed 模板 agent.role → 中文名；未知角色回退 agent.name，FR-08 别名默认规则）。 */
+const ROLE_LABELS: Record<string, string> = {
+  product: '产品经理',
+  project_manager: '项目经理',
+  architect: '架构师',
+  developer: '开发者',
+  tester: '测试',
+} as const;
+
+/** 团队成员实例（task_agents 行 + 模板 agent 关联，instances/teamInstancesOf 派生源）。 */
+type TaskAgentInstance = {
+  id: string;
+  agentId: string;
+  alias: string | null;
+  seq: number;
+  removedAt: Date | null;
+  agent: { id: string; name: string; role: string | null };
+};
+
+/** 任务详情/列表查询的 taskAgents include（统一带模板 agent 的 name/role，instances 渲染用）。 */
+const TASK_AGENTS_INCLUDE = {
+  taskAgents: {
+    include: {
+      agent: { select: { id: true, name: true, role: true } },
+    },
+  },
+} as const;
+
+/** 任务行 + 团队实例关系（teamInstancesOf 派生源）。 */
 type TaskRow = {
   id: string;
   projectId: string;
@@ -49,6 +77,7 @@ type TaskRow = {
   priority: string;
   status: string;
   mainAgentId: string | null;
+  mainAgentInstanceId: string | null;
   backgroundDocs: Prisma.JsonValue | null;
   createdBy: string;
   createdAt: Date;
@@ -56,7 +85,7 @@ type TaskRow = {
   pendingReviewAt: Date | null;
   completedAt: Date | null;
   archivedAt: Date | null;
-  taskAgents?: { agentId: string; removedAt: Date | null }[];
+  taskAgents?: TaskAgentInstance[];
 };
 
 /** 系统消息行（messages 表；content 为 Json 列，对齐 ChatService.toMessageDto）。 */
@@ -82,7 +111,7 @@ type SeqModel = {
 /** 状态迁移系统消息上下文（10 篇 §8.1 文案生成所需）。 */
 type SysMessageCtx = {
   task: TaskRow;
-  /** 主 Agent 名（仅 start 解析 agent.name；查询不到回退 agentId）。 */
+  /** 主实例别名（仅 start 解析实例 alias，缺省 `<角色中文名>-<seq>`；查询不到回退实例 id）。 */
   mainAgentName?: string;
 };
 
@@ -140,14 +169,22 @@ export class TasksService implements OnModuleInit {
     if (!dto.title || dto.title.trim().length === 0) {
       throw new BadRequestException('任务标题不能为空');
     }
-    if (dto.mainAgentId && !dto.agentIds.includes(dto.mainAgentId)) {
+    const agents = dto.agents ?? [];
+    if (agents.length === 0) {
+      throw new BadRequestException({
+        code: TASK_ERRORS.TASK_EMPTY_TEAM,
+        message: '任务团队不能为空，请至少添加一个 Agent 实例',
+      });
+    }
+    if (dto.mainAgentId && !agents.some((a) => a.agentId === dto.mainAgentId)) {
       throw new BadRequestException({
         code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
-        message: '主 Agent 必须在团队 agentIds 内',
+        message: '主 Agent 必须在团队实例内',
       });
     }
 
     const taskId = await this.idGen.nextId(ID_PREFIX.task);
+    let instances: TaskAgentInstance[] = [];
 
     const task = await this.prisma.$transaction(async (tx) => {
       const created = await tx.task.create({
@@ -158,7 +195,9 @@ export class TasksService implements OnModuleInit {
           description: dto.description?.trim() || null,
           priority: dto.priority ?? TASK_PRIORITY.medium,
           status: TASK_STATUS.pending,
-          mainAgentId: dto.mainAgentId ?? null,
+          // 主实例在实例创建后解析（mainAgentInstanceId 需校验属于创建集合），先空置再更新
+          mainAgentId: null,
+          mainAgentInstanceId: null,
           backgroundDocs: (dto.backgroundDocs ?? []) as Prisma.InputJsonValue,
           createdBy: userId,
           version: 0,
@@ -175,25 +214,77 @@ export class TasksService implements OnModuleInit {
         },
       });
 
-      for (const agentId of dto.agentIds) {
-        await tx.taskAgent.create({
+      // 团队实例：每个 agents 项创建 TaskAgent（seq = 该 taskId+agentId 已用最大 seq+1，
+      // 事务内防并发重号，uk_task_agents_task_agent_seq 唯一键兜底）+ 独立会话绑实例
+      for (const item of agents) {
+        const agent = await tx.agent.findUnique({
+          where: { id: item.agentId },
+          select: { id: true, name: true, role: true },
+        });
+        if (!agent) {
+          throw new NotFoundException({
+            code: TASK_ERRORS.AGENT_NOT_FOUND,
+            message: `Agent ${item.agentId} 不存在`,
+          });
+        }
+        const max = await tx.taskAgent.aggregate({
+          _max: { seq: true },
+          where: { taskId, agentId: item.agentId },
+        });
+        const seq = (max._max.seq ?? 0) + 1;
+        const alias = item.alias?.trim() || this.defaultAlias(agent, seq);
+        const ta = await tx.taskAgent.create({
           data: {
             id: await this.idGen.nextId(ID_PREFIX.taskAgent),
             taskId,
-            agentId,
+            agentId: item.agentId,
+            alias,
+            seq,
           },
         });
-        // 每 Agent 每任务独立会话（10 篇 §3.3 / plan §6 T12「新会话创建」）：
+        // 每实例每任务独立会话（10 篇 §3.3 / plan §6 T12「新会话创建」）：
         // 无会话行 → @ 解析 no_session 不分派，mock 回复永不回流（M2 验收阻断项）。
         await tx.session.create({
           data: {
             id: await this.idGen.nextId(ID_PREFIX.session),
             taskId,
-            agentId,
+            taskAgentId: ta.id,
+            agentId: item.agentId,
             status: SESSION_STATUS.created,
           },
         });
+        instances.push({
+          id: ta.id,
+          agentId: item.agentId,
+          alias,
+          seq,
+          removedAt: null,
+          agent,
+        });
       }
+
+      // 主实例解析：入参 mainAgentInstanceId 优先 → mainAgentId 映射该 agent 第一个实例 → null；
+      // mainAgentInstanceId 必须属于本次创建实例集合（FR-08）。
+      let mainInstanceId = dto.mainAgentInstanceId ?? null;
+      if (!mainInstanceId && dto.mainAgentId) {
+        mainInstanceId =
+          instances.find((i) => i.agentId === dto.mainAgentId)?.id ?? null;
+      }
+      if (
+        mainInstanceId &&
+        !instances.some((i) => i.id === mainInstanceId)
+      ) {
+        throw new BadRequestException({
+          code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
+          message: '主 Agent 必须是团队内实例',
+        });
+      }
+      const mainAgentId =
+        instances.find((i) => i.id === mainInstanceId)?.agentId ?? null;
+      await tx.task.update({
+        where: { id: taskId },
+        data: { mainAgentId, mainAgentInstanceId: mainInstanceId },
+      });
 
       // 创建即入待开始：事件 from=null → pending（08 篇 §6.1）
       await tx.taskEvent.create({
@@ -226,11 +317,11 @@ export class TasksService implements OnModuleInit {
       { type: 'global' },
     );
 
-    const teamAgentIds = dto.agentIds.map((agentId) => ({
-      agentId,
-      removedAt: null,
-    }));
-    return this.toTaskDto({ ...task, taskAgents: teamAgentIds });
+    const fresh = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      include: TASK_AGENTS_INCLUDE,
+    });
+    return this.toTaskDto(fresh ?? { ...task, taskAgents: instances });
   }
 
   /** 看板列表：五态/优先级筛选 + 分页（page 默认 1、pageSize 默认 20 上限 100），created_at desc。 */
@@ -247,7 +338,7 @@ export class TasksService implements OnModuleInit {
       this.prisma.task.count({ where }),
       this.prisma.task.findMany({
         where,
-        include: { taskAgents: true },
+        include: TASK_AGENTS_INCLUDE,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -262,11 +353,11 @@ export class TasksService implements OnModuleInit {
     };
   }
 
-  /** 任务详情（含 teamAgentIds、backgroundDocs）。 */
+  /** 任务详情（含 teamAgentIds、instances、backgroundDocs）。 */
   async findOne(id: string) {
     const task = await this.prisma.task.findUnique({
       where: { id },
-      include: { taskAgents: true },
+      include: TASK_AGENTS_INCLUDE,
     });
     if (!task) {
       throw new NotFoundException({
@@ -277,11 +368,11 @@ export class TasksService implements OnModuleInit {
     return this.toTaskDto(task);
   }
 
-  /** 编辑任务：mainAgentId 须为团队内已选 Agent（未 removed），否则 400（FR-08）。 */
+  /** 编辑任务：mainAgentInstanceId 须为团队内实例；mainAgentId 兼容映射到该 agent 第一个实例（FR-08）。 */
   async update(id: string, dto: UpdateTaskDto) {
     const task = await this.prisma.task.findUnique({
       where: { id },
-      include: { taskAgents: true },
+      include: TASK_AGENTS_INCLUDE,
     });
     if (!task) {
       throw new NotFoundException({
@@ -300,42 +391,66 @@ export class TasksService implements OnModuleInit {
     if (dto.priority !== undefined) {
       data.priority = dto.priority;
     }
-    if (dto.mainAgentId !== undefined) {
+    const instances = this.teamInstancesOf(task.taskAgents);
+    if (dto.mainAgentInstanceId !== undefined) {
+      // 主实例：须为团队内实例，同步 mainAgentId 为其 agent（渲染兜底）
+      if (dto.mainAgentInstanceId !== null) {
+        const inst = instances.find((i) => i.id === dto.mainAgentInstanceId);
+        if (!inst) {
+          throw new BadRequestException({
+            code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
+            message: '主 Agent 必须是团队内实例',
+          });
+        }
+        data.mainAgentInstanceId = inst.id;
+        data.mainAgentId = inst.agentId;
+      } else {
+        data.mainAgentInstanceId = null;
+        data.mainAgentId = null;
+      }
+    } else if (dto.mainAgentId !== undefined) {
+      // 兼容路径：mainAgentId 映射到该 agent 第一个实例
       if (dto.mainAgentId !== null) {
-        const teamAgentIds = this.teamAgentIdsOf(task.taskAgents);
-        if (!teamAgentIds.includes(dto.mainAgentId)) {
+        const inst = instances.find((i) => i.agentId === dto.mainAgentId);
+        if (!inst) {
           throw new BadRequestException({
             code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
             message: '主 Agent 必须是团队内已选 Agent',
           });
         }
+        data.mainAgentId = inst.agentId;
+        data.mainAgentInstanceId = inst.id;
+      } else {
+        data.mainAgentId = null;
+        data.mainAgentInstanceId = null;
       }
-      data.mainAgentId = dto.mainAgentId;
     }
 
     const updated = await this.prisma.task.update({
       where: { id },
       data,
-      include: { taskAgents: true },
+      include: TASK_AGENTS_INCLUDE,
     });
     return this.toTaskDto(updated);
   }
 
   /**
-   * 团队调整（14 篇 §5.3，FR-02）：`{addAgentIds[], removeAgentIds[]}`。
+   * 团队调整（14 篇 §5.3，FR-02；角色/实例分离 T2）：`{addInstances[], removeInstanceIds[]}`。
    *
    * 时间窗：仅 pending/in_progress 合法（与 13 篇 §7.4 联动），否则 409。
-   * add：全新 Agent 写 task_agents（joined_at 默认）；已移除者重新加入（removedAt 置空 + joinedAt 刷新）；
-   *      已存在未移除者幂等跳过（200，不广播，与状态迁移幂等一致）。
-   * remove：写 removed_at（标记非删除）；sessions 冻结（status=frozen）；主 Agent 被移除时清空 mainAgentId；
-   *         产出物保留（本版不动 artifacts）。
+   * addInstances：每个实例写 task_agents（seq = 该 taskId+agentId 已用最大 seq+1，事务内防并发重号）
+   *              + 独立会话绑实例（joined_at 默认）；同 agent 可加多实例。
+   * removeInstanceIds：按实例 id 写 removed_at（标记非删除）+ 冻结该实例 session（status=frozen）；
+   *                    主实例被移除时清空 mainAgentInstanceId（同步 mainAgentId）。
+   *                    产出物保留（本版不动 artifacts）。
    * 群聊联动：task_group 频道写 system 消息（10 篇 §8.3 文案）+ 广播 chat.message.new（T9 模式）。
-   * 广播 team.changed：逐 Agent {taskId, action: add|remove, agentId}，scope={type:'task', id}（09 篇 §4.2）。
+   * 广播 team.changed 按实例：{taskId, action: add|remove, instanceId, agentId, alias}，
+   * scope={type:'task', id}（09 篇 §4.2）。
    */
   async updateTeam(id: string, dto: UpdateTeamDto, userId: string) {
     const task = await this.prisma.task.findUnique({
       where: { id },
-      include: { taskAgents: true },
+      include: TASK_AGENTS_INCLUDE,
     });
     if (!task) {
       throw new NotFoundException({
@@ -354,34 +469,16 @@ export class TasksService implements OnModuleInit {
       });
     }
 
-    const addIds = [...new Set(dto.addAgentIds ?? [])];
-    const removeIds = [...new Set(dto.removeAgentIds ?? [])].filter(
-      (agentId) => !addIds.includes(agentId),
-    );
-    const teamMap = new Map(task.taskAgents.map((ta) => [ta.agentId, ta]));
-    const toCreate = addIds.filter((a) => !teamMap.has(a));
-    const toRejoin = addIds.filter((a) => teamMap.has(a) && !!teamMap.get(a)!.removedAt);
-    const toRemove = removeIds.filter((a) => {
-      const ta = teamMap.get(a);
+    const addInstances = dto.addInstances ?? [];
+    const removeInstanceIds = [...new Set(dto.removeInstanceIds ?? [])];
+    const teamMap = new Map(task.taskAgents.map((ta) => [ta.id, ta]));
+    const toRemove = removeInstanceIds.filter((instanceId) => {
+      const ta = teamMap.get(instanceId);
       return ta && !ta.removedAt;
     });
 
-    if (toCreate.length + toRejoin.length + toRemove.length === 0) {
+    if (addInstances.length === 0 && toRemove.length === 0) {
       return this.toTaskDto(task);
-    }
-
-    const agentRows = await this.prisma.agent.findMany({
-      where: { id: { in: [...toCreate, ...toRejoin, ...toRemove] } },
-      select: { id: true, name: true },
-    });
-    const agentNameMap = new Map(agentRows.map((a) => [a.id, a.name]));
-    for (const agentId of toCreate) {
-      if (!agentNameMap.has(agentId)) {
-        throw new NotFoundException({
-          code: TASK_ERRORS.AGENT_NOT_FOUND,
-          message: `Agent ${agentId} 不存在`,
-        });
-      }
     }
 
     const channel = await this.prisma.chatChannel.findFirst({
@@ -389,74 +486,34 @@ export class TasksService implements OnModuleInit {
       select: { id: true },
     });
 
-    const sysMessages = await this.prisma.$transaction(async (tx) => {
+    const { sysMessages, created } = await this.prisma.$transaction(async (tx) => {
       // 任务进行中（in_progress）加入团队的 Agent 会话置 active，否则保持 created（T4 与 start 衔接）
       const joinStatus =
         task.status === TASK_STATUS.in_progress
           ? SESSION_STATUS.active
           : SESSION_STATUS.created;
-      for (const agentId of toCreate) {
-        await tx.taskAgent.create({
-          data: {
-            id: await this.idGen.nextId(ID_PREFIX.taskAgent),
-            taskId: id,
-            agentId,
-          },
-        });
-        await tx.session.create({
-          data: {
-            id: await this.idGen.nextId(ID_PREFIX.session),
-            taskId: id,
-            agentId,
-            status: joinStatus,
-          },
-        });
-      }
-      for (const agentId of toRejoin) {
-        await tx.taskAgent.update({
-          where: { taskId_agentId: { taskId: id, agentId } },
-          data: { removedAt: null, joinedAt: new Date() },
-        });
-        await tx.session.updateMany({
-          where: { taskId: id, agentId },
-          data: { status: joinStatus },
-        });
-      }
-      for (const agentId of toRemove) {
+      const created = await this.createInstances(tx, id, addInstances, joinStatus);
+      for (const instanceId of toRemove) {
         await tx.taskAgent.updateMany({
-          where: { taskId: id, agentId, removedAt: null },
+          where: { id: instanceId, removedAt: null },
           data: { removedAt: new Date() },
         });
         await tx.session.updateMany({
-          where: { taskId: id, agentId },
+          where: { taskAgentId: instanceId },
           data: { status: SESSION_STATUS.frozen },
         });
       }
-      if (task.mainAgentId && toRemove.includes(task.mainAgentId)) {
+      if (
+        task.mainAgentInstanceId &&
+        toRemove.includes(task.mainAgentInstanceId)
+      ) {
         await tx.task.update({
           where: { id },
-          data: { mainAgentId: null },
+          data: { mainAgentId: null, mainAgentInstanceId: null },
         });
       }
       const messages: SysMessageRow[] = [];
-      for (const agentId of [...toCreate, ...toRejoin]) {
-        const name = agentNameMap.get(agentId) ?? agentId;
-        messages.push(
-          await tx.message.create({
-            data: {
-              id: await this.idGen.nextId(ID_PREFIX.message),
-              channelId: channel!.id,
-              senderType: SENDER_TYPE.system,
-              senderId: null,
-              content: { text: `${name} 已加入团队`, parts: [] } as Prisma.InputJsonValue,
-              mentions: null,
-              status: MESSAGE_STATUS.sent,
-            },
-          }),
-        );
-      }
-      for (const agentId of toRemove) {
-        const name = agentNameMap.get(agentId) ?? agentId;
+      for (const inst of created) {
         messages.push(
           await tx.message.create({
             data: {
@@ -465,7 +522,7 @@ export class TasksService implements OnModuleInit {
               senderType: SENDER_TYPE.system,
               senderId: null,
               content: {
-                text: `${name} 已移出团队，其会话已冻结`,
+                text: `${inst.alias ?? inst.agentId} 已加入团队`,
                 parts: [],
               } as Prisma.InputJsonValue,
               mentions: null,
@@ -474,20 +531,52 @@ export class TasksService implements OnModuleInit {
           }),
         );
       }
-      return messages;
+      for (const instanceId of toRemove) {
+        const inst = teamMap.get(instanceId)!;
+        messages.push(
+          await tx.message.create({
+            data: {
+              id: await this.idGen.nextId(ID_PREFIX.message),
+              channelId: channel!.id,
+              senderType: SENDER_TYPE.system,
+              senderId: null,
+              content: {
+                text: `${inst.alias ?? inst.agentId} 已移出团队，其会话已冻结`,
+                parts: [],
+              } as Prisma.InputJsonValue,
+              mentions: null,
+              status: MESSAGE_STATUS.sent,
+            },
+          }),
+        );
+      }
+      return { sysMessages: messages, created };
     });
 
-    for (const agentId of [...toCreate, ...toRejoin]) {
+    for (const inst of created) {
       await this.realtime.broadcast(
         EVENT_TYPES.TEAM_CHANGED,
-        { taskId: id, action: 'add', agentId },
+        {
+          taskId: id,
+          action: 'add',
+          instanceId: inst.id,
+          agentId: inst.agentId,
+          alias: inst.alias,
+        },
         { type: 'task', id },
       );
     }
-    for (const agentId of toRemove) {
+    for (const instanceId of toRemove) {
+      const inst = teamMap.get(instanceId)!;
       await this.realtime.broadcast(
         EVENT_TYPES.TEAM_CHANGED,
-        { taskId: id, action: 'remove', agentId },
+        {
+          taskId: id,
+          action: 'remove',
+          instanceId: inst.id,
+          agentId: inst.agentId,
+          alias: inst.alias,
+        },
         { type: 'task', id },
       );
     }
@@ -503,27 +592,27 @@ export class TasksService implements OnModuleInit {
 
     const fresh = await this.prisma.task.findUnique({
       where: { id },
-      include: { taskAgents: true },
+      include: TASK_AGENTS_INCLUDE,
     });
     return this.toTaskDto(fresh ?? task);
   }
 
-  /** 启动任务（pending → in_progress，13 篇 §4.2）：前置校验团队 + 主 Agent，写 startedAt。 */
+  /** 启动任务（pending → in_progress，13 篇 §4.2）：前置校验团队实例 + 主实例，写 startedAt。 */
   async start(id: string, userId: string) {
     return this.transition(id, 'start', userId, {
       eventType: 'status_change',
       fields: { startedAt: new Date() },
       preflight: (task) => {
-        if (this.teamAgentIdsOf(task.taskAgents).length === 0) {
+        if (this.teamInstancesOf(task.taskAgents).length === 0) {
           throw new BadRequestException({
             code: TASK_ERRORS.TASK_EMPTY_TEAM,
-            message: '任务团队为空，请先添加 Agent 后再启动',
+            message: '任务团队为空，请先添加 Agent 实例后再启动',
           });
         }
-        if (!task.mainAgentId) {
+        if (!task.mainAgentInstanceId) {
           throw new BadRequestException({
             code: TASK_ERRORS.MAIN_AGENT_NOT_SET,
-            message: '主 Agent 未确定，请先指定主 Agent 后再启动',
+            message: '主 Agent 实例未确定，请先指定主 Agent 后再启动',
           });
         }
       },
@@ -534,10 +623,10 @@ export class TasksService implements OnModuleInit {
           data: { status: SESSION_STATUS.active },
         });
       },
-      // 10 篇 §8.1：群聊系统消息含主 Agent 名（FR-07/08）
+      // 10 篇 §8.1：群聊系统消息含主实例名（FR-07/08）
       sysMessage: ({ task, mainAgentName }) =>
-        `任务已开始，主 Agent：${mainAgentName ?? task.mainAgentId}`,
-      // 13 篇 §4.2：私信主 Agent 的启动消息（含任务目标、团队分工、背景文档）
+        `任务已开始，主 Agent：${mainAgentName ?? task.mainAgentInstanceId}`,
+      // 13 篇 §4.2：私信主实例的启动消息（含任务目标、团队分工、背景文档）
       privateMessage: ({ task }) => {
         const docs = Array.isArray(task.backgroundDocs)
           ? task.backgroundDocs
@@ -551,7 +640,9 @@ export class TasksService implements OnModuleInit {
         const parts = [
           `任务已启动，请作为主 Agent 牵头推进`,
           `任务目标：${task.title}${task.description ? `（${task.description}）` : ''}`,
-          `团队分工：${this.teamAgentIdsOf(task.taskAgents).join('、')}`,
+          `团队分工：${this.teamInstancesOf(task.taskAgents)
+            .map((i) => i.alias ?? i.agentId)
+            .join('、')}`,
         ];
         if (docs) parts.push(`背景文档：${docs}`);
         return parts.join('。');
@@ -664,7 +755,7 @@ export class TasksService implements OnModuleInit {
 
     const task = await this.prisma.task.findUnique({
       where: { id },
-      include: { taskAgents: true },
+      include: TASK_AGENTS_INCLUDE,
     });
     if (!task) {
       throw new NotFoundException({
@@ -689,19 +780,21 @@ export class TasksService implements OnModuleInit {
       where: { taskId: id, type: CHANNEL_TYPE.task_group },
       select: { id: true },
     });
-    // start 私信主 Agent（13 篇 §4.2）：解析主 Agent 名 + private 频道（无 private 频道则跳过）
+    // start 私信主实例（13 篇 §4.2）：解析主实例别名 + private 频道（按 taskAgentId，无则跳过）
     let mainAgentName: string | undefined;
     let privateChannel: { id: string } | null = null;
-    if (action === 'start' && task.mainAgentId) {
-      const agent = await this.prisma.agent.findUnique({
-        where: { id: task.mainAgentId },
-        select: { name: true },
-      });
-      mainAgentName = agent?.name ?? undefined;
+    if (action === 'start' && task.mainAgentInstanceId) {
+      const mainInstance = task.taskAgents?.find(
+        (ta) => ta.id === task.mainAgentInstanceId,
+      );
+      mainAgentName =
+        mainInstance?.alias ??
+        mainInstance?.agent.name ??
+        undefined;
       privateChannel = await this.prisma.chatChannel.findFirst({
         where: {
           taskId: id,
-          agentId: task.mainAgentId,
+          taskAgentId: task.mainAgentInstanceId,
           type: CHANNEL_TYPE.private,
         },
         select: { id: true },
@@ -771,7 +864,7 @@ export class TasksService implements OnModuleInit {
     if (casFailed) {
       const current = await this.prisma.task.findUnique({
         where: { id },
-        include: { taskAgents: true },
+        include: TASK_AGENTS_INCLUDE,
       });
       if (current?.status === to) {
         return this.toTaskDto(current);
@@ -800,12 +893,27 @@ export class TasksService implements OnModuleInit {
 
     const fresh = await this.prisma.task.findUnique({
       where: { id },
-      include: { taskAgents: true },
+      include: TASK_AGENTS_INCLUDE,
     });
     return this.toTaskDto(fresh ?? task);
   }
 
+  /**
+   * 任务 DTO（FR-08 角色/实例分离 T2）：instances 为团队实例列表
+   * [{id, agentId, alias, seq, name, role, main}]，按 (agentId, seq) 稳定排序；
+   * mainAgentId 保留（渲染兜底），mainAgentInstanceId 为决策依据；
+   * teamAgentIds 保留兼容（按 taskAgents 原始顺序，未 removed 过滤）。
+   */
   private toTaskDto(task: TaskRow) {
+    const instances = this.teamInstancesOf(task.taskAgents).map((ta) => ({
+      id: ta.id,
+      agentId: ta.agentId,
+      alias: ta.alias,
+      seq: ta.seq,
+      name: ta.agent.name,
+      role: ta.agent.role,
+      main: ta.id === task.mainAgentInstanceId,
+    }));
     return {
       id: task.id,
       projectId: task.projectId,
@@ -814,8 +922,12 @@ export class TasksService implements OnModuleInit {
       priority: task.priority,
       status: task.status,
       mainAgentId: task.mainAgentId,
+      mainAgentInstanceId: task.mainAgentInstanceId ?? null,
       backgroundDocs: task.backgroundDocs ?? [],
-      teamAgentIds: this.teamAgentIdsOf(task.taskAgents),
+      teamAgentIds: (task.taskAgents ?? [])
+        .filter((ta) => !ta.removedAt)
+        .map((ta) => ta.agentId),
+      instances,
       createdBy: task.createdBy,
       createdAt: task.createdAt,
       startedAt: task.startedAt,
@@ -825,13 +937,84 @@ export class TasksService implements OnModuleInit {
     };
   }
 
-  /** 团队内已选 Agent：task_agents 中未 removed 的 agentId 列表。 */
-  private teamAgentIdsOf(
-    taskAgents?: { agentId: string; removedAt: Date | null }[],
-  ): string[] {
+  /** 团队实例列表：task_agents 中未 removed 的实例，按 (agentId, seq) 稳定排序。 */
+  private teamInstancesOf(
+    taskAgents?: TaskAgentInstance[],
+  ): TaskAgentInstance[] {
     return (taskAgents ?? [])
       .filter((ta) => !ta.removedAt)
-      .map((ta) => ta.agentId);
+      .sort(
+        (a, b) =>
+          a.agentId.localeCompare(b.agentId) || a.seq - b.seq,
+      );
+  }
+
+  /** 实例默认别名：`<角色中文名>-<seq>`；未知角色用 agent.name（FR-08 别名默认规则）。 */
+  private defaultAlias(
+    agent: { name: string; role: string | null },
+    seq: number,
+  ): string {
+    const roleLabel = ROLE_LABELS[agent.role ?? ''] ?? agent.name;
+    return `${roleLabel}-${seq}`;
+  }
+
+  /**
+   * 事务内批量创建团队实例（create / updateTeam 共用）：
+   * 每个实例写 task_agents（seq = 该 taskId+agentId 已用最大 seq+1，防并发重号）
+   * + 独立会话绑实例（status 由调用方传入）；返回带模板 agent 关联的实例列表。
+   */
+  private async createInstances(
+    tx: Prisma.TransactionClient,
+    taskId: string,
+    agents: { agentId: string; alias?: string }[],
+    status: string,
+  ): Promise<TaskAgentInstance[]> {
+    const created: TaskAgentInstance[] = [];
+    for (const item of agents) {
+      const agent = await tx.agent.findUnique({
+        where: { id: item.agentId },
+        select: { id: true, name: true, role: true },
+      });
+      if (!agent) {
+        throw new NotFoundException({
+          code: TASK_ERRORS.AGENT_NOT_FOUND,
+          message: `Agent ${item.agentId} 不存在`,
+        });
+      }
+      const max = await tx.taskAgent.aggregate({
+        _max: { seq: true },
+        where: { taskId, agentId: item.agentId },
+      });
+      const seq = (max._max.seq ?? 0) + 1;
+      const alias = item.alias?.trim() || this.defaultAlias(agent, seq);
+      const ta = await tx.taskAgent.create({
+        data: {
+          id: await this.idGen.nextId(ID_PREFIX.taskAgent),
+          taskId,
+          agentId: item.agentId,
+          alias,
+          seq,
+        },
+      });
+      await tx.session.create({
+        data: {
+          id: await this.idGen.nextId(ID_PREFIX.session),
+          taskId,
+          taskAgentId: ta.id,
+          agentId: item.agentId,
+          status,
+        },
+      });
+      created.push({
+        id: ta.id,
+        agentId: item.agentId,
+        alias,
+        seq,
+        removedAt: null,
+        agent,
+      });
+    }
+    return created;
   }
 
   /** 系统消息 DTO（对齐 ChatService.toMessageDto：content 透传 Json、mentions 缺省 []、createdAt ISO8601）。 */

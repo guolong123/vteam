@@ -60,6 +60,7 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     artifactVersion: { findMany: jest.Mock };
     message: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock; update: jest.Mock };
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
+    task: { findUnique: jest.Mock };
   };
   let realtime: { emit: jest.Mock; broadcast: jest.Mock };
   let idGen: { nextId: jest.Mock };
@@ -110,6 +111,7 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
             id: 's_0000000001',
             workerId: 'w_0000000001',
             instanceRef: 'ses_0001',
+            taskAgentId: 'ta_0000000001',
           }),
         // instanceRef 反查：ses_ 前缀 → 平台 s_ 主键（wave1 对齐链路）
         findFirst: jest.fn().mockResolvedValue({ id: 's_0000000001' }),
@@ -129,6 +131,22 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
           .fn()
           .mockResolvedValue({ id: 'a_product', defaultModelId: null, baseAgentId: null }),
       },
+      task: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: request.taskId,
+          mainAgentInstanceId: 'ta_0000000001',
+          taskAgents: [
+            {
+              id: 'ta_0000000001',
+              agentId: 'a_product',
+              seq: 1,
+              alias: '产品经理-1',
+              removedAt: null,
+              agent: { id: 'a_product', name: '产品经理', role: 'product' },
+            },
+          ],
+        }),
+      },
       artifact: { findMany: jest.fn().mockResolvedValue([]) },
       artifactVersion: { findMany: jest.fn().mockResolvedValue([]) },
       message: {
@@ -140,11 +158,11 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
         update: jest.fn(),
       },
       chatChannel: {
-        // delta 需要 type；resolveChannel 需要 taskId——一个行对象满足两者
-        findUnique: jest
+        // resolveChannel 用 findFirst；delta 需要 type/taskId——一个行对象满足两者
+        findUnique: jest.fn().mockResolvedValue({ id: request.channelId, type: 'private', taskId: request.taskId }),
+        findFirst: jest
           .fn()
           .mockResolvedValue({ id: request.channelId, type: 'private', taskId: request.taskId }),
-        findFirst: jest.fn(),
       },
     };
     realtime = {
@@ -213,13 +231,17 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     expect(workerClient.execute).toHaveBeenCalledTimes(1);
     const execOpts = workerClient.execute.mock.calls[0][1];
     // wave1 对齐：execute 请求契约 = worker ExecuteRequestPayload（prompt 字段）
+    // 阶段 3 按需注入：prompt = 动态任务上下文指令（taskId + MCP 工具引导）+ request.text
     expect(execOpts).toMatchObject({
-      prompt: [{ type: 'text', text: request.text }],
+      prompt: [{ type: 'text', text: expect.stringContaining(request.text) }],
       taskId: request.taskId,
       agentId: 'a_product',
       channelId: request.channelId,
       sessionId: 'ses_0001',
     });
+    const execPrompt = execOpts.prompt[0].text as string;
+    expect(execPrompt).toContain(`任务 ID：${request.taskId}`);
+    expect(execPrompt).toContain('keta-platform');
 
     // 2. session.updated(running)：worker 上送 opencode 会话 id（ses_ 前缀）→ ingress
     //    反查平台 Session 主键（s_ 前缀）→ updateMany 落库 + emit session.updated
@@ -308,11 +330,11 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
       ),
     );
     await flush();
-    // wave1 对齐：task.completed 上送 channelId 透传 → resolveChannel 群聊优先
-    // （preferred 分支按 channelId 直查命中，而非回退 DM taskId_agentId 查询）
-    expect(prisma.chatChannel.findUnique).toHaveBeenLastCalledWith({
-      where: { id: request.channelId },
-      select: { id: true, taskId: true, type: true },
+    // 架构：agent 最终回复落 private 会话频道（resolveChannel 固定 private 反查）；
+    // F3 P1 修复：session 绑实例 → 按 taskAgentId 精确匹配（同 agent 多实例各自频道）
+    expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
+      where: { taskId: request.taskId, taskAgentId: 'ta_0000000001' },
+      select: { id: true, type: true },
     });
     expect(prisma.message.update).toHaveBeenCalledWith({
       where: { id: 'm_stream' },

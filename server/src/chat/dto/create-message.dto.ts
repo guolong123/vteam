@@ -11,7 +11,7 @@ import { IsArray, IsNotEmpty, IsOptional, IsString } from 'class-validator';
  * 此处仅保证 mentions 是数组。落库时保持原样语义（all 型原样存储，10 篇 §4.1）。
  */
 export type MentionInput =
-  | { type: 'agent'; agentId: string }
+  | { type: 'agent'; agentId: string; instanceId?: string }
   | { type: 'all' };
 
 /** POST /channels/:id/messages 请求体（09 篇 §5.1）。 */

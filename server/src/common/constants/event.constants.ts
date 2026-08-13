@@ -19,6 +19,8 @@ export const EVENT_TYPES = {
   TASK_COMPLETED: 'task.completed',
   AGENT_STATUS: 'agent.status',
   WORKER_HEARTBEAT: 'worker.heartbeat',
+  // 模型提问/工具权限确认待用户处理（worker 检测 serve pending 上送后 broadcast；reply 收敛复用）
+  AGENT_QUESTION: 'agent.question',
 } as const;
 
 export type EventType = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];

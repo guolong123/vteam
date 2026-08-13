@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { validateArtifactDeclaration } from '../artifacts/artifacts.service';
 import { ArtifactsService } from '../artifacts/artifacts.service';
+import { FileStorageService } from '../uploads/uploads.service';
 import {
   CHANNEL_TYPE,
   EVENT_TYPES,
@@ -47,6 +48,136 @@ export const DEFAULT_DOCLIB_MAX_BYTES = 32 * 1024;
 export const DEFAULT_DOCLIB_TOTAL_BYTES = 128 * 1024;
 /** 群聊历史上下文注入上限（对齐 doclib 单文档 32KB 语义：按条截断 + 总量截断，防超长 prompt）。 */
 export const DEFAULT_CHAT_HISTORY_MAX_BYTES = 32 * 1024;
+
+/**
+ * P7：全局系统提示（注入 prompt_async 顶层 system 字段，serve 拼入 LLM system message）：
+ * 产出物协议 + @定向机制说明——Agent 默认知晓如何声明可归档产出物，无需每条消息显式要求。
+ * 经 system 通道注入（非 parts 文本）→ 不进入会话 user 消息，不会出现在聊天记录回复中。
+ */
+export const GLOBAL_SYSTEM_INSTRUCTIONS = [
+  '你是 AI 协作平台的 Agent，请遵守以下平台协议：',
+  '【产出物声明】你的工作产出可交付内容时，调用 keta-platform MCP 的 submit_artifact 工具提交：',
+  '参数 {taskId: 你的任务ID, type: "text"|"doc"|"file", title: 标题, content?: 内容(text 必填), fileRef?: 文件路径(doc/file 必填)}。',
+  'text 类型直接提交内容；doc/file 类型提交你写入工作目录的文件（自动拉取归档为产出物）。',
+  '【群聊通知】你在群聊被 @ 时，完整处理过程（思考/工具调用）在你的私聊会话中完成，不会公开。',
+  '你像真人一样自行决定是否在群里公开回应：要发布结论/进展时，调用 keta-platform MCP 的 group_post 工具发布。',
+  '工具参数：{taskId: 你的任务ID, content: 要发布到群聊的内容, fileRef?: 产出物文件引用}。',
+  'fileRef 可选：向群聊发送文件时直接传入文件路径（如 /tmp/opencode/x.txt），文件将作为群聊附件并自动归档为产出物。',
+  '不调用工具发布则回复仅保留在私聊会话（不公开）。',
+  '【@ 定向机制】群聊中 @ 你的消息会定向分发给你。需要定向触发/通知任务内的其他 Agent 时，' +
+  '调用 keta-platform MCP 的 notify_agent 工具（参数 {taskId: 你的任务ID, targetInstanceId: 目标实例 id（ta_ 前缀，见 task_context 的 agentMembers）, content: 消息内容}）' +
+  '——目标实例会收到你的消息并开始执行；回复时也可用 @用户名 在群聊中定向回复特定成员。',
+  '【Issue 管理】任务内 issue 协作：创建 issue 调 keta-platform MCP 的 issue_create（参数 {taskId, selfInstanceId, title, description?, tags?, assigneeInstanceId?}）；查询 issue_list/issue_get；更新 issue_update；状态流转 issue_transition（action: start/resolve/close/reopen/reject）。产品/测试 Agent 负责创建需求或缺陷 issue 并指派（assigneeInstanceId 为目标实例 id），研发 Agent 处理指派给自己的 issue 并流转状态。issue 标签（tags）标识类型（如 需求/缺陷/优化）。',
+].join('\n');
+
+/**
+ * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
+ * 身份（id + 名称 + 角色 + 用户设置的 prompt 职责），供 MCP 工具调用的 selfInstanceId 参数
+ * 填写（服务端按 session.taskAgentId 校验后精确落库 senderId/senderInstanceId，
+ * 修复"@测试 触发但回复显示开发者"）。
+ * GLOBAL_SYSTEM_INSTRUCTIONS 常量保持不动（其他调用方兼容），本函数仅在 dispatch 下发时
+ * 拼接身份段；agent 行查询不到时由调用方降级（name/role/prompt 置 null，回退用 agentId）。
+ */
+export interface AgentIdentityInfo {
+  id: string;
+  name: string | null;
+  role: string | null;
+  prompt: string | null;
+}
+
+/** 团队成员信息（dispatch 时从 taskAgents→agent 提取，注入全局上下文供 agent 判断与谁协作）。
+ *  T3 实例化：团队成员 = 任务实例（TaskAgent）——instanceId 为实例 id（ta_ 前缀）、
+ *  alias 为实例别名（默认「<角色中文名>-<seq>」如 开发者-1）、seq 为同 agent 同任务序号；
+ *  id/name/role 来自模板 agent（保留兼容）。 */
+export interface TeamMemberInfo {
+  /** 模板 agent id（继承 name/role/prompt/model）。 */
+  id: string;
+  name: string | null;
+  role: string | null;
+  /** 实例 id（TaskAgent.id，ta_ 前缀）——团队成员唯一身份（@/指派/主实例判定依据）。 */
+  instanceId: string;
+  /** 实例别名（默认「<角色中文名>-<seq>」）；缺省回退 name。 */
+  alias: string | null;
+  /** 同 agent 同任务内序号（服务端生成，唯一键 taskId+agentId+seq）。 */
+  seq: number;
+}
+
+export interface BuildSystemInstructionsOptions {
+  /** 当前 agent 是否任务主实例（session.taskAgentId === task.mainAgentInstanceId）→ true 时追加主 Agent 职责段。 */
+  isMainAgent?: boolean;
+  /** 任务团队成员（实例 id/别名/序号 + 模板 agent id/名称/角色）；空/缺省则不注入【团队成员】段。 */
+  team?: TeamMemberInfo[];
+  /** 任务主实例 id（用于团队成员段中标注主实例成员；无主实例时为 null）。 */
+  mainAgentInstanceId?: string | null;
+  /** 当前 agent 的实例身份（TaskAgent.id，ta_ 前缀）；缺省（存量会话未绑实例）回退 agent.id 保持兼容。 */
+  selfInstanceId?: string;
+  /** 当前 agent 的实例别名（默认「<角色中文名>-<seq>」）；缺省回退 agent.name。 */
+  selfAlias?: string | null;
+}
+
+/**
+ * 主 Agent 动态职责段（dispatch 时仅注入被选为主 Agent 的成员）：模板 prompt 不再写死
+ * "主 Agent"职责（见 seed.ts），改由运行时按 Task.mainAgentId 判定后动态下发——
+ * 牵头分工、协调产出衔接、群聊进度提示、必要时 @ 成员协调、可汇总验收材料。
+ * 语义对齐 FR-08（推进/进度同步）、FR-11（@ 触发响应）、FR-13（成员互 @ 协调，不超 3 轮）。
+ */
+export const MAIN_AGENT_INSTRUCTION =
+  '【主 Agent 职责】你是本任务的主 Agent（牵头人）。除角色本职外，还需承担任务组织职责：' +
+  '牵头拆解工作并分派给团队成员，协调各角色产出衔接，环节切换或产出完成时主动在群聊提示进度（FR-08）；' +
+  '推进受阻或需要协作时，通过 notify_agent / 群聊 @ 定向协调成员（FR-13，互 @ 不超 3 轮）；' +
+  '收尾时可汇总各角色产出与验收材料，供成员验收判定（FR-11）。';
+
+/**
+ * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
+ * 身份（id + 名称 + 角色 + 用户设置的 prompt 职责），供 MCP 工具调用的 selfInstanceId 参数
+ * 填写（服务端按 session.taskAgentId 校验后精确落库 senderId/senderInstanceId，
+ * 修复"@测试 触发但回复显示开发者"）。
+ * opts.isMainAgent=true → 追加主 Agent 职责段；opts.team 非空 → 追加【团队成员】段
+ * （id/名称/角色，主 Agent 成员标注），使 agent 直接读取全局上下文即可了解团队构成，
+ * 无需再经 task_context MCP 工具拉取。
+ * GLOBAL_SYSTEM_INSTRUCTIONS 常量保持不动（其他调用方兼容），本函数仅在 dispatch 下发时
+ * 拼接身份段；agent 行查询不到时由调用方降级（name/role/prompt 置 null，回退用 agentId）。
+ */
+export function buildSystemInstructions(
+  agent: AgentIdentityInfo,
+  opts?: BuildSystemInstructionsOptions,
+): string {
+  const selfInstanceId = opts?.selfInstanceId ?? agent.id;
+  const selfName = opts?.selfAlias ?? agent.name ?? agent.id;
+  const blocks = [
+    GLOBAL_SYSTEM_INSTRUCTIONS +
+      '\n' +
+      `【你的身份】你是本任务的 ${selfName}（实例 id: ${selfInstanceId}，角色: ${agent.role ?? ''}）。` +
+      (agent.prompt ? `\n【职责】${agent.prompt}` : '') +
+      '\n调用 keta-platform MCP 工具时，落库类工具（group_post / notify_agent / submit_artifact）的' +
+      'selfInstanceId 参数必须填写你的实例 id（ta_ 前缀，服务器按此校验归属并精确记录发送者）。',
+  ];
+  if (opts?.isMainAgent) {
+    blocks.push(MAIN_AGENT_INSTRUCTION);
+  }
+  if (opts?.team && opts.team.length > 0) {
+    const teamLines = opts.team.map(
+      (m) =>
+        `- ${m.alias ?? m.name ?? m.id}（实例 id: ${m.instanceId}，角色: ${m.role ?? ''}）` +
+        (m.instanceId === opts.mainAgentInstanceId ? ' —— 主 Agent' : ''),
+    );
+    blocks.push(
+      `【团队成员】本次任务的团队成员（据此判断与谁协作、@ 谁）：\n${teamLines.join('\n')}`,
+    );
+  }
+  return blocks.join('\n');
+}
+
+/**
+ * 群聊触发强化指令（dispatch 动态注入，仅来源为群聊频道时）：用户在群聊 @ 你 →
+ * 默认应在群聊中公开回复结论（像真人被群聊点名后当众回应）。私聊触发不注入
+ * （保持私密独白）。经 group_post 工具发布控制公开内容——模型通过工具发布的内容才会被群聊显示。
+ */
+export const GROUP_TRIGGER_INSTRUCTION =
+  '【群聊回复要求】本条消息来自任务群聊，你被 @ 定向分发。请在群聊中公开回复你的结论' +
+  '——调用 keta-platform MCP 的 group_post 工具发布到群聊（参数 {taskId, content, fileRef?}）。' +
+  '群聊只会显示你通过 group_post 发布的内容，完整处理过程保留在你的私聊会话。' +
+  '如需向群聊发送文件：直接调用 group_post 并携带 fileRef（{taskId, content, fileRef: "文件路径"}），文件将作为群聊附件并自动归档为产出物。';
 
 /**
  * 分派后等待回流的默认超时（D8 总超时；F3 MINOR-3：架构师 5 轮 tool 调用实测 72s > 60s，
@@ -202,16 +333,12 @@ export function extractArtifacts(text: string): Array<Record<string, unknown>> {
       }
     }
   }
-  // ② 内嵌 JSON 声明对象（type 限三态枚举，避免误匹配普通文本）
-  const jsonRe = /(?<![\w])\{[\s\S]*?"type"\s*:\s*"(?:text|doc|file)"[\s\S]*?\}/g;
-  for (const m of text.matchAll(jsonRe)) {
-    try {
-      const parsed = JSON.parse(m[0]) as Record<string, unknown>;
-      if (parsed && typeof parsed === 'object' && validateArtifactDeclaration(parsed).valid) {
-        push(parsed);
-      }
-    } catch {
-      // 非合法 JSON：丢弃，不误报
+  // ② 内嵌 JSON 声明对象（type 限三态枚举，避免误匹配普通文本）。
+  // 定位法（extractAllJsonObjects，按文本出现顺序）：多声明并存（如 [artifact] + 产出物）
+  // 时，旧正则 `\{[\s\S]*?"type"` 会从第一个 `{` 跨对象匹配到混合串导致解析失败。
+  for (const parsed of extractAllJsonObjects(text, ['text', 'doc', 'file'])) {
+    if (validateArtifactDeclaration(parsed).valid) {
+      push(parsed);
     }
   }
   // ③ [artifact]...[/artifact] 包裹的 JSON 声明
@@ -233,9 +360,166 @@ export function extractArtifacts(text: string): Array<Record<string, unknown>> {
 interface PendingDispatch {
   taskId: string;
   agentId: string;
+  /** 执行实例 id（TaskAgent.id，ta_ 前缀）；存量会话（taskAgentId NULL）回退 agentId。 */
+  instanceId: string;
   /** 平台 Session 主键（活动事件回调据此反查首字 watchdog）。 */
   sessionId: string;
+  /** 执行 worker id（首字超时注销活跃执行用）。 */
+  workerId: string;
   timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * 从文本定位 type 字段值并提取完整 JSON 对象：先找 `"type":"<value>"` 位置 → 向前
+ * 回溯最近的 `{` → 向后深度配对 `}`（支持字段乱序/嵌套/多对象并存）。
+ * 修复：旧正则 `\{[\s\S]*?"type"` 从第一个 `{` 开始匹配，多声明并存时（如 artifact +
+ * group_post）会跨对象匹配到混合串导致 JSON.parse 失败——定位法杜绝。
+ */
+export function extractJsonByType(
+  text: string,
+  typeValue: string,
+): Record<string, unknown> | null {
+  if (!text) {
+    return null;
+  }
+  const typeRe = new RegExp(`"type"\\s*:\\s*"${typeValue}"`);
+  const tm = typeRe.exec(text);
+  if (!tm) {
+    return null;
+  }
+  const start = text.lastIndexOf('{', tm.index);
+  if (start < 0) {
+    return null;
+  }
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === '{') {
+      depth += 1;
+    } else if (text[i] === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1)) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** 从文本移除 type=<typeValue> 的 JSON 对象块（定位法；返回清理后文本）。 */
+export function stripJsonByType(text: string, typeValue: string): string {
+  if (!text) {
+    return text;
+  }
+  const typeRe = new RegExp(`"type"\\s*:\\s*"${typeValue}"`);
+  const tm = typeRe.exec(text);
+  if (!tm) {
+    return text;
+  }
+  const start = text.lastIndexOf('{', tm.index);
+  if (start < 0) {
+    return text;
+  }
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === '{') {
+      depth += 1;
+    } else if (text[i] === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        const cleaned = `${text.slice(0, start)}${text.slice(i + 1)}`;
+        // 递归处理剩余声明（text 中可能多个同 type 对象）
+        return stripJsonByType(cleaned, typeValue);
+      }
+    }
+  }
+  return text;
+}
+
+/** 群聊通知声明（agent 自主决策，像真人判断是否在群里公开回应）：回复含
+ *  `{"type":"group_post","content":"..."}` / `<group_post>...</group_post>` 声明 →
+ *  返回 {content, fileRef?}（要转发到群聊的对外消息；fileRef 指向随产出物归档的文件，
+ *  用于群聊消息附带附件）；无声明 → null（回复留在私聊独白，不自动公开）。
+ */
+export function extractGroupPost(text: string): { content: string; fileRef?: string } | null {
+  if (!text) {
+    return null;
+  }
+  const json = extractJsonByType(text, 'group_post');
+  if (json && typeof json.content === 'string' && json.content.trim()) {
+    return {
+      content: json.content.trim(),
+      ...(typeof json.fileRef === 'string' && json.fileRef.trim()
+        ? { fileRef: json.fileRef.trim() }
+        : {}),
+    };
+  }
+  const tagRe = /<group_post\s*([^>]*)>([\s\S]*?)<\/group_post>/g;
+  for (const m of text.matchAll(tagRe)) {
+    if (m[2].trim()) {
+      const attrs = new Map<string, string>();
+      for (const a of m[1].matchAll(/([a-zA-Z-]+)\s*=\s*"([^"]*)"/g)) {
+        attrs.set(a[1], decodeXml(a[2]));
+      }
+      const fileRef = attrs.get('fileRef');
+      return {
+        content: decodeXml(m[2].trim()),
+        ...(fileRef ? { fileRef } : {}),
+      };
+    }
+  }
+  return null;
+}
+
+/** 从回复文本移除 group_post 声明块（私聊独白不显示协议标签，仅保留对外内容）。 */
+export function stripGroupPostDeclarations(text: string): string {
+  if (!text) {
+    return text;
+  }
+  return stripJsonByType(text, 'group_post')
+    .replace(/<group_post\s*[^>]*>[\s\S]*?<\/group_post>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** 提取文本中所有 type ∈ types 的 JSON 对象（按文本出现位置排序；定位法，防多声明跨对象）。 */
+function extractAllJsonObjects(
+  text: string,
+  types: readonly string[],
+): Array<Record<string, unknown>> {
+  const found: Array<{ pos: number; obj: Record<string, unknown> }> = [];
+  const typeRe = new RegExp(`"type"\\s*:\\s*"(${types.join('|')})"`, 'g');
+  for (const tm of text.matchAll(typeRe)) {
+    const start = text.lastIndexOf('{', tm.index);
+    if (start < 0) {
+      continue;
+    }
+    let depth = 0;
+    for (let i = start; i < text.length; i++) {
+      if (text[i] === '{') {
+        depth += 1;
+      } else if (text[i] === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            found.push({
+              pos: start,
+              obj: JSON.parse(text.slice(start, i + 1)) as Record<string, unknown>,
+            });
+          } catch {
+            // 非合法 JSON：跳过
+          }
+          break;
+        }
+      }
+    }
+  }
+  return found
+    .sort((a, b) => a.pos - b.pos)
+    .map((x) => x.obj);
 }
 
 /** 消息行（messages 表；content/mentions 为 Json 列），对齐 chat.service 的 MessageRow 契约。 */
@@ -324,6 +608,74 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
   private readonly completedSessions = new Set<string>();
   /** F2 MINOR：watchdog/轮询已超时的会话（迟到回流跳过落库，防用户同时见错误+消息）。 */
   private readonly failedSessions = new Set<string>();
+
+  /**
+   * 执行中注册表（workerId:taskId → 活跃执行集合）：dispatch 调 worker execute 前登记，
+   * task.completed / agent.status error / watchdog 超时注销。platform-mcp 的落库类工具
+   * （group_post / notify_agent / submit_artifact）经 assertWorkerTask 用本表校验
+   * selfInstanceId 必须为当前活跃执行实例——修复多会话任务（taskId 下多个实例会话并存）
+   * 时 findFirst 定位歧义导致的冒充漏洞（曾误把 a_developer 判为执行 Agent）。
+   */
+  private readonly activeExecutions = new Map<
+    string,
+    { agents: Set<string>; at: number }
+  >();
+  /** 执行注册 TTL（ms）：worker 崩溃/回流丢失时防活跃记录泄漏，超时视为不活跃。 */
+  private readonly executionTtlMs = 30 * 60 * 1000;
+
+  private executionKey(workerId: string, taskId: string): string {
+    return `${workerId}:${taskId}`;
+  }
+
+  /**
+   * dispatch 下发 execute 前登记活跃执行（防冒充校验依据）。
+   * T4 实例语义：登记集合存**实例 id**（TaskAgent.id，ta_ 前缀）。instanceId 由调用方
+   * 传入 `session.taskAgentId`；存量会话（taskAgentId NULL）回退 agentId 保持兼容。
+   */
+  registerExecution(workerId: string, taskId: string, instanceId: string): void {
+    const key = this.executionKey(workerId, taskId);
+    const entry = this.activeExecutions.get(key);
+    if (entry) {
+      entry.agents.add(instanceId);
+      entry.at = Date.now();
+    } else {
+      this.activeExecutions.set(key, { agents: new Set([instanceId]), at: Date.now() });
+    }
+  }
+
+  /**
+   * task.completed / error / 超时 时注销活跃执行。ref 为实例 id（ta_ 前缀）；
+   * 兼容存量 agentId 回退登记（taskAgentId NULL 会话以 agentId 登记，注销同值匹配）。
+   */
+  unregisterExecution(workerId: string, taskId: string, ref: string): void {
+    const key = this.executionKey(workerId, taskId);
+    const entry = this.activeExecutions.get(key);
+    if (!entry) {
+      return;
+    }
+    entry.agents.delete(ref);
+    if (entry.agents.size === 0) {
+      this.activeExecutions.delete(key);
+    }
+  }
+
+  /**
+   * MCP assertWorkerTask 防冒充校验：返回该 worker+task 当前活跃执行实例集合。
+   * 无注册记录（非 dispatch 驱动/进程重启后）→ 返回 null，调用方回退 findFirst 兼容；
+   * 有记录 → 调用方必须严格校验 selfInstanceId 在集合内（防止冒充）。
+   */
+  isAgentExecuting(workerId: string, taskId: string): Set<string> | null {
+    const key = this.executionKey(workerId, taskId);
+    const entry = this.activeExecutions.get(key);
+    if (!entry) {
+      return null;
+    }
+    if (Date.now() - entry.at > this.executionTtlMs) {
+      this.activeExecutions.delete(key);
+      return null;
+    }
+    return entry.agents;
+  }
 
   /** F3 MINOR-3：回流超时 ms（env DISPATCH_TIMEOUT_MS，缺省 DISPATCH_TIMEOUT_MS=120s）。 */
   public dispatchTimeoutMs: number;
@@ -455,10 +807,45 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
   }
 
   /**
+   * FR-13：agent 互 @ 触发——MCP `notify_agent` 工具调用入口。
+   * T3 实例语义：查目标**实例**在任务下的会话（uk_sessions_task_agent，按 taskAgentId）
+   * → 构造 DispatchRequest 触发目标实例的 dispatch（agentId 从 session 行取，防同 agent
+   * 多实例下会话串扰）；复用 dispatch() 全链路（assignWorker → createSession/bind →
+   * execute → ingress 回流落库+广播，不复制 dispatchForTarget 逻辑）；单目标失败由
+   * dispatch() 统一 emitError + 广播 agent.error。
+   */
+  async dispatchAgentMention(input: {
+    taskId: string;
+    /** 群聊频道（触发来源：目标 agent 的 group_post 回复落库+广播走此频道）。 */
+    channelId: string;
+    /** 消息内容（含 @目标，透传给目标 agent 作为触发 prompt）。 */
+    text: string;
+    /** 被 @ 的目标实例 id（TaskAgent.id，ta_ 前缀）。 */
+    targetInstanceId: string;
+  }): Promise<void> {
+    const session = await this.prisma.session.findFirst({
+      where: { taskId: input.taskId, taskAgentId: input.targetInstanceId },
+      select: { id: true, agentId: true },
+    });
+    if (!session) {
+      throw new Error(`实例 ${input.targetInstanceId} 无会话（任务 ${input.taskId}）`);
+    }
+    await this.dispatch({
+      messageId: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+      channelId: input.channelId,
+      taskId: input.taskId,
+      text: input.text,
+      targets: [{ agentId: session.agentId, instanceId: input.targetInstanceId, sessionId: session.id }],
+    });
+  }
+
+  /**
    * 单目标分派时序（对齐 MockDispatcher replyFor :151-211）：
    * 1 查 Session → 已绑 worker 复用；未绑 assignWorker（无可用 → 报错不降级 D3）+
    *   首次 bind（instanceRef 占位 pending）→ 2 查 Worker 行（capabilities）→
-   *   3 Agent.defaultModelId → {providerID, modelID} → 4 doclib 上下文注入拼 prompt →
+   *   3 Agent.defaultModelId → {providerID, modelID} → 4 提示词构造（按需注入：任务
+   *   ID/MCP 工具引导 + 群聊触发指令 + 当前消息，doclib/群聊历史经 keta-platform 工具
+   *   自主拉取，不再自动注入）→
    *   5 loading(thinking) → 6 createSession（未创建时）→ bind 更新真实 instanceRef →
    *   7 execute（方案 A：调 worker 执行端点 POST /execute，202 即成功，不启动自持轮询）→
    *   8 loading(operating) + 回流超时 watchdog。
@@ -472,10 +859,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       throw new Error('会话缺失：目标无 sessionId，无法分派');
     }
 
-    // 1. 定位 Session：已绑 workerId/instanceRef → 复用同一 opencode 会话（D3 二次 @ 复用）
+    // 1. 定位 Session：已绑 workerId/instanceRef → 复用同一 opencode 会话（D3 二次 @ 复用）。
+    // T3 实例语义：taskAgentId = 当前实例（团队/主实例判定、身份注入依据）。
     const session = await this.prisma.session.findUnique({
       where: { id: target.sessionId },
-      select: { id: true, workerId: true, instanceRef: true },
+      select: { id: true, workerId: true, instanceRef: true, taskAgentId: true },
     });
     if (!session) {
       throw new Error(`会话 ${target.sessionId} 不存在`);
@@ -557,29 +945,40 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // `provider/model` → {providerID, modelID}；null 不指定模型（serve 默认）。
     const model = this.toModelSelection(agentModelId ?? workerRow.defaultModelId ?? null);
 
-    // 4. 上下文注入（doclib 产出物 12 篇 §8 + 来源频道群聊历史，均注入 prompt 前：
-    // doclib 在前、历史在后、当前消息最后；两段皆为空 → prompt 保持 request.text 现状）
-    const doclib = await this.buildDoclibContext(taskId);
-    const history = await this.buildChatHistoryContext(request.channelId, request.messageId);
+    // 4. 提示词构造（阶段 3 迁移：按需注入——移除 doclib/群聊历史自动注入，模型经
+    // keta-platform MCP 工具自主拉取上下文；buildDoclibContext/buildChatHistoryContext
+    // 方法保留不删，仅不再被 dispatch 调用，供回退/后续使用）
     const promptBlocks: string[] = [];
-    if (doclib) {
-      promptBlocks.push(doclib);
-    }
-    if (history) {
-      promptBlocks.push(history);
+    // 动态任务上下文指令（含 taskId + MCP 工具引导）：需要群聊历史/文档库/任务信息时
+    // 调用 keta-platform 的 chat_history / doclib / task_context 工具，发布群聊走 group_post
+    promptBlocks.push(
+      `【任务上下文】你的当前任务 ID：${taskId}。` +
+        '需要群聊历史/文档库/任务信息时，调用 keta-platform 的 chat_history / doclib / task_context 工具（传 taskId）。' +
+        '需要向群聊发布消息时调用 keta-platform 的 group_post 工具（参数 {taskId, content, fileRef?}）。',
+    );
+    // 群聊触发强化：来源频道是群聊 → 注入显式指令（默认公开回复到群聊，见
+    // GROUP_TRIGGER_INSTRUCTION）；私聊触发不注入（保持私密独白）
+    const sourceChannel = await this.prisma.chatChannel.findUnique({
+      where: { id: request.channelId },
+      select: { type: true },
+    });
+    if (sourceChannel?.type === CHANNEL_TYPE.task_group) {
+      promptBlocks.push(GROUP_TRIGGER_INSTRUCTION);
     }
     promptBlocks.push(request.text);
     const prompt = promptBlocks.join('\n\n');
 
-    // 5. loading(thinking)（对齐 MockDispatcher :158-162）
+    // 5. loading(thinking)（对齐 MockDispatcher :158-162）——T6 实例语义：广播带 instanceId，
+    //    同 agent 多实例各自 loading（前端按实例消费，不再按 agentId 全体 loading）
     await this.realtime.broadcast(
       EVENT_TYPES.AGENT_LOADING,
-      { taskId, agentId: target.agentId, sessionId: target.sessionId, phase: 'thinking' },
+      { taskId, agentId: target.agentId, instanceId: session.taskAgentId ?? null, sessionId: target.sessionId, phase: 'thinking' },
       { type: 'task', id: taskId },
     );
     this.emitLoading({
       taskId,
       agentId: target.agentId,
+      instanceId: session.taskAgentId ?? null,
       sessionId: target.sessionId,
       phase: 'thinking',
     });
@@ -613,6 +1012,55 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // F3 MINOR-3：工作目录隔离——directory 指向任务级独立工作目录
     // （<WORK_DIR>/tasks/<taskId>，mkdir -p 保证存在），防模型在仓库根写文件污染（F4）。
     const taskWorkDir = await this.ensureTaskWorkDir(taskId);
+    const agentRow = await this.prisma.agent.findUnique({
+      where: { id: target.agentId },
+      select: { id: true, name: true, role: true, prompt: true },
+    });
+    const agentIdentity: AgentIdentityInfo = {
+      id: target.agentId,
+      name: agentRow?.name ?? null,
+      role: agentRow?.role ?? null,
+      prompt: agentRow?.prompt ?? null,
+    };
+    // 主 Agent 动态注入 + 团队成员注入（system 通道，不进入聊天记录）：一次轻量 task
+    // 查询取 mainAgentInstanceId + 团队成员实例（id/alias/seq/removedAt→agent id/名称/角色）。
+    // 模板 prompt 不写死"主 Agent"职责，由运行时按 mainAgentInstanceId 判定动态下发；
+    // 团队信息直接进全局上下文，agent 无需再经 task_context MCP 工具拉取即可了解与谁协作。
+    // hot path 只 select 必要字段（TASK_AGENTS_INCLUDE 形状对齐 tasks.service）。
+    const taskRow = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: {
+        mainAgentInstanceId: true,
+        taskAgents: {
+          include: {
+            agent: { select: { id: true, name: true, role: true } },
+          },
+        },
+      },
+    });
+    // T3 实例语义：当前实例 = session.taskAgentId（可能 NULL——存量会话未绑实例，降级
+    // agent 语义：isMainAgent=false、selfInstanceId 回退 agent.id、selfAlias 回退 name）。
+    const selfInstanceId = session.taskAgentId ?? undefined;
+    const team: TeamMemberInfo[] = (taskRow?.taskAgents ?? [])
+      .filter((ta) => !ta.removedAt)
+      .map((ta) => ({
+        id: ta.agent.id,
+        name: ta.agent.name,
+        role: ta.agent.role,
+        instanceId: ta.id,
+        alias: ta.alias,
+        seq: ta.seq,
+      }));
+    const isMainAgent =
+      session.taskAgentId != null &&
+      session.taskAgentId === taskRow?.mainAgentInstanceId;
+    const selfAlias = selfInstanceId
+      ? (team.find((m) => m.instanceId === selfInstanceId)?.alias ?? null)
+      : null;
+    // 登记活跃执行（platform-mcp assertWorkerTask 防冒充校验依据）；completed/error 注销。
+    // T4 实例语义：登记**实例 id**（session.taskAgentId）；存量会话（taskAgentId NULL）
+    // 回退 agentId 保持兼容（防旧会话防冒充失效）。
+    this.registerExecution(workerId, taskId, session.taskAgentId ?? target.agentId);
     await this.workerClient.execute(worker, {
       prompt: [{ type: 'text', text: prompt }],
       model,
@@ -621,6 +1069,13 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       agentId: target.agentId,
       channelId: request.channelId,
       sessionId: opencodeSessionId,
+      system: buildSystemInstructions(agentIdentity, {
+        isMainAgent,
+        mainAgentInstanceId: taskRow?.mainAgentInstanceId ?? null,
+        team,
+        selfInstanceId,
+        selfAlias,
+      }),
     });
 
     // F3 MAJOR-1：新一轮 dispatch 重置该会话的幂等/失败标记——复用同一 sessionId 时，
@@ -633,16 +1088,23 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // 8. loading(operating)（工具执行阶段，FR-20）→ 回流超时 watchdog
     await this.realtime.broadcast(
       EVENT_TYPES.AGENT_LOADING,
-      { taskId, agentId: target.agentId, sessionId: target.sessionId, phase: 'operating' },
+      { taskId, agentId: target.agentId, instanceId: session.taskAgentId ?? null, sessionId: target.sessionId, phase: 'operating' },
       { type: 'task', id: taskId },
     );
     this.emitLoading({
       taskId,
       agentId: target.agentId,
+      instanceId: session.taskAgentId ?? null,
       sessionId: target.sessionId,
       phase: 'operating',
     });
-    this.startPendingWatchdog(taskId, target.agentId, target.sessionId);
+    this.startPendingWatchdog(
+      taskId,
+      target.agentId,
+      target.sessionId,
+      workerId,
+      session.taskAgentId ?? target.agentId,
+    );
   }
 
   // ------------------------------------------------------------------
@@ -675,12 +1137,18 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       }
     }
     let agentId = payload.agentId;
-    if (!agentId && sessionId) {
+    // T4 实例语义：注销需定位实例 id——反查 session 取 taskAgentId（存量 NULL 回退 agentId）
+    let executionRef: string | undefined;
+    // F3 P1 修复：终态回复落库按实例精确匹配——session.taskAgentId（NULL 回退 agentId）
+    let sessionTaskAgentId: string | undefined;
+    if (sessionId) {
       const session = await this.prisma.session.findUnique({
         where: { id: sessionId },
-        select: { agentId: true },
+        select: { agentId: true, taskAgentId: true },
       });
-      agentId = session?.agentId;
+      agentId = agentId ?? session?.agentId;
+      executionRef = session?.taskAgentId ?? session?.agentId;
+      sessionTaskAgentId = session?.taskAgentId ?? undefined;
     }
     if (!agentId) {
       this.logger.error(
@@ -688,12 +1156,27 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       );
       return;
     }
+    // 活跃执行注销（该实例已完成，MCP 落库类工具不再允许以它身份调用）
+    if (typeof payload.workerId === 'string' && payload.workerId) {
+      this.unregisterExecution(payload.workerId, taskId, executionRef ?? agentId);
+    }
     this.clearPendingWatchdog(taskId, agentId);
     const text = payload.text ?? '';
+    // 群聊通知声明 + 私聊独白展示文本（函数级作用域：try 块内赋值，产出物归档后统一转发）
+    let groupPost: ReturnType<typeof extractGroupPost> = null;
+    let displayText = text;
+    let finalParts: Array<Record<string, unknown>> = [];
 
     // 2~4. 落库 + 广播 + emitFinal（频道缺失时跳过落库，产出物仍归档）
-    const channel = await this.resolveChannel(taskId, agentId, channelId);
-    if (channel) {
+    // 架构：agent 最终回复落 private 会话频道（内心独白结尾）；群聊触发的处理额外
+    // 转发最终结果到群聊（对外消息，见 forwardToGroup）。resolveChannel 固定 private 优先。
+    const channel = await this.resolveChannel(taskId, agentId, sessionTaskAgentId);
+    // 群聊回复只经 MCP group_post 工具直发：正文独白仅落 private 会话频道（内心独白）。
+    // 任务未创建该 agent private 频道（resolveChannel 回退群聊）时跳过正文落库——群聊
+    // 只展示 ACK + 工具直发内容，不再把私聊正文兜底写进群聊（曾致群聊每人 3 条：
+    // ACK / 终态化正文 / 工具直发）。
+    const groupFallback = channel?.type === CHANNEL_TYPE.task_group;
+    if (channel && !groupFallback) {
       try {
         // 终态化（任务 3 定稿）：delta 流式期间创建的 processing 消息 → 更新为 sent +
         // 内容最终化，避免双消息（收到确认 + 流式内容两处落库）；无 processing 消息
@@ -702,12 +1185,17 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         // text part（reasoning/tool 剔除，防群聊渲染折叠卡片）；private 全量保留
         // （前端折叠展示 reasoning）。
         const rawParts = Array.isArray(payload.parts) ? payload.parts : [];
-        const finalParts =
+        finalParts =
           channel.type === CHANNEL_TYPE.private
             ? normalizeParts(rawParts)
             : extractConclusionParts(rawParts);
+        // 群聊通知（agent 自主决策，像真人判断是否在群里公开回应）：回复含 group_post
+        // 声明 → 仅声明内容转发群聊（对外消息）；无声明 → 不公开，回复留在私聊独白。
+        // 私聊独白落库文本移除协议标签（stripGroupPostDeclarations），不显示 JSON/标签。
+        groupPost = extractGroupPost(text);
+        displayText = groupPost !== null ? stripGroupPostDeclarations(text) : text;
         const finalContent = {
-          text,
+          text: displayText,
           parts: finalParts,
         } as Prisma.InputJsonValue;
         const processingRow = await this.prisma.message.findFirst({
@@ -731,6 +1219,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
                 channelId: channel.id,
                 senderType: SENDER_TYPE.agent,
                 senderId: agentId,
+                senderInstanceId: executionRef ?? null,
                 content: finalContent,
                 mentions: null,
                 status: MESSAGE_STATUS.sent,
@@ -754,8 +1243,10 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
           taskId,
           agentId,
           messageId: message.id,
-          text,
+          text: displayText,
         });
+        // 群聊转发（对外消息）延后到产出物归档后执行（forwardGroupPost）——
+        // 需要归档收集的 fileRef→落盘 URL 映射来挂附件
       } catch (err) {
         this.logger.error(
           `agent ${agentId} 回复落库失败: ${this.describeError(err)}`,
@@ -767,6 +1258,13 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
           error: `回复落库失败: ${this.describeError(err)}`,
         });
       }
+    } else if (channel) {
+      // 群聊回退（无该 agent private 频道）：正文独白不落群聊——结论内容由 MCP
+      // group_post 工具直发落库。此处仅完成幂等标记 + emitFinal（前端 loading 收尾）。
+      if (sessionId) {
+        this.completedSessions.add(sessionId);
+      }
+      this.emitFinal({ taskId, agentId, messageId: '', text });
     } else {
       this.logger.error(
         `task.completed 无法定位频道（taskId=${taskId} agentId=${agentId}），跳过回复落库`,
@@ -779,7 +1277,17 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     }
 
     // 5. 产出物归档（声明非法时 onArtifactSubmitted 返回 invalid 不抛错，12 篇 §3.1）
-    for (const raw of Array.isArray(payload.artifacts) ? payload.artifacts : []) {
+    // P3：合并 worker 显式上送（payload.artifacts）与 server 从回复文本提取
+    // （extractArtifacts）的声明——方案 A 下 worker 完成事件不带 artifacts 字段，
+    // 归档依赖 text 提取（F3 MAJOR-2 poll 路径逻辑，切方案 A 后曾丢失）。
+    const mergedArtifacts = this.mergeArtifactDeclarations([
+      ...(Array.isArray(payload.artifacts) ? payload.artifacts : []),
+      ...extractArtifacts(text),
+    ]);
+    // 归档收集 fileRef → 落盘 URL 映射（群聊转发附件用）：worker fileRef（容器路径）
+    // 与 group_post.fileRef 一致时，群聊消息可挂该文件的下载附件
+    const archivedFileUrls = new Map<string, { url: string; name: string }>();
+    for (const raw of mergedArtifacts) {
       const art = (raw ?? {}) as Record<string, unknown>;
       try {
         const result = await this.artifactsService.onArtifactSubmitted({
@@ -793,6 +1301,39 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
           this.logger.warn(
             `agent ${agentId} 产出物声明非法（${result.reason}）：${JSON.stringify(art)}`,
           );
+        } else {
+          // 归档成功（archived/duplicate 均带 artifact）→ 广播 artifact.submitted
+          // （scope=task，前端任务页产出物列表实时刷新，不再依赖手动刷新页面）
+          if (result.artifact && typeof result.artifact === 'object') {
+            const archived = result.artifact as Record<string, unknown>;
+            await this.realtime.broadcast(
+              EVENT_TYPES.ARTIFACT_SUBMITTED,
+              {
+                taskId,
+                artifactId: String(archived.id ?? ''),
+                version: archived.currentVersion ?? null,
+                type: String(art.type ?? ''),
+                title: String(art.title ?? ''),
+                agentId,
+              },
+              { type: 'task', id: taskId },
+            );
+          }
+          if (
+            result.artifact &&
+            typeof result.artifact === 'object' &&
+            typeof art.fileRef === 'string' &&
+            art.fileRef &&
+            (result.artifact as Record<string, unknown>).fileUrl
+          ) {
+            const fileUrl = String((result.artifact as Record<string, unknown>).fileUrl);
+            archivedFileUrls.set(art.fileRef, {
+              url: fileUrl,
+              name:
+                fileUrl.split(/[\\/]/).pop() ??
+                String((result.artifact as Record<string, unknown>).title ?? '附件'),
+            });
+          }
         }
       } catch (err) {
         this.logger.error(
@@ -801,6 +1342,36 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         );
       }
     }
+    // 群聊回复只经 MCP group_post 工具直发（工具 handler 已落库群聊并广播）——
+    // 不再做任何兜底转发（文本声明/群聊触发兜底转发完整回复均移除）：私聊正文
+    // 独白留在 private 会话频道，群聊不展示私聊内容（曾致群聊每人 3 条）。
+    void groupPost;
+  }
+
+  /** P3：合并多来源产出物声明（worker 上送 + 回复文本提取），按声明形状去重防重复归档。 */
+  private mergeArtifactDeclarations(
+    candidates: unknown[],
+  ): Array<Record<string, unknown>> {
+    const seen = new Set<string>();
+    const out: Array<Record<string, unknown>> = [];
+    for (const raw of candidates) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        continue;
+      }
+      const c = raw as Record<string, unknown>;
+      const key = JSON.stringify({
+        type: c.type,
+        title: c.title,
+        fileRef: c.fileRef,
+        content: c.content,
+      });
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      out.push(c);
+    }
+    return out;
   }
 
   /**
@@ -808,6 +1379,8 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
    * 仅做 emitLoading/emitError 本地回调通知（对齐 MessageDispatcher 订阅契约，供
    * ChatService onLoading/onError 日志）；SSE 的 agent.loading/agent.error emit 已由
    * T9 ingress 完成（worker-event.ingress.ts handleAgentStatus），此处不重复广播防双写。
+   * P4：错误分支额外落库 failed 消息（processing → failed + 错误内容广播）——
+   * 修复首字超时/模型错误后消息永久卡 processing、用户无失败反馈的问题。
    */
   async handleAgentStatus(payload: AgentStatusPayload): Promise<void> {
     const { taskId, agentId, sessionId } = payload;
@@ -818,6 +1391,22 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       payload.status === 'error' ||
       (typeof payload.error === 'string' && payload.error.length > 0);
     if (isError) {
+      if (sessionId) {
+        this.failedSessions.add(sessionId);
+      }
+      if (typeof payload.workerId === 'string' && payload.workerId) {
+        // T4 实例语义：注销按实例 id（sessionId 反查 taskAgentId；存量 NULL 回退 agentId）
+        let executionRef: string = agentId;
+        if (sessionId) {
+          const session = await this.prisma.session.findUnique({
+            where: { id: sessionId },
+            select: { taskAgentId: true },
+          });
+          executionRef = session?.taskAgentId ?? agentId;
+        }
+        this.unregisterExecution(payload.workerId, taskId, executionRef);
+      }
+      await this.failProcessingMessage(payload);
       this.emitError({
         taskId,
         agentId,
@@ -830,6 +1419,71 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         sessionId: sessionId ?? null,
         phase: payload.phase === 'thinking' ? 'thinking' : 'operating',
       });
+    }
+  }
+
+  /** P4：agent 失败回流 → 频道内该 agent 最新 processing 消息标记 failed + 错误内容广播
+   *  （无 processing 消息则新建 failed 消息），用户可见失败提示。落库/广播失败仅记日志。 */
+  private async failProcessingMessage(payload: AgentStatusPayload): Promise<void> {
+    const { taskId, agentId } = payload;
+    if (!taskId || !agentId) {
+      return;
+    }
+    try {
+      const errorText = payload.error?.trim() || 'agent 处理失败';
+      // F3 P1 修复：失败消息落库按实例精确匹配——sessionId 反查 taskAgentId
+      // （存量 NULL 回退 agentId 首实例；无需反查时 resolveChannel 内部兼容）。
+      let failTaskAgentId: string | undefined;
+      if (payload.sessionId) {
+        const session = await this.prisma.session.findUnique({
+          where: { id: payload.sessionId },
+          select: { taskAgentId: true },
+        });
+        failTaskAgentId = session?.taskAgentId ?? undefined;
+      }
+      const channel = await this.resolveChannel(taskId, agentId, failTaskAgentId);
+      if (!channel) {
+        return;
+      }
+      const processingRow = await this.prisma.message.findFirst({
+        where: {
+          channelId: channel.id,
+          senderType: SENDER_TYPE.agent,
+          senderId: agentId,
+          status: MESSAGE_STATUS.processing,
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      const content = { text: errorText, parts: [] } as Prisma.InputJsonValue;
+      const message = processingRow
+        ? await this.prisma.message.update({
+            where: { id: processingRow.id },
+            data: { content, status: MESSAGE_STATUS.failed },
+          })
+        : await this.prisma.message.create({
+            data: {
+              id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+              channelId: channel.id,
+              senderType: SENDER_TYPE.agent,
+              senderId: agentId,
+              content,
+              mentions: null,
+              status: MESSAGE_STATUS.failed,
+            },
+          });
+      await this.realtime.broadcast(
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        { message: this.toMessageDto(message) },
+        { type: 'channel', id: channel.id },
+      );
+      this.logger.warn(
+        `agent ${agentId} 处理失败，消息 ${message.id} 标记 failed：${errorText}`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `agent ${agentId} 失败消息落库失败: ${this.describeError(err)}`,
+      );
     }
   }
 
@@ -1114,22 +1768,19 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
   }
 
   /**
-   * 定位回流目标频道：preferredChannelId（消息来源频道，如群聊）存在且 taskId 匹配 →
-   * 优先采用（用户在群聊频道 @agent 时回复回流群聊而非 DM）；否则回退私聊频道
-   * （taskId+agentId 唯一）→ 群聊频道（taskId）。
+   * 定位 agent 最终回复的落库频道：**固定 private 会话频道（内心独白）**——架构上
+   * private 是每个 agent 的真实会话，群聊是汇总视图（对外消息经 forwardToGroup 转发）。
+   * F3 P1 修复：**按实例精确匹配**——同 agent 多实例各自独立私聊频道，若仍按 agentId
+   * findFirst 会命中最早创建的实例频道（消息串扰）。优先级：
+   * 1. taskAgentId 存在 → `{taskId, taskAgentId}` 精确命中该实例频道（终态回复/失败消息落库）。
+   * 2. taskAgentId 缺失（存量会话/频道 NULL）→ 回退 `{taskId, agentId}` 首实例（存量兼容）。
+   * 3. 均未命中 → 回退群聊频道兜底（消息仍可见）。
    */
-  private async resolveChannel(taskId: string, agentId: string, preferredChannelId?: string) {
-    if (preferredChannelId) {
-      const preferred = await this.prisma.chatChannel.findUnique({
-        where: { id: preferredChannelId },
-        select: { id: true, taskId: true, type: true },
-      });
-      if (preferred?.taskId === taskId) {
-        return preferred;
-      }
-    }
-    const dm = await this.prisma.chatChannel.findUnique({
-      where: { taskId_agentId: { taskId, agentId } },
+  private async resolveChannel(taskId: string, agentId: string, taskAgentId?: string) {
+    const dm = await this.prisma.chatChannel.findFirst({
+      where: taskAgentId
+        ? { taskId, taskAgentId }
+        : { taskId, agentId },
       select: { id: true, type: true },
     });
     if (dm) {
@@ -1139,6 +1790,63 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       where: { taskId, type: CHANNEL_TYPE.task_group },
       select: { id: true, type: true },
     });
+  }
+
+  /**
+   * 群聊转发（对外消息）：模型在回复中声明 group_post 后，把声明内容转发到群聊频道。
+   * 模型自主决策（像真人判断是否在群里公开回应）——未声明不调用本方法，回复留在私聊独白。
+   * attachment：group_post 声明 fileRef 且该文件已归档落盘 → 群聊消息挂附件
+   * （图片内嵌预览/文件下载链接，复用 messages 表 attachmentUrl 三字段）。
+   * 主频道即群聊（任务无该 agent 私聊，resolveChannel 回退）→ 已落库，跳过转发防重复。
+   */
+  private async forwardToGroup(
+    taskId: string,
+    agentId: string,
+    content: Prisma.InputJsonValue,
+    sessionId: string | undefined,
+    mainChannelId: string,
+    attachment?: { url: string; name: string },
+  ): Promise<void> {
+    try {
+      const group = await this.prisma.chatChannel.findFirst({
+        where: { taskId, type: CHANNEL_TYPE.task_group },
+        select: { id: true },
+      });
+      if (!group || group.id === mainChannelId) {
+        return;
+      }
+      const ext = attachment ? FileStorageService.extractExtension(attachment.name) ?? '' : '';
+      const groupMessage = await this.prisma.message.create({
+        data: {
+          id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+          channelId: group.id,
+          senderType: SENDER_TYPE.agent,
+          senderId: agentId,
+          content,
+          mentions: null,
+          status: MESSAGE_STATUS.sent,
+          ...(attachment
+            ? {
+                attachmentUrl: attachment.url,
+                attachmentName: attachment.name,
+                attachmentType: ext,
+              }
+            : {}),
+        },
+      });
+      await this.realtime.broadcast(
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        { message: this.toMessageDto(groupMessage) },
+        { type: 'channel', id: group.id },
+      );
+      this.logger.log(
+        `agent ${agentId} 群聊转发（对外结果）message=${groupMessage.id}（session=${sessionId ?? '-'}）`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `agent ${agentId} 群聊转发失败: ${this.describeError(err)}`,
+      );
+    }
   }
 
   /**
@@ -1193,7 +1901,13 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
    * 同时记录 lastActivityAt 作为空闲判死追踪起点（活动事件刷新，超 AGENT_IDLE_TIMEOUT_MS
    * 判死）。OBS-009：poll 已快速失败（failedSessions 已标记）时跳过注册。
    */
-  private startPendingWatchdog(taskId: string, agentId: string, sessionId: string): void {
+  private startPendingWatchdog(
+    taskId: string,
+    agentId: string,
+    sessionId: string,
+    workerId: string,
+    instanceId: string,
+  ): void {
     if (this.failedSessions.has(sessionId)) {
       return;
     }
@@ -1208,6 +1922,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       this.pendingBySession.delete(sessionId);
       // F2 MINOR：超时标记失败会话——迟到的回流（ingress/轮询）跳过落库仅记日志
       this.failedSessions.add(sessionId);
+      this.unregisterExecution(workerId, taskId, instanceId ?? agentId);
       this.lastActivityAt.delete(sessionId);
       const error = `agent 无响应（${this.firstTokenTimeoutMs / 1000}s 无事件回流），请稍后重试或检查 worker 状态`;
       this.logger.error(`agent ${agentId} ${error}`);
@@ -1222,7 +1937,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       });
     }, this.firstTokenTimeoutMs);
     timer.unref?.();
-    this.pending.set(key, { taskId, agentId, sessionId, timer });
+    this.pending.set(key, { taskId, agentId, instanceId, sessionId, workerId, timer });
     this.pendingBySession.set(sessionId, key);
     // 空闲判死追踪起点（活动事件经 handleSessionActivity 刷新）
     this.lastActivityAt.set(sessionId, Date.now());

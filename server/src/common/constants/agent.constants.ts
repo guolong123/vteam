@@ -94,15 +94,15 @@ export function buildModelSeedRows(): ModelSeedRow[] {
  * 值取 STATIC_AVAILABLE_MODELS 中的对应模型，`providerID/modelID` 格式与 D7 一致）。
  *
  * CONF-01（修正）：worker（w_compose_worker）节点 `opencode models` 实测仅 8 个可执行
- * opencode/* 模型（权威），已改为实测清单内模型：
- *   - 产品=通用对话 → opencode/ling-3.0-tiny-free（轻量通用）
- *   - 架构=推理 → opencode/nemotron-3-ultra-free（Nemotron Ultra 推理侧重）
- *   - 开发=代码 → opencode/deepseek-v4-flash-free（DeepSeek 代码侧重 + 快速）
- *   - 测试=推理/穷举 → opencode/north-mini-code-free（代码向穷举）
+ * opencode/* 模型（权威），默认模型必须落在实测清单内。
+ * CONF-02（修正）：统一改为 opencode/big-pickle——opencode 免费模型，实测稳定快速
+ * （5-20s 完成）；deepseek-v4-flash-free 等免费模型实测标题生成/思考极慢（115s+）导致
+ * 120s 首字超时 abort，故四类模板默认模型统一收敛到 big-pickle。
  */
 export const TEMPLATE_DEFAULT_MODELS: Record<string, string> = {
-  a_product: 'opencode/ling-3.0-tiny-free',
-  a_architect: 'opencode/nemotron-3-ultra-free',
-  a_developer: 'opencode/deepseek-v4-flash-free',
-  a_tester: 'opencode/north-mini-code-free',
+  a_product: 'opencode/big-pickle',
+  a_project_manager: 'opencode/big-pickle',
+  a_architect: 'opencode/big-pickle',
+  a_developer: 'opencode/big-pickle',
+  a_tester: 'opencode/big-pickle',
 } as const;

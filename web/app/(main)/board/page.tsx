@@ -157,6 +157,7 @@ function toBoardStatus(status: string): BoardStatus {
 /** seed 模板 Agent id → 角色 key（T14 Agents 模块预置 a_product/a_architect/a_developer/a_tester）。 */
 const AGENT_ID_ROLE: Record<string, RoleKey> = {
   a_product: "product",
+  a_project_manager: "project_manager",
   a_architect: "architect",
   a_developer: "developer",
   a_tester: "tester",
@@ -165,7 +166,7 @@ const AGENT_ID_ROLE: Record<string, RoleKey> = {
 /** 产出物数量（Phase 2 无产出物端点，0 为真实兜底值，对齐 project-list 页 EMPTY_TASK_COUNT 模式）。 */
 const EMPTY_ARTIFACT_COUNT = 0;
 
-const ROLE_KEYS: readonly RoleKey[] = ["product", "architect", "developer", "tester"];
+const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
 
 /** teamAgentIds（agent id 列表）→ 头像可渲染的 RoleKey[]；未知/自定义 Agent 跳过不渲染。 */
 function toRoles(agentIds: string[]): RoleKey[] {

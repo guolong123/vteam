@@ -1,0 +1,94 @@
+T5 前端改造（角色/实例分离）· 证据
+====================================
+日期：2026-08-13
+范围：web/ 纯前端，未改后端（T1-T4 契约已定）
+
+一、改动文件与摘要
+------------------
+1. web/app/(main)/tasks/new/page.tsx（核心改造：角色勾选 → 实例列表）
+   - INITIAL_CHECKED → INITIAL_ROLES=["project_manager","developer"]（决策 1：默认含项目经理）
+   - 新增 InstanceDraft{key,agentId,alias,seq,roleKey} / InstancesByRole 状态模型
+   - AgentOptionCard → RoleInstanceCard：角色卡片 = 头部（角色名+实例数+启用勾选）+ 实例列表
+     （角色色点 + 别名行内 input + #seq + ★主 Agent 标记/☆设主 + ✕移除）+ 虚线「+添加{角色}实例」按钮
+   - 主 Agent 下拉（main-agent-select）：从实例列表选择（别名（角色名）），默认 inst-project_manager-1
+   - 主实例转移（FR-19 保留）：MAIN_TRANSFER_ORDER=[project_manager, product, architect, developer, tester]，
+     移除/停用当前主实例 → 取优先级最高角色第一个剩余实例
+   - 提交契约：agents:[{agentId, alias?}]（alias 仅显式改名时提交，服务端缺省生成）+ mainAgentId
+     （主实例 key 本地临时无法匹配，传 agent 由服务端映射第一实例）
+   - 已选实例徽章区（别名+角色色+★主标记）+ 创建按钮
+
+2. web/app/(main)/tasks/[id]/page.tsx（详情页实例化）
+   - TaskDetail 加 mainAgentInstanceId / instances（对齐 toTaskDto）
+   - MembersPanel 按实例渲染：data-main 主标记徽章挂实例（member-main-tag ★ 主 Agent）、#seq 序号、
+     key=instanceId（同 agent 多实例不冲突）、onStartDm 传 agentId（后端 dm 契约）
+   - agentMembers 数据源 = task.instances（存量回退 channel.agentMembers）；agentMap 同 agent 保留首个别名
+   - mentionable 按实例：name=别名（@开发者-1 与 @开发者-2 分开）、携带 instanceId/agentId
+   - 发送 mentions 附带 instanceId（后端 CreateMessageDto 按 agentId 解析，instanceId 原样落库供展示）
+   - TaskPanel 主 Agent 渲染实例别名（instances[].main || id===mainAgentInstanceId）
+   - MessageList sender 渲染 mentions 兜底（senderNameFromMentions：notify_agent 消息 sender=目标实例，
+     其 mentions.name=目标实例别名 → 显示如 开发者-2）
+
+3. web/app/(main)/messages/[id]/page.tsx（私聊实例化）
+   - 新增 taskQuery（GET /tasks/:id → instances）
+   - mainAgent 解析：channel.agent（agentId）→ 匹配 taskInstances 首实例 → name=实例别名 + instanceId
+   - 发送 mentions 自动附带主实例 instanceId（保持 agentId 解析契约）
+
+4. web/app/(main)/issues/page.tsx（指派实例化）
+   - 指派数据源：GET /agents → GET /tasks/:id → instances（选中任务/编辑 issue 的任务实例）
+   - 下拉选项：别名（角色中文 label），value=实例 id（ta_ 前缀）；提交 assigneeInstanceId
+   - 表单 state assigneeAgentId → assigneeInstanceId（编辑预填兼容旧数据回退）
+   - IssueRow 指派展示：assigneeInstanceId → 本地实例映射显示别名（存量回退 agent/user 名）
+
+5. web/src/components/ui/message-input.tsx
+   - MentionableAgent 加 instanceId?/agentId?（多实例候选 key 用 instanceId ?? id，防同 agent 冲突）
+
+6. web/src/types/issues.ts
+   - IssueItem 加 assigneeInstanceId；Create/UpdateIssuePayload 加 assigneeInstanceId（保留 agentId 兼容）
+
+二、静态验证
+------------
+- cd web && npx tsc --noEmit → 0 错误（exit 0）
+- npm run build → 通过（23 routes，/tasks/[id]、/tasks/new、/messages/[id] 均成功编译）
+
+三、浏览器实测（Playwright + chromium，本地 dev :3001 → 本地新构建后端 :3000 → 容器 DB）
+-------------------------------------------------------------------------------------
+账号：seed-admin/Admin@123456（项目 p_seed_1）
+✓ 默认主 Agent=项目经理实例: {"select":"inst-project_manager-1"}
+✓ 项目经理卡片主标记: true
+✓ 初始实例数（项目经理1+开发者1）: 2
+✓ 添加开发者实例 → 开发者-2: ["开发者-1","开发者-2"]
+✓ 改名（开发者-2 → 全栈）: "全栈"
+✓ 移除开发者-2: 1
+✓ 移除主实例（项目经理）→ 自动转移: {"newMain":"inst-developer-1","devHasMain":true}
+✓ 确保角色启用状态: ["项目经理-1（项目经理）","开发者-1（开发者）"]
+✓ 创建任务（含别名提交）: {"postStatus":"201","url":"http://localhost:3001/tasks/t_0000000005"}
+✓ 成员面板按实例渲染（含主 Agent 徽章）:
+  [{"t":"全栈开发 ★ 主 Agent #1 · 就绪","main":"true"},{"t":"项目经理-1 #1 · 就绪","main":"false"}], mainTags:1
+✓ @ 候选按实例（开发者-1/全栈开发 分列）: ["全栈开发","项目经理-1"]
+✓ issue 指派下拉按实例: [{"v":"ta_0000000013","t":"全栈开发（开发者）"},{"v":"ta_0000000012","t":"项目经理-1（项目经理）"}]
+✓ 创建 issue 指派到开发者实例: assigneeValue=ta_0000000013, 列表行含实例别名"全栈开发"=true
+✓ 私聊页：点击成员"全栈开发" → 私聊 header 显示实例别名「全栈开发」+ 角色徽章
+JS 错误数：0（全部页面）
+
+四、截图（/tmp/opencode/t5-shots/）
+----------------------------------
+01-create-page.png                  创建页实例列表（主标记在项目经理）
+02-create-page-main-transferred.png 移除主实例后主标记转移至开发者-1
+03-mention-candidates.png           @ 候选按实例分列
+02-members-panel.png                详情成员面板（★主 Agent 挂实例 + #seq）
+04-issue-assignee.png               issue 指派下拉（全栈开发（开发者）/ 项目经理-1（项目经理））
+05-issue-list.png                   issue 列表显示实例别名
+06-dm-header.png                    私聊 header 实例别名
+
+五、环境说明与风险
+------------------
+- 部署容器（:13001/:13000）跑的是 T1-T4 之前构建——本任务验证使用本地新构建
+  server（dist 重新编译，连容器 DB 172.24.0.4:3306）+ 本地 dev :3001 完成；部署环境未改动。
+- 已知边界（后端契约现状，前端已对齐）：
+  1) 群聊 @ 用户路径：后端 resolveMentions 仍按 agentId 校验/落库（T6 建议后端升级按实例）——
+     前端候选/展示已实例化，发送映射 agentId+instanceId 透传；
+  2) 消息 DTO 无 senderInstanceId——sender 实例名经 mentions 兜底（T4 notify_agent 落库形状）；
+  3) 私聊频道 DTO 未输出 taskAgentId——私聊对象按 task.instances 匹配首实例解析；
+  4) createDmChannel 幂等按 (taskId, agentId)——同 agent 多实例私聊复用同一频道（后端 T6 待升级）。
+- 存量任务兼容：instances 后端 T2 起恒返回（单实例任务视觉与改造前一致）；instances 缺失时
+  详情页回退 channel.agentMembers。

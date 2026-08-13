@@ -43,4 +43,8 @@ export const ISSUE_ERRORS = {
   ISSUE_TASK_ARCHIVED: 'ISSUE_TASK_ARCHIVED',
   /** MCP 创建路径缺少 creatorAgentId（400，Metis B1 双创建者互斥）。 */
   ISSUE_CREATOR_REQUIRED: 'ISSUE_CREATOR_REQUIRED',
+  /** GET /issues 缺少过滤条件：taskId 与 projectId 均未提供（400）。 */
+  ISSUE_FILTER_REQUIRED: 'ISSUE_FILTER_REQUIRED',
+  /** GET /issues projectId 路径项目不存在（404）。 */
+  PROJECT_NOT_FOUND: 'PROJECT_NOT_FOUND',
 } as const;

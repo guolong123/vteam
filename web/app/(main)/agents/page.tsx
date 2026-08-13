@@ -242,7 +242,7 @@ const TYPE_LABEL: Record<string, string> = {
   clone: "克隆",
 };
 
-const ROLE_KEYS: readonly RoleKey[] = ["product", "architect", "developer", "tester"];
+const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
 
 /** 真实 role → AgentAvatar 可用 RoleKey（未知/自定义 → developer 兜底，对齐原型 custom 头像）。 */
 function toAvatarRole(role: string | null): RoleKey {
@@ -436,13 +436,13 @@ function roleBorder(role: RoleKey): string {
   return ROLE_BORDERS[role];
 }
 const ROLE_COLORS: Record<RoleKey, string> = {
-  product: "#3B82F6", architect: "#8B5CF6", developer: "#10B981", tester: "#F59E0B",
+  product: "#3B82F6", project_manager: "#0EA5E9", architect: "#8B5CF6", developer: "#10B981", tester: "#F59E0B",
 };
 const ROLE_BGS: Record<RoleKey, string> = {
-  product: "#EFF6FF", architect: "#F5F3FF", developer: "#ECFDF5", tester: "#FFFBEB",
+  product: "#EFF6FF", project_manager: "#F0F9FF", architect: "#F5F3FF", developer: "#ECFDF5", tester: "#FFFBEB",
 };
 const ROLE_BORDERS: Record<RoleKey, string> = {
-  product: "#BFDBFE", architect: "#DDD6FE", developer: "#A7F3D0", tester: "#FDE68A",
+  product: "#BFDBFE", project_manager: "#BAE6FD", architect: "#DDD6FE", developer: "#A7F3D0", tester: "#FDE68A",
 };
 
 /* ================================ 工具权限列表（可编辑，对齐原型 ToolPermissionList） ================================ */

@@ -37,11 +37,11 @@ describe('模型目录 seed 预置（C1：STATIC_AVAILABLE_MODELS → models 表
     expect(providers.has('zhipu')).toBe(true);
   });
 
-  it('四类模板默认模型均指向目录中存在的模型（providerID/modelID 格式）', () => {
+  it('五类模板默认模型均指向目录中存在的模型（providerID/modelID 格式）', () => {
     const rows = buildModelSeedRows();
     const keys = new Set(rows.map((r) => `${r.providerID}/${r.modelID}`));
     expect(Object.keys(TEMPLATE_DEFAULT_MODELS).sort()).toEqual(
-      ['a_architect', 'a_developer', 'a_product', 'a_tester'].sort(),
+      ['a_architect', 'a_developer', 'a_product', 'a_project_manager', 'a_tester'].sort(),
     );
     for (const modelId of Object.values(TEMPLATE_DEFAULT_MODELS)) {
       expect(keys.has(modelId)).toBe(true);
@@ -72,5 +72,15 @@ describe('模型目录 seed 预置（C1：STATIC_AVAILABLE_MODELS → models 表
     for (const modelId of Object.values(TEMPLATE_DEFAULT_MODELS)) {
       expect(workerCapableModels.has(modelId)).toBe(true);
     }
+  });
+
+  it('CONF-02（修正）：五类模板默认模型统一为 opencode/big-pickle（实测稳定快速，避免免费模型首字超时）', () => {
+    expect(Object.values(TEMPLATE_DEFAULT_MODELS)).toEqual([
+      'opencode/big-pickle',
+      'opencode/big-pickle',
+      'opencode/big-pickle',
+      'opencode/big-pickle',
+      'opencode/big-pickle',
+    ]);
   });
 });

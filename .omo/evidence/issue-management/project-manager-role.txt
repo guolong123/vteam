@@ -1,0 +1,112 @@
+# 项目经理角色全链路验证（project-manager-role）
+
+日期：2026-08-13
+分支：feature/git-repo-credentials
+验证人：Sisyphus-Junior
+
+## 背景
+
+1. ① seed 新增「项目经理」角色（a_project_manager / project_manager）
+2. ② 完善 5 个角色默认提示词（四方向：职责/权限/工作方式/协同方式），按设计文档 16 篇 §3~§7 调整 + 新功能收敛（issue / git 仓库 / keta-platform MCP）
+3. ③ 前端角色联动（tokens + ROLE_KEYS + AGENT_ID_ROLE 全量映射）
+4. ④ 验证闭环
+
+## 关键决策：prompt 更新策略
+
+`update: {}` 改为 `update: { prompt: agent.prompt }`（seed.ts 296-304 行，含注释说明）：
+
+- 模板 prompt 是平台维护的「出厂默认提示词」（16 篇 §8.4「模板提示词随平台版本升级」），存量部署重跑 seed 时把出厂默认升级为最新版本。
+- 其余字段（defaultModelId/name/permissionScope 等）保持 update:{} 语义——不覆盖用户已改配置；defaultModelId 模板默认值仅首次 create 时生效。
+- 用户自定义过 prompt 的模板若想保持定制，应在平台上再次修改，seed 不承担保留用户定制的义务。
+
+## 新增迁移
+
+- `server/prisma/schema.prisma`：`Agent.prompt` 由 `String`（MySQL VARCHAR(191)）改为 `String @db.Text`
+- 新增迁移 `server/prisma/migrations/20260813120000_agent_prompt_text/migration.sql`：
+  `ALTER TABLE agents MODIFY prompt TEXT NOT NULL;`
+- 原因：出厂默认提示词升级为多段长文本（2000+ 字符），VARCHAR(191) 容量不足，首次重跑 seed 报 P2000（column too long for column's type. Column: prompt）。
+
+## 1. seed 落库验证（docker compose up -d --build init）
+
+模板 Agent（type=template）5 角色全部落库：
+
+| id | role | prompt 字节长度 | default_model_id |
+|----|------|------|------|
+| a_product | product | 2109 | opencode-go/deepseek-v4-flash（旧库保留值） |
+| a_project_manager | project_manager | 2143 | opencode/big-pickle |
+| a_architect | architect | 1837 | opencode-go/deepseek-v4-flash（旧库保留值） |
+| a_developer | developer | 2017 | opencode-go/deepseek-v4-flash（旧库保留值） |
+| a_tester | tester | 2049 | opencode-go/deepseek-v4-flash（旧库保留值） |
+
+- a_project_manager 默认模型走 seed 新增项（agent.constants.ts TEMPLATE_DEFAULT_MODELS 含 `a_project_manager: 'opencode/big-pickle'`，CONF-02 统一收敛到实测稳定模型）。
+- 其余 4 角色 default_model_id 为旧库保留值（本次 update 不覆盖），符合「defaultModelId 仅首次 create 生效」决策。
+
+seed 输出：`模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)（type=template）`
+
+## 2. 提示词内容验证（API GET /api/v1/agents?type=template）
+
+5 角色全部四方向结构（## 职责 / ## 权限 / ## 工作方式 / ## 协同方式）：
+
+| 角色 | 四方向 | issue_create | issue_transition | tags=["需求"] | tags=["缺陷"] | git_clone | git_push | keta-platform | 主 Agent |
+|------|--------|-------------|-----------------|--------------|--------------|-----------|----------|---------------|----------|
+| a_product 产品经理 | ✓ | ✓ | ✓ | ✓ | - | - | - | ✓ | ✓ |
+| a_project_manager 项目经理 | ✓ | ✓ | ✓ | ✓ | - | - | - | ✓ | - |
+| a_architect 架构师 | ✓ | - | - | - | - | ✓ | - | ✓ | - |
+| a_developer 开发者 | ✓ | - | - | - | - | ✓ | ✓ | ✓ | - |
+| a_tester 测试 | ✓ | ✓ | ✓ | - | ✓ | ✓ | - | ✓ | - |
+
+说明：
+- 架构师/测试者 prompt 提及 git_clone（只读核对实现）；开发者提及 git_clone + git_push（push 需 write 授权 + 成员确认）
+- 架构师提示词含「可查看指派给自己的 issue」语义（issue_list 处理）——与任务要求「架构师只读 + 可查看指派给自己的 issue」一致
+- 开发者提示词含「处理指派给自己的 issue 并流转 start→resolve→close」（issue_list/issue_transition）
+- 产品/项目经理提示词含「创建需求 issue 并指派责任人，tags=["需求"]」
+- 测试者提示词含「创建缺陷 issue，tags=["缺陷"]，附复现步骤，@ 开发者修复」
+- 5 角色均提及经 keta-platform MCP 拉取上下文（不重复细节，全局提示词已有）
+
+## 3. 前端角色联动（project_manager 全量覆盖）
+
+- `web/src/theme/tokens.ts`：RoleKey 含 "project_manager"；roles 含 `{ label: "项目经理", color: "#0EA5E9", bg: "#F0F9FF", border: "#BAE6FD" }`；roleText 含 `"#0284C7"` ✓
+- ROLE_KEYS 数组（9 个文件全量含 project_manager）：
+  - projects/page.tsx:78 / tasks/[id]/page.tsx:246 / messages/page.tsx:102 / messages/[id]/page.tsx:102 / artifacts/page.tsx:107 / board/page.tsx:169 / agents/page.tsx:245 / tools/register/page.tsx:391
+- AGENT_ID_ROLE 映射（a_project_manager → project_manager）：
+  - tasks/[id]/page.tsx:240 / messages/page.tsx:96 / messages/[id]/page.tsx:96 / artifacts/page.tsx:101 / board/page.tsx:160
+- tasks/new/page.tsx：FIXED_DESC.project_manager="项目组织与进度推进"（:72）、ROLE_AGENT_ID.project_manager="a_project_manager"（:81）；角色列表动态拉 GET /agents，seed 后自动出现（无需固定列表改动）
+- agents/page.tsx：ROLE_COLORS/ROLE_BG/ROLE_BORDER 均含 project_manager（:439/:442/:445）
+- tools/register/page.tsx：allRoles 含 project_manager（:391）、role label 映射含项目经理（:583）
+- AgentAvatar/agent-badge 等组件通过 tokens 泛化支持，无需硬编码
+
+## 4. 后端 role 无硬编码白名单
+
+- `Agent.role` 为自由字符串（schema `role String?`），无枚举/白名单校验
+- 任务团队通过 agentId 关联（tasks.service.ts create/add：agentIds → task_agents），role 由 Agent 表提供
+- 结论：role='project_manager' 落库/展示无阻碍 ✓
+
+## 5. 编译与测试
+
+- server：`npx tsc --noEmit` → 0 错误
+- server 单测：`jest seed.spec.ts + agents.service.spec.ts` → 33 passed（含 5 角色模板、prompt update 断言）
+- web：`npx tsc --noEmit` → 0 错误；`npm run build` → 通过
+
+## 6. Playwright 端到端验证（http://localhost:13001，admin/admin123）
+
+4 项全部通过：
+
+1. **任务创建页角色选择含项目经理** ✓
+   - `[data-testid="agent-option"]` 5 个，`[data-role="project_manager"]` 1 个，文案「项目经理」
+   - 截图：/tmp/pm-tasks-new.png
+
+2. **创建含项目经理的任务，团队面板正确** ✓
+   - 勾选 project_manager → 创建任务 → 任务详情页 `members-panel` 内 `[data-role="project_manager"]` 成员存在，文案「项目经理」
+   - 头像/徽章：蓝底白字「P」（role color #0EA5E9）正确渲染
+   - 截图：/tmp/pm-task-detail.png
+
+3. **issue 页正常加载** ✓（页面渲染 Issue 列表 + 项目 Issue 入口）
+
+4. **issue 指派下拉含项目经理** ✓
+   - ISSUE_ASSIGNEE_OPTIONS=["不指派","产品经理（product）","架构师（architect）","开发者（developer）","测试（tester）","项目经理（project_manager）"]
+   - 截图：/tmp/pm-issues-form-open.png（弹窗打开态）
+
+## 遗留说明
+
+- 临时 QA spec（web/e2e/pm-role.spec.ts、playwright.pm.config.ts）验证后已删除，未入库。
+- 容器已重建（server/web/init 均 --build），当前部署含最新代码。

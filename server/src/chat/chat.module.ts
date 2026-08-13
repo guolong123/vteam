@@ -22,6 +22,9 @@ import { WorkerDispatcher } from './worker-dispatcher';
  *   ArtifactsModule（ArtifactsService.onArtifactSubmitted 产出物归档）——均已有 exports。
  * - PermissionGuard（CONF-02 方案②补齐矩阵守卫）：端点叠加 chats.view/create/edit/delete，
  *   频道成员校验在 service 层（channel → taskId → projectId → project_members）。
+ * - WorkerDispatcher 以类 token 注册并导出（FR-13：platform-mcp 模块注入调用
+ *   dispatchAgentMention），MessageDispatcher 抽象经 useExisting 复用同一实例——
+ *   单一 WorkerDispatcher 实例（T9 接线/看门狗仅一份），两个 token 指向它。
  */
 @Module({
   imports: [RealtimeModule, WorkersModule, ArtifactsModule],
@@ -29,8 +32,9 @@ import { WorkerDispatcher } from './worker-dispatcher';
   providers: [
     ChatService,
     PermissionGuard,
-    { provide: MessageDispatcher, useClass: WorkerDispatcher },
+    WorkerDispatcher,
+    { provide: MessageDispatcher, useExisting: WorkerDispatcher },
   ],
-  exports: [ChatService],
+  exports: [ChatService, WorkerDispatcher],
 })
 export class ChatModule {}

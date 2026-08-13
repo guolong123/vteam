@@ -32,6 +32,7 @@ const EVENT = {
   SESSION_UPDATED: "session.updated",
   MESSAGE_PART_DELTA: "message.part.delta",
   AGENT_STATUS: "agent.status",
+  AGENT_QUESTION: "agent.question",
 } as const;
 
 /* ------------------------------ 事件 payload 类型（对齐后端） ------------------------------ */
@@ -51,6 +52,8 @@ export interface RealtimeChatMessage {
   channelId: string;
   senderType: RealtimeSenderType;
   senderId: string | null;
+  /** T6 实例语义：消息归属实例 id（ta_ 前缀；agent 回复精确归属，同 agent 多实例区分） */
+  senderInstanceId?: string | null;
   content: RealtimeMessageContent;
   mentions: unknown[];
   /** UX-10 附件（客户端先 POST /uploads 拿 url 随消息提交；无附件为 null） */
@@ -79,6 +82,8 @@ export interface TaskStatusEvent {
 export interface AgentLoadingEvent {
   taskId: string;
   agentId: string;
+  /** T6 实例语义：目标实例 id（ta_ 前缀；同 agent 多实例各自 loading） */
+  instanceId?: string | null;
   sessionId: string | null;
   phase: string;
 }
@@ -87,9 +92,15 @@ export interface AgentLoadingEvent {
 export interface AgentErrorEvent {
   taskId: string;
   agentId: string;
+  /** T6 实例语义：目标实例 id（ta_ 前缀；同 agent 多实例错误各自归属） */
+  instanceId?: string | null;
   messageId?: string | null;
   level?: string;
-  errorType: string;
+  /** 真实错误文本（ingress 广播 payload.error，如「执行失败：…Invalid API key. (HTTP 401)」）。 */
+  error?: string;
+  /** 错误分类（ingress 从 error 文本推断：auth_failed/quota_exceeded/model_busy/model_error；旧广播可能缺失）。 */
+  errorType?: string;
+  message?: string;
 }
 
 /** team.changed 事件 payload（对齐 T8 updateTeam 广播，逐 Agent 一条，task scope）。 */
@@ -102,10 +113,13 @@ export interface TeamChangedEvent {
 /** artifact.submitted 事件 payload（对齐 T12 产出物提交广播，task scope）。 */
 export interface ArtifactSubmittedEvent {
   taskId: string;
+  artifactId?: string;
+  version?: number | null;
   type: string;
   title: string;
   content?: string;
   fileRef?: string;
+  agentId?: string | null;
 }
 
 /**
@@ -137,8 +151,49 @@ export interface MessagePartDeltaEvent {
 export interface AgentStatusEvent {
   taskId?: string | null;
   agentId?: string | null;
+  /** T6 实例语义：目标实例 id（ta_ 前缀；同 agent 多实例状态各自归属） */
+  instanceId?: string | null;
   sessionId?: string | null;
   status: string;
+}
+
+/** serve question 选项（对齐 worker SessionQuestionOption）。 */
+export interface RealtimeQuestionOption {
+  label: string;
+  description: string;
+}
+
+/** serve question 单条（对齐 worker SessionQuestionInfo / ingress AgentQuestion.content.questions）。 */
+export interface RealtimeQuestionInfo {
+  question: string;
+  header: string;
+  options: RealtimeQuestionOption[];
+  multiple?: boolean;
+  custom?: boolean;
+}
+
+/**
+ * agent.question 事件 payload（对齐 EVENT_TYPES.AGENT_QUESTION，ingress 落库后 broadcast / reply 后收敛）。
+ * kind=question：content = {questions: RealtimeQuestionInfo[]}；kind=permission：content = {title, pattern, type}。
+ * resolved=true 表示该 question 已被回复（前端据此关闭弹窗）。
+ */
+export interface RealtimeQuestionEvent {
+  question: {
+    id: string;
+    requestId: string;
+    sessionId: string;
+    taskId: string | null;
+    agentId: string | null;
+    kind: "question" | "permission";
+    content:
+      | { questions: RealtimeQuestionInfo[] }
+      | { title?: string; pattern?: string | string[] | null; type?: string };
+    status: string;
+  };
+  taskId: string | null;
+  agentId: string | null;
+  sessionId: string;
+  resolved?: boolean;
 }
 
 /** 消息列表缓存结构（对齐 GET /channels/:id/messages 分页响应 {items, nextCursor}）。 */
@@ -176,6 +231,8 @@ export interface UseRealtimeEventsOptions {
   onAgentStatus?: (payload: AgentStatusEvent, event: SSEEvent<AgentStatusEvent>) => void;
   /** message.part.delta：默认已按 id 更新消息缓存（processing 才替换），回调供页面额外处理（如滚到底）。 */
   onMessagePartDelta?: (payload: MessagePartDeltaEvent, event: SSEEvent<MessagePartDeltaEvent>) => void;
+  /** agent.question：模型提问/权限确认弹窗（页面 setPendingQuestion；resolved=true 时收敛关闭）。 */
+  onAgentQuestion?: (payload: RealtimeQuestionEvent, event: SSEEvent<RealtimeQuestionEvent>) => void;
 }
 
 /**
@@ -196,6 +253,7 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
     onSessionUpdated,
     onAgentStatus,
     onMessagePartDelta,
+    onAgentQuestion,
   } = options;
   const queryClient = useQueryClient();
 
@@ -243,6 +301,9 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
           onMessagePartDelta?.(payload, ev as SSEEvent<MessagePartDeltaEvent>);
           break;
         }
+        case EVENT.AGENT_QUESTION:
+          onAgentQuestion?.(ev.payload as RealtimeQuestionEvent, ev as SSEEvent<RealtimeQuestionEvent>);
+          break;
       }
     },
   });

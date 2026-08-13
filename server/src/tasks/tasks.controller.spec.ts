@@ -86,7 +86,11 @@ describe('TasksController', () => {
     it('POST projects/:pid/tasks 以 req.user.id 调用 create', async () => {
       const task = { id: 't_1' };
       service.create.mockResolvedValue(task);
-      const dto = { title: '任务', agentIds: ['a_1'], mainAgentId: 'a_1' };
+      const dto = {
+        title: '任务',
+        agents: [{ agentId: 'a_1' }],
+        mainAgentInstanceId: 'ta_1',
+      };
 
       const out = await controller.create(
         { id: 'u_admin', username: 'admin', roleId: 'r_admin' },
@@ -184,7 +188,10 @@ describe('TasksController', () => {
 
     it('POST tasks/:id/team 以 req.user.id 转发 id + dto 到 updateTeam', async () => {
       service.updateTeam.mockResolvedValue({ id: 't_1', teamAgentIds: ['a_1'] });
-      const dto = { addAgentIds: ['a_2'], removeAgentIds: ['a_1'] };
+      const dto = {
+        addInstances: [{ agentId: 'a_2' }],
+        removeInstanceIds: ['ta_1'],
+      };
 
       const out = await controller.updateTeam(
         { id: 'u_admin', username: 'admin', roleId: 'r_admin' },
@@ -201,26 +208,36 @@ describe('TasksController', () => {
     const errorsOf = async (cls: new () => object, obj: object) =>
       validate(plainToInstance(cls, obj));
 
-    it('CreateTaskDto：title 必填、priority 枚举、agentIds 数组', async () => {
+    it('CreateTaskDto：title 必填、priority 枚举、agents 实例数组', async () => {
       expect(await errorsOf(CreateTaskDto, {})).not.toHaveLength(0);
       expect(
         await errorsOf(CreateTaskDto, {
           title: 'x',
           priority: 'urgent',
-          agentIds: ['a_1'],
+          agents: [{ agentId: 'a_1' }],
         }),
       ).not.toHaveLength(0);
       expect(
         await errorsOf(CreateTaskDto, {
           title: 'x',
-          agentIds: 'not-array',
+          agents: 'not-array',
+        }),
+      ).not.toHaveLength(0);
+      expect(
+        await errorsOf(CreateTaskDto, {
+          title: 'x',
+          agents: [{ alias: '缺 agentId' }],
         }),
       ).not.toHaveLength(0);
       expect(
         await errorsOf(CreateTaskDto, {
           title: 'x',
           priority: 'high',
-          agentIds: ['a_1'],
+          agents: [
+            { agentId: 'a_1' },
+            { agentId: 'a_1', alias: '开发者-2' },
+          ],
+          mainAgentInstanceId: 'ta_2',
           mainAgentId: 'a_1',
           backgroundDocs: [{ name: 'd' }],
         }),
@@ -241,7 +258,7 @@ describe('TasksController', () => {
       ).toHaveLength(0);
     });
 
-    it('UpdateTaskDto：priority 枚举，title/description 可选', async () => {
+    it('UpdateTaskDto：priority 枚举，title/description 可选，主实例/主 Agent 兼容', async () => {
       expect(
         await errorsOf(UpdateTaskDto, { priority: 'urgent' }),
       ).not.toHaveLength(0);
@@ -250,6 +267,7 @@ describe('TasksController', () => {
           title: 'x',
           description: 'd',
           priority: 'low',
+          mainAgentInstanceId: 'ta_1',
           mainAgentId: 'a_1',
         }),
       ).toHaveLength(0);
@@ -263,19 +281,26 @@ describe('TasksController', () => {
       expect(await errorsOf(RejectTaskDto, { reason: 42 })).not.toHaveLength(0);
     });
 
-    it('UpdateTeamDto：add/removeAgentIds 可选字符串数组', async () => {
+    it('UpdateTeamDto：addInstances/removeInstanceIds 可选实例形状', async () => {
       expect(await errorsOf(UpdateTeamDto, {})).toHaveLength(0);
       expect(
         await errorsOf(UpdateTeamDto, {
-          addAgentIds: ['a_1'],
-          removeAgentIds: ['a_2'],
+          addInstances: [{ agentId: 'a_1', alias: '开发者-2' }],
+          removeInstanceIds: ['ta_1', 'ta_2'],
         }),
       ).toHaveLength(0);
       expect(
-        await errorsOf(UpdateTeamDto, { addAgentIds: 'a_1' }),
+        await errorsOf(UpdateTeamDto, { addInstances: 'a_1' }),
       ).not.toHaveLength(0);
       expect(
-        await errorsOf(UpdateTeamDto, { removeAgentIds: [42] }),
+        await errorsOf(UpdateTeamDto, {
+          removeInstanceIds: [42],
+        }),
+      ).not.toHaveLength(0);
+      expect(
+        await errorsOf(UpdateTeamDto, {
+          addInstances: [{ alias: '缺 agentId' }],
+        }),
       ).not.toHaveLength(0);
     });
   });

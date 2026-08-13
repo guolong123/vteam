@@ -1,0 +1,74 @@
+================================================================================
+T4 MCP 实例化（role-instance-separation）行为实证
+================================================================================
+日期：2026-08-13
+验证范围：platform-mcp 全部工具与防冒充校验从"按 agent"升级为"按实例"
+前置：T1-T3（schema 实例列就绪、tasks.service 实例化、worker-dispatcher 按 session.taskAgentId
+      解析实例 + registerExecution 待本任务改为按实例登记）
+
+--------------------------------------------------------------------------------
+1. notify_agent 双开发者完整实例语义（@开发者-2 命中 ta_dev_2）
+--------------------------------------------------------------------------------
+调用：notifyAgent({ selfInstanceId: ta_dev_1（开发者-1）, targetInstanceId: ta_dev_2（开发者-2）, content })
+
+落库消息断言（prisma.message.create data）：
+  senderId: 'a_developer'                          <- 目标实例的 agent id（查实例行）
+  senderInstanceId: 'ta_dev_2'                     <- 目标实例 id（targetInstanceId）
+  content.text: '@开发者-2 请处理模块B'
+  mentions: [{ type:'agent', instanceId:'ta_dev_2', agentId:'a_developer', name:'开发者-2' }]
+
+dispatchAgentMention 收到：
+  { taskId, channelId, text: '@开发者-2 请处理模块B', targetInstanceId: 'ta_dev_2' }
+  -> @开发者-2 命中开发者-2 实例，而非同 agent 第一实例 ta_dev_1（T3 最小适配已被本任务替换）
+
+返回结构：{ messageId, channelId, targetInstanceId: 'ta_dev_2' }
+目标实例不存在/不在团队 → 404（不落库不触发）
+
+--------------------------------------------------------------------------------
+2. task_context agentMembers 实例形状（三实例含 main 标注）
+--------------------------------------------------------------------------------
+task findUnique select 补 mainAgentInstanceId。
+taskAgent.findMany select 补 id/alias/seq/agentId + agent{id,name,role}。
+
+返回：
+  mainAgentInstanceId: 'ta_pm_1'
+  agentMembers: [
+    { id:'ta_pm_1',  alias:'项目经理-1', agentId:'a_project_manager', name:'项目经理', role:'project_manager', main: true  },
+    { id:'ta_dev_1', alias:'开发者-1',   agentId:'a_developer',      name:'开发者',   role:'developer',        main: false },
+    { id:'ta_dev_2', alias:'开发者-2',   agentId:'a_developer',      name:'开发者',   role:'developer',        main: false },
+  ]
+  main 标注 = id === mainAgentInstanceId（项目经理实例 ta_pm_1）
+
+--------------------------------------------------------------------------------
+3. assertWorkerTask 按实例集合校验（防冒充）
+--------------------------------------------------------------------------------
+活跃执行集合 isAgentExecuting(workerId, taskId) = Set(['ta_dev_1'])：
+  - selfInstanceId='ta_dev_2'（不在集合）-> 403 PLATFORM_MCP_FORBIDDEN，不落库
+  - selfInstanceId='ta_dev_1'（在集合）-> 放行（走到目标查询）
+回退 findFirst：session 行 select 补 taskAgentId；instanceId = session.taskAgentId ?? session.agentId；
+  selfInstanceId 与 instanceId 不一致 -> 403（错误文案含 selfInstanceId）
+
+--------------------------------------------------------------------------------
+4. 存量会话兼容（session.taskAgentId NULL）
+--------------------------------------------------------------------------------
+session.taskAgentId=null + session.agentId=a_developer：
+  assertWorkerTask 返回 session.agentId（回退）；selfInstanceId='a_developer' 通过。
+  worker-dispatcher registerExecution：dispatchForTarget 传 session.taskAgentId ?? target.agentId
+  （存量会话回退 agentId 登记，防旧会话防冒充失效）；unregisterExecution 注销按
+  handleTaskCompleted/handleAgentStatus（sessionId 反查 taskAgentId ?? agentId）与
+  startPendingWatchdog（instanceId ?? agentId）。
+
+--------------------------------------------------------------------------------
+5. GLOBAL_SYSTEM_INSTRUCTIONS / buildSystemInstructions 实例化
+--------------------------------------------------------------------------------
+- notify_agent 参数说明：agentId -> targetInstanceId（"目标实例 id（ta_ 前缀，见 task_context 的 agentMembers）"）
+- issue_create 参数说明：selfAgentId -> selfInstanceId、assigneeAgentId -> assigneeInstanceId
+- 身份段：selfAgentId 参数必须填写你的 Agent id -> "selfInstanceId 参数必须填写你的实例 id（ta_ 前缀，服务器按此校验归属并精确记录发送者）"
+
+--------------------------------------------------------------------------------
+验证结果
+--------------------------------------------------------------------------------
+- npx tsc --noEmit                              -> 0 错误
+- npx jest src/platform-mcp                      -> 74 passed / 2 suites
+- npx jest src/chat/worker-dispatcher.spec.ts    -> 101 passed
+- npx jest（全量）                                -> 56 suites / 1108 tests 全过

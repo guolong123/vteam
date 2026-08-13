@@ -83,7 +83,7 @@ export class ChatController {
   @Get('channels/:id/messages')
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.view')
-  @ApiOperation({ summary: '历史消息游标分页（游标=消息主键 id，id 升序）' })
+  @ApiOperation({ summary: '历史消息游标分页（首页取最新 limit 条；游标=上页最早 id，下一页取更老；items id 升序）' })
   findMessages(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,

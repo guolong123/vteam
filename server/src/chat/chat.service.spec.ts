@@ -265,7 +265,7 @@ describe('ChatService', () => {
       expect(result.triggers).toHaveLength(2);
     });
 
-    it('无 mentions：triggers 为空、dispatcher 空目标、仅广播用户消息', async () => {
+    it('无 mentions 且任务无主实例（task_group）→ 不触发：triggers 空、dispatcher 空目标、仅广播用户消息', async () => {
       allowAccess();
       prisma.taskAgent.findMany.mockResolvedValue([]);
       idGen.nextId.mockResolvedValue('m_0000000001');
@@ -278,6 +278,8 @@ describe('ChatService', () => {
         expect.objectContaining({ targets: [] }),
       );
       expect(realtime.broadcast).toHaveBeenCalledTimes(1);
+      // 无主实例配置（mock task 缺 mainAgentInstanceId/mainAgentId）→ 不查主实例行
+      expect(prisma.taskAgent.findFirst).not.toHaveBeenCalled();
     });
 
     it('UX-10 带附件：attachmentUrl/Name/Type 落库 + 响应透出（分发/广播不受影响）', async () => {
@@ -389,6 +391,222 @@ describe('ChatService', () => {
         });
       }
       expect(prisma.message.create).not.toHaveBeenCalled();
+    });
+
+    describe('T8 群聊无 @ 自动路由主实例', () => {
+      // 主实例配置齐全的任务频道行（mock task 含 mainAgentInstanceId/mainAgentId）
+      const mainChannel = (type: string = CHANNEL_TYPE.task_group) =>
+        channelRow({
+          type,
+          task: {
+            id: taskId,
+            title: '任务标题',
+            status: 'pending',
+            projectId: 'p_seed_1',
+            mainAgentInstanceId: 'ti_pm',
+            mainAgentId: 'a_project_manager',
+          },
+        });
+      // 通用主实例触发 mock：团队行 + 主实例行 + 会话 + ACK
+      const mockMainDispatched = (opts: {
+        team: { id: string; agentId: string; removedAt: Date | null }[];
+        mainRow?: { id: string; agentId: string; removedAt: Date | null } | null;
+        session?: { id: string } | null;
+        ack?: string | null;
+      }) => {
+        prisma.taskAgent.findMany.mockResolvedValue(opts.team);
+        prisma.taskAgent.findFirst.mockResolvedValue(opts.mainRow ?? null);
+        prisma.session.findFirst.mockResolvedValue(opts.session ?? { id: 's_pm' });
+        prisma.agent.findMany.mockResolvedValue([
+          { id: 'a_project_manager', ackMessage: opts.ack ?? null },
+        ]);
+        idGen.nextId.mockResolvedValue('m_1');
+        prisma.message.create
+          .mockResolvedValueOnce(messageRow())
+          .mockResolvedValueOnce(
+            messageRow({
+              senderType: SENDER_TYPE.agent,
+              senderId: 'a_project_manager',
+              senderInstanceId: 'ti_pm',
+            }),
+          );
+      };
+
+      it('task_group 无 @ → 主实例 trigger（dispatched，ACK 落库 senderInstanceId=主实例）', async () => {
+        allowAccess(mainChannel());
+        mockMainDispatched({
+          team: [
+            { id: 'ti_pm', agentId: 'a_project_manager', removedAt: null },
+            { id: 'ti_dev', agentId: 'a_developer', removedAt: null },
+          ],
+          mainRow: { id: 'ti_pm', agentId: 'a_project_manager', removedAt: null },
+          session: { id: 's_pm' },
+        });
+
+        const result = await service.createMessage(channelId, userId, { text: '无 @ 消息' } as any);
+
+        // triggers 含主实例（instanceId=主实例，status=dispatched）
+        expect(result.triggers).toEqual([
+          {
+            agentId: 'a_project_manager',
+            instanceId: 'ti_pm',
+            sessionId: 's_pm',
+            status: 'dispatched',
+          },
+        ]);
+        // dispatch targets 携带 instanceId（ACK/dispatch 复用现有链路）
+        expect(dispatcher.dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            targets: [
+              {
+                agentId: 'a_project_manager',
+                instanceId: 'ti_pm',
+                sessionId: 's_pm',
+              },
+            ],
+          }),
+        );
+        // 主实例 ACK 消息落库：senderInstanceId=主实例、无 mentions（防递归）
+        const ackData = prisma.message.create.mock.calls[1][0].data;
+        expect(ackData).toMatchObject({
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_project_manager',
+          senderInstanceId: 'ti_pm',
+          mentions: null,
+          content: { text: DEFAULT_ACK_MESSAGE, parts: [] },
+        });
+        expect(prisma.message.create).toHaveBeenCalledTimes(2);
+      });
+
+      it('无 @ 且主实例已 removed → 不触发（triggers 空，仅落库广播，不查会话不落 ACK）', async () => {
+        allowAccess(mainChannel());
+        const removedAt = new Date('2026-08-01T00:00:00Z');
+        mockMainDispatched({
+          team: [{ id: 'ti_pm', agentId: 'a_project_manager', removedAt }],
+          mainRow: { id: 'ti_pm', agentId: 'a_project_manager', removedAt },
+          session: null,
+        });
+        prisma.message.create.mockResolvedValue(messageRow());
+
+        const result = await service.createMessage(channelId, userId, { text: '无 @ 消息' } as any);
+
+        expect(result.triggers).toEqual([]);
+        expect(dispatcher.dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({ targets: [] }),
+        );
+        expect(prisma.session.findFirst).not.toHaveBeenCalled();
+        expect(prisma.message.create).toHaveBeenCalledTimes(1);
+        expect(realtime.broadcast).toHaveBeenCalledTimes(1);
+      });
+
+      it('有 @ → 仅 @ 目标，不叠加主实例', async () => {
+        allowAccess(mainChannel());
+        prisma.taskAgent.findMany.mockResolvedValue([
+          { id: 'ti_dev', agentId: 'a_developer', removedAt: null },
+        ]);
+        prisma.session.findFirst.mockResolvedValue({ id: 's_dev' });
+        prisma.agent.findMany.mockResolvedValue([{ id: 'a_developer', ackMessage: null }]);
+        idGen.nextId.mockResolvedValue('m_1');
+        prisma.message.create.mockResolvedValue(messageRow());
+
+        const result = await service.createMessage(channelId, userId, {
+          text: '@开发者',
+          mentions: [{ type: 'agent', agentId: 'a_developer' }],
+        } as any);
+
+        expect(result.triggers).toEqual([
+          {
+            agentId: 'a_developer',
+            instanceId: 'ti_dev',
+            sessionId: 's_dev',
+            status: 'dispatched',
+          },
+        ]);
+        expect(result.triggers).toHaveLength(1);
+        // 主实例行不查询（@ 语义优先，不叠加）
+        expect(prisma.taskAgent.findFirst).not.toHaveBeenCalled();
+      });
+
+      it('private 频道无 @ → 不触发（仅 task_group 路由主实例）', async () => {
+        allowAccess(mainChannel(CHANNEL_TYPE.private));
+        prisma.taskAgent.findMany.mockResolvedValue([]);
+        idGen.nextId.mockResolvedValue('m_1');
+        prisma.message.create.mockResolvedValue(messageRow());
+
+        const result = await service.createMessage(channelId, userId, { text: '私聊无 @' } as any);
+
+        expect(result.triggers).toEqual([]);
+        expect(prisma.taskAgent.findFirst).not.toHaveBeenCalled();
+        expect(dispatcher.dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({ targets: [] }),
+        );
+      });
+
+      it('mainAgentInstanceId 缺省 → 回退 mainAgentId 第一个未移除实例（seq 升序）', async () => {
+        allowAccess(
+          channelRow({
+            task: {
+              id: taskId,
+              title: '任务标题',
+              status: 'pending',
+              projectId: 'p_seed_1',
+              mainAgentInstanceId: null,
+              mainAgentId: 'a_developer',
+            },
+          }),
+        );
+        prisma.taskAgent.findMany.mockResolvedValue([
+          { id: 'ti_dev1', agentId: 'a_developer', removedAt: null },
+          { id: 'ti_dev2', agentId: 'a_developer', removedAt: null },
+        ]);
+        prisma.taskAgent.findFirst.mockResolvedValue({
+          id: 'ti_dev1',
+          agentId: 'a_developer',
+          removedAt: null,
+        });
+        prisma.session.findFirst.mockResolvedValue({ id: 's_dev1' });
+        prisma.agent.findMany.mockResolvedValue([{ id: 'a_developer', ackMessage: null }]);
+        idGen.nextId.mockResolvedValue('m_1');
+        prisma.message.create
+          .mockResolvedValueOnce(messageRow())
+          .mockResolvedValueOnce(
+            messageRow({ senderType: SENDER_TYPE.agent, senderId: 'a_developer' }),
+          );
+
+        const result = await service.createMessage(channelId, userId, { text: '无 @ 消息' } as any);
+
+        expect(result.triggers).toEqual([
+          {
+            agentId: 'a_developer',
+            instanceId: 'ti_dev1',
+            sessionId: 's_dev1',
+            status: 'dispatched',
+          },
+        ]);
+        // 回退查询条件：按 agentId + 未移除 + seq 升序取第一实例
+        expect(prisma.taskAgent.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { taskId, agentId: 'a_developer', removedAt: null },
+            orderBy: { seq: 'asc' },
+          }),
+        );
+      });
+
+      it('无 @ 且主实例配置不存在于团队 → 不触发（triggers 空）', async () => {
+        allowAccess(mainChannel());
+        prisma.taskAgent.findMany.mockResolvedValue([
+          { id: 'ti_other', agentId: 'a_developer', removedAt: null },
+        ]);
+        prisma.taskAgent.findFirst.mockResolvedValue(null);
+        idGen.nextId.mockResolvedValue('m_1');
+        prisma.message.create.mockResolvedValue(messageRow());
+
+        const result = await service.createMessage(channelId, userId, { text: '无 @ 消息' } as any);
+
+        expect(result.triggers).toEqual([]);
+        expect(prisma.session.findFirst).not.toHaveBeenCalled();
+        expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      });
     });
   });
 
@@ -541,22 +759,25 @@ describe('ChatService', () => {
   });
 
   describe('findMessages（游标分页）', () => {
-    it('首页（无 cursor）：id 升序取 limit+1 判末页，nextCursor=第 limit 条 id', async () => {
+    it('首页（无 cursor）：id 降序取最新 limit+1 判末页，items 反转升序，nextCursor=当前页最早 id', async () => {
       allowAccess();
-      prisma.message.findMany.mockResolvedValue(genMessages(51));
+      // DB `ORDER BY id DESC` 返回：最新优先
+      prisma.message.findMany.mockResolvedValue(genMessages(51).reverse());
 
       const result = await service.findMessages(channelId, userId, {} as any);
 
-      // 查询契约：idx_messages_channel_id 命中（channelId + id>cursor ORDER BY id ASC）
+      // 查询契约：idx_messages_channel_id 命中（channelId，ORDER BY id DESC，take=limit+1 判末页）
       expect(prisma.message.findMany).toHaveBeenCalledWith({
         where: { channelId },
-        orderBy: { id: 'asc' },
+        orderBy: { id: 'desc' },
         take: 51, // limit(50) + 1 判末页
       });
+      // 最新 50 条（m_2..m_51），items id 升序（时间正序）返回
       expect(result.items).toHaveLength(50);
-      expect(result.items[0].id).toBe('m_0000000001');
-      expect(result.items[49].id).toBe('m_0000000050');
-      expect(result.nextCursor).toBe('m_0000000050');
+      expect(result.items[0].id).toBe('m_0000000002');
+      expect(result.items[49].id).toBe('m_0000000051');
+      // nextCursor = 当前页最早一条 id（m_2），下一页取更老
+      expect(result.nextCursor).toBe('m_0000000002');
     });
 
     it('limit 默认 50、上限 100', async () => {
@@ -565,30 +786,30 @@ describe('ChatService', () => {
 
       await service.findMessages(channelId, userId, {} as any);
       expect(prisma.message.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ take: 51 }),
+        expect.objectContaining({ orderBy: { id: 'desc' }, take: 51 }),
       );
 
-      prisma.message.findMany.mockResolvedValue(genMessages(101));
+      prisma.message.findMany.mockResolvedValue(genMessages(101).reverse());
       await service.findMessages(channelId, userId, { limit: 200 } as any);
       expect(prisma.message.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ take: 101 }),
+        expect.objectContaining({ orderBy: { id: 'desc' }, take: 101 }),
       );
     });
 
-    it('cursor 传入 → WHERE id > cursor（翻页续拉）', async () => {
+    it('cursor 传入 → WHERE id < cursor（下一页取更老）', async () => {
       allowAccess();
-      prisma.message.findMany.mockResolvedValue(genMessages(3));
+      prisma.message.findMany.mockResolvedValue(genMessages(3).reverse());
 
       const result = await service.findMessages(channelId, userId, {
         cursor: 'm_0000000050',
       } as any);
 
       expect(prisma.message.findMany).toHaveBeenCalledWith({
-        where: { channelId, id: { gt: 'm_0000000050' } },
-        orderBy: { id: 'asc' },
+        where: { channelId, id: { lt: 'm_0000000050' } },
+        orderBy: { id: 'desc' },
         take: 51,
       });
-      // 首页 nextCursor 续传即下一页起始游标 → 无重复无遗漏
+      // items 反转回升序（时间正序），nextCursor 续传即下一页起始游标 → 无重复无遗漏
       expect(result.items.map((m) => m.id)).toEqual([
         'm_0000000001',
         'm_0000000002',
@@ -598,10 +819,14 @@ describe('ChatService', () => {
 
     it('末页/空历史 → nextCursor null', async () => {
       allowAccess();
-      prisma.message.findMany.mockResolvedValue(genMessages(3));
+      prisma.message.findMany.mockResolvedValue(genMessages(3).reverse());
 
       const result = await service.findMessages(channelId, userId, {} as any);
-      expect(result.items).toHaveLength(3);
+      expect(result.items.map((m) => m.id)).toEqual([
+        'm_0000000001',
+        'm_0000000002',
+        'm_0000000003',
+      ]);
       expect(result.nextCursor).toBeNull();
 
       prisma.message.findMany.mockResolvedValue([]);
@@ -837,7 +1062,7 @@ describe('ChatService', () => {
       prisma.task.findUnique.mockResolvedValue({ projectId: 'p_seed_1' });
       prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
       prisma.agent.findUnique.mockResolvedValue({ id: 'a_product' });
-      prisma.chatChannel.findUnique.mockResolvedValue(null);
+      prisma.chatChannel.findFirst.mockResolvedValue(null);
       idGen.nextId.mockResolvedValue('c_0000000001');
       prisma.chatChannel.create.mockResolvedValue(
         channelRow({ id: 'c_0000000001', type: 'private', agentId: 'a_product' }),
@@ -869,7 +1094,7 @@ describe('ChatService', () => {
       prisma.task.findUnique.mockResolvedValue({ projectId: 'p_seed_1' });
       prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
       prisma.agent.findUnique.mockResolvedValue({ id: 'a_product' });
-      prisma.chatChannel.findUnique.mockResolvedValue(
+      prisma.chatChannel.findFirst.mockResolvedValue(
         channelRow({ type: 'private', agentId: 'a_product' }),
       );
 
@@ -886,7 +1111,7 @@ describe('ChatService', () => {
       prisma.task.findUnique.mockResolvedValue({ projectId: 'p_seed_1' });
       prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
       prisma.agent.findUnique.mockResolvedValue({ id: 'a_product' });
-      prisma.chatChannel.findUnique.mockResolvedValue(
+      prisma.chatChannel.findFirst.mockResolvedValue(
         channelRow({ type: 'private', agentId: 'a_product', deletedAt: new Date('2026-08-08T00:00:00Z') }),
       );
       prisma.chatChannel.update.mockResolvedValue(

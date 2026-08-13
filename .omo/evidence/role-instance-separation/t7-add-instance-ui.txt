@@ -1,0 +1,80 @@
+T7 追加需求验证：任务详情页「添加实例」入口
+================================================
+日期：2026-08-13
+分支：feature/git-repo-credentials（工作树含 T5/T6/T7 全部改动）
+验证环境：:13001（docker compose up -d --build web 重建，seed-admin/Admin@123456，p_seed_1）
+
+改动文件
+--------
+web/app/(main)/tasks/[id]/page.tsx（唯一改动文件，未动后端/创建页/新依赖）
+
+1. 类型区新增（对齐创建页 T5 模式）：
+   - AgentItem/AgentsResponse（GET /agents 响应契约）
+   - ROLE_AGENT_ID（seed 预置角色 → agent id 兜底映射）
+   - AgentOption/roleOptionsOf（按角色去重取首个，ROLE_KEYS 顺序稳定）
+   - agentIdForRole（API 优先，缺省兜底）
+
+2. MembersPanel 新增「添加实例」交互：
+   - 成员列表下方虚线入口按钮（对齐创建页 add-instance-btn 视觉：1.5px dashed、
+     rgba 白底、＋ 前缀；teamEditable 假时禁用灰 + title 提示后端 409 语义）
+   - 内联展开面板（224px 窄面板紧凑布局，白底卡片 + shadow.sm）：
+     · 角色选择：五角色行（角色色点 + 中文名 + 选中勾），radiogroup/radio 语义，
+       选中态 = 角色主题 bg/border（roles tokens）
+     · 别名输入（可选，placeholder 提示缺省 <角色中文名>-N，服务端生成）
+     · 取消 / 添加按钮（添加 = 主题蓝 #2563EB 实心，未选角色/提交中禁用）
+     · 错误区（红色 #DC2626，对齐页面既有错误提示模式）
+   - 确认回调上抛 onAddInstance：成功才关闭重置；失败保留面板展示错误
+
+3. TaskChatPage：
+   - agentsQuery：GET /agents（queryKey ["agents"] 与创建页共享缓存）
+   - addInstanceMutation：POST /tasks/:id/team { addInstances:[{agentId, alias?}],
+     removeInstanceIds:[] }（T2 契约；任务描述写 PATCH 有误——controller 为
+     @Post('tasks/:id/team')，以实际后端为准）
+   - onSuccess：setQueryData(["task", taskId], 返回的任务详情) + invalidate——
+     members-panel / @ 候选 / issue 指派（数据源同 task.instances）即时联动
+   - onError：isApiError → err.message 展示（404 AGENT_NOT_FOUND / 409 状态冲突）
+   - teamEditable = status pending|in_progress（与后端 409 时间窗一致）
+
+验证结果
+--------
+A. 静态：cd web && npx tsc --noEmit → 0 错误；npm run build → 通过（23 routes）
+
+B. 浏览器主流程（Playwright chrome，/tmp/opencode/t7-add-instance.js）：
+   1) 添加实例入口 visible ✓（＋ 添加实例）
+   2) 角色选项五角色 ✓（产品经理|项目经理|架构师|开发者|测试）
+   3) 选中开发者后确认按钮 enabled ✓
+   4) 确认后成员面板出现 开发者-2（#2 · 就绪）✓ —— 开发者-1/开发者-2/项目经理-1(主)
+   5) @ 候选 = 开发者-1 | 开发者-2 | 项目经理-1 ✓（新实例自动进入）
+   6) issue 指派下拉 = 不指派 | 开发者-1(ta_0000000031) | 开发者-2(ta_0000000032) |
+      项目经理-1(ta_0000000030) ✓（新实例可指派）
+   JS 错误数 = 0
+
+C. 查库（任务 t_0000000010，添加前含 项目经理-1 seq1 + 开发者-1 seq1）：
+   task_agents 新行 ta_0000000032：agent=a_developer、alias=开发者-2（缺省服务端生成）、
+   seq=2（同 agent 最大 seq+1 递增）、removed_at=NULL ✓
+   sessions 新行 s_0000000032：task_agent_id=ta_0000000032（绑新实例）、
+   status=created（pending 任务 joinStatus=created，符合后端语义）✓
+
+D. 错误路径（route 拦截 404，/tmp/opencode/t7-add-instance-error.js）：
+   面板保留打开 + 显示「Agent a_bad_agent 不存在」✓；取消关闭 ✓；JS 错误 0
+
+E. 状态约束（route 伪造 completed，/tmp/opencode/t7-status-guard.js）：
+   入口 disabled ✓ + title「任务待验收/已完成/已归档后不允许调整团队」；
+   强制点击不展开面板 ✓
+
+截图
+----
+/tmp/opencode/t7-shots/
+  01-add-instance-panel.png          添加实例面板（展开，五角色）
+  02-add-instance-role-selected.png  选中「开发者」（主题色高亮）
+  03-members-panel-after-add.png     添加后成员面板（开发者-2 #2）
+  04-mention-candidates.png          @ 候选含开发者-2
+  05-issue-assignee.png              issue 指派下拉含开发者-2
+  06-add-instance-error.png          添加失败错误展示（404 契约）
+
+风险/备注
+---------
+- 任务描述契约写 PATCH /tasks/:id/team，实际后端为 POST（T2 实现）；前端按实际后端 POST 调用
+- 别名仅显式输入才提交，缺省由服务端生成（与创建页 T5 提交契约一致）
+- 新实例在 in_progress 任务 joinStatus=active（后端 T2 语义），前端无需处理
+- GET /agents 失败/未返回时回退 seed 预置 agent id（a_product 等），添加不中断

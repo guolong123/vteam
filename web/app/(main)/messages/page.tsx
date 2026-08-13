@@ -93,12 +93,13 @@ const STATUS_LABEL: Record<TaskApiStatus, string> = {
 /** seed 模板 Agent id → 角色 key（对齐 board AGENT_ID_ROLE）。 */
 const AGENT_ID_ROLE: Record<string, RoleKey> = {
   a_product: "product",
+  a_project_manager: "project_manager",
   a_architect: "architect",
   a_developer: "developer",
   a_tester: "tester",
 };
 
-const ROLE_KEYS: readonly RoleKey[] = ["product", "architect", "developer", "tester"];
+const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
 
 /** agent id / role 字符串 → RoleKey（未知/自定义跳过）。 */
 function toRole(input: string): RoleKey | null {

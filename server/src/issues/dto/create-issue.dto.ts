@@ -41,6 +41,13 @@ export class CreateIssueDto {
   @IsString()
   assigneeAgentId?: string;
 
+  @ApiPropertyOptional({
+    description: '指派实例 id（ta_ 前缀，须在任务团队未 removed，服务层校验；优先于 assigneeAgentId）',
+  })
+  @IsOptional()
+  @IsString()
+  assigneeInstanceId?: string;
+
   @ApiPropertyOptional({ description: '指派用户 id（可选）' })
   @IsOptional()
   @IsString()

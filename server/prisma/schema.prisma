@@ -59,6 +59,8 @@ model User {
   projectMembers ProjectMember[]
   taskCreated    Task[]          @relation("TaskCreator")
   agentsCreated  Agent[]         @relation("AgentCreator")
+  assignedIssues Issue[]         @relation("IssueAssigneeUser")
+  createdIssues  Issue[]         @relation("IssueCreatorUser")
 
   @@map("users")
 }
@@ -123,6 +125,7 @@ model Task {
   priority        String    @default("medium")
   status          String    @default("pending")
   mainAgentId     String?   @map("main_agent_id")
+  mainAgentInstanceId String? @map("main_agent_instance_id") // 主 Agent 实例（决策依据，T2 起维护）
   backgroundDocs  Json?     @map("background_docs")
   createdBy       String    @map("created_by")
   version         Int       @default(0)
@@ -141,22 +144,26 @@ model Task {
   chatChannels       ChatChannel[]
   artifacts          Artifact[]
   taskGroupInstances TaskGroupInstance[]
+  issues             Issue[]
 
   @@index([projectId, status], map: "idx_tasks_project_status")
   @@map("tasks")
 }
 
+// 团队成员 = 实例（同一模板 agent 在任务内可多实例，seq 服务端生成防并发重号）
 model TaskAgent {
   id        String    @id
   taskId    String    @map("task_id")
-  agentId   String    @map("agent_id")
+  agentId   String    @map("agent_id") // 模板 agent（继承 name/role/prompt/model）
+  alias     String? // 实例别名（默认「<角色中文名>-<seq>」，服务端生成）
+  seq       Int       @default(1) // 同 agent 同任务内序号（服务端生成，事务内防并发重号）
   joinedAt  DateTime  @default(now()) @map("joined_at")
   removedAt DateTime? @map("removed_at")
 
   task  Task  @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent Agent @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
-  @@unique([taskId, agentId], map: "uk_task_agents_task_agent")
+  @@unique([taskId, agentId, seq], map: "uk_task_agents_task_agent_seq")
   @@index([taskId, joinedAt], map: "idx_task_agents_task")
   @@map("task_agents")
 }
@@ -185,7 +192,8 @@ model TaskEvent {
 model Session {
   id          String    @id
   taskId      String    @map("task_id")
-  agentId     String    @map("agent_id")
+  taskAgentId String    @map("task_agent_id") // 绑任务实例（每实例独立会话）
+  agentId     String    @map("agent_id") // 保留（角色渲染/模型解析），不再是唯一键维度
   workerId    String?   @map("worker_id")
   instanceRef String?   @map("instance_ref")
   status      String    @default("created")
@@ -196,7 +204,7 @@ model Session {
   agent  Agent   @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   worker Worker? @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
-  @@unique([taskId, agentId], map: "uk_sessions_task_agent")
+  @@unique([taskId, taskAgentId], map: "uk_sessions_task_agent")
   @@map("sessions")
 }
 
@@ -205,10 +213,11 @@ model Session {
 // ==================================================================
 
 model ChatChannel {
-  id         String    @id
-  type       String
-  taskId     String    @map("task_id")
-  agentId    String?   @map("agent_id")
+  id          String    @id
+  type        String
+  taskId      String    @map("task_id")
+  agentId     String?   @map("agent_id") // 保留（角色渲染），不再是唯一键维度
+  taskAgentId String?   @map("task_agent_id") // 私聊频道绑实例；task_group 频道两者均为 NULL
   // UX-09 会话管理（channel 级简化：置顶/已读为频道级标记，非用户粒度——演示平台可接受；
   // 用户级置顶/已读需 ChannelUser 关联表，评估后本期不做）
   pinned     Boolean   @default(false)
@@ -220,7 +229,7 @@ model ChatChannel {
   agent    Agent?    @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   messages Message[]
 
-  @@unique([taskId, agentId], map: "uk_channels_task_agent")
+  @@unique([taskId, taskAgentId], map: "uk_channels_task_agent")
   @@map("chat_channels")
 }
 
@@ -229,6 +238,7 @@ model Message {
   channelId  String   @map("channel_id")
   senderType String   @map("sender_type")
   senderId   String?  @map("sender_id")
+  senderInstanceId String? @map("sender_instance_id") // 消息精确归属实例（agent sender 时为 ta_ 实例 id）
   content    Json
   mentions   Json?
   // UX-10 群聊附件：客户端先 POST /uploads 拿 url，随消息提交（图片/文档均可）
@@ -285,6 +295,41 @@ model ArtifactVersion {
 }
 
 // ==================================================================
+// Issue 域（任务内 issue 管理）
+// ==================================================================
+
+model Issue {
+  id              String    @id
+  taskId          String    @map("task_id")
+  title           String
+  description     String?
+  status          String    @default("open")
+  tags            Json?     @map("tags")
+  assigneeAgentId String?   @map("assignee_agent_id")
+  assigneeInstanceId String? @map("assignee_instance_id") // 指派到具体任务实例（优先于 assigneeAgentId）
+  assigneeUserId  String?   @map("assignee_user_id")
+  // 创建者二选一（Metis B1）：用户经 web/API 创建填 createdBy；
+  // Agent 经 MCP 创建填 creatorAgentId（createdBy 留空），对齐 Message.senderType/senderId 模式
+  createdBy       String?   @map("created_by")
+  creatorAgentId  String?   @map("creator_agent_id")
+  deletedAt       DateTime? @map("deleted_at")
+  resolvedAt      DateTime? @map("resolved_at")
+  closedAt        DateTime? @map("closed_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  task          Task    @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assigneeAgent Agent?  @relation("IssueAssigneeAgent", fields: [assigneeAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assigneeUser  User?   @relation("IssueAssigneeUser", fields: [assigneeUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  creatorAgent  Agent?  @relation("IssueCreatorAgent", fields: [creatorAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  creatorUser   User?   @relation("IssueCreatorUser", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([taskId, status], map: "idx_issues_task_status")
+  @@index([assigneeAgentId], map: "idx_issues_assignee_agent")
+  @@map("issues")
+}
+
+// ==================================================================
 // Agent 域
 // ==================================================================
 
@@ -294,7 +339,8 @@ model Agent {
   type            String
   baseAgentId     String?   @map("base_agent_id")
   role            String?
-  prompt          String
+  // ⚠️ 出厂默认提示词为多段长文本（16 篇 §3~§7 四方向结构），MySQL 需 TEXT 承载
+  prompt          String    @db.Text
   defaultModelId  String?   @map("default_model_id")
   // 首选 worker 软绑定（可空，null=自动调度；离线自动回退，Metis R1）
   workerId        String?   @map("worker_id")
@@ -315,6 +361,8 @@ model Agent {
   channels          ChatChannel[]
   authoredArtifacts ArtifactVersion[]  @relation("ArtifactAuthor")
   mainTasks         Task[]             @relation("TaskMainAgent")
+  assignedIssues    Issue[]            @relation("IssueAssigneeAgent")
+  createdIssues     Issue[]            @relation("IssueCreatorAgent")
 
   @@map("agents")
 }
@@ -554,4 +602,31 @@ model RealtimeEvent {
   @@index([scopeType, scopeId, id], map: "idx_realtime_events_scope_id")
   @@index([projectId], map: "idx_realtime_events_project_id")
   @@map("realtime_events")
+}
+
+// ==================================================================
+// 模型提问 / 工具权限确认域（worker 检测 serve pending → 落库 → 前端弹窗 → reply 收敛）
+// ==================================================================
+
+model AgentQuestion {
+  id         String   @id
+  // serve question/permission 请求 id（que_ / per_ 前缀，worker 检测上报的 requestId/permissionId）
+  requestId  String   @unique @map("request_id")
+  // 平台 Session 主键（s_ 前缀，ingress resolvePlatformSessionId 归一后落库；reply 时反查 instanceRef 调 worker）
+  sessionId  String   @map("session_id")
+  taskId     String   @map("task_id")
+  agentId    String   @map("agent_id")
+  // question | permission（worker 事件类型区分，两种确认共用一张表）
+  kind       String
+  // questions 数组（kind=question）或 {title, pattern, type}（kind=permission）
+  content    Json
+  // pending | resolved | rejected（resolved=已答复，rejected=用户拒绝）
+  status     String   @default("pending")
+  // 用户答复（kind=question: Array<Array<string>> label 数组；kind=permission: {response}）
+  answers    Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@index([taskId, status], map: "idx_agent_questions_task_status")
+  @@map("agent_questions")
 }

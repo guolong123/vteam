@@ -1,0 +1,139 @@
+F3 Real Manual QA（角色/实例分离）· 证据
+==========================================
+日期：2026-08-13
+环境：:13001 web / :13000 server（docker compose 已重建最新代码，13 分钟前启动）
+账号：seed-admin/Admin@123456，项目 p_seed_1
+方式：Playwright chrome 真实浏览器全链路走查 + 查库佐证 + 每场景截图
+结论：8 场景 7 PASS / 1 FAIL（场景6 私聊消息串扰），发现 1 个验收级缺陷 → REJECT
+
+测试任务：t_0000000011「F3 双开发者端到端走查任务」（新建）
+实例：ta_0000000033 项目经理-1（主）| ta_0000000034 开发者-1 | ta_0000000035 开发者-2
+      ta_0000000036 测试-1（场景3 后添加）
+频道：c_0000000024 task_group | c_0000000025 private(ta_34 开发者-1) | c_0000000026 private(ta_35 开发者-2)
+issue：is_0000000024 指派 ta_0000000035
+
+一、场景清单（逐项 PASS/FAIL）
+-------------------------------
+S1 创建页实例选择
+   ✓ 主Agent下拉默认=inst-project_manager-1，项目经理卡主标记有、主行=1
+   ✓ 添加开发者实例 → 开发者-1,开发者-2
+   ✓ 改名第二个实例 → 开发者-1,开发者-Beta
+   ✓ 移除 → 行数 2→1，剩 开发者-1
+   ✓ 恢复 → 开发者-1,开发者-2
+   PASS
+
+S2 创建双开发者任务（项目经理-1主 + 开发者-1 + 开发者-2）
+   ✓ 创建成功跳转 /tasks/t_0000000011
+   PASS
+
+S3 详情成员面板
+   ✓ 三实例独立展示 [开发者-1#1 就绪 | 开发者-2#2 就绪 | 项目经理-1★主Agent#1 就绪]
+   ✓ 主 Agent 徽章数=1，徽章在项目经理-1
+   ✓ 添加实例入口「＋添加实例」可见，五角色选项
+   ✓ 添加测试-1 → 面板出现 [.. | 测试-1#1]
+   PASS
+
+S4 群聊 @
+   ✓ @候选=[开发者-1 | 开发者-2 | 项目经理-1 | 测试-1] 按实例分列
+   ✓ @开发者-1 → 仅开发者-1「处理中」loading（查库 ACK m_253 sender_instance_id=ta_34）
+   ✓ @开发者-2 → 开发者-2「处理中」（ACK m_255 sender_instance_id=ta_35）
+   ✓ 群聊全部 agent 消息 sender_instance_id 精确（m_260→ta_34 / m_261→ta_35）
+   PASS
+
+S5 群聊无 @
+   ✓ 无@消息 → 主实例项目经理-1「处理中」loading
+   ✓ 群聊出现主实例 ACK「收到，正在处理…」（m_257 sender_instance_id=ta_33）
+   ✓ 主实例回复落库（m_258 sender_instance_id=ta_33）
+   PASS
+
+S6 私聊独立
+   ✗ 频道创建独立 ✓（c_0000000025=ta_34 / c_0000000026=ta_35，两 URL 不同）
+   ✗ 但消息串扰（缺陷，见第三节）：开发者-2 的处理总结 m_0000000262
+     (sender_instance_id=ta_35) 被写入开发者-1 私聊频道 c_0000000025；
+     开发者-2 自己的私聊频道 c_0000000026 无任何消息。
+     UI 实测：c_0000000025 页面显示开发者-2 的内容（含「上下文已掌握…」总结），
+     c_0000000026 页面为空白。
+   FAIL
+
+S7 issue 指派
+   ✓ 指派下拉按实例分列 [不指派 | 开发者-1(ta_34) | 开发者-2(ta_35) | 项目经理-1(ta_33) | 测试-1(ta_36)]
+   ✓ 指派开发者-2 → value=ta_0000000035，查库 issues.assignee_instance_id=ta_35
+   ✓ 列表显示「指派：开发者-2（开发者）」
+   PASS
+
+S8 回归
+   ✓ 存量任务 t5 详情页正常渲染（全栈开发★主 + 项目经理-1）
+   ✓ 单实例任务 t10 正常渲染（开发者-1/开发者-2/项目经理-1★主）
+   ✓ 全部页面 JS 错误 = 0（new/detail/issues/dm 各页 console 检查）
+   PASS
+
+二、查库佐证（关键点）
+-----------------------
+- sessions 按实例独立：s_33→ta_33 / s_34→ta_34 / s_35→ta_35 / s_36→ta_36 ✓
+- chat_channels 私聊两频道 task_agent_id 不同：c_25→ta_34 / c_26→ta_35 ✓
+- messages sender_instance_id 群聊精确：ACK/回复各自实例 ✓
+- issue assignee_instance_id=ta_0000000035 ✓
+- 【缺陷】messages 私聊归属错：c_0000000025 内 sender_instance_id 混入 ta_0000000035 ✗
+
+三、缺陷（REJECT 依据）
+-----------------------
+标题：双开发者任务私聊消息串扰——开发者-2 的处理内容落入开发者-1 私聊频道
+现象（本任务 t_0000000011）：
+  messages 表 c_0000000025（开发者-1 私聊）含 2 条：
+    m_0000000259 sender=ta_0000000034（开发者-1，正确）
+    m_0000000262 sender=ta_0000000035（开发者-2，错误！应为 c_0000000026）
+  c_0000000026（开发者-2 私聊）0 条消息。
+  UI 实测：开发者-1 私聊页混入开发者-2 总结，开发者-2 私聊页空白。
+存量复现（T6 任务 t_0000000009，T6 证据曾称「两频道独立」）：
+  c_0000000020（ta_0000000028 开发者-1）混入 ta_0000000029（开发者-2）消息；
+  c_0000000021（开发者-2）0 条。→ 该缺陷在 T6 修复后仍存在，非本次引入。
+
+根因（代码定位）：
+  1) server/src/workers/worker-event.ingress.ts handleMessagePartDelta（:504-510）
+     privateTarget = chatChannel.findFirst({taskId, agentId})
+     —— 按 agentId 定位 private 频道，同 agent 多实例时 findFirst 命中
+     第一个实例的频道（c_25 开发者-1），开发者-2 的流式处理消息被错误写入。
+  2) server/src/chat/worker-dispatcher.ts resolveChannel（:1757-1770）
+     findFirst({taskId, agentId}) —— 终态化回复同理串到首个实例频道。
+  T6 修复 B 只让 createDmChannel 按 taskAgentId 幂等创建（频道创建独立），
+  但流式处理/终态化回复的频道定位仍按 agentId findFirst，未按 taskAgentId
+  精确命中各自实例频道 → 修复不完整。
+
+影响：用户打开开发者-1 私聊会看到开发者-2 的内部处理内容（隐私/归属错误），
+      开发者-2 私聊缺失自身处理过程。违反「私聊按实例独立」验收语义。
+
+修复方向（F3 只测不改，供参考）：
+  privateTarget/resolveChannel 定位 private 频道时按 taskAgentId 精确匹配
+  （优先 session.taskAgentId → chatChannel.findFirst({taskId, taskAgentId})，
+   缺省回退现状 agentId 首实例兼容路径）。
+
+四、JS 错误报告
+---------------
+全部页面 JS 错误 = 0（S1-S8 全链路 console 检查，含 new/detail/issues/dm）
+
+五、截图清单（/tmp/opencode/f3-shots/）
+---------------------------------------
+S1-create-page-default.png       创建页默认（主Agent=项目经理）
+S1-add-dev-2.png                 添加开发者-2
+S1-rename.png                    改名开发者-Beta
+S1-remove.png                    移除后剩开发者-1
+S1-restore.png                   恢复双实例
+S2-created-redirect.png          创建成功跳转详情
+S3-members-panel.png             成员面板三实例（主徽章项目经理-1）
+S3-after-add-tester.png          添加测试-1 后
+S4-mention-candidates.png        @候选按实例分列
+S4-at-dev1.png / S4-loading-dev1.png   @开发者-1 触发
+S4-at-dev2.png / S4-loading-dev2.png   @开发者-2 触发
+S5-no-at-main-ack.png            无@主实例 ACK
+S6-dm-dev1.png / S6-dm-dev2.png  两个私聊频道（URL 独立）
+S7-issue-assignee.png            issue 指派下拉按实例分列
+S7-issue-list.png                issue 列表显示实例别名
+S8-legacy-task.png               存量任务 t5 详情
+S8-single-task.png               单实例任务 t10
+DEFECT-c25-dev1-dm-contaminated.png   【缺陷】开发者-1 私聊混入开发者-2 内容
+DEFECT-c26-dev2-dm-empty.png         【缺陷】开发者-2 私聊为空
+
+六、测试数据（保留供复现，未清理）
+----------------------------------
+任务 t_0000000011（F3 双开发者端到端走查任务）
+实例 ta_0000000033~36；频道 c_0000000024~26；issue is_0000000024；消息 m_251~262

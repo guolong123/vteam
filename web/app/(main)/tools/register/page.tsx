@@ -388,7 +388,7 @@ export default function ToolRegisterPage() {
   const [version, setVersion] = useState("");
 
   /* 绑定角色（受控多选：点击切换勾选态，data-bound 联动；初始不预勾选） */
-  const allRoles: RoleKey[] = ["product", "architect", "developer", "tester"];
+  const allRoles: RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
   const [boundRoles, setBoundRoles] = useState<RoleKey[]>([]);
   const toggleRole = (r: RoleKey) =>
     setBoundRoles((prev) =>
@@ -580,6 +580,7 @@ export default function ToolRegisterPage() {
 
   const ROLE_LABEL: Record<RoleKey, string> = {
     product: "产品经理",
+    project_manager: "项目经理",
     architect: "架构师",
     developer: "开发者",
     tester: "测试",

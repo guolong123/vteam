@@ -98,12 +98,13 @@ const ACCEPTED_OPTIONS: { key: string; label: string }[] = [
 /** seed 模板 Agent id → 角色 key（对齐 board 页 AGENT_ID_ROLE 范式）。 */
 const AGENT_ID_ROLE: Record<string, RoleKey> = {
   a_product: "product",
+  a_project_manager: "project_manager",
   a_architect: "architect",
   a_developer: "developer",
   a_tester: "tester",
 };
 
-const ROLE_KEYS: readonly RoleKey[] = ["product", "architect", "developer", "tester"];
+const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
 
 /* ------------------------------ API 数据模型（T6/T14 契约） ------------------------------ */
 /** GET /projects/:pid/tasks 条目（仅取下拉/任务名所需字段）。 */
@@ -324,7 +325,10 @@ function ArtifactFileView({ version }: { version: ArtifactVersionDto }) {
   const displayName =
     version.fileName || fileUrl.split(/[\\/]/).pop() || fileUrl;
   const sizeLabel = formatBytes(version.fileSize ?? null);
-  const accessible = isAccessibleFileRef(fileUrl);
+  // P2：/uploads/ 前缀 + fileSize==null（后端 statSync 失败信号）→ 磁盘文件实际不存在，
+  // URL 虽可解析但点击 404 → 并入不可访问判定走纯文本降级
+  const fileMissing = fileUrl.startsWith("/uploads/") && version.fileSize == null;
+  const accessible = isAccessibleFileRef(fileUrl) && !fileMissing;
   const isImage = PREVIEW_IMAGE_EXTS.has(ext);
   // 同源 /uploads/ 引用可触发浏览器 download；外部 URL download 无效 → 仅新标签打开
   const canDownload = fileUrl.startsWith("/uploads/");

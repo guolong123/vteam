@@ -5,13 +5,21 @@ import { ISSUE_STATUS } from '../issues.constants';
 
 /**
  * GET /issues 查询参数（issue-management plan todo 2）。
- * taskId 必填（issue 仅任务绑定）；status/assigneeAgentId 可选过滤；
- * 分页对齐 tasks 看板（page 默认 1、pageSize 默认 20）。
+ * taskId 与 projectId 二选一（taskId 优先，均缺 → 400）：
+ * - taskId：按单任务过滤（任务成员校验）；
+ * - projectId：按项目过滤（issue.task.projectId 命中该项目的全部任务 issue，项目成员校验）。
+ * status/assigneeAgentId 可选过滤；分页对齐 tasks 看板（page 默认 1、pageSize 默认 20）。
  */
 export class QueryIssuesDto {
-  @ApiProperty({ description: '任务 id（必填，按任务过滤）' })
+  @ApiPropertyOptional({ description: '任务 id（按任务过滤，与 projectId 二选一）' })
+  @IsOptional()
   @IsString()
-  taskId: string;
+  taskId?: string;
+
+  @ApiPropertyOptional({ description: '项目 id（按项目下全部任务过滤，与 taskId 二选一）' })
+  @IsOptional()
+  @IsString()
+  projectId?: string;
 
   @ApiPropertyOptional({
     description: '状态筛选（open/in_progress/resolved/closed）',

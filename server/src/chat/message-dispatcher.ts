@@ -19,6 +19,9 @@ export interface DispatchTarget {
   agentId: string;
   /** 任务×Agent 会话 id（sessions 表 uk_sessions_task_agent）。 */
   sessionId: string | null;
+  /** T6 实例语义：目标实例 id（TaskAgent.id，ta_ 前缀）。同 agent 多实例时
+   * 用于 loading 广播按实例下发、回复落库 senderInstanceId 精确归属。 */
+  instanceId?: string | null;
 }
 
 export interface DispatchRequest {
@@ -46,6 +49,7 @@ export interface DispatchResult {
 export interface DispatcherLoadingEvent {
   taskId: string;
   agentId: string;
+  instanceId?: string | null;
   sessionId: string | null;
   phase: 'thinking' | 'operating';
 }

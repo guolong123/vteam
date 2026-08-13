@@ -28,11 +28,21 @@ import {
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-/** 可 @ 的候选 Agent（对齐 GET /api/v1/agents 返回的 { id, name, role } 结构） */
+/**
+ * 可 @ 的候选 Agent。
+ * - 单 Agent 语义（存量）：对齐 GET /api/v1/agents 返回的 { id, name, role }，id=agent id。
+ * - 实例语义（T5 角色/实例分离）：同一 agent 可多实例，候选按**实例**列出（name=实例别名，
+ *   如 开发者-1/开发者-2），id=agent id（文本匹配/发送映射兼容），instanceId=实例 id
+ *   （ta_ 前缀，候选 key 与 mentions 落库结构唯一来源），agentId=模板 agent id。
+ */
 export interface MentionableAgent {
   id: string;
   name: string;
   role: RoleKey;
+  /** 任务实例 id（ta_ 前缀；多实例场景必填，候选 key 唯一标识）。 */
+  instanceId?: string;
+  /** 模板 agent id（与 id 相同；提交 mentions 时按 agentId 映射，对齐后端 CreateMessageDto）。 */
+  agentId?: string;
 }
 
 /** 已插入文本的 mention 记录（T13 落库 / 分派时按 id 解析） */
@@ -239,7 +249,7 @@ export function MessageInput({
     const text = roleText[agent.role] ?? roleText.product;
     return (
       <button
-        key={agent.id}
+        key={agent.instanceId ?? agent.id}
         type="button"
         data-role={agent.role}
         onMouseDown={(e: MouseEvent<HTMLButtonElement>) => e.preventDefault()}

@@ -4,7 +4,9 @@ import { TASK_PRIORITY } from '../../common/constants/task.constants';
 
 /**
  * PATCH /tasks/:id 请求体（09 篇 §3.4 Tasks 编辑）。
- * mainAgentId 服务层校验须为团队内已选 Agent（FR-08）；传 null 表示清除主 Agent。
+ * mainAgentInstanceId 为主实例（决策依据，须为团队内实例）；mainAgentId 保留兼容映射
+ * （服务层校验须为团队内实例对应 agent，并同步映射 mainAgentInstanceId）。
+ * 传 null 表示清除主 Agent。
  */
 export class UpdateTaskDto {
   @ApiPropertyOptional({ description: '任务标题', maxLength: 128 })
@@ -27,7 +29,16 @@ export class UpdateTaskDto {
   priority?: string;
 
   @ApiPropertyOptional({
-    description: '主 Agent id（须为团队内已选 Agent，FR-08）',
+    description:
+      '主 Agent 实例 id（FR-08，须为团队内实例；传 null 表示清除主 Agent）',
+  })
+  @IsOptional()
+  @IsString()
+  mainAgentInstanceId?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      '主 Agent id（FR-08 兼容映射：未传 mainAgentInstanceId 时按其映射到该 agent 第一个实例；须为团队内实例对应 agent）',
   })
   @IsOptional()
   @IsString()

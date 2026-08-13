@@ -1,0 +1,55 @@
+================================================================================
+T8 群聊无 @ 消息自动路由主 Agent — 行为实证（2026-08-13）
+================================================================================
+实现：chat.service.createMessage 步骤 2.5 —— 仅 channel.type=task_group 且
+triggers 为空（用户未 @ 任何人）时，解析任务主实例并追加 trigger：
+  - task.mainAgentInstanceId 优先（须在任务团队内，未 removed）
+  - 缺省回退 task.mainAgentId 第一个未移除实例（taskAgent.findFirst seq 升序）
+  - 主实例已 removed / 无主实例配置 / 配置不存在于团队 → 不触发（triggers 空）
+  - 有 @ 消息（triggers 非空）→ 不追加；private 频道不路由
+  - 命中未移除实例 → 复用 buildTrigger（按 taskAgentId 查会话 → dispatched/no_session）
+  - resolveChannelAccess 的 CHANNEL_TASK_SELECT 扩展 select mainAgentInstanceId+mainAgentId
+
+实证环境：docker compose server 容器（13000），t_0000000005 主实例=ta_0000000013
+（a_developer 开发者-1，会话 s_0000000013）；t_0000000004 无主实例。
+
+--------------------------------------------------------------------------------
+场景 A：task_group 无 @ → 主实例 trigger（dispatched）+ ACK + 回复落库
+--------------------------------------------------------------------------------
+POST /api/v1/channels/c_0000000011/messages（task t_0000000005，主实例 ta_0000000013）
+  {"text":"T8-实证-无@消息自动路由主实例"}（无 mentions）
+→ 201 triggers:
+  [{"agentId":"a_developer","instanceId":"ta_0000000013",
+    "sessionId":"s_0000000013","status":"dispatched"}]
+查库 messages 表（channel_id=c_0000000011）：
+  m_0000000243  agent  a_developer  sender_instance_id=ta_0000000013  收到，正在处理…   ← ACK（主实例）
+  m_0000000245  agent  a_developer  sender_instance_id=ta_0000000013  【T8-实证通过】…无@消息自动路由主实例机制验证通过。  ← 主实例回复到群聊
+
+--------------------------------------------------------------------------------
+场景 B：有 @ → 仅 @ 目标，不叠加主实例
+--------------------------------------------------------------------------------
+POST /api/v1/channels/c_0000000011/messages
+  {"text":"T8-实证-带@项目经理-1",
+   "mentions":[{"type":"agent","agentId":"a_project_manager","instanceId":"ta_0000000012"}]}
+→ 201 triggers:
+  [{"agentId":"a_project_manager","instanceId":"ta_0000000012",
+    "sessionId":"s_0000000012","status":"dispatched"}]
+查库：m_0000000247 ACK（sender_instance_id=ta_0000000012）+ m_0000000248 回复（项目经理-1）。
+  主实例 ta_0000000013 未收到该消息（不叠加 ✓）。
+
+--------------------------------------------------------------------------------
+场景 C：任务无主实例 → 无 @ 不触发（仅落库广播）
+--------------------------------------------------------------------------------
+POST /api/v1/channels/c_0000000010/messages（task t_0000000004，mainAgent 均 NULL）
+  {"text":"T8-实证-无主实例任务-无@不触发"}
+→ 201 triggers: []（消息 m_0000000249 落库广播，无 ACK 无分派）
+
+--------------------------------------------------------------------------------
+自动化验证
+--------------------------------------------------------------------------------
+server: npx tsc --noEmit → 0 错误
+npx jest src/chat/chat.service.spec.ts → 50/50 通过
+  （新增 T8 6 用例：主实例 dispatched+ACK instanceId / 主实例 removed 不触发 /
+   有@不叠加 / private 不路由 / mainAgentId 回退第一实例 / 主实例不在团队不触发）
+npx jest（全量）→ 56 suites / 1114 tests 通过
+================================================================================

@@ -1,0 +1,65 @@
+# 主 Agent 动态注入 + 团队信息进全局上下文（main-agent-dynamic）
+
+日期：2026-08-13
+分支：feature/git-repo-credentials
+验证人：Sisyphus-Junior
+
+## 背景与目标
+
+用户两项后端改造需求：
+
+1. ① 主 Agent 不再在 agent 提示词里写死，应随用户选择（Task.mainAgentId）动态注入
+2. ② agent 直接读取全局上下文时应包含团队成员信息，以便了解当前任务与谁合作
+
+## 改动摘要
+
+### 1. seed.ts —— 移除模板 prompt 写死的「主 Agent/牵头协调者」（4 处）
+
+| 位置 | 原表述 | 改后 |
+|------|--------|------|
+| a_product 开场 | 担任任务的主 Agent（任务负责人） | （删除，保留「负责需求拆解与文档化」） |
+| a_product 协同方式 | 作为主 Agent 牵头分工、协调产出衔接 | 在任务推进中协调产出衔接，环节切换或产出完成时主动在群聊提示进度（FR-08） |
+| a_project_manager 开场 | 担任任务的牵头协调者（主 Agent） | （删除，保留「负责项目的组织、排期与推进」） |
+| a_project_manager 协同方式 | 作为主 Agent 在环节间协调产出衔接 | 在环节间协调产出衔接，必要时 @ 相关角色提示进度（FR-13，互 @ 不超 3 轮） |
+
+其余职责/权限/工作方式/协同内容保持不变；模板只描述角色本职，牵头/协调/汇总职责随运行时 mainAgentId 动态下发。
+
+### 2. worker-dispatcher.ts —— 运行时动态注入
+
+- 新增导出 `MAIN_AGENT_INSTRUCTION` 常量：主 Agent 动态职责段（牵头拆解分派、协调产出衔接、群聊进度提示 FR-08、notify_agent/群聊 @ 协调 FR-13、汇总验收材料 FR-11）
+- 新增导出 `TeamMemberInfo` 接口（id/name/role）+ `BuildSystemInstructionsOptions`（isMainAgent/team/mainAgentId）
+- `buildSystemInstructions(agent, opts?)` 扩展签名（向后兼容单参调用）：isMainAgent=true 追加主 Agent 职责段；team 非空追加【团队成员】段（id/名称/角色，主 Agent 成员标注「—— 主 Agent」）
+- `dispatchForTarget`（原 :929-950 区域）：新增一次轻量 `prisma.task.findUnique`（select 仅 mainAgentId + taskAgents.agent 三字段，hot path 最小化），`isMainAgent = task.mainAgentId === target.agentId`，团队从 taskAgents→agent 提取，经 system 通道传给 buildSystemInstructions——不进入聊天记录，符合「全局上下文」语义
+
+## 验证
+
+1. server `npx tsc --noEmit` → 0 错误
+2. `npx jest chat/worker-dispatcher.spec.ts prisma/seed.spec.ts` → 2 suites / 102 tests 全过
+   - 新增断言：buildSystemInstructions 三态（普通不含主 Agent/团队段、isMainAgent 追加职责段、带团队注入【团队成员】段+主 Agent 标注）、dispatch 主 Agent 目标注入职责段、非主 Agent 目标只注入团队段（标注他人为主 Agent）、task 行不存在降级为纯身份、seed 5 模板 prompt 均不含主 Agent/牵头协调者
+3. seed 落库验证（docker compose up -d --build init，exit 0）：
+
+```
+SELECT id, role, LOCATE('主 Agent', prompt) AS hit_main, LOCATE('牵头协调者', prompt) AS hit_leader
+FROM agents WHERE type='template';
+id                role              hit_main  hit_leader
+a_architect       architect         0         0
+a_developer       developer         0         0
+a_product         product           0         0
+a_project_manager project_manager   0         0
+a_tester          tester            0         0
+```
+
+四方向结构保留（## 职责 / ## 协同方式 均命中，职责在前）。
+
+## 关键决策
+
+- 团队/主 Agent 注入走 system 通道（buildSystemInstructions），不拼 user prompt——避免进入聊天记录
+- GLOBAL_SYSTEM_INSTRUCTIONS 常量保持不动（其他调用方兼容）
+- dispatch 是 hot path：task 查询只 select 必要字段（mainAgentId + taskAgents.agent 三字段），不整行拉取
+- spec 中 prisma mock 默认 `task.findUnique` 不设返回值 → isMainAgent=false + team=[]，既有 100 个测试断言不受影响；需要注入的用例单独 mockResolvedValue
+- 团队段标注主 Agent 需额外传 mainAgentId（buildSystemInstructions 内部按成员 id 匹配标注），扩展签名不破坏原单参调用
+
+## 明确保留（运行时动态语义正确，不重复改）
+
+- tasks.service.ts start 私信文案「任务已启动，请作为主 Agent 牵头推进」是运行时消息（动态拼 mainAgentName），保留
+- Task/TaskAgent schema（mainAgentId 已存在）、前端主 Agent 选择/展示均不动

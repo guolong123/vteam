@@ -39,6 +39,13 @@ export class UpdateIssueDto {
   @IsString()
   assigneeAgentId?: string | null;
 
+  @ApiPropertyOptional({
+    description: '指派实例 id（null 清除；变更须在任务团队未 removed，优先于 assigneeAgentId）',
+  })
+  @IsOptional()
+  @IsString()
+  assigneeInstanceId?: string | null;
+
   @ApiPropertyOptional({ description: '指派用户 id（null 清除）' })
   @IsOptional()
   @IsString()
