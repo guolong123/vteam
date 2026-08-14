@@ -162,6 +162,8 @@ model TaskAgent {
 
   task  Task  @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent Agent @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  // 每实例独立会话（10 篇 §3.3；任务详情 instances 需回传会话状态 sessionStatus，真实状态源）
+  sessions Session[]
 
   @@unique([taskId, agentId, seq], map: "uk_task_agents_task_agent_seq")
   @@index([taskId, joinedAt], map: "idx_task_agents_task")
@@ -203,6 +205,8 @@ model Session {
   task   Task    @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent  Agent   @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   worker Worker? @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  // 绑任务实例（task_agent_id 已存在列，仅补 Prisma 关系便于任务详情 include sessions 状态）
+  taskAgent TaskAgent @relation(fields: [taskAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([taskId, taskAgentId], map: "uk_sessions_task_agent")
   @@map("sessions")

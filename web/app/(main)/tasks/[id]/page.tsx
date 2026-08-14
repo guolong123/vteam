@@ -84,6 +84,10 @@ interface TaskInstance {
   name: string;
   role: string | null;
   main: boolean;
+  /** 会话状态快照（sessions.status 真实源：running=工作中 / idle=空闲；无会话=null）。 */
+  sessionStatus: string | null;
+  /** 实例会话 id（SSE session.updated 收敛映射需 sessionId→instanceId 建链）。 */
+  sessionId: string | null;
 }
 
 /** GET /tasks/:id 任务详情（不含 channelId，见文件头「频道定位」）。 */
@@ -1090,7 +1094,7 @@ function MessageList({
         }}
       >
         <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>⚙</span>
-        Agent 内部推理过程不广播到群聊，仅最终回复展示；点击右侧「查看 Agent 会话」可实时查看处理过程
+        Agent 内部推理过程不广播到群聊，仅最终回复展示
       </div>
     </div>
   );
@@ -1478,46 +1482,6 @@ function TaskPanel({
         <TaskStatusActions taskId={task.id} status={task.status} />
       </div>
 
-      {/* 查看 Agent 会话入口（占位） */}
-      <div style={{ marginTop: "auto" }}>
-        <div
-          style={{
-            padding: space.lg,
-            borderRadius: radius.lg,
-            backgroundColor: neutral[50],
-            border: `1px dashed ${neutral[300]}`,
-          }}
-        >
-          <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], marginBottom: space.xs }}>
-            查看 Agent 会话
-          </div>
-          <div style={{ fontSize: fontSize.xs, color: neutral[500], lineHeight: 1.6, marginBottom: space.md }}>
-            Agent 内部处理过程不广播到群聊，点击下方入口可实时查看其思考与执行步骤。
-          </div>
-          <div
-            data-testid="view-session-link"
-            role="link"
-            aria-label="查看 Agent 会话"
-            title="会话面板（Phase 3）"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: space.xs,
-              padding: `${space.sm}px ${space.lg}px`,
-              borderRadius: radius.pill,
-              backgroundColor: "#2563EB",
-              color: "#FFFFFF",
-              fontSize: fontSize.md,
-              fontWeight: 500,
-              cursor: "pointer",
-              boxShadow: shadow.sm,
-            }}
-          >
-            打开会话面板
-            <span aria-hidden>→</span>
-          </div>
-        </div>
-      </div>
     </aside>
   );
 }
@@ -1690,6 +1654,34 @@ export default function TaskChatPage() {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, []);
+
+  /**
+   * 会话状态初始快照（T14）：SSE 增量驱动重连不重放 running，切页回来 sessionByAgent
+   * 重置为空 → 执行中 Agent 误显「就绪」。挂载时以任务详情 instances.sessionStatus
+   * （sessions.status 真实源）填充一次：仅补缺失 key（不覆盖已到的 SSE 实时状态），
+   * 同时按 sessionId 建 session→instance 映射，保证后续 session.updated idle 能收敛。
+   */
+  const sessionSeedRef = useRef(false);
+  useEffect(() => {
+    if (!task?.instances?.length || sessionSeedRef.current) return;
+    sessionSeedRef.current = true;
+    setSessionByAgent((prev) => {
+      let next: Record<string, string> | null = null;
+      for (const inst of task.instances) {
+        if (inst.sessionStatus && !(inst.id in prev)) {
+          if (!next) next = { ...prev };
+          next[inst.id] = inst.sessionStatus;
+        }
+      }
+      return next ?? prev;
+    });
+    for (const inst of task.instances) {
+      if (inst.sessionId) {
+        agentIdBySessionRef.current[inst.sessionId] = inst.agentId;
+        instanceIdBySessionRef.current[inst.sessionId] = inst.id;
+      }
+    }
+  }, [task]);
 
   /* ---------- 5. SSE 实时（单连接多 scope，逗号分隔：channel + task + global） ---------- */
   // 后端 realtime.controller 支持逗号分隔多 scope（scope=channel:<id>,task:<id>,global），
@@ -2193,6 +2185,7 @@ export default function TaskChatPage() {
           onSend={handleSend}
           mentionable={mentionable}
           sending={sendMutation.isPending}
+          taskId={taskId}
           placeholder="输入消息，@ 提及某个 Agent…"
           style={{ border: "none", borderTop: `1px solid ${neutral[200]}`, borderRadius: 0 }}
         />

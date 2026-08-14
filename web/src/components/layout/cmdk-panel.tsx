@@ -53,8 +53,6 @@ export const DEFAULT_CMDK_ITEMS: CmdKItem[] = [
   { group: "导航", label: "用户管理", icon: "☷" },
   { group: "导航", label: "角色权限", icon: "⚖" },
   { group: "操作", label: "新建任务", icon: "＋" },
-  { group: "操作", label: "查看产出物", icon: "▦" },
-  { group: "操作", label: "查看 Agent 会话", icon: "◷" },
 ];
 
 const navAnimStyle = `

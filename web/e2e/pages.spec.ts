@@ -63,7 +63,6 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("dm-chat-root")).toBeVisible();
     await expect(page.getByTestId("dm-agent-info")).toBeVisible();
     await expect(page.getByTestId("chat-message-list")).toBeVisible();
-    await expect(page.getByTestId("view-session-link")).toBeVisible();
     // 错误操作链接（条件渲染：agent.error → quota 分支出现 msg-error-action）
     const errAction = page.getByTestId("msg-error-action");
     if ((await errAction.count()) > 0) {
