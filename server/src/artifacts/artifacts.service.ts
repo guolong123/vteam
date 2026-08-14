@@ -161,9 +161,19 @@ export class ArtifactsService implements OnModuleInit {
     }
 
     // 归档：同 taskId+type+title → append 新版本（FR-43）；否则新建 v1
-    const contentRef =
-      type === 'text' ? content : (submission.fileRef ?? content);
-    const filePath = type === 'doc' || type === 'file' ? (submission.fileRef ?? null) : null;
+    // P2：doc/file 且携带真实内容（worker 完成回流上送的文件正文）→ 落盘 uploads
+    // 目录生成可访问 URL，替换 worker 容器路径占位（/tmp/opencode/...）——
+    // 前端下载链接不再 404（原 Phase 3「doc/file 存 fileRef 路径占位」缺陷修复）。
+    let contentRef = type === 'text' ? content : (submission.fileRef ?? content);
+    let filePath = type === 'doc' || type === 'file' ? (submission.fileRef ?? null) : null;
+    if ((type === 'doc' || type === 'file') && content.trim()) {
+      const stored = await FileStorageService.saveTextFile(
+        content,
+        this.fileNameFromRef(submission.fileRef, title),
+      );
+      contentRef = stored.url;
+      filePath = stored.url;
+    }
 
     const { artifact, current } = await this.prisma.$transaction(
       async (tx) => {
@@ -516,6 +526,15 @@ export class ArtifactsService implements OnModuleInit {
   private normalizePage(page?: number): number {
     const p = Number(page ?? 1);
     return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
+  }
+
+  /** P2：从 fileRef/标题派生落盘原始文件名（fileRef 路径尾段优先；无扩展名 → 标题兜底）。 */
+  private fileNameFromRef(fileRef: string | undefined, title: string): string {
+    const base = fileRef ? (fileRef.split(/[\\/]/).pop() ?? '') : '';
+    if (base && FileStorageService.extractExtension(base)) {
+      return base;
+    }
+    return title.trim() || 'artifact';
   }
 
   private normalizePageSize(pageSize?: number): number {

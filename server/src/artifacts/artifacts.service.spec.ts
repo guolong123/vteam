@@ -4,9 +4,12 @@ import {
   ArtifactsService,
   validateArtifactDeclaration,
 } from './artifacts.service';
+import { FileStorageService } from '../uploads/uploads.service';
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const FIXED_DATE = new Date('2026-08-07T00:00:00.000Z');
+/** P2：saveTextFile 固定返回（避免单测真实写盘，断言 contentRef/filePath 用该 URL）。 */
+const STORED_URL = '/uploads/stored-00000000-0000-4000-8000-000000000000.md';
 
 describe('ArtifactsService', () => {
   let prisma: Record<string, any>;
@@ -48,6 +51,14 @@ describe('ArtifactsService', () => {
 
   beforeEach(() => {
     service = createService();
+    // P2：mock 静态落盘（doc/file 有内容时归档走 saveTextFile，单测不真实写盘）
+    jest
+      .spyOn(FileStorageService, 'saveTextFile')
+      .mockResolvedValue({ url: STORED_URL, name: 'stored.md', size: 5, ext: 'md' });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   describe('onModuleInit', () => {
@@ -260,12 +271,13 @@ describe('ArtifactsService', () => {
         where: { id: 'art_0000000001' },
         data: { currentVersion: 2 },
       });
+      // P2：doc 携带内容 → 落盘 uploads，contentRef/filePath 指向控制面可达 URL
       expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           artifactId: 'art_0000000001',
           version: 2,
-          contentRef: 'mock://t_0000000001/2',
-          filePath: 'mock://t_0000000001/2',
+          contentRef: STORED_URL,
+          filePath: STORED_URL,
           sha256: sha('v2 内容'),
           authorAgentId: 'a_product',
           changeNote: '补充细节',
@@ -276,7 +288,7 @@ describe('ArtifactsService', () => {
       );
     });
 
-    it('doc/file 归档：contentRef/filePath 存 fileRef（mock 占位，不真实拉取）', async () => {
+    it('doc/file 归档（P2）：content 非空 → 落盘 uploads（contentRef/filePath 指向可访问 URL）', async () => {
       prisma.artifactVersion.findFirst.mockResolvedValue(null);
       prisma.artifact.findFirst.mockResolvedValue(null);
       prisma.artifact.create.mockResolvedValue({
@@ -292,8 +304,8 @@ describe('ArtifactsService', () => {
         id: 'artv_0000000001',
         artifactId: 'art_0000000002',
         version: 1,
-        contentRef: 'mock://t_0000000001/1',
-        filePath: 'mock://t_0000000001/1',
+        contentRef: STORED_URL,
+        filePath: STORED_URL,
         sha256: sha('patch content'),
         acceptedFlag: false,
         authorAgentId: null,
@@ -309,6 +321,54 @@ describe('ArtifactsService', () => {
         fileRef: 'mock://t_0000000001/1',
       });
 
+      // P2：内容非空 → 调 saveTextFile 落盘，contentRef/filePath 用落盘 URL（非 fileRef 占位）
+      expect(FileStorageService.saveTextFile).toHaveBeenCalledWith(
+        'patch content',
+        '补丁', // fileRef 尾段无扩展名 → 回退 title 作为落盘文件名
+      );
+      expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          contentRef: STORED_URL,
+          filePath: STORED_URL,
+        }),
+      });
+    });
+
+    it('doc/file 归档（P2）：content 为空 → 保留 fileRef 占位（无内容可落盘，不调 saveTextFile）', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue(null);
+      prisma.artifact.create.mockResolvedValue({
+        id: 'art_0000000002',
+        taskId: 't_0000000001',
+        type: 'doc',
+        title: '需求文档',
+        currentVersion: 1,
+        createdAt: FIXED_DATE,
+        updatedAt: FIXED_DATE,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000001',
+        artifactId: 'art_0000000002',
+        version: 1,
+        contentRef: 'mock://t_0000000001/1',
+        filePath: 'mock://t_0000000001/1',
+        sha256: sha(''),
+        acceptedFlag: false,
+        authorAgentId: null,
+        changeNote: null,
+        createdAt: FIXED_DATE,
+      });
+
+      await service.append('t_0000000001', {
+        taskId: 't_0000000001',
+        type: 'doc',
+        title: '需求文档',
+        content: '',
+        fileRef: 'mock://t_0000000001/1',
+      });
+
+      // 无内容 → 不落盘，fileRef 占位（前端对不可达引用降级为纯文本）
+      expect(FileStorageService.saveTextFile).not.toHaveBeenCalled();
       expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           contentRef: 'mock://t_0000000001/1',

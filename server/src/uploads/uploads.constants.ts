@@ -17,6 +17,8 @@ export const UPLOAD_ERRORS = {
   FILE_REQUIRED: 'UPLOAD_FILE_REQUIRED',
   /** 扩展名不在白名单（pdf/doc/…）：POST /uploads → 400。 */
   FILE_TYPE_NOT_ALLOWED: 'UPLOAD_FILE_TYPE_NOT_ALLOWED',
+  /** read_file：引用非 /uploads/ 落盘文件（外部 URL / worker 原始路径未归档）→ 400。 */
+  FILE_NOT_READABLE: 'UPLOAD_FILE_NOT_READABLE',
 } as const;
 
 export type UploadErrorCode = (typeof UPLOAD_ERRORS)[keyof typeof UPLOAD_ERRORS];
