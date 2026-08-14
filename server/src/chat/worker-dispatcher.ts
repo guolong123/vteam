@@ -69,6 +69,9 @@ export const GLOBAL_SYSTEM_INSTRUCTIONS = [
   '——目标实例会收到你的消息并开始执行；回复时也可用 @用户名 在群聊中定向回复特定成员。',
   '【Issue 管理】任务内 issue 协作：创建 issue 调 keta-platform MCP 的 issue_create（参数 {taskId, selfInstanceId, title, description?, tags?, assigneeInstanceId?}）；查询 issue_list/issue_get；更新 issue_update；状态流转 issue_transition（action: start/resolve/close/reopen/reject）。产品/测试 Agent 负责创建需求或缺陷 issue 并指派（assigneeInstanceId 为目标实例 id），研发 Agent 处理指派给自己的 issue 并流转状态。issue 标签（tags）标识类型（如 需求/缺陷/优化）。',
   '【任务状态】主 Agent 可调用 keta-platform MCP 的 task_transition 工具（参数 {taskId, selfInstanceId, action: start/mark-pending-review/accept/reject/archive, reason?}）流转任务状态：start 开始 / mark-pending-review 提交验收 / accept 验收通过 / reject 驳回（可附 reason）/ archive 归档。仅主实例可调用 task_transition，其余成员调用将返回 403 提示（请知会主实例或由管理员在任务管理界面操作）。',
+  '【持久化目录】你运行在 k8s 容器环境中，平台为每个 Agent 分配独立的持久化工作目录（默认 /data/worker/<agent名称>，可在创建任务时指定）。' +
+  '仅该目录及挂载卷内的内容在容器重启后保留，其余路径（如 /tmp、仓库外任意路径）写入的文件重启后会丢失；' +
+  '工作产物、git clone 的仓库、脚本、产出物文件等请写入该持久化目录，提交产出物（doc/file）时 fileRef 应指向该目录内的文件。',
 ].join('\n');
 
 /**
@@ -114,6 +117,9 @@ export interface BuildSystemInstructionsOptions {
   selfInstanceId?: string;
   /** 当前 agent 的实例别名（默认「<角色中文名>-<seq>」）；缺省回退 agent.name。 */
   selfAlias?: string | null;
+  /** 任务级独立工作目录（<WORK_DIR>/tasks/<taskId>，prompt_async directory）；注入
+   *  提示词作为运行时持久化目录（k8s 只有该目录重启后保留），引导 agent 把工作文件写入。 */
+  persistentWorkDir?: string;
 }
 
 /**
@@ -152,6 +158,10 @@ export function buildSystemInstructions(
       (agent.prompt ? `\n【职责】${agent.prompt}` : '') +
       '\n调用 keta-platform MCP 工具时，落库类工具（group_post / notify_agent / submit_artifact）的' +
       'selfInstanceId 参数必须填写你的实例 id（ta_ 前缀，服务器按此校验归属并精确记录发送者）。',
+    opts?.persistentWorkDir
+      ? `\n【运行时工作目录】本任务为你分配的实际持久化工作目录为：${opts.persistentWorkDir}。` +
+        '工作产物、脚本、中间文件等请写入该目录（提交 doc/file 产出物时 fileRef 使用该目录下的路径）。'
+      : '',
   ];
   if (opts?.isMainAgent) {
     blocks.push(MAIN_AGENT_INSTRUCTION);
@@ -166,7 +176,7 @@ export function buildSystemInstructions(
       `【团队成员】本次任务的团队成员（据此判断与谁协作、@ 谁）：\n${teamLines.join('\n')}`,
     );
   }
-  return blocks.join('\n');
+  return blocks.filter((b) => b.length > 0).join('\n');
 }
 
 /**
@@ -1076,6 +1086,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         team,
         selfInstanceId,
         selfAlias,
+        persistentWorkDir: taskWorkDir,
       }),
     });
 
