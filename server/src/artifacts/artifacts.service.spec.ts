@@ -485,6 +485,161 @@ describe('ArtifactsService', () => {
     });
   });
 
+  describe('archiveFile（文件归档公共方法，POST /uploads 与 submit_artifact doc/file 共用）', () => {
+    it('新建 v1：无幂等命中、无同 title file 产出物 → create artifact(currentVersion=1) + version 1（contentRef=storedUrl、filePath=fileRef 原文）', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue(null);
+      prisma.artifact.create.mockResolvedValue({
+        id: 'art_0000000001',
+        currentVersion: 1,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({ id: 'artv_0000000001' });
+
+      const result = await service.archiveFile('t_0000000001', {
+        fileRef: '报告.docx',
+        storedUrl: '/uploads/uuid-1.docx',
+        storedName: '报告.docx',
+        sha256: sha('文件内容'),
+        title: '需求文档',
+      });
+
+      expect(prisma.artifact.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          taskId: 't_0000000001',
+          type: 'file',
+          title: '需求文档',
+          currentVersion: 1,
+        }),
+      });
+      expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          artifactId: 'art_0000000001',
+          version: 1,
+          contentRef: '/uploads/uuid-1.docx',
+          filePath: '报告.docx',
+          sha256: sha('文件内容'),
+          acceptedFlag: false,
+          authorAgentId: null,
+        }),
+      });
+      expect(result).toEqual({
+        artifactId: 'art_0000000001',
+        version: 1,
+        status: 'created',
+      });
+    });
+
+    it('title 缺省 → 用 storedName 作为产出物标题', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue(null);
+      prisma.artifact.create.mockResolvedValue({
+        id: 'art_0000000002',
+        currentVersion: 1,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({ id: 'artv_0000000002' });
+
+      await service.archiveFile('t_0000000001', {
+        fileRef: '截图.png',
+        storedUrl: '/uploads/uuid-1.png',
+        storedName: '截图.png',
+        sha256: sha('png 内容'),
+      });
+
+      expect(prisma.artifact.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ title: '截图.png' }),
+      });
+    });
+
+    it('幂等去重：同 taskId+type=file+sha256 已归档 → duplicate（版本不增、不写库）', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue({
+        artifactId: 'art_existing',
+        version: 2,
+      });
+
+      const result = await service.archiveFile('t_0000000001', {
+        fileRef: 'dup.txt',
+        storedUrl: '/uploads/uuid-2.txt',
+        storedName: 'dup.txt',
+        sha256: sha('重复内容'),
+      });
+
+      expect(result).toEqual({
+        artifactId: 'art_existing',
+        version: 2,
+        status: 'duplicate',
+      });
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.artifact.create).not.toHaveBeenCalled();
+      expect(prisma.artifactVersion.create).not.toHaveBeenCalled();
+    });
+
+    it('版本递增：同 taskId+type=file+title 已有产出物 → append currentVersion+1 + 新版本', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue({
+        id: 'art_0000000001',
+        title: '需求文档',
+        currentVersion: 1,
+      });
+      prisma.artifact.update.mockResolvedValue({
+        id: 'art_0000000001',
+        currentVersion: 2,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({ id: 'artv_0000000002' });
+
+      const result = await service.archiveFile('t_0000000001', {
+        fileRef: '报告.docx',
+        storedUrl: '/uploads/uuid-2.docx',
+        storedName: '报告.docx',
+        sha256: sha('v2 内容'),
+        title: '需求文档',
+      });
+
+      expect(prisma.artifact.update).toHaveBeenCalledWith({
+        where: { id: 'art_0000000001' },
+        data: { currentVersion: 2 },
+      });
+      expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          artifactId: 'art_0000000001',
+          version: 2,
+          contentRef: '/uploads/uuid-2.docx',
+          filePath: '报告.docx',
+          sha256: sha('v2 内容'),
+          acceptedFlag: false,
+        }),
+      });
+      expect(result).toEqual({
+        artifactId: 'art_0000000001',
+        version: 2,
+        status: 'appended',
+      });
+    });
+
+    it('accepted 锁定：当前版本已验收（acceptedFlag=true）→ 抛错且不产生写操作', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue({
+        id: 'art_0000000001',
+        title: '需求文档',
+        currentVersion: 2,
+      });
+      prisma.artifactVersion.findUnique.mockResolvedValue({
+        acceptedFlag: true,
+      });
+
+      await expect(
+        service.archiveFile('t_0000000001', {
+          fileRef: '报告.docx',
+          storedUrl: '/uploads/uuid-3.docx',
+          storedName: '报告.docx',
+          sha256: sha('锁定后内容'),
+          title: '需求文档',
+        }),
+      ).rejects.toThrow('当前版本已验收锁定');
+      expect(prisma.artifact.update).not.toHaveBeenCalled();
+      expect(prisma.artifactVersion.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('onArtifactSubmitted（消费 artifact.submitted 事件）', () => {
     it('非法声明 → {status: invalid} 回退普通消息，不抛错不落库', async () => {
       const result = await service.onArtifactSubmitted({

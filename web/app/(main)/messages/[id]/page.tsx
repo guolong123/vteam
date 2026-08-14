@@ -1087,6 +1087,7 @@ export default function DmChatPage() {
           onSend={handleSend}
           mentionable={[]}
           sending={sendMutation.isPending}
+          taskId={channel?.taskId ?? undefined}
           placeholder={`发送私聊消息给 ${headerName}…`}
           style={{ border: "none", borderTop: `1px solid ${neutral[200]}`, borderRadius: 0 }}
         />

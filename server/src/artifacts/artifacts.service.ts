@@ -253,6 +253,98 @@ export class ArtifactsService implements OnModuleInit {
   }
 
   /**
+   * 文件产出物归档（submit_artifact doc/file 与 POST /uploads 带 taskId 共用；
+   * 原 platform-mcp.archiveFetchedFile 全量搬移，行为不变）。
+   * - sha256 幂等去重：同 taskId+type=file+sha256 已归档 → duplicate（版本不增、不写库）
+   * - 同 taskId+type=file+title → append 新版本（contentRef=落盘 URL、filePath=fileRef 原文）
+   * - 无则新建 v1；当前版本已验收锁定（acceptedFlag=true）→ 抛错（调用方 catch 降级 warn）
+   * type 固定 'file'。返回 {artifactId, version, status}（submit_artifact 需回传）。
+   */
+  async archiveFile(
+    taskId: string,
+    args: {
+      fileRef: string;
+      storedUrl: string;
+      storedName: string;
+      sha256: string;
+      title?: string;
+    },
+  ): Promise<{
+    artifactId: string;
+    version: number;
+    status: 'created' | 'appended' | 'duplicate';
+  }> {
+    const dup = await this.prisma.artifactVersion.findFirst({
+      where: { sha256: args.sha256, artifact: { taskId, type: 'file' } },
+      select: { artifactId: true, version: true },
+    });
+    if (dup) {
+      return { artifactId: dup.artifactId, version: dup.version, status: 'duplicate' };
+    }
+    const artifactTitle = args.title ?? args.storedName;
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.artifact.findFirst({
+        where: { taskId, type: 'file', title: artifactTitle },
+      });
+      if (!existing) {
+        const id = await this.idGen.nextId(ID_PREFIX.artifact);
+        await tx.artifact.create({
+          data: { id, taskId, type: 'file', title: artifactTitle, currentVersion: 1 },
+        });
+        await tx.artifactVersion.create({
+          data: {
+            id: await this.idGen.nextId(ID_PREFIX.version),
+            artifactId: id,
+            version: 1,
+            contentRef: args.storedUrl,
+            filePath: args.fileRef,
+            sha256: args.sha256,
+            acceptedFlag: false,
+            authorAgentId: null,
+            changeNote: null,
+          },
+        });
+        return { artifactId: id, version: 1, status: 'created' as const };
+      }
+      // 对齐 append 验收语义：当前版本已验收锁定 → 不可追加（抛错由调用方 catch 降级 warn）
+      const current = await tx.artifactVersion.findUnique({
+        where: {
+          artifactId_version: {
+            artifactId: existing.id,
+            version: existing.currentVersion,
+          },
+        },
+        select: { acceptedFlag: true },
+      });
+      if (current?.acceptedFlag) {
+        throw new Error(`产出物「${existing.title}」当前版本已验收锁定，不可追加`);
+      }
+      const updated = await tx.artifact.update({
+        where: { id: existing.id },
+        data: { currentVersion: existing.currentVersion + 1 },
+      });
+      await tx.artifactVersion.create({
+        data: {
+          id: await this.idGen.nextId(ID_PREFIX.version),
+          artifactId: existing.id,
+          version: updated.currentVersion,
+          contentRef: args.storedUrl,
+          filePath: args.fileRef,
+          sha256: args.sha256,
+          acceptedFlag: false,
+          authorAgentId: null,
+          changeNote: null,
+        },
+      });
+      return {
+        artifactId: existing.id,
+        version: updated.currentVersion,
+        status: 'appended' as const,
+      };
+    });
+  }
+
+  /**
    * GET /tasks/:id/artifacts：任务文档库列表（12 篇 §6.1 FR-44）。
    * 分页 {items, total, page, pageSize} + type 筛选；accepted 筛选按
    * currentVersion 的 acceptedFlag 内存过滤（Prisma 无法跨行引用父行 currentVersion，
@@ -358,9 +450,11 @@ export class ArtifactsService implements OnModuleInit {
     current?: {
       acceptedFlag: boolean;
       authorAgentId: string | null;
+      contentRef?: string;
+      filePath?: string | null;
     } | null,
   ) {
-    return {
+    const dto = {
       id: artifact.id,
       taskId: artifact.taskId,
       type: artifact.type,
@@ -371,6 +465,12 @@ export class ArtifactsService implements OnModuleInit {
       createdAt: artifact.createdAt.toISOString(),
       updatedAt: artifact.updatedAt.toISOString(),
     };
+    // doc/file（filePath 非空）→ 附加可访问 fileUrl（群聊转发附件映射：worker fileRef →
+    // 落盘 URL，handleTaskCompleted 据此把 group_post 文件附件挂到群聊消息）
+    if (current?.filePath && current?.contentRef) {
+      return { ...dto, fileUrl: FileStorageService.normalizeFileRef(current.contentRef) };
+    }
+    return dto;
   }
 
   /** ArtifactVersionDto（id/version/contentRef/filePath/sha256/acceptedFlag/authorAgentId/changeNote/createdAt；doc/file 追加 fileUrl/fileName/fileExt/fileSize）。 */
