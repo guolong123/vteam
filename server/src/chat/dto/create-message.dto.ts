@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsOptional, IsString } from 'class-validator';
 
 /**
  * @ mention 输入（09 篇 §5.1 CreateMessageDto）：
@@ -16,9 +16,8 @@ export type MentionInput =
 
 /** POST /channels/:id/messages 请求体（09 篇 §5.1）。 */
 export class CreateMessageDto {
-  @ApiProperty({ description: '消息正文（@ 以纯文本书写，前端解析后随 mentions 提交）' })
+  @ApiProperty({ description: '消息正文（@ 以纯文本书写，前端解析后随 mentions 提交；纯附件消息可为空串）' })
   @IsString()
-  @IsNotEmpty()
   text: string;
 
   @ApiPropertyOptional({

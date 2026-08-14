@@ -12,7 +12,7 @@
  */
 "use client";
 import { useMemo, useRef, useState } from "react";
-import type { CSSProperties, ChangeEvent, KeyboardEvent, MouseEvent } from "react";
+import type { CSSProperties, ChangeEvent, ClipboardEvent, KeyboardEvent, MouseEvent } from "react";
 import { api } from "@/lib/api";
 import {
   type RoleKey,
@@ -100,6 +100,10 @@ export interface MessageInputProps {
   placeholder?: string;
   /** 发送中：禁用按钮并显示「发送中…」 */
   sending?: boolean;
+  /** 可选：关联任务 id（任务会话/私聊场景传入）。附件上传时随 multipart 提交，
+   *  后端 POST /uploads 带 taskId 落盘后同步归档为 file 产出物（与 Agent 上传链路一致）；
+   *  非任务场景不传 → 纯上传不归档。 */
+  taskId?: string;
   style?: CSSProperties;
   className?: string;
 }
@@ -112,6 +116,7 @@ export function MessageInput({
   mentionable = [],
   placeholder = "输入消息，@ 提及某个 Agent…",
   sending = false,
+  taskId,
   style,
   className,
 }: MessageInputProps) {
@@ -133,12 +138,9 @@ export function MessageInput({
     fileInputRef.current?.click();
   };
 
-  /** 选文件 → 客户端校验 → POST /uploads → 存待发送附件 */
-  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    // 重置 input value：允许重选同名文件重复触发 onChange
-    e.target.value = "";
-    if (!file) return;
+  /** 上传单文件：客户端校验 → POST /uploads → 存待发送附件（附件按钮与粘贴复用同一流程） */
+  const uploadFile = async (file: File) => {
+    if (attaching || sending) return;
     const ext = attachmentExt(file.name);
     if (!ext || !(ALLOWED_ATTACHMENT_EXTS as readonly string[]).includes(ext)) {
       setAttachError(`不支持 ${ext || "无扩展名"} 文件，仅支持 ${ALLOWED_ATTACHMENT_EXTS.join("/")}`);
@@ -153,6 +155,9 @@ export function MessageInput({
     try {
       const form = new FormData();
       form.append("file", file);
+      if (taskId) {
+        form.append("taskId", taskId);
+      }
       const meta = await api.post<MessageAttachment>("/uploads", form);
       setPendingAttachment(meta);
     } catch (err) {
@@ -161,6 +166,31 @@ export function MessageInput({
       );
     } finally {
       setAttaching(false);
+    }
+  };
+
+  /** 选文件 → 复用 uploadFile（客户端校验 → POST /uploads → 存待发送附件） */
+  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // 重置 input value：允许重选同名文件重复触发 onChange
+    e.target.value = "";
+    if (!file) return;
+    await uploadFile(file);
+  };
+
+  /** 粘贴文件/图片 → 复用 uploadFile；粘贴纯文本时不拦截（正常输入） */
+  const handlePaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (attaching || sending) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.kind !== "file") continue;
+      const file = item.getAsFile();
+      if (!file) continue;
+      // 阻止浏览器默认把图片以 data:/file: 形式插入文本区；附件单文件模型只取第一个文件
+      e.preventDefault();
+      void uploadFile(file);
+      return;
     }
   };
 
@@ -330,6 +360,7 @@ export function MessageInput({
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
         onBlur={handleBlur}
         placeholder={placeholder}
         rows={1}

@@ -7,8 +7,11 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 # rewrites 代理目标在 build 时编译进 routes-manifest.json，运行时 ENV 无效，
-# 必须在构建期通过 build ARG 注入（compose: args: API_PROXY_TARGET=http://server:3000）
-ARG API_PROXY_TARGET=http://localhost:3000
+# 必须在构建期通过 build ARG 注入（compose: args: API_PROXY_TARGET=http://server:3000）。
+# 缺省值对齐 compose 网络内服务名 server（Next standalone 监听 $HOSTNAME 而非 127.0.0.1，
+# 容器内 localhost:3000 ECONNREFUSED → 浏览器 fetch TypeError: Failed to fetch）：
+# 即使构建时漏传 ARG，代理目标也指向正确后端而非容器自身。
+ARG API_PROXY_TARGET=http://server:3000
 ENV API_PROXY_TARGET=$API_PROXY_TARGET
 RUN npm run build
 
