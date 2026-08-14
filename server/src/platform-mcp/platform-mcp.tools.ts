@@ -178,6 +178,19 @@ const issueTransitionSchema = z.object({
 
 type IssueTransitionArgs = z.infer<typeof issueTransitionSchema>;
 
+const taskTransitionSchema = z.object({
+  taskId: z.string().describe('任务 ID'),
+  selfInstanceId: z
+    .string()
+    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+  action: z
+    .enum(['start', 'mark-pending-review', 'accept', 'reject', 'archive'])
+    .describe('状态流转动作：start 开始 / mark-pending-review 提交验收 / accept 验收通过 / reject 驳回 / archive 归档'),
+  reason: z.string().optional().describe('驳回原因（action=reject 时写入任务事件 metadata）'),
+});
+
+type TaskTransitionArgs = z.infer<typeof taskTransitionSchema>;
+
 /**
  * 构建工具集（service 闭包注入，controller 构造时调用一次）。
  * handler 签名 `(ctx, args)`：ctx.workerId 为 controller 透传的 header 值；
@@ -273,6 +286,14 @@ export function buildPlatformMcpTools(
       inputSchema: issueTransitionSchema,
       handler: (ctx, args) =>
         service.issueTransition(ctx, args as IssueTransitionArgs),
+    },
+    {
+      name: 'task_transition',
+      description:
+        '流转任务状态：start(pending→in_progress)/mark-pending-review(in_progress→pending_review)/accept(pending_review→completed)/reject(pending_review→in_progress，可附 reason)/archive(completed→archived)。仅主 Agent（mainAgentInstanceId）可调用，其余成员调用将被拒绝。返回更新后的任务 DTO；非法迁移返回错误。',
+      inputSchema: taskTransitionSchema,
+      handler: (ctx, args) =>
+        service.taskTransition(ctx, args as TaskTransitionArgs),
     },
   ];
 }

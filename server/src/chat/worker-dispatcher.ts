@@ -68,6 +68,7 @@ export const GLOBAL_SYSTEM_INSTRUCTIONS = [
   '调用 keta-platform MCP 的 notify_agent 工具（参数 {taskId: 你的任务ID, targetInstanceId: 目标实例 id（ta_ 前缀，见 task_context 的 agentMembers）, content: 消息内容}）' +
   '——目标实例会收到你的消息并开始执行；回复时也可用 @用户名 在群聊中定向回复特定成员。',
   '【Issue 管理】任务内 issue 协作：创建 issue 调 keta-platform MCP 的 issue_create（参数 {taskId, selfInstanceId, title, description?, tags?, assigneeInstanceId?}）；查询 issue_list/issue_get；更新 issue_update；状态流转 issue_transition（action: start/resolve/close/reopen/reject）。产品/测试 Agent 负责创建需求或缺陷 issue 并指派（assigneeInstanceId 为目标实例 id），研发 Agent 处理指派给自己的 issue 并流转状态。issue 标签（tags）标识类型（如 需求/缺陷/优化）。',
+  '【任务状态】主 Agent 可调用 keta-platform MCP 的 task_transition 工具（参数 {taskId, selfInstanceId, action: start/mark-pending-review/accept/reject/archive, reason?}）流转任务状态：start 开始 / mark-pending-review 提交验收 / accept 验收通过 / reject 驳回（可附 reason）/ archive 归档。仅主实例可调用 task_transition，其余成员调用将返回 403 提示（请知会主实例或由管理员在任务管理界面操作）。',
 ].join('\n');
 
 /**
@@ -566,17 +567,17 @@ export function escapeXml(text: string): string {
 }
 
 /**
- * Phase 4 真实分派器（18 篇 §8.3，替换 MockDispatcher 的核心，M4 主链路心脏）：
+ * Phase 4 真实分派器（18 篇 §8.3，替换 Phase 2 mock 分派器的核心，M4 主链路心脏）：
  * dispatch → 定位/分配 worker（T12 bindSessionToWorker）→ doclib 上下文注入（12 篇 §8）
  * → WorkerClient 下发（T8 createSession/promptAsync）→ 回流处理（D5：落库 + broadcast
  * chat.message.new + emitFinal 归本类）。
  *
- * 与 MockDispatcher 的关键差异：
+ * 与 Phase 2 mock 分派器的关键差异：
  * - **回复不在此处生成**：dispatch 返回 `{replies: []}`，真实回复经 worker task.completed
  *   回流（09 篇 §4.3）→ handleTaskCompleted 落库 + 广播 + emitFinal（D5 防双写）；
  * - **无 worker 报错不降级**（D3）：assignWorker 无可用 → emitError + 广播 agent.error；
- *   mock 降级仅 WORKER_MOCK_FALLBACK 开关（本类不实现，MockDispatcher 代码保留不动）；
- * - **loading 广播对齐 MockDispatcher**（:158-162）：dispatch 成功后 thinking → operating 两阶段；
+ *   mock 降级仅 WORKER_MOCK_FALLBACK 开关（本类不实现）；
+ * - **loading 广播对齐 Phase 2 mock 分派时序**：dispatch 成功后 thinking → operating 两阶段；
  * - **T9 接线**：构造时向 WorkerEventIngress 注册 onTaskCompleted / onAgentStatus 回调。
  *   task.completed 回调做落库+广播+emitFinal；agent.status 回调仅做 emitLoading/emitError
  *   本地通知（SSE 的 agent.loading/agent.error emit 由 T9 ingress 完成，此处不重复广播防双写）。
@@ -840,7 +841,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
   }
 
   /**
-   * 单目标分派时序（对齐 MockDispatcher replyFor :151-211）：
+   * 单目标分派时序（对齐 Phase 2 mock 分派 replyFor 时序）：
    * 1 查 Session → 已绑 worker 复用；未绑 assignWorker（无可用 → 报错不降级 D3）+
    *   首次 bind（instanceRef 占位 pending）→ 2 查 Worker 行（capabilities）→
    *   3 Agent.defaultModelId → {providerID, modelID} → 4 提示词构造（按需注入：任务
@@ -968,7 +969,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     promptBlocks.push(request.text);
     const prompt = promptBlocks.join('\n\n');
 
-    // 5. loading(thinking)（对齐 MockDispatcher :158-162）——T6 实例语义：广播带 instanceId，
+    // 5. loading(thinking)（对齐 Phase 2 mock 分派时序）——T6 实例语义：广播带 instanceId，
     //    同 agent 多实例各自 loading（前端按实例消费，不再按 agentId 全体 loading）
     await this.realtime.broadcast(
       EVENT_TYPES.AGENT_LOADING,

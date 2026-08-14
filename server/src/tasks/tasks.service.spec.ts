@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -316,8 +317,8 @@ describe('TasksService', () => {
       });
       // instances：alias 默认 `<角色中文名>-<seq>`、name/role 从 agent 关联取、main 标记（按 (agentId,seq) 排序）
       expect(result.instances).toEqual([
-        { id: 'ta_0000000002', agentId: 'a_developer', alias: '开发者-1', seq: 1, name: '开发者', role: 'developer', main: false },
-        { id: 'ta_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1, name: '产品经理', role: 'product', main: true },
+        { id: 'ta_0000000002', agentId: 'a_developer', alias: '开发者-1', seq: 1, name: '开发者', role: 'developer', main: false, sessionStatus: null, sessionId: null },
+        { id: 'ta_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1, name: '产品经理', role: 'product', main: true, sessionStatus: null, sessionId: null },
       ]);
       expect(result.backgroundDocs).toEqual([{ name: '需求文档.pdf' }]);
 
@@ -571,14 +572,24 @@ describe('TasksService', () => {
       expect(result.items[0]).toMatchObject({ id: 't_0000000001', status: 'pending' });
       expect(result.items[0].teamAgentIds).toEqual(['a_product', 'a_developer']);
       expect(result.items[0].instances).toEqual([
-        { id: 'ta_0000000002', agentId: 'a_developer', alias: '开发者-1', seq: 1, name: '开发者', role: 'developer', main: false },
-        { id: 'ta_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1, name: '产品经理', role: 'product', main: false },
+        { id: 'ta_0000000002', agentId: 'a_developer', alias: '开发者-1', seq: 1, name: '开发者', role: 'developer', main: false, sessionStatus: null, sessionId: null },
+        { id: 'ta_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1, name: '产品经理', role: 'product', main: false, sessionStatus: null, sessionId: null },
       ]);
       expect(result.items[1].teamAgentIds).toEqual(['a_tester']);
       // 查询：projectId + 排序 + taskAgents 带模板 agent 关联
       expect(prisma.task.findMany).toHaveBeenCalledWith({
         where: { projectId: pid },
-        include: { taskAgents: { include: { agent: { select: { id: true, name: true, role: true } } } } },
+        include: {
+          taskAgents: {
+            include: {
+              agent: { select: { id: true, name: true, role: true } },
+              sessions: {
+                select: { id: true, status: true },
+                where: { status: { not: 'archived' } },
+              },
+            },
+          },
+        },
         orderBy: { createdAt: 'desc' },
         skip: 0,
         take: 20,
@@ -628,6 +639,28 @@ describe('TasksService', () => {
       expect(result.backgroundDocs).toEqual([{ name: '需求文档.pdf' }]);
     });
 
+    it('instances 携带会话状态快照 sessionStatus/sessionId（真实状态源，切页回来不丢工作中）', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({
+          taskAgents: [
+            { ...taRow('a_product'), sessions: [{ id: 's_0000000041', status: 'running' }] },
+            { ...taRow('a_developer'), sessions: [{ id: 's_0000000042', status: 'idle' }] },
+          ],
+        }),
+      );
+
+      const result = await service.findOne('t_0000000001');
+
+      expect(result.instances.find((i: any) => i.id === 'ta_0000000001')).toMatchObject({
+        sessionStatus: 'running',
+        sessionId: 's_0000000041',
+      });
+      expect(result.instances.find((i: any) => i.id === 'ta_0000000002')).toMatchObject({
+        sessionStatus: 'idle',
+        sessionId: 's_0000000042',
+      });
+    });
+
     it('任务不存在 → 404 TASK_NOT_FOUND', async () => {
       prisma.task.findUnique.mockResolvedValue(null);
 
@@ -664,7 +697,17 @@ describe('TasksService', () => {
           mainAgentId: 'a_product',
           mainAgentInstanceId: 'ta_0000000001',
         },
-        include: { taskAgents: { include: { agent: { select: { id: true, name: true, role: true } } } } },
+        include: {
+          taskAgents: {
+            include: {
+              agent: { select: { id: true, name: true, role: true } },
+              sessions: {
+                select: { id: true, status: true },
+                where: { status: { not: 'archived' } },
+              },
+            },
+          },
+        },
       });
       expect(result).toMatchObject({
         title: '改名',
@@ -1345,6 +1388,171 @@ describe('TasksService', () => {
         (call) => call[0] === EVENT_TYPES.CHAT_MESSAGE_NEW,
       );
       expect(chatNewCalls).toHaveLength(2);
+    });
+
+    it('transitionByAgent：主实例 start → actor=agent 写入 task_events + TASK_STATUS_CHANGED 广播 + 系统消息照常', async () => {
+      // 首次查询为 transitionByAgent 主实例校验（仅 select id/mainAgentInstanceId）
+      prisma.task.findUnique
+        .mockResolvedValueOnce({
+          id: 't_0000000001',
+          mainAgentInstanceId: 'ta_0000000001',
+        })
+        .mockResolvedValueOnce(
+          row({ status: 'pending', version: 3, mainAgentId: 'a_product', mainAgentInstanceId: 'ta_0000000001' }),
+        )
+        .mockResolvedValue(
+          row({ status: 'in_progress', version: 4, mainAgentId: 'a_product', mainAgentInstanceId: 'ta_0000000001', startedAt: new Date() }),
+        );
+      prisma.chatChannel.findFirst
+        .mockResolvedValueOnce({ id: 'c_0000000001' }) // task_group 频道
+        .mockResolvedValueOnce({ id: 'c_0000000002' }); // 主实例 private 频道
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001')
+        .mockResolvedValueOnce('m_0000000002');
+      const txModels = mockTransitionTx();
+
+      const result = await service.transitionByAgent(
+        't_0000000001',
+        'ta_0000000001',
+        'start',
+      );
+
+      expect(result.status).toBe('in_progress');
+      // task_events 记 actor=agent/实例（非 user/用户）
+      expect(txModels.taskEvent.create).toHaveBeenCalledWith({
+        data: {
+          id: 'te_0000000001',
+          taskId: 't_0000000001',
+          eventType: 'status_change',
+          fromStatus: 'pending',
+          toStatus: 'in_progress',
+          actorType: 'agent',
+          actorId: 'ta_0000000001',
+          metadata: undefined,
+        },
+      });
+      // 广播 actor=agent/实例
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        EVENT_TYPES.TASK_STATUS_CHANGED,
+        {
+          taskId: 't_0000000001',
+          from: 'pending',
+          to: 'in_progress',
+          actorType: 'agent',
+          actorId: 'ta_0000000001',
+        },
+        { type: 'global' },
+      );
+      // 系统消息照常落库（主实例别名）
+      assertSysMessageCreated(txModels, 'c_0000000001', '任务已开始，主 Agent：产品经理-1', 1);
+    });
+
+    it('transitionByAgent：非主实例 → 403 TASK_STATUS_MAIN_AGENT_ONLY（不触达状态机）', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_0000000001',
+        mainAgentInstanceId: 'ta_0000000001',
+      });
+
+      try {
+        await service.transitionByAgent('t_0000000001', 'ta_0000000002', 'start');
+        fail('应抛出 ForbiddenException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ForbiddenException);
+        expect((e as ForbiddenException).getResponse()).toMatchObject({
+          code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,
+          message:
+            '仅主 Agent（ta_0000000001）可流转任务状态；请知会主 Agent 调用 task_transition，或由管理员在任务管理界面操作',
+        });
+      }
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('transitionByAgent：任务不存在 → 404 TASK_NOT_FOUND', async () => {
+      prisma.task.findUnique.mockResolvedValue(null);
+
+      try {
+        await service.transitionByAgent('t_ghost', 'ta_0000000001', 'start');
+        fail('应抛出 NotFoundException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(NotFoundException);
+        expect((e as NotFoundException).getResponse()).toMatchObject({
+          code: TASK_ERRORS.TASK_NOT_FOUND,
+        });
+      }
+    });
+
+    it('transitionByAgent：reject 的 reason 透传 metadata（actor=agent）', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce({
+          id: 't_0000000001',
+          mainAgentInstanceId: 'ta_0000000001',
+        })
+        .mockResolvedValueOnce(
+          row({ status: 'pending_review', version: 2, mainAgentId: 'a_product', mainAgentInstanceId: 'ta_0000000001' }),
+        )
+        .mockResolvedValue(
+          row({ status: 'in_progress', version: 3, pendingReviewAt: null }),
+        );
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      const txModels = mockTransitionTx();
+
+      await service.transitionByAgent('t_0000000001', 'ta_0000000001', 'reject', {
+        reason: '性能测试不达标',
+      });
+
+      expect(txModels.taskEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'reject',
+          actorType: 'agent',
+          actorId: 'ta_0000000001',
+          metadata: { reason: '性能测试不达标' },
+        }),
+      });
+      assertSysMessageCreated(
+        txModels,
+        'c_0000000001',
+        '任务被驳回，请补齐产出后重新提交。驳回原因：性能测试不达标',
+      );
+    });
+
+    it('transitionByAgent：mark-pending-review 主实例成功（各 action 复用 transitionOpts）', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce({
+          id: 't_0000000001',
+          mainAgentInstanceId: 'ta_0000000001',
+        })
+        .mockResolvedValueOnce(
+          row({ status: 'in_progress', version: 5, mainAgentId: 'a_product', mainAgentInstanceId: 'ta_0000000001' }),
+        )
+        .mockResolvedValue(
+          row({ status: 'pending_review', version: 6, pendingReviewAt: new Date() }),
+        );
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      const txModels = mockTransitionTx();
+
+      const result = await service.transitionByAgent(
+        't_0000000001',
+        'ta_0000000001',
+        'mark-pending-review',
+      );
+
+      expect(result.status).toBe('pending_review');
+      expect(txModels.taskEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'status_change',
+          actorType: 'agent',
+          actorId: 'ta_0000000001',
+        }),
+      });
+      assertSysMessageCreated(txModels, 'c_0000000001', '任务已提交待验收');
     });
   });
 

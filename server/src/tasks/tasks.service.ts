@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -57,6 +58,8 @@ type TaskAgentInstance = {
   seq: number;
   removedAt: Date | null;
   agent: { id: string; name: string; role: string | null };
+  /** 实例会话（每实例每任务一个，task 详情 instances 回传 sessionStatus 真实状态源）。 */
+  sessions?: { id: string; status: string }[];
 };
 
 /** 任务详情/列表查询的 taskAgents include（统一带模板 agent 的 name/role，instances 渲染用）。 */
@@ -64,6 +67,12 @@ const TASK_AGENTS_INCLUDE = {
   taskAgents: {
     include: {
       agent: { select: { id: true, name: true, role: true } },
+      // 会话状态快照：instances.sessionStatus 取该实例会话当前 status（archived 终态不参与
+      // 工作状态展示）；每实例恒 1 条会话（uk_sessions_task_agent 唯一），直接取首项。
+      sessions: {
+        select: { id: true, status: true },
+        where: { status: { not: SESSION_STATUS.archived } },
+      },
     },
   },
 } as const;
@@ -131,6 +140,8 @@ type TransitionOptions = {
   sysMessage?: (ctx: SysMessageCtx) => string;
   /** start 私信主 Agent 的启动消息文案（13 篇 §4.2，落库主 Agent private 频道）；不传则只写群聊。 */
   privateMessage?: (ctx: SysMessageCtx) => string;
+  /** 动作执行者（task_events.actorType/actorId + TASK_STATUS_CHANGED 广播）；缺省 user/调用者。 */
+  actor?: { type: string; id: string };
 };
 
 /**
@@ -597,67 +608,144 @@ export class TasksService implements OnModuleInit {
     return this.toTaskDto(fresh ?? task);
   }
 
+  /**
+   * 各动作的迁移副作用配置（自原 5 个动作方法提取，行为不变）：
+   * start/mark-pending-review/accept/reject/archive 的用户路径与 MCP 路径（transitionByAgent）
+   * 共用同一 opts；id/dto 依赖项（afterCommit 的 taskId、reject 的 reason）收参传入。
+   */
+  private transitionOpts(
+    id: string,
+    action: keyof typeof TASK_TRANSITIONS,
+    reason?: string,
+  ): TransitionOptions {
+    switch (action) {
+      case 'start':
+        return {
+          eventType: 'status_change',
+          fields: { startedAt: new Date() },
+          preflight: (task) => {
+            if (this.teamInstancesOf(task.taskAgents).length === 0) {
+              throw new BadRequestException({
+                code: TASK_ERRORS.TASK_EMPTY_TEAM,
+                message: '任务团队为空，请先添加 Agent 实例后再启动',
+              });
+            }
+            if (!task.mainAgentInstanceId) {
+              throw new BadRequestException({
+                code: TASK_ERRORS.MAIN_AGENT_NOT_SET,
+                message: '主 Agent 实例未确定，请先指定主 Agent 后再启动',
+              });
+            }
+          },
+          // T4：启动时全部 created 会话置 active（active 全库唯一写入点；Phase 4 worker 分派依赖）
+          afterCommit: async (tx) => {
+            await tx.session.updateMany({
+              where: { taskId: id, status: SESSION_STATUS.created },
+              data: { status: SESSION_STATUS.active },
+            });
+          },
+          // 10 篇 §8.1：群聊系统消息含主实例名（FR-07/08）
+          sysMessage: ({ task, mainAgentName }) =>
+            `任务已开始，主 Agent：${mainAgentName ?? task.mainAgentInstanceId}`,
+          // 13 篇 §4.2：私信主实例的启动消息（含任务目标、团队分工、背景文档）
+          privateMessage: ({ task }) => {
+            const docs = Array.isArray(task.backgroundDocs)
+              ? task.backgroundDocs
+                  .map((d) =>
+                    typeof d === 'object' && d !== null && 'name' in d
+                      ? String((d as { name: unknown }).name)
+                      : String(d),
+                  )
+                  .join('、')
+              : '';
+            const parts = [
+              `任务已启动，请作为主 Agent 牵头推进`,
+              `任务目标：${task.title}${task.description ? `（${task.description}）` : ''}`,
+              `团队分工：${this.teamInstancesOf(task.taskAgents)
+                .map((i) => i.alias ?? i.agentId)
+                .join('、')}`,
+            ];
+            if (docs) parts.push(`背景文档：${docs}`);
+            return parts.join('。');
+          },
+        };
+      case 'mark-pending-review':
+        return {
+          eventType: 'status_change',
+          fields: { pendingReviewAt: new Date() },
+          // 10 篇 §8.1：提示成员核对产出（FR-04）
+          sysMessage: () => '任务已提交待验收',
+        };
+      case 'accept':
+        return {
+          eventType: 'accept',
+          fields: { completedAt: new Date() },
+          afterCommit: async (tx) => {
+            // 12 篇 §7：accept 事务内标记该任务所有 Artifact 当前版本 accepted_flag=true（基线锁定）
+            const artifacts = await tx.artifact.findMany({
+              where: { taskId: id },
+              select: { id: true, currentVersion: true },
+            });
+            if (artifacts.length === 0) {
+              return;
+            }
+            // (artifactId, version) 精确组合匹配 currentVersion（@@unique 保证组合唯一，
+            // 不能用「in 列表」——会误标非当前版本）
+            await tx.artifactVersion.updateMany({
+              where: {
+                OR: artifacts.map((a) => ({
+                  artifactId: a.id,
+                  version: a.currentVersion,
+                })),
+              },
+              data: { acceptedFlag: true },
+            });
+          },
+          // 10 篇 §8.1：强调 accepted_flag 基线锁定（FR-04）
+          sysMessage: () => '任务已验收完成，产出物基线已锁定',
+        };
+      case 'reject':
+        return {
+          eventType: 'reject',
+          fields: { pendingReviewAt: null },
+          metadata: reason ? { reason } : undefined,
+          // 10 篇 §8.1 / 13 篇 §4.4：附驳回原因（reason 存在时）
+          sysMessage: () =>
+            reason
+              ? `任务被驳回，请补齐产出后重新提交。驳回原因：${reason}`
+              : '任务被驳回，请补齐产出后重新提交',
+        };
+      case 'archive':
+        return {
+          eventType: 'archive',
+          fields: { archivedAt: new Date() },
+          afterCommit: async (tx) => {
+            await tx.session.updateMany({
+              where: { taskId: id },
+              data: { status: SESSION_STATUS.archived },
+            });
+          },
+          // 10 篇 §8.1：明确内容保留（FR-05）
+          sysMessage: () => '任务已归档，历史可回看',
+        };
+      default:
+        throw new Error(`未知任务迁移动作：${action}`);
+    }
+  }
+
   /** 启动任务（pending → in_progress，13 篇 §4.2）：前置校验团队实例 + 主实例，写 startedAt。 */
   async start(id: string, userId: string) {
-    return this.transition(id, 'start', userId, {
-      eventType: 'status_change',
-      fields: { startedAt: new Date() },
-      preflight: (task) => {
-        if (this.teamInstancesOf(task.taskAgents).length === 0) {
-          throw new BadRequestException({
-            code: TASK_ERRORS.TASK_EMPTY_TEAM,
-            message: '任务团队为空，请先添加 Agent 实例后再启动',
-          });
-        }
-        if (!task.mainAgentInstanceId) {
-          throw new BadRequestException({
-            code: TASK_ERRORS.MAIN_AGENT_NOT_SET,
-            message: '主 Agent 实例未确定，请先指定主 Agent 后再启动',
-          });
-        }
-      },
-      // T4：启动时全部 created 会话置 active（active 全库唯一写入点；Phase 4 worker 分派依赖）
-      afterCommit: async (tx) => {
-        await tx.session.updateMany({
-          where: { taskId: id, status: SESSION_STATUS.created },
-          data: { status: SESSION_STATUS.active },
-        });
-      },
-      // 10 篇 §8.1：群聊系统消息含主实例名（FR-07/08）
-      sysMessage: ({ task, mainAgentName }) =>
-        `任务已开始，主 Agent：${mainAgentName ?? task.mainAgentInstanceId}`,
-      // 13 篇 §4.2：私信主实例的启动消息（含任务目标、团队分工、背景文档）
-      privateMessage: ({ task }) => {
-        const docs = Array.isArray(task.backgroundDocs)
-          ? task.backgroundDocs
-              .map((d) =>
-                typeof d === 'object' && d !== null && 'name' in d
-                  ? String((d as { name: unknown }).name)
-                  : String(d),
-              )
-              .join('、')
-          : '';
-        const parts = [
-          `任务已启动，请作为主 Agent 牵头推进`,
-          `任务目标：${task.title}${task.description ? `（${task.description}）` : ''}`,
-          `团队分工：${this.teamInstancesOf(task.taskAgents)
-            .map((i) => i.alias ?? i.agentId)
-            .join('、')}`,
-        ];
-        if (docs) parts.push(`背景文档：${docs}`);
-        return parts.join('。');
-      },
-    });
+    return this.transition(id, 'start', userId, this.transitionOpts(id, 'start'));
   }
 
   /** 标记待验收（in_progress → pending_review，13 篇 §4.3）：写 pendingReviewAt。 */
   async markPendingReview(id: string, userId: string) {
-    return this.transition(id, 'mark-pending-review', userId, {
-      eventType: 'status_change',
-      fields: { pendingReviewAt: new Date() },
-      // 10 篇 §8.1：提示成员核对产出（FR-04）
-      sysMessage: () => '任务已提交待验收',
-    });
+    return this.transition(
+      id,
+      'mark-pending-review',
+      userId,
+      this.transitionOpts(id, 'mark-pending-review'),
+    );
   }
 
   /**
@@ -665,62 +753,51 @@ export class TasksService implements OnModuleInit {
    * 12 篇 §7 验收联动：同事务锁定该任务全部产出物当前版本基线（accepted_flag=true）。
    */
   async accept(id: string, userId: string) {
-    return this.transition(id, 'accept', userId, {
-      eventType: 'accept',
-      fields: { completedAt: new Date() },
-      afterCommit: async (tx) => {
-        // 12 篇 §7：accept 事务内标记该任务所有 Artifact 当前版本 accepted_flag=true（基线锁定）
-        const artifacts = await tx.artifact.findMany({
-          where: { taskId: id },
-          select: { id: true, currentVersion: true },
-        });
-        if (artifacts.length === 0) {
-          return;
-        }
-        // (artifactId, version) 精确组合匹配 currentVersion（@@unique 保证组合唯一，
-        // 不能用「in 列表」——会误标非当前版本）
-        await tx.artifactVersion.updateMany({
-          where: {
-            OR: artifacts.map((a) => ({
-              artifactId: a.id,
-              version: a.currentVersion,
-            })),
-          },
-          data: { acceptedFlag: true },
-        });
-      },
-      // 10 篇 §8.1：强调 accepted_flag 基线锁定（FR-04）
-      sysMessage: () => '任务已验收完成，产出物基线已锁定',
-    });
+    return this.transition(id, 'accept', userId, this.transitionOpts(id, 'accept'));
   }
 
   /** 验收驳回（pending_review → in_progress，13 篇 §4.4）：reason 写 metadata，重置 pendingReviewAt。 */
   async reject(id: string, userId: string, dto?: RejectTaskDto) {
-    return this.transition(id, 'reject', userId, {
-      eventType: 'reject',
-      fields: { pendingReviewAt: null },
-      metadata: dto?.reason ? { reason: dto.reason } : undefined,
-      // 10 篇 §8.1 / 13 篇 §4.4：附驳回原因（reason 存在时）
-      sysMessage: () =>
-        dto?.reason
-          ? `任务被驳回，请补齐产出后重新提交。驳回原因：${dto.reason}`
-          : '任务被驳回，请补齐产出后重新提交',
-    });
+    return this.transition(id, 'reject', userId, this.transitionOpts(id, 'reject', dto?.reason));
   }
 
   /** 归档（completed → archived，终态，13 篇 §4.5）：写 archivedAt，sessions 全部置 archived。 */
   async archive(id: string, userId: string) {
-    return this.transition(id, 'archive', userId, {
-      eventType: 'archive',
-      fields: { archivedAt: new Date() },
-      afterCommit: async (tx) => {
-        await tx.session.updateMany({
-          where: { taskId: id },
-          data: { status: SESSION_STATUS.archived },
-        });
-      },
-      // 10 篇 §8.1：明确内容保留（FR-05）
-      sysMessage: () => '任务已归档，历史可回看',
+    return this.transition(id, 'archive', userId, this.transitionOpts(id, 'archive'));
+  }
+
+  /**
+   * MCP 专用状态流转（task_transition 工具）：仅主 Agent 实例可调用。
+   * 主实例校验：task.mainAgentInstanceId === instanceId，否则 403 TASK_STATUS_MAIN_AGENT_ONLY；
+   * actor 记为 agent/instanceId（task_events.actorType='agent' + TASK_STATUS_CHANGED 广播）；
+   * reject 的 reason 经 metadata 透传（transitionOpts 第 3 参）。
+   */
+  async transitionByAgent(
+    taskId: string,
+    instanceId: string,
+    action: keyof typeof TASK_TRANSITIONS,
+    dto?: { reason?: string },
+  ) {
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { id: true, mainAgentInstanceId: true },
+    });
+    if (!task) {
+      throw new NotFoundException({
+        code: TASK_ERRORS.TASK_NOT_FOUND,
+        message: '任务不存在',
+      });
+    }
+    if (task.mainAgentInstanceId !== instanceId) {
+      // Agent 可读的完整引导：指明主实例 id + 正确操作路径（MCP 由主实例调用 / 知会主实例 / 管理界面人工操作）
+      throw new ForbiddenException({
+        code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,
+        message: `仅主 Agent（${task.mainAgentInstanceId ?? '未设置'}）可流转任务状态；请知会主 Agent 调用 task_transition，或由管理员在任务管理界面操作`,
+      });
+    }
+    return this.transition(taskId, action, instanceId, {
+      ...this.transitionOpts(taskId, action, dto?.reason),
+      actor: { type: ACTOR_TYPE.agent, id: instanceId },
     });
   }
 
@@ -752,6 +829,8 @@ export class TasksService implements OnModuleInit {
     opts: TransitionOptions,
   ) {
     const { from, to } = TASK_TRANSITIONS[action];
+    // 动作执行者：缺省 user/调用者（用户路径行为不变）；MCP 路径由 transitionByAgent 传 agent/实例。
+    const actor = opts.actor ?? { type: ACTOR_TYPE.user, id: userId };
 
     const task = await this.prisma.task.findUnique({
       where: { id },
@@ -820,8 +899,8 @@ export class TasksService implements OnModuleInit {
           eventType: opts.eventType,
           fromStatus: from,
           toStatus: to,
-          actorType: ACTOR_TYPE.user,
-          actorId: userId,
+          actorType: actor.type,
+          actorId: actor.id,
           metadata: opts.metadata,
         },
       });
@@ -878,7 +957,7 @@ export class TasksService implements OnModuleInit {
 
     await this.realtime.broadcast(
       EVENT_TYPES.TASK_STATUS_CHANGED,
-      { taskId: id, from, to, actorType: ACTOR_TYPE.user, actorId: userId },
+      { taskId: id, from, to, actorType: actor.type, actorId: actor.id },
       { type: 'global' },
     );
 
@@ -913,6 +992,10 @@ export class TasksService implements OnModuleInit {
       name: ta.agent.name,
       role: ta.agent.role,
       main: ta.id === task.mainAgentInstanceId,
+      // 会话状态快照（每实例一会话，取首项；archived 已过滤）：前端挂载时初始化
+      // 成员工作状态（SSE 增量仅驱动后续切换，重连不重放 running → 状态丢失修复）。
+      sessionStatus: ta.sessions?.[0]?.status ?? null,
+      sessionId: ta.sessions?.[0]?.id ?? null,
     }));
     return {
       id: task.id,

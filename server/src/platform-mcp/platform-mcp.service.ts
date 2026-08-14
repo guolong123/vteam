@@ -25,6 +25,8 @@ import {
   IssueStatus,
   IssueTransitionAction,
 } from '../issues/issues.constants';
+import { TaskTransitionAction } from '../common/constants/task.constants';
+import { TasksService } from '../tasks/tasks.service';
 import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
 
 /**
@@ -38,13 +40,18 @@ export interface PlatformMcpContext {
   workerId: string;
 }
 
-/** chat_history 返回的消息行（text 从 content Json 提取，对齐计划 1.2 契约）。 */
+/** chat_history 返回的消息行（text 从 content Json 提取，对齐计划 1.2 契约）。
+ *  附件三字段 + senderInstanceId 透出（无附件时 null，Agent 据此调 read_file 读取）。 */
 export interface ChatHistoryItem {
   id: string;
   senderType: string;
   senderId: string | null;
   text: string;
   createdAt: string;
+  attachmentUrl?: string | null;
+  attachmentName?: string | null;
+  attachmentType?: string | null;
+  senderInstanceId?: string | null;
 }
 
 /** group_post 附件挂载（message 表附件三字段，UX-10；attachmentType 为小写 ext）。 */
@@ -95,6 +102,7 @@ export class PlatformMcpService {
     private readonly workerDispatcher: WorkerDispatcher,
     private readonly artifactsService: ArtifactsService,
     private readonly issuesService: IssuesService,
+    private readonly tasksService: TasksService,
   ) {}
 
   /**
@@ -594,6 +602,25 @@ export class PlatformMcpService {
     );
   }
 
+  /** task_transition：流转任务状态（仅主 Agent 可调用）。三参数归属校验 → TasksService.transitionByAgent。 */
+  async taskTransition(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId: string;
+      selfInstanceId: string;
+      action: TaskTransitionAction;
+      reason?: string;
+    },
+  ) {
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    return this.tasksService.transitionByAgent(
+      args.taskId,
+      args.selfInstanceId,
+      args.action,
+      args.reason ? { reason: args.reason } : undefined,
+    );
+  }
+
   /** submit_artifact doc/file 路径：worker 拉取（read_file 抛错语义）→ 落盘 uploads → 归档。 */
   private async submitFileArtifact(
     ctx: PlatformMcpContext,
@@ -622,7 +649,13 @@ export class PlatformMcpService {
     const name = fileRef.split(/[\\/]/).pop() || 'artifact';
     const stored = await FileStorageService.saveBufferFile(buffer, name);
     const sha256 = createHash('sha256').update(buffer).digest('hex');
-    return this.archiveFetchedFile(taskId, fileRef, stored, sha256, title);
+    return this.artifactsService.archiveFile(taskId, {
+      fileRef,
+      storedUrl: stored.url,
+      storedName: stored.name,
+      sha256,
+      title,
+    });
   }
 
   /** submit_artifact text 结果归一：append 返回 → {artifactId, version, status}。 */
@@ -652,8 +685,11 @@ export class PlatformMcpService {
    * 归属校验（tools/call 前置，设计文档 §4.2）：该 worker 是否有该 taskId 的 Session。
    * - 无 Session → 403 `PLATFORM_MCP_FORBIDDEN`；缺 workerId → 403 `PLATFORM_MCP_MISSING_WORKER_ID`。
    * - selfInstanceId（落库类工具必填）：必须是该任务会话绑定的实例（session.taskAgentId，
-   *   存量会话 NULL 时回退 agentId）→ 不一致 403 `PLATFORM_MCP_FORBIDDEN`
-   *   （防伪造/跨实例冒充：调用方必须声明自己的实例 id）。
+   *   存量会话 taskAgentId 为 NULL 时无法匹配 ta_ 前缀实例 → 403，不构成冒充放行）→
+   *   不一致 403 `PLATFORM_MCP_FORBIDDEN`（防伪造/跨实例冒充：调用方必须声明自己的实例 id）。
+   * - 多实例任务（taskId 下多个实例会话并存）：selfInstanceId 提供时按实例精确匹配 session
+   *   （原泛查首条会误命中外实例 → 合法成员被误判"禁止冒充"，且 task_transition 非主实例
+   *   无法落到"仅主 Agent"403）。无匹配 → 403 禁止跨任务访问（安全不降级）。
    * 返回实例 id（senderInstanceId 落库用；senderId=agent id 由 resolveSenderAgentId 解析）。
    */
   private async assertWorkerTask(
@@ -687,7 +723,11 @@ export class PlatformMcpService {
       }
     }
     const session = await this.prisma.session.findFirst({
-      where: { taskId, workerId: ctx.workerId },
+      where: {
+        taskId,
+        workerId: ctx.workerId,
+        ...(selfInstanceId !== undefined ? { taskAgentId: selfInstanceId } : {}),
+      },
       select: { id: true, agentId: true, taskAgentId: true },
     });
     if (!session) {
@@ -739,7 +779,11 @@ export class PlatformMcpService {
     id: string;
     senderType: string;
     senderId: string | null;
+    senderInstanceId: string | null;
     content: Prisma.JsonValue;
+    attachmentUrl: string | null;
+    attachmentName: string | null;
+    attachmentType: string | null;
     createdAt: Date;
   }): ChatHistoryItem {
     const content = (row.content ?? {}) as { text?: unknown };
@@ -748,6 +792,10 @@ export class PlatformMcpService {
       senderType: row.senderType,
       senderId: row.senderId,
       text: typeof content.text === 'string' ? content.text : '',
+      attachmentUrl: row.attachmentUrl ?? null,
+      attachmentName: row.attachmentName ?? null,
+      attachmentType: row.attachmentType ?? null,
+      senderInstanceId: row.senderInstanceId ?? null,
       createdAt: row.createdAt.toISOString(),
     };
   }
@@ -884,11 +932,18 @@ export class PlatformMcpService {
       const name = fileRef.split(/[\\/]/).pop() || 'attachment';
       const stored = await FileStorageService.saveBufferFile(buffer, name);
       const sha256 = createHash('sha256').update(buffer).digest('hex');
-      await this.archiveFetchedFile(taskId, fileRef, stored, sha256).catch((err) => {
-        this.logger.warn(
-          `group_post fileRef 归档写入失败（附件仍挂载）: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
+      await this.artifactsService
+        .archiveFile(taskId, {
+          fileRef,
+          storedUrl: stored.url,
+          storedName: stored.name,
+          sha256,
+        })
+        .catch((err) => {
+          this.logger.warn(
+            `group_post fileRef 归档写入失败（附件仍挂载）: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
       this.logger.log(`group_post fileRef 已从 worker 拉取并归档: ${fileRef} -> ${stored.url}`);
       return {
         attachmentUrl: stored.url,
@@ -901,94 +956,6 @@ export class PlatformMcpService {
       );
       return undefined;
     }
-  }
-
-  /**
-   * FR-41：拉取成功后的归档写入（幂等）——同 taskId+type=file+sha256 已归档则跳过
-   * （不重复产生版本，返回 duplicate）；否则同 title 的 file 产出物 append 新版本，
-   * 无则新建 v1。artifactVersion：filePath=fileRef 原文（worker 容器路径）、
-   * contentRef=落盘 URL。返回 {artifactId, version, status}（submit_artifact 需回传）。
-   */
-  private async archiveFetchedFile(
-    taskId: string,
-    fileRef: string,
-    stored: { url: string; name: string },
-    sha256: string,
-    title?: string,
-  ): Promise<{
-    artifactId: string;
-    version: number;
-    status: 'created' | 'appended' | 'duplicate';
-  }> {
-    const dup = await this.prisma.artifactVersion.findFirst({
-      where: { sha256, artifact: { taskId, type: 'file' } },
-      select: { artifactId: true, version: true },
-    });
-    if (dup) {
-      return { artifactId: dup.artifactId, version: dup.version, status: 'duplicate' };
-    }
-    const artifactTitle = title ?? stored.name;
-    return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.artifact.findFirst({
-        where: { taskId, type: 'file', title: artifactTitle },
-      });
-      if (!existing) {
-        const id = await this.idGen.nextId('art');
-        await tx.artifact.create({
-          data: { id, taskId, type: 'file', title: artifactTitle, currentVersion: 1 },
-        });
-        await tx.artifactVersion.create({
-          data: {
-            id: await this.idGen.nextId('artv'),
-            artifactId: id,
-            version: 1,
-            contentRef: stored.url,
-            filePath: fileRef,
-            sha256,
-            acceptedFlag: false,
-            authorAgentId: null,
-            changeNote: null,
-          },
-        });
-        return { artifactId: id, version: 1, status: 'created' as const };
-      }
-      // 对齐 artifacts.service 验收语义：当前版本已验收锁定 → 不可追加（抛错由调用方
-      // catch 降级为 warn，附件照常挂载，仅跳过归档写入）。
-      const current = await tx.artifactVersion.findUnique({
-        where: {
-          artifactId_version: {
-            artifactId: existing.id,
-            version: existing.currentVersion,
-          },
-        },
-        select: { acceptedFlag: true },
-      });
-      if (current?.acceptedFlag) {
-        throw new Error(`产出物「${existing.title}」当前版本已验收锁定，不可追加`);
-      }
-      const updated = await tx.artifact.update({
-        where: { id: existing.id },
-        data: { currentVersion: existing.currentVersion + 1 },
-      });
-      await tx.artifactVersion.create({
-        data: {
-          id: await this.idGen.nextId('artv'),
-          artifactId: existing.id,
-          version: updated.currentVersion,
-          contentRef: stored.url,
-          filePath: fileRef,
-          sha256,
-          acceptedFlag: false,
-          authorAgentId: null,
-          changeNote: null,
-        },
-      });
-      return {
-        artifactId: existing.id,
-        version: updated.currentVersion,
-        status: 'appended' as const,
-      };
-    });
   }
 
   /** read_file 归档路径：从 uploads 读 contentRef 落盘文件；读失败 → 404 业务错误。 */

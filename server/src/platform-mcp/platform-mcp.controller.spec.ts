@@ -142,7 +142,7 @@ describe('PlatformMcpController (HTTP)', () => {
   });
 
   describe('tools/list', () => {
-    it('→ 返回 12 个工具（含 notify_agent/submit_artifact + 5 个 issue_*）且 inputSchema 为 JSON Schema', async () => {
+    it('→ 返回 13 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition）且 inputSchema 为 JSON Schema', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
@@ -167,6 +167,7 @@ describe('PlatformMcpController (HTTP)', () => {
         'issue_get',
         'issue_update',
         'issue_transition',
+        'task_transition',
       ]);
 
       for (const tool of tools) {

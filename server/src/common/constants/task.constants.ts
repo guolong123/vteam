@@ -61,4 +61,6 @@ export const TASK_ERRORS = {
   TASK_TEAM_NOT_ALLOWED: 'TASK_TEAM_NOT_ALLOWED',
   /** add 的目标 Agent 不存在（14 篇 §5.3；code 与 chat 域 AGENT_NOT_FOUND 同值）。 */
   AGENT_NOT_FOUND: 'AGENT_NOT_FOUND',
+  /** transitionByAgent：仅主 Agent 实例可流转任务状态（MCP 工具路径，403）。 */
+  TASK_STATUS_MAIN_AGENT_ONLY: 'TASK_STATUS_MAIN_AGENT_ONLY',
 } as const;
