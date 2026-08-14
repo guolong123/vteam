@@ -14,6 +14,8 @@ export const WORKER_EVENT_TYPES = {
   AGENT_STATUS: 'agent.status',
   TASK_COMPLETED: 'task.completed',
   GIT_OP: 'git.op',
+  SESSION_QUESTION: 'session.question',
+  SESSION_PERMISSION: 'session.permission',
 } as const;
 
 export type WorkerEventType = (typeof WORKER_EVENT_TYPES)[keyof typeof WORKER_EVENT_TYPES];

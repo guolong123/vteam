@@ -1,5 +1,6 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DEFAULT_WORKER_TOKEN } from './workers.constants';
 
 /**
  * WorkerClient 错误码（T8，server→worker 的 HTTP 客户端）。
@@ -37,6 +38,8 @@ export const DEFAULT_WORKER_BASE_URL = 'http://localhost:4199';
 export const DEFAULT_EXEC_PORT = 4198;
 /** 单次 HTTP 请求超时：prompt_async 为异步 204 快速返回，getMessages 轮询稍慢，15s 兜底防悬挂。 */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+/** FR-41：GET /file 文件拉取超时（较大文件/网络慢，15s 兜底防悬挂）。 */
+export const DEFAULT_FILE_FETCH_TIMEOUT_MS = 15_000;
 
 /**
  * worker 行最小契约（Prisma Worker 的 id + capabilities Json；T10 传 findUnique 结果）。
@@ -85,6 +88,8 @@ export interface ExecuteOptions {
   agent?: string;
   /** 工作目录。 */
   directory?: string;
+  /** P7：顶层 system 提示（产出物协议/@机制等，worker 透传 serve 拼入 LLM system message）。 */
+  system?: string;
   /** 平台 Task 主键（t_ 前缀），事件回流透传。 */
   taskId?: string;
   /** Agent id（a_ 前缀），事件回流透传。 */
@@ -115,10 +120,16 @@ export class WorkerClient {
   public baseUrlFallback: string;
   /** serve Basic Auth 密码（env SERVER_PASSWORD，默认空=不鉴权）；公开字段便于测试覆盖。 */
   public serverPassword: string;
+  /**
+   * FR-41：exec 文件端点鉴权 token（env WORKER_TOKEN，默认 dev-worker-token），
+   * 经 X-Worker-Token header 下发，与 worker 端 X_WORKER_TOKEN（compose 同一值）对齐。
+   */
+  public workerToken: string;
 
   constructor(config: ConfigService) {
     this.baseUrlFallback = config.get('WORKER_BASE_URL', DEFAULT_WORKER_BASE_URL);
     this.serverPassword = config.get('SERVER_PASSWORD', '');
+    this.workerToken = config.get('WORKER_TOKEN', DEFAULT_WORKER_TOKEN);
   }
 
   /**
@@ -206,12 +217,81 @@ export class WorkerClient {
         ...(opts.channelId ? { channelId: opts.channelId } : {}),
         ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
         ...(opts.directory ? { directory: opts.directory } : {}),
+        ...(opts.system ? { system: opts.system } : {}),
         // 对齐 worker ExecuteRequestPayload.prompt（worker 执行端点校验该字段）
         prompt: opts.prompt,
       }),
     });
     if (!res.ok) {
       throw new WorkerUnavailableException(worker.id, `execute HTTP ${res.status}`);
+    }
+  }
+
+  /**
+   * FR-41：GET /file?path=<绝对路径>——从 worker 工作区拉取文件内容（二进制安全）。
+   * 走 exec 端点（resolveExecBaseUrl），带 X-Worker-Token 鉴权（worker 端校验）。
+   * 网络错误/超时 → WorkerUnavailableException（requestToUrl 归一）；HTTP 非 2xx
+   * （401/404/413/400）→ WorkerUnavailableException（fetchFile 内判断，调用方降级）。
+   */
+  async fetchFile(worker: WorkerEndpointRef, filePath: string): Promise<Buffer> {
+    const res = await this.requestExec(
+      worker,
+      `/file?path=${encodeURIComponent(filePath)}`,
+      {
+        method: 'GET',
+        headers: { 'X-Worker-Token': this.workerToken },
+      },
+      DEFAULT_FILE_FETCH_TIMEOUT_MS,
+    );
+    if (!res.ok) {
+      throw new WorkerUnavailableException(worker.id, `file fetch HTTP ${res.status}`);
+    }
+    return Buffer.from(await res.arrayBuffer());
+  }
+
+  /**
+   * POST /question-reply（worker 执行端点）：转发用户对模型 question 的回答。
+   * - answers=null + reject=true → worker 调 serve rejectQuestion（用户拒绝）；
+   * - 带 X-Worker-Token 鉴权（与 /file 一致，涉及 serve 会话状态写入不放行）。
+   * sessionId 语义 = opencode 会话 id（ses_ 前缀，调用方从平台 Session.instanceRef 取）。
+   */
+  async questionReply(
+    worker: WorkerEndpointRef,
+    opts: { sessionId: string; requestId: string; answers: string[][] | null },
+  ): Promise<void> {
+    const res = await this.requestExec(worker, '/question-reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Worker-Token': this.workerToken },
+      body: JSON.stringify(
+        opts.answers === null
+          ? { sessionId: opts.sessionId, requestId: opts.requestId, answers: null, reject: true }
+          : { sessionId: opts.sessionId, requestId: opts.requestId, answers: opts.answers },
+      ),
+    });
+    if (!res.ok) {
+      throw new WorkerUnavailableException(worker.id, `question reply HTTP ${res.status}`);
+    }
+  }
+
+  /**
+   * POST /question-reply（worker 执行端点）：转发用户对工具权限确认的回复。
+   * response ∈ once|always|reject（对齐 serve replyPermission 契约）；带 X-Worker-Token。
+   */
+  async permissionReply(
+    worker: WorkerEndpointRef,
+    opts: { sessionId: string; permissionId: string; response: 'once' | 'always' | 'reject' },
+  ): Promise<void> {
+    const res = await this.requestExec(worker, '/question-reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Worker-Token': this.workerToken },
+      body: JSON.stringify({
+        sessionId: opts.sessionId,
+        permissionId: opts.permissionId,
+        response: opts.response,
+      }),
+    });
+    if (!res.ok) {
+      throw new WorkerUnavailableException(worker.id, `permission reply HTTP ${res.status}`);
     }
   }
 

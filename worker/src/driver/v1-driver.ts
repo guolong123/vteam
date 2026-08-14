@@ -236,7 +236,12 @@ export class V1Driver {
         }),
       },
     );
-    this.logger.info(`[v1-driver] sendMessage -> ${sessionID} (HTTP ${res.status})`);
+    const modelLabel = input.model
+      ? `${input.model.providerID}/${input.model.modelID}`
+      : '(default)';
+    this.logger.info(
+      `[v1-driver] sendMessage -> ${sessionID} model=${modelLabel} (HTTP ${res.status})`,
+    );
   }
 
   /**

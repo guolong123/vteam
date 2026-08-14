@@ -115,6 +115,14 @@ export interface ExecServerOptions {
 /** 请求体解析失败（非 JSON / 缺字段）。 */
 export class ExecuteRequestError extends Error {}
 
+/** model 可读描述（providerID/modelID；缺省 → 标记 serve 默认模型，供日志排障确认实际模型）。 */
+function describeModel(model: DriverModelRef | null | undefined): string {
+  if (!model) {
+    return '(default)';
+  }
+  return `${model.providerID}/${model.modelID}`;
+}
+
 /** 将字符串 prompt 归一为 parts 数组（对象数组直接透传）。 */
 export function normalizeParts(prompt: string | unknown[]): unknown[] {
   if (typeof prompt === 'string') {
@@ -495,7 +503,7 @@ export class ExecServer {
         ...(artifacts.length > 0 ? { artifacts } : {}),
       });
       this.logger.info(
-        `[exec] 执行完成 session=${opencodeSessionId} taskId=${payload.taskId ?? '-'} text=${result.text.length} chars`,
+        `[exec] 执行完成 session=${opencodeSessionId} taskId=${payload.taskId ?? '-'} model=${describeModel(payload.model)} text=${result.text.length} chars`,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

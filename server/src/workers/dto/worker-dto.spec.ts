@@ -205,12 +205,14 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
     });
   });
 
-  it('WORKER_EVENT_TYPES 7 事件点号命名（无下划线变体）', () => {
-    expect(Object.values(WORKER_EVENT_TYPES)).toHaveLength(7);
+  it('WORKER_EVENT_TYPES 9 事件点号命名（无下划线变体）', () => {
+    expect(Object.values(WORKER_EVENT_TYPES)).toHaveLength(9);
     for (const name of Object.values(WORKER_EVENT_TYPES)) {
       expect(name.includes('_')).toBe(false);
     }
     expect(WORKER_EVENT_TYPES.GIT_OP).toBe('git.op');
+    expect(WORKER_EVENT_TYPES.SESSION_QUESTION).toBe('session.question');
+    expect(WORKER_EVENT_TYPES.SESSION_PERMISSION).toBe('session.permission');
   });
 
   it('worker 协议事件与 server EVENT_TYPES 同名事件值对齐', () => {

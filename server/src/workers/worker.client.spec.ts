@@ -243,6 +243,173 @@ describe('WorkerClient', () => {
     });
   });
 
+  describe('fetchFile（FR-41：GET /file 从 worker 工作区拉取文件）', () => {
+    const execWorker = {
+      id: 'w_1',
+      capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 },
+    };
+
+    it('200 → 返回 Buffer 内容；URL 走 exec 端点并带 X-Worker-Token（默认 dev-worker-token）', async () => {
+      const client = makeClient();
+      const content = Buffer.from('hello world');
+      const arrayBuffer = content.buffer.slice(
+        content.byteOffset,
+        content.byteOffset + content.byteLength,
+      );
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => arrayBuffer,
+      } as unknown as Response);
+
+      await expect(
+        client.fetchFile(execWorker, '/tmp/opencode/test_file.txt'),
+      ).resolves.toEqual(content);
+
+      const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(
+        'http://worker:4198/file?path=%2Ftmp%2Fopencode%2Ftest_file.txt',
+      );
+      expect(init.method).toBe('GET');
+      const headers = init.headers as Headers;
+      expect(headers.get('X-Worker-Token')).toBe('dev-worker-token');
+    });
+
+    it('WORKER_TOKEN 配置时 X-Worker-Token 用配置值（对齐 compose 同一 token）', async () => {
+      const config = {
+        get: jest.fn((key: string, def?: unknown) => {
+          if (key === 'WORKER_TOKEN') return 'compose-worker-token';
+          return key === 'SERVER_PASSWORD' ? '' : def;
+        }),
+      } as unknown as ConfigService;
+      const client = new WorkerClient(config);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new ArrayBuffer(0),
+      } as unknown as Response);
+
+      await client.fetchFile(execWorker, '/tmp/x.txt');
+
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const headers = init.headers as Headers;
+      expect(headers.get('X-Worker-Token')).toBe('compose-worker-token');
+    });
+
+    it('capabilities.execBaseUrl 优先（worker 上报完整执行端点基址）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new ArrayBuffer(0),
+      } as unknown as Response);
+
+      await client.fetchFile(
+        { id: 'w_1', capabilities: { execBaseUrl: 'http://worker:4198' } },
+        '/tmp/x.txt',
+      );
+
+      const [url] = mockFetch.mock.calls[0] as [string];
+      expect(url).toBe('http://worker:4198/file?path=%2Ftmp%2Fx.txt');
+    });
+
+    it('HTTP 非 2xx（404 文件不存在）→ WorkerUnavailableException（503，带 workerId）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ ok: false, status: 404 }));
+
+      await expect(client.fetchFile(execWorker, '/tmp/missing.txt')).rejects.toMatchObject({
+        workerId: 'w_1',
+        status: 503,
+      });
+    });
+
+    it('fetch 抛错（连接失败）→ WorkerUnavailableException（503，带 workerId）', async () => {
+      const client = makeClient();
+      mockFetch.mockRejectedValue(new TypeError('ECONNREFUSED'));
+
+      await expect(client.fetchFile(execWorker, '/tmp/x.txt')).rejects.toMatchObject({
+        workerId: 'w_1',
+        status: 503,
+      });
+    });
+  });
+
+  describe('questionReply / permissionReply（POST /question-reply 转发用户回复）', () => {
+    const execWorker = {
+      id: 'w_1',
+      capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 },
+    };
+
+    it('questionReply：POST /question-reply 带 X-Worker-Token，body {sessionId, requestId, answers}', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ ok: true, status: 200 }));
+
+      await client.questionReply(execWorker, {
+        sessionId: 'ses_1',
+        requestId: 'que_1',
+        answers: [['继续']],
+      });
+
+      const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('http://worker:4198/question-reply');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(String(init.body))).toEqual({
+        sessionId: 'ses_1',
+        requestId: 'que_1',
+        answers: [['继续']],
+      });
+      const headers = init.headers as Headers;
+      expect(headers.get('X-Worker-Token')).toBe('dev-worker-token');
+    });
+
+    it('questionReply：answers=null → 带 reject: true（用户拒绝走 serve rejectQuestion）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ ok: true, status: 200 }));
+
+      await client.questionReply(execWorker, {
+        sessionId: 'ses_1',
+        requestId: 'que_1',
+        answers: null,
+      });
+
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(String(init.body))).toEqual({
+        sessionId: 'ses_1',
+        requestId: 'que_1',
+        answers: null,
+        reject: true,
+      });
+    });
+
+    it('permissionReply：POST /question-reply，body {sessionId, permissionId, response}', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ ok: true, status: 200 }));
+
+      await client.permissionReply(execWorker, {
+        sessionId: 'ses_1',
+        permissionId: 'per_1',
+        response: 'once',
+      });
+
+      const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('http://worker:4198/question-reply');
+      expect(JSON.parse(String(init.body))).toEqual({
+        sessionId: 'ses_1',
+        permissionId: 'per_1',
+        response: 'once',
+      });
+    });
+
+    it('HTTP 非 2xx → WorkerUnavailableException（503，带 workerId）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ ok: false, status: 400 }));
+
+      await expect(
+        client.questionReply(execWorker, { sessionId: 'ses_1', requestId: 'que_1', answers: [] }),
+      ).rejects.toMatchObject({ workerId: 'w_1', status: 503 });
+    });
+  });
+
   describe('listModels', () => {
     it('GET /api/model → 映射为 {id: providerID/modelID} 列表', async () => {
       const client = makeClient();
