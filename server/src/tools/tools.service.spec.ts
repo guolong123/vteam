@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { TOOL_ERRORS } from '../common/constants/tool.constants';
 import { IdGeneratorService } from '../common/id-generator';
@@ -21,6 +21,7 @@ describe('ToolsService', () => {
       update: jest.Mock;
     };
     user: { findUnique: jest.Mock };
+    mcpServer: { findFirst: jest.Mock };
     $transaction: jest.Mock;
   };
 
@@ -67,6 +68,7 @@ describe('ToolsService', () => {
         update: jest.fn(),
       },
       user: { findUnique: jest.fn() },
+      mcpServer: { findFirst: jest.fn() },
       $transaction: jest.fn(),
     };
     workersService = { broadcastCommand: jest.fn().mockResolvedValue(1) };
@@ -326,6 +328,7 @@ describe('ToolsService', () => {
 
     it('execution=mcp → source 推导 mcp（mcpServer 透传）', async () => {
       prisma.tool.findUnique.mockResolvedValue(null);
+      prisma.mcpServer.findFirst.mockResolvedValue({ id: 'ms_0000000001' });
       prisma.tool.create.mockResolvedValue({
         ...toolRows[0],
         id: 'tl_0000000003',
@@ -339,12 +342,57 @@ describe('ToolsService', () => {
         mcpServer: 'filesystem',
       });
 
+      expect(prisma.mcpServer.findFirst).toHaveBeenCalledWith({
+        where: { OR: [{ id: 'filesystem' }, { name: 'filesystem' }] },
+        select: { id: true },
+      });
       expect(prisma.tool.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           source: 'mcp',
           execution: 'mcp',
           mcpServer: 'filesystem',
         }),
+      });
+    });
+
+    it('execution=mcp 但 mcpServer 未注册 → 400 TOOL_MCP_SERVER_NOT_FOUND（弱关联防断链）', async () => {
+      prisma.tool.findUnique.mockResolvedValue(null);
+      prisma.mcpServer.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.create({
+          ...dto,
+          execution: 'mcp',
+          mcpServer: 'npx',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.create({
+          ...dto,
+          execution: 'mcp',
+          mcpServer: 'npx',
+        }),
+      ).rejects.toMatchObject({
+        response: { code: TOOL_ERRORS.TOOL_MCP_SERVER_NOT_FOUND },
+      });
+      expect(prisma.tool.create).not.toHaveBeenCalled();
+      expect(workersService.broadcastCommand).not.toHaveBeenCalled();
+    });
+
+    it('execution=mcp 且 mcpServer 以 id 命中 → 校验通过（name/id 双键兼容）', async () => {
+      prisma.tool.findUnique.mockResolvedValue(null);
+      prisma.mcpServer.findFirst.mockResolvedValue({ id: 'ms_0000000001' });
+      prisma.tool.create.mockResolvedValue({ id: 'tl_0000000003' });
+
+      await service.create({
+        ...dto,
+        execution: 'mcp',
+        mcpServer: 'ms_0000000001',
+      });
+
+      expect(prisma.mcpServer.findFirst).toHaveBeenCalledWith({
+        where: { OR: [{ id: 'ms_0000000001' }, { name: 'ms_0000000001' }] },
+        select: { id: true },
       });
     });
 

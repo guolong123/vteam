@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -102,6 +103,9 @@ export class ToolsService implements OnModuleInit {
    */
   async create(dto: CreateToolDto) {
     await this.assertActionAvailable(dto.action);
+    if (dto.execution === 'mcp' && dto.mcpServer) {
+      await this.assertMcpServerExists(dto.mcpServer);
+    }
 
     const tool = await this.prisma.tool.create({
       data: {
@@ -172,6 +176,25 @@ export class ToolsService implements OnModuleInit {
       throw new ConflictException({
         code: TOOL_ERRORS.TOOL_ACTION_EXISTS,
         message: `工具 action 已存在：${action.trim()}`,
+      });
+    }
+  }
+
+  /**
+   * MCP 工具弱关联防断链：execution=mcp 时 mcpServer 必须命中已注册的
+   * mcp_servers（name 或 id 均可，前端 skills 页按 id/name 双键反查）。
+   * 不存在 → 400 TOOL_MCP_SERVER_NOT_FOUND（避免注册后前端反查失败显示未连接）。
+   */
+  private async assertMcpServerExists(mcpServer: string): Promise<void> {
+    const ref = mcpServer.trim();
+    const hit = await this.prisma.mcpServer.findFirst({
+      where: { OR: [{ id: ref }, { name: ref }] },
+      select: { id: true },
+    });
+    if (!hit) {
+      throw new BadRequestException({
+        code: TOOL_ERRORS.TOOL_MCP_SERVER_NOT_FOUND,
+        message: `MCP 服务器不存在：${ref}（请先在 MCP 服务器管理中注册，或填入其名称/ID）`,
       });
     }
   }
