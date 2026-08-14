@@ -339,7 +339,7 @@ export class ChatService {
   /**
    * 发消息 8 步流程（09 篇 §5.1）：
    * 1 权限校验 → 2 @ 解析 → 3 落库 → 4 广播 chat.message.new（频道）
-   * → 5 分派（MessageDispatcher，T10 MockDispatcher 异步回流）
+   * → 5 分派（MessageDispatcher，Phase 4 WorkerDispatcher 异步回流）
    * → 6 上下文注入（Phase 2 mock 跳过）。
    * Loading（thinking→operating）与异步收敛（mock 回复落库 + 广播）由分派器内部完成
    * （09 篇 §5.1：@ 触发同步返回受理，处理结果走 SSE；Phase 4 替换 WorkerDispatcher 零改动）。

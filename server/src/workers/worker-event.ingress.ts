@@ -161,8 +161,8 @@ type MessageRow = {
  * 职责边界（D5 铁律，防双写）：
  * - **只做**：幂等去重 + 语义转换 + RealtimeService.emit 转发 + 回调通知；
  * - **不做**：消息落库 / 广播 chat.message.new / emitFinal——落库与广播归
- *   T10 WorkerDispatcher 回流处理器（注册 onTaskCompleted 回调消费，对齐
- *   mock-dispatcher.ts:181-208 模板）。
+ *   T10 WorkerDispatcher 回流处理器（注册 onTaskCompleted 回调消费，按
+ *   worker task.completed 事件模板处理）。
  *
  * 各事件语义（计划 §MUST DO）：
  * - worker.heartbeat → 忽略（心跳走单独端点 POST /workers/:id/heartbeat）

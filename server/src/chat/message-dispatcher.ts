@@ -1,11 +1,10 @@
 /**
  * @ 触发分派入口（09 篇 §5.1 第 5 步「分派」）。
  *
- * 本抽象由 T10 MockDispatcher 实现（Phase 2 mock 模式：延迟 → loading 两阶段 →
- * 确定性模板回复落库 + 广播，完整 SSE 时序）；真实实现（Phase 4）为
- * WorkerDispatcher：定位任务组 Worker 实例并下发 prompt（FR-14 私聊/群聊共用同一
- * Agent 会话），注入群聊历史 + 文档库上下文（FR-15），回复经 worker task.completed
- * 回流（18 篇 §8.3）。
+ * 本抽象由 WorkerDispatcher 实现（Phase 4 真实分派：定位任务组 Worker 实例并
+ * 下发 prompt（FR-14 私聊/群聊共用同一 Agent 会话），注入群聊历史 + 文档库上下文
+ * （FR-15），回复经 worker task.completed 回流（18 篇 §8.3）。
+ * 早期 Phase 2 mock 实现（延迟 → loading 两阶段 → 确定性模板回复）已删除。
  *
  * 具体实现通过 DI token = MessageDispatcher 替换（chat.module.ts providers），
  * ChatService 只依赖本抽象，不感知具体实现——Phase 4 零改动替换。

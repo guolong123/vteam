@@ -79,7 +79,7 @@ function mockDriver(): {
   return { driver, createSession, sendMessage, getMessages, abort };
 }
 
-/** 收集事件 sender（复用 git-op-reporter.spec 模式：send 包装同步 push）。 */
+/** 收集事件 sender（send 包装同步 push 的测试辅助）。 */
 function createSender(): {
   sender: EventSender;
   sent: Array<{ type: string; payload: Record<string, unknown> }>;

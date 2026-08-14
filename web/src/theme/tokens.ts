@@ -93,12 +93,3 @@ export const shadow = {
   md: "0 4px 14px rgba(15,23,42,.08), 0 2px 4px rgba(15,23,42,.05)",
   lg: "0 16px 40px rgba(15,23,42,.14)",
 } as const;
-
-/* ---------------------------------- 侧边栏（深色） ---------------------------------- */
-export const sidebarTheme = {
-  bg: "#0F172A",
-  bgActive: "rgba(255,255,255,.08)",
-  text: "#94A3B8",
-  textActive: "#F8FAFC",
-  border: "rgba(255,255,255,.06)",
-} as const;

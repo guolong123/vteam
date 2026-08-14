@@ -55,7 +55,7 @@ export function buildAuthJson(providerKeys: ModelCredentialEntry[]): string {
  * 固定读取路径）：写前 mkdir -p（含 log 子目录，serve 启动写
  * `$HOME/.local/share/opencode/log/opencode.log`，缺失会 FileSystem.open 崩溃 →
  * serve 退出 → worker 重启换端口循环）+ writeFileSync（mode 600）+ chmodSync 兜底
- * （仿 git-credentials.ts createTempKey 双保险）。返回 { authJsonPath }。
+ * （仿临时 key 写入双保险）。返回 { authJsonPath }。
  */
 export function writeAuthJson(providerKeys: ModelCredentialEntry[]): AuthJsonResult {
   const opencodeDataDir = path.join(os.homedir(), ...OPENCODE_DATA_REL);
@@ -70,7 +70,7 @@ export function writeAuthJson(providerKeys: ModelCredentialEntry[]): AuthJsonRes
 }
 
 /**
- * 删除 auth.json 文件（幂等：不存在静默忽略；仿 git-credentials.ts cleanup）。
+ * 删除 auth.json 文件（幂等：不存在静默忽略；仿临时 key 清理幂等）。
  * 只删文件本身，**不删** $HOME/.local/share/opencode 目录（内含 opencode.db
  * 会话库，误删会导致 serve 会话状态丢失）。
  * serve 已读取 auth.json 后调用（凭据进内存后落盘明文不留存）。

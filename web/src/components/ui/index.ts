@@ -22,10 +22,6 @@ export type {
 } from "./message-input";
 export { StatusBadge } from "./status-badge";
 export type { StatusBadgeProps } from "./status-badge";
-export { Sidebar } from "./sidebar";
-export type { SidebarProps, SidebarNavKey } from "./sidebar";
-export { TopBar } from "./top-bar";
-export type { TopBarProps } from "./top-bar";
 export { EmptyState } from "./empty-state";
 export type { EmptyStateProps } from "./empty-state";
 export { ConfirmDialog } from "./confirm-dialog";

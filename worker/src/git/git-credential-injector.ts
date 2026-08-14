@@ -75,7 +75,7 @@ export function buildGitCredsFile(
 
 /**
  * 写凭证文件到 `$HOME/.keta-git-creds.json`：防御性 mkdir -p homedir +
- * writeFileSync（mode 600）+ chmodSync 兜底（仿 writeAuthJson/git-credentials 双保险）。
+ * writeFileSync（mode 600）+ chmodSync 兜底（仿 writeAuthJson 双保险）。
  * homedir 在函数内动态求值（模块级常量 GIT_CREDS_FILE 加载时固化，此处保证
  * 测试/运行时 mock 均生效）。返回 { path }。
  */

@@ -16,8 +16,7 @@ import { WorkerDispatcher } from './worker-dispatcher';
  *   保证 'm'/'c' 前缀跨模块计数一致，ChatService.onModuleInit 重启续号）；
  * - MessageDispatcher 抽象由 WorkerDispatcher 实现（Phase 4 真实分派：定位/分配 worker →
  *   doclib 上下文注入 → WorkerClient 下发 → 自持轮询/ingress 回流落库 + 广播，18 篇 §8.3）；
- *   原 MockDispatcher 代码保留不动（F4 零污染基线；F2 MINOR：删除 WORKER_MOCK_FALLBACK
- *   仅注释的开关语义，避免误导——本类不实现该开关）。
+ *   WORKER_MOCK_FALLBACK 开关语义仅存于注释（F2 MINOR：本类不实现该开关）。
  * - imports：WorkersModule（WorkersService/WorkerClient/SessionLifecycleService）、
  *   ArtifactsModule（ArtifactsService.onArtifactSubmitted 产出物归档）——均已有 exports。
  * - PermissionGuard（CONF-02 方案②补齐矩阵守卫）：端点叠加 chats.view/create/edit/delete，
