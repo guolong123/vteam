@@ -23,6 +23,18 @@ export function getAuthToken(): string | null {
   return accessToken;
 }
 
+/**
+ * 401 全局处理（token 失效 → 清 auth + 跳登录）。
+ * 用 handler 注册解耦，避免循环依赖：api 不 import authStore，
+ * 由 authStore 在模块加载时通过本函数挂载回调。
+ */
+let unauthorizedHandler: (() => void) | null = null;
+
+/** 注册 401 处理器（authStore 调用；传 null 可注销）。 */
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
+}
+
 export interface RequestOptions extends Omit<RequestInit, "body"> {
   /** 请求体，自动 JSON 序列化。传 undefined 则不带 body。 */
   body?: unknown;
@@ -87,6 +99,11 @@ export async function request<T>(
   }
 
   if (!resp.ok) {
+    // 401 且请求携带 token（登录/注册等 Public 无 token 的 401 如密码错误不触发）：
+    // token 失效 → 由已注册 handler 清登录态并跳登录页
+    if (resp.status === 401 && accessToken) {
+      unauthorizedHandler?.();
+    }
     let parsed: { code?: string; message?: string; details?: unknown } = {};
     try {
       parsed = (await resp.json()) as typeof parsed;
@@ -106,7 +123,13 @@ export async function request<T>(
   if (resp.status === 204) {
     return undefined as T;
   }
-  return (await resp.json()) as T;
+  const text = await resp.text();
+  // DELETE 等端点可能返回 200 空 body（NestJS 对 undefined 返回序列化空响应体）——
+  // 空 body 按成功处理返回 undefined，避免 JSON.parse('') 抛错导致误判失败
+  if (!text) {
+    return undefined as T;
+  }
+  return JSON.parse(text) as T;
 }
 
 /** 便捷方法：GET / POST / PATCH / DELETE。 */

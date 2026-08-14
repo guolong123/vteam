@@ -34,11 +34,11 @@ import {
  *   2. 用户不存在或已禁用 → 401；
  *   3. 读取 role.permissions JSON 判定（两种兼容格式，见 roles.constants.ts）：
  *      - `permissions.all === true`（seed 预置 admin 简写）→ 放行；
- *      - `permissions.all === false`（seed 预置 member 简写，未配置矩阵）→
- *        按「成员只读」放行 view 类权限、拒绝写操作（create/edit/delete/manage），
- *        与 09 篇「成员只读可见 + 写操作 [admin]」语义一致；
+ *      - `permissions.all === false`（旧版 member 简写/未配置矩阵的自定义角色）→
+ *        按「成员只读」放行 view 类权限、拒绝写操作（create/edit/delete/manage）；
  *      - 完整矩阵格式 `{ [resource]: { [action]: boolean } }` →
  *        校验 `permissions[resource][action] === true`（缺省视为 false）。
+ *        seed 预置 member 已迁移为完整矩阵（09 §2.3 默认权限点，见 prisma/seed.ts）。
  *   4. 不满足 → 403 FORBIDDEN_PERMISSION（携带缺失权限点）。
  *
  * 使用方需在模块 providers 注册本守卫（PrismaService 由全局 PrismaModule 提供）。

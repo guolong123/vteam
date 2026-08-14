@@ -6,7 +6,7 @@ import {
   persist,
   type StateStorage,
 } from "zustand/middleware";
-import { setAuthToken } from "@/lib/api";
+import { setAuthToken, setUnauthorizedHandler } from "@/lib/api";
 
 export const AUTH_PERSIST_KEY = "agent-platform-auth";
 
@@ -121,3 +121,12 @@ export const useAuthStore = create<AuthState>()(
     }
   )
 );
+
+// 模块加载时注册 401 处理器：token 失效 → 清登录态 + 重定向 /login。
+// next/router 在 lib 层不可靠，用 window.location；SSR 环境 window 不存在时跳过。
+setUnauthorizedHandler(() => {
+  useAuthStore.getState().logout();
+  if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+    window.location.href = "/login";
+  }
+});

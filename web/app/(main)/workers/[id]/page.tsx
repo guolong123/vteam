@@ -228,7 +228,7 @@ export default function WorkerDetailPage() {
         display: "flex",
         flexDirection: "column",
         overflowY: "auto",
-        padding: `${space.xl}px ${space.xl}px ${space.xl}px 0`,
+        padding: `${space.xl}px`,
         backgroundColor: neutral[50],
         fontFamily: fontFamily.body,
       }}
@@ -241,7 +241,9 @@ export default function WorkerDetailPage() {
           display: "flex",
           alignItems: "center",
           gap: space.md,
-          marginBottom: space.lg,
+          width: "100%",
+          maxWidth: 960,
+          margin: `${space.lg}px auto`,
         }}
       >
         <Link
@@ -279,7 +281,7 @@ export default function WorkerDetailPage() {
       {isPending ? (
         <div
           data-testid="worker-detail-loading"
-          style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xl}px 0`, ...baseFont }}
+          style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xl}px 0`, width: "100%", maxWidth: 960, margin: "0 auto", ...baseFont }}
         >
           加载中…
         </div>
@@ -294,6 +296,9 @@ export default function WorkerDetailPage() {
             gap: space.md,
             padding: `${space.xxl}px`,
             textAlign: "center",
+            width: "100%",
+            maxWidth: 960,
+            margin: "0 auto",
             borderRadius: radius.lg,
             backgroundColor: "#FFFFFF",
             border: `1px solid ${neutral[200]}`,
@@ -328,7 +333,9 @@ export default function WorkerDetailPage() {
             display: "flex",
             flexDirection: "column",
             gap: space.lg,
+            width: "100%",
             maxWidth: 960,
+            margin: "0 auto",
           }}
         >
           {/* 基本信息卡 */}
