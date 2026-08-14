@@ -37,7 +37,10 @@ export function AgentAvatar({
   className,
 }: AgentAvatarProps) {
   const dim = avatarSizes[size];
-  const theme = roles[role];
+  // 防御：role 非法/null/缺失时归一 developer——roles[非法] 与 role.charAt(null) 都会崩溃
+  // （Application error: Cannot read properties of undefined/null (label/charAt)）
+  const safeRole = role ?? "developer";
+  const theme = roles[safeRole] ?? roles.developer;
   const dotDim = Math.max(8, Math.round(dim * 0.28));
   return (
     <span
@@ -65,7 +68,7 @@ export function AgentAvatar({
         ...style,
       }}
     >
-      {(initials ?? role.charAt(0).toUpperCase())}
+      {(initials ?? safeRole.charAt(0).toUpperCase())}
       {dot && (
         <span
           aria-hidden

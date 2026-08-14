@@ -26,7 +26,8 @@ export interface AgentBadgeProps {
 }
 
 export function AgentBadge({ role, dot = true, style, className }: AgentBadgeProps) {
-  const theme = roles[role];
+  // 防御：role 非法/缺失时兜底 developer 主题（roles[非法] undefined → theme.label 崩溃）
+  const theme = roles[role] ?? roles.developer;
   return (
     <span
       data-testid="agent-badge"

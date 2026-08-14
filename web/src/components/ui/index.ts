@@ -11,8 +11,8 @@ export { AgentAvatar } from "./agent-avatar";
 export type { AgentAvatarProps } from "./agent-avatar";
 export { AgentBadge } from "./agent-badge";
 export type { AgentBadgeProps } from "./agent-badge";
-export { ChatBubble } from "./chat-bubble";
-export type { ChatBubbleProps, ChatMessageType } from "./chat-bubble";
+export { ChatBubble, AttachmentCard } from "./chat-bubble";
+export type { ChatBubbleProps, ChatMessageType, ChatBubbleAttachment } from "./chat-bubble";
 export { MessageInput } from "./message-input";
 export type {
   MessageInputProps,

@@ -105,7 +105,7 @@ export function MsgThinking({ author, role, state, text, time, style, className 
               wordBreak: "break-word",
             }}
           >
-            {text}
+            {pending ? text : text.trim() ? text : "（无详细思考内容）"}
           </div>
         )}
       </div>

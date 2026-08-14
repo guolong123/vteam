@@ -19,12 +19,14 @@
 "use client";
 import type { CSSProperties } from "react";
 import { type RoleKey, neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
-import { ChatBubble } from "@/src/components/ui";
+import { ChatBubble, AttachmentCard } from "@/src/components/ui";
+import type { ChatBubbleAttachment } from "@/src/components/ui";
 import { LoadingDots } from "./loading-indicator";
 import { MsgThinking } from "./msg-thinking";
 import { MsgTool } from "./msg-tool";
 import { MsgError } from "./msg-error";
 import { MsgAborted } from "./msg-aborted";
+import { stripInjectedContext } from "@/lib/strip-injected-context";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -33,12 +35,50 @@ export interface PartShape {
   type?: string;
   state?: "pending" | "done";
   text?: string;
+  /** reasoning 兜底字段：部分 serve 模型 reasoning 内容落在 summary/thoughts/detail 而非 text。 */
+  summary?: string;
+  thoughts?: string;
+  /** serve 标准 tool part 工具名（MCP 格式 `<serverName>_<toolName>`，如 keta-platform_task_context）。 */
+  tool?: string;
   name?: string;
   status?: "running" | "success" | "failed";
   input?: string;
   output?: string;
   kind?: "retry" | "quota";
   detail?: string;
+}
+
+/** 工具输入/输出规范化为单行文本：对象/数组 JSON 序列化，字符串原样，超长（>500 字符）截断省略。 */
+function formatToolIO(value: unknown): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value.length > 500 ? `${value.slice(0, 500)}…` : value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    serialized = String(value);
+  }
+  return serialized.length > 500 ? `${serialized.slice(0, 500)}…` : serialized;
+}
+
+/** serve tool part 状态值（completed 等）→ MsgTool 三态（running/success/failed）。 */
+function toToolStatus(value: unknown): "running" | "success" | "failed" {
+  const s = typeof value === "string" ? value.toLowerCase() : "";
+  if (s === "running" || s === "streaming" || s === "pending" || s === "queued") {
+    return "running";
+  }
+  if (s === "failed" || s === "error" || s === "aborted" || s === "cancelled") {
+    return "failed";
+  }
+  // success / completed / done / 空 → success（serve 终态以 completed 落盘）
+  return "success";
 }
 
 export interface MsgPartsProps {
@@ -51,12 +91,14 @@ export interface MsgPartsProps {
   time?: string;
   /** 流式中（消息 status=processing）：正文按流式块渲染 + 尾部「生成中」指示。 */
   streaming?: boolean;
+  /** 附件（agent 转发文件消息带 attachmentUrl 三字段时展示文件卡片）。 */
+  attachment?: ChatBubbleAttachment;
   style?: CSSProperties;
   className?: string;
 }
 
 /** Agent 消息片段渲染：过程片段（thinking/tool/error/aborted）+ 正文置底。 */
-export function MsgParts({ parts, bodyText, author, role, time, streaming, style, className }: MsgPartsProps) {
+export function MsgParts({ parts, bodyText, author, role, time, streaming, attachment, style, className }: MsgPartsProps) {
   const list = parts as PartShape[];
 
   // 中断独占：aborted 时其余未完成 Part 不渲染（10 篇 §2.3）
@@ -73,6 +115,8 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, style
   const procParts = list.filter((p) => p.type !== "text");
   const textParts = list.filter((p) => p.type === "text");
   const body = textParts.map((t) => t.text ?? "").join("\n") || bodyText || "";
+  // P6：agent 正文渲染前剥离注入的系统上下文块（流式态与非流式态统一应用）
+  const cleanBody = stripInjectedContext(body);
 
   return (
     <div className={className} style={{ display: "flex", flexDirection: "column", gap: space.sm, ...style }}>
@@ -84,21 +128,26 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, style
               author={author}
               role={role}
               state={p.state ?? "done"}
-              text={p.text ?? ""}
+              text={p.text ?? p.summary ?? p.thoughts ?? p.detail ?? ""}
               time={time}
             />
           );
         }
         if (p.type === "tool") {
+          const rawState = p.state;
+          const st =
+            rawState !== undefined && rawState !== null && typeof rawState === "object"
+              ? (rawState as unknown as Record<string, unknown>)
+              : undefined;
           return (
             <MsgTool
               key={i}
               author={author}
               role={role}
-              name={p.name ?? "工具"}
-              status={p.status ?? "success"}
-              input={p.input ?? ""}
-              output={p.output ?? ""}
+              name={String(p.tool ?? p.name ?? "工具")}
+              status={toToolStatus(st?.status ?? p.status)}
+              input={formatToolIO(st?.input)}
+              output={formatToolIO(st?.output)}
               time={time}
             />
           );
@@ -145,7 +194,7 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, style
                 wordBreak: "break-word",
               }}
             >
-              {body}
+              {cleanBody}
             </span>
             <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
               <LoadingDots color={neutral[400]} testid="msg-streaming-dots" />
@@ -153,9 +202,10 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, style
             </span>
           </div>
         ) : (
-          <ChatBubble text={body} type="agent" author={author} role={role} time={time} />
+          <ChatBubble text={cleanBody} type="agent" author={author} role={role} time={time} />
         )
       ) : null}
+      {attachment && <AttachmentCard attachment={attachment} isUser={false} />}
     </div>
   );
 }

@@ -7,6 +7,7 @@
  * data-testid=msg-tool，token 引用统一走 src/theme/tokens.ts。
  */
 "use client";
+import { useState } from "react";
 import type { CSSProperties } from "react";
 import {
   type RoleKey,
@@ -44,10 +45,12 @@ export interface MsgToolProps {
   className?: string;
 }
 
-/** 工具调用消息（tool part）：工具名 + 输入/输出摘要 + 状态（运行中/成功/失败，失败=ToolStateError） */
+/** 工具调用消息（tool part）：折叠单行概要 + 点击展开完整输入/输出（仿 MsgThinking 交互） */
 export function MsgTool({ author, role, name, status, input, output, time, style, className }: MsgToolProps) {
   const st = toolStatus[status];
   const failed = status === "failed";
+  const [open, setOpen] = useState(false);
+  const summary = input || output || "（无输入输出）";
   return (
     <div
       data-testid="msg-tool"
@@ -65,6 +68,13 @@ export function MsgTool({ author, role, name, status, input, output, time, style
     >
       <AgentAvatar role={role} size="sm" dot={false} style={{ marginTop: 2 }} />
       <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") setOpen(!open);
+        }}
         style={{
           flex: 1,
           minWidth: 0,
@@ -73,6 +83,8 @@ export function MsgTool({ author, role, name, status, input, output, time, style
           backgroundColor: "#FFFFFF",
           border: `1px solid ${failed ? "#FECACA" : neutral[200]}`,
           boxShadow: shadow.sm,
+          cursor: "pointer",
+          transition: "border-color .15s ease",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
@@ -100,28 +112,51 @@ export function MsgTool({ author, role, name, status, input, output, time, style
             {st.label}
           </span>
         </div>
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-            marginTop: space.sm,
-            fontSize: fontSize.xs,
-            color: neutral[500],
-            lineHeight: 1.6,
-          }}
-        >
-          <div style={{ display: "flex", gap: space.sm }}>
-            <span style={{ color: neutral[400], flexShrink: 0 }}>输入</span>
-            <span style={{ fontFamily: fontFamily.mono, wordBreak: "break-all" }}>{input}</span>
-          </div>
-          <div style={{ display: "flex", gap: space.sm }}>
-            <span style={{ color: neutral[400], flexShrink: 0 }}>输出</span>
-            <span style={{ wordBreak: "break-word", color: failed ? "#B91C1C" : neutral[600] }}>
-              {output}
-            </span>
-          </div>
+        <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginTop: space.sm, minWidth: 0 }}>
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontFamily: fontFamily.mono,
+              fontSize: fontSize.xs,
+              color: neutral[500],
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {summary}
+          </span>
+          <span style={{ flexShrink: 0, fontSize: fontSize.xs, color: neutral[400] }} aria-hidden>
+            {open ? "▾ 收起" : "点击查看详情 ▸"}
+          </span>
         </div>
+        {open && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 2,
+              marginTop: space.sm,
+              paddingTop: space.sm,
+              borderTop: `1px solid ${neutral[100]}`,
+              fontSize: fontSize.xs,
+              color: neutral[500],
+              lineHeight: 1.6,
+            }}
+          >
+            <div style={{ display: "flex", gap: space.sm }}>
+              <span style={{ color: neutral[400], flexShrink: 0 }}>输入</span>
+              <span style={{ fontFamily: fontFamily.mono, wordBreak: "break-all" }}>{input}</span>
+            </div>
+            <div style={{ display: "flex", gap: space.sm }}>
+              <span style={{ color: neutral[400], flexShrink: 0 }}>输出</span>
+              <span style={{ wordBreak: "break-word", color: failed ? "#B91C1C" : neutral[600] }}>
+                {output}
+              </span>
+            </div>
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginTop: space.sm }}>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
             {author}

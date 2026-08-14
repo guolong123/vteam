@@ -21,3 +21,5 @@ export { MsgAborted } from "./msg-aborted";
 export type { MsgAbortedProps } from "./msg-aborted";
 export { MsgParts } from "./msg-parts";
 export type { MsgPartsProps, PartShape } from "./msg-parts";
+export { QuestionModal } from "./question-modal";
+export type { QuestionModalProps, QuestionModalData } from "./question-modal";

@@ -17,6 +17,7 @@ import {
   shadow,
 } from "@/src/theme/tokens";
 import { AgentAvatar } from "./agent-avatar";
+import { stripInjectedContext } from "@/lib/strip-injected-context";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -100,7 +101,7 @@ export function ChatBubble({
             borderRadius: radius.pill,
           }}
         >
-          {text}
+          {stripInjectedContext(text)}
         </div>
       </div>
     );
@@ -148,7 +149,7 @@ export function ChatBubble({
               ...baseFont,
             }}
           >
-            {author ?? roleTheme!.label}
+            {author ?? (roleTheme ?? roles.developer).label}
             {time ? ` · ${time}` : ""}
           </span>
         )}
@@ -173,7 +174,7 @@ export function ChatBubble({
                   }
             }
           >
-            {text}
+            {isUser ? text : stripInjectedContext(text)}
           </div>
         )}
         {attachment && (
@@ -184,8 +185,9 @@ export function ChatBubble({
   );
 }
 
-/** 附件卡片：图片内嵌预览（attachment-image）/ 文件下载链接（attachment-file），包 message-attachment。 */
-function AttachmentCard({
+/** 附件卡片：图片内嵌预览（attachment-image）/ 文件下载链接（attachment-file），包 message-attachment。
+ *  导出供 MsgParts（agent 过程片段消息）复用同一渲染链路。 */
+export function AttachmentCard({
   attachment,
   isUser,
 }: {
@@ -208,18 +210,26 @@ function AttachmentCard({
       }}
     >
       {isImage ? (
-        <img
+        <a
           data-testid="attachment-image"
-          src={attachment.url}
-          alt={attachment.name}
-          style={{
-            display: "block",
-            width: "100%",
-            maxHeight: 280,
-            objectFit: "cover",
-            borderRadius: radius.md,
-          }}
-        />
+          href={attachment.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={`查看原图：${attachment.name}`}
+          style={{ display: "block" }}
+        >
+          <img
+            src={attachment.url}
+            alt={attachment.name}
+            style={{
+              display: "block",
+              width: "100%",
+              maxHeight: 280,
+              objectFit: "cover",
+              borderRadius: radius.md,
+            }}
+          />
+        </a>
       ) : (
         <a
           data-testid="attachment-file"
