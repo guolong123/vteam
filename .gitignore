@@ -41,3 +41,6 @@ coverage/
 
 # session snapshots (run-continuation JSON, not versioned)
 .omo/run-continuation/
+
+# server runtime uploads (P2 产出物落盘目录，运行时产物不入库)
+server/uploads/
