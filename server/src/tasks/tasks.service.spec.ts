@@ -1162,6 +1162,90 @@ describe('TasksService', () => {
       expect(result.status).toBe('completed');
     });
 
+    it('accept：主实例存在时私信主 Agent 记忆总结引导（senderType=system 落 private 频道 + 事务后广播）', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(
+          row({
+            status: 'pending_review',
+            version: 4,
+            mainAgentId: 'a_product',
+            mainAgentInstanceId: 'ta_0000000001',
+          }),
+        )
+        .mockResolvedValue(
+          row({
+            status: 'completed',
+            version: 5,
+            completedAt: new Date(),
+            mainAgentId: 'a_product',
+            mainAgentInstanceId: 'ta_0000000001',
+          }),
+        );
+      prisma.chatChannel.findFirst
+        .mockResolvedValueOnce({ id: 'c_0000000001' }) // task_group 频道
+        .mockResolvedValueOnce({ id: 'c_0000000002' }); // 主实例 private 频道
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001') // 群聊系统消息
+        .mockResolvedValueOnce('m_0000000002'); // 私信主实例
+      const txModels = mockTransitionTx();
+
+      const result = await service.accept('t_0000000001', userId);
+
+      // 私信定位按实例：accept 与 start 同路径，private 频道查找 where 含 taskAgentId=主实例
+      expect(prisma.chatChannel.findFirst).toHaveBeenNthCalledWith(2, {
+        where: {
+          taskId: 't_0000000001',
+          taskAgentId: 'ta_0000000001',
+          type: 'private',
+        },
+        select: { id: true },
+      });
+      // 群聊系统消息（accept 群聊文案不变）
+      assertSysMessageCreated(txModels, 'c_0000000001', '任务已验收完成，产出物基线已锁定', 1);
+      // 私信主实例：memory_save 引导文案（senderType=system 落 private 频道，被动提示）
+      assertSysMessageCreated(
+        txModels,
+        'c_0000000002',
+        '任务已验收完成，产出物基线已锁定。请在后续工作中调用 vteam MCP 的 memory_save 工具（参数 {taskId, selfInstanceId, level: "task", content, tags?}）总结本任务执行中的经验、教训与关键决策，沉淀为任务级记忆；如有跨任务复用价值，另存一条 level=project 记忆。',
+        2,
+      );
+      // 系统消息事务后广播 chat.message.new（群聊 + 私信各一）
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        { message: expect.objectContaining({ channelId: 'c_0000000001', senderType: 'system' }) },
+        { type: 'channel', id: 'c_0000000001' },
+      );
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        { message: expect.objectContaining({ channelId: 'c_0000000002', senderType: 'system' }) },
+        { type: 'channel', id: 'c_0000000002' },
+      );
+      expect(result.status).toBe('completed');
+    });
+
+    it('accept：无 mainAgentInstanceId → 正常完成，不解析 private 频道、不写私信、不报错', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ status: 'pending_review', version: 4 }))
+        .mockResolvedValue(
+          row({ status: 'completed', version: 5, completedAt: new Date() }),
+        );
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      const txModels = mockTransitionTx();
+
+      const result = await service.accept('t_0000000001', userId);
+
+      // 仅解析 task_group 频道一次（mainAgentInstanceId=null 不查 private）
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledTimes(1);
+      // 仅一条群聊系统消息，无私信落库
+      expect(txModels.message.create).toHaveBeenCalledTimes(1);
+      assertSysMessageCreated(txModels, 'c_0000000001', '任务已验收完成，产出物基线已锁定', 1);
+      expect(result.status).toBe('completed');
+    });
+
     it('accept：非前置状态（in_progress）→ 409 TASK_INVALID_TRANSITION', async () => {
       prisma.task.findUnique.mockResolvedValue(row({ status: 'in_progress' }));
 
@@ -1258,7 +1342,7 @@ describe('TasksService', () => {
       expect(realtime.broadcast).not.toHaveBeenCalled();
     });
 
-    it('archive：completed → archived，写 archivedAt + sessions 全部置 archived + archive 事件 + 广播 + 系统消息「任务已归档，历史可回看」', async () => {
+    it('archive：completed → archived，写 archivedAt + sessions 全部置 archived + archive 事件 + 广播 + 系统消息「任务已归档，历史可回看。任务级记忆已随验收沉淀（未总结不影响归档）」', async () => {
       prisma.task.findUnique
         .mockResolvedValueOnce(row({ status: 'completed', version: 7 }))
         .mockResolvedValue(
@@ -1291,8 +1375,8 @@ describe('TasksService', () => {
         where: { taskId: 't_0000000001' },
         data: { status: 'archived' },
       });
-      // 系统消息落库（10 篇 §8.1，明确内容保留）
-      assertSysMessageCreated(txModels, 'c_0000000001', '任务已归档，历史可回看');
+      // 系统消息落库（10 篇 §8.1，明确内容保留；mem-trigger 补充：任务级记忆已随验收沉淀）
+      assertSysMessageCreated(txModels, 'c_0000000001', '任务已归档，历史可回看。任务级记忆已随验收沉淀（未总结不影响归档）');
       expect(realtime.broadcast).toHaveBeenCalledWith(
         EVENT_TYPES.TASK_STATUS_CHANGED,
         expect.objectContaining({ from: 'completed', to: 'archived' }),

@@ -109,6 +109,7 @@ const KEY_TO_PATH: Record<string, string> = {
   messages: "/messages",
   users: "/users",
   roles: "/roles",
+  memories: "/memories",
 };
 
 /** 路由路径 → 导航 key（pathname 首段） */
@@ -150,6 +151,7 @@ const CMDK_NAV_PATH: Record<string, string> = {
   消息中心: "/messages",
   用户管理: "/users",
   角色权限: "/roles",
+  记忆管理: "/memories",
 };
 
 /**
@@ -164,12 +166,14 @@ const NAV_VISIBLE: Record<string, (perms: RolePermissions) => boolean> = {
   skills: (p) => hasPermission(p, "skills"),
   users: isPlatformAdmin,
   roles: isPlatformAdmin,
+  memories: isPlatformAdmin,
 };
 
 /** 路由首段 → 访问所需判定（与导航过滤同源；/tools 属 skills 资源；无条目 = 登录即可） */
 const ROUTE_GUARD: Record<string, (perms: RolePermissions) => boolean> = {
   ...NAV_VISIBLE,
   tools: (p) => hasPermission(p, "skills"),
+  memories: isPlatformAdmin,
 };
 
 /** 角色显示名（对齐 users 页 ROLE_LABEL：admin→管理员 / member→成员 / 其余原名） */
@@ -206,6 +210,7 @@ const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   messages: { title: "消息中心", subtitle: "任务群聊与私聊会话" },
   users: { title: "用户管理", subtitle: "管理平台账号与角色分配" },
   roles: { title: "角色权限", subtitle: "管理平台角色与权限矩阵" },
+  memories: { title: "记忆管理", subtitle: "查看与管理 Agent 记忆" },
 };
 
 /** 动态段路由优先判定：/tasks/:id（非 /tasks/new）→ 任务群聊；/messages/:id → 私聊；/workers/:id → Worker 详情 */

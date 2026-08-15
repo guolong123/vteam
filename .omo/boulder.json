@@ -1,270 +1,182 @@
 {
   "schema_version": 2,
-  "active_work_id": "issue-management-8ef55bae",
+  "active_work_id": "memory-management-a990d997",
   "works": {
-    "platform-mcp-implementation-3339f9c6": {
-      "work_id": "platform-mcp-implementation-3339f9c6",
-      "active_plan": "/data/git-project/aiagents/.omo/plans/platform-mcp-implementation.md",
-      "plan_name": "platform-mcp-implementation",
+    "swagger-mcp-915f2505": {
+      "work_id": "swagger-mcp-915f2505",
+      "active_plan": "/data/git-project/aiagents/.omo/plans/swagger-mcp.md",
+      "plan_name": "swagger-mcp",
       "status": "completed",
-      "started_at": "2026-08-11T02:36:25.429Z",
-      "updated_at": "2026-08-12T02:40:09.715Z",
-      "completed_at": "2026-08-11T04:00:00.000Z",
-      "blocked_tasks": {
-        "todo:4": "阶段4 端到端实测：模型 provider configured:False（无 API key），需配置模型凭据后执行"
-      },
+      "started_at": "2026-08-15T13:11:41.186Z",
+      "updated_at": "2026-08-15T14:45:23.875Z",
       "session_ids": [
-        "opencode:ses_01431acf9ffef3Q3c3rNxWMa8h"
+        "opencode:ses_ffc366639ffexNTxdnVyBeOjY2"
       ],
       "session_origins": {
-        "opencode:ses_01431acf9ffef3Q3c3rNxWMa8h": "direct"
+        "opencode:ses_ffc366639ffexNTxdnVyBeOjY2": "direct"
       },
       "agent": "atlas",
       "task_sessions": {
         "todo:1": {
           "task_key": "todo:1",
           "task_label": "1",
-          "task_title": "ACK「收到，正在处理…」（dispatch 时 acknowledge 落库，正确保留）",
-          "session_id": "opencode:ses_00c2cceb5ffePg8JbWmWaHX5bO",
+          "task_title": "阶段 1：`platform-mcp.constants.ts` PLATFORM_MCP_SERVER_NAME 'keta-platform'→'vteam'",
+          "session_id": "opencode:ses_ffa464f8effecUsJgzsYZMCCWb",
           "agent": "Sisyphus-Junior",
           "category": "deep",
-          "started_at": "2026-08-11T03:03:13.805Z",
-          "ended_at": "2026-08-12T02:40:09.715Z",
-          "elapsed_ms": 85015910,
-          "status": "completed",
-          "updated_at": "2026-08-12T02:40:09.715Z"
+          "started_at": "2026-08-15T13:14:58.615Z",
+          "status": "running",
+          "updated_at": "2026-08-15T14:13:08.207Z"
         },
-        "todo:2": {
-          "task_key": "todo:2",
-          "task_label": "2",
-          "task_title": "阶段 2：seed keta-platform MCP 记录 + worker 注入验证（`opencode mcp list` connected）",
-          "session_id": "opencode:ses_01126c6e3ffecbjTYSapGqy5QV",
+        "final-wave:f2": {
+          "task_key": "final-wave:f2",
+          "task_label": "F2",
+          "task_title": "评审：vteam-api 工具生成正确（70 路径全映射、参数合并、$ref 解析、命名规则稳定）",
+          "session_id": "opencode:ses_ffa2624e7ffeAAi5Ma23fvW5Ib",
           "agent": "Sisyphus-Junior",
           "category": "deep",
-          "updated_at": "2026-08-11T03:32:22.161Z",
-          "started_at": "2026-08-11T03:31:17.593Z",
-          "status": "completed",
-          "ended_at": "2026-08-11T03:32:22.161Z",
-          "elapsed_ms": 64568
-        },
-        "todo:4": {
-          "task_key": "todo:4",
-          "task_label": "4",
-          "task_title": "阶段 4：端到端实测（群聊 @ → agent 自主调工具 → group_post 结论；需模型凭据）",
-          "session_id": "opencode:ses_01116d21efferzG7bbhbvLZvN5",
-          "agent": "Sisyphus-Junior",
-          "category": "unspecified-low",
-          "updated_at": "2026-08-11T03:48:54.134Z",
-          "started_at": "2026-08-11T03:48:54.133Z",
-          "status": "running"
-        },
-        "final-wave:f1": {
-          "task_key": "final-wave:f1",
-          "task_label": "F1",
-          "task_title": "评审：platform-mcp 模块实现与设计一致（4 工具/归属校验/SDK 接入），单测覆盖正常+403 路径",
-          "session_id": "opencode:ses_0110f2d7affe3MKUuOpdwWvA44",
-          "agent": "Sisyphus-Junior",
-          "category": "ultrabrain",
-          "updated_at": "2026-08-11T03:53:16.434Z",
-          "started_at": "2026-08-11T03:52:58.498Z",
-          "status": "completed",
-          "ended_at": "2026-08-11T03:53:16.434Z",
-          "elapsed_ms": 17936
+          "started_at": "2026-08-15T14:29:44.285Z",
+          "status": "running",
+          "updated_at": "2026-08-15T14:41:50.935Z"
         }
       },
-      "ended_at": "2026-08-11T03:55:55.521Z",
-      "elapsed_ms": 4770092
+      "ended_at": "2026-08-15T14:45:23.875Z",
+      "elapsed_ms": 5622689
     },
-    "issue-management-8ef55bae": {
-      "work_id": "issue-management-8ef55bae",
-      "active_plan": "/data/git-project/aiagents/.omo/plans/issue-management.md",
-      "plan_name": "issue-management",
-      "status": "completed",
-      "started_at": "2026-08-13T00:47:30.212Z",
-      "updated_at": "2026-08-13T02:35:12.056Z",
+    "memory-management-a990d997": {
+      "work_id": "memory-management-a990d997",
+      "active_plan": "/data/git-project/aiagents/.omo/plans/memory-management.md",
+      "plan_name": "memory-management",
+      "status": "active",
+      "started_at": "2026-08-15T14:57:52.101Z",
+      "updated_at": "2026-08-15T15:35:32.347Z",
       "session_ids": [
-        "opencode:ses_01431acf9ffef3Q3c3rNxWMa8h"
+        "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O"
       ],
       "session_origins": {
-        "opencode:ses_01431acf9ffef3Q3c3rNxWMa8h": "direct"
+        "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O": "direct"
       },
       "agent": "atlas",
       "task_sessions": {
         "todo:1": {
           "task_key": "todo:1",
           "task_label": "1",
-          "task_title": "Issue 数据模型 + 迁移",
-          "session_id": "opencode:ses_00768774effeB7fKtDszoP4PT4",
+          "task_title": "server 启动 + 登录拿 token → `GET /api/v1/memories` 返回 `{items,total,page,pageSize}`",
+          "session_id": "opencode:ses_ff9fb4120ffevJqrhT3QrjOwHv",
           "agent": "Sisyphus-Junior",
           "category": "deep",
-          "updated_at": "2026-08-13T00:55:56.183Z",
-          "started_at": "2026-08-13T00:55:17.458Z",
+          "started_at": "2026-08-15T15:04:07.859Z",
+          "ended_at": "2026-08-15T15:27:56.492Z",
+          "elapsed_ms": 1428633,
           "status": "completed",
-          "ended_at": "2026-08-13T00:55:56.183Z",
-          "elapsed_ms": 38725
+          "updated_at": "2026-08-15T15:27:56.492Z"
         },
         "todo:2": {
           "task_key": "todo:2",
           "task_label": "2",
-          "task_title": "server issues 模块（CRUD + 状态流转）",
-          "session_id": "opencode:ses_00760f16cffeXieJiJf9DpoWuW",
+          "task_title": "mem-mcp：平台 MCP memory_save / memory_search 工具",
+          "session_id": "opencode:ses_ffa0abae7ffeMaTVv8wx6fTRix",
           "agent": "Sisyphus-Junior",
           "category": "deep",
-          "updated_at": "2026-08-13T01:13:19.924Z",
-          "started_at": "2026-08-13T01:12:13.305Z",
+          "updated_at": "2026-08-15T15:12:51.716Z",
+          "started_at": "2026-08-15T15:11:35.550Z",
           "status": "completed",
-          "ended_at": "2026-08-13T01:13:19.924Z",
-          "elapsed_ms": 66619
+          "ended_at": "2026-08-15T15:12:51.716Z",
+          "elapsed_ms": 76166
         },
-        "todo:3": {
-          "task_key": "todo:3",
-          "task_label": "3",
-          "task_title": "内置 issue MCP 工具 + 全局提示词",
-          "session_id": "opencode:ses_007510e5cffexpvIMwBRYz6fXW",
+        "todo:6": {
+          "task_key": "todo:6",
+          "task_label": "6",
+          "task_title": "mem-web：记忆管理页面 + 导航注册",
+          "session_id": "opencode:ses_ffa040432ffeRhtVAtKqTxqbuN",
           "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "updated_at": "2026-08-13T01:44:22.651Z",
-          "started_at": "2026-08-13T01:31:42.151Z",
+          "category": "visual-engineering",
+          "updated_at": "2026-08-15T15:22:13.331Z",
+          "started_at": "2026-08-15T15:19:35.993Z",
           "status": "completed",
-          "ended_at": "2026-08-13T01:44:22.651Z",
-          "elapsed_ms": 760500
-        },
-        "todo:5": {
-          "task_key": "todo:5",
-          "task_label": "5",
-          "task_title": "端到端验证",
-          "session_id": "opencode:ses_0073474a2ffepLh5eBDp0Ssfka",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "updated_at": "2026-08-13T02:03:55.135Z",
-          "started_at": "2026-08-13T02:03:18.689Z",
-          "status": "completed",
-          "ended_at": "2026-08-13T02:03:55.135Z",
-          "elapsed_ms": 36446
+          "ended_at": "2026-08-15T15:22:13.331Z",
+          "elapsed_ms": 157338
         },
         "final-wave:f1": {
           "task_key": "final-wave:f1",
           "task_label": "F1",
-          "task_title": "Plan compliance audit（对照本计划逐项核对：schema/模块/MCP 工具/提示词/管理页/端到端全部落地，范围外未混入）",
-          "session_id": "opencode:ses_00722d6a1ffeC4o3yN0Mgc35P4",
+          "task_title": "Plan compliance audit",
+          "session_id": "opencode:ses_ffa040432ffeRhtVAtKqTxqbuN",
           "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "updated_at": "2026-08-13T02:12:28.435Z",
-          "started_at": "2026-08-13T02:09:14.051Z",
+          "category": "visual-engineering",
+          "started_at": "2026-08-15T15:27:08.046Z",
           "status": "completed",
-          "ended_at": "2026-08-13T02:12:28.435Z",
-          "elapsed_ms": 194384
-        },
-        "final-wave:f3": {
-          "task_key": "final-wave:f3",
-          "task_label": "F3",
-          "task_title": "Real manual QA（真实 UI 走一遍创建→指派→流转→删除，截图留档）",
-          "session_id": "opencode:ses_0071b41e4ffez6P5Q4bfJKpzzc",
-          "agent": "Sisyphus-Junior",
-          "category": "quick",
-          "updated_at": "2026-08-13T02:34:12.160Z",
-          "started_at": "2026-08-13T02:15:43.124Z",
-          "status": "completed",
-          "ended_at": "2026-08-13T02:34:12.160Z",
-          "elapsed_ms": 1109036
+          "updated_at": "2026-08-15T15:35:32.347Z",
+          "ended_at": "2026-08-15T15:35:32.347Z",
+          "elapsed_ms": 504301
         }
-      },
-      "ended_at": "2026-08-13T02:35:12.056Z",
-      "elapsed_ms": 6461844
+      }
     }
   },
-  "active_plan": "/data/git-project/aiagents/.omo/plans/issue-management.md",
-  "started_at": "2026-08-13T00:47:30.212Z",
-  "status": "completed",
-  "updated_at": "2026-08-13T02:35:12.056Z",
+  "active_plan": "/data/git-project/aiagents/.omo/plans/memory-management.md",
+  "started_at": "2026-08-15T14:57:52.101Z",
+  "status": "active",
+  "updated_at": "2026-08-15T15:35:32.347Z",
   "session_ids": [
-    "opencode:ses_01431acf9ffef3Q3c3rNxWMa8h"
+    "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O"
   ],
   "session_origins": {
-    "opencode:ses_01431acf9ffef3Q3c3rNxWMa8h": "direct"
+    "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O": "direct"
   },
-  "plan_name": "issue-management",
+  "plan_name": "memory-management",
   "task_sessions": {
     "todo:1": {
       "task_key": "todo:1",
       "task_label": "1",
-      "task_title": "Issue 数据模型 + 迁移",
-      "session_id": "opencode:ses_00768774effeB7fKtDszoP4PT4",
+      "task_title": "server 启动 + 登录拿 token → `GET /api/v1/memories` 返回 `{items,total,page,pageSize}`",
+      "session_id": "opencode:ses_ff9fb4120ffevJqrhT3QrjOwHv",
       "agent": "Sisyphus-Junior",
       "category": "deep",
-      "updated_at": "2026-08-13T00:55:56.183Z",
-      "started_at": "2026-08-13T00:55:17.458Z",
+      "started_at": "2026-08-15T15:04:07.859Z",
+      "ended_at": "2026-08-15T15:27:56.492Z",
+      "elapsed_ms": 1428633,
       "status": "completed",
-      "ended_at": "2026-08-13T00:55:56.183Z",
-      "elapsed_ms": 38725
+      "updated_at": "2026-08-15T15:27:56.492Z"
     },
     "todo:2": {
       "task_key": "todo:2",
       "task_label": "2",
-      "task_title": "server issues 模块（CRUD + 状态流转）",
-      "session_id": "opencode:ses_00760f16cffeXieJiJf9DpoWuW",
+      "task_title": "mem-mcp：平台 MCP memory_save / memory_search 工具",
+      "session_id": "opencode:ses_ffa0abae7ffeMaTVv8wx6fTRix",
       "agent": "Sisyphus-Junior",
       "category": "deep",
-      "updated_at": "2026-08-13T01:13:19.924Z",
-      "started_at": "2026-08-13T01:12:13.305Z",
+      "updated_at": "2026-08-15T15:12:51.716Z",
+      "started_at": "2026-08-15T15:11:35.550Z",
       "status": "completed",
-      "ended_at": "2026-08-13T01:13:19.924Z",
-      "elapsed_ms": 66619
+      "ended_at": "2026-08-15T15:12:51.716Z",
+      "elapsed_ms": 76166
     },
-    "todo:3": {
-      "task_key": "todo:3",
-      "task_label": "3",
-      "task_title": "内置 issue MCP 工具 + 全局提示词",
-      "session_id": "opencode:ses_007510e5cffexpvIMwBRYz6fXW",
+    "todo:6": {
+      "task_key": "todo:6",
+      "task_label": "6",
+      "task_title": "mem-web：记忆管理页面 + 导航注册",
+      "session_id": "opencode:ses_ffa040432ffeRhtVAtKqTxqbuN",
       "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-08-13T01:44:22.651Z",
-      "started_at": "2026-08-13T01:31:42.151Z",
+      "category": "visual-engineering",
+      "updated_at": "2026-08-15T15:22:13.331Z",
+      "started_at": "2026-08-15T15:19:35.993Z",
       "status": "completed",
-      "ended_at": "2026-08-13T01:44:22.651Z",
-      "elapsed_ms": 760500
-    },
-    "todo:5": {
-      "task_key": "todo:5",
-      "task_label": "5",
-      "task_title": "端到端验证",
-      "session_id": "opencode:ses_0073474a2ffepLh5eBDp0Ssfka",
-      "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-08-13T02:03:55.135Z",
-      "started_at": "2026-08-13T02:03:18.689Z",
-      "status": "completed",
-      "ended_at": "2026-08-13T02:03:55.135Z",
-      "elapsed_ms": 36446
+      "ended_at": "2026-08-15T15:22:13.331Z",
+      "elapsed_ms": 157338
     },
     "final-wave:f1": {
       "task_key": "final-wave:f1",
       "task_label": "F1",
-      "task_title": "Plan compliance audit（对照本计划逐项核对：schema/模块/MCP 工具/提示词/管理页/端到端全部落地，范围外未混入）",
-      "session_id": "opencode:ses_00722d6a1ffeC4o3yN0Mgc35P4",
+      "task_title": "Plan compliance audit",
+      "session_id": "opencode:ses_ffa040432ffeRhtVAtKqTxqbuN",
       "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-08-13T02:12:28.435Z",
-      "started_at": "2026-08-13T02:09:14.051Z",
+      "category": "visual-engineering",
+      "started_at": "2026-08-15T15:27:08.046Z",
       "status": "completed",
-      "ended_at": "2026-08-13T02:12:28.435Z",
-      "elapsed_ms": 194384
-    },
-    "final-wave:f3": {
-      "task_key": "final-wave:f3",
-      "task_label": "F3",
-      "task_title": "Real manual QA（真实 UI 走一遍创建→指派→流转→删除，截图留档）",
-      "session_id": "opencode:ses_0071b41e4ffez6P5Q4bfJKpzzc",
-      "agent": "Sisyphus-Junior",
-      "category": "quick",
-      "updated_at": "2026-08-13T02:34:12.160Z",
-      "started_at": "2026-08-13T02:15:43.124Z",
-      "status": "completed",
-      "ended_at": "2026-08-13T02:34:12.160Z",
-      "elapsed_ms": 1109036
+      "updated_at": "2026-08-15T15:35:32.347Z",
+      "ended_at": "2026-08-15T15:35:32.347Z",
+      "elapsed_ms": 504301
     }
   },
-  "agent": "atlas",
-  "ended_at": "2026-08-13T02:35:12.056Z",
-  "elapsed_ms": 6461844
+  "agent": "atlas"
 }

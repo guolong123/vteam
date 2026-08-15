@@ -28,6 +28,7 @@ import {
 import { TaskTransitionAction } from '../common/constants/task.constants';
 import { TasksService } from '../tasks/tasks.service';
 import { QuestionsService } from '../questions/questions.service';
+import { MEMORY_LEVELS, MemoryLevel } from '../memories/memory.constants';
 import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
 
 /**
@@ -734,6 +735,164 @@ export class PlatformMcpService {
     });
   }
 
+  /**
+   * memory_save：写入平台记忆（memory-management Todo 2）。
+   * - 三参数归属校验（selfInstanceId 必填防冒充，对齐落库类工具 groupPost/submitArtifact）。
+   * - 级别校验（Metis M3/M4）：
+   *   - task：taskId=当前任务、projectId 取 task 行冗余存；
+   *   - project：projectId 从 task 行反查（**不接收 projectId 入参**，防跨项目写入——
+   *     写 project 级 = 写当前任务所属项目的记忆）；
+   *   - global：**仅主 Agent 可写**（task.mainAgentInstanceId === selfInstanceId，
+   *     否则 403 PLATFORM_MCP_FORBIDDEN，防全局污染）。
+   * - 落库 memories（me_ 前缀 IdGenerator 生成；createdBy=selfInstanceId 精确归属；
+   *   tags 为 Json 列，无标签传 null）。
+   * 返回 {memoryId, level}。
+   */
+  async memorySave(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId: string;
+      selfInstanceId: string;
+      level: MemoryLevel;
+      content: string;
+      tags?: string[];
+    },
+  ): Promise<{ memoryId: string; level: MemoryLevel }> {
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+
+    const task = await this.prisma.task.findUnique({
+      where: { id: args.taskId },
+      select: { projectId: true, mainAgentInstanceId: true },
+    });
+    if (!task) {
+      throw new NotFoundException({
+        code: PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
+        message: '任务不存在',
+      });
+    }
+
+    // 级别校验（显式三分支 + 兜底 400，纵深防御）：task 级冗余存 projectId；
+    // project 级从 task 反查（不接收入参）；global 级仅主 Agent 可写（防全局污染，Metis M3）。
+    // 非法 level 不再落入 global 分支（zod schema 已保证合法，此处防绕过 schema 直调 service）。
+    let memoryTaskId: string | null = null;
+    let memoryProjectId: string | null = null;
+    if (args.level === MEMORY_LEVELS.task) {
+      memoryTaskId = args.taskId;
+      memoryProjectId = task.projectId;
+    } else if (args.level === MEMORY_LEVELS.project) {
+      memoryProjectId = task.projectId;
+    } else if (args.level === MEMORY_LEVELS.global) {
+      if (task.mainAgentInstanceId !== args.selfInstanceId) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: '仅主 Agent 可写入全局记忆，禁止普通成员写 global 级',
+        });
+      }
+    } else {
+      throw new BadRequestException({
+        code: PLATFORM_MCP_ERRORS.MEMORY_INVALID,
+        message: `非法记忆级别：${String(args.level)}`,
+      });
+    }
+
+    const memory = await this.prisma.memory.create({
+      data: {
+        id: await this.idGen.nextId('me'),
+        level: args.level,
+        taskId: memoryTaskId,
+        projectId: memoryProjectId,
+        content: args.content,
+        tags: (args.tags ?? null) as Prisma.InputJsonValue | null,
+        createdBy: args.selfInstanceId,
+      },
+    });
+    return { memoryId: memory.id, level: args.level };
+  }
+
+  /**
+   * memory_search：检索平台记忆（按需检索，替代自动注入；只读，无 selfInstanceId）。
+   * 1. 归属校验（无 selfInstanceId，仅校验 worker 有该任务会话）。
+   * 2. 解析 task 行 projectId（任务不存在 → 404）。
+   * 3. `memory.findMany({where: {deletedAt: null, OR: [task级(taskId)/project级(projectId)/global]}})`——
+   *    **软删过滤必须**（Metis M7）；可选 level 入参收窄到单级。
+   * 4. query → content contains（prisma 层过滤）；tags → 取回后内存过滤
+   *    （tags 为 Json 列，prisma 无 contains 支持）。
+   * 5. limit 截断（默认 20，max 50），createdAt desc 排序。
+   * 返回 [{id, level, content, tags, createdBy, createdAt}]。
+   */
+  async memorySearch(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId: string;
+      query?: string;
+      level?: MemoryLevel;
+      tags?: string[];
+      limit?: number;
+    },
+  ): Promise<
+    Array<{
+      id: string;
+      level: string;
+      content: string;
+      tags: Prisma.JsonValue | null;
+      createdBy: string;
+      createdAt: string;
+    }>
+  > {
+    await this.assertWorkerTask(ctx, args.taskId);
+
+    const task = await this.prisma.task.findUnique({
+      where: { id: args.taskId },
+      select: { projectId: true },
+    });
+    if (!task) {
+      throw new NotFoundException({
+        code: PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
+        message: '任务不存在',
+      });
+    }
+
+    // 可见范围：当前任务的 task 级 + 所属项目的 project 级（task 无项目归属则不匹配）
+    // + global 级；level 入参收窄到单级。
+    const whereOr: Prisma.MemoryWhereInput[] = [];
+    if (args.level === undefined || args.level === MEMORY_LEVELS.task) {
+      whereOr.push({ level: MEMORY_LEVELS.task, taskId: args.taskId });
+    }
+    if (args.level === undefined || args.level === MEMORY_LEVELS.project) {
+      if (task.projectId) {
+        whereOr.push({ level: MEMORY_LEVELS.project, projectId: task.projectId });
+      }
+    }
+    if (args.level === undefined || args.level === MEMORY_LEVELS.global) {
+      whereOr.push({ level: MEMORY_LEVELS.global });
+    }
+    if (whereOr.length === 0) {
+      // 如 level=project 但任务无项目归属 → 无可见范围，返回空
+      return [];
+    }
+
+    const rows = await this.prisma.memory.findMany({
+      where: {
+        deletedAt: null,
+        OR: whereOr,
+        ...(args.query ? { content: { contains: args.query } } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const limit = this.normalizeMemoryLimit(args.limit);
+    return this.filterMemoryByTags(rows, args.tags)
+      .slice(0, limit)
+      .map((row) => ({
+        id: row.id,
+        level: row.level,
+        content: row.content,
+        tags: row.tags,
+        createdBy: row.createdBy,
+        createdAt: row.createdAt.toISOString(),
+      }));
+  }
+
   /** submit_artifact doc/file 路径：worker 拉取（read_file 抛错语义）→ 落盘 uploads → 归档。 */
   private async submitFileArtifact(
     ctx: PlatformMcpContext,
@@ -887,6 +1046,25 @@ export class PlatformMcpService {
     const l = Number(limit ?? 50);
     if (!Number.isFinite(l)) return 50;
     return Math.min(Math.max(Math.floor(l), 1), 100);
+  }
+
+  /** memory_search limit 归一：缺省 20，收敛 1~50（与 memorySearchSchema 对齐）。 */
+  private normalizeMemoryLimit(limit?: number): number {
+    const l = Number(limit ?? 20);
+    if (!Number.isFinite(l)) return 20;
+    return Math.min(Math.max(Math.floor(l), 1), 50);
+  }
+
+  /** memory_search tags 内存过滤（Json 列无 prisma contains 支持）：须包含全部查询标签。 */
+  private filterMemoryByTags<T extends { tags: Prisma.JsonValue | null }>(
+    rows: T[],
+    tags?: string[],
+  ): T[] {
+    if (!tags || tags.length === 0) return rows;
+    return rows.filter((row) => {
+      const rowTags = Array.isArray(row.tags) ? (row.tags as string[]) : [];
+      return tags.every((t) => rowTags.includes(t));
+    });
   }
 
   private toChatHistoryItem(row: {

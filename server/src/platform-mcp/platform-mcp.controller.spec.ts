@@ -142,7 +142,7 @@ describe('PlatformMcpController (HTTP)', () => {
   });
 
   describe('tools/list', () => {
-    it('→ 返回 14 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm）且 inputSchema 为 JSON Schema', async () => {
+    it('→ 返回 16 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search）且 inputSchema 为 JSON Schema', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
@@ -169,6 +169,8 @@ describe('PlatformMcpController (HTTP)', () => {
         'issue_transition',
         'task_transition',
         'question_confirm',
+        'memory_save',
+        'memory_search',
       ]);
 
       for (const tool of tools) {
@@ -220,6 +222,20 @@ describe('PlatformMcpController (HTTP)', () => {
         'action',
       ]);
       expect(issueTransition.inputSchema.properties.action).toEqual({ type: 'string' });
+      // memory_save：taskId/selfInstanceId/level/content 必填，tags 可选；level 枚举归为 string
+      const memorySave = tools.find((t) => t.name === 'memory_save')!;
+      expect(memorySave.inputSchema.required).toEqual([
+        'taskId',
+        'selfInstanceId',
+        'level',
+        'content',
+      ]);
+      expect(memorySave.inputSchema.properties.level).toEqual({ type: 'string' });
+      expect(memorySave.inputSchema.properties.tags).toEqual({ type: 'array' });
+      // memory_search：仅 taskId 必填，query/level/tags/limit 可选
+      const memorySearch = tools.find((t) => t.name === 'memory_search')!;
+      expect(memorySearch.inputSchema.required).toEqual(['taskId']);
+      expect(memorySearch.inputSchema.properties.limit).toEqual({ type: 'number' });
     });
   });
 

@@ -939,6 +939,20 @@ describe('WorkerDispatcher', () => {
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('fileRef 应指向该目录内的文件');
     });
 
+    it('GLOBAL 常量含【记忆管理】段：引导经 memory_search/memory_save 按需存取记忆（21 篇按需注入哲学）', () => {
+      // 三个 sentinel 全部在 join 后的 GLOBAL prompt 中（机器可断言，非"模型会调用工具"行为）
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('【记忆管理】');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('memory_search');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('memory_save');
+      // 工具参数契约完整（含自检索/沉淀的 level 语义）
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('{taskId, query?, level?, tags?, limit?}');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('{taskId, selfInstanceId, level: "task"|"project"|"global", content, tags?}');
+      // 既有段不被改动（顺序保留：记忆管理段追加在【托管模式】之后）
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS.indexOf('【记忆管理】')).toBeGreaterThan(
+        GLOBAL_SYSTEM_INSTRUCTIONS.indexOf('【托管模式】'),
+      );
+    });
+
     it('persistentWorkDir 注入：提示词含动态【运行时工作目录】段（实际解析路径）', () => {
       const s = buildSystemInstructions(agent, {
         persistentWorkDir: '/data/worker/开发者-1',

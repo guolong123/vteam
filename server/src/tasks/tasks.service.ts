@@ -125,7 +125,7 @@ type SeqModel = {
 /** 状态迁移系统消息上下文（10 篇 §8.1 文案生成所需）。 */
 type SysMessageCtx = {
   task: TaskRow;
-  /** 主实例别名（仅 start 解析实例 alias，缺省 `<角色中文名>-<seq>`；查询不到回退实例 id）。 */
+  /** 主实例别名（start/accept 解析实例 alias，缺省 `<角色中文名>-<seq>`；查询不到回退实例 id）。 */
   mainAgentName?: string;
 };
 
@@ -143,7 +143,7 @@ type TransitionOptions = {
   afterCommit?: (tx: Prisma.TransactionClient) => Promise<void>;
   /** 群聊系统消息文案（10 篇 §8.1，落库 task_group 频道 senderType=system）；不传则不生成。 */
   sysMessage?: (ctx: SysMessageCtx) => string;
-  /** start 私信主 Agent 的启动消息文案（13 篇 §4.2，落库主 Agent private 频道）；不传则只写群聊。 */
+  /** start/accept 私信主 Agent 的提示文案（13 篇 §4.2 + 记忆管理 mem-trigger，落库主 Agent private 频道）；不传则只写群聊。 */
   privateMessage?: (ctx: SysMessageCtx) => string;
   /** 动作执行者（task_events.actorType/actorId + TASK_STATUS_CHANGED 广播）；缺省 user/调用者。 */
   actor?: { type: string; id: string };
@@ -722,6 +722,11 @@ export class TasksService implements OnModuleInit {
           },
           // 10 篇 §8.1：强调 accepted_flag 基线锁定（FR-04）
           sysMessage: () => '任务已验收完成，产出物基线已锁定',
+          // 记忆管理（todo mem-trigger）：验收后私信主 Agent 引导记忆总结。
+          // senderType=system 不触发 worker 分派（chat.service 仅 senderType=user 分派 dispatch），
+          // 属被动提示：落库 + 广播，主 Agent 后续被触发执行时在私聊历史中可见。
+          privateMessage: () =>
+            '任务已验收完成，产出物基线已锁定。请在后续工作中调用 vteam MCP 的 memory_save 工具（参数 {taskId, selfInstanceId, level: "task", content, tags?}）总结本任务执行中的经验、教训与关键决策，沉淀为任务级记忆；如有跨任务复用价值，另存一条 level=project 记忆。',
         };
       case 'reject':
         return {
@@ -744,8 +749,8 @@ export class TasksService implements OnModuleInit {
               data: { status: SESSION_STATUS.archived },
             });
           },
-          // 10 篇 §8.1：明确内容保留（FR-05）
-          sysMessage: () => '任务已归档，历史可回看',
+          // 10 篇 §8.1：明确内容保留（FR-05）；记忆管理（mem-trigger）补充提示：任务级记忆已随验收沉淀
+          sysMessage: () => '任务已归档，历史可回看。任务级记忆已随验收沉淀（未总结不影响归档）',
         };
       default:
         throw new Error(`未知任务迁移动作：${action}`);
@@ -878,10 +883,11 @@ export class TasksService implements OnModuleInit {
       where: { taskId: id, type: CHANNEL_TYPE.task_group },
       select: { id: true },
     });
-    // start 私信主实例（13 篇 §4.2）：解析主实例别名 + private 频道（按 taskAgentId，无则跳过）
+    // start/accept 私信主实例（13 篇 §4.2；记忆管理 mem-trigger：accept 同路径私信引导记忆总结）：
+    // 解析主实例别名 + private 频道（按 taskAgentId，无 mainAgentInstanceId 则跳过）
     let mainAgentName: string | undefined;
     let privateChannel: { id: string } | null = null;
-    if (action === 'start' && task.mainAgentInstanceId) {
+    if ((action === 'start' || action === 'accept') && task.mainAgentInstanceId) {
       const mainInstance = task.taskAgents?.find(
         (ta) => ta.id === task.mainAgentInstanceId,
       );
@@ -940,7 +946,7 @@ export class TasksService implements OnModuleInit {
           }),
         );
       }
-      // start 私信主 Agent：写入主 Agent 的 private 频道（存在才发）
+      // start/accept 私信主 Agent：写入主 Agent 的 private 频道（存在才发）
       if (privateChannel && privateText) {
         sysMessages.push(
           await tx.message.create({

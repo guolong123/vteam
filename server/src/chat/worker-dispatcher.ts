@@ -74,6 +74,7 @@ export const GLOBAL_SYSTEM_INSTRUCTIONS = [
   '仅该目录及挂载卷内的内容在容器重启后保留，其余路径（如 /tmp、仓库外任意路径）写入的文件重启后会丢失；' +
   '工作产物、git clone 的仓库、脚本、产出物文件等请写入该持久化目录，提交产出物（doc/file）时 fileRef 应指向该目录内的文件。',
   '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息（含 requestId、kind、问题详情）时，调用 vteam MCP 的 question_confirm 工具（参数 {taskId, selfInstanceId, requestId, kind, answers?/response?}）决策——question 传 answers（答案数组，null=拒绝）；permission 传 response（once 允许一次 / always 总是允许 / reject 拒绝）。仅主实例可调用 question_confirm。',
+  '【记忆管理】任务执行中的经验与知识可通过 vteam MCP 记忆工具存取。开始任务/需要历史经验时，调用 memory_search（参数 {taskId, query?, level?, tags?, limit?}）按需检索任务级、项目级与全局级记忆；任务验收完成收到总结引导时，调用 memory_save（参数 {taskId, selfInstanceId, level: "task"|"project"|"global", content, tags?}）沉淀经验——任务专属经验写 level=task，跨任务复用价值写 level=project，全局级（level=global）仅沉淀平台通用知识，勿写项目/任务专属信息。',
 ].join('\n');
 
 /**
