@@ -31,6 +31,22 @@ import { RejectTaskDto } from './dto/reject-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 
+/**
+ * is_0000000010：工作目录名 sanitize——agent 名称可能含中文/空格/斜杠等，做安全映射：
+ * 保留字母数字下划线、点、连字符与 CJK 字符（Linux/UTF-8 支持中文目录，需求「与 agent
+ * 名称同名」），其余非法字符（空格/斜杠/引号/路径分隔符等）→ `-`；去首尾连字符/点，
+ * 兜底 `agent`（防空串/路径穿越/保留字）。导出供 worker-dispatcher 复用同一规则。
+ */
+export function sanitizeWorkDirName(name: string): string {
+  const raw = String(name ?? '').trim();
+  const base =
+    raw
+      .replace(/[^\p{L}\p{N}._-]/gu, '-')
+      .replace(/^[._-]+|[._-]+$/g, '')
+      .replace(/\.{2,}/g, '.') || 'agent';
+  return base;
+}
+
 /** 任务域主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
 const ID_PREFIX = {
   task: 't',
@@ -56,6 +72,7 @@ type TaskAgentInstance = {
   agentId: string;
   alias: string | null;
   seq: number;
+  workDir?: string | null;
   removedAt: Date | null;
   agent: { id: string; name: string; role: string | null };
   /** 实例会话（每实例每任务一个，task 详情 instances 回传 sessionStatus 真实状态源）。 */
@@ -244,6 +261,8 @@ export class TasksService implements OnModuleInit {
         });
         const seq = (max._max.seq ?? 0) + 1;
         const alias = item.alias?.trim() || this.defaultAlias(agent, seq);
+        const workDir =
+          item.workDir?.trim() || this.defaultAgentWorkDir(agent, seq);
         const ta = await tx.taskAgent.create({
           data: {
             id: await this.idGen.nextId(ID_PREFIX.taskAgent),
@@ -251,6 +270,7 @@ export class TasksService implements OnModuleInit {
             agentId: item.agentId,
             alias,
             seq,
+            workDir,
           },
         });
         // 每实例每任务独立会话（10 篇 §3.3 / plan §6 T12「新会话创建」）：
@@ -269,6 +289,7 @@ export class TasksService implements OnModuleInit {
           agentId: item.agentId,
           alias,
           seq,
+          workDir,
           removedAt: null,
           agent,
         });
@@ -989,6 +1010,7 @@ export class TasksService implements OnModuleInit {
       agentId: ta.agentId,
       alias: ta.alias,
       seq: ta.seq,
+      workDir: ta.workDir ?? this.defaultAgentWorkDir(ta.agent, ta.seq),
       name: ta.agent.name,
       role: ta.agent.role,
       main: ta.id === task.mainAgentInstanceId,
@@ -1042,6 +1064,19 @@ export class TasksService implements OnModuleInit {
   }
 
   /**
+   * is_0000000010：实例默认持久化工作目录 `/data/worker/<sanitize(agent.name)>`。
+   * agent 名称可能含中文/空格/斜杠等非 ASCII 字符，做 ASCII 化映射（非法字符 → `-`），
+   * 避免路径穿越/非法字符导致目录不可用；同 agent 同任务多实例追加 `-<seq>` 防共享串数据。
+   */
+  private defaultAgentWorkDir(
+    agent: { name: string; role: string | null; id?: string },
+    seq: number,
+  ): string {
+    const base = sanitizeWorkDirName(agent.name ?? agent.id ?? 'agent');
+    return seq > 1 ? `/data/worker/${base}-${seq}` : `/data/worker/${base}`;
+  }
+
+  /**
    * 事务内批量创建团队实例（create / updateTeam 共用）：
    * 每个实例写 task_agents（seq = 该 taskId+agentId 已用最大 seq+1，防并发重号）
    * + 独立会话绑实例（status 由调用方传入）；返回带模板 agent 关联的实例列表。
@@ -1049,7 +1084,7 @@ export class TasksService implements OnModuleInit {
   private async createInstances(
     tx: Prisma.TransactionClient,
     taskId: string,
-    agents: { agentId: string; alias?: string }[],
+    agents: { agentId: string; alias?: string; workDir?: string }[],
     status: string,
   ): Promise<TaskAgentInstance[]> {
     const created: TaskAgentInstance[] = [];
@@ -1070,6 +1105,8 @@ export class TasksService implements OnModuleInit {
       });
       const seq = (max._max.seq ?? 0) + 1;
       const alias = item.alias?.trim() || this.defaultAlias(agent, seq);
+      const workDir =
+        item.workDir?.trim() || this.defaultAgentWorkDir(agent, seq);
       const ta = await tx.taskAgent.create({
         data: {
           id: await this.idGen.nextId(ID_PREFIX.taskAgent),
@@ -1077,6 +1114,7 @@ export class TasksService implements OnModuleInit {
           agentId: item.agentId,
           alias,
           seq,
+          workDir,
         },
       });
       await tx.session.create({
@@ -1093,6 +1131,7 @@ export class TasksService implements OnModuleInit {
         agentId: item.agentId,
         alias,
         seq,
+        workDir,
         removedAt: null,
         agent,
       });

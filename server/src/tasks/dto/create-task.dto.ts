@@ -29,6 +29,15 @@ export class TaskAgentInput {
   @IsOptional()
   @IsString()
   alias?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '实例独立持久化工作目录（缺省 = `/data/worker/<sanitize(agent.name)>`，同 agent 多实例追加 -<seq>）',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  workDir?: string;
 }
 
 /**
