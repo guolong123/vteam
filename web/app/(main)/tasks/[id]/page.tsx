@@ -310,6 +310,42 @@ function customAgentsOf(items: AgentItem[]): AgentItem[] {
   return items.filter((a) => a.type !== "template");
 }
 
+/** 标题 → ASCII slug（对齐 server DocsMirrorService.toSlug）。 */
+function toDocSlug(title: string): string {
+  return (
+    String(title ?? "doc")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "doc"
+  );
+}
+
+/** 产出物 → 文档站 doc id（对齐 server DocsMirrorService.docIdFor + buildRegistry 去重，is_0000000036）：
+ *  base = ASCII slug；纯中文/空 → 'doc' 追加 artifact id 前 8 位；
+ *  同名多文档按 artifact id 序，base 已被占用 → 追加 -<artId前8位>（复刻 server buildRegistry 去重，审核 B）。 */
+function docIdFor(title: string, artifactId: string, all?: { id: string; title: string }[]): string {
+  const toBase = (t: string, id: string): string => {
+    const slug = toDocSlug(t);
+    if (slug !== "doc") return slug;
+    const suffix = String(id).replace(/[^a-z0-9]/gi, "").slice(0, 8);
+    return suffix ? `doc-${suffix}` : "doc";
+  };
+  const base = toBase(title, artifactId);
+  if (!all || all.length <= 1) return base;
+  // 复刻 server buildRegistry：按 artifact id 升序迭代，base 被占则追加后缀
+  const seen = new Set<string>();
+  const ordered = [...all].sort((a, b) => a.id.localeCompare(b.id));
+  for (const a of ordered) {
+    const b = toBase(a.title, a.id);
+    if (a.id === artifactId) {
+      return seen.has(b) ? `${b}-${String(artifactId).replace(/[^a-z0-9]/gi, "").slice(0, 8)}` : b;
+    }
+    seen.add(b);
+  }
+  return base;
+}
+
 /** GET /agents 结果 → 角色选择项（按角色去重取首个，顺序对齐 ROLE_KEYS）。 */
 function roleOptionsOf(items: AgentItem[]): AgentOption[] {
   const byRole = new Map<RoleKey, AgentItem>();
@@ -1638,8 +1674,8 @@ function TaskPanel({
   agents: { id: string; name: string; role: RoleKey }[];
   /** 产出物入口：跳项目产出物页 /artifacts?pid= */
   onOpenArtifacts?: () => void;
-  /** 文档站入口（is_0000000024）：跳 /docs/:taskId。 */
-  onOpenDocs?: () => void;
+  /** 文档站入口（is_0000000024/0036）：跳 /docs/:taskId（docSlug 可选，携带则初始定位该文档）。 */
+  onOpenDocs?: (docSlug?: string) => void;
   /** 任务实际产出物列表（GET /tasks/:id/artifacts）。 */
   artifacts: ArtifactItem[];
   artifactsTotal: number;
@@ -1675,22 +1711,18 @@ function TaskPanel({
     [issues],
   );
 
-  /** 产出物条目点击（is_0000000033）：
-   *  - doc → 跳文档站视图 /docs/:taskId（文档站内按 slug 渲染）
-   *  - file 带可访问 fileUrl → 新窗口打开/下载（同源 /uploads/ 自动触发下载）
+  /** 产出物条目点击（is_0000000033/0036，file 型 .md 并入 is_0000000024 TC-044）：
+   *  - doc 或 file 型 .md（含 .MD/.markdown）→ 跳文档站 /docs/:taskId?doc=<slug>，文档站初始定位该文档
+   *  - 其余 file 带可访问 fileUrl → 新窗口打开/下载（同源 /uploads/ 自动触发下载）
    *  - text 或无 fileUrl → 跳产出物聚合页查看。 */
   const handleArtifactClick = (item: ArtifactItem) => {
-    // doc 产出物 → 文档站视图
-    if (item.type === "doc") {
-      onOpenDocs?.();
+    const isMarkdownFile =
+      item.type === "file" && !!item.fileUrl && /\.(md|markdown)$/i.test(item.fileUrl);
+    if (item.type === "doc" || isMarkdownFile) {
+      onOpenDocs?.(docIdFor(item.title, item.id, artifacts));
       return;
     }
-    // file 型 markdown 文档 → 文档站渲染（避免浏览器直接显示 .md 原文）；其他格式新窗口打开
     if (item.type === "file" && item.fileUrl) {
-      if (item.fileUrl.endsWith(".md")) {
-        onOpenDocs?.();
-        return;
-      }
       window.open(item.fileUrl, "_blank", "noopener,noreferrer");
       return;
     }
@@ -1805,7 +1837,7 @@ function TaskPanel({
             data-testid="task-docs-entry"
             aria-label="文档站"
             title="以文档站视图查看本任务产出物文档"
-            onClick={onOpenDocs}
+            onClick={() => onOpenDocs?.()}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -2936,7 +2968,7 @@ export default function TaskChatPage() {
         onEditTaskInfo={() => setTaskEditOpen(true)}
         width={taskPanel.width}
         onToggleManagedMode={handleToggleManagedMode}
-        onOpenDocs={() => router.push(`/docs/${taskId}`)}
+        onOpenDocs={(docSlug) => router.push(docSlug ? `/docs/${taskId}?doc=${docSlug}` : `/docs/${taskId}`)}
       />
 
       {/* 任务信息编辑弹窗（is_0000000011） */}

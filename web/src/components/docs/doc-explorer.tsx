@@ -37,7 +37,7 @@ interface TocItem {
   level: number;
 }
 
-export function DocExplorer({ taskId }: { taskId: string }) {
+export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialDocId?: string }) {
   const [activeDocId, setActiveDocId] = useState<string>("");
   const [source, setSource] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,12 +63,15 @@ export function DocExplorer({ taskId }: { taskId: string }) {
   const findDoc = (id: string) => docs.find((d) => d.id === id);
   const activeDoc = findDoc(activeDocId) ?? rootDocs[0];
 
-  // 缺省选中第一文档
+  // 初始定位（is_0000000036）：registry 加载完成后，initialDocId 命中则选中该文档，否则取第一个
+  const initialAppliedRef = useRef(false);
   useEffect(() => {
-    if (!activeDocId && rootDocs.length > 0) {
-      setActiveDocId(rootDocs[0].id);
-    }
-  }, [rootDocs, activeDocId]);
+    if (initialAppliedRef.current || rootDocs.length === 0) return;
+    const target = initialDocId && findDoc(initialDocId) ? initialDocId : rootDocs[0].id;
+    setActiveDocId(target);
+    initialAppliedRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rootDocs, initialDocId]);
 
   // 默认展开包含当前文档的父节点
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
