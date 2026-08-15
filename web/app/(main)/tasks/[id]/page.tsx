@@ -36,6 +36,7 @@ import { AgentAvatar, ChatBubble, MessageInput, StatusBadge } from "@/src/compon
 import type { MentionableAgent, SendMessagePayload } from "@/src/components/ui";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
+import { useResizableWidth } from "@/src/hooks/use-resizable";
 import {
   LoadingIndicator,
   MsgError,
@@ -407,6 +408,7 @@ function MembersPanel({
   adding,
   addError,
   onAddInstance,
+  width,
 }: {
   /** 团队实例（id=agent id 兼容状态 key；instanceId=实例 id 唯一键；main=主实例）。 */
   agents: { id: string; instanceId?: string; name: string; role: RoleKey; seq?: number; main?: boolean }[];
@@ -425,6 +427,8 @@ function MembersPanel({
   addError: string | null;
   /** 确认添加（返回是否成功；成功后面板关闭重置，失败保留面板展示错误）。 */
   onAddInstance: (agentId: string, alias?: string) => Promise<boolean>;
+  /** 面板宽度（is_0000000017 可拖拽 resize，缺省 224）。 */
+  width?: number;
 }) {
   const [addOpen, setAddOpen] = useState(false);
   const [selectedRole, setSelectedRole] = useState<RoleKey | null>(null);
@@ -455,7 +459,7 @@ function MembersPanel({
     <aside
       data-testid="members-panel"
       style={{
-        width: 224,
+        width: width ?? 224,
         flexShrink: 0,
         borderRight: `1px solid ${neutral[200]}`,
         backgroundColor: neutral[50],
@@ -839,6 +843,39 @@ function ChatHeader({ title, statusLabel, agents }: { title: string; statusLabel
         ))}
       </div>
     </header>
+  );
+}
+
+/* ================================ 面板拖拽分隔条（is_0000000017） ================================ */
+function ResizeHandle({
+  label,
+  onResizeStart,
+}: {
+  label: string;
+  onResizeStart: (e: React.MouseEvent) => void;
+}) {
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      data-testid="panel-resize-handle"
+      title={label}
+      onMouseDown={onResizeStart}
+      style={{
+        flexShrink: 0,
+        width: 6,
+        cursor: "col-resize",
+        backgroundColor: "transparent",
+        transition: "background-color .15s ease",
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLDivElement).style.backgroundColor = "#BFDBFE";
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent";
+      }}
+    />
   );
 }
 
@@ -1523,6 +1560,7 @@ function TaskPanel({
   issuesLoading,
   onOpenIssueDetail,
   onEditTaskInfo,
+  width,
 }: {
   task: TaskDetail;
   agents: { id: string; name: string; role: RoleKey }[];
@@ -1542,6 +1580,8 @@ function TaskPanel({
   onOpenIssueDetail?: (issueId: string) => void;
   /** 「编辑任务信息」入口（is_0000000011：描述/标题/背景文档）。 */
   onEditTaskInfo?: () => void;
+  /** 面板宽度（is_0000000017 可拖拽 resize，缺省 300）。 */
+  width?: number;
 }) {
   const mainAgent = task.mainAgentId ? agents.find((a) => a.id === task.mainAgentId) : undefined;
   /** 主实例（T5：instances[].main 或 id===mainAgentInstanceId；别名优先展示） */
@@ -1581,7 +1621,7 @@ function TaskPanel({
       data-testid="task-info-panel"
       style={{
         position: "relative",
-        width: 300,
+        width: width ?? 300,
         flexShrink: 0,
         borderLeft: `1px solid ${neutral[200]}`,
         backgroundColor: "#FFFFFF",
@@ -1964,6 +2004,21 @@ export default function TaskChatPage() {
   const [detailIssueId, setDetailIssueId] = useState<string | null>(null);
   // 任务信息编辑弹窗（is_0000000011）
   const [taskEditOpen, setTaskEditOpen] = useState(false);
+  // 面板可拖拽宽度（is_0000000017）：左成员面板 224 / 右任务面板 300，宽度持久化 localStorage
+  const membersPanel = useResizableWidth({
+    storageKey: "task-members-panel-width",
+    defaultWidth: 224,
+    min: 160,
+    max: 400,
+    direction: "normal",
+  });
+  const taskPanel = useResizableWidth({
+    storageKey: "task-info-panel-width",
+    defaultWidth: 300,
+    min: 240,
+    max: 520,
+    direction: "inverse",
+  });
 
   /* ---------- 1. 任务详情（无 channelId，仅标题/状态/主 Agent/团队） ---------- */
   const taskQuery = useQuery({
@@ -2614,7 +2669,11 @@ export default function TaskChatPage() {
         adding={addInstanceMutation.isPending}
         addError={addError}
         onAddInstance={handleAddInstance}
+        width={membersPanel.width}
       />
+
+      {/* 左侧面板拖拽分隔条（is_0000000017） */}
+      <ResizeHandle label="调整成员面板宽度" onResizeStart={membersPanel.onResizeStart} />
 
       {/* 消息区 */}
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", backgroundColor: neutral[50] }}>
@@ -2650,6 +2709,9 @@ export default function TaskChatPage() {
         />
       </div>
 
+      {/* 右侧面板拖拽分隔条（is_0000000017） */}
+      <ResizeHandle label="调整任务面板宽度" onResizeStart={taskPanel.onResizeStart} />
+
       <TaskPanel
         task={task}
         agents={agentMembers}
@@ -2663,6 +2725,7 @@ export default function TaskChatPage() {
         issuesLoading={issuesQuery.isPending}
         onOpenIssueDetail={setDetailIssueId}
         onEditTaskInfo={() => setTaskEditOpen(true)}
+        width={taskPanel.width}
       />
 
       {/* 任务信息编辑弹窗（is_0000000011） */}
