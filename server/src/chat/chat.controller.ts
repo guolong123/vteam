@@ -93,6 +93,23 @@ export class ChatController {
   }
 
   /**
+   * 私聊会话历史（DM 需求：完整历史直接读 opencode serve 会话，含 agent 思考/工具调用）。
+   * GET /api/v1/channels/:id/session-history → {items, nextCursor, source: 'session'|'db'}
+   * - private 频道且会话已绑定 worker → serve 全量会话消息转换（source='session'，无游标）；
+   * - 未绑定/worker 不可用 → 回退平台消息表（source='db'）；task_group → 400。
+   */
+  @Get('channels/:id/session-history')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('chats.view')
+  @ApiOperation({ summary: '私聊会话历史（serve 完整会话，含思考/工具；回退平台表）' })
+  getSessionHistory(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.chatService.getSessionHistory(id, user.id);
+  }
+
+  /**
    * @ 触发结果轮询（前端 SSE 兜底）。
    * GET /api/v1/channels/:id/trigger-results/:messageId → {triggers:[{agentId,status,replyMessageId?}]}
    */

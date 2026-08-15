@@ -87,6 +87,60 @@ interface MessagesResponse {
   nextCursor: string | null;
 }
 
+/** GET /channels/:id/session-history 私聊会话历史响应（serve 完整会话 or 平台表回退）。 */
+interface SessionHistoryResponse {
+  items: RealtimeChatMessage[];
+  nextCursor?: string | null;
+  source: "session" | "db";
+}
+
+/**
+ * 私聊历史数据源（DM 需求）：私聊频道 → session-history（opencode serve 完整会话，
+ * source=session 全量返回，含 agent 思考/工具 parts）；回退/群聊 → findMessages 平台表。
+ */
+async function fetchChannelMessages(channelId: string, channelType?: string): Promise<MessagesResponse> {
+  if (channelType === "private") {
+    const res = await api.get<SessionHistoryResponse>(`/channels/${channelId}/session-history`);
+    if (res.source === "session") {
+      // serve 会话全量（无游标，不再加载更多）
+      return { items: res.items, nextCursor: null };
+    }
+    // 回退平台表：items + 游标复用 findMessages 契约
+    return { items: res.items, nextCursor: res.nextCursor ?? null };
+  }
+  return api.get<MessagesResponse>(`/channels/${channelId}/messages`, { query: { limit: 50 } });
+}
+
+/**
+ * 私聊历史合并去重：初始快照来自 serve 会话（id 为 msg_ 前缀或 ses- 合成），SSE 增量
+ * 来自平台消息（id=m_ 前缀）。快照 moment 若 agent 仍在流式，快照含未完成（processing）
+ * assistant 消息，与 SSE 推送的同 sender processing/终态消息逻辑同源 → 用 SSE 消息替换
+ * （不做双重渲染）；其余平台消息（用户新消息 / 新轮次 agent 回复）正常追加。时间正序输出。
+ */
+function mergeSnapshotWithLive(items: RealtimeChatMessage[]): RealtimeChatMessage[] {
+  const snapshot = items.filter((m) => !m.id.startsWith("m_"));
+  const live = items.filter((m) => m.id.startsWith("m_"));
+  const out = [...snapshot];
+  for (const msg of live) {
+    if (msg.senderType === "agent") {
+      let replaceIdx = -1;
+      for (let i = out.length - 1; i >= 0; i -= 1) {
+        const m = out[i];
+        if (m.senderType === "agent" && m.senderId === msg.senderId && m.status === "processing") {
+          replaceIdx = i;
+          break;
+        }
+      }
+      if (replaceIdx !== -1) {
+        out[replaceIdx] = msg;
+        continue;
+      }
+    }
+    out.push(msg);
+  }
+  return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
 /** GET /channels?type=task_group 条目（后端 ChatService.toChannelDto，含 taskId 可匹配任务，tasks 页同款）。 */
 interface ChannelItem {
   id: string;
@@ -565,11 +619,18 @@ export default function DmChatPage() {
   const taskInstances = taskQuery.data?.instances ?? [];
 
   /* ---------- 2. 消息历史：queryKey 与 use-realtime 追加 key 一致（['channel', id, 'messages']） ---------- */
+  // 私聊数据源 = serve 会话历史（session-history，全量含思考/工具）；群聊保持平台表（findMessages）
   const messagesQuery = useQuery({
     queryKey: ["channel", channelId, "messages"],
-    queryFn: () => api.get<MessagesResponse>(`/channels/${channelId}/messages`, { query: { limit: 50 } }),
+    queryFn: () => fetchChannelMessages(channelId, channelQuery.data?.type),
     enabled: !!channelId && !!user?.id && !!channelQuery.data,
   });
+
+  /* ---------- 2.5 私聊历史合并：快照（serve 会话）+ SSE 平台增量去重（同源 processing 替换） ---------- */
+  const messages = useMemo(
+    () => mergeSnapshotWithLive(messagesQuery.data?.items ?? []),
+    [messagesQuery.data],
+  );
 
   /* ---------- 2.5 群聊上下文：GET /channels?type=task_group 按 taskId 匹配群聊频道（tasks 页同款） ---------- */
   const channelsQuery = useQuery({
@@ -599,7 +660,8 @@ export default function DmChatPage() {
   useEffect(() => {
     const pending = questionsQuery.data;
     if (!pending || pending.length === 0) return;
-    setPendingQuestion((prev) => prev ?? pending[0]);
+    // 托管模式请求由主 Agent 确认，不弹窗给用户
+    setPendingQuestion((prev) => prev ?? (pending[0]?.managedMode ? null : pending[0]));
   }, [questionsQuery.data]);
   // 初始/刷新同步：查询结果过滤 user 消息 → 上下文区；与 onMessage 实时追加合并去重（取最近 5 条）
   useEffect(() => {
@@ -777,6 +839,8 @@ export default function DmChatPage() {
       }
       if (payload.question.status !== "pending") return;
       if (payload.taskId && channel?.taskId && payload.taskId !== channel.taskId) return;
+      // 托管模式请求由主 Agent 确认，不弹窗给用户
+      if (payload.question.managedMode) return;
       setPendingQuestion({
         id: payload.question.id,
         requestId: payload.question.requestId,
@@ -785,6 +849,7 @@ export default function DmChatPage() {
         status: payload.question.status,
         taskId: payload.question.taskId,
         agentId: payload.question.agentId,
+        managedMode: payload.question.managedMode,
       });
     },
   });
@@ -828,7 +893,9 @@ export default function DmChatPage() {
   useEffect(() => {
     if (!messagesQuery.isSuccess || historySettledRef.current) return;
     historySettledRef.current = true;
-    const items = messagesQuery.data?.items ?? [];
+    // 用合并后消息（快照 serve + SSE 平台增量）：快照未完成 assistant 被 SSE 终态替换后
+    // 不再误判 processing（historySettled 恢复 loading 语义与 merged 一致）
+    const items = messages;
     const lastByAgent = new Map<string, RealtimeChatMessage>();
     for (const m of items) {
       if (m.senderId) lastByAgent.set(m.senderId, m);
@@ -879,7 +946,7 @@ export default function DmChatPage() {
       }
       return next ?? prev;
     });
-  }, [messagesQuery.isSuccess, messagesQuery.data]);
+  }, [messagesQuery.isSuccess, messages]);
 
   /* ---------- 4. 发送：POST /channels/:id/messages ---------- */
   // 私聊语义：无需手动 @（mentionable=[]），自动附带主 Agent 的 mention；
@@ -1028,8 +1095,6 @@ export default function DmChatPage() {
       </div>
     );
   }
-
-  const messages = messagesQuery.data?.items ?? [];
 
   return (
     <div

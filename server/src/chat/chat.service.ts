@@ -21,6 +21,7 @@ import {
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { WorkerClient, WorkerEndpointRef } from '../workers/worker.client';
 import { CHAT_ERRORS, DEFAULT_ACK_MESSAGE } from './chat.constants';
 import { CreateDmChannelDto } from './dto/create-dm-channel.dto';
 import { CreateMessageDto, MentionInput } from './dto/create-message.dto';
@@ -135,6 +136,7 @@ export class ChatService {
     private readonly prisma: PrismaService,
     private readonly idGen: IdGeneratorService,
     private readonly realtime: RealtimeService,
+    private readonly workerClient: WorkerClient,
     @Inject(MessageDispatcher)
     private readonly dispatcher: MessageDispatcher,
   ) {
@@ -238,6 +240,160 @@ export class ChatService {
       // 当前页最早一条 id（降序下为 page 末项），供下一页取更老
       nextCursor: hasMore ? page[page.length - 1].id : null,
     };
+  }
+
+  /**
+   * 私聊历史 = opencode serve 会话完整历史（任务 DM 需求：任何时间进入私聊都能看到
+   * 最新消息 + 完整历史，含 agent 思考/工具调用过程——平台 messages 表只落 ACK+最终回复）。
+   *
+   * private 频道且其 Session（taskId+taskAgentId → uk_sessions_task_agent）已绑定
+   * worker+instanceRef → 调 worker serve `GET /session/{id}/message` 拉全量消息，
+   * 转换为平台消息 DTO 返回 `{items, source:'session'}`（items 时间正序，无游标——
+   * 会话历史一次性全量返回，前端游标参数忽略）；未绑定 / worker 不可用 → 回退平台
+   * messages 表（`{items, nextCursor, source:'db'}`，复用 findMessages 首页语义）。
+   * 群聊（task_group）不支持 → 400 SESSION_HISTORY_NOT_SUPPORTED（群聊保持平台表）。
+   */
+  async getSessionHistory(channelId: string, userId: string) {
+    const { channel } = await this.resolveChannelAccess(channelId, userId);
+    if (channel.type !== CHANNEL_TYPE.private) {
+      throw new BadRequestException({
+        code: CHAT_ERRORS.SESSION_HISTORY_NOT_SUPPORTED,
+        message: '仅私聊频道支持会话历史（群聊保持平台消息表）',
+      });
+    }
+    // 回退路径：平台 messages 表首页（游标分页 items 时间正序，与前端 findMessages 契约一致）
+    const fallback = async () => ({
+      items: (await this.findMessages(channelId, userId, {})).items,
+      nextCursor: null,
+      source: 'db' as const,
+    });
+    // 频道未绑定实例（taskAgentId 空）→ 无从定位会话，回退平台表
+    if (!channel.taskAgentId) {
+      return fallback();
+    }
+    const session = await this.prisma.session.findFirst({
+      where: { taskId: channel.taskId, taskAgentId: channel.taskAgentId },
+      select: { instanceRef: true, workerId: true, agentId: true, createdAt: true },
+    });
+    // 会话未绑定 worker/instanceRef（created 态）→ 回退平台表
+    if (!session?.instanceRef || !session.workerId) {
+      return fallback();
+    }
+    const workerRow = await this.prisma.worker.findUnique({
+      where: { id: session.workerId },
+      select: { id: true, capabilities: true },
+    });
+    if (!workerRow) {
+      return fallback();
+    }
+    const worker: WorkerEndpointRef = { id: workerRow.id, capabilities: workerRow.capabilities };
+    try {
+      const raw = await this.workerClient.getMessages(worker, session.instanceRef);
+      return {
+        items: this.convertSessionMessages(raw, channel, session),
+        nextCursor: null,
+        source: 'session' as const,
+      };
+    } catch (err) {
+      // worker 不可达/serve 异常 → 回退平台表（历史主数据源降级，不发错误阻塞读历史）
+      this.logger.warn(
+        `[session-history] worker 拉取失败回退平台表 channel=${channelId}: ${this.describeError(err)}`,
+      );
+      return fallback();
+    }
+  }
+
+  /**
+   * serve 会话消息 → 平台消息 DTO（对齐 toMessageDto 形状，前端复用 MsgParts 渲染）：
+   * - 排序：按 serve info.time.created 升序（缺失 → 会话创建时间，保持原序稳定）。
+   * - user 消息：senderType=user、senderId=null；content.text = 非 synthetic text parts 聚合；
+   *   parts 仅保留 text（prompt 注入的 synthetic 内容剔除，不渲染）。
+   * - assistant 消息：senderType=agent、senderId=频道模板 agent id（回退 Session.agentId）、
+   *   senderInstanceId=channel.taskAgentId；content.text = 非 synthetic text 聚合；
+   *   parts 保留 text/reasoning/tool（前端折叠思考 / 工具调用卡片渲染），
+   *   step-start/step-finish/snapshot/patch 等过程 part 忽略。
+   * - status：serve 历史消息的 step-finish part 并非总是持久化（实测历史轮次常缺失），
+   *   故历史 assistant 消息一律 sent；仅**最后一条** assistant 消息且无 step-finish
+   *   标 processing（会话末尾可能仍在流式，前端 SSE 增量同 sender 替换去重）。
+   * - id：serve 消息 id（msg_ 前缀）或合成 `ses-<序号>`（稳定，前端 SSE 去重按 id）。
+   */
+  private convertSessionMessages(
+    raw: unknown[],
+    channel: { id: string; agentId: string | null; taskAgentId?: string | null },
+    session: { agentId: string; createdAt: Date },
+  ): Array<Record<string, unknown>> {
+    const fallbackCreated = session.createdAt.getTime();
+    const sorted = [...raw].sort((a, b) => {
+      const ta = (a as { info?: { time?: { created?: number } } })?.info?.time?.created;
+      const tb = (b as { info?: { time?: { created?: number } } })?.info?.time?.created;
+      return (ta ?? fallbackCreated) - (tb ?? fallbackCreated);
+    });
+    const converted: Array<{ dto: Record<string, unknown>; hasFinish: boolean }> = [];
+    let seq = 0;
+    for (const entry of sorted) {
+      const m = entry as {
+        info?: { id?: string; role?: string; time?: { created?: number } };
+        parts?: unknown[];
+      };
+      const info = m?.info;
+      if (!info) continue;
+      const role = info.role;
+      if (role !== 'user' && role !== 'assistant') continue;
+      const parts = Array.isArray(m.parts)
+        ? (m.parts as Array<Record<string, unknown>>).filter(
+            (p) => p !== null && typeof p === 'object',
+          )
+        : [];
+      // 文本聚合：type=text 且非 synthetic（工具调用占位/注入上下文排除）
+      const text = parts
+        .filter((p) => p.type === 'text' && !p.synthetic)
+        .map((p) => (typeof p.text === 'string' ? p.text : ''))
+        .join('');
+      // 保留 parts：user 仅 text；assistant 保留 text/reasoning/tool（过程 part 忽略）
+      const kept =
+        role === 'user'
+          ? parts.filter((p) => p.type === 'text' && !p.synthetic)
+          : parts.filter(
+              (p) => p.type === 'text' || p.type === 'reasoning' || p.type === 'tool',
+            );
+      // 空消息（无文本且无保留 parts，如仅 step-start 的空壳）→ 跳过
+      if (!text && kept.length === 0) continue;
+      const hasFinish = parts.some(
+        (p) => p.type === 'step-finish' && p.reason === 'stop',
+      );
+      const createdMs =
+        typeof info.time?.created === 'number' ? info.time.created : fallbackCreated;
+      converted.push({
+        dto: {
+          id:
+            typeof info.id === 'string' && info.id
+              ? info.id
+              : `ses-${String(seq).padStart(4, '0')}`,
+          channelId: channel.id,
+          senderType: role === 'user' ? SENDER_TYPE.user : SENDER_TYPE.agent,
+          senderId: role === 'user' ? null : (channel.agentId ?? session.agentId),
+          senderInstanceId: role === 'user' ? null : (channel.taskAgentId ?? null),
+          content: { text, parts: kept },
+          mentions: [],
+          status: MESSAGE_STATUS.sent,
+          createdAt: new Date(createdMs).toISOString(),
+        },
+        hasFinish,
+      });
+      seq += 1;
+    }
+    // 会话末尾可能仍在流式：最后一条 assistant 无 step-finish → processing（其余历史一律 sent）
+    const last = [...converted].reverse().find((c) => c.dto.senderType === SENDER_TYPE.agent);
+    if (last && !last.hasFinish) {
+      last.dto.status = MESSAGE_STATUS.processing;
+    }
+    return converted.map((c) => c.dto);
+  }
+
+  /** 错误信息归一（worker 拉取失败时用于日志）。 */
+  private describeError(err: unknown): string {
+    if (err instanceof Error) return err.message;
+    return String(err);
   }
 
   /**

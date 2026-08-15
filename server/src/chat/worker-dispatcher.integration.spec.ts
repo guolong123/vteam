@@ -58,7 +58,7 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     agent: { findUnique: jest.Mock };
     artifact: { findMany: jest.Mock };
     artifactVersion: { findMany: jest.Mock };
-    message: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock; update: jest.Mock };
+    message: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
     task: { findUnique: jest.Mock };
     taskAgent: { findUnique: jest.Mock };
@@ -165,6 +165,8 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
         // 默认无 processing 流式消息；用例内按 delta/completed 顺序 mockResolvedValueOnce 链
         findFirst: jest.fn().mockResolvedValue(null),
         update: jest.fn(),
+        // dispatch 前清理目标频道残留 processing（无残留 count=0）
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       chatChannel: {
         // resolveChannel 用 findFirst；delta 需要 type/taskId——一个行对象满足两者

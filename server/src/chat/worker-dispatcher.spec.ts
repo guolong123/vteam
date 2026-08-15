@@ -50,6 +50,7 @@ describe('WorkerDispatcher', () => {
       findMany: jest.Mock;
       findFirst: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
     };
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
     task: { findUnique: jest.Mock };
@@ -129,6 +130,8 @@ describe('WorkerDispatcher', () => {
         // 默认无 processing 流式消息 → handleTaskCompleted 走 create 落库路径（兼容既有测试）
         findFirst: jest.fn().mockResolvedValue(null),
         update: jest.fn(),
+        // dm-sse-no-refresh：dispatch 前清理目标频道残留 processing（无残留时 count=0）
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       chatChannel: { findUnique: jest.fn(), findFirst: jest.fn() },
       // 主 Agent/团队成员注入：默认无 task 行 → isMainAgent=false + team=[]（既有断言

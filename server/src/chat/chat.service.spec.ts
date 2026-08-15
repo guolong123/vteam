@@ -11,9 +11,13 @@ import {
   MESSAGE_STATUS,
   SENDER_TYPE,
 } from '../common/constants/event.constants';
+import {
+  PROJECT_MEMBERSHIP_ERRORS,
+} from '../common/guards/project-membership.guard';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { WorkerClient } from '../workers/worker.client';
 import { CHAT_ERRORS, DEFAULT_ACK_MESSAGE } from './chat.constants';
 import { ChatService } from './chat.service';
 import { MessageDispatcher } from './message-dispatcher';
@@ -27,11 +31,13 @@ describe('ChatService', () => {
     projectMember: { findMany: jest.Mock; findUnique: jest.Mock };
     taskAgent: { findMany: jest.Mock; findFirst: jest.Mock };
     session: { findFirst: jest.Mock };
+    worker: { findUnique: jest.Mock };
     agent: { findUnique: jest.Mock; findMany: jest.Mock };
     $transaction: jest.Mock;
   };
   let idGen: { nextId: jest.Mock; seed: jest.Mock };
   let realtime: { broadcast: jest.Mock };
+  let workerClient: { getMessages: jest.Mock };
   let dispatcher: {
     dispatch: jest.Mock;
     onLoading: jest.Mock;
@@ -99,11 +105,13 @@ describe('ChatService', () => {
       projectMember: { findMany: jest.fn(), findUnique: jest.fn() },
       taskAgent: { findMany: jest.fn(), findFirst: jest.fn() },
       session: { findFirst: jest.fn() },
+      worker: { findUnique: jest.fn() },
       agent: { findUnique: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(),
     };
     idGen = { nextId: jest.fn(), seed: jest.fn() };
     realtime = { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
+    workerClient = { getMessages: jest.fn().mockResolvedValue([]) };
     dispatcher = {
       dispatch: jest.fn().mockResolvedValue({ replies: [] }),
       onLoading: jest.fn().mockReturnThis(),
@@ -117,6 +125,7 @@ describe('ChatService', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: IdGeneratorService, useValue: idGen },
         { provide: RealtimeService, useValue: realtime },
+        { provide: WorkerClient, useValue: workerClient },
         { provide: MessageDispatcher, useValue: dispatcher },
       ],
     }).compile();
@@ -833,6 +842,206 @@ describe('ChatService', () => {
       const empty = await service.findMessages(channelId, userId, {} as any);
       expect(empty.items).toEqual([]);
       expect(empty.nextCursor).toBeNull();
+    });
+  });
+
+  describe('getSessionHistory（私聊历史 = serve 会话完整历史，含思考/工具）', () => {
+    /** 私聊频道（默认 channelRow 为 task_group，override type/agentId/taskAgentId）。 */
+    const privateChannel = (overrides: Record<string, unknown> = {}) =>
+      channelRow({
+        type: CHANNEL_TYPE.private,
+        agentId: 'a_product',
+        taskAgentId: 'ta_1',
+        ...overrides,
+      });
+
+    const boundSession = (overrides: Record<string, unknown> = {}) => ({
+      instanceRef: 'ses_abc',
+      workerId: 'w_1',
+      agentId: 'a_product',
+      createdAt: new Date('2026-08-01T00:00:00Z'),
+      ...overrides,
+    });
+
+    /** serve GET /session/{id}/message 返回的会话消息（info/parts 形状对齐 v1-driver ServeMessage）。 */
+    const serveMessages = () => [
+      {
+        info: { id: 'msg_user_1', role: 'user', time: { created: 1000 } },
+        parts: [
+          { type: 'step-start' },
+          { type: 'text', text: '帮我调研一下', synthetic: false },
+          { type: 'text', text: '（注入的群聊历史上下文）', synthetic: true },
+        ],
+      },
+      {
+        info: { id: 'msg_asst_1', role: 'assistant', time: { created: 2000 } },
+        parts: [
+          { type: 'reasoning', text: '先拆解需求', synthetic: false },
+          { type: 'tool', tool: 'keta-platform_task_context', state: { status: 'success' } },
+          { type: 'text', text: '调研结果如下', synthetic: false },
+          // 实测 serve 历史消息 step-finish 常不持久化 → 非最后一条 assistant 仍须 sent
+        ],
+      },
+      {
+        info: { id: 'msg_asst_2', role: 'assistant', time: { created: 3000 } },
+        parts: [{ type: 'text', text: '补充说明', synthetic: false }],
+      },
+    ];
+
+    it('private + 会话已绑定 → serve 消息转换（source=session；user/assistant 映射；思考/工具 parts 保留；未完成标 processing）', async () => {
+      allowAccess(privateChannel());
+      prisma.session.findFirst.mockResolvedValue(boundSession());
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: { baseUrl: 'http://worker' },
+      });
+      workerClient.getMessages.mockResolvedValue(serveMessages());
+
+      const result = await service.getSessionHistory(channelId, userId);
+
+      // 调 worker serve GET /session/{id}/message（worker 引用 + instanceRef）
+      expect(workerClient.getMessages).toHaveBeenCalledWith(
+        { id: 'w_1', capabilities: { baseUrl: 'http://worker' } },
+        'ses_abc',
+      );
+      expect(result.source).toBe('session');
+      expect(result.nextCursor).toBeNull();
+
+      const [u, a1, a2] = result.items as Array<Record<string, any>>;
+      // user：senderType=user、senderId=null；text 聚合非 synthetic（注入上下文剔除）
+      expect(u.senderType).toBe('user');
+      expect(u.senderId).toBeNull();
+      expect(u.senderInstanceId).toBeNull();
+      expect(u.content.text).toBe('帮我调研一下');
+      expect(u.content.parts).toEqual([
+        { type: 'text', text: '帮我调研一下', synthetic: false },
+      ]);
+      expect(u.status).toBe('sent');
+      // assistant：senderType=agent、senderId=频道模板 agent、senderInstanceId=taskAgentId
+      expect(a1.senderType).toBe('agent');
+      expect(a1.senderId).toBe('a_product');
+      expect(a1.senderInstanceId).toBe('ta_1');
+      // parts：reasoning/tool/text 保留；step-start/step-finish 过滤
+      expect(a1.content.parts.map((p) => p.type)).toEqual(['reasoning', 'tool', 'text']);
+      expect(a1.content.text).toBe('调研结果如下');
+      // 历史 assistant 无 step-finish（serve 不持久化）→ 非最后一条仍 sent；
+      // 仅最后一条无 finish 标 processing（会话末尾可能仍在流式）
+      expect(a1.status).toBe('sent');
+      expect(a2.status).toBe('processing');
+      // createdAt = serve info.time.created（毫秒）转 ISO
+      expect(u.createdAt).toBe(new Date(1000).toISOString());
+      expect(a2.createdAt).toBe(new Date(3000).toISOString());
+    });
+
+    it('serve 消息按 time.created 升序（乱序输入 → 输出时间正序）', async () => {
+      allowAccess(privateChannel());
+      prisma.session.findFirst.mockResolvedValue(boundSession());
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_1', capabilities: {} });
+      const [m1, m2, m3] = serveMessages();
+      workerClient.getMessages.mockResolvedValue([m3, m1, m2]);
+
+      const result = await service.getSessionHistory(channelId, userId);
+      expect((result.items as Array<Record<string, any>>).map((m) => m.id)).toEqual([
+        'msg_user_1',
+        'msg_asst_1',
+        'msg_asst_2',
+      ]);
+    });
+
+    it('最后一条 assistant 含 step-finish(reason=stop) → sent（不误标 processing）', async () => {
+      allowAccess(privateChannel());
+      prisma.session.findFirst.mockResolvedValue(boundSession());
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_1', capabilities: {} });
+      const [u, a1] = serveMessages();
+      workerClient.getMessages.mockResolvedValue([
+        u,
+        { ...a1, parts: [...a1.parts, { type: 'step-finish', reason: 'stop' }] },
+      ]);
+
+      const result = await service.getSessionHistory(channelId, userId);
+      const items = result.items as Array<Record<string, any>>;
+      expect(items[0].status).toBe('sent');
+      expect(items[1].status).toBe('sent');
+    });
+
+    it('会话未绑定（workerId/instanceRef 空，created 态）→ 回退平台表 source=db，不调 worker', async () => {
+      allowAccess(privateChannel());
+      prisma.session.findFirst.mockResolvedValue(
+        boundSession({ instanceRef: null, workerId: null }),
+      );
+      prisma.message.findMany.mockResolvedValue(genMessages(3).reverse());
+
+      const result = await service.getSessionHistory(channelId, userId);
+
+      expect(result.source).toBe('db');
+      expect(result.items).toHaveLength(3);
+      expect(workerClient.getMessages).not.toHaveBeenCalled();
+    });
+
+    it('频道无 taskAgentId（存量私聊单实例）→ 回退平台表，不查会话', async () => {
+      allowAccess(privateChannel({ taskAgentId: null }));
+      prisma.message.findMany.mockResolvedValue([]);
+
+      const result = await service.getSessionHistory(channelId, userId);
+
+      expect(result.source).toBe('db');
+      expect(result.items).toEqual([]);
+      expect(prisma.session.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('worker 不存在 → 回退平台表', async () => {
+      allowAccess(privateChannel());
+      prisma.session.findFirst.mockResolvedValue(boundSession());
+      prisma.worker.findUnique.mockResolvedValue(null);
+      prisma.message.findMany.mockResolvedValue(genMessages(2).reverse());
+
+      const result = await service.getSessionHistory(channelId, userId);
+
+      expect(result.source).toBe('db');
+      expect(result.items).toHaveLength(2);
+      expect(workerClient.getMessages).not.toHaveBeenCalled();
+    });
+
+    it('worker 拉取失败 → 回退平台表（读历史不因 worker 异常阻塞）', async () => {
+      allowAccess(privateChannel());
+      prisma.session.findFirst.mockResolvedValue(boundSession());
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_1', capabilities: {} });
+      workerClient.getMessages.mockRejectedValue(new Error('worker down'));
+      prisma.message.findMany.mockResolvedValue(genMessages(2).reverse());
+
+      const result = await service.getSessionHistory(channelId, userId);
+
+      expect(result.source).toBe('db');
+      expect(result.items).toHaveLength(2);
+    });
+
+    it('非 private（task_group）→ 400 SESSION_HISTORY_NOT_SUPPORTED（群聊保持平台表）', async () => {
+      allowAccess();
+
+      try {
+        await service.getSessionHistory(channelId, userId);
+        fail('应抛出 BadRequestException');
+      } catch (e) {
+        expect((e as BadRequestException).getResponse()).toMatchObject({
+          code: CHAT_ERRORS.SESSION_HISTORY_NOT_SUPPORTED,
+        });
+      }
+      expect(prisma.session.findFirst).not.toHaveBeenCalled();
+      expect(workerClient.getMessages).not.toHaveBeenCalled();
+    });
+
+    it('非项目成员 → 403 PERMISSION_PROJECT_NOT_MEMBER', async () => {
+      allowAccess(privateChannel());
+      prisma.projectMember.findUnique.mockResolvedValue(null);
+
+      try {
+        await service.getSessionHistory(channelId, userId);
+        fail('应抛出 ForbiddenException');
+      } catch (e) {
+        expect((e as ForbiddenException).getResponse()).toMatchObject({
+          code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        });
+      }
     });
   });
 

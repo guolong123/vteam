@@ -32,7 +32,7 @@ import {
 import { AssignmentRequirement, WorkersService } from '../workers/workers.service';
 import { DispatchRequest, DispatchResult, MessageDispatcher } from './message-dispatcher';
 import { extractConclusionParts, normalizeParts } from './message-parts';
-import { sanitizeWorkDirName } from '../tasks/tasks.service';
+import { sanitizeWorkDirName } from '../tasks/work-dir.util';
 
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
 const MESSAGE_ID_PREFIX = 'm';
@@ -73,6 +73,7 @@ export const GLOBAL_SYSTEM_INSTRUCTIONS = [
   '【持久化目录】你运行在 k8s 容器环境中，平台为每个 Agent 分配独立的持久化工作目录（默认 /data/worker/<agent名称>，可在创建任务时指定）。' +
   '仅该目录及挂载卷内的内容在容器重启后保留，其余路径（如 /tmp、仓库外任意路径）写入的文件重启后会丢失；' +
   '工作产物、git clone 的仓库、脚本、产出物文件等请写入该持久化目录，提交产出物（doc/file）时 fileRef 应指向该目录内的文件。',
+  '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息（含 requestId、kind、问题详情）时，调用 keta-platform MCP 的 question_confirm 工具（参数 {taskId, selfInstanceId, requestId, kind, answers?/response?}）决策——question 传 answers（答案数组，null=拒绝）；permission 传 response（once 允许一次 / always 总是允许 / reject 拒绝）。仅主实例可调用 question_confirm。',
 ].join('\n');
 
 /**
@@ -133,7 +134,8 @@ export const MAIN_AGENT_INSTRUCTION =
   '【主 Agent 职责】你是本任务的主 Agent（牵头人）。除角色本职外，还需承担任务组织职责：' +
   '牵头拆解工作并分派给团队成员，协调各角色产出衔接，环节切换或产出完成时主动在群聊提示进度（FR-08）；' +
   '推进受阻或需要协作时，通过 notify_agent / 群聊 @ 定向协调成员（FR-13，互 @ 不超 3 轮）；' +
-  '收尾时可汇总各角色产出与验收材料，供成员验收判定（FR-11）。';
+  '收尾时可汇总各角色产出与验收材料，供成员验收判定（FR-11）。' +
+  '任务开启托管模式时，成员的 question/permission 请求由你确认——收到【托管确认】消息时调用 question_confirm 工具决策。';
 
 /**
  * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
@@ -1076,6 +1078,25 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // T4 实例语义：登记**实例 id**（session.taskAgentId）；存量会话（taskAgentId NULL）
     // 回退 agentId 保持兼容（防旧会话防冒充失效）。
     this.registerExecution(workerId, taskId, session.taskAgentId ?? target.agentId);
+    // 私聊 SSE 不刷新修复：上一轮失败残留的 processing 消息若被 task.completed 复用，
+    // 本轮回复会写入旧消息（createdAt 保留上轮时间）→ 前端按 createdAt 排序后新回复被
+    // 排到历史中间，私聊页底部不刷新。新一轮 dispatch 前清理目标频道残留 processing。
+    const cleanupChannel = await this.resolveChannel(
+      taskId,
+      target.agentId,
+      session.taskAgentId ?? undefined,
+    );
+    if (cleanupChannel) {
+      await this.prisma.message.updateMany({
+        where: {
+          channelId: cleanupChannel.id,
+          senderType: SENDER_TYPE.agent,
+          senderId: target.agentId,
+          status: MESSAGE_STATUS.processing,
+        },
+        data: { status: MESSAGE_STATUS.failed },
+      });
+    }
     await this.workerClient.execute(worker, {
       prompt: [{ type: 'text', text: prompt }],
       model,
