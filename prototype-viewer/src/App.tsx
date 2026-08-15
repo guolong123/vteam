@@ -4,7 +4,6 @@ import DeviceSwitcher from "./components/DeviceSwitcher";
 import PrototypeNav from "./components/PrototypeNav";
 import DocExplorer from "./prd/DocExplorer";
 import { findDoc, docPath, ROOT_DOCS } from "./prd/docs";
-import { detectTaskMode } from "./prd/taskMode";
 import { PROTOTYPES } from "./prototypes/registry";
 import { DEVICE_SPECS, type DeviceType } from "./prototypes/types";
 
@@ -59,11 +58,7 @@ function parseHash(hash: string): { view: View; protoId: string; docId: string }
 }
 
 function App() {
-  // is_0000000024 任务模式：URL 携带 ?task=<taskId> → 仅文档视图（任务产出物文档站）
-  const taskModeTaskId = detectTaskMode();
-  const [view, setView] = useState<View>(() =>
-    taskModeTaskId ? "docs" : parseHash(window.location.hash).view,
-  );
+  const [view, setView] = useState<View>(() => parseHash(window.location.hash).view);
   const [protoId, setProtoId] = useState<string>(() => parseHash(window.location.hash).protoId);
   const [docId, setDocId] = useState<string>(() => parseHash(window.location.hash).docId);
   const [device, setDevice] = useState<DeviceType>("desktop");
@@ -72,14 +67,13 @@ function App() {
   useEffect(() => {
     const onHashChange = () => {
       const s = parseHash(window.location.hash);
-      // 任务模式锁定文档视图（不展示原型入口）
-      setView(taskModeTaskId ? "docs" : s.view);
+      setView(s.view);
       setProtoId(s.protoId);
       setDocId(s.docId);
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
-  }, [taskModeTaskId]);
+  }, []);
 
   const activeDef = PROTOTYPES.find((p) => p.meta.id === protoId) ?? PROTOTYPES[0];
 
@@ -111,8 +105,7 @@ function App() {
 
   const selectDoc = (id: string) => {
     setDocId(id);
-    // 任务模式：注册表无父子层级，hash 直接用 docs/<id>；本地模式保留父子路径
-    const path = taskModeTaskId ? id : docPath(id).join("/");
+    const path = docPath(id).join("/");
     navigate(`docs/${path}`);
   };
 
@@ -138,17 +131,13 @@ function App() {
               </svg>
             </span>
             <div>
-              <h1 className="text-sm font-semibold leading-tight">
-                {taskModeTaskId ? "任务文档站" : "Orchestra 展示中心"}
-              </h1>
-              <p className="text-[11px] leading-tight text-slate-400">
-                {taskModeTaskId ? "任务产出物文档" : "原型 & 文档"}
-              </p>
+              <h1 className="text-sm font-semibold leading-tight">Orchestra 展示中心</h1>
+              <p className="text-[11px] leading-tight text-slate-400">原型 & 文档</p>
             </div>
           </div>
 
-          {/* 顶层入口切换（任务模式隐藏原型入口） */}
-          <nav aria-label="主入口" className={`ml-2 flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-100/70 p-0.5 ${taskModeTaskId ? "hidden" : ""}`}>
+          {/* 顶层入口切换 */}
+          <nav aria-label="主入口" className="ml-2 flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-100/70 p-0.5">
             <button
               type="button"
               onClick={() => switchView("protos")}
@@ -180,12 +169,12 @@ function App() {
           </nav>
         </div>
 
-        {view === "protos" && !taskModeTaskId && <DeviceSwitcher device={device} onChange={setDevice} />}
+        {view === "protos" && <DeviceSwitcher device={device} onChange={setDevice} />}
       </header>
 
       {view === "docs" ? (
-        /* 文档视图（任务模式透传 taskId → server 注册表 + 内容） */
-        <DocExplorer activeDocId={docId} onSelectDoc={selectDoc} taskId={taskModeTaskId} />
+        /* 文档视图 */
+        <DocExplorer activeDocId={docId} onSelectDoc={selectDoc} />
       ) : (
         <>
           {/* 窄屏（< md）横向原型 tab，替代侧栏 */}

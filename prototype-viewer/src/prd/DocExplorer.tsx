@@ -1,16 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { parsePrdMarkdown } from "./parser";
 import PrdMarkdown from "./PrdMarkdown";
-import { ROOT_DOCS, findDoc } from "./docs";
-import { taskBase, type TaskDocDef } from "./taskMode";
+import { ROOT_DOCS, childrenOf, findDoc } from "./docs";
 
 /**
  * DocExplorer：文档阅读器（多文档，树形层级）
  * =====================================================
  * 布局：左侧文档树（父文档可展开/折叠，子文档缩进）+ 中间文档内容 + 右侧章节菜单。
- * 本地模式：文档从 public/prd/ 加载（构建时同步自 docs/），注册表用静态 docs.ts。
- * 任务模式（taskId 非空）：注册表从 server 动态拉取（/docs-site/:taskId/registry），
- * 内容从 /docs-site/:taskId/prd/<file> 加载（server 鉴权 + taskId 隔离）。
+ * 文档从 public/prd/ 加载（构建时同步自 docs/），解析原型标记并渲染。
  * 章节定位使用 scrollIntoView（不改变 URL hash，避免与应用路由冲突）。
  */
 
@@ -24,63 +21,14 @@ interface TocItem {
 interface DocExplorerProps {
   activeDocId: string;
   onSelectDoc: (id: string) => void;
-  /** 任务模式 taskId（非空时从 server 拉取注册表与内容；缺省本地 PRD 模式）。 */
-  taskId?: string | null;
 }
 
-/** 统一 DocDef（本地 docs.ts 与 server 注册表同形状）。 */
-type DocDef = { id: string; name: string; kind: string; file: string; parent?: string; order: number };
-
-export default function DocExplorer({ activeDocId, onSelectDoc, taskId }: DocExplorerProps) {
-  // 注册表：本地静态 ROOT_DOCS / 任务模式从 server 拉取
-  const [taskDocs, setTaskDocs] = useState<TaskDocDef[] | null>(null);
-  const taskMode = !!taskId;
-  const allDocs: DocDef[] = useMemo(() => {
-    if (taskMode) {
-      return (taskDocs ?? []).map((d) => ({
-        id: d.id,
-        name: d.name,
-        kind: d.kind,
-        file: d.file,
-        order: d.order,
-      }));
-    }
-    return ROOT_DOCS as unknown as DocDef[];
-  }, [taskMode, taskDocs]);
-  const rootDocs = useMemo(() => allDocs.filter((d) => !d.parent), [allDocs]);
-  const childrenOfDynamic = (id: string) => allDocs.filter((d) => d.parent === id);
-
-  // 任务模式：拉取动态注册表
-  useEffect(() => {
-    if (!taskMode) return;
-    let cancelled = false;
-    setTaskDocs(null);
-    (async () => {
-      try {
-        const res = await fetch(`${taskBase(taskId as string)}/registry`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const defs = (await res.json()) as TaskDocDef[];
-        if (!cancelled) setTaskDocs(defs);
-      } catch {
-        if (!cancelled) setTaskDocs([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [taskMode, taskId]);
-
-  const activeDoc = useMemo<DocDef | null>(() => {
-    if (taskMode) {
-      return allDocs.find((d) => d.id === activeDocId) ?? allDocs[0] ?? null;
-    }
-    return findDoc(activeDocId) ?? ROOT_DOCS[0];
-  }, [taskMode, allDocs, activeDocId]);
-
+export default function DocExplorer({ activeDocId, onSelectDoc }: DocExplorerProps) {
+  const activeDoc = findDoc(activeDocId) ?? ROOT_DOCS[0];
   // 默认展开包含当前文档的父节点；若当前文档自身是父文档，也一并展开
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     const parent = activeDoc?.parent;
-    const self = activeDoc && childrenOfDynamic(activeDoc.id).length > 0 ? activeDoc.id : undefined;
+    const self = activeDoc && childrenOf(activeDoc.id).length > 0 ? activeDoc.id : undefined;
     return new Set([parent, self].filter((x): x is string => !!x));
   });
   const [source, setSource] = useState<string | null>(null);
@@ -93,10 +41,9 @@ export default function DocExplorer({ activeDocId, onSelectDoc, taskId }: DocExp
     setExpanded((prev) => {
       const next = new Set(prev);
       if (activeDoc?.parent) next.add(activeDoc.parent);
-      if (activeDoc && childrenOfDynamic(activeDoc.id).length > 0) next.add(activeDoc.id);
+      if (activeDoc && childrenOf(activeDoc.id).length > 0) next.add(activeDoc.id);
       return next;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDoc]);
 
   const toggleExpand = (id: string) => {
@@ -108,7 +55,7 @@ export default function DocExplorer({ activeDocId, onSelectDoc, taskId }: DocExp
     });
   };
 
-  // 加载当前文档（本地 /prd/<file> 或任务模式 /docs-site/:taskId/prd/<file>）
+  // 加载当前文档
   useEffect(() => {
     if (!activeDoc) return;
     let cancelled = false;
@@ -116,10 +63,7 @@ export default function DocExplorer({ activeDocId, onSelectDoc, taskId }: DocExp
     setError(null);
     (async () => {
       try {
-        const url = taskMode
-          ? `${taskBase(taskId as string)}/prd/${encodeURIComponent(activeDoc.file)}`
-          : `/prd/${activeDoc.file}`;
-        const res = await fetch(url);
+        const res = await fetch(`/prd/${activeDoc.file}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const text = await res.text();
         if (!cancelled) setSource(text);
@@ -130,7 +74,6 @@ export default function DocExplorer({ activeDocId, onSelectDoc, taskId }: DocExp
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDoc]);
 
   const parsed = useMemo(() => (source ? parsePrdMarkdown(source) : null), [source]);
@@ -189,10 +132,10 @@ export default function DocExplorer({ activeDocId, onSelectDoc, taskId }: DocExp
         <div className="shrink-0 overflow-y-auto border-b border-slate-200">
           <p className="px-4 pb-2 pt-4 text-xs font-semibold text-slate-400">文档</p>
           <div className="space-y-0.5 px-2 pb-3">
-            {rootDocs.map((root) => {
-              const kids = childrenOfDynamic(root.id);
+            {ROOT_DOCS.map((root) => {
+              const kids = childrenOf(root.id);
               const isExpanded = expanded.has(root.id);
-              const active = root.id === activeDoc?.id;
+              const active = root.id === activeDoc.id;
               return (
                 <div key={root.id}>
                   {/* 顶级文档 */}
@@ -243,7 +186,7 @@ export default function DocExplorer({ activeDocId, onSelectDoc, taskId }: DocExp
                   {isExpanded && kids.length > 0 && (
                     <div className="mt-0.5 space-y-0.5 border-l border-slate-200 pl-3.5 ml-2">
                       {kids.map((kid) => {
-                        const kidActive = kid.id === activeDoc?.id;
+                        const kidActive = kid.id === activeDoc.id;
                         return (
                           <button
                             key={kid.id}
@@ -279,10 +222,6 @@ export default function DocExplorer({ activeDocId, onSelectDoc, taskId }: DocExp
         {error ? (
           <div className="flex h-full flex-col items-center justify-center px-6 text-center text-sm text-danger-600">
             <p>{error}</p>
-          </div>
-        ) : !activeDoc ? (
-          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-slate-400">
-            该任务暂无 doc 产出物文档
           </div>
         ) : !parsed ? (
           <div className="flex h-full items-center justify-center text-sm text-slate-400">加载文档…</div>
