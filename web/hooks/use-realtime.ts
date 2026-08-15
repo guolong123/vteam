@@ -29,6 +29,7 @@ const EVENT = {
   TASK_STATUS_CHANGED: "task.status.changed",
   TEAM_CHANGED: "team.changed",
   ARTIFACT_SUBMITTED: "artifact.submitted",
+  ISSUE_CHANGED: "issue.changed",
   SESSION_UPDATED: "session.updated",
   MESSAGE_PART_DELTA: "message.part.delta",
   AGENT_STATUS: "agent.status",
@@ -120,6 +121,18 @@ export interface ArtifactSubmittedEvent {
   content?: string;
   fileRef?: string;
   agentId?: string | null;
+}
+
+/** issue.changed 事件 payload（对齐后端 IssuesService.notifyIssueChanged，task scope，is_0000000020）。 */
+export interface IssueChangedEvent {
+  taskId: string;
+  issueId: string;
+  /** create | update | transition。 */
+  action: string;
+  fromStatus: string | null;
+  status: string;
+  actorType: string;
+  actorId: string | null;
 }
 
 /**
@@ -225,6 +238,8 @@ export interface UseRealtimeEventsOptions {
   onTeamChanged?: (payload: TeamChangedEvent, event: SSEEvent<TeamChangedEvent>) => void;
   /** artifact.submitted：页面收到产出物提交事件后刷新聚合列表（如 /artifacts 页）。 */
   onArtifactSubmitted?: (payload: ArtifactSubmittedEvent, event: SSEEvent<ArtifactSubmittedEvent>) => void;
+  /** issue.changed：issue 创建/编辑/状态流转事件（is_0000000020 右侧面板实时刷新）。 */
+  onIssueChanged?: (payload: IssueChangedEvent, event: SSEEvent<IssueChangedEvent>) => void;
   /** session.updated：页面按 sessionId→agentId 映射更新成员会话状态（payload 无 agentId）。 */
   onSessionUpdated?: (payload: SessionUpdatedEvent, event: SSEEvent<SessionUpdatedEvent>) => void;
   /** agent.status：页面按 agentId 收敛 loading（status=running 开始 / completed|failed 结束）。 */
@@ -250,6 +265,7 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
     onAgentError,
     onTeamChanged,
     onArtifactSubmitted,
+    onIssueChanged,
     onSessionUpdated,
     onAgentStatus,
     onMessagePartDelta,
@@ -288,6 +304,9 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
           break;
         case EVENT.ARTIFACT_SUBMITTED:
           onArtifactSubmitted?.(ev.payload as ArtifactSubmittedEvent, ev as SSEEvent<ArtifactSubmittedEvent>);
+          break;
+        case EVENT.ISSUE_CHANGED:
+          onIssueChanged?.(ev.payload as IssueChangedEvent, ev as SSEEvent<IssueChangedEvent>);
           break;
         case EVENT.SESSION_UPDATED:
           onSessionUpdated?.(ev.payload as SessionUpdatedEvent, ev as SSEEvent<SessionUpdatedEvent>);

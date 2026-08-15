@@ -12,6 +12,8 @@ export const EVENT_TYPES = {
   TASK_STATUS_CHANGED: 'task.status.changed',
   TEAM_CHANGED: 'team.changed',
   ARTIFACT_SUBMITTED: 'artifact.submitted',
+  // issue 变更（create/update/transition，task scope，is_0000000020 右侧面板实时刷新）
+  ISSUE_CHANGED: 'issue.changed',
   // Phase 4 worker 回流事件（T1 契约基座，与 worker 协议 WORKER_EVENT_TYPES 值对齐，
   // 用于 server 落库后 SSE 广播 /chat.message.new 等既有事件同名语义）。
   SESSION_UPDATED: 'session.updated',

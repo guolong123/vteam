@@ -9,7 +9,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PROJECT_MEMBERSHIP_ERRORS } from '../common/guards/project-membership.guard';
 import { resyncIdPrefix } from '../common/id-resync';
-import { ACTOR_TYPE } from '../common/constants/event.constants';
+import { ACTOR_TYPE, EVENT_TYPES } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { TASK_STATUS } from '../common/constants/task.constants';
 import { PrismaService } from '../prisma/prisma.service';
@@ -250,12 +250,21 @@ export class IssuesService implements OnModuleInit {
       });
       return created;
     });
-    return this.toIssueDto(
+    const result = await this.toIssueDto(
       await this.prisma.issue.findUnique({
         where: { id: issue.id },
         include: ISSUE_INCLUDE,
       }),
     );
+    await this.notifyIssueChanged({
+      taskId: result.taskId,
+      issueId: result.id,
+      action: 'create',
+      status: result.status,
+      actorType: ACTOR_TYPE.user,
+      actorId: userId,
+    });
+    return result;
   }
 
   /**
@@ -308,12 +317,21 @@ export class IssuesService implements OnModuleInit {
       });
       return created;
     });
-    return this.toIssueDto(
+    const result = await this.toIssueDto(
       await this.prisma.issue.findUnique({
         where: { id: issue.id },
         include: ISSUE_INCLUDE,
       }),
     );
+    await this.notifyIssueChanged({
+      taskId: result.taskId,
+      issueId: result.id,
+      action: 'create',
+      status: result.status,
+      actorType: ACTOR_TYPE.agent,
+      actorId: agentRef,
+    });
+    return result;
   }
 
   /** GET /issues：taskId 或 projectId 二选一过滤（均缺 → 400）+ status/assigneeAgentId 筛选 + 分页（不含软删）。 */
@@ -394,7 +412,16 @@ export class IssuesService implements OnModuleInit {
       });
       return u;
     });
-    return this.toIssueDto(updated);
+    const result = await this.toIssueDto(updated);
+    await this.notifyIssueChanged({
+      taskId: result.taskId,
+      issueId: result.id,
+      action: 'update',
+      status: result.status,
+      actorType: ACTOR_TYPE.user,
+      actorId: userId,
+    });
+    return result;
   }
 
   /**
@@ -483,7 +510,17 @@ export class IssuesService implements OnModuleInit {
       });
       return u;
     });
-    return this.toIssueDto(updated);
+    const result = await this.toIssueDto(updated);
+    await this.notifyIssueChanged({
+      taskId: result.taskId,
+      issueId: result.id,
+      action: 'transition',
+      fromStatus: issue.status,
+      status: to,
+      actorType: opts?.actorType ?? ACTOR_TYPE.user,
+      actorId: opts?.actorId ?? null,
+    });
+    return result;
   }
 
   /** DELETE /issues/:id：软删（deletedAt=now，GET 列表/详情不可见）。 */
@@ -567,7 +604,16 @@ export class IssuesService implements OnModuleInit {
       });
       return u;
     });
-    return this.toIssueDto(updated);
+    const result = await this.toIssueDto(updated);
+    await this.notifyIssueChanged({
+      taskId: result.taskId,
+      issueId: result.id,
+      action: 'update',
+      status: result.status,
+      actorType: ACTOR_TYPE.agent,
+      actorId: agentRef,
+    });
+    return result;
   }
 
   /** MCP 专用状态流转：校验同 findOneByAgent；核心复用 applyTransition（reject 时 reason 必填）。 */
@@ -740,6 +786,34 @@ export class IssuesService implements OnModuleInit {
       return agentMap.get(a.actorId ?? '') ?? a.actorId ?? '';
     }
     return '';
+  }
+
+  /**
+   * issue 变更广播（is_0000000020：右侧面板实时刷新）。
+   * 先落库后转发（08 篇 §7.3），task scope → 任务页 use-realtime 收到后失效 issue 缓存。
+   */
+  private async notifyIssueChanged(payload: {
+    taskId: string;
+    issueId: string;
+    action: string;
+    status: string;
+    fromStatus?: string | null;
+    actorType: string;
+    actorId?: string | null;
+  }): Promise<void> {
+    await this.realtime.broadcast(
+      EVENT_TYPES.ISSUE_CHANGED,
+      {
+        taskId: payload.taskId,
+        issueId: payload.issueId,
+        action: payload.action,
+        fromStatus: payload.fromStatus ?? null,
+        status: payload.status,
+        actorType: payload.actorType,
+        actorId: payload.actorId ?? null,
+      },
+      { type: 'task', id: payload.taskId },
+    );
   }
 
   /** 操作记录落库（事务内随主变更写 issue_activities，create/update/transition 共用）。 */
