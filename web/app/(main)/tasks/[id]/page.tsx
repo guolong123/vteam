@@ -310,17 +310,40 @@ function customAgentsOf(items: AgentItem[]): AgentItem[] {
   return items.filter((a) => a.type !== "template");
 }
 
-/** 产出物标题 → 文档站 doc id（与 server DocsMirrorService.toSlug/docIdFor 对齐，is_0000000036）：
- *  ASCII slug（[a-z0-9-]）；纯中文/空 → 'doc'，追加 artifact id 前 8 位防冲突。 */
-function docIdFor(title: string, artifactId: string): string {
-  const base = String(title ?? "doc")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (base !== "doc") return base;
-  const suffix = String(artifactId).replace(/[^a-z0-9]/gi, "").slice(0, 8);
-  return suffix ? `doc-${suffix}` : "doc";
+/** 标题 → ASCII slug（对齐 server DocsMirrorService.toSlug）。 */
+function toDocSlug(title: string): string {
+  return (
+    String(title ?? "doc")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "doc"
+  );
+}
+
+/** 产出物 → 文档站 doc id（对齐 server DocsMirrorService.docIdFor + buildRegistry 去重，is_0000000036）：
+ *  base = ASCII slug；纯中文/空 → 'doc' 追加 artifact id 前 8 位；
+ *  同名多文档按 artifact id 序，base 已被占用 → 追加 -<artId前8位>（复刻 server buildRegistry 去重，审核 B）。 */
+function docIdFor(title: string, artifactId: string, all?: { id: string; title: string }[]): string {
+  const toBase = (t: string, id: string): string => {
+    const slug = toDocSlug(t);
+    if (slug !== "doc") return slug;
+    const suffix = String(id).replace(/[^a-z0-9]/gi, "").slice(0, 8);
+    return suffix ? `doc-${suffix}` : "doc";
+  };
+  const base = toBase(title, artifactId);
+  if (!all || all.length <= 1) return base;
+  // 复刻 server buildRegistry：按 artifact id 升序迭代，base 被占则追加后缀
+  const seen = new Set<string>();
+  const ordered = [...all].sort((a, b) => a.id.localeCompare(b.id));
+  for (const a of ordered) {
+    const b = toBase(a.title, a.id);
+    if (a.id === artifactId) {
+      return seen.has(b) ? `${b}-${String(artifactId).replace(/[^a-z0-9]/gi, "").slice(0, 8)}` : b;
+    }
+    seen.add(b);
+  }
+  return base;
 }
 
 /** GET /agents 结果 → 角色选择项（按角色去重取首个，顺序对齐 ROLE_KEYS）。 */
@@ -1696,7 +1719,7 @@ function TaskPanel({
     const isMarkdownFile =
       item.type === "file" && !!item.fileUrl && /\.(md|markdown)$/i.test(item.fileUrl);
     if (item.type === "doc" || isMarkdownFile) {
-      onOpenDocs?.(docIdFor(item.title, item.id));
+      onOpenDocs?.(docIdFor(item.title, item.id, artifacts));
       return;
     }
     if (item.type === "file" && item.fileUrl) {
