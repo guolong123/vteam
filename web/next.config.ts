@@ -23,6 +23,13 @@ const nextConfig: NextConfig = {
         source: "/uploads/:path*",
         destination: `${API_PROXY_TARGET}/uploads/:path*`,
       },
+      // 文档站同源代理（is_0000000024）：/docs-site/* → server DocsSiteController
+      // （鉴权 + taskId 隔离 + 代理 md-docs），web 仅同源转发，浏览器整页导航到 /docs/:taskId 后
+      // 经本规则落到 server，cookie/query token 由 server 控制器校验。
+      {
+        source: "/docs-site/:path*",
+        destination: `${API_PROXY_TARGET}/docs-site/:path*`,
+      },
     ];
   },
 };

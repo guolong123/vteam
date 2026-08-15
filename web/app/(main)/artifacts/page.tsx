@@ -862,7 +862,7 @@ export default function ArtifactsPage() {
         ...baseFont,
       }}
     >
-      {/* 头部：项目名 + 产出物管理 */}
+      {/* 头部：项目名 + 产出物管理 + 文档站视图入口 */}
       <div
         data-testid="artifacts-title"
         style={{
@@ -876,6 +876,33 @@ export default function ArtifactsPage() {
         <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>
           {projectName ? `${projectName} · 产出物管理` : "产出物管理"}
         </div>
+        {/* is_0000000024：文档站视图 → /docs/:taskId（需先在下拉选择具体任务） */}
+        <button
+          type="button"
+          data-testid="artifacts-docs-entry"
+          aria-label="文档站视图"
+          title={taskKey === "all" ? "请先在任务下拉中选择具体任务" : "以文档站视图查看所选任务产出物"}
+          disabled={taskKey === "all"}
+          onClick={() => router.push(`/docs/${taskKey}`)}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: space.xs,
+            padding: `${space.sm}px ${space.lg}px`,
+            borderRadius: radius.pill,
+            border: `1px solid ${taskKey === "all" ? neutral[200] : "#2563EB"}`,
+            backgroundColor: taskKey === "all" ? "#F8FAFC" : "#2563EB",
+            color: taskKey === "all" ? neutral[400] : "#FFFFFF",
+            fontSize: fontSize.md,
+            fontWeight: 500,
+            cursor: taskKey === "all" ? "not-allowed" : "pointer",
+            opacity: taskKey === "all" ? 0.6 : 1,
+            fontFamily: fontFamily.body,
+          }}
+        >
+          <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>▤</span>
+          文档站视图
+        </button>
       </div>
 
       {/* 三筛：任务下拉 + 类型筛 + 验收状态筛 */}

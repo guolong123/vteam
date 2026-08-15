@@ -1564,11 +1564,14 @@ function TaskPanel({
   onEditTaskInfo,
   width,
   onToggleManagedMode,
+  onOpenDocs,
 }: {
   task: TaskDetail;
   agents: { id: string; name: string; role: RoleKey }[];
   /** 产出物入口：跳项目产出物页 /artifacts?pid= */
   onOpenArtifacts?: () => void;
+  /** 文档站入口（is_0000000024）：跳 /docs/:taskId。 */
+  onOpenDocs?: () => void;
   /** 任务实际产出物列表（GET /tasks/:id/artifacts）。 */
   artifacts: ArtifactItem[];
   artifactsTotal: number;
@@ -1714,8 +1717,32 @@ function TaskPanel({
       {/* 产出物：任务实际产出物文件列表（GET /tasks/:id/artifacts；doc/file 直开 fileUrl，
           超 5 个 →「更多 N 个」跳 /artifacts?pid= 聚合页；空 → 占位按钮） */}
       <div>
-        <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600], marginBottom: space.sm }}>
-          产出物
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm, marginBottom: space.sm }}>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600] }}>产出物</span>
+          {/* is_0000000024：文档站入口 → /docs/:taskId */}
+          <button
+            type="button"
+            data-testid="task-docs-entry"
+            aria-label="文档站"
+            title="以文档站视图查看本任务产出物文档"
+            onClick={onOpenDocs}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: space.xs,
+              border: `1px solid ${neutral[200]}`,
+              background: "#FFFFFF",
+              color: neutral[600],
+              fontSize: fontSize.sm,
+              borderRadius: radius.pill,
+              padding: `${space.xs - 1}px ${space.sm}px`,
+              cursor: "pointer",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>▤</span>
+            文档站
+          </button>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           {artifactsLoading ? (
@@ -2823,6 +2850,7 @@ export default function TaskChatPage() {
         onEditTaskInfo={() => setTaskEditOpen(true)}
         width={taskPanel.width}
         onToggleManagedMode={handleToggleManagedMode}
+        onOpenDocs={() => router.push(`/docs/${taskId}`)}
       />
 
       {/* 任务信息编辑弹窗（is_0000000011） */}
