@@ -55,3 +55,58 @@ a {
   color: color-mix(in oklab, currentcolor 50%, transparent);
   opacity: 1;
 }
+
+/* ============================================================
+ * Tailwind（is_0000000037）：为移植的 md-docs 原型（src/components/docs/prototypes/）
+ * 提供工具类。preflight 与上方手动 reset 对齐（原型环境同源），
+ * 现有 web 组件以 inline styles 为主，不受工具类影响。
+ * ============================================================ */
+@import "tailwindcss";
+
+@theme {
+  /* 品牌色（对齐 prototype-viewer index.css @theme） */
+  --color-brand-50: #eef4ff;
+  --color-brand-100: #e0ebfe;
+  --color-brand-200: #c7dafe;
+  --color-brand-300: #a3c2fb;
+  --color-brand-400: #7ea2f6;
+  --color-brand-500: #5f83ef;
+  --color-brand-600: #4564e0;
+  --color-brand-700: #374fc4;
+  --color-brand-800: #2f429e;
+  --color-brand-900: #2c3c7d;
+
+  /* 语义色（状态 / 徽标） */
+  --color-success-50: #ecfdf5;
+  --color-success-500: #10b981;
+  --color-success-600: #059669;
+  --color-success-700: #047857;
+  --color-warning-50: #fffbeb;
+  --color-warning-500: #f59e0b;
+  --color-warning-700: #b45309;
+  --color-danger-50: #fef2f2;
+  --color-danger-500: #ef4444;
+  --color-danger-600: #dc2626;
+  --color-danger-700: #b91c1c;
+  --color-info-50: #f0f9ff;
+  --color-info-500: #0ea5e9;
+  --color-info-600: #0284c7;
+  --color-info-700: #0369a1;
+
+  /* 圆角 */
+  --radius-card: 0.75rem;
+  --radius-control: 0.5rem;
+  --radius-frame: 0.625rem;
+
+  /* 阴影 */
+  --shadow-panel: 0 1px 2px rgb(15 23 42 / 0.06), 0 4px 12px rgb(15 23 42 / 0.06);
+  --shadow-frame: 0 10px 24px rgb(15 23 42 / 0.12), 0 2px 6px rgb(15 23 42 / 0.08);
+
+  /* 字体栈 */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
+}

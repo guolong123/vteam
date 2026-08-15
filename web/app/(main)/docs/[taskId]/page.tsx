@@ -10,14 +10,21 @@
  * - 顶部薄壳提供任务上下文（返回任务链接 + 标题）+ 文档站标识；
  * - 实时性：registry 30s refetchInterval（AC-1 新口径，与 is_0000000020 同模式）。
  */
-import { type CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useParams, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
 import { DocExplorer } from "@/src/components/docs/doc-explorer";
+
+// is_0000000037：原型 tab 懒加载（仅进入原型 tab 才拉取 registry/原型 chunk，文档 tab 首屏不受影响）
+const PrototypePanel = dynamic(
+  () => import("@/src/components/docs/prototype-panel").then((m) => m.PrototypePanel),
+  { ssr: false, loading: () => <div style={{ padding: space.xl, color: neutral[400], fontFamily: fontFamily.body }}>加载原型…</div> },
+);
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -28,6 +35,8 @@ export default function DocsPage() {
   // is_0000000036：?doc=<slug> 初始定位到具体文档（产出物 doc 点击携带）
   const searchParams = useSearchParams();
   const initialDocId = searchParams.get("doc") ?? undefined;
+  // is_0000000037：文档 | 原型 tab
+  const [tab, setTab] = useState<"docs" | "protos">("docs");
 
   // 任务上下文标题（返回入口 + 顶部标题）
   const taskQuery = useQuery({
@@ -109,9 +118,54 @@ export default function DocsPage() {
         </span>
       </div>
 
-      {/* 文档阅读器（v4 内嵌渲染） */}
+      {/* 文档 | 原型 tab（is_0000000037） */}
+      <div
+        data-testid="docs-tab-bar"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: space.xs,
+          padding: `${space.sm}px ${space.xl}px 0`,
+          backgroundColor: "#FFFFFF",
+          borderBottom: `1px solid ${neutral[200]}`,
+          flexShrink: 0,
+        }}
+      >
+        {(
+          [
+            { key: "docs", label: "文档" },
+            { key: "protos", label: "原型" },
+          ] as const
+        ).map((t) => {
+          const active = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              data-testid={`docs-tab-${t.key}`}
+              data-active={active ? "true" : "false"}
+              onClick={() => setTab(t.key)}
+              style={{
+                padding: `${space.sm + 2}px ${space.lg}px`,
+                border: "none",
+                background: "none",
+                borderBottom: active ? `2px solid #2563EB` : `2px solid transparent`,
+                color: active ? "#1D4ED8" : neutral[500],
+                fontSize: fontSize.md,
+                fontWeight: active ? 600 : 500,
+                cursor: "pointer",
+                fontFamily: fontFamily.body,
+              }}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* 内容区：文档阅读器（v4 内嵌渲染，initialDocId 定位）或 原型面板（懒加载） */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <DocExplorer taskId={taskId} initialDocId={initialDocId} />
+        {tab === "docs" ? <DocExplorer taskId={taskId} initialDocId={initialDocId} /> : <PrototypePanel />}
       </div>
     </div>
   );
