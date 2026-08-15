@@ -1,4 +1,5 @@
 import { Logger, Module, OnModuleInit } from '@nestjs/common';
+import { DiscoveryModule } from '@nestjs/core';
 import { TerminusModule } from '@nestjs/terminus';
 import { AgentsService } from '../agents/agents.service';
 import { ArtifactsModule } from '../artifacts/artifacts.module';
@@ -25,6 +26,12 @@ import { SwaggerToolSyncService } from './swagger-tools.sync';
  *   从 Swagger 文档（SwaggerDocsProvider）动态生成全量业务 API 工具（70+），
  *   JSON-RPC initialize/tools/list/call + ajv 校验 + 权限点校验（SwaggerMcpAuthService）
  *   + handler 绑定（SwaggerMcpHandlers → 各业务 service）。
+ * - handler 绑定两段式：手动映射表（build()，52 条，含 taskId 归属校验）优先；
+ *   未命中时走约定式自动绑定（autoHandler：operationId → service 方法，参数透传 args），
+ *   新增常规 API（controller→service 同名方法）无需额外维护映射。
+ * - DiscoveryModule（@nestjs/core）提供 DiscoveryService——自动绑定经其全局扫描
+ *   按实例构造名解析 service（类 token 注册的 provider 无法用字符串 token 经
+ *   ModuleRef.get 取到，ModuleRef 字符串查找仅作为显式字符串 token 的快速路径）。
  * - SwaggerDocsProvider 为模块级 store（main.ts setSwaggerRawDocument + initialize），
  *   构造无参可 DI。
  * - 业务 service：TasksModule/ArtifactsModule/McpServersModule/ModelsModule/WorkersModule
@@ -41,6 +48,7 @@ import { SwaggerToolSyncService } from './swagger-tools.sync';
  */
 @Module({
   imports: [
+    DiscoveryModule,
     RealtimeModule,
     WorkersModule,
     ModelsModule,

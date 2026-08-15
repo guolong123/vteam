@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DiscoveryService, ModuleRef } from '@nestjs/core';
 import { HealthCheckService } from '@nestjs/terminus';
 import { AgentsService } from '../agents/agents.service';
 import { QueryAgentsDto } from '../agents/dto/query-agents.dto';
@@ -36,6 +37,7 @@ import { UsersService } from '../users/users.service';
 import { DEFAULT_WORKER_TOKEN } from '../workers/workers.constants';
 import { UpdateWorkerModelDto } from '../workers/dto/update-worker-model.dto';
 import { WorkersService } from '../workers/workers.service';
+import type { SwaggerMcpTool } from './swagger-tools';
 
 /** handler 上下文：workerId 透传（权限与归属校验在 controller/auth 内完成）。 */
 export interface SwaggerMcpHandlerContext {
@@ -69,6 +71,54 @@ export interface SwaggerMcpHandler {
 /** args → DTO 类型断言（ajv 已校验，字段与 DTO 同名）。 */
 const asDto = <T>(args: SwaggerMcpArgs): T => args as unknown as T;
 
+/** 匹配层路径归一化：剥离全局前缀 /api/v1（main.ts setGlobalPrefix 注入 Swagger paths 键，httpRef.path 保持原始形态便于调试）。 */
+const stripGlobalPrefix = (p: string): string =>
+  p.replace(/^\/api\/v1(?=\/|$)/, '');
+
+const upperFirst = (s: string): string =>
+  s ? s[0].toUpperCase() + s.slice(1) : s;
+
+/**
+ * 解析 sanitize 后 operationId（形如 `taskscontroller_findall`）：
+ * 首段 = controller 基名（去 `controller` 后缀），后续段拼接 = 方法名。
+ * 不满足 `<controller>_<method>` 形态返回 undefined（交由 NOT_IMPLEMENTED）。
+ */
+function parseOperationId(
+  name: string,
+): { baseName: string; methodName: string } | undefined {
+  const parts = name.split('_').filter((p) => p.length > 0);
+  if (parts.length < 2) return undefined;
+  const base = parts[0].replace(/controller$/i, '');
+  if (base === '') return undefined;
+  return { baseName: base, methodName: parts.slice(1).join('') };
+}
+
+/** 方法名规范化：小写 + 去非字母数字（findAll / find_all / findall 视为等价）。 */
+const normalizeMethodName = (s: string): string =>
+  s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** 在 service 实例上按方法名查找（不区分大小写、忽略分隔符）；原型 + 自有属性都覆盖。 */
+function findServiceMethod(
+  service: unknown,
+  methodName: string,
+): ((...args: unknown[]) => unknown) | undefined {
+  const target = normalizeMethodName(methodName);
+  const record = service as Record<string, unknown>;
+  const names: string[] = [];
+  const proto = Object.getPrototypeOf(record) as Record<string, unknown> | null;
+  if (proto) names.push(...Object.getOwnPropertyNames(proto));
+  for (const key of Object.keys(record)) {
+    if (!names.includes(key)) names.push(key);
+  }
+  for (const name of names) {
+    if (name === 'constructor') continue;
+    if (normalizeMethodName(name) !== target) continue;
+    const fn = record[name];
+    if (typeof fn === 'function') return fn as (...args: unknown[]) => unknown;
+  }
+  return undefined;
+}
+
 /**
  * handler 绑定（阶段 2 任务 11）：Swagger 工具 → service 方法映射。
  *
@@ -96,11 +146,13 @@ export class SwaggerMcpHandlers {
     private readonly roles: RolesService,
     private readonly health: HealthCheckService,
     private readonly config: ConfigService,
+    private readonly moduleRef: ModuleRef,
+    private readonly discovery: DiscoveryService,
   ) {}
 
   build(): readonly SwaggerMcpHandler[] {
     const m = (method: string, path: string) => (httpRef: HttpRef) =>
-      httpRef.method === method && httpRef.path === path;
+      httpRef.method === method && stripGlobalPrefix(httpRef.path) === path;
     /** path 参数即 taskId 的提取（/tasks/{id}、/tasks/{id}/artifacts 等）。 */
     const taskIdFromArgs = (args: SwaggerMcpArgs): string | undefined =>
       typeof args.id === 'string' ? args.id : undefined;
@@ -394,5 +446,52 @@ export class SwaggerMcpHandlers {
         call: () => this.health.check([]),
       },
     ];
+  }
+
+  /**
+   * 约定式自动绑定兜底：手动映射（build()）未命中时，从 operationId
+   * （sanitize 后小写，形如 `skillscontroller_create`）反推 controller 基名 +
+   * 方法名，获取对应 service 实例并返回 handler。解析失败返回 undefined →
+   * controller 走 NOT_IMPLEMENTED（与现状一致）。
+   */
+  autoHandler(tool: SwaggerMcpTool): SwaggerMcpHandler | undefined {
+    const parsed = parseOperationId(tool.name);
+    if (!parsed) return undefined;
+    const service = this.resolveService(parsed.baseName);
+    if (service === undefined || service === null) return undefined;
+    const method = findServiceMethod(service, parsed.methodName);
+    if (!method) return undefined;
+    return {
+      // controller 直接调用本 handler，不参与 match 分发。
+      match: () => false,
+      call: (_ctx, args) => {
+        try {
+          return Promise.resolve(method.call(service, args));
+        } catch (err) {
+          return Promise.reject(err);
+        }
+      },
+    };
+  }
+
+  /** service 解析：先按 `${Base}Service` 字符串 token 经 ModuleRef 取，失败则 DiscoveryService 全局扫描按实例构造名匹配。 */
+  private resolveService(baseName: string): unknown {
+    const token = `${upperFirst(baseName)}Service`;
+    try {
+      const byToken = this.moduleRef.get(token, { strict: false });
+      if (byToken !== undefined && byToken !== null) return byToken;
+    } catch {
+      // 类 token 注册的 provider 用字符串 token 查找会抛 UnknownElementException，走 Discovery 兜底。
+    }
+    for (const wrapper of this.discovery.getProviders()) {
+      const inst = wrapper?.instance;
+      if (
+        inst &&
+        (inst as { constructor?: { name?: string } }).constructor?.name === token
+      ) {
+        return inst;
+      }
+    }
+    return undefined;
   }
 }

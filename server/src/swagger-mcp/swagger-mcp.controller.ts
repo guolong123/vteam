@@ -60,6 +60,7 @@ const ERROR_NOT_IMPLEMENTED = 'NOT_IMPLEMENTED';
 @Controller('vteam-api/mcp')
 export class SwaggerMcpController {
   private readonly handlers: readonly SwaggerMcpHandler[];
+  private readonly handlersService: SwaggerMcpHandlers;
   private readonly ajv: Ajv;
   private readonly compiled = new Map<string, ValidateFunction>();
   private toolsCache: readonly SwaggerMcpTool[] | null = null;
@@ -69,6 +70,7 @@ export class SwaggerMcpController {
     handlers: SwaggerMcpHandlers,
     private readonly auth: SwaggerMcpAuthService,
   ) {
+    this.handlersService = handlers;
     this.handlers = handlers.build();
     this.ajv = new Ajv({ strict: false });
     addFormats(this.ajv);
@@ -266,7 +268,10 @@ export class SwaggerMcpController {
   }
 
   private findHandler(tool: SwaggerMcpTool): SwaggerMcpHandler | undefined {
-    return this.handlers.find((h) => h.match(tool.httpRef));
+    return (
+      this.handlers.find((h) => h.match(tool.httpRef)) ??
+      this.handlersService.autoHandler?.(tool)
+    );
   }
 
   private result(id: unknown, result: unknown): unknown {

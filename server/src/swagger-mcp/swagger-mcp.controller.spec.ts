@@ -1,5 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DiscoveryService, ModuleRef } from '@nestjs/core';
 import { Test, TestingModule } from '@nestjs/testing';
 import type { OpenAPIObject } from '@nestjs/swagger';
 import * as request from 'supertest';
@@ -13,6 +14,17 @@ jest.mock('@apidevtools/json-schema-ref-parser', () => ({
 
 import { PrismaService } from '../prisma/prisma.service';
 import { WorkerTokenGuard } from '../workers/worker-token.guard';
+import { AgentsService } from '../agents/agents.service';
+import { ArtifactsService } from '../artifacts/artifacts.service';
+import { McpServersService } from '../mcp-servers/mcp-servers.service';
+import { ModelsService } from '../models/models.service';
+import { SkillsService } from '../skills/skills.service';
+import { TasksService } from '../tasks/tasks.service';
+import { ToolsService } from '../tools/tools.service';
+import { RolesService } from '../users/roles.service';
+import { UsersService } from '../users/users.service';
+import { WorkersService } from '../workers/workers.service';
+import { HealthCheckService } from '@nestjs/terminus';
 import { SwaggerMcpAuthService } from './swagger-mcp.auth';
 import { SwaggerMcpController } from './swagger-mcp.controller';
 import { SwaggerDocsProvider } from './swagger-docs.provider';
@@ -402,5 +414,220 @@ describe('SwaggerMcpController (HTTP)', () => {
 
       expect(res.body).toEqual({ accepted: true });
     });
+  });
+});
+
+/**
+ * F2 前缀失配修复 + 约定式自动绑定集成测试（真实 SwaggerMcpHandlers）。
+ * Swagger 文档 paths 带 /api/v1 前缀（main.ts setGlobalPrefix 注入），验证：
+ * ① 手动映射命中（匹配层剥离前缀后 52 条映射恢复）；
+ * ② 自动绑定命中（operationId → service 方法调用，ModuleRef 字符串 token 与
+ *    DiscoveryService 全局扫描两条路径）；
+ * ③ 自动解析失败（service 不存在）→ NOT_IMPLEMENTED。
+ */
+describe('SwaggerMcpController (F2 前缀 + 自动绑定集成)', () => {
+  let app: INestApplication;
+  let prisma: {
+    session: { findFirst: jest.Mock };
+    taskAgent: { findUnique: jest.Mock };
+    agentToolEffect: { findUnique: jest.Mock };
+  };
+  let tasksService: { findOne: jest.Mock };
+  let skillsService: { create: jest.Mock };
+  let moduleRefMock: { get: jest.Mock };
+  let discoveryMock: { getProviders: jest.Mock };
+
+  const prefixedDocument: OpenAPIObject = {
+    openapi: '3.0.0',
+    info: { title: 'Test API', version: '1.0' },
+    paths: {
+      '/api/v1/tasks/{id}': {
+        get: {
+          operationId: 'TasksController_findOne',
+          summary: '任务详情',
+          parameters: [
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+            },
+          ],
+          responses: { '200': { description: 'OK' } },
+        },
+      },
+      '/api/v1/skills': {
+        post: {
+          operationId: 'SkillsController_create',
+          summary: '创建技能',
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { name: { type: 'string' } },
+                  required: ['name'],
+                },
+              },
+            },
+          },
+          responses: { '201': { description: 'Created' } },
+        },
+      },
+      '/api/v1/nonexistent': {
+        get: {
+          operationId: 'NoSuchController_doThing',
+          summary: '不存在的接口',
+          responses: { '200': { description: 'OK' } },
+        },
+      },
+    },
+  };
+
+  const mcpPost = () =>
+    request(app.getHttpServer())
+      .post('/vteam-api/mcp')
+      .set('x-worker-token', 'dev-worker-token');
+
+  const allowContext = () => {
+    prisma.session.findFirst.mockResolvedValue({ taskAgentId: 'ta_1' });
+    prisma.taskAgent.findUnique.mockResolvedValue({ agentId: 'a_1' });
+    prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'allow' });
+  };
+
+  beforeEach(async () => {
+    prisma = {
+      session: { findFirst: jest.fn() },
+      taskAgent: { findUnique: jest.fn() },
+      agentToolEffect: { findUnique: jest.fn() },
+    };
+    tasksService = { findOne: jest.fn().mockResolvedValue({ id: 't_1' }) };
+    skillsService = { create: jest.fn().mockResolvedValue({ id: 's_1' }) };
+    moduleRefMock = { get: jest.fn(() => undefined) };
+    discoveryMock = { getProviders: jest.fn(() => []) };
+
+    const moduleFixture: TestingModule = await Test.createTestingModule({
+      controllers: [SwaggerMcpController],
+      providers: [
+        {
+          provide: SwaggerDocsProvider,
+          useValue: { getDocument: () => prefixedDocument },
+        },
+        SwaggerMcpHandlers,
+        { provide: TasksService, useValue: tasksService },
+        { provide: ArtifactsService, useValue: {} },
+        { provide: AgentsService, useValue: {} },
+        { provide: WorkersService, useValue: {} },
+        { provide: ModelsService, useValue: {} },
+        { provide: SkillsService, useValue: skillsService },
+        { provide: ToolsService, useValue: {} },
+        { provide: McpServersService, useValue: {} },
+        { provide: UsersService, useValue: {} },
+        { provide: RolesService, useValue: {} },
+        { provide: HealthCheckService, useValue: { check: jest.fn() } },
+        { provide: ConfigService, useValue: { get: jest.fn(() => undefined) } },
+        { provide: ModuleRef, useValue: moduleRefMock },
+        { provide: DiscoveryService, useValue: discoveryMock },
+        SwaggerMcpAuthService,
+        { provide: PrismaService, useValue: prisma },
+        WorkerTokenGuard,
+      ],
+    }).compile();
+
+    app = moduleFixture.createNestApplication();
+    await app.init();
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('① 手动映射命中：/api/v1/tasks/{id} GET → TasksService.findOne（前缀剥离修复 F2）', async () => {
+    allowContext();
+    prisma.session.findFirst
+      .mockResolvedValueOnce({ taskAgentId: 'ta_1' })
+      .mockResolvedValue({ id: 't_1' });
+
+    const res = await mcpPost()
+      .set('x-worker-id', 'w_0001')
+      .send({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'taskscontroller_findone', arguments: { id: 't_1' } },
+      })
+      .expect(200);
+
+    expect(tasksService.findOne).toHaveBeenCalledWith('t_1');
+    expect(res.body.error).toBeUndefined();
+    expect(JSON.parse(res.body.result.content[0].text)).toEqual({ id: 't_1' });
+  });
+
+  it('② 自动绑定命中：/api/v1/skills POST → SkillsService.create（ModuleRef 字符串 token 路径）', async () => {
+    allowContext();
+    moduleRefMock.get.mockImplementation((token: string) =>
+      token === 'SkillsService' ? skillsService : undefined,
+    );
+
+    const res = await mcpPost()
+      .set('x-worker-id', 'w_0001')
+      .send({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: {
+          name: 'skillscontroller_create',
+          arguments: { name: 'x' },
+        },
+      })
+      .expect(200);
+
+    expect(skillsService.create).toHaveBeenCalledWith({ name: 'x' });
+    expect(res.body.error).toBeUndefined();
+  });
+
+  it('② DiscoveryService 全局扫描路径：字符串 token 未命中时按实例构造名匹配', async () => {
+    allowContext();
+    const discoveredSkills: { create: jest.Mock } = {
+      create: jest.fn().mockResolvedValue({ id: 's_2' }),
+    };
+    Object.defineProperty(discoveredSkills, 'constructor', {
+      value: { name: 'SkillsService' },
+      configurable: true,
+    });
+    discoveryMock.getProviders.mockReturnValue([{ instance: discoveredSkills }]);
+
+    const res = await mcpPost()
+      .set('x-worker-id', 'w_0001')
+      .send({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: {
+          name: 'skillscontroller_create',
+          arguments: { name: 'y' },
+        },
+      })
+      .expect(200);
+
+    expect(discoveredSkills.create).toHaveBeenCalledWith({ name: 'y' });
+    expect(res.body.error).toBeUndefined();
+  });
+
+  it('③ 自动解析失败（service 不存在）→ NOT_IMPLEMENTED', async () => {
+    allowContext();
+
+    const res = await mcpPost()
+      .set('x-worker-id', 'w_0001')
+      .send({
+        jsonrpc: '2.0',
+        id: 4,
+        method: 'tools/call',
+        params: { name: 'nosuchcontroller_dothing', arguments: {} },
+      })
+      .expect(200);
+
+    expect(res.body.error.code).toBe(-32603);
+    expect(res.body.error.message).toContain('该 API 暂未接入 service 绑定');
   });
 });
