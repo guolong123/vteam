@@ -9,6 +9,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
@@ -21,6 +22,7 @@ import {
   WorkerTokenRequest,
 } from './worker-token.guard';
 import { WorkersService } from './workers.service';
+import { DEFAULT_WORKER_TOKEN } from './workers.constants';
 
 /**
  * Worker 控制面端点（T7）。
@@ -36,7 +38,10 @@ import { WorkersService } from './workers.service';
 @ApiBearerAuth()
 @Controller('workers')
 export class WorkersController {
-  constructor(private readonly workers: WorkersService) {}
+  constructor(
+    private readonly workers: WorkersService,
+    private readonly config: ConfigService,
+  ) {}
 
   /**
    * POST /api/v1/workers/register：worker 注册（X-Worker-Token 鉴权）。
@@ -70,6 +75,20 @@ export class WorkersController {
   @ApiOperation({ summary: 'worker 列表' })
   findAll() {
     return this.workers.findAll();
+  }
+
+  /**
+   * GET /api/v1/workers/register-token：worker 注册 token（workers.view）。
+   * 安装向导页生成「复制即成功」的 curl 命令用——脚本需 X_WORKER_TOKEN 与
+   * server 的 WORKER_TOKEN 一致，向导页拉取后拼进 --token 参数。
+   * 注意：路由须在 @Get(':id') 之前（否则 register-token 被 :id 捕获）。
+   */
+  @Get('register-token')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('workers.view')
+  @ApiOperation({ summary: 'worker 注册 token（workers.view；安装向导生成命令用）' })
+  getRegisterToken() {
+    return { token: this.config.get<string>('WORKER_TOKEN', DEFAULT_WORKER_TOKEN) };
   }
 
   /** GET /api/v1/workers/:id：worker 详情（用户 JWT + workers.view 权限）。 */

@@ -45,17 +45,17 @@ chart/vteam/
 # server（NestJS）
 docker build -t <registry>/vteam-server:latest ./server && docker push <registry>/vteam-server:latest
 
-# web（Next.js standalone）——⚠️ 必须注入 API_PROXY_TARGET 构建参数
-# rewrites 在 next build 时编译进 routes-manifest.json，运行时 ENV 无效。
-# 目标指向 release 的 server Service：http://<release>-server:3000
-docker build --build-arg API_PROXY_TARGET=http://vteam-server:3000 \
-  -t <registry>/vteam-web:latest ./web && docker push <registry>/vteam-web:latest
+# web（Next.js standalone）——代理目标为**运行时** env（middleware.ts 读取），
+# 无需构建参数；部署时由 chart 向容器注入 API_PROXY_TARGET（见
+# deployment-web.yaml，值取 values.web.image.proxyTarget，默认指向本 release
+# 的 server Service http://<release>-server:3000）。同一镜像可部署任意环境。
+docker build -t <registry>/vteam-web:latest ./web && docker push <registry>/vteam-web:latest
 
 # worker（opencode 执行节点）
 docker build -t <registry>/vteam-worker:latest ./worker && docker push <registry>/vteam-worker:latest
 ```
 
-若 release 名非 `vteam`，web 镜像的 `API_PROXY_TARGET` 需对应 `http://<release>-server:3000`。chart 运行时**不再**向 web 容器注入代理 env（`values.web.image.proxyTarget` 仅为构建说明）。
+若 release 名非 `vteam`，`values.web.image.proxyTarget` 自动按 `http://<release>-server:3000` 兜底（`deployment-web.yaml` 运行时注入 `API_PROXY_TARGET` env），无需改镜像。
 
 ## 安装
 
@@ -109,7 +109,7 @@ helm install vteam chart/vteam \
 |------|------|------|
 | `replicaCount.{server,web,worker}` | 1 | 各服务副本数 |
 | `server.image` / `web.image` / `worker.image` | 见 values.yaml | 各服务镜像仓库/tag |
-| `web.image.proxyTarget` | `http://vteam-server:3000` | **构建参数说明**（非运行时 env） |
+| `web.image.proxyTarget` | `http://vteam-server:3000` | 运行时 env `API_PROXY_TARGET`（middleware 同源代理目标，deployment-web 注入） |
 | `db.enabled` | `true` | 内置 MySQL StatefulSet |
 | `db.external.url` | 空 | 外部 DATABASE_URL（`db.enabled=false` 时必填） |
 | `server.env.*` | 对齐 compose | NODE_ENV/PORT/JWT 时效/FIRST_TOKEN_TIMEOUT_MS |
