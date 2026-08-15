@@ -173,7 +173,11 @@ const issueTransitionSchema = z.object({
   issueId: z.string().describe('issue ID'),
   action: z
     .enum(['start', 'resolve', 'close', 'reopen', 'reject'])
-    .describe('状态流转动作：start 开始处理 / resolve 处理完成 / close 验收关闭 / reopen 重开 / reject 驳回'),
+    .describe('状态流转动作：start 开始处理 / resolve 处理完成 / close 验收关闭 / reopen 重开 / reject 拒绝处理'),
+  reason: z
+    .string()
+    .optional()
+    .describe('拒绝处理原因（action=reject 时必填）'),
 });
 
 type IssueTransitionArgs = z.infer<typeof issueTransitionSchema>;
@@ -268,7 +272,7 @@ export function buildPlatformMcpTools(
     {
       name: 'issue_get',
       description:
-        '查询单个 issue 详情（任务成员可用，issue 须属于该任务）。返回 issue DTO（含描述/指派/创建者名）。',
+        '查询单个 issue 详情（任务成员可用，issue 须属于该任务）。返回 issue DTO（含描述/指派/创建者名/拒绝原因/操作记录 activities，操作记录含操作人 actorName）。',
       inputSchema: issueGetSchema,
       handler: (ctx, args) => service.issueGet(ctx, args as IssueGetArgs),
     },
@@ -282,7 +286,7 @@ export function buildPlatformMcpTools(
     {
       name: 'issue_transition',
       description:
-        '流转 issue 状态：start(open→in_progress)/resolve(in_progress→resolved)/close(resolved→closed)/reopen(closed→open)/reject(in_progress→open)。返回更新后的 issue DTO；非法迁移返回错误。',
+        '流转 issue 状态：start(open→in_progress)/resolve(in_progress→resolved)/close(resolved→closed)/reopen(closed|rejected→open)/reject(in_progress→rejected，必填 reason 拒绝原因)。返回更新后的 issue DTO；非法迁移返回错误。',
       inputSchema: issueTransitionSchema,
       handler: (ctx, args) =>
         service.issueTransition(ctx, args as IssueTransitionArgs),

@@ -8,8 +8,27 @@
  * - IssuesResponse：GET /issues 分页响应（对齐 models/git-repos 的 findAll 模式）。
  */
 
-/** Issue 状态（ISSUE_STATUS：open/in_progress/resolved/closed）。 */
-export type IssueStatus = "open" | "in_progress" | "resolved" | "closed";
+/** Issue 状态（ISSUE_STATUS：open/in_progress/resolved/closed/rejected，is_0000000013 增 rejected）。 */
+export type IssueStatus = "open" | "in_progress" | "resolved" | "closed" | "rejected";
+
+/** 操作记录条目（is_0000000013：IssueActivity 的 DTO，含操作人展示名）。 */
+export interface IssueActivityItem {
+  id: string;
+  issueId: string;
+  /** create | update | transition。 */
+  action: string;
+  fromStatus: string | null;
+  toStatus: string | null;
+  actorType: "user" | "agent";
+  actorId: string | null;
+  /** agent 操作时的 ta_ 实例 id。 */
+  instanceId: string | null;
+  /** 操作人展示名（user→username；agent→实例别名/agent 名）。 */
+  actorName: string;
+  /** { reason? }（拒绝原因等）。 */
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
 
 /** GET /issues 条目（IssuesService.toIssueDto；创建者 agent/user 二选一非空）。 */
 export interface IssueItem {
@@ -33,6 +52,12 @@ export interface IssueItem {
   createdAt: string;
   resolvedAt: string | null;
   closedAt: string | null;
+  /** is_0000000013：拒绝处理原因（status=rejected 时有值）。 */
+  rejectReason: string | null;
+  /** is_0000000013：拒绝处理时间。 */
+  rejectedAt: string | null;
+  /** is_0000000013：操作记录（升序，含操作人）。 */
+  activities: IssueActivityItem[];
 }
 
 /** GET /issues 分页响应（对齐 models/git-repos 的 findAll 模式）。 */
@@ -66,7 +91,9 @@ export interface UpdateIssuePayload {
   assigneeUserId?: string | null;
 }
 
-/** POST /issues/:id/transition 请求体（TransitionIssueDto；action ∈ start/resolve/close/reopen/reject）。 */
+/** POST /issues/:id/transition 请求体（TransitionIssueDto；action ∈ start/resolve/close/reopen/reject，reject 必填 reason）。 */
 export interface TransitionIssuePayload {
   action: "start" | "resolve" | "close" | "reopen" | "reject";
+  /** 拒绝处理原因（action=reject 必填，is_0000000013）。 */
+  reason?: string;
 }

@@ -30,6 +30,7 @@ import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { ConfirmDialog, EmptyState } from "@/src/components/ui";
 import { IssueStatusActions } from "@/src/components/tasks/issue-status-actions";
+import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
 import { neutral, space, radius, fontSize, fontFamily, shadow, roles, type RoleKey } from "@/src/theme/tokens";
 import type {
   CreateIssuePayload,
@@ -43,12 +44,13 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /* ------------------------------ 页面内扩展 token（仿原型范式，不写 tokens.ts） ------------------------------ */
 
-/** Issue 状态四色：open=灰蓝 / in_progress=蓝 / resolved=绿 / closed=灰（独立于任务四态语义）。 */
+/** Issue 状态五色：open=灰蓝 / in_progress=蓝 / resolved=绿 / closed=灰 / rejected=红（独立于任务态语义）。 */
 const ISSUE_STATUS_THEME: Record<IssueStatus, { label: string; color: string; bg: string; border: string }> = {
   open: { label: "待处理", color: "#475569", bg: "#F8FAFC", border: "#CBD5E1" },
   in_progress: { label: "进行中", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
   resolved: { label: "已解决", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
   closed: { label: "已关闭", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+  rejected: { label: "已拒绝", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
 };
 
 /** tags 标签徽章多彩循环色板（需求/缺陷/优化 等自由标签按 index 循环取色）。 */
@@ -427,9 +429,11 @@ interface IssueRowProps {
   agents: { id: string; name: string; role: string | null }[];
   onEdit: (issue: IssueItem) => void;
   onDelete: (issue: IssueItem) => void;
+  /** 主列点击 → 弹 Issue 详情（is_0000000012）。 */
+  onOpenDetail?: (issue: IssueItem) => void;
 }
 
-function IssueRow({ issue, agents, onEdit, onDelete }: IssueRowProps) {
+function IssueRow({ issue, agents, onEdit, onDelete, onOpenDetail }: IssueRowProps) {
   // T5：指派实例展示别名（agents=任务实例列表）；存量/未命中回退 agent/user 名
   const assigneeInst = issue.assigneeInstanceId
     ? agents.find((a) => a.id === issue.assigneeInstanceId)
@@ -462,8 +466,22 @@ function IssueRow({ issue, agents, onEdit, onDelete }: IssueRowProps) {
         (e.currentTarget as HTMLDivElement).style.backgroundColor = "#FFFFFF";
       }}
     >
-      {/* 主列：标题 + 状态徽章 + 标签徽章 + 元信息 */}
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: space.sm }}>
+      {/* 主列：标题 + 状态徽章 + 标签徽章 + 元信息（点击弹详情，is_0000000012） */}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={`查看 issue 详情：${issue.title}`}
+        data-testid="issue-row-detail"
+        title="点击查看详情"
+        onClick={() => onOpenDetail?.(issue)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpenDetail?.(issue);
+          }
+        }}
+        style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: space.sm, cursor: "pointer" }}
+      >
         <div style={{ display: "flex", alignItems: "center", gap: space.md, flexWrap: "wrap" }}>
           <span
             data-testid="issue-title"
@@ -635,6 +653,7 @@ const STATUS_FILTERS: { key: StatusFilterKey; label: string }[] = [
   { key: "in_progress", label: "进行中" },
   { key: "resolved", label: "已解决" },
   { key: "closed", label: "已关闭" },
+  { key: "rejected", label: "已拒绝" },
 ];
 
 export default function IssuesPage() {
@@ -662,6 +681,8 @@ export default function IssuesPage() {
   const [formError, setFormError] = useState<string | null>(null);
   // 删除确认
   const [deleteTarget, setDeleteTarget] = useState<IssueItem | null>(null);
+  // Issue 详情弹窗（is_0000000012：IssueRow 主列点击）
+  const [detailIssueId, setDetailIssueId] = useState<string | null>(null);
 
   // 任务下拉：GET /projects/:pid/tasks
   const tasksQuery = useQuery({
@@ -1010,6 +1031,7 @@ export default function IssuesPage() {
                     setFormOpen(true);
                   }}
                   onDelete={setDeleteTarget}
+                  onOpenDetail={(i) => setDetailIssueId(i.id)}
                 />
               ))}
 
@@ -1054,6 +1076,15 @@ export default function IssuesPage() {
         onConfirm={() => {
           if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
         }}
+      />
+
+      {/* Issue 详情弹窗（is_0000000012：列表行主列点击） */}
+      <IssueDetailModal
+        issueId={detailIssueId}
+        open={!!detailIssueId}
+        onClose={() => setDetailIssueId(null)}
+        agents={assigneeAgents}
+        onChanged={() => queryClient.invalidateQueries({ queryKey: ["issues"] })}
       />
     </div>
   );

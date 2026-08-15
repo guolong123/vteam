@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsArray, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { TASK_PRIORITY } from '../../common/constants/task.constants';
 
 /**
@@ -43,4 +43,12 @@ export class UpdateTaskDto {
   @IsOptional()
   @IsString()
   mainAgentId?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      '背景文档元数据数组（is_0000000011：PATCH 支持更新任务背景文档，与 create 同形状 [{name,url}]，传 [] 清空）',
+  })
+  @IsOptional()
+  @IsArray()
+  backgroundDocs?: unknown[];
 }

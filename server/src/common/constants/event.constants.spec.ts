@@ -58,7 +58,7 @@ describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 �
     });
   });
 
-  it('ACTOR_TYPE 三类操作者（含 MCP 路径 agent）', () => {
+  it('ACTOR_TYPE 三类操作者（user/system/agent，agent 供 MCP/issue_activities 操作记录）', () => {
     expect(ACTOR_TYPE).toEqual({ user: 'user', system: 'system', agent: 'agent' });
   });
 });

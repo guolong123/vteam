@@ -35,6 +35,7 @@ import type { AgentStatusEvent, MessagePartDeltaEvent, RealtimeQuestionEvent, Se
 import { AgentAvatar, ChatBubble, MessageInput, StatusBadge } from "@/src/components/ui";
 import type { MentionableAgent, SendMessagePayload } from "@/src/components/ui";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
+import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
 import {
   LoadingIndicator,
   MsgError,
@@ -148,7 +149,7 @@ interface TaskIssueItem {
   id: string;
   taskId: string;
   title: string;
-  status: "open" | "in_progress" | "resolved" | "closed";
+  status: "open" | "in_progress" | "resolved" | "closed" | "rejected";
 }
 
 /** GET /issues?taskId= 分页响应（TaskPanel 待办 Issue 区）。 */
@@ -159,12 +160,13 @@ interface TaskIssuesResponse {
   pageSize: number;
 }
 
-/** issue 状态排序优先级（待办在前：open < in_progress < resolved < closed）。 */
+/** issue 状态排序优先级（待办在前：open < in_progress < resolved < closed < rejected）。 */
 const ISSUE_STATUS_ORDER: Record<TaskIssueItem["status"], number> = {
   open: 0,
   in_progress: 1,
   resolved: 2,
   closed: 3,
+  rejected: 4,
 };
 
 /** issue 状态徽章主题（语义对齐 issues 页 ISSUE_STATUS_THEME，面板内小号渲染）。 */
@@ -173,6 +175,7 @@ const ISSUE_STATUS_BADGE: Record<TaskIssueItem["status"], { label: string; color
   in_progress: { label: "进行中", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
   resolved: { label: "已解决", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
   closed: { label: "已关闭", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+  rejected: { label: "已拒绝", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
 };
 
 /** 待办 Issue 区状态小徽章（title 旁展示状态语义）。 */
@@ -1134,6 +1137,378 @@ function MentionHint() {
   );
 }
 
+/* ================================ 任务信息编辑弹窗（is_0000000011：描述/标题/背景文档） ================================ */
+
+/** POST /uploads 响应（server FileStorageService.describe：{url, name, size, ext}）。 */
+interface UploadedFileMeta {
+  url: string;
+  name: string;
+  size: number;
+  ext: string;
+}
+
+/** 背景文档条目（TaskDetail.backgroundDocs 元素 + 新增上传）。 */
+interface BackgroundDocItem {
+  name: string;
+  url: string;
+}
+
+/** 解析 task.backgroundDocs（unknown[] → {name, url}[]，非法元素忽略）。 */
+function parseBackgroundDocs(docs: unknown[]): BackgroundDocItem[] {
+  if (!Array.isArray(docs)) return [];
+  return docs.flatMap((d) => {
+    if (typeof d !== "object" || d === null) return [];
+    const { name, url } = d as { name?: unknown; url?: unknown };
+    return typeof name === "string" && typeof url === "string" && name && url
+      ? [{ name, url }]
+      : [];
+  });
+}
+
+function TaskInfoEditModal({
+  task,
+  open,
+  onClose,
+  onSaved,
+}: {
+  task: TaskDetail;
+  open: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [title, setTitle] = useState(task.title);
+  const [description, setDescription] = useState(task.description ?? "");
+  const [docs, setDocs] = useState<BackgroundDocItem[]>(() =>
+    parseBackgroundDocs(task.backgroundDocs),
+  );
+  const [formError, setFormError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 打开时重置为最新任务数据
+  useEffect(() => {
+    if (!open) return;
+    setTitle(task.title);
+    setDescription(task.description ?? "");
+    setDocs(parseBackgroundDocs(task.backgroundDocs));
+    setFormError(null);
+    setUploadError(null);
+  }, [open, task]);
+
+  // Esc 关闭
+  useEffect(() => {
+    if (!open) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [open, onClose]);
+
+  // 上传：POST /uploads multipart（file 字段）→ {url,name,size,ext} → 加入 docs
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return api.post<UploadedFileMeta>("/uploads", fd);
+    },
+    onSuccess: (meta) => {
+      setDocs((prev) => [...prev, { name: meta.name, url: meta.url }]);
+      setUploadError(null);
+    },
+    onError: (err) =>
+      setUploadError(isApiError(err) ? err.message : "文档上传失败，请稍后重试"),
+  });
+
+  // 保存：PATCH /tasks/:id {title, description, backgroundDocs}
+  const saveMutation = useMutation({
+    mutationFn: (payload: { title: string; description: string; backgroundDocs: BackgroundDocItem[] }) =>
+      api.patch<TaskDetail>(`/tasks/${task.id}`, payload),
+    onSuccess: () => {
+      onSaved();
+      onClose();
+    },
+    onError: (err) => {
+      setFormError(isApiError(err) ? err.message : "保存失败，请稍后重试");
+    },
+  });
+
+  if (!open) return null;
+
+  const handleSave = () => {
+    if (saveMutation.isPending) return;
+    if (!title.trim()) {
+      setFormError("请填写任务标题");
+      return;
+    }
+    setFormError(null);
+    saveMutation.mutate({
+      title: title.trim(),
+      description: description.trim(),
+      backgroundDocs: docs,
+    });
+  };
+
+  const inputBase: CSSProperties = {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: `${space.md}px ${space.lg}px`,
+    borderRadius: radius.md,
+    border: `1px solid ${neutral[200]}`,
+    backgroundColor: "#FFFFFF",
+    fontSize: fontSize.md,
+    color: neutral[800],
+    outline: "none",
+    fontFamily: fontFamily.body,
+  };
+
+  return (
+    <div
+      data-testid="task-edit-overlay"
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 60,
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "center",
+        paddingTop: "8%",
+        ...baseFont,
+      }}
+    >
+      {/* 轻遮罩：点击关闭 */}
+      <div
+        aria-hidden
+        data-testid="task-edit-mask"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }}
+      />
+
+      <div
+        data-testid="task-edit-modal"
+        style={{
+          position: "relative",
+          width: 560,
+          maxWidth: "calc(100% - 48px)",
+          maxHeight: "calc(100% - 16%)",
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+          gap: space.md,
+          padding: `${space.xl}px`,
+          borderRadius: radius.lg,
+          backgroundColor: "#FFFFFF",
+          border: `1px solid ${neutral[200]}`,
+          boxShadow: shadow.lg,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900], lineHeight: 1.3 }}>
+            编辑任务信息
+          </div>
+          <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>
+            修改任务标题 / 描述 / 背景文档，保存后任务详情即时刷新
+          </div>
+        </div>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+          <span style={{ fontSize: fontSize.md, fontWeight: 500, color: neutral[700] }}>
+            任务标题 <span style={{ color: "#DC2626" }}>*</span>
+          </span>
+          <input
+            data-testid="task-edit-title-input"
+            value={title}
+            maxLength={128}
+            onChange={(e) => setTitle(e.target.value)}
+            style={inputBase}
+          />
+        </label>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+          <span style={{ fontSize: fontSize.md, fontWeight: 500, color: neutral[700] }}>任务描述</span>
+          <textarea
+            data-testid="task-edit-description-input"
+            value={description}
+            rows={5}
+            onChange={(e) => setDescription(e.target.value)}
+            style={{ ...inputBase, resize: "vertical", lineHeight: 1.6 }}
+          />
+        </label>
+
+        {/* 背景文档：已有列表 + 上传 */}
+        <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+          <span style={{ fontSize: fontSize.md, fontWeight: 500, color: neutral[700] }}>背景文档</span>
+
+          {docs.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+              {docs.map((doc) => (
+                <div
+                  key={doc.url}
+                  data-testid="task-edit-doc-item"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: space.sm,
+                    padding: `${space.xs}px ${space.md}px`,
+                    borderRadius: radius.md,
+                    backgroundColor: neutral[50],
+                    border: `1px solid ${neutral[200]}`,
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: 2,
+                      backgroundColor: "#2563EB",
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      fontSize: fontSize.md,
+                      color: neutral[700],
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {doc.name}
+                  </span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    data-testid="task-edit-doc-remove"
+                    aria-label={`移除 ${doc.name}`}
+                    onClick={() => setDocs((prev) => prev.filter((d) => d.url !== doc.url))}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setDocs((prev) => prev.filter((d) => d.url !== doc.url));
+                      }
+                    }}
+                    style={{
+                      fontSize: fontSize.sm,
+                      color: neutral[400],
+                      cursor: "pointer",
+                      padding: space.xs,
+                      flexShrink: 0,
+                    }}
+                  >
+                    ✕
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            type="button"
+            data-testid="task-edit-upload-btn"
+            aria-label="上传背景文档"
+            disabled={uploadMutation.isPending}
+            onClick={() => fileInputRef.current?.click()}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: space.xs,
+              padding: `${space.md}px ${space.lg}px`,
+              borderRadius: radius.md,
+              border: `1.5px dashed ${neutral[300]}`,
+              backgroundColor: neutral[50],
+              color: neutral[500],
+              fontSize: fontSize.md,
+              fontWeight: 500,
+              cursor: uploadMutation.isPending ? "default" : "pointer",
+              opacity: uploadMutation.isPending ? 0.7 : 1,
+              fontFamily: fontFamily.body,
+            }}
+          >
+            <span aria-hidden style={{ color: "#2563EB" }}>↑</span>
+            {uploadMutation.isPending ? "上传中…" : "上传背景文档"}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            data-testid="task-edit-file-input"
+            accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.gif,.md,.txt"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                setUploadError(null);
+                uploadMutation.mutate(file);
+              }
+              e.target.value = "";
+            }}
+            style={{ display: "none" }}
+          />
+          {uploadError && (
+            <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", fontWeight: 500 }}>
+              {uploadError}
+            </div>
+          )}
+        </div>
+
+        {(formError || saveMutation.isError) && (
+          <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", fontWeight: 500 }}>
+            {formError ?? (isApiError(saveMutation.error) ? saveMutation.error.message : "保存失败")}
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm, marginTop: space.sm }}>
+          <button
+            type="button"
+            data-testid="task-edit-cancel"
+            onClick={onClose}
+            disabled={saveMutation.isPending}
+            style={{
+              padding: `${space.sm + 1}px ${space.lg}px`,
+              borderRadius: radius.pill,
+              border: `1px solid ${neutral[200]}`,
+              backgroundColor: "#FFFFFF",
+              color: neutral[600],
+              fontSize: fontSize.md,
+              cursor: saveMutation.isPending ? "default" : "pointer",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            data-testid="task-edit-save"
+            onClick={handleSave}
+            disabled={saveMutation.isPending}
+            style={{
+              padding: `${space.sm + 1}px ${space.lg}px`,
+              borderRadius: radius.pill,
+              border: "none",
+              backgroundColor: "#2563EB",
+              color: "#FFFFFF",
+              fontSize: fontSize.md,
+              fontWeight: 500,
+              cursor: saveMutation.isPending ? "default" : "pointer",
+              opacity: saveMutation.isPending ? 0.6 : 1,
+              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            {saveMutation.isPending ? "保存中…" : "保存"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ================================ 任务信息面板（268px，对齐原型 TaskPanel，静态展示） ================================ */
 function TaskPanel({
   task,
@@ -1146,6 +1521,8 @@ function TaskPanel({
   issues,
   issuesTotal,
   issuesLoading,
+  onOpenIssueDetail,
+  onEditTaskInfo,
 }: {
   task: TaskDetail;
   agents: { id: string; name: string; role: RoleKey }[];
@@ -1161,6 +1538,10 @@ function TaskPanel({
   issues: TaskIssueItem[];
   issuesTotal: number;
   issuesLoading?: boolean;
+  /** 待办 Issue 项点击 → 弹 Issue 详情（is_0000000012）。 */
+  onOpenIssueDetail?: (issueId: string) => void;
+  /** 「编辑任务信息」入口（is_0000000011：描述/标题/背景文档）。 */
+  onEditTaskInfo?: () => void;
 }) {
   const mainAgent = task.mainAgentId ? agents.find((a) => a.id === task.mainAgentId) : undefined;
   /** 主实例（T5：instances[].main 或 id===mainAgentInstanceId；别名优先展示） */
@@ -1213,14 +1594,57 @@ function TaskPanel({
     >
       <div>
         <div style={{ fontSize: fontSize.xs, color: neutral[400], marginBottom: space.xs }}>任务</div>
-        <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900], lineHeight: 1.4 }}>
-          {task.title}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: space.sm }}>
+          <div style={{ flex: 1, minWidth: 0, fontSize: fontSize.xl, fontWeight: 600, color: neutral[900], lineHeight: 1.4 }}>
+            {task.title}
+          </div>
+          {/* is_0000000011：编辑任务信息入口 */}
+          <button
+            type="button"
+            data-testid="task-edit-entry"
+            aria-label="编辑任务信息"
+            title="编辑任务信息（标题/描述/背景文档）"
+            onClick={onEditTaskInfo}
+            style={{
+              flexShrink: 0,
+              border: `1px solid ${neutral[200]}`,
+              background: "#FFFFFF",
+              color: neutral[500],
+              fontSize: fontSize.sm,
+              borderRadius: radius.pill,
+              padding: `${space.xs - 1}px ${space.sm}px`,
+              cursor: "pointer",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            ✎ 编辑
+          </button>
         </div>
         <div style={{ marginTop: space.sm, display: "flex", alignItems: "center", gap: space.sm }}>
           {renderStatusBadge(statusLabel)}
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>更新于 {formatTime(task.createdAt)}</span>
         </div>
       </div>
+
+      {/* 任务描述（is_0000000011：编辑后展示最新内容） */}
+      {task.description && (
+        <div
+          data-testid="task-description-panel"
+          style={{
+            fontSize: fontSize.sm,
+            color: neutral[600],
+            lineHeight: 1.6,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            backgroundColor: neutral[50],
+            border: `1px solid ${neutral[200]}`,
+            borderRadius: radius.md,
+            padding: `${space.sm + 2}px ${space.md}px`,
+          }}
+        >
+          {task.description}
+        </div>
+      )}
 
       {/* 主 Agent / 团队 */}
       <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
@@ -1405,6 +1829,16 @@ function TaskPanel({
                 <div
                   key={issue.id}
                   data-testid="task-issue-item"
+                  role="button"
+                  tabIndex={0}
+                  title={`查看 ${issue.title} 详情`}
+                  onClick={() => onOpenIssueDetail?.(issue.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onOpenIssueDetail?.(issue.id);
+                    }
+                  }}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -1413,6 +1847,16 @@ function TaskPanel({
                     borderRadius: radius.md,
                     backgroundColor: neutral[50],
                     border: `1px solid ${neutral[200]}`,
+                    cursor: "pointer",
+                    transition: "border-color .15s ease, background-color .15s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLDivElement).style.backgroundColor = "#FFFFFF";
+                    (e.currentTarget as HTMLDivElement).style.borderColor = "#BFDBFE";
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLDivElement).style.backgroundColor = neutral[50];
+                    (e.currentTarget as HTMLDivElement).style.borderColor = neutral[200];
                   }}
                 >
                   <span
@@ -1516,6 +1960,10 @@ export default function TaskChatPage() {
   // Agent 提问/权限确认弹窗：SSE agent.question 事件 / 进入页补拉设置（resolved 事件收敛关闭）
   const [pendingQuestion, setPendingQuestion] = useState<QuestionModalData | null>(null);
   const [questionSubmitting, setQuestionSubmitting] = useState(false);
+  // Issue 详情弹窗（is_0000000012：TaskPanel 待办 Issue 点击）
+  const [detailIssueId, setDetailIssueId] = useState<string | null>(null);
+  // 任务信息编辑弹窗（is_0000000011）
+  const [taskEditOpen, setTaskEditOpen] = useState(false);
 
   /* ---------- 1. 任务详情（无 channelId，仅标题/状态/主 Agent/团队） ---------- */
   const taskQuery = useQuery({
@@ -1639,6 +2087,17 @@ export default function TaskChatPage() {
     }
     return map;
   }, [agentMembers]);
+
+  /** Issue 详情弹窗指派候选（T5 实例：id=实例 id、name=别名、role）。 */
+  const issueModalAgents = useMemo(
+    () =>
+      (task?.instances ?? []).map((i) => ({
+        id: i.id,
+        name: i.alias ?? i.name,
+        role: i.role,
+      })),
+    [task],
+  );
 
   /** @ 候选（T5 按实例）：name=实例别名（唯一），instanceId 透传（mentions 落库结构）。 */
   const mentionable: MentionableAgent[] = agentMembers.map((a) => ({
@@ -2202,6 +2661,25 @@ export default function TaskChatPage() {
         issues={issuesQuery.data?.items ?? []}
         issuesTotal={issuesQuery.data?.total ?? 0}
         issuesLoading={issuesQuery.isPending}
+        onOpenIssueDetail={setDetailIssueId}
+        onEditTaskInfo={() => setTaskEditOpen(true)}
+      />
+
+      {/* 任务信息编辑弹窗（is_0000000011） */}
+      <TaskInfoEditModal
+        task={task}
+        open={taskEditOpen}
+        onClose={() => setTaskEditOpen(false)}
+        onSaved={() => queryClient.invalidateQueries({ queryKey: ["task", taskId] })}
+      />
+
+      {/* Issue 详情弹窗（is_0000000012：TaskPanel 待办 Issue 点击，absolute 相对宿主） */}
+      <IssueDetailModal
+        issueId={detailIssueId}
+        open={!!detailIssueId}
+        onClose={() => setDetailIssueId(null)}
+        agents={issueModalAgents}
+        onChanged={() => queryClient.invalidateQueries({ queryKey: ["task-issues", taskId] })}
       />
 
       {/* Agent 提问/权限确认弹窗（absolute 相对宿主，不阻塞消息流） */}

@@ -68,7 +68,7 @@ export type SessionStatus = (typeof SESSION_STATUS)[keyof typeof SESSION_STATUS]
 export const ACTOR_TYPE = {
   user: 'user',
   system: 'system',
-  /** MCP 工具路径（task_transition 等）：task_events.actorType 自由字符串，无枚举约束。 */
+  /** agent 操作（MCP 工具路径 task_transition / issue_* 等，actorId=ta_ 实例 id）。 */
   agent: 'agent',
 } as const;
 

@@ -423,6 +423,9 @@ export class TasksService implements OnModuleInit {
     if (dto.priority !== undefined) {
       data.priority = dto.priority;
     }
+    if (dto.backgroundDocs !== undefined) {
+      data.backgroundDocs = dto.backgroundDocs as Prisma.InputJsonValue;
+    }
     const instances = this.teamInstancesOf(task.taskAgents);
     if (dto.mainAgentInstanceId !== undefined) {
       // 主实例：须为团队内实例，同步 mainAgentId 为其 agent（渲染兜底）

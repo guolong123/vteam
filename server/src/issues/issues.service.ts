@@ -9,6 +9,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PROJECT_MEMBERSHIP_ERRORS } from '../common/guards/project-membership.guard';
 import { resyncIdPrefix } from '../common/id-resync';
+import { ACTOR_TYPE } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { TASK_STATUS } from '../common/constants/task.constants';
 import { PrismaService } from '../prisma/prisma.service';
@@ -27,16 +28,33 @@ import {
 /** Issue 域主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
 const ISSUE_ID_PREFIX = 'is';
 
-/** findMany/findUnique 统一 include（task 标题 + 指派/创建者名，agent/user 二选一）。 */
+/** issue_activities 主键前缀（is_0000000013：`ia_` 域前缀 + 零填充序号）。 */
+const ISSUE_ACTIVITY_ID_PREFIX = 'ia';
+
+/** findMany/findUnique 统一 include（task 标题 + 指派/创建者名，agent/user 二选一 + 操作记录）。 */
 const ISSUE_INCLUDE = {
   task: { select: { title: true } },
   assigneeAgent: { select: { name: true } },
   assigneeUser: { select: { username: true } },
   creatorAgent: { select: { name: true } },
   creatorUser: { select: { username: true } },
+  activities: { orderBy: { createdAt: 'asc' } },
 } satisfies Prisma.IssueInclude;
 
 type IssueRow = Prisma.IssueGetPayload<{ include: typeof ISSUE_INCLUDE }>;
+
+/** issue_activities 行（toActivityDtos 输入）。 */
+type ActivityRow = Prisma.IssueActivityGetPayload<Record<string, never>>;
+
+/** applyTransition 附加入参（is_0000000013：操作人 + 拒绝原因，transition / transitionByAgent 共用）。 */
+interface TransitionActorOpts {
+  actorType: string;
+  actorId: string | null;
+  /** agent 操作时的 ta_ 实例 id（MCP 路径）。 */
+  instanceId?: string | null;
+  /** 拒绝原因（action=reject 必填）。 */
+  reason?: string;
+}
 
 /**
  * Issue 服务（issue-management plan todo 2）。
@@ -54,9 +72,10 @@ export class IssuesService implements OnModuleInit {
     private readonly realtime: RealtimeService,
   ) {}
 
-  /** 进程启动：按 `is_` 前缀最大序号对齐 id 生成器（重启续号）。 */
+  /** 进程启动：按 `is_`/`ia_` 前缀最大序号对齐 id 生成器（重启续号）。 */
   async onModuleInit(): Promise<void> {
     await resyncIdPrefix(this.prisma.issue, ISSUE_ID_PREFIX, this.idGen);
+    await resyncIdPrefix(this.prisma.issueActivity, ISSUE_ACTIVITY_ID_PREFIX, this.idGen);
   }
 
   /** 用户路径成员校验：任务存在（404）→ 调用者是任务所属项目成员（403）。返回任务状态供归档判定。 */
@@ -207,20 +226,29 @@ export class IssuesService implements OnModuleInit {
       dto.assigneeInstanceId ?? dto.assigneeAgentId,
     );
 
-    const issue = await this.prisma.issue.create({
-      data: {
-        id: await this.idGen.nextId(ISSUE_ID_PREFIX),
-        taskId: dto.taskId,
-        title: dto.title.trim(),
-        description: dto.description?.trim() || null,
-        status: ISSUE_STATUS.open,
-        tags: (dto.tags ?? []) as Prisma.InputJsonValue,
-        assigneeAgentId: dto.assigneeAgentId ?? null,
-        assigneeInstanceId: dto.assigneeInstanceId ?? null,
-        assigneeUserId: dto.assigneeUserId ?? null,
-        createdBy: userId,
-        creatorAgentId: null,
-      },
+    const issue = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.issue.create({
+        data: {
+          id: await this.idGen.nextId(ISSUE_ID_PREFIX),
+          taskId: dto.taskId,
+          title: dto.title.trim(),
+          description: dto.description?.trim() || null,
+          status: ISSUE_STATUS.open,
+          tags: (dto.tags ?? []) as Prisma.InputJsonValue,
+          assigneeAgentId: dto.assigneeAgentId ?? null,
+          assigneeInstanceId: dto.assigneeInstanceId ?? null,
+          assigneeUserId: dto.assigneeUserId ?? null,
+          createdBy: userId,
+          creatorAgentId: null,
+        },
+      });
+      await this.recordActivity(tx, {
+        issueId: created.id,
+        action: 'create',
+        actorType: ACTOR_TYPE.user,
+        actorId: userId,
+      });
+      return created;
     });
     return this.toIssueDto(
       await this.prisma.issue.findUnique({
@@ -255,20 +283,30 @@ export class IssuesService implements OnModuleInit {
       dto.assigneeInstanceId ?? dto.assigneeAgentId,
     );
 
-    const issue = await this.prisma.issue.create({
-      data: {
-        id: await this.idGen.nextId(ISSUE_ID_PREFIX),
-        taskId,
-        title: dto.title.trim(),
-        description: dto.description?.trim() || null,
-        status: ISSUE_STATUS.open,
-        tags: (dto.tags ?? []) as Prisma.InputJsonValue,
-        assigneeAgentId: dto.assigneeAgentId ?? null,
-        assigneeInstanceId: dto.assigneeInstanceId ?? null,
-        assigneeUserId: dto.assigneeUserId ?? null,
-        createdBy: null,
-        creatorAgentId,
-      },
+    const issue = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.issue.create({
+        data: {
+          id: await this.idGen.nextId(ISSUE_ID_PREFIX),
+          taskId,
+          title: dto.title.trim(),
+          description: dto.description?.trim() || null,
+          status: ISSUE_STATUS.open,
+          tags: (dto.tags ?? []) as Prisma.InputJsonValue,
+          assigneeAgentId: dto.assigneeAgentId ?? null,
+          assigneeInstanceId: dto.assigneeInstanceId ?? null,
+          assigneeUserId: dto.assigneeUserId ?? null,
+          createdBy: null,
+          creatorAgentId,
+        },
+      });
+      await this.recordActivity(tx, {
+        issueId: created.id,
+        action: 'create',
+        actorType: ACTOR_TYPE.agent,
+        actorId: creatorAgentId,
+        instanceId: agentRef,
+      });
+      return created;
     });
     return this.toIssueDto(
       await this.prisma.issue.findUnique({
@@ -315,7 +353,7 @@ export class IssuesService implements OnModuleInit {
     ]);
 
     return {
-      items: rows.map((row) => this.toIssueDto(row)),
+      items: await Promise.all(rows.map((row) => this.toIssueDto(row))),
       total,
       page,
       pageSize,
@@ -342,10 +380,19 @@ export class IssuesService implements OnModuleInit {
 
     const data = this.buildUpdateData(dto);
 
-    const updated = await this.prisma.issue.update({
-      where: { id },
-      data,
-      include: ISSUE_INCLUDE,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.issue.update({
+        where: { id },
+        data,
+        include: ISSUE_INCLUDE,
+      });
+      await this.recordActivity(tx, {
+        issueId: id,
+        action: 'update',
+        actorType: ACTOR_TYPE.user,
+        actorId: userId,
+      });
+      return u;
     });
     return this.toIssueDto(updated);
   }
@@ -358,31 +405,46 @@ export class IssuesService implements OnModuleInit {
   async transition(id: string, userId: string, dto: TransitionIssueDto) {
     const issue = await this.findIssue(id);
     await this.assertTaskMember(issue.taskId, userId);
-    return this.applyTransition(issue, dto.action as IssueTransitionAction);
+    return this.applyTransition(issue, dto.action as IssueTransitionAction, {
+      actorType: ACTOR_TYPE.user,
+      actorId: userId,
+      reason: dto.reason,
+    });
   }
 
   /**
    * 状态流转核心（transition / transitionByAgent 共用）：成员校验已由调用方完成。
-   * 幂等（已处目标态直接返回当前 DTO）+ 非法迁移 409 + 时间戳语义。
+   * 幂等（已处目标态直接返回当前 DTO）+ 非法迁移 409 + 时间戳语义
+   * + 操作记录（issue_activities，事务内随变更落库）。
+   * reject 语义（is_0000000013）：in_progress → rejected 独立态，必填 reason；
+   * reopen 支持 closed/rejected → open（清 rejectedAt/rejectReason）。
    */
   private async applyTransition(
     issue: IssueRow,
     action: IssueTransitionAction,
+    opts?: TransitionActorOpts,
   ) {
     const { from, to } = ISSUE_TRANSITIONS[action];
+    const fromStatuses = Array.isArray(from) ? from : [from];
     if (issue.status === to) {
       return this.toIssueDto(issue);
     }
-    if (issue.status !== from) {
+    if (!(fromStatuses as readonly string[]).includes(issue.status)) {
       throw new ConflictException({
         code: ISSUE_ERRORS.ISSUE_INVALID_TRANSITION,
         message: 'Issue 状态流转不合法',
         details: {
           action,
-          from,
+          from: fromStatuses,
           to,
           current: issue.status,
         },
+      });
+    }
+    if (action === 'reject' && !opts?.reason?.trim()) {
+      throw new BadRequestException({
+        code: ISSUE_ERRORS.ISSUE_REJECT_REASON_REQUIRED,
+        message: '拒绝处理时必须填写拒绝原因',
       });
     }
 
@@ -395,14 +457,31 @@ export class IssuesService implements OnModuleInit {
     } else if (action === 'reopen') {
       data.resolvedAt = null;
       data.closedAt = null;
+      data.rejectReason = null;
+      data.rejectedAt = null;
     } else if (action === 'reject') {
-      data.resolvedAt = null;
+      data.rejectReason = opts?.reason?.trim() ?? null;
+      data.rejectedAt = now;
     }
 
-    const updated = await this.prisma.issue.update({
-      where: { id: issue.id },
-      data,
-      include: ISSUE_INCLUDE,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.issue.update({
+        where: { id: issue.id },
+        data,
+        include: ISSUE_INCLUDE,
+      });
+      await this.recordActivity(tx, {
+        issueId: issue.id,
+        action: 'transition',
+        fromStatus: issue.status,
+        toStatus: to,
+        actorType: opts?.actorType ?? ACTOR_TYPE.user,
+        actorId: opts?.actorId ?? null,
+        instanceId: opts?.instanceId ?? null,
+        metadata:
+          action === 'reject' && opts?.reason ? { reason: opts.reason } : undefined,
+      });
+      return u;
     });
     return this.toIssueDto(updated);
   }
@@ -444,7 +523,7 @@ export class IssuesService implements OnModuleInit {
       include: ISSUE_INCLUDE,
       orderBy: { createdAt: 'desc' },
     });
-    return rows.map((row) => this.toIssueDto(row));
+    return Promise.all(rows.map((row) => this.toIssueDto(row)));
   }
 
   /** MCP 专用详情：issue 属于该 taskId（404 否则）→ agentRef 在任务团队（403 否则）。 */
@@ -473,25 +552,41 @@ export class IssuesService implements OnModuleInit {
     }
 
     const data = this.buildUpdateData(dto);
-    const updated = await this.prisma.issue.update({
-      where: { id: issueId },
-      data,
-      include: ISSUE_INCLUDE,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.issue.update({
+        where: { id: issueId },
+        data,
+        include: ISSUE_INCLUDE,
+      });
+      await this.recordActivity(tx, {
+        issueId,
+        action: 'update',
+        actorType: ACTOR_TYPE.agent,
+        actorId: agentRef,
+        instanceId: agentRef,
+      });
+      return u;
     });
     return this.toIssueDto(updated);
   }
 
-  /** MCP 专用状态流转：校验同 findOneByAgent；核心复用 applyTransition。 */
+  /** MCP 专用状态流转：校验同 findOneByAgent；核心复用 applyTransition（reject 时 reason 必填）。 */
   async transitionByAgent(
     agentRef: string,
     taskId: string,
     issueId: string,
     action: IssueTransitionAction,
+    reason?: string,
   ) {
     const issue = await this.findIssue(issueId);
     this.assertIssueInTask(issue, taskId);
     await this.assertAgentTaskMember(taskId, agentRef);
-    return this.applyTransition(issue, action);
+    return this.applyTransition(issue, action, {
+      actorType: ACTOR_TYPE.agent,
+      actorId: agentRef,
+      instanceId: agentRef,
+      reason,
+    });
   }
 
   /** issue 不属于指定任务 → 404（防跨任务越权读取/操作）。 */
@@ -528,8 +623,8 @@ export class IssuesService implements OnModuleInit {
     return data;
   }
 
-  /** Issue DTO（含 task 标题 + 指派/创建者名，agent/user 二选一）。 */
-  private toIssueDto(row: IssueRow) {
+  /** Issue DTO（含 task 标题 + 指派/创建者名，agent/user 二选一 + 拒绝信息 + 操作记录）。 */
+  private async toIssueDto(row: IssueRow) {
     return {
       id: row.id,
       taskId: row.taskId,
@@ -550,7 +645,130 @@ export class IssuesService implements OnModuleInit {
       createdAt: row.createdAt.toISOString(),
       resolvedAt: row.resolvedAt ? row.resolvedAt.toISOString() : null,
       closedAt: row.closedAt ? row.closedAt.toISOString() : null,
+      rejectReason: row.rejectReason ?? null,
+      rejectedAt: row.rejectedAt ? row.rejectedAt.toISOString() : null,
+      activities: await this.toActivityDtos(row.activities ?? []),
     };
+  }
+
+  /** 操作记录 DTO（含操作人展示名：user → username；agent → 实例别名 / agent 名）。 */
+  private async toActivityDtos(
+    rows: ActivityRow[],
+  ): Promise<
+    {
+      id: string;
+      issueId: string;
+      action: string;
+      fromStatus: string | null;
+      toStatus: string | null;
+      actorType: string;
+      actorId: string | null;
+      instanceId: string | null;
+      actorName: string;
+      metadata: Prisma.JsonValue | null;
+      createdAt: string;
+    }[]
+  > {
+    if (rows.length === 0) return [];
+    const userIds = new Set<string>();
+    const instanceIds = new Set<string>();
+    const agentIds = new Set<string>();
+    for (const a of rows) {
+      if (a.actorType === ACTOR_TYPE.user) {
+        if (a.actorId) userIds.add(a.actorId);
+      } else if (a.actorType === ACTOR_TYPE.agent) {
+        if (a.instanceId) instanceIds.add(a.instanceId);
+        else if (a.actorId) agentIds.add(a.actorId);
+      }
+    }
+    const [users, taskAgents, agents] = await Promise.all([
+      userIds.size > 0
+        ? this.prisma.user.findMany({
+            where: { id: { in: [...userIds] } },
+            select: { id: true, username: true },
+          })
+        : [],
+      instanceIds.size > 0
+        ? this.prisma.taskAgent.findMany({
+            where: { id: { in: [...instanceIds] } },
+            include: { agent: { select: { name: true } } },
+          })
+        : [],
+      agentIds.size > 0
+        ? this.prisma.agent.findMany({
+            where: { id: { in: [...agentIds] } },
+            select: { id: true, name: true },
+          })
+        : [],
+    ]);
+    const userMap = new Map(
+      users.map((u) => [u.id, u.username] as [string, string]),
+    );
+    const instMap = new Map(
+      taskAgents.map((t) => [t.id, t.alias ?? t.agent.name] as [string, string]),
+    );
+    const agentMap = new Map(
+      agents.map((a) => [a.id, a.name] as [string, string]),
+    );
+    return rows.map((a) => ({
+      id: a.id,
+      issueId: a.issueId,
+      action: a.action,
+      fromStatus: a.fromStatus,
+      toStatus: a.toStatus,
+      actorType: a.actorType,
+      actorId: a.actorId,
+      instanceId: a.instanceId,
+      actorName: this.resolveActivityActorName(a, userMap, instMap, agentMap),
+      metadata: a.metadata,
+      createdAt: a.createdAt.toISOString(),
+    }));
+  }
+
+  /** 操作人展示名解析（agent 实例优先别名；user 用 username；未命中回退 actorId）。 */
+  private resolveActivityActorName(
+    a: ActivityRow,
+    userMap: Map<string, string>,
+    instMap: Map<string, string>,
+    agentMap: Map<string, string>,
+  ): string {
+    if (a.actorType === ACTOR_TYPE.user) {
+      return userMap.get(a.actorId ?? '') ?? a.actorId ?? '';
+    }
+    if (a.actorType === ACTOR_TYPE.agent) {
+      if (a.instanceId) return instMap.get(a.instanceId) ?? a.actorId ?? '';
+      return agentMap.get(a.actorId ?? '') ?? a.actorId ?? '';
+    }
+    return '';
+  }
+
+  /** 操作记录落库（事务内随主变更写 issue_activities，create/update/transition 共用）。 */
+  private async recordActivity(
+    tx: Prisma.TransactionClient,
+    data: {
+      issueId: string;
+      action: string;
+      fromStatus?: string | null;
+      toStatus?: string | null;
+      actorType: string;
+      actorId?: string | null;
+      instanceId?: string | null;
+      metadata?: Prisma.InputJsonValue;
+    },
+  ): Promise<void> {
+    await tx.issueActivity.create({
+      data: {
+        id: await this.idGen.nextId(ISSUE_ACTIVITY_ID_PREFIX),
+        issueId: data.issueId,
+        action: data.action,
+        fromStatus: data.fromStatus ?? null,
+        toStatus: data.toStatus ?? null,
+        actorType: data.actorType,
+        actorId: data.actorId ?? null,
+        instanceId: data.instanceId ?? null,
+        metadata: data.metadata,
+      },
+    });
   }
 
   /** tags Json 列解析为字符串数组（非字符串元素忽略）。 */
