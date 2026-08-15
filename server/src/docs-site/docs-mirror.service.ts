@@ -115,8 +115,8 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         // 未落盘 uploads（text 型或 fileRef 占位）→ 跳过镜像
         continue;
       }
-      if (!cur.contentRef.endsWith('.md')) {
-        // 非 markdown 文件（图片/二进制等）不入文档站
+      if (!/\.(md|markdown)$/i.test(cur.contentRef)) {
+        // 非 markdown 文件（图片/二进制等）不入文档站（大小写不敏感 + .markdown，与前端一致）
         continue;
       }
       let content: Buffer;
@@ -171,7 +171,7 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
       // 仅当前版本且为 markdown（file 型非 .md 不入站）——与 doSyncTask 镜像口径一致
       if (
         r.version === r.artifact.currentVersion &&
-        (r.contentRef ?? '').endsWith('.md')
+        /\.(md|markdown)$/i.test(r.contentRef ?? '')
       ) {
         current.set(r.artifact.id, { id: r.artifact.id, title: r.artifact.title });
       }
