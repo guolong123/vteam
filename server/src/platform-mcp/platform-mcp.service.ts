@@ -295,6 +295,13 @@ export class PlatformMcpService {
     const attachment = args.fileRef
       ? await this.resolveAttachment(ctx, args.taskId, args.fileRef)
       : undefined;
+    // is_0000000015 修复：解析 content 中 @<别名/名称> 的定向提及（agent 互 @ 用），
+    // 落库 mentions（对齐 notify_agent 形状）并分派到被 @ 实例——修复「群聊 @ 主 Agent
+    // 无反应」。未 @ 任何人 → mentions 保持 null、不触发分派（普通群聊发布）。
+    const { mentions, mentionedInstances } = await this.parseGroupPostMentions(
+      args.taskId,
+      args.content,
+    );
 
     const message = await this.prisma.message.create({
       data: {
@@ -304,7 +311,7 @@ export class PlatformMcpService {
         senderId: await this.resolveSenderAgentId(args.taskId, instanceId),
         senderInstanceId: instanceId,
         content: { text: args.content, parts: [] } as Prisma.InputJsonValue,
-        mentions: null,
+        mentions: (mentions ?? null) as Prisma.InputJsonValue | null,
         status: MESSAGE_STATUS.sent,
         ...(attachment ?? {}),
       },
@@ -316,10 +323,77 @@ export class PlatformMcpService {
       { type: 'channel', id: channel.id },
     );
 
+    // is_0000000015：@ 提及 → 定向分派每个被 @ 实例（含主 Agent），失败不阻断发布
+    for (const target of mentionedInstances) {
+      await this.workerDispatcher
+        .dispatchAgentMention({
+          taskId: args.taskId,
+          channelId: channel.id,
+          text: args.content,
+          targetInstanceId: target,
+        })
+        .catch((err: unknown) =>
+          this.logger.error(
+            `[mcp] group_post 提及分派失败 instance=${target}: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
+    }
+
     return {
       messageId: message.id,
       channelId: channel.id,
       attachment: attachment ?? null,
+    };
+  }
+
+  /**
+   * is_0000000015：解析 group_post content 中被 @ 的团队实例（按实例别名/agent 名称
+   * 前缀匹配 `@<名称>`），返回 mentions（落库形状，对齐 notify_agent）与被提及实例 id。
+   * 无 @ 命中 → { mentions: null, mentionedInstances: [] }（不触发分派）。
+   */
+  private async parseGroupPostMentions(
+    taskId: string,
+    content: string,
+  ): Promise<{
+    mentions: Array<{ type: 'agent'; instanceId: string; agentId: string; name: string }> | null;
+    mentionedInstances: string[];
+  }> {
+    if (!content || !content.includes('@')) {
+      return { mentions: null, mentionedInstances: [] };
+    }
+    const teamRows = await this.prisma.taskAgent.findMany({
+      where: { taskId, removedAt: null },
+      select: {
+        id: true,
+        agentId: true,
+        alias: true,
+        agent: { select: { name: true } },
+      },
+    });
+    const mentionedInstances: string[] = [];
+    const mentions: Array<{
+      type: 'agent';
+      instanceId: string;
+      agentId: string;
+      name: string;
+    }> = [];
+    for (const row of teamRows) {
+      const name = row.alias ?? row.agent.name;
+      if (!name) continue;
+      // `@名称` 或 `@名称,` 或 `@名称 ` 前缀命中（防 @开发者 误吞 @开发者-2）
+      const atName = `@${name}`;
+      const boundaryAfter = content.length;
+      const idx = content.indexOf(atName);
+      const hit = idx >= 0 && (idx + atName.length >= boundaryAfter || /[\s,，。；;:：!！?？]/.test(content[idx + atName.length] ?? ''));
+      if (!hit) continue;
+      if (!mentionedInstances.includes(row.id)) {
+        mentionedInstances.push(row.id);
+        mentions.push({ type: 'agent', instanceId: row.id, agentId: row.agentId, name });
+      }
+    }
+    return {
+      mentions: mentions.length > 0 ? mentions : null,
+      mentionedInstances,
     };
   }
 

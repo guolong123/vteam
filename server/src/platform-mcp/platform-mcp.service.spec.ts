@@ -698,6 +698,85 @@ describe('PlatformMcpService', () => {
       });
     });
 
+    it('is_0000000015：content 含 @主 Agent → 落库 mentions + 定向分派被 @ 实例（含主 Agent 触发）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      idGen.nextId.mockResolvedValue('m_0000000100');
+      prisma.message.create.mockResolvedValue(createdMessage);
+      // 团队实例：主 Agent（a_project_manager/鲍勃）+ 其他成员（用于 @ 前缀边界）
+      prisma.taskAgent.findMany.mockResolvedValue([
+        { id: 'ta_pm', agentId: 'a_project_manager', alias: '鲍勃', agent: { name: '项目经理' } },
+        { id: 'ta_dev', agentId: 'a_developer', alias: '刘二开', agent: { name: '开发者' } },
+      ]);
+
+      const result = await service.groupPost(ctx, {
+        taskId,
+        content: '@鲍勃 请审核本次方案',
+        selfInstanceId: senderInstanceId,
+      });
+
+      // mentions 落库（对齐 notify_agent 形状：instanceId+agentId+name）
+      expect(prisma.message.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          mentions: [{ type: 'agent', instanceId: 'ta_pm', agentId: 'a_project_manager', name: '鲍勃' }],
+        }),
+      });
+      // 定向分派被 @ 实例（主 Agent）
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith({
+        taskId,
+        channelId,
+        text: '@鲍勃 请审核本次方案',
+        targetInstanceId: 'ta_pm',
+      });
+      expect(result).toEqual({ messageId: 'm_0000000100', channelId, attachment: null });
+    });
+
+    it('is_0000000015：content 无 @ 提及 → mentions 保持 null、不触发分派（普通群聊发布）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      idGen.nextId.mockResolvedValue('m_0000000100');
+      prisma.message.create.mockResolvedValue(createdMessage);
+      prisma.taskAgent.findMany.mockResolvedValue([
+        { id: 'ta_pm', agentId: 'a_project_manager', alias: '鲍勃', agent: { name: '项目经理' } },
+      ]);
+
+      await service.groupPost(ctx, {
+        taskId,
+        content: '进度同步：所有需求已完成',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(prisma.message.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ mentions: null }),
+      });
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+
+    it('is_0000000015：多实例 @ 前缀边界（@开发者 不误触发 @开发者-2；@开发者-2 精确命中）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      idGen.nextId.mockResolvedValue('m_0000000100');
+      prisma.message.create.mockResolvedValue(createdMessage);
+      prisma.taskAgent.findMany.mockResolvedValue([
+        { id: 'ta_dev1', agentId: 'a_developer', alias: '开发者-1', agent: { name: '开发者' } },
+        { id: 'ta_dev2', agentId: 'a_developer', alias: '开发者-2', agent: { name: '开发者' } },
+      ]);
+
+      await service.groupPost(ctx, {
+        taskId,
+        content: '@开发者-2 请处理',
+        selfInstanceId: senderInstanceId,
+      });
+
+      const mentions = prisma.message.create.mock.calls[0][0].data.mentions;
+      expect(mentions).toEqual([
+        { type: 'agent', instanceId: 'ta_dev2', agentId: 'a_developer', name: '开发者-2' },
+      ]);
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith(
+        expect.objectContaining({ targetInstanceId: 'ta_dev2' }),
+      );
+    });
+
     it('fileRef 命中该任务已归档产出物 → 挂附件三字段', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
