@@ -7,6 +7,11 @@ metadata:
     {{- include "vteam.labels" (dict "context" . "component" "server") | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount.server }}
+  # is_0000000040 方案 B：单实例设计下滚动更新会产生新旧 pod 并存窗口，进程内
+  # id 计数器从相近 seed 生成重叠 ev_ 序号 → realtimeEvent PRIMARY 冲突偶发 500。
+  # 改为 Recreate（先删旧再起新）消除并存窗口；配合代码层 P2002 自愈兜底（方案 A）。
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "vteam.matchLabels" (dict "context" . "component" "server") | nindent 6 }}

@@ -77,6 +77,11 @@ export class RealtimeService implements OnModuleInit {
   /**
    * 发布一条事件：先落库（Prisma realtime_events）后转发（08 §7.3）。
    * scope 缺省为 global；返回完整事件帧（含字符串 id 游标）。
+   *
+   * is_0000000040：k8s 滚动更新窗口内新旧 pod 并存，各自进程内计数器从相近 seed
+   * 生成重叠 ev_ 序号 → realtimeEvent.create PRIMARY 冲突。代码自愈：
+   * 捕获 P2002 唯一约束冲突 → 重新读取 DB 当前最大 ev_ 序号 seed 计数器 →
+   * 重新生成 id 重试（限 3 次）。单实例设计下任何并存窗口自动收敛，不向上抛 500。
    */
   async emit(
     type: RealtimeEventType,
@@ -84,6 +89,26 @@ export class RealtimeService implements OnModuleInit {
     scope?: RealtimeScope,
   ): Promise<RealtimeEvent> {
     const resolved: RealtimeScope = scope ?? { type: 'global' };
+    const maxRetries = 3;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.emitOnce(type, payload, resolved);
+      } catch (err) {
+        if (attempt >= maxRetries || !this.isPrimaryConflict(err)) {
+          throw err;
+        }
+        // P2002 冲突：多实例并存窗口，重新对齐 DB 最大序号后重试
+        await this.reseedFromDb();
+      }
+    }
+  }
+
+  /** 单次事件发布（id 生成 + 落库 + 内存缓冲 + 总线广播）。 */
+  private async emitOnce(
+    type: RealtimeEventType,
+    payload: unknown,
+    resolved: RealtimeScope,
+  ): Promise<RealtimeEvent> {
     const event: RealtimeEvent = {
       id: await this.idGen.nextId(EVENT_ID_PREFIX),
       type,
@@ -113,6 +138,29 @@ export class RealtimeService implements OnModuleInit {
     }
     this.bus.emit('event', event);
     return event;
+  }
+
+  /** is_0000000040：P2002 PRIMARY 唯一约束冲突判定（Prisma 冲突错误）。 */
+  private isPrimaryConflict(err: unknown): boolean {
+    if (!err || typeof err !== 'object') return false;
+    const anyErr = err as { code?: string; meta?: { target?: unknown } };
+    if (anyErr.code !== 'P2002') return false;
+    const target = Array.isArray(anyErr.meta?.target)
+      ? anyErr.meta.target
+      : [];
+    // 主键冲突（PRIMARY）才自愈重试；其他唯一约束冲突（如业务字段）不吞
+    return target.includes('PRIMARY');
+  }
+
+  /** is_0000000040：重新读取 DB 当前最大 ev_ 序号 seed 计数器（多实例冲突后收敛）。 */
+  private async reseedFromDb(): Promise<void> {
+    const last = await this.prisma.realtimeEvent.findFirst({
+      orderBy: { id: 'desc' },
+      select: { id: true },
+    });
+    if (last) {
+      this.idGen.seed(EVENT_ID_PREFIX, this.parseSeq(last.id));
+    }
   }
 
   /** broadcast 即 emit 的语义别名，供其他模块以「广播」语义注入事件。 */

@@ -91,6 +91,62 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
       expect(third.id > second.id).toBe(true);
     });
 
+    it('is_0000000040：P2002 PRIMARY 冲突 → reseed DB max → 重新生成 id 重试成功', async () => {
+      // 首次 create 抛 P2002（PRIMARY 主键冲突，多实例并存窗口），
+      // findFirst 返回当前 DB 最大 ev_ 序号（另一实例已用）→ reseed 后重试成功
+      prisma.realtimeEvent.create
+        .mockRejectedValueOnce({
+          code: 'P2002',
+          meta: { target: ['PRIMARY'] },
+        })
+        .mockImplementation((args) =>
+          Promise.resolve({
+            id: args.data.id,
+            type: args.data.type,
+            scopeType: args.data.scopeType,
+            scopeId: args.data.scopeId,
+            projectId: args.data.projectId,
+            payload: args.data.payload,
+            createdAt: new Date(),
+          }),
+        );
+      prisma.realtimeEvent.findFirst.mockResolvedValue({ id: 'ev_0000000009' });
+
+      const ev = await service.emit('chat.message.new', { messageId: 'm_1' });
+
+      // 重试后 id 跳过冲突序号（reseed 到 9 → nextId 10）
+      expect(ev.id).toBe('ev_0000000010');
+      expect(prisma.realtimeEvent.create).toHaveBeenCalledTimes(2);
+      expect(prisma.realtimeEvent.findFirst).toHaveBeenCalled();
+    });
+
+    it('is_0000000040：非 PRIMARY 的 P2002（业务唯一约束）不重试，原样上抛', async () => {
+      prisma.realtimeEvent.create.mockRejectedValueOnce({
+        code: 'P2002',
+        meta: { target: ['uk_something_else'] },
+      });
+
+      await expect(service.emit('a', { n: 1 })).rejects.toMatchObject({
+        code: 'P2002',
+      });
+      expect(prisma.realtimeEvent.create).toHaveBeenCalledTimes(1);
+      expect(prisma.realtimeEvent.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('is_0000000040：P2002 重试超限（3 次仍冲突）→ 上抛异常（不无限循环）', async () => {
+      prisma.realtimeEvent.create.mockRejectedValue({
+        code: 'P2002',
+        meta: { target: ['PRIMARY'] },
+      });
+      prisma.realtimeEvent.findFirst.mockResolvedValue({ id: 'ev_0000000005' });
+
+      await expect(service.emit('a', { n: 1 })).rejects.toMatchObject({
+        code: 'P2002',
+      });
+      // 初始 + 3 次重试 = 4 次 create 调用
+      expect(prisma.realtimeEvent.create).toHaveBeenCalledTimes(4);
+    });
+
     it('broadcast 是 emit 的语义别名，返回同构事件帧', async () => {
       const ev = await service.broadcast('task.status.changed', {
         taskId: 't_1',
