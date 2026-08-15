@@ -38,7 +38,7 @@ export interface PartShape {
   /** reasoning 兜底字段：部分 serve 模型 reasoning 内容落在 summary/thoughts/detail 而非 text。 */
   summary?: string;
   thoughts?: string;
-  /** serve 标准 tool part 工具名（MCP 格式 `<serverName>_<toolName>`，如 keta-platform_task_context）。 */
+  /** serve 标准 tool part 工具名（MCP 格式 `<serverName>_<toolName>`，如 vteam_task_context）。 */
   tool?: string;
   name?: string;
   status?: "running" | "success" | "failed";

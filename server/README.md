@@ -20,7 +20,7 @@ vteam 的后端，基于 NestJS。提供任务、群聊/私聊、Issue、Agent/�
 | `models/` | 模型目录与模型可用性 |
 | `tools/` | 内置工具 + MCP 工具注册、技能管理 |
 | `artifacts/` | 产出物提交与文档库、版本基线锁定 |
-| `platform-mcp/` | 平台 MCP Server（`keta-platform`）：`task_context` / `chat_history` / `doclib` / `group_post` / `notify_agent` / `issue_*` / `submit_artifact` |
+| `platform-mcp/` | 平台 MCP Server（`vteam`）：`task_context` / `chat_history` / `doclib` / `group_post` / `notify_agent` / `issue_*` / `submit_artifact` |
 | `auth/` | 登录认证与 JWT |
 | `users/` `projects/` `roles/` | 用户、项目、权限矩阵（RBAC） |
 | `realtime/` | SSE 实时事件通道 |
@@ -54,7 +54,7 @@ npx prisma migrate deploy   # 应用迁移
 npm run seed                # 执行种子数据（等价 npx ts-node prisma/seed.ts）
 ```
 
-种子数据包括：admin / member 角色、admin / seed-admin / seed-member 三个用户、两个种子项目（p_seed_1 / p_seed_2）、5 个模板角色 Agent、内置工具与 `keta-platform` MCP 工具、模型目录。
+种子数据包括：admin / member 角色、admin / seed-admin / seed-member 三个用户、两个种子项目（p_seed_1 / p_seed_2）、5 个模板角色 Agent、内置工具与 `vteam` MCP 工具、模型目录。
 
 ## 测试
 

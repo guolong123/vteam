@@ -877,7 +877,7 @@ describe('ChatService', () => {
         info: { id: 'msg_asst_1', role: 'assistant', time: { created: 2000 } },
         parts: [
           { type: 'reasoning', text: '先拆解需求', synthetic: false },
-          { type: 'tool', tool: 'keta-platform_task_context', state: { status: 'success' } },
+          { type: 'tool', tool: 'vteam_task_context', state: { status: 'success' } },
           { type: 'text', text: '调研结果如下', synthetic: false },
           // 实测 serve 历史消息 step-finish 常不持久化 → 非最后一条 assistant 仍须 sent
         ],

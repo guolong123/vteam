@@ -60,7 +60,7 @@ spec:
             - configMapRef:
                 name: {{ include "vteam.config.name" . }}
           env:
-            # 内置 keta-platform MCP 的 URL（seed 写入 mcp_servers 表）。
+            # 内置 vteam MCP 的 URL（seed 写入 mcp_servers 表）。
             # 默认按 server Service 名拼（K8s 下 seed 的 compose 默认 http://server:3000 不通），
             # 可用 initJob.platformMcpUrl 显式覆盖。
             - name: PLATFORM_MCP_URL

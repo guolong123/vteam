@@ -1209,7 +1209,7 @@ describe('WorkerDispatcher', () => {
       prisma.artifact.findMany.mockResolvedValue([]);
     });
 
-    it('任务有产出物：prompt 不再注入 <doclib> 块（模型经 keta-platform doclib 工具自主拉取）', async () => {
+    it('任务有产出物：prompt 不再注入 <doclib> 块（模型经 vteam doclib 工具自主拉取）', async () => {
       prisma.artifact.findMany.mockResolvedValue([
         {
           id: 'art_1',
@@ -1234,7 +1234,7 @@ describe('WorkerDispatcher', () => {
       expect(promptText).not.toContain('需求正文 v3');
       // 含动态任务上下文指令（taskId + MCP 工具引导）+ 当前消息
       expect(promptText).toContain(`任务 ID：${request.taskId}`);
-      expect(promptText).toContain('keta-platform');
+      expect(promptText).toContain('vteam');
       expect(promptText).toContain('chat_history / doclib / task_context');
       expect(promptText).toContain(request.text);
     });
@@ -2611,7 +2611,7 @@ describe('WorkerDispatcher', () => {
           { type: 'text', text: '已通过工具发布群聊' },
           {
             type: 'tool',
-            tool: 'keta-platform_group_post',
+            tool: 'vteam_group_post',
             state: {
               status: 'completed',
               input: { content: '结论已同步' },
@@ -2654,7 +2654,7 @@ describe('WorkerDispatcher', () => {
           { type: 'text', text: '普通回复' },
           {
             type: 'tool',
-            tool: 'keta-platform_group_post',
+            tool: 'vteam_group_post',
             state: { status: 'running', input: {} },
           },
         ],
@@ -3210,7 +3210,7 @@ describe('WorkerDispatcher', () => {
   });
 
   // ------------------------------------------------------------------
-  // F5 按需注入：移除自动群聊历史注入（模型经 keta-platform chat_history 工具自主拉取）
+  // F5 按需注入：移除自动群聊历史注入（模型经 vteam chat_history 工具自主拉取）
   // ------------------------------------------------------------------
 
   describe('F5：按需注入（移除自动群聊历史注入）', () => {

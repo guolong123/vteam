@@ -36,7 +36,7 @@ export interface WorkerConfig {
   /** C2：worker 默认模型（env WORKER_DEFAULT_MODEL，id 格式 providerID/modelID）；未设 = 不指定（serve 默认） */
   defaultModelId?: string;
   /**
-   * 内置 keta-platform MCP 地址覆盖（env WORKER_MCP_URL，可选）。
+   * 内置 vteam MCP 地址覆盖（env WORKER_MCP_URL，可选）。
    * 默认取 server 下发的 mcp_servers.url（seed 的 PLATFORM_MCP_URL）——K8s 内为
    * 集群服务名（http://vteam-server:3000/api/v1/platform-mcp），集群外 worker 无法
    * 解析。注册时上报本值（capabilities.mcpUrl），server 在 worker 拉取 mcp-servers

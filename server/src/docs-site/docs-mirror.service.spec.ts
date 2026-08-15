@@ -111,9 +111,11 @@ describe('DocsMirrorService（is_0000000024 F1 镜像导出层）', () => {
   describe('buildRegistry', () => {
     it('仅当前版本 doc 产出物 → DocDef[]（id=slug、file=<slug>.md、name=title）', async () => {
       prisma.artifactVersion.findMany.mockResolvedValue([
-        { version: 2, artifact: { id: 'art_1', title: '需求文档', currentVersion: 2 } },
-        { version: 1, artifact: { id: 'art_1', title: '需求文档', currentVersion: 2 } },
-        { version: 1, artifact: { id: 'art_2', title: 'Architecture', currentVersion: 1 } },
+        { version: 2, contentRef: '/uploads/uuid-1.md', artifact: { id: 'art_1', title: '需求文档', currentVersion: 2 } },
+        { version: 1, contentRef: '/uploads/uuid-0.md', artifact: { id: 'art_1', title: '需求文档', currentVersion: 2 } },
+        { version: 1, contentRef: '/uploads/uuid-2.md', artifact: { id: 'art_2', title: 'Architecture', currentVersion: 1 } },
+        // file 型非 .md 不入站
+        { version: 1, contentRef: '/uploads/uuid-3.png', artifact: { id: 'art_3', title: '截图', currentVersion: 1 } },
       ]);
       const registry = await service.buildRegistry(taskId);
       expect(registry).toHaveLength(2);

@@ -58,7 +58,7 @@ Agent: xxx（32KB 截断）
 ```
 
 - **remote MCP**（opencode 1.18 原生支持）：worker `opencode.json` 配
-  `{ mcp: { "keta-platform": { type: "remote", url: "http://server:3000/api/v1/platform-mcp", headers: { "x-worker-token": "<token>" } } } }`
+  `{ mcp: { "vteam": { type: "remote", url: "http://server:3000/api/v1/platform-mcp", headers: { "x-worker-token": "<token>" } } } }`
 - worker 侧**零新增代码**——复用 `ResourceInjector.injectMcp()`（从 `GET /mcp-servers?enabled=true` 拉取注入）
 
 ## 3. 注册方式（复用现有注入链）
@@ -66,7 +66,7 @@ Agent: xxx（32KB 截断）
 **seed 一条内置 MCP 记录**（`mcp-servers` 表，`McpServerService.create`）：
 
 ```
-name: keta-platform
+name: vteam
 type: remote
 url: http://server:3000/api/v1/platform-mcp
 headers: { x-worker-token: "{env:X_WORKER_TOKEN}" }   ← 环境变量引用，worker 各自 token
@@ -76,7 +76,7 @@ enabled: true
 `injector.injectMcp()` 自动拉取 → `buildMcpEntry(remote)` → 写 `opencode.json` 的 `mcp` 节 → serve 读取。
 
 > **决策（已定）**：token 注入首选 opencode env 引用 `{env:X_WORKER_TOKEN}`（worker 侧 env 已有该变量，零改 worker）。
-> 实施时先用 `opencode mcp` 实测验证 1.18 的 env 引用支持；若不支持 → 回退方案：`buildMcpEntry` 对 `keta-platform` 特判附加 `x-worker-token`（worker 注入器小改，可单测）。
+> 实施时先用 `opencode mcp` 实测验证 1.18 的 env 引用支持；若不支持 → 回退方案：`buildMcpEntry` 对 `vteam` 特判附加 `x-worker-token`（worker 注入器小改，可单测）。
 
 ## 4. Server 端 MCP 端点
 
@@ -131,7 +131,7 @@ MCP 调用本身不携带「当前任务」——opencode 会话对 server 不�
 - **移除自动注入**：`buildDoclibContext` / `buildChatHistoryContext` 不再拼进 prompt
 - `GLOBAL_SYSTEM_INSTRUCTIONS` 改为说明：
   - 「你的任务 ID：<taskId>」
-  - 「需要群聊历史/文档库/任务信息时，调用 keta-platform 的 chat_history/doclib/task_context 工具」
+  - 「需要群聊历史/文档库/任务信息时，调用 vteam 的 chat_history/doclib/task_context 工具」
   - 「需要向群聊发消息时调用 group_post 工具（或使用 <group_post> 声明）」
 - **唯一保留注入**：当前消息（request.text）
 
@@ -143,7 +143,7 @@ MCP 调用本身不携带「当前任务」——opencode 会话对 server 不�
 | 阶段 | 内容 | 验证 |
 |------|------|------|
 | 1 | server 平台 MCP 端点（SDK + StreamableHTTP）+ 4 工具 + 归属校验 | 单测 + curl 直接调 MCP 端点 |
-| 2 | seed keta-platform MCP 记录 + worker 注入验证（env 引用） | `opencode mcp list` 显示 connected |
+| 2 | seed vteam MCP 记录 + worker 注入验证（env 引用） | `opencode mcp list` 显示 connected |
 | 3 | 移除自动注入 + GLOBAL_SYSTEM_INSTRUCTIONS 改写（任务 ID/工具引导） | 单测（prompt 构造断言） |
 | 4 | 实测：群聊 @ agent → agent 自主调 chat_history/doclib → 结论 group_post | 端到端（需模型凭据） |
 | 5 | 设计文档落位 docs/agent-platform/21-平台MCP-Server设计方案.md | 文件存在 |
@@ -162,7 +162,7 @@ MCP 调用本身不携带「当前任务」——opencode 会话对 server 不�
 ## 10. 涉及模块
 
 - `server/src/platform-mcp/`（新）：MCP 端点（SDK + StreamableHTTP）+ 工具实现 + 归属校验
-- `server/src/mcp-servers/`：seed keta-platform 记录
+- `server/src/mcp-servers/`：seed vteam 记录
 - `server/src/chat/worker-dispatcher.ts`：GLOBAL_SYSTEM_INSTRUCTIONS 改写 + 移除 buildDoclibContext/buildChatHistoryContext 注入
 - `server/package.json`：新增 @modelcontextprotocol/sdk
 - `worker/src/resources/injector.ts`：验证 env 引用（不可用则小改）

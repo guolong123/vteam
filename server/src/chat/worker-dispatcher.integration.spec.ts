@@ -252,7 +252,7 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     });
     const execPrompt = execOpts.prompt[0].text as string;
     expect(execPrompt).toContain(`任务 ID：${request.taskId}`);
-    expect(execPrompt).toContain('keta-platform');
+    expect(execPrompt).toContain('vteam');
 
     // 2. session.updated(running)：worker 上送 opencode 会话 id（ses_ 前缀）→ ingress
     //    反查平台 Session 主键（s_ 前缀）→ updateMany 落库 + emit session.updated

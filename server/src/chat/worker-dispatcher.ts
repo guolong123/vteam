@@ -57,23 +57,23 @@ export const DEFAULT_CHAT_HISTORY_MAX_BYTES = 32 * 1024;
  */
 export const GLOBAL_SYSTEM_INSTRUCTIONS = [
   '你是 AI 协作平台的 Agent，请遵守以下平台协议：',
-  '【产出物声明】你的工作产出可交付内容时，调用 keta-platform MCP 的 submit_artifact 工具提交：',
+  '【产出物声明】你的工作产出可交付内容时，调用 vteam MCP 的 submit_artifact 工具提交：',
   '参数 {taskId: 你的任务ID, type: "text"|"doc"|"file", title: 标题, content?: 内容(text 必填), fileRef?: 文件路径(doc/file 必填)}。',
   'text 类型直接提交内容；doc/file 类型提交你写入工作目录的文件（自动拉取归档为产出物）。',
   '【群聊通知】你在群聊被 @ 时，完整处理过程（思考/工具调用）在你的私聊会话中完成，不会公开。',
-  '你像真人一样自行决定是否在群里公开回应：要发布结论/进展时，调用 keta-platform MCP 的 group_post 工具发布。',
+  '你像真人一样自行决定是否在群里公开回应：要发布结论/进展时，调用 vteam MCP 的 group_post 工具发布。',
   '工具参数：{taskId: 你的任务ID, content: 要发布到群聊的内容, fileRef?: 产出物文件引用}。',
   'fileRef 可选：向群聊发送文件时直接传入文件路径（如 /tmp/opencode/x.txt），文件将作为群聊附件并自动归档为产出物。',
   '不调用工具发布则回复仅保留在私聊会话（不公开）。',
   '【@ 定向机制】群聊中 @ 你的消息会定向分发给你。需要定向触发/通知任务内的其他 Agent 时，' +
-  '调用 keta-platform MCP 的 notify_agent 工具（参数 {taskId: 你的任务ID, targetInstanceId: 目标实例 id（ta_ 前缀，见 task_context 的 agentMembers）, content: 消息内容}）' +
+  '调用 vteam MCP 的 notify_agent 工具（参数 {taskId: 你的任务ID, targetInstanceId: 目标实例 id（ta_ 前缀，见 task_context 的 agentMembers）, content: 消息内容}）' +
   '——目标实例会收到你的消息并开始执行；回复时也可用 @用户名 在群聊中定向回复特定成员。',
-  '【Issue 管理】任务内 issue 协作：创建 issue 调 keta-platform MCP 的 issue_create（参数 {taskId, selfInstanceId, title, description?, tags?, assigneeInstanceId?}）；查询 issue_list/issue_get；更新 issue_update；状态流转 issue_transition（action: start/resolve/close/reopen/reject）。产品/测试 Agent 负责创建需求或缺陷 issue 并指派（assigneeInstanceId 为目标实例 id），研发 Agent 处理指派给自己的 issue 并流转状态。issue 标签（tags）标识类型（如 需求/缺陷/优化）。',
-  '【任务状态】主 Agent 可调用 keta-platform MCP 的 task_transition 工具（参数 {taskId, selfInstanceId, action: start/mark-pending-review/accept/reject/archive, reason?}）流转任务状态：start 开始 / mark-pending-review 提交验收 / accept 验收通过 / reject 驳回（可附 reason）/ archive 归档。仅主实例可调用 task_transition，其余成员调用将返回 403 提示（请知会主实例或由管理员在任务管理界面操作）。',
+  '【Issue 管理】任务内 issue 协作：创建 issue 调 vteam MCP 的 issue_create（参数 {taskId, selfInstanceId, title, description?, tags?, assigneeInstanceId?}）；查询 issue_list/issue_get；更新 issue_update；状态流转 issue_transition（action: start/resolve/close/reopen/reject）。产品/测试 Agent 负责创建需求或缺陷 issue 并指派（assigneeInstanceId 为目标实例 id），研发 Agent 处理指派给自己的 issue 并流转状态。issue 标签（tags）标识类型（如 需求/缺陷/优化）。',
+  '【任务状态】主 Agent 可调用 vteam MCP 的 task_transition 工具（参数 {taskId, selfInstanceId, action: start/mark-pending-review/accept/reject/archive, reason?}）流转任务状态：start 开始 / mark-pending-review 提交验收 / accept 验收通过 / reject 驳回（可附 reason）/ archive 归档。仅主实例可调用 task_transition，其余成员调用将返回 403 提示（请知会主实例或由管理员在任务管理界面操作）。',
   '【持久化目录】你运行在 k8s 容器环境中，平台为每个 Agent 分配独立的持久化工作目录（默认 /data/worker/<agent名称>，可在创建任务时指定）。' +
   '仅该目录及挂载卷内的内容在容器重启后保留，其余路径（如 /tmp、仓库外任意路径）写入的文件重启后会丢失；' +
   '工作产物、git clone 的仓库、脚本、产出物文件等请写入该持久化目录，提交产出物（doc/file）时 fileRef 应指向该目录内的文件。',
-  '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息（含 requestId、kind、问题详情）时，调用 keta-platform MCP 的 question_confirm 工具（参数 {taskId, selfInstanceId, requestId, kind, answers?/response?}）决策——question 传 answers（答案数组，null=拒绝）；permission 传 response（once 允许一次 / always 总是允许 / reject 拒绝）。仅主实例可调用 question_confirm。',
+  '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息（含 requestId、kind、问题详情）时，调用 vteam MCP 的 question_confirm 工具（参数 {taskId, selfInstanceId, requestId, kind, answers?/response?}）决策——question 传 answers（答案数组，null=拒绝）；permission 传 response（once 允许一次 / always 总是允许 / reject 拒绝）。仅主实例可调用 question_confirm。',
 ].join('\n');
 
 /**
@@ -159,7 +159,7 @@ export function buildSystemInstructions(
       '\n' +
       `【你的身份】你是本任务的 ${selfName}（实例 id: ${selfInstanceId}，角色: ${agent.role ?? ''}）。` +
       (agent.prompt ? `\n【职责】${agent.prompt}` : '') +
-      '\n调用 keta-platform MCP 工具时，落库类工具（group_post / notify_agent / submit_artifact）的' +
+      '\n调用 vteam MCP 工具时，落库类工具（group_post / notify_agent / submit_artifact）的' +
       'selfInstanceId 参数必须填写你的实例 id（ta_ 前缀，服务器按此校验归属并精确记录发送者）。',
     opts?.persistentWorkDir
       ? `\n【运行时工作目录】本任务为你分配的实际持久化工作目录为：${opts.persistentWorkDir}。` +
@@ -189,7 +189,7 @@ export function buildSystemInstructions(
  */
 export const GROUP_TRIGGER_INSTRUCTION =
   '【群聊回复要求】本条消息来自任务群聊，你被 @ 定向分发。请在群聊中公开回复你的结论' +
-  '——调用 keta-platform MCP 的 group_post 工具发布到群聊（参数 {taskId, content, fileRef?}）。' +
+  '——调用 vteam MCP 的 group_post 工具发布到群聊（参数 {taskId, content, fileRef?}）。' +
   '群聊只会显示你通过 group_post 发布的内容，完整处理过程保留在你的私聊会话。' +
   '如需向群聊发送文件：直接调用 group_post 并携带 fileRef（{taskId, content, fileRef: "文件路径"}），文件将作为群聊附件并自动归档为产出物。';
 
@@ -858,7 +858,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
    * 1 查 Session → 已绑 worker 复用；未绑 assignWorker（无可用 → 报错不降级 D3）+
    *   首次 bind（instanceRef 占位 pending）→ 2 查 Worker 行（capabilities）→
    *   3 Agent.defaultModelId → {providerID, modelID} → 4 提示词构造（按需注入：任务
-   *   ID/MCP 工具引导 + 群聊触发指令 + 当前消息，doclib/群聊历史经 keta-platform 工具
+   *   ID/MCP 工具引导 + 群聊触发指令 + 当前消息，doclib/群聊历史经 vteam 工具
    *   自主拉取，不再自动注入）→
    *   5 loading(thinking) → 6 createSession（未创建时）→ bind 更新真实 instanceRef →
    *   7 execute（方案 A：调 worker 执行端点 POST /execute，202 即成功，不启动自持轮询）→
@@ -960,15 +960,15 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     const model = this.toModelSelection(agentModelId ?? workerRow.defaultModelId ?? null);
 
     // 4. 提示词构造（阶段 3 迁移：按需注入——移除 doclib/群聊历史自动注入，模型经
-    // keta-platform MCP 工具自主拉取上下文；buildDoclibContext/buildChatHistoryContext
+    // vteam MCP 工具自主拉取上下文；buildDoclibContext/buildChatHistoryContext
     // 方法保留不删，仅不再被 dispatch 调用，供回退/后续使用）
     const promptBlocks: string[] = [];
     // 动态任务上下文指令（含 taskId + MCP 工具引导）：需要群聊历史/文档库/任务信息时
-    // 调用 keta-platform 的 chat_history / doclib / task_context 工具，发布群聊走 group_post
+    // 调用 vteam 的 chat_history / doclib / task_context 工具，发布群聊走 group_post
     promptBlocks.push(
       `【任务上下文】你的当前任务 ID：${taskId}。` +
-        '需要群聊历史/文档库/任务信息时，调用 keta-platform 的 chat_history / doclib / task_context 工具（传 taskId）。' +
-        '需要向群聊发布消息时调用 keta-platform 的 group_post 工具（参数 {taskId, content, fileRef?}）。',
+        '需要群聊历史/文档库/任务信息时，调用 vteam 的 chat_history / doclib / task_context 工具（传 taskId）。' +
+        '需要向群聊发布消息时调用 vteam 的 group_post 工具（参数 {taskId, content, fileRef?}）。',
     );
     // 群聊触发强化：来源频道是群聊 → 注入显式指令（默认公开回复到群聊，见
     // GROUP_TRIGGER_INSTRUCTION）；私聊触发不注入（保持私密独白）

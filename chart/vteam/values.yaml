@@ -189,7 +189,7 @@ worker:
 initJob:
   ## 对齐 compose depends_on: db(healthy)+init(completed) 门控：
   ## init 以 initContainer 等待 DB 就绪后再跑迁移/种子，失败自动重试
-  ## platformMcpUrl：内置 keta-platform MCP 的 URL（seed 写入 mcp_servers 表）。
+  ## platformMcpUrl：内置 vteam MCP 的 URL（seed 写入 mcp_servers 表）。
   ## 空 = 模板按 release 拼 http://<fullname>-server:3000/api/v1/platform-mcp
   ##     （K8s 下 server 服务名，seed 默认 compose 的 server:3000 不可用）；
   ## 显式设置时用该值（如外部自定义服务名/路径）。

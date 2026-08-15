@@ -27,7 +27,7 @@ vteam 是任务驱动的多 Agent 虚拟团队协作平台。用户创建任务�
 
 ### 平台能力
 
-- 平台 MCP Server（`keta-platform`）：提供 `task_context`、`chat_history`、`doclib`、`group_post`、`notify_agent`、`issue_*`、`submit_artifact` 等工具，Agent 在会话内经 MCP 协议调用
+- 平台 MCP Server（`vteam`）：提供 `task_context`、`chat_history`、`doclib`、`group_post`、`notify_agent`、`issue_*`、`submit_artifact` 等工具，Agent 在会话内经 MCP 协议调用
 - Worker 节点：集成 opencode 执行引擎，负责会话创建、执行、事件回流、首字超时、空闲判死，并注入模型凭据
 - 权限矩阵（RBAC）：admin / member 角色 + 项目成员管理
 - 实时事件：SSE 通道推送消息、事件与状态变更
@@ -46,7 +46,7 @@ vteam 是任务驱动的多 Agent 虚拟团队协作平台。用户创建任务�
                     │          server (NestJS + Prisma)            │
                     │  chat · tasks · issues · agents · workers    │
                     │  artifacts · models · tools · platform-mcp   │
-                    │              MCP Server (keta-platform)      │
+                    │              MCP Server (vteam)      │
                     └───────┬───────────────────────┬──────────────┘
                             │                       │ 注册/心跳/事件回流
                    ┌────────▼────────┐     ┌────────▼──────────────┐
@@ -70,7 +70,7 @@ vteam 是任务驱动的多 Agent 虚拟团队协作平台。用户创建任务�
 | 执行节点 | Node worker，集成 opencode CLI（spawn 子进程 + REST 代理） |
 | 数据层 | Prisma ORM + MySQL 8，迁移文件位于 `server/prisma/migrations` |
 | 实时 | SSE（消息流式输出、事件推送），两阶段 loading 提示 |
-| Agent 工具 | MCP 协议（`keta-platform` MCP Server + worker 端 MCP 客户端） |
+| Agent 工具 | MCP 协议（`vteam` MCP Server + worker 端 MCP 客户端） |
 | 部署 | Docker Compose（db / init / server / web / worker 五服务） |
 
 ## 快速开始
@@ -108,7 +108,7 @@ docker compose up -d --build
 
 - 5 个模板 Agent：产品经理 / 项目经理 / 架构师 / 开发者 / 测试
 - 2 个种子项目：`p_seed_1`（AI 智能体平台）、`p_seed_2`（文档协作平台）
-- 内置工具 + `keta-platform` MCP 工具注册、模型目录
+- 内置工具 + `vteam` MCP 工具注册、模型目录
 
 ### 本地开发
 
@@ -139,7 +139,7 @@ docker compose up -d --build
 - [13-任务状态机与全生命周期](docs/agent-platform/13-任务状态机与全生命周期.md)：任务状态流转
 - [14-Agent配置与虚拟团队模型](docs/agent-platform/14-Agent配置与虚拟团队模型.md)：角色、实例与团队模型
 - [16-内置Agent角色与提示词库](docs/agent-platform/16-内置Agent角色与提示词库.md)：五类角色身份与四方向提示词
-- [21-平台MCP-Server设计方案](docs/agent-platform/21-平台MCP-Server设计方案.md)：keta-platform MCP 工具设计
+- [21-平台MCP-Server设计方案](docs/agent-platform/21-平台MCP-Server设计方案.md)：vteam MCP 工具设计
 
 ## License
 

@@ -203,11 +203,11 @@ interface ApiTool {
 }
 
 /** GET /mcp-servers 记录（T8c：status 为 worker 心跳节流探测上报的三态；无上报 → null）。 */
-/** 内置 MCP server 判定：seed 预置的 keta-platform（seed.ts 固定 id=`ms_keta_platform`）。
+/** 内置 MCP server 判定：seed 预置的 vteam / vteam-api（seed.ts 固定 id=`ms_keta_platform`）。
  * 用 name 判定（比固定 id 更语义化，且 MCP 工具行只能拿到 server name，两端判定口径一致）；
  * 内置 server 只读：编辑/删除/启停禁用，仅可查看。 */
-const BUILTIN_MCP_SERVER_NAME = "keta-platform";
-const isBuiltinMcpServer = (name: string): boolean => name === BUILTIN_MCP_SERVER_NAME;
+const BUILTIN_MCP_SERVER_NAMES = ["vteam", "vteam-api"];
+const isBuiltinMcpServer = (name: string): boolean => BUILTIN_MCP_SERVER_NAMES.includes(name);
 
 interface ApiMcpServer {
   id: string;
@@ -1116,7 +1116,7 @@ function McpToolRow({
         )}
       </div>
 
-      {/* 来源徽章：内置 server（keta-platform）只读 → 标注内置（蓝系） */}
+      {/* 来源徽章：内置 server（vteam / vteam-api）只读 → 标注内置（蓝系） */}
       {builtin && (
         <PillBadge
           theme={sourceColors.内置}
@@ -1159,7 +1159,7 @@ function McpToolRow({
 /* ------------------------------ MCP server 管理（工具 Tab → MCP 子 Tab） ------------------------------
  * MCP server 本体（POST /mcp-servers）管理：注册/编辑/查看/删除全生命周期。
  * - McpServerSection：MCP 子 Tab 顶部的 server 列表区块（name/type/status/enabled + endpoint 摘要）
- * - McpServerRow：server 行卡片（查看全员放开；编辑/删除 [admin]，内置 keta-platform 只读）
+ * - McpServerRow：server 行卡片（查看全员放开；编辑/删除 [admin]，内置 vteam / vteam-api 只读）
  * - McpServerModal：注册（POST /mcp-servers）/ 编辑（PATCH /mcp-servers/:id）/ 查看 三合一弹窗
  */
 
@@ -2828,7 +2828,7 @@ export default function SkillToolManagePage() {
   };
 
   /* 打开 MCP server 弹窗：create 空表单 / edit·view 预填当前 server（重置 mutation 错误态）。
-   * 内置 server（keta-platform）只读 → 强制 view，入口即使误传 edit 也降级为只读。 */
+   * 内置 server（vteam / vteam-api）只读 → 强制 view，入口即使误传 edit 也降级为只读。 */
   const handleOpenMcpServerModal = (
     mode: "create" | "edit" | "view",
     server?: ApiMcpServer

@@ -37,5 +37,5 @@ export const PLATFORM_MCP_TOOLS = [
 ] as const;
 
 /** 平台 MCP server 标识（seed 阶段 2 的 mcp-servers 记录 name 对齐）。 */
-export const PLATFORM_MCP_SERVER_NAME = 'keta-platform';
+export const PLATFORM_MCP_SERVER_NAME = 'vteam';
 export const PLATFORM_MCP_SERVER_VERSION = '1.0.0';

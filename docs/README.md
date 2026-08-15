@@ -24,7 +24,7 @@
 | 13 | [任务状态机与全生命周期](agent-platform/13-任务状态机与全生命周期.md) | 任务状态流转与验收 |
 | 14 | [Agent 配置与虚拟团队模型](agent-platform/14-Agent配置与虚拟团队模型.md) | 角色、实例与团队模型 |
 | 16 | [内置 Agent 角色与提示词库](agent-platform/16-内置Agent角色与提示词库.md) | 五类角色身份与四方向提示词 |
-| 21 | [平台 MCP Server 设计方案](agent-platform/21-平台MCP-Server设计方案.md) | keta-platform MCP 工具设计 |
+| 21 | [平台 MCP Server 设计方案](agent-platform/21-平台MCP-Server设计方案.md) | vteam MCP 工具设计 |
 
 另有：[02 用户与场景](agent-platform/02-用户与场景.md)、[05 非功能与验收边界](agent-platform/05-非功能与验收边界.md)、[06 交互与页面设计](agent-platform/06-交互与页面设计.md)、[10 群聊与消息机制](agent-platform/10-群聊与消息机制.md)、[11 资源与注册机制](agent-platform/11-资源与注册机制（工具skills-mcp）.md)、[12 产出物协议与文档库](agent-platform/12-产出物协议与文档库.md)、[15 数据模型细化（ER图）](agent-platform/15-数据模型细化（ER图）.md)、[17 仓库权限与凭证机制](agent-platform/17-仓库权限与凭证机制.md)、[18 原型审计报告](agent-platform/18-原型审计报告.md)、[18 推进计划](agent-platform/18-推进计划（分阶段实施）.md)、[19 worker-agent 任务关系梳理](agent-platform/19-worker-agent-任务关系梳理.md)、[20 E2E 验证问题清单](agent-platform/20-E2E验证问题清单.md)
 
