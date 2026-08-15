@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+/*
+ * PrototypeViewer 设计 token（Tailwind CSS v4 @theme）
+ * =====================================================
+ * 浅色工程工具风格：
+ *  - 品牌色 brand：靛蓝系（主操作、选中态、链接）
+ *  - 语义色：success / warning / danger / info（状态 badge 等）
+ *  - 中性色沿用内置 slate 系
+ * 新增原型页面时直接使用这些 token 的 Tailwind 工具类，
+ * 不要硬编码任意 hex 值。
+ */
+@theme {
+  /* 品牌色 */
+  --color-brand-50: #eef4ff;
+  --color-brand-100: #e0ebfe;
+  --color-brand-200: #c7dafe;
+  --color-brand-300: #a3c2fb;
+  --color-brand-400: #7ea2f6;
+  --color-brand-500: #5f83ef;
+  --color-brand-600: #4564e0;
+  --color-brand-700: #374fc4;
+  --color-brand-800: #2f429e;
+  --color-brand-900: #2c3c7d;
+
+  /* 语义色（状态 / 徽标） */
+  --color-success-50: #ecfdf5;
+  --color-success-500: #10b981;
+  --color-success-600: #059669;
+  --color-success-700: #047857;
+  --color-warning-50: #fffbeb;
+  --color-warning-500: #f59e0b;
+  --color-warning-700: #b45309;
+  --color-danger-50: #fef2f2;
+  --color-danger-500: #ef4444;
+  --color-danger-600: #dc2626;
+  --color-danger-700: #b91c1c;
+  --color-info-50: #f0f9ff;
+  --color-info-500: #0ea5e9;
+  --color-info-600: #0284c7;
+  --color-info-700: #0369a1;
+
+  /* 圆角 */
+  --radius-card: 0.75rem; /* 12px */
+  --radius-control: 0.5rem; /* 8px */
+  --radius-frame: 0.625rem; /* 10px */
+
+  /* 阴影（微妙层级） */
+  --shadow-panel: 0 1px 2px rgb(15 23 42 / 0.06), 0 4px 12px rgb(15 23 42 / 0.06);
+  --shadow-frame: 0 10px 24px rgb(15 23 42 / 0.12), 0 2px 6px rgb(15 23 42 / 0.08);
+
+  /* 字体：系统字体栈（工程工具风格，不引入外部字体） */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
+}
+
+/*
+ * 文档代码块样式
+ * pre 内的 code（无论是否带 language- class）统一透明继承 pre 的深色背景，
+ * 避免行内 code 的浅色底覆盖到代码块内部（黑底白字的背景冲突）。
+ */
+pre code {
+  background: transparent !important;
+  padding: 0 !important;
+  font-size: inherit !important;
+  color: inherit;
+}
