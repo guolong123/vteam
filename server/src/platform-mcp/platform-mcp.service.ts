@@ -816,22 +816,20 @@ export class PlatformMcpService {
         message: '缺少 x-worker-id header',
       });
     }
-    // 防冒充优先：落库类工具（selfInstanceId 必填）必须声明"当前正在执行"的实例——
-    // dispatcher 在 execute 下发时按实例登记、completed/error 注销。多会话任务（taskId 下
-    // 多个实例会话并存）下 findFirst 定位歧义曾导致冒充放行（误把旧会话实例判为执行者），
-    // 注册表精确校验可根治。无注册记录（非 dispatch 驱动）→ 回退 findFirst。
+    // 防冒充（is_0000000028 修复）：落库类工具（selfInstanceId 必填）须为「该 worker 当前
+    // 执行该任务」的实例——dispatcher 在 execute 下发时按实例登记、completed/error/超时注销。
+    // 内存活跃集合（activeExecutions）为**增强校验**，但可能因并发/首字超时/空闲判死的
+    // 竞态与真实会话状态不一致（间歇性误拒合法成员）。故以 **DB session 为权威**：
+    // - 该 worker+task 存在绑定 selfInstanceId 的会话 → 合法，放行（无论内存集合是否命中）；
+    // - 内存集合命中 → 直接放行（快路径，免 DB 查询）；
+    // - 内存集合未命中且 DB 无绑定会话 → 拒绝（真冒充）。
+    // 语义：注册表校验防止「旧会话实例冒充当值执行者」的漏洞，DB 会话绑定兜底防内存陈旧。
     if (selfInstanceId !== undefined) {
       const active = this.workerDispatcher.isAgentExecuting(
         ctx.workerId,
         taskId,
       );
-      if (active !== null) {
-        if (!active.has(selfInstanceId)) {
-          throw new ForbiddenException({
-            code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-            message: `selfInstanceId（${selfInstanceId}）不在该 worker 当前执行任务（${taskId}）的活跃实例集合中，禁止冒充`,
-          });
-        }
+      if (active !== null && active.has(selfInstanceId)) {
         return selfInstanceId;
       }
     }
@@ -846,7 +844,10 @@ export class PlatformMcpService {
     if (!session) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message: '该 worker 无此任务会话，禁止跨任务访问',
+        message:
+          selfInstanceId !== undefined
+            ? `selfInstanceId（${selfInstanceId}）不在该 worker 当前执行任务（${taskId}）的活跃实例集合中，且该 worker 无绑定会话，禁止冒充`
+            : '该 worker 无此任务会话，禁止跨任务访问',
       });
     }
     const instanceId = session.taskAgentId ?? session.agentId;

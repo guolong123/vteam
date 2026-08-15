@@ -781,6 +781,46 @@ describe('PlatformMcpService', () => {
       );
     });
 
+    it('is_0000000028：内存活跃集合未命中但 DB 有绑定会话 → 放行（修复间歇性误拒合法成员）', async () => {
+      // 模拟并发/超时导致的内存集合陈旧：isAgentExecuting 返回不含调用方的集合
+      workerDispatcher.isAgentExecuting.mockReturnValue(
+        new Set(['ta_other_instance']),
+      );
+      // DB 会话存在（该 worker 绑定 selfInstanceId）
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      idGen.nextId.mockResolvedValue('m_0000000100');
+      prisma.message.create.mockResolvedValue(createdMessage);
+
+      const result = await service.groupPost(ctx, {
+        taskId,
+        content: '结论',
+        selfInstanceId: senderInstanceId,
+      });
+
+      // 不抛「不在活跃实例集合」，DB 会话兜底放行
+      expect(result.messageId).toBe('m_0000000100');
+      expect(prisma.session.findFirst).toHaveBeenCalled();
+    });
+
+    it('is_0000000028：内存活跃集合未命中且 DB 无绑定会话 → 拒绝（真冒充仍拦截）', async () => {
+      workerDispatcher.isAgentExecuting.mockReturnValue(
+        new Set(['ta_other_instance']),
+      );
+      // DB 无该 worker 绑定 selfInstanceId 的会话
+      prisma.session.findFirst.mockResolvedValue(null);
+
+      await expectCode(
+        service.groupPost(ctx, {
+          taskId,
+          content: '冒名',
+          selfInstanceId: senderInstanceId,
+        }),
+        ForbiddenException,
+        PLATFORM_MCP_ERRORS.FORBIDDEN,
+      );
+    });
+
     it('fileRef 命中该任务已归档产出物 → 挂附件三字段', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
