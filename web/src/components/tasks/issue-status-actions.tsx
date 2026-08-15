@@ -1,16 +1,18 @@
 "use client";
 
 /**
- * Issue 状态流转操作按钮组（issue-management plan todo 4）
+ * Issue 状态流转操作按钮组（issue-management plan todo 4；is_0000000013 增 rejected 态）
  * =============================================================
  * 任务内 issue 的状态机与 Task 五态不同（Metis m6：两者 action 同名 start/reject，
  * 禁止复用 TaskStatusActions 的 start/reject 常量/组件），独立实现：
  *   open        → start  → in_progress
- *   in_progress → resolve → resolved；in_progress → reject → open
+ *   in_progress → resolve → resolved；in_progress → reject → rejected（必填原因）
  *   resolved    → close  → closed
  *   closed      → reopen → open
- * 调用 POST /issues/:id/transition（TransitionIssueDto {action}），
- * from 不匹配 → 后端 409 ISSUE_INVALID_TRANSITION（前端按状态渲染，正常不触发）。
+ *   rejected    → reopen → open
+ * 调用 POST /issues/:id/transition（TransitionIssueDto {action, reason}），
+ * from 不匹配 → 后端 409 ISSUE_INVALID_TRANSITION（前端按状态渲染，正常不触发）；
+ * action=reject 无 reason → 后端 400 ISSUE_REJECT_REASON_REQUIRED（前端点击后弹原因输入）。
  * 行内横向小按钮（列表行操作列，区别于看板卡片竖向 TaskStatusActions）。
  * data-testid：issue-transition-<action>。
  */
@@ -29,6 +31,8 @@ type IssueAction = "start" | "resolve" | "close" | "reopen" | "reject";
 interface IssueStatusActionsProps {
   issueId: string;
   status: IssueStatus;
+  /** 流转完成后额外回调（详情弹窗失效 ["issue", id] 缓存用，is_0000000012）。 */
+  onSettled?: () => void;
 }
 
 /** 各状态可执行动作组（终态之外均至少一项）。 */
@@ -52,7 +56,7 @@ const ACTION_META: Record<IssueAction, { label: string; color: string; pendingLa
  * 按 issue 状态渲染横向流转按钮组。
  * 内部持有 mutation（onSettled 失效 issues 缓存），调用方无需感知请求细节。
  */
-export function IssueStatusActions({ issueId, status }: IssueStatusActionsProps) {
+export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusActionsProps) {
   const queryClient = useQueryClient();
   const transitionMutation = useMutation({
     mutationFn: (action: TransitionIssuePayload["action"]) =>
@@ -60,6 +64,7 @@ export function IssueStatusActions({ issueId, status }: IssueStatusActionsProps)
     onSettled: () => {
       // 列表（["issues", ...]）缓存失效重取，按钮随新状态重渲染
       queryClient.invalidateQueries({ queryKey: ["issues"] });
+      onSettled?.();
     },
   });
 
@@ -73,6 +78,7 @@ export function IssueStatusActions({ issueId, status }: IssueStatusActionsProps)
 
   return (
     <div
+      data-testid="issue-status-actions"
       style={{
         display: "flex",
         alignItems: "center",

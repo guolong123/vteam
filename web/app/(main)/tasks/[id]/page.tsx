@@ -35,6 +35,7 @@ import type { AgentStatusEvent, MessagePartDeltaEvent, RealtimeQuestionEvent, Se
 import { AgentAvatar, ChatBubble, MessageInput, StatusBadge } from "@/src/components/ui";
 import type { MentionableAgent, SendMessagePayload } from "@/src/components/ui";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
+import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
 import {
   LoadingIndicator,
   MsgError,
@@ -1146,6 +1147,7 @@ function TaskPanel({
   issues,
   issuesTotal,
   issuesLoading,
+  onOpenIssueDetail,
 }: {
   task: TaskDetail;
   agents: { id: string; name: string; role: RoleKey }[];
@@ -1161,6 +1163,8 @@ function TaskPanel({
   issues: TaskIssueItem[];
   issuesTotal: number;
   issuesLoading?: boolean;
+  /** 待办 Issue 项点击 → 弹 Issue 详情（is_0000000012）。 */
+  onOpenIssueDetail?: (issueId: string) => void;
 }) {
   const mainAgent = task.mainAgentId ? agents.find((a) => a.id === task.mainAgentId) : undefined;
   /** 主实例（T5：instances[].main 或 id===mainAgentInstanceId；别名优先展示） */
@@ -1405,6 +1409,16 @@ function TaskPanel({
                 <div
                   key={issue.id}
                   data-testid="task-issue-item"
+                  role="button"
+                  tabIndex={0}
+                  title={`查看 ${issue.title} 详情`}
+                  onClick={() => onOpenIssueDetail?.(issue.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onOpenIssueDetail?.(issue.id);
+                    }
+                  }}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -1413,6 +1427,16 @@ function TaskPanel({
                     borderRadius: radius.md,
                     backgroundColor: neutral[50],
                     border: `1px solid ${neutral[200]}`,
+                    cursor: "pointer",
+                    transition: "border-color .15s ease, background-color .15s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLDivElement).style.backgroundColor = "#FFFFFF";
+                    (e.currentTarget as HTMLDivElement).style.borderColor = "#BFDBFE";
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLDivElement).style.backgroundColor = neutral[50];
+                    (e.currentTarget as HTMLDivElement).style.borderColor = neutral[200];
                   }}
                 >
                   <span
@@ -1516,6 +1540,8 @@ export default function TaskChatPage() {
   // Agent 提问/权限确认弹窗：SSE agent.question 事件 / 进入页补拉设置（resolved 事件收敛关闭）
   const [pendingQuestion, setPendingQuestion] = useState<QuestionModalData | null>(null);
   const [questionSubmitting, setQuestionSubmitting] = useState(false);
+  // Issue 详情弹窗（is_0000000012：TaskPanel 待办 Issue 点击）
+  const [detailIssueId, setDetailIssueId] = useState<string | null>(null);
 
   /* ---------- 1. 任务详情（无 channelId，仅标题/状态/主 Agent/团队） ---------- */
   const taskQuery = useQuery({
@@ -1639,6 +1665,17 @@ export default function TaskChatPage() {
     }
     return map;
   }, [agentMembers]);
+
+  /** Issue 详情弹窗指派候选（T5 实例：id=实例 id、name=别名、role）。 */
+  const issueModalAgents = useMemo(
+    () =>
+      (task?.instances ?? []).map((i) => ({
+        id: i.id,
+        name: i.alias ?? i.name,
+        role: i.role,
+      })),
+    [task],
+  );
 
   /** @ 候选（T5 按实例）：name=实例别名（唯一），instanceId 透传（mentions 落库结构）。 */
   const mentionable: MentionableAgent[] = agentMembers.map((a) => ({
@@ -2202,6 +2239,16 @@ export default function TaskChatPage() {
         issues={issuesQuery.data?.items ?? []}
         issuesTotal={issuesQuery.data?.total ?? 0}
         issuesLoading={issuesQuery.isPending}
+        onOpenIssueDetail={setDetailIssueId}
+      />
+
+      {/* Issue 详情弹窗（is_0000000012：TaskPanel 待办 Issue 点击，absolute 相对宿主） */}
+      <IssueDetailModal
+        issueId={detailIssueId}
+        open={!!detailIssueId}
+        onClose={() => setDetailIssueId(null)}
+        agents={issueModalAgents}
+        onChanged={() => queryClient.invalidateQueries({ queryKey: ["task-issues", taskId] })}
       />
 
       {/* Agent 提问/权限确认弹窗（absolute 相对宿主，不阻塞消息流） */}
