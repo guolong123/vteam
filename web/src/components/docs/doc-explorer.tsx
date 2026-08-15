@@ -172,10 +172,10 @@ export function DocExplorer({ taskId }: { taskId: string }) {
 
   return (
     <div data-testid="docs-explorer" style={{ display: "flex", minHeight: 0, flex: 1, backgroundColor: "#FFFFFF", ...baseFont }}>
-      {/* 左侧：文档树 */}
-      <aside style={{ width: 240, flexShrink: 0, display: "flex", flexDirection: "column", borderRight: `1px solid ${neutral[200]}`, backgroundColor: neutral[50] }}>
+      {/* 左侧：文档树（is_0000000038 样式优化：间距/层级/视觉层次） */}
+      <aside style={{ width: 264, flexShrink: 0, display: "flex", flexDirection: "column", borderRight: `1px solid ${neutral[200]}`, backgroundColor: neutral[50] }}>
         <div style={{ flexShrink: 0, overflowY: "auto", borderBottom: `1px solid ${neutral[200]}`, ...baseFont }}>
-          <p style={{ margin: 0, padding: `${space.md}px ${space.lg}px ${space.sm}px`, fontSize: fontSize.xs, fontWeight: 600, color: neutral[400] }}>
+          <p style={{ margin: 0, padding: `${space.md}px ${space.lg}px ${space.sm}px`, fontSize: fontSize.xs, fontWeight: 600, letterSpacing: "0.05em", color: neutral[400], textTransform: "uppercase" }}>
             文档
           </p>
           {registryQuery.isError ? (
@@ -187,7 +187,7 @@ export function DocExplorer({ taskId }: { taskId: string }) {
               {registryQuery.isPending ? "加载中…" : "暂无 doc 产出物"}
             </p>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: `0 ${space.sm}px ${space.md}px` }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: space.xs, padding: `0 ${space.sm}px ${space.lg}px` }}>
               {rootDocs.map((root) => {
                 const kids = childrenOf(root.id);
                 const isExpanded = expanded.has(root.id);
@@ -200,12 +200,12 @@ export function DocExplorer({ taskId }: { taskId: string }) {
                           type="button"
                           onClick={() => toggleExpand(root.id)}
                           aria-label={isExpanded ? "折叠子文档" : "展开子文档"}
-                          style={{ ...treeBtnBase, width: 20, height: 20, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", color: neutral[400] }}
+                          style={{ ...treeBtnBase, width: 22, height: 28, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", color: neutral[400], borderRadius: radius.sm }}
                         >
                           <span aria-hidden style={{ transform: isExpanded ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
                         </button>
                       ) : (
-                        <span style={{ width: 20, flexShrink: 0 }} />
+                        <span style={{ width: 22, flexShrink: 0 }} />
                       )}
                       <button
                         type="button"
@@ -218,12 +218,19 @@ export function DocExplorer({ taskId }: { taskId: string }) {
                           display: "flex",
                           alignItems: "center",
                           gap: space.sm,
-                          padding: `${space.xs}px ${space.sm}px`,
+                          padding: `${space.sm}px ${space.sm}px`,
                           borderRadius: radius.sm,
                           backgroundColor: active ? "#EFF6FF" : "transparent",
-                          color: active ? "#1D4ED8" : neutral[600],
+                          color: active ? "#1D4ED8" : neutral[700],
                           fontSize: fontSize.md,
                           fontWeight: 500,
+                          transition: "background-color .15s ease",
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!active) (e.currentTarget as HTMLButtonElement).style.backgroundColor = neutral[100];
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!active) (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent";
                         }}
                       >
                         <span
@@ -232,11 +239,11 @@ export function DocExplorer({ taskId }: { taskId: string }) {
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            width: 18,
-                            height: 18,
-                            borderRadius: 4,
+                            width: 20,
+                            height: 20,
+                            borderRadius: 5,
                             fontSize: 9,
-                            fontWeight: 600,
+                            fontWeight: 700,
                             backgroundColor: active ? "#DBEAFE" : neutral[200],
                             color: active ? "#1D4ED8" : neutral[500],
                             flexShrink: 0,
@@ -248,7 +255,7 @@ export function DocExplorer({ taskId }: { taskId: string }) {
                       </button>
                     </div>
                     {isExpanded && kids.length > 0 && (
-                      <div style={{ marginTop: 2, marginLeft: 26, paddingLeft: 12, borderLeft: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: 2 }}>
+                      <div style={{ marginTop: 4, marginLeft: 30, paddingLeft: 14, borderLeft: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: 4 }}>
                         {kids.map((kid) => {
                           const kidActive = kid.id === activeDoc?.id;
                           return (
@@ -263,14 +270,22 @@ export function DocExplorer({ taskId }: { taskId: string }) {
                                 display: "flex",
                                 alignItems: "center",
                                 gap: space.sm,
-                                padding: `${space.xs}px ${space.sm}px`,
+                                padding: `${space.sm - 1}px ${space.sm}px`,
                                 borderRadius: radius.sm,
-                                fontSize: fontSize.sm,
+                                fontSize: fontSize.md,
                                 color: kidActive ? "#1D4ED8" : neutral[500],
                                 backgroundColor: kidActive ? "#EFF6FF" : "transparent",
+                                fontWeight: kidActive ? 500 : 400,
+                                transition: "background-color .15s ease",
+                              }}
+                              onMouseEnter={(e) => {
+                                if (!kidActive) (e.currentTarget as HTMLButtonElement).style.backgroundColor = neutral[100];
+                              }}
+                              onMouseLeave={(e) => {
+                                if (!kidActive) (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent";
                               }}
                             >
-                              <span aria-hidden style={{ width: 5, height: 5, borderRadius: "50%", backgroundColor: kidActive ? "#2563EB" : neutral[300], flexShrink: 0 }} />
+                              <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: kidActive ? "#2563EB" : neutral[300], flexShrink: 0 }} />
                               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{kid.name}</span>
                             </button>
                           );
@@ -341,7 +356,7 @@ export function DocExplorer({ taskId }: { taskId: string }) {
         ) : !source ? (
           <p style={{ margin: 0, padding: `0 ${space.lg}px`, fontSize: fontSize.xs, color: neutral[400] }}>加载中…</p>
         ) : (
-          <nav style={{ display: "flex", flexDirection: "column", gap: 2, padding: `0 ${space.sm}px ${space.md}px` }}>
+          <nav style={{ display: "flex", flexDirection: "column", gap: 4, padding: `0 ${space.sm}px ${space.lg}px` }}>
             {toc.map((t) => (
               <button
                 key={t.id}
@@ -355,14 +370,21 @@ export function DocExplorer({ taskId }: { taskId: string }) {
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
-                  paddingLeft: t.level === 2 ? 22 : 12,
-                  paddingTop: 5,
-                  paddingBottom: 5,
+                  paddingLeft: t.level === 2 ? 24 : 12,
+                  paddingTop: 7,
+                  paddingBottom: 7,
                   borderRadius: radius.sm,
                   fontSize: t.level === 2 ? fontSize.xs : fontSize.sm,
                   color: activeSection === t.id ? "#1D4ED8" : t.level === 2 ? neutral[500] : neutral[700],
                   fontWeight: activeSection === t.id ? 600 : t.level === 2 ? 400 : 500,
                   backgroundColor: activeSection === t.id ? "#EFF6FF" : "transparent",
+                  transition: "background-color .15s ease",
+                }}
+                onMouseEnter={(e) => {
+                  if (activeSection !== t.id) (e.currentTarget as HTMLButtonElement).style.backgroundColor = neutral[100];
+                }}
+                onMouseLeave={(e) => {
+                  if (activeSection !== t.id) (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent";
                 }}
               >
                 {t.text}
