@@ -13,6 +13,7 @@ export { AgentBadge } from "./agent-badge";
 export type { AgentBadgeProps } from "./agent-badge";
 export { ChatBubble, AttachmentCard } from "./chat-bubble";
 export type { ChatBubbleProps, ChatMessageType, ChatBubbleAttachment } from "./chat-bubble";
+export { Markdown } from "./markdown";
 export { MessageInput } from "./message-input";
 export type {
   MessageInputProps,

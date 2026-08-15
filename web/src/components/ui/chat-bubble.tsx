@@ -18,6 +18,7 @@ import {
 } from "@/src/theme/tokens";
 import { AgentAvatar } from "./agent-avatar";
 import { stripInjectedContext } from "@/lib/strip-injected-context";
+import { Markdown } from "./markdown";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -174,7 +175,12 @@ export function ChatBubble({
                   }
             }
           >
-            {isUser ? text : stripInjectedContext(text)}
+            {/* agent 消息 markdown 渲染（is_0000000019）；用户/系统消息保持纯文本 */}
+            {isUser || isSystem ? (
+              stripInjectedContext(text)
+            ) : (
+              <Markdown>{stripInjectedContext(text)}</Markdown>
+            )}
           </div>
         )}
         {attachment && (
