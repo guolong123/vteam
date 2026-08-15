@@ -58,10 +58,16 @@ a {
 
 /* ============================================================
  * Tailwind（is_0000000037）：为移植的 md-docs 原型（src/components/docs/prototypes/）
- * 提供工具类。preflight 与上方手动 reset 对齐（原型环境同源），
- * 现有 web 组件以 inline styles 为主，不受工具类影响。
+ * 提供工具类。
+ * - **不引入 preflight**（仅 theme + utilities）：避免 button cursor、img/svg display、
+ *   ul list-style 等全站默认改动影响现有 inline-style 组件/markdown 列表（审核 #23 意见）；
+ *   现有 web 手动 reset 保持权威。
+ * - @theme 补齐原型用到的全部色阶（含 warning/info/success/danger 缺档，审核 #23 意见，
+ *   修复源环境 17 处静默失效）。
  * ============================================================ */
-@import "tailwindcss";
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
 
 @theme {
   /* 品牌色（对齐 prototype-viewer index.css @theme） */
@@ -76,19 +82,31 @@ a {
   --color-brand-800: #2f429e;
   --color-brand-900: #2c3c7d;
 
-  /* 语义色（状态 / 徽标） */
+  /* 语义色（状态 / 徽标，补齐原型用到的全色阶） */
   --color-success-50: #ecfdf5;
+  --color-success-100: #d1fae5;
+  --color-success-400: #34d399;
   --color-success-500: #10b981;
   --color-success-600: #059669;
   --color-success-700: #047857;
   --color-warning-50: #fffbeb;
+  --color-warning-100: #fef3c7;
+  --color-warning-200: #fde68a;
+  --color-warning-400: #fbbf24;
   --color-warning-500: #f59e0b;
+  --color-warning-600: #d97706;
   --color-warning-700: #b45309;
+  --color-warning-800: #92400e;
   --color-danger-50: #fef2f2;
+  --color-danger-100: #fee2e2;
+  --color-danger-400: #f87171;
   --color-danger-500: #ef4444;
   --color-danger-600: #dc2626;
   --color-danger-700: #b91c1c;
   --color-info-50: #f0f9ff;
+  --color-info-100: #cffafe;
+  --color-info-200: #a5f3fc;
+  --color-info-300: #67e8f9;
   --color-info-500: #0ea5e9;
   --color-info-600: #0284c7;
   --color-info-700: #0369a1;
