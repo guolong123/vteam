@@ -492,7 +492,11 @@ export class PlatformMcpService {
    * 1. **归档优先**：查该 taskId 已归档产出物（artifactVersion.filePath 非空），filePath
    *    归一化与 fileRef 归一化相等即命中（filePath 保存 agent 经 group_post 直发时的
    *    原始 fileRef）→ 用 contentRef 从 uploads 目录读内容（无跨 worker 网络开销）。
-   * 2. **worker 拉取兜底**：归档未命中 → 从调用方 worker（ctx.workerId）工作区拉取
+   * 2. **server 上传目录直读**（is_0000000018）：fileRef 为 `/uploads/*` 控制面落盘文件
+   *    但未在任务归档命中（如任务 backgroundDocs 经 POST /uploads 上传、未归档为产出物）——
+   *    直接从 server uploads 目录读取。修复「任务级背景文档 read_file 404」：此前落入
+   *    worker 拉取兜底，worker 文件系统不存在 server 侧 /uploads 路径 → 404。
+   * 3. **worker 拉取兜底**：非 /uploads 引用 → 从调用方 worker（ctx.workerId）工作区拉取
    *    （跨 worker 场景由归档层覆盖——agent B 读的是 agent A 已归档的文件）。
    * maxBytes 截断（默认 256KB，zod 已限 1MB 上限）；utf8 解码失败（二进制）→ base64 前缀。
    */
@@ -516,6 +520,14 @@ export class PlatformMcpService {
     );
     if (hit) {
       return this.readFromArchive(hit.contentRef, args.fileRef, maxBytes);
+    }
+    // is_0000000018：调用方显式传 `/uploads/*` 控制面落盘文件（如任务 backgroundDocs，
+    // 经 POST /uploads 上传、未归档为产出物）→ server 上传目录直读，不再落入 worker
+    // 拉取（worker 文件系统无 server 侧 /uploads 路径 → 404）。仅对**原始 fileRef** 为
+    // /uploads 前缀生效；worker 原始路径（/tmp/opencode/*）归一化后虽也是 /uploads/*，
+    // 但文件在 worker 工作区，仍走 worker 拉取兜底。
+    if (args.fileRef.startsWith('/uploads/')) {
+      return this.readFromArchive(target, args.fileRef, maxBytes);
     }
     return this.fetchFromWorker(ctx, args.fileRef, maxBytes);
   }
