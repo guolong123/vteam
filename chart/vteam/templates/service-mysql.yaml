@@ -1,0 +1,19 @@
+# MySQL Service（ClusterIP :3306，db.enabled=true 时）
+{{- if .Values.db.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vteam.mysql.name" . }}
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "mysql") | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None   # Headless：StatefulSet 网络身份（pod-0.<svc>）
+  selector:
+    {{- include "vteam.matchLabels" (dict "context" . "component" "mysql") | nindent 4 }}
+  ports:
+    - name: mysql
+      port: {{ .Values.service.mysql.port }}
+      targetPort: {{ .Values.service.mysql.targetPort }}
+      protocol: TCP
+{{- end }}

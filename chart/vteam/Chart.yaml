@@ -1,0 +1,21 @@
+apiVersion: v2
+name: vteam
+description: |
+  vteam — 虚拟团队 AI 协作平台（Virtual Team Collaboration Platform）。
+  任务驱动的多 Agent 虚拟团队协作：server（NestJS API）/ web（Next.js 控制台）/
+  worker（opencode 执行节点）+ 可选内置 MySQL 8 + 一次性 init Job（prisma migrate + seed）。
+  对齐 docker-compose.yml 的服务配置（镜像 / 环境 / 端口 / 持久化 / 探针语义）。
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.22.0-0"
+keywords:
+  - ai
+  - agents
+  - vteam
+  - opencode
+  - nestjs
+  - nextjs
+home: https://gitee.com/xishuhq/aiagents
+sources:
+  - https://gitee.com/xishuhq/aiagents

@@ -1,0 +1,19 @@
+# worker Headless Service（clusterIP: None）— StatefulSet spec.serviceName 必填。
+# 提供稳定 DNS（<pod>.<headless-service>.<namespace>.svc），每副本独立解析
+# （server 直连副本用 <sts 名>-<ordinal>.<headless>）。无共享 ClusterIP Service：
+# serve 调试入口用 kubectl port-forward sts/<release>-worker 14000:4000（转发到 ordinal 0）。
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vteam.worker.name" . }}-headless
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "worker") | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "vteam.matchLabels" (dict "context" . "component" "worker") | nindent 4 }}
+  ports:
+    - name: serve
+      port: {{ .Values.service.worker.port }}
+      targetPort: {{ .Values.service.worker.targetPort }}
+      protocol: TCP

@@ -1,0 +1,38 @@
+# vteam 共享配置（非敏感 env + DATABASE_URL 拼装）
+# 敏感项（JWT_SECRET / WORKER_TOKEN / MODEL_CREDENTIAL_KEY / DB_PASSWORD）在 Secret。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vteam.config.name" . }}
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "config") | nindent 4 }}
+data:
+  # ---------------------------------------------------------------------------
+  # DATABASE_URL
+  #  - db.enabled=true（内置 MySQL）：mysql://root:<password>@<release>-mysql:3306/aiagents
+  #    密码来自 vteam.dbPassword（与 Secret.DB_PASSWORD 同源，保证一致）
+  #  - db.external.enabled=true（外部 DB）：直接使用外部 URL
+  # ---------------------------------------------------------------------------
+  DATABASE_URL: {{ if .Values.db.external.enabled }}{{ .Values.db.external.url | quote }}{{ else }}{{ printf "mysql://root:%s@%s:%d/%s" (include "vteam.dbPassword" .) (include "vteam.mysql.name" .) (int .Values.db.port) .Values.db.database | quote }}{{ end }}
+
+  # ---- server ----
+  NODE_ENV: {{ .Values.server.env.nodeEnv | quote }}
+  PORT: {{ .Values.server.env.port | quote }}
+  JWT_ACCESS_EXPIRES_IN: {{ .Values.server.env.jwtAccessExpiresIn | quote }}
+  JWT_REFRESH_EXPIRES_IN: {{ .Values.server.env.jwtRefreshExpiresIn | quote }}
+  FIRST_TOKEN_TIMEOUT_MS: {{ .Values.server.env.firstTokenTimeoutMs | quote }}
+
+  # ---- worker ----
+  SERVER_URL: {{ printf "http://%s:%d" (include "vteam.server.name" .) (int .Values.service.server.port) | quote }}
+  # WORKER_ID 不在共享 ConfigMap 下发：由 worker StatefulSet 按 pod 名注入
+  # （downward API，pod 名 <release>-worker-<ordinal> 全局唯一），多副本天然唯一，
+  # 避免共享同一 ID 相互覆盖注册。
+  OPENCODE_SERVE_HOSTNAME: {{ .Values.worker.env.serveHostname | quote }}
+  OPENCODE_SERVE_PORT: {{ .Values.worker.env.servePort | quote }}
+  # WORKER_ADVERTISE_HOST 不在共享 ConfigMap 下发：StatefulSet 多副本下必须按 pod 注入
+  # 专属 headless DNS（<pod>.<release>-worker-headless.<ns>.svc，见 statefulset-worker.yaml
+  # env 覆盖）。worker 无共享 ClusterIP Service（仅 headless），server 经每副本上报的
+  # headless baseUrl 直连对应 pod（serve :4000 / exec :4198 同 origin），不依赖负载均衡。
+  WORKER_DEFAULT_MODEL: {{ .Values.worker.env.defaultModel | quote }}
+  WORKER_FIRST_TOKEN_TIMEOUT_MS: {{ .Values.worker.env.firstTokenTimeoutMs | quote }}
+  WORK_DIR: {{ .Values.worker.env.workDir | quote }}

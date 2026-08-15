@@ -1,0 +1,37 @@
+vteam（虚拟团队 AI 协作平台）已部署。
+
+1. 查看各资源状态：
+   kubectl get deploy,sts,job,pvc,svc -l app.kubernetes.io/instance={{ .Release.Name }} -n {{ .Release.Namespace }}
+
+2. 等待就绪（init Job 完成 + server/web/worker ready）：
+   kubectl rollout status deploy/{{ include "vteam.server.name" . }} -n {{ .Release.Namespace }}
+   kubectl rollout status deploy/{{ include "vteam.web.name" . }} -n {{ .Release.Namespace }}
+   kubectl rollout status deploy/{{ include "vteam.worker.name" . }} -n {{ .Release.Namespace }}
+   kubectl wait --for=condition=complete job/{{ include "vteam.init.name" . }} --timeout=300s -n {{ .Release.Namespace }}
+
+3. 访问控制台（port-forward 到 web 与 server）：
+   kubectl port-forward svc/{{ include "vteam.web.name" . }} 13001:3000 -n {{ .Release.Namespace }}
+   kubectl port-forward svc/{{ include "vteam.server.name" . }} 13000:3000 -n {{ .Release.Namespace }}
+   - Web 控制台：http://localhost:13001
+   - 后端 API / Swagger：http://localhost:13000/api/v1 ， http://localhost:13000/api/v1/docs
+   - 调试 opencode serve：kubectl port-forward sts/{{ include "vteam.worker.name" . }} 14000:4000
+     （worker 无共享 ClusterIP Service，serve 仅经 headless DNS/pod 名访问；sts 转发到 ordinal 0）
+
+{{- if not .Values.secret.existingSecret }}
+4. 敏感配置：本 chart 已自动生成随机 Secret（{{ include "vteam.secret.name" . }}）。
+   生产环境建议显式提供，避免升级时依赖 Secret 持久化：
+   helm upgrade {{ .Release.Name }} chart/vteam \
+     --set secret.jwtSecret=$(openssl rand -hex 32) \
+     --set secret.workerToken=$(openssl rand -hex 32) \
+     --set secret.modelCredentialKey=$(openssl rand -hex 32) \
+     --set secret.dbPassword=$(openssl rand -hex 16)
+{{- end }}
+
+5. 镜像构建（未推送 registry 时先构建并推送）：
+   docker build --build-arg API_PROXY_TARGET=http://{{ include "vteam.server.name" . }}:3000 \
+     -t <registry>/vteam-web:latest ./web && docker push <registry>/vteam-web:latest
+   docker build -t <registry>/vteam-server:latest ./server && docker push <registry>/vteam-server:latest
+   docker build -t <registry>/vteam-worker:latest ./worker && docker push <registry>/vteam-worker:latest
+   再以 --set server.image.repository=<registry>/vteam-server 等覆盖 values。
+
+6. worker 默认模型：通过 --set worker.env.defaultModel=<model-id> 指定（空 = 不指定）。

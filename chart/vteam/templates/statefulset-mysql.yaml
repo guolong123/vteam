@@ -1,0 +1,81 @@
+# 内置 MySQL 8 StatefulSet（db.enabled=true 时）— 自包含简单实现（非 bitnami）
+# 数据持久化走 volumeClaimTemplates：<fullname>-mysql-data-<fullname>-mysql-0
+{{- if .Values.db.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "vteam.mysql.name" . }}
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "mysql") | nindent 4 }}
+spec:
+  serviceName: {{ include "vteam.mysql.name" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "vteam.matchLabels" (dict "context" . "component" "mysql") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vteam.matchLabels" (dict "context" . "component" "mysql") | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mysql
+          image: {{ printf "%s:%s" .Values.db.image.repository (.Values.db.image.tag | default "8") }}
+          imagePullPolicy: {{ .Values.db.image.pullPolicy | default .Values.image.pullPolicy }}
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vteam.secretName" . }}
+                  key: DB_PASSWORD
+            - name: MYSQL_DATABASE
+              value: {{ .Values.db.database | quote }}
+          ports:
+            - name: mysql
+              containerPort: {{ .Values.db.port }}
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+          resources:
+            {{- toYaml .Values.db.resources | nindent 12 }}
+          # mysqladmin ping 不校验凭据，仅探测 mysqld 存活（对齐 compose healthcheck）
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -h 127.0.0.1 --silent
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+            startPeriodSeconds: 20
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        {{- if .Values.persistence.mysql.storageClass }}
+        storageClassName: {{ .Values.persistence.mysql.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.mysql.size | quote }}
+{{- end }}

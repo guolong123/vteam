@@ -1,0 +1,42 @@
+# Ingress（values.ingress.enabled=true 时）
+# 路径路由：/api/v1 → server:3000（后端 + Swagger /api/v1/docs），/ → web:3000（控制台）
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "vteam.fullname" . }}
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "ingress") | nindent 4 }}
+  {{- if and .Values.ingress.tls.enabled .Values.ingress.tls.secretName }}
+  annotations:
+    kubernetes.io/tls-acme: "true"
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | default (printf "%s-tls" (include "vteam.fullname" .)) | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /api/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "vteam.server.name" . }}
+                port:
+                  number: {{ .Values.service.server.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "vteam.web.name" . }}
+                port:
+                  number: {{ .Values.service.web.port }}
+{{- end }}

@@ -1,0 +1,69 @@
+# init Job（一次性）：prisma migrate deploy && node dist/prisma/seed.js
+# 对齐 compose 门控：init 等待 db(healthy) 后再执行，server 依赖 init(completed)。
+# db.enabled=true：initContainer 用 node net 探测 mysql service 就绪。
+# db.external.enabled=true：跳过等待（外部 DB 假定就绪），直接迁移/种子。
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "vteam.init.name" . }}
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "init") | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.initJob.backoffLimit }}
+  {{- if .Values.initJob.ttlSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ .Values.initJob.ttlSecondsAfterFinished }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "vteam.matchLabels" (dict "context" . "component" "init") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.db.enabled }}
+      initContainers:
+        - name: wait-db
+          image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.server.image.pullPolicy | default .Values.image.pullPolicy }}
+          env:
+            - name: DB_HOST
+              value: {{ include "vteam.mysql.name" . | quote }}
+            - name: DB_PORT
+              value: {{ .Values.db.port | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              node -e "
+                const net = require('net');
+                const host = process.env.DB_HOST, port = Number(process.env.DB_PORT);
+                function check() {
+                  const s = net.connect({ host, port });
+                  s.on('connect', () => { console.log('mysql ready'); process.exit(0); });
+                  s.on('error', () => { s.destroy(); setTimeout(check, 5000); });
+                }
+                check();
+              "
+      {{- end }}
+      containers:
+        - name: init
+          image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.server.image.pullPolicy | default .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - npx prisma migrate deploy && node dist/prisma/seed.js
+          envFrom:
+            - configMapRef:
+                name: {{ include "vteam.config.name" . }}
+          env:
+            # 内置 keta-platform MCP 的 URL（seed 写入 mcp_servers 表）。
+            # 默认按 server Service 名拼（K8s 下 seed 的 compose 默认 http://server:3000 不通），
+            # 可用 initJob.platformMcpUrl 显式覆盖。
+            - name: PLATFORM_MCP_URL
+              value: {{ default (printf "http://%s:%d/api/v1/platform-mcp" (include "vteam.server.name" .) (int .Values.service.server.port)) .Values.initJob.platformMcpUrl | quote }}
+          resources:
+            {{- toYaml .Values.initJob.resources | nindent 12 }}

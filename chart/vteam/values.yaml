@@ -1,0 +1,275 @@
+# vteam Helm chart 默认值
+# 对齐 docker-compose.yml（db / init / server / web / worker 五服务）。
+
+## ---------------------------------------------------------------------------
+## 全局命名
+## ---------------------------------------------------------------------------
+nameOverride: ""
+## 全量资源名前缀（默认 <release>-vteam）。如 fullnameOverride: vteam → vteam-server 等
+fullnameOverride: ""
+
+imagePullSecrets: []
+#  - name: registry-secret
+
+## 全局镜像拉取策略（各服务 image.pullPolicy 未设置时生效）
+image:
+  pullPolicy: IfNotPresent
+
+## ---------------------------------------------------------------------------
+## 副本数
+## ---------------------------------------------------------------------------
+replicaCount:
+  server: 1
+  web: 1
+  worker: 1
+
+## ---------------------------------------------------------------------------
+## 敏感配置
+## 默认留空：chart 首次安装时自动生成随机值（helm install 时写入 Secret，
+## 升级复用已有值）。生产环境建议显式提供：
+##   --set secret.jwtSecret=$(openssl rand -hex 32) 等
+## existingSecret：提供外部 Secret 名时，模板不再自建 Secret，各组件从
+## 该 Secret 读取同名 key（JWT_SECRET / WORKER_TOKEN / MODEL_CREDENTIAL_KEY /
+## DB_PASSWORD）。若同时启用内置 MySQL（db.enabled=true），需一并提供
+## secret.dbPassword（configmap 拼装 DATABASE_URL 需要明文密码）。
+## ---------------------------------------------------------------------------
+secret:
+  jwtSecret: ""            # 空 → 自动生成（32 字符随机）
+  workerToken: ""          # 空 → 自动生成（32 字符随机）
+  modelCredentialKey: ""   # 空 → 自动生成（32 字节 utf8，满足 AES-256-GCM 约束）
+  dbPassword: ""           # 空 → 自动生成（16 字符随机）
+  existingSecret: ""       # 外部 Secret 名（data 含 JWT_SECRET 等同名 key）
+
+## ---------------------------------------------------------------------------
+## 数据库
+## db.enabled=true（默认）：内置 MySQL 8 StatefulSet（非 bitnami，自包含简单实现）
+## db.enabled=false：必须 external.enabled=true 并提供 url（外部 DATABASE_URL）
+## ---------------------------------------------------------------------------
+db:
+  enabled: true
+  external:
+    enabled: false
+    url: ""                # 例：mysql://user:pass@external-mysql:3306/aiagents
+  database: aiagents
+  port: 3306
+  image:
+    repository: docker.ketaops.cc/library/mysql
+    tag: "8"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+## ---------------------------------------------------------------------------
+## server（NestJS，对齐 compose environment + healthcheck）
+## ---------------------------------------------------------------------------
+server:
+  image:
+    ## Dockerfile: ./server
+    repository: docker.ketaops.cc/ketaops/vteam-server
+    tag: latest
+    pullPolicy: IfNotPresent
+  env:
+    nodeEnv: production
+    port: 3000
+    jwtAccessExpiresIn: 2h
+    jwtRefreshExpiresIn: 7d
+    firstTokenTimeoutMs: "180000"
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  ## 探针：/api/v1/health，容器 node 内置 fetch（对齐 compose healthcheck）
+  probes:
+    startup:
+      failureThreshold: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+    readiness:
+      failureThreshold: 3
+      periodSeconds: 10
+      timeoutSeconds: 5
+    liveness:
+      failureThreshold: 3
+      periodSeconds: 10
+      timeoutSeconds: 5
+
+## ---------------------------------------------------------------------------
+## web（Next.js standalone，对齐 compose healthcheck $HOSTNAME 语义）
+## ---------------------------------------------------------------------------
+web:
+  image:
+    ## Dockerfile: ./web（Next.js standalone）
+    repository: docker.ketaops.cc/ketaops/vteam-web
+    tag: latest
+    pullPolicy: IfNotPresent
+    ## ⚠️ 构建参数（铁律）：rewrites 代理目标在 next build 时编译进
+    ## routes-manifest.json，运行时 ENV 无效。必须在构建期通过
+    ##   --build-arg API_PROXY_TARGET=http://<release>-server:3000
+    ## 注入（与 docker-compose.yml 的 ARG 语义一致）。本 chart 运行时
+    ## 不再向 web 容器注入任何代理相关 env。
+    proxyTarget: http://vteam-server:3000
+  env:
+    port: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  probes:
+    startup:
+      failureThreshold: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+    readiness:
+      failureThreshold: 3
+      periodSeconds: 10
+      timeoutSeconds: 5
+    liveness:
+      failureThreshold: 3
+      periodSeconds: 10
+      timeoutSeconds: 5
+
+## ---------------------------------------------------------------------------
+## worker（opencode 执行节点，对齐 compose environment）
+## ---------------------------------------------------------------------------
+worker:
+  image:
+    ## Dockerfile: ./worker（opencode 执行节点）
+    repository: docker.ketaops.cc/ketaops/vteam-worker
+    tag: latest
+    pullPolicy: IfNotPresent
+  env:
+    serveHostname: 0.0.0.0
+    servePort: "4000"
+    ## 默认模型兜底（Agent 未配模型时用）；空 = 不指定（serve 默认）
+    defaultModel: ""
+    firstTokenTimeoutMs: "180000"
+    workDir: /data/keta-worker
+    ## worker 唯一 id；空 = 自动按 pod 名生成（w_<pod 名>，downward API 注入，
+    ## 多副本天然唯一）；显式设置时用该值（注意多副本下须自行保证唯一）
+    workerId: ""
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  ## 不设 HTTP 探针（对齐 compose：worker 无 healthcheck）；
+  ## readiness 探活由 server 心跳判 offline（server 30s = 3 周期）
+  ## ---------------------------------------------------------------------------
+  ## 持久化（StatefulSet volumeClaimTemplates，默认启用：每副本独立 PVC）
+  ## 独立 home 卷隔离 opencode.db（SQLite 会话库）——多副本不再共享同一 PVC，
+  ## 避免并发写损坏；replicaCount 扩容 → StatefulSet 自动为新增 ordinal
+  ## 创建独立 PVC（<template 名>-<sts 名>-<ordinal>，如 worker-home-vteam-worker-1）。
+  ## enabled=false 时该卷回退 emptyDir（临时，重启即失，生产不建议关闭）。
+  ## ---------------------------------------------------------------------------
+  persistence:
+    workerHome:              # worker 用户目录（opencode.db 会话库、auth.json 凭据、log、repos）
+      enabled: true
+      size: 5Gi
+      storageClass: ""       # 空 → 集群默认 StorageClass
+    workerWork:              # worker 工作目录（serve cwd、.opencode 注入、git clone 仓库、任务文件）
+      enabled: true
+      size: 10Gi
+      storageClass: ""
+  ## StatefulSet 滚动更新（RollingUpdate）。partition 空 = 全量滚动（默认）；
+  ## 设置数字时仅更新 ordinal >= partition 的副本（如升级场景先升 worker-1 保留 worker-0）。
+  updateStrategy:
+    partition: ""            # 空 → 不渲染 rollingUpdate（默认全量）
+
+## ---------------------------------------------------------------------------
+## init Job（一次性：prisma migrate deploy && node dist/prisma/seed.js）
+## ---------------------------------------------------------------------------
+initJob:
+  ## 对齐 compose depends_on: db(healthy)+init(completed) 门控：
+  ## init 以 initContainer 等待 DB 就绪后再跑迁移/种子，失败自动重试
+  ## platformMcpUrl：内置 keta-platform MCP 的 URL（seed 写入 mcp_servers 表）。
+  ## 空 = 模板按 release 拼 http://<fullname>-server:3000/api/v1/platform-mcp
+  ##     （K8s 下 server 服务名，seed 默认 compose 的 server:3000 不可用）；
+  ## 显式设置时用该值（如外部自定义服务名/路径）。
+  platformMcpUrl: ""
+  backoffLimit: 6
+  ## Job 完成后自动清理（默认 300s）
+  ttlSecondsAfterFinished: 300
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+## ---------------------------------------------------------------------------
+## 持久化（PVC 名带 release 前缀：<fullname>-uploads）
+## worker 数据卷已迁至 worker.persistence（StatefulSet volumeClaimTemplates，
+## 每副本独立 PVC，见 worker 段）；不再定义共享的 worker-home / worker-work PVC。
+## mysql 用 StatefulSet volumeClaimTemplates（<fullname>-mysql-data-<fullname>-mysql-0）
+## ---------------------------------------------------------------------------
+persistence:
+  uploads:                 # server 静态上传目录（产出物落盘，P2）
+    enabled: true
+    size: 10Gi
+    storageClass: ""       # 空 → 集群默认 StorageClass
+  mysql:                   # MySQL 数据（db.enabled 时经 volumeClaimTemplates 生效）
+    enabled: true
+    size: 20Gi
+    storageClass: ""
+
+## ---------------------------------------------------------------------------
+## Service（ClusterIP）
+## worker 无共享 ClusterIP Service：serve 仅经 headless DNS/pod 名访问
+## （service.worker 段仅被 service-worker-headless.yaml 引用，用于 StatefulSet
+## serviceName 的端口定义）；调试 opencode serve 用
+## kubectl port-forward sts/<release>-worker 14000:4000（转发到 ordinal 0）
+## ---------------------------------------------------------------------------
+service:
+  server:
+    port: 3000
+    targetPort: 3000
+  web:
+    port: 3000
+    targetPort: 3000
+  worker:
+    ## 仅供 worker Headless Service（service-worker-headless.yaml）引用：
+    ## serve 端口（:4000），无共享 ClusterIP 入口
+    port: 4000
+    targetPort: 4000
+  mysql:
+    port: 3306
+    targetPort: 3306
+
+## ---------------------------------------------------------------------------
+## Ingress（默认关闭）
+## ---------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: nginx
+  host: vteam.example.com
+  ## 路径路由：/api/v1 → server:3000，/ → web:3000
+  tls:
+    enabled: false
+    secretName: ""         # 空 → 用 <fullname>-tls（需 cert-manager 签发注解）
+
+## ---------------------------------------------------------------------------
+## serviceAccount（init Job 等可选）
+## ---------------------------------------------------------------------------
+serviceAccount:
+  create: false
+  name: ""
+
+## 调度约束
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+## 额外 env（透传给 server / web / worker 全部容器，可用于覆盖 NODE_ENV 等）
+extraEnv: []
+#  - name: LOG_LEVEL
+#    value: debug

@@ -1,0 +1,68 @@
+# vteam Helm chart — 开发/测试环境覆盖示例
+# 用法：helm install vteam chart/vteam -f chart/vteam/values-dev.yaml
+#
+# 说明：
+#   - 小资源配额（适合 minikube / 开发集群）
+#   - 显式 dev 密码（可预测，便于本地调试）
+#   - 生产环境请勿使用本文件（弱密码）
+
+# 显式 dev secret（避免随机，便于多人共享同一套凭据联调）
+secret:
+  jwtSecret: dev-jwt-secret-change-me
+  workerToken: dev-worker-token-change-me
+  modelCredentialKey: dev-model-credential-key-32bytes!!
+  dbPassword: dev-db-password
+
+# 小资源
+server:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+web:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+worker:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 1Gi
+    limits:
+      memory: 8Gi
+  # worker 数据卷（StatefulSet volumeClaimTemplates，每副本独立）
+  persistence:
+    workerHome:
+      size: 5Gi
+    workerWork:
+      size: 10Gi
+
+db:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+initJob:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+# 小容量卷（开发可缩短为 5Gi；生产按实际数据量调整）
+persistence:
+  uploads:
+    size: 5Gi
+  mysql:
+    size: 10Gi

@@ -1,0 +1,16 @@
+# server Service（ClusterIP :3000）
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vteam.server.name" . }}
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "server") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "vteam.matchLabels" (dict "context" . "component" "server") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.server.port }}
+      targetPort: {{ .Values.service.server.targetPort }}
+      protocol: TCP

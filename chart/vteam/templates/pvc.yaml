@@ -1,0 +1,23 @@
+# 持久卷声明（PVC 名带 release 前缀）
+#  - uploads：server 静态上传目录（产出物落盘，P2）
+# worker 数据卷（home/work）由 StatefulSet volumeClaimTemplates 按副本独立创建
+# （worker-home-<sts>-<ordinal> / worker-work-<sts>-<ordinal>），不在此定义。
+# mysql 数据走 StatefulSet volumeClaimTemplates（不在此定义）。
+
+{{- if .Values.persistence.uploads.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "vteam.fullname" . }}-uploads
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "server") | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.uploads.storageClass }}
+  storageClassName: {{ .Values.persistence.uploads.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.uploads.size | quote }}
+{{- end }}

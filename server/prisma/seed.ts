@@ -385,11 +385,15 @@ async function main() {
   // 平台 MCP Server（阶段 2）：keta-platform 远程端点（server 侧 /api/v1/platform-mcp），
   // 供 worker 端 opencode 会话经 MCP 工具按需拉取群聊历史/文档库/任务上下文。
   // headers 用 {env:...} 引用（worker 注入器解析 X_WORKER_TOKEN/WORKER_ID 注入鉴权头）。
+  // URL 可经 PLATFORM_MCP_URL 覆盖（docker compose 默认 http://server:3000/...，
+  // K8s 下 server 服务名为 <release>-server，由 chart init Job 注入正确值）。
+  const platformMcpUrl =
+    process.env.PLATFORM_MCP_URL ?? 'http://server:3000/api/v1/platform-mcp';
   await prisma.mcpServer.upsert({
     where: { name: 'keta-platform' },
     update: {
       type: 'remote',
-      url: 'http://server:3000/api/v1/platform-mcp',
+      url: platformMcpUrl,
       headers: {
         'x-worker-token': '{env:X_WORKER_TOKEN}',
         'x-worker-id': '{env:WORKER_ID}',
@@ -400,7 +404,7 @@ async function main() {
       id: 'ms_keta_platform',
       name: 'keta-platform',
       type: 'remote',
-      url: 'http://server:3000/api/v1/platform-mcp',
+      url: platformMcpUrl,
       headers: {
         'x-worker-token': '{env:X_WORKER_TOKEN}',
         'x-worker-id': '{env:WORKER_ID}',
@@ -443,7 +447,7 @@ async function main() {
   console.log(`  - 模板 Agent：${templateAgents.map((a) => `${a.name}(${a.role})`).join('、')}（type=template）`);
   console.log(`  - 内置工具：${builtinTools.map((t) => t.action).join('、')}（source=builtin）`);
   console.log(`  - MCP 工具：${ketaPlatformTools.map((t) => t.action).join('、')}（source=mcp，mcpServer=keta-platform）`);
-  console.log(`  - MCP Server：keta-platform（remote，${'http://server:3000/api/v1/platform-mcp'}）`);
+  console.log(`  - MCP Server：keta-platform（remote，${platformMcpUrl}）`);
   console.log(`  - 模型目录：${modelRows.length} 个模型（${modelRows.map((m) => m.modelID).join('、')}）`);
   console.log(`  - 管理员密码：${ADMIN_PASSWORD}`);
   console.log(`  - 初始 admin 账号：admin / admin123`);

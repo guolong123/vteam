@@ -1,0 +1,102 @@
+# server（NestJS）— 对齐 compose server 服务
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vteam.server.name" . }}
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "server") | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount.server }}
+  selector:
+    matchLabels:
+      {{- include "vteam.matchLabels" (dict "context" . "component" "server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vteam.matchLabels" (dict "context" . "component" "server") | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: server
+          image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.server.image.pullPolicy | default .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.env.port }}
+              protocol: TCP
+          # 非敏感 env（DATABASE_URL / NODE_ENV / PORT / JWT 时效 / 首字超时）
+          envFrom:
+            - configMapRef:
+                name: {{ include "vteam.config.name" . }}
+          env:
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vteam.secretName" . }}
+                  key: JWT_SECRET
+            - name: WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vteam.secretName" . }}
+                  key: WORKER_TOKEN
+            - name: MODEL_CREDENTIAL_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vteam.secretName" . }}
+                  key: MODEL_CREDENTIAL_KEY
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # 产出物落盘持久化（P2）：/app/uploads
+          volumeMounts:
+            - name: uploads
+              mountPath: /app/uploads
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          # 探针：/api/v1/health（容器 node 内置 fetch，对齐 compose healthcheck）
+          startupProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "fetch('http://127.0.0.1:{{ .Values.server.env.port }}/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+            failureThreshold: {{ .Values.server.probes.startup.failureThreshold }}
+            periodSeconds: {{ .Values.server.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.server.probes.startup.timeoutSeconds }}
+          readinessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "fetch('http://127.0.0.1:{{ .Values.server.env.port }}/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+            failureThreshold: {{ .Values.server.probes.readiness.failureThreshold }}
+            periodSeconds: {{ .Values.server.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.server.probes.readiness.timeoutSeconds }}
+          livenessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "fetch('http://127.0.0.1:{{ .Values.server.env.port }}/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+            failureThreshold: {{ .Values.server.probes.liveness.failureThreshold }}
+            periodSeconds: {{ .Values.server.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.server.probes.liveness.timeoutSeconds }}
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: {{ include "vteam.fullname" . }}-uploads

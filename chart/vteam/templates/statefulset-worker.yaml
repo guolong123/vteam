@@ -1,0 +1,141 @@
+# worker（opencode 执行节点）— 对齐 compose worker 服务
+# StatefulSet：每副本独立 PVC（volumeClaimTemplates），解决多副本共享 home PVC
+# 并发写 opencode.db（SQLite）导致的数据库损坏问题。
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "vteam.worker.name" . }}
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "worker") | nindent 4 }}
+spec:
+  serviceName: {{ include "vteam.worker.name" . }}-headless
+  replicas: {{ .Values.replicaCount.worker }}
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+    {{- if .Values.worker.updateStrategy.partition }}
+    rollingUpdate:
+      partition: {{ .Values.worker.updateStrategy.partition }}
+    {{- end }}
+  selector:
+    matchLabels:
+      {{- include "vteam.matchLabels" (dict "context" . "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vteam.matchLabels" (dict "context" . "component" "worker") | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: {{ printf "%s:%s" .Values.worker.image.repository (.Values.worker.image.tag | default .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.worker.image.pullPolicy | default .Values.image.pullPolicy }}
+          ports:
+            - name: serve
+              containerPort: {{ .Values.worker.env.servePort }}
+              protocol: TCP
+          # 非敏感 env（SERVER_URL / WORKER_ID / serve 端口 / advertise / 默认模型 / 首字超时 / WORK_DIR）
+          envFrom:
+            - configMapRef:
+                name: {{ include "vteam.config.name" . }}
+          env:
+            - name: X_WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vteam.secretName" . }}
+                  key: WORKER_TOKEN
+            - name: HOME
+              value: /root
+            # WORKER_ID 唯一化：StatefulSet pod 名 <release>-worker-<ordinal>（如
+            # vteam-worker-0）经 downward API 注入 metadata.name 全局唯一，避免
+            # 共享同一 ID 相互覆盖注册（worker 侧 config.ts：env 值直接用，无覆盖逻辑）。
+            # 显式设置 worker.env.workerId 时优先使用该值。
+            {{- if .Values.worker.env.workerId }}
+            - name: WORKER_ID
+              value: {{ .Values.worker.env.workerId | quote }}
+            {{- else }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: WORKER_ID
+              value: "w_$(POD_NAME)"
+            {{- end }}
+            # WORKER_ADVERTISE_HOST 按 pod 注入专属 headless DNS（<pod>.<headless>.<ns>.svc），
+            # 每副本上报唯一 baseUrl（http://vteam-worker-N.vteam-worker-headless...:4000），
+            # server 直连持有该副本 session 的 worker，exec 基址自动解析为同 origin :4198。
+            # worker 无共享 ClusterIP Service，serve 调试用
+            # kubectl port-forward sts/<release>-worker 14000:4000（见 NOTES/README）。
+            # 显式设置 worker.env.workerId 时同样按 pod 名拼装（workerId 须与 pod 名对应）。
+            - name: WORKER_ADVERTISE_HOST
+              value: "http://$(POD_NAME).{{ include "vteam.worker.name" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local"
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # 每副本独立卷（volumeClaimTemplates，见下方）：work=serve cwd、.opencode 注入、
+          # git clone 仓库与任务文件；home=opencode.db 会话库、auth.json 模型凭据、log、repos。
+          # 持久化关闭（enabled=false）时回退 emptyDir（临时，重启即失）。
+          volumeMounts:
+            - name: {{ ternary "worker-work" "worker-work-tmp" .Values.worker.persistence.workerWork.enabled }}
+              mountPath: {{ .Values.worker.env.workDir | quote }}
+            - name: {{ ternary "worker-home" "worker-home-tmp" .Values.worker.persistence.workerHome.enabled }}
+              mountPath: /root
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          # 无 HTTP 探针（对齐 compose：worker 无 healthcheck）；活跃判定由 server 心跳承担
+  {{- if or .Values.worker.persistence.workerHome.enabled .Values.worker.persistence.workerWork.enabled }}
+  # 每副本独立 PVC（<template 名>-<sts 名>-<ordinal>，如 worker-home-vteam-worker-0）。
+  # replicaCount 扩容 → 自动为新增 ordinal 创建独立 PVC，数据互不共享。
+  volumeClaimTemplates:
+    {{- if .Values.worker.persistence.workerHome.enabled }}
+    - metadata:
+        name: worker-home
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.worker.persistence.workerHome.storageClass }}
+        storageClassName: {{ .Values.worker.persistence.workerHome.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.worker.persistence.workerHome.size | quote }}
+    {{- end }}
+    {{- if .Values.worker.persistence.workerWork.enabled }}
+    - metadata:
+        name: worker-work
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.worker.persistence.workerWork.storageClass }}
+        storageClassName: {{ .Values.worker.persistence.workerWork.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.worker.persistence.workerWork.size | quote }}
+    {{- end }}
+  {{- end }}
+  {{- if or (not .Values.worker.persistence.workerHome.enabled) (not .Values.worker.persistence.workerWork.enabled) }}
+  # 持久化关闭时的 emptyDir 回退（默认全部启用，此分支仅在 enabled=false 时出现）
+  volumes:
+    {{- if not .Values.worker.persistence.workerHome.enabled }}
+    - name: worker-home-tmp
+      emptyDir: {}
+    {{- end }}
+    {{- if not .Values.worker.persistence.workerWork.enabled }}
+    - name: worker-work-tmp
+      emptyDir: {}
+    {{- end }}
+  {{- end }}

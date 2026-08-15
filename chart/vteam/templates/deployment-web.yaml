@@ -1,0 +1,82 @@
+# web（Next.js standalone）— 对齐 compose web 服务
+# ⚠️ API_PROXY_TARGET 是构建 ARG（编译进 routes-manifest.json），运行时无注入 env，
+#    见 values.web.image.proxyTarget 与 README「构建并推送镜像」。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vteam.web.name" . }}
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "web") | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount.web }}
+  selector:
+    matchLabels:
+      {{- include "vteam.matchLabels" (dict "context" . "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vteam.matchLabels" (dict "context" . "component" "web") | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: web
+          image: {{ printf "%s:%s" .Values.web.image.repository (.Values.web.image.tag | default .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.web.image.pullPolicy | default .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.web.env.port }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ .Values.web.env.port | quote }}
+            - name: NODE_ENV
+              value: production
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          # 探针：fetch('http://'+HOSTNAME+':3000/')（对齐 compose $HOSTNAME 语义——
+          # Next standalone server.js 监听容器 hostname 而非 loopback）
+          startupProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "fetch('http://'+process.env.HOSTNAME+':{{ .Values.web.env.port }}/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+            failureThreshold: {{ .Values.web.probes.startup.failureThreshold }}
+            periodSeconds: {{ .Values.web.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.web.probes.startup.timeoutSeconds }}
+          readinessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "fetch('http://'+process.env.HOSTNAME+':{{ .Values.web.env.port }}/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+            failureThreshold: {{ .Values.web.probes.readiness.failureThreshold }}
+            periodSeconds: {{ .Values.web.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.web.probes.readiness.timeoutSeconds }}
+          livenessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "fetch('http://'+process.env.HOSTNAME+':{{ .Values.web.env.port }}/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+            failureThreshold: {{ .Values.web.probes.liveness.failureThreshold }}
+            periodSeconds: {{ .Values.web.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.web.probes.liveness.timeoutSeconds }}
