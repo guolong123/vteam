@@ -14,6 +14,7 @@ import { TASK_STATUS } from '../common/constants/task.constants';
 import { ARTIFACT_ERRORS, ARTIFACT_TYPES } from './artifacts.constants';
 import { QueryArtifactsDto } from './dto/artifact.dto';
 import { FileStorageService } from '../uploads/uploads.service';
+import { DocsMirrorService } from '../docs-site/docs-mirror.service';
 
 /** 产出物域主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
 const ID_PREFIX = {
@@ -102,6 +103,7 @@ export class ArtifactsService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly idGen: IdGeneratorService,
     private readonly realtime: RealtimeService,
+    private readonly docsMirror?: DocsMirrorService,
   ) {}
 
   /** 进程启动：按库内各前缀最大序号对齐 id 生成器（重启续号，防主键冲突）。 */
@@ -254,6 +256,12 @@ export class ArtifactsService implements OnModuleInit {
         },
         { type: 'global' },
       );
+    }
+
+    // is_0000000024：doc 产出物归档后异步触发文档站镜像同步（幂等覆盖，失败不阻断归档）。
+    // DocsMirrorService 可选注入（docs-site 未启用/未接线时不触发）。
+    if (type === 'doc' && this.docsMirror) {
+      void this.docsMirror.syncTask(taskId);
     }
 
     return {

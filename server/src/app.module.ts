@@ -22,6 +22,7 @@ import { GitReposModule } from './git-repos/git-repos.module';
 import { PlatformMcpModule } from './platform-mcp/platform-mcp.module';
 import { QuestionsModule } from './questions/questions.module';
 import { IssuesModule } from './issues/issues.module';
+import { DocsSiteModule } from './docs-site/docs-site.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
@@ -36,7 +37,12 @@ import { PrismaModule } from './prisma/prisma.module';
           process.env.LOG_PRETTY === '1' && process.env.NODE_ENV !== 'test'
             ? { target: 'pino-pretty', options: { singleLine: true } }
             : undefined,
-        redact: ['req.headers.authorization', 'req.headers.cookie'],
+        redact: [
+          'req.headers.authorization',
+          'req.headers.cookie',
+          // docs-site 整页导航首跳 query token（art_0000000030 v3 脱敏要求）
+          'req.query.token',
+        ],
       },
     }),
     PrismaModule,
@@ -59,6 +65,7 @@ import { PrismaModule } from './prisma/prisma.module';
     PlatformMcpModule,
     QuestionsModule,
     IssuesModule,
+    DocsSiteModule,
   ],
   controllers: [AppController],
   providers: [AppService],

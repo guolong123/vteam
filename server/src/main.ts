@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import * as cookieParser from 'cookie-parser';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { resolveUploadDir } from './uploads/uploads.constants';
@@ -19,6 +20,9 @@ async function bootstrap() {
   // 文件经 UPLOAD_DIR 可覆盖（默认 server/uploads，upload.constants resolveUploadDir 同源）；
   // 目录不存在时静态挂载不报错，首次上传由 multer destination 递归创建。
   app.useStaticAssets(resolveUploadDir(), { prefix: '/uploads/' });
+
+  // docs-site cookie 鉴权（art_0000000030 v3：httpOnly 会话 cookie 解析）
+  app.use(cookieParser());
 
   // 全局 DTO 校验（class-validator，对齐 09 篇 §2.1 的 VALIDATION_* 语义）
   app.useGlobalPipes(
