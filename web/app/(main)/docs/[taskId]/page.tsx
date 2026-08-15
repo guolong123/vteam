@@ -12,7 +12,7 @@
  */
 import { type CSSProperties } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/stores/authStore";
@@ -25,6 +25,9 @@ export default function DocsPage() {
   const params = useParams<{ taskId: string }>();
   const taskId = params?.taskId ?? "";
   const user = useAuthStore((s) => s.user);
+  // is_0000000036：?doc=<slug> 初始定位到具体文档（产出物 doc 点击携带）
+  const searchParams = useSearchParams();
+  const initialDocId = searchParams.get("doc") ?? undefined;
 
   // 任务上下文标题（返回入口 + 顶部标题）
   const taskQuery = useQuery({
@@ -108,7 +111,7 @@ export default function DocsPage() {
 
       {/* 文档阅读器（v4 内嵌渲染） */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <DocExplorer taskId={taskId} />
+        <DocExplorer taskId={taskId} initialDocId={initialDocId} />
       </div>
     </div>
   );

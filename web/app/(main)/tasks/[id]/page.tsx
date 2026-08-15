@@ -310,6 +310,19 @@ function customAgentsOf(items: AgentItem[]): AgentItem[] {
   return items.filter((a) => a.type !== "template");
 }
 
+/** 产出物标题 → 文档站 doc id（与 server DocsMirrorService.toSlug/docIdFor 对齐，is_0000000036）：
+ *  ASCII slug（[a-z0-9-]）；纯中文/空 → 'doc'，追加 artifact id 前 8 位防冲突。 */
+function docIdFor(title: string, artifactId: string): string {
+  const base = String(title ?? "doc")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (base !== "doc") return base;
+  const suffix = String(artifactId).replace(/[^a-z0-9]/gi, "").slice(0, 8);
+  return suffix ? `doc-${suffix}` : "doc";
+}
+
 /** GET /agents 结果 → 角色选择项（按角色去重取首个，顺序对齐 ROLE_KEYS）。 */
 function roleOptionsOf(items: AgentItem[]): AgentOption[] {
   const byRole = new Map<RoleKey, AgentItem>();
@@ -1638,8 +1651,8 @@ function TaskPanel({
   agents: { id: string; name: string; role: RoleKey }[];
   /** 产出物入口：跳项目产出物页 /artifacts?pid= */
   onOpenArtifacts?: () => void;
-  /** 文档站入口（is_0000000024）：跳 /docs/:taskId。 */
-  onOpenDocs?: () => void;
+  /** 文档站入口（is_0000000024/0036）：跳 /docs/:taskId（docSlug 可选，携带则初始定位该文档）。 */
+  onOpenDocs?: (docSlug?: string) => void;
   /** 任务实际产出物列表（GET /tasks/:id/artifacts）。 */
   artifacts: ArtifactItem[];
   artifactsTotal: number;
@@ -1675,13 +1688,13 @@ function TaskPanel({
     [issues],
   );
 
-  /** 产出物条目点击（is_0000000033）：
-   *  - doc → 跳文档站视图 /docs/:taskId（文档站内按 slug 渲染）
+  /** 产出物条目点击（is_0000000033/0036）：
+   *  - doc → 跳文档站视图 /docs/:taskId?doc=<slug>（携带文档标识，文档站初始定位该文档）
    *  - file 带可访问 fileUrl → 新窗口打开/下载（同源 /uploads/ 自动触发下载）
    *  - text 或无 fileUrl → 跳产出物聚合页查看。 */
   const handleArtifactClick = (item: ArtifactItem) => {
     if (item.type === "doc") {
-      onOpenDocs?.();
+      onOpenDocs?.(docIdFor(item.title, item.id));
       return;
     }
     if (item.type === "file" && item.fileUrl) {
@@ -1799,7 +1812,7 @@ function TaskPanel({
             data-testid="task-docs-entry"
             aria-label="文档站"
             title="以文档站视图查看本任务产出物文档"
-            onClick={onOpenDocs}
+            onClick={() => onOpenDocs?.()}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -2930,7 +2943,7 @@ export default function TaskChatPage() {
         onEditTaskInfo={() => setTaskEditOpen(true)}
         width={taskPanel.width}
         onToggleManagedMode={handleToggleManagedMode}
-        onOpenDocs={() => router.push(`/docs/${taskId}`)}
+        onOpenDocs={(docSlug) => router.push(docSlug ? `/docs/${taskId}?doc=${docSlug}` : `/docs/${taskId}`)}
       />
 
       {/* 任务信息编辑弹窗（is_0000000011） */}
