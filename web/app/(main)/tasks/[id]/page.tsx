@@ -1688,12 +1688,14 @@ function TaskPanel({
     [issues],
   );
 
-  /** 产出物条目点击（is_0000000033/0036）：
-   *  - doc → 跳文档站视图 /docs/:taskId?doc=<slug>（携带文档标识，文档站初始定位该文档）
-   *  - file 带可访问 fileUrl → 新窗口打开/下载（同源 /uploads/ 自动触发下载）
+  /** 产出物条目点击（is_0000000033/0036，file 型 .md 并入 is_0000000024 TC-044）：
+   *  - doc 或 file 型 .md（含 .MD/.markdown）→ 跳文档站 /docs/:taskId?doc=<slug>，文档站初始定位该文档
+   *  - 其余 file 带可访问 fileUrl → 新窗口打开/下载（同源 /uploads/ 自动触发下载）
    *  - text 或无 fileUrl → 跳产出物聚合页查看。 */
   const handleArtifactClick = (item: ArtifactItem) => {
-    if (item.type === "doc") {
+    const isMarkdownFile =
+      item.type === "file" && !!item.fileUrl && /\.(md|markdown)$/i.test(item.fileUrl);
+    if (item.type === "doc" || isMarkdownFile) {
       onOpenDocs?.(docIdFor(item.title, item.id));
       return;
     }
