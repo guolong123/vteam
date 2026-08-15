@@ -10,19 +10,15 @@ import { NextRequest, NextResponse } from "next/server";
  * 覆盖路径：
  * - /api/v1/*            → {target}/api/v1/*（透传）
  * - /uploads/*           → {target}/uploads/*（server 静态上传目录）
- * - /docs-site/*         → {target}/api/v1/docs-site/*（文档站，server 控制器）
- * 响应流式透传（SSE 聊天输出/长连接不受影响）；Set-Cookie 完整透传
- * （docs-site 首跳 query token 换 httpOnly cookie 依赖它）。
+ * （is_0000000024 v4：文档站不代理——组件内嵌，registry/prd 经 api.get 直连 server。）
+ * 响应流式透传（SSE 聊天输出/长连接不受影响）；Set-Cookie 完整透传。
  */
 const API_PROXY_TARGET =
   process.env.API_PROXY_TARGET ?? "http://localhost:3000";
 
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
-  const destPath = pathname.startsWith("/docs-site")
-    ? `/api/v1${pathname}`
-    : pathname;
-  const upstreamUrl = new URL(destPath + search, API_PROXY_TARGET);
+  const upstreamUrl = new URL(pathname + search, API_PROXY_TARGET);
 
   // 透传请求头（去掉 host，fetch 按目标地址设置）
   const headers = new Headers(req.headers);
@@ -38,7 +34,7 @@ export async function middleware(req: NextRequest) {
   } as RequestInit);
 
   const resHeaders = new Headers(upstream.headers);
-  // 完整透传 Set-Cookie（docs-site 首跳 query token 换 httpOnly cookie 依赖它）
+  // 完整透传 Set-Cookie（上游会话/鉴权 cookie）
   const setCookies = upstream.headers.getSetCookie?.() ?? [];
   for (const c of setCookies) {
     resHeaders.append("set-cookie", c);
@@ -51,6 +47,6 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/v1/:path*", "/uploads/:path*", "/docs-site/:path*"],
+  matcher: ["/api/v1/:path*", "/uploads/:path*"],
   runtime: "nodejs",
 };

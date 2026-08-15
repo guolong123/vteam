@@ -1,24 +1,23 @@
 "use client";
 
 /**
- * 文档站视图（is_0000000024 · 集成 md-docs 产出物文档查看工具）
+ * 文档站视图（is_0000000024 v4 深度集成）
  * =============================================================
- * 架构决策（art_0000000026 §2-④/§4）：同源代理 + 整页渲染，不用 iframe。
- * - 本页为「薄壳路由」：提供任务上下文（标题 + 返回任务入口），随后整页导航到
- *   server 鉴权同源代理 `/docs-site/:taskId/`（经 next.config.ts rewrites 转发，
- *   同源 cookie/query token 由 server DocsSiteController 校验）。
- * - 鉴权传递：平台认证为 Bearer token（authStore 内存态，非 cookie），浏览器整页
- *   导航无法携带 Authorization 头 → 以 `?token=` query 透传，server docs-site 控制器
- *   从 query 读取（依赖刘二开 server 侧支持 token 读取，见实现说明）。
- * - 整页渲染后 md-docs 自身文档树导航在其页面内；浏览器回退保留任务上下文。
+ * v4（art_0000000039）：组件内嵌 web，无代理/无独立进程/无 query token。
+ * - /docs/[taskId] 直接渲染 DocExplorer（移植自 prototype-viewer）：
+ *   registry（GET /docs-site/:taskId/registry）+ 文档正文（/docs-site/:taskId/prd/<file>）
+ *   均经标准 JWT Authorization（api.get / fetch Bearer 头）；
+ * - 顶部薄壳提供任务上下文（返回任务链接 + 标题）+ 文档站标识；
+ * - 实时性：registry 30s refetchInterval（AC-1 新口径，与 is_0000000020 同模式）。
  */
-import { useEffect, type CSSProperties } from "react";
+import { type CSSProperties } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { api, getAuthToken } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
+import { DocExplorer } from "@/src/components/docs/doc-explorer";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -35,15 +34,6 @@ export default function DocsPage() {
     enabled: !!taskId && !!user?.id,
     retry: false,
   });
-
-  // 整页渲染：挂载后跳转同源 docs-site 代理（任务模式标识 ?task= + token 鉴权，server 控制器校验）
-  useEffect(() => {
-    if (!taskId) return;
-    const token = getAuthToken();
-    const params = new URLSearchParams({ task: taskId });
-    if (token) params.set("token", token);
-    window.location.replace(`/docs-site/${encodeURIComponent(taskId)}/?${params.toString()}`);
-  }, [taskId]);
 
   return (
     <div
@@ -66,6 +56,7 @@ export default function DocsPage() {
           padding: `${space.md}px ${space.xl}px`,
           backgroundColor: "#FFFFFF",
           borderBottom: `1px solid ${neutral[200]}`,
+          flexShrink: 0,
         }}
       >
         <Link
@@ -115,18 +106,9 @@ export default function DocsPage() {
         </span>
       </div>
 
-      {/* 整页渲染中转（跳转 /docs-site/:taskId/ 前短暂展示） */}
-      <div
-        style={{
-          flex: 1,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: neutral[400],
-          fontSize: fontSize.md,
-        }}
-      >
-        正在加载文档站…
+      {/* 文档阅读器（v4 内嵌渲染） */}
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <DocExplorer taskId={taskId} />
       </div>
     </div>
   );
