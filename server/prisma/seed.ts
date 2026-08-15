@@ -461,6 +461,36 @@ async function main() {
     },
   });
 
+  // vteam-api MCP Server（Swagger-MCP 阶段 2）：与 vteam 同源（同一 server 侧进程），
+  // 将 Swagger 文档转译出的 REST 端点经 JSON-RPC 暴露为 MCP 工具（路径 /api/v1/vteam-api/mcp）。
+  // url 从 platformMcpUrl 推导：去掉 /api/v1/platform-mcp 后缀取基址，再拼上 vteam-api 路径；
+  // headers 同 vteam，用 {env:...} 引用（worker 注入器解析 X_WORKER_TOKEN/WORKER_ID 注入鉴权头）。
+  const vteamApiUrl = `${platformMcpUrl.replace(/\/api\/v1\/platform-mcp$/, '')}/api/v1/vteam-api/mcp`;
+
+  await prisma.mcpServer.upsert({
+    where: { name: 'vteam-api' },
+    update: {
+      type: 'remote',
+      url: vteamApiUrl,
+      headers: {
+        'x-worker-token': '{env:X_WORKER_TOKEN}',
+        'x-worker-id': '{env:WORKER_ID}',
+      },
+      enabled: true,
+    },
+    create: {
+      id: 'ms_vteam_api',
+      name: 'vteam-api',
+      type: 'remote',
+      url: vteamApiUrl,
+      headers: {
+        'x-worker-token': '{env:X_WORKER_TOKEN}',
+        'x-worker-id': '{env:WORKER_ID}',
+      },
+      enabled: true,
+    },
+  });
+
   // vteam 的 MCP 工具（阶段 2）：注册 tools 表 source=mcp 行，
   // 前端「技能与工具」页 MCP 工具子 Tab 按 source=mcp 过滤渲染。
   // action 为 platform-mcp 端点 tools/list 的 tool 名（命名 <server>_<action>），
