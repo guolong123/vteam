@@ -78,6 +78,7 @@ describe('ResourceInjector.injectSkills', () => {
     const injector = new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
+      workerId: 'w_test',
       workDir,
       fetchImpl,
     });
@@ -133,6 +134,7 @@ describe('ResourceInjector.injectTools', () => {
     const injector = new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
+      workerId: 'w_test',
       workDir,
       fetchImpl,
     });
@@ -173,6 +175,7 @@ describe('ResourceInjector.injectTools', () => {
     const injector = new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
+      workerId: 'w_test',
       workDir,
       fetchImpl,
     });
@@ -222,6 +225,7 @@ describe('ResourceInjector.injectMcp', () => {
     const injector = new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
+      workerId: 'w_test',
       workDir,
       fetchImpl,
     });
@@ -279,6 +283,7 @@ describe('ResourceInjector.injectMcp', () => {
     const injector = new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
+      workerId: 'w_test',
       workDir,
       fetchImpl,
     });
@@ -322,6 +327,7 @@ describe('ResourceInjector.injectMcp', () => {
     const injectorA = new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
+      workerId: 'w_test',
       workDir,
       fetchImpl: fetchA,
     });
@@ -342,6 +348,7 @@ describe('ResourceInjector.injectMcp', () => {
     const injectorB = new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
+      workerId: 'w_test',
       workDir,
       fetchImpl: fetchB,
     });
@@ -368,6 +375,7 @@ describe('ResourceInjector.injectMcp', () => {
     const injector = new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
+      workerId: 'w_test',
       workDir,
       fetchImpl,
     });
@@ -409,6 +417,7 @@ describe('ResourceInjector.injectMcp', () => {
     const injector = new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
+      workerId: 'w_test',
       workDir,
       fetchImpl,
     });
@@ -469,6 +478,7 @@ describe('ResourceInjector.injectMcp', () => {
     const injector = new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
+      workerId: 'w_test',
       workDir,
       fetchImpl,
     });
@@ -495,6 +505,7 @@ describe('ResourceInjector 清理与组合', () => {
     const injectorA = new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
+      workerId: 'w_test',
       workDir,
       fetchImpl: fetchA,
     });
@@ -509,6 +520,7 @@ describe('ResourceInjector 清理与组合', () => {
     const injectorB = new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
+      workerId: 'w_test',
       workDir,
       fetchImpl: fetchB,
     });
@@ -530,6 +542,7 @@ describe('ResourceInjector 清理与组合', () => {
     const injector = new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
+      workerId: 'w_test',
       workDir,
       fetchImpl,
     });

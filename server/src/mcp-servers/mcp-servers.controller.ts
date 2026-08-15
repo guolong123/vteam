@@ -7,8 +7,10 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import { Request } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
 import { AdminGuard } from '../users/admin.guard';
@@ -36,13 +38,16 @@ export class McpServersController {
    * 服务器列表（type/enabled 过滤 + name 搜索 + 分页，成员只读）。
    * GET /api/v1/mcp-servers?type=remote&enabled=true&name=gitee&page=1&pageSize=20
    *   → 200 {items, total, page, pageSize}
+   * worker 拉取（X-Worker-Token）带 x-worker-id：按该 worker 上报的 mcpUrl 覆盖
+   * 内置 keta-platform 地址（集群外 worker 场景，见 McpServersService.findAll）。
    */
   @Public()
   @UseGuards(WorkerOrJwtGuard)
   @Get()
   @ApiOperation({ summary: 'MCP 服务器列表（type/enabled 过滤 + 分页）' })
-  findAll(@Query() query: QueryMcpServersDto) {
-    return this.mcpServersService.findAll(query);
+  findAll(@Query() query: QueryMcpServersDto, @Req() req: Request) {
+    const workerId = req.headers['x-worker-id'] as string | undefined;
+    return this.mcpServersService.findAll(query, workerId);
   }
 
   /** GET /api/v1/mcp-servers/:id → 200 + McpServer；不存在 → 404。 */

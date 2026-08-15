@@ -37,6 +37,8 @@ export interface ResourceInjectorOptions {
   serverUrl: string;
   /** X-Worker-Token 鉴权 token（config.workerToken）。 */
   workerToken: string;
+  /** worker 全局唯一 id（config.workerId；拉取时带 x-worker-id，server 按 worker 覆盖内置 MCP 地址）。 */
+  workerId: string;
   /** opencode serve 工作目录（注入落点根）。 */
   workDir: string;
   /** fetch 注入点（测试用）；默认 globalThis.fetch。 */
@@ -90,6 +92,7 @@ const INVALID_FILE_CHARS = /[^a-z0-9-_.]/g;
 export class ResourceInjector {
   private readonly serverUrl: string;
   private readonly workerToken: string;
+  private readonly workerId: string;
   private readonly workDir: string;
   private readonly fetchImpl: typeof fetch;
   private readonly logger?: ResourceLogger;
@@ -97,6 +100,7 @@ export class ResourceInjector {
   constructor(options: ResourceInjectorOptions) {
     this.serverUrl = options.serverUrl.replace(/\/+$/, '');
     this.workerToken = options.workerToken;
+    this.workerId = options.workerId;
     this.workDir = options.workDir;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.logger = options.logger;
@@ -217,7 +221,11 @@ export class ResourceInjector {
     const qs = new URLSearchParams(query).toString();
     const url = apiUrl(this.serverUrl, `${pathname}?${qs}`);
     const response = await this.fetchImpl(url, {
-      headers: { [WORKER_TOKEN_HEADER]: this.workerToken },
+      headers: {
+        [WORKER_TOKEN_HEADER]: this.workerToken,
+        // 携带 worker 身份：server 按 worker.capabilities.mcpUrl 覆盖内置 keta-platform 地址
+        'x-worker-id': this.workerId,
+      },
     });
     if (!response.ok) {
       throw new Error(

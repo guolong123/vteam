@@ -36,6 +36,14 @@ export interface WorkerConfig {
   /** C2：worker 默认模型（env WORKER_DEFAULT_MODEL，id 格式 providerID/modelID）；未设 = 不指定（serve 默认） */
   defaultModelId?: string;
   /**
+   * 内置 keta-platform MCP 地址覆盖（env WORKER_MCP_URL，可选）。
+   * 默认取 server 下发的 mcp_servers.url（seed 的 PLATFORM_MCP_URL）——K8s 内为
+   * 集群服务名（http://vteam-server:3000/api/v1/platform-mcp），集群外 worker 无法
+   * 解析。注册时上报本值（capabilities.mcpUrl），server 在 worker 拉取 mcp-servers
+   * 时按 worker 覆盖内置地址下发。未设置 = 用全局地址。
+   */
+  mcpUrl?: string;
+  /**
    * T10：执行端点端口（env WORKER_EXEC_PORT，node:http POST /execute，与 serve 端口解耦）。
    * 随注册 capabilities.execPort 上报，server 据此发现执行端点；默认 4198。
    */
@@ -109,6 +117,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     workerAdvertiseHost: (env.WORKER_ADVERTISE_HOST ?? '').trim() || 'http://127.0.0.1',
     opencodeServeHostname: (env.OPENCODE_SERVE_HOSTNAME ?? '').trim() || '127.0.0.1',
     defaultModelId: (env.WORKER_DEFAULT_MODEL ?? '').trim() || undefined,
+    mcpUrl: (env.WORKER_MCP_URL ?? '').trim() || undefined,
     workerExecPort: parseNonNegativeInt('WORKER_EXEC_PORT', env.WORKER_EXEC_PORT, 4198),
     workerFirstTokenTimeoutMs: parseNonNegativeInt(
       'WORKER_FIRST_TOKEN_TIMEOUT_MS',

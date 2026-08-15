@@ -223,10 +223,17 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
   async register(workerToken: string, dto: RegisterWorkerDto) {
     const tokenHash = await bcrypt.hash(workerToken, WORKER_TOKEN_BCRYPT_ROUNDS);
     const now = new Date();
+    // mcpUrl：worker 上报的内置 keta-platform MCP 地址覆盖（集群外 worker 用它替代
+    // seed 的 PLATFORM_MCP_URL 内网名）；合并进 capabilities Json（不新增 DB 列），
+    // McpServersService.findAll 按 x-worker-id 读取并覆盖内置 server url 下发。
+    const capabilities = {
+      ...(dto.capabilities as unknown as Record<string, unknown>),
+      ...(dto.mcpUrl ? { mcpUrl: dto.mcpUrl } : {}),
+    };
     const data = {
       name: dto.name ?? null,
       opencodeVersion: dto.opencodeVersion,
-      capabilities: dto.capabilities as unknown as Prisma.InputJsonValue,
+      capabilities: capabilities as Prisma.InputJsonValue,
       load: dto.load as unknown as Prisma.InputJsonValue,
       // C2：worker 上报默认模型——仅显式提供时更新（旧 worker 不携带时保留已有值，不误清 C8/PATCH 配置）
       ...(dto.defaultModelId !== undefined

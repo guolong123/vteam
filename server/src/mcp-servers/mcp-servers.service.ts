@@ -106,8 +106,11 @@ export class McpServersService implements OnModuleInit {
 
   /** GET /mcp-servers：type/enabled 过滤 + name 模糊搜索 + 分页（成员只读可见）。
    * 返回 {items, total, page, pageSize}（对齐 tools.findAll 模式）。
+   * workerId（worker 拉取时带 x-worker-id）：若该 worker 注册时上报了 mcpUrl
+   * （capabilities.mcpUrl，集群外 worker 覆盖内置 keta-platform 的地址），
+   * 返回列表中对内置 keta-platform 条目覆盖 url；未上报/用户侧访问不覆盖。
    */
-  async findAll(query: QueryMcpServersDto = {}) {
+  async findAll(query: QueryMcpServersDto = {}, workerId?: string) {
     const page = this.normalizePage(query.page);
     const pageSize = this.normalizePageSize(query.pageSize);
     const where: Prisma.McpServerWhereInput = {
@@ -126,8 +129,33 @@ export class McpServersService implements OnModuleInit {
       }),
     ]);
 
+    let items = rows.map((row) => this.withStatus(row));
+
+    // 按 worker 覆盖内置 keta-platform 的地址（集群外 worker 场景：seed 的
+    // PLATFORM_MCP_URL 是 K8s 内网服务名，集群外解析失败）
+    if (workerId) {
+      const worker = await this.prisma.worker.findUnique({
+        where: { id: workerId },
+        select: { capabilities: true },
+      });
+      const caps =
+        worker?.capabilities &&
+        typeof worker.capabilities === 'object' &&
+        !Array.isArray(worker.capabilities)
+          ? (worker.capabilities as Record<string, unknown>)
+          : {};
+      const mcpUrl = typeof caps.mcpUrl === 'string' ? caps.mcpUrl : undefined;
+      if (mcpUrl) {
+        items = items.map((s) =>
+          s.name === 'keta-platform' && s.type === 'remote'
+            ? { ...s, url: mcpUrl }
+            : s,
+        );
+      }
+    }
+
     return {
-      items: rows.map((row) => this.withStatus(row)),
+      items,
       total,
       page,
       pageSize,

@@ -98,4 +98,9 @@ export class RegisterWorkerDto {
   @IsOptional()
   @IsString()
   defaultModelId?: string;
+
+  @ApiPropertyOptional({ description: '内置 keta-platform MCP 地址覆盖（env WORKER_MCP_URL；集群外 worker 用它覆盖 seed 的 PLATFORM_MCP_URL）' })
+  @IsOptional()
+  @IsString()
+  mcpUrl?: string;
 }

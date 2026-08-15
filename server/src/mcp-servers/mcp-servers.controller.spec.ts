@@ -65,9 +65,9 @@ describe('McpServersController', () => {
       page: 1,
       pageSize: 20,
     };
-    const result = await controller.findAll(query);
+    const result = await controller.findAll(query, { headers: {} } as never);
 
-    expect(service.findAll).toHaveBeenCalledWith(query);
+    expect(service.findAll).toHaveBeenCalledWith(query, undefined);
     expect(result).toMatchObject({ items, total: 1, page: 1, pageSize: 20 });
   });
 
