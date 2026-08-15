@@ -1621,8 +1621,35 @@ describe('PlatformMcpService', () => {
         taskId,
         'is_0000000001',
         'start',
+        undefined,
       );
       expect(out).toMatchObject({ status: 'in_progress' });
+    });
+
+    it('issue_transition：reject 携带 reason 透传（is_0000000013）', async () => {
+      allowWorker();
+      issuesService.transitionByAgent.mockResolvedValue({
+        ...issueDto,
+        status: 'rejected',
+        rejectReason: '原因',
+      });
+
+      const out = await service.issueTransition(ctx, {
+        taskId,
+        selfInstanceId: senderInstanceId,
+        issueId: 'is_0000000001',
+        action: 'reject',
+        reason: '原因',
+      });
+
+      expect(issuesService.transitionByAgent).toHaveBeenCalledWith(
+        senderInstanceId,
+        taskId,
+        'is_0000000001',
+        'reject',
+        '原因',
+      );
+      expect(out).toMatchObject({ status: 'rejected', rejectReason: '原因' });
     });
 
     it('issue_transition：归属校验失败（selfInstanceId 冒充）→ 403，不触达 transitionByAgent', async () => {

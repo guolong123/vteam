@@ -319,18 +319,41 @@ model Issue {
   deletedAt       DateTime? @map("deleted_at")
   resolvedAt      DateTime? @map("resolved_at")
   closedAt        DateTime? @map("closed_at")
+  // 拒绝处理态（is_0000000013）：reject 流转必填原因，落 rejectReason；reopen 回 open 时清空
+  rejectReason    String?   @map("reject_reason")
+  rejectedAt      DateTime? @map("rejected_at")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  task          Task    @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  assigneeAgent Agent?  @relation("IssueAssigneeAgent", fields: [assigneeAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  assigneeUser  User?   @relation("IssueAssigneeUser", fields: [assigneeUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  creatorAgent  Agent?  @relation("IssueCreatorAgent", fields: [creatorAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  creatorUser   User?   @relation("IssueCreatorUser", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  task          Task            @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assigneeAgent Agent?          @relation("IssueAssigneeAgent", fields: [assigneeAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assigneeUser  User?           @relation("IssueAssigneeUser", fields: [assigneeUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  creatorAgent  Agent?          @relation("IssueCreatorAgent", fields: [creatorAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  creatorUser   User?           @relation("IssueCreatorUser", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  activities    IssueActivity[]
 
   @@index([taskId, status], map: "idx_issues_task_status")
   @@index([assigneeAgentId], map: "idx_issues_assignee_agent")
   @@map("issues")
+}
+
+// issue 操作记录（is_0000000013）：状态流转/编辑/创建轨迹，含操作人（user 走 userId，agent 走实例 id）
+model IssueActivity {
+  id         String    @id
+  issueId    String    @map("issue_id")
+  action     String // create | update | transition
+  fromStatus String?   @map("from_status")
+  toStatus   String?   @map("to_status")
+  actorType  String    @map("actor_type") // user | agent
+  actorId    String?   @map("actor_id") // userId 或 agent 实例 id（ta_）
+  instanceId String?   @map("instance_id") // agent 操作时的 ta_ 实例 id
+  metadata   Json? // { reason? }（拒绝原因）/ { fields? }（编辑变更字段，可选）
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([issueId, createdAt], map: "idx_issue_activities_issue_time")
+  @@map("issue_activities")
 }
 
 // ==================================================================

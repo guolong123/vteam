@@ -44,12 +44,13 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /* ------------------------------ 页面内扩展 token（仿原型范式，不写 tokens.ts） ------------------------------ */
 
-/** Issue 状态四色：open=灰蓝 / in_progress=蓝 / resolved=绿 / closed=灰（独立于任务四态语义）。 */
+/** Issue 状态五色：open=灰蓝 / in_progress=蓝 / resolved=绿 / closed=灰 / rejected=红（独立于任务态语义）。 */
 const ISSUE_STATUS_THEME: Record<IssueStatus, { label: string; color: string; bg: string; border: string }> = {
   open: { label: "待处理", color: "#475569", bg: "#F8FAFC", border: "#CBD5E1" },
   in_progress: { label: "进行中", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
   resolved: { label: "已解决", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
   closed: { label: "已关闭", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+  rejected: { label: "已拒绝", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
 };
 
 /** tags 标签徽章多彩循环色板（需求/缺陷/优化 等自由标签按 index 循环取色）。 */
@@ -652,6 +653,7 @@ const STATUS_FILTERS: { key: StatusFilterKey; label: string }[] = [
   { key: "in_progress", label: "进行中" },
   { key: "resolved", label: "已解决" },
   { key: "closed", label: "已关闭" },
+  { key: "rejected", label: "已拒绝" },
 ];
 
 export default function IssuesPage() {

@@ -25,13 +25,34 @@ import type {
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-/** Issue 状态徽章（对齐 issues 页 ISSUE_STATUS_THEME）。 */
+/** Issue 状态徽章（对齐 issues 页 ISSUE_STATUS_THEME；is_0000000013 增 rejected 主题）。 */
 const ISSUE_STATUS_THEME: Record<IssueStatus, { label: string; color: string; bg: string; border: string }> = {
   open: { label: "待处理", color: "#475569", bg: "#F8FAFC", border: "#CBD5E1" },
   in_progress: { label: "进行中", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
   resolved: { label: "已解决", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
   closed: { label: "已关闭", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+  rejected: { label: "已拒绝", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
 };
+
+/** 操作记录动作中文文案（is_0000000013）。 */
+const ACTIVITY_ACTION_LABEL: Record<string, string> = {
+  create: "创建",
+  update: "编辑",
+  transition: "状态流转",
+};
+
+/** 操作记录状态中文（缺省原值）。 */
+function statusLabel(status: string | null): string {
+  if (!status) return "—";
+  const map: Record<string, string> = {
+    open: "待处理",
+    in_progress: "进行中",
+    resolved: "已解决",
+    closed: "已关闭",
+    rejected: "已拒绝",
+  };
+  return map[status] ?? status;
+}
 
 /** 状态徽章（对齐 issues 页 IssueStatusBadge 视觉）。 */
 function IssueStatusBadge({ status }: { status: IssueStatus }) {
@@ -407,6 +428,96 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
               <span data-testid="issue-detail-created-at">{formatTime(issue.createdAt)}</span>
               <span aria-hidden style={{ color: neutral[300] }}>·</span>
               <span data-testid="issue-detail-task">{issue.taskTitle ?? issue.taskId}</span>
+            </div>
+
+            {/* 拒绝原因（is_0000000013：status=rejected 时展示拒绝信息） */}
+            {issue.status === "rejected" && (
+              <div
+                data-testid="issue-detail-reject-reason"
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: space.xs,
+                  padding: `${space.md}px ${space.lg}px`,
+                  borderRadius: radius.md,
+                  backgroundColor: "#FEF2F2",
+                  border: `1px solid #FECACA`,
+                }}
+              >
+                <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: "#B91C1C" }}>
+                  拒绝原因
+                </div>
+                <div style={{ fontSize: fontSize.md, color: neutral[700], whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.6 }}>
+                  {issue.rejectReason || <span style={{ color: neutral[400] }}>—</span>}
+                </div>
+                <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
+                  {formatTime(issue.rejectedAt)}
+                </div>
+              </div>
+            )}
+
+            {/* 操作记录（is_0000000013：每次操作含操作人） */}
+            <div style={{ paddingTop: space.md, borderTop: `1px solid ${neutral[200]}` }}>
+              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600], marginBottom: space.sm }}>
+                操作记录 · {issue.activities.length}
+              </div>
+              {issue.activities.length > 0 ? (
+                <div data-testid="issue-detail-activities" style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+                  {issue.activities.map((act) => (
+                    <div
+                      key={act.id}
+                      data-testid="issue-detail-activity"
+                      data-action={act.action}
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: space.sm,
+                        padding: `${space.sm + 1}px ${space.md}px`,
+                        borderRadius: radius.md,
+                        backgroundColor: neutral[50],
+                        border: `1px solid ${neutral[200]}`,
+                        fontSize: fontSize.sm,
+                      }}
+                    >
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 7,
+                          height: 7,
+                          borderRadius: "50%",
+                          backgroundColor:
+                            act.action === "transition"
+                              ? "#2563EB"
+                              : act.action === "update"
+                                ? "#D97706"
+                                : "#059669",
+                          flexShrink: 0,
+                          marginTop: 5,
+                        }}
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap", color: neutral[700] }}>
+                          <span style={{ fontWeight: 600 }}>{act.actorName || act.actorId || "—"}</span>
+                          <span style={{ color: neutral[400] }}>{ACTIVITY_ACTION_LABEL[act.action] ?? act.action}</span>
+                          {act.action === "transition" && (
+                            <span style={{ color: neutral[500] }}>
+                              {statusLabel(act.fromStatus)} → {statusLabel(act.toStatus)}
+                            </span>
+                          )}
+                          <span style={{ color: neutral[400], marginLeft: "auto" }}>{formatTime(act.createdAt)}</span>
+                        </div>
+                        {act.action === "transition" && act.metadata && typeof act.metadata.reason === "string" && (
+                          <div style={{ color: neutral[500], marginTop: 2, lineHeight: 1.5 }}>
+                            原因：{act.metadata.reason}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: fontSize.sm, color: neutral[400] }}>暂无操作记录</div>
+              )}
             </div>
 
             {/* 状态流转操作区 */}

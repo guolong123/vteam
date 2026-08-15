@@ -16,7 +16,7 @@
  * 行内横向小按钮（列表行操作列，区别于看板卡片竖向 TaskStatusActions）。
  * data-testid：issue-transition-<action>。
  */
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -41,15 +41,16 @@ const ACTION_SETS: Record<IssueStatus, IssueAction[]> = {
   in_progress: ["resolve", "reject"],
   resolved: ["close"],
   closed: ["reopen"],
+  rejected: ["reopen"],
 };
 
-/** 动作元信息：按钮文案 / 强调色。颜色对齐 issue 状态语义（开始蓝/解决绿/关闭灰/重开琥珀/退回琥珀）。 */
+/** 动作元信息：按钮文案 / 强调色。颜色对齐 issue 状态语义（开始蓝/解决绿/关闭灰/重开琥珀/拒绝红）。 */
 const ACTION_META: Record<IssueAction, { label: string; color: string; pendingLabel: string }> = {
   start: { label: "开始处理", color: "#2563EB", pendingLabel: "处理中…" },
   resolve: { label: "标记解决", color: "#059669", pendingLabel: "解决中…" },
   close: { label: "关闭", color: "#64748B", pendingLabel: "关闭中…" },
   reopen: { label: "重新打开", color: "#D97706", pendingLabel: "重开中…" },
-  reject: { label: "退回", color: "#D97706", pendingLabel: "退回中…" },
+  reject: { label: "拒绝处理", color: "#DC2626", pendingLabel: "提交中…" },
 };
 
 /**
@@ -58,9 +59,14 @@ const ACTION_META: Record<IssueAction, { label: string; color: string; pendingLa
  */
 export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusActionsProps) {
   const queryClient = useQueryClient();
+  // 拒绝处理原因输入（is_0000000013：reject 必填原因）
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [reasonError, setReasonError] = useState<string | null>(null);
+
   const transitionMutation = useMutation({
-    mutationFn: (action: TransitionIssuePayload["action"]) =>
-      api.post(`/issues/${issueId}/transition`, { action } satisfies TransitionIssuePayload),
+    mutationFn: (payload: TransitionIssuePayload) =>
+      api.post(`/issues/${issueId}/transition`, payload),
     onSettled: () => {
       // 列表（["issues", ...]）缓存失效重取，按钮随新状态重渲染
       queryClient.invalidateQueries({ queryKey: ["issues"] });
@@ -75,6 +81,28 @@ export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusAc
     : transitionMutation.isError
       ? "操作失败，请稍后重试"
       : null;
+
+  /** 动作点击：reject 先弹原因输入，其余直接流转。 */
+  const handleAction = (action: IssueAction) => {
+    if (action === "reject") {
+      setRejectReason("");
+      setReasonError(null);
+      setRejectOpen(true);
+      return;
+    }
+    transitionMutation.mutate({ action });
+  };
+
+  /** 拒绝确认：原因必填（trim 非空）→ 提交 {action:'reject', reason}。 */
+  const confirmReject = () => {
+    const reason = rejectReason.trim();
+    if (!reason) {
+      setReasonError("请填写拒绝原因");
+      return;
+    }
+    setReasonError(null);
+    transitionMutation.mutate({ action: "reject", reason });
+  };
 
   return (
     <div
@@ -97,7 +125,7 @@ export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusAc
             disabled={pending}
             onClick={(e) => {
               e.stopPropagation();
-              transitionMutation.mutate(action);
+              handleAction(action);
             }}
             style={{
               display: "inline-flex",
@@ -132,6 +160,95 @@ export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusAc
       )}
       {actions.length === 0 && (
         <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>无可用操作</span>
+      )}
+
+      {/* 拒绝原因输入（reject 必填，is_0000000013） */}
+      {rejectOpen && (
+        <div
+          data-testid="issue-reject-panel"
+          style={{
+            flexBasis: "100%",
+            display: "flex",
+            flexDirection: "column",
+            gap: space.sm,
+            padding: space.md,
+            borderRadius: radius.md,
+            backgroundColor: "#FEF2F2",
+            border: `1px solid #FECACA`,
+          }}
+        >
+          <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: "#B91C1C" }}>
+            拒绝处理
+          </div>
+          <textarea
+            data-testid="issue-reject-reason-input"
+            value={rejectReason}
+            rows={2}
+            maxLength={512}
+            placeholder="请填写拒绝原因（必填，如：方案不满足验收口径，需返工）"
+            onChange={(e) => setRejectReason(e.target.value)}
+            disabled={pending}
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              padding: `${space.sm}px ${space.md}px`,
+              borderRadius: radius.sm,
+              border: `1px solid ${reasonError ? "#DC2626" : "#FECACA"}`,
+              backgroundColor: "#FFFFFF",
+              fontSize: fontSize.md,
+              color: neutral[800],
+              outline: "none",
+              resize: "vertical",
+              fontFamily: fontFamily.body,
+            }}
+          />
+          {reasonError && (
+            <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", fontWeight: 500 }}>
+              {reasonError}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: space.sm, justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              data-testid="issue-reject-cancel"
+              onClick={() => setRejectOpen(false)}
+              disabled={pending}
+              style={{
+                padding: `${space.xs}px ${space.md}px`,
+                borderRadius: radius.pill,
+                border: `1px solid #FECACA`,
+                backgroundColor: "#FFFFFF",
+                color: neutral[600],
+                fontSize: fontSize.sm,
+                fontWeight: 500,
+                cursor: pending ? "default" : "pointer",
+                fontFamily: fontFamily.body,
+              }}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              data-testid="issue-reject-confirm"
+              onClick={confirmReject}
+              disabled={pending}
+              style={{
+                padding: `${space.xs}px ${space.md}px`,
+                borderRadius: radius.pill,
+                border: "none",
+                backgroundColor: "#DC2626",
+                color: "#FFFFFF",
+                fontSize: fontSize.sm,
+                fontWeight: 500,
+                cursor: pending ? "default" : "pointer",
+                opacity: pending ? 0.6 : 1,
+                fontFamily: fontFamily.body,
+              }}
+            >
+              {pending ? "提交中…" : "确认拒绝"}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

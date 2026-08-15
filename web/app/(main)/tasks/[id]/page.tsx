@@ -149,7 +149,7 @@ interface TaskIssueItem {
   id: string;
   taskId: string;
   title: string;
-  status: "open" | "in_progress" | "resolved" | "closed";
+  status: "open" | "in_progress" | "resolved" | "closed" | "rejected";
 }
 
 /** GET /issues?taskId= 分页响应（TaskPanel 待办 Issue 区）。 */
@@ -160,12 +160,13 @@ interface TaskIssuesResponse {
   pageSize: number;
 }
 
-/** issue 状态排序优先级（待办在前：open < in_progress < resolved < closed）。 */
+/** issue 状态排序优先级（待办在前：open < in_progress < resolved < closed < rejected）。 */
 const ISSUE_STATUS_ORDER: Record<TaskIssueItem["status"], number> = {
   open: 0,
   in_progress: 1,
   resolved: 2,
   closed: 3,
+  rejected: 4,
 };
 
 /** issue 状态徽章主题（语义对齐 issues 页 ISSUE_STATUS_THEME，面板内小号渲染）。 */
@@ -174,6 +175,7 @@ const ISSUE_STATUS_BADGE: Record<TaskIssueItem["status"], { label: string; color
   in_progress: { label: "进行中", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
   resolved: { label: "已解决", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
   closed: { label: "已关闭", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+  rejected: { label: "已拒绝", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
 };
 
 /** 待办 Issue 区状态小徽章（title 旁展示状态语义）。 */

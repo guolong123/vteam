@@ -1,12 +1,12 @@
 /**
- * Issue 域常量（issue-management plan todo 2）。
+ * Issue 域常量（issue-management plan todo 2；is_0000000013 增 rejected 态）。
  *
- * 状态机 open/in_progress/resolved/closed（四态，无跳态），迁移表驱动判定：
+ * 状态机 open/in_progress/resolved/closed/rejected（五态，无跳态），迁移表驱动判定：
  * - start：open → in_progress（开始处理）
  * - resolve：in_progress → resolved（处理完成）
  * - close：resolved → closed（验收关闭）
- * - reopen：closed → open（关闭后重开）
- * - reject：in_progress → open（处理被驳回，唯一「后退」动作）
+ * - reopen：closed/rejected → open（关闭或拒绝处理后重新打开）
+ * - reject：in_progress → rejected（拒绝处理，必填原因，独立态非退回）
  * 非法迁移 409 `ISSUE_INVALID_TRANSITION`，已处目标态幂等返回 200。
  */
 
@@ -15,17 +15,18 @@ export const ISSUE_STATUS = {
   in_progress: 'in_progress',
   resolved: 'resolved',
   closed: 'closed',
+  rejected: 'rejected',
 } as const;
 
 export type IssueStatus = (typeof ISSUE_STATUS)[keyof typeof ISSUE_STATUS];
 
-/** 合法迁移表（仿 task.constants TASK_TRANSITIONS：动作 → { from, to }）。 */
+/** 合法迁移表（仿 task.constants TASK_TRANSITIONS：动作 → { from[], to }；from 支持多来源）。 */
 export const ISSUE_TRANSITIONS = {
-  start: { from: ISSUE_STATUS.open, to: ISSUE_STATUS.in_progress },
-  resolve: { from: ISSUE_STATUS.in_progress, to: ISSUE_STATUS.resolved },
-  close: { from: ISSUE_STATUS.resolved, to: ISSUE_STATUS.closed },
-  reopen: { from: ISSUE_STATUS.closed, to: ISSUE_STATUS.open },
-  reject: { from: ISSUE_STATUS.in_progress, to: ISSUE_STATUS.open },
+  start: { from: [ISSUE_STATUS.open], to: ISSUE_STATUS.in_progress },
+  resolve: { from: [ISSUE_STATUS.in_progress], to: ISSUE_STATUS.resolved },
+  close: { from: [ISSUE_STATUS.resolved], to: ISSUE_STATUS.closed },
+  reopen: { from: [ISSUE_STATUS.closed, ISSUE_STATUS.rejected], to: ISSUE_STATUS.open },
+  reject: { from: [ISSUE_STATUS.in_progress], to: ISSUE_STATUS.rejected },
 } as const;
 
 export type IssueTransitionAction = keyof typeof ISSUE_TRANSITIONS;
@@ -47,4 +48,6 @@ export const ISSUE_ERRORS = {
   ISSUE_FILTER_REQUIRED: 'ISSUE_FILTER_REQUIRED',
   /** GET /issues projectId 路径项目不存在（404）。 */
   PROJECT_NOT_FOUND: 'PROJECT_NOT_FOUND',
+  /** reject 流转缺拒绝原因（400，is_0000000013）。 */
+  ISSUE_REJECT_REASON_REQUIRED: 'ISSUE_REJECT_REASON_REQUIRED',
 } as const;

@@ -583,7 +583,7 @@ export class PlatformMcpService {
     );
   }
 
-  /** issue_transition：状态流转。三参数归属校验 → IssuesService.transitionByAgent。 */
+  /** issue_transition：状态流转（reject 时 reason 必填，透传服务层校验）。三参数归属校验 → IssuesService.transitionByAgent。 */
   async issueTransition(
     ctx: PlatformMcpContext,
     args: {
@@ -591,6 +591,7 @@ export class PlatformMcpService {
       selfInstanceId: string;
       issueId: string;
       action: IssueTransitionAction;
+      reason?: string;
     },
   ) {
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
@@ -599,6 +600,7 @@ export class PlatformMcpService {
       args.taskId,
       args.issueId,
       args.action,
+      args.reason,
     );
   }
 

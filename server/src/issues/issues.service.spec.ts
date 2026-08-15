@@ -18,6 +18,8 @@ const makeRow = (over: Record<string, any> = {}) => ({
   deletedAt: null,
   resolvedAt: null,
   closedAt: null,
+  rejectReason: null,
+  rejectedAt: null,
   createdAt: FIXED_DATE,
   updatedAt: FIXED_DATE,
   task: { title: '测试任务' },
@@ -25,6 +27,7 @@ const makeRow = (over: Record<string, any> = {}) => ({
   assigneeUser: null,
   creatorAgent: null,
   creatorUser: { username: 'admin' },
+  activities: [],
   ...over,
 });
 
@@ -47,8 +50,16 @@ describe('IssuesService', () => {
       project: { findUnique: jest.fn() },
       projectMember: { findUnique: jest.fn() },
       taskAgent: { findUnique: jest.fn(), findFirst: jest.fn() },
-      // findAll 用数组形式 $transaction([count, findMany])
-      $transaction: jest.fn((ops: any[]) => Promise.all(ops)),
+      issueActivity: {
+        create: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      user: { findMany: jest.fn() },
+      agent: { findMany: jest.fn() },
+      // findAll 用数组形式 $transaction([count, findMany])；写路径用回调形式 $transaction(async tx => ...)
+      $transaction: jest.fn(async (arg: any) =>
+        typeof arg === 'function' ? arg(prisma) : Promise.all(arg),
+      ),
     };
     idGen = {
       nextId: jest.fn(async (prefix: string) => `${prefix}_0000000001`),
@@ -605,21 +616,89 @@ describe('IssuesService', () => {
       );
     });
 
-    it('reject：in_progress → open（resolvedAt 清空）', async () => {
+    it('reject：in_progress → rejected（rejectReason 必填 + rejectedAt 置 now，is_0000000013）', async () => {
       prisma.issue.findUnique.mockResolvedValue(
-        makeRow({ status: 'in_progress', resolvedAt: FIXED_DATE }),
+        makeRow({ status: 'in_progress' }),
       );
       memberOk();
       prisma.issue.update.mockResolvedValue(
-        makeRow({ status: 'open', resolvedAt: null }),
+        makeRow({ status: 'rejected', rejectReason: '测试原因', rejectedAt: FIXED_DATE }),
       );
 
-      await service.transition('is_0000000001', 'u_admin', { action: 'reject' });
+      const out = await service.transition('is_0000000001', 'u_admin', {
+        action: 'reject',
+        reason: ' 测试原因 ',
+      });
+      expect(prisma.issue.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'rejected',
+            rejectReason: '测试原因', // trim 后
+            rejectedAt: expect.any(Date),
+          }),
+        }),
+      );
+      expect(out.status).toBe('rejected');
+    });
+
+    it('reject 缺原因 → 400 ISSUE_REJECT_REASON_REQUIRED（不落更新）', async () => {
+      prisma.issue.findUnique.mockResolvedValue(
+        makeRow({ status: 'in_progress' }),
+      );
+      memberOk();
+      await expect(
+        service.transition('is_0000000001', 'u_admin', { action: 'reject' }),
+      ).rejects.toMatchObject({
+        response: { code: 'ISSUE_REJECT_REASON_REQUIRED' },
+      });
+      expect(prisma.issue.update).not.toHaveBeenCalled();
+    });
+
+    it('reopen：rejected → open（清 rejectReason/rejectedAt，is_0000000013）', async () => {
+      prisma.issue.findUnique.mockResolvedValue(
+        makeRow({ status: 'rejected', rejectReason: '原因', rejectedAt: FIXED_DATE }),
+      );
+      memberOk();
+      prisma.issue.update.mockResolvedValue(
+        makeRow({ status: 'open', rejectReason: null, rejectedAt: null }),
+      );
+
+      await service.transition('is_0000000001', 'u_admin', { action: 'reopen' });
       expect(prisma.issue.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             status: 'open',
-            resolvedAt: null,
+            rejectReason: null,
+            rejectedAt: null,
+          }),
+        }),
+      );
+    });
+
+    it('操作记录：transition 落 issue_activities（含操作人 + 拒绝原因 metadata）', async () => {
+      prisma.issue.findUnique.mockResolvedValue(
+        makeRow({ status: 'in_progress' }),
+      );
+      memberOk();
+      prisma.issue.update.mockResolvedValue(
+        makeRow({ status: 'rejected', rejectReason: '原因', rejectedAt: FIXED_DATE }),
+      );
+
+      await service.transition('is_0000000001', 'u_admin', {
+        action: 'reject',
+        reason: '原因',
+      });
+
+      expect(prisma.issueActivity.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            issueId: 'is_0000000001',
+            action: 'transition',
+            fromStatus: 'in_progress',
+            toStatus: 'rejected',
+            actorType: 'user',
+            actorId: 'u_admin',
+            metadata: { reason: '原因' },
           }),
         }),
       );
@@ -648,13 +727,14 @@ describe('IssuesService', () => {
       expect(prisma.issue.update).not.toHaveBeenCalled();
     });
 
-    it('迁移表覆盖全部 5 个动作且 from≠to（迁移表自洽）', () => {
+    it('迁移表覆盖全部 5 个动作且 from≠to（迁移表自洽，is_0000000013 含 rejected 态）', () => {
+      const statuses = ['open', 'in_progress', 'resolved', 'closed', 'rejected'];
       for (const [action, t] of Object.entries(ISSUE_TRANSITIONS)) {
-        expect(t.from).not.toBe(t.to);
-        expect(['open', 'in_progress', 'resolved', 'closed']).toContain(
-          t.from,
-        );
-        expect(['open', 'in_progress', 'resolved', 'closed']).toContain(t.to);
+        const fromList = Array.isArray(t.from) ? t.from : [t.from];
+        expect(fromList.length).toBeGreaterThan(0);
+        expect(fromList).not.toContain(t.to);
+        expect(statuses).toEqual(expect.arrayContaining(fromList));
+        expect(statuses).toContain(t.to);
       }
     });
   });
