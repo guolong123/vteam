@@ -77,14 +77,14 @@ export class AgentsController {
   }
 
   /**
-   * 更新 Agent（type=template → 403 PERMISSION_AGENT_READONLY；clone/custom 可更新）。
+   * 更新 Agent（is_0000000030：template/内置也可修改设置字段，agentId/type 不可改）。
    * PATCH /api/v1/agents/:id {prompt?, role?, skillIds?, toolEffects?, permissionScope?, defaultModelId?}
    * skillIds/toolEffects 显式传入时重建关联。
    */
   @Patch(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission('agents.edit')
-  @ApiOperation({ summary: '更新 Agent（template → 403 PERMISSION_AGENT_READONLY）' })
+  @ApiOperation({ summary: '更新 Agent（内置/自定义均可修改设置，agentId/type 不可改）' })
   update(@Param('id') id: string, @Body() dto: UpdateAgentDto) {
     return this.agentsService.update(id, dto);
   }

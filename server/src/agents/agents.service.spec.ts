@@ -447,27 +447,31 @@ describe('AgentsService', () => {
   });
 
   describe('update（PATCH /agents/:id）', () => {
-    it('type=template → 403 PERMISSION_AGENT_READONLY，不触发事务', async () => {
-      prisma.agent.findUnique.mockResolvedValue(templateRows[0]);
+    it('is_0000000030：type=template 可修改设置字段（prompt），不再 403', async () => {
+      prisma.agent.findUnique
+        .mockResolvedValueOnce(templateRows[0]) // 存在性
+        .mockResolvedValueOnce({ ...templateRows[0], prompt: '新提示词' });
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      prisma.agent.update.mockResolvedValue({ ...templateRows[0], prompt: '新提示词' });
+      prisma.agent.findUnique.mockResolvedValue({ ...templateRows[0], prompt: '新提示词' });
 
-      await expect(service.update('a_product', { prompt: 'x' })).rejects.toThrow(
-        ForbiddenException,
+      const result = await service.update('a_product', { prompt: '新提示词' });
+
+      expect(prisma.agent.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ prompt: '新提示词' }),
+        }),
       );
-      await expect(service.update('a_product', { prompt: 'x' })).rejects.toMatchObject(
-        { response: { code: AGENT_ERRORS.AGENT_READONLY } },
-      );
-      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(result).toBeDefined();
     });
 
-    it('type=template 仅放行 defaultModelId（模型=部署环境适配），其余字段仍 403', async () => {
+    it('is_0000000030：type=template 可修改 defaultModelId（不再仅单字段放行）', async () => {
       prisma.agent.findUnique
-        .mockResolvedValueOnce(templateRows[0]) // 存在性/只读检查
-        .mockResolvedValueOnce({
-          ...templateRows[0],
-          defaultModelId: 'opencode-go/deepseek-v4-flash',
-        });
+        .mockResolvedValueOnce(templateRows[0])
+        .mockResolvedValueOnce({ ...templateRows[0], defaultModelId: 'opencode-go/deepseek-v4-flash' });
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
-      prisma.agent.update.mockResolvedValue(templateRows[0]);
+      prisma.agent.update.mockResolvedValue({ ...templateRows[0], defaultModelId: 'opencode-go/deepseek-v4-flash' });
+      prisma.agent.findUnique.mockResolvedValue({ ...templateRows[0], defaultModelId: 'opencode-go/deepseek-v4-flash' });
 
       const result = await service.update('a_product', {
         defaultModelId: 'opencode-go/deepseek-v4-flash',
@@ -483,48 +487,57 @@ describe('AgentsService', () => {
       expect(result).toBeDefined();
     });
 
-    it('type=template 仅放行 ackMessage（收到确认文案=部署适配），其余字段仍 403', async () => {
+    it('is_0000000030：type=template 可修改多字段（prompt+defaultModelId+ackMessage）', async () => {
       prisma.agent.findUnique
-        .mockResolvedValueOnce(templateRows[0]) // 存在性/只读检查
+        .mockResolvedValueOnce(templateRows[0])
         .mockResolvedValueOnce({
           ...templateRows[0],
-          ackMessage: '收到，马上处理',
+          prompt: 'x',
+          defaultModelId: 'opencode-go/deepseek-v4-flash',
+          ackMessage: '收到',
         });
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
-      prisma.agent.update.mockResolvedValue(templateRows[0]);
+      prisma.agent.update.mockResolvedValue({ ...templateRows[0], prompt: 'x' });
+      prisma.agent.findUnique.mockResolvedValue({ ...templateRows[0], prompt: 'x' });
 
       const result = await service.update('a_product', {
-        ackMessage: '收到，马上处理',
+        ackMessage: '收到',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+        prompt: 'x',
       });
 
       expect(prisma.agent.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ ackMessage: '收到，马上处理' }),
+          data: expect.objectContaining({ prompt: 'x' }),
         }),
       );
       expect(result).toBeDefined();
     });
 
-    it('type=template 更新含其他字段（ackMessage+prompt）仍 403', async () => {
+    it('is_0000000030：type=template 可修改 skillIds/toolEffects（重建关联）', async () => {
+      prisma.agent.findUnique
+        .mockResolvedValueOnce(templateRows[0])
+        .mockResolvedValueOnce(templateRows[0]);
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      prisma.agent.update.mockResolvedValue(templateRows[0]);
       prisma.agent.findUnique.mockResolvedValue(templateRows[0]);
 
-      await expect(
-        service.update('a_product', {
-          ackMessage: '收到，马上处理',
-          prompt: 'x',
-        }),
-      ).rejects.toMatchObject({ response: { code: AGENT_ERRORS.AGENT_READONLY } });
+      const result = await service.update('a_product', {
+        skillIds: ['skill_1'],
+        toolEffects: [{ toolAction: 'bash', effect: 'allow' }],
+      });
+
+      expect(prisma.agent.update).toHaveBeenCalled();
+      expect(prisma.agentSkill.deleteMany).toHaveBeenCalled();
+      expect(prisma.agentToolEffect.deleteMany).toHaveBeenCalled();
+      expect(result).toBeDefined();
     });
 
-    it('type=template 更新含其他字段（defaultModelId+prompt）仍 403', async () => {
-      prisma.agent.findUnique.mockResolvedValue(templateRows[0]);
-
-      await expect(
-        service.update('a_product', {
-          defaultModelId: 'opencode-go/deepseek-v4-flash',
-          prompt: 'x',
-        }),
-      ).rejects.toMatchObject({ response: { code: AGENT_ERRORS.AGENT_READONLY } });
+    it('is_0000000030：agent 不存在 → 404（template 放开后仍校验存在性）', async () => {
+      prisma.agent.findUnique.mockResolvedValue(null);
+      await expect(service.update('a_ghost', { prompt: 'x' })).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('custom 更新：标量字段 + skillIds/toolEffects 显式传入时重建关联', async () => {

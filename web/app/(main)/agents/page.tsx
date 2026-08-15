@@ -12,10 +12,10 @@
  * - 交互：
  *   · clone-template-button → POST /agents/:id/clone → 刷新列表并选中克隆体（可继续编辑）
  *   · 新建自定义 → 弹窗 POST /agents（type=custom）→ 刷新列表并选中新建
- *   · type=custom / clone → 可编辑（提示词 / 默认模型 / 工具 effect）→ PATCH 保存
- *   · type=template → 只读（表单控件禁用 + 隐藏保存/添加按钮），仅保留克隆入口
- * - 模板只读态：isTemplate = type === 'template'。后端 PATCH/DELETE 仅禁 template
- *   （403 PERMISSION_AGENT_READONLY），clone/custom 可写——克隆的意义就是编辑副本。
+ *   · type=custom / clone / template → 均可编辑设置（提示词 / 默认模型 / 工具 effect）→ PATCH 保存
+ * - is_0000000030：内置（template）agent 设置可编辑（后端已放开，agentId/type 不可改）；
+ *   删除仍对 template 隐藏（后端 DELETE 403 PERMISSION_AGENT_READONLY 兜底），
+ *   isTemplate 仅用于主题色展示，不再作为只读态。
  * - 页面内扩展 token（仿原型 :156-170）：toolEffectMeta（allow/ask/deny 三态色）、
  *   toolSourceMeta（builtin/custom/mcp 真实 source 徽章色），不写 tokens.ts 基线。
  * - 技能面板真实勾选（T7）：GET /skills?enabled=true 拉取技能库 → 勾选（skillIds 草稿）
@@ -794,7 +794,8 @@ interface ConfigPanelProps {
 }
 
 function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, catalogByRef, workers, saving, saveError, onSave, onSaveToken, onClone, canCreate, canDelete, onDelete, deleting, deleteError }: ConfigPanelProps) {
-  const isTemplate = readOnly;
+  // is_0000000030：readOnly 不再按 type 区分（template 也可编辑）；isTemplate 仅用于主题色
+  const isTemplate = agent.type === "template";
   const accent = isTemplate
     ? ROLE_COLORS[toAvatarRole(agent.role)]
     : CUSTOM_THEME.color;
@@ -849,22 +850,17 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
   };
 
   const handleSave = () => {
-    // template 仅允许保存 defaultModelId + ackMessage（后端 assertWritable 单字段放行）；
-    // ackMessage 属部署适配字段（收到确认文案），模板也放行；空=null 落库用默认文案
-    const payload: UpdateAgentPayload = isTemplate
-      ? {
-          defaultModelId: modelDraft ?? undefined,
-          ackMessage: ackMessageDraft.trim() || null,
-        }
-      : {
-          prompt: promptDraft.trim(),
-          defaultModelId: modelDraft ?? undefined,
-          // 软绑定首选 worker：显式提交（空=自动调度，null 清除绑定），仅 custom/clone 可配
-          workerId: workerDraft || null,
-          skillIds: skillDrafts,
-          toolEffects: toolDrafts.map((t) => ({ toolAction: t.toolAction, effect: t.effect })),
-          ackMessage: ackMessageDraft.trim() || null,
-        };
+    // is_0000000030：内置（template）agent 设置也可修改（后端已放开，agentId/type 不可改）；
+    // 提交全部设置字段（prompt/模型/worker/技能/工具 effect/确认文案）
+    const payload: UpdateAgentPayload = {
+      prompt: promptDraft.trim(),
+      defaultModelId: modelDraft ?? undefined,
+      // 软绑定首选 worker：显式提交（空=自动调度，null 清除绑定）
+      workerId: workerDraft || null,
+      skillIds: skillDrafts,
+      toolEffects: toolDrafts.map((t) => ({ toolAction: t.toolAction, effect: t.effect })),
+      ackMessage: ackMessageDraft.trim() || null,
+    };
     onSave(payload);
   };
 
@@ -2141,7 +2137,8 @@ export default function AgentConfigPage() {
         <ConfigPanel
           key={selectedAgent.id}
           agent={selectedAgent}
-          readOnly={isTemplate}
+          // is_0000000030：内置（template）agent 设置可编辑；删除仍对 template 隐藏（后端 403 兜底）
+          readOnly={false}
           models={models}
           skills={skills}
           tools={tools}
@@ -2154,7 +2151,7 @@ export default function AgentConfigPage() {
           onSaveToken={(payload) => saveTokenMutation.mutate(payload)}
           onClone={() => cloneMutation.mutate(selectedAgent.id)}
           canCreate={canCreateAgent}
-          canDelete={canDeleteAgent}
+          canDelete={isTemplate ? false : canDeleteAgent}
           deleting={deleteMutation.isPending}
           onDelete={() => setDeleteConfirmOpen(true)}
           deleteError={deleteError}
