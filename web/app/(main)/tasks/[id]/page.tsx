@@ -1985,20 +1985,24 @@ export default function TaskChatPage() {
     [agentsQuery.data],
   );
 
-  /* ---------- 1b. 产出物列表：GET /tasks/:id/artifacts（右侧面板直接展示实际产出物文件） ---------- */
+  /* ---------- 1b. 产出物列表：GET /tasks/:id/artifacts（右侧面板直接展示实际产出物文件）。
+       实时性（is_0000000020）：SSE artifact.submitted 失效缓存 + 30s 轮询兜底（错过事件/用户侧改动）。 ---------- */
   const artifactsQuery = useQuery({
     queryKey: ["task", taskId, "artifacts"],
     queryFn: () =>
       api.get<ArtifactsResponse>(`/tasks/${taskId}/artifacts`, { query: { pageSize: 10 } }),
     enabled: !!taskId && !!user?.id,
+    refetchInterval: 30_000,
   });
 
-  /* ---------- 1c. 待办 issue：GET /issues?taskId=（右侧面板「待办 Issue」区，状态排序取前 5） ---------- */
+  /* ---------- 1c. 待办 issue：GET /issues?taskId=（右侧面板「待办 Issue」区，状态排序取前 5）。
+       实时性（is_0000000020）：SSE issue.changed 失效缓存 + 30s 轮询兜底。 ---------- */
   const issuesQuery = useQuery({
     queryKey: ["task-issues", taskId],
     queryFn: () =>
       api.get<TaskIssuesResponse>("/issues", { query: { taskId, page: 1, pageSize: 100 } }),
     enabled: !!taskId && !!user?.id,
+    refetchInterval: 30_000,
   });
 
   /* ---------- 2. 频道定位：GET /channels?type=task_group → 按 taskId 匹配 ---------- */
@@ -2289,6 +2293,13 @@ export default function TaskChatPage() {
       // 产出物归档（artifact.submitted，task scope）→ 失效产出物列表缓存，新文件自动出现
       if (payload.taskId === taskId) {
         queryClient.invalidateQueries({ queryKey: ["task", taskId, "artifacts"] });
+      }
+    },
+    onIssueChanged: (payload) => {
+      // issue 变更（issue.changed，task scope，is_0000000020）→ 失效待办 issue 缓存，右侧面板自动刷新
+      if (payload.taskId === taskId) {
+        queryClient.invalidateQueries({ queryKey: ["task-issues", taskId] });
+        queryClient.invalidateQueries({ queryKey: ["issues"] });
       }
     },
     onAgentQuestion: (payload: RealtimeQuestionEvent) => {

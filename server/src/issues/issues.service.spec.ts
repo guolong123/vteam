@@ -176,6 +176,31 @@ describe('IssuesService', () => {
         creatorUserName: 'admin',
       });
     });
+
+    it('成功：广播 issue.changed（task scope，is_0000000020 右侧面板实时刷新）', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        projectId: 'p_1',
+        status: 'pending',
+      });
+      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+      prisma.issue.create.mockResolvedValue({ id: 'is_0000000001' });
+      prisma.issue.findUnique.mockResolvedValue(makeRow());
+
+      await service.create('u_admin', base as any);
+
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        'issue.changed',
+        expect.objectContaining({
+          taskId: 't_0000000001',
+          issueId: 'is_0000000001',
+          action: 'create',
+          status: 'open',
+          actorType: 'user',
+          actorId: 'u_admin',
+        }),
+        { type: 'task', id: 't_0000000001' },
+      );
+    });
   });
 
   describe('createByAgent（MCP 专用）', () => {
@@ -672,6 +697,34 @@ describe('IssuesService', () => {
             rejectedAt: null,
           }),
         }),
+      );
+    });
+
+    it('transition 后广播 issue.changed（task scope，is_0000000020）', async () => {
+      prisma.issue.findUnique.mockResolvedValue(
+        makeRow({ status: 'open' }),
+      );
+      memberOk();
+      prisma.issue.update.mockResolvedValue(
+        makeRow({ status: 'in_progress' }),
+      );
+
+      await service.transition('is_0000000001', 'u_admin', {
+        action: 'start',
+      });
+
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        'issue.changed',
+        expect.objectContaining({
+          taskId: 't_0000000001',
+          issueId: 'is_0000000001',
+          action: 'transition',
+          fromStatus: 'open',
+          status: 'in_progress',
+          actorType: 'user',
+          actorId: 'u_admin',
+        }),
+        { type: 'task', id: 't_0000000001' },
       );
     });
 
