@@ -788,6 +788,24 @@ describe('TasksService', () => {
         service.update('t_missing', { title: 'x' } as any),
       ).rejects.toThrow(NotFoundException);
     });
+
+    it('backgroundDocs 更新生效（is_0000000011：PATCH 支持改背景文档，传 [] 清空）', async () => {
+      prisma.task.findUnique.mockResolvedValue(row());
+      prisma.task.update.mockResolvedValue(
+        row({ backgroundDocs: [{ name: '新需求文档.md' }] }),
+      );
+
+      const result = await service.update('t_0000000001', {
+        backgroundDocs: [{ name: '新需求文档.md' }],
+      } as any);
+
+      expect(prisma.task.update).toHaveBeenCalledWith({
+        where: { id: 't_0000000001' },
+        data: { backgroundDocs: [{ name: '新需求文档.md' }] },
+        include: expect.any(Object),
+      });
+      expect(result.backgroundDocs).toEqual([{ name: '新需求文档.md' }]);
+    });
   });
 
   describe('五态状态迁移（迁移表驱动 + CAS 乐观锁）', () => {
