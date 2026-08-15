@@ -8,7 +8,7 @@ vteam 的 worker 端：独立于 `server/`（NestJS）的 Node 进程，负责�
 - **事件回流**：注册（`X-Worker-Token`）、定时心跳、事件上送（seq 单调递增 + 失败重试不阻塞），server 经 `worker-event.ingress` 消费
 - **执行端点**：`node:http` 提供 `/execute`（默认 4198），首字超时 abort（`WORKER_FIRST_TOKEN_TIMEOUT_MS`），空闲判死（`instance-tracker`）
 - **凭证注入**：模型凭据下发后写入 opencode auth.json；git 经 `GIT_SSH_COMMAND` 注入 SSH 私钥
-- **MCP 客户端**：探测 server 的 `keta-platform` MCP 工具可用性（`mcp-status-probe`），注入自定义工具（`resources/custom-tool`）
+- **MCP 客户端**：探测 server 的 `vteam` MCP 工具可用性（`mcp-status-probe`），注入自定义工具（`resources/custom-tool`）
 - **产出物抽取**：`artifact-extract` 从会话结果中识别并上报 `submit_artifact` 产出物
 - **优雅重启**：`restart-coordinator` 协调 opencode serve 重启与实例重建
 
@@ -99,7 +99,7 @@ worker/
 │   │   └── artifact-extract.ts
 │   ├── git/                  # git 工具族注入 + SSH 凭证 + 操作上报
 │   │   ├── git-tools.ts / git-credentials.ts / git-credential-injector.ts / git-op-reporter.ts
-│   ├── mcp-status/           # mcp-status-probe：探测 keta-platform MCP 可用性
+│   ├── mcp-status/           # mcp-status-probe：探测 vteam MCP 可用性
 │   ├── protocol/             # 双写协议类型（不 import server 代码）
 │   │   └── worker-protocol.ts
 │   ├── resources/            # custom-tool + injector：自定义工具注入

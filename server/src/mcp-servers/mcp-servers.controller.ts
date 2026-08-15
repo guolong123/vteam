@@ -39,7 +39,7 @@ export class McpServersController {
    * GET /api/v1/mcp-servers?type=remote&enabled=true&name=gitee&page=1&pageSize=20
    *   → 200 {items, total, page, pageSize}
    * worker 拉取（X-Worker-Token）带 x-worker-id：按该 worker 上报的 mcpUrl 覆盖
-   * 内置 keta-platform 地址（集群外 worker 场景，见 McpServersService.findAll）。
+   * 内置 vteam 地址（集群外 worker 场景，见 McpServersService.findAll）。
    */
   @Public()
   @UseGuards(WorkerOrJwtGuard)

@@ -135,7 +135,7 @@ describe('PlatformMcpController (HTTP)', () => {
         tools: { listChanged: false },
       });
       expect(res.body.result.serverInfo).toMatchObject({
-        name: 'keta-platform',
+        name: 'vteam',
         version: '1.0.0',
       });
     });

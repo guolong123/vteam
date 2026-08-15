@@ -309,7 +309,7 @@ export class TaskProgressionScheduler
     const text =
       `【托管确认】任务 <${task?.title ?? taskId}> 托管模式下收到成员确认请求：` +
       `requestId=${row.requestId}，kind=${row.kind}，内容：${contentText}。` +
-      '请调用 keta-platform MCP 的 question_confirm 工具决策：' +
+      '请调用 vteam MCP 的 question_confirm 工具决策：' +
       'question 传 {taskId, selfInstanceId, requestId, kind:"question", answers: 答案数组} 提交答案（answers=null 表示拒绝）；' +
       'permission 传 {taskId, selfInstanceId, requestId, kind:"permission", response:"once"|"always"|"reject"}。';
     await this.dispatchToMainAgent(taskId, text);

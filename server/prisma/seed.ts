@@ -127,7 +127,7 @@ async function main() {
   // type=template 只读；permissionScope 按 16 篇 §2.1 默认权限范围最小化。
   // prompt 为平台维护的「出厂默认提示词」（16 篇 §8.4 模板提示词随平台版本升级）：四方向结构
   // （职责/权限/工作方式/协同方式），并针对新功能收敛——issue 管理（issue_create/list/transition）、
-  // git 仓库（clone/pull 只读授权、push 需 write+确认）、keta-platform MCP 工具。
+  // git 仓库（clone/pull 只读授权、push 需 write+确认）、vteam MCP 工具。
   const templateAgents = [
     {
       id: 'a_product',
@@ -145,7 +145,7 @@ async function main() {
         '- Issue 管理：把拆分出的需求条目以「需求」标签创建 issue 并指派责任人，跟踪状态流转（issue_create / issue_list / issue_transition）。\n' +
         '\n' +
         '## 权限\n' +
-        '- 可访问：任务文档库（只读 + 可提交产出）、项目内只读资源；经 keta-platform 按需拉取群聊历史/文档库/任务上下文。\n' +
+        '- 可访问：任务文档库（只读 + 可提交产出）、项目内只读资源；经 vteam 按需拉取群聊历史/文档库/任务上下文。\n' +
         '- 可执行：read、doclib、webfetch（参考外部资料）；写操作（提交文档、写文件）默认需成员确认。\n' +
         '- 代码仓库：只读，不直接写仓库；超出边界的操作转成员确认后放行（FR-36）。\n' +
         '- 禁止：未经确认执行写操作；代替成员作出验收判定。\n' +
@@ -178,7 +178,7 @@ async function main() {
         '- 风险提示：识别需求/方案/实现/验证各环节的风险与依赖，提前向成员提示。\n' +
         '\n' +
         '## 权限\n' +
-        '- 可访问：任务文档库（只读 + 可提交产出）、项目内只读资源；经 keta-platform 拉取群聊历史/任务上下文/文档库。\n' +
+        '- 可访问：任务文档库（只读 + 可提交产出）、项目内只读资源；经 vteam 拉取群聊历史/任务上下文/文档库。\n' +
         '- 可执行：read、doclib、webfetch；issue_create/issue_list/issue_transition（Issue 编排）；写操作默认需成员确认。\n' +
         '- 代码仓库：只读；超出边界的操作转成员确认后放行（FR-36）。\n' +
         '- 禁止：未经确认执行写操作；代替成员作出验收判定。\n' +
@@ -210,7 +210,7 @@ async function main() {
         '- 代码仓库：项目代码仓库只读（git_clone/git_pull 读取授权仓库，用于方案与现状核对），不直接修改代码。\n' +
         '\n' +
         '## 权限\n' +
-        '- 可访问：任务文档库、项目内只读资源（代码仓库只读）；经 keta-platform 按需拉取文档库/任务上下文。\n' +
+        '- 可访问：任务文档库、项目内只读资源（代码仓库只读）；经 vteam 按需拉取文档库/任务上下文。\n' +
         '- 可执行：read、grep、glob、lsp（只读检索）；bash 默认 ask（仅只读查询命令由成员确认放行）。\n' +
         '- 禁止：未经成员确认执行写操作；代替开发者落地实现；将未经验证的技术假设表述为既定事实。\n' +
         '\n' +
@@ -242,7 +242,7 @@ async function main() {
         '- 代码仓库：项目代码仓库读写——git_clone/git_pull 读取授权仓库；git_push 需 write 授权且写操作经成员确认（ask）。\n' +
         '\n' +
         '## 权限\n' +
-        '- 可访问：任务文档库、项目代码仓库（读写）；经 keta-platform 拉取任务上下文/群聊历史。\n' +
+        '- 可访问：任务文档库、项目代码仓库（读写）；经 vteam 拉取任务上下文/群聊历史。\n' +
         '- 可执行：read、edit、write、grep、glob；bash 按团队策略（有副作用命令默认 ask）。\n' +
         '- 代码仓库写操作（commit/push）默认需成员确认；超出边界的资源不越权访问。\n' +
         '- 禁止：越权访问成员未授权的资源；将未自测的代码直接声明为完成。\n' +
@@ -275,7 +275,7 @@ async function main() {
         '- 代码仓库：项目代码仓库只读（git_clone/git_pull 读取授权仓库核对实现），不直接修改代码。\n' +
         '\n' +
         '## 权限\n' +
-        '- 可访问：任务文档库、项目内只读资源（代码仓库只读）；经 keta-platform 拉取文档库/任务上下文。\n' +
+        '- 可访问：任务文档库、项目内只读资源（代码仓库只读）；经 vteam 拉取文档库/任务上下文。\n' +
         '- 可执行：read、doclib、webfetch；bash 默认 ask（执行测试脚本/运行命令时向成员确认）。\n' +
         '- 禁止：代替开发者修复代码（缺陷修复归开发者）；以验证结论替代成员验收判定（FR-08）。\n' +
         '\n' +
@@ -382,15 +382,63 @@ async function main() {
     });
   }
 
-  // 平台 MCP Server（阶段 2）：keta-platform 远程端点（server 侧 /api/v1/platform-mcp），
+  // 平台 MCP Server（阶段 2）：vteam 远程端点（server 侧 /api/v1/platform-mcp），
   // 供 worker 端 opencode 会话经 MCP 工具按需拉取群聊历史/文档库/任务上下文。
   // headers 用 {env:...} 引用（worker 注入器解析 X_WORKER_TOKEN/WORKER_ID 注入鉴权头）。
   // URL 可经 PLATFORM_MCP_URL 覆盖（docker compose 默认 http://server:3000/...，
   // K8s 下 server 服务名为 <release>-server，由 chart init Job 注入正确值）。
   const platformMcpUrl =
     process.env.PLATFORM_MCP_URL ?? 'http://server:3000/api/v1/platform-mcp';
+
+  // ---- 存量数据迁移（Swagger-MCP 阶段 1 改名）：keta-platform → vteam ----
+  // 存量部署（k8s）的 mcp_servers / tools 表已有旧名行：mcp_servers.name @unique（upsert 主键），
+  // tools.mcpServer 存旧名、工具 name 带旧前缀。upgrade 后重跑 seed 若不迁移，新名 upsert
+  // 会建出重复 server、旧工具残留。迁移失败不阻断 seed（try/catch + console.warn）。
+  try {
+    const legacyServer = await prisma.mcpServer.findUnique({
+      where: { name: 'keta-platform' },
+    });
+    const vteamServer = await prisma.mcpServer.findUnique({
+      where: { name: 'vteam' },
+    });
+
+    if (legacyServer) {
+      if (!vteamServer) {
+        // 旧名存在且新名不存在 → rename（保留 id/url/headers/enabled，url 用 platformMcpUrl 覆盖）
+        await prisma.mcpServer.update({
+          where: { id: legacyServer.id },
+          data: { name: 'vteam', url: platformMcpUrl },
+        });
+        console.log(`  - 迁移 MCP Server：keta-platform → vteam（id=${legacyServer.id}）`);
+      } else {
+        // vteam 已存在（防 name 唯一约束冲突）→ 仅停用旧行，不 rename
+        await prisma.mcpServer.update({
+          where: { id: legacyServer.id },
+          data: { enabled: false },
+        });
+        console.log(`  - vteam 已存在，旧行 keta-platform（id=${legacyServer.id}）已停用`);
+      }
+    }
+
+    // 工具名前缀迁移：keta-platform_* → vteam_*（action 不变，mcpServer 同步指向新名，避免旧名残留）
+    const legacyTools = await prisma.tool.findMany({
+      where: { name: { startsWith: 'keta-platform_' } },
+    });
+    for (const lt of legacyTools) {
+      await prisma.tool.update({
+        where: { id: lt.id },
+        data: { name: lt.name.replace('keta-platform_', 'vteam_'), mcpServer: 'vteam' },
+      });
+    }
+    if (legacyTools.length > 0) {
+      console.log(`  - 迁移 MCP 工具：${legacyTools.length} 条（keta-platform_* → vteam_*）`);
+    }
+  } catch (e) {
+    console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+  }
+
   await prisma.mcpServer.upsert({
-    where: { name: 'keta-platform' },
+    where: { name: 'vteam' },
     update: {
       type: 'remote',
       url: platformMcpUrl,
@@ -401,8 +449,8 @@ async function main() {
       enabled: true,
     },
     create: {
-      id: 'ms_keta_platform',
-      name: 'keta-platform',
+      id: 'ms_vteam',
+      name: 'vteam',
       type: 'remote',
       url: platformMcpUrl,
       headers: {
@@ -413,28 +461,28 @@ async function main() {
     },
   });
 
-  // keta-platform 的 MCP 工具（阶段 2）：注册 tools 表 source=mcp 行，
+  // vteam 的 MCP 工具（阶段 2）：注册 tools 表 source=mcp 行，
   // 前端「技能与工具」页 MCP 工具子 Tab 按 source=mcp 过滤渲染。
   // action 为 platform-mcp 端点 tools/list 的 tool 名（命名 <server>_<action>），
   // source=mcp + execution=mcp + mcpServer 对齐 tools.service 的 source 推导逻辑。
-  const ketaPlatformTools = [
-    { action: 'chat_history', name: 'keta-platform_chat_history', description: '查询任务群聊历史（按需拉取）' },
-    { action: 'doclib', name: 'keta-platform_doclib', description: '查询任务产出物文档库' },
-    { action: 'task_context', name: 'keta-platform_task_context', description: '查询任务概览与团队' },
-    { action: 'group_post', name: 'keta-platform_group_post', description: '向任务群聊发布消息' },
+  const vteamTools = [
+    { action: 'chat_history', name: 'vteam_chat_history', description: '查询任务群聊历史（按需拉取）' },
+    { action: 'doclib', name: 'vteam_doclib', description: '查询任务产出物文档库' },
+    { action: 'task_context', name: 'vteam_task_context', description: '查询任务概览与团队' },
+    { action: 'group_post', name: 'vteam_group_post', description: '向任务群聊发布消息' },
   ];
 
-  for (const t of ketaPlatformTools) {
+  for (const t of vteamTools) {
     await prisma.tool.upsert({
       where: { action: t.action },
-      update: { mcpServer: 'keta-platform', source: 'mcp', execution: 'mcp', enabled: true },
+      update: { mcpServer: 'vteam', source: 'mcp', execution: 'mcp', enabled: true },
       create: {
-        id: `tl_keta_${t.action}`,
+        id: `tl_vteam_${t.action}`,
         name: t.name,
         action: t.action,
         source: 'mcp',
         execution: 'mcp',
-        mcpServer: 'keta-platform',
+        mcpServer: 'vteam',
         enabled: true,
       },
     });
@@ -446,8 +494,8 @@ async function main() {
   console.log(`  - 项目：${projects.map((p) => p.name).join('、')}（owner=seed-admin）`);
   console.log(`  - 模板 Agent：${templateAgents.map((a) => `${a.name}(${a.role})`).join('、')}（type=template）`);
   console.log(`  - 内置工具：${builtinTools.map((t) => t.action).join('、')}（source=builtin）`);
-  console.log(`  - MCP 工具：${ketaPlatformTools.map((t) => t.action).join('、')}（source=mcp，mcpServer=keta-platform）`);
-  console.log(`  - MCP Server：keta-platform（remote，${platformMcpUrl}）`);
+  console.log(`  - MCP 工具：${vteamTools.map((t) => t.action).join('、')}（source=mcp，mcpServer=vteam）`);
+  console.log(`  - MCP Server：vteam（remote，${platformMcpUrl}）`);
   console.log(`  - 模型目录：${modelRows.length} 个模型（${modelRows.map((m) => m.modelID).join('、')}）`);
   console.log(`  - 管理员密码：${ADMIN_PASSWORD}`);
   console.log(`  - 初始 admin 账号：admin / admin123`);

@@ -82,7 +82,7 @@ export interface RegisterWorkerPayload {
   load: WorkerLoad;
   /** C2：worker 配置的默认模型（env WORKER_DEFAULT_MODEL，可选；id 格式 providerID/modelID，C7 兜底用） */
   defaultModelId?: string;
-  /** 内置 keta-platform MCP 地址覆盖（env WORKER_MCP_URL，可选；server 按 worker 覆盖下发） */
+  /** 内置 vteam MCP 地址覆盖（env WORKER_MCP_URL，可选；server 按 worker 覆盖下发） */
   mcpUrl?: string;
 }
 

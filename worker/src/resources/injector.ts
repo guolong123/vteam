@@ -223,7 +223,7 @@ export class ResourceInjector {
     const response = await this.fetchImpl(url, {
       headers: {
         [WORKER_TOKEN_HEADER]: this.workerToken,
-        // 携带 worker 身份：server 按 worker.capabilities.mcpUrl 覆盖内置 keta-platform 地址
+        // 携带 worker 身份：server 按 worker.capabilities.mcpUrl 覆盖内置 vteam 地址
         'x-worker-id': this.workerId,
       },
     });

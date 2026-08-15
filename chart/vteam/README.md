@@ -118,7 +118,7 @@ helm install vteam chart/vteam \
 | `worker.resources` | requests 500m/1Gi，limits cpu 4 / memory 8Gi | worker 资源配额。默认副本数 1（`replicaCount.worker`）；opencode 执行引擎内存占用高，limit 8Gi 为推荐值（开发环境可用 values-dev 的小配额覆盖） |
 | `worker.persistence.{workerHome,workerWork}.{enabled,size,storageClass}` | 全部启用 | worker 每副本独立卷（StatefulSet volumeClaimTemplates，PVC 名 `worker-home-<sts>-<ordinal>`；`replicaCount.worker` 扩容自动建独立 PVC）。`enabled=false` 回退 emptyDir（临时，生产不建议关闭 workerHome） |
 | `worker.updateStrategy.partition` | 空 | StatefulSet 滚动更新 partition：空 = 全量滚动（默认）；数字 = 仅更新 ordinal ≥ partition 的副本 |
-| `initJob.platformMcpUrl` | 空（自动） | 内置 `keta-platform` MCP 的 URL（seed 写入 mcp_servers 表）。空 = 按 server Service 名拼 `http://<fullname>-server:3000/api/v1/platform-mcp`（K8s 下 server 服务名，seed 的 compose 默认 `http://server:3000` 不通）；显式设置时用该值 |
+| `initJob.platformMcpUrl` | 空（自动） | 内置 `vteam` MCP 的 URL（seed 写入 mcp_servers 表）。空 = 按 server Service 名拼 `http://<fullname>-server:3000/api/v1/platform-mcp`（K8s 下 server 服务名，seed 的 compose 默认 `http://server:3000` 不通）；显式设置时用该值 |
 | `persistence.{uploads,mysql}.{enabled,size,storageClass}` | 全部启用 | uploads / mysql 卷（worker 卷见上） |
 | `secret.*` / `secret.existingSecret` | 自动生成 | 敏感配置 |
 | `ingress.enabled` | `false` | Ingress（`/api/v1`→server，`/`→web） |
@@ -183,7 +183,7 @@ kubectl delete pvc -l app.kubernetes.io/instance=vteam
 ## 与 docker-compose 的对齐点
 
 - env：DATABASE_URL / NODE_ENV / PORT / JWT_* / WORKER_TOKEN / MODEL_CREDENTIAL_KEY / FIRST_TOKEN_TIMEOUT_MS / X_WORKER_TOKEN / SERVER_URL / OPENCODE_SERVE_* / WORKER_ADVERTISE_HOST / WORKER_DEFAULT_MODEL / WORK_DIR 全部对齐 compose。
-- PLATFORM_MCP_URL：仅 init Job 注入（seed 用），指向本 release 的 server Service（`http://<fullname>-server:3000/api/v1/platform-mcp`），避免 keta-platform MCP 仍注册 compose 的 `server:3000` 导致 worker 连接失败。
+- PLATFORM_MCP_URL：仅 init Job 注入（seed 用），指向本 release 的 server Service（`http://<fullname>-server:3000/api/v1/platform-mcp`），避免 vteam MCP 仍注册 compose 的 `server:3000` 导致 worker 连接失败。
 - WORKER_ID：**不**在 ConfigMap 下发，由 worker StatefulSet 经 downward API 注入 pod 名（`w_<pod 名>`，pod 名 `<release>-worker-<ordinal>` 全局唯一）——多副本时每个 pod 唯一，避免共享同一 ID 相互覆盖注册；compose 单副本仍走 `w_<hostname>` 默认。
 - 探针：server `/api/v1/health`、web `fetch($HOSTNAME:3000)`，均为容器 node 内置 fetch（node:22-alpine 无 curl/wget）。
 - 挂载：`/app/uploads`、`/data/keta-worker`、`/root` 对齐 compose volume 语义（worker 为每副本独立卷，非 compose 的命名卷共享）。

@@ -223,7 +223,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
   async register(workerToken: string, dto: RegisterWorkerDto) {
     const tokenHash = await bcrypt.hash(workerToken, WORKER_TOKEN_BCRYPT_ROUNDS);
     const now = new Date();
-    // mcpUrl：worker 上报的内置 keta-platform MCP 地址覆盖（集群外 worker 用它替代
+    // mcpUrl：worker 上报的内置 vteam MCP 地址覆盖（集群外 worker 用它替代
     // seed 的 PLATFORM_MCP_URL 内网名）；合并进 capabilities Json（不新增 DB 列），
     // McpServersService.findAll 按 x-worker-id 读取并覆盖内置 server url 下发。
     const capabilities = {
