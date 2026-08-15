@@ -109,10 +109,210 @@ export function loadCredential(repoUrl: string): GitCredentialEntry {
   return entry;
 }
 
+/**
+ * SSH 私钥格式归一（OPENSSH 容器格式 ssh-rsa → PKCS#1 PEM）。
+ *
+ * 背景：部分 OPENSSH 容器格式的 ssh-rsa 私钥在 OpenSSL 3.x（worker 容器
+ * OpenSSH 10.3/OpenSSL 3.5，宿主机 8.9/3.0 均复现）加载报
+ * `error in libcrypto: unsupported`，`ssh -i` 静默跳过该 identity → git_clone 失败。
+ * 密钥数学有效，纯容器格式兼容问题（详见 .omo/evidence/role-instance-separation/git-ssh-key-format.txt）。
+ *
+ * 行为（仅 worker 侧兜底，不改 server/凭证存储）：
+ * - key 不含 `-----BEGIN OPENSSH PRIVATE KEY-----` 头（PEM/其他格式）→ 原样返回；
+ * - 解 openssh-key-v1 容器（cipher/kdf 须为 none 即未加密），读私钥块 keytype：
+ *   - `ssh-rsa` → 提取 n/e/d/p/q → 计算 dp/dq/qinv → 构 PKCS#1 RSAPrivateKey DER
+ *     → `-----BEGIN RSA PRIVATE KEY-----` PEM（64 字符换行）；
+ *   - 其他（ssh-ed25519 等）→ 原样返回（不受该问题影响，转 PKCS#1 反而破坏）；
+ * - 加密（ciphername != none）→ 抛错，不静默降级；容器/私钥块结构非法 → 抛错。
+ *
+ * 自包含：不引用模块级变量，可被 renderGitToolsFile toString() 内联进渲染产物
+ * git.ts（同 loadCredential 约定）；纯 Node 实现，不依赖 openssl 二进制 /
+ * ssh-keygen -p（后者在 worker 容器内对问题 key 也失败）。
+ */
+export function normalizeSshKey(key: string): string {
+  // ---- mpint/ASN.1 纯 Node 内联辅助（无模块级依赖，随本函数 toString 内联） ----
+  // RFC 4251 mpint → BigInt：正数剥离前导 0x00（含符号位填充）；负数不支持（RSA 参数恒正）。
+  const mpintToBigInt = (raw: Buffer): bigint => {
+    if (raw.length === 0) {
+      return 0n;
+    }
+    if ((raw[0] & 0x80) !== 0) {
+      throw new Error('cannot parse openssh private key: negative mpint not supported');
+    }
+    let start = 0;
+    while (start < raw.length - 1 && raw[start] === 0x00) {
+      start += 1;
+    }
+    if (raw[start] === 0x00) {
+      return 0n;
+    }
+    return BigInt('0x' + raw.subarray(start).toString('hex'));
+  };
+  // DER 长度编码（BER definite，short/long 形式）。
+  const derLen = (n: number): Buffer => {
+    if (n < 0x80) {
+      return Buffer.from([n]);
+    }
+    const bytes: number[] = [];
+    let v = n;
+    while (v > 0) {
+      bytes.unshift(v & 0xff);
+      v = v >>> 8;
+    }
+    return Buffer.from([0x80 | bytes.length, ...bytes]);
+  };
+  // DER INTEGER：非负；最高位 bit7=1 时前导 0x00 符号位；0 编码为单字节 0x00。
+  const derInt = (v: bigint): Buffer => {
+    if (v < 0n) {
+      throw new Error('cannot build pkcs1 private key: negative integer not supported');
+    }
+    const bytes: number[] = [];
+    let t = v;
+    while (t > 0n) {
+      bytes.unshift(Number(t & 0xffn));
+      t >>= 8n;
+    }
+    if (bytes.length === 0) {
+      bytes.push(0);
+    }
+    if ((bytes[0] & 0x80) !== 0) {
+      bytes.unshift(0);
+    }
+    return Buffer.concat([Buffer.from([0x02]), derLen(bytes.length), Buffer.from(bytes)]);
+  };
+  // DER SEQUENCE。
+  const derSeq = (parts: Buffer[]): Buffer => {
+    const body = Buffer.concat(parts);
+    return Buffer.concat([Buffer.from([0x30]), derLen(body.length), body]);
+  };
+  // 模逆（扩展欧几里得，BigInt）。
+  const modInverse = (a: bigint, m: bigint): bigint => {
+    let oldR = ((a % m) + m) % m;
+    let r = m;
+    let oldS = 1n;
+    let s = 0n;
+    while (r !== 0n) {
+      const q = oldR / r;
+      [oldR, r] = [r, oldR - q * r];
+      [oldS, s] = [s, oldS - q * s];
+    }
+    if (oldR !== 1n) {
+      throw new Error('cannot build pkcs1 private key: no modular inverse for q mod p');
+    }
+    return ((oldS % m) + m) % m;
+  };
+  // ---- 容器解析 ----
+  const src = String(key);
+  if (!src.includes('-----BEGIN OPENSSH PRIVATE KEY-----')) {
+    return key;
+  }
+  const b64 = src
+    .replace(/-----BEGIN OPENSSH PRIVATE KEY-----/g, '')
+    .replace(/-----END OPENSSH PRIVATE KEY-----/g, '')
+    .replace(/\s+/g, '');
+  const buf = Buffer.from(b64, 'base64');
+  if (buf.length === 0) {
+    throw new Error('cannot parse openssh private key: empty body');
+  }
+  const MAGIC = Buffer.from('openssh-key-v1\0', 'utf8');
+  if (!buf.subarray(0, MAGIC.length).equals(MAGIC)) {
+    throw new Error('cannot parse openssh private key: bad magic');
+  }
+  let off = MAGIC.length;
+  const need = (n: number): void => {
+    if (off + n > buf.length) {
+      throw new Error('cannot parse openssh private key: truncated container');
+    }
+  };
+  const readU32 = (): number => {
+    need(4);
+    const v = buf.readUInt32BE(off);
+    off += 4;
+    return v;
+  };
+  const readStr = (): Buffer => {
+    const len = readU32();
+    need(len);
+    const out = buf.subarray(off, off + len);
+    off += len;
+    return out;
+  };
+  const ciphername = readStr().toString('utf8');
+  const kdfname = readStr().toString('utf8');
+  readStr(); // kdfoptions（cipher=none 时为空串）
+  const nkeys = readU32();
+  if (ciphername !== 'none' || kdfname !== 'none') {
+    throw new Error('encrypted openssh private key is not supported');
+  }
+  if (nkeys !== 1) {
+    throw new Error(`cannot parse openssh private key: unsupported nkeys=${nkeys}`);
+  }
+  readStr(); // public key blob（nkeys=1，跳过）
+  const privBlock = readStr();
+  // 私钥块：checkint×2, keytype, keyfields..., comment, padding
+  let po = 0;
+  const pNeed = (n: number): void => {
+    if (po + n > privBlock.length) {
+      throw new Error('cannot parse openssh private key: truncated private block');
+    }
+  };
+  const pReadU32 = (): number => {
+    pNeed(4);
+    const v = privBlock.readUInt32BE(po);
+    po += 4;
+    return v;
+  };
+  const pReadStr = (): Buffer => {
+    const len = pReadU32();
+    pNeed(len);
+    const out = privBlock.subarray(po, po + len);
+    po += len;
+    return out;
+  };
+  const check1 = pReadU32();
+  const check2 = pReadU32();
+  if (check1 !== check2) {
+    throw new Error('cannot parse openssh private key: checkint mismatch');
+  }
+  const keytype = pReadStr().toString('utf8');
+  if (keytype !== 'ssh-rsa') {
+    return key; // ssh-ed25519 等不受该问题影响，原样返回
+  }
+  // ssh-rsa 私钥字段顺序（OpenSSH PROTOCOL.key）：n, e, d, iqmp, p, q
+  const n = mpintToBigInt(pReadStr());
+  const e = mpintToBigInt(pReadStr());
+  const d = mpintToBigInt(pReadStr());
+  pReadStr(); // iqmp = q^{-1} mod p（PKCS#1 需重新计算，直接跳过）
+  const p = mpintToBigInt(pReadStr());
+  const q = mpintToBigInt(pReadStr());
+  // 私钥块尾部 comment + padding 无需读取（pReadStr 已校验不越界）。
+
+  // ---- 构 PKCS#1 RSAPrivateKey DER（version=0; n,e,d; p,q; dp,dq; qinv） ----
+  const der = derSeq([
+    derInt(0n), // version
+    derInt(n),
+    derInt(e),
+    derInt(d),
+    derInt(p),
+    derInt(q),
+    derInt(d % (p - 1n)), // exponent1 = d mod (p-1)
+    derInt(d % (q - 1n)), // exponent2 = d mod (q-1)
+    derInt(modInverse(q, p)), // coefficient = q^{-1} mod p
+  ]);
+  const wrapped = der
+    .toString('base64')
+    .replace(/(.{64})/g, '$1\n')
+    .replace(/\n$/, '');
+  return `-----BEGIN RSA PRIVATE KEY-----\n${wrapped}\n-----END RSA PRIVATE KEY-----\n`;
+}
+
 /** 写临时 SSH 私钥文件（随机路径 + 0o600），返回路径；调用方 finally cleanupTemp。 */
 export function writeTempKey(key: string): string {
+  // ssh_key 落盘前格式归一：OPENSSH 容器格式 ssh-rsa → PKCS#1 PEM（兼容 OpenSSL 3.x，
+  // 见 normalizeSshKey）。转换失败抛错（buildGitEnv/runGit 调用方错误链路已处理，不静默降级）。
+  const normalized = normalizeSshKey(key);
   const keyPath = path.join(os.tmpdir(), `keta-git-key-${crypto.randomBytes(8).toString('hex')}`);
-  fs.writeFileSync(keyPath, key, { mode: 0o600 });
+  fs.writeFileSync(keyPath, normalized, { mode: 0o600 });
   fs.chmodSync(keyPath, 0o600);
   return keyPath;
 }
@@ -400,6 +600,8 @@ export function renderGitToolsFile(defs: readonly GitToolDef[] = GIT_TOOLS): str
     normalizeRepoUrl.toString(),
     '',
     loadCredential.toString(),
+    '',
+    normalizeSshKey.toString(),
     '',
     writeTempKey.toString(),
     '',
