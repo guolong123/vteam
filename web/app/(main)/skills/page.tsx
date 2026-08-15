@@ -1177,19 +1177,22 @@ function mcpServerEndpoint(s: ApiMcpServer): string {
 }
 
 /** MCP server 行卡片：名称（mono）+ 来源徽章（内置/自定义）+ Local/Remote 类型 + 连接状态 +
- * 启用态 + endpoint 摘要 + 操作（内置 server 只读：仅查看；用户 server 查看/编辑/删除） */
+ * 启用态 + endpoint 摘要 + 操作（内置 server 只读：仅查看；用户 server 查看/编辑/删除；
+ * 启用态 [admin] 可点击切换，内置/自定义通用） */
 function McpServerRow({
   server,
   canManage,
   onView,
   onEdit,
   onDelete,
+  onToggle,
 }: {
   server: ApiMcpServer;
   canManage: boolean;
   onView: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onToggle: (s: ApiMcpServer) => void;
 }) {
   const builtin = isBuiltinMcpServer(server.name);
   return (
@@ -1252,13 +1255,42 @@ function McpServerRow({
       {/* 连接状态徽章 */}
       <McpStatusBadge status={toFrontendStatus(server.status)} />
 
-      {/* 启用状态 */}
-      <PillBadge
-        theme={enableColors[server.enabled ? "启用" : "停用"]}
-        label={server.enabled ? "启用" : "停用"}
-        testid="mcp-server-status"
-        status={server.enabled ? "启用" : "停用"}
-      />
+      {/* 启用状态（[admin] 可点击切换 → PATCH /mcp-servers/:id {enabled}，内置/自定义通用；
+       * 视觉保持启用/停用配色；成员只读展示） */}
+      {canManage ? (
+        <button
+          type="button"
+          data-testid="mcp-server-toggle-button"
+          data-status={server.enabled ? "启用" : "停用"}
+          onClick={() => onToggle(server)}
+          title={server.enabled ? "点击停用" : "点击启用"}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: space.xs,
+            padding: `${space.xs}px ${space.sm + 2}px`,
+            borderRadius: radius.pill,
+            backgroundColor: enableColors[server.enabled ? "启用" : "停用"].bg,
+            border: `1px solid ${enableColors[server.enabled ? "启用" : "停用"].border}`,
+            color: enableColors[server.enabled ? "启用" : "停用"].color,
+            fontSize: fontSize.sm,
+            fontWeight: 500,
+            lineHeight: 1.4,
+            whiteSpace: "nowrap",
+            cursor: "pointer",
+            fontFamily: fontFamily.body,
+          }}
+        >
+          {server.enabled ? "启用" : "停用"}
+        </button>
+      ) : (
+        <PillBadge
+          theme={enableColors[server.enabled ? "启用" : "停用"]}
+          label={server.enabled ? "启用" : "停用"}
+          testid="mcp-server-status"
+          status={server.enabled ? "启用" : "停用"}
+        />
+      )}
 
       {/* 操作（查看全员放开；编辑/删除 [admin] 专属；内置 server 只读不渲染编辑/删除） */}
       <div style={{ display: "flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
@@ -1287,6 +1319,7 @@ function McpServerSection({
   onEdit,
   onCreate,
   onDelete,
+  onToggle,
 }: {
   servers: ApiMcpServer[];
   canManage: boolean;
@@ -1294,6 +1327,7 @@ function McpServerSection({
   onEdit: (s: ApiMcpServer) => void;
   onCreate: () => void;
   onDelete: (s: ApiMcpServer) => void;
+  onToggle: (s: ApiMcpServer) => void;
 }) {
   return (
     <div
@@ -1380,6 +1414,7 @@ function McpServerSection({
             onView={() => onView(s)}
             onEdit={() => onEdit(s)}
             onDelete={() => onDelete(s)}
+            onToggle={onToggle}
           />
         ))
       )}
@@ -2728,6 +2763,19 @@ export default function SkillToolManagePage() {
     onError: (err) => showNotice("error", isApiError(err) ? err.message : "删除失败，请稍后重试"),
   });
 
+  /* MCP server 启停：PATCH /mcp-servers/:id {enabled}（内置/自定义通用；worker 注入按 enabled
+   * 过滤，切换后经 broadcastReloadConfig 广播自动重拉）→ 刷新 mcp-servers + tools */
+  const toggleMcpServerMutation = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      api.patch<ApiMcpServer>(`/mcp-servers/${id}`, { enabled }),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+      queryClient.invalidateQueries({ queryKey: ["tools"] });
+      showNotice("success", vars.enabled ? "已启用" : "已停用");
+    },
+    onError: (err) => showNotice("error", isApiError(err) ? err.message : "操作失败，请稍后重试"),
+  });
+
   /* 工具编辑：PATCH /tools/:id {schema?, initCommand?, enabled?}（自定义工具 [admin]；
    * name/action/execution 注册后不可改，由弹窗只读展示） */
   const editToolMutation = useMutation({
@@ -2844,6 +2892,11 @@ export default function SkillToolManagePage() {
     mcpServerMutation.mutate(
       target && mcpServerModal?.mode === "edit" ? { id: target.id, payload } : { payload }
     );
+  };
+
+  /* MCP server 启停：目标态为当前 enabled 取反（PATCH /mcp-servers/:id {enabled}） */
+  const handleToggleMcpServer = (s: ApiMcpServer) => {
+    toggleMcpServerMutation.mutate({ id: s.id, enabled: !s.enabled });
   };
 
   /* 工具详情：从 tools 列表反查原始 ApiTool（含 schema/initCommand/mcpServer） */
@@ -3335,7 +3388,7 @@ export default function SkillToolManagePage() {
                 )
               ) : (
                 <>
-                  {/* MCP server 管理区块（列表/查看/注册/编辑/删除，成员只读查看） */}
+                  {/* MCP server 管理区块（列表/查看/注册/编辑/删除/启停，成员只读查看） */}
                   <McpServerSection
                     servers={mcpServersQuery.data?.items ?? []}
                     canManage={isAdmin}
@@ -3343,6 +3396,7 @@ export default function SkillToolManagePage() {
                     onEdit={(s) => handleOpenMcpServerModal("edit", s)}
                     onCreate={() => handleOpenMcpServerModal("create")}
                     onDelete={(s) => setDeletingMcpServer(s)}
+                    onToggle={(s) => handleToggleMcpServer(s)}
                   />
                   {mcpData.length === 0 ? (
                     <div
