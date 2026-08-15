@@ -6,17 +6,19 @@
 #   curl -fsSL <控制面地址>/install-worker.sh | bash -s -- \
 #     --server http://<控制面地址> --worker-id my-worker-1 --concurrency 8 --opencode v1.18.15
 #
-# 流程：前置校验（git / node >= 18 / opencode CLI）→ 拉取 worker 源码 → npm install
-#   → 生成 .env（SERVER_URL / WORKER_ID）→ 校验 X_WORKER_TOKEN → 构建 → 启动
+# 流程：自动安装前置（git / node >= 18 / opencode CLI，缺失即自动装）→ 下载 worker 发布包
+#   → npm install → 生成 .env（SERVER_URL / WORKER_ID）→ 校验 X_WORKER_TOKEN → 启动
 #   （复用仓库内 worker/scripts/start.sh 语义：启动即注册，随后每 10s 心跳）。
+#   worker 源码以发布包（pack-worker.sh 产物）从控制面下载，不做 git clone——
+#   目标机器无需任何仓库 SSH 凭证，复制命令即可完整安装。
 #
 # 参数：
 #   --server <url>      控制面地址（缺省 http://localhost:3000）
 #   --worker-id <id>    worker 唯一 id（缺省 w_<hostname>）
 #   --concurrency <n>   并发上限（预留：worker 侧当前硬编码 maxInstances=1，见 worker/src/index.ts）
-#   --opencode <ver>    opencode CLI 版本要求（仅提示校验，CLI 需自行安装并入 PATH）
+#   --opencode <ver>    opencode CLI 版本（如 v1.18.15）；CLI 缺失时按此版本 npm 安装（缺省 latest），已安装则仅提示校验
 #   --token <token>     X_WORKER_TOKEN（注册鉴权，需与 server 侧约定一致；缺省引导手动填写）
-#   --repo <url>        源码仓库（缺省 git@gitee.com:xishuhq/aiagents.git）
+#   --src-url <url>     worker 发布包下载地址（缺省 ${SERVER_URL%/}/worker-src.tar.gz）
 #   --dir <path>        安装目录（缺省 $HOME/aiagents-worker）
 set -euo pipefail
 
@@ -26,7 +28,7 @@ WORKER_ID=""
 CONCURRENCY=""
 OPENCODE_VERSION=""
 WORKER_TOKEN=""
-REPO_URL="git@gitee.com:xishuhq/aiagents.git"
+WORKER_SRC_URL=""
 INSTALL_DIR="${HOME}/aiagents-worker"
 
 while [[ $# -gt 0 ]]; do
@@ -36,10 +38,10 @@ while [[ $# -gt 0 ]]; do
     --concurrency) CONCURRENCY="${2:-}"; shift 2 ;;
     --opencode) OPENCODE_VERSION="${2:-}"; shift 2 ;;
     --token) WORKER_TOKEN="${2:-}"; shift 2 ;;
-    --repo) REPO_URL="${2:-}"; shift 2 ;;
+    --src-url) WORKER_SRC_URL="${2:-}"; shift 2 ;;
     --dir) INSTALL_DIR="${2:-}"; shift 2 ;;
     *)
-      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--repo/--dir）" >&2
+      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir）" >&2
       exit 1
       ;;
   esac
@@ -48,63 +50,127 @@ done
 SERVER_URL="${SERVER_URL:-http://localhost:3000}"
 WORKER_ID="${WORKER_ID:-w_$(hostname)}"
 CONCURRENCY="${CONCURRENCY:-8}"
+WORKER_SRC_URL="${WORKER_SRC_URL:-${SERVER_URL%/}/worker-src.tar.gz}"
 
-# ------------------------------ 前置校验 ------------------------------
-for cmd in git node npm opencode; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "[install-worker] ERROR: 未找到 $cmd，请先安装并加入 PATH（opencode CLI 为 worker 运行依赖）" >&2
-    exit 1
+# ------------------------------ 前置环境自动安装（缺失即装，保证一键成功） ------------------------------
+# 目标：git/curl/node/opencode 无需用户预装。node 缺失时下载官方二进制到 $HOME/.local/node；
+# opencode 缺失时按 --opencode 指定版本（缺省 latest）经 npm 全局安装。
+
+ensure_git_curl() {
+  local missing=()
+  for cmd in git curl tar; do
+    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "[install-worker] 缺少系统工具 ${missing[*]}，尝试 apt 安装..."
+    if command -v apt-get >/dev/null 2>&1; then
+      if ! apt-get install -y "${missing[@]}" >&2; then
+        echo "[install-worker] ERROR: 自动安装 ${missing[*]} 失败，请手动安装后重试" >&2
+        exit 1
+      fi
+    else
+      echo "[install-worker] ERROR: 未找到 apt-get，请手动安装 ${missing[*]} 后重试" >&2
+      exit 1
+    fi
   fi
-done
+}
 
-if ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) < 18 ? 1 : 0)'; then
-  echo "[install-worker] ERROR: Node.js >= 18 必需，当前 $(node --version)" >&2
-  exit 1
-fi
+ensure_node() {
+  if command -v node >/dev/null 2>&1 && node -e 'process.exit(Number(process.versions.node.split(".")[0]) < 18 ? 1 : 0)' 2>/dev/null; then
+    return 0
+  fi
+  echo "[install-worker] 未找到 Node.js >= 18，自动下载官方二进制到 \${HOME}/.local/node ..."
+  local node_ver="v22.12.0"
+  local arch
+  case "$(uname -m)" in
+    x86_64|amd64) arch="x64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) echo "[install-worker] ERROR: 不支持的架构 $(uname -m)" >&2; exit 1 ;;
+  esac
+  local base="${HOME}/.local/node"
+  mkdir -p "$base"
+  local tarball="${TMPDIR:-/tmp}/node-${node_ver}-linux-${arch}.tar.xz"
+  curl -fsSL "https://nodejs.org/dist/${node_ver}/node-${node_ver}-linux-${arch}.tar.xz" -o "$tarball"
+  tar -xJf "$tarball" -C "$base" --strip-components=1
+  rm -f "$tarball"
+  export PATH="$base/bin:$PATH"
+  echo "[install-worker] Node.js 已安装：$(node --version)（npm $(npm --version)）"
+}
 
-if [ -n "${OPENCODE_VERSION}" ]; then
-  echo "[install-worker] opencode 版本要求：${OPENCODE_VERSION}（请确认 PATH 中 opencode CLI 版本满足，当前 $(opencode --version 2>/dev/null || echo 未知)）"
-fi
+ensure_opencode() {
+  if ! command -v opencode >/dev/null 2>&1; then
+    local pkg="opencode-ai"
+    [ -n "${OPENCODE_VERSION}" ] && pkg="opencode-ai@${OPENCODE_VERSION#v}"
+    echo "[install-worker] 未找到 opencode CLI，执行 npm install -g ${pkg} ..."
+    if ! npm install -g "$pkg"; then
+      echo "[install-worker] ERROR: opencode 自动安装失败；如为权限问题请加 sudo 重试" >&2
+      exit 1
+    fi
+  fi
+  if [ -n "${OPENCODE_VERSION}" ] && [ "$(opencode --version 2>/dev/null || true)" != "${OPENCODE_VERSION#v}" ]; then
+    echo "[install-worker] 提示：opencode 当前 $(opencode --version 2>/dev/null || echo 未知)，与要求 ${OPENCODE_VERSION} 不一致（不自动切换，避免破坏已有环境）"
+  fi
+}
 
-# ------------------------------ 拉取源码 ------------------------------
-if [ -d "${INSTALL_DIR}/worker" ]; then
-  echo "[install-worker] 复用已有源码目录 ${INSTALL_DIR}/worker（跳过 clone）"
+ensure_git_curl
+ensure_node
+ensure_opencode
+
+# ------------------------------ 下载 worker 发布包 ------------------------------
+if [ -d "${INSTALL_DIR}/worker/dist" ] && [ -f "${INSTALL_DIR}/worker/package.json" ]; then
+  echo "[install-worker] 复用已有发布目录 ${INSTALL_DIR}/worker（跳过下载）"
 else
-  echo "[install-worker] 拉取 worker 源码：${REPO_URL} → ${INSTALL_DIR}"
-  mkdir -p "$INSTALL_DIR"
-  git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+  echo "[install-worker] 下载 worker 发布包：${WORKER_SRC_URL} → ${INSTALL_DIR}/worker"
+  local_tarball="${TMPDIR:-/tmp}/worker-src.tar.gz"
+  curl -fsSL "$WORKER_SRC_URL" -o "$local_tarball"
+  mkdir -p "${INSTALL_DIR}/worker"
+  tar -xzf "$local_tarball" -C "${INSTALL_DIR}/worker"
+  rm -f "$local_tarball"
 fi
 
 cd "${INSTALL_DIR}/worker"
 
-# ------------------------------ 安装依赖 ------------------------------
-echo "[install-worker] npm install ..."
-npm install
+# ------------------------------ 安装依赖（仅生产依赖；dist 由发布包自带） ------------------------------
+echo "[install-worker] npm install --omit=dev ..."
+npm install --omit=dev
 
-# ------------------------------ 生成 .env（不覆盖已有配置） ------------------------------
+# ------------------------------ 生成/更新 .env（幂等：显式参数总是生效） ------------------------------
+# 先删旧行再追加：.env 已存在（复用源码目录）时 --token 等参数仍覆盖写入，未显式传入的 X_WORKER_TOKEN 保留旧值。
 if [ ! -f .env ]; then
   cp .env.example .env
-  sed -i "s|^SERVER_URL=.*|SERVER_URL=${SERVER_URL}|" .env
-  sed -i "s|^X_WORKER_TOKEN=.*|X_WORKER_TOKEN=${WORKER_TOKEN}|" .env
-  echo "# worker-id 由安装参数注入（缺省 w_<hostname>）" >> .env
-  echo "WORKER_ID=${WORKER_ID}" >> .env
-  echo "[install-worker] 已生成 .env（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}）"
+  echo "[install-worker] 已从 .env.example 生成 .env"
 fi
+
+update_env() {
+  local key="$1" value="$2"
+  sed -i "/^${key}=/d" .env
+  echo "${key}=${value}" >> .env
+}
+
+update_env SERVER_URL "${SERVER_URL}"
+if [ -n "${WORKER_TOKEN}" ]; then
+  update_env X_WORKER_TOKEN "${WORKER_TOKEN}"
+fi
+update_env WORKER_ID "${WORKER_ID}"
+echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}）"
 
 # ------------------------------ token 校验 ------------------------------
 if [ -z "${X_WORKER_TOKEN:-}" ]; then
-  X_WORKER_TOKEN="$(sed -n 's/^X_WORKER_TOKEN=//p' .env | tail -n 1)"
+  # set -euo pipefail 下 grep 无匹配返回非零，需 || true 兜底
+  X_WORKER_TOKEN="$(grep '^X_WORKER_TOKEN=' .env | tail -n 1 | cut -d= -f2- || true)"
 fi
 if [ -z "${X_WORKER_TOKEN}" ] || [ "${X_WORKER_TOKEN}" = "change-me-worker-token" ]; then
-  echo "[install-worker] ERROR: 缺少 X_WORKER_TOKEN（注册鉴权 token，需与 server 侧约定一致）" >&2
-  echo "  请编辑 ${INSTALL_DIR}/worker/.env 填写 X_WORKER_TOKEN 后重新执行：./scripts/start.sh" >&2
+  echo "[install-worker] ERROR: 缺少 X_WORKER_TOKEN（注册鉴权 token，需与 server 侧 WORKER_TOKEN 约定一致）" >&2
+  echo "  重跑本命令并携带 --token <token>，或手动编辑 ${INSTALL_DIR}/worker/.env 后执行：./scripts/start.sh" >&2
   exit 1
 fi
+# 导出给 exec 的 start.sh，避免其重新 source .env 失败时 token 丢失
+export X_WORKER_TOKEN
 
-# ------------------------------ 构建 + 启动 ------------------------------
+# ------------------------------ 启动 ------------------------------
 if [ ! -d dist ]; then
-  echo "[install-worker] dist 不存在，执行 npm run build ..."
-  npm run build
+  echo "[install-worker] ERROR: 发布包缺少 dist/，请确认控制面 worker-src.tar.gz 完整（pack-worker.sh 产物）" >&2
+  exit 1
 fi
 
 echo "[install-worker] 启动 worker（workerId=${WORKER_ID}，server=${SERVER_URL}）..."

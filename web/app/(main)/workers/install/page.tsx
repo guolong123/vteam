@@ -228,6 +228,7 @@ export default function WorkerInstallPage() {
   /* 参数配置（受控，动态拼接到命令展示） */
   const [serverUrl, setServerUrl] = useState("");
   const [workerId, setWorkerId] = useState("");
+  const [workerToken, setWorkerToken] = useState("");
   const [concurrency, setConcurrency] = useState(8);
   /* 默认值 = worker 实际运行的稳定版本（worker/package.json @opencode-ai/sdk 1.18.15），
      非原型假版本 v2.0.0-beta.1（worker 侧暂无 V2Runtime 实现，v2 仅调研计划，见 07 篇） */
@@ -244,15 +245,16 @@ export default function WorkerInstallPage() {
     setWorkerId(randomWorkerId());
   }, []);
 
-  /* 两种安装方式的命令；curl 下载地址 = 当前 origin + /install-worker.sh */
-  const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}`;
+  /* 两种安装方式的命令；curl 下载地址 = 当前 origin + /install-worker.sh。
+     token 非空时追加 --token，保证复制命令即可完整安装（脚本自动写入 X_WORKER_TOKEN） */
+  const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}${workerToken ? ` --token ${workerToken}` : ""}`;
   const dockerCommand = `docker run -d --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e CONCURRENCY=${concurrency} -e OPENCODE_VERSION=${opencodeVersion} -p 18080:18080 ketaops/opencode-worker:latest`;
 
   const command = method === "curl" ? curlCommand : dockerCommand;
 
   const curlSteps = [
     "在目标机器（任意网络位置，无需控制面反向可达）执行右侧 curl 命令",
-    "脚本自动拉取 worker 源码、安装依赖并写入配置（SERVER_URL / WORKER_ID / X_WORKER_TOKEN），启动后向控制面注册",
+    "脚本自动安装前置（node / opencode CLI 缺失即装）、下载 worker 发布包并安装依赖、写入配置（SERVER_URL / WORKER_ID / --token 传入的 X_WORKER_TOKEN），启动后向控制面注册",
     "等待首次心跳（worker→控制面 SSE 通道），注册表出现后即自动入池调度",
   ];
 
@@ -365,6 +367,18 @@ export default function WorkerInstallPage() {
                     ↻ 重新生成
                   </button>
                 </div>
+              </FieldRow>
+
+              <FieldRow label="注册 token（workerToken）" hint="与 server 侧 WORKER_TOKEN 一致 · 留空则需安装后手动填写">
+                <input
+                  type="password"
+                  data-testid="worker-token-input"
+                  value={workerToken}
+                  onChange={(e) => setWorkerToken(e.target.value)}
+                  spellCheck={false}
+                  placeholder="可选：填写后安装命令将携带 --token"
+                  style={inputStyle}
+                />
               </FieldRow>
 
               {/* 能力声明：并发上限 + opencode 版本 */}

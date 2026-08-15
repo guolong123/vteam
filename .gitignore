@@ -44,3 +44,6 @@ coverage/
 
 # server runtime uploads (P2 产出物落盘目录，运行时产物不入库)
 server/uploads/
+
+# worker 发布包（pack-worker.sh 构建产物，随 web 静态服务发布，不入库）
+web/public/worker-src.tar.gz
