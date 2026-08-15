@@ -4,6 +4,10 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { AppModule } from './app.module';
+import {
+  setSwaggerRawDocument,
+  SwaggerDocsProvider,
+} from './swagger-mcp/swagger-docs.provider';
 import { resolveUploadDir } from './uploads/uploads.constants';
 
 async function bootstrap() {
@@ -43,6 +47,12 @@ async function bootstrap() {
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/v1/docs', app, document);
+
+  // Swagger-MCP（vteam-api）数据源：createDocument 结果写入模块级 store 并做一次
+  // $ref dereference 缓存（v11 clone 输入，不污染 Swagger UI 文档；失败 warn 降级
+  // 原始文档，不阻断启动），供 generateSwaggerTools 生成 MCP 工具
+  setSwaggerRawDocument(document);
+  await new SwaggerDocsProvider().initialize();
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);
