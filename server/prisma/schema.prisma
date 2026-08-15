@@ -96,6 +96,7 @@ model Project {
   owner   User            @relation("UserProjects", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   members ProjectMember[]
   tasks   Task[]
+  memories Memory[]
 
   @@map("projects")
 }
@@ -149,6 +150,7 @@ model Task {
   artifacts          Artifact[]
   taskGroupInstances TaskGroupInstance[]
   issues             Issue[]
+  memories           Memory[]
 
   @@index([projectId, status], map: "idx_tasks_project_status")
   @@map("tasks")
@@ -642,6 +644,32 @@ model RealtimeEvent {
 // ==================================================================
 // 模型提问 / 工具权限确认域（worker 检测 serve pending → 落库 → 前端弹窗 → reply 收敛）
 // ==================================================================
+
+// ==================================================================
+// 记忆域（memory-management：me_ 前缀主键；task|project|global 字符串枚举，
+// 双库兼容——不声明 Prisma enum；task 级冗余存 projectId 便于项目内检索）
+// ==================================================================
+
+model Memory {
+  id        String    @id // me_ 前缀，服务层 IdGeneratorService 生成
+  level     String // task|project|global（字符串枚举，双库兼容——不声明 Prisma enum）
+  taskId    String?   @map("task_id")
+  projectId String?   @map("project_id") // task 级冗余存 projectId 便于项目内检索
+  content   String    @db.Text
+  tags      Json? // 标签数组
+  createdBy String    @map("created_by") // agent 实例 id 或 user id
+  deletedAt DateTime? @map("deleted_at") // 软删，对齐 ChatChannel:235
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  task    Task?    @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([level], map: "idx_memories_level")
+  @@index([taskId, createdAt], map: "idx_memories_task_time")
+  @@index([projectId, createdAt], map: "idx_memories_project_time")
+  @@map("memories")
+}
 
 model AgentQuestion {
   id         String   @id

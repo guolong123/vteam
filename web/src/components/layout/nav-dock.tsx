@@ -42,6 +42,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: "messages", label: "消息中心", icon: "✉" },
   { key: "users", label: "用户管理", icon: "☷" },
   { key: "roles", label: "角色权限", icon: "⚖" },
+  { key: "memories", label: "记忆管理", icon: "◈" },
 ];
 
 /* ------------------------------ scoped 动画与样式 ------------------------------ */

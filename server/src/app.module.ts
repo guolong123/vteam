@@ -24,6 +24,7 @@ import { QuestionsModule } from './questions/questions.module';
 import { IssuesModule } from './issues/issues.module';
 import { DocsSiteModule } from './docs-site/docs-site.module';
 import { SwaggerMcpModule } from './swagger-mcp/swagger-mcp.module';
+import { MemoriesModule } from './memories/memories.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
@@ -63,6 +64,7 @@ import { PrismaModule } from './prisma/prisma.module';
     IssuesModule,
     DocsSiteModule,
     SwaggerMcpModule,
+    MemoriesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
