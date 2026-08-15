@@ -3094,14 +3094,14 @@ describe('WorkerDispatcher', () => {
   });
 
   describe('F3 MINOR-3：任务工作目录隔离 + 超时可配', () => {
-    it('dispatch 传 agent 兜底工作目录（未绑实例 → <WORK_DIR>/agents/<agentName>）且目录存在', async () => {
+    it('dispatch 传 agent 兜底工作目录（未绑实例 → /data/worker/<agentName>，与 tasks.service 同根）且目录存在', async () => {
       prisma.session.findUnique.mockResolvedValue({
         id: 's_0000000001',
         workerId: 'w_0000000001',
         instanceRef: 'ses_0001',
       });
       prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001', capabilities: {} });
-      // 存量会话未绑实例（taskAgentId NULL）：agent 名称兜底目录
+      // 存量会话未绑实例（taskAgentId NULL）：agent 名称兜底目录（/data/worker 根）
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_product',
         name: '产品经理',
@@ -3113,7 +3113,7 @@ describe('WorkerDispatcher', () => {
       await d.dispatch(request);
 
       const execArgs = workerClient.execute.mock.calls[0][1] as { directory: string };
-      const expectedDir = path.join(workRoot, 'agents', '产品经理');
+      const expectedDir = '/data/worker/产品经理';
       expect(execArgs.directory).toBe(expectedDir);
       // mkdir -p 已保证目录存在
       expect(fs.existsSync(expectedDir)).toBe(true);

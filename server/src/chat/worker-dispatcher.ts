@@ -1013,7 +1013,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // 自持轮询 pollForCompletion 方案 A 后不再调用（代码保留作兜底/测试，见方法注释）。
     // is_0000000010：工作目录解析链（worker 持久化目录 = 每 agent 独立工作区）——
     // 1. 实例 task_agents.work_dir（创建任务可指定，优先）
-    // 2. 缺省 <WORK_DIR>/agents/<sanitize(agent.name)>-<seq>（存量/未指定时兜底）
+    // 2. 缺省 /data/worker/<sanitize(agent.name)>-<seq>（与 tasks.service 同根，防分叉）
     // 3. 任务级 <WORK_DIR>/tasks/<taskId> 兜底（兼容存量，见 resolveAgentWorkDir）
     // 目录创建下沉两处兜底：server mkdir -p + worker 执行端点 mkdir（文件系统可能不共享）。
     const taskWorkDir = await this.resolveAgentWorkDir(taskId, session, target);
@@ -2124,8 +2124,9 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
   /**
    * is_0000000010：实例工作目录解析链——优先实例 task_agents.work_dir（创建任务时
    * 指定或服务端默认 `/data/worker/<sanitize(name)>[-seq]`）；缺失（存量实例/异常）
-   * 回落 `<WORK_DIR>/agents/<sanitize(agent.name)>-<seq>`，最终任务级目录兜底。
-   * mkdir -p 保证存在；worker 执行端点亦有兜底创建（server/worker 文件系统可能不共享）。
+   * 回落 `/data/worker/<sanitize(agent.name)>-<seq>`（与 tasks.service 同根，防两处默认
+   * 路径分叉——PR 审核建议），最终任务级目录兜底。mkdir -p 保证存在；worker 执行端点
+   * 亦有兜底创建（server/worker 文件系统可能不共享，依赖 /data/worker 持久卷）。
    */
   private async resolveAgentWorkDir(
     taskId: string,
@@ -2165,14 +2166,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     return this.ensureTaskWorkDir(taskId);
   }
 
-  /** is_0000000010：`<WORK_DIR>/agents/<sanitize(name)>[-seq]`（对齐 tasks.service 默认规则）。 */
+  /** is_0000000010：默认 agent 目录 `/data/worker/<sanitize(name)>[-seq]`（对齐
+   *  tasks.service defaultAgentWorkDir，统一根路径防存量实例调度/DTO 展示分叉）。 */
   private defaultAgentWorkDirPath(name: string, seq: number): string {
     const base = sanitizeWorkDirName(name ?? 'agent');
-    return path.join(
-      this.taskWorkDirRoot,
-      'agents',
-      seq > 1 ? `${base}-${seq}` : base,
-    );
+    return `/data/worker/${seq > 1 ? `${base}-${seq}` : base}`;
   }
 
   private clearPendingWatchdog(taskId: string, agentId: string): void {
