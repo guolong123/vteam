@@ -37,12 +37,7 @@ import { PrismaModule } from './prisma/prisma.module';
           process.env.LOG_PRETTY === '1' && process.env.NODE_ENV !== 'test'
             ? { target: 'pino-pretty', options: { singleLine: true } }
             : undefined,
-        redact: [
-          'req.headers.authorization',
-          'req.headers.cookie',
-          // docs-site 整页导航首跳 query token（art_0000000030 v3 脱敏要求）
-          'req.query.token',
-        ],
+        redact: ['req.headers.authorization', 'req.headers.cookie'],
       },
     }),
     PrismaModule,
