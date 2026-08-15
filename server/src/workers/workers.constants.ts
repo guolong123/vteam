@@ -28,6 +28,11 @@ export const WORKER_ERRORS = {
   WORKER_NOT_FOUND: 'WORKER_NOT_FOUND',
   TOKEN_INVALID: 'WORKER_TOKEN_INVALID',
   NOT_IMPLEMENTED: 'WORKER_LIFECYCLE_NOT_IMPLEMENTED',
+  /**
+   * DELETE /workers/:id 防护：仅 offline 可物理删除（防运行中误删）。
+   * online/degraded 删除 → 409，先经 shutdown/下线再删。
+   */
+  WORKER_ONLINE_NOT_REMOVABLE: 'WORKER_ONLINE_NOT_REMOVABLE',
 } as const;
 
 /** tokenHash bcrypt 轮数，与 auth.service.ts BCRYPT_ROUNDS（10）保持一致。 */

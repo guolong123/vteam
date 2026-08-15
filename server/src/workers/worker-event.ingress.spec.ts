@@ -35,6 +35,7 @@ describe('WorkerEventIngress', () => {
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
     message: { findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
     agentQuestion: { findUnique: jest.Mock; create: jest.Mock; update: jest.Mock };
+    task: { findUnique: jest.Mock };
   };
   let realtime: { emit: jest.Mock };
   let idGen: { nextId: jest.Mock };
@@ -60,6 +61,7 @@ describe('WorkerEventIngress', () => {
         create: jest.fn().mockResolvedValue({ id: 'aq_1', status: 'pending' }),
         update: jest.fn().mockResolvedValue({ id: 'aq_1', status: 'pending' }),
       },
+      task: { findUnique: jest.fn().mockResolvedValue({ id: 't_1', managedMode: false }) },
     };
     realtime = { emit: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
     idGen = { nextId: jest.fn().mockResolvedValue('te_0000000042') };

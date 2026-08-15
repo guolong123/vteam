@@ -35,7 +35,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { hasPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { EmptyState } from "@/src/components/ui";
+import { ConfirmDialog, EmptyState } from "@/src/components/ui";
 import {
   neutral,
   space,
@@ -66,18 +66,23 @@ function WorkerCard({
   worker,
   now,
   canEdit,
+  canDelete,
   busy,
   onRestart,
   onShutdown,
+  onDelete,
 }: {
   worker: WorkerItem;
   now: number;
   /** workers.edit 权限（对齐后端 PermissionGuard；false 时操作按钮禁用 + 提示） */
   canEdit: boolean;
-  /** 当前进行中的操作（同一卡片任一操作 busy 时两个按钮均禁用防并发） */
-  busy: { workerId: string; action: "restart" | "shutdown" } | null;
+  /** workers.delete 权限（仅 offline 行显示删除入口） */
+  canDelete: boolean;
+  /** 当前进行中的操作（同一卡片任一操作 busy 时全部按钮禁用防并发） */
+  busy: { workerId: string; action: "restart" | "shutdown" | "delete" } | null;
   onRestart: (id: string) => void;
   onShutdown: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   const router = useRouter();
   const label = WORKER_STATUS_LABEL[worker.status];
@@ -101,6 +106,7 @@ function WorkerCard({
   const isBusy = busy?.workerId === worker.id;
   const restartBusy = isBusy && busy?.action === "restart";
   const shutdownBusy = isBusy && busy?.action === "shutdown";
+  const deleteBusy = isBusy && busy?.action === "delete";
   const opsDisabled = !canEdit || isOffline || isBusy;
   const opsTitle = !canEdit
     ? "无 workers.edit 权限"
@@ -365,6 +371,36 @@ function WorkerCard({
         >
           {shutdownBusy ? "下线中…" : "下线"}
         </button>
+        {/* 删除入口：仅 offline 显示（online 节点后端 409 拒绝，前端直接不暴露） */}
+        {isOffline && (
+          <button
+            type="button"
+            data-testid="worker-delete-button"
+            data-worker-id={worker.id}
+            disabled={!canDelete || isBusy}
+            title={
+              !canDelete
+                ? "无 workers.delete 权限"
+                : isBusy
+                  ? "操作进行中…"
+                  : "删除离线节点：清理其全部关联数据（不可恢复）"
+            }
+            onClick={() => onDelete(worker.id)}
+            style={{
+              flex: 1,
+              padding: `${space.sm - 1}px ${space.md}px`,
+              borderRadius: radius.md,
+              border: "none",
+              backgroundColor: !canDelete || isBusy ? neutral[100] : "#DC2626",
+              color: !canDelete || isBusy ? neutral[400] : "#FFFFFF",
+              fontSize: fontSize.md,
+              cursor: !canDelete || isBusy ? "not-allowed" : "pointer",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            {deleteBusy ? "删除中…" : "删除"}
+          </button>
+        )}
       </div>
     </section>
   );
@@ -395,12 +431,16 @@ export default function WorkersPage() {
 
   /* UX-01：重启/下线操作权限（对齐后端 PermissionGuard workers.edit） */
   const canEditWorker = hasPermission(user?.permissions, "workers", "edit");
+  /* 删除权限（对齐后端 PermissionGuard workers.delete；admin all:true 放行） */
+  const canDeleteWorker = hasPermission(user?.permissions, "workers", "delete");
 
-  /* 操作中的 worker（防并发：同一卡片任一操作 busy 时两按钮均禁用） */
+  /* 操作中的 worker（防并发：同一卡片任一操作 busy 时全部按钮均禁用） */
   const [busyWorker, setBusyWorker] = useState<{
     workerId: string;
-    action: "restart" | "shutdown";
+    action: "restart" | "shutdown" | "delete";
   } | null>(null);
+  /* 删除二次确认目标（null = 弹窗关闭） */
+  const [deleteTarget, setDeleteTarget] = useState<WorkerItem | null>(null);
   /* 操作错误提示（页级，3s 自动消失，对齐 skills 页 notice 模式） */
   const [actionError, setActionError] = useState<string | null>(null);
   useEffect(() => {
@@ -438,6 +478,25 @@ export default function WorkersPage() {
     onError: (err) => {
       setBusyWorker(null);
       setActionError(isApiError(err) ? err.message : "下线失败，请稍后重试");
+    },
+  });
+
+  /* 删除：DELETE /workers/:id（仅 offline；后端 409 拒绝 online/degraded）
+     → ConfirmDialog 确认后执行 → 刷新列表；失败走页级错误条 */
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) =>
+      api.delete<{ id: string; deleted: boolean }>(`/workers/${id}`),
+    onMutate: (id) => setBusyWorker({ workerId: id, action: "delete" }),
+    onSuccess: () => {
+      setBusyWorker(null);
+      setDeleteTarget(null);
+      setActionError(null);
+      queryClient.invalidateQueries({ queryKey: ["workers"] });
+    },
+    onError: (err) => {
+      setBusyWorker(null);
+      setDeleteTarget(null);
+      setActionError(isApiError(err) ? err.message : "删除失败，请稍后重试");
     },
   });
 
@@ -673,9 +732,14 @@ export default function WorkersPage() {
               worker={w}
               now={now}
               canEdit={canEditWorker}
+              canDelete={canDeleteWorker}
               busy={busyWorker}
               onRestart={(id) => restartMutation.mutate(id)}
               onShutdown={(id) => shutdownMutation.mutate(id)}
+              onDelete={(id) => {
+                const target = items.find((x) => x.id === id);
+                if (target) setDeleteTarget(target);
+              }}
             />
           ))}
         </div>
@@ -700,6 +764,27 @@ export default function WorkersPage() {
         心跳超时（连续 30 秒 = 3 个心跳周期未上报）自动标记离线，其上的任务组按亲和与负载策略
         迁移到存活节点；新增节点无需重启控制面，注册即入池（水平扩容）。
       </div>
+
+      {/* 删除离线 worker 二次确认（复用 ConfirmDialog，对齐 agents 页删除确认模式） */}
+      <ConfirmDialog
+        testid="worker-delete"
+        open={deleteTarget !== null}
+        title="删除 Worker"
+        description={
+          deleteTarget
+            ? `确定删除离线节点「${deleteTarget.name ?? deleteTarget.id}」？删除后不可恢复，其模型可用性、会话实例与 worker 绑定数据将一并清理。`
+            : undefined
+        }
+        confirmLabel="确认删除"
+        pendingLabel="删除中…"
+        submitting={deleteMutation.isPending}
+        onClose={() => {
+          if (!deleteMutation.isPending) setDeleteTarget(null);
+        }}
+        onConfirm={() => {
+          if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
+        }}
+      />
     </div>
   );
 }

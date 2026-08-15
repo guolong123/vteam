@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -116,5 +117,18 @@ export class WorkersController {
   @ApiOperation({ summary: '下线 worker（workers.edit；立即标 offline + 心跳命令下发）' })
   requestShutdown(@Param('id') id: string) {
     return this.workers.requestShutdown(id);
+  }
+
+  /**
+   * DELETE /api/v1/workers/:id：删除离线 worker（workers.delete）。
+   * 仅 offline 可删（online/degraded → 409 WORKER_ONLINE_NOT_REMOVABLE）；
+   * 事务内清理全部 workerId 关联后物理删除（sessions/agents 置空、availability/instances 硬删）。
+   */
+  @Delete(':id')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('workers.delete')
+  @ApiOperation({ summary: '删除离线 worker（workers.delete；仅 offline 可删）' })
+  remove(@Param('id') id: string) {
+    return this.workers.remove(id);
   }
 }

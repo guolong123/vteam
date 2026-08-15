@@ -33,6 +33,19 @@ describe('WorkersService', () => {
       findMany: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
+      delete: jest.Mock;
+    };
+    workerModelAvailability: {
+      deleteMany: jest.Mock;
+    };
+    taskGroupInstance: {
+      deleteMany: jest.Mock;
+    };
+    session: {
+      updateMany: jest.Mock;
+    };
+    agent: {
+      updateMany: jest.Mock;
     };
     modelCredential: {
       findMany: jest.Mock;
@@ -47,6 +60,7 @@ describe('WorkersService', () => {
       findMany: jest.Mock;
       count: jest.Mock;
     };
+    $transaction: jest.Mock;
   };
   let mcpServers: { applyHeartbeatStatus: jest.Mock };
   let credentialCrypto: { decrypt: jest.Mock };
@@ -90,6 +104,19 @@ describe('WorkersService', () => {
         findMany: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn(),
+        delete: jest.fn(),
+      },
+      workerModelAvailability: {
+        deleteMany: jest.fn(),
+      },
+      taskGroupInstance: {
+        deleteMany: jest.fn(),
+      },
+      session: {
+        updateMany: jest.fn(),
+      },
+      agent: {
+        updateMany: jest.fn(),
       },
       modelCredential: {
         findMany: jest.fn(),
@@ -104,7 +131,15 @@ describe('WorkersService', () => {
         findMany: jest.fn(),
         count: jest.fn(),
       },
+      $transaction: jest.fn(),
     };
+    // remove 事务默认原样执行 batch 数组（各操作 mock 已就位）
+    // PrismaPromise 是 thenable 而非函数，`await op` 即可触发其 then（mock 返回 undefined 亦安全）
+    prisma.$transaction.mockImplementation(async (ops: unknown[]) => {
+      for (const op of ops as unknown[]) {
+        await (op as Promise<unknown>);
+      }
+    });
 
     mcpServers = { applyHeartbeatStatus: jest.fn() };
     credentialCrypto = { decrypt: jest.fn().mockReturnValue('sk-raw-token') };
@@ -1597,5 +1632,93 @@ describe('WorkersService', () => {
         ).rejects.toBeInstanceOf(NotImplementedException);
       },
     );
+  });
+
+  describe('remove（DELETE /workers/:id 删除离线 worker）', () => {
+    it('offline → 事务内清理全部关联后物理删除，返回 {id, deleted:true}', async () => {
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: WORKER_STATUS.OFFLINE,
+      });
+
+      const result = await service.remove('w_0000000001');
+
+      // 事务 batch 数组顺序：availability 硬删 → instances 硬删 → sessions 置空 → agents 置空 → worker 删
+      const [txOps] = prisma.$transaction.mock.calls[0] as unknown as [
+        Array<() => Promise<unknown>>,
+      ];
+      expect(txOps).toHaveLength(5);
+      expect(prisma.workerModelAvailability.deleteMany).toHaveBeenCalledWith({
+        where: { workerId: 'w_0000000001' },
+      });
+      expect(prisma.taskGroupInstance.deleteMany).toHaveBeenCalledWith({
+        where: { workerId: 'w_0000000001' },
+      });
+      expect(prisma.session.updateMany).toHaveBeenCalledWith({
+        where: { workerId: 'w_0000000001' },
+        data: { workerId: null, instanceRef: null },
+      });
+      expect(prisma.agent.updateMany).toHaveBeenCalledWith({
+        where: { workerId: 'w_0000000001' },
+        data: { workerId: null },
+      });
+      expect(prisma.worker.delete).toHaveBeenCalledWith({
+        where: { id: 'w_0000000001' },
+      });
+      expect(result).toEqual({ id: 'w_0000000001', deleted: true });
+    });
+
+    it('online → 409 WORKER_ONLINE_NOT_REMOVABLE，不删除不清理', async () => {
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: WORKER_STATUS.ONLINE,
+      });
+
+      await expect(service.remove('w_0000000001')).rejects.toMatchObject({
+        response: { code: 'WORKER_ONLINE_NOT_REMOVABLE' },
+      });
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.worker.delete).not.toHaveBeenCalled();
+    });
+
+    it('degraded → 409（仅 offline 可删）', async () => {
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: WORKER_STATUS.DEGRADED,
+      });
+
+      await expect(service.remove('w_0000000001')).rejects.toMatchObject({
+        response: { code: 'WORKER_ONLINE_NOT_REMOVABLE' },
+      });
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('worker 不存在 → 404 WORKER_NOT_FOUND', async () => {
+      prisma.worker.findUnique.mockResolvedValue(null);
+
+      await expect(service.remove('w_unknown')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('删除成功同步清理 workerMcpStatus 与 pendingCommands 内存态', async () => {
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: WORKER_STATUS.OFFLINE,
+      });
+      service['workerMcpStatus'].set('w_0000000001', [
+        { serverName: 'gitee-ent', status: 'connected' },
+      ]);
+      service.enqueueCommand('w_0000000001', {
+        type: 'reload-config',
+        resourceVersion: 'v9',
+      });
+
+      await service.remove('w_0000000001');
+
+      expect(service['workerMcpStatus'].has('w_0000000001')).toBe(false);
+      expect(service['pendingCommands'].has('w_0000000001')).toBe(false);
+    });
   });
 });

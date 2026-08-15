@@ -18,6 +18,7 @@ describe('WorkersController', () => {
     updateDefaultModel: jest.Mock;
     requestRestart: jest.Mock;
     requestShutdown: jest.Mock;
+    remove: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -29,6 +30,7 @@ describe('WorkersController', () => {
       updateDefaultModel: jest.fn(),
       requestRestart: jest.fn(),
       requestShutdown: jest.fn(),
+      remove: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -147,5 +149,14 @@ describe('WorkersController', () => {
 
     expect(service.requestShutdown).toHaveBeenCalledWith('w_0000000001');
     expect(result).toMatchObject({ workerId: 'w_0000000001', status: 'offline' });
+  });
+
+  it('DELETE /workers/:id 转发 remove（workers.delete 保护）', async () => {
+    service.remove.mockResolvedValue({ id: 'w_0000000001', deleted: true });
+
+    const result = await controller.remove('w_0000000001');
+
+    expect(service.remove).toHaveBeenCalledWith('w_0000000001');
+    expect(result).toEqual({ id: 'w_0000000001', deleted: true });
   });
 });

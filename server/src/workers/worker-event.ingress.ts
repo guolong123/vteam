@@ -784,6 +784,17 @@ export class WorkerEventIngress {
     this.logger.log(
       `[ingress] ${dto.type} 落库 requestId=${requestId} session=${storeSessionId} kind=${kind}（workerId=${dto.workerId}）`,
     );
+    // 托管模式检测：任务 managedMode=true → 请求改由主 Agent 确认（前端不弹窗）。
+    // payload 带 managed 标记（TaskProgressionScheduler 订阅 realtime bus 据此 dispatch 给主 Agent），
+    // question.managedMode 供 GET /questions 补拉路径前端过滤弹窗。
+    const managedMode = taskId
+      ? (
+          await this.prisma.task.findUnique({
+            where: { id: taskId },
+            select: { managedMode: true },
+          })
+        )?.managedMode ?? false
+      : false;
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
@@ -796,7 +807,9 @@ export class WorkerEventIngress {
           kind,
           content,
           status: row.status,
+          managedMode,
         },
+        ...(managedMode ? { managed: true } : {}),
         taskId: taskId ?? null,
         agentId: agentId ?? null,
         sessionId: storeSessionId,
