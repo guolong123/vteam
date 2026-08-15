@@ -54,6 +54,8 @@ export interface RegistryClientOptions {
   load?: WorkerLoad;
   /** C2：worker 默认模型 id（config.defaultModelId，env WORKER_DEFAULT_MODEL）；空不携带 */
   defaultModelId?: string;
+  /** 内置 keta-platform MCP 地址覆盖（config.mcpUrl，env WORKER_MCP_URL）；空不携带 */
+  mcpUrl?: string;
   /** fetch 注入点（测试用）；默认 globalThis.fetch */
   fetchImpl?: typeof fetch;
 }
@@ -103,6 +105,7 @@ export async function registerWorker(opts: RegistryClientOptions): Promise<Regis
     capabilities: opts.capabilities,
     load: opts.load ?? { instances: 0 },
     ...(opts.defaultModelId ? { defaultModelId: opts.defaultModelId } : {}),
+    ...(opts.mcpUrl ? { mcpUrl: opts.mcpUrl } : {}),
   };
   const response = await fetchImpl(apiUrl(opts.serverUrl, '/workers/register'), {
     method: 'POST',

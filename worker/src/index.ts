@@ -422,6 +422,7 @@ export async function buildRegisterOptions(
     opencodeVersion: serveVersion !== 'unknown' ? serveVersion : cliVersion,
     capabilities,
     ...(config.defaultModelId ? { defaultModelId: config.defaultModelId } : {}),
+    ...(config.mcpUrl ? { mcpUrl: config.mcpUrl } : {}),
   };
 }
 
@@ -462,6 +463,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   const injector = new ResourceInjector({
     serverUrl: config.serverUrl,
     workerToken: config.workerToken,
+    workerId: config.workerId,
     workDir: config.workDir,
   });
 
