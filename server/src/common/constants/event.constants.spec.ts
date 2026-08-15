@@ -8,20 +8,21 @@ import {
 } from './event.constants';
 
 describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 篇；Phase 4 worker 回流扩展，T1）', () => {
-  it('EVENT_TYPES 含 12 个事件，事件名一律点号分隔（无下划线变体）', () => {
+  it('EVENT_TYPES 含 13 个事件，事件名一律点号分隔（无下划线变体）', () => {
     expect(EVENT_TYPES.CHAT_MESSAGE_NEW).toBe('chat.message.new');
     expect(EVENT_TYPES.AGENT_LOADING).toBe('agent.loading');
     expect(EVENT_TYPES.AGENT_ERROR).toBe('agent.error');
     expect(EVENT_TYPES.TASK_STATUS_CHANGED).toBe('task.status.changed');
     expect(EVENT_TYPES.TEAM_CHANGED).toBe('team.changed');
     expect(EVENT_TYPES.ARTIFACT_SUBMITTED).toBe('artifact.submitted');
+    expect(EVENT_TYPES.ISSUE_CHANGED).toBe('issue.changed');
     expect(EVENT_TYPES.SESSION_UPDATED).toBe('session.updated');
     expect(EVENT_TYPES.MESSAGE_PART_DELTA).toBe('message.part.delta');
     expect(EVENT_TYPES.TASK_COMPLETED).toBe('task.completed');
     expect(EVENT_TYPES.AGENT_STATUS).toBe('agent.status');
     expect(EVENT_TYPES.WORKER_HEARTBEAT).toBe('worker.heartbeat');
     expect(EVENT_TYPES.AGENT_QUESTION).toBe('agent.question');
-    expect(Object.values(EVENT_TYPES)).toHaveLength(12);
+    expect(Object.values(EVENT_TYPES)).toHaveLength(13);
     for (const name of Object.values(EVENT_TYPES)) {
       expect(name.includes('_')).toBe(false);
     }
