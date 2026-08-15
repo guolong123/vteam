@@ -1240,6 +1240,28 @@ describe('PlatformMcpService', () => {
       });
     });
 
+    it('is_0000000018：/uploads/* 未归档（任务背景文档经 POST /uploads 上传）→ server 上传目录直读，不触达 worker', async () => {
+      allowWorker();
+      prisma.artifactVersion.findMany.mockResolvedValue([]);
+      fsReadSpy.mockResolvedValue(Buffer.from('背景文档内容'));
+
+      const result = await service.readFile(ctx, {
+        taskId,
+        fileRef: '/uploads/8054d908-85d3-45e5-8d96-3bc1a4b8a092.md',
+      });
+
+      // 直接走 readFromArchive（readUploadedFile → fsp.readFile），不再 worker 拉取
+      expect(fsReadSpy).toHaveBeenCalled();
+      expect(workerClient.fetchFile).not.toHaveBeenCalled();
+      expect(prisma.worker.findUnique).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        content: '背景文档内容',
+        fileName: '8054d908-85d3-45e5-8d96-3bc1a4b8a092.md',
+        fileRef: '/uploads/8054d908-85d3-45e5-8d96-3bc1a4b8a092.md',
+        source: 'archive',
+      });
+    });
+
     it('归档未命中且 worker 不存在 → 404 PLATFORM_MCP_FILE_NOT_FOUND（不调用 fetchFile）', async () => {
       allowWorker();
       prisma.artifactVersion.findMany.mockResolvedValue([]);
