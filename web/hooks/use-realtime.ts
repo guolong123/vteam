@@ -202,6 +202,8 @@ export interface RealtimeQuestionEvent {
       | { questions: RealtimeQuestionInfo[] }
       | { title?: string; pattern?: string | string[] | null; type?: string };
     status: string;
+    /** 托管模式标记：任务开启托管时请求改由主 Agent 确认，页面不弹窗。 */
+    managedMode?: boolean;
   };
   taskId: string | null;
   agentId: string | null;

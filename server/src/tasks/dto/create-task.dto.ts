@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsIn,
   IsOptional,
   IsString,
@@ -91,6 +92,14 @@ export class CreateTaskDto {
   @IsOptional()
   @IsString()
   mainAgentId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '托管模式（默认 false）：开启后成员 question/permission 请求不弹窗给用户，改由主 Agent 经 question_confirm 确认',
+  })
+  @IsOptional()
+  @IsBoolean()
+  managedMode?: boolean;
 
   @ApiPropertyOptional({
     description: '背景文档元数据数组（FR-06，存 tasks.background_docs Json）',

@@ -27,6 +27,7 @@ import {
 } from '../issues/issues.constants';
 import { TaskTransitionAction } from '../common/constants/task.constants';
 import { TasksService } from '../tasks/tasks.service';
+import { QuestionsService } from '../questions/questions.service';
 import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
 
 /**
@@ -103,6 +104,7 @@ export class PlatformMcpService {
     private readonly artifactsService: ArtifactsService,
     private readonly issuesService: IssuesService,
     private readonly tasksService: TasksService,
+    private readonly questionsService: QuestionsService,
   ) {}
 
   /**
@@ -707,6 +709,29 @@ export class PlatformMcpService {
       args.action,
       args.reason ? { reason: args.reason } : undefined,
     );
+  }
+
+  /** question_confirm：托管模式下主 Agent 确认成员请求（仅主实例可调，复用 task_transition 权限模式）。 */
+  async questionConfirm(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId: string;
+      selfInstanceId: string;
+      requestId: string;
+      kind: 'question' | 'permission';
+      answers?: string[][] | null;
+      response?: 'once' | 'always' | 'reject';
+    },
+  ) {
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    return this.questionsService.confirmByAgent({
+      taskId: args.taskId,
+      instanceId: args.selfInstanceId,
+      requestId: args.requestId,
+      kind: args.kind,
+      answers: args.answers,
+      response: args.response,
+    });
   }
 
   /** submit_artifact doc/file 路径：worker 拉取（read_file 抛错语义）→ 落盘 uploads → 归档。 */

@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
@@ -30,22 +31,8 @@ import { QueryTasksDto } from './dto/query-tasks.dto';
 import { RejectTaskDto } from './dto/reject-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
-
-/**
- * is_0000000010：工作目录名 sanitize——agent 名称可能含中文/空格/斜杠等，做安全映射：
- * 保留字母数字下划线、点、连字符与 CJK 字符（Linux/UTF-8 支持中文目录，需求「与 agent
- * 名称同名」），其余非法字符（空格/斜杠/引号/路径分隔符等）→ `-`；去首尾连字符/点，
- * 兜底 `agent`（防空串/路径穿越/保留字）。导出供 worker-dispatcher 复用同一规则。
- */
-export function sanitizeWorkDirName(name: string): string {
-  const raw = String(name ?? '').trim();
-  const base =
-    raw
-      .replace(/[^\p{L}\p{N}._-]/gu, '-')
-      .replace(/^[._-]+|[._-]+$/g, '')
-      .replace(/\.{2,}/g, '.') || 'agent';
-  return base;
-}
+import { TaskProgressionScheduler } from './task-progression.scheduler';
+import { sanitizeWorkDirName } from './work-dir.util';
 
 /** 任务域主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
 const ID_PREFIX = {
@@ -104,6 +91,7 @@ type TaskRow = {
   status: string;
   mainAgentId: string | null;
   mainAgentInstanceId: string | null;
+  managedMode: boolean;
   backgroundDocs: Prisma.JsonValue | null;
   createdBy: string;
   createdAt: Date;
@@ -170,11 +158,14 @@ type TransitionOptions = {
  */
 @Injectable()
 export class TasksService implements OnModuleInit {
+  private readonly logger = new Logger(TasksService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly idGen: IdGeneratorService,
     private readonly realtime: RealtimeService,
     private readonly sessionLifecycle: SessionLifecycleService,
+    private readonly progression: TaskProgressionScheduler,
   ) {}
 
   /** 进程启动：按库内各前缀最大序号对齐 id 生成器（重启续号，防主键冲突）。 */
@@ -226,6 +217,7 @@ export class TasksService implements OnModuleInit {
           // 主实例在实例创建后解析（mainAgentInstanceId 需校验属于创建集合），先空置再更新
           mainAgentId: null,
           mainAgentInstanceId: null,
+          managedMode: dto.managedMode ?? false,
           backgroundDocs: (dto.backgroundDocs ?? []) as Prisma.InputJsonValue,
           createdBy: userId,
           version: 0,
@@ -425,6 +417,9 @@ export class TasksService implements OnModuleInit {
     }
     if (dto.backgroundDocs !== undefined) {
       data.backgroundDocs = dto.backgroundDocs as Prisma.InputJsonValue;
+    }
+    if (dto.managedMode !== undefined) {
+      data.managedMode = dto.managedMode;
     }
     const instances = this.teamInstancesOf(task.taskAgents);
     if (dto.mainAgentInstanceId !== undefined) {
@@ -985,6 +980,19 @@ export class TasksService implements OnModuleInit {
       { type: 'global' },
     );
 
+    // 巡检调度器接线（功能 1）：进入 in_progress（start/reject）注册循环，离开注销。
+    // 事务已提交且广播完成——register 内部按 status=in_progress 再校验，失败自动注销兜底；
+    // unregister 为纯内存删除不抛错。防重启丢循环由调度器 onModuleInit 扫描重建兜底。
+    if (to === TASK_STATUS.in_progress) {
+      await this.progression.register(id).catch((err: unknown) =>
+        this.logger.error(
+          `巡检注册失败 taskId=${id}: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    } else if (from === TASK_STATUS.in_progress) {
+      this.progression.unregister(id);
+    }
+
     // 系统消息事务后广播 chat.message.new（先落库后转发，与 updateTeam 一致）
     for (const msg of sysMessages) {
       await this.realtime.broadcast(
@@ -1031,6 +1039,7 @@ export class TasksService implements OnModuleInit {
       status: task.status,
       mainAgentId: task.mainAgentId,
       mainAgentInstanceId: task.mainAgentInstanceId ?? null,
+      managedMode: task.managedMode ?? false,
       backgroundDocs: task.backgroundDocs ?? [],
       teamAgentIds: (task.taskAgents ?? [])
         .filter((ta) => !ta.removedAt)

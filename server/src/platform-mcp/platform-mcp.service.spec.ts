@@ -21,6 +21,7 @@ import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
 import { PlatformMcpService } from './platform-mcp.service';
 import { IssuesService } from '../issues/issues.service';
 import { TasksService } from '../tasks/tasks.service';
+import { QuestionsService } from '../questions/questions.service';
 
 describe('PlatformMcpService', () => {
   let service: PlatformMcpService;
@@ -51,6 +52,7 @@ describe('PlatformMcpService', () => {
     transitionByAgent: jest.Mock;
   };
   let tasksService: { transitionByAgent: jest.Mock };
+  let questionsService: { confirmByAgent: jest.Mock };
 
   const taskId = 't_0000000001';
   const workerId = 'w_0000000001';
@@ -108,6 +110,7 @@ describe('PlatformMcpService', () => {
       transitionByAgent: jest.fn(),
     };
     tasksService = { transitionByAgent: jest.fn() };
+    questionsService = { confirmByAgent: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -120,6 +123,7 @@ describe('PlatformMcpService', () => {
         { provide: ArtifactsService, useValue: artifactsService },
         { provide: IssuesService, useValue: issuesService },
         { provide: TasksService, useValue: tasksService },
+        { provide: QuestionsService, useValue: questionsService },
       ],
     }).compile();
 

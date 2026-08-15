@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   GoneException,
   Injectable,
   Logger,
@@ -8,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { AgentQuestion, Prisma } from '@prisma/client';
 import { EVENT_TYPES } from '../common/constants/event.constants';
+import { TASK_ERRORS } from '../common/constants/task.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
@@ -19,6 +21,7 @@ import {
   AGENT_QUESTION_ID_PREFIX,
   AGENT_QUESTION_KINDS,
   AGENT_QUESTION_STATUS,
+  PermissionResponse,
   QUESTION_PENDING_TTL_MS,
   QUESTIONS_ERRORS,
 } from './questions.constants';
@@ -34,6 +37,8 @@ export interface AgentQuestionDto {
   content: unknown;
   status: string;
   answers: unknown;
+  /** 托管模式标记：任务开启托管（managedMode=true）时该请求改由主 Agent 确认，前端不弹窗。 */
+  managedMode: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -90,9 +95,25 @@ export class QuestionsService {
         where,
         orderBy: { createdAt: 'desc' },
       });
-      return fresh.map((r) => this.toDto(r));
+      return this.toDtos(fresh);
     }
-    return rows.map((r) => this.toDto(r));
+    return this.toDtos(rows);
+  }
+
+  /** 批量行 → DTO：一次查询关联任务 managedMode（托管标记，前端据此过滤弹窗）。 */
+  private async toDtos(rows: AgentQuestion[]): Promise<AgentQuestionDto[]> {
+    const taskIds = [...new Set(rows.map((r) => r.taskId).filter(Boolean))];
+    const tasks =
+      taskIds.length > 0
+        ? await this.prisma.task.findMany({
+            where: { id: { in: taskIds } },
+            select: { id: true, managedMode: true },
+          })
+        : [];
+    const managedByTask = new Map(tasks.map((t) => [t.id, t.managedMode]));
+    return rows.map((r) =>
+      this.toDto(r, managedByTask.get(r.taskId) ?? false),
+    );
   }
 
   /**
@@ -130,6 +151,68 @@ export class QuestionsService {
         });
       }
     }
+    return this.forwardReply(row, { answers: dto.answers, response: dto.response });
+  }
+
+  /**
+   * 托管确认（question_confirm MCP 工具）：任务托管模式下由主 Agent 确认成员请求。
+   * 仅主实例可调（task.mainAgentInstanceId === instanceId，复用 task_transition 权限模式）；
+   * requestId 精确命中 AgentQuestion（requestId 唯一键），kind 须与落库一致；
+   * 回复语义与用户 reply 相同（question=answers / permission=response，answers=null=拒绝）。
+   */
+  async confirmByAgent(input: {
+    taskId: string;
+    instanceId: string;
+    requestId: string;
+    kind: 'question' | 'permission';
+    answers?: string[][] | null;
+    response?: PermissionResponse;
+  }): Promise<AgentQuestionDto> {
+    const task = await this.prisma.task.findUnique({
+      where: { id: input.taskId },
+      select: { mainAgentInstanceId: true },
+    });
+    if (!task) {
+      throw new NotFoundException({
+        code: TASK_ERRORS.TASK_NOT_FOUND,
+        message: '任务不存在',
+      });
+    }
+    if (task.mainAgentInstanceId !== input.instanceId) {
+      throw new ForbiddenException({
+        code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,
+        message: `仅主 Agent（${task.mainAgentInstanceId ?? '未设置'}）可确认托管模式下的请求`,
+      });
+    }
+    const row = await this.prisma.agentQuestion.findUnique({
+      where: { requestId: input.requestId },
+    });
+    if (!row) {
+      throw new NotFoundException({
+        code: QUESTIONS_ERRORS.QUESTION_NOT_FOUND,
+        message: `AgentQuestion requestId ${input.requestId} 不存在`,
+      });
+    }
+    if (row.status !== AGENT_QUESTION_STATUS.PENDING) {
+      throw new BadRequestException({
+        code: QUESTIONS_ERRORS.QUESTION_ALREADY_RESOLVED,
+        message: `AgentQuestion ${row.id} 已终态（${row.status}），不可重复确认`,
+      });
+    }
+    if (row.kind !== input.kind) {
+      throw new BadRequestException({
+        code: QUESTIONS_ERRORS.QUESTION_INVALID_REPLY,
+        message: `确认 kind（${input.kind}）与请求类型（${row.kind}）不符`,
+      });
+    }
+    return this.forwardReply(row, { answers: input.answers, response: input.response });
+  }
+
+  /** 回复转发核心（reply / confirmByAgent 共用）：worker 定位 → workerClient → 终态落库 → emit 收敛。 */
+  private async forwardReply(
+    row: AgentQuestion,
+    payload: { answers?: string[][] | null; response?: PermissionResponse },
+  ): Promise<AgentQuestionDto> {
     const session = await this.prisma.session.findUnique({
       where: { id: row.sessionId },
       select: { workerId: true, instanceRef: true },
@@ -176,10 +259,10 @@ export class QuestionsService {
 
     const answers: Prisma.InputJsonValue =
       row.kind === AGENT_QUESTION_KINDS.QUESTION
-        ? (dto.answers as Prisma.InputJsonValue)
-        : { response: dto.response };
+        ? (payload.answers as Prisma.InputJsonValue)
+        : { response: payload.response };
     const status =
-      row.kind === AGENT_QUESTION_KINDS.QUESTION && dto.answers === null
+      row.kind === AGENT_QUESTION_KINDS.QUESTION && payload.answers === null
         ? AGENT_QUESTION_STATUS.REJECTED
         : AGENT_QUESTION_STATUS.RESOLVED;
 
@@ -190,7 +273,7 @@ export class QuestionsService {
           {
             sessionId: opencodeSessionId,
             requestId: row.requestId,
-            answers: dto.answers ?? null,
+            answers: payload.answers ?? null,
           },
         );
       } else {
@@ -199,7 +282,7 @@ export class QuestionsService {
           {
             sessionId: opencodeSessionId,
             permissionId: row.requestId,
-            response: dto.response as 'once' | 'always' | 'reject',
+            response: payload.response as 'once' | 'always' | 'reject',
           },
         );
       }
@@ -210,23 +293,24 @@ export class QuestionsService {
         await this.expire(row, `reply 转发 serve 404（${row.requestId}）`);
         throw new GoneException({
           code: QUESTIONS_ERRORS.QUESTION_EXPIRED,
-          message: `AgentQuestion ${id} 已过期（serve 已无请求 ${row.requestId}），弹窗已关闭`,
+          message: `AgentQuestion ${row.id} 已过期（serve 已无请求 ${row.requestId}），弹窗已关闭`,
         });
       }
       throw err;
     }
 
     const updated = await this.prisma.agentQuestion.update({
-      where: { id },
+      where: { id: row.id },
       data: { status, answers },
     });
     this.logger.log(
-      `[questions] reply ${row.kind} id=${id} status=${status} requestId=${row.requestId}（worker=${worker.id}）`,
+      `[questions] ${row.kind === AGENT_QUESTION_KINDS.QUESTION ? 'reply' : 'confirm'} ${row.kind} id=${row.id} status=${status} requestId=${row.requestId}（worker=${worker.id}）`,
     );
+    const managedMode = await this.managedModeOf(updated.taskId);
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
-        question: this.toDto(updated),
+        question: this.toDto(updated, managedMode),
         taskId: updated.taskId,
         agentId: updated.agentId,
         sessionId: updated.sessionId,
@@ -234,7 +318,18 @@ export class QuestionsService {
       },
       this.scopeOf(updated.taskId),
     );
-    return this.toDto(updated);
+    return this.toDto(updated, managedMode);
+  }
+
+  private async managedModeOf(taskId: string): Promise<boolean> {
+    if (!taskId) {
+      return false;
+    }
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { managedMode: true },
+    });
+    return task?.managedMode ?? false;
   }
 
   private scopeOf(taskId: string): RealtimeScope {
@@ -257,7 +352,7 @@ export class QuestionsService {
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
-        question: this.toDto(updated),
+        question: this.toDto(updated, await this.managedModeOf(updated.taskId)),
         taskId: updated.taskId,
         agentId: updated.agentId,
         sessionId: updated.sessionId,
@@ -267,7 +362,7 @@ export class QuestionsService {
     );
   }
 
-  private toDto(row: AgentQuestion): AgentQuestionDto {
+  private toDto(row: AgentQuestion, managedMode = false): AgentQuestionDto {
     return {
       id: row.id,
       requestId: row.requestId,
@@ -278,6 +373,7 @@ export class QuestionsService {
       content: row.content,
       status: row.status,
       answers: row.answers,
+      managedMode,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

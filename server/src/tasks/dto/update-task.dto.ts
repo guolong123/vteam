@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { TASK_PRIORITY } from '../../common/constants/task.constants';
 
 /**
@@ -51,4 +51,12 @@ export class UpdateTaskDto {
   @IsOptional()
   @IsArray()
   backgroundDocs?: unknown[];
+
+  @ApiPropertyOptional({
+    description:
+      '托管模式（默认 false）：开启后成员 question/permission 请求不弹窗给用户，改由主 Agent 经 question_confirm 确认',
+  })
+  @IsOptional()
+  @IsBoolean()
+  managedMode?: boolean;
 }

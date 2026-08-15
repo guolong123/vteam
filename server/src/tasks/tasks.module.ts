@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
+import { ChatModule } from '../chat/chat.module';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { ProjectMembershipGuard } from '../common/guards/project-membership.guard';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { WorkersModule } from '../workers/workers.module';
+import { TaskProgressionScheduler } from './task-progression.scheduler';
 import { TasksController } from './tasks.controller';
 import { TasksService } from './tasks.service';
 
@@ -17,11 +19,14 @@ import { TasksService } from './tasks.service';
  * - ProjectMembershipGuard 本模块注册（依赖全局 PrismaService 与 Reflector）；
  * - PermissionGuard（CONF-02 方案②补齐矩阵守卫）：端点叠加 tasks.view/create/edit/review
  *   权限点，成员过滤之上再按矩阵判定（admin all:true 全放行 / member all:false 写拒）。
+ * - ChatModule（功能 1）：TaskProgressionScheduler 注入 WorkerDispatcher（dispatchAgentMention
+ *   定向主 Agent 巡检/托管确认）；ChatModule imports Workers/Realtime/Artifacts，不反向依赖本模块，无环。
+ * - TaskProgressionScheduler（本模块 provider）：主 Agent 定期巡检调度 + 托管确认路由。
  */
 @Module({
-  imports: [RealtimeModule, WorkersModule],
+  imports: [RealtimeModule, WorkersModule, ChatModule],
   controllers: [TasksController],
-  providers: [TasksService, ProjectMembershipGuard, PermissionGuard],
+  providers: [TasksService, TaskProgressionScheduler, ProjectMembershipGuard, PermissionGuard],
   exports: [TasksService],
 })
 export class TasksModule {}

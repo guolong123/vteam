@@ -195,6 +195,27 @@ const taskTransitionSchema = z.object({
 
 type TaskTransitionArgs = z.infer<typeof taskTransitionSchema>;
 
+const questionConfirmSchema = z.object({
+  taskId: z.string().describe('任务 ID'),
+  selfInstanceId: z
+    .string()
+    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+  requestId: z.string().describe('待确认请求 id（que_/per_ 前缀，来自托管确认消息）'),
+  kind: z
+    .enum(['question', 'permission'])
+    .describe('请求类型：question=模型提问 / permission=工具权限确认'),
+  answers: z
+    .array(z.array(z.string()))
+    .optional()
+    .describe('question 答复：label 数组（顺序对应问题）；answers=null 表示拒绝'),
+  response: z
+    .enum(['once', 'always', 'reject'])
+    .optional()
+    .describe('permission 确认：once 允许一次 / always 总是允许 / reject 拒绝'),
+});
+
+type QuestionConfirmArgs = z.infer<typeof questionConfirmSchema>;
+
 /**
  * 构建工具集（service 闭包注入，controller 构造时调用一次）。
  * handler 签名 `(ctx, args)`：ctx.workerId 为 controller 透传的 header 值；
@@ -298,6 +319,14 @@ export function buildPlatformMcpTools(
       inputSchema: taskTransitionSchema,
       handler: (ctx, args) =>
         service.taskTransition(ctx, args as TaskTransitionArgs),
+    },
+    {
+      name: 'question_confirm',
+      description:
+        '托管模式下确认成员请求（仅主 Agent 可调用）：kind=question 传 answers（label 数组，answers=null 拒绝）；kind=permission 传 response(once/always/reject)。请求 requestId 来自托管确认消息。返回更新后的确认记录；非主实例调用将被拒绝。',
+      inputSchema: questionConfirmSchema,
+      handler: (ctx, args) =>
+        service.questionConfirm(ctx, args as QuestionConfirmArgs),
     },
   ];
 }

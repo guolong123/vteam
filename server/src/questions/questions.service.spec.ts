@@ -20,6 +20,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
     };
     session: { findUnique: jest.Mock; findFirst: jest.Mock };
     worker: { findUnique: jest.Mock };
+    task: { findUnique: jest.Mock; findMany: jest.Mock };
   };
   let realtime: { emit: jest.Mock };
   let workerClient: { questionReply: jest.Mock; permissionReply: jest.Mock };
@@ -51,6 +52,10 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       },
       session: { findUnique: jest.fn(), findFirst: jest.fn() },
       worker: { findUnique: jest.fn() },
+      task: {
+        findUnique: jest.fn().mockResolvedValue({ id: 't_1', managedMode: false }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     };
     realtime = { emit: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
     workerClient = { questionReply: jest.fn().mockResolvedValue(undefined), permissionReply: jest.fn().mockResolvedValue(undefined) };
@@ -143,7 +148,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         { sessionId: 'ses_abc', requestId: 'que_1', answers: [['继续']] },
       );
       expect(prisma.agentQuestion.update).toHaveBeenCalledWith({
-        where: { id: 'aq_1' },
+        where: { id: 'aq_0000000001' },
         data: { status: 'resolved', answers: [['继续']] },
       });
       expect(realtime.emit).toHaveBeenCalledWith(
@@ -167,7 +172,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         { sessionId: 'ses_abc', requestId: 'que_1', answers: null },
       );
       expect(prisma.agentQuestion.update).toHaveBeenCalledWith({
-        where: { id: 'aq_1' },
+        where: { id: 'aq_0000000001' },
         data: { status: 'rejected', answers: null },
       });
     });

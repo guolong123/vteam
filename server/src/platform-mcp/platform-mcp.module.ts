@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ArtifactsModule } from '../artifacts/artifacts.module';
 import { ChatModule } from '../chat/chat.module';
 import { IssuesModule } from '../issues/issues.module';
+import { QuestionsModule } from '../questions/questions.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { TasksModule } from '../tasks/tasks.module';
 import { WorkersModule } from '../workers/workers.module';
@@ -31,6 +32,9 @@ import { PlatformMcpService } from './platform-mcp.service';
  *   IssuesModule 仅依赖 RealtimeModule，无环。
  * - TasksModule 导出 TasksService（task_transition 工具经其做主实例校验与五态状态机流转）；
  *   TasksModule imports RealtimeModule/WorkersModule，不反向依赖本模块，无环。
+ * - QuestionsModule 导出 QuestionsService（question_confirm 工具经其做主实例校验与
+ *   question/permission 确认转发）；QuestionsModule imports RealtimeModule/WorkersModule，
+ *   不反向依赖本模块，无环。
  */
 @Module({
   imports: [
@@ -40,6 +44,7 @@ import { PlatformMcpService } from './platform-mcp.service';
     ArtifactsModule,
     IssuesModule,
     TasksModule,
+    QuestionsModule,
   ],
   controllers: [PlatformMcpController],
   providers: [PlatformMcpService, WorkerTokenGuard],

@@ -201,6 +201,8 @@ function TaskForm({
   onDescriptionChange,
   priority,
   onPriorityChange,
+  managedMode,
+  onManagedModeChange,
   titleError,
   docs,
   onRemoveDoc,
@@ -215,6 +217,8 @@ function TaskForm({
   onDescriptionChange: (v: string) => void;
   priority: Priority;
   onPriorityChange: (v: Priority) => void;
+  managedMode: boolean;
+  onManagedModeChange: (v: boolean) => void;
   titleError: string | null;
   docs: BackgroundDoc[];
   onRemoveDoc: (url: string) => void;
@@ -502,6 +506,51 @@ function TaskForm({
             </option>
           ))}
         </select>
+      </div>
+
+      {/* 托管模式开关：开启后成员 question/permission 请求由主 Agent 确认（不弹窗给用户） */}
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
+          <span
+            role="switch"
+            aria-checked={managedMode}
+            data-testid="managed-mode-toggle"
+            onClick={() => onManagedModeChange(!managedMode)}
+            style={{
+              width: 40,
+              height: 22,
+              borderRadius: 11,
+              border: "none",
+              backgroundColor: managedMode ? "#2563EB" : neutral[300],
+              position: "relative",
+              flexShrink: 0,
+              cursor: "pointer",
+              transition: "background-color .2s",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                top: 2,
+                left: managedMode ? 20 : 2,
+                width: 18,
+                height: 18,
+                borderRadius: "50%",
+                backgroundColor: "#FFFFFF",
+                transition: "left .2s",
+                boxShadow: shadow.sm,
+              }}
+            />
+          </span>
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            <label htmlFor="managed-mode-toggle" style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800], cursor: "pointer" }}>
+              托管模式
+            </label>
+            <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>
+              开启后，成员提问/权限请求由主 Agent 确认，不再弹窗打扰
+            </span>
+          </div>
+        </div>
       </div>
 
       {/* 提示条 */}
@@ -1150,6 +1199,7 @@ export default function TaskCreatePage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<Priority>("中");
+  const [managedMode, setManagedMode] = useState(false);
 
   // 背景文档：真实上传列表（POST /uploads 成功后入列，禁止预置假数据）
   const [backgroundDocs, setBackgroundDocs] = useState<BackgroundDoc[]>([]);
@@ -1382,6 +1432,8 @@ export default function TaskCreatePage() {
           //（决策 1：默认主 Agent=项目经理；用户改主实例别名不影响——按 agent 映射）
           mainAgentId: mainInstance ? toAgentId(mainInstance.roleKey) : undefined,
           backgroundDocs: backgroundDocs.map((d) => ({ name: d.name, url: d.url })),
+          // 托管模式：开启后成员 question/permission 请求改由主 Agent 确认（不弹窗给用户）
+          managedMode,
         }
       );
       setCreated(true);
@@ -1425,6 +1477,8 @@ export default function TaskCreatePage() {
           onDescriptionChange={setDescription}
           priority={priority}
           onPriorityChange={setPriority}
+          managedMode={managedMode}
+          onManagedModeChange={setManagedMode}
           titleError={titleError}
           docs={backgroundDocs}
           onRemoveDoc={handleRemoveDoc}

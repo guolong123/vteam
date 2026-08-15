@@ -103,6 +103,8 @@ interface TaskDetail {
   mainAgentId: string | null;
   /** 主实例 id（决策依据；mainAgentId 渲染兜底）。 */
   mainAgentInstanceId: string | null;
+  /** 托管模式：成员 question/permission 请求由主 Agent 确认（不弹窗给用户）。 */
+  managedMode: boolean;
   backgroundDocs: unknown[];
   teamAgentIds: string[];
   /** 团队实例列表（[{id, agentId, alias, seq, name, role, main}]，按 (agentId, seq) 排序）。 */
@@ -1561,6 +1563,7 @@ function TaskPanel({
   onOpenIssueDetail,
   onEditTaskInfo,
   width,
+  onToggleManagedMode,
 }: {
   task: TaskDetail;
   agents: { id: string; name: string; role: RoleKey }[];
@@ -1582,6 +1585,8 @@ function TaskPanel({
   onEditTaskInfo?: () => void;
   /** 面板宽度（is_0000000017 可拖拽 resize，缺省 300）。 */
   width?: number;
+  /** 托管模式开关（PATCH /tasks/:id {managedMode}，父组件 mutation 写回缓存）。 */
+  onToggleManagedMode?: (managed: boolean) => void;
 }) {
   const mainAgent = task.mainAgentId ? agents.find((a) => a.id === task.mainAgentId) : undefined;
   /** 主实例（T5：instances[].main 或 id===mainAgentInstanceId；别名优先展示） */
@@ -1964,6 +1969,63 @@ function TaskPanel({
           任务操作
         </div>
         <TaskStatusActions taskId={task.id} status={task.status} />
+
+        {/* 托管模式开关：开启后成员 question/permission 请求由主 Agent 确认（不弹窗给用户） */}
+        {onToggleManagedMode && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: space.md,
+              marginTop: space.lg,
+              padding: `${space.md}px ${space.lg}px`,
+              borderRadius: radius.md,
+              backgroundColor: neutral[50],
+              border: `1px solid ${neutral[200]}`,
+            }}
+          >
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>
+                托管模式
+              </span>
+              <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>
+                成员提问/权限请求由主 Agent 确认
+              </span>
+            </div>
+            <span
+              role="switch"
+              aria-checked={task.managedMode}
+              data-testid="managed-mode-toggle"
+              onClick={() => onToggleManagedMode(!task.managedMode)}
+              style={{
+                width: 40,
+                height: 22,
+                borderRadius: 11,
+                border: "none",
+                backgroundColor: task.managedMode ? "#2563EB" : neutral[300],
+                position: "relative",
+                flexShrink: 0,
+                cursor: "pointer",
+                transition: "background-color .2s",
+              }}
+            >
+              <span
+                style={{
+                  position: "absolute",
+                  top: 2,
+                  left: task.managedMode ? 20 : 2,
+                  width: 18,
+                  height: 18,
+                  borderRadius: "50%",
+                  backgroundColor: "#FFFFFF",
+                  transition: "left .2s",
+                  boxShadow: shadow.sm,
+                }}
+              />
+            </span>
+          </div>
+        )}
       </div>
 
     </aside>
@@ -2095,7 +2157,8 @@ export default function TaskChatPage() {
   useEffect(() => {
     const pending = questionsQuery.data;
     if (!pending || pending.length === 0) return;
-    setPendingQuestion((prev) => prev ?? pending[0]);
+    // 托管模式请求由主 Agent 确认，不弹窗给用户
+    setPendingQuestion((prev) => prev ?? (pending[0]?.managedMode ? null : pending[0]));
   }, [questionsQuery.data]);
 
   /**
@@ -2367,6 +2430,8 @@ export default function TaskChatPage() {
       }
       if (payload.question.status !== "pending") return;
       if (payload.taskId && payload.taskId !== taskId) return;
+      // 托管模式请求由主 Agent 确认，不弹窗给用户
+      if (payload.question.managedMode) return;
       setPendingQuestion({
         id: payload.question.id,
         requestId: payload.question.requestId,
@@ -2375,6 +2440,7 @@ export default function TaskChatPage() {
         status: payload.question.status,
         taskId: payload.question.taskId,
         agentId: payload.question.agentId,
+        managedMode: payload.question.managedMode,
       });
     },
   });
@@ -2566,6 +2632,25 @@ export default function TaskChatPage() {
     });
   };
 
+  /* ---------- 5c. 托管模式开关：PATCH /tasks/:id {managedMode} → 写回任务缓存（参考 addInstance 模式） ---------- */
+  const managedModeMutation = useMutation({
+    mutationFn: (managed: boolean) => api.patch<TaskDetail>(`/tasks/${taskId}`, { managedMode: managed }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<TaskDetail>(["task", taskId], updated);
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+    },
+    onError: (err) => {
+      // 开关失败：提示 + 缓存回滚（reload 兜底）
+      const msg = isApiError(err) ? err.message : "托管模式切换失败，请稍后重试";
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+      alert(msg);
+    },
+  });
+  const handleToggleManagedMode = (managed: boolean) => {
+    if (managedModeMutation.isPending) return;
+    managedModeMutation.mutate(managed);
+  };
+
   /** 当前处于 loading 的 Agent 集合（members-panel 状态 + 指示器 label） */
   const loadingAgentIds = useMemo(
     () => new Set(Object.keys(loadingByAgent)),
@@ -2737,6 +2822,7 @@ export default function TaskChatPage() {
         onOpenIssueDetail={setDetailIssueId}
         onEditTaskInfo={() => setTaskEditOpen(true)}
         width={taskPanel.width}
+        onToggleManagedMode={handleToggleManagedMode}
       />
 
       {/* 任务信息编辑弹窗（is_0000000011） */}

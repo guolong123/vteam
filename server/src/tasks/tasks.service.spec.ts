@@ -11,7 +11,9 @@ import { TASK_ERRORS } from '../common/constants/task.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
-import { sanitizeWorkDirName, TasksService } from './tasks.service';
+import { TaskProgressionScheduler } from './task-progression.scheduler';
+import { TasksService } from './tasks.service';
+import { sanitizeWorkDirName } from './work-dir.util';
 
 describe('TasksService', () => {
   let service: TasksService;
@@ -138,6 +140,10 @@ describe('TasksService', () => {
         { provide: IdGeneratorService, useValue: idGen },
         { provide: RealtimeService, useValue: realtime },
         { provide: SessionLifecycleService, useValue: sessionLifecycle },
+        {
+          provide: TaskProgressionScheduler,
+          useValue: { register: jest.fn().mockResolvedValue(undefined), unregister: jest.fn() },
+        },
       ],
     }).compile();
 
@@ -333,6 +339,7 @@ describe('TasksService', () => {
           status: 'pending',
           mainAgentId: null,
           mainAgentInstanceId: null,
+          managedMode: false,
           backgroundDocs: [{ name: '需求文档.pdf' }],
           createdBy: userId,
           version: 0,
