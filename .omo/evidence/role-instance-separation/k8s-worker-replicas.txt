@@ -1,0 +1,122 @@
+================================================================================
+vteam K8s worker 多副本注册冲突修复 — 证据
+日期: 2026-08-14
+任务: role-instance-separation (K8s worker 多副本 WORKER_ID 唯一化)
+================================================================================
+
+[0] 根因
+--------------------------------------------------------------------------------
+- chart ConfigMap（vteam-config）固定下发 WORKER_ID=w_<release>（如 w_vteam），
+  worker Deployment 所有副本共享同一 WORKER_ID。
+- server workers.register() 以 dto.workerId 为主键 upsert（server/src/workers/
+  workers.service.ts:243）→ 后注册副本覆盖先注册副本 → 页面/API 只显示 1 个 worker。
+- 实证（修复前 DB）：workers 表仅 1 行 id=w_vteam，2 个 pod 共用。
+- worker 侧读取（worker/src/config.ts:95）：
+  workerId = (env.WORKER_ID ?? '').trim() || `w_${hostname}` —— env 值直接用，
+  无覆盖逻辑；hostname 在容器内即 pod 名（天然唯一）。→ 无需改 worker 代码。
+
+[1] 修复 diff（chart/vteam/）
+--------------------------------------------------------------------------------
+a) templates/deployment-worker.yaml —— WORKER_ID 由 pod 名注入（downward API）：
+   env 段新增（显式设置 worker.env.workerId 时优先用该值）：
+     {{- if .Values.worker.env.workerId }}
+     - name: WORKER_ID
+       value: {{ .Values.worker.env.workerId | quote }}
+     {{- else }}
+     - name: POD_NAME
+       valueFrom:
+         fieldRef:
+           fieldPath: metadata.name
+     - name: WORKER_ID
+       value: "w_$(POD_NAME)"
+     {{- end }}
+   （K8s env value 支持 $(VAR) 引用同容器先前 env；POD_NAME=metadata.name 全局唯一）
+
+b) templates/configmap.yaml —— 移除共享 WORKER_ID 键（避免 envFrom/env 歧义）：
+   -  WORKER_ID: {{ .Values.worker.env.workerId | default (printf "w_%s" .Release.Name) | quote }}
+
+c) values.yaml —— worker.env.workerId 注释更新：
+     空 = 自动按 pod 名生成（w_<pod 名>，多副本天然唯一）；显式设置时用该值
+
+d) README.md —— 关键 values 表 + 与 compose 对齐点补充 WORKER_ID 语义说明
+
+[2] 验证：helm lint + template（replicas=2）
+--------------------------------------------------------------------------------
+$ helm lint chart/vteam
+==> Linting chart/vteam
+[INFO] Chart.yaml: icon is recommended
+1 chart(s) linted, 0 chart(s) failed
+
+$ helm template vteam chart/vteam --set worker.replicaCount=2
+→ worker 容器 env 渲染（模板阶段值相同，K8s 运行时按 pod 展开唯一）：
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.name
+    - name: WORKER_ID
+      value: "w_$(POD_NAME)"
+→ ConfigMap data 已无 WORKER_ID 键（仅注释保留说明）。
+
+[3] 部署：helm upgrade（REV 5）
+--------------------------------------------------------------------------------
+- 原安装参数：/tmp/opencode/vteam-helm-values.yaml（helm get values 导出：
+  镜像 docker-hosted.ketaops.cc/xishuhq/vteam-{server,web,worker}:vteam-k8s、
+  secret 四项、ingress vteam.ketaops.cc、persistence 尺寸等）+ --set replicaCount.worker=2
+- 旧 Job 已被 TTL 自动清理（kubectl delete job 返回 NotFound），无需手动删除。
+- $ helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-helm-values.yaml \
+      --set replicaCount.worker=2 --wait --timeout 300s → Upgrade complete
+- helm history vteam：REV 5 deployed（REV 3 failed 为历史 Job immutable 报错记录）
+- 资源：replicas=2；两个 worker pod 不同名、均 Running：
+    vteam-worker-545cfb86f7-7jbdg   Running  (worker-09)
+    vteam-worker-545cfb86f7-pmnqm   Running  (worker-02)
+  server/web/mysql 均 Running；init Job vteam-init-brg9m Completed。
+
+[4] 注册实证（核心）
+--------------------------------------------------------------------------------
+a) pod 内 WORKER_ID（唯一）：
+   w1=w_vteam-worker-545cfb86f7-7jbdg  hostname=vteam-worker-545cfb86f7-7jbdg
+   w2=w_vteam-worker-545cfb86f7-pmnqm  hostname=vteam-worker-545cfb86f7-pmnqm
+
+b) worker 日志（各自注册成功，不同 workerId）：
+   [worker] 注册成功: workerId=w_vteam-worker-545cfb86f7-7jbdg
+   [worker] 注册成功: workerId=w_vteam-worker-545cfb86f7-pmnqm
+
+c) DB workers 表（2 行 online + 心跳双活）：
+   -- 首查（06:44:08/09）--
+   id                                name                              status  last_heartbeat_at
+   w_vteam-worker-545cfb86f7-7jbdg   vteam-worker-545cfb86f7-7jbdg   online  2026-08-14 06:44:09.786
+   w_vteam-worker-545cfb86f7-pmnqm   vteam-worker-545cfb86f7-pmnqm   online  2026-08-14 06:44:08.027
+   -- 20s 后复查（心跳均刷新，双活）--
+   ...7jbdg online 2026-08-14 06:44:49.800
+   ...pmnqm online 2026-08-14 06:44:48.043
+   -- 旧残留 w_vteam 已由 server 30s 健康检查自动判 offline（升级前旧 pod 心跳停止）--
+   w_vteam  offline 2026-08-14 06:43:44.197
+
+d) API（server pod 内 node fetch，经 /api/v1/workers）：
+   login: 200；GET /workers: 200 count=3
+     - w_vteam-worker-545cfb86f7-7jbdg | status=online | lastHeartbeat=06:50:40
+     - w_vteam-worker-545cfb86f7-pmnqm | status=online | lastHeartbeat=06:50:38
+     - w_vteam                         | status=offline（旧残留）
+
+e) 模型可用性双上报（worker_model_availabilities 按 workerId 独立记录）：
+   w_vteam-worker-545cfb86f7-7jbdg  7 个模型
+   w_vteam-worker-545cfb86f7-pmnqm  7 个模型
+   （w_vteam 残留 7 个为旧 pod 下线前上报，分派只调度 online worker）
+
+[5] 回归
+--------------------------------------------------------------------------------
+- health：server 容器内 fetch http://localhost:3000/api/v1/health → {"status":"ok"}
+- 登录 admin/admin123 → 200（access token 221 字符）
+- 分派基础：2 个 online worker 独立注册 + 心跳 + 模型能力上报正常，
+  server 容量调度（maxInstances=5/worker）与分派路径就绪。
+
+[6] Risks / 备注
+--------------------------------------------------------------------------------
+- 旧 w_vteam worker 行残留为 offline：升级滚动替换遗留，server 30s 判离线后
+  不再参与分派；如需彻底清理可手动 DELETE（非必要，不执行）。
+- WORKER_ID 变更为 pod 名（w_<pod>）：worker 名（name 字段）同为 hostname=pod 名，
+  UI 展示为 pod 名而非可读名称，可后续经 WORKER_NAME env 覆盖。
+- 显式 --set worker.env.workerId 时多副本唯一性由运维负责（文档已注明）。
+- 本机 13000 端口被 docker compose server 占用，API 验证改走 server pod 内 fetch。
+- chart 改动未 git 提交（未授权），留工作区。
+================================================================================

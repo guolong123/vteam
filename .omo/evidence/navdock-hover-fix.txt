@@ -1,0 +1,56 @@
+# NavDock 展开时机修复 — 验证证据
+
+日期：2026-08-12
+涉及文件：`web/src/components/layout/nav-dock.tsx`（唯一改动文件）
+
+## 问题
+`.navdock-hitzone`（dock 兄弟透明热区，覆盖 x∈[68,260]，3.4 倍于 dock 本体 56px）
+在 onMouseEnter 时 setExpanded(true)，导致鼠标从内容区移向 dock 途中即展开大菜单，
+遮住左边内容（消息输入框、列表操作按钮等）。
+
+## 修复内容
+1. **删除 hitzone 元素**（原 JSX `onMouseEnter={() => setExpanded(true)}` 的
+   `navdock-hitzone` div 及注释，:309-316）
+2. **删除 `.navdock-hitzone` CSS 规则**（:201-220 含 P8 注释、pointer-events 规则）
+3. **删除 React `expanded` state** 及 `.navdock-expanded` class 相关 CSS
+   （展开完全交由 CSS `.navdock-dock:hover` 驱动：移入 dock 本体 56px 即展开 248px，
+   移出 dock+panel 即收起）
+4. 清理 `useState` import → type-only import
+
+## 验证
+### 1. 静态检查
+- `npx tsc --noEmit` → 0 错误
+- `npm run build` → 通过（首次失败为 `.next` 残留缓存缺失 next-font-manifest.json，
+  `rm -rf .next` 后重建成功，与代码无关）
+
+### 2. 部署
+`docker compose up -d --build web` → `aiagents-compose-web` healthy，:13001
+
+### 3. Playwright 端到端（chromium chrome headless，seed-admin/Admin@123456 登录 :13001）
+权威判据：rail-bar 宽度（56 收起 / 248 展开）+ rail-panel 宽度（0 收起 / 192 展开）。
+（`nav-item.isVisible()` 不感知 overflow:hidden 裁剪，弃用。）
+
+| # | 断言 | 结果 |
+|---|------|------|
+| 基线 | dock 收起态 dock=56px / panel=1px | PASS |
+| 关键① | `page.mouse.move(150,y)`（内容区/原热区 x∈[68,260]）→ dock=56px **未展开** | PASS |
+| 关键①b | 内容区 x∈{100,200,260} 采样全部未展开 | PASS |
+| 关键② | `page.mouse.move(40,y)`（dock 本体 56px）→ dock=248px / panel=192px 展开 | PASS |
+| 稳定① | 展开后鼠标移入 panel(x=150) → 保持 248px 不收起 | PASS |
+| 导航 | 展开后点击 nav-item → 跳转 /projects | PASS |
+| 关键③ | hover 展开 248px → 移出(x=800) → dock=56px / panel=1px 收起 | PASS |
+| 收起态点击 | 收起态直接点 rail-icon(agents) → 跳转 /agents | PASS |
+
+**关键证据**：`mouse.move(150,y)` 位于原热区中央，dock 保持 56px 未展开——
+热区误触已消除；仅 dock 胶囊本体（x∈[12,68]）hover 才展开。
+
+### 4. 回归
+- e2e `pages.spec.ts` 依赖的 `rail-bar`/`rail-icon`/`nav-item` testid 均未改动；
+  上述 Playwright 验证已覆盖其核心断言（rail-bar 可见、rail-icon 点击跳转、
+  nav-item 点击跳转）。
+- 展开/收起/点击/高亮（data-active）功能正常。
+
+## 截图
+- `navdock-collapsed.png`（收起态 56px）
+- `navdock-hover-expanded.png`（dock hover 展开 248px）
+- `navdock-nav-jump.png`（导航跳转后）

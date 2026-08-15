@@ -1,0 +1,121 @@
+================================================================================
+证据：K8s（vteam.ketaops.cc）任务 t_0000000002 发消息无反应 — 排障与修复
+时间：2026-08-14
+结论：根因 = worker capabilities.baseUrl 上报共享 ClusterIP 名（vteam-worker），
+      exec 端口 4198 未在 ClusterIP Service 暴露 → server dispatch 全部
+      WorkerUnavailableException(fetch failed) → 仅 ACK 无实际回复。
+      已修复（chart 改为 pod 专属 headless DNS）+ 复验通过。
+================================================================================
+
+一、运行状态总览（修复前）
+--------------------------------------------------------------------------------
+$ kubectl get pods -n vteam
+  vteam-mysql-0                  1/1 Running   vteam-worker-0  1/1 Running（worker-09）
+  vteam-server-c55dcc86-clcm4    1/1 Running   vteam-worker-1  1/1 Running（worker-05）
+  vteam-web-5db48bb5b9-ccm4x     1/1 Running
+→ 全部 pod Running；worker 双副本在线。
+
+$ GET /api/v1/workers（admin token）
+  {"id":"w_vteam-worker-1","status":"online","baseUrl":"http://vteam-worker:4000","execPort":4198,"models":7}
+  {"id":"w_vteam-worker-0","status":"online","baseUrl":"http://vteam-worker:4000","execPort":4198,"models":7}
+→ 2 worker online，capabilities.baseUrl = http://vteam-worker:4000（共享 ClusterIP 名）。
+
+二、DB 取证（mysql exec，db=aiagents）
+--------------------------------------------------------------------------------
+-- chat_channels（t_0000000002）
+  c_0000000002  task_group    （团队频道）
+  c_0000000003  private       a_project_manager
+  c_0000000005  private       a_developer
+
+-- messages（c_0000000002，修复前）
+  m_0000000005  user  u_admin  "收得到吗"            08:43:11
+  m_0000000006  agent a_project_manager "收到，正在处理…"  08:43:11  ← ACK
+  m_0000000003  user  "能收到消息吗" / m_0000000004 ACK（07:13）
+  m_0000000001  user  "请推进项目..." / m_0000000002 ACK（07:11）
+→ 用户消息全部落库且均有 ACK（"收到，正在处理…"），但没有任何 agent 实际处理回复。
+
+-- sessions（t_0000000002）
+  s_0000000003  a_project_manager  active   w_vteam-worker-1  ses_0008f7cb4ffeFGjDAftJ1ZYMR6
+  s_0000000004  a_developer        created  NULL              NULL
+  s_0000000005  a_tester           created  NULL              NULL
+→ 主 Agent 会话已绑定 worker-1 并持有 opencode 会话。
+
+三、server 日志（根因直接证据）
+--------------------------------------------------------------------------------
+$ kubectl logs deploy/vteam-server -n vteam --since=24h | grep -i dispatch
+{"level":50,...,"context":"WorkerDispatcher",
+ "err":{"type":"Error",
+   "message":"agent a_project_manager dispatch failed: worker w_vteam-worker-1 不可用：fetch failed",
+   "stack":"WorkerUnavailableException: worker w_vteam-worker-1 不可用：fetch failed
+     at WorkerClient.requestToUrl (/app/dist/src/workers/worker.client.js:203:19)
+     at WorkerClient.execute (/app/dist/src/workers/worker.client.js:76:21)
+     at WorkerDispatcher.dispatchForTarget (/app/dist/src/chat/worker-dispatcher.js:635:9)
+     at WorkerDispatcher.dispatch (/app/dist/src/chat/worker-dispatcher.js:466:17)"},
+ "msg":"agent a_project_manager dispatch failed: worker w_vteam-worker-1 不可用：fetch failed"}
+→ dispatch 调用 worker execute 端点时 fetch failed（worker 心跳正常但 server→worker 不通）。
+
+四、worker 日志（两副本，修复前）
+--------------------------------------------------------------------------------
+[worker] 启动中: workerAdvertiseHost = http://vteam-worker
+[exec] 执行端点就绪: POST http://0.0.0.0:4198/execute
+[worker] 注册成功: workerId=w_vteam-worker-1
+→ exec 端点监听 4198 正常；但全程无任何 execute/sendMessage 请求（dispatch 从未到达）。
+
+五、模型凭据检查
+--------------------------------------------------------------------------------
+$ kubectl exec sts/vteam-worker -- opencode auth list
+  ~/.local/share/opencode/auth.json
+  └  0 credentials
+→ auth.json 不存在（无凭据），WORKER_DEFAULT_MODEL 为空。但 capabilities.models 上报
+  7 个模型（opencode/big-pickle 等 free 模型）——修复后实测 model=opencode/big-pickle
+  调用成功，模型凭据非本问题根因（free 模型无需凭据）。
+
+六、根因定位（证据链）
+--------------------------------------------------------------------------------
+1. worker 上报 capabilities.baseUrl = http://vteam-worker:4000
+   （configmap WORKER_ADVERTISE_HOST: http://vteam-worker，共享 ClusterIP 名）
+2. server WorkerClient.resolveExecBaseUrl()（worker.client.ts:431）：
+   capabilities 无 execBaseUrl → 取 baseUrl origin + capabilities.execPort(4198)
+   → http://vteam-worker:4198
+3. vteam-worker 为 ClusterIP Service，仅暴露 4000（serve）端口：
+   $ kubectl get svc vteam-worker -o jsonpath ports → [{"name":"serve","port":4000}]
+   → 4198 未暴露 → server 内实测 fetch http://vteam-worker:4198/execute
+     → TypeError: fetch failed（连接拒绝）
+4. 而 pod 专属 headless DNS 下 4198 可达（实测 HTTP 400，端口通）：
+   vteam-worker-1.vteam-worker-headless.vteam.svc.cluster.local:4198 ✓
+5. 结论：worker 上报地址用错 Service 名（共享 ClusterIP 而非 pod 专属 headless），
+   且 ClusterIP 未暴露 exec 端口 → dispatch 必然失败 → 发消息只有 ACK 无回复。
+
+七、修复（chart/vteam/templates，REV 12）
+--------------------------------------------------------------------------------
+1. statefulset-worker.yaml：新增 env WORKER_ADVERTISE_HOST
+   value: "http://$(POD_NAME).vteam-worker-headless.{{ .Release.Namespace }}.svc.cluster.local"
+   → 每副本上报唯一 baseUrl（http://vteam-worker-N.vteam-worker-headless...:4000）
+2. configmap.yaml：移除共享 WORKER_ADVERTISE_HOST（注释说明由 StatefulSet 按 pod 注入）
+3. helm upgrade vteam chart/vteam（-n vteam，保留全部既有 image/secret/values）
+
+八、复验（修复后）
+--------------------------------------------------------------------------------
+$ GET /api/v1/workers
+  {"id":"w_vteam-worker-1","status":"online","baseUrl":"http://vteam-worker-1.vteam-worker-headless.vteam.svc.cluster.local:4000","execPort":4198}
+  {"id":"w_vteam-worker-0","status":"online","baseUrl":"http://vteam-worker-0.vteam-worker-headless.vteam.svc.cluster.local:4000","execPort":4198}
+
+$ POST /api/v1/channels/c_0000000002/messages {"text":"修复后验证-..."}
+  HTTP 201，msg id m_0000000009，triggers: [a_project_manager, s_0000000003, dispatched]
+
+worker 日志： [v1-driver] sendMessage -> ses_0008f7cb4ffeFGjDAftJ1ZYMR6 model=opencode/big-pickle (HTTP 204)
+
+DB messages（c_0000000002）：
+  m_0000000012  agent a_project_manager "收到「修复后验证-connectivity-...」，连通性正常。..." 08:54:59
+→ 用户消息 → 落库 → ACK → dispatch → worker execute → opencode 模型调用 →
+  事件回流 → agent 实际回复落库。全链路打通，模型成功生成回复。
+
+九、Risks
+--------------------------------------------------------------------------------
+1. 旧 worker 行（w_vteam-worker-58cf4cb768-9l55w 等 offline，baseUrl 仍为旧 ClusterIP 名）
+   保留在 DB——不影响（offline 不参与调度），可按需清理。
+2. 本次修复为 chart 部署配置改动（未提交 git，按任务要求不提交）；后续发布需
+   随 chart 一并提交，确保 helm 部署复用该修复。
+3. worker 重启后 auth.json 无凭据（free 模型可用）；如需付费模型，平台需配置
+   模型凭据（ModelCredential），否则默认模型不可用。
+4. web 镜像当前为 vteam-k8s-workerdel（删除按钮功能），本次未涉及 web 代码改动。

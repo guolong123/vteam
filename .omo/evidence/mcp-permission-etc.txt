@@ -1,0 +1,86 @@
+============================================================
+opencode 读 /etc 触发权限确认但前端无弹窗 —— 排查与修复证据
+环境：docker-compose（aiagents-compose-*），复现页面 /messages/c_0000000006
+时间：2026-08-12 14:17 ~ 14:37
+============================================================
+
+【0. 复现背景】
+- c_0000000006 = a_tester 私聊频道，task=t_0000000002，agent=a_tester
+- a_tester opencode 会话 instanceRef = ses_00a4f5d74ffek2zmAeCeRUJQIi
+- a_tester 执行 bash `cat /etc/os-release` → serve 触发 external_directory 权限确认
+- 前端无弹窗（线上症状）
+
+【1. DB 现状 —— 修复前 /etc 权限未落库】
+命令：SELECT id, request_id, kind, status, ... FROM agent_questions
+结果（修复前最新）：
+  aq_0000000001  per_ff58e0c5...  permission  resolved  10:39  (/etc/* 注入实证，弹窗正常)
+  aq_0000000002  que_ff5b20ab...  question    resolved  11:18
+  aq_0000000003  que_ff5bb03f...  question    resolved  11:28
+=> 修复前 a_tester 真实读 /etc 触发的权限 **没有新落库记录** → 断点在 worker 检测链路。
+
+【2. serve 端点实测 —— 根因（Bug2，与 Bug1 question 完全对称）】
+v2 端点（detector 当前在用）：
+  GET /api/session/ses_00a4f5d74ffek2zmAeCeRUJQIi/permission
+  => {"data":[]}        ← v2 独立通道，pending 权限不在其中（恒空）
+
+v1 全局端点：
+  GET /permission
+  => [{"id":"per_ff6558bbd001P3YmJAqTjpQ7QV","sessionID":"ses_00a4f5d74...",
+       "permission":"external_directory","patterns":["/etc/*"],
+       "metadata":{"command":"... cat /etc/os-release ..."},"always":["/etc/*"],
+       "tool":{"messageID":"msg_ff6557acd...","callID":"call_00_ppe1z..."}}]
+  => pending 权限真实在 v1 全局端点，字段名为 permission(=action) / patterns(=resources)
+
+判定：worker PendingQuestionDetector.listPermissions 走 v2 端点恒空 → 永不检测到
+pending 权限 → 不上送 session.permission → server 不落库 → 前端不弹窗。
+（对照 listQuestions 已修 Bug1 走 v1 /question；permission 侧未修。）
+
+【3. 修复（worker/src/driver/v1-driver.ts）】
+a) ServePermissionRequest 接口：新增 v1 字段 permission?/patterns?（兼容 v2 action/resources）
+b) listPermissions：GET /permission（v1 全局）→ 按 sessionID 过滤 → 字段归一为 action/resources
+c) replyPermission：POST /permission/{requestID}/reply（v1 全局）——实测 v2
+   /api/session/{id}/permission/{id}/reply 返回 404（PermissionNotFoundError，Bug3），
+   与 Bug1 的 question reply 对称；v1 全局端点实测 200 返回 true
+d) exec-server.ts detector：resources ?? [] 兜底（接口字段变可选后 TS 编译通过）
+
+【4. 测试】
+- npx tsc --noEmit 通过
+- npx jest 全部通过：21 suites / 354 tests
+- 新增/更新用例：
+  - listPermissions：GET /permission（v1 全局端点）按 sessionID 过滤 + 字段归一
+  - listPermissions：v2 {data:[...]} action/resources 形态兼容
+  - replyPermission：POST /permission/{requestID}/reply body {reply:"once"}
+
+【5. 修复后重验（完整闭环）】
+步骤：
+1) docker compose build worker && docker compose up -d worker
+2) 触发：POST /api/v1/channels/c_0000000006/messages
+   {"text":"运行 bash 命令：cat /etc/os-release ...","mentions":[{type:agent,agentId:a_tester}]}
+3) serve v1 /permission 出现新权限：
+   per_ff66673c5001p23a7qxgCFoKx5 external_directory ['/etc/*']
+4) DB 落库：
+   aq_0000000005  per_ff66673c...  permission  pending  14:35:37
+5) server 日志：
+   [ingress] session.permission 落库 requestId=per_ff66673c... kind=permission
+6) realtime_events：
+   ev_... agent.question scope=task t_0000000002 {kind:permission,status:pending,requestId:per_ff66673c...}
+7) 前端页面（browse 实测，截图 mcp-permission-modal-v2.png）：
+   弹窗出现：发送工具权限确认 / external_directory / /etc/* / 稍后决定|允许一次|总是允许|拒绝
+8) 点击「允许一次」：
+   worker 日志：[v1-driver] replyPermission -> ses_.../per_ff66673c...=once (HTTP 200)
+   serve v1 /permission => []（权限已放行）
+   DB：aq_0000000005 status=resolved
+9) agent 继续执行（页面实测，截图 mcp-permission-result.png）：
+   T⚙bash成功 {"command":"cat /etc/os-release"} → 测试 22:35 系统版本信息：PRETTY_NAME...
+
+结论：权限确认弹窗出现 + 处理后 agent 继续执行 —— 修复验证通过。
+
+【6. 证据截图】
+- .omo/evidence/mcp-permission-modal-v2.png  （弹窗出现）
+- .omo/evidence/mcp-permission-result.png    （放行后 agent 继续执行并汇报）
+
+【7. 备注/风险】
+- 修复前 aq_0000000004（per_ff66020650... 14:28）遗留 pending：为旧代码 v2 reply 404
+  的失败残留，serve 重启后已不在 pending 列表，仅 DB 历史记录挂起，不影响后续。
+- worker 重建会中断进行中的 agent 执行（serve 同容器重启）；会话上下文在 /root volume
+  （opencode.db）持久化，重建后新消息可继续复用。

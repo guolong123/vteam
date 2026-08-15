@@ -1,0 +1,99 @@
+# 附件上传 Failed to fetch 修复 + 粘贴文件/图片支持（fix-attachment-upload）
+
+日期：2026-08-14
+工作区：/data/git-project/aiagents（docker compose，server:13000 / web:13001）
+
+## 一、Failed to fetch 根因实证（先定位再修，不猜）
+
+### 1. 上传链路 curl 对比（当前部署）
+- 直连 server `curl -X POST http://localhost:13000/api/v1/uploads -F file=@test-upload.png` → **201** `{url, name, size, ext}`
+- 经 web 代理 `curl -X POST http://localhost:13001/api/v1/uploads -F file=@...` → **201**
+- 5MB 大文件经代理 → **201**；9MB 直连 → **201**（均无 body 限制问题）
+- 结论：当前运行容器中「web 代理 → server 上传」链路本身完好。
+
+### 2. 浏览器真实复现（playwright chromium）
+- 登录 → 任务群聊 → 附件按钮选图上传 → preview 出现、发送成功、聊天区渲染图片、**0 失败请求 / 0 console 错误**
+- 私聊页面同样通过
+- 结论：当前部署浏览器端无 Failed to fetch。
+
+### 3. 根因定位（为什么用户会 Failed to fetch）
+- web Dockerfile build 阶段：`ARG API_PROXY_TARGET=http://localhost:3000`（**缺省值陷阱**）
+- rewrites 在 `next build` 时编译进 routes-manifest.json，**运行时 env 无效**，只能构建期 ARG 注入
+- 容器内实测 `fetch("http://localhost:3000/api/v1/health")` → **FAIL: ECONNREFUSED**
+  - 原因：Next standalone server.js 监听 `$HOSTNAME`（容器网络 IP），**无进程监听 127.0.0.1:3000**
+- 完整故障链：镜像构建时未注入 `API_PROXY_TARGET=http://server:3000`（漏传 ARG / 旧镜像）→
+  rewrites 目标 `localhost:3000` 指向 web 容器自身 → 代理请求 ECONNREFUSED →
+  浏览器 fetch TypeError: **Failed to fetch**（用户所见：发送图片附件失败）
+- 当前 compose（docker-compose.yml 服务 web build.args `API_PROXY_TARGET: http://server:3000`，
+  c65df59 提交）构建注入正确 → 容器内 routes-manifest 确认 `http://server:3000` → 实测全通。
+
+### 4. 附带发现的真实 bug：纯附件消息 400
+- 前端 MessageInput.handleSend 允许「无文本纯附件」发送（text 空串）
+- 后端 CreateMessageDto.text `@IsNotEmpty()` 拒绝空串 → **400 text should not be empty**
+- 发送纯图片/文件消息必然失败（非 Failed to fetch，但同属「发送图片附件」场景）
+
+## 二、修复（最小变更）
+
+### 1. web/Dockerfile（Failed to fetch 防御性根因修复）
+```
+- ARG API_PROXY_TARGET=http://localhost:3000
++ ARG API_PROXY_TARGET=http://server:3000
+```
+即使构建时漏传 ARG，缺省代理目标也指向 compose 网络内 server 服务，而非容器自身
+（localhost:3000 容器内 ECONNREFUSED）。docker-compose.yml 无需改动（已正确注入）。
+
+### 2. server/src/chat/dto/create-message.dto.ts（纯附件 400 修复）
+```
+- @IsNotEmpty()
+  @IsString()
+  text: string;
++ @IsString()
+  text: string;    // 纯附件消息 text 可为空串
+```
+（import 移除 IsNotEmpty。text 字段保持必传、仅放宽空串；attachment 三字段协议不变）
+
+### 3. web/src/components/ui/message-input.tsx（粘贴支持）
+- 抽取公共函数 `uploadFile(file: File)`：扩展名白名单 → 10MB 上限 → POST /uploads →
+  setPendingAttachment（原 handleFileChange 逻辑原样迁入）
+- `handleFileChange` 改为仅取 file 后 `await uploadFile(file)`（附件按钮复用同一流程）
+- 新增 `handlePaste(e: ClipboardEvent)`：遍历 `e.clipboardData.items`，`kind==="file"` 取第一个
+  `getAsFile()` → `e.preventDefault()`（阻止浏览器把图片以 data:/file: 插入文本区）→
+  `void uploadFile(file)`；**无文件（纯文本）不拦截**；`attaching/sending` 中不重复触发
+- textarea 挂载 `onPaste={handlePaste}`；import 补 ClipboardEvent 类型
+
+## 三、验证结果（真实复现）
+
+### 静态
+- web `npx tsc --noEmit` → 0 错误；`npm run build` → 通过
+- server `npx tsc --noEmit` → 0 错误；jest **54 suites / 1107 tests 全过**
+
+### 部署
+- `docker compose up -d --build`（期间发现 /data 分区 100% 满 → MySQL redo log 崩溃，
+  已清 docker build cache 腾出 7.8G 恢复；非代码问题）
+- 容器内确认：routes-manifest rewrites=`http://server:3000`；
+  server dist create-message.dto.js 仅 @IsString()
+
+### 浏览器（playwright chromium，http://localhost:13001）
+| 场景 | 结果 |
+|---|---|
+| 场景1 选图上传 + 文本发送 | preview ✓ → 发送后聊天区渲染 /uploads 图片 ✓ |
+| 场景2 纯附件消息（text 空）发送 | 成功（修复 400），attach-error 0 ✓ |
+| 场景3 Ctrl+V 粘贴图片 | 事件 defaultPrevented=true（拦截默认插入）→ preview "pasted-image.png" → 发送成功 ✓ |
+| 场景4 粘贴纯文本 | defaultPrevented=false（**未拦截**）→ 手动输入正常 ✓ |
+| 网络 | 0 failed requests / 0 page errors |
+
+### DB 落库确认
+- m_0000000413：attachment_url=/uploads/191dc219-...png、attachment_name=pasted-image.png、content.text 为空（粘贴纯附件）
+- m_0000000410：attachment_url=/uploads/fc02763d-...png、content.text 为空（纯附件消息成功落库）
+- server 日志无 error / dispatch failed
+
+### 截图
+- /tmp/opencode/final-full-flow.png（四场景综合，含粘贴 preview + 发送后聊天区图片）
+
+## 四、Risks
+- 后端 DTO 放宽 text 必填为允许空串：纯附件消息落库 content.text=""，worker dispatch 文本为空
+  不崩溃（fire-and-forget 且 catch）；存量客户端不受影响
+- Dockerfile 缺省 ARG 改为 server:3000：仅影响 Docker 构建；本地 dev 不经 Docker，
+  next.config.ts 缺省 localhost:3000 保留（本地开发正确）
+- 粘贴只取第一个文件（附件单文件模型），多文件粘贴其余忽略
+- 未做 git 提交（未授权）；未改消息协议/schema（attachment 字段未动）

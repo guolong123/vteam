@@ -1,0 +1,101 @@
+============================================================
+任务页 t_0000000002 权限弹窗：刷新一直弹窗 + 点"允许"报 503 —— 排查证据
+环境：docker-compose（aiagents-compose-*），复现页 http://192.168.10.78:13001/tasks/t_0000000002
+时间：2026-08-12 22:4x
+============================================================
+
+【0. 现象】
+- 任务页刷新后一直弹权限确认弹窗（某个 pending 权限）
+- 点"允许一次/总是允许"→ 503（server 调 worker 转发失败 / serve 404）
+
+【1. DB pending 记录】
+docker exec aiagents-compose-db mysql -uroot -paiagents-root aiagents \
+  -e "SELECT id, request_id, session_id, task_id, agent_id, kind, JSON_EXTRACT(content,'\$'), status, created_at, updated_at FROM agent_questions WHERE status='pending' ORDER BY created_at DESC;"
+结果：
+  aq_0000000004  per_ff6602065001s8u1qcnGd5f4mX  s_0000000005  t_0000000002  a_tester
+  kind=permission  content={"type":"external_directory","title":"external_directory","pattern":"/etc/*"}
+  status=pending   created_at=2026-08-12 14:28:43.161
+=> 仅此一条 pending，task_id=t_0000000002。
+
+【2. 该 pending 对应 opencode 会话是否还存在】
+docker exec aiagents-compose-db mysql ... -e "SELECT id, instance_ref, agent_id, task_id, status FROM sessions WHERE id='s_0000000005';"
+结果：
+  s_0000000005  instance_ref=ses_00a4f5d74ffek2zmAeCeRUJQIi  a_tester  t_0000000002  status=idle
+docker exec aiagents-compose-worker sh -c "curl -s http://127.0.0.1:4000/session"
+结果：ses_00a4f5d74ffek2zmAeCeRUJQIi 在列表中（title="验证会话复用"）。
+=> opencode 会话存在；但该权限请求本身已从 serve 消失（见下）。
+
+【3. serve 权限现状】
+docker exec aiagents-compose-worker sh -c "curl -s http://127.0.0.1:4000/permission"   =>  []
+=> per_ff6602065001s8u1qcnGd5f4mX 已不在 serve pending 列表（旧代码 v2 reply 404 的失败残留 +
+   serve 重启后权限请求消失 —— 与 mcp-permission-etc.txt §7 预判一致）。
+
+【4. 复现 503（带 admin token）】
+GET  /api/v1/questions?taskId=t_0000000002&status=pending
+  => 200 [ {aq_0000000004, per_ff66020650..., status:"pending", pattern:"/etc/*"} ]   ← 弹窗数据源
+POST /api/v1/questions/aq_0000000004/reply  body {"response":"once"}
+  => HTTP 503
+     {"code":"WORKER_UNAVAILABLE","message":"worker w_compose_worker 不可用：permission reply HTTP 400","workerId":"w_compose_worker"}
+
+server 日志：
+  POST /api/v1/questions/aq_0000000004/reply  → statusCode 503（多次，无 [questions] reply 成功日志）
+  POST /api/v1/questions/aq_0000000005/reply  → statusCode 201 + [questions] reply permission ... resolved（新鲜权限正常）
+worker 日志：
+  [exec] question-reply 转发失败: [v1-driver] /permission/per_ff6602065001s8u1qcnGd5f4mX/reply HTTP 404 (HTTP 400)
+
+【5. 链路】
+worker PendingQuestionDetector 检测 serve pending → 上送 SESSION_PERMISSION → server ingress 落库
+pending → SSE 广播 → 前端弹窗。但：
+  - serve 已无 per_ff66020650...（僵尸）：worker replyPermission → serve POST /permission/{id}/reply
+    → 404 → worker handleQuestionReply catch 统一转 HTTP 400 → server permissionReply !res.ok →
+    WorkerUnavailableException(503)。
+  - server QuestionsService.reply 转发失败时【不落库终态、不广播收敛】→ DB 恒 pending → 前端
+    GET /questions?status=pending 恒返回该记录 → 刷新永远弹窗；点允许永远 503（死循环）。
+
+【6. 根因】
+僵尸 pending（aq_0000000004）：serve 侧已无对应 requestId，但 DB 残留 pending 记录。
+reply 失败链：serve 404 → worker 400 → server 503，且 server 不落终态不收敛 → 前端无限弹窗。
+（对照：新鲜权限 aq_0000000005 reply 201 + resolved + 广播收敛，流程正常 → 排除 worker 不可达/
+   端点错/转发 bug。）
+
+【7. 复现次数】GET pending ×N（304/200 交替）、POST reply ×4（均 503）。
+
+============================================================
+【8. 修复】目标：弹窗不无限弹 + reply 不再 503
+============================================================
+a) worker/src/exec/exec-server.ts handleQuestionReply：catch 中 DriverRequestError.status===404
+   → 透传 404 + code=QUESTION_EXPIRED（区分"僵尸 requestId"）；非 404 保留 400。
+b) server/src/questions/questions.constants.ts：AGENT_QUESTION_STATUS 新增 EXPIRED；
+   QUESTIONS_ERRORS 新增 QUESTION_EXPIRED；新增 QUESTION_PENDING_TTL_MS=30min。
+c) server/src/questions/questions.service.ts：
+   - reply()：转发 WorkerUnavailableException 且 message 含 "HTTP 404"（僵尸）→ expire()
+     终态落库 + emit 收敛 → 抛 410 GoneException(code=QUESTION_EXPIRED)；其他错误维持 503。
+   - findAll()：惰性 TTL 清理 —— pending 超 30min 自动 expire() + 收敛（GET 时触发）。
+   - 新增 expire()：落库 expired + answers{expired:true,reason} + realtime.emit AGENT_QUESTION
+     {resolved:true}（前端 onAgentQuestion 据此关闭弹窗）。
+d) web/app/(main)/tasks/[id]/page.tsx + messages/[id]/page.tsx：questionReplyMutation onError
+   中 isApiError && (status===410 || code==='QUESTION_EXPIRED') → 关闭弹窗 + 失效 questions 缓存。
+
+【9. 测试】worker tsc + jest 355/355 全过（新增 404 透传 / 非 404 保留 400 两用例）；
+server tsc + jest 1027/1027 全过（新增 reply-404→expired+410、findAll TTL 惰性过期、
+pending 未超 TTL 不误杀 三用例）；web tsc --noEmit 通过。
+
+【10. 修复后重验（docker compose build server worker + up -d）】
+1) TTL 惰性清理：GET /questions?taskId=t_0000000002&status=pending
+   aq_0000000004(pending, 14:28 创建, 超 30min) → 自动 expired{reason:"GET 惰性过期"}，
+   GET 返回 [] → 刷新任务页不再弹窗。
+2) reply-404→410 兜底：插入僵尸 pending aq_0000000999(per_zzz_not_in_serve, serve 无此请求)
+   → POST reply → HTTP 410 {"code":"QUESTION_EXPIRED","message":"...已过期...弹窗已关闭"}
+   → DB status=expired，server 日志"[questions] ...已终态（expired）：reply 转发 serve 404"。
+   测试记录已删除。
+3) 新鲜权限正常流程：发消息让 a_tester 执行 cat /etc/os-release → serve 出现
+   per_ff686b468001mrXk7wGjJ0633L → 落库 aq_0000000006 pending → POST reply once →
+   HTTP 201 status=resolved{response:once} → serve /permission=[]（放行）→
+   worker 日志"[v1-driver] replyPermission -> ...=once (HTTP 200)"。正常流程不破坏。
+4) 最终 GET pending = []（无 pending 无弹窗）。
+
+【11. 风险/备注】
+- 30min TTL 为产品策略：超时未回复的 question/权限自动过期关闭弹窗（serve 侧请求若仍
+  存在则不自动答复，仅平台侧收敛展示）。如需更保守可调大 QUESTION_PENDING_TTL_MS。
+- worker 重建会重启 serve（同容器），进行中 agent 执行中断；会话上下文 /root volume 持久化。
+- 遗留 aq_0000000001/2/3 等历史 resolved/rejected 记录不受影响。

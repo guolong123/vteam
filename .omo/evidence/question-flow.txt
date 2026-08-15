@@ -1,0 +1,67 @@
+# Question/权限确认全链路 E2E 证据（2026-08-12）
+
+## 环境
+- docker-compose: server/worker/web 重建（本需求代码）
+- worker serve: opencode 1.18.16（--pure，容器内 4000 / 宿主 14000）
+- 平台登录：admin / admin123；会话 c_0000000006（a_tester, task t_0000000002）
+
+## serve 1.18.16 API 实测结论（关键）
+| 端点 | 路径 | 实测 |
+|---|---|---|
+| question 列表 | GET /api/session/{id}/question | `{"data":[...]}`（空=[]）；**v1 /session/{id}/question 返回 HTML（不存在）** |
+| question reply | POST /api/session/{id}/question/{requestID}/reply | body `{answers:[[]]}`，204 |
+| question reject | POST /api/session/{id}/question/{requestID}/reject | 204 |
+| permission 列表 | GET /api/session/{id}/permission | `{"data":[{id,sessionID,action,resources,...}]}` |
+| permission reply | **POST /api/session/{id}/permission/{requestID}/reply** body `{reply:"once"\|"always"\|"reject"}` | 204 ✅（v2 生效） |
+| ~~permission reply v1~~ | ~~POST /session/{id}/permissions/{permissionID}~~ | 实测 **PermissionNotFoundError**（v1 端点不识别 per_ id，必须用 v2） |
+| permission create（测试用） | POST /api/session/{id}/permission | `{"data":{id:"per_...",effect:"ask"\|"allow"}}`；effect=ask 才产生 pending |
+
+⚠️ 重要：计划书假设 permission reply 走 v1 `/session/{id}/permissions/{permissionID}`（body {response}），
+实测 1.18.16 该端点返回 PermissionNotFoundError；生效的是 v2 `/api/session/{id}/permission/{requestID}/reply`。
+**已按实测改为 v2**（worker v1-driver.replyPermission + server WorkerClient 契约同步）。
+
+## 场景 A（权限确认 → 允许一次）✅
+1. 平台发送消息 → worker createSession `ses_00a941787ffe...` + sendMessage(204)
+2. 测试注入 serve pending permission：POST /api/session/{id}/permission `{action:external_directory, resources:["/etc/*"]}` → `effect:ask`
+3. worker PendingQuestionDetector 轮询 listPermissions 检测 → 上送 `session.permission` 事件 → server ingress 落库：
+   - `aq_0000000004  per_ff56c2ae9001...  permission  pending  session=ses_00a941787ffe...`
+   - server 日志：`[ingress] session.permission 落库 requestId=per_... session=ses_... kind=permission`
+4. POST /api/v1/questions/aq_0000000004/reply `{response:"once"}` → 200：
+   - server → WorkerClient.permissionReply → worker /question-reply（X-Worker-Token）→ serve v2 reply → 204
+   - 落库 `status=resolved answers={"response":"once"}`
+   - serve 侧权限列表清空（已消费）
+   - SSE realtime_events：agent.question pending + resolved 两条事件均落库
+5. 前端私聊页弹窗出现（Playwright 验证），点「允许一次」→ 弹窗关闭
+
+## 场景 B（刷新/进入补拉）✅
+- 触发权限确认但不处理 → GET /api/v1/questions?taskId=t_0000000002&status=pending 返回 pending 列表：
+  `aq_0000000006 kind=permission status=pending requestId=per_ff56f41a0001...`
+- 刷新/进入页面 useQuery 补拉 → setPendingQuestion 恢复弹窗（落库持久化生效）
+
+## 场景 C（拒绝）✅（前端完整闭环）
+1. 触发活跃 pending `aq_0000000007`（session=ses_00a8bb3c1ffe...）
+2. Playwright 进入私聊页 → `question-modal visible: True`（标题"工具权限确认"、external_directory、/etc/*、
+   允许一次/总是允许/拒绝三按钮，截图 /tmp/opencode/dm-modal-shown.png）
+3. 点「拒绝」→ 弹窗关闭（`after reject, modal visible: False`，截图 dm-modal-after-reject.png）
+4. DB：`aq_0000000007 status=resolved answers={"response":"reject"}`
+5. SSE resolved 事件到达（前端 onAgentQuestion resolved 分支收敛）
+
+## 场景 D（question 主动提问）
+- serve 无 question 创建端点（question 由模型 question 工具主动触发）；模型未触发 question 工具
+- question 与 permission 共用同一链路：worker listQuestions 检测 → SESSION_QUESTION 事件 → ingress kind=question
+  落库（content.questions）→ reply {answers} 或 reject。该路径由单测覆盖（v1-driver.spec listQuestions/
+  replyQuestion/rejectQuestion + ingress.spec session.question + questions.service.spec answers/reject）
+
+## 关键 bug 修复（E2E 发现）
+1. **serve permission reply 端点**：v1 端点不识别 per_ id（404）→ 改 v2 `/api/session/{id}/permission/{requestID}/reply`
+2. **ingress 反查失败丢弃事件**：同 worker 多 running 会话时 resolvePlatformSessionId 反查不唯一失败
+   （adoptNewInstanceRef 放弃回写）→ 原实现直接跳过落库，事件静默丢失。改为保留原始 ses_ sessionId 落库
+   （payload taskId/agentId 兜底），reply 时 ses_ 前缀直接透传 worker
+3. **ExecServer 检测器实例级标志残留**：detectingPending/reportedPending 为实例级，任务结束残留 true 导致
+   后续任务检测全跳过 → 重构为 PendingQuestionDetector 每任务独立实例
+
+## 回归
+- server tsc 0 错误；jest 1017 tests 全绿（含新增 questions/ingress/client spec）
+- worker tsc 0 错误；jest 353 tests 全绿（基线 335 + 18 新增）
+- web tsc 0 错误；next build 通过
+- 正常消息收发回归正常（消息发送 → worker 执行 → 回复落库），git 工具链不受影响

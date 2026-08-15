@@ -1,0 +1,71 @@
+# GitHub PR Round-2 Review & Deploy (PR #5-#8)
+
+日期: 2026-08-15 | 工作区: /data/git-project/aiagents | 部署: ns vteam REV27
+
+## 一、审核结论（4 PR，均 APPROVE，无 P0/P1 阻塞）
+
+| PR | 标题 | 结论 | 问题清单 |
+|----|------|------|----------|
+| #5 fix/task-backgrounddoc-404 | read_file 对 /uploads/* 未归档文件直读 server 上传目录 | APPROVE | P2: 无阻塞。readUploadedFile basename 提取已杜绝路径穿越；仅对原始 fileRef /uploads 前缀生效，worker 原始路径仍走兜底 |
+| #6 feature/resizable-panels | 任务页左右面板拖拽调整宽度（is_0000000017） | APPROVE | P2: SSR hydration 潜在宽度闪烁+警告；handleUp 读 widthRef 可能差一帧（真实场景正常） |
+| #7 feature/markdown-render | 消息 markdown 渲染优化（is_0000000019） | APPROVE | P2: 每消息内嵌 style 标签重复注入；流式 delta 重解析 markdown 有 CPU 开销 |
+| #8 feature/panel-realtime | 右侧面板 issue/产出物实时刷新（is_0000000020） | APPROVE | P2: notifyIssueChanged await broadcast 与全库既有 emit 模式一致（先落库后转发）；broadcast 失败理论上污染主请求，非新引入风险 |
+
+- 4 PR 均基于 main@61e8e18（与 github/main 一致），基线未过期
+- 与本地未提交修复（119 项）重叠文件：platform-mcp.service.ts（本地 questionConfirm vs #5 readFile）、tasks/[id]/page.tsx（本地托管开关 vs #6/#8）、use-realtime.ts（本地 managedMode vs #8）——均为不同区域
+
+## 二、合并（git push 路线，gh merge 受限沿用）
+
+worktree 隔离合并：git worktree add /tmp/opencode/vteam-pr2nd github/main -b merge-pr2nd
+按依赖顺序 merge --no-ff：
+1. #5 → e91c4ab（2 文件，无冲突）
+2. #7 → 424964d（6 文件含 package-lock 新依赖 react-markdown@10/remark-gfm@4，无冲突）
+3. #6 → 6e77591（page.tsx + use-resizable.ts，无冲突）
+4. #8 → b822abb（page.tsx + issues.service + use-realtime + event.constants，ort 自动合并成功，无冲突）
+
+push github main: 61e8e18..b822abb
+gh pr list 验证：#5-#8 全部 MERGED，无 open PR
+
+## 三、本地 main-local 合并（保留未提交修复）
+
+- git stash push -u（119 项）→ merge github/main（fast-forward 语义）→ stash pop
+- 唯一冲突文件：web/app/(main)/tasks/[id]/page.tsx（TaskPanel props 三方重叠）
+  - 解决：width（#6）+ onToggleManagedMode（本地）+ onEditTaskInfo 三者共存；调用处同样合并
+- 三端 tsc --noEmit 0 错误；server jest 55 suites / 1173 tests 全过（含本地修复新增测试）
+- stash drop（内容已完整恢复，119 项改动保留）
+
+## 四、镜像构建与部署
+
+- server: docker-hosted.ketaops.cc/xishuhq/vteam-server:vteam-k8s-pr2nd (sha256:62bf2a39...)
+- worker: docker-hosted.ketaops.cc/xishuhq/vteam-worker:vteam-k8s-pr2nd (sha256:c73ea639...)
+- web: docker-hosted.ketaops.cc/xishuhq/vteam-web:vteam-k8s-pr2nd (sha256:5cc82534..., --build-arg API_PROXY_TARGET=http://vteam-server:3000)
+- helm upgrade vteam -n vteam chart/vteam -f /tmp/opencode/vteam-values-baseline.yaml（完整 values 基线：secret/ingress/副本1/worker 8Gi 全保留，仅改三镜像 tag）
+- REVISION 25 → 27，init Job Completed，三端 rollout 完成
+
+## 五、验证（全部通过）
+
+### 基础
+- 4 pods Running/Ready 1/1；health 200；登录 200
+- agents=5；worker w_vteam-worker-1 online（opencode 1.18.16, serve port 4000, git tools MCP connected）
+- MCP keta-platform 14 tools：chat_history/doclib/task_context/group_post/read_file/notify_agent/submit_artifact/issue_create/issue_list/issue_get/issue_update/issue_transition/task_transition/question_confirm
+
+### 新 PR 功能冒烟
+- PR#5: POST /uploads 上传 → 静态 /uploads/*.md 200 + server uploads 目录落盘；read_file 直读分支单测 is_0000000018 覆盖（1173 tests）
+- PR#6: 任务页 2×panel-resize-handle；拖拽模拟 224→284px；localStorage task-members-panel-width 持久化；reload 恢复
+- PR#7: agent 消息 .md-render 渲染 BOLD/LIST 结构（PR #6/7/8 审核结论消息）；用户消息保持纯文本
+- PR#8: SSE 订阅 scope=task:t_0000000015 捕获 issue.changed（ev_0000023588 create / 3589 transition / 3590 update）
+
+### 本地修复回归
+- 长描述/TEXT 列: 任务描述 1020 字完整创建/展示（t_0000000015，原 VARCHAR(191) 会 value too long）
+- 托管模式: PATCH /tasks/:id {managedMode:true} → true；question_confirm 工具就位
+- 私聊 session-history: GET /channels/:id/messages 27 条正常返回
+- 任务启动/消息链路: t_0000000015 start → in_progress；群聊消息触发 dispatcher
+
+## 六、Risks
+- worker 当前卡在 t_0000000008 旧任务消息循环执行（[exec] 反复 328 chars），非本次部署引入，建议排查该任务
+- SSE 经本机 curl 验证遇 0 字节/401（pod 内 wget 200 正常，疑本机网络/代理问题）；前端 EventSource 不受影响（pod 内事件流完整）
+- web PR#7 内嵌 style 标签重复注入为已知 P2，非阻塞
+
+## 证据文件
+- 本文件
+- learnings.md appended（round2 经验）

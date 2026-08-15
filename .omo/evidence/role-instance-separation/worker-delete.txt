@@ -1,0 +1,107 @@
+================================================================================
+删除离线 Worker 能力实证（DELETE /api/v1/workers/:id）
+================================================================================
+日期：2026-08-14
+环境：K8s ns=vteam（helm REV10，server 镜像 vteam-worker-delete），registry docker-hosted.ketaops.cc
+范围：后端 remove + 权限 + 前端删除入口 + tsc/jest/build + 真实删除实证（offline 造出→删除→行消失+关联清）+ online 409 回归
+
+--------------------------------------------------------------------------------
+1. 后端 diff（工作区未提交）
+--------------------------------------------------------------------------------
+server/src/workers/workers.constants.ts:
+  WORKER_ERRORS 新增 WORKER_ONLINE_NOT_REMOVABLE = 'WORKER_ONLINE_NOT_REMOVABLE'
+
+server/src/workers/workers.service.ts:
+  新增 remove(id):
+  - findUnique 查 worker（不存在 → 404 WORKER_NOT_FOUND）
+  - status !== 'offline' → 409 WORKER_ONLINE_NOT_REMOVABLE（message '仅离线 Worker 可删除，请先停止/下线'）
+  - $transaction 数组（顺序固定）：
+      ① workerModelAvailability.deleteMany({ workerId })      // 硬删
+      ② taskGroupInstance.deleteMany({ workerId })            // 硬删（软删 removedAt 不解除 FK Restrict）
+      ③ session.updateMany({ workerId }, { workerId: null, instanceRef: null })  // 置空（Session.workerId Restrict）
+      ④ agent.updateMany({ workerId }, { workerId: null })    // 软绑定"首选 worker"置空
+      ⑤ worker.delete({ id })
+  - 成功后 workerMcpStatus.delete(id) + pendingCommands.delete(id) 内存态清理
+  - 返回 { id, deleted: true }
+
+server/src/workers/workers.controller.ts:
+  新增 @Delete(':id') + @UseGuards(PermissionGuard) + @RequirePermission('workers.delete')
+  → 权限矩阵合法：PERMISSION_RESOURCES 含 'workers'、PERMISSION_ACTIONS 含 'delete'
+    （roles.constants.ts）；PermissionGuard 按 resource.action 解析，seed admin `all:true` 放行。
+
+server/src/workers/workers.service.spec.ts（remove 用例）:
+  - offline → 事务内清理 5 步全断言 + 返回 {id, deleted:true}
+  - online → 409（不删不清理）；degraded → 409；不存在 → 404
+  - 成功同步清理 workerMcpStatus/pendingCommands 内存态
+  - 修复：$transaction mock 误把 PrismaPromise 当函数调用（op is not a function）→ 改 `await op`
+    （thenable 语义），remove 用例全绿
+
+server/src/workers/workers.controller.spec.ts:
+  DELETE /workers/:id 转发 remove（workers.delete 保护）
+
+--------------------------------------------------------------------------------
+2. 前端 diff（web/app/(main)/workers/page.tsx）
+--------------------------------------------------------------------------------
+- WorkerCard 新增 props canDelete / onDelete / busy.action='delete'
+- 删除入口仅 isOffline 时渲染（online 节点前端不暴露，后端 409 兜底）
+- 无 workers.delete 权限 → 禁用 + title 提示
+- 点击 → ConfirmDialog 二次确认（复用组件，对齐 agents 页模式）→ DELETE /workers/:id
+  → invalidateQueries(['workers']) 刷新列表；失败走页级 actionError 条（3s 自动消失）
+- data-testid="worker-delete-button"
+
+--------------------------------------------------------------------------------
+3. 构建与测试结果
+--------------------------------------------------------------------------------
+- server: npx tsc --noEmit          → 0 错误
+- server: jest src/workers          → 8 suites · 234 tests 全过
+- server: jest 全量                 → 54 suites · 1131 tests 全过
+- web:    npx tsc --noEmit          → 0 错误
+- web:    npm run build             → 通过（/workers 页面 7.25 kB）
+
+--------------------------------------------------------------------------------
+4. 真实删除实证（K8s ns=vteam）
+--------------------------------------------------------------------------------
+部署：docker build vteam-server:vteam-worker-delete → push → helm upgrade -n vteam REV10
+      （--reuse-values --set server.image.repository/tag）
+
+(1) online 409 回归：
+    DELETE /api/v1/workers/w_vteam-worker-0 → 409
+      {"code":"WORKER_ONLINE_NOT_REMOVABLE","message":"仅离线 Worker 可删除，请先停止/下线"}
+    → 行保留（DB 仍在，心跳在线）
+
+(2) offline 遗留行删除：
+    DELETE /api/v1/workers/w_vteam-worker-545cfb86f7-7jbdg → 200 {"id":...,"deleted":true}
+    → DB workers 表该 id 消失（8→7）
+
+(3) offline 带关联行删除（关联清理完整实证）：
+    删除前基线：w_vteam-worker-58cf4cb768-phrcl（offline）关联：
+      worker_model_availabilities 7 行 / task_group_instances 2 行 /
+      sessions s_0000000003（worker_id + instance_ref=ses_000e34269ffeNSagKqiwvLkiAS）
+    DELETE /api/v1/workers/w_vteam-worker-58cf4cb768-phrcl → 200
+    删除后 DB：
+      workers 该 id 消失（7→6）
+      worker_model_availabilities WHERE worker_id=该id → 0 行（硬删）
+      task_group_instances WHERE worker_id=该id → 0 行（硬删）
+      sessions s_0000000003 保留，worker_id=NULL + instance_ref=NULL（置空）
+      agents worker_id 无指向该 worker 的行（现状无绑定，updateMany 空操作安全）
+
+(4) offline 造出 → 删除（完整链路）：
+    kubectl scale sts vteam-worker --replicas=1（停 vteam-worker-1）
+    → 35s 后 API：w_vteam-worker-1 由 online 判 offline（lastHeartbeatAt 08:18:04 停滞）
+    DELETE /api/v1/workers/w_vteam-worker-1 → 200
+    → DB workers 6→5，该 id + wma/tgi 全清
+    恢复：kubectl scale sts vteam-worker --replicas=2 → worker-1 重新注册上线（新行自动创建）
+
+(5) 404 防护：DELETE /api/v1/workers/w_deleted_worker → 404 WORKER_NOT_FOUND
+
+(6) 系统回归：GET /api/v1/health → {"status":"ok"}；admin/admin123 登录 → 200（roleId=r_admin）
+
+--------------------------------------------------------------------------------
+5. 风险与备注
+--------------------------------------------------------------------------------
+- 权限点 workers.delete 未写入 seed 角色矩阵（admin 为 all:true 简写天然放行；
+  member all:false 仅 view 拒绝写操作）。若后续引入自定义角色需显式配 workers.delete。
+- 删除 worker 行会使其上历史会话的 worker_id 置空（记录保留，归属历史字段丢失）——
+  属预期语义（防 FK Restrict 阻塞删除），前端 ConfirmDialog 已明示"不可恢复"。
+- task_group_instances 硬删（removedAt 软删不解除 FK Restrict，必须删行）。
+- 未 git 提交（未授权），改动保留在工作区。

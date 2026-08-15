@@ -1,0 +1,48 @@
+删除前端「查看 Agent 会话」无效占位入口（点击无效）
+
+## 变更 diff 摘要
+
+1. web/app/(main)/tasks/[id]/page.tsx
+   - 删除 :1485-1524「查看 Agent 会话入口（占位）」整块：含 data-testid="view-session-link"、
+     「打开会话面板」按钮、说明文字（title="会话面板（Phase 3）"，Phase 3 从未实现，纯占位）；
+     外层 aside 结构保留。
+   - :1097 说明文字改为「Agent 内部推理过程不广播到群聊，仅最终回复展示」（删除
+     「点击右侧『查看 Agent 会话』可实时查看处理过程」指引）。
+
+2. web/src/components/layout/cmdk-panel.tsx
+   - 删除 :57 { group:"操作", label:"查看 Agent 会话", icon:"◷" } — 无导航目标，点击无效。
+
+3. web/src/components/layout/cmdk-panel.tsx
+   - 删除 :56 { group:"操作", label:"查看产出物", icon:"▦" }（判定：无效，见下）
+
+4. e2e 同源残留清理（避免删除后断言失败）
+   - web/e2e/pages.spec.ts:66 删除 `getByTestId("view-session-link")` 可见性断言
+   - web/e2e/reference/testids.ts 删除 5 处 "view-session-link"（testids 数组 4 处 + 路由映射 1 处）
+
+## 「查看产出物」判定结果
+
+CMDK_NAV_PATH（app-shell.tsx:142-153）仅含「导航」组 10 个 label；handleCmdKSelect
+（app-shell.tsx:365-375）仅对「新建任务」有专门分支（→ /tasks/new?pid=p_seed_1）。
+「查看产出物」既不在 CMDK_NAV_PATH 也无专门分支 → 点击无效，一并删除。
+页面内实际的产出物区块（task 详情页 :1277/:1377 等，有效功能）保留。
+
+## 验证结果
+
+- npx tsc --noEmit：0 错误
+- npm run build：通过（/tasks/[id] 11.4 kB 等全部路由构建成功）
+- grep "查看 Agent 会话|view-session|打开会话面板" web/app web/src web/e2e：0 命中
+- grep "查看产出物"：仅剩任务详情页实际产出物功能引用（有效，保留）
+- docker compose up -d --build web → web :13001 就绪
+
+## 浏览器实测（playwright + chromium，web :13001）
+
+任务详情页 /tasks/t_0000000001：
+  view-session-link: 0，卡片文字「查看 Agent 会话」: 0，「打开会话面板」按钮: 0
+Cmd+K 命令面板：
+  「查看 Agent 会话」: 0，「查看产出物」: 0，「新建任务」: 1（保留正常）
+截图：/tmp/opencode/remove-session-panel/task-detail.png、cmdk-open.png
+
+## Risks
+
+- 无 git 操作、无其他功能/布局改动
+- e2e reference/testids.ts 为审计参考文档，同步删除引用保持一致性

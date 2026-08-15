@@ -1,0 +1,105 @@
+# 证据：SSH 私钥格式兼容修复（worker writeTempKey 格式归一，OPENSSH ssh-rsa → PKCS#1 PEM）
+
+- 日期：2026-08-14
+- 任务：worker 侧 `git-tools.ts writeTempKey` 落盘前格式归一——OPENSSH 容器格式的 ssh-rsa 私钥转 PKCS#1 PEM；ed25519/PEM 原样；加密 key 明确抛错。
+- 修复前根因证据：`.omo/evidence/role-instance-separation/git-ssh-key-format.txt`（问题 key 在 OpenSSL 3.x 加载报 `error in libcrypto: unsupported`，git_clone 失败）
+- 运行时：K8s ns vteam，worker 镜像 `docker-hosted.ketaops.cc/xishuhq/vteam-worker:vteam-k8s-gitfix`
+
+## 1. 实现方案（worker/src/git/git-tools.ts）
+
+- **新增 `normalizeSshKey(key): string`**（导出，供单测）：
+  - 检测：key 含 `-----BEGIN OPENSSH PRIVATE KEY-----` 头才进入转换分支；否则原样返回（PEM/PKCS#8/其他格式/ed25519 原样）。
+  - 解 openssh-key-v1 容器（纯 Node，无 openssl 二进制依赖，worker alpine 无 openssl）：
+    - base64 解码 → magic `openssh-key-v1\0` → ciphername/kdfname/kdfoptions/nkeys 长度解析；
+    - `ciphername != none || kdfname != none` → 抛 `encrypted openssh private key is not supported`（不静默降级）；
+    - nkeys 须 =1；提取私钥块：checkint×2（校验相等）→ keytype string：
+      - `ssh-rsa` → 按 OpenSSH PROTOCOL.key 顺序读 mpint n, e, d, iqmp, p, q（iqmp 跳过，PKCS#1 重新计算）；
+      - 其他 keytype（ssh-ed25519 等）→ 原样返回；
+    - mpint 解析（RFC 4251）：正数剥离前导 0x00（含符号位填充）；负数抛错（RSA 参数恒正）。
+  - 构 PKCS#1 RSAPrivateKey DER（`-----BEGIN RSA PRIVATE KEY-----`）：
+    - SEQUENCE { version=0, n, e, d, p, q, dp=d mod(p-1), dq=d mod(q-1), qinv=q⁻¹ mod p }；
+    - DER INTEGER：BigInt 大端、去前导零、最高位 bit7=1 时补 0x00 符号位；长度 BER definite（short/long 自适应）；
+    - qinv 用 BigInt 扩展欧几里得；base64 每 64 字符换行。
+  - 自包含：不引用模块级变量，随 `renderGitToolsFile` toString() 内联进渲染产物 git.ts（同 loadCredential 约定），渲染产物顺序 normalizeSshKey 在 writeTempKey 之前。
+- **`writeTempKey` 集成**：写临时 key 前 `normalizeSshKey(entry.key)`，写 normalized（0o600 保持）；转换失败 → 抛错（buildGitEnv/runGit 调用方错误链路已处理，不静默降级、不写坏文件）。
+
+## 2. 单测清单（git-tools.spec.ts，新增 14 项）
+
+| 用例 | 覆盖点 | 结果 |
+|------|--------|------|
+| 真实生成 3072 ssh-rsa OPENSSH key → PEM | 头/尾正确；指纹三方交叉（容器 blob vs DER 重建 vs `ssh-keygen -lf`） | PASS |
+| `ssh-keygen -y` 加载转换后 PEM | 输出 `ssh-rsa <base64(pubblob)>`，与容器公钥 blob 一致 | PASS |
+| PEM 体 64 字符换行 | 除末行外行长为 64 | PASS |
+| ed25519 OPENSSH 容器 | 原样返回（不转换） | PASS |
+| RSA PEM / PKCS#8 / EC PEM | 原样返回 | PASS |
+| 加密 OPENSSH 私钥（-N passphrase） | 抛 `encrypted openssh private key is not supported` | PASS |
+| 坏 magic / 空体 | 抛 `bad magic` / `empty body` | PASS |
+| mpint 冗余前导零（e=17 编码 0x00 0x11） | 剥离后 DER 9 字段全对（n=3233,d=2753,dp=49,dq=53,qinv=20） | PASS |
+| mpint 符号位+冗余前导零（e=0xA1 编码 0x00 0x00 0xA1） | 剥离后 e=161,d=1841,dp=21,dq=41,qinv=20 | PASS |
+| p<q 顺序（53<61） | 保持 OpenSSH 参数次序，PKCS#1 p/q 正确 | PASS |
+| writeTempKey 集成 | OPENSSH ssh-rsa → 临时文件为 PEM 头 + 权限 600 | PASS |
+| writeTempKey 加密 key | 抛错（不写坏文件） | PASS |
+| 渲染产物内联 | 含 normalizeSshKey.toString() 且在 writeTempKey 之前；writeTempKey 调用它 | PASS |
+| DER 解析器边界 | 长格式长度（3072bit 整数 >127 字节） | PASS（交叉测试隐含） |
+
+单测 key 均为本机 `ssh-keygen` 临时生成（脱敏，不含平台真实私钥）；DER/容器解析 helper 与 normalizeSshKey 内部实现不同源（交叉验证，防同构）。
+
+## 3. 构建/测试结果
+
+```
+$ cd worker && npx tsc --noEmit        → 0 错误
+$ npx jest src/git                     → 2 suites, 50 tests PASS
+$ npx jest --runInBand                 → 19 suites, 349 tests PASS
+```
+
+## 4. 真实 git clone 复验（问题 key 场景，宿主 8.9/OpenSSL 3.0.2）
+
+- 真实 key 取自 worker `/root/.keta-git-creds.json`（3 条 ssh_key 共享同一把 3072 ssh-rsa，未写入证据）。
+
+修复前（原始 OPENSSH 容器原样）：
+```
+$ ssh-keygen -y -f /tmp/keta-real-key.pem
+Load key "/tmp/keta-real-key.pem": error in libcrypto        EXIT=255
+$ GIT_SSH_COMMAND='ssh -i <orig> ...' git clone --depth 1 git@gitee.com:xishuhq/ketacli
+Please make sure you have the correct access rights and the repository exists.   → FAIL
+```
+
+修复后（normalizeSshKey → PKCS#1 PEM）：
+```
+$ ssh-keygen -y -f /tmp/keta-real-key-norm.pem               EXIT=0（公钥正常输出）
+$ ssh-keygen -lf /tmp/keta-real-key-norm.pem
+3072 SHA256:iy36pU1xfSgNS1/Ir059x9BdHfzN+/vmyPyDmGNAzmc no comment (RSA)   ← 指纹与平台原 key 一致
+$ GIT_SSH_COMMAND='ssh -i <norm> ...' git clone --depth 1 git@gitee.com:xishuhq/ketacli  → OK
+```
+
+worker 真实代码路径（writeTempKey → GIT_SSH_COMMAND → git clone）：
+```
+$ npx tsx e2e（writeTempKey(真实key)）
+writeTempKey 写入文件头: -----BEGIN RSA PRIVATE KEY-----
+权限: 600
+git clone exit: 0 / clone 产物: OK / temp key cleaned: true
+```
+
+## 5. K8s 部署与容器内复验
+
+- 构建并推送：`docker build -t docker-hosted.ketaops.cc/xishuhq/vteam-worker:vteam-k8s-gitfix ./worker` + push（digest sha256:ae36492790c...）。
+- 部署：helm upgrade 因 chart 触发无关资源更新（mysql sts spec 不可 patch / uploads PVC resize 禁止）整体失败 → 改为 `kubectl set image sts/vteam-worker -n vteam worker=docker-hosted.ketaops.cc/xishuhq/vteam-worker:vteam-k8s-gitfix`，pod 删除重建后 Running（sts revision 更新完成）。
+- worker 容器内（新镜像，OpenSSH 10.3p1 + OpenSSL 3.5.7，无 openssl 二进制）：
+```
+修复前对照（原始 key 原样）：
+$ ssh-keygen -y -f /tmp/orig-key
+Load key "/tmp/orig-key": error in libcrypto: unsupported    EXIT=255
+
+修复后（writeTempKey(凭证key) → /tmp/keta-worker/dist/git/git-tools.js）：
+writeTempKey 输出头: -----BEGIN RSA PRIVATE KEY-----
+ssh-keygen -lf: 3072 SHA256:iy36pU1xfSgNS1/Ir059x9BdHfzN+/vmyPyDmGNAzmc no comment (RSA)
+GIT CLONE: OK   （git@gitee.com:xishuhq/keta-agent → /tmp/keta-clone，产物含 AGENTS.md 等）
+```
+
+## 6. Risks / 备注
+
+- 转换实现为纯代码解析+DER 构造，靠单测锁边界：mpint 前导零/符号位、p<q、DER 长短格式长度、64 字符换行均已覆盖；真实 key 指纹一致 + 宿主/worker 双环境 git clone 成功验证。
+- 转换失败（加密/结构非法）抛错不静默降级，不写坏文件；临时 key 权限保持 0o600。
+- 仅 worker 侧兜底，server/凭证存储未改，存量数据无需迁移；错误信息不含明文 key。
+- 非 ssh-rsa（ed25519 等）原样返回，不受影响。
+- 建议长期录入引导 ed25519（方案 C，无 RSA/OpenSSL legacy 兼容问题）。

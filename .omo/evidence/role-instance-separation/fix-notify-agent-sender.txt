@@ -1,0 +1,103 @@
+T4 修复：notify_agent（agent 互 @）落库 sender 归属 bug（BUG 修复证据）
+=========================================================================
+日期：2026-08-13
+复现任务：t_0000000012（项目经理-1 分配任务给测试-1，群聊显示"测试的头像/名字"但内容是项目经理的）
+
+一、根因
+---------------------------------------------------------------------
+T4 设计 notifyAgent（platform-mcp.service.ts :308-351）时契约定为"sender=目标实例"：
+落库 senderId=目标实例 agent id（targetAgentId）、senderInstanceId=targetInstanceId、
+mentions 标 @ 目标。这与群聊普通消息（group_post sender=发送者实例）语义相反——
+前端按 sender 渲染头像/名字，导致"头像是目标实例（测试）的、内容是发送者（项目经理）写的"。
+T5 前端 senderNameFromMentions 兜底（senderId 命中 mentions[].agentId 时取 name）进一步
+放大该 bug：senderId=targetAgentId 恰好命中 mentions 里的目标 agentId → 显示目标别名。
+
+二、修复 diff 摘要（platform-mcp.service.ts notifyAgent，不改 schema/前端/dispatch 触发）
+---------------------------------------------------------------------
+触发语义不变：targetInstanceId 仍精确触发目标实例（dispatchAgentMention 原样保留）。
+显示语义修正（对齐 group_post 普通消息）：
+1) 新增私有方法 resolveSenderAgentId(taskId, instanceId)（group_post 亦复用）：
+   taskAgent.findFirst({ id: instanceId, taskId }) 查实例行 → 返回 ta.agentId（真实模板
+   agent id）；实例行缺失（存量/回退，instanceId 本身可能是 agent id）→ 原样返回。
+2) notifyAgent 落库消息：
+   - senderId = resolveSenderAgentId(taskId, selfInstanceId)（发送者实例解析的真实模板
+     agent id，如 a_project_manager）
+   - senderInstanceId = selfInstanceId（发送者实例，如 ta_0000000037）
+   - mentions = [{ type:'agent', instanceId: targetInstanceId, agentId: 目标实例 agent id,
+     name: 目标实例别名 }]（@ 目标语义不变，仅表示 mention 归属）
+   - content.text = `@目标别名 content`（保持现有拼接）
+   - dispatchAgentMention({ taskId, channelId, text, targetInstanceId }) 原样（触发目标实例）
+   - 返回结构 { messageId, channelId, targetInstanceId } 不变
+语义：MCP notify_agent = "发送者通知目标实例"。消息是发送者的发言（@目标），目标实例被触发处理。
+
+三、spec 更新（platform-mcp.service.spec）
+---------------------------------------------------------------------
+- notifyAgent 用例的 taskAgent.findFirst mock 改为分流实现（mockTaskAgentRows）：
+  发送者实例 ta_sender → { agentId: 'a_sender' }（resolveSenderAgentId 解析）；目标实例
+  ta_tester → { agentId: 'a_tester', alias:null, agent:{id,name:'测试'} }（@ 目标/mentions）。
+- 主用例断言改为：senderId='a_sender'（发送者 agent id）、senderInstanceId='ta_sender'
+  （selfInstanceId）、mentions 含目标实例（ta_tester/a_tester/测试）；dispatchAgentMention
+  触发断言、目标实例无会话抛错向上传播断言保留。
+- worker-dispatcher.spec 无 notifyAgent 落库形状断言（仅 tools 清单含 notify_agent 字符串），无需改。
+
+四、验证输出
+---------------------------------------------------------------------
+- npx tsc --noEmit → 0 错误
+- npx jest src/platform-mcp src/chat/worker-dispatcher.spec.ts → 3 suites / 177 tests 全过
+- 全量 npx jest → 56 suites / 1121 tests 全过
+
+五、真实链路验证（部署重建 + curl 直调 MCP + 查库）
+---------------------------------------------------------------------
+部署：docker compose up -d --build server → 新容器（aiagents-server 镜像）启动健康；
+容器内 dist 确认含修复代码（notifyAgent 中 senderAgentId=resolveSenderAgentId(...)/
+senderId:senderAgentId/senderInstanceId:args.selfInstanceId）。
+
+调用（X-Worker-Token + x-worker-id 直调 JSON-RPC tools/call）：
+  POST http://localhost:13000/api/v1/platform-mcp
+  X-Worker-Token: compose-worker-token
+  x-worker-id: w_compose_worker
+  {"method":"tools/call","params":{"name":"notify_agent","arguments":{
+     "taskId":"t_0000000012","selfInstanceId":"ta_0000000037",
+     "targetInstanceId":"ta_0000000041","content":"分配任务验证：请开始处理你负责的模块 A 测试"}}}
+  → result: {"messageId":"m_0000000315","channelId":"c_0000000029","targetInstanceId":"ta_0000000041"}
+
+查库实证（messages 表 m_0000000315）：
+  sender_id        = a_project_manager   （发送者=项目经理-1 的真实模板 agent id，修复前=目标 a_tester）
+  sender_instance_id = ta_0000000037     （发送者实例=项目经理-1，修复前=目标实例 ta_0000000041）
+  content          = {"text":"@测试-4 分配任务验证：请开始处理你负责的模块 A 测试","parts":[]}
+  mentions         = [{"name":"测试-4","type":"agent","agentId":"a_tester","instanceId":"ta_0000000041"}]
+  status           = sent
+触发语义验证：sessions 表 s_0000000041（测试-4）状态由 idle → running（dispatchAgentMention
+真实触发目标实例执行，触发机制不变）。
+UI 语义：senderId=a_project_manager 不再命中 mentions[].agentId(a_tester)，前端走 agentMap
+渲染"项目经理-1"，消息显示"项目经理-1：@测试-4 分配任务验证..."。
+
+补充验证（用户实测场景：项目经理-1 → 测试-1，ta_0000000038）：
+  调用 notify_agent selfInstanceId=ta_0000000037 targetInstanceId=ta_0000000038
+  content="你好，请执行分配任务的验收测试"
+  → result: {"messageId":"m_0000000327","channelId":"c_0000000029","targetInstanceId":"ta_0000000038"}
+  查库实证（messages 表 m_0000000327）：
+    sender_id        = a_project_manager   （发送者=项目经理-1，修复后正确）
+    sender_instance_id = ta_0000000037     （发送者实例=项目经理-1）
+    content          = {"text":"@测试-1 你好，请执行分配任务的验收测试","parts":[]}
+    mentions         = [{"name":"测试-1","type":"agent","agentId":"a_tester","instanceId":"ta_0000000038"}]
+  触发语义：sessions 表 s_0000000038（测试-1）状态 idle → running（dispatchAgentMention 真实触发）。
+  UI 截图实证（浏览器登录 admin → 任务 t_0000000012 群聊，滚动至目标消息气泡）：
+    fix-notify-agent-sender-ui.png —— 消息气泡显示：
+      data-role="project_manager" 蓝色 "P" 头像（项目经理风格，与测试的黄色 "T" 区分）
+      chat-bubble-author = "项目经理-1 · 22:18"
+      文本 = "@测试-1 你好，请执行分配任务的验收测试"
+    修复前该消息 sender=目标（a_tester/ta_0000000038）会渲染黄色 "T" 头像 + 测试-1 名字。
+  API 层（GET /api/v1/channels/c_0000000029/messages，admin token）同证：
+    m_0000000327 senderType=agent senderId=a_project_manager senderInstanceId=ta_0000000037
+    mentions=[{name:测试-1, agentId:a_tester, instanceId:ta_0000000038}]；
+    真实链路测试-1→测试-2 的 m_0000000331 亦为 sender=测试-1（发送者）@测试-2——新语义全链路生效。
+
+六、风险
+---------------------------------------------------------------------
+- 触发链路零改动：dispatchAgentMention/worker-dispatcher 原样，目标实例触发不受影响。
+- 兼容性：resolveSenderAgentId 实例行缺失时原样返回（存量 agent id 直传兼容），与
+  group_post 共用同一解析器行为一致。
+- 无 schema/前端改动，无新依赖。
+- 前端 senderNameFromMentions（T5 兜底）仅当 senderId 命中 mentions 时生效——新语义下
+  senderId=发送者、mentions=目标，二者不再重叠，兜底路径自然不触发，无需前端改动。

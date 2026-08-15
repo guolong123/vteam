@@ -1,0 +1,44 @@
+========================================================
+超时误报修复（方案 A+B）端到端验证
+日期: 2026-08-12  环境: docker compose (server 13000 / worker 容器)
+========================================================
+
+## 改动
+- A. docker-compose.yml: server FIRST_TOKEN_TIMEOUT_MS=180000; worker WORKER_FIRST_TOKEN_TIMEOUT_MS=180000
+- B. worker/src/exec/exec-server.ts runExecution: session.updated(running) 后补 agent.status(loading) phase=thinking
+  （对齐失败路径形状; ingress handleAgentStatus → sessionActivityCallbacks → clearPendingWatchdogBySession）
+- spec: exec-server.spec.ts 更新 5 处事件序列断言（成功路径 + 4 失败路径）+ waitFor 阈值 + loading payload 断言
+
+## 单元/类型验证
+- worker: npx tsc --noEmit → 0 错误
+- server: npx tsc --noEmit → 0 错误
+- worker: npx jest --runInBand → 21 suites / 335 tests 全绿（基线 335）
+
+## 部署
+- docker compose up -d --build server worker → server health 200, worker online
+- 容器 env 确认: server FIRST_TOKEN_TIMEOUT_MS=180000; worker WORKER_FIRST_TOKEN_TIMEOUT_MS=180000
+
+## 端到端时序（长思考/多工具任务，@a_architect 群聊 c_0000000001，消息 m_0000000058）
+本地 15:44:53.215 消息发送（dispatch 开始）
+15:44:53.292 dispatch loading(thinking)        [realtime_events agent.loading scope=t_0000000001]
+15:44:53.397 dispatch loading(operating)       [realtime_events]
+15:44:53.410 worker running 事件回流            [realtime_events session.updated; server 日志 session s_0000000003 status→running]
+15:44:53.425 worker agent.status(loading) 回流  [realtime_events agent.loading thinking payload.sessionId=ses_00c336...（worker 原始值, B 方案核心证据）]
+15:47:53  (dispatch+180s) 无「agent 无响应」错误 —— watchdog 已被 loading 清除（原 60s 默认值下必误报）
+15:50:59.172 群聊回复落库 m_0000000061（agent a_architect, sent, 架构分析 1020 字 + 产出物 art_0000000003）
+处理总耗时 ≈ 6 分钟（远超原 60s 首字窗口），全程 server「agent 无响应」错误计数 = 0
+
+## 回归
+- 普通短消息 @agent → 正常回复不受影响（见回归记录）
+
+## 观察/风险
+1. session s_0000000003 完成（task.completed 已落库）但 status 仍 running：worker 404 重建新 opencode 会话
+   （ses_00b1194b5ffe...）后 idle 事件 instanceRef 反查失败，adoptNewInstanceRef 因同 worker 多 running
+   会话（s_0000000003+s_0000000005）放弃回写 —— F3 已知边界（非本次改动引入），30min 空闲判死兜底。
+2. worker 容器重建导致旧 opencode 会话失效 → 复用 404 重建路径被触发（本次验证顺带覆盖该路径）。
+3. 私聊流式消息 m_0000000060 保持 processing（text 由 parts 累积，未拼接 text 字段）——既有流式展示行为。
+
+## 回归（普通短消息）
+15:52:24 发送 @a_product 短消息（m_0000000062）
+15:52:29.446 群聊回复落库 m_0000000064（a_product, sent, 5s 内）: 「系统运行正常，随时可以开始干活。」
+server「agent 无响应」错误 = 0 —— 短消息正常回复不受影响

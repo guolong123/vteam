@@ -1,0 +1,65 @@
+主 Agent 通过 MCP 工具流转任务状态（task_transition）
+================================================================
+日期：2026-08-14
+场景：项目经理-1 无法操作任务状态 → 新增 keta-platform MCP 工具 task_transition，
+      仅主 Agent（mainAgentInstanceId）可流转任务五态。
+
+一、代码改动
+----------------------------------------------------------------
+- server/src/common/constants/event.constants.ts：ACTOR_TYPE 新增 agent（task_events.actorType 自由字符串）。
+- server/src/common/constants/task.constants.ts：TASK_ERRORS 新增 TASK_STATUS_MAIN_AGENT_ONLY。
+- server/src/tasks/tasks.service.ts：
+  - TransitionOptions 新增可选 actor {type, id}（缺省 {user, userId}，用户路径行为不变）；
+  - transition 内 task_events 写入与 TASK_STATUS_CHANGED 广播改用 opts.actor（缺省 user）；
+  - 提取 private transitionOpts(id, action, reason?)：5 个动作（start/mark-pending-review/
+    accept/reject/archive）副作用配置集中管理，5 个公开方法改为薄封装；
+  - 新增 async transitionByAgent(taskId, instanceId, action, dto?)：查任务（404）→
+    主实例校验（mainAgentInstanceId === instanceId，否则 403 TASK_STATUS_MAIN_AGENT_ONLY
+    「仅主 Agent 可流转任务状态」）→ transition + actor={agent, instanceId}；
+    reject 的 reason 经 transitionOpts 第 3 参透传 metadata。
+- server/src/platform-mcp/platform-mcp.tools.ts：新增 taskTransitionSchema
+  {taskId, selfInstanceId, action(5 态 enum), reason?} + 注册 task_transition 工具
+  （工具数 12 → 13，描述标注「仅主 Agent（mainAgentInstanceId）可调用」）。
+- server/src/platform-mcp/platform-mcp.service.ts：注入 TasksService，新增 taskTransition(ctx,args)
+  = assertWorkerTask → tasksService.transitionByAgent。
+- server/src/platform-mcp/platform-mcp.module.ts：imports TasksModule（导出 TasksService，无环）。
+- server/src/chat/worker-dispatcher.ts：GLOBAL_SYSTEM_INSTRUCTIONS 新增
+  「【任务状态】主 Agent 可调用 keta-platform MCP 的 task_transition 工具…仅主实例可调用」。
+
+二、静态验证
+----------------------------------------------------------------
+- npx tsc --noEmit：0 错误。
+- jest：全量 54 suites / 1124 tests 全过（含新增 transitionByAgent 5 用例 +
+  task_transition 4 用例 + ACTOR_TYPE 三类断言 + controller tools/list 13 工具断言）。
+
+三、真实链路（docker compose up -d --build server 后）
+----------------------------------------------------------------
+任务 t_0000000012：主实例 ta_0000000037（项目经理-1），团队成员 ta_38~41（测试 1-4），
+状态 pending → 验证用 in_progress。
+
+1) 主实例 start（MCP tools/call task_transition，X-Worker-Token + x-worker-id: w_compose_worker）
+   请求：{taskId:"t_0000000012", selfInstanceId:"ta_0000000037", action:"start"}
+   响应：result.content[0].text JSON → status=in_progress, startedAt=2026-08-14T03:05:07.344Z
+   查库：
+     tasks:  t_0000000012  in_progress  started_at=2026-08-14 03:05:07.344
+     task_events: te_0000000014  status_change  pending→in_progress  actor_type=agent
+                  actor_id=ta_0000000037
+     群聊系统消息：「任务已开始，主 Agent：项目经理-1」（task_group 频道 senderType=system）
+
+2) 非主实例拒绝
+   请求：{taskId:"t_0000000012", selfInstanceId:"ta_0000000038", action:"start"}
+   响应：error -32603 "selfInstanceId 与执行该任务的实例（ta_0000000037）不一致，禁止冒充"
+   → 非主实例被 403 拒绝（归属校验层拦截防冒充；TasksService 层「仅主 Agent」403
+     由单元测试覆盖 transitionByAgent 分支）。
+   缺 selfInstanceId：error -32602 zod 必填校验拒绝。
+
+3) 用户路径回归（API /tasks/:id/start）
+   新建任务 t_0000000013（PATCH 设 mainAgentId=a_project_manager → mainAgentInstanceId=ta_0000000042）
+   后调用户 start：status=in_progress。
+   查库 task_events：pending→in_progress  actor_type=user  actor_id=u_admin
+   → 用户路径 actor 缺省 user，行为完全不变；start 前置校验（MAIN_AGENT_NOT_SET）仍正常拦截。
+
+四、结论
+----------------------------------------------------------------
+主 Agent 可通过 MCP task_transition 流转任务状态；仅主实例可调用（非主实例 403 拒绝）；
+用户路径 actor=user 不受影响；系统消息/版本 CAS/幂等逻辑复用既有 transition 全套语义。

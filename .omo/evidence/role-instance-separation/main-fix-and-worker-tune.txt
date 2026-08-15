@@ -1,0 +1,85 @@
+# Main Push + Worker Tune (replica=1, memory 8Gi)
+
+时间: 2026-08-14T23:43Z (K8s cluster time)
+Namespace: vteam
+
+## A. GitHub main 推送
+
+- 本地 HEAD: 6566a3b4727f10a34da8d732d14fbe2cd5979c9c
+  (feature/git-repo-credentials 分支)
+- GitHub remote: `github` → git@github.com:guolong123/vteam.git
+- 推送前 github/main = de90d52f07f77aac378a4102cc10bb4a498a7169
+  (merge-base 验证 github/main 是 HEAD 祖先，fast-forward 安全)
+- 推送: `git push github HEAD:main` → de90d52..6566a3b  HEAD -> main
+- 未推送 commit 数: 13
+  (含编译修复批次: fix(auth) 权限矩阵/401、feat(skills) 技能工具 MCP、
+   feat(questions) 会话提问、fix(workers) 执行链路与事件契约、
+   feat(mcp) task_transition、fix(chat) 附件上传、fix(tasks) agent 状态、
+   fix(issues) create_issue 校验、fix(platform-mcp) notify_agent 归属、
+   chore server/uploads gitignore 等)
+- 验证: `git ls-remote github refs/heads/main` = 6566a3b... = 本地 HEAD ✓
+- 无 force push。push 前确认 github/main 为 HEAD 祖先（fast-forward），无冲突。
+
+## B+C. chart worker 副本 1 + 内存 8Gi
+
+### 发现（与任务描述差异）
+- 当前 K8s sts vteam-worker 实际 replicas=1 且 resources limits.memory=8Gi
+  —— 系上轮手动 kubectl edit 结果，**helm release 基线仍是旧值**
+  (replicaCount.worker=2, worker.resources.limits.memory=1Gi)。
+- 生产部署基线 = chart 默认 + values-dev.yaml 覆盖
+  (helm get values 显示 worker.resources 100m/256Mi/1Gi 与 values-dev 一致)。
+- chart/ 目录在 git 中从未跟踪（untracked），本次修改一并纳入。
+
+### chart 修改
+- chart/vteam/values.yaml:
+  - worker.resources.requests.memory: 512Mi → 1Gi (合理值)
+  - worker.resources.limits.memory: 4Gi → 8Gi
+  - worker.replicaCount 默认已是 1（无需改）
+- chart/vteam/values-dev.yaml (生产基线覆盖源):
+  - worker.resources.requests.memory: 256Mi → 1Gi
+  - worker.resources.limits.memory: 1Gi → 8Gi
+- chart/vteam/README.md: 关键 values 表补充 worker.resources 行
+  (默认副本 1、limit 8Gi、requests 500m/1Gi)
+
+### 验证
+- helm lint: 1 chart(s) linted, 0 failed ✓
+- helm template --set worker.replicaCount=1:
+  worker sts replicas=1, limits cpu=4/memory=8Gi, requests 500m/1Gi ✓
+
+### 部署（完整基线纪律）
+- 基线导出: helm get values vteam -n vteam -o yaml > /tmp/opencode/vteam-baseline.yaml
+- 基线修改: replicaCount.worker 2→1, worker.resources.requests.memory 1Gi,
+  worker.resources.limits.memory 8Gi
+- 执行: helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline.yaml
+  → Upgrade complete (revision 21)
+
+### K8s 状态确认
+- sts vteam-worker: replicas=1, ready=1 ✓
+- sts template resources: {"limits":{"cpu":"4","memory":"8Gi"},
+  "requests":{"cpu":"100m","memory":"1Gi"}} ✓ (helm 驱动，非手动)
+- pod vteam-worker-0: 1/1 Running, resources 同上 ✓
+- rollout: statefulset rolling update complete 1 pods ✓
+- opencode serve 4000 LISTEN ✓ (pid 44)
+- 注册成功: workerId=w_vteam-worker-0, heartbeatInterval=10000ms ✓
+- worker-1 遗留 PVC (worker-home/work-vteam-worker-1) 保留（StatefulSet 缩容不删数据，
+  扩容可复用）—— 符合预期，未删除
+
+## 回归
+
+- /api/v1/health: {"status":"ok"} ✓
+- 登录 admin/admin123 → accessToken ✓
+- workers 列表: w_vteam-worker-0 online, mcpStatus
+  keta-platform:connected, gitee-ent:connected ✓
+  (w_vteam-worker-1 offline 为缩容前陈旧注册，pod 已不存在，属预期)
+- agents 数量: 5 ✓
+- 消息链路: 群聊 c_0000000011 (task t_0000000008) POST 消息 201，
+  触发 a_project_manager 处理，agent 回复 "收到，正在处理…" + 安排回归，
+  a_tester 产出物落盘 ✓ (SSE 全链路正常)
+
+## Risks
+
+- w_vteam-worker-1 陈旧注册记录仍在 DB（offline）；若不再扩容建议后续清理
+  (或保留以保持历史 worker 审计)。未删 PVC 保数据。
+- chart/ 目录首次纳入 git 跟踪（此前从未提交）；后续需 review 后提交。
+- worker requests.memory 1Gi < 实际常驻 ~2Gi（kubectl top 2072Mi），
+  无 HPA/驱逐策略下可运行，但若节点压力大可考虑 requests 提到 2Gi。

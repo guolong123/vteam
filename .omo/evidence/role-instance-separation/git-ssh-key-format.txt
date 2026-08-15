@@ -1,0 +1,135 @@
+# 证据：SSH 私钥格式兼容问题（git_clone 失败根因确认）
+
+- 日期：2026-08-14
+- 任务：确认 Agent 报告的「OPENSSH 容器格式 ssh-rsa 私钥在 worker 环境加载失败，转 PKCS#1 PEM 后可加载」是否真实存在
+- 运行时：K8s ns vteam（worker vteam-worker-0/vteam-worker-1，镜像 docker-hosted.ketaops.cc/xishuhq/vteam-worker:vteam-k8s）
+
+## 结论
+
+**问题真实存在。** 平台下发并原样落盘的 OPENSSH 容器格式 ssh-rsa 私钥（`-----BEGIN OPENSSH PRIVATE KEY-----`），在 worker 容器（OpenSSH 10.3p1 + OpenSSL 3.5.7）中加载报 `error in libcrypto: unsupported`，`git_clone` 失败；同一把 key 转 PKCS#1 PEM（`-----BEGIN RSA PRIVATE KEY-----`）后加载成功且 git clone 成功。密钥内容数学有效（openssl rsa -check ok / sign-verify ok），纯格式兼容问题。
+
+影响面：所有以 OPENSSH 容器格式录入的 **ssh-rsa（非 ed25519）** 私钥凭证。当前 3 个仓库（keta-agent / ketacli / ketaops）凭证均为同一把 ssh-rsa 3072 私钥，全部受影响。
+
+## 1. 平台侧密钥格式取证
+
+- 凭证落盘：worker 容器 `/root/.keta-git-creds.json`（明文），3 条凭证共享同一把私钥
+- key 头：`-----BEGIN OPENSSH PRIVATE KEY-----`（OPENSSH 容器格式）
+- key 算法：`openssh-key-v1` 容器，magic=`openssh-key-v1`，cipher=`none`，kdf=`none`，nkeys=1，private key type=`ssh-rsa`
+- RSA 参数：n=3072 bit，e=010001（65537），p/q=1536 bit；comment=`guolong@qiniu.com`（脱敏；完整私钥不记录）
+- 指纹：`SHA256:iy36pU1xfSgNS1/Ir059x9BdHfzN+/vmyPyDmGNAzmc`（worker 与宿主机 `ssh-keygen -lf` 一致）
+- 结构完整性：checkint1==checkint2，padding 2 字节（0102）——容器结构合法
+- 数学有效性：openssl rsa -check → `RSA key ok`；python cryptography sign/verify OK
+
+代码链路（已核对）：`server git-repos POST {authType:'ssh_key', key}` → `git_credentials` 表（AES 加密）→ 下行 git-credentials 命令 → worker 写 `.keta-git-creds.json`（明文）→ `git-tools.ts buildGitEnv`(L141-148) ssh_key 分支 → `writeTempKey(entry.key)`(L113-118) **原样写临时文件**（无任何格式转换）→ `GIT_SSH_COMMAND: ssh -i <path> -o IdentitiesOnly=yes ...`。全程无格式归一，Agent 报告属实。
+
+## 2. worker 环境版本
+
+- worker 容器（vteam-worker-0 / vteam-worker-1 一致）：
+  - `ssh -V` → **OpenSSH_10.3p1, OpenSSL 3.5.7**（与 Agent 报告 10.3/3.5 一致）
+  - `git --version` → 2.54.0
+  - `openssl` 二进制 **不存在**（alpine 精简镜像）
+  - `ssh-keygen` 存在（/usr/bin/ssh-keygen）
+- 宿主机（对比）：OpenSSH_8.9p1 + OpenSSL 3.0.2
+
+## 3. 复现输出（原始报错）
+
+### 3.1 worker 容器内直接加载（复现 Agent 报错）
+
+```
+$ ssh-keygen -y -f /tmp/testkey        # /tmp/testkey = OPENSSH 容器原样写入
+Load key "/tmp/testkey": error in libcrypto: unsupported
+EXIT_CODE=255
+```
+
+```
+$ ssh-keygen -lf /tmp/testkey
+/tmp/testkey is not a key file.
+```
+
+`ssh-keygen -p -m PEM -f`（试图在 worker 内转换）同样失败（转换也需先加载）：
+
+```
+$ ssh-keygen -p -m PEM -f /tmp/testkey.pemtest -N ''
+Failed to load key /tmp/testkey.pemtest: error in libcrypto: unsupported
+EXIT_CODE=255
+```
+
+### 3.2 业务级复现：git clone（GIT_SSH_COMMAND 注入）
+
+- **OPENSSH 原格式 key**：
+  ```
+  $ GIT_SSH_COMMAND='ssh -i /tmp/testkey -o IdentitiesOnly=yes -o StrictHostKeyChecking=no' \
+      git clone --depth 1 git@gitee.com:xishuhq/ketacli /tmp/clone-ssh
+  git@gitee.com: Permission denied (publickey).
+  fatal: Could not read from remote repository.
+  ```
+- verbose ssh 确认根因：`debug1: no pubkey loaded from /tmp/testkey` + `debug1: identity file /tmp/testkey type -1`（key 加载失败，ssh 静默跳过该 identity）
+
+### 3.3 宿主环境交叉验证（非 worker 特有）
+
+宿主机 OpenSSH 8.9p1 + OpenSSL 3.0.2 加载同一 OPENSSH key 同样失败（错误文本略异）：
+
+```
+$ ssh-keygen -y -f /tmp/host-key-openssh
+Load key "/tmp/host-key-openssh": error in libcrypto
+EXIT_CODE=255
+```
+
+宿主 openssl 直接读 OPENSSH 容器失败（openssl 不认 openssh-key-v1 容器，报 STORE unsupported）——符合预期。
+
+### 3.4 对照：worker 自己生成的 key 可正常加载
+
+worker 容器内 `ssh-keygen -t rsa -b 3072` 生成的 OPENSSH key 加载**正常**（EXIT 0）——证明**不是环境普遍禁用 ssh-rsa**，而是**平台这把 key 的特定容器内容在 OpenSSL 3.x 下不被支持**（旧版 ssh-keygen / qiniu 环境生成特征，两把 key 容器结构解析几乎一致，仅 padding/comment 差异，详见 5）。
+
+## 4. PEM 转换对比（Agent 绕过方案验证）
+
+同一把 key：
+| 格式 | 头 | worker(10.3/3.5) ssh-keygen -y | git clone |
+|------|----|--------------------------------|-----------|
+| OPENSSH 容器（平台原样） | `-----BEGIN OPENSSH PRIVATE KEY-----` | FAIL `error in libcrypto: unsupported` | FAIL `Permission denied (publickey)` |
+| PKCS#1 PEM（python cryptography 标准导出） | `-----BEGIN RSA PRIVATE KEY-----` | **OK**（EXIT 0） | **OK**（仓库成功拉取） |
+| PKCS#1 PEM（worker 内纯 Node 手工构造 DER） | `-----BEGIN RSA PRIVATE KEY-----` | **OK**（EXIT 0） | 同左（指纹一致，密钥等价） |
+
+- PEM 转换后指纹与平台原 key 一致：`SHA256:iy36pU1xfSgNS1/Ir059x9BdHfzN+/vmyPyDmGNAzmc`（证明是同一把 key，仅格式变化）
+- 宿主 openssl 读标准 PEM：`openssl pkey -in` OK / `openssl rsa -check` → `RSA key ok`
+- **Agent 的「转 PKCS#1 PEM 后成功」方案完全成立**（key 内容有效，纯格式解析兼容问题）
+
+## 5. 根因定位与影响面
+
+- 触发条件：OPENSSH 容器格式 + 内部 `ssh-rsa`（RSA）私钥，且该容器内容在当前 OpenSSL 3.x 默认 provider 下不可加载（报 `error in libcrypto: unsupported`）
+- worker 自生成 ssh-rsa key 不受影响 → 影响取决于**录入时 key 的具体生成来源/内容特征**，无法在录入侧仅凭格式头判断；但**任何 OPENSSH 容器格式的 ssh-rsa 都处于风险面**（本环境实测不可靠）
+- ed25519 key（同为 `-----BEGIN OPENSSH PRIVATE KEY-----` 头）不受此问题影响（容器内算法标记为 ssh-ed25519，加载路径不同）
+- 容器结构解析对比（平台 key vs worker 自生成 key）几乎一致（cipher/kdf/nkeys/keytype/RSA 参数尺寸全同），仅 comment 与 padding 字节数不同——**结构级解析无法解释加载差异，根因在 OpenSSL 3.x libcrypto 内部对该容器特定内容的支持性**（OpenSSH 加载时经 libcrypto 解析私钥触发 `unsupported`）
+
+## 6. 修复建议
+
+### 方案 A（推荐）：worker 侧 writeTempKey 格式归一
+- 落点：`worker/src/git/git-tools.ts` `writeTempKey`（L113-118）/ `buildGitEnv`（L141-148）
+- 行为：ssh_key 写临时文件前检测——`-----BEGIN OPENSSH PRIVATE KEY-----` 头 → 解码 openssh-key-v1 容器 → 读 private keytype：
+  - `ssh-rsa` → 提取 n/e/d/p/q（mpint）→ 计算 dp/dq/qinv → 构造 PKCS#1 RSAPrivateKey DER → 写 `-----BEGIN RSA PRIVATE KEY-----` PEM（0o600）
+  - 其他（ssh-ed25519 等）→ 原样写（不受影响）
+- 可行性：**已在 worker 容器内用纯 Node 完整验证**（解析→构造 DER→落盘→ssh-keygen -y EXIT 0，指纹与平台原 key 一致）；无 openssl 二进制依赖、不依赖 ssh-keygen -p（后者在本环境对此 key 也失败）
+- 生效范围：所有 ssh_key 凭证（对全部仓库一次性兜底，无需改录入数据）
+- 注意：PKCS#1 DER 构造需严格（版本=0、mpint 去前导零、qinv=modinv(q,p)、每 64 字符换行），建议补单测锁定
+
+### 方案 B：平台录入侧转换/校验
+- 落点：server git-repos 录入接口
+- 缺点：仅对新录入生效；存量 3 条凭证仍需迁移；录入侧同样受 OpenSSL 3.x 限制（当前 server 环境是否含该问题需另验）；改动面在数据面
+
+### 方案 C：长期——推荐 ed25519
+- 录入引导优先 ed25519（无 RSA/SHA-1 legacy 兼容问题），ssh-rsa 仅作兼容保留
+
+## 7. Risks
+
+- **worker 侧纯代码转换**：RSA 参数→DER 的手工构造易出编码边界 bug（mpint 前导零、qinv 计算、base64 换行），必须配套单测（给定已知 OPENSSH key → 期望 DER 指纹不变）；已在验证中证实 Node 构造的 DER 与 python cryptography 标准导出逐字节一致（长度 1766）
+- **转换失败兜底**：转换逻辑异常时不得吞掉 key 或写坏文件——应抛错并保留原样（避免静默降级）
+- **权限**：临时 key 文件必须 0o600（既有 writeTempKey 已保证）
+- **不可泄露 key**：错误信息/日志不含明文 key（既有约定保持）
+- **ed25519 不受影响但无法区分**：按容器头检测时需解 keytype，不能仅凭 `-----BEGIN OPENSSH PRIVATE KEY-----` 头一律转 PEM（ed25519 转 PKCS#1 无意义且会破坏）
+- **环境差异**：问题在 OpenSSL 3.x 全系（3.0.2 / 3.5.7）均复现，修复须在 worker 侧而非依赖特定 OpenSSH 版本
+
+## 复现环境速查
+
+- worker pod：`vteam-worker-0`（IP 172.20.203.59）/ `vteam-worker-1`（IP 172.20.24.197），ns vteam
+- 凭证文件：worker 容器 `/root/.keta-git-creds.json`（3 条 ssh_key，共享同 key）
+- 仓库：git@gitee.com:xishuhq/keta-agent / ketacli / ketaops

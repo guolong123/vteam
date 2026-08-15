@@ -1,0 +1,90 @@
+私聊页展示问题修复 — 端到端验证证据
+====================================
+日期: 2026-08-12
+范围: 仅 web 前端 4 文件（page.tsx / msg-tool.tsx / msg-parts.tsx / msg-thinking.tsx）
+环境: docker-compose web :13001, server :13000, worker :14000 (admin/admin123)
+
+──────────────────────────────────────────
+一、构建验证
+──────────────────────────────────────────
+1. cd web && npx tsc --noEmit          → EXIT=0（0 错误）
+2. cd web && npm run build             → BUILD_EXIT=0（22 routes 全部通过）
+3. docker-compose up -d --build web    → 容器 Recreated + Started（db Healthy → server Healthy → web Started）
+4. curl http://127.0.0.1:13001/       → HTTP=200
+   curl http://127.0.0.1:13001/login   → HTTP=200
+
+──────────────────────────────────────────
+二、问题 1：刷新后 Agent 状态（在线 ↔ 处理中）
+──────────────────────────────────────────
+修复：historySettled effect 新增「processing 恢复」——messagesQuery.isSuccess 时扫描
+最后一条 agent 消息 status==='processing' → setLoadingByAgent(agentId:'operating')；
+同时收敛条件改为 m.status !== 'processing' 才清除残留（processing 生成中不收敛）。
+
+验证（c_0000000006 私聊，tester Agent）：
+[a] agent 已完成（最后一条 sent）→ 刷新 → AgentInfoBar 显示「在线」  ✓（多次）
+[b] 最新 agent 消息临时置为 processing（DB 模拟流式中间态，created_at=now 未超时）
+    → 刷新 → AgentInfoBar 显示「处理中」+ LoadingIndicator「操作中」+ 正文「生成中」 ✓
+    （截图 dm-refresh-processing.png）
+[c] 恢复 sent 后刷新 → 等待 SSE 补拉收敛（~12s）→ 恢复「在线」 ✓
+    （SSE 补拉重放 loading 为既有时序行为，完成消息送达后 onMessage 收敛）
+
+结论：修复生效——刷新后运行状态从 server 历史恢复，不再误显示「在线」。
+
+──────────────────────────────────────────
+三、问题 2a：工具消息 MsgTool 折叠单行概要
+──────────────────────────────────────────
+修复：MsgTool 加 useState 折叠交互——默认收起单行概要（⚙ 工具名 + 状态徽章 + 输入概要
+单行 nowrap ellipsis），点击卡片（role=button/tabIndex/onKeyDown 仿 MsgThinking）展开
+完整 input/output，再点收起；收起提示「点击查看详情 ▸」，展开提示「▾ 收起」。
+
+验证（m_0000000050 含 574 parts 消息，渲染 144 个工具卡片）：
+[a] 页面渲染 144 个 msg-tool，全部折叠态，显示「点击查看详情 ▸」单行概要 ✓
+[b] 点击第一个卡片 → aria-expanded=true + 「▾ 收起」+ 完整「输入」「输出」详情 ✓
+[c] 再点 → aria-expanded=false + 「点击查看详情 ▸」恢复折叠 ✓
+    （截图 dm-tool-collapsed.png 折叠态 / dm-tool-expanded.png 展开态）
+[d] 无大块 input/output 撑宽（概要行 ellipsis 截断） ✓
+
+──────────────────────────────────────────
+四、问题 2b：移除「查看历史会话」按钮
+──────────────────────────────────────────
+修复：删除 page.tsx Footer 中的假链接 span（view-session-link，无 onClick）。
+
+验证：
+[a] 页面 DOM 无 [data-testid=view-session-link] 元素  ✓
+[b] 页面文本无「查看历史会话」 ✓
+[c] Footer 仅剩 MessageInput ✓
+
+──────────────────────────────────────────
+五、问题 3：思考消息 MsgThinking 展开空
+──────────────────────────────────────────
+修复：msg-parts.tsx reasoning 传参字段兜底 p.text ?? p.summary ?? p.thoughts ?? p.detail ?? ""；
+PartShape 加 summary/thoughts 字段；msg-thinking.tsx 展开区空 text 显示「（无详细思考内容）」。
+
+验证（m_0000000050 含 45 个 reasoning part，其中 42 个 text 为空）：
+[a] 点击空 text 思考条展开 → 显示「（无详细思考内容）」兜底文案，非空白  ✓
+[b] 点击含内容思考条展开 → 显示真实 reasoning 文本（「让我系统测试各个命令…」） ✓
+    （截图 dm-thinking-expanded.png）
+
+──────────────────────────────────────────
+六、回归验证
+──────────────────────────────────────────
+[a] 普通私聊消息收发正常：发送「回归测试：这是一条普通私聊消息」→ 占位「收到，正在处理…」
+    → agent 真实回复落库，SSE 实时上屏  ✓
+[b] SSE 实时刷新正常：agent.loading/思考中 → 流式生成 → 完成 sent 收敛「在线」 ✓
+[c] 群聊上下文区、AgentInfoBar、Footer MessageInput 均正常 ✓
+
+──────────────────────────────────────────
+七、截图留档（.omo/evidence/）
+──────────────────────────────────────────
+- dm-refresh-processing.png  执行中刷新后的状态条（处理中）
+- dm-tool-collapsed.png      工具卡片折叠态（单行概要 × 144）
+- dm-tool-expanded.png       工具卡片展开态（完整输入/输出）
+- dm-thinking-expanded.png   思考条展开态（含内容 + 兜底文案）
+
+──────────────────────────────────────────
+八、清理与风险
+──────────────────────────────────────────
+- DB：m_0000000078 status 已恢复 sent、created_at 已恢复原值（无残留改动）
+- 无 server/worker 改动；未触碰 git-repo-credentials
+- 风险：MsgTool 折叠为行为变更（原默认展开），工具详情改为点击查看；SSE 补拉重放
+  loading 的时序边界（historySettled 单次执行）为既有行为，完成消息送达后即收敛

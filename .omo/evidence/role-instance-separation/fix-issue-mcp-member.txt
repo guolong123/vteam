@@ -1,0 +1,78 @@
+T4 修复：MCP issue_create "Agent 不是该任务团队成员"（BUG 修复证据）
+=====================================================================
+日期：2026-08-13
+复现任务：t_0000000012（http://192.168.10.78:13001/tasks/t_0000000012）
+
+一、根因
+---------------------------------------------------------------------
+调用链：platform-mcp.service.ts issueCreate(:497) → issuesService.createByAgent(args.selfInstanceId,
+taskId, dto)（:509，第一参是**实例 id ta_xxx**）→ assertAgentTaskMember(taskId, agentId)
+（issues.service.ts，T4 实例化遗漏）→ taskAgent.findFirst({ where: { taskId, agentId } })
+按 task_agents.agent_id 列（存模板 agent id 如 a_developer）匹配实例 id → 查不到 → 抛
+"Agent 不是该任务团队成员"。
+
+叠加隐患：createByAgent 的 creatorAgentId: agentId 直接落 selfInstanceId 原文——即使团队校验
+通过，issues.creator_agent_id 外键指向 agents 表（a_ 前缀），落实例 id ta_xxx 必外键失败。
+
+二、修复 diff 摘要（issues.service.ts，不改 schema/前端）
+---------------------------------------------------------------------
+1) 新增私有统一解析助手 resolveAgentInstance(taskId, ref)：
+   - ref 以 `ta_` 开头（实例 id）→ taskAgent.findFirst({ taskId, id: ref }) 按实例行匹配
+   - 否则（模板 agent id，存量兼容）→ taskAgent.findFirst({ taskId, agentId: ref })
+   - select { id, agentId, removedAt }，返回实例行（含真实模板 agent id），未命中 null
+   → 全部 agent 侧方法前缀分流收敛到一处，消除散落 startsWith 判断
+2) assertAgentTaskMember(taskId, agentRef)：改走 resolveAgentInstance；返回
+   { status, agentId }（agentId 为实例行解析出的真实模板 agent id，供 creator 落库）
+3) assertAssigneeInTeam(taskId, assigneeRef)：改走 resolveAgentInstance（原有 ta_ 前缀
+   分流保留，统一到助手）
+4) createByAgent(agentRef, taskId, dto)：解构 assertAgentTaskMember 返回的真实
+   agentId 落库 creatorAgentId（非 selfInstanceId 原文）；assigneeInstanceId 保持
+   现有逻辑精确落库
+5) findAllByAgent / findOneByAgent / updateByAgent / transitionByAgent：第一参统一
+   更名 agentRef（语义=实例 id 或模板 agent id），团队校验自动经修复后的
+   assertAgentTaskMember 实例化
+
+三、spec 新增用例（issues.service.spec）
+---------------------------------------------------------------------
+- createByAgent：实例 id（ta_ 前缀）→ 团队校验按 task_agents.id 通过 + creatorAgentId
+  落真实模板 agent id + assigneeInstanceId 精确落库（新增）
+- createByAgent：实例 id 不在任务团队 → 403 PERMISSION_PROJECT_NOT_MEMBER 不落库（新增）
+- findAllByAgent：实例 id → 团队校验按 task_agents.id 通过（新增）
+- transitionByAgent：实例 id → 团队校验按 task_agents.id 通过并流转（新增）
+- 存量 agentId 语义用例全部保留（非 ta_ 前缀回退兼容）；createByAgent 成功用例 mock
+  补 id/agentId 字段以支持真实 creator 解析
+
+四、验证输出
+---------------------------------------------------------------------
+- npx tsc --noEmit → 0 错误
+- npx jest src/issues src/platform-mcp → 4 suites / 135 tests 全过
+- 全量 npx jest → 56 suites / 1121 tests 全过（基线 1117 + 新增 4）
+
+五、真实复现（修复前 → 修复后 → 查库）
+---------------------------------------------------------------------
+修复前复现（等价 SQL，task_agents.agent_id 列匹配实例 id）：
+  SELECT COUNT(*) FROM task_agents WHERE task_id='t_0000000012' AND agent_id='ta_0000000037';
+  → matched_rows = 0（修复前 findFirst 返回 null → 抛 "Agent 不是该任务团队成员"）
+
+修复后（临时集成 spec 连真实 MySQL 调用 service.createByAgent 完整链路）：
+  DATABASE_URL='mysql://root:aiagents-root@172.24.0.4:3306/aiagents'
+  npx jest src/issues/issues-mcp-fix.integration.spec.ts → PASS
+  createByAgent('ta_0000000037', 't_0000000012', {title, assigneeInstanceId:'ta_0000000038'})
+  不再抛 NOT_MEMBER，成功返回 issue DTO。
+
+查库实证（issues 表）：
+  id=t_0000000012 任务成员：ta_0000000037→a_project_manager（主实例）、ta_0000000038/39/40/41→a_tester
+  SELECT id, task_id, title, creator_agent_id, assignee_agent_id, assignee_instance_id,
+         created_by, status FROM issues ORDER BY created_at DESC LIMIT 3;
+  → is_0000000001 | t_0000000012 | [T4fix集成验证] issue MCP member |
+    creator_agent_id=a_project_manager（真实模板 agent id，非 selfInstanceId 原文）
+    assignee_agent_id=NULL | assignee_instance_id=ta_0000000038（精确落库）
+    created_by=NULL（Metis B1）| status=open
+  集成验证数据已清理（DELETE WHERE id='is_0000000001'，issues 表归 0 行）。
+
+六、风险
+---------------------------------------------------------------------
+- 兼容性：非 ta_ 前缀（存量 agentId 语义）回退路径不变，用户路径 create/update 不受影响。
+- 返回签名扩展：assertAgentTaskMember 返回 { status, agentId }，调用方只读 status 亦兼容。
+- 无 schema/前端改动，无新依赖。
+- 已 removed 实例：resolveAgentInstance 命中后仍由 assert 校验 removedAt 拒绝（行为不变）。

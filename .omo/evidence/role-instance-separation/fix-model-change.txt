@@ -1,0 +1,97 @@
+# Bug 调查：重新配置 Agent 模型后重发消息模型没有变化
+
+**结论：模型变更链路（DB → server → worker → serve）完整正常，未发现"模型不生效"的代码缺陷。** 真实环境复现证明：修改 agent.defaultModelId 后复用会话发消息，serve 实际使用新模型。作为防御性改进，为 worker 执行链路补充了模型日志（原日志不记录 model，无法确认 serve 实际使用的模型）。
+
+## 1. 根因实证（观察到的实际行为）
+
+### 1.1 全链路 model 透传代码审查（链路完整）
+- `server/src/chat/worker-dispatcher.ts:886`：`resolveAgentModelId(agentId)` 每次 dispatch 从 DB 读（无缓存），沿 baseAgentId 链解析
+- `:946`：`toModelSelection(agentModelId ?? workerRow.defaultModelId ?? null)` 转换 provider/model
+- `:1064`：`workerClient.execute(worker, { ..., model, sessionId: opencodeSessionId })` 透传
+- `server/src/workers/worker.client.ts:208`：`execute` body 含 `model`
+- `worker/src/exec/exec-server.ts:542`：`sendAndAwait({ model: payload.model ?? null, ... })` 透传
+- `worker/src/driver/v1-driver.ts:220`：`sendMessage` body 含 `model`
+- `worker/src/driver/prompt-await.ts:429`：`sendAndAwait` 直接调 `sendMessage(sessionID, input)` 透传
+
+### 1.2 serve 复用会话接受新 model（curl 实证，核心嫌疑排除）
+新建会话 ses_004898c69ffeh8p0V2XSI6r47G，同一会话两次 prompt_async 传不同 model：
+- 第 1 条 user message model = `opencode-go/deepseek-v4-flash`
+- 第 2 条 user message model = `opencode-go/deepseek-v4-pro`
+- GET /session 会话 model 更新为 deepseek-v4-pro
+
+**结论：opencode serve 1.18.16 对已存在会话的 prompt_async 传新 model 生效，会话不锁定模型。**
+
+### 1.3 历史会话多重模型（serve 不锁模型佐证）
+`ses_004855de9ffezCn5BpukMpp50y` 两条 user message 分别用 `opencode-go/deepseek-v4-flash`（14:15:45）与 `opencode/deepseek-v4-flash-free`（14:17:42，Rate limit exceeded）。
+
+### 1.4 用户操作时间线还原（DB + serve 会话交叉验证）
+模板初始模型 = `opencode/big-pickle`（TEMPLATE_DEFAULT_MODELS，agent.constants.ts:102）。
+- 13:46 UTC：tester 会话全部用 `opencode/big-pickle`（旧模型）
+- 13:49-13:50 UTC：用户配置 → tester 全部改用 `opencode-go/deepseek-v4-flash`（**生效**）
+- 14:14:14 UTC：agents 表批量更新（a_tester/a_developer/a_architect/a_product 同一秒 updated_at）
+- 14:15-14:18 UTC：tester 消息用 flash（**生效**）
+- 14:17 UTC（本次调查）：改 a_project_manager → deepseek-v4-pro → serve 用 pro（**生效**）
+
+### 1.5 其他排查项
+- worker.default_model_id = NULL（无兜底干扰）；availability 覆盖全部配置模型（26 个）
+- auth.json 凭据仅 `opencode-go`；model_credentials 表仅 1 条（opencode-go）
+- serve 默认模型（不传 model 时）= `opencode-go/gpt-5.6-luna`
+
+## 2. 修复方案与 diff
+
+**无行为缺陷可修。** 补充模型日志（防御性改进，帮助用户/运维确认 serve 实际使用模型）：
+
+### worker/src/driver/v1-driver.ts（sendMessage 日志加 model）
+```ts
+const modelLabel = input.model
+  ? `${input.model.providerID}/${input.model.modelID}`
+  : '(default)';
+this.logger.info(
+  `[v1-driver] sendMessage -> ${sessionID} model=${modelLabel} (HTTP ${res.status})`,
+);
+```
+
+### worker/src/exec/exec-server.ts（执行日志加 model + describeModel 辅助）
+```ts
+function describeModel(model: DriverModelRef | null | undefined): string {
+  if (!model) return '(default)';
+  return `${model.providerID}/${model.modelID}`;
+}
+// 执行完成日志
+`[exec] 执行完成 session=${opencodeSessionId} taskId=${payload.taskId ?? '-'} model=${describeModel(payload.model)} text=${result.text.length} chars`
+```
+`(default)` 标记是排障关键：当日志显示 `model=(default)` 即表示 dispatch 未传模型、serve 落入默认模型（gpt-5.6-luna）。
+
+## 3. 验证结果（真实环境新旧模型对比）
+
+### 3.1 编译与单测
+- `cd worker && npx tsc --noEmit` → 0 错误
+- worker 全量 jest：21 suites / 355 tests 全部通过
+
+### 3.2 真实环境（重建 worker 容器后）
+1. PATCH a_project_manager → `opencode-go/deepseek-v4-pro`（DB 落库确认）
+2. 群聊 @ 项目管理员（复用会话 ses_004bade45ffehFihqetEq25ST9）
+3. **worker 日志（新增 model 字段）**：
+   ```
+   [v1-driver] sendMessage -> ses_004bade45ffehFihqetEq25ST9 model=opencode-go/deepseek-v4-pro (HTTP 204)
+   [exec] 执行完成 session=ses_004bade45ffehFihqetEq25ST9 taskId=t_0000000012 model=opencode-go/deepseek-v4-pro text=7 chars
+   ```
+4. **serve 日志（双重确认）**：
+   ```
+   message=stream providerID=opencode-go modelID=deepseek-v4-pro session.id=ses_004bade45ffehFihqetEq25ST9
+   ```
+5. 验证后还原：a_project_manager → `opencode-go/deepseek-v4-flash`（全部 5 个 agent 恢复一致）
+
+## 4. 用户问题可能原因分析（非代码缺陷）
+
+1. **用户配置的模型与当前相同**（13:49 与 14:14 两次配置均为 flash，重发消息模型"不变"是预期的）
+2. **配置的模型额度同样失效**：serve 日志显示 `opencode/deepseek-v4-flash-free` 报 `AI_APICallError: Rate limit exceeded`——若换的模型无额度/无凭据，serve 调用失败（表现为超时/错误），易被误判为"模型没变"
+3. **available-models 返回目录全部 enabled 模型（不过滤 worker availability/凭据）**：用户可配置 worker 实际无法运行的模型（如 deepseek/deepseek-v4-pro 无凭据），配置后 dispatch 失败或 serve 调用失败
+
+**排查建议**：用户配置模型后重发消息，通过 `docker logs aiagents-compose-worker | grep sendMessage` 直接确认实际使用的模型（本次新增的日志字段）。
+
+## 5. Risks
+
+- 日志改动仅影响输出格式（原 logger 无结构化消费方），不影响 sendMessage/execute 行为
+- worker 容器已重建部署（镜像 aiagents-worker 重新 build）
+- 环境模型已还原为全 flash，无残留改动

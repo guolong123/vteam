@@ -1,0 +1,76 @@
+# 技能交互式创建 E2E 证据（2026-08-12）
+
+## 需求
+前端"新建技能"弹窗（交互式创建）→ 前端组装 SKILL.md → FormData 复用现有 POST /skills（零后端改动）。
+
+## 改动范围
+- 仅改 `web/app/(main)/skills/page.tsx`（+新增前端组装逻辑），后端/worker 零改动
+- `buildSkillMarkdown()`：name/description trim + 换行折叠为空格（防破坏 frontmatter），version 缺省 v1
+- `createSkillMutation`：`new File([md], "SKILL.md", {type:"text/markdown"})` → FormData multipart file 字段 → POST /skills
+- 工具条「新建技能」按钮（isAdmin，与"上传技能"并列，主按钮蓝底）
+- 弹窗字段：技能名称（小写 slug）/ 描述 / 版本（可选，缺省 v1）/ 技能正文 / SKILL.md 实时预览
+- 校验：name/description/正文非空才可提交（创建按钮 disabled）；slug 前端预校验；409 重名在弹窗内展示
+
+## 验证 1/2：静态
+- `cd web && npx tsc --noEmit` → 0 错误
+- `npm run build` → 通过（Route list 正常输出，skills 页无 ESLint 错误）
+
+## 验证 3：部署 + Playwright（admin/admin123，http://localhost:13001）
+### 环境
+- `docker compose up -d --build web`（server/web 重建，web 容器 healthy，端口 13001）
+- 注：首次构建遇 `.next` 残留 ENOENT build-manifest.json → `rm -rf .next` 后 build 通过
+- init 容器名冲突 → `docker rm` 遗留容器后正常
+
+### 场景 A：打开弹窗 + 必填 disabled
+- /skills → 「新建技能」（data-testid=create-skill-button）出现（admin 可见）
+- 点按 → 弹窗出现（create-skill-modal-root）：标题「新建技能」+ 4 字段 + SKILL.md 预览区（空态占位）
+- **创建按钮初始 disabled**（name/description/正文全空）✅
+
+### 场景 B：表单填写 + 实时预览（特殊字符转义）
+- 填 name=`git-ops`、description=`Git 操作：提交、分支、PR（含"示例"）`（中文冒号+引号）、version=`v2.1`
+- 正文 textarea：多行步骤
+- **预览区实时刷新**（create-skill-preview）：
+  ```
+  ---
+  name: git-ops
+  description: Git 操作：提交、分支、PR（含"示例"）
+  version: v2.1
+  ---
+  使用 git 命令完成提交、分支与 PR 操作。
+  ## 步骤
+  1. git status 查看变更
+  2. git commit -m 提交
+  ```
+  格式正确、特殊字符保持合法 ✅；创建按钮变 enabled
+
+### 场景 C：提交成功
+- 点「创建」→ POST /api/v1/skills → **201 Created** → 弹窗关闭 + invalidate ["skills"] 列表刷新
+- 列表出现新技能：`git-ops v2.1`、描述含特殊字符正确、**source 徽章=「上传」**、状态=停用（默认停用）✅
+- GET /api/v1/skills 响应（network 捕获）：
+  `{"items":[{"id":"sk_0000000001","name":"git-ops","description":"Git 操作：提交、分支、PR（含\"示例\"）","content":"---\nname: git-ops\ndescription: ...\nversion: v2.1\n---\n\n使用 git 命令...","fileMeta":{"version":"v2.1","originalname":"SKILL.md","mimetype":"text/markdown","size":217,...},"enabled":false}],"total":1,...}`
+  → content 为前端组装的 SKILL.md 全文、fileMeta.version=v2.1（列表徽章 v2.1）、enabled=false（后端默认停用）✅
+
+### 场景 D：409 重名
+- 再次打开弹窗，填同名 `git-ops` 提交 → POST 409 Conflict
+- **弹窗保持打开**，错误区显示后端 message：「技能名称「git-ops」已存在」（create-skill-modal 内 alert）✅
+- 列表未新增重复项（total 仍 1）✅
+
+### 场景 E：回归（文件上传技能仍可用）
+- 「上传技能」→ file chooser → 选择本地 SKILL.md（doc-gen v1.3）→ 上传成功
+- 列表新增 `doc-gen v1.3`（来源=上传、状态=停用），Tab 计数 2 ✅
+- 既有上传入口未受影响
+
+### Console 检查
+- 3 条 error 均为测试动作产生（2×401=裸 fetch 不带 token 的验证尝试、1×409=重名测试预期响应），无代码级 JS 运行时错误
+
+## 截图（.omo/evidence/）
+- skill-create-modal.png：弹窗表单（必填 disabled 初始态）
+- skill-create-preview.png：填写后实时预览（含特殊字符）
+- skill-create-success.png：创建成功列表（git-ops 上传徽章）
+- skill-create-409.png：重名 409 错误提示（弹窗内展示）
+
+## 结论
+- 交互式创建全链路闭环：弹窗 → 组装 → multipart POST（零后端改动）→ 201 → 列表刷新（上传徽章/版本）
+- 校验：必填 disabled + slug 预校验 + 409 弹窗内错误提示
+- 特殊字符（冒号/引号）经 trim+换行折叠转义后 frontmatter 合法，后端 parseSkillMarkdown 正常解析
+- 文件上传回归通过

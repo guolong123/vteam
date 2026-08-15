@@ -1,0 +1,117 @@
+# 排查：MCP 服务器 npx_gitee-ent（v1）连接失败
+
+环境：docker-compose（aiagents-compose-*），工作区 /data/git-project/aiagents
+时间：2026-08-12
+
+## 1. DB 注册记录（aiagents-compose-db / aiagents.mcp_servers）
+```
+docker exec aiagents-compose-db mysql -uroot -paiagents-root aiagents \
+  -e "SELECT id, name, type, command, url, enabled FROM mcp_servers;"
+```
+结果：
+```
+id              name          type   command                       url                                enabled
+ms_keta_platform keta-platform remote NULL  http://server:3000/api/v1/platform-mcp  1
+```
+**npx_gitee-ent 无任何记录**。表结构确认 command 为 json 列。
+
+## 2. worker 注入结果（WORK_DIR=/data/keta-worker）
+```
+docker exec aiagents-compose-worker cat /data/keta-worker/opencode.json
+```
+```
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "keta-platform": {
+      "type": "remote",
+      "url": "http://server:3000/api/v1/platform-mcp",
+      "headers": { "x-worker-id": "{env:WORKER_ID}", "x-worker-token": "{env:X_WORKER_TOKEN}" },
+      "enabled": true
+    }
+  }
+}
+```
+mcp 节**只有 keta-platform**，无 npx_gitee-ent。（注：/tmp/keta-worker/opencode.json 不存在，实际路径 /data/keta-worker）
+
+## 3. MCP 探测状态
+```
+docker exec aiagents-compose-worker sh -c "cd /data/keta-worker && timeout 60 opencode mcp list"
+```
+```
+●  ✓ keta-platform connected
+└  1 server(s)
+```
+无 npx_gitee-ent。opencode 1.18.16，探测正常（keta-platform connected）。
+
+## 4. server / worker 日志
+- server 完整日志（容器启动至今）：**从未出现 POST/PATCH/DELETE /api/v1/mcp-servers**，仅 web 前端 GET /api/v1/mcp-servers?page=1&pageSize=100（skills 页轮询，200）与 curl 未带鉴权 GET（401）。
+- worker 日志：`reload-config：资源重注入完成（0 skills, 0 tools, 1 mcp servers）`——始终 1 个 MCP。
+
+## 5. npx 网络与命令可用性（worker 容器）
+```
+npm config get registry            → https://registry.npmjs.org/（官方源）
+which npx opencode node npm        → /usr/local/bin/* 全部存在
+node --version                     → v22.23.2
+curl -sI https://registry.npmjs.org/ → HTTP/2 200（外网可达）
+timeout 30 npx -y cowsay@1.5.0 hello → 正常输出（npx 下载+运行 OK）
+```
+**worker 环境无 npx/网络问题。**
+
+## 6. 用户期望使用的包
+```
+npm view @gitee/mcp-gitee-ent      → version 0.1.11, bin = { 'mcp-gitee-ent': 'bin/index.js' }
+npm view gitee-ent-server          → 404（不存在该包）
+```
+`@gitee/mcp-gitee-ent` 真实存在；`gitee-ent-server` 不存在。
+
+## 根因判定
+**npx_gitee-ent 从未注册成功落库**：
+1. DB mcp_servers 仅 keta-platform 1 条，无 npx_gitee-ent。
+2. server 完整日志无任何创建/修改/删除 /mcp-servers 请求 → 用户注册请求从未到达（或发生在前次 server 进程、未落库即失败）。
+3. 前端（web/）无创建 MCP 服务器的 UI——skills 页仅 GET /mcp-servers 只读展示，tools 注册弹窗是 POST /tools 工具注册，无 POST /mcp-servers 入口。
+4. worker 注入/探测/重启链路均正常（keta-platform connected 即为链路健康证据）。
+
+因此"MCP 状态 failed / 工具不可用"的根因是**注册数据缺失**，而非注入链路或网络问题。worker 的 npx 环境完全可用，`@gitee/mcp-gitee-ent` 包可被 npx 正常拉取。
+
+## 正确注册格式（验证通过）
+POST /api/v1/mcp-servers（Bearer admin token）
+```json
+{
+  "name": "npx_gitee-ent",
+  "type": "local",
+  "command": { "command": ["npx", "-y", "@gitee/mcp-gitee-ent@latest"] },
+  "enabled": true
+}
+```
+关键：local 类型 command 必须为对象 `{ command: string[] }`（可含 cwd/environment/timeout），
+非字符串数组。server validateConfig（mcp-servers.service.ts:249）与 worker buildMcpEntry
+（injector.ts:341）均按此格式解析；格式错 → 400 MCP_SERVER_INVALID_CONFIG。
+
+## 修复后验证（2026-08-12 已执行通过）
+1. POST /api/v1/mcp-servers（正确格式）→ 201，id=ms_0000000001
+   `{"name":"npx_gitee-ent","type":"local","command":{"command":["npx","-y","@gitee/mcp-gitee-ent@latest"]},"enabled":true}`
+2. worker 日志：
+   `[worker] 收到命令 reload-config（...），分派注入+重启`
+   `[worker] reload-config：资源重注入完成（0 skills, 0 tools, 2 mcp servers）`
+   `[worker] [restart] serve 重启完成: http://127.0.0.1:4000`
+   `[worker] [restart] 重新注册完成（capabilities.baseUrl/port 已更新）`
+3. opencode.json mcp 节新增：
+   `"npx_gitee-ent": { "type": "local", "command": ["npx","-y","@gitee/mcp-gitee-ent@latest"], "enabled": true }`
+4. `opencode mcp list`：
+   `●  ✓ npx_gitee-ent connected`
+   `●  ✓ keta-platform connected`（现有 MCP 未受影响）
+5. GET /api/v1/mcp-servers（Bearer admin）→ total=2：
+   `npx_gitee-ent  status: connected`
+   `keta-platform  status: connected`
+
+链路完整打通：注册落库 → broadcastReloadConfig → worker reload-config 注入 → serve 重启
+→ opencode mcp list 三态探测 connected → 心跳上报 → 前端展示 connected。
+
+## 给用户的结论
+- 此前"连不上/failed"的根因：npx_gitee-ent 从未成功落库（DB 无记录、server 日志无
+  POST /mcp-servers），且前端无 MCP 服务器创建 UI → 需要走 API 注册。
+- 正确注册格式见上（command 必须是 `{command: [...]}` 对象）。
+- 现已代为注册 ms_0000000001 并验证 connected；如不需要可 DELETE /api/v1/mcp-servers/ms_0000000001。
+- 前端如需新增"创建 MCP 服务器"入口属产品功能缺口（当前仅 skills 页只读展示 + tools 注册
+  弹窗 POST /tools），可另开需求。

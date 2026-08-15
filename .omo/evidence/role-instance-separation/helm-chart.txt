@@ -1,0 +1,165 @@
+# Helm Chart 证据 — chart/vteam
+
+日期：2026-08-14
+任务：为 vteam 项目创建 Helm chart（对齐 docker-compose.yml 全部服务），K8s 形态部署 server/web/worker + 可选内置 MySQL + init Job。
+
+## 1. Chart 结构树
+
+```
+chart/vteam/
+├── Chart.yaml                 # name: vteam, version: 1.0.0, appVersion: "1.0.0", type: application
+├── values.yaml                # 镜像/replicas/资源/secret/持久化/ingress（db.enabled=true 默认）
+├── values-dev.yaml            # dev 覆盖示例（小资源 + 显式 dev 密码）
+├── README.md                  # 安装/镜像构建/secret 生成/端口/Ingress 说明
+└── templates/
+    ├── _helpers.tpl           # 名称/labels/secretName/随机值缓存（secret↔configmap 同源）
+    ├── configmap.yaml         # DATABASE_URL 拼装 + 非敏感 env（NODE_ENV/PORT/JWT时效/首字超时/worker env）
+    ├── secret.yaml            # JWT_SECRET/WORKER_TOKEN/MODEL_CREDENTIAL_KEY/DB_PASSWORD
+    ├── deployment-server.yaml # env + /app/uploads 挂载 + startup/readiness/liveness 探针
+    ├── deployment-web.yaml    # 无运行时代理 env + $HOSTNAME 探针
+    ├── deployment-worker.yaml # X_WORKER_TOKEN + worker-work→/data/keta-worker + worker-home→/root
+    ├── statefulset-mysql.yaml # mysql:8 + volumeClaimTemplates + mysqladmin ping readiness（db.enabled 时）
+    ├── job-init.yaml          # prisma migrate deploy && node dist/prisma/seed.js + wait-db initContainer
+    ├── service-server.yaml    # ClusterIP :3000
+    ├── service-web.yaml       # ClusterIP :3000
+    ├── service-worker.yaml    # ClusterIP :4000（serve）
+    ├── service-mysql.yaml     # Headless :3306（db.enabled 时）
+    ├── pvc.yaml               # uploads / worker-work / worker-home
+    ├── ingress.yaml           # /api/v1→server、/→web（默认关闭）
+    └── NOTES.txt              # 部署后使用说明
+```
+
+## 2. helm lint
+
+```
+$ helm lint chart/vteam
+==> Linting chart/vteam
+[INFO] Chart.yaml: icon is recommended
+1 chart(s) linted, 0 chart(s) failed
+```
+
+0 错误（仅 icon 推荐 INFO）。
+
+## 3. helm template（默认 db.enabled=true）
+
+```
+$ helm template vteam chart/vteam > /tmp/opencode/vteam-render-default.yaml
+=== RENDER OK (default) ===
+      1 ConfigMap vteam-config
+      1 Deployment vteam-server
+      1 Deployment vteam-web
+      1 Deployment vteam-worker
+      1 Job vteam-init
+      1 PersistentVolumeClaim vteam-uploads
+      1 PersistentVolumeClaim vteam-worker-home
+      1 PersistentVolumeClaim vteam-worker-work
+      1 Secret vteam-secret
+      1 Service vteam-mysql
+      1 Service vteam-server
+      1 Service vteam-web
+      1 Service vteam-worker
+      1 StatefulSet vteam-mysql
+```
+
+### 关键渲染抽查
+
+**DATABASE_URL（指向 mysql service，密码与 Secret 同源）**
+```
+DATABASE_URL: "mysql://root:I6iOVVgiTGGajtZB@vteam-mysql:3306/aiagents"
+DB_PASSWORD (decoded) = I6iOVVgiTGGajtZB
+✅ configmap 密码 == secret.DB_PASSWORD 一致
+JWT_SECRET len=32 ✅  WORKER_TOKEN len=32 ✅  MODEL_CREDENTIAL_KEY len=32 ✅
+```
+
+**secret 引用（MODEL_CREDENTIAL_KEY / X_WORKER_TOKEN 等）**
+```
+- name: JWT_SECRET        secretKeyRef: vteam-secret/JWT_SECRET
+- name: WORKER_TOKEN      secretKeyRef: vteam-secret/WORKER_TOKEN
+- name: MODEL_CREDENTIAL_KEY  secretKeyRef: vteam-secret/MODEL_CREDENTIAL_KEY
+- name: X_WORKER_TOKEN    secretKeyRef: vteam-secret/WORKER_TOKEN
+```
+
+**API_PROXY_TARGET（web 无运行时注入，仅注释说明）**
+```
+grep -n "API_PROXY_TARGET" 渲染输出 → 仅 335 行注释：
+# ⚠️ API_PROXY_TARGET 是构建 ARG（编译进 routes-manifest.json），运行时无注入 env，
+```
+
+**worker env（configmap，对齐 compose）**
+```
+SERVER_URL: "http://vteam-server:3000"
+WORKER_ID: "w_vteam"
+OPENCODE_SERVE_HOSTNAME: "0.0.0.0"
+OPENCODE_SERVE_PORT: "4000"
+WORKER_ADVERTISE_HOST: "http://vteam-worker"
+WORKER_DEFAULT_MODEL: ""
+WORKER_FIRST_TOKEN_TIMEOUT_MS: "180000"
+WORK_DIR: "/data/keta-worker"
+```
+
+**PVC 挂载路径**
+```
+mountPath: /app/uploads        claimName: vteam-uploads        # server 产出物落盘
+mountPath: "/data/keta-worker" claimName: vteam-worker-work    # worker 工作目录
+mountPath: /root               claimName: vteam-worker-home    # worker 用户目录
+mountPath: /var/lib/mysql                                      # mysql volumeClaimTemplates
+```
+
+**探针（容器 node 内置 fetch，对齐 compose healthcheck）**
+```
+server:  fetch('http://127.0.0.1:3000/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(...)
+web:     fetch('http://'+process.env.HOSTNAME+':3000/').then(r=>{...})   # Next standalone 监听 $HOSTNAME
+```
+
+**init Job**
+```
+kind: Job  name: vteam-init  restartPolicy: Never
+initContainers:
+  - name: wait-db            # node net 探测 vteam-mysql:3306
+containers:
+  - command: npx prisma migrate deploy && node dist/prisma/seed.js
+```
+
+**残留模板变量检查**：无 `{{ }}` 残留 ✅
+
+## 4. helm template（external：db.enabled=false + db.externalUrl）
+
+```
+$ helm template vteam chart/vteam --set db.enabled=false --set db.external.enabled=true \
+    --set 'db.external.url=mysql://extuser:extpass@ext-db:3306/aiagents'
+=== RENDER OK (external) ===
+      1 ConfigMap vteam-config
+      1 Deployment vteam-server / web / worker
+      1 Job vteam-init
+      3 PersistentVolumeClaim（uploads/worker-work/worker-home，无 mysql）
+      1 Secret vteam-secret
+      3 Service（server/web/worker，无 mysql）
+DATABASE_URL: "mysql://extuser:extpass@ext-db:3306/aiagents"
+init Job 无 wait-db initContainer（0 处，外部 DB 假定就绪）✅
+```
+
+## 5. values-dev.yaml 覆盖验证
+
+```
+$ helm template vteam-dev chart/vteam -f chart/vteam/values-dev.yaml
+JWT_SECRET: ZGV2LWp3dC1zZWNyZXQtY2hhbmdlLW1l → dev jwt: dev-jwt-secret-change-me ✅
+resources memory: 128Mi ✅（dev 小资源生效）
+```
+
+## 6. 设计要点（与 docker-compose 对齐）
+
+- **DATABASE_URL 拼装**：configmap 中 `mysql://root:<dbPassword>@<release>-mysql:3306/aiagents`；external 模式直接使用 `db.external.url`。密码经 `_helpers.tpl` 的 set 缓存保证 secret.yaml 与 configmap 引用同一生成值（避免 DB 密码失配）。
+- **Secret 生命周期**：首次安装自动生成随机值（randAlphaNum），`lookup` 复用在 cluster 中已存在的 Secret → helm upgrade 不轮换密码；生产建议 `--set secret.*=$(openssl rand -hex 32)` 显式注入；`secret.existingSecret` 支持外部 Secret 引用。
+- **init 门控**：initContainer（node net 探测 mysql service:3306）等待 DB 就绪 → 对齐 compose `depends_on: db(service_healthy)`；Job backoffLimit=6 + ttlSecondsAfterFinished=300。
+- **web 镜像代理**：`values.web.image.proxyTarget` 仅为构建参数文档（rewrites 编译进 routes-manifest，运行时无 env 注入）。
+- **worker advertise**：`WORKER_ADVERTISE_HOST=http://<release>-worker`，worker 注册上报 baseUrl=`<advertiseHost>:<servePort>` → server 经 worker Service :4000 访问（对齐 compose 网络内互通）。
+- **探针**：server `/api/v1/health`、web `fetch($HOSTNAME:3000)` 均为 exec(node -e fetch)，与 node:22-alpine 无 curl/wget 的镜像约束一致；worker 无 HTTP 探针（对齐 compose 无 healthcheck，活跃判定由 server 心跳承担）。
+- **持久化**：uploads→/app/uploads、worker-work→/data/keta-worker、worker-home→/root 对齐 compose 三卷；mysql 用 StatefulSet volumeClaimTemplates（标准做法，替代 PVC 清单）。
+
+## 7. Risks
+
+- 内置 MySQL 为单副本 StatefulSet（数据卷 RWO），无高可用/备份策略——生产建议切换 `db.enabled=false` + 外部托管数据库。
+- 随机密码生成依赖 Helm 的 `randAlphaNum`（首装写入 Secret），若 Secret 被删除则升级会生成新密码与 MySQL 数据失配——需备份 Secret 或显式注入 `secret.dbPassword`。
+- `secret.existingSecret` + 内置 MySQL 同时启用时须显式提供 `secret.dbPassword`（configmap 拼装 DATABASE_URL 需明文密码），README 已注明。
+- 镜像需预先构建并推送 registry（README 提供三服务构建命令，含 web 的 API_PROXY_TARGET 构建参数）。
+- 渲染验证未做真实集群 dry-run（无集群）；worker `HOME=/root` 与 opencode 会话库路径依赖镜像默认行为，真实部署建议先 smoke test。

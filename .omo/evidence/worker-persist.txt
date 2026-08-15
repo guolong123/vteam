@@ -1,0 +1,72 @@
+# Worker 容器工作目录与用户目录持久化 —— 端到端验证证据
+# 日期: 2026-08-12
+# 改动: 仅 docker-compose.yml（SCOPE 内，未改 worker/server/web 代码、未改 Dockerfile）
+
+## 改动内容
+1. worker.environment 新增 `WORK_DIR: /data/keta-worker`（serve cwd + .opencode 注入 + agent 工作区）
+2. worker.volumes 新增两个命名卷挂载：
+   - `worker_work:/data/keta-worker`  # 工作目录（serve cwd、.opencode 注入、git clone 的仓库、任务文件）
+   - `worker_home:/root`             # 用户目录（opencode.db 会话库、auth.json、.keta-git-creds.json、log）
+3. 底部 volumes 段新增 `worker_work:` / `worker_home:`（与 mysql_data/uploads_data 并列）
+
+## 1. 语法校验
+命令: `docker-compose config`
+结果: 通过（无 YAML 错误）
+- worker environment 含 WORK_DIR: /data/keta-worker
+- volumes: worker_work -> /data/keta-worker, worker_home -> /root
+- 底部 volumes: mysql_data / uploads_data / worker_home / worker_work
+
+## 2. 重建部署
+命令: `docker-compose up -d --build worker`
+结果:
+- State=running Running=true RestartCount=0
+- `docker exec aiagents-compose-worker node -e "...existsSync('/data/keta-worker')"` = true
+- `docker exec aiagents-compose-worker env | grep WORK_DIR` = WORK_DIR=/data/keta-worker
+- 日志: 「注册成功: workerId=w_compose_worker」「opencode serve 就绪: http://127.0.0.1:4000」
+
+### 存量数据迁移（首次挂载 volume 时容器 writable layer 会清空，先停容器备份再还原）
+- 备份: `docker stop worker && docker cp worker:/root /tmp/opencode/worker-persist-backup/root && docker cp worker:/tmp/keta-worker /tmp/opencode/worker-persist-backup/keta-worker`
+- 还原: 重建后 `docker cp` 回 /root 与 /data/keta-worker
+- 迁移后: opencode.db(2682880B)、auth.json(600)、.keta-git-creds.json(600)、.opencode/tools/git.ts 均在
+
+## 3. 持久化验证（核心）
+- 写测试数据: echo persist-test > /data/keta-worker/persist-check.txt 且 > /root/.local/share/opencode/persist-home-check.txt
+- 重建: `docker-compose up -d --force-recreate worker`（不删 volume）
+- 重建后:
+  - cat /data/keta-worker/persist-check.txt = persist-test ✓
+  - cat /root/.local/share/opencode/persist-home-check.txt = persist-test ✓
+- 清理: rm -f 两个 persist-check.txt ✓（已清理）
+
+## 4. 会话库真实持久化
+- 重建前后 opencode.db 始终存在（2682880B 字节数一致）
+- 备份 db（重建前）与当前 db session 表对比: 9 个会话 ID 完全一致
+  （ses_00b1194b5ffe... / ses_00b0ab140ffe... / ses_00afa4eaaffe... / ses_00af70d98ffe... /
+    ses_00af65602ffe... / ses_00af50c13ffe... / ses_00af3b88bffe... / ses_00af0ddddffe... / ses_00aec8a51ffe...）
+- serve API 可列出全部 9 个会话（重建后无丢失）
+- DB 中 session.instanceRef 指向的 ses_00c336... 创建于 02:27，早于当前 db 最早会话（07:44），
+  为改动前已丢失的历史遗留（此前无 volume 时容器重建即丢），与本次持久化无关。
+- 新建会话测试: POST /session/ -> ses_00ae586e5ffe... , directory=/data/keta-worker,
+  确认写入 volume 中 opencode.db（sqlite 查询命中，directory 字段=/data/keta-worker）
+  删除测试会话: HTTP 200
+
+## 5. 功能回归
+- worker 注册 online: `SELECT id,status FROM aiagents.workers` = w_compose_worker online ✓
+- 模型凭据: /root/.local/share/opencode/auth.json 存在（600 权限，volume 保留）✓
+- git 工具注入: /data/keta-worker/.opencode/tools/git.ts 存在 ✓
+- git 凭证: /root/.keta-git-creds.json 存在（600 权限）✓
+- health: curl http://127.0.0.1:13000/api/v1/health = HTTP 200 ✓
+- worker 命令分发: 日志「收到命令 model-credentials」「收到命令 git-credentials」正常处理 ✓
+- 执行链路: POST /session/.../message 请求进入 serve 并尝试调用模型（返回 403 区域限制，
+  属模型 provider 外部因素，与持久化无关；serve 处理链路正常）✓
+- server DB: sessions 表正常（s_0000000006 idle / s_0000000005 running 等）✓
+
+## 6. git 凭证持久化
+/root/.keta-git-creds.json 重建后仍在（volume 保留，600 权限）
+（同时 server 心跳回放命令在重建后自动下发，日志显示「凭证文件未变化，跳过写入」）
+
+## 风险
+- 首次应用本配置时会经历一次数据迁移（本验证已备份并还原，历史会话完整保留）；
+  后续重建不再需要。
+- 若未来手动 `docker compose down -v` 删除所有 volume，worker 数据仍会清空（预期行为）。
+- WORK_DIR 改 /data/keta-worker 后，镜像内 /tmp/keta-worker 的 dist/node_modules 不受影响
+  （Dockerfile WORKDIR 未变），serve cwd 为空卷自动重建 .opencode。

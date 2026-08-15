@@ -1,0 +1,41 @@
+worker 详情页居中修复 — 验证证据
+==================================
+日期：2026-08-12
+分支/目标：web/app/(main)/workers/[id]/page.tsx 布局居中修复
+
+一、代码改动（web/app/(main)/workers/[id]/page.tsx）
+1. 页面根容器 padding 由 `${space.xl}px ${space.xl}px ${space.xl}px 0` 改为对称 `${space.xl}px`
+   （消除右 0 导致的偏左）
+2. 返回+标题行容器：加 `width: "100%", maxWidth: 960, margin: "${space.lg}px auto"`
+   （原 marginBottom 改为 margin 合并）
+3. 内容容器（基本信息卡等）：加 `width: "100%", margin: "0 auto"`（保留 maxWidth: 960）
+4. 加载态/错误态容器：同样加 `width: "100%", maxWidth: 960, margin: "0 auto"`
+   （flex column 中 margin auto 会 shrink-to-fit 子项宽度，必须显式 width:100% 才能撑到 960）
+
+二、类型与构建
+- cd web && npx tsc --noEmit → 0 错误
+- npm run build → 通过（/workers/[id] 动态路由正常产出）
+
+三、部署
+- docker-compose up -d --build web → 容器重建并 healthy（:13001）
+
+四、Playwright 验证（chromium/chrome，登录 seed-admin）
+目标：/workers/w_compose_worker
+1) 宽屏 1440×900（以 app-content>main 内容区为参照，排除左侧 Dock 避让 paddingLeft=80）：
+   main    x=80.0  w=1360.0  center=760.0
+   basic   x=280.0 w=960.0   center=760.0   Δ=0.0  → 基本信息卡水平居中 ✓
+   back    x=280.0（标题行容器左缘）
+   basic   x=280.0  → 标题行与卡片区同一水平中轴，Δ=0.0 ✓
+   boundingBox 断言：card x > 100 ✓；|cardCenter - contentCenter| ≤ 20（实测 0）✓
+2) 窄屏 375×667：documentElement.scrollWidth=375 ≤ innerWidth=375 → 无横向滚动 ✓
+3) 截图留档：
+   - .omo/evidence/worker-detail-center-wide.png（宽屏居中）
+   - .omo/evidence/worker-detail-center-narrow.png（窄屏无横滚）
+
+五、回归
+- workers 列表页可正常加载（worker-list-root visible）
+- 仅改动 workers/[id]/page.tsx 布局，其他页面/数据/逻辑未触碰
+
+六、清理
+- 临时验证脚本 e2e/worker-detail-center.spec.ts、pw-center.config.mjs、diag.mjs 已删除
+- test-results/、.auth/user.json（playwright 产物）不受 git 跟踪

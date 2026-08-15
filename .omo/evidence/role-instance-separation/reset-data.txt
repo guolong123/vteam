@@ -1,0 +1,155 @@
+================================================================
+数据清理与重置（reset-data）— 2026-08-13
+================================================================
+用户要求「清理现有的数据，重新开始」。清空全部业务表（保留 schema 与
+_prisma_migrations），重新 seed 重建基础数据。仅动数据/运行时产物，无代码提交。
+
+----------------------------------------------------------------
+1. 清理前各表行数基线（SHOW TABLES 共 30 张：29 业务 + 1 系统）
+----------------------------------------------------------------
+agent_questions           6
+agent_skills              0
+agent_tool_effects        0
+agents                    5
+artifact_versions        10
+artifacts                10
+chat_channels            28
+git_credentials          13
+git_repo_grants          17
+issues                   24
+mcp_servers               2
+messages                276
+model_credentials         1
+models                   35
+project_members           4
+projects                  4
+realtime_events        2421
+roles                     2
+sessions                 36
+skills                    2
+task_agents              36
+task_events              12
+task_group_instances     30
+tasks                    11
+tools                    12
+users                     3
+worker_model_availabilities 26
+workers                   1
+_prisma_migrations       14   ← 保留（schema 版本记录）
+
+----------------------------------------------------------------
+2. 清空操作（保留 _prisma_migrations）
+----------------------------------------------------------------
+命令：docker exec aiagents-compose-db mysql -uroot -paiagents-root aiagents \
+      -e "SET FOREIGN_KEY_CHECKS=0; TRUNCATE TABLE <29 张业务表>; SET FOREIGN_KEY_CHECKS=1;"
+输出：TRUNCATE OK
+
+TRUNCATE 表清单（29 张）：
+  agent_questions / agent_skills / agent_tool_effects / agents /
+  artifact_versions / artifacts / chat_channels / git_credentials /
+  git_repo_grants / issues / mcp_servers / messages / model_credentials /
+  models / project_members / projects / realtime_events / roles / sessions /
+  skills / task_agents / task_events / task_group_instances / tasks / tools /
+  users / worker_model_availabilities / workers
+
+未 DROP 数据库 / 未重跑迁移 / 未删 _prisma_migrations。
+
+----------------------------------------------------------------
+3. 清理上传文件目录
+----------------------------------------------------------------
+命令：rm -rf server/uploads/* （保留目录本身）
+清理前：238 个文件 / 972K
+清理后：目录为空（git ls-files server/uploads/ = 0，该目录未被 git 跟踪，
+        清理不产生任何 git 变更）
+
+----------------------------------------------------------------
+4. 重新 seed
+----------------------------------------------------------------
+命令：docker exec aiagents-compose-server node dist/prisma/seed.js
+（server 容器内已有编译产物 dist/prisma/seed.js，DATABASE_URL 指向 aiagents 库）
+
+输出：
+  - 角色：admin / member
+  - 用户：admin(u_admin) / seed-admin(u_seed_admin) / seed-member(u_seed_member)
+  - 项目：AI 智能体平台、文档协作平台（owner=seed-admin）
+  - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、
+    开发者(developer)、测试(tester)（type=template）
+  - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+  - MCP 工具：chat_history、doclib、task_context、group_post（source=mcp）
+  - MCP Server：keta-platform（remote，http://server:3000/api/v1/platform-mcp）
+  - 模型目录：16 个模型
+  - 管理员密码：Admin@123456；初始 admin 账号：admin / admin123
+
+----------------------------------------------------------------
+5. 重建验证（清理后）
+----------------------------------------------------------------
+agents                         5  → a_product/a_architect/a_developer/a_tester/a_project_manager（type=template）
+users                          3  → admin(u_admin)/seed-admin(u_seed_admin)/seed-member(u_seed_member)
+projects                       2  → p_seed_1「AI 智能体平台」/ p_seed_2「文档协作平台」（owner=u_seed_admin）
+project_members                2  → pm_seed_p_seed_1 / pm_seed_p_seed_2（owner）
+roles                          2  → r_admin / r_member
+models                        16
+tools                         10  → 6 builtin + 4 mcp(keta-platform)
+mcp_servers                    1  → keta-platform
+_prisma_migrations            14  → 保留（schema 版本记录）
+
+业务数据（=0）：
+  tasks=0  messages=0  chat_channels=0  sessions=0  issues=0
+  artifacts=0  artifact_versions=0  task_agents=0  task_events=0
+  task_group_instances=0  workers=0  realtime_events=0  skills=0
+  agent_questions=0  git_credentials=0  git_repo_grants=0
+  model_credentials=0  agent_skills=0  agent_tool_effects=0
+  worker_model_availabilities=0
+
+----------------------------------------------------------------
+6. 清理前 → 清理后 行数对比
+----------------------------------------------------------------
+表名                        清理前    清理后
+agent_questions               6        0
+agent_skills                  0        0
+agent_tool_effects            0        0
+agents                        5        5（seed 重建 5 模板）
+artifact_versions            10        0
+artifacts                    10        0
+chat_channels                28        0
+git_credentials              13        0
+git_repo_grants              17        0
+issues                       24        0
+mcp_servers                   2        1（seed 重建 keta-platform）
+messages                    276        0
+model_credentials             1        0
+models                       35       16（seed 重建 16）
+project_members               4        2（seed 重建 2 owner）
+projects                      4        2（seed 重建 p_seed_1/2）
+realtime_events            2421        0
+roles                         2        2（seed 重建）
+sessions                     36        0
+skills                        2        0
+task_agents                  36        0
+task_events                  12        0
+task_group_instances         30        0
+tasks                        11        0
+tools                        12       10（seed 重建 6 builtin + 4 mcp）
+users                         3        3（seed 重建 3 用户）
+worker_model_availabilities  26        0（worker 重启注册时重建）
+workers                       1        0（worker 重启自动重新注册）
+_prisma_migrations           14       14（保留）
+
+----------------------------------------------------------------
+7. 容器状态（含 worker 重注册收尾）
+----------------------------------------------------------------
+aiagents-compose-db      Up 8 hours (healthy)
+aiagents-compose-server  Up (healthy)   → :13000 /api/v1/health = HTTP 200
+aiagents-compose-web     Up (healthy)   → :13001 /                  = HTTP 200
+aiagents-compose-worker  已重启（docker restart aiagents-compose-worker）
+  → workers 表自动重新注册 1 条：
+    id=w_compose_worker  status=online  registered_at/last_heartbeat_at 已更新
+  → worker_model_availabilities 自动重新上报 26 条
+
+Risks / 备注
+- workers / worker_model_availabilities 为 worker 运行期自注册数据，seed 不生成；
+  已通过重启 worker 容器自动重新注册（不再需要人工干预）。
+- 模型目录由 seed 重建为 16 个（清理前 35 个含运行时/历史数据），前端模型下拉
+  以 models 表为准。
+- 登录账号：admin / admin123（初始管理员）或 seed-admin / Admin@123456。
+- 无代码/配置文件改动；uploads 目录未被 git 跟踪，无 git 变更产生。

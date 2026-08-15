@@ -1,0 +1,90 @@
+================================================================================
+Fix: Agent 工作状态在页面切换/刷新后丢失（真实 running 被误显示为「就绪」）
+================================================================================
+日期：2026-08-13
+分支：feature/git-repo-credentials
+
+--------------------------------------------------------------------------------
+1. 根因
+--------------------------------------------------------------------------------
+前端任务详情页 web/app/(main)/tasks/[id]/page.tsx：
+- sessionByAgent 状态初始为 {}（useState({})，:1541），只靠 SSE 增量事件驱动
+  （useRealtimeEvents：agent.loading / agent.status / session.updated）。
+- Next.js 客户端路由切页 → 组件卸载重建 + SSE 连接重置（首连 since=latest）→
+  sessionByAgent 复位为空 → 成员面板默认显示「就绪」。
+- SSE 重连只收「连接时刻之后」的新事件（skipHistory=true），正在工作的 agent
+  不会重放 running 状态 → 执行中状态在切页回来时丢失。
+
+后端已有真实状态源 sessions.status（SESSION_STATUS：created/active/running/idle/
+frozen/archived；dispatch 时 updated=running、回复回流收敛=idle），但 GET /tasks/:id
+（toTaskDto）此前未返回各实例会话状态 → 前端无从在挂载时恢复。
+
+--------------------------------------------------------------------------------
+2. 修复方案
+--------------------------------------------------------------------------------
+后端（打通真实状态源）：
+- server/prisma/schema.prisma：TaskAgent 增加 sessions 关系（Session 增加
+  taskAgent 反向关系）。仅 Prisma 层补关系（sessions.task_agent_id 列早已存在），
+  无需 DB 迁移；prisma generate 再生客户端即可。
+- server/src/tasks/tasks.service.ts：
+  · TASK_AGENTS_INCLUDE 的 taskAgents.include 增加
+    sessions: { select: { id, status }, where: { status: { not: 'archived' } } }
+  · TaskAgentInstance 类型增加 sessions?
+  · toTaskDto 实例项增加 sessionStatus（sessions[0].status，每实例恒 1 条会话取首项）
+    与 sessionId（供前端建 sessionId→instance 映射收敛 SSE）。
+
+前端（初始快照 + 增量不冲突）：
+- web/app/(main)/tasks/[id]/page.tsx：
+  · TaskInstance 接口增加 sessionStatus / sessionId（对齐后端 DTO）。
+  · 新增 sessionSeedRef 守卫的初始化 effect（仅挂载首次执行）：
+    - sessionByAgent 仅「填充缺失 key」：inst.sessionStatus && !(inst.id in prev)，
+      不覆盖已到的 SSE 实时状态（避免 refetch/SSE 竞态覆盖 running/idle 切换）。
+    - 按 inst.sessionId 建立 sessionId→instanceId/agentId 映射（agentIdBySessionRef /
+      instanceIdBySessionRef），保证执行中切页回来时 session.updated idle 仍能收敛。
+  · SSE 增量驱动（onSessionUpdated / onMessage 收敛）保持原样，未改事件协议。
+
+--------------------------------------------------------------------------------
+3. 验证结果
+--------------------------------------------------------------------------------
+[静态]
+- server: npx tsc --noEmit → 0 错误
+- web:    npx tsc --noEmit → 0 错误
+- server: npx jest --runInBand → 56 suites / 1122 tests 全过
+  （新增 1 条：findOne instances 携带 sessionStatus/sessionId 断言；
+   既有 include 形状断言同步补齐 sessions）
+- web:    npm run build → 通过
+
+[部署]
+- docker compose up -d --build server web → server/web healthy
+- GET /api/v1/tasks/t_0000000012 instances 每项返回
+  sessionStatus（真实 sessions.status）+ sessionId
+
+[真实场景复现]
+场景 A（DB 确定性模拟 in-flight）：
+  UPDATE sessions SET status='running' WHERE task_agent_id='ta_0000000037'
+  → 打开 /tasks/t_0000000012 → 成员面板 项目经理-1 显示「工作中」
+  → 切到 /projects → 切回任务页 → 仍「工作中」（不丢状态）
+  → 查库 status=running 与页面显示一致
+
+场景 B（真实 @ 执行中）：
+  POST /channels/c_0000000029/messages @ 测试-1(ta_0000000038)
+  → 4s 后查库 ta_0000000038=running
+  → 打开任务页 → 成员面板 测试-1 显示「工作中」
+  → 约 30s 执行完成，查库 status=idle
+  → 页面 SSE 自动收敛 测试-1 为「空闲」（无残留「工作中」，
+    证明 sessionId 映射初始化 + SSE 增量收敛均正常）
+
+截图（.omo/evidence/role-instance-separation/）：
+- fix-agent-status-task-page.png   （DB running → 工作中）
+- fix-agent-status-after-nav.png   （切页回来仍工作中）
+- fix-agent-status-real-running.png（真实 @ 执行中 → 工作中）
+
+--------------------------------------------------------------------------------
+4. 风险与说明
+--------------------------------------------------------------------------------
+- 每实例一会话为既有设计约束（sessions.uk_sessions_task_agent 唯一 [taskId,
+  taskAgentId]），取 sessions[0] 安全。
+- archived 终态会话不参与展示（where 过滤），归档任务成员回退「就绪」，语义不变。
+- SSE 断线重放的历史回复（channel scope）可能在极少数连接级重连时经 onMessage
+  收敛清除 running 快照——与原「历史收敛」设计一致，属既有边界；正常切页路径
+  （连接保活）不受影响。

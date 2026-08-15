@@ -1,0 +1,148 @@
+================================================================================
+vteam K8s 部署证据 — chart/vteam/ Helm chart → 远程 K8s 集群 (ns: vteam)
+日期: 2026-08-14
+任务: role-instance-separation (K8s 部署 vteam)
+================================================================================
+
+[1] 环境勘察
+--------------------------------------------------------------------------------
+- 集群类型: 远程 K8s 集群 (非 kind/k3s/docker-desktop)
+  - control plane: https://10.0.1.18:6443, context: admin@local
+  - K8s v1.26.12, 容器运行时 containerd 1.6.23
+  - master-01/02/03 SchedulingDisabled, 可调度 worker: worker-02/04/05/06/07/09/10/11/13
+- helm: v3.20.1
+- 集群已有大量工作负载 (几十个 ns), 使用 docker-hosted.ketaops.cc / docker-release.ketaops.cc
+  registry → 节点网络可达 docker-hosted (无额外 pull secret 的 workload 也在跑)
+- 本机 docker 已有 docker-hosted.ketaops.cc 推送凭据 (~/.docker/config.json auths)
+- 本地镜像: aiagents-server/web/worker/init:latest (docker compose 构建产物)
+
+[2] 镜像策略与 web 重建
+--------------------------------------------------------------------------------
+决策: 推送 4 镜像到 docker-hosted.ketaops.cc/xishuhq/ (集群已验证可达的 registry),
+      统一 tag vteam-k8s; mysql:8 也拉取重推 (不依赖 docker.ketaops.cc/library 可达性)。
+- web 镜像必须重建: rewrites 代理目标编译进 routes-manifest.json (运行时 env 无效)。
+  本地 aiagents-web:latest 指向 http://server:3000 (compose 服务名) →
+  K8s 下 service 名不同 (vteam-server) → 重建注入 http://vteam-server:3000。
+  验证: 新镜像 /app/.next/routes-manifest.json rewrites.afterFiles =
+    /api/v1/:path*  → http://vteam-server:3000/api/v1/:path*
+    /uploads/:path* → http://vteam-server:3000/uploads/:path*
+- server/worker/init 无需重构 (env 运行时注入); server 镜像含 dist/prisma/seed.js 已验证。
+- 镜像清单 (docker-hosted.ketaops.cc/xishuhq/):
+    vteam-server:vteam-k8s   sha256:17f62d8c...
+    vteam-web:vteam-k8s      sha256:1dfda790... (API_PROXY_TARGET=http://vteam-server:3000)
+    vteam-worker:vteam-k8s   sha256:1c60f966...
+    vteam-init:vteam-k8s     sha256:fb1d9087...
+    vteam-mysql:vteam-k8s    sha256:d0ecae40... (mysql:8 重推)
+- push 权限实测: docker push docker-hosted.ketaops.cc/xishuhq/vteam-web-pushtest:test OK
+
+[3] Namespace 创建 + helm install
+--------------------------------------------------------------------------------
+kubectl create ns vteam → namespace/vteam created
+
+helm install vteam chart/vteam -n vteam \
+  -f chart/vteam/values-dev.yaml \
+  --set secret.jwtSecret=<openssl rand -hex 32 生成, 已记录 /tmp/opencode/vteam-*.txt> \
+  --set secret.workerToken=... \
+  --set secret.modelCredentialKey=... \
+  --set secret.dbPassword=... \
+  --set server.image.repository=docker-hosted.ketaops.cc/xishuhq/vteam-server --set server.image.tag=vteam-k8s \
+  --set web.image.repository=docker-hosted.ketaops.cc/xishuhq/vteam-web    --set web.image.tag=vteam-k8s \
+  --set worker.image.repository=docker-hosted.ketaops.cc/xishuhq/vteam-worker --set worker.image.tag=vteam-k8s \
+  --set db.image.repository=docker-hosted.ketaops.cc/xishuhq/vteam-mysql --set db.image.tag=vteam-k8s
+→ install 成功 (Secret vteam-secret Opaque 4 keys, 显式注入无漂移)
+
+资源: Deploy vteam-server/web/worker ×1, StatefulSet vteam-mysql, Job vteam-init,
+      Service vteam-server(:3000)/web(:3000)/worker(:4000)/mysql(:3306 headless),
+      PVC uploads 5Gi / worker-work 10Gi / worker-home 5Gi / mysql 10Gi (managed-nfs-storage, 均 Bound)
+
+[4] Pods / Job 状态 (最终)
+--------------------------------------------------------------------------------
+NAME                                READY   STATUS      RESTARTS
+pod/vteam-init-dsplk                0/1     Completed   0      (migrate 全部 applied + seed 成功, 91s)
+pod/vteam-mysql-0                   1/1     Running     0
+pod/vteam-server-dcc9b67cb-5vt2j    1/1     Running     3     (初始启动竞态自愈, 见 risks)
+pod/vteam-web-7cdb69ff-h4cth        1/1     Running     0
+pod/vteam-worker-665dbdc645-w9rkn   1/1     Running     0
+job.batch/vteam-init   1/1  Completed (DURATION 91s)
+
+[5] 端到端验证
+--------------------------------------------------------------------------------
+a) 服务可达 (kubectl port-forward):
+   svc/vteam-server 13000:3000 → GET /api/v1/health
+     {"status":"ok","info":{},"error":{},"details":{}}   HTTP 200
+   svc/vteam-web 13001:3000    → GET /                    HTTP 200
+   worker: 日志 "注册成功: workerId=w_vteam, heartbeatInterval=10000ms,
+           serverTime=2026-08-14T06:25:31Z"; 后续心跳 201;
+           GET /api/v1/workers → [{"id":"w_compose_worker","opencodeVersion":"1.18.16",
+           capabilities: git 工具族 + 23 模型}]
+
+b) 登录: POST /api/v1/auth/login admin/admin123 → 200 (accessToken + user u_admin r_admin)
+        seed-admin/Admin@123456 → 200
+
+c) agents 计数 (seed 硬证据):
+   GET /api/v1/agents → TOTAL 5: a_product 产品经理 / a_project_manager 项目经理 /
+       a_architect 架构师 / a_developer 开发者 / a_tester 测试 (type=template)
+   DB (kubectl exec vteam-mysql-0 -- mysql): agents_count=5, users_count=3, projects_count=2
+
+d) 功能冒烟 (任务创建, seed-admin as p_seed_1 owner):
+   POST /api/v1/projects/p_seed_1/tasks
+     {"title":"K8s部署冒烟任务","agents":[{"agentId":"a_product","alias":"产品经理-1"},
+      {"agentId":"a_developer","alias":"开发者-1"}]}
+   → HTTP 201, taskId t_0000000014, status pending,
+     instances: [开发者-1(a_developer), 产品经理-1(a_product)]
+   (注: admin 非项目成员 → ProjectMembershipGuard 403, 符合 RBAC 预期)
+
+[6] Risks / 备注
+--------------------------------------------------------------------------------
+- server 初始 3 次重启: Deployment 与 init Job 无硬性依赖, server 在 init 迁移建表
+  完成前启动, Prisma 查 realtimeEvent 表报 PrismaClientInitializationError → liveness
+  CrashLoop 3 次; init 完成后自愈。当前稳定 (全部验证通过)。
+  缓解: 保持现状 (功能正常); 长期可在 server 加 initContainer 等 init Job 或显式
+  dependsOn (chart 未内置, 不改模板)。
+- mysql 镜像从 docker.ketaops.cc/library/mysql 改为 docker-hosted 重推, 规避该 registry
+  匿名可达性不确定性。
+- secret 显式提供 (openssl 生成), 已记录 /tmp/opencode/vteam-{jwt,wt,mk,dbp}.txt,
+  Secret vteam-secret (4 keys) 持久于集群。
+- 全部 pod 落在 worker-09 (单节点), 无多节点 spread; 无节点选择器/反亲和。
+- 未改动 chart 模板代码; 未 git 提交; 未动其他 ns。
+- 清理: 本机 docker 残留 vteam-web-pushtest:test tag (远端镜像已随构建覆盖策略保留)。
+
+[7] 验证修正 (重要) — 外部可达性链路
+--------------------------------------------------------------------------------
+初轮 port-forward 验证有误: 本机 13000/13001 已被 docker compose 旧部署
+(aiagents-compose-server/web, 本机常驻) 占用, kubectl port-forward 绑定失败
+("bind: address already in use"), 当时 curl 打到的是 compose 部署而非 K8s。
+另: web (Next.js standalone) 只监听 $HOSTNAME(pod IP) 而非 loopback,
+kubectl port-forward 转发到 pod 127.0.0.1:3000 也会 connection refused。
+
+纠正方案: 启用 chart ingress (nginx class, host=vteam.ketaops.cc), 经集群
+ingress-nginx NodePort 32054 验证 (集群已有 ingress-nginx, LoadBalancer pending,
+裸金属走 NodePort; ingress-nginx controller 位于 worker-02/worker-05)。
+
+最终 K8s 链路验证 (全部经 ingress, 唯一可信入口):
+- http://<node>:32054/              Host: vteam.ketaops.cc  → web 200 (真实 K8s web pod)
+- http://<node>:32054/api/v1/health Host: vteam.ketaops.cc  → {"status":"ok"} 200
+  (web rewrites 代理 → vteam-server:3000, 证明重建 web 镜像 API_PROXY_TARGET 生效)
+- 登录 admin/admin123 → 200 (user admin, role admin)
+- GET /api/v1/agents → TOTAL 5, types=['template'] (产品经理/项目经理/架构师/开发者/测试)
+- seed-admin/Admin@123456 登录 → POST /projects/p_seed_1/tasks → 201
+  taskId t_0000000001 "K8s冒烟-任务创建" status=pending
+- DB 最终计数 (K8s mysql): agents=5 users=3 projects=2, tasks 含 t_0000000001
+- worker: w_compose_worker 注册 + 心跳 201 (server 日志 heartbeat 请求可见)
+
+补充: helm upgrade 注意事项 — Job spec.template 不可变, 改 values 后 upgrade 前需
+kubectl delete job vteam-init (seed 用 upsert 幂等, 重跑安全); upgrade 必须带
+完整原始 values (-f values-dev.yaml + secret.* + image.*), 否则 PVC 尺寸/Secret
+漂移导致失败。
+
+[8] 最终资源清单 (ns=vteam)
+--------------------------------------------------------------------------------
+deploy/vteam-server 1/1 Running (RESTARTS 3, 初始竞态自愈)
+deploy/vteam-web    1/1 Running
+deploy/vteam-worker 1/1 Running
+sts/vteam-mysql     1/1 Running
+job/vteam-init      Completed (migrate + seed 成功)
+svc: vteam-server:3000 / vteam-web:3000 / vteam-worker:4000 / vteam-mysql:3306(headless)
+pvc: vteam-uploads 5Gi / vteam-worker-work 10Gi / vteam-worker-home 5Gi / data-vteam-mysql-0 10Gi (均 Bound, managed-nfs-storage)
+ingress: vteam (nginx, vteam.ketaops.cc, /api/v1→server / →web)
+secret: vteam-secret (Opaque, 4 keys, 显式注入)

@@ -1,0 +1,93 @@
+# 私聊页 SSE 事件返回数据但前端不实时刷新 — 实证定位与修复
+
+> 日期：2026-08-14 ｜ 工作区：/data/git-project/aiagents ｜ 环境：本地 compose（:13000/:13001）
+> 用户反馈：刚做完私聊历史改 session-history 后，私聊页 SSE 事件接口一直在返回数据，但前端页面不实时刷新消息。
+
+## 一、实证链路（先实证，再定位）
+
+### 1. SSE 事件流抓取（curl -N /api/v1/events?scope=all&since=latest）
+私聊频道 c_0000000037（a_tester，任务 t_0000000013）触发期间完整事件：
+```
+ev_... chat.message.new  m_545 (user)      channelId=c_0000000037 ✓ 用户消息实时广播
+ev_... agent.loading     thinking / operating                          ✓
+ev_... chat.message.new  m_546 (ACK 收到)  channelId=c_0000000037 ✓ ACK 实时广播
+ev_... session.updated   running → idle
+ev_... message.part.delta m_553 (processing) channelId=c_0000000036    ✓ 私聊 delta
+ev_... chat.message.new  m_553 (sent)      channelId=c_0000000036     ✓ 终态
+```
+结论：**SSE 广播链路正常**，channelId 正确，chat.message.new/delta/loading 均到达。
+
+### 2. 页面 DOM 实测（playwright）
+- 用户消息「重复实验-唯一标记XYZ」实时出现在页面底部 ✓
+- ACK「收到，正在处理…」实时出现 ✓
+- **agent 最终回复不出现**——但 serve 快照（session-history）最后一条 msg_00088a7d 含完整回复，
+  平台表 c_0000000037 **无对应 m_ 最终回复**。
+
+### 3. DB 实证（MySQL）
+```
+messages:
+m_0000000579  c_0000000037  agent a_tester  sent  13:48:34  (ACK)
+m_0000000526  c_0000000037  agent a_tester  sent  12:43:35  ← createdAt 是 20:43 旧时间！
+   content = 本次回复「重复实验完成...m_0000000582」
+```
+日志：`[WorkerDispatcher] agent a_tester 流式消息终态化 message=m_0000000526 → sent`
+
+## 二、根因（证据链）
+
+**handleTaskCompleted 复用了跨轮次残留的旧 processing 消息 m_526**：
+1. m_526 是 20:43 某轮 dispatch 的 delta 创建的 processing 消息（后续 agent 失败/中断，
+   failProcessingMessage 只标记最新一条 processing，m_526 未清理而残留）；
+2. 21:48 新一轮 dispatch → agent 回复 → handleTaskCompleted `findFirst({channelId,
+   senderType:agent, senderId, status:processing})` **命中残留 m_526** → update 终态化，
+   **createdAt 保留 20:43**（旧时间）；
+3. SSE 广播 `chat.message.new` 的 `message.createdAt=20:43`；
+4. 前端 `mergeSnapshotWithLive` 按 `createdAt` 排序（serve 快照 + 平台增量混合需时间序）→
+   **新回复被排到历史中间（页面索引 20），页面底部不出现新消息**；
+5. 用户视角：SSE 事件接口持续返回数据（loading/delta/chat.message.new 都有），但底部无刷新。
+
+## 三、修复（最小，server 端）
+
+`server/src/chat/worker-dispatcher.ts` dispatchForTarget 内，execute 之前：
+```ts
+const cleanupChannel = await this.resolveChannel(taskId, target.agentId, session.taskAgentId ?? undefined);
+if (cleanupChannel) {
+  await this.prisma.message.updateMany({
+    where: {
+      channelId: cleanupChannel.id,
+      senderType: SENDER_TYPE.agent,
+      senderId: target.agentId,
+      status: MESSAGE_STATUS.processing,
+    },
+    data: { status: MESSAGE_STATUS.failed },
+  });
+}
+```
+原理：新一轮 dispatch 前清理目标频道残留 processing → 本轮回复要么新建（createdAt=本轮），
+要么复用**本轮 delta 新建**的 processing → createdAt 正确 → 前端按时间正序排到底部 → 实时刷新。
+
+配套：`worker-dispatcher.spec.ts` message mock 增加 `updateMany`（类型 + beforeEach 默认值）。
+
+## 四、复验（真实部署，compose 重建 server）
+
+### 私聊实时刷新 ✓（页面 /messages/c_0000000037）
+1. 发消息「修复验证-唯一标记ABC」→ 用户消息实时出现（索引 75）✓
+2. agent 回复（delta 流式 thinking/tool 实时累积）→ task.completed 终态化 **m_0000000606**（createdAt=22:09:49，新时间）✓
+3. 回复正文（含 ev_0000006059）位于 **索引 77 = 列表底部**，紧跟 ACK 之后 ✓
+   —— 修复前回复排到索引 20（历史中间），修复后实时出现在底部。
+4. 重进页面历史完整：最后一条「修复验证完成（唯一标记 ABC）」22:10 ✓
+   （截图：dm-sse-fixed.png）
+
+### 群聊回归 ✓（页面 /messages/c_0000000035）
+发消息「群聊回归验证-标记DEF」→ 用户消息实时出现 + ACK + loading 正常，群聊行为未受影响。
+
+### 测试
+- worker-dispatcher.spec.ts：103/103 PASS
+- chat.service.spec.ts：59/59 PASS
+- server `tsc --noEmit`：通过
+
+## 五、风险
+- dispatch 热路径新增一次 `resolveChannel` 查询 + 一次 `updateMany`（channel 存在时）——
+  频道路径已在前置步骤查询过，开销可忽略；清理命中为 0 时 updateMany 无副作用。
+- failProcessingMessage 的「只标记最新一条」残留问题仍可能产生 processing 残留，
+  但 dispatch 前清理已兜底，残留不会再被终端回复复用。
+- 前端 `mergeSnapshotWithLive`/`upsertMessage` 无需改动（根因在后端 createdAt）。

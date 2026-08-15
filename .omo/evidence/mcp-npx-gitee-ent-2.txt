@@ -1,0 +1,94 @@
+# 排查：MCP 工具 npx_gitee-ent「注册成功但 worker 不生效」复查（第 2 轮）
+
+环境：docker-compose（aiagents-compose-*），工作区 /data/git-project/aiagents
+时间：2026-08-12（复查前一轮证据 mcp-npx-gitee-ent.txt 结论已过时——用户为之后注册）
+
+## 1. DB 现状（权威，aiagents-compose-db）
+```
+SELECT id, name, type, JSON_EXTRACT(command,'$'), url, enabled, created_at FROM mcp_servers;
+id              name          type   command                                                  url                                enabled  created_at
+ms_0000000001   npx_gitee-ent local  {"command": ["npx","-y","@gitee/mcp-gitee-ent@latest"]} NULL     1        2026-08-12 12:31:10.354
+ms_keta_platform keta-platform remote NULL                                                   http://server:3000/api/v1/platform-mcp 1        2026-08-11 11:49:55
+```
+- type=local，command 为对象形态且结构正确，enabled=1，今天 12:31 注册 → 前一轮"DB 只有 keta-platform"结论过时。
+
+## 2. API 现状
+```
+GET /api/v1/mcp-servers?page=1&pageSize=100（admin token）
+keta-platform: type=remote status=connected
+npx_gitee-ent: type=local  status=connected
+```
+- status 来自 worker 心跳节流探测上报（server 内存 statusByServer，worker 心跳 mcpStatus 字段合并）。
+
+## 3. worker 注入现状（/data/keta-worker/opencode.json）
+```json
+"mcp": {
+  "keta-platform": { "type":"remote", "url":"http://server:3000/api/v1/platform-mcp", "headers":{...}, "enabled":true },
+  "npx_gitee-ent": { "type":"local", "command":["npx","-y","@gitee/mcp-gitee-ent@latest"], "enabled":true }
+}
+```
+- 12:31 修改 → injectMcp 已写入。
+
+## 4. worker 探测状态
+```
+opencode mcp list →
+●  ✓ keta-platform connected
+●  ✓ npx_gitee-ent connected
+└  2 server(s)
+```
+- npx_gitee-ent connected（非 failed）。
+
+## 5. worker 日志时序
+```
+[worker] 收到命令 reload-config（resourceVersion=2026-08-12T12:31:10.360Z），分派注入+重启
+[worker] reload-config：资源重注入完成（0 skills, 0 tools, 2 mcp servers）
+[worker] [restart] 执行重启（reload-config（resourceVersion=2026-08-12T12:31:10.360Z））
+[opencode-server] serve 就绪: http://127.0.0.1:4000 (pid=2408)
+```
+- 注入 2 mcp servers → serve 重启完成（pid=2408）→ serve config 端点确认 mcp 含 npx_gitee-ent。
+
+## 6. server 日志
+```
+POST /api/v1/mcp-servers 到达（host localhost:13000, user-agent curl/7.81.0, content-length 119）
+McpServersService: "MCP 服务器变更：已广播 reload-config 到 1 个 worker"
+```
+- 创建请求为 curl 直调（非 UI 弹窗），广播正常。
+
+## 7. npx 运行环境（worker 容器）
+```
+timeout 90 npx -y @gitee/mcp-gitee-ent@latest --help → 正常输出（-transport stdio 默认等）
+node mcp-probe.mjs：initialize 握手成功 → mcp-gitee-ent 0.1.11，capabilities.tools ✓
+tools/list → 31 个工具（comment_enterprise_issue / create_enterprise_issue / ...）
+```
+- worker 环境无 npx/网络问题；MCP server 真实可用。
+
+## 8. 真正的残留问题（本次修复点）
+- tools 表 tl_0000000002（gitee-ent, source=mcp）的 mcp_server 字段值 = **`npx`**，
+  而真实 MCP server 名 = `npx_gitee-ent`（id=ms_0000000001）。
+- 前端 skills 页按 tool.mcpServer 反查 GET /mcp-servers（id/name 双键 map）→ `npx` 必失败
+  → UI 显示「remote/未连接」兜底，即使 worker 已 connected。
+- 根因：UI「注册 MCP 工具」弹窗的 MCP server 标识为自由输入（placeholder 如 filesystem），
+  用户填 `npx`（非完整 server 名/ID），弱关联断裂。属产品 UX 缺口 + 后端无存在性校验。
+
+## 修复
+### A. 数据修复（立即生效）
+```
+UPDATE tools SET mcp_server='npx_gitee-ent' WHERE id='tl_0000000002';
+```
+- 修复后前端展示模型模拟：npx_gitee-ent_gitee-ent type=local status=connected ✓
+
+### B. 代码加固（防复发，server/src/tools）
+1. common/constants/tool.constants.ts：新增错误码 TOOL_MCP_SERVER_NOT_FOUND
+2. tools.service.ts create()：execution=mcp 且 mcpServer 提供时，assertMcpServerExists
+   （按 name/id OR 查询 mcp_servers，不存在 → 400 提示），防注册即断链。
+3. tools.service.spec.ts：新增 2 测试（未注册 → 400 不落库不广播；id 命中 → 通过）
+
+## 验证
+- tsc --noEmit：0 错误
+- jest --runInBand：54 suites / 1024 tests 全通过（含新增 2 测试）
+- docker compose build+up server：healthy
+- 实证：POST /tools mcpServer=nonexistent-server → 400 TOOL_MCP_SERVER_NOT_FOUND
+         POST /tools mcpServer=npx_gitee-ent → 201 创建成功（已清理测试记录）
+- opencode mcp list：npx_gitee-ent connected ✓
+- GET /mcp-servers：npx_gitee-ent status=connected ✓
+- GET /tools：gitee-ent mcpServer=npx_gitee-ent（反查命中）✓

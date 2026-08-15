@@ -1,0 +1,83 @@
+================================================================================
+task_transition 权限链路实证 + 提示优化（2026-08-14）
+================================================================================
+
+## 一、权限链路（代码层核实）
+
+taskTransition (platform-mcp.service.ts:606)
+  → assertWorkerTask(ctx, taskId, selfInstanceId)    // 归属校验（前置）
+  → TasksService.transitionByAgent(taskId, selfInstanceId, action, reason?)
+      → task.mainAgentInstanceId === instanceId ? 放行 : 403 TASK_STATUS_MAIN_AGENT_ONLY
+
+## 二、实证发现的真实缺陷（修复前）
+
+首次真实调用（非主实例 ta_38，selfInstanceId 正确、团队内活跃成员）：
+  error: "selfInstanceId 与执行该任务的实例（ta_0000000037）不一致，禁止冒充"
+
+根因：assertWorkerTask 回退分支 `session.findFirst({ where: { taskId, workerId } })`
+在多实例任务（t_12 下 5 个会话并存）返回**首条 session（恰好是主实例 s_37）**，
+导致：
+- 合法成员 ta_38~41 被误判"禁止冒充"（提示不准确，未走到 transitionByAgent）
+- 无法落到"仅主 Agent"403，与任务目标（团队内非主实例落"仅主 Agent"提示）不符
+
+修复（platform-mcp.service.ts assertWorkerTask）：
+  where 增加 `...(selfInstanceId !== undefined ? { taskAgentId: selfInstanceId } : {})`
+  → selfInstanceId 提供时按实例精确匹配自身 session；无匹配 → 403"禁止跨任务访问"
+  （安全不降级：跨任务/冒充实例因无自身 session 仍被拦）。
+
+## 三、提示优化（tasks.service.ts transitionByAgent）
+
+修复前 message: '仅主 Agent 可流转任务状态'
+修复后 message:
+  仅主 Agent（ta_0000000037）可流转任务状态；请知会主 Agent 调用 task_transition，或由管理员在任务管理界面操作
+（含实际 mainAgentInstanceId + 正确操作路径引导）
+
+GSI 同步（worker-dispatcher.ts）：
+  "仅主实例可调用 task_transition，其余成员调用将返回 403 提示（请知会主实例或由管理员在任务管理界面操作）"
+
+## 四、spec
+
+- tasks.service.spec.ts: 非主实例用例断言新 message（含主实例 id + 引导）
+- platform-mcp.service.spec.ts:
+  - taskTransition 非主实例用例同步 mock message
+  - 新增归属校验用例：多实例任务 selfInstanceId 精确匹配（where 含 taskAgentId）放行
+- tsc --noEmit 0 错误；jest src/tasks+src/platform-mcp 158 过；全量 54 suites / 1125 tests 过
+
+## 五、真实链路验证（docker compose up -d --build server 重建）
+
+### 1) 非主实例 ta_38 调 task_transition action=start
+  {"jsonrpc":"2.0","id":1,"method":"tools/call",... selfInstanceId:"ta_0000000038", action:"start"}
+  → error.code -32603（HTTP 403 ForbiddenException），message:
+    "仅主 Agent（ta_0000000037）可流转任务状态；请知会主 Agent 调用 task_transition，或由管理员在任务管理界面操作"
+
+### 2) 非主实例 ta_40 调 action=mark-pending-review
+  → 同上 403 完整引导（mainAgentInstanceId=ta_0000000037）
+
+### 3) 主实例 ta_37 全部放行
+  - action=start（当前 in_progress）→ 幂等 200，status 不变
+  - action=mark-pending-review → in_progress→pending_review，pendingReviewAt 写入
+  - action=reject（reason=验证后回滚）→ pending_review→in_progress，pendingReviewAt 重置
+
+### 4) 冒充/跨任务仍被归属校验拦截（安全不降级）
+  - 不存在的实例 ta_0000000099 → 403 "该 worker 无此任务会话，禁止跨任务访问"
+  - 跨任务实例 ta_0000000042（t_13 成员）调 t_12 → 403 "该 worker 无此任务会话，禁止跨任务访问"
+
+### 5) 查库（t_12 状态已回滚恢复 in_progress，不破坏数据）
+  tasks: status=in_progress, pending_review_at=NULL
+  task_events（近 3 条，actor_type=agent）:
+    reject       pending_review→in_progress  agent/ta_0000000037  metadata={"reason":"验证后回滚"}
+    status_change in_progress→pending_review agent/ta_0000000037
+    status_change pending→in_progress        agent/ta_0000000037 （上轮 start）
+  非主实例调用未产生任何 task_events。
+
+### 6) UI 截图（/tmp/opencode/task-t12-state.png）
+  任务详情页：标题"自身功能测试"，状态"进行中"（in_progress），团队 5 人
+  （项目经理-1 标★主 Agent + 测试-1~4），主 Agent 标记正确。
+
+## 六、结论
+
+权限链路真实生效且提示准确：
+  跨任务/冒充实例 → assertWorkerTask 403"禁止跨任务访问"
+  团队内非主实例 → 精确匹配放行 → transitionByAgent 403 TASK_STATUS_MAIN_AGENT_ONLY + 完整引导
+  主实例 → 放行流转（actor=agent 落库）
+================================================================================

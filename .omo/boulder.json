@@ -1,721 +1,270 @@
 {
   "schema_version": 2,
-  "active_work_id": "model-management-b9263bc4",
+  "active_work_id": "issue-management-8ef55bae",
   "works": {
-    "agent-platform-prd-prototypes-7f290efc": {
-      "work_id": "agent-platform-prd-prototypes-7f290efc",
-      "active_plan": "/data/git-project/aiagents/.omo/plans/agent-platform-prd-prototypes.md",
-      "plan_name": "agent-platform-prd-prototypes",
+    "platform-mcp-implementation-3339f9c6": {
+      "work_id": "platform-mcp-implementation-3339f9c6",
+      "active_plan": "/data/git-project/aiagents/.omo/plans/platform-mcp-implementation.md",
+      "plan_name": "platform-mcp-implementation",
       "status": "completed",
-      "started_at": "2026-08-06T04:16:19.009Z",
-      "updated_at": "2026-08-06T12:41:17.692Z",
+      "started_at": "2026-08-11T02:36:25.429Z",
+      "updated_at": "2026-08-12T02:40:09.715Z",
+      "completed_at": "2026-08-11T04:00:00.000Z",
+      "blocked_tasks": {
+        "todo:4": "阶段4 端到端实测：模型 provider configured:False（无 API key），需配置模型凭据后执行"
+      },
       "session_ids": [
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn",
-        "opencode:ses_02a4a43a6ffehG2YheHwevszKl",
-        "opencode:ses_02a4a2eb8ffen4hHBWUd4Z07wM",
-        "opencode:ses_02a37d840ffePCRLWwJ5NhYX1o",
-        "opencode:ses_02a37c40dffeAtGfysbhQZn2Ol",
-        "opencode:ses_02a2df0b7ffeambI4sd94Mf32P",
-        "opencode:ses_02a2ddaffffeerF3Cj1xSWBdst",
-        "opencode:ses_02a1c2061ffeEc0hfybtFvn5m8",
-        "opencode:ses_02a1c0df2ffeUDQIyykZT3mnmo",
-        "opencode:ses_029e132efffeH13HYDaYsVtC3b",
-        "opencode:ses_029e11d0dffe5k75gxFSGuRh70",
-        "opencode:ses_029bc09c8ffepTgB54A5Pk4jhY",
-        "opencode:ses_0292457a3ffe9HrrEc5mFE75rR",
-        "opencode:ses_028e8648bffeQ8Os9KZYRNM5uH"
+        "opencode:ses_01431acf9ffef3Q3c3rNxWMa8h"
       ],
       "session_origins": {
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct",
-        "opencode:ses_02a4a43a6ffehG2YheHwevszKl": "appended",
-        "opencode:ses_02a4a2eb8ffen4hHBWUd4Z07wM": "appended",
-        "opencode:ses_02a37d840ffePCRLWwJ5NhYX1o": "appended",
-        "opencode:ses_02a37c40dffeAtGfysbhQZn2Ol": "appended",
-        "opencode:ses_02a2df0b7ffeambI4sd94Mf32P": "appended",
-        "opencode:ses_02a2ddaffffeerF3Cj1xSWBdst": "appended",
-        "opencode:ses_02a1c2061ffeEc0hfybtFvn5m8": "appended",
-        "opencode:ses_02a1c0df2ffeUDQIyykZT3mnmo": "appended",
-        "opencode:ses_029e132efffeH13HYDaYsVtC3b": "appended",
-        "opencode:ses_029e11d0dffe5k75gxFSGuRh70": "appended",
-        "opencode:ses_029bc09c8ffepTgB54A5Pk4jhY": "appended",
-        "opencode:ses_0292457a3ffe9HrrEc5mFE75rR": "appended",
-        "opencode:ses_028e8648bffeQ8Os9KZYRNM5uH": "appended"
+        "opencode:ses_01431acf9ffef3Q3c3rNxWMa8h": "direct"
       },
       "agent": "atlas",
       "task_sessions": {
         "todo:1": {
           "task_key": "todo:1",
           "task_label": "1",
-          "task_title": "`docs/agent-platform/08-平台架构设计.md` — 在 §7.2 实时推送处补三级 SSE 链路图与说明",
-          "session_id": "opencode:ses_0295a7a0dffeyTMujpBbuZaSd6",
-          "agent": "Sisyphus-Junior",
-          "category": "writing",
-          "started_at": "2026-08-06T04:18:07.124Z",
-          "ended_at": "2026-08-06T10:37:44.624Z",
-          "elapsed_ms": 22777500,
-          "status": "completed",
-          "updated_at": "2026-08-06T10:37:44.624Z"
-        },
-        "todo:5": {
-          "task_key": "todo:5",
-          "task_label": "5",
-          "task_title": "PRD 功能需求：任务与群聊协作",
-          "session_id": "opencode:ses_02aae920bffeyWciJi49W2CmsG",
-          "agent": "Sisyphus-Junior",
-          "category": "writing",
-          "updated_at": "2026-08-06T04:26:26.373Z",
-          "started_at": "2026-08-06T04:26:26.373Z",
-          "status": "completed"
-        },
-        "todo:12": {
-          "task_key": "todo:12",
-          "task_label": "12",
-          "task_title": "PRD 交互与页面设计说明",
-          "session_id": "opencode:ses_02a962730ffevhfGX4DZ21gYnk",
-          "agent": "Sisyphus-Junior",
-          "category": "writing",
-          "started_at": "2026-08-06T04:51:41.665Z",
-          "status": "completed",
-          "updated_at": "2026-08-06T04:52:39.583Z"
-        },
-        "todo:13": {
-          "task_key": "todo:13",
-          "task_label": "13",
-          "task_title": "md-docs 构建与全量验证",
-          "session_id": "opencode:ses_02a950a7cffeQNoo6Spz93k2t7",
-          "agent": "Sisyphus-Junior",
-          "category": "visual-engineering",
-          "updated_at": "2026-08-06T05:00:03.758Z",
-          "started_at": "2026-08-06T05:00:03.758Z",
-          "status": "completed"
-        },
-        "final-wave:f1": {
-          "task_key": "final-wave:f1",
-          "task_label": "F1",
-          "task_title": "**Plan Compliance Audit** — `oracle`",
-          "session_id": "opencode:ses_02a8de42cffeEGFnYCXySOufAI",
-          "agent": "oracle",
-          "updated_at": "2026-08-06T05:02:10.159Z",
-          "started_at": "2026-08-06T05:02:10.159Z",
-          "status": "completed"
-        },
-        "todo:4": {
-          "task_key": "todo:4",
-          "task_label": "4",
-          "task_title": "创建 agent 时支持设置 agent 的**默认模型**，模型列表从 opencode 接口获取",
-          "session_id": "opencode:ses_02a4c543dffeetqyAWO11YmyvE",
-          "agent": "Sisyphus-Junior",
-          "category": "writing",
-          "updated_at": "2026-08-06T06:14:01.301Z",
-          "started_at": "2026-08-06T06:14:01.300Z",
-          "status": "completed",
-          "ended_at": "2026-08-06T06:14:01.301Z",
-          "elapsed_ms": 1
-        }
-      },
-      "ended_at": "2026-08-06T05:05:26.481Z",
-      "elapsed_ms": 2947472
-    },
-    "agent-platform-phase0-1-5f05608a": {
-      "work_id": "agent-platform-phase0-1-5f05608a",
-      "active_plan": "/data/git-project/aiagents/.omo/plans/agent-platform-phase0-1.md",
-      "plan_name": "agent-platform-phase0-1",
-      "status": "completed",
-      "started_at": "2026-08-06T13:53:01.012Z",
-      "updated_at": "2026-08-07T02:07:57.556Z",
-      "session_ids": [
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn"
-      ],
-      "session_origins": {
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct"
-      },
-      "agent": "atlas",
-      "task_sessions": {
-        "todo:1": {
-          "task_key": "todo:1",
-          "task_label": "1",
-          "task_title": "**圆角触边跳闪**：Dock 用 `position: absolute; left: 12px; top: 50%; transform: translateY(-50%)` 垂直居中（宿主是 app-shell 的 100vh 容器），`border-radius: radius.pill(999px)` 胶囊圆角 + `overflow: hidden`。当 Dock 高度接近/超过视口可用高度时，顶部或底部触到容器边缘，胶囊圆角被容器裁剪，hover 展开的宽度动画过程中边缘内容（图标 hover 背景 / 阴影）出现视觉跳动闪烁。",
-          "session_id": "opencode:ses_026074f38ffemTMaeaxlJKOcMP",
-          "agent": "Sisyphus-Junior",
-          "category": "visual-engineering",
-          "started_at": "2026-08-06T13:55:08.278Z",
-          "ended_at": "2026-08-07T02:07:57.556Z",
-          "elapsed_ms": 43969278,
-          "status": "completed",
-          "updated_at": "2026-08-07T02:07:57.556Z"
-        },
-        "todo:4": {
-          "task_key": "todo:4",
-          "task_label": "4",
-          "task_title": "Prisma schema 20 表 + 双 provider",
-          "session_id": "opencode:ses_0289e4088ffebbinEi8TBFVk1N",
-          "agent": "Sisyphus-Junior",
-          "category": "quick",
-          "updated_at": "2026-08-06T14:09:54.035Z",
-          "started_at": "2026-08-06T14:09:30.156Z",
-          "status": "completed",
-          "ended_at": "2026-08-06T14:09:54.035Z",
-          "elapsed_ms": 23879
-        },
-        "todo:8": {
-          "task_key": "todo:8",
-          "task_label": "8",
-          "task_title": "styles.ts token → tokens.ts 全量迁移",
-          "session_id": "opencode:ses_02896dafeffe2V9g32UeAR7jp0",
-          "agent": "Sisyphus-Junior",
-          "category": "quick",
-          "updated_at": "2026-08-07T00:17:21.058Z",
-          "started_at": "2026-08-06T14:12:11.254Z",
-          "status": "completed",
-          "ended_at": "2026-08-07T00:17:21.058Z",
-          "elapsed_ms": 36309804
-        },
-        "todo:9": {
-          "task_key": "todo:9",
-          "task_label": "9",
-          "task_title": "8 个共享组件迁移",
-          "session_id": "opencode:ses_0266ae550ffe6Rz99EEVWAOJIS",
-          "agent": "Sisyphus-Junior",
-          "category": "unspecified-high",
-          "updated_at": "2026-08-07T00:20:03.156Z",
-          "started_at": "2026-08-07T00:19:25.166Z",
-          "status": "completed",
-          "ended_at": "2026-08-07T00:20:03.156Z",
-          "elapsed_ms": 37990
-        },
-        "todo:10": {
-          "task_key": "todo:10",
-          "task_label": "10",
-          "task_title": "导航体系迁移（Sidebar/TopBar + App Router 路由）",
-          "session_id": "opencode:ses_0266875dcffeL3L3RN927QahBO",
-          "agent": "Sisyphus-Junior",
-          "category": "unspecified-high",
-          "updated_at": "2026-08-07T00:39:51.271Z",
-          "started_at": "2026-08-07T00:39:16.040Z",
-          "status": "completed",
-          "ended_at": "2026-08-07T00:39:51.271Z",
-          "elapsed_ms": 35231
-        },
-        "todo:11": {
-          "task_key": "todo:11",
-          "task_label": "11",
-          "task_title": "login 页迁移",
-          "session_id": "opencode:ses_0265660a3ffepghbRGvTEvQnkG",
-          "agent": "Sisyphus-Junior",
-          "category": "unspecified-high",
-          "updated_at": "2026-08-07T00:58:44.886Z",
-          "started_at": "2026-08-07T00:51:32.829Z",
-          "status": "completed",
-          "ended_at": "2026-08-07T00:58:44.886Z",
-          "elapsed_ms": 432057
-        },
-        "todo:20": {
-          "task_key": "todo:20",
-          "task_label": "20",
-          "task_title": "前后端联调（登录→项目→导航，M1）",
-          "session_id": "opencode:ses_02644e4b2ffe0VE20Owa9mwwgs",
-          "agent": "Sisyphus-Junior",
-          "category": "unspecified-high",
-          "updated_at": "2026-08-07T01:05:22.723Z",
-          "started_at": "2026-08-07T01:04:55.243Z",
-          "status": "completed",
-          "ended_at": "2026-08-07T01:05:22.723Z",
-          "elapsed_ms": 27480
-        },
-        "todo:21": {
-          "task_key": "todo:21",
-          "task_label": "21",
-          "task_title": "原型一致性验收（4 页截图对比）",
-          "session_id": "opencode:ses_026289fa0ffedbB359uFKR2QU4",
-          "agent": "Sisyphus-Junior",
-          "category": "unspecified-high",
-          "updated_at": "2026-08-07T01:49:02.358Z",
-          "started_at": "2026-08-07T01:48:30.590Z",
-          "status": "completed",
-          "ended_at": "2026-08-07T01:49:02.358Z",
-          "elapsed_ms": 31768
-        },
-        "final-wave:f1": {
-          "task_key": "final-wave:f1",
-          "task_label": "F1",
-          "task_title": "**Plan Compliance Audit** — `oracle`",
-          "session_id": "opencode:ses_026127546ffeXZjLyFZ5s36Dfk",
-          "agent": "Sisyphus-Junior",
-          "category": "unspecified-high",
-          "updated_at": "2026-08-07T02:01:51.502Z",
-          "started_at": "2026-08-07T01:55:38.635Z",
-          "status": "completed",
-          "ended_at": "2026-08-07T02:01:51.502Z",
-          "elapsed_ms": 372867
-        }
-      },
-      "ended_at": "2026-08-07T02:02:31.400Z",
-      "elapsed_ms": 43770388
-    },
-    "phase2-task-chat-fcef1cbd": {
-      "work_id": "phase2-task-chat-fcef1cbd",
-      "active_plan": "/data/git-project/aiagents/.omo/plans/phase2-task-chat.md",
-      "plan_name": "phase2-task-chat",
-      "status": "completed",
-      "started_at": "2026-08-07T02:51:11.000Z",
-      "updated_at": "2026-08-07T07:50:09.195Z",
-      "session_ids": [
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn"
-      ],
-      "session_origins": {
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct"
-      },
-      "agent": "atlas",
-      "task_sessions": {
-        "todo:1": {
-          "task_key": "todo:1",
-          "task_label": "1",
-          "task_title": "**后端**：`GET /api/v1/projects` 响应为每个项目加任务数（`taskCount`）——用 Prisma `_count: { select: { tasks: true } }` 统计该项目任务数",
-          "session_id": "opencode:ses_024d02f26ffehLBmsvFv7Oavfh",
-          "agent": "Sisyphus-Junior",
-          "category": "visual-engineering",
-          "started_at": "2026-08-07T02:56:48.065Z",
-          "ended_at": "2026-08-07T07:50:09.195Z",
-          "elapsed_ms": 17601130,
-          "status": "completed",
-          "updated_at": "2026-08-07T07:50:09.195Z"
-        },
-        "todo:13": {
-          "task_key": "todo:13",
-          "task_label": "13",
-          "task_title": "group-chat 页 /tasks/[id]",
-          "session_id": "opencode:ses_025ae5180ffeV8lvoLYcGH2K92",
-          "agent": "Sisyphus-Junior",
-          "category": "visual-engineering",
-          "updated_at": "2026-08-07T03:57:20.604Z",
-          "started_at": "2026-08-07T03:57:20.604Z",
-          "status": "running"
-        },
-        "todo:14": {
-          "task_key": "todo:14",
-          "task_label": "14",
-          "task_title": "dm-chat 页 /messages/[id]",
-          "session_id": "opencode:ses_025a0bedeffem6bzZNM3ok1oSU",
-          "agent": "Sisyphus-Junior",
-          "category": "visual-engineering",
-          "updated_at": "2026-08-07T04:28:55.479Z",
-          "started_at": "2026-08-07T04:28:55.479Z",
-          "status": "running"
-        },
-        "todo:18": {
-          "task_key": "todo:18",
-          "task_label": "18",
-          "task_title": "M2 联调（创建→启动→群聊@→SSE 回流→看板流转→断线补拉）",
-          "session_id": "opencode:ses_02583d276ffe4WU32UNxg7ryzz",
-          "agent": "Sisyphus-Junior",
-          "category": "unspecified-high",
-          "updated_at": "2026-08-07T04:48:21.698Z",
-          "started_at": "2026-08-07T04:48:21.698Z",
-          "status": "running"
-        },
-        "todo:19": {
-          "task_key": "todo:19",
-          "task_label": "19",
-          "task_title": "原型一致性验收（group-chat/dm-chat/task-board/task-create 截图对比）",
-          "session_id": "opencode:ses_0256b7ee5ffeQOWXOCfwCnPuUK",
-          "agent": "Sisyphus-Junior",
-          "category": "unspecified-high",
-          "started_at": "2026-08-07T04:53:28.464Z",
-          "status": "running",
-          "updated_at": "2026-08-07T05:17:52.166Z"
-        },
-        "todo:20": {
-          "task_key": "todo:20",
-          "task_label": "20",
-          "task_title": "构建/测试全量验证（M2 证据汇总）",
-          "session_id": "opencode:ses_02556eeafffer65tItlJXpoN8j",
-          "agent": "Sisyphus-Junior",
-          "category": "quick",
-          "updated_at": "2026-08-07T05:21:36.159Z",
-          "started_at": "2026-08-07T05:21:36.159Z",
-          "status": "running"
-        },
-        "final-wave:f1": {
-          "task_key": "final-wave:f1",
-          "task_label": "F1",
-          "task_title": "**Plan Compliance Audit** — `oracle`",
-          "session_id": "opencode:ses_0250fc792ffes2X1BrJCyyl8pq",
+          "task_title": "ACK「收到，正在处理…」（dispatch 时 acknowledge 落库，正确保留）",
+          "session_id": "opencode:ses_00c2cceb5ffePg8JbWmWaHX5bO",
           "agent": "Sisyphus-Junior",
           "category": "deep",
-          "started_at": "2026-08-07T05:24:38.874Z",
-          "status": "running",
-          "updated_at": "2026-08-07T06:38:18.854Z"
-        }
-      },
-      "ended_at": "2026-08-07T06:39:46.105Z",
-      "elapsed_ms": 13715105
-    },
-    "phase3-agent-artifacts-3ccbb238": {
-      "work_id": "phase3-agent-artifacts-3ccbb238",
-      "active_plan": "/data/git-project/aiagents/.omo/plans/phase3-agent-artifacts.md",
-      "plan_name": "phase3-agent-artifacts",
-      "status": "completed",
-      "started_at": "2026-08-07T12:37:06.373Z",
-      "updated_at": "2026-08-07T14:31:11.097Z",
-      "session_ids": [
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn"
-      ],
-      "session_origins": {
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct"
-      },
-      "agent": "atlas",
-      "task_sessions": {
-        "todo:1": {
-          "task_key": "todo:1",
-          "task_label": "1",
-          "task_title": "18 篇 §7.4 前端迁移表文档同步",
-          "session_id": "opencode:ses_023c3c5a5ffeJfa5jAAm5FQGBt",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "updated_at": "2026-08-07T12:43:54.783Z",
-          "started_at": "2026-08-07T12:43:54.783Z",
-          "status": "running"
-        },
-        "todo:5": {
-          "task_key": "todo:5",
-          "task_label": "5",
-          "task_title": "AgentsModule CRUD：POST custom + clone + PATCH（模板 403）+ available-models",
-          "session_id": "opencode:ses_023b964c4ffeYK0fYYoVufY09B",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "updated_at": "2026-08-07T12:59:01.097Z",
-          "started_at": "2026-08-07T12:59:01.097Z",
-          "status": "running"
-        },
-        "todo:7": {
-          "task_key": "todo:7",
-          "task_label": "7",
-          "task_title": "验收联动：accept 标记 accepted_flag + 409 不可变 + append 退回",
-          "session_id": "opencode:ses_023ae1a72ffe2MBJJHGZTpD6cz",
-          "agent": "Sisyphus-Junior",
-          "category": "unspecified-high",
-          "updated_at": "2026-08-07T13:10:48.000Z",
-          "started_at": "2026-08-07T13:10:48.000Z",
-          "status": "running"
-        },
-        "todo:12": {
-          "task_key": "todo:12",
-          "task_label": "12",
-          "task_title": "前端 /artifacts?pid= 产出物管理聚合页（三筛 + 列表 + 版本查看器 + 验收徽章）",
-          "session_id": "opencode:ses_02392582fffe6o4bn2tl8mxofN",
-          "agent": "Sisyphus-Junior",
-          "category": "visual-engineering",
-          "started_at": "2026-08-07T13:29:02.509Z",
-          "status": "running",
-          "updated_at": "2026-08-07T13:57:55.637Z"
-        },
-        "todo:17": {
-          "task_key": "todo:17",
-          "task_label": "17",
-          "task_title": "learnings/文档收口 + M3 证据汇总",
-          "session_id": "opencode:ses_023772cebffeRX7YroNWZNL7Hz",
-          "agent": "Sisyphus-Junior",
-          "category": "writing",
-          "updated_at": "2026-08-07T14:06:58.686Z",
-          "started_at": "2026-08-07T14:06:58.686Z",
-          "status": "running"
-        },
-        "final-wave:f1": {
-          "task_key": "final-wave:f1",
-          "task_label": "F1",
-          "task_title": "**Plan Compliance Audit** — `oracle`",
-          "session_id": "opencode:ses_02360d747ffeF7wbPf7ldda59R",
-          "agent": "Sisyphus-Junior",
-          "category": "quick",
-          "started_at": "2026-08-07T14:11:29.657Z",
-          "status": "running",
-          "updated_at": "2026-08-07T14:29:07.655Z"
-        }
-      },
-      "ended_at": "2026-08-07T14:31:11.097Z",
-      "elapsed_ms": 6844724
-    },
-    "phase4-worker-opencode-1a2b3c4d": {
-      "work_id": "phase4-worker-opencode-1a2b3c4d",
-      "plan_name": "phase4-worker-opencode",
-      "started_at": "2026-08-07T16:04:59.603913+00:00",
-      "updated_at": "2026-08-07T19:07:57.963843+00:00",
-      "status": "completed",
-      "elapsed_ms": 0,
-      "task_sessions": [],
-      "session_ids": [],
-      "session_origins": {}
-    },
-    "phase5-ops-acceptance-f149f723": {
-      "work_id": "phase5-ops-acceptance-f149f723",
-      "active_plan": "/data/git-project/aiagents/.omo/plans/phase5-ops-acceptance.md",
-      "plan_name": "phase5-ops-acceptance",
-      "status": "completed",
-      "started_at": "2026-08-08T00:16:43.028Z",
-      "updated_at": "2026-08-08T02:48:43.372Z",
-      "session_ids": [
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn"
-      ],
-      "session_origins": {
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct"
-      },
-      "agent": "atlas",
-      "task_sessions": {
-        "todo:1": {
-          "task_key": "todo:1",
-          "task_label": "1",
-          "task_title": "**任务管理页（/board）没有\"新建任务\"按钮**——原型 task-board 有（Cmd+K 操作组 :184 + 标题区应有按钮），实现页标题右侧只有\"产出物\"按钮（board/page.tsx:514-538），缺新建任务入口；且空状态\"暂无任务，创建任务后即可在看板查看\"是死胡同",
-          "session_id": "opencode:ses_020c96205ffeLU2GrTrNwprDiH",
-          "agent": "Sisyphus-Junior",
-          "category": "visual-engineering",
-          "updated_at": "2026-08-08T02:48:43.372Z",
-          "started_at": "2026-08-08T02:48:43.372Z",
-          "status": "running"
-        }
-      },
-      "ended_at": "2026-08-08T02:25:44.672Z",
-      "elapsed_ms": 7741644
-    },
-    "skills-tools-redesign-266f698a": {
-      "work_id": "skills-tools-redesign-266f698a",
-      "active_plan": "/data/git-project/aiagents/.omo/plans/skills-tools-redesign.md",
-      "plan_name": "skills-tools-redesign",
-      "status": "completed",
-      "started_at": "2026-08-08T04:09:48.475Z",
-      "updated_at": "2026-08-08T09:40:33.754Z",
-      "session_ids": [
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn",
-        "opencode:ses_01f415a0bffeCevaLR6UFke7Kd",
-        "opencode:ses_01f41414fffevLQ8Ney5Bz8CqJ",
-        "opencode:ses_01f412f06ffewhu6dB1yNrS5B2"
-      ],
-      "session_origins": {
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct",
-        "opencode:ses_01f415a0bffeCevaLR6UFke7Kd": "appended",
-        "opencode:ses_01f41414fffevLQ8Ney5Bz8CqJ": "appended",
-        "opencode:ses_01f412f06ffewhu6dB1yNrS5B2": "appended"
-      },
-      "agent": "atlas",
-      "task_sessions": {},
-      "ended_at": "2026-08-08T07:50:25.051Z",
-      "elapsed_ms": 13236576
-    },
-    "model-management-b9263bc4": {
-      "work_id": "model-management-b9263bc4",
-      "active_plan": "/data/git-project/aiagents/.omo/plans/model-management.md",
-      "plan_name": "model-management",
-      "status": "completed",
-      "started_at": "2026-08-08T14:35:02.320Z",
-      "updated_at": "2026-08-09T02:38:14.784Z",
-      "session_ids": [
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn",
-        "opencode:ses_01b9d7231ffe5Mv9y6wcXuRJ66"
-      ],
-      "session_origins": {
-        "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct",
-        "opencode:ses_01b9d7231ffe5Mv9y6wcXuRJ66": "appended"
-      },
-      "agent": "atlas",
-      "task_sessions": {
-        "todo:1": {
-          "task_key": "todo:1",
-          "task_label": "1",
-          "task_title": "`worker/src/index.ts`：",
-          "session_id": "opencode:ses_01df73a2effeOcOqIzsAo6DWLH",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "started_at": "2026-08-08T14:40:56.765Z",
-          "ended_at": "2026-08-08T16:05:09.994Z",
-          "elapsed_ms": 5053229,
+          "started_at": "2026-08-11T03:03:13.805Z",
+          "ended_at": "2026-08-12T02:40:09.715Z",
+          "elapsed_ms": 85015910,
           "status": "completed",
-          "updated_at": "2026-08-08T16:05:09.994Z"
+          "updated_at": "2026-08-12T02:40:09.715Z"
         },
         "todo:2": {
           "task_key": "todo:2",
           "task_label": "2",
-          "task_title": "增强 `docs/agent-platform/prototypes/agent-config/index.tsx` 模型区（凭据/token 输入 + provider 显示 + **首选 worker 选择**，保持 model-* testid 前缀）",
-          "session_id": "opencode:ses_01e29084dffeax80GGStK5mbmQ",
-          "agent": "Sisyphus-Junior",
-          "category": "visual-engineering",
-          "updated_at": "2026-08-08T15:39:56.769Z",
-          "started_at": "2026-08-08T15:04:15.133Z",
-          "status": "completed",
-          "ended_at": "2026-08-08T15:39:56.769Z",
-          "elapsed_ms": 2141636
-        },
-        "todo:3": {
-          "task_key": "todo:3",
-          "task_label": "3",
-          "task_title": "原型验收：md-docs 注册 + 全量走查 + 文档同步",
-          "session_id": "opencode:ses_01df76327ffeSI0n20hVbVvzh5",
+          "task_title": "阶段 2：seed keta-platform MCP 记录 + worker 注入验证（`opencode mcp list` connected）",
+          "session_id": "opencode:ses_01126c6e3ffecbjTYSapGqy5QV",
           "agent": "Sisyphus-Junior",
           "category": "deep",
-          "started_at": "2026-08-08T15:56:51.433Z",
+          "updated_at": "2026-08-11T03:32:22.161Z",
+          "started_at": "2026-08-11T03:31:17.593Z",
           "status": "completed",
-          "updated_at": "2026-08-08T16:06:18.532Z",
-          "ended_at": "2026-08-08T16:06:18.532Z",
-          "elapsed_ms": 567099
+          "ended_at": "2026-08-11T03:32:22.161Z",
+          "elapsed_ms": 64568
         },
-        "todo:6": {
-          "task_key": "todo:6",
-          "task_label": "6",
-          "task_title": "C3 目录服务：ModelsModule（CRUD + AdminGuard + worker 上报合并 + available-models 改读目录 + 集成验收）",
-          "session_id": "opencode:ses_01ddf26daffeQH1X5uGqgrcTWW",
+        "todo:4": {
+          "task_key": "todo:4",
+          "task_label": "4",
+          "task_title": "阶段 4：端到端实测（群聊 @ → agent 自主调工具 → group_post 结论；需模型凭据）",
+          "session_id": "opencode:ses_01116d21efferzG7bbhbvLZvN5",
           "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "started_at": "2026-08-08T16:22:53.890Z",
-          "status": "completed",
-          "updated_at": "2026-08-08T16:27:43.565Z",
-          "ended_at": "2026-08-08T16:27:43.565Z",
-          "elapsed_ms": 289675
-        },
-        "todo:10": {
-          "task_key": "todo:10",
-          "task_label": "10",
-          "task_title": "C6 前端模型管理页 + agent 页模型选择器（与 P0 原型 testid 全保留对齐；**支持选择已有模型 + 显示 provider + 首选 worker**）",
-          "session_id": "opencode:ses_01dcb1842ffeLeQQ9Hna4ucXIg",
-          "agent": "Sisyphus-Junior",
-          "category": "visual-engineering",
-          "started_at": "2026-08-08T16:44:33.961Z",
-          "ended_at": "2026-08-08T17:00:21.572Z",
-          "elapsed_ms": 947611,
-          "status": "completed",
-          "updated_at": "2026-08-08T17:00:21.572Z"
-        },
-        "todo:12": {
-          "task_key": "todo:12",
-          "task_label": "12",
-          "task_title": "C8 worker 默认模型配置 + worker 详情页模型卡（显示 provider + 默认模型标识）",
-          "session_id": "opencode:ses_01dbc1403ffeZI71g5txbI2ZiD",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "updated_at": "2026-08-08T16:56:19.541Z",
-          "started_at": "2026-08-08T16:56:19.540Z",
-          "status": "completed",
-          "ended_at": "2026-08-08T16:56:19.541Z",
-          "elapsed_ms": 1
+          "category": "unspecified-low",
+          "updated_at": "2026-08-11T03:48:54.134Z",
+          "started_at": "2026-08-11T03:48:54.133Z",
+          "status": "running"
         },
         "final-wave:f1": {
           "task_key": "final-wave:f1",
           "task_label": "F1",
-          "task_title": "计划符合度审计（oracle）：逐 todo 对照 Scope/IN-OUT 与用户决策（provider 显示、worker 默认模型兜底、软绑定、定向下发、模型解析优先级）",
-          "session_id": "opencode:ses_01d6706fdffegJnTCAP2yidq6f",
+          "task_title": "评审：platform-mcp 模块实现与设计一致（4 工具/归属校验/SDK 接入），单测覆盖正常+403 路径",
+          "session_id": "opencode:ses_0110f2d7affe3MKUuOpdwWvA44",
           "agent": "Sisyphus-Junior",
           "category": "ultrabrain",
-          "started_at": "2026-08-08T17:06:05.038Z",
-          "status": "running",
-          "updated_at": "2026-08-08T18:27:51.931Z"
+          "updated_at": "2026-08-11T03:53:16.434Z",
+          "started_at": "2026-08-11T03:52:58.498Z",
+          "status": "completed",
+          "ended_at": "2026-08-11T03:53:16.434Z",
+          "elapsed_ms": 17936
         }
       },
-      "ended_at": "2026-08-08T18:33:54.550Z",
-      "elapsed_ms": 14332230
+      "ended_at": "2026-08-11T03:55:55.521Z",
+      "elapsed_ms": 4770092
+    },
+    "issue-management-8ef55bae": {
+      "work_id": "issue-management-8ef55bae",
+      "active_plan": "/data/git-project/aiagents/.omo/plans/issue-management.md",
+      "plan_name": "issue-management",
+      "status": "completed",
+      "started_at": "2026-08-13T00:47:30.212Z",
+      "updated_at": "2026-08-13T02:35:12.056Z",
+      "session_ids": [
+        "opencode:ses_01431acf9ffef3Q3c3rNxWMa8h"
+      ],
+      "session_origins": {
+        "opencode:ses_01431acf9ffef3Q3c3rNxWMa8h": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "Issue 数据模型 + 迁移",
+          "session_id": "opencode:ses_00768774effeB7fKtDszoP4PT4",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-08-13T00:55:56.183Z",
+          "started_at": "2026-08-13T00:55:17.458Z",
+          "status": "completed",
+          "ended_at": "2026-08-13T00:55:56.183Z",
+          "elapsed_ms": 38725
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "task_title": "server issues 模块（CRUD + 状态流转）",
+          "session_id": "opencode:ses_00760f16cffeXieJiJf9DpoWuW",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-08-13T01:13:19.924Z",
+          "started_at": "2026-08-13T01:12:13.305Z",
+          "status": "completed",
+          "ended_at": "2026-08-13T01:13:19.924Z",
+          "elapsed_ms": 66619
+        },
+        "todo:3": {
+          "task_key": "todo:3",
+          "task_label": "3",
+          "task_title": "内置 issue MCP 工具 + 全局提示词",
+          "session_id": "opencode:ses_007510e5cffexpvIMwBRYz6fXW",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-08-13T01:44:22.651Z",
+          "started_at": "2026-08-13T01:31:42.151Z",
+          "status": "completed",
+          "ended_at": "2026-08-13T01:44:22.651Z",
+          "elapsed_ms": 760500
+        },
+        "todo:5": {
+          "task_key": "todo:5",
+          "task_label": "5",
+          "task_title": "端到端验证",
+          "session_id": "opencode:ses_0073474a2ffepLh5eBDp0Ssfka",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-08-13T02:03:55.135Z",
+          "started_at": "2026-08-13T02:03:18.689Z",
+          "status": "completed",
+          "ended_at": "2026-08-13T02:03:55.135Z",
+          "elapsed_ms": 36446
+        },
+        "final-wave:f1": {
+          "task_key": "final-wave:f1",
+          "task_label": "F1",
+          "task_title": "Plan compliance audit（对照本计划逐项核对：schema/模块/MCP 工具/提示词/管理页/端到端全部落地，范围外未混入）",
+          "session_id": "opencode:ses_00722d6a1ffeC4o3yN0Mgc35P4",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-08-13T02:12:28.435Z",
+          "started_at": "2026-08-13T02:09:14.051Z",
+          "status": "completed",
+          "ended_at": "2026-08-13T02:12:28.435Z",
+          "elapsed_ms": 194384
+        },
+        "final-wave:f3": {
+          "task_key": "final-wave:f3",
+          "task_label": "F3",
+          "task_title": "Real manual QA（真实 UI 走一遍创建→指派→流转→删除，截图留档）",
+          "session_id": "opencode:ses_0071b41e4ffez6P5Q4bfJKpzzc",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-08-13T02:34:12.160Z",
+          "started_at": "2026-08-13T02:15:43.124Z",
+          "status": "completed",
+          "ended_at": "2026-08-13T02:34:12.160Z",
+          "elapsed_ms": 1109036
+        }
+      },
+      "ended_at": "2026-08-13T02:35:12.056Z",
+      "elapsed_ms": 6461844
     }
   },
-  "active_plan": "/data/git-project/aiagents/.omo/plans/model-management.md",
-  "started_at": "2026-08-08T14:35:02.320Z",
+  "active_plan": "/data/git-project/aiagents/.omo/plans/issue-management.md",
+  "started_at": "2026-08-13T00:47:30.212Z",
   "status": "completed",
-  "updated_at": "2026-08-09T02:38:14.784Z",
+  "updated_at": "2026-08-13T02:35:12.056Z",
   "session_ids": [
-    "opencode:ses_02ad3f64dffeH0vEIATllKlxTn",
-    "opencode:ses_01b9d7231ffe5Mv9y6wcXuRJ66"
+    "opencode:ses_01431acf9ffef3Q3c3rNxWMa8h"
   ],
   "session_origins": {
-    "opencode:ses_02ad3f64dffeH0vEIATllKlxTn": "direct",
-    "opencode:ses_01b9d7231ffe5Mv9y6wcXuRJ66": "appended"
+    "opencode:ses_01431acf9ffef3Q3c3rNxWMa8h": "direct"
   },
-  "plan_name": "model-management",
+  "plan_name": "issue-management",
   "task_sessions": {
     "todo:1": {
       "task_key": "todo:1",
       "task_label": "1",
-      "task_title": "`worker/src/index.ts`：",
-      "session_id": "opencode:ses_01df73a2effeOcOqIzsAo6DWLH",
+      "task_title": "Issue 数据模型 + 迁移",
+      "session_id": "opencode:ses_00768774effeB7fKtDszoP4PT4",
       "agent": "Sisyphus-Junior",
       "category": "deep",
-      "started_at": "2026-08-08T14:40:56.765Z",
-      "ended_at": "2026-08-08T16:05:09.994Z",
-      "elapsed_ms": 5053229,
+      "updated_at": "2026-08-13T00:55:56.183Z",
+      "started_at": "2026-08-13T00:55:17.458Z",
       "status": "completed",
-      "updated_at": "2026-08-08T16:05:09.994Z"
+      "ended_at": "2026-08-13T00:55:56.183Z",
+      "elapsed_ms": 38725
     },
     "todo:2": {
       "task_key": "todo:2",
       "task_label": "2",
-      "task_title": "增强 `docs/agent-platform/prototypes/agent-config/index.tsx` 模型区（凭据/token 输入 + provider 显示 + **首选 worker 选择**，保持 model-* testid 前缀）",
-      "session_id": "opencode:ses_01e29084dffeax80GGStK5mbmQ",
+      "task_title": "server issues 模块（CRUD + 状态流转）",
+      "session_id": "opencode:ses_00760f16cffeXieJiJf9DpoWuW",
       "agent": "Sisyphus-Junior",
-      "category": "visual-engineering",
-      "updated_at": "2026-08-08T15:39:56.769Z",
-      "started_at": "2026-08-08T15:04:15.133Z",
+      "category": "deep",
+      "updated_at": "2026-08-13T01:13:19.924Z",
+      "started_at": "2026-08-13T01:12:13.305Z",
       "status": "completed",
-      "ended_at": "2026-08-08T15:39:56.769Z",
-      "elapsed_ms": 2141636
+      "ended_at": "2026-08-13T01:13:19.924Z",
+      "elapsed_ms": 66619
     },
     "todo:3": {
       "task_key": "todo:3",
       "task_label": "3",
-      "task_title": "原型验收：md-docs 注册 + 全量走查 + 文档同步",
-      "session_id": "opencode:ses_01df76327ffeSI0n20hVbVvzh5",
+      "task_title": "内置 issue MCP 工具 + 全局提示词",
+      "session_id": "opencode:ses_007510e5cffexpvIMwBRYz6fXW",
       "agent": "Sisyphus-Junior",
       "category": "deep",
-      "started_at": "2026-08-08T15:56:51.433Z",
+      "updated_at": "2026-08-13T01:44:22.651Z",
+      "started_at": "2026-08-13T01:31:42.151Z",
       "status": "completed",
-      "updated_at": "2026-08-08T16:06:18.532Z",
-      "ended_at": "2026-08-08T16:06:18.532Z",
-      "elapsed_ms": 567099
+      "ended_at": "2026-08-13T01:44:22.651Z",
+      "elapsed_ms": 760500
     },
-    "todo:6": {
-      "task_key": "todo:6",
-      "task_label": "6",
-      "task_title": "C3 目录服务：ModelsModule（CRUD + AdminGuard + worker 上报合并 + available-models 改读目录 + 集成验收）",
-      "session_id": "opencode:ses_01ddf26daffeQH1X5uGqgrcTWW",
+    "todo:5": {
+      "task_key": "todo:5",
+      "task_label": "5",
+      "task_title": "端到端验证",
+      "session_id": "opencode:ses_0073474a2ffepLh5eBDp0Ssfka",
       "agent": "Sisyphus-Junior",
       "category": "deep",
-      "started_at": "2026-08-08T16:22:53.890Z",
+      "updated_at": "2026-08-13T02:03:55.135Z",
+      "started_at": "2026-08-13T02:03:18.689Z",
       "status": "completed",
-      "updated_at": "2026-08-08T16:27:43.565Z",
-      "ended_at": "2026-08-08T16:27:43.565Z",
-      "elapsed_ms": 289675
-    },
-    "todo:10": {
-      "task_key": "todo:10",
-      "task_label": "10",
-      "task_title": "C6 前端模型管理页 + agent 页模型选择器（与 P0 原型 testid 全保留对齐；**支持选择已有模型 + 显示 provider + 首选 worker**）",
-      "session_id": "opencode:ses_01dcb1842ffeLeQQ9Hna4ucXIg",
-      "agent": "Sisyphus-Junior",
-      "category": "visual-engineering",
-      "started_at": "2026-08-08T16:44:33.961Z",
-      "ended_at": "2026-08-08T17:00:21.572Z",
-      "elapsed_ms": 947611,
-      "status": "completed",
-      "updated_at": "2026-08-08T17:00:21.572Z"
-    },
-    "todo:12": {
-      "task_key": "todo:12",
-      "task_label": "12",
-      "task_title": "C8 worker 默认模型配置 + worker 详情页模型卡（显示 provider + 默认模型标识）",
-      "session_id": "opencode:ses_01dbc1403ffeZI71g5txbI2ZiD",
-      "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-08-08T16:56:19.541Z",
-      "started_at": "2026-08-08T16:56:19.540Z",
-      "status": "completed",
-      "ended_at": "2026-08-08T16:56:19.541Z",
-      "elapsed_ms": 1
+      "ended_at": "2026-08-13T02:03:55.135Z",
+      "elapsed_ms": 36446
     },
     "final-wave:f1": {
       "task_key": "final-wave:f1",
       "task_label": "F1",
-      "task_title": "计划符合度审计（oracle）：逐 todo 对照 Scope/IN-OUT 与用户决策（provider 显示、worker 默认模型兜底、软绑定、定向下发、模型解析优先级）",
-      "session_id": "opencode:ses_01d6706fdffegJnTCAP2yidq6f",
+      "task_title": "Plan compliance audit（对照本计划逐项核对：schema/模块/MCP 工具/提示词/管理页/端到端全部落地，范围外未混入）",
+      "session_id": "opencode:ses_00722d6a1ffeC4o3yN0Mgc35P4",
       "agent": "Sisyphus-Junior",
-      "category": "ultrabrain",
-      "started_at": "2026-08-08T17:06:05.038Z",
-      "status": "running",
-      "updated_at": "2026-08-08T18:27:51.931Z"
+      "category": "deep",
+      "updated_at": "2026-08-13T02:12:28.435Z",
+      "started_at": "2026-08-13T02:09:14.051Z",
+      "status": "completed",
+      "ended_at": "2026-08-13T02:12:28.435Z",
+      "elapsed_ms": 194384
+    },
+    "final-wave:f3": {
+      "task_key": "final-wave:f3",
+      "task_label": "F3",
+      "task_title": "Real manual QA（真实 UI 走一遍创建→指派→流转→删除，截图留档）",
+      "session_id": "opencode:ses_0071b41e4ffez6P5Q4bfJKpzzc",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-08-13T02:34:12.160Z",
+      "started_at": "2026-08-13T02:15:43.124Z",
+      "status": "completed",
+      "ended_at": "2026-08-13T02:34:12.160Z",
+      "elapsed_ms": 1109036
     }
   },
   "agent": "atlas",
-  "ended_at": "2026-08-08T18:33:54.550Z",
-  "elapsed_ms": 14332230
+  "ended_at": "2026-08-13T02:35:12.056Z",
+  "elapsed_ms": 6461844
 }

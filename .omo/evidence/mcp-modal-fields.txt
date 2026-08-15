@@ -1,0 +1,57 @@
+MCP 服务器编辑界面字段缺失问题修复 — 验证证据
+=================================================
+
+变更：McpServerModal local 表单结构化（web/app/(main)/skills/page.tsx）
+- command 命令片段行列表（可增删，提交拼 string[]）
+- cwd 工作目录（可选）
+- environment 键值对列表（key/value 两列可增删，提交转对象）
+- timeout 超时 ms（可选）
+- create/edit/view 三模式复用同一套字段；view 只读展示同结构
+- 兼容旧数据：parseLocalCommand 防御反解（command 非数组→空行 / environment 非对象→空）
+
+1. 静态验证
+----------------------------------------
+- `cd web && npx tsc --noEmit` → 0 错误（无输出）
+- `npm run build` → 通过（/skills 页面产物正常生成）
+- `docker-compose up -d --build web` → 部署成功，:13001 /login 200
+
+2. Playwright 手动验证（admin/admin123，:13001 /skills → 工具 Tab → MCP 子 Tab）
+----------------------------------------
+[验证点 1] 点 npx_gitee-ent「编辑」→ 弹窗显示结构化字段：
+  - command 行：npx / -y / @gitee/mcp-gitee-ent@latest（3 行，反解回填）
+  - cwd：空 / environment：空（仅有「＋ 添加环境变量」按钮）/ timeout：空
+  → 编辑复用新建界面 ✓
+  （截图 mcp-edit-struct-fields.png / mcp-edit-full.png）
+
+[验证点 2] 填 environment 2 个键值对（GITEE_TOKEN=test-token-123、
+  GITEE_BASE_URL=https://gitee.com）+ timeout=60 → 保存 →
+  API 实证 command.environment={...} command.timeout=60 持久化：
+  ```json
+  {"command":["npx","-y","@gitee/mcp-gitee-ent@latest"],"timeout":60,
+   "environment":{"GITEE_TOKEN":"test-token-123","GITEE_BASE_URL":"https://gitee.com"}}
+  ```
+  → PERSISTENCE OK ✓（截图 mcp-edit-env-filled.png）
+
+[验证点 3] 再打开编辑 → 字段正确回填：
+  cmd0=npx cmd1=-y cmd2=@gitee/mcp-gitee-ent@latest
+  envK0=GITEE_TOKEN envV0=test-token-123 envK1=GITEE_BASE_URL envV1=https://gitee.com
+  timeout=60 → REFILL OK ✓（截图 mcp-edit-refill.png）
+
+[验证点 4] 新建 test-mcp-srv → 同表单填 command 行（npx/-y/@gitee/mcp-test@latest）
+  + environment（FOO=bar）+ timeout=30 → 创建成功，API 实证：
+  command={command:["npx","-y","@gitee/mcp-test@latest"],timeout:30,environment:{FOO:"bar"}}
+  → CREATE OK ✓；点「查看」→ 只读展示同结构：
+  command 3 行 / cwd=— / env FOO=bar / timeout=30 / 启用 → VIEW OK ✓
+  （截图 mcp-view-mode.png）
+
+[验证点 5] 清理：
+  - 删除测试 server test-mcp-srv（DELETE 200，列表恢复 keta-platform / npx_gitee-ent）
+  - 恢复 npx_gitee-ent command 为原始 {command:[...]}（移除验证用 env/timeout）
+
+3. 回归
+----------------------------------------
+- remote 类型：keta-platform 编辑 → url + headers JSON 正确回填，无 command 行 ✓
+- 启用/停用：keta-platform_chat_history 停用（API enabled=False）→ 启用
+  （API enabled=True）→ TOGGLE REGRESSION OK ✓
+
+结论：全部验证点通过。

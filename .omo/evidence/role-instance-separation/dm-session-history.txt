@@ -1,0 +1,80 @@
+DM 私聊历史数据源改造：serve 会话完整历史（含 agent 思考/工具调用）
+=====================================================================
+日期：2026-08-14
+任务：私聊历史主数据源从平台 messages 表 → opencode serve 会话（GET /session/{id}/message）
+
+一、改动内容
+===========
+后端（server）
+- GET /channels/:id/session-history 新端点（chat.controller.ts）
+  · 权限复用 resolveChannelAccess（404/403 同 findMessages）
+  · 仅 private 频道支持（task_group → 400 SESSION_HISTORY_NOT_SUPPORTED）
+- ChatService.getSessionHistory（chat.service.ts）
+  · private + Session(taskId+taskAgentId) 已绑定 worker+instanceRef → workerClient.getMessages
+    拉 serve 全量 → convertSessionMessages 转换 → {items, source:'session'}（全量，无游标）
+  · 未绑定（created 态）/ 无 taskAgentId / worker 不存在 / 拉取异常 → 回退平台表
+    {items, nextCursor, source:'db'}（读历史不因 worker 异常阻塞）
+- convertSessionMessages 转换（serve → 平台消息 DTO，前端零改动复用 MsgParts）
+  · 排序：serve info.time.created 升序（缺失用会话创建时间）
+  · user 消息：senderType=user/senderId=null；content.text=非 synthetic text 聚合；
+    parts 仅保留 text（prompt 注入 synthetic 剔除）
+  · assistant 消息：senderType=agent/senderId=频道模板 agent id/senderInstanceId=taskAgentId；
+    parts 保留 text/reasoning/tool（前端思考折叠+工具卡片），step-start/step-finish 等过滤
+  · status：serve 历史消息 step-finish 不总是持久化（实测）→ 历史 assistant 一律 sent；
+    仅最后一条 assistant 无 step-finish 标 processing（会话末尾可能仍在流式）
+  · id：serve 消息 id（msg_ 前缀）或合成 ses-<序号>（稳定）
+  · createdAt：serve info.time.created（毫秒）转 ISO
+
+前端（web/app/(main)/messages/[id]/page.tsx）
+- fetchChannelMessages：private 频道 → GET session-history（source=session 全量返回
+  nextCursor=null 不再加载更多；source=db 回退 findMessages）；task_group → findMessages 不变
+- mergeSnapshotWithLive：初始快照（serve 消息 id=msg_/ses-）与 SSE 增量（平台消息 id=m_）
+  去重合并——SSE agent 消息若快照存在同 sender 的 processing assistant → 替换（不做双重渲染）；
+  其余正常追加；按 createdAt 时间正序
+- historySettled 收敛改用合并后消息（快照未完成被 SSE 终态替换后不误判 processing）
+
+二、自动化验证
+=============
+- server: npx tsc --noEmit 通过；npm test 55 suites / 1156 tests 全过
+  · chat.service.spec 新增 9 个 getSessionHistory 用例（含转换映射/回退/400/403）
+- web: npx tsc --noEmit 通过；npm run build 成功
+
+三、真实链路实证（本地 compose，:13000/:13001）
+============================================
+场景：task t_0000000013「用户路径回归-actor-user」PM 私聊 c_0000000036
+
+修复前（平台 messages 表）：13 条（全部 agent 终态回复，无思考/工具 parts，无用户消息）
+修复后（serve 会话历史）：66→68 条，含
+  - 用户消息（【任务上下文】注入 + 用户文本）
+  - assistant 思考 parts（reasoning）→ 前端 39-40 个「已思考 · 点击展开 ▸」折叠卡片
+  - assistant 工具调用 parts（tool，keta-platform_task_context 等）→ 17 处工具引用渲染
+  - 完整正文（巡检结果等）
+
+1. 新端点验证：GET /channels/c_0000000036/session-history
+   → {"source":"session","items":68,"nextCursor":null}；processing=0、sent=68
+2. 发新私聊消息 m_0000000512（带 mention a_project_manager/ta_0000000042）→ dispatched
+   → agent 回复「测试收到。本 DM 会话中我看到的整体历程与关键消息如下…」
+   （证明 agent 上下文 = serve 完整 DM 会话）
+   → 重新拉 session-history：68 条，含新轮次（serve id msg_0003aaada / msg_0003aab6）
+3. 断连重进（浏览器刷新重进 /messages/c_0000000036）：
+   → 历史完整保留（40 个思考折叠块 + 最新消息「DM 会话历史验证…」在底部）✅
+4. 思考折叠交互：点击「已思考 · 点击展开 ▸」→ 变为「▾ 收起」并展示 reasoning 文本
+   （"Completely static. Same status. I'll give the concise report."）✅
+5. 群聊回归：
+   · 后端：GET /channels/<task_group>/session-history → 400 SESSION_HISTORY_NOT_SUPPORTED
+   · 前端群聊页（tasks/t_0000000013）：仍调 GET /channels/c_0000000035/messages?limit=50
+     （平台表），未调用 session-history ✅
+6. 前端控制台无 error；网络请求确认私聊页调用 /channels/c_0000000036/session-history => 200
+
+截图（.omo/evidence/role-instance-separation/）：
+- dm-session-history-top.png    私聊页顶部（思考折叠卡片/工具调用/消息正文）
+- dm-session-history-bottom.png 私聊页底部（最新轮次）
+- dm-thinking-expanded.png      思考折叠展开（reasoning 文本）
+
+四、风险与说明
+=============
+- 私聊用户消息显示 serve 原始 prompt 形态（【任务上下文】+用户文本，serve 单 text part
+  未拆 synthetic），与改造前私聊行为一致，非本次回归；如需纯净展示可后续在转换层
+  剥离注入前缀（本期不做，保持 serve 语义透传）
+- session-history 全量返回不参与游标分页；消息量大时建议后续按需截断（当前会话规模可控）
+- worker 不可达时自动回退平台表（历史降级可读，不阻塞）

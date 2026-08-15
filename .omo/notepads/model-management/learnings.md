@@ -1060,3 +1060,262 @@ Tags: CONF-01, fake-models, syncFromWorkerCapabilities, resolveModels, stability
 - **经验**：① SSE 首连「不传 since = 全量重放」是隐患——历史事件数量随运行时间线性增长，重放进 React Query 桥（invalidateQueries）会放大成请求风暴；「历史走 REST、SSE 只做增量」的原则下首连必须显式携带游标；② 断线补拉（since=<lastId>）与首连跳过历史（since=latest）是两个正交语义，前者对离线恢复有价值，后者是默认增量策略，二者可共存于同一 `since` 参数（特殊值 latest 不破坏既有游标语义）；③ 单例连接池的**连接级选项**（skipHistory）由首个订阅者决定、后订阅者共享，是比「每个订阅者各连各的」更省资源的正确粒度。
 
 Tags: SSE, realtime, history-replay, since=latest, skipHistory, request-storm, invalidateQueries
+
+---
+
+## 群聊 @agent 回复落 DM 修复（2026-08-10，代码 + tsc + 单 spec 验证完成，未部署）
+
+- **问题（用户实测）**：用户在**任务群聊频道**（type=task_group）发 @agent 消息，agent 回复**落到私聊频道（DM）**而非群聊。
+- **根因**：`handleTaskCompleted` 落库时 `resolveChannel(taskId, agentId)` **优先返回 taskId+agentId 唯一索引的私聊频道**（`chatChannel.findUnique({ taskId_agentId })`），找不到才回退群聊（findFirst taskId+type=task_group）。用户在任务上创建过私聊后，所有回复都进 DM。`DispatchRequest.channelId`（消息来源频道）在 dispatch 入口有值，但 `dispatch → dispatchForTarget → pollForCompletion → handlePolledCompletion → handleTaskCompleted` 链路**完全没有传递**，回流时只能靠 taskId+agentId 猜测频道。
+- **修复（channelId 透传 + resolveChannel preferredChannelId 群聊优先）**：
+  1. `TaskCompletedPayload` 加可选 `channelId?: string`（ingress 回调路径 worker 不上报，缺省保持现状 DM 优先）。
+  2. `dispatchForTarget` 把 `request.channelId` 传入 `pollForCompletion`（新增 `channelId?: string` 参数）→ 经 `handlePolledCompletion` 透传给 `handleTaskCompleted` payload。
+  3. `resolveChannel(taskId, agentId, preferredChannelId?)`：`preferredChannelId` 存在且该频道 `taskId` 匹配（`chatChannel.findUnique({ id })` 校验，防串频道）→ **直接返回它（群聊优先于 DM）**；否则回退现状（DM → 群聊）。
+- **测试**：worker-dispatcher.spec 新增 3 例——① 群聊场景完整 dispatch 轮询链路：request.channelId 为群聊且 taskId 匹配、DM 存在 → 落群聊且**不执行 taskId_agentId 查询**；② 防御：preferredChannelId 存在但 taskId 不匹配 → 回退 DM；③ payload 无 channelId（ingress 回调路径）→ 不查 preferred，DM 优先（现状不变）。既有「私聊优先」等用例零改动（payload 无 channelId 时不触发 preferred 分支）。
+- **验证**：`cd server && npx tsc --noEmit` **0 错误**；`npx jest src/chat/worker-dispatcher.spec.ts` **56/56 全绿**（基线 53 + 新增 3）；`npx jest src/workers/worker-event.ingress.spec.ts` **23/23 全绿**（ingress 仅加接口字段，零逻辑改动）。未 docker build / 未部署（遵守执行范围）。
+- **经验**：① 真实分派链路（poll 回流）是用户实际触发的生产路径，回流传参应携带**消息来源频道**而非靠 taskId+agentId 猜测——channelId 是 dispatch 入口已有的权威信息，透传链路补齐即可；② preferredChannelId 命中必须校验 taskId 一致（防用户切到别的任务频道后该频道 id 误复用）；③ ingress task.completed 回调路径（worker 不上报 channelId）保持无 preferred 行为不变，两路径语义隔离。
+
+Tags: worker-dispatcher, resolveChannel, task_group, DM, channelId, poll-replay
+
+---
+
+## 群聊历史注入：@agent 携带来源频道历史（2026-08-10，代码 + tsc + 单 spec 验证完成，未部署）
+
+- **问题（用户实测）**：群聊里发了很多**不 @agent** 的消息后再 @agent，agent **看不到之前群聊讨论内容**——`dispatchForTarget` 构建 prompt 时只有 `doclib + request.text`（当前触发消息），完全不携带频道历史。
+- **根因**：dispatch 时 prompt 上下文 = doclib（产出物）+ 当前消息文本，历史消息（含未 @agent 的群聊讨论）从未被查询/注入。
+- **修复（来源频道历史注入，仅 server 侧 prompt 文本组装，消息传输契约不变）**：
+  1. 新增 `DEFAULT_CHAT_HISTORY_MAX_BYTES = 32KB`（公开常量，env `CHAT_HISTORY_MAX_BYTES` 可配，公开字段 `chatHistoryMaxBytes` 便于测试）。
+  2. 新增 `buildChatHistoryContext(channelId, excludeMessageId)`：`prisma.message.findMany({ where: { channelId, status: 'sent', NOT: { id: excludeMessageId } }, orderBy: { createdAt: 'asc' } })` → 每条取 `content.text`（用户=正文；agent=已排除 reasoning 的结论性文本，落库时 text 已由 aggregateText 生成）→ 标注发言者（用户/Agent/系统）→ 按时间升序拼接为 `[群聊历史消息]\n用户: xxx\nAgent: xxx\n...` 块。
+  3. 注入顺序：doclib 在前、历史块在后、`request.text` 最后（`promptBlocks.join('\n\n')`）；**两段皆空 → prompt 保持 `request.text` 现状**（空历史不注入，既有行为不变）。
+  4. 截断：按条累加字节 + 总量 32KB 截断（首条即超限 → 单条 truncateUtf8 保前缀；否则停止追加保留已有前缀），与 doclib 截断语义对齐。
+  5. 防御：循环内再按 `id === excludeMessageId` 过滤一次（查询 NOT 在 mock 场景不生效）；`content.text` 缺失/非字符串/非对象 → 跳过不抛错。
+- **测试**：worker-dispatcher.spec 新增 5 例——① 2 条历史（用户+agent）+ 1 条当前消息混入 → prompt 含历史块、`用户: <历史>`, `Agent: <回复>`、`request.text` 在历史之后，且**不含当前触发消息内容**；② 历史 mock 含触发消息 → 不注入；③ 空历史 → prompt 恰等于 `request.text`，且断言 findMany 查询条件（channelId + sent + NOT id + 时间升序）；④ 超长历史（config 上限 100 字节）→ 保前缀丢弃后续条目；⑤ content.text 缺失/非对象 → 跳过不抛错，正常消息仍注入。既有 56 例零改动（beforeEach 默认 `findMany → []` 空历史保持现状行为）。
+- **验证**：`cd server && npx tsc --noEmit` **0 错误**；`npx jest src/chat/worker-dispatcher.spec.ts` **61/61 全绿**（基线 56 + 新增 5）。未 docker build / 未部署（遵守执行范围）。
+- **经验**：① 群聊历史是 prompt 组装层面的纯 server 侧增强——不用动 WorkerClient/promptAsync/ingress（消息传输契约不变），只在 dispatch 拼 prompt 时注入；② 注入顺序「doclib → 历史 → 当前消息」与既有 `doclib + request.text` 拼接风格兼容，空历史退化为原样，天然不破坏既有行为；③ content.text 已是结论性文本（agent 落库时 reasoning/synthetic 已被 aggregateText 排除），历史注入无需额外过滤思考消息。
+
+Tags: worker-dispatcher, chat-history, prompt-injection, task_group, truncateUtf8
+
+---
+
+## 流式 delta 累积落库 + session 状态机扩展（2026-08-10，代码 + 双 spec 验证完成，未部署）
+
+- **问题（需求）**：Phase 4 方案 A（worker 主动推）要求 server 侧处理 `message.part.delta` 流式中间态——此前 ingress 明确「忽略」（D2 流式中间态不进统一事件流）；且 SESSION_STATUS 缺执行中/空闲状态值（只有 created/active/frozen/archived）。
+- **实现（worker-event.ingress.ts + event.constants.ts + worker-dispatcher.ts）**：
+  1. **`message.part.delta` 处理**：新增 `MessagePartDeltaPayload`（`{taskId, agentId, sessionId, channelId, parts, status:'streaming'}`）→ `handleMessagePartDelta`：解析 channelId → 查 `chatChannel.type`；**private 全量 parts 落库（含 reasoning/tool），task_group 只累积结论性 parts**（`type==='text' && !synthetic`，`extractConclusionParts` 过滤）→ 按该会话最新一条 `status=processing` 的 agent 消息**累积更新 content**（parts 追加 + text 经 `concatText` 重新拼接）；无 processing 消息 → 新建（status=processing）→ 广播 `MESSAGE_PART_DELTA`（payload `{message: toMessageDto(最新), delta: 本次新增}`，scope=channel）。
+  2. **SESSION_STATUS 增加 `running`/`idle`**：`mapSessionStatus` 用 `Object.values(SESSION_STATUS)` 白名单自动支持新值，`handleSessionUpdated` 已按 status 落库 + 广播，零额外改动。
+  3. **task.completed 终态化**：`handleTaskCompleted` 在 resolveChannel 后**先查 processing 消息**——存在 → `message.update` 为 `status=sent` + 内容最终化（避免双消息：收到确认 + 流式内容两处落库）；不存在（无 delta 直接完成）→ 走现有 `message.create` 落库路径（兼容）。
+- **关键设计（历史教训驱动）**：**不每 delta 落一条新消息**——按 `channelId + senderType=agent + status=processing` 定位流式消息（Message 表**无 sessionId 列**，以 channelId+senderId 唯一定位，同 agent 在频道内同时仅一条流式消息），聚合累积防撑爆 DB。
+- **测试**：ingress.spec 新增 6 例（private 全量含 reasoning / task_group 过滤 / 同会话两次 delta 累积不新建 / 纯 reasoning 跳过 / agentId 缺失反查 Session / running·idle 新状态）→ **29/29 全绿**（基线 23 + 6）；worker-dispatcher.spec 新增终态化 1 例（processing→sent 不 create、广播 + emitFinal 用终态化消息）→ **62/62 全绿**（基线 61 + 1）。
+- **验证**：`cd server && npx tsc --noEmit` 中**本任务 4 文件 0 错误**（整体仍有并行会话 agents.service.ts/chat.service.ts 的 `ackMessage` 中间态错误——schema 已加字段但 Prisma client 未重新生成，非本任务文件，不代改）；`npx jest src/workers/worker-event.ingress.spec.ts` + `npx jest src/chat/worker-dispatcher.spec.ts` 全绿。未 docker build / 未部署。
+- **经验**：① 流式中间态落库走 ingress（worker 主动推的 delta 事件），终态化走 WorkerDispatcher（task.completed 回调）——分工清晰：delta 累积归事件入口，终态确认归 D5 落库归口，避免双写；② `toMessageDto` 在 ingress/worker-dispatcher 各持一份（私有方法不跨文件复用），payload 广播形状与 `chat.message.new` 一致（`{message, ...}`）；③ Message 无 sessionId 列是约束而非缺陷——用 channelId+senderId 定位流式消息，语义等价「该 agent 在该会话（频道）的流式消息」。
+
+Tags: message.part.delta, streaming, processing, session-status, running, idle, task.completed, finalize, worker-event-ingress
+
+---
+
+## T10-A: worker 执行端点 + 事件上送接线（2026-08-10，实现 + 测试完成）
+
+- **目标（方案 A worker 主动推）**：worker 新增 HTTP 执行端点 POST /execute（node:http 内置，不引依赖），server 下发 prompt → worker 驱动 serve → 事件主动上送（session.updated/message.part.delta/agent.status/task.completed）→ server 只消费事件落库 + SSE 推送。
+- **新模块 `worker/src/exec/exec-server.ts`（ExecServer）**：
+  - `start()` 监听 `WORKER_EXEC_PORT`（config.workerExecPort，默认 4198），bind 0.0.0.0；`boundPort`/`isRunning` getter；`stop()` 优雅关闭（在途执行不中断）。
+  - 请求校验：非 `/execute` → 404、非 POST → 405、body 超 `maxBodyBytes`（默认 1MB）→ 413、非法 JSON → 400、缺 `prompt` → 400；合法 → **立即 202 `{accepted:true}`** + fire-and-forget `void this.runExecution(payload)`。
+  - 请求体：`{taskId?, agentId?, channelId?, sessionId?, prompt: string|parts[], model?: {providerID, modelID}, agent?, directory?}`——`sessionId` = opencode 会话 id（复用 serve 会话；缺省 `driver.createSession` 新建，**端点按 opencodeSessionId 区分，serve 单实例多会话并发安全**）。
+  - `runExecution`：`trackInstanceStart()` → 无会话先 createSession → `send(session.updated, {..., status:'running'})` → `sendAndAwait`（sendMessage + awaitCompletion，**onPoll 钩子内 `MessageDeltaTracker` 增量上送 message.part.delta `{..., parts: 新出现, status:'streaming'}`**）→ `send(session.updated, {..., status:'idle'})` + `send(task.completed, {taskId, agentId, sessionId, text, parts, tokens?, cost?})`；失败/超时 → `send(agent.status, {..., status:'error', error})` + `send(session.updated, {..., status:'failed'})`；`finally { trackInstanceEnd() }`（所有错误路径收敛，不 unhandled rejection）。
+- **`driver/prompt-await.ts` 新增 `MessageDeltaTracker`**（不改 awaitCompletion 语义，保留超时 abort + 聚合）：按消息 id 去重，`extractNewParts(messages)` 只返回未上送过的消息的 parts（serve 轮询返回**累积列表**，同 id 消息后续轮询被粗粒度跳过——任务约定按消息 id 对比只送新增）；`reset()` 供多轮执行复用隔离。
+- **`index.ts` 接线**：
+  - `buildCapabilities(port, advertiseHost, injected, models, execPort?)`——execPort 有值才携带（undefined 不报，server 不连不可用端点）；`buildRegisterOptions` 加 `execPort?` 参数**直接透传**（⚠️ 不能给默认参数 `= config.workerExecPort`：TS 默认参数对显式传 undefined 也生效，无法区分「未传」与「显式 undefined」——main() 显式注入闭包变量 execPort）。
+  - main()：eventSender 之后创建 ExecServer；serve 启动后、注册前 `execServer.start()`——成功 → execPort=bound；**失败仅记 warn + execPort=undefined（不阻断 serve/注册/心跳主链）**；注册/reRegister 随 buildRegisterOptions 上报 execPort；优雅退出 shutdown 中 `await execServer.stop()`（stop 在 flush 事件后、stop serve 前）。
+- **config.ts**：`workerExecPort`（WORKER_EXEC_PORT，parseNonNegativeInt 默认 4198）；**`.env.example`** 补说明。
+- **测试**：exec-server.spec.ts 8 例（202+驱动 serve mock、复用 sessionId 不 createSession、事件按序 running→delta(增量去重)→idle→task.completed、超时→error+failed+abort、createSession 失败→error+failed+归零、trackInstance 执行期间=1 完成归零、404/405/400 校验）；prompt-await.spec 增补 MessageDeltaTracker 5 例；index.spec 增补 execPort 4 例（buildCapabilities 携带/不携带、buildRegisterOptions 透传/undefined 覆盖）。**验证**：worker `tsc --noEmit` 0 错误 + `npm run build` 通过 + jest **18 suites / 230 tests 全绿**。
+- **经验**：① 事件上送顺序由「send 包装同步 push」保证（mock 中 send 第一行 push 再 await 发送），running/delta/idle/completed 顺序在单测可稳定断言；② 超时路径 onPoll 会先上送 delta（step-start），终态断言需过滤 message.part.delta；③ `jest.fn().mockResolvedValue(x)` 会被推断为具体函数签名，要链式 mockResolvedValueOnce 需 `jest.fn() as jest.Mock` 声明且默认 mockResolvedValue 不能丢（否则 getMessages 返回 undefined → mergeMessages 崩）。
+- **遗留（对齐 server 侧任务 4）**：事件 payload 的 sessionId 目前上送 opencode 会话 id（ses_ 前缀），server ingress 经 Session.instanceRef 反查映射平台 Session 主键（F2 MINOR 已实现）；若 server dispatch 传平台 s_ 主键需 worker 透传（worker 侧已含 channelId/taskId/agentId 透传通道）。
+
+Tags: worker-exec, exec-server, message.part.delta, task.completed, trackInstance, MessageDeltaTracker, execPort, T10
+
+## Task: 群聊 @Agent 立即回复「收到」确认消息（2026-08-10，实现 + 测试 + migration apply 完成）
+
+- **需求**：群聊 @agent 时 agent 立即回复「收到」确认消息（不等模型），文案在 agent 配置中可配，默认「收到，正在处理…」。
+- **改动面（仅 server/）**：
+  1. **schema**：`agents` 表新增 `ackMessage String? @map("ack_message")` + migration `20260810000000_add_agent_ack_message`（`ALTER TABLE agents ADD COLUMN ack_message VARCHAR(191) NULL`）。
+  2. **chat.constants.ts**：新增 `DEFAULT_ACK_MESSAGE = '收到，正在处理…'`（ackMessage 兜底 + seed 预置的单一事实源）。
+  3. **AgentsService**：AgentRow 类型加 ackMessage；`toAgentDto` 输出 `ackMessage`；create `dto.ackMessage ?? null`；clone `source.ackMessage`（血缘复制）；update `dto.ackMessage !== undefined` 才写；`isModelOnlyUpdate` **放行 ackMessage**（template 只读例外扩展——收到确认文案属部署适配，与 defaultModelId 同语义）。
+  4. **DTO**：CreateAgentDto/UpdateAgentDto 加可选 `ackMessage`（Update 支持 `string | null`，null=清空回默认，`@ValidateIf` 允许 null 对齐 workerId 模式）。
+  5. **ChatService.createMessage 第 5.5 步**（dispatch 之后）：新增私有 `acknowledge(channelId, agentIds)`——`prisma.agent.findMany` 查每个 dispatched 目标的 ackMessage 配置，逐目标落库 agent「收到」消息（senderType=agent、senderId=目标 agentId、`content.text = ackMessage ?? DEFAULT_ACK_MESSAGE`、**mentions=null 防递归触发 dispatch**、status=sent）+ 广播 `chat.message.new`（scope=channel，先落库后转发）。**不修改 MessageDispatcher/WorkerDispatcher**（落库在 ChatService 层）。
+  6. **seed.ts**：模板 agent 数组每项加 `ackMessage: DEFAULT_ACK_MESSAGE`（upsert create 分支 spread 自动写入；update 分支仅 defaultModelId 保持——ackMessage 可配，re-seed 不覆盖用户配置）。seed.ts 重构支持测试：`if (require.main === module)` 守卫 + `export { main }`（CLI 仍自动运行）。
+- **测试**：chat.service.spec 更新 `发消息全流程`（message.create 2 次=用户+ACK、broadcast 2 次、ACK mentions=null 防递归）+ 新增「ackMessage 配置非空走配置文案」「多目标每目标一条 ACK」；agents.service.spec 更新 findAll Object.keys 精确断言加 ackMessage + create/clone/update 透传 + template 仅放行 ackMessage + ackMessage+prompt 仍 403；新增 `src/prisma/seed.spec.ts`（mock PrismaClient/bcrypt，验证 4 模板 upsert create 分支 ackMessage === DEFAULT_ACK_MESSAGE）。
+- **⚠️ Prisma client 类型坑**：改 schema.prisma 后必须 `npx prisma generate`，否则 tsc 报 `ackMessage does not exist in type AgentCreateInput` / select 报错。chat.service.spec 顶部 `let prisma` 的类型声明（非 beforeEach 的 mock 对象）也要同步加 `agent.findMany`。
+- **⚠️ seed.spec 集成测试坑**：seed.ts 顶层 `main()` 立即执行 → 用 `require.main === module` 守卫后 import 安全；mock 需覆盖 main 全链路（role/user/project/projectMember/agent/model.findMany+upsert/workerModelAvailability.deleteMany/tool/$disconnect）——遗漏 `prisma.model.findMany`（legacy 模型清理）会 TypeError。
+- **⚠️ mock 恒返回值坑**：`prisma.message.create.mockResolvedValue(messageRow())` 恒返回用户行 → ACK 广播断言失败。需 `mockResolvedValueOnce(用户行).mockResolvedValueOnce(agent 行)` 链式。
+- **验证**：`tsc --noEmit` 0 错误；`jest --runInBand src/chat/chat.service.spec.ts src/agents/agents.service.spec.ts src/prisma/seed.spec.ts` 75/75 全绿；完整 jest 818 passed / 1 failed（**并行会话**的 event.constants.spec SESSION_STATUS 四态断言未跟上其 idle/running 扩展，非本任务文件不代改）；`prisma migrate deploy` 成功应用 2 个待应用 migration（含并行会话的 09161243 + 本任务 10000000），`migrate status` 显示 8/8 Database schema is up to date。
+- **遗留（后续 web 任务）**：agent 配置页读取/编辑 ackMessage（web 端）。
+
+Tags: chat, ack-message, group-chat, senderType-agent, mentions-null, seed, migration, prisma-generate
+
+## Task: 方案 A dispatch 改造——server 调 worker 执行端点 POST /execute（202 fire-and-forget），停用自持轮询（2026-08-10，实现 + 全量测试完成）
+
+- **需求**：`WorkerDispatcher.dispatchForTarget` 第 7 步从「server 直连 serve 的 promptAsync + 自持轮询 pollForCompletion」切换为「调 worker 新 HTTP 执行端点 POST /execute（202 accepted 即成功）+ 回复经 ingress task.completed 事件回流落库」。
+- **改动面（仅 server/ 4 文件）**：
+  1. **worker.client.ts**：新增 `DEFAULT_EXEC_PORT = 4198`（对齐 worker config WORKER_EXEC_PORT）+ `ExecuteOptions` 接口（parts/model/agent/directory/taskId/agentId/channelId/sessionId，对齐 worker exec-server.ts ExecuteRequestPayload）+ `execute(worker, opts)` 方法——POST `{execBaseUrl}/execute`，2xx 即成功。**request 重构三件套**：`request`（serve 基址）/`requestExec`（执行端点基址）/`requestToUrl(baseUrl, workerId, path, init, timeout)`（核心：拼 URL + Basic Auth + 超时 + 错误归一 503 带 workerId）。新增 `resolveExecBaseUrl`（capabilities.execBaseUrl 优先 → 否则 serve origin + ':' + execPort，缺省 4198）与 `resolveServeOrigin`（baseUrl → capabilities.port → WORKER_BASE_URL 回退，`new URL` 解析取 protocol+hostname，裸 host 剥离端口兜底）。
+  2. **worker-dispatcher.ts**：dispatchForTarget 第 7 步改 `workerClient.execute(worker, {parts, model, directory: taskWorkDir, taskId, agentId, channelId: request.channelId, sessionId: opencodeSessionId})`；**删除前置基线 getMessages**（F3 MAJOR-1 基线只服务于 poll，方案 A 后无意义）；**删除 `void this.pollForCompletion(...)` 调用**（方法保留，注释标注「方案 A 后仅作兜底/测试」）；保留 createSession（会话复用语义）+ completedSessions/failedSessions 重置 + loading(operating) + watchdog（判死为任务 5）。
+- **execPort/baseUrl 设计**：执行端点与 serve 是**不同端口**（worker 独立 node:http 监听），不能复用 serve baseUrl 直连。worker 侧 buildCapabilities 已上报 `execPort`（4198）但**未上报 execBaseUrl**（worker 侧 buildCapabilities 只拼 serve baseUrl + port），且本任务 MUST NOT 改 worker/ → server 侧拼接：`resolveServeOrigin(worker)`（serve 基址 protocol+host）+ ':' + execPort。capabilities.execBaseUrl 保留读取分支（未来 worker 上报完整基址时优先）。
+- **⚠️ spec 适配核心坑（轮询测试）**：原 F2 C1 / F3 MAJOR-1 / F3 MAJOR-2 共 13 个测试通过 `await d.dispatch(request)` 触发 poll（dispatch 尾部 `void pollForCompletion`）。方案 A 后 dispatch 不再启动 poll → 这些测试全部改为**直接调私有方法** `void d['pollForCompletion']({worker, opencodeSessionId, taskId, agentId, sessionId, channelId, startedAt, baselineCursor})` + fake timers advance。**baselineCursor 语义**：原 dispatch 前置基线 = `lastMessageId(前置 getMessages 结果)`——首次/无历史 → `null`（poll 首轮 messagesAfter(null) 返回全部）；复用会话 → 历史最后消息 id（如 'msg_1'）。mock 序列整体**前移一个**（原 mock1 是前置基线，改造后是 poll 首轮）→ 需要补一次 advance 的测试：幂等（3 mock → advance 2 次）、F3 残留占位（3 mock → advance 2 次）。超时 watchdog 测试（1277）保留 dispatch（watchdog 由 dispatch 注册，poll 超时标记由 watchdog 触发 emitError）。
+- **验证**：`tsc --noEmit` 0 错误；`jest --runInBand src/chat/worker-dispatcher.spec.ts src/workers/worker.client.spec.ts` **91/91 全绿**（execute 新增 6 例：完整 payload/execBaseUrl 优先/execPort 缺省/baseUrl 缺失回退/非 2xx/fetch 抛错）；完整 server jest **47 suites / 825 tests 全绿**。未改 worker/ 与 web/，未新增依赖，未 docker build。
+- **遗留（任务 5）**：判死 watchdog 语义改造（dispatch 后不再等回流，watchdog 判死逻辑串行做，同文件 worker-dispatcher.ts 避免冲突）。
+
+Tags: dispatch, execute, exec-server, execPort, fire-and-forget, ingress-reflow, pollForCompletion-retired
+
+---
+
+## Task: 判死 watchdog——首字超时（60s）+ 空闲判死（30min），移除旧 120s 完成超时（2026-08-10，实现 + 双 spec 验证完成，未部署）
+
+- **需求（方案 A 后续）**：dispatch 改为 fire-and-forget（POST /execute 202）+ ingress 事件回流后，worker 执行可长达数小时，**不能再有「120s 完成超时」**。改为双机制：① **首字超时**（FIRST_TOKEN_TIMEOUT_MS 默认 60s）——dispatch 后 60s 内无任何事件（delta/session.updated/agent.status/task.completed）→ emitError + agent.error「无响应」；② **空闲判死**（AGENT_IDLE_TIMEOUT_MS 默认 30min）——session 运行期无输出活动持续超时 → session 标 failed + agent.error；③ 移除旧「等 task.completed 完成回流 120s」语义。
+- **改动面（仅 server/ 3 文件）**：
+  1. **worker-dispatcher.ts（判死核心）**：新增常量 `DEFAULT_FIRST_TOKEN_TIMEOUT_MS=60s` / `DEFAULT_AGENT_IDLE_TIMEOUT_MS=30min` / `IDLE_SCAN_INTERVAL_MS=60s`（env `FIRST_TOKEN_TIMEOUT_MS` / `AGENT_IDLE_TIMEOUT_MS` 可配，实例字段 `firstTokenTimeoutMs`/`agentIdleTimeoutMs`，constructor `config.get<number>('ENV', default)` 模式）；`startPendingWatchdog` 语义改首字超时（timer=`firstTokenTimeoutMs`，错误文案 `agent 无响应（Xs 无事件回流）`，errorType=`first_token_timeout`，level=retry），同时 `lastActivityAt.set(sessionId, Date.now())` 作为空闲判死追踪起点 + `startIdleScan()` 惰性启动 setInterval(60s)（unref，OnModuleDestroy clearInterval）；`PendingDispatch` 加 `sessionId` 字段 + `pendingBySession`（sessionId→key）反查索引（ingress 活动回调按 sessionId 清除首字 watchdog）；新增 `handleSessionActivity(payload)`（onSessionActivity 回调：任意事件 → `clearPendingWatchdogBySession`；`task.completed` / `session.updated(status≠running)` → 退出 idle 追踪；delta/agent.status/session.updated(running) → 刷新 `lastActivityAt`）+ `scanIdleSessions()` + `markSessionIdleDead()`（扫描：跳过仍等首字（pendingBySession 命中）的会话；超时 → `prisma.session.findUnique` 查 status，**仅 running 判死**（非 running → 退出追踪防误杀）→ `session.update(status=failed)` + `failedSessions.add` + emitError + broadcastAgentError(errorType=`agent_idle_timeout`)）。**边界**：`now - lastAt <= agentIdleTimeoutMs` 才 continue，判死需推进 > 超时 + 一个扫描周期（jest fake timers 下最后 scan 触发点恰好在 t=超时 时不判死）。
+  2. **worker-event.ingress.ts（活动源）**：新增 `SessionActivityPayload`（type/taskId/agentId/sessionId/status）+ `sessionActivityCallbacks` + `onSessionActivity(cb)` + 内部 `sessionActivity` Map（sessionId→Date.now()）+ `getLastActivity(sessionId)` + `touchSessionActivity()`；4 类事件 notify——session.updated（**仅合法 status**）、message.part.delta（落库+广播成功，sessionId 存在即 touch）、agent.status、task.completed；**仅 delta/task.completed/session.updated 三类 touchSessionActivity 刷新计时**（agent.status 只 notify 不清计时——防 worker 仅上送状态不产字误保活）。
+  3. **event.constants.ts**：`SESSION_STATUS` 加 `failed`（**必要**：worker exec-server 失败路径已 `send(session.updated, {status:'failed'})`，ingress `SESSION_STATUS_ALLOWED=Object.values(SESSION_STATUS)` 白名单需含 failed 才放行落库）。
+- **测试**：worker-dispatcher.spec 判死 describe 6 例（首字超时 emitError「无响应」+ first_token_timeout 广播 / 60s 内收到 running → watchdog 清除 / task.completed 回流清除 / running 后空闲 30min → session failed + agent_idle_timeout / 空闲期间 delta 刷新不误杀 / 回归：旧「处理超时（120s」文案移除）+ 构造接线断言 onSessionActivity 注册 + prisma mock 加 `session.update`/`updateMany` + ingress mock 加 `onSessionActivity`；ingress.spec 新增 activity describe（session.updated 通知+刷新 / delta 通知+刷新 / task.completed 通知+刷新 / **agent.status 通知但不刷新** getLastActivity 保持基线）。
+- **验证**：`tsc --noEmit` 0 错误；`jest --runInBand src/chat/worker-dispatcher.spec.ts src/workers/worker-event.ingress.spec.ts` **106/106 全绿**（dispatcher 66 + ingress 40）；event.constants.spec 七态全绿。未改 worker/ 与 web/，未新增依赖，未 docker build。
+- **经验**：① 「无输出判死」必须区分首字期与运行期——首字期由 pendingBySession 挂起（只判 60s 无响应），运行期由 lastActivityAt 刷新（只判 30min 无输出）；**有 delta/工具活动绝不误杀**；② `markSessionIdleDead` 判死前再查 DB status 二次确认（仅 running 判死）——防 dispatch 后 session 已 idle/frozen 仍被误判；③ fake timers 边界：interval 最后触发点恰在 t=超时 时 `now-lastAt <= 超时` 不判死，测试需推进 `超时 + 扫描周期`；④ 会话活动事件由 ingress 统一 notify（onSessionActivity），dispatcher 消费清除首字 watchdog + 维护 idle 计时——事件驱动的判死避免每 dispatch 自持扫描，长期任务只要持续输出（delta）就永不判死。
+- **遗留**：`ingress.getLastActivity` 当前未被 dispatcher 消费（dispatcher 自维护 lastActivityAt），保留为任务要求的 ingress 侧数据源/未来扩展；`DISPATCH_TIMEOUT_MS` 仍保留（仅供 pollForCompletion 兜底路径 deadline，方案 A 后 dispatch 不调用）。
+
+Tags: watchdog, first-token-timeout, idle-timeout, session-failed, kill-switch, SESSION_STATUS.failed, onSessionActivity, lastActivityAt
+
+---
+
+## wave1 汇总对齐：双端事件契约审计 + 修复 execute 请求契约断裂 + sessionId 域一致（2026-08-10，实现 + 双端全量验证完成）
+
+- **背景（方案 A 7 模块已交付，本任务为接口层汇总对齐）**：逐项审计 worker（数据源出口）/server（消费方）双端契约 8 项，发现 **2 处真实接口不一致**并修复 + 补端到端链路集成测试。
+- **不一致 1（CRITICAL，execute 请求契约断裂）：server 发 `parts`，worker 收 `prompt`**——`worker.client.ts execute()` body 发送 `parts: opts.parts`，而 worker 执行端点 `exec-server.ts handleRequest` 校验 `payload.prompt`（缺字段 → 400「缺少必填字段 prompt」）→ **每次 dispatch execute 必然 400** → WorkerUnavailableException。修复：`ExecuteOptions.parts` → `prompt: string | unknown[]`（对齐 worker `ExecuteRequestPayload.prompt`），execute() body 发 `prompt`，worker-dispatcher.ts 调用点同步改。**根因**：worker 契约权威（exec-server.spec 用 `{taskId, prompt}` 自洽），server 侧 execute 复用了 promptAsync 的 `parts` 命名导致双端错位——单测各自自洽但互不交叉，正是本次「接口层面审计」要抓的盲区。
+- **不一致 2（sessionId 域不一致，判死 watchdog 失效根因）：worker 回流 sessionId 为 opencode 会话 id（ses_ 前缀，exec-server 透传 dispatch 下发值），server 期望平台 Session 主键（s_ 前缀）**——dispatch 时 `startPendingWatchdog` 以 `target.sessionId`（s_）注册 `pendingBySession`/`lastActivityAt`，而 ingress `onSessionActivity` 通知用 worker 上送的 ses_ → `clearPendingWatchdogBySession(ses_)` 找不到 s_ 键 → **首字 watchdog 永不清除**、空闲判死计时分两套 Map。修复（改 server 消费方，worker 设计注释已声明「server 经 instanceRef 反查」）：新增 `resolvePlatformSessionId()`（s_ 前缀直接透传无反查开销；ses_ 前缀经 `Session.instanceRef` 反查；缺失 undefined），接入 `handleSessionUpdated`（updateMany/emit/activity 全用平台主键）+ `handleMessagePartDelta`（agentId 反查 + activity 通知）+ `handleAgentStatus`（activity 通知）；task.completed 已有反查（F2 MINOR 防御）不变。
+- **小项**：`AgentStatusPayload` 补显式 `channelId?: string`（worker agent.status 上送含 channelId，此前仅靠 index signature 透传）；其余 6 项（事件 type 7 枚举全等 / SESSION_STATUS 7 态含 failed 白名单 / message.part.delta payload / task.completed payload / session.updated 解构 / channelId 透传语义）审计通过无需改动。
+- **集成测试 `worker-dispatcher.integration.spec.ts`（真实 ingress + 真实 dispatcher，mock 仅基础设施）**：验证方案 A 主链路 dispatch → execute → 回流 → 落库/广播：
+  1. 端到端主链路——execute 被调（断言 `prompt/taskId/agentId/channelId/sessionId`）→ `session.updated(running)`（ses_ → 反查 s_ → `updateMany` + `emit`）→ `message.part.delta`（private 全量落库 processing + 广播）→ `task.completed`（processing 终态化 sent + `chat.message.new` + emitFinal）→ `session.updated(idle)`；
+  2. 判死链路——`session.updated(running)` 经完整回流（ses_ → s_）→ activity 通知 → 首字 watchdog 清除（advance 61s 不 emitError）；
+  3. 回归基线——dispatch 后 60s 无回流 → 首字 watchdog `first_token_timeout` emitError。
+- **⚠️ 集成测试 mock 链坑**：`message.findFirst` 需按 delta（新建，mock null）/completed（终态化定位，mock `{id:'m_stream'}`）**顺序 mockResolvedValueOnce**；`chatChannel.findUnique` 一个行对象需同时满足 delta（`type`）与 resolveChannel（`taskId`）；fire-and-forget 回调（`void handleTaskCompleted`）落库需 `flush()`（setTimeout 10ms）等异步落定。
+- **验证**：server `tsc --noEmit` 0 错误 + jest **48 suites / 845 tests 全绿**（基线 825 + 集成 3 例 + client/dispatcher/ingress 既有 135 全过）；worker `tsc --noEmit` 0 错误 + jest **18 suites / 230 tests 全绿**（worker 侧零改动——worker 是契约权威端，`prompt` 字段为其定义）。未改 web/，未新增依赖，未 docker build。
+- **经验**：① 双端契约审计不能只看各自 spec 自洽——execute 这种「server 发、worker 收」的请求方向，两端 spec 用不同字段名都能通过，必须在接口层做「字段一一对应」交叉核对；② sessionId 域是判死链路（watchdog 注册/activity 通知/空闲判死扫描）的一致性前提，worker 上送 ses_、server 内部用 s_ 必须收敛到单一域——反查映射统一放 ingress 消费方（worker 设计已声明该语义）；③ 集成测试用「真实 ingress + 真实 dispatcher 互相接线」能一次性暴露 dispatch/watchdog/回流三处的域错配，比单测各段自洽有效得多。
+
+Tags: wave1, contract-audit, execute-request, prompt-vs-parts, sessionId-domain, instanceRef, resolvePlatformSessionId, integration-spec, worker-dispatcher.integration
+
+---
+
+## wave1 补充审计：task.completed channelId 透传（修复 3）+ 契约锁定测试增强（2026-08-10，验证完成）
+
+- **不一致 3（wave1 主审计遗漏，MINOR→实为群聊优先回流链路断裂）：ingress handleTaskCompleted 丢弃 worker 上送的 channelId**——`TaskCompletedPayload` 接口有 `channelId?: string`（注释明确「供 resolveChannel 群聊优先」），worker exec-server 事件上送 ctx 含 channelId，但 ingress 解析 payload 时未解构 `raw.channelId` → dispatcher `resolveChannel(taskId, agentId, channelId)` 永远拿不到 preferredChannelId → 群聊 @agent 回复回退 DM（1320cbe 修复的群聊优先在方案 A 事件回流路径**静默失效**，仅轮询兜底路径保留）。
+- **修复（ingress 消费方补透传）**：`handleTaskCompleted` 构造 payload 加 `channelId: this.str(raw.channelId)`；顺手把 task.completed 的 sessionId 映射统一到 `resolvePlatformSessionId`（原 F2 MINOR 的 `!sessionId.startsWith('s_')` + `resolveSessionIdByInstanceRef` 分支逻辑等价，消除双实现）。
+- **测试锁定（双端链路）**：
+  1. ingress.spec 新增 2 例——`session.updated` 上送 ses_ 前缀 → instanceRef 映射后 `updateMany/emit/activity 通知`全部用平台 s_ 主键（防「DB 永不更新 + watchdog 永不清除」回归）；`task.completed` 上送 channelId → 回调 payload 透传 channelId。
+  2. 集成测试主链路 task.completed 阶段加显式断言：`chatChannel.findUnique` 最后一次调用为 `{ where: { id: channelId }, select: { id, taskId } }`（resolveChannel **preferred 分支命中**，非回退 DM taskId_agentId 查询）——锁定「channelId 透传驱动群聊优先」在真实回流链路生效。
+- **审计复核结论（8 项清单终版）**：① 事件 type 7 枚举 worker/server 全等 ✅；② session 状态 running/idle/failed 均入 SESSION_STATUS 白名单 ✅；③ message.part.delta payload `{taskId,agentId,sessionId,channelId,parts,status:'streaming'}` 双端一致 ✅；④ task.completed payload 双端字段一致（channelId 补透传后消费方不再丢弃）✅；⑤ session.updated 解构字段一致（sessionId 映射已收敛单一域）✅；⑥ execute 请求：server ExecuteOptions.prompt ↔ worker ExecuteRequestPayload.prompt 一一对应 ✅；⑦ channelId 语义 worker 透传 → ingress delta 落库 + task.completed 群聊优先全部消费 ✅；⑧ agent.status payload 一致（AgentStatusPayload 显式 channelId）✅。
+- **验证**：server `tsc --noEmit` 0 错误 + `jest --runInBand` **48 suites / 845 tests 全绿**（ingress 42 + client 18 + dispatcher 66 + 集成 3 + 其余）；worker 端零改动（契约权威端），`tsc` 0 错误 + 18 suites / 230 tests 全绿。未改 web/，未新增依赖，未 docker build。
+- **经验**：① 方案 A 后「群聊优先」有两条路径——轮询兜底（handlePolledCompletion 已传 channelId）与 ingress 事件回流（此前漏传）——**审计必须逐路径核对 channelId 是否送达消费方**，接口字段存在 ≠ 消费方解构；② `resolvePlatformSessionId` 统一入口让所有回流事件的 sessionId 域收敛（task.completed 原 F2 MINOR 独立实现也并入），避免「task.completed 会映射、session.updated 不会」的隐性不一致；③ 契约锁定测试应断言「消费方实际走了正确分支」（如 resolveChannel preferred 命中），而非仅断言字段存在。
+
+Tags: wave1, channelId, task.completed, resolveChannel, group-chat-reflow, contract-lock, resolvePlatformSessionId
+
+---
+
+## T10: worker 注册 capabilities 丢失 execPort 的修复（2026-08-10，实现 + 验证完成）
+
+- **问题（bug 根因）**：worker 上报 capabilities 含 `execPort: 4198`，但 server `WorkerCapabilitiesDto` 未声明该字段——NestJS `class-transformer` + `class-validator`（@ValidateNested + @Type）在反序列化请求体时**剥离未声明字段**，导致 server 保存到 DB `workers.capabilities` 无 execPort，`WorkerClient.resolveExecBaseUrl` 无法发现 worker 执行端点（仅能靠 serve origin + 默认 4198 兜底；worker 配置非默认端口即失败）。
+- **修复**：`server/src/workers/dto/register-worker.dto.ts` `WorkerCapabilitiesDto` 显式声明 `@IsOptional() @IsInt() @Min(0) execPort?: number`（带 ApiPropertyOptional 注释）。`workers.service.register` 已全量透传 `dto.capabilities`，无需改动。
+- **测试**：`worker-dto.spec.ts` 补 execPort 序列化用例（仿 port/baseUrl/models 模式，whitelist 不剔除断言）。
+- **验证**：`tsc --noEmit` 0 错误；`jest --runInBand src/workers/` 8 suites / 192 tests 全绿。
+- **Inherited wisdom**：DTO 必须显式声明所有需透传的 capabilities 字段——`@Type` 在 ValidateNested 下的 whitelist 行为会剥离未声明字段。
+
+---
+
+## T11: assignWorker 模型过滤「无可用 worker」的修复（2026-08-10，实现 + 验证完成）
+
+- **问题（bug 根因）**：`matchesModelRequirement`（`server/src/workers/workers.service.ts`）最后一行 `avail.some((a) => a.modelId === modelId ...)`——`a.modelId` 是 `WorkerModelAvailability.modelId` = **models 表主键**（`md_0000000010`，schema 既定设计：`syncFromWorkerCapabilities` 用 `upsertCatalogModel` 返回的 catalogId 存 availability），而 `modelId` 参数是 **provider/model 格式**（如 `opencode/deepseek-v4-flash-free`，来自 `Agent.defaultModelId`）——两者永不相等 → `avail.some` 恒 false → 已上报模型能力的 worker 全部被排除 → `assignWorker` 返回 null → dispatch 抛「无可用 worker」。
+- **为何之前验收通过**：F3 端到端时 worker 从未上报 availability（`avail.length === 0` 走降级分支 `return true`）→ 侥幸通过。本次数据清理后 worker 上报 8 个模型 availability → 过滤生效 → bug 暴露。
+- **修复**：
+  1. `assignWorker` include 补 model 字段：`modelAvailabilities: { include: { model: { select: { enabled: true, providerID: true, modelID: true } } } }`（原只 select enabled）。
+  2. `matchesModelRequirement` avail 匹配改为**经关联 Model 的 providerID/modelID 拼接**：`a.model?.enabled !== false && \`${a.model?.providerID}/${a.model?.modelID}\` === modelId`（注意拼接不加空格）。
+  3. 保留既有降级语义：modelId 空 → true、avail 空 → true、`worker.defaultModelId === modelId` → true。
+- **测试**（`workers.service.spec.ts` assignWorker describe）：C7 用例 mock 数据从错误的 `modelId: 'opencode/xxx'` 修正为**真实数据形状**（`modelId: 'md_0000000010'` + `model: { enabled, providerID, modelID }`），覆盖 6 场景：① 匹配 → 选中；② 不含 → null；③ modelId 省略 → 不过滤；④ defaultModelId 匹配 → 通过；⑤ avail 空 → 降级通过；⑥ enabled=false → 排除。另加 `findMany` 调用断言锁死 include 带回 providerID/modelID（防回退为只 select enabled）。
+- **验证**：`tsc --noEmit` 0 错误；`jest --runInBand src/workers/workers.service.spec.ts` 73 tests 全绿。未改 worker//web/，未改 syncFromWorkerCapabilities 写入逻辑，未改 schema，未新增依赖。
+- **Inherited wisdom**：① `WorkerModelAvailability.modelId` 是 md_ 主键（schema 既定），**分派过滤必须经关联 Model 的 providerID/modelID 拼接**，不能直接比 `a.modelId`；② spec mock 的数据形状必须贴近真实 DB 形状（主键 + 关联对象），用错误格式写 mock 会让「实现有缺陷但测试全绿」的假象持续存在；③ include select 字段若被过滤逻辑依赖，应在测试中断言 findMany 调用参数，防止后续回退。
+
+---
+
+## T12: worker 执行端点「60s 完成超时」→ 首字超时语义（2026-08-10，实现 + 验证完成）
+
+- **问题（部署实测确认）**：`worker/src/exec/exec-server.ts` 的 `runExecution` 用 `sendAndAwait(..., { timeoutMs: this.timeoutMs })`，默认 `timeoutMs=60_000`。模型首字 8-52s、完整回复可能更久，60s 内未出 step-finish 即 abort → 「执行失败：等待完成超时」→ 用户看不到模型回复。
+- **方案 A 语义**：长期任务不设完成超时——判死由 server `AGENT_IDLE_TIMEOUT_MS=30min` 空闲判死负责（248b308 已实现），worker 只管「有活动就继续」。worker 执行端点只保留**首字超时**（模型完全没响应才报错）。
+- **修改**：
+  1. `prompt-await.ts`：`AwaitCompletionOptions.timeoutMs`（总超时，默认 60s）→ **`firstTokenTimeoutMs`**（默认 120s）。`awaitCompletion` 逻辑：新增 `hasFirstToken(collected)`（存在任一非空 assistant text part，排除 synthetic），`firstTokenAt` 记录首字时刻；**首字出现前** deadline = `startedAt + firstTokenTimeoutMs`，首字未出现超时 → abort + 抛 `CompletionTimeoutError`；**首字出现后无完成超时**（`while(true)` 持续轮询直到 `findFinish`，不 break）。
+  2. `exec-server.ts`：`ExecServerOptions.timeoutMs` → `firstTokenTimeoutMs`（默认 120s），透传 sendAndAwait；error 事件前缀「执行超时：」→「执行失败：」。
+  3. `config.ts` 新增 `workerFirstTokenTimeoutMs`（env `WORKER_FIRST_TOKEN_TIMEOUT_MS`，默认 120000）+ `index.ts` ExecServer 接线 + `.env.example`/`README.md` 环境变量表同步。
+- **测试**：`prompt-await.spec` —— ① 首字出现后无完成超时（首字约 20ms 出现，`firstTokenTimeoutMs: 60` 下继续轮询 30+ 轮远超总时限才 step-finish，断言 `calls > 10` 且 `abort` 未被调用）；② 首字超时（mock 仅 step-start 无 text，40ms 时限）→ abort + 抛 + 错误携带已收集消息（text 为空串）；③ 原「60s 总超时」用例改首字语义。`exec-server.spec` 全量 `timeoutMs:` → `firstTokenTimeoutMs:`（含失败路径 60ms 首字超时用例）。
+- **⚠️ 语义变更踩坑**：原「超时」用例 mock 含 `textPart('partial')`——新语义下第一轮即命中首字 → 永不超时 → 死循环。**首字超时用例的 mock 必须无 text part**（仅 step-start），否则测试挂死而非报错。
+- **验证**：`tsc --noEmit` 0 错误；`jest --runInBand src/exec/exec-server.spec.ts src/driver/prompt-await.spec.ts` 26 tests 全绿；worker 全量 `jest --runInBand` 18 suites / 231 tests 全绿。未改 server//web/，未新增依赖，未 docker build。
+- **Inherited wisdom**：① 完成超时与首字超时是两种正交语义——完成判定靠「活动继续轮询」，无活动才靠超时兜底；首字超时 mock 里若有 text part 会瞬间命中首字，无法构造超时路径；② 语义变更需同步所有调用点（exec-server 构造/spec 选项名）+ config + 文档，grep `timeoutMs` 需区分 awaitCompletion 选项与 HTTP 请求超时（`v1-driver.ts`/`opencode-server.ts`/`mcp-status-probe.ts` 的 `timeoutMs` 是请求超时，不动）。
+
+---
+
+## T13: 复用失效 opencode 会话 → `prompt_async HTTP 404` 的会话生命周期边界修复（2026-08-10，实现 + 验证完成）
+
+- **问题（部署实测确认）**：`worker/src/exec/exec-server.ts` 的 `runExecution` 在 `payload.sessionId` 提供时**直接复用**该 opencode 会话 id（server 侧 Session.instanceRef 存的旧 ses_），不再 createSession。但 **serve 重启/worker 容器重建后会话丢失**——旧 ses_ 对 `POST /session/{id}/prompt_async` 返回 **HTTP 404** → `sendMessage` 抛 `DriverRequestError`（带 `status: 404`）→ sendAndAwait 抛错 → 外层 catch 收敛为 error 事件 → 用户看不到回复。触发场景：worker 容器重建 / serve 重启（凭据注入、配置重载、远程重启命令）后，server 的 instanceRef 仍指向旧会话 id，下次 dispatch 携带该 id → 404。
+- **修复设计（exec-server 层最小改动，不动 prompt-await 语义）**：
+  1. `runExecution` 的 `sendAndAwait` 调用提取为私有方法 **`runSendAndAwait(payload, sessionID, ctx)`**（onPoll 增量上送 delta 逻辑整体内聚；重试时复用，tracker 每次新建天然空——404 发生在 sendMessage 阶段，awaitCompletion 从未执行，无 delta 残留需 reset）。
+  2. 外层再包一层 try/catch：捕获到 `DriverRequestError && status === 404` **且 `payload.sessionId` 非空（复用场景）** → `driver.createSession(payload.model)` 新建会话 → `ctx.sessionId = 新 id`（后续 idle/completed 事件都带新 id）→ 重跑 `runSendAndAwait` 一次。
+  3. **重试失败（createSession 也失败 / 新会话也 404 / 其他错）→ 第二次 runSendAndAwait 抛错直接传播到外层 catch 走既有 error 收敛**（agent.status error + session.updated failed；sessionId 用当前 opencodeSessionId——createSession 失败时仍是旧 id）。
+  4. **`payload.sessionId` 缺失（新建场景）→ 404 不触发重建**（任务「现状不变」）：新建会话是 serve 刚创建的，若也 404 说明 serve 自身异常，重试无意义。
+  5. 判定辅助 `isSessionNotFound(err)`：`err instanceof DriverRequestError && err.status === 404`——v1-driver 的 `request` 已把 HTTP status 存入 `DriverRequestError.status`（v1-driver.ts:112-121），sendMessage 抛的就是它，无需解析 message。
+- **测试**（exec-server.spec.ts，4 新用例 + 1 回归增强）：
+  1. 复用会话 404 → createSession 返回 ses_new → 第二次 sendMessage 成功 → 终态 idle/completed 事件 sessionId=ses_new（`sendMessage` 调用 2 次：先 ses_existing 后 ses_new）；
+  2. 复用会话正常 → 不重建（回归：createSession 不调用、sendMessage 仅 1 次用原 id、completed 用原 id）；
+  3. 复用 404 → createSession 也失败（serve 未就绪）→ error + failed，sessionId 仍为旧 id（不重试 sendMessage）；
+  4. 无 sessionId 新建场景 → sendMessage 404 不触发重建（createSession 仅 1 次）→ error + failed。
+- **⚠️ 首版 bug（测试暴露）**：最初 404 判定未加 `payload.sessionId` 条件，新建场景 404 也走重试（createSession 2 次）——第 4 个用例失败暴露，加条件后全绿。**教训：会话失效回退只应针对「复用外部传入的会话」这一边界，新建会话 404 属 serve 自身异常，不适用重试语义。**
+- **验证**：`tsc --noEmit` 0 错误；`jest --runInBand src/exec/exec-server.spec.ts` 10/10 全绿；worker 全量 `jest --runInBand` **18 suites / 234 tests 全绿**（基线 231 + 新增 3，另 1 为复用回归增强）。未改 server//web/，未改 prompt-await.ts 首字语义，未新增依赖，未 docker build。
+- **Inherited wisdom**：① 复用外部状态（会话 id）的边界必须考虑「提供者已重启/重置」的失效场景——靠 HTTP 404 判定失效 + createSession 重建重试一次是零状态恢复的通用模式；② 重试分支的触发条件要精确匹配「复用」场景，新建场景同样 404 时不应套用重试；③ ctx.sessionId 随新建会话更新是关键——重试后的事件上送（idle/completed/delta）必须带新 id，否则 server 侧 instanceRef 反查仍指旧会话；④ 用 `jest.mockRejectedValueOnce(DriverRequestError).mockResolvedValue(undefined)` 链式 mock 即可构造「首次 404 后成功」的序列，DriverRequestError 构造带 status 参数（`new DriverRequestError(msg, 404)`）。
+
+---
+## T14（fix）：v1-driver `request` 未透传 HTTP status → exec-server 404 会话重建回退永不触发
+
+- **问题（部署实测确认）**：`worker/src/driver/v1-driver.ts` 的 `request` 方法（原 :280）非 2xx 抛错时**只传 message 未传 status**：
+  `throw new DriverRequestError(\`[v1-driver] ${path} HTTP ${res.status}\`)`——而 `DriverRequestError` 构造签名是 `(message, status?)`（:113-121）。结果 `err.status` 恒为 `undefined`，exec-server 的 `isSessionNotFound`（`err instanceof DriverRequestError && err.status === 404`）**永不匹配 404** → T13（45e0fdf）的会话失效自动重建回退形同虚设，serve 重启后复用旧 ses_ 会话仍直接失败。
+- **修复（最小改动，改对源头）**：request 抛错补第二个参数 `res.status`：
+  `throw new DriverRequestError(\`[v1-driver] ${path} HTTP ${res.status}\`, res.status)`。其他抛错点（createSession 缺 session id、baseUrl 未设置、网络错/超时）为非 HTTP 错误，**不**带 status，合理不动。
+- **测试**（v1-driver.spec.ts）：现有「非 2xx → DriverRequestError」用例断言从 `rejects.toThrow(/HTTP 400/)` 增强为 `rejects.toMatchObject({ status: 400 })`（message + status 双重校验）；新增 404 用例断言 `status === 404`（直接对应 exec-server 会话失效判定契约）。exec-server.spec.ts 既有 4 个 404 重建用例**无需改动**——它们 mock 的是 `new DriverRequestError('prompt_async HTTP 404', 404)` 直接带 status，现在真实路径也透传 status，回退被真实触发。
+- **验证**：`tsc --noEmit` 0 错误；`jest --runInBand src/driver/v1-driver.spec.ts src/exec/exec-server.spec.ts` **2 suites / 31 tests 全绿**。未改 server//web/，未改 exec-server.ts 的 isSessionNotFound，未新增依赖，未 docker build。
+- **Inherited wisdom**：① T13 注释曾假设「v1-driver 的 request 已把 HTTP status 存入 DriverRequestError.status」——**假设未经验证就写入设计**，本次部署实测推翻。跨模块契约（isSessionNotFound 依赖 `err.status === 404`）必须在**源头（抛错点）**落实，不能只依赖调用方 mock 或假设；② 排查思路：问题在调用方（exec-server 判定不触发）不一定根因在调用方——沿 `err.status` 向上追到 v1-driver 抛错点即发现构造时漏传；③ 补测试时断言 `err.status` 具体值（`toMatchObject({ status })`）而非只断言 message 文本，才能锁住「字段存在且正确」这一契约，防止此类回归再次静默通过。
+
+---
+
+## F3-缺陷②: ingress `resolvePlatformSessionId` 回写 `Session.instanceRef`（2026-08-10，实现 + 测试完成）
+
+- **问题（F3 真实 QA 确认）**：session 状态永不收敛（卡 running >1.5h）。根因：worker 执行端点复用失效 opencode 会话 → `prompt_async 404` → 自动 `createSession` 重建（45e0fdf T13），但**重建后的新 ses_ 会话 id 没有任何路径回写 server 的 `Session.instanceRef`**——instanceRef 仍指向旧会话 → 每次 dispatch 重复 404 重建；且 worker 上送 `session.updated(idle)` 时 sessionId 是新 ses_，ingress `resolveSessionIdByInstanceRef` 反查失败 → server 找不到 s_ 主键 → **idle 不落库** → 永久 running。
+- **修复设计（ingress 侧回写副作用，不改 worker/web）**：`resolvePlatformSessionId(sessionId, workerId)` 新增第二参 `workerId`（4 个调用点 handleSessionUpdated / handleMessagePartDelta / handleTaskCompleted / handleAgentStatus 均从 dto.workerId 传入）：
+  1. s_ 前缀 → 直接透传（不回写）；
+  2. ses_ 前缀 → 先按 `Session.findFirst({where: {instanceRef}})` 反查（**命中 → 现状返回 s_ 主键，不回写**）；
+  3. **反查未命中**（worker 404 重建新会话）→ `Session.findMany({where: {workerId, status: 'running'}})` 找该 worker 正在运行的会话 → **唯一命中 → updateMany 回写 instanceRef=新 ses_ id（幂等：where 加 `instanceRef: { not: newRef }`）+ 返回该 s_ 主键**；不唯一（并发多会话）/未命中 → undefined（现状，不误写）。
+- **⚠️ 死锁边界分析（时序确认）**：回写过滤 `status: 'running'` 能命中 F3 实际场景——卡 running 正是症状（上一轮执行成功时 `session.updated(running)` 已落库，DB 中该 session 就是 running）。若首次执行就 404 重建（session 尚为 active），running 过滤不命中、回写不触发——但此时也不存在「卡 running」症状，属可接受边界（设计定稿明确按 running 过滤）。回写时机：worker 上送**任何**带新 ses_ 的事件（delta/task.completed/session.updated/agent.status）都会触发首笔回写，后续 idle 即可落库。
+- **幂等设计**：① updateMany where 带 `instanceRef: { not: newRef }`——instanceRef 已是新值（首笔事件已回写）时无更新；② 回写分支内 `session.instanceRef !== newRef` 前置判断跳过重复 updateMany。
+- **测试**（ingress.spec 新增 6 例，mock 加 `session.findMany: jest.fn().mockResolvedValue([])`）：
+  1. ses_ 新会话反查失败 → findMany(workerId+running) 唯一命中 → 回写 instanceRef + idle 以平台主键落库 + emit/activity 通知用平台主键；
+  2. s_ 前缀 → 不透传不回写（findFirst/findMany 均不调用，仅状态 updateMany 1 次）；
+  3. 反查命中（instanceRef 已是新值）→ 不回写（findMany 不调用，仅状态更新）；
+  4. 回写分支 instanceRef 已是新值 → 幂等不重复 updateMany（仅状态更新 1 次）；
+  5. 同 worker 多个 running 会话 → 不唯一放弃回写（状态不落库，emit sessionId=null）；
+  6. task.completed 也触发回写 → 回调 sessionId 为平台主键。
+- **验证**：server `./node_modules/.bin/tsc --noEmit` **0 错误**；`jest --runInBand src/workers/worker-event.ingress.spec.ts` **47/47 全绿**（基线 41 + 新增 6）。未改 worker/web，未新增 npm 依赖，未 docker build。
+- **⚠️ 并行会话竞争（复现）**：本文件 `worker-event.ingress.ts` 被并行会话同时改了（parts 工具函数迁移到新文件 `src/chat/message-parts.ts`，untracked）——本改动叠加其上，编辑前已重读文件。**`worker-dispatcher.integration.spec.ts` 3/3 在本改动**前后**均为「HEAD 基线绿 + 工作区红」**（git worktree 验证：HEAD `resolveChannel` preferred select 是 `{id, taskId}` 而并行会话改成 `{id, taskId, type}` → 破坏 :313 断言 `select: {id, taskId}`）——该失败与本次改动无关，按纪律不代改并行会话文件。
+- **Inherited wisdom**：① 跨端会话 id 一致性是「分发→执行→回流」链路的隐藏契约——worker 端重建会话（404 回退）后 server 侧 instanceRef 必须同步，否则状态机（running→idle）断链；② 归一化入口（resolvePlatformSessionId）是加「反查+回写」副作用的最佳位置——所有会话相关回流事件都经它，一次改动覆盖全链路；③ 用 `git worktree add <dir> HEAD` + `ln -sfn` node_modules 即可在无编译干扰下验证 HEAD 基线（隔离「我的改动」与「并行会话改动」的归因），测完 `rm -rf` + `git worktree prune`。
+
+---
+
+## F3-缺陷①: 群聊终态化路径 parts 不过滤导致渲染 reasoning 折叠卡片（2026-08-10，实现 + tsc/jest 验证完成）
+
+- **问题（F3 真实 QA 确认）**：群聊（task_group）消息 content.parts 含 reasoning/tool → 前端初始加载渲染折叠卡片，违反 SC4「群聊仅结论性文本」。**根因是两条回流路径行为不一致**：ingress `message.part.delta` 流式路径用 `extractConclusionParts`（`type==='text' && !synthetic`）过滤，但 `worker-dispatcher.handleTaskCompleted` 终态化路径（processing 消息 update content.parts）**全量 parts 落库不过滤**——模型产生 reasoning 时 delta 已过滤、task.completed 终态化把完整 parts 覆盖回去。且前端 `tasks/[id]` 页初始加载（GET messages → MsgParts 全量透传）也无防御过滤。
+- **修复设计（共享工具 + 双端防御）**：
+  1. **新建 `server/src/chat/message-parts.ts`**：`normalizeParts` / `extractConclusionParts` / `concatText` 从 ingress 私有方法提取为**共享导出纯函数**（放独立 util 而非 worker-dispatcher.ts——ingress 与 dispatcher 相互 import 会成循环依赖）。ingress 与 dispatcher 双路径复用同一套过滤，杜绝再次分叉。
+  2. **服务端 `handleTaskCompleted` 终态化**：`resolveChannel` 三处 select 增加 `type: true`（preferred/DM/群聊），终态化时 `channel.type === private ? normalizeParts : extractConclusionParts`——task_group 只落结论 text，private 全量保留（前端折叠展示 reasoning）。text 保持 `payload.text` 原样（worker 上送即聚合结论，非 reasoning）。
+  3. **前端 `tasks/[id]` 初始加载防御**：`messages.map` 中 parts 提取处（原 :496）加与 `onMessagePartDelta`（:995-999）相同的过滤（`type==='text' && !synthetic`）——历史/残留数据兜底，与 SSE 增量行为对齐。**tasks 页本身即群聊页，无需区分 channel.type**；私聊页 `messages/[id]` 不动（保留 reasoning 折叠）。
+  4. **覆盖链完整**：终态化过滤后 `chat.message.new` 广播携带的已是干净 parts → 前端 upsertMessage 写入缓存即干净；GET 路径服务端已滤 + 前端双保险；delta 路径 ingress 滤 + 前端兜底。
+- **测试**（worker-dispatcher.spec 新增 2 例 + 3 处既有 select 断言同步）：task_group 终态化 → `content.parts` 只含 text（reasoning/tool 剔除）；private 终态化 → 全量保留。`resolveChannel` select 从 `{id, taskId}` 改 `{id, taskId, type}` 破坏既有断言（dispatcher.spec 3 处 + integration.spec :313）——**改 select 必须同步全部断言**（`toHaveBeenCalledWith` 精确匹配）。
+- **验证**：server `./node_modules/.bin/tsc --noEmit` **0 错误**；`jest --runInBand src/chat/worker-dispatcher.spec.ts + integration.spec + ingress.spec` **72/72 + 49/49 全绿**；web `npx tsc --noEmit` **0 错误**。未改 worker/私聊渲染，未新增 npm 依赖，未 docker build。
+- **⚠️ 并行会话竞争（复现）**：本文件 `worker-event.ingress.ts` 与 `worker-dispatcher.integration.spec.ts` 存在并行会话改动（instanceRef 回写）——integration.spec :313 断言在我改动 resolveChannel 前后均为「HEAD 基线绿 + 工作区红」（HEAD 断言 `{id, taskId}`，工作区实际 `{id, taskId, type}`）；本次因我的改动是 select 变化的直接责任方，更新了该断言使其恢复全绿。
+- **Inherited wisdom**：①「两条路径行为必须一致」是流式+终态化双通道架构的核心不变量——任何 parts 过滤/转换逻辑都应提取为共享函数而非各自实现；② 前端「服务端已过滤 + 前端防御过滤」双保险是防御历史脏数据/残留的稳妥模式；③ `resolveChannel` 的 select 变更牵动所有 `toHaveBeenCalledWith({select})` 断言，改动前先 grep 全仓定位。

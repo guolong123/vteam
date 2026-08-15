@@ -1,0 +1,73 @@
+# 死代码删除证据（docs/code-review-2026-08-report.md A1-A5）
+
+日期：2026-08-13
+范围：按审核报告删除 A 类确认死代码 5 处；C 类全部保留；不提交 git。
+用户指示：真实问题先修；不确定的保留；C1 canvasui 明确保留。只处理 A1-A5。
+
+## 删除前证据复核（每处 grep 确认无生产引用）
+
+- A1 MockDispatcher：grep 全库 `MockDispatcher|mock-dispatcher` 仅注释提及
+  （message-dispatcher.ts:4 / worker-dispatcher.ts:569-579,843,971 / chat.module.ts:19 /
+  chat.service.ts:342 / worker-event.ingress.ts:165 / artifacts-mock-consumer.ts:30,33），
+  零 provider 接线、零 @Inject、零 new。真实实现 WorkerDispatcher（chat.module.ts useExisting）。
+- A2 ArtifactsMockConsumer：artifacts.module.ts:5,13,21,22 接线但 simulateSubmission 仅
+  spec 引用，无生产调用；artifacts.controller 无对应路由。
+- A3 git-credentials.ts：生产零 import（仅 git-credentials.spec.ts:6-10）；文件头注释自述
+  未完成占位脚手架。真实路径 git-credential-injector.ts / git-tools.ts（内联 writeTempKey/
+  writeAskpass/cleanupTemp）。
+- A4 sidebar.tsx / top-bar.tsx：仅 ui/index.ts barrel（:25-28）导出，0 页面使用；
+  sidebarTheme（tokens.ts:98）仅 sidebar.tsx 使用。
+- A5 git-op-reporter.ts：GitOpReporter/extractGitOps 生产零 import（仅 spec）；exec-server.ts
+  onPoll 未接线。worker-protocol.ts GIT_OP 常量与 server worker-event.ingress.ts git.op 消费
+  逻辑保留（消费者已接线、生产者未接线——半成品标注）。
+
+## 删除动作（10 文件）
+
+- server/src/chat/mock-dispatcher.ts + mock-dispatcher.spec.ts
+- server/src/artifacts/artifacts-mock-consumer.ts + artifacts-mock-consumer.spec.ts
+- worker/src/git/git-credentials.ts + git-credentials.spec.ts
+- worker/src/git/git-op-reporter.ts + git-op-reporter.spec.ts
+- web/src/components/ui/sidebar.tsx + ui/top-bar.tsx
+
+## 连带清理（注释改描述文字，避免悬挂引用）
+
+- A1：worker-dispatcher.ts(569,574,578-579,843,971)、chat.module.ts(19)、chat.service.ts(342)、
+  message-dispatcher.ts(4)、worker-event.ingress.ts(165) 中 MockDispatcher/mock-dispatcher.ts
+  引用改为描述性文字。
+- A2：artifacts.module.ts 摘除 import/providers/exports（注释同步去掉 ArtifactsMockConsumer 描述）。
+- A3：model-credential-injector.ts(58,73)、git-credential-injector.ts(78) 注释中
+  git-credentials.ts 引用改为"临时 key/双保险"描述文字。
+- A4：ui/index.ts 摘除 Sidebar/TopBar 导出；tokens.ts 删除 sidebarTheme。
+- A5：exec-server.spec.ts(82) 注释"复用 git-op-reporter.spec 模式"改为描述文字。
+
+## 验证输出
+
+- server `npx tsc --noEmit`：EXIT 0，0 错误
+- worker `npx tsc --noEmit`：EXIT 0，0 错误
+- web `npx tsc --noEmit`：EXIT 0，0 错误
+- server `npx jest`：1107 passed / 1107 total（原 1121，减 14 = mock-dispatcher.spec 13 +
+  artifacts-mock-consumer.spec 1，属预期）
+- worker `npx jest`：336 passed / 336 total（原 343 附近，减 git-credentials.spec +
+  git-op-reporter.spec，属预期）
+- web `npm run build`：通过（路由表完整输出，无报错）
+
+## 无悬空引用 grep（删除后，全部 0 命中）
+
+- `grep -rn "mock-dispatcher\|MockDispatcher" server/src --include="*.ts"` → 0 命中
+- `grep -rn "artifacts-mock-consumer\|ArtifactsMockConsumer\|simulateSubmission" server/src --include="*.ts"` → 0 命中
+- `grep -rn "git-credentials\.ts\|from .*git-credentials" worker/src --include="*.ts"` → 0 命中（协议命令字符串 'git-credentials' 为活协议保留）
+- `grep -rn "git-op-reporter\|GitOpReporter\|extractGitOps\|resolveGitEnv" worker/src --include="*.ts"` → 0 命中
+- `grep -rn "ui/sidebar\|ui/top-bar\|\bSidebar\b" web/src web/app --include="*.tsx" --include="*.ts"` → 0 命中
+- `grep -rn "\bTopBar\b" web/src web/app --include="*.tsx" --include="*.ts"`（排除 NavTopBar）→ 0 命中
+- `grep -rn "sidebarTheme" web/src --include="*.ts"` → 0 命中
+
+## 保留项说明
+
+- C1 canvasui 视觉库：保留（用户明确指示）
+- C2 event-client 测试辅助导出、C3 根目录截图/uploads ignore、C4 根路由占位页：均不动
+- worker-protocol.ts:21 `GIT_OP: 'git.op'` 常量：保留（grep 确认仍在）
+- server worker-event.ingress.ts:301,646-692 `git.op` 消费逻辑：保留（消费者已接线，
+  生产者 git-op-reporter 已删——半成品功能标注按报告保留）
+- "五、排除误报"清单全部未动：message-dispatcher / id-resync / credential-crypto /
+  skill-frontmatter / question-modal / v1-driver / constants
+- 未提交 git、未部署、未改 schema/迁移

@@ -146,3 +146,300 @@
 - **验证**：tsc 0 错误；全量 jest 56 suites / 1117 tests（+3）；web tsc+build 过；
   真实部署双开发者复测——ta_35 私聊消息全在 c_26（流式 processing + 终态 sent），
   c_25 零新增污染；SSE loading 仅目标实例处理中并正常收敛。
+
+## 2026-08-13 数据清理与重置（reset-data，全新干净环境）
+
+- **清空业务表保留 schema**：`SET FOREIGN_KEY_CHECKS=0; TRUNCATE <29 张业务表>; SET FOREIGN_KEY_CHECKS=1;`
+  包 TRUNCATE 最稳（表间外键不影响清空顺序）。**保留 `_prisma_migrations`**（schema 版本记录，
+  清掉会损坏迁移状态）。不 DROP 库/不重跑 migrate deploy。
+- **表分布**：DB 共 30 张表 = 29 业务 + 1 系统（`_prisma_migrations`）。业务表含
+  tasks/messages/chat_channels/sessions/task_agents/issues/artifacts/artifact_versions/
+  task_events/task_group_instances/realtime_events/skills/agent_questions/git_credentials/
+  git_repo_grants/model_credentials/models/tools/mcp_servers/roles/users/projects/
+  project_members/agents/workers/worker_model_availabilities 等。
+- **seed 重建范围**（server/prisma/seed.ts，全 upsert 幂等）：roles=admin/member、
+  users=admin(u_admin)/seed-admin(u_seed_admin)/seed-member(u_seed_member)、
+  projects=p_seed_1「AI 智能体平台」/p_seed_2「文档协作平台」+ project_members(owner)、
+  template agents=5（a_product/a_project_manager/a_architect/a_developer/a_tester）、
+  models=16、tools=10（6 builtin + 4 mcp）、mcp_servers=1（keta-platform）。
+- **seed 执行方式**：server 容器内有编译产物 `dist/prisma/seed.js`，
+  `docker exec aiagents-compose-server node dist/prisma/seed.js` 直接跑（比
+  `docker compose up -d --build init` 快，无需重建镜像）。
+- **运行时数据不重建**：workers=0 / worker_model_availabilities=0 是运行期自注册数据，
+  seed 不生成——**需重启 worker 容器**（`docker restart aiagents-compose-worker`）
+  自动重新注册。
+- **uploads 清理**：`rm -rf server/uploads/*`（保留目录）；该目录未被 git 跟踪
+  （git ls-files = 0），清理不产生 git 变更，无需提交。
+- **MySQL 中文乱码坑（复用）**：查询中文需 `--default-character-set=utf8mb4`，否则显示 `???`
+  （数据本身正确）。列名为 snake_case（display_name/role_id/owner_id，非 Prisma 驼峰）。
+- **证据**：`.omo/evidence/role-instance-separation/reset-data.txt`（清理前后行数对比 +
+  TRUNCATE + seed + 重建验证 + 容器状态）。
+
+## 2026-08-13 T4 修复：MCP issue_create "Agent 不是该任务团队成员"
+
+- **根因教训（T4 实例化遗漏）**：T4 只实例化了 platform-mcp 层（issueCreate 收 selfInstanceId、
+  assertWorkerTask 按实例、assigneeInstanceId 落库），但 issues.service 的 agent 侧方法仍按
+  **agentId 语义**——`assertAgentTaskMember` 用 `taskAgent.findFirst({taskId, agentId})` 按
+  task_agents.agent_id 列匹配，传实例 id ta_xxx 查不到 → 403 NOT_MEMBER。**MCP selfInstanceId
+  必须贯穿到 service 层校验与落库**，不能只在 MCP 层转义。
+- **creator 落真实 agent id**：`issues.creator_agent_id` 外键指向 agents 表（a_ 前缀）——
+  createByAgent 若把 selfInstanceId 原文落库会外键失败（Restrict）。必须从实例行解析
+  `ta.agentId`（模板 agent id）再落。assignee_instance_id 无外键（字符串）可直接落实例 id。
+- **统一解析助手模式**：新增 `resolveAgentInstance(taskId, ref)`——`ta_` 前缀 → 按
+  `{taskId, id}`（实例行）；否则按 `{taskId, agentId}`（存量兼容）。全部 6 个 agent 方法
+  （assert/create/findAll/findOne/update/transition）的前缀分流收敛到一处，避免散落
+  startsWith 判断（T4 时 assertAssigneeInTeam 自己写了一份，未覆盖 assertAgentTaskMember）。
+- **方法返回值承载实例语义**：assertAgentTaskMember 返回 `{ status, agentId }`（agentId=
+  实例行解析的真实模板 agent id），createByAgent 解构落库——比"多查一次"干净。
+- **spec mock 细节**：select 增加 id/agentId 后，createByAgent 成功用例的
+  `taskAgent.findFirst` mock 必须带 agentId 字段，否则 creatorAgentId 落 undefined 被
+  Prisma 忽略、断言失败；非落库方法（findAll/findOne/update/transition）的 mock 只需
+  removedAt 即可。
+- **验证**：tsc 0 错误；全量 jest 56 suites / 1121 tests（+4 实例化用例）；真实集成
+  （DATABASE_URL 指 172.24.0.4:3306）createByAgent('ta_0000000037', 't_0000000012') 通过，
+  查库 creator_agent_id=a_project_manager、assignee_instance_id=ta_0000000038；修复前等价
+  SQL matched_rows=0 复现报错。证据 `.omo/evidence/role-instance-separation/fix-issue-mcp-member.txt`。
+
+## 2026-08-13 T4 修复：notify_agent 落库 sender 归属（agent 互 @ 显示割裂）
+
+- **根因教训（发送者/目标语义错位）**：T4 notifyAgent 契约定为"sender=目标实例"
+  （senderId=targetAgentId、senderInstanceId=targetInstanceId、mentions @目标）——与群聊普通
+  消息（group_post sender=发送者实例）语义相反。前端按 sender 渲染头像/名字 → "头像是目标
+  （测试）、内容是发送者（项目经理）写的"。T5 前端 senderNameFromMentions 兜底（senderId 命中
+  mentions[].agentId 时取 name）进一步放大：senderId=目标 agentId 恰好命中 mentions → 显示目标别名。
+- **MCP 互 @ 的正确语义模型**："notify_agent = 发送者通知目标实例"——落库消息必须是**发送者**
+  的发言（sender=发送者实例解析的真实模板 agent id + senderInstanceId=selfInstanceId），
+  @目标只体现在 mentions 与 content.text 前缀；目标实例的**触发**由 dispatchAgentMention
+  （targetInstanceId）完成，与落库 sender 无关。**显示语义与触发语义解耦**：落库管 UI 显示
+  （sender），dispatch 管触发（target）。
+- **解析助手复用**：resolveSenderAgentId(taskId, instanceId)——taskAgent.findFirst({id,
+  taskId}) 查实例行取 ta.agentId（真实模板 agent id），实例行缺失（存量 agent id 直传）原样
+  返回。group_post/notifyAgent 共用，行为一致。
+- **spec mock 分流模式**：同一方法内多次 taskAgent.findFirst（目标实例查询 + resolveSenderAgentId
+  发送者查询）时，mock 用 mockImplementation 按 where.id 分流返回不同行，而非单值 mockResolvedValue。
+- **验证**：tsc 0 错误；全量 jest 56 suites / 1121 tests 全过；真实链路
+  （docker compose up -d --build server → curl 直调 notify_agent selfInstanceId=ta_37
+  target=ta_41）落库查证 sender_id=a_project_manager、sender_instance_id=ta_0000000037、
+  mentions=[{ta_41,a_tester,测试-4}]，且 sessions s_0000000041 idle→running（触发语义不变）。
+  证据 `.omo/evidence/role-instance-separation/fix-notify-agent-sender.txt`。
+  补充（用户实测场景 target=ta_38 测试-1）：落库 m_0000000327 sender_id=a_project_manager、
+  sender_instance_id=ta_0000000037、mentions=[{ta_38,a_tester,测试-1}]；sessions s_38
+  idle→running；浏览器 UI 截图（fix-notify-agent-sender-ui.png）消息气泡蓝色"P"项目经理
+  头像 + "项目经理-1 · 22:18" + "@测试-1 你好，请执行分配任务的验收测试"——sender 归属、
+  触发、UI 三者全链路一致。
+
+## 2026-08-13 T5 调查：重新配置 Agent 模型后重发消息模型没有变化
+
+- **结论（实证驱动，非猜测）**：模型变更链路（DB → server → worker → serve）完整正常，
+  "模型不生效"在当前代码中不可复现。真实复现：PATCH a_project_manager → deepseek-v4-pro →
+  群聊 @（复用会话 ses_004bade45ffehFihqetEq25ST9）→ serve 日志 `stream providerID=opencode-go
+  modelID=deepseek-v4-pro`，新模型生效。
+- **核心嫌疑排除（实证方法）**：opencode serve 1.18.16 **不锁定会话模型**——同一会话两次
+  prompt_async 传不同 model（flash → pro），user message model 字段分别记录，GET /session 会话
+  model 更新为最新。历史会话同样多模型（ses_004855de9 内 flash 与 flash-free 并存）。
+- **模型全链路透传确认**：worker-dispatcher.ts:886 resolveAgentModelId（每次 DB 读无缓存）
+  → :946 toModelSelection → :1064 execute → worker.client.ts:208 body model → exec-server.ts:542
+  sendAndAwait → v1-driver.ts:220 prompt_async body model → prompt-await.ts:429 直传。
+- **关键判据**：`model = agentModelId ?? workerRow.defaultModelId ?? null`——agent 无模型时
+  fallback worker 默认（当前 NULL）→ null → **serve 用默认模型 `opencode-go/gpt-5.6-luna`**。
+  若用户配置的 defaultModelId 格式非法（无 '/'），toModelSelection 返回 null 同样落入 serve 默认。
+- **用户问题可能原因**：① 配置的模型与当前相同（时间线显示 13:49 与 14:14 两次配置均为 flash，
+  重发消息模型不变是预期）；② 新模型额度同样失效——serve 日志 `opencode/deepseek-v4-flash-free`
+  报 `AI_APICallError: Rate limit exceeded`（"模型额度失效"场景的直接证据）；③ available-models
+  返回目录全部 enabled 模型，不过滤 worker availability/凭据，用户可配置 dispatch 后失败的模型。
+- **防御性改进**：worker 执行链路日志补 model 字段（v1-driver sendMessage + exec-server 执行
+  完成），`model=(default)` 标记 serve 落入默认模型——用户/运维可 `docker logs aiagents-compose-worker
+  | grep sendMessage` 直接确认每次 dispatch 实际使用的模型，避免"模型是否生效"盲猜。
+- **验证**：worker tsc 0 错误；worker 全量 jest 21 suites / 355 tests 全过；真实环境重建 worker
+  容器后改模型 → 日志 `sendMessage -> ses_xxx model=opencode-go/deepseek-v4-pro (HTTP 204)` +
+  serve 日志 stream 双重确认；验证后环境还原（全 flash）。证据
+  `.omo/evidence/role-instance-separation/fix-model-change.txt`。
+
+## Fix: Agent 工作状态切页丢失（sessionByAgent 初始快照）
+- **根因**：`web/app/(main)/tasks/[id]/page.tsx` `sessionByAgent` 初始 `{}` 仅靠 SSE 增量驱动；
+  切页组件重建 + SSE 首连 `since=latest` 只收新事件，执行中 running 不重放 → 成员误显「就绪」。
+- **后端状态源打通**：`sessions.status` 已是真实状态（dispatch→running、回复回流→idle），
+  但 toTaskDto 未返回。修复：Prisma 补 `TaskAgent.sessions` 关系（`sessions.task_agent_id`
+  列已存在，仅 Prisma 层关系，**无需 DB 迁移**，prisma generate 即可）→ TASK_AGENTS_INCLUDE
+  增 `sessions: { select: {id,status}, where: { status: { not: 'archived' } } }` →
+  instances 每项加 `sessionStatus`（每实例恒 1 条会话取首项，uk_sessions_task_agent 唯一）。
+- **前端初始快照策略（关键）**：`useState(()=>{})` 无法取异步任务数据，改用
+  `sessionSeedRef` 守卫 + effect 首次填充：**仅填缺失 key**（`!(inst.id in prev)` 才 set，
+  不覆盖已到的 SSE 实时状态，避免 refetch/SSE 竞态覆盖 running/idle）。
+- **连带收敛修复**：只 seed sessionStatus 会留 stale「工作中」——执行完成时页面若错过
+  agent.loading（切页期间）则 `agentIdBySessionRef` 无映射、session.updated idle 被丢。
+  故 instances 同时回传 `sessionId`，seed 时按 sessionId 建 `agentIdBySessionRef`/
+  `instanceIdBySessionRef` 映射，idle 事件可收敛。
+- **SSE key 约定不变**：`key = instanceId ?? agentId`（instanceId=taskAgentId ta_ 前缀），
+  与 seed key（inst.id=ta_xxx）一致，members-panel `a.instanceId ?? a.id` 命中。
+- **验证**：server 1122 / web build 通过；真实 @ 执行中→工作中、完成后 SSE 收敛→空闲；
+  切页回来仍工作中。证据 `.omo/evidence/role-instance-separation/fix-agent-status-persist.txt`。
+
+## 死代码清理（code-review-2026-08-report A1-A5，2026-08-13）
+- 按审核报告删除 A 类确认死代码 5 处：A1 mock-dispatcher（被 WorkerDispatcher 取代）、
+  A2 artifacts-mock-consumer（已接线但 simulateSubmission 无生产调用）、A3 git-credentials
+  （占位脚手架，真实路径 git-credential-injector/git-tools 内联复刻）、A4 ui/sidebar+top-bar
+  （被 NavDock/NavTopBar 取代，连带清 tokens.ts sidebarTheme）、A5 git-op-reporter（onPoll
+  未接线的半成品 producer）。
+- 关键原则：**只删 producer/死文件，保留消费者**——A5 的 worker-protocol.ts GIT_OP 常量
+  与 server worker-event.ingress.ts git.op 消费逻辑（301/646-692）完整保留（消费者已接线、
+  生产者未接线的半成品标注保留）。
+- 删除前逐处 grep 复核报告证据（确认零生产引用才删）；删除后把悬空注释引用（MockDispatcher/
+  git-credentials.ts/git-op-reporter.spec 等）改为描述性文字，避免悬挂引用。
+- 验证：server 1107 jest / worker 336 jest / 三端 tsc 0 错误 / web build 通过 / 7 组无悬空
+  grep 全 0 命中。C 类（canvasui 等）全部保留，未提交 git。证据
+  `.omo/evidence/code-review/dead-code-removal.txt`。
+
+## 2026-08-14 删除「查看 Agent 会话」无效占位入口
+
+- **占位入口识别**：任务详情页右侧 aside 底部的「查看 Agent 会话」卡片是 Phase 3 会话面板的纯占位（title="会话面板（Phase 3）"，从未实现），data-testid="view-session-link" 无任何点击处理。
+- **CMDK 操作项判定法**：Cmd+K 命令面板「操作」组项是否有效 = 是否在 app-shell handleCmdKSelect 有专门分支（如「新建任务」）或 CMDK_NAV_PATH 有 label。本项目中「查看产出物」「查看 Agent 会话」两者皆无 → 均无效，一并删除；「新建任务」保留。
+- **同源残留清理**：删 DOM 元素后必须同步清理引用它的断言/审计文档（e2e/pages.spec.ts 的 toBeVisible 断言 + e2e/reference/testids.ts 的 testid 清单），否则 e2e 会挂。testids.ts 中同一 testid 出现在多处，注意用 replaceAll 或分上下文逐一删除。
+- **playwright 脚本位置**：脚本放 /tmp 下无法解析 web 的 node_modules 的 playwright 包，需放到 web/ 目录内运行；扩展名 .mjs 下 require 报 ES module 错，用 .cjs 即可。
+- **验证链**：tsc --noEmit 0 错误 → npm run build 通过 → grep 0 命中 → docker compose up -d --build web 重建 → playwright 实测 DOM 消失 + Cmd+K 项消失。
+
+## 2026-08-14 附件上传 Failed to fetch 根因（Next rewrites ARG 陷阱）+ 粘贴支持
+
+- **Failed to fetch 根因（web Dockerfile ARG 缺省陷阱）**：web/Dockerfile `ARG API_PROXY_TARGET=http://localhost:3000` 缺省值在容器内致命——Next standalone server.js 监听 `$HOSTNAME`（容器网络 IP），**无进程监听 127.0.0.1:3000**，容器内实测 `fetch("http://localhost:3000/...")` 直接 ECONNREFUSED。rewrites 在 next build 编译进 routes-manifest.json、运行时 ENV 无效，构建期漏传 ARG / 旧镜像 → 代理指向容器自身 → 浏览器 fetch TypeError: Failed to fetch。修复：Dockerfile 缺省 ARG 改为 `http://server:3000`（compose 网络服务名），docker-compose.yml 的 build args 注入保持。
+- **实证方法论**：直连(13000) vs 代理(13001) curl 对比 + 容器内 fetch 探测 + routes-manifest 确认 + playwright 浏览器实测（0 失败请求才算过）——逐环节锁定，不猜。
+- **附带 bug（纯附件消息 400）**：前端 MessageInput 允许无文本纯附件发送（text=""），后端 CreateMessageDto.text `@IsNotEmpty()` 拒绝 → 400 text should not be empty。修复：DTO 去掉 @IsNotEmpty 保留 @IsString（text 允许空串），import 同步移除 IsNotEmpty。**前后端契约不一致要查：前端发送按钮 disabled 条件 = 允许纯附件，后端 DTO 必填校验却拒绝**。
+- **粘贴支持复用上传**：message-input.tsx 抽 `uploadFile(file)` 公共函数（扩展名校验→10MB→POST /uploads→pendingAttachment），handleFileChange 与 onPaste 共用。onPaste 遍历 clipboardData.items，`kind==="file"` 取第一个 getAsFile() → preventDefault（阻止浏览器把图片以 data: 插入 textarea）→ uploadFile；纯文本不拦截。playwright 模拟粘贴：page.evaluate 构造 DataTransfer.items.add(new File([bytes],...)) + dispatch ClipboardEvent('paste',{clipboardData,bubbles,cancelable})，检查 evt.defaultPrevented 验证拦截行为。
+- **运维教训（本次踩坑）**：`/data` 分区 100% 满会导致 MySQL redo log resize 失败崩溃循环（Cannot resize redo log file #innodb_redo... Failed to set size），docker build cache 占 53GB；`docker builder prune -f` 腾空间即恢复。另外 compose 依赖链重建时若 init 种子脚本被锁卡住（seed upsert Lock wait timeout），需 kill MySQL 残留连接（SHOW PROCESSLIST + KILL）+ 删残留容器再 up。
+
+## 2026-08-14 统一"用户上传附件"与"Agent MCP 上传"链路（unify-upload-archive）
+
+- **归档公共化**：platform-mcp.archiveFetchedFile 全量搬移至 ArtifactsService.archiveFile（行为不变，只换宿主），platform-mcp 的 submitFileArtifact / group_post fetchAndArchiveAttachment 转调之；POST /uploads 带可选 taskId 时也走同方法 → 用户附件与 Agent 上传链路完全一致。
+- **read_file 归档命中关键设计**：read_file 归档命中按 artifactVersion.filePath 归一化匹配（normalizeFileRef）。用户上传归档时 fileRef 必须存**落盘 URL**（=消息 attachmentUrl）而非 originalname，否则 Agent 用 chat_history 返回的 attachmentUrl 调 read_file 无法命中归档（走 worker 拉取 404）。filePath==attachmentUrl==contentRef 三者同源 → source:"archive" 读回内容。
+- **上传归档不阻断上传**：归档在 upload 内 await + catch(warn)，失败仅记日志，附件照常返回——附件发送稳定性优先于归档完整性。
+- **幂等去重天然覆盖重复上传**：同内容重复上传（同 sha256 + taskId）→ archiveFile 返回 duplicate，不新增 artifact/版本，UI 无感知。
+- **chat_history 附件契约**：消息行补 attachmentUrl/attachmentName/attachmentType/senderInstanceId 四字段（无附件显式 null），Agent 可据此调 read_file 读取用户上传的附件。
+- **多实例兼容**：chat_history 的 senderInstanceId 透出（agent 消息为 ta_ 实例 id，user 消息 null），与私聊/群聊落库双写结构对齐。
+- 验证：server tsc 0 错 / 1115 jest 全过 / web tsc+build 过；浏览器实测群聊上传 → 消息附件三字段 + artifacts 新 file 产出物 → chat_history 含 attachmentUrl → read_file(source:archive) 读回 base64。证据 `.omo/evidence/role-instance-separation/unify-upload-archive.txt`。
+
+## 2026-08-14 task_transition 权限实证 + assertWorkerTask 多实例精确匹配修复
+
+- **真实缺陷（实证发现）**：assertWorkerTask 回退分支 `session.findFirst({ where: { taskId, workerId } })` 在多实例任务下返回**首条 session**（恰好是主实例的）→ 团队内合法非主成员（selfInstanceId 正确）被误判"禁止冒充"，提示不准确，且无法落到 transitionByAgent 的"仅主 Agent"403。**单元测试 mock 了 findFirst 返回值，掩盖了真实多实例歧义**——必须真实链路验证才能发现。
+- **修复**：where 增加 `...(selfInstanceId !== undefined ? { taskAgentId: selfInstanceId } : {})`，selfInstanceId 提供时按实例精确匹配自身 session。安全不降级：跨任务/冒充实例因无自身 session → 403"禁止跨任务访问"。
+- **Prisma OR 陷阱**：OR 内各分支字段集必须完全一致，`undefined` 值也会被剔除导致"Argument taskAgentId is missing"；`{ taskAgentId: x, agentId: undefined }` 与 `{ taskAgentId: null, agentId: y }` 仍报字段缺失。干脆不用 OR——因 selfInstanceId 恒为 ta_ 前缀、存量 taskAgentId NULL 会话的 instanceId 回退是 a_ 前缀 agentId，两者永不等（legacy 回退是死代码），直接按 taskAgentId 精确匹配即可。
+- **错误提示 Agent 友好化**：MCP 工具的 403 不仅报错，还要给 Agent 完整引导——message 含实际 mainAgentInstanceId + 正确操作路径（"请知会主 Agent 调用 task_transition，或由管理员在任务管理界面操作"）。GSI（worker-dispatcher）同步"其余成员调用将返回 403 提示"。
+- **验证方法论**：三层防线逐层实证——(a) 跨任务/冒充实例 → 403"禁止跨任务访问"（归属校验）；(b) 团队内非主实例 ta_38/ta_40 → 403 TASK_STATUS_MAIN_AGENT_ONLY 完整引导；(c) 主实例 ta_37 → start 幂等 + mark-pending-review 流转 + reject 回滚（actor_type=agent 落库 task_events）。验证后必须回滚状态（in_progress），不破坏数据。截图任务详情页确认状态与主 Agent 标记。
+- **playwright 脚本运行**：脚本放 /tmp 下 NODE_PATH 指向 web/node_modules 才能 require playwright；用 .cjs（.mjs require 报 ES module 错）。
+- 验证：server tsc 0 错 / 全量 jest 54 suites·1125 tests 过 / 真实链路 curl + 查库 + UI 截图。证据 `.omo/evidence/role-instance-separation/task-transition-permission.txt`。
+
+## 2026-08-14 vteam Helm chart（chart/vteam，对齐 docker-compose 的 K8s 形态）
+
+- **结构**：chart/vteam 含 Chart.yaml/values.yaml/values-dev.yaml/README.md + 14 个 templates（server/web/worker 三 Deployment、mysql StatefulSet、init Job、4 Service、3 PVC、ConfigMap/Secret/Ingress/NOTES）。自包含实现，不引入 bitnami 依赖。
+- **随机值同源（关键设计）**：configmap 拼装 DATABASE_URL 的密码与 Secret.DB_PASSWORD 必须是同一生成值——在 `_helpers.tpl` 里用 `set` 在根 context 缓存随机值（`{{- $_ := set . "vteamDbPassword" (default (randAlphaNum 16) .vteamDbPassword) }}`），secret.yaml 与 configmap.yaml 都 include 同一 helper → 保证一致。首次安装随机生成，升级经 `lookup` 复用已有 Secret 值（避免密码轮换失配）。
+- **Helm 模板陷阱**：`{{- include ...}}` 会吞掉前一行的换行导致 labels 合并（`helm.sh/chart: vteam-1.0.0app.kubernetes.io/name`）——include 前不能用 `-`；`fromYaml` 渲染 JSON 数组进 exec.command 不可靠（报 cannot unmarshal array），探针命令直接写 YAML list 最稳。
+- **web API_PROXY_TARGET 铁律**：rewrites 编译进 routes-manifest.json，运行时 env 无效——chart 只把 `web.image.proxyTarget` 作为构建参数文档（README/values 注释），web Deployment 不注入任何代理 env（验证渲染仅注释出现）。
+- **探针对齐**：server `/api/v1/health`、web `fetch($HOSTNAME:3000)` 都用 exec(node -e fetch)（node:22-alpine 无 curl/wget）；worker 不设 HTTP 探针（对齐 compose 无 healthcheck，活跃由 server 心跳判定）。
+- **init 门控**：initContainer（node net 探测 mysql:3306，外部 DB 模式跳过）→ 对齐 compose `depends_on: db(service_healthy)`；Job command `npx prisma migrate deploy && node dist/prisma/seed.js`，backoffLimit=6 + ttlSecondsAfterFinished=300。
+- **worker advertise**：`WORKER_ADVERTISE_HOST=http://<release>-worker`，worker 上报 baseUrl=`advertiseHost:servePort` → server 经 worker Service :4000 访问。
+- **验证**：helm lint 0 错误；helm template 默认模式（14 资源齐全）+ external 模式（无 mysql，init 无 wait-db）+ values-dev 覆盖均渲染成功；抽查 DATABASE_URL 指向 vteam-mysql:3306/aiagents、configmap 密码==secret.DB_PASSWORD 一致、MODEL_CREDENTIAL_KEY 32 字符、PVC 挂载 /app/uploads|/data/keta-worker|/root、无模板残留。证据 `.omo/evidence/role-instance-separation/helm-chart.txt`。
+
+## 2026-08-14 K8s worker 多副本注册冲突修复（WORKER_ID 唯一化）
+
+- **根因**：chart ConfigMap 固定下发 WORKER_ID=w_<release>，worker 所有副本共享同一 ID → server 以 workerId 为主键 upsert（workers.service.ts:243 register）→ 后注册覆盖先注册，页面只显示 1 个 worker。
+- **修复（零 worker 代码改动）**：WORKER_ID 移出共享 ConfigMap，改由 worker Deployment 经 downward API 注入 pod 名。选 `POD_NAME=fieldRef(metadata.name)` + `WORKER_ID="w_$(POD_NAME)"`（K8s env value 支持 $(VAR) 引用同容器先前 env）——保留 w_ 前缀协议语义，且每个 pod 全局唯一。显式 --set worker.env.workerId 时优先用该值。
+- **worker 侧确认**：config.ts:95 `workerId = env.WORKER_ID || w_${hostname}`，env 值直接用无覆盖逻辑；hostname 容器内即 pod 名（天然唯一）——故 config.ts 也可作为天然兜底，但显式注入更清晰。
+- **Job immutable 陷阱复现**：helm upgrade 历史 REV3 failed = "cannot patch Job spec.template: field is immutable"——改 configmap 后 init Job 也需重渲。本次 Job 已被 ttlSecondsAfterFinished=300 自动清理（delete job 返回 NotFound），无需手动删。
+- **滚动替换旧 worker 行**：旧 pod 的 worker 行 30s 后由 server 健康检查自动判 offline（markStaleWorkersOffline），无需手动清理；分派只调度 online worker。
+- **API 验证端口冲突**：本机 13000 被 docker compose server 占用，port-forward 绑定失败且 curl 会打到本机 compose 环境（误以为 K8s 数据）——遇此情况改走 `kubectl exec <server pod> -- node -e "fetch(...)"` 集群内验证最可靠。
+- **验证实证**：2 副本 → DB workers 2 行 online 心跳双活（各自 w_<pod> 唯一）、API /api/v1/workers 2 online、worker_model_availabilities 两 worker 各 7 模型、两 worker 日志注册成功 workerId 不同。证据 `.omo/evidence/role-instance-separation/k8s-worker-replicas.txt`。
+
+## 2026-08-14 删除离线 Worker 能力（DELETE /api/v1/workers/:id）
+
+- **后端 remove(id)**：查 worker（404）→ 仅 offline 可删（online/degraded → 409 WORKER_ONLINE_NOT_REMOVABLE）→ `$transaction` 数组按序清理全部 workerId 外键引用后物理删除。**关键顺序**：availability/instances 硬删（软删 removedAt 不解除 FK Restrict，必须删行）→ sessions.workerId+instanceRef 置空（Session.workerId Restrict）→ agents.workerId 置空（软绑定"首选 worker"）→ worker.delete。成功后清理 workerMcpStatus/pendingCommands 内存态。
+- **权限点 workers.delete**：roles.constants.ts 权限矩阵 8 资源 × 6 操作本就含 workers×delete，controller 直接 `@RequirePermission('workers.delete')`，PermissionGuard 按 `permission.split('.')` 解析 resource/action；seed admin `all:true` 简写天然放行，member `all:false` 仅 view 拒绝写——无需改权限矩阵/seed。
+- **前端**：删除入口仅 `isOffline` 渲染（online 不暴露，后端 409 兜底）；ConfirmDialog 二次确认 + 确认后 invalidateQueries(['workers']) 刷新；无 workers.delete 权限禁用 + title 提示。对齐 agents 页删除确认模式。
+- **Prisma $transaction mock 陷阱**：`prisma.$transaction([...])` 数组元素是 PrismaPromise（thenable）而非函数，测试 mock 里 `await op()` 会报 `TypeError: op is not a function`（2 个 remove 用例挂）——改为 `await op`（thenable await）即全绿。之前全量 1129 过是因为 remove 用例还没加。
+- **K8s 部署流**：改 server 代码后需 docker build（tag vteam-worker-delete）→ push docker-hosted.ketaops.cc/xishuhq → `helm upgrade -n vteam --reuse-values --set server.image.repository=... --set server.image.tag=...`（⚠️ helm upgrade 必须带 `-n vteam`，否则报 "has no deployed releases" 误导）。
+- **真实删除实证**：online 删除 → 409 行保留；offline 带关联（7 wma + 2 tgi + 1 session）删除 → workers 行消失 + wma/tgi 硬删清零 + session 保留但 worker_id/instance_ref 置空；offline 造出（scale sts --replicas=1 → 35s 判 offline）→ 删除 → 行消失；scale 回 2 后 pod 重新注册自动建新行。health/登录回归正常。
+- **wget 不支持 DELETE method**：K8s 容器内（node:22-alpine 无 curl）用 `node -e "fetch(url, {method:'DELETE', headers:{Authorization}})"` 发 DELETE 最稳。
+- 证据 `.omo/evidence/role-instance-separation/worker-delete.txt`。
+
+## 2026-08-14 K8s 发消息无反应根因（vteam.ketaops.cc）
+
+**症状**：任务 t_0000000002 发消息只有 ACK（"收到，正在处理…"）无 agent 实际回复。
+**根因**：worker 上报 capabilities.baseUrl 用共享 ClusterIP 名 `http://vteam-worker:4000`；
+server `resolveExecBaseUrl()` 拼出 `http://vteam-worker:4198`，而 vteam-worker ClusterIP
+Service 仅暴露 4000（serve），4198（exec）未暴露 → dispatch 全部
+`WorkerUnavailableException: fetch failed`。
+**关键区分**：worker 心跳（worker→server）正常，但 server→worker 方向不通。
+**修复**：chart statefulset-worker.yaml 新增 env
+`WORKER_ADVERTISE_HOST=http://$(POD_NAME).vteam-worker-headless.<ns>.svc.cluster.local`
+（每副本上报 pod 专属 headless DNS，exec 基址自动解析为同 origin :4198）；configmap 移除共享值。
+**复验**：sendMessage -> ses_0008f7cb4ffeFGjDAftJ1ZYMR6 model=opencode/big-pickle (HTTP 204)，
+agent 回复落库（m_0000000012）。
+**通用排查顺序**：① 消息是否落库（无=接口/前端，有=dispatch）② ACK 有但无回复=dispatch
+或模型失败 ③ 用 kubectl logs 查 WorkerUnavailable ④ 检查 worker 上报的 baseUrl 是否可达
+（server 容器内 fetch 实测，区分 ClusterIP vs headless DNS）。
+**StatefulSet 多副本部署注意**：server 对 worker 的调用必须走 pod 专属 headless DNS
+（<pod>.<headless>.<ns>.svc），共享 ClusterIP 会造成负载均衡到错误副本 + 端口未暴露问题。
+
+## 2026-08-14 SSH 私钥格式兼容问题确认（git_clone 失败根因）
+
+- **问题真实存在**：平台下发并原样落盘的 OPENSSH 容器格式 ssh-rsa 私钥，在 worker（OpenSSH 10.3p1 + OpenSSL 3.5.7）加载报 `error in libcrypto: unsupported`（EXIT 255），git clone `Permission denied (publickey)`；转 PKCS#1 PEM 后加载/克隆均成功。密钥内容数学有效（openssl rsa -check ok / sign-verify ok），纯格式兼容问题。当前 3 个仓库凭证共享同一把 ssh-rsa 3072 私钥，全部受影响。
+- **环境取证**：worker 容器 `ssh -V`=OpenSSH_10.3p1+OpenSSL 3.5.7；无 `openssl` 二进制（alpine 精简镜像），有 ssh-keygen；宿主机 8.9/3.0.2 交叉验证同样失败（文本略异：`error in libcrypto`）。
+- **关键区分**：worker 自己 `ssh-keygen -t rsa` 生成的 OPENSSH key 加载**正常**——不是环境普遍禁用 ssh-rsa，而是平台这把 key 的特定容器内容在 OpenSSL 3.x 下不被支持；两把 key 容器结构解析几乎一致（仅 comment/padding 差异），根因在 libcrypto 内部。**ed25519（同为 OPENSSH 头）不受影响**。
+- **worker 内 `ssh-keygen -p -m PEM` 不可用**：转换也需先加载 key，对问题 key 同样报 unsupported；worker 又无 openssl 二进制 → 修复必须纯代码解析 openssh-key-v1 容器（Node 实测可行：解 keytype=ssh-rsa → 提 n/e/d/p/q → 算 dp/dq/qinv → 构 PKCS#1 DER，DER 与 python cryptography 标准导出逐字节一致，加载 EXIT 0 指纹不变）。
+- **修复建议**：worker 侧 `git-tools.ts writeTempKey` 格式归一（检测 OPENSSH 头+解容器 keytype，ssh-rsa→PKCS#1 PEM，ed25519 原样）；平台录入侧转换仅对新录入生效；长期引导 ed25519。DER 构造需单测锁定（mpint 前导零/qinv/base64 每 64 字符换行是坑）。
+- **验证方法速查**：kubectl exec worker `cat /root/.keta-git-creds.json`（明文）→ node 提 key 写临时文件 → `ssh-keygen -y -f` 复现 → python cryptography 导出标准 PKCS#1 → `ssh-keygen -y -f` 对比指纹（应一致 `SHA256:iy36pU1xfSgNS1/Ir059x9BdHfzN+/vmyPyDmGNAzmc`）→ GIT_SSH_COMMAND git clone 端到端。
+
+## [2026-08-14] worker 移除共享 ClusterIP Service（方案 B）— k8s-remove-worker-svc.txt
+- **共享 Service 无实际作用**：REV 12 headless DNS 修复后，server 分派已全部走
+  `WORKER_ADVERTISE_HOST=http://<pod>.<sts>-headless.<ns>.svc:4000`（exec :4198 同 origin），
+  共享 `vteam-worker` ClusterIP（:4000/serve）仅剩 serve 调试入口 → 直接删除，
+  serve 经 port-forward 到 pod 调试。StatefulSet `serviceName` 依赖 headless Service，
+  **必须保留**。
+- **helm upgrade 删 Service 不触发 worker 重启**：StatefulSet template 未变，仅 Service
+  资源被 helm 回收，worker 会话/注册零中断（pods AGE 不变）。
+- **port-forward 语法坑**：`kubectl port-forward sts/<sts>` 合法（转发到 ordinal 0），
+  `sts/vteam-worker-0` 会 NotFound——StatefulSet 名不含 ordinal。指定副本用
+  `kubectl port-forward pod/vteam-worker-1 14000:4000`。
+- **本机端口被 compose 占用**：13000/13001/14000 是 `aiagents-compose-*`（docker）
+  映射，查 K8s server 需另选端口（13003）转发；K8s 与 compose 环境数据独立
+  （compose server 的 workers 只含 w_compose_worker）。
+- **回归模式**：POST /channels/{id}/messages @ agent → 观察 ACK（"收到，正在处理…"）
+  + 最终回复落库 + server 日志 `[ingress] session s_xxx status → running/idle`，
+  6m 窗口无 WorkerUnavailable 即证明 headless 直连分派正常。
+- **API 返回控制字符坑**：群聊历史含 Agent 多行回复，json 解析前需剥
+  `[\x00-\x08\x0b\x0c\x0e-\x1f]`（server 未转义，Python json 直接报 Invalid control character）。
+
+- **私聊历史 = serve 会话（DM 需求）**：新增 GET /channels/:id/session-history，
+  workerClient.getMessages 拉 serve 全量 → 转换（user/assistant 映射、reasoning/tool parts
+  保留、synthetic 剔除）；未绑定/worker 不可达回退平台表（source=db）。前端私聊页
+  fetchChannelMessages 按 channel.type=private 分流，mergeSnapshotWithLive 按 id 前缀
+  （serve=msg_/ses-，平台=m_）区分快照与 SSE 增量，同 sender processing 替换去重。
+- **serve step-finish 不总是持久化**：历史 assistant 消息常无 step-finish part，
+  status 判定不能依赖它——历史一律 sent，仅最后一条 assistant 无 finish 标 processing。
+- **serve user 消息含注入 prompt**：【任务上下文】+用户文本合成单个 text part（无
+  synthetic 标记），前端 ChatBubble 原样展示，与改造前行为一致，如需纯净展示需
+  转换层剥离注入前缀（本期未做，保持 serve 语义透传）。
+
+- **私聊 SSE 不刷新根因（dm-sse-no-refresh）**：handleTaskCompleted 复用**跨轮次残留**的
+  processing 消息（delta 建后 agent 失败/中断未清理）→ 本轮回复写入旧消息，createdAt 保留
+  旧轮时间 → SSE 广播 message.createdAt 过期 → 前端 mergeSnapshotWithLive 按 createdAt 排序
+  把新回复排到历史中间 → 私聊页底部不刷新（SSE 事件接口正常返回数据，页面却不实时更新）。
+  修复：dispatchForTarget 每轮 execute 前 `message.updateMany` 把目标频道该 agent 残留
+  processing 标记 failed → 本轮回复新建或复用本轮 delta 的 processing，createdAt 正确。
+  诊断要点：日志「流式消息终态化 message=m_526」+ DB 查 created_at 是否早于本轮 + 页面
+  按文本 grep 回复定位其在历史中间而非底部。
+- **failProcessingMessage 只标记最新一条 processing**：同 agent 频道内多 processing 残留时
+  其余不清理；dispatch 前统一清理兜底，防终端回复复用旧残留。
+
+- **长文本列根治（fix-text-columns）**：`value too long for column description`（VARCHAR(191)）
+  源于 description 列无 @db.Text 而 DTO 无 MaxLength → 用户长文本落库 500。修复：Task/Issue/
+  Project/Skill 四个 description 列改 TEXT（新迁移 20260814150000_text_columns）。排查方法：
+  grep schema 中 `String?` 无 @db.Text 且对应 DTO 无 MaxLength 的列即长文本候选（title/枚举/
+  短字段不动）。K8s 部署纪律：镜像重推 vteam-k8s-textfix + `helm get values` 导出完整基线
+  仅改 server.image.tag → helm upgrade，init Job 自动重跑 prisma migrate deploy。
+
+- **worker 缩容 + 内存调整纪律（main-fix-and-worker-tune）**：sts 可能被手动
+  kubectl edit 过而 helm 基线仍旧值——先 `helm get values vteam -n vteam` 对比，
+  别信 kubectl get sts 表面值。改资源/副本一律改 chart values.yaml + values-dev.yaml
+  (生产基线覆盖源) 双处，再完整基线 -f upgrade（严禁只 --set）。worker 内存
+  limit 1Gi→8Gi、requests 256Mi→1Gi（常驻 ~2Gi，requests 若低于常驻需留意驱逐）。
+  chart/ 目录此前从未 git 跟踪（untracked），改 chart 时注意首次 add。
+  StatefulSet 缩容不删 PVC（worker-1 遗留 PVC 保留，扩容可复用）。
+  worker 注册记录 w_vteam-worker-1 变 offline 属预期（pod 已终止），不误判为故障。

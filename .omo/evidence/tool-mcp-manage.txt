@@ -1,0 +1,38 @@
+PASS | admin login
+PASS | skill edit modal opens + content loaded | contentLen=143
+PASS | skill toggle | ✓已停用
+PASS | create skill modal
+PASS | mcp server list | count=3 names=keta-platform,npx_gitee-ent,test-server-tmp
+PASS | edit npx_gitee-ent prefill | cmd={   "command": [     "npx",     "-y",     "@gitee/mcp-gitee-ent@latest"   ] }
+PASS | edit npx_gitee-ent save | ✓MCP 服务器「npx_gitee-ent」保存成功
+PASS | PATCH /mcp-servers timeout persisted | timeout=60
+PASS | restore npx_gitee-ent original command
+PASS | view keta-platform detail | url=http://server:3000/api/v1/platform-mcp headers=true
+PASS | delete test-server-tmp | ✓MCP 服务器已删除
+PASS | server list after delete | count=2
+PASS | custom tool detail (schema read-only) | schema={   "type": "object",   "required": [     "query"   ],   "properties": {     "qu
+PASS | custom tool edit save | ✓工具「test-tool」保存成功
+PASS | PATCH /tools schema persisted | additionalProperties=false
+PASS | restore test-tool schema
+PASS | builtin tool detail (read-only) | action=bash
+PASS | mcp tool detail (server reverse) | server=keta-platform
+PASS | member login
+PASS | member sees server list | count=2
+PASS | member no edit/delete/create on server | edit=0 delete=0 create=0
+PASS | member tool view only | view=2 edit=0 toggle=0
+PASS | member skill no edit | skillEdit=0
+
+FAIL_COUNT=0
+
+========================================
+截图清单（.omo/evidence/tool-mcp-manage/）:
+- 1-mcp-server-list.png        MCP 子 Tab：server 列表（npx_gitee-ent/keta-platform + 测试 server，含类型/状态徽章）
+- 2-mcp-server-view-detail.png 查看 keta-platform 详情弹窗（remote url/headers 只读展示）
+- 3-mcp-server-delete-confirm.png 删除 MCP server 的 ConfirmDialog 二次确认
+- 4-tool-detail.png            自定义工具详情弹窗（schema 只读格式化 JSON）
+- 5-tool-edit.png              自定义工具编辑弹窗（schema JSON 可改 + enabled）
+- 6-member-readonly.png        成员（seed-member）只读视图（无编辑/删除/新建按钮）
+
+改动文件:
+- web/app/(main)/skills/page.tsx  MCP server 管理（列表/查看/注册/编辑/删除）+ 工具详情/编辑 + 工具行查看按钮
+- web/lib/api.ts                 修复 DELETE 200 空 body 被 JSON.parse('') 误判为失败（NestJS 对 undefined 返回空响应体）

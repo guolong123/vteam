@@ -1,0 +1,126 @@
+================================================================
+GitHub PR Review — guolong123/vteam（4 PR）
+审核时间：2026-08-15 ｜ 审核人：Sisyphus-Junior
+方式：gh pr view/diff + 本地 worktree 基线对照（github/main = 6566a3b）
+================================================================
+
+【基线事实】
+- main 当前 = 6566a3b（本地已推 13 commit，含 ensureTaskWorkDir/taskWorkDir 基础）
+- 4 个 PR 均基于 6566a3b，无过期基线
+- PR #4 分支（fix/group-post-mention-dispatch）包含 PR #1 的提交 54f3cde
+  （worker-dispatcher.ts 两分支内容 IDENTICAL 已验证）→ PR #1 与 PR #4 内容重叠
+
+----------------------------------------------------------------
+PR #1  feat(prompts): agent 系统提示补充运行时持久化目录说明
+  分支 feature/agent-prompt-persistent-dir ｜ 1 commit（54f3cde）｜ 2 文件
+----------------------------------------------------------------
+改动：
+- worker-dispatcher.ts GLOBAL_SYSTEM_INSTRUCTIONS 增【持久化目录】静态段
+- BuildSystemInstructionsOptions 增 persistentWorkDir；buildSystemInstructions
+  动态注入【运行时工作目录】段；blocks 空段 filter
+- spec +3 用例（静态段/动态注入/缺省兼容）
+审核：
+- 引用 taskWorkDir（main 已有 ensureTaskWorkDir）→ 可编译
+- 空段 filter 为行为兼容增强，正确
+- P1：内容已被 PR #4 完整包含（worker-dispatcher.ts 与 PR #4 IDENTICAL），
+  两 PR 并存会产生合并重复/冲突 → 建议 PR #1 关闭，由 PR #4 承载
+- P2：GLOBAL 提示词写死「默认 /data/worker/<agent名称>」，若 WORK_DIR env
+  与 /data/worker 不一致（PR #2 默认 /tmp/keta-worker-tasks），提示词与实际
+  目录可能不符（与 PR #2 同根则一致）
+结论：APPROVE（须与 PR #4 合并处理，避免重复合并）
+
+----------------------------------------------------------------
+PR #2  feat(tasks): 每个 agent 独立持久化工作目录绑定（is_0000000010）
+  分支 feature/agent-work-dir ｜ 2 commits（0419ab3 + 6238ae9）｜ 13 文件
+----------------------------------------------------------------
+改动：
+- migration 20260814150000_agent_work_dir：task_agents 加 work_dir（可空）
+- schema.prisma TaskAgent.workDir
+- tasks.service：sanitizeWorkDirName（CJK 保留、防路径穿越，`../../etc`→`etc` 已 trace 正确）、
+  defaultAgentWorkDir、createInstances/toTaskDto 写回显 workDir；DTO 加 workDir?
+- worker-dispatcher：ensureTaskWorkDir → resolveAgentWorkDir（work_dir →
+  /data/worker/<sanitize(name)>[-seq] → 任务级兜底 三层链）
+- web tasks/new：实例行 workDir 输入（未改动不提交，后端按 agent 名解析）
+- worker exec-server：payload.directory 兜底 mkdir recursive（try 内，错误收敛 error 事件）
+审核：
+- P1：agent 目录硬编码 /data/worker，不读 WORK_DIR env；taskWorkDirRoot 读
+  WORK_DIR（默认 /tmp/keta-worker-tasks）。未设 WORK_DIR 时 agent 目录与任务级
+  目录不同根；.env.example WORK_DIR 注释（暗示控制 agent 目录）与实现不符。
+  建议：agent 根也读 WORK_DIR，或明确 /data/worker 为固定约定并修正注释
+- P2：spec 的 F3 用例断言 /data/worker/产品经理 且 fs.existsSync —— 测试真实写
+  系统目录（原为 config WORK_DIR 临时根），非 root/CI 环境可能失败、污染系统目录
+- NITPICK：resolveAgentWorkDir 的 session 参数仅用 taskAgentId，签名可简化；
+  worker-dispatcher import tasks.service 导出函数（chat→tasks 耦合，无环可接受）
+结论：APPROVE（P1 合并前确认 WORK_DIR 语义；P2 测试隔离性建议改进）
+
+----------------------------------------------------------------
+PR #3  web 端任务/issue 交互优化（is_0000000011/0012/0013）
+  分支 feature/issue-web-optimization ｜ 3 commits（9ce34bf/1c8c449/52b8252）｜ 19 文件
+----------------------------------------------------------------
+改动：
+- is_0011：UpdateTaskDto 加 backgroundDocs，TasksService.update 持久化；
+  TaskPanel ✎编辑 + 弹窗（标题/描述/背景文档，POST /uploads 上传）
+- is_0012：IssueDetailModal 共享组件（详情+编辑+流转），双入口
+  （TaskPanel 待办 Issue、issues 列表 IssueRow 主列）；IssueStatusActions 增 onSettled
+- is_0013：issue 状态机四态→五态（+rejected，reject=in_progress→rejected 独立态，
+  必填 reason 400）；reject_reason/rejected_at 列 + issue_activities 新表（迁移
+  20260814090000，create/update/transition 轨迹含 actorType/actorId/instanceId，
+  reason 入 metadata）；toIssueDto async 化（含操作人展示名解析）；MCP issue_transition 增 reason
+审核：
+- 逻辑：applyTransition from 支持数组、reject reason 校验（trim 非空 400）、
+  reopen 清 rejectReason/rejectedAt、幂等分支正确；toIssueDto 全部调用点
+  await 检查通过（async 方法内 return 自动 flatten + findAll/findAllByAgent
+  显式 Promise.all）；findIssue 带 ISSUE_INCLUDE ✓
+- web：IssueRow 主列（onOpenDetail）与操作列（编辑/删除）为兄弟节点 → 无冒泡误触；
+  IssueStatusActions 按钮有 stopPropagation；rejected 主题/排序/筛选/徽章全量同步
+- P2：toIssueDto async 化 → 列表分页 N+1（每 issue 最多 3 个 findMany 解析
+  actorName，20 条/页 ≈ 60 额外查询）——列表不展示 activities，建议列表路径
+  不 include activities 或批量解析
+- P2：reject 语义破坏性变更（open 退回 → rejected 独立态 + reason 必填 400）——
+  已声明且仓库内 MCP 描述/前端全量同步，需确认无外部调用方依赖旧语义
+- NITPICK：issue-detail-modal.tsx 复制 issues/page.tsx 的 ISSUE_STATUS_THEME/
+  TAG_THEMES/formatTime（建议抽取共享）；迁移时间戳早于 PR #2（不同表无冲突）
+结论：APPROVE（P2 建议优化，非阻断）
+
+----------------------------------------------------------------
+PR #4  fix(mcp): group_post 解析 @ 提及并定向分派被 @ 实例（含主 Agent）
+  分支 fix/group-post-mention-dispatch ｜ 2 commits（cb7f205 + 54f3cde）｜ 4 文件
+----------------------------------------------------------------
+改动：
+- platform-mcp.service.ts groupPost：parseGroupPostMentions 解析 content 中
+  @<别名/agent名>（@前缀 + 边界字符判定，防 @开发者 误吞 @开发者-2）；
+  命中 → 落库 mentions（对齐 notify_agent 形状）+ dispatchAgentMention 定向分派
+  每个被 @ 实例（含主 Agent），失败 catch 记日志不阻断发布；无 @ → mentions null
+- 分支携带 PR #1 提示词改动（worker-dispatcher.ts 与 PR #1 IDENTICAL）
+审核：
+- 边界逻辑正确：indexOf + 边界正则（空白/中英文标点）验证通过；@开发者-2
+  中 @开发者 后随 '-' 不误命中；重复提及去重 ✓
+- 落库形状与 notify_agent 对齐；分派失败不阻断 ✓；无 @ 零查询早退 ✓
+- 测试覆盖：@主 Agent 分派 / 无@不触发 / 多实例@前缀边界（66 passed）
+- P1：分支包含 PR #1 提交 → 与 PR #1 合并冲突面；建议先合 PR #2（落实
+  /data/worker 语义）再合 PR #4，关闭 PR #1
+结论：APPROVE（分支管理需与 PR #1 协调）
+
+================================================================
+汇总
+================================================================
+PR #1  APPROVE（与 #4 重叠，建议关闭由 #4 承载）
+PR #2  APPROVE（P1：agent 目录根与 WORK_DIR env 语义确认）
+PR #3  APPROVE（P2：列表 N+1；reject 语义破坏变更已声明）
+PR #4  APPROVE（P1：分支含 #1 提交，合并顺序协调）
+
+合并顺序建议：
+  1) PR #2（work_dir 基础设施——#1/#4 提示词的 /data/worker 语义依赖它）
+  2) PR #4（含 PR #1 提示词改动 + group_post @ 分派修复）
+  3) 关闭 PR #1（内容已被 PR #4 完整包含）
+  4) PR #3（issue 交互，独立；与 #2/#4 仅 schema.prisma/tasks.service.ts/
+     platform-mcp.service.ts 文件级轻度重叠，git 三路合并可处理）
+
+阻塞项：无 P0。P1 汇总：
+  - PR #1/#4 内容重叠（分支管理，非代码缺陷）
+  - PR #2 agent 工作目录根硬编码 /data/worker 与 WORK_DIR env 不一致（文档与实现）
+未评论、未合并（待用户指示）。
+
+审核方法说明：完整 diff 逐行审阅（PR1:87 / PR2:718 / PR3:2604 / PR4:285 行）；
+对照本地 main（6566a3b）worker-dispatcher.ts / issues.service.ts / issues/page.tsx /
+exec-server.ts 源码交叉验证编译与行为影响。

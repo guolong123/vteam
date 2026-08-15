@@ -1,0 +1,85 @@
+# K8s 部署验证：GitHub main 合并 + 本地修复 + PR 冒烟（2026-08-15）
+
+## 1. Git 合并处理（保留本地未提交修复）
+
+### 流程
+- `git fetch github`（main=61e8e18，含 PR #2/#3/#4 合并）
+- 本地未提交修复备份至 `/tmp/opencode/vteam-merge-backup/`（5675 行 diff + 74 untracked 列表）
+- `git stash push -u` → `git checkout -b main-local github/main` → `git stash pop`
+- 冲突 5 文件，两侧语义均保留：
+
+| 文件 | PR 侧改动 | 本地修复 | 合并结果 |
+|------|-----------|----------|----------|
+| worker-dispatcher.ts | PR#2「持久化目录」系统指令 + resolveAgentWorkDir | 「托管模式」系统指令 | 两条指令都保留 |
+| tasks.service.ts | PR#2 workDir 默认目录 + sanitizeWorkDirName | managedMode 更新分支 | 两个 if 分支都保留 |
+| update-task.dto.ts | backgroundDocs 属性 + IsArray | managedMode 属性 + IsBoolean | 两属性都保留 |
+| tasks.service.spec.ts | sanitizeWorkDirName import | TaskProgressionScheduler import | 都保留 |
+| web tasks/[id]/page.tsx | IssueDetailModal/TaskInfoEditModal/onEditTaskInfo | onToggleManagedMode 托管开关 | 三个 prop 都保留 |
+
+### 修复：循环依赖（合并后 tsc/jest 失败根因）
+- PR #2 让 worker-dispatcher import tasks.service（sanitizeWorkDirName）
+- 本地 scheduler（task-progression.scheduler）import worker-dispatcher → 形成循环：
+  `worker-dispatcher → tasks.service → scheduler → worker-dispatcher`
+- CJS 下 decorator 元数据 `design:paramtypes` 第 5 位为 null，Nest 无法解析 TasksService 构造依赖
+- 修复：新建 `server/src/tasks/work-dir.util.ts`（纯函数无依赖），两处改 import，循环打破
+
+### 修复：PR #2 schema bug（workDir 缺 @map）
+- PR #2 schema.prisma `workDir String?` 缺 `@map("work_dir")`，迁移建的列是 `work_dir`
+- Prisma client 生成列名 `workDir`，查询报 "column workDir does not exist"
+- 修复：`workDir String? @map("work_dir")` → 重建 server 镜像（merged2 tag）
+
+## 2. 三端编译 + 测试
+- server tsc --noEmit: 0 错误（prisma generate 后）
+- worker tsc --noEmit: 0 错误
+- web tsc --noEmit: 0 错误
+- server jest: 55 套件 / 1170 测试全部通过
+
+## 3. 镜像构建与推送（registry docker-hosted.ketaops.cc/xishuhq/）
+- vteam-server:vteam-k8s-merged  → 6387afa1b2bc
+- vteam-server:vteam-k8s-merged2 → f3583dc43715（@map 修复版，实际部署）
+- vteam-worker:vteam-k8s-merged → 752f4889c1a1
+- vteam-web:vteam-k8s-merged    → edaa92411674（API_PROXY_TARGET=http://vteam-server:3000）
+
+## 4. Helm 部署（完整 values 基线纪律）
+- `helm get values vteam -n vteam` 导出 73 行基线（db/ingress/secret/persistence/replicaCount/资源限制全保留）
+- 仅改 3 个镜像 tag → `helm upgrade`，当前 REVISION=25
+- init Job Completed（18 个迁移全部应用，含本地 managed_mode/text_columns + PR agent_work_dir）
+- 事故：一次 sed 误将 web/worker tag 也改成 merged2（该镜像不存在）→ ImagePullBackOff；用修正 values 重新 upgrade + 强制删 worker pod 恢复
+
+## 5. 全面验证
+- pod: server/web/worker/mysql 全部 1/1 Running；init Completed
+- health 200；登录 200（admin/admin123）
+- agents=5（产品经理/项目经理/架构师/开发者/测试）
+- worker: vteam-worker-0 online，opencode serve:4000 就绪，MCP connected（/api/v1/platform-mcp 200）
+
+## 6. PR 功能冒烟
+
+### PR #2：每 agent 独立工作目录
+- 创建任务显式 workDir `/data/worker/冒烟产品` → 201，落库 work_dir 精确保存
+- 缺省实例自动生成 `/data/worker/开发者`
+- worker 容器内 `/data/worker/冒烟产品` 目录由 resolveAgentWorkDir mkdir 创建
+- DB 确认：task_agents.work_dir 列存在且值正确
+
+### PR #4：group_post @ 提及定向分派
+- MCP group_post 调用（content 含 @开发者-1）成功 → messageId m_0000000435
+- mentions 落库：`[{name: 开发者-1, type: agent, agentId: a_developer, instanceId: ta_0000000024}]`
+- 被 @ 开发者实例 s_0000000024 worker_id NULL→w_vteam-worker-0，被调度执行（131 chars 完成）
+
+### PR #3：web issue 交互
+- issue 创建 201（is_0000000016，tags 落库，activities=1）
+- 流转 start → in_progress；reject 必填原因 → rejected + rejectReason/rejectedAt 落库
+- PATCH 任务编辑 200（description + backgroundDocs is_0000000011）
+- web routes-manifest 验证 API_PROXY_TARGET=http://vteam-server:3000 编译进 rewrites
+- /issues、/tasks/[id]、/workers、/agents、/login 页面均 200
+
+## 7. 本地修复回归
+- 长描述任务创建：355 字符 201（TEXT 列修复生效）
+- 私聊历史：GET /channels/:id/session-history 返回 309 条（session-history 修复生效）
+- 托管开关：PATCH managedMode=true 200 + GET 回显 True
+- question_confirm 工具：MCP tools/list 14 个工具含 question_confirm（第 14 个）
+- TEXT 列：tasks.description=text 类型（DB DESCRIBE 确认）
+
+## Risks
+1. 产品经理实例（deepseek-v4-flash）在某会话首字超时 1 次——模型偶发无响应，重发后恢复（非代码问题）；同 worker 其他会话执行成功（277 chars）
+2. web 页面为 SPA 骨架（服务端渲染仅出壳），PR #3 issue 弹窗交互需真实浏览器二次确认（API 层已验证全链路）
+3. 冒烟产生的任务/issue 数据保留在库中（t_0000000013/14、is_0000000016），无删除 API，未清理

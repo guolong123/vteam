@@ -1,0 +1,118 @@
+================================================================================
+K8s vteam-server pod CrashLoopBackOff 排查与修复 — 证据记录
+时间：2026-08-14 19:34 ~ 19:48 +0800
+================================================================================
+
+【1. 现象】
+--------------------------------------------------------------------------------
+$ kubectl get pods -n vteam
+vteam-init-mb2jj                0/1  Init:ImagePullBackOff    0    111m
+vteam-mysql-0                   1/1  Running                  6 (40m ago)  5h12m
+vteam-server-6cc7988b55-zxv9g   0/1  ImagePullBackOff         0    111m
+vteam-server-c55dcc86-clcm4     0/1  CrashLoopBackOff        11 (2m24s ago)  3h21m
+vteam-web-5db48bb5b9-ccm4x      1/1  Running                  0    178m
+vteam-web-d6f9d9f9d-mlzvc       0/1  ImagePullBackOff         0    111m
+vteam-worker-0                  1/1  Running                  0    107m
+
+- server 有 2 个 RS 并存：旧 RS c55dcc86（vteam-worker-delete）CrashLoopBackOff；
+  新 RS 6cc7988b55（docker.ketaops.cc/ketaops/vteam-server:latest）ImagePullBackOff
+- web 也出现同款 latest 镜像 ImagePullBackOff；init job ImagePullBackOff
+- helm release: REV14 failed（17:44 +0800），REV13 deployed 为最后正常版本
+
+【2. 报错原文（server 日志，不缩写）】
+--------------------------------------------------------------------------------
+PrismaClientInitializationError:
+Invalid `prisma.realtimeEvent.findFirst()` invocation:
+
+
+Authentication failed against database server, the provided database credentials for `root` are not valid.
+
+Please make sure to provide valid database credentials for the database server at the configured address.
+    at ei.handleRequestError (/app/node_modules/@prisma/client/runtime/library.js:121:7568)
+    at ei.handleAndLogRequestError (/app/node_modules/@prisma/client/runtime/library.js:121:6593)
+    at ei.request (/app/node_modules/@prisma/client/runtime/library.js:121:6300)
+    at async a (/app/node_modules/@prisma/client/runtime/library.js:130:9551)
+    at async RealtimeService.onModuleInit (/app/dist/src/realtime/realtime.service.js:28:22)
+    at async Promise.all (index 0)
+    at async callModuleInitHook (/app/node_modules/@nestjs/core/hooks/on-module-init.hook.js:43:5)
+    at async NestApplication.callInitHook (/app/node_modules/@nestjs/core/nest-application-context.js:234:13)
+    at async NestApplication.init (/app/node_modules/@nestjs/core/nest-application.js:100:9)
+    at async NestApplication.listen (/app/node_modules/@nestjs/core/nest-application.js:170:13) {
+  clientVersion: '6.19.3',
+  errorCode: undefined,
+  retryable: undefined
+}
+
+Node.js v22.23.2
+
+→ 根因迹象：root 认证失败，非迁移缺失（若列不存在会是 P2010/P2012 类错误）。
+
+【3. 取证过程（证据链）】
+--------------------------------------------------------------------------------
+3.1 MySQL 实际 root 密码（exec 实测）：
+  mysql -uroot -p'RpNJn1sCaUqM6SW9'           → ERROR 1045 (28000) Access denied（ConfigMap 里那个密码）
+  mysql -uroot -p'97ce5d276e2cb5890a425b31698dced8' → OK（secret.DB_PASSWORD 的值）
+  SELECT COUNT(*) FROM aiagents._prisma_migrations → 14（DB 迁移完整，非迁移缺失）
+
+3.2 配置来源比对：
+  ConfigMap vteam-config DATABASE_URL（REV14 后被随机化）：
+      mysql://root:RpNJn1sCaUqM6SW9@vteam-mysql:3306/aiagents   ← 与实际 root 密码不符
+  Secret vteam-secret.DB_PASSWORD = base64("97ce5d276e2cb5890a425b31698dced8")
+  helm get values --revision 13（最后正常版）secret.dbPassword = 97ce5d276e2cb5890a425b31698dced8
+  helm get manifest --revision 13 DATABASE_URL = mysql://root:97ce5d...@vteam-mysql:3306/aiagents
+
+3.3 helm 历史：
+  REV13 17:24 deployed（正常：server=vteam-worker-delete, web=vteam-k8s-workerdel,
+        mysql=vteam-k8s, worker=vteam-k8s, ingress=vteam.ketaops.cc）
+  REV14 17:44 FAILED：
+    - user-supplied values 只剩 worker.image.tag=vteam-k8s-gitfix（其余回退 chart 默认）
+    - 报错：cannot patch vteam-uploads PVC (resize 被拒) +
+          StatefulSet vteam-mysql spec 变更被拒（forbidden）
+    → helm upgrade 整体 failed，但 configmap / deploy image 已被部分应用到集群
+
+3.4 REV14 破坏链（代码对照 chart/vteam/templates/_helpers.tpl vteam.dbPassword）：
+   upgrade 未带 secret.* → .Values.secret.dbPassword 为空 → helper 执行
+   randAlphaNum 16 生成随机密码 RpNJn1sCaUqM6SW9 → 写入 ConfigMap DATABASE_URL；
+   同时 server/web/init 镜像 repository 回退 docker.ketaops.cc/ketaops/...:latest
+   （该镜像不存在 → ImagePullBackOff）；
+   MySQL root 密码仍为数据卷初始化的 97ce5d... → server 用 RpNJn... 连接被拒。
+
+【4. 修复动作】
+--------------------------------------------------------------------------------
+1) helm rollback vteam 13 -n vteam
+   → 部分成功：ConfigMap DATABASE_URL 恢复 97ce5d...、server deploy image 恢复
+     vteam-worker-delete；但报 "no Ingress with the name vteam found" 未完整完成
+2) kubectl delete job vteam-init -n vteam          # 删除 REV14 遗留的不可变 Job（latest 镜像）
+3) helm upgrade vteam chart/vteam -n vteam         # 沿用 REV15 完整 values，REV17 deployed
+   - job vteam-init 完成（prisma migrate deploy + seed 成功）
+   - deploy vteam-web 就绪
+4) kubectl rollout restart deploy/vteam-server     # 强制新 pod 拉取修复后的 ConfigMap env
+   → deployment "vteam-server" successfully rolled out
+
+【5. 修复后验证】
+--------------------------------------------------------------------------------
+5.1 pod 稳定（≥4 分钟无重启）：
+  vteam-server-6f7f489b9b-cbj4q  1/1 Running  restarts=0  age=11:43:06Z
+  vteam-mysql-0    1/1 Running    vteam-web-5db48bb5b9 1/1 Running
+  vteam-worker-0/1 1/1 Running（heartbeat/register 均 201，模型上报 26 个）
+  vteam-init-ql4zr Completed 1/1
+
+5.2 健康检查（ingress 外部访问）：
+  curl http://vteam.ketaops.cc/api/v1/health → 200 {"status":"ok","info":{},"error":{},"details":{}}
+  curl http://vteam.ketaops.cc/              → 200
+
+5.3 登录 + agents：
+  POST /api/v1/auth/login (seed-admin/Admin@123456) → 200
+  GET  /api/v1/agents → 200，5 个 Agent：产品经理, 项目经理, 架构师, 开发者, 测试
+
+【6. Risks / 建议】
+--------------------------------------------------------------------------------
+- REV14 教训：helm upgrade 只传部分 --set 时其余值回退 chart 默认（secret 重新随机 +
+  镜像回退 latest + PVC/STS 规格变更被拒）。部署必须携带完整 values 或复用
+  helm get values --revision N 作为基线；禁止只传单个 --set 覆盖。
+- MySQL pod 曾 OOMKilled（exitCode 137，restartCount 6，512Mi limit 偏小），
+  生产建议按 chart 默认 1Gi 提升 limit。
+- 本次恢复使用的是 K8s 现有镜像（vteam-worker-delete / vteam-k8s-workerdel）；
+  本地新代码（巡检调度器 + managedMode 迁移 20260814120000_task_managed_mode +
+  question_confirm 工具）尚未构建推送部署到 K8s，后续部署时需一并执行迁移。
+- ConfigMap 修复后必须 rollout restart 使容器重新注入 env（K8s 不会热更 env）。

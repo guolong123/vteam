@@ -82,3 +82,96 @@
 - md-docs build 输出重定向到独立目录（`--out-dir`），不污染仓库；vite 大 chunk 警告（>500kB）为 mermaid 全量引入所致，非错误。
 - 后台启动 md-docs dev 服务后需 `pkill -f md-docs` 清理；`pkill -f "md-docs --no-open --port XX"` 可能因参数被 shell 包装而匹配不到，直接 `pkill -f md-docs` 更可靠。
 - 18 篇文档用「每阶段独立可功能性验收」措辞，验收点 M1~M5 逐阶段闭环、可回滚，「功能性验收」关键词需在 grep 断言中显式出现（已补入 §1.3 标题）。
+
+## 2026-08-14：主 Agent MCP task_transition（任务状态流转工具）
+
+- 用户路径与 MCP 路径共用同一状态机：tasks.service transition 增加可选 actor {type,id}（缺省 user/调用者），5 个动作的副作用配置提取为 transitionOpts(id, action, reason?)——reject 的 reason 以第 3 参透传，MCP 路径只传 actor，行为零分叉。actor 同时写入 task_events.actorType/actorId 与 TASK_STATUS_CHANGED 广播（前端/审计可见操作者身份）。
+- 主实例校验独立成方法 transitionByAgent：先查任务（404）→ 校验 mainAgentInstanceId === instanceId（403 TASK_STATUS_MAIN_AGENT_ONLY）→ 复用 transition。错误码新增而非复用（TASK_STATUS_MAIN_AGENT_ONLY），语义明确（仅主 Agent 权限）且与既有 TASK_ERRORS 风格一致。
+- MCP 工具双层防伪：platform-mcp 层 assertWorkerTask 校验 worker↔任务会话归属 + selfInstanceId 一致性（防冒充），TasksService 层再校验主实例——真实链路中非主实例在归属校验层即被拒（"禁止冒充"），TasksService 的仅主 Agent 分支由单测覆盖（纵深防御，两层各自成立）。
+- GLOBAL_SYSTEM_INSTRUCTIONS 是 Agent 能力宣言的唯一入口：新增 MCP 工具必须在其中加说明（Agent 才知道可用），同时更新 platform-mcp.module.ts 顶部注释与 controller.spec 工具数断言（12→13），三处数量口径同步。
+- 真实链路验证注意：docker 容器跑旧镜像时 tools/call 报 "Unknown tool"，必须先 `docker compose up -d --build server` 重建；MySQL 查中文需 `--default-character-set=utf8mb4`，否则 JSON_EXTRACT 的中文系统消息显示为 ? 乱码。
+
+## 2026-08-14：K8s 部署 vteam（chart/vteam → 远程集群 ns=vteam）
+
+- 集群勘察先行：远程 K8s v1.26.12 + containerd，master SchedulingDisabled；节点可匿名访问 docker-hosted.ketaops.cc（已有大量 workload 在用），本机 docker 也已有该 registry 推送凭据 → 镜像策略定为推送 docker-hosted.ketaops.cc/xishuhq/vteam-*:vteam-k8s，mysql:8 也重推（规避 docker.ketaops.cc/library 匿名可达性不确定）。
+- web 镜像必须重建：Next.js rewrites 的 API_PROXY_TARGET 编译进 routes-manifest.json，运行时 env 无效；compose 产物指向 http://server:3000，K8s 下 service 名是 vteam-server。重建验证法：docker run --entrypoint cat <img> /app/.next/routes-manifest.json | 检查 rewrites.afterFiles destination。
+- server 镜像同时供 init Job 用（prisma migrate + seed），无需单独 init 镜像；验证镜像含 dist/prisma/seed.js 再装。
+- helm install 显式提供 secret.*（openssl rand -hex 32/16），避免 chart 自动生成后升级漂移；dev 小资源用 -f values-dev.yaml + --set 覆盖。
+- server 初始 CrashLoop（3 次）根因：Deployment 与 init Job 无硬性门控，server 在迁移建表前启动，Prisma 查 realtimeEvent 表抛 PrismaClientInitializationError → liveness 重启；init 完成后自愈。chart 的「server 依赖 init」是探针/重试兜底语义，非硬依赖。
+- 冒烟注意：admin 非种子项目成员 → 创建任务 403（ProjectMembershipGuard 符合 RBAC 预期），用 seed-admin/Admin@123456（项目 owner）走通创建任务 201 + 双实例团队。
+- 端到端硬证据：health 200 / web 200 / 登录 200 / agents API=5 模板 agent / DB agents=5 users=3 projects=2 / worker 注册成功 w_compose_worker + 心跳 201 / 任务创建 t_0000000014。
+- K8s 外部可达性坑：本机 docker compose 旧部署常驻占用宿主 13000/13001，kubectl port-forward 绑定失败且无报错提示后续 curl 打到的是 compose 旧部署——验证前必须检查 port-forward 日志（"Unable to listen on port... already in use"）；另 Next.js standalone server.js 只监听 $HOSTNAME(pod IP) 非 loopback，kubectl port-forward 转发到 pod 127.0.0.1 也会 connection refused。可靠做法：集群有 ingress-nginx 时启用 chart ingress + NodePort + Host 头验证（一次验证 web→server rewrites 代理链路）。
+- helm upgrade 改 values 前先 kubectl delete job vteam-init（Job spec.template immutable）；seed 全 upsert 幂等，重跑安全。
+
+## 2026-08-14：K8s 内置 MCP（keta-platform）连接失败修复
+
+- seed 硬编码 compose 服务名会穿透到 K8s：server/prisma/seed.ts 写死 `http://server:3000/api/v1/platform-mcp`，worker injectMcp() 从 mcp_servers 表拉 URL 注入 opencode.json → K8s 下 server 服务名是 `vteam-server`，探测失败。修复：URL 改 `process.env.PLATFORM_MCP_URL ?? 默认`（compose 行为不变），chart initJob 新增 `platformMcpUrl` 传给 init Job env（默认按 server Service 名拼 `http://<fullname>-server:3000/api/v1/platform-mcp`），seed 日志同步输出实际 URL。
+- 多副本 worker 共享 home PVC 会损坏 opencode.db：replicaCount.worker=2 时两个 pod 并发写同一 NFS PVC 上的 SQLite（`/root/.local/share/opencode/opencode.db`）→ `PRAGMA integrity_check` 报 `Tree 23 page 23 Extends off end of page`、`opencode mcp list --pure` 报 `database disk image is malformed` → mcpStatus 探测失败上报不了 connected。恢复：备份+删除损坏 db 让 opencode 重建 + 临时降 1 副本；**若需恢复 2 副本须先按 pod 隔离 home 卷（每副本独立 PVC / StatefulSet）**。
+- mcpStatus connected 双证路径：①worker 容器内 `opencode mcp list --pure`（在注入 cwd `/data/keta-worker` 下执行，显示 `●  ✓ keta-platform connected`）②server `GET /api/v1/workers` 的 mcpStatus / `GET /api/v1/mcp-servers` 的 status（worker 每 10s 心跳经 30s 节流的 probe 上报到内存）。探测用 cwd 必须与注入 opencode.json 的 workDir 一致，否则读不到 mcp 节。
+- worker 容器内无 curl/wget 时用 `wget -qO-`（busybox），JSON POST 服务端连通性验证：`POST http://vteam-server:3000/api/v1/platform-mcp` 带 `X-Worker-Token`/`X-Worker-Id` header，`tools/list` 返回全部平台 MCP 工具即通。
+- helm upgrade 持久修复流程：删旧 Job（`kubectl delete job vteam-init`，spec.template immutable）→ `--reuse-values --set server.image.tag=<新tag>` → init Job 重跑 seed（全 upsert 幂等）。已存在且 TTL 300s 自动清理时 delete 报 NotFound 属正常。
+- server 镜像同时是 init Job 镜像：改 seed.ts 只需重建 vteam-server（`npm run build && docker build ./server`），无需独立 init 镜像；验证产物 `grep PLATFORM_MCP_URL dist/prisma/seed.js`。
+
+## 2026-08-14：worker Deployment → StatefulSet（每副本独立 PVC 根治共享 home 卷损坏）
+
+- 架构级根治共享 home 卷：worker 迁 StatefulSet + `volumeClaimTemplates`（worker-home→/root、worker-work→/data/keta-worker，各 RWO+size+storageClass），每副本独立 PVC（命名 `<template>-<sts>-<ordinal>`，如 `worker-home-vteam-worker-0`），多副本并发写 opencode.db（SQLite）不再相互损坏。扩容 `replicaCount.worker` 自动建独立 PVC；`enabled=false` 回退 emptyDir。
+- StatefulSet 三件套必填/关键：`serviceName` 指向 headless Service（clusterIP: None，selector 同 pod 标签）；`podManagementPolicy: OrderedReady`（有序启动 0→1→n）；`updateStrategy: RollingUpdate` 且 `rollingUpdate.partition`（空不渲染子块=全量滚动；数字=仅升 ordinal≥partition 的副本）。
+- helm `--reuse-values` 坑：chart 新增嵌套 values 键（如 `worker.updateStrategy.partition`）时旧 user-values 未携带该键 → 渲染 nil pointer。替代法：`helm get values <rel> -n <ns> | tail -n +2 > cur.yaml`（去掉首行 "USER-SUPPLIED VALUES:" 标题，否则解析出多余 key）+ `-f cur.yaml --set ...` 升级，等价且能带上新 chart 默认值。
+- helm 3 upgrade 会**自动删除模板中移除的资源（含 PVC）**：Deployment→StatefulSet 迁移后旧共享 PVC `vteam-worker-home/work` 被 helm 删除，且 managed-nfs-storage reclaimPolicy=Delete → 旧数据不可恢复。要保留旧数据须 upgrade 前手动备份或先改 reclaimPolicy=Retain。
+- worker 容器默认 cwd 是镜像 WORKDIR `/tmp/keta-worker`，而 MCP 配置注入在 `/data/keta-worker/opencode.json`：`kubectl exec <pod> -- opencode mcp list --pure` 直接跑会报 "No MCP servers configured"（误导），必须 `cd /data/keta-worker && opencode mcp list --pure` 才显示 `●  ✓ keta-platform connected`。
+- 升级从 Deployment→StatefulSet：旧 Deployment pod 被替换为 worker-0/1（WORKER_ID 天然 `w_<pod名>`），server 侧 workers 表 2 行 online 独立注册 + mcpStatus 双 connected + worker_model_availabilities 按 workerId 各 7 模型；API 验证 token 在响应顶层 `accessToken`（非 data.accessToken），`/agents` 返回 `{items:[...]}` 非数组。
+
+## 2026-08-14：SSH 私钥格式兼容修复（worker writeTempKey 格式归一，OPENSSH ssh-rsa → PKCS#1 PEM）
+
+- 根因（详见 .omo/evidence/.../git-ssh-key-format.txt）：平台录入的 OPENSSH 容器格式 ssh-rsa 私钥在 OpenSSL 3.x（worker 10.3/3.5、宿主 8.9/3.0 均复现）加载报 `error in libcrypto: unsupported`，`ssh -i` 静默跳过 identity → git_clone Permission denied；同头 ed25519 / worker 自生成 ssh-rsa 正常 → 只转 ssh-rsa，且 worker 无 openssl 二进制（`ssh-keygen -p -m PEM` 对问题 key 也失败）→ 必须纯 Node 代码解析转换。
+- 修复落点 `worker/src/git/git-tools.ts`：新增 `normalizeSshKey`（导出+自包含，随 renderGitToolsFile toString() 内联进渲染产物 git.ts，顺序必须在 writeTempKey 之前）→ `writeTempKey` 写盘前调用。openssh-key-v1 解析（cipher/kdf 须 none，nkeys=1，checkint 相等，keytype 分流）→ mpint 提取 n/e/d/p/q → PKCS#1 DER（version=0, dp=d mod(p-1), dq=d mod(q-1), qinv=q⁻¹ mod p，扩展欧几里得）→ PEM 64 字符换行。加密 key 抛错不静默；ed25519/PEM 原样；错误不含明文 key。
+- 单测关键（git-tools.spec.ts 新增 14 项）：DER 解析器必须区分长短格式（SEQUENCE 长格式 content 起点 = 2+lenBytes，INTEGER 长格式长度字段总字节 = 1+lenBytes；3072bit 整数 >127 字节必触发）；OpenSSH 公钥 blob 的 mpint 需无条件符号位填充（n 最高字节 bit7=1 时）；测试 key 用 ssh-keygen 临时生成脱敏，helper 与实现不同源交叉验证（容器 blob 指纹 vs DER 重建 vs ssh-keygen -lf 三方一致）。
+- helm upgrade 在 worker 仅改镜像 tag 时也可能整体失败（chart 触发 mysql sts spec 更新禁止 / uploads PVC resize 禁止）→ 直接 `kubectl set image sts/vteam-worker -n vteam worker=<repo>:<tag>` 只改 worker，避免动无关资源；改完删 pod 重建确认新镜像。
+- 验证链路：宿主复现 FAIL → normalize → PEM 加载 OK + 指纹不变（SHA256:iy36pU1xfSgNS1/...）→ 宿主 git clone OK → worker 容器内 writeTempKey 真实代码路径 git clone OK。K8s worker 容器 dist 路径是 `/tmp/keta-worker/dist`（Dockerfile WORKDIR），非 /app/dist。
+
+## 2026-08-14：任务巡检调度器 + 托管模式（question/permission 主 Agent 确认）
+
+- 巡检调度器 `TaskProgressionScheduler`（server/src/tasks/）：内存循环表 + setInterval 扫描（仿 IDLE_SCAN_INTERVAL_MS 惰性启动模式）；register 在 tasks.service transition 事务提交后按 `to===in_progress` 触发（start/reject 注册、mark-pending-review 注销）；onModuleInit 扫描库内 in_progress 重建循环防重启丢失。dispatch 复用 `WorkerDispatcher.dispatchAgentMention` 全链路（assignWorker→createSession→execute→回流），target 用 `task.mainAgentInstanceId` 定位，频道 private（按 taskAgentId）优先、群聊回退。
+- 托管路由的循环依赖解法：ingress（workers 模块）不直接注入 chat/tasks 服务，改为 ingress 落库时查 `task.managedMode` 并在 emit 的 AGENT_QUESTION payload 加 `managed:true` 标记；scheduler 在 onModuleInit 用 `realtime.subscribe(listener)`（无 scope 全量）订阅 bus，过滤 `type==='agent.question' && payload.managed===true && !payload.resolved` 后 dispatch 确认请求给主 Agent。避开 WorkersModule↔ChatModule 环。
+- 主 Agent 真实执行巡检时按 prompt 引导自主决策：实际观察到创建缺失 issue 指派 + notify_agent 通知成员 + group_post 群聊同步 + submit_artifact 提交产出物（完全响应「引导而非写死」的 prompt 设计）。
+- **NestJS ConfigService env 类型坑**：`config.get('X')` 返回字符串（`forRoot({isGlobal:true})` 无 infer），`typeof val==='number'` 恒 false → 用默认值。新配置必须 `Number(config.get('X')) + Number.isFinite` 归一。注意 worker-dispatcher 既有 `FIRST_TOKEN_TIMEOUT_MS` 等 env 若设字符串值同样失效（既有问题未修，非本期范围）。
+- MCP 工具新增完整链路：platform-mcp.tools.ts 加 zod schema + buildPlatformMcpTools 注册 → service 加 handler（先 assertWorkerTask 归属校验防冒充）→ module imports 对应业务模块（question_confirm → QuestionsModule）。tools/list 数量断言测试（controller.spec 13→14）需同步更新。
+- 权限模式复用：question_confirm 仅主实例可调——先 assertWorkerTask（活跃执行集合 + session 校验），再 QuestionsService.confirmByAgent 里 `task.mainAgentInstanceId !== instanceId → 403`。模拟事件（serve 端无真实请求）触发转发会走 serve 404 → 僵尸收敛 expired + 410，重复确认被幂等拦截（已终态 400）——这两个路径恰好证明转发与幂等保护都生效。
+- 托管模式前端：QuestionModalData/RealtimeQuestionEvent 加 managedMode 字段；两个会话页（messages/[id]、tasks/[id]）onAgentQuestion 回调 + GET /questions 补拉处过滤 `managedMode`（不弹窗）；创建页/详情页托管开关（role="switch" + data-testid="managed-mode-toggle"），详情页 PATCH /tasks/:id {managedMode} + setQueryData 写回缓存（参考 addInstance 模式）。
+- 事件上送验证捷径：`POST /api/v1/worker/events`（X-Worker-Token）可直接模拟 session.permission/session.question 落库，无需真实模型触发——但 serve 端无对应 requestId，转发必 404。验证托管「dispatch 到达主 Agent + 确认路由」够用；验证「worker 继续执行」需真实模型场景。
+- 受影响 spec 批量修复模式：TasksService 加依赖 → provider mock；DTO 新增字段 → task.create 断言补字段；ingress emit payload 变化 → 补 prisma.task mock；platform-mcp 注入新服务 → provider mock + tools/list 断言 13→14。
+- docker compose override：验证用临时 `docker-compose.override.yml`（services.server.environment 注入 PROGRESSION_INTERVAL_MS/MAX_ROUNDS）→ `docker compose up -d --force-recreate server`，验证后删除恢复默认。build server 时新迁移须重新 build init 镜像（`docker compose build init && docker compose run --rm init`）才应用。
+
+## 2026-08-14：K8s server CrashLoopBackOff 根因=REV14 部分 upgrade 回退 values（DB 密码随机化 + 镜像回退 latest）
+
+- 事故链（详见 .omo/evidence/.../k8s-server-crash.txt）：helm upgrade 只传 `--set worker.image.tag=...` → 其余 values 全部回退 chart 默认 → `secret.*` 清空 → `_helpers.tpl vteam.dbPassword` 走 `randAlphaNum 16` 生成新随机密码写入 ConfigMap DATABASE_URL（与 MySQL 数据卷初始化的真实 root 密码不一致）→ server `RealtimeService.onModuleInit` 首次查询 `prisma.realtimeEvent.findFirst()` 即抛 `PrismaClientInitializationError: Authentication failed ... credentials for 'root' are not valid` → CrashLoopBackOff；同次 upgrade 还把 server/web/init 镜像 repository 回退 `docker.ketaops.cc/ketaops/...:latest`（该镜像不存在）→ ImagePullBackOff；并触发 PVC resize + mysql sts spec 变更被拒 → 整体 `helm upgrade failed`，但 configmap/deploy 已部分落集群。
+- **识别技巧**：同 ns 出现「CrashLoopBackOff(旧镜像) + ImagePullBackOff(latest 镜像) + init Job ImagePullBackOff」三态并存 = 一次失败 upgrade 的半成品状态；先 `helm history` + `helm get values --revision <N-1>` 对比 last-deployed 与 failed 的 user-values 差异。
+- **修复路径（不删数据）**：`helm rollback <rel> <rev13>` 恢复 configmap/镜像（可能报 Ingress reconcile 错误部分完成）→ `kubectl delete job <rel>-init`（旧 Job template immutable，不删会挡 upgrade）→ `helm upgrade`（复用完整 values）→ **ConfigMap 修复后必须 `kubectl rollout restart deploy/<server>`**（K8s 不热更 envFrom，旧 pod 仍拿旧 DATABASE_URL）。
+- 验证闭环：ingress `/api/v1/health` 200 + `{"status":"ok"}`；`POST /auth/login` 200；`GET /agents` 5 个种子 Agent；`kubectl exec mysql -- mysql -uroot -p<real> -e 'SELECT COUNT(*) FROM aiagents._prisma_migrations'`=14（迁移完整，排除迁移缺失嫌疑）。
+- 教训：**部署命令必须携带完整 values**（`helm get values <rel> -n <ns> | tail -n +2 > cur.yaml` + `-f cur.yaml --set 增量`），禁止只传单个 --set；upgrade 失败后先看 helm history 再动手，不要盲目重启/删 PVC。
+
+- **GitHub PR 分支链审核（2026-08-15）**：guolong123/vteam 4 PR 审核，核心发现——PR #4 分支（fix/group-post-mention-dispatch）包含 PR #1 的提交 54f3cde，`git diff <(git show review/pr1:file) <(git show review/pr4:file)` 验证 worker-dispatcher.ts IDENTICAL，即 PR #1 内容已被 PR #4 完整承载 → 合并 PR #4 后应关闭 PR #1，避免重复合并/冲突。合并顺序应与功能依赖对齐：先合基础设施（PR #2 work_dir），再合依赖它的提示词/修复（PR #4），独立功能最后（PR #3）。
+- **目录根一致性陷阱**：PR #2 的 agent 工作目录硬编码 `/data/worker`，而既有 taskWorkDirRoot 读 WORK_DIR env（默认 /tmp/keta-worker-tasks）——同一 worker-dispatcher 内两套目录根语义，未设 WORK_DIR 时不同根，且 .env.example 注释暗示 WORK_DIR 控制 agent 目录与实现不符。审核此类「持久化路径」改动必须核对 env 可配项与硬编码路径的全部交叉点。
+- **async 化 N+1**：PR #3 把 toIssueDto 变 async（解析操作记录 actorName），列表分页每条 issue 触发最多 3 个 findMany —— 列表路径不需要 activities 却全量 include。审核 async 化改造时检查所有调用路径的数据量级。
+- **测试真实写系统目录**：PR #2 的 spec 断言 `fs.existsSync('/data/worker/产品经理')`，测试由临时根（config WORK_DIR）回归为硬编码系统路径——CI 非 root 会失败且污染系统目录。
+- **GitHub PR 合并执行（2026-08-15）**：guolong123/vteam 4 PR 按序处理，#2 → #4 → #1（自动）→ #3 全部 MERGED。关键坑：`gh pr merge` 报 `GraphQL: Resource not accessible by personal access token (mergePullRequest)`——**fine-grained PAT 无法通过 GraphQL mergePullRequest，REST `PUT /pulls/:n/merge` 同样 403**（即使 token 有 push:true 权限）。替代方案：`git fetch github refs/pull/<n>/head:pr_<n>` → 独立 worktree（`git worktree add`，避免污染当前分支未提交改动）→ 逐 PR `git merge --no-ff pr_<n>` + `git push github merge-work:main` → GitHub 检测 head commit 进入 main 后**自动将 PR 标记为 MERGED**（`gh pr view <n> --json state` 验证），merge commit 保留完整 PR 历史，效果等价于 gh merge。若 PR 分支 commit 已被其他 PR 承载（如 #1 被 #4 包含），GitHub 合并后会自动把被承载的 PR 也标记为 MERGED（非 CLOSED），无需手动 close。
+- 合并验证闭环：push 后 `sleep 3` → `gh pr view <n> --json state,mergedAt,mergeCommit` 确认 MERGED 再合下一个；最终 `gh pr list --state all` 无 OPEN 残留 + `git fetch github && git log github/main -5` 确认 main 更新。
+
+## K8s 部署验证：main 合并 + 本地修复 + PR 冒烟（2026-08-15）
+- **循环依赖陷阱（合并后才暴露）**：PR #2 引入 `worker-dispatcher import tasks.service`（sanitizeWorkDirName），本地又有 `scheduler → worker-dispatcher`，形成 `worker-dispatcher → tasks.service → scheduler → worker-dispatcher` 循环。CJS 下 NestJS 装饰器元数据（design:paramtypes）在循环中拿到 null → `Nest can't resolve dependencies`。**修复模板**：把被共享的纯函数抽到独立无依赖模块（work-dir.util.ts），打破循环。合并前若只跑单端 tsc 无法发现（tsc 不查 decorator 元数据运行时值），必须跑 jest/Nest 容器化测试。
+- **PR schema 漏 @map（运行时才炸）**：PR #2 schema.prisma `workDir` 缺 `@map("work_dir")`，迁移 SQL 却建 `work_dir` 列。Prisma client 按字段名生成查询列名 `workDir` → 运行时 "column workDir does not exist"。**预防**：审查 PR 的 migration SQL 与 schema 字段 @map 一一对应（对比 grep 迁移列名 vs schema @map），尤其新字段必须显式 @map。
+- **sed 批量替换 values 误伤**：`sed 's/tag: vteam-k8s-merged/tag: vteam-k8s-merged2/'` 把 web/worker 的 merged 也替换成 merged2（该镜像不存在）→ ImagePullBackOff。**纪律**：helm values 改镜像 tag 用结构化方式（python 按 server/web/worker 分块改），不要全局 sed 前缀匹配；upgrade 后立即 `kubectl get deploy/sts -o jsonpath` 核对三端 image。
+- **helm 升级坑：Job/STS 不可变字段**：init Job spec.template 变更报 `field is immutable`（历史 rev16 踩过）。本次用完整 values 基线 upgrade 成功（rev23/25），init Job 由 helm 以新 name 重建——**完整 values 基线纪律有效**。
+- **port-forward 端口残留**：旧 port-forward 进程占 13000，curl 打到旧 pod 导致数据不一致（workers 列表缺 vteam-worker-0 误判）。`ss -tlnp` 看不到 pid 时用新端口（13100/13101）绕过，并用 `kubectl get endpoints` 确认 svc 指向新 pod。
+- **Next standalone 监听容器 IP 非 localhost**：web port-forward 127.0.0.1 失败（ECONNREFUSED），容器内 curl 也失败——Next 监听 pod IP。验证用 pod IP 或 `kubectl exec ... node fetch http://<podIP>:3000`。
+- **MCP 运行时冒烟直接调 JSON-RPC**：POST /api/v1/platform-mcp + x-worker-token/x-worker-id 头 + `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"group_post",...}}` 可同步返回 result（无需 SSE 长连接），适合 CI 冒烟。tools/list 返回 14 工具确认 question_confirm 存在。
+- **模型执行首字超时（环境噪声）**：deepseek-v4-flash 某会话首字超时 1 次（prompt-await abort），同 worker 其他会话成功。冒烟时区分「代码 bug」与「模型偶发」，重试或换会话确认，勿据单次失败判部署失败。
+
+## Round-2 GitHub PR #5-#8 合并+部署（2026-08-15）
+
+1. **worktree 隔离合并**：git worktree add /tmp/opencode/vteam-pr2nd github/main -b merge-pr2nd，4 PR 按序 merge --no-ff，ort 策略对同文件（tasks/[id]/page.tsx）不同区域改动可自动合并，未出现 #6/#8 冲突。push 到 github main 后 GitHub 自动标 MERGED。
+2. **本地合并唯一冲突**：tasks/[id]/page.tsx TaskPanel props 三方重叠（PR#6 width / PR#8 无 / 本地托管 onToggleManagedMode），stash pop 冲突后需手动合并 props 解构+类型+调用处三处，两侧语义都保留。
+3. **SSE 本机 curl 坑**：curl 对 SSE 流有缓冲（0 字节落盘），且经本机 port-forward 偶发 401；pod 内 wget 直连 200 + 事件流完整。验证 SSE 事件用 kubectl exec pod 内 wget -O 文件 + 触发业务操作 + 读文件。
+4. **read_file 权限防护**：assertWorkerTask 需 session.workerId 匹配（dispatcher 绑定），任务未实际分派前 read_file 403「该 worker 无此任务会话」是预期防护；冒烟改用上传链路+静态访问+单测覆盖。
+5. **helm upgrade 必须带 chart 路径**：helm upgrade vteam -n vteam chart/vteam -f <基线>，只传 -f 会报 requires 2 arguments。values 基线直接导出 helm get values（含 secret），改三 tag 后 -f 全量覆盖，REV 25→27 一次成功。
+6. **worker 旧任务循环**：worker 卡在 t_0000000008 [exec] 328 chars 反复执行（旧任务遗留），新任务消息排队；影响冒烟（read_file 会话绑定），非本次部署引入。

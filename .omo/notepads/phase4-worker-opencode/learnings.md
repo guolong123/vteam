@@ -239,3 +239,14 @@
 - **目录隔离**：仓库根零新增（最近修改仅 F3 遗留截图）；任务 workdir /tmp/keta-worker-tasks/tasks/t_0000000006/ 存在为空（模型未调工具）
 - **验收结论**：MAJOR-1 真实环境修复闭合。遗留：复用会话 workdir 隔离（serve 层 directory 不可变）、5s 目标线依赖模型行为
 - **API 备忘**：POST /api/v1/channels/:id/messages body={text, mentions:[{type:'agent',agentId}]} → 201 {message, triggers[{agentId,sessionId,status:'dispatched'}]}；回复 senderType=agent 落库，poll 检测到 step-finish 后写入
+
+## [2026-08-11] T17 serve 日志模型错误感知（Rate limit/Free usage 快速失败，已完成）
+- **根因（实测确认）**：m_59 失败显示"模型无任何输出"，实际 serve 报 `AI_APICallError: Rate limit exceeded`。serve 对部分 APIError（401 Invalid API key）透传 message.info.error（extractMessageError 已处理），但 **Rate limit/Free usage 只写 stderr**（`message="stream error" ... error.error="AI_APICallError: ..."`）不透传 → worker 空等首字超时 120s+（实测 5 分钟），错误文本丢失
+- **改动**：
+  - `opencode-server.ts`：`recentErrors(limit=5)` 过滤含模型错误关键词行（`/stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i`），数据源即既有 recentLogs 环形缓冲
+  - `prompt-await.ts`：`AwaitCompletionOptions` 加 `onServeError(errorText)=>boolean`（true=提前失败）+ `serveErrorReader()=>string[]`（数据源）；轮询在 extractMessageError 检测**之后**调用，命中 → 记录错误文本 → break（abort + 抛 CompletionTimeoutError，文案用 serve 错误文本）；去重 `triggeredServeErrorLine`（同文本只触发一次）；`extractServeError` 从日志行提取 `error.error="..."` 并去 `AI_APICallError:` 前缀；`describeTimeoutReason` 加 serveErrorText 最高优先级参数；CompletionTimeoutError 加 `serveErrorText` 字段
+  - `exec-server.ts`：`ExecServerOptions.serveErrorReader`（注入式，不 import runtime 类型，可测性好）；runSendAndAwait 传 onServeError（关键词正则，返回 true 提前失败）
+  - `index.ts`：组装 ExecServer 时 `serveErrorReader: () => serveServer.recentErrors()`
+- **测试**：prompt-await.spec（+4：返回 true 提前失败/返回 false 继续轮询/完成优先不误杀/同文本去重）+ describeTimeoutReason serveErrorText 优先级 2 例；exec-server.spec（+1：serve 日志 Rate limit → agent.status error 含 Rate limit + abort）；opencode-server.spec（+2：recentErrors 过滤/limit）；全量 19 suites / 285 tests 通过
+- **部署验证（compose 实测）**：worker 容器重建 → 注册成功；容器内 node 脚本跑编译产物：serveErrorReader 注入 Rate limit 行 → **1ms 内快速失败 + abort + 文案"模型调用报错：Rate limit exceeded. Please try again later."**（修复前 m_59 空等 5 分钟）；真实挂起请求（provider 无响应、serve 未写 stderr 错误）→ serve 日志检测**不误杀**，走首字超时兜底 abort（正确行为）
+- **关键设计**：onServeError 返回 false 忽略（防误杀正常日志）；完成判定（step-finish）优先于 serve 日志检测；serveErrorReader 经 options 注入（driver 不 import runtime，保持分层）

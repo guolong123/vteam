@@ -1,0 +1,106 @@
+================================================================================
+功能 1：TaskProgressionScheduler（主 Agent 定期巡检调度器）
+功能 2：托管模式（question/permission 由主 Agent 确认）
+实现 + 真实链路实证（本地 compose :13000/:13001，server+web 重建）
+日期：2026-08-14
+================================================================================
+
+一、功能 1：主 Agent 定期巡检调度器
+--------------------------------------------------------------------------------
+设计：
+- 新 service server/src/tasks/task-progression.scheduler.ts
+  - 内存循环表 Map<taskId, {taskId, nextRunAt, rounds, maxRounds}> + setInterval 扫描
+    （仿 worker-dispatcher IDLE_SCAN_INTERVAL_MS 惰性启动模式，PROGRESSION_SCAN_INTERVAL_MS=30s）
+  - register(taskId)：任务进入 in_progress（start/reject）注册；onModuleInit 扫描库内
+    in_progress 任务重建（防重启丢循环）
+  - unregister(taskId)：任务离开 in_progress 注销
+  - 扫描：nextRunAt<=now && status=in_progress && 主 Agent 存在 → dispatch 巡检消息给
+    主 Agent（复用 WorkerDispatcher.dispatchAgentMention 全链路，private 频道优先/群聊回退）
+    → nextRunAt+=interval、rounds++；非 in_progress/无主实例 → 注销；rounds>=maxRounds
+    → 注销 + 日志告警防空转
+  - 配置：PROGRESSION_INTERVAL_MS（缺省 5min）、PROGRESSION_MAX_ROUNDS（缺省 12）
+- 接线：tasks.service transition 事务提交后 to=in_progress → register（start/reject）、
+  from=in_progress → unregister（mark-pending-review 等）；TasksModule imports ChatModule
+  （WorkerDispatcher），scheduler 为 tasks 模块 provider
+- 巡检消息 prompt（引导而非写死）：检查 issue 完成度/产出物/团队进展 → 卡点经
+  notify_agent/群聊@定向推进 → 完成则 task_transition mark-pending-review → 未完成说明进展
+
+实证（真实链路，模型可用完整执行）：
+1. server 重启恢复：日志「[progression] 重启重建巡检循环：1 个 in_progress 任务」——
+   t_0000000013 重启后自动重建循环（防重启丢循环）
+2. 巡检 dispatch 到达主 Agent + 模型真实执行（interval=10s 验证模式）：
+   - 「[progression] 巡检消息已下发主 Agent taskId=t_0000000013」（多次）
+   - 主 Agent（项目经理）session running，私聊频道产出 step-start + 回复消息：
+     「巡检完成。现状与处置：巡检结果 - ① issues：0 个 → 已创建「需求」issue is_0000000038
+     并指派给测试-1。现在定向通知测试-1 开始回归验证，并在群聊同步进展。通知已送达
+     （m_0000000447）、群聊已同步（m_0000000449）。补充提交项目计划产出物。」
+     —— 主 Agent 按巡检引导执行：检查 issue → 创建缺失 issue 指派 → notify_agent 通知成员
+     → group_post 群聊同步 → submit_artifact 提交产出物
+3. 轮次上限终止：maxRounds=3 → 「[progression] taskId=t_0000000013 巡检已达轮次上限（3），
+   注销防空转」
+4. register/unregister 真实接线：创建任务 t_0000000015 → start → 「[progression] 注册巡检
+   taskId=t_0000000015」；mark-pending-review → 「[progression] 注销巡检 taskId=t_0000000015」
+5. 单测：task-progression.scheduler.spec.ts 17 用例全过（注册/幂等/扫描触发/状态检测注销/
+   主实例缺失注销/轮次上限/patrolNow/重启恢复/托管路由/巡检 prompt）
+
+二、功能 2：托管模式（question/permission 由主 Agent 确认）
+--------------------------------------------------------------------------------
+设计：
+1. schema：Task.managedMode Boolean @default(false) @map("managed_mode") + 迁移
+   20260814120000_task_managed_mode；CreateTaskDto/UpdateTaskDto 支持（IsBoolean）
+2. 落库后路由（ingress handleAgentQuestion）：查 task.managedMode → true 时 emit
+   AGENT_QUESTION payload 带 managed:true + question.managedMode（前端不弹窗依据）
+3. TaskProgressionScheduler 订阅 realtime bus：agent.question 事件 payload.managed=true
+   且未收敛 → dispatch 托管确认请求给主 Agent（含 requestId/kind/问题详情 + question_confirm
+   决策指令）
+4. 新 MCP 工具 question_confirm（platform-mcp tools + service）：
+   - 参数 {taskId, selfInstanceId, requestId, kind, answers?/response?}
+   - 归属校验 assertWorkerTask（防冒充）+ QuestionsService.confirmByAgent 仅主实例
+     （task.mainAgentInstanceId===instanceId，403 TASK_STATUS_MAIN_AGENT_ONLY）
+   - 处理：按 requestId 精确命中 AgentQuestion → kind 校验 → 复用 reply 核心转发
+     workerClient.questionReply/permissionReply → 终态落库 + emit 收敛（僵尸 serve 404 → 410）
+5. 前端：创建页+详情页托管开关（role="switch"，PATCH /tasks/:id {managedMode} 写回缓存）；
+   QuestionModalData/RealtimeQuestionEvent 加 managedMode；两个会话页 onAgentQuestion/补拉
+   过滤 managedMode（托管不弹窗）
+6. GSI/主 Agent 指令补托管模式说明（question_confirm 决策引导）
+
+实证（真实链路）：
+1. managedMode 落库：创建托管任务 t_0000000016（managedMode:True）→ start in_progress
+2. permission 请求托管路由：worker 事件端点上送 session.permission（per_managed_verify_01）
+   → ingress 落库 agent_questions pending → 「[progression] 托管确认请求已下发主 Agent
+   taskId=t_0000000016 requestId=per_managed_verify_01」→ 主 Agent 收到确认请求执行
+   （session running→idle）→ 实际调用 question_confirm 转发 worker → serve 404（模拟
+   permissionId serve 端不存在）→ QuestionsService 僵尸收敛 expired（404 路径幂等收敛）
+3. question 类型：上送 session.question（que_managed_verify_01）→ 主实例 question_confirm
+   answers=[["继续"]] → kind 校验通过 → 转发 → serve 404 → 410「已过期，弹窗已关闭」→ expired
+4. 非主实例 question_confirm → assertWorkerTask 归属校验拒绝（「不在该 worker 当前执行任务的
+   活跃实例集合中，禁止冒充」）
+5. 重复确认幂等：已终态 → 「AgentQuestion ... 已终态（expired），不可重复确认」
+6. GET /questions 返回 managedMode（前端过滤依据）
+7. 前端开关：创建页/详情页托管开关渲染（data-testid=managed-mode-toggle，aria-checked）：
+   - 创建页点击开关 false→true
+   - 详情页托管任务开关 aria-checked=true（后端加载）；点击 → PATCH /tasks/:id → DB
+     managed_mode=1→0 + API 返回 false（写回缓存）
+8. 回归：非托管任务 managedMode=false；非托管 question 不路由（单测）；弹窗逻辑仅托管跳过
+
+三、回归验证
+--------------------------------------------------------------------------------
+- server tsc --noEmit：0 错误
+- server jest --runInBand：1148/1148 全过（55 suites；含新增 scheduler spec 17 用例 +
+  受影响 spec 修复：tasks.service/questions.service/worker-event.ingress/platform-mcp.service/controller）
+- web tsc --noEmit：0 错误；next build 通过
+- 数据库迁移 20260814120000_task_managed_mode 已应用（init 容器，15 migrations）
+- 本地 compose 重建：server（含新镜像）+ web；worker 不改（MUST NOT）
+- 巡检默认配置恢复：PROGRESSION_INTERVAL_MS=5min / PROGRESSION_MAX_ROUNDS=12
+  （验证用临时 docker-compose.override.yml 已删除）
+
+四、风险与说明
+--------------------------------------------------------------------------------
+- 巡检 dispatch 目标私聊频道（private 按实例）优先、群聊回退：private 频道按需创建（chat
+  service），巡检前未创建时回退群聊（dispatchForTarget 群聊注入公开回复指令，语义略偏公开）
+- ConfigService 读 env 返回字符串：scheduler 用 Number() 归一（worker-dispatcher 既有
+  `typeof==='number'` 判断对字符串 env 失效的潜在问题未在本期修复——FIRST_TOKEN_TIMEOUT_MS 等
+  若设字符串值同样失效，非本次范围）
+- 托管确认请求 dispatch 为 fire-and-forget（void ...catch），主 Agent 执行失败仅日志告警
+- 模拟 permission/question 事件 serve 端无对应请求 → 404 收敛 expired（僵尸防护），真实
+  worker 上送场景 serve 端请求存在，确认后正常 resolved

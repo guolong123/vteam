@@ -1,0 +1,76 @@
+# 修复「模型提问/权限确认弹窗不触发」bug 的 E2E 证据（2026-08-12）
+
+## 根因
+`web/hooks/use-sse.ts` 的 `matchesScope` `task:` 分支白名单缺 `agent.question`。
+server 广播的 `agent.question` 事件（scope=task）被前端过滤丢弃 → `onAgentQuestion` 永不触发 → 弹窗不出现。
+
+## 修复（唯一代码改动）
+`web/hooks/use-sse.ts:85-88` `task:` 分支白名单加 `"agent.question"`：
+```ts
+["agent.loading", "agent.error", "team.changed", "agent.status", "agent.question"].includes(ev.type)
+```
+
+## 断点排查结论（私聊补拉兜底）
+- `web/app/(main)/messages/[id]/page.tsx:571-575` questions 补拉查询 `enabled: !!channel?.taskId`。
+- 后端 `ChatService.createDmChannel`（chat.service.ts:432-493）**强制绑定 taskId**（`taskId: dto.taskId`），
+  `toChannelDto`（:649-668）**始终返回 taskId**（含 private 频道）。
+- DB 实测：`c_0000000006 = private / task_id=t_0000000002 / agent_id=a_tester` → taskId 非空，补拉可用。
+- **结论：私聊补拉无第二断点，无需修改后端。**
+
+## 环境
+- docker-compose：server(:13000)/worker(:14000)/web(:13001)，web 镜像重建（含修复代码）
+- worker serve: opencode 1.18.16（--pure）
+- 平台登录：admin / admin123；会话 c_0000000006（a_tester, task t_0000000002）
+
+## 触发方式（serve 测试注入端点）
+serve 1.18.16 支持 `POST /api/session/{id}/permission` 注入权限请求（effect=ask 产生 pending）：
+```
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"action":"external_directory","resources":["/etc/*"]}' \
+  http://127.0.0.1:14000/api/session/<ses>/permission
+→ {"data":{"id":"per_ff58e0c52001...","effect":"ask"}}
+```
+worker `PendingQuestionDetector`（exec-server.ts:585-641）onPoll 检测 listPermissions → 上报
+`session.permission` 事件 → server ingress 落库 agent_questions（taskId 兜底）→ realtime 广播
+`agent.question`（scope=task，payload 带 taskId）→ **前端 matchesScope（修复后）放行** → onAgentQuestion → 弹窗。
+
+## 场景验证
+### A. 弹窗出现（SSE 实时路径，修复后 agent.question 通过过滤）✅
+1. 注入 permission：`per_ff58e0c52001IPreNOYV4o1YC5` effect=ask
+2. worker 检测上送 → server 落库：`aq_0000000001 permission pending taskId=t_0000000002 agentId=a_tester`
+3. **页面弹窗出现**（Playwright snapshot）：
+   - dialog "权限确认"
+   - 标题「工具权限确认」
+   - `external_directory` / code `/etc/*`
+   - 按钮：稍后决定 / 允许一次 / 总是允许 / 拒绝
+4. 截图：`evidence/question-modal-fix-modal-shown.png`
+
+### B. 刷新补拉兜底 ✅
+- 不处理 → DB 保持 `aq_0000000001 status=pending`
+- `browser_navigate` 重进 `/messages/c_0000000006` → **弹窗重现**（useQuery GET /questions 补拉，
+  依赖私聊频道 taskId=t_0000000002 非空，前端 enabled 条件满足）
+- 截图：`evidence/question-modal-fix-refresh-reappear.png`
+
+### C. 处理（允许一次）→ 弹窗关闭 + agent 继续 ✅
+1. 点「允许一次」（testid question-permission-once）
+2. worker 日志：`replyPermission -> ses_00a7267f2ffemL5443idJ0MupI/per_ff58e0c52001IPreNOYV4o1YC5=once (HTTP 204)`
+   + `执行完成 session=ses_00a7267f2ffemL5443idJ0MupI taskId=t_0000000002 text=4 chars`
+3. DB：`aq_0000000001 status=resolved answers={"response":"once"}`
+4. serve permission 列表清空 `{"data":[]}`
+5. 弹窗消失；agent 继续执行并回复 DONE（页面 18:33）
+6. 截图：`evidence/question-modal-fix-after-allow.png`
+
+### D. 回归：正常消息收发 / loading / error ✅
+- 发「回复一个简单的问候即可」→ worker 执行完成（46 chars）→ agent 回复（页面 18:41）
+- 历史 loading（「收到，正在处理…」）与 error（「[v1-driver] fetch failed」）渲染均正常，
+  未受 matchesScope 白名单改动影响（其余事件类型白名单未动）
+
+## 构建验证
+- `cd web && npx tsc --noEmit`：0 错误
+- `npm run build`：通过（全路由产物正常）
+- 无 jest 单测覆盖 matchesScope（web 测试均为 Playwright e2e：e2e/login.spec.ts 等 5 个）；
+  matchesScope 逻辑已通过上述真实 SSE 链路手工验证（agent.question 通过、其余事件不受影响）
+
+## 改动文件
+- `web/hooks/use-sse.ts`（唯一代码改动，+1 白名单项）
+- 重建 web 镜像 `docker compose up -d --build web`（compose 部署生效）

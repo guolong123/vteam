@@ -1,0 +1,136 @@
+# 线上双 Bug 修复证据：question 弹窗不出现 + 私聊每次新建 opencode 会话
+
+日期：2026-08-12
+环境：docker-compose（aiagents-compose-*），opencode serve 1.18.16
+证据截图：`bug1-question-modal.png`
+
+---
+
+## Bug 1：模型提问（question）弹窗不出现
+
+### 根因（实证）
+
+serve 1.18.16 的模型提问（question 工具）走 **v1 Question 通道**，而 worker 的
+`PendingQuestionDetector`（exec-server.ts:585-641）只查 **v2** `/api/session/{id}/question`
+列表端点——两套通道独立，v2 列表对 question 恒空 → 检测器永不触发 → 不落库 → 无弹窗。
+
+实证命令与输出：
+
+1) **DB agent_questions 无 pending question**（只有一条 permission 记录）：
+```sql
+SELECT id, request_id, session_id, task_id, agent_id, kind, status FROM agent_questions ORDER BY created_at DESC LIMIT 10;
+-- 仅 aq_0000000001 kind=permission status=resolved（无 question 记录）
+```
+
+2) **serve 的 question 是 tool part 形态**（messages 表，type=tool, tool=question，无 requestID 字段）：
+```
+"type": "tool", "callID": "call_00_...", "tool": "question",
+"state": {"input": {"questions": [{"question","header","options","multiple"}]}}
+```
+
+3) **实时实证：question 处于 status:"running"（pending）期间，v2 端点始终返回空**：
+```bash
+# agent 提问后连续 5 次轮询（question part 明确 status=running）
+curl -s http://127.0.0.1:14000/api/session/ses_xxx/question
+# {"data":[]}   ← v2 端点恒空
+```
+
+4) **v1 全局端点 `GET /question` 返回 pending question（含 que_ 前缀 requestID + tool:{messageID,callID}）**：
+```json
+[{"id":"que_ff5a358d3001gKA1IQixDQWutc","sessionID":"ses_00a5e492affe6okfmDBnXpiIi8",
+  "questions":[...],"tool":{"messageID":"msg_...","callID":"call_..."}}]
+```
+
+5) **回复端点实测**：v1 `POST /question/{id}/reply` → HTTP 200（part 变 completed）；
+   v2 `POST /api/session/{id}/question/{id}/reply` → HTTP 404（QuestionNotFoundError）。
+   拒绝端点 v1 `POST /question/{id}/reject`（存在，reply 后调用返回 404 属预期：已 resolved）。
+
+### 修复
+
+`worker/src/driver/v1-driver.ts`（3 个方法从 v2 切到 v1）：
+- `listQuestions(sessionID)`：`GET /question`（v1 全局），按 `sessionID` 过滤本会话 pending
+- `replyQuestion(sessionID, requestID, answers)`：`POST /question/{requestID}/reply`
+- `rejectQuestion(sessionID, requestID)`：`POST /question/{requestID}/reject`
+
+permission 仍走 v2（`/api/session/{id}/permission`，per_ 前缀，实测有效，不改）。
+
+### 验证（端到端闭环）
+
+1. 私聊发「用 question 工具提问」→ DB 出现 pending question：
+```
+aq_0000000002  que_ff5b20ab3001...  question  pending  {"questions":[...]}
+```
+2. server 日志：`[ingress] session.question 落库 requestId=que_ff5b20ab3001... kind=question`
+3. Playwright 打开 /messages/c_0000000006 → **弹窗出现**：`dialog "Agent 提问"`（含选项 + 拒绝/确认按钮）
+4. 选中「配置管理与会话持久化」→ 点确认 → 弹窗关闭：
+   - worker 日志：`[v1-driver] replyQuestion -> ses_.../que_ff5b20ab3001... (HTTP 200)`
+   - serve part：`status: completed`，`output: "User has answered your questions: ..."`
+   - DB：`aq_0000000002  question  resolved`
+5. 截图：`bug1-question-modal.png`
+
+---
+
+## Bug 2：每次私聊消息都新建 opencode session
+
+### 根因（实证）
+
+instanceRef 回写失败 → 每次 dispatch 复用失效旧值 → worker 404 → 重建新会话 → 新值不回写 → 循环。
+
+1) **DB sessions 表**：s_0000000005（t_0000000002/a_tester）instance_ref=`ses_00b26b26effecIE8HTi0rYb3lW`（volume 持久化前容器重建丢失 opencode.db 的旧会话）。
+
+2) **serve 中该会话已不存在**：
+```
+/session 列表 42+ 个会话 → has old ses_00b26b26effecIE8HTi0rYb3lW: False
+```
+
+3) **worker 日志：每次消息都 404 重建 createSession**：
+```
+[exec] 复用会话 ses_00b26b26effecIE8HTi0rYb3lW 会话不存在（HTTP 404），新建会话重试一次
+[v1-driver] createSession -> ses_00a8549f9ffe0XusFcDeEzP456
+[exec] 复用会话 ses_00b26b26effecIE8HTi0rYb3lW 会话不存在（HTTP 404），新建会话重试一次
+[v1-driver] createSession -> ses_00a6c7d20ffe0aMORMX191Vqsd
+...（每次消息一条）
+```
+
+4) **server 端 adoptNewInstanceRef（唯一 running 定位）放弃回写**：
+`worker-event.ingress.ts:867-900` 只在 worker 唯一 running Session 时回写；线上 w_compose_worker
+同时有 s_0000000001/a_product、s_0000000003/a_architect、s_0000000005/a_tester 多个 running
+→ running.length !== 1 → 放弃 → instance_ref 永为旧值 → 每次 dispatch 复用旧值 404 → 每次新建。
+
+### 修复
+
+`server/src/workers/worker-event.ingress.ts`：
+- `resolvePlatformSessionId(sessionId, workerId, taskId?, agentId?)` 增加 taskId/agentId 参数
+- 新增 `adoptNewInstanceRefByTask(newRef, workerId, taskId, agentId)`：adoptNewInstanceRef
+  唯一 running 失败后，按 `{workerId, taskId, agentId}`（Session 表同 task+agent 唯一）精确定位回写
+- 5 个调用点（session.updated / agent.status / message.part.delta / task.completed / session.question）透传 taskId/agentId
+
+### 验证（端到端闭环）
+
+1. 第 1 条消息：worker 404 → createSession `ses_00a4f5d74ffek2zmAeCeRUJQIi`
+2. **server 日志（新分支生效）**：
+```
+[ingress] 回写 session s_0000000005 instanceRef → ses_00a4f5d74ffek2zmAeCeRUJQIi（404 重建新会话，taskId=t_0000000002 workerId=w_compose_worker）
+```
+3. DB：s_0000000005 instance_ref=`ses_00a4f5d74ffek2zmAeCeRUJQIi`，status 从 running 收敛为 idle
+4. 第 2 条消息：**无二次 createSession**，复用 `ses_00a4f5d74ffek2zmAeCeRUJQIi` 执行完成，instance_ref 不变：
+```
+[exec] 执行完成 session=ses_00a4f5d74ffek2zmAeCeRUJQIi taskId=t_0000000002 text=131 chars
+```
+
+---
+
+## 改动文件
+
+| 文件 | 改动 |
+|------|------|
+| worker/src/driver/v1-driver.ts | listQuestions/replyQuestion/rejectQuestion v2→v1 端点 |
+| worker/src/driver/v1-driver.spec.ts | question 相关用例端点/过滤断言更新 |
+| server/src/workers/worker-event.ingress.ts | resolvePlatformSessionId 增加 taskId/agentId 兜底回写 + adoptNewInstanceRefByTask |
+| server/src/workers/worker-event.ingress.spec.ts | Bug2 回写兜底 3 个新用例 |
+
+## 测试
+
+- server：`npx tsc --noEmit` 0 错误；`npx jest --runInBand` **1022 passed**
+- worker：`npx tsc --noEmit` 0 错误；`npx jest --runInBand` **353 passed**
+- web：`npx tsc --noEmit` 0 错误

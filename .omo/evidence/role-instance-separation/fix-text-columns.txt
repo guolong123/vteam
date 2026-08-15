@@ -1,0 +1,75 @@
+================================================================================
+vteam 修复证据 — Task/Issue/Project/Skill description 列改 TEXT
+日期: 2026-08-14
+任务: 任务创建 500 —— PrismaClientKnownRequestError: value too long for column
+      description（VARCHAR(191) 容量不足，用户提交超长 description）
+================================================================================
+
+[1] 根因
+--------------------------------------------------------------------------------
+- tasks.description / issues.description 列为 VARCHAR(191)（init / issue_management 迁移），
+  CreateTaskDto / CreateIssueDto / UpdateTaskDto / UpdateIssueDto 的 description 无 MaxLength
+  约束，用户提交超长文本 → MySQL 报 `value too long for column description` → 500。
+- 同类先例：Agent.prompt / Skill.content / credential_ref 已 TEXT（F3-1 同根因）。
+
+[2] 修复内容（schema.prisma + 迁移）
+--------------------------------------------------------------------------------
+schema.prisma 4 处 description 加 @db.Text：
+  - Task.description        String?   @db.Text
+  - Issue.description       String?   @db.Text
+  - Project.description     String?  @db.Text   （同类预防，无 MaxLength 用户长文本）
+  - Skill.description       String?  @db.Text   （同类预防）
+新建迁移 server/prisma/migrations/20260814150000_text_columns/migration.sql：
+  ALTER TABLE `tasks`    MODIFY `description` TEXT NULL;
+  ALTER TABLE `issues`   MODIFY `description` TEXT NULL;
+  ALTER TABLE `projects` MODIFY `description` TEXT NULL;
+  ALTER TABLE `skills`   MODIFY `description` TEXT NULL;
+title / 短字段 / artifact_versions.change_note 等不改。
+
+[3] 长文本字段排查结果（grep schema 无 @db.Text 的 String 列）
+--------------------------------------------------------------------------------
+| 模型/列                     | 类型    | 处置          | 理由                              |
+| Task.description            | TEXT    | 改 @db.Text   | 无 MaxLength，用户长描述          |
+| Issue.description           | TEXT    | 改 @db.Text   | 无 MaxLength，用户长描述          |
+| Project.description         | TEXT    | 改 @db.Text   | 无 MaxLength，同类预防            |
+| Skill.description           | TEXT    | 改 @db.Text   | 无 MaxLength，同类预防            |
+| ArtifactVersion.change_note | VARCHAR | 不动          | 提交说明通常短，非 description 类 |
+| Agent.ackMessage            | VARCHAR | 不动          | 配置文案，短                      |
+| 其余 title/name/url/枚举等  | VARCHAR | 不动          | 短字段/标识符/枚举                |
+
+[4] 本地验证（compose 环境）
+--------------------------------------------------------------------------------
+- npx tsc --noEmit                                   → 0 错误
+- npm run test（jest 全量）                          → 55 suites / 1157 passed
+- prisma generate                                   → 成功
+- 迁移应用到本地 db（docker exec aiagents-compose-db）：
+    SHOW COLUMNS FROM tasks/issues/projects/skills LIKE 'description' → 全部 text
+- POST /api/v1/projects/p_1786626706210_ksu7tq/tasks（description 360 字符）
+    → HTTP 201，id t_0000000022，desc_len=360
+
+[5] K8s 部署（完整 values 基线纪律）
+--------------------------------------------------------------------------------
+- 镜像重建并推送：docker-hosted.ketaops.cc/xishuhq/vteam-server:vteam-k8s-textfix
+    digest sha256:c182c9e1af4445c5379829e0462ad6ce00d6c1c825d5a1e02288dfce7a57ff97
+- 基线：helm get values vteam -n vteam → /tmp/opencode/vteam-values-textfix.yaml
+    （保留全部现有覆盖：db/ingress/initJob/persistence/replicaCount/secret/
+    server/web/worker，仅 server.image.tag: latest → textfix）
+- helm upgrade vteam chart/vteam -n vteam -f <基线>  → 成功
+- init Job vteam-init 重新执行（prisma migrate deploy && seed）→ 1/1 Completed（18s）
+- server rollout → 成功，新 pod 镜像 vteam-k8s-textfix
+
+[6] K8s 验证（ns vteam, REV: server image vteam-k8s-textfix）
+--------------------------------------------------------------------------------
+- 列类型（kubectl exec vteam-mysql-0 -- mysql ...）：
+    tasks.description / issues.description / projects.description / skills.description
+    → 全部 Type=text
+- health：GET http://vteam.ketaops.cc/api/v1/health → 200
+- 长描述任务：POST /api/v1/projects/p_1786717367232_odhep6/tasks（description 540 字符）
+    → HTTP 201，id t_0000000009，desc_len=540   （不再 500）
+- 回归：普通任务（description=正常短描述）→ HTTP 201，id t_0000000010
+
+[7] Risks / 备注
+--------------------------------------------------------------------------------
+- seed 幂等（upsert），init Job 重跑不破坏存量数据。
+- 未改动 chart 模板代码；未 git 提交（未授权）；未动其他 ns / 其他服务镜像。
+- 本地 compose 部署未重建镜像（验证仅靠 db 列变更 + 既有 server，API 逻辑无变化）。

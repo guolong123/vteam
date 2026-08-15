@@ -1,0 +1,126 @@
+================================================================================
+k8s-remove-worker-svc — 移除 worker 共享 ClusterIP Service（方案 B）
+================================================================================
+日期：2026-08-14  K8s ns vteam（REVISION 13）  工作区 /data/git-project/aiagents
+目标：删除 chart/vteam/templates/service-worker.yaml（共享 ClusterIP :4000），
+      保留 service-worker-headless.yaml（StatefulSet serviceName 必填），
+      消除 serve 走负载均衡导致会话错乱的风险；分派仍走 pod 专属 headless DNS。
+
+--------------------------------------------------------------------------------
+1. Chart 变更
+--------------------------------------------------------------------------------
+删除：
+  chart/vteam/templates/service-worker.yaml
+    （原 ClusterIP Service vteam-worker :4000/serve，仅 serve 调试入口；
+      server 分派已不依赖它，REV 12 headless DNS 修复后无引用）
+
+保留（未动）：
+  chart/vteam/templates/service-worker-headless.yaml
+    （clusterIP: None，StatefulSet spec.serviceName 必填依赖；
+     selector 与 worker pod 标签一致，port 4000/serve）
+
+注释同步（仅注释，无渲染逻辑变化）：
+  - service-worker-headless.yaml  头注：无共享 ClusterIP；serve 调试用
+    `kubectl port-forward sts/vteam-worker 14000:4000`（sts 转发到 ordinal 0）
+  - statefulset-worker.yaml  WORKER_ADVERTISE_HOST 注释：删除"不能使用共享
+    ClusterIP 名（vteam-worker）"段，改为"worker 无共享 ClusterIP Service"
+  - configmap.yaml  WORKER_ADVERTISE_HOST 注释：同步为"仅 headless，server
+    经每副本上报的 headless baseUrl 直连（serve :4000 / exec :4198 同 origin）"
+  - values.yaml  service.worker 段注释：仅被 headless 模板引用（端口定义），
+    无共享 ClusterIP 入口；调试命令说明
+  - NOTES.txt / README.md  端口表与访问方式：worker 行改 Headless；调试命令
+    改为 kubectl port-forward sts/vteam-worker 14000:4000
+
+说明：`kubectl port-forward sts/<sts>` 转发到 ordinal 0；指定副本用
+      `kubectl port-forward pod/vteam-worker-1 14000:4000`。
+
+--------------------------------------------------------------------------------
+2. 静态验证
+--------------------------------------------------------------------------------
+$ helm lint chart/vteam
+==> Linting chart/vteam
+[INFO] Chart.yaml: icon is recommended
+1 chart(s) linted, 0 chart(s) failed
+
+$ helm template vteam chart/vteam -n vteam --set secret.jwtSecret=x ... | grep -E "^kind: Service|name: vteam-worker"
+kind: Service        (mysql, headless)
+kind: Service        (server, ClusterIP)
+kind: Service        (web, ClusterIP)
+kind: Service        (worker-headless, clusterIP: None)
+  name: vteam-worker-headless   # worker 唯一 Service（headless）
+  name: vteam-worker            # 这是 StatefulSet，不是 Service
+→ worker Service 仅剩 headless；共享 ClusterIP 不再渲染。
+
+--------------------------------------------------------------------------------
+3. 部署
+--------------------------------------------------------------------------------
+$ helm get values vteam -n vteam -o yaml > /tmp/opencode/vteam-values-upgrade.yaml   # 保留原覆盖参数
+$ helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-values-upgrade.yaml --wait --timeout 300s
+Release "vteam" has been upgraded. Happy Helming!
+NAME: vteam / NAMESPACE: vteam / STATUS: deployed / REVISION: 13
+（保留项：replicaCount.worker=2；server tag vteam-worker-delete；web tag
+  vteam-k8s-workerdel；db/worker tag vteam-k8s；secret 四件套；ingress vteam.ketaops.cc）
+
+--------------------------------------------------------------------------------
+4. 运行态验证
+--------------------------------------------------------------------------------
+4.1 svc 清单（共享消失 / headless 保留）
+$ kubectl get svc -n vteam -o wide
+NAME                    TYPE        CLUSTER-IP     PORT(S)    SELECTOR
+vteam-mysql             ClusterIP   None           3306/TCP   component=mysql
+vteam-server            ClusterIP   10.68.51.215   3000/TCP   component=server
+vteam-web               ClusterIP   10.68.177.17   3000/TCP   component=web
+vteam-worker-headless   ClusterIP   None           4000/TCP   component=worker   ← 仅 headless
+（共享 vteam-worker ClusterIP Service 已消失）
+
+4.2 StatefulSet serviceName / worker pod（未重启，仅 Service 资源变更）
+$ kubectl get sts vteam-worker -n vteam -o jsonpath='{.spec.serviceName}'
+vteam-worker-headless
+$ kubectl get pods -n vteam -l component=worker
+vteam-worker-0   1/1 Running   0   30m
+vteam-worker-1   1/1 Running   0   31m
+
+4.3 worker 在线/注册（K8s server API）
+w_vteam-worker-1 | online | baseUrl http://vteam-worker-1.vteam-worker-headless.vteam.svc.cluster.local:4000 | exec 4198 | mcp keta-platform:connected
+w_vteam-worker-0 | online | baseUrl http://vteam-worker-0.vteam-worker-headless.vteam.svc.cluster.local:4000 | exec 4198 | mcp keta-platform:connected
+（另有 3 条旧 Deployment 时代注册记录，offline、baseUrl http://vteam-worker:4000，历史遗留无影响）
+K8s server 日志：w_vteam-worker-0/1 持续 heartbeat(201) + platform-mcp 调用正常。
+
+--------------------------------------------------------------------------------
+5. 分派回归（关键：headless 直连不受影响）
+--------------------------------------------------------------------------------
+POST /api/v1/channels/c_0000000002/messages @ 开发者（session s_0000000004）：
+  m_0000000023 | user u_admin   | 【svc移除回归@开发者】请用一句话确认你已收到此消息。
+  m_0000000024 | agent a_developer | sent | 收到，正在处理…                          ← ACK 落库
+  m_0000000026 | agent a_developer | sent | 已收到「svc移除回归」消息，我作为开发者将
+                                            配合处理，请告知需要我执行的回归验证范围…
+                                                                    ← 实际回复落库 ✅
+server 日志（WorkerEventIngress / WorkerDispatcher）：
+  [ingress] session s_0000000004 status → running（workerId=w_vteam-worker-0）
+  [ingress] session s_0000000004 status → idle
+  agent a_developer 流式消息终态化 message=m_0000000025 → sent
+  6m 窗口内无 WorkerUnavailable / fetch failed / ECONNREFUSED
+结论：server→worker headless DNS（<pod>.vteam-worker-headless:4000，exec :4198
+      同 origin）直连分派全链路正常，共享 Service 移除无影响。
+
+--------------------------------------------------------------------------------
+6. serve 调试方式（说明可用，不实际长跑）
+--------------------------------------------------------------------------------
+$ kubectl port-forward sts/vteam-worker -n vteam 14004:4000 &   # sts 转发到 ordinal 0
+Forwarding from 127.0.0.1:14004 -> 4000
+$ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:14004/doc   → 200
+$ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:14004/      → 200
+（opencode serve 可经 pod port-forward 直接访问；共享入口已不存在）
+
+--------------------------------------------------------------------------------
+7. Risks
+--------------------------------------------------------------------------------
+- worker pod 未重启，serve/会话/注册状态零中断（helm upgrade 只删 Service）。
+- 共享 Service 删除瞬间若仍有进程引用 vteam-worker:4000/4198 会连接失败；
+  当前 server 分派已全部使用 headless baseUrl，6m 日志无失败。
+- compose 环境（aiagents-compose-*，13000/13001/14000 端口）与 K8s 环境独立，
+  不受本次变更影响；14000 当前指向 compose worker 的 serve。
+- 旧的 offline worker 注册记录（baseUrl http://vteam-worker:4000）保留在库中，
+  未清理（非本任务范围）；如需清理可在 workers 管理页删除。
+- 未 git 提交（未授权；chart/ 目录整体仍为 untracked，含 REV 8-12 改动）。
+================================================================================

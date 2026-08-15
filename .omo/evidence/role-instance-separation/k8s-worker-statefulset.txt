@@ -1,0 +1,120 @@
+================================================================================
+vteam K8s worker 由 Deployment 迁移 StatefulSet（每副本独立持久化）— 证据
+日期: 2026-08-14
+任务: role-instance-separation (worker 多副本共享 home PVC 损坏 opencode.db 的根治)
+================================================================================
+
+[0] 背景 / 根因
+--------------------------------------------------------------------------------
+- worker 原为 Deployment，多副本共享同一 home PVC（vteam-worker-home，
+  opencode.db SQLite 会话库 + auth.json 凭证）→ 多副本并发写 SQLite 损坏
+  （上次 mcp 修复时发现 "Tree 23 page 23 Extends off end of page"，临时降 1 副本）。
+- 目标：worker 迁 StatefulSet + volumeClaimTemplates（每副本独立 PVC），
+  从架构上消除共享卷并发写。
+
+[1] chart diff（chart/vteam/）
+--------------------------------------------------------------------------------
+a) templates/deployment-worker.yaml → 删除，新建 templates/statefulset-worker.yaml：
+   - kind: StatefulSet；spec.serviceName: <release>-worker-headless
+   - replicas/podManagementPolicy: OrderedReady；updateStrategy.type: RollingUpdate
+     （values.worker.updateStrategy.partition 空 → 不渲染 rollingUpdate 子块，全量滚动）
+   - env/探针/镜像/资源与原 Deployment 完全一致：
+     X_WORKER_TOKEN(secret)、HOME=/root、WORKER_ID=w_$(POD_NAME)（downward API，
+     StatefulSet pod 名 <release>-worker-<ordinal> 全局唯一）、extraEnv
+   - volumes 改为 volumeClaimTemplates（worker-home→/root、worker-work→/data/keta-worker，
+     RWO + size + storageClass(空=集群默认)）；持久化 enabled=false 时回退 emptyDir
+b) templates/service-worker-headless.yaml（新增）：
+   clusterIP: None，selector 同 worker 标签，port 4000/serve（StatefulSet serviceName 必填）
+c) templates/pvc.yaml：移除 worker-work/worker-home 段（仅保留 uploads）
+d) templates/configmap.yaml：注释 WORKER_ID 下发说明 Deployment → StatefulSet（无功能变化）
+e) values.yaml：
+   - worker 段新增 persistence.workerHome(5Gi)/workerWork(10Gi)/updateStrategy.partition
+   - 顶层 persistence 移除 workerWork/workerHome（保留 uploads/mysql）
+f) values-dev.yaml：worker.persistence.* 随迁；README.md 更新（结构/持久化表/关键 values/
+   compose 对齐点 WORKER_ID 与挂载说明）
+
+[2] helm lint + template（replicas=2）
+--------------------------------------------------------------------------------
+$ helm lint chart/vteam
+==> Linting chart/vteam
+[INFO] Chart.yaml: icon is recommended
+1 chart(s) linted, 0 chart(s) failed
+
+$ helm template vteam chart/vteam --set replicaCount.worker=2
+→ StatefulSet vteam-worker：replicas=2, serviceName=vteam-worker-headless,
+  podManagementPolicy=OrderedReady, updateStrategy=RollingUpdate,
+  volumeClaimTemplates=[worker-home(5Gi,RWO), worker-work(10Gi,RWO)]
+→ Service vteam-worker-headless：clusterIP=None, selector=worker 标签, 4000/serve
+→ 渲染不再包含 vteam-worker-work / vteam-worker-home PVC（grep=0）
+
+[3] 部署：helm upgrade（REV 8）
+--------------------------------------------------------------------------------
+- init Job 已被 TTL 清理（kubectl get job 空），无需手动删除。
+- ⚠️ --reuse-values 触发 nil（新值 worker.updateStrategy.partition 未被旧 user-values
+  携带，helm --reuse-values 不复用新 chart 嵌套默认值）。改用：
+  helm get values vteam -n vteam | tail -n +2 > /tmp/opencode/vteam-current-values.yaml
+  helm upgrade vteam chart/vteam -n vteam \
+    -f /tmp/opencode/vteam-current-values.yaml \
+    --set replicaCount.worker=2 \
+    --set worker.persistence.workerHome.size=5Gi \
+    --set worker.persistence.workerWork.size=10Gi \
+    --wait --timeout 300s
+  → Release "vteam" REVISION 8 deployed（server tag vteam-k8s-mcpfix 保留）
+  （提示仅 server readinessProbe startPeriodSeconds 未知字段 warning，既有，无影响）
+
+[4] 独立存储实证
+--------------------------------------------------------------------------------
+a) kubectl get sts,pvc -n vteam：
+   sts/vteam-worker   2/2 Ready
+   PVC（每副本独立，managed-nfs-storage）：
+     worker-home-vteam-worker-0  5Gi  RWO  Bound
+     worker-home-vteam-worker-1  5Gi  RWO  Bound
+     worker-work-vteam-worker-0  10Gi RWO  Bound
+     worker-work-vteam-worker-1  10Gi RWO  Bound
+b) pod 卷挂载独立：
+   vteam-worker-0: worker-home→worker-home-vteam-worker-0, worker-work→worker-work-vteam-worker-0
+   vteam-worker-1: worker-home→worker-home-vteam-worker-1, worker-work→worker-work-vteam-worker-1
+c) opencode.db 各自独立且完好（两个 pod 均有，无损坏报错）：
+   /root/.local/share/opencode/opencode.db（249856B）+ -wal/-shm + repos/
+   /data/keta-worker/opencode.json（keta-platform 注入）
+d) 旧共享 PVC vteam-worker-home / vteam-worker-work 已被 helm upgrade 自动删除
+   （模板移除该资源时 helm 3 默认删除，且 managed-nfs-storage reclaimPolicy=Delete
+   → 旧数据不可恢复）。报告供决策：如需保留旧 worker 数据须在 upgrade 前手动备份/改
+   reclaimPolicy；本次数据为运行时会话/缓存，丢失影响有限。
+
+[5] 双 worker 独立注册 + MCP 实证
+--------------------------------------------------------------------------------
+a) worker 日志：注册成功 workerId=w_vteam-worker-0 / w_vteam-worker-1（各自心跳 10s）
+b) DB workers 表：w_vteam-worker-0 online / w_vteam-worker-1 online（心跳双活，独立）
+c) GET /api/v1/workers（server pod 内 node fetch）：200，online 2 个，
+   两副本 mcpStatus 均 [{"serverName":"keta-platform","status":"connected"}]
+d) 各副本 opencode 探测（cd /data/keta-worker && opencode mcp list --pure）：
+   ● ✓ keta-platform connected http://vteam-server:3000/api/v1/platform-mcp
+   （⚠️ 容器默认 cwd 为 /tmp/keta-worker（镜像 WORKDIR），必须 cd /data/keta-worker
+   才能读到注入的 opencode.json；直接 exec 会显示 "No MCP servers configured"）
+e) 并发写不再损坏：两副本同时跑 opencode mcp list --pure 均正常（SQLite 无报错）
+f) 模型可用性双上报：worker_model_availabilities 中 w_vteam-worker-0=7、
+   w_vteam-worker-1=7
+
+[6] 回归
+--------------------------------------------------------------------------------
+- health: 200 {"status":"ok","info":{},"error":{},"details":{}}
+- login admin/admin123 → 200（token 221 字符）；seed-admin/Admin@123456 → 200
+- GET /agents → 200 count=5（a_product,a_project_manager,a_architect,a_developer,a_tester）
+  （响应结构为 {items:[...]}，非数组）
+- POST /api/v1/projects/p_seed_1/tasks（seed-admin）→ 201
+  taskId t_0000000003 status=pending instances=[开发者-1(a_developer),产品经理-1(a_product)]
+- DB：agents=5，tasks 含 t_0000000003 落库
+- GET /api/v1/workers → 200 online=2（另 6 个历史残留 offline）
+
+[7] Risks / 备注
+--------------------------------------------------------------------------------
+- --reuse-values 在 chart 新增嵌套 values 键时无效（nil），改用导出当前 user-values
+  + -f 方式升级（文档已在 README 部署段隐含此用法）。
+- 旧共享 worker PVC 被 helm 自动删除（见 [4d]）：如需保留历史 worker 数据，
+  升级前须先备份或把 PVC 改为 retain（本次无历史价值数据）。
+- 历史 offline worker 残留行（w_vteam、旧 pod 名 6 行）由 server 心跳判定不再分派；
+  如需清理可手动 DELETE workers 行（非必要不执行）。
+- API 验证 token 在响应顶层 accessToken（非 data.accessToken）。
+- chart 改动未 git 提交（未授权）。
+================================================================================

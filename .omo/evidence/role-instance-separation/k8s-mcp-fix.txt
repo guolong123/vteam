@@ -1,0 +1,95 @@
+================================================================================
+K8s 内置 MCP（keta-platform）连接失败修复实证
+================================================================================
+日期：2026-08-14
+环境：K8s ns=vteam（REV6），镜像 registry docker-hosted.ketaops.cc/xishuhq/（tag vteam-k8s-mcpfix）
+范围：seed URL 可配置化 + chart 传参 + 当前部署快速修复 + 持久修复 + mcpStatus connected 双证
+
+--------------------------------------------------------------------------------
+1. 根因确认（DB 现值）
+--------------------------------------------------------------------------------
+seed.ts 硬编码 keta-platform URL = http://server:3000/api/v1/platform-mcp（docker compose
+服务名）；K8s 下 server 服务名为 vteam-server → worker injectMcp() 从 mcp_servers 表拉取
+该 URL 注入 opencode.json，探测失败。
+
+修复前 DB（mcp_servers 表）：
+  id=ms_keta_platform  name=keta-platform  url=http://server:3000/api/v1/platform-mcp  enabled=1
+
+--------------------------------------------------------------------------------
+2. seed/chart diff 摘要
+--------------------------------------------------------------------------------
+server/prisma/seed.ts:
+  - 两处（update/create 分支）url 改为：process.env.PLATFORM_MCP_URL ?? 'http://server:3000/api/v1/platform-mcp'
+  - 打印日志改为输出实际 platformMcpUrl（不再硬编码）
+
+chart/vteam/values.yaml:
+  - 新增 initJob.platformMcpUrl（默认空 → 模板按 server Service 名拼 http://<fullname>-server:3000/api/v1/platform-mcp；显式设置时用其值）
+
+chart/vteam/templates/job-init.yaml:
+  - init 容器 env 增加 PLATFORM_MCP_URL（值同上模板逻辑）
+
+chart/vteam/README.md:
+  - 关键 values 表 + 与 compose 对齐点补充 platformMcpUrl 说明
+
+验证：helm lint 0 错；helm template 默认拼出 http://vteam-server:3000/api/v1/platform-mcp；
+     --set initJob.platformMcpUrl=http://my-custom:9999/... 时显式覆盖生效。
+
+--------------------------------------------------------------------------------
+3. 当前部署快速修复（UPDATE URL + worker 重新注入）
+--------------------------------------------------------------------------------
+UPDATE mcp_servers SET url='http://vteam-server:3000/api/v1/platform-mcp' WHERE name='keta-platform';
+  → 1 行更新，SELECT 确认新值。
+
+kubectl rollout restart deployment vteam-worker（injectMcp 启动时执行）
+  → worker 日志: [worker] 平台资源注入完成: 0 skills, 0 tools, 1 mcp servers
+  → 容器内 opencode.json mcp 节:
+      "keta-platform": { type:remote, url:"http://vteam-server:3000/api/v1/platform-mcp",
+                         headers:{x-worker-id:{env:WORKER_ID}, x-worker-token:{env:X_WORKER_TOKEN}}, enabled:true }
+
+--------------------------------------------------------------------------------
+4. 持久修复（helm upgrade 重跑 init Job，seed upsert 用 PLATFORM_MCP_URL）
+--------------------------------------------------------------------------------
+- 重建 server 镜像 vteam-k8s-mcpfix（nest build 后 docker build/push，digest 含新 seed）
+- 删旧 Job → helm upgrade vteam chart/vteam --reuse-values --set server.image.tag=vteam-k8s-mcpfix
+- init Job 重跑日志：MCP Server：keta-platform（remote，http://vteam-server:3000/api/v1/platform-mcp）
+- DB 幂等确认：id=ms_keta_platform url=http://vteam-server:3000/api/v1/platform-mcp（seed 全 upsert 安全）
+
+--------------------------------------------------------------------------------
+5. mcpStatus connected 实证（worker 日志 + API/DB 双证）
+--------------------------------------------------------------------------------
+(1) worker 容器内 opencode mcp list --pure：
+      ┌  MCP Servers
+      │
+      ●  ✓ keta-platform connected
+      │      http://vteam-server:3000/api/v1/platform-mcp
+      │
+      └  1 server(s)
+
+(2) server GET /api/v1/workers（seed-admin token）：
+      w_vteam-worker-58cf4cb768-phrcl online mcpStatus: [{'serverName': 'keta-platform', 'status': 'connected'}]
+
+(3) server GET /api/v1/mcp-servers：
+      {'name': 'keta-platform', 'url': 'http://vteam-server:3000/api/v1/platform-mcp', 'status': 'connected'}
+
+(4) worker 容器内 curl 服务端连通性（X-Worker-Token）：
+      POST http://vteam-server:3000/api/v1/platform-mcp {"jsonrpc":"2.0","id":1,"method":"tools/list"}
+      → {"jsonrpc":"2.0","id":1,"result":{"tools":[chat_history/doclib/task_context/group_post/...]}}
+
+--------------------------------------------------------------------------------
+6. 回归
+--------------------------------------------------------------------------------
+- GET /api/v1/health → {"status":"ok"}
+- worker online（心跳正常，mcpStatus connected）
+- GET /api/v1/tools → 6 builtin（bash/read/edit/write/grep/glob）+ 4 MCP 工具（chat_history/doclib/task_context/group_post，mcpServer=keta-platform）
+
+--------------------------------------------------------------------------------
+7. 风险与备注
+--------------------------------------------------------------------------------
+- worker replicas=2 时两个 pod 共享同一 vteam-worker-home PVC（NFS），并发写同一 SQLite
+  opencode.db 导致数据库损坏（PRAGMA integrity_check: Tree 23 page 23 Extends off end of page；
+  opencode mcp list 报 Failed query: project ... database disk image is malformed）→ 探测失败、
+  mcpStatus 无法上报。修复过程临时降 replicaCount.worker=1 并删除损坏 db 重建（已恢复 connected）。
+  ⚠️ 若需恢复 2 副本，须先解决 home 卷按 pod 隔离（每副本独立 PVC / StatefulSet），否则 SQLite 并发写
+  必然再次损坏 opencode.db。
+- compose 部署不受影响（默认仍 http://server:3000，PLATFORM_MCP_URL 未设置时行为不变）。
+- seed 日志行修正：不再硬编码打印 server:3000，输出实际 platformMcpUrl。

@@ -1,0 +1,94 @@
+================================================================
+统一"用户上传附件"与"Agent MCP 上传"链路（unify-upload-archive）
+日期: 2026-08-14
+任务: POST /uploads 带 taskId 归档 + archiveFetchedFile 公共化 + chat_history 附件字段
+================================================================
+
+一、归档公共化（archiveFetchedFile → ArtifactsService.archiveFile）
+----------------------------------------------------------------
+1) artifacts.service.ts 新增公共方法 archiveFile(taskId, args):
+   - 逻辑 = 原 platform-mcp.archiveFetchedFile 全量搬移（行为不变，只换宿主）
+   - sha256 幂等去重（同 taskId+type=file+sha256 已归档 → duplicate 不写库）
+   - 同 taskId+type=file+title → append 新版本；无则新建 v1
+   - acceptedFlag 锁定（当前版本已验收）→ 抛错（调用方 catch 降级 warn）
+   - type 固定 'file'；返回 {artifactId, version, status}
+2) platform-mcp.service.ts:
+   - 删除 archiveFetchedFile 方法（原 :912-992）
+   - submitFileArtifact → this.artifactsService.archiveFile(taskId,
+     { fileRef, storedUrl, storedName, sha256, title })
+   - fetchAndArchiveAttachment → this.artifactsService.archiveFile(...).catch(warn)
+     （group_post fileRef 归档失败仍不阻断附件挂载）
+   - ArtifactsService 已在 platform-mcp.module imports/注入（无模块改动）
+
+二、POST /uploads 带 taskId 归档
+----------------------------------------------------------------
+uploads.controller.ts:
+  - upload(@UploadedFile() file, @Body() body: { taskId?: string })
+  - taskId 存在时 → fsp.readFile(file.path) → sha256 →
+    artifactsService.archiveFile(taskId, { fileRef: meta.url, storedUrl: meta.url,
+    storedName: file.originalname, sha256 })
+  - 归档失败仅 warn，不阻断上传成功返回（附件发送稳定性优先）
+  - 设计决策：fileRef 存落盘 URL（=消息 attachmentUrl），使
+    filePath == attachmentUrl == contentRef，read_file 归档命中（按 filePath
+    归一化匹配）可用 chat_history 返回的 attachmentUrl 直接读回归档内容
+uploads.module.ts: imports [ArtifactsModule]（无环：ArtifactsModule 仅依赖 RealtimeModule）
+
+三、chat_history 补附件字段
+----------------------------------------------------------------
+platform-mcp.service.ts:
+  - ChatHistoryItem 接口加可选字段：
+    attachmentUrl? / attachmentName? / attachmentType? / senderInstanceId?
+  - toChatHistoryItem 补四字段（无附件/null 显式返回，无附件消息不变）
+
+四、前端 taskId 传递
+----------------------------------------------------------------
+web/src/components/ui/message-input.tsx:
+  - MessageInputProps 加 taskId?: string（可选，非任务场景不传）
+  - uploadFile: form.append("taskId", taskId)（taskId 存在时）
+web/app/(main)/tasks/[id]/page.tsx:        MessageInput taskId={taskId}
+web/app/(main)/messages/[id]/page.tsx:     MessageInput taskId={channel?.taskId ?? undefined}
+
+五、静态验证
+----------------------------------------------------------------
+- server npx tsc --noEmit         → 0 错误
+- server 全量 jest                 → 54 suites / 1115 tests 全过
+  （含 artifacts.service.spec 新增 archiveFile 5 用例：
+   created / title 缺省用 storedName / duplicate / appended / accepted 锁定）
+- server uploads.controller.spec  → 新增 4 用例（带 taskId 归档、归档失败不阻断、
+  缺 file、纯上传不归档）
+- web npx tsc --noEmit            → 0 错误
+- web npm run build               → 通过
+
+六、真实链路验证（docker compose up -d --build server web，服务健康 200）
+----------------------------------------------------------------
+1) 浏览器群聊上传（:13001 admin/admin123 → /tasks/t_0000000012 → 附件上传 upload-blue.png → 发送）
+   截图: unify-upload-group-chat.png / unify-upload-group-chat-annotated.png
+2) 查库（messages）: m_0000000417 user 行
+   attachment_url = /uploads/270a516b-0794-4bae-92e8-6f3c5b736c98.png
+   attachment_name = upload-blue.png, attachment_type = png, sender_instance_id = NULL
+3) 查库（artifacts/artifact_versions）: 出现新 file 产出物
+   art_0000000023 (task=t_0000000012, type=file, title=upload-blue.png, current_version=1)
+   artv_0000000030 (file_path=/uploads/270a516b...png, content_ref=同 URL,
+                    sha256=5c1940856c064a85, accepted_flag=0)
+4) MCP chat_history（X-Worker-Token: compose-worker-token, X-Worker-Id: w_compose_worker）:
+   m_0000000417 → {id, senderType:"user", text:"",
+     attachmentUrl:"/uploads/270a516b...png", attachmentName:"upload-blue.png",
+     attachmentType:"png", senderInstanceId:null}
+   无附件消息 attachmentUrl:null（兼容），agent 消息 senderInstanceId 透出
+5) MCP read_file(fileRef="/uploads/270a516b-0794-4bae-92e8-6f3c5b736c98.png"):
+   {fileName:"270a516b...png", fileRef:"/uploads/270a516b...png",
+    source:"archive", content:"base64:iVBORw0KGgo..."}  → 命中归档读回图片内容（PNG 头）
+6) 幂等去重: 重复上传相同内容（upload-blue.png）带 taskId → 返回新 URL，
+   artifacts 仍 1 条（blue_artifacts=1, blue_versions=1），不新增产出物
+7) 不带 taskId 纯上传回归: curl 上传 33641c06-...png 无 taskId → artifact_versions
+   无该 URL 记录（不归档，纯上传不受影响）
+
+七、Risks
+----------------------------------------------------------------
+- fileRef 语义差异：用户上传归档的 filePath 为落盘 URL（/uploads/<UUID>.<ext>），
+  而 Agent MCP 上传仍为 worker 原始路径（如 /tmp/opencode/req.md）——read_file
+  匹配逻辑（normalizeFileRef）对两者均兼容，行为不变
+- 上传归档为 await 同步执行（成功/失败都返回上传结果），上传响应略慢于纯上传
+  （一次 DB 写入），换取真实链路时序确定性
+- 归档失败不阻断上传（warn），附件发送稳定性优先
+- 未 git 提交（未授权）
