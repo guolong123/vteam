@@ -296,10 +296,18 @@ const ROLE_AGENT_ID: Record<RoleKey, string> = {
   tester: "a_tester",
 };
 
+/** 自定义 agent 中性主题（teal，区别于内置 5 角色色，is_0000000035）。 */
+const CUSTOM_THEME = { color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4", label: "自定义" };
+
 /** 角色选择项（每角色首个模板 agent；role 非法跳过，按 ROLE_KEYS 顺序稳定展示）。 */
 interface AgentOption {
   id: string;
   role: RoleKey;
+}
+
+/** is_0000000035：自定义/clone agent（type !== template）→ 添加实例可选。 */
+function customAgentsOf(items: AgentItem[]): AgentItem[] {
+  return items.filter((a) => a.type !== "template");
 }
 
 /** GET /agents 结果 → 角色选择项（按角色去重取首个，顺序对齐 ROLE_KEYS）。 */
@@ -407,6 +415,7 @@ function MembersPanel({
   dmError,
   teamEditable,
   agentOptions,
+  customAgents,
   adding,
   addError,
   onAddInstance,
@@ -424,6 +433,8 @@ function MembersPanel({
   teamEditable: boolean;
   /** 模板角色选择项（GET /agents，每角色首 agent；缺省兜底 seed 预置 id）。 */
   agentOptions: AgentOption[];
+  /** is_0000000035：自定义/clone agent（type !== template）→ 添加实例可选。 */
+  customAgents: AgentItem[];
   adding: boolean;
   /** 添加失败错误（agent 不存在等，后端 404 AGENT_NOT_FOUND / 409 TASK_TEAM_NOT_ALLOWED）。 */
   addError: string | null;
@@ -433,9 +444,16 @@ function MembersPanel({
   width?: number;
 }) {
   const [addOpen, setAddOpen] = useState(false);
-  const [selectedRole, setSelectedRole] = useState<RoleKey | null>(null);
+  /** 选中项：内置角色 RoleKey 或自定义 agent id（is_0000000035）。 */
+  const [selectedRole, setSelectedRole] = useState<string | null>(null);
   const [alias, setAlias] = useState("");
-  const theme = selectedRole ? roles[selectedRole] ?? roles.developer : null;
+  /** 选中主题：内置角色主题；自定义 agent 用中性 CUSTOM_THEME（别名占位提示 agent 名）。 */
+  const selectedCustom = customAgents.find((a) => a.id === selectedRole);
+  const theme = selectedCustom
+    ? { ...CUSTOM_THEME, label: selectedCustom.name }
+    : selectedRole
+      ? (roles[selectedRole as RoleKey] ?? roles.developer)
+      : null;
 
   const openPanel = () => {
     if (!teamEditable || adding) return;
@@ -449,7 +467,11 @@ function MembersPanel({
   };
   const confirmAdd = async () => {
     if (!selectedRole || adding) return;
-    const ok = await onAddInstance(agentIdForRole(selectedRole, agentOptions), alias.trim() || undefined);
+    // 内置角色 → 模板 agent id；自定义 agent id 直用
+    const agentId = (ROLE_KEYS as readonly string[]).includes(selectedRole)
+      ? agentIdForRole(selectedRole as RoleKey, agentOptions)
+      : selectedRole;
+    const ok = await onAddInstance(agentId, alias.trim() || undefined);
     if (ok) {
       setAddOpen(false);
       setSelectedRole(null);
@@ -711,6 +733,52 @@ function MembersPanel({
                   </button>
                 );
               })}
+              {/* is_0000000035：自定义/clone agent 可选（中性 teal 主题） */}
+              {customAgents.length > 0 && (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginTop: space.xs, padding: `0 ${space.sm}px` }}>
+                    <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
+                    <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>自定义 Agent</span>
+                    <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
+                  </div>
+                  {customAgents.map((a) => {
+                    const selected = selectedRole === a.id;
+                    return (
+                      <button
+                        key={a.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        data-testid="add-instance-custom-role"
+                        data-agent-id={a.id}
+                        aria-label={`添加自定义 Agent ${a.name}`}
+                        onClick={() => setSelectedRole(a.id)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: space.sm,
+                          padding: `${space.xs}px ${space.sm}px`,
+                          borderRadius: radius.sm,
+                          border: `1px solid ${selected ? CUSTOM_THEME.border : "transparent"}`,
+                          backgroundColor: selected ? CUSTOM_THEME.bg : "transparent",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          fontFamily: fontFamily.body,
+                        }}
+                      >
+                        <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: CUSTOM_THEME.color, flexShrink: 0 }} />
+                        <span style={{ flex: 1, minWidth: 0, fontSize: fontSize.md, color: neutral[700], fontWeight: selected ? 600 : 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {a.name}
+                        </span>
+                        <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>{a.type}</span>
+                        {selected && (
+                          <span aria-hidden style={{ color: CUSTOM_THEME.color, fontSize: fontSize.sm, fontWeight: 700 }}>✓</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </>
+              )}
             </div>
             {/* 别名（可选，缺省服务端生成 <角色中文名>-<seq>） */}
             <input
@@ -2128,6 +2196,11 @@ export default function TaskChatPage() {
     () => roleOptionsOf(agentsQuery.data?.items ?? []),
     [agentsQuery.data],
   );
+  /** is_0000000035：自定义/clone agent（type !== template）→ 添加实例面板可选。 */
+  const customAgents = useMemo(
+    () => customAgentsOf(agentsQuery.data?.items ?? []),
+    [agentsQuery.data],
+  );
 
   /* ---------- 1b. 产出物列表：GET /tasks/:id/artifacts（右侧面板直接展示实际产出物文件）。
        实时性（is_0000000020）：SSE artifact.submitted 失效缓存 + 30s 轮询兜底（错过事件/用户侧改动）。 ---------- */
@@ -2789,6 +2862,7 @@ export default function TaskChatPage() {
         dmError={dmError}
         teamEditable={task.status === "pending" || task.status === "in_progress"}
         agentOptions={agentOptions}
+        customAgents={customAgents}
         adding={addInstanceMutation.isPending}
         addError={addError}
         onAddInstance={handleAddInstance}
