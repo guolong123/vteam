@@ -211,6 +211,25 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     }
   });
 
+  it('directory 存在时：执行前 mkdir -p 兜底创建（server/worker 文件系统可能不共享，is_0000000010）', async () => {
+    const { driver, sendMessage } = mockDriver();
+    const { sender } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    const parent = join(os.tmpdir(), `keta-exec-wd-${process.pid}-${Date.now()}`);
+    const workDir = join(parent, '深 开发');
+    try {
+      await postExecute(bound, { taskId: 't_1', prompt: 'go', directory: workDir });
+      await waitFor(() => sendMessage.mock.calls.length > 0);
+      // worker 执行端点兜底创建目录（递归），且 directory 原样透传 serve
+      expect(fs.existsSync(workDir)).toBe(true);
+      expect(sendMessage).toHaveBeenCalledWith('ses_1', expect.objectContaining({ directory: workDir }));
+    } finally {
+      await exec.stop();
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   it('复用会话：请求带 sessionId 时不 createSession（端点按 opencode 会话 id 区分）', async () => {
     const { driver, createSession, sendMessage } = mockDriver();
     const { sender, sent } = createSender();

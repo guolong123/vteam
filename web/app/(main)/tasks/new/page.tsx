@@ -108,6 +108,8 @@ interface InstanceDraft {
   agentId: string;
   alias: string;
   seq: number;
+  /** is_0000000010：实例独立持久化工作目录（缺省 `/data/worker/<sanitize(agent名称)>`，可改）。 */
+  workDir: string;
   /** 所属角色（展平后主题色/徽章/提交聚合用）。 */
   roleKey: RoleKey;
 }
@@ -118,6 +120,12 @@ type InstancesByRole = Partial<Record<RoleKey, InstanceDraft[]>>;
 /** 默认别名（与后端 seq 生成规则一致：<角色中文名>-<seq>） */
 function defaultAliasOf(role: RoleKey, seq: number): string {
   return `${roles[role].label}-${seq}`;
+}
+
+/** is_0000000010：默认持久化工作目录 `/data/worker/<角色名>[-seq]`（对齐后端 sanitize 规则，
+ *  仅作前端预填展示；提交时未改动则不传，由服务端按 agent 名称解析）。 */
+function defaultWorkDirOf(role: RoleKey, seq: number): string {
+  return seq > 1 ? `/data/worker/${roles[role].label}-${seq}` : `/data/worker/${roles[role].label}`;
 }
 
 /** 展平全部实例（按角色顺序）。 */
@@ -528,6 +536,7 @@ function RoleInstanceCard({
   onToggleRole,
   onAddInstance,
   onRenameInstance,
+  onWorkDirChange,
   onRemoveInstance,
   onSetMain,
 }: {
@@ -537,6 +546,7 @@ function RoleInstanceCard({
   onToggleRole: (role: RoleKey) => void;
   onAddInstance: (role: RoleKey) => void;
   onRenameInstance: (key: string, alias: string) => void;
+  onWorkDirChange: (key: string, workDir: string) => void;
   onRemoveInstance: (key: string) => void;
   onSetMain: (key: string) => void;
 }) {
@@ -678,6 +688,24 @@ function RoleInstanceCard({
                     padding: `${space.xs}px 0`,
                   }}
                 />
+                <input
+                  data-testid="instance-workdir-input"
+                  value={inst.workDir}
+                  aria-label={`${theme.label}实例 ${inst.seq} 工作目录`}
+                  onChange={(e) => onWorkDirChange(inst.key, e.target.value)}
+                  placeholder="/data/worker/<agent名称>"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    border: "none",
+                    outline: "none",
+                    background: "transparent",
+                    fontSize: fontSize.xs,
+                    color: neutral[500],
+                    fontFamily: fontFamily.mono ?? fontFamily.body,
+                    padding: `${space.xs}px 0`,
+                  }}
+                />
                 <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>#{inst.seq}</span>
                 {isMain ? (
                   <span
@@ -782,6 +810,7 @@ function AgentSelectPanel({
   onToggleRole,
   onAddInstance,
   onRenameInstance,
+  onWorkDirChange,
   onRemoveInstance,
   onSetMain,
   onSelectMain,
@@ -800,6 +829,7 @@ function AgentSelectPanel({
   onToggleRole: (role: RoleKey) => void;
   onAddInstance: (role: RoleKey) => void;
   onRenameInstance: (key: string, alias: string) => void;
+  onWorkDirChange: (key: string, workDir: string) => void;
   onRemoveInstance: (key: string) => void;
   onSetMain: (key: string) => void;
   onSelectMain: (key: string) => void;
@@ -883,6 +913,7 @@ function AgentSelectPanel({
               onToggleRole={onToggleRole}
               onAddInstance={onAddInstance}
               onRenameInstance={onRenameInstance}
+              onWorkDirChange={onWorkDirChange}
               onRemoveInstance={onRemoveInstance}
               onSetMain={onSetMain}
             />
@@ -1157,6 +1188,7 @@ export default function TaskCreatePage() {
           key: `inst-${role}-1`,
           agentId: ROLE_AGENT_ID[role],
           alias: defaultAliasOf(role, 1),
+          workDir: defaultWorkDirOf(role, 1),
           seq: 1,
           roleKey: role,
         },
@@ -1209,6 +1241,7 @@ export default function TaskCreatePage() {
                 key: nextKey(),
                 agentId: ROLE_AGENT_ID[role],
                 alias: defaultAliasOf(role, 1),
+                workDir: defaultWorkDirOf(role, 1),
                 seq: 1,
                 roleKey: role,
               },
@@ -1232,7 +1265,14 @@ export default function TaskCreatePage() {
         ...prev,
         [role]: [
           ...list,
-          { key: nextKey(), agentId: ROLE_AGENT_ID[role], alias: defaultAliasOf(role, seq), seq, roleKey: role },
+          {
+            key: nextKey(),
+            agentId: ROLE_AGENT_ID[role],
+            alias: defaultAliasOf(role, seq),
+            workDir: defaultWorkDirOf(role, seq),
+            seq,
+            roleKey: role,
+          },
         ],
       };
     });
@@ -1246,6 +1286,18 @@ export default function TaskCreatePage() {
       return {
         ...prev,
         [role]: (prev[role] ?? []).map((i) => (i.key === key ? { ...i, alias } : i)),
+      };
+    });
+  };
+
+  /** is_0000000010：行内修改工作目录（workDir 输入受控） */
+  const handleWorkDirChange = (key: string, workDir: string) => {
+    setInstancesByRole((prev) => {
+      const role = findRoleOf(prev, key);
+      if (!role) return prev;
+      return {
+        ...prev,
+        [role]: (prev[role] ?? []).map((i) => (i.key === key ? { ...i, workDir } : i)),
       };
     });
   };
@@ -1321,6 +1373,10 @@ export default function TaskCreatePage() {
             ...(inst.alias !== defaultAliasOf(inst.roleKey, inst.seq)
               ? { alias: inst.alias }
               : {}),
+            // is_0000000010：workDir 仅显式修改时提交（缺省由服务端解析 /data/worker/<agent名称>）
+            ...(inst.workDir.trim() !== defaultWorkDirOf(inst.roleKey, inst.seq)
+              ? { workDir: inst.workDir.trim() }
+              : {}),
           })),
           // 主实例：实例 id 由服务端生成，前端无法预知——传 mainAgentId 由服务端映射该 agent 第一实例
           //（决策 1：默认主 Agent=项目经理；用户改主实例别名不影响——按 agent 映射）
@@ -1391,6 +1447,7 @@ export default function TaskCreatePage() {
           onToggleRole={handleToggleRole}
           onAddInstance={handleAddInstance}
           onRenameInstance={handleRenameInstance}
+          onWorkDirChange={handleWorkDirChange}
           onRemoveInstance={handleRemoveInstance}
           onSetMain={handleSetMain}
           onSelectMain={handleSetMain}

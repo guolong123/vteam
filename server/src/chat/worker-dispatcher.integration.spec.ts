@@ -61,6 +61,7 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     message: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock; update: jest.Mock };
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
     task: { findUnique: jest.Mock };
+    taskAgent: { findUnique: jest.Mock };
   };
   let realtime: { emit: jest.Mock; broadcast: jest.Mock };
   let idGen: { nextId: jest.Mock };
@@ -149,6 +150,14 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
       },
       artifact: { findMany: jest.fn().mockResolvedValue([]) },
       artifactVersion: { findMany: jest.fn().mockResolvedValue([]) },
+      taskAgent: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'ta_0000000001',
+          workDir: null,
+          seq: 1,
+          agent: { id: 'a_product', name: '产品经理' },
+        }),
+      },
       message: {
         create: jest.fn(),
         // 空历史（群聊历史查询）

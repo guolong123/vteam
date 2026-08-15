@@ -11,7 +11,7 @@ import { TASK_ERRORS } from '../common/constants/task.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
-import { TasksService } from './tasks.service';
+import { sanitizeWorkDirName, TasksService } from './tasks.service';
 
 describe('TasksService', () => {
   let service: TasksService;
@@ -317,8 +317,8 @@ describe('TasksService', () => {
       });
       // instances：alias 默认 `<角色中文名>-<seq>`、name/role 从 agent 关联取、main 标记（按 (agentId,seq) 排序）
       expect(result.instances).toEqual([
-        { id: 'ta_0000000002', agentId: 'a_developer', alias: '开发者-1', seq: 1, name: '开发者', role: 'developer', main: false, sessionStatus: null, sessionId: null },
-        { id: 'ta_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1, name: '产品经理', role: 'product', main: true, sessionStatus: null, sessionId: null },
+        { id: 'ta_0000000002', agentId: 'a_developer', alias: '开发者-1', seq: 1, workDir: '/data/worker/开发者', name: '开发者', role: 'developer', main: false, sessionStatus: null, sessionId: null },
+        { id: 'ta_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1, workDir: '/data/worker/产品经理', name: '产品经理', role: 'product', main: true, sessionStatus: null, sessionId: null },
       ]);
       expect(result.backgroundDocs).toEqual([{ name: '需求文档.pdf' }]);
 
@@ -393,6 +393,7 @@ describe('TasksService', () => {
           agentId: 'a_product',
           alias: '产品经理-1',
           seq: 1,
+          workDir: '/data/worker/产品经理',
         },
       });
       expect(txModels.taskAgent.create).toHaveBeenNthCalledWith(2, {
@@ -402,6 +403,7 @@ describe('TasksService', () => {
           agentId: 'a_developer',
           alias: '开发者-1',
           seq: 1,
+          workDir: '/data/worker/开发者',
         },
       });
       // 会话：每实例一行（uk_sessions_task_agent），status=created，绑实例
@@ -468,6 +470,7 @@ describe('TasksService', () => {
           agentId: 'a_developer',
           alias: '开发者-1',
           seq: 1,
+          workDir: '/data/worker/开发者',
         },
       });
       expect(txModels.taskAgent.create).toHaveBeenNthCalledWith(2, {
@@ -477,6 +480,7 @@ describe('TasksService', () => {
           agentId: 'a_developer',
           alias: '开发者-2',
           seq: 2,
+          workDir: '/data/worker/开发者-2',
         },
       });
       // 主实例 = 第二个开发者实例（mainAgentInstanceId 入参优先）
@@ -486,6 +490,34 @@ describe('TasksService', () => {
       });
       // 两个实例各自独立会话
       expect(txModels.session.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('创建任务可指定 workDir：显式传入原样落库，缺省用 /data/worker/<agent名称>', async () => {
+      idGen.nextId
+        .mockResolvedValueOnce('t_0000000001')
+        .mockResolvedValueOnce('c_0000000001')
+        .mockResolvedValueOnce('ta_0000000001')
+        .mockResolvedValueOnce('s_0000000001')
+        .mockResolvedValueOnce('te_0000000001');
+      const txModels = mockCreateTx(row());
+      const customWorkDir = '/data/worker/custom-agent';
+
+      await service.create(pid, userId, {
+        title: 'x',
+        agents: [{ agentId: 'a_product', workDir: customWorkDir }],
+      } as any);
+
+      // 显式 workDir 原样落库
+      expect(txModels.taskAgent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ workDir: customWorkDir }),
+        }),
+      );
+      // 缺省（未传 workDir）：默认 /data/worker/<sanitize(agent.name)>
+      expect(sanitizeWorkDirName('产品经理')).toBe('产品经理');
+      expect(sanitizeWorkDirName(' 开发/者 1 ')).toBe('开发-者-1');
+      expect(sanitizeWorkDirName('../../etc')).toBe('etc');
+      expect(sanitizeWorkDirName('')).toBe('agent');
     });
 
     it('mainAgentInstanceId 不属于本次创建实例集合 → 400（事务回滚，task.update 不执行）', async () => {
@@ -572,8 +604,8 @@ describe('TasksService', () => {
       expect(result.items[0]).toMatchObject({ id: 't_0000000001', status: 'pending' });
       expect(result.items[0].teamAgentIds).toEqual(['a_product', 'a_developer']);
       expect(result.items[0].instances).toEqual([
-        { id: 'ta_0000000002', agentId: 'a_developer', alias: '开发者-1', seq: 1, name: '开发者', role: 'developer', main: false, sessionStatus: null, sessionId: null },
-        { id: 'ta_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1, name: '产品经理', role: 'product', main: false, sessionStatus: null, sessionId: null },
+        { id: 'ta_0000000002', agentId: 'a_developer', alias: '开发者-1', seq: 1, workDir: '/data/worker/开发者', name: '开发者', role: 'developer', main: false, sessionStatus: null, sessionId: null },
+        { id: 'ta_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1, workDir: '/data/worker/产品经理', name: '产品经理', role: 'product', main: false, sessionStatus: null, sessionId: null },
       ]);
       expect(result.items[1].teamAgentIds).toEqual(['a_tester']);
       // 查询：projectId + 排序 + taskAgents 带模板 agent 关联
@@ -1625,6 +1657,7 @@ describe('TasksService', () => {
           agentId: 'a_developer',
           alias: '开发者-1',
           seq: 1,
+          workDir: '/data/worker/开发者',
         },
       });
       expect(txModels.session.create).toHaveBeenCalledWith({
@@ -1698,6 +1731,7 @@ describe('TasksService', () => {
           agentId: 'a_developer',
           alias: '开发者-2',
           seq: 2,
+          workDir: '/data/worker/开发者-2',
         },
       });
       expect(realtime.broadcast).toHaveBeenCalledWith(

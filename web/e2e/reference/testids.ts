@@ -585,7 +585,7 @@ export const PAGE_SMOKE: Record<string, string[]> = {
   "/login": ["username", "password", "remember-me", "forgot-password-link", "login-button", "register-link"],
   "/register": ["register-username", "register-displayname", "register-password", "register-submit", "register-login-link"],
   "/projects": ["project-list-root", "project-card", "create-project-button"],
-  "/tasks/new": ["task-create-root", "task-title", "priority-select", "agent-option", "create-task-button"],
+  "/tasks/new": ["task-create-root", "task-title", "priority-select", "agent-option", "create-task-button", "instance-row", "instance-alias-input", "instance-workdir-input"],
   "/board": ["task-board-root", "status-filter", "task-card", "status-badge"],
   "/agents": ["agent-config-root", "agent-list-item", "model-select", "clone-template-button"],
   "/messages": ["messages-list-root", "conversation-item", "messages-retry"],

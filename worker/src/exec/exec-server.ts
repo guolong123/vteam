@@ -444,6 +444,11 @@ export class ExecServer {
     trackInstanceStart();
     let opencodeSessionId = payload.sessionId ?? '';
     try {
+      // is_0000000010：worker 侧兜底创建目录（server 与 worker 可能不共享文件系统，
+      // server 侧 mkdir 无效——目录由 worker 执行端点确保存在，持久卷挂载 /data/worker）。
+      if (payload.directory) {
+        await fsp.mkdir(payload.directory, { recursive: true });
+      }
       if (!opencodeSessionId) {
         opencodeSessionId = await this.driver.createSession(payload.model);
       }

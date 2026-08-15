@@ -32,6 +32,7 @@ import {
 import { AssignmentRequirement, WorkersService } from '../workers/workers.service';
 import { DispatchRequest, DispatchResult, MessageDispatcher } from './message-dispatcher';
 import { extractConclusionParts, normalizeParts } from './message-parts';
+import { sanitizeWorkDirName } from '../tasks/tasks.service';
 
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
 const MESSAGE_ID_PREFIX = 'm';
@@ -1010,9 +1011,12 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // 即成功——worker 异步驱动 serve 并上送事件；回复经 ingress task.completed 回流
     // （handleTaskCompleted 落库+广播+emitFinal），server 不再自持轮询。
     // 自持轮询 pollForCompletion 方案 A 后不再调用（代码保留作兜底/测试，见方法注释）。
-    // F3 MINOR-3：工作目录隔离——directory 指向任务级独立工作目录
-    // （<WORK_DIR>/tasks/<taskId>，mkdir -p 保证存在），防模型在仓库根写文件污染（F4）。
-    const taskWorkDir = await this.ensureTaskWorkDir(taskId);
+    // is_0000000010：工作目录解析链（worker 持久化目录 = 每 agent 独立工作区）——
+    // 1. 实例 task_agents.work_dir（创建任务可指定，优先）
+    // 2. 缺省 /data/worker/<sanitize(agent.name)>-<seq>（与 tasks.service 同根，防分叉）
+    // 3. 任务级 <WORK_DIR>/tasks/<taskId> 兜底（兼容存量，见 resolveAgentWorkDir）
+    // 目录创建下沉两处兜底：server mkdir -p + worker 执行端点 mkdir（文件系统可能不共享）。
+    const taskWorkDir = await this.resolveAgentWorkDir(taskId, session, target);
     const agentRow = await this.prisma.agent.findUnique({
       where: { id: target.agentId },
       select: { id: true, name: true, role: true, prompt: true },
@@ -2115,6 +2119,58 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     const dir = path.join(this.taskWorkDirRoot, 'tasks', taskId);
     await fs.mkdir(dir, { recursive: true });
     return dir;
+  }
+
+  /**
+   * is_0000000010：实例工作目录解析链——优先实例 task_agents.work_dir（创建任务时
+   * 指定或服务端默认 `/data/worker/<sanitize(name)>[-seq]`）；缺失（存量实例/异常）
+   * 回落 `/data/worker/<sanitize(agent.name)>-<seq>`（与 tasks.service 同根，防两处默认
+   * 路径分叉——PR 审核建议），最终任务级目录兜底。mkdir -p 保证存在；worker 执行端点
+   * 亦有兜底创建（server/worker 文件系统可能不共享，依赖 /data/worker 持久卷）。
+   */
+  private async resolveAgentWorkDir(
+    taskId: string,
+    session: { taskAgentId: string | null },
+    target: { agentId: string; sessionId: string | null },
+  ): Promise<string> {
+    if (session.taskAgentId) {
+      const ta = await this.prisma.taskAgent.findUnique({
+        where: { id: session.taskAgentId },
+        select: {
+          workDir: true,
+          seq: true,
+          agent: { select: { id: true, name: true } },
+        },
+      });
+      if (ta) {
+        const dir = ta.workDir?.trim();
+        if (dir) {
+          await fs.mkdir(dir, { recursive: true });
+          return dir;
+        }
+        const agentDir = this.defaultAgentWorkDirPath(ta.agent.name ?? ta.agent.id, ta.seq);
+        await fs.mkdir(agentDir, { recursive: true });
+        return agentDir;
+      }
+    }
+    // 实例行缺失（存量会话未绑实例）：agent 名称兜底 → 任务级兜底
+    const agentRow = await this.prisma.agent.findUnique({
+      where: { id: target.agentId },
+      select: { id: true, name: true },
+    });
+    if (agentRow) {
+      const dir = this.defaultAgentWorkDirPath(agentRow.name ?? agentRow.id, 1);
+      await fs.mkdir(dir, { recursive: true });
+      return dir;
+    }
+    return this.ensureTaskWorkDir(taskId);
+  }
+
+  /** is_0000000010：默认 agent 目录 `/data/worker/<sanitize(name)>[-seq]`（对齐
+   *  tasks.service defaultAgentWorkDir，统一根路径防存量实例调度/DTO 展示分叉）。 */
+  private defaultAgentWorkDirPath(name: string, seq: number): string {
+    const base = sanitizeWorkDirName(name ?? 'agent');
+    return `/data/worker/${seq > 1 ? `${base}-${seq}` : base}`;
   }
 
   private clearPendingWatchdog(taskId: string, agentId: string): void {

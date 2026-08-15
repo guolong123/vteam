@@ -157,6 +157,8 @@ model TaskAgent {
   agentId   String    @map("agent_id") // 模板 agent（继承 name/role/prompt/model）
   alias     String? // 实例别名（默认「<角色中文名>-<seq>」，服务端生成）
   seq       Int       @default(1) // 同 agent 同任务内序号（服务端生成，事务内防并发重号）
+  workDir   String? // is_0000000010：实例独立持久化工作目录（创建任务可指定；缺省
+  // /data/worker/<sanitize(agent.name)>，同 agent 多实例追加 -<seq>）
   joinedAt  DateTime  @default(now()) @map("joined_at")
   removedAt DateTime? @map("removed_at")
 

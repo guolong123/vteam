@@ -53,6 +53,7 @@ describe('WorkerDispatcher', () => {
     };
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
     task: { findUnique: jest.Mock };
+    taskAgent: { findUnique: jest.Mock };
   };
   let idGen: { nextId: jest.Mock };
   let realtime: { broadcast: jest.Mock };
@@ -133,6 +134,9 @@ describe('WorkerDispatcher', () => {
       // 主 Agent/团队成员注入：默认无 task 行 → isMainAgent=false + team=[]（既有断言
       // system 不含主 Agent/团队段，回归现状）；需要注入的用例单独 mockResolvedValue。
       task: { findUnique: jest.fn() },
+      // is_0000000010：默认无实例行 → resolveAgentWorkDir 走 agent 名称兜底目录（回归既有
+      // 任务级/agent 兜底行为）；需要验证 work_dir 的用例单独 mockResolvedValue。
+      taskAgent: { findUnique: jest.fn() },
     };
     idGen = { nextId: jest.fn().mockResolvedValue('m_0000000002') };
     realtime = { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
@@ -3090,24 +3094,56 @@ describe('WorkerDispatcher', () => {
   });
 
   describe('F3 MINOR-3：任务工作目录隔离 + 超时可配', () => {
-    it('dispatch 传独立任务工作目录（promptAsync directory=<WORK_DIR>/tasks/<taskId>）且目录存在', async () => {
+    it('dispatch 传 agent 兜底工作目录（未绑实例 → /data/worker/<agentName>，与 tasks.service 同根）且目录存在', async () => {
       prisma.session.findUnique.mockResolvedValue({
         id: 's_0000000001',
         workerId: 'w_0000000001',
         instanceRef: 'ses_0001',
       });
       prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001', capabilities: {} });
-      prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
+      // 存量会话未绑实例（taskAgentId NULL）：agent 名称兜底目录（/data/worker 根）
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        name: '产品经理',
+        defaultModelId: null,
+      });
       prisma.artifact.findMany.mockResolvedValue([]);
       const d = createDispatcher();
 
       await d.dispatch(request);
 
       const execArgs = workerClient.execute.mock.calls[0][1] as { directory: string };
-      const expectedDir = path.join(workRoot, 'tasks', request.taskId);
+      const expectedDir = '/data/worker/产品经理';
       expect(execArgs.directory).toBe(expectedDir);
       // mkdir -p 已保证目录存在
       expect(fs.existsSync(expectedDir)).toBe(true);
+    });
+
+    it('dispatch 绑实例且 task_agents.work_dir 存在：directory 用实例独立工作目录', async () => {
+      const workDir = path.join(workRoot, 'worker', '产品经理');
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: 'w_0000000001',
+        instanceRef: 'ses_0001',
+        taskAgentId: 'ta_0000000001',
+      });
+      prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001', capabilities: {} });
+      prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
+      prisma.taskAgent.findUnique.mockResolvedValue({
+        id: 'ta_0000000001',
+        workDir,
+        seq: 1,
+        agent: { id: 'a_product', name: '产品经理' },
+      });
+      prisma.artifact.findMany.mockResolvedValue([]);
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      const execArgs = workerClient.execute.mock.calls[0][1] as { directory: string };
+      expect(execArgs.directory).toBe(workDir);
+      // server 侧 mkdir -p 已保证存在
+      expect(fs.existsSync(workDir)).toBe(true);
     });
 
     it('DISPATCH_TIMEOUT_MS 默认 120s（复杂任务多轮 tool 调用放宽），env 可配', async () => {
