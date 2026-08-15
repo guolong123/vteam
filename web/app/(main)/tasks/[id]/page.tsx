@@ -1607,10 +1607,16 @@ function TaskPanel({
     [issues],
   );
 
-  /** 产出物条目点击：doc/file 带可访问 fileUrl → 新窗口打开（同源 /uploads/ 自动触发下载）；
-   *  text 或无 fileUrl → 跳产出物聚合页查看。 */
+  /** 产出物条目点击（is_0000000033）：
+   *  - doc → 跳文档站视图 /docs/:taskId（文档站内按 slug 渲染）
+   *  - file 带可访问 fileUrl → 新窗口打开/下载（同源 /uploads/ 自动触发下载）
+   *  - text 或无 fileUrl → 跳产出物聚合页查看。 */
   const handleArtifactClick = (item: ArtifactItem) => {
-    if ((item.type === "doc" || item.type === "file") && item.fileUrl) {
+    if (item.type === "doc") {
+      onOpenDocs?.();
+      return;
+    }
+    if (item.type === "file" && item.fileUrl) {
       window.open(item.fileUrl, "_blank", "noopener,noreferrer");
       return;
     }
@@ -1770,7 +1776,7 @@ function TaskPanel({
                     tabIndex={0}
                     onClick={() => handleArtifactClick(item)}
                     onKeyDown={handleArtifactKeyDown(item)}
-                    title={item.fileUrl ? `打开 ${item.title}` : `查看产出物 ${item.title}`}
+                    title={item.type === "doc" ? `在文档站查看 ${item.title}` : item.fileUrl ? `打开 ${item.title}` : `查看产出物 ${item.title}`}
                     style={{
                       display: "flex",
                       alignItems: "center",
