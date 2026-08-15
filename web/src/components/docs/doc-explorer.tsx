@@ -287,7 +287,38 @@ export function DocExplorer({ taskId }: { taskId: string }) {
 
       {/* 中间：文档内容 */}
       <main ref={mainRef} style={{ minWidth: 0, flex: 1, overflowY: "auto", ...baseFont }}>
-        {error ? (
+        {registryQuery.isError ? (
+          <div style={{ display: "flex", height: "100%", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: space.sm, padding: `0 ${space.xl}px`, textAlign: "center", fontSize: fontSize.md, color: "#DC2626" }}>
+            <p>文档列表加载失败（registry 拉取异常）</p>
+            <button
+              type="button"
+              data-testid="docs-registry-retry"
+              onClick={() => registryQuery.refetch()}
+              style={{
+                padding: `${space.sm}px ${space.lg}px`,
+                borderRadius: radius.md,
+                border: `1px solid ${neutral[200]}`,
+                backgroundColor: "#FFFFFF",
+                color: neutral[600],
+                fontSize: fontSize.md,
+                fontWeight: 500,
+                cursor: "pointer",
+                fontFamily: fontFamily.body,
+              }}
+            >
+              重试
+            </button>
+          </div>
+        ) : registryQuery.isPending ? (
+          <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", fontSize: fontSize.md, color: neutral[400] }}>
+            加载文档…
+          </div>
+        ) : rootDocs.length === 0 ? (
+          <div style={{ display: "flex", height: "100%", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: space.sm, padding: `0 ${space.xl}px`, textAlign: "center", fontSize: fontSize.md, color: neutral[500] }}>
+            <span aria-hidden style={{ fontSize: 26, color: neutral[300] }}>▤</span>
+            <p>该任务暂无 doc 产出物，Agent 归档文档后自动出现在文档站（约 30s 内）</p>
+          </div>
+        ) : error ? (
           <div style={{ display: "flex", height: "100%", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: `0 ${space.xl}px`, textAlign: "center", fontSize: fontSize.md, color: "#DC2626" }}>
             <p>{error}</p>
           </div>
