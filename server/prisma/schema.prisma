@@ -86,7 +86,8 @@ model Role {
 model Project {
   id          String   @id
   name        String
-  description String?
+  // 项目描述可能超过 VARCHAR(191)，TEXT 承载（K8s 部署 500：value too long for column description）
+  description String?  @db.Text
   ownerId     String   @map("owner_id")
   status      String   @default("active")
   createdAt   DateTime @default(now()) @map("created_at")
@@ -121,11 +122,14 @@ model Task {
   id              String    @id
   projectId       String    @map("project_id")
   title           String
-  description     String?
+  // 任务描述可能超过 VARCHAR(191)，TEXT 承载（K8s 部署 500：value too long for column description）
+  description     String?   @db.Text
   priority        String    @default("medium")
   status          String    @default("pending")
   mainAgentId     String?   @map("main_agent_id")
   mainAgentInstanceId String? @map("main_agent_instance_id") // 主 Agent 实例（决策依据，T2 起维护）
+  // 托管模式：开启后成员 question/permission 请求不弹窗给用户，改由主 Agent 经 question_confirm 确认
+  managedMode     Boolean   @default(false) @map("managed_mode")
   backgroundDocs  Json?     @map("background_docs")
   createdBy       String    @map("created_by")
   version         Int       @default(0)
@@ -157,7 +161,7 @@ model TaskAgent {
   agentId   String    @map("agent_id") // 模板 agent（继承 name/role/prompt/model）
   alias     String? // 实例别名（默认「<角色中文名>-<seq>」，服务端生成）
   seq       Int       @default(1) // 同 agent 同任务内序号（服务端生成，事务内防并发重号）
-  workDir   String? // is_0000000010：实例独立持久化工作目录（创建任务可指定；缺省
+  workDir   String? @map("work_dir") // is_0000000010：实例独立持久化工作目录（创建任务可指定；缺省
   // /data/worker/<sanitize(agent.name)>，同 agent 多实例追加 -<seq>）
   joinedAt  DateTime  @default(now()) @map("joined_at")
   removedAt DateTime? @map("removed_at")
@@ -308,7 +312,8 @@ model Issue {
   id              String    @id
   taskId          String    @map("task_id")
   title           String
-  description     String?
+  // issue 描述可能超过 VARCHAR(191)，TEXT 承载（同类预防：issue 描述超长报数据库列限制）
+  description     String?   @db.Text
   status          String    @default("open")
   tags            Json?     @map("tags")
   assigneeAgentId String?   @map("assignee_agent_id")
@@ -429,7 +434,8 @@ model AgentToolEffect {
 model Skill {
   id          String   @id
   name        String   @unique
-  description String?
+  // 技能描述可能超过 VARCHAR(191)，TEXT 承载（同类 description 长文本预防）
+  description String?  @db.Text
   // SKILL.md 全文（T1 新增列：worker 注入需原文写出，DB 为唯一事实源）
   // F3-1：@db.Text 承载长文档（VARCHAR(191) 导致 >191 字符 SKILL.md 落库 500）
   // ⚠️ 不带 @default：MySQL TEXT 列禁止字面量默认值（P3018/1101），create 必传 content 无需 DB 默认
