@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Logger, Module, OnModuleInit } from '@nestjs/common';
 import { TerminusModule } from '@nestjs/terminus';
 import { AgentsService } from '../agents/agents.service';
 import { ArtifactsModule } from '../artifacts/artifacts.module';
@@ -16,6 +16,7 @@ import { SwaggerMcpAuthService } from './swagger-mcp.auth';
 import { SwaggerMcpController } from './swagger-mcp.controller';
 import { SwaggerDocsProvider } from './swagger-docs.provider';
 import { SwaggerMcpHandlers } from './swagger-mcp.handlers';
+import { SwaggerToolSyncService } from './swagger-tools.sync';
 
 /**
  * Swagger-MCP（vteam-api）模块（阶段 2 任务 13）。
@@ -33,6 +34,10 @@ import { SwaggerMcpHandlers } from './swagger-mcp.handlers';
  *   导出 ModelsService）后重新注册为 provider（无状态数据库服务，重复实例行为一致）。
  * - WorkerTokenGuard 在 WorkersModule 中未导出，本模块自行注册（依赖全局 ConfigModule）。
  * - PrismaService 由全局 PrismaModule 提供；HealthCheckService 由 TerminusModule 提供。
+ * - onModuleInit 调 SwaggerToolSyncService.syncToToolsTable()：把 Swagger 生成的 70 个
+ *   MCP 工具注册进 tools 表（source=mcp，任务 15）。main.ts 在 app.listen 前已完成
+ *   setSwaggerRawDocument + initialize（模块级 store），onModuleInit 时文档已就绪；
+ *   同步失败仅 warn，不阻断启动。
  */
 @Module({
   imports: [
@@ -50,6 +55,7 @@ import { SwaggerMcpHandlers } from './swagger-mcp.handlers';
     SwaggerMcpAuthService,
     SwaggerMcpHandlers,
     SwaggerDocsProvider,
+    SwaggerToolSyncService,
     WorkerTokenGuard,
     AgentsService,
     SkillsService,
@@ -58,4 +64,18 @@ import { SwaggerMcpHandlers } from './swagger-mcp.handlers';
     RolesService,
   ],
 })
-export class SwaggerMcpModule {}
+export class SwaggerMcpModule implements OnModuleInit {
+  private readonly logger = new Logger(SwaggerMcpModule.name);
+
+  constructor(private readonly toolSync: SwaggerToolSyncService) {}
+
+  /** 启动时把 Swagger 生成的 MCP 工具同步进 tools 表（source=mcp，失败 warn 不阻断）。 */
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.toolSync.syncToToolsTable();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`tools 表同步失败（不阻断启动）：${message}`);
+    }
+  }
+}
