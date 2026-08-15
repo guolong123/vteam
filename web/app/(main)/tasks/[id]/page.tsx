@@ -1680,11 +1680,17 @@ function TaskPanel({
    *  - file 带可访问 fileUrl → 新窗口打开/下载（同源 /uploads/ 自动触发下载）
    *  - text 或无 fileUrl → 跳产出物聚合页查看。 */
   const handleArtifactClick = (item: ArtifactItem) => {
+    // doc 产出物 → 文档站视图
     if (item.type === "doc") {
       onOpenDocs?.();
       return;
     }
+    // file 型 markdown 文档 → 文档站渲染（避免浏览器直接显示 .md 原文）；其他格式新窗口打开
     if (item.type === "file" && item.fileUrl) {
+      if (item.fileUrl.endsWith(".md")) {
+        onOpenDocs?.();
+        return;
+      }
       window.open(item.fileUrl, "_blank", "noopener,noreferrer");
       return;
     }

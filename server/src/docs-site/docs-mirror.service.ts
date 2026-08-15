@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { promises as fsp } from 'fs';
 import { join } from 'path';
 import { ConfigService } from '@nestjs/config';
@@ -7,21 +7,34 @@ import { FileStorageService } from '../uploads/uploads.service';
 import { resolveDocsRoot } from './docs-site.constants';
 
 /**
- * F1 镜像导出层（is_0000000024）：任务 doc 产出物 → 文档站镜像 .md。
+ * F1 镜像导出层（is_0000000024）：任务产出物 → 文档站镜像 .md。
  *
  * 原则（art_0000000026）：镜像 = **派生视图**，权威在 DB(artifacts)+uploads。
- * - 只处理 type=doc（AC-6：text/file 不入站）；
+ * - 处理 type=doc 与 type=file 且 contentRef 以 .md 结尾的产出物（AC-6 扩展：
+ *   实际产出物多为 file 型 .md 文档，text/其他格式文件不入站）；
  * - 读 uploads 正文（contentRef=/uploads/...）→ 写 `<docsRoot>/<taskId>/<slug>.md`；
- * - frontmatter 注入 `title` + 英文 `id`（规避 prototype-viewer 中文 id hash 路由 bug）；
  * - 幂等：按 (taskId, title) 覆盖写最新版本（AC-5），历史版本不走文档站；
- * - 可全量重建（扫描 artifacts 表），不新增 DB 表（AC-8）。
+ * - 可全量重建（扫描 artifacts 表），不新增 DB 表（AC-8）；启动时全量重建存量。
  */
 @Injectable()
-export class DocsMirrorService implements OnModuleDestroy {
+export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DocsMirrorService.name);
   private readonly docsRoot: string;
   /** 串行重建锁（防归档事件并发触发镜像写竞争）。 */
   private rebuildLocks = new Map<string, Promise<void>>();
+
+  /** 启动全量重建存量任务镜像（含修复前遗漏的 file 型 .md 产出物）；失败不阻断启动。 */
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.rebuildAll();
+    } catch (err) {
+      this.logger.warn(
+        `[docs-mirror] 启动全量重建失败（不影响启动，后续归档事件仍会触发单任务同步）: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -66,10 +79,10 @@ export class DocsMirrorService implements OnModuleDestroy {
   }
 
   private async doSyncTask(taskId: string): Promise<void> {
-    // 1. 查该任务全部 doc 产出物当前版本（镜像只含最新版本，AC-5）
+    // 1. 查该任务全部 doc / file(.md) 产出物当前版本（镜像只含最新版本，AC-5）
     const rows = await this.prisma.artifactVersion.findMany({
       where: {
-        artifact: { taskId, type: 'doc' },
+        artifact: { taskId, type: { in: ['doc', 'file'] } },
       },
       select: {
         version: true,
@@ -100,6 +113,10 @@ export class DocsMirrorService implements OnModuleDestroy {
     for (const [artifactId, cur] of currentByArtifact) {
       if (!cur.contentRef.startsWith('/uploads/')) {
         // 未落盘 uploads（text 型或 fileRef 占位）→ 跳过镜像
+        continue;
+      }
+      if (!cur.contentRef.endsWith('.md')) {
+        // 非 markdown 文件（图片/二进制等）不入文档站
         continue;
       }
       let content: Buffer;
@@ -142,15 +159,20 @@ export class DocsMirrorService implements OnModuleDestroy {
     order: number;
   }>> {
     const rows = await this.prisma.artifactVersion.findMany({
-      where: { artifact: { taskId, type: 'doc' } },
+      where: { artifact: { taskId, type: { in: ['doc', 'file'] } } },
       select: {
         version: true,
+        contentRef: true,
         artifact: { select: { id: true, title: true, currentVersion: true } },
       },
     });
     const current = new Map<string, { id: string; title: string }>();
     for (const r of rows) {
-      if (r.version === r.artifact.currentVersion) {
+      // 仅当前版本且为 markdown（file 型非 .md 不入站）——与 doSyncTask 镜像口径一致
+      if (
+        r.version === r.artifact.currentVersion &&
+        (r.contentRef ?? '').endsWith('.md')
+      ) {
         current.set(r.artifact.id, { id: r.artifact.id, title: r.artifact.title });
       }
     }
