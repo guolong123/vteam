@@ -108,11 +108,9 @@ web:
     repository: docker.ketaops.cc/ketaops/vteam-web
     tag: latest
     pullPolicy: IfNotPresent
-    ## ⚠️ 构建参数（铁律）：rewrites 代理目标在 next build 时编译进
-    ## routes-manifest.json，运行时 ENV 无效。必须在构建期通过
-    ##   --build-arg API_PROXY_TARGET=http://<release>-server:3000
-    ## 注入（与 docker-compose.yml 的 ARG 语义一致）。本 chart 运行时
-    ## 不再向 web 容器注入任何代理相关 env。
+    ## 运行时代理目标（middleware.ts 同源代理读取）：部署时注入 web 容器 env
+    ## API_PROXY_TARGET（见 deployment-web.yaml）。缺省对齐本 release 的
+    ## server Service（http://<release>-server:3000），无需按环境重建镜像。
     proxyTarget: http://vteam-server:3000
   env:
     port: 3000
@@ -253,6 +251,11 @@ ingress:
   className: nginx
   host: vteam.example.com
   ## 路径路由：/api/v1 → server:3000，/ → web:3000
+  ## SSE 兼容（realtime SSE 长连接 /api/v1/events）：关闭响应缓冲（事件实时推送）
+  ## + 调大读超时（默认 60s 会断流；server 侧 10s 心跳保活兜底，此处放宽到 1h）。
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
   tls:
     enabled: false
     secretName: ""         # 空 → 用 <fullname>-tls（需 cert-manager 签发注解）

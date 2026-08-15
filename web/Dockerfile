@@ -16,13 +16,9 @@ RUN chmod +x scripts/pack-worker.sh \
     && cd worker && npm ci \
     && cd .. && ./scripts/pack-worker.sh \
     && rm -rf worker scripts
-# rewrites 代理目标在 build 时编译进 routes-manifest.json，运行时 ENV 无效，
-# 必须在构建期通过 build ARG 注入（compose: args: API_PROXY_TARGET=http://server:3000）。
-# 缺省值对齐 compose 网络内服务名 server（Next standalone 监听 $HOSTNAME 而非 127.0.0.1，
-# 容器内 localhost:3000 ECONNREFUSED → 浏览器 fetch TypeError: Failed to fetch）：
-# 即使构建时漏传 ARG，代理目标也指向正确后端而非容器自身。
-ARG API_PROXY_TARGET=http://server:3000
-ENV API_PROXY_TARGET=$API_PROXY_TARGET
+# 运行时代理目标由部署方以环境变量注入（middleware.ts 运行时读取），
+# 不再构建期编译——同一镜像可部署 compose（http://server:3000）与
+# k8s（http://vteam-server:3000）等任意环境，无需按环境重建。
 WORKDIR /app/web
 RUN npm run build
 

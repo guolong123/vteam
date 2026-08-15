@@ -7,10 +7,13 @@ metadata:
   name: {{ include "vteam.fullname" . }}
   labels:
     {{- include "vteam.labels" (dict "context" . "component" "ingress") | nindent 4 }}
-  {{- if and .Values.ingress.tls.enabled .Values.ingress.tls.secretName }}
   annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if and .Values.ingress.tls.enabled .Values.ingress.tls.secretName }}
     kubernetes.io/tls-acme: "true"
-  {{- end }}
+    {{- end }}
 spec:
   {{- if .Values.ingress.className }}
   ingressClassName: {{ .Values.ingress.className | quote }}

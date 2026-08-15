@@ -25,6 +25,8 @@
  */
 import { useEffect, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
+import { api } from "@/lib/api";
+import { useAuthStore } from "@/lib/stores/authStore";
 import {
   neutral,
   roleText,
@@ -214,6 +216,7 @@ function InstallSteps({ steps }: { steps: string[] }) {
 
 export default function WorkerInstallPage() {
   const router = useRouter();
+  const user = useAuthStore((s) => s.user);
 
   /* 安装方式 Tab（受控） */
   const [method, setMethod] = useState<InstallMethod>("curl");
@@ -244,6 +247,20 @@ export default function WorkerInstallPage() {
   useEffect(() => {
     setWorkerId(randomWorkerId());
   }, []);
+
+  /* 注册 token 自动拉取（GET /workers/register-token，workers.view）：
+     保证复制命令即带 --token，无需手工填写；拉取失败（权限不足/网络）保留空值走手动引导 */
+  useEffect(() => {
+    if (!user?.id) return;
+    api
+      .get<{ token: string }>("/workers/register-token")
+      .then((r) => {
+        if (r.token) setWorkerToken(r.token);
+      })
+      .catch(() => {
+        /* 静默：无权限或异常时由脚本端引导手动填写 */
+      });
+  }, [user?.id]);
 
   /* 两种安装方式的命令；curl 下载地址 = 当前 origin + /install-worker.sh。
      token 非空时追加 --token，保证复制命令即可完整安装（脚本自动写入 X_WORKER_TOKEN） */
@@ -369,14 +386,14 @@ export default function WorkerInstallPage() {
                 </div>
               </FieldRow>
 
-              <FieldRow label="注册 token（workerToken）" hint="与 server 侧 WORKER_TOKEN 一致 · 留空则需安装后手动填写">
+              <FieldRow label="注册 token（workerToken）" hint="自动拉取 server WORKER_TOKEN · 可手动修改">
                 <input
                   type="password"
                   data-testid="worker-token-input"
                   value={workerToken}
                   onChange={(e) => setWorkerToken(e.target.value)}
                   spellCheck={false}
-                  placeholder="可选：填写后安装命令将携带 --token"
+                  placeholder="自动填充中…"
                   style={inputStyle}
                 />
               </FieldRow>

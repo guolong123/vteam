@@ -99,11 +99,11 @@ services:
       #（web/public/worker-src.tar.gz，install-worker.sh 一键安装下载），镜像自带无需前置步骤
       context: .
       dockerfile: web/Dockerfile
-      args:
-        # T1 铁律：rewrites 编译进 routes-manifest.json，运行时 env 无效，必须 build ARG 注入
-        API_PROXY_TARGET: http://server:3000
     container_name: aiagents-compose-web
     restart: unless-stopped
+    environment:
+      # 运行时代理目标（middleware.ts 读取）：compose 网络内服务名 server
+      API_PROXY_TARGET: http://server:3000
     depends_on:
       server:
         condition: service_healthy

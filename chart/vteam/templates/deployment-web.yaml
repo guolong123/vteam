@@ -1,6 +1,6 @@
 # web（Next.js standalone）— 对齐 compose web 服务
-# ⚠️ API_PROXY_TARGET 是构建 ARG（编译进 routes-manifest.json），运行时无注入 env，
-#    见 values.web.image.proxyTarget 与 README「构建并推送镜像」。
+# API_PROXY_TARGET 为**运行时** env（middleware.ts 同源代理读取），
+# 值见 values.web.image.proxyTarget（http://<release>-server:3000）。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -46,6 +46,8 @@ spec:
               value: {{ .Values.web.env.port | quote }}
             - name: NODE_ENV
               value: production
+            - name: API_PROXY_TARGET
+              value: {{ .Values.web.image.proxyTarget | default (printf "http://%s-server:3000" .Release.Name) | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
