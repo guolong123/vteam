@@ -217,17 +217,19 @@ export class AgentsService implements OnModuleInit {
   }
 
   /**
-   * PATCH /agents/:id：type=template → 403 PERMISSION_AGENT_READONLY（14 篇 §2.2 第 4 条）；
-   * 唯一例外：template 允许更新 defaultModelId（模型属部署环境适配，非角色定义，2026-08 决策）；
-   * clone/custom → 更新标量字段（name/prompt/role/defaultModelId/permissionScope）
-   * + skillIds/toolEffects 各自显式传入时单独重建对应关联（不传的一侧保持原关联，避免半更新清空另一张表）。
+   * PATCH /agents/:id（is_0000000030 放开内置 agent 设置修改）：
+   * - template（内置）允许修改全部**设置字段**（name/role/prompt/defaultModelId/
+   *   permissionScope/ackMessage/workerId + skillIds/toolEffects 关联重建），
+   *   使内置 agent 可自定义配置；agentId/type 不可改（不在 DTO，天然安全红线）；
+   * - clone/custom → 同规则更新；
+   * - 删除（remove）仍对 template 403（销毁性操作不在"设置修改"范围）。
+   * skillIds/toolEffects 各自显式传入时单独重建对应关联（不传的一侧保持原关联，避免半更新清空另一张表）。
    */
   async update(id: string, dto: UpdateAgentDto) {
     const agent = await this.prisma.agent.findUnique({ where: { id } });
     if (!agent) {
       this.throwNotFound(id);
     }
-    this.assertWritable(agent.type, dto);
 
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.agent.update({
@@ -444,36 +446,16 @@ export class AgentsService implements OnModuleInit {
   }
 
   /**
-   * 模板只读校验：type=template 不可更新/删除（14 篇 §2.2 第 4 条）。
-   * 例外：仅含 defaultModelId 的更新放行（模型=部署环境适配；其余字段仍 403）。
+   * 删除只读校验（is_0000000030）：type=template 不可删除（销毁性操作不在"设置修改"范围，
+   * 内置 agent 仍只读保护）。update 已放开设置修改，不再走本校验。
    */
-  private assertWritable(type: string, dto?: UpdateAgentDto): void {
-    if (type === 'template' && !(dto && this.isModelOnlyUpdate(dto))) {
+  private assertWritable(type: string): void {
+    if (type === 'template') {
       throw new ForbiddenException({
         code: AGENT_ERRORS.AGENT_READONLY,
-        message: '模板 Agent 只读，请先克隆副本再编辑',
+        message: '模板 Agent 不可删除，请先克隆副本再操作',
       });
     }
-  }
-
-  /**
-   * template 仅放行 defaultModelId/ackMessage 单字段更新（其余字段任一出现即视为越权）。
-   * defaultModelId=模型属部署环境适配；ackMessage=收到确认文案属部署适配，均可由部署方调整。
-   */
-  private isModelOnlyUpdate(dto: UpdateAgentDto): boolean {
-    const fields = [
-      dto.name,
-      dto.role,
-      dto.prompt,
-      dto.permissionScope,
-      dto.skillIds,
-      dto.toolEffects,
-    ];
-    const hasOtherField = fields.some((f) => f !== undefined);
-    return (
-      !hasOtherField &&
-      (dto.defaultModelId !== undefined || dto.ackMessage !== undefined)
-    );
   }
 
   /** 404：AGENT_NOT_FOUND（AGENT_ERRORS，值跨域一致）。 */
