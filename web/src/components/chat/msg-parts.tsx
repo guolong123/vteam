@@ -19,7 +19,7 @@
 "use client";
 import type { CSSProperties } from "react";
 import { type RoleKey, neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
-import { ChatBubble, AttachmentCard } from "@/src/components/ui";
+import { ChatBubble, AttachmentCard, Markdown } from "@/src/components/ui";
 import type { ChatBubbleAttachment } from "@/src/components/ui";
 import { LoadingDots } from "./loading-indicator";
 import { MsgThinking } from "./msg-thinking";
@@ -194,7 +194,8 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
                 wordBreak: "break-word",
               }}
             >
-              {cleanBody}
+              {/* 流式正文 markdown 渲染（is_0000000019，终态走 ChatBubble 同链路） */}
+              <Markdown>{cleanBody}</Markdown>
             </span>
             <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
               <LoadingDots color={neutral[400]} testid="msg-streaming-dots" />
