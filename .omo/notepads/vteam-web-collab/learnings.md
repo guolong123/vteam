@@ -112,3 +112,55 @@
 ### 验证
 - `npm run build`：编译通过，standalone 输出正常
 - `npm run lint`：0 errors（14 warnings pre-existing）
+
+## 部署 + 收尾 — 2026-08-16（REV 45）
+- **部署**：web 镜像 `vteam-web:vteam-k8s-team-collab-web`（根 context `docker build -f web/Dockerfile .`，digest 198e9e98）→ 完整基线 helm upgrade（awk 只改 web 段 tag；server/worker 未动）→ 删 init Job → **REV 45 deployed** → init Job Completed
+- **浏览器实测（F3）**：persona-select 6 选项可交互（选中 innovative）、execution-mode-select 2 选项默认 direct、任务详情 badge「轻量执行」+toggle+「暂无执行计划」空态、board 渲染正常、**realConsoleErrors=0**（仅 plan API 404 预期业务探测）——report.json allPass=true + 6 截图（/tmp/opencode/browser-qa-final/）
+- **Final Wave**：F1 APPROVE / F2 APPROVE（首轮 REJECT 后修复：F2-M1 空态 plan-section testid、F2-M2 board 条件断言；F1 两条件：docs 修正 + e2e 由 F3 等价覆盖）/ F3 APPROVE / F4 APPROVE
+- **git 收尾**：commit `93da22a` feat(web)（7 文件 + docs 修正 + .omo 计划产物）；历史遗留 png/yml 未提交
+- **经验**：e2e 断言必须与产品 testid 放置严格对齐（空态也要有 testid）；数据依赖断言（seed 无 plan 任务）须条件化；docs/deployment.md 的 web 构建命令此前是错的（./web），根 context 是唯一正确方式
+
+## seed 默认性格固化（server/prisma/seed.ts）
+- **默认值**（按 k8s 环境当前配置固化）：a_product=innovative（产品经理/创新）、a_project_manager=aggressive（项目经理/激进）、a_architect=steady（架构师/沉稳）、a_developer=conservative（开发者/保守）、a_tester=strict（测试/苛刻）。
+- **幂等选择**：seed 的 agent.upsert update 分支只同步 prompt（`update: { prompt }`），**不含 persona**——故 persona 仅在 create 分支生效（`...agent` 展开），存量环境已设 persona 不被 seed 覆盖，幂等重跑无害。新环境首次 create 即带默认性格。
+- **验证**：`npx tsc --noEmit` EXIT 0（seed.ts 编译通过）；未跑真实 seed（需 DB 连接，部署 init Job 重跑时生效）。
+- **约束**：仅改 seed.ts；未动 agent 其他字段/其他 seed 数据；无新增依赖。
+
+## Todo 6 wf-style：任务详情页样式优化 — 2026-08-16
+
+### 改动摘要
+
+**① 执行模式工具栏（消息输入框下方）**
+- **改动文件**：`web/app/(main)/tasks/[id]/page.tsx`
+- **新增 `execution-mode-toolbar`**：MessageInput 下方添加一行工具栏（`data-testid="execution-mode-toolbar"`），包含：
+  - `execution-mode-select` 下拉（direct「轻量执行」/ plan「计划驱动」）
+  - 409 错误时显示引导文案（`executionModeError`）
+  - 预留 flex 空间供后续扩展（模型选择等）
+- **移除 `execution-mode-toggle`**：从 TaskPanel 中移除右侧面板的模式切换入口（避免重复）
+- **TaskPanel props 清理**：移除 `onToggleExecutionMode`、`executionModePending`、`executionModeError` 三个 props
+
+**② TaskPanel 独立滚动**
+- `task-info-panel` aside 添加 `overflowY: "auto"`，利用 flex 布局自动获得高度约束
+- 符合 T15 铁律：无 fixed/100vh/100vw，高度由 AppShell main flex column 接管
+
+**③ 产出物 + 待办 Issue tab 切换**
+- 新增 `activeTab` state（`"artifacts" | "issues"`，默认 `"artifacts"`）
+- 产出物和待办 Issue 区块合并为 tab 切换 UI（`data-testid="artifacts-issues-tab"`）
+- tab 样式：底部边框指示器（蓝色 `#2563EB`），对齐平台既有 tab 先例（models 页）
+- 文档站入口按钮移至 tab 栏右侧（仅在产出物 tab 显示）
+
+**④ e2e testid 更新**
+- `web/e2e/reference/testids.ts`：
+  - 新增 `execution-mode-toolbar`、`execution-mode-select`（工具栏）
+  - 移除 `execution-mode-toggle`（已从 UI 中移除）
+  - PAGE_SMOKE `/tasks/[id]` 同步更新
+
+### 验证
+- `npm run lint`：0 errors（14 warnings pre-existing）
+- `npm run build`：编译通过，standalone 输出正常
+- `/tasks/[id]` 页面大小：16.7 kB（+0.1 kB from previous）
+
+### 发现
+- TaskPanel 中移除 execution-mode-toggle 后，相关 props 可安全清理（TypeScript 编译验证）
+- tab 切换使用条件渲染（`activeTab === "artifacts"` / `activeTab === "issues"`），避免不必要的 DOM 挂载
+- overflowY: auto 在 flex 布局中自动生效，无需显式高度约束（flex: 1 + minHeight: 0 已处理）
