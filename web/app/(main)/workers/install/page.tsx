@@ -17,11 +17,15 @@
  *   workerId 初始随机生成（worker-XX，与「重新生成」按钮同源逻辑，替代示例值 worker-05）。
  * - 纯静态展示（不执行真实安装）；复制按钮为唯一增强交互：navigator.clipboard 写剪贴板
  *   （原型"复制"占位语义），失败静默降级。
- * - data-testid 与原型一致（17 个）：worker-install-root/install-wizard/install-config/
+ * - data-testid 与原型一致（20 个）：worker-install-root/install-wizard/install-config/
  *   server-url-input/worker-id-input/regenerate-worker-id-button/capability-config/
+ *   advertise-host-input/serve-hostname-input/mcp-url-input/
  *   install-method-section/install-method-tabs/install-method-tab/install-command-section/
  *   install-command/copy-command-button/install-steps/install-footer/
  *   install-confirm-button/install-cancel-button。
+ *
+ * - 网络可达性（可选）：外部/跨机 worker 专用参数（--advertise-host / --serve-hostname / --mcp-url），
+ *   空值不拼接，集群内/本机 worker 无需配置；详见 worker install-worker.sh。
  */
 import { useEffect, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
@@ -237,6 +241,11 @@ export default function WorkerInstallPage() {
      非原型假版本 v2.0.0-beta.1（worker 侧暂无 V2Runtime 实现，v2 仅调研计划，见 07 篇） */
   const [opencodeVersion, setOpencodeVersion] = useState("v1.18.15");
 
+  /* 网络可达性（可选）：外部/跨机 worker 专用，空值不拼接命令——集群内/本机无需配置 */
+  const [advertiseHost, setAdvertiseHost] = useState("");
+  const [serveHostname, setServeHostname] = useState("");
+  const [mcpUrl, setMcpUrl] = useState("");
+
   /* serverUrl 初始值跟随页面 origin（用户可手动修改） */
   useEffect(() => {
     setServerUrl((cur) => (cur ? cur : pageOrigin));
@@ -264,14 +273,14 @@ export default function WorkerInstallPage() {
 
   /* 两种安装方式的命令；curl 下载地址 = 当前 origin + /install-worker.sh。
      token 非空时追加 --token，保证复制命令即可完整安装（脚本自动写入 X_WORKER_TOKEN） */
-  const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}${workerToken ? ` --token ${workerToken}` : ""}`;
+  const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host ${advertiseHost}` : ""}${serveHostname ? ` --serve-hostname ${serveHostname}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`;
   const dockerCommand = `docker run -d --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e CONCURRENCY=${concurrency} -e OPENCODE_VERSION=${opencodeVersion} -p 18080:18080 ketaops/opencode-worker:latest`;
 
   const command = method === "curl" ? curlCommand : dockerCommand;
 
   const curlSteps = [
     "在目标机器（任意网络位置，无需控制面反向可达）执行右侧 curl 命令",
-    "脚本自动安装前置（node / opencode CLI 缺失即装）、下载 worker 发布包并安装依赖、写入配置（SERVER_URL / WORKER_ID / --token 传入的 X_WORKER_TOKEN），启动后向控制面注册",
+    "脚本自动安装前置（node / opencode CLI 缺失即装）、下载 worker 发布包并安装依赖、写入配置（SERVER_URL / WORKER_ID / --token 传入的 X_WORKER_TOKEN / --advertise-host 传入的 WORKER_ADVERTISE_HOST / --serve-hostname 传入的 OPENCODE_SERVE_HOSTNAME / --mcp-url 传入的 WORKER_MCP_URL），启动后向控制面注册",
     "等待首次心跳（worker→控制面 SSE 通道），注册表出现后即自动入池调度",
   ];
 
@@ -422,6 +431,47 @@ export default function WorkerInstallPage() {
                     <option value="v1.18.15">v1.18.15（V1Runtime · 当前稳定）</option>
                     <option value="v1.18.14">v1.18.14（V1Runtime）</option>
                   </select>
+                </FieldRow>
+              </div>
+
+              {/* 网络可达性（可选）：外部/跨机 worker 专用 */}
+              <div style={{ display: "flex", flexDirection: "column", gap: space.md, paddingTop: space.sm, borderTop: `1px solid ${neutral[100]}` }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: space.sm }}>
+                  <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>网络可达性（可选）</span>
+                  <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>外部/跨机 worker 必填 · 集群内留空</span>
+                </div>
+
+                <FieldRow label="上报地址（advertise-host）" hint="跨机/集群外必填——worker 上报 baseUrl 默认 127.0.0.1 时 server 连不上">
+                  <input
+                    data-testid="advertise-host-input"
+                    value={advertiseHost}
+                    onChange={(e) => setAdvertiseHost(e.target.value)}
+                    placeholder="http://<worker可达地址>:45087"
+                    spellCheck={false}
+                    style={inputStyle}
+                  />
+                </FieldRow>
+
+                <FieldRow label="监听地址（serve-hostname）" hint="外部 worker 填 0.0.0.0 监听所有接口 · 集群内/本机留空">
+                  <input
+                    data-testid="serve-hostname-input"
+                    value={serveHostname}
+                    onChange={(e) => setServeHostname(e.target.value)}
+                    placeholder="0.0.0.0"
+                    spellCheck={false}
+                    style={inputStyle}
+                  />
+                </FieldRow>
+
+                <FieldRow label="MCP 地址（mcp-url）" hint="外部 worker 填控制面外部地址 · 内置 MCP 才可达">
+                  <input
+                    data-testid="mcp-url-input"
+                    value={mcpUrl}
+                    onChange={(e) => setMcpUrl(e.target.value)}
+                    placeholder="http://<控制面外部地址>/api/v1/platform-mcp"
+                    spellCheck={false}
+                    style={inputStyle}
+                  />
                 </FieldRow>
               </div>
             </section>
