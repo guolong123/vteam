@@ -164,3 +164,38 @@
 - TaskPanel 中移除 execution-mode-toggle 后，相关 props 可安全清理（TypeScript 编译验证）
 - tab 切换使用条件渲染（`activeTab === "artifacts"` / `activeTab === "issues"`），避免不必要的 DOM 挂载
 - overflowY: auto 在 flex 布局中自动生效，无需显式高度约束（flex: 1 + minHeight: 0 已处理）
+
+### 发现（executionMode 约束语义调整，2026-08-16）
+- 移除 updateExecutionMode direct→plan 的 409 PLAN_NOT_APPROVED 拦截：切换 = 用户意图声明（对齐 omo keyword-detector：说 ultrawork 立即生效，零前置校验）。计划门不放在切换点——start.preflight（approved = approval gate）与 mark-pending-review.preflight（计划任务全完成 = 验收门）保留把关。
+- 顺带置 executing 逻辑保留但收窄：仅 in_progress 任务切 plan 且计划存在（approved/executing）时事务内置 executing；计划不存在/其他状态（reviewing/completed/draft）仅切模式不碰计划——避免「completed 计划被误重置为 executing」。
+- 系统提示注入分层：新增 PLAN_CAPABILITY_INSTRUCTION（【执行计划】轻量引导）对所有任务无条件注入；plan 模式额外叠加 PLAN_WORKFLOW_INSTRUCTION（【计划工作流】完整段）。direct = 轻量；plan = 轻量 + 完整。模型始终知晓计划能力，不切换模式也能响应「使用计划模式」。
+- 验证：`npx tsc --noEmit` 通过；jest tasks.service.spec + worker-dispatcher.spec 201 用例全过。
+- 待部署：server 镜像重建 + helm REV；web 前端 tasks/[id] 切换引导文案同步（移除 409 提示，切 plan 后显示流程引导）。
+
+## Todo 7 wf-execution-mode：执行模式切换交互优化 — 2026-08-16
+
+### 改动摘要
+
+**改动文件**：`web/app/(main)/tasks/[id]/page.tsx`（单文件，无 server 改动）
+
+1. **移除 409 错误引导**（:3193-3203 `executionModeMutation`）
+   - 删除 `if (isApiError(err) && err.status === 409)` 分支及对应引导文案
+   - 仅保留通用错误处理：`setExecutionModeError(isApiError(err) ? err.message : "切换失败，请稍后重试")`
+   - 后端已移除 409 校验（updateExecutionMode 切换任意成功），前端不再需要特殊处理
+
+2. **流程引导文案**（:3418-3426 execution-mode-toolbar）
+   - 三元条件渲染：`executionModeError` → 显示错误 / `task.executionMode === "plan" && !plansQuery.data` → 显示引导 / 其他 → null
+   - 引导文案：「计划模式下，主 Agent 将调用 plan_submit 产出执行计划并提交您评审；评审通过后任务方可启动」
+   - 样式：`fontSize.xs + neutral[500]`（中性灰色，不抢视觉焦点）
+   - 显示条件：plan 模式 + 无计划（`plansQuery.data` 为 null/undefined）；有计划时不显示（计划区块自身展示状态）
+
+### 设计决策
+
+- **引导位置**：execution-mode-toolbar（消息输入框下方），与模式选择下拉同级——用户切换模式时立即看到流程说明，无需滚动到 plan-section
+- **有计划时隐藏**：当 `plansQuery.data` 存在（无论状态），引导文案消失，由 plan-section 区块展示计划状态（reviewing/approved/rejected 等）
+- **错误优先**：executionModeError 存在时优先显示错误，避免引导文案与错误信息冲突
+
+### 验证
+- `npm run lint`：0 errors（14 warnings pre-existing）
+- `npm run build`：编译通过，standalone 输出正常
+- `/tasks/[id]` 页面大小：16.8 kB（+0.1 kB from previous）

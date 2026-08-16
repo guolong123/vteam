@@ -475,9 +475,13 @@ export class TasksService implements OnModuleInit {
 
   /**
    * 切换任务执行模式（tc-flow）：
-   * - plan → direct 直接切换（计划保持现状）；
-   * - direct → plan 要求该任务已有 approved 执行计划（否则 409 PLAN_NOT_APPROVED，防绕过）；
-   * - 任务已 in_progress 时切换 → 事务内顺带计划置 executing（执行态与计划态一致）。
+   * - 双向切换均即时生效（direct ↔ plan 无前置校验）——切换 = 用户意图声明/提示
+   *   （对齐 omo keyword-detector 哲学：说 ultrawork 立即生效，零前置校验）；
+   * - 计划门不放在切换点：start.preflight（plan 模式须 approved 计划 = approval gate）
+   *   与 mark-pending-review.preflight（计划任务全完成 = 验收门）各自把关；
+   * - 任务已 in_progress 时切到 plan：若计划存在且已批准/执行中（approved/executing）
+   *   → 事务内顺带计划置 executing（执行态与计划态一致）；计划不存在或其他状态 → 仅切
+   *   executionMode，不碰计划。
    * 执行模式与托管模式（managedMode）独立生效、互不干扰。
    */
   async updateExecutionMode(id: string, mode: string) {
@@ -497,24 +501,22 @@ export class TasksService implements OnModuleInit {
     if (task.executionMode === mode) {
       return this.toTaskDto(task);
     }
-    if (mode === EXECUTION_MODES.plan) {
+    if (
+      mode === EXECUTION_MODES.plan &&
+      task.status === TASK_STATUS.in_progress
+    ) {
       const plan = await this.prisma.plan.findUnique({
         where: { taskId: id },
         select: { status: true },
       });
-      // direct→plan：计划须已批准（approved）或正在执行（executing——曾批准且已启动，回切无需重新评审；
-      // 消除「plan→direct→plan」切换死锁：executing 被 plan_submit 覆盖重提拒之门外，本校验再拒则无法恢复）
+      // in_progress 切 plan：计划已批准（approved）或正在执行（executing——曾批准且已启动，
+      // 回切无需重新评审）→ 顺带置 executing，消除「plan→direct→plan」切换死锁；
+      // 计划不存在/其他状态（reviewing/completed 等）→ 仅切模式，由 start 门把关。
       if (
-        !plan ||
-        (plan.status !== PLAN_STATUS.approved &&
-          plan.status !== PLAN_STATUS.executing)
+        plan &&
+        (plan.status === PLAN_STATUS.approved ||
+          plan.status === PLAN_STATUS.executing)
       ) {
-        throw new ConflictException({
-          code: PLAN_ERRORS.PLAN_NOT_APPROVED,
-          message: '切换为执行计划模式前，请先 plan_submit 提交计划并评审通过',
-        });
-      }
-      if (task.status === TASK_STATUS.in_progress) {
         const updated = await this.prisma.$transaction(async (tx) => {
           await tx.plan.update({
             where: { taskId: id },

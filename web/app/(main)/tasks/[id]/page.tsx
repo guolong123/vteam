@@ -3199,11 +3199,7 @@ export default function TaskChatPage() {
       queryClient.invalidateQueries({ queryKey: ["task", taskId] });
     },
     onError: (err) => {
-      if (isApiError(err) && err.status === 409) {
-        setExecutionModeError("请先提交执行计划并评审通过，再切换至计划驱动模式");
-      } else {
-        setExecutionModeError(isApiError(err) ? err.message : "切换失败，请稍后重试");
-      }
+      setExecutionModeError(isApiError(err) ? err.message : "切换失败，请稍后重试");
     },
   });
   const handleToggleExecutionMode = (mode: "direct" | "plan") => {
@@ -3419,11 +3415,15 @@ export default function TaskChatPage() {
             <option value="direct">轻量执行</option>
             <option value="plan">计划驱动</option>
           </select>
-          {executionModeError && (
+          {executionModeError ? (
             <span style={{ fontSize: fontSize.xs, color: "#DC2626", flex: 1 }}>
               {executionModeError}
             </span>
-          )}
+          ) : task.executionMode === "plan" && !plansQuery.data ? (
+            <span style={{ fontSize: fontSize.xs, color: neutral[500], flex: 1 }}>
+              计划模式下，主 Agent 将调用 plan_submit 产出执行计划并提交您评审；评审通过后任务方可启动
+            </span>
+          ) : null}
           {/* 预留扩展位：后续可添加模型选择等 */}
           <div style={{ flex: 1 }} />
         </div>

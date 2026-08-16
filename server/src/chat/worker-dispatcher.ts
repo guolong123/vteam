@@ -127,8 +127,9 @@ export interface BuildSystemInstructionsOptions {
   /** 任务级独立工作目录（<WORK_DIR>/tasks/<taskId>，prompt_async directory）；注入
    *  提示词作为运行时持久化目录（k8s 只有该目录重启后保留），引导 agent 把工作文件写入。 */
   persistentWorkDir?: string;
-  /** 任务执行模式（tasks.execution_mode，direct/plan；Todo 4 tc-flow 引入）。executionMode=plan
-   *  时追加【计划工作流】段，引导主 Agent 先产出执行计划再实施；direct 或缺省不注入。 */
+  /** 任务执行模式（tasks.execution_mode，direct/plan；Todo 4 tc-flow 引入）。所有任务注入
+   *  轻量【执行计划】能力引导（PLAN_CAPABILITY_INSTRUCTION）；executionMode=plan 时额外
+   *  追加完整【计划工作流】段（PLAN_WORKFLOW_INSTRUCTION）。 */
   executionMode?: string;
 }
 
@@ -146,7 +147,18 @@ export const MAIN_AGENT_INSTRUCTION =
   '任务开启托管模式时，成员的 question/permission 请求由你确认——收到【托管确认】消息时调用 question_confirm 工具决策。';
 
 /**
- * 计划工作流引导段（dispatch 时仅注入 executionMode=plan 的任务）：任务采用「计划驱动」执行模式
+ * 计划流程可用轻量引导段（dispatch 时对所有任务注入）：让模型始终知晓「计划驱动」能力——
+ * 任意任务不经切换执行模式即可走计划流程（对齐 omo 哲学：工具无条件可用 + 提示引导，无需切换模式）。
+ * 仅注入能力引导文案，不注入任何计划数据（按需注入哲学）。plan 模式任务再叠加
+ * PLAN_WORKFLOW_INSTRUCTION 完整工作流段（轻量 + 完整两段）。
+ */
+export const PLAN_CAPABILITY_INSTRUCTION =
+  '【执行计划】如需计划驱动，主 Agent 可调用 vteam MCP 的 plan_submit 工具产出执行计划' +
+  '（六要素任务清单），经成员评审通过后按计划逐项推进（plan_task_transition 汇报进度）；' +
+  '计划流程对任意任务可用，无需切换模式。若任务执行模式为 plan，按完整计划工作流执行。';
+
+/**
+ * 计划工作流完整引导段（dispatch 时注入 executionMode=plan 的任务）：任务采用「计划驱动」执行模式
  * （tc-flow）时，主 Agent 启动前须先产出执行计划并提交评审，评审通过后按计划子任务逐项推进。
  * 本段为独立常量——GLOBAL_SYSTEM_INSTRUCTIONS 静态数组保持不动（其他调用方兼容），由
  * buildSystemInstructions 在 dispatch 时按 executionMode 条件动态追加（对齐 MAIN_AGENT_INSTRUCTION /
@@ -193,6 +205,7 @@ export function buildSystemInstructions(
   if (opts?.isMainAgent) {
     blocks.push(MAIN_AGENT_INSTRUCTION);
   }
+  blocks.push(PLAN_CAPABILITY_INSTRUCTION);
   if (opts?.executionMode === EXECUTION_MODES.plan) {
     blocks.push(PLAN_WORKFLOW_INSTRUCTION);
   }
