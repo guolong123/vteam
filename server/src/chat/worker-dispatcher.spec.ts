@@ -29,6 +29,7 @@ import {
   GROUP_TRIGGER_INSTRUCTION,
   MAIN_AGENT_INSTRUCTION,
   PENDING_INSTANCE_REF,
+  PLAN_CAPABILITY_INSTRUCTION,
   PLAN_WORKFLOW_INSTRUCTION,
   POLL_INTERVAL_MS,
   aggregateText,
@@ -992,8 +993,10 @@ describe('WorkerDispatcher', () => {
       expect(s).toContain('【职责】负责需求拆解与文档化。');
     });
 
-    it('executionMode=plan：追加【计划工作流】段（计划驱动工作流引导，含 plan_submit/plan_task_transition 工具名）', () => {
+    it('executionMode=plan：追加轻量能力引导 + 完整【计划工作流】两段（含 plan_submit/plan_task_transition 工具名）', () => {
       const s = buildSystemInstructions(agent, { executionMode: 'plan' });
+      expect(s).toContain(PLAN_CAPABILITY_INSTRUCTION);
+      expect(s).toContain('【执行计划】');
       expect(s).toContain(PLAN_WORKFLOW_INSTRUCTION);
       expect(s).toContain('【计划工作流】');
       expect(s).toContain('本任务执行模式=plan');
@@ -1003,13 +1006,15 @@ describe('WorkerDispatcher', () => {
       expect(s).toContain('task_transition mark-pending-review');
     });
 
-    it('executionMode 非 plan（direct/缺省）：不注入【计划工作流】段（direct 模式行为零变化）', () => {
+    it('executionMode 非 plan（direct/缺省）：注入轻量【执行计划】引导、不注入完整【计划工作流】段', () => {
       const s = buildSystemInstructions(agent, { executionMode: 'direct' });
+      expect(s).toContain(PLAN_CAPABILITY_INSTRUCTION);
+      expect(s).toContain('【执行计划】');
       expect(s).not.toContain('【计划工作流】');
       expect(s).not.toContain(PLAN_WORKFLOW_INSTRUCTION);
-      expect(s).not.toContain('plan_submit');
-      // 缺省（存量调用未传 executionMode）同样不注入——向后兼容
+      // 缺省（存量调用未传 executionMode）同样只注入轻量引导——向后兼容
       const s2 = buildSystemInstructions(agent);
+      expect(s2).toContain(PLAN_CAPABILITY_INSTRUCTION);
       expect(s2).not.toContain('【计划工作流】');
       // 既有段不受影响
       expect(s).toContain(GLOBAL_SYSTEM_INSTRUCTIONS);

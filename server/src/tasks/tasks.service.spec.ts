@@ -2452,40 +2452,49 @@ describe('TasksService', () => {
       expect(result.executionMode).toBe(EXECUTION_MODES.direct);
     });
 
-    it('direct → plan 且任务无计划 → 409 PLAN_NOT_APPROVED', async () => {
+    it('direct → plan 且任务无计划 → 直接切换成功（切换=意图声明，计划门在 start）', async () => {
       prisma.task.findUnique.mockResolvedValue(
         row({ status: 'pending', executionMode: EXECUTION_MODES.direct }),
       );
-      prisma.plan.findUnique.mockResolvedValue(null);
+      prisma.task.update.mockResolvedValue(
+        row({ status: 'pending', executionMode: EXECUTION_MODES.plan }),
+      );
 
-      try {
-        await service.updateExecutionMode('t_0000000001', EXECUTION_MODES.plan);
-        fail('应抛出 ConflictException');
-      } catch (e) {
-        expect(e).toBeInstanceOf(ConflictException);
-        expect((e as ConflictException).getResponse()).toMatchObject({
-          code: PLAN_ERRORS.PLAN_NOT_APPROVED,
-        });
-      }
-      expect(prisma.task.update).not.toHaveBeenCalled();
+      const result = await service.updateExecutionMode(
+        't_0000000001',
+        EXECUTION_MODES.plan,
+      );
+
+      expect(prisma.task.update).toHaveBeenCalledWith({
+        where: { id: 't_0000000001' },
+        data: { executionMode: EXECUTION_MODES.plan },
+        include: expect.any(Object),
+      });
+      expect(prisma.plan.findUnique).not.toHaveBeenCalled();
+      expect(result.executionMode).toBe(EXECUTION_MODES.plan);
     });
 
-    it('direct → plan 且计划未评审通过（reviewing）→ 409 PLAN_NOT_APPROVED', async () => {
+    it('direct → plan 且计划未评审通过（reviewing）→ 仍切换成功（计划状态不拦截切换）', async () => {
       prisma.task.findUnique.mockResolvedValue(
         row({ status: 'pending', executionMode: EXECUTION_MODES.direct }),
       );
       prisma.plan.findUnique.mockResolvedValue({ id: 'pl_1', status: PLAN_STATUS.reviewing });
+      prisma.task.update.mockResolvedValue(
+        row({ status: 'pending', executionMode: EXECUTION_MODES.plan }),
+      );
 
-      try {
-        await service.updateExecutionMode('t_0000000001', EXECUTION_MODES.plan);
-        fail('应抛出 ConflictException');
-      } catch (e) {
-        expect(e).toBeInstanceOf(ConflictException);
-        expect((e as ConflictException).getResponse()).toMatchObject({
-          code: PLAN_ERRORS.PLAN_NOT_APPROVED,
-        });
-      }
-      expect(prisma.task.update).not.toHaveBeenCalled();
+      const result = await service.updateExecutionMode(
+        't_0000000001',
+        EXECUTION_MODES.plan,
+      );
+
+      expect(prisma.task.update).toHaveBeenCalledWith({
+        where: { id: 't_0000000001' },
+        data: { executionMode: EXECUTION_MODES.plan },
+        include: expect.any(Object),
+      });
+      expect(prisma.plan.update).not.toHaveBeenCalled();
+      expect(result.executionMode).toBe(EXECUTION_MODES.plan);
     });
 
     it('direct → plan 计划已 approved（任务未开始）→ 仅切换模式，计划保持 approved', async () => {
@@ -2587,22 +2596,50 @@ describe('TasksService', () => {
       expect(r2.executionMode).toBe(EXECUTION_MODES.plan);
     });
 
-    it('direct → plan 计划已 completed → 409 PLAN_NOT_APPROVED（仅 approved/executing 放行）', async () => {
+    it('direct → plan 计划已 completed → 仍切换成功（仅切模式，不重置计划状态）', async () => {
       prisma.task.findUnique.mockResolvedValue(
         row({ status: 'pending', executionMode: EXECUTION_MODES.direct }),
       );
       prisma.plan.findUnique.mockResolvedValue({ id: 'pl_1', status: PLAN_STATUS.completed });
+      prisma.task.update.mockResolvedValue(
+        row({ status: 'pending', executionMode: EXECUTION_MODES.plan }),
+      );
 
-      try {
-        await service.updateExecutionMode('t_0000000001', EXECUTION_MODES.plan);
-        fail('应抛出 ConflictException');
-      } catch (e) {
-        expect(e).toBeInstanceOf(ConflictException);
-        expect((e as ConflictException).getResponse()).toMatchObject({
-          code: PLAN_ERRORS.PLAN_NOT_APPROVED,
-        });
-      }
-      expect(prisma.task.update).not.toHaveBeenCalled();
+      const result = await service.updateExecutionMode(
+        't_0000000001',
+        EXECUTION_MODES.plan,
+      );
+
+      expect(prisma.task.update).toHaveBeenCalledWith({
+        where: { id: 't_0000000001' },
+        data: { executionMode: EXECUTION_MODES.plan },
+        include: expect.any(Object),
+      });
+      expect(prisma.plan.update).not.toHaveBeenCalled();
+      expect(result.executionMode).toBe(EXECUTION_MODES.plan);
+    });
+
+    it('direct → plan 任务 in_progress 且计划 reviewing → 仅切模式，不置 executing', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({ status: 'in_progress', executionMode: EXECUTION_MODES.direct }),
+      );
+      prisma.plan.findUnique.mockResolvedValue({ id: 'pl_1', status: PLAN_STATUS.reviewing });
+      prisma.task.update.mockResolvedValue(
+        row({ status: 'in_progress', executionMode: EXECUTION_MODES.plan }),
+      );
+
+      const result = await service.updateExecutionMode(
+        't_0000000001',
+        EXECUTION_MODES.plan,
+      );
+
+      expect(prisma.task.update).toHaveBeenCalledWith({
+        where: { id: 't_0000000001' },
+        data: { executionMode: EXECUTION_MODES.plan },
+        include: expect.any(Object),
+      });
+      expect(prisma.plan.update).not.toHaveBeenCalled();
+      expect(result.executionMode).toBe(EXECUTION_MODES.plan);
     });
 
     it('目标模式与当前一致 → 幂等返回，不写库', async () => {
