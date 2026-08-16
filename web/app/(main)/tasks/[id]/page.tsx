@@ -115,6 +115,8 @@ interface TaskDetail {
   pendingReviewAt: string | null;
   completedAt: string | null;
   archivedAt: string | null;
+  /** 执行模式：direct（轻量，默认）/ plan（计划驱动）。 */
+  executionMode: "direct" | "plan";
 }
 
 /* ------------------------------ 产出物模型（对齐 toArtifactListItem / artifacts 页） ------------------------------ */
@@ -162,6 +164,52 @@ interface TaskIssuesResponse {
   page: number;
   pageSize: number;
 }
+
+/** 计划子任务条目（GET /plans?taskId= → tasks[]）。 */
+interface PlanTaskItem {
+  id: string;
+  seq: number;
+  title: string;
+  content: unknown;
+  assigneeInstanceId: string | null;
+  assigneeAlias: string | null;
+  assigneeName: string | null;
+  status: string;
+}
+
+/** 计划头 + 子任务清单（GET /plans?taskId= 响应）。 */
+interface PlanWithTasks {
+  id: string;
+  taskId: string;
+  title: string;
+  summary: string | null;
+  scopeIn: string | null;
+  scopeOut: string | null;
+  status: string;
+  createdBy: string;
+  reviewerInstanceId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  tasks: PlanTaskItem[];
+}
+
+/** 计划状态 → 视觉主题（徽章色）。 */
+const PLAN_STATUS_THEME: Record<string, { label: string; color: string; bg: string; border: string }> = {
+  reviewing: { label: "待评审", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
+  approved: { label: "已通过", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
+  rejected: { label: "已驳回", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
+  executing: { label: "执行中", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
+  completed: { label: "已完成", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+};
+
+/** 计划子任务状态 → 中文标签。 */
+const PLAN_TASK_STATUS_LABEL: Record<string, string> = {
+  pending: "待开始",
+  in_progress: "进行中",
+  done: "已完成",
+  blocked: "已阻塞",
+  skipped: "已跳过",
+};
 
 /** issue 状态排序优先级（待办在前：open < in_progress < resolved < closed < rejected）。 */
 const ISSUE_STATUS_ORDER: Record<TaskIssueItem["status"], number> = {
@@ -1652,6 +1700,273 @@ function TaskInfoEditModal({
   );
 }
 
+/* ================================ 执行计划区块（plan-section） ================================ */
+function PlanSection({
+  plan,
+  loading,
+  error,
+  onReview,
+  reviewPending,
+  taskExecutionMode,
+}: {
+  plan: PlanWithTasks | null;
+  loading: boolean;
+  error: unknown;
+  onReview: (planId: string) => void;
+  reviewPending: boolean;
+  taskExecutionMode: string;
+}) {
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+
+  if (loading) {
+    return (
+      <div style={{ padding: `${space.sm + 2}px ${space.md}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, color: neutral[400], fontSize: fontSize.sm }}>
+        加载中…
+      </div>
+    );
+  }
+
+  if (error) {
+    const is404 = isApiError(error) && error.status === 404;
+    if (is404) {
+      return (
+        <div data-testid="plan-section" style={{ padding: `${space.sm + 2}px ${space.md}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, color: neutral[400], fontSize: fontSize.sm, lineHeight: 1.5 }}>
+          暂无执行计划
+          {taskExecutionMode === "plan" && (
+            <span style={{ display: "block", marginTop: space.xs, color: neutral[500] }}>请先提交执行计划</span>
+          )}
+        </div>
+      );
+    }
+    return (
+      <div role="alert" style={{ padding: `${space.sm + 2}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "#FEF2F2", border: "1px solid #FECACA", color: "#DC2626", fontSize: fontSize.sm }}>
+        加载计划失败：{isApiError(error) ? error.message : "未知错误"}
+      </div>
+    );
+  }
+
+  if (!plan) return null;
+
+  const statusTheme = PLAN_STATUS_THEME[plan.status] ?? PLAN_STATUS_THEME.reviewing;
+  const isReviewing = plan.status === "reviewing";
+
+  return (
+    <div data-testid="plan-section" style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+      <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600] }}>执行计划</span>
+        <span
+          style={{
+            display: "inline-flex", alignItems: "center", gap: space.xs,
+            padding: `${space.xs - 1}px ${space.sm + 1}px`,
+            borderRadius: radius.pill, backgroundColor: statusTheme.bg,
+            border: `1px solid ${statusTheme.border}`, color: statusTheme.color,
+            fontSize: fontSize.xs, fontWeight: 500, lineHeight: 1.4, whiteSpace: "nowrap",
+          }}
+        >
+          <span aria-hidden style={{ width: 5, height: 5, borderRadius: "50%", backgroundColor: statusTheme.color, flexShrink: 0 }} />
+          {statusTheme.label}
+        </span>
+      </div>
+
+      {plan.summary && (
+        <div style={{ fontSize: fontSize.sm, color: neutral[600], lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {plan.summary}
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+        {plan.tasks.map((pt) => {
+          const expanded = expandedTaskId === pt.id;
+          const taskStatusLabel = PLAN_TASK_STATUS_LABEL[pt.status] ?? pt.status;
+          return (
+            <div
+              key={pt.id}
+              data-testid="plan-task-item"
+              style={{
+                borderRadius: radius.md, backgroundColor: neutral[50],
+                border: `1px solid ${neutral[200]}`, overflow: "hidden",
+              }}
+            >
+              <div
+                role="button"
+                tabIndex={0}
+                data-testid="plan-task-toggle"
+                onClick={() => setExpandedTaskId(expanded ? null : pt.id)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedTaskId(expanded ? null : pt.id); } }}
+                style={{
+                  display: "flex", alignItems: "center", gap: space.sm,
+                  padding: `${space.sm}px ${space.md}px`, cursor: "pointer",
+                  transition: "background-color .15s ease",
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.backgroundColor = "#FFFFFF"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent"; }}
+              >
+                <span style={{ fontSize: fontSize.xs, color: neutral[400], fontWeight: 600, flexShrink: 0 }}>
+                  #{pt.seq}
+                </span>
+                <span style={{ flex: 1, minWidth: 0, fontSize: fontSize.md, color: neutral[800], fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {pt.title}
+                </span>
+                {pt.assigneeAlias && (
+                  <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>
+                    {pt.assigneeAlias}
+                  </span>
+                )}
+                <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>
+                  {taskStatusLabel}
+                </span>
+                <span style={{ color: neutral[400], fontSize: fontSize.sm, transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s ease" }} aria-hidden>
+                  ›
+                </span>
+              </div>
+              {expanded && pt.content != null ? (
+                <div style={{ padding: `${space.sm}px ${space.md}px`, borderTop: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, color: neutral[600], lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                  {typeof pt.content === "string" ? pt.content : JSON.stringify(pt.content, null, 2)}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+
+      {isReviewing && !reviewPending && (
+        <button
+          type="button"
+          data-testid="plan-review-entry"
+          onClick={() => onReview(plan.id)}
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "center", gap: space.xs,
+            padding: `${space.sm - 1}px ${space.md}px`,
+            borderRadius: radius.md, border: `1px solid ${neutral[200]}`,
+            backgroundColor: "#FFFFFF", color: neutral[600],
+            fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer",
+            fontFamily: fontFamily.body,
+          }}
+        >
+          评审计划
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ================================ 评审弹窗（verdict + reason textarea） ================================ */
+function ReviewDialog({
+  open,
+  planId,
+  verdict,
+  reason,
+  error,
+  submitting,
+  onClose,
+  onVerdictChange,
+  onReasonChange,
+  onSubmit,
+}: {
+  open: boolean;
+  planId: string | null;
+  verdict: "approved" | "rejected";
+  reason: string;
+  error: string | null;
+  submitting: boolean;
+  onClose: () => void;
+  onVerdictChange: (v: "approved" | "rejected") => void;
+  onReasonChange: (r: string) => void;
+  onSubmit: () => void;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const handleKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [open, onClose]);
+
+  if (!open || !planId) return null;
+
+  const inputBase: CSSProperties = {
+    width: "100%", boxSizing: "border-box",
+    padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md,
+    border: `1px solid ${neutral[200]}`, backgroundColor: "#FFFFFF",
+    fontSize: fontSize.md, color: neutral[800], outline: "none",
+    fontFamily: fontFamily.body,
+  };
+
+  return (
+    <div data-testid="review-dialog-overlay" onClick={(e) => e.stopPropagation()} style={{ position: "absolute", inset: 0, zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "8%", ...baseFont }}>
+      <div aria-hidden data-testid="review-dialog-mask" onClick={(e) => { e.stopPropagation(); onClose(); }} style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }} />
+      <div data-testid="review-dialog-modal" style={{ position: "relative", width: 440, maxWidth: "calc(100% - 48px)", display: "flex", flexDirection: "column", gap: space.md, padding: space.xl, borderRadius: radius.lg, backgroundColor: "#FFFFFF", border: `1px solid ${neutral[200]}`, boxShadow: shadow.lg }}>
+        <div>
+          <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900], lineHeight: 1.3 }}>评审执行计划</div>
+          <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>通过后任务可按计划驱动执行</div>
+        </div>
+
+        <div style={{ display: "flex", gap: space.sm }}>
+          {(["approved", "rejected"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              data-testid={`review-verdict-${v}`}
+              onClick={() => onVerdictChange(v)}
+              style={{
+                flex: 1, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md,
+                border: `1px solid ${verdict === v ? (v === "approved" ? "#059669" : "#DC2626") : neutral[200]}`,
+                backgroundColor: verdict === v ? (v === "approved" ? "#ECFDF5" : "#FEF2F2") : "#FFFFFF",
+                color: verdict === v ? (v === "approved" ? "#059669" : "#DC2626") : neutral[600],
+                fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body,
+              }}
+            >
+              {v === "approved" ? "通过" : "驳回"}
+            </button>
+          ))}
+        </div>
+
+        {verdict === "rejected" && (
+          <label style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+            <span style={{ fontSize: fontSize.md, fontWeight: 500, color: neutral[700] }}>
+              驳回原因 <span style={{ color: "#DC2626" }}>*</span>
+            </span>
+            <textarea
+              data-testid="review-reason-input"
+              value={reason}
+              rows={3}
+              maxLength={512}
+              onChange={(e) => onReasonChange(e.target.value)}
+              placeholder="请填写驳回原因…"
+              style={{ ...inputBase, resize: "vertical", lineHeight: 1.6 }}
+            />
+          </label>
+        )}
+
+        {error && (
+          <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", fontWeight: 500 }}>{error}</div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm, marginTop: space.sm }}>
+          <button type="button" data-testid="review-cancel" onClick={onClose} disabled={submitting} style={{ padding: `${space.sm + 1}px ${space.lg}px`, borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, backgroundColor: "#FFFFFF", color: neutral[600], fontSize: fontSize.md, cursor: submitting ? "default" : "pointer", fontFamily: fontFamily.body }}>
+            取消
+          </button>
+          <button
+            type="button"
+            data-testid="review-submit"
+            disabled={submitting || (verdict === "rejected" && !reason.trim())}
+            onClick={onSubmit}
+            style={{
+              padding: `${space.sm + 1}px ${space.lg}px`, borderRadius: radius.pill, border: "none",
+              backgroundColor: verdict === "approved" ? "#059669" : "#DC2626",
+              color: "#FFFFFF", fontSize: fontSize.md, fontWeight: 500,
+              cursor: submitting || (verdict === "rejected" && !reason.trim()) ? "default" : "pointer",
+              opacity: submitting || (verdict === "rejected" && !reason.trim()) ? 0.6 : 1,
+              fontFamily: fontFamily.body,
+            }}
+          >
+            {submitting ? "提交中…" : "提交评审"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ================================ 任务信息面板（268px，对齐原型 TaskPanel，静态展示） ================================ */
 function TaskPanel({
   task,
@@ -1669,31 +1984,38 @@ function TaskPanel({
   width,
   onToggleManagedMode,
   onOpenDocs,
+  plan,
+  planLoading,
+  planError,
+  onReviewPlan,
+  reviewPending,
+  onToggleExecutionMode,
+  executionModePending,
+  executionModeError,
 }: {
   task: TaskDetail;
   agents: { id: string; name: string; role: RoleKey }[];
-  /** 产出物入口：跳项目产出物页 /artifacts?pid= */
   onOpenArtifacts?: () => void;
-  /** 文档站入口（is_0000000024/0036）：跳 /docs/:taskId（docSlug 可选，携带则初始定位该文档）。 */
   onOpenDocs?: (docSlug?: string) => void;
-  /** 任务实际产出物列表（GET /tasks/:id/artifacts）。 */
   artifacts: ArtifactItem[];
   artifactsTotal: number;
   artifactsLoading?: boolean;
-  /** 待办 Issue 入口：跳项目 issue 页 /issues?pid= */
   onOpenIssues?: () => void;
-  /** 任务全部 issue（GET /issues?taskId=，按状态排序后取前 5 展示）。 */
   issues: TaskIssueItem[];
   issuesTotal: number;
   issuesLoading?: boolean;
-  /** 待办 Issue 项点击 → 弹 Issue 详情（is_0000000012）。 */
   onOpenIssueDetail?: (issueId: string) => void;
-  /** 「编辑任务信息」入口（is_0000000011：描述/标题/背景文档）。 */
   onEditTaskInfo?: () => void;
-  /** 面板宽度（is_0000000017 可拖拽 resize，缺省 300）。 */
   width?: number;
-  /** 托管模式开关（PATCH /tasks/:id {managedMode}，父组件 mutation 写回缓存）。 */
   onToggleManagedMode?: (managed: boolean) => void;
+  plan: PlanWithTasks | null;
+  planLoading: boolean;
+  planError: unknown;
+  onReviewPlan: (planId: string) => void;
+  reviewPending: boolean;
+  onToggleExecutionMode?: (mode: "direct" | "plan") => void;
+  executionModePending?: boolean;
+  executionModeError?: string | null;
 }) {
   const mainAgent = task.mainAgentId ? agents.find((a) => a.id === task.mainAgentId) : undefined;
   /** 主实例（T5：instances[].main 或 id===mainAgentInstanceId；别名优先展示） */
@@ -1780,8 +2102,23 @@ function TaskPanel({
             ✎ 编辑
           </button>
         </div>
-        <div style={{ marginTop: space.sm, display: "flex", alignItems: "center", gap: space.sm }}>
+        <div style={{ marginTop: space.sm, display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
           {renderStatusBadge(statusLabel)}
+          <span
+            data-testid="execution-mode-badge"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: space.xs,
+              padding: `${space.xs - 1}px ${space.sm + 1}px`,
+              borderRadius: radius.pill,
+              backgroundColor: task.executionMode === "plan" ? "#EFF6FF" : neutral[100],
+              border: `1px solid ${task.executionMode === "plan" ? "#BFDBFE" : neutral[200]}`,
+              color: task.executionMode === "plan" ? "#2563EB" : neutral[500],
+              fontSize: fontSize.xs, fontWeight: 500, lineHeight: 1.4, whiteSpace: "nowrap",
+            }}
+          >
+            <span aria-hidden style={{ width: 5, height: 5, borderRadius: "50%", backgroundColor: task.executionMode === "plan" ? "#2563EB" : neutral[400], flexShrink: 0 }} />
+            {task.executionMode === "plan" ? "计划驱动" : "轻量执行"}
+          </span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>更新于 {formatTime(task.createdAt)}</span>
         </div>
       </div>
@@ -2102,6 +2439,52 @@ function TaskPanel({
         </div>
       </div>
 
+      {/* 执行计划区块 */}
+      <PlanSection
+        plan={plan}
+        loading={planLoading}
+        error={planError}
+        onReview={onReviewPlan}
+        reviewPending={reviewPending}
+        taskExecutionMode={task.executionMode}
+      />
+
+      {/* 执行模式切换（托管模式开关内） */}
+      {onToggleExecutionMode && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.md,
+          padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md,
+          backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`,
+        }}>
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>执行模式</span>
+            <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>
+              {task.executionMode === "plan" ? "计划驱动：按评审通过的计划执行" : "轻量执行：直接由 Agent 处理"}
+            </span>
+          </div>
+          <select
+            data-testid="execution-mode-toggle"
+            value={task.executionMode}
+            onChange={(e) => onToggleExecutionMode(e.target.value as "direct" | "plan")}
+            disabled={executionModePending}
+            style={{
+              padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.sm,
+              border: `1px solid ${neutral[200]}`, backgroundColor: "#FFFFFF",
+              fontSize: fontSize.sm, color: neutral[700], cursor: executionModePending ? "default" : "pointer",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            <option value="direct">轻量执行</option>
+            <option value="plan">计划驱动</option>
+          </select>
+        </div>
+      )}
+      {executionModeError && (
+        <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", padding: `0 ${space.lg}px` }}>
+          {executionModeError}
+        </div>
+      )}
+
       {/* 状态流转操作（OBS-010：与看板同款按钮组，共享 TaskStatusActions） */}
       <div>
         <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600], marginBottom: space.sm }}>
@@ -2205,6 +2588,8 @@ export default function TaskChatPage() {
   const [detailIssueId, setDetailIssueId] = useState<string | null>(null);
   // 任务信息编辑弹窗（is_0000000011）
   const [taskEditOpen, setTaskEditOpen] = useState(false);
+  // 执行模式切换 409 引导弹窗（direct→plan 未批准时）
+  const [executionModeError, setExecutionModeError] = useState<string | null>(null);
   // 面板可拖拽宽度（is_0000000017）：左成员面板 224 / 右任务面板 300，宽度持久化 localStorage
   const membersPanel = useResizableWidth({
     storageKey: "task-members-panel-width",
@@ -2262,6 +2647,15 @@ export default function TaskChatPage() {
     queryKey: ["task-issues", taskId],
     queryFn: () =>
       api.get<TaskIssuesResponse>("/issues", { query: { taskId, page: 1, pageSize: 100 } }),
+    enabled: !!taskId && !!user?.id,
+    refetchInterval: 30_000,
+  });
+
+  /* ---------- 1d. 执行计划：GET /plans?taskId=（右侧面板「执行计划」区）。
+       实时性：30s 轮询兜底 + SSE chat.message.new 失效（计划提交/评审为 system 消息）。 ---------- */
+  const plansQuery = useQuery({
+    queryKey: ["plans", taskId],
+    queryFn: () => api.get<PlanWithTasks>("/plans", { query: { taskId } }),
     enabled: !!taskId && !!user?.id,
     refetchInterval: 30_000,
   });
@@ -2418,6 +2812,7 @@ export default function TaskChatPage() {
     enabled: !!channelId && !!taskId,
     onMessage: (payload) => {
       scrollToBottom();
+      queryClient.invalidateQueries({ queryKey: ["plans", taskId] });
       const m = payload.message;
       // agent 回复到达 → 收敛该 Agent 的 loading 指示器与错误态（FR-20 处理完成替换）。
       // T6 实例语义：收敛 key 优先 senderInstanceId（回复精确归属实例），缺省回退 senderId。
@@ -2795,6 +3190,50 @@ export default function TaskChatPage() {
     managedModeMutation.mutate(managed);
   };
 
+  const executionModeMutation = useMutation({
+    mutationFn: (mode: "direct" | "plan") =>
+      api.patch<TaskDetail>(`/tasks/${taskId}/execution-mode`, { mode }),
+    onSuccess: (updated) => {
+      setExecutionModeError(null);
+      queryClient.setQueryData<TaskDetail>(["task", taskId], updated);
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+    },
+    onError: (err) => {
+      if (isApiError(err) && err.status === 409) {
+        setExecutionModeError("请先提交执行计划并评审通过，再切换至计划驱动模式");
+      } else {
+        setExecutionModeError(isApiError(err) ? err.message : "切换失败，请稍后重试");
+      }
+    },
+  });
+  const handleToggleExecutionMode = (mode: "direct" | "plan") => {
+    if (executionModeMutation.isPending) return;
+    setExecutionModeError(null);
+    executionModeMutation.mutate(mode);
+  };
+
+  const [reviewDialogPlanId, setReviewDialogPlanId] = useState<string | null>(null);
+  const [reviewDialogVerdict, setReviewDialogVerdict] = useState<"approved" | "rejected">("approved");
+  const [reviewDialogReason, setReviewDialogReason] = useState("");
+  const [reviewDialogError, setReviewDialogError] = useState<string | null>(null);
+
+  const planReviewMutation = useMutation({
+    mutationFn: (payload: { planId: string; verdict: "approved" | "rejected"; reason?: string }) =>
+      api.patch(`/plans/${payload.planId}/review`, {
+        verdict: payload.verdict,
+        ...(payload.reason ? { reason: payload.reason } : {}),
+      }),
+    onSuccess: () => {
+      setReviewDialogPlanId(null);
+      setReviewDialogReason("");
+      setReviewDialogError(null);
+      queryClient.invalidateQueries({ queryKey: ["plans", taskId] });
+    },
+    onError: (err) => {
+      setReviewDialogError(isApiError(err) ? err.message : "评审提交失败，请稍后重试");
+    },
+  });
+
   /** 当前处于 loading 的 Agent 集合（members-panel 状态 + 指示器 label） */
   const loadingAgentIds = useMemo(
     () => new Set(Object.keys(loadingByAgent)),
@@ -2969,6 +3408,19 @@ export default function TaskChatPage() {
         width={taskPanel.width}
         onToggleManagedMode={handleToggleManagedMode}
         onOpenDocs={(docSlug) => router.push(docSlug ? `/docs/${taskId}?doc=${docSlug}` : `/docs/${taskId}`)}
+        plan={plansQuery.data ?? null}
+        planLoading={plansQuery.isPending}
+        planError={plansQuery.error}
+        onReviewPlan={(planId) => {
+          setReviewDialogPlanId(planId);
+          setReviewDialogVerdict("approved");
+          setReviewDialogReason("");
+          setReviewDialogError(null);
+        }}
+        reviewPending={planReviewMutation.isPending}
+        onToggleExecutionMode={handleToggleExecutionMode}
+        executionModePending={executionModeMutation.isPending}
+        executionModeError={executionModeError}
       />
 
       {/* 任务信息编辑弹窗（is_0000000011） */}
@@ -2995,6 +3447,31 @@ export default function TaskChatPage() {
         submitting={questionSubmitting}
         onClose={() => setPendingQuestion(null)}
         onSubmit={handleQuestionSubmit}
+      />
+
+      {/* 评审弹窗（plan-section「评审计划」按钮触发） */}
+      <ReviewDialog
+        open={!!reviewDialogPlanId}
+        planId={reviewDialogPlanId}
+        verdict={reviewDialogVerdict}
+        reason={reviewDialogReason}
+        error={reviewDialogError}
+        submitting={planReviewMutation.isPending}
+        onClose={() => { setReviewDialogPlanId(null); setReviewDialogReason(""); setReviewDialogError(null); }}
+        onVerdictChange={setReviewDialogVerdict}
+        onReasonChange={setReviewDialogReason}
+        onSubmit={() => {
+          if (!reviewDialogPlanId) return;
+          if (reviewDialogVerdict === "rejected" && !reviewDialogReason.trim()) {
+            setReviewDialogError("驳回时请填写原因");
+            return;
+          }
+          planReviewMutation.mutate({
+            planId: reviewDialogPlanId,
+            verdict: reviewDialogVerdict,
+            ...(reviewDialogVerdict === "rejected" ? { reason: reviewDialogReason.trim() } : {}),
+          });
+        }}
       />
     </div>
   );

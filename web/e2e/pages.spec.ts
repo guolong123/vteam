@@ -37,6 +37,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("priority-select")).toBeVisible();
     await expect(page.getByTestId("agent-option").first()).toBeVisible();
     await expect(page.getByTestId("create-task-button")).toBeVisible();
+    await expect(page.getByTestId("execution-mode-select")).toBeVisible();
   });
 
   test("4/17 task-board /board?pid=p_seed_1", async ({ page }) => {
@@ -46,6 +47,11 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("status-filter")).toBeVisible();
     await expect(page.getByTestId("task-card").first()).toBeVisible();
     await expect(page.getByTestId("status-badge").first()).toBeVisible();
+    // plan-badge 仅 executionMode==='plan' 的任务渲染——seed 无 plan 任务时跳过
+    const badges = page.getByTestId("plan-badge");
+    if ((await badges.count()) > 0) {
+      await expect(badges.first()).toBeVisible();
+    }
   });
 
   test("5/17 agent-config /agents", async ({ page }) => {
@@ -55,6 +61,8 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("agent-list-item").first()).toBeVisible();
     await expect(page.getByTestId("clone-template-button")).toBeVisible();
     await expect(page.getByTestId("model-select").first()).toBeVisible();
+    await expect(page.getByTestId("persona-select").first()).toBeVisible();
+    await expect(page.getByTestId("persona-select").first()).toBeEnabled();
   });
 
   test("6/17 dm-chat /messages/c_0000000001", async ({ page }) => {
@@ -78,6 +86,9 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("member-item").first()).toBeVisible();
     await expect(page.getByTestId("chat-message-list")).toBeVisible();
     await expect(page.getByTestId("task-info-panel")).toBeVisible();
+    await expect(page.getByTestId("execution-mode-badge")).toBeVisible();
+    await expect(page.getByTestId("execution-mode-toggle")).toBeVisible();
+    await expect(page.getByTestId("plan-section")).toContainText("暂无执行计划");
   });
 
   test("8-10/17 导航变体（AppShell 融合导航承载）", async ({ page }) => {

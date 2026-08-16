@@ -116,9 +116,11 @@ chart/vteam/
 docker build -t docker-hosted.ketaops.cc/xishuhq/vteam-server:vteam-k8s ./server && docker push docker-hosted.ketaops.cc/xishuhq/vteam-server:vteam-k8s
 
 # web（Next.js standalone）—— ⚠️ 必须构建期注入 API_PROXY_TARGET（见 4.2）
+# Dockerfile 引用 web/package.json、worker/、scripts/，必须以项目根目录为构建 context
 docker build \
+  -f web/Dockerfile \
   --build-arg API_PROXY_TARGET=http://vteam-server:3000 \
-  -t docker-hosted.ketaops.cc/xishuhq/vteam-web:vteam-k8s ./web \
+  -t docker-hosted.ketaops.cc/xishuhq/vteam-web:vteam-k8s . \
 && docker push docker-hosted.ketaops.cc/xishuhq/vteam-web:vteam-k8s
 
 # worker（opencode 执行节点）
