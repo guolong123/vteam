@@ -55,6 +55,7 @@ export default function DocsPage() {
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
+        overflow: "hidden",
         backgroundColor: neutral[50],
         ...baseFont,
       }}
@@ -65,8 +66,8 @@ export default function DocsPage() {
           display: "flex",
           alignItems: "center",
           gap: space.md,
-          padding: `${space.md}px ${space.xl}px`,
-          backgroundColor: "#FFFFFF",
+          padding: `${space.md}px ${space.xl}px ${space.md}px 0`,
+          backgroundColor: neutral[50],
           borderBottom: `1px solid ${neutral[200]}`,
           flexShrink: 0,
         }}
@@ -165,7 +166,7 @@ export default function DocsPage() {
 
       {/* 内容区：文档阅读器（v4 内嵌渲染，initialDocId 定位）或 原型面板（懒加载） */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        {tab === "docs" ? <DocExplorer taskId={taskId} initialDocId={initialDocId} /> : <PrototypePanel />}
+        {tab === "docs" ? <DocExplorer taskId={taskId} initialDocId={initialDocId} /> : <PrototypePanel taskId={taskId} />}
       </div>
     </div>
   );

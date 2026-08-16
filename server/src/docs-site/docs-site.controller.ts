@@ -28,6 +28,8 @@ import { DocsMirrorService } from './docs-mirror.service';
  * 端点（路径均为 /api/v1 前缀，main.ts 全局前缀）：
  * - GET /docs-site/:taskId/registry     → 动态 DocDef[]（任务 doc 产出物，AC-3 文档树）
  * - GET /docs-site/:taskId/prd/<file>   → 镜像 .md 内容（taskId 子树白名单 + 路径穿越防护）
+ * - GET /docs-site/:taskId/prototypes       → 原型 DSL 列表 { items: [{id, name, file}] }
+ * - GET /docs-site/:taskId/prototypes/<file> → 原型 DSL JSON 内容（文件白名单防路径穿越）
  *
  * 鉴权：全局 JwtAuthGuard 要求合法 access token；本控制器按 taskId → projectId →
  * 项目成员校验（AC-2 越权 401/403）。taskId 白名单 + 文件名白名单防路径穿越/跨任务。
@@ -64,6 +66,36 @@ export class DocsSiteController {
       throw new NotFoundException({
         code: DOCS_SITE_ERRORS.DOC_NOT_FOUND,
         message: `文档不存在: ${file}`,
+      });
+    }
+    return content;
+  }
+
+  /** 原型 DSL 列表 GET /docs-site/:taskId/prototypes → { items: [{id, name, file}] }。 */
+  @Get(':taskId/prototypes')
+  @Header('Content-Type', 'application/json; charset=utf-8')
+  async prototypes(
+    @Param('taskId') taskId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<{ items: Array<{ id: string; name: string; file: string }> }> {
+    await this.assertMember(taskId, user.id);
+    return { items: await this.mirror.listPrototypes(taskId) };
+  }
+
+  /** 原型 DSL 内容 GET /docs-site/:taskId/prototypes/:file → DSL JSON。 */
+  @Get(':taskId/prototypes/:file')
+  @Header('Content-Type', 'application/json; charset=utf-8')
+  async prototypeContent(
+    @Param('taskId') taskId: string,
+    @Param('file') file: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<string> {
+    await this.assertMember(taskId, user.id);
+    const content = await this.mirror.readPrototype(taskId, file);
+    if (content === null) {
+      throw new NotFoundException({
+        code: DOCS_SITE_ERRORS.DOC_NOT_FOUND,
+        message: `原型不存在: ${file}`,
       });
     }
     return content;
