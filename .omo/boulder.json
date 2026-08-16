@@ -47,9 +47,11 @@
       "work_id": "memory-management-a990d997",
       "active_plan": "/data/git-project/aiagents/.omo/plans/memory-management.md",
       "plan_name": "memory-management",
-      "status": "active",
+      "status": "completed",
       "started_at": "2026-08-15T14:57:52.101Z",
-      "updated_at": "2026-08-15T15:35:32.347Z",
+      "updated_at": "2026-08-15T15:38:00.000Z",
+      "ended_at": "2026-08-15T15:38:00.000Z",
+      "elapsed_ms": 2407879,
       "session_ids": [
         "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O"
       ],
