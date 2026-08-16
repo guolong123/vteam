@@ -34,3 +34,31 @@ describe('WORKER_MAX_INSTANCES（F4：worker 并发上限配置化）', () => {
     }
   });
 });
+
+describe('WORKER_ADVERTISE_HOST 显式标记（外部/跨机 worker 可达地址引导）', () => {
+  it('缺省（未设置）：workerAdvertiseHostExplicit=false 且回落 http://127.0.0.1', () => {
+    const config = loadConfig(BASE_ENV);
+    expect(config.workerAdvertiseHostExplicit).toBe(false);
+    expect(config.workerAdvertiseHost).toBe('http://127.0.0.1');
+  });
+
+  it('显式设置（即使值恰好为 http://127.0.0.1 的本地开发场景）：workerAdvertiseHostExplicit=true 不误报', () => {
+    const config = loadConfig({ ...BASE_ENV, WORKER_ADVERTISE_HOST: 'http://127.0.0.1' });
+    expect(config.workerAdvertiseHostExplicit).toBe(true);
+    expect(config.workerAdvertiseHost).toBe('http://127.0.0.1');
+  });
+
+  it('显式设置非回环地址：workerAdvertiseHostExplicit=true', () => {
+    const config = loadConfig({ ...BASE_ENV, WORKER_ADVERTISE_HOST: 'http://192.168.1.10' });
+    expect(config.workerAdvertiseHostExplicit).toBe(true);
+    expect(config.workerAdvertiseHost).toBe('http://192.168.1.10');
+  });
+
+  it('显式设置空串/空白：视为未设置（回落默认 + 标记 false，启动告警仍触发）', () => {
+    for (const raw of ['', '   ']) {
+      const config = loadConfig({ ...BASE_ENV, WORKER_ADVERTISE_HOST: raw });
+      expect(config.workerAdvertiseHostExplicit).toBe(false);
+      expect(config.workerAdvertiseHost).toBe('http://127.0.0.1');
+    }
+  });
+});

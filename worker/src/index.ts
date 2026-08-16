@@ -260,6 +260,24 @@ function printStartup(config: WorkerConfig, opencodeVersion: string): void {
   opencodeVersion     = ${opencodeVersion}`);
 }
 
+/**
+ * 启动告警（引导性，不阻断启动）：仅当 WORKER_ADVERTISE_HOST 未显式设置时触发一次——
+ * 此时上报的 capabilities.baseUrl 会是默认 http://127.0.0.1（仅本机可访问），worker 与
+ * server 不在同一主机时 server 连不上 → worker 显示不可用。已显式设置（即使值恰好为
+ * http://127.0.0.1 的本地开发场景）不提示，避免误报。独立导出便于单测。
+ */
+export function warnLoopbackAdvertiseHost(config: WorkerConfig): void {
+  if (config.workerAdvertiseHostExplicit) {
+    return;
+  }
+  console.warn(
+    `[worker] ⚠️  baseUrl=127.0.0.1 仅本机可访问（未设置 WORKER_ADVERTISE_HOST）\n` +
+      `  若 worker 与 server 不在同一主机，server 将无法连接本 worker → worker 显示不可用。\n` +
+      `  请设置 WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>（如 http://<worker 局域网 IP>），\n` +
+      `  并设置 OPENCODE_SERVE_HOSTNAME=0.0.0.0（serve 监听非回环，server 才能连上）。`,
+  );
+}
+
 /** C2 模型探测重试选项（B2：空列表重试参数，options.delay 供单测注入跳过真实等待）。 */
 export interface ModelListProbeOptions {
   /** 空列表额外重试次数（默认 3 次，延迟 1s/2s/4s 指数退避，总窗口 ~7s）。 */
@@ -431,6 +449,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   const opencodeVersion = detectOpencodeVersion();
 
   printStartup(config, opencodeVersion);
+  warnLoopbackAdvertiseHost(config);
 
   // K3 修复（T6）：serve 启动前把 git 工具族注入工作目录（<workDir>/.opencode/tools/git.ts，
   // opencode 启动时扫描该目录自动注册；注入失败不阻断启动，工具缺失由后续执行时报错暴露）。

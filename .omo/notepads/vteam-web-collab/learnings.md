@@ -224,3 +224,43 @@
 - worker jest 全量：19 suites / 361 tests 全通过（含 mcp-status 24 个，新增 12 个告警分支用例）
 - `scripts/pack-worker.sh` 重跑：worker-src.tar.gz 212K，`tar -tzf` 确认 .env.example 在包内且含 WORKER_MCP_URL
 - 部署待派发：install-worker.sh 由 web/public 静态服务提供，需 web 镜像重建才生效；worker-src.tar.gz 随 web 发布
+
+## 外部/跨机 worker 连不上（baseUrl=127.0.0.1）：引导性增强（A+B+D）— 2026-08-16
+
+### 问题根因
+- worker 上报 `capabilities.baseUrl = ${WORKER_ADVERTISE_HOST}:${servePort}`，`WORKER_ADVERTISE_HOST`
+  默认 `http://127.0.0.1`（worker/src/config.ts）——手动脚本 install-worker.sh 不引导设置 → server
+  在远端用回环地址连 worker → 连接失败 → agent 提示 worker 不可用
+- 次因：`OPENCODE_SERVE_HOSTNAME` 默认 `127.0.0.1`（config.ts），外部 worker 的 serve 只监听回环
+- 执行端点 exec-server 已监听 0.0.0.0，无需改动
+
+### 改动清单（纯引导，机制零改动）
+- `web/public/install-worker.sh`：新增 `--advertise-host <url>`（→ update_env WORKER_ADVERTISE_HOST）与
+  `--serve-hostname <host>`（→ update_env OPENCODE_SERVE_HOSTNAME），非空才写入（本机/集群内无感知）；
+  安装后未提供 --advertise-host 且 .env 无 WORKER_ADVERTISE_HOST 时醒目提示（对齐 WORKER_MCP_URL 提示块
+  ⚠️ 格式）；帮助注释 + 未知参数报错同步更新；旧参数全保留
+- `worker/src/config.ts`：WorkerConfig 新增 `workerAdvertiseHostExplicit` 标记（env 中非空值即 true）——
+  告警触发的判定标准，避免「值恰好 127.0.0.1 的本地开发」误报
+- `worker/src/index.ts`：新增 `warnLoopbackAdvertiseHost(config)` 独立导出函数，main() 在 printStartup 后
+  调用；仅未显式设置时 console.warn 一次醒目提示（含 WORKER_ADVERTISE_HOST + OPENCODE_SERVE_HOSTNAME 引导）
+- `worker/.env.example`：OPENCODE_SERVE_HOSTNAME / WORKER_ADVERTISE_HOST 两行补集群外注释
+- `worker/README.md`：env 表两行补集群外说明；「集群外 worker 配置」小节重命名扩展为三件套组合示例
+  （WORKER_MCP_URL + WORKER_ADVERTISE_HOST + OPENCODE_SERVE_HOSTNAME，含执行端点已 0.0.0.0 说明）
+- `docs/deployment.md` 4.4.1：扩展为「WORKER_MCP_URL + 可达地址三件套」，含一键安装命令示例
+
+### 关键设计决策
+- **防误报判定标准**：告警只看「是否显式设置」（workerAdvertiseHostExplicit = env 非空），不看值是否为
+  127.0.0.1——显式设置 127.0.0.1（本地开发）不提示；空串/空白视为未设置（回落默认 + 仍提示）
+- **告警一次**：仅 main() 启动时调用一次（非心跳/探测路径，无节流问题）
+- **幂等**：update_env 先删 `^KEY=` 再追加；缺省不写 .env（本机/集群内 worker 无感知）
+- **独立导出**：warnLoopbackAdvertiseHost 独立导出便于单测（console.warn spy 三态：未设置提示 / 显式
+  127.0.0.1 不提示 / 显式非回环不提示）
+
+### 验证结果
+- `bash -n web/public/install-worker.sh`：SYNTAX_OK
+- worker jest 全量：19 suites / 368 tests 全通过（新增 7 个：config 4 + index 3）
+- `npm run typecheck`：EXIT 0
+- `scripts/pack-worker.sh` 重跑：worker-src.tar.gz 216K，`tar -tzf` 确认 .env.example 在包内且含
+  WORKER_ADVERTISE_HOST / OPENCODE_SERVE_HOSTNAME / 集群外注释
+- 部署待派发：install-worker.sh + worker-src.tar.gz 随 web 镜像重建生效；worker 代码改动（config/index
+  告警）需 worker 镜像重建生效；本任务不部署（另行派发）

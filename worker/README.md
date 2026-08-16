@@ -71,31 +71,41 @@ npm run dev            # tsx src/index.ts
 | `HEARTBEAT_INTERVAL_MS` | 否 | `10000` | 心跳间隔 ms（server 30s = 3 周期判 offline） |
 | `LOG_LEVEL` | 否 | `info` | 日志级别 |
 | `WORK_DIR` | 否 | `/tmp/keta-worker` | opencode serve 工作目录（工具注入落点） |
-| `OPENCODE_SERVE_HOSTNAME` | 否 | `127.0.0.1` | opencode serve 绑定地址（容器内设 `0.0.0.0` 供 server 容器访问） |
-| `WORKER_ADVERTISE_HOST` | 否 | `http://127.0.0.1` | worker 对 server 公布的 serve 基址主机（随注册 capabilities.baseUrl 上报；compose 设 `http://worker`） |
+| `OPENCODE_SERVE_HOSTNAME` | 否 | `127.0.0.1` | opencode serve 绑定地址（容器内设 `0.0.0.0` 供 server 容器访问；**集群外/跨机 worker 必须设 `0.0.0.0`**，serve 监听非回环 server 才能连上） |
+| `WORKER_ADVERTISE_HOST` | 否 | `http://127.0.0.1` | worker 对 server 公布的 serve 基址主机（随注册 capabilities.baseUrl 上报；compose 设 `http://worker`）。**集群外/跨机 worker 必须设置为 server 可达的 worker 地址**（如 `http://<worker 局域网 IP>`），否则默认回环地址仅本机可访问，server 连不上 → worker 显示不可用 |
 | `GIT_SSH_KEY_PATH` | 否 | 空 | SSH 私钥路径（git 凭证注入 `GIT_SSH_COMMAND`）；空 = 不注入 |
 | `WORKER_DEFAULT_MODEL` | 否 | 空 | worker 默认模型 id（随注册上报，分派兜底） |
 | `WORKER_EXEC_PORT` | 否 | `4198` | 执行端点端口（node:http POST /execute，与 serve 端口解耦） |
 | `WORKER_FIRST_TOKEN_TIMEOUT_MS` | 否 | `120000` | 首字超时 ms（模型时限内无首字输出即 abort；首字出现后无完成超时） |
 | `WORKER_MAX_INSTANCES` | 否 | `5` | worker 最大并发会话数（随注册上报，server 按 capacity 分派）；≤0/非法值兜底 5 |
 
-## 集群外 worker 配置（内置 MCP）
+## 集群外 worker 配置（内置 MCP + 可达地址三件套）
 
-worker 注册时上报 `capabilities.mcpUrl`（env `WORKER_MCP_URL`），server 在 worker 拉取
-mcp-servers 时按 worker 覆盖内置 vteam 地址下发（server/src/mcp-servers/mcp-servers.service.ts）。
+worker 注册时上报 `capabilities.mcpUrl`（env `WORKER_MCP_URL`）与 `capabilities.baseUrl`（env
+`WORKER_ADVERTISE_HOST`），server 在 worker 拉取 mcp-servers 时按 worker 覆盖内置 vteam 地址下发
+（server/src/mcp-servers/mcp-servers.service.ts），并经 baseUrl 直连 worker 执行端点（exec 端点
+node:http 已监听 `0.0.0.0`，无需改动）。
 
 **集群内（compose/k8s）worker 无需配置**：server 下发的默认内置地址（seed `PLATFORM_MCP_URL`）
-即集群内服务名（`http://server:3000/...` / `http://vteam-server:3000/...`），worker 可正常解析。
+即集群内服务名（`http://server:3000/...` / `http://vteam-server:3000/...`），worker 可正常解析；
+`WORKER_ADVERTISE_HOST` 由编排层注入（compose `http://worker` / k8s headless DNS）。
 
-**集群外 worker 必须设置**，否则内置 vteam MCP 因地址不可解析而 failed：
+**集群外 worker 必须配置三件套**，否则内置 vteam MCP 探测 failed + server 连不上 worker
+（显示不可用）：
 
 ```bash
-# .env
-WORKER_MCP_URL=http://<控制面外部地址>/api/v1/platform-mcp
+# worker/.env
+WORKER_MCP_URL=http://<控制面外部地址>/api/v1/platform-mcp   # 内置 vteam MCP 外部可达地址
+WORKER_ADVERTISE_HOST=http://<worker 局域网 IP>              # server 可达的 worker 地址（baseUrl）
+OPENCODE_SERVE_HOSTNAME=0.0.0.0                             # serve 监听非回环，server 才能连上
 ```
 
-探测到内置 MCP 失败且地址为集群内服务名时，`mcp-status-probe` 会在 worker 日志输出
-WORKER_MCP_URL 引导提示。一键安装（install-worker.sh）可携带 `--mcp-url <url>` 写入该值。
+一键安装（install-worker.sh）可携带 `--mcp-url <url> --advertise-host <url> --serve-hostname
+0.0.0.0` 写入上述值；未提供时脚本会醒目提示（不强制，本机/集群内 worker 忽略即可）。
+
+探测到内置 MCP 失败且地址为集群内服务名时，`mcp-status-probe` 会在 worker 日志输出 WORKER_MCP_URL
+引导提示；启动时未显式设置 `WORKER_ADVERTISE_HOST`（上报 baseUrl 为 `http://127.0.0.1`）时，
+worker 启动日志输出一次可达地址引导提示。
 
 ## 目录结构
 

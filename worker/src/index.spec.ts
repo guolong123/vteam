@@ -21,6 +21,7 @@ import {
   handleModelCredentials,
   onCommands,
   resolveModels,
+  warnLoopbackAdvertiseHost,
 } from './index';
 
 /** 最小 WorkerConfig（buildRegisterOptions 全字段）。 */
@@ -36,6 +37,7 @@ const CONFIG: WorkerConfig = {
   workDir: '/tmp/w',
   gitSshKeyPath: '',
   workerAdvertiseHost: 'http://worker',
+  workerAdvertiseHostExplicit: true,
   opencodeServeHostname: '127.0.0.1',
   defaultModelId: '',
   workerExecPort: 4198,
@@ -719,5 +721,41 @@ describe('buildRegisterOptions（T4c：重启后重新注册携带新端口）',
       'cli-version',
     );
     expect(opts.capabilities.maxInstances).toBe(3);
+  });
+});
+
+describe('warnLoopbackAdvertiseHost（外部/跨机 worker 可达地址启动告警）', () => {
+  it('未显式设置 WORKER_ADVERTISE_HOST：输出一次醒目提示（含 baseUrl=127.0.0.1 与 WORKER_ADVERTISE_HOST 引导）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      warnLoopbackAdvertiseHost({ ...CONFIG, workerAdvertiseHostExplicit: false, workerAdvertiseHost: 'http://127.0.0.1' });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const message = warnSpy.mock.calls[0][0] as string;
+      expect(message).toContain('baseUrl=127.0.0.1');
+      expect(message).toContain('WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>');
+      expect(message).toContain('OPENCODE_SERVE_HOSTNAME=0.0.0.0');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('已显式设置（值恰好 http://127.0.0.1 的本地开发场景）：不提示（防误报）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      warnLoopbackAdvertiseHost({ ...CONFIG, workerAdvertiseHost: 'http://127.0.0.1' });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('已显式设置非回环地址：不提示', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      warnLoopbackAdvertiseHost(CONFIG);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

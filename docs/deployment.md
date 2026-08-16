@@ -256,23 +256,35 @@ helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline.yaml --w
 - 存量部署修复（不重装）：`UPDATE mcp_servers SET url='http://vteam-server:3000/api/v1/platform-mcp' WHERE name='keta-platform';` 然后 `kubectl rollout restart sts/vteam-worker`（injectMcp 启动时执行）。
 - 注意 worker 容器默认 cwd 是镜像 WORKDIR，探测 MCP 必须 `cd /data/keta-worker && opencode mcp list --pure` 才能读到注入的 opencode.json。
 
-#### 4.4.1 集群外 worker 配置（WORKER_MCP_URL）
+#### 4.4.1 集群外 worker 配置（WORKER_MCP_URL + 可达地址三件套）
 
-集群外独立部署的 worker（install-worker.sh 一键安装场景）与 server 不在同一集群网络，`PLATFORM_MCP_URL`
-默认值（`http://server:3000/...` / `http://vteam-server:3000/...`，均为集群内服务名）无法解析 → 内置 vteam MCP 探测 failed。
+集群外独立部署的 worker（install-worker.sh 一键安装场景）与 server 不在同一集群网络，需同时解决
+**内置 MCP 不可达** 与 **server 连不上 worker** 两个问题：
 
-worker 侧用 `WORKER_MCP_URL` 覆盖：注册时经 `capabilities.mcpUrl` 上报，server 在 worker 拉取
-mcp-servers 时按 worker 覆盖内置地址下发（不修改全局 seed 地址，集群内 worker 无感知）。
+1. **内置 MCP 不可达**：`PLATFORM_MCP_URL` 默认值（`http://server:3000/...` /
+   `http://vteam-server:3000/...`，均为集群内服务名）无法解析 → 内置 vteam MCP 探测 failed。
+   worker 侧用 `WORKER_MCP_URL` 覆盖：注册时经 `capabilities.mcpUrl` 上报，server 在 worker 拉取
+   mcp-servers 时按 worker 覆盖内置地址下发（不修改全局 seed 地址，集群内 worker 无感知）。
+2. **server 连不上 worker**：`WORKER_ADVERTISE_HOST` 默认 `http://127.0.0.1`（仅本机可访问），
+   server 在远端用回环地址连 worker 执行端点 → 消息只有 ACK 无实际回复、worker 显示不可用。
+   须设置为 server 可达的 worker 地址，并将 `OPENCODE_SERVE_HOSTNAME` 设为 `0.0.0.0`
+   （serve 监听非回环，server 才能连上；执行端点 node:http 已监听 `0.0.0.0`，无需改动）。
 
 ```bash
-# worker/.env
-WORKER_MCP_URL=http://<控制面外部地址>/api/v1/platform-mcp
+# worker/.env —— 集群外 worker 三件套
+WORKER_MCP_URL=http://<控制面外部地址>/api/v1/platform-mcp   # 内置 vteam MCP 外部可达地址
+WORKER_ADVERTISE_HOST=http://<worker 局域网 IP>              # server 可达的 worker 地址（baseUrl）
+OPENCODE_SERVE_HOSTNAME=0.0.0.0                             # serve 监听非回环，server 才能连上
 ```
 
-- `<控制面外部地址>`：worker 所在网络可达的 server 地址（如 `https://vteam.example.com`）。
-- 一键安装：`bash install-worker.sh ... --mcp-url http://<控制面外部地址>/api/v1/platform-mcp`；未提供时
-  脚本会醒目提示（不强制，集群内 worker 忽略即可）。
-- worker 探测到内置 MCP 失败且地址为集群内服务名时，`mcp-status-probe` 会在日志输出 WORKER_MCP_URL 引导提示。
+- `<控制面外部地址>`：worker 所在网络可达的 server 地址（如 `https://vteam.example.com`）；
+  `<worker 局域网 IP>`：worker 所在网络内 server 可达的 worker 地址。
+- 一键安装：`bash install-worker.sh ... --mcp-url http://<控制面外部地址>/api/v1/platform-mcp
+  --advertise-host http://<worker 局域网 IP> --serve-hostname 0.0.0.0`；未提供时脚本会醒目提示
+  （不强制，本机/集群内 worker 忽略即可）。
+- worker 探测到内置 MCP 失败且地址为集群内服务名时，`mcp-status-probe` 会在日志输出 WORKER_MCP_URL
+  引导提示；启动时未显式设置 `WORKER_ADVERTISE_HOST`（上报 baseUrl 为 `http://127.0.0.1`）时，
+  worker 启动日志输出一次可达地址引导提示。
 
 ### 4.5 secret：显式注入，避免随机化
 
