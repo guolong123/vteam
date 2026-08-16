@@ -253,6 +253,131 @@ const memorySearchSchema = z.object({
 
 type MemorySearchArgs = z.infer<typeof memorySearchSchema>;
 
+export const planSubmitSchema = z.object({
+  taskId: z.string().describe('任务 ID'),
+  selfInstanceId: z
+    .string()
+    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+  title: z.string().min(1).describe('执行计划标题'),
+  summary: z.string().optional().describe('计划摘要'),
+  scopeIn: z.string().optional().describe('范围：包含'),
+  scopeOut: z.string().optional().describe('范围：不包含'),
+  tasks: z
+    .array(
+      z.object({
+        title: z.string().min(1).describe('子任务标题'),
+        what: z.string().min(1).describe('子任务内容（六要素必填项）'),
+        mustNot: z.string().optional().describe('禁止事项'),
+        references: z.string().optional().describe('参考依据'),
+        acceptance: z.string().optional().describe('验收标准'),
+        qa: z.string().optional().describe('QA 要求'),
+        commit: z.string().optional().describe('交付产物'),
+        assigneeInstanceId: z
+          .string()
+          .optional()
+          .describe('指派实例 id（须属于任务团队未移除成员）'),
+      }),
+    )
+    .min(1)
+    .describe('计划子任务（至少 1 项）'),
+});
+
+type PlanSubmitArgs = z.infer<typeof planSubmitSchema>;
+
+export const planReviewSchema = z
+  .object({
+    taskId: z.string().describe('任务 ID'),
+    selfInstanceId: z
+      .string()
+      .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    planId: z.string().optional().describe('计划 id（缺省取任务当前计划）'),
+    verdict: z.enum(['approved', 'rejected']).describe('评审结论'),
+    reason: z.string().optional().describe('评审说明（rejected 时必填）'),
+  })
+  .refine(
+    (data) => data.verdict !== 'rejected' || (data.reason ?? '').trim().length > 0,
+    { message: '评审驳回必须填写 reason', path: ['reason'] },
+  );
+
+type PlanReviewArgs = z.infer<typeof planReviewSchema>;
+
+const planTaskTransitionSchema = z.object({
+  taskId: z.string().describe('任务 ID'),
+  selfInstanceId: z
+    .string()
+    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+  planTaskId: z.string().describe('计划子任务 id（pt_ 前缀）'),
+  status: z
+    .enum(['in_progress', 'done', 'blocked', 'skipped'])
+    .describe('子任务新状态：in_progress 进行中 / done 完成 / blocked 阻塞 / skipped 跳过'),
+});
+
+type PlanTaskTransitionArgs = z.infer<typeof planTaskTransitionSchema>;
+
+/** team_view：任务团队实时视图（只读，无 selfInstanceId——仅校验 worker 有该任务会话）。 */
+export const teamViewSchema = z.object({
+  taskId: z.string().describe('任务 ID'),
+});
+
+type TeamViewArgs = z.infer<typeof teamViewSchema>;
+
+/** my_profile：自身 Agent 配置视图（只读，prompt 仅返回摘要，不暴露完整提示词）。 */
+export const myProfileSchema = z.object({
+  taskId: z.string().describe('任务 ID'),
+  selfInstanceId: z
+    .string()
+    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+});
+
+type MyProfileArgs = z.infer<typeof myProfileSchema>;
+
+/**
+ * plan_get：读取任务执行计划（只读，评审者读计划通道——Metis MAJOR-4 闭环）。
+ * 无 selfInstanceId：仅校验 worker 有该任务会话（对齐 team_view/memorySearch 只读先例）。
+ */
+export const planGetSchema = z.object({
+  taskId: z.string().describe('任务 ID'),
+  planId: z
+    .string()
+    .optional()
+    .describe('计划 id（缺省取任务当前计划）'),
+});
+
+type PlanGetArgs = z.infer<typeof planGetSchema>;
+
+/**
+ * plan_assign_reviewer：指派执行计划评审者（Oracle R3 独立工具，仅主 Agent 可调）。
+ * 评审者可经 plan_get 读取计划全文、经 plan_review 完成评审（reviewer 权限联动）。
+ */
+export const planAssignReviewerSchema = z.object({
+  taskId: z.string().describe('任务 ID'),
+  selfInstanceId: z
+    .string()
+    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+  reviewerInstanceId: z
+    .string()
+    .describe('被指派评审者实例 id（ta_ 前缀，须属于任务团队未移除成员）'),
+});
+
+type PlanAssignReviewerArgs = z.infer<typeof planAssignReviewerSchema>;
+
+/**
+ * team_add_member：主 Agent 申请将 Agent 加入团队（L2 自治确认门，vteam-team-collaboration
+ * Todo 8）。仅主 Agent 可调；创建平台 question 确认请求（question_confirm 确认门），用户
+ * 确认后才会真正加入团队并写 team_add 审计。
+ */
+export const teamAddMemberSchema = z.object({
+  taskId: z.string().describe('任务 ID'),
+  selfInstanceId: z
+    .string()
+    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+  agentId: z.string().describe('要加入团队的 Agent id'),
+  alias: z.string().optional().describe('别名（缺省由服务端按角色生成）'),
+  workDir: z.string().optional().describe('工作目录（缺省由服务端按角色生成）'),
+});
+
+type TeamAddMemberArgs = z.infer<typeof teamAddMemberSchema>;
+
 /**
  * 构建工具集（service 闭包注入，controller 构造时调用一次）。
  * handler 签名 `(ctx, args)`：ctx.workerId 为 controller 透传的 header 值；
@@ -379,6 +504,65 @@ export function buildPlatformMcpTools(
       inputSchema: memorySearchSchema,
       handler: (ctx, args) => service.memorySearch(ctx, args as MemorySearchArgs),
     },
+    {
+      name: 'plan_submit',
+      description:
+        '提交执行计划（仅主 Agent 可调用）。plan 模式工作流：主 Agent 拆分实施步骤为计划子任务（六要素，what 必填）→ 评审通过后可实施。重复提交：已处于 rejected/completed 的旧计划将被覆盖重提（原评审者自动失效），否则 409。返回 {planId, status: "reviewing", taskCount}。',
+      inputSchema: planSubmitSchema,
+      handler: (ctx, args) => service.planSubmit(ctx, args as PlanSubmitArgs),
+    },
+    {
+      name: 'plan_review',
+      description:
+        '评审执行计划（主 Agent 或已被指派的评审者可调用）。verdict=approved 通过后计划可实施；verdict=rejected 必须附 reason（驳回后可修改重提或切换 direct 模式）。评审完成后该计划的评审者身份即失效。返回 {planId, status: "approved"|"rejected"}。',
+      inputSchema: planReviewSchema,
+      handler: (ctx, args) => service.planReview(ctx, args as PlanReviewArgs),
+    },
+    {
+      name: 'plan_task_transition',
+      description:
+        '流转计划子任务状态（子任务指派者或主 Agent 可调用）：in_progress/done/blocked/skipped。所有子任务均达终态（done/blocked/skipped）时自动在群聊提示可提交验收。返回 {planTaskId, status}。',
+      inputSchema: planTaskTransitionSchema,
+      handler: (ctx, args) =>
+        service.planTaskTransition(ctx, args as PlanTaskTransitionArgs),
+    },
+    {
+      name: 'team_view',
+      description:
+        '查询任务团队的实时视图（只读，无需 selfInstanceId）：成员列表（实例 id/agent id/别名/角色/序号/主标注 + 会话实时状态 sessionStatus/sessionId）+ 执行计划子任务分配概览 planSummary（total 总子任务数 / done 已终态 / pending 未完成）。返回 {taskId, members: [{id, agentId, alias, role, seq, main, sessionStatus, sessionId}], planSummary: {total, done, pending}}。',
+      inputSchema: teamViewSchema,
+      handler: (ctx, args) => service.teamView(ctx, args as TeamViewArgs),
+    },
+    {
+      name: 'my_profile',
+      description:
+        '查询自身 Agent 配置（只读）：角色/权限范围 permissionScope/工具效应 toolEffects/默认模型 defaultModelId + 任务实例别名/序号/工作目录，prompt 仅返回前 500 字符摘要（promptSummary + promptTruncated，不暴露完整提示词）。返回自身配置视图。',
+      inputSchema: myProfileSchema,
+      handler: (ctx, args) => service.myProfile(ctx, args as MyProfileArgs),
+    },
+    {
+      name: 'plan_get',
+      description:
+        '读取任务执行计划（只读，评审者读计划通道，无需 selfInstanceId）：计划头（含 reviewerInstanceId）+ 子任务清单全文（六要素 content + 指派概览）。返回 {id, taskId, title, summary, scopeIn, scopeOut, status, createdBy, reviewerInstanceId, createdAt, updatedAt, tasks: [{id, seq, title, content, assigneeInstanceId, assigneeAlias, assigneeName, status}]}。',
+      inputSchema: planGetSchema,
+      handler: (ctx, args) => service.planGet(ctx, args as PlanGetArgs),
+    },
+    {
+      name: 'plan_assign_reviewer',
+      description:
+        '指派执行计划评审者（仅主 Agent 可调用）：写入计划评审者 + 群聊提示「已指派 <alias> 评审执行计划」。被指派评审者可经 plan_get 读取计划全文、经 plan_review 完成评审。返回 {planId, taskId, reviewerInstanceId, reviewerAlias}。',
+      inputSchema: planAssignReviewerSchema,
+      handler: (ctx, args) =>
+        service.planAssignReviewer(ctx, args as PlanAssignReviewerArgs),
+    },
+    {
+      name: 'team_add_member',
+      description:
+        '申请将 Agent 加入团队（仅主 Agent 可调用，L2 自治确认门）：创建用户确认请求（question_confirm 确认门，question 弹窗「是否确认」），用户确认后才真正加入团队并写 team_add 审计；重复申请（已加入/有 pending 申请）被拒绝。返回 {requestId, taskId, agentId, alias}。',
+      inputSchema: teamAddMemberSchema,
+      handler: (ctx, args) =>
+        service.teamAddMember(ctx, args as TeamAddMemberArgs),
+    },
   ];
 }
 
@@ -393,6 +577,8 @@ export function zodObjectToJsonSchema(schema: z.ZodTypeAny): {
   properties: Record<string, { type: string }>;
   required: string[];
 } {
+  // zod v4 classic：z.object().refine() 返回仍是 ZodObject（refine 校验挂
+  // _def.checks），shape 直接可访问，无需解包
   const shape = (schema as z.ZodObject<z.ZodRawShape>).shape;
   const properties: Record<string, { type: string }> = {};
   const required: string[] = [];

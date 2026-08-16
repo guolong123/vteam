@@ -22,6 +22,12 @@ import {
   TASK_STATUS,
   TASK_TRANSITIONS,
 } from '../common/constants/task.constants';
+import {
+  EXECUTION_MODES,
+  PLAN_ERRORS,
+  PLAN_STATUS,
+  PLAN_TASK_STATUS,
+} from '../plans/plan.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -92,6 +98,7 @@ type TaskRow = {
   mainAgentId: string | null;
   mainAgentInstanceId: string | null;
   managedMode: boolean;
+  executionMode: string;
   backgroundDocs: Prisma.JsonValue | null;
   createdBy: string;
   createdAt: Date;
@@ -137,8 +144,8 @@ type TransitionOptions = {
   fields?: Prisma.TaskUpdateManyMutationInput;
   /** task_events.metadata（reject 写 { reason }）。 */
   metadata?: Prisma.InputJsonValue;
-  /** CAS 前业务前置校验（仅 start：团队非空 + 主 Agent 已确定）。 */
-  preflight?: (task: TaskRow) => void;
+  /** CAS 前业务前置校验（start：团队非空 + 主 Agent 已确定；tc-flow 追加 plan 模式分支校验，可异步查表）。 */
+  preflight?: (task: TaskRow) => void | Promise<void>;
   /** 事务内副作用（仅 archive：sessions 全部置 archived）。 */
   afterCommit?: (tx: Prisma.TransactionClient) => Promise<void>;
   /** 群聊系统消息文案（10 篇 §8.1，落库 task_group 频道 senderType=system）；不传则不生成。 */
@@ -218,6 +225,8 @@ export class TasksService implements OnModuleInit {
           mainAgentId: null,
           mainAgentInstanceId: null,
           managedMode: dto.managedMode ?? false,
+          // 执行模式（tc-flow）：缺省 direct（迁移列 @default("direct") 兜底）；与托管模式独立生效
+          executionMode: dto.executionMode ?? EXECUTION_MODES.direct,
           backgroundDocs: (dto.backgroundDocs ?? []) as Prisma.InputJsonValue,
           createdBy: userId,
           version: 0,
@@ -465,6 +474,70 @@ export class TasksService implements OnModuleInit {
   }
 
   /**
+   * 切换任务执行模式（tc-flow）：
+   * - plan → direct 直接切换（计划保持现状）；
+   * - direct → plan 要求该任务已有 approved 执行计划（否则 409 PLAN_NOT_APPROVED，防绕过）；
+   * - 任务已 in_progress 时切换 → 事务内顺带计划置 executing（执行态与计划态一致）。
+   * 执行模式与托管模式（managedMode）独立生效、互不干扰。
+   */
+  async updateExecutionMode(id: string, mode: string) {
+    if (mode !== EXECUTION_MODES.direct && mode !== EXECUTION_MODES.plan) {
+      throw new BadRequestException(`非法执行模式：${mode}`);
+    }
+    const task = await this.prisma.task.findUnique({
+      where: { id },
+      include: TASK_AGENTS_INCLUDE,
+    });
+    if (!task) {
+      throw new NotFoundException({
+        code: TASK_ERRORS.TASK_NOT_FOUND,
+        message: '任务不存在',
+      });
+    }
+    if (task.executionMode === mode) {
+      return this.toTaskDto(task);
+    }
+    if (mode === EXECUTION_MODES.plan) {
+      const plan = await this.prisma.plan.findUnique({
+        where: { taskId: id },
+        select: { status: true },
+      });
+      // direct→plan：计划须已批准（approved）或正在执行（executing——曾批准且已启动，回切无需重新评审；
+      // 消除「plan→direct→plan」切换死锁：executing 被 plan_submit 覆盖重提拒之门外，本校验再拒则无法恢复）
+      if (
+        !plan ||
+        (plan.status !== PLAN_STATUS.approved &&
+          plan.status !== PLAN_STATUS.executing)
+      ) {
+        throw new ConflictException({
+          code: PLAN_ERRORS.PLAN_NOT_APPROVED,
+          message: '切换为执行计划模式前，请先 plan_submit 提交计划并评审通过',
+        });
+      }
+      if (task.status === TASK_STATUS.in_progress) {
+        const updated = await this.prisma.$transaction(async (tx) => {
+          await tx.plan.update({
+            where: { taskId: id },
+            data: { status: PLAN_STATUS.executing },
+          });
+          return tx.task.update({
+            where: { id },
+            data: { executionMode: mode },
+            include: TASK_AGENTS_INCLUDE,
+          });
+        });
+        return this.toTaskDto(updated);
+      }
+    }
+    const updated = await this.prisma.task.update({
+      where: { id },
+      data: { executionMode: mode },
+      include: TASK_AGENTS_INCLUDE,
+    });
+    return this.toTaskDto(updated);
+  }
+
+  /**
    * 团队调整（14 篇 §5.3，FR-02；角色/实例分离 T2）：`{addInstances[], removeInstanceIds[]}`。
    *
    * 时间窗：仅 pending/in_progress 合法（与 13 篇 §7.4 联动），否则 409。
@@ -474,10 +547,22 @@ export class TasksService implements OnModuleInit {
    *                    主实例被移除时清空 mainAgentInstanceId（同步 mainAgentId）。
    *                    产出物保留（本版不动 artifacts）。
    * 群聊联动：task_group 频道写 system 消息（10 篇 §8.3 文案）+ 广播 chat.message.new（T9 模式）。
+   * 审计：team 变更写 task_event（team_add/team_remove，actorType/actorId=userId 或 opts 确认方）。
    * 广播 team.changed 按实例：{taskId, action: add|remove, instanceId, agentId, alias}，
    * scope={type:'task', id}（09 篇 §4.2）。
    */
-  async updateTeam(id: string, dto: UpdateTeamDto, userId: string) {
+  async updateTeam(
+    id: string,
+    dto: UpdateTeamDto,
+    userId?: string,
+    opts?: {
+      /** 审计 actorType/actorId（MCP 确认门传 agent/主实例；缺省回退 user/userId）。 */
+      actorType?: string;
+      actorId?: string;
+      /** 确认方名称：系统消息标注「经主 Agent 申请、<confirmedBy> 确认」。 */
+      confirmedBy?: string;
+    },
+  ) {
     const task = await this.prisma.task.findUnique({
       where: { id },
       include: TASK_AGENTS_INCLUDE,
@@ -543,6 +628,9 @@ export class TasksService implements OnModuleInit {
         });
       }
       const messages: SysMessageRow[] = [];
+      const confirmedSuffix = opts?.confirmedBy
+        ? `（经主 Agent 申请、${opts.confirmedBy} 确认）`
+        : '';
       for (const inst of created) {
         messages.push(
           await tx.message.create({
@@ -552,7 +640,7 @@ export class TasksService implements OnModuleInit {
               senderType: SENDER_TYPE.system,
               senderId: null,
               content: {
-                text: `${inst.alias ?? inst.agentId} 已加入团队`,
+                text: `${inst.alias ?? inst.agentId} 已加入团队${confirmedSuffix}`,
                 parts: [],
               } as Prisma.InputJsonValue,
               mentions: null,
@@ -579,6 +667,40 @@ export class TasksService implements OnModuleInit {
             },
           }),
         );
+      }
+      // 审计：team 变更写 task_event（actor=userId 或确认门 opts 确认方）
+      const actorType = opts?.actorType ?? ACTOR_TYPE.user;
+      const actorId = opts?.actorId ?? userId;
+      if (created.length > 0) {
+        await tx.taskEvent.create({
+          data: {
+            id: await this.idGen.nextId(ID_PREFIX.taskEvent),
+            taskId: id,
+            eventType: 'team_add',
+            fromStatus: null,
+            toStatus: null,
+            actorType,
+            actorId,
+            metadata: {
+              agentIds: created.map((c) => c.agentId),
+              confirmedBy: opts?.confirmedBy ?? null,
+            } as Prisma.InputJsonValue,
+          },
+        });
+      }
+      if (toRemove.length > 0) {
+        await tx.taskEvent.create({
+          data: {
+            id: await this.idGen.nextId(ID_PREFIX.taskEvent),
+            taskId: id,
+            eventType: 'team_remove',
+            fromStatus: null,
+            toStatus: null,
+            actorType,
+            actorId,
+            metadata: { instanceIds: toRemove } as Prisma.InputJsonValue,
+          },
+        });
       }
       return { sysMessages: messages, created };
     });
@@ -638,11 +760,14 @@ export class TasksService implements OnModuleInit {
     reason?: string,
   ): TransitionOptions {
     switch (action) {
-      case 'start':
+      case 'start': {
+        // tc-flow：plan 模式启动前置通过后，事务内将计划置 executing（approved → executing 唯一写入点之一）；
+        // 执行模式与托管模式（managedMode）独立生效、互不干扰
+        let planStarted = false;
         return {
           eventType: 'status_change',
           fields: { startedAt: new Date() },
-          preflight: (task) => {
+          preflight: async (task) => {
             if (this.teamInstancesOf(task.taskAgents).length === 0) {
               throw new BadRequestException({
                 code: TASK_ERRORS.TASK_EMPTY_TEAM,
@@ -655,6 +780,19 @@ export class TasksService implements OnModuleInit {
                 message: '主 Agent 实例未确定，请先指定主 Agent 后再启动',
               });
             }
+            if (task.executionMode === EXECUTION_MODES.plan) {
+              const plan = await this.prisma.plan.findUnique({
+                where: { taskId: task.id },
+                select: { status: true },
+              });
+              if (!plan || plan.status !== PLAN_STATUS.approved) {
+                throw new BadRequestException({
+                  code: PLAN_ERRORS.PLAN_NOT_APPROVED,
+                  message: '执行计划未评审通过，请先 plan_submit 提交计划并评审通过后再启动',
+                });
+              }
+              planStarted = true;
+            }
           },
           // T4：启动时全部 created 会话置 active（active 全库唯一写入点；Phase 4 worker 分派依赖）
           afterCommit: async (tx) => {
@@ -662,6 +800,12 @@ export class TasksService implements OnModuleInit {
               where: { taskId: id, status: SESSION_STATUS.created },
               data: { status: SESSION_STATUS.active },
             });
+            if (planStarted) {
+              await tx.plan.update({
+                where: { taskId: id },
+                data: { status: PLAN_STATUS.executing },
+              });
+            }
           },
           // 10 篇 §8.1：群聊系统消息含主实例名（FR-07/08）
           sysMessage: ({ task, mainAgentName }) =>
@@ -688,37 +832,75 @@ export class TasksService implements OnModuleInit {
             return parts.join('。');
           },
         };
+      }
       case 'mark-pending-review':
         return {
           eventType: 'status_change',
           fields: { pendingReviewAt: new Date() },
+          // tc-flow：plan 模式校验全部计划子任务已完成（Metis MAJOR-2：防止带未完成任务提交验收）
+          preflight: async (task) => {
+            if (task.executionMode !== EXECUTION_MODES.plan) {
+              return;
+            }
+            const incomplete = await this.prisma.planTask.findFirst({
+              where: {
+                plan: { taskId: task.id },
+                status: {
+                  in: [PLAN_TASK_STATUS.pending, PLAN_TASK_STATUS.in_progress],
+                },
+              },
+              select: { id: true },
+            });
+            if (incomplete) {
+              throw new ConflictException({
+                code: PLAN_ERRORS.PLAN_TASKS_INCOMPLETE,
+                message: '执行计划仍有子任务未完成，请先完成全部计划子任务后再提交验收',
+              });
+            }
+          },
           // 10 篇 §8.1：提示成员核对产出（FR-04）
           sysMessage: () => '任务已提交待验收',
         };
-      case 'accept':
+      case 'accept': {
+        // tc-flow：plan 模式且存在计划 → 验收通过后计划置 completed（Oracle B3）
+        let planCompletable = false;
         return {
           eventType: 'accept',
           fields: { completedAt: new Date() },
+          preflight: async (task) => {
+            if (task.executionMode === EXECUTION_MODES.plan) {
+              const plan = await this.prisma.plan.findUnique({
+                where: { taskId: task.id },
+                select: { id: true },
+              });
+              planCompletable = Boolean(plan);
+            }
+          },
           afterCommit: async (tx) => {
             // 12 篇 §7：accept 事务内标记该任务所有 Artifact 当前版本 accepted_flag=true（基线锁定）
             const artifacts = await tx.artifact.findMany({
               where: { taskId: id },
               select: { id: true, currentVersion: true },
             });
-            if (artifacts.length === 0) {
-              return;
+            if (artifacts.length > 0) {
+              // (artifactId, version) 精确组合匹配 currentVersion（@@unique 保证组合唯一，
+              // 不能用「in 列表」——会误标非当前版本）
+              await tx.artifactVersion.updateMany({
+                where: {
+                  OR: artifacts.map((a) => ({
+                    artifactId: a.id,
+                    version: a.currentVersion,
+                  })),
+                },
+                data: { acceptedFlag: true },
+              });
             }
-            // (artifactId, version) 精确组合匹配 currentVersion（@@unique 保证组合唯一，
-            // 不能用「in 列表」——会误标非当前版本）
-            await tx.artifactVersion.updateMany({
-              where: {
-                OR: artifacts.map((a) => ({
-                  artifactId: a.id,
-                  version: a.currentVersion,
-                })),
-              },
-              data: { acceptedFlag: true },
-            });
+            if (planCompletable) {
+              await tx.plan.update({
+                where: { taskId: id },
+                data: { status: PLAN_STATUS.completed },
+              });
+            }
           },
           // 10 篇 §8.1：强调 accepted_flag 基线锁定（FR-04）
           sysMessage: () => '任务已验收完成，产出物基线已锁定',
@@ -728,6 +910,7 @@ export class TasksService implements OnModuleInit {
           privateMessage: () =>
             '任务已验收完成，产出物基线已锁定。请在后续工作中调用 vteam MCP 的 memory_save 工具（参数 {taskId, selfInstanceId, level: "task", content, tags?}）总结本任务执行中的经验、教训与关键决策，沉淀为任务级记忆；如有跨任务复用价值，另存一条 level=project 记忆。',
         };
+      }
       case 'reject':
         return {
           eventType: 'reject',
@@ -739,19 +922,37 @@ export class TasksService implements OnModuleInit {
               ? `任务被驳回，请补齐产出后重新提交。驳回原因：${reason}`
               : '任务被驳回，请补齐产出后重新提交',
         };
-      case 'archive':
+      case 'archive': {
+        // tc-flow：plan 模式且存在计划 → 归档后计划置 completed（Oracle B3）
+        let planCompletable = false;
         return {
           eventType: 'archive',
           fields: { archivedAt: new Date() },
+          preflight: async (task) => {
+            if (task.executionMode === EXECUTION_MODES.plan) {
+              const plan = await this.prisma.plan.findUnique({
+                where: { taskId: task.id },
+                select: { id: true },
+              });
+              planCompletable = Boolean(plan);
+            }
+          },
           afterCommit: async (tx) => {
             await tx.session.updateMany({
               where: { taskId: id },
               data: { status: SESSION_STATUS.archived },
             });
+            if (planCompletable) {
+              await tx.plan.update({
+                where: { taskId: id },
+                data: { status: PLAN_STATUS.completed },
+              });
+            }
           },
           // 10 篇 §8.1：明确内容保留（FR-05）；记忆管理（mem-trigger）补充提示：任务级记忆已随验收沉淀
           sysMessage: () => '任务已归档，历史可回看。任务级记忆已随验收沉淀（未总结不影响归档）',
         };
+      }
       default:
         throw new Error(`未知任务迁移动作：${action}`);
     }
@@ -876,7 +1077,7 @@ export class TasksService implements OnModuleInit {
         details: { from, to, current: task.status },
       });
     }
-    opts.preflight?.(task);
+    await opts.preflight?.(task);
 
     // 系统消息落库目标：任务群聊频道（task_group，10 篇 §8.1；T8 updateTeam 同模式）
     const channel = await this.prisma.chatChannel.findFirst({
@@ -1046,6 +1247,7 @@ export class TasksService implements OnModuleInit {
       mainAgentId: task.mainAgentId,
       mainAgentInstanceId: task.mainAgentInstanceId ?? null,
       managedMode: task.managedMode ?? false,
+      executionMode: task.executionMode ?? EXECUTION_MODES.direct,
       backgroundDocs: task.backgroundDocs ?? [],
       teamAgentIds: (task.taskAgents ?? [])
         .filter((ta) => !ta.removedAt)

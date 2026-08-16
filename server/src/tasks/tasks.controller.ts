@@ -20,6 +20,7 @@ import {
 import { CreateTaskDto } from './dto/create-task.dto';
 import { QueryTasksDto } from './dto/query-tasks.dto';
 import { RejectTaskDto } from './dto/reject-task.dto';
+import { UpdateExecutionModeDto } from './dto/update-execution-mode.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { TasksService } from './tasks.service';
@@ -110,6 +111,21 @@ export class TasksController {
     @Body() dto: UpdateTeamDto,
   ) {
     return this.tasksService.updateTeam(id, dto, user.id);
+  }
+
+  /**
+   * 切换任务执行模式（tc-flow）：direct ↔ plan。
+   * PATCH /api/v1/tasks/:id/execution-mode
+   */
+  @Patch('tasks/:id/execution-mode')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('tasks.edit')
+  @ApiOperation({ summary: '切换任务执行模式（direct/plan）' })
+  updateExecutionMode(
+    @Param('id') id: string,
+    @Body() dto: UpdateExecutionModeDto,
+  ) {
+    return this.tasksService.updateExecutionMode(id, dto.mode);
   }
 
   /**

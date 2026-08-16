@@ -2,6 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsIn,
   IsNotEmpty,
   IsObject,
   IsOptional,
@@ -11,6 +12,7 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import { PERSONA_LIBRARY } from '../persona.constants';
 import { ToolEffectDto } from './create-agent.dto';
 
 /**
@@ -34,6 +36,16 @@ export class UpdateAgentDto {
   @IsOptional()
   @IsString()
   prompt?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Agent 性格（PERSONA_LIBRARY 预设 key，null=清除性格；第五维协作风格，不改变权限/工具边界）',
+    enum: Object.keys(PERSONA_LIBRARY),
+    example: 'strict',
+  })
+  @IsOptional()
+  @IsIn(Object.keys(PERSONA_LIBRARY))
+  persona?: string | null;
 
   @ApiPropertyOptional({
     description: '勾选技能 id 列表（重建 agent_skills 关联）',

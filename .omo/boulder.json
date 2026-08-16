@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "active_work_id": "memory-management-a990d997",
+  "active_work_id": "vteam-team-collaboration-d46db5dd",
   "works": {
     "swagger-mcp-915f2505": {
       "work_id": "swagger-mcp-915f2505",
@@ -113,71 +113,192 @@
           "elapsed_ms": 504301
         }
       }
+    },
+    "vteam-team-collaboration-d46db5dd": {
+      "work_id": "vteam-team-collaboration-d46db5dd",
+      "active_plan": "/data/git-project/aiagents/.omo/plans/vteam-team-collaboration.md",
+      "plan_name": "vteam-team-collaboration",
+      "status": "active",
+      "started_at": "2026-08-16T01:29:34.236Z",
+      "updated_at": "2026-08-16T02:49:14.959Z",
+      "session_ids": [
+        "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O"
+      ],
+      "session_origins": {
+        "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "server 启动 + 登录拿 token → `GET /api/v1/plans?taskId=` 返回计划查询结构",
+          "session_id": "opencode:ses_ff796fee3ffeRlQqPnoM8N1vBW",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "started_at": "2026-08-16T01:40:24.180Z",
+          "ended_at": "2026-08-16T02:42:26.213Z",
+          "elapsed_ms": 3722033,
+          "status": "completed",
+          "updated_at": "2026-08-16T02:42:26.213Z"
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "task_title": "tc-mcp-plan：平台 MCP plan_submit / plan_review / plan_task_transition",
+          "session_id": "opencode:ses_ff7c3ce25ffebQcI7wn8UH3g2b",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-08-16T01:56:45.320Z",
+          "started_at": "2026-08-16T01:55:40.366Z",
+          "status": "completed",
+          "ended_at": "2026-08-16T01:56:45.320Z",
+          "elapsed_ms": 64954
+        },
+        "todo:3": {
+          "task_key": "todo:3",
+          "task_label": "3",
+          "task_title": "tc-mcp-l1：平台 MCP team_view / my_profile（团队感知，只读）",
+          "session_id": "opencode:ses_ff7b69920ffeuDtAC13UV7EfON",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-08-16T02:03:15.051Z",
+          "started_at": "2026-08-16T02:02:20.315Z",
+          "status": "completed",
+          "ended_at": "2026-08-16T02:03:15.051Z",
+          "elapsed_ms": 54736
+        },
+        "todo:5": {
+          "task_key": "todo:5",
+          "task_label": "5",
+          "task_title": "tc-review：双时点评审流程 + PlansController（用户评审入口）",
+          "session_id": "opencode:ses_ff7b09d7fffehGMlfzFn2bbBcs",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-08-16T02:14:30.349Z",
+          "started_at": "2026-08-16T02:13:44.640Z",
+          "status": "completed",
+          "ended_at": "2026-08-16T02:14:30.349Z",
+          "elapsed_ms": 45709
+        },
+        "todo:8": {
+          "task_key": "todo:8",
+          "task_label": "8",
+          "task_title": "tc-auth：L2 自治——主 Agent 申请增员（question_confirm 确认门）",
+          "session_id": "opencode:ses_ff7a649ccffePVVCQg5ukG57F1",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-08-16T02:31:01.610Z",
+          "started_at": "2026-08-16T02:30:14.779Z",
+          "status": "completed",
+          "ended_at": "2026-08-16T02:31:01.610Z",
+          "elapsed_ms": 46831
+        },
+        "final-wave:f1": {
+          "task_key": "final-wave:f1",
+          "task_label": "F1",
+          "task_title": "Plan compliance audit",
+          "session_id": "opencode:ses_ff7891f66ffeOZs9CL9hEzWg6w",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "started_at": "2026-08-16T02:35:33.104Z",
+          "status": "completed",
+          "updated_at": "2026-08-16T02:49:14.959Z",
+          "ended_at": "2026-08-16T02:49:14.959Z",
+          "elapsed_ms": 821855
+        }
+      }
     }
   },
-  "active_plan": "/data/git-project/aiagents/.omo/plans/memory-management.md",
-  "started_at": "2026-08-15T14:57:52.101Z",
+  "active_plan": "/data/git-project/aiagents/.omo/plans/vteam-team-collaboration.md",
+  "started_at": "2026-08-16T01:29:34.236Z",
   "status": "active",
-  "updated_at": "2026-08-15T15:35:32.347Z",
+  "updated_at": "2026-08-16T02:49:14.959Z",
   "session_ids": [
     "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O"
   ],
   "session_origins": {
     "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O": "direct"
   },
-  "plan_name": "memory-management",
+  "plan_name": "vteam-team-collaboration",
   "task_sessions": {
     "todo:1": {
       "task_key": "todo:1",
       "task_label": "1",
-      "task_title": "server 启动 + 登录拿 token → `GET /api/v1/memories` 返回 `{items,total,page,pageSize}`",
-      "session_id": "opencode:ses_ff9fb4120ffevJqrhT3QrjOwHv",
+      "task_title": "server 启动 + 登录拿 token → `GET /api/v1/plans?taskId=` 返回计划查询结构",
+      "session_id": "opencode:ses_ff796fee3ffeRlQqPnoM8N1vBW",
       "agent": "Sisyphus-Junior",
       "category": "deep",
-      "started_at": "2026-08-15T15:04:07.859Z",
-      "ended_at": "2026-08-15T15:27:56.492Z",
-      "elapsed_ms": 1428633,
+      "started_at": "2026-08-16T01:40:24.180Z",
+      "ended_at": "2026-08-16T02:42:26.213Z",
+      "elapsed_ms": 3722033,
       "status": "completed",
-      "updated_at": "2026-08-15T15:27:56.492Z"
+      "updated_at": "2026-08-16T02:42:26.213Z"
     },
     "todo:2": {
       "task_key": "todo:2",
       "task_label": "2",
-      "task_title": "mem-mcp：平台 MCP memory_save / memory_search 工具",
-      "session_id": "opencode:ses_ffa0abae7ffeMaTVv8wx6fTRix",
+      "task_title": "tc-mcp-plan：平台 MCP plan_submit / plan_review / plan_task_transition",
+      "session_id": "opencode:ses_ff7c3ce25ffebQcI7wn8UH3g2b",
       "agent": "Sisyphus-Junior",
       "category": "deep",
-      "updated_at": "2026-08-15T15:12:51.716Z",
-      "started_at": "2026-08-15T15:11:35.550Z",
+      "updated_at": "2026-08-16T01:56:45.320Z",
+      "started_at": "2026-08-16T01:55:40.366Z",
       "status": "completed",
-      "ended_at": "2026-08-15T15:12:51.716Z",
-      "elapsed_ms": 76166
+      "ended_at": "2026-08-16T01:56:45.320Z",
+      "elapsed_ms": 64954
     },
-    "todo:6": {
-      "task_key": "todo:6",
-      "task_label": "6",
-      "task_title": "mem-web：记忆管理页面 + 导航注册",
-      "session_id": "opencode:ses_ffa040432ffeRhtVAtKqTxqbuN",
+    "todo:3": {
+      "task_key": "todo:3",
+      "task_label": "3",
+      "task_title": "tc-mcp-l1：平台 MCP team_view / my_profile（团队感知，只读）",
+      "session_id": "opencode:ses_ff7b69920ffeuDtAC13UV7EfON",
       "agent": "Sisyphus-Junior",
-      "category": "visual-engineering",
-      "updated_at": "2026-08-15T15:22:13.331Z",
-      "started_at": "2026-08-15T15:19:35.993Z",
+      "category": "deep",
+      "updated_at": "2026-08-16T02:03:15.051Z",
+      "started_at": "2026-08-16T02:02:20.315Z",
       "status": "completed",
-      "ended_at": "2026-08-15T15:22:13.331Z",
-      "elapsed_ms": 157338
+      "ended_at": "2026-08-16T02:03:15.051Z",
+      "elapsed_ms": 54736
+    },
+    "todo:5": {
+      "task_key": "todo:5",
+      "task_label": "5",
+      "task_title": "tc-review：双时点评审流程 + PlansController（用户评审入口）",
+      "session_id": "opencode:ses_ff7b09d7fffehGMlfzFn2bbBcs",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-08-16T02:14:30.349Z",
+      "started_at": "2026-08-16T02:13:44.640Z",
+      "status": "completed",
+      "ended_at": "2026-08-16T02:14:30.349Z",
+      "elapsed_ms": 45709
+    },
+    "todo:8": {
+      "task_key": "todo:8",
+      "task_label": "8",
+      "task_title": "tc-auth：L2 自治——主 Agent 申请增员（question_confirm 确认门）",
+      "session_id": "opencode:ses_ff7a649ccffePVVCQg5ukG57F1",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-08-16T02:31:01.610Z",
+      "started_at": "2026-08-16T02:30:14.779Z",
+      "status": "completed",
+      "ended_at": "2026-08-16T02:31:01.610Z",
+      "elapsed_ms": 46831
     },
     "final-wave:f1": {
       "task_key": "final-wave:f1",
       "task_label": "F1",
       "task_title": "Plan compliance audit",
-      "session_id": "opencode:ses_ffa040432ffeRhtVAtKqTxqbuN",
+      "session_id": "opencode:ses_ff7891f66ffeOZs9CL9hEzWg6w",
       "agent": "Sisyphus-Junior",
-      "category": "visual-engineering",
-      "started_at": "2026-08-15T15:27:08.046Z",
+      "category": "deep",
+      "started_at": "2026-08-16T02:35:33.104Z",
       "status": "completed",
-      "updated_at": "2026-08-15T15:35:32.347Z",
-      "ended_at": "2026-08-15T15:35:32.347Z",
-      "elapsed_ms": 504301
+      "updated_at": "2026-08-16T02:49:14.959Z",
+      "ended_at": "2026-08-16T02:49:14.959Z",
+      "elapsed_ms": 821855
     }
   },
   "agent": "atlas"

@@ -11,6 +11,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { TASK_PRIORITY } from '../../common/constants/task.constants';
+import { EXECUTION_MODES } from '../../plans/plan.constants';
 
 /**
  * 团队成员实例输入（FR-08 角色/实例分离 T2）：
@@ -100,6 +101,16 @@ export class CreateTaskDto {
   @IsOptional()
   @IsBoolean()
   managedMode?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      '执行模式（direct/plan，默认 direct）：plan 模式按已评审通过的执行计划推进任务，direct 轻量直达；与托管模式独立生效、互不干扰',
+    enum: Object.values(EXECUTION_MODES),
+    default: EXECUTION_MODES.direct,
+  })
+  @IsOptional()
+  @IsIn(Object.values(EXECUTION_MODES))
+  executionMode?: string;
 
   @ApiPropertyOptional({
     description: '背景文档元数据数组（FR-06，存 tasks.background_docs Json）',

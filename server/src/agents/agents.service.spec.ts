@@ -193,6 +193,7 @@ describe('AgentsService', () => {
           'prompt',
           'baseAgentId',
           'defaultModelId',
+          'persona',
           'ackMessage',
           'permissionScope',
           'skillIds',
@@ -356,6 +357,43 @@ describe('AgentsService', () => {
       });
 
       expect(prisma.agentSkill.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('persona 落库：DTO 传 persona 时写入 agents.persona，不改写 prompt（运行时拼接）', async () => {
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      prisma.agent.create.mockResolvedValue({ ...customRow, persona: 'strict' });
+
+      await service.create('u_admin', {
+        name: '数据分析师',
+        type: 'custom',
+        prompt: 'prompt-custom',
+        persona: 'strict',
+      });
+
+      expect(prisma.agent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            persona: 'strict',
+            prompt: 'prompt-custom', // prompt 原样，性格段不写入 prompt
+          }),
+        }),
+      );
+    });
+
+    it('create 不传 persona：落库 persona=null（缺省无性格，向后兼容）', async () => {
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      prisma.agent.create.mockResolvedValue(customRow);
+
+      await service.create('u_admin', {
+        name: '数据分析师',
+        type: 'custom',
+      });
+
+      expect(prisma.agent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ persona: null }),
+        }),
+      );
     });
   });
 
@@ -718,6 +756,38 @@ describe('AgentsService', () => {
 
       await expect(service.update('a_nonexistent', { prompt: 'x' })).rejects.toMatchObject(
         { response: { code: AGENT_ERRORS.AGENT_NOT_FOUND } },
+      );
+    });
+
+    it('persona 更新：传 persona 写入 agents.persona，null 清除性格（不触碰 prompt）', async () => {
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+
+      // 第一次 update：设置性格
+      prisma.agent.findUnique
+        .mockResolvedValueOnce(customRow)
+        .mockResolvedValueOnce({ ...customRow, persona: 'innovative' });
+      prisma.agent.update.mockResolvedValue({ ...customRow, persona: 'innovative' });
+
+      await service.update('a_0000000005', { persona: 'innovative' });
+
+      expect(prisma.agent.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ persona: 'innovative' }),
+        }),
+      );
+
+      // 第二次 update：persona=null → 清除性格（UpdateAgentDto 允许 null 表示清空）
+      prisma.agent.findUnique
+        .mockResolvedValueOnce(customRow)
+        .mockResolvedValueOnce({ ...customRow, persona: null });
+      prisma.agent.update.mockResolvedValue({ ...customRow, persona: null });
+
+      await service.update('a_0000000005', { persona: null });
+
+      expect(prisma.agent.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ persona: null }),
+        }),
       );
     });
   });

@@ -23,6 +23,13 @@ export const AGENT_QUESTION_ID_PREFIX = 'aq';
 /** pending 惰性过期阈值 ms（30min：超时未回复的 question/权限视为过期，GET /questions 时自动终态收敛）。 */
 export const QUESTION_PENDING_TTL_MS = 30 * 60 * 1000;
 
+/**
+ * 平台侧创建 question 的 source 标记（AgentQuestion.content.source='platform'）。
+ * 平台 question（如主 Agent 申请增员的确认门）不经 worker 转发——serve 无该 requestId
+ * 必 404→expire，reply/confirmByAgent 据此短路 forwardReply（Oracle R2 旁路）。
+ */
+export const PLATFORM_QUESTION_SOURCE = 'platform';
+
 /** 权限确认 response 枚举（对齐 serve replyPermission 契约）。 */
 export const PERMISSION_RESPONSES = ['once', 'always', 'reject'] as const;
 export type PermissionResponse = (typeof PERMISSION_RESPONSES)[number];
