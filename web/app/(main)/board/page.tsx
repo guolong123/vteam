@@ -114,6 +114,7 @@ interface TaskItem {
   description: string | null;
   priority: string;
   status: TaskApiStatus;
+  executionMode?: "direct" | "plan";
   mainAgentId: string | null;
   backgroundDocs: unknown[];
   teamAgentIds: string[];
@@ -266,7 +267,41 @@ function TaskCard({ task, onOpen, projectName }: TaskCardProps) {
             {task.id}
           </span>
         </div>
-        {renderStatusBadge(toBoardStatus(task.status))}
+        <div style={{ display: "flex", alignItems: "center", gap: space.xs }}>
+          {renderStatusBadge(toBoardStatus(task.status))}
+          {task.executionMode === "plan" && (
+            <span
+              data-testid="plan-badge"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: space.xs,
+                padding: `${space.xs - 1}px ${space.sm + 1}px`,
+                borderRadius: radius.pill,
+                backgroundColor: "#EFF6FF",
+                border: "1px solid #BFDBFE",
+                color: "#2563EB",
+                fontSize: fontSize.xs,
+                fontWeight: 500,
+                lineHeight: 1.4,
+                whiteSpace: "nowrap",
+                ...baseFont,
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: 5,
+                  height: 5,
+                  borderRadius: "50%",
+                  backgroundColor: "#2563EB",
+                  flexShrink: 0,
+                }}
+              />
+              计划
+            </span>
+          )}
+        </div>
       </div>
 
       {/* 标题 + 描述 */}

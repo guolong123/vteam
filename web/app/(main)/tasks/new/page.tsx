@@ -207,6 +207,13 @@ type Priority = (typeof priorities)[number];
 /** 表单优先级（中文，原型文案）→ API 优先级（CreateTaskDto：high/medium/low） */
 const PRIORITY_API: Record<Priority, string> = { 低: "low", 中: "medium", 高: "high" };
 
+/* ------------------------------ 执行模式（direct/plan，默认 direct） ------------------------------ */
+type ExecutionMode = "direct" | "plan";
+const executionModes: { value: ExecutionMode; label: string; desc: string }[] = [
+  { value: "direct", label: "轻量执行（默认）", desc: "直接启动，无需预先制定计划" },
+  { value: "plan", label: "计划驱动", desc: "任务启动前主 Agent 产出执行计划，评审通过后实施" },
+];
+
 /* ================================ 左栏：任务表单 ================================ */
 function TaskForm({
   title,
@@ -217,6 +224,8 @@ function TaskForm({
   onPriorityChange,
   managedMode,
   onManagedModeChange,
+  executionMode,
+  onExecutionModeChange,
   titleError,
   docs,
   onRemoveDoc,
@@ -233,6 +242,8 @@ function TaskForm({
   onPriorityChange: (v: Priority) => void;
   managedMode: boolean;
   onManagedModeChange: (v: boolean) => void;
+  executionMode: ExecutionMode;
+  onExecutionModeChange: (v: ExecutionMode) => void;
   titleError: string | null;
   docs: BackgroundDoc[];
   onRemoveDoc: (url: string) => void;
@@ -565,6 +576,30 @@ function TaskForm({
             </span>
           </div>
         </div>
+      </div>
+
+      {/* 执行模式选择 */}
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        <label htmlFor="execution-mode-select" style={fieldLabel}>
+          执行模式
+        </label>
+        <select
+          id="execution-mode-select"
+          data-testid="execution-mode-select"
+          value={executionMode}
+          onChange={(e) => onExecutionModeChange(e.target.value as ExecutionMode)}
+          aria-label="执行模式"
+          style={{ ...inputBase, width: 240, cursor: "pointer" }}
+        >
+          {executionModes.map((m) => (
+            <option key={m.value} value={m.value}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+        <span style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>
+          {executionModes.find((m) => m.value === executionMode)?.desc}
+        </span>
       </div>
 
       {/* 提示条 */}
@@ -1517,6 +1552,7 @@ export default function TaskCreatePage() {
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<Priority>("中");
   const [managedMode, setManagedMode] = useState(false);
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>("direct");
 
   // 背景文档：真实上传列表（POST /uploads 成功后入列，禁止预置假数据）
   const [backgroundDocs, setBackgroundDocs] = useState<BackgroundDoc[]>([]);
@@ -1786,8 +1822,8 @@ export default function TaskCreatePage() {
           //（决策 1：默认主 Agent=项目经理；用户改主实例别名不影响——按 agent 映射；自定义 agent 直接用其 id）
           mainAgentId: mainInstance ? instanceAgentId(mainInstance) : undefined,
           backgroundDocs: backgroundDocs.map((d) => ({ name: d.name, url: d.url })),
-          // 托管模式：开启后成员 question/permission 请求改由主 Agent 确认（不弹窗给用户）
           managedMode,
+          executionMode,
         }
       );
       setCreated(true);
@@ -1833,6 +1869,8 @@ export default function TaskCreatePage() {
           onPriorityChange={setPriority}
           managedMode={managedMode}
           onManagedModeChange={setManagedMode}
+          executionMode={executionMode}
+          onExecutionModeChange={setExecutionMode}
           titleError={titleError}
           docs={backgroundDocs}
           onRemoveDoc={handleRemoveDoc}

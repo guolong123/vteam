@@ -118,29 +118,33 @@
       "work_id": "vteam-team-collaboration-d46db5dd",
       "active_plan": "/data/git-project/aiagents/.omo/plans/vteam-team-collaboration.md",
       "plan_name": "vteam-team-collaboration",
-      "status": "active",
+      "status": "completed",
       "started_at": "2026-08-16T01:29:34.236Z",
-      "updated_at": "2026-08-16T02:49:14.959Z",
+      "updated_at": "2026-08-16T12:21:57.166Z",
+      "ended_at": "2026-08-16T11:10:00.000Z",
+      "elapsed_ms": 34825766,
       "session_ids": [
-        "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O"
+        "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O",
+        "opencode:ses_ff5b642d1ffe1UYPhuPCTFQloD"
       ],
       "session_origins": {
-        "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O": "direct"
+        "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O": "direct",
+        "opencode:ses_ff5b642d1ffe1UYPhuPCTFQloD": "appended"
       },
       "agent": "atlas",
       "task_sessions": {
         "todo:1": {
           "task_key": "todo:1",
           "task_label": "1",
-          "task_title": "server 启动 + 登录拿 token → `GET /api/v1/plans?taskId=` 返回计划查询结构",
-          "session_id": "opencode:ses_ff796fee3ffeRlQqPnoM8N1vBW",
+          "task_title": "登录 → agents 页 persona-select 可见可交互（选项含未配置+5 性格）",
+          "session_id": "opencode:ses_ff57d9ff5ffedIvrFKpVt1n4v3",
           "agent": "Sisyphus-Junior",
           "category": "deep",
           "started_at": "2026-08-16T01:40:24.180Z",
-          "ended_at": "2026-08-16T02:42:26.213Z",
-          "elapsed_ms": 3722033,
+          "ended_at": "2026-08-16T12:21:57.166Z",
+          "elapsed_ms": 38492986,
           "status": "completed",
-          "updated_at": "2026-08-16T02:42:26.213Z"
+          "updated_at": "2026-08-16T12:21:57.166Z"
         },
         "todo:2": {
           "task_key": "todo:2",
@@ -212,28 +216,30 @@
   },
   "active_plan": "/data/git-project/aiagents/.omo/plans/vteam-team-collaboration.md",
   "started_at": "2026-08-16T01:29:34.236Z",
-  "status": "active",
-  "updated_at": "2026-08-16T02:49:14.959Z",
+  "status": "completed",
+  "updated_at": "2026-08-16T12:21:57.166Z",
   "session_ids": [
-    "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O"
+    "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O",
+    "opencode:ses_ff5b642d1ffe1UYPhuPCTFQloD"
   ],
   "session_origins": {
-    "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O": "direct"
+    "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O": "direct",
+    "opencode:ses_ff5b642d1ffe1UYPhuPCTFQloD": "appended"
   },
   "plan_name": "vteam-team-collaboration",
   "task_sessions": {
     "todo:1": {
       "task_key": "todo:1",
       "task_label": "1",
-      "task_title": "server 启动 + 登录拿 token → `GET /api/v1/plans?taskId=` 返回计划查询结构",
-      "session_id": "opencode:ses_ff796fee3ffeRlQqPnoM8N1vBW",
+      "task_title": "登录 → agents 页 persona-select 可见可交互（选项含未配置+5 性格）",
+      "session_id": "opencode:ses_ff57d9ff5ffedIvrFKpVt1n4v3",
       "agent": "Sisyphus-Junior",
       "category": "deep",
       "started_at": "2026-08-16T01:40:24.180Z",
-      "ended_at": "2026-08-16T02:42:26.213Z",
-      "elapsed_ms": 3722033,
+      "ended_at": "2026-08-16T12:21:57.166Z",
+      "elapsed_ms": 38492986,
       "status": "completed",
-      "updated_at": "2026-08-16T02:42:26.213Z"
+      "updated_at": "2026-08-16T12:21:57.166Z"
     },
     "todo:2": {
       "task_key": "todo:2",
@@ -301,5 +307,7 @@
       "elapsed_ms": 821855
     }
   },
-  "agent": "atlas"
+  "agent": "atlas",
+  "ended_at": "2026-08-16T11:10:00.000Z",
+  "elapsed_ms": 34825766
 }
