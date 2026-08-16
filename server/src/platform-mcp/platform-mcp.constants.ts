@@ -16,6 +16,10 @@ export const PLATFORM_MCP_ERRORS = {
   FILE_NOT_FOUND: 'PLATFORM_MCP_FILE_NOT_FOUND',
   ARTIFACT_INVALID: 'PLATFORM_MCP_ARTIFACT_INVALID',
   MEMORY_INVALID: 'PLATFORM_MCP_MEMORY_INVALID',
+  /** team_add_member：目标 Agent 已在团队（未移除）→ 400 重复加入。 */
+  AGENT_ALREADY_IN_TEAM: 'PLATFORM_MCP_AGENT_ALREADY_IN_TEAM',
+  /** team_add_member：该 Agent 已有 pending 增员申请未确认 → 409 冲突。 */
+  PENDING_APPLICATION: 'PLATFORM_MCP_PENDING_APPLICATION',
 } as const;
 
 export type PlatformMcpErrorCode =

@@ -313,4 +313,228 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       });
     });
   });
+
+  /** 平台 question 行（content.source='platform'，确认门场景）。 */
+  const platformRow = (overrides: Record<string, unknown> = {}) =>
+    aqRow({
+      id: 'aq_platform',
+      requestId: 'que_platform_0000000001',
+      sessionId: 's_main',
+      content: {
+        questions: [
+          {
+            question: '主 Agent 申请将 开发者 加入团队，是否确认？',
+            header: '团队增员确认',
+            options: [
+              { label: '确认', description: '' },
+              { label: '拒绝', description: '' },
+            ],
+          },
+        ],
+        source: 'platform',
+      },
+      ...overrides,
+    });
+
+  describe('createForPlatform（平台侧创建确认门 question，L2 自治）', () => {
+    it('创建落库：que_platform_ requestId + 主 Agent 会话占位 + content 前端形状(source=platform) + emit AGENT_QUESTION', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_1',
+        mainAgentInstanceId: 'ta_main',
+        managedMode: false,
+      });
+      prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
+      prisma.agentQuestion.create.mockResolvedValue(platformRow());
+
+      const result = await service.createForPlatform(
+        't_1',
+        {
+          question: '主 Agent 申请将 开发者 加入团队，是否确认？',
+          header: '团队增员确认',
+          options: ['确认', '拒绝'],
+        },
+        { agentId: 'a_1' },
+      );
+
+      expect(prisma.agentQuestion.create).toHaveBeenCalledWith({
+        data: {
+          id: 'aq_0000000001',
+          requestId: 'que_platform_0000000001',
+          sessionId: 's_main',
+          taskId: 't_1',
+          agentId: 'a_1',
+          kind: 'question',
+          content: {
+            questions: [
+              {
+                question: '主 Agent 申请将 开发者 加入团队，是否确认？',
+                header: '团队增员确认',
+                options: [
+                  { label: '确认', description: '' },
+                  { label: '拒绝', description: '' },
+                ],
+              },
+            ],
+            source: 'platform',
+          },
+          status: 'pending',
+        },
+      });
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_QUESTION,
+        expect.objectContaining({
+          taskId: 't_1',
+          question: expect.objectContaining({ requestId: 'que_platform_0000000001' }),
+        }),
+        { type: 'task', id: 't_1' },
+      );
+      expect(result.requestId).toBe('que_platform_0000000001');
+    });
+
+    it('无主 Agent 会话 → sessionId 占位符（s_placeholder，仅满足非空约束不实际转发）', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_1',
+        mainAgentInstanceId: null,
+        managedMode: false,
+      });
+      prisma.agentQuestion.create.mockResolvedValue(
+        platformRow({ sessionId: 's_placeholder' }),
+      );
+
+      await service.createForPlatform('t_1', {
+        question: 'Q',
+        options: ['确认', '拒绝'],
+      });
+
+      expect(prisma.agentQuestion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ sessionId: 's_placeholder' }),
+      });
+      expect(prisma.session.findFirst).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('平台 question 短路（Oracle R2 旁路：不转发 worker）', () => {
+    it('reply 平台 question → workerClient 不调用 → 终态落库 + hook 收到二维 answers + emit resolved 收敛', async () => {
+      const hook = jest.fn().mockResolvedValue(undefined);
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_1',
+        mainAgentInstanceId: 'ta_main',
+        managedMode: false,
+      });
+      prisma.agentQuestion.create.mockResolvedValue(platformRow());
+      await service.createForPlatform('t_1', { question: 'Q', options: ['确认', '拒绝'] }, { onResolved: hook });
+
+      prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
+      prisma.agentQuestion.update.mockResolvedValue(
+        platformRow({ status: 'resolved', answers: [['确认']] }),
+      );
+
+      const result = await service.reply(
+        'aq_platform',
+        { answers: [['确认']] } as ReplyQuestionDto,
+        'u_1',
+      );
+
+      expect(workerClient.questionReply).not.toHaveBeenCalled();
+      expect(prisma.session.findUnique).not.toHaveBeenCalled();
+      expect(prisma.agentQuestion.update).toHaveBeenCalledWith({
+        where: { id: 'aq_platform' },
+        data: { status: 'resolved', answers: [['确认']] },
+      });
+      expect(hook).toHaveBeenCalledWith({
+        answers: [['确认']],
+        actor: { type: 'user', id: 'u_1' },
+      });
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_QUESTION,
+        expect.objectContaining({ resolved: true, taskId: 't_1' }),
+        { type: 'task', id: 't_1' },
+      );
+      expect(result.status).toBe('resolved');
+    });
+
+    it('confirmByAgent 平台 question → 旁路 + hook actor={type:agent, id:主实例}', async () => {
+      const hook = jest.fn().mockResolvedValue(undefined);
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_1',
+        mainAgentInstanceId: 'ta_main',
+        managedMode: false,
+      });
+      prisma.agentQuestion.create.mockResolvedValue(platformRow());
+      await service.createForPlatform('t_1', { question: 'Q', options: ['确认', '拒绝'] }, { onResolved: hook });
+
+      prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
+      prisma.agentQuestion.update.mockResolvedValue(
+        platformRow({ status: 'resolved', answers: [['确认']] }),
+      );
+
+      const result = await service.confirmByAgent({
+        taskId: 't_1',
+        instanceId: 'ta_main',
+        requestId: 'que_platform_0000000001',
+        kind: 'question',
+        answers: [['确认']],
+      });
+
+      expect(workerClient.questionReply).not.toHaveBeenCalled();
+      expect(hook).toHaveBeenCalledWith({
+        answers: [['确认']],
+        actor: { type: 'agent', id: 'ta_main' },
+      });
+      expect(result.status).toBe('resolved');
+    });
+
+    it('拒绝（answers=null）→ 终态落库 rejected + hook 收到 answers=null（拒绝不执行）', async () => {
+      const hook = jest.fn().mockResolvedValue(undefined);
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_1',
+        mainAgentInstanceId: 'ta_main',
+        managedMode: false,
+      });
+      prisma.agentQuestion.create.mockResolvedValue(platformRow());
+      await service.createForPlatform('t_1', { question: 'Q', options: ['确认', '拒绝'] }, { onResolved: hook });
+
+      prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
+      prisma.agentQuestion.update.mockResolvedValue(
+        platformRow({ status: 'rejected', answers: null }),
+      );
+
+      await service.reply('aq_platform', { answers: null } as ReplyQuestionDto, 'u_1');
+
+      expect(workerClient.questionReply).not.toHaveBeenCalled();
+      expect(prisma.agentQuestion.update).toHaveBeenCalledWith({
+        where: { id: 'aq_platform' },
+        data: { status: 'rejected', answers: null },
+      });
+      expect(hook).toHaveBeenCalledWith({
+        answers: null,
+        actor: { type: 'user', id: 'u_1' },
+      });
+    });
+
+    it('hook 抛错（如终态回调）→ 不阻塞弹窗收敛（question 已终态落库）', async () => {
+      const hook = jest.fn().mockRejectedValue(new Error('updateTeam 409'));
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_1',
+        mainAgentInstanceId: 'ta_main',
+        managedMode: false,
+      });
+      prisma.agentQuestion.create.mockResolvedValue(platformRow());
+      await service.createForPlatform('t_1', { question: 'Q', options: ['确认', '拒绝'] }, { onResolved: hook });
+
+      prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
+      prisma.agentQuestion.update.mockResolvedValue(
+        platformRow({ status: 'resolved', answers: [['确认']] }),
+      );
+
+      const result = await service.reply('aq_platform', { answers: [['确认']] } as ReplyQuestionDto, 'u_1');
+
+      expect(result.status).toBe('resolved');
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_QUESTION,
+        expect.objectContaining({ resolved: true }),
+        { type: 'task', id: 't_1' },
+      );
+    });
+  });
 });

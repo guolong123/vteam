@@ -37,11 +37,11 @@ describe('QuestionsController（Agent 提问/权限确认端点）', () => {
     expect(guardsOf('findAll')).toContain(PermissionGuard);
   });
 
-  it('POST /questions/:id/reply 转发 reply(id, dto)', async () => {
+  it('POST /questions/:id/reply 转发 reply(id, dto, userId)', async () => {
     service.reply.mockResolvedValue({ id: 'aq_1', status: 'resolved' });
     const dto = { answers: [['继续']] } as ReplyQuestionDto;
-    const result = await controller.reply('aq_1', dto);
-    expect(service.reply).toHaveBeenCalledWith('aq_1', dto);
+    const result = await controller.reply('aq_1', dto, { id: 'u_1' });
+    expect(service.reply).toHaveBeenCalledWith('aq_1', dto, 'u_1');
     expect(result).toEqual({ id: 'aq_1', status: 'resolved' });
   });
 

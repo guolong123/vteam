@@ -29,6 +29,7 @@ import {
   GROUP_TRIGGER_INSTRUCTION,
   MAIN_AGENT_INSTRUCTION,
   PENDING_INSTANCE_REF,
+  PLAN_WORKFLOW_INSTRUCTION,
   POLL_INTERVAL_MS,
   aggregateText,
   findError,
@@ -372,11 +373,12 @@ describe('WorkerDispatcher', () => {
       const d = createDispatcher();
       await d.dispatch(request);
 
-      // hot path：task 查询只 select mainAgentInstanceId + taskAgents.agent 三字段
+      // hot path：task 查询只 select mainAgentInstanceId + executionMode + taskAgents.agent 三字段
       expect(prisma.task.findUnique).toHaveBeenCalledWith({
         where: { id: request.taskId },
         select: {
           mainAgentInstanceId: true,
+          executionMode: true,
           taskAgents: {
             include: { agent: { select: { id: true, name: true, role: true } } },
           },
@@ -864,6 +866,7 @@ describe('WorkerDispatcher', () => {
       name: '产品经理',
       role: 'product',
       prompt: '负责需求拆解与文档化。',
+      persona: null,
     };
     const team: TeamMemberInfo[] = [
       {
@@ -968,6 +971,48 @@ describe('WorkerDispatcher', () => {
       const s = buildSystemInstructions(agent);
       expect(s).not.toContain('【运行时工作目录】');
       expect(s).toContain('【持久化目录】');
+    });
+
+    it('persona 拼接：agent.persona=strict 时注入【性格】段（含安全阀文案），不改写 prompt', () => {
+      const s = buildSystemInstructions({ ...agent, persona: 'strict' });
+      expect(s).toContain('## 性格');
+      expect(s).toContain('附改进建议');
+      expect(s).toContain('【职责】负责需求拆解与文档化。'); // prompt 原样保留，未被性格污染
+    });
+
+    it('persona 为 null：不注入【性格】段（缺省/存量 agent 无性格，向后兼容）', () => {
+      const s = buildSystemInstructions(agent);
+      expect(s).not.toContain('## 性格');
+      expect(s).not.toContain('【性格】');
+    });
+
+    it('persona 未知 key：renderPersonaSection 返回空串 → 不注入【性格】段且不抛错', () => {
+      const s = buildSystemInstructions({ ...agent, persona: 'unknown-key' });
+      expect(s).not.toContain('## 性格');
+      expect(s).toContain('【职责】负责需求拆解与文档化。');
+    });
+
+    it('executionMode=plan：追加【计划工作流】段（计划驱动工作流引导，含 plan_submit/plan_task_transition 工具名）', () => {
+      const s = buildSystemInstructions(agent, { executionMode: 'plan' });
+      expect(s).toContain(PLAN_WORKFLOW_INSTRUCTION);
+      expect(s).toContain('【计划工作流】');
+      expect(s).toContain('本任务执行模式=plan');
+      expect(s).toContain('plan_submit');
+      expect(s).toContain('plan_review');
+      expect(s).toContain('plan_task_transition');
+      expect(s).toContain('task_transition mark-pending-review');
+    });
+
+    it('executionMode 非 plan（direct/缺省）：不注入【计划工作流】段（direct 模式行为零变化）', () => {
+      const s = buildSystemInstructions(agent, { executionMode: 'direct' });
+      expect(s).not.toContain('【计划工作流】');
+      expect(s).not.toContain(PLAN_WORKFLOW_INSTRUCTION);
+      expect(s).not.toContain('plan_submit');
+      // 缺省（存量调用未传 executionMode）同样不注入——向后兼容
+      const s2 = buildSystemInstructions(agent);
+      expect(s2).not.toContain('【计划工作流】');
+      // 既有段不受影响
+      expect(s).toContain(GLOBAL_SYSTEM_INSTRUCTIONS);
     });
   });
 

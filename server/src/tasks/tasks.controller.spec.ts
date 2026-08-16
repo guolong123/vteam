@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { QueryTasksDto } from './dto/query-tasks.dto';
 import { RejectTaskDto } from './dto/reject-task.dto';
+import { UpdateExecutionModeDto } from './dto/update-execution-mode.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { TasksController } from './tasks.controller';
@@ -21,6 +22,7 @@ describe('TasksController', () => {
     findOne: jest.Mock;
     update: jest.Mock;
     updateTeam: jest.Mock;
+    updateExecutionMode: jest.Mock;
     start: jest.Mock;
     markPendingReview: jest.Mock;
     accept: jest.Mock;
@@ -35,6 +37,7 @@ describe('TasksController', () => {
       findOne: jest.fn(),
       update: jest.fn(),
       updateTeam: jest.fn(),
+      updateExecutionMode: jest.fn(),
       start: jest.fn(),
       markPendingReview: jest.fn(),
       accept: jest.fn(),
@@ -202,6 +205,22 @@ describe('TasksController', () => {
       expect(service.updateTeam).toHaveBeenCalledWith('t_1', dto, 'u_admin');
       expect(out).toEqual({ id: 't_1', teamAgentIds: ['a_1'] });
     });
+
+    it('PATCH tasks/:id/execution-mode 转发 id + mode 到 updateExecutionMode', async () => {
+      service.updateExecutionMode.mockResolvedValue({
+        id: 't_1',
+        executionMode: 'plan',
+      });
+      const dto = { mode: 'plan' };
+
+      const out = await controller.updateExecutionMode(
+        't_1',
+        dto as UpdateExecutionModeDto,
+      );
+
+      expect(service.updateExecutionMode).toHaveBeenCalledWith('t_1', 'plan');
+      expect(out).toEqual({ id: 't_1', executionMode: 'plan' });
+    });
   });
 
   describe('DTO 校验（class-validator）', () => {
@@ -242,6 +261,33 @@ describe('TasksController', () => {
           backgroundDocs: [{ name: 'd' }],
         }),
       ).toHaveLength(0);
+    });
+
+    it('CreateTaskDto：executionMode 缺省通过，仅 direct/plan 合法', async () => {
+      expect(
+        await errorsOf(CreateTaskDto, {
+          title: 'x',
+          agents: [{ agentId: 'a_1' }],
+          executionMode: 'plan',
+        }),
+      ).toHaveLength(0);
+      expect(
+        await errorsOf(CreateTaskDto, {
+          title: 'x',
+          agents: [{ agentId: 'a_1' }],
+          executionMode: 'agile',
+        }),
+      ).not.toHaveLength(0);
+    });
+
+    it('UpdateExecutionModeDto：mode 必填且仅 direct/plan', async () => {
+      expect(await errorsOf(UpdateExecutionModeDto, {})).not.toHaveLength(0);
+      expect(
+        await errorsOf(UpdateExecutionModeDto, { mode: 'plan' }),
+      ).toHaveLength(0);
+      expect(
+        await errorsOf(UpdateExecutionModeDto, { mode: 'agile' }),
+      ).not.toHaveLength(0);
     });
 
     it('QueryTasksDto：status 须为五态之一，page/pageSize 正整数', async () => {
@@ -318,9 +364,10 @@ describe('TasksController', () => {
       expect(permOf(controller.create)).toBe('tasks.create');
     });
 
-    it('编辑类端点挂 tasks.edit（update/team/start/mark-pending-review/archive）', () => {
+    it('编辑类端点挂 tasks.edit（update/team/start/mark-pending-review/archive/execution-mode）', () => {
       expect(permOf(controller.update)).toBe('tasks.edit');
       expect(permOf(controller.updateTeam)).toBe('tasks.edit');
+      expect(permOf(controller.updateExecutionMode)).toBe('tasks.edit');
       expect(permOf(controller.start)).toBe('tasks.edit');
       expect(permOf(controller.markPendingReview)).toBe('tasks.edit');
       expect(permOf(controller.archive)).toBe('tasks.edit');

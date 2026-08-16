@@ -42,6 +42,7 @@ type AgentRow = {
   prompt: string;
   baseAgentId: string | null;
   defaultModelId: string | null;
+  persona: string | null;
   workerId: string | null;
   ackMessage: string | null;
   permissionScope: Prisma.JsonValue | null;
@@ -152,6 +153,7 @@ export class AgentsService implements OnModuleInit {
           prompt: dto.prompt ?? '',
           baseAgentId: null,
           defaultModelId: dto.defaultModelId ?? null,
+          persona: dto.persona ?? null,
           ackMessage: dto.ackMessage ?? null,
           permissionScope: dto.permissionScope
             ? (dto.permissionScope as Prisma.InputJsonValue)
@@ -197,6 +199,7 @@ export class AgentsService implements OnModuleInit {
           role: source.role,
           prompt: source.prompt,
           defaultModelId: source.defaultModelId,
+          persona: source.persona,
           ackMessage: source.ackMessage,
           permissionScope: source.permissionScope as Prisma.InputJsonValue | undefined,
           createdBy: userId,
@@ -240,6 +243,9 @@ export class AgentsService implements OnModuleInit {
           ...(dto.prompt !== undefined ? { prompt: dto.prompt } : {}),
           ...(dto.defaultModelId !== undefined
             ? { defaultModelId: dto.defaultModelId }
+            : {}),
+          ...(dto.persona !== undefined
+            ? { persona: dto.persona ?? null }
             : {}),
           ...(dto.workerId !== undefined ? { workerId: dto.workerId } : {}),
           ...(dto.ackMessage !== undefined ? { ackMessage: dto.ackMessage } : {}),
@@ -321,6 +327,7 @@ export class AgentsService implements OnModuleInit {
       prompt: agent.prompt,
       baseAgentId: agent.baseAgentId,
       defaultModelId: agent.defaultModelId,
+      persona: agent.persona,
       workerId: agent.workerId,
       ackMessage: agent.ackMessage,
       permissionScope: agent.permissionScope,

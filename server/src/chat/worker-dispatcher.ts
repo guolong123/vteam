@@ -30,6 +30,8 @@ import {
   WorkerEventIngress,
 } from '../workers/worker-event.ingress';
 import { AssignmentRequirement, WorkersService } from '../workers/workers.service';
+import { renderPersonaSection } from '../agents/persona.constants';
+import { EXECUTION_MODES } from '../plans/plan.constants';
 import { DispatchRequest, DispatchResult, MessageDispatcher } from './message-dispatcher';
 import { extractConclusionParts, normalizeParts } from './message-parts';
 import { sanitizeWorkDirName } from '../tasks/work-dir.util';
@@ -90,6 +92,8 @@ export interface AgentIdentityInfo {
   name: string | null;
   role: string | null;
   prompt: string | null;
+  /** Agent 性格 key（PERSONA_LIBRARY 预设 key；null=无性格）。运行时按此拼接【性格】段进系统提示。 */
+  persona: string | null;
 }
 
 /** 团队成员信息（dispatch 时从 taskAgents→agent 提取，注入全局上下文供 agent 判断与谁协作）。
@@ -123,6 +127,9 @@ export interface BuildSystemInstructionsOptions {
   /** 任务级独立工作目录（<WORK_DIR>/tasks/<taskId>，prompt_async directory）；注入
    *  提示词作为运行时持久化目录（k8s 只有该目录重启后保留），引导 agent 把工作文件写入。 */
   persistentWorkDir?: string;
+  /** 任务执行模式（tasks.execution_mode，direct/plan；Todo 4 tc-flow 引入）。executionMode=plan
+   *  时追加【计划工作流】段，引导主 Agent 先产出执行计划再实施；direct 或缺省不注入。 */
+  executionMode?: string;
 }
 
 /**
@@ -137,6 +144,21 @@ export const MAIN_AGENT_INSTRUCTION =
   '推进受阻或需要协作时，通过 notify_agent / 群聊 @ 定向协调成员（FR-13，互 @ 不超 3 轮）；' +
   '收尾时可汇总各角色产出与验收材料，供成员验收判定（FR-11）。' +
   '任务开启托管模式时，成员的 question/permission 请求由你确认——收到【托管确认】消息时调用 question_confirm 工具决策。';
+
+/**
+ * 计划工作流引导段（dispatch 时仅注入 executionMode=plan 的任务）：任务采用「计划驱动」执行模式
+ * （tc-flow）时，主 Agent 启动前须先产出执行计划并提交评审，评审通过后按计划子任务逐项推进。
+ * 本段为独立常量——GLOBAL_SYSTEM_INSTRUCTIONS 静态数组保持不动（其他调用方兼容），由
+ * buildSystemInstructions 在 dispatch 时按 executionMode 条件动态追加（对齐 MAIN_AGENT_INSTRUCTION /
+ * persistentWorkDir 动态注入先例）。仅注入工作流引导文案，不注入任何计划数据（按需注入哲学）。
+ */
+export const PLAN_WORKFLOW_INSTRUCTION =
+  '【计划工作流】（本任务执行模式=plan）任务启动前主 Agent 须产出执行计划：经 plan_submit 提交' +
+  '（tasks 每项含 目标/边界/引用/验收/QA/提交 六要素）；计划评审由成员确认或主 Agent 指派成员' +
+  '（评审者可经 plan_get 读计划、plan_review 提交结论；评审默认放行、驳回须附理由）；' +
+  '评审通过后按 plan_task 逐项推进（plan_task_transition 汇报进度，状态 done/blocked）；' +
+  '全部完成后主 Agent 提交验收（task_transition mark-pending-review）。' +
+  '计划前如关键假设不明，先向成员确认再提交。';
 
 /**
  * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
@@ -162,6 +184,7 @@ export function buildSystemInstructions(
       (agent.prompt ? `\n【职责】${agent.prompt}` : '') +
       '\n调用 vteam MCP 工具时，落库类工具（group_post / notify_agent / submit_artifact）的' +
       'selfInstanceId 参数必须填写你的实例 id（ta_ 前缀，服务器按此校验归属并精确记录发送者）。',
+    agent.persona ? renderPersonaSection(agent.persona) : '',
     opts?.persistentWorkDir
       ? `\n【运行时工作目录】本任务为你分配的实际持久化工作目录为：${opts.persistentWorkDir}。` +
         '工作产物、脚本、中间文件等请写入该目录（提交 doc/file 产出物时 fileRef 使用该目录下的路径）。'
@@ -169,6 +192,9 @@ export function buildSystemInstructions(
   ];
   if (opts?.isMainAgent) {
     blocks.push(MAIN_AGENT_INSTRUCTION);
+  }
+  if (opts?.executionMode === EXECUTION_MODES.plan) {
+    blocks.push(PLAN_WORKFLOW_INSTRUCTION);
   }
   if (opts?.team && opts.team.length > 0) {
     const teamLines = opts.team.map(
@@ -1032,13 +1058,14 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     const taskWorkDir = await this.resolveAgentWorkDir(taskId, session, target);
     const agentRow = await this.prisma.agent.findUnique({
       where: { id: target.agentId },
-      select: { id: true, name: true, role: true, prompt: true },
+      select: { id: true, name: true, role: true, prompt: true, persona: true },
     });
     const agentIdentity: AgentIdentityInfo = {
       id: target.agentId,
       name: agentRow?.name ?? null,
       role: agentRow?.role ?? null,
       prompt: agentRow?.prompt ?? null,
+      persona: agentRow?.persona ?? null,
     };
     // 主 Agent 动态注入 + 团队成员注入（system 通道，不进入聊天记录）：一次轻量 task
     // 查询取 mainAgentInstanceId + 团队成员实例（id/alias/seq/removedAt→agent id/名称/角色）。
@@ -1049,6 +1076,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       where: { id: taskId },
       select: {
         mainAgentInstanceId: true,
+        executionMode: true,
         taskAgents: {
           include: {
             agent: { select: { id: true, name: true, role: true } },
@@ -1113,6 +1141,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         selfInstanceId,
         selfAlias,
         persistentWorkDir: taskWorkDir,
+        executionMode: taskRow?.executionMode,
       }),
     });
 

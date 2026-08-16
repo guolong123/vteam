@@ -11,6 +11,7 @@ import {
   MaxLength,
   ValidateNested,
 } from 'class-validator';
+import { PERSONA_LIBRARY } from '../persona.constants';
 
 /** 工具 effect 单行（14 篇 §3.3：每工具一行 toolAction + effect 三态）。 */
 export class ToolEffectDto {
@@ -50,6 +51,17 @@ export class CreateAgentDto {
   @IsOptional()
   @IsString()
   prompt?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Agent 性格（PERSONA_LIBRARY 预设 key：steady/strict/aggressive/conservative/innovative；' +
+      '第五维协作风格，不改变权限/工具边界；缺省无性格）',
+    enum: Object.keys(PERSONA_LIBRARY),
+    example: 'strict',
+  })
+  @IsOptional()
+  @IsIn(Object.keys(PERSONA_LIBRARY))
+  persona?: string;
 
   @ApiPropertyOptional({
     description: '勾选技能 id 列表（FR-34，写 agent_skills）',

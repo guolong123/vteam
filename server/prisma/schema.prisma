@@ -131,6 +131,8 @@ model Task {
   mainAgentInstanceId String? @map("main_agent_instance_id") // 主 Agent 实例（决策依据，T2 起维护）
   // 托管模式：开启后成员 question/permission 请求不弹窗给用户，改由主 Agent 经 question_confirm 确认
   managedMode     Boolean   @default(false) @map("managed_mode")
+  // 执行模式（vteam-team-collaboration）：direct|plan，默认 direct（轻量），plan 按需开启
+  executionMode   String    @default("direct") @map("execution_mode")
   backgroundDocs  Json?     @map("background_docs")
   createdBy       String    @map("created_by")
   version         Int       @default(0)
@@ -151,6 +153,7 @@ model Task {
   taskGroupInstances TaskGroupInstance[]
   issues             Issue[]
   memories           Memory[]
+  plan               Plan?
 
   @@index([projectId, status], map: "idx_tasks_project_status")
   @@map("tasks")
@@ -382,6 +385,9 @@ model Agent {
   workerId        String?   @map("worker_id")
   // 群聊 @Agent 收到确认文案（可空，null → 落库用 DEFAULT_ACK_MESSAGE 默认文案）
   ackMessage      String?   @map("ack_message")
+  // 性格（vteam-team-collaboration tc-persona：PERSONA_LIBRARY 的 key，可空；
+  // 存量 agent 不动，运行时由 buildSystemInstructions 拼接进系统提示，不改写 prompt）
+  persona         String?
   permissionScope Json?     @map("permission_scope")
   createdBy       String    @map("created_by")
   createdAt       DateTime  @default(now()) @map("created_at")
@@ -644,6 +650,52 @@ model RealtimeEvent {
 // ==================================================================
 // 模型提问 / 工具权限确认域（worker 检测 serve pending → 落库 → 前端弹窗 → reply 收敛）
 // ==================================================================
+
+// ==================================================================
+// 协作计划域（vteam-team-collaboration：pl_/pt_ 前缀主键；
+// 双库兼容——不声明 Prisma enum，状态为 String 列 + 应用层常量）
+// ==================================================================
+
+// 任务执行计划（一任务一计划，taskId 唯一；status 字符串枚举：
+// draft/reviewing/approved/rejected/executing/completed，draft 为预留态）
+model Plan {
+  id                 String    @id // pl_ 前缀，服务层 IdGeneratorService 生成
+  taskId             String    @unique @map("task_id") // 一任务一计划
+  title              String
+  summary            String?   @db.Text
+  scopeIn            String?   @db.Text
+  scopeOut           String?   @db.Text
+  status             String // draft/reviewing/approved/rejected/executing/completed
+  createdBy          String    @map("created_by") // 主 Agent 实例 id
+  reviewerInstanceId String?   @map("reviewer_instance_id") // 被指派评审者实例（null=用户评审/未指派）
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  task      Task       @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  planTasks PlanTask[]
+
+  @@map("plans")
+}
+
+// 计划子任务（pt_ 前缀；content 六要素 {what, mustNot, references, acceptance, qa, commit}，
+// 允许字段缺省但 what 必填；assigneeInstanceId 指派实例，同角色多实例并行分发）
+model PlanTask {
+  id                 String   @id // pt_ 前缀，服务层 IdGeneratorService 生成
+  planId             String   @map("plan_id")
+  seq                Int
+  title              String
+  content            Json // 六要素 {what, mustNot, references, acceptance, qa, commit}
+  assigneeInstanceId String?  @map("assignee_instance_id")
+  status             String // pending/in_progress/done/blocked/skipped
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([planId, seq], map: "uk_plan_tasks_plan_seq")
+  @@index([planId], map: "idx_plan_tasks_plan")
+  @@map("plan_tasks")
+}
 
 // ==================================================================
 // 记忆域（memory-management：me_ 前缀主键；task|project|global 字符串枚举，

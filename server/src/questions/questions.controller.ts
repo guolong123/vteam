@@ -8,6 +8,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../projects/current-user.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { ReplyQuestionDto } from './dto/reply-question.dto';
@@ -43,7 +44,11 @@ export class QuestionsController {
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.edit')
   @ApiOperation({ summary: '回复 Agent 提问/权限确认（question=answers / permission=response）' })
-  reply(@Param('id') id: string, @Body() dto: ReplyQuestionDto) {
-    return this.questionsService.reply(id, dto);
+  reply(
+    @Param('id') id: string,
+    @Body() dto: ReplyQuestionDto,
+    @CurrentUser() user: { id: string },
+  ) {
+    return this.questionsService.reply(id, dto, user?.id);
   }
 }
