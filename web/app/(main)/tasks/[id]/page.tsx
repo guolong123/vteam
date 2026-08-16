@@ -1989,9 +1989,6 @@ function TaskPanel({
   planError,
   onReviewPlan,
   reviewPending,
-  onToggleExecutionMode,
-  executionModePending,
-  executionModeError,
 }: {
   task: TaskDetail;
   agents: { id: string; name: string; role: RoleKey }[];
@@ -2013,9 +2010,6 @@ function TaskPanel({
   planError: unknown;
   onReviewPlan: (planId: string) => void;
   reviewPending: boolean;
-  onToggleExecutionMode?: (mode: "direct" | "plan") => void;
-  executionModePending?: boolean;
-  executionModeError?: string | null;
 }) {
   const mainAgent = task.mainAgentId ? agents.find((a) => a.id === task.mainAgentId) : undefined;
   /** 主实例（T5：instances[].main 或 id===mainAgentInstanceId；别名优先展示） */
@@ -2024,7 +2018,6 @@ function TaskPanel({
   );
   const statusLabel = STATUS_LABEL[task.status] ?? "进行中";
 
-  /** 待办 issue 按状态优先级排序（open 最前），供「待办 Issue」区取前 5。 */
   const sortedIssues = useMemo(
     () =>
       [...issues].sort(
@@ -2032,6 +2025,8 @@ function TaskPanel({
       ),
     [issues],
   );
+
+  const [activeTab, setActiveTab] = useState<"artifacts" | "issues">("artifacts");
 
   /** 产出物条目点击（is_0000000033/0036，file 型 .md 并入 is_0000000024 TC-044）：
    *  - doc 或 file 型 .md（含 .MD/.markdown）→ 跳文档站 /docs/:taskId?doc=<slug>，文档站初始定位该文档
@@ -2071,6 +2066,7 @@ function TaskPanel({
         flexDirection: "column",
         gap: space.lg,
         padding: space.xl,
+        overflowY: "auto",
         ...baseFont,
       }}
     >
@@ -2163,63 +2159,242 @@ function TaskPanel({
         </div>
       </div>
 
-      {/* 产出物：任务实际产出物文件列表（GET /tasks/:id/artifacts；doc/file 直开 fileUrl，
-          超 5 个 →「更多 N 个」跳 /artifacts?pid= 聚合页；空 → 占位按钮） */}
-      <div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm, marginBottom: space.sm }}>
-          <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600] }}>产出物</span>
-          {/* is_0000000024：文档站入口 → /docs/:taskId */}
+      {/* 产出物 + 待办 Issue tab 切换 */}
+      <div data-testid="artifacts-issues-tab">
+        <div style={{ display: "flex", gap: space.xs, marginBottom: space.sm, borderBottom: `1px solid ${neutral[200]}` }}>
           <button
             type="button"
-            data-testid="task-docs-entry"
-            aria-label="文档站"
-            title="以文档站视图查看本任务产出物文档"
-            onClick={() => onOpenDocs?.()}
+            data-testid="artifacts-tab"
+            onClick={() => setActiveTab("artifacts")}
             style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: space.xs,
-              border: `1px solid ${neutral[200]}`,
-              background: "#FFFFFF",
-              color: neutral[600],
+              padding: `${space.xs}px ${space.sm}px`,
+              borderBottom: `2px solid ${activeTab === "artifacts" ? "#2563EB" : "transparent"}`,
+              backgroundColor: "transparent",
+              color: activeTab === "artifacts" ? "#2563EB" : neutral[500],
               fontSize: fontSize.sm,
-              borderRadius: radius.pill,
-              padding: `${space.xs - 1}px ${space.sm}px`,
+              fontWeight: activeTab === "artifacts" ? 600 : 400,
               cursor: "pointer",
               fontFamily: fontFamily.body,
+              border: "none",
+              transition: "color .15s ease, border-color .15s ease",
             }}
           >
-            <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>▤</span>
-            文档站
+            产出物
           </button>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-          {artifactsLoading ? (
-            <div
+          <button
+            type="button"
+            data-testid="issues-tab"
+            onClick={() => setActiveTab("issues")}
+            style={{
+              padding: `${space.xs}px ${space.sm}px`,
+              borderBottom: `2px solid ${activeTab === "issues" ? "#2563EB" : "transparent"}`,
+              backgroundColor: "transparent",
+              color: activeTab === "issues" ? "#2563EB" : neutral[500],
+              fontSize: fontSize.sm,
+              fontWeight: activeTab === "issues" ? 600 : 400,
+              cursor: "pointer",
+              fontFamily: fontFamily.body,
+              border: "none",
+              transition: "color .15s ease, border-color .15s ease",
+            }}
+          >
+            待办 Issue
+          </button>
+          {/* 预留扩展位 */}
+          <div style={{ flex: 1 }} />
+          {activeTab === "artifacts" && (
+            <button
+              type="button"
+              data-testid="task-docs-entry"
+              aria-label="文档站"
+              title="以文档站视图查看本任务产出物文档"
+              onClick={() => onOpenDocs?.()}
               style={{
-                padding: `${space.sm + 2}px ${space.md}px`,
-                borderRadius: radius.md,
-                backgroundColor: neutral[50],
+                display: "inline-flex",
+                alignItems: "center",
+                gap: space.xs,
                 border: `1px solid ${neutral[200]}`,
-                color: neutral[400],
+                background: "#FFFFFF",
+                color: neutral[600],
                 fontSize: fontSize.sm,
+                borderRadius: radius.pill,
+                padding: `${space.xs - 1}px ${space.sm}px`,
+                cursor: "pointer",
+                fontFamily: fontFamily.body,
               }}
             >
-              加载中…
-            </div>
-          ) : artifacts.length > 0 ? (
-            <>
-              {artifacts.slice(0, 5).map((item) => {
-                const typeTheme = ARTIFACT_TYPE_THEME[item.type] ?? ARTIFACT_TYPE_THEME.file;
-                return (
+              <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>▤</span>
+              文档站
+            </button>
+          )}
+        </div>
+
+        {/* 产出物 tab 内容 */}
+        {activeTab === "artifacts" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+            {artifactsLoading ? (
+              <div
+                style={{
+                  padding: `${space.sm + 2}px ${space.md}px`,
+                  borderRadius: radius.md,
+                  backgroundColor: neutral[50],
+                  border: `1px solid ${neutral[200]}`,
+                  color: neutral[400],
+                  fontSize: fontSize.sm,
+                }}
+              >
+                加载中…
+              </div>
+            ) : artifacts.length > 0 ? (
+              <>
+                {artifacts.slice(0, 5).map((item) => {
+                  const typeTheme = ARTIFACT_TYPE_THEME[item.type] ?? ARTIFACT_TYPE_THEME.file;
+                  return (
+                    <div
+                      key={item.id}
+                      data-testid="artifact-item"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => handleArtifactClick(item)}
+                      onKeyDown={handleArtifactKeyDown(item)}
+                      title={item.type === "doc" ? `在文档站查看 ${item.title}` : item.fileUrl ? `打开 ${item.title}` : `查看产出物 ${item.title}`}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: space.sm,
+                        padding: `${space.sm + 2}px ${space.md}px`,
+                        borderRadius: radius.md,
+                        backgroundColor: neutral[50],
+                        border: `1px solid ${neutral[200]}`,
+                        cursor: "pointer",
+                        transition: "border-color .15s ease",
+                      }}
+                    >
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: 2,
+                          backgroundColor: typeTheme.color,
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span
+                          style={{
+                            display: "block",
+                            fontSize: fontSize.md,
+                            color: neutral[800],
+                            fontWeight: 500,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {item.title}
+                        </span>
+                        <span
+                          style={{
+                            display: "block",
+                            fontSize: fontSize.xs,
+                            color: neutral[400],
+                            lineHeight: 1.4,
+                          }}
+                        >
+                          {ARTIFACT_TYPE_LABEL[item.type] ?? item.type} · v{item.currentVersion}
+                        </span>
+                      </span>
+                      <span style={{ color: neutral[400], fontSize: fontSize.md }} aria-hidden>
+                        ↗
+                      </span>
+                    </div>
+                  );
+                })}
+                {artifactsTotal > 5 && (
+                  <button
+                    type="button"
+                    data-testid="artifact-more"
+                    onClick={onOpenArtifacts}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: space.sm,
+                      padding: `${space.sm + 2}px ${space.md}px`,
+                      borderRadius: radius.md,
+                      backgroundColor: neutral[50],
+                      border: `1px solid ${neutral[200]}`,
+                      color: neutral[600],
+                      fontSize: fontSize.md,
+                      fontWeight: 500,
+                      cursor: "pointer",
+                      fontFamily: fontFamily.body,
+                    }}
+                  >
+                    <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>▤</span>
+                    更多 {artifactsTotal - 5} 个 →
+                  </button>
+                )}
+              </>
+            ) : (
+              <button
+                type="button"
+                data-testid="artifact-link"
+                onClick={onOpenArtifacts}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: space.sm,
+                  padding: `${space.sm + 2}px ${space.md}px`,
+                  borderRadius: radius.md,
+                  backgroundColor: neutral[50],
+                  border: `1px solid ${neutral[200]}`,
+                  color: neutral[600],
+                  fontSize: fontSize.md,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>▤</span>
+                查看产出物
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* 待办 Issue tab 内容 */}
+        {activeTab === "issues" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+            {issuesLoading ? (
+              <div
+                style={{
+                  padding: `${space.sm + 2}px ${space.md}px`,
+                  borderRadius: radius.md,
+                  backgroundColor: neutral[50],
+                  border: `1px solid ${neutral[200]}`,
+                  color: neutral[400],
+                  fontSize: fontSize.sm,
+                }}
+              >
+                加载中…
+              </div>
+            ) : sortedIssues.length > 0 ? (
+              <>
+                {sortedIssues.slice(0, 5).map((issue) => (
                   <div
-                    key={item.id}
-                    data-testid="artifact-item"
+                    key={issue.id}
+                    data-testid="task-issue-item"
                     role="button"
                     tabIndex={0}
-                    onClick={() => handleArtifactClick(item)}
-                    onKeyDown={handleArtifactKeyDown(item)}
-                    title={item.type === "doc" ? `在文档站查看 ${item.title}` : item.fileUrl ? `打开 ${item.title}` : `查看产出物 ${item.title}`}
+                    title={`查看 ${issue.title} 详情`}
+                    onClick={() => onOpenIssueDetail?.(issue.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onOpenIssueDetail?.(issue.id);
+                      }
+                    }}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -2229,214 +2404,75 @@ function TaskPanel({
                       backgroundColor: neutral[50],
                       border: `1px solid ${neutral[200]}`,
                       cursor: "pointer",
-                      transition: "border-color .15s ease",
+                      transition: "border-color .15s ease, background-color .15s ease",
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLDivElement).style.backgroundColor = "#FFFFFF";
+                      (e.currentTarget as HTMLDivElement).style.borderColor = "#BFDBFE";
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLDivElement).style.backgroundColor = neutral[50];
+                      (e.currentTarget as HTMLDivElement).style.borderColor = neutral[200];
                     }}
                   >
                     <span
-                      aria-hidden
                       style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: 2,
-                        backgroundColor: typeTheme.color,
-                        flexShrink: 0,
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: fontSize.md,
+                        color: neutral[800],
+                        fontWeight: 500,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
                       }}
-                    />
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span
-                        style={{
-                          display: "block",
-                          fontSize: fontSize.md,
-                          color: neutral[800],
-                          fontWeight: 500,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {item.title}
-                      </span>
-                      <span
-                        style={{
-                          display: "block",
-                          fontSize: fontSize.xs,
-                          color: neutral[400],
-                          lineHeight: 1.4,
-                        }}
-                      >
-                        {ARTIFACT_TYPE_LABEL[item.type] ?? item.type} · v{item.currentVersion}
-                      </span>
+                    >
+                      {issue.title}
                     </span>
-                    <span style={{ color: neutral[400], fontSize: fontSize.md }} aria-hidden>
-                      ↗
-                    </span>
+                    <IssueStatusPill status={issue.status} />
                   </div>
-                );
-              })}
-              {artifactsTotal > 5 && (
-                <button
-                  type="button"
-                  data-testid="artifact-more"
-                  onClick={onOpenArtifacts}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: space.sm,
-                    padding: `${space.sm + 2}px ${space.md}px`,
-                    borderRadius: radius.md,
-                    backgroundColor: neutral[50],
-                    border: `1px solid ${neutral[200]}`,
-                    color: neutral[600],
-                    fontSize: fontSize.md,
-                    fontWeight: 500,
-                    cursor: "pointer",
-                    fontFamily: fontFamily.body,
-                  }}
-                >
-                  <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>▤</span>
-                  更多 {artifactsTotal - 5} 个 →
-                </button>
-              )}
-            </>
-          ) : (
-            <button
-              type="button"
-              data-testid="artifact-link"
-              onClick={onOpenArtifacts}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: space.sm,
-                padding: `${space.sm + 2}px ${space.md}px`,
-                borderRadius: radius.md,
-                backgroundColor: neutral[50],
-                border: `1px solid ${neutral[200]}`,
-                color: neutral[600],
-                fontSize: fontSize.md,
-                fontWeight: 500,
-                cursor: "pointer",
-                fontFamily: fontFamily.body,
-              }}
-            >
-              <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>▤</span>
-              查看产出物
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* 待办 Issue：任务全部 issue 按状态排序（open 在前）展示前 5；超 5 →「更多 N 个」跳 /issues?pid=；空 → 占位 */}
-      <div>
-        <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600], marginBottom: space.sm }}>
-          待办 Issue
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-          {issuesLoading ? (
-            <div
-              style={{
-                padding: `${space.sm + 2}px ${space.md}px`,
-                borderRadius: radius.md,
-                backgroundColor: neutral[50],
-                border: `1px solid ${neutral[200]}`,
-                color: neutral[400],
-                fontSize: fontSize.sm,
-              }}
-            >
-              加载中…
-            </div>
-          ) : sortedIssues.length > 0 ? (
-            <>
-              {sortedIssues.slice(0, 5).map((issue) => (
-                <div
-                  key={issue.id}
-                  data-testid="task-issue-item"
-                  role="button"
-                  tabIndex={0}
-                  title={`查看 ${issue.title} 详情`}
-                  onClick={() => onOpenIssueDetail?.(issue.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      onOpenIssueDetail?.(issue.id);
-                    }
-                  }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: space.sm,
-                    padding: `${space.sm + 2}px ${space.md}px`,
-                    borderRadius: radius.md,
-                    backgroundColor: neutral[50],
-                    border: `1px solid ${neutral[200]}`,
-                    cursor: "pointer",
-                    transition: "border-color .15s ease, background-color .15s ease",
-                  }}
-                  onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLDivElement).style.backgroundColor = "#FFFFFF";
-                    (e.currentTarget as HTMLDivElement).style.borderColor = "#BFDBFE";
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLDivElement).style.backgroundColor = neutral[50];
-                    (e.currentTarget as HTMLDivElement).style.borderColor = neutral[200];
-                  }}
-                >
-                  <span
+                ))}
+                {issuesTotal > 5 && (
+                  <button
+                    type="button"
+                    data-testid="task-issues-more"
+                    onClick={onOpenIssues}
                     style={{
-                      flex: 1,
-                      minWidth: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: space.sm,
+                      padding: `${space.sm + 2}px ${space.md}px`,
+                      borderRadius: radius.md,
+                      backgroundColor: neutral[50],
+                      border: `1px solid ${neutral[200]}`,
+                      color: neutral[600],
                       fontSize: fontSize.md,
-                      color: neutral[800],
                       fontWeight: 500,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
+                      cursor: "pointer",
+                      fontFamily: fontFamily.body,
                     }}
                   >
-                    {issue.title}
-                  </span>
-                  <IssueStatusPill status={issue.status} />
-                </div>
-              ))}
-              {issuesTotal > 5 && (
-                <button
-                  type="button"
-                  data-testid="task-issues-more"
-                  onClick={onOpenIssues}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: space.sm,
-                    padding: `${space.sm + 2}px ${space.md}px`,
-                    borderRadius: radius.md,
-                    backgroundColor: neutral[50],
-                    border: `1px solid ${neutral[200]}`,
-                    color: neutral[600],
-                    fontSize: fontSize.md,
-                    fontWeight: 500,
-                    cursor: "pointer",
-                    fontFamily: fontFamily.body,
-                  }}
-                >
-                  <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>☰</span>
-                  更多 {issuesTotal - 5} 个 →
-                </button>
-              )}
-            </>
-          ) : (
-            <div
-              style={{
-                padding: `${space.sm + 2}px ${space.md}px`,
-                borderRadius: radius.md,
-                backgroundColor: neutral[50],
-                border: `1px solid ${neutral[200]}`,
-                color: neutral[400],
-                fontSize: fontSize.sm,
-              }}
-            >
-              暂无待办 issue
-            </div>
-          )}
-        </div>
+                    <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>☰</span>
+                    更多 {issuesTotal - 5} 个 →
+                  </button>
+                )}
+              </>
+            ) : (
+              <div
+                style={{
+                  padding: `${space.sm + 2}px ${space.md}px`,
+                  borderRadius: radius.md,
+                  backgroundColor: neutral[50],
+                  border: `1px solid ${neutral[200]}`,
+                  color: neutral[400],
+                  fontSize: fontSize.sm,
+                }}
+              >
+                暂无待办 issue
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 执行计划区块 */}
@@ -2448,42 +2484,6 @@ function TaskPanel({
         reviewPending={reviewPending}
         taskExecutionMode={task.executionMode}
       />
-
-      {/* 执行模式切换（托管模式开关内） */}
-      {onToggleExecutionMode && (
-        <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.md,
-          padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md,
-          backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`,
-        }}>
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>执行模式</span>
-            <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>
-              {task.executionMode === "plan" ? "计划驱动：按评审通过的计划执行" : "轻量执行：直接由 Agent 处理"}
-            </span>
-          </div>
-          <select
-            data-testid="execution-mode-toggle"
-            value={task.executionMode}
-            onChange={(e) => onToggleExecutionMode(e.target.value as "direct" | "plan")}
-            disabled={executionModePending}
-            style={{
-              padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.sm,
-              border: `1px solid ${neutral[200]}`, backgroundColor: "#FFFFFF",
-              fontSize: fontSize.sm, color: neutral[700], cursor: executionModePending ? "default" : "pointer",
-              fontFamily: fontFamily.body,
-            }}
-          >
-            <option value="direct">轻量执行</option>
-            <option value="plan">计划驱动</option>
-          </select>
-        </div>
-      )}
-      {executionModeError && (
-        <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", padding: `0 ${space.lg}px` }}>
-          {executionModeError}
-        </div>
-      )}
 
       {/* 状态流转操作（OBS-010：与看板同款按钮组，共享 TaskStatusActions） */}
       <div>
@@ -3387,6 +3387,46 @@ export default function TaskChatPage() {
           placeholder="输入消息，@ 提及某个 Agent…"
           style={{ border: "none", borderTop: `1px solid ${neutral[200]}`, borderRadius: 0 }}
         />
+        {/* 执行模式工具栏（消息输入框下方） */}
+        <div
+          data-testid="execution-mode-toolbar"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.sm,
+            padding: `${space.xs}px ${space.md}px`,
+            borderTop: `1px solid ${neutral[200]}`,
+            backgroundColor: "#FFFFFF",
+          }}
+        >
+          <span style={{ fontSize: fontSize.sm, color: neutral[500], flexShrink: 0 }}>模式</span>
+          <select
+            data-testid="execution-mode-select"
+            value={task.executionMode}
+            onChange={(e) => handleToggleExecutionMode(e.target.value as "direct" | "plan")}
+            disabled={executionModeMutation.isPending}
+            style={{
+              padding: `${space.xs}px ${space.sm}px`,
+              borderRadius: radius.sm,
+              border: `1px solid ${neutral[200]}`,
+              backgroundColor: "#FFFFFF",
+              fontSize: fontSize.sm,
+              color: neutral[700],
+              cursor: executionModeMutation.isPending ? "default" : "pointer",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            <option value="direct">轻量执行</option>
+            <option value="plan">计划驱动</option>
+          </select>
+          {executionModeError && (
+            <span style={{ fontSize: fontSize.xs, color: "#DC2626", flex: 1 }}>
+              {executionModeError}
+            </span>
+          )}
+          {/* 预留扩展位：后续可添加模型选择等 */}
+          <div style={{ flex: 1 }} />
+        </div>
       </div>
 
       {/* 右侧面板拖拽分隔条（is_0000000017） */}
@@ -3418,9 +3458,6 @@ export default function TaskChatPage() {
           setReviewDialogError(null);
         }}
         reviewPending={planReviewMutation.isPending}
-        onToggleExecutionMode={handleToggleExecutionMode}
-        executionModePending={executionModeMutation.isPending}
-        executionModeError={executionModeError}
       />
 
       {/* 任务信息编辑弹窗（is_0000000011） */}

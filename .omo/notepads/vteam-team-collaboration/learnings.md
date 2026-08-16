@@ -134,3 +134,17 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **回归测试**：tasks.service.spec updateExecutionMode describe 新增「plan（executing）→ direct → 再切回 plan 成功」——两步 mock（第一步 direct 切换仅 task.update；第二步 plan 回切 in_progress + plan=executing → $transaction 内 tx.plan.update 保持 executing + task.update 置 plan），断言第二次切换成功不抛 409、executionMode=plan。另补「completed → 409」边界（仅 approved/executing 放行语义闭环）。
 - **⚠️ 并行/残留编辑陷阱**：任务开始前工作区已含半个「幂等返回」测试（`prisma.task.findUnique.mockResolvedValue` 前缺 `it(...)` 头，describe 顶层残留语句）——疑似前序修复尝试未清理。发现时先核对 git diff 与 Read 是否一致（文件行数随并行 agent 编辑变化：2581→2641→2643），确认残留为半成品后由并行 agent 修复补齐 it 头；**勿假设文件只被自己修改**。
 - 验证：`npx tsc --noEmit` EXIT 0；`npx jest src/tasks --runInBand` 3 suites / **126 passed**（updateExecutionMode 10 条全绿，含 M1 回归）。未做 git commit。
+
+## 部署 + 收尾 — 2026-08-16（REV 44）
+- **部署**：server 镜像 `vteam-server:vteam-k8s-team-collab`（digest 0c2ea7e，含 plans 模块 + 迁移）→ 完整基线 helm upgrade（**只改 server 段 tag**——awk 限定 `^server:` 到 `^web:` 之间替换，避免误改 web；web/worker/db tag 未动）→ 删 init Job → REV 44 deployed → init Job Completed（应用迁移 20260816013314_team_collaboration_plans）
+- **验证**：plans/plan_tasks 表存在 + tasks.execution_mode + agents.persona 列 ✓；health 200 ✓；登录 ✓；GET /api/v1/plans?taskId= → 404 PLAN_NOT_FOUND（**预期业务错误**——该任务无计划）；MCP tools/list **24 工具全命中**（8 新工具全在）✓；agents persona 字段（seed null）✓
+- **⚠️ task 派发故障（重要经验）**：`task()` 连续 5+ 次 `Failed to create session: [object Object]`（部署/浏览器委托全失败）——subagent 会话创建系统故障；orchestrator 以 **bash 兜底**执行部署（docker build/push、helm、kubectl、python3 HTTP 验证）成功。经验：task 派发故障时，bash 可用则直接执行受控收尾动作（部署/验证/commit），不要无限重试委托
+- **⚠️ /api/v1/tasks 404 非 bug**：vteam 任务列表端点是 `GET /api/v1/projects/:pid/tasks`（按项目，tasks.controller.ts:50），`/api/v1/tasks` 无路由；web `/tasks` 同理（无列表页，看板在 /board）——均既有设计，非本计划引入
+- **浏览器实测受限**：playwright CLI 存在但浏览器二进制未装 + task 派发故障 → 用 python3 HTTP 层兜底（登录/页面可达 / /board /agents /messages /memories 全 200 + 新 API + MCP 24 工具）作为验证证据；真实浏览器渲染测试需新会话（task 恢复后派 browse/playwright）
+- **git 收尾**：commit `2448939` feat(plans): 团队协作增强（39 文件：server 代码 + plans 模块 + 迁移 + .omo 计划产物 + 16 篇文档）；历史遗留 png/yml 未提交
+
+## 浏览器实测（补做，真实 chromium）— 2026-08-16
+- **环境**：chromium 二进制实际已装（~/.cache/ms-playwright/chromium-1208）；playwright 包在 web/node_modules；Node v22.22.1 运行
+- **方法**：playwright launch + `--host-resolver-rules=MAP vteam.ketaops.cc 10.0.1.18`（绕过 DNS 直连 ingress NodePort 32054）——脚本 /tmp/opencode/browser-qa/qa.cjs
+- **结果**：登录页渲染 ✓ → seed-admin 登录成功落地 /projects ✓ → /board /agents /messages /memories 全 200 渲染 ✓ → **0 console error / 0 pageerror**（唯一 reqfail：SSE /api/v1/events 页面导航断开，正常行为）→ 截图 6 张 + report.json 存 /tmp/opencode/browser-qa/
+- **经验**：真实浏览器渲染验证不需要 task() 派发——bash + playwright（chromium 已装）即可；host-resolver-rules 解决域名访问；先探测登录表单 input 结构再 fill（避免 selector 猜错）

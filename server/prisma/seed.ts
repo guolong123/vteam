@@ -125,6 +125,9 @@ async function main() {
 
   // 预置 template 角色 Agent（16 篇 §3~§7 五类角色提示词 + 项目经理新增；role 与前端 task-create data-role 对齐）
   // type=template 只读；permissionScope 按 16 篇 §2.1 默认权限范围最小化。
+  // persona 为「出厂默认性格」（PERSONA_LIBRARY 的 key，tc-persona 第五维）：产品经理=innovative（创新）/
+  // 项目经理=aggressive（激进）/架构师=steady（沉稳）/开发者=conservative（保守）/测试=strict（苛刻），
+  // 按当前 k8s 环境已配置值固化；仅首次 create 时生效，不覆盖存量已设值（幂等）。
   // prompt 为平台维护的「出厂默认提示词」（16 篇 §8.4 模板提示词随平台版本升级）：四方向结构
   // （职责/权限/工作方式/协同方式），并针对新功能收敛——issue 管理（issue_create/list/transition）、
   // git 仓库（clone/pull 只读授权、push 需 write+确认）、vteam MCP 工具。
@@ -133,6 +136,7 @@ async function main() {
       id: 'a_product',
       name: '产品经理',
       role: 'product',
+      persona: 'innovative',
       ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '# 角色：产品经理\n' +
@@ -166,6 +170,7 @@ async function main() {
       id: 'a_project_manager',
       name: '项目经理',
       role: 'project_manager',
+      persona: 'aggressive',
       ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '# 角色：项目经理\n' +
@@ -199,6 +204,7 @@ async function main() {
       id: 'a_architect',
       name: '架构师',
       role: 'architect',
+      persona: 'steady',
       ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '# 角色：架构师\n' +
@@ -230,6 +236,7 @@ async function main() {
       id: 'a_developer',
       name: '开发者',
       role: 'developer',
+      persona: 'conservative',
       ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '# 角色：开发者\n' +
@@ -263,6 +270,7 @@ async function main() {
       id: 'a_tester',
       name: '测试',
       role: 'tester',
+      persona: 'strict',
       ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '# 角色：测试者\n' +
@@ -296,8 +304,8 @@ async function main() {
   // update 只同步 prompt（平台维护的模板出厂默认提示词，16 篇 §8.4「模板提示词随平台版本升级」——
   // 存量部署重跑 seed 时把「出厂默认」升级为最新版本；用户自定义过 prompt 的模板若想保持定制，
   // 应在平台上再次修改，seed 不承担保留用户定制的义务）。
-  // 其余字段（defaultModelId/name/permissionScope 等）保持 update:{} 语义——不覆盖用户已改配置，
-  // defaultModelId 模板默认值仅首次 create 时生效。
+  // 其余字段（defaultModelId/name/permissionScope/persona 等）保持 update:{} 语义——不覆盖用户已改配置，
+  // defaultModelId 与 persona 模板默认值仅首次 create 时生效（存量环境已设 persona 不被 seed 覆盖）。
   for (const agent of templateAgents) {
     await prisma.agent.upsert({
       where: { id: agent.id },
