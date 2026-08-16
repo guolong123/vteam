@@ -222,8 +222,8 @@ function AgentInfoBar({
         display: "flex",
         alignItems: "center",
         gap: space.md,
-        padding: `${space.lg}px ${space.xl}px`,
-        backgroundColor: "#FFFFFF",
+        padding: `${space.lg}px ${space.xl}px ${space.lg}px 80px`,
+        backgroundColor: neutral[50],
         borderBottom: `1px solid ${neutral[200]}`,
         ...baseFont,
       }}
@@ -301,8 +301,8 @@ function GroupContextBar({
         display: "flex",
         flexDirection: "column",
         gap: space.sm,
-        padding: `${space.md}px ${space.xl}px`,
-        backgroundColor: "#FFFFFF",
+        padding: `${space.md}px ${space.xl}px ${space.md}px 80px`,
+        backgroundColor: neutral[50],
         borderBottom: `1px solid ${neutral[200]}`,
         ...baseFont,
       }}
@@ -393,7 +393,7 @@ function DmMessageList({
         flex: 1,
         minHeight: 0,
         overflowY: "auto",
-        padding: `${space.xl}px`,
+        padding: `${space.xl}px ${space.xl}px ${space.xl}px 80px`,
         display: "flex",
         flexDirection: "column",
         gap: space.lg,
@@ -1105,6 +1105,7 @@ export default function DmChatPage() {
         display: "flex",
         flexDirection: "column",
         backgroundColor: neutral[50],
+        marginLeft: -80,
         ...baseFont,
       }}
     >
@@ -1141,7 +1142,7 @@ export default function DmChatPage() {
       <div
         style={{
           flexShrink: 0,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: neutral[50],
           borderTop: `1px solid ${neutral[200]}`,
           ...baseFont,
         }}

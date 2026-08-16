@@ -57,6 +57,7 @@ export default function DocsPage() {
         flexDirection: "column",
         overflow: "hidden",
         backgroundColor: neutral[50],
+        marginLeft: -80,
         ...baseFont,
       }}
     >
@@ -66,7 +67,7 @@ export default function DocsPage() {
           display: "flex",
           alignItems: "center",
           gap: space.md,
-          padding: `${space.md}px ${space.xl}px ${space.md}px 0`,
+          padding: `${space.md}px ${space.xl}px ${space.md}px 80px`,
           backgroundColor: neutral[50],
           borderBottom: `1px solid ${neutral[200]}`,
           flexShrink: 0,
@@ -126,8 +127,8 @@ export default function DocsPage() {
           display: "flex",
           alignItems: "center",
           gap: space.xs,
-          padding: `${space.sm}px ${space.xl}px 0`,
-          backgroundColor: "#FFFFFF",
+          padding: `${space.sm}px 80px 0`,
+          backgroundColor: neutral[50],
           borderBottom: `1px solid ${neutral[200]}`,
           flexShrink: 0,
         }}
@@ -165,7 +166,7 @@ export default function DocsPage() {
       </div>
 
       {/* 内容区：文档阅读器（v4 内嵌渲染，initialDocId 定位）或 原型面板（懒加载） */}
-      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", paddingLeft: 80 }}>
         {tab === "docs" ? <DocExplorer taskId={taskId} initialDocId={initialDocId} /> : <PrototypePanel taskId={taskId} />}
       </div>
     </div>
