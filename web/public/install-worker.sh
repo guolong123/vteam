@@ -24,6 +24,13 @@
 #                       为外部可达地址（如 http://<控制面外部地址>/api/v1/platform-mcp），否则内置
 #                       MCP 不可达（server 下发的默认地址为集群内服务名）；集群内 worker 可省略。
 #                       未提供时仅提示，不强制写入（保证集群内 worker 无感知）。
+#   --advertise-host <url>   worker 对 server 公布的 serve 基址（WORKER_ADVERTISE_HOST，可选）：
+#                       外部/跨机 worker 必须设置为 server 可达的 worker 地址（如
+#                       http://<worker 局域网 IP>），否则 baseUrl 默认 http://127.0.0.1 仅本机
+#                       可访问，server 连不上 → worker 显示不可用；集群内/本机 worker 可省略。
+#   --serve-hostname <host>  opencode serve 监听地址（OPENCODE_SERVE_HOSTNAME，可选）：外部
+#                       worker 须设 0.0.0.0（serve 监听非回环，server 才能连上）；缺省 127.0.0.1
+#                       只监听本机。未提供时仅提示，不强制写入（本机/集群内 worker 无感知）。
 set -euo pipefail
 
 # ------------------------------ 参数解析 ------------------------------
@@ -35,6 +42,8 @@ WORKER_TOKEN=""
 WORKER_SRC_URL=""
 INSTALL_DIR="${HOME}/aiagents-worker"
 WORKER_MCP_URL=""
+WORKER_ADVERTISE_HOST=""
+WORKER_SERVE_HOSTNAME=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -46,8 +55,10 @@ while [[ $# -gt 0 ]]; do
     --src-url) WORKER_SRC_URL="${2:-}"; shift 2 ;;
     --dir) INSTALL_DIR="${2:-}"; shift 2 ;;
     --mcp-url) WORKER_MCP_URL="${2:-}"; shift 2 ;;
+    --advertise-host) WORKER_ADVERTISE_HOST="${2:-}"; shift 2 ;;
+    --serve-hostname) WORKER_SERVE_HOSTNAME="${2:-}"; shift 2 ;;
     *)
-      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url）" >&2
+      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-hostname）" >&2
       exit 1
       ;;
   esac
@@ -161,7 +172,13 @@ update_env WORKER_ID "${WORKER_ID}"
 if [ -n "${WORKER_MCP_URL}" ]; then
   update_env WORKER_MCP_URL "${WORKER_MCP_URL}"
 fi
-echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}）"
+if [ -n "${WORKER_ADVERTISE_HOST}" ]; then
+  update_env WORKER_ADVERTISE_HOST "${WORKER_ADVERTISE_HOST}"
+fi
+if [ -n "${WORKER_SERVE_HOSTNAME}" ]; then
+  update_env OPENCODE_SERVE_HOSTNAME "${WORKER_SERVE_HOSTNAME}"
+fi
+echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}${WORKER_ADVERTISE_HOST:+，WORKER_ADVERTISE_HOST 已注入}${WORKER_SERVE_HOSTNAME:+，OPENCODE_SERVE_HOSTNAME 已注入}）"
 
 # ------------------------------ token 校验 ------------------------------
 if [ -z "${X_WORKER_TOKEN:-}" ]; then
@@ -186,6 +203,19 @@ if [ -z "${WORKER_MCP_URL}" ] && ! grep -q '^WORKER_MCP_URL=' .env; then
   echo "  （http://server:3000 或 http://vteam-server:3000），集群外无法解析 → 内置 MCP 不可达。"
   echo "  请设置 WORKER_MCP_URL=<外部可达 server>/api/v1/platform-mcp（如 http://<控制面外部地址>/api/v1/platform-mcp）"
   echo "  —— 可重跑本命令携带 --mcp-url <url>，或手动编辑 ${INSTALL_DIR}/worker/.env 后执行：./scripts/start.sh"
+fi
+
+# ------------------------------ 可达地址提示 ------------------------------
+# 外部/跨机 worker：未设置 WORKER_ADVERTISE_HOST 时上报 baseUrl 默认 http://127.0.0.1，
+# 仅本机可访问 → server 在远端连回环地址连不上 → worker 显示不可用。未提供 --advertise-host
+# 且 .env 亦无 WORKER_ADVERTISE_HOST 时醒目提示；不强制（本机/集群内 worker 无感知）。
+if [ -z "${WORKER_ADVERTISE_HOST}" ] && ! grep -q '^WORKER_ADVERTISE_HOST=' .env; then
+  echo "[install-worker] ⚠️  未配置 WORKER_ADVERTISE_HOST（worker 对 server 公布的 serve 地址）"
+  echo "  若本 worker 与 server 不在同一主机/集群：baseUrl 默认 http://127.0.0.1 仅本机可访问，"
+  echo "  server 无法连接 → worker 显示不可用。"
+  echo "  请设置 WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>（如 http://<worker 局域网 IP>）"
+  echo "  且 OPENCODE_SERVE_HOSTNAME=0.0.0.0（serve 须监听非回环，server 才能连上）。"
+  echo "  —— 可重跑本命令携带 --advertise-host <url> --serve-hostname 0.0.0.0，或手动编辑 ${INSTALL_DIR}/worker/.env 后执行：./scripts/start.sh"
 fi
 
 # ------------------------------ 启动 ------------------------------

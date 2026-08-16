@@ -31,6 +31,9 @@ export interface WorkerConfig {
   gitSshKeyPath: string;
   /** worker 对 server 公布的 serve 基址主机（D2：capabilities.baseUrl 上报用；容器 compose 设 http://worker） */
   workerAdvertiseHost: string;
+  /** WORKER_ADVERTISE_HOST 是否显式设置（env 中非空值即 true）。未显式设置时上报 baseUrl 为
+   *  http://127.0.0.1（仅本机可访问）——外部/跨机 worker 场景需启动告警引导（见 index.ts）。 */
+  workerAdvertiseHostExplicit: boolean;
   /** opencode serve 绑定地址（D2：默认 127.0.0.1 保住本地铁律；容器内设 0.0.0.0 供 server 容器访问） */
   opencodeServeHostname: string;
   /** C2：worker 默认模型（env WORKER_DEFAULT_MODEL，id 格式 providerID/modelID）；未设 = 不指定（serve 默认） */
@@ -102,6 +105,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
   const hostname = os.hostname();
   const workerId = (env.WORKER_ID ?? '').trim() || `w_${hostname}`;
   const workerName = (env.WORKER_NAME ?? '').trim() || hostname;
+  const advertiseHostRaw = (env.WORKER_ADVERTISE_HOST ?? '').trim();
 
   return {
     workerToken,
@@ -114,7 +118,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     logLevel: (env.LOG_LEVEL ?? '').trim() || 'info',
     workDir: (env.WORK_DIR ?? '').trim() || '/tmp/keta-worker',
     gitSshKeyPath: (env.GIT_SSH_KEY_PATH ?? '').trim(),
-    workerAdvertiseHost: (env.WORKER_ADVERTISE_HOST ?? '').trim() || 'http://127.0.0.1',
+    workerAdvertiseHost: advertiseHostRaw || 'http://127.0.0.1',
+    workerAdvertiseHostExplicit: advertiseHostRaw.length > 0,
     opencodeServeHostname: (env.OPENCODE_SERVE_HOSTNAME ?? '').trim() || '127.0.0.1',
     defaultModelId: (env.WORKER_DEFAULT_MODEL ?? '').trim() || undefined,
     mcpUrl: (env.WORKER_MCP_URL ?? '').trim() || undefined,
