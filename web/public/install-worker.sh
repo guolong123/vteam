@@ -20,6 +20,10 @@
 #   --token <token>     X_WORKER_TOKEN（注册鉴权，需与 server 侧约定一致；缺省引导手动填写）
 #   --src-url <url>     worker 发布包下载地址（缺省 ${SERVER_URL%/}/worker-src.tar.gz）
 #   --dir <path>        安装目录（缺省 $HOME/aiagents-worker）
+#   --mcp-url <url>     内置 vteam MCP 地址覆盖（WORKER_MCP_URL，可选）：集群外 worker 必须设置
+#                       为外部可达地址（如 http://<控制面外部地址>/api/v1/platform-mcp），否则内置
+#                       MCP 不可达（server 下发的默认地址为集群内服务名）；集群内 worker 可省略。
+#                       未提供时仅提示，不强制写入（保证集群内 worker 无感知）。
 set -euo pipefail
 
 # ------------------------------ 参数解析 ------------------------------
@@ -30,6 +34,7 @@ OPENCODE_VERSION=""
 WORKER_TOKEN=""
 WORKER_SRC_URL=""
 INSTALL_DIR="${HOME}/aiagents-worker"
+WORKER_MCP_URL=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,8 +45,9 @@ while [[ $# -gt 0 ]]; do
     --token) WORKER_TOKEN="${2:-}"; shift 2 ;;
     --src-url) WORKER_SRC_URL="${2:-}"; shift 2 ;;
     --dir) INSTALL_DIR="${2:-}"; shift 2 ;;
+    --mcp-url) WORKER_MCP_URL="${2:-}"; shift 2 ;;
     *)
-      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir）" >&2
+      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url）" >&2
       exit 1
       ;;
   esac
@@ -152,7 +158,10 @@ if [ -n "${WORKER_TOKEN}" ]; then
   update_env X_WORKER_TOKEN "${WORKER_TOKEN}"
 fi
 update_env WORKER_ID "${WORKER_ID}"
-echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}）"
+if [ -n "${WORKER_MCP_URL}" ]; then
+  update_env WORKER_MCP_URL "${WORKER_MCP_URL}"
+fi
+echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}）"
 
 # ------------------------------ token 校验 ------------------------------
 if [ -z "${X_WORKER_TOKEN:-}" ]; then
@@ -166,6 +175,18 @@ if [ -z "${X_WORKER_TOKEN}" ] || [ "${X_WORKER_TOKEN}" = "change-me-worker-token
 fi
 # 导出给 exec 的 start.sh，避免其重新 source .env 失败时 token 丢失
 export X_WORKER_TOKEN
+
+# ------------------------------ 内置 MCP 地址提示 ------------------------------
+# 集群外 worker：server 下发的内置 vteam MCP 地址（seed PLATFORM_MCP_URL）为集群内服务名
+# （http://server:3000/... 或 http://vteam-server:3000/...），集群外无法解析 → 内置 MCP 不可达。
+# 未提供 --mcp-url 且 .env 亦无 WORKER_MCP_URL 时醒目提示；不强制（集群内 worker 无感知）。
+if [ -z "${WORKER_MCP_URL}" ] && ! grep -q '^WORKER_MCP_URL=' .env; then
+  echo "[install-worker] ⚠️  未配置 WORKER_MCP_URL（内置 vteam MCP 地址覆盖）"
+  echo "  若本 worker 位于集群外：server 下发的内置 MCP 地址是集群内服务名"
+  echo "  （http://server:3000 或 http://vteam-server:3000），集群外无法解析 → 内置 MCP 不可达。"
+  echo "  请设置 WORKER_MCP_URL=<外部可达 server>/api/v1/platform-mcp（如 http://<控制面外部地址>/api/v1/platform-mcp）"
+  echo "  —— 可重跑本命令携带 --mcp-url <url>，或手动编辑 ${INSTALL_DIR}/worker/.env 后执行：./scripts/start.sh"
+fi
 
 # ------------------------------ 启动 ------------------------------
 if [ ! -d dist ]; then

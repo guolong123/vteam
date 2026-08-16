@@ -199,3 +199,28 @@
 - `npm run lint`：0 errors（14 warnings pre-existing）
 - `npm run build`：编译通过，standalone 输出正常
 - `/tasks/[id]` 页面大小：16.8 kB（+0.1 kB from previous）
+
+## 外部 worker 连不上内置 MCP：引导性增强（方案 A+B+D）— 2026-08-16
+
+### 问题根因
+- 集群外 worker（install-worker.sh 一键安装）不提供 WORKER_MCP_URL 配置入口，用 server 下发的默认地址（seed PLATFORM_MCP_URL = 集群内 `http://vteam-server:3000/api/v1/platform-mcp` / `http://server:3000`）→ DNS 无法解析 → 内置 vteam MCP 探测 failed
+- 覆盖链路本身正确：worker env WORKER_MCP_URL → capabilities.mcpUrl（注册上报，registry-client.ts:108）→ server 按 x-worker-id 覆盖内置地址下发（mcp-servers.service.ts）→ injector 注入 opencode.json（injector.ts:226 携 x-worker-id）——只缺入口/提示/文档
+
+### 改动清单（纯引导，机制零改动）
+- `web/public/install-worker.sh`：新增 `--mcp-url <url>` 参数（缺省空 → 非空才 `update_env WORKER_MCP_URL`，不强制）；安装后若未配置 WORKER_MCP_URL 打印醒目提示（集群内 worker 无感知）；帮助注释 + 未知参数报错同步更新
+- `worker/.env.example`：补 WORKER_MCP_URL 条目 + 集群外 worker 注释
+- `worker/src/mcp-status/mcp-status-probe.ts`：内置 MCP failed 时读注入的 <cwd>/opencode.json 的 `mcp.<name>.url`，hostname ∈ {server, vteam-server}（`isClusterInternalUrl`）→ 输出「内置 MCP 不可达：地址 <url> 为集群内服务名，集群外 worker 请设置 WORKER_MCP_URL=<外部可达地址>」；告警只在节流窗口外新探测触发（30s 节流语义保持）；内置名兼容新名 `vteam` + 存量旧名 `keta-platform`（seed 改名迁移）
+- `worker/README.md`：环境变量表补 WORKER_MCP_URL 行 + 「集群外 worker 配置」小节
+- `docs/deployment.md`：4.4 后补「4.4.1 集群外 worker 配置（WORKER_MCP_URL）」小节
+
+### 关键设计决策
+- **告警 URL 来源**：不依赖 config.mcpUrl（集群外 worker 未设置 WORKER_MCP_URL 时为空，会丢告警），而是探测时读注入后的 opencode.json——probe 探测的就是该文件效果，自包含且准确；解析器做成 `resolveBuiltinMcpUrl` 注入点便于单测
+- **不打扰原则**：仅 hostname ∈ {server, vteam-server} 才提示；外部域名/IP 可达失败不提示；connected/needs_auth 不提示；非内置 server failed 不提示
+- **幂等**：update_env 先删 `^KEY=` 再追加；`--mcp-url` 缺省不写 .env（集群内 worker 无感知）
+- **旧名兼容**：seed 将 keta-platform 改名 vteam，存量部署仍可能注入旧名，BUILTIN_MCP_SERVERS 双名匹配
+
+### 验证结果
+- `bash -n web/public/install-worker.sh`：SYNTAX_OK
+- worker jest 全量：19 suites / 361 tests 全通过（含 mcp-status 24 个，新增 12 个告警分支用例）
+- `scripts/pack-worker.sh` 重跑：worker-src.tar.gz 212K，`tar -tzf` 确认 .env.example 在包内且含 WORKER_MCP_URL
+- 部署待派发：install-worker.sh 由 web/public 静态服务提供，需 web 镜像重建才生效；worker-src.tar.gz 随 web 发布

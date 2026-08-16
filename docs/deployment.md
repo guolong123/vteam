@@ -256,6 +256,24 @@ helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline.yaml --w
 - 存量部署修复（不重装）：`UPDATE mcp_servers SET url='http://vteam-server:3000/api/v1/platform-mcp' WHERE name='keta-platform';` 然后 `kubectl rollout restart sts/vteam-worker`（injectMcp 启动时执行）。
 - 注意 worker 容器默认 cwd 是镜像 WORKDIR，探测 MCP 必须 `cd /data/keta-worker && opencode mcp list --pure` 才能读到注入的 opencode.json。
 
+#### 4.4.1 集群外 worker 配置（WORKER_MCP_URL）
+
+集群外独立部署的 worker（install-worker.sh 一键安装场景）与 server 不在同一集群网络，`PLATFORM_MCP_URL`
+默认值（`http://server:3000/...` / `http://vteam-server:3000/...`，均为集群内服务名）无法解析 → 内置 vteam MCP 探测 failed。
+
+worker 侧用 `WORKER_MCP_URL` 覆盖：注册时经 `capabilities.mcpUrl` 上报，server 在 worker 拉取
+mcp-servers 时按 worker 覆盖内置地址下发（不修改全局 seed 地址，集群内 worker 无感知）。
+
+```bash
+# worker/.env
+WORKER_MCP_URL=http://<控制面外部地址>/api/v1/platform-mcp
+```
+
+- `<控制面外部地址>`：worker 所在网络可达的 server 地址（如 `https://vteam.example.com`）。
+- 一键安装：`bash install-worker.sh ... --mcp-url http://<控制面外部地址>/api/v1/platform-mcp`；未提供时
+  脚本会醒目提示（不强制，集群内 worker 忽略即可）。
+- worker 探测到内置 MCP 失败且地址为集群内服务名时，`mcp-status-probe` 会在日志输出 WORKER_MCP_URL 引导提示。
+
 ### 4.5 secret：显式注入，避免随机化
 
 | key | 用途 | 生成 |

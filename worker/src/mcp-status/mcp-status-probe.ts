@@ -14,6 +14,8 @@
  */
 
 import { spawnSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 
 /** MCP 服务器可用性三态（11 §5.8）。 */
 export type McpStatus = 'connected' | 'failed' | 'needs_auth';
@@ -22,6 +24,26 @@ export type McpStatus = 'connected' | 'failed' | 'needs_auth';
 export interface McpStatusEntry {
   serverName: string;
   status: McpStatus;
+}
+
+/**
+ * 内置 vteam MCP 的注入名（新名 `vteam`；存量部署旧名 `keta-platform`，
+ * 改名迁移见 server/prisma/seed.ts）。探测失败时对两者都做集群内地址判定。
+ */
+export const BUILTIN_MCP_SERVERS = ['vteam', 'keta-platform'] as const;
+
+/**
+ * 判定内置 MCP 地址是否为集群内服务名（compose 的 `server` / k8s 的 `vteam-server`）。
+ * 集群外 worker 无法解析这类地址，是「内置 MCP 不可达」的典型根因。
+ */
+export function isClusterInternalUrl(url: string): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  return hostname === 'server' || hostname === 'vteam-server';
 }
 
 /** 探测执行函数形态（测试可注入 mock；默认 spawnSync opencode）。 */
@@ -43,6 +65,11 @@ export interface McpStatusProbeOptions {
   probeFn?: McpListProbeFn;
   /** 日志（可选，默认 console）。 */
   logger?: { warn(message: string): void };
+  /**
+   * 内置 vteam MCP 配置 URL 解析器（默认读 <cwd>/opencode.json 的 `mcp.<serverName>.url`）。
+   * 探测到内置 MCP failed 时用它取实际注入地址，判定集群内服务名后输出 WORKER_MCP_URL 引导。
+   */
+  resolveBuiltinMcpUrl?: (serverName: string) => string | undefined;
 }
 
 /** ANSI 转义序列（剥色/样式）。 */
@@ -104,6 +131,7 @@ export class McpStatusProbe {
   private readonly timeoutMs: number;
   private readonly probeFn: McpListProbeFn;
   private readonly logger?: { warn(message: string): void };
+  private readonly resolveBuiltinMcpUrl: (serverName: string) => string | undefined;
   private cached: McpStatusEntry[] = [];
   private lastProbeAt = 0;
 
@@ -121,6 +149,41 @@ export class McpStatusProbe {
         return { stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
       });
     this.logger = options.logger;
+    this.resolveBuiltinMcpUrl =
+      options.resolveBuiltinMcpUrl ?? ((serverName: string) => this.readInjectedUrl(options.cwd, serverName));
+  }
+
+  /** 默认 URL 解析：从注入后的 <cwd>/opencode.json 读 `mcp.<name>.url`（探测的同一文件）。 */
+  private readInjectedUrl(cwd: string | undefined, serverName: string): string | undefined {
+    if (!cwd) {
+      return undefined;
+    }
+    try {
+      const config = JSON.parse(
+        fs.readFileSync(path.join(cwd, 'opencode.json'), 'utf8'),
+      ) as { mcp?: Record<string, { url?: string }> };
+      return config?.mcp?.[serverName]?.url;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** 内置 vteam MCP failed 且地址为集群内服务名时输出 WORKER_MCP_URL 引导（仅新探测路径，节流不重复）。 */
+  private warnBuiltinUnreachable(entries: McpStatusEntry[]): void {
+    const failed = entries.find(
+      (e) =>
+        BUILTIN_MCP_SERVERS.some((name) => e.serverName === name) && e.status === 'failed',
+    );
+    if (!failed) {
+      return;
+    }
+    const url = this.resolveBuiltinMcpUrl(failed.serverName);
+    if (!url || !isClusterInternalUrl(url)) {
+      return;
+    }
+    this.logger?.warn?.(
+      `[mcp-status] 内置 MCP 不可达：地址 ${url} 为集群内服务名，集群外 worker 请设置 WORKER_MCP_URL=<外部可达地址>（如 http://<控制面外部地址>/api/v1/platform-mcp）`,
+    );
   }
 
   /**
@@ -139,6 +202,7 @@ export class McpStatusProbe {
       const entries = parseMcpListOutput(stdout);
       if (entries.length > 0 || !stderr) {
         this.cached = entries;
+        this.warnBuiltinUnreachable(entries);
       }
     } catch (err) {
       this.logger?.warn?.(

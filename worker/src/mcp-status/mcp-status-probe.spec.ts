@@ -5,7 +5,13 @@
  * - McpStatusProbe：30s 节流缓存（窗口内复用）、探测失败保留上次结果、
  *   probeFn 注入、默认 spawnSync 形态
  */
-import { McpStatusProbe, parseMcpListOutput, stripAnsi } from './mcp-status-probe';
+import {
+  BUILTIN_MCP_SERVERS,
+  McpStatusProbe,
+  isClusterInternalUrl,
+  parseMcpListOutput,
+  stripAnsi,
+} from './mcp-status-probe';
 
 describe('stripAnsi', () => {
   it('剥除 ANSI 转义序列（[90m 灰色着色等）', () => {
@@ -160,5 +166,149 @@ describe('McpStatusProbe（30s 节流缓存）', () => {
     });
 
     expect(probe.getStatus()).toEqual([]);
+  });
+});
+
+describe('isClusterInternalUrl（集群内服务名判定）', () => {
+  it('compose/k8s 服务名视为集群内地址', () => {
+    expect(isClusterInternalUrl('http://server:3000/api/v1/platform-mcp')).toBe(true);
+    expect(isClusterInternalUrl('http://vteam-server:3000/api/v1/platform-mcp')).toBe(true);
+  });
+
+  it('外部域名/IP 不算集群内地址', () => {
+    expect(isClusterInternalUrl('http://mcp.example.com/api/v1/platform-mcp')).toBe(false);
+    expect(isClusterInternalUrl('http://192.168.10.78:3000/api/v1/platform-mcp')).toBe(false);
+  });
+
+  it('非法 URL 返回 false 不抛错', () => {
+    expect(isClusterInternalUrl('not a url')).toBe(false);
+    expect(isClusterInternalUrl('')).toBe(false);
+  });
+});
+
+describe('内置 MCP 集群内地址引导告警', () => {
+  it('内置 vteam failed + 集群内地址 → 输出 WORKER_MCP_URL 引导', () => {
+    const warn = jest.fn();
+    const probe = new McpStatusProbe({
+      throttleMs: 30_000,
+      probeFn: () => ({
+        stdout: '●  ✗ vteam failed',
+        stderr: '',
+      }),
+      resolveBuiltinMcpUrl: () => 'http://vteam-server:3000/api/v1/platform-mcp',
+      logger: { warn },
+    });
+
+    probe.getStatus();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('[mcp-status] 内置 MCP 不可达'),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('http://vteam-server:3000/api/v1/platform-mcp'),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('WORKER_MCP_URL'),
+    );
+  });
+
+  it('存量旧名 keta-platform failed 亦触发（改名迁移兼容）', () => {
+    const warn = jest.fn();
+    const probe = new McpStatusProbe({
+      throttleMs: 30_000,
+      probeFn: () => ({ stdout: '●  ✗ keta-platform failed', stderr: '' }),
+      resolveBuiltinMcpUrl: () => 'http://server:3000/api/v1/platform-mcp',
+      logger: { warn },
+    });
+
+    probe.getStatus();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('WORKER_MCP_URL'));
+  });
+
+  it('内置 MCP 地址为外部可达地址时不告警（不打扰）', () => {
+    const warn = jest.fn();
+    const probe = new McpStatusProbe({
+      throttleMs: 30_000,
+      probeFn: () => ({ stdout: '●  ✗ vteam failed', stderr: '' }),
+      resolveBuiltinMcpUrl: () => 'http://mcp.example.com/api/v1/platform-mcp',
+      logger: { warn },
+    });
+
+    probe.getStatus();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('内置 MCP connected 不告警', () => {
+    const warn = jest.fn();
+    const probe = new McpStatusProbe({
+      throttleMs: 30_000,
+      probeFn: () => ({ stdout: '●  ✓ vteam connected', stderr: '' }),
+      resolveBuiltinMcpUrl: () => 'http://vteam-server:3000/api/v1/platform-mcp',
+      logger: { warn },
+    });
+
+    probe.getStatus();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('非内置 server failed 不告警', () => {
+    const warn = jest.fn();
+    const probe = new McpStatusProbe({
+      throttleMs: 30_000,
+      probeFn: () => ({ stdout: '●  ✗ gitee-ent failed', stderr: '' }),
+      resolveBuiltinMcpUrl: () => 'http://vteam-server:3000/api/v1/platform-mcp',
+      logger: { warn },
+    });
+
+    probe.getStatus();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('节流窗口内复用缓存不重复告警', () => {
+    jest.useFakeTimers();
+    const warn = jest.fn();
+    const probe = new McpStatusProbe({
+      throttleMs: 30_000,
+      probeFn: () => ({ stdout: '●  ✗ vteam failed', stderr: '' }),
+      resolveBuiltinMcpUrl: () => 'http://vteam-server:3000/api/v1/platform-mcp',
+      logger: { warn },
+    });
+
+    probe.getStatus();
+    probe.getStatus();
+    jest.advanceTimersByTime(29_999);
+    probe.getStatus();
+    expect(warn).toHaveBeenCalledTimes(1);
+    jest.useRealTimers();
+  });
+
+  it('默认 resolver 从 <cwd>/opencode.json 读取实际注入地址', () => {
+    const warn = jest.fn();
+    const fs = require('fs') as typeof import('fs');
+    const os = require('os') as typeof import('os');
+    const path = require('path') as typeof import('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-probe-'));
+    fs.writeFileSync(
+      path.join(dir, 'opencode.json'),
+      JSON.stringify({ mcp: { vteam: { type: 'remote', url: 'http://vteam-server:3000/api/v1/platform-mcp' } } }),
+      'utf8',
+    );
+    try {
+      const probe = new McpStatusProbe({
+        throttleMs: 30_000,
+        cwd: dir,
+        probeFn: () => ({ stdout: '●  ✗ vteam failed', stderr: '' }),
+        logger: { warn },
+      });
+
+      probe.getStatus();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('WORKER_MCP_URL'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('BUILTIN_MCP_SERVERS 覆盖新名与存量旧名', () => {
+    expect(BUILTIN_MCP_SERVERS).toContain('vteam');
+    expect(BUILTIN_MCP_SERVERS).toContain('keta-platform');
   });
 });

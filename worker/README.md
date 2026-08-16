@@ -63,6 +63,7 @@ npm run dev            # tsx src/index.ts
 |------|------|--------|------|
 | `X_WORKER_TOKEN` | 是 | 无 | 注册鉴权 token（对齐协议 `X-Worker-Token` header，与 server 的 `WORKER_TOKEN` 一致） |
 | `SERVER_URL` | 否 | `http://localhost:3000` | server 基址（docker compose 内为 `http://server:3000`） |
+| `WORKER_MCP_URL` | 否 | 空 | 内置 vteam MCP 地址覆盖（集群外 worker 用；覆盖 server 下发的内置地址。server 默认下发 seed 的 `PLATFORM_MCP_URL`——集群内服务名 `http://server:3000` / `http://vteam-server:3000`，集群外无法解析）；未设置 = 用 server 下发全局地址 |
 | `WORKER_ID` | 否 | `w_<hostname>` | worker 唯一 id |
 | `WORKER_NAME` | 否 | `<hostname>` | worker 可读名称 |
 | `OPENCODE_SERVE_PORT` | 否 | `0` | opencode serve 端口；`0` = OS 随机空闲端口（占用则 +1 重试） |
@@ -77,6 +78,24 @@ npm run dev            # tsx src/index.ts
 | `WORKER_EXEC_PORT` | 否 | `4198` | 执行端点端口（node:http POST /execute，与 serve 端口解耦） |
 | `WORKER_FIRST_TOKEN_TIMEOUT_MS` | 否 | `120000` | 首字超时 ms（模型时限内无首字输出即 abort；首字出现后无完成超时） |
 | `WORKER_MAX_INSTANCES` | 否 | `5` | worker 最大并发会话数（随注册上报，server 按 capacity 分派）；≤0/非法值兜底 5 |
+
+## 集群外 worker 配置（内置 MCP）
+
+worker 注册时上报 `capabilities.mcpUrl`（env `WORKER_MCP_URL`），server 在 worker 拉取
+mcp-servers 时按 worker 覆盖内置 vteam 地址下发（server/src/mcp-servers/mcp-servers.service.ts）。
+
+**集群内（compose/k8s）worker 无需配置**：server 下发的默认内置地址（seed `PLATFORM_MCP_URL`）
+即集群内服务名（`http://server:3000/...` / `http://vteam-server:3000/...`），worker 可正常解析。
+
+**集群外 worker 必须设置**，否则内置 vteam MCP 因地址不可解析而 failed：
+
+```bash
+# .env
+WORKER_MCP_URL=http://<控制面外部地址>/api/v1/platform-mcp
+```
+
+探测到内置 MCP 失败且地址为集群内服务名时，`mcp-status-probe` 会在 worker 日志输出
+WORKER_MCP_URL 引导提示。一键安装（install-worker.sh）可携带 `--mcp-url <url>` 写入该值。
 
 ## 目录结构
 
