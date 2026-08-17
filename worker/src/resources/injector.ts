@@ -364,7 +364,7 @@ export class ResourceInjector {
         return null;
       }
       const entry: Record<string, unknown> = { type: 'remote', url: server.url };
-      if (server.headers) entry.headers = server.headers;
+      if (server.headers) entry.headers = this.resolveHeaders(server.headers);
       if (server.oauth !== undefined && server.oauth !== null) {
         entry.oauth = server.oauth;
       }
@@ -373,6 +373,32 @@ export class ResourceInjector {
       return entry;
     }
     return null;
+  }
+
+  /**
+   * 解析 headers 中的 {env:VAR} 模板为实际值（worker 侧已知 WORKER_ID / X_WORKER_TOKEN
+   * 直接替换，不依赖 serve 子进程环境是否导出、以及 opencode 版本对 {env:} 模板的
+   * 支持差异——外部 worker 场景 serve 环境缺变量时模板替换为空导致 401 needs_auth）。
+   * 未知变量保留原样（由 opencode 侧兜底替换）。
+   */
+  private resolveHeaders(
+    headers: Record<string, unknown> | undefined,
+  ): Record<string, unknown> | undefined {
+    if (!headers) {
+      return headers;
+    }
+    const knownEnv: Record<string, string> = {
+      WORKER_ID: this.workerId,
+      X_WORKER_TOKEN: this.workerToken,
+    };
+    const resolved: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      resolved[key] =
+        typeof value === 'string'
+          ? value.replace(/\{env:([A-Z0-9_]+)\}/g, (match, name: string) => knownEnv[name] ?? match)
+          : value;
+    }
+    return resolved;
   }
 
   // ------------------------------------------------------------------
