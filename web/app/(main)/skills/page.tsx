@@ -51,7 +51,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { AgentBadge, ConfirmDialog } from "@/src/components/ui";
+import { AgentBadge, ConfirmDialog, Pagination } from "@/src/components/ui";
 import {
   type RoleKey,
   neutral,
@@ -1186,6 +1186,7 @@ function McpServerRow({
   onEdit,
   onDelete,
   onToggle,
+  onSelect,
 }: {
   server: ApiMcpServer;
   canManage: boolean;
@@ -1193,6 +1194,7 @@ function McpServerRow({
   onEdit: () => void;
   onDelete: () => void;
   onToggle: (s: ApiMcpServer) => void;
+  onSelect: () => void;
 }) {
   const builtin = isBuiltinMcpServer(server.name);
   return (
@@ -1201,6 +1203,7 @@ function McpServerRow({
       data-server-id={server.id}
       data-type={server.type}
       data-status={toFrontendStatus(server.status)}
+      onClick={onSelect}
       style={{
         display: "flex",
         alignItems: "center",
@@ -1209,6 +1212,7 @@ function McpServerRow({
         borderRadius: radius.md,
         backgroundColor: neutral[50],
         border: `1px solid ${neutral[200]}`,
+        cursor: "pointer",
         ...baseFont,
       }}
     >
@@ -1262,7 +1266,7 @@ function McpServerRow({
           type="button"
           data-testid="mcp-server-toggle-button"
           data-status={server.enabled ? "启用" : "停用"}
-          onClick={() => onToggle(server)}
+          onClick={(e) => { e.stopPropagation(); onToggle(server); }}
           title={server.enabled ? "点击停用" : "点击启用"}
           style={{
             display: "inline-flex",
@@ -1293,7 +1297,7 @@ function McpServerRow({
       )}
 
       {/* 操作（查看全员放开；编辑/删除 [admin] 专属；内置 server 只读不渲染编辑/删除） */}
-      <div style={{ display: "flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: space.xs, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
         <ActionButton label="查看" onClick={onView} testid="mcp-server-view-button" />
         {canManage && !builtin && (
           <>
@@ -1320,6 +1324,7 @@ function McpServerSection({
   onCreate,
   onDelete,
   onToggle,
+  onSelect,
 }: {
   servers: ApiMcpServer[];
   canManage: boolean;
@@ -1328,6 +1333,7 @@ function McpServerSection({
   onCreate: () => void;
   onDelete: (s: ApiMcpServer) => void;
   onToggle: (s: ApiMcpServer) => void;
+  onSelect: (s: ApiMcpServer) => void;
 }) {
   return (
     <div
@@ -1415,6 +1421,7 @@ function McpServerSection({
             onEdit={() => onEdit(s)}
             onDelete={() => onDelete(s)}
             onToggle={onToggle}
+            onSelect={() => onSelect(s)}
           />
         ))
       )}
@@ -2571,6 +2578,14 @@ export default function SkillToolManagePage() {
   /* 工具 Tab 内子 Tab（受控互斥）：内置 / 自定义 / MCP，默认内置 */
   const [toolTab, setToolTab] = useState<ToolTabKey>("builtin");
 
+  /* 服务端分页 state（每页 20 条） */
+  const [skillPage, setSkillPage] = useState(1);
+  const [customToolPage, setCustomToolPage] = useState(1);
+  const [mcpToolPage, setMcpToolPage] = useState(1);
+  const [mcpServersPage, setMcpServersPage] = useState(1);
+  const [serverToolsPage, setServerToolsPage] = useState(1);
+  const [selectedServer, setSelectedServer] = useState<ApiMcpServer | null>(null);
+
   /* 页面内反馈条（success=操作成功 / error=API 失败 / info=提示；3s 自动消失） */
   const [notice, setNotice] = useState<{ kind: "info" | "success" | "error"; text: string } | null>(
     null
@@ -2601,27 +2616,68 @@ export default function SkillToolManagePage() {
     return () => clearTimeout(timer);
   }, [notice]);
 
+  // tab 切换时重置对应分页
+  useEffect(() => {
+    if (tab === "skill") setSkillPage(1);
+  }, [tab]);
+  useEffect(() => {
+    if (tab === "tool" && toolTab === "custom") setCustomToolPage(1);
+    if (tab === "tool" && toolTab === "mcp") {
+      setMcpToolPage(1);
+      setSelectedServer(null);
+      setServerToolsPage(1);
+    }
+  }, [tab, toolTab]);
+
   const showNotice = (kind: "info" | "success" | "error", text: string) =>
     setNotice({ kind, text });
 
-  /* 列表数据：GET /skills + GET /tools（分页 pageSize=100，一次拉全量；对齐 agents 页模式） */
+  /* 列表数据：GET /skills + GET /tools（分页 pageSize=20；MCP 服务器分页 + 全量反查） */
   const skillsQuery = useQuery({
-    queryKey: ["skills"],
+    queryKey: ["skills", { page: skillPage }],
     queryFn: () =>
-      api.get<PageResponse<ApiSkill>>("/skills", { query: { page: 1, pageSize: 100 } }),
+      api.get<PageResponse<ApiSkill>>("/skills", { query: { page: skillPage, pageSize: 20 } }),
   });
-  const toolsQuery = useQuery({
-    queryKey: ["tools"],
+  const builtinToolsQuery = useQuery({
+    queryKey: ["tools", { source: "builtin" }],
     queryFn: () =>
-      api.get<PageResponse<ApiTool>>("/tools", { query: { page: 1, pageSize: 100 } }),
+      api.get<PageResponse<ApiTool>>("/tools", { query: { source: "builtin", page: 1, pageSize: 100 } }),
+  });
+  const customToolsQuery = useQuery({
+    queryKey: ["tools", { source: "custom", page: customToolPage }],
+    queryFn: () =>
+      api.get<PageResponse<ApiTool>>("/tools", { query: { source: "custom", page: customToolPage, pageSize: 20 } }),
+  });
+  const mcpToolsQuery = useQuery({
+    queryKey: ["tools", { source: "mcp", page: mcpToolPage }],
+    queryFn: () =>
+      api.get<PageResponse<ApiTool>>("/tools", { query: { source: "mcp", page: mcpToolPage, pageSize: 20 } }),
   });
   // T8c：MCP 服务器真实三态数据源（GET /mcp-servers 含 worker 心跳上报的 status）
   const mcpServersQuery = useQuery({
-    queryKey: ["mcp-servers"],
+    queryKey: ["mcp-servers", { page: mcpServersPage }],
+    queryFn: () =>
+      api.get<PageResponse<ApiMcpServer>>("/mcp-servers", {
+        query: { page: mcpServersPage, pageSize: 20 },
+      }),
+  });
+  // 全量 MCP 服务器（供 mcpServerMap 反查，分页查询只含当前页服务器）
+  const allMcpServersQuery = useQuery({
+    queryKey: ["mcp-servers-all"],
     queryFn: () =>
       api.get<PageResponse<ApiMcpServer>>("/mcp-servers", {
         query: { page: 1, pageSize: 100 },
       }),
+    staleTime: 60_000,
+  });
+  // 二级视图：选中服务器的工具列表（工具表 mcpServer 存服务器名称，按 name 过滤）
+  const serverToolsQuery = useQuery({
+    queryKey: ["tools", { source: "mcp", mcpServer: selectedServer?.name, page: serverToolsPage }],
+    queryFn: () =>
+      api.get<PageResponse<ApiTool>>("/tools", {
+        query: { source: "mcp", mcpServer: selectedServer!.name, page: serverToolsPage, pageSize: 20 },
+      }),
+    enabled: !!selectedServer,
   });
 
   const skillsData = useMemo(
@@ -2629,44 +2685,55 @@ export default function SkillToolManagePage() {
     [skillsQuery.data]
   );
   const builtinData = useMemo(
-    () =>
-      (toolsQuery.data?.items ?? [])
-        .filter((t) => t.source === "builtin")
-        .map(toBuiltinTool),
-    [toolsQuery.data]
+    () => (builtinToolsQuery.data?.items ?? []).map(toBuiltinTool),
+    [builtinToolsQuery.data]
   );
   const customData = useMemo(
-    () =>
-      (toolsQuery.data?.items ?? [])
-        .filter((t) => t.source === "custom")
-        .map(toCustomTool),
-    [toolsQuery.data]
+    () => (customToolsQuery.data?.items ?? []).map(toCustomTool),
+    [customToolsQuery.data]
   );
   // T8c：mcp-servers 建索引（type + 三态 status）。双键：tool.mcpServer 为弱关联
   // 存 server id（ms_xxx），用户注册时也可能直接写 server 名 → id/name 均可命中
   const mcpServerMap = useMemo(() => {
     const map = new Map<string, { name: string; type: "local" | "remote"; status: string | null }>();
-    for (const s of mcpServersQuery.data?.items ?? []) {
+    for (const s of allMcpServersQuery.data?.items ?? []) {
       const value = { name: s.name, type: s.type, status: s.status };
       map.set(s.id, value);
       map.set(s.name, value);
     }
     return map;
-  }, [mcpServersQuery.data]);
-  const mcpData = useMemo(
-    () =>
-      (toolsQuery.data?.items ?? [])
-        .filter((t) => t.source === "mcp")
-        .map((t) => toMcpTool(t, mcpServerMap.get(t.mcpServer ?? "mcp"))),
-    [toolsQuery.data, mcpServerMap]
+  }, [allMcpServersQuery.data]);
+  // 合并三查询 items 供 handleViewTool/handleOpenEditTool 反查
+  const allToolsItems = useMemo(
+    () => [
+      ...(builtinToolsQuery.data?.items ?? []),
+      ...(customToolsQuery.data?.items ?? []),
+      ...(mcpToolsQuery.data?.items ?? []),
+    ],
+    [builtinToolsQuery.data, customToolsQuery.data, mcpToolsQuery.data]
+  );
+  // 二级视图用 serverToolsQuery items 补充反查
+  const allToolsWithServer = useMemo(
+    () => (selectedServer ? [...allToolsItems, ...(serverToolsQuery.data?.items ?? [])] : allToolsItems),
+    [allToolsItems, selectedServer, serverToolsQuery.data]
   );
 
+  // totalPages 计算
+  const skillTotalPages = Math.max(1, Math.ceil((skillsQuery.data?.total ?? 0) / 20));
+  const customTotalPages = Math.max(1, Math.ceil((customToolsQuery.data?.total ?? 0) / 20));
+  const mcpServersTotalPages = Math.max(1, Math.ceil((mcpServersQuery.data?.total ?? 0) / 20));
+  const serverToolsTotalPages = Math.max(1, Math.ceil((serverToolsQuery.data?.total ?? 0) / 20));
+  // effectiveSelectedServer：allMcpServersQuery 数据重派生（防止 selectedServer 被删除后失效）
+  const effectiveSelectedServer = selectedServer
+    ? allMcpServersQuery.data?.items.find((s) => s.id === selectedServer.id) ?? selectedServer
+    : null;
+
   const loadError = (() => {
-    const err = skillsQuery.error ?? toolsQuery.error;
+    const err = skillsQuery.error ?? builtinToolsQuery.error ?? customToolsQuery.error ?? mcpToolsQuery.error ?? mcpServersQuery.error;
     if (!err) return null;
     return isApiError(err) ? err.message : "加载技能/工具列表失败";
   })();
-  const isLoading = skillsQuery.isPending || toolsQuery.isPending;
+  const isLoading = skillsQuery.isPending || builtinToolsQuery.isPending || customToolsQuery.isPending || mcpToolsQuery.isPending || mcpServersQuery.isPending;
 
   /* 启停：skill → PATCH /skills/:id/status、tool → PATCH /tools/:id {enabled}（09 §3.8）→ 刷新对应列表 */
   const toggleMutation = useMutation({
@@ -2743,6 +2810,7 @@ export default function SkillToolManagePage() {
         : api.post<ApiMcpServer>("/mcp-servers", payload),
     onSuccess: (updated, vars) => {
       queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+      queryClient.invalidateQueries({ queryKey: ["mcp-servers-all"] });
       queryClient.invalidateQueries({ queryKey: ["tools"] });
       setMcpServerModal(null);
       showNotice("success", `MCP 服务器「${updated.name}」${vars.id ? "保存" : "注册"}成功`);
@@ -2756,6 +2824,7 @@ export default function SkillToolManagePage() {
     mutationFn: (id: string) => api.delete(`/mcp-servers/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+      queryClient.invalidateQueries({ queryKey: ["mcp-servers-all"] });
       queryClient.invalidateQueries({ queryKey: ["tools"] });
       setDeletingMcpServer(null);
       showNotice("success", "MCP 服务器已删除");
@@ -2770,6 +2839,7 @@ export default function SkillToolManagePage() {
       api.patch<ApiMcpServer>(`/mcp-servers/${id}`, { enabled }),
     onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+      queryClient.invalidateQueries({ queryKey: ["mcp-servers-all"] });
       queryClient.invalidateQueries({ queryKey: ["tools"] });
       showNotice("success", vars.enabled ? "已启用" : "已停用");
     },
@@ -2899,16 +2969,16 @@ export default function SkillToolManagePage() {
     toggleMcpServerMutation.mutate({ id: s.id, enabled: !s.enabled });
   };
 
-  /* 工具详情：从 tools 列表反查原始 ApiTool（含 schema/initCommand/mcpServer） */
+  /* 工具详情：从合并工具列表反查原始 ApiTool（含 schema/initCommand/mcpServer） */
   const handleViewTool = (toolId: string) => {
-    const raw = toolsQuery.data?.items.find((x) => x.id === toolId);
+    const raw = allToolsWithServer.find((x) => x.id === toolId);
     if (raw) setViewingTool(raw);
   };
 
   /* 打开工具编辑（[admin]，自定义工具）：重置错误态 + 反查原始记录 */
   const handleOpenEditTool = (toolId: string) => {
     editToolMutation.reset();
-    const raw = toolsQuery.data?.items.find((x) => x.id === toolId);
+    const raw = allToolsWithServer.find((x) => x.id === toolId);
     if (raw) setEditingTool(raw);
   };
 
@@ -2927,10 +2997,10 @@ export default function SkillToolManagePage() {
   };
 
   /* 工具总数 = 内置 + 自定义 + MCP（Tab 徽章计数） */
-  const toolTotal = builtinData.length + customData.length + mcpData.length;
+  const toolTotal = (builtinToolsQuery.data?.total ?? 0) + (customToolsQuery.data?.total ?? 0) + (mcpToolsQuery.data?.total ?? 0);
 
   const tabs: { key: TabKey; label: string; icon: string; count: number }[] = [
-    { key: "skill", label: "技能", icon: "✦", count: skillsData.length },
+    { key: "skill", label: "技能", icon: "✦", count: skillsQuery.data?.total ?? 0 },
     { key: "tool", label: "工具", icon: "⚙", count: toolTotal },
   ];
 
@@ -3226,7 +3296,10 @@ export default function SkillToolManagePage() {
                   data-testid="skills-retry"
                   onClick={() => {
                     skillsQuery.refetch();
-                    toolsQuery.refetch();
+                    builtinToolsQuery.refetch();
+                    customToolsQuery.refetch();
+                    mcpToolsQuery.refetch();
+                    mcpServersQuery.refetch();
                   }}
                   style={{
                     padding: `${space.sm}px ${space.lg}px`,
@@ -3271,6 +3344,16 @@ export default function SkillToolManagePage() {
                 />
               ))
             ))}
+            {tab === "skill" && !isLoading && !loadError && skillsData.length > 0 && (
+              <div style={{ display: "flex", justifyContent: "center", paddingTop: space.sm }}>
+                <Pagination
+                  page={skillPage}
+                  totalPages={skillTotalPages}
+                  onPageChange={setSkillPage}
+                  dataTestId="skills-pagination"
+                />
+              </div>
+            )}
 
           {/* 工具列表：三子 Tab 互斥切换（内置 / 自定义 / MCP） */}
           {tab === "tool" && (
@@ -3279,9 +3362,9 @@ export default function SkillToolManagePage() {
                 active={toolTab}
                 onChange={setToolTab}
                 counts={{
-                  builtin: builtinData.length,
-                  custom: customData.length,
-                  mcp: mcpData.length,
+                  builtin: builtinToolsQuery.data?.total ?? 0,
+                  custom: customToolsQuery.data?.total ?? 0,
+                  mcp: mcpToolsQuery.data?.total ?? 0,
                 }}
               />
               {isLoading ? (
@@ -3310,7 +3393,10 @@ export default function SkillToolManagePage() {
                     data-testid="tools-retry"
                     onClick={() => {
                       skillsQuery.refetch();
-                      toolsQuery.refetch();
+                      builtinToolsQuery.refetch();
+                      customToolsQuery.refetch();
+                      mcpToolsQuery.refetch();
+                      mcpServersQuery.refetch();
                     }}
                     style={{
                       padding: `${space.sm}px ${space.lg}px`,
@@ -3375,58 +3461,173 @@ export default function SkillToolManagePage() {
                     <span>暂无自定义工具，点击右上「注册工具」创建</span>
                   </div>
                 ) : (
-                  customData.map((t) => (
-                    <CustomToolRow
-                      key={t.id}
-                      t={t}
-                      onView={() => handleViewTool(t.id)}
-                      onEdit={() => handleOpenEditTool(t.id)}
-                      onToggle={() => handleToggleEnabled("tool", t.id, t.enabled === "启用")}
-                      canManage={isAdmin}
-                    />
-                  ))
+                  <>
+                    {customData.map((t) => (
+                      <CustomToolRow
+                        key={t.id}
+                        t={t}
+                        onView={() => handleViewTool(t.id)}
+                        onEdit={() => handleOpenEditTool(t.id)}
+                        onToggle={() => handleToggleEnabled("tool", t.id, t.enabled === "启用")}
+                        canManage={isAdmin}
+                      />
+                    ))}
+                    <div style={{ display: "flex", justifyContent: "center", paddingTop: space.sm }}>
+                      <Pagination
+                        page={customToolPage}
+                        totalPages={customTotalPages}
+                        onPageChange={setCustomToolPage}
+                        dataTestId="tools-custom-pagination"
+                      />
+                    </div>
+                  </>
                 )
               ) : (
                 <>
-                  {/* MCP server 管理区块（列表/查看/注册/编辑/删除/启停，成员只读查看） */}
-                  <McpServerSection
-                    servers={mcpServersQuery.data?.items ?? []}
-                    canManage={isAdmin}
-                    onView={(s) => handleOpenMcpServerModal("view", s)}
-                    onEdit={(s) => handleOpenMcpServerModal("edit", s)}
-                    onCreate={() => handleOpenMcpServerModal("create")}
-                    onDelete={(s) => setDeletingMcpServer(s)}
-                    onToggle={(s) => handleToggleMcpServer(s)}
-                  />
-                  {mcpData.length === 0 ? (
-                    <div
-                      data-testid="tool-empty"
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        alignItems: "center",
-                        gap: space.sm,
-                        padding: `${space.xl}px`,
-                        fontSize: fontSize.md,
-                        color: neutral[400],
-                        textAlign: "center",
-                      }}
-                    >
-                      <span aria-hidden style={{ fontSize: fontSize.xl }}>◈</span>
-                      <span>暂无 MCP 工具，请先在上方「MCP 服务器」区块新建并连接 server</span>
-                    </div>
-                  ) : (
-                    mcpData.map((t) => (
-                      <McpToolRow
-                        key={t.id}
-                        t={t}
-                        onView={() => handleViewTool(t.toolId)}
-                        onToggle={() =>
-                          handleToggleEnabled("tool", t.toolId, t.enabled === "启用")
-                        }
+                  {!effectiveSelectedServer ? (
+                    <>
+                      <McpServerSection
+                        servers={mcpServersQuery.data?.items ?? []}
                         canManage={isAdmin}
+                        onView={(s) => handleOpenMcpServerModal("view", s)}
+                        onEdit={(s) => handleOpenMcpServerModal("edit", s)}
+                        onCreate={() => handleOpenMcpServerModal("create")}
+                        onDelete={(s) => setDeletingMcpServer(s)}
+                        onToggle={(s) => handleToggleMcpServer(s)}
+                        onSelect={(s) => { setSelectedServer(s); setServerToolsPage(1); }}
                       />
-                    ))
+                      {mcpServersQuery.data?.items && mcpServersQuery.data.items.length > 0 && (
+                        <div style={{ display: "flex", justifyContent: "center", paddingTop: space.sm }}>
+                          <Pagination
+                            page={mcpServersPage}
+                            totalPages={mcpServersTotalPages}
+                            onPageChange={setMcpServersPage}
+                            dataTestId="mcp-servers-pagination"
+                          />
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {/* 面包屑行 */}
+                      <div
+                        data-testid="mcp-server-breadcrumb"
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: space.sm,
+                          padding: `${space.sm}px 0`,
+                        }}
+                      >
+                        <button
+                          type="button"
+                          data-testid="mcp-server-back-button"
+                          onClick={() => setSelectedServer(null)}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: space.xs,
+                            padding: `${space.xs}px ${space.sm}px`,
+                            borderRadius: radius.md,
+                            border: `1px solid ${neutral[200]}`,
+                            backgroundColor: "#FFFFFF",
+                            color: neutral[600],
+                            fontSize: fontSize.sm,
+                            cursor: "pointer",
+                            fontFamily: fontFamily.body,
+                          }}
+                        >
+                          ← 返回 MCP 服务器列表
+                        </button>
+                        <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900], fontFamily: fontFamily.mono }}>
+                          {effectiveSelectedServer.name}
+                        </span>
+                        <span style={{ fontSize: fontSize.xs, color: neutral[400], fontFamily: fontFamily.mono }}>
+                          {mcpServerEndpoint(effectiveSelectedServer)}
+                        </span>
+                      </div>
+                      {serverToolsQuery.isPending ? (
+                        <div
+                          data-testid="server-tools-loading"
+                          style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xl}px 0` }}
+                        >
+                          加载中…
+                        </div>
+                      ) : serverToolsQuery.error ? (
+                        <div
+                          data-testid="server-tools-error"
+                          role="alert"
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "center",
+                            gap: space.md,
+                            padding: `${space.xl}px`,
+                            textAlign: "center",
+                          }}
+                        >
+                          <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>加载服务器工具失败</div>
+                          <button
+                            type="button"
+                            data-testid="server-tools-retry"
+                            onClick={() => serverToolsQuery.refetch()}
+                            style={{
+                              padding: `${space.sm}px ${space.lg}px`,
+                              borderRadius: radius.md,
+                              border: `1px solid ${neutral[200]}`,
+                              backgroundColor: "#FFFFFF",
+                              color: neutral[600],
+                              fontSize: fontSize.md,
+                              fontWeight: 500,
+                              cursor: "pointer",
+                              fontFamily: fontFamily.body,
+                            }}
+                          >
+                            重试
+                          </button>
+                        </div>
+                      ) : (serverToolsQuery.data?.items ?? []).length === 0 ? (
+                        <div
+                          data-testid="server-tools-empty"
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "center",
+                            gap: space.sm,
+                            padding: `${space.xl}px`,
+                            fontSize: fontSize.md,
+                            color: neutral[400],
+                            textAlign: "center",
+                          }}
+                        >
+                          <span aria-hidden style={{ fontSize: fontSize.xl }}>◈</span>
+                          <span>该服务器暂无工具</span>
+                        </div>
+                      ) : (
+                        <>
+                          {(serverToolsQuery.data?.items ?? []).map((t) => {
+                            const mapped = toMcpTool(t, mcpServerMap.get(t.mcpServer ?? "mcp"));
+                            return (
+                              <McpToolRow
+                                key={t.id}
+                                t={mapped}
+                                onView={() => handleViewTool(t.id)}
+                                onToggle={() => handleToggleEnabled("tool", t.id, !t.enabled)}
+                                canManage={isAdmin}
+                              />
+                            );
+                          })}
+                          <div style={{ display: "flex", justifyContent: "center", paddingTop: space.sm }}>
+                            <Pagination
+                              page={serverToolsPage}
+                              totalPages={serverToolsTotalPages}
+                              onPageChange={setServerToolsPage}
+                              dataTestId="mcp-server-tools-pagination"
+                            />
+                          </div>
+                        </>
+                      )}
+                    </>
                   )}
                 </>
               )}
