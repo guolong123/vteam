@@ -253,6 +253,55 @@ describe('ResourceInjector.injectMcp', () => {
     });
   });
 
+  it('remote 型 headers 的 {env:WORKER_ID}/{env:X_WORKER_TOKEN} 替换为实际值（未知变量保留）', async () => {
+    const workDir = workDirFor();
+    const fetchImpl = makeFetch({
+      '/api/v1/mcp-servers': () => ({
+        items: [
+          {
+            id: 'ms_vteam',
+            name: 'vteam',
+            type: 'remote',
+            command: null,
+            url: 'https://vteam.example.com/api/v1/platform-mcp',
+            headers: {
+              'x-worker-id': '{env:WORKER_ID}',
+              'x-worker-token': '{env:X_WORKER_TOKEN}',
+              Authorization: 'Bearer {env:UNKNOWN_VAR}',
+            },
+            oauth: null,
+          },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 100,
+      }),
+    });
+
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok-secret',
+      workerId: 'w_external',
+      workDir,
+      fetchImpl,
+    });
+
+    await injector.injectMcp();
+    const config = JSON.parse(
+      fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'),
+    ) as { mcp?: Record<string, unknown> };
+    expect(config.mcp?.vteam).toMatchObject({
+      type: 'remote',
+      url: 'https://vteam.example.com/api/v1/platform-mcp',
+      headers: {
+        'x-worker-id': 'w_external',
+        'x-worker-token': 'tok-secret',
+        Authorization: 'Bearer {env:UNKNOWN_VAR}',
+      },
+      enabled: true,
+    });
+  });
+
   it('local 型透传 cwd/environment/timeout（enabled 恒 true 因已过滤启用集）', async () => {
     const workDir = workDirFor();
     const fetchImpl = makeFetch({
