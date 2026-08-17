@@ -32,6 +32,9 @@
 #   --serve-hostname <host>  opencode serve 监听地址（OPENCODE_SERVE_HOSTNAME，可选）：外部
 #                       worker 须设 0.0.0.0（serve 监听非回环，server 才能连上）；缺省 127.0.0.1
 #                       只监听本机。未提供时仅提示，不强制写入（本机/集群内 worker 无感知）。
+#   --work-dir <path>   worker 工作目录（WORK_DIR，可选；缺省 /tmp/keta-worker）：opencode serve
+#                       工作目录 + 资源注入落点（opencode.json / 技能 / 工具）。外部 worker 若
+#                       需固定工作目录/挂载持久化盘可设置；缺省不写入（worker 用内置默认）。
 set -euo pipefail
 
 # ------------------------------ 参数解析 ------------------------------
@@ -45,6 +48,7 @@ INSTALL_DIR="${HOME}/aiagents-worker"
 WORKER_MCP_URL=""
 WORKER_ADVERTISE_HOST=""
 WORKER_SERVE_HOSTNAME=""
+WORK_DIR=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -58,8 +62,9 @@ while [[ $# -gt 0 ]]; do
     --mcp-url) WORKER_MCP_URL="${2:-}"; shift 2 ;;
     --advertise-host) WORKER_ADVERTISE_HOST="${2:-}"; shift 2 ;;
     --serve-hostname) WORKER_SERVE_HOSTNAME="${2:-}"; shift 2 ;;
+    --work-dir) WORK_DIR="${2:-}"; shift 2 ;;
     *)
-      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-hostname）" >&2
+      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-hostname/--work-dir）" >&2
       exit 1
       ;;
   esac
@@ -184,7 +189,10 @@ fi
 if [ -n "${WORKER_SERVE_HOSTNAME}" ]; then
   update_env OPENCODE_SERVE_HOSTNAME "${WORKER_SERVE_HOSTNAME}"
 fi
-echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}${WORKER_ADVERTISE_HOST:+，WORKER_ADVERTISE_HOST 已注入}${WORKER_SERVE_HOSTNAME:+，OPENCODE_SERVE_HOSTNAME 已注入}）"
+if [ -n "${WORK_DIR}" ]; then
+  update_env WORK_DIR "${WORK_DIR}"
+fi
+echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}${WORKER_ADVERTISE_HOST:+，WORKER_ADVERTISE_HOST 已注入}${WORKER_SERVE_HOSTNAME:+，OPENCODE_SERVE_HOSTNAME 已注入}${WORK_DIR:+，WORK_DIR 已注入}）"
 
 # ------------------------------ token 校验 ------------------------------
 if [ -z "${X_WORKER_TOKEN:-}" ]; then
