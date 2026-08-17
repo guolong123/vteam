@@ -100,14 +100,14 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
     });
   });
 
-  describe('prototypes 原型端点（25-原型DSL动态渲染方案）', () => {
+  describe('prototypes 原型端点（26-原型TSX动态渲染）', () => {
     it('列表：成员校验通过 → { items: [{id, name, file}] }', async () => {
       mirror.listPrototypes.mockResolvedValue([
-        { id: 'my-proto', name: '登录页原型', file: 'my-proto.json' },
+        { id: 'my-proto', name: '登录页原型', file: 'my-proto/index.tsx' },
       ]);
       const result = await controller.prototypes(taskId, user as never);
       expect(mirror.listPrototypes).toHaveBeenCalledWith(taskId);
-      expect(result).toEqual({ items: [{ id: 'my-proto', name: '登录页原型', file: 'my-proto.json' }] });
+      expect(result).toEqual({ items: [{ id: 'my-proto', name: '登录页原型', file: 'my-proto/index.tsx' }] });
     });
 
     it('列表：无原型 → { items: [] }', async () => {
@@ -123,10 +123,17 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
       expect(err.response?.code).toBe('DOCS_SITE_FORBIDDEN');
     });
 
-    it('内容：成员校验通过 + 正常读取 DSL JSON', async () => {
+    it('内容：TSX 路径 → 返回 TSX 源码', async () => {
+      mirror.readPrototype.mockResolvedValue('export default function P() {}');
+      const result = await controller.prototypeContent(taskId, 'my-proto/index.tsx', user as never);
+      expect(mirror.readPrototype).toHaveBeenCalledWith(taskId, 'my-proto/index.tsx');
+      expect(result).toBe('export default function P() {}');
+    });
+
+    it('内容：旧 JSON 路径 → 返回 JSON', async () => {
       mirror.readPrototype.mockResolvedValue('{"name":"x"}');
-      const result = await controller.prototypeContent(taskId, 'my-proto.json', user as never);
-      expect(mirror.readPrototype).toHaveBeenCalledWith(taskId, 'my-proto.json');
+      const result = await controller.prototypeContent(taskId, 'old.json', user as never);
+      expect(mirror.readPrototype).toHaveBeenCalledWith(taskId, 'old.json');
       expect(result).toBe('{"name":"x"}');
     });
 
@@ -149,7 +156,7 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
     it('内容：非项目成员 → 403', async () => {
       prisma.projectMember.findUnique.mockResolvedValue(null);
       const err = (await controller
-        .prototypeContent(taskId, 'my-proto.json', user as never)
+        .prototypeContent(taskId, 'my-proto/index.tsx', user as never)
         .catch((e: unknown) => e)) as { response?: { code?: string } };
       expect(err.response?.code).toBe('DOCS_SITE_FORBIDDEN');
     });

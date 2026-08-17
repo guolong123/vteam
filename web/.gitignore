@@ -44,3 +44,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# runtime 资产（scripts/sync-runtime.mjs postinstall 生成；esbuild.wasm ~14MB 不入库）
+/public/esbuild/
+/public/vendor/

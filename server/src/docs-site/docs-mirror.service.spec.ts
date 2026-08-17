@@ -176,31 +176,142 @@ describe('DocsMirrorService（is_0000000024 F1 镜像导出层）', () => {
     });
   });
 
+  describe('TSX 原型镜像（26-原型TSX动态渲染）', () => {
+    const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-mirror-tsx-'));
+
+    afterEach(() => {
+      fs.rmSync(uploadsDir, { recursive: true, force: true });
+    });
+
+    function mockUploads(entries: Array<{ ref: string; body: string }>) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+      for (const e of entries) {
+        fs.writeFileSync(path.join(uploadsDir, e.ref.split('/').pop() as string), e.body);
+      }
+      prisma.artifactVersion.findMany.mockResolvedValue(
+        entries.map((e, i) => ({
+          version: 1,
+          contentRef: e.ref,
+          artifact: { id: `art_tsx_${i}`, title: `TSX原型${i}`, currentVersion: 1 },
+        })),
+      );
+      return jest
+        .spyOn(require('../uploads/uploads.service').FileStorageService, 'readUploadedFile')
+        .mockImplementation(async (ref: string) => {
+          const base = ref.split('/').pop();
+          return fs.promises.readFile(path.join(uploadsDir, base as string));
+        });
+    }
+
+    it('file 型 *.tsx → 写 <root>/<taskId>/prototypes/<slug>/index.tsx', async () => {
+      const tsxContent = 'export const meta = { name: "登录页" };\nexport default function Login() { return <div>Login</div>; }';
+      const spy = mockUploads([{ ref: '/uploads/login-page.tsx', body: tsxContent }]);
+      try {
+        await service.syncTask(taskId);
+        const file = path.join(root, taskId, 'prototypes', 'login-page', 'index.tsx');
+        expect(fs.existsSync(file)).toBe(true);
+        expect(fs.readFileSync(file, 'utf8')).toBe(tsxContent);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('TSX 与 .md 和旧 DSL JSON 共存', async () => {
+      const spy = mockUploads([
+        { ref: '/uploads/guide.md', body: '# Guide' },
+        { ref: '/uploads/dashboard.tsx', body: 'export default function Dash() { return <div/>; }' },
+        { ref: '/uploads/old-proto.prototype.json', body: '{"name":"Old"}' },
+      ]);
+      prisma.artifactVersion.findMany.mockResolvedValue([
+        { version: 1, contentRef: '/uploads/guide.md', artifact: { id: 'art_md', title: 'Guide', currentVersion: 1 } },
+        { version: 1, contentRef: '/uploads/dashboard.tsx', artifact: { id: 'art_tsx', title: 'Dash', currentVersion: 1 } },
+        { version: 1, contentRef: '/uploads/old-proto.prototype.json', artifact: { id: 'art_old', title: 'Old', currentVersion: 1 } },
+      ]);
+      try {
+        await service.syncTask(taskId);
+        const dir = path.join(root, taskId);
+        expect(fs.existsSync(path.join(dir, 'guide.md'))).toBe(true);
+        expect(fs.existsSync(path.join(dir, 'prototypes', 'dashboard', 'index.tsx'))).toBe(true);
+        expect(fs.existsSync(path.join(dir, 'prototypes', 'old-proto.json'))).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('重建时清理旧 TSX 原型目录', async () => {
+      const spy = mockUploads([{ ref: '/uploads/a.tsx', body: '<div/>' }]);
+      try {
+        await service.syncTask(taskId);
+        expect(fs.existsSync(path.join(root, taskId, 'prototypes', 'a', 'index.tsx'))).toBe(true);
+        spy.mockRestore();
+        prisma.artifactVersion.findMany.mockResolvedValue([]);
+        await service.syncTask(taskId);
+        expect(fs.existsSync(path.join(root, taskId, 'prototypes', 'a'))).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
   describe('listPrototypes / readPrototype', () => {
-    it('listPrototypes：无 prototypes 目录 → 空数组；有文件 → [{id, name, file}]（name 读 DSL name 字段）', async () => {
+    it('listPrototypes：无 prototypes 目录 → 空数组', async () => {
       expect(await service.listPrototypes(taskId)).toEqual([]);
+    });
+
+    it('listPrototypes：TSX 目录 → [{id, name, file: "<name>/index.tsx"}]（name 从 meta 导出）', async () => {
+      const dir = path.join(root, taskId, 'prototypes', 'login');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'index.tsx'), 'export const meta = { name: "登录页" };\nexport default function Login() {}');
+      expect(await service.listPrototypes(taskId)).toEqual([
+        { id: 'login', name: '登录页', file: 'login/index.tsx' },
+      ]);
+    });
+
+    it('listPrototypes：TSX 目录无 meta 导出 → name 回退目录名', async () => {
+      const dir = path.join(root, taskId, 'prototypes', 'dash');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'index.tsx'), 'export default function Dash() {}');
+      expect(await service.listPrototypes(taskId)).toEqual([
+        { id: 'dash', name: 'dash', file: 'dash/index.tsx' },
+      ]);
+    });
+
+    it('listPrototypes：TSX + 旧 JSON 共存 → 合并列表并排序', async () => {
+      const tsxDir = path.join(root, taskId, 'prototypes', 'alpha');
+      fs.mkdirSync(tsxDir, { recursive: true });
+      fs.writeFileSync(path.join(tsxDir, 'index.tsx'), 'export const meta = { name: "Alpha" }');
+      const jsonDir = path.join(root, taskId, 'prototypes');
+      fs.writeFileSync(path.join(jsonDir, 'beta.json'), '{"name":"Beta"}');
+      const items = await service.listPrototypes(taskId);
+      expect(items).toEqual([
+        { id: 'alpha', name: 'Alpha', file: 'alpha/index.tsx' },
+        { id: 'beta', name: 'Beta', file: 'beta.json' },
+      ]);
+    });
+
+    it('readPrototype：TSX 路径 <name>/index.tsx → 返回内容', async () => {
+      const dir = path.join(root, taskId, 'prototypes', 'my-proto');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'index.tsx'), 'export default function P() {}');
+      expect(await service.readPrototype(taskId, 'my-proto/index.tsx')).toBe('export default function P() {}');
+    });
+
+    it('readPrototype：旧 JSON 路径 <name>.json → 返回内容', async () => {
       const dir = path.join(root, taskId, 'prototypes');
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'a.json'), '{"name":"原型A"}');
-      fs.writeFileSync(path.join(dir, 'b.json'), '{"no_name":1}');
-      fs.writeFileSync(path.join(dir, 'bad.json'), '{broken');
-      expect(await service.listPrototypes(taskId)).toEqual([
-        { id: 'a', name: '原型A', file: 'a.json' },
-        { id: 'b', name: 'b', file: 'b.json' },
-      ]);
+      fs.writeFileSync(path.join(dir, 'old.json'), '{"name":"x"}');
+      expect(await service.readPrototype(taskId, 'old.json')).toBe('{"name":"x"}');
     });
 
     it('readPrototype：白名单外文件名（路径穿越）→ null', async () => {
       await expect(service.readPrototype(taskId, '../../etc/passwd')).resolves.toBeNull();
-      await expect(service.readPrototype(taskId, 'a/b.json')).resolves.toBeNull();
+      await expect(service.readPrototype(taskId, 'a/b/c.json')).resolves.toBeNull();
       await expect(service.readPrototype(taskId, '中文.json')).resolves.toBeNull();
+      await expect(service.readPrototype(taskId, '../x/index.tsx')).resolves.toBeNull();
     });
 
-    it('readPrototype：合法文件名存在 → 返回内容；不存在 → null', async () => {
-      const dir = path.join(root, taskId, 'prototypes');
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'my-proto.json'), '{"name":"x"}');
-      expect(await service.readPrototype(taskId, 'my-proto.json')).toBe('{"name":"x"}');
+    it('readPrototype：合法路径不存在 → null', async () => {
+      expect(await service.readPrototype(taskId, 'ghost/index.tsx')).toBeNull();
       expect(await service.readPrototype(taskId, 'ghost.json')).toBeNull();
     });
   });

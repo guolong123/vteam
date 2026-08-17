@@ -527,130 +527,205 @@ async function main() {
       id: 'sk_builtin_prototype_designer',
       name: 'prototype-designer',
       description:
-        '原型页面设计技能——按平台原型 DSL 规范编写 prototype.json 并提交，文档站「原型」tab 自动渲染（无需改代码）。适用于任务需要产出原型/UI 稿/页面示意时。',
+        '原型页面设计技能——按平台 TSX 规范编写 React 组件原型并提交，文档站「原型」tab 编译渲染（无需改代码）。适用于任务需要产出原型/UI 稿/页面示意时。',
       content: `---
 name: prototype-designer
-description: 原型页面设计技能——按平台原型 DSL 规范编写 prototype.json 并提交，文档站「原型」tab 自动渲染（无需改代码）。适用于任务需要产出原型/UI 稿/页面示意时。
-version: 1.0.0
+description: 原型页面设计技能——按平台 TSX 规范编写 React 组件原型并提交，文档站「原型」tab 编译渲染（无需改代码）。适用于任务需要产出原型/UI 稿/页面示意时。
+version: 2.0.0
 allowed-tools:
   - task_context
   - submit_artifact
   - read_file
 ---
 
-# 原型设计（Prototype Designer）
+# 原型设计（Prototype Designer）— TSX
 
 ## 目标
 
-为当前任务设计并提交**可渲染的原型页面**：按平台 DSL 规范编写 \`prototype.json\`，经 \`submit_artifact\` 提交后，文档站「原型」tab 自动出现并渲染。**无需改动任何代码、无需重新部署。**
+为当前任务设计并提交**可渲染的 TSX 原型页面**：编写 React 组件（TSX），经 \`submit_artifact\` 提交后，文档站「原型」tab 自动编译并渲染。**无需改动任何代码、无需重新部署。**
 
 ## 工作流程
 
 1. **分析需求**：用 \`task_context\` 获取任务标题/描述/背景，明确原型要展示什么（业务页面、管理界面、流程示意等）。
-2. **设计结构**：规划页面数量（\`pages\`，通常 1-3 页）与每页区块（\`sections\`，自上而下布局）。
-3. **编写 DSL**：按下方规范生成 JSON 文件（文件名 \`<英文短名>.prototype.json\`）。
-4. **自检**：JSON 语法合法、\`id/name\` 必填、section \`type\` 均为规范内组件、数据用演示值。
+2. **设计结构**：规划页面布局与组件组合（原生 HTML 元素 + 平台共享组件 + tailwind 样式）。
+3. **编写 TSX**：按下方规范生成 \`<kebab-name>/index.tsx\` 文件。
+4. **自检**：组件导出 meta + default function、仅使用允许的 import、语法合法。
 5. **提交**：\`submit_artifact\`（type=file）提交原型文件（见「提交方式」）。
-6. **确认**：可经 \`read_file\` 复查已提交文件内容；文档站渲染失败时检查 JSON 合法性与 type 拼写。
+6. **确认**：可经 \`read_file\` 复查已提交文件内容。
 
-## DSL 规范（v1）
+## TSX 规范（v2）
 
-文件为 UTF-8 JSON，结构：
+### 文件结构
 
-\\\`\\\`\\\`jsonc
-{
-  "id": "proto-name",          // 必填：唯一英文短名（kebab-case，= 文件名去后缀）
-  "name": "原型显示名",         // 必填：文档站列表/页头展示名
-  "description": "一句话说明",  // 可选
-  "pages": [                   // 必填：至少 1 页
-    {
-      "title": "页面标题",      // 页面 tab 名
-      "sections": [             // 自上而下区块，至少 1 个
-        { "type": "...", ... }
-      ]
-    }
-  ]
+每个原型 = 一个目录 \`<kebab-name>/\`，内含 \`index.tsx\`：
+
+\`\`\`
+prototypes/
+  my-dashboard/
+    index.tsx        ← 唯一文件
+  login-page/
+    index.tsx
+\`\`\`
+
+### 组件格式
+
+\`\`\`tsx
+export const meta = {
+  id: "my-dashboard",        // 必填：唯一英文短名（kebab-case，= 目录名）
+  name: "仪表盘",             // 必填：文档站列表展示名
+  device: "desktop",          // 可选："desktop"（默认）| "mobile"
+};
+
+export default function MyDashboard() {
+  return (
+    <div className="min-h-full bg-slate-50 p-6">
+      {/* 页面内容 */}
+    </div>
+  );
 }
-\\\`\\\`\\\`
+\`\`\`
 
-### 区块组件（section.type 取值）
+### 可用平台共享库（\`@proto/shared\`）
 
-| type | 字段 | 说明 |
-|---|---|---|
-| \`header\` | \`title\`, \`subtitle?\` | 页面标题区（大标题 + 副标题） |
-| \`stats\` | \`items: [{label, value, trend?}]\` | 统计卡片行（数字指标） |
-| \`cards\` | \`items: [{title, description?, status?, badge?}]\` | 卡片列表（status: success/warning/danger/info） |
-| \`table\` | \`columns: [{key, label}], rows: [{key: 值}]\` | 数据表格（columns 定义列，rows 为对象数组） |
-| \`list\` | \`items: [{title, description?}]\` | 列表条目 |
-| \`form\` | \`fields: [{label, type, options?, placeholder?}], submitLabel?\` | 表单（type: text/textarea/select；select 需 options 数组） |
-| \`tabs\` | \`tabs: [{label, sections: [...]}]\` | 页签分组（sections 可嵌套任意组件） |
-| \`markdown\` | \`content\` | Markdown 文本（支持标题/列表/表格等） |
-| \`nav\` | \`items: [{label, active?}]\` | 侧边导航示意（active=true 高亮当前项） |
+通过 \`import { ... } from "@proto/shared"\` 引入以下组件：
+
+**业务组件（components）：**
+| 组件 | 说明 |
+|---|---|
+| \`AgentAvatar\` | Agent 头像（含角色色环） |
+| \`AgentBadge\` | Agent 角色徽章（产品/架构/开发/测试） |
+| \`ChatBubble\` | 聊天气泡（user/agent/system） |
+| \`MessageInput\` | 消息输入框 |
+| \`StatusBadge\` | 任务状态徽章（进行中/待验收/已完成/已归档） |
+| \`Sidebar\` | 侧边导航栏 |
+| \`TopBar\` | 顶部导航栏 |
+| \`EmptyState\` | 空状态占位 |
+
+**导航组件（nav）：**
+| 组件 | 说明 |
+|---|---|
+| \`NavDock\` | 底部 Dock 导航（含图标+标签） |
+| \`NavTopBar\` | 顶部导航栏（含项目名+用户头像） |
+| \`CmdKPanel\` | Command-K 快捷面板 |
+
+**UI 组件（ui）：**
+| 组件 | 说明 |
+|---|---|
+| \`UiStatusBadge\` | 通用状态标签（tone 版） |
+| \`ProgressBar\` | 进度条 |
+| \`Avatar\` | 用户头像（文字首字母） |
+| \`Button\` | 按钮 |
+| \`IconSearch\` / \`IconPlus\` / \`IconEdit\` / \`IconMore\` | 图标 |
+| \`IconChevronLeft\` / \`IconChevronRight\` | 箭头图标 |
+| \`IconLock\` / \`IconClock\` / \`IconRefresh\` | 功能图标 |
+| \`IconMonitor\` / \`IconSmartphone\` | 设备图标 |
+
+**样式 token（styles）：**
+| 导出 | 说明 |
+|---|---|
+| \`roles\` | 角色色阶（product/architect/developer/tester） |
+| \`statusColors\` | 状态色阶（进行中/待验收/已完成/已归档） |
+| \`neutral\` / \`space\` / \`radius\` / \`fontSize\` / \`shadow\` | 设计 token |
+
+### 样式规范
+
+- 使用 **tailwind CSS 类**（平台已内置）。
+- 品牌色阶：\`brand-50\`/\`brand-100\`/…/\`brand-600\`/\`brand-700\`（主色）。
+- 语义色阶：\`success-*\`（成功）、\`warning-*\`（警告）、\`danger-*\`（危险）、\`info-*\`（信息）。
+- 可用原生 HTML 元素（\`div\`/\`span\`/\`table\`/\`form\` 等）+ tailwind 类自由组合。
+- 可嵌套使用平台共享组件（如 \`<NavDock />\` + 自定义内容区）。
 
 ### 规范约束
 
-- **必须**：\`id\`、\`name\` 必填；\`pages[].sections\` 至少 1 个；JSON 严格合法（渲染器解析失败则原型不可用）。
-- **未知 type 不要用**：渲染器对未知 type 显示占位卡片（"未支持的组件"），不会崩溃但视觉差。
+- **必须**：导出 \`meta\`（含 id/name）+ \`export default function\`。
+- **仅允许 import**：\`@proto/shared\` + \`react\`（useState 等）+ 原生元素。
+- **禁止**：import 其他第三方库/Node 模块/平台 API/网络请求/本地存储。
+- **交互**：可用 \`useState\` 实现客户端状态（tab 切换、表单输入等）；无服务端交互。
 - **数据为演示值**：原型是静态展示/演示，数据写示例值（如"1286""进行中"），不要留空。
-- **交互仅客户端**：支持页签切换、tab 切换、表单输入；不支持真实提交/写操作/服务端请求。
-- **命名**：\`id\` 用英文 kebab-case（\`cliyard-dashboard\`）；\`name\` 可用中文。
-- **嵌套**：\`tabs\` 的 sections 可嵌套任意组件（含 tabs 外的全部类型）。
+- **命名**：目录名 \`id\` 用英文 kebab-case（\`my-dashboard\`）；\`name\` 可用中文。
 
 ### 示例（最小完整原型）
 
-\\\`\\\`\\\`json
-{
-  "id": "task-overview",
-  "name": "任务总览",
-  "description": "任务进度与统计概览",
-  "pages": [
-    {
-      "title": "总览",
-      "sections": [
-        { "type": "header", "title": "任务总览", "subtitle": "当前迭代演示" },
-        { "type": "stats", "items": [
-          { "label": "总任务", "value": "1286" },
-          { "label": "运行中", "value": "8", "trend": "+2" },
-          { "label": "待审批", "value": "6" }
-        ]},
-        { "type": "cards", "items": [
-          { "title": "前端重构", "description": "进行中的迭代", "status": "info", "badge": "v2.1" }
-        ]},
-        { "type": "table", "columns": [
-          { "key": "name", "label": "任务" },
-          { "key": "owner", "label": "负责人" },
-          { "key": "status", "label": "状态" }
-        ], "rows": [
-          { "name": "文档站改造", "owner": "开发者-1", "status": "进行中" },
-          { "name": "MCP 接入", "owner": "开发者-2", "status": "待验收" }
-        ]}
-      ]
-    }
-  ]
+\`\`\`tsx
+export const meta = {
+  id: "task-overview",
+  name: "任务总览",
+};
+
+export default function TaskOverview() {
+  const [activeTab, setActiveTab] = useState("all");
+
+  return (
+    <div className="min-h-full bg-slate-50 p-6">
+      <h1 className="text-xl font-semibold text-slate-900">任务总览</h1>
+      <p className="mt-1 text-sm text-slate-500">当前迭代演示</p>
+
+      {/* 统计卡片 */}
+      <div className="mt-6 grid grid-cols-4 gap-3">
+        {[
+          { label: "总任务", value: "1286" },
+          { label: "运行中", value: "8", trend: "+2" },
+          { label: "待审批", value: "6" },
+          { label: "已完成", value: "1272" },
+        ].map((item) => (
+          <div key={item.label} className="rounded-xl border border-slate-200 bg-white p-4">
+            <p className="text-2xl font-semibold text-slate-900">{item.value}</p>
+            <p className="text-xs text-slate-500">{item.label}</p>
+            {item.trend && <p className="text-[11px] font-medium text-green-600">{item.trend}</p>}
+          </div>
+        ))}
+      </div>
+
+      {/* Tab 切换 */}
+      <div className="mt-6 flex border-b border-slate-200">
+        {["all", "active", "done"].map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={\`px-4 py-2 text-sm font-medium \${
+              activeTab === tab ? "border-b-2 border-brand-500 text-brand-600" : "text-slate-500"
+            }\`}
+          >
+            {tab === "all" ? "全部" : tab === "active" ? "进行中" : "已完成"}
+          </button>
+        ))}
+      </div>
+
+      {/* 任务列表 */}
+      <div className="mt-4 rounded-xl border border-slate-200 bg-white">
+        {["文档站改造", "MCP 接入", "Agent 优化"].map((name) => (
+          <div key={name} className="flex items-center justify-between border-b border-slate-100 px-4 py-3 last:border-0">
+            <span className="text-sm text-slate-900">{name}</span>
+            <StatusBadge status="进行中" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
-\\\`\\\`\\\`
+\`\`\`
 
 ## 提交方式
 
-- **文件名**：\`<id>.prototype.json\`（与 DSL \`id\` 一致，如 \`task-overview.prototype.json\`）。
-- **fileRef**：原型文件在工作目录的路径（绝对路径，如 \`/data/keta-worker/<任务工作目录>/task-overview.prototype.json\`；文件需先写入工作目录）。
+- **目录结构**：原型文件为 \`<kebab-name>/index.tsx\`（id 与目录名一致）。
+- **fileRef**：\`index.tsx\` 在工作目录的路径（绝对路径）。
 - **调用**：
 
-\\\`\\\`\\\`
-submit_artifact { taskId: <任务ID>, selfInstanceId: <你的实例ID>, type: "file", title: "<原型名>", fileRef: "<工作目录>/<id>.prototype.json" }
-\\\`\\\`\\\`
+\`\`\`
+submit_artifact { taskId: <任务ID>, selfInstanceId: <你的实例ID>, type: "file", title: "<显示名>", fileRef: "<工作目录>/<kebab-name>/index.tsx" }
+\`\`\`
 
-提交成功后，文档站「原型」tab 自动出现该原型（列表按名称展示，点击渲染）。
+提交成功后，文档站「原型」tab 自动出现该原型（列表按名称展示，点击编译渲染）。
 
 ## 常见错误
 
 | 错误 | 规避 |
 |---|---|
-| JSON 语法错误（引号/逗号） | 提交前严格校验 JSON（可用 read_file 复查） |
-| \`type\` 拼写错误/未知值 | 只用规范内 9 种 type |
-| \`id\` 含中文/大写 | 用英文 kebab-case |
-| 数据留空/undefined | 全部写演示值 |
-| 试图做真实交互（提交/请求） | 原型仅静态展示，交互仅 tab/表单输入 |
+| 缺少 \`meta\` 导出 | 必须 \`export const meta = { id, name }\` |
+| 缺少 \`export default function\` | 必须默认导出 React 组件 |
+| import 非允许模块 | 仅 \`@proto/shared\` + \`react\` + 原生元素 |
+| 语法错误（JSX/TS） | 提交前确保 TSX 语法合法 |
+| 数据留空 | 全部写演示值 |
 `,
     },
   ];
