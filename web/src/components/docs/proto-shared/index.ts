@@ -29,4 +29,5 @@ export {
   IconMonitor,
   IconSmartphone,
   IconRefresh,
+  IconUser,
 } from "./ui";
