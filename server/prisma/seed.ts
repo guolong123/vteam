@@ -506,10 +506,30 @@ async function main() {
   // action 为 platform-mcp 端点 tools/list 的 tool 名（命名 <server>_<action>），
   // source=mcp + execution=mcp + mcpServer 对齐 tools.service 的 source 推导逻辑。
   const vteamTools = [
-    { action: 'chat_history', name: 'vteam_chat_history', description: '查询任务群聊历史（按需拉取）' },
+    { action: 'chat_history', name: 'vteam_chat_history', description: '查询任务群聊历史消息（按需拉取）' },
     { action: 'doclib', name: 'vteam_doclib', description: '查询任务产出物文档库' },
-    { action: 'task_context', name: 'vteam_task_context', description: '查询任务概览与团队' },
+    { action: 'task_context', name: 'vteam_task_context', description: '查询任务概览与团队实例成员' },
     { action: 'group_post', name: 'vteam_group_post', description: '向任务群聊发布消息' },
+    { action: 'read_file', name: 'vteam_read_file', description: '读取产出物文件或 worker 工作区文件' },
+    { action: 'notify_agent', name: 'vteam_notify_agent', description: '向任务内实例定向发消息并触发执行' },
+    { action: 'submit_artifact', name: 'vteam_submit_artifact', description: '提交产出物到任务文档库' },
+    { action: 'issue_create', name: 'vteam_issue_create', description: '创建任务内 issue' },
+    { action: 'issue_list', name: 'vteam_issue_list', description: '查询任务内 issue 列表' },
+    { action: 'issue_get', name: 'vteam_issue_get', description: '查询单个 issue 详情' },
+    { action: 'issue_update', name: 'vteam_issue_update', description: '更新 issue 标题/描述/标签' },
+    { action: 'issue_transition', name: 'vteam_issue_transition', description: '流转 issue 状态' },
+    { action: 'task_transition', name: 'vteam_task_transition', description: '流转任务状态（仅主 Agent）' },
+    { action: 'question_confirm', name: 'vteam_question_confirm', description: '托管模式确认成员请求（仅主 Agent）' },
+    { action: 'memory_save', name: 'vteam_memory_save', description: '写入平台记忆（task/project/global 三级）' },
+    { action: 'memory_search', name: 'vteam_memory_search', description: '检索平台记忆' },
+    { action: 'plan_submit', name: 'vteam_plan_submit', description: '提交执行计划（仅主 Agent）' },
+    { action: 'plan_review', name: 'vteam_plan_review', description: '评审执行计划' },
+    { action: 'plan_task_transition', name: 'vteam_plan_task_transition', description: '流转计划子任务状态' },
+    { action: 'team_view', name: 'vteam_team_view', description: '查询任务团队实时视图' },
+    { action: 'my_profile', name: 'vteam_my_profile', description: '查询自身 Agent 配置' },
+    { action: 'plan_get', name: 'vteam_plan_get', description: '读取任务执行计划' },
+    { action: 'plan_assign_reviewer', name: 'vteam_plan_assign_reviewer', description: '指派计划评审者（仅主 Agent）' },
+    { action: 'team_add_member', name: 'vteam_team_add_member', description: '申请将 Agent 加入团队（仅主 Agent）' },
   ];
 
   for (const t of vteamTools) {
