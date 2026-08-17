@@ -7,11 +7,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "sync:runtime": "node scripts/sync-runtime.mjs",
+    "postinstall": "node scripts/sync-runtime.mjs"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.3.3",
     "@tanstack/react-query": "^5.101.4",
+    "esbuild-wasm": "^0.28.2",
     "mermaid": "^11.16.1",
     "next": "^15.5.22",
     "react": "^19.2.8",

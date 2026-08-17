@@ -43,6 +43,11 @@ export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialD
   const [error, setError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<string>("");
   const mainRef = useRef<HTMLElement | null>(null);
+  
+  const [sidebarWidth, setSidebarWidth] = useState(264);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartX = useRef(0);
+  const dragStartWidth = useRef(0);
 
   // registry：30s 轮询（AC-1 新口径），api.get 自动带 Authorization
   const registryQuery = useQuery({
@@ -93,6 +98,39 @@ export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialD
       return next;
     });
   };
+
+  const handleDragStart = (e: React.MouseEvent) => {
+    setIsDragging(true);
+    dragStartX.current = e.clientX;
+    dragStartWidth.current = sidebarWidth;
+    e.preventDefault();
+  };
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = e.clientX - dragStartX.current;
+      const newWidth = Math.min(420, Math.max(180, dragStartWidth.current + delta));
+      setSidebarWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+  }, [isDragging]);
 
   // 加载当前文档正文（prd 端点返回纯文本，fetch Bearer 头）
   useEffect(() => {
@@ -176,11 +214,8 @@ export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialD
   return (
     <div data-testid="docs-explorer" style={{ display: "flex", minHeight: 0, flex: 1, backgroundColor: "#FFFFFF", ...baseFont }}>
       {/* 左侧：文档树（is_0000000038 样式优化：间距/层级/视觉层次） */}
-      <aside style={{ width: 264, flexShrink: 0, display: "flex", flexDirection: "column", borderRight: `1px solid ${neutral[200]}`, backgroundColor: neutral[50] }}>
-        <div style={{ flexShrink: 0, overflowY: "auto", borderBottom: `1px solid ${neutral[200]}`, ...baseFont }}>
-          <p style={{ margin: 0, padding: `${space.md}px ${space.lg}px ${space.sm}px`, fontSize: fontSize.xs, fontWeight: 600, letterSpacing: "0.05em", color: neutral[400], textTransform: "uppercase" }}>
-            文档
-          </p>
+      <aside style={{ width: sidebarWidth, flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden", borderRight: `1px solid ${neutral[200]}`, backgroundColor: "#FFFFFF" }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", borderBottom: `1px solid ${neutral[200]}`, ...baseFont }}>
           {registryQuery.isError ? (
             <p style={{ padding: `0 ${space.md}px ${space.md}px`, fontSize: fontSize.sm, color: "#DC2626" }}>
               文档列表加载失败
@@ -190,7 +225,7 @@ export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialD
               {registryQuery.isPending ? "加载中…" : "暂无 doc 产出物"}
             </p>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: space.xs, padding: `0 ${space.sm}px ${space.lg}px` }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: space.xs, padding: `0 0 ${space.lg}px` }}>
               {rootDocs.map((root) => {
                 const kids = childrenOf(root.id);
                 const isExpanded = expanded.has(root.id);
@@ -236,29 +271,11 @@ export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialD
                           if (!active) (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent";
                         }}
                       >
-                        <span
-                          aria-hidden
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: 20,
-                            height: 20,
-                            borderRadius: 5,
-                            fontSize: 9,
-                            fontWeight: 700,
-                            backgroundColor: active ? "#DBEAFE" : neutral[200],
-                            color: active ? "#1D4ED8" : neutral[500],
-                            flexShrink: 0,
-                          }}
-                        >
-                          {root.kind}
-                        </span>
                         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{root.name}</span>
                       </button>
                     </div>
                     {isExpanded && kids.length > 0 && (
-                      <div style={{ marginTop: 4, marginLeft: 30, paddingLeft: 14, borderLeft: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: 4 }}>
+                      <div style={{ marginTop: 4, marginLeft: 26, paddingLeft: 14, borderLeft: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: 4 }}>
                         {kids.map((kid) => {
                           const kidActive = kid.id === activeDoc?.id;
                           return (
@@ -301,10 +318,44 @@ export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialD
             </div>
           )}
         </div>
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整文档列表宽度"
+          title="拖动调整列表宽度"
+          onMouseDown={handleDragStart}
+          onMouseEnter={(e) => {
+            if (!isDragging) e.currentTarget.style.backgroundColor = neutral[100];
+          }}
+          onMouseLeave={(e) => {
+            if (!isDragging) e.currentTarget.style.backgroundColor = 'transparent';
+          }}
+          style={{
+            width: 6,
+            cursor: 'col-resize',
+            backgroundColor: isDragging ? '#2563EB' : 'transparent',
+            transition: 'background-color 0.15s',
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 2,
+              height: 16,
+              borderRadius: 1,
+              backgroundColor: isDragging ? '#FFFFFF' : neutral[300],
+              transition: 'background-color 0.15s',
+            }}
+          />
+        </div>
       </aside>
 
       {/* 中间：文档内容 */}
-      <main ref={mainRef} style={{ minWidth: 0, flex: 1, overflowY: "auto", ...baseFont }}>
+      <main ref={mainRef} style={{ minWidth: 0, minHeight: 0, flex: 1, overflowY: "auto", ...baseFont }}>
         {registryQuery.isError ? (
           <div style={{ display: "flex", height: "100%", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: space.sm, padding: `0 ${space.xl}px`, textAlign: "center", fontSize: fontSize.md, color: "#DC2626" }}>
             <p>文档列表加载失败（registry 拉取异常）</p>

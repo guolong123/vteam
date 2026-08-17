@@ -6,6 +6,9 @@ WORKDIR /app
 # 布局对齐仓库：web/ 与 worker/ 并存，pack-worker.sh 的 ROOT 推导不变
 #（compose build context 已改为仓库根，见 docker-compose.yml web 服务）。
 COPY web/package.json web/package-lock.json ./web/
+COPY web/scripts ./web/scripts
+# postinstall (sync-runtime.mjs) 需要读取 proto-shared 源码生成 sources.generated.ts
+COPY web/src/components/docs/proto-shared ./web/src/components/docs/proto-shared
 RUN cd web && npm ci
 COPY web/ ./web/
 # worker 发布包 → web/public/worker-src.tar.gz（install-worker.sh 一键安装下载；
