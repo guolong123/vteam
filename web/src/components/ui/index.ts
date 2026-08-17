@@ -27,3 +27,5 @@ export { EmptyState } from "./empty-state";
 export type { EmptyStateProps } from "./empty-state";
 export { ConfirmDialog } from "./confirm-dialog";
 export type { ConfirmDialogProps } from "./confirm-dialog";
+export { Pagination } from "./pagination";
+export type { PaginationProps } from "./pagination";
