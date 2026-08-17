@@ -515,7 +515,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   // C3（CONF-01）：stability=2——预热期中间态假模型列表需连续 2 次探测一致才上报，杜绝假模型回流。
   const registerCurrent = async (): Promise<RegisterResponse | null> => {
     const models = await resolveModels(driver, { stability: 2 });
-    return registerWorkerWithRetry(
+    const result = await registerWorkerWithRetry(
       await buildRegisterOptions(
         config,
         serveServer.port,
@@ -530,6 +530,21 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       console.error(`[worker] 注册失败（重试耗尽）: ${err.message}`);
       return null;
     });
+    if (result !== null) {
+      // 覆盖补注入：首次启动的 injectAll 在注册前执行，server 尚无本 worker 的
+      // capabilities.mcpUrl（注册才上报）→ 内置 vteam 地址不会被覆盖。注册成功
+      // （mcpUrl 已入库）后重拉 mcp-servers，使覆盖地址写入 opencode.json。
+      try {
+        const mcpServers = await injector.injectMcp();
+        lastInjectReport = { ...lastInjectReport, mcpServers };
+        console.log(
+          `[worker] 注册后 MCP 重注入完成: ${mcpServers.length} servers（内置 vteam 地址按 mcpUrl 覆盖）`,
+        );
+      } catch (err) {
+        console.warn(`[worker] 注册后 MCP 重注入失败: ${(err as Error).message}`);
+      }
+    }
+    return result;
   };
 
   // T4c：重启后重新注册——serve 随机端口重启后可能变化，用当前 port 重新组装注册选项；
