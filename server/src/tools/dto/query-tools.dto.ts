@@ -42,6 +42,13 @@ export class QueryToolsDto {
   @IsString()
   name?: string;
 
+  @ApiPropertyOptional({
+    description: 'MCP server 过滤（server id 或名称）',
+  })
+  @IsOptional()
+  @IsString()
+  mcpServer?: string;
+
   @ApiPropertyOptional({ description: '页码（从 1 起）', default: 1, minimum: 1 })
   @IsOptional()
   @Type(() => Number)
