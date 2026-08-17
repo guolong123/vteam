@@ -1286,7 +1286,7 @@ export class TasksService implements OnModuleInit {
   }
 
   /**
-   * is_0000000010：实例默认持久化工作目录 `/data/worker/<sanitize(agent.name)>`。
+   * is_0000000010：实例默认持久化工作目录 `/data/vteam-worker/<sanitize(agent.name)>`。
    * agent 名称可能含中文/空格/斜杠等非 ASCII 字符，做 ASCII 化映射（非法字符 → `-`），
    * 避免路径穿越/非法字符导致目录不可用；同 agent 同任务多实例追加 `-<seq>` 防共享串数据。
    */
@@ -1295,7 +1295,7 @@ export class TasksService implements OnModuleInit {
     seq: number,
   ): string {
     const base = sanitizeWorkDirName(agent.name ?? agent.id ?? 'agent');
-    return seq > 1 ? `/data/worker/${base}-${seq}` : `/data/worker/${base}`;
+    return seq > 1 ? `/data/vteam-worker/${base}-${seq}` : `/data/vteam-worker/${base}`;
   }
 
   /**

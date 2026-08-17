@@ -925,9 +925,9 @@ describe('WorkerDispatcher', () => {
       expect(s).not.toContain(' —— 主 Agent');
     });
 
-    it('GLOBAL 常量含静态【持久化目录】段：约定默认 /data/worker/<agent名称> + 重启保留语义 + 写入指引', () => {
+    it('GLOBAL 常量含静态【持久化目录】段：约定默认 /data/vteam-worker/<agent名称> + 重启保留语义 + 写入指引', () => {
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('【持久化目录】');
-      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('/data/worker/<agent名称>');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('/data/vteam-worker/<agent名称>');
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('容器重启后保留');
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('fileRef 应指向该目录内的文件');
     });
@@ -948,10 +948,10 @@ describe('WorkerDispatcher', () => {
 
     it('persistentWorkDir 注入：提示词含动态【运行时工作目录】段（实际解析路径）', () => {
       const s = buildSystemInstructions(agent, {
-        persistentWorkDir: '/data/worker/开发者-1',
+        persistentWorkDir: '/data/vteam-worker/开发者-1',
       });
       expect(s).toContain('【运行时工作目录】');
-      expect(s).toContain('/data/worker/开发者-1');
+      expect(s).toContain('/data/vteam-worker/开发者-1');
       expect(s).toContain('fileRef 使用该目录下的路径');
       // 静态段仍保留（默认约定），动态段给出本任务实际目录
       expect(s).toContain('【持久化目录】');
@@ -3165,14 +3165,14 @@ describe('WorkerDispatcher', () => {
   });
 
   describe('F3 MINOR-3：任务工作目录隔离 + 超时可配', () => {
-    it('dispatch 传 agent 兜底工作目录（未绑实例 → /data/worker/<agentName>，与 tasks.service 同根）且目录存在', async () => {
+    it('dispatch 传 agent 兜底工作目录（未绑实例 → /data/vteam-worker/<agentName>，与 tasks.service 同根）且目录存在', async () => {
       prisma.session.findUnique.mockResolvedValue({
         id: 's_0000000001',
         workerId: 'w_0000000001',
         instanceRef: 'ses_0001',
       });
       prisma.worker.findUnique.mockResolvedValue({ id: 'w_0000000001', capabilities: {} });
-      // 存量会话未绑实例（taskAgentId NULL）：agent 名称兜底目录（/data/worker 根）
+      // 存量会话未绑实例（taskAgentId NULL）：agent 名称兜底目录（/data/vteam-worker 根）
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_product',
         name: '产品经理',
@@ -3184,7 +3184,7 @@ describe('WorkerDispatcher', () => {
       await d.dispatch(request);
 
       const execArgs = workerClient.execute.mock.calls[0][1] as { directory: string };
-      const expectedDir = '/data/worker/产品经理';
+      const expectedDir = '/data/vteam-worker/产品经理';
       expect(execArgs.directory).toBe(expectedDir);
       // mkdir -p 已保证目录存在
       expect(fs.existsSync(expectedDir)).toBe(true);

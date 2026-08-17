@@ -2940,7 +2940,7 @@ describe('PlatformMcpService', () => {
         agentId: senderAgentId,
         alias: '开发者-1',
         seq: 1,
-        workDir: '/data/worker/developer-1',
+        workDir: '/data/vteam-worker/developer-1',
         agent: {
           id: senderAgentId,
           name: '开发者',
@@ -2991,7 +2991,7 @@ describe('PlatformMcpService', () => {
           role: 'developer',
           alias: '开发者-1',
           seq: 1,
-          workDir: '/data/worker/developer-1',
+          workDir: '/data/vteam-worker/developer-1',
           defaultModelId: 'm_1',
           permissionScope: { tools: ['read', 'write'] },
           toolEffects: [
@@ -3379,7 +3379,7 @@ describe('PlatformMcpService', () => {
         selfInstanceId: mainInstanceId,
         agentId: 'a_developer',
         alias: '开发者-2',
-        workDir: '/data/worker/dev2',
+        workDir: '/data/vteam-worker/dev2',
       });
 
       expect(questionsService.createForPlatform).toHaveBeenCalledWith(
