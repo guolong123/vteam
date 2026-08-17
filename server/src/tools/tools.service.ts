@@ -29,7 +29,7 @@ export interface ToolViewer {
 
 /**
  * Tool 服务：列表/详情 + 注册/启停（T2 重构对齐 09 §3.8）。
- * - findAll：source/execution/enabled 过滤 + name 模糊搜索 + 分页 {items, total}；
+ * - findAll：source/execution/enabled/mcpServer 过滤 + name 模糊搜索 + 分页 {items, total}；
  *   **成员只读强制 enabled=true**（agent 配置页工具区数据源，FR-35 启用开关），admin 全量
  * - create：action 唯一（撞 @unique → 409 TOOL_ACTION_EXISTS），id=tl_<seq>，
  *   **无独立 source 入参**：execution=mcp → source=mcp，其余 → custom（builtin 走 seed）；
@@ -62,7 +62,7 @@ export class ToolsService implements OnModuleInit {
   }
 
   /**
-   * GET /tools：source/execution/enabled 过滤 + name 模糊搜索 + 分页。
+   * GET /tools：source/execution/enabled/mcpServer 过滤 + name 模糊搜索 + 分页。
    * viewer 为空（无鉴权上下文）不强制过滤；admin 遵循 query.enabled（缺省全量）；
    * 成员只读：强制 enabled=true（09 §3.8 成员只读 + FR-35 启用开关，仅启用工具可供 Agent 勾选）。
    * 返回 {items, total, page, pageSize}（对齐 agents.findMany 模式）。
@@ -75,6 +75,7 @@ export class ToolsService implements OnModuleInit {
       execution: query.execution ? { equals: query.execution } : undefined,
       enabled: query.enabled === undefined ? undefined : query.enabled,
       name: query.name ? { contains: query.name } : undefined,
+      mcpServer: query.mcpServer ? { equals: query.mcpServer } : undefined,
     };
 
     if (viewer && !(await this.isPlatformAdmin(viewer))) {

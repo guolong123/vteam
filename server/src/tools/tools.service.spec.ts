@@ -171,6 +171,62 @@ describe('ToolsService', () => {
       });
     });
 
+    it('mcpServer 过滤参数正确传入 Prisma where（缺省其余过滤 undefined）', async () => {
+      prisma.$transaction.mockResolvedValue([1, [toolRows[1]]]);
+
+      await service.findAll({ mcpServer: 'filesystem' });
+
+      expect(prisma.tool.count).toHaveBeenCalledWith({
+        where: {
+          source: undefined,
+          execution: undefined,
+          enabled: undefined,
+          name: undefined,
+          mcpServer: { equals: 'filesystem' },
+        },
+      });
+      expect(prisma.tool.findMany).toHaveBeenCalledWith({
+        where: {
+          source: undefined,
+          execution: undefined,
+          enabled: undefined,
+          name: undefined,
+          mcpServer: { equals: 'filesystem' },
+        },
+        orderBy: { createdAt: 'asc' },
+        skip: 0,
+        take: 20,
+      });
+    });
+
+    it('source=mcp + mcpServer 组合过滤只返回该 server 的工具', async () => {
+      prisma.$transaction.mockResolvedValue([1, [toolRows[1]]]);
+
+      await service.findAll({ source: 'mcp', mcpServer: 'filesystem' });
+
+      expect(prisma.tool.count).toHaveBeenCalledWith({
+        where: {
+          source: { equals: 'mcp' },
+          execution: undefined,
+          enabled: undefined,
+          name: undefined,
+          mcpServer: { equals: 'filesystem' },
+        },
+      });
+      expect(prisma.tool.findMany).toHaveBeenCalledWith({
+        where: {
+          source: { equals: 'mcp' },
+          execution: undefined,
+          enabled: undefined,
+          name: undefined,
+          mcpServer: { equals: 'filesystem' },
+        },
+        orderBy: { createdAt: 'asc' },
+        skip: 0,
+        take: 20,
+      });
+    });
+
     it('enabled=false 过滤停用工具（不误伤 true）', async () => {
       prisma.$transaction.mockResolvedValue([0, []]);
 
