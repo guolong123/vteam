@@ -25,9 +25,10 @@
 #                       MCP 不可达（server 下发的默认地址为集群内服务名）；集群内 worker 可省略。
 #                       未提供时仅提示，不强制写入（保证集群内 worker 无感知）。
 #   --advertise-host <url>   worker 对 server 公布的 serve 基址（WORKER_ADVERTISE_HOST，可选）：
-#                       外部/跨机 worker 必须设置为 server 可达的 worker 地址（如
-#                       http://<worker 局域网 IP>），否则 baseUrl 默认 http://127.0.0.1 仅本机
-#                       可访问，server 连不上 → worker 显示不可用；集群内/本机 worker 可省略。
+#                       外部/跨机 worker 建议显式设置 server 可达的 worker 地址（只填 IP 即可，
+#                       脚本自动补 http:// 前缀，如 192.168.1.10 → http://192.168.1.10）；
+#                       未提供时 worker 会自动探测本机非回环 IPv4 上报（探测失败回退
+#                       http://127.0.0.1 仅本机可访问）；集群内/本机 worker 可省略。
 #   --serve-hostname <host>  opencode serve 监听地址（OPENCODE_SERVE_HOSTNAME，可选）：外部
 #                       worker 须设 0.0.0.0（serve 监听非回环，server 才能连上）；缺省 127.0.0.1
 #                       只监听本机。未提供时仅提示，不强制写入（本机/集群内 worker 无感知）。
@@ -173,6 +174,11 @@ if [ -n "${WORKER_MCP_URL}" ]; then
   update_env WORKER_MCP_URL "${WORKER_MCP_URL}"
 fi
 if [ -n "${WORKER_ADVERTISE_HOST}" ]; then
+  # 只填 IP（如 192.168.1.10）时自动补协议前缀（WORKER_ADVERTISE_HOST 须为完整 URL，server 直连）
+  case "${WORKER_ADVERTISE_HOST}" in
+    *://*) ;;
+    *) WORKER_ADVERTISE_HOST="http://${WORKER_ADVERTISE_HOST}" ;;
+  esac
   update_env WORKER_ADVERTISE_HOST "${WORKER_ADVERTISE_HOST}"
 fi
 if [ -n "${WORKER_SERVE_HOSTNAME}" ]; then
@@ -206,16 +212,16 @@ if [ -z "${WORKER_MCP_URL}" ] && ! grep -q '^WORKER_MCP_URL=' .env; then
 fi
 
 # ------------------------------ 可达地址提示 ------------------------------
-# 外部/跨机 worker：未设置 WORKER_ADVERTISE_HOST 时上报 baseUrl 默认 http://127.0.0.1，
-# 仅本机可访问 → server 在远端连回环地址连不上 → worker 显示不可用。未提供 --advertise-host
-# 且 .env 亦无 WORKER_ADVERTISE_HOST 时醒目提示；不强制（本机/集群内 worker 无感知）。
+# 外部/跨机 worker：未设置 WORKER_ADVERTISE_HOST 时 worker 会自动探测本机非回环 IPv4 上报
+# （探测失败才回退 http://127.0.0.1）。未提供 --advertise-host 且 .env 亦无
+# WORKER_ADVERTISE_HOST 时提醒：若 server 无法访问探测到的地址，可显式设置；不强制
+# （本机/集群内 worker 无感知）。
 if [ -z "${WORKER_ADVERTISE_HOST}" ] && ! grep -q '^WORKER_ADVERTISE_HOST=' .env; then
-  echo "[install-worker] ⚠️  未配置 WORKER_ADVERTISE_HOST（worker 对 server 公布的 serve 地址）"
-  echo "  若本 worker 与 server 不在同一主机/集群：baseUrl 默认 http://127.0.0.1 仅本机可访问，"
-  echo "  server 无法连接 → worker 显示不可用。"
-  echo "  请设置 WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>（如 http://<worker 局域网 IP>）"
+  echo "[install-worker] 提示：未配置 WORKER_ADVERTISE_HOST"
+  echo "  worker 会自动探测本机内网 IP 上报（探测失败才回退 http://127.0.0.1 仅本机可访问）。"
+  echo "  若 server 无法访问探测到的地址（多网卡/VPN 等），请显式设置 --advertise-host <只填 IP>"
   echo "  且 OPENCODE_SERVE_HOSTNAME=0.0.0.0（serve 须监听非回环，server 才能连上）。"
-  echo "  —— 可重跑本命令携带 --advertise-host <url> --serve-hostname 0.0.0.0，或手动编辑 ${INSTALL_DIR}/worker/.env 后执行：./scripts/start.sh"
+  echo "  —— 可重跑本命令携带 --advertise-host <IP> --serve-hostname 0.0.0.0，或手动编辑 ${INSTALL_DIR}/worker/.env 后执行：./scripts/start.sh"
 fi
 
 # ------------------------------ 启动 ------------------------------

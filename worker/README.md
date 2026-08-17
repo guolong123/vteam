@@ -72,7 +72,7 @@ npm run dev            # tsx src/index.ts
 | `LOG_LEVEL` | 否 | `info` | 日志级别 |
 | `WORK_DIR` | 否 | `/tmp/keta-worker` | opencode serve 工作目录（工具注入落点） |
 | `OPENCODE_SERVE_HOSTNAME` | 否 | `127.0.0.1` | opencode serve 绑定地址（容器内设 `0.0.0.0` 供 server 容器访问；**集群外/跨机 worker 必须设 `0.0.0.0`**，serve 监听非回环 server 才能连上） |
-| `WORKER_ADVERTISE_HOST` | 否 | `http://127.0.0.1` | worker 对 server 公布的 serve 基址主机（随注册 capabilities.baseUrl 上报；compose 设 `http://worker`）。**集群外/跨机 worker 必须设置为 server 可达的 worker 地址**（如 `http://<worker 局域网 IP>`），否则默认回环地址仅本机可访问，server 连不上 → worker 显示不可用 |
+| `WORKER_ADVERTISE_HOST` | 否 | 自动探测本机非回环 IPv4（失败回退 `http://127.0.0.1`） | worker 对 server 公布的 serve 基址主机（随注册 capabilities.baseUrl 上报；compose 设 `http://worker`）。未设置时 worker 启动自动探测本机内网 IP 上报（跳过 docker/veth/br- 等虚拟网卡，探测失败才回退回环地址）。**集群外/跨机 worker 若 server 无法访问探测到的地址（多网卡/VPN 等），应显式设置为 server 可达的 worker 地址**（如 `http://<worker 局域网 IP>`），否则 server 连不上 → worker 显示不可用 |
 | `GIT_SSH_KEY_PATH` | 否 | 空 | SSH 私钥路径（git 凭证注入 `GIT_SSH_COMMAND`）；空 = 不注入 |
 | `WORKER_DEFAULT_MODEL` | 否 | 空 | worker 默认模型 id（随注册上报，分派兜底） |
 | `WORKER_EXEC_PORT` | 否 | `4198` | 执行端点端口（node:http POST /execute，与 serve 端口解耦） |
@@ -101,11 +101,13 @@ OPENCODE_SERVE_HOSTNAME=0.0.0.0                             # serve 监听非回
 ```
 
 一键安装（install-worker.sh）可携带 `--mcp-url <url> --advertise-host <url> --serve-hostname
-0.0.0.0` 写入上述值；未提供时脚本会醒目提示（不强制，本机/集群内 worker 忽略即可）。
+0.0.0.0` 写入上述值（`--advertise-host` 只填 IP 也可，脚本自动补 `http://` 前缀）；未提供时
+worker 会自动探测本机非回环 IPv4 上报（探测失败才回退 `http://127.0.0.1`），脚本仅提示不强制
+（本机/集群内 worker 忽略即可）。
 
 探测到内置 MCP 失败且地址为集群内服务名时，`mcp-status-probe` 会在 worker 日志输出 WORKER_MCP_URL
-引导提示；启动时未显式设置 `WORKER_ADVERTISE_HOST`（上报 baseUrl 为 `http://127.0.0.1`）时，
-worker 启动日志输出一次可达地址引导提示。
+引导提示；启动时未显式设置 `WORKER_ADVERTISE_HOST` 时，worker 启动日志输出上报地址提示
+（自动探测成功 → 「已自动探测上报地址」引导；探测失败回退 `http://127.0.0.1` → 可达地址告警）。
 
 ## 目录结构
 

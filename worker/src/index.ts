@@ -261,20 +261,34 @@ function printStartup(config: WorkerConfig, opencodeVersion: string): void {
 }
 
 /**
- * 启动告警（引导性，不阻断启动）：仅当 WORKER_ADVERTISE_HOST 未显式设置时触发一次——
- * 此时上报的 capabilities.baseUrl 会是默认 http://127.0.0.1（仅本机可访问），worker 与
- * server 不在同一主机时 server 连不上 → worker 显示不可用。已显式设置（即使值恰好为
- * http://127.0.0.1 的本地开发场景）不提示，避免误报。独立导出便于单测。
+ * 启动提示（引导性，不阻断启动）：仅当 WORKER_ADVERTISE_HOST 未显式设置时触发一次——
+ * 此时上报的 capabilities.baseUrl 来源为自动探测（config.ts detectLocalIPv4）：
+ * - 探测成功（baseUrl 非 127.0.0.1）→ console.log 输出「已自动探测上报地址」引导提示，
+ *   提示多网卡/VPN 场景可显式覆盖。
+ * - 探测失败回退 http://127.0.0.1（仅本机可访问）→ console.warn 输出可达地址告警，
+ *   worker 与 server 不在同一主机时 server 连不上 → worker 显示不可用。
+ * 已显式设置（即使值恰好为 http://127.0.0.1 的本地开发场景）不提示，避免误报。
+ * 独立导出便于单测。
  */
 export function warnLoopbackAdvertiseHost(config: WorkerConfig): void {
   if (config.workerAdvertiseHostExplicit) {
     return;
   }
-  console.warn(
-    `[worker] ⚠️  baseUrl=127.0.0.1 仅本机可访问（未设置 WORKER_ADVERTISE_HOST）\n` +
-      `  若 worker 与 server 不在同一主机，server 将无法连接本 worker → worker 显示不可用。\n` +
-      `  请设置 WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>（如 http://<worker 局域网 IP>），\n` +
-      `  并设置 OPENCODE_SERVE_HOSTNAME=0.0.0.0（serve 监听非回环，server 才能连上）。`,
+  if (config.workerAdvertiseHost === 'http://127.0.0.1') {
+    // 自动探测失败回退：保留原 127.0.0.1 可达性告警
+    console.warn(
+      `[worker] ⚠️  baseUrl=127.0.0.1 仅本机可访问（未设置 WORKER_ADVERTISE_HOST，自动探测本机 IP 失败）\n` +
+        `  若 worker 与 server 不在同一主机，server 将无法连接本 worker → worker 显示不可用。\n` +
+        `  请设置 WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>（如 http://<worker 局域网 IP>），\n` +
+        `  并设置 OPENCODE_SERVE_HOSTNAME=0.0.0.0（serve 监听非回环，server 才能连上）。`,
+    );
+    return;
+  }
+  // 自动探测成功：输出引导提示（探测到的地址即上报基址，端口随 serve 启动确定后拼接）
+  console.log(
+    `[worker] ✓ 已自动探测上报地址 ${config.workerAdvertiseHost}（未设置 WORKER_ADVERTISE_HOST）\n` +
+      `  最终上报 baseUrl = ${config.workerAdvertiseHost}:<serve 端口>（端口随 serve 启动确定）。\n` +
+      `  若 server 无法访问该地址（多网卡/VPN 等），请显式设置 WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>。`,
   );
 }
 

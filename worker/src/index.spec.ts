@@ -724,9 +724,10 @@ describe('buildRegisterOptions（T4c：重启后重新注册携带新端口）',
   });
 });
 
-describe('warnLoopbackAdvertiseHost（外部/跨机 worker 可达地址启动告警）', () => {
-  it('未显式设置 WORKER_ADVERTISE_HOST：输出一次醒目提示（含 baseUrl=127.0.0.1 与 WORKER_ADVERTISE_HOST 引导）', () => {
+describe('warnLoopbackAdvertiseHost（上报地址启动提示）', () => {
+  it('未显式设置 + 自动探测失败（回退 127.0.0.1）：输出一次醒目告警（含 baseUrl=127.0.0.1 与 WORKER_ADVERTISE_HOST 引导）', () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     try {
       warnLoopbackAdvertiseHost({ ...CONFIG, workerAdvertiseHostExplicit: false, workerAdvertiseHost: 'http://127.0.0.1' });
       expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -734,28 +735,53 @@ describe('warnLoopbackAdvertiseHost（外部/跨机 worker 可达地址启动告
       expect(message).toContain('baseUrl=127.0.0.1');
       expect(message).toContain('WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>');
       expect(message).toContain('OPENCODE_SERVE_HOSTNAME=0.0.0.0');
+      expect(logSpy).not.toHaveBeenCalled();
     } finally {
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+
+  it('未显式设置 + 自动探测成功（上报地址非 127.0.0.1）：console.log 输出已自动探测提示，不含 127.0.0.1 告警', () => {
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      warnLoopbackAdvertiseHost({ ...CONFIG, workerAdvertiseHostExplicit: false, workerAdvertiseHost: 'http://192.168.1.10' });
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      const message = logSpy.mock.calls[0][0] as string;
+      expect(message).toContain('已自动探测上报地址');
+      expect(message).toContain('http://192.168.1.10');
+      expect(message).toContain('WORKER_ADVERTISE_HOST=<server 可达的 worker 地址>');
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
       warnSpy.mockRestore();
     }
   });
 
   it('已显式设置（值恰好 http://127.0.0.1 的本地开发场景）：不提示（防误报）', () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     try {
       warnLoopbackAdvertiseHost({ ...CONFIG, workerAdvertiseHost: 'http://127.0.0.1' });
       expect(warnSpy).not.toHaveBeenCalled();
+      expect(logSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
+      logSpy.mockRestore();
     }
   });
 
   it('已显式设置非回环地址：不提示', () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     try {
       warnLoopbackAdvertiseHost(CONFIG);
       expect(warnSpy).not.toHaveBeenCalled();
+      expect(logSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
+      logSpy.mockRestore();
     }
   });
 });
