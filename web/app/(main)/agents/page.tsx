@@ -4,8 +4,8 @@
  * Agent 管理页（Phase 3 T9：agent-config 原型保真迁移 + 真实 API 接入）
  * =============================================
  * 唯一来源：docs/agent-platform/prototypes/agent-config/index.tsx（布局/间距/文案/data-testid 零改动）。
- * - 左 Agent 列表（320px，data-testid=agent-list-item）+ 右 ConfigPanel 五块配置面板：
- *   提示词（prompt-editor）/ 默认模型（model-select）/ 技能（skill-list）/
+ * - 左 Agent 列表（320px，data-testid=agent-list-item）+ 右 ConfigPanel 四块配置面板：
+ *   提示词（prompt-editor）/ 默认模型（model-select）/
  *   工具（tool-permission-list + tool-effect-select）/ 权限范围（permission-config）。
  * - 数据源：GET /api/v1/agents（type 过滤 + 分页 + 扩展字段）→ TanStack Query；
  *   选中 Agent → GET /api/v1/agents/:id 详情（列表条目已含扩展字段，详情查询保证选中态最新）。
@@ -18,8 +18,7 @@
  *   isTemplate 仅用于主题色展示，不再作为只读态。
  * - 页面内扩展 token（仿原型 :156-170）：toolEffectMeta（allow/ask/deny 三态色）、
  *   toolSourceMeta（builtin/custom/mcp 真实 source 徽章色），不写 tokens.ts 基线。
- * - 技能面板真实勾选（T7）：GET /skills?enabled=true 拉取技能库 → 勾选（skillIds 草稿）
- *   → PATCH 提交 skillIds 重建 agent_skills；停用残留/池外 id 原样展示不丢。
+ * - 技能注入为全局机制（worker 级全局注入，不按 agent 绑定），前端移除绑定配置。
  * - 工具区目录驱动（T7）：GET /tools?enabled=true 为工具行数据源（action + 真实 source 徽章
  *   + enabled 恒启用），effect 三态编辑 → PATCH 提交 toolEffects 重建 agent_tool_effects；
  *   手动添加/停用残留 action 不在目录时按命名启发式兜底标注来源。
@@ -88,18 +87,8 @@ interface UpdateAgentPayload {
   defaultModelId?: string;
   /** 首选 worker id（软绑定；显式 null=自动调度） */
   workerId?: string | null;
-  /** 勾选技能 id 列表（重建 agent_skills 关联；显式传空数组 = 清空） */
-  skillIds?: string[];
   /** 工具 effect 配置（重建 agent_tool_effects 关联） */
   toolEffects?: { toolAction: string; effect: string }[];
-}
-
-/** GET /skills 条目（对齐 SkillsService.findAll 返回；enabled=true 仅启用技能可供勾选）。 */
-interface ApiSkill {
-  id: string;
-  name: string;
-  description: string | null;
-  enabled: boolean;
 }
 
 /** GET /tools 条目（对齐 ToolsService.findAll 返回；source 为注册推导/seed 内置）。 */
@@ -350,29 +339,6 @@ function AgentListItem({ agent, active, modelNameOf, onClick }: AgentListItemPro
           }}
         >
           {agent.prompt || "暂无角色描述"}
-        </div>
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: space.xs,
-            marginTop: space.sm,
-          }}
-        >
-          {agent.skillIds.slice(0, 3).map((skill) => (
-            <span
-              key={skill}
-              style={{
-                fontSize: fontSize.xs,
-                color: neutral[500],
-                backgroundColor: neutral[100],
-                padding: "1px 6px",
-                borderRadius: radius.pill,
-              }}
-            >
-              {skill}
-            </span>
-          ))}
         </div>
         <div
           style={{
@@ -765,12 +731,8 @@ interface ConfigPanelProps {
   readOnly: boolean;
   /** 可用模型列表（available-models，目录读取） */
   models: AvailableModel[];
-  /** 已启用技能库（GET /skills?enabled=true，agent 勾选池） */
-  skills: ApiSkill[];
   /** 启用工具目录（GET /tools?enabled=true，工具行 + 来源徽章） */
   tools: ApiTool[];
-  /** 技能库加载中（降级提示文案） */
-  skillsPending: boolean;
   /** 模型目录（GET /models）：名称查询 + 存量校验 + 凭据端点 md id 解析 */
   catalogByRef: Map<string, CatalogRow>;
   /** 可用 worker 列表（GET /workers，首选 worker 选择数据源） */
@@ -793,7 +755,7 @@ interface ConfigPanelProps {
   deleteError: string | null;
 }
 
-function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, catalogByRef, workers, saving, saveError, onSave, onSaveToken, onClone, canCreate, canDelete, onDelete, deleting, deleteError }: ConfigPanelProps) {
+function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, saving, saveError, onSave, onSaveToken, onClone, canCreate, canDelete, onDelete, deleting, deleteError }: ConfigPanelProps) {
   // is_0000000030：readOnly 不再按 type 区分（template 也可编辑）；isTemplate 仅用于主题色
   const isTemplate = agent.type === "template";
   const accent = isTemplate
@@ -805,7 +767,6 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
   const [ackMessageDraft, setAckMessageDraft] = useState(agent.ackMessage ?? "");
   const [modelDraft, setModelDraft] = useState<string | null>(agent.defaultModelId ?? null);
   const [workerDraft, setWorkerDraft] = useState<string>(agent.workerId ?? "");
-  const [skillDrafts, setSkillDrafts] = useState<string[]>(agent.skillIds);
   const [toolDrafts, setToolDrafts] = useState<ToolEffectRow[]>(
     agent.toolEffects.map((t) => ({
       toolAction: t.toolAction,
@@ -842,13 +803,6 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
     });
   }, [tools]);
 
-  const toggleSkill = (id: string) => {
-    if (readOnly) return;
-    setSkillDrafts((prev) =>
-      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
-    );
-  };
-
   const handleSave = () => {
     // is_0000000030：内置（template）agent 设置也可修改（后端已放开，agentId/type 不可改）；
     // 提交全部设置字段（prompt/模型/worker/技能/工具 effect/确认文案）
@@ -857,7 +811,6 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
       defaultModelId: modelDraft ?? undefined,
       // 软绑定首选 worker：显式提交（空=自动调度，null 清除绑定）
       workerId: workerDraft || null,
-      skillIds: skillDrafts,
       toolEffects: toolDrafts.map((t) => ({ toolAction: t.toolAction, effect: t.effect })),
       ackMessage: ackMessageDraft.trim() || null,
     };
@@ -1425,115 +1378,6 @@ function ConfigPanel({ agent, readOnly, models, skills, tools, skillsPending, ca
         </div>
       </div>
 
-      {/* ③ 技能列表（GET /skills?enabled=true 真实勾选，提交 skillIds 重建关联） */}
-      <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>
-            技能配置
-          </span>
-          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            技能 · 已启用 {skillDrafts.length}/{skills.length}
-          </span>
-        </div>
-        {skills.length === 0 ? (
-          <div
-            data-testid="skill-empty"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: space.sm,
-              padding: `${space.md}px`,
-              borderRadius: radius.md,
-              border: `1px dashed ${neutral[300]}`,
-              backgroundColor: neutral[50],
-              fontSize: fontSize.sm,
-              color: neutral[400],
-            }}
-          >
-            {skillsPending ? "技能库加载中…" : "技能库暂无已启用技能（可在技能管理页上传启用）"}
-          </div>
-        ) : (
-          <div
-            data-testid="skill-list"
-            style={{ display: "flex", flexWrap: "wrap", gap: space.sm }}
-          >
-            {skills.map((skill) => {
-              const checked = skillDrafts.includes(skill.id);
-              return (
-                <label
-                  key={skill.id}
-                  data-skill={skill.name}
-                  data-checked={checked ? "true" : "false"}
-                  onClick={readOnly ? undefined : () => toggleSkill(skill.id)}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: space.xs,
-                    padding: `${space.xs}px ${space.sm + 2}px`,
-                    borderRadius: radius.pill,
-                    backgroundColor: checked ? "#EFF6FF" : neutral[50],
-                    border: `1px solid ${checked ? "#BFDBFE" : neutral[200]}`,
-                    color: checked ? "#2563EB" : neutral[500],
-                    fontSize: fontSize.sm,
-                    cursor: readOnly ? "default" : "pointer",
-                    userSelect: "none",
-                    fontFamily: fontFamily.body,
-                  }}
-                >
-                  <span
-                    aria-hidden
-                    style={{
-                      width: 14,
-                      height: 14,
-                      borderRadius: radius.sm,
-                      backgroundColor: checked ? "#2563EB" : "#FFFFFF",
-                      border: `1px solid ${checked ? "#2563EB" : neutral[300]}`,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      color: "#FFFFFF",
-                      fontSize: 10,
-                      lineHeight: 1,
-                    }}
-                  >
-                    {checked ? "✓" : ""}
-                  </span>
-                  {skill.name}
-                </label>
-              );
-            })}
-            {/* 池外技能（已勾选但不在启用技能库：停用残留/手动 id，原样展示保证数据不丢） */}
-            {skillDrafts
-              .filter((s) => !skills.some((sk) => sk.id === s))
-              .map((s) => (
-                <span
-                  key={s}
-                  data-skill={s}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    padding: `${space.xs}px ${space.sm + 2}px`,
-                    borderRadius: radius.pill,
-                    backgroundColor: "#EFF6FF",
-                    border: `1px solid #BFDBFE`,
-                    color: "#2563EB",
-                    fontSize: fontSize.sm,
-                    fontFamily: fontFamily.mono,
-                  }}
-                >
-                  {s}
-                </span>
-              ))}
-          </div>
-        )}
-      </div>
-
       {/* ④ 工具配置（开关 + 权限矩阵，可编辑 effect） */}
       <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
         <div
@@ -1946,14 +1790,6 @@ export default function AgentConfigPage() {
     },
   });
 
-  // 技能库：GET /skills?enabled=true（仅启用技能可供 Agent 勾选，admin/成员语义一致）
-  const skillsQuery = useQuery({
-    queryKey: ["skills"],
-    queryFn: () => api.get<PageResponse<ApiSkill>>("/skills", { query: { page: 1, pageSize: 100, enabled: true } }),
-    enabled: !!userId,
-  });
-  const skills = skillsQuery.data?.items ?? [];
-
   // 工具目录：GET /tools?enabled=true（T3 成员只读过滤保证停用工具不可见）
   const toolsQuery = useQuery({
     queryKey: ["tools"],
@@ -2140,9 +1976,7 @@ export default function AgentConfigPage() {
           // is_0000000030：内置（template）agent 设置可编辑；删除仍对 template 隐藏（后端 403 兜底）
           readOnly={false}
           models={models}
-          skills={skills}
           tools={tools}
-          skillsPending={skillsQuery.isPending}
           catalogByRef={catalogByRef}
           workers={workers}
           saving={saveMutation.isPending}
