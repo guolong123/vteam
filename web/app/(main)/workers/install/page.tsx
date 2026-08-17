@@ -290,6 +290,7 @@ export default function WorkerInstallPage() {
   const [advertiseHost, setAdvertiseHost] = useState("");
   const [serveHostname, setServeHostname] = useState("");
   const [mcpUrl, setMcpUrl] = useState("");
+  const [workDir, setWorkDir] = useState("");
 
   /* serverUrl 初始值跟随页面 origin（用户可手动修改） */
   useEffect(() => {
@@ -326,7 +327,7 @@ export default function WorkerInstallPage() {
   /* 两种安装方式的命令；curl 下载地址 = 当前 origin + /install-worker.sh。
      token 非空时追加 --token，保证复制命令即可完整安装（脚本自动写入 X_WORKER_TOKEN）；
      --advertise-host 传入经 sanitizeIp 清洗的纯 IP，脚本自动补 http:// 前缀 */
-  const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${serveHostname ? ` --serve-hostname ${serveHostname}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`;
+  const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${serveHostname ? ` --serve-hostname ${serveHostname}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}${workDir ? ` --work-dir ${workDir}` : ""}`;
   const dockerCommand = `docker run -d --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e CONCURRENCY=${concurrency} -e OPENCODE_VERSION=${opencodeVersion} -p 18080:18080 ketaops/opencode-worker:latest`;
 
   const command = method === "curl" ? curlCommand : dockerCommand;
@@ -522,6 +523,17 @@ export default function WorkerInstallPage() {
                     value={mcpUrl}
                     onChange={(e) => setMcpUrl(e.target.value)}
                     placeholder="http://<控制面外部地址>/api/v1/platform-mcp"
+                    spellCheck={false}
+                    style={inputStyle}
+                  />
+                </FieldRow>
+
+                <FieldRow label="工作目录（work-dir）" hint="缺省 /tmp/keta-worker · 注入落点（opencode.json/技能/工具）；需持久化/固定目录时可设">
+                  <input
+                    data-testid="work-dir-input"
+                    value={workDir}
+                    onChange={(e) => setWorkDir(e.target.value)}
+                    placeholder="/tmp/keta-worker"
                     spellCheck={false}
                     style={inputStyle}
                   />
