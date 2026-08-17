@@ -71,6 +71,7 @@ function WorkerCard({
   onRestart,
   onShutdown,
   onDelete,
+  onSetDefault,
 }: {
   worker: WorkerItem;
   now: number;
@@ -79,10 +80,11 @@ function WorkerCard({
   /** workers.delete 权限（仅 offline 行显示删除入口） */
   canDelete: boolean;
   /** 当前进行中的操作（同一卡片任一操作 busy 时全部按钮禁用防并发） */
-  busy: { workerId: string; action: "restart" | "shutdown" | "delete" } | null;
+  busy: { workerId: string; action: "restart" | "shutdown" | "delete" | "set-default" } | null;
   onRestart: (id: string) => void;
   onShutdown: (id: string) => void;
   onDelete: (id: string) => void;
+  onSetDefault: (id: string) => void;
 }) {
   const router = useRouter();
   const label = WORKER_STATUS_LABEL[worker.status];
@@ -107,6 +109,7 @@ function WorkerCard({
   const restartBusy = isBusy && busy?.action === "restart";
   const shutdownBusy = isBusy && busy?.action === "shutdown";
   const deleteBusy = isBusy && busy?.action === "delete";
+  const setDefaultBusy = isBusy && busy?.action === "set-default";
   const opsDisabled = !canEdit || isOffline || isBusy;
   const opsTitle = !canEdit
     ? "无 workers.edit 权限"
@@ -165,6 +168,24 @@ function WorkerCard({
           </span>
         </div>
         <WorkerStatusBadge status={worker.status} />
+        {worker.isDefault && (
+          <span
+            data-testid="worker-default-badge"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              fontSize: fontSize.xs,
+              fontWeight: 600,
+              color: "#92400E",
+              backgroundColor: "#FEF3C7",
+              padding: "2px 8px",
+              borderRadius: radius.pill,
+              lineHeight: 1.4,
+            }}
+          >
+            默认
+          </span>
+        )}
       </div>
 
       {/* 版本 + 节点名称（后端无 address 字段 → 展示注册名 name，缺省 hostname 语义） */}
@@ -401,6 +422,36 @@ function WorkerCard({
             {deleteBusy ? "删除中…" : "删除"}
           </button>
         )}
+        <button
+          type="button"
+          data-testid="worker-set-default-button"
+          data-worker-id={worker.id}
+          disabled={opsDisabled || worker.isDefault}
+          title={
+            !canEdit
+              ? "无 workers.edit 权限"
+              : isBusy
+                ? "操作进行中…"
+                : worker.isDefault
+                  ? "已是默认节点"
+                  : "设为默认节点：所有候选均不满足时以此节点兜底"
+          }
+          onClick={() => onSetDefault(worker.id)}
+          style={{
+            flex: 1,
+            padding: `${space.sm - 1}px ${space.md}px`,
+            borderRadius: radius.md,
+            border: `1px solid ${opsDisabled || worker.isDefault ? neutral[100] : "#FEF3C7"}`,
+            backgroundColor: opsDisabled || worker.isDefault ? neutral[100] : "#FEF3C7",
+            color: opsDisabled || worker.isDefault ? neutral[400] : "#92400E",
+            fontSize: fontSize.md,
+            cursor: opsDisabled || worker.isDefault ? "not-allowed" : "pointer",
+            fontFamily: fontFamily.body,
+            opacity: opsDisabled ? 0.5 : 1,
+          }}
+        >
+          {setDefaultBusy ? "设置中…" : worker.isDefault ? "已默认" : "设为默认"}
+        </button>
       </div>
     </section>
   );
@@ -437,7 +488,7 @@ export default function WorkersPage() {
   /* 操作中的 worker（防并发：同一卡片任一操作 busy 时全部按钮均禁用） */
   const [busyWorker, setBusyWorker] = useState<{
     workerId: string;
-    action: "restart" | "shutdown" | "delete";
+    action: "restart" | "shutdown" | "delete" | "set-default";
   } | null>(null);
   /* 删除二次确认目标（null = 弹窗关闭） */
   const [deleteTarget, setDeleteTarget] = useState<WorkerItem | null>(null);
@@ -497,6 +548,22 @@ export default function WorkersPage() {
       setBusyWorker(null);
       setDeleteTarget(null);
       setActionError(isApiError(err) ? err.message : "删除失败，请稍后重试");
+    },
+  });
+
+  /* 设为默认：PATCH /workers/:id {isDefault:true} → 全局唯一（后端自动取消其他）→ 刷新 */
+  const setDefaultMutation = useMutation({
+    mutationFn: (id: string) =>
+      api.patch<WorkerItem>(`/workers/${id}`, { isDefault: true }),
+    onMutate: (id) => setBusyWorker({ workerId: id, action: "set-default" }),
+    onSuccess: () => {
+      setBusyWorker(null);
+      setActionError(null);
+      queryClient.invalidateQueries({ queryKey: ["workers"] });
+    },
+    onError: (err) => {
+      setBusyWorker(null);
+      setActionError(isApiError(err) ? err.message : "设为默认失败，请稍后重试");
     },
   });
 
@@ -740,6 +807,7 @@ export default function WorkersPage() {
                 const target = items.find((x) => x.id === id);
                 if (target) setDeleteTarget(target);
               }}
+              onSetDefault={(id) => setDefaultMutation.mutate(id)}
             />
           ))}
         </div>

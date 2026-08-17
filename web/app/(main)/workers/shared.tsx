@@ -87,6 +87,8 @@ export interface WorkerItem {
   registeredAt: string;
   /** C8：worker 默认模型 id（providerID/modelID；C2 register 上报或 PATCH 配置，null=未配置）。 */
   defaultModelId: string | null;
+  /** 全局唯一默认 worker（assignWorker 全部候选不满足时兜底）。 */
+  isDefault: boolean;
 }
 
 /** 心跳载荷中的单条 MCP 服务器状态（server McpStatusEntryDto，11 篇 §5.8 三态）。 */
