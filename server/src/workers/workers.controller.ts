@@ -101,16 +101,21 @@ export class WorkersController {
   }
 
   /**
-   * PATCH /api/v1/workers/:id：配置/清除 worker 默认模型（C8，workers.edit）。
-   * body {defaultModelId: string | null}——须存在于 models 目录且 enabled（否则 400），
-   * null=清除；返回更新后的 WorkerView（含 defaultModelId）。
+   * PATCH /api/v1/workers/:id：配置 worker 默认模型 / 全局默认标记（C8 + 默认 worker，workers.edit）。
+   * body {defaultModelId: string | null, isDefault?: boolean}——defaultModelId 须存在于 models
+   * 目录且 enabled（否则 400），null=清除；isDefault true=设为全局默认（自动取消其他 worker）、
+   * false=取消默认、缺省=不更新；返回更新后的 WorkerView（含 isDefault）。
    */
   @Patch(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission('workers.edit')
-  @ApiOperation({ summary: '配置 worker 默认模型（workers.edit；null=清除）' })
-  updateDefaultModel(@Param('id') id: string, @Body() dto: UpdateWorkerModelDto) {
-    return this.workers.updateDefaultModel(id, dto);
+  @ApiOperation({ summary: '配置 worker 默认模型 / 全局默认标记（workers.edit）' })
+  async update(@Param('id') id: string, @Body() dto: UpdateWorkerModelDto) {
+    let view = await this.workers.updateDefaultModel(id, dto);
+    if (dto.isDefault !== undefined) {
+      view = await this.workers.setDefaultWorker(id, dto.isDefault);
+    }
+    return view;
   }
 
   /**

@@ -81,6 +81,7 @@ describe('WorkersService', () => {
     lastHeartbeatAt: new Date('2026-08-08T00:00:00Z'),
     registeredAt: new Date('2026-08-08T00:00:00Z'),
     defaultModelId: null,
+    isDefault: false,
     ...overrides,
   });
 
@@ -1328,6 +1329,91 @@ describe('WorkersService', () => {
       const workerId = await service.assignWorker();
 
       expect(workerId).toBe('w_none');
+    });
+
+    it('全部候选不满足（版本/容量/模型均不符）→ 回退到全局默认 worker（在线 + 有容量）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({ id: 'w_candidate', opencodeVersion: '1.18.14' }),
+        workerRow({ id: 'w_default', isDefault: true }),
+      ]);
+      // 候选 w_candidate 版本不符被排除；默认 worker w_default 兜底（回退不应用版本/模型过滤）
+      const workerId = await service.assignWorker({ opencodeVersion: '9.9.9' });
+
+      expect(workerId).toBe('w_default');
+    });
+
+    it('全部候选不满足 → 默认 worker 也无容量 → 返回 null', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({ id: 'w_full', load: { instances: 5 } }),
+        workerRow({ id: 'w_default', isDefault: true, load: { instances: 5 } }),
+      ]);
+      // maxInstances=5 容量 0 < 1：普通候选排除、默认 worker 也无容量 → null
+      const workerId = await service.assignWorker();
+
+      expect(workerId).toBeNull();
+    });
+
+    it('全部候选不满足 → 默认 worker 离线 → 返回 null（默认也不可用）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({ id: 'w_full', load: { instances: 5 } }),
+        workerRow({ id: 'w_default', isDefault: true, status: WORKER_STATUS.OFFLINE }),
+      ]);
+
+      const workerId = await service.assignWorker();
+
+      expect(workerId).toBeNull();
+    });
+  });
+
+  describe('setDefaultWorker（全局唯一默认 worker）', () => {
+    it('设为默认：事务内先取消全部其他 worker，再置目标 isDefault=true', async () => {
+      prisma.worker.findUnique
+        .mockResolvedValueOnce({ id: 'w_1' }) // 存在性检查
+        .mockResolvedValueOnce(workerRow({ id: 'w_1', isDefault: true })); // findOne 返回
+      prisma.worker.updateMany.mockResolvedValue({ count: 1 });
+      prisma.worker.update.mockResolvedValue(
+        workerRow({ id: 'w_1', isDefault: true }),
+      );
+
+      const view = await service.setDefaultWorker('w_1', true);
+
+      expect(prisma.worker.updateMany).toHaveBeenCalledWith({
+        where: { id: { not: 'w_1' } },
+        data: { isDefault: false },
+      });
+      expect(prisma.worker.update).toHaveBeenCalledWith({
+        where: { id: 'w_1' },
+        data: { isDefault: true },
+      });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(view.isDefault).toBe(true);
+    });
+
+    it('取消默认（isDefault=false）：目标置 false，其他 worker 不受影响', async () => {
+      prisma.worker.findUnique
+        .mockResolvedValueOnce({ id: 'w_1' })
+        .mockResolvedValueOnce(workerRow({ id: 'w_1', isDefault: false }));
+      prisma.worker.updateMany.mockResolvedValue({ count: 0 });
+      prisma.worker.update.mockResolvedValue(
+        workerRow({ id: 'w_1', isDefault: false }),
+      );
+
+      const view = await service.setDefaultWorker('w_1', false);
+
+      expect(prisma.worker.update).toHaveBeenCalledWith({
+        where: { id: 'w_1' },
+        data: { isDefault: false },
+      });
+      expect(view.isDefault).toBe(false);
+    });
+
+    it('worker 不存在 → 404 WORKER_NOT_FOUND', async () => {
+      prisma.worker.findUnique.mockResolvedValue(null);
+
+      await expect(service.setDefaultWorker('w_missing', true)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });
 

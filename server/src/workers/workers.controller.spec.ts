@@ -16,6 +16,7 @@ describe('WorkersController', () => {
     findAll: jest.Mock;
     findOne: jest.Mock;
     updateDefaultModel: jest.Mock;
+    setDefaultWorker: jest.Mock;
     requestRestart: jest.Mock;
     requestShutdown: jest.Mock;
     remove: jest.Mock;
@@ -28,6 +29,7 @@ describe('WorkersController', () => {
       findAll: jest.fn(),
       findOne: jest.fn(),
       updateDefaultModel: jest.fn(),
+      setDefaultWorker: jest.fn(),
       requestRestart: jest.fn(),
       requestShutdown: jest.fn(),
       remove: jest.fn(),
@@ -109,9 +111,10 @@ describe('WorkersController', () => {
     };
     service.updateDefaultModel.mockResolvedValue(view);
 
-    const result = await controller.updateDefaultModel('w_0000000001', dto);
+    const result = await controller.update('w_0000000001', dto);
 
     expect(service.updateDefaultModel).toHaveBeenCalledWith('w_0000000001', dto);
+    expect(service.setDefaultWorker).not.toHaveBeenCalled();
     expect(result).toEqual(view);
   });
 
@@ -119,9 +122,26 @@ describe('WorkersController', () => {
     const dto: UpdateWorkerModelDto = { defaultModelId: null };
     service.updateDefaultModel.mockResolvedValue({ id: 'w_0000000001', defaultModelId: null });
 
-    await controller.updateDefaultModel('w_0000000001', dto);
+    await controller.update('w_0000000001', dto);
 
     expect(service.updateDefaultModel).toHaveBeenCalledWith('w_0000000001', { defaultModelId: null });
+    expect(service.setDefaultWorker).not.toHaveBeenCalled();
+  });
+
+  it('默认 worker：PATCH /workers/:id 传 isDefault → 转发 setDefaultWorker', async () => {
+    const dto: UpdateWorkerModelDto = { isDefault: true };
+    const view = { id: 'w_0000000001', isDefault: true };
+    service.updateDefaultModel.mockResolvedValue({
+      id: 'w_0000000001',
+      defaultModelId: null,
+    });
+    service.setDefaultWorker.mockResolvedValue(view);
+
+    const result = await controller.update('w_0000000001', dto);
+
+    expect(service.updateDefaultModel).toHaveBeenCalledWith('w_0000000001', dto);
+    expect(service.setDefaultWorker).toHaveBeenCalledWith('w_0000000001', true);
+    expect(result).toEqual(view);
   });
 
   it('UX-01：POST /workers/:id/restart 转发 requestRestart（workers.edit 保护）', async () => {

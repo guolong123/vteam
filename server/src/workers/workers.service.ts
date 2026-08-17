@@ -668,7 +668,19 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         if (aOnline !== bOnline) return bOnline - aOnline;
         return b.capacity - a.capacity;
       });
-    return ranked[0]?.worker.id ?? null;
+    if (ranked.length > 0) {
+      return ranked[0].worker.id;
+    }
+    // 兜底：所有候选都不满足 → 回退到全局默认 worker（仅要求在线 + 有容量；
+    // 不应用版本/模型过滤——默认 worker 是最终兜底，接受任意请求）。
+    // candidates 已由 DB where 排除 offline（防御 filter 再兜底），此处只需查 isDefault + 容量。
+    const fallback = candidates.find(
+      (w) =>
+        w.isDefault === true &&
+        w.status !== WORKER_STATUS.OFFLINE &&
+        this.remainingCapacity(w) >= need,
+    );
+    return fallback?.id ?? null;
   }
 
   /**
@@ -763,6 +775,37 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
           : { defaultModelId: defaultModelId || null },
     });
     return this.toWorkerView(row);
+  }
+
+  /**
+   * 设置/取消 worker 全局默认标记（全局唯一：同一时间仅一个 worker isDefault=true）。
+   * - worker 不存在 → 404 WORKER_NOT_FOUND；
+   * - isDefault=true：事务内先把全部其他 worker isDefault 置 false，再置目标 true（原子保证唯一）；
+   * - isDefault=false：清除目标 worker 默认标记（允许无默认 worker 状态）；
+   * 返回更新后的 WorkerView（含 isDefault）。
+   */
+  async setDefaultWorker(id: string, isDefault: boolean) {
+    const existing = await this.prisma.worker.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new NotFoundException({
+        code: WORKER_ERRORS.WORKER_NOT_FOUND,
+        message: `Worker ${id} 不存在`,
+      });
+    }
+    await this.prisma.$transaction([
+      this.prisma.worker.updateMany({
+        where: { id: { not: id } },
+        data: { isDefault: false },
+      }),
+      this.prisma.worker.update({
+        where: { id },
+        data: { isDefault },
+      }),
+    ]);
+    return this.findOne(id);
   }
 
   /**
@@ -927,6 +970,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     lastHeartbeatAt: Date | null;
     registeredAt: Date;
     defaultModelId: string | null;
+    isDefault: boolean;
   }) {
     return {
       id: worker.id,
@@ -938,6 +982,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       lastHeartbeatAt: worker.lastHeartbeatAt,
       registeredAt: worker.registeredAt,
       defaultModelId: worker.defaultModelId,
+      isDefault: worker.isDefault,
       mcpStatus: this.workerMcpStatus.get(worker.id) ?? [],
     };
   }

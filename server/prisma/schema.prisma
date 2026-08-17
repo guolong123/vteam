@@ -603,6 +603,8 @@ model Worker {
   status          String    @default("offline")
   // worker 默认模型兜底（分派时 Agent 未配模型 → 用执行 worker 默认模型，C8）
   defaultModelId  String?   @map("default_model_id")
+  // 全局唯一默认 worker（assignWorker 兜底：候选全不满足时回退；同时仅一个为 true，service 侧保证）
+  isDefault       Boolean   @default(false) @map("is_default")
   tokenHash       String?   @map("token_hash")
   lastHeartbeatAt DateTime? @map("last_heartbeat_at")
   registeredAt    DateTime  @default(now()) @map("registered_at")

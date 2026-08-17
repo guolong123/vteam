@@ -255,10 +255,10 @@ export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 30 * 60_000;
 /** 空闲判死扫描周期（定期遍历 lastActivityAt，检查超时会话）。 */
 export const IDLE_SCAN_INTERVAL_MS = 60_000;
 
-/** F3 MINOR-3：任务工作目录根（env WORK_DIR，默认 /tmp/keta-worker-tasks）。
+/** F3 MINOR-3：任务工作目录根（env WORK_DIR，默认 /tmp/vteam-worker-tasks）。
  *  任务级独立工作目录 = <根>/tasks/<taskId>（server 侧 mkdir -p 保证存在），
  *  作为 prompt_async 的 directory 传入——防模型在仓库根真实写文件污染（F4 零污染关键）。 */
-export const DEFAULT_TASK_WORK_DIR = '/tmp/keta-worker-tasks';
+export const DEFAULT_TASK_WORK_DIR = '/tmp/vteam-worker-tasks';
 
 /** 自持轮询间隔 ms（F2 C1：对齐 worker 侧 prompt-await.ts pollMs=500，计划 D8）。 */
 export const POLL_INTERVAL_MS = 500;
@@ -737,7 +737,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
   public firstTokenTimeoutMs: number;
   /** 空闲判死 ms（env AGENT_IDLE_TIMEOUT_MS，缺省 30min）：running 后无输出活动超时 → 判死。 */
   public agentIdleTimeoutMs: number;
-  /** F3 MINOR-3：任务工作目录根（env WORK_DIR，缺省 /tmp/keta-worker-tasks）。 */
+  /** F3 MINOR-3：任务工作目录根（env WORK_DIR，缺省 /tmp/vteam-worker-tasks）。 */
   public taskWorkDirRoot: string;
   /** F3 MAJOR-1：增量 poll 游标（sessionId → 已消费到的最新消息 id），复用会话跨轮续接。 */
   private readonly pollCursors = new Map<string, string>();
@@ -961,33 +961,16 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // 修复验收 e2e 缺陷：复用已绑定 worker 不校验在线 → offline worker 被复用 → fetch failed 首字超时。
     // offline（心跳超时标记）或行缺失 → 解绑 + 重新分配；未绑定分支 assignWorker 已过滤 offline，
     // 此检查只命中"复用已绑定"场景（复用语义保留：在线 worker 直接复用，见单测回归用例）。
-    let workerRow = await this.prisma.worker.findUnique({
+    const workerRow = await this.prisma.worker.findUnique({
       where: { id: workerId },
       select: { id: true, status: true, capabilities: true, defaultModelId: true },
     });
     if (!workerRow || workerRow.status === WORKER_STATUS.OFFLINE) {
-      const staleWorkerId = workerId;
-      this.logger.warn(
-        `agent ${target.agentId} 绑定的 worker ${staleWorkerId} 不可用` +
-          `${workerRow ? '（offline）' : '（不存在）'}，解绑并重新分配 worker`,
-      );
-      await this.sessionLifecycle.unbindSession(target.sessionId);
-      workerId = await this.workersService.assignWorker(assignmentReq);
-      if (!workerId) {
-        throw new Error('无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）');
-      }
-      workerRow = await this.prisma.worker.findUnique({
-        where: { id: workerId },
-        select: { id: true, status: true, capabilities: true, defaultModelId: true },
-      });
-      if (!workerRow) {
-        throw new Error(`worker ${workerId} 不存在`);
-      }
-      opencodeSessionId = null;
-      await this.sessionLifecycle.bindSessionToWorker(
-        target.sessionId,
+      // 会话隔离：session.workerId 锁定后禁止转移到其他 worker——即使原 worker offline
+      // 也不解绑重分配（默认 worker 不会自动接管），直接抛错让用户手动处理。
+      throw new WorkerUnavailableException(
         workerId,
-        PENDING_INSTANCE_REF,
+        '会话绑定的 worker 不可用，请手动处理（默认 worker 不会自动接管）',
       );
     }
     const worker: WorkerEndpointRef = {

@@ -1,12 +1,14 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsOptional, IsString } from 'class-validator';
 
 /**
- * PATCH /workers/:id 请求体（C8：worker 默认模型配置）。
+ * PATCH /workers/:id 请求体（C8：worker 默认模型配置 + 全局默认 worker 标记）。
  * defaultModelId 为 `providerID/modelID` 格式（对齐 worker 上报 id 与 models 目录 ref）；
  * - 非空：须存在于 models 目录且 enabled（否则 400 MODEL_NOT_FOUND）；
  * - null：清除默认模型；
  * - 缺省：幂等跳过（不更新）。
+ * isDefault：全局唯一默认 worker 标记（true=设为默认并自动取消其他 worker；
+ * false=取消默认；缺省=不更新）。
  */
 export class UpdateWorkerModelDto {
   @ApiPropertyOptional({
@@ -17,4 +19,12 @@ export class UpdateWorkerModelDto {
   @IsOptional()
   @IsString()
   defaultModelId?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      '全局唯一默认 worker 标记（true=设为默认并自动取消其他 worker；false=取消默认；缺省=不更新）',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isDefault?: boolean;
 }

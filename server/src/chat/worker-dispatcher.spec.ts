@@ -671,74 +671,63 @@ describe('WorkerDispatcher', () => {
       );
     });
 
-    it('修复：绑定 offline worker → 解绑 + 重新分配在线 worker（不复用离线节点）', async () => {
+    it('会话隔离：绑定 offline worker → 抛错（默认 worker 不自动接管），不解绑不重分配', async () => {
       prisma.session.findUnique.mockResolvedValue({
         id: 's_0000000001',
         workerId: 'w_offline',
         instanceRef: 'ses_stale',
       });
-      // 第一次查询命中绑定 worker（offline）→ 触发解绑重分配；第二次查询返回新 worker
-      prisma.worker.findUnique
-        .mockResolvedValueOnce({ id: 'w_offline', status: 'offline', capabilities: {} })
-        .mockResolvedValueOnce({ id: 'w_online', status: 'online', capabilities: {} });
-      workersService.assignWorker.mockResolvedValue('w_online');
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_offline',
+        status: 'offline',
+        capabilities: {},
+      });
       prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
-      prisma.artifact.findMany.mockResolvedValue([]);
-      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_online' });
       const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
 
       await d.dispatch(request);
 
-      // 解绑被调用（释放离线 worker 绑定，Session 恢复 created）
-      expect(sessionLifecycle.unbindSession).toHaveBeenCalledWith('s_0000000001');
-      // 重新分配在线 worker
-      expect(workersService.assignWorker).toHaveBeenCalledTimes(1);
-      // 重新绑定（pending → 真实 instanceRef）
-      expect(sessionLifecycle.bindSessionToWorker).toHaveBeenNthCalledWith(
-        1,
-        's_0000000001',
-        'w_online',
-        PENDING_INSTANCE_REF,
+      // 会话锁定：不解绑、不重分配、不执行
+      expect(sessionLifecycle.unbindSession).not.toHaveBeenCalled();
+      expect(workersService.assignWorker).not.toHaveBeenCalled();
+      expect(workerClient.execute).not.toHaveBeenCalled();
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toEqual(
+        expect.objectContaining({
+          agentId: 'a_product',
+          error: expect.stringContaining('请手动处理'),
+        }),
       );
-      expect(sessionLifecycle.bindSessionToWorker).toHaveBeenNthCalledWith(
-        2,
-        's_0000000001',
-        'w_online',
-        'ses_online',
+      const agentError = realtime.broadcast.mock.calls.find(
+        (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
       );
-      // 下发到新 worker 的新会话，不复用离线 worker 的旧会话
-      expect(workerClient.execute).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'w_online' }),
-        expect.objectContaining({ sessionId: 'ses_online' }),
-      );
-      expect(workerClient.execute).not.toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'w_offline' }),
-        expect.anything(),
+      expect(agentError?.[1]).toEqual(
+        expect.objectContaining({ level: 'message', errorType: 'dispatch_failed' }),
       );
     });
 
-    it('修复：绑定 worker 行缺失（已删除）→ 解绑 + 重新分配，无可用则报错', async () => {
+    it('会话隔离：绑定 worker 行缺失（已删除）→ 抛错，不解绑不重分配', async () => {
       prisma.session.findUnique.mockResolvedValue({
         id: 's_0000000001',
         workerId: 'w_deleted',
         instanceRef: 'ses_gone',
       });
-      prisma.worker.findUnique
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: 'w_online', status: 'online', capabilities: {} });
-      workersService.assignWorker.mockResolvedValue('w_online');
+      prisma.worker.findUnique.mockResolvedValue(null);
       prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
-      prisma.artifact.findMany.mockResolvedValue([]);
-      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_online' });
       const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
 
       await d.dispatch(request);
 
-      expect(sessionLifecycle.unbindSession).toHaveBeenCalledWith('s_0000000001');
-      expect(workersService.assignWorker).toHaveBeenCalledTimes(1);
-      expect(workerClient.execute).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'w_online' }),
-        expect.objectContaining({ sessionId: 'ses_online' }),
+      expect(sessionLifecycle.unbindSession).not.toHaveBeenCalled();
+      expect(workersService.assignWorker).not.toHaveBeenCalled();
+      expect(workerClient.execute).not.toHaveBeenCalled();
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toEqual(
+        expect.objectContaining({ error: expect.stringContaining('请手动处理') }),
       );
     });
 
@@ -1218,39 +1207,30 @@ describe('WorkerDispatcher', () => {
       );
     });
 
-    it('回归：绑定 offline worker 重分配时 assignWorker 仍携带模型过滤', async () => {
+    it('会话隔离：绑定 offline worker → 抛错，assignWorker 不被调用', async () => {
       prisma.session.findUnique.mockResolvedValue({
         id: 's_0000000001',
         workerId: 'w_offline',
         instanceRef: 'ses_stale',
       });
-      prisma.worker.findUnique
-        .mockResolvedValueOnce({ id: 'w_offline', status: 'offline', capabilities: {} })
-        .mockResolvedValueOnce({
-          id: 'w_online',
-          status: 'online',
-          capabilities: {},
-          defaultModelId: null,
-        });
-      workersService.assignWorker.mockResolvedValue('w_online');
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_offline',
+        status: 'offline',
+        capabilities: {},
+        defaultModelId: null,
+      });
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_product',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
-      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_online' });
       const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
 
       await d.dispatch(request);
 
-      // 解绑重分配的 assignWorker 同样带 modelId 过滤
-      expect(workersService.assignWorker).toHaveBeenCalledTimes(1);
-      expect(workersService.assignWorker).toHaveBeenCalledWith({
-        modelId: 'opencode-go/deepseek-v4-flash',
-      });
-      expect(workerClient.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'w_online' }),
-        { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
-      );
+      expect(workersService.assignWorker).not.toHaveBeenCalled();
+      expect(errors).toHaveLength(1);
     });
   });
 
