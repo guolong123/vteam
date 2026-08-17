@@ -296,6 +296,13 @@ export default function WorkerInstallPage() {
     setServerUrl((cur) => (cur ? cur : pageOrigin));
   }, [pageOrigin]);
 
+  /* MCP 地址默认值 = 当前控制面地址 + /api/v1/platform-mcp（内置 MCP 入口；外部/集群外场景可手动改） */
+  useEffect(() => {
+    if (pageOrigin) {
+      setMcpUrl((cur) => cur || `${pageOrigin}/api/v1/platform-mcp`);
+    }
+  }, [pageOrigin]);
+
   /* workerId 初始随机生成：SSR 首帧空串 → 挂载后填充（对齐 pageOrigin 模式避免 hydration mismatch，
      替代原型示例值 worker-05，避免固定 id 多 worker 冲突） */
   useEffect(() => {
@@ -509,7 +516,7 @@ export default function WorkerInstallPage() {
                   />
                 </FieldRow>
 
-                <FieldRow label="MCP 地址（mcp-url）" hint="外部 worker 填控制面外部地址 · 内置 MCP 才可达">
+                <FieldRow label="MCP 地址（mcp-url）" hint="默认已填当前控制面内置 MCP 入口 · 外部/集群外场景可改">
                   <input
                     data-testid="mcp-url-input"
                     value={mcpUrl}
