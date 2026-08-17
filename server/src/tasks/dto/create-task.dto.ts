@@ -40,6 +40,16 @@ export class TaskAgentInput {
   @IsString()
   @MaxLength(255)
   workDir?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '创建时预绑的 worker id，可选；填了 dispatcher 直接复用，不调 assignWorker 也不走默认 worker 兜底（须为注册在线 worker，离线拒绝）',
+    maxLength: 64,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  workerId?: string;
 }
 
 /**

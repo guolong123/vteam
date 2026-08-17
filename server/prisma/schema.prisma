@@ -168,11 +168,15 @@ model TaskAgent {
   seq       Int       @default(1) // 同 agent 同任务内序号（服务端生成，事务内防并发重号）
   workDir   String? @map("work_dir") // is_0000000010：实例独立持久化工作目录（创建任务可指定；缺省
   // /data/worker/<sanitize(agent.name)>，同 agent 多实例追加 -<seq>）
+  // C12：创建任务时预绑的 worker 节点 id（dispatch 优先复用，不调 assignWorker，**不**走默认 worker 兜底）。
+  // null = 未预绑，dispatch 走 assignWorker 流程。
+  workerId  String? @map("worker_id")
   joinedAt  DateTime  @default(now()) @map("joined_at")
   removedAt DateTime? @map("removed_at")
 
   task  Task  @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent Agent @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  worker Worker? @relation(fields: [workerId], references: [id], onDelete: SetNull, onUpdate: Restrict)
   // 每实例独立会话（10 篇 §3.3；任务详情 instances 需回传会话状态 sessionStatus，真实状态源）
   sessions Session[]
 
@@ -612,6 +616,7 @@ model Worker {
   sessions           Session[]
   taskGroupInstances TaskGroupInstance[]
   modelAvailabilities WorkerModelAvailability[]
+  taskAgentInstances TaskAgent[]
 
   @@index([status, lastHeartbeatAt], map: "idx_workers_status_heartbeat")
   @@map("workers")

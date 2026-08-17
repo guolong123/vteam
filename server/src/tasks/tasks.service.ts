@@ -32,6 +32,7 @@ import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
+import { WORKER_STATUS } from '../workers/workers.constants';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { QueryTasksDto } from './dto/query-tasks.dto';
 import { RejectTaskDto } from './dto/reject-task.dto';
@@ -264,6 +265,28 @@ export class TasksService implements OnModuleInit {
         const alias = item.alias?.trim() || this.defaultAlias(agent, seq);
         const workDir =
           item.workDir?.trim() || this.defaultAgentWorkDir(agent, seq);
+        // C12：创建任务时预绑 worker（可选）。非空 → 校验 worker 存在且注册在线（离线拒绝），
+        // 通过后写入 TaskAgent.workerId；dispatch 时直接复用，不调 assignWorker 也不走默认 worker 兜底。
+        let workerId: string | null = null;
+        if (item.workerId?.trim()) {
+          const worker = await tx.worker.findUnique({
+            where: { id: item.workerId.trim() },
+            select: { id: true, status: true },
+          });
+          if (!worker) {
+            throw new BadRequestException({
+              code: TASK_ERRORS.TASK_AGENT_WORKER_NOT_FOUND,
+              message: `预绑 worker ${item.workerId} 不存在`,
+            });
+          }
+          if (worker.status === WORKER_STATUS.OFFLINE) {
+            throw new BadRequestException({
+              code: TASK_ERRORS.TASK_AGENT_WORKER_OFFLINE,
+              message: `预绑 worker ${item.workerId} 离线，请选择在线 worker`,
+            });
+          }
+          workerId = worker.id;
+        }
         const ta = await tx.taskAgent.create({
           data: {
             id: await this.idGen.nextId(ID_PREFIX.taskAgent),
@@ -272,6 +295,7 @@ export class TasksService implements OnModuleInit {
             alias,
             seq,
             workDir,
+            workerId,
           },
         });
         // 每实例每任务独立会话（10 篇 §3.3 / plan §6 T12「新会话创建」）：

@@ -63,4 +63,8 @@ export const TASK_ERRORS = {
   AGENT_NOT_FOUND: 'AGENT_NOT_FOUND',
   /** transitionByAgent：仅主 Agent 实例可流转任务状态（MCP 工具路径，403）。 */
   TASK_STATUS_MAIN_AGENT_ONLY: 'TASK_STATUS_MAIN_AGENT_ONLY',
+  /** C12：创建任务预绑 worker 不存在（400）。 */
+  TASK_AGENT_WORKER_NOT_FOUND: 'TASK_AGENT_WORKER_NOT_FOUND',
+  /** C12：创建任务预绑 worker 离线（400，须选在线 worker）。 */
+  TASK_AGENT_WORKER_OFFLINE: 'TASK_AGENT_WORKER_OFFLINE',
 } as const;

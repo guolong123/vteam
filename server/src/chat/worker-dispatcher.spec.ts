@@ -731,6 +731,76 @@ describe('WorkerDispatcher', () => {
       );
     });
 
+    it('C12 预绑 worker：taskAgent.workerId 在线 → 直接复用（不调 assignWorker），bind 到预绑 worker', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: null,
+        instanceRef: null,
+        taskAgentId: 'ta_0000000001',
+      });
+      prisma.taskAgent.findUnique.mockResolvedValue({
+        workerId: 'w_prebound',
+        workDir: '/data/vteam-worker/产品经理',
+        seq: 1,
+        agent: { id: 'a_product', name: '产品经理' },
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_prebound',
+        status: 'online',
+        capabilities: {},
+        defaultModelId: null,
+      });
+      prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      // 预绑 → 不调 assignWorker（也不走默认 worker 兜底）
+      expect(workersService.assignWorker).not.toHaveBeenCalled();
+      // 首次绑定：bind 到预绑 worker（占位 instanceRef）
+      expect(sessionLifecycle.bindSessionToWorker).toHaveBeenCalledWith(
+        's_0000000001',
+        'w_prebound',
+        PENDING_INSTANCE_REF,
+      );
+      expect(workerClient.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'w_prebound' }),
+        expect.objectContaining({ taskId: request.taskId, agentId: 'a_product' }),
+      );
+    });
+
+    it('C12 预绑 worker 离线 → 抛 WorkerUnavailableException（不解绑不重分配，默认 worker 不接管）', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: null,
+        instanceRef: null,
+        taskAgentId: 'ta_0000000001',
+      });
+      prisma.taskAgent.findUnique.mockResolvedValue({ workerId: 'w_offline' });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_offline',
+        status: 'offline',
+        capabilities: {},
+      });
+      prisma.agent.findUnique.mockResolvedValue({ id: 'a_product', defaultModelId: null });
+      const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
+
+      await d.dispatch(request);
+
+      expect(workersService.assignWorker).not.toHaveBeenCalled();
+      expect(sessionLifecycle.unbindSession).not.toHaveBeenCalled();
+      expect(workerClient.execute).not.toHaveBeenCalled();
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toEqual(
+        expect.objectContaining({
+          agentId: 'a_product',
+          error: expect.stringContaining('请手动处理'),
+        }),
+      );
+    });
+
     it('sessionId 为 null：emitError 且不触碰 worker 链路', async () => {
       const d = createDispatcher();
       const errors: unknown[] = [];

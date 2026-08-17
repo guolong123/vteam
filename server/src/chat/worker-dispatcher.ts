@@ -942,7 +942,27 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       ? { modelId: agentModelId }
       : {};
 
-    if (!workerId || hasStalePending) {
+    // C12：创建任务时预绑 worker 优先于 assignWorker（用户创建时显式选择 → dispatch 直接复用，
+    // 不调 assignWorker 也不走默认 worker 兜底）。预绑 worker 若 offline 由下方 L968 会话隔离
+    // 逻辑覆盖（不解绑不转移，直接抛 WorkerUnavailableException）。
+    let preboundWorkerId: string | null = null;
+    if (session.taskAgentId) {
+      const taskAgent = await this.prisma.taskAgent.findUnique({
+        where: { id: session.taskAgentId },
+        select: { workerId: true },
+      });
+      preboundWorkerId = taskAgent?.workerId ?? null;
+    }
+
+    if (preboundWorkerId) {
+      // 预绑 → 直接复用，**不**调 assignWorker（也不走默认 worker 兜底）
+      workerId = preboundWorkerId;
+      await this.sessionLifecycle.bindSessionToWorker(
+        target.sessionId,
+        workerId,
+        PENDING_INSTANCE_REF,
+      );
+    } else if (!workerId || hasStalePending) {
       // 未绑定：调度分配 worker（D3 无可用 → 抛错，调用方报错不降级 mock）
       workerId = await this.workersService.assignWorker(assignmentReq);
       if (!workerId) {

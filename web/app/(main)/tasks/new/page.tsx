@@ -35,6 +35,7 @@ import {
   fontFamily,
   shadow,
 } from "@/src/theme/tokens";
+import type { WorkerItem } from "@/app/(main)/workers/shared";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -114,6 +115,8 @@ interface InstanceDraft {
   roleKey: RoleKey | null;
   /** 自定义 agent 名称（默认别名/工作目录用；模板实例无需）。 */
   agentName?: string;
+  /** 预绑定 worker（可选，不填走 dispatcher 自动分配）。 */
+  workerId?: string;
 }
 
 /** 实例桶 key：内置 5 角色 + "custom"（自定义/clone agent，is_0000000031）。 */
@@ -631,20 +634,24 @@ function RoleInstanceCard({
   role,
   instances,
   mainKey,
+  onlineWorkers,
   onToggleRole,
   onAddInstance,
   onRenameInstance,
   onWorkDirChange,
+  onWorkerChange,
   onRemoveInstance,
   onSetMain,
 }: {
   role: RoleKey;
   instances: InstanceDraft[];
   mainKey: string | null;
+  onlineWorkers: WorkerItem[];
   onToggleRole: (role: RoleKey) => void;
   onAddInstance: (role: RoleKey) => void;
   onRenameInstance: (key: string, alias: string) => void;
   onWorkDirChange: (key: string, workDir: string) => void;
+  onWorkerChange: (key: string, workerId: string) => void;
   onRemoveInstance: (key: string) => void;
   onSetMain: (key: string) => void;
 }) {
@@ -804,6 +811,31 @@ function RoleInstanceCard({
                     padding: `${space.xs}px 0`,
                   }}
                 />
+                <select
+                  data-testid={`task-agent-worker-select-${instances.indexOf(inst)}`}
+                  value={inst.workerId ?? ""}
+                  aria-label={`${theme.label}实例 ${inst.seq} 预绑 Worker`}
+                  onChange={(e) => onWorkerChange(inst.key, e.target.value)}
+                  style={{
+                    width: 120,
+                    border: "none",
+                    outline: "none",
+                    background: "transparent",
+                    fontSize: fontSize.xs,
+                    color: neutral[500],
+                    fontFamily: fontFamily.body,
+                    padding: `${space.xs}px 0`,
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  <option value="">自动分配</option>
+                  {onlineWorkers.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name ?? w.id.slice(0, 8)}
+                    </option>
+                  ))}
+                </select>
                 <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>#{inst.seq}</span>
                 {isMain ? (
                   <span
@@ -902,9 +934,11 @@ function CustomAgentCard({
   agents,
   instances,
   mainKey,
+  onlineWorkers,
   onAdd,
   onRenameInstance,
   onWorkDirChange,
+  onWorkerChange,
   onRemoveInstance,
   onSetMain,
 }: {
@@ -913,9 +947,11 @@ function CustomAgentCard({
   /** 已选自定义实例（custom 桶）。 */
   instances: InstanceDraft[];
   mainKey: string | null;
+  onlineWorkers: WorkerItem[];
   onAdd: (agent: AgentItem) => void;
   onRenameInstance: (key: string, alias: string) => void;
   onWorkDirChange: (key: string, workDir: string) => void;
+  onWorkerChange: (key: string, workerId: string) => void;
   onRemoveInstance: (key: string) => void;
   onSetMain: (key: string) => void;
 }) {
@@ -1102,6 +1138,32 @@ function CustomAgentCard({
                     fontFamily: fontFamily.mono,
                   }}
                 />
+                <select
+                  data-testid={`task-agent-worker-select-custom-${instances.indexOf(inst)}`}
+                  value={inst.workerId ?? ""}
+                  aria-label={`${inst.alias} 预绑 Worker`}
+                  onChange={(e) => onWorkerChange(inst.key, e.target.value)}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    border: `1px solid ${neutral[200]}`,
+                    borderRadius: radius.sm,
+                    padding: `${space.xs}px ${space.sm}px`,
+                    fontSize: fontSize.xs,
+                    color: neutral[600],
+                    outline: "none",
+                    background: neutral[50],
+                    fontFamily: fontFamily.body,
+                    cursor: "pointer",
+                  }}
+                >
+                  <option value="">自动分配</option>
+                  {onlineWorkers.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name ?? w.id.slice(0, 8)}
+                    </option>
+                  ))}
+                </select>
               </div>
             );
           })}
@@ -1189,11 +1251,13 @@ function AgentSelectPanel({
   mainRole,
   allInstances,
   customAgents,
+  onlineWorkers,
   onToggleRole,
   onAddInstance,
   onAddCustomAgent,
   onRenameInstance,
   onWorkDirChange,
+  onWorkerChange,
   onRemoveInstance,
   onSetMain,
   onSelectMain,
@@ -1211,11 +1275,13 @@ function AgentSelectPanel({
   allInstances: InstanceDraft[];
   /** is_0000000031：自定义/clone agent 列表（type !== template）。 */
   customAgents: AgentItem[];
+  onlineWorkers: WorkerItem[];
   onToggleRole: (role: RoleKey) => void;
   onAddInstance: (role: RoleKey) => void;
   onAddCustomAgent: (agent: AgentItem) => void;
   onRenameInstance: (key: string, alias: string) => void;
   onWorkDirChange: (key: string, workDir: string) => void;
+  onWorkerChange: (key: string, workerId: string) => void;
   onRemoveInstance: (key: string) => void;
   onSetMain: (key: string) => void;
   onSelectMain: (key: string) => void;
@@ -1297,10 +1363,12 @@ function AgentSelectPanel({
                 role={role}
                 instances={instancesByRole[role] ?? []}
                 mainKey={mainKey}
+                onlineWorkers={onlineWorkers}
                 onToggleRole={onToggleRole}
                 onAddInstance={onAddInstance}
                 onRenameInstance={onRenameInstance}
                 onWorkDirChange={onWorkDirChange}
+                onWorkerChange={onWorkerChange}
                 onRemoveInstance={onRemoveInstance}
                 onSetMain={onSetMain}
               />
@@ -1310,9 +1378,11 @@ function AgentSelectPanel({
               agents={customAgents}
               instances={instancesByRole.custom ?? []}
               mainKey={mainKey}
+              onlineWorkers={onlineWorkers}
               onAdd={onAddCustomAgent}
               onRenameInstance={onRenameInstance}
               onWorkDirChange={onWorkDirChange}
+              onWorkerChange={onWorkerChange}
               onRemoveInstance={onRemoveInstance}
               onSetMain={onSetMain}
             />
@@ -1722,7 +1792,7 @@ export default function TaskCreatePage() {
     });
   };
 
-  /** is_0000000010：行内修改工作目录（workDir 输入受控） */
+  /** 行内修改工作目录（workDir 输入受控） */
   const handleWorkDirChange = (key: string, workDir: string) => {
     setInstancesByRole((prev) => {
       const role = findRoleOf(prev, key);
@@ -1730,6 +1800,20 @@ export default function TaskCreatePage() {
       return {
         ...prev,
         [role]: (prev[role] ?? []).map((i) => (i.key === key ? { ...i, workDir } : i)),
+      };
+    });
+  };
+
+  /** 预绑 worker（下拉选择受控） */
+  const handleWorkerChange = (key: string, workerId: string) => {
+    setInstancesByRole((prev) => {
+      const role = findRoleOf(prev, key);
+      if (!role) return prev;
+      return {
+        ...prev,
+        [role]: (prev[role] ?? []).map((i) =>
+          i.key === key ? { ...i, workerId: workerId || undefined } : i,
+        ),
       };
     });
   };
@@ -1767,6 +1851,17 @@ export default function TaskCreatePage() {
     queryFn: () => api.get<AgentsResponse>("/agents"),
     enabled: !!user?.id,
   });
+
+  // Worker 数据源：GET /workers（在线 worker 用于实例预绑下拉）
+  const { data: workersData } = useQuery({
+    queryKey: ["workers"],
+    queryFn: () => api.get<WorkerItem[]>("/workers"),
+    enabled: !!user?.id,
+  });
+  const onlineWorkers = useMemo(
+    () => (workersData ?? []).filter((w) => w.status === "online"),
+    [workersData],
+  );
   const agentOptions: AgentOption[] = (agentsData?.items ?? []).map((a) => ({
     id: a.id,
     name: a.name,
@@ -1817,6 +1912,7 @@ export default function TaskCreatePage() {
             ...(inst.workDir.trim() !== defaultWorkDirOf(inst.roleKey ?? "custom", inst.agentName, inst.seq)
               ? { workDir: inst.workDir.trim() }
               : {}),
+            ...(inst.workerId ? { workerId: inst.workerId } : {}),
           })),
           // 主实例：实例 id 由服务端生成，前端无法预知——传 mainAgentId 由服务端映射该 agent 第一实例
           //（决策 1：默认主 Agent=项目经理；用户改主实例别名不影响——按 agent 映射；自定义 agent 直接用其 id）
@@ -1891,11 +1987,13 @@ export default function TaskCreatePage() {
           mainRole={mainInstance?.roleKey ?? null}
           allInstances={allInstances}
           customAgents={customAgents}
+          onlineWorkers={onlineWorkers}
           onToggleRole={handleToggleRole}
           onAddInstance={handleAddInstance}
           onAddCustomAgent={handleAddCustomAgent}
           onRenameInstance={handleRenameInstance}
           onWorkDirChange={handleWorkDirChange}
+          onWorkerChange={handleWorkerChange}
           onRemoveInstance={handleRemoveInstance}
           onSetMain={handleSetMain}
           onSelectMain={handleSetMain}

@@ -42,6 +42,7 @@ describe('TasksService', () => {
     taskEvent: { create: jest.Mock };
     message: { create: jest.Mock; findFirst: jest.Mock };
     agent: { findMany: jest.Mock; findUnique: jest.Mock };
+    worker: { findUnique: jest.Mock };
     session: { create: jest.Mock; updateMany: jest.Mock };
     plan: { findUnique: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
     planTask: { findFirst: jest.Mock; findMany: jest.Mock };
@@ -133,6 +134,7 @@ describe('TasksService', () => {
       taskEvent: { create: jest.fn() },
       message: { create: jest.fn(), findFirst: jest.fn() },
       agent: { findMany: jest.fn(), findUnique: jest.fn() },
+      worker: { findUnique: jest.fn() },
       session: { create: jest.fn(), updateMany: jest.fn() },
       plan: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
       planTask: { findFirst: jest.fn(), findMany: jest.fn() },
@@ -196,6 +198,9 @@ describe('TasksService', () => {
           .mockImplementation(({ where }: any) =>
             Promise.resolve({ id: where.id, ...mockAgentMeta(where.id) }),
           ),
+      },
+      worker: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'w_0000000001', status: 'online' }),
       },
       session: { create: jest.fn().mockResolvedValue({ id: 's_1' }) },
       taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
@@ -415,6 +420,7 @@ describe('TasksService', () => {
           alias: '产品经理-1',
           seq: 1,
           workDir: '/data/vteam-worker/产品经理',
+          workerId: null,
         },
       });
       expect(txModels.taskAgent.create).toHaveBeenNthCalledWith(2, {
@@ -425,6 +431,7 @@ describe('TasksService', () => {
           alias: '开发者-1',
           seq: 1,
           workDir: '/data/vteam-worker/开发者',
+          workerId: null,
         },
       });
       // 会话：每实例一行（uk_sessions_task_agent），status=created，绑实例
@@ -492,6 +499,7 @@ describe('TasksService', () => {
           alias: '开发者-1',
           seq: 1,
           workDir: '/data/vteam-worker/开发者',
+          workerId: null,
         },
       });
       expect(txModels.taskAgent.create).toHaveBeenNthCalledWith(2, {
@@ -502,6 +510,7 @@ describe('TasksService', () => {
           alias: '开发者-2',
           seq: 2,
           workDir: '/data/vteam-worker/开发者-2',
+          workerId: null,
         },
       });
       // 主实例 = 第二个开发者实例（mainAgentInstanceId 入参优先）
@@ -539,6 +548,96 @@ describe('TasksService', () => {
       expect(sanitizeWorkDirName(' 开发/者 1 ')).toBe('开发-者-1');
       expect(sanitizeWorkDirName('../../etc')).toBe('etc');
       expect(sanitizeWorkDirName('')).toBe('agent');
+    });
+
+    it('C12 预绑 worker：workerId 合法（在线）→ 写入 TaskAgent.workerId', async () => {
+      idGen.nextId
+        .mockResolvedValueOnce('t_0000000001')
+        .mockResolvedValueOnce('c_0000000001')
+        .mockResolvedValueOnce('ta_0000000001')
+        .mockResolvedValueOnce('s_0000000001')
+        .mockResolvedValueOnce('te_0000000001');
+      const txModels = mockCreateTx(row());
+      txModels.worker.findUnique.mockResolvedValue({ id: 'w_0000000001', status: 'online' });
+
+      await service.create(pid, userId, {
+        title: 'x',
+        agents: [{ agentId: 'a_product', workerId: 'w_0000000001' }],
+      } as any);
+
+      expect(txModels.worker.findUnique).toHaveBeenCalledWith({
+        where: { id: 'w_0000000001' },
+        select: { id: true, status: true },
+      });
+      expect(txModels.taskAgent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ workerId: 'w_0000000001' }),
+        }),
+      );
+    });
+
+    it('C12 预绑 worker 离线 → 400 TASK_AGENT_WORKER_OFFLINE（不写 TaskAgent）', async () => {
+      idGen.nextId
+        .mockResolvedValueOnce('t_0000000001')
+        .mockResolvedValueOnce('c_0000000001')
+        .mockResolvedValueOnce('ta_0000000001')
+        .mockResolvedValueOnce('s_0000000001')
+        .mockResolvedValueOnce('te_0000000001');
+      const txModels = mockCreateTx(row());
+      txModels.worker.findUnique.mockResolvedValue({ id: 'w_offline', status: 'offline' });
+
+      await assertBadRequestCode(
+        () =>
+          service.create(pid, userId, {
+            title: 'x',
+            agents: [{ agentId: 'a_product', workerId: 'w_offline' }],
+          } as any),
+        TASK_ERRORS.TASK_AGENT_WORKER_OFFLINE,
+      );
+      expect(txModels.taskAgent.create).not.toHaveBeenCalled();
+    });
+
+    it('C12 预绑 worker 不存在 → 400 TASK_AGENT_WORKER_NOT_FOUND（不写 TaskAgent）', async () => {
+      idGen.nextId
+        .mockResolvedValueOnce('t_0000000001')
+        .mockResolvedValueOnce('c_0000000001')
+        .mockResolvedValueOnce('ta_0000000001')
+        .mockResolvedValueOnce('s_0000000001')
+        .mockResolvedValueOnce('te_0000000001');
+      const txModels = mockCreateTx(row());
+      txModels.worker.findUnique.mockResolvedValue(null);
+
+      await assertBadRequestCode(
+        () =>
+          service.create(pid, userId, {
+            title: 'x',
+            agents: [{ agentId: 'a_product', workerId: 'w_ghost' }],
+          } as any),
+        TASK_ERRORS.TASK_AGENT_WORKER_NOT_FOUND,
+      );
+      expect(txModels.taskAgent.create).not.toHaveBeenCalled();
+    });
+
+    it('C12 未填 workerId → 不查 worker，TaskAgent.workerId 保持 null', async () => {
+      idGen.nextId
+        .mockResolvedValueOnce('t_0000000001')
+        .mockResolvedValueOnce('c_0000000001')
+        .mockResolvedValueOnce('ta_0000000001')
+        .mockResolvedValueOnce('s_0000000001')
+        .mockResolvedValueOnce('te_0000000001');
+      const txModels = mockCreateTx(row());
+
+      await service.create(pid, userId, {
+        title: 'x',
+        agents: [{ agentId: 'a_product' }],
+      } as any);
+
+      expect(txModels.worker.findUnique).not.toHaveBeenCalled();
+      expect(txModels.taskAgent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ workerId: null }),
+        }),
+      );
     });
 
     it('mainAgentInstanceId 不属于本次创建实例集合 → 400（事务回滚，task.update 不执行）', async () => {
