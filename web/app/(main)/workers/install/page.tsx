@@ -25,6 +25,7 @@
  *   install-confirm-button/install-cancel-button。
  *
  * - 网络可达性（可选）：外部/跨机 worker 专用参数（--advertise-host / --serve-hostname / --mcp-url），
+ *   --advertise-host 只需填 IP（http:// 与端口由脚本/worker 自动处理；不填则 worker 自动探测本机 IP）；
  *   空值不拼接，集群内/本机 worker 无需配置；详见 worker install-worker.sh。
  */
 import { useEffect, useState, type CSSProperties } from "react";
@@ -50,6 +51,50 @@ type InstallMethod = "curl" | "docker";
 function randomWorkerId(): string {
   const rand = Math.floor(10 + Math.random() * 90);
   return `worker-${String(rand).padStart(2, "0")}`;
+}
+
+/**
+ * 清洗用户输入的 IP 地址（trim → 去协议 → 去路径 → 去端口）。
+ * 支持脏值输入（用户手滑填了完整 URL），输出纯净 IP。
+ *
+ * IPv6 例外：`[::1]` 或 `[2001:db8::1]` 保留方括号（CLI 期望 `[addr]`）。
+ *
+ * @example
+ * sanitizeIp("  http://192.168.1.100:8080/path  ") // "192.168.1.100"
+ * sanitizeIp("https://[::1]:9090")                  // "[::1]"
+ * sanitizeIp("10.0.0.1")                           // "10.0.0.1"
+ * sanitizeIp("")                                    // ""
+ */
+function sanitizeIp(raw: string): string {
+  let ip = raw.trim();
+  if (!ip) return "";
+
+  // 去掉协议前缀（http:// 或 https://）
+  ip = ip.replace(/^https?:\/\//i, "");
+
+  // 去掉路径（第一个 / 后截断）
+  const slashIdx = ip.indexOf("/");
+  if (slashIdx !== -1) ip = ip.slice(0, slashIdx);
+
+  // IPv6 用方括号包裹 → 保留 [addr]，去掉端口
+  const bracketOpen = ip.indexOf("[");
+  const bracketClose = ip.indexOf("]");
+  if (bracketOpen !== -1 && bracketClose !== -1) {
+    // 取 [addr] 内容，丢弃 ] 后的 :port
+    ip = ip.slice(bracketOpen, bracketClose + 1);
+  } else {
+    // IPv4 或裸 IPv6：去掉端口（最后一个 : 后是端口）
+    const lastColon = ip.lastIndexOf(":");
+    if (lastColon !== -1) {
+      // 确认 : 后面全是数字（端口），而非 IPv6 内部的冒号
+      const afterColon = ip.slice(lastColon + 1);
+      if (/^\d+$/.test(afterColon)) {
+        ip = ip.slice(0, lastColon);
+      }
+    }
+  }
+
+  return ip;
 }
 
 /** 表单字段行：标签 + 说明 + 输入槽（原型 FieldRow） */
@@ -272,15 +317,16 @@ export default function WorkerInstallPage() {
   }, [user?.id]);
 
   /* 两种安装方式的命令；curl 下载地址 = 当前 origin + /install-worker.sh。
-     token 非空时追加 --token，保证复制命令即可完整安装（脚本自动写入 X_WORKER_TOKEN） */
-  const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host ${advertiseHost}` : ""}${serveHostname ? ` --serve-hostname ${serveHostname}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`;
+     token 非空时追加 --token，保证复制命令即可完整安装（脚本自动写入 X_WORKER_TOKEN）；
+     --advertise-host 传入经 sanitizeIp 清洗的纯 IP，脚本自动补 http:// 前缀 */
+  const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${serveHostname ? ` --serve-hostname ${serveHostname}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}`;
   const dockerCommand = `docker run -d --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e CONCURRENCY=${concurrency} -e OPENCODE_VERSION=${opencodeVersion} -p 18080:18080 ketaops/opencode-worker:latest`;
 
   const command = method === "curl" ? curlCommand : dockerCommand;
 
   const curlSteps = [
     "在目标机器（任意网络位置，无需控制面反向可达）执行右侧 curl 命令",
-    "脚本自动安装前置（node / opencode CLI 缺失即装）、下载 worker 发布包并安装依赖、写入配置（SERVER_URL / WORKER_ID / --token 传入的 X_WORKER_TOKEN / --advertise-host 传入的 WORKER_ADVERTISE_HOST / --serve-hostname 传入的 OPENCODE_SERVE_HOSTNAME / --mcp-url 传入的 WORKER_MCP_URL），启动后向控制面注册",
+    "脚本自动安装前置（node / opencode CLI 缺失即装）、下载 worker 发布包并安装依赖、写入配置（SERVER_URL / WORKER_ID / --token 传入的 X_WORKER_TOKEN / --advertise-host 传入的 IP 由脚本自动补全为 http://<ip> 作为 WORKER_ADVERTISE_HOST / --serve-hostname 传入的 OPENCODE_SERVE_HOSTNAME / --mcp-url 传入的 WORKER_MCP_URL），启动后向控制面注册",
     "等待首次心跳（worker→控制面 SSE 通道），注册表出现后即自动入池调度",
   ];
 
@@ -441,12 +487,12 @@ export default function WorkerInstallPage() {
                   <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>外部/跨机 worker 必填 · 集群内留空</span>
                 </div>
 
-                <FieldRow label="上报地址（advertise-host）" hint="跨机/集群外必填——worker 上报 baseUrl 默认 127.0.0.1 时 server 连不上">
+                <FieldRow label="上报 IP（advertise-host）" hint="只填 IP 如 192.168.1.100，http:// 与端口自动处理；不填则 worker 自动探测本机 IP">
                   <input
                     data-testid="advertise-host-input"
                     value={advertiseHost}
                     onChange={(e) => setAdvertiseHost(e.target.value)}
-                    placeholder="http://<worker可达地址>:45087"
+                    placeholder="192.168.1.100"
                     spellCheck={false}
                     style={inputStyle}
                   />

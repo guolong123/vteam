@@ -65,6 +65,31 @@ export interface WorkerConfig {
   workerMaxInstances: number;
 }
 
+/**
+ * 自动探测本机非回环网卡 IPv4，作为 WORKER_ADVERTISE_HOST 缺省来源（用户未显式设置时
+ * 用探测到的内网 IP 上报，替代固定回退 http://127.0.0.1——后者仅本机可访问，跨机 worker
+ * server 连不上）。
+ * 遍历 os.networkInterfaces()：按返回顺序取第一个非 internal 的 IPv4 地址；跳过虚拟网卡
+ * （docker/veth/br-/vnic/virbr/cni/flannel 等桥接/容器网络，非 server 可达的真实网卡）。
+ * 返回裸 IP 字符串（如 "192.168.1.10"）；无命中（全回环/无网卡/仅 IPv6）返回 undefined。
+ * 纯函数（仅依赖 os 内置模块），独立导出便于单测 mock。
+ */
+export function detectLocalIPv4(): string | undefined {
+  const VIRTUAL_PREFIXES = ['docker', 'veth', 'br-', 'vnic', 'virbr', 'cni', 'flannel'];
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    if (VIRTUAL_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+      continue;
+    }
+    for (const net of interfaces[name] ?? []) {
+      if (!net.internal && net.family === 'IPv4') {
+        return net.address;
+      }
+    }
+  }
+  return undefined;
+}
+
 /** 解析非负整数配置项；缺省/空串回落默认值，非法值抛错。 */
 function parseNonNegativeInt(name: string, raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === '') {
@@ -106,6 +131,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
   const workerId = (env.WORKER_ID ?? '').trim() || `w_${hostname}`;
   const workerName = (env.WORKER_NAME ?? '').trim() || hostname;
   const advertiseHostRaw = (env.WORKER_ADVERTISE_HOST ?? '').trim();
+  // 未显式设置时自动探测本机非回环 IPv4 作为上报基址（detectLocalIPv4 失败/无命中回退
+  // http://127.0.0.1——仅本机可访问，跨机 worker 场景由启动告警引导显式设置）。
+  const detectedIPv4 = advertiseHostRaw ? undefined : detectLocalIPv4();
 
   return {
     workerToken,
@@ -118,7 +146,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     logLevel: (env.LOG_LEVEL ?? '').trim() || 'info',
     workDir: (env.WORK_DIR ?? '').trim() || '/tmp/keta-worker',
     gitSshKeyPath: (env.GIT_SSH_KEY_PATH ?? '').trim(),
-    workerAdvertiseHost: advertiseHostRaw || 'http://127.0.0.1',
+    workerAdvertiseHost: advertiseHostRaw || (detectedIPv4 ? `http://${detectedIPv4}` : 'http://127.0.0.1'),
     workerAdvertiseHostExplicit: advertiseHostRaw.length > 0,
     opencodeServeHostname: (env.OPENCODE_SERVE_HOSTNAME ?? '').trim() || '127.0.0.1',
     defaultModelId: (env.WORKER_DEFAULT_MODEL ?? '').trim() || undefined,

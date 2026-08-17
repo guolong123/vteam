@@ -264,3 +264,29 @@
   WORKER_ADVERTISE_HOST / OPENCODE_SERVE_HOSTNAME / 集群外注释
 - 部署待派发：install-worker.sh + worker-src.tar.gz 随 web 镜像重建生效；worker 代码改动（config/index
   告警）需 worker 镜像重建生效；本任务不部署（另行派发）
+
+## worker 上报地址自动探测（WORKER_ADVERTISE_HOST 缺省值）— 2026-08-17
+
+### 需求
+未设置 WORKER_ADVERTISE_HOST 时，worker 自动探测本机非回环网卡 IPv4 作为上报基址（替代固定回退 http://127.0.0.1——跨机场景 server 连回环必挂）。
+
+### 改动清单
+- `worker/src/config.ts`：新增 `detectLocalIPv4()` 导出纯函数（os.networkInterfaces 遍历：跳过 internal、仅取 IPv4 `family==='IPv4'`、跳过虚拟网卡前缀 docker/veth/br-/vnic/virbr/cni/flannel；返回裸 IP，无命中 undefined）；`workerAdvertiseHost` 默认值 = `detectLocalIPv4() → 'http://<ip>'`，探测失败回退 `http://127.0.0.1`；`workerAdvertiseHostExplicit` 语义不变（env 非空即 true），显式设置时**不调用** detectLocalIPv4
+- `worker/src/index.ts` `warnLoopbackAdvertiseHost`：未显式设置时分两支——探测成功（baseUrl≠127.0.0.1）→ console.log「已自动探测上报地址 http://<ip>（最终 baseUrl = http://<ip>:<serve 端口>，端口随 serve 启动确定）；若 server 无法访问（多网卡/VPN 等）请显式设置 WORKER_ADVERTISE_HOST」；探测失败（回退 127.0.0.1）→ 保留原 console.warn 可达地址告警
+- `worker/src/config.spec.ts`：**jest 环境 os.networkInterfaces 是不可重定义的 getter（jest.spyOn 抛 Cannot redefine property）**——改用模块级 `jest.mock('os')` 部分 mock（展开 actual + networkInterfaces 替换为 jest.fn 默认返回 `{}`）；新增探测用例（命中/跳过虚拟网卡/全回环 undefined→回退 127.0.0.1/显式设置不触发探测）
+- `worker/src/index.spec.ts`：告警用例更新——探测成功 console.log 提示（warnSpy 不调用）/ 探测失败保留 127.0.0.1 告警 / 显式设置均不提示
+- `web/public/install-worker.sh`：未提供 --advertise-host 提示改为「worker 会自动探测本机内网 IP 上报；若 server 无法访问探测到的地址（多网卡/VPN 等），请显式设置 --advertise-host <只填 IP>」（不再说默认 127.0.0.1 必挂）；**--advertise-host 只填 IP 时自动补 http:// 前缀**（WORKER_ADVERTISE_HOST 须为完整 URL，server resolveBaseUrl 直接 fetch，裸 IP 不可用）
+- `worker/README.md` / `.env.example`：WORKER_ADVERTISE_HOST 默认值/注释改为「自动探测本机非回环 IPv4（失败回退 http://127.0.0.1）」
+
+### 关键设计决策
+- **端口提示不硬编码**：config 不含 serve 端口（随机端口启动后才确定），探测成功提示写明「端口随 serve 启动确定」，避免误导
+- **探测跳过虚拟网卡**：docker0/veth/br- 等桥接地址非 server 可达真实网卡，探测到会误导上报
+- **默认 mock 返回空对象**：未显式 mock 的用例（F4 等）探测结果 undefined → 稳定回落 127.0.0.1，不依赖真实网卡
+- **server resolveBaseUrl 零协议规范化**：worker.client.ts 直接 fetch caps.baseUrl，裸 IP 会 fetch 失败 → install-worker.sh 负责补协议
+
+### 验证结果
+- worker jest 全量：19 suites / **373 tests** 全通过（新增 5 个：config 4 + index 1）
+- `bash -n web/public/install-worker.sh`：SYNTAX_OK
+- `npm run typecheck`：EXIT 0
+- `scripts/pack-worker.sh` 重跑：worker-src.tar.gz 216K，tar -tzf 确认 .env.example 含新注释
+- 部署待派发：worker 代码改动需 worker 镜像重建；install-worker.sh + tarball 随 web 镜像重建生效
