@@ -157,7 +157,7 @@ helm upgrade vteam chart/vteam \
 |-----|--------|------|
 | `<release>-uploads` | server `/app/uploads` | Agent 产出物落盘 |
 | `worker-home-<release>-worker-<n>` | worker `<n>` `/root` | opencode.db 会话库、auth.json 凭据（**每副本独立**，StatefulSet VCT） |
-| `worker-work-<release>-worker-<n>` | worker `<n>` `/data/keta-worker` | serve cwd、.opencode 注入、git clone 仓库（**每副本独立**，StatefulSet VCT） |
+| `worker-work-<release>-worker-<n>` | worker `<n>` `/data/vteam-worker` | serve cwd、.opencode 注入、git clone 仓库（**每副本独立**，StatefulSet VCT） |
 | MySQL 数据 | mysql `/var/lib/mysql` | StatefulSet volumeClaimTemplates |
 
 worker 为 StatefulSet：`replicaCount.worker` 扩容时自动为每个 ordinal 创建独立 PVC
@@ -186,6 +186,6 @@ kubectl delete pvc -l app.kubernetes.io/instance=vteam
 - PLATFORM_MCP_URL：仅 init Job 注入（seed 用），指向本 release 的 server Service（`http://<fullname>-server:3000/api/v1/platform-mcp`），避免 vteam MCP 仍注册 compose 的 `server:3000` 导致 worker 连接失败。
 - WORKER_ID：**不**在 ConfigMap 下发，由 worker StatefulSet 经 downward API 注入 pod 名（`w_<pod 名>`，pod 名 `<release>-worker-<ordinal>` 全局唯一）——多副本时每个 pod 唯一，避免共享同一 ID 相互覆盖注册；compose 单副本仍走 `w_<hostname>` 默认。
 - 探针：server `/api/v1/health`、web `fetch($HOSTNAME:3000)`，均为容器 node 内置 fetch（node:22-alpine 无 curl/wget）。
-- 挂载：`/app/uploads`、`/data/keta-worker`、`/root` 对齐 compose volume 语义（worker 为每副本独立卷，非 compose 的命名卷共享）。
+- 挂载：`/app/uploads`、`/data/vteam-worker`、`/root` 对齐 compose volume 语义（worker 为每副本独立卷，非 compose 的命名卷共享）。
 - 门控：init Job 经 initContainer 等待 MySQL 就绪（对齐 compose `depends_on: service_healthy`）；server 依赖 init 成功（Job 完成后 Deployment 探针即可就绪）。
 - 端口：容器内 3000/3000/4000/3306 对齐；宿主 13000/13001/14000 对应 `kubectl port-forward` 语义。

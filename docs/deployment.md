@@ -48,7 +48,7 @@ vteam 提供两套部署方式，按环境选择：
 | `WORKER_ADVERTISE_HOST` | worker | `http://worker` | 上报给 server 的 baseUrl（compose 服务名） |
 | `WORKER_DEFAULT_MODEL` | worker | 空 | Agent 未配模型时的默认模型兜底 |
 | `WORKER_FIRST_TOKEN_TIMEOUT_MS` | worker | `180000` | worker 侧首字超时，与 server 对齐防竞态误杀 |
-| `WORK_DIR` | worker | `/data/keta-worker` | 持久化工作目录（serve cwd、.opencode 注入、git clone 仓库） |
+| `WORK_DIR` | worker | `/data/vteam-worker` | 持久化工作目录（serve cwd、.opencode 注入、git clone 仓库） |
 
 ### 2.3 卷
 
@@ -56,7 +56,7 @@ vteam 提供两套部署方式，按环境选择：
 |----|--------|------|
 | `mysql_data` | db `/var/lib/mysql` | MySQL 数据 |
 | `uploads_data` | server `/app/uploads` | Agent 产出物落盘（server 静态服务挂载点） |
-| `worker_work` | worker `/data/keta-worker` | serve cwd、.opencode 注入、git clone 仓库、任务文件 |
+| `worker_work` | worker `/data/vteam-worker` | serve cwd、.opencode 注入、git clone 仓库、任务文件 |
 | `worker_home` | worker `/root` | opencode.db 会话库、auth.json 模型凭据、.keta-git-creds.json |
 
 ### 2.4 启动与清理
@@ -254,7 +254,7 @@ helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline.yaml --w
 - seed 默认把 keta-platform 注册为 `http://server:3000/api/v1/platform-mcp`（compose 服务名）——K8s 下不通。
 - 修复：seed 读 `process.env.PLATFORM_MCP_URL ?? 'http://server:3000/...'`；init Job 注入该 env，默认按 server Service 名拼 `http://vteam-server:3000/api/v1/platform-mcp`（`initJob.platformMcpUrl` 可显式覆盖）。
 - 存量部署修复（不重装）：`UPDATE mcp_servers SET url='http://vteam-server:3000/api/v1/platform-mcp' WHERE name='keta-platform';` 然后 `kubectl rollout restart sts/vteam-worker`（injectMcp 启动时执行）。
-- 注意 worker 容器默认 cwd 是镜像 WORKDIR，探测 MCP 必须 `cd /data/keta-worker && opencode mcp list --pure` 才能读到注入的 opencode.json。
+- 注意 worker 容器默认 cwd 是镜像 WORKDIR，探测 MCP 必须 `cd /data/vteam-worker && opencode mcp list --pure` 才能读到注入的 opencode.json。
 
 #### 4.4.1 集群外 worker 配置（WORKER_MCP_URL + 可达地址三件套）
 
@@ -313,7 +313,7 @@ OPENCODE_SERVE_HOSTNAME=0.0.0.0                             # serve 监听非回
 | 1 | server CrashLoopBackOff，日志 `Authentication failed against database server` | helm upgrade 未带完整 values，ConfigMap `DATABASE_URL` 密码被随机化，与 MySQL 实际密码失配 | 比对 `kubectl get configmap vteam-config -o yaml` 的 DATABASE_URL 与 `kubectl get secret vteam-secret -o jsonpath='{.data.DB_PASSWORD}'`（base64 解码）；`helm rollback` 或按 4.1 完整基线 upgrade，最后 `kubectl rollout restart deploy/vteam-server` |
 | 1b | server/web/init pod `ImagePullBackOff` | 镜像 tag 回退 `latest` 或 tag 写错（如 sed 误改多个 tag） | 检查 `helm get values` 中 image tag，用正确基线重推镜像并 upgrade |
 | 2 | 发消息只有 ACK（"收到，正在处理…"）无实际回复；server 日志 `WorkerDispatcher ... 不可用：fetch failed` | worker `baseUrl` 上报共享 ClusterIP 名，exec 端口 4198 未暴露 | 确认 `GET /api/v1/workers` 的 baseUrl 为 `http://vteam-worker-N.vteam-worker-headless...:4000`（headless DNS）；非则按 4.3 修正 WORKER_ADVERTISE_HOST 并 upgrade |
-| 3 | 内置 MCP `mcpStatus` 非 connected | seed 注册的 URL 是 compose 的 `server:3000` | 按 4.4 UPDATE mcp_servers + `kubectl rollout restart sts/vteam-worker`；容器内 `cd /data/keta-worker && opencode mcp list --pure` 确认 |
+| 3 | 内置 MCP `mcpStatus` 非 connected | seed 注册的 URL 是 compose 的 `server:3000` | 按 4.4 UPDATE mcp_servers + `kubectl rollout restart sts/vteam-worker`；容器内 `cd /data/vteam-worker && opencode mcp list --pure` 确认 |
 | 4 | worker 多副本后 `database disk image is malformed` | 共享 home PVC 并发写 SQLite opencode.db | 迁移 StatefulSet 每副本独立 PVC；损坏时降副本、删除损坏 db 重建（运行时会话/缓存，丢失影响有限） |
 | 5 | 任务创建 500，`value too long for column description` | description 列 VARCHAR(191) 容量不足 | 已改 TEXT 列（迁移 `20260814150000_text_columns`）；新部署随 init Job 自动应用，存量需重跑迁移 |
 | 6 | worker opencode 进程无响应/被杀 | 内存不足（OOMKilled）或模型偶发卡死 | `kubectl top pod` 查看资源，worker limits 提到 8Gi；模型无响应为偶发，重发消息恢复 |
@@ -346,7 +346,7 @@ kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e
 kubectl exec vteam-mysql-0 -n vteam -- mysql -uroot -p'<dbPassword>' aiagents -e "SHOW COLUMNS FROM tasks LIKE 'description';"
 
 # worker 内核对（注意先 cd 到工作目录）
-kubectl exec sts/vteam-worker -n vteam -- sh -c "cd /data/keta-worker && opencode mcp list --pure"
+kubectl exec sts/vteam-worker -n vteam -- sh -c "cd /data/vteam-worker && opencode mcp list --pure"
 
 # 健康检查
 curl -H "Host: vteam.ketaops.cc" http://<node>:32054/api/v1/health

@@ -25,14 +25,19 @@
 #                       MCP 不可达（server 下发的默认地址为集群内服务名）；集群内 worker 可省略。
 #                       未提供时仅提示，不强制写入（保证集群内 worker 无感知）。
 #   --advertise-host <url>   worker 对 server 公布的 serve 基址（WORKER_ADVERTISE_HOST，可选）：
-#                       外部/跨机 worker 建议显式设置 server 可达的 worker 地址（只填 IP 即可，
+#                       外部/跨机 worker 建议显式设置 server 可达的 worker 地址（只填 IP/URL 即可，
 #                       脚本自动补 http:// 前缀，如 192.168.1.10 → http://192.168.1.10）；
-#                       未提供时 worker 会自动探测本机非回环 IPv4 上报（探测失败回退
+#                       URL 含端口时（如 http://1.2.3.4:45087）脚本自动解析并写入 OPENCODE_SERVE_PORT，
+#                       保证 baseUrl 拼接端口与 serve 实际监听端口一致（否则 serve 随机端口 → server
+#                       fetch 失败）；未提供时 worker 会自动探测本机非回环 IPv4 上报（探测失败回退
 #                       http://127.0.0.1 仅本机可访问）；集群内/本机 worker 可省略。
+#   --serve-port <port>     opencode serve 监听端口（OPENCODE_SERVE_PORT，可选；缺省 0 = OS
+#                       随机分配）：外部/跨机 worker 强烈建议显式指定固定端口（如 45087），便于
+#                       在 NAT/反向代理层做端口转发；与 --advertise-host URL 端口冲突时显式值优先。
 #   --serve-hostname <host>  opencode serve 监听地址（OPENCODE_SERVE_HOSTNAME，可选）：外部
 #                       worker 须设 0.0.0.0（serve 监听非回环，server 才能连上）；缺省 127.0.0.1
 #                       只监听本机。未提供时仅提示，不强制写入（本机/集群内 worker 无感知）。
-#   --work-dir <path>   worker 工作目录（WORK_DIR，可选；缺省 /tmp/keta-worker）：opencode serve
+#   --work-dir <path>   worker 工作目录（WORK_DIR，可选；缺省 /tmp/vteam-worker）：opencode serve
 #                       工作目录 + 资源注入落点（opencode.json / 技能 / 工具）。外部 worker 若
 #                       需固定工作目录/挂载持久化盘可设置；缺省不写入（worker 用内置默认）。
 #   --no-service        不注册 systemd 服务（默认注册：守护进程 + 开机自启 + 崩溃自动重启，
@@ -51,6 +56,7 @@ INSTALL_DIR="${HOME}/aiagents-worker"
 WORKER_MCP_URL=""
 WORKER_ADVERTISE_HOST=""
 WORKER_SERVE_HOSTNAME=""
+WORKER_SERVE_PORT=""
 WORK_DIR=""
 NO_SERVICE=""
 
@@ -65,11 +71,12 @@ while [[ $# -gt 0 ]]; do
     --dir) INSTALL_DIR="${2:-}"; shift 2 ;;
     --mcp-url) WORKER_MCP_URL="${2:-}"; shift 2 ;;
     --advertise-host) WORKER_ADVERTISE_HOST="${2:-}"; shift 2 ;;
+    --serve-port) WORKER_SERVE_PORT="${2:-}"; shift 2 ;;
     --serve-hostname) WORKER_SERVE_HOSTNAME="${2:-}"; shift 2 ;;
     --work-dir) WORK_DIR="${2:-}"; shift 2 ;;
     --no-service) NO_SERVICE="1"; shift ;;
     *)
-      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-hostname/--work-dir/--no-service）" >&2
+      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-port/--serve-hostname/--work-dir/--no-service）" >&2
       exit 1
       ;;
   esac
@@ -190,6 +197,19 @@ if [ -n "${WORKER_ADVERTISE_HOST}" ]; then
     *) WORKER_ADVERTISE_HOST="http://${WORKER_ADVERTISE_HOST}" ;;
   esac
   update_env WORKER_ADVERTISE_HOST "${WORKER_ADVERTISE_HOST}"
+  # 自动从 advertise URL 提取端口写 OPENCODE_SERVE_PORT（避免 baseUrl 拼接端口与 serve 实际
+  # 监听端口不一致——serve 默认随机分配，外部 NAT/反向代理无法转发）。仅在用户未显式
+  # --serve-port 时从 URL 推断（priority：--serve-port > URL 端口 > 0 默认随机）。
+  if [ -z "${WORKER_SERVE_PORT}" ]; then
+    ADVERTISE_PORT="$(printf '%s' "${WORKER_ADVERTISE_HOST}" | sed -nE 's|^[a-zA-Z]+://[^/:]+:([0-9]+).*|\1|p')"
+    if [ -n "${ADVERTISE_PORT}" ]; then
+      WORKER_SERVE_PORT="${ADVERTISE_PORT}"
+      echo "[install-worker] 自动从 --advertise-host 推断 OPENCODE_SERVE_PORT=${ADVERTISE_PORT}"
+    fi
+  fi
+fi
+if [ -n "${WORKER_SERVE_PORT}" ]; then
+  update_env OPENCODE_SERVE_PORT "${WORKER_SERVE_PORT}"
 fi
 if [ -n "${WORKER_SERVE_HOSTNAME}" ]; then
   update_env OPENCODE_SERVE_HOSTNAME "${WORKER_SERVE_HOSTNAME}"

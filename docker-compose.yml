@@ -140,9 +140,9 @@ services:
       WORKER_FIRST_TOKEN_TIMEOUT_MS: "180000"
       # 持久化工作目录：serve cwd + .opencode/tools|skills 注入落点 + agent 工作区
       #（git clone 的仓库、任务文件）。改挂载卷路径，容器重建不丢（worker 启动时
-      # installGitTools/injector 会在空卷上自动重建 .opencode；镜像内 /tmp/keta-worker
+      # installGitTools/injector 会在空卷上自动重建 .opencode；镜像内 /tmp/vteam-worker
       # 的 dist/node_modules 不受影响，WORKDIR 未变）。
-      WORK_DIR: /data/keta-worker
+      WORK_DIR: /data/vteam-worker
     depends_on:
       server:
         condition: service_healthy
@@ -151,7 +151,7 @@ services:
       - "14000:4000"
     volumes:
       # 工作目录持久化：serve cwd、.opencode 注入、git clone 的仓库与任务文件
-      - worker_work:/data/keta-worker
+      - worker_work:/data/vteam-worker
       # 用户目录（HOME=/root）持久化：opencode.db 会话库（session.instanceRef 指向的
       # opencode 会话重建后不 404）、auth.json 模型凭据、.keta-git-creds.json、log、repos
       - worker_home:/root

@@ -528,12 +528,12 @@ export default function WorkerInstallPage() {
                   />
                 </FieldRow>
 
-                <FieldRow label="工作目录（work-dir）" hint="缺省 /tmp/keta-worker · 注入落点（opencode.json/技能/工具）；需持久化/固定目录时可设">
+                <FieldRow label="工作目录（work-dir）" hint="缺省 /tmp/vteam-worker · 注入落点（opencode.json/技能/工具）；需持久化/固定目录时可设">
                   <input
                     data-testid="work-dir-input"
                     value={workDir}
                     onChange={(e) => setWorkDir(e.target.value)}
-                    placeholder="/tmp/keta-worker"
+                    placeholder="/tmp/vteam-worker"
                     spellCheck={false}
                     style={inputStyle}
                   />
