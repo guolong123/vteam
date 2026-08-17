@@ -35,6 +35,9 @@
 #   --work-dir <path>   worker 工作目录（WORK_DIR，可选；缺省 /tmp/keta-worker）：opencode serve
 #                       工作目录 + 资源注入落点（opencode.json / 技能 / 工具）。外部 worker 若
 #                       需固定工作目录/挂载持久化盘可设置；缺省不写入（worker 用内置默认）。
+#   --no-service        不注册 systemd 服务（默认注册：守护进程 + 开机自启 + 崩溃自动重启，
+#                       服务名 aiagents-worker，日志 journalctl -u aiagents-worker -f）。
+#                       无 systemd 环境（容器等）自动回退前台启动。
 set -euo pipefail
 
 # ------------------------------ 参数解析 ------------------------------
@@ -49,6 +52,7 @@ WORKER_MCP_URL=""
 WORKER_ADVERTISE_HOST=""
 WORKER_SERVE_HOSTNAME=""
 WORK_DIR=""
+NO_SERVICE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -63,8 +67,9 @@ while [[ $# -gt 0 ]]; do
     --advertise-host) WORKER_ADVERTISE_HOST="${2:-}"; shift 2 ;;
     --serve-hostname) WORKER_SERVE_HOSTNAME="${2:-}"; shift 2 ;;
     --work-dir) WORK_DIR="${2:-}"; shift 2 ;;
+    --no-service) NO_SERVICE="1"; shift ;;
     *)
-      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-hostname/--work-dir）" >&2
+      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-hostname/--work-dir/--no-service）" >&2
       exit 1
       ;;
   esac
@@ -232,9 +237,55 @@ if [ -z "${WORKER_ADVERTISE_HOST}" ] && ! grep -q '^WORKER_ADVERTISE_HOST=' .env
   echo "  —— 可重跑本命令携带 --advertise-host <IP> --serve-hostname 0.0.0.0，或手动编辑 ${INSTALL_DIR}/worker/.env 后执行：./scripts/start.sh"
 fi
 
-# ------------------------------ 启动 ------------------------------
+# ------------------------------ 启动：systemd 服务（默认）或前台 ------------------------------
 if [ ! -d dist ]; then
   echo "[install-worker] ERROR: 发布包缺少 dist/，请确认控制面 worker-src.tar.gz 完整（pack-worker.sh 产物）" >&2
+  exit 1
+fi
+
+# 检测 systemd 环境（有 systemctl 且运行于 systemd PID 1——容器内通常无）
+SYSTEMD_AVAILABLE=""
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+  SYSTEMD_AVAILABLE="1"
+fi
+
+if [ -n "${NO_SERVICE}" ]; then
+  echo "[install-worker] --no-service：前台启动（Ctrl+C 停止，无守护）"
+elif [ -z "${SYSTEMD_AVAILABLE}" ]; then
+  echo "[install-worker] 未检测到 systemd（容器/精简环境），回退前台启动"
+  echo "  手动注册 systemd 可参考：/etc/systemd/system/aiagents-worker.service（ExecStart=${INSTALL_DIR}/worker/scripts/start.sh）"
+else
+  # node 可能在非默认 PATH（ensure_node 装到 ${HOME}/.local/node/bin）——unit 里显式补 PATH
+  NODE_BIN_DIR="$(dirname "$(command -v node 2>/dev/null || echo /usr/bin/node)")"
+  SERVICE_UNIT="/etc/systemd/system/aiagents-worker.service"
+  echo "[install-worker] 注册 systemd 服务：aiagents-worker（unit=${SERVICE_UNIT}）"
+  cat > "${SERVICE_UNIT}" <<EOF
+[Unit]
+Description=vteam AI worker (aiagents, workerId=${WORKER_ID})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${INSTALL_DIR}/worker
+EnvironmentFile=${INSTALL_DIR}/worker/.env
+Environment=PATH=${NODE_BIN_DIR}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/env bash ${INSTALL_DIR}/worker/scripts/start.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now aiagents-worker >/dev/null 2>&1
+  if systemctl is-active --quiet aiagents-worker; then
+    echo "[install-worker] ✅ systemd 服务已启动：aiagents-worker"
+    echo "  状态：systemctl status aiagents-worker；日志：journalctl -u aiagents-worker -f"
+    echo "  停止：systemctl stop aiagents-worker；卸载：systemctl disable --now aiagents-worker && rm -f ${SERVICE_UNIT} && systemctl daemon-reload"
+    exit 0
+  fi
+  echo "[install-worker] ⚠️  systemd 服务启动失败，请检查：journalctl -u aiagents-worker -n 50" >&2
   exit 1
 fi
 
