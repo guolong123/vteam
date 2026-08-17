@@ -207,6 +207,22 @@ if [ -n "${WORKER_ADVERTISE_HOST}" ]; then
       echo "[install-worker] 自动从 --advertise-host 推断 OPENCODE_SERVE_PORT=${ADVERTISE_PORT}"
     fi
   fi
+  # 自动从 advertise host 推断 OPENCODE_SERVE_HOSTNAME（默认 127.0.0.1 只本机可达；
+  # 外部/跨机 worker 必须 0.0.0.0 让 serve 监听非回环，否则 server fetch baseUrl 失败）。
+  # 仅在用户未显式 --serve-hostname 时从 URL 推断（priority：--serve-hostname > 推断 > 0.0.0.0 默认）。
+  if [ -z "${WORKER_SERVE_HOSTNAME}" ]; then
+    ADVERTISE_HOST_ONLY="$(printf '%s' "${WORKER_ADVERTISE_HOST}" | sed -nE 's|^[a-zA-Z]+://([^/:]+).*|\1|p')"
+    case "${ADVERTISE_HOST_ONLY}" in
+      127.0.0.1|::1|localhost|"")
+        # 本地回环 → 保持 OPENCODE_SERVE_HOSTNAME 默认（不写入 .env，worker 端 127.0.0.1 铁律）
+        ;;
+      *)
+        # 外部 host（192.168.x / 10.x / 公网）→ 必须 0.0.0.0
+        WORKER_SERVE_HOSTNAME="0.0.0.0"
+        echo "[install-worker] 自动从 --advertise-host 推断 OPENCODE_SERVE_HOSTNAME=0.0.0.0（外部/跨机 worker）"
+        ;;
+    esac
+  fi
 fi
 if [ -n "${WORKER_SERVE_PORT}" ]; then
   update_env OPENCODE_SERVE_PORT "${WORKER_SERVE_PORT}"

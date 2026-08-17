@@ -148,7 +148,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     gitSshKeyPath: (env.GIT_SSH_KEY_PATH ?? '').trim(),
     workerAdvertiseHost: advertiseHostRaw || (detectedIPv4 ? `http://${detectedIPv4}` : 'http://127.0.0.1'),
     workerAdvertiseHostExplicit: advertiseHostRaw.length > 0,
-    opencodeServeHostname: (env.OPENCODE_SERVE_HOSTNAME ?? '').trim() || '127.0.0.1',
+    // opencodeServeHostname：OPENCODE_SERVE_HOSTNAME 显式设置时尊重用户；否则按 serve 必须
+    // 可达性自适应——adverse 指向外部/非回环 IP（如 192.168.x）→ 必须 0.0.0.0（否则 serve
+    // 只监听 127.0.0.1 时 server fetch baseUrl 失败），其他情况（本地开发/探测失败）保留
+    // 127.0.0.1 铁律。
+    opencodeServeHostname: (() => {
+      const explicit = (env.OPENCODE_SERVE_HOSTNAME ?? '').trim();
+      if (explicit) return explicit;
+      // 解析 advertise host 提取 host 部分（去协议/端口）
+      let host = '';
+      try {
+        const adv = advertiseHostRaw || (detectedIPv4 ? `http://${detectedIPv4}` : 'http://127.0.0.1');
+        host = adv.replace(/^[a-zA-Z]+:\/\//, '').replace(/[:/].*$/, '');
+      } catch {
+        host = '127.0.0.1';
+      }
+      // host 是 127.0.0.1/::1/localhost 或空 → 本地开发，保持 127.0.0.1
+      if (!host || host === '127.0.0.1' || host === '::1' || host === 'localhost') {
+        return '127.0.0.1';
+      }
+      // 外部/集群外 host（192.168.x / 10.x / 公网 IP）→ 必须 0.0.0.0 让 serve 监听非回环
+      return '0.0.0.0';
+    })(),
     defaultModelId: (env.WORKER_DEFAULT_MODEL ?? '').trim() || undefined,
     mcpUrl: (env.WORKER_MCP_URL ?? '').trim() || undefined,
     workerExecPort: parseNonNegativeInt('WORKER_EXEC_PORT', env.WORKER_EXEC_PORT, 4198),
