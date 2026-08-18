@@ -19,7 +19,7 @@
  *   （原型"复制"占位语义），失败静默降级。
  * - data-testid 与原型一致（20 个）：worker-install-root/install-wizard/install-config/
  *   server-url-input/worker-id-input/regenerate-worker-id-button/capability-config/
- *   advertise-host-input/serve-hostname-input/mcp-url-input/
+ *   advertise-host-input/serve-hostname-input/mcp-url-input/work-dir-input/opencode-pure-select/
  *   install-method-section/install-method-tabs/install-method-tab/install-command-section/
  *   install-command/copy-command-button/install-steps/install-footer/
  *   install-confirm-button/install-cancel-button。
@@ -291,6 +291,7 @@ export default function WorkerInstallPage() {
   const [serveHostname, setServeHostname] = useState("");
   const [mcpUrl, setMcpUrl] = useState("");
   const [workDir, setWorkDir] = useState("");
+  const [opencodePure, setOpencodePure] = useState(true);
 
   /* serverUrl 初始值跟随页面 origin（用户可手动修改） */
   useEffect(() => {
@@ -327,14 +328,14 @@ export default function WorkerInstallPage() {
   /* 两种安装方式的命令；curl 下载地址 = 当前 origin + /install-worker.sh。
      token 非空时追加 --token，保证复制命令即可完整安装（脚本自动写入 X_WORKER_TOKEN）；
      --advertise-host 传入经 sanitizeIp 清洗的纯 IP，脚本自动补 http:// 前缀 */
-  const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${serveHostname ? ` --serve-hostname ${serveHostname}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}${workDir ? ` --work-dir ${workDir}` : ""}`;
+  const curlCommand = `curl -fsSL ${pageOrigin}/install-worker.sh | bash -s -- --server ${serverUrl} --worker-id ${workerId} --concurrency ${concurrency} --opencode ${opencodeVersion}${workerToken ? ` --token ${workerToken}` : ""}${advertiseHost ? ` --advertise-host http://${sanitizeIp(advertiseHost)}` : ""}${serveHostname ? ` --serve-hostname ${serveHostname}` : ""}${mcpUrl ? ` --mcp-url ${mcpUrl}` : ""}${workDir ? ` --work-dir ${workDir}` : ""} ${opencodePure ? "--pure" : "--no-pure"}`;
   const dockerCommand = `docker run -d --name opencode-worker-${workerId} -e SERVER_URL=${serverUrl} -e WORKER_ID=${workerId} -e CONCURRENCY=${concurrency} -e OPENCODE_VERSION=${opencodeVersion} -p 18080:18080 ketaops/opencode-worker:latest`;
 
   const command = method === "curl" ? curlCommand : dockerCommand;
 
   const curlSteps = [
     "在目标机器（任意网络位置，无需控制面反向可达）执行右侧 curl 命令",
-    "脚本自动安装前置（node / opencode CLI 缺失即装）、下载 worker 发布包并安装依赖、写入配置（SERVER_URL / WORKER_ID / --token 传入的 X_WORKER_TOKEN / --advertise-host 传入的 IP 由脚本自动补全为 http://<ip> 作为 WORKER_ADVERTISE_HOST / --serve-hostname 传入的 OPENCODE_SERVE_HOSTNAME / --mcp-url 传入的 WORKER_MCP_URL），启动后向控制面注册",
+    "脚本自动安装前置（node / opencode CLI 缺失即装）、下载 worker 发布包并安装依赖、写入配置（SERVER_URL / WORKER_ID / --token 传入的 X_WORKER_TOKEN / --advertise-host 传入的 IP 由脚本自动补全为 http://<ip> 作为 WORKER_ADVERTISE_HOST / --serve-hostname 传入的 OPENCODE_SERVE_HOSTNAME / --mcp-url 传入的 WORKER_MCP_URL / --pure 传入 WORKER_OPENCODE_PURE=true 去插件省 token），启动后向控制面注册",
     "等待首次心跳（worker→控制面 SSE 通道），注册表出现后即自动入池调度",
   ];
 
@@ -537,6 +538,18 @@ export default function WorkerInstallPage() {
                     spellCheck={false}
                     style={inputStyle}
                   />
+                </FieldRow>
+
+                <FieldRow label="opencode 纯净模式" hint="默认开启：去掉插件/MEMORY 注入/默认 agent，节省 input tokens（7601→~2000）。外部 worker 需要 opencode 插件能力时选「关闭」">
+                  <select
+                    data-testid="opencode-pure-select"
+                    value={opencodePure ? "true" : "false"}
+                    onChange={(e) => setOpencodePure(e.target.value === "true")}
+                    style={{ ...inputStyle, cursor: "pointer" }}
+                  >
+                    <option value="true">开启（--pure，推荐 · 内部 worker 默认）</option>
+                    <option value="false">关闭（--no-pure · 外部 worker 需插件时选）</option>
+                  </select>
                 </FieldRow>
               </div>
             </section>

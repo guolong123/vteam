@@ -58,6 +58,7 @@ WORKER_ADVERTISE_HOST=""
 WORKER_SERVE_HOSTNAME=""
 WORKER_SERVE_PORT=""
 WORK_DIR=""
+OPENCODE_PURE=""
 NO_SERVICE=""
 
 while [[ $# -gt 0 ]]; do
@@ -74,9 +75,11 @@ while [[ $# -gt 0 ]]; do
     --serve-port) WORKER_SERVE_PORT="${2:-}"; shift 2 ;;
     --serve-hostname) WORKER_SERVE_HOSTNAME="${2:-}"; shift 2 ;;
     --work-dir) WORK_DIR="${2:-}"; shift 2 ;;
+    --pure) OPENCODE_PURE="true"; shift ;;
+    --no-pure) OPENCODE_PURE="false"; shift ;;
     --no-service) NO_SERVICE="1"; shift ;;
     *)
-      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-port/--serve-hostname/--work-dir/--no-service）" >&2
+      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-port/--serve-hostname/--work-dir/--pure/--no-pure/--no-service）" >&2
       exit 1
       ;;
   esac
@@ -233,7 +236,10 @@ fi
 if [ -n "${WORK_DIR}" ]; then
   update_env WORK_DIR "${WORK_DIR}"
 fi
-echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}${WORKER_ADVERTISE_HOST:+，WORKER_ADVERTISE_HOST 已注入}${WORKER_SERVE_HOSTNAME:+，OPENCODE_SERVE_HOSTNAME 已注入}${WORK_DIR:+，WORK_DIR 已注入}）"
+if [ -n "${OPENCODE_PURE}" ]; then
+  update_env WORKER_OPENCODE_PURE "${OPENCODE_PURE}"
+fi
+echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}${WORKER_ADVERTISE_HOST:+，WORKER_ADVERTISE_HOST 已注入}${WORKER_SERVE_HOSTNAME:+，OPENCODE_SERVE_HOSTNAME 已注入}${WORK_DIR:+，WORK_DIR 已注入}${OPENCODE_PURE:+，WORKER_OPENCODE_PURE=${OPENCODE_PURE}}）"
 
 # ------------------------------ token 校验 ------------------------------
 if [ -z "${X_WORKER_TOKEN:-}" ]; then
