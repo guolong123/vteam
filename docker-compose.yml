@@ -140,7 +140,7 @@ services:
       WORKER_FIRST_TOKEN_TIMEOUT_MS: "180000"
       # 持久化工作目录：serve cwd + .opencode/tools|skills 注入落点 + agent 工作区
       #（git clone 的仓库、任务文件）。改挂载卷路径，容器重建不丢（worker 启动时
-      # installGitTools/injector 会在空卷上自动重建 .opencode；镜像内 /tmp/vteam-worker
+      # installGitTools/injector 会在空卷上自动重建 .opencode；镜像内 /data/vteam-worker
       # 的 dist/node_modules 不受影响，WORKDIR 未变）。
       WORK_DIR: /data/vteam-worker
     depends_on:

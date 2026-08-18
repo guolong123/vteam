@@ -25,7 +25,8 @@ export interface WorkerConfig {
   heartbeatIntervalMs: number;
   /** 日志级别；默认 info */
   logLevel: string;
-  /** opencode serve 工作目录（T5：.opencode/tools/ 注入落点）；默认 /tmp/vteam-worker */
+  /** opencode serve 工作目录（T5：.opencode/tools/ 注入落点）；默认 /data/vteam-worker
+   *  （持久化目录，compose 挂卷 / k8s StatefulSet VCT；容器内启动时 mkdir -p 兜底） */
   workDir: string;
   /** SSH 私钥路径（T5 git 凭证注入：GIT_SSH_KEY_PATH，D6 2B）；可选，空 = 不注入 GIT_SSH_COMMAND */
   gitSshKeyPath: string;
@@ -144,7 +145,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     serverPassword: (env.OPENCODE_SERVER_PASSWORD ?? '').trim(),
     heartbeatIntervalMs: parseNonNegativeInt('HEARTBEAT_INTERVAL_MS', env.HEARTBEAT_INTERVAL_MS, 10000),
     logLevel: (env.LOG_LEVEL ?? '').trim() || 'info',
-    workDir: (env.WORK_DIR ?? '').trim() || '/tmp/vteam-worker',
+    workDir: (env.WORK_DIR ?? '').trim() || '/data/vteam-worker',
     gitSshKeyPath: (env.GIT_SSH_KEY_PATH ?? '').trim(),
     workerAdvertiseHost: advertiseHostRaw || (detectedIPv4 ? `http://${detectedIPv4}` : 'http://127.0.0.1'),
     workerAdvertiseHostExplicit: advertiseHostRaw.length > 0,
