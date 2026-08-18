@@ -207,6 +207,19 @@ describe('OpencodeServer', () => {
     expect(mockedHttpGet).toHaveBeenCalled();
   });
 
+  it('WORKER_OPENCODE_PURE=false → spawn 参数不含 --pure（允许外部 worker 用插件）', async () => {
+    process.env.WORKER_OPENCODE_PURE = 'false';
+    try {
+      await newServer({ port: 4199 }).start();
+      const args = mockedSpawn.mock.calls[0][1] as string[];
+      expect(args).not.toContain('--pure');
+      // 端口/hostname 仍正常
+      expect(args).toEqual(['serve', '--port', '4199', '--hostname', '127.0.0.1']);
+    } finally {
+      delete process.env.WORKER_OPENCODE_PURE;
+    }
+  });
+
   it('serverPassword 注入 env 的 OPENCODE_SERVER_PASSWORD；为空时不注入', async () => {
     await newServer({ port: 4199, serverPassword: 's3cret' }).start();
     const env = mockedSpawn.mock.calls[0][2].env as NodeJS.ProcessEnv;

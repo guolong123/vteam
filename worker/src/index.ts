@@ -400,6 +400,37 @@ export async function resolveModels(
  * 全部被拒"无可用 worker"）；serve 实测支持多 session 并行。
  * 异步化语义：与调用点（serve 就绪后）保持一致，供 registerCurrent/reRegister 链 await。
  */
+
+/**
+ * T-port-pin：端口安装后固定（首次启动随机 → 持久化回 OPENCODE_SERVE_PORT=，
+ * 重启不变）。语义：
+ * - 当前 .env 无 OPENCODE_SERVE_PORT / 值为 0 / 与新值相同 → 跳过写
+ * - 用户显式设固定值（如 45087）但与新值不同 → **不写**（用户偏好优先，仅在 0/缺失时接管）
+ * - 写时用 mode 0o600（chmod 兜底，仿 writeGitCredsFile）
+ * 失败仅 warn 不阻断（运行已就绪，持久化是增强）
+ */
+export function persistServePort(workDir: string, port: number): void {
+  if (port <= 0) return;
+  try {
+    const envPath = path.join(workDir, '.env');
+    const current = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+    const portLine = current.match(/^OPENCODE_SERVE_PORT=.*$/m);
+    const currentVal = portLine?.[0]?.split('=', 2)[1]?.trim() ?? '';
+    // 用户已设固定值且与新值不同 → 不覆盖（保留用户偏好；与 start 端 0=随机的语义相反）
+    if (currentVal && currentVal !== '0' && currentVal !== String(port)) {
+      return;
+    }
+    // 当前 0/缺失/等于新值 → 写入/更新
+    const next = portLine
+      ? current.replace(/^OPENCODE_SERVE_PORT=.*$/m, `OPENCODE_SERVE_PORT=${port}`)
+      : (current ? current.replace(/\n?$/, '') + '\n' : '') + `OPENCODE_SERVE_PORT=${port}\n`;
+    fs.writeFileSync(envPath, next, { mode: 0o600 });
+    console.log(`[worker] 端口已固定到 .env: OPENCODE_SERVE_PORT=${port}（下次启动沿用）`);
+  } catch (err) {
+    console.warn(`[worker] 端口持久化失败（不影响运行）: ${(err as Error).message}`);
+  }
+}
+
 export async function buildCapabilities(
   port: number | null,
   advertiseHost: string,
@@ -423,7 +454,7 @@ export async function buildCapabilities(
 
 /**
  * T4c/T6：组装注册选项。T4c 重启后 serve 端口可能变化（随机端口），reRegister 用当前
- * serveServer.port 重新组装 → capabilities.baseUrl/port 随心跳后注册更新，server 才能连上新端口。
+ * actualPort 重新组装 → capabilities.baseUrl/port 随心跳后注册更新，server 才能连上新端口。
  * T9：injected 为最近一次注入报告（启动注入 + reload-config 重注入后更新），
  * 注册/reRegister 携带真实 skills/tools 清单，保证 worker 详情页数据非陈旧。
  * C2：models 透传 buildCapabilities（resolveModels 结果，失败 undefined 不带）；
@@ -779,6 +810,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       // T4：serve 就绪后注入实际 baseUrl（随机端口场景，driver 后续请求才有目标地址）
       driver.baseUrl = baseUrl;
       console.log(`[worker] opencode serve 就绪: ${baseUrl} (pid=${serveServer.pid})`);
+
+      // T-port-pin：端口安装后固定（首次启动随机 → 持久化回 .env，重启不变）
+      persistServePort(config.workDir, serveServer.port ?? 0);
 
       // T10：执行端点启动（node:http POST /execute，固定端口）。失败仅记录日志并
       // 置 execPort=undefined（注册不带 execPort，server 不会连到不可用端点），

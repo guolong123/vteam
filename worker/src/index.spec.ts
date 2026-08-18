@@ -2,6 +2,9 @@
  * index.ts 注册能力组装测试（T3 D2：baseUrl 上报 + T4c：重启后重新注册数据源）。
  * 仅测 buildCapabilities/buildRegisterOptions 纯函数；main() 由 require.main 守卫隔离，import 不触发 worker 启动。
  */
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { WorkerConfig } from './config';
 import { GIT_TOOLS } from './git/git-tools';
 import {
@@ -20,6 +23,7 @@ import {
   handleGitCredentials,
   handleModelCredentials,
   onCommands,
+  persistServePort,
   resolveModels,
   warnLoopbackAdvertiseHost,
 } from './index';
@@ -783,5 +787,57 @@ describe('warnLoopbackAdvertiseHost（上报地址启动提示）', () => {
       warnSpy.mockRestore();
       logSpy.mockRestore();
     }
+  });
+});
+
+describe('persistServePort（端口安装后固定 → .env 持久化）', () => {
+  let workDir: string;
+
+  beforeEach(() => {
+    workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'persist-port-'));
+  });
+  afterEach(() => {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  });
+
+  it('.env 不存在 → 创建并写 OPENCODE_SERVE_PORT=port', () => {
+    persistServePort(workDir, 36869);
+    const content = fs.readFileSync(path.join(workDir, '.env'), 'utf8');
+    expect(content).toBe('OPENCODE_SERVE_PORT=36869\n');
+  });
+
+  it('.env 存在但无 OPENCODE_SERVE_PORT → 追加一行（保留其他内容）', () => {
+    fs.writeFileSync(path.join(workDir, '.env'), 'X_WORKER_TOKEN=abc\n', 'utf8');
+    persistServePort(workDir, 36869);
+    const content = fs.readFileSync(path.join(workDir, '.env'), 'utf8');
+    expect(content).toContain('X_WORKER_TOKEN=abc');
+    expect(content).toContain('OPENCODE_SERVE_PORT=36869');
+  });
+
+  it('.env 存在且 OPENCODE_SERVE_PORT=0（待固定） → 替换为真实 port', () => {
+    fs.writeFileSync(path.join(workDir, '.env'), 'OPENCODE_SERVE_PORT=0\n', 'utf8');
+    persistServePort(workDir, 36869);
+    const content = fs.readFileSync(path.join(workDir, '.env'), 'utf8');
+    expect(content).toBe('OPENCODE_SERVE_PORT=36869\n');
+  });
+
+  it('.env 存在且 OPENCODE_SERVE_PORT=45087（用户固定值） → 不覆盖（用户偏好优先）', () => {
+    fs.writeFileSync(path.join(workDir, '.env'), 'OPENCODE_SERVE_PORT=45087\n', 'utf8');
+    persistServePort(workDir, 36869);
+    const content = fs.readFileSync(path.join(workDir, '.env'), 'utf8');
+    // 仍是用户的 45087，不是新的 36869
+    expect(content).toBe('OPENCODE_SERVE_PORT=45087\n');
+  });
+
+  it('.env 已含相同 port（持久化后重启） → 不变（幂等）', () => {
+    fs.writeFileSync(path.join(workDir, '.env'), 'OPENCODE_SERVE_PORT=36869\n', 'utf8');
+    persistServePort(workDir, 36869);
+    const content = fs.readFileSync(path.join(workDir, '.env'), 'utf8');
+    expect(content).toBe('OPENCODE_SERVE_PORT=36869\n');
+  });
+
+  it('port <= 0 → 跳过（不写 .env）', () => {
+    persistServePort(workDir, 0);
+    expect(fs.existsSync(path.join(workDir, '.env'))).toBe(false);
   });
 });

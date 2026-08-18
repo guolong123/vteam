@@ -287,14 +287,17 @@ export class OpencodeServer {
 
   /** spawn serve 子进程；detached + stdio pipe；env 注入 OPENCODE_SERVER_PASSWORD。 */
   private spawnServe(port: number): ChildProcess {
+    // D2 铁律：--pure 必带（去插件/MEMORY 注入/默认 agent），缺失将导致 input tokens 高达 7601。
+    // 用户可通过 env WORKER_OPENCODE_PURE=false 关闭（让外部 worker 用 opencode 插件扩展能力，
+    // 但会跳脱 vteam 管控 + 与平台记忆冲突 + token 增升，外部用请自担）。
+    const enableOpencodePlugins = process.env.WORKER_OPENCODE_PURE === 'false';
     const args = [
       'serve',
       '--port',
       String(port),
       '--hostname',
       this.options.serveHostname!,
-      // D2 铁律：--pure 必带（去插件/MEMORY 注入/默认 agent），缺失将导致 input tokens 高达 7601
-      '--pure',
+      ...(enableOpencodePlugins ? [] : ['--pure']),
     ];
     const env: NodeJS.ProcessEnv = { ...process.env };
     if (this.options.serverPassword) {
