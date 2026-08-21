@@ -28,9 +28,9 @@ const toolStatus: Record<
   "running" | "success" | "failed",
   { label: string; color: string; bg: string; border: string }
 > = {
-  running: { label: "运行中", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  success: { label: "成功", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  failed: { label: "失败", color: "#B91C1C", bg: "#FEF2F2", border: "#FECACA" },
+  running: { label: "运行中", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  success: { label: "成功", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  failed: { label: "失败", color: "#B91C1C", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 };
 
 export interface MsgToolProps {
@@ -80,8 +80,8 @@ export function MsgTool({ author, role, name, status, input, output, time, style
           minWidth: 0,
           padding: space.md,
           borderRadius: radius.md,
-          backgroundColor: "#FFFFFF",
-          border: `1px solid ${failed ? "#FECACA" : neutral[200]}`,
+          backgroundColor: "var(--color-surface)",
+          border: `1px solid ${failed ? "rgba(239,68,68,0.22)" : neutral[200]}`,
           boxShadow: shadow.sm,
           cursor: "pointer",
           transition: "border-color .15s ease",

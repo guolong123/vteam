@@ -52,11 +52,11 @@ const ACTION_SETS: Record<TaskApiStatus, TaskAction[] | null> = {
 
 /** 操作元信息：按钮文案 / 强调色 / pending 文案。颜色对齐既有状态语义（进行中蓝/完成绿/驳回琥珀/归档灰）。 */
 const ACTION_META: Record<TaskAction, { label: string; color: string; pendingLabel: string }> = {
-  start: { label: "开始任务", color: "#475569", pendingLabel: "启动中…" },
+  start: { label: "开始任务", color: "var(--color-neutral-600)", pendingLabel: "启动中…" },
   "mark-pending-review": { label: "提交验收", color: "#2563EB", pendingLabel: "提交中…" },
   accept: { label: "验收通过", color: "#059669", pendingLabel: "处理中…" },
   reject: { label: "驳回", color: "#D97706", pendingLabel: "驳回中…" },
-  archive: { label: "归档", color: "#64748B", pendingLabel: "归档中…" },
+  archive: { label: "归档", color: "var(--color-neutral-500)", pendingLabel: "归档中…" },
 };
 
 /** 操作按钮（对齐 board 原「开始任务」按钮样式）。 */
@@ -202,14 +202,14 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
             gap: space.xs,
             padding: `${space.sm + 2}px ${space.md}px`,
             borderRadius: radius.md,
-            backgroundColor: "#F8FAFC",
-            border: "1px solid #CBD5E1",
+            backgroundColor: "var(--color-neutral-50)",
+            border: "1px solid var(--color-neutral-300)",
             fontSize: fontSize.sm,
             lineHeight: 1.6,
             color: neutral[600],
           }}
         >
-          <div style={{ fontWeight: 600, color: "#475569" }}>开始前检查</div>
+          <div style={{ fontWeight: 600, color: "var(--color-neutral-600)" }}>开始前检查</div>
           <div>未选择 Agent 将先弹出 Agent 选择；多 Agent 需指定主 Agent 作为任务负责人（默认产品经理）。</div>
           {actionError && (
             <div role="alert" style={{ color: "#DC2626", fontWeight: 500 }}>
@@ -268,7 +268,7 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
               gap: space.md,
               padding: `${space.xl}px`,
               borderRadius: radius.lg,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[200]}`,
               boxShadow: shadow.lg,
               ...baseFont,
@@ -293,7 +293,7 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
                 padding: `${space.md}px ${space.lg}px`,
                 borderRadius: radius.md,
                 border: `1px solid ${neutral[200]}`,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 fontSize: fontSize.md,
                 color: neutral[800],
                 outline: "none",
@@ -310,7 +310,7 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.md,
                   border: `1px solid ${neutral[200]}`,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   color: neutral[600],
                   fontSize: fontSize.md,
                   fontWeight: 500,

@@ -48,7 +48,7 @@ const ACTION_SETS: Record<IssueStatus, IssueAction[]> = {
 const ACTION_META: Record<IssueAction, { label: string; color: string; pendingLabel: string }> = {
   start: { label: "开始处理", color: "#2563EB", pendingLabel: "处理中…" },
   resolve: { label: "标记解决", color: "#059669", pendingLabel: "解决中…" },
-  close: { label: "关闭", color: "#64748B", pendingLabel: "关闭中…" },
+  close: { label: "关闭", color: "var(--color-neutral-500)", pendingLabel: "关闭中…" },
   reopen: { label: "重新打开", color: "#D97706", pendingLabel: "重开中…" },
   reject: { label: "拒绝处理", color: "#DC2626", pendingLabel: "提交中…" },
 };
@@ -135,7 +135,7 @@ export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusAc
               padding: `${space.xs + 1}px ${space.md}px`,
               borderRadius: radius.pill,
               border: `1px solid ${meta.color}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: meta.color,
               fontSize: fontSize.sm,
               fontWeight: 500,
@@ -173,8 +173,8 @@ export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusAc
             gap: space.sm,
             padding: space.md,
             borderRadius: radius.md,
-            backgroundColor: "#FEF2F2",
-            border: `1px solid #FECACA`,
+            backgroundColor: "rgba(239,68,68,0.10)",
+            border: `1px solid rgba(239,68,68,0.22)`,
           }}
         >
           <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: "#B91C1C" }}>
@@ -193,8 +193,8 @@ export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusAc
               boxSizing: "border-box",
               padding: `${space.sm}px ${space.md}px`,
               borderRadius: radius.sm,
-              border: `1px solid ${reasonError ? "#DC2626" : "#FECACA"}`,
-              backgroundColor: "#FFFFFF",
+              border: `1px solid ${reasonError ? "#DC2626" : "rgba(239,68,68,0.22)"}`,
+              backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
               outline: "none",
@@ -216,8 +216,8 @@ export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusAc
               style={{
                 padding: `${space.xs}px ${space.md}px`,
                 borderRadius: radius.pill,
-                border: `1px solid #FECACA`,
-                backgroundColor: "#FFFFFF",
+                border: `1px solid rgba(239,68,68,0.22)`,
+                backgroundColor: "var(--color-surface)",
                 color: neutral[600],
                 fontSize: fontSize.sm,
                 fontWeight: 500,

@@ -13,7 +13,7 @@
  *
  * 触发：web/package.json 的 postinstall（自动）+ sync:runtime（手动）。
  */
-import { mkdirSync, copyFileSync, writeFileSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, copyFileSync, writeFileSync, readFileSync, statSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -23,9 +23,10 @@ const webRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const vendorDir = join(webRoot, "public", "vendor");
 const esbuildDir = join(webRoot, "public", "esbuild");
-const sharedDir = join(webRoot, "src", "components", "docs", "proto-shared");
+const sharedDir = join(webRoot, "src", "features", "docs-site", "proto-shared");
 mkdirSync(vendorDir, { recursive: true });
 mkdirSync(esbuildDir, { recursive: true });
+mkdirSync(sharedDir, { recursive: true });
 
 /* ---------------- 0. proto-shared 源码 map（浏览器端 esbuild bundle 输入） ---------------- */
 const sharedFiles = [
@@ -38,7 +39,12 @@ const sharedFiles = [
 ];
 const sharedSources = {};
 for (const f of sharedFiles) {
-  sharedSources[f] = readFileSync(join(sharedDir, f), "utf8");
+  const p = join(sharedDir, f);
+  if (existsSync(p)) {
+    sharedSources[f] = readFileSync(p, "utf8");
+  } else {
+    console.warn(`[sync-runtime] skip missing proto-shared source: ${f}`);
+  }
 }
 const sharedJson = JSON.stringify(sharedSources, null, 2)
   .replace(/\u2028/g, "\\u2028")

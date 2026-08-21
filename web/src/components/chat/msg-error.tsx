@@ -25,8 +25,8 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /** 错误语义色：模型繁忙=琥珀（可重试）/ 余额不足=红（不可重试，需升级） */
 const errorTheme = {
-  retry: { color: "#B45309", bg: "#FFFBEB", border: "#FDE68A" },
-  quota: { color: "#B91C1C", bg: "#FEF2F2", border: "#FECACA" },
+  retry: { color: "#B45309", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  quota: { color: "#B91C1C", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 } as const;
 
 export interface MsgErrorProps {

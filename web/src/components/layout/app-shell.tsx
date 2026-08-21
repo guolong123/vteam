@@ -23,6 +23,7 @@ import {
   useCanvasUIStore,
   type CanvasUIEffectKey,
 } from "@/src/components/canvasui/store";
+import { ThemeToggle } from "@/src/theme/theme-toggle";
 
 /**
  * 演示模式开关（UX-04）：页面效果下拉默认隐藏，仅当 URL ?fx=on 或
@@ -392,6 +393,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         userRole={user ? roleLabel(user.roleName) : undefined}
         onCmdKClick={() => setCmdkOpen(true)}
       >
+        {/* 主题切换（常驻） */}
+        <ThemeToggle />
         {/* 全局效果下拉（头像右侧插槽，与登出按钮并排）— UX-04：仅演示模式显示 */}
         {fxDemo && (
           <select
@@ -404,7 +407,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               padding: "6px 8px",
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.sm,
               fontWeight: 500,
@@ -440,7 +443,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             padding: "6px 12px",
             borderRadius: radius.md,
             border: `1px solid ${neutral[200]}`,
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
             color: neutral[600],
             fontSize: fontSize.sm,
             fontWeight: 500,

@@ -167,7 +167,7 @@ export function ChatBubble({
                   }
                 : {
                     ...bubbleBase,
-                    backgroundColor: "#FFFFFF",
+                    backgroundColor: "var(--color-surface)",
                     color: neutral[800],
                     border: `1px solid ${neutral[200]}`,
                     borderTopLeftRadius: radius.sm,
@@ -266,7 +266,7 @@ export function AttachmentCard({
               width: 28,
               height: 28,
               borderRadius: radius.sm,
-              backgroundColor: isUser ? "rgba(255,255,255,0.2)" : "#DBEAFE",
+              backgroundColor: isUser ? "rgba(255,255,255,0.2)" : "rgba(37,99,235,0.18)",
               color: "#2563EB",
               fontSize: fontSize.xs,
               fontWeight: 600,

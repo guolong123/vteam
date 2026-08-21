@@ -27,11 +27,11 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /** Issue 状态徽章（对齐 issues 页 ISSUE_STATUS_THEME；is_0000000013 增 rejected 主题）。 */
 const ISSUE_STATUS_THEME: Record<IssueStatus, { label: string; color: string; bg: string; border: string }> = {
-  open: { label: "待处理", color: "#475569", bg: "#F8FAFC", border: "#CBD5E1" },
-  in_progress: { label: "进行中", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  resolved: { label: "已解决", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  closed: { label: "已关闭", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
-  rejected: { label: "已拒绝", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
+  open: { label: "待处理", color: "var(--color-neutral-600)", bg: "var(--color-neutral-50)", border: "var(--color-neutral-300)" },
+  in_progress: { label: "进行中", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  resolved: { label: "已解决", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  closed: { label: "已关闭", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
+  rejected: { label: "已拒绝", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 };
 
 /** 操作记录动作中文文案（is_0000000013）。 */
@@ -86,11 +86,11 @@ function IssueStatusBadge({ status }: { status: IssueStatus }) {
 
 /** tags 标签徽章（多彩，按 index 循环取色，对齐 issues 页 TAG_THEMES）。 */
 const TAG_THEMES: { color: string; bg: string; border: string }[] = [
-  { color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  { color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
-  { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  { color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  { color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
+  { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
+  { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  { color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
   { color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4" },
 ];
 
@@ -146,7 +146,7 @@ const inputBase: CSSProperties = {
   padding: `${space.md}px ${space.lg}px`,
   borderRadius: radius.md,
   border: `1px solid ${neutral[200]}`,
-  backgroundColor: "#FFFFFF",
+  backgroundColor: "var(--color-surface)",
   fontSize: fontSize.md,
   color: neutral[800],
   outline: "none",
@@ -264,7 +264,7 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
           overflowY: "auto",
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
         }}
@@ -440,8 +440,8 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
                   gap: space.xs,
                   padding: `${space.md}px ${space.lg}px`,
                   borderRadius: radius.md,
-                  backgroundColor: "#FEF2F2",
-                  border: `1px solid #FECACA`,
+                  backgroundColor: "rgba(239,68,68,0.10)",
+                  border: `1px solid rgba(239,68,68,0.22)`,
                 }}
               >
                 <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: "#B91C1C" }}>
@@ -558,7 +558,7 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
                       padding: `${space.sm + 1}px ${space.lg}px`,
                       borderRadius: radius.pill,
                       border: `1px solid ${neutral[200]}`,
-                      backgroundColor: "#FFFFFF",
+                      backgroundColor: "var(--color-surface)",
                       color: neutral[600],
                       fontSize: fontSize.md,
                       cursor: updateMutation.isPending ? "default" : "pointer",
@@ -604,7 +604,7 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
                     padding: `${space.sm + 1}px ${space.lg}px`,
                     borderRadius: radius.pill,
                     border: `1px solid ${neutral[200]}`,
-                    backgroundColor: "#FFFFFF",
+                    backgroundColor: "var(--color-surface)",
                     color: neutral[600],
                     fontSize: fontSize.md,
                     fontWeight: 500,

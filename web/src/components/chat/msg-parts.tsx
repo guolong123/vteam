@@ -178,7 +178,7 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
               alignSelf: "flex-start",
               padding: `${space.sm}px ${space.md}px`,
               borderRadius: radius.md,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[200]}`,
               ...baseFont,
             }}

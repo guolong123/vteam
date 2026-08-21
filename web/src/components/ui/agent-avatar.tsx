@@ -80,7 +80,7 @@ export function AgentAvatar({
             height: dotDim,
             borderRadius: "50%",
             backgroundColor: theme.color,
-            border: `2px solid #FFFFFF`,
+            border: `2px solid var(--color-surface)`,
           }}
         />
       )}

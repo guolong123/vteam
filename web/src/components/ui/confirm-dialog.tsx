@@ -102,7 +102,7 @@ export function ConfirmDialog({
           gap: space.md,
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
         }}
@@ -134,7 +134,7 @@ export function ConfirmDialog({
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               cursor: submitting ? "default" : "pointer",

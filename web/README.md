@@ -28,7 +28,16 @@ app/
     ├── tools/  skills/        # 工具与技能管理
     ├── projects/  users/  roles/   # 项目、用户、权限
     ├── git-repos/             # 仓库与凭证
+    ├── docs/[taskId]/          # 文档站（任务级，features/docs-site）
     └── artifacts/             # 产出物 / 文档库
+```
+
+## 文档站（docs-site-rebuild）
+
+- 单源模块 `src/features/docs-site/`（`parser/docs-markdown/doc-explorer/device-frame|switcher/prototype-sandbox|panel/hooks/mermaid-block/types`），零复用 `md-docs` 源码
+- 数据源 `GET /docs-site/:taskId/registry|prd/:file|prototypes|prototypes/*`（JWT + 成员校验，白名单防穿越），`registry` 30s 轮询，`taskId` 单作用域（`docs/<project>` 多项目已裁剪）
+- 双视图：文档（三栏 `w-64|flex-1|w-60` + 窄屏 pill + 章节 `IntersectionObserver`）与原型（列表+网格+`DeviceFrame` 预览，`esbuild-wasm + iframe sandbox(allow-scripts)`）
+- 文档内原型内嵌：` ```prototype / ```prototype-list / @prototype[]` 按任务原型解析（缩放/高度自适应/全屏/跳转）
 ```
 
 ## 主题

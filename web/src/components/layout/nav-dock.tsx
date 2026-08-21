@@ -197,6 +197,14 @@ const dockCss = navAnimStyle + `
   flex-direction: column;
   gap: ${space.xs + 2}px;
 }
+.dark .navdock-dock {
+  background: rgba(30,41,59,.72);
+  border: 1px solid rgba(255,255,255,.08);
+}
+.dark .navdock-panel {
+  border-left: 1px solid rgba(255,255,255,.06);
+}
+.dark .navdock-nav-item:hover { background: rgba(255,255,255,.06); }
 `;
 
 export function NavDock({

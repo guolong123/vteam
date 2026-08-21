@@ -17,23 +17,23 @@ import {
   fontFamily,
 } from "@/src/theme/tokens";
 
-/** 页面级浅色渐变背景（白 → 浅灰 → 极浅蓝，与全站浅色主题协调） */
+/** 页面级渐变背景（跟随主题：浅色白→灰→蓝，深色深灰→墨蓝） */
 export const pageBg =
-  "linear-gradient(160deg, #FFFFFF 0%, #F8FAFC 50%, #EEF2FF 100%)";
+  "linear-gradient(160deg, var(--color-surface) 0%, var(--color-bg) 50%, var(--color-bg) 100%)";
 
-/** 品牌区浅色渐变：白 → 极浅蓝紫（呼应 Logo 色系，与全站浅色主题协调） */
+/** 品牌区渐变（跟随主题） */
 const brandBg =
-  "linear-gradient(160deg, #FFFFFF 0%, #F8FAFC 55%, #EEF2FF 100%)";
+  "linear-gradient(160deg, var(--color-surface) 0%, var(--color-bg) 55%, var(--color-bg) 100%)";
 
-/** 品牌区浅色底上的深色文字/边框/点缀（对齐 neutral 系层级） */
+/** 品牌区文字/边框（跟随主题，浅底深字→深底浅字） */
 const brandOnDark = {
   glow: "radial-gradient(70% 55% at 15% 85%, rgba(59,130,246,.1), transparent 70%)",
-  text: "#0F172A",
-  textStrong: "#1E293B",
-  textSub: "rgba(15,23,42,.6)",
-  textMuted: "rgba(15,23,42,.5)",
-  textList: "rgba(15,23,42,.7)",
-  border: "#E2E8F0",
+  text: "var(--color-neutral-900)",
+  textStrong: "var(--color-neutral-800)",
+  textSub: "var(--color-neutral-500)",
+  textMuted: "var(--color-neutral-400)",
+  textList: "var(--color-neutral-600)",
+  border: "var(--color-neutral-200)",
   accent: "#3B82F6",
 } as const;
 
@@ -239,7 +239,7 @@ export const authCardStyle: CSSProperties = {
   maxWidth: 400,
   padding: `${space.xxl}px ${space.xl}px`,
   borderRadius: radius.lg,
-  backgroundColor: "#FFFFFF",
+  backgroundColor: "var(--color-surface)",
   boxShadow:
     "0 8px 40px rgba(15,23,42,.08), 0 2px 8px rgba(15,23,42,.05)",
   display: "flex",
@@ -253,7 +253,7 @@ export const authInputStyle: CSSProperties = {
   padding: `${space.md}px ${space.lg}px`,
   borderRadius: radius.md,
   border: `1px solid ${neutral[200]}`,
-  backgroundColor: "#FFFFFF",
+  backgroundColor: "var(--color-surface)",
   fontSize: fontSize.md,
   color: neutral[800],
   outline: "none",

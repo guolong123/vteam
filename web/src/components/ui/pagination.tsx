@@ -29,7 +29,7 @@ const btnStyle: CSSProperties = {
   padding: `${space.sm}px ${space.md}px`,
   borderRadius: radius.md,
   border: `1px solid ${neutral[200]}`,
-  backgroundColor: "#FFFFFF",
+  backgroundColor: "var(--color-surface)",
   color: neutral[600],
   fontSize: fontSize.sm,
   cursor: "pointer",

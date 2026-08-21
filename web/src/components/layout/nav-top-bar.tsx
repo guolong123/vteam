@@ -52,7 +52,7 @@ export function NavTopBar({
         justifyContent: "space-between",
         gap: space.xl,
         padding: `0 ${space.xl}px`,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         borderBottom: `1px solid ${neutral[200]}`,
         ...baseFont,
         ...style,
@@ -151,19 +151,19 @@ export function NavTopBar({
           搜索或输入命令…
         </span>
         <span
-          aria-hidden
-          style={{
-            fontSize: fontSize.xs,
-            fontWeight: 600,
-            color: neutral[500],
-            backgroundColor: "#FFFFFF",
-            border: `1px solid ${neutral[200]}`,
-            padding: "1px 6px",
-            borderRadius: radius.sm,
-          }}
-        >
-          ⌘K
-        </span>
+           aria-hidden
+           style={{
+             fontSize: fontSize.xs,
+             fontWeight: 600,
+             color: neutral[500],
+             backgroundColor: "var(--color-surface)",
+             border: `1px solid ${neutral[200]}`,
+             padding: "1px 6px",
+             borderRadius: radius.sm,
+           }}
+         >
+           ⌘K
+         </span>
       </button>
 
       {/* 右侧：用户信息 + 头像 + children 插槽 */}
@@ -177,7 +177,7 @@ export function NavTopBar({
             width: 34,
             height: 34,
             borderRadius: "50%",
-            backgroundColor: neutral[900],
+            backgroundColor: "#0F172A",
             color: "#FFFFFF",
             display: "inline-flex",
             alignItems: "center",

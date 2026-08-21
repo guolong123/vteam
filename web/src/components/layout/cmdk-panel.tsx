@@ -93,6 +93,12 @@ const panelCss = navAnimStyle + `
   box-shadow: ${shadow.lg};
   animation: navshared-pop .16s ease-out;
 }
+.dark .navcmdk-panel {
+  background-color: rgba(30,41,59,.88);
+  border: 1px solid rgba(255,255,255,.12);
+}
+.dark .navcmdk-item:hover { background: rgba(255,255,255,.06); }
+.dark .navcmdk-close:hover { background-color: rgba(255,255,255,.08); }
 .navcmdk-item {
   width: 100%;
   display: flex;
@@ -220,7 +226,7 @@ export function CmdKPanel({
             gap: space.sm,
             padding: `${space.lg}px ${space.xl}px`,
             borderBottom: `1px solid ${neutral[200]}`,
-            backgroundColor: "rgba(255,255,255,.55)",
+            backgroundColor: "color-mix(in srgb, var(--color-surface) 70%, transparent)",
           }}
         >
           <span aria-hidden style={{ fontSize: 18, color: neutral[400], lineHeight: 1 }}>
@@ -339,7 +345,7 @@ export function CmdKPanel({
             gap: space.lg,
             padding: `${space.sm}px ${space.lg}px`,
             borderTop: `1px solid ${neutral[200]}`,
-            backgroundColor: "rgba(255,255,255,.55)",
+            backgroundColor: "color-mix(in srgb, var(--color-surface) 70%, transparent)",
             fontSize: fontSize.xs,
             color: neutral[400],
           }}
