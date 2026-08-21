@@ -192,9 +192,21 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
    * 支持两种格式：TSX 目录（<name>/index.tsx）和旧 DSL JSON（<name>.json）。
    * name 优先从 TSX meta 导出 / JSON name 字段读，缺省回退目录名/文件名。
    */
-  async listPrototypes(taskId: string): Promise<Array<{ id: string; name: string; file: string }>> {
+  async listPrototypes(taskId: string): Promise<Array<{ id: string; metaId?: string; name: string; file: string; artifactId?: string }>> {
     const protoDir = join(this.docsRoot, taskId, 'prototypes');
-    const items: Array<{ id: string; name: string; file: string }> = [];
+    const items: Array<{ id: string; metaId?: string; name: string; file: string; artifactId?: string }> = [];
+
+    // 从 DB 获取 file 型产出物映射（contentRef → artifactId），供 slug 反查
+    const fileArtifactVersions = await this.prisma.artifactVersion.findMany({
+      where: { artifact: { taskId, type: 'file' } },
+      select: { contentRef: true, artifact: { select: { id: true, currentVersion: true } }, version: true },
+    });
+    const contentRefToArtifact = new Map<string, string>();
+    for (const r of fileArtifactVersions) {
+      if (r.version === r.artifact.currentVersion && r.contentRef) {
+        contentRefToArtifact.set(r.contentRef, r.artifact.id);
+      }
+    }
 
     // 扫描 TSX 目录：prototypes/<name>/index.tsx
     try {
@@ -207,15 +219,25 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         try {
           await fsp.access(tsxFile);
           let displayName = name;
+          let metaId: string | undefined;
           try {
             const content = await fsp.readFile(tsxFile, 'utf8');
             const metaMatch = content.match(/export\s+const\s+meta\s*=\s*(\{[^}]+\})/s);
             if (metaMatch) {
               const nameMatch = metaMatch[1].match(/name\s*:\s*["']([^"']+)["']/);
               if (nameMatch?.[1]) displayName = nameMatch[1];
+              const idMatch = metaMatch[1].match(/id\s*:\s*["']([^"']+)["']/);
+              if (idMatch?.[1]) metaId = idMatch[1].trim();
             }
           } catch { /* 读取失败用目录名兜底 */ }
-          items.push({ id: name, name: displayName, file: `${name}/index.tsx` });
+          let artifactId: string | undefined;
+          for (const [ref, aid] of contentRefToArtifact) {
+            if (ref.includes(`/${name}/`) || ref.endsWith(`/${name}/index.tsx`) || ref.endsWith(`/${name}.tsx`)) {
+              artifactId = aid;
+              break;
+            }
+          }
+          items.push({ id: name, metaId, name: displayName, file: `${name}/index.tsx`, artifactId });
         } catch { /* index.tsx 不存在 → 跳过 */ }
       }
     } catch {
@@ -231,7 +253,14 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         try {
           const doc = JSON.parse(await fsp.readFile(join(protoDir, f), 'utf8')) as { name?: unknown };
           const name = typeof doc?.name === 'string' && doc.name.trim() ? doc.name.trim() : id;
-          items.push({ id, name, file: f });
+          let artifactId: string | undefined;
+          for (const [ref, aid] of contentRefToArtifact) {
+            if (ref.endsWith(`/${f}`)) {
+              artifactId = aid;
+              break;
+            }
+          }
+          items.push({ id, name, file: f, artifactId });
         } catch {
           this.logger.warn(`[docs-mirror] 原型 ${f} 解析失败，跳过列表`);
         }
@@ -272,7 +301,7 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
       slug = this.toSlug(title);
     }
     if (!slug || slug === 'doc') {
-      const suffix = String(artifactId).replace(/[^a-z0-9]/gi, '').slice(0, 8);
+      const suffix = String(artifactId).replace(/[^a-z0-9]/gi, '').slice(-8);
       slug = suffix ? `proto-${suffix}` : 'proto';
     }
     return slug;
@@ -296,7 +325,7 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
       slug = this.toSlug(title);
     }
     if (!slug || slug === 'doc') {
-      const suffix = String(artifactId).replace(/[^a-z0-9]/gi, '').slice(0, 8);
+      const suffix = String(artifactId).replace(/[^a-z0-9]/gi, '').slice(-8);
       slug = suffix ? `proto-${suffix}` : 'proto';
     }
     return `${slug}.json`;
@@ -310,6 +339,7 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
     description: string;
     file: string;
     order: number;
+    artifactId?: string;
   }>> {
     const rows = await this.prisma.artifactVersion.findMany({
       where: { artifact: { taskId, type: { in: ['doc', 'file'] } } },
@@ -321,7 +351,6 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
     });
     const current = new Map<string, { id: string; title: string }>();
     for (const r of rows) {
-      // 仅当前版本且为 markdown（file 型非 .md 不入站）——与 doSyncTask 镜像口径一致
       if (
         r.version === r.artifact.currentVersion &&
         /\.(md|markdown)$/i.test(r.contentRef ?? '')
@@ -329,11 +358,19 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         current.set(r.artifact.id, { id: r.artifact.id, title: r.artifact.title });
       }
     }
-    // 去重（同名产出物多 artifact 或弱 slug 冲突 → 追加 artifact id 后缀保证唯一）
     const seen = new Set<string>();
     return [...current.values()].map((a, i) => {
       const base = this.docIdFor(a.title, a.id);
-      const id = seen.has(base) ? `${base}-${a.id.replace(/[^a-z0-9]/gi, '').slice(0, 8)}` : base;
+      let id = base;
+      if (seen.has(base)) {
+        const suffix = String(a.id).replace(/[^a-z0-9]/gi, '').slice(-8);
+        id = suffix ? `${base}-${suffix}` : base;
+        let counter = 1;
+        while (seen.has(id)) {
+          counter += 1;
+          id = `${base}-${suffix}-${counter}`;
+        }
+      }
       seen.add(id);
       return {
         id,
@@ -342,6 +379,7 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         description: `任务产出物文档：${a.title}`,
         file: `${id}.md`,
         order: i + 1,
+        artifactId: a.id,
       };
     });
   }
@@ -360,7 +398,7 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
   docIdFor(title: string, artifactId: string): string {
     const slug = this.toSlug(title);
     if (slug === 'doc' && artifactId) {
-      const suffix = String(artifactId).replace(/[^a-z0-9]/gi, '').slice(0, 8);
+      const suffix = String(artifactId).replace(/[^a-z0-9]/gi, '').slice(-8);
       return suffix ? `doc-${suffix}` : 'doc';
     }
     return slug;

@@ -295,6 +295,7 @@ export class TaskProgressionScheduler
           kind: true,
           content: true,
           status: true,
+          sessionId: true,
         },
       })
       .catch(() => null);
@@ -303,8 +304,20 @@ export class TaskProgressionScheduler
     }
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { title: true },
+      select: { title: true, mainAgentInstanceId: true },
     });
+    if (task?.mainAgentInstanceId && row.sessionId) {
+      const reqSession = await this.prisma.session
+        .findUnique({
+          where: { id: row.sessionId },
+          select: { taskAgentId: true },
+        })
+        .catch(() => null);
+      if (reqSession?.taskAgentId && reqSession.taskAgentId === task.mainAgentInstanceId) {
+        this.logger.log(`[progression] 托管确认跳过自环 taskId=${taskId} requestId=${row.requestId} 自身主实例权限请求不转发`);
+        return;
+      }
+    }
     const contentText = this.describeQuestionContent(row.kind, row.content);
     const text =
       `【托管确认】任务 <${task?.title ?? taskId}> 托管模式下收到成员确认请求：` +

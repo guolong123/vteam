@@ -258,9 +258,10 @@ export class ArtifactsService implements OnModuleInit {
       );
     }
 
-    // is_0000000024：doc 产出物归档后异步触发文档站镜像同步（幂等覆盖，失败不阻断归档）。
+    // is_0000000024：doc/file 产出物归档后异步触发文档站镜像同步（幂等覆盖，失败不阻断归档）。
+    // file 型含 .tsx 原型，doSyncTask 内部按后缀过滤（仅镜像 .md / .tsx / .prototype.json）。
     // DocsMirrorService 可选注入（docs-site 未启用/未接线时不触发）。
-    if (type === 'doc' && this.docsMirror) {
+    if ((type === 'doc' || type === 'file') && this.docsMirror) {
       void this.docsMirror.syncTask(taskId);
     }
 
@@ -300,7 +301,7 @@ export class ArtifactsService implements OnModuleInit {
       return { artifactId: dup.artifactId, version: dup.version, status: 'duplicate' };
     }
     const artifactTitle = args.title ?? args.storedName;
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.artifact.findFirst({
         where: { taskId, type: 'file', title: artifactTitle },
       });
@@ -360,6 +361,11 @@ export class ArtifactsService implements OnModuleInit {
         status: 'appended' as const,
       };
     });
+
+    if (this.docsMirror) {
+      void this.docsMirror.syncTask(taskId);
+    }
+    return result;
   }
 
   /**
@@ -452,6 +458,23 @@ export class ArtifactsService implements OnModuleInit {
       });
     }
     return this.toVersionDto(v);
+  }
+
+  async remove(artifactId: string): Promise<void> {
+    const artifact = await this.prisma.artifact.findUnique({ where: { id: artifactId } });
+    if (!artifact) {
+      throw new NotFoundException({
+        code: ARTIFACT_ERRORS.ARTIFACT_NOT_FOUND,
+        message: `产出物 ${artifactId} 不存在`,
+      });
+    }
+    await this.prisma.$transaction([
+      this.prisma.artifactVersion.deleteMany({ where: { artifactId } }),
+      this.prisma.artifact.delete({ where: { id: artifactId } }),
+    ]);
+    if (this.docsMirror) {
+      void this.docsMirror.syncTask(artifact.taskId);
+    }
   }
 
   /** 文档库列表项 DTO（12 篇 §6.1 展示列 + 验收状态）。 */

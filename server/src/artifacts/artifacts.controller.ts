@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -90,5 +91,18 @@ export class ArtifactsController {
       content: dto.content ?? '',
       fileRef: dto.fileRef,
     });
+  }
+
+  /**
+   * 删除产出物（含全部版本），触发文档站镜像同步清理。
+   * DELETE /api/v1/artifacts/:id → 200 {deleted: true}；不存在 → 404
+   */
+  @Delete('artifacts/:id')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('artifacts.create')
+  @ApiOperation({ summary: '删除产出物（含全部版本）' })
+  async remove(@Param('id') id: string) {
+    await this.artifactsService.remove(id);
+    return { deleted: true };
   }
 }
