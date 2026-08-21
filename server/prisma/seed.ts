@@ -745,6 +745,136 @@ submit_artifact { taskId: <任务ID>, selfInstanceId: <你的实例ID>, type: "f
 
 提交成功后，文档站「原型」tab 自动出现该原型（列表按名称展示，点击编译渲染）。
 
+## 文档内嵌入原型
+
+原型提交后，可在 markdown 文档中**嵌入可交互的原型预览**，支持三种嵌入语法。文档站会自动编译原型并在 iframe 中渲染，用户可切换设备（PC / 移动端）查看效果。
+
+### 块级嵌入（推荐）
+
+在 markdown 中使用 3 反引号 \`prototype\` 围栏，内部为 YAML 格式的 key: value 行：
+
+\`\`\`\`markdown
+\`\`\`prototype
+id: my-dashboard
+title: 仪表盘预览    # 可选，覆盖原型名称
+device: desktop      # 可选：desktop | mobile，默认 desktop
+height: 520          # 可选：iframe 最大高度 px，默认 640
+\`\`\`
+\`\`\`\`
+
+**参数说明：**
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| \`id\` | 是 | 原型 ID（与 \`meta.id\` 一致） |
+| \`title\` | 否 | 显示标题（默认使用原型 \`name\`） |
+| \`device\` | 否 | 初始设备：\`desktop\`（默认）或 \`mobile\` |
+| \`height\` | 否 | iframe 最大高度（px），默认 640 |
+
+**渲染效果：** 原型在 DeviceFrame 中渲染，顶部显示标题和设备切换按钮（PC / 移动端），用户可交互操作原型。
+
+### 原型清单
+
+使用 \`prototype-list\` 列出当前文档引用的全部原型：
+
+\`\`\`\`markdown
+\`\`\`prototype-list
+\`\`\`
+\`\`\`\`
+
+清单以链接形式展示所有引用的原型，点击可跳转到原型视图。如需内嵌所有原型（而非链接列表），添加 \`embed: true\`：
+
+\`\`\`\`markdown
+\`\`\`prototype-list
+embed: true
+\`\`\`
+\`\`\`\`
+
+### 行内引用
+
+使用 \`@prototype[id]\` 语法在文本中嵌入原型引用标签：
+
+\`\`\`markdown
+查看效果：@prototype[my-dashboard]（点击跳转原型视图）
+\`\`\`
+
+渲染为可点击的蓝色标签，点击后跳转到该原型的全屏预览视图。
+
+### 嵌入规则
+
+1. **按任务解析**：嵌入的原型必须属于当前任务（与文档同目录下的 \`prototypes/\`），引用其他任务的原型会提示"原型不存在于当前任务"
+2. **反引号规则**：解析器只识别**恰好 3 个反引号**的 \`prototype\` 围栏；展示标记写法本身时，必须用 4+ 反引号包裹
+3. **设备切换**：嵌入的原型支持实时切换 PC / 移动端视图，无需重新加载
+
+### 示例
+
+\`\`\`\`markdown
+## 功能演示
+
+以下是任务管理原型的预览：
+
+\`\`\`prototype
+id: task-management
+title: 任务管理界面
+device: desktop
+\`\`\`
+
+也可以查看移动端效果：
+
+\`\`\`prototype
+id: task-management
+title: 任务管理（移动端）
+device: mobile
+height: 720
+\`\`\`
+
+本文档引用的原型清单：
+
+\`\`\`prototype-list
+\`\`\`
+\`\`\`\`
+
+## 原型实现方式
+
+### 数据链路
+
+\`\`\`
+TSX 源码 (<kebab-name>/index.tsx)
+  → submit_artifact (type=file, 写入 uploads/<uuid>.tsx)
+  → DocsMirrorService.syncTask 提取 *.tsx → docs-root/<taskId>/prototypes/<slug>/index.tsx
+  → GET /docs-site/:taskId/prototypes 列表 + GET /docs-site/:taskId/prototypes/<file> 原文
+  → PrototypeSandbox 拉取源码 → esbuild-wasm 编译 → iframe srcdoc 渲染
+\`\`\`
+
+- **镜像层**：\`syncTask\` 扫描该任务 \`type=file\` 且 \`contentRef\` 以 \`.tsx\` 结尾的产出物当前版本，按 \`prototypeSlug\` 写入 \`docs-root/<taskId>/prototypes/\`，旧 \`.md\` / \`.prototype.json\` 镜像共存；支持全量重建（\`rebuildAll\`，启动时触发）。
+- **文档注册表**：\`buildRegistry\` 只收录 \`.md\` 产出物，\`listPrototypes\` 扫描 \`prototypes/<name>/index.tsx\` 目录并通过 \`contentRef → artifactId\` 反查关联产出物。
+- **产出物版本**：镜像始终为 \`currentVersion\` 的正文，历史版本不入站；删除产出物后镜像幂等清理。
+
+### 编译渲染
+
+由 \`web/src/features/docs-site/prototype-sandbox.tsx\` 完成：
+
+1. **拉取**：\`GET /docs-site/:taskId/prototypes/<file>\`（\`Authorization: Bearer <token>\`）+ \`/vendor/react-runtime.js\`。
+2. **编译**：\`esbuild-wasm\`（\`initialize({ wasmURL: "/esbuild/esbuild.wasm" })\`），\`bundle: true, format: "iife", globalName: "__ProtoModule", jsx: "transform", target: "es2017"\`，插件 \`protoCompilePlugin\` 将 \`react\` / \`react-dom\` / \`@proto/shared\` / \`@proto/shared/*\` / \`_shared/*\` / \`@md-docs/*\` 分流到虚拟命名空间（React 来自 \`globalThis\`，\`@proto/shared\` 置空占位，不走网络）。
+3. **装配 srcdoc**：\`buildSrcdoc(runtimeJs, bundleCode, cssText)\` 拼接 \`<!DOCTYPE html>\`：\`cdn.tailwindcss.com\` + \`baseStyle\` + 父页面 \`collectCss()\` + \`runtimeJs\` + \`bundleCode\` + \`renderScript\`（取 \`__ProtoModule.default\` 或 \`Component\`，\`ReactDOMClient.createRoot\` / \`ReactDOM.render\` 兼容分支）。
+4. **挂载**：\`iframe sandbox="allow-scripts" srcDoc={srcdoc}\`；\`isFramed\` 时固定 \`height:100%\`，否则监听 \`postMessage({ type:'proto-height' })\` + \`ResizeObserver\` 自适应高度（120–4096px 钳制）。
+
+### 样式与布局
+
+- **Tailwind**：iframe 内通过 \`cdn.tailwindcss.com\` 即时编译类名，支持 \`brand-*\` / \`success-*\` / \`warning-*\` / \`danger-*\` / \`info-*\` 等语义色；同时注入父页面已加载样式表（\`collectCss\` 遍历 \`document.styleSheets\`）。
+- **DeviceFrame**（\`device-frame.tsx\`）：\`desktop\` 为浏览器窗体（红黄绿三点 + 地址栏 + \`spec.width × spec.height\`，默认 1280×800）；\`mobile\` 为手机外壳（圆角 + 刘海 + 信号/电量图标 + \`390×844\`），由 \`DEVICE_SPECS\` 定义，\`DeviceSwitcher\` 在原型头与嵌入卡片中切换。
+- **约束**：iframe 仅 \`allow-scripts\`，无网络/存储访问；原型内禁止第三方库与 API 调用，所有数据为静态演示值。
+
+### 关联组件
+
+| 组件/模块 | 职责 |
+|---|---|
+| \`DocsMirrorService\` | 镜像导出与重建（\`syncTask\` / \`rebuildAll\` / \`listPrototypes\` / \`readPrototype\`） |
+| \`DocsSiteController\` | \`registry\` / \`prd/:file\` / \`prototypes\` / \`prototypes/*\` 四端点，JWT + 项目成员校验 |
+| \`PrototypePanel\` | 「原型」tab：左侧列表 + 右侧 \`DeviceFrame > PrototypeSandbox\` 预览，支持删除（\`DELETE /artifacts/:id\`） |
+| \`PrototypeSandbox\` | 编译 + iframe 渲染，含 loading / error 态 |
+| \`DeviceFrame\` / \`DeviceSwitcher\` | 设备外壳与切换器 |
+
 ## 常见错误
 
 | 错误 | 规避 |
@@ -754,6 +884,7 @@ submit_artifact { taskId: <任务ID>, selfInstanceId: <你的实例ID>, type: "f
 | import 非允许模块 | 仅 \`@proto/shared\` + \`react\` + 原生元素 |
 | 语法错误（JSX/TS） | 提交前确保 TSX 语法合法 |
 | 数据留空 | 全部写演示值 |
+| 嵌入原型不存在 | 确保 \`id\` 与原型 \`meta.id\` 一致，且原型属于当前任务（同 \`taskId\` 反查）；跨任务引用会渲染为黄底提示 |
 `,
     },
   ];

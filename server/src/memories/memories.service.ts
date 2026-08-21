@@ -49,7 +49,9 @@ export class MemoriesService implements OnModuleInit {
       ...(query.level ? { level: query.level } : {}),
       ...(query.taskId ? { taskId: query.taskId } : {}),
       ...(query.projectId ? { projectId: query.projectId } : {}),
-      ...(query.keyword ? { content: { contains: query.keyword } } : {}),
+      ...(query.keyword
+        ? { OR: [{ content: { contains: query.keyword } }, { description: { contains: query.keyword } }] }
+        : {}),
     };
 
     const [total, rows] = await this.prisma.$transaction([

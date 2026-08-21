@@ -96,7 +96,7 @@ describe('MemoriesService', () => {
       expect(out).toEqual({ items: rows, total: 1, page: 1, pageSize: 20 });
     });
 
-    it('level/taskId/projectId/keyword 过滤透传（keyword → content contains）', async () => {
+    it('level/taskId/projectId/keyword 过滤透传（keyword → content OR description contains）', async () => {
       prisma.memory.count.mockResolvedValue(0);
       prisma.memory.findMany.mockResolvedValue([]);
 
@@ -115,12 +115,24 @@ describe('MemoriesService', () => {
           level: 'task',
           taskId: 't_1',
           projectId: 'p_1',
-          content: { contains: '验收' },
+          OR: [{ content: { contains: '验收' } }, { description: { contains: '验收' } }],
         },
         orderBy: { createdAt: 'desc' },
         skip: 10,
         take: 10,
       });
+    });
+
+    it('description 字段透传：keyword 同时命中 content 与 description', async () => {
+      prisma.memory.count.mockResolvedValue(1);
+      prisma.memory.findMany.mockResolvedValue([{ id: 'me_1', description: 'token刷新' }]);
+
+      const out = await service.findAll({ keyword: 'token' });
+
+      expect(out.items[0].description).toBe('token刷新');
+      expect(prisma.memory.count).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ OR: expect.any(Array) }) }),
+      );
     });
 
     it('page/pageSize 非法值归一（page=0→1，pageSize=999→100）', async () => {

@@ -31,6 +31,7 @@ interface MemoryItem {
   id: string;
   level: "task" | "project" | "global";
   content: string;
+  description?: string | null;
   tags: string[] | null;
   createdBy: string;
   createdAt: string;
@@ -60,16 +61,16 @@ const LEVEL_META: Record<
   MemoryItem["level"],
   { label: string; color: string; bg: string; border: string }
 > = {
-  task: { label: "任务", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  project: { label: "项目", color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
-  global: { label: "全局", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
+  task: { label: "任务", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  project: { label: "项目", color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
+  global: { label: "全局", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
 };
 
 /* ------------------------------ 行 hover CSS ------------------------------ */
 
 const rowCss = `
 .mem-row { transition: border-color .15s ease, background-color .15s ease; }
-.mem-row:hover { background-color: #F8FAFC; }
+.mem-row:hover { background-color: var(--color-neutral-50); }
 `;
 
 /* ================================ 页面组件 ================================ */
@@ -96,7 +97,12 @@ export default function MemoriesPage() {
   /* ---------- 筛选切换重置页码 ---------- */
   useEffect(() => {
     setPage(1);
+    setExpandedIds(new Set());
   }, [levelFilter]);
+
+  useEffect(() => {
+    setExpandedIds(new Set());
+  }, [debouncedKeyword, page]);
 
   /* ---------- 数据查询 ---------- */
   const memoriesQuery = useQuery<MemoriesResponse>({
@@ -111,6 +117,17 @@ export default function MemoriesPage() {
         },
       }),
   });
+
+  /* ---------- 展开/收起 ---------- */
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const toggleExpand = useCallback((id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   /* ---------- 删除 ---------- */
   const [deleteTarget, setDeleteTarget] = useState<MemoryItem | null>(null);
@@ -195,7 +212,7 @@ export default function MemoriesPage() {
                     padding: `${space.sm + 1}px ${space.lg}px`,
                     borderRadius: radius.md,
                     border: "none",
-                    backgroundColor: active ? "#FFFFFF" : "transparent",
+                    backgroundColor: active ? "var(--color-surface)" : "transparent",
                     boxShadow: active ? shadow.sm : "none",
                     cursor: "pointer",
                     fontFamily: fontFamily.body,
@@ -224,7 +241,7 @@ export default function MemoriesPage() {
               maxWidth: 320,
               padding: `${space.sm}px ${space.md}px`,
               borderRadius: radius.md,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[200]}`,
               boxShadow: shadow.sm,
               marginLeft: "auto",
@@ -285,7 +302,7 @@ export default function MemoriesPage() {
                 padding: `${space.sm}px ${space.lg}px`,
                 borderRadius: radius.md,
                 border: `1px solid ${neutral[200]}`,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 color: neutral[600],
                 fontSize: fontSize.md,
                 fontWeight: 500,
@@ -343,7 +360,7 @@ export default function MemoriesPage() {
                       gap: space.md,
                       padding: `${space.md}px ${space.lg}px`,
                       borderRadius: radius.lg,
-                      backgroundColor: "#FFFFFF",
+                      backgroundColor: "var(--color-surface)",
                       border: `1px solid ${neutral[200]}`,
                       boxShadow: shadow.sm,
                       ...baseFont,
@@ -384,22 +401,89 @@ export default function MemoriesPage() {
 
                     {/* 内容区 */}
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      {/* 内容摘要（截断 2 行） */}
-                      <div
-                        data-testid="memory-content"
-                        style={{
-                          fontSize: fontSize.md,
-                          color: neutral[800],
-                          lineHeight: 1.6,
-                          display: "-webkit-box",
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: "vertical",
-                          overflow: "hidden",
-                          wordBreak: "break-word",
-                        }}
-                      >
-                        {item.content}
-                      </div>
+                      {(() => {
+                        const expanded = expandedIds.has(item.id);
+                        const preview = item.description?.trim() ? item.description!.trim() : item.content.slice(0, 120);
+                        const hasFull = item.content !== preview;
+                        const isExpandable = hasFull || item.content.length > 80;
+                        const displayContent = expanded && hasFull ? item.content : preview;
+                        return (
+                          <>
+                            <div
+                              data-testid="memory-content"
+                              role={isExpandable ? "button" : undefined}
+                              tabIndex={isExpandable ? 0 : undefined}
+                              aria-expanded={isExpandable ? expanded : undefined}
+                              onClick={isExpandable ? () => toggleExpand(item.id) : undefined}
+                              onKeyDown={
+                                isExpandable
+                                  ? (e) => {
+                                      if (e.key === "Enter" || e.key === " ") {
+                                        e.preventDefault();
+                                        toggleExpand(item.id);
+                                      }
+                                    }
+                                  : undefined
+                              }
+                              style={{
+                                fontSize: fontSize.md,
+                                color: neutral[800],
+                                lineHeight: 1.6,
+                                wordBreak: "break-word",
+                                whiteSpace: "pre-wrap",
+                                cursor: isExpandable ? "pointer" : undefined,
+                                ...(expanded && hasFull
+                                  ? {}
+                                  : {
+                                      display: "-webkit-box",
+                                      WebkitLineClamp: 2,
+                                      WebkitBoxOrient: "vertical",
+                                      overflow: "hidden",
+                                    } as React.CSSProperties),
+                              }}
+                            >
+                              {displayContent}
+                            </div>
+                            {isExpandable && (
+                              <button
+                                type="button"
+                                data-testid="memory-expand-button"
+                                data-memory-id={item.id}
+                                data-expanded={expanded ? "true" : "false"}
+                                onClick={() => toggleExpand(item.id)}
+                                style={{
+                                  marginTop: 4,
+                                  padding: 0,
+                                  border: "none",
+                                  background: "transparent",
+                                  color: "#2563EB",
+                                  fontSize: fontSize.xs,
+                                  fontWeight: 500,
+                                  cursor: "pointer",
+                                  fontFamily: fontFamily.body,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 2,
+                                }}
+                              >
+                                {expanded ? "收起" : "展开"}
+                                <span
+                                  aria-hidden
+                                  style={{
+                                    display: "inline-block",
+                                    fontSize: 10,
+                                    lineHeight: 1,
+                                    transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
+                                    transition: "transform .15s ease",
+                                  }}
+                                >
+                                  ▾
+                                </span>
+                              </button>
+                            )}
+                          </>
+                        );
+                      })()}
 
                       {/* 底部：tags + createdBy + createdAt */}
                       <div
@@ -464,7 +548,7 @@ export default function MemoriesPage() {
                         flexShrink: 0,
                         borderRadius: radius.sm,
                         border: `1px solid ${neutral[200]}`,
-                        backgroundColor: "#FFFFFF",
+                        backgroundColor: "var(--color-surface)",
                         color: neutral[400],
                         fontSize: fontSize.sm,
                         lineHeight: 1,
@@ -475,7 +559,7 @@ export default function MemoriesPage() {
                       }}
                       onMouseEnter={(e) => {
                         e.currentTarget.style.color = "#DC2626";
-                        e.currentTarget.style.borderColor = "#FECACA";
+                        e.currentTarget.style.borderColor = "rgba(239,68,68,0.22)";
                       }}
                       onMouseLeave={(e) => {
                         e.currentTarget.style.color = neutral[400];
@@ -510,7 +594,7 @@ export default function MemoriesPage() {
                     padding: `${space.sm}px ${space.md}px`,
                     borderRadius: radius.md,
                     border: `1px solid ${neutral[200]}`,
-                    backgroundColor: "#FFFFFF",
+                    backgroundColor: "var(--color-surface)",
                     color: page <= 1 ? neutral[300] : neutral[600],
                     fontSize: fontSize.sm,
                     cursor: page <= 1 ? "default" : "pointer",
@@ -531,7 +615,7 @@ export default function MemoriesPage() {
                     padding: `${space.sm}px ${space.md}px`,
                     borderRadius: radius.md,
                     border: `1px solid ${neutral[200]}`,
-                    backgroundColor: "#FFFFFF",
+                    backgroundColor: "var(--color-surface)",
                     color: page >= totalPages ? neutral[300] : neutral[600],
                     fontSize: fontSize.sm,
                     cursor: page >= totalPages ? "default" : "pointer",
@@ -578,8 +662,8 @@ export default function MemoriesPage() {
             gap: space.xs,
             padding: `${space.sm}px ${space.md}px`,
             borderRadius: radius.md,
-            backgroundColor: "#FEF2F2",
-            border: `1px solid #FECACA`,
+            backgroundColor: "rgba(239,68,68,0.10)",
+            border: `1px solid rgba(239,68,68,0.22)`,
           }}
         >
           <span aria-hidden style={{ fontWeight: 700 }}>!</span>
