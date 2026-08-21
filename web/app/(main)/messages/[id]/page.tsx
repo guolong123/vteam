@@ -420,7 +420,7 @@ function DmMessageList({
               padding: `${space.sm}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.sm,
               fontWeight: 500,
@@ -469,8 +469,8 @@ function DmMessageList({
                     minWidth: 0,
                     padding: space.md,
                     borderRadius: radius.md,
-                    backgroundColor: "#FEF2F2",
-                    border: "1px solid #FECACA",
+                    backgroundColor: "rgba(239,68,68,0.10)",
+                    border: "1px solid rgba(239,68,68,0.22)",
                     boxShadow: shadow.sm,
                   }}
                 >
@@ -1082,7 +1082,7 @@ export default function DmChatPage() {
             padding: `${space.sm}px ${space.lg}px`,
             borderRadius: radius.pill,
             border: `1px solid ${neutral[200]}`,
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
             color: neutral[600],
             fontSize: fontSize.md,
             fontWeight: 500,

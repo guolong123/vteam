@@ -160,16 +160,16 @@ const toolEffectMeta: Record<
   ToolEffectKey,
   { label: string; desc: string; color: string; bg: string; border: string }
 > = {
-  allow: { label: "允许", desc: "无需确认 · 只读/低风险", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  ask: { label: "确认", desc: "每次调用需确认 · 有副作用", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  deny: { label: "禁止", desc: "白名单排除", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
+  allow: { label: "允许", desc: "无需确认 · 只读/低风险", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  ask: { label: "确认", desc: "每次调用需确认 · 有副作用", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  deny: { label: "禁止", desc: "白名单排除", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 };
 
 /** 工具来源徽章色（真实 source 值：builtin/custom/mcp，来自 GET /tools）。 */
 type ToolSourceKey = "builtin" | "custom" | "mcp";
 const toolSourceMeta: Record<ToolSourceKey, { label: string; color: string; bg: string; border: string }> = {
-  builtin: { label: "内置", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  custom: { label: "自定义", color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
+  builtin: { label: "内置", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  custom: { label: "自定义", color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
   mcp: { label: "MCP", color: "#0891B2", bg: "#ECFEFF", border: "#A5F3FC" },
 };
 
@@ -180,8 +180,8 @@ const BUILTIN_TOOL_ACTIONS = new Set([
 
 /** 凭据状态双态（与 models-manage 页内定义完全一致；"扩展 token"范式页面内定义）。 */
 const credentialTheme = {
-  configured: { label: "已配置", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  missing: { label: "未配置", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+  configured: { label: "已配置", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  missing: { label: "未配置", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
 } as const;
 
 /** 凭据状态徽章：已配置=绿 / 未配置=灰（仿 StatusBadge 视觉）。 */
@@ -253,7 +253,7 @@ function toAvatarRole(role: string | null): RoleKey {
 }
 
 /** 模板/自定义 徽章主题：模板按角色色，自定义/克隆用灰蓝系（对齐原型 AgentListItem）。 */
-const CUSTOM_THEME = { color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" };
+const CUSTOM_THEME = { color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" };
 
 /** permissionScope 对象 → 权限范围面板三行可读文本（对齐原型 permission-config 行结构）。 */
 function permissionRows(scope: Record<string, unknown> | null): { label: string; value: string }[] {
@@ -307,7 +307,7 @@ function AgentListItem({ agent, active, modelNameOf, onClick }: AgentListItemPro
         cursor: "pointer",
         border: `1px solid ${active ? (isTemplate ? roleBorder(roleKey) : CUSTOM_THEME.border) : neutral[200]}`,
         borderRadius: radius.md,
-        backgroundColor: active ? "#FFFFFF" : neutral[50],
+        backgroundColor: active ? "var(--color-surface)" : neutral[50],
         boxShadow: active ? shadow.sm : "none",
         padding: space.md,
         display: "flex",
@@ -397,7 +397,7 @@ function AgentListItem({ agent, active, modelNameOf, onClick }: AgentListItemPro
             width: 15,
             height: 15,
             borderRadius: "50%",
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
           }}
         />
       </span>
@@ -419,10 +419,10 @@ const ROLE_COLORS: Record<RoleKey, string> = {
   product: "#3B82F6", project_manager: "#0EA5E9", architect: "#8B5CF6", developer: "#10B981", tester: "#F59E0B",
 };
 const ROLE_BGS: Record<RoleKey, string> = {
-  product: "#EFF6FF", project_manager: "#F0F9FF", architect: "#F5F3FF", developer: "#ECFDF5", tester: "#FFFBEB",
+  product: "rgba(37,99,235,0.10)", project_manager: "rgba(14,165,233,0.10)", architect: "rgba(124,58,237,0.10)", developer: "rgba(16,185,129,0.10)", tester: "rgba(245,158,11,0.10)",
 };
 const ROLE_BORDERS: Record<RoleKey, string> = {
-  product: "#BFDBFE", project_manager: "#BAE6FD", architect: "#DDD6FE", developer: "#A7F3D0", tester: "#FDE68A",
+  product: "rgba(37,99,235,0.22)", project_manager: "rgba(14,165,233,0.22)", architect: "rgba(124,58,237,0.22)", developer: "rgba(16,185,129,0.28)", tester: "rgba(245,158,11,0.28)",
 };
 
 /* ================================ 工具权限列表（可编辑，对齐原型 ToolPermissionList） ================================ */
@@ -496,7 +496,7 @@ function ToolPermissionList({ tools, catalog, readOnly, onChange }: ToolPermissi
               gap: space.md,
               padding: `${space.sm}px ${space.md}px`,
               borderRadius: radius.md,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[200]}`,
             }}
           >
@@ -522,7 +522,7 @@ function ToolPermissionList({ tools, catalog, readOnly, onChange }: ToolPermissi
                   width: 15,
                   height: 15,
                   borderRadius: "50%",
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                 }}
               />
             </span>
@@ -623,7 +623,7 @@ function ToolPermissionList({ tools, catalog, readOnly, onChange }: ToolPermissi
                     flexShrink: 0,
                     borderRadius: radius.sm,
                     border: `1px solid ${neutral[200]}`,
-                    backgroundColor: "#FFFFFF",
+                    backgroundColor: "var(--color-surface)",
                     color: neutral[400],
                     fontSize: fontSize.sm,
                     lineHeight: 1,
@@ -679,7 +679,7 @@ function ToolPermissionList({ tools, catalog, readOnly, onChange }: ToolPermissi
                   padding: `${space.sm}px ${space.md}px`,
                   borderRadius: radius.md,
                   border: `1px solid ${neutral[300]}`,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   fontSize: fontSize.sm,
                   fontFamily: fontFamily.mono,
                   color: neutral[800],
@@ -857,7 +857,7 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
         display: "flex",
         flexDirection: "column",
         gap: space.lg,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         border: `1px solid ${neutral[200]}`,
         borderRadius: radius.lg,
         boxShadow: shadow.sm,
@@ -953,8 +953,8 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
                 gap: space.xs,
                 padding: `${space.sm}px ${space.lg}px`,
                 borderRadius: radius.pill,
-                border: "1px solid #FECACA",
-                backgroundColor: "#FFFFFF",
+                border: "1px solid rgba(239,68,68,0.22)",
+                backgroundColor: "var(--color-surface)",
                 color: "#DC2626",
                 fontSize: fontSize.md,
                 fontWeight: 500,
@@ -978,7 +978,7 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
                 padding: `${space.sm}px ${space.lg}px`,
                 borderRadius: radius.pill,
                 border: `1px solid ${accent}`,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 color: accent,
                 fontSize: fontSize.md,
                 fontWeight: 500,
@@ -1028,8 +1028,8 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
             gap: space.xs,
             padding: `${space.sm}px ${space.md}px`,
             borderRadius: radius.md,
-            backgroundColor: "#FEF2F2",
-            border: `1px solid #FECACA`,
+            backgroundColor: "rgba(239,68,68,0.10)",
+            border: `1px solid rgba(239,68,68,0.22)`,
           }}
         >
           <span aria-hidden style={{ fontWeight: 700 }}>!</span>
@@ -1050,8 +1050,8 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
             gap: space.xs,
             padding: `${space.sm}px ${space.md}px`,
             borderRadius: radius.md,
-            backgroundColor: "#FEF2F2",
-            border: `1px solid #FECACA`,
+            backgroundColor: "rgba(239,68,68,0.10)",
+            border: `1px solid rgba(239,68,68,0.22)`,
           }}
         >
           <span aria-hidden style={{ fontWeight: 700 }}>!</span>
@@ -1089,7 +1089,7 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
             resize: "none",
             border: `1px solid ${neutral[200]}`,
             borderRadius: radius.md,
-            backgroundColor: isTemplate ? neutral[50] : "#FFFFFF",
+            backgroundColor: isTemplate ? neutral[50] : "var(--color-surface)",
             padding: space.md,
             fontSize: fontSize.md,
             lineHeight: 1.6,
@@ -1129,7 +1129,7 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
             resize: "none",
             border: `1px solid ${neutral[200]}`,
             borderRadius: radius.md,
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
             padding: space.md,
             fontSize: fontSize.md,
             lineHeight: 1.6,
@@ -1168,7 +1168,7 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
               fontFamily: fontFamily.body,
               fontSize: fontSize.sm,
               color: neutral[800],
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[300]}`,
               borderRadius: radius.md,
               padding: `${space.xs}px ${space.sm}px`,
@@ -1261,7 +1261,7 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
               fontFamily: fontFamily.body,
               fontSize: fontSize.sm,
               color: neutral[800],
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[300]}`,
               borderRadius: radius.md,
               padding: `${space.xs}px ${space.sm}px`,
@@ -1330,7 +1330,7 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
                   padding: `${space.xs}px ${space.sm}px`,
                   borderRadius: radius.md,
                   border: `1px solid ${neutral[300]}`,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   fontSize: fontSize.sm,
                   color: neutral[800],
                   fontFamily: fontFamily.mono,
@@ -1393,7 +1393,7 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
               fontFamily: fontFamily.body,
               fontSize: fontSize.sm,
               color: neutral[800],
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[300]}`,
               borderRadius: radius.md,
               padding: `${space.xs}px ${space.sm}px`,
@@ -1424,8 +1424,8 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
               gap: space.xs,
               fontSize: fontSize.xs,
               color: "#D97706",
-              backgroundColor: "#FFFBEB",
-              border: `1px solid #FDE68A`,
+              backgroundColor: "rgba(245,158,11,0.10)",
+              border: `1px solid rgba(245,158,11,0.28)`,
               borderRadius: radius.md,
               padding: `${space.sm}px ${space.md}px`,
             }}
@@ -1591,7 +1591,7 @@ function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: Create
     padding: `${space.md}px ${space.lg}px`,
     borderRadius: radius.md,
     border: `1px solid ${neutral[200]}`,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "var(--color-surface)",
     fontSize: fontSize.md,
     color: neutral[800],
     outline: "none",
@@ -1630,7 +1630,7 @@ function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: Create
           gap: space.lg,
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
           fontFamily: fontFamily.body,
@@ -1761,7 +1761,7 @@ function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: Create
               padding: `${space.sm + 2}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               fontWeight: 500,
@@ -2019,7 +2019,7 @@ export default function AgentConfigPage() {
                 padding: `${space.sm}px ${space.lg}px`,
                 borderRadius: radius.md,
                 border: `1px solid ${neutral[200]}`,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 color: neutral[600],
                 fontSize: fontSize.md,
                 fontWeight: 500,

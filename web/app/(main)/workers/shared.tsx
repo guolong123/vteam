@@ -36,9 +36,9 @@ export const workerStatusTheme: Record<
   WorkerStatusLabel,
   { color: string; bg: string; border: string }
 > = {
-  在线: { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  维护中: { color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  离线: { color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
+  在线: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  维护中: { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  离线: { color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 };
 
 /** 负载档位色（原型 :47-51）：高（红）/ 中（琥珀）/ 低（绿） */
@@ -124,9 +124,9 @@ export const MCP_STATUS_THEME: Record<
   McpStatusEntry["status"],
   { label: string; mark: string; color: string; bg: string; border: string }
 > = {
-  connected: { label: "已连接", mark: "✅", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  failed: { label: "连接失败", mark: "✗", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
-  needs_auth: { label: "待授权", mark: "🔑", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
+  connected: { label: "已连接", mark: "✅", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  failed: { label: "连接失败", mark: "✗", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  needs_auth: { label: "待授权", mark: "🔑", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
 };
 
 /* ------------------------------ 内置 git 工具（17 篇 §4.1 七工具） ------------------------------ */
@@ -199,7 +199,7 @@ export function cardStyle(options?: { border?: string; shadow?: string }): CSSPr
     gap: space.md,
     padding: `${space.xl}px`,
     borderRadius: radius.lg,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "var(--color-surface)",
     border: `1px solid ${options?.border ?? neutral[200]}`,
     boxShadow: options?.shadow ?? undefined,
     ...baseFont,

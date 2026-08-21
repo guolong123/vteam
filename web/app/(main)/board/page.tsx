@@ -15,7 +15,7 @@
  * - 卡片点击 → router.push(/tasks/[id])（群聊入口，T13 建路由，先跳转）。
  * - data-testid 与原型一致：status-filter / task-card / task-members /
  *   task-artifact-count / start-task-button / start-task-hint。
- * - 「待开始」配色在页面内本地定义（WAITING_STATUS 灰蓝 #475569 系），不扩散共享层；
+ * - 「待开始」配色在页面内本地定义（WAITING_STATUS 灰蓝 var(--color-neutral-600) 系），不扩散共享层；
  *   其余状态复用共享 StatusBadge。
  * - 融合导航（NavTopBar / NavDock / CmdKPanel / rail-bar / topbar / cmdk-trigger /
  *   cmdk-panel）由 AppShell 提供，本页仅渲染内容区。
@@ -48,11 +48,11 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 /** 看板状态 = 共享 StatusKey(4 态) + 新增「待开始」（PRD 03 FR-03 状态机 5 态） */
 type BoardStatus = StatusKey | "待开始";
 
-/** 「待开始」本地配色：灰蓝 #475569 系（与已归档灰 #64748B 区分，偏深偏冷） */
+/** 「待开始」本地配色：灰蓝 var(--color-neutral-600) 系（与已归档灰 var(--color-neutral-500) 区分，偏深偏冷） */
 const WAITING_STATUS = {
-  color: "#475569",
-  bg: "#F8FAFC",
-  border: "#CBD5E1",
+  color: "var(--color-neutral-600)",
+  bg: "var(--color-neutral-50)",
+  border: "var(--color-neutral-300)",
 } as const;
 
 /** 待开始徽章（仿 StatusBadge 视觉，仅用于「待开始」，其余状态仍走共享 StatusBadge） */
@@ -226,7 +226,7 @@ function TaskCard({ task, onOpen, projectName }: TaskCardProps) {
         gap: space.md,
         padding: `${space.xl}px`,
         borderRadius: radius.lg,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         border: `1px solid ${neutral[200]}`,
         boxShadow: shadow.sm,
         transition: "box-shadow .15s ease",
@@ -278,8 +278,8 @@ function TaskCard({ task, onOpen, projectName }: TaskCardProps) {
                 gap: space.xs,
                 padding: `${space.xs - 1}px ${space.sm + 1}px`,
                 borderRadius: radius.pill,
-                backgroundColor: "#EFF6FF",
-                border: "1px solid #BFDBFE",
+                backgroundColor: "rgba(37,99,235,0.10)",
+                border: "1px solid rgba(37,99,235,0.22)",
                 color: "#2563EB",
                 fontSize: fontSize.xs,
                 fontWeight: 500,
@@ -486,7 +486,7 @@ export default function TaskBoardPage() {
                 padding: `${space.sm}px ${space.lg}px`,
                 borderRadius: radius.pill,
                 border: `1px solid ${neutral[200]}`,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 color: neutral[700],
                 fontSize: fontSize.md,
                 fontWeight: 500,
@@ -527,7 +527,7 @@ export default function TaskBoardPage() {
                 padding: `${space.sm}px ${space.lg}px`,
                 borderRadius: radius.pill,
                 border: `1px solid ${isActive ? "#2563EB" : neutral[200]}`,
-                backgroundColor: isActive ? "#2563EB" : "#FFFFFF",
+                backgroundColor: isActive ? "#2563EB" : "var(--color-surface)",
                 color: isActive ? "#FFFFFF" : neutral[600],
                 fontSize: fontSize.md,
                 fontWeight: isActive ? 600 : 400,
@@ -584,7 +584,7 @@ export default function TaskBoardPage() {
                 padding: `${space.sm}px ${space.lg}px`,
                 borderRadius: radius.md,
                 border: `1px solid ${neutral[200]}`,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 color: neutral[600],
                 fontSize: fontSize.md,
                 fontWeight: 500,

@@ -160,7 +160,7 @@ function findRoleOf(instancesByRole: InstancesByRole, key: string): InstanceBuck
 const docTypeColors = { pdf: "#EF4444", csv: "#10B981", docx: "#3B82F6" } as const;
 
 /** 未在语义色表内的扩展名兜底色（中性 slate，避免白底白字）。 */
-const DEFAULT_DOC_COLOR = "#64748B";
+const DEFAULT_DOC_COLOR = "var(--color-neutral-500)";
 
 /** POST /uploads 响应（server FileStorageService.describe：{url, name, size, ext}，size 为字节）。 */
 interface UploadedFileMeta {
@@ -197,8 +197,8 @@ function colorOf(ext: string): string {
 
 /* ------------------------------ 「待开始」状态色（新状态未入共享 statusColors，本地收敛与琥珀同族） ------------------------------ */
 const pendingColor = "#D97706";
-const pendingBg = "#FFFBEB";
-const pendingBorder = "#FDE68A";
+const pendingBg = "rgba(245,158,11,0.10)";
+const pendingBorder = "rgba(245,158,11,0.28)";
 
 /* ------------------------------ 优先级（低/中/高，默认选中「中」） ------------------------------ */
 const priorities = ["低", "中", "高"] as const;
@@ -265,7 +265,7 @@ function TaskForm({
     padding: `${space.md}px ${space.lg}px`,
     borderRadius: radius.md,
     border: `1px solid ${neutral[200]}`,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "var(--color-surface)",
     fontSize: fontSize.md,
     color: neutral[800],
     outline: "none",
@@ -281,7 +281,7 @@ function TaskForm({
         gap: space.lg,
         padding: space.xl,
         borderRadius: radius.lg,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         border: `1px solid ${neutral[200]}`,
         boxShadow: shadow.sm,
         ...baseFont,
@@ -412,8 +412,8 @@ function TaskForm({
               gap: space.sm,
               padding: `${space.md}px ${space.lg}px`,
               borderRadius: radius.md,
-              backgroundColor: "#FEF2F2",
-              border: "1px solid #FECACA",
+              backgroundColor: "rgba(239,68,68,0.10)",
+              border: "1px solid rgba(239,68,68,0.22)",
               fontSize: fontSize.sm,
               color: "#B91C1C",
               lineHeight: 1.6,
@@ -561,7 +561,7 @@ function TaskForm({
                 width: 18,
                 height: 18,
                 borderRadius: "50%",
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 transition: "left .2s",
                 boxShadow: shadow.sm,
               }}
@@ -662,7 +662,7 @@ function RoleInstanceCard({
         gap: space.sm,
         padding: `${space.md}px ${space.lg}px`,
         borderRadius: radius.md,
-        backgroundColor: enabled ? theme.bg : "#FFFFFF",
+        backgroundColor: enabled ? theme.bg : "var(--color-surface)",
         border: `1px solid ${enabled ? theme.border : neutral[200]}`,
         boxShadow: enabled ? shadow.sm : undefined,
         transition: "border-color .15s ease, background-color .15s ease",
@@ -687,7 +687,7 @@ function RoleInstanceCard({
               style={{
                 fontSize: fontSize.xs,
                 color: neutral[400],
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 border: `1px solid ${neutral[200]}`,
                 borderRadius: radius.pill,
                 padding: "1px 8px",
@@ -722,7 +722,7 @@ function RoleInstanceCard({
             height: 20,
             borderRadius: radius.sm,
             border: `1.5px solid ${enabled ? theme.color : neutral[300]}`,
-            backgroundColor: enabled ? theme.color : "#FFFFFF",
+            backgroundColor: enabled ? theme.color : "var(--color-surface)",
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
@@ -754,7 +754,7 @@ function RoleInstanceCard({
                   gap: space.sm,
                   padding: `${space.xs}px ${space.sm}px`,
                   borderRadius: radius.md,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   border: `1px solid ${isMain ? theme.border : neutral[200]}`,
                 }}
               >
@@ -882,7 +882,7 @@ function RoleInstanceCard({
           padding: `${space.sm - 1}px ${space.md}px`,
           borderRadius: radius.md,
           border: `1.5px dashed ${theme.border}`,
-          backgroundColor: "rgba(255,255,255,.6)",
+          backgroundColor: "color-mix(in srgb, var(--color-surface) 70%, transparent)",
           color: theme.color,
           fontSize: fontSize.sm,
           fontWeight: 500,
@@ -931,7 +931,7 @@ function CustomAgentCard({
         gap: space.sm,
         padding: `${space.md}px ${space.lg}px`,
         borderRadius: radius.md,
-        backgroundColor: enabled ? theme.bg : "#FFFFFF",
+        backgroundColor: enabled ? theme.bg : "var(--color-surface)",
         border: `1px solid ${enabled ? theme.border : neutral[200]}`,
         boxShadow: enabled ? shadow.sm : undefined,
         transition: "border-color .15s ease, background-color .15s ease",
@@ -967,7 +967,7 @@ function CustomAgentCard({
               style={{
                 fontSize: fontSize.xs,
                 color: neutral[400],
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 border: `1px solid ${neutral[200]}`,
                 borderRadius: radius.pill,
                 padding: "1px 8px",
@@ -999,7 +999,7 @@ function CustomAgentCard({
                   gap: space.xs,
                   padding: `${space.xs}px ${space.sm}px`,
                   borderRadius: radius.md,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   border: `1px solid ${isMain ? theme.border : neutral[200]}`,
                 }}
               >
@@ -1124,7 +1124,7 @@ function CustomAgentCard({
                   gap: space.sm,
                   padding: `${space.xs}px ${space.sm}px`,
                   borderRadius: radius.md,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   border: `1px solid ${already ? theme.border : neutral[200]}`,
                 }}
               >
@@ -1153,7 +1153,7 @@ function CustomAgentCard({
                     alignItems: "center",
                     gap: 2,
                     border: `1px solid ${already ? neutral[200] : theme.border}`,
-                    background: already ? neutral[50] : "#FFFFFF",
+                    background: already ? neutral[50] : "var(--color-surface)",
                     color: already ? neutral[400] : theme.color,
                     fontSize: fontSize.sm,
                     fontWeight: 500,
@@ -1241,7 +1241,7 @@ function AgentSelectPanel({
         style={{
           padding: space.xl,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.sm,
           display: "flex",
@@ -1278,7 +1278,7 @@ function AgentSelectPanel({
                 padding: `${space.sm}px ${space.lg}px`,
                 borderRadius: radius.md,
                 border: `1px solid ${neutral[200]}`,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 color: neutral[600],
                 fontSize: fontSize.md,
                 fontWeight: 500,
@@ -1325,7 +1325,7 @@ function AgentSelectPanel({
         style={{
           padding: space.xl,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.sm,
           display: "flex",
@@ -1348,7 +1348,7 @@ function AgentSelectPanel({
             padding: `${space.md}px ${space.lg}px`,
             borderRadius: radius.md,
             border: `1px solid ${mainTheme ? mainTheme.border : neutral[200]}`,
-            backgroundColor: mainTheme ? mainTheme.bg : "#FFFFFF",
+            backgroundColor: mainTheme ? mainTheme.bg : "var(--color-surface)",
             color: neutral[800],
             fontSize: fontSize.md,
             fontWeight: 500,
@@ -1376,7 +1376,7 @@ function AgentSelectPanel({
         style={{
           padding: space.xl,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.sm,
           display: "flex",
@@ -1480,8 +1480,8 @@ function AgentSelectPanel({
             alignItems: "flex-start",
             padding: `${space.md}px ${space.lg}px`,
             borderRadius: radius.md,
-            backgroundColor: "#ECFDF5",
-            border: `1px solid #A7F3D0`,
+            backgroundColor: "rgba(16,185,129,0.10)",
+            border: `1px solid rgba(16,185,129,0.28)`,
             fontSize: fontSize.sm,
             color: "#065F46",
             lineHeight: 1.6,
@@ -1503,8 +1503,8 @@ function AgentSelectPanel({
             gap: space.xs,
             padding: `${space.md}px ${space.lg}px`,
             borderRadius: radius.md,
-            backgroundColor: "#FEF2F2",
-            border: "1px solid #FECACA",
+            backgroundColor: "rgba(239,68,68,0.10)",
+            border: "1px solid rgba(239,68,68,0.22)",
             fontSize: fontSize.sm,
             color: "#B91C1C",
             lineHeight: 1.6,

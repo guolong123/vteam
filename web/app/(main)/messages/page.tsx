@@ -135,9 +135,9 @@ function WaitingBadge() {
         gap: space.xs,
         padding: `${space.xs}px ${space.sm + 2}px`,
         borderRadius: radius.pill,
-        backgroundColor: "#F8FAFC",
-        border: "1px solid #CBD5E1",
-        color: "#475569",
+        backgroundColor: "var(--color-neutral-50)",
+        border: "1px solid var(--color-neutral-300)",
+        color: "var(--color-neutral-600)",
         fontSize: fontSize.sm,
         fontWeight: 500,
         lineHeight: 1.4,
@@ -147,7 +147,7 @@ function WaitingBadge() {
     >
       <span
         aria-hidden
-        style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "#475569", flexShrink: 0 }}
+        style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "var(--color-neutral-600)", flexShrink: 0 }}
       />
       待开始
     </span>
@@ -188,7 +188,7 @@ function ConversationItem({
     padding: `${space.xs}px ${space.sm + 2}px`,
     borderRadius: radius.pill,
     border: `1px solid ${channel.pinned ? "#2563EB" : neutral[200]}`,
-    backgroundColor: channel.pinned ? "#2563EB" : "#FFFFFF",
+    backgroundColor: channel.pinned ? "#2563EB" : "var(--color-surface)",
     color: channel.pinned ? "#FFFFFF" : neutral[600],
     fontSize: fontSize.xs,
     fontWeight: 500,
@@ -217,8 +217,8 @@ function ConversationItem({
         gap: space.md,
         padding: `${space.lg}px ${space.xl}px`,
         borderRadius: radius.lg,
-        backgroundColor: channel.pinned ? "#EFF6FF" : "#FFFFFF",
-        border: `1px solid ${channel.pinned ? "#BFDBFE" : neutral[200]}`,
+        backgroundColor: channel.pinned ? "rgba(37,99,235,0.10)" : "var(--color-surface)",
+        border: `1px solid ${channel.pinned ? "rgba(37,99,235,0.22)" : neutral[200]}`,
         boxShadow: shadow.sm,
         cursor: "pointer",
         transition: "border-color .15s ease, box-shadow .15s ease",
@@ -283,7 +283,7 @@ function ConversationItem({
           style={{
             ...actionButtonStyle,
             borderColor: neutral[200],
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
             color: neutral[600],
           }}
         >
@@ -296,8 +296,8 @@ function ConversationItem({
           title="删除会话"
           style={{
             ...actionButtonStyle,
-            borderColor: "#FECACA",
-            backgroundColor: "#FFFFFF",
+            borderColor: "rgba(239,68,68,0.22)",
+            backgroundColor: "var(--color-surface)",
             color: "#DC2626",
           }}
         >
@@ -354,7 +354,7 @@ function ConversationSection({
             fontSize: fontSize.sm,
             color: neutral[400],
             textAlign: "center",
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
             border: `1px dashed ${neutral[200]}`,
             borderRadius: radius.lg,
           }}
@@ -475,7 +475,7 @@ export default function MessagesPage() {
             maxWidth: 320,
             padding: `${space.sm}px ${space.md}px`,
             borderRadius: radius.md,
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
             border: `1px solid ${neutral[200]}`,
             boxShadow: shadow.sm,
           }}
@@ -515,7 +515,7 @@ export default function MessagesPage() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.pill,
                   border: `1px solid ${isActive ? "#2563EB" : neutral[200]}`,
-                  backgroundColor: isActive ? "#2563EB" : "#FFFFFF",
+                  backgroundColor: isActive ? "#2563EB" : "var(--color-surface)",
                   color: isActive ? "#FFFFFF" : neutral[600],
                   fontSize: fontSize.md,
                   fontWeight: isActive ? 600 : 400,
@@ -560,7 +560,7 @@ export default function MessagesPage() {
               padding: `${space.sm}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               fontWeight: 500,
@@ -585,7 +585,7 @@ export default function MessagesPage() {
             fontSize: fontSize.sm,
             color: neutral[400],
             textAlign: "center",
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
             border: `1px dashed ${neutral[200]}`,
             borderRadius: radius.lg,
           }}

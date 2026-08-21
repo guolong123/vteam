@@ -48,18 +48,18 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
  * 遵循"扩展 token"范式在页面内定义具名常量并注释原因，不扩散共享层（对齐原型 :38-42）。
  */
 const permCellTheme = {
-  allow: { mark: "✓", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  partial: { mark: "◐", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  deny: { mark: "✗", color: "#94A3B8", bg: "#F8FAFC", border: "#E2E8F0" },
+  allow: { mark: "✓", color: "#059669", bg: "rgba(16,185,129,0.14)", border: "rgba(16,185,129,0.28)" },
+  partial: { mark: "◐", color: "#D97706", bg: "rgba(245,158,11,0.14)", border: "rgba(245,158,11,0.28)" },
+  deny: { mark: "✗", color: "var(--color-neutral-400)", bg: "var(--color-neutral-50)", border: "var(--color-neutral-200)" },
 } as const;
 
 type Perm = keyof typeof permCellTheme;
 
-/** 角色主题色（管理员蓝 / 成员绿 / 自定义紫），对齐原型 :47-51 */
+/** 角色主题色（管理员蓝 / 成员绿 / 自定义紫），深色下用半透明以跟随 surface */
 const roleThemes = {
-  admin: { color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE", icon: "◈" },
-  member: { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0", icon: "●" },
-  custom: { color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE", icon: "✦" },
+  admin: { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)", icon: "◈" },
+  member: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.22)", icon: "●" },
+  custom: { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)", icon: "✦" },
 } as const;
 
 type RoleTheme = (typeof roleThemes)[keyof typeof roleThemes];
@@ -286,7 +286,7 @@ function PermissionMatrix({
         overflowX: "auto",
         borderRadius: radius.md,
         border: `1px solid ${neutral[200]}`,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
       }}
     >
       <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, ...baseFont }}>
@@ -457,7 +457,7 @@ function PermissionScope({
         gap: space.lg,
         padding: `${space.lg}px`,
         borderRadius: radius.md,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         border: `1px solid ${neutral[200]}`,
         ...baseFont,
       }}
@@ -476,7 +476,7 @@ function PermissionScope({
               padding: `${space.sm}px ${space.md}px`,
               borderRadius: radius.md,
               border: `1px solid ${scopeType === "global" ? theme.border : neutral[200]}`,
-              backgroundColor: scopeType === "global" ? theme.bg : "#FFFFFF",
+              backgroundColor: scopeType === "global" ? theme.bg : "var(--color-surface)",
               color: scopeType === "global" ? theme.color : neutral[600],
               fontSize: fontSize.md,
               fontWeight: scopeType === "global" ? 600 : 500,
@@ -496,7 +496,7 @@ function PermissionScope({
               padding: `${space.sm}px ${space.md}px`,
               borderRadius: radius.md,
               border: `1px solid ${scopeType === "projects" ? theme.border : neutral[200]}`,
-              backgroundColor: scopeType === "projects" ? theme.bg : "#FFFFFF",
+              backgroundColor: scopeType === "projects" ? theme.bg : "var(--color-surface)",
               color: scopeType === "projects" ? theme.color : neutral[600],
               fontSize: fontSize.md,
               fontWeight: scopeType === "projects" ? 600 : 500,
@@ -546,7 +546,7 @@ function PermissionScope({
                     padding: `${space.xs + 1}px ${space.md}px`,
                     borderRadius: radius.pill,
                     border: `1px solid ${active ? theme.border : neutral[200]}`,
-                    backgroundColor: active ? theme.bg : "#FFFFFF",
+                    backgroundColor: active ? theme.bg : "var(--color-surface)",
                     color: active ? theme.color : neutral[600],
                     fontSize: fontSize.md,
                     cursor: editable
@@ -588,7 +588,7 @@ function PermissionScope({
                   padding: `${space.xs + 1}px ${space.md}px`,
                   borderRadius: radius.pill,
                   border: `1px solid ${active ? theme.border : neutral[200]}`,
-                  backgroundColor: active ? theme.bg : "#FFFFFF",
+                  backgroundColor: active ? theme.bg : "var(--color-surface)",
                   color: active ? theme.color : neutral[600],
                   fontSize: fontSize.md,
                   cursor: editable ? "pointer" : "default",
@@ -760,7 +760,7 @@ function CreateRoleModal({
           gap: space.lg,
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
           fontFamily: fontFamily.body,
@@ -820,7 +820,7 @@ function CreateRoleModal({
               padding: `${space.md}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
               outline: "none",
@@ -864,7 +864,7 @@ function CreateRoleModal({
               padding: `${space.sm + 2}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               fontWeight: 500,
@@ -1082,7 +1082,7 @@ export default function RolePermissionPage() {
               padding: `${space.sm}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               fontWeight: 500,
@@ -1160,7 +1160,7 @@ export default function RolePermissionPage() {
                     padding: `${space.md}px ${space.lg}px`,
                     borderRadius: radius.lg,
                     border: `1px solid ${active ? t.border : neutral[200]}`,
-                    backgroundColor: active ? t.bg : "#FFFFFF",
+                    backgroundColor: active ? t.bg : "var(--color-surface)",
                     boxShadow: active ? shadow.sm : undefined,
                     cursor: "pointer",
                     textAlign: "left",
@@ -1179,7 +1179,7 @@ export default function RolePermissionPage() {
                       justifyContent: "center",
                       fontSize: fontSize.lg,
                       color: t.color,
-                      backgroundColor: active ? "#FFFFFF" : neutral[100],
+                      backgroundColor: active ? "var(--color-surface)" : neutral[100],
                       border: `1px solid ${active ? t.border : neutral[200]}`,
                     }}
                   >
@@ -1208,7 +1208,7 @@ export default function RolePermissionPage() {
                 padding: `${space.md}px ${space.lg}px`,
                 borderRadius: radius.lg,
                 border: `1px dashed ${neutral[300]}`,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 color: neutral[500],
                 fontSize: fontSize.md,
                 cursor: "pointer",
@@ -1335,8 +1335,8 @@ export default function RolePermissionPage() {
                     style={{
                       padding: `${space.sm + 2}px ${space.lg}px`,
                       borderRadius: radius.md,
-                      border: `1px solid #FCA5A5`,
-                      backgroundColor: "#FEF2F2",
+                      border: `1px solid rgba(239,68,68,0.32)`,
+                      backgroundColor: "rgba(239,68,68,0.10)",
                       color: "#DC2626",
                       fontSize: fontSize.md,
                       fontWeight: 500,
@@ -1382,8 +1382,8 @@ export default function RolePermissionPage() {
                     gap: space.xs,
                     padding: `${space.sm}px ${space.md}px`,
                     borderRadius: radius.md,
-                    backgroundColor: "#FEF2F2",
-                    border: `1px solid #FCA5A5`,
+                    backgroundColor: "rgba(239,68,68,0.10)",
+                    border: `1px solid rgba(239,68,68,0.32)`,
                     fontSize: fontSize.sm,
                     color: "#DC2626",
                     fontFamily: fontFamily.body,
@@ -1400,8 +1400,8 @@ export default function RolePermissionPage() {
                 style={{
                   padding: `${space.md}px ${space.lg}px`,
                   borderRadius: radius.md,
-                  backgroundColor: "#EFF6FF",
-                  border: `1px solid #BFDBFE`,
+                  backgroundColor: "rgba(37,99,235,0.10)",
+                  border: `1px solid rgba(37,99,235,0.22)`,
                   fontSize: fontSize.sm,
                   color: "#1D4ED8",
                   lineHeight: 1.7,

@@ -52,25 +52,25 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /** 认证方式徽章：SSH=蓝 / HTTPS=紫（页面内定义，语义独立于任务/凭据态）。 */
 const authTypeTheme = {
-  ssh_key: { label: "SSH", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  https_token: { label: "HTTPS", color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
+  ssh_key: { label: "SSH", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  https_token: { label: "HTTPS", color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
 } as const;
 
 /** 授权权限小徽章：read=灰 / write=琥珀。 */
 const permTheme = {
-  read: { label: "read", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
-  write: { label: "write", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
+  read: { label: "read", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
+  write: { label: "write", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
 } as const;
 
 /** 状态徽章（列表仅未吊销 → 已配置=绿常显）。 */
 const statusTheme = {
-  configured: { label: "已配置", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
+  configured: { label: "已配置", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
 } as const;
 
 /** 行 hover / 过渡（scoped：gr 前缀避免污染） */
 const rowCss = `
 .gr-repo-row { transition: border-color .15s ease, background-color .15s ease; }
-.gr-repo-row:hover { background-color: #F8FAFC; }
+.gr-repo-row:hover { background-color: var(--color-neutral-50); }
 `;
 
 /* ------------------------------ 轻量按钮（仿 providers-tab ActionButton） ------------------------------ */
@@ -101,7 +101,7 @@ function ActionButton({
         padding: `${space.xs + 2}px ${space.md + 2}px`,
         borderRadius: radius.pill,
         border: primary ? "none" : `1px solid ${neutral[200]}`,
-        backgroundColor: primary ? "#2563EB" : "#FFFFFF",
+        backgroundColor: primary ? "#2563EB" : "var(--color-surface)",
         color: primary ? "#FFFFFF" : neutral[600],
         fontSize: fontSize.sm,
         fontWeight: 500,
@@ -281,7 +281,7 @@ function GitRepoRow({
         gap: space.lg,
         padding: `${space.lg}px ${space.xl}px`,
         borderRadius: radius.lg,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         border: `1px solid ${neutral[200]}`,
         boxShadow: shadow.sm,
         ...baseFont,
@@ -444,7 +444,7 @@ function GitRepoModal({
     padding: `${space.md}px ${space.lg}px`,
     borderRadius: radius.md,
     border: `1px solid ${neutral[200]}`,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "var(--color-surface)",
     fontSize: fontSize.md,
     color: neutral[800],
     outline: "none",
@@ -536,7 +536,7 @@ function GitRepoModal({
           gap: space.lg,
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
           fontFamily: fontFamily.body,
@@ -698,8 +698,8 @@ function GitRepoModal({
                       gap: space.sm,
                       padding: `${space.xs + 2}px ${space.md}px`,
                       borderRadius: radius.md,
-                      backgroundColor: checked ? "#EFF6FF" : "#FFFFFF",
-                      border: `1px solid ${checked ? "#BFDBFE" : neutral[200]}`,
+                      backgroundColor: checked ? "rgba(37,99,235,0.10)" : "var(--color-surface)",
+                      border: `1px solid ${checked ? "rgba(37,99,235,0.22)" : neutral[200]}`,
                       cursor: "pointer",
                       fontSize: fontSize.md,
                       color: neutral[700],
@@ -725,8 +725,8 @@ function GitRepoModal({
                         marginLeft: "auto",
                         padding: "0 6px",
                         borderRadius: radius.sm,
-                        backgroundColor: write ? "#FFFBEB" : "#FFFFFF",
-                        border: `1px solid ${write ? "#FDE68A" : neutral[200]}`,
+                        backgroundColor: write ? "rgba(245,158,11,0.10)" : "var(--color-surface)",
+                        border: `1px solid ${write ? "rgba(245,158,11,0.28)" : neutral[200]}`,
                         opacity: checked ? 1 : 0.45,
                       }}
                     >
@@ -774,7 +774,7 @@ function GitRepoModal({
               padding: `${space.sm + 2}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               fontWeight: 500,
@@ -923,7 +923,7 @@ export default function GitReposPage() {
               style={{
                 fontSize: fontSize.xs,
                 color: neutral[500],
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 border: `1px solid ${neutral[200]}`,
                 borderRadius: radius.pill,
                 padding: "2px 10px",
@@ -982,7 +982,7 @@ export default function GitReposPage() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.md,
                   border: `1px solid ${neutral[200]}`,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   color: neutral[600],
                   fontSize: fontSize.md,
                   fontWeight: 500,
@@ -1003,7 +1003,7 @@ export default function GitReposPage() {
                 gap: space.sm,
                 padding: space.md,
                 borderRadius: radius.lg,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 border: `1px solid ${neutral[200]}`,
                 boxShadow: shadow.md,
               }}

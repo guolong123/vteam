@@ -55,9 +55,9 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /** 凭据状态三态（已配置 / 未配置 / 已撤销），语义独立于任务四态，页面内定义。 */
 const credentialTheme = {
-  configured: { label: "已配置", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  missing: { label: "未配置", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
-  revoked: { label: "已撤销", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
+  configured: { label: "已配置", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  missing: { label: "未配置", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
+  revoked: { label: "已撤销", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
 } as const;
 
 /** Provider 列表主色（与导航高亮蓝同族） */
@@ -66,7 +66,7 @@ const activeBlue = "#2563EB";
 /** 行 hover / 过渡（scoped：pv 前缀避免污染） */
 const rowCss = `
 .pv-provider-row { transition: border-color .15s ease, background-color .15s ease; }
-.pv-provider-row:hover { background-color: #F8FAFC; }
+.pv-provider-row:hover { background-color: var(--color-neutral-50); }
 `;
 
 type CredentialStatus = keyof typeof credentialTheme;
@@ -145,7 +145,7 @@ export function ActionButton({
         padding: `${space.xs + 2}px ${space.md + 2}px`,
         borderRadius: radius.pill,
         border: primary ? "none" : `1px solid ${neutral[200]}`,
-        backgroundColor: primary ? activeBlue : "#FFFFFF",
+        backgroundColor: primary ? activeBlue : "var(--color-surface)",
         color: primary ? "#FFFFFF" : neutral[600],
         fontSize: fontSize.sm,
         fontWeight: 500,
@@ -210,7 +210,7 @@ export function ConfigureModal({
     padding: `${space.md}px ${space.lg}px`,
     borderRadius: radius.md,
     border: `1px solid ${neutral[200]}`,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "var(--color-surface)",
     fontSize: fontSize.md,
     color: neutral[800],
     outline: "none",
@@ -260,7 +260,7 @@ export function ConfigureModal({
           gap: space.lg,
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
           fontFamily: fontFamily.body,
@@ -378,7 +378,7 @@ export function ConfigureModal({
                 color: neutral[500],
                 border: `1px solid ${neutral[200]}`,
                 borderRadius: radius.sm,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 padding: "2px 8px",
                 cursor: "pointer",
                 fontFamily: fontFamily.body,
@@ -416,8 +416,8 @@ export function ConfigureModal({
                     gap: space.sm,
                     padding: `${space.xs + 2}px ${space.md}px`,
                     borderRadius: radius.pill,
-                    backgroundColor: checked ? "#EFF6FF" : "#FFFFFF",
-                    border: `1px solid ${checked ? "#BFDBFE" : neutral[200]}`,
+                    backgroundColor: checked ? "rgba(37,99,235,0.10)" : "var(--color-surface)",
+                    border: `1px solid ${checked ? "rgba(37,99,235,0.22)" : neutral[200]}`,
                     cursor: "pointer",
                     fontSize: fontSize.md,
                     color: neutral[700],
@@ -436,7 +436,7 @@ export function ConfigureModal({
                       width: 7,
                       height: 7,
                       borderRadius: "50%",
-                      backgroundColor: online ? "#059669" : "#94A3B8",
+                      backgroundColor: online ? "#059669" : "var(--color-neutral-400)",
                       flexShrink: 0,
                     }}
                   />
@@ -480,7 +480,7 @@ export function ConfigureModal({
               padding: `${space.sm + 2}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               fontWeight: 500,
@@ -675,7 +675,7 @@ export default function ProvidersTab() {
               style={{
                 fontSize: fontSize.xs,
                 color: neutral[500],
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 border: `1px solid ${neutral[200]}`,
                 borderRadius: radius.pill,
                 padding: "2px 10px",
@@ -700,8 +700,8 @@ export default function ProvidersTab() {
                 gap: space.sm,
                 padding: `${space.sm + 2}px ${space.md}px`,
                 borderRadius: radius.md,
-                backgroundColor: "#FEF2F2",
-                border: "1px solid #FECACA",
+                backgroundColor: "rgba(239,68,68,0.10)",
+                border: "1px solid rgba(239,68,68,0.22)",
                 color: "#DC2626",
                 fontSize: fontSize.sm,
                 fontWeight: 500,
@@ -765,7 +765,7 @@ export default function ProvidersTab() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.md,
                   border: `1px solid ${neutral[200]}`,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   color: neutral[600],
                   fontSize: fontSize.md,
                   fontWeight: 500,
@@ -786,7 +786,7 @@ export default function ProvidersTab() {
                 gap: space.sm,
                 padding: space.md,
                 borderRadius: radius.lg,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 border: `1px solid ${neutral[200]}`,
                 boxShadow: shadow.md,
               }}
@@ -846,7 +846,7 @@ export default function ProvidersTab() {
                       gap: space.lg,
                       padding: `${space.lg}px ${space.xl}px`,
                       borderRadius: radius.lg,
-                      backgroundColor: "#FFFFFF",
+                      backgroundColor: "var(--color-surface)",
                       border: `1px solid ${neutral[200]}`,
                       boxShadow: shadow.sm,
                       ...baseFont,

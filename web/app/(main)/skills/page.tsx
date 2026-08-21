@@ -70,26 +70,26 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
  * 与角色色，遵循"扩展 token"范式在页面内定义具名常量并注释原因，不扩散共享层。
  */
 const sourceColors = {
-  内置: { color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  上传: { color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
+  内置: { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  上传: { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
 } as const;
 
 const enableColors = {
-  启用: { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  停用: { color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+  启用: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  停用: { color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
 } as const;
 
 /** 工具依赖状态：ok=依赖已安装 ✅ / missing=依赖缺失 ⚠️（worker 节点需按安装命令下载） */
 const depStateColors = {
-  ok: { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0", label: "依赖已安装", mark: "✅" },
-  missing: { color: "#D97706", bg: "#FFFBEB", border: "#FDE68A", label: "依赖缺失", mark: "⚠️" },
+  ok: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)", label: "依赖已安装", mark: "✅" },
+  missing: { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)", label: "依赖缺失", mark: "⚠️" },
 } as const;
 
 /** 自定义工具的实现类型：代码=绿 / HTTP=橙 / CLI=紫（与角色/状态色系区分） */
 const toolKindTheme: Record<"代码" | "HTTP" | "CLI", { color: string; bg: string; border: string }> = {
-  代码: { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  HTTP: { color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  CLI: { color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
+  代码: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  HTTP: { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  CLI: { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
 };
 
 /* ------------------------------ 工具子 Tab 主题（页面内扩展 token） ------------------------------
@@ -102,16 +102,16 @@ const groupTheme = {
     title: "内置工具",
     desc: "平台预置，开箱即用",
     color: "#2563EB",
-    bg: "#EFF6FF",
-    border: "#BFDBFE",
+    bg: "rgba(37,99,235,0.10)",
+    border: "rgba(37,99,235,0.22)",
   },
   custom: {
     icon: "✚",
     title: "自定义工具",
     desc: "用户注册的 代码 · HTTP · CLI 工具",
     color: "#7C3AED",
-    bg: "#F5F3FF",
-    border: "#DDD6FE",
+    bg: "rgba(124,58,237,0.10)",
+    border: "rgba(124,58,237,0.22)",
   },
   mcp: {
     icon: "◈",
@@ -124,7 +124,7 @@ const groupTheme = {
 } as const;
 
 /** 内置工具「开箱即用」徽章（平台预置语义，蓝系同内置来源） */
-const builtinReadyTheme = { color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" };
+const builtinReadyTheme = { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" };
 
 /* ------------------------------ MCP 语义主题（页面内扩展 token） ------------------------------
  * MCP 的「类型 / 连接状态」语义独立于任务四态与角色色，遵循"扩展 token"范式在页面内
@@ -144,8 +144,8 @@ type McpStatus = "connected" | "failed" | "needs_auth" | "disconnected" | "conne
 
 /** 类型徽章主题：Local=本地二进制（蓝系）/ Remote=远程服务（紫系，与 v2 标识同族） */
 const mcpTypeTheme: Record<McpType, { label: string; color: string; bg: string; border: string }> = {
-  local: { label: "Local 本地", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  remote: { label: "Remote 远程", color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
+  local: { label: "Local 本地", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  remote: { label: "Remote 远程", color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
 };
 
 /**
@@ -157,11 +157,11 @@ const mcpStatusTheme: Record<
   McpStatus,
   { label: string; mark: string; color: string; bg: string; border: string }
 > = {
-  connected: { label: "已连接", mark: "✅", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  failed: { label: "连接失败", mark: "✗", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
-  needs_auth: { label: "待授权", mark: "🔑", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  disconnected: { label: "未连接", mark: "⚠️", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
-  connecting: { label: "连接中", mark: "◐", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
+  connected: { label: "已连接", mark: "✅", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  failed: { label: "连接失败", mark: "✗", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  needs_auth: { label: "待授权", mark: "🔑", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  disconnected: { label: "未连接", mark: "⚠️", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
+  connecting: { label: "连接中", mark: "◐", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
 };
 
 /* 连接中 ◐ 旋转动画（scoped：stmmcp 前缀避免污染其他原型） */
@@ -484,7 +484,7 @@ function ActionButton({
         padding: `${space.xs}px ${space.md}px`,
         borderRadius: radius.md,
         border: `1px solid ${neutral[200]}`,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         color: danger ? "#DC2626" : neutral[600],
         fontSize: fontSize.sm,
         cursor: "pointer",
@@ -519,7 +519,7 @@ function SkillItemRow({
         gap: space.lg,
         padding: `${space.lg}px ${space.xl}px`,
         borderRadius: radius.lg,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         border: `1px solid ${neutral[200]}`,
         boxShadow: shadow.sm,
         ...baseFont,
@@ -664,7 +664,7 @@ function ToolSubTabs({
               padding: `${space.xs + 1}px ${space.md}px`,
               borderRadius: radius.md,
               border: "none",
-              backgroundColor: isActive ? "#FFFFFF" : "transparent",
+              backgroundColor: isActive ? "var(--color-surface)" : "transparent",
               boxShadow: isActive ? shadow.sm : "none",
               cursor: "pointer",
               fontFamily: fontFamily.body,
@@ -725,7 +725,7 @@ function BuiltinToolRow({
         gap: space.lg,
         padding: `${space.lg}px ${space.xl}px`,
         borderRadius: radius.lg,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         border: `1px solid ${neutral[200]}`,
         boxShadow: shadow.sm,
         ...baseFont,
@@ -846,7 +846,7 @@ function CustomToolRow({
         gap: space.lg,
         padding: `${space.lg}px ${space.xl}px`,
         borderRadius: radius.lg,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         border: `1px solid ${neutral[200]}`,
         boxShadow: shadow.sm,
         ...baseFont,
@@ -1046,7 +1046,7 @@ function McpToolRow({
         gap: space.lg,
         padding: `${space.lg}px ${space.xl}px`,
         borderRadius: radius.lg,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         border: `1px solid ${neutral[200]}`,
         boxShadow: shadow.sm,
         ...baseFont,
@@ -1247,7 +1247,7 @@ function McpServerRow({
 
       {/* 来源徽章：内置=seed 预置（蓝系，只读）/ 自定义=用户注册（紫系） */}
       <PillBadge
-        theme={builtin ? sourceColors.内置 : { color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" }}
+        theme={builtin ? sourceColors.内置 : { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" }}
         label={builtin ? "内置" : "自定义"}
         testid={builtin ? "mcp-server-builtin-badge" : "mcp-server-custom-badge"}
         status={builtin ? "内置" : "自定义"}
@@ -1344,7 +1344,7 @@ function McpServerSection({
         gap: space.sm,
         padding: `${space.md}px ${space.md}px ${space.lg}px`,
         borderRadius: radius.md,
-        backgroundColor: "#F8FAFC",
+        backgroundColor: "var(--color-neutral-50)",
         border: `1px dashed ${neutral[200]}`,
         ...baseFont,
       }}
@@ -1357,7 +1357,7 @@ function McpServerSection({
           style={{
             fontSize: fontSize.xs,
             color: neutral[400],
-            backgroundColor: "#E2E8F0",
+            backgroundColor: "var(--color-neutral-200)",
             padding: "0 7px",
             borderRadius: radius.pill,
             lineHeight: "16px",
@@ -1381,7 +1381,7 @@ function McpServerSection({
               padding: `${space.xs}px ${space.md}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[700],
               fontSize: fontSize.sm,
               cursor: "pointer",
@@ -1473,7 +1473,7 @@ const mcpRowAddBtnStyle: CSSProperties = {
   padding: `${space.xs}px ${space.md}px`,
   borderRadius: radius.md,
   border: `1px dashed ${neutral[300]}`,
-  backgroundColor: "#FFFFFF",
+  backgroundColor: "var(--color-surface)",
   color: neutral[600],
   fontSize: fontSize.xs,
   cursor: "pointer",
@@ -1485,7 +1485,7 @@ const mcpRowRemoveBtnStyle: CSSProperties = {
   flexShrink: 0,
   borderRadius: radius.md,
   border: `1px solid ${neutral[200]}`,
-  backgroundColor: "#FEF2F2",
+  backgroundColor: "rgba(239,68,68,0.10)",
   color: "#DC2626",
   fontSize: fontSize.md,
   lineHeight: 1,
@@ -1697,7 +1697,7 @@ function McpServerModal({
           gap: space.lg,
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
           fontFamily: fontFamily.body,
@@ -1739,7 +1739,7 @@ function McpServerModal({
                     padding: `${space.sm}px ${space.md}px`,
                     borderRadius: radius.md,
                     border: type === t ? `1px solid #2563EB` : `1px solid ${neutral[200]}`,
-                    backgroundColor: type === t ? "#EFF6FF" : "#FFFFFF",
+                    backgroundColor: type === t ? "rgba(37,99,235,0.10)" : "var(--color-surface)",
                     color: type === t ? "#1E40AF" : neutral[600],
                     fontSize: fontSize.sm,
                     fontWeight: type === t ? 600 : 500,
@@ -1989,8 +1989,8 @@ function McpServerModal({
             style={{
               padding: `${space.sm}px ${space.md}px`,
               borderRadius: radius.md,
-              backgroundColor: "#FEF2F2",
-              border: "1px solid #FECACA",
+              backgroundColor: "rgba(239,68,68,0.10)",
+              border: "1px solid rgba(239,68,68,0.22)",
               color: "#DC2626",
               fontSize: fontSize.sm,
               lineHeight: 1.6,
@@ -2010,7 +2010,7 @@ function McpServerModal({
               padding: `${space.sm}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               cursor: submitting ? "default" : "pointer",
@@ -2133,7 +2133,7 @@ function ToolDetailModal({
           gap: space.lg,
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
           fontFamily: fontFamily.body,
@@ -2276,7 +2276,7 @@ function ToolDetailModal({
               padding: `${space.sm}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               cursor: "pointer",
@@ -2388,7 +2388,7 @@ function ToolEditModal({
           gap: space.lg,
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
           fontFamily: fontFamily.body,
@@ -2474,8 +2474,8 @@ function ToolEditModal({
             style={{
               padding: `${space.sm}px ${space.md}px`,
               borderRadius: radius.md,
-              backgroundColor: "#FEF2F2",
-              border: "1px solid #FECACA",
+              backgroundColor: "rgba(239,68,68,0.10)",
+              border: "1px solid rgba(239,68,68,0.22)",
               color: "#DC2626",
               fontSize: fontSize.sm,
               lineHeight: 1.6,
@@ -2495,7 +2495,7 @@ function ToolEditModal({
               padding: `${space.sm}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               cursor: submitting ? "default" : "pointer",
@@ -2544,7 +2544,7 @@ const modalInputStyle: CSSProperties = {
   padding: `${space.sm}px ${space.md}px`,
   borderRadius: radius.md,
   border: `1px solid ${neutral[200]}`,
-  backgroundColor: "#FFFFFF",
+  backgroundColor: "var(--color-surface)",
   color: neutral[800],
   fontSize: fontSize.md,
   fontFamily: fontFamily.body,
@@ -3055,9 +3055,9 @@ export default function SkillToolManagePage() {
               padding: `${space.sm + 2}px ${space.md}px`,
               borderRadius: radius.md,
               backgroundColor:
-                notice.kind === "success" ? "#ECFDF5" : notice.kind === "error" ? "#FEF2F2" : "#EFF6FF",
+                notice.kind === "success" ? "rgba(16,185,129,0.10)" : notice.kind === "error" ? "rgba(239,68,68,0.10)" : "rgba(37,99,235,0.10)",
               border:
-                notice.kind === "success" ? "1px solid #A7F3D0" : notice.kind === "error" ? "1px solid #FECACA" : "1px solid #BFDBFE",
+                notice.kind === "success" ? "1px solid rgba(16,185,129,0.28)" : notice.kind === "error" ? "1px solid rgba(239,68,68,0.22)" : "1px solid rgba(37,99,235,0.22)",
               color:
                 notice.kind === "success" ? "#065F46" : notice.kind === "error" ? "#DC2626" : "#1E40AF",
               fontSize: fontSize.sm,
@@ -3112,7 +3112,7 @@ export default function SkillToolManagePage() {
                     padding: `${space.sm + 1}px ${space.lg}px`,
                     borderRadius: radius.md,
                     border: "none",
-                    backgroundColor: active ? "#FFFFFF" : "transparent",
+                    backgroundColor: active ? "var(--color-surface)" : "transparent",
                     boxShadow: active ? shadow.sm : "none",
                     cursor: "pointer",
                     fontFamily: fontFamily.body,
@@ -3130,7 +3130,7 @@ export default function SkillToolManagePage() {
                     style={{
                       fontSize: fontSize.xs,
                       color: active ? "#2563EB" : neutral[400],
-                      backgroundColor: active ? "#EFF6FF" : neutral[100],
+                      backgroundColor: active ? "rgba(37,99,235,0.10)" : neutral[100],
                       padding: "0 7px",
                       borderRadius: radius.pill,
                       lineHeight: "16px",
@@ -3185,7 +3185,7 @@ export default function SkillToolManagePage() {
                     padding: `${space.sm + 1}px ${space.lg}px`,
                     borderRadius: radius.pill,
                     border: `1px solid ${neutral[200]}`,
-                    backgroundColor: "#FFFFFF",
+                    backgroundColor: "var(--color-surface)",
                     color: neutral[700],
                     fontSize: fontSize.md,
                     cursor: "pointer",
@@ -3246,7 +3246,7 @@ export default function SkillToolManagePage() {
             gap: space.sm,
             padding: space.md,
             borderRadius: radius.lg,
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
             border: `1px solid ${neutral[200]}`,
             boxShadow: shadow.md,
           }}
@@ -3305,7 +3305,7 @@ export default function SkillToolManagePage() {
                     padding: `${space.sm}px ${space.lg}px`,
                     borderRadius: radius.md,
                     border: `1px solid ${neutral[200]}`,
-                    backgroundColor: "#FFFFFF",
+                    backgroundColor: "var(--color-surface)",
                     color: neutral[600],
                     fontSize: fontSize.md,
                     fontWeight: 500,
@@ -3402,7 +3402,7 @@ export default function SkillToolManagePage() {
                       padding: `${space.sm}px ${space.lg}px`,
                       borderRadius: radius.md,
                       border: `1px solid ${neutral[200]}`,
-                      backgroundColor: "#FFFFFF",
+                      backgroundColor: "var(--color-surface)",
                       color: neutral[600],
                       fontSize: fontSize.md,
                       fontWeight: 500,
@@ -3530,7 +3530,7 @@ export default function SkillToolManagePage() {
                             padding: `${space.xs}px ${space.sm}px`,
                             borderRadius: radius.md,
                             border: `1px solid ${neutral[200]}`,
-                            backgroundColor: "#FFFFFF",
+                            backgroundColor: "var(--color-surface)",
                             color: neutral[600],
                             fontSize: fontSize.sm,
                             cursor: "pointer",
@@ -3575,7 +3575,7 @@ export default function SkillToolManagePage() {
                               padding: `${space.sm}px ${space.lg}px`,
                               borderRadius: radius.md,
                               border: `1px solid ${neutral[200]}`,
-                              backgroundColor: "#FFFFFF",
+                              backgroundColor: "var(--color-surface)",
                               color: neutral[600],
                               fontSize: fontSize.md,
                               fontWeight: 500,
@@ -3684,7 +3684,7 @@ export default function SkillToolManagePage() {
               gap: space.lg,
               padding: `${space.xl}px`,
               borderRadius: radius.lg,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[200]}`,
               boxShadow: shadow.lg,
               fontFamily: fontFamily.body,
@@ -3739,8 +3739,8 @@ export default function SkillToolManagePage() {
                 style={{
                   padding: `${space.sm}px ${space.md}px`,
                   borderRadius: radius.md,
-                  backgroundColor: "#FEF2F2",
-                  border: "1px solid #FECACA",
+                  backgroundColor: "rgba(239,68,68,0.10)",
+                  border: "1px solid rgba(239,68,68,0.22)",
                   color: "#DC2626",
                   fontSize: fontSize.sm,
                   lineHeight: 1.6,
@@ -3761,7 +3761,7 @@ export default function SkillToolManagePage() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.md,
                   border: `1px solid ${neutral[200]}`,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   color: neutral[600],
                   fontSize: fontSize.md,
                   cursor: editMutation.isPending ? "default" : "pointer",
@@ -3829,7 +3829,7 @@ export default function SkillToolManagePage() {
               gap: space.lg,
               padding: `${space.xl}px`,
               borderRadius: radius.lg,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[200]}`,
               boxShadow: shadow.lg,
               fontFamily: fontFamily.body,
@@ -3927,8 +3927,8 @@ export default function SkillToolManagePage() {
                 style={{
                   padding: `${space.sm}px ${space.md}px`,
                   borderRadius: radius.md,
-                  backgroundColor: "#FEF2F2",
-                  border: "1px solid #FECACA",
+                  backgroundColor: "rgba(239,68,68,0.10)",
+                  border: "1px solid rgba(239,68,68,0.22)",
                   color: "#DC2626",
                   fontSize: fontSize.sm,
                   lineHeight: 1.6,
@@ -3949,7 +3949,7 @@ export default function SkillToolManagePage() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.md,
                   border: `1px solid ${neutral[200]}`,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   color: neutral[600],
                   fontSize: fontSize.md,
                   cursor: createSkillMutation.isPending ? "default" : "pointer",

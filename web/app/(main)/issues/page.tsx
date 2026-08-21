@@ -46,20 +46,20 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /** Issue 状态五色：open=灰蓝 / in_progress=蓝 / resolved=绿 / closed=灰 / rejected=红（独立于任务态语义）。 */
 const ISSUE_STATUS_THEME: Record<IssueStatus, { label: string; color: string; bg: string; border: string }> = {
-  open: { label: "待处理", color: "#475569", bg: "#F8FAFC", border: "#CBD5E1" },
-  in_progress: { label: "进行中", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  resolved: { label: "已解决", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  closed: { label: "已关闭", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
-  rejected: { label: "已拒绝", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
+  open: { label: "待处理", color: "var(--color-neutral-600)", bg: "var(--color-neutral-50)", border: "var(--color-neutral-300)" },
+  in_progress: { label: "进行中", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  resolved: { label: "已解决", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  closed: { label: "已关闭", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
+  rejected: { label: "已拒绝", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 };
 
 /** tags 标签徽章多彩循环色板（需求/缺陷/优化 等自由标签按 index 循环取色）。 */
 const TAG_THEMES: { color: string; bg: string; border: string }[] = [
-  { color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  { color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
-  { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  { color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  { color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
+  { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
+  { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  { color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
   { color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4" },
 ];
 
@@ -253,7 +253,7 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
           gap: space.md,
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
         }}
@@ -283,7 +283,7 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
               padding: `${space.md}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
               outline: "none",
@@ -307,7 +307,7 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
               padding: `${space.md}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
               outline: "none",
@@ -332,7 +332,7 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
               padding: `${space.md}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
               outline: "none",
@@ -353,7 +353,7 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
               padding: `${space.md}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
               outline: "none",
@@ -387,7 +387,7 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               cursor: submitting ? "default" : "pointer",
@@ -453,17 +453,17 @@ function IssueRow({ issue, agents, onEdit, onDelete, onOpenDetail }: IssueRowPro
         gap: space.lg,
         padding: `${space.lg}px ${space.xl}px`,
         borderRadius: radius.lg,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         border: `1px solid ${neutral[200]}`,
         boxShadow: shadow.sm,
         transition: "border-color .15s ease, background-color .15s ease",
         ...baseFont,
       }}
       onMouseEnter={(e) => {
-        (e.currentTarget as HTMLDivElement).style.backgroundColor = "#F8FAFC";
+        (e.currentTarget as HTMLDivElement).style.backgroundColor = "var(--color-neutral-50)";
       }}
       onMouseLeave={(e) => {
-        (e.currentTarget as HTMLDivElement).style.backgroundColor = "#FFFFFF";
+        (e.currentTarget as HTMLDivElement).style.backgroundColor = "var(--color-surface)";
       }}
     >
       {/* 主列：标题 + 状态徽章 + 标签徽章 + 元信息（点击弹详情，is_0000000012） */}
@@ -580,7 +580,7 @@ function IssueRow({ issue, agents, onEdit, onDelete, onOpenDetail }: IssueRowPro
               padding: `${space.xs + 1}px ${space.md}px`,
               borderRadius: radius.pill,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.sm,
               fontWeight: 500,
@@ -601,8 +601,8 @@ function IssueRow({ issue, agents, onEdit, onDelete, onOpenDetail }: IssueRowPro
               gap: space.xs,
               padding: `${space.xs + 1}px ${space.md}px`,
               borderRadius: radius.pill,
-              border: `1px solid #FECACA`,
-              backgroundColor: "#FFFFFF",
+              border: `1px solid rgba(239,68,68,0.22)`,
+              backgroundColor: "var(--color-surface)",
               color: "#DC2626",
               fontSize: fontSize.sm,
               fontWeight: 500,
@@ -812,7 +812,7 @@ export default function IssuesPage() {
                 gap: space.sm,
                 padding: `${space.sm}px ${space.md}px`,
                 borderRadius: radius.md,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 border: `1px solid ${neutral[200]}`,
                 boxShadow: shadow.sm,
               }}
@@ -850,7 +850,7 @@ export default function IssuesPage() {
                 gap: space.sm,
                 padding: `${space.sm}px ${space.md}px`,
                 borderRadius: radius.md,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 border: `1px solid ${neutral[200]}`,
                 boxShadow: shadow.sm,
               }}
@@ -924,7 +924,7 @@ export default function IssuesPage() {
                 padding: `${space.xxl}px`,
                 textAlign: "center",
                 borderRadius: radius.lg,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 border: `1px solid ${neutral[200]}`,
                 boxShadow: shadow.md,
               }}
@@ -966,7 +966,7 @@ export default function IssuesPage() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.md,
                   border: `1px solid ${neutral[200]}`,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   color: neutral[600],
                   fontSize: fontSize.md,
                   fontWeight: 500,
@@ -987,7 +987,7 @@ export default function IssuesPage() {
                 gap: space.sm,
                 padding: space.md,
                 borderRadius: radius.lg,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 border: `1px solid ${neutral[200]}`,
                 boxShadow: shadow.md,
               }}

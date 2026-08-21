@@ -62,9 +62,9 @@ const ARTIFACT_TYPE_THEME: Record<
   ArtifactApiType,
   { color: string; bg: string; border: string }
 > = {
-  text: { color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
-  doc: { color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  file: { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
+  text: { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
+  doc: { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  file: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
 };
 
 /** 类型中文名（三筛标签 / 类型徽章文案）。 */
@@ -76,8 +76,8 @@ const ARTIFACT_TYPE_LABEL: Record<ArtifactApiType, string> = {
 
 /** 验收状态二色：已验收=绿 / 未验收=灰（对齐 statusColors 已完成/已归档语义）。 */
 const ACCEPTED_THEME = {
-  accepted: { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  rejected: { color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+  accepted: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  rejected: { color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
 } as const;
 
 /** 类型筛选项（key 对齐 API type 参数，all=不传）。 */
@@ -395,8 +395,8 @@ function ArtifactFileView({ version }: { version: ArtifactVersionDto }) {
               alignItems: "center",
               padding: `1px ${space.sm}px`,
               borderRadius: radius.sm,
-              backgroundColor: "#EFF6FF",
-              border: "1px solid #BFDBFE",
+              backgroundColor: "rgba(37,99,235,0.10)",
+              border: "1px solid rgba(37,99,235,0.22)",
               color: "#2563EB",
               fontSize: fontSize.xs,
               fontWeight: 500,
@@ -496,7 +496,7 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
       style={{
         display: "flex",
         flexDirection: "column",
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         border: `1px solid ${neutral[200]}`,
         borderRadius: radius.lg,
         boxShadow: shadow.sm,
@@ -541,7 +541,7 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
               display: "inline-flex",
               alignItems: "center",
               gap: space.xs,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[200]}`,
               borderRadius: radius.pill,
               padding: `${space.xs}px ${space.sm}px`,
@@ -592,7 +592,7 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
               height: 24,
               borderRadius: radius.sm,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[500],
               fontSize: fontSize.md,
               lineHeight: 1,
@@ -679,7 +679,7 @@ function ArtifactRow({ item, expanded, onToggle }: ArtifactRowProps) {
       style={{
         display: "flex",
         flexDirection: "column",
-        backgroundColor: expanded ? "#FFFFFF" : neutral[50],
+        backgroundColor: expanded ? "var(--color-surface)" : neutral[50],
         border: `1px solid ${expanded ? roleText.product : neutral[200]}`,
         borderRadius: radius.md,
         boxShadow: expanded ? shadow.sm : "none",
@@ -891,7 +891,7 @@ export default function ArtifactsPage() {
             padding: `${space.sm}px ${space.lg}px`,
             borderRadius: radius.pill,
             border: `1px solid ${taskKey === "all" ? neutral[200] : "#2563EB"}`,
-            backgroundColor: taskKey === "all" ? "#F8FAFC" : "#2563EB",
+            backgroundColor: taskKey === "all" ? "var(--color-neutral-50)" : "#2563EB",
             color: taskKey === "all" ? neutral[400] : "#FFFFFF",
             fontSize: fontSize.md,
             fontWeight: 500,
@@ -926,7 +926,7 @@ export default function ArtifactsPage() {
             padding: `${space.sm}px ${space.lg}px`,
             borderRadius: radius.md,
             border: `1px solid ${neutral[200]}`,
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
             color: neutral[700],
             fontSize: fontSize.md,
             fontFamily: fontFamily.body,
@@ -958,7 +958,7 @@ export default function ArtifactsPage() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.pill,
                   border: `1px solid ${isActive ? "#2563EB" : neutral[200]}`,
-                  backgroundColor: isActive ? "#2563EB" : "#FFFFFF",
+                  backgroundColor: isActive ? "#2563EB" : "var(--color-surface)",
                   color: isActive ? "#FFFFFF" : neutral[600],
                   fontSize: fontSize.md,
                   fontWeight: isActive ? 600 : 400,
@@ -989,7 +989,7 @@ export default function ArtifactsPage() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.pill,
                   border: `1px solid ${isActive ? "#2563EB" : neutral[200]}`,
-                  backgroundColor: isActive ? "#2563EB" : "#FFFFFF",
+                  backgroundColor: isActive ? "#2563EB" : "var(--color-surface)",
                   color: isActive ? "#FFFFFF" : neutral[600],
                   fontSize: fontSize.md,
                   fontWeight: isActive ? 600 : 400,
@@ -1045,7 +1045,7 @@ export default function ArtifactsPage() {
                 padding: `${space.sm}px ${space.lg}px`,
                 borderRadius: radius.md,
                 border: `1px solid ${neutral[200]}`,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 color: neutral[600],
                 fontSize: fontSize.md,
                 fontWeight: 500,

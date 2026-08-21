@@ -41,8 +41,8 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /** 凭据状态「已配置 / 未配置」语义独立于任务四态，遵循"扩展 token"范式页面内定义。 */
 const credentialTheme = {
-  configured: { label: "已配置", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  missing: { label: "未配置", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+  configured: { label: "已配置", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  missing: { label: "未配置", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
 } as const;
 
 /** 启用状态徽章主色（与导航高亮蓝同族） */
@@ -51,7 +51,7 @@ const activeBlue = "#2563EB";
 /** 行 hover / 过渡（scoped：mmrow 前缀避免污染） */
 const rowCss = `
 .mm-model-row { transition: border-color .15s ease, background-color .15s ease; }
-.mm-model-row:hover { background-color: #F8FAFC; }
+.mm-model-row:hover { background-color: var(--color-neutral-50); }
 `;
 
 type CredentialStatus = "configured" | "missing";
@@ -100,8 +100,8 @@ function CredentialBadge({ status }: { status: CredentialStatus }) {
 /** 启用状态只读徽章：已启用=蓝 / 已停用=灰（替代原 model-toggle 写操作开关）。 */
 function EnabledBadge({ enabled }: { enabled: boolean }) {
   const theme = enabled
-    ? { label: "已启用", color: activeBlue, bg: "#EFF6FF", border: "#BFDBFE" }
-    : { label: "已停用", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" };
+    ? { label: "已启用", color: activeBlue, bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" }
+    : { label: "已停用", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" };
   return (
     <span
       data-testid="model-enabled-badge"
@@ -162,7 +162,7 @@ function ModelRow({
         gap: space.lg,
         padding: `${space.lg}px ${space.xl}px`,
         borderRadius: radius.lg,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         border: `1px solid ${neutral[200]}`,
         boxShadow: shadow.sm,
         ...baseFont,
@@ -490,7 +490,7 @@ export default function ModelsPage() {
                       padding: `${space.sm + 1}px ${space.lg}px`,
                       borderRadius: radius.md,
                       border: "none",
-                      backgroundColor: active ? "#FFFFFF" : "transparent",
+                      backgroundColor: active ? "var(--color-surface)" : "transparent",
                       boxShadow: active ? shadow.sm : "none",
                       cursor: "pointer",
                       fontFamily: fontFamily.body,
@@ -520,7 +520,7 @@ export default function ModelsPage() {
                   maxWidth: 320,
                   padding: `${space.sm}px ${space.md}px`,
                   borderRadius: radius.md,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   border: `1px solid ${neutral[200]}`,
                   boxShadow: shadow.sm,
                   marginLeft: "auto",
@@ -584,7 +584,7 @@ export default function ModelsPage() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.md,
                   border: `1px solid ${neutral[200]}`,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   color: neutral[600],
                   fontSize: fontSize.md,
                   fontWeight: 500,
@@ -605,7 +605,7 @@ export default function ModelsPage() {
                 gap: space.sm,
                 padding: space.md,
                 borderRadius: radius.lg,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 border: `1px solid ${neutral[200]}`,
                 boxShadow: shadow.md,
               }}
@@ -643,8 +643,8 @@ export default function ModelsPage() {
                     style={{
                       fontSize: fontSize.xs,
                       color: activeBlue,
-                      backgroundColor: "#EFF6FF",
-                      border: `1px solid #BFDBFE`,
+                      backgroundColor: "rgba(37,99,235,0.10)",
+                      border: `1px solid rgba(37,99,235,0.22)`,
                       borderRadius: radius.pill,
                       padding: "1px 8px",
                       marginLeft: "auto",

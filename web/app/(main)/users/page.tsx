@@ -47,20 +47,20 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
  * 与 Agent 角色色，遵循"扩展 token"范式在页面内定义具名常量并注释原因，不扩散共享层。
  */
 const roleTheme = {
-  管理员: { color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE", mark: "◈" },
-  成员: { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0", mark: "●" },
+  管理员: { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)", mark: "◈" },
+  成员: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)", mark: "●" },
 } as const;
 
 const statusTheme = {
-  启用: { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0", mark: "✅" },
-  禁用: { color: "#DC2626", bg: "#FEF2F2", border: "#FECACA", mark: "⛔" },
+  启用: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)", mark: "✅" },
+  禁用: { color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)", mark: "⛔" },
 } as const;
 
-/** 自定义角色兜底主题（GET /roles 除 admin/member 外的角色）：灰蓝 #475569 系，仿 statusColors 已归档 */
+/** 自定义角色兜底主题（GET /roles 除 admin/member 外的角色）：灰蓝 var(--color-neutral-600) 系，仿 statusColors 已归档 */
 const ROLE_FALLBACK = {
-  color: "#475569",
-  bg: "#F8FAFC",
-  border: "#CBD5E1",
+  color: "var(--color-neutral-600)",
+  bg: "var(--color-neutral-50)",
+  border: "var(--color-neutral-300)",
   mark: "◈",
 } as const;
 
@@ -219,7 +219,7 @@ function UserRow({
         gap: space.md,
         padding: `${space.md}px ${space.lg}px`,
         borderBottom: `1px solid ${neutral[100]}`,
-        backgroundColor: enabled ? "#FFFFFF" : neutral[50],
+        backgroundColor: enabled ? "var(--color-surface)" : neutral[50],
         ...baseFont,
       }}
     >
@@ -280,7 +280,7 @@ function UserRow({
             padding: `${space.sm - 1}px ${space.md}px`,
             borderRadius: radius.md,
             border: `1px solid ${neutral[200]}`,
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
             color: neutral[700],
             fontSize: fontSize.md,
             cursor: "pointer",
@@ -297,8 +297,8 @@ function UserRow({
           style={{
             padding: `${space.sm - 1}px ${space.md}px`,
             borderRadius: radius.md,
-            border: `1px solid ${enabled ? "#FECACA" : neutral[200]}`,
-            backgroundColor: enabled ? statusTheme["禁用"].bg : "#FFFFFF",
+            border: `1px solid ${enabled ? "rgba(239,68,68,0.22)" : neutral[200]}`,
+            backgroundColor: enabled ? statusTheme["禁用"].bg : "var(--color-surface)",
             color: enabled ? statusTheme["禁用"].color : neutral[600],
             fontSize: fontSize.md,
             cursor: "pointer",
@@ -338,7 +338,7 @@ const formField: CSSProperties = {
   padding: `${space.sm}px ${space.md}px`,
   borderRadius: radius.md,
   border: `1px solid ${neutral[200]}`,
-  backgroundColor: "#FFFFFF",
+  backgroundColor: "var(--color-surface)",
   fontSize: fontSize.md,
   color: neutral[800],
   outline: "none",
@@ -440,7 +440,7 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
           gap: space.md,
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
         }}
@@ -549,7 +549,7 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
                       padding: `${space.sm}px ${space.md}px`,
                       borderRadius: radius.md,
                       border: `1px solid ${active ? theme.border : neutral[200]}`,
-                      backgroundColor: active ? theme.bg : "#FFFFFF",
+                      backgroundColor: active ? theme.bg : "var(--color-surface)",
                       color: active ? theme.color : neutral[600],
                       fontSize: fontSize.md,
                       fontWeight: active ? 600 : 500,
@@ -592,7 +592,7 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               cursor: submitting ? "default" : "pointer",
@@ -710,7 +710,7 @@ function ResetPasswordModal({ open, target, submitting, error, onClose, onSubmit
           gap: space.md,
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
         }}
@@ -782,7 +782,7 @@ function ResetPasswordModal({ open, target, submitting, error, onClose, onSubmit
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               cursor: submitting ? "default" : "pointer",
@@ -911,7 +911,7 @@ function EditUserModal({ open, target, roles, submitting, error, onClose, onSubm
           gap: space.md,
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
         }}
@@ -1002,7 +1002,7 @@ function EditUserModal({ open, target, roles, submitting, error, onClose, onSubm
                       padding: `${space.sm}px ${space.md}px`,
                       borderRadius: radius.md,
                       border: `1px solid ${active ? theme.border : neutral[200]}`,
-                      backgroundColor: active ? theme.bg : "#FFFFFF",
+                      backgroundColor: active ? theme.bg : "var(--color-surface)",
                       color: active ? theme.color : neutral[600],
                       fontSize: fontSize.md,
                       fontWeight: active ? 600 : 500,
@@ -1042,7 +1042,7 @@ function EditUserModal({ open, target, roles, submitting, error, onClose, onSubm
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               cursor: submitting ? "default" : "pointer",
@@ -1191,7 +1191,7 @@ export default function UsersPage() {
 
   /* 统计条（对齐原型 4 卡；管理员/成员按角色名分组，已禁用按 enabled=false） */
   const stats = [
-    { label: "总用户", value: data?.total ?? items.length, theme: { color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" } },
+    { label: "总用户", value: data?.total ?? items.length, theme: { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" } },
     { label: "管理员", value: items.filter((u) => resolveRoleLabel(u.roleId, roles) === "管理员").length, theme: roleTheme["管理员"] },
     { label: "成员", value: items.filter((u) => resolveRoleLabel(u.roleId, roles) === "成员").length, theme: roleTheme["成员"] },
     { label: "已禁用", value: items.filter((u) => !u.enabled).length, theme: statusTheme["禁用"] },
@@ -1232,7 +1232,7 @@ export default function UsersPage() {
               gap: space.md,
               padding: `${space.lg}px ${space.xl}px`,
               borderRadius: radius.lg,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[200]}`,
               boxShadow: shadow.sm,
             }}
@@ -1283,7 +1283,7 @@ export default function UsersPage() {
             maxWidth: 320,
             padding: `${space.sm}px ${space.md}px`,
             borderRadius: radius.md,
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
             border: `1px solid ${neutral[200]}`,
             boxShadow: shadow.sm,
             marginLeft: "auto",
@@ -1373,7 +1373,7 @@ export default function UsersPage() {
             padding: `${space.xxl}px`,
             textAlign: "center",
             borderRadius: radius.lg,
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
             border: `1px solid ${neutral[200]}`,
           }}
         >
@@ -1388,7 +1388,7 @@ export default function UsersPage() {
               padding: `${space.sm}px ${space.lg}px`,
               borderRadius: radius.md,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               fontWeight: 500,
@@ -1416,7 +1416,7 @@ export default function UsersPage() {
         <div
           style={{
             borderRadius: radius.lg,
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
             border: `1px solid ${neutral[200]}`,
             boxShadow: shadow.sm,
             overflow: "hidden",
@@ -1464,7 +1464,7 @@ export default function UsersPage() {
           marginTop: space.xl,
           padding: `${space.md}px ${space.lg}px`,
           borderRadius: radius.md,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px dashed ${neutral[200]}`,
           fontSize: fontSize.sm,
           color: neutral[400],

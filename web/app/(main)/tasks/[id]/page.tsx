@@ -195,11 +195,11 @@ interface PlanWithTasks {
 
 /** 计划状态 → 视觉主题（徽章色）。 */
 const PLAN_STATUS_THEME: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  reviewing: { label: "待评审", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  approved: { label: "已通过", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  rejected: { label: "已驳回", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
-  executing: { label: "执行中", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  completed: { label: "已完成", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+  reviewing: { label: "待评审", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  approved: { label: "已通过", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  rejected: { label: "已驳回", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  executing: { label: "执行中", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  completed: { label: "已完成", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
 };
 
 /** 计划子任务状态 → 中文标签。 */
@@ -222,11 +222,11 @@ const ISSUE_STATUS_ORDER: Record<TaskIssueItem["status"], number> = {
 
 /** issue 状态徽章主题（语义对齐 issues 页 ISSUE_STATUS_THEME，面板内小号渲染）。 */
 const ISSUE_STATUS_BADGE: Record<TaskIssueItem["status"], { label: string; color: string; bg: string; border: string }> = {
-  open: { label: "待处理", color: "#475569", bg: "#F8FAFC", border: "#CBD5E1" },
-  in_progress: { label: "进行中", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  resolved: { label: "已解决", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  closed: { label: "已关闭", color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
-  rejected: { label: "已拒绝", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
+  open: { label: "待处理", color: "var(--color-neutral-600)", bg: "var(--color-neutral-50)", border: "var(--color-neutral-300)" },
+  in_progress: { label: "进行中", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  resolved: { label: "已解决", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  closed: { label: "已关闭", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
+  rejected: { label: "已拒绝", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 };
 
 /** 待办 Issue 区状态小徽章（title 旁展示状态语义）。 */
@@ -376,18 +376,25 @@ function docIdFor(title: string, artifactId: string, all?: { id: string; title: 
   const toBase = (t: string, id: string): string => {
     const slug = toDocSlug(t);
     if (slug !== "doc") return slug;
-    const suffix = String(id).replace(/[^a-z0-9]/gi, "").slice(0, 8);
+    const suffix = String(id).replace(/[^a-z0-9]/gi, "").slice(-8);
     return suffix ? `doc-${suffix}` : "doc";
   };
   const base = toBase(title, artifactId);
   if (!all || all.length <= 1) return base;
-  // 复刻 server buildRegistry：按 artifact id 升序迭代，base 被占则追加后缀
   const seen = new Set<string>();
   const ordered = [...all].sort((a, b) => a.id.localeCompare(b.id));
   for (const a of ordered) {
     const b = toBase(a.title, a.id);
     if (a.id === artifactId) {
-      return seen.has(b) ? `${b}-${String(artifactId).replace(/[^a-z0-9]/gi, "").slice(0, 8)}` : b;
+      if (!seen.has(b)) return b;
+      const suffix = String(artifactId).replace(/[^a-z0-9]/gi, "").slice(-8);
+      let cand = suffix ? `${b}-${suffix}` : b;
+      let cnt = 1;
+      while (seen.has(cand)) {
+        cnt += 1;
+        cand = `${b}-${suffix}-${cnt}`;
+      }
+      return cand;
     }
     seen.add(b);
   }
@@ -459,9 +466,9 @@ function WaitingBadge() {
         gap: space.xs,
         padding: `${space.xs}px ${space.sm + 2}px`,
         borderRadius: radius.pill,
-        backgroundColor: "#F8FAFC",
-        border: "1px solid #CBD5E1",
-        color: "#475569",
+        backgroundColor: "var(--color-neutral-50)",
+        border: "1px solid var(--color-neutral-300)",
+        color: "var(--color-neutral-600)",
         fontSize: fontSize.sm,
         fontWeight: 500,
         lineHeight: 1.4,
@@ -475,7 +482,7 @@ function WaitingBadge() {
           width: 7,
           height: 7,
           borderRadius: "50%",
-          backgroundColor: "#475569",
+          backgroundColor: "var(--color-neutral-600)",
           flexShrink: 0,
         }}
       />
@@ -703,7 +710,7 @@ function MembersPanel({
                         width: 10,
                         height: 10,
                         borderRadius: "50%",
-                        border: "2px solid #BFDBFE",
+                        border: "2px solid rgba(37,99,235,0.22)",
                         borderTopColor: "#2563EB",
                         marginRight: space.xs,
                         verticalAlign: "-2px",
@@ -750,7 +757,7 @@ function MembersPanel({
             padding: `${space.sm - 1}px ${space.md}px`,
             borderRadius: radius.md,
             border: `1.5px dashed ${teamEditable ? neutral[300] : neutral[200]}`,
-            backgroundColor: "rgba(255,255,255,.6)",
+            backgroundColor: "color-mix(in srgb, var(--color-surface) 70%, transparent)",
             color: teamEditable ? "#2563EB" : neutral[300],
             fontSize: fontSize.sm,
             fontWeight: 500,
@@ -773,7 +780,7 @@ function MembersPanel({
               gap: space.sm,
               padding: space.md,
               borderRadius: radius.md,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[200]}`,
               boxShadow: shadow.sm,
             }}
@@ -878,7 +885,7 @@ function MembersPanel({
                 padding: `${space.sm}px ${space.sm}px`,
                 borderRadius: radius.sm,
                 border: `1px solid ${neutral[200]}`,
-                backgroundColor: "#FFFFFF",
+                backgroundColor: "var(--color-surface)",
                 fontSize: fontSize.md,
                 color: neutral[800],
                 outline: "none",
@@ -902,7 +909,7 @@ function MembersPanel({
                   padding: `${space.sm - 1}px ${space.md}px`,
                   borderRadius: radius.md,
                   border: `1px solid ${neutral[200]}`,
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   color: neutral[600],
                   fontSize: fontSize.sm,
                   fontWeight: 500,
@@ -964,7 +971,7 @@ function ChatHeader({ title, statusLabel, agents }: { title: string; statusLabel
         alignItems: "center",
         gap: space.md,
         padding: `0 ${space.xl}px`,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         borderBottom: `1px solid ${neutral[200]}`,
         ...baseFont,
       }}
@@ -1024,7 +1031,7 @@ function ResizeHandle({
         transition: "background-color .15s ease",
       }}
       onMouseEnter={(e) => {
-        (e.currentTarget as HTMLDivElement).style.backgroundColor = "#BFDBFE";
+        (e.currentTarget as HTMLDivElement).style.backgroundColor = "rgba(37,99,235,0.22)";
       }}
       onMouseLeave={(e) => {
         (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent";
@@ -1099,7 +1106,7 @@ function MessageList({
               padding: `${space.sm}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.sm,
               fontWeight: 500,
@@ -1164,8 +1171,8 @@ function MessageList({
                     minWidth: 0,
                     padding: space.md,
                     borderRadius: radius.md,
-                    backgroundColor: "#FEF2F2",
-                    border: "1px solid #FECACA",
+                    backgroundColor: "rgba(239,68,68,0.10)",
+                    border: "1px solid rgba(239,68,68,0.22)",
                     boxShadow: shadow.sm,
                   }}
                 >
@@ -1304,7 +1311,7 @@ function MentionHint() {
         alignItems: "center",
         gap: space.sm,
         padding: `${space.xs + 1}px ${space.md}px`,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         ...baseFont,
       }}
     >
@@ -1446,7 +1453,7 @@ function TaskInfoEditModal({
     padding: `${space.md}px ${space.lg}px`,
     borderRadius: radius.md,
     border: `1px solid ${neutral[200]}`,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "var(--color-surface)",
     fontSize: fontSize.md,
     color: neutral[800],
     outline: "none",
@@ -1492,7 +1499,7 @@ function TaskInfoEditModal({
           gap: space.md,
           padding: `${space.xl}px`,
           borderRadius: radius.lg,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: "var(--color-surface)",
           border: `1px solid ${neutral[200]}`,
           boxShadow: shadow.lg,
         }}
@@ -1664,7 +1671,7 @@ function TaskInfoEditModal({
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               color: neutral[600],
               fontSize: fontSize.md,
               cursor: saveMutation.isPending ? "default" : "pointer",
@@ -1739,7 +1746,7 @@ function PlanSection({
       );
     }
     return (
-      <div role="alert" style={{ padding: `${space.sm + 2}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "#FEF2F2", border: "1px solid #FECACA", color: "#DC2626", fontSize: fontSize.sm }}>
+      <div role="alert" style={{ padding: `${space.sm + 2}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", color: "#DC2626", fontSize: fontSize.sm }}>
         加载计划失败：{isApiError(error) ? error.message : "未知错误"}
       </div>
     );
@@ -1798,7 +1805,7 @@ function PlanSection({
                   padding: `${space.sm}px ${space.md}px`, cursor: "pointer",
                   transition: "background-color .15s ease",
                 }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.backgroundColor = "#FFFFFF"; }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.backgroundColor = "var(--color-surface)"; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent"; }}
               >
                 <span style={{ fontSize: fontSize.xs, color: neutral[400], fontWeight: 600, flexShrink: 0 }}>
@@ -1838,7 +1845,7 @@ function PlanSection({
             display: "flex", alignItems: "center", justifyContent: "center", gap: space.xs,
             padding: `${space.sm - 1}px ${space.md}px`,
             borderRadius: radius.md, border: `1px solid ${neutral[200]}`,
-            backgroundColor: "#FFFFFF", color: neutral[600],
+            backgroundColor: "var(--color-surface)", color: neutral[600],
             fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer",
             fontFamily: fontFamily.body,
           }}
@@ -1886,7 +1893,7 @@ function ReviewDialog({
   const inputBase: CSSProperties = {
     width: "100%", boxSizing: "border-box",
     padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md,
-    border: `1px solid ${neutral[200]}`, backgroundColor: "#FFFFFF",
+    border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)",
     fontSize: fontSize.md, color: neutral[800], outline: "none",
     fontFamily: fontFamily.body,
   };
@@ -1894,7 +1901,7 @@ function ReviewDialog({
   return (
     <div data-testid="review-dialog-overlay" onClick={(e) => e.stopPropagation()} style={{ position: "absolute", inset: 0, zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "8%", ...baseFont }}>
       <div aria-hidden data-testid="review-dialog-mask" onClick={(e) => { e.stopPropagation(); onClose(); }} style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }} />
-      <div data-testid="review-dialog-modal" style={{ position: "relative", width: 440, maxWidth: "calc(100% - 48px)", display: "flex", flexDirection: "column", gap: space.md, padding: space.xl, borderRadius: radius.lg, backgroundColor: "#FFFFFF", border: `1px solid ${neutral[200]}`, boxShadow: shadow.lg }}>
+      <div data-testid="review-dialog-modal" style={{ position: "relative", width: 440, maxWidth: "calc(100% - 48px)", display: "flex", flexDirection: "column", gap: space.md, padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.lg }}>
         <div>
           <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900], lineHeight: 1.3 }}>评审执行计划</div>
           <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>通过后任务可按计划驱动执行</div>
@@ -1910,7 +1917,7 @@ function ReviewDialog({
               style={{
                 flex: 1, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md,
                 border: `1px solid ${verdict === v ? (v === "approved" ? "#059669" : "#DC2626") : neutral[200]}`,
-                backgroundColor: verdict === v ? (v === "approved" ? "#ECFDF5" : "#FEF2F2") : "#FFFFFF",
+                backgroundColor: verdict === v ? (v === "approved" ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)") : "var(--color-surface)",
                 color: verdict === v ? (v === "approved" ? "#059669" : "#DC2626") : neutral[600],
                 fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body,
               }}
@@ -1942,7 +1949,7 @@ function ReviewDialog({
         )}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm, marginTop: space.sm }}>
-          <button type="button" data-testid="review-cancel" onClick={onClose} disabled={submitting} style={{ padding: `${space.sm + 1}px ${space.lg}px`, borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, backgroundColor: "#FFFFFF", color: neutral[600], fontSize: fontSize.md, cursor: submitting ? "default" : "pointer", fontFamily: fontFamily.body }}>
+          <button type="button" data-testid="review-cancel" onClick={onClose} disabled={submitting} style={{ padding: `${space.sm + 1}px ${space.lg}px`, borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], fontSize: fontSize.md, cursor: submitting ? "default" : "pointer", fontFamily: fontFamily.body }}>
             取消
           </button>
           <button
@@ -1984,6 +1991,7 @@ function TaskPanel({
   width,
   onToggleManagedMode,
   onOpenDocs,
+  onOpenProto,
   plan,
   planLoading,
   planError,
@@ -1994,6 +2002,7 @@ function TaskPanel({
   agents: { id: string; name: string; role: RoleKey }[];
   onOpenArtifacts?: () => void;
   onOpenDocs?: (docSlug?: string) => void;
+  onOpenProto?: (protoId?: string) => void;
   artifacts: ArtifactItem[];
   artifactsTotal: number;
   artifactsLoading?: boolean;
@@ -2030,6 +2039,7 @@ function TaskPanel({
 
   /** 产出物条目点击（is_0000000033/0036，file 型 .md 并入 is_0000000024 TC-044）：
    *  - doc 或 file 型 .md（含 .MD/.markdown）→ 跳文档站 /docs/:taskId?doc=<slug>，文档站初始定位该文档
+   *  - file 型 .tsx / .prototype.json（原型）→ 跳文档站原型 tab /docs/:taskId?proto=<id>（按 fileUrl 文件名取原型 id）
    *  - 其余 file 带可访问 fileUrl → 新窗口打开/下载（同源 /uploads/ 自动触发下载）
    *  - text 或无 fileUrl → 跳产出物聚合页查看。 */
   const handleArtifactClick = (item: ArtifactItem) => {
@@ -2037,6 +2047,20 @@ function TaskPanel({
       item.type === "file" && !!item.fileUrl && /\.(md|markdown)$/i.test(item.fileUrl);
     if (item.type === "doc" || isMarkdownFile) {
       onOpenDocs?.(docIdFor(item.title, item.id, artifacts));
+      return;
+    }
+    const isProtoFile =
+      item.type === "file" && !!item.fileUrl && (/\.tsx$/i.test(item.fileUrl) || /\.prototype\.json$/i.test(item.fileUrl));
+    if (isProtoFile && item.fileUrl) {
+      const raw = item.fileUrl.split("/").pop() ?? "";
+      const protoId = raw
+        .replace(/\.tsx$/i, "")
+        .replace(/\.prototype\.json$/i, "")
+        .replace(/\.json$/i, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "proto";
+      onOpenProto?.(protoId);
       return;
     }
     if (item.type === "file" && item.fileUrl) {
@@ -2061,7 +2085,7 @@ function TaskPanel({
         width: width ?? 300,
         flexShrink: 0,
         borderLeft: `1px solid ${neutral[200]}`,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "var(--color-surface)",
         display: "flex",
         flexDirection: "column",
         gap: space.lg,
@@ -2086,7 +2110,7 @@ function TaskPanel({
             style={{
               flexShrink: 0,
               border: `1px solid ${neutral[200]}`,
-              background: "#FFFFFF",
+              background: "var(--color-surface)",
               color: neutral[500],
               fontSize: fontSize.sm,
               borderRadius: radius.pill,
@@ -2106,8 +2130,8 @@ function TaskPanel({
               display: "inline-flex", alignItems: "center", gap: space.xs,
               padding: `${space.xs - 1}px ${space.sm + 1}px`,
               borderRadius: radius.pill,
-              backgroundColor: task.executionMode === "plan" ? "#EFF6FF" : neutral[100],
-              border: `1px solid ${task.executionMode === "plan" ? "#BFDBFE" : neutral[200]}`,
+              backgroundColor: task.executionMode === "plan" ? "rgba(37,99,235,0.10)" : neutral[100],
+              border: `1px solid ${task.executionMode === "plan" ? "rgba(37,99,235,0.22)" : neutral[200]}`,
               color: task.executionMode === "plan" ? "#2563EB" : neutral[500],
               fontSize: fontSize.xs, fontWeight: 500, lineHeight: 1.4, whiteSpace: "nowrap",
             }}
@@ -2214,7 +2238,7 @@ function TaskPanel({
                 alignItems: "center",
                 gap: space.xs,
                 border: `1px solid ${neutral[200]}`,
-                background: "#FFFFFF",
+                background: "var(--color-surface)",
                 color: neutral[600],
                 fontSize: fontSize.sm,
                 borderRadius: radius.pill,
@@ -2407,8 +2431,8 @@ function TaskPanel({
                       transition: "border-color .15s ease, background-color .15s ease",
                     }}
                     onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLDivElement).style.backgroundColor = "#FFFFFF";
-                      (e.currentTarget as HTMLDivElement).style.borderColor = "#BFDBFE";
+                      (e.currentTarget as HTMLDivElement).style.backgroundColor = "var(--color-surface)";
+                      (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(37,99,235,0.22)";
                     }}
                     onMouseLeave={(e) => {
                       (e.currentTarget as HTMLDivElement).style.backgroundColor = neutral[50];
@@ -2540,7 +2564,7 @@ function TaskPanel({
                   width: 18,
                   height: 18,
                   borderRadius: "50%",
-                  backgroundColor: "#FFFFFF",
+                  backgroundColor: "var(--color-surface)",
                   transition: "left .2s",
                   boxShadow: shadow.sm,
                 }}
@@ -2656,8 +2680,9 @@ export default function TaskChatPage() {
   const plansQuery = useQuery({
     queryKey: ["plans", taskId],
     queryFn: () => api.get<PlanWithTasks>("/plans", { query: { taskId } }),
-    enabled: !!taskId && !!user?.id,
+    enabled: !!taskId && !!user?.id && task?.executionMode === "plan",
     refetchInterval: 30_000,
+    retry: false,
   });
 
   /* ---------- 2. 频道定位：GET /channels?type=task_group → 按 taskId 匹配 ---------- */
@@ -3392,7 +3417,7 @@ export default function TaskChatPage() {
             gap: space.sm,
             padding: `${space.xs}px ${space.md}px`,
             borderTop: `1px solid ${neutral[200]}`,
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "var(--color-surface)",
           }}
         >
           <span style={{ fontSize: fontSize.sm, color: neutral[500], flexShrink: 0 }}>模式</span>
@@ -3405,7 +3430,7 @@ export default function TaskChatPage() {
               padding: `${space.xs}px ${space.sm}px`,
               borderRadius: radius.sm,
               border: `1px solid ${neutral[200]}`,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: "var(--color-surface)",
               fontSize: fontSize.sm,
               color: neutral[700],
               cursor: executionModeMutation.isPending ? "default" : "pointer",
@@ -3448,6 +3473,7 @@ export default function TaskChatPage() {
         width={taskPanel.width}
         onToggleManagedMode={handleToggleManagedMode}
         onOpenDocs={(docSlug) => router.push(docSlug ? `/docs/${taskId}?doc=${docSlug}` : `/docs/${taskId}`)}
+        onOpenProto={(protoId) => router.push(protoId ? `/docs/${taskId}?proto=${protoId}` : `/docs/${taskId}?proto=1`)}
         plan={plansQuery.data ?? null}
         planLoading={plansQuery.isPending}
         planError={plansQuery.error}
