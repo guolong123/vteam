@@ -290,7 +290,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
   async heartbeat(id: string, dto: HeartbeatWorkerDto, token?: string) {
     const worker = await this.prisma.worker.findUnique({
       where: { id },
-      select: { id: true, tokenHash: true, status: true },
+      select: { id: true, tokenHash: true, status: true, capabilities: true },
     });
     if (!worker) {
       throw new NotFoundException({
@@ -339,10 +339,19 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       this.workerMcpStatus.set(id, dto.mcpStatus);
     }
     const lastHeartbeatAt = new Date();
+    const caps = (worker.capabilities ?? {}) as Partial<{ maxInstances: number }>;
+    const maxInstances = caps.maxInstances ?? 5;
+    const rawInstances = (dto.load as Partial<{ instances: number }>)?.instances ?? 0;
+    let safeInstances = rawInstances;
+    if (rawInstances > maxInstances * 3) {
+      this.logger.warn(`[workers] worker ${id} 上报异常负载 ${rawInstances}/${maxInstances} 已钳制为 ${maxInstances}（疑似计数泄漏）`);
+      safeInstances = maxInstances;
+    }
+    const safeLoad = { instances: safeInstances } as unknown as Prisma.InputJsonValue;
     await this.prisma.worker.update({
       where: { id },
       data: {
-        load: dto.load as unknown as Prisma.InputJsonValue,
+        load: safeLoad,
         status,
         lastHeartbeatAt,
       },

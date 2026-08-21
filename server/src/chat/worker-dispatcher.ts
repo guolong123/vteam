@@ -76,7 +76,7 @@ export const GLOBAL_SYSTEM_INSTRUCTIONS = [
   '仅该目录及挂载卷内的内容在容器重启后保留，其余路径（如 /tmp、仓库外任意路径）写入的文件重启后会丢失；' +
   '工作产物、git clone 的仓库、脚本、产出物文件等请写入该持久化目录，提交产出物（doc/file）时 fileRef 应指向该目录内的文件。',
   '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息（含 requestId、kind、问题详情）时，调用 vteam MCP 的 question_confirm 工具（参数 {taskId, selfInstanceId, requestId, kind, answers?/response?}）决策——question 传 answers（答案数组，null=拒绝）；permission 传 response（once 允许一次 / always 总是允许 / reject 拒绝）。仅主实例可调用 question_confirm。',
-  '【记忆管理】任务执行中的经验与知识可通过 vteam MCP 记忆工具存取。开始任务/需要历史经验时，调用 memory_search（参数 {taskId, query?, level?, tags?, limit?}）按需检索任务级、项目级与全局级记忆；任务验收完成收到总结引导时，调用 memory_save（参数 {taskId, selfInstanceId, level: "task"|"project"|"global", content, tags?}）沉淀经验——任务专属经验写 level=task，跨任务复用价值写 level=project，全局级（level=global）仅沉淀平台通用知识，勿写项目/任务专属信息。',
+  '【记忆管理】任务执行中的经验与知识可通过 vteam MCP 记忆工具存取。开始任务/需要历史经验时，调用 memory_search（参数 {taskId, query?, level?, tags?, limit?≤5}）按需检索任务级、项目级与全局级记忆（返回含 description 索引，命中后再取 content 正文，可多次翻页）；任务验收完成收到总结引导时，调用 memory_save（参数 {taskId, selfInstanceId, level: "task"|"project"|"global", content, description?:30字摘要, tags?}）沉淀经验——description 由模型携带，缺省回落 content 截断，任务专属经验写 level=task，跨任务复用价值写 level=project，全局级（level=global）仅沉淀平台通用知识，勿写项目/任务专属信息。遇可用记忆索引时先用 tags 精搜，再用 query 精排，单次≤5条，摘要命中再取正文。',
 ].join('\n');
 
 /**
@@ -131,6 +131,8 @@ export interface BuildSystemInstructionsOptions {
    *  轻量【执行计划】能力引导（PLAN_CAPABILITY_INSTRUCTION）；executionMode=plan 时额外
    *  追加完整【计划工作流】段（PLAN_WORKFLOW_INSTRUCTION）。 */
   executionMode?: string;
+  /** 可用记忆索引块（task/project/global 计数+Top tags+description 列表，已按预算截断 <400 token）；缺省不注入。 */
+  memoryIndex?: string | null;
 }
 
 /**
@@ -218,6 +220,9 @@ export function buildSystemInstructions(
     blocks.push(
       `【团队成员】本次任务的团队成员（据此判断与谁协作、@ 谁）：\n${teamLines.join('\n')}`,
     );
+  }
+  if (opts?.memoryIndex) {
+    blocks.push(opts.memoryIndex);
   }
   return blocks.filter((b) => b.length > 0).join('\n');
 }
@@ -1088,6 +1093,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     const taskRow = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: {
+        projectId: true,
         mainAgentInstanceId: true,
         executionMode: true,
         taskAgents: {
@@ -1139,6 +1145,42 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         data: { status: MESSAGE_STATUS.failed },
       });
     }
+    let memoryIndex: string | null = null;
+    try {
+      const projectId = (taskRow as any)?.projectId as string | undefined;
+      const countWhere = (level: string, tid?: string | null, pid?: string | null) => {
+        if (level === 'task') return { level, taskId: tid, deletedAt: null };
+        if (level === 'project') return { level, projectId: pid, deletedAt: null };
+        return { level, deletedAt: null };
+      };
+      const [taskCnt, projCnt, globCnt, recent] = await Promise.all([
+        this.prisma.memory.count({ where: countWhere('task', taskId, projectId) } as any),
+        projectId ? this.prisma.memory.count({ where: countWhere('project', null, projectId) } as any) : Promise.resolve(0),
+        this.prisma.memory.count({ where: countWhere('global', null, null) } as any),
+        this.prisma.memory.findMany({
+          where: {
+            deletedAt: null,
+            OR: [{ level: 'task', taskId }, ...(projectId ? [{ level: 'project', projectId }] : []), { level: 'global' }],
+          } as any,
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+          select: { id: true, level: true, description: true, content: true, tags: true },
+        } as any),
+      ]);
+      const tagMap = new Map<string, number>();
+      for (const r of recent as any[]) {
+        const tags = Array.isArray(r.tags) ? (r.tags as string[]) : [];
+        for (const t of tags) tagMap.set(t, (tagMap.get(t) ?? 0) + 1);
+      }
+      const topTags = [...tagMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k]) => k);
+      const lines = (recent as any[]).map((r) => `- [${r.level}] ${r.description || String(r.content).slice(0, 60)} (tags:${Array.isArray(r.tags) ? (r.tags as string[]).join(',') : '-'})`);
+      if (taskCnt + projCnt + globCnt > 0) {
+        memoryIndex =
+          `【可用记忆索引 本任务可见 task:${taskCnt} project:${projCnt} global:${globCnt}${topTags.length ? ` Top tags:${topTags.join(',')}` : ''}】\n` +
+          (lines.length ? lines.join('\n') + '\n按需 memory_search({taskId, level/tags/query, limit≤5}) 拉正文，摘要命中再取 content。' : '暂无记忆正文。');
+        if (memoryIndex.length > 1200) memoryIndex = memoryIndex.slice(0, 1200);
+      }
+    } catch {}
     await this.workerClient.execute(worker, {
       prompt: [{ type: 'text', text: prompt }],
       model,
@@ -1155,6 +1197,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         selfAlias,
         persistentWorkDir: taskWorkDir,
         executionMode: taskRow?.executionMode,
+        memoryIndex,
       }),
     });
 

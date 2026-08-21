@@ -817,7 +817,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         void (async () => {
           // F2 M4：load 上报真实活动会话数（instance-tracker 计数，
           // T10 会话执行接线后由 V1Driver 调用点 trackInstanceStart/End 驱动）
-          const load: WorkerLoad = getLoad();
+          const load: WorkerLoad = getLoad(config.workerMaxInstances);
           const health: WorkerHealth = serveServer.isRunning ? 'ok' : 'degraded';
           try {
             const heartbeat = await sendHeartbeat({
