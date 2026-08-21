@@ -1993,11 +1993,29 @@ describe('PlatformMcpService', () => {
             taskId,
             projectId: taskProjectId,
             content: '结论：改用 Prisma 事务',
+            description: '结论：改用 Prisma 事务',
             tags: ['结论'],
             createdBy: senderInstanceId,
           },
         });
         expect(out).toEqual({ memoryId: 'me_0000000001', level: 'task' });
+      });
+
+      it('description 直通：模型携带 description 优先落库，否则回落 content 截断', async () => {
+        allowWorker();
+        prisma.task.findUnique.mockResolvedValue(taskRow());
+        idGen.nextId.mockResolvedValue('me_0000000002');
+        prisma.memory.create.mockResolvedValue({ id: 'me_0000000002', level: 'task' } as any);
+        await service.memorySave(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+          level: 'task',
+          content: '长内容'.repeat(100),
+          description: 'token刷新踩坑',
+        });
+        expect(prisma.memory.create).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ description: 'token刷新踩坑' }) }),
+        );
       });
 
       it('冒充 403：selfInstanceId 不在活跃集合且无绑定会话 → PLATFORM_MCP_FORBIDDEN，不触达 memory.create', async () => {
@@ -2167,6 +2185,7 @@ describe('PlatformMcpService', () => {
             id: 'me_0000000002',
             level: 'global',
             content: '平台约定',
+            description: null,
             tags: null,
             createdBy: 'ta_main',
             createdAt: '2026-08-08T00:00:02.000Z',
@@ -2175,6 +2194,7 @@ describe('PlatformMcpService', () => {
             id: 'me_0000000001',
             level: 'task',
             content: '任务结论',
+            description: null,
             tags: ['结论'],
             createdBy: senderInstanceId,
             createdAt: '2026-08-08T00:00:01.000Z',
@@ -2182,7 +2202,7 @@ describe('PlatformMcpService', () => {
         ]);
       });
 
-      it('query → content contains 透传 prisma 层过滤', async () => {
+      it('query → content/description OR contains 透传 prisma 层过滤', async () => {
         allowWorker();
         prisma.task.findUnique.mockResolvedValue({ projectId: taskProjectId });
         prisma.memory.findMany.mockResolvedValue([]);
@@ -2192,7 +2212,10 @@ describe('PlatformMcpService', () => {
         expect(prisma.memory.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
             where: expect.objectContaining({
-              content: { contains: '事务' },
+              AND: expect.arrayContaining([
+                expect.objectContaining({ OR: expect.any(Array) }),
+                expect.objectContaining({ OR: [{ content: { contains: '事务' } }, { description: { contains: '事务' } }] }),
+              ]),
             }),
           }),
         );

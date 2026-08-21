@@ -38,7 +38,7 @@ import {
   PLAN_STATUS,
   PLAN_TASK_STATUS,
 } from '../plans/plan.constants';
-import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
+import { PLATFORM_MCP_ERRORS, validateTsxPrototype } from './platform-mcp.constants';
 
 /**
  * Plan 主键前缀（与 plans.service.ts 对齐：pl_/pt_ 前缀零填充序号）。
@@ -779,6 +779,7 @@ export class PlatformMcpService {
       selfInstanceId: string;
       level: MemoryLevel;
       content: string;
+      description?: string;
       tags?: string[];
     },
   ): Promise<{ memoryId: string; level: MemoryLevel }> {
@@ -819,6 +820,7 @@ export class PlatformMcpService {
       });
     }
 
+    const description = (args.description?.trim() || args.content.slice(0, 120)).slice(0, 255);
     const memory = await this.prisma.memory.create({
       data: {
         id: await this.idGen.nextId('me'),
@@ -826,9 +828,10 @@ export class PlatformMcpService {
         taskId: memoryTaskId,
         projectId: memoryProjectId,
         content: args.content,
+        description,
         tags: (args.tags ?? null) as Prisma.InputJsonValue | null,
         createdBy: args.selfInstanceId,
-      },
+      } as any,
     });
     return { memoryId: memory.id, level: args.level };
   }
@@ -858,6 +861,7 @@ export class PlatformMcpService {
       id: string;
       level: string;
       content: string;
+      description: string | null;
       tags: Prisma.JsonValue | null;
       createdBy: string;
       createdAt: string;
@@ -895,22 +899,25 @@ export class PlatformMcpService {
       return [];
     }
 
+    const where: Prisma.MemoryWhereInput = args.query
+      ? {
+          deletedAt: null,
+          AND: [{ OR: whereOr }, { OR: [{ content: { contains: args.query } }, { description: { contains: args.query } }] }],
+        }
+      : { deletedAt: null, OR: whereOr };
     const rows = await this.prisma.memory.findMany({
-      where: {
-        deletedAt: null,
-        OR: whereOr,
-        ...(args.query ? { content: { contains: args.query } } : {}),
-      },
+      where,
       orderBy: { createdAt: 'desc' },
     });
 
     const limit = this.normalizeMemoryLimit(args.limit);
-    return this.filterMemoryByTags(rows, args.tags)
+    return this.filterMemoryByTags(rows as any, args.tags)
       .slice(0, limit)
-      .map((row) => ({
+      .map((row: any) => ({
         id: row.id,
         level: row.level,
         content: row.content,
+        description: row.description ?? null,
         tags: row.tags,
         createdBy: row.createdBy,
         createdAt: row.createdAt.toISOString(),
@@ -1810,6 +1817,17 @@ export class PlatformMcpService {
       { id: ctx.workerId, capabilities: workerRow.capabilities },
       fileRef,
     );
+
+    if (/\.tsx$/i.test(fileRef)) {
+      const issues = validateTsxPrototype(buffer.toString('utf8'));
+      if (issues.length > 0) {
+        throw new BadRequestException({
+          code: PLATFORM_MCP_ERRORS.ARTIFACT_INVALID,
+          message: `TSX 原型预检失败（请根据以下提示修复后重新提交）：\n${issues.map((i) => `- ${i}`).join('\n')}`,
+        });
+      }
+    }
+
     const name = fileRef.split(/[\\/]/).pop() || 'artifact';
     const stored = await FileStorageService.saveBufferFile(buffer, name);
     const sha256 = createHash('sha256').update(buffer).digest('hex');

@@ -44,3 +44,22 @@ export const PLATFORM_MCP_TOOLS = [
 /** 平台 MCP server 标识（seed 阶段 2 的 mcp-servers 记录 name 对齐）。 */
 export const PLATFORM_MCP_SERVER_NAME = 'vteam';
 export const PLATFORM_MCP_SERVER_VERSION = '1.0.0';
+
+const HOOK_RE = /\b(useState|useEffect|useRef|useMemo|useCallback|useContext|useReducer)\b/;
+const HOOK_IMPORT_RE = /\bimport\s*[\s\S]*?\b(useState|useEffect|useRef|useMemo|useCallback|useContext|useReducer)\b[\s\S]*?\bfrom\s*['"]react['"]/;
+
+export function validateTsxPrototype(source: string): string[] {
+  const issues: string[] = [];
+  const usedHooks = source.match(HOOK_RE);
+  if (usedHooks && !HOOK_IMPORT_RE.test(source)) {
+    const unique = [...new Set(usedHooks)];
+    issues.push(`使用了 React hooks（${unique.join(', ')}）但缺少 import { ${unique.join(', ')} } from "react"`);
+  }
+  if (!/export\s+const\s+meta\s*=/.test(source)) {
+    issues.push('缺少 export const meta = { id, name } 声明');
+  }
+  if (!/export\s+default\s+function/.test(source)) {
+    issues.push('缺少 export default function 组件导出');
+  }
+  return issues;
+}

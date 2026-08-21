@@ -225,6 +225,7 @@ export const memorySaveSchema = z.object({
     .enum(['task', 'project', 'global'])
     .describe('记忆级别：task=任务级 / project=项目级（写入当前任务所属项目，跨任务共享）/ global=全局（仅主 Agent 可写）'),
   content: z.string().min(1).max(20000).describe('记忆内容（1~20000 字符）'),
+  description: z.string().min(1).max(255).optional().describe('记忆摘要（1~255 字符，模型携带，用于列表首屏/索引，按需拉正文）'),
   tags: z
     .array(z.string())
     .max(20)
@@ -236,7 +237,7 @@ type MemorySaveArgs = z.infer<typeof memorySaveSchema>;
 
 const memorySearchSchema = z.object({
   taskId: z.string().describe('任务 ID'),
-  query: z.string().optional().describe('内容关键词过滤（content 包含即命中）'),
+  query: z.string().optional().describe('关键词过滤（content/description 包含即命中）'),
   level: z
     .enum(['task', 'project', 'global'])
     .optional()
@@ -493,14 +494,14 @@ export function buildPlatformMcpTools(
     {
       name: 'memory_save',
       description:
-        '写入平台记忆（沉淀经验/结论/决策，供后续任务 memory_search 检索复用）。level=task 写当前任务级记忆；level=project 写当前任务所属项目级记忆（跨任务共享，projectId 由任务归属自动解析）；level=global 写全局记忆（仅主 Agent 可写）。返回 {memoryId, level}。',
+        '写入平台记忆（沉淀经验/结论/决策，供后续任务 memory_search 检索复用）。level=task 写当前任务级记忆；level=project 写当前任务所属项目级记忆（跨任务共享，projectId 由任务归属自动解析）；level=global 写全局记忆（仅主 Agent 可写）。description 为模型携带的30字摘要（可选，缺省回落 content 截断），用于列表首屏索引。返回 {memoryId, level}。',
       inputSchema: memorySaveSchema,
       handler: (ctx, args) => service.memorySave(ctx, args as MemorySaveArgs),
     },
     {
       name: 'memory_search',
       description:
-        '检索平台记忆（按需检索，替代自动注入）。默认聚合当前任务可见的 task+project+global 三级记忆（已软删不返回），可按 query/level/tags 过滤，结果按创建时间倒序。返回 [{id, level, content, tags, createdBy, createdAt}]。',
+        '检索平台记忆（按需检索，替代自动注入）。默认聚合当前任务可见的 task+project+global 三级记忆（已软删不返回），可按 query(level/content/description)/tags 过滤，结果按创建时间倒序。返回 [{id, level, content, description, tags, createdBy, createdAt}]。首屏用 description 索引，按需拉 content。',
       inputSchema: memorySearchSchema,
       handler: (ctx, args) => service.memorySearch(ctx, args as MemorySearchArgs),
     },
