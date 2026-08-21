@@ -1,17 +1,8 @@
 "use client";
-
-/**
- * MermaidBlock：mermaid 代码块 → SVG 渲染（is_0000000024 v4，移植自 prototype-viewer）
- * =============================================================
- * - mermaid 全局只初始化一次（浅色主题，适配文档白色背景）；
- * - 渲染期间显示占位；语法错误/失败回退原始代码块；
- * - 宽图容器横向滚动，不撑破文档布局。
- */
 import { useEffect, useRef, useState } from "react";
 import mermaid from "mermaid";
 import { neutral, radius, space, fontSize } from "@/src/theme/tokens";
 
-/** 浅色主题变量（对齐 prototype-viewer MermaidBlock）。 */
 const MERMAID_THEME_VARIABLES = {
   primaryColor: "#e0ebfe",
   primaryTextColor: "#1e293b",
@@ -28,12 +19,7 @@ const MERMAID_THEME_VARIABLES = {
 let initialized = false;
 function ensureMermaidInitialized() {
   if (initialized) return;
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: "base",
-    themeVariables: MERMAID_THEME_VARIABLES,
-    securityLevel: "strict",
-  });
+  mermaid.initialize({ startOnLoad: false, theme: "base", themeVariables: MERMAID_THEME_VARIABLES, securityLevel: "strict" });
   initialized = true;
 }
 
@@ -47,7 +33,6 @@ export function MermaidBlock({ code }: { code: string }) {
   const [svg, setSvg] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const renderIdRef = useRef(nextRenderId());
-
   useEffect(() => {
     const source = String(code ?? "").trim();
     if (!source) {
@@ -72,64 +57,25 @@ export function MermaidBlock({ code }: { code: string }) {
       cancelled = true;
     };
   }, [code]);
-
   if (failed) {
     return (
       <div data-testid="docs-mermaid-fallback" style={{ margin: `${space.md}px 0` }}>
-        <p style={{ margin: `0 0 ${space.xs}px`, fontSize: fontSize.xs, color: "#B45309" }}>
-          图渲染失败，显示源码
-        </p>
-        <pre
-          style={{
-            overflowX: "auto",
-            borderRadius: radius.md,
-            backgroundColor: "#0F172A",
-            color: "#E2E8F0",
-            padding: space.md,
-            fontSize: fontSize.sm,
-            lineHeight: 1.6,
-          }}
-        >
+        <p style={{ margin: `0 0 ${space.xs}px`, fontSize: fontSize.xs, color: "#B45309" }}>图渲染失败，显示源码</p>
+        <pre style={{ overflowX: "auto", borderRadius: radius.md, backgroundColor: "#0F172A", color: "var(--color-neutral-200)", padding: space.md, fontSize: fontSize.sm, lineHeight: 1.6 }}>
           <code style={{ fontFamily: "ui-monospace, monospace" }}>{code}</code>
         </pre>
       </div>
     );
   }
-
   if (!svg) {
     return (
-      <div
-        data-testid="docs-mermaid-loading"
-        style={{
-          margin: `${space.md}px 0`,
-          height: 96,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          borderRadius: radius.md,
-          border: `1px solid ${neutral[200]}`,
-          backgroundColor: neutral[50],
-          color: neutral[400],
-          fontSize: fontSize.sm,
-        }}
-      >
+      <div data-testid="docs-mermaid-loading" style={{ margin: `${space.md}px 0`, height: 96, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], color: neutral[400], fontSize: fontSize.sm }}>
         渲染图中…
       </div>
     );
   }
-
   return (
-    <div
-      data-testid="docs-mermaid"
-      style={{
-        margin: `${space.lg}px 0`,
-        overflowX: "auto",
-        borderRadius: radius.md,
-        border: `1px solid ${neutral[200]}`,
-        backgroundColor: "#FFFFFF",
-        padding: space.md,
-      }}
-    >
+    <div data-testid="docs-mermaid" style={{ margin: `${space.lg}px 0`, overflowX: "auto", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", padding: space.md }}>
       <div style={{ display: "flex", justifyContent: "center" }} dangerouslySetInnerHTML={{ __html: svg }} />
     </div>
   );

@@ -1,173 +1,75 @@
 "use client";
-
-/**
- * 文档站视图（is_0000000024 v4 深度集成）
- * =============================================================
- * v4（art_0000000039）：组件内嵌 web，无代理/无独立进程/无 query token。
- * - /docs/[taskId] 直接渲染 DocExplorer（移植自 prototype-viewer）：
- *   registry（GET /docs-site/:taskId/registry）+ 文档正文（/docs-site/:taskId/prd/<file>）
- *   均经标准 JWT Authorization（api.get / fetch Bearer 头）；
- * - 顶部薄壳提供任务上下文（返回任务链接 + 标题）+ 文档站标识；
- * - 实时性：registry 30s refetchInterval（AC-1 新口径，与 is_0000000020 同模式）。
- */
-import { useState, type CSSProperties } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useParams, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
-import { DocExplorer } from "@/src/components/docs/doc-explorer";
+import { DocExplorer } from "@/src/features/docs-site/doc-explorer";
+import { neutral, surface, border, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
 
-// is_0000000037：原型 tab 懒加载（仅进入原型 tab 才拉取 registry/原型 chunk，文档 tab 首屏不受影响）
 const PrototypePanel = dynamic(
-  () => import("@/src/components/docs/prototype-panel").then((m) => m.PrototypePanel),
-  { ssr: false, loading: () => <div style={{ padding: space.xl, color: neutral[400], fontFamily: fontFamily.body }}>加载原型…</div> },
+  () => import("@/src/features/docs-site/prototype-panel").then((m) => m.PrototypePanel),
+  { ssr: false, loading: () => <div style={{ padding: space.xl, fontSize: fontSize.md, color: neutral[400], fontFamily: fontFamily.body }}>加载原型…</div> },
 );
 
-const baseFont: CSSProperties = { fontFamily: fontFamily.body };
+/* 品牌蓝（对齐 roleText.product，双主题下保持可读） */
+const ACCENT = "#2563EB";
+const ACCENT_BG = "rgba(37,99,235,0.10)";
 
 export default function DocsPage() {
   const params = useParams<{ taskId: string }>();
   const taskId = params?.taskId ?? "";
   const user = useAuthStore((s) => s.user);
-  // is_0000000036：?doc=<slug> 初始定位到具体文档（产出物 doc 点击携带）
   const searchParams = useSearchParams();
   const initialDocId = searchParams.get("doc") ?? undefined;
-  // is_0000000037：文档 | 原型 tab
-  const [tab, setTab] = useState<"docs" | "protos">("docs");
-
-  // 任务上下文标题（返回入口 + 顶部标题）
+  const initialProtoId = searchParams.get("proto") ?? undefined;
+  const [tab, setTab] = useState<"docs" | "protos">(() => (searchParams.get("proto") ? "protos" : "docs"));
   const taskQuery = useQuery({
     queryKey: ["task", taskId],
-    queryFn: () =>
-      api.get<{ id: string; title: string; status: string }>(`/tasks/${taskId}`),
+    queryFn: () => api.get<{ id: string; title: string; status: string }>(`/tasks/${taskId}`),
     enabled: !!taskId && !!user?.id,
     retry: false,
   });
-
+  const protoCountQuery = useQuery({
+    queryKey: ["docs-proto-count", taskId],
+    queryFn: () => api.get<{ items: unknown[] }>(`/docs-site/${taskId}/prototypes`),
+    enabled: !!taskId && !!user?.id,
+    retry: false,
+  });
+  const protoCount = Array.isArray(protoCountQuery.data?.items) ? protoCountQuery.data.items.length : undefined;
+  const crumb = tab === "docs" ? "文档" : "原型";
   return (
-    <div
-      data-testid="docs-shell"
-      style={{
-        flex: 1,
-        minHeight: 0,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        backgroundColor: neutral[50],
-        marginLeft: -80,
-        ...baseFont,
-      }}
-    >
-      {/* 薄壳头部：返回任务 + 任务上下文 */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: space.md,
-          padding: `${space.md}px ${space.xl}px ${space.md}px 80px`,
-          backgroundColor: neutral[50],
-          borderBottom: `1px solid ${neutral[200]}`,
-          flexShrink: 0,
-        }}
-      >
-        <Link
-          href={`/tasks/${taskId}`}
-          data-testid="docs-back-to-task"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: space.xs,
-            color: "#2563EB",
-            fontSize: fontSize.md,
-            fontWeight: 500,
-            textDecoration: "none",
-            fontFamily: fontFamily.body,
-            flexShrink: 0,
-          }}
-        >
-          ← 返回任务
+    <div data-testid="docs-shell" style={{ display: "flex", minHeight: 0, flex: 1, flexDirection: "column", overflow: "hidden", backgroundColor: surface, fontFamily: fontFamily.body, WebkitFontSmoothing: "antialiased" }}>
+      <nav aria-label="面包屑" style={{ display: "flex", height: 36, flexShrink: 0, alignItems: "center", gap: 6, borderBottom: `1px solid ${border}`, backgroundColor: surface, padding: `0 ${space.lg}px`, fontSize: fontSize.xs }}>
+        <Link href={`/tasks/${taskId}`} data-testid="docs-back-to-task" style={{ display: "flex", alignItems: "center", gap: 4, borderRadius: radius.sm, color: neutral[500], textDecoration: "none", transition: "color .15s", fontFamily: fontFamily.body }}>
+          <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+          返回任务
         </Link>
-        <span aria-hidden style={{ color: neutral[300] }}>·</span>
-        <span
-          data-testid="docs-task-title"
-          style={{
-            fontSize: fontSize.md,
-            fontWeight: 600,
-            color: neutral[800],
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            minWidth: 0,
-          }}
-        >
-          {taskQuery.data?.title ?? taskId}
+        <span style={{ color: neutral[300] }} aria-hidden>/</span>
+        <span data-testid="docs-task-title" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500, color: neutral[700] }} title={taskQuery.data?.title ?? taskId}>{taskQuery.data?.title ?? taskId}</span>
+        <span style={{ color: neutral[300] }} aria-hidden>/</span>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: neutral[500] }}>{crumb}</span>
+        <span className="hidden sm:inline-flex" style={{ marginLeft: "auto", alignItems: "center", gap: 6, borderRadius: radius.pill, border: `1px solid ${border}`, backgroundColor: neutral[50], padding: "2px 10px", fontSize: 11, fontWeight: 500, color: neutral[500] }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "#3B82F6" }} />文档站
         </span>
-        <span
-          style={{
-            flexShrink: 0,
-            fontSize: fontSize.xs,
-            color: neutral[400],
-            backgroundColor: neutral[50],
-            border: `1px solid ${neutral[200]}`,
-            borderRadius: radius.pill,
-            padding: "1px 10px",
-          }}
-        >
-          文档站
-        </span>
+      </nav>
+      <div data-testid="docs-tab-bar" style={{ display: "flex", height: 44, flexShrink: 0, alignItems: "center", gap: 4, borderBottom: `1px solid ${border}`, backgroundColor: surface, padding: `0 ${space.lg}px` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, borderRadius: radius.md, border: `1px solid ${border}`, backgroundColor: neutral[100], padding: 2 }} role="tablist" aria-label="文档站内容">
+          <button type="button" role="tab" aria-selected={tab === "docs"} data-testid="docs-tab-docs" data-active={tab === "docs" ? "true" : "false"} onClick={() => setTab("docs")} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: radius.sm, padding: "6px 12px", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", border: "none", fontFamily: fontFamily.body, transition: "background .15s, color .15s", ...(tab === "docs" ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" } : { backgroundColor: "transparent", color: neutral[500] }) }}>
+            <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16M6 20V8l6-4 6 4v12M10 20v-6h4v6" /></svg>文档
+          </button>
+          <button type="button" role="tab" aria-selected={tab === "protos"} data-testid="docs-tab-protos" data-active={tab === "protos" ? "true" : "false"} onClick={() => setTab("protos")} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: radius.sm, padding: "6px 12px", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", border: "none", fontFamily: fontFamily.body, transition: "background .15s, color .15s", ...(tab === "protos" ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" } : { backgroundColor: "transparent", color: neutral[500] }) }}>
+            <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>原型
+            {typeof protoCount === "number" && protoCount > 0 && <span style={{ borderRadius: radius.pill, backgroundColor: neutral[200], padding: "0 6px", fontSize: 10, fontWeight: 600, lineHeight: "16px", color: neutral[600] }}>{protoCount}</span>}
+          </button>
+        </div>
       </div>
-
-      {/* 文档 | 原型 tab（is_0000000037） */}
-      <div
-        data-testid="docs-tab-bar"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: space.xs,
-          padding: `${space.sm}px 80px 0`,
-          backgroundColor: neutral[50],
-          borderBottom: `1px solid ${neutral[200]}`,
-          flexShrink: 0,
-        }}
-      >
-        {(
-          [
-            { key: "docs", label: "文档" },
-            { key: "protos", label: "原型" },
-          ] as const
-        ).map((t) => {
-          const active = tab === t.key;
-          return (
-            <button
-              key={t.key}
-              type="button"
-              data-testid={`docs-tab-${t.key}`}
-              data-active={active ? "true" : "false"}
-              onClick={() => setTab(t.key)}
-              style={{
-                padding: `${space.sm + 2}px ${space.lg}px`,
-                border: "none",
-                background: "none",
-                borderBottom: active ? `2px solid #2563EB` : `2px solid transparent`,
-                color: active ? "#1D4ED8" : neutral[500],
-                fontSize: fontSize.md,
-                fontWeight: active ? 600 : 500,
-                cursor: "pointer",
-                fontFamily: fontFamily.body,
-              }}
-            >
-              {t.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* 内容区：文档阅读器（v4 内嵌渲染，initialDocId 定位）或 原型面板（懒加载） */}
-      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", paddingLeft: 80 }}>
-        {tab === "docs" ? <DocExplorer taskId={taskId} initialDocId={initialDocId} /> : <PrototypePanel taskId={taskId} />}
+      <div style={{ display: "flex", minHeight: 0, flex: 1, flexDirection: "column", overflow: "hidden" }}>
+        {tab === "docs" ? <DocExplorer taskId={taskId} initialDocId={initialDocId} /> : <PrototypePanel taskId={taskId} initialProtoId={initialProtoId} />}
       </div>
     </div>
   );
