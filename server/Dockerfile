@@ -4,7 +4,7 @@
 FROM docker.ketaops.cc/library/node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm config set registry https://registry.npmmirror.com && npm ci
 
 # ---------- build：编译 NestJS 产物 + 生成 Prisma Client ----------
 FROM docker.ketaops.cc/library/node:22-alpine AS build

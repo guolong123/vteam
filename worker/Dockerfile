@@ -6,13 +6,15 @@
 FROM docker.ketaops.cc/library/node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm config set registry https://registry.npmmirror.com && npm ci
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 # ---- 阶段 2：runner ----
 FROM docker.ketaops.cc/library/node:22-alpine
+# 国内源加速（npm / apk）
+RUN npm config set registry https://registry.npmmirror.com
 # opencode CLI 全局安装（serve spawn 依赖，需在 PATH；npm 全局 bin 默认进 PATH）
 RUN npm i -g opencode-ai@1.18.16
 
@@ -20,7 +22,8 @@ RUN npm i -g opencode-ai@1.18.16
 # node:22-alpine 基础镜像不含 git/ssh）
 # 常用命令预装：python3/pip3（Agent 跑脚本/数据分析）、curl（HTTP 请求）、jq（JSON 处理）、
 # bash（alpine 默认 sh，Agent 脚本常依赖 bash）、wget（下载）。git/openssh-client 为 git 工具链路保留。
-RUN apk add --no-cache git openssh-client \
+RUN sed -i 's#https://dl-cdn.alpinelinux.org#https://mirrors.aliyun.com#g' /etc/apk/repositories && \
+    apk add --no-cache git openssh-client \
     python3 py3-pip curl jq bash wget
 
 # git 工具注入落点（.opencode/tools/，T5）+ serve 工作目录；与 config WORK_DIR 默认一致

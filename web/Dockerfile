@@ -7,8 +7,8 @@ WORKDIR /app
 #（compose build context 已改为仓库根，见 docker-compose.yml web 服务）。
 COPY web/package.json web/package-lock.json ./web/
 COPY web/scripts ./web/scripts
-# postinstall (sync-runtime.mjs) 需要读取 proto-shared 源码生成 sources.generated.ts
-COPY web/src/components/docs/proto-shared ./web/src/components/docs/proto-shared
+# docs-site-rebuild：proto-shared 已迁至 web/src/features/docs-site/proto-shared，
+# sync-runtime.mjs 已自带 mkdirSync + existsSync 兜底，无需预先 COPY；整树仍由下方 COPY web/ ./web/ 覆盖。
 RUN cd web && npm ci
 COPY web/ ./web/
 # worker 发布包 → web/public/worker-src.tar.gz（install-worker.sh 一键安装下载；
