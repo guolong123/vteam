@@ -27,6 +27,7 @@ import {
   authSubmitStyle,
   authLabelStyle,
 } from "@/src/components/auth/BrandPanel";
+import { ThemeToggle } from "@/src/theme/theme-toggle";
 
 /** 简单邮箱格式校验（对齐后端 RegisterDto @IsEmail，前端即时反馈） */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -239,14 +240,18 @@ function RegisterForm() {
 export default function RegisterPage() {
   const isMobile = useIsMobile();
   return (
-    /* 全屏浅色渐变背景（对齐登录页）；表单白色卡片悬浮聚焦 */
+    /* 全屏渐变背景（对齐登录页，跟随主题） */
     <div
       style={{
         minHeight: "100vh",
         background: pageBg,
         fontFamily: fontFamily.body,
+        position: "relative",
       }}
     >
+      <div style={{ position: "absolute", top: 16, right: 16, zIndex: 10 }}>
+        <ThemeToggle />
+      </div>
       <div
         style={{
           minHeight: "100vh",

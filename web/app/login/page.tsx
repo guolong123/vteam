@@ -26,6 +26,7 @@ import {
   authSubmitStyle,
   authLabelStyle,
 } from "@/src/components/auth/BrandPanel";
+import { ThemeToggle } from "@/src/theme/theme-toggle";
 
 /** POST /auth/login 响应（Task 15：accessToken + refreshToken + user） */
 interface LoginResponse {
@@ -579,14 +580,18 @@ function LoginForm() {
 export default function LoginPage() {
   const isMobile = useIsMobile();
   return (
-    /* 全屏浅色渐变背景（白 → 浅灰 → 极浅蓝，与全站浅色主题协调）；表单白色卡片悬浮聚焦 */
+    /* 全屏渐变背景（跟随主题）；表单卡片悬浮聚焦 */
     <div
       style={{
         minHeight: "100vh",
         background: pageBg,
         fontFamily: fontFamily.body,
+        position: "relative",
       }}
     >
+      <div style={{ position: "absolute", top: 16, right: 16, zIndex: 10 }}>
+        <ThemeToggle />
+      </div>
       <div
         style={{
           minHeight: "100vh",

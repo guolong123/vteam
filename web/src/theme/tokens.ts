@@ -15,13 +15,13 @@ export interface RoleTheme {
   border: string;
 }
 
-/** 五类 Agent 角色的语义色（产品=蓝 / 项目经理=sky / 架构=紫 / 开发=绿 / 测试=橙） */
+/** 五类 Agent 角色的语义色（产品=蓝 / 项目经理=sky / 架构=紫 / 开发=绿 / 测试=橙，深色下半透明跟随 surface） */
 export const roles: Record<RoleKey, RoleTheme> = {
-  product: { label: "产品经理", color: "#3B82F6", bg: "#EFF6FF", border: "#BFDBFE" },
-  project_manager: { label: "项目经理", color: "#0EA5E9", bg: "#F0F9FF", border: "#BAE6FD" },
-  architect: { label: "架构师", color: "#8B5CF6", bg: "#F5F3FF", border: "#DDD6FE" },
-  developer: { label: "开发者", color: "#10B981", bg: "#ECFDF5", border: "#A7F3D0" },
-  tester: { label: "测试", color: "#F59E0B", bg: "#FFFBEB", border: "#FDE68A" },
+  product: { label: "产品经理", color: "#3B82F6", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  project_manager: { label: "项目经理", color: "#0EA5E9", bg: "rgba(14,165,233,0.10)", border: "rgba(14,165,233,0.22)" },
+  architect: { label: "架构师", color: "#8B5CF6", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
+  developer: { label: "开发者", color: "#10B981", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  tester: { label: "测试", color: "#F59E0B", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
 };
 
 /** 角色对应导航/面板上的强调色（深一档，用于文字） */
@@ -42,27 +42,32 @@ export interface StatusTheme {
   border: string;
 }
 
-/** 任务状态四色：进行中=蓝 / 待验收=琥珀 / 已完成=绿 / 已归档=灰 */
+/** 任务状态四色：进行中=蓝 / 待验收=琥珀 / 已完成=绿 / 已归档=灰（深色下半透明） */
 export const statusColors: Record<StatusKey, StatusTheme> = {
-  "进行中": { color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  "待验收": { color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  "已完成": { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  "已归档": { color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
+  "进行中": { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  "待验收": { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  "已完成": { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  "已归档": { color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
 };
 
-/* ---------------------------------- 中性色 ---------------------------------- */
+/* ---------------------------------- 中性色（CSS 变量驱动，自动跟随 light/dark） ---------------------------------- */
 export const neutral = {
-  900: "#0F172A",
-  800: "#1E293B",
-  700: "#334155",
-  600: "#475569",
-  500: "#64748B",
-  400: "#94A3B8",
-  300: "#CBD5E1",
-  200: "#E2E8F0",
-  100: "#F1F5F9",
-  50: "#F8FAFC",
+  900: "var(--color-neutral-900)",
+  800: "var(--color-neutral-800)",
+  700: "var(--color-neutral-700)",
+  600: "var(--color-neutral-600)",
+  500: "var(--color-neutral-500)",
+  400: "var(--color-neutral-400)",
+  300: "var(--color-neutral-300)",
+  200: "var(--color-neutral-200)",
+  100: "var(--color-neutral-100)",
+  50: "var(--color-neutral-50)",
 } as const;
+
+/* 语义面：卡片/背景/边框（对齐 CSS 变量） */
+export const surface = "var(--color-surface)";
+export const bg = "var(--color-bg)";
+export const border = "var(--color-border)";
 
 /* ---------------------------------- 间距（4px 基准） ---------------------------------- */
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;

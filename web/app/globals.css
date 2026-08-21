@@ -13,21 +13,25 @@ html {
   line-height: 1.5;
 }
 
-/* 对齐 Tailwind preflight：form 控件继承字体/行高（否则 line-height normal 致 input 高度与原型差 5px） */
-button,
-input,
-select,
-optgroup,
-textarea,
-::file-selector-button {
-  font: inherit;
-  font-feature-settings: inherit;
-  font-variation-settings: inherit;
-  letter-spacing: inherit;
-  color: inherit;
-  border-radius: 0;
-  background-color: transparent;
-  opacity: 1;
+/* 对齐 Tailwind preflight：form 控件继承字体/行高（否则 line-height normal 致 input 高度与原型差 5px）
+ * 注：必须放在 @layer base 内，否则作为未分层样式会覆盖 @layer utilities 内的 bg-/text- 工具类 */
+@layer base {
+  button,
+  input,
+  select,
+  optgroup,
+  textarea,
+  ::file-selector-button {
+    font: inherit;
+    font-feature-settings: inherit;
+    font-variation-settings: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+    border: none;
+    border-radius: 0;
+    background-color: transparent;
+    opacity: 1;
+  }
 }
 
 html,
@@ -43,6 +47,8 @@ body {
   font-family: Arial, Helvetica, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-color: var(--color-bg);
+  color: var(--color-text);
 }
 
 a {
@@ -54,6 +60,49 @@ a {
 ::placeholder {
   color: color-mix(in oklab, currentcolor 50%, transparent);
   opacity: 1;
+}
+
+/* Tailwind v4 dark variant：class 策略，html.dark 生效 */
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================
+ * 主题 CSS 变量（light / dark 双主题，inline-style 通过 var() 自动跟随）
+ * neutral 10 阶在 :root 为浅色，.dark 下反转为深色；组件无需改 JS
+ * ============================================================ */
+:root {
+  --color-neutral-50: #f8fafc;
+  --color-neutral-100: #f1f5f9;
+  --color-neutral-200: #e2e8f0;
+  --color-neutral-300: #cbd5e1;
+  --color-neutral-400: #94a3b8;
+  --color-neutral-500: #64748b;
+  --color-neutral-600: #475569;
+  --color-neutral-700: #334155;
+  --color-neutral-800: #1e293b;
+  --color-neutral-900: #0f172a;
+  --color-surface: #ffffff;
+  --color-bg: #f8fafc;
+  --color-border: #e2e8f0;
+  --color-text: #0f172a;
+  --color-text-muted: #64748b;
+}
+
+.dark {
+  --color-neutral-50: #0f172a;
+  --color-neutral-100: #1e293b;
+  --color-neutral-200: #334155;
+  --color-neutral-300: #475569;
+  --color-neutral-400: #64748b;
+  --color-neutral-500: #94a3b8;
+  --color-neutral-600: #cbd5e1;
+  --color-neutral-700: #e2e8f0;
+  --color-neutral-800: #f1f5f9;
+  --color-neutral-900: #f8fafc;
+  --color-surface: #1e293b;
+  --color-bg: #020617;
+  --color-border: #334155;
+  --color-text: #f1f5f9;
+  --color-text-muted: #94a3b8;
 }
 
 /* ============================================================
