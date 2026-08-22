@@ -23,6 +23,7 @@ services:
     image: mysql:8
     container_name: aiagents-compose-db
     restart: unless-stopped
+    command: --sort-buffer-size=8M
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-aiagents-root}
       MYSQL_DATABASE: aiagents
