@@ -46,8 +46,8 @@ import {
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-/** P4：processing 消息超时兜底阈值（worker abort 后无 SSE 事件回流时，超过此阈值渲染失败形态） */
-const PROCESSING_TIMEOUT_MS = 180_000;
+/** P4：processing 消息超时兜底阈值（0 表示禁用，已按需求禁用前端超时） */
+const PROCESSING_TIMEOUT_MS = 0;
 
 /** scoped CSS 动画（dm- 前缀防污染，对齐原型 dmAnimCss 的三连点弹跳） */
 const dmCss = `
@@ -344,7 +344,7 @@ function GroupContextBar({
               whiteSpace: "nowrap",
             }}
           >
-            {msg.content.text ?? ""}
+            {msg.content?.text ?? ""}
           </span>
           <span style={{ flexShrink: 0, fontSize: fontSize.xs, color: neutral[400] }}>
             {formatTime(msg.createdAt)}
@@ -438,7 +438,7 @@ function DmMessageList({
         const agent = msg.senderId ? agentMap.get(msg.senderId) : undefined;
         const role = agent?.role ?? (msg.senderId ? toRole(msg.senderId) : null) ?? "developer";
         const author = agent?.name ?? msg.senderId ?? "";
-        const parts = Array.isArray(msg.content.parts) ? (msg.content.parts as unknown[]) : [];
+        const parts = Array.isArray((msg as unknown as { content?: { parts?: unknown } })?.content?.parts) ? ((msg as unknown as { content?: { parts?: unknown } })?.content?.parts as unknown[]) : [];
 
         // Agent 消息：parts 过程片段（thinking/tool/error/aborted）+ 正文置底（MsgParts，T14）；
         // status=processing 为流式中间态（message.part.delta 累积），正文走「生成中」流式块
@@ -447,7 +447,9 @@ function DmMessageList({
           // 不再显示流式「生成中」；不修改 SSE 状态管理，仅渲染层判定
           const processing = msg.status === "processing";
           const timedOut =
-            processing && Date.now() - new Date(msg.createdAt).getTime() > PROCESSING_TIMEOUT_MS;
+            PROCESSING_TIMEOUT_MS > 0 &&
+            processing &&
+            Date.now() - new Date(msg.createdAt).getTime() > PROCESSING_TIMEOUT_MS;
           if (timedOut) {
             return (
               <div
@@ -492,7 +494,7 @@ function DmMessageList({
             <MsgParts
               key={msg.id}
               parts={parts}
-              bodyText={(msg.content.text ?? "") as string}
+              bodyText={(msg.content?.text ?? "") as string}
               author={author}
               role={role}
               time={formatTime(msg.createdAt)}
@@ -504,13 +506,13 @@ function DmMessageList({
         // 基础三型：user=右 / agent=左 / system=居中（复用共享 ChatBubble）
         if (msg.senderType === "system") {
           return (
-            <ChatBubble key={msg.id} text={(msg.content.text ?? "") as string} type="system" time={formatTime(msg.createdAt)} />
+            <ChatBubble key={msg.id} text={(msg.content?.text ?? "") as string} type="system" time={formatTime(msg.createdAt)} />
           );
         }
         return (
           <ChatBubble
             key={msg.id}
-            text={(msg.content.text ?? "") as string}
+            text={(msg.content?.text ?? "") as string}
             type={msg.senderType === "user" ? "user" : "agent"}
             author={msg.senderType === "user" ? undefined : author}
             role={msg.senderType === "user" ? undefined : role}

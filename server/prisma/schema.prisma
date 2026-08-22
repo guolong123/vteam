@@ -170,6 +170,7 @@ model TaskAgent {
   // /data/worker/<sanitize(agent.name)>，同 agent 多实例追加 -<seq>）
   joinedAt  DateTime  @default(now()) @map("joined_at")
   removedAt DateTime? @map("removed_at")
+  enabled   Boolean   @default(true)
 
   task  Task  @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent Agent @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -383,7 +384,8 @@ model Agent {
   defaultModelId  String?   @map("default_model_id")
   // 首选 worker 软绑定（可空，null=自动调度；离线自动回退，Metis R1）
   workerId        String?   @map("worker_id")
-  // 群聊 @Agent 收到确认文案（可空，null → 落库用 DEFAULT_ACK_MESSAGE 默认文案）
+  // @deprecated 2026-08-21 已下线：群聊 @Agent 自动回复“收到，正在处理…”机制已删除（模型不可用时无法区分）。
+  // 列保留以兼容存量 DB，业务层已不再读写；下次重建库可删。
   ackMessage      String?   @map("ack_message")
   // 性格（vteam-team-collaboration tc-persona：PERSONA_LIBRARY 的 key，可空；
   // 存量 agent 不动，运行时由 buildSystemInstructions 拼接进系统提示，不改写 prompt）
@@ -485,6 +487,8 @@ model Model {
   name         String
   capabilities Json?
   enabled      Boolean   @default(true)
+  baseUrl      String?   @db.Text @map("base_url")
+  providerType String    @default("cloud") @map("provider_type")
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 

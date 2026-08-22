@@ -36,10 +36,10 @@ export const DEFAULT_WORKER_BASE_URL = 'http://localhost:4199';
  * capabilities.execBaseUrl 缺失时以 serve 基址 origin + ':' + execPort 拼接发现。
  */
 export const DEFAULT_EXEC_PORT = 4198;
-/** 单次 HTTP 请求超时：prompt_async 为异步 204 快速返回，getMessages 轮询稍慢，15s 兜底防悬挂。 */
-export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
-/** FR-41：GET /file 文件拉取超时（较大文件/网络慢，15s 兜底防悬挂）。 */
-export const DEFAULT_FILE_FETCH_TIMEOUT_MS = 15_000;
+/** 单次 HTTP 请求超时：已从 15s 调整为 60s，适配长命令/思考执行 */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+/** FR-41：GET /file 文件拉取超时（较大文件/网络慢） */
+export const DEFAULT_FILE_FETCH_TIMEOUT_MS = 60_000;
 
 /**
  * worker 行最小契约（Prisma Worker 的 id + capabilities Json；T10 传 findUnique 结果）。

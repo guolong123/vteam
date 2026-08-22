@@ -67,11 +67,9 @@ services:
       # 模型 provider token 加密密钥（C4 AES-256-GCM，32 字节/64 hex）。
       # 必填校验：未设置即启动报错（拒绝公开默认值导致密钥泄露）。生成方式：openssl rand -hex 32
       MODEL_CREDENTIAL_KEY: ${MODEL_CREDENTIAL_KEY:?MODEL_CREDENTIAL_KEY 未设置，请生成 32 字节随机密钥（openssl rand -hex 32）}
-      # 首字超时（server dispatcher watchdog）：dispatch 后 FIRST_TOKEN_TIMEOUT_MS 内无任何
-      # 事件回流 → 判「agent 无响应」。180s ≥ worker 首字超时 120s + 余量——复杂任务长思考
-      # 不因 60s 默认值被误报；env 可配。worker 成功路径已主动上报 agent.status(loading)
-      # 清除本 watchdog（B 方案），此值作为兜底防线。
-      FIRST_TOKEN_TIMEOUT_MS: "180000"
+      # 首字超时（server dispatcher watchdog）：0 表示禁用（按需求已禁杀死长任务，模型执行命令不中断）
+      FIRST_TOKEN_TIMEOUT_MS: "0"
+      AGENT_IDLE_TIMEOUT_MS: "0"
     depends_on:
       db:
         condition: service_healthy
@@ -134,26 +132,35 @@ services:
       WORKER_ADVERTISE_HOST: http://worker
       # worker 默认模型兜底（C2 新增，Agent 未配模型时用，C7 模型解析优先级第 3 级）；空 = 不指定（serve 默认）
       WORKER_DEFAULT_MODEL: ${WORKER_DEFAULT_MODEL:-}
-      # 首字超时（worker awaitCompletion）：模型时限内无 text/reasoning 输出即 abort。
-      # 对齐 server FIRST_TOKEN_TIMEOUT_MS=180s（compose 同步放宽），防长思考任务被 worker
-      # 侧提前 abort（server 侧先误报、worker 侧再误杀的竞态）。
-      WORKER_FIRST_TOKEN_TIMEOUT_MS: "180000"
+      # 首字超时（worker awaitCompletion）：0 表示禁用（已禁杀死长任务）
+      WORKER_FIRST_TOKEN_TIMEOUT_MS: "0"
       # 持久化工作目录：serve cwd + .opencode/tools|skills 注入落点 + agent 工作区
       #（git clone 的仓库、任务文件）。改挂载卷路径，容器重建不丢（worker 启动时
       # installGitTools/injector 会在空卷上自动重建 .opencode；镜像内 /tmp/keta-worker
       # 的 dist/node_modules 不受影响，WORKDIR 未变）。
-      WORK_DIR: /data/keta-worker
+      WORK_DIR: /data/vteam-worker
+      # agent-browser 容器内默认参数（覆盖 Dockerfile ENV，可通过 env 调整）
+      AGENT_BROWSER_ARGS: --no-sandbox,--disable-gpu
+      # 可选：agent-browser 额外配置（按需覆盖）
+      # AGENT_BROWSER_IDLE_TIMEOUT_MS: "3600000" # 1h 无命令自动关闭 daemon（容器内建议保留）
+      # AGENT_BROWSER_STREAM_PORT: "9223"       # 固定 WebSocket 推流端口（默认 OS 随机）
+      # AGENT_BROWSER_ALLOWED_DOMAINS: ""       # 白名单逗号分隔，空=不限制（按任务/环境收紧）
     depends_on:
       server:
         condition: service_healthy
     ports:
       # serve 容器内 4000 → 宿主机 14000，浏览器访问 http://localhost:14000
       - "14000:4000"
+      # agent-browser dashboard（宿主 14848 -> 容器 4848，Agent 浏览器可视化/回放）
+      - "14848:4848"
+      # agent-browser stream WebSocket（按需固定端口时用，默认随机无需映射）
+      # - "19223:9223"
     volumes:
-      # 工作目录持久化：serve cwd、.opencode 注入、git clone 的仓库与任务文件
-      - worker_work:/data/keta-worker
+      # 统一持久化：/data/vteam-worker 含 serve cwd、.opencode 注入及全部任务实例目录（/data/vteam-worker/<agent名>）
+      - vteam_worker_data:/data/vteam-worker
       # 用户目录（HOME=/root）持久化：opencode.db 会话库（session.instanceRef 指向的
       # opencode 会话重建后不 404）、auth.json 模型凭据、.keta-git-creds.json、log、repos
+      # 以及 agent-browser 状态（~/.agent-browser/sessions, Chrome 缓存，随 volume 持久化）
       - worker_home:/root
     networks:
       - aiagents-net
@@ -162,8 +169,8 @@ volumes:
   mysql_data:
   # P2：server 产出物落盘持久化（Agent 文档/文件，见 server 服务 volumes 挂载）
   uploads_data:
-  # worker 工作目录持久化（serve cwd、.opencode 注入、git clone 的仓库、任务文件）
-  worker_work:
+  # 统一持久化：vteam-worker 含 serve 工作目录及全部实例目录
+  vteam_worker_data:
   # worker 用户目录（HOME）持久化（opencode.db 会话库、auth.json 模型凭据、.keta-git-creds.json）
   worker_home:
 

@@ -17,12 +17,7 @@ export const CHAT_ERRORS = {
   MESSAGE_NOT_FOUND: 'MESSAGE_NOT_FOUND',
   MESSAGE_NOT_USER: 'MESSAGE_NOT_USER',
   SESSION_HISTORY_NOT_SUPPORTED: 'SESSION_HISTORY_NOT_SUPPORTED',
+  AGENT_DISABLED: 'AGENT_DISABLED',
 } as const;
 
 export type ChatErrorCode = (typeof CHAT_ERRORS)[keyof typeof CHAT_ERRORS];
-
-/**
- * 群聊 @Agent 收到确认默认文案：agent.ackMessage 未配置时的兜底（agent 配置页可覆盖）。
- * seed.ts 模板 Agent 预置同值（create 分支），保证开箱即有确认提示。
- */
-export const DEFAULT_ACK_MESSAGE = '收到，正在处理…';

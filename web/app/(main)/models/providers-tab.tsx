@@ -165,6 +165,7 @@ export function ActionButton({
 interface ConfigureModalProps {
   open: boolean;
   provider: string;
+  providerType?: string | null;
   submitting: boolean;
   error: string | null;
   workers: ApiWorker[];
@@ -176,6 +177,7 @@ interface ConfigureModalProps {
 export function ConfigureModal({
   open,
   provider,
+  providerType,
   submitting,
   error,
   workers,
@@ -184,6 +186,7 @@ export function ConfigureModal({
 }: ConfigureModalProps) {
   const [token, setToken] = useState("");
   const [targetWorkers, setTargetWorkers] = useState<Set<string>>(new Set());
+  const isLocal = providerType === 'local' || providerType === 'custom';
 
   useEffect(() => {
     if (!open) return;
@@ -343,22 +346,28 @@ export function ConfigureModal({
           </div>
         </div>
 
-        {/* API key 输入（password） */}
+        {/* API key 输入（password；本地 provider 无鉴权可留空） */}
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           <span style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
-            API Key <span aria-hidden style={{ color: "#DC2626" }}>*</span>
+            API Key {!isLocal && <span aria-hidden style={{ color: "#DC2626" }}>*</span>}
           </span>
           <input
-            data-testid="provider-modal-key-input"
-            type="password"
-            placeholder={`输入 ${provider} 的 API token（sk-…）`}
+            data-testid="provider-modal-key-input" autoComplete="new-password" name="api-token"
+            type={isLocal ? "text" : "password"}
+            placeholder={
+              isLocal
+                ? `本地 provider（${provider}）无需密钥，可留空`
+                : `输入 ${provider} 的 API token（sk-…）`
+            }
             value={token}
             onChange={(e) => setToken(e.target.value)}
             disabled={submitting}
             style={inputBase}
           />
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            按 provider 粒度保存，agent 选择该 provider 下模型时自动生效
+            {isLocal
+              ? "本地模型无鉴权，留空保存即完成配置（worker 侧自动补占位 key）"
+              : "按 provider 粒度保存，agent 选择该 provider 下模型时自动生效"}
           </span>
         </div>
 
@@ -493,7 +502,7 @@ export function ConfigureModal({
           <button
             type="button"
             data-testid="provider-modal-save"
-            disabled={submitting || !token.trim()}
+            disabled={submitting || (!isLocal && !token.trim())}
             onClick={() =>
               onSubmit({
                 token: token.trim(),
@@ -508,8 +517,8 @@ export function ConfigureModal({
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
-              cursor: submitting || !token.trim() ? "default" : "pointer",
-              opacity: submitting || !token.trim() ? 0.6 : 1,
+              cursor: submitting || (!isLocal && !token.trim()) ? "default" : "pointer",
+              opacity: submitting || (!isLocal && !token.trim()) ? 0.6 : 1,
               boxShadow: "0 6px 16px rgba(37,99,235,.3)",
               fontFamily: fontFamily.body,
             }}
@@ -626,10 +635,12 @@ export default function ProvidersTab() {
     },
   });
 
-  const configuringProvider = useMemo(
-    () => providers.find((p) => p.providerID === configureOpen)?.providerID,
+  const configuringProviderRow = useMemo(
+    () => providers.find((p) => p.providerID === configureOpen),
     [providers, configureOpen]
   );
+  const configuringProvider = configuringProviderRow?.providerID;
+  const configuringProviderType = configuringProviderRow?.providerType ?? null;
 
   return (
     <div
@@ -1002,6 +1013,7 @@ export default function ProvidersTab() {
       <ConfigureModal
         open={configuringProvider !== undefined}
         provider={configuringProvider ?? ""}
+        providerType={configuringProviderType}
         submitting={saveCredentialMutation.isPending}
         error={configureError}
         workers={workers}

@@ -1,0 +1,17 @@
+import { chromium } from '/Users/mac/01work/git-project/vteam/web/node_modules/playwright/index.mjs';
+const browser = await chromium.launch({ headless: true, channel: 'chrome', executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', args: ['--no-sandbox'] });
+const context = await browser.newContext();
+const page = await context.newPage();
+await page.goto('http://localhost:5174/', { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(3000);
+await page.screenshot({ path: '/tmp/md-docs-home.png', fullPage: true });
+console.log('home done');
+await page.goto('http://localhost:5174/#/p/demo-app', { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(3000);
+await page.screenshot({ path: '/tmp/md-docs-demo.png', fullPage: true });
+console.log('demo done');
+await page.goto('http://localhost:5174/#/p/demo-app/protos/button-demo', { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(3000);
+await page.screenshot({ path: '/tmp/md-docs-proto.png', fullPage: true });
+console.log('proto done');
+await browser.close();

@@ -70,7 +70,7 @@ npm run dev            # tsx src/index.ts
 | `OPENCODE_SERVE_PASSWORD` | 否 | 空 | opencode serve 认证密码（Basic Auth username=opencode）；空 = 不设鉴权 |
 | `HEARTBEAT_INTERVAL_MS` | 否 | `10000` | 心跳间隔 ms（server 30s = 3 周期判 offline） |
 | `LOG_LEVEL` | 否 | `info` | 日志级别 |
-| `WORK_DIR` | 否 | `/tmp/keta-worker` | opencode serve 工作目录（工具注入落点） |
+| `WORK_DIR` | 否 | `/data/vteam-worker` | opencode serve 工作目录（工具注入落点） |
 | `OPENCODE_SERVE_HOSTNAME` | 否 | `127.0.0.1` | opencode serve 绑定地址（容器内设 `0.0.0.0` 供 server 容器访问；**集群外/跨机 worker 必须设 `0.0.0.0`**，serve 监听非回环 server 才能连上） |
 | `WORKER_ADVERTISE_HOST` | 否 | 自动探测本机非回环 IPv4（失败回退 `http://127.0.0.1`） | worker 对 server 公布的 serve 基址主机（随注册 capabilities.baseUrl 上报；compose 设 `http://worker`）。未设置时 worker 启动自动探测本机内网 IP 上报（跳过 docker/veth/br- 等虚拟网卡，探测失败才回退回环地址）。**集群外/跨机 worker 若 server 无法访问探测到的地址（多网卡/VPN 等），应显式设置为 server 可达的 worker 地址**（如 `http://<worker 局域网 IP>`），否则 server 连不上 → worker 显示不可用 |
 | `GIT_SSH_KEY_PATH` | 否 | 空 | SSH 私钥路径（git 凭证注入 `GIT_SSH_COMMAND`）；空 = 不注入 |

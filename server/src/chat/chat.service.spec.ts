@@ -18,7 +18,7 @@ import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WorkerClient } from '../workers/worker.client';
-import { CHAT_ERRORS, DEFAULT_ACK_MESSAGE } from './chat.constants';
+import { CHAT_ERRORS } from './chat.constants';
 import { ChatService } from './chat.service';
 import { MessageDispatcher } from './message-dispatcher';
 
@@ -140,19 +140,14 @@ describe('ChatService', () => {
       expect(dispatcher.onError).toHaveBeenCalledTimes(1);
     });
 
-    it('发消息全流程：权限→@解析→落库→广播→分派受理→收到确认落库，返回 {message, triggers}（回复异步回流）', async () => {
+    it('发消息全流程：权限→@解析→落库→广播→分派受理，返回 {message, triggers}（回复异步回流）', async () => {
       allowAccess();
       prisma.taskAgent.findMany.mockResolvedValue([
         { agentId: 'a_product', removedAt: null },
       ]);
       prisma.session.findFirst.mockResolvedValue({ id: 's_0000000001' });
       idGen.nextId.mockResolvedValue('m_0000000001');
-      prisma.message.create
-        .mockResolvedValueOnce(messageRow())
-        .mockResolvedValueOnce(
-          messageRow({ senderType: SENDER_TYPE.agent, senderId: 'a_product' }),
-        );
-      prisma.agent.findMany.mockResolvedValue([{ id: 'a_product', ackMessage: null }]);
+      prisma.message.create.mockResolvedValue(messageRow());
       dispatcher.dispatch.mockResolvedValue({
         replies: [{ agentId: 'a_product', text: '需求已明确' }],
       });
@@ -160,8 +155,8 @@ describe('ChatService', () => {
       const dto = { text: '你好', mentions: [{ type: 'agent', agentId: 'a_product' }] };
       const result = await service.createMessage(channelId, userId, dto as any);
 
-      // 3. 落库：用户消息 + agent「收到」确认消息（回复由分派器异步落库，此处不重复）
-      expect(prisma.message.create).toHaveBeenCalledTimes(2);
+      // 3. 落库：仅用户消息（无 ACK，回复由分派器异步落库）
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
       expect(prisma.message.create).toHaveBeenCalledWith({
         data: {
           id: 'm_0000000001',
@@ -173,34 +168,13 @@ describe('ChatService', () => {
           status: MESSAGE_STATUS.sent,
         },
       });
-      // 5.5 「收到」确认：senderType=agent、无 mentions（防递归）、ackMessage 空 → 默认文案
-      const ackData = prisma.message.create.mock.calls[1][0].data;
-      expect(ackData).toMatchObject({
-        channelId,
-        senderType: SENDER_TYPE.agent,
-        senderId: 'a_product',
-        content: { text: DEFAULT_ACK_MESSAGE, parts: [] },
-        mentions: null,
-        status: MESSAGE_STATUS.sent,
-      });
 
-      // 4. 广播用户消息 + ACK（loading/回复由分派器广播）
-      expect(realtime.broadcast).toHaveBeenCalledTimes(2);
+      // 4. 广播用户消息（loading/回复由分派器广播）
+      expect(realtime.broadcast).toHaveBeenCalledTimes(1);
       expect(realtime.broadcast).toHaveBeenNthCalledWith(
         1,
         EVENT_TYPES.CHAT_MESSAGE_NEW,
         { message: expect.objectContaining({ id: 'm_0000000001', senderType: 'user' }) },
-        { type: 'channel', id: channelId },
-      );
-      expect(realtime.broadcast).toHaveBeenNthCalledWith(
-        2,
-        EVENT_TYPES.CHAT_MESSAGE_NEW,
-        {
-          message: expect.objectContaining({
-            senderType: SENDER_TYPE.agent,
-            senderId: 'a_product',
-          }),
-        },
         { type: 'channel', id: channelId },
       );
 
@@ -220,43 +194,13 @@ describe('ChatService', () => {
       ]);
     });
 
-    it('agent 配置 ackMessage → 「收到」消息用配置文案（不走默认）', async () => {
-      allowAccess();
-      prisma.taskAgent.findMany.mockResolvedValue([
-        { agentId: 'a_product', removedAt: null },
-      ]);
-      prisma.session.findFirst.mockResolvedValue({ id: 's_1' });
-      prisma.agent.findMany.mockResolvedValue([
-        { id: 'a_product', ackMessage: '收到，马上处理' },
-      ]);
-      prisma.message.create.mockResolvedValue(messageRow());
-
-      await service.createMessage(channelId, userId, {
-        text: '你好',
-        mentions: [{ type: 'agent', agentId: 'a_product' }],
-      } as any);
-
-      const ackData = prisma.message.create.mock.calls[1][0].data;
-      expect(ackData).toMatchObject({
-        senderType: SENDER_TYPE.agent,
-        senderId: 'a_product',
-        content: { text: '收到，马上处理', parts: [] },
-        mentions: null,
-        status: MESSAGE_STATUS.sent,
-      });
-    });
-
-    it('多目标 @（{type:all} 展开全部）→ 每个 dispatched 目标各落一条「收到」消息', async () => {
+    it('多目标 @（{type:all} 展开全部）→ 触发多目标分派', async () => {
       allowAccess();
       prisma.taskAgent.findMany.mockResolvedValue([
         { agentId: 'a_product', removedAt: null },
         { agentId: 'a_architect', removedAt: null },
       ]);
       prisma.session.findFirst.mockResolvedValue({ id: 's_1' });
-      prisma.agent.findMany.mockResolvedValue([
-        { id: 'a_product', ackMessage: null },
-        { id: 'a_architect', ackMessage: null },
-      ]);
       prisma.message.create.mockResolvedValue(messageRow());
 
       const result = await service.createMessage(channelId, userId, {
@@ -264,14 +208,10 @@ describe('ChatService', () => {
         mentions: [{ type: 'all' }],
       } as any);
 
-      // 1 用户消息 + 每目标 1 条 ACK = 3 次落库；2 个 ACK 各对应一个目标
-      expect(prisma.message.create).toHaveBeenCalledTimes(3);
-      const ackSenders = prisma.message.create.mock.calls
-        .slice(1)
-        .map((call) => call[0].data.senderId)
-        .sort();
-      expect(ackSenders).toEqual(['a_architect', 'a_product']);
+      // 仅用户消息落库，无 ACK
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
       expect(result.triggers).toHaveLength(2);
+      expect(realtime.broadcast).toHaveBeenCalledTimes(1);
     });
 
     it('无 mentions 且任务无主实例（task_group）→ 不触发：triggers 空、dispatcher 空目标、仅广播用户消息', async () => {
@@ -421,27 +361,15 @@ describe('ChatService', () => {
         team: { id: string; agentId: string; removedAt: Date | null }[];
         mainRow?: { id: string; agentId: string; removedAt: Date | null } | null;
         session?: { id: string } | null;
-        ack?: string | null;
       }) => {
         prisma.taskAgent.findMany.mockResolvedValue(opts.team);
         prisma.taskAgent.findFirst.mockResolvedValue(opts.mainRow ?? null);
         prisma.session.findFirst.mockResolvedValue(opts.session ?? { id: 's_pm' });
-        prisma.agent.findMany.mockResolvedValue([
-          { id: 'a_project_manager', ackMessage: opts.ack ?? null },
-        ]);
         idGen.nextId.mockResolvedValue('m_1');
-        prisma.message.create
-          .mockResolvedValueOnce(messageRow())
-          .mockResolvedValueOnce(
-            messageRow({
-              senderType: SENDER_TYPE.agent,
-              senderId: 'a_project_manager',
-              senderInstanceId: 'ti_pm',
-            }),
-          );
+        prisma.message.create.mockResolvedValue(messageRow());
       };
 
-      it('task_group 无 @ → 主实例 trigger（dispatched，ACK 落库 senderInstanceId=主实例）', async () => {
+      it('task_group 无 @ → 主实例 trigger（dispatched）', async () => {
         allowAccess(mainChannel());
         mockMainDispatched({
           team: [
@@ -463,7 +391,7 @@ describe('ChatService', () => {
             status: 'dispatched',
           },
         ]);
-        // dispatch targets 携带 instanceId（ACK/dispatch 复用现有链路）
+        // dispatch targets 携带 instanceId
         expect(dispatcher.dispatch).toHaveBeenCalledWith(
           expect.objectContaining({
             targets: [
@@ -475,16 +403,8 @@ describe('ChatService', () => {
             ],
           }),
         );
-        // 主实例 ACK 消息落库：senderInstanceId=主实例、无 mentions（防递归）
-        const ackData = prisma.message.create.mock.calls[1][0].data;
-        expect(ackData).toMatchObject({
-          senderType: SENDER_TYPE.agent,
-          senderId: 'a_project_manager',
-          senderInstanceId: 'ti_pm',
-          mentions: null,
-          content: { text: DEFAULT_ACK_MESSAGE, parts: [] },
-        });
-        expect(prisma.message.create).toHaveBeenCalledTimes(2);
+        expect(prisma.message.create).toHaveBeenCalledTimes(1);
+        expect(realtime.broadcast).toHaveBeenCalledTimes(1);
       });
 
       it('无 @ 且主实例已 removed → 不触发（triggers 空，仅落库广播，不查会话不落 ACK）', async () => {
@@ -514,7 +434,6 @@ describe('ChatService', () => {
           { id: 'ti_dev', agentId: 'a_developer', removedAt: null },
         ]);
         prisma.session.findFirst.mockResolvedValue({ id: 's_dev' });
-        prisma.agent.findMany.mockResolvedValue([{ id: 'a_developer', ackMessage: null }]);
         idGen.nextId.mockResolvedValue('m_1');
         prisma.message.create.mockResolvedValue(messageRow());
 
@@ -574,13 +493,8 @@ describe('ChatService', () => {
           removedAt: null,
         });
         prisma.session.findFirst.mockResolvedValue({ id: 's_dev1' });
-        prisma.agent.findMany.mockResolvedValue([{ id: 'a_developer', ackMessage: null }]);
         idGen.nextId.mockResolvedValue('m_1');
-        prisma.message.create
-          .mockResolvedValueOnce(messageRow())
-          .mockResolvedValueOnce(
-            messageRow({ senderType: SENDER_TYPE.agent, senderId: 'a_developer' }),
-          );
+        prisma.message.create.mockResolvedValue(messageRow());
 
         const result = await service.createMessage(channelId, userId, { text: '无 @ 消息' } as any);
 

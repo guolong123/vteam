@@ -58,8 +58,8 @@ import {
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-/** P4：processing 消息超时兜底阈值（worker abort 后无 SSE 事件回流时，超过此阈值渲染失败形态） */
-const PROCESSING_TIMEOUT_MS = 180_000;
+/** P4：processing 消息超时兜底阈值（0 表示禁用，仅由后端 watchdog 决定；已按需求禁用前端超时） */
+const PROCESSING_TIMEOUT_MS = 0;
 
 /** scoped CSS 动画（groupchat- 前缀防污染，对齐原型 groupchatCss） */
 const groupchatCss = `
@@ -86,6 +86,7 @@ interface TaskInstance {
   name: string;
   role: string | null;
   main: boolean;
+  enabled?: boolean | null;
   /** 会话状态快照（sessions.status 真实源：running=工作中 / idle=空闲；无会话=null）。 */
   sessionStatus: string | null;
   /** 实例会话 id（SSE session.updated 收敛映射需 sessionId→instanceId 建链）。 */
@@ -511,9 +512,11 @@ function MembersPanel({
   addError,
   onAddInstance,
   width,
+  onToggleEnabled,
+  onResetSession,
 }: {
   /** 团队实例（id=agent id 兼容状态 key；instanceId=实例 id 唯一键；main=主实例）。 */
-  agents: { id: string; instanceId?: string; name: string; role: RoleKey; seq?: number; main?: boolean }[];
+  agents: { id: string; instanceId?: string; name: string; role: RoleKey; seq?: number; main?: boolean; enabled?: boolean | null }[];
   loadingAgentIds: Set<string>;
   /** agentId → session.updated status（running=工作中 / idle=空闲，其余状态走现状） */
   sessionStatusByAgent: Record<string, string>;
@@ -533,6 +536,8 @@ function MembersPanel({
   onAddInstance: (agentId: string, alias?: string) => Promise<boolean>;
   /** 面板宽度（is_0000000017 可拖拽 resize，缺省 224）。 */
   width?: number;
+  onToggleEnabled?: (instanceId: string, enabled: boolean) => void;
+  onResetSession?: (instanceId: string) => void;
 }) {
   const [addOpen, setAddOpen] = useState(false);
   /** 选中项：内置角色 RoleKey 或自定义 agent id（is_0000000035）。 */
@@ -620,11 +625,16 @@ function MembersPanel({
               data-role={a.role}
               data-main={a.main ? "true" : "false"}
               role="button"
-              tabIndex={0}
-              title={`与 ${a.name} 发起私聊`}
+              tabIndex={a.enabled === false ? -1 : 0}
+              title={a.enabled === false ? `${a.name} 已禁用` : `与 ${a.name} 发起私聊`}
               aria-busy={starting}
-              onClick={() => onStartDm(a.id, a.instanceId)}
+              aria-disabled={a.enabled === false}
+              onClick={() => {
+                if (a.enabled === false) return;
+                onStartDm(a.id, a.instanceId);
+              }}
               onKeyDown={(e) => {
+                if (a.enabled === false) return;
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   onStartDm(a.id, a.instanceId);
@@ -637,11 +647,11 @@ function MembersPanel({
                 padding: `${space.sm}px ${space.sm}px`,
                 borderRadius: radius.md,
                 border: a.main ? `1px solid ${roles[a.role]?.border ?? neutral[200]}` : "none",
-                background: starting || working || a.main ? neutral[100] : "transparent",
+                background: starting || working || a.main ? neutral[100] : a.enabled === false ? neutral[50] : "transparent",
                 textAlign: "left",
                 fontFamily: fontFamily.body,
-                cursor: starting ? "default" : "pointer",
-                opacity: starting ? 0.6 : 1,
+                cursor: a.enabled === false ? "not-allowed" : starting ? "default" : "pointer",
+                opacity: a.enabled === false ? 0.5 : starting ? 0.6 : 1,
                 transition: "background-color .15s ease, opacity .15s ease",
               }}
               onMouseEnter={(e) => {
@@ -734,8 +744,69 @@ function MembersPanel({
                   {statusText}
                 </span>
               </span>
-              <span style={{ color: "#2563EB", fontSize: fontSize.lg, lineHeight: 1 }} aria-hidden>
-                ›
+              <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                <button
+                  type="button"
+                  data-testid={`agent-enable-toggle-${a.instanceId ?? a.id}`}
+                  aria-label={a.enabled === false ? "启用" : "禁用"}
+                  title={a.enabled === false ? "启用该 Agent" : "禁用该 Agent（禁用后无法接收消息）"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const next = a.enabled === false ? true : false;
+                    onToggleEnabled?.(a.instanceId ?? a.id, next);
+                  }}
+                  style={{
+                    width: 28,
+                    height: 16,
+                    borderRadius: 8,
+                    border: "none",
+                    backgroundColor: a.enabled === false ? neutral[300] : "#10B981",
+                    position: "relative",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  <span
+                    style={{
+                      position: "absolute",
+                      top: 2,
+                      left: a.enabled === false ? 2 : 14,
+                      width: 12,
+                      height: 12,
+                      borderRadius: "50%",
+                      backgroundColor: "#FFFFFF",
+                      transition: "left .15s",
+                    }}
+                  />
+                </button>
+                <button
+                  type="button"
+                  data-testid={`agent-reset-${a.instanceId ?? a.id}`}
+                  aria-label="重置会话"
+                  title="重置会话（绑定新 opencode session）"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onResetSession?.(a.instanceId ?? a.id);
+                  }}
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: "50%",
+                    border: `1px solid ${neutral[200]}`,
+                    backgroundColor: "var(--color-surface)",
+                    color: neutral[500],
+                    fontSize: 10,
+                    cursor: "pointer",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  ↻
+                </button>
+                <span style={{ color: "#2563EB", fontSize: fontSize.lg, lineHeight: 1 }} aria-hidden>
+                  ›
+                </span>
               </span>
             </div>
           );
@@ -1135,8 +1206,9 @@ function MessageList({
         // 群聊结论防御：初始加载（GET messages）同样只保留 text 结论 part——与
         // onMessagePartDelta 兜底一致（reasoning/tool 不渲染折叠卡片；后端终态化
         // 已滤，此处防御历史/残留数据，F3 缺陷①）
-        const parts = Array.isArray(msg.content.parts)
-          ? (msg.content.parts as unknown[]).filter(
+        const rawParts = (msg as unknown as { content?: { parts?: unknown } })?.content?.parts;
+        const parts = Array.isArray(rawParts)
+          ? (rawParts as unknown[]).filter(
               (p) => (p as { type?: string; synthetic?: boolean }).type === "text"
                 && !(p as { type?: string; synthetic?: boolean }).synthetic,
             )
@@ -1149,7 +1221,9 @@ function MessageList({
           // 不再显示流式「生成中」；不修改 SSE 状态管理，仅渲染层判定
           const processing = msg.status === "processing";
           const timedOut =
-            processing && Date.now() - new Date(msg.createdAt).getTime() > PROCESSING_TIMEOUT_MS;
+            PROCESSING_TIMEOUT_MS > 0 &&
+            processing &&
+            Date.now() - new Date(msg.createdAt).getTime() > PROCESSING_TIMEOUT_MS;
           if (timedOut) {
             return (
               <div
@@ -1194,7 +1268,7 @@ function MessageList({
             <MsgParts
               key={msg.id}
               parts={parts}
-              bodyText={(msg.content.text ?? "") as string}
+              bodyText={((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string}
               author={author}
               role={role}
               time={formatTime(msg.createdAt)}
@@ -1215,13 +1289,13 @@ function MessageList({
         // 基础三型：user=右 / agent=左 / system=居中（复用共享 ChatBubble）
         if (msg.senderType === "system") {
           return (
-            <ChatBubble key={msg.id} text={(msg.content.text ?? "") as string} type="system" time={formatTime(msg.createdAt)} />
+            <ChatBubble key={msg.id} text={((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string} type="system" time={formatTime(msg.createdAt)} />
           );
         }
         return (
           <ChatBubble
             key={msg.id}
-            text={(msg.content.text ?? "") as string}
+            text={(msg.content?.text ?? "") as string}
             type={msg.senderType === "user" ? "user" : "agent"}
             author={msg.senderType === "user" ? undefined : author}
             role={msg.senderType === "user" ? undefined : role}
@@ -2036,6 +2110,10 @@ function TaskPanel({
   );
 
   const [activeTab, setActiveTab] = useState<"artifacts" | "issues">("artifacts");
+  const [descExpanded, setDescExpanded] = useState(false);
+  useEffect(() => {
+    setDescExpanded(false);
+  }, [task.id, task.description]);
 
   /** 产出物条目点击（is_0000000033/0036，file 型 .md 并入 is_0000000024 TC-044）：
    *  - doc 或 file 型 .md（含 .MD/.markdown）→ 跳文档站 /docs/:taskId?doc=<slug>，文档站初始定位该文档
@@ -2143,23 +2221,55 @@ function TaskPanel({
         </div>
       </div>
 
-      {/* 任务描述（is_0000000011：编辑后展示最新内容） */}
       {task.description && (
         <div
           data-testid="task-description-panel"
           style={{
-            fontSize: fontSize.sm,
-            color: neutral[600],
-            lineHeight: 1.6,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
             backgroundColor: neutral[50],
             border: `1px solid ${neutral[200]}`,
             borderRadius: radius.md,
             padding: `${space.sm + 2}px ${space.md}px`,
+            ...baseFont,
           }}
         >
-          {task.description}
+          <div
+            data-testid="task-description-content"
+            style={{
+              fontSize: fontSize.sm,
+              color: neutral[600],
+              lineHeight: 1.6,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              display: descExpanded ? "block" : "-webkit-box",
+              WebkitLineClamp: (descExpanded ? undefined : 3) as unknown as number,
+              WebkitBoxOrient: "vertical" as unknown as string,
+              overflow: descExpanded ? "visible" : "hidden",
+              maxHeight: descExpanded ? "none" : "4.8em",
+            } as unknown as CSSProperties}
+          >
+            {task.description}
+          </div>
+          {task.description.length > 120 && (
+            <button
+              type="button"
+              data-testid="task-description-toggle"
+              aria-expanded={descExpanded}
+              onClick={() => setDescExpanded((v) => !v)}
+              style={{
+                marginTop: space.xs,
+                padding: 0,
+                border: "none",
+                background: "none",
+                color: "#2563EB",
+                fontSize: fontSize.sm,
+                fontWeight: 500,
+                cursor: "pointer",
+                fontFamily: fontFamily.body,
+              }}
+            >
+              {descExpanded ? "收起 ▲" : "展开 ▼"}
+            </button>
+          )}
         </div>
       )}
 
@@ -2696,6 +2806,33 @@ export default function TaskChatPage() {
   );
   const channelId = channel?.id ?? "";
 
+  /* ---------- 2b. 私聊 Tabs（Scheme C）：同页切换群聊/私聊，本地态 activeTab ---------- */
+  const [activeTab, setActiveTab] = useState<string>("group");
+  const [privateChannelMap, setPrivateChannelMap] = useState<Map<string, string>>(new Map());
+  const activePrivateId = activeTab.startsWith("private:") ? activeTab.slice(8) : null;
+
+  const handlePrivateTab = useCallback(
+    async (instanceId: string, agentId: string) => {
+      const cached = privateChannelMap.get(instanceId);
+      if (cached) {
+        setActiveTab(`private:${cached}`);
+        return;
+      }
+      try {
+        const ch = await api.post<{ id: string }>("/dm-channels", { taskId, agentId });
+        setPrivateChannelMap((prev) => {
+          const next = new Map(prev);
+          next.set(instanceId, ch.id);
+          return next;
+        });
+        setActiveTab(`private:${ch.id}`);
+      } catch (e) {
+        console.error("create dm channel failed", e);
+      }
+    },
+    [privateChannelMap, taskId],
+  );
+
   /* ---------- 3. 频道详情：agentMembers（members-panel + @ mentionable + agent 名映射） ---------- */
   const channelQuery = useQuery({
     queryKey: ["channel", channelId],
@@ -2708,7 +2845,25 @@ export default function TaskChatPage() {
     queryKey: ["channel", channelId, "messages"],
     queryFn: () =>
       api.get<MessagesResponse>(`/channels/${channelId}/messages`, { query: { limit: 50 } }),
-    enabled: !!channelId,
+    enabled: !!channelId && activeTab === "group",
+  });
+
+  /* ---------- 4a. 私聊消息历史（按 Tab 独立缓存，session-history） ---------- */
+  const privateMessagesQuery = useQuery({
+    queryKey: ["channel", activePrivateId, "messages"],
+    queryFn: async () => {
+      if (!activePrivateId) return { items: [], nextCursor: null } as MessagesResponse;
+      // 私聊走 session-history（复用 messages/[id] 的 fetchChannelMessages 逻辑，简化为直接调 session-history）
+      try {
+        const res = await api.get<{ items: RealtimeChatMessage[]; nextCursor: string | null; source: string }>(
+          `/channels/${activePrivateId}/session-history`,
+        );
+        return { items: res.items, nextCursor: res.nextCursor ?? null } as MessagesResponse;
+      } catch {
+        return api.get<MessagesResponse>(`/channels/${activePrivateId}/messages`, { query: { limit: 50 } });
+      }
+    },
+    enabled: !!activePrivateId,
   });
 
   /* ---------- 4b. Agent 提问/权限确认补拉：进入页面/刷新时恢复未处理弹窗（落库持久化） ---------- */
@@ -2744,6 +2899,7 @@ export default function TaskChatPage() {
           role,
           seq: inst.seq,
           main: inst.main || inst.id === task?.mainAgentInstanceId,
+          enabled: (inst as { enabled?: boolean | null }).enabled ?? true,
         };
       });
     }
@@ -2751,7 +2907,7 @@ export default function TaskChatPage() {
       const role = (a.role && (ROLE_KEYS as readonly string[]).includes(a.role))
         ? (a.role as RoleKey)
         : toRole(a.id) ?? "developer";
-      return { id: a.id, instanceId: undefined, name: a.name, role };
+      return { id: a.id, instanceId: undefined, name: a.name, role, enabled: (a as { enabled?: boolean | null }).enabled ?? true };
     });
   }, [task, channelQuery.data, task?.mainAgentInstanceId]);
 
@@ -2784,14 +2940,16 @@ export default function TaskChatPage() {
     [task],
   );
 
-  /** @ 候选（T5 按实例）：name=实例别名（唯一），instanceId 透传（mentions 落库结构）。 */
-  const mentionable: MentionableAgent[] = agentMembers.map((a) => ({
-    id: a.id,
-    agentId: a.id,
-    instanceId: a.instanceId,
-    name: a.name,
-    role: a.role,
-  }));
+  /** @ 候选（T5 按实例）：name=实例别名（唯一），instanceId 透传（mentions 落库结构）。禁用的实例不出现在候选。 */
+  const mentionable: MentionableAgent[] = agentMembers
+    .filter((a) => (a as { enabled?: boolean | null }).enabled !== false)
+    .map((a) => ({
+      id: a.id,
+      agentId: a.id,
+      instanceId: a.instanceId,
+      name: a.name,
+      role: a.role,
+    }));
 
   /** 滚到底：新消息（SSE onMessage / 发送成功）后调用 */
   const scrollToBottom = useCallback(() => {
@@ -2833,7 +2991,7 @@ export default function TaskChatPage() {
   // team.changed / task.status.changed。前端按事件 type 分发（useRealtimeEvents），
   // 回调内保留 payload.taskId === taskId 过滤（多 scope 下事件会跨 scope 混流，必须逐条过滤）。
   useRealtimeEvents({
-    scope: `channel:${channelId},task:${taskId},global`,
+    scope: `channel:${channelId}${activePrivateId ? `,channel:${activePrivateId}` : ""},task:${taskId},global`,
     enabled: !!channelId && !!taskId,
     onMessage: (payload) => {
       scrollToBottom();
@@ -2940,19 +3098,20 @@ export default function TaskChatPage() {
       const m = payload.message;
       // 群聊结论防御：仅保留 text 结论 part（后端 extractConclusionParts 已滤 reasoning/tool，
       // 此处兜底——delta 带非 text parts 时也绝不渲染过程片段）
-      const parts = Array.isArray(m.content.parts)
-        ? (m.content.parts as unknown[]).filter(
+      const rawParts2 = (m as unknown as { content?: { parts?: unknown } })?.content?.parts;
+      const parts = Array.isArray(rawParts2)
+        ? (rawParts2 as unknown[]).filter(
             (p) => (p as { type?: string; synthetic?: boolean }).type === "text"
               && !(p as { type?: string; synthetic?: boolean }).synthetic,
           )
         : [];
       const text = parts
         .map((p) => (p as { text?: string }).text ?? "")
-        .join("") || (m.content.text ?? "");
+        .join("") || ((m as unknown as { content?: { text?: string } })?.content?.text ?? "");
       queryClient.setQueryData<MessagesResponse>(["channel", channelId, "messages"], (old) => {
         if (!old) return old;
         const idx = old.items.findIndex((x) => x.id === m.id);
-        const merged = { ...m, content: { text, parts } };
+        const merged = { ...m, content: { text, parts } } as unknown as RealtimeChatMessage;
         if (idx === -1) return { ...old, items: [...old.items, merged] };
         if (old.items[idx].status !== "processing") return old; // 终态优先：重放不覆盖
         const items = [...old.items];
@@ -3082,20 +3241,23 @@ export default function TaskChatPage() {
     });
   }, [messagesQuery.isSuccess, messagesQuery.data]);
 
-  /* ---------- 6. 发送：POST /channels/:id/messages（mentions 转换 + @all 广播） ---------- */
+  /* ---------- 6. 发送：POST /channels/:id/messages（Tabs 感知：群聊/私聊路由） ---------- */
+  const targetChannelId = activeTab === "group" ? channelId : (activePrivateId ?? channelId);
   const sendMutation = useMutation({
     mutationFn: (payload: SendMessagePayload) =>
-      api.post(`/channels/${channelId}/messages`, {
+      api.post(`/channels/${targetChannelId}/messages`, {
         text: payload.text,
-        mentions: [
-          ...payload.mentions.map((m) => ({
-            type: "agent" as const,
-            agentId: m.id,
-            // T5：实例 id 透传（后端 CreateMessageDto 按 agentId 解析，instanceId 原样落库供展示）
-            ...(m.instanceId ? { instanceId: m.instanceId } : {}),
-          })),
-          ...(payload.text.includes("@all") ? [{ type: "all" as const }] : []),
-        ],
+        mentions:
+          activeTab === "group"
+            ? [
+                ...payload.mentions.map((m) => ({
+                  type: "agent" as const,
+                  agentId: m.id,
+                  ...(m.instanceId ? { instanceId: m.instanceId } : {}),
+                })),
+                ...(payload.text.includes("@all") ? [{ type: "all" as const }] : []),
+              ]
+            : [],
         // UX-10 附件：MessageInput 已先 POST /uploads 拿 url，随消息提交三字段
         ...(payload.attachment
           ? {
@@ -3107,24 +3269,37 @@ export default function TaskChatPage() {
       }),
     onSuccess: () => {
       setInput("");
-      // 等待 SSE chat.message.new 回显（channel scope 已订阅）；本地先滚到底
       scrollToBottom();
     },
   });
 
   const handleSend = (payload: SendMessagePayload) => {
+    // 禁用拦截：私聊 Tab 对应实例被禁用时禁止发送
+    if (activeTab !== "group" && activePrivateId) {
+      const instanceId = Array.from(privateChannelMap.entries()).find(([, cid]) => cid === activePrivateId)?.[0];
+      const inst = instanceId ? agentMembers.find((a) => a.instanceId === instanceId) : null;
+      if (inst && (inst as { enabled?: boolean | null }).enabled === false) return;
+    }
+    // 群聊中 @ 被禁用实例时拦截
+    for (const m of payload.mentions) {
+      const inst = agentMembers.find((a) => a.id === m.id && (m.instanceId ? a.instanceId === m.instanceId : true));
+      if (inst && (inst as { enabled?: boolean | null }).enabled === false) return;
+    }
     sendMutation.mutate(payload);
   };
 
-  /** 加载更多：cursor=nextCursor 取更新消息追加尾部（游标分页契约） */
+  /** 加载更多：Tabs 感知（群聊/私聊各自独立游标） */
   const handleLoadMore = async () => {
-    if (!channelId || !messagesQuery.data?.nextCursor || loadingMore) return;
+    const isGroup = activeTab === "group";
+    const q = isGroup ? messagesQuery : privateMessagesQuery;
+    const cid = isGroup ? channelId : activePrivateId;
+    if (!cid || !q.data?.nextCursor || loadingMore) return;
     setLoadingMore(true);
     try {
-      const next = await api.get<MessagesResponse>(`/channels/${channelId}/messages`, {
-        query: { cursor: messagesQuery.data.nextCursor, limit: 50 },
+      const next = await api.get<MessagesResponse>(`/channels/${cid}/messages`, {
+        query: { cursor: q.data.nextCursor, limit: 50 },
       });
-      queryClient.setQueryData<MessagesResponse>(["channel", channelId, "messages"], (old) =>
+      queryClient.setQueryData<MessagesResponse>(["channel", cid, "messages"], (old) =>
         old
           ? {
               items: [...old.items, ...next.items.filter((n) => !old.items.some((o) => o.id === n.id))],
@@ -3137,9 +3312,7 @@ export default function TaskChatPage() {
     }
   };
 
-  /** 发起私聊：POST /dm-channels {taskId, agentId, taskAgentId} → 成功跳转 /messages/:id。
-   *  T6 实例语义：taskAgentId=实例 id——同 agent 多实例各自独立私聊频道
-   *  （后端 uk_channels_task_agent 按 task_agent_id 幂等），重复发起返回已有频道。 */
+  /** 发起私聊（Scheme C）：同页 Tabs 切换，不再跳转 /messages。 */
   const startDmMutation = useMutation({
     mutationFn: (target: { agentId: string; taskAgentId?: string }) =>
       api.post<ChannelItem>("/dm-channels", {
@@ -3147,9 +3320,17 @@ export default function TaskChatPage() {
         agentId: target.agentId,
         ...(target.taskAgentId ? { taskAgentId: target.taskAgentId } : {}),
       }),
-    onSuccess: (channel) => {
+    onSuccess: (channel, variables) => {
       setDmError(null);
-      router.push(`/messages/${channel.id}`);
+      const instanceId = (variables as { taskAgentId?: string })?.taskAgentId ?? channel.agentId ?? "";
+      if (instanceId) {
+        setPrivateChannelMap((prev) => {
+          const next = new Map(prev);
+          next.set(instanceId, channel.id);
+          return next;
+        });
+        setActiveTab(`private:${channel.id}`);
+      }
     },
     onError: (err) => {
       setDmError(isApiError(err) ? err.message : "发起私聊失败");
@@ -3158,6 +3339,10 @@ export default function TaskChatPage() {
 
   const handleStartDm = (agentId: string, taskAgentId?: string) => {
     if (startDmMutation.isPending) return;
+    if (taskAgentId) {
+      handlePrivateTab(taskAgentId, agentId);
+      return;
+    }
     setDmError(null);
     startDmMutation.mutate({ agentId, taskAgentId });
   };
@@ -3195,6 +3380,25 @@ export default function TaskChatPage() {
       );
     });
   };
+
+  const toggleEnabledMutation = useMutation({
+    mutationFn: ({ instanceId, enabled }: { instanceId: string; enabled: boolean }) =>
+      api.patch<TaskDetail>(`/tasks/${taskId}/instances/${instanceId}`, { enabled }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<TaskDetail>(["task", taskId], updated);
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+    },
+  });
+
+  const resetSessionMutation = useMutation({
+    mutationFn: (instanceId: string) =>
+      api.post<{ task: TaskDetail; session: unknown }>(`/tasks/${taskId}/instances/${instanceId}/reset-session`),
+    onSuccess: (res) => {
+      queryClient.setQueryData<TaskDetail>(["task", taskId], res.task);
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+      queryClient.invalidateQueries({ queryKey: ["channel", channelId, "messages"] });
+    },
+  });
 
   /* ---------- 5c. 托管模式开关：PATCH /tasks/:id {managedMode} → 写回任务缓存（参考 addInstance 模式） ---------- */
   const managedModeMutation = useMutation({
@@ -3314,12 +3518,25 @@ export default function TaskChatPage() {
     if (messagesQuery.isSuccess) scrollToBottom();
   }, [messagesQuery.isSuccess, scrollToBottom]);
 
+  // Tab 切换或消息数变化时滚到底（私聊切 Tab 后默认看最新）
+  useEffect(() => {
+    // 延迟到 DOM 更新后
+    const t = setTimeout(scrollToBottom, 50);
+    return () => clearTimeout(t);
+  }, [activeTab, messagesQuery.data?.items?.length, privateMessagesQuery.data?.items?.length, scrollToBottom]);
+
+  const isGroupTab = activeTab === "group";
   /* ---------- 渲染：加载 / 错误 / 三栏 ---------- */
   const pageError = taskQuery.isError ? (isApiError(taskQuery.error) ? taskQuery.error.message : "加载任务失败")
     : channelsQuery.isError ? (isApiError(channelsQuery.error) ? channelsQuery.error.message : "加载频道失败")
     : channelId && channelQuery.isError ? (isApiError(channelQuery.error) ? channelQuery.error.message : "加载团队失败")
-    : channelId && messagesQuery.isError ? (isApiError(messagesQuery.error) ? messagesQuery.error.message : "加载消息失败")
-    : null;
+    : isGroupTab
+      ? channelId && messagesQuery.isError
+        ? (isApiError(messagesQuery.error) ? messagesQuery.error.message : "加载消息失败")
+        : null
+      : activePrivateId && privateMessagesQuery.isError
+        ? (isApiError(privateMessagesQuery.error) ? privateMessagesQuery.error.message : "加载私聊消息失败")
+        : null;
 
   if (!taskId) {
     return <div style={{ padding: space.xl, color: neutral[500] }}>缺少任务 ID</div>;
@@ -3342,7 +3559,7 @@ export default function TaskChatPage() {
     );
   }
 
-  const messages = messagesQuery.data?.items ?? [];
+  const messages = isGroupTab ? (messagesQuery.data?.items ?? []) : (privateMessagesQuery.data?.items ?? []);
   const statusLabel = STATUS_LABEL[task.status] ?? "进行中";
 
   return (
@@ -3371,6 +3588,8 @@ export default function TaskChatPage() {
         addError={addError}
         onAddInstance={handleAddInstance}
         width={membersPanel.width}
+        onToggleEnabled={(instanceId, enabled) => toggleEnabledMutation.mutate({ instanceId, enabled })}
+        onResetSession={(instanceId) => resetSessionMutation.mutate(instanceId)}
       />
 
       {/* 左侧面板拖拽分隔条（is_0000000017） */}
@@ -3379,14 +3598,89 @@ export default function TaskChatPage() {
       {/* 消息区 */}
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", backgroundColor: neutral[50] }}>
         <ChatHeader title={task.title} statusLabel={statusLabel} agents={agentMembers} />
+        {/* 私聊 Tabs（Scheme C）：群聊 + 各实例私聊，同页切换 */}
+        <div
+          data-testid="dm-tabs"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.sm,
+            padding: `${space.sm}px ${space.xl}px`,
+            borderBottom: `1px solid ${neutral[200]}`,
+            backgroundColor: "var(--color-surface)",
+            overflowX: "auto",
+            ...baseFont,
+          }}
+        >
+          <button
+            type="button"
+            data-testid="dm-tab-group"
+            data-active={activeTab === "group" ? "true" : "false"}
+            onClick={() => setActiveTab("group")}
+            style={{
+              padding: `${space.xs}px ${space.md}px`,
+              borderRadius: radius.pill,
+              border: `1px solid ${activeTab === "group" ? "#2563EB" : neutral[200]}`,
+              backgroundColor: activeTab === "group" ? "#2563EB" : "var(--color-surface)",
+              color: activeTab === "group" ? "#FFFFFF" : neutral[600],
+              fontSize: fontSize.sm,
+              fontWeight: activeTab === "group" ? 600 : 400,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+            }}
+          >
+            群聊
+          </button>
+          {agentMembers.map((m) => {
+            const chanId = privateChannelMap.get(m.instanceId ?? m.id);
+            const isActive = chanId ? activeTab === `private:${chanId}` : false;
+            return (
+              <button
+                key={m.instanceId ?? m.id}
+                type="button"
+                data-testid={`dm-tab-private-${m.instanceId ?? m.id}`}
+                data-active={isActive ? "true" : "false"}
+                onClick={() => handlePrivateTab(m.instanceId ?? m.id, m.id)}
+                style={{
+                  padding: `${space.xs}px ${space.md}px`,
+                  borderRadius: radius.pill,
+                  border: `1px solid ${isActive ? "#2563EB" : neutral[200]}`,
+                  backgroundColor: isActive ? "#2563EB" : "var(--color-surface)",
+                  color: isActive ? "#FFFFFF" : neutral[600],
+                  fontSize: fontSize.sm,
+                  fontWeight: isActive ? 600 : 400,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                }}
+              >
+                私聊: {m.name}
+              </button>
+            );
+          })}
+        </div>
         {pageError && channelId ? (
           <div data-testid="chat-error" role="alert" style={{ padding: space.xl, color: "#DC2626" }}>
             {pageError}
           </div>
-        ) : (
+        ) : activeTab === "group" ? (
           <MessageList
             messages={messages}
             nextCursor={messagesQuery.data?.nextCursor ?? null}
+            loadingMore={loadingMore}
+            agentMap={agentMap}
+            instanceNameById={instanceNameById}
+            onLoadMore={handleLoadMore}
+            loadingLabel={loadingLabel}
+            errorLabel={errorLabel}
+            sessionLabel={sessionLabel}
+            listRef={listRef}
+          />
+        ) : (
+          <MessageList
+            messages={privateMessagesQuery.data?.items ?? []}
+            nextCursor={privateMessagesQuery.data?.nextCursor ?? null}
             loadingMore={loadingMore}
             agentMap={agentMap}
             instanceNameById={instanceNameById}
@@ -3402,10 +3696,14 @@ export default function TaskChatPage() {
           value={input}
           onChange={setInput}
           onSend={handleSend}
-          mentionable={mentionable}
+          mentionable={isGroupTab ? mentionable : []}
           sending={sendMutation.isPending}
           taskId={taskId}
-          placeholder="输入消息，@ 提及某个 Agent…"
+          placeholder={
+            isGroupTab
+              ? "输入消息，@ 提及某个 Agent…"
+              : `发送私聊给 ${agentMembers.find((m) => `private:${privateChannelMap.get(m.instanceId ?? m.id)}` === activeTab)?.name ?? "私聊对象"}…`
+          }
           style={{ border: "none", borderTop: `1px solid ${neutral[200]}`, borderRadius: 0 }}
         />
         {/* 执行模式工具栏（消息输入框下方） */}

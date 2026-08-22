@@ -6,6 +6,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { WorkersModule } from '../workers/workers.module';
 import { TaskProgressionScheduler } from './task-progression.scheduler';
 import { TasksController } from './tasks.controller';
+import { MigrateController } from './migrate.controller';
 import { TasksService } from './tasks.service';
 
 /**
@@ -25,7 +26,7 @@ import { TasksService } from './tasks.service';
  */
 @Module({
   imports: [RealtimeModule, WorkersModule, ChatModule],
-  controllers: [TasksController],
+  controllers: [TasksController, MigrateController],
   providers: [TasksService, TaskProgressionScheduler, ProjectMembershipGuard, PermissionGuard],
   exports: [TasksService],
 })

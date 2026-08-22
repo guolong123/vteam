@@ -23,6 +23,8 @@ export interface ApiModel {
   modelID: string;
   name: string;
   enabled: boolean;
+  baseUrl?: string | null;
+  providerType?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -68,4 +70,6 @@ export interface ProviderSummary {
   fingerprint: string | null;
   /** 吊销时间（未吊销为 null） */
   revokedAt: string | null;
+  providerType?: string | null;
+  baseUrl?: string | null;
 }

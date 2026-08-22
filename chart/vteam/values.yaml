@@ -77,7 +77,8 @@ server:
     port: 3000
     jwtAccessExpiresIn: 2h
     jwtRefreshExpiresIn: 7d
-    firstTokenTimeoutMs: "180000"
+    firstTokenTimeoutMs: "0"
+    agentIdleTimeoutMs: "0"
   resources:
     requests:
       cpu: 200m
@@ -148,8 +149,8 @@ worker:
     servePort: "4000"
     ## 默认模型兜底（Agent 未配模型时用）；空 = 不指定（serve 默认）
     defaultModel: ""
-    firstTokenTimeoutMs: "180000"
-    workDir: /data/keta-worker
+    firstTokenTimeoutMs: "0"
+    workDir: /data/vteam-worker
     ## worker 唯一 id；空 = 自动按 pod 名生成（w_<pod 名>，downward API 注入，
     ## 多副本天然唯一）；显式设置时用该值（注意多副本下须自行保证唯一）
     workerId: ""

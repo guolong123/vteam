@@ -1,9 +1,12 @@
+"use client";
+
 /**
  * ChatBubble：消息气泡（user=右对齐蓝 / agent=左对齐白卡带角色 / system=居中灰）
  *
  * 从 docs/agent-platform/prototypes/_shared/components.tsx 原样迁移。
  * 结构 / 样式 / data-testid 与原型一致；token 引用统一走 src/theme/tokens.ts。
  */
+import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import {
   type RoleKey,
@@ -69,9 +72,8 @@ export function ChatBubble({
   const isUser = type === "user";
   const isSystem = type === "system";
   const roleTheme = role ? roles[role] : null;
+  const [expanded, setExpanded] = useState(false);
 
-  // 气泡外壳：宽度自适应内容，总宽上限由根行容器 maxWidth 控制
-  // （maxWidth 放 flex 列子项上会按内容宽解析，短文本被压成逐字换行）
   const bubbleBase: CSSProperties = {
     width: "fit-content",
     maxWidth: "100%",
@@ -110,6 +112,8 @@ export function ChatBubble({
 
   const showHeader = !isUser && (author || roleTheme);
   const hasText = text.trim().length > 0;
+  const CHAT_COLLAPSE_THRESHOLD = 360;
+  const needsCollapse = hasText && text.length > CHAT_COLLAPSE_THRESHOLD;
   return (
     <div
       data-testid="chat-bubble"
@@ -154,7 +158,7 @@ export function ChatBubble({
             {time ? ` · ${time}` : ""}
           </span>
         )}
-        {hasText && (
+        {(hasText || attachment) && (
           <div
             style={
               isUser
@@ -164,6 +168,7 @@ export function ChatBubble({
                     color: "#FFFFFF",
                     borderTopRightRadius: radius.sm,
                     boxShadow: shadow.sm,
+                    maxWidth: attachment ? 520 : undefined,
                   }
                 : {
                     ...bubbleBase,
@@ -172,19 +177,62 @@ export function ChatBubble({
                     border: `1px solid ${neutral[200]}`,
                     borderTopLeftRadius: radius.sm,
                     boxShadow: shadow.sm,
+                    maxWidth: attachment ? 520 : undefined,
                   }
             }
           >
-            {/* agent 消息 markdown 渲染（is_0000000019）；用户/系统消息保持纯文本 */}
-            {isUser || isSystem ? (
-              stripInjectedContext(text)
-            ) : (
-              <Markdown>{stripInjectedContext(text)}</Markdown>
+            {hasText && (
+              <>
+                <div
+                  data-testid="chat-bubble-content"
+                  style={
+                    (needsCollapse && !expanded
+                      ? {
+                          display: "-webkit-box",
+                          WebkitLineClamp: 6,
+                          WebkitBoxOrient: "vertical",
+                          overflow: "hidden",
+                          maxHeight: "9.6em",
+                        }
+                      : undefined) as unknown as CSSProperties
+                  }
+                >
+                  {isUser || isSystem ? (
+                    stripInjectedContext(text)
+                  ) : (
+                    <Markdown>{stripInjectedContext(text)}</Markdown>
+                  )}
+                </div>
+                {needsCollapse && (
+                  <button
+                    type="button"
+                    data-testid="chat-bubble-toggle"
+                    aria-expanded={expanded}
+                    onClick={() => setExpanded((v) => !v)}
+                    style={{
+                      marginTop: space.xs,
+                      padding: 0,
+                      border: "none",
+                      background: "none",
+                      color: isUser ? "rgba(255,255,255,0.9)" : "#2563EB",
+                      fontSize: fontSize.sm,
+                      fontWeight: 500,
+                      cursor: "pointer",
+                      fontFamily: fontFamily.body,
+                      textDecoration: "underline",
+                    }}
+                  >
+                    {expanded ? "收起 ▲" : "展开 ▼"}
+                  </button>
+                )}
+              </>
+            )}
+            {attachment && (
+              <div style={{ marginTop: hasText ? space.md : 0 }}>
+                <AttachmentCard attachment={attachment} isUser={isUser} embedded />
+              </div>
             )}
           </div>
-        )}
-        {attachment && (
-          <AttachmentCard attachment={attachment} isUser={isUser} />
         )}
       </div>
     </div>
@@ -196,18 +244,175 @@ export function ChatBubble({
 export function AttachmentCard({
   attachment,
   isUser,
+  embedded = false,
 }: {
   attachment: ChatBubbleAttachment;
   isUser: boolean;
+  embedded?: boolean;
 }) {
   const isImage = (IMAGE_EXTS as readonly string[]).includes(
     attachment.ext.toLowerCase(),
   );
+  const [zoomed, setZoomed] = useState(false);
+  useEffect(() => {
+    if (!zoomed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setZoomed(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zoomed]);
+  if (embedded) {
+    if (isImage) {
+      return (
+        <>
+          <button
+            type="button"
+            data-testid="attachment-image"
+            aria-label={`查看大图：${attachment.name}`}
+            title="点击查看大图"
+            onClick={() => setZoomed(true)}
+            style={{
+              display: "inline-block",
+              maxWidth: "100%",
+              padding: 0,
+              border: `1px solid ${neutral[200]}`,
+              borderRadius: radius.md,
+              overflow: "hidden",
+              backgroundColor: neutral[50],
+              cursor: "zoom-in",
+            }}
+          >
+            <img
+              src={attachment.url}
+              alt={attachment.name}
+              style={{
+                display: "block",
+                width: "auto",
+                maxWidth: 320,
+                maxHeight: 180,
+                objectFit: "cover",
+                objectPosition: "top",
+                borderRadius: radius.md,
+              }}
+            />
+          </button>
+          {zoomed && (
+            <div
+              data-testid="attachment-lightbox"
+              role="dialog"
+              aria-modal="true"
+              onClick={() => setZoomed(false)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 9999,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: space.xl,
+                backgroundColor: "rgba(15,23,42,0.72)",
+                backdropFilter: "blur(4px)",
+                cursor: "zoom-out",
+              }}
+            >
+              <img
+                src={attachment.url}
+                alt={attachment.name}
+                style={{
+                  display: "block",
+                  maxWidth: "92vw",
+                  maxHeight: "92vh",
+                  width: "auto",
+                  height: "auto",
+                  objectFit: "contain",
+                  borderRadius: radius.lg,
+                  border: `1px solid rgba(255,255,255,0.18)`,
+                  backgroundColor: "#FFFFFF",
+                  boxShadow: shadow.lg,
+                  cursor: "zoom-out",
+                }}
+              />
+            </div>
+          )}
+        </>
+      );
+    }
+    // embedded file: inline without outer card background, keeps light border inside bubble
+    return (
+      <a
+        data-testid="attachment-file"
+        href={attachment.url}
+        download={attachment.name}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={attachment.name}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: space.sm,
+          padding: `${space.sm}px ${space.md}px`,
+          color: isUser ? "#FFFFFF" : "#2563EB",
+          fontSize: fontSize.sm,
+          fontWeight: 500,
+          textDecoration: "none",
+          wordBreak: "break-all",
+          border: `1px solid ${neutral[200]}`,
+          borderRadius: radius.md,
+          backgroundColor: isUser ? "rgba(255,255,255,0.12)" : neutral[50],
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            flexShrink: 0,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 28,
+            height: 28,
+            borderRadius: radius.sm,
+            backgroundColor: isUser ? "rgba(255,255,255,0.2)" : "rgba(37,99,235,0.18)",
+            color: "#2563EB",
+            fontSize: fontSize.xs,
+            fontWeight: 600,
+          }}
+        >
+          {attachment.ext.slice(0, 3).toUpperCase()}
+        </span>
+        <span style={{ minWidth: 0 }}>
+          <span
+            style={{
+              display: "block",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              lineHeight: 1.4,
+            }}
+          >
+            {attachment.name}
+          </span>
+          {typeof attachment.size === "number" && (
+            <span
+              style={{
+                display: "block",
+                fontSize: fontSize.xs,
+                color: isUser ? "rgba(255,255,255,0.75)" : neutral[400],
+                lineHeight: 1.4,
+              }}
+            >
+              {formatFileSize(attachment.size)}
+            </span>
+          )}
+        </span>
+      </a>
+    );
+  }
   return (
     <div
       data-testid="message-attachment"
       style={{
-        marginTop: space.sm,
+        marginTop: embedded ? 0 : space.sm,
         borderRadius: radius.md,
         overflow: "hidden",
         backgroundColor: isUser ? "rgba(255,255,255,0.12)" : neutral[50],
@@ -216,26 +421,78 @@ export function AttachmentCard({
       }}
     >
       {isImage ? (
-        <a
-          data-testid="attachment-image"
-          href={attachment.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={`查看原图：${attachment.name}`}
-          style={{ display: "block" }}
-        >
-          <img
-            src={attachment.url}
-            alt={attachment.name}
+        <>
+          <button
+            type="button"
+            data-testid="attachment-image"
+            aria-label={`查看大图：${attachment.name}`}
+            title="点击查看大图"
+            onClick={() => setZoomed(true)}
             style={{
               display: "block",
               width: "100%",
-              maxHeight: 280,
-              objectFit: "cover",
+              padding: 0,
+              border: `1px solid ${neutral[200]}`,
               borderRadius: radius.md,
+              overflow: "hidden",
+              backgroundColor: neutral[50],
+              cursor: "zoom-in",
             }}
-          />
-        </a>
+          >
+            <img
+              src={attachment.url}
+              alt={attachment.name}
+              style={{
+                display: "block",
+                width: "100%",
+                height: "auto",
+                maxWidth: 320,
+                maxHeight: 180,
+                objectFit: "cover",
+                objectPosition: "top",
+                borderRadius: radius.md,
+              }}
+            />
+          </button>
+          {zoomed && (
+            <div
+              data-testid="attachment-lightbox"
+              role="dialog"
+              aria-modal="true"
+              onClick={() => setZoomed(false)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 9999,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: space.xl,
+                backgroundColor: "rgba(15,23,42,0.72)",
+                backdropFilter: "blur(4px)",
+                cursor: "zoom-out",
+              }}
+            >
+              <img
+                src={attachment.url}
+                alt={attachment.name}
+                style={{
+                  display: "block",
+                  maxWidth: "92vw",
+                  maxHeight: "92vh",
+                  width: "auto",
+                  height: "auto",
+                  objectFit: "contain",
+                  borderRadius: radius.lg,
+                  border: `1px solid rgba(255,255,255,0.18)`,
+                  backgroundColor: "#FFFFFF",
+                  boxShadow: shadow.lg,
+                  cursor: "zoom-out",
+                }}
+              />
+            </div>
+          )}
+        </>
       ) : (
         <a
           data-testid="attachment-file"

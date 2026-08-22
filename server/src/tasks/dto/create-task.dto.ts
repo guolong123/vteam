@@ -34,7 +34,7 @@ export class TaskAgentInput {
 
   @ApiPropertyOptional({
     description:
-      '实例独立持久化工作目录（缺省 = `/data/worker/<sanitize(agent.name)>`，同 agent 多实例追加 -<seq>）',
+      '实例独立持久化工作目录（缺省 = `/data/vteam-worker/<sanitize(agent.name)>`，同 agent 多实例追加 -<seq>）',
   })
   @IsOptional()
   @IsString()

@@ -72,7 +72,7 @@ export const GLOBAL_SYSTEM_INSTRUCTIONS = [
   '——目标实例会收到你的消息并开始执行；回复时也可用 @用户名 在群聊中定向回复特定成员。',
   '【Issue 管理】任务内 issue 协作：创建 issue 调 vteam MCP 的 issue_create（参数 {taskId, selfInstanceId, title, description?, tags?, assigneeInstanceId?}）；查询 issue_list/issue_get；更新 issue_update；状态流转 issue_transition（action: start/resolve/close/reopen/reject）。产品/测试 Agent 负责创建需求或缺陷 issue 并指派（assigneeInstanceId 为目标实例 id），研发 Agent 处理指派给自己的 issue 并流转状态。issue 标签（tags）标识类型（如 需求/缺陷/优化）。',
   '【任务状态】主 Agent 可调用 vteam MCP 的 task_transition 工具（参数 {taskId, selfInstanceId, action: start/mark-pending-review/accept/reject/archive, reason?}）流转任务状态：start 开始 / mark-pending-review 提交验收 / accept 验收通过 / reject 驳回（可附 reason）/ archive 归档。仅主实例可调用 task_transition，其余成员调用将返回 403 提示（请知会主实例或由管理员在任务管理界面操作）。',
-  '【持久化目录】你运行在 k8s 容器环境中，平台为每个 Agent 分配独立的持久化工作目录（默认 /data/worker/<agent名称>，可在创建任务时指定）。' +
+  '【持久化目录】你运行在 k8s 容器环境中，平台为每个 Agent 分配独立的持久化工作目录（默认 /data/vteam-worker/<agent名称>，可在创建任务时指定）。' +
   '仅该目录及挂载卷内的内容在容器重启后保留，其余路径（如 /tmp、仓库外任意路径）写入的文件重启后会丢失；' +
   '工作产物、git clone 的仓库、脚本、产出物文件等请写入该持久化目录，提交产出物（doc/file）时 fileRef 应指向该目录内的文件。',
   '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息（含 requestId、kind、问题详情）时，调用 vteam MCP 的 question_confirm 工具（参数 {taskId, selfInstanceId, requestId, kind, answers?/response?}）决策——question 传 answers（答案数组，null=拒绝）；permission 传 response（once 允许一次 / always 总是允许 / reject 拒绝）。仅主实例可调用 question_confirm。',
@@ -260,10 +260,10 @@ export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 30 * 60_000;
 /** 空闲判死扫描周期（定期遍历 lastActivityAt，检查超时会话）。 */
 export const IDLE_SCAN_INTERVAL_MS = 60_000;
 
-/** F3 MINOR-3：任务工作目录根（env WORK_DIR，默认 /tmp/keta-worker-tasks）。
+  /** F3 MINOR-3：任务工作目录根（env WORK_DIR，默认 /data/vteam-worker）。
  *  任务级独立工作目录 = <根>/tasks/<taskId>（server 侧 mkdir -p 保证存在），
  *  作为 prompt_async 的 directory 传入——防模型在仓库根真实写文件污染（F4 零污染关键）。 */
-export const DEFAULT_TASK_WORK_DIR = '/tmp/keta-worker-tasks';
+export const DEFAULT_TASK_WORK_DIR = '/data/vteam-worker';
 
 /** 自持轮询间隔 ms（F2 C1：对齐 worker 侧 prompt-await.ts pollMs=500，计划 D8）。 */
 export const POLL_INTERVAL_MS = 500;
@@ -742,7 +742,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
   public firstTokenTimeoutMs: number;
   /** 空闲判死 ms（env AGENT_IDLE_TIMEOUT_MS，缺省 30min）：running 后无输出活动超时 → 判死。 */
   public agentIdleTimeoutMs: number;
-  /** F3 MINOR-3：任务工作目录根（env WORK_DIR，缺省 /tmp/keta-worker-tasks）。 */
+  /** F3 MINOR-3：任务工作目录根（env WORK_DIR，缺省 /data/vteam-worker-tasks）。 */
   public taskWorkDirRoot: string;
   /** F3 MAJOR-1：增量 poll 游标（sessionId → 已消费到的最新消息 id），复用会话跨轮续接。 */
   private readonly pollCursors = new Map<string, string>();
@@ -1070,7 +1070,7 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // 自持轮询 pollForCompletion 方案 A 后不再调用（代码保留作兜底/测试，见方法注释）。
     // is_0000000010：工作目录解析链（worker 持久化目录 = 每 agent 独立工作区）——
     // 1. 实例 task_agents.work_dir（创建任务可指定，优先）
-    // 2. 缺省 /data/worker/<sanitize(agent.name)>-<seq>（与 tasks.service 同根，防分叉）
+    // 2. 缺省 /data/vteam-worker/<sanitize(agent.name)>-<seq>（与 tasks.service 同根，防分叉）
     // 3. 任务级 <WORK_DIR>/tasks/<taskId> 兜底（兼容存量，见 resolveAgentWorkDir）
     // 目录创建下沉两处兜底：server mkdir -p + worker 执行端点 mkdir（文件系统可能不共享）。
     const taskWorkDir = await this.resolveAgentWorkDir(taskId, session, target);
@@ -2031,6 +2031,9 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     workerId: string,
     instanceId: string,
   ): void {
+    if (this.firstTokenTimeoutMs <= 0) {
+      return;
+    }
     if (this.failedSessions.has(sessionId)) {
       return;
     }
@@ -2091,8 +2094,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     this.lastActivityAt.set(sessionId, Date.now());
   }
 
-  /** 惰性启动空闲判死扫描（setInterval 周期遍历 lastActivityAt；unref 防阻塞进程退出）。 */
+  /** 惰性启动空闲判死扫描（0 表示禁用，按需求已禁杀死长任务） */
   private startIdleScan(): void {
+    if (this.agentIdleTimeoutMs <= 0) {
+      return;
+    }
     if (this.idleScanTimer) {
       return;
     }
@@ -2110,6 +2116,9 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
    * + 广播 agent.error）；非 running（idle/完成/冻结）→ 退出追踪不判死（防误杀）。
    */
   private async scanIdleSessions(): Promise<void> {
+    if (this.agentIdleTimeoutMs <= 0) {
+      return;
+    }
     const now = Date.now();
     const stale: string[] = [];
     for (const [sessionId, lastAt] of this.lastActivityAt) {
@@ -2241,10 +2250,10 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
 
   /**
    * is_0000000010：实例工作目录解析链——优先实例 task_agents.work_dir（创建任务时
-   * 指定或服务端默认 `/data/worker/<sanitize(name)>[-seq]`）；缺失（存量实例/异常）
-   * 回落 `/data/worker/<sanitize(agent.name)>-<seq>`（与 tasks.service 同根，防两处默认
+   * 指定或服务端默认 `/data/vteam-worker/<sanitize(name)>[-seq]`）；缺失（存量实例/异常）
+   * 回落 `/data/vteam-worker/<sanitize(agent.name)>-<seq>`（与 tasks.service 同根，防两处默认
    * 路径分叉——PR 审核建议），最终任务级目录兜底。mkdir -p 保证存在；worker 执行端点
-   * 亦有兜底创建（server/worker 文件系统可能不共享，依赖 /data/worker 持久卷）。
+   * 亦有兜底创建（server/worker 文件系统可能不共享，依赖 /data/vteam-worker 持久卷）。
    */
   private async resolveAgentWorkDir(
     taskId: string,
@@ -2284,11 +2293,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     return this.ensureTaskWorkDir(taskId);
   }
 
-  /** is_0000000010：默认 agent 目录 `/data/worker/<sanitize(name)>[-seq]`（对齐
+  /** is_0000000010：默认 agent 目录 `/data/vteam-worker/<sanitize(name)>[-seq]`（对齐
    *  tasks.service defaultAgentWorkDir，统一根路径防存量实例调度/DTO 展示分叉）。 */
   private defaultAgentWorkDirPath(name: string, seq: number): string {
     const base = sanitizeWorkDirName(name ?? 'agent');
-    return `/data/worker/${seq > 1 ? `${base}-${seq}` : base}`;
+    return `/data/vteam-worker/${seq > 1 ? `${base}-${seq}` : base}`;
   }
 
   private clearPendingWatchdog(taskId: string, agentId: string): void {

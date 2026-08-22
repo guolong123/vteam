@@ -19,7 +19,7 @@
 "use client";
 import type { CSSProperties } from "react";
 import { type RoleKey, neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
-import { ChatBubble, AttachmentCard, Markdown } from "@/src/components/ui";
+import { ChatBubble, Markdown } from "@/src/components/ui";
 import type { ChatBubbleAttachment } from "@/src/components/ui";
 import { LoadingDots } from "./loading-indicator";
 import { MsgThinking } from "./msg-thinking";
@@ -99,7 +99,7 @@ export interface MsgPartsProps {
 
 /** Agent 消息片段渲染：过程片段（thinking/tool/error/aborted）+ 正文置底。 */
 export function MsgParts({ parts, bodyText, author, role, time, streaming, attachment, style, className }: MsgPartsProps) {
-  const list = parts as PartShape[];
+  const list = (parts ?? []) as PartShape[];
 
   // 中断独占：aborted 时其余未完成 Part 不渲染（10 篇 §2.3）
   const aborted = list.find((p) => p.type === "aborted");
@@ -111,11 +111,9 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
     );
   }
 
-  // 非 text 过程片段按序渲染；text 片段合并为正文置底
   const procParts = list.filter((p) => p.type !== "text");
   const textParts = list.filter((p) => p.type === "text");
   const body = textParts.map((t) => t.text ?? "").join("\n") || bodyText || "";
-  // P6：agent 正文渲染前剥离注入的系统上下文块（流式态与非流式态统一应用）
   const cleanBody = stripInjectedContext(body);
 
   return (
@@ -203,10 +201,11 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
             </span>
           </div>
         ) : (
-          <ChatBubble text={cleanBody} type="agent" author={author} role={role} time={time} />
+          <ChatBubble text={cleanBody} type="agent" author={author} role={role} time={time} attachment={attachment} />
         )
+      ) : attachment ? (
+        <ChatBubble text="" type="agent" author={author} role={role} time={time} attachment={attachment} />
       ) : null}
-      {attachment && <AttachmentCard attachment={attachment} isUser={false} />}
     </div>
   );
 }

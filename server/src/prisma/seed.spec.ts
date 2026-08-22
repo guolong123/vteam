@@ -1,4 +1,3 @@
-import { DEFAULT_ACK_MESSAGE } from '../chat/chat.constants';
 import { TEMPLATE_DEFAULT_MODELS } from '../common/constants/agent.constants';
 
 jest.mock('@prisma/client', () => ({
@@ -23,12 +22,12 @@ const mockPrisma = {
 
 import { main } from '../../prisma/seed';
 
-describe('seed（模板 Agent 预置收到确认文案）', () => {
+describe('seed（模板 Agent 预置）', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it('5 类模板 Agent upsert create 分支均预置 ackMessage 默认文案', async () => {
+  it('5 类模板 Agent upsert create 分支均预置为 template 类型', async () => {
     await main();
 
     const agentUpserts = mockPrisma.agent.upsert.mock.calls;
@@ -39,18 +38,16 @@ describe('seed（模板 Agent 预置收到确认文案）', () => {
     for (const id of templateIds) {
       const call = agentUpserts.find((c) => c[0].where.id === id);
       expect(call[0].create.type).toBe('template');
-      expect(call[0].create.ackMessage).toBe(DEFAULT_ACK_MESSAGE);
+      expect(call[0].create.ackMessage).toBeUndefined();
     }
   });
 
-  it('create 分支 ackMessage 与 chat 域默认文案常量一致（文案单一事实源）', async () => {
+  it('已移除默认 ACK 文案（收到，正在处理… 机制已下线）', async () => {
     await main();
-
     const ackValues = mockPrisma.agent.upsert.mock.calls
       .map((call) => call[0].create.ackMessage)
       .filter((v: unknown) => v !== undefined);
-    expect(new Set(ackValues)).toEqual(new Set([DEFAULT_ACK_MESSAGE]));
-    expect(DEFAULT_ACK_MESSAGE).toBe('收到，正在处理…');
+    expect(ackValues).toEqual([]);
   });
 
   it('已存在模板 Agent 时 update 分支仅同步出厂默认 prompt，不覆盖用户修改的 defaultModelId', async () => {

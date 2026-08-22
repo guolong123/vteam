@@ -50,6 +50,58 @@ export function buildAuthJson(providerKeys: ModelCredentialEntry[]): string {
   return JSON.stringify(map, null, 2);
 }
 
+export function ensureLocalProviderKeys(providerKeys: ModelCredentialEntry[], localProviderIds: string[]): ModelCredentialEntry[] {
+  const existing = new Set((providerKeys ?? []).map((e) => e?.providerID?.trim()).filter(Boolean));
+  const extra: ModelCredentialEntry[] = [];
+  for (const pid of localProviderIds ?? []) {
+    const id = pid?.trim();
+    if (id && !existing.has(id)) {
+      extra.push({ providerID: id, key: 'dummy-local-key' });
+    }
+  }
+  return [...(providerKeys ?? []), ...extra];
+}
+
+export function buildOpencodeConfig(providerBaseUrls: Map<string, string>): string {
+  const providers: Record<string, { baseUrl: string }> = {};
+  for (const [pid, url] of providerBaseUrls.entries()) {
+    const id = pid?.trim();
+    const u = url?.trim();
+    if (id && u && /^https?:\/\/.+/.test(u)) {
+      if (providers[id] && providers[id].baseUrl !== u) {
+        console.warn(`[model-credential-injector] provider ${id} 多 baseUrl 不一致，保留首个 ${providers[id].baseUrl} 忽略 ${u}`);
+        continue;
+      }
+      providers[id] = { baseUrl: u };
+    }
+  }
+  return JSON.stringify({ providers }, null, 2);
+}
+
+export function writeOpencodeConfig(providerBaseUrls: Map<string, string>): string {
+  const configDir = path.join(os.homedir(), '.config', 'opencode');
+  const configPath = path.join(configDir, 'opencode.json');
+  fs.mkdirSync(configDir, { recursive: true });
+  const content = buildOpencodeConfig(providerBaseUrls);
+  const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null;
+  if (existing) {
+    try {
+      const parsed = JSON.parse(existing);
+      const merged = { ...parsed, providers: { ...(parsed.providers ?? {}), ...JSON.parse(content).providers } };
+      fs.writeFileSync(configPath, JSON.stringify(merged, null, 2), { mode: AUTH_FILE_MODE });
+      fs.chmodSync(configPath, AUTH_FILE_MODE);
+      return configPath;
+    } catch {
+      fs.writeFileSync(configPath, content, { mode: AUTH_FILE_MODE });
+      fs.chmodSync(configPath, AUTH_FILE_MODE);
+      return configPath;
+    }
+  }
+  fs.writeFileSync(configPath, content, { mode: AUTH_FILE_MODE });
+  fs.chmodSync(configPath, AUTH_FILE_MODE);
+  return configPath;
+}
+
 /**
  * 写 auth.json 到 `$HOME/.local/share/opencode/auth.json`（opencode 1.18.16 实测
  * 固定读取路径）：写前 mkdir -p（含 log 子目录，serve 启动写

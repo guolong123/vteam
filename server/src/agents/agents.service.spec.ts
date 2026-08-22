@@ -39,7 +39,6 @@ describe('AgentsService', () => {
       prompt: 'prompt1',
       baseAgentId: null,
       defaultModelId: null,
-      ackMessage: '收到，正在处理…',
       permissionScope: null,
       createdBy: 'u_admin',
       createdAt: new Date('2026-08-07T00:00:00Z'),
@@ -55,7 +54,6 @@ describe('AgentsService', () => {
       prompt: 'prompt2',
       baseAgentId: null,
       defaultModelId: null,
-      ackMessage: null,
       permissionScope: null,
       createdBy: 'u_admin',
       createdAt: new Date('2026-08-07T00:00:01Z'),
@@ -71,7 +69,6 @@ describe('AgentsService', () => {
       prompt: 'prompt3',
       baseAgentId: null,
       defaultModelId: null,
-      ackMessage: null,
       permissionScope: null,
       createdBy: 'u_admin',
       createdAt: new Date('2026-08-07T00:00:02Z'),
@@ -87,7 +84,6 @@ describe('AgentsService', () => {
       prompt: 'prompt4',
       baseAgentId: null,
       defaultModelId: null,
-      ackMessage: null,
       permissionScope: null,
       createdBy: 'u_admin',
       createdAt: new Date('2026-08-07T00:00:03Z'),
@@ -107,7 +103,6 @@ describe('AgentsService', () => {
     role: 'analyst',
     prompt: 'prompt-custom',
     defaultModelId: 'opencode-go/deepseek-v4-flash',
-    ackMessage: '收到确认',
     permissionScope: { projects: ['p1'], write: false },
   };
 
@@ -175,7 +170,6 @@ describe('AgentsService', () => {
         prompt: 'prompt1',
         baseAgentId: null,
         defaultModelId: null,
-        ackMessage: '收到，正在处理…',
         permissionScope: null,
         skillIds: ['s_skill1'],
         toolEffects: [{ toolAction: 'read', effect: '允许读取' }],
@@ -194,7 +188,6 @@ describe('AgentsService', () => {
           'baseAgentId',
           'defaultModelId',
           'persona',
-          'ackMessage',
           'permissionScope',
           'skillIds',
           'toolEffects',
@@ -295,7 +288,6 @@ describe('AgentsService', () => {
         toolEffects: [{ toolAction: 'read', effect: 'allow' }],
         permissionScope: { projects: ['p1'], write: false },
         defaultModelId: 'opencode-go/deepseek-v4-flash',
-        ackMessage: '收到确认',
       };
 
       const result = await service.create('u_admin', dto);
@@ -311,7 +303,6 @@ describe('AgentsService', () => {
             prompt: 'prompt-custom',
             baseAgentId: null,
             defaultModelId: 'opencode-go/deepseek-v4-flash',
-            ackMessage: '收到确认',
             permissionScope: { projects: ['p1'], write: false },
             createdBy: 'u_admin',
           }),
@@ -342,7 +333,6 @@ describe('AgentsService', () => {
         skillIds: ['s_skill1', 's_skill2'],
         toolEffects: [{ toolAction: 'read', effect: 'allow' }],
         defaultModelId: 'opencode-go/deepseek-v4-flash',
-        ackMessage: '收到确认',
       });
     });
 
@@ -421,7 +411,6 @@ describe('AgentsService', () => {
             baseAgentId: 'a_product',
             role: 'product',
             prompt: 'prompt1',
-            ackMessage: '收到，正在处理…',
             createdBy: 'u_admin',
           }),
         }),
@@ -443,7 +432,6 @@ describe('AgentsService', () => {
         name: '产品经理副本',
         type: 'clone',
         baseAgentId: 'a_product',
-        ackMessage: '收到，正在处理…',
         skillIds: ['s_skill1'],
         toolEffects: [{ toolAction: 'read', effect: '允许读取' }],
       });
@@ -525,21 +513,19 @@ describe('AgentsService', () => {
       expect(result).toBeDefined();
     });
 
-    it('is_0000000030：type=template 可修改多字段（prompt+defaultModelId+ackMessage）', async () => {
+    it('is_0000000030：type=template 可修改多字段（prompt+defaultModelId）', async () => {
       prisma.agent.findUnique
         .mockResolvedValueOnce(templateRows[0])
         .mockResolvedValueOnce({
           ...templateRows[0],
           prompt: 'x',
           defaultModelId: 'opencode-go/deepseek-v4-flash',
-          ackMessage: '收到',
         });
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
       prisma.agent.update.mockResolvedValue({ ...templateRows[0], prompt: 'x' });
       prisma.agent.findUnique.mockResolvedValue({ ...templateRows[0], prompt: 'x' });
 
       const result = await service.update('a_product', {
-        ackMessage: '收到',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
         prompt: 'x',
       });
@@ -597,7 +583,6 @@ describe('AgentsService', () => {
         name: '新数据分析师',
         prompt: 'new-prompt',
         defaultModelId: 'deepseek-v4-pro',
-        ackMessage: '收到确认v2',
         skillIds: ['s_new'],
         toolEffects: [{ toolAction: 'bash', effect: 'ask' }],
       };
@@ -610,7 +595,6 @@ describe('AgentsService', () => {
             name: '新数据分析师',
             prompt: 'new-prompt',
             defaultModelId: 'deepseek-v4-pro',
-            ackMessage: '收到确认v2',
           }),
         }),
       );

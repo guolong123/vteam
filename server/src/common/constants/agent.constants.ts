@@ -40,25 +40,7 @@ export type AgentErrorCode = (typeof AGENT_ERRORS)[keyof typeof AGENT_ERRORS];
  * 落在 worker 实际可执行清单内（TEMPLATE_DEFAULT_MODELS 的 spec 断言锁定），否则模板
  * Agent 用默认模型创建任务 → dispatch 模型不匹配 → 无回复/insufficient_quota。
  */
-export const STATIC_AVAILABLE_MODELS = [
-  { id: 'opencode-go/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-  { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
-  { id: 'zhipu/glm-5.1', name: 'GLM 5.1' },
-  { id: 'zhipu/glm-5.2', name: 'GLM 5.2' },
-  { id: 'openai/gpt-5.6-luna', name: 'GPT 5.6 Luna' },
-  { id: 'xai/grok-4.5', name: 'Grok 4.5' },
-  { id: 'moonshot/kimi-k2.6', name: 'Kimi K2.6' },
-  { id: 'qwen/qwen3.6-plus', name: 'Qwen 3.6 Plus' },
-  // worker（w_compose_worker）节点 opencode models 实测可执行模型（CONF-01 修正：仅 8 个，DB 其余为假模型）
-  { id: 'opencode/big-pickle', name: 'Big Pickle' },
-  { id: 'opencode/deepseek-v4-flash-free', name: 'DeepSeek V4 Flash (Free)' },
-  { id: 'opencode/laguna-s-2.1-free', name: 'Laguna S 2.1 (Free)' },
-  { id: 'opencode/ling-3.0-tiny-free', name: 'Ling 3.0 Tiny (Free)' },
-  { id: 'opencode/longcat-2.0-free', name: 'Longcat 2.0 (Free)' },
-  { id: 'opencode/mimo-v2.5-free', name: 'Mimo V2.5 (Free)' },
-  { id: 'opencode/nemotron-3-ultra-free', name: 'Nemotron 3 Ultra (Free)' },
-  { id: 'opencode/north-mini-code-free', name: 'North Mini Code (Free)' },
-] as const;
+export const STATIC_AVAILABLE_MODELS: readonly { id: string; name: string }[] = [];
 
 /**
  * 模型目录 seed 行（C1：STATIC_AVAILABLE_MODELS → models 表预置，防空目录回归——Metis P1-2）。
@@ -89,20 +71,6 @@ export function buildModelSeedRows(): ModelSeedRow[] {
 }
 
 /**
- * 四类模板默认模型（C1 seed 预置——模板只读 PATCH 403 堵死配置通道，只能 seed 预设，Metis R3）。
- * 推荐映射：产品=通用对话、架构=推理、开发=代码、测试=推理（14 篇 §4.1 模型侧重；
- * 值取 STATIC_AVAILABLE_MODELS 中的对应模型，`providerID/modelID` 格式与 D7 一致）。
- *
- * CONF-01（修正）：worker（w_compose_worker）节点 `opencode models` 实测仅 8 个可执行
- * opencode/* 模型（权威），默认模型必须落在实测清单内。
- * CONF-02（修正）：统一改为 opencode/big-pickle——opencode 免费模型，实测稳定快速
- * （5-20s 完成）；deepseek-v4-flash-free 等免费模型实测标题生成/思考极慢（115s+）导致
- * 120s 首字超时 abort，故四类模板默认模型统一收敛到 big-pickle。
+ * 模板默认模型已清空（动态获取）：不再预置静态模型，按 worker 上报动态目录选择。
  */
-export const TEMPLATE_DEFAULT_MODELS: Record<string, string> = {
-  a_product: 'opencode/big-pickle',
-  a_project_manager: 'opencode/big-pickle',
-  a_architect: 'opencode/big-pickle',
-  a_developer: 'opencode/big-pickle',
-  a_tester: 'opencode/big-pickle',
-} as const;
+export const TEMPLATE_DEFAULT_MODELS: Record<string, string> = {} as const;

@@ -386,8 +386,8 @@ export async function awaitCompletion(
       firstTokenAt = Date.now();
     }
     // 首字（text 或 reasoning）出现后无完成超时（继续轮询，判死由上层负责）；
-    // 仅「时限内 text/reasoning 均未出现」才 abort。
-    if (firstTokenAt === null && Date.now() - startedAt >= firstTokenTimeoutMs) {
+    // 仅「时限内 text/reasoning 均未出现」才 abort；firstTokenTimeoutMs<=0 视为禁用
+    if (firstTokenTimeoutMs > 0 && firstTokenAt === null && Date.now() - startedAt >= firstTokenTimeoutMs) {
       break;
     }
     await sleep(pollMs);

@@ -12,7 +12,12 @@ export const MODEL_ERRORS = {
   MODEL_EXISTS: 'MODEL_EXISTS',
   MODEL_CREDENTIAL_NOT_FOUND: 'MODEL_CREDENTIAL_NOT_FOUND',
   MODEL_PROVIDER_MISMATCH: 'MODEL_PROVIDER_MISMATCH',
+  MODEL_BASEURL_CONFLICT: 'MODEL_BASEURL_CONFLICT',
+  MODEL_BASEURL_REQUIRED: 'MODEL_BASEURL_REQUIRED',
 } as const;
+
+export const MODEL_PROVIDER_TYPES = ['cloud', 'local', 'custom'] as const;
+export type ModelProviderType = (typeof MODEL_PROVIDER_TYPES)[number];
 
 export type ModelErrorCode =
   (typeof MODEL_ERRORS)[keyof typeof MODEL_ERRORS];

@@ -67,6 +67,7 @@ type TaskAgentInstance = {
   seq: number;
   workDir?: string | null;
   removedAt: Date | null;
+  enabled?: boolean | null;
   agent: { id: string; name: string; role: string | null };
   /** 实例会话（每实例每任务一个，task 详情 instances 回传 sessionStatus 真实状态源）。 */
   sessions?: { id: string; status: string }[];
@@ -751,6 +752,42 @@ export class TasksService implements OnModuleInit {
     return this.toTaskDto(fresh ?? task);
   }
 
+  async updateInstance(taskId: string, instanceId: string, dto: { enabled?: boolean }) {
+    const inst = await this.prisma.taskAgent.findUnique({ where: { id: instanceId } });
+    if (!inst || inst.taskId !== taskId) {
+      throw new NotFoundException({ code: TASK_ERRORS.TASK_NOT_FOUND, message: '实例不存在' });
+    }
+    if (dto.enabled !== undefined) {
+      await this.prisma.taskAgent.update({ where: { id: instanceId }, data: { enabled: dto.enabled } });
+    }
+    const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: TASK_AGENTS_INCLUDE });
+    return this.toTaskDto(task!);
+  }
+
+  async resetInstanceSession(taskId: string, instanceId: string) {
+    const inst = await this.prisma.taskAgent.findUnique({ where: { id: instanceId } });
+    if (!inst || inst.taskId !== taskId) {
+      throw new NotFoundException({ code: TASK_ERRORS.TASK_NOT_FOUND, message: '实例不存在' });
+    }
+    // 归档旧会话
+    await this.prisma.session.updateMany({
+      where: { taskAgentId: instanceId, status: { not: 'archived' } },
+      data: { status: 'archived' },
+    });
+    // 创建新会话（created 态，worker 下次 dispatch 时绑定）
+    const newSession = await this.prisma.session.create({
+      data: {
+        id: await this.idGen.nextId('s'),
+        taskId,
+        taskAgentId: instanceId,
+        agentId: inst.agentId,
+        status: 'created',
+      },
+    });
+    const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: TASK_AGENTS_INCLUDE });
+    return { task: this.toTaskDto(task!), session: newSession };
+  }
+
   /**
    * 各动作的迁移副作用配置（自原 5 个动作方法提取，行为不变）：
    * start/mark-pending-review/accept/reject/archive 的用户路径与 MCP 路径（transitionByAgent）
@@ -1234,6 +1271,7 @@ export class TasksService implements OnModuleInit {
       name: ta.agent.name,
       role: ta.agent.role,
       main: ta.id === task.mainAgentInstanceId,
+      enabled: (ta as { enabled?: boolean | null }).enabled ?? true,
       // 会话状态快照（每实例一会话，取首项；archived 已过滤）：前端挂载时初始化
       // 成员工作状态（SSE 增量仅驱动后续切换，重连不重放 running → 状态丢失修复）。
       sessionStatus: ta.sessions?.[0]?.status ?? null,
@@ -1286,7 +1324,7 @@ export class TasksService implements OnModuleInit {
   }
 
   /**
-   * is_0000000010：实例默认持久化工作目录 `/data/worker/<sanitize(agent.name)>`。
+   * is_0000000010：实例默认持久化工作目录 `/data/vteam-worker/<sanitize(agent.name)>`（统一持久化）。
    * agent 名称可能含中文/空格/斜杠等非 ASCII 字符，做 ASCII 化映射（非法字符 → `-`），
    * 避免路径穿越/非法字符导致目录不可用；同 agent 同任务多实例追加 `-<seq>` 防共享串数据。
    */
@@ -1295,7 +1333,7 @@ export class TasksService implements OnModuleInit {
     seq: number,
   ): string {
     const base = sanitizeWorkDirName(agent.name ?? agent.id ?? 'agent');
-    return seq > 1 ? `/data/worker/${base}-${seq}` : `/data/worker/${base}`;
+    return seq > 1 ? `/data/vteam-worker/${base}-${seq}` : `/data/vteam-worker/${base}`;
   }
 
   /**

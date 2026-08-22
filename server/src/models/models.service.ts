@@ -15,7 +15,7 @@ import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
 import { WorkersService } from '../workers/workers.service';
-import { MODEL_ERRORS } from './models.constants';
+import { MODEL_ERRORS, MODEL_PROVIDER_TYPES } from './models.constants';
 import { CreateModelDto } from './dto/create-model.dto';
 import { QueryModelsDto } from './dto/query-models.dto';
 import { UpdateModelDto } from './dto/update-model.dto';
@@ -48,6 +48,8 @@ export interface ProviderSummary {
   /** 已配置时返回库内脱敏指纹；未配置/已吊销为 null（明文零接触）。 */
   fingerprint: string | null;
   revokedAt: Date | null;
+  providerType?: string | null;
+  baseUrl?: string | null;
 }
 
 /**
@@ -100,11 +102,12 @@ export class ModelsService implements OnModuleInit {
   async findAll(query: QueryModelsDto = {}) {
     const page = this.normalizePage(query.page);
     const pageSize = this.normalizePageSize(query.pageSize);
-    const where = {
+    const where: Prisma.ModelWhereInput = {
       enabled: query.enabled === undefined ? undefined : query.enabled,
       providerID: query.providerID ? query.providerID : undefined,
       modelID: query.modelID ? { contains: query.modelID } : undefined,
       name: query.name ? { contains: query.name } : undefined,
+      providerType: query.providerType ? query.providerType : undefined,
     };
 
     const [total, rows] = await this.prisma.$transaction([
@@ -178,6 +181,17 @@ export class ModelsService implements OnModuleInit {
       }
     }
 
+    const providerMetaRowsRaw = await this.prisma.model.findMany({
+      where: { enabled: true },
+      select: { providerID: true, providerType: true, baseUrl: true },
+    } as never) as unknown;
+    const providerMetaRows = Array.isArray(providerMetaRowsRaw) ? (providerMetaRowsRaw as { providerID: string; providerType?: string; baseUrl?: string | null }[]) : [];
+    const metaByProvider = new Map<string, { providerType: string; baseUrl: string | null }>();
+    for (const r of providerMetaRows) {
+      if (!metaByProvider.has(r.providerID)) {
+        metaByProvider.set(r.providerID, { providerType: r.providerType ?? 'cloud', baseUrl: r.baseUrl ?? null });
+      }
+    }
     const providerIds = new Set<string>([
       ...groups.map((g) => g.providerID),
       ...workerCountByProvider.keys(),
@@ -188,6 +202,7 @@ export class ModelsService implements OnModuleInit {
         const configured = !!cred && cred.revokedAt === null;
         const catalogCount =
           groups.find((g) => g.providerID === providerID)?._count._all ?? 0;
+        const meta = metaByProvider.get(providerID);
         return {
           providerID,
           modelCount:
@@ -195,6 +210,8 @@ export class ModelsService implements OnModuleInit {
           configured,
           fingerprint: configured ? (cred?.fingerprint ?? null) : null,
           revokedAt: cred?.revokedAt ?? null,
+          ...(meta?.providerType ? { providerType: meta.providerType } : {}),
+          ...(meta?.baseUrl ? { baseUrl: meta.baseUrl } : {}),
         };
       })
       .sort((a, b) => a.providerID.localeCompare(b.providerID));
@@ -209,6 +226,10 @@ export class ModelsService implements OnModuleInit {
       dto.providerID.trim(),
       dto.modelID.trim(),
     );
+    const providerType = dto.providerType ? this.normalizeProviderType(dto.providerType) : undefined;
+    const effectiveProviderType = providerType ?? 'cloud';
+    const baseUrl = this.normalizeBaseUrl(dto.baseUrl, effectiveProviderType);
+    await this.assertBaseUrlConsistent(dto.providerID.trim(), baseUrl);
     return this.prisma.model.create({
       data: {
         id: await this.idGen.nextId(MODEL_ID_PREFIX),
@@ -217,6 +238,8 @@ export class ModelsService implements OnModuleInit {
         name: dto.name.trim(),
         capabilities: dto.capabilities as Prisma.InputJsonValue | undefined,
         enabled: dto.enabled ?? true,
+        ...(providerType ? { providerType } : {}),
+        ...(baseUrl ? { baseUrl } : {}),
       },
     });
   }
@@ -244,6 +267,13 @@ export class ModelsService implements OnModuleInit {
         id,
       );
     }
+    const effectiveProviderType =
+      dto.providerType !== undefined ? this.normalizeProviderType(dto.providerType) : (existing as { providerType?: string }).providerType ?? 'cloud';
+    const effectiveBaseUrlRaw = dto.baseUrl !== undefined ? dto.baseUrl : (existing as { baseUrl?: string | null }).baseUrl ?? null;
+    const effectiveBaseUrl = this.normalizeBaseUrl(effectiveBaseUrlRaw as string | undefined, effectiveProviderType);
+    if (dto.providerType !== undefined || dto.baseUrl !== undefined || dto.providerID !== undefined) {
+      await this.assertBaseUrlConsistent(effectiveProvider, effectiveBaseUrl, id);
+    }
 
     return this.prisma.model.update({
       where: { id },
@@ -257,6 +287,8 @@ export class ModelsService implements OnModuleInit {
           ? { capabilities: dto.capabilities as Prisma.InputJsonValue }
           : {}),
         ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
+        ...(dto.providerType !== undefined ? { providerType: effectiveProviderType } : {}),
+        ...(dto.baseUrl !== undefined ? { baseUrl: effectiveBaseUrl } : {}),
       },
     });
   }
@@ -395,6 +427,36 @@ export class ModelsService implements OnModuleInit {
     return row.id;
   }
 
+  private normalizeProviderType(raw?: string): string {
+    const v = (raw ?? 'cloud').trim().toLowerCase();
+    if ((MODEL_PROVIDER_TYPES as readonly string[]).includes(v)) return v;
+    throw new BadRequestException({ code: 'MODEL_PROVIDER_TYPE_INVALID', message: `providerType 非法: ${raw}` });
+  }
+
+  private normalizeBaseUrl(raw: string | undefined, providerType: string): string | null {
+    const trimmed = raw?.trim() ?? '';
+    if (providerType === 'local' || providerType === 'custom') {
+      if (!trimmed) throw new BadRequestException({ code: MODEL_ERRORS.MODEL_BASEURL_REQUIRED, message: `providerType=${providerType} 时 baseUrl 必填` });
+      if (!/^https?:\/\/.+/.test(trimmed)) throw new BadRequestException({ code: MODEL_ERRORS.MODEL_BASEURL_REQUIRED, message: 'baseUrl 需为 http(s) URL' });
+      return trimmed;
+    }
+    return trimmed ? trimmed : null;
+  }
+
+  private async assertBaseUrlConsistent(providerID: string, baseUrl: string | null, excludeId?: string): Promise<void> {
+    if (!baseUrl) return;
+    const rows = await this.prisma.model.findMany({
+      where: { providerID, id: excludeId ? { not: excludeId } : undefined },
+      select: { baseUrl: true },
+    });
+    for (const r of rows) {
+      const existing = (r as { baseUrl?: string | null }).baseUrl ?? null;
+      if (existing && existing !== baseUrl) {
+        throw new ConflictException({ code: MODEL_ERRORS.MODEL_BASEURL_CONFLICT, message: `provider ${providerID} 已有不同 baseUrl=${existing}，同一 provider 的 baseUrl 需一致` });
+      }
+    }
+  }
+
   /** providerID+modelID 唯一冲突校验（PATCH 排除自身）：已存在 → 409 MODEL_EXISTS。 */
   private async assertProviderModelAvailable(
     providerID: string,
@@ -429,7 +491,7 @@ export class ModelsService implements OnModuleInit {
    */
   async setCredential(
     modelId: string,
-    token: string,
+    token?: string,
     providerID?: string,
     targetWorkerIds?: string[],
   ): Promise<ModelCredentialView> {
@@ -442,8 +504,40 @@ export class ModelsService implements OnModuleInit {
         });
       }
     }
-    const credentialRef = this.crypto.encrypt(token);
-    const fingerprint = this.crypto.fingerprint(token);
+    const modelRows = (await this.prisma.model.findMany({ where: { providerID: modelProviderID }, select: { providerType: true }, take: 1 } as never)) as unknown[] | undefined;
+    const providerType = ((modelRows ?? [])[0] as { providerType?: string } | undefined)?.providerType ?? 'cloud';
+    const isLocal = providerType === 'local' || providerType === 'custom';
+    const trimmedToken = token?.trim() ?? '';
+    if (!trimmedToken) {
+      if (isLocal) {
+        this.logger.log(`模型凭据本地无鉴权（空 token 视为已配置）：model=${modelId} provider=${modelProviderID} providerType=${providerType}`);
+        const placeholder = 'local-noop';
+        const credentialRef = this.crypto.encrypt(placeholder);
+        const fingerprint = this.crypto.fingerprint(placeholder);
+        const existingLocal = await this.prisma.modelCredential.findUnique({ where: { providerID: modelProviderID } });
+        let row: ModelCredential;
+        if (existingLocal) {
+          row = await this.prisma.modelCredential.update({
+            where: { providerID: modelProviderID },
+            data: { credentialRef, fingerprint, revokedAt: null },
+          });
+        } else {
+          row = await this.prisma.modelCredential.create({
+            data: {
+              id: await this.idGen.nextId(MODEL_CREDENTIAL_ID_PREFIX),
+              providerID: modelProviderID,
+              credentialRef,
+              fingerprint,
+            },
+          });
+        }
+        await this.dispatchAfterSave(modelProviderID, placeholder, targetWorkerIds);
+        return this.toView(row);
+      }
+      throw new BadRequestException({ code: 'MODEL_TOKEN_REQUIRED', message: 'token 必填（cloud 模型需配置凭据）' });
+    }
+    const credentialRef = this.crypto.encrypt(trimmedToken);
+    const fingerprint = this.crypto.fingerprint(trimmedToken);
 
     const existing = await this.prisma.modelCredential.findUnique({
       where: { providerID: modelProviderID },
@@ -473,7 +567,7 @@ export class ModelsService implements OnModuleInit {
     }
     await this.dispatchAfterSave(
       modelProviderID,
-      token,
+      trimmedToken,
       targetWorkerIds,
     );
     return this.toView(row);

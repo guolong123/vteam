@@ -1,6 +1,5 @@
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import { DEFAULT_ACK_MESSAGE } from '../src/chat/chat.constants';
 import {
   buildModelSeedRows,
   TEMPLATE_DEFAULT_MODELS,
@@ -137,7 +136,6 @@ async function main() {
       name: '产品经理',
       role: 'product',
       persona: 'innovative',
-      ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '# 角色：产品经理\n' +
         '你是任务虚拟团队中的产品经理 Agent，负责需求拆解与文档化，输出需求文档与验收标准。\n' +
@@ -171,7 +169,6 @@ async function main() {
       name: '项目经理',
       role: 'project_manager',
       persona: 'aggressive',
-      ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '# 角色：项目经理\n' +
         '你是任务虚拟团队中的项目经理 Agent，负责项目的组织、排期与推进。\n' +
@@ -205,7 +202,6 @@ async function main() {
       name: '架构师',
       role: 'architect',
       persona: 'steady',
-      ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '# 角色：架构师\n' +
         '你是任务虚拟团队中的架构师 Agent，负责任务的技术方案设计与推演，权衡取舍输出设计文档。\n' +
@@ -237,7 +233,6 @@ async function main() {
       name: '开发者',
       role: 'developer',
       persona: 'conservative',
-      ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '# 角色：开发者\n' +
         '你是任务虚拟团队中的开发者 Agent，负责编码实现与问题排查。\n' +
@@ -271,7 +266,6 @@ async function main() {
       name: '测试',
       role: 'tester',
       persona: 'strict',
-      ackMessage: DEFAULT_ACK_MESSAGE,
       prompt:
         '# 角色：测试者\n' +
         '你是任务虚拟团队中的测试者 Agent，负责用例设计与缺陷验证，穷举边界场景输出验证结论。\n' +
@@ -361,6 +355,9 @@ async function main() {
       create: row,
     });
   }
+
+  // 已清空：本地示例模型改为 worker 动态上报，不再静态种子
+  const localModelSeeds: typeof modelRows = [];
 
   // 预置 builtin 工具（11 篇 §3.1 内置工具集：bash/read/edit/write/grep/glob 等基础能力）。
   // source=builtin 走 seed（POST /tools 只产 custom/mcp，见 tools.service.create）；

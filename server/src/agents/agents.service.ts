@@ -44,7 +44,6 @@ type AgentRow = {
   defaultModelId: string | null;
   persona: string | null;
   workerId: string | null;
-  ackMessage: string | null;
   permissionScope: Prisma.JsonValue | null;
   createdAt: Date;
   updatedAt: Date;
@@ -154,7 +153,6 @@ export class AgentsService implements OnModuleInit {
           baseAgentId: null,
           defaultModelId: dto.defaultModelId ?? null,
           persona: dto.persona ?? null,
-          ackMessage: dto.ackMessage ?? null,
           permissionScope: dto.permissionScope
             ? (dto.permissionScope as Prisma.InputJsonValue)
             : undefined,
@@ -200,7 +198,6 @@ export class AgentsService implements OnModuleInit {
           prompt: source.prompt,
           defaultModelId: source.defaultModelId,
           persona: source.persona,
-          ackMessage: source.ackMessage,
           permissionScope: source.permissionScope as Prisma.InputJsonValue | undefined,
           createdBy: userId,
         },
@@ -222,7 +219,7 @@ export class AgentsService implements OnModuleInit {
   /**
    * PATCH /agents/:id（is_0000000030 放开内置 agent 设置修改）：
    * - template（内置）允许修改全部**设置字段**（name/role/prompt/defaultModelId/
-   *   permissionScope/ackMessage/workerId + skillIds/toolEffects 关联重建），
+   *   permissionScope/workerId + skillIds/toolEffects 关联重建），
    *   使内置 agent 可自定义配置；agentId/type 不可改（不在 DTO，天然安全红线）；
    * - clone/custom → 同规则更新；
    * - 删除（remove）仍对 template 403（销毁性操作不在"设置修改"范围）。
@@ -248,7 +245,6 @@ export class AgentsService implements OnModuleInit {
             ? { persona: dto.persona ?? null }
             : {}),
           ...(dto.workerId !== undefined ? { workerId: dto.workerId } : {}),
-          ...(dto.ackMessage !== undefined ? { ackMessage: dto.ackMessage } : {}),
           ...(dto.permissionScope !== undefined
             ? { permissionScope: dto.permissionScope as Prisma.InputJsonValue }
             : {}),
@@ -329,7 +325,6 @@ export class AgentsService implements OnModuleInit {
       defaultModelId: agent.defaultModelId,
       persona: agent.persona,
       workerId: agent.workerId,
-      ackMessage: agent.ackMessage,
       permissionScope: agent.permissionScope,
       skillIds: agent.skills.map((s) => s.skillId),
       toolEffects: agent.toolEffects.map((t) => ({

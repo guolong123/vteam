@@ -108,7 +108,7 @@ interface InstanceDraft {
   agentId: string;
   alias: string;
   seq: number;
-  /** is_0000000010：实例独立持久化工作目录（缺省 `/data/worker/<sanitize(agent名称)>`，可改）。 */
+  /** is_0000000010：实例独立持久化工作目录（缺省 `/data/vteam-worker/<sanitize(agent名称)>`，可改）。 */
   workDir: string;
   /** 所属角色（展平后主题色/徽章/提交聚合用）；自定义 agent 为 null。 */
   roleKey: RoleKey | null;
@@ -131,11 +131,11 @@ function defaultAliasOf(bucket: InstanceBucketKey, agentName: string | undefined
   return `${roles[bucket].label}-${seq}`;
 }
 
-/** is_0000000010：默认持久化工作目录 `/data/worker/<角色名/agent名>[-seq]`（对齐后端 sanitize 规则，
+/** is_0000000010：默认持久化工作目录 `/data/vteam-worker/<角色名/agent名>[-seq]`（对齐后端 sanitize 规则，
  *  仅作前端预填展示；提交时未改动则不传，由服务端按 agent 名称解析）。 */
 function defaultWorkDirOf(bucket: InstanceBucketKey, agentName: string | undefined, seq: number): string {
   const base = bucket === "custom" ? agentName ?? "自定义" : roles[bucket].label;
-  return seq > 1 ? `/data/worker/${base}-${seq}` : `/data/worker/${base}`;
+  return seq > 1 ? `/data/vteam-worker/${base}-${seq}` : `/data/vteam-worker/${base}`;
 }
 
 /** 展平全部实例（按角色顺序 + 自定义桶）。 */
@@ -791,7 +791,7 @@ function RoleInstanceCard({
                   value={inst.workDir}
                   aria-label={`${theme.label}实例 ${inst.seq} 工作目录`}
                   onChange={(e) => onWorkDirChange(inst.key, e.target.value)}
-                  placeholder="/data/worker/<agent名称>"
+                  placeholder="/data/vteam-worker/<agent名称>"
                   style={{
                     flex: 1,
                     minWidth: 0,
@@ -1088,7 +1088,7 @@ function CustomAgentCard({
                   value={inst.workDir}
                   aria-label={`${inst.alias} 工作目录`}
                   onChange={(e) => onWorkDirChange(inst.key, e.target.value)}
-                  placeholder="/data/worker/…"
+                  placeholder="/data/vteam-worker/…"
                   style={{
                     width: "100%",
                     boxSizing: "border-box",
@@ -1813,7 +1813,7 @@ export default function TaskCreatePage() {
             ...(inst.alias !== defaultAliasOf(inst.roleKey ?? "custom", inst.agentName, inst.seq)
               ? { alias: inst.alias }
               : {}),
-            // is_0000000010：workDir 仅显式修改时提交（缺省由服务端解析 /data/worker/<agent名称>）
+            // is_0000000010：workDir 仅显式修改时提交（缺省由服务端解析 /data/vteam-worker/<agent名称>）
             ...(inst.workDir.trim() !== defaultWorkDirOf(inst.roleKey ?? "custom", inst.agentName, inst.seq)
               ? { workDir: inst.workDir.trim() }
               : {}),

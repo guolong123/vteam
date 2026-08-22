@@ -32,7 +32,7 @@
 #   --serve-hostname <host>  opencode serve 监听地址（OPENCODE_SERVE_HOSTNAME，可选）：外部
 #                       worker 须设 0.0.0.0（serve 监听非回环，server 才能连上）；缺省 127.0.0.1
 #                       只监听本机。未提供时仅提示，不强制写入（本机/集群内 worker 无感知）。
-#   --work-dir <path>   worker 工作目录（WORK_DIR，可选；缺省 /tmp/keta-worker）：opencode serve
+#   --work-dir <path>   worker 工作目录（WORK_DIR，可选；缺省 /data/vteam-worker）：opencode serve
 #                       工作目录 + 资源注入落点（opencode.json / 技能 / 工具）。外部 worker 若
 #                       需固定工作目录/挂载持久化盘可设置；缺省不写入（worker 用内置默认）。
 #   --no-service        不注册 systemd 服务（默认注册：守护进程 + 开机自启 + 崩溃自动重启，

@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
+  IsIn,
   IsObject,
   IsOptional,
   IsString,
@@ -9,8 +10,10 @@ import {
   MinLength,
 } from 'class-validator';
 
-/** providerID/modelID slug 格式（对齐 mcp-servers name：小写字母/数字开头 + 小写/数字/连字符/下划线/点）。 */
+/** providerID slug 格式（对齐 mcp-servers name：小写字母/数字开头 + 小写/数字/连字符/下划线/点）。 */
 export const MODEL_SLUG_PATTERN = /^[a-z0-9][a-z0-9-_.]*$/;
+/** modelID 允许含冒号的本地标签（如 ollama 的 ornith-1.5:9b、llama3:8b）。 */
+export const MODEL_ID_PATTERN = /^[a-z0-9][a-z0-9-_.:]*$/;
 
 /**
  * POST /models 请求体（C3 目录 CRUD）。
@@ -33,15 +36,15 @@ export class CreateModelDto {
   providerID: string;
 
   @ApiProperty({
-    description: '模型标识（如 deepseek-v4-flash；slug 小写字母/数字开头）',
-    example: 'deepseek-v4-flash',
+    description: '模型标识（如 ornith-1.5:9b；支持冒号的本地标签）',
+    example: 'ornith-1.5:9b',
     maxLength: 128,
   })
   @IsString()
   @MinLength(1)
   @MaxLength(128)
-  @Matches(MODEL_SLUG_PATTERN, {
-    message: 'modelID 需为小写字母/数字/连字符/下划线/点（如 deepseek-v4-flash）',
+  @Matches(MODEL_ID_PATTERN, {
+    message: 'modelID 需为小写字母/数字/连字符/下划线/点/冒号（如 ornith-1.5:9b）',
   })
   modelID: string;
 
@@ -63,4 +66,17 @@ export class CreateModelDto {
   @IsOptional()
   @IsBoolean()
   enabled?: boolean;
+
+  @ApiPropertyOptional({ description: '模型 provider 类型（cloud 云端 | local 本地 | custom 自定义）', example: 'cloud', enum: ['cloud', 'local', 'custom'], default: 'cloud' })
+  @IsOptional()
+  @IsString()
+  @IsIn(['cloud', 'local', 'custom'])
+  providerType?: string;
+
+  @ApiPropertyOptional({ description: '本地/自定义模型 baseUrl（local/custom 必填，http(s) URL）', example: 'http://host.docker.internal:11434/v1', maxLength: 512 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(512)
+  @Matches(/^https?:\/\/.+/, { message: 'baseUrl 需为 http(s) URL' })
+  baseUrl?: string;
 }

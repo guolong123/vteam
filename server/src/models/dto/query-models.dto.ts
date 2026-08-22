@@ -53,4 +53,10 @@ export class QueryModelsDto {
   @IsInt()
   @Min(1)
   pageSize?: number;
+
+  @ApiPropertyOptional({ description: 'provider 类型过滤（cloud|local|custom）', enum: ['cloud', 'local', 'custom'] })
+  @IsOptional()
+  @IsString()
+  @IsIn(['cloud', 'local', 'custom'])
+  providerType?: string;
 }

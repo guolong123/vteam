@@ -96,18 +96,10 @@ export class CreateAgentDto {
   })
   @IsOptional()
   @IsString()
-  @Matches(/^[a-z0-9-_.]+\/[a-z0-9-_.]+$/, {
+  @Matches(/^[^\s\/]+\/[^\s\/]+$/, {
     message: 'defaultModelId 需为 provider/model 格式（如 opencode-go/deepseek-v4-flash）',
   })
   defaultModelId?: string;
 
-  @ApiPropertyOptional({
-    description: '群聊 @Agent 收到确认文案（缺省落库用 DEFAULT_ACK_MESSAGE）',
-    example: '收到，正在处理…',
-    maxLength: 200,
-  })
-  @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  ackMessage?: string;
+
 }

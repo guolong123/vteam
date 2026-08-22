@@ -149,7 +149,7 @@ export interface ServePermissionRequest {
 }
 
 /** 默认请求超时 ms（计划 D8 宽松验收 15s）。 */
-export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
 /** 请求失败（网络错/超时/HTTP 非 2xx），带 status 便于区分。 */
 export class DriverRequestError extends Error {

@@ -22,7 +22,7 @@ import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WorkerClient, WorkerEndpointRef } from '../workers/worker.client';
-import { CHAT_ERRORS, DEFAULT_ACK_MESSAGE } from './chat.constants';
+import { CHAT_ERRORS } from './chat.constants';
 import { CreateDmChannelDto } from './dto/create-dm-channel.dto';
 import { CreateMessageDto, MentionInput } from './dto/create-message.dto';
 import { QueryMessagesDto } from './dto/query-messages.dto';
@@ -38,7 +38,7 @@ export interface TriggerResult {
   agentId: string;
   instanceId?: string | null;
   sessionId: string | null;
-  status: 'dispatched' | 'no_session' | 'agent_removed';
+  status: 'dispatched' | 'no_session' | 'agent_removed' | 'agent_disabled';
 }
 
 /**
@@ -48,7 +48,7 @@ export interface TriggerResult {
 export interface TriggerPollResult {
   agentId: string;
   instanceId?: string | null;
-  status: 'dispatched' | 'no_session' | 'agent_removed';
+  status: 'dispatched' | 'no_session' | 'agent_removed' | 'agent_disabled';
   replyMessageId?: string;
 }
 
@@ -94,6 +94,7 @@ const TEAM_AGENT_SELECT = {
   id: true,
   agentId: true,
   removedAt: true,
+  enabled: true,
 } as const;
 
 const CHANNEL_TASK_SELECT = {
@@ -577,57 +578,10 @@ export class ChatService {
         this.logger.error(`dispatch failed: ${err.message}`, err.stack),
       );
 
-    // 5.5 收到确认（ACK）：dispatch 后立即为每个 dispatched 目标落库 agent「收到」消息
-    //    （text=agent.ackMessage 或 DEFAULT_ACK_MESSAGE；mentions=null 不会递归触发 dispatch）
-    await this.acknowledge(
-      channelId,
-      targets.map((t) => ({ agentId: t.agentId, instanceId: t.instanceId })),
-    );
-
     return {
       message: this.toMessageDto(message),
       triggers,
     };
-  }
-
-  /**
-   * 收到确认（ACK）：@Agent 消息响应同步返回受理，DB 立即落库 agent「收到」消息。
-   * 每个 dispatched 目标各落一条（senderType=agent，mentions=null 防递归触发 dispatch）；
-   * text=agent.ackMessage 配置或 DEFAULT_ACK_MESSAGE 默认；先落库后广播（08 篇 §7.3）。
-   */
-  private async acknowledge(
-    channelId: string,
-    targets: { agentId: string; instanceId?: string | null }[],
-  ): Promise<void> {
-    const ids = [...new Set(targets.map((t) => t.agentId))];
-    if (ids.length === 0) return;
-    const rows = await this.prisma.agent.findMany({
-      where: { id: { in: ids } },
-      select: { id: true, ackMessage: true },
-    });
-    for (const row of rows) {
-      const target = targets.find((t) => t.agentId === row.id);
-      const ack = await this.prisma.message.create({
-        data: {
-          id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
-          channelId,
-          senderType: SENDER_TYPE.agent,
-          senderId: row.id,
-          senderInstanceId: target?.instanceId ?? null,
-          content: {
-            text: row.ackMessage ?? DEFAULT_ACK_MESSAGE,
-            parts: [],
-          } as Prisma.InputJsonValue,
-          mentions: null,
-          status: MESSAGE_STATUS.sent,
-        },
-      });
-      await this.realtime.broadcast(
-        EVENT_TYPES.CHAT_MESSAGE_NEW,
-        { message: this.toMessageDto(ack) },
-        { type: 'channel', id: channelId },
-      );
-    }
   }
 
   /**
@@ -816,7 +770,7 @@ export class ChatService {
     for (const mention of mentions) {
       if (mention.type === 'all') {
         for (const row of teamRows) {
-          if (!row.removedAt) {
+          if (!row.removedAt && row.enabled !== false) {
             triggers.push(await this.buildTrigger(taskId, row));
           }
         }
@@ -840,6 +794,12 @@ export class ChatService {
             message: `Agent ${mention.agentId} 不在任务团队内`,
           });
         }
+        if ((row as { enabled?: boolean | null }).enabled === false) {
+          throw new BadRequestException({
+            code: CHAT_ERRORS.AGENT_DISABLED,
+            message: `Agent ${mention.agentId} 已禁用，无法发送消息`,
+          });
+        }
         triggers.push(await this.buildTrigger(taskId, row));
       } else {
         throw new BadRequestException({
@@ -852,13 +812,16 @@ export class ChatService {
     return { mentionsStored: mentions, triggers };
   }
 
-  /** 单个触发结果：已移除 → agent_removed；未移除查会话（uk_sessions_task_agent）定 dispatched/no_session。 */
+  /** 单个触发结果：已移除 → agent_removed；禁用 → agent_disabled；未移除查会话。 */
   private async buildTrigger(
     taskId: string,
-    row: { id: string; agentId: string; removedAt: Date | null },
+    row: { id: string; agentId: string; removedAt: Date | null; enabled?: boolean | null },
   ): Promise<TriggerResult> {
     if (row.removedAt) {
       return { agentId: row.agentId, instanceId: row.id, sessionId: null, status: 'agent_removed' };
+    }
+    if (row.enabled === false) {
+      return { agentId: row.agentId, instanceId: row.id, sessionId: null, status: 'agent_disabled' };
     }
     // T6 实例语义：按 taskAgentId 定位会话（同 agent 多实例会话独立，不再按 agentId 撞首条）
     const session = await this.prisma.session.findFirst({
@@ -897,10 +860,10 @@ export class ChatService {
         select: TEAM_AGENT_SELECT,
       });
     }
-    if (!row || row.removedAt) {
+    if (!row || row.removedAt || (row as { enabled?: boolean | null }).enabled === false) {
       return null;
     }
-    return this.buildTrigger(taskId, row);
+    return this.buildTrigger(taskId, row as { id: string; agentId: string; removedAt: Date | null; enabled?: boolean | null });
   }
 
   /** 频道 DTO：id/type/taskId/agentId/taskAgentId + 关联 task/agent + pinned/lastReadAt + createdAt（ISO8601）。 */

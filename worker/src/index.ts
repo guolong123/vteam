@@ -26,6 +26,7 @@ import {
 } from './client/registry-client';
 import { V1Driver, DriverModelInfo } from './driver/v1-driver';
 import { GIT_TOOLS, installGitTools } from './git/git-tools';
+import { BROWSER_TOOLS, installBrowserTools, isAgentBrowserAvailable } from './browser/browser-tools';
 import {
   GitCredentialEntry,
   GIT_CREDS_FILE,
@@ -246,6 +247,14 @@ export async function handleGitCredentials(
 }
 
 function printStartup(config: WorkerConfig, opencodeVersion: string): void {
+  let browserInfo = '未安装';
+  try {
+    const r = spawnSync('agent-browser', ['--version'], { encoding: 'utf8', timeout: 3000 });
+    browserInfo = (r.stdout ?? '').trim() || (r.stderr ?? '').trim() || 'unknown';
+    if (r.status !== 0) browserInfo = `不可用(${browserInfo})`;
+  } catch {
+    browserInfo = '未安装';
+  }
   console.log(`[worker] 启动中:
   workerId            = ${config.workerId}
   workerName          = ${config.workerName}
@@ -257,7 +266,8 @@ function printStartup(config: WorkerConfig, opencodeVersion: string): void {
   heartbeatIntervalMs = ${config.heartbeatIntervalMs}
   workerMaxInstances  = ${config.workerMaxInstances}
   logLevel            = ${config.logLevel}
-  opencodeVersion     = ${opencodeVersion}`);
+  opencodeVersion     = ${opencodeVersion}
+  agentBrowser        = ${browserInfo}`);
 }
 
 /**
@@ -409,7 +419,8 @@ export async function buildCapabilities(
   maxInstances = 5,
 ): Promise<WorkerCapabilities> {
   const base = advertiseHost.replace(/\/+$/, '');
-  const tools = [...new Set([...GIT_TOOLS.map((tool) => tool.name), ...injected.tools])];
+  const browserTools = isAgentBrowserAvailable() ? BROWSER_TOOLS.map((t) => t.name) : [];
+  const tools = [...new Set([...GIT_TOOLS.map((tool) => tool.name), ...browserTools, ...injected.tools])];
   return {
     maxInstances,
     skills: injected.skills,
@@ -472,6 +483,17 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     console.log(`[worker] git 工具族已注入: ${gitToolsPath}`);
   } catch (err) {
     console.error(`[worker] git 工具族注入失败: ${(err as Error).message}`);
+  }
+
+  try {
+    const browserPath = installBrowserTools(config.workDir);
+    if (browserPath) {
+      console.log(`[worker] browser 工具已注入: ${browserPath} (agent-browser)`);
+    } else {
+      console.log('[worker] browser 工具跳过: agent-browser 未安装（本地 dev/旧镜像可忽略，容器镜像已内置）');
+    }
+  } catch (err) {
+    console.error(`[worker] browser 工具注入失败: ${(err as Error).message}`);
   }
 
   // T3：拉起 opencode serve（spawn detached + 健康检查；失败即退出）。

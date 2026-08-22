@@ -23,6 +23,7 @@ import { RejectTaskDto } from './dto/reject-task.dto';
 import { UpdateExecutionModeDto } from './dto/update-execution-mode.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
+import { UpdateInstanceDto } from './dto/update-instance.dto';
 import { TasksService } from './tasks.service';
 
 /**
@@ -111,6 +112,34 @@ export class TasksController {
     @Body() dto: UpdateTeamDto,
   ) {
     return this.tasksService.updateTeam(id, dto, user.id);
+  }
+
+  /**
+   * 实例启用/禁用（按实例粒度）。
+   * PATCH /api/v1/tasks/:id/instances/:instanceId
+   */
+  @Patch('tasks/:id/instances/:instanceId')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('tasks.edit')
+  @ApiOperation({ summary: '更新任务实例（启用/禁用）' })
+  updateInstance(
+    @Param('id') id: string,
+    @Param('instanceId') instanceId: string,
+    @Body() dto: UpdateInstanceDto,
+  ) {
+    return this.tasksService.updateInstance(id, instanceId, dto);
+  }
+
+  /**
+   * 重置实例会话（绑定新 opencode session）。
+   * POST /api/v1/tasks/:id/instances/:instanceId/reset-session
+   */
+  @Post('tasks/:id/instances/:instanceId/reset-session')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('tasks.edit')
+  @ApiOperation({ summary: '重置实例会话（新 opencode session）' })
+  resetInstanceSession(@Param('id') id: string, @Param('instanceId') instanceId: string) {
+    return this.tasksService.resetInstanceSession(id, instanceId);
   }
 
   /**

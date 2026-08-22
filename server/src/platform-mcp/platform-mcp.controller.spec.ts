@@ -682,7 +682,7 @@ describe('PlatformMcpController (HTTP)', () => {
               selfInstanceId: 'ta_main',
               agentId: 'a_developer',
               alias: '开发者-2',
-              workDir: '/data/worker/dev2',
+              workDir: '/data/vteam-worker/dev2',
             },
           },
         })
@@ -695,7 +695,7 @@ describe('PlatformMcpController (HTTP)', () => {
           selfInstanceId: 'ta_main',
           agentId: 'a_developer',
           alias: '开发者-2',
-          workDir: '/data/worker/dev2',
+          workDir: '/data/vteam-worker/dev2',
         },
       );
       const text = res.body.result.content[0].text as string;

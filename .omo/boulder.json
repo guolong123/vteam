@@ -1,313 +1,107 @@
 {
   "schema_version": 2,
-  "active_work_id": "vteam-team-collaboration-d46db5dd",
+  "active_work_id": "agent-enable-disable-reset-a3fb7edf",
   "works": {
-    "swagger-mcp-915f2505": {
-      "work_id": "swagger-mcp-915f2505",
-      "active_plan": "/data/git-project/aiagents/.omo/plans/swagger-mcp.md",
-      "plan_name": "swagger-mcp",
+    "docs-site-rebuild-2130c40f": {
+      "work_id": "docs-site-rebuild-2130c40f",
+      "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/docs-site-rebuild.md",
+      "plan_name": "docs-site-rebuild",
       "status": "completed",
-      "started_at": "2026-08-15T13:11:41.186Z",
-      "updated_at": "2026-08-15T14:45:23.875Z",
+      "started_at": "2026-08-20T06:38:36.683Z",
+      "updated_at": "2026-08-20T06:47:00.817Z",
       "session_ids": [
-        "opencode:ses_ffc366639ffexNTxdnVyBeOjY2"
+        "opencode:ses_fe22d3822ffebYe8CSO4ca4Aju"
       ],
       "session_origins": {
-        "opencode:ses_ffc366639ffexNTxdnVyBeOjY2": "direct"
+        "opencode:ses_fe22d3822ffebYe8CSO4ca4Aju": "direct"
       },
       "agent": "atlas",
-      "task_sessions": {
-        "todo:1": {
-          "task_key": "todo:1",
-          "task_label": "1",
-          "task_title": "阶段 1：`platform-mcp.constants.ts` PLATFORM_MCP_SERVER_NAME 'keta-platform'→'vteam'",
-          "session_id": "opencode:ses_ffa464f8effecUsJgzsYZMCCWb",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "started_at": "2026-08-15T13:14:58.615Z",
-          "status": "running",
-          "updated_at": "2026-08-15T14:13:08.207Z"
-        },
-        "final-wave:f2": {
-          "task_key": "final-wave:f2",
-          "task_label": "F2",
-          "task_title": "评审：vteam-api 工具生成正确（70 路径全映射、参数合并、$ref 解析、命名规则稳定）",
-          "session_id": "opencode:ses_ffa2624e7ffeAAi5Ma23fvW5Ib",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "started_at": "2026-08-15T14:29:44.285Z",
-          "status": "running",
-          "updated_at": "2026-08-15T14:41:50.935Z"
-        }
-      },
-      "ended_at": "2026-08-15T14:45:23.875Z",
-      "elapsed_ms": 5622689
+      "task_sessions": {},
+      "ended_at": "2026-08-20T06:47:00.817Z",
+      "elapsed_ms": 504134
     },
-    "memory-management-a990d997": {
-      "work_id": "memory-management-a990d997",
-      "active_plan": "/data/git-project/aiagents/.omo/plans/memory-management.md",
-      "plan_name": "memory-management",
+    "memory-layered-description-injection-526dd328": {
+      "work_id": "memory-layered-description-injection-526dd328",
+      "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/memory-layered-description-injection.md",
+      "plan_name": "memory-layered-description-injection",
       "status": "completed",
-      "started_at": "2026-08-15T14:57:52.101Z",
-      "updated_at": "2026-08-15T15:38:00.000Z",
-      "ended_at": "2026-08-15T15:38:00.000Z",
-      "elapsed_ms": 2407879,
+      "started_at": "2026-08-20T13:42:48.779Z",
+      "updated_at": "2026-08-20T14:05:00.000Z",
+      "ended_at": "2026-08-20T14:05:00.000Z",
+      "elapsed_ms": 1332000,
       "session_ids": [
-        "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O"
+        "opencode:ses_fe22d3822ffebYe8CSO4ca4Aju"
       ],
       "session_origins": {
-        "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O": "direct"
+        "opencode:ses_fe22d3822ffebYe8CSO4ca4Aju": "direct"
       },
       "agent": "atlas",
-      "task_sessions": {
-        "todo:1": {
-          "task_key": "todo:1",
-          "task_label": "1",
-          "task_title": "server 启动 + 登录拿 token → `GET /api/v1/memories` 返回 `{items,total,page,pageSize}`",
-          "session_id": "opencode:ses_ff9fb4120ffevJqrhT3QrjOwHv",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "started_at": "2026-08-15T15:04:07.859Z",
-          "ended_at": "2026-08-15T15:27:56.492Z",
-          "elapsed_ms": 1428633,
-          "status": "completed",
-          "updated_at": "2026-08-15T15:27:56.492Z"
-        },
-        "todo:2": {
-          "task_key": "todo:2",
-          "task_label": "2",
-          "task_title": "mem-mcp：平台 MCP memory_save / memory_search 工具",
-          "session_id": "opencode:ses_ffa0abae7ffeMaTVv8wx6fTRix",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "updated_at": "2026-08-15T15:12:51.716Z",
-          "started_at": "2026-08-15T15:11:35.550Z",
-          "status": "completed",
-          "ended_at": "2026-08-15T15:12:51.716Z",
-          "elapsed_ms": 76166
-        },
-        "todo:6": {
-          "task_key": "todo:6",
-          "task_label": "6",
-          "task_title": "mem-web：记忆管理页面 + 导航注册",
-          "session_id": "opencode:ses_ffa040432ffeRhtVAtKqTxqbuN",
-          "agent": "Sisyphus-Junior",
-          "category": "visual-engineering",
-          "updated_at": "2026-08-15T15:22:13.331Z",
-          "started_at": "2026-08-15T15:19:35.993Z",
-          "status": "completed",
-          "ended_at": "2026-08-15T15:22:13.331Z",
-          "elapsed_ms": 157338
-        },
-        "final-wave:f1": {
-          "task_key": "final-wave:f1",
-          "task_label": "F1",
-          "task_title": "Plan compliance audit",
-          "session_id": "opencode:ses_ffa040432ffeRhtVAtKqTxqbuN",
-          "agent": "Sisyphus-Junior",
-          "category": "visual-engineering",
-          "started_at": "2026-08-15T15:27:08.046Z",
-          "status": "completed",
-          "updated_at": "2026-08-15T15:35:32.347Z",
-          "ended_at": "2026-08-15T15:35:32.347Z",
-          "elapsed_ms": 504301
-        }
-      }
+      "task_sessions": {}
     },
-    "vteam-team-collaboration-d46db5dd": {
-      "work_id": "vteam-team-collaboration-d46db5dd",
-      "active_plan": "/data/git-project/aiagents/.omo/plans/vteam-team-collaboration.md",
-      "plan_name": "vteam-team-collaboration",
+    "custom-local-model-f1fa32d9": {
+      "work_id": "custom-local-model-f1fa32d9",
+      "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/custom-local-model.md",
+      "plan_name": "custom-local-model",
       "status": "completed",
-      "started_at": "2026-08-16T01:29:34.236Z",
-      "updated_at": "2026-08-16T12:21:57.166Z",
-      "ended_at": "2026-08-16T11:10:00.000Z",
-      "elapsed_ms": 34825766,
+      "started_at": "2026-08-21T01:21:53.967Z",
+      "updated_at": "2026-08-21T01:38:03.486146Z",
       "session_ids": [
-        "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O",
-        "opencode:ses_ff5b642d1ffe1UYPhuPCTFQloD"
+        "opencode:ses_fde1df655ffeJEZeptPkMZ7GkT"
       ],
       "session_origins": {
-        "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O": "direct",
-        "opencode:ses_ff5b642d1ffe1UYPhuPCTFQloD": "appended"
+        "opencode:ses_fde1df655ffeJEZeptPkMZ7GkT": "direct"
       },
       "agent": "atlas",
-      "task_sessions": {
-        "todo:1": {
-          "task_key": "todo:1",
-          "task_label": "1",
-          "task_title": "登录 → agents 页 persona-select 可见可交互（选项含未配置+5 性格）",
-          "session_id": "opencode:ses_ff57d9ff5ffedIvrFKpVt1n4v3",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "started_at": "2026-08-16T01:40:24.180Z",
-          "ended_at": "2026-08-16T12:21:57.166Z",
-          "elapsed_ms": 38492986,
-          "status": "completed",
-          "updated_at": "2026-08-16T12:21:57.166Z"
-        },
-        "todo:2": {
-          "task_key": "todo:2",
-          "task_label": "2",
-          "task_title": "tc-mcp-plan：平台 MCP plan_submit / plan_review / plan_task_transition",
-          "session_id": "opencode:ses_ff7c3ce25ffebQcI7wn8UH3g2b",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "updated_at": "2026-08-16T01:56:45.320Z",
-          "started_at": "2026-08-16T01:55:40.366Z",
-          "status": "completed",
-          "ended_at": "2026-08-16T01:56:45.320Z",
-          "elapsed_ms": 64954
-        },
-        "todo:3": {
-          "task_key": "todo:3",
-          "task_label": "3",
-          "task_title": "tc-mcp-l1：平台 MCP team_view / my_profile（团队感知，只读）",
-          "session_id": "opencode:ses_ff7b69920ffeuDtAC13UV7EfON",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "updated_at": "2026-08-16T02:03:15.051Z",
-          "started_at": "2026-08-16T02:02:20.315Z",
-          "status": "completed",
-          "ended_at": "2026-08-16T02:03:15.051Z",
-          "elapsed_ms": 54736
-        },
-        "todo:5": {
-          "task_key": "todo:5",
-          "task_label": "5",
-          "task_title": "tc-review：双时点评审流程 + PlansController（用户评审入口）",
-          "session_id": "opencode:ses_ff7b09d7fffehGMlfzFn2bbBcs",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "updated_at": "2026-08-16T02:14:30.349Z",
-          "started_at": "2026-08-16T02:13:44.640Z",
-          "status": "completed",
-          "ended_at": "2026-08-16T02:14:30.349Z",
-          "elapsed_ms": 45709
-        },
-        "todo:8": {
-          "task_key": "todo:8",
-          "task_label": "8",
-          "task_title": "tc-auth：L2 自治——主 Agent 申请增员（question_confirm 确认门）",
-          "session_id": "opencode:ses_ff7a649ccffePVVCQg5ukG57F1",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "updated_at": "2026-08-16T02:31:01.610Z",
-          "started_at": "2026-08-16T02:30:14.779Z",
-          "status": "completed",
-          "ended_at": "2026-08-16T02:31:01.610Z",
-          "elapsed_ms": 46831
-        },
-        "final-wave:f1": {
-          "task_key": "final-wave:f1",
-          "task_label": "F1",
-          "task_title": "Plan compliance audit",
-          "session_id": "opencode:ses_ff7891f66ffeOZs9CL9hEzWg6w",
-          "agent": "Sisyphus-Junior",
-          "category": "deep",
-          "started_at": "2026-08-16T02:35:33.104Z",
-          "status": "completed",
-          "updated_at": "2026-08-16T02:49:14.959Z",
-          "ended_at": "2026-08-16T02:49:14.959Z",
-          "elapsed_ms": 821855
-        }
-      }
+      "task_sessions": {},
+      "ended_at": "2026-08-21T01:38:03.486146Z",
+      "elapsed_ms": 969519
+    },
+    "agent-dm-tabs-c-18531345": {
+      "work_id": "agent-dm-tabs-c-18531345",
+      "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/agent-dm-tabs-c.md",
+      "plan_name": "agent-dm-tabs-c",
+      "status": "completed",
+      "started_at": "2026-08-21T15:13:59.832Z",
+      "updated_at": "2026-08-21T15:30:00.000Z",
+      "ended_at": "2026-08-21T15:30:00.000Z",
+      "elapsed_ms": 960000,
+      "session_ids": [
+        "opencode:ses_fdd8189dcffei7fbGsTQKcY5HC"
+      ],
+      "session_origins": {
+        "opencode:ses_fdd8189dcffei7fbGsTQKcY5HC": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {}
+    },
+    "agent-enable-disable-reset-a3fb7edf": {
+      "work_id": "agent-enable-disable-reset-a3fb7edf",
+      "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/agent-enable-disable-reset.md",
+      "plan_name": "agent-enable-disable-reset",
+      "status": "active",
+      "started_at": "2026-08-22T00:44:15.137Z",
+      "updated_at": "2026-08-22T00:44:15.137Z",
+      "session_ids": [
+        "opencode:ses_fdd8189dcffei7fbGsTQKcY5HC"
+      ],
+      "session_origins": {
+        "opencode:ses_fdd8189dcffei7fbGsTQKcY5HC": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {}
     }
   },
-  "active_plan": "/data/git-project/aiagents/.omo/plans/vteam-team-collaboration.md",
-  "started_at": "2026-08-16T01:29:34.236Z",
-  "status": "completed",
-  "updated_at": "2026-08-16T12:21:57.166Z",
+  "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/agent-enable-disable-reset.md",
+  "started_at": "2026-08-22T00:44:15.137Z",
+  "status": "active",
+  "updated_at": "2026-08-22T00:44:15.137Z",
   "session_ids": [
-    "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O",
-    "opencode:ses_ff5b642d1ffe1UYPhuPCTFQloD"
+    "opencode:ses_fdd8189dcffei7fbGsTQKcY5HC"
   ],
   "session_origins": {
-    "opencode:ses_ffa20d4b8ffeP2MTM8PNN3Mx0O": "direct",
-    "opencode:ses_ff5b642d1ffe1UYPhuPCTFQloD": "appended"
+    "opencode:ses_fdd8189dcffei7fbGsTQKcY5HC": "direct"
   },
-  "plan_name": "vteam-team-collaboration",
-  "task_sessions": {
-    "todo:1": {
-      "task_key": "todo:1",
-      "task_label": "1",
-      "task_title": "登录 → agents 页 persona-select 可见可交互（选项含未配置+5 性格）",
-      "session_id": "opencode:ses_ff57d9ff5ffedIvrFKpVt1n4v3",
-      "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "started_at": "2026-08-16T01:40:24.180Z",
-      "ended_at": "2026-08-16T12:21:57.166Z",
-      "elapsed_ms": 38492986,
-      "status": "completed",
-      "updated_at": "2026-08-16T12:21:57.166Z"
-    },
-    "todo:2": {
-      "task_key": "todo:2",
-      "task_label": "2",
-      "task_title": "tc-mcp-plan：平台 MCP plan_submit / plan_review / plan_task_transition",
-      "session_id": "opencode:ses_ff7c3ce25ffebQcI7wn8UH3g2b",
-      "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-08-16T01:56:45.320Z",
-      "started_at": "2026-08-16T01:55:40.366Z",
-      "status": "completed",
-      "ended_at": "2026-08-16T01:56:45.320Z",
-      "elapsed_ms": 64954
-    },
-    "todo:3": {
-      "task_key": "todo:3",
-      "task_label": "3",
-      "task_title": "tc-mcp-l1：平台 MCP team_view / my_profile（团队感知，只读）",
-      "session_id": "opencode:ses_ff7b69920ffeuDtAC13UV7EfON",
-      "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-08-16T02:03:15.051Z",
-      "started_at": "2026-08-16T02:02:20.315Z",
-      "status": "completed",
-      "ended_at": "2026-08-16T02:03:15.051Z",
-      "elapsed_ms": 54736
-    },
-    "todo:5": {
-      "task_key": "todo:5",
-      "task_label": "5",
-      "task_title": "tc-review：双时点评审流程 + PlansController（用户评审入口）",
-      "session_id": "opencode:ses_ff7b09d7fffehGMlfzFn2bbBcs",
-      "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-08-16T02:14:30.349Z",
-      "started_at": "2026-08-16T02:13:44.640Z",
-      "status": "completed",
-      "ended_at": "2026-08-16T02:14:30.349Z",
-      "elapsed_ms": 45709
-    },
-    "todo:8": {
-      "task_key": "todo:8",
-      "task_label": "8",
-      "task_title": "tc-auth：L2 自治——主 Agent 申请增员（question_confirm 确认门）",
-      "session_id": "opencode:ses_ff7a649ccffePVVCQg5ukG57F1",
-      "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-08-16T02:31:01.610Z",
-      "started_at": "2026-08-16T02:30:14.779Z",
-      "status": "completed",
-      "ended_at": "2026-08-16T02:31:01.610Z",
-      "elapsed_ms": 46831
-    },
-    "final-wave:f1": {
-      "task_key": "final-wave:f1",
-      "task_label": "F1",
-      "task_title": "Plan compliance audit",
-      "session_id": "opencode:ses_ff7891f66ffeOZs9CL9hEzWg6w",
-      "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "started_at": "2026-08-16T02:35:33.104Z",
-      "status": "completed",
-      "updated_at": "2026-08-16T02:49:14.959Z",
-      "ended_at": "2026-08-16T02:49:14.959Z",
-      "elapsed_ms": 821855
-    }
-  },
-  "agent": "atlas",
-  "ended_at": "2026-08-16T11:10:00.000Z",
-  "elapsed_ms": 34825766
+  "plan_name": "agent-enable-disable-reset",
+  "task_sessions": {},
+  "agent": "atlas"
 }

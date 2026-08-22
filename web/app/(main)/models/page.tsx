@@ -32,7 +32,7 @@ import {
   fontFamily,
   shadow,
 } from "@/src/theme/tokens";
-import type { ApiModel, ApiWorker, CredentialView, ModelsResponse } from "@/src/types/models";
+import type { ApiModel, ApiWorker, CredentialView, ModelsResponse, ProviderSummary } from "@/src/types/models";
 import ProvidersTab, { ActionButton, ConfigureModal } from "./providers-tab";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
@@ -128,7 +128,7 @@ function EnabledBadge({ enabled }: { enabled: boolean }) {
   );
 }
 
-/** 模型行卡片：provider 列 + 名称列 + 模型ID列 + 可用节点 + 凭据状态 + 启用状态 + 配置凭据操作（admin）。 */
+/** 模型行卡片：provider 列 + 名称列 + 模型ID列 + 可用节点 + 凭据状态 + 启用状态 + 配置凭据/编辑操作（admin）。 */
 function ModelRow({
   m,
   nodes,
@@ -136,6 +136,7 @@ function ModelRow({
   enabled,
   isAdmin,
   onConfigure,
+  onEdit,
 }: {
   /** 目录行（id=md_xxx；展示 id 用 providerID/modelID 组合） */
   m: ApiModel;
@@ -146,6 +147,7 @@ function ModelRow({
   /** admin 专属：行内「配置/更新凭据」按钮（复用 Provider Tab 的 ConfigureModal，CFG-04） */
   isAdmin: boolean;
   onConfigure: (providerID: string) => void;
+  onEdit: (m: ApiModel) => void;
 }) {
   const modelRef = `${m.providerID}/${m.modelID}`;
   return (
@@ -279,22 +281,26 @@ function ModelRow({
         <EnabledBadge enabled={enabled} />
       </div>
 
-      {/* 操作列：配置凭据（admin 专属，复用 Provider Tab ConfigureModal，CFG-04/UX-06） */}
+      {/* 操作列：编辑 + 配置凭据（admin 专属） */}
       <div
         style={{
-          width: 110,
+          width: 180,
           flexShrink: 0,
           display: "flex",
           justifyContent: "flex-end",
+          gap: space.sm,
         }}
       >
         {isAdmin && (
-          <ActionButton
-            testid="model-configure-button"
-            label={credential === "configured" ? "更新凭据" : "配置"}
-            primary
-            onClick={() => onConfigure(m.providerID)}
-          />
+          <>
+            <ActionButton testid="model-edit-button" label="编辑" onClick={() => onEdit(m)} />
+            <ActionButton
+              testid="model-configure-button"
+              label={credential === "configured" ? "更新凭据" : "配置"}
+              primary
+              onClick={() => onConfigure(m.providerID)}
+            />
+          </>
         )}
       </div>
     </div>
@@ -303,31 +309,147 @@ function ModelRow({
 
 /* ================================ 页面主组件 ================================ */
 
-/** 双 Tab：模型目录（catalog）/ Provider 管理（providers） */
-type TabKey = "catalog" | "providers";
-
-const TABS: { key: TabKey; label: string; icon: string }[] = [
-  { key: "catalog", label: "模型目录", icon: "◇" },
-  { key: "providers", label: "Provider 管理", icon: "◈" },
-];
+const BUILTIN_PROVIDERS = new Set([
+  "opencode-go",
+  "deepseek",
+  "zhipu",
+  "openai",
+  "xai",
+  "moonshot",
+  "qwen",
+  "opencode",
+]);
+const isBuiltinProvider = (pid: string) => BUILTIN_PROVIDERS.has(pid);
+const isBuiltinModel = (m: ApiModel) => BUILTIN_PROVIDERS.has(m.providerID);
 
 export default function ModelsPage() {
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.roleName === "admin";
   const queryClient = useQueryClient();
 
-  /* 双 Tab（受控，对齐 skills 页 manage-tabs/manage-tab 模式） */
-  const [tab, setTab] = useState<TabKey>("catalog");
-
-  /* 搜索框（受控，按模型名 / provider / modelID 过滤；仅模型目录 Tab 展示） */
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [keyword, setKeyword] = useState("");
+  const [providerKeyword, setProviderKeyword] = useState("");
 
-  /* 目录行「配置凭据」弹窗（open=providerID，false=关闭；复用 Provider Tab 的
-   * ConfigureModal 与保存逻辑，CFG-04——同 provider 模型直接配置 token，无需切 Tab） */
   const [configureOpen, setConfigureOpen] = useState<string | false>(false);
   const [configureError, setConfigureError] = useState<string | null>(null);
 
-  /* 列表：GET /models（分页 pageSize=100 一次拉全量，对齐 agents 页模式） */
+  const [addOpen, setAddOpen] = useState(false);
+  const [addProviderID, setAddProviderID] = useState("");
+  const [addModelID, setAddModelID] = useState("");
+  const [addName, setAddName] = useState("");
+  const [addProviderType, setAddProviderType] = useState<"cloud" | "local" | "custom">("local");
+  const [addBaseUrl, setAddBaseUrl] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const [editTarget, setEditTarget] = useState<ApiModel | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editProviderType, setEditProviderType] = useState<"cloud" | "local" | "custom">("local");
+  const [editBaseUrl, setEditBaseUrl] = useState("");
+  const [editEnabled, setEditEnabled] = useState(true);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const [providerEditTarget, setProviderEditTarget] = useState<string | null>(null);
+  const [providerEditType, setProviderEditType] = useState<"cloud" | "local" | "custom">("local");
+  const [providerEditBaseUrl, setProviderEditBaseUrl] = useState("");
+  const [providerEditError, setProviderEditError] = useState<string | null>(null);
+  const [providerDeleteTarget, setProviderDeleteTarget] = useState<string | null>(null);
+
+  const openEdit = (m: ApiModel) => {
+    if (isBuiltinModel(m)) return;
+    setEditTarget(m);
+    setEditName(m.name);
+    setEditProviderType((m.providerType as never) ?? "cloud");
+    setEditBaseUrl(m.baseUrl ?? "");
+    setEditEnabled(m.enabled);
+    setEditError(null);
+  };
+
+  const openProviderEdit = (providerID: string, providerType: string, baseUrl: string | null) => {
+    if (isBuiltinProvider(providerID)) return;
+    setProviderEditTarget(providerID);
+    setProviderEditType((providerType as never) ?? "local");
+    setProviderEditBaseUrl(baseUrl ?? "");
+    setProviderEditError(null);
+  };
+
+  const updateModelMutation = useMutation({
+    mutationFn: (payload: { id: string; name: string; providerType: string; baseUrl?: string | null; enabled: boolean }) =>
+      api.patch<ApiModel>(`/models/${payload.id}`, {
+        name: payload.name,
+        providerType: payload.providerType,
+        baseUrl: payload.baseUrl,
+        enabled: payload.enabled,
+      }),
+    onSuccess: () => {
+      setEditTarget(null);
+      setEditError(null);
+      queryClient.invalidateQueries({ queryKey: ["models"] });
+      queryClient.invalidateQueries({ queryKey: ["model-providers"] });
+    },
+    onError: (err) => setEditError(isApiError(err) ? err.message : "更新失败"),
+  });
+
+  const deleteModelMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/models/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["models"] });
+      queryClient.invalidateQueries({ queryKey: ["model-providers"] });
+      queryClient.invalidateQueries({ queryKey: ["workers"] });
+    },
+  });
+
+  const updateProviderMutation = useMutation({
+    mutationFn: async (payload: { providerID: string; providerType: string; baseUrl: string | null }) => {
+      const list = models.filter((m) => m.providerID === payload.providerID);
+      for (const m of list) {
+        await api.patch(`/models/${m.id}`, { providerType: payload.providerType, baseUrl: payload.baseUrl });
+      }
+    },
+    onSuccess: () => {
+      setProviderEditTarget(null);
+      queryClient.invalidateQueries({ queryKey: ["models"] });
+      queryClient.invalidateQueries({ queryKey: ["model-providers"] });
+    },
+    onError: (err) => setProviderEditError(isApiError(err) ? err.message : "更新失败"),
+  });
+
+  const deleteProviderMutation = useMutation({
+    mutationFn: async (providerID: string) => {
+      const list = models.filter((m) => m.providerID === providerID);
+      for (const m of list) {
+        await api.delete(`/models/${m.id}`);
+      }
+      try {
+        await api.delete(`/models/providers/${providerID}/credentials`);
+      } catch {}
+    },
+    onSuccess: () => {
+      setProviderDeleteTarget(null);
+      setSelectedProvider(null);
+      queryClient.invalidateQueries({ queryKey: ["models"] });
+      queryClient.invalidateQueries({ queryKey: ["model-providers"] });
+      queryClient.invalidateQueries({ queryKey: ["model-credentials"] });
+    },
+  });
+
+  const createModelMutation = useMutation({
+    mutationFn: (payload: { providerID: string; modelID: string; name: string; providerType: string; baseUrl?: string }) =>
+      api.post<ApiModel>("/models", payload),
+    onSuccess: () => {
+      setAddOpen(false);
+      setAddProviderID("");
+      setAddModelID("");
+      setAddName("");
+      setAddBaseUrl("");
+      setAddError(null);
+      queryClient.invalidateQueries({ queryKey: ["models"] });
+      queryClient.invalidateQueries({ queryKey: ["model-providers"] });
+      queryClient.invalidateQueries({ queryKey: ["workers"] });
+    },
+    onError: (err) => setAddError(isApiError(err) ? err.message : "创建失败"),
+  });
+
   const modelsQuery = useQuery({
     queryKey: ["models"],
     queryFn: () => api.get<ModelsResponse>("/models", { query: { page: 1, pageSize: 100 } }),
@@ -335,7 +457,13 @@ export default function ModelsPage() {
   });
   const models = modelsQuery.data?.items ?? [];
 
-  /* worker 池：GET /workers（可用节点统计） */
+  const providersQuery = useQuery({
+    queryKey: ["model-providers"],
+    queryFn: () => api.get<ProviderSummary[]>("/models/providers"),
+    enabled: !!user,
+  });
+  const providers = providersQuery.data ?? [];
+
   const workersQuery = useQuery({
     queryKey: ["workers"],
     queryFn: () => api.get<ApiWorker[]>("/workers"),
@@ -343,7 +471,6 @@ export default function ModelsPage() {
   });
   const workers = workersQuery.data ?? [];
 
-  /* 可用节点数：在线 worker（status != offline）capabilities.models 含该模型 id 的计数 */
   const nodeCountByModel = useMemo(() => {
     const map = new Map<string, number>();
     for (const w of workers) {
@@ -355,7 +482,6 @@ export default function ModelsPage() {
     return map;
   }, [workers]);
 
-  /* 凭据状态：GET /models/:id/credentials（脱敏 fingerprint；按 provider 粒度 C4） */
   const credentialsQuery = useQuery({
     queryKey: ["model-credentials"],
     queryFn: async () => {
@@ -364,7 +490,6 @@ export default function ModelsPage() {
           try {
             return [m.id, await api.get<CredentialView>(`/models/${m.id}/credentials`)] as const;
           } catch {
-            // 单模型凭据查询失败不阻断列表（未配置视同 missing）
             return [m.id, { configured: false, fingerprint: null } as CredentialView] as const;
           }
         })
@@ -376,10 +501,6 @@ export default function ModelsPage() {
   const credentialOf = (m: ApiModel): CredentialStatus =>
     credentialsQuery.data?.get(m.id)?.configured ? "configured" : "missing";
 
-  /* 保存凭据：POST /models/:id/credentials（目录行已含全量模型，model id 直接从列表
-   * 解析首个 provider 匹配项——凭据按 provider 粒度 C4，同 provider 任一模型 id 均可；
-   * 无需像 Provider Tab 那样保底 GET /models 再解析）
-   * 指定 worker → 定向 enqueueCommand；未选 → 全量 broadcastCommand（C5） */
   const saveCredentialMutation = useMutation({
     mutationFn: ({
       providerID,
@@ -400,8 +521,6 @@ export default function ModelsPage() {
     onSuccess: () => {
       setConfigureOpen(false);
       setConfigureError(null);
-      /* 可用节点联动：worker 收到凭据后重新上报模型能力（capabilities.models），
-       * invalidate ["workers"] 刷新节点计数；目录/凭据态跨 Tab 缓存一并失效 */
       queryClient.invalidateQueries({ queryKey: ["models"] });
       queryClient.invalidateQueries({ queryKey: ["model-credentials"] });
       queryClient.invalidateQueries({ queryKey: ["model-providers"] });
@@ -413,13 +532,10 @@ export default function ModelsPage() {
   });
 
   const kw = keyword.trim().toLowerCase();
-  const filtered =
-    kw === ""
-      ? models
-      : models.filter((m) =>
-          `${m.name} ${m.providerID} ${m.modelID}`.toLowerCase().includes(kw)
-        );
-
+  const filteredModels = selectedProvider
+    ? models.filter((m) => m.providerID === selectedProvider).filter((m) => kw === "" || `${m.name} ${m.modelID}`.toLowerCase().includes(kw))
+    : [];
+  const providerFiltered = providerKeyword.trim().toLowerCase() === "" ? providers : providers.filter((p) => p.providerID.toLowerCase().includes(providerKeyword.trim().toLowerCase()));
   const configuredCount = models.filter((m) => credentialOf(m) === "configured").length;
   const missingCount = models.length - configuredCount;
 
@@ -438,311 +554,182 @@ export default function ModelsPage() {
       }}
     >
       <style>{rowCss}</style>
-
-      <main
-        style={{
-          flex: 1,
-          minHeight: 0,
-          padding: `${space.xl}px`,
-        }}
-      >
-        <div
-          style={{
-            maxWidth: 1080,
-            margin: "0 auto",
-            display: "flex",
-            flexDirection: "column",
-            gap: space.lg,
-          }}
-        >
-          {/* ① 工具条：双 Tab 切换 + 搜索框（仅模型目录 Tab） */}
-          <div
-            data-testid="manage-toolbar"
-            style={{ display: "flex", alignItems: "center", gap: space.lg, flexWrap: "wrap" }}
-          >
-            {/* 双 Tab（受控切换，对齐 skills 页 manage-tabs/manage-tab 模式） */}
-            <div
-              data-testid="manage-tabs"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: space.xs,
-                padding: space.xs,
-                borderRadius: radius.lg,
-                backgroundColor: neutral[100],
-                border: `1px solid ${neutral[200]}`,
-              }}
-            >
-              {TABS.map((t) => {
-                const active = tab === t.key;
-                return (
-                  <button
-                    key={t.key}
-                    type="button"
-                    data-testid="manage-tab"
-                    data-kind={t.key}
-                    data-active={active ? "true" : "false"}
-                    onClick={() => setTab(t.key)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: space.sm,
-                      padding: `${space.sm + 1}px ${space.lg}px`,
-                      borderRadius: radius.md,
-                      border: "none",
-                      backgroundColor: active ? "var(--color-surface)" : "transparent",
-                      boxShadow: active ? shadow.sm : "none",
-                      cursor: "pointer",
-                      fontFamily: fontFamily.body,
-                      fontSize: fontSize.md,
-                      fontWeight: active ? 600 : 500,
-                      color: active ? neutral[900] : neutral[600],
-                    }}
-                  >
-                    <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>
-                      {t.icon}
-                    </span>
-                    {t.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* 搜索框（按模型名 / provider / modelID 过滤；仅模型目录 Tab 展示） */}
-            {tab === "catalog" && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: space.sm,
-                  flex: 1,
-                  minWidth: 220,
-                  maxWidth: 320,
-                  padding: `${space.sm}px ${space.md}px`,
-                  borderRadius: radius.md,
-                  backgroundColor: "var(--color-surface)",
-                  border: `1px solid ${neutral[200]}`,
-                  boxShadow: shadow.sm,
-                  marginLeft: "auto",
-                }}
-              >
-                <span aria-hidden style={{ fontSize: fontSize.lg, color: neutral[400], lineHeight: 1 }}>
-                  ⌕
-                </span>
-                <input
-                  data-testid="model-search"
-                  value={keyword}
-                  onChange={(e) => setKeyword(e.target.value)}
-                  placeholder="搜索模型名 / provider…"
-                  aria-label="搜索模型"
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    border: "none",
-                    outline: "none",
-                    background: "transparent",
-                    fontSize: fontSize.md,
-                    color: neutral[800],
-                    fontFamily: fontFamily.body,
-                  }}
-                />
-              </div>
-            )}
-          </div>
-
-          {/* ② Tab 内容：模型目录（catalog） / Provider 管理（providers，独立视图组件） */}
-          {tab === "providers" ? (
-            <ProvidersTab />
-          ) : modelsQuery.isPending ? (
-            <div
-              data-testid="models-loading"
-              style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}
-            >
-              加载中…
-            </div>
-          ) : modelsQuery.isError ? (
-            <div
-              data-testid="models-error"
-              role="alert"
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                gap: space.md,
-                padding: `${space.xl}px`,
-                textAlign: "center",
-              }}
-            >
-              <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>
-                {isApiError(modelsQuery.error) ? modelsQuery.error.message : "加载模型目录失败"}
-              </div>
-              <button
-                type="button"
-                data-testid="models-retry"
-                onClick={() => modelsQuery.refetch()}
-                style={{
-                  padding: `${space.sm}px ${space.lg}px`,
-                  borderRadius: radius.md,
-                  border: `1px solid ${neutral[200]}`,
-                  backgroundColor: "var(--color-surface)",
-                  color: neutral[600],
-                  fontSize: fontSize.md,
-                  fontWeight: 500,
-                  cursor: "pointer",
-                  fontFamily: fontFamily.body,
-                }}
-              >
-                重试
-              </button>
-            </div>
-          ) : (
-            /* ② 模型列表（白卡容器 + 表头行 + 数据行） */
-            <div
-              data-testid="model-list"
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: space.sm,
-                padding: space.md,
-                borderRadius: radius.lg,
-                backgroundColor: "var(--color-surface)",
-                border: `1px solid ${neutral[200]}`,
-                boxShadow: shadow.md,
-              }}
-            >
-              {/* 列表头 */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: space.md,
-                  padding: `${space.sm}px ${space.md}px`,
-                }}
-              >
-                <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900] }}>
-                  全部模型
-                </span>
-                <span
-                  style={{
-                    fontSize: fontSize.xs,
-                    color: neutral[500],
-                    backgroundColor: neutral[50],
-                    border: `1px solid ${neutral[200]}`,
-                    borderRadius: radius.pill,
-                    padding: "2px 10px",
-                    fontFamily: fontFamily.mono,
-                  }}
-                >
-                  {models.length} 个模型 · 已配置 {configuredCount} / 未配置 {missingCount}
-                </span>
-                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-                  凭据按 provider 粒度配置 · 可点行内「配置」或切到「Provider 管理」Tab
-                </span>
-                {kw !== "" && (
-                  <span
-                    style={{
-                      fontSize: fontSize.xs,
-                      color: activeBlue,
-                      backgroundColor: "rgba(37,99,235,0.10)",
-                      border: `1px solid rgba(37,99,235,0.22)`,
-                      borderRadius: radius.pill,
-                      padding: "1px 8px",
-                      marginLeft: "auto",
-                    }}
-                  >
-                    过滤命中 {filtered.length} / {models.length}
-                  </span>
+      <main style={{ flex: 1, minHeight: 0, padding: `${space.xl}px` }}>
+        <div style={{ maxWidth: 1080, margin: "0 auto", display: "flex", flexDirection: "column", gap: space.lg }}>
+          {selectedProvider === null ? (
+            <>
+              <div data-testid="manage-toolbar" style={{ display: "flex", alignItems: "center", gap: space.lg, flexWrap: "wrap" }}>
+                <span style={{ fontSize: fontSize.xl, fontWeight: 700, color: neutral[900] }}>Provider 列表</span>
+                <span style={{ fontSize: fontSize.xs, color: neutral[500], backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, borderRadius: radius.pill, padding: "2px 10px", fontFamily: fontFamily.mono }}>{providers.length} 个 Provider</span>
+                <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginLeft: "auto", flex: 1, maxWidth: 320, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm }}>
+                  <span aria-hidden style={{ fontSize: fontSize.lg, color: neutral[400] }}>⌕</span>
+                  <input data-testid="provider-search" autoComplete="off" name="provider-search" value={providerKeyword} onChange={(e) => setProviderKeyword(e.target.value)} placeholder="搜索 provider…" style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }} />
+                </div>
+                {isAdmin && (
+                  <button type="button" data-testid="add-provider-button" onClick={() => { setAddProviderID(""); setAddModelID(""); setAddName(""); setAddProviderType("local"); setAddBaseUrl(""); setAddOpen(true); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#fff", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body }}>+ 新增 Provider</button>
                 )}
               </div>
-
-              {/* 表头行（列宽与数据行一致） */}
-              <div
-                aria-hidden
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: space.lg,
-                  padding: `${space.sm}px ${space.xl}px`,
-                  fontSize: fontSize.xs,
-                  fontWeight: 600,
-                  color: neutral[400],
-                  letterSpacing: "0.03em",
-                }}
-              >
-                <span style={{ width: 140, flexShrink: 0 }}>PROVIDER</span>
-                <span style={{ flex: 1, minWidth: 0 }}>模型名称</span>
-                <span style={{ width: 250, flexShrink: 0 }}>模型 ID</span>
-                <span style={{ width: 72, flexShrink: 0 }}>可用节点</span>
-                <span style={{ width: 88, flexShrink: 0 }}>凭据状态</span>
-                <span style={{ width: 72, flexShrink: 0 }}>启用</span>
-                <span style={{ width: 110, flexShrink: 0, textAlign: "right" }}>操作</span>
-              </div>
-
-              {/* 模型行 */}
-              {filtered.map((m) => (
-                <ModelRow
-                  key={m.id}
-                  m={m}
-                  nodes={nodeCountByModel.get(`${m.providerID}/${m.modelID}`) ?? 0}
-                  credential={credentialOf(m)}
-                  enabled={m.enabled}
-                  isAdmin={isAdmin}
-                  onConfigure={setConfigureOpen}
-                />
-              ))}
-
-              {/* 空结果（过滤无命中） */}
-              {filtered.length === 0 && (
-                <div
-                  style={{
-                    padding: `${space.xxl}px`,
-                    textAlign: "center",
-                    fontSize: fontSize.md,
-                    color: neutral[400],
-                  }}
-                >
-                  无匹配模型，换个关键词试试
+              {providersQuery.isPending ? (
+                <div data-testid="providers-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}>加载中…</div>
+              ) : (
+                <div data-testid="provider-list" style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: space.md, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.md }}>
+                  <div aria-hidden style={{ display: "flex", alignItems: "center", gap: space.lg, padding: `${space.sm}px ${space.xl}px`, fontSize: fontSize.xs, fontWeight: 600, color: neutral[400], letterSpacing: "0.03em" }}>
+                    <span style={{ width: 200, flexShrink: 0 }}>PROVIDER</span>
+                    <span style={{ width: 80, flexShrink: 0 }}>模型数</span>
+                    <span style={{ flex: 1 }}>BaseUrl</span>
+                    <span style={{ width: 100, flexShrink: 0 }}>类型</span>
+                    <span style={{ width: 100, flexShrink: 0 }}>凭据</span>
+                    <span style={{ width: 200, flexShrink: 0, textAlign: "right" }}>操作</span>
+                  </div>
+                  {providerFiltered.map((p) => {
+                    const builtin = isBuiltinProvider(p.providerID);
+                    return (
+                      <div key={p.providerID} data-testid="provider-item" data-provider={p.providerID} onClick={() => setSelectedProvider(p.providerID)} style={{ display: "flex", alignItems: "center", gap: space.lg, padding: `${space.lg}px ${space.xl}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, cursor: "pointer", ...baseFont }}>
+                        <span data-testid="provider-id" style={{ width: 200, flexShrink: 0, display: "inline-flex", alignItems: "center", gap: space.sm, fontWeight: 600, fontFamily: fontFamily.mono, color: neutral[800] }}><span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: activeBlue }} />{p.providerID}{builtin && <span style={{ fontSize: fontSize.xs, color: neutral[500], backgroundColor: neutral[100], border: `1px solid ${neutral[200]}`, borderRadius: radius.pill, padding: "1px 6px" }}>内置</span>}</span>
+                        <span style={{ width: 80, flexShrink: 0, fontFamily: fontFamily.mono, fontWeight: 600 }}>{p.modelCount}</span>
+                        <span style={{ flex: 1, fontSize: fontSize.sm, color: neutral[500], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.baseUrl ?? "—"}</span>
+                        <span style={{ width: 100, flexShrink: 0, fontSize: fontSize.sm, color: neutral[600] }}>{p.providerType ?? "cloud"}</span>
+                        <span style={{ width: 100, flexShrink: 0 }}><CredentialBadge status={p.configured ? "configured" : "missing"} /></span>
+                        <div style={{ width: 200, flexShrink: 0, display: "flex", justifyContent: "flex-end", gap: space.sm }} onClick={(e) => e.stopPropagation()}>
+                          {isAdmin && !builtin && <ActionButton testid="provider-edit-button" label="编辑" onClick={() => openProviderEdit(p.providerID, p.providerType ?? "cloud", p.baseUrl ?? null)} />}
+                          {isAdmin && !builtin && <ActionButton testid="provider-delete-button" label="删除" onClick={() => setProviderDeleteTarget(p.providerID)} />}
+                          {isAdmin && <ActionButton testid="provider-configure-button" label={p.configured ? "更新凭据" : "配置"} primary onClick={() => setConfigureOpen(p.providerID)} />}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {providerFiltered.length === 0 && <div style={{ padding: `${space.xxl}px`, textAlign: "center", color: neutral[400] }}>无匹配 Provider</div>}
                 </div>
               )}
-            </div>
-          )}
-
-          {/* 底部说明（仅模型目录 Tab） */}
-          {tab === "catalog" && (
-            <div
-              data-testid="model-hint"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: space.xs,
-                fontSize: fontSize.xs,
-                color: neutral[400],
-              }}
-            >
-              <span aria-hidden style={{ fontSize: fontSize.sm }}>◷</span>
-              模型解析优先级：Agent 显式配置 → 模板默认（baseAgentId 链）→ worker 默认模型 →
-              不指定（serve 默认）· 凭据保存后即时下发（C7 / C5）
-            </div>
+            </>
+          ) : (
+            <>
+              <div data-testid="manage-toolbar" style={{ display: "flex", alignItems: "center", gap: space.lg, flexWrap: "wrap" }}>
+                <button type="button" data-testid="back-to-providers" onClick={() => setSelectedProvider(null)} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", cursor: "pointer", fontFamily: fontFamily.body }}>← 返回 Provider</button>
+                <span style={{ fontSize: fontSize.xl, fontWeight: 700, color: neutral[900] }}>{selectedProvider}</span>
+                <span style={{ fontSize: fontSize.xs, color: neutral[500], backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, borderRadius: radius.pill, padding: "2px 10px", fontFamily: fontFamily.mono }}>{filteredModels.length} 个模型</span>
+                <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginLeft: "auto", flex: 1, maxWidth: 320, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm }}>
+                  <span aria-hidden style={{ fontSize: fontSize.lg, color: neutral[400] }}>⌕</span>
+                  <input data-testid="model-search" autoComplete="off" name="model-search" value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="搜索模型名…" style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }} />
+                </div>
+                {isAdmin && (
+                  <button type="button" data-testid="add-model-button" onClick={() => { setAddProviderID(selectedProvider); setAddModelID(""); setAddName(""); setAddProviderType("local"); setAddBaseUrl(providers.find(p=>p.providerID===selectedProvider)?.baseUrl ?? ""); setAddOpen(true); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#fff", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body }}>+ 新增模型</button>
+                )}
+              </div>
+              {modelsQuery.isPending ? (
+                <div data-testid="models-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}>加载中…</div>
+              ) : (
+                <div data-testid="model-list" style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: space.md, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.md }}>
+                  <div aria-hidden style={{ display: "flex", alignItems: "center", gap: space.lg, padding: `${space.sm}px ${space.xl}px`, fontSize: fontSize.xs, fontWeight: 600, color: neutral[400], letterSpacing: "0.03em" }}>
+                    <span style={{ flex: 1 }}>模型名称</span>
+                    <span style={{ width: 250, flexShrink: 0 }}>模型 ID</span>
+                    <span style={{ width: 72, flexShrink: 0 }}>可用节点</span>
+                    <span style={{ width: 88, flexShrink: 0 }}>凭据</span>
+                    <span style={{ width: 72, flexShrink: 0 }}>启用</span>
+                    <span style={{ width: 200, flexShrink: 0, textAlign: "right" }}>操作</span>
+                  </div>
+                  {filteredModels.map((m) => (
+                    <div key={m.id} data-testid="model-item" data-model-id={`${m.providerID}/${m.modelID}`} style={{ display: "flex", alignItems: "center", gap: space.lg, padding: `${space.lg}px ${space.xl}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, ...baseFont }}>
+                      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+                        <span data-testid="model-name" style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</span>
+                        <span style={{ fontSize: fontSize.md, color: neutral[500], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.modelID}{isBuiltinModel(m) && <span style={{ marginLeft: 6, fontSize: fontSize.xs, color: neutral[500], backgroundColor: neutral[100], border: `1px solid ${neutral[200]}`, borderRadius: radius.pill, padding: "1px 6px" }}>内置</span>}</span>
+                      </div>
+                      <span data-testid="model-id" style={{ width: 250, flexShrink: 0, fontSize: fontSize.sm, fontFamily: fontFamily.mono, color: neutral[500], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{`${m.providerID}/${m.modelID}`}</span>
+                      <span style={{ width: 72, flexShrink: 0, display: "inline-flex", alignItems: "baseline", gap: space.xs, fontSize: fontSize.md, color: neutral[700] }}><span style={{ fontWeight: 600, fontFamily: fontFamily.mono }}>{nodeCountByModel.get(`${m.providerID}/${m.modelID}`) ?? 0}</span><span style={{ fontSize: fontSize.xs, color: neutral[400] }}>节点</span></span>
+                      <CredentialBadge status={credentialOf(m)} />
+                      <div style={{ width: 72, flexShrink: 0, display: "flex", justifyContent: "center" }}><EnabledBadge enabled={m.enabled} /></div>
+                      <div style={{ width: 200, flexShrink: 0, display: "flex", justifyContent: "flex-end", gap: space.sm }}>
+                        {isAdmin && !isBuiltinModel(m) && <ActionButton testid="model-edit-button" label="编辑" onClick={() => openEdit(m)} />}
+                        {isAdmin && !isBuiltinModel(m) && <ActionButton testid="model-delete-button" label="删除" onClick={() => deleteModelMutation.mutate(m.id)} />}
+                        {isAdmin && <ActionButton testid="model-configure-button" label={credentialOf(m) === "configured" ? "更新凭据" : "配置"} primary onClick={() => setConfigureOpen(m.providerID)} />}
+                      </div>
+                    </div>
+                  ))}
+                  {filteredModels.length === 0 && <div style={{ padding: `${space.xxl}px`, textAlign: "center", color: neutral[400] }}>该 Provider 暂无模型</div>}
+                </div>
+              )}
+            </>
           )}
         </div>
       </main>
-
-      {/* 目录行「配置凭据」弹窗（admin 专属；复用 Provider Tab 的 ConfigureModal，CFG-04） */}
-      <ConfigureModal
-        open={configureOpen !== false}
-        provider={configureOpen === false ? "" : configureOpen}
-        submitting={saveCredentialMutation.isPending}
-        error={configureError}
-        workers={workers}
-        onClose={() => {
-          setConfigureOpen(false);
-          setConfigureError(null);
-        }}
-        onSubmit={(payload) =>
-          configureOpen !== false &&
-          saveCredentialMutation.mutate({ providerID: configureOpen, ...payload })
-        }
-      />
+      <ConfigureModal open={configureOpen !== false} provider={configureOpen === false ? "" : configureOpen} submitting={saveCredentialMutation.isPending} error={configureError} workers={workers} onClose={() => { setConfigureOpen(false); setConfigureError(null); }} onSubmit={(payload) => configureOpen !== false && saveCredentialMutation.mutate({ providerID: configureOpen, ...payload })} />
+      {addOpen && (
+        <div data-testid="add-model-modal" style={{ position: "absolute", inset: 0, zIndex: 40, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "10%" }}>
+          <div aria-hidden onClick={() => setAddOpen(false)} style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }} />
+          <div style={{ position: "relative", width: 520, maxWidth: "calc(100% - 48px)", display: "flex", flexDirection: "column", gap: space.lg, padding: `${space.xl}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.lg }}>
+            <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900] }}>{selectedProvider ? `为 ${selectedProvider} 新增模型` : "添加本地/自定义模型"}</div>
+            {addError && <div data-testid="add-model-error" role="alert" style={{ color: "#DC2626", fontSize: fontSize.sm }}>{addError}</div>}
+            <input data-testid="add-model-provider" autoComplete="off" name="add-provider" placeholder="providerID (如 ollama-local)" value={addProviderID} onChange={(e) => setAddProviderID(e.target.value)} disabled={!!selectedProvider} style={{ padding: `${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: selectedProvider ? neutral[100] : "var(--color-surface)" }} />
+            <input data-testid="add-model-modelid" autoComplete="off" name="add-modelid" placeholder="modelID (如 ornith-1.5:9b)" value={addModelID} onChange={(e) => setAddModelID(e.target.value)} style={{ padding: `${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }} />
+            <input data-testid="add-model-name" autoComplete="off" name="add-name" placeholder="显示名 (如 Ornith 9B)" value={addName} onChange={(e) => setAddName(e.target.value)} style={{ padding: `${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }} />
+            <select data-testid="add-model-providertype" value={addProviderType} onChange={(e) => setAddProviderType(e.target.value as never)} style={{ padding: `${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>
+              <option value="local">local</option>
+              <option value="custom">custom</option>
+              <option value="cloud">cloud</option>
+            </select>
+            <input data-testid="add-model-baseurl" autoComplete="off" name="add-baseurl" placeholder="baseUrl (http://.../v1)" value={addBaseUrl} onChange={(e) => setAddBaseUrl(e.target.value)} style={{ padding: `${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }} />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
+              <button type="button" onClick={() => setAddOpen(false)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>取消</button>
+              <button type="button" data-testid="add-model-submit" disabled={createModelMutation.isPending} onClick={() => { const payload: Record<string, string> = { providerID: addProviderID.trim(), modelID: addModelID.trim(), name: addName.trim(), providerType: addProviderType }; if (addBaseUrl.trim()) payload.baseUrl = addBaseUrl.trim(); createModelMutation.mutate(payload as never); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#fff" }}>{createModelMutation.isPending ? "创建中…" : "创建"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {editTarget && (
+        <div data-testid="edit-model-modal" style={{ position: "absolute", inset: 0, zIndex: 40, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "10%" }}>
+          <div aria-hidden onClick={() => setEditTarget(null)} style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }} />
+          <div style={{ position: "relative", width: 520, maxWidth: "calc(100% - 48px)", display: "flex", flexDirection: "column", gap: space.lg, padding: `${space.xl}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.lg }}>
+            <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900] }}>编辑模型 {editTarget.providerID}/{editTarget.modelID}</div>
+            {editError && <div data-testid="edit-model-error" role="alert" style={{ color: "#DC2626", fontSize: fontSize.sm }}>{editError}</div>}
+            <input data-testid="edit-model-name" autoComplete="off" name="edit-name" placeholder="显示名" value={editName} onChange={(e) => setEditName(e.target.value)} style={{ padding: `${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }} />
+            <select data-testid="edit-model-providertype" value={editProviderType} onChange={(e) => setEditProviderType(e.target.value as never)} style={{ padding: `${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>
+              <option value="cloud">cloud</option>
+              <option value="local">local</option>
+              <option value="custom">custom</option>
+            </select>
+            <input data-testid="edit-model-baseurl" autoComplete="off" name="edit-baseurl" placeholder="baseUrl (http://.../v1)" value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)} style={{ padding: `${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }} />
+            <label style={{ display: "flex", alignItems: "center", gap: space.sm, fontSize: fontSize.md }}>
+              <input type="checkbox" checked={editEnabled} onChange={(e) => setEditEnabled(e.target.checked)} /> 已启用
+            </label>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
+              <button type="button" onClick={() => setEditTarget(null)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>取消</button>
+              <button type="button" data-testid="edit-model-submit" disabled={updateModelMutation.isPending} onClick={() => updateModelMutation.mutate({ id: editTarget.id, name: editName.trim(), providerType: editProviderType, baseUrl: editBaseUrl.trim() || null, enabled: editEnabled })} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#fff" }}>{updateModelMutation.isPending ? "保存中…" : "保存"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {providerEditTarget && (
+        <div data-testid="edit-provider-modal" style={{ position: "absolute", inset: 0, zIndex: 40, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "10%" }}>
+          <div aria-hidden onClick={() => setProviderEditTarget(null)} style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }} />
+          <div style={{ position: "relative", width: 520, maxWidth: "calc(100% - 48px)", display: "flex", flexDirection: "column", gap: space.lg, padding: `${space.xl}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.lg }}>
+            <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900] }}>编辑 Provider {providerEditTarget}</div>
+            {providerEditError && <div data-testid="edit-provider-error" role="alert" style={{ color: "#DC2626", fontSize: fontSize.sm }}>{providerEditError}</div>}
+            <select data-testid="edit-provider-providertype" value={providerEditType} onChange={(e) => setProviderEditType(e.target.value as never)} style={{ padding: `${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>
+              <option value="cloud">cloud</option>
+              <option value="local">local</option>
+              <option value="custom">custom</option>
+            </select>
+            <input data-testid="edit-provider-baseurl" autoComplete="off" name="edit-provider-baseurl" placeholder="baseUrl (http://.../v1)" value={providerEditBaseUrl} onChange={(e) => setProviderEditBaseUrl(e.target.value)} style={{ padding: `${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }} />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
+              <button type="button" onClick={() => setProviderEditTarget(null)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>取消</button>
+              <button type="button" data-testid="edit-provider-submit" disabled={updateProviderMutation.isPending} onClick={() => updateProviderMutation.mutate({ providerID: providerEditTarget, providerType: providerEditType, baseUrl: providerEditBaseUrl.trim() || null })} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#fff" }}>{updateProviderMutation.isPending ? "保存中…" : "保存"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {providerDeleteTarget && (
+        <div data-testid="delete-provider-confirm" style={{ position: "absolute", inset: 0, zIndex: 40, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div aria-hidden onClick={() => setProviderDeleteTarget(null)} style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }} />
+          <div style={{ position: "relative", width: 420, padding: `${space.xl}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.lg }}>
+            <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>确认删除 Provider {providerDeleteTarget}？</div>
+            <div style={{ fontSize: fontSize.sm, color: neutral[500], marginTop: space.sm }}>将删除该 Provider 下所有模型及凭据，内置 Provider 不可删除。</div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm, marginTop: space.lg }}>
+              <button type="button" onClick={() => setProviderDeleteTarget(null)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>取消</button>
+              <button type="button" data-testid="confirm-delete-provider" disabled={deleteProviderMutation.isPending} onClick={() => deleteProviderMutation.mutate(providerDeleteTarget)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#DC2626", color: "#fff" }}>{deleteProviderMutation.isPending ? "删除中…" : "确认删除"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
