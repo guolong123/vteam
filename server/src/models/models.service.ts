@@ -202,11 +202,11 @@ export class ModelsService implements OnModuleInit {
         const configured = !!cred && cred.revokedAt === null;
         const catalogCount =
           groups.find((g) => g.providerID === providerID)?._count._all ?? 0;
+        const workerCount = workerCountByProvider.get(providerID) ?? 0;
         const meta = metaByProvider.get(providerID);
         return {
           providerID,
-          modelCount:
-            catalogCount + (workerCountByProvider.get(providerID) ?? 0),
+          modelCount: Math.max(catalogCount, workerCount),
           configured,
           fingerprint: configured ? (cred?.fingerprint ?? null) : null,
           revokedAt: cred?.revokedAt ?? null,

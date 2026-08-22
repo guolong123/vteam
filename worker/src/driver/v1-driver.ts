@@ -387,10 +387,6 @@ export class V1Driver {
       };
       const models: DriverModelInfo[] = [];
       for (const provider of body.all ?? []) {
-        const hasKey = typeof provider.key === 'string' && provider.key.length > 0;
-        if (!hasKey && provider.id !== 'opencode') {
-          continue;
-        }
         const providerID = provider.id ?? '';
         for (const [modelID, model] of Object.entries(provider.models ?? {})) {
           models.push({

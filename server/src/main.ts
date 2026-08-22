@@ -3,6 +3,7 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger as PinoLogger } from 'nestjs-pino';
+import * as express from 'express';
 import { AppModule } from './app.module';
 import {
   setSwaggerRawDocument,
@@ -12,9 +13,12 @@ import { resolveUploadDir } from './uploads/uploads.constants';
 
 async function bootstrap() {
   // bufferLogs：缓冲 Nest 启动期框架日志，useLogger 后 flush 输出为 pino JSON
+  // bodyParser: false → 禁用 Nest 默认 100kb 限制，改由下方 express.json({limit:'5mb'}) 接管
+  // （Worker 全量 provider 上报可达 5mb，未配置也展示场景）
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
-  });
+    bodyParser: false,
+  } as never);
 
   // 全局路由前缀 /api/v1（对齐 09 篇 API 契约）
   app.setGlobalPrefix('api/v1');
@@ -23,6 +27,11 @@ async function bootstrap() {
   // 文件经 UPLOAD_DIR 可覆盖（默认 server/uploads，upload.constants resolveUploadDir 同源）；
   // 目录不存在时静态挂载不报错，首次上传由 multer destination 递归创建。
   app.useStaticAssets(resolveUploadDir(), { prefix: '/uploads/' });
+
+  // Worker 上报：capabilities.models 全量 provider 展开后可达 1-2k 条（未配置也展示），
+  // 默认 express json 100kb 会 PayloadTooLarge（v1-driver 全量上报）。放宽至 5mb。
+  app.use(express.json({ limit: '5mb' }));
+  app.use(express.urlencoded({ limit: '5mb', extended: true }));
 
   // 全局 DTO 校验（class-validator，对齐 09 篇 §2.1 的 VALIDATION_* 语义）
   app.useGlobalPipes(
