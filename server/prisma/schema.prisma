@@ -535,43 +535,49 @@ model ModelCredential {
 
 model GitCredential {
   id            String    @id
-  // repoUrl 逻辑关联（不建 FK：repo 跨仓库/命名空间解析，仿 ModelCredential 无 FK 模式）
-  repoUrl       String    @map("repo_url")
-  // 认证方式：ssh_key | https_token（credentialRef 仅存 AES-256-GCM 密文引用，明文零接触）
+  // 凭证名称（人类可识别，复用时区分，Q1 全局唯一）
+  name          String    @unique
+  // 认证方式：ssh_key | https_token
   authType      String    @map("auth_type")
   credentialRef String    @db.Text @map("credential_ref")
-  // 脱敏标识（如 ssh-rsa AAAA**** / gh_****，不进日志/审计事件/响应）
   fingerprint   String
-  // 操作者（管理员 id），保留审计轨迹
+  description   String?   @db.Text
   createdBy     String    @map("created_by")
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
-  // 软撤销（吊销 = 软删，保留审计轨迹；同 repo+authType 重复 POST 覆盖更新时清除）
   revokedAt     DateTime? @map("revoked_at")
 
-  @@unique([repoUrl, authType], map: "uk_git_credentials_repo_auth")
   @@map("git_credentials")
+}
+
+model GitRepo {
+  id           String    @id
+  repoUrl      String    @unique @map("repo_url")
+  credentialId String    @map("credential_id")
+  createdBy    String    @map("created_by")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  revokedAt    DateTime? @map("revoked_at")
+
+  @@index([credentialId], map: "idx_git_repos_credential")
+  @@map("git_repos")
 }
 
 model GitRepoGrant {
   id         String    @id
   // agentId 逻辑关联（不建 FK：agents 域主键，Agent 生命周期独立）
-  // subject_type 预留：role/project 粒度授权不引入字段（B 方案仅 agent 粒度，注释预留）
+  // repoId 逻辑关联 GitRepo.id（不建 Prisma relation，Restrict 由服务层编排）
   agentId    String    @map("agent_id")
-  repoUrl    String    @map("repo_url")
-  // permission: read | write（write 含 read 能力；git_push 需 write）
+  repoId     String    @map("repo_id")
   permission String
-  // effect: allow | ask（ask = 默认成员确认后放行）
   effect     String
-  // 授权人（管理员 id），保留授权轨迹
   grantedBy  String    @map("granted_by")
   grantedAt  DateTime  @default(now()) @map("granted_at")
-  // 软撤销（吊销 = 软删，保留授权轨迹）
   revokedAt  DateTime? @map("revoked_at")
 
-  @@unique([agentId, repoUrl], map: "uk_git_repo_grants_agent_repo")
+  @@unique([agentId, repoId], map: "uk_git_repo_grants_agent_repo")
   @@index([agentId], map: "idx_git_repo_grants_agent")
-  @@index([repoUrl], map: "idx_git_repo_grants_repo")
+  @@index([repoId], map: "idx_git_repo_grants_repo")
   @@map("git_repo_grants")
 }
 

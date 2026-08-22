@@ -533,10 +533,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * 活跃 agent 授权仓库解析（dispatch/replay 复用）：
-   * ① taskAgent（removedAt=null）+ 关联 task 未终态（status ∉ {completed, archived}）
-   *    → 活跃 agent 集合（distinct agentId）；
-   * ② 这些 agent 的未吊销 GitRepoGrant → repoUrl → 最高权限映射（write > read）。
+   * 活跃 agent 授权仓库解析（dispatch/replay 复用，凭证池分离后）：
+   * ① taskAgent（removedAt=null）+ 关联 task 未终态 → 活跃 agent 集合；
+   * ② 这些 agent 的未吊销 GitRepoGrant(repoId) → repoId → 最高权限映射；
+   * ③ GitRepo(repoId→repoUrl) 转换为 repoUrl→permission，供 build 阶段按 repoUrl 过滤。
    * 返回空 Map → 无任何授权仓库（打包结果为 credentials=[]，仍下发清 worker 侧条目）。
    */
   private async resolveWorkerActiveRepoUrls(): Promise<Map<string, string>> {
@@ -556,49 +556,68 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     const agentIds = activeTaskAgents.map((t) => t.agentId);
     const grants = await this.prisma.gitRepoGrant.findMany({
       where: { agentId: { in: agentIds }, revokedAt: null },
-      select: { repoUrl: true, permission: true },
+      select: { repoId: true, permission: true },
     });
-    // 同一仓库多 agent 授权时取最高权限（write > read），凭证面=worker 级语义。
-    const permByRepo = new Map<string, string>();
-    for (const g of grants) {
-      const current = permByRepo.get(g.repoUrl);
+    // 同一仓库多 agent 授权时取最高权限（write > read）
+    const permByRepoId = new Map<string, string>();
+    for (const g of grants as any[]) {
+      const current = permByRepoId.get(g.repoId);
       if (g.permission === 'write' || !current) {
-        permByRepo.set(g.repoUrl, g.permission);
+        permByRepoId.set(g.repoId, g.permission);
       }
     }
-    return permByRepo;
+    if (permByRepoId.size === 0) return new Map();
+    const repoIds = Array.from(permByRepoId.keys());
+    const repos = await (this.prisma as any).gitRepo.findMany({
+      where: { id: { in: repoIds }, revokedAt: null },
+      select: { id: true, repoUrl: true },
+    });
+    const permByRepoUrl = new Map<string, string>();
+    for (const r of repos as any[]) {
+      const perm = permByRepoId.get(r.id);
+      if (perm) permByRepoUrl.set(r.repoUrl, perm);
+    }
+    return permByRepoUrl;
   }
 
   /**
-   * 仓库凭证 → 解密打包（orderBy repoUrl asc 幂等；内存过滤到授权集合）。
-   * 返回 null 表示从未配置任何凭证（调用方跳过下发）；返回空数组表示有凭证但
-   * 全部已吊销/当前活跃 agent 无授权（下发空 payload 清 worker 侧条目——含吊销场景）。
+   * 仓库凭证 → 解密打包（orderBy repoUrl asc 幂等；内存过滤到授权集合，凭证池分离后改为 Repo→Credential join）。
+   * 返回 null 表示从未配置任何仓库（调用方跳过下发）；返回空数组表示有仓库但全部已吊销/无授权（下发空 payload 清 worker 侧条目）。
    * key 明文仅存在于返回数组（进命令 payload），不落日志。
-   * permission 取授权映射中该仓库的最高权限（push 工具 write 校验依赖）。
    */
   private async buildGitCredentialsPayload(
     repoPerm: Map<string, string>,
   ): Promise<GitCredentialEntry[] | null> {
-    // 从未配置任何凭证（含已吊销历史行）→ 跳过下发（避免无意义命令风暴）。
-    // 与「有行但全部 revokedAt≠null」区分：后者必须下发空数组清 worker 侧残留明文。
-    const totalCount = await this.prisma.gitCredential.count();
+    const totalCount = await (this.prisma as any).gitRepo.count();
     if (totalCount === 0) {
       return null;
     }
-    const rows = await this.prisma.gitCredential.findMany({
+    const repos = await (this.prisma as any).gitRepo.findMany({
       where: { revokedAt: null },
       orderBy: [{ repoUrl: 'asc' }],
-      select: { repoUrl: true, authType: true, credentialRef: true, fingerprint: true },
+      select: { repoUrl: true, credentialId: true },
     });
-    return rows
-      .filter((row) => repoPerm.has(row.repoUrl))
-      .map((row) => ({
-        repoUrl: row.repoUrl,
-        authType: row.authType,
-        key: this.credentialCrypto.decrypt(row.credentialRef),
-        fingerprint: row.fingerprint,
-        permission: repoPerm.get(row.repoUrl),
-      }));
+    if (repos.length === 0) return [];
+    const credentialIds = [...new Set((repos as any[]).map((r: any) => r.credentialId))];
+    const credentials = await this.prisma.gitCredential.findMany({
+      where: { id: { in: credentialIds }, revokedAt: null },
+      select: { id: true, authType: true, credentialRef: true, fingerprint: true },
+    });
+    const credById = new Map((credentials as any[]).map((c) => [c.id, c]));
+    const result: GitCredentialEntry[] = [];
+    for (const r of repos as any[]) {
+      if (!repoPerm.has(r.repoUrl)) continue;
+      const cred = credById.get(r.credentialId);
+      if (!cred) continue;
+      result.push({
+        repoUrl: r.repoUrl,
+        authType: cred.authType,
+        key: this.credentialCrypto.decrypt(cred.credentialRef),
+        fingerprint: cred.fingerprint,
+        permission: repoPerm.get(r.repoUrl),
+      });
+    }
+    return result;
   }
 
   /**

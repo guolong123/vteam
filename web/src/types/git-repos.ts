@@ -20,18 +20,41 @@ export interface GitGrantView {
   effect: "allow" | "ask";
 }
 
-/** GET /git-repos 条目（脱敏视图：只含 fingerprint，绝无 key 明文）。 */
+/** GET /git-credentials 条目（脱敏视图，凭证池）。 */
+export interface GitCredentialView {
+  id: string;
+  name: string;
+  authType: "ssh_key" | "https_token";
+  fingerprint: string | null;
+  description: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+/** POST /git-credentials 请求体 */
+export interface CreateGitCredentialPayload {
+  name: string;
+  authType: "ssh_key" | "https_token";
+  key: string;
+  description?: string;
+}
+
+/** PATCH /git-credentials/:id 请求体 */
+export interface UpdateGitCredentialPayload {
+  name?: string;
+  key?: string;
+  description?: string;
+}
+
+/** GET /git-repos 条目（脱敏视图：通过 credentialId 关联凭证，含 credentialName/authType/fingerprint）。 */
 export interface GitRepoView {
   id: string;
-  /** 规范化仓库地址（已去 .git 后缀 / trim） */
   repoUrl: string;
-  /** 认证方式：ssh_key=SSH 私钥 / https_token=HTTPS token */
+  credentialId: string;
+  credentialName: string | null;
   authType: "ssh_key" | "https_token";
-  /** 脱敏指纹（展示用，无明文 key） */
   fingerprint: string | null;
-  /** 吊销时间（列表仅未吊销；非 null 已撤销） */
   revokedAt: string | null;
-  /** 未吊销授权 agent 列表 */
   grantedAgents: GitGrantView[];
   createdAt: string;
 }
@@ -39,22 +62,20 @@ export interface GitRepoView {
 /** 授权输入条目（POST/PATCH 共用）。 */
 export interface GitGrantInput {
   agentId: string;
-  /** 缺省 read=allow、write=ask（对齐 17 篇 §3.3） */
   permission: "read" | "write";
   effect: "allow" | "ask";
 }
 
-/** POST /git-repos 请求体（grantedAgents 可缺省——创建但不授权任何 agent）。 */
+/** POST /git-repos 请求体（credentialId 指向已创建凭证）。 */
 export interface CreateGitRepoPayload {
   repoUrl: string;
-  authType: "ssh_key" | "https_token";
-  key: string;
+  credentialId: string;
   grantedAgents?: GitGrantInput[];
 }
 
-/** PATCH /git-repos/:id 请求体（部分更新；key 缺省 = 保留原凭证，仅更新授权）。 */
+/** PATCH /git-repos/:id 请求体（切换凭证或更新授权）。 */
 export interface UpdateGitRepoPayload {
-  key?: string;
+  credentialId?: string;
   grantedAgents?: GitGrantInput[];
 }
 

@@ -1,11 +1,14 @@
 /**
- * 仓库凭证域常量（17 篇《仓库权限与凭证机制》§3.1/§3.2，B 方案落地）。
+ * 仓库凭证域常量（17 篇《仓库权限与凭证机制》§3.1/§3.2，B 方案落地 + 凭证池分离）。
  *
  * 域主键前缀（对齐 resyncIdPrefix 模式，仿 MODEL_CREDENTIAL_ID_PREFIX='mc'）：
- * - `gc_<零填充序号>`：GitCredential（git_credentials 表）
- * - `gr_<零填充序号>`：GitRepoGrant（git_repo_grants 表）
+ * - `gc_<零填充序号>`：GitCredential 凭证池（git_credentials 表，name 唯一）
+ * - `gro_<零填充序号>`：GitRepo 仓库表（git_repos 表，repoUrl 唯一）
+ * - `gr_<零填充序号>`：GitRepoGrant（git_repo_grants 表，repoId 关联）
  */
 export const GIT_CREDENTIAL_ID_PREFIX = 'gc';
+
+export const GIT_REPO_ID_PREFIX = 'gro';
 
 export const GIT_REPO_GRANT_ID_PREFIX = 'gr';
 
@@ -41,12 +44,18 @@ export type GitEffect = (typeof GIT_EFFECTS)[keyof typeof GIT_EFFECTS];
  * - repoUrl+authType 撞 @@unique 且未吊销（POST 冲突）→ 409 REPO_EXISTS
  * - authType 非法（非 ssh_key/https_token）→ 400 AUTH_TYPE_INVALID
  * - 授权参数非法（agent 不存在 / permission/effect 越界）→ 400 GRANT_INVALID
+ * - 凭证不存在 → 404 CREDENTIAL_NOT_FOUND
+ * - 凭证名称已存在 → 409 CREDENTIAL_NAME_EXISTS
+ * - 凭证被仓库引用，删除阻断 → 409 CREDENTIAL_IN_USE
  */
 export const GIT_REPOS_ERRORS = {
   REPO_NOT_FOUND: 'REPO_NOT_FOUND',
   REPO_EXISTS: 'REPO_EXISTS',
   AUTH_TYPE_INVALID: 'AUTH_TYPE_INVALID',
   GRANT_INVALID: 'GRANT_INVALID',
+  CREDENTIAL_NOT_FOUND: 'CREDENTIAL_NOT_FOUND',
+  CREDENTIAL_NAME_EXISTS: 'CREDENTIAL_NAME_EXISTS',
+  CREDENTIAL_IN_USE: 'CREDENTIAL_IN_USE',
 } as const;
 
 export type GitReposErrorCode =

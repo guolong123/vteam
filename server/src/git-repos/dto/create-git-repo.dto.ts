@@ -8,11 +8,7 @@ import {
   IsString,
   ValidateNested,
 } from 'class-validator';
-import {
-  GIT_AUTH_TYPES,
-  GIT_EFFECTS,
-  GIT_PERMISSIONS,
-} from '../git-repos.constants';
+import { GIT_EFFECTS, GIT_PERMISSIONS } from '../git-repos.constants';
 
 /**
  * 授权条目（GitRepoGrant 行输入）。
@@ -45,10 +41,9 @@ export class GitGrantInput {
 }
 
 /**
- * POST /git-repos 请求体（仓库凭证录入 + 授权）。
- * - repoUrl + authType 构成唯一键（@@unique uk_git_credentials_repo_auth），
- *   service 层先查撞冲突（未吊销）→ 409 REPO_EXISTS；
- * - key 为 SSH 私钥明文 / HTTPS token（AES-256-GCM 加密存 credentialRef，明文零接触）；
+ * POST /git-repos 请求体（仓库创建 + 授权，选择已有凭证）。
+ * - repoUrl 唯一（@@unique，未吊销）→ 409 REPO_EXISTS；
+ * - credentialId 指向未吊销凭证池条目，不存在 → 404 CREDENTIAL_NOT_FOUND；
  * - grantedAgents 可缺省（创建仓库但不授权任何 agent，此时凭证不会下发到任何 worker）。
  */
 export class CreateGitRepoDto {
@@ -61,19 +56,12 @@ export class CreateGitRepoDto {
   repoUrl: string;
 
   @ApiProperty({
-    description: '认证方式：ssh_key（SSH 私钥）| https_token（HTTPS token）',
-    enum: Object.values(GIT_AUTH_TYPES),
-  })
-  @IsIn(Object.values(GIT_AUTH_TYPES))
-  authType: 'ssh_key' | 'https_token';
-
-  @ApiProperty({
-    description: 'SSH 私钥明文 / HTTPS access token（加密存储，绝不返回明文）',
-    example: '-----BEGIN OPENSSH PRIVATE KEY-----...',
+    description: '凭证池 id（gc_ 前缀，需为未吊销凭证）',
+    example: 'gc_0000000001',
   })
   @IsString()
   @IsNotEmpty()
-  key: string;
+  credentialId: string;
 
   @ApiPropertyOptional({
     description: '授权 Agent 列表（可空数组或缺省；agent 不存在 → 400 GRANT_INVALID）',
