@@ -502,7 +502,7 @@ export default function ModelsPage() {
     credentialsQuery.data?.get(m.id)?.configured ? "configured" : "missing";
 
   const saveCredentialMutation = useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       providerID,
       token,
       targetWorkerIds,
@@ -511,7 +511,12 @@ export default function ModelsPage() {
       token: string;
       targetWorkerIds?: string[];
     }) => {
-      const modelId = models.find((m) => m.providerID === providerID)?.id;
+      // 目录 Tab 只加载前 100 个模型（老 opencode 系），worker 同步进来的数千个
+      // provider 模型不在其中 —— 必须按 providerID 走 API 解析，不能用本地 models.find
+      const res = await api.get<ModelsResponse>("/models", {
+        query: { providerID, page: 1, pageSize: 1 },
+      });
+      const modelId = res.items[0]?.id;
       if (!modelId) throw new Error(`provider ${providerID} 无可用模型`);
       return api.post<CredentialView>(`/models/${modelId}/credentials`, {
         token,
@@ -527,7 +532,13 @@ export default function ModelsPage() {
       queryClient.invalidateQueries({ queryKey: ["workers"] });
     },
     onError: (err) => {
-      setConfigureError(isApiError(err) ? err.message : "保存失败，请稍后重试");
+      setConfigureError(
+        isApiError(err)
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "保存失败，请稍后重试"
+      );
     },
   });
 
