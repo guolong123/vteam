@@ -14,6 +14,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { WorkerEventDto } from './dto/worker-event.dto';
 import { WORKER_ERRORS } from './workers.constants';
 import { concatText, extractConclusionParts, normalizeParts } from '../chat/message-parts';
+import { inferErrorType } from './infer-error-type';
 
 /** task.completed 回流负载（worker 侧 step-finish 实测字段，T10 WorkerDispatcher 消费）。
  * sessionId 语义：平台 Session 主键（s_ 前缀）；worker 若误上报 opencode 会话 id
@@ -431,13 +432,9 @@ export class WorkerEventIngress {
     });
   }
 
-  /** 从错误文本推断 errorType（前端分类依据；推断不出缺省 model_error，保持向后兼容）。 */
+  /** 从错误文本推断 errorType（前端分类依据；推断不出缺省 model_error，保持向后兼容）。委托共享工具。 */
   private inferErrorType(error?: string): string {
-    const e = (error ?? '').toLowerCase();
-    if (/invalid api key|unauthorized|401|credential/.test(e)) return 'auth_failed';
-    if (/quota|insufficient|billing/.test(e)) return 'quota_exceeded';
-    if (/timeout|model_busy|busy|rate.?limit|overloaded|try again/.test(e)) return 'model_busy';
-    return 'model_error';
+    return inferErrorType(error);
   }
 
   /**

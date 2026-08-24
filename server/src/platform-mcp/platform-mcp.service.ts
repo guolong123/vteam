@@ -408,7 +408,6 @@ export class PlatformMcpService {
     for (const row of teamRows) {
       const name = row.alias ?? row.agent.name;
       if (!name) continue;
-      // `@名称` 或 `@名称,` 或 `@名称 ` 前缀命中（防 @开发者 误吞 @开发者-2）
       const atName = `@${name}`;
       const boundaryAfter = content.length;
       const idx = content.indexOf(atName);
@@ -419,8 +418,41 @@ export class PlatformMcpService {
         mentions.push({ type: 'agent', instanceId: row.id, agentId: row.agentId, name });
       }
     }
+    if (content.includes('@all')) {
+      (mentions as unknown as Array<{ type: string }>).push({ type: 'all' } as unknown as { type: 'agent'; instanceId: string; agentId: string; name: string });
+    }
+    try {
+      const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: { projectId: true } });
+      if (task?.projectId) {
+        const members = await this.prisma.projectMember.findMany({
+          where: { projectId: task.projectId },
+          select: { user: { select: { id: true, username: true, displayName: true } } },
+        });
+        const hasDynamic = ['@user', '@me', '@当前用户', '@here', '@用户'].some((t) => content.includes(t));
+        if (hasDynamic) {
+          for (const m of members) {
+            if (!(mentions as unknown as Array<{ type: string; userId: string }>).some((x) => x.userId === m.user.id)) {
+              (mentions as unknown as Array<{ type: string; userId: string }>).push({ type: 'user', userId: m.user.id });
+            }
+          }
+        } else {
+          for (const m of members) {
+            const names = [m.user.username, m.user.displayName].filter(Boolean) as string[];
+            for (const n of names) {
+              const atN = `@${n}`;
+              const idx = content.indexOf(atN);
+              const hit = idx >= 0 && (idx + atN.length >= content.length || /[\s,，。；;:：!！?？]/.test(content[idx + atN.length] ?? ''));
+              if (hit) {
+                (mentions as unknown as Array<{ type: string; userId: string }>).push({ type: 'user', userId: m.user.id });
+                break;
+              }
+            }
+          }
+        }
+      }
+    } catch {}
     return {
-      mentions: mentions.length > 0 ? mentions : null,
+      mentions: mentions.length > 0 ? (mentions as unknown as Array<{ type: 'agent'; instanceId: string; agentId: string; name: string }>) : null,
       mentionedInstances,
     };
   }
@@ -534,7 +566,27 @@ export class PlatformMcpService {
   ): Promise<ReadFileResult> {
     await this.assertWorkerTask(ctx, args.taskId);
     const maxBytes = this.normalizeMaxBytes(args.maxBytes);
-
+    if (args.fileRef.startsWith('art_')) {
+      const artifactId = args.fileRef.split('@')[0].split('/')[0].split('?')[0];
+      const direct = await this.prisma.artifactVersion.findFirst({
+        where: { artifactId, artifact: { taskId: args.taskId } },
+        orderBy: { version: 'desc' },
+        select: { contentRef: true },
+      });
+      if (direct) return this.readFromArchive(direct.contentRef, args.fileRef, maxBytes);
+      const art = await this.prisma.artifact.findUnique({
+        where: { id: artifactId },
+        select: { taskId: true },
+      });
+      if (art?.taskId === args.taskId) {
+        const v2 = await this.prisma.artifactVersion.findFirst({
+          where: { artifactId },
+          orderBy: { version: 'desc' },
+          select: { contentRef: true },
+        });
+        if (v2) return this.readFromArchive(v2.contentRef, args.fileRef, maxBytes);
+      }
+    }
     const target = FileStorageService.normalizeFileRef(args.fileRef);
     const versions = await this.prisma.artifactVersion.findMany({
       where: { artifact: { taskId: args.taskId }, filePath: { not: null } },
@@ -718,7 +770,6 @@ export class PlatformMcpService {
     );
   }
 
-  /** task_transition：流转任务状态（仅主 Agent 可调用）。三参数归属校验 → TasksService.transitionByAgent。 */
   async taskTransition(
     ctx: PlatformMcpContext,
     args: {
@@ -729,6 +780,18 @@ export class PlatformMcpService {
     },
   ) {
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    if (args.action === 'start') {
+      const t = await this.prisma.task.findUnique({
+        where: { id: args.taskId },
+        select: { executionMode: true },
+      });
+      if (t?.executionMode === 'plan') {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: '计划模式下需由用户在任务管理界面手动启动任务，Agent 不可自动 start；评审通过后请等待用户点击“开始任务”',
+        });
+      }
+    }
     return this.tasksService.transitionByAgent(
       args.taskId,
       args.selfInstanceId,
@@ -822,6 +885,33 @@ export class PlatformMcpService {
     }
 
     const description = (args.description?.trim() || args.content.slice(0, 120)).slice(0, 255);
+    let sourceAgentId: string | null = null;
+    let sessionId: string | null = null;
+    let sessionTitle: string | null = null;
+    let channelId: string | null = null;
+    try {
+      const ta = await this.prisma.taskAgent.findUnique({
+        where: { id: args.selfInstanceId },
+        select: { agentId: true, alias: true, taskId: true },
+      });
+      if (ta) sourceAgentId = ta.agentId;
+      const sess = await this.prisma.session.findFirst({
+        where: { taskAgentId: args.selfInstanceId },
+        select: { id: true },
+      });
+      if (sess) sessionId = sess.id;
+      const taskRow = await this.prisma.task.findUnique({
+        where: { id: args.taskId },
+        select: { title: true },
+      });
+      if (taskRow) sessionTitle = taskRow.title;
+      const ch = await this.prisma.chatChannel.findFirst({
+        where: { taskId: args.taskId, taskAgentId: args.selfInstanceId },
+        select: { id: true },
+      });
+      if (ch) channelId = ch.id;
+      if (!sessionTitle && ta?.alias) sessionTitle = ta.alias;
+    } catch {}
     const memory = await this.prisma.memory.create({
       data: {
         id: await this.idGen.nextId('me'),
@@ -832,6 +922,12 @@ export class PlatformMcpService {
         description,
         tags: (args.tags ?? null) as Prisma.InputJsonValue | null,
         createdBy: args.selfInstanceId,
+        sourceAgentId,
+        sourceInstanceId: args.selfInstanceId,
+        sourceType: 'agent',
+        sessionId,
+        sessionTitle,
+        channelId,
       } as any,
     });
     return { memoryId: memory.id, level: args.level };
@@ -866,6 +962,12 @@ export class PlatformMcpService {
       tags: Prisma.JsonValue | null;
       createdBy: string;
       createdAt: string;
+      sourceAgentId: string | null;
+      sourceInstanceId: string | null;
+      sourceType: string | null;
+      sessionId: string | null;
+      sessionTitle: string | null;
+      channelId: string | null;
     }>
   > {
     await this.assertWorkerTask(ctx, args.taskId);
@@ -900,11 +1002,12 @@ export class PlatformMcpService {
       return [];
     }
 
-    const where: Prisma.MemoryWhereInput = args.query
-      ? {
-          deletedAt: null,
-          AND: [{ OR: whereOr }, { OR: [{ content: { contains: args.query } }, { description: { contains: args.query } }] }],
-        }
+    const tokens = args.query ? args.query.trim().split(/\s+/).filter(Boolean) : [];
+    const tokenFilters: Prisma.MemoryWhereInput[] = tokens.map((t) => ({
+      OR: [{ content: { contains: t } }, { description: { contains: t } }],
+    }));
+    const where: Prisma.MemoryWhereInput = tokens.length > 0
+      ? { deletedAt: null, AND: [{ OR: whereOr }, ...tokenFilters] }
       : { deletedAt: null, OR: whereOr };
     const rows = await this.prisma.memory.findMany({
       where,
@@ -922,6 +1025,12 @@ export class PlatformMcpService {
         tags: row.tags,
         createdBy: row.createdBy,
         createdAt: row.createdAt.toISOString(),
+        sourceAgentId: row.sourceAgentId ?? null,
+        sourceInstanceId: row.sourceInstanceId ?? null,
+        sourceType: row.sourceType ?? null,
+        sessionId: row.sessionId ?? null,
+        sessionTitle: row.sessionTitle ?? null,
+        channelId: row.channelId ?? null,
       }));
   }
 
@@ -1199,7 +1308,7 @@ export class PlatformMcpService {
 
     const approved = args.verdict === 'approved';
     const sysText = approved
-      ? '执行计划已通过评审，可启动实施'
+      ? '执行计划已通过评审，请等待用户手动启动任务后再实施'
       : `执行计划被驳回：${args.reason}（可修改后重提或切换 direct 模式）`;
     const channel = await this.findTaskGroupChannel(args.taskId);
 
@@ -1286,7 +1395,7 @@ export class PlatformMcpService {
     if (!isAssignee && !isMain) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message: `仅该子任务的指派实例（${planTask.assigneeInstanceId ?? '未指派'}）或主 Agent 可流转计划子任务状态`,
+        message: `仅该子任务的指派实例（${planTask.assigneeInstanceId ?? '未指派'}）或主 Agent 可流转；未指派任务请@主Agent指派或让主Agent调用plan_assign_reviewer/直接操作`,
       });
     }
 

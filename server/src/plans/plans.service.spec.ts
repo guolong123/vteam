@@ -361,13 +361,13 @@ describe('PlansService', () => {
           channelId: 'c_1',
           senderType: 'system',
           senderId: null,
-          content: { text: '执行计划已通过评审，可启动实施', parts: [] },
+          content: { text: '执行计划已通过评审，请等待用户手动启动任务后再实施', parts: [] },
         }),
       });
       expect(realtime.broadcast).toHaveBeenCalledWith(
         'chat.message.new',
         expect.objectContaining({
-          message: { text: '执行计划已通过评审，可启动实施', channelId: 'c_1' },
+          message: { text: '执行计划已通过评审，请等待用户手动启动任务后再实施', channelId: 'c_1' },
         }),
         expect.any(Object),
       );

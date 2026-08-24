@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
  * 任务状态流转操作按钮组（OBS-010 修复）
@@ -18,7 +19,7 @@
  * reject-confirm / reject-cancel。
  */
 import { useEffect, useState, type CSSProperties } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
@@ -150,12 +151,47 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
     if (rejectOpen) setReason("");
   }, [rejectOpen]);
 
+  const taskQuery = useQuery({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    queryKey: ["task", taskId],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    queryFn: () => api.get<any>(`/tasks/${taskId}`),
+    enabled: status === "pending",
+    retry: false,
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const taskDetail: any = taskQuery.data;
+  const executionMode: string | undefined = taskDetail?.executionMode;
+  const teamSize: number = Array.isArray(taskDetail?.taskAgents)
+    ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      taskDetail.taskAgents.filter((t: any) => !t.removedAt).length
+    : Array.isArray(taskDetail?.instances)
+      ? taskDetail.instances.length
+      : 0;
+  const hasMainAgent: boolean = !!taskDetail?.mainAgentInstanceId || !!taskDetail?.mainAgentId;
+
+  const planQuery = useQuery({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    queryKey: ["plans", taskId],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    queryFn: () => api.get<any>("/plans", { query: { taskId } }),
+    enabled: status === "pending" && executionMode === "plan",
+    retry: false,
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const plan: any = planQuery.data;
+
   const actions = ACTION_SETS[status];
   if (!actions) return null;
 
   const pending = actionMutation.isPending;
   const showStartHint = status === "pending" && (pending || !!actionError);
   const showErrorBar = status !== "pending" && !!actionError;
+  const planStatus: string | undefined = plan?.status;
+  const errText: string = actionError ?? "";
+  const isEmptyTeamErr = /TASK_EMPTY_TEAM|团队为空/.test(errText);
+  const isMainAgentErr = /MAIN_AGENT_NOT_SET|主 Agent/.test(errText) && !/额度|plan/.test(errText);
+  const isPlanErr = /PLAN_NOT_APPROVED|执行计划/.test(errText);
 
   const handleAction = (action: TaskAction) => {
     setActionError(null);
@@ -192,7 +228,6 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
         />
       ))}
 
-      {/* 开始前检查（对齐 board 原版 hint，仅 pending 状态操作中/失败时展示） */}
       {showStartHint && (
         <div
           data-testid="start-task-hint"
@@ -210,9 +245,47 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
           }}
         >
           <div style={{ fontWeight: 600, color: "var(--color-neutral-600)" }}>开始前检查</div>
-          <div>未选择 Agent 将先弹出 Agent 选择；多 Agent 需指定主 Agent 作为任务负责人（默认产品经理）。</div>
+          {(() => {
+            const teamOk = teamSize > 0;
+            const mainOk = teamSize <= 1 ? hasMainAgent || teamSize === 0 : hasMainAgent;
+            const planOk = executionMode !== "plan" || planStatus === "approved" || planStatus === "executing";
+            const teamColor = isEmptyTeamErr ? "#DC2626" : teamOk ? "#059669" : neutral[600];
+            const mainColor = isMainAgentErr ? "#DC2626" : mainOk ? "#059669" : neutral[600];
+            const planColor = isPlanErr ? "#DC2626" : planOk ? "#059669" : "#D97706";
+            const teamIcon = teamOk ? "✓" : "✗";
+            const mainIcon = mainOk ? "✓" : "✗";
+            const planIcon = planOk ? "✓" : executionMode === "plan" && !plan ? "✗" : planStatus === "reviewing" ? "○" : planStatus === "rejected" ? "✗" : "✗";
+            return (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: space.xs, color: teamColor }}>
+                  <span style={{ fontWeight: 700 }}>{teamIcon}</span>
+                  <span>{teamOk ? `已选择 ${teamSize} 个 Agent` : "未选择 Agent — 点击开始将先弹出 Agent 选择"}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: space.xs, color: mainColor }}>
+                  <span style={{ fontWeight: 700 }}>{mainIcon}</span>
+                  <span>{mainOk ? "已指定主 Agent（任务负责人）" : "多 Agent 需指定主 Agent 作为任务负责人（默认产品经理）"}</span>
+                </div>
+                {executionMode === "plan" && (
+                  <div style={{ display: "flex", alignItems: "center", gap: space.xs, color: planColor }}>
+                    <span style={{ fontWeight: 700 }}>{planIcon}</span>
+                    <span>
+                      {planOk
+                        ? "执行计划已评审通过"
+                        : !plan
+                          ? "执行计划未提交 — 请让主 Agent 用 plan_submit 提交"
+                          : planStatus === "reviewing"
+                            ? "执行计划待评审 — 请评审通过后再启动"
+                            : planStatus === "rejected"
+                              ? "执行计划已驳回 — 请修改后重提或切 direct 模式"
+                              : "执行计划未评审通过 — 需 approved 后再启动"}
+                    </span>
+                  </div>
+                )}
+              </>
+            );
+          })()}
           {actionError && (
-            <div role="alert" style={{ color: "#DC2626", fontWeight: 500 }}>
+            <div role="alert" style={{ color: "#DC2626", fontWeight: 500, borderTop: `1px dashed ${neutral[200]}`, paddingTop: space.xs, marginTop: space.xs }}>
               {actionError}
             </div>
           )}

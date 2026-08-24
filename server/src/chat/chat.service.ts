@@ -482,14 +482,13 @@ export class ChatService {
     return { triggers };
   }
 
-  /** mentions 列（Json）安全解析：非数组 → 空数组；仅保留 type=agent|all 项（存储格式由 createMessage 保证）。 */
   private parseMentions(mentions: Prisma.JsonValue | null): MentionInput[] {
     if (!Array.isArray(mentions)) return [];
     return mentions.filter(
       (m): m is MentionInput =>
         typeof m === 'object' &&
         m !== null &&
-        ((m as MentionInput).type === 'agent' || (m as MentionInput).type === 'all'),
+        ((m as MentionInput).type === 'agent' || (m as MentionInput).type === 'all' || (m as MentionInput).type === 'user'),
     );
   }
 
@@ -801,10 +800,17 @@ export class ChatService {
           });
         }
         triggers.push(await this.buildTrigger(taskId, row));
+      } else if (mention.type === 'user') {
+        if (!(mention as { userId?: string }).userId) {
+          throw new BadRequestException({
+            code: CHAT_ERRORS.MENTION_TYPE_INVALID,
+            message: 'user mention 缺少 userId',
+          });
+        }
       } else {
         throw new BadRequestException({
           code: CHAT_ERRORS.MENTION_TYPE_INVALID,
-          message: 'mentions 项 type 仅支持 agent | all',
+          message: 'mentions 项 type 仅支持 agent | all | user',
         });
       }
     }

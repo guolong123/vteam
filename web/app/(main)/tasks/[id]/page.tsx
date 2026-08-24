@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
  * 任务群聊页（Phase 2 核心页面 · M2 联调主入口）
@@ -23,7 +24,7 @@
  * - 铁律（T15）：无 fixed / 100vh / 100vw，高度由 AppShell main（flex column + overflow auto）
  *   接管，本页根 flex:1 + minHeight:0，消息列表内部滚动。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -514,30 +515,24 @@ function MembersPanel({
   width,
   onToggleEnabled,
   onResetSession,
+  onChangeModel,
 }: {
-  /** 团队实例（id=agent id 兼容状态 key；instanceId=实例 id 唯一键；main=主实例）。 */
-  agents: { id: string; instanceId?: string; name: string; role: RoleKey; seq?: number; main?: boolean; enabled?: boolean | null }[];
+  agents: { id: string; instanceId?: string; name: string; role: RoleKey; seq?: number; main?: boolean; enabled?: boolean | null; overrideModelId?: string | null }[];
   loadingAgentIds: Set<string>;
-  /** agentId → session.updated status（running=工作中 / idle=空闲，其余状态走现状） */
   sessionStatusByAgent: Record<string, string>;
   startingAgentId: string | null;
   onStartDm: (agentId: string, taskAgentId?: string) => void;
   dmError: string | null;
-  /** 团队可编辑（仅 pending/in_progress 可添加实例，对齐后端 409 约束）。 */
   teamEditable: boolean;
-  /** 模板角色选择项（GET /agents，每角色首 agent；缺省兜底 seed 预置 id）。 */
   agentOptions: AgentOption[];
-  /** is_0000000035：自定义/clone agent（type !== template）→ 添加实例可选。 */
   customAgents: AgentItem[];
   adding: boolean;
-  /** 添加失败错误（agent 不存在等，后端 404 AGENT_NOT_FOUND / 409 TASK_TEAM_NOT_ALLOWED）。 */
   addError: string | null;
-  /** 确认添加（返回是否成功；成功后面板关闭重置，失败保留面板展示错误）。 */
   onAddInstance: (agentId: string, alias?: string) => Promise<boolean>;
-  /** 面板宽度（is_0000000017 可拖拽 resize，缺省 224）。 */
   width?: number;
   onToggleEnabled?: (instanceId: string, enabled: boolean) => void;
   onResetSession?: (instanceId: string) => void;
+  onChangeModel?: (instanceId: string, modelId: string | null) => void;
 }) {
   const [addOpen, setAddOpen] = useState(false);
   /** 选中项：内置角色 RoleKey 或自定义 agent id（is_0000000035）。 */
@@ -550,6 +545,26 @@ function MembersPanel({
     : selectedRole
       ? (roles[selectedRole as RoleKey] ?? roles.developer)
       : null;
+
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [modelPicker, setModelPicker] = useState<string | null>(null);
+  const [modelSearch, setModelSearch] = useState("");
+
+  useEffect(() => {
+    if (!openMenu && !modelPicker) return;
+    const h = () => { setOpenMenu(null); setModelPicker(null); };
+    window.addEventListener("click", h);
+    return () => window.removeEventListener("click", h);
+  }, [openMenu, modelPicker]);
+
+  const modelsQuery = useQuery({
+    queryKey: ["models", "picker"],
+    queryFn: () => api.get<any>("/models", { query: { page: 1, pageSize: 100 } }),
+    enabled: !!modelPicker,
+    retry: false,
+  });
+  const allModels: { id: string; name: string; providerID?: string }[] =
+    (modelsQuery.data as any)?.items ?? (modelsQuery.data as any)?.models ?? [];
 
   const openPanel = () => {
     if (!teamEditable || adding) return;
@@ -619,9 +634,9 @@ function MembersPanel({
                   ? "空闲"
                   : "就绪";
           return (
-            <div
-              key={a.instanceId ?? a.id}
-              data-testid="member-item"
+            <React.Fragment key={a.instanceId ?? a.id}>
+              <div
+                data-testid="member-item"
               data-role={a.role}
               data-main={a.main ? "true" : "false"}
               role="button"
@@ -743,74 +758,239 @@ function MembersPanel({
                   )}
                   {statusText}
                 </span>
-              </span>
-              <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
                 <button
                   type="button"
-                  data-testid={`agent-enable-toggle-${a.instanceId ?? a.id}`}
-                  aria-label={a.enabled === false ? "启用" : "禁用"}
-                  title={a.enabled === false ? "启用该 Agent" : "禁用该 Agent（禁用后无法接收消息）"}
+                  data-testid={`agent-model-chip-${a.instanceId ?? a.id}`}
+                  aria-label="设置模型"
                   onClick={(e) => {
                     e.stopPropagation();
-                    const next = a.enabled === false ? true : false;
-                    onToggleEnabled?.(a.instanceId ?? a.id, next);
+                    setModelPicker(modelPicker === (a.instanceId ?? a.id) ? null : (a.instanceId ?? a.id));
+                    setOpenMenu(null);
                   }}
+                  title={(a as any).overrideModelId || "跟随模板（点击设置模型）"}
                   style={{
-                    width: 28,
-                    height: 16,
-                    borderRadius: 8,
-                    border: "none",
-                    backgroundColor: a.enabled === false ? neutral[300] : "#10B981",
-                    position: "relative",
+                    marginTop: 4,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    padding: "1px 6px",
+                    borderRadius: radius.pill,
+                    border: (a as any).overrideModelId ? `1px solid ${neutral[200]}` : `1px dashed ${neutral[300]}`,
+                    backgroundColor: (a as any).overrideModelId ? "#EFF6FF" : "transparent",
+                    color: (a as any).overrideModelId ? "#2563EB" : neutral[500],
+                    fontSize: 10,
+                    maxWidth: "100%",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
                     cursor: "pointer",
-                    flexShrink: 0,
                   }}
                 >
-                  <span
-                    style={{
-                      position: "absolute",
-                      top: 2,
-                      left: a.enabled === false ? 2 : 14,
-                      width: 12,
-                      height: 12,
-                      borderRadius: "50%",
-                      backgroundColor: "#FFFFFF",
-                      transition: "left .15s",
-                    }}
-                  />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {(a as any).overrideModelId ? String((a as any).overrideModelId).split("/").pop() : "跟随模板"}
+                  </span>
+                  <span style={{ fontSize: 8 }}>▼</span>
                 </button>
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, position: "relative" }}>
                 <button
                   type="button"
-                  data-testid={`agent-reset-${a.instanceId ?? a.id}`}
-                  aria-label="重置会话"
-                  title="重置会话（绑定新 opencode session）"
+                  data-testid={`agent-more-${a.instanceId ?? a.id}`}
+                  aria-label="更多"
+                  title="更多操作"
                   onClick={(e) => {
                     e.stopPropagation();
-                    onResetSession?.(a.instanceId ?? a.id);
+                    setOpenMenu(openMenu === (a.instanceId ?? a.id) ? null : (a.instanceId ?? a.id));
+                    setModelPicker(null);
                   }}
                   style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: "50%",
-                    border: `1px solid ${neutral[200]}`,
-                    backgroundColor: "var(--color-surface)",
+                    width: 24,
+                    height: 24,
+                    borderRadius: radius.md,
+                    border: "1px solid transparent",
+                    backgroundColor: openMenu === (a.instanceId ?? a.id) ? neutral[100] : "transparent",
                     color: neutral[500],
-                    fontSize: 10,
                     cursor: "pointer",
                     display: "inline-flex",
                     alignItems: "center",
                     justifyContent: "center",
+                    fontSize: 14,
                   }}
                 >
-                  ↻
+                  ⋯
                 </button>
+                {openMenu === (a.instanceId ?? a.id) && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      position: "absolute",
+                      right: 0,
+                      top: 28,
+                      zIndex: 20,
+                      minWidth: 160,
+                      backgroundColor: "var(--color-surface)",
+                      border: `1px solid ${neutral[200]}`,
+                      borderRadius: radius.md,
+                      boxShadow: shadow.lg,
+                      padding: 4,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 2,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleEnabled?.(a.instanceId ?? a.id, a.enabled === false ? true : false);
+                        setOpenMenu(null);
+                      }}
+                      style={{
+                        textAlign: "left",
+                        padding: `6px 8px`,
+                        borderRadius: radius.sm,
+                        border: "none",
+                        background: "transparent",
+                        cursor: "pointer",
+                        fontSize: fontSize.sm,
+                        color: neutral[700],
+                      }}
+                    >
+                      {a.enabled === false ? "启用" : "禁用"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onResetSession?.(a.instanceId ?? a.id);
+                        setOpenMenu(null);
+                      }}
+                      style={{
+                        textAlign: "left",
+                        padding: `6px 8px`,
+                        borderRadius: radius.sm,
+                        border: "none",
+                        background: "transparent",
+                        cursor: "pointer",
+                        fontSize: fontSize.sm,
+                        color: neutral[700],
+                      }}
+                    >
+                      重置会话
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setModelPicker(a.instanceId ?? a.id);
+                        setOpenMenu(null);
+                      }}
+                      style={{
+                        textAlign: "left",
+                        padding: `6px 8px`,
+                        borderRadius: radius.sm,
+                        border: "none",
+                        background: "transparent",
+                        cursor: "pointer",
+                        fontSize: fontSize.sm,
+                        color: "#2563EB",
+                      }}
+                    >
+                      模型设置…
+                    </button>
+                  </div>
+                )}
                 <span style={{ color: "#2563EB", fontSize: fontSize.lg, lineHeight: 1 }} aria-hidden>
                   ›
                 </span>
               </span>
             </div>
-          );
-        })}
+            {modelPicker === (a.instanceId ?? a.id) && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  margin: `0 ${space.sm}px`,
+                  padding: 8,
+                  border: `1px solid ${neutral[200]}`,
+                  borderRadius: radius.md,
+                  backgroundColor: "var(--color-surface)",
+                  boxShadow: shadow.md,
+                }}
+              >
+                <input
+                  autoFocus
+                  placeholder="搜索模型…"
+                  value={modelSearch}
+                  onChange={(e) => setModelSearch(e.target.value)}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: `6px 8px`,
+                    borderRadius: radius.sm,
+                    border: `1px solid ${neutral[200]}`,
+                    fontSize: fontSize.sm,
+                    marginBottom: 6,
+                  }}
+                />
+                <div style={{ maxHeight: 160, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onChangeModel?.(a.instanceId ?? a.id, null);
+                      setModelPicker(null);
+                    }}
+                    style={{
+                      textAlign: "left",
+                      padding: `6px 8px`,
+                      borderRadius: radius.sm,
+                      border: !(a as any).overrideModelId ? `1px solid #2563EB` : `1px solid transparent`,
+                      backgroundColor: !(a as any).overrideModelId ? "#EFF6FF" : "transparent",
+                      cursor: "pointer",
+                      fontSize: fontSize.sm,
+                    }}
+                  >
+                    跟随模板 {!(a as any).overrideModelId && "✓"}
+                  </button>
+                  {allModels
+                    .filter((m) => !modelSearch || `${m.name} ${m.id}`.toLowerCase().includes(modelSearch.toLowerCase()))
+                    .slice(0, 20)
+                    .map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => {
+                          onChangeModel?.(a.instanceId ?? a.id, m.id);
+                          setModelPicker(null);
+                        }}
+                        style={{
+                          textAlign: "left",
+                          padding: `6px 8px`,
+                          borderRadius: radius.sm,
+                          border: (a as any).overrideModelId === m.id ? `1px solid #2563EB` : `1px solid transparent`,
+                          backgroundColor: (a as any).overrideModelId === m.id ? "#EFF6FF" : "transparent",
+                          cursor: "pointer",
+                          fontSize: fontSize.sm,
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 8,
+                        }}
+                      >
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {m.name} <span style={{ color: neutral[400], fontSize: 10 }}>{m.providerID ?? m.id.split("/")[0]}</span>
+                        </span>
+                        {(a as any).overrideModelId === m.id && "✓"}
+                      </button>
+                    ))}
+                  {modelsQuery.isPending && <span style={{ fontSize: fontSize.xs, color: neutral[400], padding: 6 }}>加载中…</span>}
+                  {!modelsQuery.isPending && allModels.length === 0 && (
+                    <span style={{ fontSize: fontSize.xs, color: neutral[400], padding: 6 }}>暂无模型</span>
+                  )}
+                </div>
+              </div>
+            )}
+            </React.Fragment>
+           );
+         })}
 
         {/* 添加实例：虚线入口（对齐创建页 add-instance-btn 视觉语言：1.5px dashed） */}
         <button
@@ -1031,8 +1211,7 @@ function MembersPanel({
   );
 }
 
-/* ================================ 频道头部（对齐原型 ChatHeader） ================================ */
-function ChatHeader({ title, statusLabel, agents }: { title: string; statusLabel: string; agents: { role: RoleKey }[] }) {
+function ChatHeader({ title, statusLabel, agents, onRefresh, refreshing }: { title: string; statusLabel: string; agents: { role: RoleKey }[]; onRefresh?: () => void; refreshing?: boolean }) {
   return (
     <header
       style={{
@@ -1058,21 +1237,40 @@ function ChatHeader({ title, statusLabel, agents }: { title: string; statusLabel
           群聊 · 仅被 @ 的 Agent 会收到消息
         </div>
       </div>
-
-      {/* 参与者头像堆叠 */}
-      <div
-        aria-label="参与成员"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          marginLeft: "auto",
-        }}
-      >
-        {agents.map((a, i) => (
-          <span key={i} style={{ marginLeft: i === 0 ? 0 : -8 }}>
-            <AgentAvatar role={a.role} size="sm" style={{ border: "2px solid #FFFFFF" }} />
-          </span>
-        ))}
+      <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginLeft: "auto" }}>
+        {onRefresh && (
+          <button
+            type="button"
+            data-testid="chat-refresh"
+            aria-label="刷新消息"
+            title="刷新消息"
+            onClick={onRefresh}
+            disabled={!!refreshing}
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: radius.md,
+              border: `1px solid ${neutral[200]}`,
+              backgroundColor: "var(--color-surface)",
+              color: neutral[500],
+              cursor: refreshing ? "default" : "pointer",
+              opacity: refreshing ? 0.6 : 1,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 14,
+            }}
+          >
+            {refreshing ? "…" : "↻"}
+          </button>
+        )}
+        <div aria-label="参与成员" style={{ display: "flex", alignItems: "center" }}>
+          {agents.map((a, i) => (
+            <span key={i} style={{ marginLeft: i === 0 ? 0 : -8 }}>
+              <AgentAvatar role={a.role} size="sm" style={{ border: "2px solid #FFFFFF" }} />
+            </span>
+          ))}
+        </div>
       </div>
     </header>
   );
@@ -1264,6 +1462,7 @@ function MessageList({
               </div>
             );
           }
+          const isMentionMe = Array.isArray((msg as unknown as { mentions?: unknown }).mentions) && (((msg as unknown as { mentions: { type?: string; userId?: string }[] }).mentions.some((m) => m.type === "user" && m.userId === useAuthStore.getState().user?.id) || (msg as unknown as { mentions: { type?: string }[] }).mentions.some((m) => m.type === "all")));
           return (
             <MsgParts
               key={msg.id}
@@ -1273,6 +1472,7 @@ function MessageList({
               role={role}
               time={formatTime(msg.createdAt)}
               streaming={processing}
+              isMentionMe={isMentionMe}
               attachment={
                 msg.attachmentUrl
                   ? {
@@ -1300,6 +1500,7 @@ function MessageList({
             author={msg.senderType === "user" ? undefined : author}
             role={msg.senderType === "user" ? undefined : role}
             time={formatTime(msg.createdAt)}
+            isMentionMe={(msg as unknown as { senderType: string }).senderType === "agent" && Array.isArray((msg as unknown as { mentions?: unknown }).mentions) && (((msg as unknown as { mentions: { type?: string; userId?: string }[] }).mentions.some((m) => m.type === "user" && m.userId === useAuthStore.getState().user?.id) || (msg as unknown as { mentions: { type?: string }[] }).mentions.some((m) => m.type === "all")))}
             attachment={
               msg.attachmentUrl
                 ? {
@@ -1888,10 +2089,12 @@ function PlanSection({
                 <span style={{ flex: 1, minWidth: 0, fontSize: fontSize.md, color: neutral[800], fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {pt.title}
                 </span>
-                {pt.assigneeAlias && (
-                  <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>
+                {pt.assigneeAlias ? (
+                  <span style={{ fontSize: fontSize.xs, color: "#2563EB", backgroundColor: "#EFF6FF", border: `1px solid #BFDBFE`, borderRadius: radius.pill, padding: "1px 6px", flexShrink: 0 }}>
                     {pt.assigneeAlias}
                   </span>
+                ) : (
+                  <span style={{ fontSize: 10, color: "#D97706", flexShrink: 0 }}>未指派</span>
                 )}
                 <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>
                   {taskStatusLabel}
@@ -2790,7 +2993,7 @@ export default function TaskChatPage() {
   const plansQuery = useQuery({
     queryKey: ["plans", taskId],
     queryFn: () => api.get<PlanWithTasks>("/plans", { query: { taskId } }),
-    enabled: !!taskId && !!user?.id && task?.executionMode === "plan",
+    enabled: !!taskId && !!user?.id,
     refetchInterval: 30_000,
     retry: false,
   });
@@ -2819,7 +3022,7 @@ export default function TaskChatPage() {
         return;
       }
       try {
-        const ch = await api.post<{ id: string }>("/dm-channels", { taskId, agentId });
+        const ch = await api.post<{ id: string }>("/dm-channels", { taskId, agentId, taskAgentId: instanceId });
         setPrivateChannelMap((prev) => {
           const next = new Map(prev);
           next.set(instanceId, ch.id);
@@ -2846,6 +3049,7 @@ export default function TaskChatPage() {
     queryFn: () =>
       api.get<MessagesResponse>(`/channels/${channelId}/messages`, { query: { limit: 50 } }),
     enabled: !!channelId && activeTab === "group",
+    refetchInterval: 30_000,
   });
 
   /* ---------- 4a. 私聊消息历史（按 Tab 独立缓存，session-history） ---------- */
@@ -3390,6 +3594,15 @@ export default function TaskChatPage() {
     },
   });
 
+  const instanceModelMutation = useMutation({
+    mutationFn: ({ instanceId, modelId }: { instanceId: string; modelId: string | null }) =>
+      api.patch<TaskDetail>(`/tasks/${taskId}/instances/${instanceId}`, { overrideModelId: modelId ?? "" }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<TaskDetail>(["task", taskId], updated);
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+    },
+  });
+
   const resetSessionMutation = useMutation({
     mutationFn: (instanceId: string) =>
       api.post<{ task: TaskDetail; session: unknown }>(`/tasks/${taskId}/instances/${instanceId}/reset-session`),
@@ -3590,6 +3803,7 @@ export default function TaskChatPage() {
         width={membersPanel.width}
         onToggleEnabled={(instanceId, enabled) => toggleEnabledMutation.mutate({ instanceId, enabled })}
         onResetSession={(instanceId) => resetSessionMutation.mutate(instanceId)}
+        onChangeModel={(instanceId, modelId) => instanceModelMutation.mutate({ instanceId, modelId })}
       />
 
       {/* 左侧面板拖拽分隔条（is_0000000017） */}
@@ -3597,7 +3811,19 @@ export default function TaskChatPage() {
 
       {/* 消息区 */}
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", backgroundColor: neutral[50] }}>
-        <ChatHeader title={task.title} statusLabel={statusLabel} agents={agentMembers} />
+        <ChatHeader
+        title={task.title}
+        statusLabel={statusLabel}
+        agents={agentMembers}
+        onRefresh={() => {
+          if (activeTab === "group") {
+            messagesQuery.refetch();
+          } else if (activePrivateId) {
+            privateMessagesQuery.refetch();
+          }
+        }}
+        refreshing={isGroupTab ? messagesQuery.isFetching : privateMessagesQuery.isFetching}
+      />
         {/* 私聊 Tabs（Scheme C）：群聊 + 各实例私聊，同页切换 */}
         <div
           data-testid="dm-tabs"

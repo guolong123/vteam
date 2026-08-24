@@ -68,6 +68,7 @@ type TaskAgentInstance = {
   workDir?: string | null;
   removedAt: Date | null;
   enabled?: boolean | null;
+  overrideModelId?: string | null;
   agent: { id: string; name: string; role: string | null };
   /** 实例会话（每实例每任务一个，task 详情 instances 回传 sessionStatus 真实状态源）。 */
   sessions?: { id: string; status: string }[];
@@ -752,13 +753,19 @@ export class TasksService implements OnModuleInit {
     return this.toTaskDto(fresh ?? task);
   }
 
-  async updateInstance(taskId: string, instanceId: string, dto: { enabled?: boolean }) {
+  async updateInstance(taskId: string, instanceId: string, dto: { enabled?: boolean; overrideModelId?: string | null }) {
     const inst = await this.prisma.taskAgent.findUnique({ where: { id: instanceId } });
     if (!inst || inst.taskId !== taskId) {
       throw new NotFoundException({ code: TASK_ERRORS.TASK_NOT_FOUND, message: '实例不存在' });
     }
-    if (dto.enabled !== undefined) {
-      await this.prisma.taskAgent.update({ where: { id: instanceId }, data: { enabled: dto.enabled } });
+    const data: Record<string, unknown> = {};
+    if (dto.enabled !== undefined) data.enabled = dto.enabled;
+    if (dto.overrideModelId !== undefined) {
+      const v = dto.overrideModelId?.trim();
+      data.overrideModelId = v ? v : null;
+    }
+    if (Object.keys(data).length > 0) {
+      await this.prisma.taskAgent.update({ where: { id: instanceId }, data });
     }
     const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: TASK_AGENTS_INCLUDE });
     return this.toTaskDto(task!);
@@ -816,7 +823,7 @@ export class TasksService implements OnModuleInit {
             if (!task.mainAgentInstanceId) {
               throw new BadRequestException({
                 code: TASK_ERRORS.MAIN_AGENT_NOT_SET,
-                message: '主 Agent 实例未确定，请先指定主 Agent 后再启动',
+                message: '请先指定主 Agent',
               });
             }
             if (task.executionMode === EXECUTION_MODES.plan) {
@@ -827,7 +834,7 @@ export class TasksService implements OnModuleInit {
               if (!plan || plan.status !== PLAN_STATUS.approved) {
                 throw new BadRequestException({
                   code: PLAN_ERRORS.PLAN_NOT_APPROVED,
-                  message: '执行计划未评审通过，请先 plan_submit 提交计划并评审通过后再启动',
+                  message: '计划未通过评审，请先提交并评审通过',
                 });
               }
               planStarted = true;
@@ -876,7 +883,6 @@ export class TasksService implements OnModuleInit {
         return {
           eventType: 'status_change',
           fields: { pendingReviewAt: new Date() },
-          // tc-flow：plan 模式校验全部计划子任务已完成（Metis MAJOR-2：防止带未完成任务提交验收）
           preflight: async (task) => {
             if (task.executionMode !== EXECUTION_MODES.plan) {
               return;
@@ -897,8 +903,9 @@ export class TasksService implements OnModuleInit {
               });
             }
           },
-          // 10 篇 §8.1：提示成员核对产出（FR-04）
           sysMessage: () => '任务已提交待验收',
+          privateMessage: () =>
+            '任务已提交待验收。作为主 Agent，请牵头收集本任务各 Agent 在执行过程中遇到的问题、解决办法及用户提示，整理后调用 vteam MCP 的 memory_save 工具沉淀为记忆：先用 memory_search 回顾已有记忆避免重复，再按问题/解决/用户提示分类保存（level: "task" 写本任务沉淀，level: "project" 写跨任务复用价值，level: "global" 仅平台通用知识，tags 标注问题类型如 bugfix/workflow/prompt）。如暂无可沉淀内容可跳过，不影响验收流程。',
         };
       case 'accept': {
         // tc-flow：plan 模式且存在计划 → 验收通过后计划置 completed（Oracle B3）
@@ -1127,7 +1134,7 @@ export class TasksService implements OnModuleInit {
     // 解析主实例别名 + private 频道（按 taskAgentId，无 mainAgentInstanceId 则跳过）
     let mainAgentName: string | undefined;
     let privateChannel: { id: string } | null = null;
-    if ((action === 'start' || action === 'accept') && task.mainAgentInstanceId) {
+    if ((action === 'start' || action === 'accept' || action === 'mark-pending-review') && task.mainAgentInstanceId) {
       const mainInstance = task.taskAgents?.find(
         (ta) => ta.id === task.mainAgentInstanceId,
       );

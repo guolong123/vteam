@@ -14,6 +14,7 @@ import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
+import { WorkerClient } from '../workers/worker.client';
 import { WorkersService } from '../workers/workers.service';
 import { MODEL_ERRORS, MODEL_PROVIDER_TYPES } from './models.constants';
 import { CreateModelDto } from './dto/create-model.dto';
@@ -74,6 +75,7 @@ export class ModelsService implements OnModuleInit {
     // C5：凭据保存后触发 worker 下发（forwardRef——WorkersService 亦依赖 CredentialCryptoService）
     @Inject(forwardRef(() => WorkersService))
     private readonly workers: WorkersService,
+    private readonly workerClient: WorkerClient,
   ) {}
 
   /** 进程启动对齐 md_/mc_ 前缀序号（重启续号，md_ 对齐 tools.service onModuleInit 模式）。 */
@@ -353,17 +355,153 @@ export class ModelsService implements OnModuleInit {
     return merged;
   }
 
-  /** available-models 目录优先数据源：enabled=true 全部模型，id 拼回 providerID/modelID。 */
+  /**
+   * available-models 目录优先数据源：仅返回可用模型（免费或已配置 apikey）。
+   * - 免费：providerID === 'opencode'（opencode 免费内置）或 providerType === 'local'/'custom'（本地模型无需凭据）
+   * - 付费：需 ModelCredential 存在且 revokedAt === null
+   * 未配置密钥的付费模型不返回，前端 agent 配置下拉仅展示可用模型。
+   */
   async listCatalogModels(): Promise<{ id: string; name: string }[]> {
-    const rows = await this.prisma.model.findMany({
+    const rowsRaw = await this.prisma.model.findMany({
       where: { enabled: true },
       orderBy: { createdAt: 'asc' },
-      select: { providerID: true, modelID: true, name: true },
+      select: { id: true, providerID: true, modelID: true, name: true, providerType: true },
+    } as never) as unknown as { id: string; providerID: string; modelID: string; name: string; providerType?: string | null }[];
+    const rows = Array.isArray(rowsRaw) ? rowsRaw : [];
+    const credentials = await this.prisma.modelCredential.findMany({
+      where: { revokedAt: null },
+      select: { providerID: true },
     });
-    return rows.map((m) => ({
+    const configuredProviders = new Set(
+      credentials.map((c) => c.providerID),
+    );
+    const availRows = await this.prisma.workerModelAvailability.findMany({
+      select: { modelId: true },
+    });
+    const availSet = new Set(availRows.map((r) => r.modelId));
+    const filtered = rows.filter((m) => {
+      if (!availSet.has(m.id)) return false;
+      const providerType = (m as { providerType?: string | null }).providerType;
+      if (m.providerID === 'opencode') return true;
+      if (providerType === 'local' || providerType === 'custom') return true;
+      return configuredProviders.has(m.providerID);
+    });
+    return filtered.map((m) => ({
       id: `${m.providerID}/${m.modelID}`,
       name: m.name,
     }));
+  }
+
+  /**
+   * Live 同步：实时拉取在线 worker 的 opencode 模型（GET /provider），与目录校正。
+   * - 无在线 worker → 不做剪枝，仅返回空结果（避免 offline 时误删）
+   * - 有在线 worker → union 所有 worker 的 live 模型，upsert 到目录（不存在则创建，存在则保证 enabled=true），并对已无任何 worker 持有且未配置凭据的孤儿模型置 enabled=false（软禁用，不删 ModelCredential，apikey 为 provider 粒度不受影响）
+   */
+  async syncLiveModels(): Promise<{ synced: number; disabled: number; liveModels: string[] }> {
+    const onlineWorkers = await this.prisma.worker.findMany({
+      where: { status: { not: WORKER_STATUS.OFFLINE } },
+      select: { id: true, capabilities: true },
+    });
+    if (onlineWorkers.length === 0) {
+      return { synced: 0, disabled: 0, liveModels: [] };
+    }
+    const liveSet = new Set<string>();
+    for (const w of onlineWorkers) {
+      const caps = (w.capabilities as { baseUrl?: string } | null) ?? null;
+      const baseUrl = caps?.baseUrl ?? null;
+      if (!baseUrl) continue;
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
+        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/model`, { signal: controller.signal });
+        clearTimeout(timer);
+        if (!res.ok) continue;
+        const body = (await res.json()) as { data?: Array<{ id?: string; providerID?: string; status?: string; enabled?: boolean }> };
+        for (const m of body.data ?? []) {
+          if (m?.id && m?.providerID && m.enabled !== false && (m.status ?? 'active') === 'active') liveSet.add(`${m.providerID}/${m.id}`);
+        }
+      } catch {
+        try {
+          const models = await this.workerClient.listModels(
+            w as unknown as { id: string; capabilities: unknown },
+          );
+          for (const m of models) {
+            if (m?.id) liveSet.add(m.id);
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+    const liveModels = [...liveSet];
+    if (liveModels.length === 0) {
+      return { synced: 0, disabled: 0, liveModels: [] };
+    }
+    const liveCatalogIds: string[] = [];
+    for (const raw of liveModels) {
+      const { providerID, modelID } = this.splitModelId(raw);
+      const catalogId = await this.upsertAndEnableCatalogModel(providerID, modelID);
+      liveCatalogIds.push(catalogId);
+    }
+    for (const cid of liveCatalogIds) {
+      for (const w of onlineWorkers) {
+        await this.prisma.workerModelAvailability.upsert({
+          where: { workerId_modelId: { workerId: w.id, modelId: cid } },
+          create: { workerId: w.id, modelId: cid },
+          update: {},
+        });
+      }
+    }
+    const credentials = await this.prisma.modelCredential.findMany({
+      where: { revokedAt: null },
+      select: { providerID: true },
+    });
+    const configuredSet = new Set(credentials.map((c) => c.providerID));
+    const orphansRaw = await this.prisma.model.findMany({
+      where: { enabled: true, id: { notIn: liveCatalogIds } },
+      select: { id: true, providerID: true, providerType: true },
+    } as never) as unknown as { id: string; providerID: string; providerType?: string | null }[];
+    const orphans = Array.isArray(orphansRaw) ? orphansRaw : [];
+    let disabled = 0;
+    for (const o of orphans) {
+      if (o.providerType === 'local' || o.providerType === 'custom') continue;
+      if (o.providerID !== 'opencode' && configuredSet.has(o.providerID)) continue;
+      await this.prisma.model.update({
+        where: { id: o.id },
+        data: { enabled: false },
+      });
+      await this.prisma.workerModelAvailability.deleteMany({
+        where: { modelId: o.id },
+      });
+      disabled++;
+    }
+    if (disabled > 0) {
+      this.logger.log(`live 同步剪枝：禁用孤儿模型 ${disabled} 个（无 worker 持有且未配置凭据）`);
+    }
+    return { synced: liveCatalogIds.length, disabled, liveModels };
+  }
+
+  private async upsertAndEnableCatalogModel(providerID: string, modelID: string): Promise<string> {
+    const existing = await this.prisma.model.findUnique({
+      where: { providerID_modelID: { providerID, modelID } },
+      select: { id: true, enabled: true },
+    });
+    if (existing) {
+      if ((existing as { enabled?: boolean }).enabled === false) {
+        await this.prisma.model.update({ where: { id: existing.id }, data: { enabled: true } });
+      }
+      return existing.id;
+    }
+    const row = await this.prisma.model.create({
+      data: {
+        id: await this.idGen.nextId(MODEL_ID_PREFIX),
+        providerID,
+        modelID,
+        name: modelID,
+        enabled: true,
+      },
+    });
+    return row.id;
   }
 
   /**

@@ -33,6 +33,7 @@ import { AssignmentRequirement, WorkersService } from '../workers/workers.servic
 import { renderPersonaSection } from '../agents/persona.constants';
 import { EXECUTION_MODES } from '../plans/plan.constants';
 import { DispatchRequest, DispatchResult, MessageDispatcher } from './message-dispatcher';
+import { inferErrorType, isQuotaError } from '../workers/infer-error-type';
 import { extractConclusionParts, normalizeParts } from './message-parts';
 import { sanitizeWorkDirName } from '../tasks/work-dir.util';
 
@@ -69,7 +70,8 @@ export const GLOBAL_SYSTEM_INSTRUCTIONS = [
   '不调用工具发布则回复仅保留在私聊会话（不公开）。',
   '【@ 定向机制】群聊中 @ 你的消息会定向分发给你。需要定向触发/通知任务内的其他 Agent 时，' +
   '调用 vteam MCP 的 notify_agent 工具（参数 {taskId: 你的任务ID, targetInstanceId: 目标实例 id（ta_ 前缀，见 task_context 的 agentMembers）, content: 消息内容}）' +
-  '——目标实例会收到你的消息并开始执行；回复时也可用 @用户名 在群聊中定向回复特定成员。',
+  '——目标实例会收到你的消息并开始执行；回复时也可用 @用户名 在群聊中定向回复特定成员。' +
+  '【@用户】需要用户确认/决策或完成后通知时，在 group_post 的 content 中写 @user 或 @all（系统动态注入当前任务相关用户，无需写死 @admin），也可写 @用户名 精确@某人；命中后消息对该用户高亮（蓝底+左蓝条+★@你）。',
   '【Issue 管理】任务内 issue 协作：创建 issue 调 vteam MCP 的 issue_create（参数 {taskId, selfInstanceId, title, description?, tags?, assigneeInstanceId?}）；查询 issue_list/issue_get；更新 issue_update；状态流转 issue_transition（action: start/resolve/close/reopen/reject）。产品/测试 Agent 负责创建需求或缺陷 issue 并指派（assigneeInstanceId 为目标实例 id），研发 Agent 处理指派给自己的 issue 并流转状态。issue 标签（tags）标识类型（如 需求/缺陷/优化）。',
   '【任务状态】主 Agent 可调用 vteam MCP 的 task_transition 工具（参数 {taskId, selfInstanceId, action: start/mark-pending-review/accept/reject/archive, reason?}）流转任务状态：start 开始 / mark-pending-review 提交验收 / accept 验收通过 / reject 驳回（可附 reason）/ archive 归档。仅主实例可调用 task_transition，其余成员调用将返回 403 提示（请知会主实例或由管理员在任务管理界面操作）。',
   '【持久化目录】你运行在 k8s 容器环境中，平台为每个 Agent 分配独立的持久化工作目录（默认 /data/vteam-worker/<agent名称>，可在创建任务时指定）。' +
@@ -171,7 +173,7 @@ export const PLAN_WORKFLOW_INSTRUCTION =
   '（tasks 每项含 目标/边界/引用/验收/QA/提交 六要素，其中验收/qa 必填且 qa 须含工具＋步骤＋预期结果）；' +
   '计划结构对齐 TL;DR/范围/验证策略/执行策略/Todos/终验/提交策略/成功标准八段模板；' +
   '计划评审由成员确认或主 Agent 指派成员（评审者可经 plan_get 读计划、plan_review 提交结论；评审默认放行、驳回须附理由）；' +
-  '评审通过后按 plan_task 逐项推进（plan_task_transition 汇报进度，状态 done/blocked）；' +
+  '评审通过后等待用户在任务管理界面手动点击“开始任务”再按 plan_task 逐项推进（plan_task_transition 汇报进度，状态 done/blocked），Agent 不可自动调用 task_transition start；' +
   '全部完成后主 Agent 提交验收（task_transition mark-pending-review）。' +
   '计划前如关键假设不明，先向成员确认再提交。驳回重提有 3 次上限，超限需人工裁决。';
 
@@ -949,10 +951,15 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         ? session.instanceRef
         : null;
 
-    // C7：模型解析优先级链（阶段 1，Agent→模板）。解析结果非空 → 作为 assignWorker 的
-    // modelId 过滤条件；为空（Agent/模板均未配模型）→ 跳过模型过滤（回归现状），
-    // 等 worker 选定后再用 worker.defaultModelId 兜底（阶段 2）。
-    const agentModelId = await this.resolveAgentModelId(target.agentId);
+    let overrideModelId: string | null = null;
+    if (session.taskAgentId) {
+      const ta = await this.prisma.taskAgent.findUnique({
+        where: { id: session.taskAgentId },
+        select: { overrideModelId: true },
+      });
+      overrideModelId = ta?.overrideModelId ?? null;
+    }
+    const agentModelId = overrideModelId ?? (await this.resolveAgentModelId(target.agentId));
     const assignmentReq: AssignmentRequirement = agentModelId
       ? { modelId: agentModelId }
       : {};
@@ -2145,12 +2152,19 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     }
   }
 
-  /** 单会话空闲判死：查 DB 状态（仅 running 判死）→ failed + emitError + 广播 agent.error。 */
+  public getLastActivityAt(sessionId: string): number | undefined {
+    return this.lastActivityAt.get(sessionId);
+  }
+
+  public isSessionPending(sessionId: string): boolean {
+    return this.pendingBySession.has(sessionId);
+  }
+
   private async markSessionIdleDead(sessionId: string): Promise<void> {
     try {
       const row = await this.prisma.session.findUnique({
         where: { id: sessionId },
-        select: { status: true, taskId: true, agentId: true },
+        select: { status: true, taskId: true, agentId: true, workerId: true, instanceRef: true, taskAgentId: true },
       });
       if (!row) {
         this.lastActivityAt.delete(sessionId);
@@ -2160,6 +2174,27 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         this.lastActivityAt.delete(sessionId);
         return;
       }
+      let forensicsError: string | undefined;
+      let forensicsType = 'agent_idle_timeout';
+      if (row.workerId && row.instanceRef && row.instanceRef !== PENDING_INSTANCE_REF) {
+        try {
+          const workerRow = await this.prisma.worker.findUnique({
+            where: { id: row.workerId },
+            select: { capabilities: true },
+          });
+          if (workerRow) {
+            const messages = await this.workerClient.getMessages(
+              { id: row.workerId, capabilities: workerRow.capabilities },
+              row.instanceRef,
+            );
+            const errText = findError(messages);
+            if (errText) {
+              forensicsError = errText;
+              forensicsType = inferErrorType(errText);
+            }
+          }
+        } catch {}
+      }
       await this.prisma.session.update({
         where: { id: sessionId },
         data: { status: SESSION_STATUS.failed },
@@ -2168,24 +2203,92 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       this.lastActivityAt.delete(sessionId);
       const taskId = row.taskId ?? '';
       const agentId = row.agentId ?? '';
-      const error = `agent 长时间无活动（超过 ${this.agentIdleTimeoutMs / 60000}min），已判死`;
-      this.logger.error(`session ${sessionId} ${error}`);
-      if (taskId && agentId) {
-        this.emitError({ taskId, agentId, error });
+      if (!taskId || !agentId) return;
+      if (forensicsError && isQuotaError(forensicsType)) {
+        const quotaMsg = `agent 额度不足已暂停（${forensicsError}），请补充额度或更换模型后重试`;
+        this.logger.error(`session ${sessionId} ${quotaMsg}`);
+        this.emitError({ taskId, agentId, error: quotaMsg });
+        void this.broadcastAgentError({
+          taskId,
+          agentId,
+          sessionId,
+          level: 'message',
+          errorType: 'quota_exceeded',
+          message: quotaMsg,
+        });
+        return;
+      }
+      if (forensicsError) {
+        const transientMsg = `agent 意外中断（${forensicsError}），已自动重试`;
+        this.logger.warn(`session ${sessionId} ${transientMsg}，尝试自动拉起`);
+        this.emitError({ taskId, agentId, error: transientMsg });
         void this.broadcastAgentError({
           taskId,
           agentId,
           sessionId,
           level: 'retry',
-          errorType: 'agent_idle_timeout',
-          message: error,
+          errorType: forensicsType,
+          message: transientMsg,
         });
+        void this.tryAutoRestart(taskId, row.taskAgentId ?? agentId, sessionId).catch((e) =>
+          this.logger.error(`自动拉起失败: ${this.describeError(e)}`),
+        );
+        return;
       }
+      const idleMsg = `agent 长时间无活动（超过 ${this.agentIdleTimeoutMs / 60000}min），已判死`;
+      this.logger.error(`session ${sessionId} ${idleMsg}`);
+      this.emitError({ taskId, agentId, error: idleMsg });
+      void this.broadcastAgentError({
+        taskId,
+        agentId,
+        sessionId,
+        level: 'retry',
+        errorType: 'agent_idle_timeout',
+        message: idleMsg,
+      });
+      void this.tryAutoRestart(taskId, row.taskAgentId ?? agentId, sessionId).catch((e) =>
+        this.logger.error(`自动拉起失败: ${this.describeError(e)}`),
+      );
     } catch (err) {
       this.logger.error(
         `session ${sessionId} 空闲判死失败: ${this.describeError(err)}`,
       );
     }
+  }
+
+  private async tryAutoRestart(taskId: string, targetRef: string, sessionId: string): Promise<void> {
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { status: true, mainAgentInstanceId: true },
+    });
+    if (!task || task.status !== 'in_progress') return;
+    let targetInstanceId: string | null = null;
+    if (targetRef.startsWith('ta_')) {
+      targetInstanceId = targetRef;
+    } else {
+      const s = await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { taskAgentId: true },
+      });
+      targetInstanceId = s?.taskAgentId ?? null;
+    }
+    if (!targetInstanceId) return;
+    const channel =
+      (await this.prisma.chatChannel.findFirst({
+        where: { taskId, type: CHANNEL_TYPE.private, taskAgentId: targetInstanceId },
+        select: { id: true },
+      })) ??
+      (await this.prisma.chatChannel.findFirst({
+        where: { taskId, type: CHANNEL_TYPE.task_group },
+        select: { id: true },
+      }));
+    if (!channel) return;
+    await this.dispatchAgentMention({
+      taskId,
+      channelId: channel.id,
+      text: '【自动恢复】检测到会话意外中断，已自动重试，请继续执行未完成的任务',
+      targetInstanceId,
+    });
   }
 
   // ------------------------------------------------------------------

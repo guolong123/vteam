@@ -274,7 +274,7 @@ export class PlansService implements OnModuleInit {
 
     const approved = verdict === 'approved';
     const sysText = approved
-      ? '执行计划已通过评审，可启动实施'
+      ? '执行计划已通过评审，请等待用户手动启动任务后再实施'
       : `执行计划被驳回：${reason}（可修改后重提或切换 direct 模式）`;
     const channel = await this.findTaskGroupChannel(plan.taskId);
 

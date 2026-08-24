@@ -38,14 +38,11 @@ export interface ChatBubbleAttachment {
 export interface ChatBubbleProps {
   text: string;
   type?: ChatMessageType;
-  /** 发送人（agent / system 消息展示） */
   author?: string;
-  /** 发送人角色（agent 消息展示角色色） */
   role?: RoleKey;
-  /** 可选时间戳 */
   time?: string;
-  /** UX-10 附件：图片内嵌预览（attachment-image）/ 文件下载链接（attachment-file） */
   attachment?: ChatBubbleAttachment;
+  isMentionMe?: boolean;
   style?: CSSProperties;
   className?: string;
 }
@@ -66,6 +63,7 @@ export function ChatBubble({
   role,
   time,
   attachment,
+  isMentionMe,
   style,
   className,
 }: ChatBubbleProps) {
@@ -158,6 +156,25 @@ export function ChatBubble({
             {time ? ` · ${time}` : ""}
           </span>
         )}
+        {isMentionMe && !isUser && !isSystem && (
+          <span
+            data-testid="mention-me-badge"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 10,
+              color: "#2563EB",
+              backgroundColor: "#EFF6FF",
+              border: "1px solid #BFDBFE",
+              borderRadius: 4,
+              padding: "1px 6px",
+              fontWeight: 600,
+            }}
+          >
+            ★ @你
+          </span>
+        )}
         {(hasText || attachment) && (
           <div
             style={
@@ -172,11 +189,12 @@ export function ChatBubble({
                   }
                 : {
                     ...bubbleBase,
-                    backgroundColor: "var(--color-surface)",
+                    backgroundColor: isMentionMe ? "#EFF6FF" : "var(--color-surface)",
                     color: neutral[800],
-                    border: `1px solid ${neutral[200]}`,
+                    border: isMentionMe ? `1px solid #BFDBFE` : `1px solid ${neutral[200]}`,
+                    borderLeft: isMentionMe ? `3px solid #2563EB` : `1px solid ${neutral[200]}`,
                     borderTopLeftRadius: radius.sm,
-                    boxShadow: shadow.sm,
+                    boxShadow: isMentionMe ? `0 0 0 1px rgba(37,99,235,0.15)` : shadow.sm,
                     maxWidth: attachment ? 520 : undefined,
                   }
             }

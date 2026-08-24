@@ -82,23 +82,19 @@ function toToolStatus(value: unknown): "running" | "success" | "failed" {
 }
 
 export interface MsgPartsProps {
-  /** 消息 content.parts 原始数组（后端 Json 透传）。 */
   parts: unknown[];
-  /** 正文兜底（content.text；parts 无 text 片段时使用）。 */
   bodyText?: string;
   author: string;
   role: RoleKey;
   time?: string;
-  /** 流式中（消息 status=processing）：正文按流式块渲染 + 尾部「生成中」指示。 */
   streaming?: boolean;
-  /** 附件（agent 转发文件消息带 attachmentUrl 三字段时展示文件卡片）。 */
   attachment?: ChatBubbleAttachment;
+  isMentionMe?: boolean;
   style?: CSSProperties;
   className?: string;
 }
 
-/** Agent 消息片段渲染：过程片段（thinking/tool/error/aborted）+ 正文置底。 */
-export function MsgParts({ parts, bodyText, author, role, time, streaming, attachment, style, className }: MsgPartsProps) {
+export function MsgParts({ parts, bodyText, author, role, time, streaming, attachment, isMentionMe, style, className }: MsgPartsProps) {
   const list = (parts ?? []) as PartShape[];
 
   // 中断独占：aborted 时其余未完成 Part 不渲染（10 篇 §2.3）
@@ -201,10 +197,10 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
             </span>
           </div>
         ) : (
-          <ChatBubble text={cleanBody} type="agent" author={author} role={role} time={time} attachment={attachment} />
+          <ChatBubble text={cleanBody} type="agent" author={author} role={role} time={time} attachment={attachment} isMentionMe={isMentionMe} />
         )
       ) : attachment ? (
-        <ChatBubble text="" type="agent" author={author} role={role} time={time} attachment={attachment} />
+        <ChatBubble text="" type="agent" author={author} role={role} time={time} attachment={attachment} isMentionMe={isMentionMe} />
       ) : null}
     </div>
   );

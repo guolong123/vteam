@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
  * 私聊页（Phase 2 私聊能力 · FR-14，与群聊共用 Agent 会话）
@@ -490,6 +491,7 @@ function DmMessageList({
               </div>
             );
           }
+          const isMentionMe = Array.isArray((msg as unknown as { mentions?: unknown }).mentions) && (((msg as unknown as { mentions: { type?: string; userId?: string }[] }).mentions.some((m) => m.type === "user" && m.userId === useAuthStore.getState().user?.id) || (msg as unknown as { mentions: { type?: string }[] }).mentions.some((m) => m.type === "all")));
           return (
             <MsgParts
               key={msg.id}
@@ -499,6 +501,7 @@ function DmMessageList({
               role={role}
               time={formatTime(msg.createdAt)}
               streaming={processing}
+              isMentionMe={isMentionMe}
             />
           );
         }
@@ -517,6 +520,7 @@ function DmMessageList({
             author={msg.senderType === "user" ? undefined : author}
             role={msg.senderType === "user" ? undefined : role}
             time={formatTime(msg.createdAt)}
+            isMentionMe={(msg as unknown as { senderType: string }).senderType === "agent" && Array.isArray((msg as unknown as { mentions?: unknown }).mentions) && (((msg as unknown as { mentions: { type?: string; userId?: string }[] }).mentions.some((m) => m.type === "user" && m.userId === useAuthStore.getState().user?.id) || (msg as unknown as { mentions: { type?: string }[] }).mentions.some((m) => m.type === "all")))}
             attachment={
               msg.attachmentUrl
                 ? {

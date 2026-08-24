@@ -1987,7 +1987,7 @@ describe('PlatformMcpService', () => {
           select: { projectId: true, mainAgentInstanceId: true },
         });
         expect(prisma.memory.create).toHaveBeenCalledWith({
-          data: {
+          data: expect.objectContaining({
             id: 'me_0000000001',
             level: 'task',
             taskId,
@@ -1996,7 +1996,9 @@ describe('PlatformMcpService', () => {
             description: '结论：改用 Prisma 事务',
             tags: ['结论'],
             createdBy: senderInstanceId,
-          },
+            sourceInstanceId: senderInstanceId,
+            sourceType: 'agent',
+          }),
         });
         expect(out).toEqual({ memoryId: 'me_0000000001', level: 'task' });
       });
@@ -2189,6 +2191,12 @@ describe('PlatformMcpService', () => {
             tags: null,
             createdBy: 'ta_main',
             createdAt: '2026-08-08T00:00:02.000Z',
+            sourceAgentId: null,
+            sourceInstanceId: null,
+            sourceType: null,
+            sessionId: null,
+            sessionTitle: null,
+            channelId: null,
           },
           {
             id: 'me_0000000001',
@@ -2198,6 +2206,12 @@ describe('PlatformMcpService', () => {
             tags: ['结论'],
             createdBy: senderInstanceId,
             createdAt: '2026-08-08T00:00:01.000Z',
+            sourceAgentId: null,
+            sourceInstanceId: null,
+            sourceType: null,
+            sessionId: null,
+            sessionTitle: null,
+            channelId: null,
           },
         ]);
       });
@@ -2338,10 +2352,11 @@ describe('PlatformMcpService', () => {
       selfInstanceId: mainInstanceId,
       title: '实施稻邕线消缺',
       tasks: [
-        { title: '步骤一', what: '定位故障点', assigneeInstanceId: assigneeId },
-        { title: '步骤二', what: '执行消缺' },
+        { title: '步骤一', what: '定位故障点', acceptance: '访问 /login 提交错误密码返回 401 且提示文案包含密码错误', qa: 'curl POST /api/v1/users 缺少 name 字段，断言返回 400', assigneeInstanceId: assigneeId },
+        { title: '步骤二', what: '执行消缺', acceptance: '执行消缺后巡检通过', qa: 'playwright 打开 /status 断言显示正常' },
       ],
     };
+    const validSubmitArgs = submitArgs;
     /** 主实例任务行（plan 工具主实例校验通过）。 */
     const mainTaskRow = (overrides: Record<string, unknown> = {}) => ({
       mainAgentInstanceId: mainInstanceId,
@@ -2369,7 +2384,7 @@ describe('PlatformMcpService', () => {
         });
         prisma.planTask.create.mockResolvedValue({ id: planTaskId });
 
-        const out = await service.planSubmit(ctx, submitArgs);
+        const out = await service.planSubmit(ctx, validSubmitArgs);
 
         expect(prisma.plan.upsert).toHaveBeenCalledWith({
           where: { taskId },
@@ -2392,7 +2407,7 @@ describe('PlatformMcpService', () => {
             seq: 1,
             assigneeInstanceId: assigneeId,
             status: 'pending',
-            content: { what: '定位故障点', mustNot: null, references: null, acceptance: null, qa: null, commit: null },
+            content: { what: '定位故障点', mustNot: null, references: null, acceptance: '访问 /login 提交错误密码返回 401 且提示文案包含密码错误', qa: 'curl POST /api/v1/users 缺少 name 字段，断言返回 400', commit: null },
           }),
         });
         expect(prisma.message.create).toHaveBeenCalledWith({
@@ -2542,7 +2557,7 @@ describe('PlatformMcpService', () => {
         });
         expect(prisma.message.create).toHaveBeenCalledWith({
           data: expect.objectContaining({
-            content: { text: '执行计划已通过评审，可启动实施', parts: [] },
+            content: { text: '执行计划已通过评审，请等待用户手动启动任务后再实施', parts: [] },
           }),
         });
         expect(out).toEqual({ planId, status: 'approved' });
@@ -2588,7 +2603,7 @@ describe('PlatformMcpService', () => {
 
         expect(prisma.plan.update).toHaveBeenCalledWith({
           where: { id: planId },
-          data: { status: 'rejected', reviewerInstanceId: null },
+          data: { status: 'rejected', reviewerInstanceId: null, rejectCount: { increment: 1 } },
         });
         expect(prisma.message.create).toHaveBeenCalledWith({
           data: expect.objectContaining({
@@ -2665,7 +2680,7 @@ describe('PlatformMcpService', () => {
         });
         expect(prisma.message.create).toHaveBeenCalledWith({
           data: expect.objectContaining({
-            content: { text: '执行计划已通过评审，可启动实施', parts: [] },
+            content: { text: '执行计划已通过评审，请等待用户手动启动任务后再实施', parts: [] },
           }),
         });
         expect(out).toEqual({ planId, status: 'approved' });

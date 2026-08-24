@@ -68,6 +68,18 @@ export class ModelsController {
     return this.modelsService.revokeCredentialByProvider(providerID);
   }
 
+  /**
+   * 实时同步 opencode 模型（live 拉取 + 孤儿禁用，AdminGuard）。
+   * POST /api/v1/models/sync → 200 {synced, disabled, liveModels}
+   * 声明在 :id 之前——静态段先于参数段。
+   */
+  @Post('sync')
+  @UseGuards(AdminGuard)
+  @ApiOperation({ summary: '实时同步 opencode 模型（live 拉取 + 孤儿禁用，AdminGuard）' })
+  syncLive() {
+    return this.modelsService.syncLiveModels();
+  }
+
   /** GET /api/v1/models/:id → 200 + Model；不存在 → 404 MODEL_NOT_FOUND。 */
   @Get(':id')
   @ApiOperation({ summary: '模型目录详情' })

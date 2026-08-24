@@ -128,15 +128,14 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
 
     // 3. 逐个读 uploads 正文 → 写镜像（.md 纯 markdown 正文 / *.tsx 原型组件 / *.prototype.json 兼容）
     let protoCount = 0;
+    const seenDocIds = new Set<string>();
     for (const [artifactId, cur] of currentByArtifact) {
       if (!cur.contentRef.startsWith('/uploads/')) {
-        // 未落盘 uploads（text 型或 fileRef 占位）→ 跳过镜像
         continue;
       }
       const isTsxPrototype = /\.tsx$/i.test(cur.contentRef);
       const isPrototype = /\.prototype\.json$/i.test(cur.contentRef);
       if (!isTsxPrototype && !isPrototype && !/\.(md|markdown)$/i.test(cur.contentRef)) {
-        // 非 markdown / 非原型 TSX / 非原型 DSL 文件（图片/二进制/普通 json 等）不入文档站
         continue;
       }
       let content: Buffer;
@@ -150,7 +149,6 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
       }
       const body = content.toString('utf8');
       if (isTsxPrototype) {
-        // TSX 原型：写入 prototypes/<slug>/index.tsx（目录结构供 esbuild-wasm 编译）
         const slug = this.prototypeSlug(cur.title, artifactId, cur.contentRef);
         const tsxDir = join(protoDir, slug);
         await fsp.mkdir(tsxDir, { recursive: true });
@@ -159,13 +157,22 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
       if (isPrototype) {
-        // 旧 DSL 原型：文件名优先取产出物文件名（去 .prototype.json），标题弱名兜底
         const fileName = this.prototypeFileName(cur.title, artifactId, cur.contentRef);
         await fsp.writeFile(join(protoDir, fileName), body, 'utf8');
         protoCount += 1;
         continue;
       }
-      const slug = this.docIdFor(cur.title, artifactId);
+      let slug = this.docIdFor(cur.title, artifactId);
+      if (seenDocIds.has(slug)) {
+        const suffix = String(artifactId).replace(/[^a-z0-9]/gi, '').slice(-8);
+        slug = suffix ? `${slug}-${suffix}` : slug;
+        let counter = 1;
+        while (seenDocIds.has(slug)) {
+          counter += 1;
+          slug = `${this.docIdFor(cur.title, artifactId)}-${suffix}-${counter}`;
+        }
+      }
+      seenDocIds.add(slug);
       await fsp.writeFile(join(dir, `${slug}.md`), body, 'utf8');
     }
     this.logger.log(

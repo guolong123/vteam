@@ -12,7 +12,8 @@ import { IsArray, IsOptional, IsString } from 'class-validator';
  */
 export type MentionInput =
   | { type: 'agent'; agentId: string; instanceId?: string }
-  | { type: 'all' };
+  | { type: 'all' }
+  | { type: 'user'; userId: string };
 
 /** POST /channels/:id/messages 请求体（09 篇 §5.1）。 */
 export class CreateMessageDto {

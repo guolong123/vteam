@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { CredentialCryptoService } from '../common/credential-crypto.service';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
+import { WorkerClient } from '../workers/worker.client';
 import { WorkersService } from '../workers/workers.service';
 import { MODEL_ERRORS } from './models.constants';
 import { ModelsService } from './models.service';
@@ -111,6 +112,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       workerModelAvailability: {
         deleteMany: jest.fn(),
         upsert: jest.fn(),
+        count: jest.fn().mockResolvedValue(0),
       },
       worker: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -133,6 +135,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         { provide: IdGeneratorService, useValue: idGen },
         { provide: CredentialCryptoService, useValue: crypto },
         { provide: WorkersService, useValue: workers },
+        { provide: WorkerClient, useValue: { listModels: jest.fn().mockResolvedValue([]) } },
       ],
     }).compile();
 
@@ -346,8 +349,8 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       });
       // union：目录 opencode-go + worker 上报 deepseek/zhipu/qwen
       expect(result.map((r) => r.providerID)).toEqual(['deepseek', 'opencode-go', 'qwen', 'zhipu']);
-      // modelCount = 目录 count + worker 上报计数（opencode-go: 1 + 2 = 3；deepseek 两个 worker 累加 = 2）
-      expect(result.find((r) => r.providerID === 'opencode-go')?.modelCount).toBe(3);
+      // modelCount = Math.max(目录 count, worker 上报计数)（opencode-go: max(1,2)=2；deepseek 两个 worker 累加 = 2）
+      expect(result.find((r) => r.providerID === 'opencode-go')?.modelCount).toBe(2);
       expect(result.find((r) => r.providerID === 'deepseek')?.modelCount).toBe(2);
       expect(result.find((r) => r.providerID === 'zhipu')?.modelCount).toBe(1);
       expect(result.find((r) => r.providerID === 'qwen')?.modelCount).toBe(1);
@@ -569,19 +572,42 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
   });
 
   describe('listCatalogModels（available-models 目录数据源）', () => {
-    it('enabled=true 全部模型 → [{id: providerID/modelID, name}]', async () => {
+    it('enabled=true 全部模型 → [{id: providerID/modelID, name}]（仅可用模型：免费或已配置凭据）', async () => {
       prisma.model.findMany.mockResolvedValue([modelRowFull]);
+      prisma.modelCredential.findMany.mockResolvedValue([credentialRow]);
 
       const result = await service.listCatalogModels();
 
       expect(prisma.model.findMany).toHaveBeenCalledWith({
         where: { enabled: true },
         orderBy: { createdAt: 'asc' },
-        select: { providerID: true, modelID: true, name: true },
+        select: { providerID: true, modelID: true, name: true, providerType: true },
+      });
+      expect(prisma.modelCredential.findMany).toHaveBeenCalledWith({
+        where: { revokedAt: null },
+        select: { providerID: true },
       });
       expect(result).toEqual([
         { id: 'opencode-go/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
       ]);
+    });
+
+    it('未配置凭据的付费模型不返回，仅免费或已配置模型可见', async () => {
+      const freeRow = { providerID: 'opencode', modelID: 'free-model', name: 'Free' };
+      const localRow = { providerID: 'ollama', modelID: 'local-model', name: 'Local', providerType: 'local' };
+      const paidNoCredRow = { providerID: 'opencode-go', modelID: 'paid-model', name: 'Paid' };
+      const paidWithCredRow = { providerID: 'zhipu', modelID: 'paid2', name: 'Paid2' };
+      prisma.model.findMany.mockResolvedValue([freeRow, localRow, paidNoCredRow, paidWithCredRow]);
+      prisma.modelCredential.findMany.mockResolvedValue([{ providerID: 'zhipu' }]);
+
+      const result = await service.listCatalogModels();
+
+      expect(result).toEqual([
+        { id: 'opencode/free-model', name: 'Free' },
+        { id: 'ollama/local-model', name: 'Local' },
+        { id: 'zhipu/paid2', name: 'Paid2' },
+      ]);
+      expect(result.find((r) => r.id === 'opencode-go/paid-model')).toBeUndefined();
     });
   });
 

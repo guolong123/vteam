@@ -520,7 +520,7 @@ export function buildPlatformMcpTools(
     {
       name: 'plan_submit',
       description:
-        '提交执行计划（仅主 Agent 可调用）。plan 模式工作流：主 Agent 拆分实施步骤为计划子任务（六要素，what 必填）→ 评审通过后可实施。重复提交：已处于 rejected/completed 的旧计划将被覆盖重提（原评审者自动失效），否则 409。返回 {planId, status: "reviewing", taskCount}。',
+        '提交执行计划（仅主 Agent 可调用）。必填：title + tasks[].title/what/acceptance/qa（acceptance 需可判定如“访问 /login 提交错误密码返回 401 且提示包含密码错误”、qa 需“工具+步骤+预期”如“curl POST /api/v1/users 缺少 name 断言 400”或“playwright 打开 /login 输入错误密码提交断言提示”；白名单工具词：curl/playwright/http/fetch/api/request/test/执行/验证/断言/assert/check/preview 等，无工具词将触发质量预检 -32602）。六要素完整：what/mustNot/references/acceptance/qa/commit（前3可空后2必填）。评审通过后可实施。重复提交：已处于 rejected/completed 的旧计划将被覆盖重提（原评审者自动失效），否则 409。返回 {planId, status: "reviewing", taskCount}。',
       inputSchema: planSubmitSchema,
       handler: (ctx, args) => service.planSubmit(ctx, args as PlanSubmitArgs),
     },

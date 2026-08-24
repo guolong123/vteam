@@ -40,19 +40,19 @@ datasource db {
 // ==================================================================
 
 model User {
-  id           String   @id
-  username     String   @unique
-  passwordHash String   @map("password_hash")
-  displayName  String   @map("display_name")
-  email        String?  @unique
-  roleId       String   @map("role_id")
-  enabled      Boolean  @default(true)
+  id                String    @id
+  username          String    @unique
+  passwordHash      String    @map("password_hash")
+  displayName       String    @map("display_name")
+  email             String?   @unique
+  roleId            String    @map("role_id")
+  enabled           Boolean   @default(true)
   /// 忘记密码一次性重置 token（内网手动传递，无邮件服务），用后即清
-  resetToken         String?   @map("reset_token")
+  resetToken        String?   @map("reset_token")
   /// 重置 token 过期时间（生成后 30 分钟内有效）
-  resetTokenExpires  DateTime? @map("reset_token_expires")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  resetTokenExpires DateTime? @map("reset_token_expires")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
 
   role           Role            @relation(fields: [roleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   projects       Project[]       @relation("UserProjects")
@@ -93,9 +93,9 @@ model Project {
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
-  owner   User            @relation("UserProjects", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  members ProjectMember[]
-  tasks   Task[]
+  owner    User            @relation("UserProjects", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  members  ProjectMember[]
+  tasks    Task[]
   memories Memory[]
 
   @@map("projects")
@@ -120,27 +120,27 @@ model ProjectMember {
 // ==================================================================
 
 model Task {
-  id              String    @id
-  projectId       String    @map("project_id")
-  title           String
+  id                  String    @id
+  projectId           String    @map("project_id")
+  title               String
   // 任务描述可能超过 VARCHAR(191)，TEXT 承载（K8s 部署 500：value too long for column description）
-  description     String?   @db.Text
-  priority        String    @default("medium")
-  status          String    @default("pending")
-  mainAgentId     String?   @map("main_agent_id")
-  mainAgentInstanceId String? @map("main_agent_instance_id") // 主 Agent 实例（决策依据，T2 起维护）
+  description         String?   @db.Text
+  priority            String    @default("medium")
+  status              String    @default("pending")
+  mainAgentId         String?   @map("main_agent_id")
+  mainAgentInstanceId String?   @map("main_agent_instance_id") // 主 Agent 实例（决策依据，T2 起维护）
   // 托管模式：开启后成员 question/permission 请求不弹窗给用户，改由主 Agent 经 question_confirm 确认
-  managedMode     Boolean   @default(false) @map("managed_mode")
+  managedMode         Boolean   @default(false) @map("managed_mode")
   // 执行模式（vteam-team-collaboration）：direct|plan，默认 direct（轻量），plan 按需开启
-  executionMode   String    @default("direct") @map("execution_mode")
-  backgroundDocs  Json?     @map("background_docs")
-  createdBy       String    @map("created_by")
-  version         Int       @default(0)
-  createdAt       DateTime  @default(now()) @map("created_at")
-  startedAt       DateTime? @map("started_at")
-  pendingReviewAt DateTime? @map("pending_review_at")
-  completedAt     DateTime? @map("completed_at")
-  archivedAt      DateTime? @map("archived_at")
+  executionMode       String    @default("direct") @map("execution_mode")
+  backgroundDocs      Json?     @map("background_docs")
+  createdBy           String    @map("created_by")
+  version             Int       @default(0)
+  createdAt           DateTime  @default(now()) @map("created_at")
+  startedAt           DateTime? @map("started_at")
+  pendingReviewAt     DateTime? @map("pending_review_at")
+  completedAt         DateTime? @map("completed_at")
+  archivedAt          DateTime? @map("archived_at")
 
   project            Project             @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   creator            User                @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -161,19 +161,20 @@ model Task {
 
 // 团队成员 = 实例（同一模板 agent 在任务内可多实例，seq 服务端生成防并发重号）
 model TaskAgent {
-  id        String    @id
-  taskId    String    @map("task_id")
-  agentId   String    @map("agent_id") // 模板 agent（继承 name/role/prompt/model）
-  alias     String? // 实例别名（默认「<角色中文名>-<seq>」，服务端生成）
-  seq       Int       @default(1) // 同 agent 同任务内序号（服务端生成，事务内防并发重号）
-  workDir   String? @map("work_dir") // is_0000000010：实例独立持久化工作目录（创建任务可指定；缺省
+  id              String    @id
+  taskId          String    @map("task_id")
+  agentId         String    @map("agent_id") // 模板 agent（继承 name/role/prompt/model）
+  alias           String? // 实例别名（默认「<角色中文名>-<seq>」，服务端生成）
+  seq             Int       @default(1) // 同 agent 同任务内序号（服务端生成，事务内防并发重号）
+  workDir         String?   @map("work_dir") // is_0000000010：实例独立持久化工作目录（创建任务可指定；缺省
   // /data/worker/<sanitize(agent.name)>，同 agent 多实例追加 -<seq>）
-  joinedAt  DateTime  @default(now()) @map("joined_at")
-  removedAt DateTime? @map("removed_at")
-  enabled   Boolean   @default(true)
+  joinedAt        DateTime  @default(now()) @map("joined_at")
+  removedAt       DateTime? @map("removed_at")
+  enabled         Boolean   @default(true)
+  overrideModelId String?   @map("override_model_id")
 
-  task  Task  @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  agent Agent @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  task     Task      @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  agent    Agent     @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   // 每实例独立会话（10 篇 §3.3；任务详情 instances 需回传会话状态 sessionStatus，真实状态源）
   sessions Session[]
 
@@ -204,19 +205,19 @@ model TaskEvent {
 // ==================================================================
 
 model Session {
-  id          String    @id
-  taskId      String    @map("task_id")
-  taskAgentId String    @map("task_agent_id") // 绑任务实例（每实例独立会话）
-  agentId     String    @map("agent_id") // 保留（角色渲染/模型解析），不再是唯一键维度
-  workerId    String?   @map("worker_id")
-  instanceRef String?   @map("instance_ref")
-  status      String    @default("created")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
+  id          String   @id
+  taskId      String   @map("task_id")
+  taskAgentId String   @map("task_agent_id") // 绑任务实例（每实例独立会话）
+  agentId     String   @map("agent_id") // 保留（角色渲染/模型解析），不再是唯一键维度
+  workerId    String?  @map("worker_id")
+  instanceRef String?  @map("instance_ref")
+  status      String   @default("created")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
-  task   Task    @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  agent  Agent   @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  worker Worker? @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  task      Task      @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  agent     Agent     @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  worker    Worker?   @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   // 绑任务实例（task_agent_id 已存在列，仅补 Prisma 关系便于任务详情 include sessions 状态）
   taskAgent TaskAgent @relation(fields: [taskAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
@@ -236,10 +237,10 @@ model ChatChannel {
   taskAgentId String?   @map("task_agent_id") // 私聊频道绑实例；task_group 频道两者均为 NULL
   // UX-09 会话管理（channel 级简化：置顶/已读为频道级标记，非用户粒度——演示平台可接受；
   // 用户级置顶/已读需 ChannelUser 关联表，评估后本期不做）
-  pinned     Boolean   @default(false)
-  lastReadAt DateTime? @map("last_read_at")
-  deletedAt  DateTime? @map("deleted_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
+  pinned      Boolean   @default(false)
+  lastReadAt  DateTime? @map("last_read_at")
+  deletedAt   DateTime? @map("deleted_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
 
   task     Task      @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent    Agent?    @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -250,19 +251,19 @@ model ChatChannel {
 }
 
 model Message {
-  id         String   @id
-  channelId  String   @map("channel_id")
-  senderType String   @map("sender_type")
-  senderId   String?  @map("sender_id")
-  senderInstanceId String? @map("sender_instance_id") // 消息精确归属实例（agent sender 时为 ta_ 实例 id）
-  content    Json
-  mentions   Json?
+  id               String   @id
+  channelId        String   @map("channel_id")
+  senderType       String   @map("sender_type")
+  senderId         String?  @map("sender_id")
+  senderInstanceId String?  @map("sender_instance_id") // 消息精确归属实例（agent sender 时为 ta_ 实例 id）
+  content          Json
+  mentions         Json?
   // UX-10 群聊附件：客户端先 POST /uploads 拿 url，随消息提交（图片/文档均可）
   attachmentUrl    String?  @map("attachment_url")
   attachmentName   String?  @map("attachment_name")
   attachmentType   String?  @map("attachment_type")
-  status     String   @default("sent")
-  createdAt  DateTime @default(now()) @map("created_at")
+  status           String   @default("sent")
+  createdAt        DateTime @default(now()) @map("created_at")
 
   channel ChatChannel @relation(fields: [channelId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
@@ -292,16 +293,16 @@ model Artifact {
 }
 
 model ArtifactVersion {
-  id            String    @id
-  artifactId    String    @map("artifact_id")
+  id            String   @id
+  artifactId    String   @map("artifact_id")
   version       Int
-  contentRef    String    @map("content_ref")
-  filePath      String?   @map("file_path")
+  contentRef    String   @map("content_ref") @db.Text
+  filePath      String?  @map("file_path")
   sha256        String?
-  acceptedFlag  Boolean   @default(false) @map("accepted_flag")
-  authorAgentId String?   @map("author_agent_id")
-  changeNote    String?   @map("change_note")
-  createdAt     DateTime  @default(now()) @map("created_at")
+  acceptedFlag  Boolean  @default(false) @map("accepted_flag")
+  authorAgentId String?  @map("author_agent_id")
+  changeNote    String?  @map("change_note")
+  createdAt     DateTime @default(now()) @map("created_at")
 
   artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   author   Agent?   @relation("ArtifactAuthor", fields: [authorAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -315,28 +316,28 @@ model ArtifactVersion {
 // ==================================================================
 
 model Issue {
-  id              String    @id
-  taskId          String    @map("task_id")
-  title           String
+  id                 String    @id
+  taskId             String    @map("task_id")
+  title              String
   // issue 描述可能超过 VARCHAR(191)，TEXT 承载（同类预防：issue 描述超长报数据库列限制）
-  description     String?   @db.Text
-  status          String    @default("open")
-  tags            Json?     @map("tags")
-  assigneeAgentId String?   @map("assignee_agent_id")
-  assigneeInstanceId String? @map("assignee_instance_id") // 指派到具体任务实例（优先于 assigneeAgentId）
-  assigneeUserId  String?   @map("assignee_user_id")
+  description        String?   @db.Text
+  status             String    @default("open")
+  tags               Json?     @map("tags")
+  assigneeAgentId    String?   @map("assignee_agent_id")
+  assigneeInstanceId String?   @map("assignee_instance_id") // 指派到具体任务实例（优先于 assigneeAgentId）
+  assigneeUserId     String?   @map("assignee_user_id")
   // 创建者二选一（Metis B1）：用户经 web/API 创建填 createdBy；
   // Agent 经 MCP 创建填 creatorAgentId（createdBy 留空），对齐 Message.senderType/senderId 模式
-  createdBy       String?   @map("created_by")
-  creatorAgentId  String?   @map("creator_agent_id")
-  deletedAt       DateTime? @map("deleted_at")
-  resolvedAt      DateTime? @map("resolved_at")
-  closedAt        DateTime? @map("closed_at")
+  createdBy          String?   @map("created_by")
+  creatorAgentId     String?   @map("creator_agent_id")
+  deletedAt          DateTime? @map("deleted_at")
+  resolvedAt         DateTime? @map("resolved_at")
+  closedAt           DateTime? @map("closed_at")
   // 拒绝处理态（is_0000000013）：reject 流转必填原因，落 rejectReason；reopen 回 open 时清空
-  rejectReason    String?   @map("reject_reason")
-  rejectedAt      DateTime? @map("rejected_at")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+  rejectReason       String?   @map("reject_reason")
+  rejectedAt         DateTime? @map("rejected_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
   task          Task            @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   assigneeAgent Agent?          @relation("IssueAssigneeAgent", fields: [assigneeAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -352,16 +353,16 @@ model Issue {
 
 // issue 操作记录（is_0000000013）：状态流转/编辑/创建轨迹，含操作人（user 走 userId，agent 走实例 id）
 model IssueActivity {
-  id         String    @id
-  issueId    String    @map("issue_id")
+  id         String   @id
+  issueId    String   @map("issue_id")
   action     String // create | update | transition
-  fromStatus String?   @map("from_status")
-  toStatus   String?   @map("to_status")
-  actorType  String    @map("actor_type") // user | agent
-  actorId    String?   @map("actor_id") // userId 或 agent 实例 id（ta_）
-  instanceId String?   @map("instance_id") // agent 操作时的 ta_ 实例 id
+  fromStatus String?  @map("from_status")
+  toStatus   String?  @map("to_status")
+  actorType  String   @map("actor_type") // user | agent
+  actorId    String?  @map("actor_id") // userId 或 agent 实例 id（ta_）
+  instanceId String?  @map("instance_id") // agent 操作时的 ta_ 实例 id
   metadata   Json? // { reason? }（拒绝原因）/ { fields? }（编辑变更字段，可选）
-  createdAt  DateTime  @default(now()) @map("created_at")
+  createdAt  DateTime @default(now()) @map("created_at")
 
   issue Issue @relation(fields: [issueId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
@@ -374,40 +375,40 @@ model IssueActivity {
 // ==================================================================
 
 model Agent {
-  id              String    @id
+  id              String   @id
   name            String
   type            String
-  baseAgentId     String?   @map("base_agent_id")
+  baseAgentId     String?  @map("base_agent_id")
   role            String?
   // ⚠️ 出厂默认提示词为多段长文本（16 篇 §3~§7 四方向结构），MySQL 需 TEXT 承载
-  prompt          String    @db.Text
-  defaultModelId  String?   @map("default_model_id")
+  prompt          String   @db.Text
+  defaultModelId  String?  @map("default_model_id")
   // 首选 worker 软绑定（可空，null=自动调度；离线自动回退，Metis R1）
-  workerId        String?   @map("worker_id")
+  workerId        String?  @map("worker_id")
   // @deprecated 2026-08-21 已下线：群聊 @Agent 自动回复“收到，正在处理…”机制已删除（模型不可用时无法区分）。
   // 列保留以兼容存量 DB，业务层已不再读写；下次重建库可删。
-  ackMessage      String?   @map("ack_message")
+  ackMessage      String?  @map("ack_message")
   // 性格（vteam-team-collaboration tc-persona：PERSONA_LIBRARY 的 key，可空；
   // 存量 agent 不动，运行时由 buildSystemInstructions 拼接进系统提示，不改写 prompt）
   persona         String?
-  permissionScope Json?     @map("permission_scope")
-  policyId        String?   @map("policy_id")
-  createdBy       String    @map("created_by")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+  permissionScope Json?    @map("permission_scope")
+  policyId        String?  @map("policy_id")
+  createdBy       String   @map("created_by")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
 
-  baseAgent         Agent?             @relation("AgentClone", fields: [baseAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  clones            Agent[]            @relation("AgentClone")
-  creator           User               @relation("AgentCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  baseAgent         Agent?            @relation("AgentClone", fields: [baseAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  clones            Agent[]           @relation("AgentClone")
+  creator           User              @relation("AgentCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   skills            AgentSkill[]
   toolEffects       AgentToolEffect[]
   taskAgents        TaskAgent[]
   sessions          Session[]
   channels          ChatChannel[]
-  authoredArtifacts ArtifactVersion[]  @relation("ArtifactAuthor")
-  mainTasks         Task[]             @relation("TaskMainAgent")
-  assignedIssues    Issue[]            @relation("IssueAssigneeAgent")
-  createdIssues     Issue[]            @relation("IssueCreatorAgent")
+  authoredArtifacts ArtifactVersion[] @relation("ArtifactAuthor")
+  mainTasks         Task[]            @relation("TaskMainAgent")
+  assignedIssues    Issue[]           @relation("IssueAssigneeAgent")
+  createdIssues     Issue[]           @relation("IssueCreatorAgent")
 
   @@map("agents")
 }
@@ -494,16 +495,16 @@ model Tool {
 // ==================================================================
 
 model Model {
-  id           String    @id
-  providerID   String    @map("provider_id")
-  modelID      String    @map("model_id")
+  id           String   @id
+  providerID   String   @map("provider_id")
+  modelID      String   @map("model_id")
   name         String
   capabilities Json?
-  enabled      Boolean   @default(true)
-  baseUrl      String?   @db.Text @map("base_url")
-  providerType String    @default("cloud") @map("provider_type")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  enabled      Boolean  @default(true)
+  baseUrl      String?  @map("base_url") @db.Text
+  providerType String   @default("cloud") @map("provider_type")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   workerAvailabilities WorkerModelAvailability[]
 
@@ -532,7 +533,7 @@ model ModelCredential {
   // （models.provider_id 非唯一，逻辑关联经 ModelsService 查询 provider 解析）
   providerID    String    @map("provider_id")
   // AES-256-GCM 加密后的 token 引用（明文零接触：不进日志/审计事件/响应）
-  credentialRef String    @db.Text @map("credential_ref")
+  credentialRef String    @map("credential_ref") @db.Text
   // 脱敏标识（如 sk-****abc，fingerprint 不进日志/审计事件/响应）
   fingerprint   String
   // 软撤销（吊销 = 软删，保留审计轨迹；同 provider 重复 POST 覆盖更新时清除）
@@ -552,7 +553,7 @@ model GitCredential {
   name          String    @unique
   // 认证方式：ssh_key | https_token
   authType      String    @map("auth_type")
-  credentialRef String    @db.Text @map("credential_ref")
+  credentialRef String    @map("credential_ref") @db.Text
   fingerprint   String
   description   String?   @db.Text
   createdBy     String    @map("created_by")
@@ -630,8 +631,8 @@ model Worker {
   lastHeartbeatAt DateTime? @map("last_heartbeat_at")
   registeredAt    DateTime  @default(now()) @map("registered_at")
 
-  sessions           Session[]
-  taskGroupInstances TaskGroupInstance[]
+  sessions            Session[]
+  taskGroupInstances  TaskGroupInstance[]
   modelAvailabilities WorkerModelAvailability[]
 
   @@index([status, lastHeartbeatAt], map: "idx_workers_status_heartbeat")
@@ -682,18 +683,18 @@ model RealtimeEvent {
 // 任务执行计划（一任务一计划，taskId 唯一；status 字符串枚举：
 // draft/reviewing/approved/rejected/executing/completed，draft 为预留态）
 model Plan {
-  id                 String    @id // pl_ 前缀，服务层 IdGeneratorService 生成
-  taskId             String    @unique @map("task_id") // 一任务一计划
+  id                 String   @id // pl_ 前缀，服务层 IdGeneratorService 生成
+  taskId             String   @unique @map("task_id") // 一任务一计划
   title              String
-  summary            String?   @db.Text
-  scopeIn            String?   @db.Text
-  scopeOut           String?   @db.Text
+  summary            String?  @db.Text
+  scopeIn            String?  @db.Text
+  scopeOut           String?  @db.Text
   status             String // draft/reviewing/approved/rejected/executing/completed
-  createdBy          String    @map("created_by") // 主 Agent 实例 id
-  reviewerInstanceId String?   @map("reviewer_instance_id") // 被指派评审者实例（null=用户评审/未指派)
-  rejectCount        Int       @default(0) @map("reject_count")
-  createdAt          DateTime  @default(now()) @map("created_at")
-  updatedAt          DateTime  @updatedAt @map("updated_at")
+  createdBy          String   @map("created_by") // 主 Agent 实例 id
+  reviewerInstanceId String?  @map("reviewer_instance_id") // 被指派评审者实例（null=用户评审/未指派)
+  rejectCount        Int      @default(0) @map("reject_count")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
 
   task      Task       @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   planTasks PlanTask[]
@@ -727,17 +728,23 @@ model PlanTask {
 // ==================================================================
 
 model Memory {
-  id          String    @id // me_ 前缀，服务层 IdGeneratorService 生成
-  level       String // task|project|global（字符串枚举，双库兼容——不声明 Prisma enum）
-  taskId      String?   @map("task_id")
-  projectId   String?   @map("project_id") // task 级冗余存 projectId 便于项目内检索
-  content     String    @db.Text
-  description String?   @db.VarChar(255) @map("description") // 模型携带的30字摘要，用于索引/列表首屏，缺省回落 content.slice(0,120)
-  tags        Json? // 标签数组
-  createdBy   String    @map("created_by") // agent 实例 id 或 user id
-  deletedAt   DateTime? @map("deleted_at") // 软删，对齐 ChatChannel:235
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
+  id               String    @id // me_ 前缀，服务层 IdGeneratorService 生成
+  level            String // task|project|global（字符串枚举，双库兼容——不声明 Prisma enum）
+  taskId           String?   @map("task_id")
+  projectId        String?   @map("project_id") // task 级冗余存 projectId 便于项目内检索
+  content          String    @db.Text
+  description      String?   @map("description") @db.VarChar(255) // 模型携带的30字摘要，用于索引/列表首屏，缺省回落 content.slice(0,120)
+  tags             Json? // 标签数组
+  createdBy        String    @map("created_by") // agent 实例 id 或 user id（兼容）
+  sourceAgentId    String?   @map("source_agent_id")
+  sourceInstanceId String?   @map("source_instance_id")
+  sourceType       String?   @map("source_type") // agent|user|system
+  sessionId        String?   @map("session_id")
+  sessionTitle     String?   @map("session_title") @db.VarChar(512)
+  channelId        String?   @map("channel_id")
+  deletedAt        DateTime? @map("deleted_at") // 软删，对齐 ChatChannel:235
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
   task    Task?    @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   project Project? @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -749,23 +756,23 @@ model Memory {
 }
 
 model AgentQuestion {
-  id         String   @id
+  id        String   @id
   // serve question/permission 请求 id（que_ / per_ 前缀，worker 检测上报的 requestId/permissionId）
-  requestId  String   @unique @map("request_id")
+  requestId String   @unique @map("request_id")
   // 平台 Session 主键（s_ 前缀，ingress resolvePlatformSessionId 归一后落库；reply 时反查 instanceRef 调 worker）
-  sessionId  String   @map("session_id")
-  taskId     String   @map("task_id")
-  agentId    String   @map("agent_id")
+  sessionId String   @map("session_id")
+  taskId    String   @map("task_id")
+  agentId   String   @map("agent_id")
   // question | permission（worker 事件类型区分，两种确认共用一张表）
-  kind       String
+  kind      String
   // questions 数组（kind=question）或 {title, pattern, type}（kind=permission）
-  content    Json
+  content   Json
   // pending | resolved | rejected（resolved=已答复，rejected=用户拒绝）
-  status     String   @default("pending")
+  status    String   @default("pending")
   // 用户答复（kind=question: Array<Array<string>> label 数组；kind=permission: {response}）
-  answers    Json?
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  answers   Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([taskId, status], map: "idx_agent_questions_task_status")
   @@map("agent_questions")

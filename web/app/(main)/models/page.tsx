@@ -451,8 +451,8 @@ export default function ModelsPage() {
   });
 
   const modelsQuery = useQuery({
-    queryKey: ["models"],
-    queryFn: () => api.get<ModelsResponse>("/models", { query: { page: 1, pageSize: 100 } }),
+    queryKey: ["models", selectedProvider],
+    queryFn: () => api.get<ModelsResponse>("/models", { query: { page: 1, pageSize: 100, ...(selectedProvider ? { providerID: selectedProvider } : {}) } }),
     enabled: !!user,
   });
   const models = modelsQuery.data?.items ?? [];
@@ -470,6 +470,23 @@ export default function ModelsPage() {
     enabled: !!user,
   });
   const workers = workersQuery.data ?? [];
+
+  const [syncHint, setSyncHint] = useState<string | null>(null);
+  const syncMutation = useMutation({
+    mutationFn: () => api.post<{ synced: number; disabled: number; liveModels: string[] }>("/models/sync", {}),
+    onSuccess: (res) => {
+      setSyncHint(`同步完成：live ${res.liveModels.length} 个，已校正 ${res.synced} 个，禁用孤儿 ${res.disabled} 个`);
+      queryClient.invalidateQueries({ queryKey: ["models"] });
+      queryClient.invalidateQueries({ queryKey: ["model-providers"] });
+      queryClient.invalidateQueries({ queryKey: ["model-credentials"] });
+      queryClient.invalidateQueries({ queryKey: ["workers"] });
+      setTimeout(() => setSyncHint(null), 4000);
+    },
+    onError: (err) => {
+      setSyncHint(isApiError(err) ? err.message : "同步失败");
+      setTimeout(() => setSyncHint(null), 4000);
+    },
+  });
 
   const nodeCountByModel = useMemo(() => {
     const map = new Map<string, number>();
@@ -577,9 +594,13 @@ export default function ModelsPage() {
                   <input data-testid="provider-search" autoComplete="off" name="provider-search" value={providerKeyword} onChange={(e) => setProviderKeyword(e.target.value)} placeholder="搜索 provider…" style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }} />
                 </div>
                 {isAdmin && (
+                  <button type="button" data-testid="sync-models-button" disabled={syncMutation.isPending} onClick={() => syncMutation.mutate()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[700], fontSize: fontSize.md, fontWeight: 500, cursor: syncMutation.isPending ? "default" : "pointer", opacity: syncMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body }}>{syncMutation.isPending ? "同步中…" : "↻ 同步"}</button>
+                )}
+                {isAdmin && (
                   <button type="button" data-testid="add-provider-button" onClick={() => { setAddProviderID(""); setAddModelID(""); setAddName(""); setAddProviderType("local"); setAddBaseUrl(""); setAddOpen(true); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#fff", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body }}>+ 新增 Provider</button>
                 )}
               </div>
+              {syncHint && <div data-testid="sync-hint" style={{ fontSize: fontSize.sm, color: neutral[600], backgroundColor: "rgba(37,99,235,0.08)", border: `1px solid rgba(37,99,235,0.15)`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>{syncHint}</div>}
               {providersQuery.isPending ? (
                 <div data-testid="providers-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}>加载中…</div>
               ) : (
@@ -624,9 +645,13 @@ export default function ModelsPage() {
                   <input data-testid="model-search" autoComplete="off" name="model-search" value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="搜索模型名…" style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }} />
                 </div>
                 {isAdmin && (
+                  <button type="button" data-testid="sync-models-button" disabled={syncMutation.isPending} onClick={() => syncMutation.mutate()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[700], fontSize: fontSize.md, fontWeight: 500, cursor: syncMutation.isPending ? "default" : "pointer", opacity: syncMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body }}>{syncMutation.isPending ? "同步中…" : "↻ 同步"}</button>
+                )}
+                {isAdmin && (
                   <button type="button" data-testid="add-model-button" onClick={() => { setAddProviderID(selectedProvider); setAddModelID(""); setAddName(""); setAddProviderType("local"); setAddBaseUrl(providers.find(p=>p.providerID===selectedProvider)?.baseUrl ?? ""); setAddOpen(true); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#fff", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body }}>+ 新增模型</button>
                 )}
               </div>
+              {syncHint && <div data-testid="sync-hint" style={{ fontSize: fontSize.sm, color: neutral[600], backgroundColor: "rgba(37,99,235,0.08)", border: `1px solid rgba(37,99,235,0.15)`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>{syncHint}</div>}
               {modelsQuery.isPending ? (
                 <div data-testid="models-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}>加载中…</div>
               ) : (

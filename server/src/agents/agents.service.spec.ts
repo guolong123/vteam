@@ -864,11 +864,7 @@ describe('AgentsService', () => {
 
       expect(workerClient.listModels).not.toHaveBeenCalled();
       expect(result).toMatchObject({ source: 'fallback' });
-      // fallback 用 D7 新格式模型 id（provider/model），非旧 gpt-4o
-      expect(result.models.map((m) => m.id)).toContain(
-        'opencode-go/deepseek-v4-flash',
-      );
-      expect(result.models.map((m) => m.id)).not.toContain('gpt-4o');
+      expect(result.models).toEqual([]);
     });
 
     it('目录空 + listModels 异常 → 降级 STATIC_AVAILABLE_MODELS + source=fallback', async () => {
@@ -882,7 +878,7 @@ describe('AgentsService', () => {
       };
 
       expect(result).toMatchObject({ source: 'fallback' });
-      expect(result.models.length).toBeGreaterThan(0);
+      expect(result.models).toEqual([]);
     });
 
     it('目录空 + listModels 返回空列表 → 降级 STATIC_AVAILABLE_MODELS + source=fallback', async () => {
@@ -896,7 +892,7 @@ describe('AgentsService', () => {
       };
 
       expect(result).toMatchObject({ source: 'fallback' });
-      expect(result.models.length).toBeGreaterThan(0);
+      expect(result.models).toEqual([]);
     });
   });
 });

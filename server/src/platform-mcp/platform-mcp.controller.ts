@@ -200,7 +200,8 @@ export class PlatformMcpController {
         content: [{ type: 'text', text: JSON.stringify(result) }],
       });
     } catch (err) {
-      return this.error(id, ERROR_INTERNAL_ERROR, this.toErrorMessage(err));
+      const code = this.toErrorCode(err);
+      return this.error(id, code, this.toErrorMessage(err));
     }
   }
 
@@ -214,19 +215,35 @@ export class PlatformMcpController {
     return { jsonrpc: '2.0', id, error: { code, message } };
   }
 
-  /** 异常 → 错误 message：Nest HttpException 取响应体 message（业务错误码可读），其余取 Error.message。 */
+  private toErrorCode(err: unknown): number {
+    if (err instanceof HttpException) {
+      const status = err.getStatus();
+      if (status === 400) return ERROR_INVALID_PARAMS;
+      if (status === 403) return -32003;
+      if (status === 404) return -32004;
+      if (status === 409) return -32009;
+    }
+    return ERROR_INTERNAL_ERROR;
+  }
+
   private toErrorMessage(err: unknown): string {
     if (err instanceof HttpException) {
       const response = err.getResponse();
+      const status = err.getStatus();
+      const prefix = status === 403 ? '[403]' : status === 409 ? '[409]' : status === 400 ? '[400]' : '';
+      let msg: string;
       if (
         response &&
         typeof response === 'object' &&
         'message' in response &&
         typeof (response as { message?: unknown }).message === 'string'
       ) {
-        return (response as { message: string }).message;
+        msg = (response as { message: string }).message;
+      } else {
+        msg = err.message;
       }
-      return err.message;
+      const code = (response && typeof response === 'object' && 'code' in response) ? ` ${(response as { code?: string }).code}` : '';
+      return `${prefix}${code} ${msg}`.trim();
     }
     if (err instanceof Error) {
       return err.message;

@@ -184,7 +184,6 @@ export class TaskProgressionScheduler
     this.scanTimer.unref?.();
   }
 
-  /** 扫描：遍历循环表，nextRunAt <= now 的条目触发巡检（状态检测 → dispatch → 轮次累计）。 */
   private async scan(): Promise<void> {
     const now = Date.now();
     for (const [taskId, entry] of [...this.loop]) {
@@ -195,16 +194,31 @@ export class TaskProgressionScheduler
         where: { id: taskId },
         select: { title: true, status: true, mainAgentInstanceId: true },
       });
-      // 状态检测：任务不存在 / 非 in_progress → 注销（不 dispatch）
       if (!task || task.status !== TASK_STATUS.in_progress) {
         this.unregister(taskId);
         continue;
       }
-      // 主 Agent 缺失（团队调整移除主实例）→ 注销防空转
       if (!task.mainAgentInstanceId) {
         this.unregister(taskId);
         continue;
       }
+      try {
+        const mainSession = await (this.prisma as any).session?.findFirst?.({
+          where: { taskAgentId: task.mainAgentInstanceId },
+          select: { id: true },
+        });
+        if (mainSession) {
+          if (this.workerDispatcher.isSessionPending(mainSession.id)) {
+            entry.nextRunAt = now + this.progressionIntervalMs;
+            continue;
+          }
+          const lastAt = this.workerDispatcher.getLastActivityAt(mainSession.id);
+          if (lastAt !== undefined && now - lastAt < this.progressionIntervalMs) {
+            entry.nextRunAt = lastAt + this.progressionIntervalMs;
+            continue;
+          }
+        }
+      } catch {}
       await this.runPatrol(taskId, task.title);
       entry.rounds += 1;
       entry.nextRunAt = now + this.progressionIntervalMs;
