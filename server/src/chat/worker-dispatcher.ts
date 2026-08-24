@@ -168,11 +168,20 @@ export const PLAN_CAPABILITY_INSTRUCTION =
  */
 export const PLAN_WORKFLOW_INSTRUCTION =
   '【计划工作流】（本任务执行模式=plan）任务启动前主 Agent 须产出执行计划：经 plan_submit 提交' +
-  '（tasks 每项含 目标/边界/引用/验收/QA/提交 六要素）；计划评审由成员确认或主 Agent 指派成员' +
-  '（评审者可经 plan_get 读计划、plan_review 提交结论；评审默认放行、驳回须附理由）；' +
+  '（tasks 每项含 目标/边界/引用/验收/QA/提交 六要素，其中验收/qa 必填且 qa 须含工具＋步骤＋预期结果）；' +
+  '计划结构对齐 TL;DR/范围/验证策略/执行策略/Todos/终验/提交策略/成功标准八段模板；' +
+  '计划评审由成员确认或主 Agent 指派成员（评审者可经 plan_get 读计划、plan_review 提交结论；评审默认放行、驳回须附理由）；' +
   '评审通过后按 plan_task 逐项推进（plan_task_transition 汇报进度，状态 done/blocked）；' +
   '全部完成后主 Agent 提交验收（task_transition mark-pending-review）。' +
-  '计划前如关键假设不明，先向成员确认再提交。';
+  '计划前如关键假设不明，先向成员确认再提交。驳回重提有 3 次上限，超限需人工裁决。';
+
+export const PLAN_REVIEW_CHECKLIST_INSTRUCTION =
+  '【计划评审清单】评审执行计划（plan_get 读取全文）时只查四件事：' +
+  '1 引用核查—references 提到的文件/模块是否真实存在且内容相符（用只读工具核实）；' +
+  '2 可起步—每个子任务是否有足够上下文动手（知道改哪、参照什么）；' +
+  '3 一致性—子任务之间无矛盾、无遗漏依赖；' +
+  '4 QA 可执行—每条 qa 是否含具体工具＋步骤＋预期结果、能否机器执行。' +
+  '判定：四项全过→approved；有阻塞问题→rejected 附 reason，最多列 3 个最致命问题，每个含子任务定位与改法；风格/“可以更好”类建议不构成驳回理由。';
 
 /**
  * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
@@ -210,6 +219,7 @@ export function buildSystemInstructions(
   blocks.push(PLAN_CAPABILITY_INSTRUCTION);
   if (opts?.executionMode === EXECUTION_MODES.plan) {
     blocks.push(PLAN_WORKFLOW_INSTRUCTION);
+    blocks.push(PLAN_REVIEW_CHECKLIST_INSTRUCTION);
   }
   if (opts?.team && opts.team.length > 0) {
     const teamLines = opts.team.map(

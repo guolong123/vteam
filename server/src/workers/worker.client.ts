@@ -79,6 +79,11 @@ export interface WorkerModel {
  * ⚠️ 字段名与 worker ExecuteRequestPayload.prompt 一一对应（worker 执行端点校验
  * `payload.prompt`，发送 `parts` 会 400「缺少必填字段 prompt」——wave1 对齐修复）。
  */
+export interface ExecutionConfig {
+  permissions: Record<string, 'allow' | 'ask' | 'deny'>;
+  writePaths: string[];
+}
+
 export interface ExecuteOptions {
   /** 提示内容：字符串（worker 归一为单 text part）或 parts 数组（透传 serve）。 */
   prompt: string | unknown[];
@@ -98,6 +103,8 @@ export interface ExecuteOptions {
   channelId?: string;
   /** opencode 会话 id（ses_ 前缀，复用 serve 会话）；缺省则 worker 执行端点新建。 */
   sessionId?: string;
+  /** 执行策略配置（服务端 ExecutionPolicy 下发，worker 盲翻成 opencode 配置）。 */
+  executionConfig?: ExecutionConfig;
 }
 
 /**
@@ -218,7 +225,7 @@ export class WorkerClient {
         ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
         ...(opts.directory ? { directory: opts.directory } : {}),
         ...(opts.system ? { system: opts.system } : {}),
-        // 对齐 worker ExecuteRequestPayload.prompt（worker 执行端点校验该字段）
+        ...(opts.executionConfig ? { executionConfig: opts.executionConfig } : {}),
         prompt: opts.prompt,
       }),
     });

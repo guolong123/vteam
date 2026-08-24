@@ -391,6 +391,7 @@ model Agent {
   // 存量 agent 不动，运行时由 buildSystemInstructions 拼接进系统提示，不改写 prompt）
   persona         String?
   permissionScope Json?     @map("permission_scope")
+  policyId        String?   @map("policy_id")
   createdBy       String    @map("created_by")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
@@ -409,6 +410,18 @@ model Agent {
   createdIssues     Issue[]            @relation("IssueCreatorAgent")
 
   @@map("agents")
+}
+
+model ExecutionPolicy {
+  id          String   @id
+  name        String
+  description String?  @db.Text
+  type        String
+  config      Json
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("execution_policies")
 }
 
 model AgentSkill {
@@ -677,7 +690,8 @@ model Plan {
   scopeOut           String?   @db.Text
   status             String // draft/reviewing/approved/rejected/executing/completed
   createdBy          String    @map("created_by") // 主 Agent 实例 id
-  reviewerInstanceId String?   @map("reviewer_instance_id") // 被指派评审者实例（null=用户评审/未指派）
+  reviewerInstanceId String?   @map("reviewer_instance_id") // 被指派评审者实例（null=用户评审/未指派)
+  rejectCount        Int       @default(0) @map("reject_count")
   createdAt          DateTime  @default(now()) @map("created_at")
   updatedAt          DateTime  @updatedAt @map("updated_at")
 

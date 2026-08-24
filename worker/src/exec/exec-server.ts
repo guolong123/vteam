@@ -38,6 +38,11 @@ import { trackInstanceEnd, trackInstanceStart } from '../instance-tracker';
 import { WORKER_EVENT_TYPES } from '../protocol/worker-protocol';
 import { collectFileArtifacts } from './artifact-extract';
 
+export interface ExecutionConfig {
+  permissions: Record<string, 'allow' | 'ask' | 'deny'>;
+  writePaths: string[];
+}
+
 /** POST /execute 请求体（server dispatchForTarget 下发形状）。 */
 export interface ExecuteRequestPayload {
   /** 平台 Task 主键（t_ 前缀），事件回流透传。 */
@@ -58,6 +63,8 @@ export interface ExecuteRequestPayload {
   directory?: string;
   /** P7：顶层 system 提示（产出物协议/@机制等，serve 拼入 LLM system message，不进会话记录）。 */
   system?: string;
+  /** 执行策略配置（服务端 ExecutionPolicy 下发，worker 盲翻成 opencode 配置，A1 通道①）。 */
+  executionConfig?: ExecutionConfig;
 }
 
 /**
@@ -448,6 +455,17 @@ export class ExecServer {
       // server 侧 mkdir 无效——目录由 worker 执行端点确保存在，持久卷挂载 /data/vteam-worker）。
       if (payload.directory) {
         await fsp.mkdir(payload.directory, { recursive: true });
+      }
+      if (payload.executionConfig) {
+        this.logger.info(
+          `[exec] executionConfig received permissions=${Object.keys(payload.executionConfig.permissions).length} writePaths=${payload.executionConfig.writePaths.length}`,
+        );
+        if (payload.directory) {
+          try {
+            const cfg = JSON.stringify({ executionConfig: payload.executionConfig }, null, 2);
+            await fsp.writeFile(`${payload.directory}/.execution-config.json`, cfg, 'utf8');
+          } catch {}
+        }
       }
       if (!opencodeSessionId) {
         opencodeSessionId = await this.driver.createSession(payload.model);

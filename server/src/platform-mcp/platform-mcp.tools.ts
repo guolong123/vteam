@@ -269,9 +269,21 @@ export const planSubmitSchema = z.object({
         title: z.string().min(1).describe('子任务标题'),
         what: z.string().min(1).describe('子任务内容（六要素必填项）'),
         mustNot: z.string().optional().describe('禁止事项'),
-        references: z.string().optional().describe('参考依据'),
-        acceptance: z.string().optional().describe('验收标准'),
-        qa: z.string().optional().describe('QA 要求'),
+        references: z.string().optional().describe(
+          '参考依据（涉代码改动时必填：给出具体文件路径或模块名，评审将核查其真实性）',
+        ),
+        acceptance: z
+          .string()
+          .min(1)
+          .describe(
+            '验收标准（必填）。必须可判定：明确"怎样算通过/不通过"，如"访问 /login 提交错误密码返回 401 且提示文案包含『密码错误』"。禁止空泛表述（"功能正常""可用"）',
+          ),
+        qa: z
+          .string()
+          .min(1)
+          .describe(
+            'QA 要求（必填）。格式＝工具＋步骤＋预期结果，如 "playwright 打开 /login，输入错误密码提交，断言出现错误提示"；或 "curl POST /api/v1/users 缺少 name 字段，断言 400"。禁止无工具无步骤的表述（"测试一下""验证功能"）',
+          ),
         commit: z.string().optional().describe('交付产物'),
         assigneeInstanceId: z
           .string()
@@ -515,7 +527,7 @@ export function buildPlatformMcpTools(
     {
       name: 'plan_review',
       description:
-        '评审执行计划（主 Agent 或已被指派的评审者可调用）。verdict=approved 通过后计划可实施；verdict=rejected 必须附 reason（驳回后可修改重提或切换 direct 模式）。评审完成后该计划的评审者身份即失效。返回 {planId, status: "approved"|"rejected"}。',
+        '评审执行计划（主 Agent 或已被指派的评审者可调用）。评审时只查四件事：1 引用核查（references 文件是否真实存在）2 可起步（子任务有足够上下文）3 一致性（子任务无矛盾）4 QA 可执行（qa 含工具＋步骤＋预期结果）。四项全过 approved；有阻塞 rejected 附 reason 最多 3 个致命问题。verdict=approved 通过后可实施；rejected 驳回后可修改重提或切换 direct 模式，连续驳回 3 次后需人工裁决。评审完成后评审者身份即失效。返回 {planId, status: "approved"|"rejected"}。',
       inputSchema: planReviewSchema,
       handler: (ctx, args) => service.planReview(ctx, args as PlanReviewArgs),
     },
@@ -544,7 +556,7 @@ export function buildPlatformMcpTools(
     {
       name: 'plan_get',
       description:
-        '读取任务执行计划（只读，评审者读计划通道，无需 selfInstanceId）：计划头（含 reviewerInstanceId）+ 子任务清单全文（六要素 content + 指派概览）。返回 {id, taskId, title, summary, scopeIn, scopeOut, status, createdBy, reviewerInstanceId, createdAt, updatedAt, tasks: [{id, seq, title, content, assigneeInstanceId, assigneeAlias, assigneeName, status}]}。',
+        '读取任务执行计划（只读，评审者读计划通道，无需 selfInstanceId）：计划头（含 reviewerInstanceId）+ 子任务清单全文（六要素 content + 指派概览）。评审者读取后按四项清单核查：引用真实性/可起步/一致性/QA 可执行性。返回 {id, taskId, title, summary, scopeIn, scopeOut, status, createdBy, reviewerInstanceId, createdAt, updatedAt, tasks: [{id, seq, title, content, assigneeInstanceId, assigneeAlias, assigneeName, status}]}。',
       inputSchema: planGetSchema,
       handler: (ctx, args) => service.planGet(ctx, args as PlanGetArgs),
     },

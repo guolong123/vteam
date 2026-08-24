@@ -193,6 +193,11 @@ export interface HeartbeatResponse {
   commands?: WorkerCommand[];
 }
 
+export interface ExecutionConfig {
+  permissions: Record<string, 'allow' | 'ask' | 'deny'>;
+  writePaths: string[];
+}
+
 /** POST /worker/events 请求体（对齐 server WorkerEventDto）。 */
 export interface WorkerEventPayload {
   workerId: string;

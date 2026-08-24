@@ -39,6 +39,7 @@ import {
   PLAN_TASK_STATUS,
 } from '../plans/plan.constants';
 import { PLATFORM_MCP_ERRORS, validateTsxPrototype } from './platform-mcp.constants';
+import { validatePlanTaskQuality } from './plan-quality.guard';
 
 /**
  * Plan 主键前缀（与 plans.service.ts 对齐：pl_/pt_ 前缀零填充序号）。
@@ -952,7 +953,12 @@ export class PlatformMcpService {
         assigneeInstanceId?: string;
       }>;
     },
-  ): Promise<{ planId: string; status: string; taskCount: number }> {
+  ): Promise<{
+    planId: string;
+    status: string;
+    taskCount: number;
+    qualityWarnings?: string[];
+  }> {
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
 
     const task = await this.prisma.task.findUnique({
@@ -974,7 +980,7 @@ export class PlatformMcpService {
 
     const existing = await this.prisma.plan.findUnique({
       where: { taskId: args.taskId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, rejectCount: true },
     });
     if (
       existing &&
@@ -983,6 +989,12 @@ export class PlatformMcpService {
       throw new ConflictException({
         code: PLAN_ERRORS.PLAN_INVALID_STATUS,
         message: `执行计划处于 ${existing.status} 状态（评审中/已批准/实施中），不可重复提交`,
+      });
+    }
+    if (existing && (existing as { rejectCount?: number }).rejectCount !== undefined && (existing.rejectCount as number) >= 3) {
+      throw new ConflictException({
+        code: PLAN_ERRORS.PLAN_REVIEW_ROUNDS_EXCEEDED,
+        message: `执行计划已驳回 ${existing.rejectCount} 次，请向用户同步分歧点并请求人工裁决后再提交`,
       });
     }
 
@@ -994,6 +1006,26 @@ export class PlatformMcpService {
           message: '计划子任务 what 不能为空',
         });
       }
+    }
+
+    const qualityErrors: string[] = [];
+    const qualityWarnings: string[] = [];
+    for (const t of args.tasks) {
+      const result = validatePlanTaskQuality({
+        title: t.title,
+        what: t.what,
+        references: t.references,
+        acceptance: t.acceptance ?? '',
+        qa: t.qa ?? '',
+      });
+      qualityErrors.push(...result.errors);
+      qualityWarnings.push(...result.warnings);
+    }
+    if (qualityErrors.length > 0) {
+      throw new BadRequestException({
+        code: PLAN_ERRORS.PLAN_STRUCTURE_INVALID,
+        message: `计划质量预检未通过（${qualityErrors.length} 项），请修正后重新提交：${qualityErrors.join('；')}`,
+      });
     }
 
     const assigneeIds = args.tasks
@@ -1087,7 +1119,12 @@ export class PlatformMcpService {
         { type: 'channel', id: channel.id },
       );
     }
-    return { planId: plan.id, status: plan.status, taskCount };
+    return {
+      planId: plan.id,
+      status: plan.status,
+      taskCount,
+      ...(qualityWarnings.length > 0 ? { qualityWarnings } : {}),
+    };
   }
 
   /**
@@ -1169,10 +1206,9 @@ export class PlatformMcpService {
     const updated = await this.prisma.$transaction(async (tx) => {
       const p = await tx.plan.update({
         where: { id: plan.id },
-        data: {
-          status: approved ? PLAN_STATUS.approved : PLAN_STATUS.rejected,
-          reviewerInstanceId: null,
-        },
+        data: approved
+          ? { status: PLAN_STATUS.approved, reviewerInstanceId: null }
+          : { status: PLAN_STATUS.rejected, reviewerInstanceId: null, rejectCount: { increment: 1 } },
       });
       if (channel) {
         await tx.message.create({
