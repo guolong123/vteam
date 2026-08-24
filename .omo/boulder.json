@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "active_work_id": "repo-credential-separation-c139ab77",
+  "active_work_id": "vteam-agent-strengthening-2cf4fc75",
   "works": {
     "docs-site-rebuild-2130c40f": {
       "work_id": "docs-site-rebuild-2130c40f",
@@ -107,21 +107,43 @@
       "task_sessions": {},
       "ended_at": "2026-08-22T03:43:38.521Z",
       "elapsed_ms": 377867
+    },
+    "vteam-agent-strengthening-2cf4fc75": {
+      "work_id": "vteam-agent-strengthening-2cf4fc75",
+      "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/vteam-agent-strengthening.md",
+      "plan_name": "vteam-agent-strengthening",
+      "status": "completed",
+      "started_at": "2026-08-24T04:45:44.519Z",
+      "updated_at": "2026-08-24T05:03:15.979203Z",
+      "session_ids": [
+        "opencode:ses_fce5130a9ffebSx0gwxVYWINmB",
+        "opencode:ses_fcddbe80bffeSrjMKjHbupd6Rs"
+      ],
+      "session_origins": {
+        "opencode:ses_fce5130a9ffebSx0gwxVYWINmB": "direct",
+        "opencode:ses_fcddbe80bffeSrjMKjHbupd6Rs": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {},
+      "ended_at": "2026-08-24T05:00:05.472Z",
+      "elapsed_ms": 860953
     }
   },
-  "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/repo-credential-separation.md",
-  "started_at": "2026-08-22T03:37:20.654Z",
+  "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/vteam-agent-strengthening.md",
+  "started_at": "2026-08-24T04:45:44.519Z",
   "status": "completed",
-  "updated_at": "2026-08-22T03:43:38.521Z",
+  "updated_at": "2026-08-24T05:03:15.979203Z",
   "session_ids": [
-    "opencode:ses_fd879bf21ffe3uv3W4JAIKHDzl"
+    "opencode:ses_fce5130a9ffebSx0gwxVYWINmB",
+    "opencode:ses_fcddbe80bffeSrjMKjHbupd6Rs"
   ],
   "session_origins": {
-    "opencode:ses_fd879bf21ffe3uv3W4JAIKHDzl": "direct"
+    "opencode:ses_fce5130a9ffebSx0gwxVYWINmB": "direct",
+    "opencode:ses_fcddbe80bffeSrjMKjHbupd6Rs": "direct"
   },
-  "plan_name": "repo-credential-separation",
+  "plan_name": "vteam-agent-strengthening",
   "task_sessions": {},
   "agent": "atlas",
-  "ended_at": "2026-08-22T03:43:38.521Z",
-  "elapsed_ms": 377867
+  "ended_at": "2026-08-24T05:00:05.472Z",
+  "elapsed_ms": 860953
 }
