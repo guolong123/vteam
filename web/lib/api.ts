@@ -104,17 +104,22 @@ export async function request<T>(
     if (resp.status === 401 && accessToken) {
       unauthorizedHandler?.();
     }
-    let parsed: { code?: string; message?: string; details?: unknown } = {};
+    let parsed: { code?: string; message?: string | string[]; details?: unknown } = {};
     try {
       parsed = (await resp.json()) as typeof parsed;
     } catch {
       // 响应体非 JSON（如网关 502 的 HTML），保持默认错误
     }
+    // class-validator 校验失败的 message 是数组（如 ["token 不能为空"]），拼接为可读文案
+    const rawMessage = parsed.message;
+    const messageText = Array.isArray(rawMessage)
+      ? rawMessage.join("；")
+      : rawMessage;
     throw new ApiError(resp.status, {
       code: typeof parsed.code === "string" ? parsed.code : "INTERNAL_ERROR",
       message:
-        typeof parsed.message === "string"
-          ? parsed.message
+        typeof messageText === "string"
+          ? messageText
           : `请求失败 (HTTP ${resp.status})`,
       details: parsed.details,
     });

@@ -357,7 +357,7 @@ export function ConfigureModal({
             placeholder={
               isLocal
                 ? `本地 provider（${provider}）无需密钥，可留空`
-                : `输入 ${provider} 的 API token（sk-…）`
+                : `输入 ${provider} 的 API token`
             }
             value={token}
             onChange={(e) => setToken(e.target.value)}
