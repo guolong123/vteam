@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "active_work_id": "agent-enable-disable-reset-a3fb7edf",
+  "active_work_id": "repo-credential-separation-c139ab77",
   "works": {
     "docs-site-rebuild-2130c40f": {
       "work_id": "docs-site-rebuild-2130c40f",
@@ -89,19 +89,39 @@
       },
       "agent": "atlas",
       "task_sessions": {}
+    },
+    "repo-credential-separation-c139ab77": {
+      "work_id": "repo-credential-separation-c139ab77",
+      "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/repo-credential-separation.md",
+      "plan_name": "repo-credential-separation",
+      "status": "completed",
+      "started_at": "2026-08-22T03:37:20.654Z",
+      "updated_at": "2026-08-22T03:43:38.521Z",
+      "session_ids": [
+        "opencode:ses_fd879bf21ffe3uv3W4JAIKHDzl"
+      ],
+      "session_origins": {
+        "opencode:ses_fd879bf21ffe3uv3W4JAIKHDzl": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {},
+      "ended_at": "2026-08-22T03:43:38.521Z",
+      "elapsed_ms": 377867
     }
   },
-  "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/agent-enable-disable-reset.md",
-  "started_at": "2026-08-22T00:44:15.137Z",
-  "status": "active",
-  "updated_at": "2026-08-22T00:44:15.137Z",
+  "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/repo-credential-separation.md",
+  "started_at": "2026-08-22T03:37:20.654Z",
+  "status": "completed",
+  "updated_at": "2026-08-22T03:43:38.521Z",
   "session_ids": [
-    "opencode:ses_fdd8189dcffei7fbGsTQKcY5HC"
+    "opencode:ses_fd879bf21ffe3uv3W4JAIKHDzl"
   ],
   "session_origins": {
-    "opencode:ses_fdd8189dcffei7fbGsTQKcY5HC": "direct"
+    "opencode:ses_fd879bf21ffe3uv3W4JAIKHDzl": "direct"
   },
-  "plan_name": "agent-enable-disable-reset",
+  "plan_name": "repo-credential-separation",
   "task_sessions": {},
-  "agent": "atlas"
+  "agent": "atlas",
+  "ended_at": "2026-08-22T03:43:38.521Z",
+  "elapsed_ms": 377867
 }
