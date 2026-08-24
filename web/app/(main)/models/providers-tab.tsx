@@ -604,15 +604,22 @@ export default function ProvidersTab() {
           ...(targetWorkerIds && targetWorkerIds.length > 0 ? { targetWorkerIds } : {}),
         })
       ),
+    onError: (err) => {
+      console.error("[providers-tab] save credential failed:", err);
+      setConfigureError(
+        isApiError(err)
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "保存失败，请稍后重试"
+      );
+    },
     onSuccess: () => {
       setConfigureOpen(false);
       setConfigureError(null);
       queryClient.invalidateQueries({ queryKey: ["model-providers"] });
       /* 与模型目录 Tab 共享的凭据态缓存一并失效（跨 Tab 一致性） */
       queryClient.invalidateQueries({ queryKey: ["model-credentials"] });
-    },
-    onError: (err) => {
-      setConfigureError(isApiError(err) ? err.message : "保存失败，请稍后重试");
     },
   });
 
