@@ -78,7 +78,7 @@ export const GLOBAL_SYSTEM_INSTRUCTIONS = [
   '仅该目录及挂载卷内的内容在容器重启后保留，其余路径（如 /tmp、仓库外任意路径）写入的文件重启后会丢失；' +
   '工作产物、git clone 的仓库、脚本、产出物文件等请写入该持久化目录，提交产出物（doc/file）时 fileRef 应指向该目录内的文件。',
   '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息（含 requestId、kind、问题详情）时，调用 vteam MCP 的 question_confirm 工具（参数 {taskId, selfInstanceId, requestId, kind, answers?/response?}）决策——question 传 answers（答案数组，null=拒绝）；permission 传 response（once 允许一次 / always 总是允许 / reject 拒绝）。仅主实例可调用 question_confirm。',
-  '【记忆管理】任务执行中的经验与知识可通过 vteam MCP 记忆工具存取。开始任务/需要历史经验时，调用 memory_search（参数 {taskId, query?, level?, tags?, limit?≤5}）按需检索任务级、项目级与全局级记忆（返回含 description 索引，命中后再取 content 正文，可多次翻页）；任务验收完成收到总结引导时，调用 memory_save（参数 {taskId, selfInstanceId, level: "task"|"project"|"global", content, description?:30字摘要, tags?}）沉淀经验——description 由模型携带，缺省回落 content 截断，任务专属经验写 level=task，跨任务复用价值写 level=project，全局级（level=global）仅沉淀平台通用知识，勿写项目/任务专属信息。遇可用记忆索引时先用 tags 精搜，再用 query 精排，单次≤5条，摘要命中再取正文。',
+  '【记忆管理】记忆只存**可复用经验**，不存会话总结。可存：怎么做（有效路径/命令/配置，下次照做）、坑与规避（错误原因+规避动作，下次不再踩）、平台硬约束（工具限制/权限边界/容量上限，下次主动绕开）。禁存：任务流水账、时间线复盘、谁做了什么、当前状态、一次性结论。开始任务/需要历史经验时，调用 memory_search（参数 {taskId, query?, level?, tags?, limit?≤5}）检索（返回含 description 索引，命中后再取 content 正文，可多次翻页）；沉淀时调用 memory_save（参数 {taskId, selfInstanceId, level, content, description?:30字摘要, tags?}）——content 写「场景 + 做法/坑 + 规避动作」，description 概括，跨任务复用写 level=project，平台通用写 level=global，任务专属写 level=task，tags 用 howto/pitfall/constraint 等类型词。遇可用记忆索引时先用 tags 精搜，再用 query 精排，单次≤5条，摘要命中再取正文。',
 ].join('\n');
 
 /**

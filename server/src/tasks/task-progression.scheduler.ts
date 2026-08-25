@@ -239,6 +239,27 @@ export class TaskProgressionScheduler
   }
 
   /**
+   * 记忆收集自动触发（mark-pending-review 时调用）：dispatch 一条 user 型触发消息给主 Agent，
+   * 使其立即执行记忆收集（memory_search → memory_save），不等下次被 @。
+   * dispatchAgentMention 走 user 消息链路 → chat.service 分派 → 主 Agent 收到触发。
+   */
+  async triggerMemoryHarvest(taskId: string, taskTitle?: string): Promise<void> {
+    const text =
+      `【记忆收集】任务 <${taskTitle ?? taskId}> 已提交验收。请沉淀**可复用经验**（不是会话总结）：\n` +
+      '只记录对未来任务有指导价值的内容，例如：\n' +
+      '- 怎么做：某类操作的有效路径/命令/API 用法/配置方法（下次可直接照做）\n' +
+      '- 坑与规避：踩过的错误、失败原因、错误信号与规避方法（下次不再踩）\n' +
+      '- 平台约束：工具限制、权限边界、容量上限等硬约束（下次主动绕开）\n' +
+      '**不要保存**：任务流水账、时间线复盘、谁做了什么、当前状态描述、无普适性的一次性结论。\n' +
+      '执行：① memory_search 查重避免重复；② 从执行过程提炼符合上述标准的经验条目（宁缺毋滥，0 条也可）；' +
+      '③ 逐条 memory_save：content 写「场景 + 做法/坑 + 规避动作」，description 30 字内概括，' +
+      'level: 跨任务复用写 "project"，平台通用写 "global"，tags 用 howto/pitfall/constraint 等类型词。\n' +
+      '完成后无需回复本消息。';
+    await this.dispatchToMainAgent(taskId, text);
+    this.logger.log(`[progression] 记忆收集触发已下发主 Agent taskId=${taskId}`);
+  }
+
+  /**
    * 定向 dispatch 给主 Agent（巡检/托管确认共用）：
    * 主 Agent 定位 = task.mainAgentInstanceId → 会话；频道 private（按实例）优先，回退群聊。
    * 复用 WorkerDispatcher.dispatchAgentMention（assignWorker → createSession/bind → execute → 回复回流）。

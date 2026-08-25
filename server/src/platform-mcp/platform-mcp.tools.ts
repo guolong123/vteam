@@ -237,12 +237,15 @@ type MemorySaveArgs = z.infer<typeof memorySaveSchema>;
 
 const memorySearchSchema = z.object({
   taskId: z.string().describe('任务 ID'),
-  query: z.string().optional().describe('关键词过滤（content/description 包含即命中）'),
+  query: z.string().optional().describe('关键词过滤（content/description 包含即命中，多词空格分隔 AND）'),
   level: z
     .enum(['task', 'project', 'global'])
     .optional()
     .describe('级别过滤（缺省聚合当前任务可见的 task+project+global 三级）'),
   tags: z.array(z.string()).optional().describe('标签过滤（记忆 tags 须包含全部给定标签）'),
+  sourceInstanceId: z.string().optional().describe('来源实例过滤（ta_ 前缀，只看某 Agent 实例沉淀的记忆）'),
+  sourceAgentId: z.string().optional().describe('来源 Agent 过滤（a_ 前缀，只看某 Agent 模板沉淀的全部记忆）'),
+  sessionId: z.string().optional().describe('会话过滤（s_ 前缀，只看某次会话沉淀的记忆）'),
   limit: z
     .number()
     .int()
@@ -506,7 +509,7 @@ export function buildPlatformMcpTools(
     {
       name: 'memory_save',
       description:
-        '写入平台记忆（沉淀经验/结论/决策，供后续任务 memory_search 检索复用）。level=task 写当前任务级记忆；level=project 写当前任务所属项目级记忆（跨任务共享，projectId 由任务归属自动解析）；level=global 写全局记忆（仅主 Agent 可写）。description 为模型携带的30字摘要（可选，缺省回落 content 截断），用于列表首屏索引。返回 {memoryId, level}。',
+        '写入平台记忆（只存可复用经验，禁存会话总结/流水账/一次性结论）。可存三类：howto=怎么做（有效路径/命令/配置）、pitfall=坑与规避（错误原因+规避动作）、constraint=平台硬约束。content 写「场景 + 做法/坑 + 规避动作」。level=task 任务专属；level=project 跨任务复用（projectId 自动解析）；level=global 平台通用（仅主 Agent 可写）。description 30字摘要（缺省回落 content 截断）。返回 {memoryId, level}。',
       inputSchema: memorySaveSchema,
       handler: (ctx, args) => service.memorySave(ctx, args as MemorySaveArgs),
     },

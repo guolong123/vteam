@@ -950,11 +950,8 @@ export class TasksService implements OnModuleInit {
           },
           // 10 篇 §8.1：强调 accepted_flag 基线锁定（FR-04）
           sysMessage: () => '任务已验收完成，产出物基线已锁定',
-          // 记忆管理（todo mem-trigger）：验收后私信主 Agent 引导记忆总结。
-          // senderType=system 不触发 worker 分派（chat.service 仅 senderType=user 分派 dispatch），
-          // 属被动提示：落库 + 广播，主 Agent 后续被触发执行时在私聊历史中可见。
           privateMessage: () =>
-            '任务已验收完成，产出物基线已锁定。请在后续工作中调用 vteam MCP 的 memory_save 工具（参数 {taskId, selfInstanceId, level: "task", content, tags?}）总结本任务执行中的经验、教训与关键决策，沉淀为任务级记忆；如有跨任务复用价值，另存一条 level=project 记忆。',
+            '任务已验收完成，产出物基线已锁定。记忆收集已自动触发（见触发消息），请按其要求只沉淀可复用经验（做法/坑/约束），不要保存会话总结。',
         };
       }
       case 'reject':
@@ -1233,9 +1230,6 @@ export class TasksService implements OnModuleInit {
       { type: 'global' },
     );
 
-    // 巡检调度器接线（功能 1）：进入 in_progress（start/reject）注册循环，离开注销。
-    // 事务已提交且广播完成——register 内部按 status=in_progress 再校验，失败自动注销兜底；
-    // unregister 为纯内存删除不抛错。防重启丢循环由调度器 onModuleInit 扫描重建兜底。
     if (to === TASK_STATUS.in_progress) {
       await this.progression.register(id).catch((err: unknown) =>
         this.logger.error(
@@ -1244,6 +1238,16 @@ export class TasksService implements OnModuleInit {
       );
     } else if (from === TASK_STATUS.in_progress) {
       this.progression.unregister(id);
+    }
+
+    if (action === 'mark-pending-review' && task.mainAgentInstanceId) {
+      void this.progression
+        .triggerMemoryHarvest(id, task.title)
+        .catch((err: unknown) =>
+          this.logger.error(
+            `记忆收集触发失败 taskId=${id}: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
     }
 
     // 系统消息事务后广播 chat.message.new（先落库后转发，与 updateTeam 一致）

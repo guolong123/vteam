@@ -951,6 +951,9 @@ export class PlatformMcpService {
       query?: string;
       level?: MemoryLevel;
       tags?: string[];
+      sourceInstanceId?: string;
+      sourceAgentId?: string;
+      sessionId?: string;
       limit?: number;
     },
   ): Promise<
@@ -1006,9 +1009,15 @@ export class PlatformMcpService {
     const tokenFilters: Prisma.MemoryWhereInput[] = tokens.map((t) => ({
       OR: [{ content: { contains: t } }, { description: { contains: t } }],
     }));
-    const where: Prisma.MemoryWhereInput = tokens.length > 0
-      ? { deletedAt: null, AND: [{ OR: whereOr }, ...tokenFilters] }
-      : { deletedAt: null, OR: whereOr };
+    const sourceFilters: Prisma.MemoryWhereInput[] = [];
+    if (args.sourceInstanceId) sourceFilters.push({ sourceInstanceId: args.sourceInstanceId });
+    if (args.sourceAgentId) sourceFilters.push({ sourceAgentId: args.sourceAgentId });
+    if (args.sessionId) sourceFilters.push({ sessionId: args.sessionId });
+    const andBlocks: Prisma.MemoryWhereInput[] = [{ OR: whereOr }, ...tokenFilters, ...sourceFilters];
+    const where: Prisma.MemoryWhereInput =
+      tokenFilters.length > 0 || sourceFilters.length > 0
+        ? { deletedAt: null, AND: andBlocks }
+        : { deletedAt: null, OR: whereOr };
     const rows = await this.prisma.memory.findMany({
       where,
       orderBy: { createdAt: 'desc' },
