@@ -96,7 +96,8 @@ export class ProjectMembershipGuard implements CanActivate {
       return metadataPid;
     }
     // 任务路由兜底：/tasks/:id 无 pid 参数，从任务反查 projectId（09 篇 §3.4 GET/PATCH /tasks/:id）
-    const taskId = request.params?.id;
+    // 兼容任务绑定控制器使用 :taskId 参数（POST/GET /tasks/:taskId/message-channels 等）
+    const taskId = request.params?.id ?? request.params?.taskId;
     if (typeof taskId === 'string' && taskId.length > 0) {
       const task = await this.prisma.task.findUnique({
         where: { id: taskId },

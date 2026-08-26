@@ -1,8 +1,4 @@
-import {
-  Injectable,
-  NotFoundException,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
@@ -50,7 +46,12 @@ export class MemoriesService implements OnModuleInit {
       ...(query.taskId ? { taskId: query.taskId } : {}),
       ...(query.projectId ? { projectId: query.projectId } : {}),
       ...(query.keyword
-        ? { OR: [{ content: { contains: query.keyword } }, { description: { contains: query.keyword } }] }
+        ? {
+            OR: [
+              { content: { contains: query.keyword } },
+              { description: { contains: query.keyword } },
+            ],
+          }
         : {}),
     };
 

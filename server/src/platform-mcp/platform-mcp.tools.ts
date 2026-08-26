@@ -31,7 +31,10 @@ export interface PlatformMcpTool {
 
 const chatHistorySchema = z.object({
   taskId: z.string().describe('任务 ID'),
-  sinceId: z.string().optional().describe('游标：仅返回 id 大于该值的消息（分页续拉）'),
+  sinceId: z
+    .string()
+    .optional()
+    .describe('游标：仅返回 id 大于该值的消息（分页续拉）'),
   limit: z
     .number()
     .int()
@@ -45,8 +48,16 @@ type ChatHistoryArgs = z.infer<typeof chatHistorySchema>;
 
 const doclibSchema = z.object({
   taskId: z.string().describe('任务 ID'),
-  artifactId: z.string().optional().describe('产出物 ID（缺省返回该任务产出物清单）'),
-  version: z.number().int().positive().optional().describe('版本号（缺省取 currentVersion）'),
+  artifactId: z
+    .string()
+    .optional()
+    .describe('产出物 ID（缺省返回该任务产出物清单）'),
+  version: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('版本号（缺省取 currentVersion）'),
 });
 
 type DoclibArgs = z.infer<typeof doclibSchema>;
@@ -63,14 +74,19 @@ const groupPostSchema = z.object({
     .string()
     .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
   content: z.string().describe('要发布到群聊的内容'),
-  fileRef: z.string().optional().describe('产出物文件引用（与产出物声明 fileRef 一致时挂附件）'),
+  fileRef: z
+    .string()
+    .optional()
+    .describe('产出物文件引用（与产出物声明 fileRef 一致时挂附件）'),
 });
 
 type GroupPostArgs = z.infer<typeof groupPostSchema>;
 
 const readFileSchema = z.object({
   taskId: z.string().describe('任务 ID'),
-  fileRef: z.string().describe('文件路径/引用（如 /tmp/opencode/x.txt 或产出物 fileRef）'),
+  fileRef: z
+    .string()
+    .describe('文件路径/引用（如 /tmp/opencode/x.txt 或产出物 fileRef）'),
   maxBytes: z
     .number()
     .int()
@@ -89,7 +105,9 @@ const notifyAgentSchema = z.object({
     .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
   targetInstanceId: z
     .string()
-    .describe('目标实例 id（ta_ 前缀，见 task_context agentMembers / 团队提示，@ 定向触发目标）'),
+    .describe(
+      '目标实例 id（ta_ 前缀，见 task_context agentMembers / 团队提示，@ 定向触发目标）',
+    ),
   content: z.string().describe('要发送给目标实例的消息内容'),
 });
 
@@ -102,10 +120,15 @@ const submitArtifactSchema = z.object({
     .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
   type: z
     .enum(['text', 'doc', 'file'])
-    .describe('产出物类型：text 直接提交内容；doc/file 提交工作目录文件（fileRef）'),
+    .describe(
+      '产出物类型：text 直接提交内容；doc/file 提交工作目录文件（fileRef）',
+    ),
   title: z.string().describe('产出物标题'),
   content: z.string().optional().describe('产出物内容（type=text 必填）'),
-  fileRef: z.string().optional().describe('文件路径/引用（type=doc/file 必填，自动拉取并归档）'),
+  fileRef: z
+    .string()
+    .optional()
+    .describe('文件路径/引用（type=doc/file 必填，自动拉取并归档）'),
 });
 
 type SubmitArtifactArgs = z.infer<typeof submitArtifactSchema>;
@@ -173,7 +196,9 @@ const issueTransitionSchema = z.object({
   issueId: z.string().describe('issue ID'),
   action: z
     .enum(['start', 'resolve', 'close', 'reopen', 'reject'])
-    .describe('状态流转动作：start 开始处理 / resolve 处理完成 / close 验收关闭 / reopen 重开 / reject 拒绝处理'),
+    .describe(
+      '状态流转动作：start 开始处理 / resolve 处理完成 / close 验收关闭 / reopen 重开 / reject 拒绝处理',
+    ),
   reason: z
     .string()
     .optional()
@@ -189,8 +214,13 @@ const taskTransitionSchema = z.object({
     .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
   action: z
     .enum(['start', 'mark-pending-review', 'accept', 'reject', 'archive'])
-    .describe('状态流转动作：start 开始 / mark-pending-review 提交验收 / accept 验收通过 / reject 驳回 / archive 归档'),
-  reason: z.string().optional().describe('驳回原因（action=reject 时写入任务事件 metadata）'),
+    .describe(
+      '状态流转动作：start 开始 / mark-pending-review 提交验收 / accept 验收通过 / reject 驳回 / archive 归档',
+    ),
+  reason: z
+    .string()
+    .optional()
+    .describe('驳回原因（action=reject 时写入任务事件 metadata）'),
 });
 
 type TaskTransitionArgs = z.infer<typeof taskTransitionSchema>;
@@ -200,14 +230,18 @@ const questionConfirmSchema = z.object({
   selfInstanceId: z
     .string()
     .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
-  requestId: z.string().describe('待确认请求 id（que_/per_ 前缀，来自托管确认消息）'),
+  requestId: z
+    .string()
+    .describe('待确认请求 id（que_/per_ 前缀，来自托管确认消息）'),
   kind: z
     .enum(['question', 'permission'])
     .describe('请求类型：question=模型提问 / permission=工具权限确认'),
   answers: z
     .array(z.array(z.string()))
     .optional()
-    .describe('question 答复：label 数组（顺序对应问题）；answers=null 表示拒绝'),
+    .describe(
+      'question 答复：label 数组（顺序对应问题）；answers=null 表示拒绝',
+    ),
   response: z
     .enum(['once', 'always', 'reject'])
     .optional()
@@ -223,9 +257,18 @@ export const memorySaveSchema = z.object({
     .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
   level: z
     .enum(['task', 'project', 'global'])
-    .describe('记忆级别：task=任务级 / project=项目级（写入当前任务所属项目，跨任务共享）/ global=全局（仅主 Agent 可写）'),
+    .describe(
+      '记忆级别：task=任务级 / project=项目级（写入当前任务所属项目，跨任务共享）/ global=全局（仅主 Agent 可写）',
+    ),
   content: z.string().min(1).max(20000).describe('记忆内容（1~20000 字符）'),
-  description: z.string().min(1).max(255).optional().describe('记忆摘要（1~255 字符，模型携带，用于列表首屏/索引，按需拉正文）'),
+  description: z
+    .string()
+    .min(1)
+    .max(255)
+    .optional()
+    .describe(
+      '记忆摘要（1~255 字符，模型携带，用于列表首屏/索引，按需拉正文）',
+    ),
   tags: z
     .array(z.string())
     .max(20)
@@ -237,15 +280,30 @@ type MemorySaveArgs = z.infer<typeof memorySaveSchema>;
 
 const memorySearchSchema = z.object({
   taskId: z.string().describe('任务 ID'),
-  query: z.string().optional().describe('关键词过滤（content/description 包含即命中，多词空格分隔 AND）'),
+  query: z
+    .string()
+    .optional()
+    .describe('关键词过滤（content/description 包含即命中，多词空格分隔 AND）'),
   level: z
     .enum(['task', 'project', 'global'])
     .optional()
     .describe('级别过滤（缺省聚合当前任务可见的 task+project+global 三级）'),
-  tags: z.array(z.string()).optional().describe('标签过滤（记忆 tags 须包含全部给定标签）'),
-  sourceInstanceId: z.string().optional().describe('来源实例过滤（ta_ 前缀，只看某 Agent 实例沉淀的记忆）'),
-  sourceAgentId: z.string().optional().describe('来源 Agent 过滤（a_ 前缀，只看某 Agent 模板沉淀的全部记忆）'),
-  sessionId: z.string().optional().describe('会话过滤（s_ 前缀，只看某次会话沉淀的记忆）'),
+  tags: z
+    .array(z.string())
+    .optional()
+    .describe('标签过滤（记忆 tags 须包含全部给定标签）'),
+  sourceInstanceId: z
+    .string()
+    .optional()
+    .describe('来源实例过滤（ta_ 前缀，只看某 Agent 实例沉淀的记忆）'),
+  sourceAgentId: z
+    .string()
+    .optional()
+    .describe('来源 Agent 过滤（a_ 前缀，只看某 Agent 模板沉淀的全部记忆）'),
+  sessionId: z
+    .string()
+    .optional()
+    .describe('会话过滤（s_ 前缀，只看某次会话沉淀的记忆）'),
   limit: z
     .number()
     .int()
@@ -272,9 +330,12 @@ export const planSubmitSchema = z.object({
         title: z.string().min(1).describe('子任务标题'),
         what: z.string().min(1).describe('子任务内容（六要素必填项）'),
         mustNot: z.string().optional().describe('禁止事项'),
-        references: z.string().optional().describe(
-          '参考依据（涉代码改动时必填：给出具体文件路径或模块名，评审将核查其真实性）',
-        ),
+        references: z
+          .string()
+          .optional()
+          .describe(
+            '参考依据（涉代码改动时必填：给出具体文件路径或模块名，评审将核查其真实性）',
+          ),
         acceptance: z
           .string()
           .min(1)
@@ -311,7 +372,8 @@ export const planReviewSchema = z
     reason: z.string().optional().describe('评审说明（rejected 时必填）'),
   })
   .refine(
-    (data) => data.verdict !== 'rejected' || (data.reason ?? '').trim().length > 0,
+    (data) =>
+      data.verdict !== 'rejected' || (data.reason ?? '').trim().length > 0,
     { message: '评审驳回必须填写 reason', path: ['reason'] },
   );
 
@@ -325,7 +387,9 @@ const planTaskTransitionSchema = z.object({
   planTaskId: z.string().describe('计划子任务 id（pt_ 前缀）'),
   status: z
     .enum(['in_progress', 'done', 'blocked', 'skipped'])
-    .describe('子任务新状态：in_progress 进行中 / done 完成 / blocked 阻塞 / skipped 跳过'),
+    .describe(
+      '子任务新状态：in_progress 进行中 / done 完成 / blocked 阻塞 / skipped 跳过',
+    ),
 });
 
 type PlanTaskTransitionArgs = z.infer<typeof planTaskTransitionSchema>;
@@ -353,10 +417,7 @@ type MyProfileArgs = z.infer<typeof myProfileSchema>;
  */
 export const planGetSchema = z.object({
   taskId: z.string().describe('任务 ID'),
-  planId: z
-    .string()
-    .optional()
-    .describe('计划 id（缺省取任务当前计划）'),
+  planId: z.string().optional().describe('计划 id（缺省取任务当前计划）'),
 });
 
 type PlanGetArgs = z.infer<typeof planGetSchema>;
@@ -394,6 +455,115 @@ export const teamAddMemberSchema = z.object({
 
 type TeamAddMemberArgs = z.infer<typeof teamAddMemberSchema>;
 
+const channelSendSchema = z.object({
+  target: z
+    .string()
+    .min(1)
+    .describe('Channel id or name (e.g., nc_xxxx or my-webhook)'),
+  text: z.string().min(1).max(4000).describe('Markdown/text to send'),
+});
+
+type ChannelSendArgs = z.infer<typeof channelSendSchema>;
+
+const wecomReplySchema = z
+  .object({
+    taskId: z.string().optional().describe('任务 ID（缺省自动解析当前任务）'),
+    selfInstanceId: z
+      .string()
+      .optional()
+      .describe('调用方实例 id（ta_ 前缀，你的实例身份；缺省自动解析）'),
+    msgtype: z
+      .enum(['text', 'markdown', 'template_card', 'image', 'mpnews'])
+      .optional()
+      .describe(
+        '消息类型：text/markdown 文本、template_card 卡片、image 图片、mpnews 图文（默认 text）。card/mpnews 图片均为可选 HTTPS URL，无本地文件要求。',
+      ),
+    text: z
+      .string()
+      .max(4000)
+      .optional()
+      .describe(
+        '回复正文，支持 markdown，≤4000字。msgtype=text/markdown 时必填，template_card/image/mpnews 时可选（作为附带文本镜像群聊）',
+      ),
+    atUser: z
+      .boolean()
+      .optional()
+      .describe('是否@发送者（默认 true，群聊时 @，私聊直回；仅 text/markdown 生效）'),
+    card: z
+      .any()
+      .optional()
+      .describe(
+        '模板卡片 JSON（msgtype=template_card 时必填）：{card_type, main_title, button_list, task_id 等}，card_type+main_title 必填，icon_url/pic_url/image_url 等图片字段均可选不传也能发，参考 @wecom/aibot-node-sdk TemplateCard',
+      ),
+    media: z
+      .string()
+      .optional()
+      .describe(
+        '图片文件引用（msgtype=image 时必填其一：与 mediaId 二选一）：worker 工作区路径（如 /tmp/opencode/xxx.png）或已归档 fileRef/artifactId，服务端自动拉取并上传为 mediaId；仅 image 需要本地文件，card/mpnews 的 picurl 为可选 HTTPS URL',
+      ),
+    mediaId: z
+      .string()
+      .optional()
+      .describe('已上传媒体 ID（msgtype=image 时与 media 二选一，传 mediaId 则直接发送不再上传）'),
+    filename: z
+      .string()
+      .optional()
+      .describe('文件名（msgtype=image 时可选，上传时透传，如 image.png；缺省从 media 推断）'),
+    articles: z
+      .array(
+        z.object({
+          title: z.string().min(1).describe('图文标题（必填）'),
+          description: z.string().optional().describe('图文描述/摘要（可选）'),
+          url: z.string().optional().describe('跳转链接（可选，HTTPS URL）'),
+          picurl: z.string().optional().describe('封面图片 URL（可选，HTTPS URL，无则不展示封面，不做上传）'),
+        }),
+      )
+      .optional()
+      .describe('图文 articles（msgtype=mpnews 时必填其一：与 mpnews 二选一；picurl 可选，缺省也能发）'),
+    mpnews: z
+      .object({
+        articles: z
+          .array(
+            z.object({
+              title: z.string().min(1),
+              thumb_media_id: z.string().optional(),
+              author: z.string().optional(),
+              content_source_url: z.string().optional(),
+              content: z.string().optional(),
+              digest: z.string().optional(),
+              description: z.string().optional(),
+              url: z.string().optional(),
+              picurl: z.string().optional(),
+            }),
+          )
+          .optional(),
+      })
+      .or(
+        z.array(
+          z.object({
+            title: z.string().min(1),
+            description: z.string().optional(),
+            url: z.string().optional(),
+            picurl: z.string().optional(),
+          }),
+        ),
+      )
+      .optional()
+      .describe('mpnews 原始体（兼容旧调用：{articles:[{title,digest,url,picurl}]} 或直接 articles 数组）；picurl 均为可选'),
+  })
+  .refine(
+    (data) => {
+      const t = (data.msgtype ?? 'text') as string;
+      if (t === 'text' || t === 'markdown') {
+        return typeof data.text === 'string' && data.text.trim().length > 0;
+      }
+      return true;
+    },
+    { message: 'text 不能为空（msgtype=text/markdown 时必填）', path: ['text'] },
+  );
+
+type WecomReplyArgs = z.infer<typeof wecomReplySchema>;
+
 /**
  * 构建工具集（service 闭包注入，controller 构造时调用一次）。
  * handler 签名 `(ctx, args)`：ctx.workerId 为 controller 透传的 header 值；
@@ -408,8 +578,7 @@ export function buildPlatformMcpTools(
       description:
         '查询任务群聊的历史消息（按需拉取，替代自动注入的群聊历史）。返回消息数组 [{id, senderType, senderId, text, createdAt}]。',
       inputSchema: chatHistorySchema,
-      handler: (ctx, args) =>
-        service.chatHistory(ctx, args as ChatHistoryArgs),
+      handler: (ctx, args) => service.chatHistory(ctx, args as ChatHistoryArgs),
     },
     {
       name: 'doclib',
@@ -428,7 +597,7 @@ export function buildPlatformMcpTools(
     {
       name: 'group_post',
       description:
-        '向任务群聊发布消息（senderType=agent，发送者=你的实例 selfInstanceId）。fileRef 可选：命中该任务已归档产出物文件时作为群聊附件。返回 {messageId, channelId, attachment}。',
+        '向任务群聊发布消息（senderType=agent，发送者=你的实例 selfInstanceId）。用于内部群聊沟通，不用于回复企微用户（企微消息请用 wecom_reply）。fileRef 可选：命中该任务已归档产出物文件时作为群聊附件。返回 {messageId, channelId, attachment}。',
       inputSchema: groupPostSchema,
       handler: (ctx, args) => service.groupPost(ctx, args as GroupPostArgs),
     },
@@ -518,7 +687,8 @@ export function buildPlatformMcpTools(
       description:
         '检索平台记忆（按需检索，替代自动注入）。默认聚合当前任务可见的 task+project+global 三级记忆（已软删不返回），可按 query(level/content/description)/tags 过滤，结果按创建时间倒序。返回 [{id, level, content, description, tags, createdBy, createdAt}]。首屏用 description 索引，按需拉 content。',
       inputSchema: memorySearchSchema,
-      handler: (ctx, args) => service.memorySearch(ctx, args as MemorySearchArgs),
+      handler: (ctx, args) =>
+        service.memorySearch(ctx, args as MemorySearchArgs),
     },
     {
       name: 'plan_submit',
@@ -578,6 +748,20 @@ export function buildPlatformMcpTools(
       inputSchema: teamAddMemberSchema,
       handler: (ctx, args) =>
         service.teamAddMember(ctx, args as TeamAddMemberArgs),
+    },
+    {
+      name: 'channel_send',
+      description:
+        'Agent-decided outbound notification: send text/markdown to a notification channel bound to the current task (webhook/wecom_group_robot). This is the SOLE way to trigger outbound webhook notifications — auto-push on task status/agent reply is disabled. Decide when to notify based on task context.',
+      inputSchema: channelSendSchema,
+      handler: (ctx, args) => service.channelSend(ctx, args as ChannelSendArgs),
+    },
+    {
+      name: 'wecom_reply',
+      description:
+        '回复企业微信私聊或群@消息（唯一 conversational 回流入企微入口，通过 wecom_aibot 长连接）。支持类型：msgtype=text|markdown|template_card|image|mpnews（默认 text）。text/markdown 走 replyStream/finishStream 替换占位并镜像群聊；template_card 需 card JSON（card_type+main_title 必填，icon_url/pic_url/image_url 等图片字段均为可选不传也能发：如 {card_type:"text_notice", main_title:{title:"标题"}} 即可），优先 replyTemplateCard/被动回复否则 sendMessage 主动推送；image 需 media(文件路径/fileRef, 仅此类型需本地文件) 或 mediaId 二选一 + 可选 filename；mpnews 图文需 articles 或 mpnews 二选一（每篇仅 title 必填，picurl/description/url 均可选，无 picurl 也能发，自动映射为 news_notice 卡片无需上传）。\n\n【msgtype 选型指南｜何时用哪种】\n| msgtype | 适用场景 | 典型例子 | 媒体/图片说明 |\n| text | 私聊/群@ 简单文本回复，无格式需求 | 问候、确认、简短答复、状态回告 | 无图片 |\n| markdown | 需要格式化、链接、列表、代码块的回复 | 带链接的说明、分步骤列表、富文本答复 | 无图片 |\n| template_card | 需交互（按钮/跳转/投票）或结构化展示 | 审批/确认按钮、投票、通知卡片；4类 card_type：text_notice(通知)、news_notice(单图文)、button_interaction(交互按钮)、vote_interaction(投票) | card 内 pic_url/image_url/icon_url 均为可选 HTTPS URL，不传也能发 |\n| image | 需发送图片（图表、截图、可视化结果） | 生成的图表、截图、二维码 | 仅此类型需本地文件：media(工作区路径/fileRef) 或 mediaId 二选一，服务端自动上传 |\n| mpnews | 需发送多图文消息 | 文档列表、新闻推送、多文章合集 | articles 每篇仅 title 必填，picurl/description/url 均为可选 HTTPS URL，无 picurl 也能发，无需上传 |\n\n常见会话场景：私聊直回（atUser 忽略直回发送者）、群聊 @回复（atUser=true 自动 @发送者）、卡片交互回调后更新/再发卡片、图文推送。不要用 channel_send/group_post 回复企微用户。\n\n示例：{msgtype:"template_card", card:{card_type:"text_notice", main_title:{title:"标题"}}}；{msgtype:"mpnews", articles:[{title:"标题", description:"摘要", url:"https://example.com"}]}。',
+      inputSchema: wecomReplySchema,
+      handler: (ctx, args) => service.wecomReply(ctx, args as WecomReplyArgs),
     },
   ];
 }

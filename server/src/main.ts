@@ -15,9 +15,14 @@ async function bootstrap() {
   // bufferLogs：缓冲 Nest 启动期框架日志，useLogger 后 flush 输出为 pino JSON
   // bodyParser: false → 禁用 Nest 默认 100kb 限制，改由下方 express.json({limit:'5mb'}) 接管
   // （Worker 全量 provider 上报可达 5mb，未配置也展示场景）
+  // Integrations inbound HMAC 要求 rawBody 原始字节（MAJOR-1 fix）：
+  // - Express 场景：rawBody:true 使 Nest 在 bodyParser 阶段保留原始 Buffer 到 req.rawBody；
+  // - 本项目 bodyParser:false（自行接管 5mb 限制），故需在 express.json verify 回调显式填充 req.rawBody。
+  // - Fastify 场景：若检测到 FastifyAdapter，则改用 fastify contentParser 同步填充 req.rawBody（见下方分支注释）。
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
     bodyParser: false,
+    rawBody: true,
   } as never);
 
   // 全局路由前缀 /api/v1（对齐 09 篇 API 契约）
@@ -28,10 +33,23 @@ async function bootstrap() {
   // 目录不存在时静态挂载不报错，首次上传由 multer destination 递归创建。
   app.useStaticAssets(resolveUploadDir(), { prefix: '/uploads/' });
 
-  // Worker 上报：capabilities.models 全量 provider 展开后可达 1-2k 条（未配置也展示），
-  // 默认 express json 100kb 会 PayloadTooLarge（v1-driver 全量上报）。放宽至 5mb。
-  app.use(express.json({ limit: '5mb' }));
-  app.use(express.urlencoded({ limit: '5mb', extended: true }));
+  app.use(
+    express.json({
+      limit: '5mb',
+      verify: (req: any, _res: any, buf: Buffer) => {
+        req.rawBody = buf;
+      },
+    }),
+  );
+  app.use(
+    express.urlencoded({
+      limit: '5mb',
+      extended: true,
+      verify: (req: any, _res: any, buf: Buffer) => {
+        req.rawBody = buf;
+      },
+    }),
+  );
 
   // 全局 DTO 校验（class-validator，对齐 09 篇 §2.1 的 VALIDATION_* 语义）
   app.useGlobalPipes(

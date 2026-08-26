@@ -21,9 +21,12 @@ describe('ProjectMembershipGuard', () => {
   let reflector: { getAllAndOverride: jest.Mock };
 
   const buildGuard = () =>
-    new ProjectMembershipGuard(prisma as unknown as PrismaService, {
-      getAllAndOverride: reflector.getAllAndOverride,
-    } as unknown as Reflector);
+    new ProjectMembershipGuard(
+      prisma as unknown as PrismaService,
+      {
+        getAllAndOverride: reflector.getAllAndOverride,
+      } as unknown as Reflector,
+    );
 
   const buildContext = (opts: {
     user?: { id: string } | null;
@@ -159,7 +162,10 @@ describe('ProjectMembershipGuard', () => {
     prisma.task.findUnique.mockResolvedValue(null);
 
     const guard = buildGuard();
-    const ctx = buildContext({ user: { id: 'u_1' }, params: { id: 't_missing' } });
+    const ctx = buildContext({
+      user: { id: 'u_1' },
+      params: { id: 't_missing' },
+    });
 
     await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(
       NotFoundException,

@@ -36,7 +36,8 @@ export class RolesService {
       data: {
         id: `r_${Date.now()}`,
         name,
-        permissions: (permissions ?? emptyPermissions()) as Prisma.InputJsonValue,
+        permissions: (permissions ??
+          emptyPermissions()) as Prisma.InputJsonValue,
         scopes: (scopes ?? DEFAULT_SCOPES) as Prisma.InputJsonValue,
         isBuiltin: false,
       },

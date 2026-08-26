@@ -1,12 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import {
-  IsIn,
-  IsInt,
-  IsOptional,
-  IsString,
-  Min,
-} from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
 
 /**
  * GET /models 查询参数（enabled 过滤 + providerID/modelID/name 模糊搜索 + 分页，
@@ -40,7 +34,11 @@ export class QueryModelsDto {
   @IsString()
   name?: string;
 
-  @ApiPropertyOptional({ description: '页码（从 1 起）', default: 1, minimum: 1 })
+  @ApiPropertyOptional({
+    description: '页码（从 1 起）',
+    default: 1,
+    minimum: 1,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -54,7 +52,10 @@ export class QueryModelsDto {
   @Min(1)
   pageSize?: number;
 
-  @ApiPropertyOptional({ description: 'provider 类型过滤（cloud|local|custom）', enum: ['cloud', 'local', 'custom'] })
+  @ApiPropertyOptional({
+    description: 'provider 类型过滤（cloud|local|custom）',
+    enum: ['cloud', 'local', 'custom'],
+  })
   @IsOptional()
   @IsString()
   @IsIn(['cloud', 'local', 'custom'])

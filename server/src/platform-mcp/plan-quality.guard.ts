@@ -77,7 +77,8 @@ const QA_EMPTY_TALK_PATTERN =
   /^(仅|再|先|重新|认真|仔细|严格)?(进行|做|跑)?(一下)?(测试|验证|确认|检查|自测|回归)[一下的吗。.！!？?\s]*$/;
 
 /** acceptance 纯结论词：整段只有这些词的组合视为不可判定。 */
-const ACCEPTANCE_EMPTY_PATTERN = /^[\s正常可用完成okokay通过没问题,，。.!！的]+$/i;
+const ACCEPTANCE_EMPTY_PATTERN =
+  /^[\s正常可用完成okokay通过没问题,，。.!！的]+$/i;
 
 export interface PlanQualityInput {
   title: string;
@@ -108,7 +109,9 @@ function hasQaStructureSignal(qa: string): boolean {
  * 对单条计划子任务执行质量预检。纯函数、零 IO——错误信息直接面向
  * 提交方（主 Agent）书写：指明字段、说明缺陷、给出正确示例。
  */
-export function validatePlanTaskQuality(task: PlanQualityInput): PlanQualityResult {
+export function validatePlanTaskQuality(
+  task: PlanQualityInput,
+): PlanQualityResult {
   const errors: string[] = [];
   const warnings: string[] = [];
   const at = (field: string, problem: string, fix: string) =>
@@ -118,15 +121,27 @@ export function validatePlanTaskQuality(task: PlanQualityInput): PlanQualityResu
   const qa = task.qa.trim();
   if (qa.length < 8) {
     errors.push(
-      at('qa', `内容过短（${qa.length} 字符），无法作为机器可执行的验证依据`, '请按「工具＋步骤＋预期结果」重写，如 "curl POST /api/v1/users 缺少 name 字段，断言返回 400"'),
+      at(
+        'qa',
+        `内容过短（${qa.length} 字符），无法作为机器可执行的验证依据`,
+        '请按「工具＋步骤＋预期结果」重写，如 "curl POST /api/v1/users 缺少 name 字段，断言返回 400"',
+      ),
     );
   } else if (QA_EMPTY_TALK_PATTERN.test(qa)) {
     errors.push(
-      at('qa', '属于纯空话表述（只有测试/验证类动词，没有工具与步骤）', '请写明用什么工具、执行什么步骤、期望什么结果，如 "playwright 打开 /login 输入错误密码提交，断言出现『密码错误』提示"'),
+      at(
+        'qa',
+        '属于纯空话表述（只有测试/验证类动词，没有工具与步骤）',
+        '请写明用什么工具、执行什么步骤、期望什么结果，如 "playwright 打开 /login 输入错误密码提交，断言出现『密码错误』提示"',
+      ),
     );
   } else if (!hasQaToolToken(qa) && !hasQaStructureSignal(qa)) {
     errors.push(
-      at('qa', '未包含任何可执行工具或结构化步骤（无工具词/路径/命令/断言特征）', '请补充具体验证手段，如 playwright/curl/jest/git diff/接口路径/CLI 命令等'),
+      at(
+        'qa',
+        '未包含任何可执行工具或结构化步骤（无工具词/路径/命令/断言特征）',
+        '请补充具体验证手段，如 playwright/curl/jest/git diff/接口路径/CLI 命令等',
+      ),
     );
   }
 
@@ -134,11 +149,19 @@ export function validatePlanTaskQuality(task: PlanQualityInput): PlanQualityResu
   const acceptance = task.acceptance.trim();
   if (acceptance.length < 6) {
     errors.push(
-      at('acceptance', `内容过短（${acceptance.length} 字符），不可判定`, '请写明可判定的通过条件，如 "访问 /login 提交错误密码返回 401 且提示文案包含『密码错误』"'),
+      at(
+        'acceptance',
+        `内容过短（${acceptance.length} 字符），不可判定`,
+        '请写明可判定的通过条件，如 "访问 /login 提交错误密码返回 401 且提示文案包含『密码错误』"',
+      ),
     );
   } else if (ACCEPTANCE_EMPTY_PATTERN.test(acceptance)) {
     errors.push(
-      at('acceptance', '属于纯结论词（"正常/可用/完成"），无法判定通过与不通过的边界', '请改为可观测的具体行为或指标，如 "构建日志出现 build finished 且退出码为 0"'),
+      at(
+        'acceptance',
+        '属于纯结论词（"正常/可用/完成"），无法判定通过与不通过的边界',
+        '请改为可观测的具体行为或指标，如 "构建日志出现 build finished 且退出码为 0"',
+      ),
     );
   }
 

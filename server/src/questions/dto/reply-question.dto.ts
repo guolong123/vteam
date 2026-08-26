@@ -9,7 +9,8 @@ import { PERMISSION_RESPONSES } from '../questions.constants';
  */
 export class ReplyQuestionDto {
   @ApiProperty({
-    description: 'question 答复：Array<Array<string>>（label 数组，顺序对应 questions）；null=拒绝',
+    description:
+      'question 答复：Array<Array<string>>（label 数组，顺序对应 questions）；null=拒绝',
     type: 'array',
     items: { type: 'array', items: { type: 'string' } },
     required: false,

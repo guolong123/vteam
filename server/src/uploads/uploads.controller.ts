@@ -60,17 +60,20 @@ export class UploadsController {
         file: {
           type: 'string',
           format: 'binary',
-          description: '待上传文件（白名单扩展名：pdf/doc/docx/xls/xlsx/csv/png/jpg/jpeg/gif/md/txt，上限 10MB）',
+          description:
+            '待上传文件（白名单扩展名：pdf/doc/docx/xls/xlsx/csv/png/jpg/jpeg/gif/md/txt，上限 10MB）',
         },
         taskId: {
           type: 'string',
-          description: '可选：关联任务 id，存在时落盘后同步归档为 file 产出物（进文档库）',
+          description:
+            '可选：关联任务 id，存在时落盘后同步归档为 file 产出物（进文档库）',
         },
       },
     },
   })
   @ApiOperation({
-    summary: '通用文件上传（diskStorage 落盘，UUID 文件名，返回 /uploads 可访问 URL；带 taskId 时同步归档）',
+    summary:
+      '通用文件上传（diskStorage 落盘，UUID 文件名，返回 /uploads 可访问 URL；带 taskId 时同步归档）',
   })
   async upload(
     @UploadedFile() file: StoredFile | undefined,

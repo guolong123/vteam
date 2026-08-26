@@ -26,7 +26,8 @@ export class UpdateGitRepoDto {
   credentialId?: string;
 
   @ApiPropertyOptional({
-    description: '授权 Agent 全量覆盖（缺省不变；提供则先软撤旧授权再写入新授权）',
+    description:
+      '授权 Agent 全量覆盖（缺省不变；提供则先软撤旧授权再写入新授权）',
     type: [GitGrantInput],
   })
   @IsOptional()

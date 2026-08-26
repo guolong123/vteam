@@ -19,7 +19,10 @@ export class CreateUserDto {
   @MaxLength(64)
   username: string;
 
-  @ApiProperty({ description: '明文密码，bcrypt 哈希后落库', example: 'passw0rd' })
+  @ApiProperty({
+    description: '明文密码，bcrypt 哈希后落库',
+    example: 'passw0rd',
+  })
   @IsString()
   @IsNotEmpty()
   @MinLength(6)
@@ -32,7 +35,10 @@ export class CreateUserDto {
   @MaxLength(128)
   displayName: string;
 
-  @ApiPropertyOptional({ description: '可选邮箱，唯一', example: 'alice@x.com' })
+  @ApiPropertyOptional({
+    description: '可选邮箱，唯一',
+    example: 'alice@x.com',
+  })
   @IsOptional()
   @IsEmail()
   @MaxLength(255)

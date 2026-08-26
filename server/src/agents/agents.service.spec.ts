@@ -153,7 +153,10 @@ describe('AgentsService', () => {
 
   describe('findAll（列表：type 过滤 + 分页 + 扩展字段）', () => {
     it('无参返回全部 Agent，含扩展字段（skillIds/toolEffects/baseAgentId/permissionScope/defaultModelId）', async () => {
-      prisma.$transaction.mockResolvedValue([templateRows.length, templateRows]);
+      prisma.$transaction.mockResolvedValue([
+        templateRows.length,
+        templateRows,
+      ]);
 
       const result = await service.findAll();
 
@@ -312,7 +315,10 @@ describe('AgentsService', () => {
       expect(prisma.agentSkill.create).toHaveBeenCalledTimes(2);
       expect(prisma.agentSkill.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ agentId: 'a_0000000005', skillId: 's_skill1' }),
+          data: expect.objectContaining({
+            agentId: 'a_0000000005',
+            skillId: 's_skill1',
+          }),
         }),
       );
       expect(prisma.agentToolEffect.create).toHaveBeenCalledTimes(1);
@@ -351,7 +357,10 @@ describe('AgentsService', () => {
 
     it('persona 落库：DTO 传 persona 时写入 agents.persona，不改写 prompt（运行时拼接）', async () => {
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
-      prisma.agent.create.mockResolvedValue({ ...customRow, persona: 'strict' });
+      prisma.agent.create.mockResolvedValue({
+        ...customRow,
+        persona: 'strict',
+      });
 
       await service.create('u_admin', {
         name: '数据分析师',
@@ -463,12 +472,14 @@ describe('AgentsService', () => {
     it('克隆源不存在 → 404 AGENT_NOT_FOUND', async () => {
       prisma.agent.findUnique.mockResolvedValue(null);
 
-      await expect(service.clone('u_admin', 'a_nonexistent', {})).rejects.toThrow(
-        NotFoundException,
-      );
-      await expect(service.clone('u_admin', 'a_nonexistent', {})).rejects.toMatchObject(
-        { response: { code: AGENT_ERRORS.AGENT_NOT_FOUND } },
-      );
+      await expect(
+        service.clone('u_admin', 'a_nonexistent', {}),
+      ).rejects.toThrow(NotFoundException);
+      await expect(
+        service.clone('u_admin', 'a_nonexistent', {}),
+      ).rejects.toMatchObject({
+        response: { code: AGENT_ERRORS.AGENT_NOT_FOUND },
+      });
     });
   });
 
@@ -478,8 +489,14 @@ describe('AgentsService', () => {
         .mockResolvedValueOnce(templateRows[0]) // 存在性
         .mockResolvedValueOnce({ ...templateRows[0], prompt: '新提示词' });
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
-      prisma.agent.update.mockResolvedValue({ ...templateRows[0], prompt: '新提示词' });
-      prisma.agent.findUnique.mockResolvedValue({ ...templateRows[0], prompt: '新提示词' });
+      prisma.agent.update.mockResolvedValue({
+        ...templateRows[0],
+        prompt: '新提示词',
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        ...templateRows[0],
+        prompt: '新提示词',
+      });
 
       const result = await service.update('a_product', { prompt: '新提示词' });
 
@@ -494,10 +511,19 @@ describe('AgentsService', () => {
     it('is_0000000030：type=template 可修改 defaultModelId（不再仅单字段放行）', async () => {
       prisma.agent.findUnique
         .mockResolvedValueOnce(templateRows[0])
-        .mockResolvedValueOnce({ ...templateRows[0], defaultModelId: 'opencode-go/deepseek-v4-flash' });
+        .mockResolvedValueOnce({
+          ...templateRows[0],
+          defaultModelId: 'opencode-go/deepseek-v4-flash',
+        });
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
-      prisma.agent.update.mockResolvedValue({ ...templateRows[0], defaultModelId: 'opencode-go/deepseek-v4-flash' });
-      prisma.agent.findUnique.mockResolvedValue({ ...templateRows[0], defaultModelId: 'opencode-go/deepseek-v4-flash' });
+      prisma.agent.update.mockResolvedValue({
+        ...templateRows[0],
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        ...templateRows[0],
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
 
       const result = await service.update('a_product', {
         defaultModelId: 'opencode-go/deepseek-v4-flash',
@@ -522,8 +548,14 @@ describe('AgentsService', () => {
           defaultModelId: 'opencode-go/deepseek-v4-flash',
         });
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
-      prisma.agent.update.mockResolvedValue({ ...templateRows[0], prompt: 'x' });
-      prisma.agent.findUnique.mockResolvedValue({ ...templateRows[0], prompt: 'x' });
+      prisma.agent.update.mockResolvedValue({
+        ...templateRows[0],
+        prompt: 'x',
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        ...templateRows[0],
+        prompt: 'x',
+      });
 
       const result = await service.update('a_product', {
         defaultModelId: 'opencode-go/deepseek-v4-flash',
@@ -738,9 +770,11 @@ describe('AgentsService', () => {
     it('Agent 不存在 → 404 AGENT_NOT_FOUND', async () => {
       prisma.agent.findUnique.mockResolvedValue(null);
 
-      await expect(service.update('a_nonexistent', { prompt: 'x' })).rejects.toMatchObject(
-        { response: { code: AGENT_ERRORS.AGENT_NOT_FOUND } },
-      );
+      await expect(
+        service.update('a_nonexistent', { prompt: 'x' }),
+      ).rejects.toMatchObject({
+        response: { code: AGENT_ERRORS.AGENT_NOT_FOUND },
+      });
     });
 
     it('persona 更新：传 persona 写入 agents.persona，null 清除性格（不触碰 prompt）', async () => {
@@ -750,7 +784,10 @@ describe('AgentsService', () => {
       prisma.agent.findUnique
         .mockResolvedValueOnce(customRow)
         .mockResolvedValueOnce({ ...customRow, persona: 'innovative' });
-      prisma.agent.update.mockResolvedValue({ ...customRow, persona: 'innovative' });
+      prisma.agent.update.mockResolvedValue({
+        ...customRow,
+        persona: 'innovative',
+      });
 
       await service.update('a_0000000005', { persona: 'innovative' });
 

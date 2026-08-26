@@ -21,7 +21,8 @@ export const UPLOAD_ERRORS = {
   FILE_NOT_READABLE: 'UPLOAD_FILE_NOT_READABLE',
 } as const;
 
-export type UploadErrorCode = (typeof UPLOAD_ERRORS)[keyof typeof UPLOAD_ERRORS];
+export type UploadErrorCode =
+  (typeof UPLOAD_ERRORS)[keyof typeof UPLOAD_ERRORS];
 
 /** 文件类型白名单（扩展名，小写；对齐任务要求：pdf/doc/docx/xlsx/csv/png/jpg/jpeg/gif/md/txt 等）。 */
 export const ALLOWED_EXTENSIONS = [

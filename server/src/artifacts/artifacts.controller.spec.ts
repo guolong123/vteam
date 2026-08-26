@@ -8,7 +8,9 @@ import { ArtifactsService } from './artifacts.service';
 describe('ArtifactsController', () => {
   let controller: ArtifactsController;
   const service = {
-    findByTask: jest.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 }),
+    findByTask: jest
+      .fn()
+      .mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 }),
     findOne: jest.fn(),
     findVersion: jest.fn(),
     append: jest.fn(),
@@ -34,7 +36,12 @@ describe('ArtifactsController', () => {
 
   it('GET /tasks/:id/artifacts：转发 findByTask（id + 查询参数）', async () => {
     await expect(
-      controller.findByTask('t_0000000001', { type: 'text', accepted: 'true', page: 1, pageSize: 20 }),
+      controller.findByTask('t_0000000001', {
+        type: 'text',
+        accepted: 'true',
+        page: 1,
+        pageSize: 20,
+      }),
     ).resolves.toEqual({ items: [], total: 0, page: 1, pageSize: 20 });
     expect(service.findByTask).toHaveBeenCalledWith('t_0000000001', {
       type: 'text',
@@ -45,7 +52,10 @@ describe('ArtifactsController', () => {
   });
 
   it('GET /artifacts/:id：转发 findOne', async () => {
-    service.findOne.mockResolvedValue({ id: 'art_0000000001', currentVersion: 1 });
+    service.findOne.mockResolvedValue({
+      id: 'art_0000000001',
+      currentVersion: 1,
+    });
     await expect(controller.findOne('art_0000000001')).resolves.toEqual({
       id: 'art_0000000001',
       currentVersion: 1,
@@ -63,14 +73,20 @@ describe('ArtifactsController', () => {
   });
 
   it('POST /tasks/:id/artifacts：body 组装 payload 后转 append', async () => {
-    service.append.mockResolvedValue({ status: 'archived', artifact: { id: 'art_0000000001' } });
+    service.append.mockResolvedValue({
+      status: 'archived',
+      artifact: { id: 'art_0000000001' },
+    });
     await expect(
       controller.append('t_0000000001', {
         type: 'text',
         title: '验收结论',
         content: '通过',
       }),
-    ).resolves.toEqual({ status: 'archived', artifact: { id: 'art_0000000001' } });
+    ).resolves.toEqual({
+      status: 'archived',
+      artifact: { id: 'art_0000000001' },
+    });
     expect(service.append).toHaveBeenCalledWith('t_0000000001', {
       taskId: 't_0000000001',
       type: 'text',

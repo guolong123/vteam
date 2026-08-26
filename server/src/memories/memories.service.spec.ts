@@ -22,7 +22,9 @@ describe('MemoriesService', () => {
       seed: jest.fn(),
     };
     prisma = {
-      $transaction: jest.fn((args: Array<Promise<unknown>>) => Promise.all(args)),
+      $transaction: jest.fn((args: Array<Promise<unknown>>) =>
+        Promise.all(args),
+      ),
       memory: {
         findMany: jest.fn(),
         count: jest.fn(),
@@ -115,7 +117,10 @@ describe('MemoriesService', () => {
           level: 'task',
           taskId: 't_1',
           projectId: 'p_1',
-          OR: [{ content: { contains: '验收' } }, { description: { contains: '验收' } }],
+          OR: [
+            { content: { contains: '验收' } },
+            { description: { contains: '验收' } },
+          ],
         },
         orderBy: { createdAt: 'desc' },
         skip: 10,
@@ -125,13 +130,17 @@ describe('MemoriesService', () => {
 
     it('description 字段透传：keyword 同时命中 content 与 description', async () => {
       prisma.memory.count.mockResolvedValue(1);
-      prisma.memory.findMany.mockResolvedValue([{ id: 'me_1', description: 'token刷新' }]);
+      prisma.memory.findMany.mockResolvedValue([
+        { id: 'me_1', description: 'token刷新' },
+      ]);
 
       const out = await service.findAll({ keyword: 'token' });
 
       expect(out.items[0].description).toBe('token刷新');
       expect(prisma.memory.count).toHaveBeenCalledWith(
-        expect.objectContaining({ where: expect.objectContaining({ OR: expect.any(Array) }) }),
+        expect.objectContaining({
+          where: expect.objectContaining({ OR: expect.any(Array) }),
+        }),
       );
     });
 

@@ -32,7 +32,10 @@ export class MemoriesController {
    */
   @Get()
   @UseGuards(AdminGuard)
-  @ApiOperation({ summary: '记忆列表（level/projectId/taskId 过滤 + keyword 搜索 + 分页，仅管理员）' })
+  @ApiOperation({
+    summary:
+      '记忆列表（level/projectId/taskId 过滤 + keyword 搜索 + 分页，仅管理员）',
+  })
   findAll(@Query() query: QueryMemoriesDto) {
     return this.memoriesService.findAll(query);
   }

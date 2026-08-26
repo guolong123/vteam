@@ -63,7 +63,10 @@ describe('SessionLifecycleService', () => {
       },
       $transaction: jest.fn(),
     };
-    idGen = { nextId: jest.fn().mockResolvedValue('ti_0000000001'), seed: jest.fn() };
+    idGen = {
+      nextId: jest.fn().mockResolvedValue('ti_0000000001'),
+      seed: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -249,7 +252,12 @@ describe('SessionLifecycleService', () => {
 
     it('未绑定（workerId/instanceRef 空）幂等：不触碰实例行，仅回写 created 态', async () => {
       const tx = mockUnbindTx({
-        session: { id: 's_0000000001', taskId: 't_0000000001', workerId: null, instanceRef: null },
+        session: {
+          id: 's_0000000001',
+          taskId: 't_0000000001',
+          workerId: null,
+          instanceRef: null,
+        },
       });
 
       await service.unbindSession('s_0000000001');

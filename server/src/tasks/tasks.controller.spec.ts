@@ -190,7 +190,10 @@ describe('TasksController', () => {
     });
 
     it('POST tasks/:id/team 以 req.user.id 转发 id + dto 到 updateTeam', async () => {
-      service.updateTeam.mockResolvedValue({ id: 't_1', teamAgentIds: ['a_1'] });
+      service.updateTeam.mockResolvedValue({
+        id: 't_1',
+        teamAgentIds: ['a_1'],
+      });
       const dto = {
         addInstances: [{ agentId: 'a_2' }],
         removeInstanceIds: ['ta_1'],
@@ -252,10 +255,7 @@ describe('TasksController', () => {
         await errorsOf(CreateTaskDto, {
           title: 'x',
           priority: 'high',
-          agents: [
-            { agentId: 'a_1' },
-            { agentId: 'a_1', alias: '开发者-2' },
-          ],
+          agents: [{ agentId: 'a_1' }, { agentId: 'a_1', alias: '开发者-2' }],
           mainAgentInstanceId: 'ta_2',
           mainAgentId: 'a_1',
           backgroundDocs: [{ name: 'd' }],

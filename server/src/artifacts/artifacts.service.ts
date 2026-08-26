@@ -71,7 +71,10 @@ export function validateArtifactDeclaration(input: {
     return { valid: false, reason: '非法声明：title 必填且非空字符串' };
   }
   if (input.type === 'text') {
-    if (typeof input.content !== 'string' || input.content.trim().length === 0) {
+    if (
+      typeof input.content !== 'string' ||
+      input.content.trim().length === 0
+    ) {
       return { valid: false, reason: '非法声明：type=text 时 content 必填' };
     }
   } else {
@@ -79,7 +82,10 @@ export function validateArtifactDeclaration(input: {
       typeof input.fileRef !== 'string' ||
       input.fileRef.trim().length === 0
     ) {
-      return { valid: false, reason: '非法声明：type=doc/file 时 fileRef 必填' };
+      return {
+        valid: false,
+        reason: '非法声明：type=doc/file 时 fileRef 必填',
+      };
     }
   }
   return { valid: true };
@@ -166,8 +172,10 @@ export class ArtifactsService implements OnModuleInit {
     // P2：doc/file 且携带真实内容（worker 完成回流上送的文件正文）→ 落盘 uploads
     // 目录生成可访问 URL，替换 worker 容器路径占位（/tmp/opencode/...）——
     // 前端下载链接不再 404（原 Phase 3「doc/file 存 fileRef 路径占位」缺陷修复）。
-    let contentRef = type === 'text' ? content : (submission.fileRef ?? content);
-    let filePath = type === 'doc' || type === 'file' ? (submission.fileRef ?? null) : null;
+    let contentRef =
+      type === 'text' ? content : (submission.fileRef ?? content);
+    let filePath =
+      type === 'doc' || type === 'file' ? (submission.fileRef ?? null) : null;
     if ((type === 'doc' || type === 'file') && content.trim()) {
       const stored = await FileStorageService.saveTextFile(
         content,
@@ -177,56 +185,20 @@ export class ArtifactsService implements OnModuleInit {
       filePath = stored.url;
     }
 
-    const { artifact, current } = await this.prisma.$transaction(
-      async (tx) => {
-        const existing = await tx.artifact.findFirst({
-          where: { taskId, type, title },
-        });
-        if (!existing) {
-          const id = await this.idGen.nextId(ID_PREFIX.artifact);
-          const created = await tx.artifact.create({
-            data: { id, taskId, type, title, currentVersion: 1 },
-          });
-          const v = await tx.artifactVersion.create({
-            data: {
-              id: await this.idGen.nextId(ID_PREFIX.version),
-              artifactId: id,
-              version: 1,
-              contentRef,
-              filePath,
-              sha256,
-              acceptedFlag: false,
-              authorAgentId: meta.authorAgentId ?? null,
-              changeNote: meta.changeNote ?? null,
-            },
-          });
-          return { artifact: created, current: v };
-        }
-        // 12 篇 §7 验收联动：当前版本已验收锁定（accepted_flag=true）→ 非重复内容不可覆盖
-        const current = await tx.artifactVersion.findUnique({
-          where: {
-            artifactId_version: {
-              artifactId: existing.id,
-              version: existing.currentVersion,
-            },
-          },
-          select: { acceptedFlag: true },
-        });
-        if (current?.acceptedFlag) {
-          throw new ConflictException({
-            code: ARTIFACT_ERRORS.ARTIFACT_ACCEPTED_IMMUTABLE,
-            message: `产出物「${existing.title}」当前版本已验收锁定（v${existing.currentVersion}），不可追加`,
-          });
-        }
-        const updated = await tx.artifact.update({
-          where: { id: existing.id },
-          data: { currentVersion: existing.currentVersion + 1 },
+    const { artifact, current } = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.artifact.findFirst({
+        where: { taskId, type, title },
+      });
+      if (!existing) {
+        const id = await this.idGen.nextId(ID_PREFIX.artifact);
+        const created = await tx.artifact.create({
+          data: { id, taskId, type, title, currentVersion: 1 },
         });
         const v = await tx.artifactVersion.create({
           data: {
             id: await this.idGen.nextId(ID_PREFIX.version),
-            artifactId: existing.id,
-            version: updated.currentVersion,
+            artifactId: id,
+            version: 1,
             contentRef,
             filePath,
             sha256,
@@ -235,9 +207,43 @@ export class ArtifactsService implements OnModuleInit {
             changeNote: meta.changeNote ?? null,
           },
         });
-        return { artifact: updated, current: v };
-      },
-    );
+        return { artifact: created, current: v };
+      }
+      // 12 篇 §7 验收联动：当前版本已验收锁定（accepted_flag=true）→ 非重复内容不可覆盖
+      const current = await tx.artifactVersion.findUnique({
+        where: {
+          artifactId_version: {
+            artifactId: existing.id,
+            version: existing.currentVersion,
+          },
+        },
+        select: { acceptedFlag: true },
+      });
+      if (current?.acceptedFlag) {
+        throw new ConflictException({
+          code: ARTIFACT_ERRORS.ARTIFACT_ACCEPTED_IMMUTABLE,
+          message: `产出物「${existing.title}」当前版本已验收锁定（v${existing.currentVersion}），不可追加`,
+        });
+      }
+      const updated = await tx.artifact.update({
+        where: { id: existing.id },
+        data: { currentVersion: existing.currentVersion + 1 },
+      });
+      const v = await tx.artifactVersion.create({
+        data: {
+          id: await this.idGen.nextId(ID_PREFIX.version),
+          artifactId: existing.id,
+          version: updated.currentVersion,
+          contentRef,
+          filePath,
+          sha256,
+          acceptedFlag: false,
+          authorAgentId: meta.authorAgentId ?? null,
+          changeNote: meta.changeNote ?? null,
+        },
+      });
+      return { artifact: updated, current: v };
+    });
 
     // 12 篇 §7：completed 任务追加产出 → 自动退回 in_progress（CAS 命中才广播）
     const reverted = await this.prisma.task.updateMany({
@@ -298,7 +304,11 @@ export class ArtifactsService implements OnModuleInit {
       select: { artifactId: true, version: true },
     });
     if (dup) {
-      return { artifactId: dup.artifactId, version: dup.version, status: 'duplicate' };
+      return {
+        artifactId: dup.artifactId,
+        version: dup.version,
+        status: 'duplicate',
+      };
     }
     const artifactTitle = args.title ?? args.storedName;
     const result = await this.prisma.$transaction(async (tx) => {
@@ -308,7 +318,13 @@ export class ArtifactsService implements OnModuleInit {
       if (!existing) {
         const id = await this.idGen.nextId(ID_PREFIX.artifact);
         await tx.artifact.create({
-          data: { id, taskId, type: 'file', title: artifactTitle, currentVersion: 1 },
+          data: {
+            id,
+            taskId,
+            type: 'file',
+            title: artifactTitle,
+            currentVersion: 1,
+          },
         });
         await tx.artifactVersion.create({
           data: {
@@ -336,7 +352,9 @@ export class ArtifactsService implements OnModuleInit {
         select: { acceptedFlag: true },
       });
       if (current?.acceptedFlag) {
-        throw new Error(`产出物「${existing.title}」当前版本已验收锁定，不可追加`);
+        throw new Error(
+          `产出物「${existing.title}」当前版本已验收锁定，不可追加`,
+        );
       }
       const updated = await tx.artifact.update({
         where: { id: existing.id },
@@ -461,7 +479,9 @@ export class ArtifactsService implements OnModuleInit {
   }
 
   async remove(artifactId: string): Promise<void> {
-    const artifact = await this.prisma.artifact.findUnique({ where: { id: artifactId } });
+    const artifact = await this.prisma.artifact.findUnique({
+      where: { id: artifactId },
+    });
     if (!artifact) {
       throw new NotFoundException({
         code: ARTIFACT_ERRORS.ARTIFACT_NOT_FOUND,
@@ -509,7 +529,10 @@ export class ArtifactsService implements OnModuleInit {
     // doc/file（filePath 非空）→ 附加可访问 fileUrl（群聊转发附件映射：worker fileRef →
     // 落盘 URL，handleTaskCompleted 据此把 group_post 文件附件挂到群聊消息）
     if (current?.filePath && current?.contentRef) {
-      return { ...dto, fileUrl: FileStorageService.normalizeFileRef(current.contentRef) };
+      return {
+        ...dto,
+        fileUrl: FileStorageService.normalizeFileRef(current.contentRef),
+      };
     }
     return dto;
   }

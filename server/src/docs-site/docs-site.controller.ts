@@ -12,9 +12,7 @@ import {
   AuthenticatedUser,
   CurrentUser,
 } from '../projects/current-user.decorator';
-import {
-  DOCS_SITE_ERRORS,
-} from './docs-site.constants';
+import { DOCS_SITE_ERRORS } from './docs-site.constants';
 import { DocsMirrorService } from './docs-mirror.service';
 
 /**

@@ -43,7 +43,13 @@ function event(
   payload: Record<string, unknown>,
   eventId: string,
 ): WorkerEventDto {
-  return { workerId: 'w_0000000001', eventId, type, payload, seq: 0 } as WorkerEventDto;
+  return {
+    workerId: 'w_0000000001',
+    eventId,
+    type,
+    payload,
+    seq: 0,
+  } as WorkerEventDto;
 }
 
 /** 等待 dispatcher fire-and-forget 回调（task.completed 落库异步执行）落定。 */
@@ -53,12 +59,23 @@ function flush(): Promise<void> {
 
 describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）', () => {
   let prisma: {
-    session: { findUnique: jest.Mock; findFirst: jest.Mock; updateMany: jest.Mock; update: jest.Mock };
+    session: {
+      findUnique: jest.Mock;
+      findFirst: jest.Mock;
+      updateMany: jest.Mock;
+      update: jest.Mock;
+    };
     worker: { findUnique: jest.Mock };
     agent: { findUnique: jest.Mock };
     artifact: { findMany: jest.Mock };
     artifactVersion: { findMany: jest.Mock };
-    message: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
+    message: {
+      create: jest.Mock;
+      findMany: jest.Mock;
+      findFirst: jest.Mock;
+      update: jest.Mock;
+      updateMany: jest.Mock;
+    };
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
     task: { findUnique: jest.Mock };
     taskAgent: { findUnique: jest.Mock };
@@ -72,7 +89,10 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     getMessages: jest.Mock;
     execute: jest.Mock;
   };
-  let sessionLifecycle: { bindSessionToWorker: jest.Mock; unbindSession: jest.Mock };
+  let sessionLifecycle: {
+    bindSessionToWorker: jest.Mock;
+    unbindSession: jest.Mock;
+  };
   let artifactsService: { onArtifactSubmitted: jest.Mock };
   let config: { get: jest.Mock };
   let ingress: WorkerEventIngress;
@@ -106,14 +126,12 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     // dispatch：已绑 worker（复用，不 assignWorker/createSession）
     prisma = {
       session: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValue({
-            id: 's_0000000001',
-            workerId: 'w_0000000001',
-            instanceRef: 'ses_0001',
-            taskAgentId: 'ta_0000000001',
-          }),
+        findUnique: jest.fn().mockResolvedValue({
+          id: 's_0000000001',
+          workerId: 'w_0000000001',
+          instanceRef: 'ses_0001',
+          taskAgentId: 'ta_0000000001',
+        }),
         // instanceRef 反查：ses_ 前缀 → 平台 s_ 主键（wave1 对齐链路）
         findFirst: jest.fn().mockResolvedValue({ id: 's_0000000001' }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -128,9 +146,11 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
         }),
       },
       agent: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValue({ id: 'a_product', defaultModelId: null, baseAgentId: null }),
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'a_product',
+          defaultModelId: null,
+          baseAgentId: null,
+        }),
       },
       task: {
         findUnique: jest.fn().mockResolvedValue({
@@ -170,10 +190,16 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
       },
       chatChannel: {
         // resolveChannel 用 findFirst；delta 需要 type/taskId——一个行对象满足两者
-        findUnique: jest.fn().mockResolvedValue({ id: request.channelId, type: 'private', taskId: request.taskId }),
-        findFirst: jest
-          .fn()
-          .mockResolvedValue({ id: request.channelId, type: 'private', taskId: request.taskId }),
+        findUnique: jest.fn().mockResolvedValue({
+          id: request.channelId,
+          type: 'private',
+          taskId: request.taskId,
+        }),
+        findFirst: jest.fn().mockResolvedValue({
+          id: request.channelId,
+          type: 'private',
+          taskId: request.taskId,
+        }),
       },
     };
     realtime = {
@@ -181,18 +207,27 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
       broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }),
     };
     idGen = { nextId: jest.fn().mockResolvedValue('m_0000000002') };
-    workersService = { assignWorker: jest.fn().mockResolvedValue('w_0000000001') };
+    workersService = {
+      assignWorker: jest.fn().mockResolvedValue('w_0000000001'),
+    };
     workerClient = {
       createSession: jest.fn(),
       promptAsync: jest.fn().mockResolvedValue(undefined),
       getMessages: jest.fn().mockResolvedValue([]),
       execute: jest.fn().mockResolvedValue(undefined),
     };
-    sessionLifecycle = { bindSessionToWorker: jest.fn(), unbindSession: jest.fn() };
-    artifactsService = { onArtifactSubmitted: jest.fn().mockResolvedValue({ status: 'archived' }) };
+    sessionLifecycle = {
+      bindSessionToWorker: jest.fn(),
+      unbindSession: jest.fn(),
+    };
+    artifactsService = {
+      onArtifactSubmitted: jest.fn().mockResolvedValue({ status: 'archived' }),
+    };
     workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'keta-int-'));
     config = {
-      get: jest.fn((key: string) => (key === 'WORK_DIR' ? workRoot : undefined)),
+      get: jest.fn((key: string) =>
+        key === 'WORK_DIR' ? workRoot : undefined,
+      ),
     };
 
     // 真实 ingress + 真实 dispatcher（构造即接线回流回调）
@@ -278,7 +313,11 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     });
     expect(realtime.emit).toHaveBeenCalledWith(
       EVENT_TYPES.SESSION_UPDATED,
-      { sessionId: 's_0000000001', status: 'running', workerId: 'w_0000000001' },
+      {
+        sessionId: 's_0000000001',
+        status: 'running',
+        workerId: 'w_0000000001',
+      },
       { type: 'task', id: request.taskId },
     );
 
@@ -359,12 +398,18 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     });
     expect(realtime.broadcast).toHaveBeenCalledWith(
       EVENT_TYPES.CHAT_MESSAGE_NEW,
-      expect.objectContaining({ message: expect.objectContaining({ status: MESSAGE_STATUS.sent }) }),
+      expect.objectContaining({
+        message: expect.objectContaining({ status: MESSAGE_STATUS.sent }),
+      }),
       { type: 'channel', id: request.channelId },
     );
     expect(finals).toHaveLength(1);
     expect(finals[0]).toEqual(
-      expect.objectContaining({ taskId: request.taskId, agentId: 'a_product', text: '最终结论' }),
+      expect.objectContaining({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        text: '最终结论',
+      }),
     );
 
     // 5. session.updated(idle)：反查 s_ 主键落库 + emit
@@ -406,7 +451,9 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     await jest.advanceTimersByTimeAsync(0);
     expect(errors).toHaveLength(0);
     expect(
-      realtime.broadcast.mock.calls.some((c) => c[0] === EVENT_TYPES.AGENT_ERROR),
+      realtime.broadcast.mock.calls.some(
+        (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
+      ),
     ).toBe(false);
     jest.useRealTimers();
   });
@@ -431,7 +478,10 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
       (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
     );
     expect(agentError?.[1]).toEqual(
-      expect.objectContaining({ level: 'retry', errorType: 'first_token_timeout' }),
+      expect.objectContaining({
+        level: 'retry',
+        errorType: 'first_token_timeout',
+      }),
     );
     jest.useRealTimers();
   });

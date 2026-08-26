@@ -13,7 +13,10 @@ const mockPrisma = {
   project: { upsert: jest.fn().mockResolvedValue({}) },
   projectMember: { upsert: jest.fn().mockResolvedValue({}) },
   agent: { upsert: jest.fn().mockResolvedValue({}) },
-  model: { findMany: jest.fn().mockResolvedValue([]), upsert: jest.fn().mockResolvedValue({}) },
+  model: {
+    findMany: jest.fn().mockResolvedValue([]),
+    upsert: jest.fn().mockResolvedValue({}),
+  },
   workerModelAvailability: { deleteMany: jest.fn().mockResolvedValue({}) },
   tool: { upsert: jest.fn().mockResolvedValue({}) },
   mcpServer: { upsert: jest.fn().mockResolvedValue({}) },

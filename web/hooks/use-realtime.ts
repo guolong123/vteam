@@ -39,7 +39,7 @@ const EVENT = {
 /* ------------------------------ 事件 payload 类型（对齐后端） ------------------------------ */
 
 /** 消息发送方（对齐 event.constants SENDER_TYPE）。 */
-export type RealtimeSenderType = "user" | "agent" | "system";
+export type RealtimeSenderType = "user" | "agent" | "system" | "external";
 
 /** 消息内容（后端 messages.content Json：{text, parts}；Phase 2 parts 恒空数组）。 */
 export interface RealtimeMessageContent {

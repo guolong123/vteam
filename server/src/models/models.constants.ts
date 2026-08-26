@@ -19,5 +19,4 @@ export const MODEL_ERRORS = {
 export const MODEL_PROVIDER_TYPES = ['cloud', 'local', 'custom'] as const;
 export type ModelProviderType = (typeof MODEL_PROVIDER_TYPES)[number];
 
-export type ModelErrorCode =
-  (typeof MODEL_ERRORS)[keyof typeof MODEL_ERRORS];
+export type ModelErrorCode = (typeof MODEL_ERRORS)[keyof typeof MODEL_ERRORS];

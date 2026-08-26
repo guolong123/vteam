@@ -1412,6 +1412,29 @@ function MessageList({
             )
           : [];
 
+        if ((msg as unknown as { senderType: string }).senderType === "external") {
+          return (
+            <ChatBubble
+              key={msg.id}
+              text={(msg.content?.text ?? "") as string}
+              type="agent"
+              author={author}
+              role={role}
+              time={formatTime(msg.createdAt)}
+              senderType="external"
+              attachment={
+                msg.attachmentUrl
+                  ? {
+                      url: msg.attachmentUrl,
+                      name: msg.attachmentName ?? msg.attachmentUrl,
+                      ext: msg.attachmentType ?? "",
+                    }
+                  : undefined
+              }
+            />
+          );
+        }
+
         // Agent 消息：parts 过程片段（thinking/tool/error/aborted）+ 正文置底（MsgParts，T14）；
         // status=processing 为流式中间态（message.part.delta 累积），正文走「生成中」流式块
         if (msg.senderType === "agent") {
@@ -2251,6 +2274,54 @@ function ReviewDialog({
   );
 }
 
+function TaskChannelBindingSection({ taskId }: { taskId: string }) {
+  const [msgIds, setMsgIds] = useState<string[]>([]);
+  const [notifIds, setNotifIds] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const allMsgQ = useQuery({ queryKey: ["message-channels"], queryFn: () => api.get<any[]>("/message-channels") });
+  const allNotifQ = useQuery({ queryKey: ["notification-channels"], queryFn: () => api.get<any[]>("/notification-channels") });
+  const boundMsgQ = useQuery({ queryKey: ["task", taskId, "message-channels"], queryFn: () => api.get<any[]>(`/tasks/${taskId}/message-channels`), enabled: !!taskId });
+  const boundNotifQ = useQuery({ queryKey: ["task", taskId, "notification-channels"], queryFn: () => api.get<any[]>(`/tasks/${taskId}/notification-channels`), enabled: !!taskId });
+  useEffect(() => { if (boundMsgQ.data) setMsgIds((boundMsgQ.data as any[]).map((c: any) => c.id)); }, [boundMsgQ.data]);
+  useEffect(() => { if (boundNotifQ.data) setNotifIds((boundNotifQ.data as any[]).map((c: any) => c.id)); }, [boundNotifQ.data]);
+  const handleSave = async () => {
+    setSaving(true); setMsg(null);
+    try {
+      await api.post(`/tasks/${taskId}/message-channels`, { messageChannelIds: msgIds });
+      await api.post(`/tasks/${taskId}/notification-channels`, { notificationChannelIds: notifIds });
+      setMsg("绑定已保存");
+    } catch (e) { setMsg(isApiError(e) ? e.message : "保存失败"); }
+    setSaving(false);
+    setTimeout(() => setMsg(null), 2500);
+  };
+  return (
+    <div data-testid="task-channel-binding-section" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: space.md }}>
+      <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>渠道绑定</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>消息渠道</span>
+        {(allMsgQ.data as any[] ?? []).length === 0 ? <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{allMsgQ.isPending ? "加载中…" : "暂无"}</span> : (allMsgQ.data as any[]).map((c: any) => (
+          <label key={c.id} style={{ display: "flex", alignItems: "center", gap: space.sm, cursor: "pointer" }}>
+            <input type="checkbox" data-testid="task-message-channel-checkbox" data-channel-id={c.id} checked={msgIds.includes(c.id)} onChange={(e) => setMsgIds((prev) => e.target.checked ? [...prev, c.id] : prev.filter((x) => x !== c.id))} />
+            <span style={{ fontSize: fontSize.sm, color: neutral[700] }}>{c.name}</span>
+          </label>
+        ))}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>通知渠道</span>
+        {(allNotifQ.data as any[] ?? []).length === 0 ? <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{allNotifQ.isPending ? "加载中…" : "暂无"}</span> : (allNotifQ.data as any[]).map((c: any) => (
+          <label key={c.id} style={{ display: "flex", alignItems: "center", gap: space.sm, cursor: "pointer" }}>
+            <input type="checkbox" data-testid="task-notification-channel-checkbox" data-channel-id={c.id} checked={notifIds.includes(c.id)} onChange={(e) => setNotifIds((prev) => e.target.checked ? [...prev, c.id] : prev.filter((x) => x !== c.id))} />
+            <span style={{ fontSize: fontSize.sm, color: neutral[700] }}>{c.name}</span>
+          </label>
+        ))}
+      </div>
+      <button type="button" data-testid="task-channel-binding-save" disabled={saving} onClick={handleSave} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#FFF", cursor: saving ? "default" : "pointer", opacity: saving ? 0.6 : 1, fontSize: fontSize.sm, fontWeight: 500 }}>{saving ? "保存中…" : "保存绑定"}</button>
+      {msg && <div data-testid="task-channel-binding-msg" style={{ fontSize: fontSize.xs, color: msg === "绑定已保存" ? "#059669" : "#DC2626" }}>{msg}</div>}
+    </div>
+  );
+}
+
 /* ================================ 任务信息面板（268px，对齐原型 TaskPanel，静态展示） ================================ */
 function TaskPanel({
   task,
@@ -2886,6 +2957,7 @@ function TaskPanel({
           </div>
         )}
       </div>
+      <TaskChannelBindingSection taskId={task.id} />
 
     </aside>
   );

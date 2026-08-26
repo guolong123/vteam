@@ -61,7 +61,10 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
         { provide: ModelsService, useValue: service },
         // 方法级 @UseGuards(AdminGuard) 会在 compile 时实例化 guard，
         // AdminGuard 依赖全局 PrismaService，提供 mock 占位
-        { provide: PrismaService, useValue: { user: { findUnique: jest.fn() } } },
+        {
+          provide: PrismaService,
+          useValue: { user: { findUnique: jest.fn() } },
+        },
       ],
     }).compile();
 
@@ -69,7 +72,12 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
   });
 
   it('GET /models 转发 findAll（查询参数透传）', async () => {
-    service.findAll.mockResolvedValue({ items: [modelRow], total: 1, page: 1, pageSize: 20 });
+    service.findAll.mockResolvedValue({
+      items: [modelRow],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    });
     const query = { enabled: true, name: 'deep' };
 
     const result = await controller.findAll(query);
@@ -125,7 +133,11 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
   });
 
   it('POST /models 转发 create（DTO 透传）', async () => {
-    const dto = { providerID: 'opencode-go', modelID: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' };
+    const dto = {
+      providerID: 'opencode-go',
+      modelID: 'deepseek-v4-flash',
+      name: 'DeepSeek V4 Flash',
+    };
     service.create.mockResolvedValue(modelRow);
 
     const result = await controller.create(dto);
@@ -153,7 +165,10 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
   });
 
   it('POST /models/:id/credentials 转发 setCredential（token + providerID 传服务层加密）', async () => {
-    const dto: SetModelCredentialDto = { token: 'sk-raw-token', providerID: 'opencode-go' };
+    const dto: SetModelCredentialDto = {
+      token: 'sk-raw-token',
+      providerID: 'opencode-go',
+    };
     service.setCredential.mockResolvedValue(view);
 
     const result = await controller.setCredential('md_0000000001', dto);
@@ -164,7 +179,10 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
       'opencode-go',
       undefined,
     );
-    expect(result).toMatchObject({ configured: true, fingerprint: 'sk-a****89xz' });
+    expect(result).toMatchObject({
+      configured: true,
+      fingerprint: 'sk-a****89xz',
+    });
     expect(JSON.stringify(result)).not.toContain('sk-raw-token');
   });
 
@@ -219,7 +237,10 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
     const result = await controller.getCredential('md_0000000001');
 
     expect(service.getCredential).toHaveBeenCalledWith('md_0000000001');
-    expect(result).toMatchObject({ configured: true, fingerprint: 'sk-a****89xz' });
+    expect(result).toMatchObject({
+      configured: true,
+      fingerprint: 'sk-a****89xz',
+    });
   });
 
   it('DELETE /models/:id/credentials 转发 revokeCredential', async () => {
@@ -243,8 +264,13 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
 
     const result = await controller.revokeCredentialByProvider('opencode-go');
 
-    expect(service.revokeCredentialByProvider).toHaveBeenCalledWith('opencode-go');
-    expect(result).toMatchObject({ providerID: 'opencode-go', revokedAt: expect.any(Date) });
+    expect(service.revokeCredentialByProvider).toHaveBeenCalledWith(
+      'opencode-go',
+    );
+    expect(result).toMatchObject({
+      providerID: 'opencode-go',
+      revokedAt: expect.any(Date),
+    });
   });
 
   it('路由顺序：@Delete providers 静态段在 :id 参数段之前声明（不吞 providers/:providerID/credentials）', () => {

@@ -39,6 +39,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: "models", label: "模型管理", icon: "◇" },
   { key: "git-repos", label: "仓库管理", icon: "⌗" },
   { key: "skills", label: "技能与工具", icon: "◫" },
+  { key: "integrations", label: "集成渠道", icon: "⇄" },
   { key: "messages", label: "消息中心", icon: "✉" },
   { key: "users", label: "用户管理", icon: "☷" },
   { key: "roles", label: "角色权限", icon: "⚖" },

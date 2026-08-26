@@ -5,9 +5,11 @@
  */
 export function inferErrorType(error?: string): string {
   const e = (error ?? '').toLowerCase();
-  if (/invalid api key|unauthorized|401|credential/.test(e)) return 'auth_failed';
+  if (/invalid api key|unauthorized|401|credential/.test(e))
+    return 'auth_failed';
   if (/quota|insufficient|billing/.test(e)) return 'quota_exceeded';
-  if (/timeout|model_busy|busy|rate.?limit|overloaded|try again/.test(e)) return 'model_busy';
+  if (/timeout|model_busy|busy|rate.?limit|overloaded|try again/.test(e))
+    return 'model_busy';
   return 'model_error';
 }
 

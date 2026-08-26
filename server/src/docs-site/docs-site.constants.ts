@@ -21,7 +21,8 @@ export const DOCS_SITE_ERRORS = {
   DOC_NOT_FOUND: 'DOCS_DOC_NOT_FOUND',
 } as const;
 
-export type DocsSiteErrorCode = (typeof DOCS_SITE_ERRORS)[keyof typeof DOCS_SITE_ERRORS];
+export type DocsSiteErrorCode =
+  (typeof DOCS_SITE_ERRORS)[keyof typeof DOCS_SITE_ERRORS];
 
 /** 镜像根目录默认值（相对 server 进程 cwd；生产建议挂持久卷到 /data/docs-root）。 */
 export const DEFAULT_DOCS_ROOT = 'docs-root';

@@ -36,7 +36,9 @@ describe('TaskProgressionScheduler', () => {
       agentQuestion: { findUnique: jest.fn() },
     };
     realtime = { subscribe: jest.fn(() => () => {}) };
-    workerDispatcher = { dispatchAgentMention: jest.fn().mockResolvedValue(undefined) };
+    workerDispatcher = {
+      dispatchAgentMention: jest.fn().mockResolvedValue(undefined),
+    };
     config = { get: jest.fn().mockReturnValue(undefined) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -71,7 +73,10 @@ describe('TaskProgressionScheduler', () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
       await scheduler.register('t_1');
       await scheduler.register('t_1');
-      const entry = (scheduler as any).loop.get('t_1') as { rounds: number; nextRunAt: number };
+      const entry = (scheduler as any).loop.get('t_1') as {
+        rounds: number;
+        nextRunAt: number;
+      };
       expect(entry.rounds).toBe(0);
       expect(entry.nextRunAt).toBeGreaterThan(Date.now());
     });
@@ -155,7 +160,10 @@ describe('TaskProgressionScheduler', () => {
     it('轮次上限：rounds >= maxRounds → 注销 + 不再 dispatch', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
       await scheduler.register('t_1');
-      const entry = (scheduler as any).loop.get('t_1') as { rounds: number; nextRunAt: number };
+      const entry = (scheduler as any).loop.get('t_1') as {
+        rounds: number;
+        nextRunAt: number;
+      };
       entry.nextRunAt = 0;
       entry.rounds = (scheduler as any).maxRounds - 1; // 本次触发即达上限
       await (scheduler as any).scan();
@@ -181,10 +189,7 @@ describe('TaskProgressionScheduler', () => {
 
   describe('onModuleInit', () => {
     it('重启恢复：扫描库内 in_progress 任务重建循环 + 订阅 realtime bus', async () => {
-      prisma.task.findMany.mockResolvedValue([
-        { id: 't_1' },
-        { id: 't_2' },
-      ]);
+      prisma.task.findMany.mockResolvedValue([{ id: 't_1' }, { id: 't_2' }]);
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
       await scheduler.onModuleInit();
       expect(scheduler.isRegistered('t_1')).toBe(true);

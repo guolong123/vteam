@@ -21,10 +21,10 @@ export function normalizeParts(parts: unknown): Array<Record<string, unknown>> {
 }
 
 /** 结论性 parts（群聊只保留此子集）：type==='text' && 非 synthetic（reasoning/tool 排除）。 */
-export function extractConclusionParts(parts: unknown): Array<Record<string, unknown>> {
-  return normalizeParts(parts).filter(
-    (p) => p.type === 'text' && !p.synthetic,
-  );
+export function extractConclusionParts(
+  parts: unknown,
+): Array<Record<string, unknown>> {
+  return normalizeParts(parts).filter((p) => p.type === 'text' && !p.synthetic);
 }
 
 /** 从 parts 拼接结论文本：type==='text' 且非 synthetic 的 part.text 顺序串接。 */

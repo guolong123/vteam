@@ -167,7 +167,10 @@ describe('UsersService', () => {
 
     beforeEach(() => {
       prisma.user.findUnique.mockResolvedValue(null); // username/email 均未占用
-      prisma.role.findUnique.mockResolvedValue({ id: 'r_member', name: 'member' });
+      prisma.role.findUnique.mockResolvedValue({
+        id: 'r_member',
+        name: 'member',
+      });
       prisma.user.create.mockResolvedValue({
         ...userRow,
         id: 'u_bob',
@@ -197,7 +200,10 @@ describe('UsersService', () => {
     });
 
     it('username 已被占用抛 ConflictException（USERNAME_CONFLICT）', async () => {
-      prisma.user.findUnique.mockResolvedValueOnce({ id: 'u_x', username: 'bob' });
+      prisma.user.findUnique.mockResolvedValueOnce({
+        id: 'u_x',
+        username: 'bob',
+      });
       await expect(service.create(createDto)).rejects.toThrow(
         ConflictException,
       );
@@ -252,7 +258,10 @@ describe('UsersService', () => {
       prisma.user.findUnique
         .mockResolvedValueOnce(userRow) // 目标用户存在
         .mockResolvedValueOnce(null); // email 无冲突
-      prisma.role.findUnique.mockResolvedValue({ id: 'r_member', name: 'member' });
+      prisma.role.findUnique.mockResolvedValue({
+        id: 'r_member',
+        name: 'member',
+      });
       prisma.user.update.mockResolvedValue({
         ...userRow,
         email: 'new@test.com',

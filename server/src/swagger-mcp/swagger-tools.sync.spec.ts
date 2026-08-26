@@ -138,9 +138,7 @@ describe('SwaggerToolSyncService', () => {
 
     expect(idGen.nextId).toHaveBeenCalledTimes(3);
     expect(idGen.nextId).toHaveBeenCalledWith('tl');
-    const createIds = prisma.tool.upsert.mock.calls.map(
-      (c) => c[0].create.id,
-    );
+    const createIds = prisma.tool.upsert.mock.calls.map((c) => c[0].create.id);
     expect(createIds).toEqual([
       'tl_0000000001',
       'tl_0000000002',

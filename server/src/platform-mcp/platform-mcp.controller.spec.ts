@@ -1,7 +1,4 @@
-import {
-  ForbiddenException,
-  INestApplication,
-} from '@nestjs/common';
+import { ForbiddenException, INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -33,6 +30,8 @@ describe('PlatformMcpController (HTTP)', () => {
     planGet: jest.Mock;
     planAssignReviewer: jest.Mock;
     teamAddMember: jest.Mock;
+    channelSend: jest.Mock;
+    wecomReply: jest.Mock;
   };
 
   /** 手写 JSON-RPC 端点：无需 Accept 头，直接 POST JSON 即可。 */
@@ -51,7 +50,9 @@ describe('PlatformMcpController (HTTP)', () => {
       chatHistory: jest.fn().mockResolvedValue([]),
       doclib: jest.fn().mockResolvedValue({ artifacts: [] }),
       taskContext: jest.fn().mockResolvedValue({}),
-      groupPost: jest.fn().mockResolvedValue({ messageId: 'm_1', attachment: null }),
+      groupPost: jest
+        .fn()
+        .mockResolvedValue({ messageId: 'm_1', attachment: null }),
       readFile: jest.fn().mockResolvedValue({
         content: 'x',
         fileName: 'x.txt',
@@ -113,6 +114,12 @@ describe('PlatformMcpController (HTTP)', () => {
         taskId: 't_1',
         agentId: 'a_developer',
         alias: '开发者-1',
+      }),
+      channelSend: jest.fn().mockResolvedValue({
+        content: [{ type: 'text', text: '已发送至渠道 nc_0001: hi' }],
+      }),
+      wecomReply: jest.fn().mockResolvedValue({
+        content: [{ type: 'text', text: '已回复企微用户 @张三 并同步到任务群聊' }],
       }),
     };
 
@@ -193,7 +200,7 @@ describe('PlatformMcpController (HTTP)', () => {
   });
 
   describe('tools/list', () => {
-    it('→ 返回 24 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search + plan_submit/plan_review/plan_task_transition + team_view/my_profile + plan_get/plan_assign_reviewer + team_add_member）且 inputSchema 为 JSON Schema', async () => {
+    it('→ 返回 26 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search + plan_submit/plan_review/plan_task_transition + team_view/my_profile + plan_get/plan_assign_reviewer + team_add_member + channel_send + wecom_reply）且 inputSchema 为 JSON Schema', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
@@ -202,7 +209,11 @@ describe('PlatformMcpController (HTTP)', () => {
       const tools = res.body.result.tools as Array<{
         name: string;
         description: string;
-        inputSchema: { type: string; properties: Record<string, unknown>; required: string[] };
+        inputSchema: {
+          type: string;
+          properties: Record<string, unknown>;
+          required: string[];
+        };
       }>;
       const names = tools.map((t) => t.name);
       expect(names).toEqual([
@@ -230,10 +241,19 @@ describe('PlatformMcpController (HTTP)', () => {
         'plan_get',
         'plan_assign_reviewer',
         'team_add_member',
+        'channel_send',
+        'wecom_reply',
       ]);
 
       for (const tool of tools) {
         expect(tool.description).toEqual(expect.any(String));
+        if (tool.name === 'channel_send') {
+          expect(tool.inputSchema).toMatchObject({
+            type: 'object',
+            properties: expect.objectContaining({ target: { type: 'string' } }),
+          });
+          continue;
+        }
         expect(tool.inputSchema).toMatchObject({
           type: 'object',
           properties: expect.objectContaining({ taskId: { type: 'string' } }),
@@ -242,11 +262,19 @@ describe('PlatformMcpController (HTTP)', () => {
       // 必填字段派生：chat_history 仅 taskId 必填，sinceId/limit 可选
       const chatHistory = tools.find((t) => t.name === 'chat_history')!;
       expect(chatHistory.inputSchema.required).toEqual(['taskId']);
-      expect(chatHistory.inputSchema.properties.limit).toEqual({ type: 'number' });
+      expect(chatHistory.inputSchema.properties.limit).toEqual({
+        type: 'number',
+      });
       // group_post：taskId/selfInstanceId/content 必填，fileRef 可选
       const groupPost = tools.find((t) => t.name === 'group_post')!;
-      expect(groupPost.inputSchema.required).toEqual(['taskId', 'selfInstanceId', 'content']);
-      expect(groupPost.inputSchema.properties.selfInstanceId).toEqual({ type: 'string' });
+      expect(groupPost.inputSchema.required).toEqual([
+        'taskId',
+        'selfInstanceId',
+        'content',
+      ]);
+      expect(groupPost.inputSchema.properties.selfInstanceId).toEqual({
+        type: 'string',
+      });
       // notify_agent：taskId/selfInstanceId/targetInstanceId/content 全必填
       const notifyAgent = tools.find((t) => t.name === 'notify_agent')!;
       expect(notifyAgent.inputSchema.required).toEqual([
@@ -263,12 +291,22 @@ describe('PlatformMcpController (HTTP)', () => {
         'type',
         'title',
       ]);
-      expect(submitArtifact.inputSchema.properties.type).toEqual({ type: 'string' });
+      expect(submitArtifact.inputSchema.properties.type).toEqual({
+        type: 'string',
+      });
       // issue_create：taskId/selfInstanceId/title 必填，description/tags/assigneeInstanceId 可选；tags 数组归为 array
       const issueCreate = tools.find((t) => t.name === 'issue_create')!;
-      expect(issueCreate.inputSchema.required).toEqual(['taskId', 'selfInstanceId', 'title']);
-      expect(issueCreate.inputSchema.properties.tags).toEqual({ type: 'array' });
-      expect(issueCreate.inputSchema.properties.description).toEqual({ type: 'string' });
+      expect(issueCreate.inputSchema.required).toEqual([
+        'taskId',
+        'selfInstanceId',
+        'title',
+      ]);
+      expect(issueCreate.inputSchema.properties.tags).toEqual({
+        type: 'array',
+      });
+      expect(issueCreate.inputSchema.properties.description).toEqual({
+        type: 'string',
+      });
       expect(issueCreate.inputSchema.properties.assigneeInstanceId).toEqual({
         type: 'string',
       });
@@ -280,7 +318,9 @@ describe('PlatformMcpController (HTTP)', () => {
         'issueId',
         'action',
       ]);
-      expect(issueTransition.inputSchema.properties.action).toEqual({ type: 'string' });
+      expect(issueTransition.inputSchema.properties.action).toEqual({
+        type: 'string',
+      });
       // memory_save：taskId/selfInstanceId/level/content 必填，tags 可选；level 枚举归为 string
       const memorySave = tools.find((t) => t.name === 'memory_save')!;
       expect(memorySave.inputSchema.required).toEqual([
@@ -289,12 +329,16 @@ describe('PlatformMcpController (HTTP)', () => {
         'level',
         'content',
       ]);
-      expect(memorySave.inputSchema.properties.level).toEqual({ type: 'string' });
+      expect(memorySave.inputSchema.properties.level).toEqual({
+        type: 'string',
+      });
       expect(memorySave.inputSchema.properties.tags).toEqual({ type: 'array' });
       // memory_search：仅 taskId 必填，query/level/tags/limit 可选
       const memorySearch = tools.find((t) => t.name === 'memory_search')!;
       expect(memorySearch.inputSchema.required).toEqual(['taskId']);
-      expect(memorySearch.inputSchema.properties.limit).toEqual({ type: 'number' });
+      expect(memorySearch.inputSchema.properties.limit).toEqual({
+        type: 'number',
+      });
       // plan_submit：taskId/selfInstanceId/title/tasks 必填，summary/scopeIn/scopeOut 可选；tasks 数组归为 array
       const planSubmit = tools.find((t) => t.name === 'plan_submit')!;
       expect(planSubmit.inputSchema.required).toEqual([
@@ -303,8 +347,12 @@ describe('PlatformMcpController (HTTP)', () => {
         'title',
         'tasks',
       ]);
-      expect(planSubmit.inputSchema.properties.tasks).toEqual({ type: 'array' });
-      expect(planSubmit.inputSchema.properties.summary).toEqual({ type: 'string' });
+      expect(planSubmit.inputSchema.properties.tasks).toEqual({
+        type: 'array',
+      });
+      expect(planSubmit.inputSchema.properties.summary).toEqual({
+        type: 'string',
+      });
       // plan_review：taskId/selfInstanceId/verdict 必填，planId/reason 可选（refine 解包后 shape 不变）
       const planReview = tools.find((t) => t.name === 'plan_review')!;
       expect(planReview.inputSchema.required).toEqual([
@@ -312,8 +360,12 @@ describe('PlatformMcpController (HTTP)', () => {
         'selfInstanceId',
         'verdict',
       ]);
-      expect(planReview.inputSchema.properties.verdict).toEqual({ type: 'string' });
-      expect(planReview.inputSchema.properties.reason).toEqual({ type: 'string' });
+      expect(planReview.inputSchema.properties.verdict).toEqual({
+        type: 'string',
+      });
+      expect(planReview.inputSchema.properties.reason).toEqual({
+        type: 'string',
+      });
       // plan_task_transition：taskId/selfInstanceId/planTaskId/status 全必填；status 枚举归为 string
       const planTaskTransition = tools.find(
         (t) => t.name === 'plan_task_transition',
@@ -352,7 +404,9 @@ describe('PlatformMcpController (HTTP)', () => {
         'selfInstanceId',
         'reviewerInstanceId',
       ]);
-      expect(planAssignReviewer.inputSchema.properties.reviewerInstanceId).toEqual({
+      expect(
+        planAssignReviewer.inputSchema.properties.reviewerInstanceId,
+      ).toEqual({
         type: 'string',
       });
       // team_add_member：taskId/selfInstanceId/agentId 必填，alias/workDir 可选
@@ -366,6 +420,14 @@ describe('PlatformMcpController (HTTP)', () => {
         type: 'string',
       });
       expect(teamAddMember.inputSchema.properties.workDir).toEqual({
+        type: 'string',
+      });
+      const channelSend = tools.find((t) => t.name === 'channel_send')!;
+      expect(channelSend.inputSchema.required).toEqual(['target', 'text']);
+      expect(channelSend.inputSchema.properties.target).toEqual({
+        type: 'string',
+      });
+      expect(channelSend.inputSchema.properties.text).toEqual({
         type: 'string',
       });
     });
@@ -472,7 +534,11 @@ describe('PlatformMcpController (HTTP)', () => {
           method: 'tools/call',
           params: {
             name: 'read_file',
-            arguments: { taskId: 't_1', fileRef: '/uploads/a.pdf', maxBytes: 1024 },
+            arguments: {
+              taskId: 't_1',
+              fileRef: '/uploads/a.pdf',
+              maxBytes: 1024,
+            },
           },
         })
         .expect(200);
@@ -707,6 +773,32 @@ describe('PlatformMcpController (HTTP)', () => {
       });
     });
 
+    it('channel_send → service.channelSend 收到 target/text', async () => {
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 17,
+          method: 'tools/call',
+          params: {
+            name: 'channel_send',
+            arguments: { target: 'nc_0001', text: 'hello' },
+          },
+        })
+        .expect(200);
+
+      expect(service.channelSend).toHaveBeenCalledWith(
+        { workerId: 'w_0001' },
+        { target: 'nc_0001', text: 'hello' },
+      );
+      const text = res.body.result.content[0].text as string;
+      expect(JSON.parse(text)).toMatchObject({
+        content: [
+          { type: 'text', text: expect.stringContaining('已发送至渠道') },
+        ],
+      });
+    });
+
     it('未知工具 → 200 + error -32602 Unknown tool（不触达 service）', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
@@ -761,7 +853,7 @@ describe('PlatformMcpController (HTTP)', () => {
         })
         .expect(200);
 
-      expect(res.body.error.code).toBe(-32603);
+      expect(res.body.error.code).toBe(-32003);
       expect(res.body.error.message).toContain('禁止跨任务访问');
     });
   });

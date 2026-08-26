@@ -47,7 +47,9 @@ export class ToolsController {
   @Public()
   @UseGuards(WorkerOrJwtGuard)
   @Get()
-  @ApiOperation({ summary: '工具列表（source 过滤 + 分页，含来源徽章，成员只读）' })
+  @ApiOperation({
+    summary: '工具列表（source 过滤 + 分页，含来源徽章，成员只读）',
+  })
   findAll(@Query() query: QueryToolsDto, @Req() req: Request) {
     const viewer = req.user as { id?: string } | undefined;
     return this.toolsService.findAll(
@@ -63,7 +65,9 @@ export class ToolsController {
    */
   @Post()
   @UseGuards(AdminGuard)
-  @ApiOperation({ summary: '注册工具（无 source 入参，execution=mcp→mcp 其余→custom）' })
+  @ApiOperation({
+    summary: '注册工具（无 source 入参，execution=mcp→mcp 其余→custom）',
+  })
   create(@Body() dto: CreateToolDto) {
     return this.toolsService.create(dto);
   }
@@ -75,7 +79,9 @@ export class ToolsController {
    */
   @Patch(':id')
   @UseGuards(AdminGuard)
-  @ApiOperation({ summary: '更新工具（仅 schema/initCommand/enabled；停用替代删除）' })
+  @ApiOperation({
+    summary: '更新工具（仅 schema/initCommand/enabled；停用替代删除）',
+  })
   update(@Param('id') id: string, @Body() dto: UpdateToolDto) {
     return this.toolsService.update(id, dto);
   }

@@ -71,7 +71,9 @@ export class SkillsController {
   @UseGuards(WorkerOrJwtGuard, PermissionGuard)
   @RequirePermission('skills.view')
   @Get()
-  @ApiOperation({ summary: '技能列表（enabled 过滤 + 分页；成员只读可见已启用）' })
+  @ApiOperation({
+    summary: '技能列表（enabled 过滤 + 分页；成员只读可见已启用）',
+  })
   findAll(@Query() query: QuerySkillsDto, @Req() req: Request) {
     const viewer = req.user as { id?: string } | undefined;
     return this.skillsService.findAll(
@@ -114,7 +116,13 @@ export class SkillsController {
     schema: {
       type: 'object',
       required: ['file'],
-      properties: { file: { type: 'string', format: 'binary', description: 'SKILL.md 技能包' } },
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'SKILL.md 技能包',
+        },
+      },
     },
   })
   @ApiOperation({ summary: '上传 SKILL.md 注册技能（multipart，默认停用）' })
@@ -140,7 +148,10 @@ export class SkillsController {
   @Patch(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission('skills.edit')
-  @ApiOperation({ summary: '编辑技能元信息/内容（{name?, description?, content?}，skills.edit）' })
+  @ApiOperation({
+    summary:
+      '编辑技能元信息/内容（{name?, description?, content?}，skills.edit）',
+  })
   update(@Param('id') id: string, @Body() dto: UpdateSkillDto) {
     return this.skillsService.update(id, dto);
   }
@@ -152,11 +163,10 @@ export class SkillsController {
   @Patch(':id/status')
   @UseGuards(PermissionGuard)
   @RequirePermission('skills.edit')
-  @ApiOperation({ summary: '启用/停用技能（{enabled}，skills.edit；替代物理删除）' })
-  updateStatus(
-    @Param('id') id: string,
-    @Body() dto: UpdateSkillStatusDto,
-  ) {
+  @ApiOperation({
+    summary: '启用/停用技能（{enabled}，skills.edit；替代物理删除）',
+  })
+  updateStatus(@Param('id') id: string, @Body() dto: UpdateSkillStatusDto) {
     return this.skillsService.updateStatus(id, dto.enabled);
   }
 }

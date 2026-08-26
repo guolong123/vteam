@@ -19,7 +19,12 @@ import { GitReposService } from './git-repos.service';
 @Module({
   imports: [RealtimeModule, forwardRef(() => WorkersModule)],
   controllers: [GitCredentialsController, GitReposController],
-  providers: [GitCredentialsService, GitReposService, CredentialCryptoService, AdminGuard],
+  providers: [
+    GitCredentialsService,
+    GitReposService,
+    CredentialCryptoService,
+    AdminGuard,
+  ],
   exports: [GitCredentialsService, GitReposService],
 })
 export class GitReposModule {}

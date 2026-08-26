@@ -15,7 +15,9 @@ const DEFAULT_MINIMAL: ExecutionConfig = {
 export class ExecutionPolicyService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async resolveExecutionConfig(agent: { policyId?: string | null }): Promise<ExecutionConfig> {
+  async resolveExecutionConfig(agent: {
+    policyId?: string | null;
+  }): Promise<ExecutionConfig> {
     if (!agent.policyId) {
       return DEFAULT_MINIMAL;
     }

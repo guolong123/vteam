@@ -1,13 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import {
-  IsIn,
-  IsInt,
-  IsOptional,
-  IsString,
-  Max,
-  Min,
-} from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { MEMORY_LEVELS } from '../memory.constants';
 
 /**
@@ -39,7 +32,11 @@ export class QueryMemoriesDto {
   @IsString()
   keyword?: string;
 
-  @ApiPropertyOptional({ description: '页码（从 1 起）', default: 1, minimum: 1 })
+  @ApiPropertyOptional({
+    description: '页码（从 1 起）',
+    default: 1,
+    minimum: 1,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

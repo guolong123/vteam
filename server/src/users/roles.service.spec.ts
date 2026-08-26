@@ -127,9 +127,9 @@ describe('RolesService', () => {
 
     it('预置角色（isBuiltin）更新抛 403', async () => {
       prisma.role.findUnique.mockResolvedValue(builtinRole);
-      await expect(
-        service.update('r_admin', { name: 'root' }),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.update('r_admin', { name: 'root' })).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('目标角色不存在抛 404', async () => {

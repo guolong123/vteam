@@ -24,7 +24,8 @@ export class UpdateSkillDto {
   description?: string;
 
   @ApiPropertyOptional({
-    description: 'SKILL.md 全文（含 frontmatter；后端校验合法并同步 name/description 列）',
+    description:
+      'SKILL.md 全文（含 frontmatter；后端校验合法并同步 name/description 列）',
   })
   @IsOptional()
   @IsString()

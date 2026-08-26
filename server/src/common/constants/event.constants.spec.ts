@@ -40,11 +40,19 @@ describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 �
   });
 
   it('CHANNEL_TYPE 两类频道', () => {
-    expect(CHANNEL_TYPE).toEqual({ task_group: 'task_group', private: 'private' });
+    expect(CHANNEL_TYPE).toEqual({
+      task_group: 'task_group',
+      private: 'private',
+    });
   });
 
-  it('SENDER_TYPE 三类发送方', () => {
-    expect(SENDER_TYPE).toEqual({ user: 'user', agent: 'agent', system: 'system' });
+  it('SENDER_TYPE 四类发送方', () => {
+    expect(SENDER_TYPE).toEqual({
+      user: 'user',
+      agent: 'agent',
+      system: 'system',
+      external: 'external',
+    });
   });
 
   it('SESSION_STATUS 七态', () => {
@@ -60,6 +68,10 @@ describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 �
   });
 
   it('ACTOR_TYPE 三类操作者（user/system/agent，agent 供 MCP/issue_activities 操作记录）', () => {
-    expect(ACTOR_TYPE).toEqual({ user: 'user', system: 'system', agent: 'agent' });
+    expect(ACTOR_TYPE).toEqual({
+      user: 'user',
+      system: 'system',
+      agent: 'agent',
+    });
   });
 });

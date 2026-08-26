@@ -77,7 +77,10 @@ describe('IssuesController', () => {
     });
 
     it('POST /issues/:id/transition 以 req.user.id 转发 id + dto 到 transition', async () => {
-      service.transition.mockResolvedValue({ id: 'is_1', status: 'in_progress' });
+      service.transition.mockResolvedValue({
+        id: 'is_1',
+        status: 'in_progress',
+      });
       const dto = { action: 'start' };
       const out = await controller.transition(
         'is_1',
@@ -102,9 +105,9 @@ describe('IssuesController', () => {
 
     it('CreateIssueDto：taskId/title 必填、tags 须为字符串数组', async () => {
       expect(await errorsOf(CreateIssueDto, {})).not.toHaveLength(0);
-      expect(await errorsOf(CreateIssueDto, { taskId: 't_1' })).not.toHaveLength(
-        0,
-      );
+      expect(
+        await errorsOf(CreateIssueDto, { taskId: 't_1' }),
+      ).not.toHaveLength(0);
       expect(
         await errorsOf(CreateIssueDto, { taskId: 't_1', title: 'x' }),
       ).toHaveLength(0);
@@ -159,11 +162,15 @@ describe('IssuesController', () => {
 
     it('QueryIssuesDto：taskId 可选、projectId 可选、status 枚举、page/pageSize 正整数', async () => {
       expect(await errorsOf(QueryIssuesDto, {})).toHaveLength(0); // taskId/projectId 均可选，二选一由 service 校验
-      expect(await errorsOf(QueryIssuesDto, { projectId: 'p_1' })).toHaveLength(0);
+      expect(await errorsOf(QueryIssuesDto, { projectId: 'p_1' })).toHaveLength(
+        0,
+      );
       expect(
         await errorsOf(QueryIssuesDto, { taskId: 't_1', status: 'bogus' }),
       ).not.toHaveLength(0);
-      expect(await errorsOf(QueryIssuesDto, { taskId: 't_1', page: 0 })).not.toHaveLength(0);
+      expect(
+        await errorsOf(QueryIssuesDto, { taskId: 't_1', page: 0 }),
+      ).not.toHaveLength(0);
       expect(
         await errorsOf(QueryIssuesDto, {
           taskId: 't_1',
@@ -179,8 +186,7 @@ describe('IssuesController', () => {
     it('controller 类级不挂 AdminGuard / ProjectMembershipGuard（:id 会误解析为 taskId）', () => {
       const guards =
         (Reflect.getMetadata('__guards__', IssuesController) as
-          | Array<{ name: string }>
-          | undefined) ?? [];
+          Array<{ name: string }> | undefined) ?? [];
       const guardNames = guards.map((g) => g.name);
       expect(guardNames).not.toContain(AdminGuard.name);
       expect(guardNames).not.toContain(ProjectMembershipGuard.name);

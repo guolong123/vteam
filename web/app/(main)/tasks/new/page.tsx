@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
  * 任务创建页（Task 13 保真迁移）
@@ -1553,6 +1554,8 @@ export default function TaskCreatePage() {
   const [priority, setPriority] = useState<Priority>("中");
   const [managedMode, setManagedMode] = useState(false);
   const [executionMode, setExecutionMode] = useState<ExecutionMode>("direct");
+  const [selectedMessageChannelIds, setSelectedMessageChannelIds] = useState<string[]>([]);
+  const [selectedNotificationChannelIds, setSelectedNotificationChannelIds] = useState<string[]>([]);
 
   // 背景文档：真实上传列表（POST /uploads 成功后入列，禁止预置假数据）
   const [backgroundDocs, setBackgroundDocs] = useState<BackgroundDoc[]>([]);
@@ -1785,6 +1788,9 @@ export default function TaskCreatePage() {
     setBackgroundDocs((prev) => prev.filter((d) => d.url !== url));
   };
 
+  const messageChannelsQuery = useQuery({ queryKey: ["message-channels"], queryFn: () => api.get<any[]>("/message-channels"), enabled: !!user?.id });
+  const notificationChannelsQuery = useQuery({ queryKey: ["notification-channels"], queryFn: () => api.get<any[]>("/notification-channels"), enabled: !!user?.id });
+
   /** 创建任务：空标题校验 → 真实 POST /projects/:pid/tasks，成功跳转任务详情，失败展示接口错误 */
   const handleCreate = async () => {
     if (!title.trim()) {
@@ -1827,8 +1833,14 @@ export default function TaskCreatePage() {
         }
       );
       setCreated(true);
-      // 真实成功 → 跳转任务详情（T13 路由，先跳转即可）
-      router.push(`/tasks/${res.id}`);
+      const taskId = res.id;
+      if (selectedMessageChannelIds.length > 0) {
+        try { await api.post(`/tasks/${taskId}/message-channels`, { messageChannelIds: selectedMessageChannelIds }); } catch {}
+      }
+      if (selectedNotificationChannelIds.length > 0) {
+        try { await api.post(`/tasks/${taskId}/notification-channels`, { notificationChannelIds: selectedNotificationChannelIds }); } catch {}
+      }
+      router.push(`/tasks/${taskId}`);
     } catch (err) {
       setCreateError(isApiError(err) ? err.message : "创建任务失败，请稍后重试");
     } finally {
@@ -1860,28 +1872,52 @@ export default function TaskCreatePage() {
           alignItems: "flex-start",
         }}
       >
-        <TaskForm
-          title={title}
-          onTitleChange={setTitle}
-          description={description}
-          onDescriptionChange={setDescription}
-          priority={priority}
-          onPriorityChange={setPriority}
-          managedMode={managedMode}
-          onManagedModeChange={setManagedMode}
-          executionMode={executionMode}
-          onExecutionModeChange={setExecutionMode}
-          titleError={titleError}
-          docs={backgroundDocs}
-          onRemoveDoc={handleRemoveDoc}
-          uploading={uploadMutation.isPending}
-          uploadError={uploadError}
-          onUploadFile={(file) => {
-            setUploadError(null);
-            uploadMutation.mutate(file);
-          }}
-          onDismissUploadError={() => setUploadError(null)}
-        />
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: space.lg }}>
+          <TaskForm
+            title={title}
+            onTitleChange={setTitle}
+            description={description}
+            onDescriptionChange={setDescription}
+            priority={priority}
+            onPriorityChange={setPriority}
+            managedMode={managedMode}
+            onManagedModeChange={setManagedMode}
+            executionMode={executionMode}
+            onExecutionModeChange={setExecutionMode}
+            titleError={titleError}
+            docs={backgroundDocs}
+            onRemoveDoc={handleRemoveDoc}
+            uploading={uploadMutation.isPending}
+            uploadError={uploadError}
+            onUploadFile={(file) => {
+              setUploadError(null);
+              uploadMutation.mutate(file);
+            }}
+            onDismissUploadError={() => setUploadError(null)}
+          />
+          <div data-testid="task-channel-binding-section" style={{ padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, display: "flex", flexDirection: "column", gap: space.md, ...baseFont }}>
+            <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>渠道绑定</div>
+            <div style={{ fontSize: fontSize.sm, color: neutral[400] }}>创建后自动绑定到任务，可在任务详情右侧栏调整</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+              <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>消息渠道 (入站)</span>
+              {(messageChannelsQuery.data as any[] ?? []).length === 0 ? <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>{messageChannelsQuery.isPending ? "加载中…" : "暂无消息渠道"}</span> : (messageChannelsQuery.data as any[]).map((ch: any) => (
+                <label key={ch.id} style={{ display: "flex", alignItems: "center", gap: space.sm, cursor: "pointer" }}>
+                  <input type="checkbox" data-testid="message-channel-checkbox" data-channel-id={ch.id} checked={selectedMessageChannelIds.includes(ch.id)} onChange={(e) => setSelectedMessageChannelIds((prev) => e.target.checked ? [...prev, ch.id] : prev.filter((id) => id !== ch.id))} />
+                  <span style={{ fontSize: fontSize.sm, color: neutral[700] }}>{ch.name}</span><span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{ch.type}</span>
+                </label>
+              ))}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+              <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>通知渠道 (出站)</span>
+              {(notificationChannelsQuery.data as any[] ?? []).length === 0 ? <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>{notificationChannelsQuery.isPending ? "加载中…" : "暂无通知渠道"}</span> : (notificationChannelsQuery.data as any[]).map((ch: any) => (
+                <label key={ch.id} style={{ display: "flex", alignItems: "center", gap: space.sm, cursor: "pointer" }}>
+                  <input type="checkbox" data-testid="notification-channel-checkbox" data-channel-id={ch.id} checked={selectedNotificationChannelIds.includes(ch.id)} onChange={(e) => setSelectedNotificationChannelIds((prev) => e.target.checked ? [...prev, ch.id] : prev.filter((id) => id !== ch.id))} />
+                  <span style={{ fontSize: fontSize.sm, color: neutral[700] }}>{ch.name}</span><span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{ch.type}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
         <AgentSelectPanel
           agentsLoading={agentsLoading}
           agentsError={agentsError}

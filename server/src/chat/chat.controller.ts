@@ -9,7 +9,12 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { UseGuards } from '@nestjs/common';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
@@ -48,7 +53,9 @@ export class ChatController {
   @Get('channels')
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.view')
-  @ApiOperation({ summary: '可访问频道列表（task_group + private，type 过滤）' })
+  @ApiOperation({
+    summary: '可访问频道列表（task_group + private，type 过滤）',
+  })
   @ApiQuery({
     name: 'type',
     required: false,
@@ -69,10 +76,7 @@ export class ChatController {
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.view')
   @ApiOperation({ summary: '频道详情（类型/关联任务/成员 Agent）' })
-  findOne(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param('id') id: string,
-  ) {
+  findOne(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.chatService.findOne(id, user.id);
   }
 
@@ -83,7 +87,10 @@ export class ChatController {
   @Get('channels/:id/messages')
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.view')
-  @ApiOperation({ summary: '历史消息游标分页（首页取最新 limit 条；游标=上页最早 id，下一页取更老；items id 升序）' })
+  @ApiOperation({
+    summary:
+      '历史消息游标分页（首页取最新 limit 条；游标=上页最早 id，下一页取更老；items id 升序）',
+  })
   findMessages(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -101,7 +108,9 @@ export class ChatController {
   @Get('channels/:id/session-history')
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.view')
-  @ApiOperation({ summary: '私聊会话历史（serve 完整会话，含思考/工具；回退平台表）' })
+  @ApiOperation({
+    summary: '私聊会话历史（serve 完整会话，含思考/工具；回退平台表）',
+  })
   getSessionHistory(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -116,7 +125,9 @@ export class ChatController {
   @Get('channels/:id/trigger-results/:messageId')
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.view')
-  @ApiOperation({ summary: '@ 触发结果轮询（被触发 Agent、dispatch 状态、回复消息 id）' })
+  @ApiOperation({
+    summary: '@ 触发结果轮询（被触发 Agent、dispatch 状态、回复消息 id）',
+  })
   getTriggerResults(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -133,7 +144,9 @@ export class ChatController {
   @HttpCode(201)
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.create')
-  @ApiOperation({ summary: '发消息 + @ 触发（8 步流程，返回 {message, triggers}）' })
+  @ApiOperation({
+    summary: '发消息 + @ 触发（8 步流程，返回 {message, triggers}）',
+  })
   createMessage(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -150,7 +163,9 @@ export class ChatController {
   @HttpCode(201)
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.create')
-  @ApiOperation({ summary: '创建私聊频道（type=private，重复创建幂等返回已有）' })
+  @ApiOperation({
+    summary: '创建私聊频道（type=private，重复创建幂等返回已有）',
+  })
   createDmChannel(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateDmChannelDto,

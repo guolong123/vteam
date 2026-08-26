@@ -146,7 +146,10 @@ export class FileStorageService {
    * 占位（/tmp/opencode/...），前端下载链接不再 404。文件名 UUID.<ext>（扩展名取
    * originalName；无扩展名 → 纯 UUID）。
    */
-  static async saveTextFile(content: string, originalName: string): Promise<UploadedFileMeta> {
+  static async saveTextFile(
+    content: string,
+    originalName: string,
+  ): Promise<UploadedFileMeta> {
     const dir = resolveUploadDir();
     await fsp.mkdir(dir, { recursive: true });
     const filename = FileStorageService.generateFilename(originalName);
@@ -164,7 +167,10 @@ export class FileStorageService {
    * 归档路径），返回控制面可访问的 URL。与 saveTextFile 对称，区别是 Buffer 直写
    * （二进制安全，不按 utf8 转码）。文件名 UUID.<ext>（扩展名取 originalName）。
    */
-  static async saveBufferFile(content: Buffer, originalName: string): Promise<UploadedFileMeta> {
+  static async saveBufferFile(
+    content: Buffer,
+    originalName: string,
+  ): Promise<UploadedFileMeta> {
     const dir = resolveUploadDir();
     await fsp.mkdir(dir, { recursive: true });
     const filename = FileStorageService.generateFilename(originalName);

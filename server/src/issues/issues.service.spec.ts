@@ -86,11 +86,11 @@ describe('IssuesService', () => {
 
     it('任务不存在 → 404 ISSUE_TASK_NOT_FOUND', async () => {
       prisma.task.findUnique.mockResolvedValue(null);
-      await expect(service.create('u_admin', base as any)).rejects.toMatchObject(
-        {
-          response: { code: 'ISSUE_TASK_NOT_FOUND' },
-        },
-      );
+      await expect(
+        service.create('u_admin', base as any),
+      ).rejects.toMatchObject({
+        response: { code: 'ISSUE_TASK_NOT_FOUND' },
+      });
     });
 
     it('非项目成员 → 403 PERMISSION_PROJECT_NOT_MEMBER', async () => {
@@ -99,11 +99,11 @@ describe('IssuesService', () => {
         status: 'pending',
       });
       prisma.projectMember.findUnique.mockResolvedValue(null);
-      await expect(service.create('u_member', base as any)).rejects.toMatchObject(
-        {
-          response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
-        },
-      );
+      await expect(
+        service.create('u_member', base as any),
+      ).rejects.toMatchObject({
+        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+      });
     });
 
     it('任务已归档 → 409 ISSUE_TASK_ARCHIVED', async () => {
@@ -112,11 +112,11 @@ describe('IssuesService', () => {
         status: 'archived',
       });
       prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
-      await expect(service.create('u_admin', base as any)).rejects.toMatchObject(
-        {
-          response: { code: 'ISSUE_TASK_ARCHIVED' },
-        },
-      );
+      await expect(
+        service.create('u_admin', base as any),
+      ).rejects.toMatchObject({
+        response: { code: 'ISSUE_TASK_ARCHIVED' },
+      });
     });
 
     it('指派 Agent 不在任务团队 → 400 ASSIGNEE_NOT_IN_TEAM', async () => {
@@ -140,7 +140,10 @@ describe('IssuesService', () => {
       prisma.taskAgent.findFirst.mockResolvedValue({ removedAt: null });
       prisma.issue.create.mockResolvedValue({ id: 'is_0000000001' });
       prisma.issue.findUnique.mockResolvedValue(
-        makeRow({ assigneeAgentId: 'a_developer', assigneeAgent: { name: '开发者' } }),
+        makeRow({
+          assigneeAgentId: 'a_developer',
+          assigneeAgent: { name: '开发者' },
+        }),
       );
 
       const out = await service.create('u_admin', {
@@ -217,7 +220,9 @@ describe('IssuesService', () => {
       prisma.taskAgent.findFirst.mockResolvedValue(null);
       await expect(
         service.createByAgent('a_x', 't_0000000001', base as any),
-      ).rejects.toMatchObject({ response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' } });
+      ).rejects.toMatchObject({
+        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+      });
     });
 
     it('成功：creatorAgentId=agentId、createdBy=null（Metis B1）', async () => {
@@ -307,7 +312,9 @@ describe('IssuesService', () => {
       prisma.taskAgent.findFirst.mockResolvedValue(null);
       await expect(
         service.createByAgent('ta_not_member', 't_0000000001', base as any),
-      ).rejects.toMatchObject({ response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' } });
+      ).rejects.toMatchObject({
+        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+      });
       expect(prisma.issue.create).not.toHaveBeenCalled();
     });
   });
@@ -321,13 +328,15 @@ describe('IssuesService', () => {
       prisma.projectMember.findUnique.mockResolvedValue(null);
       await expect(
         service.findAll({ taskId: 't_1' } as any, 'u_member'),
-      ).rejects.toMatchObject({ response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' } });
+      ).rejects.toMatchObject({
+        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+      });
     });
 
     it('缺少过滤条件（taskId 与 projectId 均无）→ 400 ISSUE_FILTER_REQUIRED', async () => {
-      await expect(
-        service.findAll({} as any, 'u_admin'),
-      ).rejects.toMatchObject({ response: { code: 'ISSUE_FILTER_REQUIRED' } });
+      await expect(service.findAll({} as any, 'u_admin')).rejects.toMatchObject(
+        { response: { code: 'ISSUE_FILTER_REQUIRED' } },
+      );
       expect(prisma.task.findUnique).not.toHaveBeenCalled();
       expect(prisma.issue.count).not.toHaveBeenCalled();
     });
@@ -345,14 +354,19 @@ describe('IssuesService', () => {
       prisma.projectMember.findUnique.mockResolvedValue(null);
       await expect(
         service.findAll({ projectId: 'p_1' } as any, 'u_member'),
-      ).rejects.toMatchObject({ response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' } });
+      ).rejects.toMatchObject({
+        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+      });
     });
 
     it('projectId 路径：按 issue.task.projectId 过滤该项目全部任务 issue', async () => {
       prisma.project.findUnique.mockResolvedValue({ id: 'p_1' });
       prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
       prisma.issue.count.mockResolvedValue(2);
-      prisma.issue.findMany.mockResolvedValue([makeRow(), makeRow({ id: 'is_0000000002' })]);
+      prisma.issue.findMany.mockResolvedValue([
+        makeRow(),
+        makeRow({ id: 'is_0000000002' }),
+      ]);
 
       const out = await service.findAll(
         { projectId: 'p_1', status: 'open', page: 1, pageSize: 20 } as any,
@@ -378,8 +392,14 @@ describe('IssuesService', () => {
       );
       expect(out).toEqual({
         items: [
-          expect.objectContaining({ id: 'is_0000000001', taskTitle: '测试任务' }),
-          expect.objectContaining({ id: 'is_0000000002', taskTitle: '测试任务' }),
+          expect.objectContaining({
+            id: 'is_0000000001',
+            taskTitle: '测试任务',
+          }),
+          expect.objectContaining({
+            id: 'is_0000000002',
+            taskTitle: '测试任务',
+          }),
         ],
         total: 2,
         page: 1,
@@ -443,16 +463,18 @@ describe('IssuesService', () => {
   describe('findOne', () => {
     it('不存在 → 404 ISSUE_NOT_FOUND', async () => {
       prisma.issue.findUnique.mockResolvedValue(null);
-      await expect(
-        service.findOne('is_x', 'u_admin'),
-      ).rejects.toMatchObject({ response: { code: 'ISSUE_NOT_FOUND' } });
+      await expect(service.findOne('is_x', 'u_admin')).rejects.toMatchObject({
+        response: { code: 'ISSUE_NOT_FOUND' },
+      });
     });
 
     it('已软删视为不存在 → 404', async () => {
-      prisma.issue.findUnique.mockResolvedValue(makeRow({ deletedAt: FIXED_DATE }));
-      await expect(
-        service.findOne('is_x', 'u_admin'),
-      ).rejects.toMatchObject({ response: { code: 'ISSUE_NOT_FOUND' } });
+      prisma.issue.findUnique.mockResolvedValue(
+        makeRow({ deletedAt: FIXED_DATE }),
+      );
+      await expect(service.findOne('is_x', 'u_admin')).rejects.toMatchObject({
+        response: { code: 'ISSUE_NOT_FOUND' },
+      });
     });
 
     it('非任务成员 → 403', async () => {
@@ -464,7 +486,9 @@ describe('IssuesService', () => {
       prisma.projectMember.findUnique.mockResolvedValue(null);
       await expect(
         service.findOne('is_0000000001', 'u_member'),
-      ).rejects.toMatchObject({ response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' } });
+      ).rejects.toMatchObject({
+        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+      });
     });
 
     it('成功返回详情 DTO', async () => {
@@ -550,7 +574,9 @@ describe('IssuesService', () => {
 
       expect(prisma.taskAgent.findFirst).not.toHaveBeenCalled();
       expect(prisma.issue.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ assigneeAgentId: null }) }),
+        expect.objectContaining({
+          data: expect.objectContaining({ assigneeAgentId: null }),
+        }),
       );
     });
   });
@@ -567,9 +593,7 @@ describe('IssuesService', () => {
     it('start：open → in_progress', async () => {
       prisma.issue.findUnique.mockResolvedValue(makeRow({ status: 'open' }));
       memberOk();
-      prisma.issue.update.mockResolvedValue(
-        makeRow({ status: 'in_progress' }),
-      );
+      prisma.issue.update.mockResolvedValue(makeRow({ status: 'in_progress' }));
 
       const out = await service.transition('is_0000000001', 'u_admin', {
         action: 'start',
@@ -622,14 +646,20 @@ describe('IssuesService', () => {
 
     it('reopen：closed → open（resolvedAt/closedAt 清空）', async () => {
       prisma.issue.findUnique.mockResolvedValue(
-        makeRow({ status: 'closed', resolvedAt: FIXED_DATE, closedAt: FIXED_DATE }),
+        makeRow({
+          status: 'closed',
+          resolvedAt: FIXED_DATE,
+          closedAt: FIXED_DATE,
+        }),
       );
       memberOk();
       prisma.issue.update.mockResolvedValue(
         makeRow({ status: 'open', resolvedAt: null, closedAt: null }),
       );
 
-      await service.transition('is_0000000001', 'u_admin', { action: 'reopen' });
+      await service.transition('is_0000000001', 'u_admin', {
+        action: 'reopen',
+      });
       expect(prisma.issue.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -647,7 +677,11 @@ describe('IssuesService', () => {
       );
       memberOk();
       prisma.issue.update.mockResolvedValue(
-        makeRow({ status: 'rejected', rejectReason: '测试原因', rejectedAt: FIXED_DATE }),
+        makeRow({
+          status: 'rejected',
+          rejectReason: '测试原因',
+          rejectedAt: FIXED_DATE,
+        }),
       );
 
       const out = await service.transition('is_0000000001', 'u_admin', {
@@ -681,14 +715,20 @@ describe('IssuesService', () => {
 
     it('reopen：rejected → open（清 rejectReason/rejectedAt，is_0000000013）', async () => {
       prisma.issue.findUnique.mockResolvedValue(
-        makeRow({ status: 'rejected', rejectReason: '原因', rejectedAt: FIXED_DATE }),
+        makeRow({
+          status: 'rejected',
+          rejectReason: '原因',
+          rejectedAt: FIXED_DATE,
+        }),
       );
       memberOk();
       prisma.issue.update.mockResolvedValue(
         makeRow({ status: 'open', rejectReason: null, rejectedAt: null }),
       );
 
-      await service.transition('is_0000000001', 'u_admin', { action: 'reopen' });
+      await service.transition('is_0000000001', 'u_admin', {
+        action: 'reopen',
+      });
       expect(prisma.issue.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -701,13 +741,9 @@ describe('IssuesService', () => {
     });
 
     it('transition 后广播 issue.changed（task scope，is_0000000020）', async () => {
-      prisma.issue.findUnique.mockResolvedValue(
-        makeRow({ status: 'open' }),
-      );
+      prisma.issue.findUnique.mockResolvedValue(makeRow({ status: 'open' }));
       memberOk();
-      prisma.issue.update.mockResolvedValue(
-        makeRow({ status: 'in_progress' }),
-      );
+      prisma.issue.update.mockResolvedValue(makeRow({ status: 'in_progress' }));
 
       await service.transition('is_0000000001', 'u_admin', {
         action: 'start',
@@ -734,7 +770,11 @@ describe('IssuesService', () => {
       );
       memberOk();
       prisma.issue.update.mockResolvedValue(
-        makeRow({ status: 'rejected', rejectReason: '原因', rejectedAt: FIXED_DATE }),
+        makeRow({
+          status: 'rejected',
+          rejectReason: '原因',
+          rejectedAt: FIXED_DATE,
+        }),
       );
 
       await service.transition('is_0000000001', 'u_admin', {
@@ -763,7 +803,9 @@ describe('IssuesService', () => {
 
       await expect(
         service.transition('is_0000000001', 'u_admin', { action: 'resolve' }),
-      ).rejects.toMatchObject({ response: { code: 'ISSUE_INVALID_TRANSITION' } });
+      ).rejects.toMatchObject({
+        response: { code: 'ISSUE_INVALID_TRANSITION' },
+      });
       expect(prisma.issue.update).not.toHaveBeenCalled();
     });
 
@@ -781,7 +823,13 @@ describe('IssuesService', () => {
     });
 
     it('迁移表覆盖全部 5 个动作且 from≠to（迁移表自洽，is_0000000013 含 rejected 态）', () => {
-      const statuses = ['open', 'in_progress', 'resolved', 'closed', 'rejected'];
+      const statuses = [
+        'open',
+        'in_progress',
+        'resolved',
+        'closed',
+        'rejected',
+      ];
       for (const [action, t] of Object.entries(ISSUE_TRANSITIONS)) {
         const fromList = Array.isArray(t.from) ? t.from : [t.from];
         expect(fromList.length).toBeGreaterThan(0);
@@ -821,7 +869,9 @@ describe('IssuesService', () => {
 
       await expect(
         service.remove('is_0000000001', 'u_member'),
-      ).rejects.toMatchObject({ response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' } });
+      ).rejects.toMatchObject({
+        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+      });
       expect(prisma.issue.update).not.toHaveBeenCalled();
     });
   });
@@ -864,7 +914,10 @@ describe('IssuesService', () => {
           }),
         );
         expect(out).toEqual([
-          expect.objectContaining({ id: 'is_0000000001', taskTitle: '测试任务' }),
+          expect.objectContaining({
+            id: 'is_0000000001',
+            taskTitle: '测试任务',
+          }),
         ]);
       });
 
@@ -897,9 +950,7 @@ describe('IssuesService', () => {
             where: { taskId: 't_0000000001', id: 'ta_dev_1' },
           }),
         );
-        expect(out).toEqual([
-          expect.objectContaining({ id: 'is_0000000001' }),
-        ]);
+        expect(out).toEqual([expect.objectContaining({ id: 'is_0000000001' })]);
       });
     });
 
@@ -912,9 +963,15 @@ describe('IssuesService', () => {
       });
 
       it('issue 不属于该 taskId → 404 ISSUE_NOT_FOUND（防跨任务，不触发团队校验）', async () => {
-        prisma.issue.findUnique.mockResolvedValue(makeRow({ taskId: 't_other' }));
+        prisma.issue.findUnique.mockResolvedValue(
+          makeRow({ taskId: 't_other' }),
+        );
         await expect(
-          service.findOneByAgent('a_developer', 't_0000000001', 'is_0000000001'),
+          service.findOneByAgent(
+            'a_developer',
+            't_0000000001',
+            'is_0000000001',
+          ),
         ).rejects.toMatchObject({ response: { code: 'ISSUE_NOT_FOUND' } });
         expect(prisma.taskAgent.findFirst).not.toHaveBeenCalled();
       });
@@ -932,7 +989,10 @@ describe('IssuesService', () => {
 
       it('成功返回详情 DTO', async () => {
         prisma.issue.findUnique.mockResolvedValue(
-          makeRow({ creatorAgentId: 'a_product', creatorAgent: { name: '产品' } }),
+          makeRow({
+            creatorAgentId: 'a_product',
+            creatorAgent: { name: '产品' },
+          }),
         );
         agentTeamOk();
         const out = await service.findOneByAgent(
@@ -972,11 +1032,18 @@ describe('IssuesService', () => {
       });
 
       it('issue 不属于该 taskId → 404（不落更新）', async () => {
-        prisma.issue.findUnique.mockResolvedValue(makeRow({ taskId: 't_other' }));
+        prisma.issue.findUnique.mockResolvedValue(
+          makeRow({ taskId: 't_other' }),
+        );
         await expect(
-          service.updateByAgent('a_developer', 't_0000000001', 'is_0000000001', {
-            title: 'x',
-          } as any),
+          service.updateByAgent(
+            'a_developer',
+            't_0000000001',
+            'is_0000000001',
+            {
+              title: 'x',
+            } as any,
+          ),
         ).rejects.toMatchObject({ response: { code: 'ISSUE_NOT_FOUND' } });
         expect(prisma.issue.update).not.toHaveBeenCalled();
       });
@@ -1004,9 +1071,14 @@ describe('IssuesService', () => {
         );
 
         await expect(
-          service.updateByAgent('a_developer', 't_0000000001', 'is_0000000001', {
-            assigneeAgentId: 'a_x',
-          } as any),
+          service.updateByAgent(
+            'a_developer',
+            't_0000000001',
+            'is_0000000001',
+            {
+              assigneeAgentId: 'a_x',
+            } as any,
+          ),
         ).rejects.toMatchObject({ response: { code: 'ASSIGNEE_NOT_IN_TEAM' } });
         expect(prisma.issue.update).not.toHaveBeenCalled();
       });
@@ -1016,7 +1088,9 @@ describe('IssuesService', () => {
       it('start：open → in_progress（复用 applyTransition 状态机核心）', async () => {
         prisma.issue.findUnique.mockResolvedValue(makeRow({ status: 'open' }));
         agentTeamOk();
-        prisma.issue.update.mockResolvedValue(makeRow({ status: 'in_progress' }));
+        prisma.issue.update.mockResolvedValue(
+          makeRow({ status: 'in_progress' }),
+        );
 
         const out = await service.transitionByAgent(
           'a_developer',
@@ -1037,12 +1111,16 @@ describe('IssuesService', () => {
             'is_0000000001',
             'resolve',
           ),
-        ).rejects.toMatchObject({ response: { code: 'ISSUE_INVALID_TRANSITION' } });
+        ).rejects.toMatchObject({
+          response: { code: 'ISSUE_INVALID_TRANSITION' },
+        });
         expect(prisma.issue.update).not.toHaveBeenCalled();
       });
 
       it('issue 不属于该 taskId → 404（不落更新）', async () => {
-        prisma.issue.findUnique.mockResolvedValue(makeRow({ taskId: 't_other' }));
+        prisma.issue.findUnique.mockResolvedValue(
+          makeRow({ taskId: 't_other' }),
+        );
         await expect(
           service.transitionByAgent(
             'a_developer',
@@ -1062,7 +1140,9 @@ describe('IssuesService', () => {
           id: 'ta_dev_1',
           agentId: 'a_developer',
         });
-        prisma.issue.update.mockResolvedValue(makeRow({ status: 'in_progress' }));
+        prisma.issue.update.mockResolvedValue(
+          makeRow({ status: 'in_progress' }),
+        );
 
         const out = await service.transitionByAgent(
           'ta_dev_1',

@@ -40,7 +40,11 @@ export class GitCredentialsService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    await resyncIdPrefix(this.prisma.gitCredential, GIT_CREDENTIAL_ID_PREFIX, this.idGen);
+    await resyncIdPrefix(
+      this.prisma.gitCredential,
+      GIT_CREDENTIAL_ID_PREFIX,
+      this.idGen,
+    );
   }
 
   async findAll(): Promise<GitCredentialView[]> {
@@ -51,8 +55,14 @@ export class GitCredentialsService implements OnModuleInit {
     return rows.map((r) => this.toView(r));
   }
 
-  async create(dto: CreateGitCredentialDto, userId: string): Promise<GitCredentialView> {
-    if (dto.authType !== GIT_AUTH_TYPES.SSH_KEY && dto.authType !== GIT_AUTH_TYPES.HTTPS_TOKEN) {
+  async create(
+    dto: CreateGitCredentialDto,
+    userId: string,
+  ): Promise<GitCredentialView> {
+    if (
+      dto.authType !== GIT_AUTH_TYPES.SSH_KEY &&
+      dto.authType !== GIT_AUTH_TYPES.HTTPS_TOKEN
+    ) {
       throw new BadRequestException({
         code: GIT_REPOS_ERRORS.AUTH_TYPE_INVALID,
         message: `authType 仅支持 ${GIT_AUTH_TYPES.SSH_KEY}|${GIT_AUTH_TYPES.HTTPS_TOKEN}`,
@@ -99,12 +109,20 @@ export class GitCredentialsService implements OnModuleInit {
       });
       credentialId = row.id;
     }
-    this.logger.log(`凭证创建：name=${dto.name} authType=${dto.authType} fingerprint=${fingerprint}`);
+    this.logger.log(
+      `凭证创建：name=${dto.name} authType=${dto.authType} fingerprint=${fingerprint}`,
+    );
     return this.findView(credentialId);
   }
 
-  async update(id: string, dto: UpdateGitCredentialDto, userId: string): Promise<GitCredentialView> {
-    const existing = await this.prisma.gitCredential.findUnique({ where: { id } });
+  async update(
+    id: string,
+    dto: UpdateGitCredentialDto,
+    userId: string,
+  ): Promise<GitCredentialView> {
+    const existing = await this.prisma.gitCredential.findUnique({
+      where: { id },
+    });
     if (!existing || existing.revokedAt !== null) {
       this.throwNotFound(id);
     }
@@ -130,14 +148,24 @@ export class GitCredentialsService implements OnModuleInit {
       (data as any).description = dto.description;
     }
     if (Object.keys(data).length > 0) {
-      await this.prisma.gitCredential.update({ where: { id }, data: data as any });
-      this.logger.log(`凭证更新：id=${id} fields=${Object.keys(data).join(',')}`);
+      await this.prisma.gitCredential.update({
+        where: { id },
+        data: data as any,
+      });
+      this.logger.log(
+        `凭证更新：id=${id} fields=${Object.keys(data).join(',')}`,
+      );
     }
     return this.findView(id);
   }
 
-  async remove(id: string, userId: string): Promise<{ id: string; revokedAt: Date }> {
-    const existing = await this.prisma.gitCredential.findUnique({ where: { id } });
+  async remove(
+    id: string,
+    userId: string,
+  ): Promise<{ id: string; revokedAt: Date }> {
+    const existing = await this.prisma.gitCredential.findUnique({
+      where: { id },
+    });
     if (!existing || existing.revokedAt !== null) {
       this.throwNotFound(id);
     }
@@ -152,7 +180,10 @@ export class GitCredentialsService implements OnModuleInit {
       });
     }
     const now = new Date();
-    await this.prisma.gitCredential.update({ where: { id }, data: { revokedAt: now } });
+    await this.prisma.gitCredential.update({
+      where: { id },
+      data: { revokedAt: now },
+    });
     this.logger.log(`凭证吊销：name=${existing.name} by=${userId}`);
     return { id, revokedAt: now };
   }

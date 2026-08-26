@@ -36,7 +36,8 @@ export const MESSAGE_STATUS = {
   failed: 'failed',
 } as const;
 
-export type MessageStatus = (typeof MESSAGE_STATUS)[keyof typeof MESSAGE_STATUS];
+export type MessageStatus =
+  (typeof MESSAGE_STATUS)[keyof typeof MESSAGE_STATUS];
 
 export const CHANNEL_TYPE = {
   task_group: 'task_group',
@@ -49,6 +50,7 @@ export const SENDER_TYPE = {
   user: 'user',
   agent: 'agent',
   system: 'system',
+  external: 'external',
 } as const;
 
 export type SenderType = (typeof SENDER_TYPE)[keyof typeof SENDER_TYPE];
@@ -65,7 +67,8 @@ export const SESSION_STATUS = {
   failed: 'failed',
 } as const;
 
-export type SessionStatus = (typeof SESSION_STATUS)[keyof typeof SESSION_STATUS];
+export type SessionStatus =
+  (typeof SESSION_STATUS)[keyof typeof SESSION_STATUS];
 
 export const ACTOR_TYPE = {
   user: 'user',

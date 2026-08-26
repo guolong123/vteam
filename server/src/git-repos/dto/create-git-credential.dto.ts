@@ -1,5 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 import { GIT_AUTH_TYPES } from '../git-repos.constants';
 
 /**
@@ -10,22 +16,36 @@ import { GIT_AUTH_TYPES } from '../git-repos.constants';
  * - description 可选说明。
  */
 export class CreateGitCredentialDto {
-  @ApiProperty({ description: '凭证名称（全局唯一，人类可识别）', example: 'gitee-ssh-main', maxLength: 64 })
+  @ApiProperty({
+    description: '凭证名称（全局唯一，人类可识别）',
+    example: 'gitee-ssh-main',
+    maxLength: 64,
+  })
   @IsString()
   @IsNotEmpty()
   @MaxLength(64)
   name: string;
 
-  @ApiProperty({ description: '认证方式：ssh_key|https_token', enum: Object.values(GIT_AUTH_TYPES) })
+  @ApiProperty({
+    description: '认证方式：ssh_key|https_token',
+    enum: Object.values(GIT_AUTH_TYPES),
+  })
   @IsIn(Object.values(GIT_AUTH_TYPES))
   authType: 'ssh_key' | 'https_token';
 
-  @ApiProperty({ description: 'SSH 私钥明文 / HTTPS token（加密存储，绝不返回明文）', example: '-----BEGIN OPENSSH PRIVATE KEY-----...' })
+  @ApiProperty({
+    description: 'SSH 私钥明文 / HTTPS token（加密存储，绝不返回明文）',
+    example: '-----BEGIN OPENSSH PRIVATE KEY-----...',
+  })
   @IsString()
   @IsNotEmpty()
   key: string;
 
-  @ApiPropertyOptional({ description: '凭证描述（可选）', example: '用于 gitee.com 的主 SHH 密钥', maxLength: 256 })
+  @ApiPropertyOptional({
+    description: '凭证描述（可选）',
+    example: '用于 gitee.com 的主 SHH 密钥',
+    maxLength: 256,
+  })
   @IsOptional()
   @IsString()
   @MaxLength(256)

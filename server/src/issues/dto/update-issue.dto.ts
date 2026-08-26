@@ -1,10 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsArray,
-  IsOptional,
-  IsString,
-  MaxLength,
-} from 'class-validator';
+import { IsArray, IsOptional, IsString, MaxLength } from 'class-validator';
 
 /**
  * PATCH /issues/:id 请求体（全 optional 部分更新）。
@@ -40,7 +35,8 @@ export class UpdateIssueDto {
   assigneeAgentId?: string | null;
 
   @ApiPropertyOptional({
-    description: '指派实例 id（null 清除；变更须在任务团队未 removed，优先于 assigneeAgentId）',
+    description:
+      '指派实例 id（null 清除；变更须在任务团队未 removed，优先于 assigneeAgentId）',
   })
   @IsOptional()
   @IsString()

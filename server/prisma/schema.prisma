@@ -142,18 +142,20 @@ model Task {
   completedAt         DateTime? @map("completed_at")
   archivedAt          DateTime? @map("archived_at")
 
-  project            Project             @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  creator            User                @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  mainAgent          Agent?              @relation("TaskMainAgent", fields: [mainAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  taskAgents         TaskAgent[]
-  taskEvents         TaskEvent[]
-  sessions           Session[]
-  chatChannels       ChatChannel[]
-  artifacts          Artifact[]
-  taskGroupInstances TaskGroupInstance[]
-  issues             Issue[]
-  memories           Memory[]
-  plan               Plan?
+  project             Project              @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  creator             User                 @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  mainAgent           Agent?               @relation("TaskMainAgent", fields: [mainAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  taskAgents          TaskAgent[]
+  taskEvents          TaskEvent[]
+  sessions            Session[]
+  chatChannels        ChatChannel[]
+  artifacts           Artifact[]
+  taskGroupInstances  TaskGroupInstance[]
+  issues              Issue[]
+  memories            Memory[]
+  plan                     Plan?
+  messageChannelLinks      TaskMessageChannel[]
+  notificationChannelLinks TaskNotificationChannel[]
 
   @@index([projectId, status], map: "idx_tasks_project_status")
   @@map("tasks")
@@ -776,4 +778,106 @@ model AgentQuestion {
 
   @@index([taskId, status], map: "idx_agent_questions_task_status")
   @@map("agent_questions")
+}
+
+// ==================================================================
+// 消息渠道域（message-channels：mc_/md_ 前缀主键；inbound-only）
+// 通知渠道域（notification-channels：nc_/nd_ 前缀主键；outbound-only）
+// 任务绑定经关联表 TaskMessageChannel / TaskNotificationChannel
+// ==================================================================
+
+model MessageChannel {
+  id         String   @id
+  name       String   @db.VarChar(64)
+  type       String   @db.VarChar(32)
+  config     Json     @default("{}")
+  secrets    Json     @default("{}")
+  enabled    Boolean  @default(true)
+  lastStatus String?  @db.VarChar(16) @map("last_status")
+  lastError  String?  @db.VarChar(512) @map("last_error")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  deliveries MessageDelivery[]
+  taskLinks  TaskMessageChannel[]
+
+  @@map("message_channels")
+}
+
+model MessageDelivery {
+  id         String         @id
+  channelId  String         @map("channel_id")
+  channel    MessageChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  externalId String?        @db.VarChar(128) @map("external_id")
+  direction  String         @db.VarChar(8) @default("inbound")
+  status     String         @db.VarChar(16)
+  kind       String?        @db.VarChar(32)
+  error      String?        @db.VarChar(512)
+  payload    Json?
+  meta       Json?
+  createdAt  DateTime       @default(now()) @map("created_at")
+
+  @@unique([channelId, externalId])
+  @@index([channelId, createdAt])
+  @@map("message_deliveries")
+}
+
+model NotificationChannel {
+  id         String   @id
+  name       String   @db.VarChar(64)
+  type       String   @db.VarChar(32)
+  config     Json     @default("{}")
+  secrets    Json     @default("{}")
+  enabled    Boolean  @default(true)
+  lastStatus String?  @db.VarChar(16) @map("last_status")
+  lastError  String?  @db.VarChar(512) @map("last_error")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  deliveries NotificationDelivery[]
+  taskLinks  TaskNotificationChannel[]
+
+  @@map("notification_channels")
+}
+
+model NotificationDelivery {
+  id         String              @id
+  channelId  String              @map("channel_id")
+  channel    NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  externalId String?             @db.VarChar(128) @map("external_id")
+  direction  String              @db.VarChar(8) @default("outbound")
+  status     String              @db.VarChar(16)
+  kind       String?             @db.VarChar(32)
+  error      String?             @db.VarChar(512)
+  payload    Json?
+  meta       Json?
+  createdAt  DateTime            @default(now()) @map("created_at")
+
+  @@unique([channelId, externalId])
+  @@index([channelId, createdAt])
+  @@map("notification_deliveries")
+}
+
+model TaskMessageChannel {
+  taskId           String         @map("task_id")
+  messageChannelId String         @map("message_channel_id")
+  task             Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  messageChannel   MessageChannel @relation(fields: [messageChannelId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, messageChannelId])
+  @@unique([taskId, messageChannelId])
+  @@index([taskId])
+  @@map("task_message_channels")
+}
+
+model TaskNotificationChannel {
+  taskId                String              @map("task_id")
+  notificationChannelId String              @map("notification_channel_id")
+  task                  Task                @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  notificationChannel   NotificationChannel @relation(fields: [notificationChannelId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, notificationChannelId])
+  @@unique([taskId, notificationChannelId])
+  @@index([taskId])
+  @@map("task_notification_channels")
 }

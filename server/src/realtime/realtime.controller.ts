@@ -54,7 +54,8 @@ export class RealtimeController {
   @ApiQuery({
     name: 'token',
     required: true,
-    description: 'JWT access token（EventSource 无法携带 Authorization 头，改走 query）',
+    description:
+      'JWT access token（EventSource 无法携带 Authorization 头，改走 query）',
   })
   @ApiQuery({
     name: 'scope',

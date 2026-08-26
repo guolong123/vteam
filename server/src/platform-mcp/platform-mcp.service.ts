@@ -2,9 +2,11 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
@@ -23,10 +25,7 @@ import { ArtifactsService } from '../artifacts/artifacts.service';
 import { FileStorageService } from '../uploads/uploads.service';
 import { WorkerClient } from '../workers/worker.client';
 import { IssuesService } from '../issues/issues.service';
-import {
-  IssueStatus,
-  IssueTransitionAction,
-} from '../issues/issues.constants';
+import { IssueStatus, IssueTransitionAction } from '../issues/issues.constants';
 import { TaskTransitionAction } from '../common/constants/task.constants';
 import { TasksService } from '../tasks/tasks.service';
 import { QuestionsService } from '../questions/questions.service';
@@ -38,8 +37,13 @@ import {
   PLAN_STATUS,
   PLAN_TASK_STATUS,
 } from '../plans/plan.constants';
-import { PLATFORM_MCP_ERRORS, validateTsxPrototype } from './platform-mcp.constants';
+import {
+  PLATFORM_MCP_ERRORS,
+  validateTsxPrototype,
+} from './platform-mcp.constants';
 import { validatePlanTaskQuality } from './plan-quality.guard';
+import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service';
+import { ModuleRef } from '@nestjs/core';
 
 /**
  * Plan 主键前缀（与 plans.service.ts 对齐：pl_/pt_ 前缀零填充序号）。
@@ -131,6 +135,11 @@ export class PlatformMcpService {
     private readonly tasksService: TasksService,
     private readonly questionsService: QuestionsService,
     private readonly plansService: PlansService,
+    @Optional()
+    @Inject(NotificationDispatcherService)
+    private readonly outboundDispatcher: NotificationDispatcherService,
+    @Optional()
+    private readonly moduleRef?: ModuleRef,
   ) {}
 
   /**
@@ -311,8 +320,16 @@ export class PlatformMcpService {
       content: string;
       fileRef?: string;
     },
-  ): Promise<{ messageId: string; channelId: string; attachment: GroupPostAttachment | null }> {
-    const instanceId = await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+  ): Promise<{
+    messageId: string;
+    channelId: string;
+    attachment: GroupPostAttachment | null;
+  }> {
+    const instanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
+      args.selfInstanceId,
+    );
     const channel = await this.findTaskGroupChannel(args.taskId);
     if (!channel) {
       throw new NotFoundException({
@@ -383,7 +400,12 @@ export class PlatformMcpService {
     taskId: string,
     content: string,
   ): Promise<{
-    mentions: Array<{ type: 'agent'; instanceId: string; agentId: string; name: string }> | null;
+    mentions: Array<{
+      type: 'agent';
+      instanceId: string;
+      agentId: string;
+      name: string;
+    }> | null;
     mentionedInstances: string[];
   }> {
     if (!content || !content.includes('@')) {
@@ -411,39 +433,76 @@ export class PlatformMcpService {
       const atName = `@${name}`;
       const boundaryAfter = content.length;
       const idx = content.indexOf(atName);
-      const hit = idx >= 0 && (idx + atName.length >= boundaryAfter || /[\s,，。；;:：!！?？]/.test(content[idx + atName.length] ?? ''));
+      const hit =
+        idx >= 0 &&
+        (idx + atName.length >= boundaryAfter ||
+          /[\s,，。；;:：!！?？]/.test(content[idx + atName.length] ?? ''));
       if (!hit) continue;
       if (!mentionedInstances.includes(row.id)) {
         mentionedInstances.push(row.id);
-        mentions.push({ type: 'agent', instanceId: row.id, agentId: row.agentId, name });
+        mentions.push({
+          type: 'agent',
+          instanceId: row.id,
+          agentId: row.agentId,
+          name,
+        });
       }
     }
     if (content.includes('@all')) {
-      (mentions as unknown as Array<{ type: string }>).push({ type: 'all' } as unknown as { type: 'agent'; instanceId: string; agentId: string; name: string });
+      (mentions as unknown as Array<{ type: string }>).push({
+        type: 'all',
+      } as unknown as {
+        type: 'agent';
+        instanceId: string;
+        agentId: string;
+        name: string;
+      });
     }
     try {
-      const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: { projectId: true } });
+      const task = await this.prisma.task.findUnique({
+        where: { id: taskId },
+        select: { projectId: true },
+      });
       if (task?.projectId) {
         const members = await this.prisma.projectMember.findMany({
           where: { projectId: task.projectId },
-          select: { user: { select: { id: true, username: true, displayName: true } } },
+          select: {
+            user: { select: { id: true, username: true, displayName: true } },
+          },
         });
-        const hasDynamic = ['@user', '@me', '@当前用户', '@here', '@用户'].some((t) => content.includes(t));
+        const hasDynamic = ['@user', '@me', '@当前用户', '@here', '@用户'].some(
+          (t) => content.includes(t),
+        );
         if (hasDynamic) {
           for (const m of members) {
-            if (!(mentions as unknown as Array<{ type: string; userId: string }>).some((x) => x.userId === m.user.id)) {
-              (mentions as unknown as Array<{ type: string; userId: string }>).push({ type: 'user', userId: m.user.id });
+            if (
+              !(
+                mentions as unknown as Array<{ type: string; userId: string }>
+              ).some((x) => x.userId === m.user.id)
+            ) {
+              (
+                mentions as unknown as Array<{ type: string; userId: string }>
+              ).push({ type: 'user', userId: m.user.id });
             }
           }
         } else {
           for (const m of members) {
-            const names = [m.user.username, m.user.displayName].filter(Boolean) as string[];
+            const names = [m.user.username, m.user.displayName].filter(
+              Boolean,
+            ) as string[];
             for (const n of names) {
               const atN = `@${n}`;
               const idx = content.indexOf(atN);
-              const hit = idx >= 0 && (idx + atN.length >= content.length || /[\s,，。；;:：!！?？]/.test(content[idx + atN.length] ?? ''));
+              const hit =
+                idx >= 0 &&
+                (idx + atN.length >= content.length ||
+                  /[\s,，。；;:：!！?？]/.test(
+                    content[idx + atN.length] ?? '',
+                  ));
               if (hit) {
-                (mentions as unknown as Array<{ type: string; userId: string }>).push({ type: 'user', userId: m.user.id });
+                (
+                  mentions as unknown as Array<{ type: string; userId: string }>
+                ).push({ type: 'user', userId: m.user.id });
                 break;
               }
             }
@@ -452,7 +511,15 @@ export class PlatformMcpService {
       }
     } catch {}
     return {
-      mentions: mentions.length > 0 ? (mentions as unknown as Array<{ type: 'agent'; instanceId: string; agentId: string; name: string }>) : null,
+      mentions:
+        mentions.length > 0
+          ? (mentions as unknown as Array<{
+              type: 'agent';
+              instanceId: string;
+              agentId: string;
+              name: string;
+            }>)
+          : null,
       mentionedInstances,
     };
   }
@@ -479,7 +546,11 @@ export class PlatformMcpService {
       targetInstanceId: string;
       content: string;
     },
-  ): Promise<{ messageId: string; channelId: string; targetInstanceId: string }> {
+  ): Promise<{
+    messageId: string;
+    channelId: string;
+    targetInstanceId: string;
+  }> {
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
     const channel = await this.findTaskGroupChannel(args.taskId);
     if (!channel) {
@@ -490,7 +561,11 @@ export class PlatformMcpService {
     }
     // 目标实例行（agentId/alias/name）——@ 目标、消息 sender/mentions 归属依据
     const targetInstance = await this.prisma.taskAgent.findFirst({
-      where: { id: args.targetInstanceId, taskId: args.taskId, removedAt: null },
+      where: {
+        id: args.targetInstanceId,
+        taskId: args.taskId,
+        removedAt: null,
+      },
       select: {
         agentId: true,
         alias: true,
@@ -504,8 +579,12 @@ export class PlatformMcpService {
       });
     }
     const targetAgentId = targetInstance.agentId;
-    const targetName = targetInstance.alias ?? targetInstance.agent.name ?? targetAgentId;
-    const senderAgentId = await this.resolveSenderAgentId(args.taskId, args.selfInstanceId);
+    const targetName =
+      targetInstance.alias ?? targetInstance.agent.name ?? targetAgentId;
+    const senderAgentId = await this.resolveSenderAgentId(
+      args.taskId,
+      args.selfInstanceId,
+    );
     const text = `@${targetName} ${args.content}`;
     const message = await this.prisma.message.create({
       data: {
@@ -573,7 +652,8 @@ export class PlatformMcpService {
         orderBy: { version: 'desc' },
         select: { contentRef: true },
       });
-      if (direct) return this.readFromArchive(direct.contentRef, args.fileRef, maxBytes);
+      if (direct)
+        return this.readFromArchive(direct.contentRef, args.fileRef, maxBytes);
       const art = await this.prisma.artifact.findUnique({
         where: { id: artifactId },
         select: { taskId: true },
@@ -584,7 +664,8 @@ export class PlatformMcpService {
           orderBy: { version: 'desc' },
           select: { contentRef: true },
         });
-        if (v2) return this.readFromArchive(v2.contentRef, args.fileRef, maxBytes);
+        if (v2)
+          return this.readFromArchive(v2.contentRef, args.fileRef, maxBytes);
       }
     }
     const target = FileStorageService.normalizeFileRef(args.fileRef);
@@ -788,7 +869,8 @@ export class PlatformMcpService {
       if (t?.executionMode === 'plan') {
         throw new ForbiddenException({
           code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-          message: '计划模式下需由用户在任务管理界面手动启动任务，Agent 不可自动 start；评审通过后请等待用户点击“开始任务”',
+          message:
+            '计划模式下需由用户在任务管理界面手动启动任务，Agent 不可自动 start；评审通过后请等待用户点击“开始任务”',
         });
       }
     }
@@ -884,7 +966,9 @@ export class PlatformMcpService {
       });
     }
 
-    const description = (args.description?.trim() || args.content.slice(0, 120)).slice(0, 255);
+    const description = (
+      args.description?.trim() || args.content.slice(0, 120)
+    ).slice(0, 255);
     let sourceAgentId: string | null = null;
     let sessionId: string | null = null;
     let sessionTitle: string | null = null;
@@ -994,7 +1078,10 @@ export class PlatformMcpService {
     }
     if (args.level === undefined || args.level === MEMORY_LEVELS.project) {
       if (task.projectId) {
-        whereOr.push({ level: MEMORY_LEVELS.project, projectId: task.projectId });
+        whereOr.push({
+          level: MEMORY_LEVELS.project,
+          projectId: task.projectId,
+        });
       }
     }
     if (args.level === undefined || args.level === MEMORY_LEVELS.global) {
@@ -1005,15 +1092,23 @@ export class PlatformMcpService {
       return [];
     }
 
-    const tokens = args.query ? args.query.trim().split(/\s+/).filter(Boolean) : [];
+    const tokens = args.query
+      ? args.query.trim().split(/\s+/).filter(Boolean)
+      : [];
     const tokenFilters: Prisma.MemoryWhereInput[] = tokens.map((t) => ({
       OR: [{ content: { contains: t } }, { description: { contains: t } }],
     }));
     const sourceFilters: Prisma.MemoryWhereInput[] = [];
-    if (args.sourceInstanceId) sourceFilters.push({ sourceInstanceId: args.sourceInstanceId });
-    if (args.sourceAgentId) sourceFilters.push({ sourceAgentId: args.sourceAgentId });
+    if (args.sourceInstanceId)
+      sourceFilters.push({ sourceInstanceId: args.sourceInstanceId });
+    if (args.sourceAgentId)
+      sourceFilters.push({ sourceAgentId: args.sourceAgentId });
     if (args.sessionId) sourceFilters.push({ sessionId: args.sessionId });
-    const andBlocks: Prisma.MemoryWhereInput[] = [{ OR: whereOr }, ...tokenFilters, ...sourceFilters];
+    const andBlocks: Prisma.MemoryWhereInput[] = [
+      { OR: whereOr },
+      ...tokenFilters,
+      ...sourceFilters,
+    ];
     const where: Prisma.MemoryWhereInput =
       tokenFilters.length > 0 || sourceFilters.length > 0
         ? { deletedAt: null, AND: andBlocks }
@@ -1109,7 +1204,11 @@ export class PlatformMcpService {
         message: `执行计划处于 ${existing.status} 状态（评审中/已批准/实施中），不可重复提交`,
       });
     }
-    if (existing && (existing as { rejectCount?: number }).rejectCount !== undefined && (existing.rejectCount as number) >= 3) {
+    if (
+      existing &&
+      (existing as { rejectCount?: number }).rejectCount !== undefined &&
+      (existing.rejectCount as number) >= 3
+    ) {
       throw new ConflictException({
         code: PLAN_ERRORS.PLAN_REVIEW_ROUNDS_EXCEEDED,
         message: `执行计划已驳回 ${existing.rejectCount} 次，请向用户同步分歧点并请求人工裁决后再提交`,
@@ -1326,7 +1425,11 @@ export class PlatformMcpService {
         where: { id: plan.id },
         data: approved
           ? { status: PLAN_STATUS.approved, reviewerInstanceId: null }
-          : { status: PLAN_STATUS.rejected, reviewerInstanceId: null, rejectCount: { increment: 1 } },
+          : {
+              status: PLAN_STATUS.rejected,
+              reviewerInstanceId: null,
+              rejectCount: { increment: 1 },
+            },
       });
       if (channel) {
         await tx.message.create({
@@ -1791,7 +1894,12 @@ export class PlatformMcpService {
       alias?: string;
       workDir?: string;
     },
-  ): Promise<{ requestId: string; taskId: string; agentId: string; alias: string }> {
+  ): Promise<{
+    requestId: string;
+    taskId: string;
+    agentId: string;
+    alias: string;
+  }> {
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
 
     const task = await this.prisma.task.findUnique({
@@ -1895,6 +2003,1049 @@ export class PlatformMcpService {
   }
 
   /**
+   * wecom_reply：回复企业微信用户（仅当消息来自企微时使用）。
+   * - 解析当前任务（taskId/selfInstanceId 可选，未传则从 worker 会话自动解析）→ 校验归属
+   * - 查找该任务绑定的 wecom_aibot 渠道 → 通过 WecomAibotAdapter 发送到企微（@发送者，群聊时@）
+   * - 同时镜像到任务群聊（@发送者 前缀），确保两端可见
+   * - 成功/失败均返回 isError:false 的 content 文本，不中断 agent 会话
+   */
+  async wecomReply(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId?: string;
+      selfInstanceId?: string;
+      msgtype?: string;
+      text?: string;
+      atUser?: boolean;
+      card?: unknown;
+      media?: string;
+      mediaId?: string;
+      filename?: string;
+      articles?: Array<{ title: string; description?: string; url?: string; picurl?: string }>;
+      mpnews?: unknown;
+    },
+  ): Promise<{
+    content: Array<{ type: string; text: string }>;
+    isError?: boolean;
+    messageId?: string;
+    channelId?: string | null;
+    wecomSent?: boolean;
+  }> {
+    const msgtypeRaw = (args.msgtype ?? 'text').trim().toLowerCase();
+    const msgtype = ['text', 'markdown', 'template_card', 'image', 'mpnews'].includes(msgtypeRaw)
+      ? msgtypeRaw
+      : 'text';
+    const rawText = args.text?.trim() ?? '';
+    const atUser = args.atUser ?? true;
+    if ((msgtype === 'text' || msgtype === 'markdown') && !rawText) {
+      return {
+        content: [{ type: 'text', text: '发送失败: text 不能为空' }],
+        isError: false,
+      };
+    }
+    if (rawText.length > 4000) {
+      return {
+        content: [{ type: 'text', text: '发送失败: text 长度超过 4000 字符' }],
+        isError: false,
+      };
+    }
+    if (msgtype === 'template_card' && !args.card) {
+      return {
+        content: [{ type: 'text', text: '发送失败: template_card 需要 card 参数' }],
+        isError: false,
+      };
+    }
+    if (msgtype === 'image' && !args.media && !args.mediaId) {
+      return {
+        content: [{ type: 'text', text: '发送失败: image 需要 media(文件路径) 或 mediaId 参数' }],
+        isError: false,
+      };
+    }
+    if (msgtype === 'mpnews') {
+      const rawArticles = (args.articles as unknown) ?? (args.mpnews as unknown);
+      let articles: Array<{ title: string; description?: string; url?: string; picurl?: string }> = [];
+      if (Array.isArray(rawArticles)) {
+        articles = rawArticles as any;
+      } else if (rawArticles && typeof rawArticles === 'object' && Array.isArray((rawArticles as any).articles)) {
+        articles = (rawArticles as any).articles as any;
+      } else if (typeof rawArticles === 'string') {
+        try {
+          const parsed = JSON.parse((rawArticles as string).trim());
+          if (Array.isArray(parsed)) articles = parsed as any;
+          else if (parsed && Array.isArray(parsed.articles)) articles = parsed.articles as any;
+        } catch {}
+      }
+      if (!articles || articles.length === 0) {
+        return {
+          content: [{ type: 'text', text: '发送失败: mpnews 需要 articles(≥1 篇) 或 mpnews 参数' }],
+          isError: false,
+        };
+      }
+    }
+
+    let taskId: string | null = args.taskId?.trim() || null;
+    let selfInstanceId: string | null = args.selfInstanceId?.trim() || null;
+    if (!taskId || !selfInstanceId) {
+      try {
+        const sess = await (this.prisma as any).session.findFirst({
+          where: { workerId: ctx.workerId },
+          orderBy: { createdAt: 'desc' },
+          select: { taskId: true, taskAgentId: true, agentId: true },
+        });
+        if (sess) {
+          if (!taskId) taskId = sess.taskId ?? null;
+          if (!selfInstanceId) selfInstanceId = sess.taskAgentId ?? sess.agentId ?? null;
+        }
+      } catch {}
+    }
+    if (!taskId) {
+      return {
+        content: [{ type: 'text', text: '发送失败: 无法解析当前任务上下文（请传 taskId）' }],
+        isError: false,
+      };
+    }
+    if (!selfInstanceId) {
+      return {
+        content: [{ type: 'text', text: '发送失败: 无法解析实例身份（请传 selfInstanceId）' }],
+        isError: false,
+      };
+    }
+    let instanceId: string;
+    try {
+      instanceId = await this.assertWorkerTask(ctx, taskId, selfInstanceId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text', text: `发送失败: ${msg}` }],
+        isError: false,
+      };
+    }
+
+    let wecomChannelId: string | null = null;
+    try {
+      const bindings = await (this.prisma as any).taskMessageChannel.findMany({
+        where: { taskId },
+        select: { messageChannelId: true },
+      });
+      for (const b of bindings as Array<{ messageChannelId: string }>) {
+        try {
+          const ch = await (this.prisma as any).messageChannel.findUnique({
+            where: { id: b.messageChannelId },
+            select: { id: true, type: true },
+          });
+          if (ch && ch.type === 'wecom_aibot') {
+            wecomChannelId = ch.id;
+            break;
+          }
+        } catch {}
+      }
+    } catch {}
+    if (!wecomChannelId) {
+      return {
+        content: [{ type: 'text', text: '发送失败: 当前任务未绑定企业微信渠道' }],
+        isError: false,
+      };
+    }
+
+    let adapter: any | undefined;
+    try {
+      const WecomAibotAdapterRef = (await import('../message-channels/adapters/wecom-aibot.adapter')).WecomAibotAdapter;
+      adapter = this.moduleRef?.get(WecomAibotAdapterRef, { strict: false }) as unknown;
+    } catch {}
+    if (!adapter) {
+      try {
+        const g = globalThis as unknown as Record<string, unknown>;
+        adapter = (g as any)['__wecomAdapter'] as unknown;
+      } catch {}
+    }
+    if (!adapter || typeof adapter.sendNewMessage !== 'function') {
+      return {
+        content: [{ type: 'text', text: '发送失败: WeCom 适配器未就绪' }],
+        isError: false,
+      };
+    }
+
+    let fromName: string | null = null;
+    let chattype: string | null = null;
+    try {
+      const pending = (adapter as any).getPendingOperatorForTask?.(taskId);
+      if (pending) {
+        fromName = pending.fromUserName ?? pending.fromUserId ?? null;
+        chattype = pending.chattype ?? null;
+      } else {
+        const groupCh = await this.prisma.chatChannel.findFirst({
+          where: { taskId, type: CHANNEL_TYPE.task_group },
+          select: { id: true },
+        });
+        if (groupCh) {
+          const ext = await (this.prisma as any).message.findFirst({
+            where: { channelId: groupCh.id, senderType: SENDER_TYPE.external },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, content: true },
+          });
+          if (ext) {
+            const streamInfo =
+              (adapter as any).getStream?.(ext.id) ?? (adapter as any).getPendingUser?.(ext.id);
+            if (streamInfo) {
+              fromName = streamInfo.fromUserName ?? streamInfo.fromUserId ?? null;
+              chattype = streamInfo.chattype ?? null;
+            } else {
+              const contentText = (ext.content as any)?.text ?? '';
+              const m = /\[WeCom:([^\]]+)\]/.exec(String(contentText));
+              if (m) fromName = m[1].trim();
+            }
+          }
+        }
+      }
+    } catch {}
+
+    let wecomText = rawText;
+    let mirrorText = rawText;
+    if (fromName && atUser) {
+      if (chattype === 'group') {
+        wecomText = `@${fromName} ${rawText}`;
+      }
+      mirrorText = `@${fromName} ${rawText}`;
+    } else if (fromName) {
+      mirrorText = `@${fromName} ${rawText}`;
+    }
+
+    let wecomSent = false;
+    let resolvedCard: unknown = args.card ?? null;
+    let mirrorContent: any = null;
+    let sendError: string | null = null;
+    try {
+      if (msgtype === 'text' || msgtype === 'markdown') {
+        if (typeof (adapter as any).finishStream === 'function') {
+          const groupCh = await this.prisma.chatChannel.findFirst({
+            where: { taskId, type: CHANNEL_TYPE.task_group },
+            select: { id: true },
+          });
+          if (groupCh) {
+            const ext = await (this.prisma as any).message.findFirst({
+              where: { channelId: groupCh.id, senderType: SENDER_TYPE.external },
+              orderBy: { createdAt: 'desc' },
+              select: { id: true },
+            });
+            if (ext) {
+              try {
+                wecomSent = await (adapter as any).finishStream(ext.id, wecomText);
+                if (wecomSent) {
+                  this.logger.log(`wecom_reply finishStream ok taskId=${taskId} internalMessageId=${ext.id} stream replaced`);
+                } else {
+                  this.logger.log(`wecom_reply finishStream miss taskId=${taskId} internalMessageId=${ext.id} fallback to sendNewMessage`);
+                }
+              } catch (e) {
+                this.logger.warn(`wecom_reply finishStream error taskId=${taskId}: ${(e as Error).message}`);
+              }
+            }
+          }
+        }
+        if (!wecomSent && typeof (adapter as any).sendNewMessage === 'function') {
+          wecomSent = await (adapter as any).sendNewMessage(wecomChannelId, wecomText);
+        }
+        if (!wecomSent && typeof (adapter as any).sendFallbackMessage === 'function') {
+          wecomSent = await (adapter as any).sendFallbackMessage(wecomChannelId, wecomText);
+        }
+        mirrorContent = { text: mirrorText, msgtype, parts: [] };
+      } else if (msgtype === 'template_card') {
+        let cardObj: any;
+        try {
+          if (typeof resolvedCard === 'string') {
+            const s = (resolvedCard as string).trim();
+            cardObj = s ? JSON.parse(s) : null;
+          } else {
+            cardObj = resolvedCard as any;
+          }
+        } catch (e) {
+          sendError = `card JSON 解析失败: ${(e as Error).message}`;
+          this.logger.warn(`wecom_reply template_card JSON parse failed taskId=${taskId} err=${(e as Error).message} raw=${String(resolvedCard).slice(0, 800)}`);
+          throw new Error(sendError);
+        }
+        if (cardObj && typeof cardObj === 'object' && !cardObj.card_type && cardObj.template_card && typeof cardObj.template_card === 'object') {
+          this.logger.log(`wecom_reply template_card unwrap template_card wrapper taskId=${taskId}`);
+          cardObj = cardObj.template_card;
+        }
+        if (cardObj && typeof cardObj === 'object' && !cardObj.card_type && cardObj.card && typeof cardObj.card === 'object' && cardObj.card.card_type) {
+          this.logger.log(`wecom_reply template_card unwrap card wrapper taskId=${taskId}`);
+          cardObj = cardObj.card;
+        }
+        if (!cardObj || typeof cardObj !== 'object') {
+          sendError = 'card 必须为 JSON 对象';
+          throw new Error(sendError);
+        }
+        const validCardTypes = ['text_notice', 'button_interaction', 'vote_interaction', 'news_notice', 'multiple_interaction'];
+        if (!cardObj.card_type || typeof cardObj.card_type !== 'string') {
+          sendError = 'card.card_type 必填（如 text_notice / button_interaction / vote_interaction / news_notice）';
+          this.logger.warn(`wecom_reply template_card missing card_type taskId=${taskId} card=${JSON.stringify(cardObj).slice(0, 1200)}`);
+          throw new Error(sendError);
+        }
+        if (!validCardTypes.includes(cardObj.card_type)) {
+          this.logger.warn(`wecom_reply template_card unknown card_type=${cardObj.card_type} taskId=${taskId}`);
+        }
+        // Only card_type + main_title are required; icon_url/pic_url/image_url/card_image etc are all optional (no image required to send card)
+        if (!cardObj.main_title || typeof cardObj.main_title !== 'object') {
+          // Graceful: if main_title missing but we have rawText fallback, inject minimal main_title; else require it
+          if (rawText) {
+            cardObj.main_title = { title: rawText.slice(0, 64), desc: rawText.slice(0, 512) };
+            this.logger.log(`wecom_reply template_card auto-filled main_title from text taskId=${taskId} card_type=${cardObj.card_type}`);
+          } else if (['text_notice', 'news_notice', 'button_interaction', 'vote_interaction', 'multiple_interaction'].includes(cardObj.card_type)) {
+            sendError = 'card.main_title 必填（card_type 已提供但 main_title 缺失，image/pic_url 等均为可选）';
+            this.logger.warn(`wecom_reply template_card missing main_title taskId=${taskId} card_type=${cardObj.card_type} card=${JSON.stringify(cardObj).slice(0, 800)}`);
+            throw new Error(sendError);
+          }
+        }
+        // Auto-fill task_id (WeCom requires unique per vote; same value reused causes 42014 taskid has existed)
+        // Generate unique per card send: base_sanitized + _<timestamp>_<random>, keep <64 and [\w\-@] charset
+        const genUniqueTaskId = (base: string): string => {
+          const sanitized = base.replace(/[^a-zA-Z0-9_\-@]/g, '_') || 't_default';
+          const suffix = `_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+          const maxBase = 64 - suffix.length;
+          return `${sanitized.slice(0, Math.max(1, maxBase))}${suffix}`.slice(0, 64);
+        };
+        if (!cardObj.task_id) {
+          cardObj.task_id = genUniqueTaskId(taskId);
+        } else {
+          // Provided task_id must also be unique per send; sanitize and ensure uniqueness to avoid 42014
+          const provided = String(cardObj.task_id).trim();
+          const sanitizedProvided = provided.replace(/[^a-zA-Z0-9_\-@]/g, '_').slice(0, 64) || genUniqueTaskId(taskId);
+          // If provided equals base sanitized (reused t_0000000014), make it unique
+          const baseSanitized = taskId.replace(/[^a-zA-Z0-9_\-@]/g, '_');
+          if (sanitizedProvided === baseSanitized || sanitizedProvided === taskId) {
+            cardObj.task_id = genUniqueTaskId(taskId);
+          } else {
+            // Ensure length <64 and unique suffix to avoid collision when same LLM value reused
+            const suffix = `_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+            const needsSuffix = cardObj.task_id === sanitizedProvided; // reused literal
+            // Append short suffix if provided looks like repeated reuse (defensive); keep total <64
+            if (needsSuffix && sanitizedProvided.length <= 48) {
+              cardObj.task_id = `${sanitizedProvided}${suffix}`.slice(0, 64);
+            } else {
+              cardObj.task_id = sanitizedProvided.slice(0, 64);
+              // If still collision risk and provided not unique enough, ensure randomness for vote_interaction
+              if (cardObj.card_type === 'vote_interaction' && sanitizedProvided.length < 60) {
+                cardObj.task_id = `${sanitizedProvided.slice(0, 64 - suffix.length)}${suffix}`.slice(0, 64);
+              }
+            }
+          }
+        }
+        // Per-type normalization per WeCom spec:
+        // - text_notice / news_notice: card_action REQUIRED, type MUST be 1 or 2 (42045 if type 0 / missing). Auto-fill type=1 with placeholder URL.
+        // - button_interaction / vote_interaction / multiple_interaction: card_action OPTIONAL; do NOT auto-add type 0 (working question cards have none). Only validate if present.
+        // - button_list type=1 without url -> 42028 Missing Url; auto-fill placeholder URL.
+        const PLACEHOLDER_URL = 'https://work.weixin.qq.com';
+        const noticeTypes = new Set(['text_notice', 'news_notice']);
+        const interactiveTypes = new Set(['button_interaction', 'vote_interaction', 'multiple_interaction']);
+        if ('card_style' in cardObj) {
+          delete cardObj.card_style;
+          this.logger.log(`wecom_reply template_card stripped invalid card_style taskId=${taskId}`);
+        }
+        if (!cardObj.source || typeof cardObj.source !== 'object') {
+          cardObj.source = { desc: 'vteam', desc_color: 0 };
+          this.logger.log(`wecom_reply template_card auto-filled source taskId=${taskId} card_type=${cardObj.card_type}`);
+        } else {
+          const sc: any = cardObj.source;
+          if (typeof sc.desc_color !== 'undefined' && ![0, 1, 2, 3].includes(sc.desc_color)) {
+            sc.desc_color = 0;
+          }
+        }
+        // Per-type card_action handling
+        if (noticeTypes.has(cardObj.card_type)) {
+          const ca: any = cardObj.card_action;
+          const hasValidType1 = ca && typeof ca === 'object' && ca.type === 1 && typeof ca.url === 'string' && ca.url.trim();
+          const hasValidType2 = ca && typeof ca === 'object' && ca.type === 2 && typeof ca.appid === 'string' && ca.appid.trim();
+          if (!hasValidType1 && !hasValidType2) {
+            // Fix 42045: type 0 or missing is invalid for text_notice/news_notice; must be 1 or 2
+            if (ca && typeof ca === 'object' && ca.type === 2 && !ca.appid) {
+              // Attempts type 2 but missing appid -> fallback to type 1
+            }
+            cardObj.card_action = { type: 1, url: PLACEHOLDER_URL };
+            this.logger.log(`wecom_reply template_card auto-filled card_action type=1 url=${PLACEHOLDER_URL} for ${cardObj.card_type} taskId=${taskId} (42045 fix)`);
+          } else {
+            // Valid type exists but ensure required field present
+            if (ca.type === 1 && (!ca.url || !String(ca.url).trim())) {
+              ca.url = PLACEHOLDER_URL;
+              this.logger.log(`wecom_reply template_card patched card_action url placeholder taskId=${taskId}`);
+            }
+          }
+        } else if (interactiveTypes.has(cardObj.card_type)) {
+          // For interactive, card_action optional; remove invalid ones instead of adding type 0
+          if (cardObj.card_action && typeof cardObj.card_action === 'object') {
+            const ca: any = cardObj.card_action;
+            if (![0, 1, 2].includes(ca.type)) {
+              delete cardObj.card_action;
+              this.logger.log(`wecom_reply template_card stripped invalid card_action type=${ca.type} for interactive ${cardObj.card_type} taskId=${taskId}`);
+            } else if (ca.type === 1 && (!ca.url || !String(ca.url).trim())) {
+              // Instead of downgrading to type 0, auto-fill url to avoid 42028-like handling? For card_action fallback to delete
+              // Prefer delete to avoid accidental 42045; but type 1 without url would be invalid anywhere, so patch
+              ca.url = PLACEHOLDER_URL;
+              this.logger.log(`wecom_reply template_card patched interactive card_action url placeholder taskId=${taskId}`);
+            } else if (ca.type === 2 && (!ca.appid || !String(ca.appid).trim())) {
+              delete cardObj.card_action;
+              this.logger.log(`wecom_reply template_card stripped invalid card_action appid missing for interactive ${cardObj.card_type} taskId=${taskId}`);
+            }
+          }
+          // Do NOT auto-add card_action if missing — working button_interaction cards have none
+        } else {
+          // Unknown type: keep generic fallback but ensure not 42045; prefer delete invalid
+          if (!cardObj.card_action || typeof cardObj.card_action !== 'object' || typeof (cardObj.card_action as any).type === 'undefined') {
+            // Leave absent rather than forcing type 0 which may be invalid for notice-like unknown
+          } else {
+            const ca: any = cardObj.card_action;
+            if (![0, 1, 2].includes(ca.type)) delete cardObj.card_action;
+            else if (ca.type === 1 && !ca.url) ca.url = PLACEHOLDER_URL;
+            else if (ca.type === 2 && !ca.appid) delete cardObj.card_action;
+          }
+        }
+        // button_list per-item fix: type 1 without url -> 42028 Missing Url
+        if (Array.isArray(cardObj.button_list)) {
+          let patched = 0;
+          for (let i = 0; i < cardObj.button_list.length; i++) {
+            const btn: any = cardObj.button_list[i];
+            if (!btn || typeof btn !== 'object') continue;
+            // Ensure key exists (required for callback routing)
+            if (!btn.key || typeof btn.key !== 'string' || !btn.key.trim()) {
+              btn.key = `btn_${i}_${Date.now()}`.slice(0, 1024);
+              patched++;
+            }
+            // Ensure style valid (1-4)
+            if (typeof btn.style !== 'undefined' && ![1, 2, 3, 4].includes(btn.style)) {
+              btn.style = 1;
+              patched++;
+            }
+            // Fix 42028: type 1 requires url
+            if (btn.type === 1 && (!btn.url || !String(btn.url).trim())) {
+              btn.url = PLACEHOLDER_URL;
+              patched++;
+              this.logger.log(`wecom_reply template_card patched button_list[${i}] missing url -> placeholder taskId=${taskId}`);
+            }
+            // If type is present but not 0/1/2, normalize to absent (key-based button)
+            if (typeof btn.type !== 'undefined' && ![0, 1, 2].includes(btn.type)) {
+              delete btn.type;
+              if (btn.url) delete btn.url;
+              if (btn.appid) delete btn.appid;
+              patched++;
+            }
+            // If button has type but also missing required field for non-key semantics, fallback to key-based
+            if (btn.type === 2 && (!btn.appid || !String(btn.appid).trim())) {
+              delete btn.type;
+              delete btn.appid;
+              if (btn.pagepath) delete btn.pagepath;
+              patched++;
+            }
+            // For pure key-based interactive buttons (SDK spec), strip url/type if url was dummy but type inconsistent
+            // Keep type/url only when explicitly intended; otherwise ensure key-based button passes validation
+            // If button has no type, ensure no stray url causes confusion (strip if not type 1)
+            if (typeof btn.type === 'undefined' && btn.url && !btn.key) {
+              // Keep url only if type 1 was intended; since type missing, url is stray — keep but log
+            }
+          }
+          if (patched) this.logger.log(`wecom_reply template_card patched ${patched} button_list items taskId=${taskId} card_type=${cardObj.card_type}`);
+        }
+        // jump_list and horizontal_content_list similar per-item url fixes (type 1 needs url, type 2 needs appid)
+        for (const listKey of ['jump_list', 'horizontal_content_list'] as const) {
+          if (Array.isArray((cardObj as any)[listKey])) {
+            for (const item of (cardObj as any)[listKey] as any[]) {
+              if (!item || typeof item !== 'object') continue;
+              if (item.type === 1 && (!item.url || !String(item.url).trim())) {
+                item.url = PLACEHOLDER_URL;
+                this.logger.log(`wecom_reply template_card patched ${listKey} type1 missing url -> placeholder taskId=${taskId}`);
+              }
+              if (item.type === 2 && (!item.appid || !String(item.appid).trim())) {
+                // fallback to url jump
+                item.type = 1;
+                item.url = PLACEHOLDER_URL;
+                delete item.appid;
+                this.logger.log(`wecom_reply template_card patched ${listKey} type2 missing appid -> fallback type1 taskId=${taskId}`);
+              }
+            }
+          }
+        }
+        // quote_area type 1 needs url
+        if (cardObj.quote_area && typeof cardObj.quote_area === 'object') {
+          const qa: any = cardObj.quote_area;
+          if (qa.type === 1 && (!qa.url || !String(qa.url).trim())) {
+            qa.url = PLACEHOLDER_URL;
+            this.logger.log(`wecom_reply template_card patched quote_area missing url taskId=${taskId}`);
+          }
+          if (qa.type === 2 && (!qa.appid || !String(qa.appid).trim())) {
+            qa.type = 0;
+            delete qa.appid;
+            this.logger.log(`wecom_reply template_card patched quote_area type2 missing appid -> type0 taskId=${taskId}`);
+          }
+        }
+        if (cardObj.card_type === 'news_notice') {
+          const ci: any = cardObj.card_image;
+          if (!ci || typeof ci !== 'object' || !ci.url || !String(ci.url).trim()) {
+            cardObj.card_image = { url: PLACEHOLDER_URL };
+            this.logger.log(`wecom_reply template_card auto-filled card_image placeholder for news_notice taskId=${taskId} (42044 fix)`);
+          } else if (typeof ci.url === 'string' && !/^https?:\/\//.test(ci.url.trim())) {
+            ci.url = PLACEHOLDER_URL;
+            this.logger.log(`wecom_reply template_card patched card_image url placeholder for news_notice taskId=${taskId}`);
+          }
+          if (!cardObj.image_text_area || typeof cardObj.image_text_area !== 'object') {
+            const t = (cardObj.main_title as any)?.title ?? rawText?.slice(0, 64) ?? '图文消息';
+            const d = (cardObj.main_title as any)?.desc ?? rawText?.slice(0, 512) ?? '';
+            cardObj.image_text_area = { type: 1, title: String(t).slice(0, 64), desc: String(d).slice(0, 512), url: PLACEHOLDER_URL, image_url: PLACEHOLDER_URL };
+            this.logger.log(`wecom_reply template_card auto-filled image_text_area for news_notice taskId=${taskId}`);
+          }
+        }
+        if (cardObj.card_type === 'vote_interaction') {
+          const cb: any = cardObj.checkbox;
+          let optionList: any[] | null = null;
+          if (cb && typeof cb === 'object' && Array.isArray(cb.option_list) && cb.option_list.length > 0) {
+            optionList = cb.option_list;
+          }
+          if (!optionList || optionList.length === 0) {
+            const rawList: any =
+              (cardObj as any).vote_list ?? (cardObj as any).option_list ?? (cardObj as any).options ?? (cardObj as any).select_list?.option_list ?? (cardObj as any).select_list;
+            if (Array.isArray(rawList) && rawList.length > 0) optionList = rawList;
+            else if (rawList && typeof rawList === 'object' && Array.isArray((rawList as any).option_list)) optionList = (rawList as any).option_list;
+          }
+          if (optionList && optionList.length > 0) {
+            const seen = new Set<string>();
+            const questionKeyRaw = cb?.question_key ?? (cardObj as any).vote_title ?? (cardObj as any).question_key ?? cardObj.main_title?.title ?? String(taskId).slice(0, 32);
+            const questionKey = String(questionKeyRaw).slice(0, 1024) || String(taskId).slice(0, 1024);
+            const titleRaw = (cardObj as any).vote_title ?? cb?.title ?? cardObj.main_title?.title ?? '';
+            const mapped = optionList.slice(0, 20).map((o: any, idx: number) => {
+              if (typeof o === 'string') {
+                const text = o.trim().slice(0, 17) || `选项${idx + 1}`;
+                let id = `${questionKey}:${text}`.slice(0, 128);
+                if (seen.has(id)) id = `${id}_${idx}`.slice(0, 128);
+                seen.add(id);
+                return { id, text };
+              }
+              const textRaw = o.text ?? o.label ?? o.title ?? o.name ?? String(o.id ?? '');
+              const text = String(textRaw).trim().slice(0, 17) || `选项${idx + 1}`;
+              let id = String(o.id ?? o.key ?? `${questionKey}:${text}`).slice(0, 128) || `${questionKey}:${text}`.slice(0, 128);
+              if (seen.has(id)) id = `${id}_${idx}`.slice(0, 128);
+              seen.add(id);
+              const item: any = { id, text };
+              if (typeof o.is_checked === 'boolean') item.is_checked = o.is_checked;
+              return item;
+            });
+            while (mapped.length < 2) {
+              const idx = mapped.length;
+              const text = `选项${idx + 1}`;
+              const id = `${questionKey}:${text}_${idx}`.slice(0, 128);
+              if (!seen.has(id)) { seen.add(id); mapped.push({ id, text }); }
+              else mapped.push({ id: `${id}x`, text });
+            }
+            cardObj.checkbox = { question_key: questionKey, title: String(titleRaw).slice(0, 64) || undefined, option_list: mapped, mode: typeof cb?.mode === 'number' ? cb.mode : 0, disable: typeof cb?.disable === 'boolean' ? cb.disable : false };
+            if (!cardObj.checkbox.title) delete cardObj.checkbox.title;
+            if (typeof cardObj.checkbox.disable === 'undefined' || cardObj.checkbox.disable === false) delete cardObj.checkbox.disable;
+            if ('vote_list' in cardObj) delete (cardObj as any).vote_list;
+            if ('vote_title' in cardObj) delete (cardObj as any).vote_title;
+            if ('select_list' in cardObj && (cardObj as any).select_list?.option_list) delete (cardObj as any).select_list;
+            if (!cardObj.submit_button || typeof cardObj.submit_button !== 'object') {
+              cardObj.submit_button = { text: '提交', key: `${questionKey}:submit`.slice(0, 1024) };
+            } else {
+              if (!(cardObj.submit_button as any).key) (cardObj.submit_button as any).key = `${questionKey}:submit`.slice(0, 1024);
+              if (!(cardObj.submit_button as any).text) (cardObj.submit_button as any).text = '提交';
+            }
+            this.logger.log(`wecom_reply template_card normalized vote_interaction taskId=${taskId} question_key=${questionKey} options=${mapped.length} (42037 fix)`);
+          } else if (!cb || !Array.isArray(cb.option_list) || cb.option_list.length < 2) {
+            const questionKey = String((cardObj as any).vote_title ?? cardObj.main_title?.title ?? String(taskId).slice(0, 32)).slice(0, 1024);
+            const mapped = [{ id: `${questionKey}:选项1`.slice(0, 128), text: '选项1' }, { id: `${questionKey}:选项2`.slice(0, 128), text: '选项2' }];
+            cardObj.checkbox = { question_key: questionKey, option_list: mapped, mode: 0 };
+            cardObj.submit_button = { text: '提交', key: `${questionKey}:submit`.slice(0, 1024) };
+            if ('vote_list' in cardObj) delete (cardObj as any).vote_list;
+            if ('vote_title' in cardObj) delete (cardObj as any).vote_title;
+            this.logger.log(`wecom_reply template_card fabricated vote_interaction options taskId=${taskId} (42037 fix)`);
+          }
+        }
+        // Ensure at least one content field exists for empty interactive cards; sub_title_text is optional but helps rendering
+        if (!cardObj.sub_title_text && !cardObj.quote_area && !cardObj.horizontal_content_list && !cardObj.jump_list && !cardObj.button_list && !cardObj.checkbox && !cardObj.select_list && !cardObj.card_image && !cardObj.image_text_area && !cardObj.vertical_content_list) {
+          // For pure text_notice with only main_title, fill sub_title_text from main_title.desc or rawText to avoid empty card rejection
+          const fallbackDesc = (cardObj.main_title as any)?.desc ?? rawText?.slice(0, 512) ?? '详情请查看';
+          if (fallbackDesc) cardObj.sub_title_text = String(fallbackDesc).slice(0, 512);
+        }
+        // Log normalized card for debugging (slice to avoid oversized)
+        this.logger.log(`wecom_reply template_card normalized taskId=${taskId} card_type=${cardObj.card_type} task_id=${cardObj.task_id} card=${JSON.stringify(cardObj).slice(0, 2000)}`);
+        resolvedCard = cardObj;
+        let internalId: string | null = null;
+        try {
+          const groupCh = await this.prisma.chatChannel.findFirst({ where: { taskId, type: CHANNEL_TYPE.task_group }, select: { id: true } });
+          if (groupCh) {
+            const ext = await (this.prisma as any).message.findFirst({ where: { channelId: groupCh.id, senderType: SENDER_TYPE.external }, orderBy: { createdAt: 'desc' }, select: { id: true } });
+            if (ext) internalId = ext.id;
+          }
+        } catch {}
+        // Prefer passive reply (carries replyStream context + req_id) for chattype single/group both work via frameHeaders; fallback to active sendMessage
+        try {
+          if (internalId && typeof (adapter as any).replyTemplateCard === 'function') {
+            this.logger.log(`wecom_reply trying replyTemplateCard internalId=${internalId} chattype=${chattype ?? 'unknown'} taskId=${taskId}`);
+            wecomSent = await (adapter as any).replyTemplateCard(internalId, cardObj);
+            if (!wecomSent) this.logger.warn(`wecom_reply replyTemplateCard returned false internalId=${internalId} fallback to sendTemplateCard`);
+          }
+        } catch (e) {
+          this.logger.warn(`wecom_reply replyTemplateCard threw taskId=${taskId} card=${JSON.stringify(cardObj).slice(0, 800)} err=${(e as Error).message} stack=${(e as Error).stack?.slice(0, 600) ?? ''}`);
+        }
+        if (!wecomSent && typeof (adapter as any).sendTemplateCard === 'function') {
+          try {
+            this.logger.log(`wecom_reply trying sendTemplateCard channel=${wecomChannelId} chatId hint resolved via adapter taskId=${taskId}`);
+            wecomSent = await (adapter as any).sendTemplateCard(wecomChannelId, cardObj);
+          } catch (e) {
+            this.logger.warn(`wecom_reply sendTemplateCard threw taskId=${taskId} card=${JSON.stringify(cardObj).slice(0, 800)} err=${(e as Error).message}`);
+          }
+        }
+        if (!wecomSent) {
+          this.logger.warn(`wecom_reply template_card both methods failed taskId=${taskId} card_type=${cardObj.card_type} internalId=${internalId ?? 'null'} channel=${wecomChannelId} card=${JSON.stringify(cardObj).slice(0, 2000)}`);
+        }
+        mirrorContent = { text: mirrorText || (cardObj?.main_title?.title ?? cardObj?.main_title?.desc ?? '[template_card]'), msgtype, card: cardObj, parts: [] };
+      } else if (msgtype === 'mpnews') {
+        let articles: Array<{ title: string; description?: string; url?: string; picurl?: string; digest?: string; content?: string; thumb_media_id?: string; author?: string; content_source_url?: string }> = [];
+        const raw = (args.articles as unknown) ?? (args.mpnews as unknown);
+        if (Array.isArray(raw)) {
+          articles = raw as any;
+        } else if (raw && typeof raw === 'object' && Array.isArray((raw as any).articles)) {
+          articles = (raw as any).articles as any;
+        } else if (typeof raw === 'string') {
+          try {
+            const parsed = JSON.parse((raw as string).trim());
+            if (Array.isArray(parsed)) articles = parsed as any;
+            else if (parsed && Array.isArray(parsed.articles)) articles = parsed.articles as any;
+          } catch {}
+        }
+        if (!articles || articles.length === 0) {
+          sendError = 'mpnews 需要 articles(≥1 篇) 或 mpnews 参数';
+          throw new Error(sendError);
+        }
+        const sanitizedTaskId = (() => {
+          const s = taskId.replace(/[^a-zA-Z0-9_\-@]/g, '_') || 't_default';
+          const suffix = `_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+          return `${s.slice(0, Math.max(1, 64 - suffix.length))}${suffix}`.slice(0, 64);
+        })();
+        const normalized = articles.slice(0, 8).map((a) => {
+          const title = String(a.title ?? '').trim().slice(0, 64) || '标题';
+          const descRaw = (a.description ?? (a as any).digest ?? a.content ?? '').toString().trim();
+          const desc = descRaw ? descRaw.slice(0, 512) : undefined;
+          const url = (a.url ?? (a as any).content_source_url ?? '').toString().trim() || undefined;
+          const picurl = (a.picurl ?? '').toString().trim() || undefined;
+          const item: Record<string, unknown> = { title };
+          if (desc) item.desc = desc;
+          if (url) item.url = url;
+          if (picurl) item.picurl = picurl;
+          return item;
+        });
+        const first = normalized[0] as Record<string, unknown>;
+        const cardObj: Record<string, unknown> = {
+          card_type: 'news_notice',
+          main_title: { title: String(first.title ?? '图文消息').slice(0, 64), desc: (first.desc as string | undefined)?.slice(0, 512) ?? rawText.slice(0, 512) ?? String(first.title) },
+          task_id: sanitizedTaskId,
+        };
+        if (first.picurl) {
+          (cardObj as Record<string, unknown>).card_image = { url: first.picurl as string };
+        }
+        if (normalized.length === 1) {
+          const imgTxt: Record<string, unknown> = { type: 1, title: first.title as string };
+          if (first.desc) imgTxt.desc = first.desc as string;
+          if (first.url) imgTxt.url = first.url as string;
+          if (first.picurl) imgTxt.image_url = first.picurl as string;
+          (cardObj as Record<string, unknown>).image_text_area = imgTxt;
+        } else {
+          const list = normalized.map((a) => {
+            const r: Record<string, unknown> = { title: a.title as unknown as string };
+            if (a.desc) r.desc = a.desc as unknown as string;
+            if (a.url) r.url = a.url as unknown as string;
+            if (a.picurl) r.image_url = a.picurl as unknown as string;
+            return r;
+          });
+          (cardObj as Record<string, unknown>).news_info = { list };
+          if (first.picurl) (cardObj as Record<string, unknown>).card_image = { url: first.picurl as string };
+        }
+        if (rawText) (cardObj as Record<string, unknown>).quote_area = { type: 0, title: rawText.slice(0, 512) };
+        // 42045 fix for news_notice: card_action type must be 1 or 2, add source as well
+        if (!(cardObj as any).source) (cardObj as any).source = { desc: 'vteam', desc_color: 0 };
+        if (!(cardObj as any).card_action) (cardObj as any).card_action = { type: 1, url: 'https://work.weixin.qq.com' };
+        else {
+          const ca: any = (cardObj as any).card_action;
+          if (ca.type === 1 && !ca.url) ca.url = 'https://work.weixin.qq.com';
+          if (ca.type !== 1 && ca.type !== 2) { ca.type = 1; ca.url = 'https://work.weixin.qq.com'; }
+        }
+        this.logger.log(`wecom_reply mpnews normalized taskId=${taskId} articles=${normalized.length} hasPic=${normalized.some((a) => !!a.picurl)} card=${JSON.stringify(cardObj).slice(0, 2000)}`);
+        resolvedCard = cardObj;
+        let internalId: string | null = null;
+        try {
+          const groupCh = await this.prisma.chatChannel.findFirst({ where: { taskId, type: CHANNEL_TYPE.task_group }, select: { id: true } });
+          if (groupCh) {
+            const ext = await (this.prisma as any).message.findFirst({ where: { channelId: groupCh.id, senderType: SENDER_TYPE.external }, orderBy: { createdAt: 'desc' }, select: { id: true } });
+            if (ext) internalId = ext.id;
+          }
+        } catch {}
+        try {
+          if (internalId && typeof (adapter as any).replyTemplateCard === 'function') {
+            this.logger.log(`wecom_reply mpnews trying replyTemplateCard internalId=${internalId} taskId=${taskId}`);
+            wecomSent = await (adapter as any).replyTemplateCard(internalId, cardObj);
+            if (!wecomSent) this.logger.warn(`wecom_reply mpnews replyTemplateCard returned false internalId=${internalId} fallback to sendTemplateCard`);
+          }
+        } catch (e) {
+          this.logger.warn(`wecom_reply mpnews replyTemplateCard threw taskId=${taskId} err=${(e as Error).message}`);
+        }
+        if (!wecomSent && typeof (adapter as any).sendTemplateCard === 'function') {
+          try {
+            this.logger.log(`wecom_reply mpnews trying sendTemplateCard channel=${wecomChannelId} taskId=${taskId}`);
+            wecomSent = await (adapter as any).sendTemplateCard(wecomChannelId, cardObj);
+          } catch (e) {
+            this.logger.warn(`wecom_reply mpnews sendTemplateCard threw taskId=${taskId} err=${(e as Error).message}`);
+          }
+        }
+        if (!wecomSent) {
+          this.logger.warn(`wecom_reply mpnews both methods failed taskId=${taskId} internalId=${internalId ?? 'null'} channel=${wecomChannelId}`);
+        }
+        mirrorContent = { text: mirrorText || (first.title as string) || '[mpnews]', msgtype: 'mpnews', card: cardObj, articles: normalized, parts: [] };
+      } else if (msgtype === 'image') {
+        let mediaIdToSend: string | null = args.mediaId?.trim() || null;
+        let resolvedFilename = (args.filename?.trim() || (args.media ? args.media.split(/[\\/]/).pop() || 'image.png' : 'image.png')) as string;
+        if (!mediaIdToSend) {
+          const mediaRef = (args.media ?? '').trim();
+          if (!mediaRef) {
+            sendError = 'image 需要 media(文件路径) 或 mediaId 参数';
+            throw new Error(sendError);
+          }
+          let buffer: Buffer | null = null;
+          // Try artifactId / archive path first, then /uploads direct, then worker fetch
+          try {
+            if (mediaRef.startsWith('art_')) {
+              const artifactId = mediaRef.split('@')[0].split('/')[0].split('?')[0];
+              const direct = await (this.prisma as any).artifactVersion.findFirst({
+                where: { artifactId, artifact: { taskId } },
+                orderBy: { version: 'desc' },
+                select: { contentRef: true },
+              });
+              if (direct?.contentRef) {
+                buffer = await FileStorageService.readUploadedFile(direct.contentRef);
+              }
+            }
+            if (!buffer) {
+              const target = FileStorageService.normalizeFileRef(mediaRef);
+              const versions = await (this.prisma as any).artifactVersion.findMany({
+                where: { artifact: { taskId }, filePath: { not: null } },
+                orderBy: { createdAt: 'desc' },
+                select: { contentRef: true, filePath: true },
+              });
+              const hit = (versions as Array<{ contentRef: string; filePath: string | null }>).find(
+                (v) => v.filePath !== null && FileStorageService.normalizeFileRef(v.filePath) === target,
+              );
+              if (hit) {
+                buffer = await FileStorageService.readUploadedFile(hit.contentRef);
+              } else if (mediaRef.startsWith('/uploads/')) {
+                buffer = await FileStorageService.readUploadedFile(target);
+              }
+            }
+            if (!buffer) {
+              const workerRow = await this.prisma.worker.findUnique({
+                where: { id: ctx.workerId },
+                select: { capabilities: true },
+              });
+              if (!workerRow) {
+                sendError = '执行该任务的 worker 不存在，无法拉取文件';
+                throw new Error(sendError);
+              }
+              buffer = await this.workerClient.fetchFile(
+                { id: ctx.workerId, capabilities: workerRow.capabilities as any },
+                mediaRef,
+              );
+            }
+          } catch (e) {
+            if (!sendError) sendError = (e as Error).message ?? String(e);
+            this.logger.warn(`wecom_reply image fetch failed media=${mediaRef} taskId=${taskId} err=${sendError}`);
+            throw new Error(sendError);
+          }
+          if (!buffer) {
+            sendError = '图片文件读取失败';
+            throw new Error(sendError);
+          }
+          if (typeof (adapter as any).uploadMediaBuffer !== 'function') {
+            sendError = 'WeCom 适配器不支持图片上传';
+            throw new Error(sendError);
+          }
+          mediaIdToSend = await (adapter as any).uploadMediaBuffer(buffer, 'image', resolvedFilename);
+          if (!mediaIdToSend) {
+            sendError = '图片上传失败（uploadMedia 返回空）';
+            throw new Error(sendError);
+          }
+        }
+        // Send via passive reply first, fallback to active
+        let internalId: string | null = null;
+        try {
+          const groupCh = await this.prisma.chatChannel.findFirst({ where: { taskId, type: CHANNEL_TYPE.task_group }, select: { id: true } });
+          if (groupCh) {
+            const ext = await (this.prisma as any).message.findFirst({ where: { channelId: groupCh.id, senderType: SENDER_TYPE.external }, orderBy: { createdAt: 'desc' }, select: { id: true } });
+            if (ext) internalId = ext.id;
+          }
+        } catch {}
+        if (internalId && typeof (adapter as any).replyMedia === 'function') {
+          wecomSent = await (adapter as any).replyMedia(internalId, 'image', mediaIdToSend);
+          if (!wecomSent) this.logger.warn(`wecom_reply replyMedia returned false internalId=${internalId} fallback to sendMediaMessage`);
+        }
+        if (!wecomSent && typeof (adapter as any).sendMediaMessage === 'function') {
+          wecomSent = await (adapter as any).sendMediaMessage(wecomChannelId, 'image', mediaIdToSend);
+        }
+        if (!wecomSent) {
+          sendError = '图片发送失败（replyMedia/sendMediaMessage 均失败）';
+          this.logger.warn(`wecom_reply image both methods failed taskId=${taskId} mediaId=${mediaIdToSend} internalId=${internalId ?? 'null'} channel=${wecomChannelId}`);
+          throw new Error(sendError);
+        }
+        mirrorContent = { text: mirrorText || rawText || `[image] ${resolvedFilename}`, msgtype: 'image', mediaId: mediaIdToSend, filename: resolvedFilename, parts: [] };
+      }
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      if (!sendError) sendError = msg;
+      this.logger.warn(`wecom_reply send failed taskId=${taskId} msgtype=${msgtype} err=${msg} stack=${(e as Error).stack?.slice(0, 800) ?? ''} card=${JSON.stringify(resolvedCard ?? args.card).slice(0, 1200)}`);
+      if (!mirrorContent) {
+        mirrorContent = { text: mirrorText || rawText || `[${msgtype}]`, msgtype, card: resolvedCard, error: sendError, parts: [] };
+      }
+    }
+    if (!wecomSent) {
+      const detail = sendError ? ` 详情: ${sendError.slice(0, 400)}` : '';
+      const cardPreview = resolvedCard ? ` card=${JSON.stringify(resolvedCard).slice(0, 600)}` : '';
+      this.logger.warn(`wecom_reply wecom send failed taskId=${taskId} channel=${wecomChannelId} msgtype=${msgtype}${detail}${cardPreview}`);
+      if (!mirrorContent) {
+        mirrorContent = { text: mirrorText || rawText || `[${msgtype}]`, msgtype, card: resolvedCard, error: sendError, articles: args.articles, parts: [] };
+      } else if (sendError && !(mirrorContent as any).error) {
+        (mirrorContent as any).error = sendError;
+      }
+    }
+    if (!mirrorContent) {
+      mirrorContent = { text: mirrorText, msgtype, parts: [] };
+    }
+    try {
+      (adapter as any).consumePendingOperatorForTask?.(taskId);
+    } catch {}
+
+    let mirrorMessageId: string | null = null;
+    let groupChannelId: string | null = null;
+    try {
+      const groupCh = await this.prisma.chatChannel.findFirst({
+        where: { taskId, type: CHANNEL_TYPE.task_group },
+        select: { id: true },
+      });
+      if (groupCh) {
+        groupChannelId = groupCh.id;
+        const senderAgentId = await this.resolveSenderAgentId(taskId, instanceId);
+        // Lookup placeholder in task_group to UPDATE instead of CREATE (fix duplicate: placeholder + new mirror -> only one).
+        let placeholder: { id: string } | null = null;
+        try {
+          placeholder = await (this.prisma as any).message.findFirst({
+            where: {
+              channelId: groupCh.id,
+              senderType: { in: [SENDER_TYPE.agent, SENDER_TYPE.system] },
+              status: MESSAGE_STATUS.processing,
+            },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true },
+          });
+        } catch {}
+        if (!placeholder) {
+          try {
+            const ext = await (this.prisma as any).message.findFirst({
+              where: { channelId: groupCh.id, senderType: SENDER_TYPE.external },
+              orderBy: { createdAt: 'desc' },
+              select: { createdAt: true },
+            });
+            if (ext?.createdAt) {
+              placeholder = await (this.prisma as any).message.findFirst({
+                where: {
+                  channelId: groupCh.id,
+                  senderType: { in: [SENDER_TYPE.agent, SENDER_TYPE.system] },
+                  createdAt: { gt: ext.createdAt },
+                },
+                orderBy: { createdAt: 'desc' },
+                select: { id: true },
+              });
+            } else {
+              placeholder = await (this.prisma as any).message.findFirst({
+                where: {
+                  channelId: groupCh.id,
+                  senderType: { in: [SENDER_TYPE.agent, SENDER_TYPE.system] },
+                },
+                orderBy: { createdAt: 'desc' },
+                select: { id: true },
+              });
+            }
+          } catch {}
+        }
+        if (placeholder) {
+          const updated = await (this.prisma as any).message.update({
+            where: { id: placeholder.id },
+            data: {
+              content: mirrorContent as any,
+              status: MESSAGE_STATUS.sent,
+              senderId: senderAgentId,
+              senderInstanceId: instanceId,
+            },
+          });
+          mirrorMessageId = updated.id;
+          await this.realtime.broadcast(
+            EVENT_TYPES.CHAT_MESSAGE_NEW,
+            { message: this.toMessageDto(updated as any) },
+            { type: 'channel', id: groupCh.id },
+          );
+          this.logger.log(`wecom_reply placeholder updated taskId=${taskId} placeholderId=${placeholder.id} -> mirrorTextLen=${(mirrorContent.text ?? '').length} msgtype=${msgtype}`);
+        } else {
+          const msg = await (this.prisma as any).message.create({
+            data: {
+              id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+              channelId: groupCh.id,
+              senderType: SENDER_TYPE.agent,
+              senderId: senderAgentId,
+              senderInstanceId: instanceId,
+              content: mirrorContent as any,
+              mentions: null,
+              status: MESSAGE_STATUS.sent,
+            },
+          });
+          mirrorMessageId = msg.id;
+          await this.realtime.broadcast(
+            EVENT_TYPES.CHAT_MESSAGE_NEW,
+            { message: this.toMessageDto(msg as any) },
+            { type: 'channel', id: groupCh.id },
+          );
+        }
+      }
+    } catch (e) {
+      this.logger.warn(`wecom_reply mirror failed: ${(e as Error).message}`);
+    }
+
+    if (wecomSent && mirrorMessageId) {
+      return {
+        content: [{ type: 'text', text: `已回复企微用户${fromName ? ` @${fromName}` : ''} 并同步到任务群聊。重要：回复已完成，请直接结束本轮，不要再输出任何总结或重复回复（不要生成 final answer）。` }],
+        isError: false,
+        messageId: mirrorMessageId,
+        channelId: groupChannelId,
+        wecomSent: true,
+      };
+    } else if (wecomSent) {
+      return {
+        content: [{ type: 'text', text: `已发送到企微${fromName ? ` @${fromName}` : ''}（群聊同步失败）。重要：回复已完成，请直接结束本轮，不要再输出任何总结或重复回复。` }],
+        isError: false,
+        wecomSent: true,
+      };
+    }
+    const failDetail = sendError ? ` 失败原因: ${sendError.slice(0, 400)}` : '';
+    return {
+      content: [{ type: 'text', text: `已同步到任务群聊（企微发送失败，请检查 WeCom 通道绑定与在线状态）。${failDetail}重要：回复已同步，请直接结束本轮，不要再输出重复回复。`.trim() }],
+      isError: false,
+      messageId: mirrorMessageId ?? undefined,
+      channelId: groupChannelId,
+      wecomSent: false,
+    };
+  }
+
+  /**
+    * channel_send：向当前任务绑定的通知渠道发送文本（webhook / wecom_group_robot）。
+     * - 入参仅 target(id/name, nc_ 前缀) + text(≤4000)，taskId 从 worker 会话上下文解析（当前任务边界）。
+     * - text 越界 → 返回结构化错误文本（不抛断会话）。
+     * - outboundDispatcher.sendToChannelByIdOrName 查询 NotificationChannel (nc_) + TaskNotificationChannel 绑定；
+     *   失败返回错误文本 isError:false，避免 abort agent session。
+     */
+  async channelSend(
+    ctx: PlatformMcpContext,
+    args: { target: string; text: string },
+  ): Promise<{
+    content: Array<{ type: string; text: string }>;
+    isError?: boolean;
+  }> {
+    const target = args.target?.trim() ?? '';
+    const text = args.text ?? '';
+    if (!target) {
+      return {
+        content: [{ type: 'text', text: '发送失败: target 不能为空' }],
+        isError: false,
+      };
+    }
+    if (text.length > 4000) {
+      return {
+        content: [{ type: 'text', text: '发送失败: text 长度超过 4000 字符' }],
+        isError: false,
+      };
+    }
+    if (!text) {
+      return {
+        content: [{ type: 'text', text: '发送失败: text 不能为空' }],
+        isError: false,
+      };
+    }
+    if (!this.outboundDispatcher) {
+      return {
+        content: [{ type: 'text', text: '发送失败: 出站分发器未就绪' }],
+        isError: false,
+      };
+    }
+    let taskId: string | null = null;
+    try {
+      const session = await (this.prisma as any).session.findFirst({
+        where: { workerId: ctx.workerId },
+        orderBy: { createdAt: 'desc' },
+        select: { taskId: true },
+      });
+      taskId = session?.taskId ?? null;
+    } catch {}
+    if (!taskId) {
+      return {
+        content: [{ type: 'text', text: '发送失败: 无法解析当前任务上下文' }],
+        isError: false,
+      };
+    }
+    try {
+      await this.assertWorkerTask(ctx, taskId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: 'text', text: `发送失败: ${msg}` }],
+        isError: false,
+      };
+    }
+    try {
+      await this.outboundDispatcher.sendToChannelByIdOrName(
+        taskId,
+        target,
+        text,
+      );
+      const preview = text.slice(0, 100);
+      return {
+        content: [{ type: 'text', text: `已发送至渠道 ${target}: ${preview}` }],
+        isError: false,
+      };
+    } catch (err: unknown) {
+      let msg: string;
+      if (err instanceof Error) {
+        msg = err.message;
+      } else if (
+        err &&
+        typeof err === 'object' &&
+        'getResponse' in (err as Record<string, unknown>)
+      ) {
+        try {
+          const resp = (
+            err as { getResponse(): unknown }
+          ).getResponse() as unknown;
+          if (
+            resp &&
+            typeof resp === 'object' &&
+            'message' in (resp as Record<string, unknown>)
+          ) {
+            msg = String((resp as { message: string }).message);
+          } else if (typeof resp === 'string') {
+            msg = resp;
+          } else {
+            msg = String(resp);
+          }
+        } catch {
+          msg = String(err);
+        }
+      } else {
+        msg = String(err);
+      }
+      return {
+        content: [{ type: 'text', text: `发送失败: ${msg}` }],
+        isError: false,
+      };
+    }
+  }
+
+  /**
    * team_add_member 确认回调执行：确认（answers 首项=「确认」）→ updateTeam + team_add 审计；
    * 拒绝 → 不执行；确认回调时任务已终态（非 pending/in_progress）→ updateTeam 409，显式记录并忽略。
    */
@@ -1929,7 +3080,8 @@ export class PlatformMcpService {
         {
           actorType: args.actor.type,
           actorId: args.actor.id,
-          confirmedBy: args.actor.type === ACTOR_TYPE.user ? '用户' : '主 Agent',
+          confirmedBy:
+            args.actor.type === ACTOR_TYPE.user ? '用户' : '主 Agent',
         },
       );
       this.logger.log(
@@ -1995,10 +3147,7 @@ export class PlatformMcpService {
   }
 
   /** submit_artifact text 结果归一：append 返回 → {artifactId, version, status}。 */
-  private toSubmitResult(result: {
-    status: string;
-    artifact?: unknown;
-  }): {
+  private toSubmitResult(result: { status: string; artifact?: unknown }): {
     artifactId: string;
     version: number;
     status: 'created' | 'appended' | 'duplicate';
@@ -2060,7 +3209,9 @@ export class PlatformMcpService {
       where: {
         taskId,
         workerId: ctx.workerId,
-        ...(selfInstanceId !== undefined ? { taskAgentId: selfInstanceId } : {}),
+        ...(selfInstanceId !== undefined
+          ? { taskAgentId: selfInstanceId }
+          : {}),
       },
       select: { id: true, agentId: true, taskAgentId: true },
     });
@@ -2300,7 +3451,9 @@ export class PlatformMcpService {
             `group_post fileRef 归档写入失败（附件仍挂载）: ${err instanceof Error ? err.message : String(err)}`,
           );
         });
-      this.logger.log(`group_post fileRef 已从 worker 拉取并归档: ${fileRef} -> ${stored.url}`);
+      this.logger.log(
+        `group_post fileRef 已从 worker 拉取并归档: ${fileRef} -> ${stored.url}`,
+      );
       return {
         attachmentUrl: stored.url,
         attachmentName: stored.name,

@@ -13,7 +13,10 @@ export class UpdateToolDto {
   @IsObject()
   schema?: Record<string, unknown>;
 
-  @ApiPropertyOptional({ description: '初始化命令/脚本列表（Json 数组）', type: [Object] })
+  @ApiPropertyOptional({
+    description: '初始化命令/脚本列表（Json 数组）',
+    type: [Object],
+  })
   @IsOptional()
   @IsArray()
   initCommand?: Array<Record<string, unknown>>;

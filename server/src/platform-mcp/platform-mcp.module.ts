@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ArtifactsModule } from '../artifacts/artifacts.module';
+import { NotificationChannelsModule } from '../notifications/notification-channels.module';
 import { ChatModule } from '../chat/chat.module';
 import { IssuesModule } from '../issues/issues.module';
 import { PlansModule } from '../plans/plans.module';
@@ -47,6 +48,7 @@ import { PlatformMcpService } from './platform-mcp.service';
     TasksModule,
     QuestionsModule,
     PlansModule,
+    NotificationChannelsModule,
   ],
   controllers: [PlatformMcpController],
   providers: [PlatformMcpService, WorkerTokenGuard],

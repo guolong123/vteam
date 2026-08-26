@@ -28,8 +28,7 @@ export class AdminGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
     const authUser = request.user as
-      | { id?: string; username?: string }
-      | undefined;
+      { id?: string; username?: string } | undefined;
 
     if (!authUser?.id) {
       throw new UnauthorizedException({
@@ -49,13 +48,14 @@ export class AdminGuard implements CanActivate {
       });
     }
 
-    const permissions = (user.role.permissions ?? {}) as Record<string, unknown>;
+    const permissions = (user.role.permissions ?? {}) as Record<
+      string,
+      unknown
+    >;
     if (permissions.all === true) {
       return true;
     }
-    const usersPerm = permissions.users as
-      | { manage?: boolean }
-      | undefined;
+    const usersPerm = permissions.users as { manage?: boolean } | undefined;
     if (usersPerm?.manage === true) {
       return true;
     }

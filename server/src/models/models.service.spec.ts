@@ -82,8 +82,9 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
   beforeEach(async () => {
     seq = 0;
     idGen = {
-      nextId: jest.fn(async (prefix: string) =>
-        `${prefix}_${String(++seq).padStart(10, '0')}`,
+      nextId: jest.fn(
+        async (prefix: string) =>
+          `${prefix}_${String(++seq).padStart(10, '0')}`,
       ),
       seed: jest.fn(),
     };
@@ -135,7 +136,10 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         { provide: IdGeneratorService, useValue: idGen },
         { provide: CredentialCryptoService, useValue: crypto },
         { provide: WorkersService, useValue: workers },
-        { provide: WorkerClient, useValue: { listModels: jest.fn().mockResolvedValue([]) } },
+        {
+          provide: WorkerClient,
+          useValue: { listModels: jest.fn().mockResolvedValue([]) },
+        },
       ],
     }).compile();
 
@@ -195,7 +199,12 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
           take: 20,
         }),
       );
-      expect(result).toEqual({ items: [modelRowFull], total: 1, page: 1, pageSize: 20 });
+      expect(result).toEqual({
+        items: [modelRowFull],
+        total: 1,
+        page: 1,
+        pageSize: 20,
+      });
     });
 
     it('无过滤条件 → where 仅含 enabled undefined（全量）', async () => {
@@ -337,7 +346,9 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         },
         {
           // 第二个在线 worker：qwen 新 provider + deepseek 模型计数累加
-          capabilities: { models: ['qwen/qwen3.6-plus', 'deepseek/deepseek-v4-pro'] },
+          capabilities: {
+            models: ['qwen/qwen3.6-plus', 'deepseek/deepseek-v4-pro'],
+          },
         },
       ]);
 
@@ -348,10 +359,19 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         select: { capabilities: true },
       });
       // union：目录 opencode-go + worker 上报 deepseek/zhipu/qwen
-      expect(result.map((r) => r.providerID)).toEqual(['deepseek', 'opencode-go', 'qwen', 'zhipu']);
+      expect(result.map((r) => r.providerID)).toEqual([
+        'deepseek',
+        'opencode-go',
+        'qwen',
+        'zhipu',
+      ]);
       // modelCount = Math.max(目录 count, worker 上报计数)（opencode-go: max(1,2)=2；deepseek 两个 worker 累加 = 2）
-      expect(result.find((r) => r.providerID === 'opencode-go')?.modelCount).toBe(2);
-      expect(result.find((r) => r.providerID === 'deepseek')?.modelCount).toBe(2);
+      expect(
+        result.find((r) => r.providerID === 'opencode-go')?.modelCount,
+      ).toBe(2);
+      expect(result.find((r) => r.providerID === 'deepseek')?.modelCount).toBe(
+        2,
+      );
       expect(result.find((r) => r.providerID === 'zhipu')?.modelCount).toBe(1);
       expect(result.find((r) => r.providerID === 'qwen')?.modelCount).toBe(1);
     });
@@ -544,7 +564,9 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       }));
       prisma.workerModelAvailability.upsert.mockResolvedValue({});
       // 上次上报 25 个，本次 8 个 → 17 个假模型 availability 被清理
-      prisma.workerModelAvailability.deleteMany.mockResolvedValue({ count: 17 });
+      prisma.workerModelAvailability.deleteMany.mockResolvedValue({
+        count: 17,
+      });
 
       const n = await service.syncFromWorkerCapabilities(
         'w_0000000001',
@@ -564,7 +586,9 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     });
 
     it('缺省/空数组 → 返回 0 不触碰目录（降级未上报保留旧数据）', async () => {
-      expect(await service.syncFromWorkerCapabilities('w_0000000001', [])).toBe(0);
+      expect(await service.syncFromWorkerCapabilities('w_0000000001', [])).toBe(
+        0,
+      );
       expect(prisma.model.findUnique).not.toHaveBeenCalled();
       expect(prisma.workerModelAvailability.upsert).not.toHaveBeenCalled();
       expect(prisma.workerModelAvailability.deleteMany).not.toHaveBeenCalled();
@@ -581,7 +605,12 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       expect(prisma.model.findMany).toHaveBeenCalledWith({
         where: { enabled: true },
         orderBy: { createdAt: 'asc' },
-        select: { providerID: true, modelID: true, name: true, providerType: true },
+        select: {
+          providerID: true,
+          modelID: true,
+          name: true,
+          providerType: true,
+        },
       });
       expect(prisma.modelCredential.findMany).toHaveBeenCalledWith({
         where: { revokedAt: null },
@@ -593,12 +622,36 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     });
 
     it('未配置凭据的付费模型不返回，仅免费或已配置模型可见', async () => {
-      const freeRow = { providerID: 'opencode', modelID: 'free-model', name: 'Free' };
-      const localRow = { providerID: 'ollama', modelID: 'local-model', name: 'Local', providerType: 'local' };
-      const paidNoCredRow = { providerID: 'opencode-go', modelID: 'paid-model', name: 'Paid' };
-      const paidWithCredRow = { providerID: 'zhipu', modelID: 'paid2', name: 'Paid2' };
-      prisma.model.findMany.mockResolvedValue([freeRow, localRow, paidNoCredRow, paidWithCredRow]);
-      prisma.modelCredential.findMany.mockResolvedValue([{ providerID: 'zhipu' }]);
+      const freeRow = {
+        providerID: 'opencode',
+        modelID: 'free-model',
+        name: 'Free',
+      };
+      const localRow = {
+        providerID: 'ollama',
+        modelID: 'local-model',
+        name: 'Local',
+        providerType: 'local',
+      };
+      const paidNoCredRow = {
+        providerID: 'opencode-go',
+        modelID: 'paid-model',
+        name: 'Paid',
+      };
+      const paidWithCredRow = {
+        providerID: 'zhipu',
+        modelID: 'paid2',
+        name: 'Paid2',
+      };
+      prisma.model.findMany.mockResolvedValue([
+        freeRow,
+        localRow,
+        paidNoCredRow,
+        paidWithCredRow,
+      ]);
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'zhipu' },
+      ]);
 
       const result = await service.listCatalogModels();
 
@@ -607,7 +660,9 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         { id: 'ollama/local-model', name: 'Local' },
         { id: 'zhipu/paid2', name: 'Paid2' },
       ]);
-      expect(result.find((r) => r.id === 'opencode-go/paid-model')).toBeUndefined();
+      expect(
+        result.find((r) => r.id === 'opencode-go/paid-model'),
+      ).toBeUndefined();
     });
   });
 
@@ -658,7 +713,9 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       );
 
       expect(prisma.modelCredential.create).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ providerID: 'opencode-go' }) }),
+        expect.objectContaining({
+          data: expect.objectContaining({ providerID: 'opencode-go' }),
+        }),
       );
       expect(result).toMatchObject({ configured: true });
     });
@@ -704,7 +761,10 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         },
       });
       expect(prisma.modelCredential.create).not.toHaveBeenCalled();
-      expect(result).toMatchObject({ fingerprint: 'sk-n****xxxx', revokedAt: null });
+      expect(result).toMatchObject({
+        fingerprint: 'sk-n****xxxx',
+        revokedAt: null,
+      });
     });
 
     it('model 不存在 → 404 MODEL_NOT_FOUND（不触发任何加密/写入）', async () => {
@@ -740,9 +800,12 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       prisma.modelCredential.findUnique.mockResolvedValue(null);
       prisma.modelCredential.create.mockResolvedValue(credentialRow);
 
-      await service.setCredential('md_0000000001', 'sk-raw-token', 'opencode-go', [
-        'w_0000000001',
-      ]);
+      await service.setCredential(
+        'md_0000000001',
+        'sk-raw-token',
+        'opencode-go',
+        ['w_0000000001'],
+      );
 
       expect(workers.dispatchModelCredentials).toHaveBeenCalledWith(
         [{ providerID: 'opencode-go', key: 'sk-raw-token' }],
@@ -761,7 +824,10 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         .spyOn(service['logger'], 'warn')
         .mockImplementation(() => {});
 
-      const result = await service.setCredential('md_0000000001', 'sk-raw-token');
+      const result = await service.setCredential(
+        'md_0000000001',
+        'sk-raw-token',
+      );
 
       expect(result).toMatchObject({ configured: true });
       warnSpy.mockRestore();

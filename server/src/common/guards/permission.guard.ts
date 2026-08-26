@@ -8,9 +8,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { PrismaService } from '../../prisma/prisma.service';
-import {
-  REQUIRE_PERMISSION_KEY,
-} from '../decorators/require-permission.decorator';
+import { REQUIRE_PERMISSION_KEY } from '../decorators/require-permission.decorator';
 
 /**
  * 通用权限点守卫（Phase 3 T8 权限矩阵落地，修复 ISSUE-006）。
@@ -73,8 +71,7 @@ export class PermissionGuard implements CanActivate {
     }
 
     const authUser = request.user as
-      | { id?: string; username?: string }
-      | undefined;
+      { id?: string; username?: string } | undefined;
 
     if (!authUser?.id) {
       throw new UnauthorizedException({
@@ -94,7 +91,10 @@ export class PermissionGuard implements CanActivate {
       });
     }
 
-    const permissions = (user.role.permissions ?? {}) as Record<string, unknown>;
+    const permissions = (user.role.permissions ?? {}) as Record<
+      string,
+      unknown
+    >;
 
     // seed admin 简写 `{ all: true }`：全权限放行
     if (permissions.all === true) {
@@ -103,8 +103,7 @@ export class PermissionGuard implements CanActivate {
 
     // 完整矩阵格式：permissions[resource][action] === true → 放行
     const resourcePerm = permissions[resource] as
-      | Record<string, boolean>
-      | undefined;
+      Record<string, boolean> | undefined;
     if (resourcePerm?.[action] === true) {
       return true;
     }

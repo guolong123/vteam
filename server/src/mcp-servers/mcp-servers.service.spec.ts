@@ -1,4 +1,8 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { MCP_SERVER_ERRORS } from '../common/constants/mcp-server.constants';
 import { IdGeneratorService } from '../common/id-generator';
@@ -182,12 +186,17 @@ describe('McpServersService', () => {
 
       const result = await service.findAll();
 
-      expect(result.items[0]).toMatchObject({ name: 'gitee-ent', status: 'connected' });
+      expect(result.items[0]).toMatchObject({
+        name: 'gitee-ent',
+        status: 'connected',
+      });
       expect(result.items[1]).toMatchObject({ name: 'swagger', status: null });
     });
 
     it('needs_auth 三态透传 + findOne 合并 status', async () => {
-      service.applyHeartbeatStatus([{ serverName: 'github-remote', status: 'needs_auth' }]);
+      service.applyHeartbeatStatus([
+        { serverName: 'github-remote', status: 'needs_auth' },
+      ]);
       prisma.mcpServer.findUnique.mockResolvedValue({
         ...remoteRow,
         id: 'ms_0000000003',
@@ -197,17 +206,27 @@ describe('McpServersService', () => {
 
       const result = await service.findOne('ms_0000000003');
 
-      expect(result).toMatchObject({ name: 'github-remote', status: 'needs_auth' });
+      expect(result).toMatchObject({
+        name: 'github-remote',
+        status: 'needs_auth',
+      });
     });
 
     it('同名重复上报 last-update-wins 覆盖', async () => {
-      service.applyHeartbeatStatus([{ serverName: 'gitee-ent', status: 'connected' }]);
-      service.applyHeartbeatStatus([{ serverName: 'gitee-ent', status: 'needs_auth' }]);
+      service.applyHeartbeatStatus([
+        { serverName: 'gitee-ent', status: 'connected' },
+      ]);
+      service.applyHeartbeatStatus([
+        { serverName: 'gitee-ent', status: 'needs_auth' },
+      ]);
       prisma.$transaction.mockResolvedValue([1, [localRow]]);
 
       const result = await service.findAll();
 
-      expect(result.items[0]).toMatchObject({ name: 'gitee-ent', status: 'needs_auth' });
+      expect(result.items[0]).toMatchObject({
+        name: 'gitee-ent',
+        status: 'needs_auth',
+      });
     });
 
     it('空数组/非法条目不写入（幂等）', async () => {
@@ -217,7 +236,10 @@ describe('McpServersService', () => {
 
       const result = await service.findAll();
 
-      expect(result.items[0]).toMatchObject({ name: 'gitee-ent', status: null });
+      expect(result.items[0]).toMatchObject({
+        name: 'gitee-ent',
+        status: null,
+      });
     });
   });
 
@@ -381,7 +403,10 @@ describe('McpServersService', () => {
   describe('update（PATCH /mcp-servers/:id）', () => {
     it('部分更新：只改 enabled 停用服务器', async () => {
       prisma.mcpServer.findUnique.mockResolvedValue(localRow);
-      prisma.mcpServer.update.mockResolvedValue({ ...localRow, enabled: false });
+      prisma.mcpServer.update.mockResolvedValue({
+        ...localRow,
+        enabled: false,
+      });
 
       const dto: UpdateMcpServerDto = { enabled: false };
       const result = await service.update('ms_0000000001', dto);
@@ -395,7 +420,10 @@ describe('McpServersService', () => {
 
     it('F1 MAJOR：PATCH 成功同样广播 reload-config', async () => {
       prisma.mcpServer.findUnique.mockResolvedValue(localRow);
-      prisma.mcpServer.update.mockResolvedValue({ ...localRow, enabled: false });
+      prisma.mcpServer.update.mockResolvedValue({
+        ...localRow,
+        enabled: false,
+      });
 
       await service.update('ms_0000000001', { enabled: false });
 

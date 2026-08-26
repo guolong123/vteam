@@ -43,6 +43,8 @@ export interface ChatBubbleProps {
   time?: string;
   attachment?: ChatBubbleAttachment;
   isMentionMe?: boolean;
+  /** 外部渠道消息：senderType==='external' 时展示“外部渠道”徽章 */
+  senderType?: string;
   style?: CSSProperties;
   className?: string;
 }
@@ -64,6 +66,7 @@ export function ChatBubble({
   time,
   attachment,
   isMentionMe,
+  senderType,
   style,
   className,
 }: ChatBubbleProps) {
@@ -149,11 +152,35 @@ export function ChatBubble({
               fontSize: fontSize.xs,
               color: roleTheme ? roleText[role!] : neutral[400],
               fontWeight: 500,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              flexWrap: "wrap",
               ...baseFont,
             }}
           >
-            {author ?? (roleTheme ?? roles.developer).label}
-            {time ? ` · ${time}` : ""}
+            <span>{author ?? (roleTheme ?? roles.developer).label}</span>
+            {senderType === "external" && (
+              <span
+                data-testid="external-channel-badge"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: "1px 6px",
+                  borderRadius: 999,
+                  backgroundColor: neutral[100],
+                  border: `1px solid ${neutral[200]}`,
+                  color: neutral[500],
+                  fontSize: 10,
+                  fontWeight: 600,
+                  lineHeight: 1.4,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                外部渠道
+              </span>
+            )}
+            {time ? <span> · {time}</span> : null}
           </span>
         )}
         {isMentionMe && !isUser && !isSystem && (

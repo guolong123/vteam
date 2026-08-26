@@ -43,6 +43,7 @@ async function main() {
     skills: { view: true, create: false, edit: false },
     tasks: { view: true, create: true, edit: true, review: true, delete: false },
     workers: { view: true, edit: false },
+    channels: { view: true, manage: false },
   } as const;
 
   const memberRole = await prisma.role.upsert({
@@ -527,6 +528,8 @@ async function main() {
     { action: 'plan_get', name: 'vteam_plan_get', description: '读取任务执行计划' },
     { action: 'plan_assign_reviewer', name: 'vteam_plan_assign_reviewer', description: '指派计划评审者（仅主 Agent）' },
     { action: 'team_add_member', name: 'vteam_team_add_member', description: '申请将 Agent 加入团队（仅主 Agent）' },
+    { action: 'channel_send', name: 'vteam_channel_send', description: 'Agent 主动推送通知到通知渠道（webhook/企微机器人）' },
+    { action: 'wecom_reply', name: 'vteam_wecom_reply', description: '回复企业微信用户（仅当消息来自企微时使用）' },
   ];
 
   for (const t of vteamTools) {

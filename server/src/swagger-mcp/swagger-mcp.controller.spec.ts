@@ -595,7 +595,9 @@ describe('SwaggerMcpController (F2 前缀 + 自动绑定集成)', () => {
       value: { name: 'SkillsService' },
       configurable: true,
     });
-    discoveryMock.getProviders.mockReturnValue([{ instance: discoveredSkills }]);
+    discoveryMock.getProviders.mockReturnValue([
+      { instance: discoveredSkills },
+    ]);
 
     const res = await mcpPost()
       .set('x-worker-id', 'w_0001')

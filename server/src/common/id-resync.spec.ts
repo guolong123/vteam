@@ -40,10 +40,7 @@ describe('resyncIdPrefix（域主键续号：只统计前缀下纯数字序号�
   });
 
   it('纯命名 id（a_architect/a_product）→ 不 seed，nextId 从 1 起', async () => {
-    const { model } = mockModel([
-      { id: 'a_architect' },
-      { id: 'a_product' },
-    ]);
+    const { model } = mockModel([{ id: 'a_architect' }, { id: 'a_product' }]);
 
     await resyncIdPrefix(model, 'a', idGen);
 

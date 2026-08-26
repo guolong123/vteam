@@ -28,7 +28,11 @@ describe('task.constants（任务状态机契约，13 篇 §3）', () => {
   });
 
   it('TASK_PRIORITY 三档', () => {
-    expect(TASK_PRIORITY).toEqual({ high: 'high', medium: 'medium', low: 'low' });
+    expect(TASK_PRIORITY).toEqual({
+      high: 'high',
+      medium: 'medium',
+      low: 'low',
+    });
   });
 
   it('TASK_TRANSITIONS 覆盖 5 个迁移动作且迁移合法', () => {

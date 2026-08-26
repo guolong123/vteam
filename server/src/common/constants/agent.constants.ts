@@ -40,7 +40,8 @@ export type AgentErrorCode = (typeof AGENT_ERRORS)[keyof typeof AGENT_ERRORS];
  * 落在 worker 实际可执行清单内（TEMPLATE_DEFAULT_MODELS 的 spec 断言锁定），否则模板
  * Agent 用默认模型创建任务 → dispatch 模型不匹配 → 无回复/insufficient_quota。
  */
-export const STATIC_AVAILABLE_MODELS: readonly { id: string; name: string }[] = [];
+export const STATIC_AVAILABLE_MODELS: readonly { id: string; name: string }[] =
+  [];
 
 /**
  * 模型目录 seed 行（C1：STATIC_AVAILABLE_MODELS → models 表预置，防空目录回归——Metis P1-2）。

@@ -1,7 +1,4 @@
-import {
-  NotFoundException,
-  NotImplementedException,
-} from '@nestjs/common';
+import { NotFoundException, NotImplementedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
 import { McpServersService } from '../mcp-servers/mcp-servers.service';
@@ -322,11 +319,11 @@ describe('WorkersService', () => {
 
     it('C5（R5）：无未吊销凭据时注册不产生命令', async () => {
       prisma.worker.upsert.mockResolvedValue(workerRow());
-    prisma.modelCredential.findMany.mockResolvedValue([]);
-    prisma.taskAgent.findMany.mockResolvedValue([]);
-    prisma.gitRepoGrant.findMany.mockResolvedValue([]);
-    prisma.gitCredential.findMany.mockResolvedValue([]);
-    prisma.gitCredential.count.mockResolvedValue(0);
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.taskAgent.findMany.mockResolvedValue([]);
+      prisma.gitRepoGrant.findMany.mockResolvedValue([]);
+      prisma.gitCredential.findMany.mockResolvedValue([]);
+      prisma.gitCredential.count.mockResolvedValue(0);
       const dto = registerDto();
 
       await service.register('secret-token', dto);
@@ -402,7 +399,9 @@ describe('WorkersService', () => {
         .mockImplementation(() => {});
       const dto = registerDto();
 
-      await expect(service.register('secret-token', dto)).resolves.toMatchObject({
+      await expect(
+        service.register('secret-token', dto),
+      ).resolves.toMatchObject({
         workerId: 'w_0000000001',
       });
       expect(service['pendingCommands'].has('w_0000000001')).toBe(false);
@@ -469,7 +468,9 @@ describe('WorkersService', () => {
 
       await service.heartbeat('w_0000000001', dto);
 
-      expect(mcpServers.applyHeartbeatStatus).toHaveBeenCalledWith(dto.mcpStatus);
+      expect(mcpServers.applyHeartbeatStatus).toHaveBeenCalledWith(
+        dto.mcpStatus,
+      );
       expect(prisma.worker.update).toHaveBeenCalled();
     });
 
@@ -502,7 +503,9 @@ describe('WorkersService', () => {
 
       await service.heartbeat('w_0000000001', dto);
 
-      expect(service['workerMcpStatus'].get('w_0000000001')).toEqual(dto.mcpStatus);
+      expect(service['workerMcpStatus'].get('w_0000000001')).toEqual(
+        dto.mcpStatus,
+      );
     });
 
     it('T9：不携带 mcpStatus 时不写入该 worker 的关联状态（旧 worker 兼容）', async () => {
@@ -1019,7 +1022,9 @@ describe('WorkersService', () => {
         throw new Error('bad ciphertext');
       });
 
-      await expect(service.replayGitCredentials('w_0000000001')).resolves.toBeUndefined();
+      await expect(
+        service.replayGitCredentials('w_0000000001'),
+      ).resolves.toBeUndefined();
 
       // 命令未入队（解密失败在打包阶段抛出，warn 捕获）
       expect(service['pendingCommands'].size).toBe(0);
@@ -1064,7 +1069,8 @@ describe('WorkersService', () => {
     });
   });
 
-  describe('HealthChecker', () => {    it('仅更新过期行：where status != offline AND (lastHeartbeatAt IS NULL OR < now-30s)', async () => {
+  describe('HealthChecker', () => {
+    it('仅更新过期行：where status != offline AND (lastHeartbeatAt IS NULL OR < now-30s)', async () => {
       prisma.worker.findMany.mockResolvedValue([
         { id: 'w_0000000001' },
         { id: 'w_0000000002' },
@@ -1086,8 +1092,12 @@ describe('WorkersService', () => {
       expect(args.where.OR[0]).toEqual({ lastHeartbeatAt: null });
       // 截断时间必须是 now-30s 之前：对 lt 阈值做范围校验（允许毫秒级抖动）
       const cutoff = (args.where.OR[1].lastHeartbeatAt as { lt: Date }).lt;
-      expect(cutoff.getTime()).toBeLessThanOrEqual(Date.now() - WORKER_OFFLINE_TIMEOUT_MS + 100);
-      expect(cutoff.getTime()).toBeGreaterThan(Date.now() - WORKER_OFFLINE_TIMEOUT_MS - 1000);
+      expect(cutoff.getTime()).toBeLessThanOrEqual(
+        Date.now() - WORKER_OFFLINE_TIMEOUT_MS + 100,
+      );
+      expect(cutoff.getTime()).toBeGreaterThan(
+        Date.now() - WORKER_OFFLINE_TIMEOUT_MS - 1000,
+      );
       expect(args.data).toEqual({ status: WORKER_STATUS.OFFLINE });
     });
 
@@ -1145,7 +1155,9 @@ describe('WorkersService', () => {
         workerRow({ id: 'w_v2', opencodeVersion: '1.18.14' }),
       ]);
 
-      const workerId = await service.assignWorker({ opencodeVersion: '1.18.14' });
+      const workerId = await service.assignWorker({
+        opencodeVersion: '1.18.14',
+      });
 
       expect(workerId).toBe('w_v2');
     });
@@ -1217,7 +1229,11 @@ describe('WorkersService', () => {
           modelAvailabilities: [
             {
               modelId: 'md_0000000011',
-              model: { enabled: true, providerID: 'opencode', modelID: 'glm-5.1' },
+              model: {
+                enabled: true,
+                providerID: 'opencode',
+                modelID: 'glm-5.1',
+              },
             },
           ],
         }),
@@ -1250,7 +1266,11 @@ describe('WorkersService', () => {
           modelAvailabilities: [
             {
               modelId: 'md_0000000011',
-              model: { enabled: true, providerID: 'opencode', modelID: 'glm-5.1' },
+              model: {
+                enabled: true,
+                providerID: 'opencode',
+                modelID: 'glm-5.1',
+              },
             },
           ],
         }),
@@ -1288,9 +1308,7 @@ describe('WorkersService', () => {
     });
 
     it('C7 按模型过滤：从未上报（availability 无行）→ 降级不受过滤约束', async () => {
-      prisma.worker.findMany.mockResolvedValue([
-        workerRow({ id: 'w_legacy' }),
-      ]);
+      prisma.worker.findMany.mockResolvedValue([workerRow({ id: 'w_legacy' })]);
 
       const workerId = await service.assignWorker({
         modelId: 'opencode/deepseek-v4-pro',
@@ -1307,7 +1325,11 @@ describe('WorkersService', () => {
           modelAvailabilities: [
             {
               modelId: 'md_0000000011',
-              model: { enabled: true, providerID: 'opencode', modelID: 'glm-5.1' },
+              model: {
+                enabled: true,
+                providerID: 'opencode',
+                modelID: 'glm-5.1',
+              },
             },
           ],
         }),
@@ -1321,9 +1343,7 @@ describe('WorkersService', () => {
     });
 
     it('C7 按模型过滤：modelId 未指定 → 不过滤（回归现状，availability 无关）', async () => {
-      prisma.worker.findMany.mockResolvedValue([
-        workerRow({ id: 'w_none' }),
-      ]);
+      prisma.worker.findMany.mockResolvedValue([workerRow({ id: 'w_none' })]);
 
       const workerId = await service.assignWorker();
 
@@ -1624,11 +1644,13 @@ describe('WorkersService', () => {
       '%s 抛出 NotImplementedException（T10 接 WorkerClient 前不实现）',
       async (method) => {
         await expect(
-          (service[method] as (a: string, b: string, c?: string) => Promise<never>)(
-            'w_1',
-            's_1',
-            'prompt',
-          ),
+          (
+            service[method] as (
+              a: string,
+              b: string,
+              c?: string,
+            ) => Promise<never>
+          )('w_1', 's_1', 'prompt'),
         ).rejects.toBeInstanceOf(NotImplementedException);
       },
     );

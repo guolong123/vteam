@@ -36,7 +36,8 @@ export const EXECUTION_MODES = {
   plan: 'plan',
 } as const;
 
-export type ExecutionMode = (typeof EXECUTION_MODES)[keyof typeof EXECUTION_MODES];
+export type ExecutionMode =
+  (typeof EXECUTION_MODES)[keyof typeof EXECUTION_MODES];
 
 /**
  * 协作计划域错误码常量（对齐 memory.constants / tool.constants 命名约定：

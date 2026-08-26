@@ -15,7 +15,9 @@ import { PERSONA_LIBRARY } from '../persona.constants';
 
 /** 工具 effect 单行（14 篇 §3.3：每工具一行 toolAction + effect 三态）。 */
 export class ToolEffectDto {
-  @ApiProperty({ description: '工具 action（如 bash / github_create_issue / jenkins-*）' })
+  @ApiProperty({
+    description: '工具 action（如 bash / github_create_issue / jenkins-*）',
+  })
   @IsString()
   toolAction: string;
 
@@ -38,11 +40,16 @@ export class CreateAgentDto {
   @MaxLength(64)
   name: string;
 
-  @ApiProperty({ description: 'Agent 类型（POST 仅支持 custom 创建）', enum: ['custom'] })
+  @ApiProperty({
+    description: 'Agent 类型（POST 仅支持 custom 创建）',
+    enum: ['custom'],
+  })
   @IsIn(['custom'])
   type: 'custom';
 
-  @ApiPropertyOptional({ description: '角色 key（与前端 task-create data-role 对齐）' })
+  @ApiPropertyOptional({
+    description: '角色 key（与前端 task-create data-role 对齐）',
+  })
   @IsOptional()
   @IsString()
   role?: string;
@@ -73,7 +80,8 @@ export class CreateAgentDto {
   skillIds?: string[];
 
   @ApiPropertyOptional({
-    description: '工具 effect 配置（FR-35/48，写 agent_tool_effects，每工具一行）',
+    description:
+      '工具 effect 配置（FR-35/48，写 agent_tool_effects，每工具一行）',
     type: [ToolEffectDto],
   })
   @IsOptional()
@@ -83,7 +91,8 @@ export class CreateAgentDto {
   toolEffects?: ToolEffectDto[];
 
   @ApiPropertyOptional({
-    description: '权限范围对象（FR-36，如 {projects:["p1"], write:false, doclibOnly:true}）',
+    description:
+      '权限范围对象（FR-36，如 {projects:["p1"], write:false, doclibOnly:true}）',
     type: Object,
   })
   @IsOptional()
@@ -91,15 +100,15 @@ export class CreateAgentDto {
   permissionScope?: Record<string, unknown>;
 
   @ApiPropertyOptional({
-    description: '默认模型 id（D7：opencode 模型 id，provider/model 格式，可选自 available-models）',
+    description:
+      '默认模型 id（D7：opencode 模型 id，provider/model 格式，可选自 available-models）',
     example: 'opencode-go/deepseek-v4-flash',
   })
   @IsOptional()
   @IsString()
   @Matches(/^[^\s\/]+\/[^\s\/]+$/, {
-    message: 'defaultModelId 需为 provider/model 格式（如 opencode-go/deepseek-v4-flash）',
+    message:
+      'defaultModelId 需为 provider/model 格式（如 opencode-go/deepseek-v4-flash）',
   })
   defaultModelId?: string;
-
-
 }

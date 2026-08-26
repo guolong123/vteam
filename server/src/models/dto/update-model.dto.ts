@@ -61,13 +61,19 @@ export class UpdateModelDto {
   @IsBoolean()
   enabled?: boolean;
 
-  @ApiPropertyOptional({ description: '模型 provider 类型（cloud|local|custom）', enum: ['cloud', 'local', 'custom'] })
+  @ApiPropertyOptional({
+    description: '模型 provider 类型（cloud|local|custom）',
+    enum: ['cloud', 'local', 'custom'],
+  })
   @IsOptional()
   @IsString()
   @IsIn(['cloud', 'local', 'custom'])
   providerType?: string;
 
-  @ApiPropertyOptional({ description: '本地/自定义模型 baseUrl（local/custom 需 http(s) URL）', maxLength: 512 })
+  @ApiPropertyOptional({
+    description: '本地/自定义模型 baseUrl（local/custom 需 http(s) URL）',
+    maxLength: 512,
+  })
   @IsOptional()
   @IsString()
   @MaxLength(512)

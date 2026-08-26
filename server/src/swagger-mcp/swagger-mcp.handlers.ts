@@ -487,7 +487,8 @@ export class SwaggerMcpHandlers {
       const inst = wrapper?.instance;
       if (
         inst &&
-        (inst as { constructor?: { name?: string } }).constructor?.name === token
+        (inst as { constructor?: { name?: string } }).constructor?.name ===
+          token
       ) {
         return inst;
       }

@@ -14,7 +14,16 @@ export class UpdateRoleDto {
 
   @ApiPropertyOptional({
     description: '权限矩阵：8 资源 × 6 操作',
-    example: { tasks: { view: true, create: true, edit: true, delete: true, review: true, manage: false } },
+    example: {
+      tasks: {
+        view: true,
+        create: true,
+        edit: true,
+        delete: true,
+        review: true,
+        manage: false,
+      },
+    },
   })
   @IsOptional()
   @IsObject()

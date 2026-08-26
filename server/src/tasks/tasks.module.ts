@@ -1,5 +1,6 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ChatModule } from '../chat/chat.module';
+import { MessageChannelsModule } from '../message-channels/message-channels.module';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { ProjectMembershipGuard } from '../common/guards/project-membership.guard';
 import { RealtimeModule } from '../realtime/realtime.module';
@@ -7,6 +8,7 @@ import { WorkersModule } from '../workers/workers.module';
 import { TaskProgressionScheduler } from './task-progression.scheduler';
 import { TasksController } from './tasks.controller';
 import { MigrateController } from './migrate.controller';
+import { TaskChannelBindingsController } from './task-channel-bindings.controller';
 import { TasksService } from './tasks.service';
 
 /**
@@ -25,9 +27,18 @@ import { TasksService } from './tasks.service';
  * - TaskProgressionScheduler（本模块 provider）：主 Agent 定期巡检调度 + 托管确认路由。
  */
 @Module({
-  imports: [RealtimeModule, WorkersModule, ChatModule],
-  controllers: [TasksController, MigrateController],
-  providers: [TasksService, TaskProgressionScheduler, ProjectMembershipGuard, PermissionGuard],
+  imports: [RealtimeModule, WorkersModule, ChatModule, forwardRef(() => MessageChannelsModule)],
+  controllers: [
+    TasksController,
+    MigrateController,
+    TaskChannelBindingsController,
+  ],
+  providers: [
+    TasksService,
+    TaskProgressionScheduler,
+    ProjectMembershipGuard,
+    PermissionGuard,
+  ],
   exports: [TasksService],
 })
 export class TasksModule {}

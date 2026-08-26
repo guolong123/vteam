@@ -1,10 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsArray,
-  IsOptional,
-  IsString,
-  MaxLength,
-} from 'class-validator';
+import { IsArray, IsOptional, IsString, MaxLength } from 'class-validator';
 
 /**
  * POST /issues 请求体（issue-management plan todo 2）。
@@ -42,7 +37,8 @@ export class CreateIssueDto {
   assigneeAgentId?: string;
 
   @ApiPropertyOptional({
-    description: '指派实例 id（ta_ 前缀，须在任务团队未 removed，服务层校验；优先于 assigneeAgentId）',
+    description:
+      '指派实例 id（ta_ 前缀，须在任务团队未 removed，服务层校验；优先于 assigneeAgentId）',
   })
   @IsOptional()
   @IsString()

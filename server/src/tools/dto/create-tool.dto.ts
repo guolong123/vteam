@@ -25,7 +25,10 @@ export type ToolExecution = (typeof TOOL_EXECUTIONS)[number];
  * action 全局唯一（schema.prisma @@unique），冲突 → 409 TOOL_ACTION_EXISTS。
  */
 export class CreateToolDto {
-  @ApiProperty({ description: '工具名称（展示名，如 Jira 查询）', maxLength: 64 })
+  @ApiProperty({
+    description: '工具名称（展示名，如 Jira 查询）',
+    maxLength: 64,
+  })
   @IsString()
   @MaxLength(64)
   name: string;
@@ -54,7 +57,8 @@ export class CreateToolDto {
   mcpServer?: string;
 
   @ApiPropertyOptional({
-    description: '输入/输出 JSON Schema（execution=mcp 时 server 自带，可不传）',
+    description:
+      '输入/输出 JSON Schema（execution=mcp 时 server 自带，可不传）',
     type: Object,
   })
   @IsOptional()

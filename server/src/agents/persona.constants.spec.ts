@@ -10,7 +10,9 @@ describe('persona.constants', () => {
 
     it('每条性格文案非空且可被 renderPersonaSection 渲染', () => {
       for (const key of Object.keys(PERSONA_LIBRARY)) {
-        expect(PERSONA_LIBRARY[key as keyof typeof PERSONA_LIBRARY].length).toBeGreaterThan(0);
+        expect(
+          PERSONA_LIBRARY[key as keyof typeof PERSONA_LIBRARY].length,
+        ).toBeGreaterThan(0);
         expect(renderPersonaSection(key)).toContain('## 性格');
       }
     });

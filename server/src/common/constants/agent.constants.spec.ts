@@ -24,9 +24,15 @@ describe('模型目录 seed 预置（C1：STATIC_AVAILABLE_MODELS → models 表
   it('id 拆解：全部 seed 模型携带真实 provider 前缀（D5 规范化）', () => {
     const rows = buildModelSeedRows();
     const flash = rows.find((r) => r.modelID === 'deepseek-v4-flash');
-    expect(flash).toMatchObject({ providerID: 'opencode-go', modelID: 'deepseek-v4-flash' });
+    expect(flash).toMatchObject({
+      providerID: 'opencode-go',
+      modelID: 'deepseek-v4-flash',
+    });
     const pro = rows.find((r) => r.modelID === 'deepseek-v4-pro');
-    expect(pro).toMatchObject({ providerID: 'deepseek', modelID: 'deepseek-v4-pro' });
+    expect(pro).toMatchObject({
+      providerID: 'deepseek',
+      modelID: 'deepseek-v4-pro',
+    });
   });
 
   it('D5：seed 模型覆盖 ≥4 个不同 provider（Provider 页不再只有 opencode/opencode-go）', () => {
@@ -41,7 +47,13 @@ describe('模型目录 seed 预置（C1：STATIC_AVAILABLE_MODELS → models 表
     const rows = buildModelSeedRows();
     const keys = new Set(rows.map((r) => `${r.providerID}/${r.modelID}`));
     expect(Object.keys(TEMPLATE_DEFAULT_MODELS).sort()).toEqual(
-      ['a_architect', 'a_developer', 'a_product', 'a_project_manager', 'a_tester'].sort(),
+      [
+        'a_architect',
+        'a_developer',
+        'a_product',
+        'a_project_manager',
+        'a_tester',
+      ].sort(),
     );
     for (const modelId of Object.values(TEMPLATE_DEFAULT_MODELS)) {
       expect(keys.has(modelId)).toBe(true);

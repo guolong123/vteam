@@ -11,12 +11,16 @@ import { ISSUE_STATUS } from '../issues.constants';
  * status/assigneeAgentId 可选过滤；分页对齐 tasks 看板（page 默认 1、pageSize 默认 20）。
  */
 export class QueryIssuesDto {
-  @ApiPropertyOptional({ description: '任务 id（按任务过滤，与 projectId 二选一）' })
+  @ApiPropertyOptional({
+    description: '任务 id（按任务过滤，与 projectId 二选一）',
+  })
   @IsOptional()
   @IsString()
   taskId?: string;
 
-  @ApiPropertyOptional({ description: '项目 id（按项目下全部任务过滤，与 taskId 二选一）' })
+  @ApiPropertyOptional({
+    description: '项目 id（按项目下全部任务过滤，与 taskId 二选一）',
+  })
   @IsOptional()
   @IsString()
   projectId?: string;
@@ -34,14 +38,22 @@ export class QueryIssuesDto {
   @IsString()
   assigneeAgentId?: string;
 
-  @ApiPropertyOptional({ description: '页码（从 1 起）', default: 1, minimum: 1 })
+  @ApiPropertyOptional({
+    description: '页码（从 1 起）',
+    default: 1,
+    minimum: 1,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   page?: number;
 
-  @ApiPropertyOptional({ description: '每页条数（上限 100）', default: 20, minimum: 1 })
+  @ApiPropertyOptional({
+    description: '每页条数（上限 100）',
+    default: 20,
+    minimum: 1,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

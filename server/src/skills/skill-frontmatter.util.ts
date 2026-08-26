@@ -120,7 +120,12 @@ function parseYamlSimple(lines: string[]): SkillFrontmatter {
     const kv = splitKeyValue(trimmed);
     if (!kv) continue; // 非键值行忽略
     const [k, v] = kv;
-    if (k !== 'name' && k !== 'description' && k !== 'version' && k !== 'allowed-tools') {
+    if (
+      k !== 'name' &&
+      k !== 'description' &&
+      k !== 'version' &&
+      k !== 'allowed-tools'
+    ) {
       continue; // 未知字段忽略（保持宽松，SKILL.md 可含其他元数据）
     }
     if (v === '|' || v === '>') {

@@ -44,11 +44,16 @@ export class CreateModelDto {
   @MinLength(1)
   @MaxLength(128)
   @Matches(MODEL_ID_PATTERN, {
-    message: 'modelID 需为小写字母/数字/连字符/下划线/点/冒号（如 ornith-1.5:9b）',
+    message:
+      'modelID 需为小写字母/数字/连字符/下划线/点/冒号（如 ornith-1.5:9b）',
   })
   modelID: string;
 
-  @ApiProperty({ description: '模型显示名', example: 'DeepSeek V4 Flash', maxLength: 128 })
+  @ApiProperty({
+    description: '模型显示名',
+    example: 'DeepSeek V4 Flash',
+    maxLength: 128,
+  })
   @IsString()
   @MinLength(1)
   @MaxLength(128)
@@ -62,18 +67,31 @@ export class CreateModelDto {
   @IsObject()
   capabilities?: Record<string, unknown>;
 
-  @ApiPropertyOptional({ description: '是否启用（false=停用，available-models 只出 enabled）', default: true })
+  @ApiPropertyOptional({
+    description: '是否启用（false=停用，available-models 只出 enabled）',
+    default: true,
+  })
   @IsOptional()
   @IsBoolean()
   enabled?: boolean;
 
-  @ApiPropertyOptional({ description: '模型 provider 类型（cloud 云端 | local 本地 | custom 自定义）', example: 'cloud', enum: ['cloud', 'local', 'custom'], default: 'cloud' })
+  @ApiPropertyOptional({
+    description:
+      '模型 provider 类型（cloud 云端 | local 本地 | custom 自定义）',
+    example: 'cloud',
+    enum: ['cloud', 'local', 'custom'],
+    default: 'cloud',
+  })
   @IsOptional()
   @IsString()
   @IsIn(['cloud', 'local', 'custom'])
   providerType?: string;
 
-  @ApiPropertyOptional({ description: '本地/自定义模型 baseUrl（local/custom 必填，http(s) URL）', example: 'http://host.docker.internal:11434/v1', maxLength: 512 })
+  @ApiPropertyOptional({
+    description: '本地/自定义模型 baseUrl（local/custom 必填，http(s) URL）',
+    example: 'http://host.docker.internal:11434/v1',
+    maxLength: 512,
+  })
   @IsOptional()
   @IsString()
   @MaxLength(512)

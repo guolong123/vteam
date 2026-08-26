@@ -157,10 +157,7 @@ export class PlansService implements OnModuleInit {
       select: { id: true, alias: true, agent: { select: { name: true } } },
     });
     return new Map(
-      agents.map((a) => [
-        a.id,
-        { alias: a.alias, name: a.agent.name },
-      ]),
+      agents.map((a) => [a.id, { alias: a.alias, name: a.agent.name }]),
     );
   }
 

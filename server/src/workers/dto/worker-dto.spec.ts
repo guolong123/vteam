@@ -38,7 +38,11 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
     const wire = JSON.parse(JSON.stringify(dto));
     expect(wire.workerId).toBe('w_0000000002');
     expect(wire.name).toBeUndefined();
-    expect(wire.capabilities).toEqual({ maxInstances: 1, skills: [], tools: [] });
+    expect(wire.capabilities).toEqual({
+      maxInstances: 1,
+      skills: [],
+      tools: [],
+    });
   });
 
   it('WorkerCapabilitiesDto 支持可选 port（F2 C2：随机端口上报，whitelist 不剔除）', () => {
@@ -49,7 +53,12 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
     dto.load = { instances: 0 };
 
     const wire = JSON.parse(JSON.stringify(dto));
-    expect(wire.capabilities).toEqual({ maxInstances: 1, skills: [], tools: [], port: 53001 });
+    expect(wire.capabilities).toEqual({
+      maxInstances: 1,
+      skills: [],
+      tools: [],
+      port: 53001,
+    });
   });
 
   it('WorkerCapabilitiesDto 支持可选 baseUrl（D2：容器内 http://worker:port 上报，whitelist 不剔除）', () => {
@@ -217,8 +226,12 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
 
   it('worker 协议事件与 server EVENT_TYPES 同名事件值对齐', () => {
     expect(WORKER_EVENT_TYPES.HEARTBEAT).toBe(EVENT_TYPES.WORKER_HEARTBEAT);
-    expect(WORKER_EVENT_TYPES.SESSION_UPDATED).toBe(EVENT_TYPES.SESSION_UPDATED);
-    expect(WORKER_EVENT_TYPES.MESSAGE_PART_DELTA).toBe(EVENT_TYPES.MESSAGE_PART_DELTA);
+    expect(WORKER_EVENT_TYPES.SESSION_UPDATED).toBe(
+      EVENT_TYPES.SESSION_UPDATED,
+    );
+    expect(WORKER_EVENT_TYPES.MESSAGE_PART_DELTA).toBe(
+      EVENT_TYPES.MESSAGE_PART_DELTA,
+    );
     expect(WORKER_EVENT_TYPES.TASK_COMPLETED).toBe(EVENT_TYPES.TASK_COMPLETED);
     expect(WORKER_EVENT_TYPES.AGENT_STATUS).toBe(EVENT_TYPES.AGENT_STATUS);
   });
@@ -245,7 +258,9 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
     });
 
     it('capabilities 为标量 → 校验失败（@IsObject）', async () => {
-      expect(await errorsOf({ ...base, capabilities: 'string' })).not.toHaveLength(0);
+      expect(
+        await errorsOf({ ...base, capabilities: 'string' }),
+      ).not.toHaveLength(0);
     });
 
     it('完整对象 → 校验通过', async () => {

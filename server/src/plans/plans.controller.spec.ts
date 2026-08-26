@@ -57,11 +57,7 @@ describe('PlansController', () => {
       });
       const dto = { verdict: 'approved' };
 
-      const out = await controller.review(
-        'pl_1',
-        dto as ReviewPlanDto,
-        user,
-      );
+      const out = await controller.review('pl_1', dto as ReviewPlanDto, user);
 
       expect(service.review).toHaveBeenCalledWith(
         'pl_1',

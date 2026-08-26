@@ -75,7 +75,11 @@ export class IssuesService implements OnModuleInit {
   /** 进程启动：按 `is_`/`ia_` 前缀最大序号对齐 id 生成器（重启续号）。 */
   async onModuleInit(): Promise<void> {
     await resyncIdPrefix(this.prisma.issue, ISSUE_ID_PREFIX, this.idGen);
-    await resyncIdPrefix(this.prisma.issueActivity, ISSUE_ACTIVITY_ID_PREFIX, this.idGen);
+    await resyncIdPrefix(
+      this.prisma.issueActivity,
+      ISSUE_ACTIVITY_ID_PREFIX,
+      this.idGen,
+    );
   }
 
   /** 用户路径成员校验：任务存在（404）→ 调用者是任务所属项目成员（403）。返回任务状态供归档判定。 */
@@ -107,7 +111,10 @@ export class IssuesService implements OnModuleInit {
   }
 
   /** 项目路径成员校验（GET /issues projectId 过滤用）：项目存在（404）→ 调用者是项目成员（403）。 */
-  private async assertProjectMember(projectId: string, userId: string): Promise<void> {
+  private async assertProjectMember(
+    projectId: string,
+    userId: string,
+  ): Promise<void> {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
       select: { id: true },
@@ -506,7 +513,9 @@ export class IssuesService implements OnModuleInit {
         actorId: opts?.actorId ?? null,
         instanceId: opts?.instanceId ?? null,
         metadata:
-          action === 'reject' && opts?.reason ? { reason: opts.reason } : undefined,
+          action === 'reject' && opts?.reason
+            ? { reason: opts.reason }
+            : undefined,
       });
       return u;
     });
@@ -544,11 +553,7 @@ export class IssuesService implements OnModuleInit {
    * 全部 issue 的 DTO 数组
    * （status 可选过滤，不含软删；对齐 findAll 的筛选语义，无分页——MCP 模型直读）。
    */
-  async findAllByAgent(
-    agentRef: string,
-    taskId: string,
-    status?: string,
-  ) {
+  async findAllByAgent(agentRef: string, taskId: string, status?: string) {
     await this.assertAgentTaskMember(taskId, agentRef);
     const where: Prisma.IssueWhereInput = {
       taskId,
@@ -646,7 +651,9 @@ export class IssuesService implements OnModuleInit {
   }
 
   /** PATCH 字段组装（update / updateByAgent 共用）：title trim、description 空串归一 null。 */
-  private buildUpdateData(dto: UpdateIssueDto): Prisma.IssueUncheckedUpdateInput {
+  private buildUpdateData(
+    dto: UpdateIssueDto,
+  ): Prisma.IssueUncheckedUpdateInput {
     const data: Prisma.IssueUncheckedUpdateInput = {};
     if (dto.title !== undefined) {
       data.title = dto.title.trim();
@@ -698,9 +705,7 @@ export class IssuesService implements OnModuleInit {
   }
 
   /** 操作记录 DTO（含操作人展示名：user → username；agent → 实例别名 / agent 名）。 */
-  private async toActivityDtos(
-    rows: ActivityRow[],
-  ): Promise<
+  private async toActivityDtos(rows: ActivityRow[]): Promise<
     {
       id: string;
       issueId: string;
@@ -751,7 +756,9 @@ export class IssuesService implements OnModuleInit {
       users.map((u) => [u.id, u.username] as [string, string]),
     );
     const instMap = new Map(
-      taskAgents.map((t) => [t.id, t.alias ?? t.agent.name] as [string, string]),
+      taskAgents.map(
+        (t) => [t.id, t.alias ?? t.agent.name] as [string, string],
+      ),
     );
     const agentMap = new Map(
       agents.map((a) => [a.id, a.name] as [string, string]),

@@ -1,10 +1,17 @@
-import { BadRequestException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { IdGeneratorService } from '../common/id-generator';
 import { EVENT_TYPES } from '../common/constants/event.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { WorkerClient, WorkerUnavailableException } from '../workers/worker.client';
+import {
+  WorkerClient,
+  WorkerUnavailableException,
+} from '../workers/worker.client';
 import { ReplyQuestionDto } from './dto/reply-question.dto';
 import { QUESTIONS_ERRORS } from './questions.constants';
 import { QuestionsService } from './questions.service';
@@ -33,7 +40,9 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
     taskId: 't_1',
     agentId: 'a_1',
     kind: 'question',
-    content: { questions: [{ question: '继续吗？', header: '确认', options: [] }] },
+    content: {
+      questions: [{ question: '继续吗？', header: '确认', options: [] }],
+    },
     status: 'pending',
     answers: null,
     createdAt: new Date(),
@@ -53,12 +62,17 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       session: { findUnique: jest.fn(), findFirst: jest.fn() },
       worker: { findUnique: jest.fn() },
       task: {
-        findUnique: jest.fn().mockResolvedValue({ id: 't_1', managedMode: false }),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 't_1', managedMode: false }),
         findMany: jest.fn().mockResolvedValue([]),
       },
     };
     realtime = { emit: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
-    workerClient = { questionReply: jest.fn().mockResolvedValue(undefined), permissionReply: jest.fn().mockResolvedValue(undefined) };
+    workerClient = {
+      questionReply: jest.fn().mockResolvedValue(undefined),
+      permissionReply: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -81,7 +95,11 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         orderBy: { createdAt: 'desc' },
       });
       expect(list).toHaveLength(1);
-      expect(list[0]).toMatchObject({ id: 'aq_0000000001', kind: 'question', status: 'pending' });
+      expect(list[0]).toMatchObject({
+        id: 'aq_0000000001',
+        kind: 'question',
+        status: 'pending',
+      });
     });
 
     it('status 缺省 pending（会话页默认补拉待处理）', async () => {
@@ -104,7 +122,9 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       prisma.agentQuestion.findMany
         .mockResolvedValueOnce([stale])
         .mockResolvedValueOnce([]);
-      prisma.agentQuestion.update.mockResolvedValue(aqRow({ id: 'aq_stale', status: 'expired' }));
+      prisma.agentQuestion.update.mockResolvedValue(
+        aqRow({ id: 'aq_stale', status: 'expired' }),
+      );
 
       const list = await service.findAll({ taskId: 't_1', status: 'pending' });
 
@@ -133,7 +153,10 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
   describe('reply（question）', () => {
     it('answers 数组 → workerClient.questionReply 转发 → 落库 resolved + answers → emit {resolved}', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValue(aqRow());
-      prisma.session.findUnique.mockResolvedValue({ workerId: 'w_1', instanceRef: 'ses_abc' });
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: 'w_1',
+        instanceRef: 'ses_abc',
+      });
       prisma.worker.findUnique.mockResolvedValue({
         id: 'w_1',
         capabilities: { execBaseUrl: 'http://worker:4198' },
@@ -141,7 +164,9 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       const updated = aqRow({ status: 'resolved', answers: [['继续']] });
       prisma.agentQuestion.update.mockResolvedValue(updated);
 
-      const result = await service.reply('aq_1', { answers: [['继续']] } as ReplyQuestionDto);
+      const result = await service.reply('aq_1', {
+        answers: [['继续']],
+      } as ReplyQuestionDto);
 
       expect(workerClient.questionReply).toHaveBeenCalledWith(
         { id: 'w_1', capabilities: { execBaseUrl: 'http://worker:4198' } },
@@ -161,9 +186,17 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
 
     it('answers=null → reject 转发 → 落库 rejected（用户拒绝）', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValue(aqRow());
-      prisma.session.findUnique.mockResolvedValue({ workerId: 'w_1', instanceRef: 'ses_abc' });
-      prisma.worker.findUnique.mockResolvedValue({ id: 'w_1', capabilities: {} });
-      prisma.agentQuestion.update.mockResolvedValue(aqRow({ status: 'rejected', answers: null }));
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: 'w_1',
+        instanceRef: 'ses_abc',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      prisma.agentQuestion.update.mockResolvedValue(
+        aqRow({ status: 'rejected', answers: null }),
+      );
 
       await service.reply('aq_1', { answers: null } as ReplyQuestionDto);
 
@@ -181,11 +214,28 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
   describe('reply（permission）', () => {
     it('response=once → workerClient.permissionReply 转发 → 落库 resolved + {response}', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValue(
-        aqRow({ id: 'aq_2', requestId: 'per_1', kind: 'permission', content: { title: 'bash', pattern: '/data/*' } }),
+        aqRow({
+          id: 'aq_2',
+          requestId: 'per_1',
+          kind: 'permission',
+          content: { title: 'bash', pattern: '/data/*' },
+        }),
       );
-      prisma.session.findUnique.mockResolvedValue({ workerId: 'w_1', instanceRef: 'ses_abc' });
-      prisma.worker.findUnique.mockResolvedValue({ id: 'w_1', capabilities: {} });
-      prisma.agentQuestion.update.mockResolvedValue(aqRow({ id: 'aq_2', status: 'resolved', answers: { response: 'once' } }));
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: 'w_1',
+        instanceRef: 'ses_abc',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      prisma.agentQuestion.update.mockResolvedValue(
+        aqRow({
+          id: 'aq_2',
+          status: 'resolved',
+          answers: { response: 'once' },
+        }),
+      );
 
       await service.reply('aq_2', { response: 'once' } as ReplyQuestionDto);
 
@@ -203,7 +253,9 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       prisma.agentQuestion.findUnique.mockResolvedValue(
         aqRow({ kind: 'permission' }),
       );
-      await expect(service.reply('aq_1', {} as ReplyQuestionDto)).rejects.toMatchObject({
+      await expect(
+        service.reply('aq_1', {} as ReplyQuestionDto),
+      ).rejects.toMatchObject({
         response: { code: QUESTIONS_ERRORS.QUESTION_INVALID_REPLY },
       });
     });
@@ -212,33 +264,50 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
   describe('reply 错误路径', () => {
     it('AgentQuestion 不存在 → 404 QUESTION_NOT_FOUND', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValue(null);
-      await expect(service.reply('aq_missing', { answers: [['x']] } as ReplyQuestionDto)).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
+      await expect(
+        service.reply('aq_missing', { answers: [['x']] } as ReplyQuestionDto),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('已终态（resolved）→ 400 QUESTION_ALREADY_RESOLVED（防重复回复）', async () => {
-      prisma.agentQuestion.findUnique.mockResolvedValue(aqRow({ status: 'resolved' }));
-      await expect(service.reply('aq_1', { answers: [['x']] } as ReplyQuestionDto)).rejects.toMatchObject({
+      prisma.agentQuestion.findUnique.mockResolvedValue(
+        aqRow({ status: 'resolved' }),
+      );
+      await expect(
+        service.reply('aq_1', { answers: [['x']] } as ReplyQuestionDto),
+      ).rejects.toMatchObject({
         response: { code: QUESTIONS_ERRORS.QUESTION_ALREADY_RESOLVED },
       });
     });
 
     it('question 缺 answers → 400 QUESTION_INVALID_REPLY', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValue(aqRow());
-      await expect(service.reply('aq_1', {} as ReplyQuestionDto)).rejects.toMatchObject({
+      await expect(
+        service.reply('aq_1', {} as ReplyQuestionDto),
+      ).rejects.toMatchObject({
         response: { code: QUESTIONS_ERRORS.QUESTION_INVALID_REPLY },
       });
     });
 
     it('ses_ 前缀 sessionId（ingress 反查失败兜底）→ 直接透传 worker，worker 按 taskId+agentId 反查', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValue(
-        aqRow({ id: 'aq_3', requestId: 'que_3', sessionId: 'ses_abc', taskId: 't_9', agentId: 'a_9' }),
+        aqRow({
+          id: 'aq_3',
+          requestId: 'que_3',
+          sessionId: 'ses_abc',
+          taskId: 't_9',
+          agentId: 'a_9',
+        }),
       );
       prisma.session.findUnique.mockResolvedValue(null); // ses_ 无主键记录
       prisma.session.findFirst.mockResolvedValue({ workerId: 'w_1' });
-      prisma.worker.findUnique.mockResolvedValue({ id: 'w_1', capabilities: {} });
-      prisma.agentQuestion.update.mockResolvedValue(aqRow({ id: 'aq_3', status: 'resolved' }));
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      prisma.agentQuestion.update.mockResolvedValue(
+        aqRow({ id: 'aq_3', status: 'resolved' }),
+      );
 
       await service.reply('aq_3', { answers: [['继续']] } as ReplyQuestionDto);
 
@@ -250,29 +319,47 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
 
     it('session 无 instanceRef → 503 QUESTION_WORKER_UNAVAILABLE（不静默）', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValue(aqRow());
-      prisma.session.findUnique.mockResolvedValue({ workerId: 'w_1', instanceRef: null });
-      await expect(service.reply('aq_1', { answers: [['x']] } as ReplyQuestionDto)).rejects.toMatchObject({
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: 'w_1',
+        instanceRef: null,
+      });
+      await expect(
+        service.reply('aq_1', { answers: [['x']] } as ReplyQuestionDto),
+      ).rejects.toMatchObject({
         response: { code: QUESTIONS_ERRORS.QUESTION_WORKER_UNAVAILABLE },
       });
     });
 
     it('session 无绑定 worker → 503 QUESTION_WORKER_UNAVAILABLE', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValue(aqRow());
-      prisma.session.findUnique.mockResolvedValue({ workerId: null, instanceRef: 'ses_abc' });
-      await expect(service.reply('aq_1', { answers: [['x']] } as ReplyQuestionDto)).rejects.toMatchObject({
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: null,
+        instanceRef: 'ses_abc',
+      });
+      await expect(
+        service.reply('aq_1', { answers: [['x']] } as ReplyQuestionDto),
+      ).rejects.toMatchObject({
         response: { code: QUESTIONS_ERRORS.QUESTION_WORKER_UNAVAILABLE },
       });
     });
 
     it('workerClient 失败（worker 不可达）→ 向上抛 503 WorkerUnavailableException（不静默）', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValue(aqRow());
-      prisma.session.findUnique.mockResolvedValue({ workerId: 'w_1', instanceRef: 'ses_abc' });
-      prisma.worker.findUnique.mockResolvedValue({ id: 'w_1', capabilities: {} });
-      workerClient.questionReply.mockRejectedValue(new ServiceUnavailableException('worker offline'));
-
-      await expect(service.reply('aq_1', { answers: [['x']] } as ReplyQuestionDto)).rejects.toBeInstanceOf(
-        ServiceUnavailableException,
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: 'w_1',
+        instanceRef: 'ses_abc',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      workerClient.questionReply.mockRejectedValue(
+        new ServiceUnavailableException('worker offline'),
       );
+
+      await expect(
+        service.reply('aq_1', { answers: [['x']] } as ReplyQuestionDto),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
       expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
     });
 
@@ -280,16 +367,31 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       prisma.agentQuestion.findUnique.mockResolvedValue(
         aqRow({ id: 'aq_4', requestId: 'per_stale', kind: 'permission' }),
       );
-      prisma.session.findUnique.mockResolvedValue({ workerId: 'w_1', instanceRef: 'ses_abc' });
-      prisma.worker.findUnique.mockResolvedValue({ id: 'w_1', capabilities: {} });
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: 'w_1',
+        instanceRef: 'ses_abc',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
       workerClient.permissionReply.mockRejectedValue(
         new WorkerUnavailableException('w_1', 'permission reply HTTP 404'),
       );
       prisma.agentQuestion.update.mockResolvedValue(
-        aqRow({ id: 'aq_4', status: 'expired', answers: { expired: true, reason: 'reply 转发 serve 404（per_stale）' } }),
+        aqRow({
+          id: 'aq_4',
+          status: 'expired',
+          answers: {
+            expired: true,
+            reason: 'reply 转发 serve 404（per_stale）',
+          },
+        }),
       );
 
-      await expect(service.reply('aq_4', { response: 'once' } as ReplyQuestionDto)).rejects.toMatchObject({
+      await expect(
+        service.reply('aq_4', { response: 'once' } as ReplyQuestionDto),
+      ).rejects.toMatchObject({
         response: { code: QUESTIONS_ERRORS.QUESTION_EXPIRED },
       });
       expect(prisma.agentQuestion.update).toHaveBeenCalledWith({
@@ -384,7 +486,9 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         EVENT_TYPES.AGENT_QUESTION,
         expect.objectContaining({
           taskId: 't_1',
-          question: expect.objectContaining({ requestId: 'que_platform_0000000001' }),
+          question: expect.objectContaining({
+            requestId: 'que_platform_0000000001',
+          }),
         }),
         { type: 'task', id: 't_1' },
       );
@@ -422,7 +526,11 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         managedMode: false,
       });
       prisma.agentQuestion.create.mockResolvedValue(platformRow());
-      await service.createForPlatform('t_1', { question: 'Q', options: ['确认', '拒绝'] }, { onResolved: hook });
+      await service.createForPlatform(
+        't_1',
+        { question: 'Q', options: ['确认', '拒绝'] },
+        { onResolved: hook },
+      );
 
       prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
       prisma.agentQuestion.update.mockResolvedValue(
@@ -461,7 +569,11 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         managedMode: false,
       });
       prisma.agentQuestion.create.mockResolvedValue(platformRow());
-      await service.createForPlatform('t_1', { question: 'Q', options: ['确认', '拒绝'] }, { onResolved: hook });
+      await service.createForPlatform(
+        't_1',
+        { question: 'Q', options: ['确认', '拒绝'] },
+        { onResolved: hook },
+      );
 
       prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
       prisma.agentQuestion.update.mockResolvedValue(
@@ -492,14 +604,22 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         managedMode: false,
       });
       prisma.agentQuestion.create.mockResolvedValue(platformRow());
-      await service.createForPlatform('t_1', { question: 'Q', options: ['确认', '拒绝'] }, { onResolved: hook });
+      await service.createForPlatform(
+        't_1',
+        { question: 'Q', options: ['确认', '拒绝'] },
+        { onResolved: hook },
+      );
 
       prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
       prisma.agentQuestion.update.mockResolvedValue(
         platformRow({ status: 'rejected', answers: null }),
       );
 
-      await service.reply('aq_platform', { answers: null } as ReplyQuestionDto, 'u_1');
+      await service.reply(
+        'aq_platform',
+        { answers: null } as ReplyQuestionDto,
+        'u_1',
+      );
 
       expect(workerClient.questionReply).not.toHaveBeenCalled();
       expect(prisma.agentQuestion.update).toHaveBeenCalledWith({
@@ -520,14 +640,22 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         managedMode: false,
       });
       prisma.agentQuestion.create.mockResolvedValue(platformRow());
-      await service.createForPlatform('t_1', { question: 'Q', options: ['确认', '拒绝'] }, { onResolved: hook });
+      await service.createForPlatform(
+        't_1',
+        { question: 'Q', options: ['确认', '拒绝'] },
+        { onResolved: hook },
+      );
 
       prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
       prisma.agentQuestion.update.mockResolvedValue(
         platformRow({ status: 'resolved', answers: [['确认']] }),
       );
 
-      const result = await service.reply('aq_platform', { answers: [['确认']] } as ReplyQuestionDto, 'u_1');
+      const result = await service.reply(
+        'aq_platform',
+        { answers: [['确认']] } as ReplyQuestionDto,
+        'u_1',
+      );
 
       expect(result.status).toBe('resolved');
       expect(realtime.emit).toHaveBeenCalledWith(

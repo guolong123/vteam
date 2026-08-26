@@ -31,7 +31,9 @@ export class QuestionsController {
   @Get()
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.view')
-  @ApiOperation({ summary: 'Agent 提问/权限确认列表（按 taskId/status 过滤，会话页补拉）' })
+  @ApiOperation({
+    summary: 'Agent 提问/权限确认列表（按 taskId/status 过滤，会话页补拉）',
+  })
   findAll(@Query('taskId') taskId?: string, @Query('status') status?: string) {
     return this.questionsService.findAll({ taskId, status });
   }
@@ -43,7 +45,10 @@ export class QuestionsController {
   @Post(':id/reply')
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.edit')
-  @ApiOperation({ summary: '回复 Agent 提问/权限确认（question=answers / permission=response）' })
+  @ApiOperation({
+    summary:
+      '回复 Agent 提问/权限确认（question=answers / permission=response）',
+  })
   reply(
     @Param('id') id: string,
     @Body() dto: ReplyQuestionDto,

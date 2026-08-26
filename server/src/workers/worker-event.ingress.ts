@@ -13,7 +13,11 @@ import { RealtimeScope } from '../realtime/realtime.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WorkerEventDto } from './dto/worker-event.dto';
 import { WORKER_ERRORS } from './workers.constants';
-import { concatText, extractConclusionParts, normalizeParts } from '../chat/message-parts';
+import {
+  concatText,
+  extractConclusionParts,
+  normalizeParts,
+} from '../chat/message-parts';
 import { inferErrorType } from './infer-error-type';
 
 /** task.completed 回流负载（worker 侧 step-finish 实测字段，T10 WorkerDispatcher 消费）。
@@ -142,7 +146,9 @@ const MESSAGE_ID_PREFIX = 'm';
 const DEDUP_WINDOW = 1000;
 
 /** Session.status 允许的流转值（SESSION_STATUS.created 为 bind 前初始态，worker 不回流该值）。 */
-const SESSION_STATUS_ALLOWED: Set<string> = new Set(Object.values(SESSION_STATUS));
+const SESSION_STATUS_ALLOWED: Set<string> = new Set(
+  Object.values(SESSION_STATUS),
+);
 
 /** 消息行（messages 表；content/mentions 为 Json 列），对齐 worker-dispatcher 的 MessageRow 契约。 */
 type MessageRow = {
@@ -410,7 +416,11 @@ export class WorkerEventIngress {
     if (isError) {
       await this.realtime.emit(
         EVENT_TYPES.AGENT_ERROR,
-        { ...base, error: payload.error ?? 'agent error', errorType: this.inferErrorType(payload.error) },
+        {
+          ...base,
+          error: payload.error ?? 'agent error',
+          errorType: this.inferErrorType(payload.error),
+        },
         this.scopeOf(payload.taskId),
       );
     } else {
@@ -420,7 +430,10 @@ export class WorkerEventIngress {
         this.scopeOf(payload.taskId),
       );
     }
-    this.notify(this.agentStatusCallbacks, { ...payload, workerId: dto.workerId });
+    this.notify(this.agentStatusCallbacks, {
+      ...payload,
+      workerId: dto.workerId,
+    });
     // 判死 watchdog：agent 状态上报即活动（thinking/operating 均刷新 idle 计时）
     // wave1 对齐：sessionId 反查为平台主键（与 dispatcher watchdog 注册域一致）
     this.notify(this.sessionActivityCallbacks, {
@@ -628,7 +641,10 @@ export class WorkerEventIngress {
       `[ingress] task.completed workerId=${dto.workerId} taskId=${payload.taskId ?? '-'} agentId=${payload.agentId ?? '-'}`,
     );
     // 判死 watchdog：完成回流 = 本轮结束（dispatcher 停止 idle 追踪，防完成后再误判死）
-    this.touchSessionActivity({ type: 'task.completed', sessionId: payload.sessionId });
+    this.touchSessionActivity({
+      type: 'task.completed',
+      sessionId: payload.sessionId,
+    });
     this.notify(this.sessionActivityCallbacks, {
       type: 'task.completed',
       sessionId: payload.sessionId,
@@ -701,10 +717,13 @@ export class WorkerEventIngress {
    * - emit AGENT_QUESTION（scope=task）：payload = AgentQuestion DTO + taskId/agentId，前端弹窗。
    */
   private async handleAgentQuestion(dto: WorkerEventDto): Promise<boolean> {
-    const raw = dto.payload as SessionQuestionPayload & SessionPermissionPayload;
+    const raw = dto.payload as SessionQuestionPayload &
+      SessionPermissionPayload;
     const kind = dto.type === 'session.question' ? 'question' : 'permission';
     const requestId =
-      kind === 'question' ? this.str(raw.requestId) : this.str(raw.permissionId);
+      kind === 'question'
+        ? this.str(raw.requestId)
+        : this.str(raw.permissionId);
     if (!requestId) {
       this.logger.debug(
         `[ingress] ${dto.type} 缺 ${kind === 'question' ? 'requestId' : 'permissionId'}，跳过（workerId=${dto.workerId}）`,
@@ -785,12 +804,12 @@ export class WorkerEventIngress {
     // payload 带 managed 标记（TaskProgressionScheduler 订阅 realtime bus 据此 dispatch 给主 Agent），
     // question.managedMode 供 GET /questions 补拉路径前端过滤弹窗。
     const managedMode = taskId
-      ? (
+      ? ((
           await this.prisma.task.findUnique({
             where: { id: taskId },
             select: { managedMode: true },
           })
-        )?.managedMode ?? false
+        )?.managedMode ?? false)
       : false;
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,

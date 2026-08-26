@@ -41,7 +41,9 @@ export class IssuesController {
    *   → 200 {items: [IssueDto], total, page, pageSize}
    */
   @Get()
-  @ApiOperation({ summary: '任务 issue 列表（按任务过滤 + 状态/指派筛选 + 分页）' })
+  @ApiOperation({
+    summary: '任务 issue 列表（按任务过滤 + 状态/指派筛选 + 分页）',
+  })
   findAll(
     @Query() query: QueryIssuesDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -55,10 +57,7 @@ export class IssuesController {
    */
   @Get(':id')
   @ApiOperation({ summary: 'issue 详情（含任务标题/指派/创建者名）' })
-  findOne(
-    @Param('id') id: string,
-    @CurrentUser() user: AuthenticatedUser,
-  ) {
+  findOne(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.issuesService.findOne(id, user.id);
   }
 
@@ -69,10 +68,7 @@ export class IssuesController {
    */
   @Post()
   @ApiOperation({ summary: '创建 issue（任务成员，指派 Agent 须在任务团队）' })
-  create(
-    @Body() dto: CreateIssueDto,
-    @CurrentUser() user: AuthenticatedUser,
-  ) {
+  create(@Body() dto: CreateIssueDto, @CurrentUser() user: AuthenticatedUser) {
     return this.issuesService.create(user.id, dto);
   }
 
@@ -81,7 +77,9 @@ export class IssuesController {
    * PATCH /api/v1/issues/:id → 200 IssueDto
    */
   @Patch(':id')
-  @ApiOperation({ summary: '编辑 issue（标题/描述/标签/指派，assignee 变更重新校验）' })
+  @ApiOperation({
+    summary: '编辑 issue（标题/描述/标签/指派，assignee 变更重新校验）',
+  })
   update(
     @Param('id') id: string,
     @Body() dto: UpdateIssueDto,
@@ -96,7 +94,9 @@ export class IssuesController {
    *   from 不匹配 → 409 ISSUE_INVALID_TRANSITION；action 非法 → 400
    */
   @Post(':id/transition')
-  @ApiOperation({ summary: 'issue 状态流转（start/resolve/close/reopen/reject）' })
+  @ApiOperation({
+    summary: 'issue 状态流转（start/resolve/close/reopen/reject）',
+  })
   transition(
     @Param('id') id: string,
     @Body() dto: TransitionIssueDto,

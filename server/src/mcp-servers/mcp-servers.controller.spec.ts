@@ -32,7 +32,10 @@ describe('McpServersController', () => {
         { provide: McpServersService, useValue: service },
         // 控制器方法级 @UseGuards(AdminGuard) 会在 compile 时实例化 guard，
         // AdminGuard 依赖全局 PrismaService，提供 mock 占位
-        { provide: PrismaService, useValue: { user: { findUnique: jest.fn() } } },
+        {
+          provide: PrismaService,
+          useValue: { user: { findUnique: jest.fn() } },
+        },
       ],
     })
       .overrideGuard(WorkerOrJwtGuard)
@@ -57,7 +60,12 @@ describe('McpServersController', () => {
         updatedAt: new Date('2026-08-08T00:00:00Z'),
       },
     ];
-    service.findAll.mockResolvedValue({ items, total: 1, page: 1, pageSize: 20 });
+    service.findAll.mockResolvedValue({
+      items,
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    });
 
     const query: QueryMcpServersDto = {
       type: 'local',

@@ -346,7 +346,10 @@ describe('AuthService', () => {
 
     it('无效 token 应抛 401 AUTH_RESET_TOKEN_INVALID', async () => {
       await expect(
-        service.resetPassword({ token: 'bad-token', newPassword: 'newpass123' }),
+        service.resetPassword({
+          token: 'bad-token',
+          newPassword: 'newpass123',
+        }),
       ).rejects.toMatchObject({
         response: { code: AUTH_ERRORS.RESET_TOKEN_INVALID },
       });

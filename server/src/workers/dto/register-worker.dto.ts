@@ -28,24 +28,37 @@ export class WorkerCapabilitiesDto {
   @IsString({ each: true })
   tools: string[];
 
-  @ApiPropertyOptional({ description: 'serve 实际监听端口（F2 C2：随机端口上报，供 WorkerClient.resolveBaseUrl 直连）' })
+  @ApiPropertyOptional({
+    description:
+      'serve 实际监听端口（F2 C2：随机端口上报，供 WorkerClient.resolveBaseUrl 直连）',
+  })
   @IsOptional()
   @IsInt()
   @Min(0)
   port?: number;
 
-  @ApiPropertyOptional({ description: 'serve 对 server 公布的基址（D2：WORKER_ADVERTISE_HOST:port，容器内 http://worker:port；resolveBaseUrl 优先读取）' })
+  @ApiPropertyOptional({
+    description:
+      'serve 对 server 公布的基址（D2：WORKER_ADVERTISE_HOST:port，容器内 http://worker:port；resolveBaseUrl 优先读取）',
+  })
   @IsOptional()
   @IsString()
   baseUrl?: string;
 
-  @ApiPropertyOptional({ description: 'C2：serve 实际可用模型 id 列表（listModels 上报，id 格式 providerID/modelID；失败缺省，C3 合并入库用）', type: [String] })
+  @ApiPropertyOptional({
+    description:
+      'C2：serve 实际可用模型 id 列表（listModels 上报，id 格式 providerID/modelID；失败缺省，C3 合并入库用）',
+    type: [String],
+  })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
   models?: string[];
 
-  @ApiPropertyOptional({ description: 'T10：worker 执行端点端口（方案 A POST /execute；server 据此发现执行端点下发 prompt，缺省回退 serve origin + 4198）' })
+  @ApiPropertyOptional({
+    description:
+      'T10：worker 执行端点端口（方案 A POST /execute；server 据此发现执行端点下发 prompt，缺省回退 serve origin + 4198）',
+  })
   @IsOptional()
   @IsInt()
   @Min(0)
@@ -94,12 +107,18 @@ export class RegisterWorkerDto {
   @Type(() => WorkerLoadDto)
   load: WorkerLoadDto;
 
-  @ApiPropertyOptional({ description: 'C2：worker 配置的默认模型（env WORKER_DEFAULT_MODEL，id 格式 providerID/modelID，C7 分派兜底）' })
+  @ApiPropertyOptional({
+    description:
+      'C2：worker 配置的默认模型（env WORKER_DEFAULT_MODEL，id 格式 providerID/modelID，C7 分派兜底）',
+  })
   @IsOptional()
   @IsString()
   defaultModelId?: string;
 
-  @ApiPropertyOptional({ description: '内置 vteam MCP 地址覆盖（env WORKER_MCP_URL；集群外 worker 用它覆盖 seed 的 PLATFORM_MCP_URL）' })
+  @ApiPropertyOptional({
+    description:
+      '内置 vteam MCP 地址覆盖（env WORKER_MCP_URL；集群外 worker 用它覆盖 seed 的 PLATFORM_MCP_URL）',
+  })
   @IsOptional()
   @IsString()
   mcpUrl?: string;

@@ -83,7 +83,10 @@ describe('MemoriesController', () => {
 
     it('service 抛 404 MEMORY_NOT_FOUND 时透传给客户端', async () => {
       service.remove.mockRejectedValue(
-        new NotFoundException({ code: 'MEMORY_NOT_FOUND', message: '记忆条目不存在' }),
+        new NotFoundException({
+          code: 'MEMORY_NOT_FOUND',
+          message: '记忆条目不存在',
+        }),
       );
 
       await expect(controller.remove('me_9999999999')).rejects.toMatchObject({
@@ -130,8 +133,8 @@ describe('MemoriesController AdminGuard（非 admin 403）', () => {
       role: { permissions: { tasks: { view: true } } },
     });
 
-    await expect(guard.canActivate(mockContext({ id: 'u_member' }))).rejects.toMatchObject(
-      { response: { code: 'FORBIDDEN_ADMIN' } },
-    );
+    await expect(
+      guard.canActivate(mockContext({ id: 'u_member' })),
+    ).rejects.toMatchObject({ response: { code: 'FORBIDDEN_ADMIN' } });
   });
 });

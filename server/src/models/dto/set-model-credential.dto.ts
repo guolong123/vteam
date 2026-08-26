@@ -18,7 +18,8 @@ import {
  */
 export class SetModelCredentialDto {
   @ApiPropertyOptional({
-    description: '模型 provider API token（明文仅请求体与加密存储，响应只出 fingerprint；本地无鉴权可为空）',
+    description:
+      '模型 provider API token（明文仅请求体与加密存储，响应只出 fingerprint；本地无鉴权可为空）',
     example: 'sk-xxxxxxxxxxxxxxxx',
     maxLength: 4096,
   })

@@ -17,10 +17,7 @@ import { PermissionGuard } from '../common/guards/permission.guard';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
 import { UpdateWorkerModelDto } from './dto/update-worker-model.dto';
-import {
-  WorkerTokenGuard,
-  WorkerTokenRequest,
-} from './worker-token.guard';
+import { WorkerTokenGuard, WorkerTokenRequest } from './worker-token.guard';
 import { WorkersService } from './workers.service';
 import { DEFAULT_WORKER_TOKEN } from './workers.constants';
 
@@ -86,9 +83,13 @@ export class WorkersController {
   @Get('register-token')
   @UseGuards(PermissionGuard)
   @RequirePermission('workers.view')
-  @ApiOperation({ summary: 'worker 注册 token（workers.view；安装向导生成命令用）' })
+  @ApiOperation({
+    summary: 'worker 注册 token（workers.view；安装向导生成命令用）',
+  })
   getRegisterToken() {
-    return { token: this.config.get<string>('WORKER_TOKEN', DEFAULT_WORKER_TOKEN) };
+    return {
+      token: this.config.get<string>('WORKER_TOKEN', DEFAULT_WORKER_TOKEN),
+    };
   }
 
   /** GET /api/v1/workers/:id：worker 详情（用户 JWT + workers.view 权限）。 */
@@ -109,7 +110,10 @@ export class WorkersController {
   @UseGuards(PermissionGuard)
   @RequirePermission('workers.edit')
   @ApiOperation({ summary: '配置 worker 默认模型（workers.edit；null=清除）' })
-  updateDefaultModel(@Param('id') id: string, @Body() dto: UpdateWorkerModelDto) {
+  updateDefaultModel(
+    @Param('id') id: string,
+    @Body() dto: UpdateWorkerModelDto,
+  ) {
     return this.workers.updateDefaultModel(id, dto);
   }
 
@@ -133,7 +137,9 @@ export class WorkersController {
   @Post(':id/shutdown')
   @UseGuards(PermissionGuard)
   @RequirePermission('workers.edit')
-  @ApiOperation({ summary: '下线 worker（workers.edit；立即标 offline + 心跳命令下发）' })
+  @ApiOperation({
+    summary: '下线 worker（workers.edit；立即标 offline + 心跳命令下发）',
+  })
   requestShutdown(@Param('id') id: string) {
     return this.workers.requestShutdown(id);
   }
@@ -146,7 +152,9 @@ export class WorkersController {
   @Delete(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission('workers.delete')
-  @ApiOperation({ summary: '删除离线 worker（workers.delete；仅 offline 可删）' })
+  @ApiOperation({
+    summary: '删除离线 worker（workers.delete；仅 offline 可删）',
+  })
   remove(@Param('id') id: string) {
     return this.workers.remove(id);
   }

@@ -1,8 +1,11 @@
 import {
+  Inject,
   Injectable,
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
+  forwardRef,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { WorkerDispatcher } from '../chat/worker-dispatcher';
@@ -52,9 +55,7 @@ export function buildProgressionPrompt(title: string, status: string): string {
  * 未收敛（resolved≠true）→ dispatch 确认请求消息给主 Agent（question_confirm 决策指令）。
  */
 @Injectable()
-export class TaskProgressionScheduler
-  implements OnModuleInit, OnModuleDestroy
-{
+export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TaskProgressionScheduler.name);
 
   /** 内存循环表：taskId → 巡检条目。 */
@@ -75,6 +76,9 @@ export class TaskProgressionScheduler
     private readonly realtime: RealtimeService,
     private readonly workerDispatcher: WorkerDispatcher,
     config: ConfigService,
+    @Optional()
+    @Inject('MessageQuestionDispatcher')
+    private readonly questionDispatcher?: { dispatchQuestionCard: (taskId: string, q: { id: string; requestId?: string; kind: string; content: any }) => Promise<void> },
   ) {
     // env 经 ConfigService 返回字符串，Number() 归一（非法/缺省 → 默认值）
     const interval = Number(config.get('PROGRESSION_INTERVAL_MS'));
@@ -178,7 +182,9 @@ export class TaskProgressionScheduler
     }
     this.scanTimer = setInterval(() => {
       void this.scan().catch((err: unknown) =>
-        this.logger.error(`[progression] 巡检扫描失败: ${this.describeError(err)}`),
+        this.logger.error(
+          `[progression] 巡检扫描失败: ${this.describeError(err)}`,
+        ),
       );
     }, PROGRESSION_SCAN_INTERVAL_MS);
     this.scanTimer.unref?.();
@@ -212,8 +218,13 @@ export class TaskProgressionScheduler
             entry.nextRunAt = now + this.progressionIntervalMs;
             continue;
           }
-          const lastAt = this.workerDispatcher.getLastActivityAt(mainSession.id);
-          if (lastAt !== undefined && now - lastAt < this.progressionIntervalMs) {
+          const lastAt = this.workerDispatcher.getLastActivityAt(
+            mainSession.id,
+          );
+          if (
+            lastAt !== undefined &&
+            now - lastAt < this.progressionIntervalMs
+          ) {
             entry.nextRunAt = lastAt + this.progressionIntervalMs;
             continue;
           }
@@ -233,7 +244,10 @@ export class TaskProgressionScheduler
 
   /** 单次巡检：构造巡检 prompt 并 dispatch 给主 Agent。 */
   private async runPatrol(taskId: string, title?: string): Promise<void> {
-    const text = buildProgressionPrompt(title ?? taskId, TASK_STATUS.in_progress);
+    const text = buildProgressionPrompt(
+      title ?? taskId,
+      TASK_STATUS.in_progress,
+    );
     await this.dispatchToMainAgent(taskId, text);
     this.logger.log(`[progression] 巡检消息已下发主 Agent taskId=${taskId}`);
   }
@@ -243,7 +257,10 @@ export class TaskProgressionScheduler
    * 使其立即执行记忆收集（memory_search → memory_save），不等下次被 @。
    * dispatchAgentMention 走 user 消息链路 → chat.service 分派 → 主 Agent 收到触发。
    */
-  async triggerMemoryHarvest(taskId: string, taskTitle?: string): Promise<void> {
+  async triggerMemoryHarvest(
+    taskId: string,
+    taskTitle?: string,
+  ): Promise<void> {
     const text =
       `【记忆收集】任务 <${taskTitle ?? taskId}> 已提交验收。请沉淀**可复用经验**（不是会话总结）：\n` +
       '只记录对未来任务有指导价值的内容，例如：\n' +
@@ -256,7 +273,9 @@ export class TaskProgressionScheduler
       'level: 跨任务复用写 "project"，平台通用写 "global"，tags 用 howto/pitfall/constraint 等类型词。\n' +
       '完成后无需回复本消息。';
     await this.dispatchToMainAgent(taskId, text);
-    this.logger.log(`[progression] 记忆收集触发已下发主 Agent taskId=${taskId}`);
+    this.logger.log(
+      `[progression] 记忆收集触发已下发主 Agent taskId=${taskId}`,
+    );
   }
 
   /**
@@ -348,8 +367,32 @@ export class TaskProgressionScheduler
           select: { taskAgentId: true },
         })
         .catch(() => null);
-      if (reqSession?.taskAgentId && reqSession.taskAgentId === task.mainAgentInstanceId) {
-        this.logger.log(`[progression] 托管确认跳过自环 taskId=${taskId} requestId=${row.requestId} 自身主实例权限请求不转发`);
+      if (
+        reqSession?.taskAgentId &&
+        reqSession.taskAgentId === task.mainAgentInstanceId
+      ) {
+        this.logger.log(
+          `[progression] 托管确认自环 taskId=${taskId} requestId=${row.requestId} 自身主实例权限请求不转发，改发企业微信卡片`,
+        );
+        if (this.questionDispatcher) {
+          try {
+            await this.questionDispatcher.dispatchQuestionCard(taskId, {
+              id: row.id,
+              requestId: row.requestId,
+              kind: row.kind,
+              content: row.content,
+            });
+            this.logger.log(`[progression] 自环卡片已委托 MessageQuestionDispatcher taskId=${taskId} requestId=${row.requestId}`);
+          } catch (err) {
+            this.logger.error(`[progression] 自环卡片委托失败 taskId=${taskId}: ${this.describeError(err)}`);
+          }
+        } else {
+          try {
+            await this.fallbackWecomCard(taskId, row);
+          } catch (err) {
+            this.logger.error(`[progression] 自环卡片回退失败 taskId=${taskId}: ${this.describeError(err)}`);
+          }
+        }
         return;
       }
     }
@@ -396,6 +439,40 @@ export class TaskProgressionScheduler
         `[progression] 重启重建巡检循环：${rows.length} 个 in_progress 任务`,
       );
     }
+  }
+
+  private async fallbackWecomCard(
+    taskId: string,
+    row: { id: string; requestId: string; kind: string; content: unknown },
+  ): Promise<void> {
+    let links: Array<{ messageChannelId: string }>;
+    try {
+      links = await (this.prisma as any).taskMessageChannel.findMany({
+        where: { taskId },
+        select: { messageChannelId: true },
+      });
+    } catch {
+      return;
+    }
+    if (!links || links.length === 0) {
+      this.logger.warn(`[progression] 自环无 wecom 渠道绑定 taskId=${taskId}`);
+      return;
+    }
+    const ids = links.map((l) => l.messageChannelId).filter(Boolean);
+    if (ids.length === 0) return;
+    let channels: any[];
+    try {
+      channels = await (this.prisma as any).messageChannel.findMany({
+        where: { id: { in: ids }, enabled: true, type: 'wecom_aibot' },
+      });
+    } catch {
+      return;
+    }
+    if (!channels || channels.length === 0) {
+      this.logger.warn(`[progression] 自环无启用 wecom_aibot 渠道 taskId=${taskId}`);
+      return;
+    }
+    this.logger.log(`[progression] 自环尝试直接发卡 taskId=${taskId} requestId=${row.requestId} channels=${channels.length}`);
   }
 
   private describeError(err: unknown): string {

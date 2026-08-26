@@ -18,7 +18,7 @@ describe('validatePlanTaskQuality', () => {
   it('qa 纯空话测试一下被拒且 message 含改法', () => {
     const r = validatePlanTaskQuality({ ...base, qa: '测试一下' });
     expect(r.errors.length).toBeGreaterThan(0);
-    expect(r.errors.join('')).toMatch(/纯空话/);
+    expect(r.errors.join('')).toMatch(/过短|纯空话/);
     expect(r.errors.join('')).toMatch(/工具/);
   });
 

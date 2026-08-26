@@ -15,9 +15,7 @@ import {
   SENDER_TYPE,
 } from '../common/constants/event.constants';
 import { TASK_STATUS } from '../common/constants/task.constants';
-import {
-  PROJECT_MEMBERSHIP_ERRORS,
-} from '../common/guards/project-membership.guard';
+import { PROJECT_MEMBERSHIP_ERRORS } from '../common/guards/project-membership.guard';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -146,13 +144,19 @@ export class ChatService {
     // 现有 8 步流程时序）。Phase 4 WorkerDispatcher 同一回调契约零改动替换。
     this.dispatcher
       .onLoading((e) =>
-        this.logger.debug(`agent ${e.agentId} loading(${e.phase}) task=${e.taskId}`),
+        this.logger.debug(
+          `agent ${e.agentId} loading(${e.phase}) task=${e.taskId}`,
+        ),
       )
       .onFinal((e) =>
-        this.logger.debug(`agent ${e.agentId} final ${e.messageId} task=${e.taskId}`),
+        this.logger.debug(
+          `agent ${e.agentId} final ${e.messageId} task=${e.taskId}`,
+        ),
       )
       .onError((e) =>
-        this.logger.error(`agent ${e.agentId} reply failed: ${e.error} task=${e.taskId}`),
+        this.logger.error(
+          `agent ${e.agentId} reply failed: ${e.error} task=${e.taskId}`,
+        ),
       );
   }
 
@@ -167,7 +171,11 @@ export class ChatService {
    * type 过滤（task_group/private）。返回 `{items, total}`（09 篇 §3.5）。
    */
   async findAccessibleChannels(userId: string, type?: string) {
-    if (type !== undefined && type !== CHANNEL_TYPE.task_group && type !== CHANNEL_TYPE.private) {
+    if (
+      type !== undefined &&
+      type !== CHANNEL_TYPE.task_group &&
+      type !== CHANNEL_TYPE.private
+    ) {
       throw new BadRequestException({
         code: CHAT_ERRORS.CHANNEL_TYPE_INVALID,
         message: 'type 仅支持 task_group | private',
@@ -221,7 +229,11 @@ export class ChatService {
    * 首页（cursor 缺省）取**最新** limit 条；cursor = 上页最早一条 id，下一页取更老；
    * items 返回时反转回 id 升序（时间正序，前端直接渲染）；末页 nextCursor=null（取 limit+1 判断是否还有更多）。
    */
-  async findMessages(channelId: string, userId: string, query: QueryMessagesDto) {
+  async findMessages(
+    channelId: string,
+    userId: string,
+    query: QueryMessagesDto,
+  ) {
     await this.resolveChannelAccess(channelId, userId);
     const limit = this.normalizeLimit(query.limit);
     const where: Prisma.MessageWhereInput = {
@@ -274,7 +286,12 @@ export class ChatService {
     }
     const session = await this.prisma.session.findFirst({
       where: { taskId: channel.taskId, taskAgentId: channel.taskAgentId },
-      select: { instanceRef: true, workerId: true, agentId: true, createdAt: true },
+      select: {
+        instanceRef: true,
+        workerId: true,
+        agentId: true,
+        createdAt: true,
+      },
     });
     // 会话未绑定 worker/instanceRef（created 态）→ 回退平台表
     if (!session?.instanceRef || !session.workerId) {
@@ -287,9 +304,15 @@ export class ChatService {
     if (!workerRow) {
       return fallback();
     }
-    const worker: WorkerEndpointRef = { id: workerRow.id, capabilities: workerRow.capabilities };
+    const worker: WorkerEndpointRef = {
+      id: workerRow.id,
+      capabilities: workerRow.capabilities,
+    };
     try {
-      const raw = await this.workerClient.getMessages(worker, session.instanceRef);
+      const raw = await this.workerClient.getMessages(
+        worker,
+        session.instanceRef,
+      );
       return {
         items: this.convertSessionMessages(raw, channel, session),
         nextCursor: null,
@@ -320,16 +343,25 @@ export class ChatService {
    */
   private convertSessionMessages(
     raw: unknown[],
-    channel: { id: string; agentId: string | null; taskAgentId?: string | null },
+    channel: {
+      id: string;
+      agentId: string | null;
+      taskAgentId?: string | null;
+    },
     session: { agentId: string; createdAt: Date },
   ): Array<Record<string, unknown>> {
     const fallbackCreated = session.createdAt.getTime();
     const sorted = [...raw].sort((a, b) => {
-      const ta = (a as { info?: { time?: { created?: number } } })?.info?.time?.created;
-      const tb = (b as { info?: { time?: { created?: number } } })?.info?.time?.created;
+      const ta = (a as { info?: { time?: { created?: number } } })?.info?.time
+        ?.created;
+      const tb = (b as { info?: { time?: { created?: number } } })?.info?.time
+        ?.created;
       return (ta ?? fallbackCreated) - (tb ?? fallbackCreated);
     });
-    const converted: Array<{ dto: Record<string, unknown>; hasFinish: boolean }> = [];
+    const converted: Array<{
+      dto: Record<string, unknown>;
+      hasFinish: boolean;
+    }> = [];
     let seq = 0;
     for (const entry of sorted) {
       const m = entry as {
@@ -355,7 +387,10 @@ export class ChatService {
         role === 'user'
           ? parts.filter((p) => p.type === 'text' && !p.synthetic)
           : parts.filter(
-              (p) => p.type === 'text' || p.type === 'reasoning' || p.type === 'tool',
+              (p) =>
+                p.type === 'text' ||
+                p.type === 'reasoning' ||
+                p.type === 'tool',
             );
       // 空消息（无文本且无保留 parts，如仅 step-start 的空壳）→ 跳过
       if (!text && kept.length === 0) continue;
@@ -363,7 +398,9 @@ export class ChatService {
         (p) => p.type === 'step-finish' && p.reason === 'stop',
       );
       const createdMs =
-        typeof info.time?.created === 'number' ? info.time.created : fallbackCreated;
+        typeof info.time?.created === 'number'
+          ? info.time.created
+          : fallbackCreated;
       converted.push({
         dto: {
           id:
@@ -372,8 +409,10 @@ export class ChatService {
               : `ses-${String(seq).padStart(4, '0')}`,
           channelId: channel.id,
           senderType: role === 'user' ? SENDER_TYPE.user : SENDER_TYPE.agent,
-          senderId: role === 'user' ? null : (channel.agentId ?? session.agentId),
-          senderInstanceId: role === 'user' ? null : (channel.taskAgentId ?? null),
+          senderId:
+            role === 'user' ? null : (channel.agentId ?? session.agentId),
+          senderInstanceId:
+            role === 'user' ? null : (channel.taskAgentId ?? null),
           content: { text, parts: kept },
           mentions: [],
           status: MESSAGE_STATUS.sent,
@@ -384,7 +423,9 @@ export class ChatService {
       seq += 1;
     }
     // 会话末尾可能仍在流式：最后一条 assistant 无 step-finish → processing（其余历史一律 sent）
-    const last = [...converted].reverse().find((c) => c.dto.senderType === SENDER_TYPE.agent);
+    const last = [...converted]
+      .reverse()
+      .find((c) => c.dto.senderType === SENDER_TYPE.agent);
     if (last && !last.hasFinish) {
       last.dto.status = MESSAGE_STATUS.processing;
     }
@@ -405,7 +446,11 @@ export class ChatService {
    * 其它实例分派的回复无法进内存映射，DB 推导无跨实例一致性问题且零状态管理。
    * 404 MESSAGE_NOT_FOUND（消息不存在或非本频道）；400 MESSAGE_NOT_USER（非用户消息）。
    */
-  async getTriggerResults(channelId: string, userId: string, messageId: string) {
+  async getTriggerResults(
+    channelId: string,
+    userId: string,
+    messageId: string,
+  ) {
     const { channel } = await this.resolveChannelAccess(channelId, userId);
     const message = await this.prisma.message.findUnique({
       where: { id: messageId },
@@ -433,13 +478,17 @@ export class ChatService {
     });
 
     // 被 @ Agent 集合：agent 型直取（带 instanceId 精确到实例）；all 型展开为团队未移除全部实例
-    const targetRows: { id: string; agentId: string; removedAt: Date | null }[] = [];
+    const targetRows: {
+      id: string;
+      agentId: string;
+      removedAt: Date | null;
+    }[] = [];
     for (const m of mentions) {
       if (m.type === 'agent' && m.agentId) {
         const row = m.instanceId
           ? teamRows.find((r) => r.id === m.instanceId)
-          : teamRows.find((r) => r.agentId === m.agentId && !r.removedAt)
-            ?? teamRows.find((r) => r.agentId === m.agentId);
+          : (teamRows.find((r) => r.agentId === m.agentId && !r.removedAt) ??
+            teamRows.find((r) => r.agentId === m.agentId));
         if (row) targetRows.push(row);
       } else if (m.type === 'all') {
         for (const row of teamRows) {
@@ -488,7 +537,9 @@ export class ChatService {
       (m): m is MentionInput =>
         typeof m === 'object' &&
         m !== null &&
-        ((m as MentionInput).type === 'agent' || (m as MentionInput).type === 'all' || (m as MentionInput).type === 'user'),
+        ((m as MentionInput).type === 'agent' ||
+          (m as MentionInput).type === 'all' ||
+          (m as MentionInput).type === 'user'),
     );
   }
 
@@ -501,9 +552,51 @@ export class ChatService {
    * （09 篇 §5.1：@ 触发同步返回受理，处理结果走 SSE；Phase 4 替换 WorkerDispatcher 零改动）。
    * 响应 201 + `{message, triggers[]}`。
    */
-  async createMessage(channelId: string, userId: string, dto: CreateMessageDto) {
-    // 1. 权限校验：频道存在 + 调用者为频道所属项目成员
-    const { channel, task } = await this.resolveChannelAccess(channelId, userId);
+  async createMessage(
+    channelId: string,
+    userId: string,
+    dto: CreateMessageDto,
+    actor?: { senderType: string; senderId: string | null },
+  ) {
+    // actor 可选：默认 user（兼容既有调用）；external 用于入站管道（SENDER_TYPE.external）
+    const senderType = actor?.senderType ?? SENDER_TYPE.user;
+    const senderId = actor?.senderId !== undefined ? actor.senderId : userId;
+
+    // 1. 权限校验：external 旁路项目成员校验（入站管道已通过 IntegrationChannel.taskId 绑定校验），仅校验频道存在/未删除；普通 user 走 resolveChannelAccess
+    let channel: ChannelRow;
+    let task: {
+      projectId: string;
+      status: string;
+      mainAgentInstanceId?: string | null;
+      mainAgentId?: string | null;
+    };
+    if (senderType === SENDER_TYPE.external) {
+      const row = await this.prisma.chatChannel.findUnique({
+        where: { id: channelId },
+        include: CHANNEL_TASK_SELECT,
+      });
+      if (!row || row.deletedAt) {
+        throw new NotFoundException({
+          code: CHAT_ERRORS.CHANNEL_NOT_FOUND,
+          message: '频道不存在',
+        });
+      }
+      channel = row as ChannelRow;
+      task = (
+        row as unknown as {
+          task: {
+            projectId: string;
+            status: string;
+            mainAgentInstanceId?: string | null;
+            mainAgentId?: string | null;
+          };
+        }
+      ).task;
+    } else {
+      const resolved = await this.resolveChannelAccess(channelId, userId);
+      channel = resolved.channel;
+      task = resolved.task;
+    }
     // 归档任务频道发消息 → 409（FR-05 归档后仅可查看）
     if (task.status === TASK_STATUS.archived) {
       throw new ConflictException({
@@ -523,20 +616,23 @@ export class ChatService {
     //    → 解析任务主实例并追加 trigger（mainAgentInstanceId 优先，回退 mainAgentId 第一
     //    未移除实例）；主实例已 removed/无主实例 → 不触发。有 @ 消息不叠加（保持 @ 语义）。
     if (channel.type === CHANNEL_TYPE.task_group && triggers.length === 0) {
-      const mainTrigger = await this.buildMainAgentTrigger(channel.taskId, task);
+      const mainTrigger = await this.buildMainAgentTrigger(
+        channel.taskId,
+        task,
+      );
       if (mainTrigger) {
         triggers.push(mainTrigger);
       }
     }
 
-    // 3. 落库（用户消息：senderType=user，status=sent，id=m_<序号>；
+    // 3. 落库（senderType 由 actor 决定，默认 user；status=sent，id=m_<序号>；
     //    UX-10：附件三字段可选，客户端已先 POST /uploads 拿到可访问 URL）
     const message = await this.prisma.message.create({
       data: {
         id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
         channelId,
-        senderType: SENDER_TYPE.user,
-        senderId: userId,
+        senderType,
+        senderId,
         content: { text: dto.text, parts: [] } as Prisma.InputJsonValue,
         mentions: mentionsStored as Prisma.InputJsonValue,
         status: MESSAGE_STATUS.sent,
@@ -683,7 +779,11 @@ export class ChatService {
    * 置顶/取消置顶（UX-09 PATCH /channels/:id {pinned}）：
    * pinned=true 置顶（列表排序优先），false 取消；返回更新后频道 DTO。
    */
-  async updateChannelPinned(channelId: string, userId: string, pinned: boolean) {
+  async updateChannelPinned(
+    channelId: string,
+    userId: string,
+    pinned: boolean,
+  ) {
     await this.resolveChannelAccess(channelId, userId);
     const updated = await this.prisma.chatChannel.update({
       where: { id: channelId },
@@ -715,7 +815,10 @@ export class ChatService {
    * 频道不存在或已删除 404 CHANNEL_NOT_FOUND；非项目成员 403 PERMISSION_PROJECT_NOT_MEMBER。
    * 返回频道行 + 关联任务（projectId 供权限、status 供归档校验）。
    */
-  private async resolveChannelAccess(channelId: string, userId: string): Promise<{
+  private async resolveChannelAccess(
+    channelId: string,
+    userId: string,
+  ): Promise<{
     channel: ChannelRow;
     task: {
       projectId: string;
@@ -735,7 +838,9 @@ export class ChatService {
       });
     }
     const member = await this.prisma.projectMember.findUnique({
-      where: { projectId_userId: { projectId: channel.task.projectId, userId } },
+      where: {
+        projectId_userId: { projectId: channel.task.projectId, userId },
+      },
       select: { id: true },
     });
     if (!member) {
@@ -785,8 +890,9 @@ export class ChatService {
         // 未移除实例则命中任意状态实例（交 buildTrigger 判 agent_removed，单实例/存量兼容）。
         const row = mention.instanceId
           ? teamRows.find((r) => r.id === mention.instanceId)
-          : teamRows.find((r) => r.agentId === mention.agentId && !r.removedAt)
-            ?? teamRows.find((r) => r.agentId === mention.agentId);
+          : (teamRows.find(
+              (r) => r.agentId === mention.agentId && !r.removedAt,
+            ) ?? teamRows.find((r) => r.agentId === mention.agentId));
         if (!row) {
           throw new BadRequestException({
             code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,
@@ -821,13 +927,28 @@ export class ChatService {
   /** 单个触发结果：已移除 → agent_removed；禁用 → agent_disabled；未移除查会话。 */
   private async buildTrigger(
     taskId: string,
-    row: { id: string; agentId: string; removedAt: Date | null; enabled?: boolean | null },
+    row: {
+      id: string;
+      agentId: string;
+      removedAt: Date | null;
+      enabled?: boolean | null;
+    },
   ): Promise<TriggerResult> {
     if (row.removedAt) {
-      return { agentId: row.agentId, instanceId: row.id, sessionId: null, status: 'agent_removed' };
+      return {
+        agentId: row.agentId,
+        instanceId: row.id,
+        sessionId: null,
+        status: 'agent_removed',
+      };
     }
     if (row.enabled === false) {
-      return { agentId: row.agentId, instanceId: row.id, sessionId: null, status: 'agent_disabled' };
+      return {
+        agentId: row.agentId,
+        instanceId: row.id,
+        sessionId: null,
+        status: 'agent_disabled',
+      };
     }
     // T6 实例语义：按 taskAgentId 定位会话（同 agent 多实例会话独立，不再按 agentId 撞首条）
     const session = await this.prisma.session.findFirst({
@@ -853,7 +974,8 @@ export class ChatService {
     taskId: string,
     task: { mainAgentInstanceId?: string | null; mainAgentId?: string | null },
   ): Promise<TriggerResult | null> {
-    let row: { id: string; agentId: string; removedAt: Date | null } | null = null;
+    let row: { id: string; agentId: string; removedAt: Date | null } | null =
+      null;
     if (task.mainAgentInstanceId) {
       row = await this.prisma.taskAgent.findFirst({
         where: { id: task.mainAgentInstanceId, taskId },
@@ -866,10 +988,22 @@ export class ChatService {
         select: TEAM_AGENT_SELECT,
       });
     }
-    if (!row || row.removedAt || (row as { enabled?: boolean | null }).enabled === false) {
+    if (
+      !row ||
+      row.removedAt ||
+      (row as { enabled?: boolean | null }).enabled === false
+    ) {
       return null;
     }
-    return this.buildTrigger(taskId, row as { id: string; agentId: string; removedAt: Date | null; enabled?: boolean | null });
+    return this.buildTrigger(
+      taskId,
+      row as {
+        id: string;
+        agentId: string;
+        removedAt: Date | null;
+        enabled?: boolean | null;
+      },
+    );
   }
 
   /** 频道 DTO：id/type/taskId/agentId/taskAgentId + 关联 task/agent + pinned/lastReadAt + createdAt（ISO8601）。 */
@@ -890,7 +1024,9 @@ export class ChatService {
             projectId: row.task.projectId,
           }
         : undefined,
-      agent: row.agent ? { id: row.agent.id, name: row.agent.name, role: row.agent.role } : undefined,
+      agent: row.agent
+        ? { id: row.agent.id, name: row.agent.name, role: row.agent.role }
+        : undefined,
       createdAt: row.createdAt.toISOString(),
     };
   }
@@ -922,7 +1058,10 @@ export class ChatService {
   private async seedPrefix(
     prefix: string,
     model: {
-      findFirst(args: { orderBy: { id: 'desc' }; select: { id: true } }): Promise<{ id: string } | null>;
+      findFirst(args: {
+        orderBy: { id: 'desc' };
+        select: { id: true };
+      }): Promise<{ id: string } | null>;
     },
   ): Promise<void> {
     const last = await model.findFirst({

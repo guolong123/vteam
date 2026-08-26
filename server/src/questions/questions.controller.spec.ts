@@ -11,7 +11,10 @@ describe('QuestionsController（Agent 提问/权限确认端点）', () => {
   let service: { findAll: jest.Mock; reply: jest.Mock };
 
   const guardsOf = (method: string) =>
-    (Reflect.getMetadata(GUARDS_METADATA, QuestionsController.prototype[method]) ?? []) as unknown[];
+    (Reflect.getMetadata(
+      GUARDS_METADATA,
+      QuestionsController.prototype[method],
+    ) ?? []) as unknown[];
 
   beforeEach(async () => {
     service = { findAll: jest.fn(), reply: jest.fn() };
@@ -20,7 +23,10 @@ describe('QuestionsController（Agent 提问/权限确认端点）', () => {
       providers: [
         { provide: QuestionsService, useValue: service },
         // 方法级 @UseGuards(PermissionGuard) 在 compile 时实例化，PermissionGuard 依赖 PrismaService
-        { provide: PrismaService, useValue: { user: { findUnique: jest.fn() } } },
+        {
+          provide: PrismaService,
+          useValue: { user: { findUnique: jest.fn() } },
+        },
       ],
     }).compile();
     controller = module.get<QuestionsController>(QuestionsController);
@@ -29,7 +35,10 @@ describe('QuestionsController（Agent 提问/权限确认端点）', () => {
   it('GET /questions 转发 findAll（taskId/status 透传）', async () => {
     service.findAll.mockResolvedValue([{ id: 'aq_1' }]);
     const result = await controller.findAll('t_1', 'pending');
-    expect(service.findAll).toHaveBeenCalledWith({ taskId: 't_1', status: 'pending' });
+    expect(service.findAll).toHaveBeenCalledWith({
+      taskId: 't_1',
+      status: 'pending',
+    });
     expect(result).toEqual([{ id: 'aq_1' }]);
   });
 

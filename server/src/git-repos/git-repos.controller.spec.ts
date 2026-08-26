@@ -26,15 +26,22 @@ describe('GitReposController（仓库凭证 CRUD：GET 成员只读 + 写操作 
     revokedAt: null,
     createdAt: new Date('2026-08-08T00:00:00Z'),
     grantedAgents: [
-      { agentId: 'a_tester', name: '测试 Agent', permission: 'read', effect: 'allow' },
+      {
+        agentId: 'a_tester',
+        name: '测试 Agent',
+        permission: 'read',
+        effect: 'allow',
+      },
     ],
   };
 
   const user = { id: 'u_admin', username: 'admin', roleId: 'r_admin' };
 
   const guardsOf = (method: string) =>
-    (Reflect.getMetadata(GUARDS_METADATA, GitReposController.prototype[method]) ??
-      []) as unknown[];
+    (Reflect.getMetadata(
+      GUARDS_METADATA,
+      GitReposController.prototype[method],
+    ) ?? []) as unknown[];
 
   beforeEach(async () => {
     service = {
@@ -50,7 +57,10 @@ describe('GitReposController（仓库凭证 CRUD：GET 成员只读 + 写操作 
         { provide: GitReposService, useValue: service },
         // 方法级 @UseGuards(AdminGuard) 会在 compile 时实例化 guard，
         // AdminGuard 依赖全局 PrismaService，提供 mock 占位
-        { provide: PrismaService, useValue: { user: { findUnique: jest.fn() } } },
+        {
+          provide: PrismaService,
+          useValue: { user: { findUnique: jest.fn() } },
+        },
       ],
     }).compile();
 
@@ -109,9 +119,9 @@ describe('GitReposController（仓库凭证 CRUD：GET 成员只读 + 写操作 
   it('service 抛 404 时 controller 原样透传（仓库不存在）', async () => {
     service.update.mockRejectedValue({ status: 404, code: 'REPO_NOT_FOUND' });
 
-    await expect(
-      controller.update('gc_nope', {}, user),
-    ).rejects.toMatchObject({ code: 'REPO_NOT_FOUND' });
+    await expect(controller.update('gc_nope', {}, user)).rejects.toMatchObject({
+      code: 'REPO_NOT_FOUND',
+    });
   });
 });
 

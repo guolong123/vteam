@@ -12,13 +12,19 @@ import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
  */
 export class QueryMessagesDto {
   @ApiPropertyOptional({
-    description: '游标 = 上页最早一条消息 id；缺省查第一页（最新 limit 条，items id 升序）；下一页取更老',
+    description:
+      '游标 = 上页最早一条消息 id；缺省查第一页（最新 limit 条，items id 升序）；下一页取更老',
   })
   @IsOptional()
   @IsString()
   cursor?: string;
 
-  @ApiPropertyOptional({ description: '每页条数（默认 50，上限 100）', default: 50, minimum: 1, maximum: 100 })
+  @ApiPropertyOptional({
+    description: '每页条数（默认 50，上限 100）',
+    default: 50,
+    minimum: 1,
+    maximum: 100,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

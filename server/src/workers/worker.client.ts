@@ -134,7 +134,10 @@ export class WorkerClient {
   public workerToken: string;
 
   constructor(config: ConfigService) {
-    this.baseUrlFallback = config.get('WORKER_BASE_URL', DEFAULT_WORKER_BASE_URL);
+    this.baseUrlFallback = config.get(
+      'WORKER_BASE_URL',
+      DEFAULT_WORKER_BASE_URL,
+    );
     this.serverPassword = config.get('SERVER_PASSWORD', '');
     this.workerToken = config.get('WORKER_TOKEN', DEFAULT_WORKER_TOKEN);
   }
@@ -159,7 +162,10 @@ export class WorkerClient {
       body: JSON.stringify({}),
     });
     if (!res.ok) {
-      throw new WorkerUnavailableException(worker.id, `createSession HTTP ${res.status}`);
+      throw new WorkerUnavailableException(
+        worker.id,
+        `createSession HTTP ${res.status}`,
+      );
     }
     const body = (await res.json()) as { id?: string; sessionID?: string };
     const sessionID = body.id ?? body.sessionID;
@@ -200,7 +206,10 @@ export class WorkerClient {
       },
     );
     if (!res.ok) {
-      throw new WorkerUnavailableException(worker.id, `prompt_async HTTP ${res.status}`);
+      throw new WorkerUnavailableException(
+        worker.id,
+        `prompt_async HTTP ${res.status}`,
+      );
     }
   }
 
@@ -212,7 +221,10 @@ export class WorkerClient {
    * - body：完整 ExecuteOptions（prompt/model/agent/directory/taskId/agentId/channelId/
    *   sessionId），事件回流经 ingress 落库，server 不再自持轮询。
    */
-  async execute(worker: WorkerEndpointRef, opts: ExecuteOptions): Promise<void> {
+  async execute(
+    worker: WorkerEndpointRef,
+    opts: ExecuteOptions,
+  ): Promise<void> {
     const res = await this.requestExec(worker, '/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -225,12 +237,17 @@ export class WorkerClient {
         ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
         ...(opts.directory ? { directory: opts.directory } : {}),
         ...(opts.system ? { system: opts.system } : {}),
-        ...(opts.executionConfig ? { executionConfig: opts.executionConfig } : {}),
+        ...(opts.executionConfig
+          ? { executionConfig: opts.executionConfig }
+          : {}),
         prompt: opts.prompt,
       }),
     });
     if (!res.ok) {
-      throw new WorkerUnavailableException(worker.id, `execute HTTP ${res.status}`);
+      throw new WorkerUnavailableException(
+        worker.id,
+        `execute HTTP ${res.status}`,
+      );
     }
   }
 
@@ -240,7 +257,10 @@ export class WorkerClient {
    * 网络错误/超时 → WorkerUnavailableException（requestToUrl 归一）；HTTP 非 2xx
    * （401/404/413/400）→ WorkerUnavailableException（fetchFile 内判断，调用方降级）。
    */
-  async fetchFile(worker: WorkerEndpointRef, filePath: string): Promise<Buffer> {
+  async fetchFile(
+    worker: WorkerEndpointRef,
+    filePath: string,
+  ): Promise<Buffer> {
     const res = await this.requestExec(
       worker,
       `/file?path=${encodeURIComponent(filePath)}`,
@@ -251,7 +271,10 @@ export class WorkerClient {
       DEFAULT_FILE_FETCH_TIMEOUT_MS,
     );
     if (!res.ok) {
-      throw new WorkerUnavailableException(worker.id, `file fetch HTTP ${res.status}`);
+      throw new WorkerUnavailableException(
+        worker.id,
+        `file fetch HTTP ${res.status}`,
+      );
     }
     return Buffer.from(await res.arrayBuffer());
   }
@@ -268,15 +291,30 @@ export class WorkerClient {
   ): Promise<void> {
     const res = await this.requestExec(worker, '/question-reply', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Worker-Token': this.workerToken },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Worker-Token': this.workerToken,
+      },
       body: JSON.stringify(
         opts.answers === null
-          ? { sessionId: opts.sessionId, requestId: opts.requestId, answers: null, reject: true }
-          : { sessionId: opts.sessionId, requestId: opts.requestId, answers: opts.answers },
+          ? {
+              sessionId: opts.sessionId,
+              requestId: opts.requestId,
+              answers: null,
+              reject: true,
+            }
+          : {
+              sessionId: opts.sessionId,
+              requestId: opts.requestId,
+              answers: opts.answers,
+            },
       ),
     });
     if (!res.ok) {
-      throw new WorkerUnavailableException(worker.id, `question reply HTTP ${res.status}`);
+      throw new WorkerUnavailableException(
+        worker.id,
+        `question reply HTTP ${res.status}`,
+      );
     }
   }
 
@@ -286,11 +324,18 @@ export class WorkerClient {
    */
   async permissionReply(
     worker: WorkerEndpointRef,
-    opts: { sessionId: string; permissionId: string; response: 'once' | 'always' | 'reject' },
+    opts: {
+      sessionId: string;
+      permissionId: string;
+      response: 'once' | 'always' | 'reject';
+    },
   ): Promise<void> {
     const res = await this.requestExec(worker, '/question-reply', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Worker-Token': this.workerToken },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Worker-Token': this.workerToken,
+      },
       body: JSON.stringify({
         sessionId: opts.sessionId,
         permissionId: opts.permissionId,
@@ -298,7 +343,10 @@ export class WorkerClient {
       }),
     });
     if (!res.ok) {
-      throw new WorkerUnavailableException(worker.id, `permission reply HTTP ${res.status}`);
+      throw new WorkerUnavailableException(
+        worker.id,
+        `permission reply HTTP ${res.status}`,
+      );
     }
   }
 
@@ -335,11 +383,18 @@ export class WorkerClient {
 
   /** POST /session/{id}/abort：中止会话（计划 D2：abort 后无 step-finish，轮询判定需配套）。 */
   async abort(worker: WorkerEndpointRef, sessionID: string): Promise<void> {
-    const res = await this.request(worker, `/session/${encodeURIComponent(sessionID)}/abort`, {
-      method: 'POST',
-    });
+    const res = await this.request(
+      worker,
+      `/session/${encodeURIComponent(sessionID)}/abort`,
+      {
+        method: 'POST',
+      },
+    );
     if (!res.ok) {
-      throw new WorkerUnavailableException(worker.id, `abort HTTP ${res.status}`);
+      throw new WorkerUnavailableException(
+        worker.id,
+        `abort HTTP ${res.status}`,
+      );
     }
   }
 
@@ -347,10 +402,19 @@ export class WorkerClient {
    * GET /session/{id}/message：拉取会话消息列表（T10 轮询用，500ms 间隔直到含
    * step-finish(reason=stop) 的 assistant 消息）。
    */
-  async getMessages(worker: WorkerEndpointRef, sessionID: string): Promise<unknown[]> {
-    const res = await this.request(worker, `/session/${encodeURIComponent(sessionID)}/message`);
+  async getMessages(
+    worker: WorkerEndpointRef,
+    sessionID: string,
+  ): Promise<unknown[]> {
+    const res = await this.request(
+      worker,
+      `/session/${encodeURIComponent(sessionID)}/message`,
+    );
     if (!res.ok) {
-      throw new WorkerUnavailableException(worker.id, `getMessages HTTP ${res.status}`);
+      throw new WorkerUnavailableException(
+        worker.id,
+        `getMessages HTTP ${res.status}`,
+      );
     }
     const body = (await res.json()) as unknown[] | { data?: unknown[] };
     if (Array.isArray(body)) {
@@ -376,7 +440,13 @@ export class WorkerClient {
     init: RequestInit = {},
     timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
   ): Promise<Response> {
-    return this.requestToUrl(this.resolveBaseUrl(worker), worker.id, path, init, timeoutMs);
+    return this.requestToUrl(
+      this.resolveBaseUrl(worker),
+      worker.id,
+      path,
+      init,
+      timeoutMs,
+    );
   }
 
   /** 执行端点请求入口（方案 A：与 serve 不同端口，独立解析执行端点基址）。 */
@@ -386,7 +456,13 @@ export class WorkerClient {
     init: RequestInit = {},
     timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
   ): Promise<Response> {
-    return this.requestToUrl(this.resolveExecBaseUrl(worker), worker.id, path, init, timeoutMs);
+    return this.requestToUrl(
+      this.resolveExecBaseUrl(worker),
+      worker.id,
+      path,
+      init,
+      timeoutMs,
+    );
   }
 
   /** 核心请求：指定 baseUrl + 注入 Basic Auth + 超时控制 + 错误归一（503 带 workerId）。 */
@@ -482,23 +558,25 @@ export class WorkerClient {
     const caps = (worker.capabilities ?? {}) as Record<string, unknown>;
     const models = caps.models;
     if (Array.isArray(models)) {
-      return (models as Array<{ id?: string; name?: string; providerID?: string }>).map(
-        (m): WorkerModel => ({
-          id: m.id ?? m.name ?? '',
-          name: m.name ?? m.id ?? '',
-          providerID: m.providerID ?? '',
-          modelID: m.id ?? '',
-        }),
-      );
+      return (
+        models as Array<{ id?: string; name?: string; providerID?: string }>
+      ).map((m): WorkerModel => ({
+        id: m.id ?? m.name ?? '',
+        name: m.name ?? m.id ?? '',
+        providerID: m.providerID ?? '',
+        modelID: m.id ?? '',
+      }));
     }
     if (models && typeof models === 'object') {
-      return Object.entries(models as Record<string, unknown>).map(([key, val]): WorkerModel => {
-        const name =
-          val && typeof val === 'object' && (val as { name?: string }).name
-            ? (val as { name: string }).name
-            : key;
-        return { id: key, name, providerID: '', modelID: key };
-      });
+      return Object.entries(models as Record<string, unknown>).map(
+        ([key, val]): WorkerModel => {
+          const name =
+            val && typeof val === 'object' && (val as { name?: string }).name
+              ? (val as { name: string }).name
+              : key;
+          return { id: key, name, providerID: '', modelID: key };
+        },
+      );
     }
     return [];
   }

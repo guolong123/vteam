@@ -196,7 +196,9 @@ export class UsersService {
     }
 
     if (dto.roleId !== undefined) {
-      const role = await this.prisma.role.findUnique({ where: { id: dto.roleId } });
+      const role = await this.prisma.role.findUnique({
+        where: { id: dto.roleId },
+      });
       if (!role) {
         throw new BadRequestException(`角色 ${dto.roleId} 不存在`);
       }
@@ -204,7 +206,9 @@ export class UsersService {
 
     const data = {
       ...(dto.username !== undefined ? { username: dto.username } : {}),
-      ...(dto.displayName !== undefined ? { displayName: dto.displayName } : {}),
+      ...(dto.displayName !== undefined
+        ? { displayName: dto.displayName }
+        : {}),
       ...(dto.email !== undefined ? { email: dto.email } : {}),
       ...(dto.roleId !== undefined ? { roleId: dto.roleId } : {}),
     };

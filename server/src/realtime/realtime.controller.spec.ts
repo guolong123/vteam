@@ -196,7 +196,9 @@ describe('RealtimeController（SSE 端点）', () => {
       const events = await eventsPromise;
       expect(events).toHaveLength(1);
       // 业务 type 在 data JSON 内（MessageEvent 不设 type → SSE 帧按 message 派发）
-      expect((events[0].data as { type: string }).type).toBe('chat.message.new');
+      expect((events[0].data as { type: string }).type).toBe(
+        'chat.message.new',
+      );
       expect(events[0].id).toBe('ev_0000000001');
     });
 
@@ -229,8 +231,12 @@ describe('RealtimeController（SSE 端点）', () => {
         { type: 'task', id: 't_other' },
       );
       const events = await eventsPromise;
-      expect(events.map((e) => (e.data as { payload: { messageId: string } }).payload.messageId))
-        .toEqual(['m_1', 'm_2']);
+      expect(
+        events.map(
+          (e) =>
+            (e.data as { payload: { messageId: string } }).payload.messageId,
+        ),
+      ).toEqual(['m_1', 'm_2']);
       // 补拉按多 scope OR 查询
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
         where: {
@@ -288,8 +294,12 @@ describe('RealtimeController（SSE 端点）', () => {
         where: { userId: 'u_admin' },
         select: { projectId: true },
       });
-      expect(events.map((e) => (e.data as { payload: { messageId: string } }).payload.messageId))
-        .toEqual(['m_1']);
+      expect(
+        events.map(
+          (e) =>
+            (e.data as { payload: { messageId: string } }).payload.messageId,
+        ),
+      ).toEqual(['m_1']);
     });
 
     it('scope=all 补拉按可见项目 in 过滤 DB 查询（含 since 叠加）', async () => {
@@ -349,7 +359,9 @@ describe('RealtimeController（SSE 端点）', () => {
       const obs = await controller.events(undefined, 'global', accessToken);
       const events = await collectEvents(obs, 1);
       expect(events).toHaveLength(1);
-      expect((events[0].data as { type: string }).type).toBe('task.status.changed');
+      expect((events[0].data as { type: string }).type).toBe(
+        'task.status.changed',
+      );
       // MessageEvent.id 为字符串游标，供 EventSource lastEventId 续拉
       expect(events[0].id).toBe('ev_0000000001');
       const data = events[0].data as {
@@ -374,7 +386,9 @@ describe('RealtimeController（SSE 端点）', () => {
       const eventsPromise = collectEvents(obs, 1);
       await realtime.broadcast('chat.message.new', { messageId: 'm_1' });
       const events = await eventsPromise;
-      expect((events[0].data as { type: string }).type).toBe('chat.message.new');
+      expect((events[0].data as { type: string }).type).toBe(
+        'chat.message.new',
+      );
       expect(events[0].id).toBe('ev_0000000001');
     });
   });

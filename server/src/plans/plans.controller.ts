@@ -29,7 +29,9 @@ export class PlansController {
    * GET /api/v1/plans?taskId= → 200 计划头（含 reviewerInstanceId）+ 子任务清单全文
    */
   @Get()
-  @ApiOperation({ summary: '查询任务执行计划（项目成员，按 taskId 查计划头 + 子任务清单）' })
+  @ApiOperation({
+    summary: '查询任务执行计划（项目成员，按 taskId 查计划头 + 子任务清单）',
+  })
   findByTask(
     @Query() query: QueryPlansDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -44,7 +46,10 @@ export class PlansController {
    *   非 reviewing 状态 → 400 PLAN_INVALID_STATUS；评审后 reviewerInstanceId 置 null
    */
   @Patch(':id/review')
-  @ApiOperation({ summary: '评审执行计划（项目成员，verdict=approved/rejected，rejected 必填 reason）' })
+  @ApiOperation({
+    summary:
+      '评审执行计划（项目成员，verdict=approved/rejected，rejected 必填 reason）',
+  })
   review(
     @Param('id') id: string,
     @Body() dto: ReviewPlanDto,

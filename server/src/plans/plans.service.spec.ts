@@ -95,9 +95,11 @@ describe('PlansService', () => {
       },
       (err: unknown) => {
         expect(err).toBeInstanceOf(ctor);
-        expect((err as { getResponse(): unknown }).getResponse()).toMatchObject({
-          code,
-        });
+        expect((err as { getResponse(): unknown }).getResponse()).toMatchObject(
+          {
+            code,
+          },
+        );
       },
     );
 
@@ -361,13 +363,19 @@ describe('PlansService', () => {
           channelId: 'c_1',
           senderType: 'system',
           senderId: null,
-          content: { text: '执行计划已通过评审，请等待用户手动启动任务后再实施', parts: [] },
+          content: {
+            text: '执行计划已通过评审，请等待用户手动启动任务后再实施',
+            parts: [],
+          },
         }),
       });
       expect(realtime.broadcast).toHaveBeenCalledWith(
         'chat.message.new',
         expect.objectContaining({
-          message: { text: '执行计划已通过评审，请等待用户手动启动任务后再实施', channelId: 'c_1' },
+          message: {
+            text: '执行计划已通过评审，请等待用户手动启动任务后再实施',
+            channelId: 'c_1',
+          },
         }),
         expect.any(Object),
       );
@@ -387,7 +395,12 @@ describe('PlansService', () => {
         planRow({ status: PLAN_STATUS.rejected, reviewerInstanceId: null }),
       );
 
-      const out = await service.review(planId, userId, 'rejected', '缺少验收标准');
+      const out = await service.review(
+        planId,
+        userId,
+        'rejected',
+        '缺少验收标准',
+      );
 
       expect(prisma.plan.update).toHaveBeenCalledWith({
         where: { id: planId },

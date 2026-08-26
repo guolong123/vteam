@@ -10,10 +10,7 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
-import {
-  MCP_SERVER_TYPES,
-  type McpServerType,
-} from './create-mcp-server.dto';
+import { MCP_SERVER_TYPES, type McpServerType } from './create-mcp-server.dto';
 
 /**
  * PATCH /mcp-servers/:id 请求体（全可选部分更新）。
@@ -40,7 +37,8 @@ export class UpdateMcpServerDto {
   type?: McpServerType;
 
   @ApiPropertyOptional({
-    description: 'local 配置：{command: string[], cwd?, environment?, timeout?}',
+    description:
+      'local 配置：{command: string[], cwd?, environment?, timeout?}',
     type: Object,
   })
   @IsOptional()

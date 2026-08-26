@@ -64,8 +64,16 @@ export class GitReposService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    await resyncIdPrefix((this.prisma as any).gitRepo, GIT_REPO_ID_PREFIX, this.idGen);
-    await resyncIdPrefix(this.prisma.gitRepoGrant, GIT_REPO_GRANT_ID_PREFIX, this.idGen);
+    await resyncIdPrefix(
+      (this.prisma as any).gitRepo,
+      GIT_REPO_ID_PREFIX,
+      this.idGen,
+    );
+    await resyncIdPrefix(
+      this.prisma.gitRepoGrant,
+      GIT_REPO_GRANT_ID_PREFIX,
+      this.idGen,
+    );
   }
 
   async findAll(): Promise<GitRepoView[]> {
@@ -89,7 +97,12 @@ export class GitReposService implements OnModuleInit {
       grantsByRepo.set((g as any).repoId, list);
     }
     return (repos as GitRepo[]).map((r) =>
-      this.toView(r, credById.get((r as any).credentialId), grantsByRepo.get(r.id) ?? [], nameById),
+      this.toView(
+        r,
+        credById.get((r as any).credentialId),
+        grantsByRepo.get(r.id) ?? [],
+        nameById,
+      ),
     );
   }
 
@@ -127,7 +140,11 @@ export class GitReposService implements OnModuleInit {
     if (existing) {
       await (this.prisma as any).gitRepo.update({
         where: { id: existing.id },
-        data: { credentialId: dto.credentialId, createdBy: userId, revokedAt: null },
+        data: {
+          credentialId: dto.credentialId,
+          createdBy: userId,
+          revokedAt: null,
+        },
       });
       repoId = existing.id;
     } else {
@@ -148,27 +165,42 @@ export class GitReposService implements OnModuleInit {
     });
     await this.createGrants(repoId, grants, userId);
 
-    this.logger.log(`仓库创建：repo=${repoUrl} credential=${(credential as any).name} grants=${grants.length}`);
+    this.logger.log(
+      `仓库创建：repo=${repoUrl} credential=${(credential as any).name} grants=${grants.length}`,
+    );
     await this.dispatchAfterSave();
     return this.findView(repoId);
   }
 
-  async update(id: string, dto: UpdateGitRepoDto, userId: string): Promise<GitRepoView> {
-    const existing = await (this.prisma as any).gitRepo.findUnique({ where: { id } });
+  async update(
+    id: string,
+    dto: UpdateGitRepoDto,
+    userId: string,
+  ): Promise<GitRepoView> {
+    const existing = await (this.prisma as any).gitRepo.findUnique({
+      where: { id },
+    });
     if (!existing || existing.revokedAt !== null) {
       this.throwNotFound(id);
     }
 
     if (dto.credentialId !== undefined) {
-      const cred = await this.prisma.gitCredential.findUnique({ where: { id: dto.credentialId } });
+      const cred = await this.prisma.gitCredential.findUnique({
+        where: { id: dto.credentialId },
+      });
       if (!cred || (cred as any).revokedAt !== null) {
         throw new NotFoundException({
           code: GIT_REPOS_ERRORS.CREDENTIAL_NOT_FOUND,
           message: `凭证 ${dto.credentialId} 不存在或已吊销`,
         });
       }
-      await (this.prisma as any).gitRepo.update({ where: { id }, data: { credentialId: dto.credentialId } });
-      this.logger.log(`仓库凭证切换：repo=${existing.repoUrl} credentialId=${dto.credentialId}`);
+      await (this.prisma as any).gitRepo.update({
+        where: { id },
+        data: { credentialId: dto.credentialId },
+      });
+      this.logger.log(
+        `仓库凭证切换：repo=${existing.repoUrl} credentialId=${dto.credentialId}`,
+      );
     }
 
     if (dto.grantedAgents !== undefined) {
@@ -185,13 +217,21 @@ export class GitReposService implements OnModuleInit {
     return this.findView(id);
   }
 
-  async remove(id: string, userId: string): Promise<{ id: string; revokedAt: Date }> {
-    const existing = await (this.prisma as any).gitRepo.findUnique({ where: { id } });
+  async remove(
+    id: string,
+    userId: string,
+  ): Promise<{ id: string; revokedAt: Date }> {
+    const existing = await (this.prisma as any).gitRepo.findUnique({
+      where: { id },
+    });
     if (!existing || existing.revokedAt !== null) {
       this.throwNotFound(id);
     }
     const now = new Date();
-    await (this.prisma as any).gitRepo.update({ where: { id }, data: { revokedAt: now } });
+    await (this.prisma as any).gitRepo.update({
+      where: { id },
+      data: { revokedAt: now },
+    });
     await this.prisma.gitRepoGrant.updateMany({
       where: { repoId: id, revokedAt: null },
       data: { revokedAt: now },
@@ -205,7 +245,9 @@ export class GitReposService implements OnModuleInit {
     try {
       await this.workers.dispatchGitCredentials();
     } catch (err) {
-      this.logger.warn(`git 凭证下发失败（已落库，worker 注册回放兜底）: ${(err as Error).message}`);
+      this.logger.warn(
+        `git 凭证下发失败（已落库，worker 注册回放兜底）: ${(err as Error).message}`,
+      );
     }
   }
 
@@ -219,7 +261,10 @@ export class GitReposService implements OnModuleInit {
 
   private async assertAgentsExist(agentIds: string[]): Promise<void> {
     if (agentIds.length === 0) return;
-    const found = await this.prisma.agent.findMany({ where: { id: { in: agentIds } }, select: { id: true } });
+    const found = await this.prisma.agent.findMany({
+      where: { id: { in: agentIds } },
+      select: { id: true },
+    });
     const foundSet = new Set(found.map((a) => a.id));
     const missing = agentIds.filter((id) => !foundSet.has(id));
     if (missing.length > 0) {
@@ -230,9 +275,15 @@ export class GitReposService implements OnModuleInit {
     }
   }
 
-  private async createGrants(repoId: string, grants: NormalizedGrant[], userId: string): Promise<void> {
+  private async createGrants(
+    repoId: string,
+    grants: NormalizedGrant[],
+    userId: string,
+  ): Promise<void> {
     if (grants.length === 0) return;
-    await this.prisma.gitRepoGrant.deleteMany({ where: { repoId, revokedAt: { not: null } } });
+    await this.prisma.gitRepoGrant.deleteMany({
+      where: { repoId, revokedAt: { not: null } },
+    });
     const rows = [];
     for (const g of grants) {
       rows.push({
@@ -248,17 +299,31 @@ export class GitReposService implements OnModuleInit {
   }
 
   private async findView(repoId: string): Promise<GitRepoView> {
-    const repo = await (this.prisma as any).gitRepo.findUnique({ where: { id: repoId } });
+    const repo = await (this.prisma as any).gitRepo.findUnique({
+      where: { id: repoId },
+    });
     if (!repo) this.throwNotFound(repoId);
     const [credential, grants, agents] = await Promise.all([
-      this.prisma.gitCredential.findUnique({ where: { id: (repo as any).credentialId } }),
+      this.prisma.gitCredential.findUnique({
+        where: { id: (repo as any).credentialId },
+      }),
       this.prisma.gitRepoGrant.findMany({ where: { repoId, revokedAt: null } }),
       this.prisma.agent.findMany({ select: { id: true, name: true } }),
     ]);
-    return this.toView(repo, credential as any, grants, new Map(agents.map((a) => [a.id, a.name])));
+    return this.toView(
+      repo,
+      credential as any,
+      grants,
+      new Map(agents.map((a) => [a.id, a.name])),
+    );
   }
 
-  private toView(repo: GitRepo, credential: any, grants: GitRepoGrant[], nameById: Map<string, string>): GitRepoView {
+  private toView(
+    repo: GitRepo,
+    credential: any,
+    grants: GitRepoGrant[],
+    nameById: Map<string, string>,
+  ): GitRepoView {
     return {
       id: repo.id,
       repoUrl: (repo as any).repoUrl,

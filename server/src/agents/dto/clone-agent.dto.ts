@@ -6,7 +6,10 @@ import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
  * name 缺省时服务层以「源名称 + 副本」命名。
  */
 export class CloneAgentDto {
-  @ApiPropertyOptional({ description: '克隆副本名称（缺省源名称+「副本」）', maxLength: 64 })
+  @ApiPropertyOptional({
+    description: '克隆副本名称（缺省源名称+「副本」）',
+    maxLength: 64,
+  })
   @IsOptional()
   @IsString()
   @IsNotEmpty()

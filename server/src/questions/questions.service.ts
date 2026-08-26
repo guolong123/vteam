@@ -15,7 +15,10 @@ import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeScope } from '../realtime/realtime.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { WorkerClient, WorkerUnavailableException } from '../workers/worker.client';
+import {
+  WorkerClient,
+  WorkerUnavailableException,
+} from '../workers/worker.client';
 import { ReplyQuestionDto } from './dto/reply-question.dto';
 import {
   AGENT_QUESTION_ID_PREFIX,
@@ -78,7 +81,11 @@ export class QuestionsService {
 
   /** 进程启动对齐 aq_ 前缀序号（重启续号，对齐 models/git-repos onModuleInit 模式）。 */
   async onModuleInit(): Promise<void> {
-    await resyncIdPrefix(this.prisma.agentQuestion, AGENT_QUESTION_ID_PREFIX, this.idGen);
+    await resyncIdPrefix(
+      this.prisma.agentQuestion,
+      AGENT_QUESTION_ID_PREFIX,
+      this.idGen,
+    );
   }
 
   /** GET /questions：按 taskId/status 过滤（会话页补拉用；status 缺省 pending）。 */
@@ -88,7 +95,9 @@ export class QuestionsService {
   }): Promise<AgentQuestionDto[]> {
     const where: Prisma.AgentQuestionWhereInput = {
       ...(query.taskId ? { taskId: query.taskId } : {}),
-      ...(query.status ? { status: query.status } : { status: AGENT_QUESTION_STATUS.PENDING }),
+      ...(query.status
+        ? { status: query.status }
+        : { status: AGENT_QUESTION_STATUS.PENDING }),
     };
     const rows = await this.prisma.agentQuestion.findMany({
       where,
@@ -97,11 +106,16 @@ export class QuestionsService {
     // 惰性过期：pending 超 TTL 且未回复 → 自动终态 + 广播收敛（僵尸/超时弹窗不无限弹）。
     const staleThreshold = new Date(Date.now() - QUESTION_PENDING_TTL_MS);
     const stale = rows.filter(
-      (r) => r.status === AGENT_QUESTION_STATUS.PENDING && r.createdAt < staleThreshold,
+      (r) =>
+        r.status === AGENT_QUESTION_STATUS.PENDING &&
+        r.createdAt < staleThreshold,
     );
     if (stale.length > 0) {
       for (const r of stale) {
-        await this.expire(r, `GET 惰性过期（pending 超 ${QUESTION_PENDING_TTL_MS / 60000}min）`);
+        await this.expire(
+          r,
+          `GET 惰性过期（pending 超 ${QUESTION_PENDING_TTL_MS / 60000}min）`,
+        );
       }
       const fresh = await this.prisma.agentQuestion.findMany({
         where,
@@ -123,9 +137,7 @@ export class QuestionsService {
           })
         : [];
     const managedByTask = new Map(tasks.map((t) => [t.id, t.managedMode]));
-    return rows.map((r) =>
-      this.toDto(r, managedByTask.get(r.taskId) ?? false),
-    );
+    return rows.map((r) => this.toDto(r, managedByTask.get(r.taskId) ?? false));
   }
 
   /**
@@ -135,7 +147,11 @@ export class QuestionsService {
    * 失败不静默：找不到 404；参数与 kind 不符 400；worker 不可达 503。
    * userId：审计 actor（平台 question 确认门场景；缺省 '' 兼容旧调用）。
    */
-  async reply(id: string, dto: ReplyQuestionDto, userId?: string): Promise<AgentQuestionDto> {
+  async reply(
+    id: string,
+    dto: ReplyQuestionDto,
+    userId?: string,
+  ): Promise<AgentQuestionDto> {
     const row = await this.prisma.agentQuestion.findUnique({ where: { id } });
     if (!row) {
       throw new NotFoundException({
@@ -247,8 +263,9 @@ export class QuestionsService {
     });
     // sessionId 双语义：s_ 前缀（平台主键）→ session.instanceRef 反查 opencode 会话 id；
     // ses_ 前缀（ingress 反查失败时保留的原始 opencode 会话 id）→ 直接透传 worker 调 serve。
-    const opencodeSessionId =
-      row.sessionId.startsWith('ses_') ? row.sessionId : session?.instanceRef;
+    const opencodeSessionId = row.sessionId.startsWith('ses_')
+      ? row.sessionId
+      : session?.instanceRef;
     if (!opencodeSessionId) {
       throw new ServiceUnavailableException({
         code: QUESTIONS_ERRORS.QUESTION_WORKER_UNAVAILABLE,
@@ -317,7 +334,10 @@ export class QuestionsService {
     } catch (err) {
       // 僵尸 pending：serve 已无该 requestId/permissionId（worker 转发 404，如 serve 重启/请求
       // 已消失）→ 终态落库 + 广播收敛，前端弹窗关闭；而非一直 503 死循环（GET pending 恒返回）。
-      if (err instanceof WorkerUnavailableException && /HTTP 404/.test(err.message)) {
+      if (
+        err instanceof WorkerUnavailableException &&
+        /HTTP 404/.test(err.message)
+      ) {
         await this.expire(row, `reply 转发 serve 404（${row.requestId}）`);
         throw new GoneException({
           code: QUESTIONS_ERRORS.QUESTION_EXPIRED,
@@ -377,7 +397,9 @@ export class QuestionsService {
         answers: { expired: true, reason } as Prisma.InputJsonValue,
       },
     });
-    this.logger.warn(`[questions] ${row.id} 僵尸/超期 pending 已终态（expired）：${reason}`);
+    this.logger.warn(
+      `[questions] ${row.id} 僵尸/超期 pending 已终态（expired）：${reason}`,
+    );
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
@@ -412,7 +434,10 @@ export class QuestionsService {
         {
           question: question.question,
           header: question.header ?? '平台确认',
-          options: (question.options ?? []).map((label) => ({ label, description: '' })),
+          options: (question.options ?? []).map((label) => ({
+            label,
+            description: '',
+          })),
         },
       ],
       source: PLATFORM_QUESTION_SOURCE,

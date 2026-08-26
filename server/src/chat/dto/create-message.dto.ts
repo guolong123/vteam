@@ -17,12 +17,16 @@ export type MentionInput =
 
 /** POST /channels/:id/messages 请求体（09 篇 §5.1）。 */
 export class CreateMessageDto {
-  @ApiProperty({ description: '消息正文（@ 以纯文本书写，前端解析后随 mentions 提交；纯附件消息可为空串）' })
+  @ApiProperty({
+    description:
+      '消息正文（@ 以纯文本书写，前端解析后随 mentions 提交；纯附件消息可为空串）',
+  })
   @IsString()
   text: string;
 
   @ApiPropertyOptional({
-    description: '@ 引用数组（前端按正文解析）：{type:agent,agentId} 定向或 {type:all} 广播',
+    description:
+      '@ 引用数组（前端按正文解析）：{type:agent,agentId} 定向或 {type:all} 广播',
     type: 'array',
   })
   @IsOptional()
@@ -33,7 +37,8 @@ export class CreateMessageDto {
   // 再随消息提交附件三字段。三者一起出现（服务端不单独校验 URL 可访问性，
   // 静态服务 /uploads/* 由 main.ts 挂载，上传白名单已兜底类型/大小）。
   @ApiPropertyOptional({
-    description: '附件可访问 URL（POST /uploads 返回的相对路径，如 /uploads/<uuid>.png）',
+    description:
+      '附件可访问 URL（POST /uploads 返回的相对路径，如 /uploads/<uuid>.png）',
   })
   @IsOptional()
   @IsString()
@@ -44,7 +49,9 @@ export class CreateMessageDto {
   @IsString()
   attachmentName?: string;
 
-  @ApiPropertyOptional({ description: '附件扩展名（小写，如 png/pdf，供前端判定图片内嵌或文件下载）' })
+  @ApiPropertyOptional({
+    description: '附件扩展名（小写，如 png/pdf，供前端判定图片内嵌或文件下载）',
+  })
   @IsOptional()
   @IsString()
   attachmentType?: string;

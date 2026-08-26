@@ -78,9 +78,19 @@ describe('SkillsController', () => {
   ].join('\n');
 
   it('GET /skills 透传查询参数 + viewer（request.user）', async () => {
-    service.findAll.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    service.findAll.mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      pageSize: 20,
+    });
 
-    const query: QuerySkillsDto = { enabled: true, name: 'git', page: 1, pageSize: 20 };
+    const query: QuerySkillsDto = {
+      enabled: true,
+      name: 'git',
+      page: 1,
+      pageSize: 20,
+    };
     const req = { user: { id: 'u_1', username: 'admin' } } as never;
     const result = await controller.findAll(query, req);
 
@@ -89,7 +99,12 @@ describe('SkillsController', () => {
   });
 
   it('GET /skills 无 user 时不传 viewer（undefined）', async () => {
-    service.findAll.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    service.findAll.mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      pageSize: 20,
+    });
 
     await controller.findAll({}, { user: undefined } as never);
 
@@ -146,7 +161,10 @@ describe('SkillsController', () => {
   });
 
   it('PATCH /skills/:id/status 转发 updateStatus（enabled）', async () => {
-    service.updateStatus.mockResolvedValue({ id: 'sk_0000000001', enabled: true });
+    service.updateStatus.mockResolvedValue({
+      id: 'sk_0000000001',
+      enabled: true,
+    });
 
     const dto: UpdateSkillStatusDto = { enabled: true };
     const result = await controller.updateStatus('sk_0000000001', dto);

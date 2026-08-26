@@ -25,7 +25,10 @@ export const ISSUE_TRANSITIONS = {
   start: { from: [ISSUE_STATUS.open], to: ISSUE_STATUS.in_progress },
   resolve: { from: [ISSUE_STATUS.in_progress], to: ISSUE_STATUS.resolved },
   close: { from: [ISSUE_STATUS.resolved], to: ISSUE_STATUS.closed },
-  reopen: { from: [ISSUE_STATUS.closed, ISSUE_STATUS.rejected], to: ISSUE_STATUS.open },
+  reopen: {
+    from: [ISSUE_STATUS.closed, ISSUE_STATUS.rejected],
+    to: ISSUE_STATUS.open,
+  },
   reject: { from: [ISSUE_STATUS.in_progress], to: ISSUE_STATUS.rejected },
 } as const;
 

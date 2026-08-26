@@ -81,15 +81,12 @@ describe('UploadsController', () => {
     const result = await controller.upload(file, { taskId: 't_0000000001' });
 
     expect(fsPromises.readFile).toHaveBeenCalledWith(file.path);
-    expect(artifactsService.archiveFile).toHaveBeenCalledWith(
-      't_0000000001',
-      {
-        fileRef: '/uploads/uuid-1.docx',
-        storedUrl: '/uploads/uuid-1.docx',
-        storedName: '报告.docx',
-        sha256: createHash('sha256').update(buffer).digest('hex'),
-      },
-    );
+    expect(artifactsService.archiveFile).toHaveBeenCalledWith('t_0000000001', {
+      fileRef: '/uploads/uuid-1.docx',
+      storedUrl: '/uploads/uuid-1.docx',
+      storedName: '报告.docx',
+      sha256: createHash('sha256').update(buffer).digest('hex'),
+    });
     expect(result).toEqual({
       url: '/uploads/uuid-1.docx',
       name: '报告.docx',

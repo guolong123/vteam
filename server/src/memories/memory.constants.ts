@@ -25,4 +25,5 @@ export const MEMORY_ERRORS = {
   MEMORY_NOT_FOUND: 'MEMORY_NOT_FOUND',
 } as const;
 
-export type MemoryErrorCode = (typeof MEMORY_ERRORS)[keyof typeof MEMORY_ERRORS];
+export type MemoryErrorCode =
+  (typeof MEMORY_ERRORS)[keyof typeof MEMORY_ERRORS];

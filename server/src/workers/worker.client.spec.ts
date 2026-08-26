@@ -52,7 +52,9 @@ describe('WorkerClient', () => {
   describe('createSession', () => {
     it('POST /session 200 + {id} → 返回 {sessionID}（映射 serve 实际返回的 id 字段）', async () => {
       const client = makeClient();
-      mockFetch.mockResolvedValue(response({ json: async () => ({ id: 'ses_abc' }) }));
+      mockFetch.mockResolvedValue(
+        response({ json: async () => ({ id: 'ses_abc' }) }),
+      );
 
       await expect(client.createSession(worker)).resolves.toEqual({
         sessionID: 'ses_abc',
@@ -66,7 +68,9 @@ describe('WorkerClient', () => {
 
     it('传入 model → body 仍为 {}（serve 1.18.15 拒收 model，模型在 prompt_async 指定）', async () => {
       const client = makeClient();
-      mockFetch.mockResolvedValue(response({ json: async () => ({ id: 'ses_1' }) }));
+      mockFetch.mockResolvedValue(
+        response({ json: async () => ({ id: 'ses_1' }) }),
+      );
 
       await client.createSession(worker, {
         providerID: 'opencode-go',
@@ -91,7 +95,9 @@ describe('WorkerClient', () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ json: async () => ({ foo: 1 }) }));
 
-      await expect(client.createSession(worker)).rejects.toThrow(WorkerUnavailableException);
+      await expect(client.createSession(worker)).rejects.toThrow(
+        WorkerUnavailableException,
+      );
     });
   });
 
@@ -118,16 +124,12 @@ describe('WorkerClient', () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ ok: true, status: 204 }));
 
-      await client.promptAsync(
-        worker,
-        'ses_1',
-        {
-          model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
-          agent: 'build',
-          parts: [{ type: 'text', text: 'hi' }],
-          directory: '/data/git-project/aiagents',
-        },
-      );
+      await client.promptAsync(worker, 'ses_1', {
+        model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+        agent: 'build',
+        parts: [{ type: 'text', text: 'hi' }],
+        directory: '/data/git-project/aiagents',
+      });
 
       const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
       expect(url).toBe(
@@ -196,7 +198,9 @@ describe('WorkerClient', () => {
         capabilities: { execBaseUrl: 'http://worker:4198' },
       };
 
-      await client.execute(workerWithExecBase, { prompt: [{ type: 'text', text: 'x' }] });
+      await client.execute(workerWithExecBase, {
+        prompt: [{ type: 'text', text: 'x' }],
+      });
 
       const [url] = mockFetch.mock.calls[0] as [string];
       expect(url).toBe('http://worker:4198/execute');
@@ -205,13 +209,20 @@ describe('WorkerClient', () => {
     it('execPort 缺失 → 缺省 4198（对齐 worker WORKER_EXEC_PORT）；仅 prompt 也 2xx', async () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ ok: true, status: 202 }));
-      const workerNoExecPort = { id: 'w_1', capabilities: { baseUrl: 'http://worker:46267' } };
+      const workerNoExecPort = {
+        id: 'w_1',
+        capabilities: { baseUrl: 'http://worker:46267' },
+      };
 
-      await client.execute(workerNoExecPort, { prompt: [{ type: 'text', text: 'x' }] });
+      await client.execute(workerNoExecPort, {
+        prompt: [{ type: 'text', text: 'x' }],
+      });
 
       const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
       expect(url).toBe(`http://worker:${DEFAULT_EXEC_PORT}/execute`);
-      expect(JSON.parse(String(init.body))).toEqual({ prompt: [{ type: 'text', text: 'x' }] });
+      expect(JSON.parse(String(init.body))).toEqual({
+        prompt: [{ type: 'text', text: 'x' }],
+      });
     });
 
     it('baseUrl 缺失 → WORKER_BASE_URL 回退 origin 拼接 execPort', async () => {
@@ -317,7 +328,9 @@ describe('WorkerClient', () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response({ ok: false, status: 404 }));
 
-      await expect(client.fetchFile(execWorker, '/tmp/missing.txt')).rejects.toMatchObject({
+      await expect(
+        client.fetchFile(execWorker, '/tmp/missing.txt'),
+      ).rejects.toMatchObject({
         workerId: 'w_1',
         status: 503,
       });
@@ -327,7 +340,9 @@ describe('WorkerClient', () => {
       const client = makeClient();
       mockFetch.mockRejectedValue(new TypeError('ECONNREFUSED'));
 
-      await expect(client.fetchFile(execWorker, '/tmp/x.txt')).rejects.toMatchObject({
+      await expect(
+        client.fetchFile(execWorker, '/tmp/x.txt'),
+      ).rejects.toMatchObject({
         workerId: 'w_1',
         status: 503,
       });
@@ -405,7 +420,11 @@ describe('WorkerClient', () => {
       mockFetch.mockResolvedValue(response({ ok: false, status: 400 }));
 
       await expect(
-        client.questionReply(execWorker, { sessionId: 'ses_1', requestId: 'que_1', answers: [] }),
+        client.questionReply(execWorker, {
+          sessionId: 'ses_1',
+          requestId: 'que_1',
+          answers: [],
+        }),
       ).rejects.toMatchObject({ workerId: 'w_1', status: 503 });
     });
   });
@@ -417,8 +436,16 @@ describe('WorkerClient', () => {
         response({
           json: async () => ({
             data: [
-              { id: 'deepseek-v4-flash', providerID: 'opencode-go', name: 'DeepSeek V4 Flash' },
-              { id: 'ling-3.0-tiny-free', providerID: 'opencode', name: 'Ling-3.0-tiny Free' },
+              {
+                id: 'deepseek-v4-flash',
+                providerID: 'opencode-go',
+                name: 'DeepSeek V4 Flash',
+              },
+              {
+                id: 'ling-3.0-tiny-free',
+                providerID: 'opencode',
+                name: 'Ling-3.0-tiny Free',
+              },
             ],
           }),
         }),
@@ -460,7 +487,8 @@ describe('WorkerClient', () => {
       ]);
     });
 
-    it('/api/model 404（旧版 serve）→ 回退 capabilities.models 数组', async () => {      const client = makeClient();
+    it('/api/model 404（旧版 serve）→ 回退 capabilities.models 数组', async () => {
+      const client = makeClient();
       mockFetch.mockResolvedValue(response({ ok: false, status: 404 }));
       const workerWithModels = {
         id: 'w_1',
@@ -517,7 +545,9 @@ describe('WorkerClient', () => {
       const messages = [{ id: 'msg_1', info: { role: 'assistant' } }];
       mockFetch.mockResolvedValue(response({ json: async () => messages }));
 
-      await expect(client.getMessages(worker, 'ses_1')).resolves.toEqual(messages);
+      await expect(client.getMessages(worker, 'ses_1')).resolves.toEqual(
+        messages,
+      );
 
       const [url] = mockFetch.mock.calls[0] as [string];
       expect(url).toBe('http://localhost:4199/session/ses_1/message');
@@ -563,7 +593,10 @@ describe('WorkerClient', () => {
       const client = makeClient();
       mockFetch.mockResolvedValue(response());
 
-      await client.isHealthy({ id: 'w_1', capabilities: { baseUrl: 'http://10.0.0.5:4300' } });
+      await client.isHealthy({
+        id: 'w_1',
+        capabilities: { baseUrl: 'http://10.0.0.5:4300' },
+      });
 
       const [url] = mockFetch.mock.calls[0] as [string];
       expect(url).toBe('http://10.0.0.5:4300/');
@@ -607,7 +640,10 @@ describe('WorkerClient', () => {
   describe('超时', () => {
     it('fetch abort（AbortError）→ WorkerUnavailableException 且消息含超时提示', async () => {
       const client = makeClient();
-      const abortError = new DOMException('The operation was aborted.', 'AbortError');
+      const abortError = new DOMException(
+        'The operation was aborted.',
+        'AbortError',
+      );
       mockFetch.mockRejectedValue(abortError);
 
       await expect(client.getMessages(worker, 'ses_1')).rejects.toMatchObject({

@@ -17,7 +17,10 @@ import { GIT_EFFECTS, GIT_PERMISSIONS } from '../git-repos.constants';
  * - 显式提供时校验枚举值（越界 → 400 GRANT_INVALID）。
  */
 export class GitGrantInput {
-  @ApiProperty({ description: 'Agent 实例 id（授权主体，agent 粒度）', example: 'a_tester' })
+  @ApiProperty({
+    description: 'Agent 实例 id（授权主体，agent 粒度）',
+    example: 'a_tester',
+  })
   @IsString()
   @IsNotEmpty()
   agentId: string;
@@ -48,7 +51,8 @@ export class GitGrantInput {
  */
 export class CreateGitRepoDto {
   @ApiProperty({
-    description: '仓库地址（支持 ssh git@ 与 https:// 形式，自动 trim + 去尾部 .git）',
+    description:
+      '仓库地址（支持 ssh git@ 与 https:// 形式，自动 trim + 去尾部 .git）',
     example: 'git@gitee.com:xishuhq/test-repo.git',
   })
   @IsString()
@@ -64,7 +68,8 @@ export class CreateGitRepoDto {
   credentialId: string;
 
   @ApiPropertyOptional({
-    description: '授权 Agent 列表（可空数组或缺省；agent 不存在 → 400 GRANT_INVALID）',
+    description:
+      '授权 Agent 列表（可空数组或缺省；agent 不存在 → 400 GRANT_INVALID）',
     type: [GitGrantInput],
   })
   @IsOptional()

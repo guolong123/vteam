@@ -39,7 +39,9 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
 
   describe('registry 数据端点', () => {
     it('成员校验通过 → 返回动态 DocDef[]（镜像 buildRegistry）', async () => {
-      mirror.buildRegistry.mockResolvedValue([{ id: 'doc1', name: '文档1', file: 'doc1.md' }]);
+      mirror.buildRegistry.mockResolvedValue([
+        { id: 'doc1', name: '文档1', file: 'doc1.md' },
+      ]);
       const result = await controller.registry(taskId, user as never);
       expect(prisma.task.findUnique).toHaveBeenCalledWith({
         where: { id: taskId },
@@ -107,7 +109,11 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
       ]);
       const result = await controller.prototypes(taskId, user as never);
       expect(mirror.listPrototypes).toHaveBeenCalledWith(taskId);
-      expect(result).toEqual({ items: [{ id: 'my-proto', name: '登录页原型', file: 'my-proto/index.tsx' }] });
+      expect(result).toEqual({
+        items: [
+          { id: 'my-proto', name: '登录页原型', file: 'my-proto/index.tsx' },
+        ],
+      });
     });
 
     it('列表：无原型 → { items: [] }', async () => {
@@ -125,14 +131,25 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
 
     it('内容：TSX 路径 → 返回 TSX 源码', async () => {
       mirror.readPrototype.mockResolvedValue('export default function P() {}');
-      const result = await controller.prototypeContent(taskId, 'my-proto/index.tsx', user as never);
-      expect(mirror.readPrototype).toHaveBeenCalledWith(taskId, 'my-proto/index.tsx');
+      const result = await controller.prototypeContent(
+        taskId,
+        'my-proto/index.tsx',
+        user as never,
+      );
+      expect(mirror.readPrototype).toHaveBeenCalledWith(
+        taskId,
+        'my-proto/index.tsx',
+      );
       expect(result).toBe('export default function P() {}');
     });
 
     it('内容：旧 JSON 路径 → 返回 JSON', async () => {
       mirror.readPrototype.mockResolvedValue('{"name":"x"}');
-      const result = await controller.prototypeContent(taskId, 'old.json', user as never);
+      const result = await controller.prototypeContent(
+        taskId,
+        'old.json',
+        user as never,
+      );
       expect(mirror.readPrototype).toHaveBeenCalledWith(taskId, 'old.json');
       expect(result).toBe('{"name":"x"}');
     });

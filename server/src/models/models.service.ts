@@ -153,9 +153,7 @@ export class ModelsService implements OnModuleInit {
       _count: { _all: true },
     });
     const credentials = await this.prisma.modelCredential.findMany();
-    const credByProvider = new Map(
-      credentials.map((c) => [c.providerID, c]),
-    );
+    const credByProvider = new Map(credentials.map((c) => [c.providerID, c]));
 
     // D5 数据源 2：在线 worker（status != offline）capabilities.models 拆 providerID。
     // modelCount 语义：目录 count 为主，worker 上报的该 provider 模型数累加（重复 id 不去重——
@@ -183,15 +181,27 @@ export class ModelsService implements OnModuleInit {
       }
     }
 
-    const providerMetaRowsRaw = await this.prisma.model.findMany({
+    const providerMetaRowsRaw = (await this.prisma.model.findMany({
       where: { enabled: true },
       select: { providerID: true, providerType: true, baseUrl: true },
-    } as never) as unknown;
-    const providerMetaRows = Array.isArray(providerMetaRowsRaw) ? (providerMetaRowsRaw as { providerID: string; providerType?: string; baseUrl?: string | null }[]) : [];
-    const metaByProvider = new Map<string, { providerType: string; baseUrl: string | null }>();
+    } as never)) as unknown;
+    const providerMetaRows = Array.isArray(providerMetaRowsRaw)
+      ? (providerMetaRowsRaw as {
+          providerID: string;
+          providerType?: string;
+          baseUrl?: string | null;
+        }[])
+      : [];
+    const metaByProvider = new Map<
+      string,
+      { providerType: string; baseUrl: string | null }
+    >();
     for (const r of providerMetaRows) {
       if (!metaByProvider.has(r.providerID)) {
-        metaByProvider.set(r.providerID, { providerType: r.providerType ?? 'cloud', baseUrl: r.baseUrl ?? null });
+        metaByProvider.set(r.providerID, {
+          providerType: r.providerType ?? 'cloud',
+          baseUrl: r.baseUrl ?? null,
+        });
       }
     }
     const providerIds = new Set<string>([
@@ -228,7 +238,9 @@ export class ModelsService implements OnModuleInit {
       dto.providerID.trim(),
       dto.modelID.trim(),
     );
-    const providerType = dto.providerType ? this.normalizeProviderType(dto.providerType) : undefined;
+    const providerType = dto.providerType
+      ? this.normalizeProviderType(dto.providerType)
+      : undefined;
     const effectiveProviderType = providerType ?? 'cloud';
     const baseUrl = this.normalizeBaseUrl(dto.baseUrl, effectiveProviderType);
     await this.assertBaseUrlConsistent(dto.providerID.trim(), baseUrl);
@@ -256,7 +268,9 @@ export class ModelsService implements OnModuleInit {
       this.throwNotFound(id);
     }
     const effectiveProvider =
-      dto.providerID !== undefined ? dto.providerID.trim() : existing.providerID;
+      dto.providerID !== undefined
+        ? dto.providerID.trim()
+        : existing.providerID;
     const effectiveModel =
       dto.modelID !== undefined ? dto.modelID.trim() : existing.modelID;
     if (
@@ -270,11 +284,27 @@ export class ModelsService implements OnModuleInit {
       );
     }
     const effectiveProviderType =
-      dto.providerType !== undefined ? this.normalizeProviderType(dto.providerType) : (existing as { providerType?: string }).providerType ?? 'cloud';
-    const effectiveBaseUrlRaw = dto.baseUrl !== undefined ? dto.baseUrl : (existing as { baseUrl?: string | null }).baseUrl ?? null;
-    const effectiveBaseUrl = this.normalizeBaseUrl(effectiveBaseUrlRaw as string | undefined, effectiveProviderType);
-    if (dto.providerType !== undefined || dto.baseUrl !== undefined || dto.providerID !== undefined) {
-      await this.assertBaseUrlConsistent(effectiveProvider, effectiveBaseUrl, id);
+      dto.providerType !== undefined
+        ? this.normalizeProviderType(dto.providerType)
+        : ((existing as { providerType?: string }).providerType ?? 'cloud');
+    const effectiveBaseUrlRaw =
+      dto.baseUrl !== undefined
+        ? dto.baseUrl
+        : ((existing as { baseUrl?: string | null }).baseUrl ?? null);
+    const effectiveBaseUrl = this.normalizeBaseUrl(
+      effectiveBaseUrlRaw as string | undefined,
+      effectiveProviderType,
+    );
+    if (
+      dto.providerType !== undefined ||
+      dto.baseUrl !== undefined ||
+      dto.providerID !== undefined
+    ) {
+      await this.assertBaseUrlConsistent(
+        effectiveProvider,
+        effectiveBaseUrl,
+        id,
+      );
     }
 
     return this.prisma.model.update({
@@ -289,7 +319,9 @@ export class ModelsService implements OnModuleInit {
           ? { capabilities: dto.capabilities as Prisma.InputJsonValue }
           : {}),
         ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
-        ...(dto.providerType !== undefined ? { providerType: effectiveProviderType } : {}),
+        ...(dto.providerType !== undefined
+          ? { providerType: effectiveProviderType }
+          : {}),
         ...(dto.baseUrl !== undefined ? { baseUrl: effectiveBaseUrl } : {}),
       },
     });
@@ -306,7 +338,9 @@ export class ModelsService implements OnModuleInit {
       this.throwNotFound(id);
     }
     return this.prisma.$transaction([
-      this.prisma.workerModelAvailability.deleteMany({ where: { modelId: id } }),
+      this.prisma.workerModelAvailability.deleteMany({
+        where: { modelId: id },
+      }),
       this.prisma.model.delete({ where: { id } }),
     ]);
   }
@@ -362,19 +396,29 @@ export class ModelsService implements OnModuleInit {
    * 未配置密钥的付费模型不返回，前端 agent 配置下拉仅展示可用模型。
    */
   async listCatalogModels(): Promise<{ id: string; name: string }[]> {
-    const rowsRaw = await this.prisma.model.findMany({
+    const rowsRaw = (await this.prisma.model.findMany({
       where: { enabled: true },
       orderBy: { createdAt: 'asc' },
-      select: { id: true, providerID: true, modelID: true, name: true, providerType: true },
-    } as never) as unknown as { id: string; providerID: string; modelID: string; name: string; providerType?: string | null }[];
+      select: {
+        id: true,
+        providerID: true,
+        modelID: true,
+        name: true,
+        providerType: true,
+      },
+    } as never)) as unknown as {
+      id: string;
+      providerID: string;
+      modelID: string;
+      name: string;
+      providerType?: string | null;
+    }[];
     const rows = Array.isArray(rowsRaw) ? rowsRaw : [];
     const credentials = await this.prisma.modelCredential.findMany({
       where: { revokedAt: null },
       select: { providerID: true },
     });
-    const configuredProviders = new Set(
-      credentials.map((c) => c.providerID),
-    );
+    const configuredProviders = new Set(credentials.map((c) => c.providerID));
     const availRows = await this.prisma.workerModelAvailability.findMany({
       select: { modelId: true },
     });
@@ -397,7 +441,11 @@ export class ModelsService implements OnModuleInit {
    * - 无在线 worker → 不做剪枝，仅返回空结果（避免 offline 时误删）
    * - 有在线 worker → union 所有 worker 的 live 模型，upsert 到目录（不存在则创建，存在则保证 enabled=true），并对已无任何 worker 持有且未配置凭据的孤儿模型置 enabled=false（软禁用，不删 ModelCredential，apikey 为 provider 粒度不受影响）
    */
-  async syncLiveModels(): Promise<{ synced: number; disabled: number; liveModels: string[] }> {
+  async syncLiveModels(): Promise<{
+    synced: number;
+    disabled: number;
+    liveModels: string[];
+  }> {
     const onlineWorkers = await this.prisma.worker.findMany({
       where: { status: { not: WORKER_STATUS.OFFLINE } },
       select: { id: true, capabilities: true },
@@ -413,12 +461,27 @@ export class ModelsService implements OnModuleInit {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 5000);
-        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/model`, { signal: controller.signal });
+        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/model`, {
+          signal: controller.signal,
+        });
         clearTimeout(timer);
         if (!res.ok) continue;
-        const body = (await res.json()) as { data?: Array<{ id?: string; providerID?: string; status?: string; enabled?: boolean }> };
+        const body = (await res.json()) as {
+          data?: Array<{
+            id?: string;
+            providerID?: string;
+            status?: string;
+            enabled?: boolean;
+          }>;
+        };
         for (const m of body.data ?? []) {
-          if (m?.id && m?.providerID && m.enabled !== false && (m.status ?? 'active') === 'active') liveSet.add(`${m.providerID}/${m.id}`);
+          if (
+            m?.id &&
+            m?.providerID &&
+            m.enabled !== false &&
+            (m.status ?? 'active') === 'active'
+          )
+            liveSet.add(`${m.providerID}/${m.id}`);
         }
       } catch {
         try {
@@ -440,7 +503,10 @@ export class ModelsService implements OnModuleInit {
     const liveCatalogIds: string[] = [];
     for (const raw of liveModels) {
       const { providerID, modelID } = this.splitModelId(raw);
-      const catalogId = await this.upsertAndEnableCatalogModel(providerID, modelID);
+      const catalogId = await this.upsertAndEnableCatalogModel(
+        providerID,
+        modelID,
+      );
       liveCatalogIds.push(catalogId);
     }
     for (const cid of liveCatalogIds) {
@@ -457,15 +523,20 @@ export class ModelsService implements OnModuleInit {
       select: { providerID: true },
     });
     const configuredSet = new Set(credentials.map((c) => c.providerID));
-    const orphansRaw = await this.prisma.model.findMany({
+    const orphansRaw = (await this.prisma.model.findMany({
       where: { enabled: true, id: { notIn: liveCatalogIds } },
       select: { id: true, providerID: true, providerType: true },
-    } as never) as unknown as { id: string; providerID: string; providerType?: string | null }[];
+    } as never)) as unknown as {
+      id: string;
+      providerID: string;
+      providerType?: string | null;
+    }[];
     const orphans = Array.isArray(orphansRaw) ? orphansRaw : [];
     let disabled = 0;
     for (const o of orphans) {
       if (o.providerType === 'local' || o.providerType === 'custom') continue;
-      if (o.providerID !== 'opencode' && configuredSet.has(o.providerID)) continue;
+      if (o.providerID !== 'opencode' && configuredSet.has(o.providerID))
+        continue;
       await this.prisma.model.update({
         where: { id: o.id },
         data: { enabled: false },
@@ -476,19 +547,27 @@ export class ModelsService implements OnModuleInit {
       disabled++;
     }
     if (disabled > 0) {
-      this.logger.log(`live 同步剪枝：禁用孤儿模型 ${disabled} 个（无 worker 持有且未配置凭据）`);
+      this.logger.log(
+        `live 同步剪枝：禁用孤儿模型 ${disabled} 个（无 worker 持有且未配置凭据）`,
+      );
     }
     return { synced: liveCatalogIds.length, disabled, liveModels };
   }
 
-  private async upsertAndEnableCatalogModel(providerID: string, modelID: string): Promise<string> {
+  private async upsertAndEnableCatalogModel(
+    providerID: string,
+    modelID: string,
+  ): Promise<string> {
     const existing = await this.prisma.model.findUnique({
       where: { providerID_modelID: { providerID, modelID } },
       select: { id: true, enabled: true },
     });
     if (existing) {
       if ((existing as { enabled?: boolean }).enabled === false) {
-        await this.prisma.model.update({ where: { id: existing.id }, data: { enabled: true } });
+        await this.prisma.model.update({
+          where: { id: existing.id },
+          data: { enabled: true },
+        });
       }
       return existing.id;
     }
@@ -510,9 +589,13 @@ export class ModelsService implements OnModuleInit {
    * 故不能用 findOne——此处复用 worker 上报 id 的拆解约定（splitModelId）查 @@unique。
    * 返回完整行（含 enabled）；引用非法/不存在 → null（调用方据此 400/404）。
    */
-  async findCatalogByRef(
-    ref: string,
-  ): Promise<{ id: string; providerID: string; modelID: string; name: string; enabled: boolean } | null> {
+  async findCatalogByRef(ref: string): Promise<{
+    id: string;
+    providerID: string;
+    modelID: string;
+    name: string;
+    enabled: boolean;
+  } | null> {
     if (!ref || typeof ref !== 'string') {
       return null;
     }
@@ -568,20 +651,38 @@ export class ModelsService implements OnModuleInit {
   private normalizeProviderType(raw?: string): string {
     const v = (raw ?? 'cloud').trim().toLowerCase();
     if ((MODEL_PROVIDER_TYPES as readonly string[]).includes(v)) return v;
-    throw new BadRequestException({ code: 'MODEL_PROVIDER_TYPE_INVALID', message: `providerType 非法: ${raw}` });
+    throw new BadRequestException({
+      code: 'MODEL_PROVIDER_TYPE_INVALID',
+      message: `providerType 非法: ${raw}`,
+    });
   }
 
-  private normalizeBaseUrl(raw: string | undefined, providerType: string): string | null {
+  private normalizeBaseUrl(
+    raw: string | undefined,
+    providerType: string,
+  ): string | null {
     const trimmed = raw?.trim() ?? '';
     if (providerType === 'local' || providerType === 'custom') {
-      if (!trimmed) throw new BadRequestException({ code: MODEL_ERRORS.MODEL_BASEURL_REQUIRED, message: `providerType=${providerType} 时 baseUrl 必填` });
-      if (!/^https?:\/\/.+/.test(trimmed)) throw new BadRequestException({ code: MODEL_ERRORS.MODEL_BASEURL_REQUIRED, message: 'baseUrl 需为 http(s) URL' });
+      if (!trimmed)
+        throw new BadRequestException({
+          code: MODEL_ERRORS.MODEL_BASEURL_REQUIRED,
+          message: `providerType=${providerType} 时 baseUrl 必填`,
+        });
+      if (!/^https?:\/\/.+/.test(trimmed))
+        throw new BadRequestException({
+          code: MODEL_ERRORS.MODEL_BASEURL_REQUIRED,
+          message: 'baseUrl 需为 http(s) URL',
+        });
       return trimmed;
     }
     return trimmed ? trimmed : null;
   }
 
-  private async assertBaseUrlConsistent(providerID: string, baseUrl: string | null, excludeId?: string): Promise<void> {
+  private async assertBaseUrlConsistent(
+    providerID: string,
+    baseUrl: string | null,
+    excludeId?: string,
+  ): Promise<void> {
     if (!baseUrl) return;
     const rows = await this.prisma.model.findMany({
       where: { providerID, id: excludeId ? { not: excludeId } : undefined },
@@ -590,7 +691,10 @@ export class ModelsService implements OnModuleInit {
     for (const r of rows) {
       const existing = (r as { baseUrl?: string | null }).baseUrl ?? null;
       if (existing && existing !== baseUrl) {
-        throw new ConflictException({ code: MODEL_ERRORS.MODEL_BASEURL_CONFLICT, message: `provider ${providerID} 已有不同 baseUrl=${existing}，同一 provider 的 baseUrl 需一致` });
+        throw new ConflictException({
+          code: MODEL_ERRORS.MODEL_BASEURL_CONFLICT,
+          message: `provider ${providerID} 已有不同 baseUrl=${existing}，同一 provider 的 baseUrl 需一致`,
+        });
       }
     }
   }
@@ -642,17 +746,27 @@ export class ModelsService implements OnModuleInit {
         });
       }
     }
-    const modelRows = (await this.prisma.model.findMany({ where: { providerID: modelProviderID }, select: { providerType: true }, take: 1 } as never)) as unknown[] | undefined;
-    const providerType = ((modelRows ?? [])[0] as { providerType?: string } | undefined)?.providerType ?? 'cloud';
+    const modelRows = (await this.prisma.model.findMany({
+      where: { providerID: modelProviderID },
+      select: { providerType: true },
+      take: 1,
+    } as never)) as unknown[] | undefined;
+    const providerType =
+      ((modelRows ?? [])[0] as { providerType?: string } | undefined)
+        ?.providerType ?? 'cloud';
     const isLocal = providerType === 'local' || providerType === 'custom';
     const trimmedToken = token?.trim() ?? '';
     if (!trimmedToken) {
       if (isLocal) {
-        this.logger.log(`模型凭据本地无鉴权（空 token 视为已配置）：model=${modelId} provider=${modelProviderID} providerType=${providerType}`);
+        this.logger.log(
+          `模型凭据本地无鉴权（空 token 视为已配置）：model=${modelId} provider=${modelProviderID} providerType=${providerType}`,
+        );
         const placeholder = 'local-noop';
         const credentialRef = this.crypto.encrypt(placeholder);
         const fingerprint = this.crypto.fingerprint(placeholder);
-        const existingLocal = await this.prisma.modelCredential.findUnique({ where: { providerID: modelProviderID } });
+        const existingLocal = await this.prisma.modelCredential.findUnique({
+          where: { providerID: modelProviderID },
+        });
         let row: ModelCredential;
         if (existingLocal) {
           row = await this.prisma.modelCredential.update({
@@ -669,10 +783,17 @@ export class ModelsService implements OnModuleInit {
             },
           });
         }
-        await this.dispatchAfterSave(modelProviderID, placeholder, targetWorkerIds);
+        await this.dispatchAfterSave(
+          modelProviderID,
+          placeholder,
+          targetWorkerIds,
+        );
         return this.toView(row);
       }
-      throw new BadRequestException({ code: 'MODEL_TOKEN_REQUIRED', message: 'token 必填（cloud 模型需配置凭据）' });
+      throw new BadRequestException({
+        code: 'MODEL_TOKEN_REQUIRED',
+        message: 'token 必填（cloud 模型需配置凭据）',
+      });
     }
     const credentialRef = this.crypto.encrypt(trimmedToken);
     const fingerprint = this.crypto.fingerprint(trimmedToken);

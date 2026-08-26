@@ -78,7 +78,8 @@ export class UpdateAgentDto {
   @IsOptional()
   @IsString()
   @Matches(/^[^\s\/]+\/[^\s\/]+$/, {
-    message: 'defaultModelId 需为 provider/model 格式（如 opencode-go/deepseek-v4-flash）',
+    message:
+      'defaultModelId 需为 provider/model 格式（如 opencode-go/deepseek-v4-flash）',
   })
   defaultModelId?: string;
 
@@ -91,6 +92,4 @@ export class UpdateAgentDto {
   @IsString()
   @ValidateIf((o) => o.workerId !== null)
   workerId?: string | null;
-
-
 }

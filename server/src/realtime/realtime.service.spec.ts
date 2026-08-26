@@ -1,6 +1,10 @@
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
-import { RealtimeService, RealtimeEvent, RealtimeScope } from './realtime.service';
+import {
+  RealtimeService,
+  RealtimeEvent,
+  RealtimeScope,
+} from './realtime.service';
 
 describe('RealtimeService（内部事件总线 + 持久化）', () => {
   let service: RealtimeService;
@@ -21,7 +25,15 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
     scopeId: string | null = null,
     projectId: string | null = null,
     createdAt = new Date('2026-08-07T00:00:00.000Z'),
-  ) => ({ id, type, scopeType, scopeId, projectId, payload: { n: 1 }, createdAt });
+  ) => ({
+    id,
+    type,
+    scopeType,
+    scopeId,
+    projectId,
+    payload: { n: 1 },
+    createdAt,
+  });
 
   beforeEach(() => {
     prisma = {
@@ -292,10 +304,9 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
 
     it('global 订阅仅收到全局事件（不匹配 task/channel 事件）', async () => {
       const received: RealtimeEvent[] = [];
-      const unsubscribe = service.subscribe(
-        (e) => received.push(e),
-        { type: 'global' },
-      );
+      const unsubscribe = service.subscribe((e) => received.push(e), {
+        type: 'global',
+      });
 
       await service.broadcast('team.changed', { projectId: 'p_1' }); // global
       await service.broadcast(
@@ -311,10 +322,13 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
 
     it('多 scope 数组订阅命中任一 scope 即转发', async () => {
       const received: RealtimeEvent[] = [];
-      const unsubscribe = service.subscribe((e) => received.push(e), [
-        { type: 'task', id: 't_1' },
-        { type: 'channel', id: 'c_1' },
-      ]);
+      const unsubscribe = service.subscribe(
+        (e) => received.push(e),
+        [
+          { type: 'task', id: 't_1' },
+          { type: 'channel', id: 'c_1' },
+        ],
+      );
 
       await service.broadcast(
         'chat.message.new',
@@ -333,8 +347,9 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
       );
       await service.broadcast('team.changed', { projectId: 'p_1' }); // global
 
-      expect(received.map((e) => (e.payload as { messageId: string }).messageId))
-        .toEqual(['m_1', 'm_2']);
+      expect(
+        received.map((e) => (e.payload as { messageId: string }).messageId),
+      ).toEqual(['m_1', 'm_2']);
       unsubscribe();
     });
 
@@ -367,8 +382,9 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
         { type: 'task', id: 't_2' },
       ); // projectId p_2 → 未命中
 
-      expect(received.map((e) => (e.payload as { messageId: string }).messageId))
-        .toEqual(['m_1']);
+      expect(
+        received.map((e) => (e.payload as { messageId: string }).messageId),
+      ).toEqual(['m_1']);
       unsubscribe();
     });
 
@@ -389,7 +405,11 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
 
     it('visibleProjectIds 为 null 时不过滤（保持既有订阅行为）', async () => {
       const received: RealtimeEvent[] = [];
-      const unsubscribe = service.subscribe((e) => received.push(e), undefined, null);
+      const unsubscribe = service.subscribe(
+        (e) => received.push(e),
+        undefined,
+        null,
+      );
 
       await service.broadcast('a', { n: 1 });
       expect(received).toHaveLength(1);
@@ -399,7 +419,11 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
     it('visibleProjectIds 显式空数组时任何事件都不放行（无可见项目防泄露）', async () => {
       prisma.task.findUnique.mockResolvedValue({ projectId: 'p_1' });
       const received: RealtimeEvent[] = [];
-      const unsubscribe = service.subscribe((e) => received.push(e), undefined, []);
+      const unsubscribe = service.subscribe(
+        (e) => received.push(e),
+        undefined,
+        [],
+      );
 
       await service.emit(
         'chat.message.new',
@@ -493,7 +517,10 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
       ]);
 
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
-        where: { projectId: { in: ['p_1', 'p_2'] }, id: { gt: 'ev_0000000001' } },
+        where: {
+          projectId: { in: ['p_1', 'p_2'] },
+          id: { gt: 'ev_0000000001' },
+        },
         orderBy: { id: 'asc' },
       });
       expect(events).toEqual([]);

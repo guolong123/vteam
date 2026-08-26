@@ -17,10 +17,7 @@ import {
   WorkersService,
 } from '../workers/workers.service';
 import { CreateMcpServerDto } from './dto/create-mcp-server.dto';
-import {
-  MCP_STATUS,
-  McpStatusEntryDto,
-} from './dto/mcp-status.dto';
+import { MCP_STATUS, McpStatusEntryDto } from './dto/mcp-status.dto';
 import { QueryMcpServersDto } from './dto/query-mcp-servers.dto';
 import { UpdateMcpServerDto } from './dto/update-mcp-server.dto';
 
@@ -64,10 +61,7 @@ export class McpServersService implements OnModuleInit {
       select: { id: true },
     });
     if (last) {
-      const seq = parseInt(
-        last.id.slice(MCP_SERVER_ID_PREFIX.length + 1),
-        10,
-      );
+      const seq = parseInt(last.id.slice(MCP_SERVER_ID_PREFIX.length + 1), 10);
       if (Number.isFinite(seq)) {
         this.idGen.seed(MCP_SERVER_ID_PREFIX, seq);
       }
@@ -99,7 +93,9 @@ export class McpServersService implements OnModuleInit {
   }
 
   /** 服务器行 → 对外视图（合并 T8c 三态；未上报 → status: null）。 */
-  private withStatus<T extends { name: string }>(row: T): T & { status: string | null } {
+  private withStatus<T extends { name: string }>(
+    row: T,
+  ): T & { status: string | null } {
     const stored = this.statusByServer.get(row.name);
     return { ...row, status: stored ? stored.status : null };
   }
@@ -147,9 +143,7 @@ export class McpServersService implements OnModuleInit {
       const mcpUrl = typeof caps.mcpUrl === 'string' ? caps.mcpUrl : undefined;
       if (mcpUrl) {
         items = items.map((s) =>
-          s.name === 'vteam' && s.type === 'remote'
-            ? { ...s, url: mcpUrl }
-            : s,
+          s.name === 'vteam' && s.type === 'remote' ? { ...s, url: mcpUrl } : s,
         );
       }
     }
@@ -261,7 +255,9 @@ export class McpServersService implements OnModuleInit {
         resourceVersion: new Date().toISOString(),
       });
       if (n > 0) {
-        this.logger.log(`MCP 服务器变更：已广播 reload-config 到 ${n} 个 worker`);
+        this.logger.log(
+          `MCP 服务器变更：已广播 reload-config 到 ${n} 个 worker`,
+        );
       }
     } catch (e) {
       this.logger.warn(`MCP 服务器变更后广播 reload-config 失败: ${e}`);

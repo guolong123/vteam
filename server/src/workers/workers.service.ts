@@ -221,7 +221,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    * 返回 { workerId, heartbeatIntervalMs, serverTime }（worker 侧 T6 依据该协议）。
    */
   async register(workerToken: string, dto: RegisterWorkerDto) {
-    const tokenHash = await bcrypt.hash(workerToken, WORKER_TOKEN_BCRYPT_ROUNDS);
+    const tokenHash = await bcrypt.hash(
+      workerToken,
+      WORKER_TOKEN_BCRYPT_ROUNDS,
+    );
     const now = new Date();
     // mcpUrl：worker 上报的内置 vteam MCP 地址覆盖（集群外 worker 用它替代
     // seed 的 PLATFORM_MCP_URL 内网名）；合并进 capabilities Json（不新增 DB 列），
@@ -329,9 +332,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       }
     }
     const status =
-      dto.health === 'degraded'
-        ? WORKER_STATUS.DEGRADED
-        : WORKER_STATUS.ONLINE;
+      dto.health === 'degraded' ? WORKER_STATUS.DEGRADED : WORKER_STATUS.ONLINE;
     // T8c：MCP 三态快照 → 内存状态存储（前端 GET /mcp-servers 合并展示）
     // T9：另按 workerId 关联保存，worker 详情接口返回（前端 worker 详情页展示）
     if (dto.mcpStatus && dto.mcpStatus.length > 0) {
@@ -339,15 +340,22 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       this.workerMcpStatus.set(id, dto.mcpStatus);
     }
     const lastHeartbeatAt = new Date();
-    const caps = (worker.capabilities ?? {}) as Partial<{ maxInstances: number }>;
+    const caps = (worker.capabilities ?? {}) as Partial<{
+      maxInstances: number;
+    }>;
     const maxInstances = caps.maxInstances ?? 5;
-    const rawInstances = (dto.load as Partial<{ instances: number }>)?.instances ?? 0;
+    const rawInstances =
+      (dto.load as Partial<{ instances: number }>)?.instances ?? 0;
     let safeInstances = rawInstances;
     if (rawInstances > maxInstances * 3) {
-      this.logger.warn(`[workers] worker ${id} 上报异常负载 ${rawInstances}/${maxInstances} 已钳制为 ${maxInstances}（疑似计数泄漏）`);
+      this.logger.warn(
+        `[workers] worker ${id} 上报异常负载 ${rawInstances}/${maxInstances} 已钳制为 ${maxInstances}（疑似计数泄漏）`,
+      );
       safeInstances = maxInstances;
     }
-    const safeLoad = { instances: safeInstances } as unknown as Prisma.InputJsonValue;
+    const safeLoad = {
+      instances: safeInstances,
+    } as unknown as Prisma.InputJsonValue;
     await this.prisma.worker.update({
       where: { id },
       data: {
@@ -421,7 +429,9 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       resourceVersion: 'model-credentials',
       payload: {
         providerKeys,
-        ...(targetWorkerIds && targetWorkerIds.length > 0 ? { targetWorkerIds } : {}),
+        ...(targetWorkerIds && targetWorkerIds.length > 0
+          ? { targetWorkerIds }
+          : {}),
       },
     };
     if (targetWorkerIds && targetWorkerIds.length > 0) {
@@ -598,10 +608,17 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       select: { repoUrl: true, credentialId: true },
     });
     if (repos.length === 0) return [];
-    const credentialIds = [...new Set((repos as any[]).map((r: any) => r.credentialId))];
+    const credentialIds = [
+      ...new Set((repos as any[]).map((r: any) => r.credentialId)),
+    ];
     const credentials = await this.prisma.gitCredential.findMany({
       where: { id: { in: credentialIds }, revokedAt: null },
-      select: { id: true, authType: true, credentialRef: true, fingerprint: true },
+      select: {
+        id: true,
+        authType: true,
+        credentialRef: true,
+        fingerprint: true,
+      },
     });
     const credById = new Map((credentials as any[]).map((c) => [c.id, c]));
     const result: GitCredentialEntry[] = [];
@@ -661,9 +678,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    * - 匹配：opencodeVersion 精确匹配（req.opencodeVersion 提供时）+ 剩余容量 >= 需求槽位
    * - 排序：online 优先；同状态内剩余容量（maxInstances - instances）降序 → 负载最少者优先
    */
-  async assignWorker(
-    req: AssignmentRequirement = {},
-  ): Promise<string | null> {
+  async assignWorker(req: AssignmentRequirement = {}): Promise<string | null> {
     const need = Math.max(1, req.instances ?? 1);
     const candidates = await this.prisma.worker.findMany({
       where: { status: { not: WORKER_STATUS.OFFLINE } },
@@ -674,7 +689,9 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       include: {
         modelAvailabilities: {
           include: {
-            model: { select: { enabled: true, providerID: true, modelID: true } },
+            model: {
+              select: { enabled: true, providerID: true, modelID: true },
+            },
           },
         },
       },
@@ -774,7 +791,11 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       });
     }
     const { defaultModelId } = dto;
-    if (defaultModelId !== null && defaultModelId !== undefined && defaultModelId !== '') {
+    if (
+      defaultModelId !== null &&
+      defaultModelId !== undefined &&
+      defaultModelId !== ''
+    ) {
       const catalog = await this.modelsService.findCatalogByRef(defaultModelId);
       if (!catalog || catalog.enabled === false) {
         throw new BadRequestException({
@@ -887,7 +908,9 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       });
     }
     await this.prisma.$transaction([
-      this.prisma.workerModelAvailability.deleteMany({ where: { workerId: id } }),
+      this.prisma.workerModelAvailability.deleteMany({
+        where: { workerId: id },
+      }),
       this.prisma.taskGroupInstance.deleteMany({ where: { workerId: id } }),
       this.prisma.session.updateMany({
         where: { workerId: id },
@@ -910,7 +933,8 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
   async createInstance(_workerId: string, _sessionId: string): Promise<never> {
     throw new NotImplementedException({
       code: WORKER_ERRORS.NOT_IMPLEMENTED,
-      message: 'createInstance 由 T10 WorkerDispatcher 接入 WorkerClient 后实现',
+      message:
+        'createInstance 由 T10 WorkerDispatcher 接入 WorkerClient 后实现',
     });
   }
 
@@ -930,7 +954,8 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
   ): Promise<never> {
     throw new NotImplementedException({
       code: WORKER_ERRORS.NOT_IMPLEMENTED,
-      message: 'dispatchPrompt 由 T10 WorkerDispatcher 接入 WorkerClient 后实现',
+      message:
+        'dispatchPrompt 由 T10 WorkerDispatcher 接入 WorkerClient 后实现',
     });
   }
 
@@ -939,7 +964,8 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     capabilities: Prisma.JsonValue;
     load: Prisma.JsonValue | null;
   }): number {
-    const caps = (worker.capabilities ?? {}) as Partial<WorkerCapabilitiesShape>;
+    const caps = (worker.capabilities ??
+      {}) as Partial<WorkerCapabilitiesShape>;
     const load = (worker.load ?? {}) as Partial<WorkerLoadShape>;
     return (caps.maxInstances ?? 0) - (load.instances ?? 0);
   }

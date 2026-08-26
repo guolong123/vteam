@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   ArtifactsService,
   validateArtifactDeclaration,
@@ -52,9 +56,12 @@ describe('ArtifactsService', () => {
   beforeEach(() => {
     service = createService();
     // P2：mock 静态落盘（doc/file 有内容时归档走 saveTextFile，单测不真实写盘）
-    jest
-      .spyOn(FileStorageService, 'saveTextFile')
-      .mockResolvedValue({ url: STORED_URL, name: 'stored.md', size: 5, ext: 'md' });
+    jest.spyOn(FileStorageService, 'saveTextFile').mockResolvedValue({
+      url: STORED_URL,
+      name: 'stored.md',
+      size: 5,
+      ext: 'md',
+    });
   });
 
   afterEach(() => {
@@ -553,7 +560,9 @@ describe('ArtifactsService', () => {
         id: 'art_0000000001',
         currentVersion: 1,
       });
-      prisma.artifactVersion.create.mockResolvedValue({ id: 'artv_0000000001' });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000001',
+      });
 
       const result = await service.archiveFile('t_0000000001', {
         fileRef: '报告.docx',
@@ -596,7 +605,9 @@ describe('ArtifactsService', () => {
         id: 'art_0000000002',
         currentVersion: 1,
       });
-      prisma.artifactVersion.create.mockResolvedValue({ id: 'artv_0000000002' });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000002',
+      });
 
       await service.archiveFile('t_0000000001', {
         fileRef: '截图.png',
@@ -644,7 +655,9 @@ describe('ArtifactsService', () => {
         id: 'art_0000000001',
         currentVersion: 2,
       });
-      prisma.artifactVersion.create.mockResolvedValue({ id: 'artv_0000000002' });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000002',
+      });
 
       const result = await service.archiveFile('t_0000000001', {
         fileRef: '报告.docx',
@@ -979,7 +992,7 @@ describe('ArtifactsService', () => {
         createdAt: FIXED_DATE,
       });
 
-      const result = await service.findVersion('art_0000000001', 2) as Record<
+      const result = (await service.findVersion('art_0000000001', 2)) as Record<
         string,
         unknown
       >;
@@ -1012,10 +1025,10 @@ describe('ArtifactsService', () => {
         createdAt: FIXED_DATE,
       });
 
-      const result = (await service.findVersion(
-        'art_0000000001',
-        1,
-      )) as Record<string, unknown>;
+      const result = (await service.findVersion('art_0000000001', 1)) as Record<
+        string,
+        unknown
+      >;
 
       expect(result.fileUrl).toBeUndefined();
       expect(result.fileName).toBeUndefined();

@@ -40,7 +40,10 @@ describe('AgentsController', () => {
         { provide: AgentsService, useValue: service },
         // 方法级 @UseGuards(PermissionGuard) 会在 compile 时实例化 guard，
         // PermissionGuard 依赖全局 PrismaService，提供 mock 占位
-        { provide: PrismaService, useValue: { user: { findUnique: jest.fn() } } },
+        {
+          provide: PrismaService,
+          useValue: { user: { findUnique: jest.fn() } },
+        },
       ],
     }).compile();
 
@@ -62,7 +65,12 @@ describe('AgentsController', () => {
         toolEffects: [],
       },
     ];
-    service.findAll.mockResolvedValue({ items, total: 1, page: 1, pageSize: 20 });
+    service.findAll.mockResolvedValue({
+      items,
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    });
 
     const query: QueryAgentsDto = { type: 'template', page: 1, pageSize: 20 };
     const result = await controller.findAll(query);
@@ -83,7 +91,10 @@ describe('AgentsController', () => {
 
   it('POST /agents 以 req.user.id 转发 create', async () => {
     const dto: CreateAgentDto = { name: '数据分析师', type: 'custom' };
-    service.create.mockResolvedValue({ id: 'a_0000000005', name: '数据分析师' });
+    service.create.mockResolvedValue({
+      id: 'a_0000000005',
+      name: '数据分析师',
+    });
 
     const result = await controller.create(user as never, dto);
 
@@ -140,11 +151,15 @@ describe('AgentsController', () => {
       validate(plainToInstance(cls, obj));
 
     it('CreateAgentDto：name 空串 → 校验失败（@IsNotEmpty，空名 400 非 201）', async () => {
-      expect(await errorsOf(CreateAgentDto, { name: '', type: 'custom' })).not.toHaveLength(0);
+      expect(
+        await errorsOf(CreateAgentDto, { name: '', type: 'custom' }),
+      ).not.toHaveLength(0);
     });
 
     it('CreateAgentDto：name 缺失 → 校验失败', async () => {
-      expect(await errorsOf(CreateAgentDto, { type: 'custom' })).not.toHaveLength(0);
+      expect(
+        await errorsOf(CreateAgentDto, { type: 'custom' }),
+      ).not.toHaveLength(0);
     });
 
     it('CreateAgentDto：合法 name → 校验通过', async () => {

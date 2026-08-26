@@ -241,7 +241,10 @@ export class SkillsService implements OnModuleInit {
     if (!user || !user.enabled) {
       return false;
     }
-    const permissions = (user.role.permissions ?? {}) as Record<string, unknown>;
+    const permissions = (user.role.permissions ?? {}) as Record<
+      string,
+      unknown
+    >;
     if (permissions.all === true) {
       return true;
     }
@@ -265,7 +268,10 @@ export class SkillsService implements OnModuleInit {
   }
 
   /** name 唯一预检：已存在同名技能 → 409 SKILL_NAME_EXISTS。excludeId 用于 update 排除自身。 */
-  private async assertNameFree(name: string, excludeId?: string): Promise<void> {
+  private async assertNameFree(
+    name: string,
+    excludeId?: string,
+  ): Promise<void> {
     const existing = await this.prisma.skill.findUnique({ where: { name } });
     if (existing && (excludeId === undefined || existing.id !== excludeId)) {
       this.throwNameExists(name);

@@ -17,15 +17,19 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WorkerDispatcher } from '../chat/worker-dispatcher';
 import { ArtifactsService } from '../artifacts/artifacts.service';
-import { WorkerClient, WorkerUnavailableException } from '../workers/worker.client';
+import {
+  WorkerClient,
+  WorkerUnavailableException,
+} from '../workers/worker.client';
 import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
 import { PlatformMcpService } from './platform-mcp.service';
-import { memorySaveSchema } from './platform-mcp.tools';
+import { buildPlatformMcpTools, memorySaveSchema } from './platform-mcp.tools';
 import { PLAN_ERRORS } from '../plans/plan.constants';
 import { IssuesService } from '../issues/issues.service';
 import { TasksService } from '../tasks/tasks.service';
 import { QuestionsService } from '../questions/questions.service';
 import { PlansService } from '../plans/plans.service';
+import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service';
 
 describe('PlatformMcpService', () => {
   let service: PlatformMcpService;
@@ -33,8 +37,18 @@ describe('PlatformMcpService', () => {
     session: { findFirst: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
     message: { findMany: jest.Mock; create: jest.Mock };
-    artifact: { findMany: jest.Mock; findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
-    artifactVersion: { findUnique: jest.Mock; findMany: jest.Mock; create: jest.Mock; findFirst: jest.Mock };
+    artifact: {
+      findMany: jest.Mock;
+      findFirst: jest.Mock;
+      create: jest.Mock;
+      update: jest.Mock;
+    };
+    artifactVersion: {
+      findUnique: jest.Mock;
+      findMany: jest.Mock;
+      create: jest.Mock;
+      findFirst: jest.Mock;
+    };
     task: { findUnique: jest.Mock };
     taskAgent: { findMany: jest.Mock; findFirst: jest.Mock };
     worker: { findUnique: jest.Mock };
@@ -72,8 +86,12 @@ describe('PlatformMcpService', () => {
     transitionByAgent: jest.Mock;
   };
   let tasksService: { transitionByAgent: jest.Mock; updateTeam: jest.Mock };
-  let questionsService: { confirmByAgent: jest.Mock; createForPlatform: jest.Mock };
+  let questionsService: {
+    confirmByAgent: jest.Mock;
+    createForPlatform: jest.Mock;
+  };
   let plansService: { assignReviewer: jest.Mock };
+  let outboundDispatcher: { sendToChannelByIdOrName: jest.Mock };
 
   const taskId = 't_0000000001';
   const workerId = 'w_0000000001';
@@ -112,15 +130,30 @@ describe('PlatformMcpService', () => {
       session: { findFirst: jest.fn() },
       chatChannel: { findFirst: jest.fn() },
       message: { findMany: jest.fn(), create: jest.fn() },
-      artifact: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
-      artifactVersion: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), findFirst: jest.fn() },
-    task: { findUnique: jest.fn() },
-    taskAgent: { findMany: jest.fn(), findFirst: jest.fn() },
+      artifact: {
+        findMany: jest.fn(),
+        findFirst: jest.fn(),
+        create: jest.fn(),
+        update: jest.fn(),
+      },
+      artifactVersion: {
+        findUnique: jest.fn(),
+        findMany: jest.fn(),
+        create: jest.fn(),
+        findFirst: jest.fn(),
+      },
+      task: { findUnique: jest.fn() },
+      taskAgent: { findMany: jest.fn(), findFirst: jest.fn() },
       worker: { findUnique: jest.fn() },
       memory: { create: jest.fn(), findMany: jest.fn() },
       agent: { findUnique: jest.fn() },
       agentQuestion: { findMany: jest.fn() },
-      plan: { findUnique: jest.fn(), findFirst: jest.fn(), upsert: jest.fn(), update: jest.fn() },
+      plan: {
+        findUnique: jest.fn(),
+        findFirst: jest.fn(),
+        upsert: jest.fn(),
+        update: jest.fn(),
+      },
       planTask: {
         findUnique: jest.fn(),
         findMany: jest.fn(),
@@ -131,8 +164,8 @@ describe('PlatformMcpService', () => {
       $transaction: jest.fn(),
     };
     // FR-41：$transaction 直接透传回调（tx 复用 prisma mock），事务内查询可断言
-    prisma.$transaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
-      cb(prisma),
+    prisma.$transaction.mockImplementation(
+      async (cb: (tx: unknown) => Promise<unknown>) => cb(prisma),
     );
     idGen = { nextId: jest.fn() };
     realtime = { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
@@ -151,8 +184,14 @@ describe('PlatformMcpService', () => {
       transitionByAgent: jest.fn(),
     };
     tasksService = { transitionByAgent: jest.fn(), updateTeam: jest.fn() };
-    questionsService = { confirmByAgent: jest.fn(), createForPlatform: jest.fn() };
+    questionsService = {
+      confirmByAgent: jest.fn(),
+      createForPlatform: jest.fn(),
+    };
     plansService = { assignReviewer: jest.fn() };
+    outboundDispatcher = {
+      sendToChannelByIdOrName: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -167,6 +206,10 @@ describe('PlatformMcpService', () => {
         { provide: TasksService, useValue: tasksService },
         { provide: QuestionsService, useValue: questionsService },
         { provide: PlansService, useValue: plansService },
+        {
+          provide: NotificationDispatcherService,
+          useValue: outboundDispatcher,
+        },
       ],
     }).compile();
 
@@ -188,9 +231,11 @@ describe('PlatformMcpService', () => {
       },
       (err: unknown) => {
         expect(err).toBeInstanceOf(ctor);
-        expect((err as { getResponse(): unknown }).getResponse()).toMatchObject({
-          code,
-        });
+        expect((err as { getResponse(): unknown }).getResponse()).toMatchObject(
+          {
+            code,
+          },
+        );
       },
     );
 
@@ -228,7 +273,11 @@ describe('PlatformMcpService', () => {
         PLATFORM_MCP_ERRORS.FORBIDDEN,
       );
       await expectCode(
-        service.groupPost(ctx, { taskId, content: 'x', selfInstanceId: senderInstanceId }),
+        service.groupPost(ctx, {
+          taskId,
+          content: 'x',
+          selfInstanceId: senderInstanceId,
+        }),
         ForbiddenException,
         PLATFORM_MCP_ERRORS.FORBIDDEN,
       );
@@ -416,7 +465,11 @@ describe('PlatformMcpService', () => {
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       prisma.message.findMany.mockResolvedValue([]);
 
-      await service.chatHistory(ctx, { taskId, sinceId: 'm_0000000010', limit: 20 });
+      await service.chatHistory(ctx, {
+        taskId,
+        sinceId: 'm_0000000010',
+        limit: 20,
+      });
 
       expect(prisma.message.findMany).toHaveBeenCalledWith({
         where: { channelId, id: { gt: 'm_0000000010' } },
@@ -752,8 +805,18 @@ describe('PlatformMcpService', () => {
       prisma.message.create.mockResolvedValue(createdMessage);
       // 团队实例：主 Agent（a_project_manager/鲍勃）+ 其他成员（用于 @ 前缀边界）
       prisma.taskAgent.findMany.mockResolvedValue([
-        { id: 'ta_pm', agentId: 'a_project_manager', alias: '鲍勃', agent: { name: '项目经理' } },
-        { id: 'ta_dev', agentId: 'a_developer', alias: '刘二开', agent: { name: '开发者' } },
+        {
+          id: 'ta_pm',
+          agentId: 'a_project_manager',
+          alias: '鲍勃',
+          agent: { name: '项目经理' },
+        },
+        {
+          id: 'ta_dev',
+          agentId: 'a_developer',
+          alias: '刘二开',
+          agent: { name: '开发者' },
+        },
       ]);
 
       const result = await service.groupPost(ctx, {
@@ -765,7 +828,14 @@ describe('PlatformMcpService', () => {
       // mentions 落库（对齐 notify_agent 形状：instanceId+agentId+name）
       expect(prisma.message.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
-          mentions: [{ type: 'agent', instanceId: 'ta_pm', agentId: 'a_project_manager', name: '鲍勃' }],
+          mentions: [
+            {
+              type: 'agent',
+              instanceId: 'ta_pm',
+              agentId: 'a_project_manager',
+              name: '鲍勃',
+            },
+          ],
         }),
       });
       // 定向分派被 @ 实例（主 Agent）
@@ -775,7 +845,11 @@ describe('PlatformMcpService', () => {
         text: '@鲍勃 请审核本次方案',
         targetInstanceId: 'ta_pm',
       });
-      expect(result).toEqual({ messageId: 'm_0000000100', channelId, attachment: null });
+      expect(result).toEqual({
+        messageId: 'm_0000000100',
+        channelId,
+        attachment: null,
+      });
     });
 
     it('is_0000000015：content 无 @ 提及 → mentions 保持 null、不触发分派（普通群聊发布）', async () => {
@@ -784,7 +858,12 @@ describe('PlatformMcpService', () => {
       idGen.nextId.mockResolvedValue('m_0000000100');
       prisma.message.create.mockResolvedValue(createdMessage);
       prisma.taskAgent.findMany.mockResolvedValue([
-        { id: 'ta_pm', agentId: 'a_project_manager', alias: '鲍勃', agent: { name: '项目经理' } },
+        {
+          id: 'ta_pm',
+          agentId: 'a_project_manager',
+          alias: '鲍勃',
+          agent: { name: '项目经理' },
+        },
       ]);
 
       await service.groupPost(ctx, {
@@ -805,8 +884,18 @@ describe('PlatformMcpService', () => {
       idGen.nextId.mockResolvedValue('m_0000000100');
       prisma.message.create.mockResolvedValue(createdMessage);
       prisma.taskAgent.findMany.mockResolvedValue([
-        { id: 'ta_dev1', agentId: 'a_developer', alias: '开发者-1', agent: { name: '开发者' } },
-        { id: 'ta_dev2', agentId: 'a_developer', alias: '开发者-2', agent: { name: '开发者' } },
+        {
+          id: 'ta_dev1',
+          agentId: 'a_developer',
+          alias: '开发者-1',
+          agent: { name: '开发者' },
+        },
+        {
+          id: 'ta_dev2',
+          agentId: 'a_developer',
+          alias: '开发者-2',
+          agent: { name: '开发者' },
+        },
       ]);
 
       await service.groupPost(ctx, {
@@ -817,7 +906,12 @@ describe('PlatformMcpService', () => {
 
       const mentions = prisma.message.create.mock.calls[0][0].data.mentions;
       expect(mentions).toEqual([
-        { type: 'agent', instanceId: 'ta_dev2', agentId: 'a_developer', name: '开发者-2' },
+        {
+          type: 'agent',
+          instanceId: 'ta_dev2',
+          agentId: 'a_developer',
+          name: '开发者-2',
+        },
       ]);
       expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith(
         expect.objectContaining({ targetInstanceId: 'ta_dev2' }),
@@ -957,7 +1051,10 @@ describe('PlatformMcpService', () => {
         select: { capabilities: true },
       });
       expect(workerClient.fetchFile).toHaveBeenCalledWith(
-        { id: workerId, capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 } },
+        {
+          id: workerId,
+          capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 },
+        },
         '/tmp/opencode/test_file.txt',
       );
       // 附件三字段：attachmentUrl 为落盘 URL（UUID 文件名，前缀断言）、name/ext 派生自 fileRef
@@ -1021,7 +1118,9 @@ describe('PlatformMcpService', () => {
       prisma.message.create.mockResolvedValue(createdMessage);
       prisma.artifactVersion.findMany.mockResolvedValue([]);
       prisma.worker.findUnique.mockResolvedValue({ capabilities: {} });
-      workerClient.fetchFile.mockRejectedValue(new Error('worker 不可用：file fetch HTTP 404'));
+      workerClient.fetchFile.mockRejectedValue(
+        new Error('worker 不可用：file fetch HTTP 404'),
+      );
 
       const result = await service.groupPost(ctx, {
         taskId,
@@ -1061,7 +1160,11 @@ describe('PlatformMcpService', () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue(null);
       await expectCode(
-        service.groupPost(ctx, { taskId, content: 'x', selfInstanceId: senderInstanceId }),
+        service.groupPost(ctx, {
+          taskId,
+          content: 'x',
+          selfInstanceId: senderInstanceId,
+        }),
         NotFoundException,
         PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
       );
@@ -1096,19 +1199,21 @@ describe('PlatformMcpService', () => {
      * 归属依据）；发送者实例 ta_sender → a_sender（senderId/senderInstanceId 落库归属依据）。
      */
     const mockTaskAgentRows = () => {
-      prisma.taskAgent.findFirst.mockImplementation((args: { where: { id?: string } }) => {
-        if (args.where.id === 'ta_sender') {
-          return Promise.resolve({ agentId: 'a_sender' });
-        }
-        if (args.where.id === 'ta_tester') {
-          return Promise.resolve({
-            agentId: 'a_tester',
-            alias: null,
-            agent: { id: 'a_tester', name: '测试' },
-          });
-        }
-        return Promise.resolve(null);
-      });
+      prisma.taskAgent.findFirst.mockImplementation(
+        (args: { where: { id?: string } }) => {
+          if (args.where.id === 'ta_sender') {
+            return Promise.resolve({ agentId: 'a_sender' });
+          }
+          if (args.where.id === 'ta_tester') {
+            return Promise.resolve({
+              agentId: 'a_tester',
+              alias: null,
+              agent: { id: 'a_tester', name: '测试' },
+            });
+          }
+          return Promise.resolve(null);
+        },
+      );
     };
 
     it('落库 agent 消息（sender=发送者：senderId=发送者 agent id、senderInstanceId=selfInstanceId、mentions 含目标实例）+ 广播 + 触发目标实例 dispatch + 返回结构', async () => {
@@ -1259,7 +1364,10 @@ describe('PlatformMcpService', () => {
     it('归档命中（filePath 归一化匹配）→ 从 uploads 读内容 → source=archive，不触达 worker', async () => {
       allowWorker();
       prisma.artifactVersion.findMany.mockResolvedValue([
-        { contentRef: '/uploads/abc-uuid.txt', filePath: '/tmp/opencode/x.txt' },
+        {
+          contentRef: '/uploads/abc-uuid.txt',
+          filePath: '/tmp/opencode/x.txt',
+        },
       ]);
       fsReadSpy.mockResolvedValue(Buffer.from('归档内容'));
 
@@ -1286,7 +1394,10 @@ describe('PlatformMcpService', () => {
     it('fileRef 传 /uploads/ 形式也能命中（归一化相等）', async () => {
       allowWorker();
       prisma.artifactVersion.findMany.mockResolvedValue([
-        { contentRef: '/uploads/abc-uuid.txt', filePath: '/tmp/opencode/x.txt' },
+        {
+          contentRef: '/uploads/abc-uuid.txt',
+          filePath: '/tmp/opencode/x.txt',
+        },
       ]);
       fsReadSpy.mockResolvedValue(Buffer.from('内容'));
 
@@ -1316,7 +1427,10 @@ describe('PlatformMcpService', () => {
         select: { capabilities: true },
       });
       expect(workerClient.fetchFile).toHaveBeenCalledWith(
-        { id: workerId, capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 } },
+        {
+          id: workerId,
+          capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 },
+        },
         '/tmp/opencode/y.txt',
       );
       expect(result).toEqual({
@@ -1378,9 +1492,14 @@ describe('PlatformMcpService', () => {
     it('归档记录命中但磁盘缺失 → 404 PLATFORM_MCP_FILE_NOT_FOUND', async () => {
       allowWorker();
       prisma.artifactVersion.findMany.mockResolvedValue([
-        { contentRef: '/uploads/ghost.txt', filePath: '/tmp/opencode/ghost.txt' },
+        {
+          contentRef: '/uploads/ghost.txt',
+          filePath: '/tmp/opencode/ghost.txt',
+        },
       ]);
-      fsReadSpy.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      fsReadSpy.mockRejectedValue(
+        Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
+      );
 
       await expectCode(
         service.readFile(ctx, { taskId, fileRef: '/tmp/opencode/ghost.txt' }),
@@ -1392,7 +1511,10 @@ describe('PlatformMcpService', () => {
     it('maxBytes 截断 → truncated=true + content 仅前 N 字节', async () => {
       allowWorker();
       prisma.artifactVersion.findMany.mockResolvedValue([
-        { contentRef: '/uploads/abc-uuid.txt', filePath: '/tmp/opencode/long.txt' },
+        {
+          contentRef: '/uploads/abc-uuid.txt',
+          filePath: '/tmp/opencode/long.txt',
+        },
       ]);
       fsReadSpy.mockResolvedValue(Buffer.from('1234567890'));
 
@@ -1412,7 +1534,10 @@ describe('PlatformMcpService', () => {
     it('缺省 maxBytes（256KB）→ 小文件不截断（无 truncated 标记）', async () => {
       allowWorker();
       prisma.artifactVersion.findMany.mockResolvedValue([
-        { contentRef: '/uploads/abc-uuid.txt', filePath: '/tmp/opencode/small.txt' },
+        {
+          contentRef: '/uploads/abc-uuid.txt',
+          filePath: '/tmp/opencode/small.txt',
+        },
       ]);
       fsReadSpy.mockResolvedValue(Buffer.from('小文件内容'));
 
@@ -1428,7 +1553,10 @@ describe('PlatformMcpService', () => {
     it('二进制（非法 utf8 字节）→ content 回退 base64 前缀标记', async () => {
       allowWorker();
       prisma.artifactVersion.findMany.mockResolvedValue([
-        { contentRef: '/uploads/abc-uuid.bin', filePath: '/tmp/opencode/data.bin' },
+        {
+          contentRef: '/uploads/abc-uuid.bin',
+          filePath: '/tmp/opencode/data.bin',
+        },
       ]);
       fsReadSpy.mockResolvedValue(Buffer.from([0xff, 0xfe, 0x00, 0x01]));
 
@@ -1483,7 +1611,11 @@ describe('PlatformMcpService', () => {
         title: '实现说明',
         content: '已完成',
       });
-      expect(result).toEqual({ artifactId: 'a_1', version: 1, status: 'created' });
+      expect(result).toEqual({
+        artifactId: 'a_1',
+        version: 1,
+        status: 'created',
+      });
     });
 
     it('text：append 已存在同内容（duplicate）→ status 透传 duplicate', async () => {
@@ -1501,7 +1633,11 @@ describe('PlatformMcpService', () => {
         selfInstanceId: senderInstanceId,
       });
 
-      expect(result).toEqual({ artifactId: 'a_1', version: 2, status: 'duplicate' });
+      expect(result).toEqual({
+        artifactId: 'a_1',
+        version: 2,
+        status: 'duplicate',
+      });
     });
 
     it('text：已有同 title 产出物 append 新版本 → status: appended', async () => {
@@ -1519,7 +1655,11 @@ describe('PlatformMcpService', () => {
         selfInstanceId: senderInstanceId,
       });
 
-      expect(result).toEqual({ artifactId: 'a_1', version: 2, status: 'appended' });
+      expect(result).toEqual({
+        artifactId: 'a_1',
+        version: 2,
+        status: 'appended',
+      });
     });
 
     it('text 缺 content → 400 PLATFORM_MCP_ARTIFACT_INVALID（不触达 append）', async () => {
@@ -1577,7 +1717,10 @@ describe('PlatformMcpService', () => {
         select: { capabilities: true },
       });
       expect(workerClient.fetchFile).toHaveBeenCalledWith(
-        { id: workerId, capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 } },
+        {
+          id: workerId,
+          capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 },
+        },
         '/tmp/opencode/req.md',
       );
       // 归档公共化：fileRef=fileRef 原文、storedUrl=落盘 URL、title=工具入参
@@ -1591,7 +1734,11 @@ describe('PlatformMcpService', () => {
           title: '需求文档',
         }),
       );
-      expect(result).toEqual({ artifactId: 'art_1', version: 1, status: 'created' });
+      expect(result).toEqual({
+        artifactId: 'art_1',
+        version: 1,
+        status: 'created',
+      });
     });
 
     it('doc/file：同 sha256 已归档 → status: duplicate（archiveFile 幂等去重透传）', async () => {
@@ -1772,7 +1919,10 @@ describe('PlatformMcpService', () => {
 
     it('issue_update：三参数归属校验 → updateByAgent（部分字段透传）', async () => {
       allowWorker();
-      issuesService.updateByAgent.mockResolvedValue({ ...issueDto, title: '改名' });
+      issuesService.updateByAgent.mockResolvedValue({
+        ...issueDto,
+        title: '改名',
+      });
 
       const out = await service.issueUpdate(ctx, {
         taskId,
@@ -2007,7 +2157,10 @@ describe('PlatformMcpService', () => {
         allowWorker();
         prisma.task.findUnique.mockResolvedValue(taskRow());
         idGen.nextId.mockResolvedValue('me_0000000002');
-        prisma.memory.create.mockResolvedValue({ id: 'me_0000000002', level: 'task' } as any);
+        prisma.memory.create.mockResolvedValue({
+          id: 'me_0000000002',
+          level: 'task',
+        } as any);
         await service.memorySave(ctx, {
           taskId,
           selfInstanceId: senderInstanceId,
@@ -2016,7 +2169,9 @@ describe('PlatformMcpService', () => {
           description: 'token刷新踩坑',
         });
         expect(prisma.memory.create).toHaveBeenCalledWith(
-          expect.objectContaining({ data: expect.objectContaining({ description: 'token刷新踩坑' }) }),
+          expect.objectContaining({
+            data: expect.objectContaining({ description: 'token刷新踩坑' }),
+          }),
         );
       });
 
@@ -2228,7 +2383,12 @@ describe('PlatformMcpService', () => {
             where: expect.objectContaining({
               AND: expect.arrayContaining([
                 expect.objectContaining({ OR: expect.any(Array) }),
-                expect.objectContaining({ OR: [{ content: { contains: '事务' } }, { description: { contains: '事务' } }] }),
+                expect.objectContaining({
+                  OR: [
+                    { content: { contains: '事务' } },
+                    { description: { contains: '事务' } },
+                  ],
+                }),
               ]),
             }),
           }),
@@ -2352,8 +2512,19 @@ describe('PlatformMcpService', () => {
       selfInstanceId: mainInstanceId,
       title: '实施稻邕线消缺',
       tasks: [
-        { title: '步骤一', what: '定位故障点', acceptance: '访问 /login 提交错误密码返回 401 且提示文案包含密码错误', qa: 'curl POST /api/v1/users 缺少 name 字段，断言返回 400', assigneeInstanceId: assigneeId },
-        { title: '步骤二', what: '执行消缺', acceptance: '执行消缺后巡检通过', qa: 'playwright 打开 /status 断言显示正常' },
+        {
+          title: '步骤一',
+          what: '定位故障点',
+          acceptance: '访问 /login 提交错误密码返回 401 且提示文案包含密码错误',
+          qa: 'curl POST /api/v1/users 缺少 name 字段，断言返回 400',
+          assigneeInstanceId: assigneeId,
+        },
+        {
+          title: '步骤二',
+          what: '执行消缺',
+          acceptance: '执行消缺后巡检通过',
+          qa: 'playwright 打开 /status 断言显示正常',
+        },
       ],
     };
     const validSubmitArgs = submitArgs;
@@ -2407,7 +2578,15 @@ describe('PlatformMcpService', () => {
             seq: 1,
             assigneeInstanceId: assigneeId,
             status: 'pending',
-            content: { what: '定位故障点', mustNot: null, references: null, acceptance: '访问 /login 提交错误密码返回 401 且提示文案包含密码错误', qa: 'curl POST /api/v1/users 缺少 name 字段，断言返回 400', commit: null },
+            content: {
+              what: '定位故障点',
+              mustNot: null,
+              references: null,
+              acceptance:
+                '访问 /login 提交错误密码返回 401 且提示文案包含密码错误',
+              qa: 'curl POST /api/v1/users 缺少 name 字段，断言返回 400',
+              commit: null,
+            },
           }),
         });
         expect(prisma.message.create).toHaveBeenCalledWith({
@@ -2461,7 +2640,10 @@ describe('PlatformMcpService', () => {
       it('未终态重复 409：status=reviewing 时重复提交 → PLAN_INVALID_STATUS', async () => {
         allowWorker();
         prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.plan.findUnique.mockResolvedValue({ id: planId, status: 'reviewing' });
+        prisma.plan.findUnique.mockResolvedValue({
+          id: planId,
+          status: 'reviewing',
+        });
         await expectCode(
           service.planSubmit(ctx, submitArgs),
           ConflictException,
@@ -2496,7 +2678,10 @@ describe('PlatformMcpService', () => {
         });
         allowChannel();
         idGen.nextId.mockResolvedValue('pt_0000000010');
-        prisma.plan.upsert.mockResolvedValue({ id: planId, status: 'reviewing' });
+        prisma.plan.upsert.mockResolvedValue({
+          id: planId,
+          status: 'reviewing',
+        });
 
         await service.planSubmit(ctx, submitArgs);
 
@@ -2527,7 +2712,10 @@ describe('PlatformMcpService', () => {
           id: planId,
           status: 'completed',
         });
-        prisma.plan.upsert.mockResolvedValue({ id: planId, status: 'reviewing' });
+        prisma.plan.upsert.mockResolvedValue({
+          id: planId,
+          status: 'reviewing',
+        });
         await service.planSubmit(ctx, submitArgs);
         expect(prisma.plan.upsert).toHaveBeenCalled();
       });
@@ -2543,7 +2731,10 @@ describe('PlatformMcpService', () => {
           reviewerInstanceId: reviewerId,
         });
         allowChannel();
-        prisma.plan.update.mockResolvedValue({ id: planId, status: 'approved' });
+        prisma.plan.update.mockResolvedValue({
+          id: planId,
+          status: 'approved',
+        });
 
         const out = await service.planReview(ctx, {
           taskId,
@@ -2557,7 +2748,10 @@ describe('PlatformMcpService', () => {
         });
         expect(prisma.message.create).toHaveBeenCalledWith({
           data: expect.objectContaining({
-            content: { text: '执行计划已通过评审，请等待用户手动启动任务后再实施', parts: [] },
+            content: {
+              text: '执行计划已通过评审，请等待用户手动启动任务后再实施',
+              parts: [],
+            },
           }),
         });
         expect(out).toEqual({ planId, status: 'approved' });
@@ -2592,7 +2786,10 @@ describe('PlatformMcpService', () => {
           reviewerInstanceId: reviewerId,
         });
         allowChannel();
-        prisma.plan.update.mockResolvedValue({ id: planId, status: 'rejected' });
+        prisma.plan.update.mockResolvedValue({
+          id: planId,
+          status: 'rejected',
+        });
 
         const out = await service.planReview(ctx, {
           taskId,
@@ -2603,7 +2800,11 @@ describe('PlatformMcpService', () => {
 
         expect(prisma.plan.update).toHaveBeenCalledWith({
           where: { id: planId },
-          data: { status: 'rejected', reviewerInstanceId: null, rejectCount: { increment: 1 } },
+          data: {
+            status: 'rejected',
+            reviewerInstanceId: null,
+            rejectCount: { increment: 1 },
+          },
         });
         expect(prisma.message.create).toHaveBeenCalledWith({
           data: expect.objectContaining({
@@ -2666,7 +2867,10 @@ describe('PlatformMcpService', () => {
           reviewerInstanceId: reviewerId,
         });
         allowChannel();
-        prisma.plan.update.mockResolvedValue({ id: planId, status: 'approved' });
+        prisma.plan.update.mockResolvedValue({
+          id: planId,
+          status: 'approved',
+        });
 
         const out = await service.planReview(ctx, {
           taskId,
@@ -2680,7 +2884,10 @@ describe('PlatformMcpService', () => {
         });
         expect(prisma.message.create).toHaveBeenCalledWith({
           data: expect.objectContaining({
-            content: { text: '执行计划已通过评审，请等待用户手动启动任务后再实施', parts: [] },
+            content: {
+              text: '执行计划已通过评审，请等待用户手动启动任务后再实施',
+              parts: [],
+            },
           }),
         });
         expect(out).toEqual({ planId, status: 'approved' });
@@ -2986,9 +3193,7 @@ describe('PlatformMcpService', () => {
           prompt: longPrompt,
           defaultModelId: 'm_1',
           permissionScope: { tools: ['read', 'write'] },
-          toolEffects: [
-            { toolAction: 'read_file', effect: '读取工作区文件' },
-          ],
+          toolEffects: [{ toolAction: 'read_file', effect: '读取工作区文件' }],
         },
         ...overrides,
       });
@@ -3032,9 +3237,7 @@ describe('PlatformMcpService', () => {
           workDir: '/data/vteam-worker/developer-1',
           defaultModelId: 'm_1',
           permissionScope: { tools: ['read', 'write'] },
-          toolEffects: [
-            { toolAction: 'read_file', effect: '读取工作区文件' },
-          ],
+          toolEffects: [{ toolAction: 'read_file', effect: '读取工作区文件' }],
           promptSummary: 'x'.repeat(500),
           promptTruncated: true,
         });
@@ -3366,18 +3569,22 @@ describe('PlatformMcpService', () => {
 
     /** 捕获 createForPlatform 注册的 onResolved 钩子（teamAddMember 闭包）。 */
     const captureHook = () => {
-      let hook: ((args: {
-        answers: string[][] | null;
-        actor: { type: string; id: string };
-      }) => Promise<void>) | null = null;
+      let hook:
+        | ((args: {
+            answers: string[][] | null;
+            actor: { type: string; id: string };
+          }) => Promise<void>)
+        | null = null;
       questionsService.createForPlatform.mockImplementation(
         async (
           _taskId: string,
           _question: unknown,
-          opts: { onResolved?: (args: {
-            answers: string[][] | null;
-            actor: { type: string; id: string };
-          }) => Promise<void> },
+          opts: {
+            onResolved?: (args: {
+              answers: string[][] | null;
+              actor: { type: string; id: string };
+            }) => Promise<void>;
+          },
         ) => {
           hook = opts.onResolved ?? null;
           return { id: 'aq_1', requestId: 'que_platform_0000000001' };
@@ -3423,7 +3630,8 @@ describe('PlatformMcpService', () => {
       expect(questionsService.createForPlatform).toHaveBeenCalledWith(
         taskId,
         {
-          question: '主 Agent 申请将 开发者（别名 开发者-2）加入团队，是否确认？',
+          question:
+            '主 Agent 申请将 开发者（别名 开发者-2）加入团队，是否确认？',
           header: '团队增员确认',
           options: ['确认', '拒绝'],
         },
@@ -3542,7 +3750,10 @@ describe('PlatformMcpService', () => {
         alias: '开发者-2',
       });
 
-      await getHook()!({ answers: [['确认']], actor: { type: 'user', id: 'u_1' } });
+      await getHook()!({
+        answers: [['确认']],
+        actor: { type: 'user', id: 'u_1' },
+      });
 
       expect(tasksService.updateTeam).toHaveBeenCalledWith(
         taskId,
@@ -3571,7 +3782,11 @@ describe('PlatformMcpService', () => {
         taskId,
         { addInstances: [{ agentId: 'a_developer' }] },
         undefined,
-        { actorType: 'agent', actorId: mainInstanceId, confirmedBy: '主 Agent' },
+        {
+          actorType: 'agent',
+          actorId: mainInstanceId,
+          confirmedBy: '主 Agent',
+        },
       );
     });
 
@@ -3608,5 +3823,208 @@ describe('PlatformMcpService', () => {
       ).resolves.toBeUndefined();
     });
   });
-});
 
+  describe('channel_send（通知渠道推送，T12）', () => {
+    it('成功：解析当前任务上下文并调用 outboundDispatcher → 返回已发送文本，不抛异常', async () => {
+      prisma.session.findFirst.mockResolvedValueOnce({
+        taskId,
+        agentId: senderAgentId,
+        taskAgentId: senderInstanceId,
+      });
+      prisma.session.findFirst.mockResolvedValueOnce({
+        id: 's_1',
+        agentId: senderAgentId,
+        taskAgentId: senderInstanceId,
+      });
+      outboundDispatcher.sendToChannelByIdOrName.mockResolvedValue(undefined);
+
+      const result = await service.channelSend(ctx, {
+        target: 'nc_0000000001',
+        text: 'hello world',
+      });
+
+      expect(outboundDispatcher.sendToChannelByIdOrName).toHaveBeenCalledWith(
+        taskId,
+        'nc_0000000001',
+        'hello world',
+      );
+      expect(result).toEqual({
+        content: [
+          { type: 'text', text: '已发送至渠道 nc_0000000001: hello world' },
+        ],
+        isError: false,
+      });
+    });
+
+    it('成功：长文本截断预览 100 字符', async () => {
+      const longText = 'a'.repeat(150);
+      prisma.session.findFirst.mockResolvedValueOnce({
+        taskId,
+        agentId: senderAgentId,
+        taskAgentId: senderInstanceId,
+      });
+      prisma.session.findFirst.mockResolvedValueOnce({
+        id: 's_1',
+        agentId: senderAgentId,
+        taskAgentId: senderInstanceId,
+      });
+      outboundDispatcher.sendToChannelByIdOrName.mockResolvedValue(undefined);
+
+      const result = await service.channelSend(ctx, {
+        target: 'my-webhook',
+        text: longText,
+      });
+
+      expect(result.content[0].text).toBe(
+        `已发送至渠道 my-webhook: ${'a'.repeat(100)}`,
+      );
+      expect(result.isError).toBe(false);
+    });
+
+    it('失败：dispatcher 抛 channel not found → 返回 发送失败: xxx, isError false, 不抛异常', async () => {
+      prisma.session.findFirst.mockResolvedValueOnce({
+        taskId,
+        agentId: senderAgentId,
+        taskAgentId: senderInstanceId,
+      });
+      prisma.session.findFirst.mockResolvedValueOnce({
+        id: 's_1',
+        agentId: senderAgentId,
+        taskAgentId: senderInstanceId,
+      });
+      outboundDispatcher.sendToChannelByIdOrName.mockRejectedValue(
+        new NotFoundException('channel not found: missing'),
+      );
+
+      const result = await service.channelSend(ctx, {
+        target: 'missing',
+        text: 'hi',
+      });
+
+      expect(result.isError).toBe(false);
+      expect(result.content[0].text).toMatch(/发送失败:.*channel not found/);
+    });
+
+    it('失败：direction 不支持 outbound → 返回 发送失败: channel direction does not support outbound', async () => {
+      prisma.session.findFirst.mockResolvedValueOnce({
+        taskId,
+        agentId: senderAgentId,
+        taskAgentId: senderInstanceId,
+      });
+      prisma.session.findFirst.mockResolvedValueOnce({
+        id: 's_1',
+        agentId: senderAgentId,
+        taskAgentId: senderInstanceId,
+      });
+      outboundDispatcher.sendToChannelByIdOrName.mockRejectedValue(
+        new ForbiddenException('channel direction does not support outbound'),
+      );
+
+      const result = await service.channelSend(ctx, {
+        target: 'nc_in_only',
+        text: 'hi',
+      });
+
+      expect(result.content[0].text).toBe(
+        '发送失败: channel direction does not support outbound',
+      );
+      expect(result.isError).toBe(false);
+    });
+
+    it('失败：project 隔离 Forbidden → 返回 发送失败, 不抛异常', async () => {
+      prisma.session.findFirst.mockResolvedValueOnce({
+        taskId,
+        agentId: senderAgentId,
+        taskAgentId: senderInstanceId,
+      });
+      prisma.session.findFirst.mockResolvedValueOnce({
+        id: 's_1',
+        agentId: senderAgentId,
+        taskAgentId: senderInstanceId,
+      });
+      outboundDispatcher.sendToChannelByIdOrName.mockRejectedValue(
+        new ForbiddenException('channel project mismatch'),
+      );
+
+      const result = await service.channelSend(ctx, {
+        target: 'nc_other',
+        text: 'hi',
+      });
+
+      expect(result.content[0].text).toMatch(
+        /发送失败:.*channel project mismatch/,
+      );
+      expect(result.isError).toBe(false);
+    });
+
+    it('text 越界 (>4000) → 返回发送失败, 不调用 dispatcher', async () => {
+      const long = 'x'.repeat(4001);
+      const result = await service.channelSend(ctx, {
+        target: 'nc_1',
+        text: long,
+      });
+
+      expect(result.content[0].text).toMatch(/发送失败:.*4000/);
+      expect(result.isError).toBe(false);
+      expect(outboundDispatcher.sendToChannelByIdOrName).not.toHaveBeenCalled();
+    });
+
+    it('无法解析任务上下文（无 session）→ 返回发送失败', async () => {
+      prisma.session.findFirst.mockResolvedValueOnce(null);
+
+      const result = await service.channelSend(ctx, {
+        target: 'nc_1',
+        text: 'hi',
+      });
+
+      expect(result.content[0].text).toMatch(
+        /发送失败:.*无法解析当前任务上下文/,
+      );
+      expect(result.isError).toBe(false);
+      expect(outboundDispatcher.sendToChannelByIdOrName).not.toHaveBeenCalled();
+    });
+
+    it('未提供 outboundDispatcher → 返回 发送失败: 出站分发器未就绪', async () => {
+      (
+        service as unknown as { outboundDispatcher: unknown }
+      ).outboundDispatcher = null as unknown as NotificationDispatcherService;
+      const result = await service.channelSend(ctx, {
+        target: 'nc_1',
+        text: 'hi',
+      });
+      expect(result.content[0].text).toMatch(/发送失败:.*出站分发器未就绪/);
+      (
+        service as unknown as { outboundDispatcher: unknown }
+      ).outboundDispatcher =
+        outboundDispatcher as unknown as NotificationDispatcherService;
+    });
+  });
+
+  describe('tools/list 包含 channel_send', () => {
+    it('snapshot includes channel_send', async () => {
+      const tools = buildPlatformMcpTools(service);
+      const names = tools.map((t) => t.name);
+      expect(names).toContain('channel_send');
+      expect(names).toEqual(
+        expect.arrayContaining([
+          'chat_history',
+          'group_post',
+          'notify_agent',
+          'channel_send',
+        ]),
+      );
+      const channelSendTool = tools.find((t) => t.name === 'channel_send')!;
+      expect(channelSendTool.description).toMatch(/notification channel/);
+      const schema = channelSendTool.inputSchema as unknown as {
+        safeParse: (v: unknown) => { success: boolean };
+      };
+      expect(schema.safeParse({ target: 'nc_1', text: 'hi' }).success).toBe(
+        true,
+      );
+      expect(
+        schema.safeParse({ target: 'nc_1', text: 'x'.repeat(4001) }).success,
+      ).toBe(false);
+      expect(schema.safeParse({ target: 'nc_1' }).success).toBe(false);
+    });
+  });
+});

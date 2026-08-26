@@ -40,7 +40,10 @@ describe('WorkersController', () => {
         // 控制器方法级 @UseGuards(WorkerTokenGuard) 会在 compile 时实例化 guard
         { provide: ConfigService, useValue: { get: jest.fn() } },
         // 方法级 @UseGuards(PermissionGuard) 依赖 PrismaService + Reflector（compile 时实例化 guard）
-        { provide: PrismaService, useValue: { user: { findUnique: jest.fn() } } },
+        {
+          provide: PrismaService,
+          useValue: { user: { findUnique: jest.fn() } },
+        },
       ],
     }).compile();
 
@@ -81,7 +84,11 @@ describe('WorkersController', () => {
     const req = { workerToken: 'secret-token' } as WorkerTokenRequest;
     const result = await controller.heartbeat('w_0000000001', req, dto);
 
-    expect(service.heartbeat).toHaveBeenCalledWith('w_0000000001', dto, 'secret-token');
+    expect(service.heartbeat).toHaveBeenCalledWith(
+      'w_0000000001',
+      dto,
+      'secret-token',
+    );
     expect(result).toMatchObject({ status: 'online' });
   });
 
@@ -101,7 +108,9 @@ describe('WorkersController', () => {
   });
 
   it('C8：PATCH /workers/:id 转发 updateDefaultModel（DTO 透传，workers.edit 保护）', async () => {
-    const dto: UpdateWorkerModelDto = { defaultModelId: 'opencode-go/deepseek-v4-flash' };
+    const dto: UpdateWorkerModelDto = {
+      defaultModelId: 'opencode-go/deepseek-v4-flash',
+    };
     const view = {
       id: 'w_0000000001',
       status: 'online',
@@ -111,17 +120,25 @@ describe('WorkersController', () => {
 
     const result = await controller.updateDefaultModel('w_0000000001', dto);
 
-    expect(service.updateDefaultModel).toHaveBeenCalledWith('w_0000000001', dto);
+    expect(service.updateDefaultModel).toHaveBeenCalledWith(
+      'w_0000000001',
+      dto,
+    );
     expect(result).toEqual(view);
   });
 
   it('C8：PATCH /workers/:id 支持 null（清除默认模型）', async () => {
     const dto: UpdateWorkerModelDto = { defaultModelId: null };
-    service.updateDefaultModel.mockResolvedValue({ id: 'w_0000000001', defaultModelId: null });
+    service.updateDefaultModel.mockResolvedValue({
+      id: 'w_0000000001',
+      defaultModelId: null,
+    });
 
     await controller.updateDefaultModel('w_0000000001', dto);
 
-    expect(service.updateDefaultModel).toHaveBeenCalledWith('w_0000000001', { defaultModelId: null });
+    expect(service.updateDefaultModel).toHaveBeenCalledWith('w_0000000001', {
+      defaultModelId: null,
+    });
   });
 
   it('UX-01：POST /workers/:id/restart 转发 requestRestart（workers.edit 保护）', async () => {
@@ -134,7 +151,10 @@ describe('WorkersController', () => {
     const result = await controller.requestRestart('w_0000000001');
 
     expect(service.requestRestart).toHaveBeenCalledWith('w_0000000001');
-    expect(result).toMatchObject({ workerId: 'w_0000000001', command: 'restart' });
+    expect(result).toMatchObject({
+      workerId: 'w_0000000001',
+      command: 'restart',
+    });
   });
 
   it('UX-01：POST /workers/:id/shutdown 转发 requestShutdown（workers.edit 保护）', async () => {
@@ -148,7 +168,10 @@ describe('WorkersController', () => {
     const result = await controller.requestShutdown('w_0000000001');
 
     expect(service.requestShutdown).toHaveBeenCalledWith('w_0000000001');
-    expect(result).toMatchObject({ workerId: 'w_0000000001', status: 'offline' });
+    expect(result).toMatchObject({
+      workerId: 'w_0000000001',
+      status: 'offline',
+    });
   });
 
   it('DELETE /workers/:id 转发 remove（workers.delete 保护）', async () => {

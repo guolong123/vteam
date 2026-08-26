@@ -169,8 +169,8 @@ describe('assertSkillName（frontmatter name 校验）', () => {
   });
 
   it('超长 name（> 64）→ 400', () => {
-    expect(() =>
-      assertSkillName({ name: 'a'.repeat(65) }),
-    ).toThrow(BadRequestException);
+    expect(() => assertSkillName({ name: 'a'.repeat(65) })).toThrow(
+      BadRequestException,
+    );
   });
 });

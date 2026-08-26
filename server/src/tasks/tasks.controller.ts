@@ -63,7 +63,9 @@ export class TasksController {
   @Post('projects/:pid/tasks')
   @UseGuards(PermissionGuard)
   @RequirePermission('tasks.create')
-  @ApiOperation({ summary: '创建任务（三件套同事务：任务+群聊+团队+事件，并广播状态变更）' })
+  @ApiOperation({
+    summary: '创建任务（三件套同事务：任务+群聊+团队+事件，并广播状态变更）',
+  })
   create(
     @CurrentUser() user: AuthenticatedUser,
     @ProjectId() pid: string,
@@ -138,7 +140,10 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission('tasks.edit')
   @ApiOperation({ summary: '重置实例会话（新 opencode session）' })
-  resetInstanceSession(@Param('id') id: string, @Param('instanceId') instanceId: string) {
+  resetInstanceSession(
+    @Param('id') id: string,
+    @Param('instanceId') instanceId: string,
+  ) {
     return this.tasksService.resetInstanceSession(id, instanceId);
   }
 
@@ -164,7 +169,9 @@ export class TasksController {
   @Post('tasks/:id/start')
   @UseGuards(PermissionGuard)
   @RequirePermission('tasks.edit')
-  @ApiOperation({ summary: '启动任务（pending → in_progress，校验团队与主 Agent）' })
+  @ApiOperation({
+    summary: '启动任务（pending → in_progress，校验团队与主 Agent）',
+  })
   start(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.tasksService.start(id, user.id);
   }
@@ -203,7 +210,9 @@ export class TasksController {
   @Post('tasks/:id/reject')
   @UseGuards(PermissionGuard)
   @RequirePermission('tasks.review')
-  @ApiOperation({ summary: '验收驳回（pending_review → in_progress，可带原因）' })
+  @ApiOperation({
+    summary: '验收驳回（pending_review → in_progress，可带原因）',
+  })
   reject(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,

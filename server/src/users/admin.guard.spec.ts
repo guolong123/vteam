@@ -1,8 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import {
-  ForbiddenException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { AdminGuard } from './admin.guard';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -66,9 +63,9 @@ describe('AdminGuard', () => {
       enabled: true,
       role: { permissions: { all: true } },
     });
-    await expect(guard.canActivate(mockContext({ id: 'u_admin' }))).resolves.toBe(
-      true,
-    );
+    await expect(
+      guard.canActivate(mockContext({ id: 'u_admin' })),
+    ).resolves.toBe(true);
   });
 
   it('矩阵格式 users.manage=true 放行', async () => {

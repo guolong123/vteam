@@ -1,8 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import {
-  ForbiddenException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionGuard } from './permission.guard';
@@ -52,9 +49,7 @@ describe('PermissionGuard', () => {
 
   it('未挂 @RequirePermission 的端点放行（防御空标记）', async () => {
     reflector.getAllAndOverride.mockReturnValue(undefined);
-    await expect(
-      guard.canActivate(mockContext(undefined)),
-    ).resolves.toBe(true);
+    await expect(guard.canActivate(mockContext(undefined))).resolves.toBe(true);
   });
 
   it('request.user 缺失抛 401', async () => {

@@ -1,6 +1,18 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { CurrentUser, AuthenticatedUser } from '../projects/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../projects/current-user.decorator';
 import { AdminGuard } from '../users/admin.guard';
 import { CreateGitCredentialDto } from './dto/create-git-credential.dto';
 import { UpdateGitCredentialDto } from './dto/update-git-credential.dto';
@@ -21,14 +33,21 @@ export class GitCredentialsController {
   @Post()
   @UseGuards(AdminGuard)
   @ApiOperation({ summary: '创建凭证（AES-256-GCM 加密存储，AdminGuard）' })
-  create(@Body() dto: CreateGitCredentialDto, @CurrentUser() user: AuthenticatedUser) {
+  create(
+    @Body() dto: CreateGitCredentialDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
     return this.svc.create(dto, user.id);
   }
 
   @Patch(':id')
   @UseGuards(AdminGuard)
   @ApiOperation({ summary: '更新凭证（部分更新，AdminGuard）' })
-  update(@Param('id') id: string, @Body() dto: UpdateGitCredentialDto, @CurrentUser() user: AuthenticatedUser) {
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateGitCredentialDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
     return this.svc.update(id, dto, user.id);
   }
 

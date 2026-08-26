@@ -1,5 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsInt, IsNotEmpty, IsObject, IsString, Min } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsNotEmpty,
+  IsObject,
+  IsString,
+  Min,
+} from 'class-validator';
 
 /**
  * worker 协议事件 type 枚举（T1 契约基座，架构决策 D4）。
@@ -18,7 +25,8 @@ export const WORKER_EVENT_TYPES = {
   SESSION_PERMISSION: 'session.permission',
 } as const;
 
-export type WorkerEventType = (typeof WORKER_EVENT_TYPES)[keyof typeof WORKER_EVENT_TYPES];
+export type WorkerEventType =
+  (typeof WORKER_EVENT_TYPES)[keyof typeof WORKER_EVENT_TYPES];
 
 /**
  * POST /worker/events 请求体（架构决策 D1：事件上送全 push 回调）。
@@ -36,7 +44,10 @@ export class WorkerEventDto {
   @IsNotEmpty()
   eventId: string;
 
-  @ApiProperty({ description: '事件类型', enum: Object.values(WORKER_EVENT_TYPES) })
+  @ApiProperty({
+    description: '事件类型',
+    enum: Object.values(WORKER_EVENT_TYPES),
+  })
   @IsIn(Object.values(WORKER_EVENT_TYPES))
   type: WorkerEventType;
 

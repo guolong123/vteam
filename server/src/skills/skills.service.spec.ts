@@ -47,7 +47,11 @@ describe('SkillsService', () => {
     updatedAt: new Date('2026-08-08T00:00:00Z'),
   };
 
-  const adminUser = { id: 'u_admin', enabled: true, role: { permissions: { all: true } } };
+  const adminUser = {
+    id: 'u_admin',
+    enabled: true,
+    role: { permissions: { all: true } },
+  };
   const memberUser = {
     id: 'u_member',
     enabled: true,
@@ -60,7 +64,8 @@ describe('SkillsService', () => {
     seq = 0;
     idGen = {
       nextId: jest.fn(
-        async (prefix: string) => `${prefix}_${String(++seq).padStart(10, '0')}`,
+        async (prefix: string) =>
+          `${prefix}_${String(++seq).padStart(10, '0')}`,
       ),
       seed: jest.fn(),
     };
@@ -89,7 +94,9 @@ describe('SkillsService', () => {
     service = module.get<SkillsService>(SkillsService);
   });
 
-  function makeInput(overrides: Partial<CreateSkillInput> = {}): CreateSkillInput {
+  function makeInput(
+    overrides: Partial<CreateSkillInput> = {},
+  ): CreateSkillInput {
     return {
       frontmatter: {
         name: 'git-ops',
@@ -172,7 +179,9 @@ describe('SkillsService', () => {
     it('name 已存在 → 409 SKILL_NAME_EXISTS（预检拦截，不写库）', async () => {
       prisma.skill.findUnique.mockResolvedValue({ name: 'git-ops' });
 
-      await expect(service.create(makeInput())).rejects.toThrow(ConflictException);
+      await expect(service.create(makeInput())).rejects.toThrow(
+        ConflictException,
+      );
       await expect(service.create(makeInput())).rejects.toMatchObject({
         response: { code: SKILL_ERRORS.SKILL_NAME_EXISTS },
       });
@@ -265,7 +274,9 @@ describe('SkillsService', () => {
       await expect(service.updateStatus('sk_ghost', true)).rejects.toThrow(
         NotFoundException,
       );
-      await expect(service.updateStatus('sk_ghost', true)).rejects.toMatchObject({
+      await expect(
+        service.updateStatus('sk_ghost', true),
+      ).rejects.toMatchObject({
         response: { code: SKILL_ERRORS.SKILL_NOT_FOUND },
       });
       expect(prisma.skill.update).not.toHaveBeenCalled();
@@ -403,7 +414,11 @@ describe('SkillsService', () => {
 
       expect(prisma.skill.update).toHaveBeenCalledWith({
         where: { id: 'sk_0000000001' },
-        data: { name: 'git-ops', description: '从内容同步', content: newContent },
+        data: {
+          name: 'git-ops',
+          description: '从内容同步',
+          content: newContent,
+        },
       });
     });
 
@@ -461,7 +476,9 @@ describe('SkillsService', () => {
 
       expect(prisma.skill.findUnique).toHaveBeenCalledTimes(1);
       expect(prisma.skill.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ name: 'git-ops' }) }),
+        expect.objectContaining({
+          data: expect.objectContaining({ name: 'git-ops' }),
+        }),
       );
     });
 

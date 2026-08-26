@@ -67,7 +67,8 @@ export class PlatformMcpController {
   @Post()
   @HttpCode(200)
   @ApiOperation({
-    summary: '平台 MCP Streamable HTTP 端点（X-Worker-Token 鉴权，initialize/tools/list/call）',
+    summary:
+      '平台 MCP Streamable HTTP 端点（X-Worker-Token 鉴权，initialize/tools/list/call）',
   })
   handle(
     @Req() req: Request,
@@ -94,7 +95,8 @@ export class PlatformMcpController {
   @Get()
   @HttpCode(405)
   @ApiOperation({
-    summary: '平台 MCP 端点仅支持 POST（JSON-RPC over HTTP），GET（SSE 流）返回 405',
+    summary:
+      '平台 MCP 端点仅支持 POST（JSON-RPC over HTTP），GET（SSE 流）返回 405',
   })
   methodNotAllowed(): { code: string; message: string } {
     return {
@@ -191,7 +193,11 @@ export class PlatformMcpController {
         : undefined;
     const parsed = tool.inputSchema.safeParse(argumentsValue);
     if (!parsed.success) {
-      return this.error(id, ERROR_INVALID_PARAMS, z.prettifyError(parsed.error));
+      return this.error(
+        id,
+        ERROR_INVALID_PARAMS,
+        z.prettifyError(parsed.error),
+      );
     }
 
     try {
@@ -230,7 +236,14 @@ export class PlatformMcpController {
     if (err instanceof HttpException) {
       const response = err.getResponse();
       const status = err.getStatus();
-      const prefix = status === 403 ? '[403]' : status === 409 ? '[409]' : status === 400 ? '[400]' : '';
+      const prefix =
+        status === 403
+          ? '[403]'
+          : status === 409
+            ? '[409]'
+            : status === 400
+              ? '[400]'
+              : '';
       let msg: string;
       if (
         response &&
@@ -242,7 +255,10 @@ export class PlatformMcpController {
       } else {
         msg = err.message;
       }
-      const code = (response && typeof response === 'object' && 'code' in response) ? ` ${(response as { code?: string }).code}` : '';
+      const code =
+        response && typeof response === 'object' && 'code' in response
+          ? ` ${(response as { code?: string }).code}`
+          : '';
       return `${prefix}${code} ${msg}`.trim();
     }
     if (err instanceof Error) {

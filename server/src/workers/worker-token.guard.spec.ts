@@ -1,13 +1,7 @@
 import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  DEFAULT_WORKER_TOKEN,
-  WORKER_ERRORS,
-} from './workers.constants';
-import {
-  WorkerTokenGuard,
-  WorkerTokenRequest,
-} from './worker-token.guard';
+import { DEFAULT_WORKER_TOKEN, WORKER_ERRORS } from './workers.constants';
+import { WorkerTokenGuard, WorkerTokenRequest } from './worker-token.guard';
 
 describe('WorkerTokenGuard', () => {
   let guard: WorkerTokenGuard;
@@ -44,9 +38,9 @@ describe('WorkerTokenGuard', () => {
     const ctx = mockContext({ 'x-worker-token': 'my-worker-token' });
 
     expect(guard.canActivate(ctx)).toBe(true);
-    expect(ctx.switchToHttp().getRequest<WorkerTokenRequest>().workerToken).toBe(
-      'my-worker-token',
-    );
+    expect(
+      ctx.switchToHttp().getRequest<WorkerTokenRequest>().workerToken,
+    ).toBe('my-worker-token');
   });
 
   it('未配置 WORKER_TOKEN 时回退默认 dev-worker-token', () => {

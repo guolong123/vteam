@@ -9,7 +9,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { CurrentUser, AuthenticatedUser } from '../projects/current-user.decorator';
+import {
+  CurrentUser,
+  AuthenticatedUser,
+} from '../projects/current-user.decorator';
 import { AdminGuard } from '../users/admin.guard';
 import { CreateGitRepoDto } from './dto/create-git-repo.dto';
 import { UpdateGitRepoDto } from './dto/update-git-repo.dto';
@@ -47,7 +50,9 @@ export class GitReposController {
    */
   @Post()
   @UseGuards(AdminGuard)
-  @ApiOperation({ summary: '创建仓库凭证（AES-256-GCM 加密存储 + 授权，AdminGuard）' })
+  @ApiOperation({
+    summary: '创建仓库凭证（AES-256-GCM 加密存储 + 授权，AdminGuard）',
+  })
   create(
     @Body() dto: CreateGitRepoDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -78,10 +83,7 @@ export class GitReposController {
   @Delete(':id')
   @UseGuards(AdminGuard)
   @ApiOperation({ summary: '软撤销仓库凭证（+ 该仓库全部授权，AdminGuard）' })
-  remove(
-    @Param('id') id: string,
-    @CurrentUser() user: AuthenticatedUser,
-  ) {
+  remove(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.gitReposService.remove(id, user.id);
   }
 }

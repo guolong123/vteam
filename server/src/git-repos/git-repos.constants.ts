@@ -26,7 +26,8 @@ export const GIT_PERMISSIONS = {
   WRITE: 'write',
 } as const;
 
-export type GitPermission = (typeof GIT_PERMISSIONS)[keyof typeof GIT_PERMISSIONS];
+export type GitPermission =
+  (typeof GIT_PERMISSIONS)[keyof typeof GIT_PERMISSIONS];
 
 /** 授权 effect 枚举（GitRepoGrant.effect；缺省 read→allow、write→ask）。 */
 export const GIT_EFFECTS = {

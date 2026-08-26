@@ -8,10 +8,13 @@ export class MigrateController {
   @Post('add-enabled')
   async addEnabled() {
     try {
-      await this.prisma.$executeRawUnsafe(`ALTER TABLE task_agents ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT true`);
+      await this.prisma.$executeRawUnsafe(
+        `ALTER TABLE task_agents ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT true`,
+      );
       return { ok: true };
     } catch (e: any) {
-      if (String(e.message).includes('Duplicate column')) return { ok: true, existed: true };
+      if (String(e.message).includes('Duplicate column'))
+        return { ok: true, existed: true };
       throw e;
     }
   }

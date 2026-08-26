@@ -88,7 +88,11 @@ export class AgentsService implements OnModuleInit {
    */
   async onModuleInit(): Promise<void> {
     await resyncIdPrefix(this.prisma.agent, ID_PREFIX.agent, this.idGen);
-    await resyncIdPrefix(this.prisma.agentSkill, ID_PREFIX.agentSkill, this.idGen);
+    await resyncIdPrefix(
+      this.prisma.agentSkill,
+      ID_PREFIX.agentSkill,
+      this.idGen,
+    );
     await resyncIdPrefix(
       this.prisma.agentToolEffect,
       ID_PREFIX.agentToolEffect,
@@ -198,7 +202,8 @@ export class AgentsService implements OnModuleInit {
           prompt: source.prompt,
           defaultModelId: source.defaultModelId,
           persona: source.persona,
-          permissionScope: source.permissionScope as Prisma.InputJsonValue | undefined,
+          permissionScope: source.permissionScope as
+            Prisma.InputJsonValue | undefined,
           createdBy: userId,
         },
       });
@@ -345,7 +350,10 @@ export class AgentsService implements OnModuleInit {
     agentId: string,
     skillIds: string[] | undefined,
     toolEffects: { toolAction: string; effect: string }[] | undefined,
-  ): Promise<{ skills: { skillId: string }[]; toolEffects: { toolAction: string; effect: string }[] }> {
+  ): Promise<{
+    skills: { skillId: string }[];
+    toolEffects: { toolAction: string; effect: string }[];
+  }> {
     return {
       skills: await this.createSkills(tx, agentId, skillIds),
       toolEffects: await this.createToolEffects(tx, agentId, toolEffects),

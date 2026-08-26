@@ -49,7 +49,11 @@ export class QueryToolsDto {
   @IsString()
   mcpServer?: string;
 
-  @ApiPropertyOptional({ description: '页码（从 1 起）', default: 1, minimum: 1 })
+  @ApiPropertyOptional({
+    description: '页码（从 1 起）',
+    default: 1,
+    minimum: 1,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

@@ -214,7 +214,10 @@ export class ToolsService implements OnModuleInit {
     if (!user || !user.enabled) {
       return false;
     }
-    const permissions = (user.role.permissions ?? {}) as Record<string, unknown>;
+    const permissions = (user.role.permissions ?? {}) as Record<
+      string,
+      unknown
+    >;
     if (permissions.all === true) {
       return true;
     }

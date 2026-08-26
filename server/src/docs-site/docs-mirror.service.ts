@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { promises as fsp } from 'fs';
 import { join } from 'path';
 import { ConfigService } from '@nestjs/config';
@@ -63,7 +68,9 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
     if (existing) {
       return existing.catch(() => undefined);
     }
-    const run = this.doSyncTask(taskId).finally(() => this.rebuildLocks.delete(taskId));
+    const run = this.doSyncTask(taskId).finally(() =>
+      this.rebuildLocks.delete(taskId),
+    );
     this.rebuildLocks.set(taskId, run);
     return run.catch((err: unknown) => {
       this.logger.error(
@@ -96,7 +103,10 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         artifact: { select: { id: true, title: true, currentVersion: true } },
       },
     });
-    const currentByArtifact = new Map<string, { title: string; contentRef: string }>();
+    const currentByArtifact = new Map<
+      string,
+      { title: string; contentRef: string }
+    >();
     for (const r of rows) {
       if (r.version === r.artifact.currentVersion) {
         currentByArtifact.set(r.artifact.id, {
@@ -120,7 +130,8 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
     const prototypeArtifacts = [...currentByArtifact.entries()].filter(
       ([, cur]) =>
         cur.contentRef.startsWith('/uploads/') &&
-        (/\.prototype\.json$/i.test(cur.contentRef) || /\.tsx$/i.test(cur.contentRef)),
+        (/\.prototype\.json$/i.test(cur.contentRef) ||
+          /\.tsx$/i.test(cur.contentRef)),
     );
     if (prototypeArtifacts.length > 0) {
       await fsp.mkdir(protoDir, { recursive: true });
@@ -135,7 +146,11 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
       }
       const isTsxPrototype = /\.tsx$/i.test(cur.contentRef);
       const isPrototype = /\.prototype\.json$/i.test(cur.contentRef);
-      if (!isTsxPrototype && !isPrototype && !/\.(md|markdown)$/i.test(cur.contentRef)) {
+      if (
+        !isTsxPrototype &&
+        !isPrototype &&
+        !/\.(md|markdown)$/i.test(cur.contentRef)
+      ) {
         continue;
       }
       let content: Buffer;
@@ -157,14 +172,20 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
       if (isPrototype) {
-        const fileName = this.prototypeFileName(cur.title, artifactId, cur.contentRef);
+        const fileName = this.prototypeFileName(
+          cur.title,
+          artifactId,
+          cur.contentRef,
+        );
         await fsp.writeFile(join(protoDir, fileName), body, 'utf8');
         protoCount += 1;
         continue;
       }
       let slug = this.docIdFor(cur.title, artifactId);
       if (seenDocIds.has(slug)) {
-        const suffix = String(artifactId).replace(/[^a-z0-9]/gi, '').slice(-8);
+        const suffix = String(artifactId)
+          .replace(/[^a-z0-9]/gi, '')
+          .slice(-8);
         slug = suffix ? `${slug}-${suffix}` : slug;
         let counter = 1;
         while (seenDocIds.has(slug)) {
@@ -181,7 +202,10 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** 读单个任务镜像文件内容（鉴权在 controller；此处仅按白名单文件名读盘）。 */
-  async readMirrorDoc(taskId: string, fileName: string): Promise<string | null> {
+  async readMirrorDoc(
+    taskId: string,
+    fileName: string,
+  ): Promise<string | null> {
     // 白名单：仅允许 [a-z0-9-_].md（防路径穿越；与 toSlug 输出一致）
     if (!/^[a-z0-9_-]+\.md$/.test(fileName)) {
       return null;
@@ -199,14 +223,32 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
    * 支持两种格式：TSX 目录（<name>/index.tsx）和旧 DSL JSON（<name>.json）。
    * name 优先从 TSX meta 导出 / JSON name 字段读，缺省回退目录名/文件名。
    */
-  async listPrototypes(taskId: string): Promise<Array<{ id: string; metaId?: string; name: string; file: string; artifactId?: string }>> {
+  async listPrototypes(taskId: string): Promise<
+    Array<{
+      id: string;
+      metaId?: string;
+      name: string;
+      file: string;
+      artifactId?: string;
+    }>
+  > {
     const protoDir = join(this.docsRoot, taskId, 'prototypes');
-    const items: Array<{ id: string; metaId?: string; name: string; file: string; artifactId?: string }> = [];
+    const items: Array<{
+      id: string;
+      metaId?: string;
+      name: string;
+      file: string;
+      artifactId?: string;
+    }> = [];
 
     // 从 DB 获取 file 型产出物映射（contentRef → artifactId），供 slug 反查
     const fileArtifactVersions = await this.prisma.artifactVersion.findMany({
       where: { artifact: { taskId, type: 'file' } },
-      select: { contentRef: true, artifact: { select: { id: true, currentVersion: true } }, version: true },
+      select: {
+        contentRef: true,
+        artifact: { select: { id: true, currentVersion: true } },
+        version: true,
+      },
     });
     const contentRefToArtifact = new Map<string, string>();
     for (const r of fileArtifactVersions) {
@@ -229,23 +271,41 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
           let metaId: string | undefined;
           try {
             const content = await fsp.readFile(tsxFile, 'utf8');
-            const metaMatch = content.match(/export\s+const\s+meta\s*=\s*(\{[^}]+\})/s);
+            const metaMatch = content.match(
+              /export\s+const\s+meta\s*=\s*(\{[^}]+\})/s,
+            );
             if (metaMatch) {
-              const nameMatch = metaMatch[1].match(/name\s*:\s*["']([^"']+)["']/);
+              const nameMatch = metaMatch[1].match(
+                /name\s*:\s*["']([^"']+)["']/,
+              );
               if (nameMatch?.[1]) displayName = nameMatch[1];
               const idMatch = metaMatch[1].match(/id\s*:\s*["']([^"']+)["']/);
               if (idMatch?.[1]) metaId = idMatch[1].trim();
             }
-          } catch { /* 读取失败用目录名兜底 */ }
+          } catch {
+            /* 读取失败用目录名兜底 */
+          }
           let artifactId: string | undefined;
           for (const [ref, aid] of contentRefToArtifact) {
-            if (ref.includes(`/${name}/`) || ref.endsWith(`/${name}/index.tsx`) || ref.endsWith(`/${name}.tsx`)) {
+            if (
+              ref.includes(`/${name}/`) ||
+              ref.endsWith(`/${name}/index.tsx`) ||
+              ref.endsWith(`/${name}.tsx`)
+            ) {
               artifactId = aid;
               break;
             }
           }
-          items.push({ id: name, metaId, name: displayName, file: `${name}/index.tsx`, artifactId });
-        } catch { /* index.tsx 不存在 → 跳过 */ }
+          items.push({
+            id: name,
+            metaId,
+            name: displayName,
+            file: `${name}/index.tsx`,
+            artifactId,
+          });
+        } catch {
+          /* index.tsx 不存在 → 跳过 */
+        }
       }
     } catch {
       // 目录不存在（该任务无原型产出物）→ 继续扫描 JSON
@@ -253,13 +313,20 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
 
     // 扫描旧 DSL JSON：prototypes/<name>.json（向后兼容）
     try {
-      const files = (await fsp.readdir(protoDir)).filter((f) => /^[a-z0-9_-]+\.json$/.test(f));
+      const files = (await fsp.readdir(protoDir)).filter((f) =>
+        /^[a-z0-9_-]+\.json$/.test(f),
+      );
       files.sort();
       for (const f of files) {
         const id = f.replace(/\.json$/, '');
         try {
-          const doc = JSON.parse(await fsp.readFile(join(protoDir, f), 'utf8')) as { name?: unknown };
-          const name = typeof doc?.name === 'string' && doc.name.trim() ? doc.name.trim() : id;
+          const doc = JSON.parse(
+            await fsp.readFile(join(protoDir, f), 'utf8'),
+          ) as { name?: unknown };
+          const name =
+            typeof doc?.name === 'string' && doc.name.trim()
+              ? doc.name.trim()
+              : id;
           let artifactId: string | undefined;
           for (const [ref, aid] of contentRefToArtifact) {
             if (ref.endsWith(`/${f}`)) {
@@ -272,16 +339,24 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
           this.logger.warn(`[docs-mirror] 原型 ${f} 解析失败，跳过列表`);
         }
       }
-    } catch { /* 无 JSON 文件 */ }
+    } catch {
+      /* 无 JSON 文件 */
+    }
 
     items.sort((a, b) => a.id.localeCompare(b.id));
     return items;
   }
 
   /** 读单个原型文件内容（鉴权在 controller；白名单防路径穿越）。支持 TSX 和旧 DSL JSON。 */
-  async readPrototype(taskId: string, filePath: string): Promise<string | null> {
+  async readPrototype(
+    taskId: string,
+    filePath: string,
+  ): Promise<string | null> {
     // 白名单：仅允许 <name>/index.tsx（TSX 目录）或 <name>.json（旧 DSL）
-    if (!/^[a-z0-9_-]+\/index\.tsx$/.test(filePath) && !/^[a-z0-9_-]+\.json$/.test(filePath)) {
+    if (
+      !/^[a-z0-9_-]+\/index\.tsx$/.test(filePath) &&
+      !/^[a-z0-9_-]+\.json$/.test(filePath)
+    ) {
       return null;
     }
     const fullPath = join(this.docsRoot, taskId, 'prototypes', filePath);
@@ -296,7 +371,11 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
    * TSX 原型目录名（白名单 [a-z0-9_-]）：
    * 优先取产出物文件名去 `.tsx` 后缀，不可用时从标题派生；标题弱名追加 artifact 后缀防冲突。
    */
-  private prototypeSlug(title: string, artifactId: string, contentRef: string): string {
+  private prototypeSlug(
+    title: string,
+    artifactId: string,
+    contentRef: string,
+  ): string {
     const base = String(contentRef).split('/').pop() ?? '';
     let slug = base
       .replace(/\.tsx$/i, '')
@@ -308,7 +387,9 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
       slug = this.toSlug(title);
     }
     if (!slug || slug === 'doc') {
-      const suffix = String(artifactId).replace(/[^a-z0-9]/gi, '').slice(-8);
+      const suffix = String(artifactId)
+        .replace(/[^a-z0-9]/gi, '')
+        .slice(-8);
       slug = suffix ? `proto-${suffix}` : 'proto';
     }
     return slug;
@@ -319,7 +400,11 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
    * 优先取产出物文件名去 `.prototype.json`（my-proto.prototype.json → my-proto.json），
    * 文件名不可用（中文/空）时从标题派生；标题弱名（doc 兜底）追加 artifact 后缀防冲突。
    */
-  private prototypeFileName(title: string, artifactId: string, contentRef: string): string {
+  private prototypeFileName(
+    title: string,
+    artifactId: string,
+    contentRef: string,
+  ): string {
     const base = String(contentRef).split('/').pop() ?? '';
     let slug = base
       .replace(/\.prototype\.json$/i, '')
@@ -332,22 +417,26 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
       slug = this.toSlug(title);
     }
     if (!slug || slug === 'doc') {
-      const suffix = String(artifactId).replace(/[^a-z0-9]/gi, '').slice(-8);
+      const suffix = String(artifactId)
+        .replace(/[^a-z0-9]/gi, '')
+        .slice(-8);
       slug = suffix ? `proto-${suffix}` : 'proto';
     }
     return `${slug}.json`;
   }
 
   /** 生成任务文档站的动态注册表 DocDef[]（与 prototype-viewer DocDef 形状对齐）。 */
-  async buildRegistry(taskId: string): Promise<Array<{
-    id: string;
-    name: string;
-    kind: string;
-    description: string;
-    file: string;
-    order: number;
-    artifactId?: string;
-  }>> {
+  async buildRegistry(taskId: string): Promise<
+    Array<{
+      id: string;
+      name: string;
+      kind: string;
+      description: string;
+      file: string;
+      order: number;
+      artifactId?: string;
+    }>
+  > {
     const rows = await this.prisma.artifactVersion.findMany({
       where: { artifact: { taskId, type: { in: ['doc', 'file'] } } },
       select: {
@@ -362,7 +451,10 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         r.version === r.artifact.currentVersion &&
         /\.(md|markdown)$/i.test(r.contentRef ?? '')
       ) {
-        current.set(r.artifact.id, { id: r.artifact.id, title: r.artifact.title });
+        current.set(r.artifact.id, {
+          id: r.artifact.id,
+          title: r.artifact.title,
+        });
       }
     }
     const seen = new Set<string>();
@@ -370,7 +462,9 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
       const base = this.docIdFor(a.title, a.id);
       let id = base;
       if (seen.has(base)) {
-        const suffix = String(a.id).replace(/[^a-z0-9]/gi, '').slice(-8);
+        const suffix = String(a.id)
+          .replace(/[^a-z0-9]/gi, '')
+          .slice(-8);
         id = suffix ? `${base}-${suffix}` : base;
         let counter = 1;
         while (seen.has(id)) {
@@ -405,10 +499,11 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
   docIdFor(title: string, artifactId: string): string {
     const slug = this.toSlug(title);
     if (slug === 'doc' && artifactId) {
-      const suffix = String(artifactId).replace(/[^a-z0-9]/gi, '').slice(-8);
+      const suffix = String(artifactId)
+        .replace(/[^a-z0-9]/gi, '')
+        .slice(-8);
       return suffix ? `doc-${suffix}` : 'doc';
     }
     return slug;
   }
-
 }

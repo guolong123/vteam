@@ -20,7 +20,9 @@ describe('FileStorageService（文件存储基础：文件名生成 / 白名单 
   describe('generateFilename', () => {
     it('生成 UUID + 保留扩展名（杜绝重名/路径穿越）', () => {
       const name = FileStorageService.generateFilename('报告.PDF');
-      expect(name).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.pdf$/);
+      expect(name).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.pdf$/,
+      );
       expect(name).not.toContain('报告');
     });
 
@@ -31,20 +33,32 @@ describe('FileStorageService（文件存储基础：文件名生成 / 白名单 
   });
 
   describe('assertAllowed（扩展名白名单）', () => {
-    it.each(['a.pdf', 'b.docx', 'c.xlsx', 'd.csv', 'e.png', 'f.jpg', 'g.md', 'h.txt'])(
-      '接受白名单文件 %s',
-      (originalname) => {
-        expect(() =>
-          FileStorageService.assertAllowed({ originalname, mimetype: 'application/octet-stream' }),
-        ).not.toThrow();
-      },
-    );
+    it.each([
+      'a.pdf',
+      'b.docx',
+      'c.xlsx',
+      'd.csv',
+      'e.png',
+      'f.jpg',
+      'g.md',
+      'h.txt',
+    ])('接受白名单文件 %s', (originalname) => {
+      expect(() =>
+        FileStorageService.assertAllowed({
+          originalname,
+          mimetype: 'application/octet-stream',
+        }),
+      ).not.toThrow();
+    });
 
     it.each(['a.exe', 'b.html', 'c.js', 'd.sh', 'e', 'f.'])(
       '拒绝非法/无扩展名文件 %s → 400 UPLOAD_FILE_TYPE_NOT_ALLOWED',
       (originalname) => {
         expect(() =>
-          FileStorageService.assertAllowed({ originalname, mimetype: 'application/octet-stream' }),
+          FileStorageService.assertAllowed({
+            originalname,
+            mimetype: 'application/octet-stream',
+          }),
         ).toThrow(
           expect.objectContaining({
             response: expect.objectContaining({
@@ -57,7 +71,10 @@ describe('FileStorageService（文件存储基础：文件名生成 / 白名单 
 
     it('不依赖 mimetype（octet-stream 亦按扩展名放行，扩展名是可控类型信号）', () => {
       expect(() =>
-        FileStorageService.assertAllowed({ originalname: 'a.pdf', mimetype: 'application/octet-stream' }),
+        FileStorageService.assertAllowed({
+          originalname: 'a.pdf',
+          mimetype: 'application/octet-stream',
+        }),
       ).not.toThrow();
     });
   });
@@ -74,14 +91,18 @@ describe('FileStorageService（文件存储基础：文件名生成 / 白名单 
       const options = FileStorageService.buildMulterOptions();
       const accept = await new Promise<{ err: Error | null; ok: boolean }>(
         (resolve) =>
-          options.fileFilter(null, { originalname: 'ok.pdf', mimetype: 'application/pdf' }, (err, ok) =>
-            resolve({ err, ok }),
+          options.fileFilter(
+            null,
+            { originalname: 'ok.pdf', mimetype: 'application/pdf' },
+            (err, ok) => resolve({ err, ok }),
           ),
       );
       const reject = await new Promise<{ err: Error | null; ok: boolean }>(
         (resolve) =>
-          options.fileFilter(null, { originalname: 'bad.exe', mimetype: 'application/octet-stream' }, (err, ok) =>
-            resolve({ err, ok }),
+          options.fileFilter(
+            null,
+            { originalname: 'bad.exe', mimetype: 'application/octet-stream' },
+            (err, ok) => resolve({ err, ok }),
           ),
       );
       expect(accept).toEqual({ err: null, ok: true });
@@ -135,16 +156,20 @@ describe('FileStorageService（文件存储基础：文件名生成 / 白名单 
 
     it('http(s):// 完整 URL → 原样（外部引用）', () => {
       expect(
-        FileStorageService.normalizeFileRef('https://files.example.com/report.pdf'),
+        FileStorageService.normalizeFileRef(
+          'https://files.example.com/report.pdf',
+        ),
       ).toBe('https://files.example.com/report.pdf');
-      expect(FileStorageService.normalizeFileRef('http://localhost:3000/x.png')).toBe(
-        'http://localhost:3000/x.png',
-      );
+      expect(
+        FileStorageService.normalizeFileRef('http://localhost:3000/x.png'),
+      ).toBe('http://localhost:3000/x.png');
     });
 
     it('worker 工作区原始路径 → 提取 basename 归一为 /uploads/<basename>', () => {
       expect(
-        FileStorageService.normalizeFileRef('/data/workspace/tasks/t_1/report.PDF'),
+        FileStorageService.normalizeFileRef(
+          '/data/workspace/tasks/t_1/report.PDF',
+        ),
       ).toBe('/uploads/report.PDF');
       expect(
         FileStorageService.normalizeFileRef('C:\\workspace\\patch.txt'),
@@ -158,9 +183,9 @@ describe('FileStorageService（文件存储基础：文件名生成 / 白名单 
     });
 
     it('无扩展名 / 空串 → 原样（不伪造可访问 URL）', () => {
-      expect(FileStorageService.normalizeFileRef('/data/tasks/t_1/README')).toBe(
-        '/data/tasks/t_1/README',
-      );
+      expect(
+        FileStorageService.normalizeFileRef('/data/tasks/t_1/README'),
+      ).toBe('/data/tasks/t_1/README');
       expect(FileStorageService.normalizeFileRef('')).toBe('');
     });
   });
@@ -171,7 +196,9 @@ describe('FileStorageService（文件存储基础：文件名生成 / 白名单 
     });
 
     it('/uploads/ 引用 → name=basename + ext，size 读磁盘（文件存在）', () => {
-      const spy = jest.spyOn(fs, 'statSync').mockReturnValue({ size: 4096 } as never);
+      const spy = jest
+        .spyOn(fs, 'statSync')
+        .mockReturnValue({ size: 4096 } as never);
       const meta = FileStorageService.describeFileRef('/uploads/uuid.pdf');
       expect(meta).toEqual({ name: 'uuid.pdf', ext: 'pdf', size: 4096 });
       spy.mockRestore();

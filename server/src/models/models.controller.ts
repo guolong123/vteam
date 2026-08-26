@@ -36,7 +36,9 @@ export class ModelsController {
    *   → 200 {items, total, page, pageSize}
    */
   @Get()
-  @ApiOperation({ summary: '模型目录列表（enabled 过滤 + 搜索 + 分页，成员只读）' })
+  @ApiOperation({
+    summary: '模型目录列表（enabled 过滤 + 搜索 + 分页，成员只读）',
+  })
   findAll(@Query() query: QueryModelsDto) {
     return this.modelsService.findAll(query);
   }
@@ -63,7 +65,9 @@ export class ModelsController {
    */
   @Delete('providers/:providerID/credentials')
   @UseGuards(AdminGuard)
-  @ApiOperation({ summary: '按 provider 吊销凭据（不依赖模型 id，AdminGuard）' })
+  @ApiOperation({
+    summary: '按 provider 吊销凭据（不依赖模型 id，AdminGuard）',
+  })
   revokeCredentialByProvider(@Param('providerID') providerID: string) {
     return this.modelsService.revokeCredentialByProvider(providerID);
   }
@@ -75,7 +79,9 @@ export class ModelsController {
    */
   @Post('sync')
   @UseGuards(AdminGuard)
-  @ApiOperation({ summary: '实时同步 opencode 模型（live 拉取 + 孤儿禁用，AdminGuard）' })
+  @ApiOperation({
+    summary: '实时同步 opencode 模型（live 拉取 + 孤儿禁用，AdminGuard）',
+  })
   syncLive() {
     return this.modelsService.syncLiveModels();
   }
@@ -106,7 +112,9 @@ export class ModelsController {
    */
   @Patch(':id')
   @UseGuards(AdminGuard)
-  @ApiOperation({ summary: '更新模型目录条目（编辑/启停，部分更新，AdminGuard）' })
+  @ApiOperation({
+    summary: '更新模型目录条目（编辑/启停，部分更新，AdminGuard）',
+  })
   update(@Param('id') id: string, @Body() dto: UpdateModelDto) {
     return this.modelsService.update(id, dto);
   }
@@ -118,7 +126,9 @@ export class ModelsController {
    */
   @Delete(':id')
   @UseGuards(AdminGuard)
-  @ApiOperation({ summary: '删除模型目录条目（物理删除，清理 availability，AdminGuard）' })
+  @ApiOperation({
+    summary: '删除模型目录条目（物理删除，清理 availability，AdminGuard）',
+  })
   remove(@Param('id') id: string) {
     return this.modelsService.remove(id);
   }
@@ -131,11 +141,10 @@ export class ModelsController {
    */
   @Post(':id/credentials')
   @UseGuards(AdminGuard)
-  @ApiOperation({ summary: '保存模型 provider 凭据（AES-256-GCM 加密存储 + C5 下发）' })
-  setCredential(
-    @Param('id') id: string,
-    @Body() dto: SetModelCredentialDto,
-  ) {
+  @ApiOperation({
+    summary: '保存模型 provider 凭据（AES-256-GCM 加密存储 + C5 下发）',
+  })
+  setCredential(@Param('id') id: string, @Body() dto: SetModelCredentialDto) {
     return this.modelsService.setCredential(
       id,
       dto.token,

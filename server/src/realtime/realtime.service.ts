@@ -145,9 +145,7 @@ export class RealtimeService implements OnModuleInit {
     if (!err || typeof err !== 'object') return false;
     const anyErr = err as { code?: string; meta?: { target?: unknown } };
     if (anyErr.code !== 'P2002') return false;
-    const target = Array.isArray(anyErr.meta?.target)
-      ? anyErr.meta.target
-      : [];
+    const target = Array.isArray(anyErr.meta?.target) ? anyErr.meta.target : [];
     // 主键冲突（PRIMARY）才自愈重试；其他唯一约束冲突（如业务字段）不吞
     return target.includes('PRIMARY');
   }
@@ -303,8 +301,7 @@ export class RealtimeService implements OnModuleInit {
       return () => false;
     }
     const visible = new Set(visibleProjectIds);
-    return (event) =>
-      event.projectId !== null && visible.has(event.projectId);
+    return (event) => event.projectId !== null && visible.has(event.projectId);
   }
 
   /**

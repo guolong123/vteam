@@ -1,11 +1,9 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
-import {
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-} from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ModuleRef } from '@nestjs/core';
+import { WecomAibotAdapter } from '../message-channels/adapters/wecom-aibot.adapter';
 import { Prisma } from '@prisma/client';
 import { validateArtifactDeclaration } from '../artifacts/artifacts.service';
 import { ArtifactsService } from '../artifacts/artifacts.service';
@@ -22,20 +20,32 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
-import { WorkerClient, WorkerEndpointRef, WorkerUnavailableException } from '../workers/worker.client';
+import {
+  WorkerClient,
+  WorkerEndpointRef,
+  WorkerUnavailableException,
+} from '../workers/worker.client';
 import {
   AgentStatusPayload,
   SessionActivityPayload,
   TaskCompletedPayload,
   WorkerEventIngress,
 } from '../workers/worker-event.ingress';
-import { AssignmentRequirement, WorkersService } from '../workers/workers.service';
+import {
+  AssignmentRequirement,
+  WorkersService,
+} from '../workers/workers.service';
 import { renderPersonaSection } from '../agents/persona.constants';
 import { EXECUTION_MODES } from '../plans/plan.constants';
-import { DispatchRequest, DispatchResult, MessageDispatcher } from './message-dispatcher';
+import {
+  DispatchRequest,
+  DispatchResult,
+  MessageDispatcher,
+} from './message-dispatcher';
 import { inferErrorType, isQuotaError } from '../workers/infer-error-type';
 import { extractConclusionParts, normalizeParts } from './message-parts';
 import { sanitizeWorkDirName } from '../tasks/work-dir.util';
+
 
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
 const MESSAGE_ID_PREFIX = 'm';
@@ -69,15 +79,16 @@ export const GLOBAL_SYSTEM_INSTRUCTIONS = [
   'fileRef 可选：向群聊发送文件时直接传入文件路径（如 /tmp/opencode/x.txt），文件将作为群聊附件并自动归档为产出物。',
   '不调用工具发布则回复仅保留在私聊会话（不公开）。',
   '【@ 定向机制】群聊中 @ 你的消息会定向分发给你。需要定向触发/通知任务内的其他 Agent 时，' +
-  '调用 vteam MCP 的 notify_agent 工具（参数 {taskId: 你的任务ID, targetInstanceId: 目标实例 id（ta_ 前缀，见 task_context 的 agentMembers）, content: 消息内容}）' +
-  '——目标实例会收到你的消息并开始执行；回复时也可用 @用户名 在群聊中定向回复特定成员。' +
-  '【@用户】需要用户确认/决策或完成后通知时，在 group_post 的 content 中写 @user 或 @all（系统动态注入当前任务相关用户，无需写死 @admin），也可写 @用户名 精确@某人；命中后消息对该用户高亮（蓝底+左蓝条+★@你）。',
+    '调用 vteam MCP 的 notify_agent 工具（参数 {taskId: 你的任务ID, targetInstanceId: 目标实例 id（ta_ 前缀，见 task_context 的 agentMembers）, content: 消息内容}）' +
+    '——目标实例会收到你的消息并开始执行；回复时也可用 @用户名 在群聊中定向回复特定成员。' +
+    '【@用户】需要用户确认/决策或完成后通知时，在 group_post 的 content 中写 @user 或 @all（系统动态注入当前任务相关用户，无需写死 @admin），也可写 @用户名 精确@某人；命中后消息对该用户高亮（蓝底+左蓝条+★@你）。',
   '【Issue 管理】任务内 issue 协作：创建 issue 调 vteam MCP 的 issue_create（参数 {taskId, selfInstanceId, title, description?, tags?, assigneeInstanceId?}）；查询 issue_list/issue_get；更新 issue_update；状态流转 issue_transition（action: start/resolve/close/reopen/reject）。产品/测试 Agent 负责创建需求或缺陷 issue 并指派（assigneeInstanceId 为目标实例 id），研发 Agent 处理指派给自己的 issue 并流转状态。issue 标签（tags）标识类型（如 需求/缺陷/优化）。',
   '【任务状态】主 Agent 可调用 vteam MCP 的 task_transition 工具（参数 {taskId, selfInstanceId, action: start/mark-pending-review/accept/reject/archive, reason?}）流转任务状态：start 开始 / mark-pending-review 提交验收 / accept 验收通过 / reject 驳回（可附 reason）/ archive 归档。仅主实例可调用 task_transition，其余成员调用将返回 403 提示（请知会主实例或由管理员在任务管理界面操作）。',
   '【持久化目录】你运行在 k8s 容器环境中，平台为每个 Agent 分配独立的持久化工作目录（默认 /data/vteam-worker/<agent名称>，可在创建任务时指定）。' +
-  '仅该目录及挂载卷内的内容在容器重启后保留，其余路径（如 /tmp、仓库外任意路径）写入的文件重启后会丢失；' +
-  '工作产物、git clone 的仓库、脚本、产出物文件等请写入该持久化目录，提交产出物（doc/file）时 fileRef 应指向该目录内的文件。',
+    '仅该目录及挂载卷内的内容在容器重启后保留，其余路径（如 /tmp、仓库外任意路径）写入的文件重启后会丢失；' +
+    '工作产物、git clone 的仓库、脚本、产出物文件等请写入该持久化目录，提交产出物（doc/file）时 fileRef 应指向该目录内的文件。',
   '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息（含 requestId、kind、问题详情）时，调用 vteam MCP 的 question_confirm 工具（参数 {taskId, selfInstanceId, requestId, kind, answers?/response?}）决策——question 传 answers（答案数组，null=拒绝）；permission 传 response（once 允许一次 / always 总是允许 / reject 拒绝）。仅主实例可调用 question_confirm。',
+  '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名] 标记）时，请使用 wecom_reply 工具回复（参数 {taskId, selfInstanceId, text, atUser?}），不要用 group_post；wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到任务群聊，确保用户在企微端收到回复。',
   '【记忆管理】记忆只存**可复用经验**，不存会话总结。可存：怎么做（有效路径/命令/配置，下次照做）、坑与规避（错误原因+规避动作，下次不再踩）、平台硬约束（工具限制/权限边界/容量上限，下次主动绕开）。禁存：任务流水账、时间线复盘、谁做了什么、当前状态、一次性结论。开始任务/需要历史经验时，调用 memory_search（参数 {taskId, query?, level?, tags?, limit?≤5}）检索（返回含 description 索引，命中后再取 content 正文，可多次翻页）；沉淀时调用 memory_save（参数 {taskId, selfInstanceId, level, content, description?:30字摘要, tags?}）——content 写「场景 + 做法/坑 + 规避动作」，description 概括，跨任务复用写 level=project，平台通用写 level=global，任务专属写 level=task，tags 用 howto/pitfall/constraint 等类型词。遇可用记忆索引时先用 tags 精搜，再用 query 精排，单次≤5条，摘要命中再取正文。',
 ].join('\n');
 
@@ -250,6 +261,10 @@ export const GROUP_TRIGGER_INSTRUCTION =
   '群聊只会显示你通过 group_post 发布的内容，完整处理过程保留在你的私聊会话。' +
   '如需向群聊发送文件：直接调用 group_post 并携带 fileRef（{taskId, content, fileRef: "文件路径"}），文件将作为群聊附件并自动归档为产出物。';
 
+export const WECOM_TRIGGER_INSTRUCTION =
+  '【企微消息】此消息来自企业微信用户 via WeCom，请务必使用 wecom_reply 工具回复，不要使用 group_post，以确保用户在企微端收到@回复。' +
+  '参数 {taskId, selfInstanceId, text, atUser?}，text 为回复正文（支持 markdown，≤4000字），atUser 默认 true（群聊@，私聊直回）。回复会同时同步到任务群聊。';
+
 /**
  * 分派后等待回流的默认超时（D8 总超时；F3 MINOR-3：架构师 5 轮 tool 调用实测 72s > 60s，
  * 复杂任务多轮工具调用易超时 → 默认放宽至 120s，env DISPATCH_TIMEOUT_MS 可配）。
@@ -272,7 +287,7 @@ export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 30 * 60_000;
 /** 空闲判死扫描周期（定期遍历 lastActivityAt，检查超时会话）。 */
 export const IDLE_SCAN_INTERVAL_MS = 60_000;
 
-  /** F3 MINOR-3：任务工作目录根（env WORK_DIR，默认 /data/vteam-worker）。
+/** F3 MINOR-3：任务工作目录根（env WORK_DIR，默认 /data/vteam-worker）。
  *  任务级独立工作目录 = <根>/tasks/<taskId>（server 侧 mkdir -p 保证存在），
  *  作为 prompt_async 的 directory 传入——防模型在仓库根真实写文件污染（F4 零污染关键）。 */
 export const DEFAULT_TASK_WORK_DIR = '/data/vteam-worker';
@@ -297,13 +312,16 @@ interface PollMessageShape {
 }
 
 /** OBS-009：模型调用失败时的兜底错误文案（serve 未携带具体错误信息时使用）。 */
-export const MODEL_FAILURE_FALLBACK_MESSAGE = '模型调用失败（serve 返回 error）';
+export const MODEL_FAILURE_FALLBACK_MESSAGE =
+  '模型调用失败（serve 返回 error）';
 
 /**
  * F2 C1：step-finish(reason=stop) 完成判定（移植 worker prompt-await.ts findFinish）。
  * 只认 assistant 消息（user 消息带 step-finish 不算）+ reason===stop。
  */
-export function findFinish(messages: unknown[]): PollMessageShape['parts'][number] | undefined {
+export function findFinish(
+  messages: unknown[],
+): PollMessageShape['parts'][number] | undefined {
   for (const raw of messages) {
     const m = raw as PollMessageShape;
     if (m.info?.role !== 'assistant') {
@@ -417,7 +435,11 @@ export function extractArtifacts(text: string): Array<Record<string, unknown>> {
   for (const m of text.matchAll(bracketRe)) {
     try {
       const parsed = JSON.parse(m[1].trim()) as Record<string, unknown>;
-      if (parsed && typeof parsed === 'object' && validateArtifactDeclaration(parsed).valid) {
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        validateArtifactDeclaration(parsed).valid
+      ) {
         push(parsed);
       }
     } catch {
@@ -470,7 +492,10 @@ export function extractJsonByType(
       depth -= 1;
       if (depth === 0) {
         try {
-          return JSON.parse(text.slice(start, i + 1)) as Record<string, unknown>;
+          return JSON.parse(text.slice(start, i + 1)) as Record<
+            string,
+            unknown
+          >;
         } catch {
           return null;
         }
@@ -515,7 +540,9 @@ export function stripJsonByType(text: string, typeValue: string): string {
  *  返回 {content, fileRef?}（要转发到群聊的对外消息；fileRef 指向随产出物归档的文件，
  *  用于群聊消息附带附件）；无声明 → null（回复留在私聊独白，不自动公开）。
  */
-export function extractGroupPost(text: string): { content: string; fileRef?: string } | null {
+export function extractGroupPost(
+  text: string,
+): { content: string; fileRef?: string } | null {
   if (!text) {
     return null;
   }
@@ -578,7 +605,10 @@ function extractAllJsonObjects(
           try {
             found.push({
               pos: start,
-              obj: JSON.parse(text.slice(start, i + 1)) as Record<string, unknown>,
+              obj: JSON.parse(text.slice(start, i + 1)) as Record<
+                string,
+                unknown
+              >,
             });
           } catch {
             // 非合法 JSON：跳过
@@ -588,9 +618,7 @@ function extractAllJsonObjects(
       }
     }
   }
-  return found
-    .sort((a, b) => a.pos - b.pos)
-    .map((x) => x.obj);
+  return found.sort((a, b) => a.pos - b.pos).map((x) => x.obj);
 }
 
 /** 消息行（messages 表；content/mentions 为 Json 列），对齐 chat.service 的 MessageRow 契约。 */
@@ -653,7 +681,10 @@ export function escapeXml(text: string): string {
  *   本地通知（SSE 的 agent.loading/agent.error emit 由 T9 ingress 完成，此处不重复广播防双写）。
  */
 @Injectable()
-export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestroy {
+export class WorkerDispatcher
+  extends MessageDispatcher
+  implements OnModuleDestroy
+{
   private readonly logger = new Logger(WorkerDispatcher.name);
 
   /** doclib 注入上限（12 篇 §8.3 可配；公开字段便于测试覆盖）。 */
@@ -703,14 +734,21 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
    * T4 实例语义：登记集合存**实例 id**（TaskAgent.id，ta_ 前缀）。instanceId 由调用方
    * 传入 `session.taskAgentId`；存量会话（taskAgentId NULL）回退 agentId 保持兼容。
    */
-  registerExecution(workerId: string, taskId: string, instanceId: string): void {
+  registerExecution(
+    workerId: string,
+    taskId: string,
+    instanceId: string,
+  ): void {
     const key = this.executionKey(workerId, taskId);
     const entry = this.activeExecutions.get(key);
     if (entry) {
       entry.agents.add(instanceId);
       entry.at = Date.now();
     } else {
-      this.activeExecutions.set(key, { agents: new Set([instanceId]), at: Date.now() });
+      this.activeExecutions.set(key, {
+        agents: new Set([instanceId]),
+        at: Date.now(),
+      });
     }
   }
 
@@ -769,6 +807,8 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     private readonly artifactsService: ArtifactsService,
     config: ConfigService,
     ingress: WorkerEventIngress,
+    @Optional()
+    private readonly moduleRef?: ModuleRef,
   ) {
     super();
     const maxBytes = config.get<number>('DOCLIB_MAX_BYTES');
@@ -807,13 +847,17 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // F3 MINOR-3：任务工作目录根（WORK_DIR），任务目录 = <根>/tasks/<taskId>
     const workDir = config.get<string>('WORK_DIR');
     this.taskWorkDirRoot =
-      typeof workDir === 'string' && workDir.trim() ? workDir.trim() : DEFAULT_TASK_WORK_DIR;
+      typeof workDir === 'string' && workDir.trim()
+        ? workDir.trim()
+        : DEFAULT_TASK_WORK_DIR;
 
     // T9 接线：注册回流回调（D5——落库+广播 chat.message.new+emitFinal 归本类回流处理器，
     // 防双写；agent.status 仅本地回调通知，SSE emit 由 ingress 完成）
     ingress.onTaskCompleted((payload) => {
       void this.handleTaskCompleted(payload).catch((err: unknown) =>
-        this.logger.error(`task.completed 回流处理失败: ${this.describeError(err)}`),
+        this.logger.error(
+          `task.completed 回流处理失败: ${this.describeError(err)}`,
+        ),
       );
     });
     ingress.onAgentStatus((payload) => {
@@ -899,14 +943,22 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       select: { id: true, agentId: true },
     });
     if (!session) {
-      throw new Error(`实例 ${input.targetInstanceId} 无会话（任务 ${input.taskId}）`);
+      throw new Error(
+        `实例 ${input.targetInstanceId} 无会话（任务 ${input.taskId}）`,
+      );
     }
     await this.dispatch({
       messageId: await this.idGen.nextId(MESSAGE_ID_PREFIX),
       channelId: input.channelId,
       taskId: input.taskId,
       text: input.text,
-      targets: [{ agentId: session.agentId, instanceId: input.targetInstanceId, sessionId: session.id }],
+      targets: [
+        {
+          agentId: session.agentId,
+          instanceId: input.targetInstanceId,
+          sessionId: session.id,
+        },
+      ],
     });
   }
 
@@ -934,7 +986,12 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // T3 实例语义：taskAgentId = 当前实例（团队/主实例判定、身份注入依据）。
     const session = await this.prisma.session.findUnique({
       where: { id: target.sessionId },
-      select: { id: true, workerId: true, instanceRef: true, taskAgentId: true },
+      select: {
+        id: true,
+        workerId: true,
+        instanceRef: true,
+        taskAgentId: true,
+      },
     });
     if (!session) {
       throw new Error(`会话 ${target.sessionId} 不存在`);
@@ -959,7 +1016,8 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       });
       overrideModelId = ta?.overrideModelId ?? null;
     }
-    const agentModelId = overrideModelId ?? (await this.resolveAgentModelId(target.agentId));
+    const agentModelId =
+      overrideModelId ?? (await this.resolveAgentModelId(target.agentId));
     const assignmentReq: AssignmentRequirement = agentModelId
       ? { modelId: agentModelId }
       : {};
@@ -968,7 +1026,9 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       // 未绑定：调度分配 worker（D3 无可用 → 抛错，调用方报错不降级 mock）
       workerId = await this.workersService.assignWorker(assignmentReq);
       if (!workerId) {
-        throw new Error('无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）');
+        throw new Error(
+          '无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）',
+        );
       }
       // 首次绑定（T12）：占位 instanceRef，opencode 会话创建后第二次 bind 写入真实 id
       await this.sessionLifecycle.bindSessionToWorker(
@@ -985,7 +1045,12 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // 此检查只命中"复用已绑定"场景（复用语义保留：在线 worker 直接复用，见单测回归用例）。
     let workerRow = await this.prisma.worker.findUnique({
       where: { id: workerId },
-      select: { id: true, status: true, capabilities: true, defaultModelId: true },
+      select: {
+        id: true,
+        status: true,
+        capabilities: true,
+        defaultModelId: true,
+      },
     });
     if (!workerRow || workerRow.status === WORKER_STATUS.OFFLINE) {
       const staleWorkerId = workerId;
@@ -996,11 +1061,18 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       await this.sessionLifecycle.unbindSession(target.sessionId);
       workerId = await this.workersService.assignWorker(assignmentReq);
       if (!workerId) {
-        throw new Error('无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）');
+        throw new Error(
+          '无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）',
+        );
       }
       workerRow = await this.prisma.worker.findUnique({
         where: { id: workerId },
-        select: { id: true, status: true, capabilities: true, defaultModelId: true },
+        select: {
+          id: true,
+          status: true,
+          capabilities: true,
+          defaultModelId: true,
+        },
       });
       if (!workerRow) {
         throw new Error(`worker ${workerId} 不存在`);
@@ -1019,7 +1091,9 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
 
     // 3. C7 模型解析（阶段 2）：最终模型 = Agent/模板解析结果 ?? 执行 worker 默认模型 ?? null。
     // `provider/model` → {providerID, modelID}；null 不指定模型（serve 默认）。
-    const model = this.toModelSelection(agentModelId ?? workerRow.defaultModelId ?? null);
+    const model = this.toModelSelection(
+      agentModelId ?? workerRow.defaultModelId ?? null,
+    );
 
     // 4. 提示词构造（阶段 3 迁移：按需注入——移除 doclib/群聊历史自动注入，模型经
     // vteam MCP 工具自主拉取上下文；buildDoclibContext/buildChatHistoryContext
@@ -1041,6 +1115,14 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     if (sourceChannel?.type === CHANNEL_TYPE.task_group) {
       promptBlocks.push(GROUP_TRIGGER_INSTRUCTION);
     }
+    if (request.text.includes('[WeCom:')) {
+      const wecomMatch = /\[WeCom:([^\]]+)\]/.exec(request.text);
+      const wecomUserLabel = wecomMatch ? wecomMatch[1].trim() : '';
+      const tailored = wecomUserLabel
+        ? `【企微消息】此消息来自企业微信用户 ${wecomUserLabel} via WeCom，请务必使用 wecom_reply 工具回复，不要使用 group_post，以确保用户在企微端收到@回复。参数 {taskId, selfInstanceId, text, atUser?}，atUser 默认 true（群聊@，私聊直回）。回复会同时同步到任务群聊。`
+        : WECOM_TRIGGER_INSTRUCTION;
+      promptBlocks.push(tailored);
+    }
     promptBlocks.push(request.text);
     const prompt = promptBlocks.join('\n\n');
 
@@ -1048,7 +1130,13 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     //    同 agent 多实例各自 loading（前端按实例消费，不再按 agentId 全体 loading）
     await this.realtime.broadcast(
       EVENT_TYPES.AGENT_LOADING,
-      { taskId, agentId: target.agentId, instanceId: session.taskAgentId ?? null, sessionId: target.sessionId, phase: 'thinking' },
+      {
+        taskId,
+        agentId: target.agentId,
+        instanceId: session.taskAgentId ?? null,
+        sessionId: target.sessionId,
+        phase: 'thinking',
+      },
       { type: 'task', id: taskId },
     );
     this.emitLoading({
@@ -1142,7 +1230,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // 登记活跃执行（platform-mcp assertWorkerTask 防冒充校验依据）；completed/error 注销。
     // T4 实例语义：登记**实例 id**（session.taskAgentId）；存量会话（taskAgentId NULL）
     // 回退 agentId 保持兼容（防旧会话防冒充失效）。
-    this.registerExecution(workerId, taskId, session.taskAgentId ?? target.agentId);
+    this.registerExecution(
+      workerId,
+      taskId,
+      session.taskAgentId ?? target.agentId,
+    );
     // 私聊 SSE 不刷新修复：上一轮失败残留的 processing 消息若被 task.completed 复用，
     // 本轮回复会写入旧消息（createdAt 保留上轮时间）→ 前端按 createdAt 排序后新回复被
     // 排到历史中间，私聊页底部不刷新。新一轮 dispatch 前清理目标频道残留 processing。
@@ -1165,23 +1257,46 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     let memoryIndex: string | null = null;
     try {
       const projectId = (taskRow as any)?.projectId as string | undefined;
-      const countWhere = (level: string, tid?: string | null, pid?: string | null) => {
+      const countWhere = (
+        level: string,
+        tid?: string | null,
+        pid?: string | null,
+      ) => {
         if (level === 'task') return { level, taskId: tid, deletedAt: null };
-        if (level === 'project') return { level, projectId: pid, deletedAt: null };
+        if (level === 'project')
+          return { level, projectId: pid, deletedAt: null };
         return { level, deletedAt: null };
       };
       const [taskCnt, projCnt, globCnt, recent] = await Promise.all([
-        this.prisma.memory.count({ where: countWhere('task', taskId, projectId) } as any),
-        projectId ? this.prisma.memory.count({ where: countWhere('project', null, projectId) } as any) : Promise.resolve(0),
-        this.prisma.memory.count({ where: countWhere('global', null, null) } as any),
+        this.prisma.memory.count({
+          where: countWhere('task', taskId, projectId),
+        } as any),
+        projectId
+          ? this.prisma.memory.count({
+              where: countWhere('project', null, projectId),
+            } as any)
+          : Promise.resolve(0),
+        this.prisma.memory.count({
+          where: countWhere('global', null, null),
+        } as any),
         this.prisma.memory.findMany({
           where: {
             deletedAt: null,
-            OR: [{ level: 'task', taskId }, ...(projectId ? [{ level: 'project', projectId }] : []), { level: 'global' }],
+            OR: [
+              { level: 'task', taskId },
+              ...(projectId ? [{ level: 'project', projectId }] : []),
+              { level: 'global' },
+            ],
           } as any,
           orderBy: { createdAt: 'desc' },
           take: 5,
-          select: { id: true, level: true, description: true, content: true, tags: true },
+          select: {
+            id: true,
+            level: true,
+            description: true,
+            content: true,
+            tags: true,
+          },
         } as any),
       ]);
       const tagMap = new Map<string, number>();
@@ -1189,12 +1304,21 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         const tags = Array.isArray(r.tags) ? (r.tags as string[]) : [];
         for (const t of tags) tagMap.set(t, (tagMap.get(t) ?? 0) + 1);
       }
-      const topTags = [...tagMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k]) => k);
-      const lines = (recent as any[]).map((r) => `- [${r.level}] ${r.description || String(r.content).slice(0, 60)} (tags:${Array.isArray(r.tags) ? (r.tags as string[]).join(',') : '-'})`);
+      const topTags = [...tagMap.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([k]) => k);
+      const lines = (recent as any[]).map(
+        (r) =>
+          `- [${r.level}] ${r.description || String(r.content).slice(0, 60)} (tags:${Array.isArray(r.tags) ? (r.tags as string[]).join(',') : '-'})`,
+      );
       if (taskCnt + projCnt + globCnt > 0) {
         memoryIndex =
           `【可用记忆索引 本任务可见 task:${taskCnt} project:${projCnt} global:${globCnt}${topTags.length ? ` Top tags:${topTags.join(',')}` : ''}】\n` +
-          (lines.length ? lines.join('\n') + '\n按需 memory_search({taskId, level/tags/query, limit≤5}) 拉正文，摘要命中再取 content。' : '暂无记忆正文。');
+          (lines.length
+            ? lines.join('\n') +
+              '\n按需 memory_search({taskId, level/tags/query, limit≤5}) 拉正文，摘要命中再取 content。'
+            : '暂无记忆正文。');
         if (memoryIndex.length > 1200) memoryIndex = memoryIndex.slice(0, 1200);
       }
     } catch {}
@@ -1228,7 +1352,13 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // 8. loading(operating)（工具执行阶段，FR-20）→ 回流超时 watchdog
     await this.realtime.broadcast(
       EVENT_TYPES.AGENT_LOADING,
-      { taskId, agentId: target.agentId, instanceId: session.taskAgentId ?? null, sessionId: target.sessionId, phase: 'operating' },
+      {
+        taskId,
+        agentId: target.agentId,
+        instanceId: session.taskAgentId ?? null,
+        sessionId: target.sessionId,
+        phase: 'operating',
+      },
       { type: 'task', id: taskId },
     );
     this.emitLoading({
@@ -1260,7 +1390,9 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
   async handleTaskCompleted(payload: TaskCompletedPayload): Promise<void> {
     const { taskId, sessionId, channelId } = payload;
     if (!taskId) {
-      this.logger.error(`task.completed 缺少 taskId，无法处理：${JSON.stringify(payload)}`);
+      this.logger.error(
+        `task.completed 缺少 taskId，无法处理：${JSON.stringify(payload)}`,
+      );
       return;
     }
     // F2 C1（CRITICAL）：双通道幂等——自持轮询与 ingress task.completed 可能同时到达，
@@ -1298,7 +1430,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     }
     // 活跃执行注销（该实例已完成，MCP 落库类工具不再允许以它身份调用）
     if (typeof payload.workerId === 'string' && payload.workerId) {
-      this.unregisterExecution(payload.workerId, taskId, executionRef ?? agentId);
+      this.unregisterExecution(
+        payload.workerId,
+        taskId,
+        executionRef ?? agentId,
+      );
     }
     this.clearPendingWatchdog(taskId, agentId);
     const text = payload.text ?? '';
@@ -1310,7 +1446,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // 2~4. 落库 + 广播 + emitFinal（频道缺失时跳过落库，产出物仍归档）
     // 架构：agent 最终回复落 private 会话频道（内心独白结尾）；群聊触发的处理额外
     // 转发最终结果到群聊（对外消息，见 forwardToGroup）。resolveChannel 固定 private 优先。
-    const channel = await this.resolveChannel(taskId, agentId, sessionTaskAgentId);
+    const channel = await this.resolveChannel(
+      taskId,
+      agentId,
+      sessionTaskAgentId,
+    );
     // 群聊回复只经 MCP group_post 工具直发：正文独白仅落 private 会话频道（内心独白）。
     // 任务未创建该 agent private 频道（resolveChannel 回退群聊）时跳过正文落库——群聊
     // 只展示 ACK + 工具直发内容，不再把私聊正文兜底写进群聊（曾致群聊每人 3 条：
@@ -1333,7 +1473,8 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         // 声明 → 仅声明内容转发群聊（对外消息）；无声明 → 不公开，回复留在私聊独白。
         // 私聊独白落库文本移除协议标签（stripGroupPostDeclarations），不显示 JSON/标签。
         groupPost = extractGroupPost(text);
-        displayText = groupPost !== null ? stripGroupPostDeclarations(text) : text;
+        displayText =
+          groupPost !== null ? stripGroupPostDeclarations(text) : text;
         const finalContent = {
           text: displayText,
           parts: finalParts,
@@ -1416,6 +1557,323 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       });
     }
 
+    try {
+      if (payload.taskId) {
+        let derivedText = (payload.text ?? displayText ?? '').trim();
+        if (!derivedText && Array.isArray(payload.parts) && payload.parts.length > 0) {
+          const partsArr = payload.parts as Array<Record<string, unknown>>;
+          const textParts = partsArr
+            .filter((p) => p.type === 'text' && typeof p.text === 'string')
+            .map((p) => String(p.text));
+          if (textParts.length > 0) {
+            derivedText = textParts.join('\n').trim();
+          } else {
+            const anyText = partsArr
+              .map((p) => {
+                if (typeof p.text === 'string') return p.text as string;
+                if (typeof p.content === 'string') return p.content as string;
+                return '';
+              })
+              .filter(Boolean)
+              .join('\n')
+              .trim();
+            if (anyText) derivedText = anyText;
+          }
+          if (derivedText) {
+            this.logger.log(
+              `wecom bridge: text derived from parts len=${derivedText.length} taskId=${payload.taskId}`,
+            );
+          }
+        }
+        const textToSend = derivedText;
+        if (!textToSend) {
+          this.logger.warn(
+            `wecom bridge: skip taskId=${payload.taskId} text empty (payload.text len=${(payload.text ?? '').length} displayText len=${(displayText ?? '').length} parts=${Array.isArray(payload.parts) ? (payload.parts as unknown[]).length : 0})`,
+          );
+        } else {
+          const prismaAny = this.prisma as unknown as Record<string, unknown>;
+          if (
+            !prismaAny.taskMessageChannel ||
+            typeof (prismaAny.taskMessageChannel as { findMany?: unknown }).findMany !== 'function'
+          ) {
+            this.logger.warn(`wecom bridge: skip taskId=${payload.taskId} no taskMessageChannel model (test mock)`);
+          } else {
+            const bindings = await (prismaAny.taskMessageChannel as { findMany: (q: unknown) => Promise<Array<{ messageChannelId: string }>> }).findMany({
+              where: { taskId: payload.taskId },
+              select: { messageChannelId: true },
+            });
+            let wecomChannelsCount = 0;
+            const wecomChannelIds: string[] = [];
+            for (const b of bindings) {
+              try {
+                const c = await (this.prisma as unknown as { messageChannel: { findUnique: (q: unknown) => Promise<{ id: string; type: string } | null> } }).messageChannel.findUnique({
+                  where: { id: b.messageChannelId },
+                  select: { id: true, type: true },
+                });
+                if (c && c.type === 'wecom_aibot') {
+                  wecomChannelsCount++;
+                  wecomChannelIds.push(c.id);
+                }
+              } catch {}
+            }
+            this.logger.log(
+              `wecom bridge: taskId=${payload.taskId}, bindings=${bindings.length}, found wecom channels=${wecomChannelsCount}`,
+            );
+            if (bindings.length === 0) {
+              this.logger.warn(`wecom bridge: no bindings for taskId=${payload.taskId}`);
+            } else if (wecomChannelsCount === 0) {
+              this.logger.warn(`wecom bridge: no wecom channels among bindings taskId=${payload.taskId} bindings=${JSON.stringify(bindings.map((b) => b.messageChannelId))}`);
+            }
+            const wecomMirroredIds = new Set<string>();
+            for (const b of bindings) {
+              try {
+                const ch = await (this.prisma as unknown as { messageChannel: { findUnique: (q: unknown) => Promise<{ id: string; type: string; config?: unknown } | null> } }).messageChannel.findUnique({
+                  where: { id: b.messageChannelId },
+                });
+                if (!ch) {
+                  this.logger.warn(`wecom bridge: channel not found bindingsId=${b.messageChannelId} taskId=${payload.taskId}`);
+                  continue;
+                }
+                if (ch.type !== 'wecom_aibot') {
+                  this.logger.log(`wecom bridge: skip non-wecom channel ${ch.id} type=${ch.type}`);
+                  continue;
+                }
+                const groupChatChannel = await (this.prisma as unknown as { chatChannel: { findFirst: (q: unknown) => Promise<{ id: string } | null> } }).chatChannel.findFirst({
+                  where: { taskId: payload.taskId, type: CHANNEL_TYPE.task_group },
+                  select: { id: true },
+                });
+                if (!groupChatChannel) {
+                  this.logger.warn(`wecom bridge: no groupChannel for taskId=${payload.taskId}`);
+                  continue;
+                }
+                const externalMsg = await (this.prisma as unknown as { message: { findFirst: (q: unknown) => Promise<{ id: string; content?: unknown } | null> } }).message.findFirst({
+                  where: { channelId: groupChatChannel.id, senderType: SENDER_TYPE.external },
+                  orderBy: { createdAt: 'desc' },
+                });
+                const extContent = (externalMsg as unknown as { content?: { text?: string } })?.content;
+                const extTextLen = typeof extContent?.text === 'string' ? extContent.text.length : (extContent as unknown as string | undefined)?.length ?? 0;
+                this.logger.log(
+                  `wecom bridge: externalMsg id=${(externalMsg as unknown as { id?: string })?.id ?? 'null'} textLen=${extTextLen} groupChannelId=${groupChatChannel.id}`,
+                );
+                if (!externalMsg) {
+                  this.logger.warn(`wecom bridge: externalMsg not found groupChannelId=${groupChatChannel.id} taskId=${payload.taskId}`);
+                  continue;
+                }
+                let ok = false;
+                let adapter: {
+                  finishStream?: (a: string, b: string) => Promise<boolean>;
+                  sendFallbackMessage?: (a: string, b: string) => Promise<boolean>;
+                  getStream?: (a: string) => { fromUserId?: string; fromUserName?: string; chattype?: string } | undefined;
+                  getPendingUser?: (a: string) => { fromUserId?: string; fromUserName?: string; chattype?: string } | undefined;
+                  type?: string;
+                } | undefined;
+                try {
+                  adapter = this.moduleRef?.get(WecomAibotAdapter, { strict: false }) as unknown as typeof adapter;
+                } catch {}
+                if (!adapter) {
+                  try {
+                    const g = globalThis as unknown as Record<string, unknown>;
+                    adapter = (g['__wecomAdapter'] as typeof adapter) ?? undefined;
+                  } catch {}
+                }
+                if (!adapter) {
+                  this.logger.warn(`wecom bridge: no wecom adapter taskId=${payload.taskId} (lazy ModuleRef miss, will skip finishStream)`);
+                } else if (typeof adapter.finishStream !== 'function') {
+                  this.logger.warn(`wecom bridge: adapter missing finishStream taskId=${payload.taskId} adapterType=${(adapter as unknown as { type?: string }).type}`);
+                }
+                let directedWecomText = textToSend;
+                let mirrorText = textToSend;
+                let pendingInfo: { fromUserId?: string; fromUserName?: string; chattype?: string } | undefined;
+                let pendingFromCard = false;
+                if (adapter) {
+                  // PRIORITY: card operator check first — post-card must NOT fall through to finishStream
+                  // even if streams map still contains the placeholder (which it always does before discard)
+                  try {
+                    const cardOp = (adapter as any).getPendingOperatorForTask?.(payload.taskId);
+                    if (cardOp) {
+                      pendingInfo = cardOp;
+                      pendingFromCard = true;
+                      this.logger.log(
+                        `wecom bridge: using card pending operator taskId=${payload.taskId} fromUserId=${(cardOp as any).fromUserId} fromUserName=${(cardOp as any).fromUserName} chattype=${(cardOp as any).chattype ?? ''}`,
+                      );
+                    }
+                  } catch {}
+                  if (!pendingFromCard) {
+                    try {
+                      pendingInfo =
+                        (adapter as any).getStream?.(externalMsg.id) ??
+                        (adapter as any).getPendingUser?.(externalMsg.id);
+                      if (!pendingInfo && typeof (adapter as any).getPendingUser === 'function') {
+                        pendingInfo = (adapter as any).getPendingUser(externalMsg.id);
+                      }
+                    } catch {}
+                  }
+                  const fromName = pendingInfo?.fromUserName || pendingInfo?.fromUserId || '';
+                  const chattype = pendingInfo?.chattype ?? null;
+                  if (fromName) {
+                    if (chattype === 'group') {
+                      directedWecomText = `@${fromName} ${textToSend}`;
+                    }
+                    mirrorText = `@${fromName} ${textToSend}`;
+                  }
+                  if (pendingInfo) {
+                    this.logger.log(`wecom bridge: pending chattype=${chattype} fromName=${fromName} directedWecomLen=${directedWecomText.length} fromCard=${pendingFromCard}`);
+                  }
+                  if (pendingFromCard) {
+                    try {
+                      (adapter as any).consumePendingOperatorForTask?.(payload.taskId);
+                      this.logger.log(`wecom bridge: consumed pending operator for taskId=${payload.taskId}`);
+                    } catch {}
+                  }
+                }
+                if (pendingFromCard) {
+                  this.logger.log(`wecom post-card: discardStream + sendNewMessage taskId=${payload.taskId} internalMessageId=${externalMsg.id}`);
+                  try {
+                    if (typeof (adapter as unknown as { discardStream?: unknown }).discardStream === 'function') {
+                      (adapter as unknown as { discardStream: (a: string) => boolean }).discardStream(externalMsg.id);
+                      this.logger.log(`wecom bridge: post-card discarded placeholder stream internalMessageId=${externalMsg.id} taskId=${payload.taskId}`);
+                    }
+                  } catch {}
+                  try {
+                    const pcAdapter: any = adapter;
+                    const canNew = pcAdapter && typeof pcAdapter.sendNewMessage === 'function';
+                    const canFallback = pcAdapter && typeof pcAdapter.sendFallbackMessage === 'function';
+                    if (canNew) {
+                      this.logger.log(`wecom bridge: post-card sendNewMessage called channelId=${ch.id} textLen=${directedWecomText.length}`);
+                      const sendOk = await pcAdapter.sendNewMessage(ch.id, directedWecomText);
+                      this.logger.log(`wecom bridge: post-card sendNewMessage result=${sendOk} channelId=${ch.id}`);
+                      ok = !!sendOk;
+                      if (!ok) this.logger.warn(`wecom post-card sendNewMessage failed channel ${ch.id}`);
+                    } else if (canFallback) {
+                      this.logger.log(`wecom bridge: post-card fallback sendMessage called channelId=${ch.id} textLen=${directedWecomText.length}`);
+                      const fbOk = await pcAdapter.sendFallbackMessage(ch.id, directedWecomText);
+                      this.logger.log(`wecom bridge: post-card fallback result=${fbOk} channelId=${ch.id}`);
+                      ok = !!fbOk;
+                    } else {
+                      this.logger.warn(`wecom bridge: post-card no send method for ${externalMsg.id}`);
+                    }
+                  } catch (e) {
+                    this.logger.warn(`wecom post-card send failed for ${externalMsg.id}: ${(e as Error).message}`);
+                  }
+                  if (ok) this.logger.log(`wecom post-card new message ok internalMessageId=${externalMsg.id} taskId=${payload.taskId}`);
+                } else {
+                  this.logger.log(`wecom simple: finishStream taskId=${payload.taskId} internalMessageId=${externalMsg.id}`);
+                  if (adapter && typeof adapter.finishStream === 'function') {
+                    try {
+                      this.logger.log(`wecom bridge: finishStream called with internalMessageId=${externalMsg.id} textLen=${directedWecomText.length} channelId=${ch.id}`);
+                      ok = await adapter.finishStream(externalMsg.id, directedWecomText);
+                      this.logger.log(`wecom bridge: finishStream called with internalMessageId=${externalMsg.id} result=${ok}`);
+                    } catch (e) {
+                      this.logger.warn(`wecom finishStream error for ${externalMsg.id}: ${(e as Error).message}`);
+                    }
+                  }
+                  if (ok) {
+                    this.logger.log(`wecom finishStream ok internalMessageId=${externalMsg.id} taskId=${payload.taskId}`);
+                  } else {
+                    this.logger.warn(`wecom finishStream miss for ${externalMsg.id}, try fallback sendMessage channelId=${ch.id} textLen=${directedWecomText.length}`);
+                    try {
+                      const fallbackAdapter = adapter;
+                      if (fallbackAdapter && typeof (fallbackAdapter as unknown as { sendFallbackMessage?: unknown }).sendFallbackMessage === 'function') {
+                        this.logger.log(`wecom bridge: fallback sendMessage called channelId=${ch.id} textLen=${directedWecomText.length}`);
+                        const fbOk = await (fallbackAdapter as unknown as { sendFallbackMessage: (a: string, b: string) => Promise<boolean> }).sendFallbackMessage(ch.id, directedWecomText);
+                        this.logger.log(`wecom bridge: fallback sendMessage result=${fbOk} channelId=${ch.id}`);
+                        if (!fbOk) {
+                          this.logger.warn(`wecom fallback sendMessage also failed for channel ${ch.id}`);
+                        } else {
+                          ok = true;
+                        }
+                      } else if (fallbackAdapter) {
+                        this.logger.warn(`wecom finishStream miss for ${externalMsg.id}, fallback not implemented`);
+                      } else {
+                        this.logger.warn(`wecom bridge: fallback skipped no adapter for channel ${ch.id}`);
+                      }
+                    } catch (fbErr) {
+                      this.logger.warn(`wecom fallback failed: ${(fbErr as Error).message}`);
+                    }
+                  }
+                }
+                try {
+                  const mirrorKey = `${payload.taskId}:${externalMsg.id}`;
+                  if (!wecomMirroredIds.has(mirrorKey)) {
+                    wecomMirroredIds.add(mirrorKey);
+
+                    let skipMirror = false;
+                    try {
+                      const recent = await (this.prisma as unknown as {
+                        message: { findFirst: (q: unknown) => Promise<{ id: string; content?: unknown; createdAt: Date } | null> };
+                      }).message.findFirst({
+                        where: { channelId: groupChatChannel.id, senderType: SENDER_TYPE.agent },
+                        orderBy: { createdAt: 'desc' },
+                      });
+                      if (recent) {
+                        const recentText = (recent.content as unknown as { text?: string })?.text ?? '';
+                        const normMirror = mirrorText.trim();
+                        const normRecent = String(recentText).trim();
+                        const ageMs = Date.now() - new Date(recent.createdAt).getTime();
+                        // Hard dedup: any agent mirror within 120s suppresses second mirror (wecom_reply already updated placeholder)
+                        if (ageMs < 120_000) {
+                          // Strong match first (logs reason), else unconditional suppress for wecom tasks
+                          if (normRecent === normMirror || normMirror.includes(normRecent) || normRecent.includes(textToSend.trim().slice(0, 80))) {
+                            skipMirror = true;
+                            this.logger.log(`wecom bridge: dedup skip mirror taskId=${payload.taskId} recentId=${recent.id} ageMs=${ageMs} reason=textMatch`);
+                          } else if (normRecent.length > 0) {
+                            skipMirror = true;
+                            this.logger.log(`wecom bridge: dedup skip mirror taskId=${payload.taskId} recentId=${recent.id} ageMs=${ageMs} reason=cooldown120s`);
+                          } else {
+                            skipMirror = true;
+                            this.logger.log(`wecom bridge: dedup skip mirror taskId=${payload.taskId} recentId=${recent.id} ageMs=${ageMs} reason=anyRecent120s`);
+                          }
+                        }
+                        if (!skipMirror && textToSend.trim() && normMirror.includes(textToSend.trim().slice(0, 80))) {
+                          if (ageMs < 120_000 && normRecent.length > 0) {
+                            skipMirror = true;
+                            this.logger.log(`wecom bridge: dedup skip mirror by final text equality taskId=${payload.taskId}`);
+                          }
+                        }
+                      }
+                    } catch {}
+                    if (skipMirror) {
+                    } else {
+                      const prismaAny2 = this.prisma as unknown as {
+                        message: { create: (q: unknown) => Promise<{ id: string }> };
+                      };
+                      const mirrorId = await this.idGen.nextId(MESSAGE_ID_PREFIX);
+                      const mirrorMsg = await prismaAny2.message.create({
+                        data: {
+                          id: mirrorId,
+                          channelId: groupChatChannel.id,
+                          senderType: SENDER_TYPE.agent,
+                          senderId: agentId,
+                          senderInstanceId: executionRef ?? null,
+                          content: { text: mirrorText, parts: finalParts } as unknown as Prisma.InputJsonValue,
+                          mentions: null,
+                          status: MESSAGE_STATUS.sent,
+                        },
+                      });
+                      await this.realtime.broadcast(
+                        EVENT_TYPES.CHAT_MESSAGE_NEW,
+                        { message: this.toMessageDto(mirrorMsg as unknown as MessageRow) },
+                        { type: 'channel', id: groupChatChannel.id },
+                      );
+                      this.logger.log(`wecom bridge: mirrored to task_group channel=${groupChatChannel.id} mirrorId=${mirrorId} textLen=${mirrorText.length}`);
+                    }
+                  }
+                } catch (mirrorErr) {
+                  this.logger.warn(`wecom bridge: mirror to task_group failed: ${(mirrorErr as Error).message}`);
+                }
+              } catch (innerErr) {
+                this.logger.warn(`wecom per-channel handling failed: ${(innerErr as Error).message}`);
+              }
+            }
+          }
+        }
+      } else {
+        this.logger.warn(`wecom bridge: skip no taskId payload=${JSON.stringify(payload)}`);
+      }
+    } catch (e) {
+      this.logger.warn(`wecom bridge failed: ${(e as Error).message}`);
+    }
+
     // 5. 产出物归档（声明非法时 onArtifactSubmitted 返回 invalid 不抛错，12 篇 §3.1）
     // P3：合并 worker 显式上送（payload.artifacts）与 server 从回复文本提取
     // （extractArtifacts）的声明——方案 A 下 worker 完成事件不带 artifacts 字段，
@@ -1435,7 +1893,9 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
           type: String(art.type ?? ''),
           title: String(art.title ?? ''),
           content: String(art.content ?? ''),
-          ...(art.fileRef !== undefined ? { fileRef: String(art.fileRef) } : {}),
+          ...(art.fileRef !== undefined
+            ? { fileRef: String(art.fileRef) }
+            : {}),
         });
         if (result.status === 'invalid') {
           this.logger.warn(
@@ -1466,12 +1926,16 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
             art.fileRef &&
             (result.artifact as Record<string, unknown>).fileUrl
           ) {
-            const fileUrl = String((result.artifact as Record<string, unknown>).fileUrl);
+            const fileUrl = String(
+              (result.artifact as Record<string, unknown>).fileUrl,
+            );
             archivedFileUrls.set(art.fileRef, {
               url: fileUrl,
               name:
                 fileUrl.split(/[\\/]/).pop() ??
-                String((result.artifact as Record<string, unknown>).title ?? '附件'),
+                String(
+                  (result.artifact as Record<string, unknown>).title ?? '附件',
+                ),
             });
           }
         }
@@ -1564,7 +2028,9 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
 
   /** P4：agent 失败回流 → 频道内该 agent 最新 processing 消息标记 failed + 错误内容广播
    *  （无 processing 消息则新建 failed 消息），用户可见失败提示。落库/广播失败仅记日志。 */
-  private async failProcessingMessage(payload: AgentStatusPayload): Promise<void> {
+  private async failProcessingMessage(
+    payload: AgentStatusPayload,
+  ): Promise<void> {
     const { taskId, agentId } = payload;
     if (!taskId || !agentId) {
       return;
@@ -1581,7 +2047,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         });
         failTaskAgentId = session?.taskAgentId ?? undefined;
       }
-      const channel = await this.resolveChannel(taskId, agentId, failTaskAgentId);
+      const channel = await this.resolveChannel(
+        taskId,
+        agentId,
+        failTaskAgentId,
+      );
       if (!channel) {
         return;
       }
@@ -1709,7 +2179,9 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       if (firstTextAt === null && this.hasTextPart(fresh)) {
         firstTextAt = Date.now();
         const delta =
-          params.startedAt !== undefined ? firstTextAt - params.startedAt : null;
+          params.startedAt !== undefined
+            ? firstTextAt - params.startedAt
+            : null;
         this.logger.log(
           `agent ${params.agentId} 首字出现${delta !== null ? `（dispatch 后 ${delta}ms）` : ''}`,
         );
@@ -1724,7 +2196,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         this.failedSessions.add(params.sessionId);
         const message = `agent 处理失败：${pollError}`;
         this.logger.error(`agent ${params.agentId} ${message}`);
-        this.emitError({ taskId: params.taskId, agentId: params.agentId, error: message });
+        this.emitError({
+          taskId: params.taskId,
+          agentId: params.agentId,
+          error: message,
+        });
         void this.broadcastAgentError({
           taskId: params.taskId,
           agentId: params.agentId,
@@ -1756,15 +2232,24 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
    *  F3 MAJOR-2：从回复文本提取产出物声明（12 篇 §3.1/§8.2）——原 poll 路径不携带
    *  artifacts 字段，归档循环拿到空数组（M4「产出物自动归档」不可用）；无声明 → 空数组。 */
   private async handlePolledCompletion(
-    params: { taskId: string; agentId: string; sessionId: string; channelId?: string },
+    params: {
+      taskId: string;
+      agentId: string;
+      sessionId: string;
+      channelId?: string;
+    },
     messages: unknown[],
   ): Promise<void> {
     if (this.failedSessions.has(params.sessionId)) {
-      this.logger.warn(`session ${params.sessionId} 已超时失败，迟到的轮询回流跳过落库`);
+      this.logger.warn(
+        `session ${params.sessionId} 已超时失败，迟到的轮询回流跳过落库`,
+      );
       return;
     }
     if (this.completedSessions.has(params.sessionId)) {
-      this.logger.debug(`session ${params.sessionId} 已由 ingress 回流落库，跳过轮询回流`);
+      this.logger.debug(
+        `session ${params.sessionId} 已由 ingress 回流落库，跳过轮询回流`,
+      );
       return;
     }
     const finish = findFinish(messages);
@@ -1804,7 +2289,10 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     // 各产出物 current_version 正文 + 作者（authorAgentId 在版本行，12 篇 §8.3：历史版本不进上下文）
     const versions = await this.prisma.artifactVersion.findMany({
       where: {
-        OR: artifacts.map((a) => ({ artifactId: a.id, version: a.currentVersion })),
+        OR: artifacts.map((a) => ({
+          artifactId: a.id,
+          version: a.currentVersion,
+        })),
       },
       select: { artifactId: true, contentRef: true, authorAgentId: true },
     });
@@ -1888,7 +2376,9 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
   }
 
   /** 从消息 content（Prisma Json）提取结论性文本：非对象/缺 text/非字符串 → undefined（跳过不抛错）。 */
-  private extractHistoryMessageText(content: Prisma.JsonValue): string | undefined {
+  private extractHistoryMessageText(
+    content: Prisma.JsonValue,
+  ): string | undefined {
     if (!content || typeof content !== 'object' || Array.isArray(content)) {
       return undefined;
     }
@@ -1916,11 +2406,13 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
    * 2. taskAgentId 缺失（存量会话/频道 NULL）→ 回退 `{taskId, agentId}` 首实例（存量兼容）。
    * 3. 均未命中 → 回退群聊频道兜底（消息仍可见）。
    */
-  private async resolveChannel(taskId: string, agentId: string, taskAgentId?: string) {
+  private async resolveChannel(
+    taskId: string,
+    agentId: string,
+    taskAgentId?: string,
+  ) {
     const dm = await this.prisma.chatChannel.findFirst({
-      where: taskAgentId
-        ? { taskId, taskAgentId }
-        : { taskId, agentId },
+      where: taskAgentId ? { taskId, taskAgentId } : { taskId, agentId },
       select: { id: true, type: true },
     });
     if (dm) {
@@ -1955,7 +2447,9 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       if (!group || group.id === mainChannelId) {
         return;
       }
-      const ext = attachment ? FileStorageService.extractExtension(attachment.name) ?? '' : '';
+      const ext = attachment
+        ? (FileStorageService.extractExtension(attachment.name) ?? '')
+        : '';
       const groupMessage = await this.prisma.message.create({
         data: {
           id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
@@ -1997,10 +2491,19 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
    */
   private async resolveAgentModelId(agentId: string): Promise<string | null> {
     let currentId: string | null = agentId;
-    for (let depth = 0; currentId && depth < MAX_BASE_AGENT_CHAIN_DEPTH; depth++) {
+    for (
+      let depth = 0;
+      currentId && depth < MAX_BASE_AGENT_CHAIN_DEPTH;
+      depth++
+    ) {
       const row = await this.prisma.agent.findUnique({
         where: { id: currentId },
-        select: { id: true, defaultModelId: true, baseAgentId: true, type: true },
+        select: {
+          id: true,
+          defaultModelId: true,
+          baseAgentId: true,
+          type: true,
+        },
       });
       if (!row) {
         return null;
@@ -2080,7 +2583,14 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       });
     }, this.firstTokenTimeoutMs);
     timer.unref?.();
-    this.pending.set(key, { taskId, agentId, instanceId, sessionId, workerId, timer });
+    this.pending.set(key, {
+      taskId,
+      agentId,
+      instanceId,
+      sessionId,
+      workerId,
+      timer,
+    });
     this.pendingBySession.set(sessionId, key);
     // 空闲判死追踪起点（活动事件经 handleSessionActivity 刷新）
     this.lastActivityAt.set(sessionId, Date.now());
@@ -2164,7 +2674,14 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     try {
       const row = await this.prisma.session.findUnique({
         where: { id: sessionId },
-        select: { status: true, taskId: true, agentId: true, workerId: true, instanceRef: true, taskAgentId: true },
+        select: {
+          status: true,
+          taskId: true,
+          agentId: true,
+          workerId: true,
+          instanceRef: true,
+          taskAgentId: true,
+        },
       });
       if (!row) {
         this.lastActivityAt.delete(sessionId);
@@ -2176,7 +2693,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
       }
       let forensicsError: string | undefined;
       let forensicsType = 'agent_idle_timeout';
-      if (row.workerId && row.instanceRef && row.instanceRef !== PENDING_INSTANCE_REF) {
+      if (
+        row.workerId &&
+        row.instanceRef &&
+        row.instanceRef !== PENDING_INSTANCE_REF
+      ) {
         try {
           const workerRow = await this.prisma.worker.findUnique({
             where: { id: row.workerId },
@@ -2230,7 +2751,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
           errorType: forensicsType,
           message: transientMsg,
         });
-        void this.tryAutoRestart(taskId, row.taskAgentId ?? agentId, sessionId).catch((e) =>
+        void this.tryAutoRestart(
+          taskId,
+          row.taskAgentId ?? agentId,
+          sessionId,
+        ).catch((e) =>
           this.logger.error(`自动拉起失败: ${this.describeError(e)}`),
         );
         return;
@@ -2246,7 +2771,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
         errorType: 'agent_idle_timeout',
         message: idleMsg,
       });
-      void this.tryAutoRestart(taskId, row.taskAgentId ?? agentId, sessionId).catch((e) =>
+      void this.tryAutoRestart(
+        taskId,
+        row.taskAgentId ?? agentId,
+        sessionId,
+      ).catch((e) =>
         this.logger.error(`自动拉起失败: ${this.describeError(e)}`),
       );
     } catch (err) {
@@ -2256,7 +2785,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     }
   }
 
-  private async tryAutoRestart(taskId: string, targetRef: string, sessionId: string): Promise<void> {
+  private async tryAutoRestart(
+    taskId: string,
+    targetRef: string,
+    sessionId: string,
+  ): Promise<void> {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: { status: true, mainAgentInstanceId: true },
@@ -2275,7 +2808,11 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
     if (!targetInstanceId) return;
     const channel =
       (await this.prisma.chatChannel.findFirst({
-        where: { taskId, type: CHANNEL_TYPE.private, taskAgentId: targetInstanceId },
+        where: {
+          taskId,
+          type: CHANNEL_TYPE.private,
+          taskAgentId: targetInstanceId,
+        },
         select: { id: true },
       })) ??
       (await this.prisma.chatChannel.findFirst({
@@ -2388,7 +2925,10 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
           await fs.mkdir(dir, { recursive: true });
           return dir;
         }
-        const agentDir = this.defaultAgentWorkDirPath(ta.agent.name ?? ta.agent.id, ta.seq);
+        const agentDir = this.defaultAgentWorkDirPath(
+          ta.agent.name ?? ta.agent.id,
+          ta.seq,
+        );
         await fs.mkdir(agentDir, { recursive: true });
         return agentDir;
       }
@@ -2455,7 +2995,9 @@ export class WorkerDispatcher extends MessageDispatcher implements OnModuleDestr
           sessionId: event.sessionId ?? null,
           level: event.level ?? 'message',
           errorType: event.errorType ?? 'dispatch_failed',
-          ...(event.retryInfo !== undefined ? { retryInfo: event.retryInfo } : {}),
+          ...(event.retryInfo !== undefined
+            ? { retryInfo: event.retryInfo }
+            : {}),
           ...(event.message !== undefined ? { message: event.message } : {}),
         },
         { type: 'task', id: event.taskId },
