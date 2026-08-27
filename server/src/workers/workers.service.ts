@@ -751,9 +751,21 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  /** GET /workers：worker 列表（不含 tokenHash——敏感字段只存库不返回）。 */
+  /** GET /workers：worker 列表（不含 tokenHash——敏感字段只存库不返回）。
+   *  select 排除 capabilities（含 capabilities.models 7258 条，单行 ~300KB）；
+   *  此前全字段读取触发 MySQL filesort OOM（sort_buffer_size 256KB < 单行 304KB）。 */
   async findAll() {
     const rows = await this.prisma.worker.findMany({
+      select: {
+        id: true,
+        name: true,
+        opencodeVersion: true,
+        load: true,
+        status: true,
+        lastHeartbeatAt: true,
+        registeredAt: true,
+        defaultModelId: true,
+      },
       orderBy: { registeredAt: 'desc' },
     });
     return rows.map((w) => this.toWorkerView(w));
@@ -970,12 +982,13 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     return (caps.maxInstances ?? 0) - (load.instances ?? 0);
   }
 
-  /** Worker 行 → 对外视图（剔除 tokenHash；T9：合并该 worker 最近上报的 mcpStatus）。 */
+  /** Worker 行 → 对外视图（剔除 tokenHash；T9：合并该 worker 最近上报的 mcpStatus）。
+   *  capabilities 可选：findAll 列表接口不 select 该字段，单查（findOne）/派发等仍 select。 */
   private toWorkerView(worker: {
     id: string;
     name: string | null;
     opencodeVersion: string;
-    capabilities: Prisma.JsonValue;
+    capabilities?: Prisma.JsonValue;
     load: Prisma.JsonValue | null;
     status: string;
     lastHeartbeatAt: Date | null;
@@ -986,7 +999,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       id: worker.id,
       name: worker.name,
       opencodeVersion: worker.opencodeVersion,
-      capabilities: worker.capabilities,
+      capabilities: worker.capabilities ?? null,
       load: worker.load,
       status: worker.status,
       lastHeartbeatAt: worker.lastHeartbeatAt,
