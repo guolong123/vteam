@@ -63,13 +63,14 @@ export const pulseCss = `
 
 /* ------------------------------ API 数据模型（T7 toWorkerView：不含 tokenHash） ------------------------------ */
 
-/** GET /workers 条目（对齐 schema Worker 对外视图；capabilities 为注册时上报的 Json）。 */
+/** GET /workers 条目（对齐 schema Worker 对外视图；capabilities 为注册时上报的 Json）。
+ *  列表接口不返回 capabilities（单行 300KB+，触发 MySQL filesort OOM）；详情接口仍返回。 */
 export interface WorkerItem {
   id: string;
   name: string | null;
   opencodeVersion: string;
-  capabilities: {
-    maxInstances: number;
+  capabilities?: {
+    maxInstances?: number;
     /** T9：worker 侧注入的真实技能名清单（注册/reload-config 后刷新）。 */
     skills?: string[];
     /** T9：内置 git 7 工具 + 注入的自定义工具（去重）。 */
