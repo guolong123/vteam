@@ -7,8 +7,8 @@
  * 唯一视觉来源：docs/agent-platform/prototypes/group-chat/index.tsx。
  * - 三栏布局对齐原型：members-panel（224px 团队 Agent + 状态）｜消息区（ChatBubble 列表
  *   + MentionHint + MessageInput）｜task-info-panel（300px 任务信息 + 产出物占位）。
- * - 频道定位：GET /tasks/:id 不含 channelId → GET /channels?type=task_group 按 taskId 匹配
- *   （items[].taskId === 当前任务 id，后端频道 DTO 含 taskId，不改后端）。
+ * - 频道定位：GET /tasks/:id 不含 channelId → GET /channels?teamId=<teamId> 按 teamId 匹配（team_group 一团队一群）
+ *   （items[].teamId === 当前任务 teamId，后端频道 DTO 含 teamId，按团队聚合）。
  * - 消息历史：GET /channels/:id/messages?cursor&limit=50 游标分页（首次 cursor 空取最早
  *   50 条，nextCursor=末条 id，「加载更多」取更新消息追加尾部）。
  * - SSE 实时（09 篇 §4.2，单连接多 scope，逗号分隔）：
@@ -38,6 +38,8 @@ import type { MentionableAgent, SendMessagePayload } from "@/src/components/ui";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
 import { useResizableWidth } from "@/src/hooks/use-resizable";
+import { teamsApi } from "@/src/api/teams";
+import type { TeamDto, TeamMemberDto } from "@/src/api/teams";
 import {
   LoadingIndicator,
   MsgError,
@@ -70,8 +72,9 @@ const groupchatCss = `
 
 /* ------------------------------ API 数据模型（对齐 T6/T10 DTO） ------------------------------ */
 
-/** 后端五态（TASK_STATUS）。 */
+/** 后端六态（TASK_STATUS，含 queued）。 */
 type TaskApiStatus =
+  | "queued"
   | "pending"
   | "in_progress"
   | "pending_review"
@@ -94,7 +97,6 @@ interface TaskInstance {
   sessionId: string | null;
 }
 
-/** GET /tasks/:id 任务详情（不含 channelId，见文件头「频道定位」）。 */
 interface TaskDetail {
   id: string;
   projectId: string;
@@ -103,21 +105,19 @@ interface TaskDetail {
   priority: string;
   status: TaskApiStatus;
   mainAgentId: string | null;
-  /** 主实例 id（决策依据；mainAgentId 渲染兜底）。 */
   mainAgentInstanceId: string | null;
-  /** 托管模式：成员 question/permission 请求由主 Agent 确认（不弹窗给用户）。 */
   managedMode: boolean;
   backgroundDocs: unknown[];
   teamAgentIds: string[];
-  /** 团队实例列表（[{id, agentId, alias, seq, name, role, main}]，按 (agentId, seq) 排序）。 */
   instances: TaskInstance[];
+  teamId: string | null;
+  resetAfterComplete?: boolean | null;
   createdBy: string;
   createdAt: string;
   startedAt: string | null;
   pendingReviewAt: string | null;
   completedAt: string | null;
   archivedAt: string | null;
-  /** 执行模式：direct（轻量，默认）/ plan（计划驱动）。 */
   executionMode: "direct" | "plan";
 }
 
@@ -274,18 +274,13 @@ const ARTIFACT_TYPE_LABEL: Record<ArtifactApiType, string> = {
   file: "文件",
 };
 
-/** GET /channels?type=task_group 条目（后端 ChatService.toChannelDto，含 taskId 可匹配任务）。 */
 interface ChannelItem {
   id: string;
   type: string;
-  taskId: string;
+  taskId: string | null;
+  teamId?: string | null;
   agentId: string | null;
-  task?: {
-    id: string;
-    title: string;
-    status: string;
-    projectId: string;
-  } | null;
+  task?: { id: string; title: string; status: string; projectId: string } | null;
   agent?: { id: string; name: string; role: string | null } | null;
   createdAt: string;
 }
@@ -301,8 +296,8 @@ interface MessagesResponse {
   nextCursor: string | null;
 }
 
-/** API 状态 → 中文状态（对齐 board 页 STATUS_LABEL；待开始不在 StatusKey，本地 Badge 处理）。 */
 const STATUS_LABEL: Record<TaskApiStatus, string> = {
+  queued: "排队中",
   pending: "待开始",
   in_progress: "进行中",
   pending_review: "待验收",
@@ -493,9 +488,17 @@ function WaitingBadge() {
   );
 }
 
-/** 按状态渲染徽章：「待开始」用 WaitingBadge，其余复用共享 StatusBadge */
+function QueuedBadge() {
+  return (
+    <span data-testid="status-badge" data-status="排队中" style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs}px ${space.sm + 2}px`, borderRadius: radius.pill, backgroundColor: "rgba(245,158,11,0.10)", border: "1px solid rgba(245,158,11,0.28)", color: "#D97706", fontSize: fontSize.sm, fontWeight: 500, lineHeight: 1.4, whiteSpace: "nowrap", ...baseFont }}>
+      <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "#D97706", flexShrink: 0 }} />排队中
+    </span>
+  );
+}
 function renderStatusBadge(status: string) {
-  return status === "待开始" ? <WaitingBadge /> : <StatusBadge status={status as StatusKey} />;
+  if (status === "待开始") return <WaitingBadge />;
+  if (status === "排队中") return <QueuedBadge />;
+  return <StatusBadge status={status as StatusKey} />;
 }
 
 /* ================================ 成员面板（224px，T5 按实例展示） ================================ */
@@ -691,18 +694,18 @@ function MembersPanel({
                   {/* 主 Agent 徽章：挂在实例上（非角色），对齐创建页 ★ 主 Agent 视觉 */}
                   {a.main && (
                     <span
-                      data-testid="member-main-tag"
+                      data-testid="main-badge"
                       style={{
                         display: "inline-flex",
                         alignItems: "center",
                         gap: 2,
                         marginLeft: space.xs,
-                        padding: "0 6px",
+                        padding: "1px 6px",
                         borderRadius: radius.pill,
-                        backgroundColor: roles[a.role]?.color ?? "#2563EB",
+                        backgroundColor: "#F59E0B",
                         color: "#FFFFFF",
                         fontSize: fontSize.xs,
-                        fontWeight: 600,
+                        fontWeight: 700,
                         lineHeight: "15px",
                         verticalAlign: "1px",
                       }}
@@ -2963,6 +2966,299 @@ function TaskPanel({
   );
 }
 
+function TeamQueueCard({ team, taskId }: { team: TeamDto | null | undefined; taskId: string }) {
+  const queryClient = useQueryClient();
+  const [queueError, setQueueError] = useState<string | null>(null);
+  const cancelMutation = useMutation({
+    mutationFn: (tid: string) => teamsApi.cancelQueue(team!.id, tid),
+    onSuccess: () => {
+      setQueueError(null);
+      if (team) {
+        queryClient.invalidateQueries({ queryKey: ["team", team.id] });
+        queryClient.invalidateQueries({ queryKey: ["teams"] });
+      }
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+    },
+    onError: (err) => {
+      const msg = isApiError(err) ? err.message : "取消失败";
+      const is409 = isApiError(err) && err.status === 409;
+      setQueueError(is409 ? `${msg}（仅排队中的任务可取消）` : msg);
+    },
+  });
+  if (!team) return null;
+  const queuedEntry = team.queue.find((q) => q.taskId === taskId);
+  const isQueued = !!queuedEntry;
+  const isCurrent = team.currentTaskId === taskId;
+  return (
+    <div data-testid="team-queue-card" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: isQueued ? "rgba(245,158,11,0.10)" : isCurrent ? "rgba(37,99,235,0.08)" : neutral[50], border: `1px solid ${isQueued ? "rgba(245,158,11,0.28)" : isCurrent ? "rgba(37,99,235,0.22)" : neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: space.xs }}>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>团队队列</span>
+          <span style={{ fontSize: 10, color: "#D97706", backgroundColor: "rgba(245,158,11,0.10)", border: "1px solid rgba(245,158,11,0.22)", padding: "0 5px", borderRadius: radius.pill, fontWeight: 600 }}>FIFO</span>
+        </span>
+        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{team.queue.length} 排队 · {team.currentTaskId ? `当前 ${team.currentTaskId.slice(0, 8)}…` : "空闲"}</span>
+      </div>
+      <div style={{ fontSize: 10, color: neutral[400], lineHeight: 1.5 }}>按入队时间 FIFO，仅排队中可取消，不支持拖拽重排。</div>
+      {isQueued && queuedEntry ? (
+        <div data-testid="queue-position" style={{ display: "flex", alignItems: "center", gap: space.sm, fontSize: fontSize.sm, color: "#D97706", fontWeight: 600, flexWrap: "wrap" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: "50%", backgroundColor: "#F59E0B", color: "#FFF", fontSize: fontSize.xs, fontWeight: 700 }}>#{queuedEntry.position}</span>
+          排队中 · 位置 {queuedEntry.position}
+          <span style={{ fontSize: fontSize.xs, color: neutral[400], fontWeight: 400 }}>· 队列共 {team.queue.length} 个</span>
+          <button
+            type="button"
+            data-testid="queue-cancel-current"
+            data-task-id={taskId}
+            disabled={cancelMutation.isPending}
+            onClick={() => cancelMutation.mutate(taskId)}
+            style={{ marginLeft: "auto", padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.pill, border: "1px solid rgba(239,68,68,0.22)", backgroundColor: "rgba(239,68,68,0.06)", color: "#DC2626", fontSize: fontSize.xs, fontWeight: 500, cursor: cancelMutation.isPending ? "default" : "pointer", opacity: cancelMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body }}
+          >
+            {cancelMutation.isPending ? "取消中…" : "取消排队"}
+          </button>
+        </div>
+      ) : isCurrent ? (
+        <div data-testid="queue-current" style={{ fontSize: fontSize.sm, color: "#2563EB", fontWeight: 500 }}>当前执行中（队首）</div>
+      ) : (
+        <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>未在队列中 · 群聊按团队复用，历史跨任务可见</div>
+      )}
+      {queueError && <div data-testid="queue-cancel-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{queueError}</div>}
+      {team.queue.length > 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: space.xs, marginTop: space.xs }}>
+          {team.queue.map((q) => {
+            const isSelf = q.taskId === taskId;
+            const qTitle = (q as any).taskTitle ?? null;
+            const qStatus = (q as any).taskStatus ?? "queued";
+            const canCancel = qStatus === "queued";
+            return (
+              <div key={q.id} data-testid="team-queue-item" data-task-id={q.taskId} data-position={q.position} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.sm, backgroundColor: isSelf ? "rgba(245,158,11,0.12)" : "var(--color-surface)", border: `1px solid ${isSelf ? "rgba(245,158,11,0.28)" : neutral[200]}` }}>
+                <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: "50%", backgroundColor: isSelf ? "#F59E0B" : neutral[400], color: "#FFF", fontSize: 10, fontWeight: 700, flexShrink: 0 }}>{q.position}</span>
+                <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                  <span style={{ fontSize: fontSize.xs, color: neutral[700], fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{qTitle ?? q.taskId}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: space.xs }}>
+                    <span data-testid="queue-item-status" style={{ fontSize: 10, color: canCancel ? "#D97706" : neutral[500], backgroundColor: canCancel ? "rgba(245,158,11,0.10)" : neutral[100], border: `1px solid ${canCancel ? "rgba(245,158,11,0.22)" : neutral[200]}`, borderRadius: radius.pill, padding: "0 4px", fontWeight: 600 }}>{canCancel ? "排队中" : qStatus}</span>
+                    <span style={{ fontFamily: fontFamily.mono, fontSize: 10, color: neutral[400], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{q.taskId.slice(0, 10)}…</span>
+                  </span>
+                </div>
+                <span style={{ fontSize: 10, color: neutral[400], flexShrink: 0 }}>{new Date(q.enqueuedAt).toLocaleDateString()}</span>
+                <button
+                  type="button"
+                  data-testid="queue-cancel"
+                  data-task-id={q.taskId}
+                  disabled={!canCancel || cancelMutation.isPending}
+                  title={!canCancel ? "仅排队中的任务可取消" : "取消排队"}
+                  onClick={() => canCancel && cancelMutation.mutate(q.taskId)}
+                  style={{ padding: "2px 8px", borderRadius: radius.pill, border: `1px solid ${!canCancel ? neutral[200] : "rgba(239,68,68,0.22)"}`, backgroundColor: !canCancel ? neutral[100] : "rgba(239,68,68,0.06)", color: !canCancel ? neutral[400] : "#DC2626", fontSize: 10, fontWeight: 500, cursor: !canCancel || cancelMutation.isPending ? "not-allowed" : "pointer", opacity: !canCancel ? 0.6 : 1, fontFamily: fontFamily.body, flexShrink: 0 }}
+                >
+                  取消
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TeamMemoryCard({ team, task }: { team: TeamDto | null | undefined; task: TaskDetail }) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const toggleMutation = useMutation({
+    mutationFn: (next: boolean) => api.patch<TaskDetail>(`/tasks/${task.id}`, { resetAfterComplete: next }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["task", task.id], updated);
+      setError(null);
+    },
+    onError: (err) => setError(isApiError(err) ? err.message : "更新失败"),
+  });
+  const effectiveNewSession = task.resetAfterComplete ? true : !team?.reuseSession ? true : false;
+  return (
+    <div data-testid="team-memory-card" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>记忆开关</span>
+        <span style={{ fontSize: 10, color: team?.reuseSession ? "#2563EB" : "#D97706", backgroundColor: team?.reuseSession ? "rgba(37,99,235,0.08)" : "rgba(245,158,11,0.10)", border: `1px solid ${team?.reuseSession ? "rgba(37,99,235,0.14)" : "rgba(245,158,11,0.22)"}`, padding: "0 6px", borderRadius: radius.pill, fontWeight: 600 }}>{team?.reuseSession ? "默认保留" : "每任务新会话"}</span>
+      </div>
+      <div data-testid="reuse-explain" style={{ fontSize: fontSize.xs, color: neutral[500], lineHeight: 1.6, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+        {team?.reuseSession ? (
+          <span><span style={{ fontWeight: 600, color: "#2563EB" }}>团队默认保留</span>：会话跨任务复用，上下文与历史延续。</span>
+        ) : (
+          <span><span style={{ fontWeight: 600, color: "#D97706" }}>团队每任务新会话</span>：每任务独立会话，历史隔离。</span>
+        )}
+        <span style={{ display: "block", marginTop: space.xs, color: neutral[400] }}>任务级勾选可覆盖团队默认。</span>
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: task.resetAfterComplete ? "rgba(37,99,235,0.06)" : neutral[50], border: `1px solid ${task.resetAfterComplete ? "rgba(37,99,235,0.14)" : neutral[200]}`, cursor: toggleMutation.isPending ? "default" : "pointer" }}>
+        <input type="checkbox" data-testid="reset-after-complete-toggle" checked={!!task.resetAfterComplete} disabled={toggleMutation.isPending} onChange={(e) => toggleMutation.mutate(e.target.checked)} style={{ width: 16, height: 16, accentColor: "#2563EB" }} />
+        <span style={{ display: "flex", flexDirection: "column" }}>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>完成后为下一任务开新会话</span>
+          <span style={{ fontSize: 10, color: neutral[400] }}>勾选后，本任务完成/归档时为团队所有成员开新会话，下一任务上下文全新</span>
+        </span>
+      </label>
+      {effectiveNewSession && <span data-testid="memory-effective" style={{ fontSize: 10, color: "#D97706" }}>生效：下一任务将开新会话（{task.resetAfterComplete ? "任务级覆盖" : "团队设置"}）</span>}
+      {!effectiveNewSession && <span style={{ fontSize: 10, color: neutral[400] }}>生效：下一任务复用当前会话</span>}
+      {error && <span style={{ fontSize: fontSize.xs, color: "#DC2626" }}>{error}</span>}
+      {toggleMutation.isPending && <span style={{ fontSize: 10, color: neutral[400] }}>更新中…</span>}
+    </div>
+  );
+}
+
+
+function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery, plansQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onToggleManagedMode, onToggleExecutionMode }: { team: any; task: any; taskId: string; artifactsQuery: any; issuesQuery: any; plansQuery: any; agents: any[]; onEditTaskInfo: () => void; onOpenArtifacts: () => void; onOpenIssues: () => void; onToggleManagedMode: (v: boolean) => void; onToggleExecutionMode: (v: "direct" | "plan") => void }) {
+  const [active, setActive] = React.useState<"status" | "config" | "output">("status");
+  const waiting = (team?.queue ?? []).filter((q: any) => (q as any).taskStatus === "queued" || !(q as any).taskStatus).length;
+  const isCurrent = team?.currentTaskId === taskId;
+  const statusLabel = task ? (task.status === "queued" ? "排队中" : task.status === "pending" ? "待开始" : task.status === "in_progress" ? "进行中" : task.status === "pending_review" ? "待验收" : task.status === "completed" ? "已完成" : "已归档") : "";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+      <div style={{ display: "flex", borderBottom: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], flexShrink: 0 }}>
+        {[
+          { key: "status" as const, label: "状态", badge: waiting > 0 ? String(waiting) : null },
+          { key: "config" as const, label: "配置", badge: null },
+          { key: "output" as const, label: "产出", badge: artifactsQuery.data?.total ? String(artifactsQuery.data.total) : null },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            data-testid={`right-tab-${tab.key}`}
+            data-active={active === tab.key ? "true" : "false"}
+            onClick={() => setActive(tab.key)}
+            style={{
+              flex: 1,
+              padding: `${space.sm}px ${space.md}px`,
+              border: "none",
+              borderBottom: `2px solid ${active === tab.key ? "#2563EB" : "transparent"}`,
+              backgroundColor: active === tab.key ? "var(--color-surface)" : "transparent",
+              color: active === tab.key ? "#2563EB" : neutral[500],
+              fontSize: fontSize.sm,
+              fontWeight: active === tab.key ? 600 : 400,
+              cursor: "pointer",
+              fontFamily: fontFamily.body,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: space.xs,
+            }}
+          >
+            {tab.label}
+            {tab.badge && <span style={{ fontSize: 10, color: "#FFF", backgroundColor: active === tab.key ? "#2563EB" : "#F59E0B", padding: "0 5px", borderRadius: radius.pill, fontWeight: 700 }}>{tab.badge}</span>}
+          </button>
+        ))}
+      </div>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: `${space.md}px ${space.lg}px`, display: "flex", flexDirection: "column", gap: space.lg }}>
+        {active === "status" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: isCurrent ? "rgba(37,99,235,0.06)" : waiting > 0 ? "rgba(245,158,11,0.06)" : "var(--color-surface)", border: `1px solid ${isCurrent ? "rgba(37,99,235,0.14)" : waiting > 0 ? "rgba(245,158,11,0.14)" : neutral[200]}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: task.status === "in_progress" ? "#10B981" : task.status === "queued" ? "#F59E0B" : task.status === "pending" ? "#2563EB" : neutral[300] }} />
+                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>{task.title}</span>
+                <span style={{ fontSize: fontSize.xs, color: "#FFF", backgroundColor: task.status === "queued" ? "#F59E0B" : task.status === "in_progress" ? "#10B981" : "#2563EB", padding: "1px 6px", borderRadius: radius.pill }}>{statusLabel}</span>
+              </div>
+              <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
+                {isCurrent ? "当前执行（队首）" : team?.currentTaskId ? `队首 ${team.currentTaskId.slice(0,8)}… 执行中` : "团队空闲"} · {waiting > 0 ? `等待中 ${waiting} 个` : "暂无等待"}
+              </div>
+              {team?.name && (
+                <div style={{ fontSize: fontSize.xs, color: neutral[600], backgroundColor: "rgba(37,99,235,0.04)", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px`, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
+                  {team.name}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: space.sm }}>
+                <TaskStatusActions taskId={taskId} status={task.status as any} />
+                <button type="button" onClick={onEditTaskInfo} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>编辑</button>
+              </div>
+            </div>
+            <TeamQueueCard team={team} taskId={taskId} />
+            <div style={{ fontSize: fontSize.xs, color: neutral[500], backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px`, display: "flex", alignItems: "center", gap: space.xs }}>
+              <span style={{ fontWeight: 600, color: team?.reuseSession ? "#2563EB" : "#D97706" }}>{team?.reuseSession ? "默认保留" : "每任务新会话"}</span>
+              <span>· {team?.reuseSession ? "会话跨任务复用" : "每任务新会话"}，{task.resetAfterComplete ? "本任务完成后为下一任务开新会话" : "下一任务复用当前会话"}</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>主 Agent</span>
+              <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>{(team?.members?.find((m:any)=>m.id===team.mainAgentMemberId)?.alias ?? task.mainAgentId ?? "未指定")}</span>
+              {team?.mainAgentMemberId && <span style={{ fontSize: 10, color: "#FFF", backgroundColor: "#F59E0B", padding: "0 5px", borderRadius: radius.pill }}>★ 主 Agent</span>}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>团队</span>
+              <span style={{ display: "flex" }}>{(agents ?? []).slice(0,5).map((a:any,i:number)=>(<span key={a.id} style={{ marginLeft: i===0?0:-6 }}><AgentAvatar role={a.role} size="sm" style={{ border: "2px solid #FFF" }} /></span>))}</span>
+              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{(agents ?? []).length} 人</span>
+            </div>
+          </div>
+        )}
+        {active === "config" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}>
+              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>执行与托管</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: fontSize.sm, color: neutral[600] }}>执行模式</span>
+                <select value={task.executionMode} onChange={(e)=>onToggleExecutionMode(e.target.value as "direct" | "plan")} style={{ padding: `2px 8px`, borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.xs, color: neutral[700] }}>
+                  <option value="direct">轻量执行</option>
+                  <option value="plan">计划驱动</option>
+                </select>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: fontSize.sm, color: neutral[600] }}>托管模式</span>
+                <span onClick={()=>onToggleManagedMode(!task.managedMode)} role="switch" aria-checked={task.managedMode} style={{ width: 36, height: 20, borderRadius: 10, backgroundColor: task.managedMode ? "#2563EB" : neutral[300], position: "relative", cursor: "pointer" }}><span style={{ position: "absolute", top: 2, left: task.managedMode ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} /></span>
+              </div>
+            </div>
+            <TeamMemoryCard team={team} task={task} />
+            <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>
+              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>渠道绑定</div>
+              <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>消息与通知渠道可在任务操作中配置，团队级记忆在状态 Tab 查看。</div>
+              <button type="button" onClick={()=>{ const el=document.querySelector('[data-testid="task-channel-binding-section"]') as HTMLElement; el?.scrollIntoView({behavior:"smooth", block:"center"}); el?.focus(); }} style={{ alignSelf: "flex-start", fontSize: fontSize.xs, color: "#2563EB", background: "none", border: "none", cursor: "pointer" }}>去配置 →</button>
+            </div>
+          </div>
+        )}
+        {active === "output" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
+            <div>
+              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], marginBottom: space.sm }}>任务详情</div>
+              <div style={{ fontSize: fontSize.sm, color: neutral[700], backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>{task.title}</div>
+              {task.description && <div style={{ marginTop: space.xs, fontSize: fontSize.xs, color: neutral[500], backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px`, whiteSpace: "pre-wrap" }}>{task.description}</div>}
+            </div>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: space.sm }}>
+                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>产出物</span>
+                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{artifactsQuery.data?.total ?? 0} 个</span>
+              </div>
+              {(artifactsQuery.data?.items ?? []).length === 0 ? (
+                <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无产出物</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+                  {(artifactsQuery.data?.items ?? []).slice(0, 5).map((a: any) => (
+                    <div key={a.id} style={{ fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}>{a.title ?? a.id}</div>
+                  ))}
+                  <button type="button" onClick={onOpenArtifacts} style={{ fontSize: fontSize.xs, color: "#2563EB", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>查看全部 →</button>
+                </div>
+              )}
+            </div>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: space.sm }}>
+                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>待办 Issue</span>
+                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{issuesQuery.data?.total ?? 0} 个</span>
+              </div>
+              {(issuesQuery.data?.items ?? []).length === 0 ? (
+                <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无 Issue</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+                  {(issuesQuery.data?.items ?? []).slice(0, 5).map((it: any) => (
+                    <div key={it.id} style={{ fontSize: fontSize.xs, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>{it.title}</div>
+                  ))}
+                  <button type="button" onClick={onOpenIssues} style={{ fontSize: fontSize.xs, color: "#2563EB", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>查看全部 →</button>
+                </div>
+              )}
+            </div>
+            <div>
+              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], marginBottom: space.sm }}>执行计划</div>
+              {plansQuery.data ? (
+                <div style={{ fontSize: fontSize.xs, color: neutral[600], padding: `${space.sm}px ${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>{(plansQuery.data as any).title ?? "已有计划"}</div>
+              ) : (
+                <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无执行计划</div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ================================ 页面（AppShell 内容区三栏） ================================ */
 export default function TaskChatPage() {
   const params = useParams<{ id: string }>();
@@ -3070,15 +3366,34 @@ export default function TaskChatPage() {
     retry: false,
   });
 
-  /* ---------- 2. 频道定位：GET /channels?type=task_group → 按 taskId 匹配 ---------- */
+  const teamId = task?.teamId ?? null;
+  const teamQuery = useQuery({
+    queryKey: ["team", teamId],
+    queryFn: () => teamsApi.get(teamId!),
+    enabled: !!teamId && !!user?.id,
+  });
+  const team = teamQuery.data;
+
   const channelsQuery = useQuery({
-    queryKey: ["channels", "task_group"],
-    queryFn: () => api.get<{ items: ChannelItem[]; total: number }>("/channels", { query: { type: "task_group" } }),
-    enabled: !!user?.id,
-  });  const channel = useMemo(
-    () => channelsQuery.data?.items.find((c) => c.taskId === taskId) ?? null,
-    [channelsQuery.data, taskId],
-  );
+    queryKey: ["channels", "team_group", teamId],
+    queryFn: () => api.get<{ items: ChannelItem[]; total: number }>("/channels", { query: { teamId: teamId! } }),
+    enabled: !!teamId && !!user?.id,
+  });
+  const legacyChannelsQuery = useQuery({
+    queryKey: ["channels", "team_group", taskId],
+    queryFn: () => api.get<{ items: ChannelItem[]; total: number }>("/channels", { query: { type: "team_group" } }),
+    enabled: !teamId && !!user?.id,
+  });
+  const channel = useMemo(() => {
+    if (teamId) {
+      const items = channelsQuery.data?.items ?? [];
+      const teamGroup = items.find((c) => c.type === "team_group" && (c.teamId ?? null) === teamId);
+      if (teamGroup) return teamGroup;
+      if (items.length === 1) return items[0];
+      return items.find((c) => (c.teamId ?? null) === teamId) ?? items[0] ?? null;
+    }
+    return legacyChannelsQuery.data?.items.find((c) => c.type === "team_group" && ((c.teamId ?? null) === teamId || c.taskId === taskId)) ?? legacyChannelsQuery.data?.items.find((c) => (c.teamId ?? null) === teamId || c.taskId === taskId) ?? null;
+  }, [channelsQuery.data, legacyChannelsQuery.data, teamId, taskId]);
   const channelId = channel?.id ?? "";
 
   /* ---------- 2b. 私聊 Tabs（Scheme C）：同页切换群聊/私聊，本地态 activeTab ---------- */
@@ -3094,7 +3409,11 @@ export default function TaskChatPage() {
         return;
       }
       try {
-        const ch = await api.post<{ id: string }>("/dm-channels", { taskId, agentId, taskAgentId: instanceId });
+        const payload: any = teamId
+          ? { teamId, teamMemberId: instanceId }
+          : { taskId, agentId, taskAgentId: instanceId };
+        if (!teamId && !payload.agentId) payload.agentId = agentId;
+        const ch = await api.post<{ id: string }>("/dm-channels", payload);
         setPrivateChannelMap((prev) => {
           const next = new Map(prev);
           next.set(instanceId, ch.id);
@@ -3105,7 +3424,7 @@ export default function TaskChatPage() {
         console.error("create dm channel failed", e);
       }
     },
-    [privateChannelMap, taskId],
+    [privateChannelMap, taskId, teamId],
   );
 
   /* ---------- 3. 频道详情：agentMembers（members-panel + @ mentionable + agent 名映射） ---------- */
@@ -3155,13 +3474,26 @@ export default function TaskChatPage() {
     setPendingQuestion((prev) => prev ?? (pending[0]?.managedMode ? null : pending[0]));
   }, [questionsQuery.data]);
 
-  /**
-   * 团队实例（T5）：数据源 = task.instances（GET /tasks/:id，toTaskDto 已返回实例列表）。
-   * 每实例一条：id=agent id（SSE 状态/私聊发起按 agent id，后端广播维度）、
-   * instanceId=实例 id（唯一键）、name=实例别名（唯一展示标识，@开发者-1 与 @开发者-2 分开）。
-   * 存量回退：instances 缺失时用频道 agentMembers（旧数据防御）。
-   */
   const agentMembers = useMemo(() => {
+    if (team?.members && team.members.length > 0) {
+      return team.members.map((m: TeamMemberDto) => {
+        const role = m.agent?.role && (ROLE_KEYS as readonly string[]).includes(m.agent.role)
+          ? (m.agent.role as RoleKey)
+          : toRole(m.agentId) ?? "developer";
+        // 主 Agent 判定：优先 team.mainAgentMemberId（团队成员维度），与团队详情页一致
+        const isMain = !!team.mainAgentMemberId && team.mainAgentMemberId === m.id;
+        return {
+          id: m.agentId,
+          instanceId: m.id,
+          name: m.alias ?? m.agent?.name ?? m.agentId,
+          role,
+          seq: m.seq,
+          main: isMain,
+          enabled: true,
+          overrideModelId: null,
+        };
+      });
+    }
     const instances = task?.instances ?? [];
     if (instances.length > 0) {
       return instances.map((inst) => {
@@ -3179,13 +3511,13 @@ export default function TaskChatPage() {
         };
       });
     }
-    return (channelQuery.data?.agentMembers ?? []).map((a) => {
+    return (channelQuery.data?.agentMembers ?? []).map((a: any) => {
       const role = (a.role && (ROLE_KEYS as readonly string[]).includes(a.role))
         ? (a.role as RoleKey)
         : toRole(a.id) ?? "developer";
       return { id: a.id, instanceId: undefined, name: a.name, role, enabled: (a as { enabled?: boolean | null }).enabled ?? true };
     });
-  }, [task, channelQuery.data, task?.mainAgentInstanceId]);
+  }, [team, task, channelQuery.data, task?.mainAgentInstanceId]);
 
   /** 实例 → agentMap（agentId → {name, role}；同 agent 多实例保留首个别名，防覆盖） */
   const agentMap = useMemo(() => {
@@ -3267,8 +3599,8 @@ export default function TaskChatPage() {
   // team.changed / task.status.changed。前端按事件 type 分发（useRealtimeEvents），
   // 回调内保留 payload.taskId === taskId 过滤（多 scope 下事件会跨 scope 混流，必须逐条过滤）。
   useRealtimeEvents({
-    scope: `channel:${channelId}${activePrivateId ? `,channel:${activePrivateId}` : ""},task:${taskId},global`,
-    enabled: !!channelId && !!taskId,
+    scope: `channel:${channelId}${activePrivateId ? `,channel:${activePrivateId}` : ""},team:${teamId ?? ""},task:${taskId},global`,
+    enabled: (!!channelId || !!teamId) && !!taskId,
     onMessage: (payload) => {
       scrollToBottom();
       queryClient.invalidateQueries({ queryKey: ["plans", taskId] });
@@ -3395,10 +3727,14 @@ export default function TaskChatPage() {
         return { ...old, items };
       });
     },
-    onTeamChanged: (payload) => {
-      if (payload.taskId === taskId) {
-        // agentMembers 来自 GET /channels/:id（agentMembers），失效重取刷新 members-panel
+    onTeamChanged: (payload: any) => {
+      if (payload.taskId === taskId || payload.teamId === teamId) {
         queryClient.invalidateQueries({ queryKey: ["channel", channelId] });
+        if (payload.teamId) queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+      }
+      if (payload.teamId === teamId) {
+        queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+        queryClient.invalidateQueries({ queryKey: ["task", taskId] });
       }
     },
     onTaskStatusChanged: (payload) => {
@@ -3588,14 +3924,20 @@ export default function TaskChatPage() {
     }
   };
 
-  /** 发起私聊（Scheme C）：同页 Tabs 切换，不再跳转 /messages。 */
   const startDmMutation = useMutation({
-    mutationFn: (target: { agentId: string; taskAgentId?: string }) =>
-      api.post<ChannelItem>("/dm-channels", {
+    mutationFn: (target: { agentId: string; taskAgentId?: string }) => {
+      if (teamId && target.taskAgentId) {
+        return api.post<ChannelItem>("/dm-channels", { teamId, teamMemberId: target.taskAgentId });
+      }
+      if (teamId) {
+        return api.post<ChannelItem>("/dm-channels", { teamId, agentId: target.agentId });
+      }
+      return api.post<ChannelItem>("/dm-channels", {
         taskId,
         agentId: target.agentId,
         ...(target.taskAgentId ? { taskAgentId: target.taskAgentId } : {}),
-      }),
+      });
+    },
     onSuccess: (channel, variables) => {
       setDmError(null);
       const instanceId = (variables as { taskAgentId?: string })?.taskAgentId ?? channel.agentId ?? "";
@@ -3812,8 +4154,10 @@ export default function TaskChatPage() {
 
   const isGroupTab = activeTab === "group";
   /* ---------- 渲染：加载 / 错误 / 三栏 ---------- */
+  const channelError = teamId ? channelsQuery.isError : legacyChannelsQuery.isError;
+  const channelErrorMsg = teamId ? channelsQuery.error : legacyChannelsQuery.error;
   const pageError = taskQuery.isError ? (isApiError(taskQuery.error) ? taskQuery.error.message : "加载任务失败")
-    : channelsQuery.isError ? (isApiError(channelsQuery.error) ? channelsQuery.error.message : "加载频道失败")
+    : channelError ? (isApiError(channelErrorMsg) ? (channelErrorMsg as any).message : "加载频道失败")
     : channelId && channelQuery.isError ? (isApiError(channelQuery.error) ? channelQuery.error.message : "加载团队失败")
     : isGroupTab
       ? channelId && messagesQuery.isError
@@ -3866,7 +4210,7 @@ export default function TaskChatPage() {
         startingAgentId={startDmMutation.isPending ? (startDmMutation.variables?.taskAgentId ?? startDmMutation.variables?.agentId ?? null) : null}
         onStartDm={handleStartDm}
         dmError={dmError}
-        teamEditable={task.status === "pending" || task.status === "in_progress"}
+        teamEditable={!teamId && (task.status === "pending" || task.status === "in_progress")}
         agentOptions={agentOptions}
         customAgents={customAgents}
         adding={addInstanceMutation.isPending}
@@ -3884,7 +4228,7 @@ export default function TaskChatPage() {
       {/* 消息区 */}
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", backgroundColor: neutral[50] }}>
         <ChatHeader
-        title={task.title}
+        title={team?.name ?? task.title}
         statusLabel={statusLabel}
         agents={agentMembers}
         onRefresh={() => {
@@ -3896,6 +4240,42 @@ export default function TaskChatPage() {
         }}
         refreshing={isGroupTab ? messagesQuery.isFetching : privateMessagesQuery.isFetching}
       />
+        {teamId && (
+          <div
+            data-testid="team-session-redirect-banner"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: space.sm,
+              padding: `${space.sm}px ${space.xl}px`,
+              backgroundColor: "rgba(37,99,235,0.08)",
+              borderBottom: `1px solid rgba(37,99,235,0.14)`,
+              fontSize: fontSize.sm,
+              color: "#2563EB",
+            }}
+          >
+            <span>此任务的群聊已迁移至团队会话（常驻群聊，按团队复用）</span>
+            <button
+              type="button"
+              data-testid="goto-team-session"
+              data-team-id={teamId}
+              onClick={() => router.push(`/teams/${teamId}/session`)}
+              style={{
+                marginLeft: "auto",
+                padding: `${space.xs}px ${space.md}px`,
+                borderRadius: radius.pill,
+                border: "1px solid #2563EB",
+                backgroundColor: "#2563EB",
+                color: "#FFF",
+                fontSize: fontSize.sm,
+                fontWeight: 500,
+                cursor: "pointer",
+              }}
+            >
+              前往团队会话 →
+            </button>
+          </div>
+        )}
         {/* 私聊 Tabs（Scheme C）：群聊 + 各实例私聊，同页切换 */}
         <div
           data-testid="dm-tabs"
@@ -4050,37 +4430,45 @@ export default function TaskChatPage() {
         </div>
       </div>
 
-      {/* 右侧面板拖拽分隔条（is_0000000017） */}
       <ResizeHandle label="调整任务面板宽度" onResizeStart={taskPanel.onResizeStart} />
 
-      <TaskPanel
-        task={task}
-        agents={agentMembers}
-        onOpenArtifacts={() => router.push(`/artifacts?pid=${task.projectId}`)}
-        artifacts={artifactsQuery.data?.items ?? []}
-        artifactsTotal={artifactsQuery.data?.total ?? 0}
-        artifactsLoading={artifactsQuery.isPending}
-        onOpenIssues={() => router.push(`/issues?pid=${task.projectId}`)}
-        issues={issuesQuery.data?.items ?? []}
-        issuesTotal={issuesQuery.data?.total ?? 0}
-        issuesLoading={issuesQuery.isPending}
-        onOpenIssueDetail={setDetailIssueId}
-        onEditTaskInfo={() => setTaskEditOpen(true)}
-        width={taskPanel.width}
-        onToggleManagedMode={handleToggleManagedMode}
-        onOpenDocs={(docSlug) => router.push(docSlug ? `/docs/${taskId}?doc=${docSlug}` : `/docs/${taskId}`)}
-        onOpenProto={(protoId) => router.push(protoId ? `/docs/${taskId}?proto=${protoId}` : `/docs/${taskId}?proto=1`)}
-        plan={plansQuery.data ?? null}
-        planLoading={plansQuery.isPending}
-        planError={plansQuery.error}
-        onReviewPlan={(planId) => {
-          setReviewDialogPlanId(planId);
-          setReviewDialogVerdict("approved");
-          setReviewDialogReason("");
-          setReviewDialogError(null);
-        }}
-        reviewPending={planReviewMutation.isPending}
-      />
+      <div style={{ width: taskPanel.width, flexShrink: 0, display: "flex", flexDirection: "column", overflow: "hidden", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}` }}>
+        <TaskRightTabs team={team} task={task} taskId={taskId} artifactsQuery={artifactsQuery} issuesQuery={issuesQuery} plansQuery={plansQuery} agents={agentMembers} onEditTaskInfo={()=>setTaskEditOpen(true)} onOpenArtifacts={()=>router.push(`/artifacts?pid=${task.projectId}`)} onOpenIssues={()=>router.push(`/issues?taskId=${taskId}`)} onToggleManagedMode={handleToggleManagedMode} onToggleExecutionMode={handleToggleExecutionMode} />
+        <div style={{ display: "none" }}>
+          <TeamQueueCard team={team} taskId={taskId} />
+          <TeamMemoryCard team={team} task={task} />
+        </div>
+        <div style={{ display: "none", flex: 1, minHeight: 0, overflowY: "auto" }}>
+          <TaskPanel
+          task={task}
+          agents={agentMembers}
+          onOpenArtifacts={() => router.push(`/artifacts?pid=${task.projectId}`)}
+          artifacts={artifactsQuery.data?.items ?? []}
+          artifactsTotal={artifactsQuery.data?.total ?? 0}
+          artifactsLoading={artifactsQuery.isPending}
+          onOpenIssues={() => router.push(`/issues?pid=${task.projectId}`)}
+          issues={issuesQuery.data?.items ?? []}
+          issuesTotal={issuesQuery.data?.total ?? 0}
+          issuesLoading={issuesQuery.isPending}
+          onOpenIssueDetail={setDetailIssueId}
+          onEditTaskInfo={() => setTaskEditOpen(true)}
+          width={taskPanel.width}
+          onToggleManagedMode={handleToggleManagedMode}
+          onOpenDocs={(docSlug) => router.push(docSlug ? `/docs/${taskId}?doc=${docSlug}` : `/docs/${taskId}`)}
+          onOpenProto={(protoId) => router.push(protoId ? `/docs/${taskId}?proto=${protoId}` : `/docs/${taskId}?proto=1`)}
+          plan={plansQuery.data ?? null}
+          planLoading={plansQuery.isPending}
+          planError={plansQuery.error}
+          onReviewPlan={(planId) => {
+            setReviewDialogPlanId(planId);
+            setReviewDialogVerdict("approved");
+            setReviewDialogReason("");
+            setReviewDialogError(null);
+          }}
+          reviewPending={planReviewMutation.isPending}
+        />
+        </div>
+      </div>
 
       {/* 任务信息编辑弹窗（is_0000000011） */}
       <TaskInfoEditModal

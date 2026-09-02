@@ -45,8 +45,8 @@ import {
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /* ------------------------------ 待开始状态（页面内本地定义，不动共享层） ------------------------------ */
-/** 看板状态 = 共享 StatusKey(4 态) + 新增「待开始」（PRD 03 FR-03 状态机 5 态） */
-type BoardStatus = StatusKey | "待开始";
+/** 看板状态 = 共享 StatusKey(4 态) + 新增「待开始」/「排队中」（PRD 03 FR-03 状态机 6 态，Todo6 queued） */
+type BoardStatus = StatusKey | "待开始" | "排队中";
 
 /** 「待开始」本地配色：灰蓝 var(--color-neutral-600) 系（与已归档灰 var(--color-neutral-500) 区分，偏深偏冷） */
 const WAITING_STATUS = {
@@ -56,11 +56,11 @@ const WAITING_STATUS = {
 } as const;
 
 /** 待开始徽章（仿 StatusBadge 视觉，仅用于「待开始」，其余状态仍走共享 StatusBadge） */
-function WaitingBadge() {
+function WaitingBadge({ label = "待开始" }: { label?: string }) {
   return (
     <span
       data-testid="status-badge"
-      data-status="待开始"
+      data-status={label}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -87,19 +87,21 @@ function WaitingBadge() {
           flexShrink: 0,
         }}
       />
-      待开始
+      {label}
     </span>
   );
 }
 
 /** 按状态渲染徽章：「待开始」用本地 WaitingBadge，其余复用共享 StatusBadge */
 function renderStatusBadge(status: BoardStatus) {
-  return status === "待开始" ? <WaitingBadge /> : <StatusBadge status={status} />;
+  if (status === "待开始" || status === "排队中") return <WaitingBadge label={status} />;
+  return <StatusBadge status={status} />;
 }
 
 /* ------------------------------ API 数据模型（T6 DTO / 09 篇 §3.4） ------------------------------ */
-/** 后端五态（TASK_STATUS）。 */
+/** 后端六态（TASK_STATUS，含 queued 排队）。 */
 type TaskApiStatus =
+  | "queued"
   | "pending"
   | "in_progress"
   | "pending_review"
@@ -118,6 +120,7 @@ interface TaskItem {
   mainAgentId: string | null;
   backgroundDocs: unknown[];
   teamAgentIds: string[];
+  teamId?: string | null;
   createdBy: string;
   createdAt: string;
   startedAt: string | null;
@@ -142,8 +145,9 @@ interface ProjectsResponse {
   pageSize: number;
 }
 
-/** API 状态 → 看板中文状态（对齐原型筛选条文案）。 */
+/** API 状态 → 看板中文状态（对齐原型筛选条文案，queued 排队中）。 */
 const STATUS_LABEL: Record<TaskApiStatus, BoardStatus> = {
+  queued: "排队中",
   pending: "待开始",
   in_progress: "进行中",
   pending_review: "待验收",
@@ -197,6 +201,7 @@ interface StatusFilter {
 
 const filters: StatusFilter[] = [
   { key: "all", label: "全部" },
+  { key: "排队中", label: "排队中", status: "queued" },
   { key: "待开始", label: "待开始", status: "pending" },
   { key: "进行中", label: "进行中", status: "in_progress" },
   { key: "待验收", label: "待验收", status: "pending_review" },
@@ -213,6 +218,7 @@ interface TaskCardProps {
 }
 
 function TaskCard({ task, onOpen, projectName }: TaskCardProps) {
+  const router = useRouter();
   return (
     <section
       data-testid="task-card"
@@ -362,6 +368,36 @@ function TaskCard({ task, onOpen, projectName }: TaskCardProps) {
 
       {/* 状态流转操作（OBS-010：按状态渲染开始/提交验收/验收通过/驳回/归档，共享 TaskStatusActions） */}
       <TaskStatusActions taskId={task.id} status={task.status} />
+      {task.teamId && (
+        <button
+          type="button"
+          data-testid="enter-team-session"
+          data-team-id={task.teamId}
+          onClick={(e) => {
+            e.stopPropagation();
+            router.push(`/teams/${task.teamId}/session`);
+          }}
+          style={{
+            marginTop: space.sm,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: space.xs,
+            width: "100%",
+            padding: `${space.sm}px ${space.md}px`,
+            borderRadius: radius.md,
+            border: `1px solid ${neutral[200]}`,
+            backgroundColor: "var(--color-surface)",
+            color: "#2563EB",
+            fontSize: fontSize.sm,
+            fontWeight: 500,
+            cursor: "pointer",
+            fontFamily: fontFamily.body,
+          }}
+        >
+          进入会话 →
+        </button>
+      )}
     </section>
   );
 }

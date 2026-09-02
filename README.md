@@ -2,15 +2,17 @@
 
 Virtual team collaboration platform for AI agents — assemble role-based agent teams (PM, architect, developer, tester) per task; collaborate via group chat, issues, and artifact workflows.
 
-vteam 是任务驱动的多 Agent 虚拟团队协作平台。用户创建任务后，为任务组建角色化的虚拟团队（产品经理 / 项目经理 / 架构师 / 开发者 / 测试），各角色 Agent 通过群聊、私聊、Issue 与产出物工作流协作交付。
+vteam 是任务驱动的多 Agent 虚拟团队协作平台。用户先创建**全局团队**（一团队一群，成员多实例），再为任务**指派团队**（`teamId` 必填），各角色实例通过群聊、私聊、Issue 与产出物工作流协作交付；同团队多任务串行 FIFO 排队，群聊与会话可按团队复用。
 
 ## 功能特性
 
 ### 任务驱动
 
-- 任务全生命周期：创建任务 → 组建虚拟团队 → 启动 → 验收 → 归档（状态机：进行中 / 待验收 / 已完成 / 已归档）
-- 角色可多实例：同一角色可添加多个实例（如开发者-1、开发者-2），每个实例拥有独立的会话、私聊、被 @ 与 issue 指派；任务创建后仍可在详情页继续添加实例
-- 主 Agent 动态化：主 Agent 由用户选择（默认项目经理），职责在运行时动态注入；群聊中无 @ 的消息自动路由给主 Agent
+- 任务全生命周期：创建任务（指派全局团队 `teamId`）→ 排队/启动（`queued`/`pending` → 进行中）→ 验收 → 归档（状态机：排队中 / 进行中 / 待验收 / 已完成 / 已归档，队首自动晋升）
+- 全局团队与串行排队：一团队一群（`team_group`），同团队多任务 FIFO 串行（`current_task_id` 指队首，`team_queues` 按 `position` 排队，支持取消排队 `DELETE /teams/:id/queue/:taskId`）
+- 角色多实例：同一模板 Agent 可在团队内创建多个实例（如开发者-1、开发者-2），各实例独立会话、私聊、被 @ 与 issue 指派；实例在团队侧管理，任务侧为快照
+- 主 Agent 动态化：主 Agent 由用户选择（默认产品经理，须在团队内），职责在运行时动态注入；群聊中无 @ 的消息自动路由给主 Agent
+- 记忆开关：团队 `reuseSession`（默认 true 跨任务复用）与任务 `resetAfterComplete`（覆盖开关，下任务开新会话）控制会话复用
 
 ### 角色化 Agent
 
@@ -20,8 +22,10 @@ vteam 是任务驱动的多 Agent 虚拟团队协作平台。用户创建任务�
 
 ### 协作方式
 
-- 群聊：@ 触发、@all 广播、Agent 互 @（`notify_agent`）、SSE 流式输出（两阶段 loading）
-- 私聊：按实例独立隔离，与群聊并行
+ - 团队常驻会话：`/teams/:id/session` 按 `teamId` 复用群聊（`team_group` 单例，切任务不切群），看板/列表/团队详情的“进入会话”统一指向该路由，旧 `/tasks/:id` 群聊入口隐藏或 302 跳至团队会话；状态 Tab 改为任务列表（当前执行队首 `team.currentTaskId` + 等待队列 FIFO 可取消）
+- 群聊：一团队一群（`team_group` 复用，消息按 `taskId` 分区过滤 + 系统分隔），@ 触发、@all 广播、Agent 互 @（`notify_agent`）、SSE 流式输出（两阶段 loading），历史跨任务可见，按 `team:` + `channel:` 订阅
+- 私聊：按 `team_member_id` 复用（`teamId + teamMemberId` 维度幂等），与群聊并行，历史可跨任务保留（`reuseSession` 时）
+- 队列视图：团队详情队列预览与状态 Tab 任务列表 `TeamQueueCard`（FIFO 徽章、当前位置、取消排队，仅 `queued` 可取消）
 - Issue 管理：需求 / 缺陷 issue 创建指派，状态流转（start → resolve → close），支持标签
 - 产出物管理：Agent 通过 MCP `submit_artifact` 提交产出物，沉淀为文档库，验收时版本基线锁定
 
@@ -131,13 +135,19 @@ docker compose up -d --build
 └── .omo/       # 内部计划 / 验证证据目录
 ```
 
+## 迁移（Breaking）
+
+团队重构为 **expand-contract** 迁移：新增 `teams`/`team_members`/`team_queues` 3 表，`tasks.team_id` 改必填（`teamId!`），`chat_channels(team_id, team_member_id)` 一团队一群（`task_group` 已废弃 400），`messages.task_id` 分区，任务六态新增 `queued` FIFO 排队。**回滚为重建库**：`docker compose down -v && docker compose up -d --build`（或 `npx prisma migrate reset` + `npm run seed`）。详见 [15-数据模型 §8](docs/agent-platform/15-数据模型细化（ER图）.md#8-团队重构-breaking-变更与迁移) 与 [28-团队模型与排队设计 §6](docs/agent-platform/28-团队模型与排队设计.md#6-迁移与回滚)。
+
 ## 文档
 
 设计与实现细节见 `docs/agent-platform/`（20+ 篇设计文档），推荐从以下开始：
 
 - [08-平台架构设计](docs/agent-platform/08-平台架构设计.md)：三端架构与模块划分
 - [13-任务状态机与全生命周期](docs/agent-platform/13-任务状态机与全生命周期.md)：任务状态流转
-- [14-Agent配置与虚拟团队模型](docs/agent-platform/14-Agent配置与虚拟团队模型.md)：角色、实例与团队模型
+- [14-Agent配置与虚拟团队模型](docs/agent-platform/14-Agent配置与虚拟团队模型.md)：全局团队与实例模型
+- [28-团队模型与排队设计](docs/agent-platform/28-团队模型与排队设计.md)：全局团队、FIFO 排队与复用
+- [15-数据模型细化（ER图）](docs/agent-platform/15-数据模型细化（ER图）.md)：Team/TeamMember/TeamQueue ER 与迁移
 - [16-内置Agent角色与提示词库](docs/agent-platform/16-内置Agent角色与提示词库.md)：五类角色身份与四方向提示词
 - [21-平台MCP-Server设计方案](docs/agent-platform/21-平台MCP-Server设计方案.md)：vteam MCP 工具设计
 
