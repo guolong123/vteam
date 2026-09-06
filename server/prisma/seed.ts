@@ -968,6 +968,19 @@ TSX 源码 (<kebab-name>/index.tsx)
     });
   }
 
+  // 种子团队创建者即 owner（team_user_members；create() 同事务行为的种子等价）
+  await prisma.teamUserMember.upsert({
+    where: { teamId_userId: { teamId: seedTeamId, userId: admin.id } },
+    update: {},
+    create: {
+      id: 'tum_0000000001',
+      teamId: seedTeamId,
+      userId: admin.id,
+      role: 'owner',
+      joinedAt: new Date(),
+    },
+  });
+
   console.log('Seed 完成：');
   console.log(`  - 角色：${adminRole.name} / ${memberRole.name}`);
   console.log(`  - 用户：admin(u_admin) / seed-admin(${admin.id}) / seed-member(u_seed_member)`);

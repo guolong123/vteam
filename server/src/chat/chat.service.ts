@@ -821,6 +821,44 @@ export class ChatService {
       }
     }
 
+    // 零任务团队 @-mention 补会话（mention-target-fix）：resolveMentions 在无 taskId
+    // 时只能降级 no_session（无 task 会话可查），此处对 tmm_ 目标经分派器即建即得
+    // 团队会话，翻 dispatched + 回填 sessionId，使下方 targets 过滤 + dispatch()
+    // 拾取。B2 无 @ 主触发不动；task-mode（effectiveTaskId 非空）不进本分支；
+    // 单成员失败仅日志并保留 no_session，不阻塞其他目标（FR-21 同形）。
+    if (!effectiveTaskId && channel.teamId && triggers.length > 0) {
+      for (const t of triggers) {
+        if (t.status !== 'no_session') continue;
+        const memberId = t.instanceId ?? null;
+        if (!memberId || !memberId.startsWith('tmm_')) continue;
+        try {
+          const ensured = await (
+            this.dispatcher as unknown as {
+              buildTeamMemberTrigger(
+                teamId: string,
+                teamMemberId: string,
+              ): Promise<{
+                agentId: string;
+                instanceId: string;
+                sessionId: string;
+              } | null>;
+            }
+          ).buildTeamMemberTrigger(channel.teamId, memberId);
+          if (ensured?.sessionId) {
+            t.agentId = ensured.agentId;
+            t.instanceId = ensured.instanceId;
+            t.sessionId = ensured.sessionId;
+            t.status = 'dispatched';
+          }
+        } catch (err) {
+          this.logger.error(
+            `team-mode @-mention 会话确保失败 team=${channel.teamId} member=${memberId} channel=${channelId}: ${(err as Error)?.message ?? err}`,
+            (err as Error)?.stack,
+          );
+        }
+      }
+    }
+
     if (channel.teamId && effectiveTaskId) {
       const last = await this.prisma.message.findFirst({
         where: { channelId },

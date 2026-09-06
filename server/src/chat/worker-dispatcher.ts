@@ -1619,6 +1619,35 @@ export class WorkerDispatcher
     };
   }
 
+  /**
+   * team-mode 成员触发（无任务 @-mention）：按 (teamId, teamMemberId) 定位成员 +
+   * ensureTeamSession，会话即建即返，供零任务团队 @agent/@all 目标补会话
+   * （createMessage 内 no_session → dispatched 翻转用）。
+   * 成员缺失即错，不回退 taskAgent（跨维度回退禁令）；会话创建复用
+   * ensureTeamSession，无新会话逻辑（与 buildTeamMainTrigger 同形）。
+   */
+  async buildTeamMemberTrigger(
+    teamId: string,
+    teamMemberId: string,
+  ): Promise<{ agentId: string; instanceId: string; sessionId: string }> {
+    const member = await (this.prisma as any).teamMember.findFirst({
+      where: { id: teamMemberId, teamId },
+      select: { id: true, agentId: true },
+    });
+    if (!member) {
+      throw new Error(`成员 ${teamMemberId} 不在团队 ${teamId} 内`);
+    }
+    const session = await this.sessionLifecycle.ensureTeamSession(
+      teamId,
+      member.id,
+    );
+    return {
+      agentId: member.agentId,
+      instanceId: member.id,
+      sessionId: session.id,
+    };
+  }
+
   /** team-mode 频道定位：(teamId, teamMemberId) 私聊优先 → team_group 回退；无频道 → null。 */
   private async resolveTeamChannel(teamId: string, teamMemberId: string) {
     const dm = await this.prisma.chatChannel.findFirst({
