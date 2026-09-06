@@ -158,6 +158,49 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     }
   });
 
+  test("team-session zero-task 零任务直聊（无选择器）", async ({ page, request }) => {
+    const login = await request.post("/api/v1/auth/login", {
+      data: { username: "seed-admin", password: "Admin@123456" },
+    });
+    const { accessToken } = await login.json();
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    // 全新零任务团队（创建者即 owner；后端建团队即建 team_group 频道，即完整直聊路径；
+    // 不复用种子 tm_0000000002：其建于频道自动创建之前，无频道只会进 team-session-empty）
+    let agentId = "a_product";
+    const seed = await request.get("/api/v1/teams/tm_0000000001", { headers });
+    if (seed.ok()) {
+      const members = (((await seed.json()) as { members: { agentId: string }[] }).members ?? []);
+      if (members[0]?.agentId) agentId = members[0].agentId;
+    }
+    const created = await request.post("/api/v1/teams", {
+      headers,
+      data: { name: `e2e-ZeroTask-${Date.now()}`, members: [{ agentId }] },
+    });
+    expect(created.ok()).toBeTruthy();
+    const teamId = ((await created.json()) as { id: string }).id;
+    expect(teamId).toBeTruthy();
+    await page.goto(`/teams/${teamId}/session`);
+    await expectNavShell(page);
+    await expect(page.getByTestId("team-session-root")).toBeVisible();
+    await expect(page.getByTestId("team-session-empty")).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByTestId("team-session-current-task")).toHaveCount(0);
+    await expect(page.getByTestId("team-right-empty")).toBeVisible();
+    await expect(page.getByTestId("chat-message-list")).toBeVisible();
+    const sent = `e2e-zerotask-${Date.now()}`;
+    await page.getByTestId("message-input").fill(sent);
+    await page.getByTestId("message-input-send").click();
+    await expect(page.getByTestId("chat-message-list").getByText(sent)).toBeVisible();
+    expect(page.url()).toContain(`/teams/${teamId}/session`);
+    await expect(page.getByTestId("team-session-send-error")).toHaveCount(0);
+    await expect(page.getByTestId("team-session-current-task")).toHaveCount(0);
+    const after = await request.get(`/api/v1/teams/${teamId}`, { headers });
+    if (after.ok()) {
+      expect(((await after.json()) as { currentTaskId: string | null }).currentTaskId ?? null).toBeNull();
+    }
+    await request.delete(`/api/v1/teams/${teamId}`, { headers });
+  });
+
   test("8-10/17 导航变体（AppShell 融合导航承载）", async ({ page }) => {
     // nav-cmdk / nav-hybrid / nav-rail 三变体无独立路由，融合导航为终态——
     // 命令面板（nav-cmdk 核心）与 Dock 面板（nav-rail 核心）在登录页后全站可用

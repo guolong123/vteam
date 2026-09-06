@@ -152,6 +152,7 @@ export default function TeamSessionPage() {
   const [activeTab, setActiveTab] = useState<string>("group");
   const [privateChannelMap, setPrivateChannelMap] = useState<Map<string, string>>(new Map());
   const [dmError, setDmError] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
   const activePrivateId = activeTab.startsWith("private:") ? activeTab.slice(8) : null;
   const isGroupTab = activeTab === "group";
 
@@ -598,15 +599,18 @@ export default function TeamSessionPage() {
       }),
     onSuccess: () => {
       setInput("");
+      setSendError(null);
       if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
       queryClient.invalidateQueries({ queryKey: ["channel", targetChannelId, "messages"] });
     },
     onError: (err) => {
       console.error("[TeamSession] send message failed", { teamId, channelId: targetChannelId, error: err });
+      setSendError(isApiError(err) ? err.message : "发送失败，请稍后重试");
     },
   });
   const handleSend = (payload: SendMessagePayload) => {
     if (!targetChannelId) return;
+    setSendError(null);
     const inst = privateMentionTarget;
     if (inst && (inst as { enabled?: boolean | null }).enabled === false) return;
     for (const m of payload.mentions) {
@@ -789,7 +793,7 @@ export default function TeamSessionPage() {
               <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>团队空闲</span>
             )}
           </div>
-          <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}>常驻群聊 · 按团队复用，切任务不切群 · {team.members.length} 成员 · 等待队列 {team.queue.length} 个</div>
+          <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}>常驻群聊 · 按团队复用，切任务不切群 · {(team.members ?? []).length} 成员 · 等待队列 {(team.queue ?? []).length} 个</div>
         </div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: space.sm }}>
           <button type="button" data-testid="team-session-refresh" aria-label="刷新会话" onClick={() => { queryClient.invalidateQueries({ queryKey: ["channel", channelId, "messages"] }); queryClient.invalidateQueries({ queryKey: ["channels", "team_group", teamId] }); queryClient.invalidateQueries({ queryKey: ["team", teamId] }); }} style={{ width: 32, height: 32, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: neutral[500], cursor: "pointer" }}>↻</button>
@@ -933,6 +937,11 @@ export default function TeamSessionPage() {
           </div>
 
           <div style={{ padding: `${space.md}px ${space.xl}px`, backgroundColor: "var(--color-surface)", borderTop: `1px solid ${neutral[200]}` }}>
+            {sendError && (
+              <div data-testid="team-session-send-error" role="alert" style={{ marginBottom: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: "1px solid rgba(220,38,38,0.35)", backgroundColor: "rgba(220,38,38,0.06)", color: "#DC2626", fontSize: fontSize.sm }}>
+                发送失败：{sendError}
+              </div>
+            )}
             <MessageInput
               value={input}
               onChange={setInput}
