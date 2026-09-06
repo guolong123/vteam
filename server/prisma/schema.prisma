@@ -62,6 +62,7 @@ model User {
   assignedIssues Issue[]         @relation("IssueAssigneeUser")
   createdIssues  Issue[]         @relation("IssueCreatorUser")
   teamsCreated   Team[]          @relation("TeamCreator")
+  teamUserMembers TeamUserMember[]
 
   @@map("users")
 }
@@ -136,6 +137,9 @@ model Team {
   currentTask  Task?         @relation("TeamCurrentTask", fields: [currentTaskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   mainAgentMember TeamMember? @relation("TeamMainAgent", fields: [mainAgentMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   members      TeamMember[]
+  userMembers  TeamUserMember[]
+  sessions     Session[]
+  taskGroupInstances TaskGroupInstance[]
   queues       TeamQueue[]
   tasks        Task[]        @relation("TaskTeam")
   chatChannels ChatChannel[]
@@ -156,6 +160,7 @@ model TeamMember {
   team         Team          @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent        Agent         @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   sessions     Session[]
+  taskGroupInstances TaskGroupInstance[]
   chatChannels ChatChannel[]
   mainForTeams Team[]        @relation("TeamMainAgent")
 
@@ -175,6 +180,20 @@ model TeamQueue {
 
   @@index([teamId, position], map: "idx_team_queues_team_position")
   @@map("team_queues")
+}
+
+model TeamUserMember {
+  id       String   @id
+  teamId   String   @map("team_id")
+  userId   String   @map("user_id")
+  role     String
+  joinedAt DateTime @default(now()) @map("joined_at")
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([teamId, userId], map: "uk_team_user_members_team_user")
+  @@map("team_user_members")
 }
 
 // ==================================================================
@@ -277,24 +296,30 @@ model TaskEvent {
 
 model Session {
   id           String   @id
-  taskId       String   @map("task_id")
-  taskAgentId  String   @map("task_agent_id") // 绑任务实例（每实例独立会话）
+  taskId       String?  @map("task_id")
+  taskAgentId  String?  @map("task_agent_id") // 绑任务实例（每实例独立会话；team-mode 下可空）
+  teamId       String?  @map("team_id") // team-mode 执行上下文（nullable 便于存量回填；业务层 team-mode 必填）
   agentId      String   @map("agent_id") // 保留（角色渲染/模型解析），不再是唯一键维度
   teamMemberId String?  @map("team_member_id")
+  // team-mode 幂等键承载列（STORED 生成列：task_id 为空时 = team_id|team_member_id，其余为 NULL；DB 唯一索引仅约束 task-less 行，task 绑定行沿用 uk_sessions_task_agent）
+  teamMemberKey String?  @map("team_member_key")
   workerId     String?  @map("worker_id")
   instanceRef  String?  @map("instance_ref")
   status       String   @default("created")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  task       Task        @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  task       Task?       @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  team       Team?       @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent      Agent       @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   worker     Worker?     @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  // 绑任务实例（task_agent_id 已存在列，仅补 Prisma 关系便于任务详情 include sessions 状态）
-  taskAgent  TaskAgent   @relation(fields: [taskAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  // 绑任务实例（task_agent_id 已存在列，仅补 Prisma 关系便于任务详情 include sessions 状态；team-mode 下可空）
+  taskAgent  TaskAgent?  @relation(fields: [taskAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   teamMember TeamMember? @relation(fields: [teamMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([taskId, taskAgentId], map: "uk_sessions_task_agent")
+  @@unique([teamMemberKey], map: "uk_sessions_team_member")
+  @@index([teamId], map: "idx_sessions_team_id")
   @@map("sessions")
 }
 
@@ -728,14 +753,18 @@ model Worker {
 }
 
 model TaskGroupInstance {
-  id         String    @id
-  taskId     String    @map("task_id")
-  workerId   String    @map("worker_id")
-  instanceId String    @map("instance_id")
-  createdAt  DateTime  @default(now()) @map("created_at")
-  removedAt  DateTime? @map("removed_at")
+  id           String    @id
+  taskId       String?   @map("task_id")
+  teamId       String?   @map("team_id")
+  teamMemberId String?   @map("team_member_id")
+  workerId     String    @map("worker_id")
+  instanceId   String    @map("instance_id")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  removedAt    DateTime? @map("removed_at")
 
-  task   Task   @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  task       Task?       @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  team       Team?       @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  teamMember TeamMember? @relation(fields: [teamMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   worker Worker @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@map("task_group_instances")

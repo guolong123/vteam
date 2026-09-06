@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { SESSION_STATUS } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
@@ -8,8 +8,13 @@ import { PrismaService } from '../prisma/prisma.service';
 /** TaskGroupInstance 主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
 const TASK_GROUP_INSTANCE_ID_PREFIX = 'ti';
 
+/** Session 主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
+const SESSION_ID_PREFIX = 's';
+
 const SESSION_ERRORS = {
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
+  TEAM_MEMBER_NOT_FOUND: 'TEAM_MEMBER_NOT_FOUND',
+  TEAM_SESSION_MISSING_DIMENSION: 'TEAM_SESSION_MISSING_DIMENSION',
 } as const;
 
 /** TaskGroupInstance 对外视图（id/taskId/workerId/instanceId/createdAt/removedAt）。 */
@@ -36,6 +41,8 @@ export type TaskGroupInstanceRow = {
  */
 @Injectable()
 export class SessionLifecycleService implements OnModuleInit {
+  private readonly logger = new Logger(SessionLifecycleService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly idGen: IdGeneratorService,
@@ -71,7 +78,7 @@ export class SessionLifecycleService implements OnModuleInit {
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const session = await tx.session.findUnique({
         where: { id: sessionId },
-        select: { id: true, taskId: true },
+        select: { id: true, taskId: true, teamId: true, teamMemberId: true },
       });
       if (!session) {
         throw new NotFoundException({
@@ -79,23 +86,55 @@ export class SessionLifecycleService implements OnModuleInit {
           message: `会话 ${sessionId} 不存在`,
         });
       }
-      // 幂等：同 (taskId, workerId, instanceId) 已有实例行则复用（二次 @ 复用同一 opencode 会话）
-      const existing = await tx.taskGroupInstance.findFirst({
-        where: { taskId: session.taskId, workerId, instanceId },
-        select: { id: true },
-      });
-      const instanceRowId =
-        existing?.id ??
-        (
-          await tx.taskGroupInstance.create({
-            data: {
-              id: await this.idGen.nextId(TASK_GROUP_INSTANCE_ID_PREFIX),
-              taskId: session.taskId,
-              workerId,
-              instanceId,
-            },
-          })
-        ).id;
+      let instanceRowId: string;
+      if (session.taskId) {
+        // task-mode（原语义保持不动）：同 (taskId, workerId, instanceId) 已有行则复用
+        const existing = await tx.taskGroupInstance.findFirst({
+          where: { taskId: session.taskId, workerId, instanceId },
+          select: { id: true },
+        });
+        instanceRowId =
+          existing?.id ??
+          (
+            await tx.taskGroupInstance.create({
+              data: {
+                id: await this.idGen.nextId(TASK_GROUP_INSTANCE_ID_PREFIX),
+                taskId: session.taskId,
+                workerId,
+                instanceId,
+              },
+            })
+          ).id;
+      } else {
+        // team-mode（无任务团队直聊）：幂等维度为 (teamId, teamMemberId, workerId, instanceId)，
+        // task_id 置空；task-mode 分支不受影响
+        if (!session.teamId || !session.teamMemberId) {
+          throw new BadRequestException({
+            code: SESSION_ERRORS.TEAM_SESSION_MISSING_DIMENSION,
+            message: `会话 ${sessionId} 缺少团队维度（teamId/teamMemberId），无法绑定 worker`,
+          });
+        }
+        const teamId = session.teamId;
+        const teamMemberId = session.teamMemberId;
+        const existing = await tx.taskGroupInstance.findFirst({
+          where: { teamId, teamMemberId, workerId, instanceId },
+          select: { id: true },
+        });
+        instanceRowId =
+          existing?.id ??
+          (
+            await tx.taskGroupInstance.create({
+              data: {
+                id: await this.idGen.nextId(TASK_GROUP_INSTANCE_ID_PREFIX),
+                taskId: null,
+                teamId,
+                teamMemberId,
+                workerId,
+                instanceId,
+              },
+            })
+          ).id;
+      }
 
       await tx.session.update({
         where: { id: sessionId },
@@ -113,6 +152,82 @@ export class SessionLifecycleService implements OnModuleInit {
         instanceId,
         instanceRowId,
       };
+    });
+  }
+
+  /**
+   * 团队会话确保存在（team-free-chat 无任务直聊）：
+   * 按 uk_sessions_team_member 键（team_member_key = teamId|teamMemberId，仅 task_id 为空行参与）
+   * 查找，命中则复用，未命中则创建 `{teamId 必填，taskId/taskAgentId 置空}` 行。
+   * 与 bindSessionToWorker 同事务风格；bind 仅绑定既有行（缺失 404），创建走本方法。
+   */
+  async ensureTeamSession(teamId: string, teamMemberId: string) {
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const member = await tx.teamMember.findUnique({
+        where: { id: teamMemberId },
+        select: { id: true, teamId: true, agentId: true },
+      });
+      if (!member || member.teamId !== teamId) {
+        throw new NotFoundException({
+          code: SESSION_ERRORS.TEAM_MEMBER_NOT_FOUND,
+          message: `团队成员 ${teamMemberId} 不在团队 ${teamId} 内`,
+        });
+      }
+      const teamMemberKey = `${teamId}|${teamMemberId}`;
+      const existing = await tx.session.findUnique({
+        where: { teamMemberKey },
+        select: {
+          id: true,
+          teamId: true,
+          teamMemberId: true,
+          agentId: true,
+          workerId: true,
+          instanceRef: true,
+          status: true,
+        },
+      });
+      if (existing) {
+        return { ...existing, reused: true };
+      }
+      const select = {
+        id: true,
+        teamId: true,
+        teamMemberId: true,
+        agentId: true,
+        workerId: true,
+        instanceRef: true,
+        status: true,
+      };
+      try {
+        const created = await tx.session.create({
+          data: {
+            id: await this.idGen.nextId(SESSION_ID_PREFIX),
+            teamId,
+            teamMemberId,
+            agentId: member.agentId,
+            taskId: null,
+            taskAgentId: null,
+            status: SESSION_STATUS.created,
+          },
+          select,
+        });
+        return { ...created, reused: false };
+      } catch (err) {
+        // 并发竞态：两分派同时 findUnique 未命中后同键 create → P2002，重读复用胜者行
+        if ((err as { code?: string })?.code === 'P2002') {
+          this.logger.warn(
+            `ensureTeamSession 并发竞态 teamMemberKey=${teamMemberKey}，重读复用`,
+          );
+          const raced = await tx.session.findUnique({
+            where: { teamMemberKey },
+            select,
+          });
+          if (raced) {
+            return { ...raced, reused: true };
+          }
+        }
+        throw err;
+      }
     });
   }
 

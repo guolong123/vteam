@@ -200,7 +200,7 @@ describe('PlatformMcpController (HTTP)', () => {
   });
 
   describe('tools/list', () => {
-    it('→ 返回 26 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search + plan_submit/plan_review/plan_task_transition + team_view/my_profile + plan_get/plan_assign_reviewer + team_add_member + channel_send + wecom_reply）且 inputSchema 为 JSON Schema', async () => {
+    it('→ 返回 28 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search + plan_submit/plan_review/plan_task_transition + team_view/my_profile + plan_get/plan_assign_reviewer + team_add_member + channel_send + wecom_reply + task_create + my_projects）且 inputSchema 为 JSON Schema', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
@@ -243,10 +243,16 @@ describe('PlatformMcpController (HTTP)', () => {
         'team_add_member',
         'channel_send',
         'wecom_reply',
+        'task_create',
+        'my_projects',
       ]);
 
       for (const tool of tools) {
         expect(tool.description).toEqual(expect.any(String));
+        if (tool.name === 'my_projects') {
+          // my_projects 无入参（团队会话项目发现通道），跳过 taskId 属性断言
+          continue;
+        }
         if (tool.name === 'channel_send') {
           expect(tool.inputSchema).toMatchObject({
             type: 'object',
@@ -259,26 +265,24 @@ describe('PlatformMcpController (HTTP)', () => {
           properties: expect.objectContaining({ taskId: { type: 'string' } }),
         });
       }
-      // 必填字段派生：chat_history 仅 taskId 必填，sinceId/limit 可选
+      // 必填字段派生：chat_history taskId/teamId 双可选（refine 保证至少传一个），sinceId/limit 可选
       const chatHistory = tools.find((t) => t.name === 'chat_history')!;
-      expect(chatHistory.inputSchema.required).toEqual(['taskId']);
+      expect(chatHistory.inputSchema.required).toEqual([]);
       expect(chatHistory.inputSchema.properties.limit).toEqual({
         type: 'number',
       });
-      // group_post：taskId/selfInstanceId/content 必填，fileRef 可选
+      // group_post：selfInstanceId/content 必填，taskId/teamId 双可选，fileRef 可选
       const groupPost = tools.find((t) => t.name === 'group_post')!;
       expect(groupPost.inputSchema.required).toEqual([
-        'taskId',
         'selfInstanceId',
         'content',
       ]);
       expect(groupPost.inputSchema.properties.selfInstanceId).toEqual({
         type: 'string',
       });
-      // notify_agent：taskId/selfInstanceId/targetInstanceId/content 全必填
+      // notify_agent：selfInstanceId/targetInstanceId/content 必填，taskId/teamId 双可选
       const notifyAgent = tools.find((t) => t.name === 'notify_agent')!;
       expect(notifyAgent.inputSchema.required).toEqual([
-        'taskId',
         'selfInstanceId',
         'targetInstanceId',
         'content',
@@ -321,10 +325,9 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(issueTransition.inputSchema.properties.action).toEqual({
         type: 'string',
       });
-      // memory_save：taskId/selfInstanceId/level/content 必填，tags 可选；level 枚举归为 string
+      // memory_save：selfInstanceId/level/content 必填，taskId/teamId 双可选，tags 可选；level 枚举归为 string
       const memorySave = tools.find((t) => t.name === 'memory_save')!;
       expect(memorySave.inputSchema.required).toEqual([
-        'taskId',
         'selfInstanceId',
         'level',
         'content',
@@ -333,9 +336,9 @@ describe('PlatformMcpController (HTTP)', () => {
         type: 'string',
       });
       expect(memorySave.inputSchema.properties.tags).toEqual({ type: 'array' });
-      // memory_search：仅 taskId 必填，query/level/tags/limit 可选
+      // memory_search：taskId/teamId 双可选，query/level/tags/limit 可选
       const memorySearch = tools.find((t) => t.name === 'memory_search')!;
-      expect(memorySearch.inputSchema.required).toEqual(['taskId']);
+      expect(memorySearch.inputSchema.required).toEqual([]);
       expect(memorySearch.inputSchema.properties.limit).toEqual({
         type: 'number',
       });
@@ -430,6 +433,20 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(channelSend.inputSchema.properties.text).toEqual({
         type: 'string',
       });
+      // task_create：selfInstanceId/title/projectId 必填（projectId 无默认值），taskId/teamId 双可选
+      const taskCreate = tools.find((t) => t.name === 'task_create')!;
+      expect(taskCreate.inputSchema.required).toEqual([
+        'selfInstanceId',
+        'title',
+        'projectId',
+      ]);
+      expect(taskCreate.inputSchema.properties.projectId).toEqual({
+        type: 'string',
+      });
+      // my_projects：无入参
+      const myProjects = tools.find((t) => t.name === 'my_projects')!;
+      expect(myProjects.inputSchema.required).toEqual([]);
+      expect(myProjects.inputSchema.properties).toEqual({});
     });
   });
 

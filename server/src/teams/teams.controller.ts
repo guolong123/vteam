@@ -95,6 +95,28 @@ export class TeamsController {
     return this.teamsService.removeMember(id, memberId);
   }
 
+  @Post(':id/users')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('teams.edit')
+  @ApiOperation({ summary: '添加团队用户成员（userId 校验，重复 409）' })
+  addUserMember(
+    @Param('id') id: string,
+    @Body() dto: { userId: string; role?: string },
+  ) {
+    return this.teamsService.addUserMember(id, dto);
+  }
+
+  @Delete(':id/users/:userId')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('teams.edit')
+  @ApiOperation({ summary: '移除团队用户成员（联动 updatedAt/version）' })
+  removeUserMember(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+  ) {
+    return this.teamsService.removeUserMember(id, userId);
+  }
+
   @Post(':id/reset-sessions')
   @UseGuards(PermissionGuard)
   @RequirePermission('teams.edit')

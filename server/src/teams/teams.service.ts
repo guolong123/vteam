@@ -24,6 +24,7 @@ import { AddMemberDto, UpdateMemberDto } from './dto/add-member.dto';
 const ID_PREFIX = {
   team: 'tm',
   teamMember: 'tmm',
+  teamUserMember: 'tum',
   teamQueue: 'tq',
   channel: 'c',
 } as const;
@@ -42,6 +43,8 @@ const TEAM_ERRORS = {
   TEAM_BUSY: 'TEAM_BUSY',
   TEAM_QUEUE_NOT_EMPTY: 'TEAM_QUEUE_NOT_EMPTY',  AGENT_NOT_FOUND: 'AGENT_NOT_FOUND',
   MEMBER_NOT_FOUND: 'MEMBER_NOT_FOUND',
+  USER_NOT_FOUND: 'USER_NOT_FOUND',
+  USER_ALREADY_MEMBER: 'USER_ALREADY_MEMBER',
   VERSION_CONFLICT: 'VERSION_CONFLICT',
   TASK_NOT_QUEUED: 'TASK_NOT_QUEUED',
   TASK_NOT_PENDING: 'TASK_NOT_PENDING',
@@ -69,6 +72,7 @@ export class TeamsService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     await this.seedPrefix(ID_PREFIX.team, this.prisma.team as unknown as SeqModel);
     await this.seedPrefix(ID_PREFIX.teamMember, this.prisma.teamMember as unknown as SeqModel);
+    await this.seedPrefix(ID_PREFIX.teamUserMember, (this.prisma as any).teamUserMember as SeqModel);
     await this.seedPrefix(ID_PREFIX.teamQueue, (this.prisma as any).teamQueue as SeqModel);
   }
 
@@ -170,14 +174,24 @@ export class TeamsService implements OnModuleInit {
         });
       }
 
-      // 建团队即建群聊频道（一团队一群；任务创建流仅做幂等补建，新团队进会话不再"暂无频道"）
+      // 建团队即写入创建者 owner 成员行（team_user_members；与 team 创建同事务）
+      await tx.teamUserMember.create({
+        data: {
+          id: await this.idGen.nextId(ID_PREFIX.teamUserMember),
+          teamId,
+          userId,
+          role: 'owner',
+          joinedAt: new Date(),
+        },
+      });
+
+      // 建团队即建群聊频道（一团队一群；team_group_key 为生成列由 DB 自动计算，禁止显式写入）
       try {
         await tx.chatChannel.create({
           data: {
             id: await this.idGen.nextId(ID_PREFIX.channel),
             type: CHANNEL_TYPE.team_group,
             teamId,
-            teamGroupKey: teamId,
             taskId: null,
           } as any,
         });
@@ -218,6 +232,7 @@ export class TeamsService implements OnModuleInit {
             include: { agent: { select: { id: true, name: true, role: true } } },
             orderBy: { seq: 'asc' },
           },
+          userMembers: { orderBy: { joinedAt: 'asc' } },
           queues: { include: { task: { select: { title: true, status: true } } }, orderBy: { position: 'asc' } },
           currentTask: { select: { id: true, title: true, status: true } },
         },
@@ -242,6 +257,7 @@ export class TeamsService implements OnModuleInit {
           include: { agent: { select: { id: true, name: true, role: true } } },
           orderBy: [{ agentId: 'asc' }, { seq: 'asc' }],
         },
+        userMembers: { orderBy: { joinedAt: 'asc' } },
         queues: { include: { task: { select: { title: true, status: true } } }, orderBy: { position: 'asc' } },
         currentTask: { select: { id: true, title: true, status: true } },
       },
@@ -511,6 +527,115 @@ export class TeamsService implements OnModuleInit {
     await this.realtime.broadcast(
       EVENT_TYPES.TEAM_UPDATED,
       { teamId, action: 'member_remove', memberId },
+      { type: 'team', id: teamId },
+    );
+    return this.findOne(teamId);
+  }
+
+  async addUserMember(teamId: string, dto: { userId: string; role?: string }) {
+    const team = await this.prisma.team.findUnique({ where: { id: teamId } });
+    if (!team) {
+      throw new NotFoundException({
+        code: TEAM_ERRORS.TEAM_NOT_FOUND,
+        message: '团队不存在',
+      });
+    }
+    const userId = dto?.userId?.trim();
+    if (!userId) {
+      throw new BadRequestException('用户 ID 不能为空');
+    }
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException({
+        code: TEAM_ERRORS.USER_NOT_FOUND,
+        message: `用户 ${userId} 不存在`,
+      });
+    }
+    const existing = await (this.prisma as any).teamUserMember.findUnique({
+      where: { teamId_userId: { teamId, userId } },
+    });
+    if (existing) {
+      throw new ConflictException({
+        code: TEAM_ERRORS.USER_ALREADY_MEMBER,
+        message: '用户已是团队成员',
+      });
+    }
+    let created: any;
+    try {
+      created = await (this.prisma as any).teamUserMember.create({
+        data: {
+          id: await this.idGen.nextId(ID_PREFIX.teamUserMember),
+          teamId,
+          userId,
+          role: dto.role?.trim() || 'member',
+          joinedAt: new Date(),
+        },
+      });
+    } catch (err) {
+      // 并发竞态：两请求同时 findUnique 未命中后同键 create → P2002，重读确认后报干净 409
+      if ((err as { code?: string })?.code === 'P2002') {
+        this.logger.warn(
+          `addUserMember 并发竞态 team=${teamId} user=${userId}，重读确认`,
+        );
+        const raced = await (this.prisma as any).teamUserMember.findUnique({
+          where: { teamId_userId: { teamId, userId } },
+        });
+        if (raced) {
+          throw new ConflictException({
+            code: TEAM_ERRORS.USER_ALREADY_MEMBER,
+            message: '用户已是团队成员',
+          });
+        }
+      }
+      throw err;
+    }
+    await this.prisma.team.update({
+      where: { id: teamId },
+      data: { version: { increment: 1 } },
+    });
+    await this.realtime.broadcast(
+      EVENT_TYPES.TEAM_CHANGED,
+      { teamId, action: 'user_member_add', userMemberId: created.id, userId },
+      { type: 'global' },
+    );
+    await this.realtime.broadcast(
+      EVENT_TYPES.TEAM_UPDATED,
+      { teamId, action: 'user_member_add', userMemberId: created.id },
+      { type: 'team', id: teamId },
+    );
+    return this.findOne(teamId);
+  }
+
+  async removeUserMember(teamId: string, userId: string) {
+    const team = await this.prisma.team.findUnique({ where: { id: teamId } });
+    if (!team) {
+      throw new NotFoundException({
+        code: TEAM_ERRORS.TEAM_NOT_FOUND,
+        message: '团队不存在',
+      });
+    }
+    const member = await (this.prisma as any).teamUserMember.findUnique({
+      where: { teamId_userId: { teamId, userId } },
+    });
+    if (!member) {
+      throw new NotFoundException({
+        code: TEAM_ERRORS.MEMBER_NOT_FOUND,
+        message: '成员不存在',
+      });
+    }
+    await (this.prisma as any).teamUserMember.delete({ where: { id: member.id } });
+    await this.prisma.team.update({
+      where: { id: teamId },
+      data: { version: { increment: 1 } },
+    });
+    await this.realtime.broadcast(
+      EVENT_TYPES.TEAM_CHANGED,
+      { teamId, action: 'user_member_remove', userMemberId: member.id, userId },
+      { type: 'global' },
+    );
+    await this.realtime.broadcast(
+      EVENT_TYPES.TEAM_UPDATED,
+      { teamId, action: 'user_member_remove', userMemberId: member.id },
       { type: 'team', id: teamId },
     );
     return this.findOne(teamId);
@@ -857,6 +982,12 @@ export class TeamsService implements OnModuleInit {
       agent: m.agent ? { id: m.agent.id, name: m.agent.name, role: m.agent.role } : undefined,
       createdAt: m.createdAt,
     }));
+    const userMembers = (team.userMembers ?? []).map((u: any) => ({
+      id: u.id,
+      userId: u.userId,
+      role: u.role,
+      joinedAt: u.joinedAt,
+    }));
     const currentTask = (team as any).currentTask ?? null;
     return {
       id: team.id,
@@ -872,6 +1003,7 @@ export class TeamsService implements OnModuleInit {
       createdAt: team.createdAt,
       updatedAt: team.updatedAt,
       members,
+      userMembers,
       queue: (team.queues ?? []).map((q: any) => ({
         id: q.id,
         teamId: q.teamId,

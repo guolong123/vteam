@@ -301,17 +301,6 @@ export class ChatService {
       include: CHANNEL_TASK_SELECT,
     });
     if (existing) {
-      // 补 teamGroupKey（存量兼容，uk_channels_team_group_single 单例保障）
-      if (!(existing as any).teamGroupKey) {
-        try {
-          const patched = await this.prisma.chatChannel.update({
-            where: { id: existing.id },
-            data: { teamGroupKey: teamId } as any,
-            include: CHANNEL_TASK_SELECT,
-          });
-          return patched as unknown as ChannelRow;
-        } catch {}
-      }
       return existing as unknown as ChannelRow;
     }
     try {
@@ -320,7 +309,6 @@ export class ChatService {
           id: await this.idGen.nextId(CHANNEL_ID_PREFIX),
           type: CHANNEL_TYPE.team_group,
           teamId,
-          teamGroupKey: teamId,
           taskId: null,
         } as any,
         include: CHANNEL_TASK_SELECT,
@@ -785,6 +773,32 @@ export class ChatService {
       if (triggerTaskId) {
         const mainTrigger = await this.buildMainAgentTrigger(triggerTaskId, task);
         if (mainTrigger) triggers.push(mainTrigger);
+      } else if (isTeamGroup && channel.teamId) {
+        // 零任务团队直聊：无 @ 时默认触发主 Agent（团队门；会话即建即得，会话 id 直接回填）
+        try {
+          const teamMain = await (
+            this.dispatcher as unknown as {
+              buildTeamMainTrigger(teamId: string): Promise<{
+                agentId: string;
+                instanceId: string;
+                sessionId: string;
+              } | null>;
+            }
+          ).buildTeamMainTrigger(channel.teamId);
+          if (teamMain) {
+            triggers.push({
+              agentId: teamMain.agentId,
+              instanceId: teamMain.instanceId,
+              sessionId: teamMain.sessionId,
+              status: 'dispatched',
+            });
+          }
+        } catch (err) {
+          this.logger.error(
+            `team-mode 主触发失败 team=${channel.teamId} channel=${channelId}: ${(err as Error)?.message ?? err}`,
+            (err as Error)?.stack,
+          );
+        }
       }
     }
 
@@ -926,7 +940,8 @@ export class ChatService {
             instanceId: t.instanceId,
             sessionId: t.sessionId,
           })),
-        })
+          ...(!dispatchTaskId && channel.teamId ? { teamId: channel.teamId } : {}),
+        } as Parameters<MessageDispatcher['dispatch']>[0] & { teamId?: string })
         .catch((err: Error) =>
           this.logger.error(`dispatch failed: ${err.message}`, err.stack),
         );
@@ -1232,6 +1247,20 @@ export class ChatService {
           });
         }
         return { channel: row, task };
+      }
+      // 团队频道无任务上下文：调用者须为 team_user_members 成员，否则 403
+      // （错误码复用 PROJECT_MEMBERSHIP NOT_MEMBER 语义；禁止放行到“登录即可聊”）。
+      const teamMember = await (this.prisma as any).teamUserMember.findUnique({
+        where: {
+          teamId_userId: { teamId: row.teamId, userId },
+        },
+        select: { id: true },
+      });
+      if (!teamMember) {
+        throw new ForbiddenException({
+          code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
+          message: '您不是该团队成员',
+        });
       }
       return {
         channel: row,

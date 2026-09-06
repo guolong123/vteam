@@ -70,6 +70,14 @@ export interface PlatformMcpContext {
   workerId: string;
 }
 
+/**
+ * team-free-chat 双执行上下文：task 维度（任务会话）或 team 维度（团队会话）。
+ * callerId 为调用方身份（task 维度=任务实例 id，team 维度=团队成员 id）。
+ */
+export type ExecContext =
+  | { kind: 'task'; taskId: string; callerId: string }
+  | { kind: 'team'; teamId: string; callerId: string };
+
 /** chat_history 返回的消息行（text 从 content Json 提取，对齐计划 1.2 契约）。
  *  附件三字段 + senderInstanceId 透出（无附件时 null，Agent 据此调 read_file 读取）。 */
 export interface ChatHistoryItem {
@@ -149,10 +157,13 @@ export class PlatformMcpService {
    */
   async chatHistory(
     ctx: PlatformMcpContext,
-    args: { taskId: string; sinceId?: string; limit?: number },
+    args: { taskId?: string; teamId?: string; sinceId?: string; limit?: number },
   ): Promise<ChatHistoryItem[]> {
-    await this.assertWorkerTask(ctx, args.taskId);
-    const channel = await this.findTaskGroupChannel(args.taskId);
+    const exec = await this.resolveExecContext(ctx, args);
+    const channel =
+      exec.kind === 'task'
+        ? await this.findTaskGroupChannel(exec.taskId)
+        : await this.findTeamGroupChannel(exec.teamId);
     if (!channel) {
       throw new NotFoundException({
         code: PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
@@ -315,7 +326,8 @@ export class PlatformMcpService {
   async groupPost(
     ctx: PlatformMcpContext,
     args: {
-      taskId: string;
+      taskId?: string;
+      teamId?: string;
       selfInstanceId: string;
       content: string;
       fileRef?: string;
@@ -325,27 +337,42 @@ export class PlatformMcpService {
     channelId: string;
     attachment: GroupPostAttachment | null;
   }> {
-    const instanceId = await this.assertWorkerTask(
-      ctx,
-      args.taskId,
-      args.selfInstanceId,
-    );
-    const channel = await this.ensureTeamGroupChannel(args.taskId);
-    const attachment = args.fileRef
-      ? await this.resolveAttachment(ctx, args.taskId, args.fileRef)
-      : undefined;
-    const { mentions, mentionedInstances } = await this.parseGroupPostMentions(
-      args.taskId,
-      args.content,
-    );
+    const exec = await this.resolveExecContext(ctx, args);
+    const isTeam = exec.kind === 'team';
+    // 任务维度 taskId 透传；团队维度无任务（Message.taskId 可空，落库 taskId: null）。
+    const effTaskId: string | null = isTeam ? null : exec.taskId;
+    const channel = isTeam
+      ? await this.ensureTeamGroupChannelByTeam(exec.teamId)
+      : await this.ensureTeamGroupChannel(effTaskId as string);
+    const instanceId = exec.callerId;
+    // fileRef 归档命中仅任务维度可用（按 taskId 查已归档产出物）；团队维度无归档可命中。
+    const attachment =
+      args.fileRef && !isTeam
+        ? await this.resolveAttachment(
+            ctx,
+            effTaskId as string,
+            args.fileRef,
+          )
+        : undefined;
+    const { mentions, mentionedInstances } = isTeam
+      ? await this.parseTeamPostMentions(exec.teamId, args.content)
+      : await this.parseGroupPostMentions(
+          effTaskId as string,
+          args.content,
+        );
 
     const message = await this.prisma.message.create({
       data: {
         id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
         channelId: channel.id,
-        taskId: args.taskId,
+        taskId: effTaskId,
         senderType: SENDER_TYPE.agent,
-        senderId: await this.resolveSenderAgentId(args.taskId, instanceId),
+        senderId: isTeam
+          ? await this.resolveTeamSenderAgentId(exec.teamId, instanceId)
+          : await this.resolveSenderAgentId(
+              effTaskId as string,
+              instanceId,
+            ),
         senderInstanceId: instanceId,
         content: { text: args.content, parts: [] } as Prisma.InputJsonValue,
         mentions: (mentions ?? null) as Prisma.InputJsonValue | null,
@@ -360,20 +387,24 @@ export class PlatformMcpService {
       { type: 'channel', id: channel.id },
     );
 
-    // is_0000000015：@ 提及 → 定向分派每个被 @ 实例（含主 Agent），失败不阻断发布
-    for (const target of mentionedInstances) {
-      await this.workerDispatcher
-        .dispatchAgentMention({
-          taskId: args.taskId,
-          channelId: channel.id,
-          text: args.content,
-          targetInstanceId: target,
-        })
-        .catch((err: unknown) =>
-          this.logger.error(
-            `[mcp] group_post 提及分派失败 instance=${target}: ${err instanceof Error ? err.message : String(err)}`,
-          ),
-        );
+    // is_0000000015：@ 提及 → 定向分派每个被 @ 实例（含主 Agent），失败不阻断发布。
+    // 团队维度跳过分派：dispatchAgentMention 是任务域执行链路（需 taskId），团队会话
+    // 无任务可执行——被 @ 成员经频道广播可见消息。
+    if (!isTeam) {
+      for (const target of mentionedInstances) {
+        await this.workerDispatcher
+          .dispatchAgentMention({
+            taskId: effTaskId as string,
+            channelId: channel.id,
+            text: args.content,
+            targetInstanceId: target,
+          })
+          .catch((err: unknown) =>
+            this.logger.error(
+              `[mcp] group_post 提及分派失败 instance=${target}: ${err instanceof Error ? err.message : String(err)}`,
+            ),
+          );
+      }
     }
 
     return {
@@ -533,7 +564,8 @@ export class PlatformMcpService {
   async notifyAgent(
     ctx: PlatformMcpContext,
     args: {
-      taskId: string;
+      taskId?: string;
+      teamId?: string;
       selfInstanceId: string;
       targetInstanceId: string;
       content: string;
@@ -543,27 +575,44 @@ export class PlatformMcpService {
     channelId: string;
     targetInstanceId: string;
   }> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-    const channel = await this.findTaskGroupChannel(args.taskId);
+    const exec = await this.resolveExecContext(ctx, args);
+    const isTeam = exec.kind === 'team';
+    const effTaskId: string | null = isTeam ? null : exec.taskId;
+    const channel = isTeam
+      ? await this.findTeamGroupChannel(exec.teamId)
+      : await this.findTaskGroupChannel(effTaskId as string);
     if (!channel) {
       throw new NotFoundException({
         code: PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
         message: '任务群聊频道不存在',
       });
     }
-    // 目标实例行（agentId/alias/name）——@ 目标、消息 sender/mentions 归属依据
-    const targetInstance = await this.prisma.taskAgent.findFirst({
-      where: {
-        id: args.targetInstanceId,
-        taskId: args.taskId,
-        removedAt: null,
-      },
-      select: {
-        agentId: true,
-        alias: true,
-        agent: { select: { id: true, name: true } },
-      },
-    });
+    // 目标实例行（agentId/alias/name）——@ 目标、消息 sender/mentions 归属依据。
+    // 团队维度查团队成员表（TeamMember），任务维度查任务实例快照表（TaskAgent）。
+    const targetInstance = isTeam
+      ? await this.prisma.teamMember.findFirst({
+          where: {
+            id: args.targetInstanceId,
+            teamId: exec.teamId,
+          },
+          select: {
+            agentId: true,
+            alias: true,
+            agent: { select: { id: true, name: true } },
+          },
+        })
+      : await this.prisma.taskAgent.findFirst({
+          where: {
+            id: args.targetInstanceId,
+            taskId: effTaskId as string,
+            removedAt: null,
+          },
+          select: {
+            agentId: true,
+            alias: true,
+            agent: { select: { id: true, name: true } },
+          },
+        });
     if (!targetInstance) {
       throw new NotFoundException({
         code: PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
@@ -573,10 +622,12 @@ export class PlatformMcpService {
     const targetAgentId = targetInstance.agentId;
     const targetName =
       targetInstance.alias ?? targetInstance.agent.name ?? targetAgentId;
-    const senderAgentId = await this.resolveSenderAgentId(
-      args.taskId,
-      args.selfInstanceId,
-    );
+    const senderAgentId = isTeam
+      ? await this.resolveTeamSenderAgentId(exec.teamId, exec.callerId)
+      : await this.resolveSenderAgentId(
+          effTaskId as string,
+          args.selfInstanceId,
+        );
     const text = `@${targetName} ${args.content}`;
     const message = await this.prisma.message.create({
       data: {
@@ -604,12 +655,16 @@ export class PlatformMcpService {
       { type: 'channel', id: channel.id },
     );
 
-    await this.workerDispatcher.dispatchAgentMention({
-      taskId: args.taskId,
-      channelId: channel.id,
-      text,
-      targetInstanceId: args.targetInstanceId,
-    });
+    // 团队维度跳过触发：dispatchAgentMention 是任务域执行链路（需 taskId），团队会话
+    // 无任务可执行——@ 消息落库加广播后目标成员经频道可见。
+    if (!isTeam) {
+      await this.workerDispatcher.dispatchAgentMention({
+        taskId: effTaskId as string,
+        channelId: channel.id,
+        text,
+        targetInstanceId: args.targetInstanceId,
+      });
+    }
 
     return {
       messageId: message.id,
@@ -898,6 +953,226 @@ export class PlatformMcpService {
   }
 
   /**
+   * task_create：团队会话无任务时由主 Agent 建任务（team-free-chat todo-4）。
+   * 上下文解析：taskId 优先走任务维度（门 = task.mainAgentInstanceId === 调用方，
+   * 对齐 plan_review 的 isMain 语义；建任务目标团队取该任务所属团队）；无 taskId
+   * 走团队维度（门 = session 团队成员 === team.mainAgentMemberId）。
+   * 项目防提权：pid 须在团队归属项目并集中，否则 403；projectId 无默认值。
+   * 成功路径经 TasksService.createByAgent（attribution createdBy = 调用方实例 id；
+   * 永不直调 create，其按调用方 userId 的项目成员校验会 403 agent）。
+   */
+  async taskCreate(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId?: string;
+      teamId?: string;
+      selfInstanceId: string;
+      title: string;
+      description?: string;
+      projectId: string;
+      priority?: string;
+    },
+  ): Promise<unknown> {
+    const exec = await this.resolveExecContext(ctx, args);
+    let teamId: string;
+    if (exec.kind === 'task') {
+      const task = await this.prisma.task.findUnique({
+        where: { id: exec.taskId },
+        select: { id: true, teamId: true, mainAgentInstanceId: true },
+      });
+      if (!task) {
+        throw new NotFoundException({
+          code: PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
+          message: '任务不存在',
+        });
+      }
+      if (task.mainAgentInstanceId !== exec.callerId) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: `仅主 Agent（${task.mainAgentInstanceId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`,
+        });
+      }
+      if (!task.teamId) {
+        throw new BadRequestException('当前任务未绑定团队，无法解析建任务目标团队');
+      }
+      teamId = task.teamId;
+    } else {
+      const team = await this.prisma.team.findUnique({
+        where: { id: exec.teamId },
+        select: { id: true, mainAgentMemberId: true },
+      });
+      if (!team) {
+        throw new NotFoundException('团队不存在');
+      }
+      if (team.mainAgentMemberId !== exec.callerId) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: `仅主 Agent（${team.mainAgentMemberId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`,
+        });
+      }
+      teamId = team.id;
+    }
+    const pid = args.projectId?.trim() ?? '';
+    if (!pid) {
+      throw new BadRequestException(
+        'projectId 必填且无默认值，请先调 my_projects 发现可见项目',
+      );
+    }
+    const allowed = await this.resolveTeamProjectIds(teamId);
+    if (!allowed.has(pid)) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: `项目 ${pid} 与该团队无归属关系，禁止建任务（请调 my_projects 确认可见项目）`,
+      });
+    }
+    return this.tasksService.createByAgent(pid, exec.callerId, {
+      title: args.title,
+      description: args.description,
+      priority: args.priority,
+      teamId,
+    });
+  }
+
+  /**
+   * my_projects：团队会话无任务时的项目发现通道（无入参）。
+   * 调用方 worker 会话定位所在团队 → 团队用户成员 → 反查项目成员去重 → 项目清单。
+   */
+  async myProjects(
+    ctx: PlatformMcpContext,
+  ): Promise<{
+    projects: Array<{ id: string; name: string; description: string | null }>;
+  }> {
+    if (!ctx.workerId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.MISSING_WORKER_ID,
+        message: '缺少 x-worker-id header',
+      });
+    }
+    const sessions = await this.prisma.session.findMany({
+      where: { workerId: ctx.workerId },
+      select: { teamId: true, taskId: true },
+    });
+    const teamIds = new Set<string>();
+    const orphanTaskIds: string[] = [];
+    for (const s of sessions) {
+      if (s.teamId) {
+        teamIds.add(s.teamId);
+      } else if (s.taskId) {
+        orphanTaskIds.push(s.taskId);
+      }
+    }
+    if (orphanTaskIds.length > 0) {
+      const tasks = await this.prisma.task.findMany({
+        where: { id: { in: [...new Set(orphanTaskIds)] } },
+        select: { teamId: true },
+      });
+      for (const t of tasks) {
+        if (t.teamId) teamIds.add(t.teamId);
+      }
+    }
+    if (teamIds.size === 0) return { projects: [] };
+    const tums = await this.prisma.teamUserMember.findMany({
+      where: { teamId: { in: [...teamIds] } },
+      select: { userId: true },
+    });
+    const userIds = [...new Set(tums.map((t) => t.userId).filter(Boolean))];
+    if (userIds.length === 0) return { projects: [] };
+    const pms = await this.prisma.projectMember.findMany({
+      where: { userId: { in: userIds } },
+      select: { projectId: true },
+    });
+    const pids = [...new Set(pms.map((p) => p.projectId).filter(Boolean))];
+    if (pids.length === 0) return { projects: [] };
+    const rows = await this.prisma.project.findMany({
+      where: { id: { in: pids } },
+      select: { id: true, name: true, description: true },
+    });
+    return {
+      projects: rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        description: r.description ?? null,
+      })),
+    };
+  }
+
+  /**
+   * memory_save 团队维度：task/project 级无任务锚点不可写（干净 400）；
+   * global 级仅团队主 Agent 可写（成员 === team.mainAgentMemberId，否则 403）。
+   * 落库 taskId/projectId 置空（团队记忆无任务项目归属），createdBy = 团队成员 id。
+   */
+  private async memorySaveForTeam(
+    teamId: string,
+    memberId: string,
+    args: {
+      selfInstanceId: string;
+      level: MemoryLevel;
+      content: string;
+      description?: string;
+      tags?: string[];
+    },
+  ): Promise<{ memoryId: string; level: MemoryLevel }> {
+    if (args.level === MEMORY_LEVELS.task) {
+      throw new BadRequestException('task 级记忆需要任务上下文（请传 taskId）');
+    }
+    if (args.level === MEMORY_LEVELS.project) {
+      throw new BadRequestException(
+        'project 级记忆需要任务上下文（请传 taskId）',
+      );
+    }
+    if (args.level !== MEMORY_LEVELS.global) {
+      throw new BadRequestException({
+        code: PLATFORM_MCP_ERRORS.MEMORY_INVALID,
+        message: `非法记忆级别：${String(args.level)}`,
+      });
+    }
+    const team = await this.prisma.team.findUnique({
+      where: { id: teamId },
+      select: { id: true, name: true, mainAgentMemberId: true },
+    });
+    if (!team) {
+      throw new NotFoundException('团队不存在');
+    }
+    if (team.mainAgentMemberId !== memberId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: '仅主 Agent 可写入全局记忆，禁止普通成员写 global 级',
+      });
+    }
+    const description = (
+      args.description?.trim() || args.content.slice(0, 120)
+    ).slice(0, 255);
+    const tm = await this.prisma.teamMember.findFirst({
+      where: { id: memberId, teamId },
+      select: { agentId: true, alias: true },
+    });
+    const sess = await this.prisma.session.findFirst({
+      where: { teamId, teamMemberId: memberId },
+      select: { id: true },
+    });
+    const channel = await this.findTeamGroupChannel(teamId);
+    const memory = await this.prisma.memory.create({
+      data: {
+        id: await this.idGen.nextId('me'),
+        level: args.level,
+        taskId: null,
+        projectId: null,
+        content: args.content,
+        description,
+        tags: (args.tags ?? null) as Prisma.InputJsonValue | null,
+        createdBy: memberId,
+        sourceAgentId: tm?.agentId ?? null,
+        sourceInstanceId: memberId,
+        sourceType: 'agent',
+        sessionId: sess?.id ?? null,
+        sessionTitle: team.name ?? tm?.alias ?? null,
+        channelId: channel?.id ?? null,
+      } as any,
+    });
+    return { memoryId: memory.id, level: args.level };
+  }
+
+  /**
    * memory_save：写入平台记忆（memory-management Todo 2）。
    * - 三参数归属校验（selfInstanceId 必填防冒充，对齐落库类工具 groupPost/submitArtifact）。
    * - 级别校验（Metis M3/M4）：
@@ -913,7 +1188,8 @@ export class PlatformMcpService {
   async memorySave(
     ctx: PlatformMcpContext,
     args: {
-      taskId: string;
+      taskId?: string;
+      teamId?: string;
       selfInstanceId: string;
       level: MemoryLevel;
       content: string;
@@ -921,10 +1197,16 @@ export class PlatformMcpService {
       tags?: string[];
     },
   ): Promise<{ memoryId: string; level: MemoryLevel }> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    const exec = await this.resolveExecContext(ctx, args);
+    // 团队维度：task/project 级记忆必须有任务锚点（干净 400 指引传 taskId）；
+    // global 级走团队主 Agent 门（team.mainAgentMemberId）。
+    if (exec.kind === 'team') {
+      return this.memorySaveForTeam(exec.teamId, exec.callerId, args);
+    }
+    const taskId = exec.taskId;
 
     const task = await this.prisma.task.findUnique({
-      where: { id: args.taskId },
+      where: { id: taskId },
       select: { projectId: true, mainAgentInstanceId: true },
     });
     if (!task) {
@@ -940,7 +1222,7 @@ export class PlatformMcpService {
     let memoryTaskId: string | null = null;
     let memoryProjectId: string | null = null;
     if (args.level === MEMORY_LEVELS.task) {
-      memoryTaskId = args.taskId;
+      memoryTaskId = taskId;
       memoryProjectId = task.projectId;
     } else if (args.level === MEMORY_LEVELS.project) {
       memoryProjectId = task.projectId;
@@ -977,12 +1259,12 @@ export class PlatformMcpService {
       });
       if (sess) sessionId = sess.id;
       const taskRow = await this.prisma.task.findUnique({
-        where: { id: args.taskId },
+        where: { id: taskId },
         select: { title: true },
       });
       if (taskRow) sessionTitle = taskRow.title;
       const ch = await this.prisma.chatChannel.findFirst({
-        where: { taskId: args.taskId, taskAgentId: args.selfInstanceId },
+        where: { taskId, taskAgentId: args.selfInstanceId },
         select: { id: true },
       });
       if (ch) channelId = ch.id;
@@ -1023,7 +1305,8 @@ export class PlatformMcpService {
   async memorySearch(
     ctx: PlatformMcpContext,
     args: {
-      taskId: string;
+      taskId?: string;
+      teamId?: string;
       query?: string;
       level?: MemoryLevel;
       tags?: string[];
@@ -1049,35 +1332,47 @@ export class PlatformMcpService {
       channelId: string | null;
     }>
   > {
-    await this.assertWorkerTask(ctx, args.taskId);
-
-    const task = await this.prisma.task.findUnique({
-      where: { id: args.taskId },
-      select: { projectId: true },
-    });
-    if (!task) {
-      throw new NotFoundException({
-        code: PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
-        message: '任务不存在',
-      });
-    }
+    const exec = await this.resolveExecContext(ctx, args);
 
     // 可见范围：当前任务的 task 级 + 所属项目的 project 级（task 无项目归属则不匹配）
     // + global 级；level 入参收窄到单级。
+    // 团队维度：仅 global 可见（task/project 级记忆必须有任务锚点，显式请求 → 干净 400）。
     const whereOr: Prisma.MemoryWhereInput[] = [];
-    if (args.level === undefined || args.level === MEMORY_LEVELS.task) {
-      whereOr.push({ level: MEMORY_LEVELS.task, taskId: args.taskId });
-    }
-    if (args.level === undefined || args.level === MEMORY_LEVELS.project) {
-      if (task.projectId) {
-        whereOr.push({
-          level: MEMORY_LEVELS.project,
-          projectId: task.projectId,
+    if (exec.kind === 'team') {
+      if (
+        args.level === MEMORY_LEVELS.task ||
+        args.level === MEMORY_LEVELS.project
+      ) {
+        throw new BadRequestException(
+          `${args.level} 级记忆需要任务上下文（请传 taskId）`,
+        );
+      }
+      whereOr.push({ level: MEMORY_LEVELS.global });
+    } else {
+      const task = await this.prisma.task.findUnique({
+        where: { id: exec.taskId },
+        select: { projectId: true },
+      });
+      if (!task) {
+        throw new NotFoundException({
+          code: PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
+          message: '任务不存在',
         });
       }
-    }
-    if (args.level === undefined || args.level === MEMORY_LEVELS.global) {
-      whereOr.push({ level: MEMORY_LEVELS.global });
+      if (args.level === undefined || args.level === MEMORY_LEVELS.task) {
+        whereOr.push({ level: MEMORY_LEVELS.task, taskId: exec.taskId });
+      }
+      if (args.level === undefined || args.level === MEMORY_LEVELS.project) {
+        if (task.projectId) {
+          whereOr.push({
+            level: MEMORY_LEVELS.project,
+            projectId: task.projectId,
+          });
+        }
+      }
+      if (args.level === undefined || args.level === MEMORY_LEVELS.global) {
+        whereOr.push({ level: MEMORY_LEVELS.global });
+      }
     }
     if (whereOr.length === 0) {
       // 如 level=project 但任务无项目归属 → 无可见范围，返回空
@@ -3174,6 +3469,10 @@ export class PlatformMcpService {
     taskId: string,
     selfInstanceId?: string,
   ): Promise<string> {
+    // delivery-family 工具 taskId 必填：缺失时给干净 400（非 500），指引模型补任务上下文。
+    if (!taskId) {
+      throw new BadRequestException('该工具需要任务上下文');
+    }
     if (!ctx.workerId) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.MISSING_WORKER_ID,
@@ -3227,6 +3526,86 @@ export class PlatformMcpService {
   }
 
   /**
+   * team-free-chat 双上下文解析（5 个 team-free 工具 + task_create 共用）。
+   * taskId 优先走任务维度（现有 taskId/taskAgentId 会话归属）；无 taskId 时 teamId
+   * 走团队维度（teamId/teamMemberId 会话归属）；双空 → 干净 400；两个维度之间无回退，
+   * 归属不匹配 → 403。
+   */
+  private async resolveExecContext(
+    ctx: PlatformMcpContext,
+    args: { taskId?: string; teamId?: string; selfInstanceId?: string },
+  ): Promise<ExecContext> {
+    if (args.taskId) {
+      const instanceId = await this.assertWorkerTask(
+        ctx,
+        args.taskId,
+        args.selfInstanceId,
+      );
+      return { kind: 'task', taskId: args.taskId, callerId: instanceId };
+    }
+    if (args.teamId) {
+      const { memberId } = await this.assertWorkerTeam(
+        ctx,
+        args.teamId,
+        args.selfInstanceId,
+      );
+      return { kind: 'team', teamId: args.teamId, callerId: memberId };
+    }
+    throw new BadRequestException('该工具需要任务上下文');
+  }
+
+  /**
+   * 团队维度归属校验（team-free-chat）：该 worker 是否有该 teamId 的团队会话。
+   * 团队模式 selfInstanceId 即团队成员 id（session.teamMemberId）；无会话或成员
+   * 不一致 → 403（与 assertWorkerTask 同风格，维度内精确匹配，维度间无回退）。
+   */
+  private async assertWorkerTeam(
+    ctx: PlatformMcpContext,
+    teamId: string,
+    selfInstanceId?: string,
+  ): Promise<{ memberId: string; sessionId: string }> {
+    if (!ctx.workerId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.MISSING_WORKER_ID,
+        message: '缺少 x-worker-id header',
+      });
+    }
+    const session = await this.prisma.session.findFirst({
+      where: {
+        teamId,
+        workerId: ctx.workerId,
+        ...(selfInstanceId !== undefined
+          ? { teamMemberId: selfInstanceId }
+          : {}),
+      },
+      select: { id: true, teamMemberId: true },
+    });
+    if (!session) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message:
+          selfInstanceId !== undefined
+            ? `selfInstanceId（${selfInstanceId}）不是该团队（${teamId}）的会话成员，禁止冒充`
+            : '该 worker 无此团队会话，禁止跨团队访问',
+      });
+    }
+    const memberId = session.teamMemberId;
+    if (!memberId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: '该团队会话未绑定团队成员，禁止访问',
+      });
+    }
+    if (selfInstanceId !== undefined && memberId !== selfInstanceId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: `selfInstanceId 与该团队会话成员（${memberId}）不一致，禁止冒充`,
+      });
+    }
+    return { memberId, sessionId: session.id };
+  }
+
+  /**
    * 落库 senderId（agent id，角色渲染）解析：从实例行取模板 agent id。
    * 实例行缺失（存量/回退，instanceId 本身可能是 agent id）→ 原样返回。
    */
@@ -3259,6 +3638,152 @@ export class PlatformMcpService {
     });
   }
 
+  /** 团队维度群聊频道（一团队一群 team_group；团队会话无任务锚点，不回退任务维度）。 */
+  private async findTeamGroupChannel(
+    teamId: string,
+  ): Promise<{ id: string } | null> {
+    return this.prisma.chatChannel.findFirst({
+      where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+      select: { id: true },
+    });
+  }
+
+  /** 团队维度建群兜底（存在即用，P2002 竞态重查；team_group_key 为生成列，禁止显式写入）。 */
+  private async ensureTeamGroupChannelByTeam(
+    teamId: string,
+  ): Promise<{ id: string }> {
+    const found = await this.findTeamGroupChannel(teamId);
+    if (found) return found;
+    try {
+      const created = await this.prisma.chatChannel.create({
+        data: {
+          id: await this.idGen.nextId('c'),
+          type: CHANNEL_TYPE.team_group,
+          teamId,
+          taskId: null,
+        } as any,
+        select: { id: true },
+      });
+      return created;
+    } catch (err: unknown) {
+      if ((err as { code?: string })?.code === 'P2002') {
+        const raced = await this.findTeamGroupChannel(teamId);
+        if (raced) return raced;
+      }
+      throw err;
+    }
+  }
+
+  /** 团队维度 senderId 解析：从团队成员行取模板 agent id；成员行缺失 → 原样返回。 */
+  private async resolveTeamSenderAgentId(
+    teamId: string,
+    memberId: string,
+  ): Promise<string> {
+    const m = await this.prisma.teamMember.findFirst({
+      where: { id: memberId, teamId },
+      select: { agentId: true },
+    });
+    return m?.agentId ?? memberId;
+  }
+
+  /**
+   * 团队维度 @ 解析（对齐 parseGroupPostMentions 的实例别名前缀匹配，匹配源为团队成员）。
+   * 用户 @ 展开保持任务域（需任务所属项目成员），团队维度仅做实例 @ 落库。
+   */
+  private async parseTeamPostMentions(
+    teamId: string,
+    content: string,
+  ): Promise<{
+    mentions: Array<{
+      type: 'agent';
+      instanceId: string;
+      agentId: string;
+      name: string;
+    }> | null;
+    mentionedInstances: string[];
+  }> {
+    if (!content || !content.includes('@')) {
+      return { mentions: null, mentionedInstances: [] };
+    }
+    const teamRows = await this.prisma.teamMember.findMany({
+      where: { teamId },
+      select: {
+        id: true,
+        agentId: true,
+        alias: true,
+        agent: { select: { name: true } },
+      },
+    });
+    const mentionedInstances: string[] = [];
+    const mentions: Array<{
+      type: 'agent';
+      instanceId: string;
+      agentId: string;
+      name: string;
+    }> = [];
+    for (const row of teamRows) {
+      const name = row.alias ?? row.agent.name;
+      if (!name) continue;
+      const atName = `@${name}`;
+      const idx = content.indexOf(atName);
+      const hit =
+        idx >= 0 &&
+        (idx + atName.length >= content.length ||
+          /[\s,，。；;:：!！?？]/.test(content[idx + atName.length] ?? ''));
+      if (!hit) continue;
+      if (!mentionedInstances.includes(row.id)) {
+        mentionedInstances.push(row.id);
+        mentions.push({
+          type: 'agent',
+          instanceId: row.id,
+          agentId: row.agentId,
+          name,
+        });
+      }
+    }
+    if (content.includes('@all')) {
+      (mentions as unknown as Array<{ type: string }>).push({
+        type: 'all',
+      } as unknown as {
+        type: 'agent';
+        instanceId: string;
+        agentId: string;
+        name: string;
+      });
+    }
+    return { mentions: mentions.length > 0 ? mentions : null, mentionedInstances };
+  }
+
+  /**
+   * task_create 项目防提权：pid 须在该团队已有任务的项目去重集与该团队用户成员的
+   * 项目去重集的并集中（主身份只证明主 Agent 地位，不证明对任意项目的处置权）。
+   */
+  private async resolveTeamProjectIds(teamId: string): Promise<Set<string>> {
+    const ids = new Set<string>();
+    const teamTasks = await this.prisma.task.findMany({
+      where: { teamId },
+      select: { projectId: true },
+    });
+    for (const t of teamTasks) {
+      if (t.projectId) ids.add(t.projectId);
+    }
+    const members = await this.prisma.teamUserMember.findMany({
+      where: { teamId },
+      select: { userId: true },
+    });
+    const userIds = [...new Set(members.map((m) => m.userId).filter(Boolean))];
+    if (userIds.length > 0) {
+      const pms = await this.prisma.projectMember.findMany({
+        where: { userId: { in: userIds } },
+        select: { projectId: true },
+      });
+      for (const pm of pms) {
+        if (pm.projectId) ids.add(pm.projectId);
+      }
+    }
+    return ids;
+  }
+
   private async ensureTeamGroupChannel(taskId: string): Promise<{ id: string }> {
     const found = await this.findTaskGroupChannel(taskId);
     if (found) return found;
@@ -3277,7 +3802,6 @@ export class PlatformMcpService {
               id: await this.idGen.nextId('c'),
               type: CHANNEL_TYPE.team_group,
               teamId,
-              teamGroupKey: teamId,
               taskId: null,
             } as any,
             select: { id: true },

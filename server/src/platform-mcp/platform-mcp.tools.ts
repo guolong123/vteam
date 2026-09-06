@@ -18,6 +18,22 @@ export interface PlatformMcpToolContext {
 }
 
 /**
+ * team-free-chat（todo-4）：任务/团队双上下文字段语义（5 个 team-free 工具共用）。
+ * taskId 与 teamId 至少传一个（refine 在 zod 层保证，双空 → tools/call -32602）；
+ * taskId 优先，无 taskId 时用 teamId 定位团队会话；两个维度之间无回退（mismatch → 403）。
+ * delivery-family 工具（doclib、task_context、submit_artifact、issue 系列、plan 系列、
+ * task_transition、question_confirm、team_view、my_profile 等）保持 taskId 必填，不用此语义.
+ */
+const OPTIONAL_TASK_ID_DESC =
+  '任务 ID（与 teamId 至少传一个；taskId 优先，无 taskId 时用 teamId 定位团队会话）';
+const TEAM_ID_DESC =
+  '团队 ID（无 taskId 时用 teamId 定位团队会话；与 taskId 同传时 taskId 优先）';
+
+/** 双上下文至少传一个（taskId 优先）。refine message 须含 'taskId'（controller.spec 断言）。 */
+const REQUIRE_TASK_OR_TEAM_MSG =
+  'taskId 与 teamId 至少传一个（taskId 优先，无 taskId 时用 teamId 定位团队会话）';
+
+/**
  * 工具注册项。inputSchema 统一按 ZodTypeAny 消费（tools/list 运行时按
  * ZodObject 读取 shape），handler 参数为 unknown——具体入参类型由各工具
  * handler 内部收窄（zod.safeParse 已保证运行时合法）。
@@ -29,20 +45,26 @@ export interface PlatformMcpTool {
   handler: (ctx: PlatformMcpToolContext, args: unknown) => Promise<unknown>;
 }
 
-const chatHistorySchema = z.object({
-  taskId: z.string().describe('任务 ID'),
-  sinceId: z
-    .string()
-    .optional()
-    .describe('游标：仅返回 id 大于该值的消息（分页续拉）'),
-  limit: z
-    .number()
-    .int()
-    .positive()
-    .max(100)
-    .optional()
-    .describe('返回条数上限（默认 50）'),
-});
+const chatHistorySchema = z
+  .object({
+    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+    teamId: z.string().optional().describe(TEAM_ID_DESC),
+    sinceId: z
+      .string()
+      .optional()
+      .describe('游标：仅返回 id 大于该值的消息（分页续拉）'),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .max(100)
+      .optional()
+      .describe('返回条数上限（默认 50）'),
+  })
+  .refine((d) => !!d.taskId || !!d.teamId, {
+    message: REQUIRE_TASK_OR_TEAM_MSG,
+    path: ['taskId'],
+  });
 
 type ChatHistoryArgs = z.infer<typeof chatHistorySchema>;
 
@@ -68,17 +90,23 @@ const taskContextSchema = z.object({
 
 type TaskContextArgs = z.infer<typeof taskContextSchema>;
 
-const groupPostSchema = z.object({
-  taskId: z.string().describe('任务 ID'),
-  selfInstanceId: z
-    .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
-  content: z.string().describe('要发布到群聊的内容'),
-  fileRef: z
-    .string()
-    .optional()
-    .describe('产出物文件引用（与产出物声明 fileRef 一致时挂附件）'),
-});
+const groupPostSchema = z
+  .object({
+    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+    teamId: z.string().optional().describe(TEAM_ID_DESC),
+    selfInstanceId: z
+      .string()
+      .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    content: z.string().describe('要发布到群聊的内容'),
+    fileRef: z
+      .string()
+      .optional()
+      .describe('产出物文件引用（与产出物声明 fileRef 一致时挂附件）'),
+  })
+  .refine((d) => !!d.taskId || !!d.teamId, {
+    message: REQUIRE_TASK_OR_TEAM_MSG,
+    path: ['taskId'],
+  });
 
 type GroupPostArgs = z.infer<typeof groupPostSchema>;
 
@@ -98,18 +126,24 @@ const readFileSchema = z.object({
 
 type ReadFileArgs = z.infer<typeof readFileSchema>;
 
-const notifyAgentSchema = z.object({
-  taskId: z.string().describe('任务 ID'),
-  selfInstanceId: z
-    .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
-  targetInstanceId: z
-    .string()
-    .describe(
-      '目标实例 id（ta_ 前缀，见 task_context agentMembers / 团队提示，@ 定向触发目标）',
-    ),
-  content: z.string().describe('要发送给目标实例的消息内容'),
-});
+const notifyAgentSchema = z
+  .object({
+    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+    teamId: z.string().optional().describe(TEAM_ID_DESC),
+    selfInstanceId: z
+      .string()
+      .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    targetInstanceId: z
+      .string()
+      .describe(
+        '目标实例 id（ta_ 前缀，见 task_context agentMembers / 团队提示，@ 定向触发目标）',
+      ),
+    content: z.string().describe('要发送给目标实例的消息内容'),
+  })
+  .refine((d) => !!d.taskId || !!d.teamId, {
+    message: REQUIRE_TASK_OR_TEAM_MSG,
+    path: ['taskId'],
+  });
 
 type NotifyAgentArgs = z.infer<typeof notifyAgentSchema>;
 
@@ -226,6 +260,8 @@ const taskTransitionSchema = z.object({
 type TaskTransitionArgs = z.infer<typeof taskTransitionSchema>;
 
 const questionConfirmSchema = z.object({
+  // team-free-chat todo-4：question_confirm 保持 taskId 必填（agent_questions.task_id 非空，
+  // 无团队维度可确认），不加入可选 5 工具。
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
@@ -250,11 +286,13 @@ const questionConfirmSchema = z.object({
 
 type QuestionConfirmArgs = z.infer<typeof questionConfirmSchema>;
 
-export const memorySaveSchema = z.object({
-  taskId: z.string().describe('任务 ID'),
-  selfInstanceId: z
-    .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+export const memorySaveSchema = z
+  .object({
+    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+    teamId: z.string().optional().describe(TEAM_ID_DESC),
+    selfInstanceId: z
+      .string()
+      .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
   level: z
     .enum(['task', 'project', 'global'])
     .describe(
@@ -274,44 +312,54 @@ export const memorySaveSchema = z.object({
     .max(20)
     .optional()
     .describe('记忆标签（≤20 个，memory_search 按标签过滤命中）'),
+})
+.refine((d) => !!d.taskId || !!d.teamId, {
+  message: REQUIRE_TASK_OR_TEAM_MSG,
+  path: ['taskId'],
 });
 
 type MemorySaveArgs = z.infer<typeof memorySaveSchema>;
 
-const memorySearchSchema = z.object({
-  taskId: z.string().describe('任务 ID'),
-  query: z
-    .string()
-    .optional()
-    .describe('关键词过滤（content/description 包含即命中，多词空格分隔 AND）'),
-  level: z
-    .enum(['task', 'project', 'global'])
-    .optional()
-    .describe('级别过滤（缺省聚合当前任务可见的 task+project+global 三级）'),
-  tags: z
-    .array(z.string())
-    .optional()
-    .describe('标签过滤（记忆 tags 须包含全部给定标签）'),
-  sourceInstanceId: z
-    .string()
-    .optional()
-    .describe('来源实例过滤（ta_ 前缀，只看某 Agent 实例沉淀的记忆）'),
-  sourceAgentId: z
-    .string()
-    .optional()
-    .describe('来源 Agent 过滤（a_ 前缀，只看某 Agent 模板沉淀的全部记忆）'),
-  sessionId: z
-    .string()
-    .optional()
-    .describe('会话过滤（s_ 前缀，只看某次会话沉淀的记忆）'),
-  limit: z
-    .number()
-    .int()
-    .min(1)
-    .max(50)
-    .optional()
-    .describe('返回条数上限（默认 20，最多 50，按创建时间倒序）'),
-});
+const memorySearchSchema = z
+  .object({
+    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+    teamId: z.string().optional().describe(TEAM_ID_DESC),
+    query: z
+      .string()
+      .optional()
+      .describe('关键词过滤（content/description 包含即命中，多词空格分隔 AND）'),
+    level: z
+      .enum(['task', 'project', 'global'])
+      .optional()
+      .describe('级别过滤（缺省聚合当前任务可见的 task+project+global 三级）'),
+    tags: z
+      .array(z.string())
+      .optional()
+      .describe('标签过滤（记忆 tags 须包含全部给定标签）'),
+    sourceInstanceId: z
+      .string()
+      .optional()
+      .describe('来源实例过滤（ta_ 前缀，只看某 Agent 实例沉淀的记忆）'),
+    sourceAgentId: z
+      .string()
+      .optional()
+      .describe('来源 Agent 过滤（a_ 前缀，只看某 Agent 模板沉淀的全部记忆）'),
+    sessionId: z
+      .string()
+      .optional()
+      .describe('会话过滤（s_ 前缀，只看某次会话沉淀的记忆）'),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(50)
+      .optional()
+      .describe('返回条数上限（默认 20，最多 50，按创建时间倒序）'),
+  })
+  .refine((d) => !!d.taskId || !!d.teamId, {
+    message: REQUIRE_TASK_OR_TEAM_MSG,
+    path: ['taskId'],
+  });
 
 type MemorySearchArgs = z.infer<typeof memorySearchSchema>;
 
@@ -394,14 +442,17 @@ const planTaskTransitionSchema = z.object({
 
 type PlanTaskTransitionArgs = z.infer<typeof planTaskTransitionSchema>;
 
-/** team_view：任务团队实时视图（只读，无 selfInstanceId——仅校验 worker 有该任务会话）。 */
+/** team_view：任务团队实时视图（只读，无 selfInstanceId——仅校验 worker 有该任务会话）。
+ * team-free-chat todo-4：保持 task-bound（团队实时视图按任务聚合实例快照与计划概览，
+ * 无任务锚点语义不清），不加入可选 5 工具。 */
 export const teamViewSchema = z.object({
   taskId: z.string().describe('任务 ID'),
 });
 
 type TeamViewArgs = z.infer<typeof teamViewSchema>;
 
-/** my_profile：自身 Agent 配置视图（只读，prompt 仅返回摘要，不暴露完整提示词）。 */
+/** my_profile：自身 Agent 配置视图（只读，prompt 仅返回摘要，不暴露完整提示词）。
+ * team-free-chat todo-4：保持 task-bound（自身配置按任务实例快照查询），不加入可选 5 工具。 */
 export const myProfileSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
@@ -456,6 +507,8 @@ export const teamAddMemberSchema = z.object({
 type TeamAddMemberArgs = z.infer<typeof teamAddMemberSchema>;
 
 const channelSendSchema = z.object({
+  // team-free-chat todo-4：channel_send 无 taskId 入参（任务上下文由服务端按 worker 会话
+  // 自动解析），不在可选 5 工具之列，保持原样。
   target: z
     .string()
     .min(1)
@@ -563,6 +616,46 @@ const wecomReplySchema = z
   );
 
 type WecomReplyArgs = z.infer<typeof wecomReplySchema>;
+
+/**
+ * team-free-chat todo-4：task_create（主 Agent 在团队会话无任务时建任务）。
+ * projectId 必填且无默认值（缺省默认会杀死引导式追问——模型须先调 my_projects
+ * 发现可见项目再提问确认）；teamId 由服务端按会话上下文解析（不接收入参）。
+ */
+const taskCreateSchema = z
+  .object({
+    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+    teamId: z.string().optional().describe(TEAM_ID_DESC),
+    selfInstanceId: z
+      .string()
+      .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入；仅主 Agent 可调）'),
+    title: z.string().min(1).max(128).describe('任务标题（必填）'),
+    description: z.string().optional().describe('任务描述（可选）'),
+    projectId: z
+      .string()
+      .min(1)
+      .describe(
+        '目标项目 ID（必填，无默认值；须与该团队有归属关系，否则 403；可先调 my_projects 发现可见项目）',
+      ),
+    priority: z
+      .string()
+      .optional()
+      .describe('优先级（high/medium/low，缺省 medium）'),
+  })
+  .refine((d) => !!d.taskId || !!d.teamId, {
+    message: REQUIRE_TASK_OR_TEAM_MSG,
+    path: ['taskId'],
+  });
+
+type TaskCreateArgs = z.infer<typeof taskCreateSchema>;
+
+/**
+ * team-free-chat todo-4：my_projects（无任务团队会话的项目发现通道）。
+ * 无入参：按调用方 worker 会话定位所在团队 → 团队用户成员 → 反查项目成员去重。
+ */
+const myProjectsSchema = z.object({});
+
+type MyProjectsArgs = z.infer<typeof myProjectsSchema>;
 
 /**
  * 构建工具集（service 闭包注入，controller 构造时调用一次）。
@@ -762,6 +855,20 @@ export function buildPlatformMcpTools(
         '回复企业微信私聊或群@消息（唯一 conversational 回流入企微入口，通过 wecom_aibot 长连接）。支持类型：msgtype=text|markdown|template_card|image|mpnews（默认 text）。text/markdown 走 replyStream/finishStream 替换占位并镜像群聊；template_card 需 card JSON（card_type+main_title 必填，icon_url/pic_url/image_url 等图片字段均为可选不传也能发：如 {card_type:"text_notice", main_title:{title:"标题"}} 即可），优先 replyTemplateCard/被动回复否则 sendMessage 主动推送；image 需 media(文件路径/fileRef, 仅此类型需本地文件) 或 mediaId 二选一 + 可选 filename；mpnews 图文需 articles 或 mpnews 二选一（每篇仅 title 必填，picurl/description/url 均可选，无 picurl 也能发，自动映射为 news_notice 卡片无需上传）。\n\n【msgtype 选型指南｜何时用哪种】\n| msgtype | 适用场景 | 典型例子 | 媒体/图片说明 |\n| text | 私聊/群@ 简单文本回复，无格式需求 | 问候、确认、简短答复、状态回告 | 无图片 |\n| markdown | 需要格式化、链接、列表、代码块的回复 | 带链接的说明、分步骤列表、富文本答复 | 无图片 |\n| template_card | 需交互（按钮/跳转/投票）或结构化展示 | 审批/确认按钮、投票、通知卡片；4类 card_type：text_notice(通知)、news_notice(单图文)、button_interaction(交互按钮)、vote_interaction(投票) | card 内 pic_url/image_url/icon_url 均为可选 HTTPS URL，不传也能发 |\n| image | 需发送图片（图表、截图、可视化结果） | 生成的图表、截图、二维码 | 仅此类型需本地文件：media(工作区路径/fileRef) 或 mediaId 二选一，服务端自动上传 |\n| mpnews | 需发送多图文消息 | 文档列表、新闻推送、多文章合集 | articles 每篇仅 title 必填，picurl/description/url 均为可选 HTTPS URL，无 picurl 也能发，无需上传 |\n\n常见会话场景：私聊直回（atUser 忽略直回发送者）、群聊 @回复（atUser=true 自动 @发送者）、卡片交互回调后更新/再发卡片、图文推送。不要用 channel_send/group_post 回复企微用户。\n\n示例：{msgtype:"template_card", card:{card_type:"text_notice", main_title:{title:"标题"}}}；{msgtype:"mpnews", articles:[{title:"标题", description:"摘要", url:"https://example.com"}]}。',
       inputSchema: wecomReplySchema,
       handler: (ctx, args) => service.wecomReply(ctx, args as WecomReplyArgs),
+    },
+    {
+      name: 'task_create',
+      description:
+        '在团队会话无任务时创建任务（仅主 Agent 可调；projectId 必填无默认值，请先调 my_projects 发现可见项目并与用户确认）。团队由当前会话解析，任务建在该团队下。返回创建的任务 DTO。',
+      inputSchema: taskCreateSchema,
+      handler: (ctx, args) => service.taskCreate(ctx, args as TaskCreateArgs),
+    },
+    {
+      name: 'my_projects',
+      description:
+        '查询调用方可见项目列表（无入参，团队会话无任务时先调此工具发现项目，再向用户确认后调 task_create）。返回 {projects: [{id, name, description}]}。',
+      inputSchema: myProjectsSchema,
+      handler: (ctx) => service.myProjects(ctx),
     },
   ];
 }

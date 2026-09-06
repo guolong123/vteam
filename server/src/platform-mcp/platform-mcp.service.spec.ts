@@ -34,7 +34,7 @@ import { NotificationDispatcherService } from '../notifications/notification-dis
 describe('PlatformMcpService', () => {
   let service: PlatformMcpService;
   let prisma: {
-    session: { findFirst: jest.Mock };
+    session: { findFirst: jest.Mock; findMany: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
     message: { findMany: jest.Mock; create: jest.Mock };
     artifact: {
@@ -49,8 +49,13 @@ describe('PlatformMcpService', () => {
       create: jest.Mock;
       findFirst: jest.Mock;
     };
-    task: { findUnique: jest.Mock };
+    task: { findUnique: jest.Mock; findMany: jest.Mock };
     taskAgent: { findMany: jest.Mock; findFirst: jest.Mock };
+    team: { findUnique: jest.Mock };
+    teamMember: { findFirst: jest.Mock; findMany: jest.Mock };
+    teamUserMember: { findMany: jest.Mock };
+    projectMember: { findMany: jest.Mock };
+    project: { findMany: jest.Mock };
     worker: { findUnique: jest.Mock };
     memory: { create: jest.Mock; findMany: jest.Mock };
     agent: { findUnique: jest.Mock };
@@ -85,7 +90,11 @@ describe('PlatformMcpService', () => {
     updateByAgent: jest.Mock;
     transitionByAgent: jest.Mock;
   };
-  let tasksService: { transitionByAgent: jest.Mock; updateTeam: jest.Mock };
+  let tasksService: {
+    transitionByAgent: jest.Mock;
+    updateTeam: jest.Mock;
+    createByAgent: jest.Mock;
+  };
   let questionsService: {
     confirmByAgent: jest.Mock;
     createForPlatform: jest.Mock;
@@ -127,7 +136,7 @@ describe('PlatformMcpService', () => {
 
   beforeEach(async () => {
     prisma = {
-      session: { findFirst: jest.fn() },
+      session: { findFirst: jest.fn(), findMany: jest.fn() },
       chatChannel: { findFirst: jest.fn() },
       message: { findMany: jest.fn(), create: jest.fn() },
       artifact: {
@@ -142,8 +151,13 @@ describe('PlatformMcpService', () => {
         create: jest.fn(),
         findFirst: jest.fn(),
       },
-      task: { findUnique: jest.fn() },
+      task: { findUnique: jest.fn(), findMany: jest.fn() },
       taskAgent: { findMany: jest.fn(), findFirst: jest.fn() },
+      team: { findUnique: jest.fn() },
+      teamMember: { findFirst: jest.fn(), findMany: jest.fn() },
+      teamUserMember: { findMany: jest.fn() },
+      projectMember: { findMany: jest.fn() },
+      project: { findMany: jest.fn() },
       worker: { findUnique: jest.fn() },
       memory: { create: jest.fn(), findMany: jest.fn() },
       agent: { findUnique: jest.fn() },
@@ -183,7 +197,11 @@ describe('PlatformMcpService', () => {
       updateByAgent: jest.fn(),
       transitionByAgent: jest.fn(),
     };
-    tasksService = { transitionByAgent: jest.fn(), updateTeam: jest.fn() };
+    tasksService = {
+      transitionByAgent: jest.fn(),
+      updateTeam: jest.fn(),
+      createByAgent: jest.fn(),
+    };
     questionsService = {
       confirmByAgent: jest.fn(),
       createForPlatform: jest.fn(),
@@ -776,6 +794,7 @@ describe('PlatformMcpService', () => {
         data: {
           id: 'm_0000000100',
           channelId,
+          taskId,
           senderType: SENDER_TYPE.agent,
           senderId: senderAgentId,
           senderInstanceId: senderInstanceId,
@@ -4025,6 +4044,299 @@ describe('PlatformMcpService', () => {
         schema.safeParse({ target: 'nc_1', text: 'x'.repeat(4001) }).success,
       ).toBe(false);
       expect(schema.safeParse({ target: 'nc_1' }).success).toBe(false);
+    });
+  });
+
+  describe('team-free-chat todo-4：双上下文解析矩阵（chat_history）', () => {
+    it('taskId only → 任务维度（session 按 taskId 归属）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      prisma.message.findMany.mockResolvedValue([]);
+
+      const result = await service.chatHistory(ctx, { taskId });
+
+      expect(result).toEqual([]);
+      expect(prisma.session.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { taskId, workerId } }),
+      );
+    });
+
+    it('teamId only → 团队维度（session 按 teamId 归属 + 团队群聊）', async () => {
+      prisma.session.findFirst.mockResolvedValue({
+        id: 's_t',
+        teamMemberId: 'tmm_1',
+      });
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      prisma.message.findMany.mockResolvedValue([]);
+
+      const result = await service.chatHistory(ctx, { teamId: 'tm_1' });
+
+      expect(result).toEqual([]);
+      expect(prisma.session.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ teamId: 'tm_1', workerId }),
+        }),
+      );
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ teamId: 'tm_1' }),
+        }),
+      );
+    });
+
+    it('双传 → taskId 优先（只走任务维度，不查团队维度）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      prisma.message.findMany.mockResolvedValue([]);
+
+      await service.chatHistory(ctx, { taskId, teamId: 'tm_1' });
+
+      expect(prisma.session.findFirst).toHaveBeenCalledTimes(1);
+      expect(prisma.session.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { taskId, workerId } }),
+      );
+    });
+
+    it('双空 → 干净 400 该工具需要任务上下文（非 500）', async () => {
+      const err = await service
+        .chatHistory(ctx, {} as unknown as { taskId: string })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as Error).message).toContain('该工具需要任务上下文');
+      expect(prisma.session.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('团队维度归属不匹配 → 403（维度间无回退）', async () => {
+      prisma.session.findFirst.mockResolvedValue(null);
+
+      await expectCode(
+        service.chatHistory(ctx, { teamId: 'tm_other' }),
+        ForbiddenException,
+        PLATFORM_MCP_ERRORS.FORBIDDEN,
+      );
+    });
+  });
+
+  describe('team-free-chat todo-4：task_create 主门与项目防提权', () => {
+    it('非主实例（任务维度）→ 403，主门不放行', async () => {
+      allowWorker();
+      prisma.task.findUnique.mockResolvedValue({
+        id: taskId,
+        teamId: 'tm_1',
+        mainAgentInstanceId: 'ta_other',
+      });
+
+      const err = await service
+        .taskCreate(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+          title: '新任务',
+          projectId: 'p_1',
+        })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(ForbiddenException);
+      expect((err as { getResponse(): unknown }).getResponse()).toMatchObject(
+        { code: PLATFORM_MCP_ERRORS.FORBIDDEN },
+      );
+      expect(tasksService.createByAgent).not.toHaveBeenCalled();
+    });
+
+    it('无归属关系 pid → 403（主身份不证明任意项目处置权）', async () => {
+      allowWorker();
+      prisma.task.findUnique.mockResolvedValue({
+        id: taskId,
+        teamId: 'tm_1',
+        mainAgentInstanceId: senderInstanceId,
+      });
+      prisma.task.findMany.mockResolvedValue([{ projectId: 'p_1' }]);
+      prisma.teamUserMember.findMany.mockResolvedValue([{ userId: 'u_1' }]);
+      prisma.projectMember.findMany.mockResolvedValue([{ projectId: 'p_2' }]);
+
+      const err = await service
+        .taskCreate(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+          title: '新任务',
+          projectId: 'p_unrelated',
+        })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(ForbiddenException);
+      expect((err as Error).message).toContain('无归属关系');
+      expect(tasksService.createByAgent).not.toHaveBeenCalled();
+    });
+
+    it('团队维度主成员 + 并集内 pid（用户成员路径）→ 成功，createdBy = 团队成员 id', async () => {
+      prisma.session.findFirst.mockResolvedValue({
+        id: 's_t',
+        teamMemberId: 'tmm_main',
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_1',
+        mainAgentMemberId: 'tmm_main',
+      });
+      prisma.task.findMany.mockResolvedValue([{ projectId: 'p_1' }]);
+      prisma.teamUserMember.findMany.mockResolvedValue([{ userId: 'u_1' }]);
+      prisma.projectMember.findMany.mockResolvedValue([{ projectId: 'p_2' }]);
+      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
+
+      const result = await service.taskCreate(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: 'tmm_main',
+        title: '新任务',
+        projectId: 'p_2',
+      });
+
+      expect(result).toEqual({ id: 't_new' });
+      expect(tasksService.createByAgent).toHaveBeenCalledWith(
+        'p_2',
+        'tmm_main',
+        expect.objectContaining({ teamId: 'tm_1', title: '新任务' }),
+      );
+    });
+
+    it('非主成员（团队维度）→ 403', async () => {
+      prisma.session.findFirst.mockResolvedValue({
+        id: 's_t',
+        teamMemberId: 'tmm_other',
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_1',
+        mainAgentMemberId: 'tmm_main',
+      });
+
+      const err = await service
+        .taskCreate(ctx, {
+          teamId: 'tm_1',
+          selfInstanceId: 'tmm_other',
+          title: '新任务',
+          projectId: 'p_1',
+        })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(ForbiddenException);
+      expect((err as { getResponse(): unknown }).getResponse()).toMatchObject(
+        { code: PLATFORM_MCP_ERRORS.FORBIDDEN },
+      );
+      expect(tasksService.createByAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('team-free-chat todo-4：delivery 工具缺 taskId 与 my_projects', () => {
+    it('delivery 工具缺 taskId → 干净 400 该工具需要任务上下文', async () => {
+      const err = await service
+        .taskContext(ctx, { taskId: undefined as unknown as string })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as Error).message).toContain('该工具需要任务上下文');
+    });
+
+    it('my_projects 返回调用方团队用户成员的去重项目', async () => {
+      prisma.session.findMany.mockResolvedValue([
+        { teamId: 'tm_1', taskId: null },
+        { teamId: null, taskId: 't_9' },
+      ]);
+      prisma.task.findMany.mockResolvedValue([{ teamId: 'tm_2' }]);
+      prisma.teamUserMember.findMany.mockResolvedValue([
+        { userId: 'u_1' },
+        { userId: 'u_1' },
+      ]);
+      prisma.projectMember.findMany.mockResolvedValue([
+        { projectId: 'p_1' },
+        { projectId: 'p_1' },
+      ]);
+      prisma.project.findMany.mockResolvedValue([
+        { id: 'p_1', name: 'P1', description: null },
+      ]);
+
+      const result = await service.myProjects(ctx);
+
+      expect(result).toEqual({
+        projects: [{ id: 'p_1', name: 'P1', description: null }],
+      });
+      expect(prisma.teamUserMember.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { teamId: { in: ['tm_1', 'tm_2'] } },
+        }),
+      );
+      expect(prisma.projectMember.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { userId: { in: ['u_1'] } } }),
+      );
+    });
+  });
+
+  describe('team-free-chat todo-4：tools/list 新工具与更新 schema', () => {
+    it('包含 task_create + my_projects；task_create projectId 必填无默认', () => {
+      const tools = buildPlatformMcpTools(service);
+      const names = tools.map((t) => t.name);
+      expect(names).toContain('task_create');
+      expect(names).toContain('my_projects');
+      const taskCreate = tools.find((t) => t.name === 'task_create')!;
+      const schema = taskCreate.inputSchema as unknown as {
+        safeParse: (v: unknown) => { success: boolean };
+      };
+      expect(
+        schema.safeParse({
+          selfInstanceId: 'ta_1',
+          title: 't',
+          teamId: 'tm_1',
+        }).success,
+      ).toBe(false);
+      expect(
+        schema.safeParse({
+          selfInstanceId: 'ta_1',
+          title: 't',
+          projectId: 'p_1',
+          teamId: 'tm_1',
+        }).success,
+      ).toBe(true);
+    });
+
+    it('5 工具接受 teamId-only，拒绝双空', () => {
+      const tools = buildPlatformMcpTools(service);
+      for (const name of [
+        'chat_history',
+        'group_post',
+        'notify_agent',
+        'memory_save',
+        'memory_search',
+      ]) {
+        const tool = tools.find((t) => t.name === name)!;
+        const schema = tool.inputSchema as unknown as {
+          safeParse: (v: unknown) => { success: boolean };
+        };
+        const base =
+          name === 'chat_history'
+            ? {}
+            : name === 'group_post' || name === 'notify_agent'
+              ? {
+                  selfInstanceId: 'ta_1',
+                  content: 'hi',
+                  ...(name === 'notify_agent'
+                    ? { targetInstanceId: 'ta_2' }
+                    : {}),
+                }
+              : name === 'memory_save'
+                ? { selfInstanceId: 'ta_1', level: 'global', content: 'x' }
+                : {};
+        expect(schema.safeParse({ ...base, teamId: 'tm_1' }).success).toBe(
+          true,
+        );
+        expect(schema.safeParse(base).success).toBe(false);
+      }
     });
   });
 });

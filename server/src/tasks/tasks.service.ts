@@ -200,19 +200,9 @@ export class TasksService implements OnModuleInit {
    * → 广播 TASK_STATUS_CHANGED + TEAM_QUEUE_CHANGED。
    */
   async create(pid: string, userId: string, dto: CreateTaskDto) {
-    if (!dto.title || dto.title.trim().length === 0) {
-      throw new BadRequestException('任务标题不能为空');
-    }
-    const teamIdRaw = (dto as any).teamId;
-    if (!teamIdRaw || typeof teamIdRaw !== 'string' || teamIdRaw.trim().length === 0) {
-      throw new BadRequestException({
-        code: TASK_ERRORS.TEAM_REQUIRED,
-        message: 'teamId 必填，请选择团队',
-      });
-    }
-    const teamId = teamIdRaw.trim();
+    const teamId = this.requireCreateTeam(dto);
 
-    // 全局≠开放：项目成员校验（弥补全局团队泄漏）
+    // 全局≠开放：项目成员校验（弥补全局团队泄漏，用户路径保留）
     const pm = await this.prisma.projectMember.findUnique({
       where: { projectId_userId: { projectId: pid, userId } },
     } as any);
@@ -222,7 +212,78 @@ export class TasksService implements OnModuleInit {
         message: '您不是该项目成员',
       });
     }
+    return this.createTaskInternal(pid, dto, teamId, {
+      createdBy: userId,
+      actorType: ACTOR_TYPE.user,
+    });
+  }
 
+  /**
+   * team-free-chat todo-4：agent 建任务通道（platform-mcp task_create 调用）。
+   * 与 create 共用事务体（createTaskInternal，不复制）：跳过按调用方 userId 的项目成员
+   * 校验（agent 无 user 归属，归属由调用方 MCP 层的团队项目并集门保证）；项目存在性仍校验。
+   * task.createdBy 外键指向 users：调用方实例 id 非用户行，落库改用团队用户成员
+   * （owner 优先）；实例归属仍记事件与广播 actorId（actorType=agent）。
+   */
+  async createByAgent(pid: string, callerInstanceId: string, dto: CreateTaskDto) {
+    const teamId = this.requireCreateTeam(dto);
+    const project = await this.prisma.project.findUnique({
+      where: { id: pid },
+      select: { id: true },
+    });
+    if (!project) {
+      throw new NotFoundException(`项目 ${pid} 不存在`);
+    }
+    const userMembers = await (this.prisma as any).teamUserMember.findMany({
+      where: { teamId },
+      select: { userId: true, role: true },
+    });
+    const owner =
+      (userMembers ?? []).find((m: any) => m.role === 'owner') ?? (userMembers ?? [])[0];
+    if (!owner) {
+      throw new BadRequestException({
+        code: TASK_ERRORS.TASK_EMPTY_TEAM,
+        message: '团队无用户成员，无法归属任务创建者',
+      });
+    }
+    return this.createTaskInternal(pid, dto, teamId, {
+      createdBy: owner.userId,
+      actorType: ACTOR_TYPE.agent,
+      actorId: callerInstanceId,
+    });
+  }
+
+  /** create 与 createByAgent 共用前置：标题非空 + teamId 必填（与原 create 语义一致）。 */
+  private requireCreateTeam(dto: CreateTaskDto): string {
+    if (!dto.title || dto.title.trim().length === 0) {
+      throw new BadRequestException('任务标题不能为空');
+    }
+    const teamIdRaw = (dto as any).teamId;
+    if (
+      !teamIdRaw ||
+      typeof teamIdRaw !== 'string' ||
+      teamIdRaw.trim().length === 0
+    ) {
+      throw new BadRequestException({
+        code: TASK_ERRORS.TEAM_REQUIRED,
+        message: 'teamId 必填，请选择团队',
+      });
+    }
+    return teamIdRaw.trim();
+  }
+
+  /**
+   * 建任务事务体（create 用户路径与 createByAgent agent 路径共用）。
+   * opts.createdBy 落 task.createdBy（FK 指向 users 的真实用户）；
+   * opts.actorId 落 taskEvent.actorId 与广播 actorId（缺省 = createdBy；agent 路径传实例 id），
+   * opts.actorType 区分 user 与 agent。
+   */
+  private async createTaskInternal(
+    pid: string,
+    dto: CreateTaskDto,
+    teamId: string,
+    opts: { createdBy: string; actorType: string; actorId?: string },
+  ) {
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 3; attempt++) {
       const taskId = await this.idGen.nextId(ID_PREFIX.task);
@@ -314,7 +375,7 @@ export class TasksService implements OnModuleInit {
               executionMode: dto.executionMode ?? EXECUTION_MODES.direct,
               backgroundDocs: (dto.backgroundDocs ?? []) as Prisma.InputJsonValue,
               resetAfterComplete: (dto as any).resetAfterComplete ?? false,
-              createdBy: userId,
+              createdBy: opts.createdBy,
               version: 0,
             },
           });
@@ -336,23 +397,18 @@ export class TasksService implements OnModuleInit {
                         id: await this.idGen.nextId(ID_PREFIX.channel),
                         type: CHANNEL_TYPE.team_group,
                         teamId,
-                        teamGroupKey: teamId,
                         taskId: null,
                       },
                     });
                   } catch {}
-                } else if (legacy.type === CHANNEL_TYPE.task_group || !legacy.teamGroupKey) {
+                } else if (legacy.type === CHANNEL_TYPE.task_group) {
                   try {
                     await txChat.update({
                       where: { id: legacy.id },
-                      data: { teamId, type: CHANNEL_TYPE.team_group, teamGroupKey: teamId, taskId: null },
+                      data: { teamId, type: CHANNEL_TYPE.team_group, taskId: null },
                     });
                   } catch {}
                 }
-              } else if (!existing.teamGroupKey) {
-                try {
-                  await txChat.update({ where: { id: existing.id }, data: { teamGroupKey: teamId } });
-                } catch {}
               }
             }
           } catch {}
@@ -435,8 +491,8 @@ export class TasksService implements OnModuleInit {
               eventType: 'status_change',
               fromStatus: null,
               toStatus: status,
-              actorType: ACTOR_TYPE.user,
-              actorId: userId,
+              actorType: opts.actorType,
+              actorId: opts.actorId ?? opts.createdBy,
             },
           });
 
@@ -449,8 +505,8 @@ export class TasksService implements OnModuleInit {
             taskId,
             from: null,
             to: createdStatus,
-            actorType: ACTOR_TYPE.user,
-            actorId: userId,
+            actorType: opts.actorType,
+            actorId: opts.actorId ?? opts.createdBy,
           },
           { type: 'global' },
         );

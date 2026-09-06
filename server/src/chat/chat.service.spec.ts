@@ -40,6 +40,7 @@ describe('ChatService', () => {
     task: { findUnique: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock };
     team: { findUnique: jest.Mock };
     teamMember: { findMany: jest.Mock; findFirst: jest.Mock; findUnique: jest.Mock };
+    teamUserMember: { findUnique: jest.Mock };
     projectMember: { findMany: jest.Mock; findUnique: jest.Mock; findFirst: jest.Mock };
     taskAgent: { findMany: jest.Mock; findFirst: jest.Mock };
     session: { findFirst: jest.Mock; findMany: jest.Mock };
@@ -151,7 +152,9 @@ describe('ChatService', () => {
         findMany: jest.fn(),
         count: jest.fn(),
         create: jest.fn(),
-        update: jest.fn(),
+        update: jest.fn().mockImplementation(async (args: any) => ({
+          id: args?.where?.id ?? channelId,
+        })),
       },
       message: {
         create: jest.fn(),
@@ -169,6 +172,9 @@ describe('ChatService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
         findUnique: jest.fn().mockResolvedValue(null) as any,
+      },
+      teamUserMember: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'tum_1' }),
       },
       projectMember: { findMany: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn() as any },
       taskAgent: { findMany: jest.fn(), findFirst: jest.fn() },
@@ -440,6 +446,44 @@ describe('ChatService', () => {
         });
       }
       expect(prisma.message.create).not.toHaveBeenCalled();
+    });
+
+    it('团队频道无任务上下文：非团队成员 → 403 PERMISSION_PROJECT_NOT_MEMBER', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue(channelRow());
+      prisma.team.findUnique.mockResolvedValue({ id: 'tm_0000000001' });
+      prisma.task.findUnique.mockResolvedValue(null);
+      prisma.task.findFirst.mockResolvedValue(null);
+      (prisma as any).teamUserMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.createMessage(channelId, userId, { text: 'hi' } as any),
+      ).rejects.toThrow(ForbiddenException);
+      try {
+        await service.createMessage(channelId, userId, { text: 'hi' } as any);
+        fail('应抛出 ForbiddenException');
+      } catch (e) {
+        expect((e as ForbiddenException).getResponse()).toMatchObject({
+          code: 'PERMISSION_PROJECT_NOT_MEMBER',
+        });
+      }
+      expect(prisma.message.create).not.toHaveBeenCalled();
+    });
+
+    it('团队频道无任务上下文：团队成员 → 200 落库广播', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue(channelRow());
+      prisma.team.findUnique.mockResolvedValue({ id: 'tm_0000000001' });
+      prisma.task.findUnique.mockResolvedValue(null);
+      prisma.task.findFirst.mockResolvedValue(null);
+      (prisma as any).teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      (prisma as any).teamMember.findMany.mockResolvedValue([]);
+      idGen.nextId.mockResolvedValue('m_0000000001');
+      prisma.message.create.mockResolvedValue(messageRow());
+
+      const result = await service.createMessage(channelId, userId, { text: 'hi' } as any);
+
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      expect(result.message).toMatchObject({ id: 'm_0000000001', channelId });
+      expect(realtime.broadcast).toHaveBeenCalledTimes(2);
     });
 
     describe('T8 群聊无 @ 自动路由主实例', () => {

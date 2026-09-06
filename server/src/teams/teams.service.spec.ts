@@ -39,6 +39,7 @@ describe('TeamsService', () => {
     createdAt: new Date('2026-09-01T00:00:00Z'),
     updatedAt: new Date('2026-09-01T00:00:00Z'),
     members: [],
+    userMembers: [],
     queues: [],
     ...overrides,
   });
@@ -75,6 +76,13 @@ describe('TeamsService', () => {
         aggregate: jest.fn(),
       },
       teamQueue: { findFirst: jest.fn() },
+      teamUserMember: {
+        create: jest.fn(),
+        findFirst: jest.fn(),
+        findUnique: jest.fn(),
+        delete: jest.fn(),
+      },
+      user: { findUnique: jest.fn() },
       agent: { findUnique: jest.fn() },
       $transaction: jest.fn(),
       $queryRawUnsafe: jest.fn(),
@@ -102,6 +110,9 @@ describe('TeamsService', () => {
       teamMember: {
         create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...data })),
         aggregate: jest.fn().mockResolvedValue({ _max: { seq: 0 } }),
+      },
+      teamUserMember: {
+        create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...data })),
       },
       agent: {
         findUnique: jest.fn().mockImplementation(({ where }: any) =>
@@ -775,10 +786,12 @@ describe('TeamsService', () => {
     it('onModuleInit 按最大 id 对齐各前缀 seed', async () => {
       (prisma.team as any).findFirst = jest.fn().mockResolvedValue({ id: 'tm_0000000005' });
       (prisma.teamMember as any).findFirst = jest.fn().mockResolvedValue({ id: 'tmm_0000000003' });
+      (prisma.teamUserMember as any).findFirst = jest.fn().mockResolvedValue({ id: 'tum_0000000004' });
       (prisma as any).teamQueue = { findFirst: jest.fn().mockResolvedValue({ id: 'tq_0000000007' }) };
       await service.onModuleInit();
       expect(idGen.seed).toHaveBeenCalledWith('tm', 5);
       expect(idGen.seed).toHaveBeenCalledWith('tmm', 3);
+      expect(idGen.seed).toHaveBeenCalledWith('tum', 4);
       expect(idGen.seed).toHaveBeenCalledWith('tq', 7);
     });
 
@@ -790,6 +803,9 @@ describe('TeamsService', () => {
         teamMember: {
           create: jest.fn().mockResolvedValue({ id: 'tmm_0000000001', teamId: 'tm_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1 }),
           aggregate: jest.fn().mockResolvedValue({ _max: { seq: null } }),
+        },
+        teamUserMember: {
+          create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...data })),
         },
         agent: { findUnique: jest.fn().mockResolvedValue({ id: 'a_product', name: '产品经理', role: 'product' }) },
         $queryRawUnsafe: jest.fn().mockResolvedValue([]),
@@ -826,6 +842,9 @@ describe('TeamsService', () => {
           create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...data })),
           aggregate: jest.fn().mockResolvedValue({ _max: { seq: 0 } }),
         },
+        teamUserMember: {
+          create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...data })),
+        },
         agent: {
           findUnique: jest.fn().mockImplementation(({ where }: any) => Promise.resolve({ id: where.id, ...agentMeta(where.id) })),
         },
@@ -851,6 +870,7 @@ describe('TeamsService', () => {
       const tx: any = {
         team: { create: jest.fn().mockResolvedValue(teamRow()), update: jest.fn() },
         teamMember: { create: jest.fn().mockResolvedValue({}), aggregate: jest.fn().mockResolvedValue({ _max: { seq: 0 } }) },
+        teamUserMember: { create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...data })) },
         agent: { findUnique: jest.fn().mockResolvedValue({ id: 'a_product', name: '产品经理', role: 'product' }) },
         $queryRawUnsafe: jest.fn().mockResolvedValue([{ maxSeq: 0 }]),
       };
@@ -922,6 +942,149 @@ describe('TeamsService', () => {
       prisma.team.findUnique.mockResolvedValue(teamRow({ mainAgentMemberId: 'tmm_0000000001', members: [teamMemberRow()], queues: [] }));
       const result: any = await service.findOne('tm_0000000001');
       expect(result.mainAgentMemberId).toBe('tmm_0000000001');
+    });
+  });
+
+  describe('团队用户成员（team_user_members）', () => {
+    it('create 团队自动写入创建者 owner 成员行（同事务）', async () => {
+      prisma.team.findUnique.mockResolvedValue(null);
+      idGen.nextId
+        .mockResolvedValueOnce('tm_0000000001')
+        .mockResolvedValueOnce('tmm_0000000001')
+        .mockResolvedValueOnce('tum_0000000001');
+      const tx = mockCreateTx(teamRow());
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.team.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(
+          teamRow({
+            members: [teamMemberRow()],
+            userMembers: [{ id: 'tum_0000000001', userId, role: 'owner', joinedAt: new Date('2026-09-01T00:00:00Z') }],
+          }),
+        );
+      const result: any = await service.create(userId, {
+        name: 'team-owner',
+        members: [{ agentId: 'a_product' }],
+      } as any);
+      expect(tx.teamUserMember.create).toHaveBeenCalledTimes(1);
+      expect(tx.teamUserMember.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          id: 'tum_0000000001',
+          teamId: 'tm_0000000001',
+          userId,
+          role: 'owner',
+        }),
+      });
+      expect(result.userMembers).toHaveLength(1);
+      expect(result.userMembers[0]).toMatchObject({ userId, role: 'owner' });
+    });
+
+    it('findOne/GET 返回 userMembers 数组（id/userId/role/joinedAt 形状）', async () => {
+      const joinedAt = new Date('2026-09-01T00:00:00Z');
+      prisma.team.findUnique.mockResolvedValue(
+        teamRow({
+          members: [teamMemberRow()],
+          userMembers: [{ id: 'tum_0000000001', userId, role: 'owner', joinedAt }],
+          queues: [],
+        }),
+      );
+      const result: any = await service.findOne('tm_0000000001');
+      expect(result.userMembers).toHaveLength(1);
+      expect(result.userMembers[0]).toEqual({ id: 'tum_0000000001', userId, role: 'owner', joinedAt });
+    });
+
+    it('addUserMember → removeUserMember 往返：成员写入后可移除，userMembers 先增后减', async () => {
+      const store: Record<string, any> = {};
+      prisma.team.findUnique.mockImplementation(async () =>
+        teamRow({
+          members: [],
+          userMembers: Object.values(store),
+          queues: [],
+        }),
+      );
+      prisma.user.findUnique.mockResolvedValue({ id: 'u_new', username: 'new' });
+      prisma.teamUserMember.findUnique.mockImplementation(async ({ where }: any) =>
+        store[`${where.teamId_userId.teamId}|${where.teamId_userId.userId}`] ?? null,
+      );
+      prisma.teamUserMember.create.mockImplementation(async ({ data }: any) => {
+        store[`${data.teamId}|${data.userId}`] = { ...data };
+        return { ...data };
+      });
+      prisma.teamUserMember.delete.mockImplementation(async ({ where }: any) => {
+        const key = Object.keys(store).find((k) => store[k].id === where.id);
+        if (key) delete store[key];
+        return { id: where.id };
+      });
+      prisma.team.update = jest.fn().mockResolvedValue({});
+      idGen.nextId.mockResolvedValue('tum_0000000002');
+
+      const added: any = await service.addUserMember('tm_0000000001', { userId: 'u_new' });
+      expect(added.userMembers).toHaveLength(1);
+      expect(added.userMembers[0]).toMatchObject({ userId: 'u_new', role: 'member' });
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        EVENT_TYPES.TEAM_CHANGED,
+        expect.objectContaining({ action: 'user_member_add', userId: 'u_new' }),
+        { type: 'global' },
+      );
+
+      const removed: any = await service.removeUserMember('tm_0000000001', 'u_new');
+      expect(removed.userMembers).toHaveLength(0);
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        EVENT_TYPES.TEAM_CHANGED,
+        expect.objectContaining({ action: 'user_member_remove', userId: 'u_new' }),
+        { type: 'global' },
+      );
+    });
+
+    it('addUserMember 重复添加 → 409（非 500）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.user.findUnique.mockResolvedValue({ id: 'u_new', username: 'new' });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1', teamId: 'tm_0000000001', userId: 'u_new' });
+      await expect(service.addUserMember('tm_0000000001', { userId: 'u_new' })).rejects.toThrow(ConflictException);
+      try {
+        await service.addUserMember('tm_0000000001', { userId: 'u_new' });
+        fail('应抛出 ConflictException');
+      } catch (e) {
+        expect((e as ConflictException).getResponse()).toMatchObject({
+          code: 'USER_ALREADY_MEMBER',
+        });
+      }
+      expect(prisma.teamUserMember.create).not.toHaveBeenCalled();
+    });
+
+    it('addUserMember 并发竞态：create 报 P2002 → 重读命中 → 干净 409 USER_ALREADY_MEMBER（非 500）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.user.findUnique.mockResolvedValue({ id: 'u_new', username: 'new' });
+      prisma.teamUserMember.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'tum_1', teamId: 'tm_0000000001', userId: 'u_new' });
+      prisma.teamUserMember.create.mockRejectedValueOnce(
+        Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+      );
+      try {
+        await service.addUserMember('tm_0000000001', { userId: 'u_new' });
+        fail('应抛出 ConflictException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ConflictException);
+        expect((e as ConflictException).getResponse()).toMatchObject({
+          code: 'USER_ALREADY_MEMBER',
+        });
+      }
+      expect(prisma.teamUserMember.findUnique).toHaveBeenCalledTimes(2);
+    });
+
+    it('addUserMember 团队/用户不存在 → 404', async () => {
+      prisma.team.findUnique.mockResolvedValue(null);
+      await expect(service.addUserMember('tm_missing', { userId: 'u_new' })).rejects.toThrow(NotFoundException);
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.user.findUnique.mockResolvedValue(null);
+      await expect(service.addUserMember('tm_0000000001', { userId: 'ghost' })).rejects.toThrow(NotFoundException);
+    });
+
+    it('removeUserMember 非成员 → 404', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+      await expect(service.removeUserMember('tm_0000000001', 'ghost')).rejects.toThrow(NotFoundException);
     });
   });
 });
