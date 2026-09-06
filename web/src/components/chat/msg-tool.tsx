@@ -45,7 +45,7 @@ export interface MsgToolProps {
   className?: string;
 }
 
-/** 工具调用消息（tool part）：折叠单行概要 + 点击展开完整输入/输出（仿 MsgThinking 交互） */
+/** 工具调用消息（tool part）：单行概要（名称 + 输入摘要 + 状态 + 时间）+ 点击展开完整输入/输出 */
 export function MsgTool({ author, role, name, status, input, output, time, style, className }: MsgToolProps) {
   const st = toolStatus[status];
   const failed = status === "failed";
@@ -87,33 +87,13 @@ export function MsgTool({ author, role, name, status, input, output, time, style
           transition: "border-color .15s ease",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-          <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
+          <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1, flexShrink: 0 }}>
             {failed ? "✕" : "⚙"}
           </span>
-          <span style={{ fontSize: fontSize.md, color: neutral[700], fontWeight: 600 }}>{name}</span>
+          <span style={{ fontSize: fontSize.sm, color: neutral[700], fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>{name}</span>
           <span
-            style={{
-              marginLeft: "auto",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: space.xs,
-              padding: `${space.xs - 1}px ${space.sm}px`,
-              borderRadius: radius.pill,
-              backgroundColor: st.bg,
-              border: `1px solid ${st.border}`,
-              color: st.color,
-              fontSize: fontSize.xs,
-              fontWeight: 600,
-              whiteSpace: "nowrap",
-            }}
-          >
-            {status === "running" && <LoadingDots color={st.color} />}
-            {st.label}
-          </span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginTop: space.sm, minWidth: 0 }}>
-          <span
+            title={summary}
             style={{
               flex: 1,
               minWidth: 0,
@@ -127,8 +107,30 @@ export function MsgTool({ author, role, name, status, input, output, time, style
           >
             {summary}
           </span>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: space.xs,
+              padding: `${space.xs - 1}px ${space.sm}px`,
+              borderRadius: radius.pill,
+              backgroundColor: st.bg,
+              border: `1px solid ${st.border}`,
+              color: st.color,
+              fontSize: fontSize.xs,
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+            }}
+          >
+            {status === "running" && <LoadingDots color={st.color} />}
+            {st.label}
+          </span>
+          {time && (
+            <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>{time}</span>
+          )}
           <span style={{ flexShrink: 0, fontSize: fontSize.xs, color: neutral[400] }} aria-hidden>
-            {open ? "▾ 收起" : "点击查看详情 ▸"}
+            {open ? "▾" : "▸"}
           </span>
         </div>
         {open && (
@@ -155,19 +157,12 @@ export function MsgTool({ author, role, name, status, input, output, time, style
                 {output}
               </span>
             </div>
+            <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+              {author}
+              {time ? ` · ${time}` : ""}
+            </div>
           </div>
         )}
-        <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginTop: space.sm }}>
-          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            {author}
-            {time ? ` · ${time}` : ""}
-          </span>
-          {failed && (
-            <span style={{ fontSize: fontSize.xs, color: "#B91C1C", marginLeft: "auto" }}>
-              ToolStateError
-            </span>
-          )}
-        </div>
       </div>
     </div>
   );

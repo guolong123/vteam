@@ -60,8 +60,9 @@ const dmCss = `
 /** GET /channels/:id 响应：频道信息 + 任务团队未 removed 成员。 */
 interface ChannelDetail {
   id: string;
-  type: "task_group" | "private";
+  type: "team_group" | "private";
   taskId: string;
+  teamId?: string | null;
   agentId: string | null;
   /** 私聊频道绑定的任务实例 id（ta_ 前缀；后端 toChannelDto 未输出，可选防御）。 */
   taskAgentId?: string | null;
@@ -142,11 +143,12 @@ function mergeSnapshotWithLive(items: RealtimeChatMessage[]): RealtimeChatMessag
   return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-/** GET /channels?type=task_group 条目（后端 ChatService.toChannelDto，含 taskId 可匹配任务，tasks 页同款）。 */
+/** GET /channels?type=team_group 条目（后端 ChatService.toChannelDto，含 teamId 可匹配团队，tasks 页同款）。 */
 interface ChannelItem {
   id: string;
-  type: string;
+  type: "team_group" | "private";
   taskId: string;
+  teamId?: string | null;
   agentId: string | null;
   task?: {
     id: string;
@@ -599,7 +601,7 @@ export default function DmChatPage() {
   // 解析归属为主 Agent 才更新，防跨任务串扰污染本页状态）
   const agentIdBySessionRef = useRef<Record<string, string>>({});
   const [loadingMore, setLoadingMore] = useState(false);
-  // 群聊上下文：groupId = 与私聊同 task 的群聊频道 id（经 GET /channels?type=task_group 匹配）
+  // 群聊上下文：groupId = 与私聊同 team 的群聊频道 id（经 GET /channels?type=team_group 匹配）
   const [groupId, setGroupId] = useState<string | null>(null);
   // 群聊频道最近 user 消息（limit 5，含 @agent 触发消息，SSE 实时追加）
   const [groupContextMessages, setGroupContextMessages] = useState<RealtimeChatMessage[]>([]);
@@ -638,15 +640,21 @@ export default function DmChatPage() {
     [messagesQuery.data],
   );
 
-  /* ---------- 2.5 群聊上下文：GET /channels?type=task_group 按 taskId 匹配群聊频道（tasks 页同款） ---------- */
+  /* ---------- 2.5 群聊上下文：GET /channels?type=team_group 按 teamId 匹配群聊频道（tasks 页同款） ---------- */
   const channelsQuery = useQuery({
-    queryKey: ["channels", "task_group"],
-    queryFn: () => api.get<{ items: ChannelItem[]; total: number }>("/channels", { query: { type: "task_group" } }),
+    queryKey: ["channels", "team_group"],
+    queryFn: () => api.get<{ items: ChannelItem[]; total: number }>("/channels", { query: { type: "team_group" } }),
     enabled: !!user?.id && !!channel?.taskId,
   });
   useEffect(() => {
     if (!channelsQuery.data) return;
-    const g = channelsQuery.data.items.find((c) => c.taskId === channel?.taskId) ?? null;
+    const teamId = (channel as unknown as { teamId?: string | null })?.teamId ?? null;
+    const g =
+      (teamId
+        ? channelsQuery.data.items.find((c) => (c.teamId ?? null) === teamId)
+        : null) ??
+      channelsQuery.data.items.find((c) => c.taskId === channel?.taskId) ??
+      null;
     setGroupId((prev) => (prev === g?.id ? prev : (g?.id ?? null)));
   }, [channelsQuery.data, channel?.taskId]);
 
@@ -685,7 +693,7 @@ export default function DmChatPage() {
    * 主 Agent（私聊对象）：private 频道 channel.agent（agent id）→ 从任务 instances 匹配
    * T6 实例语义：channel.taskAgentId 精确命中实例（同 agent 多实例各自私聊独立，
    * 不再 find 首实例串扰）；taskAgentId 缺省（存量频道）回退该 agent 第一个实例。
-   * instances 未就绪/未命中时回退 channel.agent 原始信息。task_group 直达降级为任务标题。
+   * instances 未就绪/未命中时回退 channel.agent 原始信息。team_group 直达降级为任务标题。
    */
   const mainAgent = useMemo(() => {
     if (!channel?.agent) return null;

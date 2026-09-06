@@ -32,10 +32,14 @@ export interface MsgThinkingProps {
   className?: string;
 }
 
-/** 思考中消息（reasoning 阶段）：pending=思考中带动画 / done=可折叠（收起「已思考 · 点击展开」） */
+/** 思考中消息（reasoning 阶段）：pending=思考中带动画 / done=可折叠（单行缩略 + 思考摘要，点击展开） */
 export function MsgThinking({ author, role, state, text, time, style, className }: MsgThinkingProps) {
   const [open, setOpen] = useState(state === "done" ? false : true);
   const pending = state === "pending";
+  // 折叠态单行缩略：取思考正文前 60 字（空白归一），无内容时仅显示"已思考"
+  const excerpt = !pending
+    ? text.replace(/\s+/g, " ").trim().slice(0, 60)
+    : "";
   return (
     <div
       data-testid="msg-thinking"
@@ -69,11 +73,11 @@ export function MsgThinking({ author, role, state, text, time, style, className 
           transition: "border-color .15s ease",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginBottom: open ? space.xs : 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginBottom: open ? space.xs : 0, minWidth: 0 }}>
           {pending ? (
             <LoadingDots color={neutral[400]} />
           ) : (
-            <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>
+            <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1, flexShrink: 0 }}>
               💭
             </span>
           )}
@@ -83,16 +87,34 @@ export function MsgThinking({ author, role, state, text, time, style, className 
               color: neutral[500],
               fontWeight: 500,
               fontStyle: "italic",
+              flexShrink: 0,
             }}
           >
             {pending ? "思考中…" : author}
           </span>
+          {!pending && excerpt && (
+            <span
+              title={text.trim()}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                fontSize: fontSize.xs,
+                color: neutral[400],
+                fontStyle: "italic",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {excerpt}{text.replace(/\s+/g, " ").trim().length > 60 ? "…" : ""}
+            </span>
+          )}
           {!pending && (
-            <span style={{ fontSize: fontSize.xs, color: neutral[400], marginLeft: "auto" }} aria-hidden>
+            <span style={{ fontSize: fontSize.xs, color: neutral[400], marginLeft: "auto", flexShrink: 0 }} aria-hidden>
               {open ? "▾ 收起" : "已思考 · 点击展开 ▸"}
             </span>
           )}
-          {time && <span style={{ fontSize: fontSize.xs, color: neutral[400], marginLeft: "auto" }}>{time}</span>}
+          {time && <span style={{ fontSize: fontSize.xs, color: neutral[400], marginLeft: excerpt ? 0 : "auto", flexShrink: 0 }}>{time}</span>}
         </div>
         {(open || pending) && (
           <div

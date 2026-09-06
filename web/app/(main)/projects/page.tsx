@@ -197,6 +197,8 @@ function ProjectCard({
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          gap: space.sm,
+          flexWrap: "nowrap",
           borderTop: `1px solid ${neutral[100]}`,
           paddingTop: space.md,
           marginTop: space.md,
@@ -223,6 +225,8 @@ function ProjectCard({
             fontWeight: 500,
             cursor: "pointer",
             fontFamily: fontFamily.body,
+            whiteSpace: "nowrap",
+            flexShrink: 0,
           }}
         >
           <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>▤</span>
@@ -249,6 +253,8 @@ function ProjectCard({
             fontWeight: 500,
             cursor: "pointer",
             fontFamily: fontFamily.body,
+            whiteSpace: "nowrap",
+            flexShrink: 0,
           }}
         >
           <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>☰</span>
@@ -277,6 +283,8 @@ function ProjectCard({
             cursor: "pointer",
             boxShadow: "0 6px 16px rgba(37,99,235,.3)",
             fontFamily: fontFamily.body,
+            whiteSpace: "nowrap",
+            flexShrink: 0,
           }}
         >
           进入项目

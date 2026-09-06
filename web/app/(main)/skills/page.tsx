@@ -383,13 +383,21 @@ function toMcpTool(
   // T8c：展示 server 名取 GET /mcp-servers 反查结果（tool.mcpServer 存 server id，弱关联）；
   // 无记录时回退原始引用（用户输入的 server 名或 "mcp" 占位）
   const serverName = server?.name ?? t.mcpServer ?? "mcp";
+  // 描述优先级：内置 vteam 精选文案 > 同步的 swagger 摘要（schema.description，
+  // "METHOD /path" 式无摘要回退视为无描述）> 空（行内回退来源语义）
+  const rawSchemaDesc = t.schema && typeof (t.schema as Record<string, unknown>).description === "string"
+    ? ((t.schema as Record<string, unknown>).description as string).trim()
+    : "";
+  const schemaDesc = rawSchemaDesc && !/^(GET|POST|PUT|PATCH|DELETE)\s+\//.test(rawSchemaDesc)
+    ? rawSchemaDesc
+    : "";
   return {
     toolId: t.id,
     id: `${serverName}_${t.action}`,
     name: t.action,
     server: serverName,
     version: "v1",
-    desc: "",
+    desc: VTEAM_TOOL_DESC[t.action] ?? schemaDesc,
     roles: [],
     // T8c：server 类型/状态从 GET /mcp-servers 真实拉取（缺 server 记录 → remote/未连接兜底）
     type: server?.type ?? "remote",
@@ -1017,6 +1025,52 @@ function McpStatusBadge({ status }: { status: McpStatus }) {
   );
 }
 
+/** 内置 vteam 工具功能描述（面向人的一句话说明；权威定义见 server/src/platform-mcp/platform-mcp.tools.ts）。
+ * 非内置 server 的工具无映射时回退来源语义文案。 */
+const VTEAM_TOOL_DESC: Record<string, string> = {
+  chat_history: "查询任务群聊历史消息",
+  doclib: "查询任务产出物文档库",
+  task_context: "查询任务概览与团队成员",
+  group_post: "向任务群聊发布消息",
+  read_file: "读取任务文件内容",
+  notify_agent: "定向通知并触发其他实例",
+  submit_artifact: "提交任务产出物",
+  issue_create: "创建任务 issue",
+  issue_list: "查询任务 issue 列表",
+  issue_get: "查看 issue 详情",
+  issue_update: "编辑 issue",
+  issue_transition: "流转 issue 状态",
+  task_transition: "流转任务状态（开始/验收/归档）",
+  question_confirm: "回复 Agent 提问或权限确认",
+  memory_save: "保存可复用经验记忆",
+  memory_search: "检索平台记忆",
+  plan_submit: "提交执行计划",
+  plan_review: "评审执行计划",
+  plan_task_transition: "推进计划子任务",
+  team_view: "查看团队信息与队列",
+  my_profile: "查看自身实例信息",
+  plan_get: "查看执行计划详情",
+  plan_assign_reviewer: "指派计划评审人",
+  team_add_member: "添加团队成员",
+  channel_send: "发送频道消息（私聊直发）",
+  wecom_reply: "回复企微用户消息",
+};
+
+/** vteam-api 直挂路由（Express 注册、无装饰器摘要，只能前端映射）：全 id → 功能说明。 */
+const VTEAM_API_TOOL_DESC: Record<string, string> = {
+  "vteam-api_appcontroller_gethello": "服务存活探针",
+  "vteam-api_migratecontroller_addenabled": "一次性迁移：补实例启用列",
+  "vteam-api_docssitecontroller_registry": "文档站注册表：任务文档树",
+  "vteam-api_docssitecontroller_prd": "读取任务镜像文档内容",
+  "vteam-api_docssitecontroller_prototypes": "任务原型列表",
+  "vteam-api_docssitecontroller_prototypecontent": "读取任务原型源码",
+  "vteam-api_messagechannelscontroller_inbound_get": "查询消息渠道入站配置",
+  "vteam-api_messagechannelscontroller_inbound_post": "创建消息渠道入站配置",
+  "vteam-api_messagechannelscontroller_inbound_put": "全量更新消息渠道入站配置",
+  "vteam-api_messagechannelscontroller_inbound_patch": "修改消息渠道入站配置",
+  "vteam-api_messagechannelscontroller_inbound_delete": "删除消息渠道入站配置",
+};
+
 /** MCP 工具行卡片：来源语义 = 「来自 MCP server，命名 <server>_<tool>」+
  * server 类型（Local/Remote）+ 连接状态（mcp-group） */
 function McpToolRow({
@@ -1032,6 +1086,7 @@ function McpToolRow({
 }) {
   const typeTheme = mcpTypeTheme[t.type];
   const builtin = isBuiltinMcpServer(t.server);
+  const funcDesc = t.desc || (builtin ? VTEAM_TOOL_DESC[t.name] : undefined) || VTEAM_API_TOOL_DESC[t.id];
   return (
     <div
       data-testid="mcp-tool-item"
@@ -1093,6 +1148,7 @@ function McpToolRow({
           <VersionPill version={t.version} />
         </div>
         <span
+          data-testid="mcp-tool-desc"
           style={{
             fontSize: fontSize.md,
             color: neutral[500],
@@ -1101,7 +1157,7 @@ function McpToolRow({
             textOverflow: "ellipsis",
           }}
         >
-          来自 MCP server，命名 {t.server}_{t.name} · 权限 {t.server}_*
+          {funcDesc ?? `来自 MCP server，命名 ${t.server}_${t.name} · 权限 ${t.server}_*`}
         </span>
       </div>
 

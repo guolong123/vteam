@@ -12,7 +12,8 @@
  *   启动中/失败时展示「开始前检查」提示（data-testid=start-task-hint）。
  * - 实时联动：useSSE({ scope: "global" }) 订阅 task.status.changed（09 篇 §4.1 全局广播）→
  *   invalidateQueries(["tasks"]) 刷新看板。
- * - 卡片点击 → router.push(/tasks/[id])（群聊入口，T13 建路由，先跳转）。
+ * - 卡片点击 → 打开任务详情抽屉（TaskDetailDrawer，去聊天化；不再直跳 /tasks/:id）。
+ *   抽屉内显式"进入团队会话"按钮 → /teams/:teamId/session（团队会话唯一聊天入口）。
  * - data-testid 与原型一致：status-filter / task-card / task-members /
  *   task-artifact-count / start-task-button / start-task-hint。
  * - 「待开始」配色在页面内本地定义（WAITING_STATUS 灰蓝 var(--color-neutral-600) 系），不扩散共享层；
@@ -30,6 +31,7 @@ import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useSSE } from "@/hooks/use-sse";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
+import { TaskDetailDrawer } from "@/src/components/tasks/TaskDetailDrawer";
 import { AgentAvatar, EmptyState, StatusBadge } from "@/src/components/ui";
 import {
   type RoleKey,
@@ -412,6 +414,8 @@ export default function TaskBoardPage() {
   // pid：URL ?pid= 必填；无 pid 且已登录 → 重定向 /projects（effect 内读 window，避免 SSR 水合不一致）
   const [pid, setPid] = useState<string | null>(null);
   const [activeKey, setActiveKey] = useState("all");
+  // 抽屉详情：当前选中的任务 id（null = 关闭）；看板点击卡片只开抽屉，不跳 /tasks/:id
+  const [drawerTaskId, setDrawerTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     const urlPid = new URLSearchParams(window.location.search).get("pid");
@@ -467,6 +471,7 @@ export default function TaskBoardPage() {
         display: "flex",
         flexDirection: "column",
         backgroundColor: neutral[100],
+        position: "relative",
         ...baseFont,
       }}
     >
@@ -671,12 +676,16 @@ export default function TaskBoardPage() {
             <TaskCard
               key={task.id}
               task={task}
-              onOpen={(taskId) => router.push(`/tasks/${taskId}`)}
+              onOpen={(taskId) => setDrawerTaskId(taskId)}
               projectName={projectName}
             />
           ))
         )}
       </div>
+      <TaskDetailDrawer
+        taskId={drawerTaskId}
+        onClose={() => setDrawerTaskId(null)}
+      />
     </div>
   );
 }

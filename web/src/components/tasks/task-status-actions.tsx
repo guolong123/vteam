@@ -22,12 +22,14 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
+import { teamsApi } from "@/src/api/teams";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /** 后端五态（TASK_STATUS，对齐 board / tasks 页局部类型）。 */
 export type TaskApiStatus =
+  | "queued"
   | "pending"
   | "in_progress"
   | "pending_review"
@@ -44,6 +46,7 @@ interface TaskStatusActionsProps {
 
 /** 各状态可执行操作组（archived 终态返回 null 不渲染）。 */
 const ACTION_SETS: Record<TaskApiStatus, TaskAction[] | null> = {
+  queued: null,
   pending: ["start"],
   in_progress: ["mark-pending-review"],
   pending_review: ["accept", "reject"],
@@ -51,13 +54,13 @@ const ACTION_SETS: Record<TaskApiStatus, TaskAction[] | null> = {
   archived: null,
 };
 
-/** 操作元信息：按钮文案 / 强调色 / pending 文案。颜色对齐既有状态语义（进行中蓝/完成绿/驳回琥珀/归档灰）。 */
+/** 操作元信息：按钮文案 / 强调色 / pending 文案。颜色对齐既有状态语义（进行中蓝/完成绿/驳回琥珀/归档灰）。中性色用固定深灰（neutral token 在暗色下翻转会变浅，白字压不住）。 */
 const ACTION_META: Record<TaskAction, { label: string; color: string; pendingLabel: string }> = {
-  start: { label: "开始任务", color: "var(--color-neutral-600)", pendingLabel: "启动中…" },
+  start: { label: "开始任务", color: "#475569", pendingLabel: "启动中…" },
   "mark-pending-review": { label: "提交验收", color: "#2563EB", pendingLabel: "提交中…" },
   accept: { label: "验收通过", color: "#059669", pendingLabel: "处理中…" },
   reject: { label: "驳回", color: "#D97706", pendingLabel: "驳回中…" },
-  archive: { label: "归档", color: "var(--color-neutral-500)", pendingLabel: "归档中…" },
+  archive: { label: "归档", color: "#64748B", pendingLabel: "归档中…" },
 };
 
 /** 操作按钮（对齐 board 原「开始任务」按钮样式）。 */
@@ -180,11 +183,26 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const plan: any = planQuery.data;
+  // 排队等待 mutation 必须位于 early return 之前（hooks 顺序规则）；teamId 取自任务详情查询
+  const teamId: string | null = taskDetail?.teamId ?? null;
+  const enqueueMutation = useMutation({
+    mutationFn: () => teamsApi.enqueue(teamId!, taskId),
+    onError: (err) => {
+      setActionError(isApiError(err) ? err.message : "排队失败，请稍后重试");
+    },
+    onSuccess: () => setActionError(null),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+      if (teamId) queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+    },
+  });
 
   const actions = ACTION_SETS[status];
   if (!actions) return null;
 
   const pending = actionMutation.isPending;
+  // 排队等待：pending 孤儿重入队（有团队才展示，无团队的任务先去详情指派）
   const showStartHint = status === "pending" && (pending || !!actionError);
   const showErrorBar = status !== "pending" && !!actionError;
   const planStatus: string | undefined = plan?.status;
@@ -227,6 +245,38 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
           onClick={() => handleAction(action)}
         />
       ))}
+      {status === "pending" && teamId && (
+        <button
+          type="button"
+          data-testid="enqueue-task-button"
+          disabled={pending || enqueueMutation.isPending}
+          onClick={(e) => {
+            e.stopPropagation();
+            setActionError(null);
+            enqueueMutation.mutate();
+          }}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: space.xs,
+            padding: `${space.sm + 2}px ${space.lg}px`,
+            borderRadius: radius.md,
+            border: `1px solid ${neutral[200]}`,
+            backgroundColor: "var(--color-surface)",
+            color: "#D97706",
+            fontSize: fontSize.md,
+            fontWeight: 600,
+            cursor: pending || enqueueMutation.isPending ? "default" : "pointer",
+            opacity: pending || enqueueMutation.isPending ? 0.65 : 1,
+            fontFamily: fontFamily.body,
+            transition: "background-color .15s ease",
+            width: "100%",
+          }}
+        >
+          {enqueueMutation.isPending ? "排队中…" : "排队等待"}
+        </button>
+      )}
 
       {showStartHint && (
         <div

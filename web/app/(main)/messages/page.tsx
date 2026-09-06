@@ -3,9 +3,9 @@
 /**
  * 消息中心 · 会话列表页（Phase 2 私聊能力 · FR-14）
  * =============================================
- * 会话列表：GET /channels（不带 type → task_group + private 全部），按 type 分组展示：
+ * 会话列表：GET /channels（不带 type → team_group + private 全部），按 type 分组展示：
  * - 私聊（private）：Agent 头像/名/角色徽章（名=角色标签时徽章去重）+ 所属任务标题（副标题，不重复 Agent 名）
- * - 群聊（task_group）：任务标题 + 状态徽章 + 团队规模，点击进入 /messages/:id
+ * - 群聊（team_group）：任务标题 + 状态徽章 + 团队规模，点击进入 /messages/:id
  * 视觉对齐平台现有列表页（project-list 卡片范式）+ dm-chat 原型角色/状态语义。
  * 数据源：后端 ChatService.toChannelDto 已含 task/agent 关联（private 无需额外查 agents 表）。
  */
@@ -52,10 +52,10 @@ function channelSearchText(channel: ChannelItem): string {
 
 /* ------------------------------ API 数据模型（对齐后端 toChannelDto） ------------------------------ */
 
-/** GET /channels 条目（ChatService.toChannelDto：private 带 agent，task_group 带 task）。 */
+/** GET /channels 条目（ChatService.toChannelDto：private 带 agent，team_group 带 task）。 */
 interface ChannelItem {
   id: string;
-  type: "task_group" | "private";
+  type: "team_group" | "private";
   taskId: string;
   agentId: string | null;
   /** UX-09：置顶标记（列表置顶会话优先展示） */
@@ -421,15 +421,15 @@ export default function MessagesPage() {
   const filteredItems = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     return items.filter((c) => {
-      if (typeKey === "group" && c.type !== "task_group") return false;
+      if (typeKey === "group" && c.type !== "team_group") return false;
       if (typeKey === "dm" && c.type !== "private") return false;
       return !kw || channelSearchText(c).includes(kw);
     });
   }, [items, keyword, typeKey]);
 
-  // private 在上、task_group 在下（私聊为旁路入口，优先可见）
+  // private 在上、team_group 在下（私聊为旁路入口，优先可见）
   const dmChannels = filteredItems.filter((c) => c.type === "private");
-  const groupChannels = filteredItems.filter((c) => c.type === "task_group");
+  const groupChannels = filteredItems.filter((c) => c.type === "team_group");
   const total = data?.total ?? items.length;
 
   return (

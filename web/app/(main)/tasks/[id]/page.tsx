@@ -2,48 +2,55 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
- * 任务群聊页（Phase 2 核心页面 · M2 联调主入口）
+ * 任务详情页（任务与聊天分离后：去聊天化详情页）
  * =============================================
- * 唯一视觉来源：docs/agent-platform/prototypes/group-chat/index.tsx。
- * - 三栏布局对齐原型：members-panel（224px 团队 Agent + 状态）｜消息区（ChatBubble 列表
- *   + MentionHint + MessageInput）｜task-info-panel（300px 任务信息 + 产出物占位）。
- * - 频道定位：GET /tasks/:id 不含 channelId → GET /channels?teamId=<teamId> 按 teamId 匹配（team_group 一团队一群）
- *   （items[].teamId === 当前任务 teamId，后端频道 DTO 含 teamId，按团队聚合）。
- * - 消息历史：GET /channels/:id/messages?cursor&limit=50 游标分页（首次 cursor 空取最早
- *   50 条，nextCursor=末条 id，「加载更多」取更新消息追加尾部）。
- * - SSE 实时（09 篇 §4.2，单连接多 scope，逗号分隔）：
- *   · scope="channel:<channelId>,task:<taskId>,global" 一条连接订阅三类事件
- *   · channel 段 → chat.message.new（useRealtimeEvents 默认追加
- *     ['channel', channelId, 'messages'] 缓存，本页 queryKey 一致命中）+ onMessage 滚到底
- *   · task 段 → agent.loading（两阶段 thinking/operating 指示器）+ agent.error
- *   · global 段 → task.status.changed（刷新任务信息面板）
- * - @ 发送：MessageInput onSend({text, mentions}) → POST /channels/:id/messages，
- *   mentions 转换 {type:'agent',agentId}；正文含 @all 时追加 {type:'all'} 广播。
- * - Loading 两阶段：agent.loading phase=thinking/operating → LoadingIndicator
- *   （「思考中…/操作中…」）；收到同 agent 的 chat.message.new（senderType=agent）时收敛。
+ * 看板点击任务卡片打开抽屉（TaskDetailDrawer），深度编辑可跳本路由。
+ * - 三栏布局：members-panel（224px 团队 Agent + 状态）｜任务详情区（标题/状态/描述/
+ *   元信息/状态操作/执行模式）｜task-info-panel（300px TaskRightTabs + 队列/记忆卡片）。
+ * - 中央聊天区（MessageList/MessageInput/SSE 消息订阅/私聊 Tabs）已移除；
+ *   聊天唯一入口为 /teams/:teamId/session（团队会话）。
+ * - 实时保留任务域订阅（team/task/global）：成员状态、任务/团队/产出物/Issue/提问刷新。
  * - 铁律（T15）：无 fixed / 100vh / 100vw，高度由 AppShell main（flex column + overflow auto）
- *   接管，本页根 flex:1 + minHeight:0，消息列表内部滚动。
+ *   接管，本页根 flex:1 + minHeight:0，详情区内部滚动。
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { useRealtimeEvents, type RealtimeChatMessage } from "@/hooks/use-realtime";
-import type { AgentStatusEvent, MessagePartDeltaEvent, RealtimeQuestionEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
-import { AgentAvatar, ChatBubble, MessageInput, StatusBadge } from "@/src/components/ui";
-import type { MentionableAgent, SendMessagePayload } from "@/src/components/ui";
+import { useRealtimeEvents } from "@/hooks/use-realtime";
+import type { AgentStatusEvent, RealtimeQuestionEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
+import { AgentAvatar, StatusBadge } from "@/src/components/ui";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
+import { TaskInfoEditModal } from "@/src/components/tasks/TaskInfoEditModal";
+import { PlanSection } from "@/src/components/tasks/PlanSection";
+import { ReviewDialog } from "@/src/components/tasks/ReviewDialog";
+import {
+  TeamQueueCard,
+  TeamMemoryCard,
+  TaskRightTabs,
+} from "@/src/components/teams/TeamRightPanel";
+import { ResizeHandle } from "@/src/components/teams/ResizeHandle";
+import type {
+  TaskApiStatus,
+  TaskDetail,
+  ArtifactApiType,
+  ArtifactItem,
+  ArtifactsResponse,
+  TaskIssueItem,
+  TaskIssuesResponse,
+  PlanWithTasks,
+} from "@/src/components/tasks/task-detail-types";
+import { docIdFor } from "@/src/components/tasks/task-detail-types";
+import { TeamMembersPanel, customAgentsOf, roleOptionsOf } from "@/src/components/teams/TeamMembersPanel";
+import type { AgentItem } from "@/src/components/teams/TeamMembersPanel";
 import { useResizableWidth } from "@/src/hooks/use-resizable";
 import { teamsApi } from "@/src/api/teams";
-import type { TeamDto, TeamMemberDto } from "@/src/api/teams";
+import type { TeamMemberDto } from "@/src/api/teams";
 import {
-  LoadingIndicator,
-  MsgError,
-  MsgParts,
   QuestionModal,
 } from "@/src/components/chat";
 import type { QuestionModalData } from "@/src/components/chat";
@@ -51,7 +58,6 @@ import {
   type RoleKey,
   type StatusKey,
   neutral,
-  roles,
   space,
   radius,
   fontSize,
@@ -61,157 +67,11 @@ import {
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-/** P4：processing 消息超时兜底阈值（0 表示禁用，仅由后端 watchdog 决定；已按需求禁用前端超时） */
-const PROCESSING_TIMEOUT_MS = 0;
-
 /** scoped CSS 动画（groupchat- 前缀防污染，对齐原型 groupchatCss） */
 const groupchatCss = `
 @keyframes groupchat-pulse { 0%, 100% { opacity: .3 } 50% { opacity: 1 } }
 @keyframes groupchat-spin { to { transform: rotate(360deg) } }
 `;
-
-/* ------------------------------ API 数据模型（对齐 T6/T10 DTO） ------------------------------ */
-
-/** 后端六态（TASK_STATUS，含 queued）。 */
-type TaskApiStatus =
-  | "queued"
-  | "pending"
-  | "in_progress"
-  | "pending_review"
-  | "completed"
-  | "archived";
-
-/** 任务实例（T5 角色/实例分离：toTaskDto.instances 条目，main=主实例）。 */
-interface TaskInstance {
-  id: string;
-  agentId: string;
-  alias: string | null;
-  seq: number;
-  name: string;
-  role: string | null;
-  main: boolean;
-  enabled?: boolean | null;
-  /** 会话状态快照（sessions.status 真实源：running=工作中 / idle=空闲；无会话=null）。 */
-  sessionStatus: string | null;
-  /** 实例会话 id（SSE session.updated 收敛映射需 sessionId→instanceId 建链）。 */
-  sessionId: string | null;
-}
-
-interface TaskDetail {
-  id: string;
-  projectId: string;
-  title: string;
-  description: string | null;
-  priority: string;
-  status: TaskApiStatus;
-  mainAgentId: string | null;
-  mainAgentInstanceId: string | null;
-  managedMode: boolean;
-  backgroundDocs: unknown[];
-  teamAgentIds: string[];
-  instances: TaskInstance[];
-  teamId: string | null;
-  resetAfterComplete?: boolean | null;
-  createdBy: string;
-  createdAt: string;
-  startedAt: string | null;
-  pendingReviewAt: string | null;
-  completedAt: string | null;
-  archivedAt: string | null;
-  executionMode: "direct" | "plan";
-}
-
-/* ------------------------------ 产出物模型（对齐 toArtifactListItem / artifacts 页） ------------------------------ */
-
-/** 产出物 API 类型（对齐 ARTIFACT_TYPES：text/doc/file）。 */
-type ArtifactApiType = "text" | "doc" | "file";
-
-/**
- * GET /tasks/:id/artifacts 列表项（对齐 toArtifactListItem；doc/file 当前版本
- * filePath+contentRef 非空时后端附加可访问 fileUrl，可直接打开/下载）。
- */
-interface ArtifactItem {
-  id: string;
-  taskId: string;
-  type: ArtifactApiType;
-  title: string;
-  currentVersion: number;
-  acceptedFlag: boolean;
-  authorAgentId: string | null;
-  createdAt: string;
-  updatedAt: string;
-  fileUrl?: string;
-}
-
-/** GET /tasks/:id/artifacts 分页响应。 */
-interface ArtifactsResponse {
-  items: ArtifactItem[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
-
-/** GET /issues 列表项（TaskPanel 待办 Issue 区数据源，仅需 id/title/status）。 */
-interface TaskIssueItem {
-  id: string;
-  taskId: string;
-  title: string;
-  status: "open" | "in_progress" | "resolved" | "closed" | "rejected";
-}
-
-/** GET /issues?taskId= 分页响应（TaskPanel 待办 Issue 区）。 */
-interface TaskIssuesResponse {
-  items: TaskIssueItem[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
-
-/** 计划子任务条目（GET /plans?taskId= → tasks[]）。 */
-interface PlanTaskItem {
-  id: string;
-  seq: number;
-  title: string;
-  content: unknown;
-  assigneeInstanceId: string | null;
-  assigneeAlias: string | null;
-  assigneeName: string | null;
-  status: string;
-}
-
-/** 计划头 + 子任务清单（GET /plans?taskId= 响应）。 */
-interface PlanWithTasks {
-  id: string;
-  taskId: string;
-  title: string;
-  summary: string | null;
-  scopeIn: string | null;
-  scopeOut: string | null;
-  status: string;
-  createdBy: string;
-  reviewerInstanceId: string | null;
-  createdAt: string;
-  updatedAt: string;
-  tasks: PlanTaskItem[];
-}
-
-/** 计划状态 → 视觉主题（徽章色）。 */
-const PLAN_STATUS_THEME: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  reviewing: { label: "待评审", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
-  approved: { label: "已通过", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
-  rejected: { label: "已驳回", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
-  executing: { label: "执行中", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
-  completed: { label: "已完成", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
-};
-
-/** 计划子任务状态 → 中文标签。 */
-const PLAN_TASK_STATUS_LABEL: Record<string, string> = {
-  pending: "待开始",
-  in_progress: "进行中",
-  done: "已完成",
-  blocked: "已阻塞",
-  skipped: "已跳过",
-};
 
 /** issue 状态排序优先级（待办在前：open < in_progress < resolved < closed < rejected）。 */
 const ISSUE_STATUS_ORDER: Record<TaskIssueItem["status"], number> = {
@@ -274,28 +134,6 @@ const ARTIFACT_TYPE_LABEL: Record<ArtifactApiType, string> = {
   file: "文件",
 };
 
-interface ChannelItem {
-  id: string;
-  type: string;
-  taskId: string | null;
-  teamId?: string | null;
-  agentId: string | null;
-  task?: { id: string; title: string; status: string; projectId: string } | null;
-  agent?: { id: string; name: string; role: string | null } | null;
-  createdAt: string;
-}
-
-/** GET /channels/:id 响应：频道信息 + agentMembers（任务团队未 removed Agent）。 */
-interface ChannelDetail extends ChannelItem {
-  agentMembers: { id: string; name: string; role: string | null }[];
-}
-
-/** GET /channels/:id/messages 游标分页响应（对齐 use-realtime ChannelMessagesCache 结构）。 */
-interface MessagesResponse {
-  items: RealtimeChatMessage[];
-  nextCursor: string | null;
-}
-
 const STATUS_LABEL: Record<TaskApiStatus, string> = {
   queued: "排队中",
   pending: "待开始",
@@ -318,104 +156,9 @@ const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect"
 
 /* ------------------------------ 添加实例：模板角色选择（GET /agents，对齐创建页 T5） ------------------------------ */
 
-/** GET /agents 响应条目（T4：{items:[{id,name,role,type,prompt}]}）。 */
-interface AgentItem {
-  id: string;
-  name: string;
-  role: string;
-  type: string;
-  prompt: string | null;
-}
-
 interface AgentsResponse {
   items: AgentItem[];
   total: number;
-}
-
-/** seed 模板 Agent 角色 → id 兜底（对齐创建页 ROLE_AGENT_ID；GET /agents 未就绪时添加不中断）。 */
-const ROLE_AGENT_ID: Record<RoleKey, string> = {
-  product: "a_product",
-  project_manager: "a_project_manager",
-  architect: "a_architect",
-  developer: "a_developer",
-  tester: "a_tester",
-};
-
-/** 自定义 agent 中性主题（teal，区别于内置 5 角色色，is_0000000035）。 */
-const CUSTOM_THEME = { color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4", label: "自定义" };
-
-/** 角色选择项（每角色首个模板 agent；role 非法跳过，按 ROLE_KEYS 顺序稳定展示）。 */
-interface AgentOption {
-  id: string;
-  role: RoleKey;
-}
-
-/** is_0000000035：自定义/clone agent（type !== template）→ 添加实例可选。 */
-function customAgentsOf(items: AgentItem[]): AgentItem[] {
-  return items.filter((a) => a.type !== "template");
-}
-
-/** 标题 → ASCII slug（对齐 server DocsMirrorService.toSlug）。 */
-function toDocSlug(title: string): string {
-  return (
-    String(title ?? "doc")
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "doc"
-  );
-}
-
-/** 产出物 → 文档站 doc id（对齐 server DocsMirrorService.docIdFor + buildRegistry 去重，is_0000000036）：
- *  base = ASCII slug；纯中文/空 → 'doc' 追加 artifact id 前 8 位；
- *  同名多文档按 artifact id 序，base 已被占用 → 追加 -<artId前8位>（复刻 server buildRegistry 去重，审核 B）。 */
-function docIdFor(title: string, artifactId: string, all?: { id: string; title: string }[]): string {
-  const toBase = (t: string, id: string): string => {
-    const slug = toDocSlug(t);
-    if (slug !== "doc") return slug;
-    const suffix = String(id).replace(/[^a-z0-9]/gi, "").slice(-8);
-    return suffix ? `doc-${suffix}` : "doc";
-  };
-  const base = toBase(title, artifactId);
-  if (!all || all.length <= 1) return base;
-  const seen = new Set<string>();
-  const ordered = [...all].sort((a, b) => a.id.localeCompare(b.id));
-  for (const a of ordered) {
-    const b = toBase(a.title, a.id);
-    if (a.id === artifactId) {
-      if (!seen.has(b)) return b;
-      const suffix = String(artifactId).replace(/[^a-z0-9]/gi, "").slice(-8);
-      let cand = suffix ? `${b}-${suffix}` : b;
-      let cnt = 1;
-      while (seen.has(cand)) {
-        cnt += 1;
-        cand = `${b}-${suffix}-${cnt}`;
-      }
-      return cand;
-    }
-    seen.add(b);
-  }
-  return base;
-}
-
-/** GET /agents 结果 → 角色选择项（按角色去重取首个，顺序对齐 ROLE_KEYS）。 */
-function roleOptionsOf(items: AgentItem[]): AgentOption[] {
-  const byRole = new Map<RoleKey, AgentItem>();
-  for (const a of items) {
-    const role = a.role && (ROLE_KEYS as readonly string[]).includes(a.role)
-      ? (a.role as RoleKey)
-      : toRole(a.id);
-    if (role && !byRole.has(role)) byRole.set(role, a);
-  }
-  return ROLE_KEYS.flatMap((role) => {
-    const item = byRole.get(role);
-    return item ? [{ id: item.id, role }] : [];
-  });
-}
-
-/** 角色 → 模板 agent id（API 兜底：优先 GET /agents，缺省 seed 预置 id）。 */
-function agentIdForRole(role: RoleKey, options: AgentOption[]): string {
-  return options.find((o) => o.role === role)?.id ?? ROLE_AGENT_ID[role];
 }
 
 /** agent id / role 字符串 → RoleKey（未知/自定义 Agent 跳过）。 */
@@ -427,22 +170,7 @@ function toRole(agentId: string): RoleKey | null {
   return null;
 }
 
-/**
- * 消息发送者别名兜底（T5）：后端消息 DTO 无 senderInstanceId，但 T4 notify_agent 落库
- * mentions 为实例形状 [{type:'agent', instanceId, agentId, name}]（name=目标实例别名）——
- * 当 senderId(agentId) 命中 mentions[].agentId 时用其 name（如 开发者-2），否则 null 走 agentMap。
- */
-function senderNameFromMentions(msg: RealtimeChatMessage): string | null {
-  if (!Array.isArray(msg.mentions) || !msg.senderId) return null;
-  for (const m of msg.mentions as { type?: string; agentId?: string; name?: string }[]) {
-    if (m?.type === "agent" && m.agentId === msg.senderId && typeof m.name === "string" && m.name) {
-      return m.name;
-    }
-  }
-  return null;
-}
-
-/** ISO 时间 → HH:MM（对齐原型 time 显示）。 */
+/** ISO 时间 → HH:MM（任务元信息创建时间展示）。 */
 function formatTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
@@ -499,1782 +227,6 @@ function renderStatusBadge(status: string) {
   if (status === "待开始") return <WaitingBadge />;
   if (status === "排队中") return <QueuedBadge />;
   return <StatusBadge status={status as StatusKey} />;
-}
-
-/* ================================ 成员面板（224px，T5 按实例展示） ================================ */
-function MembersPanel({
-  agents,
-  loadingAgentIds,
-  sessionStatusByAgent,
-  startingAgentId,
-  onStartDm,
-  dmError,
-  teamEditable,
-  agentOptions,
-  customAgents,
-  adding,
-  addError,
-  onAddInstance,
-  width,
-  onToggleEnabled,
-  onResetSession,
-  onChangeModel,
-}: {
-  agents: { id: string; instanceId?: string; name: string; role: RoleKey; seq?: number; main?: boolean; enabled?: boolean | null; overrideModelId?: string | null }[];
-  loadingAgentIds: Set<string>;
-  sessionStatusByAgent: Record<string, string>;
-  startingAgentId: string | null;
-  onStartDm: (agentId: string, taskAgentId?: string) => void;
-  dmError: string | null;
-  teamEditable: boolean;
-  agentOptions: AgentOption[];
-  customAgents: AgentItem[];
-  adding: boolean;
-  addError: string | null;
-  onAddInstance: (agentId: string, alias?: string) => Promise<boolean>;
-  width?: number;
-  onToggleEnabled?: (instanceId: string, enabled: boolean) => void;
-  onResetSession?: (instanceId: string) => void;
-  onChangeModel?: (instanceId: string, modelId: string | null) => void;
-}) {
-  const [addOpen, setAddOpen] = useState(false);
-  /** 选中项：内置角色 RoleKey 或自定义 agent id（is_0000000035）。 */
-  const [selectedRole, setSelectedRole] = useState<string | null>(null);
-  const [alias, setAlias] = useState("");
-  /** 选中主题：内置角色主题；自定义 agent 用中性 CUSTOM_THEME（别名占位提示 agent 名）。 */
-  const selectedCustom = customAgents.find((a) => a.id === selectedRole);
-  const theme = selectedCustom
-    ? { ...CUSTOM_THEME, label: selectedCustom.name }
-    : selectedRole
-      ? (roles[selectedRole as RoleKey] ?? roles.developer)
-      : null;
-
-  const [openMenu, setOpenMenu] = useState<string | null>(null);
-  const [modelPicker, setModelPicker] = useState<string | null>(null);
-  const [modelSearch, setModelSearch] = useState("");
-
-  useEffect(() => {
-    if (!openMenu && !modelPicker) return;
-    const h = () => { setOpenMenu(null); setModelPicker(null); };
-    window.addEventListener("click", h);
-    return () => window.removeEventListener("click", h);
-  }, [openMenu, modelPicker]);
-
-  const modelsQuery = useQuery({
-    queryKey: ["models", "picker"],
-    queryFn: () => api.get<any>("/models", { query: { page: 1, pageSize: 100 } }),
-    enabled: !!modelPicker,
-    retry: false,
-  });
-  const allModels: { id: string; name: string; providerID?: string }[] =
-    (modelsQuery.data as any)?.items ?? (modelsQuery.data as any)?.models ?? [];
-
-  const openPanel = () => {
-    if (!teamEditable || adding) return;
-    setSelectedRole(null);
-    setAlias("");
-    setAddOpen(true);
-  };
-  const closePanel = () => {
-    if (adding) return;
-    setAddOpen(false);
-  };
-  const confirmAdd = async () => {
-    if (!selectedRole || adding) return;
-    // 内置角色 → 模板 agent id；自定义 agent id 直用
-    const agentId = (ROLE_KEYS as readonly string[]).includes(selectedRole)
-      ? agentIdForRole(selectedRole as RoleKey, agentOptions)
-      : selectedRole;
-    const ok = await onAddInstance(agentId, alias.trim() || undefined);
-    if (ok) {
-      setAddOpen(false);
-      setSelectedRole(null);
-      setAlias("");
-    }
-  };
-
-  return (
-    <aside
-      data-testid="members-panel"
-      style={{
-        width: width ?? 224,
-        flexShrink: 0,
-        borderRight: `1px solid ${neutral[200]}`,
-        backgroundColor: neutral[50],
-        display: "flex",
-        flexDirection: "column",
-        ...baseFont,
-      }}
-    >
-      <div
-        style={{
-          padding: `${space.lg}px ${space.md}px`,
-          fontSize: fontSize.sm,
-          fontWeight: 600,
-          color: neutral[500],
-          letterSpacing: "0.02em",
-        }}
-      >
-        任务成员 · {agents.length}
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: space.xs, padding: `0 ${space.sm}px ${space.md}px` }}>
-        {agents.map((a) => {
-          // T6 实例语义：loading/starting 状态按实例 key 匹配（同 agent 多实例各自 loading），
-          // 会话运行状态保留 agentId 维度（session.updated 事件无实例 id，旧协议）
-          const processing = loadingAgentIds.has(a.instanceId ?? a.id) || loadingAgentIds.has(a.id);
-          const starting = startingAgentId === (a.instanceId ?? a.id) || startingAgentId === a.id;
-          const sessionStatus =
-            sessionStatusByAgent[a.instanceId ?? a.id] ?? sessionStatusByAgent[a.id];
-          const working = sessionStatus === "running";
-          const idle = sessionStatus === "idle";
-          const statusText = starting
-            ? "创建中…"
-            : processing
-              ? "处理中"
-              : working
-                ? "工作中"
-                : idle
-                  ? "空闲"
-                  : "就绪";
-          return (
-            <React.Fragment key={a.instanceId ?? a.id}>
-              <div
-                data-testid="member-item"
-              data-role={a.role}
-              data-main={a.main ? "true" : "false"}
-              role="button"
-              tabIndex={a.enabled === false ? -1 : 0}
-              title={a.enabled === false ? `${a.name} 已禁用` : `与 ${a.name} 发起私聊`}
-              aria-busy={starting}
-              aria-disabled={a.enabled === false}
-              onClick={() => {
-                if (a.enabled === false) return;
-                onStartDm(a.id, a.instanceId);
-              }}
-              onKeyDown={(e) => {
-                if (a.enabled === false) return;
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onStartDm(a.id, a.instanceId);
-                }
-              }}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: space.sm,
-                padding: `${space.sm}px ${space.sm}px`,
-                borderRadius: radius.md,
-                border: a.main ? `1px solid ${roles[a.role]?.border ?? neutral[200]}` : "none",
-                background: starting || working || a.main ? neutral[100] : a.enabled === false ? neutral[50] : "transparent",
-                textAlign: "left",
-                fontFamily: fontFamily.body,
-                cursor: a.enabled === false ? "not-allowed" : starting ? "default" : "pointer",
-                opacity: a.enabled === false ? 0.5 : starting ? 0.6 : 1,
-                transition: "background-color .15s ease, opacity .15s ease",
-              }}
-              onMouseEnter={(e) => {
-                if (!starting && !working) e.currentTarget.style.backgroundColor = neutral[100];
-              }}
-              onMouseLeave={(e) => {
-                if (!starting && !working) e.currentTarget.style.backgroundColor = a.main ? neutral[100] : "transparent";
-              }}
-            >
-              <AgentAvatar role={a.role} size="sm" />
-              <span style={{ flex: 1, minWidth: 0 }}>
-                <span
-                  style={{
-                    display: "block",
-                    fontSize: fontSize.md,
-                    color: neutral[800],
-                    fontWeight: 500,
-                    lineHeight: 1.3,
-                  }}
-                >
-                  {a.name}
-                  {/* 主 Agent 徽章：挂在实例上（非角色），对齐创建页 ★ 主 Agent 视觉 */}
-                  {a.main && (
-                    <span
-                      data-testid="main-badge"
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 2,
-                        marginLeft: space.xs,
-                        padding: "1px 6px",
-                        borderRadius: radius.pill,
-                        backgroundColor: "#F59E0B",
-                        color: "#FFFFFF",
-                        fontSize: fontSize.xs,
-                        fontWeight: 700,
-                        lineHeight: "15px",
-                        verticalAlign: "1px",
-                      }}
-                    >
-                      ★ 主 Agent
-                    </span>
-                  )}
-                </span>
-                <span style={{ display: "block", fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.4 }}>
-                  {typeof a.seq === "number" && `#${a.seq} · `}
-                  {processing && (
-                    <span
-                      aria-hidden
-                      style={{
-                        display: "inline-block",
-                        width: 6,
-                        height: 6,
-                        borderRadius: "50%",
-                        backgroundColor: "#2563EB",
-                        marginRight: space.xs - 1,
-                        animation: "groupchat-pulse 1.2s ease-in-out infinite",
-                      }}
-                    />
-                  )}
-                  {working && (
-                    <span
-                      aria-hidden
-                      style={{
-                        display: "inline-block",
-                        width: 10,
-                        height: 10,
-                        borderRadius: "50%",
-                        border: "2px solid rgba(37,99,235,0.22)",
-                        borderTopColor: "#2563EB",
-                        marginRight: space.xs,
-                        verticalAlign: "-2px",
-                        animation: "groupchat-spin .8s linear infinite",
-                      }}
-                    />
-                  )}
-                  {idle && (
-                    <span
-                      aria-hidden
-                      style={{
-                        display: "inline-block",
-                        width: 6,
-                        height: 6,
-                        borderRadius: "50%",
-                        backgroundColor: neutral[400],
-                        marginRight: space.xs - 1,
-                      }}
-                    />
-                  )}
-                  {statusText}
-                </span>
-                <button
-                  type="button"
-                  data-testid={`agent-model-chip-${a.instanceId ?? a.id}`}
-                  aria-label="设置模型"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setModelPicker(modelPicker === (a.instanceId ?? a.id) ? null : (a.instanceId ?? a.id));
-                    setOpenMenu(null);
-                  }}
-                  title={(a as any).overrideModelId || "跟随模板（点击设置模型）"}
-                  style={{
-                    marginTop: 4,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 4,
-                    padding: "1px 6px",
-                    borderRadius: radius.pill,
-                    border: (a as any).overrideModelId ? `1px solid ${neutral[200]}` : `1px dashed ${neutral[300]}`,
-                    backgroundColor: (a as any).overrideModelId ? "#EFF6FF" : "transparent",
-                    color: (a as any).overrideModelId ? "#2563EB" : neutral[500],
-                    fontSize: 10,
-                    maxWidth: "100%",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    cursor: "pointer",
-                  }}
-                >
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {(a as any).overrideModelId ? String((a as any).overrideModelId).split("/").pop() : "跟随模板"}
-                  </span>
-                  <span style={{ fontSize: 8 }}>▼</span>
-                </button>
-              </span>
-              <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, position: "relative" }}>
-                <button
-                  type="button"
-                  data-testid={`agent-more-${a.instanceId ?? a.id}`}
-                  aria-label="更多"
-                  title="更多操作"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setOpenMenu(openMenu === (a.instanceId ?? a.id) ? null : (a.instanceId ?? a.id));
-                    setModelPicker(null);
-                  }}
-                  style={{
-                    width: 24,
-                    height: 24,
-                    borderRadius: radius.md,
-                    border: "1px solid transparent",
-                    backgroundColor: openMenu === (a.instanceId ?? a.id) ? neutral[100] : "transparent",
-                    color: neutral[500],
-                    cursor: "pointer",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 14,
-                  }}
-                >
-                  ⋯
-                </button>
-                {openMenu === (a.instanceId ?? a.id) && (
-                  <div
-                    onClick={(e) => e.stopPropagation()}
-                    style={{
-                      position: "absolute",
-                      right: 0,
-                      top: 28,
-                      zIndex: 20,
-                      minWidth: 160,
-                      backgroundColor: "var(--color-surface)",
-                      border: `1px solid ${neutral[200]}`,
-                      borderRadius: radius.md,
-                      boxShadow: shadow.lg,
-                      padding: 4,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 2,
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onToggleEnabled?.(a.instanceId ?? a.id, a.enabled === false ? true : false);
-                        setOpenMenu(null);
-                      }}
-                      style={{
-                        textAlign: "left",
-                        padding: `6px 8px`,
-                        borderRadius: radius.sm,
-                        border: "none",
-                        background: "transparent",
-                        cursor: "pointer",
-                        fontSize: fontSize.sm,
-                        color: neutral[700],
-                      }}
-                    >
-                      {a.enabled === false ? "启用" : "禁用"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onResetSession?.(a.instanceId ?? a.id);
-                        setOpenMenu(null);
-                      }}
-                      style={{
-                        textAlign: "left",
-                        padding: `6px 8px`,
-                        borderRadius: radius.sm,
-                        border: "none",
-                        background: "transparent",
-                        cursor: "pointer",
-                        fontSize: fontSize.sm,
-                        color: neutral[700],
-                      }}
-                    >
-                      重置会话
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setModelPicker(a.instanceId ?? a.id);
-                        setOpenMenu(null);
-                      }}
-                      style={{
-                        textAlign: "left",
-                        padding: `6px 8px`,
-                        borderRadius: radius.sm,
-                        border: "none",
-                        background: "transparent",
-                        cursor: "pointer",
-                        fontSize: fontSize.sm,
-                        color: "#2563EB",
-                      }}
-                    >
-                      模型设置…
-                    </button>
-                  </div>
-                )}
-                <span style={{ color: "#2563EB", fontSize: fontSize.lg, lineHeight: 1 }} aria-hidden>
-                  ›
-                </span>
-              </span>
-            </div>
-            {modelPicker === (a.instanceId ?? a.id) && (
-              <div
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                  margin: `0 ${space.sm}px`,
-                  padding: 8,
-                  border: `1px solid ${neutral[200]}`,
-                  borderRadius: radius.md,
-                  backgroundColor: "var(--color-surface)",
-                  boxShadow: shadow.md,
-                }}
-              >
-                <input
-                  autoFocus
-                  placeholder="搜索模型…"
-                  value={modelSearch}
-                  onChange={(e) => setModelSearch(e.target.value)}
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    padding: `6px 8px`,
-                    borderRadius: radius.sm,
-                    border: `1px solid ${neutral[200]}`,
-                    fontSize: fontSize.sm,
-                    marginBottom: 6,
-                  }}
-                />
-                <div style={{ maxHeight: 160, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onChangeModel?.(a.instanceId ?? a.id, null);
-                      setModelPicker(null);
-                    }}
-                    style={{
-                      textAlign: "left",
-                      padding: `6px 8px`,
-                      borderRadius: radius.sm,
-                      border: !(a as any).overrideModelId ? `1px solid #2563EB` : `1px solid transparent`,
-                      backgroundColor: !(a as any).overrideModelId ? "#EFF6FF" : "transparent",
-                      cursor: "pointer",
-                      fontSize: fontSize.sm,
-                    }}
-                  >
-                    跟随模板 {!(a as any).overrideModelId && "✓"}
-                  </button>
-                  {allModels
-                    .filter((m) => !modelSearch || `${m.name} ${m.id}`.toLowerCase().includes(modelSearch.toLowerCase()))
-                    .slice(0, 20)
-                    .map((m) => (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => {
-                          onChangeModel?.(a.instanceId ?? a.id, m.id);
-                          setModelPicker(null);
-                        }}
-                        style={{
-                          textAlign: "left",
-                          padding: `6px 8px`,
-                          borderRadius: radius.sm,
-                          border: (a as any).overrideModelId === m.id ? `1px solid #2563EB` : `1px solid transparent`,
-                          backgroundColor: (a as any).overrideModelId === m.id ? "#EFF6FF" : "transparent",
-                          cursor: "pointer",
-                          fontSize: fontSize.sm,
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: 8,
-                        }}
-                      >
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {m.name} <span style={{ color: neutral[400], fontSize: 10 }}>{m.providerID ?? m.id.split("/")[0]}</span>
-                        </span>
-                        {(a as any).overrideModelId === m.id && "✓"}
-                      </button>
-                    ))}
-                  {modelsQuery.isPending && <span style={{ fontSize: fontSize.xs, color: neutral[400], padding: 6 }}>加载中…</span>}
-                  {!modelsQuery.isPending && allModels.length === 0 && (
-                    <span style={{ fontSize: fontSize.xs, color: neutral[400], padding: 6 }}>暂无模型</span>
-                  )}
-                </div>
-              </div>
-            )}
-            </React.Fragment>
-           );
-         })}
-
-        {/* 添加实例：虚线入口（对齐创建页 add-instance-btn 视觉语言：1.5px dashed） */}
-        <button
-          type="button"
-          data-testid="add-instance-entry"
-          aria-label="添加实例"
-          title={teamEditable ? "为任务添加 Agent 实例（自动建会话并绑定）" : "任务待验收/已完成/已归档后不允许调整团队"}
-          onClick={openPanel}
-          disabled={!teamEditable || adding}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: space.xs,
-            padding: `${space.sm - 1}px ${space.md}px`,
-            borderRadius: radius.md,
-            border: `1.5px dashed ${teamEditable ? neutral[300] : neutral[200]}`,
-            backgroundColor: "color-mix(in srgb, var(--color-surface) 70%, transparent)",
-            color: teamEditable ? "#2563EB" : neutral[300],
-            fontSize: fontSize.sm,
-            fontWeight: 500,
-            cursor: teamEditable ? "pointer" : "not-allowed",
-            fontFamily: fontFamily.body,
-            transition: "border-color .15s ease, color .15s ease",
-          }}
-        >
-          <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>＋</span>
-          添加实例
-        </button>
-
-        {/* 添加实例面板（内联展开：角色选择 + 别名输入 + 确认，窄面板紧凑布局） */}
-        {addOpen && (
-          <div
-            data-testid="add-instance-panel"
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: space.sm,
-              padding: space.md,
-              borderRadius: radius.md,
-              backgroundColor: "var(--color-surface)",
-              border: `1px solid ${neutral[200]}`,
-              boxShadow: shadow.sm,
-            }}
-          >
-            <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>添加实例</div>
-            {/* 角色选择：五角色行（角色色点 + 中文名），点击选中（选中态 = 角色主题边框/背景） */}
-            <div style={{ display: "flex", flexDirection: "column", gap: space.xs }} role="radiogroup" aria-label="选择角色">
-              {ROLE_KEYS.map((role) => {
-                const t = roles[role] ?? roles.developer;
-                const selected = selectedRole === role;
-                return (
-                  <button
-                    key={role}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    data-testid="add-instance-role"
-                    data-role={role}
-                    aria-label={`添加${t.label}实例`}
-                    onClick={() => setSelectedRole(role)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: space.sm,
-                      padding: `${space.xs}px ${space.sm}px`,
-                      borderRadius: radius.sm,
-                      border: `1px solid ${selected ? t.border : "transparent"}`,
-                      backgroundColor: selected ? t.bg : "transparent",
-                      cursor: "pointer",
-                      textAlign: "left",
-                      fontFamily: fontFamily.body,
-                    }}
-                  >
-                    <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: t.color, flexShrink: 0 }} />
-                    <span style={{ flex: 1, fontSize: fontSize.md, color: neutral[700], fontWeight: selected ? 600 : 500 }}>
-                      {t.label}
-                    </span>
-                    {selected && (
-                      <span aria-hidden style={{ color: t.color, fontSize: fontSize.sm, fontWeight: 700 }}>✓</span>
-                    )}
-                  </button>
-                );
-              })}
-              {/* is_0000000035：自定义/clone agent 可选（中性 teal 主题） */}
-              {customAgents.length > 0 && (
-                <>
-                  <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginTop: space.xs, padding: `0 ${space.sm}px` }}>
-                    <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
-                    <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>自定义 Agent</span>
-                    <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
-                  </div>
-                  {customAgents.map((a) => {
-                    const selected = selectedRole === a.id;
-                    return (
-                      <button
-                        key={a.id}
-                        type="button"
-                        role="radio"
-                        aria-checked={selected}
-                        data-testid="add-instance-custom-role"
-                        data-agent-id={a.id}
-                        aria-label={`添加自定义 Agent ${a.name}`}
-                        onClick={() => setSelectedRole(a.id)}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: space.sm,
-                          padding: `${space.xs}px ${space.sm}px`,
-                          borderRadius: radius.sm,
-                          border: `1px solid ${selected ? CUSTOM_THEME.border : "transparent"}`,
-                          backgroundColor: selected ? CUSTOM_THEME.bg : "transparent",
-                          cursor: "pointer",
-                          textAlign: "left",
-                          fontFamily: fontFamily.body,
-                        }}
-                      >
-                        <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: CUSTOM_THEME.color, flexShrink: 0 }} />
-                        <span style={{ flex: 1, minWidth: 0, fontSize: fontSize.md, color: neutral[700], fontWeight: selected ? 600 : 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {a.name}
-                        </span>
-                        <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>{a.type}</span>
-                        {selected && (
-                          <span aria-hidden style={{ color: CUSTOM_THEME.color, fontSize: fontSize.sm, fontWeight: 700 }}>✓</span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </>
-              )}
-            </div>
-            {/* 别名（可选，缺省服务端生成 <角色中文名>-<seq>） */}
-            <input
-              data-testid="add-instance-alias"
-              value={alias}
-              onChange={(e) => setAlias(e.target.value)}
-              placeholder={theme ? `别名（缺省 ${theme.label}-N）` : "别名（缺省自动生成）"}
-              disabled={adding}
-              aria-label="实例别名（可选）"
-              style={{
-                width: "100%",
-                boxSizing: "border-box",
-                padding: `${space.sm}px ${space.sm}px`,
-                borderRadius: radius.sm,
-                border: `1px solid ${neutral[200]}`,
-                backgroundColor: "var(--color-surface)",
-                fontSize: fontSize.md,
-                color: neutral[800],
-                outline: "none",
-                fontFamily: fontFamily.body,
-              }}
-            />
-            {addError && (
-              <div data-testid="add-instance-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", lineHeight: 1.5 }}>
-                {addError}
-              </div>
-            )}
-            {/* 操作：取消 / 添加 */}
-            <div style={{ display: "flex", gap: space.sm }}>
-              <button
-                type="button"
-                data-testid="add-instance-cancel"
-                onClick={closePanel}
-                disabled={adding}
-                style={{
-                  flex: 1,
-                  padding: `${space.sm - 1}px ${space.md}px`,
-                  borderRadius: radius.md,
-                  border: `1px solid ${neutral[200]}`,
-                  backgroundColor: "var(--color-surface)",
-                  color: neutral[600],
-                  fontSize: fontSize.sm,
-                  fontWeight: 500,
-                  cursor: adding ? "default" : "pointer",
-                  fontFamily: fontFamily.body,
-                }}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                data-testid="add-instance-confirm"
-                onClick={confirmAdd}
-                disabled={!selectedRole || adding}
-                style={{
-                  flex: 1,
-                  padding: `${space.sm - 1}px ${space.md}px`,
-                  borderRadius: radius.md,
-                  border: "none",
-                  backgroundColor: "#2563EB",
-                  color: "#FFFFFF",
-                  fontSize: fontSize.sm,
-                  fontWeight: 500,
-                  cursor: !selectedRole || adding ? "default" : "pointer",
-                  opacity: !selectedRole || adding ? 0.5 : 1,
-                  fontFamily: fontFamily.body,
-                }}
-              >
-                {adding ? "添加中…" : "添加"}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-      <div
-        style={{
-          marginTop: "auto",
-          padding: space.md,
-          fontSize: fontSize.xs,
-          color: dmError ? "#DC2626" : neutral[400],
-          lineHeight: 1.5,
-          borderTop: `1px dashed ${neutral[200]}`,
-        }}
-      >
-        {dmError ?? "点击成员可发起与该实例的私聊"}
-      </div>
-    </aside>
-  );
-}
-
-function ChatHeader({ title, statusLabel, agents, onRefresh, refreshing }: { title: string; statusLabel: string; agents: { role: RoleKey }[]; onRefresh?: () => void; refreshing?: boolean }) {
-  return (
-    <header
-      style={{
-        height: 64,
-        flexShrink: 0,
-        display: "flex",
-        alignItems: "center",
-        gap: space.md,
-        padding: `0 ${space.xl}px`,
-        backgroundColor: "var(--color-surface)",
-        borderBottom: `1px solid ${neutral[200]}`,
-        ...baseFont,
-      }}
-    >
-      <div style={{ minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-          <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900], lineHeight: 1.3 }}>
-            {title}
-          </span>
-          {renderStatusBadge(statusLabel)}
-        </div>
-        <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}>
-          群聊 · 仅被 @ 的 Agent 会收到消息
-        </div>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginLeft: "auto" }}>
-        {onRefresh && (
-          <button
-            type="button"
-            data-testid="chat-refresh"
-            aria-label="刷新消息"
-            title="刷新消息"
-            onClick={onRefresh}
-            disabled={!!refreshing}
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: radius.md,
-              border: `1px solid ${neutral[200]}`,
-              backgroundColor: "var(--color-surface)",
-              color: neutral[500],
-              cursor: refreshing ? "default" : "pointer",
-              opacity: refreshing ? 0.6 : 1,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 14,
-            }}
-          >
-            {refreshing ? "…" : "↻"}
-          </button>
-        )}
-        <div aria-label="参与成员" style={{ display: "flex", alignItems: "center" }}>
-          {agents.map((a, i) => (
-            <span key={i} style={{ marginLeft: i === 0 ? 0 : -8 }}>
-              <AgentAvatar role={a.role} size="sm" style={{ border: "2px solid #FFFFFF" }} />
-            </span>
-          ))}
-        </div>
-      </div>
-    </header>
-  );
-}
-
-/* ================================ 面板拖拽分隔条（is_0000000017） ================================ */
-function ResizeHandle({
-  label,
-  onResizeStart,
-}: {
-  label: string;
-  onResizeStart: (e: React.MouseEvent) => void;
-}) {
-  return (
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      aria-label={label}
-      data-testid="panel-resize-handle"
-      title={label}
-      onMouseDown={onResizeStart}
-      style={{
-        flexShrink: 0,
-        width: 6,
-        cursor: "col-resize",
-        backgroundColor: "transparent",
-        transition: "background-color .15s ease",
-      }}
-      onMouseEnter={(e) => {
-        (e.currentTarget as HTMLDivElement).style.backgroundColor = "rgba(37,99,235,0.22)";
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent";
-      }}
-    />
-  );
-}
-
-/* ================================ 消息列表（游标分页 + 过程消息渲染） ================================ */
-function MessageList({
-  messages,
-  nextCursor,
-  loadingMore,
-  agentMap,
-  instanceNameById,
-  onLoadMore,
-  loadingLabel,
-  errorLabel,
-  sessionLabel,
-  listRef,
-}: {
-  messages: RealtimeChatMessage[];
-  nextCursor: string | null;
-  loadingMore: boolean;
-  agentMap: Map<string, { name: string; role: RoleKey }>;
-  instanceNameById: Map<string, string>;
-  onLoadMore: () => void;
-  loadingLabel: string | null;
-  errorLabel: { kind: "retry" | "quota"; detail: string } | null;
-  sessionLabel: string | null;
-  listRef: React.RefObject<HTMLDivElement | null>;
-}) {
-  // P4：超时兜底时钟——processing 消息无 SSE 回流时页面静止，周期 tick 强制重渲染，
-  // 让超过 PROCESSING_TIMEOUT_MS 的消息自动切换为失败形态
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setTick((x) => x + 1), 30_000);
-    return () => clearInterval(t);
-  }, []);
-  return (
-    <div
-      data-testid="chat-message-list"
-      ref={listRef}
-      style={{
-        flex: 1,
-        minHeight: 0,
-        overflowY: "auto",
-        padding: `${space.xl}px`,
-        display: "flex",
-        flexDirection: "column",
-        gap: space.lg,
-        backgroundColor: neutral[50],
-        ...baseFont,
-      }}
-    >
-      {/* 会话开始分隔 */}
-      <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
-        <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
-        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>今天 · 任务会话</span>
-        <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
-      </div>
-
-      {/* 游标分页：还有更多时显示「加载更多」（取更新消息追加尾部） */}
-      {nextCursor && (
-        <div style={{ display: "flex", justifyContent: "center" }}>
-          <button
-            type="button"
-            data-testid="chat-load-more"
-            disabled={loadingMore}
-            onClick={onLoadMore}
-            style={{
-              padding: `${space.sm}px ${space.lg}px`,
-              borderRadius: radius.pill,
-              border: `1px solid ${neutral[200]}`,
-              backgroundColor: "var(--color-surface)",
-              color: neutral[600],
-              fontSize: fontSize.sm,
-              fontWeight: 500,
-              cursor: loadingMore ? "default" : "pointer",
-              opacity: loadingMore ? 0.6 : 1,
-              fontFamily: fontFamily.body,
-            }}
-          >
-            {loadingMore ? "加载中…" : "加载更多历史消息"}
-          </button>
-        </div>
-      )}
-
-      {messages.map((msg) => {
-        const agent = msg.senderId ? agentMap.get(msg.senderId) : undefined;
-        const role = agent?.role ?? (msg.senderId ? toRole(msg.senderId) : null) ?? "developer";
-        // T6 实例语义：senderInstanceId 精确归属实例别名（同 agent 多实例各自显示，
-        // 如 开发者-2 的回复显示「开发者-2」而非 agent 名）；缺省回退 agentMap/mentions 兜底
-        const author =
-          (msg.senderInstanceId ? instanceNameById.get(msg.senderInstanceId) : null)
-          ?? agent?.name
-          ?? senderNameFromMentions(msg)
-          ?? msg.senderId
-          ?? "";
-
-        // 群聊结论防御：初始加载（GET messages）同样只保留 text 结论 part——与
-        // onMessagePartDelta 兜底一致（reasoning/tool 不渲染折叠卡片；后端终态化
-        // 已滤，此处防御历史/残留数据，F3 缺陷①）
-        const rawParts = (msg as unknown as { content?: { parts?: unknown } })?.content?.parts;
-        const parts = Array.isArray(rawParts)
-          ? (rawParts as unknown[]).filter(
-              (p) => (p as { type?: string; synthetic?: boolean }).type === "text"
-                && !(p as { type?: string; synthetic?: boolean }).synthetic,
-            )
-          : [];
-
-        if ((msg as unknown as { senderType: string }).senderType === "external") {
-          return (
-            <ChatBubble
-              key={msg.id}
-              text={(msg.content?.text ?? "") as string}
-              type="agent"
-              author={author}
-              role={role}
-              time={formatTime(msg.createdAt)}
-              senderType="external"
-              attachment={
-                msg.attachmentUrl
-                  ? {
-                      url: msg.attachmentUrl,
-                      name: msg.attachmentName ?? msg.attachmentUrl,
-                      ext: msg.attachmentType ?? "",
-                    }
-                  : undefined
-              }
-            />
-          );
-        }
-
-        // Agent 消息：parts 过程片段（thinking/tool/error/aborted）+ 正文置底（MsgParts，T14）；
-        // status=processing 为流式中间态（message.part.delta 累积），正文走「生成中」流式块
-        if (msg.senderType === "agent") {
-          // P4 超时兜底：processing 超过阈值（worker abort 后无事件回流）→ 视觉降级失败形态，
-          // 不再显示流式「生成中」；不修改 SSE 状态管理，仅渲染层判定
-          const processing = msg.status === "processing";
-          const timedOut =
-            PROCESSING_TIMEOUT_MS > 0 &&
-            processing &&
-            Date.now() - new Date(msg.createdAt).getTime() > PROCESSING_TIMEOUT_MS;
-          if (timedOut) {
-            return (
-              <div
-                key={msg.id}
-                data-testid="msg-timeout"
-                style={{
-                  display: "flex",
-                  alignItems: "flex-start",
-                  gap: space.sm,
-                  maxWidth: "78%",
-                  alignSelf: "flex-start",
-                  ...baseFont,
-                }}
-              >
-                {role && <AgentAvatar role={role} size="sm" dot={false} style={{ marginTop: 2 }} />}
-                <div
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    padding: space.md,
-                    borderRadius: radius.md,
-                    backgroundColor: "rgba(239,68,68,0.10)",
-                    border: "1px solid rgba(239,68,68,0.22)",
-                    boxShadow: shadow.sm,
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-                    <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1, color: "#B91C1C" }}>⚠</span>
-                    <span style={{ fontSize: fontSize.md, color: "#B91C1C", fontWeight: 600 }}>
-                      Agent 处理超时/失败
-                    </span>
-                  </div>
-                  <div style={{ fontSize: fontSize.xs, color: neutral[500], marginTop: space.sm }}>
-                    {author && <span>{author}</span>}
-                    <span style={{ color: neutral[400] }}> · {formatTime(msg.createdAt)}</span>
-                  </div>
-                </div>
-              </div>
-            );
-          }
-          const isMentionMe = Array.isArray((msg as unknown as { mentions?: unknown }).mentions) && (((msg as unknown as { mentions: { type?: string; userId?: string }[] }).mentions.some((m) => m.type === "user" && m.userId === useAuthStore.getState().user?.id) || (msg as unknown as { mentions: { type?: string }[] }).mentions.some((m) => m.type === "all")));
-          return (
-            <MsgParts
-              key={msg.id}
-              parts={parts}
-              bodyText={((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string}
-              author={author}
-              role={role}
-              time={formatTime(msg.createdAt)}
-              streaming={processing}
-              isMentionMe={isMentionMe}
-              attachment={
-                msg.attachmentUrl
-                  ? {
-                      url: msg.attachmentUrl,
-                      name: msg.attachmentName ?? msg.attachmentUrl,
-                      ext: msg.attachmentType ?? "",
-                    }
-                  : undefined
-              }
-            />
-          );
-        }
-
-        // 基础三型：user=右 / agent=左 / system=居中（复用共享 ChatBubble）
-        if (msg.senderType === "system") {
-          return (
-            <ChatBubble key={msg.id} text={((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string} type="system" time={formatTime(msg.createdAt)} />
-          );
-        }
-        return (
-          <ChatBubble
-            key={msg.id}
-            text={(msg.content?.text ?? "") as string}
-            type={msg.senderType === "user" ? "user" : "agent"}
-            author={msg.senderType === "user" ? undefined : author}
-            role={msg.senderType === "user" ? undefined : role}
-            time={formatTime(msg.createdAt)}
-            isMentionMe={(msg as unknown as { senderType: string }).senderType === "agent" && Array.isArray((msg as unknown as { mentions?: unknown }).mentions) && (((msg as unknown as { mentions: { type?: string; userId?: string }[] }).mentions.some((m) => m.type === "user" && m.userId === useAuthStore.getState().user?.id) || (msg as unknown as { mentions: { type?: string }[] }).mentions.some((m) => m.type === "all")))}
-            attachment={
-              msg.attachmentUrl
-                ? {
-                    url: msg.attachmentUrl,
-                    name: msg.attachmentName ?? msg.attachmentUrl,
-                    ext: msg.attachmentType ?? "",
-                  }
-                : undefined
-            }
-          />
-        );
-      })}
-
-      {/* Loading 两阶段指示器（agent.loading thinking/operating，收到回复时收敛） */}
-      {loadingLabel && <LoadingIndicator label={loadingLabel} />}
-
-      {/* 会话运行状态条（T14：session.updated status=active，真实 worker 回流后展示） */}
-      {sessionLabel && (
-        <div
-          data-testid="session-status"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: space.sm,
-            color: neutral[500],
-            fontSize: fontSize.sm,
-            padding: `${space.xs}px ${space.sm}px`,
-            ...baseFont,
-          }}
-        >
-          <span
-            aria-hidden
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              backgroundColor: "#2563EB",
-              animation: "groupchat-pulse 1.2s ease-in-out infinite",
-            }}
-          />
-          {sessionLabel}…
-        </div>
-      )}
-
-      {/* 消息级错误态（agent.error；isRetryable → 琥珀重试，否则红色升级引导） */}
-      {errorLabel && (
-        <MsgError
-          kind={errorLabel.kind}
-          detail={errorLabel.detail}
-          time={formatTime(new Date().toISOString())}
-        />
-      )}
-
-      {/* Agent 内部过程说明 */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: space.sm,
-          marginTop: space.sm,
-          padding: `${space.sm + 2}px ${space.md}px`,
-          borderRadius: radius.md,
-          backgroundColor: neutral[100],
-          color: neutral[500],
-          fontSize: fontSize.xs,
-          lineHeight: 1.5,
-        }}
-      >
-        <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>⚙</span>
-        Agent 内部推理过程不广播到群聊，仅最终回复展示
-      </div>
-    </div>
-  );
-}
-
-/* ================================ @ 提示条（对齐原型 MentionHint） ================================ */
-function MentionHint() {
-  return (
-    <div
-      data-testid="mention-hint"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: space.sm,
-        padding: `${space.xs + 1}px ${space.md}px`,
-        backgroundColor: "var(--color-surface)",
-        ...baseFont,
-      }}
-    >
-      <span
-        style={{
-          padding: `${space.xs - 1}px ${space.sm}px`,
-          borderRadius: radius.pill,
-          backgroundColor: neutral[100],
-          color: neutral[600],
-          fontSize: fontSize.xs,
-          fontWeight: 600,
-          border: `1px solid ${neutral[200]}`,
-        }}
-      >
-        @all
-      </span>
-      <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-        输入 @all 广播给全体成员；@ 单个角色仅其本人收到
-      </span>
-    </div>
-  );
-}
-
-/* ================================ 任务信息编辑弹窗（is_0000000011：描述/标题/背景文档） ================================ */
-
-/** POST /uploads 响应（server FileStorageService.describe：{url, name, size, ext}）。 */
-interface UploadedFileMeta {
-  url: string;
-  name: string;
-  size: number;
-  ext: string;
-}
-
-/** 背景文档条目（TaskDetail.backgroundDocs 元素 + 新增上传）。 */
-interface BackgroundDocItem {
-  name: string;
-  url: string;
-}
-
-/** 解析 task.backgroundDocs（unknown[] → {name, url}[]，非法元素忽略）。 */
-function parseBackgroundDocs(docs: unknown[]): BackgroundDocItem[] {
-  if (!Array.isArray(docs)) return [];
-  return docs.flatMap((d) => {
-    if (typeof d !== "object" || d === null) return [];
-    const { name, url } = d as { name?: unknown; url?: unknown };
-    return typeof name === "string" && typeof url === "string" && name && url
-      ? [{ name, url }]
-      : [];
-  });
-}
-
-function TaskInfoEditModal({
-  task,
-  open,
-  onClose,
-  onSaved,
-}: {
-  task: TaskDetail;
-  open: boolean;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [title, setTitle] = useState(task.title);
-  const [description, setDescription] = useState(task.description ?? "");
-  const [docs, setDocs] = useState<BackgroundDocItem[]>(() =>
-    parseBackgroundDocs(task.backgroundDocs),
-  );
-  const [formError, setFormError] = useState<string | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // 打开时重置为最新任务数据
-  useEffect(() => {
-    if (!open) return;
-    setTitle(task.title);
-    setDescription(task.description ?? "");
-    setDocs(parseBackgroundDocs(task.backgroundDocs));
-    setFormError(null);
-    setUploadError(null);
-  }, [open, task]);
-
-  // Esc 关闭
-  useEffect(() => {
-    if (!open) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [open, onClose]);
-
-  // 上传：POST /uploads multipart（file 字段）→ {url,name,size,ext} → 加入 docs
-  const uploadMutation = useMutation({
-    mutationFn: (file: File) => {
-      const fd = new FormData();
-      fd.append("file", file);
-      return api.post<UploadedFileMeta>("/uploads", fd);
-    },
-    onSuccess: (meta) => {
-      setDocs((prev) => [...prev, { name: meta.name, url: meta.url }]);
-      setUploadError(null);
-    },
-    onError: (err) =>
-      setUploadError(isApiError(err) ? err.message : "文档上传失败，请稍后重试"),
-  });
-
-  // 保存：PATCH /tasks/:id {title, description, backgroundDocs}
-  const saveMutation = useMutation({
-    mutationFn: (payload: { title: string; description: string; backgroundDocs: BackgroundDocItem[] }) =>
-      api.patch<TaskDetail>(`/tasks/${task.id}`, payload),
-    onSuccess: () => {
-      onSaved();
-      onClose();
-    },
-    onError: (err) => {
-      setFormError(isApiError(err) ? err.message : "保存失败，请稍后重试");
-    },
-  });
-
-  if (!open) return null;
-
-  const handleSave = () => {
-    if (saveMutation.isPending) return;
-    if (!title.trim()) {
-      setFormError("请填写任务标题");
-      return;
-    }
-    setFormError(null);
-    saveMutation.mutate({
-      title: title.trim(),
-      description: description.trim(),
-      backgroundDocs: docs,
-    });
-  };
-
-  const inputBase: CSSProperties = {
-    width: "100%",
-    boxSizing: "border-box",
-    padding: `${space.md}px ${space.lg}px`,
-    borderRadius: radius.md,
-    border: `1px solid ${neutral[200]}`,
-    backgroundColor: "var(--color-surface)",
-    fontSize: fontSize.md,
-    color: neutral[800],
-    outline: "none",
-    fontFamily: fontFamily.body,
-  };
-
-  return (
-    <div
-      data-testid="task-edit-overlay"
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 60,
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "center",
-        paddingTop: "8%",
-        ...baseFont,
-      }}
-    >
-      {/* 轻遮罩：点击关闭 */}
-      <div
-        aria-hidden
-        data-testid="task-edit-mask"
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-        style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }}
-      />
-
-      <div
-        data-testid="task-edit-modal"
-        style={{
-          position: "relative",
-          width: 560,
-          maxWidth: "calc(100% - 48px)",
-          maxHeight: "calc(100% - 16%)",
-          overflowY: "auto",
-          display: "flex",
-          flexDirection: "column",
-          gap: space.md,
-          padding: `${space.xl}px`,
-          borderRadius: radius.lg,
-          backgroundColor: "var(--color-surface)",
-          border: `1px solid ${neutral[200]}`,
-          boxShadow: shadow.lg,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900], lineHeight: 1.3 }}>
-            编辑任务信息
-          </div>
-          <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>
-            修改任务标题 / 描述 / 背景文档，保存后任务详情即时刷新
-          </div>
-        </div>
-
-        <label style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-          <span style={{ fontSize: fontSize.md, fontWeight: 500, color: neutral[700] }}>
-            任务标题 <span style={{ color: "#DC2626" }}>*</span>
-          </span>
-          <input
-            data-testid="task-edit-title-input"
-            value={title}
-            maxLength={128}
-            onChange={(e) => setTitle(e.target.value)}
-            style={inputBase}
-          />
-        </label>
-
-        <label style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-          <span style={{ fontSize: fontSize.md, fontWeight: 500, color: neutral[700] }}>任务描述</span>
-          <textarea
-            data-testid="task-edit-description-input"
-            value={description}
-            rows={5}
-            onChange={(e) => setDescription(e.target.value)}
-            style={{ ...inputBase, resize: "vertical", lineHeight: 1.6 }}
-          />
-        </label>
-
-        {/* 背景文档：已有列表 + 上传 */}
-        <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-          <span style={{ fontSize: fontSize.md, fontWeight: 500, color: neutral[700] }}>背景文档</span>
-
-          {docs.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-              {docs.map((doc) => (
-                <div
-                  key={doc.url}
-                  data-testid="task-edit-doc-item"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: space.sm,
-                    padding: `${space.xs}px ${space.md}px`,
-                    borderRadius: radius.md,
-                    backgroundColor: neutral[50],
-                    border: `1px solid ${neutral[200]}`,
-                  }}
-                >
-                  <span
-                    aria-hidden
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: 2,
-                      backgroundColor: "#2563EB",
-                      flexShrink: 0,
-                    }}
-                  />
-                  <span
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      fontSize: fontSize.md,
-                      color: neutral[700],
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {doc.name}
-                  </span>
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    data-testid="task-edit-doc-remove"
-                    aria-label={`移除 ${doc.name}`}
-                    onClick={() => setDocs((prev) => prev.filter((d) => d.url !== doc.url))}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        setDocs((prev) => prev.filter((d) => d.url !== doc.url));
-                      }
-                    }}
-                    style={{
-                      fontSize: fontSize.sm,
-                      color: neutral[400],
-                      cursor: "pointer",
-                      padding: space.xs,
-                      flexShrink: 0,
-                    }}
-                  >
-                    ✕
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <button
-            type="button"
-            data-testid="task-edit-upload-btn"
-            aria-label="上传背景文档"
-            disabled={uploadMutation.isPending}
-            onClick={() => fileInputRef.current?.click()}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: space.xs,
-              padding: `${space.md}px ${space.lg}px`,
-              borderRadius: radius.md,
-              border: `1.5px dashed ${neutral[300]}`,
-              backgroundColor: neutral[50],
-              color: neutral[500],
-              fontSize: fontSize.md,
-              fontWeight: 500,
-              cursor: uploadMutation.isPending ? "default" : "pointer",
-              opacity: uploadMutation.isPending ? 0.7 : 1,
-              fontFamily: fontFamily.body,
-            }}
-          >
-            <span aria-hidden style={{ color: "#2563EB" }}>↑</span>
-            {uploadMutation.isPending ? "上传中…" : "上传背景文档"}
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            data-testid="task-edit-file-input"
-            accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.gif,.md,.txt"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) {
-                setUploadError(null);
-                uploadMutation.mutate(file);
-              }
-              e.target.value = "";
-            }}
-            style={{ display: "none" }}
-          />
-          {uploadError && (
-            <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", fontWeight: 500 }}>
-              {uploadError}
-            </div>
-          )}
-        </div>
-
-        {(formError || saveMutation.isError) && (
-          <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", fontWeight: 500 }}>
-            {formError ?? (isApiError(saveMutation.error) ? saveMutation.error.message : "保存失败")}
-          </div>
-        )}
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm, marginTop: space.sm }}>
-          <button
-            type="button"
-            data-testid="task-edit-cancel"
-            onClick={onClose}
-            disabled={saveMutation.isPending}
-            style={{
-              padding: `${space.sm + 1}px ${space.lg}px`,
-              borderRadius: radius.pill,
-              border: `1px solid ${neutral[200]}`,
-              backgroundColor: "var(--color-surface)",
-              color: neutral[600],
-              fontSize: fontSize.md,
-              cursor: saveMutation.isPending ? "default" : "pointer",
-              fontFamily: fontFamily.body,
-            }}
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            data-testid="task-edit-save"
-            onClick={handleSave}
-            disabled={saveMutation.isPending}
-            style={{
-              padding: `${space.sm + 1}px ${space.lg}px`,
-              borderRadius: radius.pill,
-              border: "none",
-              backgroundColor: "#2563EB",
-              color: "#FFFFFF",
-              fontSize: fontSize.md,
-              fontWeight: 500,
-              cursor: saveMutation.isPending ? "default" : "pointer",
-              opacity: saveMutation.isPending ? 0.6 : 1,
-              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
-              fontFamily: fontFamily.body,
-            }}
-          >
-            {saveMutation.isPending ? "保存中…" : "保存"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ================================ 执行计划区块（plan-section） ================================ */
-function PlanSection({
-  plan,
-  loading,
-  error,
-  onReview,
-  reviewPending,
-  taskExecutionMode,
-}: {
-  plan: PlanWithTasks | null;
-  loading: boolean;
-  error: unknown;
-  onReview: (planId: string) => void;
-  reviewPending: boolean;
-  taskExecutionMode: string;
-}) {
-  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
-
-  if (loading) {
-    return (
-      <div style={{ padding: `${space.sm + 2}px ${space.md}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, color: neutral[400], fontSize: fontSize.sm }}>
-        加载中…
-      </div>
-    );
-  }
-
-  if (error) {
-    const is404 = isApiError(error) && error.status === 404;
-    if (is404) {
-      return (
-        <div data-testid="plan-section" style={{ padding: `${space.sm + 2}px ${space.md}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, color: neutral[400], fontSize: fontSize.sm, lineHeight: 1.5 }}>
-          暂无执行计划
-          {taskExecutionMode === "plan" && (
-            <span style={{ display: "block", marginTop: space.xs, color: neutral[500] }}>请先提交执行计划</span>
-          )}
-        </div>
-      );
-    }
-    return (
-      <div role="alert" style={{ padding: `${space.sm + 2}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", color: "#DC2626", fontSize: fontSize.sm }}>
-        加载计划失败：{isApiError(error) ? error.message : "未知错误"}
-      </div>
-    );
-  }
-
-  if (!plan) return null;
-
-  const statusTheme = PLAN_STATUS_THEME[plan.status] ?? PLAN_STATUS_THEME.reviewing;
-  const isReviewing = plan.status === "reviewing";
-
-  return (
-    <div data-testid="plan-section" style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-      <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
-        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600] }}>执行计划</span>
-        <span
-          style={{
-            display: "inline-flex", alignItems: "center", gap: space.xs,
-            padding: `${space.xs - 1}px ${space.sm + 1}px`,
-            borderRadius: radius.pill, backgroundColor: statusTheme.bg,
-            border: `1px solid ${statusTheme.border}`, color: statusTheme.color,
-            fontSize: fontSize.xs, fontWeight: 500, lineHeight: 1.4, whiteSpace: "nowrap",
-          }}
-        >
-          <span aria-hidden style={{ width: 5, height: 5, borderRadius: "50%", backgroundColor: statusTheme.color, flexShrink: 0 }} />
-          {statusTheme.label}
-        </span>
-      </div>
-
-      {plan.summary && (
-        <div style={{ fontSize: fontSize.sm, color: neutral[600], lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-          {plan.summary}
-        </div>
-      )}
-
-      <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-        {plan.tasks.map((pt) => {
-          const expanded = expandedTaskId === pt.id;
-          const taskStatusLabel = PLAN_TASK_STATUS_LABEL[pt.status] ?? pt.status;
-          return (
-            <div
-              key={pt.id}
-              data-testid="plan-task-item"
-              style={{
-                borderRadius: radius.md, backgroundColor: neutral[50],
-                border: `1px solid ${neutral[200]}`, overflow: "hidden",
-              }}
-            >
-              <div
-                role="button"
-                tabIndex={0}
-                data-testid="plan-task-toggle"
-                onClick={() => setExpandedTaskId(expanded ? null : pt.id)}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedTaskId(expanded ? null : pt.id); } }}
-                style={{
-                  display: "flex", alignItems: "center", gap: space.sm,
-                  padding: `${space.sm}px ${space.md}px`, cursor: "pointer",
-                  transition: "background-color .15s ease",
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.backgroundColor = "var(--color-surface)"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent"; }}
-              >
-                <span style={{ fontSize: fontSize.xs, color: neutral[400], fontWeight: 600, flexShrink: 0 }}>
-                  #{pt.seq}
-                </span>
-                <span style={{ flex: 1, minWidth: 0, fontSize: fontSize.md, color: neutral[800], fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {pt.title}
-                </span>
-                {pt.assigneeAlias ? (
-                  <span style={{ fontSize: fontSize.xs, color: "#2563EB", backgroundColor: "#EFF6FF", border: `1px solid #BFDBFE`, borderRadius: radius.pill, padding: "1px 6px", flexShrink: 0 }}>
-                    {pt.assigneeAlias}
-                  </span>
-                ) : (
-                  <span style={{ fontSize: 10, color: "#D97706", flexShrink: 0 }}>未指派</span>
-                )}
-                <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>
-                  {taskStatusLabel}
-                </span>
-                <span style={{ color: neutral[400], fontSize: fontSize.sm, transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s ease" }} aria-hidden>
-                  ›
-                </span>
-              </div>
-              {expanded && pt.content != null ? (
-                <div style={{ padding: `${space.sm}px ${space.md}px`, borderTop: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, color: neutral[600], lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                  {typeof pt.content === "string" ? pt.content : JSON.stringify(pt.content, null, 2)}
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-
-      {isReviewing && !reviewPending && (
-        <button
-          type="button"
-          data-testid="plan-review-entry"
-          onClick={() => onReview(plan.id)}
-          style={{
-            display: "flex", alignItems: "center", justifyContent: "center", gap: space.xs,
-            padding: `${space.sm - 1}px ${space.md}px`,
-            borderRadius: radius.md, border: `1px solid ${neutral[200]}`,
-            backgroundColor: "var(--color-surface)", color: neutral[600],
-            fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer",
-            fontFamily: fontFamily.body,
-          }}
-        >
-          评审计划
-        </button>
-      )}
-    </div>
-  );
-}
-
-/* ================================ 评审弹窗（verdict + reason textarea） ================================ */
-function ReviewDialog({
-  open,
-  planId,
-  verdict,
-  reason,
-  error,
-  submitting,
-  onClose,
-  onVerdictChange,
-  onReasonChange,
-  onSubmit,
-}: {
-  open: boolean;
-  planId: string | null;
-  verdict: "approved" | "rejected";
-  reason: string;
-  error: string | null;
-  submitting: boolean;
-  onClose: () => void;
-  onVerdictChange: (v: "approved" | "rejected") => void;
-  onReasonChange: (r: string) => void;
-  onSubmit: () => void;
-}) {
-  useEffect(() => {
-    if (!open) return;
-    const handleKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [open, onClose]);
-
-  if (!open || !planId) return null;
-
-  const inputBase: CSSProperties = {
-    width: "100%", boxSizing: "border-box",
-    padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md,
-    border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)",
-    fontSize: fontSize.md, color: neutral[800], outline: "none",
-    fontFamily: fontFamily.body,
-  };
-
-  return (
-    <div data-testid="review-dialog-overlay" onClick={(e) => e.stopPropagation()} style={{ position: "absolute", inset: 0, zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "8%", ...baseFont }}>
-      <div aria-hidden data-testid="review-dialog-mask" onClick={(e) => { e.stopPropagation(); onClose(); }} style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }} />
-      <div data-testid="review-dialog-modal" style={{ position: "relative", width: 440, maxWidth: "calc(100% - 48px)", display: "flex", flexDirection: "column", gap: space.md, padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.lg }}>
-        <div>
-          <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900], lineHeight: 1.3 }}>评审执行计划</div>
-          <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>通过后任务可按计划驱动执行</div>
-        </div>
-
-        <div style={{ display: "flex", gap: space.sm }}>
-          {(["approved", "rejected"] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              data-testid={`review-verdict-${v}`}
-              onClick={() => onVerdictChange(v)}
-              style={{
-                flex: 1, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md,
-                border: `1px solid ${verdict === v ? (v === "approved" ? "#059669" : "#DC2626") : neutral[200]}`,
-                backgroundColor: verdict === v ? (v === "approved" ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)") : "var(--color-surface)",
-                color: verdict === v ? (v === "approved" ? "#059669" : "#DC2626") : neutral[600],
-                fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body,
-              }}
-            >
-              {v === "approved" ? "通过" : "驳回"}
-            </button>
-          ))}
-        </div>
-
-        {verdict === "rejected" && (
-          <label style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-            <span style={{ fontSize: fontSize.md, fontWeight: 500, color: neutral[700] }}>
-              驳回原因 <span style={{ color: "#DC2626" }}>*</span>
-            </span>
-            <textarea
-              data-testid="review-reason-input"
-              value={reason}
-              rows={3}
-              maxLength={512}
-              onChange={(e) => onReasonChange(e.target.value)}
-              placeholder="请填写驳回原因…"
-              style={{ ...inputBase, resize: "vertical", lineHeight: 1.6 }}
-            />
-          </label>
-        )}
-
-        {error && (
-          <div role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", fontWeight: 500 }}>{error}</div>
-        )}
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm, marginTop: space.sm }}>
-          <button type="button" data-testid="review-cancel" onClick={onClose} disabled={submitting} style={{ padding: `${space.sm + 1}px ${space.lg}px`, borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], fontSize: fontSize.md, cursor: submitting ? "default" : "pointer", fontFamily: fontFamily.body }}>
-            取消
-          </button>
-          <button
-            type="button"
-            data-testid="review-submit"
-            disabled={submitting || (verdict === "rejected" && !reason.trim())}
-            onClick={onSubmit}
-            style={{
-              padding: `${space.sm + 1}px ${space.lg}px`, borderRadius: radius.pill, border: "none",
-              backgroundColor: verdict === "approved" ? "#059669" : "#DC2626",
-              color: "#FFFFFF", fontSize: fontSize.md, fontWeight: 500,
-              cursor: submitting || (verdict === "rejected" && !reason.trim()) ? "default" : "pointer",
-              opacity: submitting || (verdict === "rejected" && !reason.trim()) ? 0.6 : 1,
-              fontFamily: fontFamily.body,
-            }}
-          >
-            {submitting ? "提交中…" : "提交评审"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function TaskChannelBindingSection({ taskId }: { taskId: string }) {
@@ -2966,314 +918,16 @@ function TaskPanel({
   );
 }
 
-function TeamQueueCard({ team, taskId }: { team: TeamDto | null | undefined; taskId: string }) {
-  const queryClient = useQueryClient();
-  const [queueError, setQueueError] = useState<string | null>(null);
-  const cancelMutation = useMutation({
-    mutationFn: (tid: string) => teamsApi.cancelQueue(team!.id, tid),
-    onSuccess: () => {
-      setQueueError(null);
-      if (team) {
-        queryClient.invalidateQueries({ queryKey: ["team", team.id] });
-        queryClient.invalidateQueries({ queryKey: ["teams"] });
-      }
-      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
-    },
-    onError: (err) => {
-      const msg = isApiError(err) ? err.message : "取消失败";
-      const is409 = isApiError(err) && err.status === 409;
-      setQueueError(is409 ? `${msg}（仅排队中的任务可取消）` : msg);
-    },
-  });
-  if (!team) return null;
-  const queuedEntry = team.queue.find((q) => q.taskId === taskId);
-  const isQueued = !!queuedEntry;
-  const isCurrent = team.currentTaskId === taskId;
-  return (
-    <div data-testid="team-queue-card" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: isQueued ? "rgba(245,158,11,0.10)" : isCurrent ? "rgba(37,99,235,0.08)" : neutral[50], border: `1px solid ${isQueued ? "rgba(245,158,11,0.28)" : isCurrent ? "rgba(37,99,235,0.22)" : neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ display: "flex", alignItems: "center", gap: space.xs }}>
-          <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>团队队列</span>
-          <span style={{ fontSize: 10, color: "#D97706", backgroundColor: "rgba(245,158,11,0.10)", border: "1px solid rgba(245,158,11,0.22)", padding: "0 5px", borderRadius: radius.pill, fontWeight: 600 }}>FIFO</span>
-        </span>
-        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{team.queue.length} 排队 · {team.currentTaskId ? `当前 ${team.currentTaskId.slice(0, 8)}…` : "空闲"}</span>
-      </div>
-      <div style={{ fontSize: 10, color: neutral[400], lineHeight: 1.5 }}>按入队时间 FIFO，仅排队中可取消，不支持拖拽重排。</div>
-      {isQueued && queuedEntry ? (
-        <div data-testid="queue-position" style={{ display: "flex", alignItems: "center", gap: space.sm, fontSize: fontSize.sm, color: "#D97706", fontWeight: 600, flexWrap: "wrap" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: "50%", backgroundColor: "#F59E0B", color: "#FFF", fontSize: fontSize.xs, fontWeight: 700 }}>#{queuedEntry.position}</span>
-          排队中 · 位置 {queuedEntry.position}
-          <span style={{ fontSize: fontSize.xs, color: neutral[400], fontWeight: 400 }}>· 队列共 {team.queue.length} 个</span>
-          <button
-            type="button"
-            data-testid="queue-cancel-current"
-            data-task-id={taskId}
-            disabled={cancelMutation.isPending}
-            onClick={() => cancelMutation.mutate(taskId)}
-            style={{ marginLeft: "auto", padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.pill, border: "1px solid rgba(239,68,68,0.22)", backgroundColor: "rgba(239,68,68,0.06)", color: "#DC2626", fontSize: fontSize.xs, fontWeight: 500, cursor: cancelMutation.isPending ? "default" : "pointer", opacity: cancelMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body }}
-          >
-            {cancelMutation.isPending ? "取消中…" : "取消排队"}
-          </button>
-        </div>
-      ) : isCurrent ? (
-        <div data-testid="queue-current" style={{ fontSize: fontSize.sm, color: "#2563EB", fontWeight: 500 }}>当前执行中（队首）</div>
-      ) : (
-        <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>未在队列中 · 群聊按团队复用，历史跨任务可见</div>
-      )}
-      {queueError && <div data-testid="queue-cancel-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{queueError}</div>}
-      {team.queue.length > 0 ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: space.xs, marginTop: space.xs }}>
-          {team.queue.map((q) => {
-            const isSelf = q.taskId === taskId;
-            const qTitle = (q as any).taskTitle ?? null;
-            const qStatus = (q as any).taskStatus ?? "queued";
-            const canCancel = qStatus === "queued";
-            return (
-              <div key={q.id} data-testid="team-queue-item" data-task-id={q.taskId} data-position={q.position} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.sm, backgroundColor: isSelf ? "rgba(245,158,11,0.12)" : "var(--color-surface)", border: `1px solid ${isSelf ? "rgba(245,158,11,0.28)" : neutral[200]}` }}>
-                <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: "50%", backgroundColor: isSelf ? "#F59E0B" : neutral[400], color: "#FFF", fontSize: 10, fontWeight: 700, flexShrink: 0 }}>{q.position}</span>
-                <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-                  <span style={{ fontSize: fontSize.xs, color: neutral[700], fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{qTitle ?? q.taskId}</span>
-                  <span style={{ display: "flex", alignItems: "center", gap: space.xs }}>
-                    <span data-testid="queue-item-status" style={{ fontSize: 10, color: canCancel ? "#D97706" : neutral[500], backgroundColor: canCancel ? "rgba(245,158,11,0.10)" : neutral[100], border: `1px solid ${canCancel ? "rgba(245,158,11,0.22)" : neutral[200]}`, borderRadius: radius.pill, padding: "0 4px", fontWeight: 600 }}>{canCancel ? "排队中" : qStatus}</span>
-                    <span style={{ fontFamily: fontFamily.mono, fontSize: 10, color: neutral[400], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{q.taskId.slice(0, 10)}…</span>
-                  </span>
-                </div>
-                <span style={{ fontSize: 10, color: neutral[400], flexShrink: 0 }}>{new Date(q.enqueuedAt).toLocaleDateString()}</span>
-                <button
-                  type="button"
-                  data-testid="queue-cancel"
-                  data-task-id={q.taskId}
-                  disabled={!canCancel || cancelMutation.isPending}
-                  title={!canCancel ? "仅排队中的任务可取消" : "取消排队"}
-                  onClick={() => canCancel && cancelMutation.mutate(q.taskId)}
-                  style={{ padding: "2px 8px", borderRadius: radius.pill, border: `1px solid ${!canCancel ? neutral[200] : "rgba(239,68,68,0.22)"}`, backgroundColor: !canCancel ? neutral[100] : "rgba(239,68,68,0.06)", color: !canCancel ? neutral[400] : "#DC2626", fontSize: 10, fontWeight: 500, cursor: !canCancel || cancelMutation.isPending ? "not-allowed" : "pointer", opacity: !canCancel ? 0.6 : 1, fontFamily: fontFamily.body, flexShrink: 0 }}
-                >
-                  取消
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function TeamMemoryCard({ team, task }: { team: TeamDto | null | undefined; task: TaskDetail }) {
-  const queryClient = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
-  const toggleMutation = useMutation({
-    mutationFn: (next: boolean) => api.patch<TaskDetail>(`/tasks/${task.id}`, { resetAfterComplete: next }),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(["task", task.id], updated);
-      setError(null);
-    },
-    onError: (err) => setError(isApiError(err) ? err.message : "更新失败"),
-  });
-  const effectiveNewSession = task.resetAfterComplete ? true : !team?.reuseSession ? true : false;
-  return (
-    <div data-testid="team-memory-card" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>记忆开关</span>
-        <span style={{ fontSize: 10, color: team?.reuseSession ? "#2563EB" : "#D97706", backgroundColor: team?.reuseSession ? "rgba(37,99,235,0.08)" : "rgba(245,158,11,0.10)", border: `1px solid ${team?.reuseSession ? "rgba(37,99,235,0.14)" : "rgba(245,158,11,0.22)"}`, padding: "0 6px", borderRadius: radius.pill, fontWeight: 600 }}>{team?.reuseSession ? "默认保留" : "每任务新会话"}</span>
-      </div>
-      <div data-testid="reuse-explain" style={{ fontSize: fontSize.xs, color: neutral[500], lineHeight: 1.6, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
-        {team?.reuseSession ? (
-          <span><span style={{ fontWeight: 600, color: "#2563EB" }}>团队默认保留</span>：会话跨任务复用，上下文与历史延续。</span>
-        ) : (
-          <span><span style={{ fontWeight: 600, color: "#D97706" }}>团队每任务新会话</span>：每任务独立会话，历史隔离。</span>
-        )}
-        <span style={{ display: "block", marginTop: space.xs, color: neutral[400] }}>任务级勾选可覆盖团队默认。</span>
-      </div>
-      <label style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: task.resetAfterComplete ? "rgba(37,99,235,0.06)" : neutral[50], border: `1px solid ${task.resetAfterComplete ? "rgba(37,99,235,0.14)" : neutral[200]}`, cursor: toggleMutation.isPending ? "default" : "pointer" }}>
-        <input type="checkbox" data-testid="reset-after-complete-toggle" checked={!!task.resetAfterComplete} disabled={toggleMutation.isPending} onChange={(e) => toggleMutation.mutate(e.target.checked)} style={{ width: 16, height: 16, accentColor: "#2563EB" }} />
-        <span style={{ display: "flex", flexDirection: "column" }}>
-          <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>完成后为下一任务开新会话</span>
-          <span style={{ fontSize: 10, color: neutral[400] }}>勾选后，本任务完成/归档时为团队所有成员开新会话，下一任务上下文全新</span>
-        </span>
-      </label>
-      {effectiveNewSession && <span data-testid="memory-effective" style={{ fontSize: 10, color: "#D97706" }}>生效：下一任务将开新会话（{task.resetAfterComplete ? "任务级覆盖" : "团队设置"}）</span>}
-      {!effectiveNewSession && <span style={{ fontSize: 10, color: neutral[400] }}>生效：下一任务复用当前会话</span>}
-      {error && <span style={{ fontSize: fontSize.xs, color: "#DC2626" }}>{error}</span>}
-      {toggleMutation.isPending && <span style={{ fontSize: 10, color: neutral[400] }}>更新中…</span>}
-    </div>
-  );
-}
-
-
-function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery, plansQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onToggleManagedMode, onToggleExecutionMode }: { team: any; task: any; taskId: string; artifactsQuery: any; issuesQuery: any; plansQuery: any; agents: any[]; onEditTaskInfo: () => void; onOpenArtifacts: () => void; onOpenIssues: () => void; onToggleManagedMode: (v: boolean) => void; onToggleExecutionMode: (v: "direct" | "plan") => void }) {
-  const [active, setActive] = React.useState<"status" | "config" | "output">("status");
-  const waiting = (team?.queue ?? []).filter((q: any) => (q as any).taskStatus === "queued" || !(q as any).taskStatus).length;
-  const isCurrent = team?.currentTaskId === taskId;
-  const statusLabel = task ? (task.status === "queued" ? "排队中" : task.status === "pending" ? "待开始" : task.status === "in_progress" ? "进行中" : task.status === "pending_review" ? "待验收" : task.status === "completed" ? "已完成" : "已归档") : "";
-  return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-      <div style={{ display: "flex", borderBottom: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], flexShrink: 0 }}>
-        {[
-          { key: "status" as const, label: "状态", badge: waiting > 0 ? String(waiting) : null },
-          { key: "config" as const, label: "配置", badge: null },
-          { key: "output" as const, label: "产出", badge: artifactsQuery.data?.total ? String(artifactsQuery.data.total) : null },
-        ].map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            data-testid={`right-tab-${tab.key}`}
-            data-active={active === tab.key ? "true" : "false"}
-            onClick={() => setActive(tab.key)}
-            style={{
-              flex: 1,
-              padding: `${space.sm}px ${space.md}px`,
-              border: "none",
-              borderBottom: `2px solid ${active === tab.key ? "#2563EB" : "transparent"}`,
-              backgroundColor: active === tab.key ? "var(--color-surface)" : "transparent",
-              color: active === tab.key ? "#2563EB" : neutral[500],
-              fontSize: fontSize.sm,
-              fontWeight: active === tab.key ? 600 : 400,
-              cursor: "pointer",
-              fontFamily: fontFamily.body,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: space.xs,
-            }}
-          >
-            {tab.label}
-            {tab.badge && <span style={{ fontSize: 10, color: "#FFF", backgroundColor: active === tab.key ? "#2563EB" : "#F59E0B", padding: "0 5px", borderRadius: radius.pill, fontWeight: 700 }}>{tab.badge}</span>}
-          </button>
-        ))}
-      </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: `${space.md}px ${space.lg}px`, display: "flex", flexDirection: "column", gap: space.lg }}>
-        {active === "status" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: isCurrent ? "rgba(37,99,235,0.06)" : waiting > 0 ? "rgba(245,158,11,0.06)" : "var(--color-surface)", border: `1px solid ${isCurrent ? "rgba(37,99,235,0.14)" : waiting > 0 ? "rgba(245,158,11,0.14)" : neutral[200]}` }}>
-              <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: task.status === "in_progress" ? "#10B981" : task.status === "queued" ? "#F59E0B" : task.status === "pending" ? "#2563EB" : neutral[300] }} />
-                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>{task.title}</span>
-                <span style={{ fontSize: fontSize.xs, color: "#FFF", backgroundColor: task.status === "queued" ? "#F59E0B" : task.status === "in_progress" ? "#10B981" : "#2563EB", padding: "1px 6px", borderRadius: radius.pill }}>{statusLabel}</span>
-              </div>
-              <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
-                {isCurrent ? "当前执行（队首）" : team?.currentTaskId ? `队首 ${team.currentTaskId.slice(0,8)}… 执行中` : "团队空闲"} · {waiting > 0 ? `等待中 ${waiting} 个` : "暂无等待"}
-              </div>
-              {team?.name && (
-                <div style={{ fontSize: fontSize.xs, color: neutral[600], backgroundColor: "rgba(37,99,235,0.04)", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px`, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
-                  {team.name}
-                </div>
-              )}
-              <div style={{ display: "flex", gap: space.sm }}>
-                <TaskStatusActions taskId={taskId} status={task.status as any} />
-                <button type="button" onClick={onEditTaskInfo} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>编辑</button>
-              </div>
-            </div>
-            <TeamQueueCard team={team} taskId={taskId} />
-            <div style={{ fontSize: fontSize.xs, color: neutral[500], backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px`, display: "flex", alignItems: "center", gap: space.xs }}>
-              <span style={{ fontWeight: 600, color: team?.reuseSession ? "#2563EB" : "#D97706" }}>{team?.reuseSession ? "默认保留" : "每任务新会话"}</span>
-              <span>· {team?.reuseSession ? "会话跨任务复用" : "每任务新会话"}，{task.resetAfterComplete ? "本任务完成后为下一任务开新会话" : "下一任务复用当前会话"}</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
-              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>主 Agent</span>
-              <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>{(team?.members?.find((m:any)=>m.id===team.mainAgentMemberId)?.alias ?? task.mainAgentId ?? "未指定")}</span>
-              {team?.mainAgentMemberId && <span style={{ fontSize: 10, color: "#FFF", backgroundColor: "#F59E0B", padding: "0 5px", borderRadius: radius.pill }}>★ 主 Agent</span>}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
-              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>团队</span>
-              <span style={{ display: "flex" }}>{(agents ?? []).slice(0,5).map((a:any,i:number)=>(<span key={a.id} style={{ marginLeft: i===0?0:-6 }}><AgentAvatar role={a.role} size="sm" style={{ border: "2px solid #FFF" }} /></span>))}</span>
-              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{(agents ?? []).length} 人</span>
-            </div>
-          </div>
-        )}
-        {active === "config" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}>
-              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>执行与托管</div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: fontSize.sm, color: neutral[600] }}>执行模式</span>
-                <select value={task.executionMode} onChange={(e)=>onToggleExecutionMode(e.target.value as "direct" | "plan")} style={{ padding: `2px 8px`, borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.xs, color: neutral[700] }}>
-                  <option value="direct">轻量执行</option>
-                  <option value="plan">计划驱动</option>
-                </select>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: fontSize.sm, color: neutral[600] }}>托管模式</span>
-                <span onClick={()=>onToggleManagedMode(!task.managedMode)} role="switch" aria-checked={task.managedMode} style={{ width: 36, height: 20, borderRadius: 10, backgroundColor: task.managedMode ? "#2563EB" : neutral[300], position: "relative", cursor: "pointer" }}><span style={{ position: "absolute", top: 2, left: task.managedMode ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} /></span>
-              </div>
-            </div>
-            <TeamMemoryCard team={team} task={task} />
-            <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>
-              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>渠道绑定</div>
-              <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>消息与通知渠道可在任务操作中配置，团队级记忆在状态 Tab 查看。</div>
-              <button type="button" onClick={()=>{ const el=document.querySelector('[data-testid="task-channel-binding-section"]') as HTMLElement; el?.scrollIntoView({behavior:"smooth", block:"center"}); el?.focus(); }} style={{ alignSelf: "flex-start", fontSize: fontSize.xs, color: "#2563EB", background: "none", border: "none", cursor: "pointer" }}>去配置 →</button>
-            </div>
-          </div>
-        )}
-        {active === "output" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
-            <div>
-              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], marginBottom: space.sm }}>任务详情</div>
-              <div style={{ fontSize: fontSize.sm, color: neutral[700], backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>{task.title}</div>
-              {task.description && <div style={{ marginTop: space.xs, fontSize: fontSize.xs, color: neutral[500], backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px`, whiteSpace: "pre-wrap" }}>{task.description}</div>}
-            </div>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: space.sm }}>
-                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>产出物</span>
-                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{artifactsQuery.data?.total ?? 0} 个</span>
-              </div>
-              {(artifactsQuery.data?.items ?? []).length === 0 ? (
-                <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无产出物</div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-                  {(artifactsQuery.data?.items ?? []).slice(0, 5).map((a: any) => (
-                    <div key={a.id} style={{ fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}>{a.title ?? a.id}</div>
-                  ))}
-                  <button type="button" onClick={onOpenArtifacts} style={{ fontSize: fontSize.xs, color: "#2563EB", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>查看全部 →</button>
-                </div>
-              )}
-            </div>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: space.sm }}>
-                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>待办 Issue</span>
-                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{issuesQuery.data?.total ?? 0} 个</span>
-              </div>
-              {(issuesQuery.data?.items ?? []).length === 0 ? (
-                <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无 Issue</div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-                  {(issuesQuery.data?.items ?? []).slice(0, 5).map((it: any) => (
-                    <div key={it.id} style={{ fontSize: fontSize.xs, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>{it.title}</div>
-                  ))}
-                  <button type="button" onClick={onOpenIssues} style={{ fontSize: fontSize.xs, color: "#2563EB", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>查看全部 →</button>
-                </div>
-              )}
-            </div>
-            <div>
-              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], marginBottom: space.sm }}>执行计划</div>
-              {plansQuery.data ? (
-                <div style={{ fontSize: fontSize.xs, color: neutral[600], padding: `${space.sm}px ${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>{(plansQuery.data as any).title ?? "已有计划"}</div>
-              ) : (
-                <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无执行计划</div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 /* ================================ 页面（AppShell 内容区三栏） ================================ */
-export default function TaskChatPage() {
+export default function TaskDetailPage() {
   const params = useParams<{ id: string }>();
   const taskId = params?.id ?? "";
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
-  const listRef = useRef<HTMLDivElement | null>(null);
 
-  // 输入（受控 MessageInput）
-  const [input, setInput] = useState("");
   // Loading 两阶段：agentId → phase（thinking/operating）
   const [loadingByAgent, setLoadingByAgent] = useState<Record<string, string>>({});
-  // agent.error：agentId → 错误文本（error 优先，缺省 errorType/message；展示错误态）
-  const [errorByAgent, setErrorByAgent] = useState<Record<string, string>>({});
   // 会话状态：agentId → session.updated status（running=工作中 / idle=空闲 / frozen|archived=已结束）
   const [sessionByAgent, setSessionByAgent] = useState<Record<string, string>>({});
   // sessionId → agentId 映射（session.updated payload 仅 {sessionId, status, workerId}，无 agentId，
@@ -3281,9 +935,6 @@ export default function TaskChatPage() {
   const agentIdBySessionRef = useRef<Record<string, string>>({});
   // sessionId → instanceId 映射（同 agent 多实例时 session.updated 收敛 key 需按实例精确命中）
   const instanceIdBySessionRef = useRef<Record<string, string | null>>({});
-  const [loadingMore, setLoadingMore] = useState(false);
-  // 发起私聊失败提示（members-panel 底部说明区）
-  const [dmError, setDmError] = useState<string | null>(null);
   // 添加实例失败提示（members-panel 添加面板内展示）
   const [addError, setAddError] = useState<string | null>(null);
   // Agent 提问/权限确认弹窗：SSE agent.question 事件 / 进入页补拉设置（resolved 事件收敛关闭）
@@ -3374,93 +1025,6 @@ export default function TaskChatPage() {
   });
   const team = teamQuery.data;
 
-  const channelsQuery = useQuery({
-    queryKey: ["channels", "team_group", teamId],
-    queryFn: () => api.get<{ items: ChannelItem[]; total: number }>("/channels", { query: { teamId: teamId! } }),
-    enabled: !!teamId && !!user?.id,
-  });
-  const legacyChannelsQuery = useQuery({
-    queryKey: ["channels", "team_group", taskId],
-    queryFn: () => api.get<{ items: ChannelItem[]; total: number }>("/channels", { query: { type: "team_group" } }),
-    enabled: !teamId && !!user?.id,
-  });
-  const channel = useMemo(() => {
-    if (teamId) {
-      const items = channelsQuery.data?.items ?? [];
-      const teamGroup = items.find((c) => c.type === "team_group" && (c.teamId ?? null) === teamId);
-      if (teamGroup) return teamGroup;
-      if (items.length === 1) return items[0];
-      return items.find((c) => (c.teamId ?? null) === teamId) ?? items[0] ?? null;
-    }
-    return legacyChannelsQuery.data?.items.find((c) => c.type === "team_group" && ((c.teamId ?? null) === teamId || c.taskId === taskId)) ?? legacyChannelsQuery.data?.items.find((c) => (c.teamId ?? null) === teamId || c.taskId === taskId) ?? null;
-  }, [channelsQuery.data, legacyChannelsQuery.data, teamId, taskId]);
-  const channelId = channel?.id ?? "";
-
-  /* ---------- 2b. 私聊 Tabs（Scheme C）：同页切换群聊/私聊，本地态 activeTab ---------- */
-  const [activeTab, setActiveTab] = useState<string>("group");
-  const [privateChannelMap, setPrivateChannelMap] = useState<Map<string, string>>(new Map());
-  const activePrivateId = activeTab.startsWith("private:") ? activeTab.slice(8) : null;
-
-  const handlePrivateTab = useCallback(
-    async (instanceId: string, agentId: string) => {
-      const cached = privateChannelMap.get(instanceId);
-      if (cached) {
-        setActiveTab(`private:${cached}`);
-        return;
-      }
-      try {
-        const payload: any = teamId
-          ? { teamId, teamMemberId: instanceId }
-          : { taskId, agentId, taskAgentId: instanceId };
-        if (!teamId && !payload.agentId) payload.agentId = agentId;
-        const ch = await api.post<{ id: string }>("/dm-channels", payload);
-        setPrivateChannelMap((prev) => {
-          const next = new Map(prev);
-          next.set(instanceId, ch.id);
-          return next;
-        });
-        setActiveTab(`private:${ch.id}`);
-      } catch (e) {
-        console.error("create dm channel failed", e);
-      }
-    },
-    [privateChannelMap, taskId, teamId],
-  );
-
-  /* ---------- 3. 频道详情：agentMembers（members-panel + @ mentionable + agent 名映射） ---------- */
-  const channelQuery = useQuery({
-    queryKey: ["channel", channelId],
-    queryFn: () => api.get<ChannelDetail>(`/channels/${channelId}`),
-    enabled: !!channelId,
-  });
-
-  /* ---------- 4. 消息历史：queryKey 与 use-realtime 追加 key 一致（['channel', id, 'messages']） ---------- */
-  const messagesQuery = useQuery({
-    queryKey: ["channel", channelId, "messages"],
-    queryFn: () =>
-      api.get<MessagesResponse>(`/channels/${channelId}/messages`, { query: { limit: 50 } }),
-    enabled: !!channelId && activeTab === "group",
-    refetchInterval: 30_000,
-  });
-
-  /* ---------- 4a. 私聊消息历史（按 Tab 独立缓存，session-history） ---------- */
-  const privateMessagesQuery = useQuery({
-    queryKey: ["channel", activePrivateId, "messages"],
-    queryFn: async () => {
-      if (!activePrivateId) return { items: [], nextCursor: null } as MessagesResponse;
-      // 私聊走 session-history（复用 messages/[id] 的 fetchChannelMessages 逻辑，简化为直接调 session-history）
-      try {
-        const res = await api.get<{ items: RealtimeChatMessage[]; nextCursor: string | null; source: string }>(
-          `/channels/${activePrivateId}/session-history`,
-        );
-        return { items: res.items, nextCursor: res.nextCursor ?? null } as MessagesResponse;
-      } catch {
-        return api.get<MessagesResponse>(`/channels/${activePrivateId}/messages`, { query: { limit: 50 } });
-      }
-    },
-    enabled: !!activePrivateId,
-  });
-
   /* ---------- 4b. Agent 提问/权限确认补拉：进入页面/刷新时恢复未处理弹窗（落库持久化） ---------- */
   const questionsQuery = useQuery({
     queryKey: ["questions", taskId, "pending"],
@@ -3508,34 +1072,12 @@ export default function TaskChatPage() {
           seq: inst.seq,
           main: inst.main || inst.id === task?.mainAgentInstanceId,
           enabled: (inst as { enabled?: boolean | null }).enabled ?? true,
+          overrideModelId: inst.overrideModelId ?? null,
         };
       });
     }
-    return (channelQuery.data?.agentMembers ?? []).map((a: any) => {
-      const role = (a.role && (ROLE_KEYS as readonly string[]).includes(a.role))
-        ? (a.role as RoleKey)
-        : toRole(a.id) ?? "developer";
-      return { id: a.id, instanceId: undefined, name: a.name, role, enabled: (a as { enabled?: boolean | null }).enabled ?? true };
-    });
-  }, [team, task, channelQuery.data, task?.mainAgentInstanceId]);
-
-  /** 实例 → agentMap（agentId → {name, role}；同 agent 多实例保留首个别名，防覆盖） */
-  const agentMap = useMemo(() => {
-    const map = new Map<string, { name: string; role: RoleKey }>();
-    for (const a of agentMembers) {
-      if (!map.has(a.id)) map.set(a.id, { name: a.name, role: a.role });
-    }
-    return map;
-  }, [agentMembers]);
-
-  /** 实例 id → 实例别名（senderInstanceId 精确渲染；同 agent 多实例各自别名） */
-  const instanceNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const a of agentMembers) {
-      if (a.instanceId) map.set(a.instanceId, a.name);
-    }
-    return map;
-  }, [agentMembers]);
+    return [];
+  }, [team, task]);
 
   /** Issue 详情弹窗指派候选（T5 实例：id=实例 id、name=别名、role）。 */
   const issueModalAgents = useMemo(
@@ -3547,23 +1089,6 @@ export default function TaskChatPage() {
       })),
     [task],
   );
-
-  /** @ 候选（T5 按实例）：name=实例别名（唯一），instanceId 透传（mentions 落库结构）。禁用的实例不出现在候选。 */
-  const mentionable: MentionableAgent[] = agentMembers
-    .filter((a) => (a as { enabled?: boolean | null }).enabled !== false)
-    .map((a) => ({
-      id: a.id,
-      agentId: a.id,
-      instanceId: a.instanceId,
-      name: a.name,
-      role: a.role,
-    }));
-
-  /** 滚到底：新消息（SSE onMessage / 发送成功）后调用 */
-  const scrollToBottom = useCallback(() => {
-    const el = listRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, []);
 
   /**
    * 会话状态初始快照（T14）：SSE 增量驱动重连不重放 running，切页回来 sessionByAgent
@@ -3593,44 +1118,14 @@ export default function TaskChatPage() {
     }
   }, [task]);
 
-  /* ---------- 5. SSE 实时（单连接多 scope，逗号分隔：channel + task + global） ---------- */
-  // 后端 realtime.controller 支持逗号分隔多 scope（scope=channel:<id>,task:<id>,global），
-  // 一条连接收到全部订阅 scope 的事件：chat.message.new / agent.loading / agent.error /
-  // team.changed / task.status.changed。前端按事件 type 分发（useRealtimeEvents），
+  /* ---------- 5. SSE 实时（任务域订阅：team + task + global；消息订阅已随聊天区移除） ---------- */
+  // 后端 realtime.controller 支持逗号分隔多 scope，一条连接收到全部订阅 scope 的事件：
+  // agent.loading / agent.error / agent.status / session.updated / team.changed /
+  // task.status.changed / artifact.submitted / issue.changed / agent.question。
   // 回调内保留 payload.taskId === taskId 过滤（多 scope 下事件会跨 scope 混流，必须逐条过滤）。
   useRealtimeEvents({
-    scope: `channel:${channelId}${activePrivateId ? `,channel:${activePrivateId}` : ""},team:${teamId ?? ""},task:${taskId},global`,
-    enabled: (!!channelId || !!teamId) && !!taskId,
-    onMessage: (payload) => {
-      scrollToBottom();
-      queryClient.invalidateQueries({ queryKey: ["plans", taskId] });
-      const m = payload.message;
-      // agent 回复到达 → 收敛该 Agent 的 loading 指示器与错误态（FR-20 处理完成替换）。
-      // T6 实例语义：收敛 key 优先 senderInstanceId（回复精确归属实例），缺省回退 senderId。
-      if (m.senderType === "agent" && m.senderId) {
-        const senderKey = m.senderInstanceId ?? m.senderId;
-        setLoadingByAgent((prev) => {
-          if (!(senderKey in prev)) return prev;
-          const next = { ...prev };
-          delete next[senderKey];
-          return next;
-        });
-        setErrorByAgent((prev) => {
-          if (!(senderKey in prev)) return prev;
-          const next = { ...prev };
-          delete next[senderKey];
-          return next;
-        });
-        // active（bind 初始态）/ running（执行中）在回复到达时一并收敛（执行已结束）
-        setSessionByAgent((prev) => {
-          const st = prev[senderKey];
-          if (st !== "active" && st !== "running") return prev;
-          const next = { ...prev };
-          delete next[senderKey];
-          return next;
-        });
-      }
-    },
+    scope: `team:${teamId ?? ""},task:${taskId},global`,
+    enabled: !!teamId && !!taskId,
     onAgentLoading: (payload) => {
       // agent.loading 实际 payload 含 sessionId（ingress 透传 worker 负载）→ 建立会话映射
       const sessionId = (payload as { sessionId?: string | null }).sessionId;
@@ -3643,16 +1138,11 @@ export default function TaskChatPage() {
       setLoadingByAgent((prev) => ({ ...prev, [key]: payload.phase }));
     },
     onAgentError: (payload) => {
-      const p = payload as { sessionId?: string | null; error?: unknown; errorType?: unknown; message?: unknown };
+      const p = payload as { sessionId?: string | null };
       if (p.sessionId) {
         agentIdBySessionRef.current[p.sessionId] = payload.agentId;
         instanceIdBySessionRef.current[p.sessionId] = payload.instanceId ?? null;
       }
-      const detail = [p.error, p.message, p.errorType]
-        .map((x) => (typeof x === "string" && x.trim() ? x.trim() : null))
-        .find(Boolean) ?? "agent error";
-      const key = payload.instanceId ?? payload.agentId;
-      setErrorByAgent((prev) => ({ ...prev, [key]: detail }));
     },
     onAgentStatus: (payload: AgentStatusEvent) => {
       // agent.status 终结态收敛：running 开始 / completed|failed 结束（与 agent.loading 同 task scope）
@@ -3701,37 +1191,8 @@ export default function TaskChatPage() {
         });
       }
     },
-    onMessagePartDelta: (payload: MessagePartDeltaEvent) => {
-      scrollToBottom();
-      const m = payload.message;
-      // 群聊结论防御：仅保留 text 结论 part（后端 extractConclusionParts 已滤 reasoning/tool，
-      // 此处兜底——delta 带非 text parts 时也绝不渲染过程片段）
-      const rawParts2 = (m as unknown as { content?: { parts?: unknown } })?.content?.parts;
-      const parts = Array.isArray(rawParts2)
-        ? (rawParts2 as unknown[]).filter(
-            (p) => (p as { type?: string; synthetic?: boolean }).type === "text"
-              && !(p as { type?: string; synthetic?: boolean }).synthetic,
-          )
-        : [];
-      const text = parts
-        .map((p) => (p as { text?: string }).text ?? "")
-        .join("") || ((m as unknown as { content?: { text?: string } })?.content?.text ?? "");
-      queryClient.setQueryData<MessagesResponse>(["channel", channelId, "messages"], (old) => {
-        if (!old) return old;
-        const idx = old.items.findIndex((x) => x.id === m.id);
-        const merged = { ...m, content: { text, parts } } as unknown as RealtimeChatMessage;
-        if (idx === -1) return { ...old, items: [...old.items, merged] };
-        if (old.items[idx].status !== "processing") return old; // 终态优先：重放不覆盖
-        const items = [...old.items];
-        items[idx] = merged;
-        return { ...old, items };
-      });
-    },
     onTeamChanged: (payload: any) => {
-      if (payload.taskId === taskId || payload.teamId === teamId) {
-        queryClient.invalidateQueries({ queryKey: ["channel", channelId] });
-        if (payload.teamId) queryClient.invalidateQueries({ queryKey: ["team", teamId] });
-      }
+      if (payload.teamId) queryClient.invalidateQueries({ queryKey: ["team", teamId] });
       if (payload.teamId === teamId) {
         queryClient.invalidateQueries({ queryKey: ["team", teamId] });
         queryClient.invalidateQueries({ queryKey: ["task", taskId] });
@@ -3743,20 +1204,17 @@ export default function TaskChatPage() {
       }
     },
     onArtifactSubmitted: (payload) => {
-      // 产出物归档（artifact.submitted，task scope）→ 失效产出物列表缓存，新文件自动出现
       if (payload.taskId === taskId) {
         queryClient.invalidateQueries({ queryKey: ["task", taskId, "artifacts"] });
       }
     },
     onIssueChanged: (payload) => {
-      // issue 变更（issue.changed，task scope，is_0000000020）→ 失效待办 issue 缓存，右侧面板自动刷新
       if (payload.taskId === taskId) {
         queryClient.invalidateQueries({ queryKey: ["task-issues", taskId] });
         queryClient.invalidateQueries({ queryKey: ["issues"] });
       }
     },
     onAgentQuestion: (payload: RealtimeQuestionEvent) => {
-      // 模型提问/权限确认到达 → 弹窗；resolved=true（已回复收敛事件）→ 关闭
       if (payload.resolved) {
         setPendingQuestion((prev) =>
           prev && prev.id === payload.question.id ? null : prev,
@@ -3765,7 +1223,6 @@ export default function TaskChatPage() {
       }
       if (payload.question.status !== "pending") return;
       if (payload.taskId && payload.taskId !== taskId) return;
-      // 托管模式请求由主 Agent 确认，不弹窗给用户
       if (payload.question.managedMode) return;
       setPendingQuestion({
         id: payload.question.id,
@@ -3791,7 +1248,6 @@ export default function TaskChatPage() {
     },
     onError: (err) => {
       setQuestionSubmitting(false);
-      // 僵尸/超期权限：serve 已无该请求（410 QUESTION_EXPIRED）→ 关闭弹窗 + 刷新列表（不无限卡）
       if (isApiError(err) && (err.status === 410 || err.code === "QUESTION_EXPIRED")) {
         setPendingQuestion(null);
         queryClient.invalidateQueries({ queryKey: ["questions"] });
@@ -3802,167 +1258,6 @@ export default function TaskChatPage() {
     if (!pendingQuestion) return;
     setQuestionSubmitting(true);
     questionReplyMutation.mutate(payload);
-  };
-
-  /** 历史 loading 收敛：首连补拉会重放历史 loading（task scope）与回复（channel scope），
-   *  两连接顺序不定可能导致「回复先收敛、loading 后设置」→ 恒「处理中」。
-   *  依赖 loadingByAgent/errorByAgent：无论 loading 重放在历史回复之前还是之后到达，
-   *  只要最终状态里某 Agent 的历史最后一条是 agent 回复，其残留 loading/error 一律清除。
-   *  ⚠️ 仅首连执行一次（historySettledRef）：若依赖 loadingByAgent/sessionByAgent 反复
-   *  触发，Agent 执行中的新状态（agent.loading / session.updated running）会被历史消息
-   *  （该 Agent 上一条旧回复）误清 → 成员状态恒「就绪」，执行中不显示「工作中/处理中」。 */
-  const historySettledRef = useRef(false);
-  useEffect(() => {
-    if (!messagesQuery.isSuccess || historySettledRef.current) return;
-    historySettledRef.current = true;
-    const items = messagesQuery.data?.items ?? [];
-    const lastByAgent = new Map<string, RealtimeChatMessage>();
-    for (const m of items) {
-      if (m.senderId) lastByAgent.set(m.senderId, m);
-    }
-    setLoadingByAgent((prev) => {
-      let next: Record<string, string> | null = null;
-      for (const [agentId, m] of lastByAgent) {
-        if (m.senderType === "agent" && agentId in prev) {
-          if (!next) next = { ...prev };
-          delete next[agentId];
-        }
-      }
-      return next ?? prev;
-    });
-    setErrorByAgent((prev) => {
-      let next: Record<string, string> | null = null;
-      for (const [agentId, m] of lastByAgent) {
-        if (m.senderType === "agent" && agentId in prev) {
-          if (!next) next = { ...prev };
-          delete next[agentId];
-        }
-      }
-      return next ?? prev;
-    });
-    // 会话状态残留收敛：历史最后一条是 agent 回复 → 该 Agent 会话已结束（active/running 状态清除）
-    setSessionByAgent((prev) => {
-      let next: Record<string, string> | null = null;
-      for (const [agentId, m] of lastByAgent) {
-        if (m.senderType === "agent" && (prev[agentId] === "active" || prev[agentId] === "running")) {
-          if (!next) next = { ...prev };
-          delete next[agentId];
-        }
-      }
-      return next ?? prev;
-    });
-  }, [messagesQuery.isSuccess, messagesQuery.data]);
-
-  /* ---------- 6. 发送：POST /channels/:id/messages（Tabs 感知：群聊/私聊路由） ---------- */
-  const targetChannelId = activeTab === "group" ? channelId : (activePrivateId ?? channelId);
-  const sendMutation = useMutation({
-    mutationFn: (payload: SendMessagePayload) =>
-      api.post(`/channels/${targetChannelId}/messages`, {
-        text: payload.text,
-        mentions:
-          activeTab === "group"
-            ? [
-                ...payload.mentions.map((m) => ({
-                  type: "agent" as const,
-                  agentId: m.id,
-                  ...(m.instanceId ? { instanceId: m.instanceId } : {}),
-                })),
-                ...(payload.text.includes("@all") ? [{ type: "all" as const }] : []),
-              ]
-            : [],
-        // UX-10 附件：MessageInput 已先 POST /uploads 拿 url，随消息提交三字段
-        ...(payload.attachment
-          ? {
-              attachmentUrl: payload.attachment.url,
-              attachmentName: payload.attachment.name,
-              attachmentType: payload.attachment.ext,
-            }
-          : {}),
-      }),
-    onSuccess: () => {
-      setInput("");
-      scrollToBottom();
-    },
-  });
-
-  const handleSend = (payload: SendMessagePayload) => {
-    // 禁用拦截：私聊 Tab 对应实例被禁用时禁止发送
-    if (activeTab !== "group" && activePrivateId) {
-      const instanceId = Array.from(privateChannelMap.entries()).find(([, cid]) => cid === activePrivateId)?.[0];
-      const inst = instanceId ? agentMembers.find((a) => a.instanceId === instanceId) : null;
-      if (inst && (inst as { enabled?: boolean | null }).enabled === false) return;
-    }
-    // 群聊中 @ 被禁用实例时拦截
-    for (const m of payload.mentions) {
-      const inst = agentMembers.find((a) => a.id === m.id && (m.instanceId ? a.instanceId === m.instanceId : true));
-      if (inst && (inst as { enabled?: boolean | null }).enabled === false) return;
-    }
-    sendMutation.mutate(payload);
-  };
-
-  /** 加载更多：Tabs 感知（群聊/私聊各自独立游标） */
-  const handleLoadMore = async () => {
-    const isGroup = activeTab === "group";
-    const q = isGroup ? messagesQuery : privateMessagesQuery;
-    const cid = isGroup ? channelId : activePrivateId;
-    if (!cid || !q.data?.nextCursor || loadingMore) return;
-    setLoadingMore(true);
-    try {
-      const next = await api.get<MessagesResponse>(`/channels/${cid}/messages`, {
-        query: { cursor: q.data.nextCursor, limit: 50 },
-      });
-      queryClient.setQueryData<MessagesResponse>(["channel", cid, "messages"], (old) =>
-        old
-          ? {
-              items: [...old.items, ...next.items.filter((n) => !old.items.some((o) => o.id === n.id))],
-              nextCursor: next.nextCursor,
-            }
-          : next,
-      );
-    } finally {
-      setLoadingMore(false);
-    }
-  };
-
-  const startDmMutation = useMutation({
-    mutationFn: (target: { agentId: string; taskAgentId?: string }) => {
-      if (teamId && target.taskAgentId) {
-        return api.post<ChannelItem>("/dm-channels", { teamId, teamMemberId: target.taskAgentId });
-      }
-      if (teamId) {
-        return api.post<ChannelItem>("/dm-channels", { teamId, agentId: target.agentId });
-      }
-      return api.post<ChannelItem>("/dm-channels", {
-        taskId,
-        agentId: target.agentId,
-        ...(target.taskAgentId ? { taskAgentId: target.taskAgentId } : {}),
-      });
-    },
-    onSuccess: (channel, variables) => {
-      setDmError(null);
-      const instanceId = (variables as { taskAgentId?: string })?.taskAgentId ?? channel.agentId ?? "";
-      if (instanceId) {
-        setPrivateChannelMap((prev) => {
-          const next = new Map(prev);
-          next.set(instanceId, channel.id);
-          return next;
-        });
-        setActiveTab(`private:${channel.id}`);
-      }
-    },
-    onError: (err) => {
-      setDmError(isApiError(err) ? err.message : "发起私聊失败");
-    },
-  });
-
-  const handleStartDm = (agentId: string, taskAgentId?: string) => {
-    if (startDmMutation.isPending) return;
-    if (taskAgentId) {
-      handlePrivateTab(taskAgentId, agentId);
-      return;
-    }
-    setDmError(null);
-    startDmMutation.mutate({ agentId, taskAgentId });
   };
 
   /* ---------- 5b. 添加实例：POST /tasks/:id/team {addInstances:[{agentId, alias?}]}（T2 后端已就绪） ---------- */
@@ -4023,7 +1318,6 @@ export default function TaskChatPage() {
     onSuccess: (res) => {
       queryClient.setQueryData<TaskDetail>(["task", taskId], res.task);
       queryClient.invalidateQueries({ queryKey: ["task", taskId] });
-      queryClient.invalidateQueries({ queryKey: ["channel", channelId, "messages"] });
     },
   });
 
@@ -4091,81 +1385,7 @@ export default function TaskChatPage() {
     () => new Set(Object.keys(loadingByAgent)),
     [loadingByAgent],
   );
-  /** T6 实例语义：状态 key（instanceId ?? agentId）→ 实例别名（loading/error label 反查用） */
-  const nameByStateKey = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const a of agentMembers) {
-      map.set(a.instanceId ?? a.id, a.name);
-      map.set(a.id, a.name);
-    }
-    return map;
-  }, [agentMembers]);
-  const stateName = useCallback(
-    (key: string) => nameByStateKey.get(key) ?? agentMap.get(key)?.name ?? key,
-    [nameByStateKey, agentMap],
-  );
-  const loadingLabel = useMemo(() => {
-    const entries = Object.entries(loadingByAgent);
-    if (entries.length === 0) return null;
-    const [agentId, phase] = entries[0];
-    const name = stateName(agentId);
-    return phase === "operating" ? `${name} 操作中` : `${name} 思考中`;
-  }, [loadingByAgent, stateName]);
-
-  /** agent.error → 错误态（凭据/配额类硬错误 → 红色升级引导；模型繁忙/超时 → 琥珀重试） */
-  const errorLabel = useMemo<{ kind: "retry" | "quota"; detail: string } | null>(() => {
-    const entries = Object.entries(errorByAgent);
-    if (entries.length === 0) return null;
-    const [agentId, detail] = entries[0];
-    const name = stateName(agentId);
-    const d = detail.toLowerCase();
-    // 可重试：模型繁忙/限流/超时/上下文溢出；凭据/配额/计费类硬错误不可重试（走升级引导）
-    const isRetryable =
-      /model_busy|rate.?limit|timeout|context.?overflow|busy|unavailable|try again/i.test(d) &&
-      !/invalid api key|unauthorized|401|quota|insufficient|billing|credential/i.test(d);
-    return {
-      kind: isRetryable ? "retry" : "quota",
-      detail: isRetryable ? `${name} 处理失败（模型繁忙），自动重试中` : `${name} 处理失败：${detail}`,
-    };
-  }, [errorByAgent, stateName]);
-
-  /** 会话运行状态条（T14）：session.updated status=active/running 的 Agent →「XX 会话运行中…」 */
-  const sessionLabel = useMemo(() => {
-    const entries = Object.entries(sessionByAgent).filter(
-      ([agentId, status]) => (status === "active" || status === "running") && !(agentId in loadingByAgent),
-    );
-    if (entries.length === 0) return null;
-    const [agentId] = entries[0];
-    const name = stateName(agentId);
-    return `${name} 会话运行中`;
-  }, [sessionByAgent, loadingByAgent, stateName]);
-
-  // 首屏加载完成后滚到底（显示最新消息）
-  useEffect(() => {
-    if (messagesQuery.isSuccess) scrollToBottom();
-  }, [messagesQuery.isSuccess, scrollToBottom]);
-
-  // Tab 切换或消息数变化时滚到底（私聊切 Tab 后默认看最新）
-  useEffect(() => {
-    // 延迟到 DOM 更新后
-    const t = setTimeout(scrollToBottom, 50);
-    return () => clearTimeout(t);
-  }, [activeTab, messagesQuery.data?.items?.length, privateMessagesQuery.data?.items?.length, scrollToBottom]);
-
-  const isGroupTab = activeTab === "group";
-  /* ---------- 渲染：加载 / 错误 / 三栏 ---------- */
-  const channelError = teamId ? channelsQuery.isError : legacyChannelsQuery.isError;
-  const channelErrorMsg = teamId ? channelsQuery.error : legacyChannelsQuery.error;
-  const pageError = taskQuery.isError ? (isApiError(taskQuery.error) ? taskQuery.error.message : "加载任务失败")
-    : channelError ? (isApiError(channelErrorMsg) ? (channelErrorMsg as any).message : "加载频道失败")
-    : channelId && channelQuery.isError ? (isApiError(channelQuery.error) ? channelQuery.error.message : "加载团队失败")
-    : isGroupTab
-      ? channelId && messagesQuery.isError
-        ? (isApiError(messagesQuery.error) ? messagesQuery.error.message : "加载消息失败")
-        : null
-      : activePrivateId && privateMessagesQuery.isError
-        ? (isApiError(privateMessagesQuery.error) ? privateMessagesQuery.error.message : "加载私聊消息失败")
-        : null;
+  const pageError = taskQuery.isError ? (isApiError(taskQuery.error) ? taskQuery.error.message : "加载任务失败") : null;
 
   if (!taskId) {
     return <div style={{ padding: space.xl, color: neutral[500] }}>缺少任务 ID</div>;
@@ -4180,15 +1400,7 @@ export default function TaskChatPage() {
       </div>
     );
   }
-  if (!channel) {
-    return (
-      <div data-testid="chat-error" style={{ padding: space.xl, color: neutral[500] }}>
-        该任务暂无群聊频道（channelId 未找到）
-      </div>
-    );
-  }
 
-  const messages = isGroupTab ? (messagesQuery.data?.items ?? []) : (privateMessagesQuery.data?.items ?? []);
   const statusLabel = STATUS_LABEL[task.status] ?? "进行中";
 
   return (
@@ -4203,13 +1415,10 @@ export default function TaskChatPage() {
       }}
     >
       <style>{groupchatCss}</style>
-      <MembersPanel
+      <TeamMembersPanel
         agents={agentMembers}
         loadingAgentIds={loadingAgentIds}
         sessionStatusByAgent={sessionByAgent}
-        startingAgentId={startDmMutation.isPending ? (startDmMutation.variables?.taskAgentId ?? startDmMutation.variables?.agentId ?? null) : null}
-        onStartDm={handleStartDm}
-        dmError={dmError}
         teamEditable={!teamId && (task.status === "pending" || task.status === "in_progress")}
         agentOptions={agentOptions}
         customAgents={customAgents}
@@ -4217,29 +1426,58 @@ export default function TaskChatPage() {
         addError={addError}
         onAddInstance={handleAddInstance}
         width={membersPanel.width}
-        onToggleEnabled={(instanceId, enabled) => toggleEnabledMutation.mutate({ instanceId, enabled })}
-        onResetSession={(instanceId) => resetSessionMutation.mutate(instanceId)}
-        onChangeModel={(instanceId, modelId) => instanceModelMutation.mutate({ instanceId, modelId })}
+        onToggleEnabled={(instanceId: string, enabled: boolean) => toggleEnabledMutation.mutate({ instanceId, enabled })}
+        onResetSession={(instanceId: string) => resetSessionMutation.mutate(instanceId)}
+        onChangeModel={(instanceId: string, modelId: string | null) => instanceModelMutation.mutate({ instanceId, modelId })}
       />
 
       {/* 左侧面板拖拽分隔条（is_0000000017） */}
       <ResizeHandle label="调整成员面板宽度" onResizeStart={membersPanel.onResizeStart} />
 
-      {/* 消息区 */}
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", backgroundColor: neutral[50] }}>
-        <ChatHeader
-        title={team?.name ?? task.title}
-        statusLabel={statusLabel}
-        agents={agentMembers}
-        onRefresh={() => {
-          if (activeTab === "group") {
-            messagesQuery.refetch();
-          } else if (activePrivateId) {
-            privateMessagesQuery.refetch();
-          }
-        }}
-        refreshing={isGroupTab ? messagesQuery.isFetching : privateMessagesQuery.isFetching}
-      />
+      {/* 任务详情区（去聊天化：消息区/MessageInput 已移除，聊天唯一入口为团队会话） */}
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", backgroundColor: neutral[50], overflowY: "auto" }}>
+        <div
+          data-testid="task-detail-header"
+          style={{
+            padding: `${space.lg}px ${space.xl}px`,
+            borderBottom: `1px solid ${neutral[200]}`,
+            backgroundColor: "var(--color-surface)",
+          }}
+        >
+          <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900] }}>
+            {task.title}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginTop: space.sm }}>
+            <span
+              data-testid="status-badge"
+              data-status={statusLabel}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                padding: `${space.xs}px ${space.sm + 2}px`,
+                borderRadius: radius.pill,
+                backgroundColor: "var(--color-neutral-50)",
+                border: "1px solid var(--color-neutral-300)",
+                color: "var(--color-neutral-600)",
+                fontSize: fontSize.sm,
+                fontWeight: 500,
+                lineHeight: 1.4,
+                whiteSpace: "nowrap",
+                ...baseFont,
+              }}
+            >
+              {statusLabel}
+            </span>
+            {task.executionMode === "plan" ? (
+              <span style={{ fontSize: fontSize.xs, color: "#2563EB" }}>计划模式</span>
+            ) : null}
+          </div>
+          {task.description ? (
+            <div style={{ fontSize: fontSize.md, color: neutral[700], lineHeight: 1.6, marginTop: space.sm }}>
+              {task.description}
+            </div>
+          ) : null}
+        </div>
         {teamId && (
           <div
             data-testid="team-session-redirect-banner"
@@ -4276,115 +1514,50 @@ export default function TaskChatPage() {
             </button>
           </div>
         )}
-        {/* 私聊 Tabs（Scheme C）：群聊 + 各实例私聊，同页切换 */}
+        {/* 任务元信息（优先级/创建时间/所属团队/主 Agent/状态操作） */}
         <div
-          data-testid="dm-tabs"
+          data-testid="task-detail-meta"
           style={{
             display: "flex",
-            alignItems: "center",
+            flexDirection: "column",
             gap: space.sm,
-            padding: `${space.sm}px ${space.xl}px`,
+            padding: `${space.lg}px ${space.xl}px`,
             borderBottom: `1px solid ${neutral[200]}`,
             backgroundColor: "var(--color-surface)",
-            overflowX: "auto",
             ...baseFont,
           }}
         >
-          <button
-            type="button"
-            data-testid="dm-tab-group"
-            data-active={activeTab === "group" ? "true" : "false"}
-            onClick={() => setActiveTab("group")}
-            style={{
-              padding: `${space.xs}px ${space.md}px`,
-              borderRadius: radius.pill,
-              border: `1px solid ${activeTab === "group" ? "#2563EB" : neutral[200]}`,
-              backgroundColor: activeTab === "group" ? "#2563EB" : "var(--color-surface)",
-              color: activeTab === "group" ? "#FFFFFF" : neutral[600],
-              fontSize: fontSize.sm,
-              fontWeight: activeTab === "group" ? 600 : 400,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-              flexShrink: 0,
-            }}
-          >
-            群聊
-          </button>
-          {agentMembers.map((m) => {
-            const chanId = privateChannelMap.get(m.instanceId ?? m.id);
-            const isActive = chanId ? activeTab === `private:${chanId}` : false;
-            return (
-              <button
-                key={m.instanceId ?? m.id}
-                type="button"
-                data-testid={`dm-tab-private-${m.instanceId ?? m.id}`}
-                data-active={isActive ? "true" : "false"}
-                onClick={() => handlePrivateTab(m.instanceId ?? m.id, m.id)}
-                style={{
-                  padding: `${space.xs}px ${space.md}px`,
-                  borderRadius: radius.pill,
-                  border: `1px solid ${isActive ? "#2563EB" : neutral[200]}`,
-                  backgroundColor: isActive ? "#2563EB" : "var(--color-surface)",
-                  color: isActive ? "#FFFFFF" : neutral[600],
-                  fontSize: fontSize.sm,
-                  fontWeight: isActive ? 600 : 400,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                  flexShrink: 0,
-                }}
-              >
-                私聊: {m.name}
-              </button>
-            );
-          })}
+          <div style={{ display: "flex", alignItems: "center", gap: space.lg, flexWrap: "wrap", fontSize: fontSize.sm, color: neutral[600] }}>
+            <span>优先级：{task.priority}</span>
+            <span>创建时间：{formatTime(task.createdAt)}</span>
+            <span>所属团队：{team?.name ?? task.teamId ?? "未指派"}</span>
+            <span>主 Agent：{task.mainAgentId ?? "未指定"}</span>
+          </div>
+          <TaskStatusActions taskId={taskId} status={task.status} />
         </div>
-        {pageError && channelId ? (
+        {pageError ? (
           <div data-testid="chat-error" role="alert" style={{ padding: space.xl, color: "#DC2626" }}>
             {pageError}
           </div>
-        ) : activeTab === "group" ? (
-          <MessageList
-            messages={messages}
-            nextCursor={messagesQuery.data?.nextCursor ?? null}
-            loadingMore={loadingMore}
-            agentMap={agentMap}
-            instanceNameById={instanceNameById}
-            onLoadMore={handleLoadMore}
-            loadingLabel={loadingLabel}
-            errorLabel={errorLabel}
-            sessionLabel={sessionLabel}
-            listRef={listRef}
-          />
-        ) : (
-          <MessageList
-            messages={privateMessagesQuery.data?.items ?? []}
-            nextCursor={privateMessagesQuery.data?.nextCursor ?? null}
-            loadingMore={loadingMore}
-            agentMap={agentMap}
-            instanceNameById={instanceNameById}
-            onLoadMore={handleLoadMore}
-            loadingLabel={loadingLabel}
-            errorLabel={errorLabel}
-            sessionLabel={sessionLabel}
-            listRef={listRef}
-          />
-        )}
-        <MentionHint />
-        <MessageInput
-          value={input}
-          onChange={setInput}
-          onSend={handleSend}
-          mentionable={isGroupTab ? mentionable : []}
-          sending={sendMutation.isPending}
-          taskId={taskId}
-          placeholder={
-            isGroupTab
-              ? "输入消息，@ 提及某个 Agent…"
-              : `发送私聊给 ${agentMembers.find((m) => `private:${privateChannelMap.get(m.instanceId ?? m.id)}` === activeTab)?.name ?? "私聊对象"}…`
-          }
-          style={{ border: "none", borderTop: `1px solid ${neutral[200]}`, borderRadius: 0 }}
-        />
-        {/* 执行模式工具栏（消息输入框下方） */}
+        ) : null}
+        {!teamId ? (
+          <div
+            data-testid="task-chat-migrated"
+            style={{
+              margin: `${space.lg}px ${space.xl}px`,
+              padding: `${space.lg}px ${space.xl}px`,
+              borderRadius: radius.md,
+              backgroundColor: "var(--color-surface)",
+              border: `1px solid ${neutral[200]}`,
+              fontSize: fontSize.sm,
+              color: neutral[500],
+              lineHeight: 1.6,
+            }}
+          >
+            该任务尚未指派团队，指派团队后可在团队会话中与团队 Agent 协作。
+          </div>
+        ) : null}
+        {/* 执行模式工具栏（任务详情区底部） */}
         <div
           data-testid="execution-mode-toolbar"
           style={{
@@ -4433,7 +1606,7 @@ export default function TaskChatPage() {
       <ResizeHandle label="调整任务面板宽度" onResizeStart={taskPanel.onResizeStart} />
 
       <div style={{ width: taskPanel.width, flexShrink: 0, display: "flex", flexDirection: "column", overflow: "hidden", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}` }}>
-        <TaskRightTabs team={team} task={task} taskId={taskId} artifactsQuery={artifactsQuery} issuesQuery={issuesQuery} plansQuery={plansQuery} agents={agentMembers} onEditTaskInfo={()=>setTaskEditOpen(true)} onOpenArtifacts={()=>router.push(`/artifacts?pid=${task.projectId}`)} onOpenIssues={()=>router.push(`/issues?taskId=${taskId}`)} onToggleManagedMode={handleToggleManagedMode} onToggleExecutionMode={handleToggleExecutionMode} />
+        <TaskRightTabs team={team} task={task} taskId={taskId} artifactsQuery={artifactsQuery} issuesQuery={issuesQuery} plansQuery={plansQuery} agents={agentMembers} onEditTaskInfo={()=>setTaskEditOpen(true)} onOpenArtifacts={()=>router.push(`/artifacts?pid=${task.projectId}`)} onOpenIssues={()=>router.push(`/issues?taskId=${taskId}`)} onToggleManagedMode={handleToggleManagedMode} onToggleExecutionMode={handleToggleExecutionMode} onOpenArtifactDoc={(a)=>{ const items=(artifactsQuery.data?.items ?? []) as {id:string;title:string}[]; router.push(`/docs/${taskId}?doc=${docIdFor(a.title, a.id, items)}`); }} />
         <div style={{ display: "none" }}>
           <TeamQueueCard team={team} taskId={taskId} />
           <TeamMemoryCard team={team} task={task} />

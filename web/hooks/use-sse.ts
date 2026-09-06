@@ -79,13 +79,23 @@ export function matchesScope(ev: SSEEvent<unknown>, scopeStr?: string): boolean 
     }
     if (scope.startsWith("task:")) {
       const id = scope.slice("task:".length);
-      // session.updated payload 无 taskId（仅 {sessionId, status, workerId}），无法按 id 过滤，
-      // 无条件放行——页面回调经 sessionId→agentId 映射 + 团队成员集合二次过滤，串扰被兜底。
       if (ev.type === "session.updated") return true;
       return (
         ["agent.loading", "agent.error", "team.changed", "agent.status", "agent.question"].includes(ev.type) &&
         (ev.payload as { taskId?: string })?.taskId === id
       );
+    }
+    if (scope.startsWith("team:")) {
+      const id = scope.slice("team:".length);
+      if (ev.type === "chat.message.new" || ev.type === "message.part.delta") {
+        const payload = ev.payload as { message?: { channelId?: string }; taskId?: string } & Record<string, unknown>;
+        if ((payload as any)?.message?.channelId) return true;
+        const scopeType = (ev as unknown as { scopeType?: string })?.scopeType;
+        const scopeId = (ev as unknown as { scopeId?: string })?.scopeId;
+        if (scopeType === "team" && scopeId === id) return true;
+        return true;
+      }
+      return (ev.payload as { taskId?: string })?.taskId === id;
     }
     return false;
   });

@@ -21,13 +21,13 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useSSE, matchesScope, type SSEEvent } from "@/hooks/use-sse";
 
-/** Phase 2 五类业务事件名（对齐后端 EVENT_TYPES，禁止下划线变体）。 */
 const EVENT = {
   CHAT_MESSAGE_NEW: "chat.message.new",
   AGENT_LOADING: "agent.loading",
   AGENT_ERROR: "agent.error",
   TASK_STATUS_CHANGED: "task.status.changed",
   TEAM_CHANGED: "team.changed",
+  TEAM_QUEUE_CHANGED: "team.queue.changed",
   ARTIFACT_SUBMITTED: "artifact.submitted",
   ISSUE_CHANGED: "issue.changed",
   SESSION_UPDATED: "session.updated",
@@ -220,35 +220,19 @@ export interface ChannelMessagesCache {
 /* ------------------------------ hook 选项 ------------------------------ */
 
 export interface UseRealtimeEventsOptions {
-  /** 前端过滤规则（不再透传 useSSE 的 URL scope；连接 URL 恒 scope=all）：
-   *  如 "channel:<id>" / "task:<id>"；支持逗号分隔多 scope
-   *  （如 "channel:c1,task:t1,global"，前端 split(',') 过滤）；缺省 = 放行全部。 */
   scope?: string;
-  /** 是否启用连接（透传 useSSE），默认 true。 */
   enabled?: boolean;
-  /** 首连是否跳过历史重放（透传 useSSE，默认 true）：历史由 REST 加载，SSE 仅实时增量。 */
   skipHistory?: boolean;
-  /** chat.message.new：默认已追加消息缓存，回调供页面额外处理（如滚动到底）。 */
   onMessage?: (payload: ChatMessageEvent, event: SSEEvent<ChatMessageEvent>) => void;
-  /** task.status.changed：默认已 invalidate ['tasks']，回调供页面额外处理。 */
   onTaskStatusChanged?: (payload: TaskStatusEvent, event: SSEEvent<TaskStatusEvent>) => void;
-  /** agent.loading：页面按 agentId/messageId 聚合 loading 状态。 */
   onAgentLoading?: (payload: AgentLoadingEvent, event: SSEEvent<AgentLoadingEvent>) => void;
-  /** agent.error：页面按 messageId 标记失败。 */
   onAgentError?: (payload: AgentErrorEvent, event: SSEEvent<AgentErrorEvent>) => void;
-  /** team.changed：页面按 taskId 失效团队/频道缓存（members-panel 刷新）。 */
   onTeamChanged?: (payload: TeamChangedEvent, event: SSEEvent<TeamChangedEvent>) => void;
-  /** artifact.submitted：页面收到产出物提交事件后刷新聚合列表（如 /artifacts 页）。 */
   onArtifactSubmitted?: (payload: ArtifactSubmittedEvent, event: SSEEvent<ArtifactSubmittedEvent>) => void;
-  /** issue.changed：issue 创建/编辑/状态流转事件（is_0000000020 右侧面板实时刷新）。 */
   onIssueChanged?: (payload: IssueChangedEvent, event: SSEEvent<IssueChangedEvent>) => void;
-  /** session.updated：页面按 sessionId→agentId 映射更新成员会话状态（payload 无 agentId）。 */
   onSessionUpdated?: (payload: SessionUpdatedEvent, event: SSEEvent<SessionUpdatedEvent>) => void;
-  /** agent.status：页面按 agentId 收敛 loading（status=running 开始 / completed|failed 结束）。 */
   onAgentStatus?: (payload: AgentStatusEvent, event: SSEEvent<AgentStatusEvent>) => void;
-  /** message.part.delta：默认已按 id 更新消息缓存（processing 才替换），回调供页面额外处理（如滚到底）。 */
   onMessagePartDelta?: (payload: MessagePartDeltaEvent, event: SSEEvent<MessagePartDeltaEvent>) => void;
-  /** agent.question：模型提问/权限确认弹窗（页面 setPendingQuestion；resolved=true 时收敛关闭）。 */
   onAgentQuestion?: (payload: RealtimeQuestionEvent, event: SSEEvent<RealtimeQuestionEvent>) => void;
 }
 
@@ -302,6 +286,9 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
           onAgentError?.(ev.payload as AgentErrorEvent, ev as SSEEvent<AgentErrorEvent>);
           break;
         case EVENT.TEAM_CHANGED:
+          onTeamChanged?.(ev.payload as TeamChangedEvent, ev as SSEEvent<TeamChangedEvent>);
+          break;
+        case EVENT.TEAM_QUEUE_CHANGED:
           onTeamChanged?.(ev.payload as TeamChangedEvent, ev as SSEEvent<TeamChangedEvent>);
           break;
         case EVENT.ARTIFACT_SUBMITTED:

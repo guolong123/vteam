@@ -18,7 +18,8 @@ app/
 ├── login/  register/          # 认证
 ├── page.tsx                   # 首页
 └── (main)/                    # 主应用（登录后）
-    ├── tasks/                 # 任务列表 / 创建 / 详情（看板、团队成员与实例）
+    ├── tasks/                 # 任务创建 / 详情（去聊天化详情页 + 任务详情抽屉；协作请走团队会话）
+    ├── teams/[id]/session/     # 团队会话（唯一聊天入口：群聊 + 私聊 + 成员管理 + 右侧三 Tab）
     ├── messages/              # 群聊 / 私聊（SSE 流式输出）
     ├── issues/                # Issue 列表与管理
     ├── board/                 # 任务看板

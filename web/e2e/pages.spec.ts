@@ -54,6 +54,31 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     }
   });
 
+  test("4b/17 board-drawer 看板卡片开抽屉不进聊天", async ({ page, request }) => {
+    // 空库时自建一个看板任务夹具（Bearer 同 7/17 原因）
+    const cards = page.getByTestId("task-card");
+    await page.goto("/board?pid=p_seed_1");
+    await expectNavShell(page);
+    if ((await cards.count()) === 0) {
+      const login = await request.post("/api/v1/auth/login", {
+        data: { username: "seed-admin", password: "Admin@123456" },
+      });
+      const { accessToken } = await login.json();
+      await request.post("/api/v1/projects/p_seed_1/tasks", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        data: { teamId: "tm_0000000001", title: "e2e-BoardDrawer", priority: "medium" },
+      });
+      await page.reload();
+    }
+    await page.getByTestId("task-card").first().click();
+    await expect(page.getByTestId("task-detail-drawer")).toBeVisible();
+    // 卡片点击不再跳转 /tasks/:id
+    expect(page.url()).toContain("/board");
+    await expect(page.getByTestId("enter-team-session-drawer")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("task-detail-drawer")).toHaveCount(0);
+  });
+
   test("5/17 agent-config /agents", async ({ page }) => {
     await page.goto("/agents");
     await expectNavShell(page);
@@ -78,17 +103,59 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     }
   });
 
-  test("7/17 group-chat /tasks/t_0000000001", async ({ page }) => {
-    await page.goto("/tasks/t_0000000001");
+  test("7/17 task-detail（去聊天化详情页，自建任务夹具）", async ({ page, request }) => {
+    // API 夹具需显式 Bearer（浏览器登录态 token 在 localStorage，request 上下文不共享）
+    const login = await request.post("/api/v1/auth/login", {
+      data: { username: "seed-admin", password: "Admin@123456" },
+    });
+    const { accessToken } = await login.json();
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    let detailId: string | null = null;
+    const created = await request.post("/api/v1/projects/p_seed_1/tasks", {
+      headers,
+      data: { teamId: "tm_0000000001", title: "e2e-TaskDetail", description: "qa smoke", priority: "medium" },
+    });
+    if (created.ok()) {
+      detailId = ((await created.json()) as { id: string }).id;
+    } else {
+      const list = await request.get("/api/v1/projects/p_seed_1/tasks", { headers, params: { pageSize: 1 } });
+      detailId = (((await list.json()) as { items: { id: string }[] }).items ?? [])[0]?.id ?? null;
+    }
+    expect(detailId).toBeTruthy();
+    await page.goto(`/tasks/${detailId}`);
     await expectNavShell(page);
     await expect(page.getByTestId("group-chat-root")).toBeVisible();
     await expect(page.getByTestId("members-panel")).toBeVisible();
     await expect(page.getByTestId("member-item").first()).toBeVisible();
+    await expect(page.getByTestId("task-detail-header")).toBeVisible();
+    await expect(page.getByTestId("task-detail-meta")).toBeVisible();
+    await expect(page.getByTestId("execution-mode-toolbar")).toBeVisible();
+    // 聊天区已移除：无消息列表与输入框
+    await expect(page.getByTestId("chat-message-list")).toHaveCount(0);
+  });
+
+  test("7b/17 team-session /teams/tm_0000000001/session（团队唯一聊天入口）", async ({ page }) => {
+    await page.goto("/teams/tm_0000000001/session");
+    await expectNavShell(page);
+    await expect(page.getByTestId("team-session-root")).toBeVisible();
+    await expect(page.getByTestId("members-panel")).toBeVisible();
+    await expect(page.getByTestId("dm-tabs")).toBeVisible();
+    await expect(page.getByTestId("dm-tab-group")).toBeVisible();
     await expect(page.getByTestId("chat-message-list")).toBeVisible();
-    await expect(page.getByTestId("task-info-panel")).toBeVisible();
-    await expect(page.getByTestId("execution-mode-badge")).toBeVisible();
-    await expect(page.getByTestId("execution-mode-toggle")).toBeVisible();
-    await expect(page.getByTestId("plan-section")).toContainText("暂无执行计划");
+    // 私聊 Tab：点击成员私聊按钮进入 private: 频道
+    const privates = page.locator('[data-testid^="dm-tab-private-"]');
+    if ((await privates.count()) > 0) {
+      await privates.first().click();
+      await expect(page.getByTestId("chat-message-list")).toBeVisible();
+      await page.getByTestId("dm-tab-group").click();
+    }
+    // 右侧三 Tab（有进行中任务时渲染）
+    if ((await page.getByTestId("right-tab-status").count()) > 0) {
+      await expect(page.getByTestId("right-tab-config")).toBeVisible();
+      await expect(page.getByTestId("right-tab-output")).toBeVisible();
+      await page.getByTestId("right-tab-output").click();
+      await page.getByTestId("right-tab-status").click();
+    }
   });
 
   test("8-10/17 导航变体（AppShell 融合导航承载）", async ({ page }) => {

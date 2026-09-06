@@ -101,6 +101,7 @@ const CONTENT_LEFT_PAD = RAIL_W + 24;
 /** 导航 key → 路由路径（与 NAV_ITEMS 对齐） */
 const KEY_TO_PATH: Record<string, string> = {
   project: "/projects",
+  teams: "/teams",
   issues: "/issues",
   agents: "/agents",
   workers: "/workers",
@@ -135,7 +136,7 @@ const KEY_LOOKUP: Record<string, string> = {
 /** 非导航页（无 Dock key）的标题兜底：全路径 → 页面标题 */
 const EXTRA_PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   "/tasks/new": { title: "创建任务", subtitle: "提交需求，组建虚拟 AI 团队" },
-  "/tasks/[id]": { title: "任务群聊", subtitle: "与任务团队实时协作" },
+  "/tasks/[id]": { title: "任务详情", subtitle: "查看任务信息与进展，协作请前往团队会话" },
   "/messages/[id]": { title: "私聊", subtitle: "与 Agent 一对一对话" },
   "/workers/[id]": { title: "Worker 详情", subtitle: "查看节点能力与运行状态" },
   "/tools/register": { title: "注册工具", subtitle: "登记工具 manifest 并绑定执行方式" },
@@ -144,6 +145,7 @@ const EXTRA_PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
 /** 命令面板「导航」组 label → 路由路径 */
 const CMDK_NAV_PATH: Record<string, string> = {
   切换项目: "/projects",
+  团队管理: "/teams",
   "Issue 管理": "/issues",
   "Agent 管理": "/agents",
   "Worker 节点": "/workers",
@@ -158,12 +160,14 @@ const CMDK_NAV_PATH: Record<string, string> = {
 };
 
 /**
- * 导航 key → 可见性判定（对齐后端守卫语义，ISSUE-005）：
+ * 导航 key → 可见性判定（对齐后端守卫语义，ISSUE-005 + Task 14 全局团队）：
  * - 无条目的 key（project/models/messages）→ 后端无权限点（登录即可 / 成员只读），始终显示；
- * - agents/workers/skills → 矩阵 view 权限点（PermissionGuard）；
+ * - teams/agents/workers/skills → 矩阵 view 权限点（PermissionGuard teams:view 等）；
  * - users/roles → AdminGuard 语义（all:true 或 users.manage）。
+ * 全局 team ≠ 开放：仍需 PermissionGuard teams:view，未授权限的不显示入口（后端同 403）。
  */
 const NAV_VISIBLE: Record<string, (perms: RolePermissions) => boolean> = {
+  teams: (p) => hasPermission(p, "teams"),
   agents: (p) => hasPermission(p, "agents"),
   workers: (p) => hasPermission(p, "workers"),
   skills: (p) => hasPermission(p, "skills"),
@@ -172,7 +176,7 @@ const NAV_VISIBLE: Record<string, (perms: RolePermissions) => boolean> = {
   memories: isPlatformAdmin,
 };
 
-/** 路由首段 → 访问所需判定（与导航过滤同源；/tools 属 skills 资源；无条目 = 登录即可） */
+/** 路由首段 → 访问所需判定（与导航过滤同源；/tools 属 skills 资源；无条目 = 登录即可，teams 走 teams:view） */
 const ROUTE_GUARD: Record<string, (perms: RolePermissions) => boolean> = {
   ...NAV_VISIBLE,
   tools: (p) => hasPermission(p, "skills"),
@@ -203,6 +207,7 @@ interface WorkerSummaryRow {
 /** 页面标题（顶栏左侧，无面包屑时展示；对齐各页原型 NavTopBar） */
 const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   project: { title: "项目列表", subtitle: "选择项目进入 AI 协作工作区" },
+  teams: { title: "团队管理", subtitle: "全局团队 · 成员多实例 · 队列与会话复用" },
   board: { title: "任务看板", subtitle: "" },
   issues: { title: "Issue 管理", subtitle: "任务内 issue 协作与状态流转" },
   agents: { title: "Agent 管理", subtitle: "配置角色、技能与权限" },
@@ -217,7 +222,7 @@ const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   memories: { title: "记忆管理", subtitle: "查看与管理 Agent 记忆" },
 };
 
-/** 动态段路由优先判定：/tasks/:id（非 /tasks/new）→ 任务群聊；/messages/:id → 私聊；/workers/:id → Worker 详情 */
+/** 动态段路由优先判定：/tasks/:id（非 /tasks/new）→ 任务详情；/messages/:id → 私聊；/workers/:id → Worker 详情 */
 function resolvePageTitle(pathname: string): { title: string; subtitle: string } {
   const parts = pathname.split("/").filter(Boolean);
   if (parts[0] === "tasks" && parts.length === 2 && parts[1] !== "new") {
