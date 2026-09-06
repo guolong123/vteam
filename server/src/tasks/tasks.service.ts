@@ -48,6 +48,7 @@ const ID_PREFIX = {
   taskEvent: 'te',
   message: 'm',
   session: 's',
+  teamQueue: 'tq',
 } as const;
 
 /** 角色中文名映射（seed 模板 agent.role → 中文名；未知角色回退 agent.name，FR-08 别名默认规则）。 */
@@ -102,6 +103,8 @@ type TaskRow = {
   managedMode: boolean;
   executionMode: string;
   backgroundDocs: Prisma.JsonValue | null;
+  resetAfterComplete?: boolean | null;
+  teamId?: string | null;
   createdBy: string;
   createdAt: Date;
   startedAt: Date | null;
@@ -185,175 +188,354 @@ export class TasksService implements OnModuleInit {
     await this.seedPrefix(ID_PREFIX.taskEvent, this.prisma.taskEvent);
     await this.seedPrefix(ID_PREFIX.message, this.prisma.message);
     await this.seedPrefix(ID_PREFIX.session, this.prisma.session);
+    await this.seedPrefix(ID_PREFIX.teamQueue, (this.prisma as any).teamQueue as SeqModel);
   }
 
   /**
-   * 创建任务（13 篇 §4.1）：
-   * 同事务完成 任务 + 群聊频道(task_group) + 虚拟团队(task_agents) + 独立会话(sessions，10 篇 §3.3
-   * 「每 Agent 每任务一个独立会话」) + 状态事件(task_events)，
-   * 事务提交后广播 task.status.changed（先落库后转发，08 篇 §7.3）。
+   * 创建任务（vteam-team-refactor：指派团队 + FIFO 串行排队，双保险行锁+版本CAS重试3次）。
+   * 事务内：SELECT team FOR UPDATE + version CAS → 校验 team+projectMember（弥补全局泄漏）
+   * → 空闲则 currentTaskId=新task pending，否则 TeamQueue position MAX+1 queued
+   * → 快照 TeamMember→TaskAgent/Session（含 reuseSession 快照，teamMemberId 分区）
+   * → Message.taskId 分区（本期仅任务侧，后续 ChatService 复用 team_group 时带 taskId 分隔）
+   * → 广播 TASK_STATUS_CHANGED + TEAM_QUEUE_CHANGED。
    */
   async create(pid: string, userId: string, dto: CreateTaskDto) {
     if (!dto.title || dto.title.trim().length === 0) {
       throw new BadRequestException('任务标题不能为空');
     }
-    const agents = dto.agents ?? [];
-    if (agents.length === 0) {
+    const teamIdRaw = (dto as any).teamId;
+    if (!teamIdRaw || typeof teamIdRaw !== 'string' || teamIdRaw.trim().length === 0) {
       throw new BadRequestException({
-        code: TASK_ERRORS.TASK_EMPTY_TEAM,
-        message: '任务团队不能为空，请至少添加一个 Agent 实例',
+        code: TASK_ERRORS.TEAM_REQUIRED,
+        message: 'teamId 必填，请选择团队',
       });
     }
-    if (dto.mainAgentId && !agents.some((a) => a.agentId === dto.mainAgentId)) {
-      throw new BadRequestException({
-        code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
-        message: '主 Agent 必须在团队实例内',
+    const teamId = teamIdRaw.trim();
+
+    // 全局≠开放：项目成员校验（弥补全局团队泄漏）
+    const pm = await this.prisma.projectMember.findUnique({
+      where: { projectId_userId: { projectId: pid, userId } },
+    } as any);
+    if (!pm) {
+      throw new ForbiddenException({
+        code: 'PERMISSION_PROJECT_NOT_MEMBER',
+        message: '您不是该项目成员',
       });
     }
 
-    const taskId = await this.idGen.nextId(ID_PREFIX.task);
-    const instances: TaskAgentInstance[] = [];
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const taskId = await this.idGen.nextId(ID_PREFIX.task);
+      let createdStatus: string = TASK_STATUS.pending;
+      let queuePosition: number | null = null;
+      let createdTask: any = null;
+      try {
+        createdTask = await this.prisma.$transaction(async (tx: any) => {
+          // 行锁：SELECT team FOR UPDATE（双保险之一）
+          let team: any = null;
+          try {
+            const rows: any[] = await tx.$queryRawUnsafe(
+              'SELECT id, version, current_task_id as currentTaskId, reuse_session as reuseSession, main_agent_member_id as mainAgentMemberId FROM teams WHERE id = ? FOR UPDATE',
+              teamId,
+            );
+            if (rows && rows.length > 0) {
+              const r = rows[0];
+              const full = await tx.team.findUnique({ where: { id: teamId } });
+              team = full
+                ? { ...full, version: r.version, currentTaskId: r.currentTaskId, reuseSession: !!r.reuseSession, mainAgentMemberId: r.mainAgentMemberId ?? (full as any).mainAgentMemberId ?? null }
+                : { id: r.id, version: r.version, currentTaskId: r.currentTaskId, reuseSession: !!r.reuseSession, mainAgentMemberId: r.mainAgentMemberId ?? null };
+            } else {
+              team = await tx.team.findUnique({ where: { id: teamId } });
+            }
+          } catch {
+            team = await tx.team.findUnique({ where: { id: teamId } });
+          }
+          if (!team) {
+            throw new NotFoundException({
+              code: TASK_ERRORS.TEAM_NOT_FOUND,
+              message: `团队 ${teamId} 不存在`,
+            });
+          }
 
-    const task = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.task.create({
-        data: {
-          id: taskId,
-          projectId: pid,
-          title: dto.title.trim(),
-          description: dto.description?.trim() || null,
-          priority: dto.priority ?? TASK_PRIORITY.medium,
-          status: TASK_STATUS.pending,
-          // 主实例在实例创建后解析（mainAgentInstanceId 需校验属于创建集合），先空置再更新
-          mainAgentId: null,
-          mainAgentInstanceId: null,
-          managedMode: dto.managedMode ?? false,
-          // 执行模式（tc-flow）：缺省 direct（迁移列 @default("direct") 兜底）；与托管模式独立生效
-          executionMode: dto.executionMode ?? EXECUTION_MODES.direct,
-          backgroundDocs: (dto.backgroundDocs ?? []) as Prisma.InputJsonValue,
-          createdBy: userId,
-          version: 0,
-        },
-      });
+          // 队首活跃判定：currentTaskId 非空即忙（queued/in_progress/pending 都算忙，避免两人同时抢队首）
+          const isIdle = !team.currentTaskId;
 
-      // 群聊频道（type=task_group；uk_channels_task_agent 唯一约束对 agent_id=null 不冲突）
-      await tx.chatChannel.create({
-        data: {
-          id: await this.idGen.nextId(ID_PREFIX.channel),
-          type: CHANNEL_TYPE.task_group,
-          taskId,
-          agentId: null,
-        },
-      });
+          // 行锁：SELECT MAX(position) FOR UPDATE（FIFO 位置双保险）
+          let maxPos = 0;
+          if (!isIdle) {
+            try {
+              const qRows: any[] = await tx.$queryRawUnsafe(
+                'SELECT MAX(position) as maxPos FROM team_queues WHERE team_id = ? FOR UPDATE',
+                teamId,
+              );
+              const v = qRows?.[0]?.maxPos;
+              maxPos = typeof v === 'number' ? v : v != null ? Number(v) : 0;
+              if (!Number.isFinite(maxPos)) maxPos = 0;
+            } catch {
+              try {
+                const agg = await tx.teamQueue.aggregate({
+                  _max: { position: true },
+                  where: { teamId },
+                });
+                maxPos = agg._max.position ?? 0;
+              } catch {
+                maxPos = 0;
+              }
+            }
+          }
 
-      // 团队实例：每个 agents 项创建 TaskAgent（seq = 该 taskId+agentId 已用最大 seq+1，
-      // 事务内防并发重号，uk_task_agents_task_agent_seq 唯一键兜底）+ 独立会话绑实例
-      for (const item of agents) {
-        const agent = await tx.agent.findUnique({
-          where: { id: item.agentId },
-          select: { id: true, name: true, role: true },
-        });
-        if (!agent) {
-          throw new NotFoundException({
-            code: TASK_ERRORS.AGENT_NOT_FOUND,
-            message: `Agent ${item.agentId} 不存在`,
+          const status = isIdle ? TASK_STATUS.pending : TASK_STATUS.queued;
+          createdStatus = status;
+          queuePosition = isIdle ? null : maxPos + 1;
+
+          const members: any[] = await tx.teamMember.findMany({
+            where: { teamId },
+            include: { agent: { select: { id: true, name: true, role: true } } },
           });
+          if (!members || members.length === 0) {
+            throw new BadRequestException({
+              code: TASK_ERRORS.TASK_EMPTY_TEAM,
+              message: '团队成员为空，无法创建任务',
+            });
+          }
+
+          const created = await tx.task.create({
+            data: {
+              id: taskId,
+              projectId: pid,
+              title: dto.title.trim(),
+              description: dto.description?.trim() || null,
+              priority: dto.priority ?? TASK_PRIORITY.medium,
+              status,
+              teamId,
+              mainAgentId: null,
+              mainAgentInstanceId: null,
+              managedMode: dto.managedMode ?? false,
+              executionMode: dto.executionMode ?? EXECUTION_MODES.direct,
+              backgroundDocs: (dto.backgroundDocs ?? []) as Prisma.InputJsonValue,
+              resetAfterComplete: (dto as any).resetAfterComplete ?? false,
+              createdBy: userId,
+              version: 0,
+            },
+          });
+
+          try {
+            const txChat: any = (tx as any).chatChannel;
+            if (txChat?.findFirst) {
+              const existing: any = await txChat
+                .findFirst({ where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null } })
+                .catch(() => null);
+              if (!existing) {
+                const legacy: any = await txChat
+                  .findFirst({ where: { teamId } })
+                  .catch(() => null);
+                if (!legacy) {
+                  try {
+                    await txChat.create({
+                      data: {
+                        id: await this.idGen.nextId(ID_PREFIX.channel),
+                        type: CHANNEL_TYPE.team_group,
+                        teamId,
+                        teamGroupKey: teamId,
+                        taskId: null,
+                      },
+                    });
+                  } catch {}
+                } else if (legacy.type === CHANNEL_TYPE.task_group || !legacy.teamGroupKey) {
+                  try {
+                    await txChat.update({
+                      where: { id: legacy.id },
+                      data: { teamId, type: CHANNEL_TYPE.team_group, teamGroupKey: teamId, taskId: null },
+                    });
+                  } catch {}
+                }
+              } else if (!existing.teamGroupKey) {
+                try {
+                  await txChat.update({ where: { id: existing.id }, data: { teamGroupKey: teamId } });
+                } catch {}
+              }
+            }
+          } catch {}
+
+          const memberToTa = new Map<string, string>();
+          for (const m of members) {
+            const taId = await this.idGen.nextId(ID_PREFIX.taskAgent);
+            await tx.taskAgent.create({
+              data: {
+                id: taId,
+                taskId,
+                agentId: m.agentId,
+                alias: m.alias,
+                seq: m.seq,
+                workDir: m.workDir,
+              },
+            });
+            memberToTa.set(m.id, taId);
+            await tx.session.create({
+              data: {
+                id: await this.idGen.nextId(ID_PREFIX.session),
+                taskId,
+                taskAgentId: taId,
+                agentId: m.agentId,
+                teamMemberId: m.id,
+                status: SESSION_STATUS.created,
+              },
+            });
+          }
+          if ((team as any).mainAgentMemberId) {
+            const mainMember = members.find((m: any) => m.id === (team as any).mainAgentMemberId);
+            if (mainMember) {
+              const taId = memberToTa.get(mainMember.id);
+              if (taId) {
+                await tx.task.update({
+                  where: { id: taskId },
+                  data: { mainAgentInstanceId: taId, mainAgentId: mainMember.agentId },
+                });
+              }
+            }
+          }
+
+          // FIFO + 版本双保险
+          if (isIdle) {
+            const upd: any = await tx.team.updateMany({
+              where: { id: teamId, version: team.version },
+              data: { currentTaskId: taskId, version: { increment: 1 } },
+            });
+            if (upd.count === 0) {
+              throw new ConflictException({
+                code: 'VERSION_CONFLICT',
+                message: '团队并发冲突，请重试',
+              });
+            }
+          } else {
+            await tx.teamQueue.create({
+              data: {
+                id: await this.idGen.nextId(ID_PREFIX.teamQueue),
+                teamId,
+                taskId,
+                position: queuePosition!,
+              },
+            });
+            const upd: any = await tx.team.updateMany({
+              where: { id: teamId, version: team.version },
+              data: { version: { increment: 1 } },
+            });
+            if (upd.count === 0) {
+              throw new ConflictException({
+                code: 'VERSION_CONFLICT',
+                message: '团队并发冲突，请重试',
+              });
+            }
+          }
+
+          await tx.taskEvent.create({
+            data: {
+              id: await this.idGen.nextId(ID_PREFIX.taskEvent),
+              taskId,
+              eventType: 'status_change',
+              fromStatus: null,
+              toStatus: status,
+              actorType: ACTOR_TYPE.user,
+              actorId: userId,
+            },
+          });
+
+          return created;
+        });
+
+        await this.realtime.broadcast(
+          EVENT_TYPES.TASK_STATUS_CHANGED,
+          {
+            taskId,
+            from: null,
+            to: createdStatus,
+            actorType: ACTOR_TYPE.user,
+            actorId: userId,
+          },
+          { type: 'global' },
+        );
+        await this.realtime.broadcast(
+          EVENT_TYPES.TEAM_QUEUE_CHANGED,
+          {
+            teamId,
+            taskId,
+            status: createdStatus,
+            position: queuePosition,
+          },
+          { type: 'team', id: teamId },
+        );
+
+        const fresh = await this.prisma.task.findUnique({
+          where: { id: taskId },
+          include: TASK_AGENTS_INCLUDE,
+        });
+        return this.toTaskDto(fresh ?? createdTask);
+      } catch (e: any) {
+        const code = (e?.getResponse?.() as any)?.code;
+        const isVersionConflict = e instanceof ConflictException && code === 'VERSION_CONFLICT';
+        if (isVersionConflict && attempt < 2) {
+          lastError = e;
+          continue;
         }
-        const max = await tx.taskAgent.aggregate({
-          _max: { seq: true },
-          where: { taskId, agentId: item.agentId },
-        });
-        const seq = (max._max.seq ?? 0) + 1;
-        const alias = item.alias?.trim() || this.defaultAlias(agent, seq);
-        const workDir =
-          item.workDir?.trim() || this.defaultAgentWorkDir(agent, seq);
-        const ta = await tx.taskAgent.create({
-          data: {
-            id: await this.idGen.nextId(ID_PREFIX.taskAgent),
-            taskId,
-            agentId: item.agentId,
-            alias,
-            seq,
-            workDir,
-          },
-        });
-        // 每实例每任务独立会话（10 篇 §3.3 / plan §6 T12「新会话创建」）：
-        // 无会话行 → @ 解析 no_session 不分派，mock 回复永不回流（M2 验收阻断项）。
-        await tx.session.create({
-          data: {
-            id: await this.idGen.nextId(ID_PREFIX.session),
-            taskId,
-            taskAgentId: ta.id,
-            agentId: item.agentId,
-            status: SESSION_STATUS.created,
-          },
-        });
-        instances.push({
-          id: ta.id,
-          agentId: item.agentId,
-          alias,
-          seq,
-          workDir,
-          removedAt: null,
-          agent,
-        });
+        throw e;
       }
+    }
+    throw lastError ?? new ConflictException('创建任务并发冲突，请重试');
+  }
 
-      // 主实例解析：入参 mainAgentInstanceId 优先 → mainAgentId 映射该 agent 第一个实例 → null；
-      // mainAgentInstanceId 必须属于本次创建实例集合（FR-08）。
-      let mainInstanceId = dto.mainAgentInstanceId ?? null;
-      if (!mainInstanceId && dto.mainAgentId) {
-        mainInstanceId =
-          instances.find((i) => i.agentId === dto.mainAgentId)?.id ?? null;
+  /**
+   * 事务内拉起队首（FOR UPDATE 双保险）：
+   * SELECT team FOR UPDATE → 队首 queued→pending → TeamQueue 删除队首并重排剩余 position → currentTaskId 指向队首或 null → 广播 TEAM_QUEUE_CHANGED。
+   * 由 accept/archive/reject 的 afterCommit 在同一事务内调用，亦可独立调用（独立事务兜底）。
+   */
+  private async promoteNextInTx(tx: any, teamId: string): Promise<void> {
+    let team: any = null;
+    try {
+      const rows: any[] = await tx.$queryRawUnsafe('SELECT id, version FROM teams WHERE id = ? FOR UPDATE', teamId);
+      team = rows?.[0] ? await tx.team.findUnique({ where: { id: teamId } }) : await tx.team.findUnique({ where: { id: teamId } });
+      if (team && rows?.[0]) team.version = rows[0].version;
+    } catch {
+      team = await tx.team.findUnique({ where: { id: teamId } });
+    }
+    if (!team) return;
+    let next: any = null;
+    try {
+      const qRows: any[] = await tx.$queryRawUnsafe('SELECT task_id as taskId, position FROM team_queues WHERE team_id = ? ORDER BY position ASC LIMIT 1 FOR UPDATE', teamId);
+      if (qRows?.[0]?.taskId) next = { taskId: qRows[0].taskId };
+      else next = await tx.teamQueue.findFirst({ where: { teamId }, orderBy: { position: 'asc' } });
+    } catch {
+      next = await tx.teamQueue.findFirst({ where: { teamId }, orderBy: { position: 'asc' } });
+    }
+    if (next) {
+      await tx.team.updateMany({ where: { id: teamId, version: team.version }, data: { currentTaskId: next.taskId, version: { increment: 1 } } });
+      await tx.task.updateMany({ where: { id: next.taskId, status: TASK_STATUS.queued }, data: { status: TASK_STATUS.pending } });
+      await tx.teamQueue.deleteMany({ where: { taskId: next.taskId } });
+      // 重排剩余队列 position 连续化（删除队首后剩余按原 position 升序重编号 1..N）
+      try {
+        const remaining: any[] = await tx.teamQueue.findMany({ where: { teamId }, orderBy: { position: 'asc' } });
+        for (let i = 0; i < remaining.length; i++) {
+          const expected = i + 1;
+          if (remaining[i].position !== expected) {
+            await tx.teamQueue.update({ where: { id: remaining[i].id }, data: { position: expected } });
+          }
+        }
+      } catch {
+        // sqlite fallback 无碍，position 仍可用 MAX+1 保持 FIFO
       }
-      if (mainInstanceId && !instances.some((i) => i.id === mainInstanceId)) {
-        throw new BadRequestException({
-          code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
-          message: '主 Agent 必须是团队内实例',
-        });
-      }
-      const mainAgentId =
-        instances.find((i) => i.id === mainInstanceId)?.agentId ?? null;
-      await tx.task.update({
-        where: { id: taskId },
-        data: { mainAgentId, mainAgentInstanceId: mainInstanceId },
-      });
+      await this.realtime.broadcast(EVENT_TYPES.TEAM_QUEUE_CHANGED, { teamId, taskId: next.taskId, status: 'promoted', action: 'promote' }, { type: 'team', id: teamId } as any);
+    } else {
+      await tx.team.updateMany({ where: { id: teamId, version: team.version }, data: { currentTaskId: null, version: { increment: 1 } } });
+      await this.realtime.broadcast(EVENT_TYPES.TEAM_QUEUE_CHANGED, { teamId, action: 'idle' }, { type: 'team', id: teamId } as any);
+    }
+  }
 
-      // 创建即入待开始：事件 from=null → pending（08 篇 §6.1）
-      await tx.taskEvent.create({
-        data: {
-          id: await this.idGen.nextId(ID_PREFIX.taskEvent),
-          taskId,
-          eventType: 'status_change',
-          fromStatus: null,
-          toStatus: TASK_STATUS.pending,
-          actorType: ACTOR_TYPE.user,
-          actorId: userId,
-        },
-      });
-
-      return created;
+  /**
+   * 拉起队首（独立事务入口，供外部直接调用；事务内复用 promoteNextInTx）。
+   */
+  async promoteNext(teamId: string): Promise<void> {
+    await this.prisma.$transaction(async (tx: any) => {
+      await this.promoteNextInTx(tx, teamId);
     });
-
-    // 先落库后转发：广播失败不影响事务结果，前端可经 since 补拉。
-    // task.status.changed 走 global 广播（09 篇 §4.1「不传 scope 推送全局广播（任务状态变更等）」），
-    // 看板 / 任务页均可用无 scope / scope=global 订阅接收。
-    await this.realtime.broadcast(
-      EVENT_TYPES.TASK_STATUS_CHANGED,
-      {
-        taskId,
-        from: null,
-        to: TASK_STATUS.pending,
-        actorType: ACTOR_TYPE.user,
-        actorId: userId,
-      },
-      { type: 'global' },
-    );
-
-    const fresh = await this.prisma.task.findUnique({
-      where: { id: taskId },
-      include: TASK_AGENTS_INCLUDE,
-    });
-    return this.toTaskDto(fresh ?? { ...task, taskAgents: instances });
   }
 
   /** 看板列表：五态/优先级筛选 + 分页（page 默认 1、pageSize 默认 20 上限 100），created_at desc。 */
@@ -428,6 +610,9 @@ export class TasksService implements OnModuleInit {
     }
     if (dto.managedMode !== undefined) {
       data.managedMode = dto.managedMode;
+    }
+    if ((dto as any).resetAfterComplete !== undefined) {
+      data.resetAfterComplete = (dto as any).resetAfterComplete;
     }
     const instances = this.teamInstancesOf(task.taskAgents);
     if (dto.mainAgentInstanceId !== undefined) {
@@ -849,13 +1034,20 @@ export class TasksService implements OnModuleInit {
   ): TransitionOptions {
     switch (action) {
       case 'start': {
-        // tc-flow：plan 模式启动前置通过后，事务内将计划置 executing（approved → executing 唯一写入点之一）；
-        // 执行模式与托管模式（managedMode）独立生效、互不干扰
         let planStarted = false;
         return {
           eventType: 'status_change',
           fields: { startedAt: new Date() },
           preflight: async (task) => {
+            if ((task as any).teamId) {
+              const team = await this.prisma.team.findUnique({ where: { id: (task as any).teamId } } as any);
+              if (team && (team as any).currentTaskId !== task.id) {
+                throw new ConflictException({
+                  code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD,
+                  message: '仅队首任务可启动',
+                });
+              }
+            }
             if (this.teamInstancesOf(task.taskAgents).length === 0) {
               throw new BadRequestException({
                 code: TASK_ERRORS.TASK_EMPTY_TEAM,
@@ -951,12 +1143,13 @@ export class TasksService implements OnModuleInit {
             '任务已提交待验收。作为主 Agent，请牵头收集本任务各 Agent 在执行过程中遇到的问题、解决办法及用户提示，整理后调用 vteam MCP 的 memory_save 工具沉淀为记忆：先用 memory_search 回顾已有记忆避免重复，再按问题/解决/用户提示分类保存（level: "task" 写本任务沉淀，level: "project" 写跨任务复用价值，level: "global" 仅平台通用知识，tags 标注问题类型如 bugfix/workflow/prompt）。如暂无可沉淀内容可跳过，不影响验收流程。',
         };
       case 'accept': {
-        // tc-flow：plan 模式且存在计划 → 验收通过后计划置 completed（Oracle B3）
         let planCompletable = false;
+        let acceptTeamId: string | null = null;
         return {
           eventType: 'accept',
           fields: { completedAt: new Date() },
           preflight: async (task) => {
+            acceptTeamId = (task as any).teamId ?? null;
             if (task.executionMode === EXECUTION_MODES.plan) {
               const plan = await this.prisma.plan.findUnique({
                 where: { taskId: task.id },
@@ -966,14 +1159,11 @@ export class TasksService implements OnModuleInit {
             }
           },
           afterCommit: async (tx) => {
-            // 12 篇 §7：accept 事务内标记该任务所有 Artifact 当前版本 accepted_flag=true（基线锁定）
             const artifacts = await tx.artifact.findMany({
               where: { taskId: id },
               select: { id: true, currentVersion: true },
             });
             if (artifacts.length > 0) {
-              // (artifactId, version) 精确组合匹配 currentVersion（@@unique 保证组合唯一，
-              // 不能用「in 列表」——会误标非当前版本）
               await tx.artifactVersion.updateMany({
                 where: {
                   OR: artifacts.map((a) => ({
@@ -990,6 +1180,7 @@ export class TasksService implements OnModuleInit {
                 data: { status: PLAN_STATUS.completed },
               });
             }
+            if (acceptTeamId) await this.promoteNextInTx(tx, acceptTeamId);
           },
           // 10 篇 §8.1：强调 accepted_flag 基线锁定（FR-04）
           sysMessage: () => '任务已验收完成，产出物基线已锁定',
@@ -997,24 +1188,32 @@ export class TasksService implements OnModuleInit {
             '任务已验收完成，产出物基线已锁定。记忆收集已自动触发（见触发消息），请按其要求只沉淀可复用经验（做法/坑/约束），不要保存会话总结。',
         };
       }
-      case 'reject':
+      case 'reject': {
+        let rejectTeamId: string | null = null;
         return {
           eventType: 'reject',
           fields: { pendingReviewAt: null },
           metadata: reason ? { reason } : undefined,
-          // 10 篇 §8.1 / 13 篇 §4.4：附驳回原因（reason 存在时）
+          preflight: async (task) => {
+            rejectTeamId = (task as any).teamId ?? null;
+          },
+          afterCommit: async (tx) => {
+            if (rejectTeamId) await this.promoteNextInTx(tx, rejectTeamId);
+          },
           sysMessage: () =>
             reason
               ? `任务被驳回，请补齐产出后重新提交。驳回原因：${reason}`
               : '任务被驳回，请补齐产出后重新提交',
         };
+      }
       case 'archive': {
-        // tc-flow：plan 模式且存在计划 → 归档后计划置 completed（Oracle B3）
         let planCompletable = false;
+        let archiveTeamId: string | null = null;
         return {
           eventType: 'archive',
           fields: { archivedAt: new Date() },
           preflight: async (task) => {
+            archiveTeamId = (task as any).teamId ?? null;
             if (task.executionMode === EXECUTION_MODES.plan) {
               const plan = await this.prisma.plan.findUnique({
                 where: { taskId: task.id },
@@ -1034,6 +1233,7 @@ export class TasksService implements OnModuleInit {
                 data: { status: PLAN_STATUS.completed },
               });
             }
+            if (archiveTeamId) await this.promoteNextInTx(tx, archiveTeamId);
           },
           // 10 篇 §8.1：明确内容保留（FR-05）；记忆管理（mem-trigger）补充提示：任务级记忆已随验收沉淀
           sysMessage: () =>
@@ -1177,6 +1377,43 @@ export class TasksService implements OnModuleInit {
     if (task.status === to) {
       return this.toTaskDto(task);
     }
+    if (action === 'start' && (task as any).teamId) {
+      const teamHead = await (this.prisma as any).team.findUnique({ where: { id: (task as any).teamId } });
+      if (teamHead && teamHead.currentTaskId !== id) {
+        // 空闲认领：团队无当前任务且本任务为 pending（取消排队后的孤儿 pending）→ 直接认领队首后启动，
+        // 否则一旦 currentTaskId 为空将没有任何任务可启动（死锁）。忙碌中非队首仍 409。
+        if (!teamHead.currentTaskId && task.status === TASK_STATUS.pending) {
+          const claimed = await (this.prisma as any).team.updateMany({
+            where: { id: (task as any).teamId, currentTaskId: null, version: teamHead.version },
+            data: { currentTaskId: id, version: { increment: 1 } },
+          });
+          if (claimed.count === 0) {
+            throw new ConflictException({
+              code: 'VERSION_CONFLICT',
+              message: '团队并发冲突，请重试',
+            });
+          }
+          try {
+            await this.realtime.broadcast(
+              EVENT_TYPES.TEAM_QUEUE_CHANGED,
+              { teamId: (task as any).teamId, taskId: id, status: 'claimed', action: 'claim' },
+              { type: 'team', id: (task as any).teamId } as any,
+            );
+          } catch {}
+        } else {
+          throw new ConflictException({
+            code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD,
+            message: '仅队首任务可启动',
+          });
+        }
+      }
+      if (task.status === TASK_STATUS.queued) {
+        throw new ConflictException({
+          code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD,
+          message: '仅队首任务可启动',
+        });
+      }
+    }
     if (task.status !== from) {
       throw new ConflictException({
         code: TASK_ERRORS.TASK_INVALID_TRANSITION,
@@ -1276,6 +1513,41 @@ export class TasksService implements OnModuleInit {
           }),
         );
       }
+      // Todo7 记忆开关：accept/archive 同事务内批量 reset（reuseSession=false 或 resetAfterComplete=true 时）
+      // soft-remove TaskGroupInstance 先于 delete，且 Memory 表不动；分隔系统消息在同事务内写入
+      if ((action === 'accept' || action === 'archive') && (task as any).teamId) {
+        const teamIdForReset = (task as any).teamId as string;
+        let needReset = false;
+        try {
+          const teamRow = await (tx as any).team.findUnique({
+            where: { id: teamIdForReset },
+            select: { reuseSession: true },
+          });
+          const taskReset = Boolean((task as any).resetAfterComplete);
+          needReset = !!teamRow && (!teamRow.reuseSession || taskReset);
+        } catch {}
+        if (needReset) {
+          await this.sessionLifecycle.resetTeamSessionsInTx(
+            tx as unknown as Prisma.TransactionClient,
+            teamIdForReset,
+          );
+          if (channel) {
+            sysMessages.push(
+              await tx.message.create({
+                data: {
+                  id: await this.idGen.nextId(ID_PREFIX.message),
+                  channelId: channel.id,
+                  senderType: SENDER_TYPE.system,
+                  senderId: null,
+                  content: { text: '已为下一任务开新会话', parts: [] } as Prisma.InputJsonValue,
+                  mentions: null,
+                  status: MESSAGE_STATUS.sent,
+                },
+              }),
+            );
+          }
+        }
+      }
       return false;
     });
 
@@ -1355,6 +1627,8 @@ export class TasksService implements OnModuleInit {
       role: ta.agent.role,
       main: ta.id === task.mainAgentInstanceId,
       enabled: (ta as { enabled?: boolean | null }).enabled ?? true,
+      // 实例覆盖模型（成员面板模型 chip 显示 + 生效判定；null=跟随模板默认）
+      overrideModelId: (ta as { overrideModelId?: string | null }).overrideModelId ?? null,
       // 会话状态快照（每实例一会话，取首项；archived 已过滤）：前端挂载时初始化
       // 成员工作状态（SSE 增量仅驱动后续切换，重连不重放 running → 状态丢失修复）。
       sessionStatus: ta.sessions?.[0]?.status ?? null,
@@ -1372,6 +1646,7 @@ export class TasksService implements OnModuleInit {
       managedMode: task.managedMode ?? false,
       executionMode: task.executionMode ?? EXECUTION_MODES.direct,
       backgroundDocs: task.backgroundDocs ?? [],
+      teamId: (task as any).teamId ?? null,
       teamAgentIds: (task.taskAgents ?? [])
         .filter((ta) => !ta.removedAt)
         .map((ta) => ta.agentId),

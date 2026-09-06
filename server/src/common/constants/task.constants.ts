@@ -6,6 +6,7 @@
  */
 
 export const TASK_STATUS = {
+  queued: 'queued',
   pending: 'pending',
   in_progress: 'in_progress',
   pending_review: 'pending_review',
@@ -15,8 +16,9 @@ export const TASK_STATUS = {
 
 export type TaskStatus = (typeof TASK_STATUS)[keyof typeof TASK_STATUS];
 
-/** 五态顺序（看板五列与五态一一对应，06 篇 task-board）。 */
+/** 六态顺序（queued 预排队 + 五态，06 篇 task-board 扩展）。 */
 export const TASK_STATUS_ORDER: readonly TaskStatus[] = [
+  TASK_STATUS.queued,
   TASK_STATUS.pending,
   TASK_STATUS.in_progress,
   TASK_STATUS.pending_review,
@@ -63,4 +65,7 @@ export const TASK_ERRORS = {
   AGENT_NOT_FOUND: 'AGENT_NOT_FOUND',
   /** transitionByAgent：仅主 Agent 实例可流转任务状态（MCP 工具路径，403）。 */
   TASK_STATUS_MAIN_AGENT_ONLY: 'TASK_STATUS_MAIN_AGENT_ONLY',
+  TEAM_NOT_FOUND: 'TEAM_NOT_FOUND',
+  TEAM_NOT_QUEUE_HEAD: 'TEAM_NOT_QUEUE_HEAD',
+  TEAM_REQUIRED: 'TEAM_REQUIRED',
 } as const;

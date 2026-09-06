@@ -34,6 +34,7 @@ const USERNAME = env.USERNAME || 'admin';
 const PASSWORD = env.PASSWORD || 'admin123';
 const CHANNEL_ID = env.CHANNEL_ID || 'c_0000000012';
 const TASK_ID = env.TASK_ID || 't_0000000006';
+const TEAM_ID = env.TEAM_ID || '';
 const AGENTS = (env.AGENTS || 'a_product,a_architect').split(',').map((s) => s.trim()).filter(Boolean);
 
 const args = process.argv.slice(2);
@@ -44,14 +45,17 @@ const flag = (name, def) => {
 const has = (name) => args.includes(name);
 const SKIP_FIRST_TOKEN = has('--skip-first-token');
 const SKIP_PARALLEL = has('--skip-parallel');
+const SKIP_TEAM = has('--skip-team');
 const CHECKS_N = Number(flag('--checks', '20'));
 const OUT_JSON = flag('--json', null);
 const OVERRIDE_CHANNEL = flag('--channel', null);
 const OVERRIDE_TASK = flag('--task', null);
+const OVERRIDE_TEAM = flag('--team', null);
 const OVERRIDE_AGENTS = flag('--agents', null);
 
 const channelId = OVERRIDE_CHANNEL || CHANNEL_ID;
 const taskId = OVERRIDE_TASK || TASK_ID;
+const teamId = OVERRIDE_TEAM || TEAM_ID || null;
 const agents = OVERRIDE_AGENTS ? OVERRIDE_AGENTS.split(',').map((s) => s.trim()).filter(Boolean) : AGENTS;
 
 // 指标阈值（ms）
@@ -214,6 +218,93 @@ class SSEConnection {
 /* ------------------------------------------------------------------ */
 /* 指标实现                                                           */
 /* ------------------------------------------------------------------ */
+
+/** team scope 辅助：解析 team_group 频道与 teamId（team 优先，fallback channel） */
+async function resolveTeamScope({ token }) {
+  if (teamId) {
+    // 优先用显式 teamId，查 team_group 频道 id
+    try {
+      const res = await api(`/api/v1/channels?teamId=${encodeURIComponent(teamId)}&type=team_group`, { token });
+      const ch = res.data?.items?.[0];
+      if (ch) return { teamId: teamId, channelId: ch.id };
+    } catch {}
+    return { teamId: teamId, channelId: null };
+  }
+  // 无 teamId 时尝试从 channelId 反查 teamId
+  try {
+    const ch = await api(`/api/v1/channels/${channelId}`, { token });
+    const tid = ch.data?.teamId ?? null;
+    if (tid) return { teamId: tid, channelId };
+  } catch {}
+  return { teamId: null, channelId };
+}
+
+/** team scope 性能：POST 到 team_group 频道 → SSE team:<id> 订阅回流，latency ≤1000ms（复用 groupChat 阈值） */
+async function benchTeamGroupChat({ token, samples = GROUP_CHAT_SAMPLES }) {
+  const scope = await resolveTeamScope({ token });
+  if (!scope.teamId || !scope.channelId) {
+    return {
+      measured: null,
+      measuredUnit: 'ms',
+      passLine: LINES.groupChat.passLine,
+      targetLine: LINES.groupChat.targetLine,
+      pass: false,
+      skipped: true,
+      reason: '无 team scope（需 --team <teamId> 或 TEAM_ID 环境变量，或让 e2e 先建团队；跳过不阻断）',
+      samples: [],
+      note: 'team_group 频道的 groupChat 变体：POST → SSE team:<id> chat.message.new',
+    };
+  }
+  const results = [];
+  // 需取一个隶属该团队的任务 id 作为 taskId 分区（取队首或任意）
+  let effectiveTaskId = taskId;
+  try {
+    const team = await api(`/api/v1/teams/${scope.teamId}`, { token });
+    if (team.data?.currentTaskId) effectiveTaskId = team.data.currentTaskId;
+  } catch {}
+  for (let i = 0; i < samples; i++) {
+    // 订阅 team:<id>（团队维度）+ channel:<teamChannelId> 双校验兼容
+    const sseTeam = new SSEConnection(
+      `${SERVER_URL}/api/v1/events?token=${encodeURIComponent(token)}&scope=team:${scope.teamId}`,
+    );
+    await sseTeam.connect();
+    const t0 = Date.now();
+    const post = await api(`/api/v1/channels/${scope.channelId}/messages`, {
+      method: 'POST',
+      token,
+      body: { text: `[perf/teamGroupChat] team_group 采样 ${i + 1} team:${scope.teamId}（无 @，零模型）`, mentions: [], taskId: effectiveTaskId },
+    });
+    if (post.status !== 201) {
+      sseTeam.close();
+      throw new Error(`team_group 发消息失败 HTTP ${post.status}: ${JSON.stringify(post.data)}`);
+    }
+    const msgId = post.data?.message?.id;
+    const ev = await sseTeam.waitFor(
+      (e) => e.type === 'chat.message.new' && e.payload?.message?.id === msgId,
+      { timeout: 10_000, label: `teamGroupChat 采样 ${i + 1} team SSE` },
+    );
+    const latency = Date.now() - t0;
+    const sseLatency = Date.now() - new Date(ev.payload.message.createdAt).getTime();
+    results.push({ sample: i + 1, latencyMs: latency, sseDeliveryMs: sseLatency, messageId: msgId, scope: `team:${scope.teamId}` });
+    sseTeam.close();
+    await sleep(150);
+  }
+  const sorted = results.map((r) => r.latencyMs).sort((a, b) => a - b);
+  const measuredMs = Math.round(sorted[Math.floor(sorted.length / 2)]);
+  const { passLine, targetLine } = LINES.groupChat;
+  return {
+    measured: measuredMs,
+    measuredUnit: 'ms',
+    passLine,
+    targetLine,
+    pass: measuredMs <= passLine,
+    target: measuredMs <= targetLine,
+    samples: results,
+    teamId: scope.teamId,
+    channelId: scope.channelId,
+    note: 'POST team_group 频道 → SSE team:<id> chat.message.new 到达（team scope，无 @ 零模型）',
+  };
+}
 
 /** 1. 群聊消息 ≤1s：POST 无 @ 消息 → SSE chat.message.new 到达（服务端零模型调用）。 */
 async function benchGroupChat({ token, samples = GROUP_CHAT_SAMPLES }) {
@@ -537,7 +628,7 @@ async function main() {
 
   const report = {
     timestamp: new Date().toISOString(),
-    env: { serverUrl: SERVER_URL, webUrl: WEB_URL, channelId, taskId, agents },
+    env: { serverUrl: SERVER_URL, webUrl: WEB_URL, channelId, taskId, teamId, agents },
     lines: { groupChat: LINES.groupChat, firstToken: LINES.firstToken, sessionStream: LINES.sessionStream, availability: LINES.availability },
     results: {},
   };
@@ -547,6 +638,11 @@ async function main() {
 
   // 群聊消息（零模型调用）
   report.results.groupChat = await benchGroupChat({ token });
+
+  // 团队群聊（team_group，team:<id> 订阅，零模型，复用 groupChat 阈值 1000ms）
+  if (!SKIP_TEAM) {
+    report.results.teamGroupChat = await benchTeamGroupChat({ token });
+  }
 
   // 会话流（零模型调用）
   report.results.sessionStream = await benchSessionStream({ token });
@@ -563,12 +659,14 @@ async function main() {
 
   const summary = {
     groupChat: report.results.groupChat?.pass,
+    teamGroupChat: report.results.teamGroupChat ? (report.results.teamGroupChat.skipped ? true : report.results.teamGroupChat.pass) : true,
     firstToken: report.results.firstToken?.pass,
     sessionStream: report.results.sessionStream?.pass,
     parallelAgents: report.results.parallelAgents?.pass,
     availability: report.results.availability?.pass,
   };
   report.summary = summary;
+  // teamGroupChat skipped 时不计入 allPass（e2e 独立验证 latency≤1000ms）
   report.allPass = Object.values(summary).every((v) => v === true);
 
   if (OUT_JSON) {

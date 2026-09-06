@@ -338,4 +338,51 @@ describe('SessionLifecycleService', () => {
       expect(row).toBeNull();
     });
   });
+
+  describe('resetTeamSessionsInTx（Todo7 记忆开关）', () => {
+    it('批量 reset：soft-remove 先于 delete，再 delete+create 新 s_ 行，Memory 不删', async () => {
+      const tx: any = {
+        teamMember: { findMany: jest.fn().mockResolvedValue([{ id: 'tmm_0000000001' }, { id: 'tmm_0000000002' }]) },
+        session: {
+          findMany: jest.fn().mockResolvedValue([
+            { id: 's_0000000001', taskId: 't_0000000001', taskAgentId: 'ta_0000000001', agentId: 'a_product', teamMemberId: 'tmm_0000000001', workerId: 'w_1', instanceRef: 'ses_1' },
+            { id: 's_0000000002', taskId: 't_0000000001', taskAgentId: 'ta_0000000002', agentId: 'a_developer', teamMemberId: 'tmm_0000000002', workerId: null, instanceRef: null },
+          ]),
+          deleteMany: jest.fn().mockResolvedValue({ count: 2 }),
+          create: jest.fn().mockResolvedValue({}),
+        },
+        taskGroupInstance: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      };
+      idGen.nextId.mockResolvedValue('s_0000000099');
+
+      const count = await service.resetTeamSessionsInTx(tx as any, 'tm_0000000001');
+
+      expect(tx.taskGroupInstance.updateMany).toHaveBeenCalledTimes(1);
+      expect(tx.taskGroupInstance.updateMany).toHaveBeenCalledWith({
+        where: { taskId: 't_0000000001', workerId: 'w_1', instanceId: 'ses_1', removedAt: null },
+        data: { removedAt: expect.any(Date) },
+      });
+      const deleteOrder = tx.session.deleteMany.mock.invocationCallOrder[0];
+      const createOrder = tx.session.create.mock.invocationCallOrder[0];
+      expect(deleteOrder).toBeLessThan(createOrder);
+      expect(tx.session.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['s_0000000001', 's_0000000002'] } } });
+      expect(tx.session.create).toHaveBeenCalledTimes(2);
+      expect(count).toBe(2);
+    });
+
+    it('团队无成员或无会话 → 0，不报错', async () => {
+      const txEmpty: any = {
+        teamMember: { findMany: jest.fn().mockResolvedValue([]) },
+        session: { findMany: jest.fn(), deleteMany: jest.fn(), create: jest.fn() },
+        taskGroupInstance: { updateMany: jest.fn() },
+      };
+      expect(await service.resetTeamSessionsInTx(txEmpty as any, 'tm_0000000001')).toBe(0);
+      const txNoSess: any = {
+        teamMember: { findMany: jest.fn().mockResolvedValue([{ id: 'tmm_1' }]) },
+        session: { findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn(), create: jest.fn() },
+        taskGroupInstance: { updateMany: jest.fn() },
+      };
+      expect(await service.resetTeamSessionsInTx(txNoSess as any, 'tm_0000000001')).toBe(0);
+    });
+  });
 });

@@ -36,6 +36,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     workerModelAvailability: {
       deleteMany: jest.Mock;
       upsert: jest.Mock;
+      count: jest.Mock;
     };
     worker: {
       findMany: jest.Mock;

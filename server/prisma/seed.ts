@@ -44,6 +44,7 @@ async function main() {
     tasks: { view: true, create: true, edit: true, review: true, delete: false },
     workers: { view: true, edit: false },
     channels: { view: true, manage: false },
+    teams: { view: true, create: true, edit: true, delete: false },
   } as const;
 
   const memberRole = await prisma.role.upsert({
@@ -903,6 +904,70 @@ TSX 源码 (<kebab-name>/index.tsx)
     });
   }
 
+  const seedTeamId = 'tm_0000000001';
+  const seedTeamName = 'vteam开发团队';
+  await prisma.team.upsert({
+    where: { id: seedTeamId },
+    update: {},
+    create: {
+      id: seedTeamId,
+      name: seedTeamName,
+      description: '全局示例团队（e2e）',
+      reuseSession: true,
+      createdBy: admin.id,
+      version: 0,
+    },
+  });
+  const teamRoleMap: Record<string, string> = {
+    a_product: 'product',
+    a_project_manager: 'project_manager',
+    a_architect: 'architect',
+    a_developer: 'developer',
+    a_tester: 'tester',
+  };
+  const teamRoleLabels: Record<string, string> = {
+    product: '产品经理',
+    project_manager: '项目经理',
+    architect: '架构师',
+    developer: '开发者',
+    tester: '测试',
+  };
+  function sanitizeWorkDirNameSeed(name: string): string {
+    const raw = String(name ?? '').trim();
+    return (
+      raw
+        .replace(/[^\p{L}\p{N}._-]/gu, '-')
+        .replace(/^[._-]+|[._-]+$/g, '')
+        .replace(/\.{2,}/g, '.') || 'agent'
+    );
+  }
+  const seedMemberAgents = [
+    { agentId: 'a_product', name: '产品经理' },
+    { agentId: 'a_project_manager', name: '项目经理' },
+    { agentId: 'a_architect', name: '架构师' },
+    { agentId: 'a_developer', name: '开发者' },
+    { agentId: 'a_tester', name: '测试' },
+  ];
+  for (let i = 0; i < seedMemberAgents.length; i++) {
+    const m = seedMemberAgents[i];
+    const id = `tmm_${String(i + 1).padStart(10, '0')}`;
+    const role = teamRoleMap[m.agentId] ?? '';
+    const alias = `${teamRoleLabels[role] ?? m.name}-1`;
+    const workDir = `/data/vteam-worker/${sanitizeWorkDirNameSeed(m.name)}`;
+    await prisma.teamMember.upsert({
+      where: { id },
+      update: {},
+      create: {
+        id,
+        teamId: seedTeamId,
+        agentId: m.agentId,
+        alias,
+        seq: 1,
+        workDir,
+      },
+    });
+  }
+
   console.log('Seed 完成：');
   console.log(`  - 角色：${adminRole.name} / ${memberRole.name}`);
   console.log(`  - 用户：admin(u_admin) / seed-admin(${admin.id}) / seed-member(u_seed_member)`);
@@ -912,6 +977,7 @@ TSX 源码 (<kebab-name>/index.tsx)
   console.log(`  - MCP 工具：${vteamTools.map((t) => t.action).join('、')}（source=mcp，mcpServer=vteam）`);
   console.log(`  - MCP Server：vteam（remote，${platformMcpUrl}）`);
   console.log(`  - 模型目录：${modelRows.length} 个模型（${modelRows.map((m) => m.modelID).join('、')}）`);
+  console.log(`  - 示例团队：${seedTeamName}(${seedTeamId}) 含 ${seedMemberAgents.length} 成员（5 角色各 1）`);
   console.log(`  - 管理员密码：${ADMIN_PASSWORD}`);
   console.log(`  - 初始 admin 账号：admin / admin123`);
 }

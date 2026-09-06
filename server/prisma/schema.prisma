@@ -61,6 +61,7 @@ model User {
   agentsCreated  Agent[]         @relation("AgentCreator")
   assignedIssues Issue[]         @relation("IssueAssigneeUser")
   createdIssues  Issue[]         @relation("IssueCreatorUser")
+  teamsCreated   Team[]          @relation("TeamCreator")
 
   @@map("users")
 }
@@ -116,6 +117,67 @@ model ProjectMember {
 }
 
 // ==================================================================
+// 团队域（全局团队 + FIFO 排队，vteam-team-refactor expand 阶段）
+// ==================================================================
+
+model Team {
+  id                 String   @id
+  name               String   @unique
+  description        String?  @db.Text
+  reuseSession       Boolean  @default(true) @map("reuse_session")
+  currentTaskId      String?  @map("current_task_id")
+  mainAgentMemberId  String?  @map("main_agent_member_id")
+  version            Int      @default(0) @map("version")
+  createdBy          String   @map("created_by")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  creator      User          @relation("TeamCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  currentTask  Task?         @relation("TeamCurrentTask", fields: [currentTaskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  mainAgentMember TeamMember? @relation("TeamMainAgent", fields: [mainAgentMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  members      TeamMember[]
+  queues       TeamQueue[]
+  tasks        Task[]        @relation("TaskTeam")
+  chatChannels ChatChannel[]
+
+  @@index([mainAgentMemberId], map: "idx_teams_main_agent_member")
+  @@map("teams")
+}
+
+model TeamMember {
+  id        String   @id
+  teamId    String   @map("team_id")
+  agentId   String   @map("agent_id")
+  alias     String?
+  seq       Int      @default(1)
+  workDir   String?  @map("work_dir")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  team         Team          @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  agent        Agent         @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sessions     Session[]
+  chatChannels ChatChannel[]
+  mainForTeams Team[]        @relation("TeamMainAgent")
+
+  @@unique([teamId, agentId, seq], map: "uk_team_members_team_agent_seq")
+  @@map("team_members")
+}
+
+model TeamQueue {
+  id         String   @id
+  teamId     String   @map("team_id")
+  taskId     String   @unique @map("task_id")
+  position   Int
+  enqueuedAt DateTime @default(now()) @map("enqueued_at")
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  task Task @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([teamId, position], map: "idx_team_queues_team_position")
+  @@map("team_queues")
+}
+
+// ==================================================================
 // 任务域
 // ==================================================================
 
@@ -134,25 +196,32 @@ model Task {
   // 执行模式（vteam-team-collaboration）：direct|plan，默认 direct（轻量），plan 按需开启
   executionMode       String    @default("direct") @map("execution_mode")
   backgroundDocs      Json?     @map("background_docs")
+  /// 完成后为下一任务开新会话（覆盖 Team.reuseSession，默认 false，Todo7）
+  resetAfterComplete  Boolean   @default(false) @map("reset_after_complete")
   createdBy           String    @map("created_by")
   version             Int       @default(0)
+  teamId              String?   @map("team_id")
   createdAt           DateTime  @default(now()) @map("created_at")
   startedAt           DateTime? @map("started_at")
   pendingReviewAt     DateTime? @map("pending_review_at")
   completedAt         DateTime? @map("completed_at")
   archivedAt          DateTime? @map("archived_at")
 
-  project             Project              @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  creator             User                 @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  mainAgent           Agent?               @relation("TaskMainAgent", fields: [mainAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  taskAgents          TaskAgent[]
-  taskEvents          TaskEvent[]
-  sessions            Session[]
-  chatChannels        ChatChannel[]
-  artifacts           Artifact[]
-  taskGroupInstances  TaskGroupInstance[]
-  issues              Issue[]
-  memories            Memory[]
+  project                  Project                   @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  creator                  User                      @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  mainAgent                Agent?                    @relation("TaskMainAgent", fields: [mainAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  team                     Team?                     @relation("TaskTeam", fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  currentInTeams           Team[]                    @relation("TeamCurrentTask")
+  queue                    TeamQueue?
+  taskAgents               TaskAgent[]
+  taskEvents               TaskEvent[]
+  sessions                 Session[]
+  chatChannels             ChatChannel[]
+  messages                 Message[]
+  artifacts                Artifact[]
+  taskGroupInstances       TaskGroupInstance[]
+  issues                   Issue[]
+  memories                 Memory[]
   plan                     Plan?
   messageChannelLinks      TaskMessageChannel[]
   notificationChannelLinks TaskNotificationChannel[]
@@ -207,21 +276,23 @@ model TaskEvent {
 // ==================================================================
 
 model Session {
-  id          String   @id
-  taskId      String   @map("task_id")
-  taskAgentId String   @map("task_agent_id") // 绑任务实例（每实例独立会话）
-  agentId     String   @map("agent_id") // 保留（角色渲染/模型解析），不再是唯一键维度
-  workerId    String?  @map("worker_id")
-  instanceRef String?  @map("instance_ref")
-  status      String   @default("created")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id           String   @id
+  taskId       String   @map("task_id")
+  taskAgentId  String   @map("task_agent_id") // 绑任务实例（每实例独立会话）
+  agentId      String   @map("agent_id") // 保留（角色渲染/模型解析），不再是唯一键维度
+  teamMemberId String?  @map("team_member_id")
+  workerId     String?  @map("worker_id")
+  instanceRef  String?  @map("instance_ref")
+  status       String   @default("created")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
-  task      Task      @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  agent     Agent     @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  worker    Worker?   @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  task       Task        @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  agent      Agent       @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  worker     Worker?     @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   // 绑任务实例（task_agent_id 已存在列，仅补 Prisma 关系便于任务详情 include sessions 状态）
-  taskAgent TaskAgent @relation(fields: [taskAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  taskAgent  TaskAgent   @relation(fields: [taskAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  teamMember TeamMember? @relation(fields: [teamMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([taskId, taskAgentId], map: "uk_sessions_task_agent")
   @@map("sessions")
@@ -232,29 +303,40 @@ model Session {
 // ==================================================================
 
 model ChatChannel {
-  id          String    @id
-  type        String
-  taskId      String    @map("task_id")
-  agentId     String?   @map("agent_id") // 保留（角色渲染），不再是唯一键维度
-  taskAgentId String?   @map("task_agent_id") // 私聊频道绑实例；task_group 频道两者均为 NULL
+  id           String    @id
+  type         String
+  teamId       String?   @map("team_id")
+  teamMemberId String?   @map("team_member_id")
+  taskId       String?   @map("task_id")
+  agentId      String?   @map("agent_id") // 保留（角色渲染），不再是唯一键维度
+  taskAgentId  String?   @map("task_agent_id") // 私聊频道绑实例；task_group 频道两者均为 NULL（存量兼容)
+  // team_group 单例保障：team_group_key 仅 team_group 且未删除时等于 teamId，其余为 NULL，配合唯一索引保证每 team 仅一条 team_group
+  teamGroupKey String?   @map("team_group_key")
   // UX-09 会话管理（channel 级简化：置顶/已读为频道级标记，非用户粒度——演示平台可接受；
   // 用户级置顶/已读需 ChannelUser 关联表，评估后本期不做）
-  pinned      Boolean   @default(false)
-  lastReadAt  DateTime? @map("last_read_at")
-  deletedAt   DateTime? @map("deleted_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
+  pinned       Boolean   @default(false)
+  lastReadAt   DateTime? @map("last_read_at")
+  deletedAt    DateTime? @map("deleted_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
 
-  task     Task      @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  agent    Agent?    @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  messages Message[]
+  team       Team?       @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  teamMember TeamMember? @relation(fields: [teamMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  task       Task?       @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  agent      Agent?      @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  messages   Message[]
 
+  @@unique([teamId, teamMemberId], map: "uk_channels_team_member")
   @@unique([taskId, taskAgentId], map: "uk_channels_task_agent")
+  @@unique([teamGroupKey], map: "uk_channels_team_group_single")
+  @@index([teamId], map: "idx_chat_channels_team_id")
+  @@index([teamId, type], map: "idx_chat_channels_team_type")
   @@map("chat_channels")
 }
 
 model Message {
   id               String   @id
   channelId        String   @map("channel_id")
+  taskId           String?  @map("task_id")
   senderType       String   @map("sender_type")
   senderId         String?  @map("sender_id")
   senderInstanceId String?  @map("sender_instance_id") // 消息精确归属实例（agent sender 时为 ta_ 实例 id）
@@ -268,8 +350,11 @@ model Message {
   createdAt        DateTime @default(now()) @map("created_at")
 
   channel ChatChannel @relation(fields: [channelId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  task    Task?       @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([channelId, id], map: "idx_messages_channel_id")
+  @@index([taskId, createdAt], map: "idx_messages_task_created")
+  @@index([channelId, taskId], map: "idx_messages_channel_task")
   @@map("messages")
 }
 
@@ -405,6 +490,7 @@ model Agent {
   skills            AgentSkill[]
   toolEffects       AgentToolEffect[]
   taskAgents        TaskAgent[]
+  teamMembers       TeamMember[]
   sessions          Session[]
   channels          ChatChannel[]
   authoredArtifacts ArtifactVersion[] @relation("ArtifactAuthor")
@@ -793,8 +879,8 @@ model MessageChannel {
   config     Json     @default("{}")
   secrets    Json     @default("{}")
   enabled    Boolean  @default(true)
-  lastStatus String?  @db.VarChar(16) @map("last_status")
-  lastError  String?  @db.VarChar(512) @map("last_error")
+  lastStatus String?  @map("last_status") @db.VarChar(16)
+  lastError  String?  @map("last_error") @db.VarChar(512)
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
@@ -808,8 +894,8 @@ model MessageDelivery {
   id         String         @id
   channelId  String         @map("channel_id")
   channel    MessageChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  externalId String?        @db.VarChar(128) @map("external_id")
-  direction  String         @db.VarChar(8) @default("inbound")
+  externalId String?        @map("external_id") @db.VarChar(128)
+  direction  String         @default("inbound") @db.VarChar(8)
   status     String         @db.VarChar(16)
   kind       String?        @db.VarChar(32)
   error      String?        @db.VarChar(512)
@@ -829,8 +915,8 @@ model NotificationChannel {
   config     Json     @default("{}")
   secrets    Json     @default("{}")
   enabled    Boolean  @default(true)
-  lastStatus String?  @db.VarChar(16) @map("last_status")
-  lastError  String?  @db.VarChar(512) @map("last_error")
+  lastStatus String?  @map("last_status") @db.VarChar(16)
+  lastError  String?  @map("last_error") @db.VarChar(512)
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
@@ -844,8 +930,8 @@ model NotificationDelivery {
   id         String              @id
   channelId  String              @map("channel_id")
   channel    NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  externalId String?             @db.VarChar(128) @map("external_id")
-  direction  String              @db.VarChar(8) @default("outbound")
+  externalId String?             @map("external_id") @db.VarChar(128)
+  direction  String              @default("outbound") @db.VarChar(8)
   status     String              @db.VarChar(16)
   kind       String?             @db.VarChar(32)
   error      String?             @db.VarChar(512)

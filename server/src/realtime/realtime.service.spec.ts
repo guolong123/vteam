@@ -217,13 +217,63 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
 
       expect(prisma.chatChannel.findUnique).toHaveBeenCalledWith({
         where: { id: 'c_1' },
-        select: { taskId: true },
+        select: { taskId: true, teamId: true },
       });
       expect(prisma.task.findUnique).toHaveBeenCalledWith({
         where: { id: 't_1' },
         select: { projectId: true },
       });
       expect(ev.projectId).toBe('p_1');
+    });
+
+    it('channel scope 团队频道 taskId 为空 → 按消息 taskId 回退解析项目（团队聊天不断流）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({ taskId: null, teamId: 'tm_1' });
+      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_1' });
+
+      const ev = await service.emit(
+        'chat.message.new',
+        { message: { channelId: 'c_1', taskId: 't_1' } },
+        { type: 'channel', id: 'c_1' },
+      );
+
+      expect(prisma.task.findUnique).toHaveBeenCalledWith({
+        where: { id: 't_1' },
+        select: { projectId: true },
+      });
+      expect(ev.projectId).toBe('p_1');
+    });
+
+    it('channel scope 团队频道无消息 taskId → 按团队当前任务回退解析项目', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({ taskId: null, teamId: 'tm_1' });
+      (prisma as any).team = {
+        findUnique: jest.fn().mockResolvedValue({ currentTaskId: 't_9' }),
+      };
+      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_9' });
+
+      const ev = await service.emit(
+        'message.part.delta',
+        { message: { channelId: 'c_1' } },
+        { type: 'channel', id: 'c_1' },
+      );
+
+      expect((prisma as any).team.findUnique).toHaveBeenCalledWith({
+        where: { id: 'tm_1' },
+        select: { currentTaskId: true },
+      });
+      expect(ev.projectId).toBe('p_9');
+    });
+
+    it('team scope 带消息 taskId → 反查项目归属（scope=all 可收到）；无则保持 null', async () => {
+      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_2' });
+      const ev = await service.emit(
+        'chat.message.new',
+        { message: { channelId: 'c_1', taskId: 't_2' } },
+        { type: 'team', id: 'tm_1' },
+      );
+      expect(ev.projectId).toBe('p_2');
+
+      const ev2 = await service.emit('team.changed', { teamId: 'tm_1' }, { type: 'team', id: 'tm_1' });
+      expect(ev2.projectId).toBeNull();
     });
 
     it('global scope → 从 payload.taskId 反查 tasks.projectId 写入 projectId', async () => {

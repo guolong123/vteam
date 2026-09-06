@@ -15,11 +15,14 @@ import { TASK_ERRORS } from '../constants/task.constants';
 import { PROJECT_ID_KEY } from '../decorators/project-id.decorator';
 
 /**
- * 项目成员校验守卫（Phase 2 权限地基）。
+ * 项目成员校验守卫（Phase 2 权限地基，Task 14 全局团队豁免）。
  *
  * 前置：全局 JwtAuthGuard 已把 JWT validate 结果挂到 `req.user`（{id, username, roleId}）。
  * 本守卫校验调用者是目标项目的成员（project_members 表存在 (projectId, userId) 记录，
  * 命中 uk_project_members_pid_uid 唯一约束），否则拒绝 403 `PERMISSION_PROJECT_NOT_MEMBER`。
+ *
+ * 豁免：` /api/v1/teams/* ` 全局团队域不经本守卫（仅 JwtAuth + PermissionGuard `teams:*`），
+ * 即使误挂本守卫也直接放行——团队校验不依赖 projectId，Task.projectId 仍保留但不参与守卫。
  *
  * projectId 来源（三选一，按优先级）：
  *   1. 路由参数 `:pid`（如 POST /api/v1/projects/:pid/tasks）；
@@ -44,7 +47,14 @@ export class ProjectMembershipGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context
       .switchToHttp()
-      .getRequest<Request & { user?: { id: string } }>();
+      .getRequest<Request & { user?: { id: string }; originalUrl?: string; url?: string }>();
+
+    // Task 14：全局团队域豁免——/teams/* 仅 JwtAuth + PermissionGuard(teams:*)，不经项目成员校验
+    const rawUrl =
+      (request.originalUrl as string) ?? (request.url as string) ?? '';
+    if (rawUrl.includes('/teams')) {
+      return true;
+    }
 
     // 全局 JwtAuthGuard 理论上已挂载 req.user；此处防御无 token 直达的场景
     const user = request.user;

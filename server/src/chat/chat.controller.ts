@@ -46,26 +46,20 @@ import { UpdateChannelDto } from './dto/update-channel.dto';
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
-  /**
-   * 可访问频道列表（任务群聊自动创建 + 私聊）。
-   * GET /api/v1/channels?type=task_group|private → {items, total}
-   */
   @Get('channels')
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.view')
-  @ApiOperation({
-    summary: '可访问频道列表（task_group + private，type 过滤）',
-  })
-  @ApiQuery({
-    name: 'type',
-    required: false,
-    description: '频道类型过滤：task_group | private',
-  })
+  @ApiOperation({ summary: '可访问频道列表（team_group + private，type 过滤，支持 teamId）' })
+  @ApiQuery({ name: 'type', required: false, description: '频道类型过滤：team_group | private' })
+  @ApiQuery({ name: 'teamId', required: false, description: '团队 id 过滤（每团队一群）' })
+  @ApiQuery({ name: 'taskId', required: false, description: '过渡期 taskId，经 Task.teamId 映射到 team' })
   findChannels(
     @CurrentUser() user: AuthenticatedUser,
     @Query('type') type?: string,
+    @Query('teamId') teamId?: string,
+    @Query('taskId') taskId?: string,
   ) {
-    return this.chatService.findAccessibleChannels(user.id, type);
+    return this.chatService.findAccessibleChannels(user.id, type, teamId, taskId);
   }
 
   /**

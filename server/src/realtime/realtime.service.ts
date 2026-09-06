@@ -6,10 +6,10 @@ import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * 事件作用域（09 篇 §4.2 订阅粒度）。
- * - task:<id> / channel:<id>：仅广播归属该资源的事件
+ * - task:<id> / channel:<id> / team:<id>：仅广播归属该资源的事件
  * - global：全局事件（scopeId 为 null）
  */
-export type RealtimeScopeType = 'task' | 'channel' | 'global';
+export type RealtimeScopeType = 'task' | 'channel' | 'team' | 'global';
 
 export interface RealtimeScope {
   type: RealtimeScopeType;
@@ -308,6 +308,7 @@ export class RealtimeService implements OnModuleInit {
    * 解析事件所属项目 id（emit 落库时写入 project_id，供 scope=all 可见项目过滤）：
    * - task scope → tasks.projectId
    * - channel scope → chat_channels.taskId → tasks.projectId（两级）
+   * - team scope → team 域全局资源，无 projectId → null（按 team 维度隔离，不以项目过滤）
    * - global scope → payload.taskId 反查 tasks.projectId；无 taskId → null
    * 查询失败/资源不存在一律返回 null（不抛错，事件照常落库）。
    */
@@ -325,16 +326,47 @@ export class RealtimeService implements OnModuleInit {
       if (event.scopeType === 'channel' && event.scopeId) {
         const channel = await this.prisma.chatChannel.findUnique({
           where: { id: event.scopeId },
-          select: { taskId: true },
+          select: { taskId: true, teamId: true },
         });
         if (!channel) {
           return null;
         }
+        // 团队频道（team_group/私聊）本身 taskId 为空：按消息 taskId → 团队当前任务 → 团队任一任务逐级回退解析项目，
+        // 否则 scope=all 订阅的项目过滤（null 一律丢弃）会吞掉团队聊天的全部事件
+        let taskId: string | null =
+          channel.taskId ?? (event.payload as any)?.message?.taskId ?? null;
+        if (!taskId && (channel as any).teamId) {
+          const team = await (this.prisma as any).team.findUnique({
+            where: { id: (channel as any).teamId },
+            select: { currentTaskId: true },
+          });
+          taskId = team?.currentTaskId ?? null;
+          if (!taskId) {
+            const first = await this.prisma.task.findFirst({
+              where: { teamId: (channel as any).teamId },
+              select: { id: true },
+              orderBy: { createdAt: 'desc' },
+            });
+            taskId = first?.id ?? null;
+          }
+        }
+        if (!taskId) return null;
         const task = await this.prisma.task.findUnique({
-          where: { id: channel.taskId },
+          where: { id: taskId },
           select: { projectId: true },
         });
         return task?.projectId ?? null;
+      }
+      if (event.scopeType === 'team') {
+        // team 域事件本身无项目归属：能从消息 taskId 反查到项目则归属之（否则 scope=all 订阅收不到），
+        // 纯团队管理事件保持 null（按 team 维度隔离，不以项目放行）
+        const msgTaskId = (event.payload as any)?.message?.taskId ?? null;
+        if (!msgTaskId) return null;
+        const msgTask = await this.prisma.task.findUnique({
+          where: { id: msgTaskId },
+          select: { projectId: true },
+        });
+        return msgTask?.projectId ?? null;
       }
       const taskId = (event.payload as { taskId?: string } | null)?.taskId;
       if (!taskId) {

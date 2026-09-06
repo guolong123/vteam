@@ -16,6 +16,13 @@ import { Injectable } from '@nestjs/common';
  */
 export const ID_PAD_WIDTH = 10;
 
+/** 团队域前缀锁死（expand 阶段约定）：team=tm_ / teamMember=tmm_ / teamQueue=tq_，不在其基础上用 team 全写。 */
+export const TEAM_ID_PREFIXES = {
+  team: 'tm',
+  teamMember: 'tmm',
+  teamQueue: 'tq',
+} as const;
+
 export interface IdGenerator {
   /** 生成 `<prefix>_<零填充序号>`，数值序 == 字典序。 */
   nextId(prefix: string): Promise<string>;

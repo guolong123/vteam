@@ -9,6 +9,7 @@ import {
 describe('task.constants（任务状态机契约，13 篇 §3）', () => {
   it('五态常量与契约一致', () => {
     expect(TASK_STATUS).toEqual({
+      queued: 'queued',
       pending: 'pending',
       in_progress: 'in_progress',
       pending_review: 'pending_review',
@@ -19,6 +20,7 @@ describe('task.constants（任务状态机契约，13 篇 §3）', () => {
 
   it('TASK_STATUS_ORDER 覆盖五态且顺序正确', () => {
     expect(TASK_STATUS_ORDER).toEqual([
+      'queued',
       'pending',
       'in_progress',
       'pending_review',

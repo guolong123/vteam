@@ -91,8 +91,7 @@ describe('TasksController', () => {
       service.create.mockResolvedValue(task);
       const dto = {
         title: '任务',
-        agents: [{ agentId: 'a_1' }],
-        mainAgentInstanceId: 'ta_1',
+        teamId: 'tm_0000000001',
       };
 
       const out = await controller.create(
@@ -230,34 +229,31 @@ describe('TasksController', () => {
     const errorsOf = async (cls: new () => object, obj: object) =>
       validate(plainToInstance(cls, obj));
 
-    it('CreateTaskDto：title 必填、priority 枚举、agents 实例数组', async () => {
+    it('CreateTaskDto：title 必填、priority 枚举、teamId 必填', async () => {
       expect(await errorsOf(CreateTaskDto, {})).not.toHaveLength(0);
       expect(
         await errorsOf(CreateTaskDto, {
           title: 'x',
           priority: 'urgent',
-          agents: [{ agentId: 'a_1' }],
+          teamId: 'tm_0000000001',
         }),
       ).not.toHaveLength(0);
       expect(
         await errorsOf(CreateTaskDto, {
           title: 'x',
-          agents: 'not-array',
         }),
       ).not.toHaveLength(0);
       expect(
         await errorsOf(CreateTaskDto, {
           title: 'x',
-          agents: [{ alias: '缺 agentId' }],
+          teamId: 123,
         }),
       ).not.toHaveLength(0);
       expect(
         await errorsOf(CreateTaskDto, {
           title: 'x',
           priority: 'high',
-          agents: [{ agentId: 'a_1' }, { agentId: 'a_1', alias: '开发者-2' }],
-          mainAgentInstanceId: 'ta_2',
-          mainAgentId: 'a_1',
+          teamId: 'tm_0000000001',
           backgroundDocs: [{ name: 'd' }],
         }),
       ).toHaveLength(0);
@@ -267,14 +263,14 @@ describe('TasksController', () => {
       expect(
         await errorsOf(CreateTaskDto, {
           title: 'x',
-          agents: [{ agentId: 'a_1' }],
+          teamId: 'tm_0000000001',
           executionMode: 'plan',
         }),
       ).toHaveLength(0);
       expect(
         await errorsOf(CreateTaskDto, {
           title: 'x',
-          agents: [{ agentId: 'a_1' }],
+          teamId: 'tm_0000000001',
           executionMode: 'agile',
         }),
       ).not.toHaveLength(0);

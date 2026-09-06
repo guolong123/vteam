@@ -1,7 +1,23 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsOptional, IsString, ValidateNested } from 'class-validator';
-import { TaskAgentInput } from './create-task.dto';
+import { IsArray, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
+
+export class TaskAgentInput {
+  @ApiProperty({ description: '模板 Agent id' })
+  @IsString()
+  agentId: string;
+
+  @ApiPropertyOptional({ description: '实例别名' })
+  @IsOptional()
+  @IsString()
+  alias?: string;
+
+  @ApiPropertyOptional({ description: '实例工作目录' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  workDir?: string;
+}
 
 /**
  * POST /tasks/:id/team 请求体（09 篇 §3.4 团队调整，FR-02；角色/实例分离 T2）。

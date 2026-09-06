@@ -61,7 +61,7 @@ export class RealtimeController {
     name: 'scope',
     required: false,
     description:
-      '订阅粒度：global（缺省）| task:<taskId> | channel:<channelId> | all；逗号分隔可合并订阅多 scope（如 channel:c1,task:t1,global）；task/channel 需为项目成员；all = 全量订阅但仅收调用者成员项目的事件',
+      '订阅粒度：global（缺省）| task:<taskId> | channel:<channelId> | team:<teamId> | all；逗号分隔可合并订阅多 scope（如 channel:c1,task:t1,team:tm_1,global）；task/channel 需为项目成员；team 需鉴权；all = 全量订阅但仅收调用者成员项目的事件',
   })
   @ApiQuery({
     name: 'since',
@@ -171,8 +171,9 @@ export class RealtimeController {
   /**
    * 解析 scope 参数为 scope 数组：
    * - 缺省/空 → [{ type: 'global' }]
-   * - 逗号分隔多 scope（如 `channel:c1,task:t1,global`），空段忽略
+   * - 逗号分隔多 scope（如 `channel:c1,task:t1,team:tm_1,global`），空段忽略
    * - 任一段非法 → 400（复用单 scope 错误消息格式）
+   * - 双订阅过渡期兼容：task: 与 team: 可共存（如 task:t_1,team:tm_1），不复用 task_group
    */
   private parseScope(raw?: string): RealtimeScope[] {
     if (raw === undefined || raw === null || raw === '') {
@@ -188,7 +189,7 @@ export class RealtimeController {
     return segments.map((segment) => this.parseScopeSegment(segment));
   }
 
-  /** 解析单个 scope 段：global | task:<id> | channel:<id>；非法 → 400。 */
+  /** 解析单个 scope 段：global | task:<id> | channel:<id> | team:<id>；非法 → 400。 */
   private parseScopeSegment(raw: string): RealtimeScope {
     if (raw === 'global') {
       return { type: 'global' };
@@ -197,15 +198,15 @@ export class RealtimeController {
     if (colon === -1) {
       throw new BadRequestException({
         code: 'SCOPE_INVALID',
-        message: 'scope 格式非法，应为 global | task:<id> | channel:<id>',
+        message: 'scope 格式非法，应为 global | task:<id> | channel:<id> | team:<id>',
       });
     }
     const type = raw.slice(0, colon) as RealtimeScopeType;
     const id = raw.slice(colon + 1);
-    if (type !== 'task' && type !== 'channel') {
+    if (type !== 'task' && type !== 'channel' && type !== 'team') {
       throw new BadRequestException({
         code: 'SCOPE_INVALID',
-        message: 'scope 类型非法，仅支持 task / channel',
+        message: 'scope 类型非法，仅支持 task / channel / team',
       });
     }
     if (!id) {
@@ -219,8 +220,9 @@ export class RealtimeController {
 
   /**
    * scope 数组权限校验：逐 scope 校验，global 无过滤（登录即可）。
-   * task:<id> → tasks.projectId；channel:<id> → chat_channels.taskId → tasks.projectId。
-   * 任一非 global scope 调用者非该项目成员 → 403 PERMISSION_PROJECT_NOT_MEMBER。
+   * task:<id> → tasks.projectId；channel:<id> → chat_channels.taskId → tasks.projectId；
+   * team:<id> → 校验 team 存在（鉴权已过，不做项目成员校验，按 team 维度隔离）。
+   * 任一非 global scope 调用者非该资源成员/资源不存在 → 403 PERMISSION_PROJECT_NOT_MEMBER。
    */
   private async assertScopeAccess(
     scopes: RealtimeScope[],
@@ -228,6 +230,16 @@ export class RealtimeController {
   ): Promise<void> {
     for (const scope of scopes) {
       if (scope.type === 'global') {
+        continue;
+      }
+      if (scope.type === 'team') {
+        const team = await (this.prisma as any).team?.findUnique?.({
+          where: { id: scope.id },
+          select: { id: true },
+        });
+        if (!team) {
+          this.throwForbidden();
+        }
         continue;
       }
       const projectId = await this.resolveProjectId(scope);
@@ -246,8 +258,11 @@ export class RealtimeController {
     }
   }
 
-  /** 解析 scope 对应的所属项目 id；资源不存在返回 null（统一按无权处理，防信息泄露）。 */
+  /** 解析 scope 对应的所属项目 id；资源不存在返回 null（统一按无权处理，防信息泄露）。team scope 返回 null（全局资源）。 */
   private async resolveProjectId(scope: RealtimeScope): Promise<string | null> {
+    if (scope.type === 'team') {
+      return null;
+    }
     if (scope.type === 'task') {
       const task = await this.prisma.task.findUnique({
         where: { id: scope.id },

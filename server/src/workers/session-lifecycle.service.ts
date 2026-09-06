@@ -23,14 +23,16 @@ export type TaskGroupInstanceRow = {
 };
 
 /**
- * 会话生命周期服务（T12，架构决策 D3）：
+ * 会话生命周期服务（T12，架构决策 D3；TeamMember 维度）：
  * Session.workerId/instanceRef 写入路径 + status=active + TaskGroupInstance 落库。
+ * 唯一键保持 uk_sessions_task_agent（taskId, taskAgentId）不动以保存量迁移安全，
+ * 上层复用维度改为 teamMemberId（Session.teamMemberId）：同一 TeamMember 跨任务/二次 @
+ * 复用同一 opencode sessionId 时，instanceRef 保持不变，TaskGroupInstance 幂等复用不重建。
  *
  * - bindSessionToWorker：分派时把 Session 绑定到 worker（写 workerId + instanceRef + status=active），
  *   同事务写 TaskGroupInstance 行（id=ti_<seq>，instanceId = opencode sessionId）。
- *   幂等：同 (taskId, workerId, instanceId) 的实例行已存在则复用而非报错，
- *   对齐「二次 @ 复用同一 opencode 会话」（plan D3）。
- * - getInstancesByTask / getInstanceBySession：供 T10 WorkerDispatcher 调度复用与任务页查询。
+ *   幂等：同 (taskId, workerId, instanceId) 已存在则复用（二次 @ 复用同一 opencode 会话，reuse=true 时不重建）。
+ * - getInstancesByTask / getInstanceBySession：供 WorkerDispatcher 调度复用与任务页查询。
  */
 @Injectable()
 export class SessionLifecycleService implements OnModuleInit {
@@ -53,12 +55,13 @@ export class SessionLifecycleService implements OnModuleInit {
   }
 
   /**
-   * 绑定 Session → worker（T10 WorkerDispatcher 首次分派调用）。
+   * 绑定 Session → worker（WorkerDispatcher 首次分派调用，TeamMember 维度）。
    *
-   * 事务内：查 Session（不存在 → 404 SESSION_NOT_FOUND）→ 幂等 upsert TaskGroupInstance →
+   * 事务内：查 Session（不存在 → 404）→ 幂等 upsert TaskGroupInstance →
    * 更新 Session.workerId + instanceRef + status=active。
-   * 幂等语义：同 session 重复 bind 不报错（二次 @ 复用同一 opencode 会话时 workerId/instanceRef 更新，
-   * TaskGroupInstance 实例行复用已有行）。
+   * 幂等：同 (taskId, workerId, instanceId) 已有行则复用不重建（二次 @ 复用同一 opencode sessionId，
+   * reuseSession=true 时保留 TaskGroupInstance，Do NOT 每任务重建）。唯一键保持 uk_sessions_task_agent，
+   * 上层按 teamMemberId 维度复用（兼容回退 taskAgentId 快照关联）。
    */
   async bindSessionToWorker(
     sessionId: string,
@@ -152,6 +155,83 @@ export class SessionLifecycleService implements OnModuleInit {
         },
       });
       return { sessionId, unbound: true };
+    });
+  }
+
+  /**
+   * 批量重置团队会话（Todo7 记忆开关）：
+   * 对该团队所有 TeamMember 对应的 Session 行批量执行 resetInstanceSession 语义：
+   * soft-remove TaskGroupInstance 先于 delete，再 delete 旧 Session 并 create 新 s_ 行（created，workerId/instanceRef 清空）。
+   * 在调用方事务内执行（accept/archive 同事务或手动 reset 事务），Memory 表不动。
+   * 返回重置的会话数。
+   */
+  async resetTeamSessionsInTx(
+    tx: Prisma.TransactionClient,
+    teamId: string,
+  ): Promise<number> {
+    const members = await (tx as any).teamMember.findMany({
+      where: { teamId },
+      select: { id: true },
+    });
+    if (!members || members.length === 0) return 0;
+    const memberIds = members.map((m: { id: string }) => m.id);
+    const sessions = await (tx as any).session.findMany({
+      where: { teamMemberId: { in: memberIds } },
+      select: {
+        id: true,
+        taskId: true,
+        taskAgentId: true,
+        agentId: true,
+        teamMemberId: true,
+        workerId: true,
+        instanceRef: true,
+      },
+    });
+    if (!sessions || sessions.length === 0) return 0;
+    // soft-remove 先于 delete（MUST DO）
+    for (const s of sessions as Array<{
+      taskId: string;
+      workerId: string | null;
+      instanceRef: string | null;
+    }>) {
+      if (s.workerId && s.instanceRef) {
+        await (tx as any).taskGroupInstance.updateMany({
+          where: {
+            taskId: s.taskId,
+            workerId: s.workerId,
+            instanceId: s.instanceRef,
+            removedAt: null,
+          },
+          data: { removedAt: new Date() },
+        });
+      }
+    }
+    const ids = (sessions as Array<{ id: string }>).map((s) => s.id);
+    await (tx as any).session.deleteMany({ where: { id: { in: ids } } });
+    for (const s of sessions as Array<{
+      taskId: string;
+      taskAgentId: string;
+      agentId: string;
+      teamMemberId: string | null;
+    }>) {
+      await (tx as any).session.create({
+        data: {
+          id: await this.idGen.nextId('s'),
+          taskId: s.taskId,
+          taskAgentId: s.taskAgentId,
+          agentId: s.agentId,
+          teamMemberId: s.teamMemberId,
+          status: SESSION_STATUS.created,
+        },
+      });
+    }
+    return sessions.length;
+  }
+
+  /** 兼容：单团队批量重置（事务外入口，供 TeamsService 手动调用事务包装前置）。 */
+  async resetTeamSessions(teamId: string): Promise<number> {
+    return this.prisma.$transaction(async (tx) => {
+      return this.resetTeamSessionsInTx(tx as unknown as Prisma.TransactionClient, teamId);
     });
   }
 

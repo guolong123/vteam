@@ -295,20 +295,42 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     if (!task?.mainAgentInstanceId) {
       throw new Error(`任务 ${taskId} 无主实例，无法定向 dispatch`);
     }
-    // 主实例 private 频道优先（巡检/托管确认为私密独白，不注入群聊公开回复指令），回退群聊
-    const channel =
-      (await this.prisma.chatChannel.findFirst({
-        where: {
-          taskId,
-          type: CHANNEL_TYPE.private,
-          taskAgentId: task.mainAgentInstanceId,
-        },
+    const taskMeta = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { teamId: true },
+    });
+    const teamId = taskMeta?.teamId ?? null;
+    let channel: { id: string } | null = null;
+    if (teamId) {
+      const tm = await (this.prisma as any).teamMember.findFirst({
+        where: { id: task.mainAgentInstanceId },
+        select: { id: true, teamId: true },
+      });
+      if (tm?.id) {
+        channel = await this.prisma.chatChannel.findFirst({
+          where: { teamId, teamMemberId: tm.id, deletedAt: null },
+          select: { id: true },
+        });
+      }
+      if (!channel) {
+        channel = await this.prisma.chatChannel.findFirst({
+          where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+          select: { id: true },
+        });
+      }
+      // 兼容存量 taskAgent 私聊（teamMember 未建）
+      if (!channel) {
+        channel = await this.prisma.chatChannel.findFirst({
+          where: { taskId, type: CHANNEL_TYPE.private, taskAgentId: task.mainAgentInstanceId },
+          select: { id: true },
+        });
+      }
+    } else {
+      channel = await this.prisma.chatChannel.findFirst({
+        where: { taskId, type: CHANNEL_TYPE.private, taskAgentId: task.mainAgentInstanceId },
         select: { id: true },
-      })) ??
-      (await this.prisma.chatChannel.findFirst({
-        where: { taskId, type: CHANNEL_TYPE.task_group },
-        select: { id: true },
-      }));
+      });
+    }
     if (!channel) {
       throw new Error(`任务 ${taskId} 无可用频道，无法定向 dispatch`);
     }

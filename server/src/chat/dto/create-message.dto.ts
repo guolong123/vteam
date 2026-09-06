@@ -55,4 +55,9 @@ export class CreateMessageDto {
   @IsOptional()
   @IsString()
   attachmentType?: string;
+
+  @ApiPropertyOptional({ description: '任务分区 id（team_group 频道分区）' })
+  @IsOptional()
+  @IsString()
+  taskId?: string;
 }

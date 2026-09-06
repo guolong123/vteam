@@ -7,6 +7,7 @@ import {
   NotFoundException,
   Param,
 } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   AuthenticatedUser,
@@ -32,6 +33,7 @@ import { DocsMirrorService } from './docs-mirror.service';
  * 鉴权：全局 JwtAuthGuard 要求合法 access token；本控制器按 taskId → projectId →
  * 项目成员校验（AC-2 越权 401/403）。taskId 白名单 + 文件名白名单防路径穿越/跨任务。
  */
+@ApiTags('docs-site')
 @Controller('docs-site')
 export class DocsSiteController {
   constructor(
@@ -41,6 +43,7 @@ export class DocsSiteController {
 
   /** 动态注册表 GET /docs-site/:taskId/registry → DocDef[]。 */
   @Get(':taskId/registry')
+  @ApiOperation({ summary: '文档站注册表：任务文档树' })
   @Header('Content-Type', 'application/json; charset=utf-8')
   async registry(
     @Param('taskId') taskId: string,
@@ -52,6 +55,7 @@ export class DocsSiteController {
 
   /** 镜像文档内容 GET /docs-site/:taskId/prd/:file。 */
   @Get(':taskId/prd/:file')
+  @ApiOperation({ summary: '读取任务镜像文档内容' })
   @Header('Content-Type', 'text/markdown; charset=utf-8')
   async prd(
     @Param('taskId') taskId: string,
@@ -71,6 +75,7 @@ export class DocsSiteController {
 
   /** 原型列表 GET /docs-site/:taskId/prototypes → { items: [{id, name, file}] }。 */
   @Get(':taskId/prototypes')
+  @ApiOperation({ summary: '任务原型列表' })
   @Header('Content-Type', 'application/json; charset=utf-8')
   async prototypes(
     @Param('taskId') taskId: string,
@@ -82,6 +87,7 @@ export class DocsSiteController {
 
   /** 原型源码内容 GET /docs-site/:taskId/prototypes/<file> → TSX / DSL JSON 文本。 */
   @Get(':taskId/prototypes/*')
+  @ApiOperation({ summary: '读取任务原型源码' })
   @Header('Content-Type', 'text/plain; charset=utf-8')
   async prototypeContent(
     @Param('taskId') taskId: string,

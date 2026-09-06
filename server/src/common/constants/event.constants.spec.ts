@@ -14,6 +14,10 @@ describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 �
     expect(EVENT_TYPES.AGENT_ERROR).toBe('agent.error');
     expect(EVENT_TYPES.TASK_STATUS_CHANGED).toBe('task.status.changed');
     expect(EVENT_TYPES.TEAM_CHANGED).toBe('team.changed');
+    expect(EVENT_TYPES.TEAM_CREATED).toBe('team.created');
+    expect(EVENT_TYPES.TEAM_UPDATED).toBe('team.updated');
+    expect(EVENT_TYPES.TEAM_DELETED).toBe('team.deleted');
+    expect(EVENT_TYPES.TEAM_QUEUE_CHANGED).toBe('team.queue.changed');
     expect(EVENT_TYPES.ARTIFACT_SUBMITTED).toBe('artifact.submitted');
     expect(EVENT_TYPES.ISSUE_CHANGED).toBe('issue.changed');
     expect(EVENT_TYPES.SESSION_UPDATED).toBe('session.updated');
@@ -22,7 +26,7 @@ describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 �
     expect(EVENT_TYPES.AGENT_STATUS).toBe('agent.status');
     expect(EVENT_TYPES.WORKER_HEARTBEAT).toBe('worker.heartbeat');
     expect(EVENT_TYPES.AGENT_QUESTION).toBe('agent.question');
-    expect(Object.values(EVENT_TYPES)).toHaveLength(13);
+    expect(Object.values(EVENT_TYPES)).toHaveLength(17);
     for (const name of Object.values(EVENT_TYPES)) {
       expect(name.includes('_')).toBe(false);
     }
@@ -42,6 +46,7 @@ describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 �
   it('CHANNEL_TYPE 两类频道', () => {
     expect(CHANNEL_TYPE).toEqual({
       task_group: 'task_group',
+      team_group: 'team_group',
       private: 'private',
     });
   });

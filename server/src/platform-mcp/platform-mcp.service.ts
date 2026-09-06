@@ -330,19 +330,10 @@ export class PlatformMcpService {
       args.taskId,
       args.selfInstanceId,
     );
-    const channel = await this.findTaskGroupChannel(args.taskId);
-    if (!channel) {
-      throw new NotFoundException({
-        code: PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
-        message: '任务群聊频道不存在',
-      });
-    }
+    const channel = await this.ensureTeamGroupChannel(args.taskId);
     const attachment = args.fileRef
       ? await this.resolveAttachment(ctx, args.taskId, args.fileRef)
       : undefined;
-    // is_0000000015 修复：解析 content 中 @<别名/名称> 的定向提及（agent 互 @ 用），
-    // 落库 mentions（对齐 notify_agent 形状）并分派到被 @ 实例——修复「群聊 @ 主 Agent
-    // 无反应」。未 @ 任何人 → mentions 保持 null、不触发分派（普通群聊发布）。
     const { mentions, mentionedInstances } = await this.parseGroupPostMentions(
       args.taskId,
       args.content,
@@ -352,6 +343,7 @@ export class PlatformMcpService {
       data: {
         id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
         channelId: channel.id,
+        taskId: args.taskId,
         senderType: SENDER_TYPE.agent,
         senderId: await this.resolveSenderAgentId(args.taskId, instanceId),
         senderInstanceId: instanceId,
@@ -359,7 +351,7 @@ export class PlatformMcpService {
         mentions: (mentions ?? null) as Prisma.InputJsonValue | null,
         status: MESSAGE_STATUS.sent,
         ...(attachment ?? {}),
-      },
+      } as any,
     });
 
     await this.realtime.broadcast(
@@ -3249,11 +3241,63 @@ export class PlatformMcpService {
     return ta?.agentId ?? instanceId;
   }
 
-  /** 任务群聊频道（task_group 型 ChatChannel）。 */
-  private findTaskGroupChannel(taskId: string) {
+  private async findTaskGroupChannel(taskId: string): Promise<{ id: string } | null> {
+    try {
+      const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: { teamId: true } });
+      const teamId = (task as any)?.teamId ?? null;
+      if (teamId) {
+        const ch = await this.prisma.chatChannel.findFirst({
+          where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+          select: { id: true },
+        });
+        if (ch) return ch;
+      }
+    } catch {}
     return this.prisma.chatChannel.findFirst({
       where: { taskId, type: CHANNEL_TYPE.task_group },
       select: { id: true },
+    });
+  }
+
+  private async ensureTeamGroupChannel(taskId: string): Promise<{ id: string }> {
+    const found = await this.findTaskGroupChannel(taskId);
+    if (found) return found;
+    try {
+      const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: { teamId: true } });
+      const teamId: string | null = (task as any)?.teamId ?? null;
+      if (teamId) {
+        const existing = await this.prisma.chatChannel.findFirst({
+          where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+          select: { id: true },
+        });
+        if (existing) return existing;
+        try {
+          const created = await this.prisma.chatChannel.create({
+            data: {
+              id: await this.idGen.nextId('c'),
+              type: CHANNEL_TYPE.team_group,
+              teamId,
+              teamGroupKey: teamId,
+              taskId: null,
+            } as any,
+            select: { id: true },
+          });
+          return created;
+        } catch (err: any) {
+          if (err?.code === 'P2002') {
+            const raced = await this.prisma.chatChannel.findFirst({
+              where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+              select: { id: true },
+            });
+            if (raced) return raced;
+          }
+          throw err;
+        }
+      }
+    } catch {}
+    throw new NotFoundException({
+      code: PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
+      message: '任务群聊频道不存在',
     });
   }
 

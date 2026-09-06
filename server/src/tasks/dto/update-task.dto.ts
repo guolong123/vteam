@@ -66,4 +66,9 @@ export class UpdateTaskDto {
   @IsOptional()
   @IsBoolean()
   managedMode?: boolean;
+
+  @ApiPropertyOptional({ description: '完成后为下一任务开新会话（覆盖团队 reuseSession，默认 false）' })
+  @IsOptional()
+  @IsBoolean()
+  resetAfterComplete?: boolean;
 }

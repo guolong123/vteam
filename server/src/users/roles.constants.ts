@@ -3,7 +3,7 @@
  * 8 资源 × 6 操作；三态：true=允许 / false=禁止 / undefined=未配置（视为禁止）。
  */
 
-/** 9 个平台资源域（原型 RESOURCES 的英文 key + 渠道集成） */
+/** 10 个平台资源域（原型 RESOURCES 的英文 key + 渠道集成 + 全局团队） */
 export const PERMISSION_RESOURCES = [
   'tasks', // 任务
   'chats', // 群聊
@@ -14,6 +14,7 @@ export const PERMISSION_RESOURCES = [
   'users', // 用户管理
   'roles', // 权限配置
   'channels', // 集成渠道
+  'teams', // 全局团队
 ] as const;
 
 /** 6 个操作（原型 ACTIONS：查看/创建/编辑/删除/验收/管理） */

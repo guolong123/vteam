@@ -109,20 +109,19 @@ export interface AgentIdentityInfo {
   persona: string | null;
 }
 
-/** 团队成员信息（dispatch 时从 taskAgents→agent 提取，注入全局上下文供 agent 判断与谁协作）。
- *  T3 实例化：团队成员 = 任务实例（TaskAgent）——instanceId 为实例 id（ta_ 前缀）、
- *  alias 为实例别名（默认「<角色中文名>-<seq>」如 开发者-1）、seq 为同 agent 同任务序号；
- *  id/name/role 来自模板 agent（保留兼容）。 */
+/** 团队成员信息（dispatch 时从 TeamMember→Agent 组装，注入全局上下文供 agent 判断与谁协作）。
+ *  TeamMember 维度：instanceId 为团队成员 id（tmm_ 前缀，TeamMember.id），alias/seq 来自团队模板；
+ *  id/name/role 来自模板 agent。兼容期若团队未建（task.teamId 为空）则回退 TaskAgent  快照。 */
 export interface TeamMemberInfo {
   /** 模板 agent id（继承 name/role/prompt/model）。 */
   id: string;
   name: string | null;
   role: string | null;
-  /** 实例 id（TaskAgent.id，ta_ 前缀）——团队成员唯一身份（@/指派/主实例判定依据）。 */
+  /** 团队成员 id（TeamMember.id，tmm_ 前缀）——团队成员唯一身份（@/指派/主实例判定依据）；兼容期回退 ta_。 */
   instanceId: string;
   /** 实例别名（默认「<角色中文名>-<seq>」）；缺省回退 name。 */
   alias: string | null;
-  /** 同 agent 同任务内序号（服务端生成，唯一键 taskId+agentId+seq）。 */
+  /** 同 agent 同团队内序号（服务端生成，唯一键 teamId+agentId+seq）。 */
   seq: number;
 }
 
@@ -135,6 +134,10 @@ export interface BuildSystemInstructionsOptions {
   mainAgentInstanceId?: string | null;
   /** 当前 agent 的实例身份（TaskAgent.id，ta_ 前缀）；缺省（存量会话未绑实例）回退 agent.id 保持兼容。 */
   selfInstanceId?: string;
+  /** 任务实例 id（TaskAgent.id，ta_ 前缀）：团队会话按团队成员（tmm_）调度时，
+   * selfInstanceId 为团队成员 id，此时用本字段明确其在本任务中的实例身份。
+   * 缺省表示与 selfInstanceId 一致。 */
+  taskInstanceId?: string | null;
   /** 当前 agent 的实例别名（默认「<角色中文名>-<seq>」）；缺省回退 agent.name。 */
   selfAlias?: string | null;
   /** 任务级独立工作目录（<WORK_DIR>/tasks/<taskId>，prompt_async directory）；注入
@@ -213,13 +216,24 @@ export function buildSystemInstructions(
 ): string {
   const selfInstanceId = opts?.selfInstanceId ?? agent.id;
   const selfName = opts?.selfAlias ?? agent.name ?? agent.id;
+  // 双维度身份：团队会话按团队成员（tmm_）调度时，另行明确其任务实例 id（ta_），
+  // 避免 agent 拿 tmm_ 去任务成员表（ta_）自查时误判"不是任务团队成员"
+  const taskInstanceId =
+    opts?.taskInstanceId && opts.taskInstanceId !== selfInstanceId ? opts.taskInstanceId : null;
+  const identityLine = taskInstanceId
+    ? `【你的身份】你是本任务的 ${selfName}（团队成员 id: ${selfInstanceId}，任务实例 id: ${taskInstanceId}，角色: ${agent.role ?? ''}）。` +
+      `你在本任务团队中的实例就是 ${taskInstanceId}（【团队成员】段中标"主 Agent"的那一位若是你，请直接认领）；` +
+      `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的任务实例 id（${taskInstanceId}）。`
+    : `【你的身份】你是本任务的 ${selfName}（实例 id: ${selfInstanceId}，角色: ${agent.role ?? ''}）。`;
   const blocks = [
     GLOBAL_SYSTEM_INSTRUCTIONS +
       '\n' +
-      `【你的身份】你是本任务的 ${selfName}（实例 id: ${selfInstanceId}，角色: ${agent.role ?? ''}）。` +
+      identityLine +
       (agent.prompt ? `\n【职责】${agent.prompt}` : '') +
       '\n调用 vteam MCP 工具时，落库类工具（group_post / notify_agent / submit_artifact）的' +
-      'selfInstanceId 参数必须填写你的实例 id（ta_ 前缀，服务器按此校验归属并精确记录发送者）。',
+      'selfInstanceId 参数必须填写你的任务实例 id' +
+      (taskInstanceId ? `（${taskInstanceId}）` : '（ta_ 前缀，服务器按此校验归属并精确记录发送者）') +
+      '。',
     agent.persona ? renderPersonaSection(agent.persona) : '',
     opts?.persistentWorkDir
       ? `\n【运行时工作目录】本任务为你分配的实际持久化工作目录为：${opts.persistentWorkDir}。` +
@@ -923,9 +937,8 @@ export class WorkerDispatcher
 
   /**
    * FR-13：agent 互 @ 触发——MCP `notify_agent` 工具调用入口。
-   * T3 实例语义：查目标**实例**在任务下的会话（uk_sessions_task_agent，按 taskAgentId）
-   * → 构造 DispatchRequest 触发目标实例的 dispatch（agentId 从 session 行取，防同 agent
-   * 多实例下会话串扰）；复用 dispatch() 全链路（assignWorker → createSession/bind →
+   * TeamMember 维度：按 teamMemberId 定位会话（新键），找不到时回退 taskAgentId 快照关联
+   * （兼容存量/中间态）；复用 dispatch() 全链路（assignWorker → createSession/bind →
    * execute → ingress 回流落库+广播，不复制 dispatchForTarget 逻辑）；单目标失败由
    * dispatch() 统一 emitError + 广播 agent.error。
    */
@@ -935,13 +948,19 @@ export class WorkerDispatcher
     channelId: string;
     /** 消息内容（含 @目标，透传给目标 agent 作为触发 prompt）。 */
     text: string;
-    /** 被 @ 的目标实例 id（TaskAgent.id，ta_ 前缀）。 */
+    /** 被 @ 的目标成员 id（TeamMember.id，tmm_ 前缀；兼容 ta_ 快照）。 */
     targetInstanceId: string;
   }): Promise<void> {
-    const session = await this.prisma.session.findFirst({
-      where: { taskId: input.taskId, taskAgentId: input.targetInstanceId },
+    let session = await (this.prisma.session as any).findFirst({
+      where: { taskId: input.taskId, teamMemberId: input.targetInstanceId },
       select: { id: true, agentId: true },
     });
+    if (!session) {
+      session = await this.prisma.session.findFirst({
+        where: { taskId: input.taskId, taskAgentId: input.targetInstanceId },
+        select: { id: true, agentId: true },
+      } as any);
+    }
     if (!session) {
       throw new Error(
         `实例 ${input.targetInstanceId} 无会话（任务 ${input.taskId}）`,
@@ -982,15 +1001,16 @@ export class WorkerDispatcher
       throw new Error('会话缺失：目标无 sessionId，无法分派');
     }
 
-    // 1. 定位 Session：已绑 workerId/instanceRef → 复用同一 opencode 会话（D3 二次 @ 复用）。
-    // T3 实例语义：taskAgentId = 当前实例（团队/主实例判定、身份注入依据）。
-    const session = await this.prisma.session.findUnique({
+    // 1. 定位 Session：已绑 workerId/instanceRef → 复用同一 opencode 会话（D3 二次 @ 复用同一 sessionId）。
+    // TeamMember 维度：优先 teamMemberId，兼容 taskAgentId 存量；instanceRef 为 opencode sessionId，复用时保留
+    const session = await (this.prisma.session as any).findUnique({
       where: { id: target.sessionId },
       select: {
         id: true,
         workerId: true,
         instanceRef: true,
         taskAgentId: true,
+        teamMemberId: true,
       },
     });
     if (!session) {
@@ -1031,6 +1051,7 @@ export class WorkerDispatcher
         );
       }
       // 首次绑定（T12）：占位 instanceRef，opencode 会话创建后第二次 bind 写入真实 id
+      // Todo7 记忆开关：reuseSession=true 时复用同一 instanceRef（TaskGroupInstance 幂等复用，不重建）
       await this.sessionLifecycle.bindSessionToWorker(
         target.sessionId,
         workerId,
@@ -1112,7 +1133,7 @@ export class WorkerDispatcher
       where: { id: request.channelId },
       select: { type: true },
     });
-    if (sourceChannel?.type === CHANNEL_TYPE.task_group) {
+    if (sourceChannel?.type === CHANNEL_TYPE.task_group || sourceChannel?.type === CHANNEL_TYPE.team_group) {
       promptBlocks.push(GROUP_TRIGGER_INSTRUCTION);
     }
     if (request.text.includes('[WeCom:')) {
@@ -1126,14 +1147,13 @@ export class WorkerDispatcher
     promptBlocks.push(request.text);
     const prompt = promptBlocks.join('\n\n');
 
-    // 5. loading(thinking)（对齐 Phase 2 mock 分派时序）——T6 实例语义：广播带 instanceId，
-    //    同 agent 多实例各自 loading（前端按实例消费，不再按 agentId 全体 loading）
+    // 5. loading(thinking)（对齐 Phase 2 mock 分派时序）——TeamMember 维度：广播带 instanceId 为 teamMemberId
     await this.realtime.broadcast(
       EVENT_TYPES.AGENT_LOADING,
       {
         taskId,
         agentId: target.agentId,
-        instanceId: session.taskAgentId ?? null,
+        instanceId: (session as any).teamMemberId ?? session.taskAgentId ?? null,
         sessionId: target.sessionId,
         phase: 'thinking',
       },
@@ -1142,7 +1162,7 @@ export class WorkerDispatcher
     this.emitLoading({
       taskId,
       agentId: target.agentId,
-      instanceId: session.taskAgentId ?? null,
+      instanceId: (session as any).teamMemberId ?? session.taskAgentId ?? null,
       sessionId: target.sessionId,
       phase: 'thinking',
     });
@@ -1191,57 +1211,128 @@ export class WorkerDispatcher
       persona: agentRow?.persona ?? null,
     };
     // 主 Agent 动态注入 + 团队成员注入（system 通道，不进入聊天记录）：一次轻量 task
-    // 查询取 mainAgentInstanceId + 团队成员实例（id/alias/seq/removedAt→agent id/名称/角色）。
-    // 模板 prompt 不写死"主 Agent"职责，由运行时按 mainAgentInstanceId 判定动态下发；
-    // 团队信息直接进全局上下文，agent 无需再经 task_context MCP 工具拉取即可了解与谁协作。
-    // hot path 只 select 必要字段（TASK_AGENTS_INCLUDE 形状对齐 tasks.service）。
-    const taskRow = await this.prisma.task.findUnique({
+    // 查询取 mainAgentInstanceId + 团队成员（TeamMember + Agent，别名/seq 正确）。
+    // TeamMember 维度：team 段从 TeamMember 组装（tmm_ 前缀），若任务无 teamId 则回退 TaskAgent 快照兼容。
+    const taskRowRaw: any = await (this.prisma as any).task.findUnique({
       where: { id: taskId },
       select: {
         projectId: true,
+        teamId: true,
         mainAgentInstanceId: true,
         executionMode: true,
         taskAgents: {
-          include: {
-            agent: { select: { id: true, name: true, role: true } },
-          },
+          include: { agent: { select: { id: true, name: true, role: true } } },
         },
       },
     });
-    // T3 实例语义：当前实例 = session.taskAgentId（可能 NULL——存量会话未绑实例，降级
-    // agent 语义：isMainAgent=false、selfInstanceId 回退 agent.id、selfAlias 回退 name）。
-    const selfInstanceId = session.taskAgentId ?? undefined;
-    const team: TeamMemberInfo[] = (taskRow?.taskAgents ?? [])
-      .filter((ta) => !ta.removedAt)
-      .map((ta) => ({
-        id: ta.agent.id,
-        name: ta.agent.name,
-        role: ta.agent.role,
-        instanceId: ta.id,
-        alias: ta.alias,
-        seq: ta.seq,
-      }));
-    const isMainAgent =
-      session.taskAgentId != null &&
-      session.taskAgentId === taskRow?.mainAgentInstanceId;
+    const taskRow: any = taskRowRaw;
+    let team: TeamMemberInfo[] = [];
+    let teamMemberRows: any[] = [];
+    if (taskRow?.teamId) {
+      try {
+        teamMemberRows = await (this.prisma as any).teamMember.findMany({
+          where: { teamId: taskRow.teamId },
+          include: { agent: { select: { id: true, name: true, role: true } } },
+        });
+      } catch {
+        teamMemberRows = [];
+      }
+      if (teamMemberRows.length > 0) {
+        team = teamMemberRows.map((tm: any) => ({
+          id: tm.agent.id,
+          name: tm.agent.name,
+          role: tm.agent.role,
+          instanceId: tm.id,
+          alias: tm.alias,
+          seq: tm.seq,
+        }));
+      } else {
+        team = (taskRow.taskAgents ?? [])
+          .filter((ta: any) => !ta.removedAt)
+          .map((ta: any) => ({
+            id: ta.agent.id,
+            name: ta.agent.name,
+            role: ta.agent.role,
+            instanceId: ta.id,
+            alias: ta.alias,
+            seq: ta.seq,
+          }));
+      }
+    } else {
+      team = (taskRow?.taskAgents ?? [])
+        .filter((ta: any) => !ta.removedAt)
+        .map((ta: any) => ({
+          id: ta.agent.id,
+          name: ta.agent.name,
+          role: ta.agent.role,
+          instanceId: ta.id,
+          alias: ta.alias,
+          seq: ta.seq,
+        }));
+    }
+    if (team.length === 0 && !(taskRow as any)?.teamId) {
+      const fallback: any = await (this.prisma as any).task.findUnique({
+        where: { id: taskId },
+        select: {
+          mainAgentInstanceId: true,
+          taskAgents: {
+            include: { agent: { select: { id: true, name: true, role: true } } },
+          },
+        },
+      });
+      if (fallback?.taskAgents) {
+        team = (fallback.taskAgents as any[])
+          .filter((ta: any) => !ta.removedAt)
+          .map((ta: any) => ({
+            id: ta.agent.id,
+            name: ta.agent.name,
+            role: ta.agent.role,
+            instanceId: ta.id,
+            alias: ta.alias,
+            seq: ta.seq,
+          }));
+        if (!taskRow) (taskRow as any) = fallback;
+        else if (!(taskRow as any).mainAgentInstanceId) (taskRow as any).mainAgentInstanceId = (fallback as any).mainAgentInstanceId;
+      }
+    }
+    // 当前实例：优先 teamMemberId 维度，其次 taskAgentId，缺失回退 agent 语义
+    const selfInstanceId = (session as any).teamMemberId ?? session.taskAgentId ?? undefined;
+    // 主实例判定：支持 teamMemberId 与 taskAgentId 双维度；若 mainAgentInstanceId 为 TaskAgent 但 team 为 TeamMember，映射比对
+    let isMainAgent = false;
+    if (selfInstanceId && taskRow?.mainAgentInstanceId) {
+      if (selfInstanceId === taskRow.mainAgentInstanceId) {
+        isMainAgent = true;
+      } else if (teamMemberRows.length > 0 && (session as any).teamMemberId) {
+        // main 可能是 TaskAgent，映射到 TeamMember：找对应 agentId/seq 的成员
+        try {
+          const mainTA = await this.prisma.taskAgent.findUnique({
+            where: { id: taskRow.mainAgentInstanceId },
+            select: { agentId: true, seq: true },
+          } as any);
+          if (mainTA) {
+            const matched = teamMemberRows.find(
+              (tm: any) => tm.agentId === (mainTA as any).agentId && tm.seq === (mainTA as any).seq,
+            );
+            if (matched && matched.id === selfInstanceId) isMainAgent = true;
+          }
+        } catch {}
+      }
+    }
     const selfAlias = selfInstanceId
       ? (team.find((m) => m.instanceId === selfInstanceId)?.alias ?? null)
       : null;
-    // 登记活跃执行（platform-mcp assertWorkerTask 防冒充校验依据）；completed/error 注销。
-    // T4 实例语义：登记**实例 id**（session.taskAgentId）；存量会话（taskAgentId NULL）
-    // 回退 agentId 保持兼容（防旧会话防冒充失效）。
+    // 登记活跃执行（platform-mcp assertWorkerTask 防冒充校验依据）；完成/错误注销。
+    // TeamMember 维度：登记 teamMemberId，存量回退 taskAgentId/agentId
     this.registerExecution(
       workerId,
       taskId,
-      session.taskAgentId ?? target.agentId,
+      (session as any).teamMemberId ?? session.taskAgentId ?? target.agentId,
     );
-    // 私聊 SSE 不刷新修复：上一轮失败残留的 processing 消息若被 task.completed 复用，
-    // 本轮回复会写入旧消息（createdAt 保留上轮时间）→ 前端按 createdAt 排序后新回复被
-    // 排到历史中间，私聊页底部不刷新。新一轮 dispatch 前清理目标频道残留 processing。
+    // 私聊 SSE 不刷新修复：同上，清理残留 processing；按 teamMemberId 维度定位频道（回退 taskAgentId）
     const cleanupChannel = await this.resolveChannel(
       taskId,
       target.agentId,
-      session.taskAgentId ?? undefined,
+      (session as any).teamMemberId ?? session.taskAgentId ?? undefined,
     );
     if (cleanupChannel) {
       await this.prisma.message.updateMany({
@@ -1322,6 +1413,25 @@ export class WorkerDispatcher
         if (memoryIndex.length > 1200) memoryIndex = memoryIndex.slice(0, 1200);
       }
     } catch {}
+    let mainAgentInstanceIdForTeam: string | null = taskRow?.mainAgentInstanceId ?? null;
+    if (mainAgentInstanceIdForTeam && teamMemberRows.length > 0) {
+      const raw = mainAgentInstanceIdForTeam as string;
+      const isTeamMember = team.some((m) => m.instanceId === raw);
+      if (!isTeamMember) {
+        try {
+          const mainTA = await this.prisma.taskAgent.findUnique({
+            where: { id: raw },
+            select: { agentId: true, seq: true },
+          } as any);
+          if (mainTA) {
+            const matched = teamMemberRows.find(
+              (tm: any) => tm.agentId === (mainTA as any).agentId && tm.seq === (mainTA as any).seq,
+            );
+            if (matched) mainAgentInstanceIdForTeam = matched.id;
+          }
+        } catch {}
+      }
+    }
     await this.workerClient.execute(worker, {
       prompt: [{ type: 'text', text: prompt }],
       model,
@@ -1332,10 +1442,11 @@ export class WorkerDispatcher
       sessionId: opencodeSessionId,
       system: buildSystemInstructions(agentIdentity, {
         isMainAgent,
-        mainAgentInstanceId: taskRow?.mainAgentInstanceId ?? null,
+        mainAgentInstanceId: mainAgentInstanceIdForTeam,
         team,
         selfInstanceId,
         selfAlias,
+        taskInstanceId: (session as any)?.taskAgentId ?? null,
         persistentWorkDir: taskWorkDir,
         executionMode: taskRow?.executionMode,
         memoryIndex,
@@ -1349,13 +1460,13 @@ export class WorkerDispatcher
     this.completedSessions.delete(target.sessionId);
     this.failedSessions.delete(target.sessionId);
 
-    // 8. loading(operating)（工具执行阶段，FR-20）→ 回流超时 watchdog
+    // 8. loading(operating)（工具执行阶段，FR-20）→ 回流超时 watchdog（TeamMember 维度）
     await this.realtime.broadcast(
       EVENT_TYPES.AGENT_LOADING,
       {
         taskId,
         agentId: target.agentId,
-        instanceId: session.taskAgentId ?? null,
+        instanceId: (session as any).teamMemberId ?? session.taskAgentId ?? null,
         sessionId: target.sessionId,
         phase: 'operating',
       },
@@ -1364,7 +1475,7 @@ export class WorkerDispatcher
     this.emitLoading({
       taskId,
       agentId: target.agentId,
-      instanceId: session.taskAgentId ?? null,
+      instanceId: (session as any).teamMemberId ?? session.taskAgentId ?? null,
       sessionId: target.sessionId,
       phase: 'operating',
     });
@@ -1373,7 +1484,7 @@ export class WorkerDispatcher
       target.agentId,
       target.sessionId,
       workerId,
-      session.taskAgentId ?? target.agentId,
+      (session as any).teamMemberId ?? session.taskAgentId ?? target.agentId,
     );
   }
 
@@ -1492,19 +1603,20 @@ export class WorkerDispatcher
         const message = processingRow
           ? await this.prisma.message.update({
               where: { id: processingRow.id },
-              data: { content: finalContent, status: MESSAGE_STATUS.sent },
+              data: { content: finalContent, status: MESSAGE_STATUS.sent, taskId } as any,
             })
           : await this.prisma.message.create({
               data: {
                 id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
                 channelId: channel.id,
+                taskId,
                 senderType: SENDER_TYPE.agent,
                 senderId: agentId,
                 senderInstanceId: executionRef ?? null,
                 content: finalContent,
                 mentions: null,
                 status: MESSAGE_STATUS.sent,
-              },
+              } as any,
             });
         if (processingRow) {
           this.logger.log(
@@ -1842,13 +1954,14 @@ export class WorkerDispatcher
                         data: {
                           id: mirrorId,
                           channelId: groupChatChannel.id,
+                          taskId,
                           senderType: SENDER_TYPE.agent,
                           senderId: agentId,
                           senderInstanceId: executionRef ?? null,
                           content: { text: mirrorText, parts: finalParts } as unknown as Prisma.InputJsonValue,
                           mentions: null,
                           status: MESSAGE_STATUS.sent,
-                        },
+                        } as any,
                       });
                       await this.realtime.broadcast(
                         EVENT_TYPES.CHAT_MESSAGE_NEW,
@@ -2069,18 +2182,19 @@ export class WorkerDispatcher
       const message = processingRow
         ? await this.prisma.message.update({
             where: { id: processingRow.id },
-            data: { content, status: MESSAGE_STATUS.failed },
+            data: { content, status: MESSAGE_STATUS.failed, taskId } as any,
           })
         : await this.prisma.message.create({
             data: {
               id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
               channelId: channel.id,
+              taskId,
               senderType: SENDER_TYPE.agent,
               senderId: agentId,
               content,
               mentions: null,
               status: MESSAGE_STATUS.failed,
-            },
+            } as any,
           });
       await this.realtime.broadcast(
         EVENT_TYPES.CHAT_MESSAGE_NEW,
@@ -2397,40 +2511,60 @@ export class WorkerDispatcher
     return '系统';
   }
 
-  /**
-   * 定位 agent 最终回复的落库频道：**固定 private 会话频道（内心独白）**——架构上
-   * private 是每个 agent 的真实会话，群聊是汇总视图（对外消息经 forwardToGroup 转发）。
-   * F3 P1 修复：**按实例精确匹配**——同 agent 多实例各自独立私聊频道，若仍按 agentId
-   * findFirst 会命中最早创建的实例频道（消息串扰）。优先级：
-   * 1. taskAgentId 存在 → `{taskId, taskAgentId}` 精确命中该实例频道（终态回复/失败消息落库）。
-   * 2. taskAgentId 缺失（存量会话/频道 NULL）→ 回退 `{taskId, agentId}` 首实例（存量兼容）。
-   * 3. 均未命中 → 回退群聊频道兜底（消息仍可见）。
-   */
   private async resolveChannel(
     taskId: string,
     agentId: string,
     taskAgentId?: string,
   ) {
-    const dm = await this.prisma.chatChannel.findFirst({
+    const task = await (this.prisma as any).task.findUnique({
+      where: { id: taskId },
+      select: { teamId: true },
+    });
+    const teamId = task?.teamId ?? null;
+    if (teamId) {
+      if (taskAgentId) {
+        try {
+          const tm = await (this.prisma as any).teamMember?.findFirst?.({
+            where: { id: taskAgentId },
+            select: { id: true },
+          });
+          if (tm) {
+            const dmByTm = await this.prisma.chatChannel.findFirst({
+              where: { teamId, teamMemberId: taskAgentId },
+              select: { id: true, type: true },
+            });
+            if (dmByTm) return dmByTm;
+          }
+        } catch {}
+        const dm = await this.prisma.chatChannel.findFirst({
+          where: { taskId, taskAgentId },
+          select: { id: true, type: true },
+        });
+        if (dm) return dm;
+      } else {
+        const dm = await this.prisma.chatChannel.findFirst({
+          where: { teamId, agentId, type: CHANNEL_TYPE.private },
+          select: { id: true, type: true },
+        });
+        if (dm) return dm;
+      }
+      const group = await this.prisma.chatChannel.findFirst({
+        where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+        select: { id: true, type: true },
+      });
+      if (group) return group;
+    }
+    const dmLegacy = await this.prisma.chatChannel.findFirst({
       where: taskAgentId ? { taskId, taskAgentId } : { taskId, agentId },
       select: { id: true, type: true },
     });
-    if (dm) {
-      return dm;
-    }
+    if (dmLegacy) return dmLegacy;
     return this.prisma.chatChannel.findFirst({
       where: { taskId, type: CHANNEL_TYPE.task_group },
       select: { id: true, type: true },
     });
   }
 
-  /**
-   * 群聊转发（对外消息）：模型在回复中声明 group_post 后，把声明内容转发到群聊频道。
-   * 模型自主决策（像真人判断是否在群里公开回应）——未声明不调用本方法，回复留在私聊独白。
-   * attachment：group_post 声明 fileRef 且该文件已归档落盘 → 群聊消息挂附件
-   * （图片内嵌预览/文件下载链接，复用 messages 表 attachmentUrl 三字段）。
-   * 主频道即群聊（任务无该 agent 私聊，resolveChannel 回退）→ 已落库，跳过转发防重复。
-   */
   private async forwardToGroup(
     taskId: string,
     agentId: string,
@@ -2440,10 +2574,20 @@ export class WorkerDispatcher
     attachment?: { url: string; name: string },
   ): Promise<void> {
     try {
-      const group = await this.prisma.chatChannel.findFirst({
-        where: { taskId, type: CHANNEL_TYPE.task_group },
-        select: { id: true },
+      const task = await (this.prisma as any).task.findUnique({
+        where: { id: taskId },
+        select: { teamId: true },
       });
+      const teamId = task?.teamId ?? null;
+      const group = teamId
+        ? await this.prisma.chatChannel.findFirst({
+            where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+            select: { id: true },
+          })
+        : await this.prisma.chatChannel.findFirst({
+            where: { taskId, type: CHANNEL_TYPE.task_group },
+            select: { id: true },
+          });
       if (!group || group.id === mainChannelId) {
         return;
       }
@@ -2454,6 +2598,7 @@ export class WorkerDispatcher
         data: {
           id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
           channelId: group.id,
+          taskId,
           senderType: SENDER_TYPE.agent,
           senderId: agentId,
           content,
@@ -2466,7 +2611,7 @@ export class WorkerDispatcher
                 attachmentType: ext,
               }
             : {}),
-        },
+        } as any,
       });
       await this.realtime.broadcast(
         EVENT_TYPES.CHAT_MESSAGE_NEW,
@@ -2894,7 +3039,9 @@ export class WorkerDispatcher
   /** F3 MINOR-3：任务级工作目录（<根>/tasks/<taskId>），mkdir -p 保证存在后返回。 */
   private async ensureTaskWorkDir(taskId: string): Promise<string> {
     const dir = path.join(this.taskWorkDirRoot, 'tasks', taskId);
-    await fs.mkdir(dir, { recursive: true });
+    try {
+      await fs.mkdir(dir, { recursive: true });
+    } catch {}
     return dir;
   }
 
@@ -2922,14 +3069,18 @@ export class WorkerDispatcher
       if (ta) {
         const dir = ta.workDir?.trim();
         if (dir) {
-          await fs.mkdir(dir, { recursive: true });
+          try {
+            await fs.mkdir(dir, { recursive: true });
+          } catch {}
           return dir;
         }
         const agentDir = this.defaultAgentWorkDirPath(
           ta.agent.name ?? ta.agent.id,
           ta.seq,
         );
-        await fs.mkdir(agentDir, { recursive: true });
+        try {
+          await fs.mkdir(agentDir, { recursive: true });
+        } catch {}
         return agentDir;
       }
     }
@@ -2940,7 +3091,9 @@ export class WorkerDispatcher
     });
     if (agentRow) {
       const dir = this.defaultAgentWorkDirPath(agentRow.name ?? agentRow.id, 1);
-      await fs.mkdir(dir, { recursive: true });
+      try {
+        await fs.mkdir(dir, { recursive: true });
+      } catch {}
       return dir;
     }
     return this.ensureTaskWorkDir(taskId);

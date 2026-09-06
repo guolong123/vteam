@@ -1,29 +1,28 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
-/** POST /dm-channels 请求体（09 篇 §3.5 Chat FR-14）：创建 private 私聊频道。 */
+/** POST /dm-channels 请求体：创建 private 私聊频道（teamMember 维度复用）。 */
 export class CreateDmChannelDto {
   @ApiProperty({
-    description:
-      '所属任务 id（私聊频道 task_id 关联，与群聊共用该 Agent 会话）',
+    description: '所属团队 id（私聊频道 team_id 关联，每团队成员一频道复用）',
   })
   @IsString()
   @IsNotEmpty()
-  taskId: string;
+  teamId: string;
 
-  @ApiProperty({
-    description: '私聊对象 Agent id（type=private，task_id+agent_id 唯一）',
-  })
-  @IsString()
-  @IsNotEmpty()
-  agentId: string;
-
-  /** T6 实例语义：私聊目标实例 id（TaskAgent.id，ta_ 前缀）。同 agent 多实例时
-   * 按 (taskId, taskAgentId) 幂等——开发者-1/开发者-2 各自独立私聊频道。 */
+  /** 团队成员 id（tmm_ 前缀，TeamMember.id）。与 agentId 二选一，优先 teamMemberId。 */
   @ApiPropertyOptional({
-    description: '私聊目标实例 id（ta_ 前缀；同 agent 多实例时必传以区分频道）',
+    description: '私聊目标团队成员 id（tmm_ 前缀；与 agentId 二选一）',
   })
   @IsOptional()
   @IsString()
-  taskAgentId?: string;
+  teamMemberId?: string;
+
+  /** 私聊对象 Agent id（用于按 teamId+agentId 解析到 TeamMember，兼容单实例）。 */
+  @ApiPropertyOptional({
+    description: '私聊对象 Agent id（按 teamId+agentId 解析到首个 TeamMember）',
+  })
+  @IsOptional()
+  @IsString()
+  agentId?: string;
 }

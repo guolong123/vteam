@@ -388,13 +388,13 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     });
     expect(prisma.message.update).toHaveBeenCalledWith({
       where: { id: 'm_stream' },
-      data: {
+      data: expect.objectContaining({
         content: {
           text: '最终结论',
           parts: [{ type: 'text', text: '最终结论', synthetic: false }],
         },
         status: MESSAGE_STATUS.sent,
-      },
+      }),
     });
     expect(realtime.broadcast).toHaveBeenCalledWith(
       EVENT_TYPES.CHAT_MESSAGE_NEW,

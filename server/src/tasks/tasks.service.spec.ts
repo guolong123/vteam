@@ -45,7 +45,12 @@ describe('TasksService', () => {
     session: { create: jest.Mock; updateMany: jest.Mock };
     plan: { findUnique: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
     planTask: { findFirst: jest.Mock; findMany: jest.Mock };
+    projectMember: { findUnique: jest.Mock };
+    team: { findUnique: jest.Mock; updateMany: jest.Mock };
+    teamMember: { findMany: jest.Mock };
+    teamQueue: { create: jest.Mock; aggregate: jest.Mock; findFirst: jest.Mock; deleteMany: jest.Mock };
     $transaction: jest.Mock;
+    $queryRawUnsafe: jest.Mock;
   };
   let idGen: { nextId: jest.Mock; seed: jest.Mock };
   let realtime: { broadcast: jest.Mock };
@@ -143,14 +148,21 @@ describe('TasksService', () => {
       session: { create: jest.fn(), updateMany: jest.fn() },
       plan: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
       planTask: { findFirst: jest.fn(), findMany: jest.fn() },
+      projectMember: { findUnique: jest.fn() },
+      team: { findUnique: jest.fn(), updateMany: jest.fn() },
+      teamMember: { findMany: jest.fn() },
+      teamQueue: { create: jest.fn(), aggregate: jest.fn(), findFirst: jest.fn(), deleteMany: jest.fn() },
       $transaction: jest.fn(),
+      $queryRawUnsafe: jest.fn(),
     };
     idGen = { nextId: jest.fn(), seed: jest.fn() };
     realtime = { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
     sessionLifecycle = {
       getInstancesByTask: jest.fn().mockResolvedValue([]),
       getInstanceBySession: jest.fn().mockResolvedValue(null),
-    };
+    } as any;
+    (sessionLifecycle as any).resetTeamSessionsInTx = jest.fn().mockResolvedValue(2);
+    (sessionLifecycle as any).resetTeamSessions = jest.fn().mockResolvedValue(2);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -164,6 +176,7 @@ describe('TasksService', () => {
           useValue: {
             register: jest.fn().mockResolvedValue(undefined),
             unregister: jest.fn(),
+            triggerMemoryHarvest: jest.fn().mockResolvedValue(undefined),
           },
         },
       ],
@@ -295,359 +308,179 @@ describe('TasksService', () => {
     }
   };
 
-  describe('create（实例化团队 + 主实例，T2）', () => {
-    it('同事务写入 任务+群聊频道+团队实例+状态事件，主实例落库，事务后广播 task.status.changed', async () => {
-      idGen.nextId
-        .mockResolvedValueOnce('t_0000000001')
-        .mockResolvedValueOnce('c_0000000001')
-        .mockResolvedValueOnce('ta_0000000001')
-        .mockResolvedValueOnce('s_0000000001')
-        .mockResolvedValueOnce('ta_0000000002')
-        .mockResolvedValueOnce('s_0000000002')
-        .mockResolvedValueOnce('te_0000000001');
-      const txModels = mockCreateTx(
-        row({
-          title: '新任务',
-          priority: 'high',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'ta_0000000001',
-          backgroundDocs: [{ name: '需求文档.pdf' }],
-        }),
-      );
-      prisma.task.findUnique.mockResolvedValue(
-        row({
-          title: '新任务',
-          priority: 'high',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'ta_0000000001',
-          backgroundDocs: [{ name: '需求文档.pdf' }],
-        }),
-      );
+  describe('create（团队指派 + FIFO 串行，FOR UPDATE+version 双保险）', () => {
+    const teamId = 'tm_0000000001';
+    const mockMembers = [
+      { id: 'tmm_0000000001', teamId, agentId: 'a_product', alias: '产品经理-1', seq: 1, workDir: '/data/vteam-worker/产品经理', agent: { id: 'a_product', name: '产品经理', role: 'product' } },
+      { id: 'tmm_0000000002', teamId, agentId: 'a_developer', alias: '开发者-1', seq: 1, workDir: '/data/vteam-worker/开发者', agent: { id: 'a_developer', name: '开发者', role: 'developer' } },
+    ];
+    const mockTeamIdle = { id: teamId, name: 'vteam开发团队', version: 0, currentTaskId: null, reuseSession: true };
+    const mockTeamBusy = { id: teamId, name: 'vteam开发团队', version: 1, currentTaskId: 't_0000000009', reuseSession: true };
 
-      const dto = {
-        title: ' 新任务 ',
-        description: '描述',
-        priority: 'high',
-        agents: [{ agentId: 'a_product' }, { agentId: 'a_developer' }],
-        mainAgentId: 'a_product',
-        backgroundDocs: [{ name: '需求文档.pdf' }],
+    const setupTxIdle = (taskId: string) => {
+      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' } as any);
+      idGen.nextId.mockImplementation(async (prefix: string) => {
+        const map: Record<string, string> = { t: taskId, c: 'c_0000000001', ta: 'ta_0000000001', s: 's_0000000001', te: 'te_0000000001', tq: 'tq_0000000001' };
+        // fallback per prefix counter
+        if (map[prefix]) { const v=map[prefix]; map[prefix]=v; return v; }
+        return `${prefix}_0000000001`;
+      });
+      let taCounter=0;
+      let sCounter=0;
+      const tx: any = {
+        team: { findUnique: jest.fn().mockResolvedValue(mockTeamIdle), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        teamMember: { findMany: jest.fn().mockResolvedValue(mockMembers) },
+        teamQueue: { create: jest.fn().mockResolvedValue({ id: 'tq_0000000001' }), aggregate: jest.fn().mockResolvedValue({ _max: { position: 0 } }) },
+        task: { create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve(data)) },
+        chatChannel: { create: jest.fn().mockResolvedValue({ id: 'c_0000000001' }) },
+        taskAgent: { create: jest.fn().mockImplementation(({ data }: any) => { taCounter++; return Promise.resolve({ id: data.id, ...data }); }), aggregate: jest.fn().mockResolvedValue({ _max: { seq: 0 } }) },
+        session: { create: jest.fn().mockImplementation(({ data }: any) => { sCounter++; return Promise.resolve({ id: data.id }); }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_0000000001' }) },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('mock raw fallback')),
       };
-      const result = await service.create(pid, userId, dto as any);
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.task.findUnique.mockResolvedValue(row({ id: taskId, teamId, status: 'pending', title: '新任务' }) as any);
+      return tx;
+    };
 
-      // 任务创建字段：trim 标题、priority、status=pending、createdBy、version=0、backgroundDocs 存 Json
-      expect(result).toMatchObject({
-        id: 't_0000000001',
-        projectId: pid,
-        title: '新任务',
-        priority: 'high',
-        status: 'pending',
-        mainAgentId: 'a_product',
-        mainAgentInstanceId: 'ta_0000000001',
-        teamAgentIds: ['a_product', 'a_developer'],
-        createdBy: userId,
-      });
-      // instances：alias 默认 `<角色中文名>-<seq>`、name/role 从 agent 关联取、main 标记（按 (agentId,seq) 排序）
-      expect(result.instances).toEqual([
-        {
-          id: 'ta_0000000002',
-          agentId: 'a_developer',
-          alias: '开发者-1',
-          seq: 1,
-          workDir: '/data/vteam-worker/开发者',
-          name: '开发者',
-          role: 'developer',
-          main: false,
-          sessionStatus: null,
-          sessionId: null,
-        },
-        {
-          id: 'ta_0000000001',
-          agentId: 'a_product',
-          alias: '产品经理-1',
-          seq: 1,
-          workDir: '/data/vteam-worker/产品经理',
-          name: '产品经理',
-          role: 'product',
-          main: true,
-          sessionStatus: null,
-          sessionId: null,
-        },
-      ]);
-      expect(result.backgroundDocs).toEqual([{ name: '需求文档.pdf' }]);
+    const setupTxBusy = (taskId: string, maxPos: number) => {
+      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' } as any);
+      idGen.nextId.mockImplementation(async (prefix: string) => `${prefix}_0000000001`);
+      const tx: any = {
+        team: { findUnique: jest.fn().mockResolvedValue(mockTeamBusy), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        teamMember: { findMany: jest.fn().mockResolvedValue(mockMembers) },
+        teamQueue: { create: jest.fn().mockResolvedValue({ id: 'tq_0000000002' }), aggregate: jest.fn().mockResolvedValue({ _max: { position: maxPos } }) },
+        task: { create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve(data)) },
+        chatChannel: { create: jest.fn().mockResolvedValue({ id: 'c_0000000001' }) },
+        taskAgent: { create: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ id: data.id, ...data })) },
+        session: { create: jest.fn().mockResolvedValue({ id: 's_0000000001' }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_0000000001' }) },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('mock raw fallback')),
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.task.findUnique.mockResolvedValue(row({ id: taskId, teamId, status: 'queued', title: '排队任务' }) as any);
+      return tx;
+    };
 
-      // 事务内 task.create 字段对齐契约（主实例先空置，实例创建后解析再 update）
-      expect(txModels.task.create).toHaveBeenCalledWith({
-        data: {
-          id: 't_0000000001',
-          projectId: pid,
-          title: '新任务',
-          description: '描述',
-          priority: 'high',
-          status: 'pending',
-          mainAgentId: null,
-          mainAgentInstanceId: null,
-          managedMode: false,
-          executionMode: 'direct',
-          backgroundDocs: [{ name: '需求文档.pdf' }],
-          createdBy: userId,
-          version: 0,
-        },
-      });
-      // 主实例解析：mainAgentInstanceId 缺省时按 mainAgentId 映射到该 agent 第一个实例
-      expect(txModels.task.update).toHaveBeenCalledWith({
-        where: { id: 't_0000000001' },
-        data: {
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'ta_0000000001',
-        },
-      });
-
-      // 广播：点号事件名 task.status.changed + global scope（09 篇 §4.1 全局广播）
-      expect(realtime.broadcast).toHaveBeenCalledWith(
-        EVENT_TYPES.TASK_STATUS_CHANGED,
-        {
-          taskId: 't_0000000001',
-          from: null,
-          to: 'pending',
-          actorType: 'user',
-          actorId: userId,
-        },
-        { type: 'global' },
-      );
-    });
-
-    it('事务内同时创建群聊频道（task_group）与 task_agents 实例、sessions、task_events', async () => {
+    it('空闲团队：创建 pending 任务，currentTaskId 指向新任务，快照成员+会话，广播双事件', async () => {
+      const taskId = 't_0000000001';
+      const tx = setupTxIdle(taskId);
       idGen.nextId
-        .mockResolvedValueOnce('t_0000000001')
+        .mockResolvedValueOnce(taskId)
         .mockResolvedValueOnce('c_0000000001')
         .mockResolvedValueOnce('ta_0000000001')
         .mockResolvedValueOnce('s_0000000001')
         .mockResolvedValueOnce('ta_0000000002')
         .mockResolvedValueOnce('s_0000000002')
         .mockResolvedValueOnce('te_0000000001');
-      const txModels = mockCreateTx(row());
-      prisma.task.findUnique.mockResolvedValue(row());
 
-      await service.create(pid, userId, {
-        title: 'x',
-        agents: [{ agentId: 'a_product' }, { agentId: 'a_developer' }],
-      } as any);
+      const result = await service.create(pid, userId, { title: '新任务', teamId } as any);
 
-      // 群聊频道：type=task_group、agent_id=null（uk_channels_task_agent 不冲突）
-      expect(txModels.chatChannel.create).toHaveBeenCalledWith({
-        data: {
-          id: 'c_0000000001',
-          type: 'task_group',
-          taskId: 't_0000000001',
-          agentId: null,
-        },
-      });
-      // 团队实例：agents 全部 joined，alias 默认 `<角色中文名>-<seq>`、seq 从 1 起
-      expect(txModels.taskAgent.create).toHaveBeenCalledTimes(2);
-      expect(txModels.taskAgent.create).toHaveBeenNthCalledWith(1, {
-        data: {
-          id: 'ta_0000000001',
-          taskId: 't_0000000001',
-          agentId: 'a_product',
-          alias: '产品经理-1',
-          seq: 1,
-          workDir: '/data/vteam-worker/产品经理',
-        },
-      });
-      expect(txModels.taskAgent.create).toHaveBeenNthCalledWith(2, {
-        data: {
-          id: 'ta_0000000002',
-          taskId: 't_0000000001',
-          agentId: 'a_developer',
-          alias: '开发者-1',
-          seq: 1,
-          workDir: '/data/vteam-worker/开发者',
-        },
-      });
-      // 会话：每实例一行（uk_sessions_task_agent），status=created，绑实例
-      expect(txModels.session.create).toHaveBeenCalledTimes(2);
-      expect(txModels.session.create).toHaveBeenNthCalledWith(1, {
-        data: {
-          id: 's_0000000001',
-          taskId: 't_0000000001',
-          taskAgentId: 'ta_0000000001',
-          agentId: 'a_product',
-          status: 'created',
-        },
-      });
-      expect(txModels.session.create).toHaveBeenNthCalledWith(2, {
-        data: {
-          id: 's_0000000002',
-          taskId: 't_0000000001',
-          taskAgentId: 'ta_0000000002',
-          agentId: 'a_developer',
-          status: 'created',
-        },
-      });
-      // 状态事件：from=null → to=pending，actor=user
-      expect(txModels.taskEvent.create).toHaveBeenCalledWith({
-        data: {
-          id: 'te_0000000001',
-          taskId: 't_0000000001',
-          eventType: 'status_change',
-          fromStatus: null,
-          toStatus: 'pending',
-          actorType: 'user',
-          actorId: userId,
-        },
-      });
+      expect(result).toMatchObject({ id: taskId, teamId, status: 'pending' });
+      expect(tx.task.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ teamId, status: 'pending' }) }));
+      expect(tx.team.updateMany).toHaveBeenCalledWith({ where: { id: teamId, version: 0 }, data: { currentTaskId: taskId, version: { increment: 1 } } });
+      expect(tx.taskAgent.create).toHaveBeenCalledTimes(2);
+      expect(tx.session.create).toHaveBeenCalledTimes(2);
+      expect(tx.session.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ teamMemberId: 'tmm_0000000001' }) }));
+      expect(realtime.broadcast).toHaveBeenCalledWith(EVENT_TYPES.TASK_STATUS_CHANGED, expect.objectContaining({ taskId, to: 'pending' }), { type: 'global' });
+      expect(realtime.broadcast).toHaveBeenCalledWith(EVENT_TYPES.TEAM_QUEUE_CHANGED, expect.objectContaining({ teamId, taskId, status: 'pending' }), { type: 'team', id: teamId });
     });
 
-    it('双开发者实例：同一 agentId 两个实例 → seq 1/2、alias 开发者-1/开发者-2、各自会话、主实例=第二个', async () => {
+    it('忙时团队：创建 queued 任务，写入 TeamQueue position=MAX+1 FOR UPDATE，currentTaskId 不变', async () => {
+      const taskId = 't_0000000002';
+      const tx = setupTxBusy(taskId, 1);
       idGen.nextId
-        .mockResolvedValueOnce('t_0000000001')
+        .mockResolvedValueOnce(taskId)
         .mockResolvedValueOnce('c_0000000001')
         .mockResolvedValueOnce('ta_0000000001')
         .mockResolvedValueOnce('s_0000000001')
         .mockResolvedValueOnce('ta_0000000002')
         .mockResolvedValueOnce('s_0000000002')
+        .mockResolvedValueOnce('tq_0000000002')
         .mockResolvedValueOnce('te_0000000001');
-      const txModels = mockCreateTx(row());
-      // 第二个开发者实例 seq = 该 taskId+agentId 已用最大 seq(1) + 1
-      txModels.taskAgent.aggregate
-        .mockResolvedValueOnce({ _max: { seq: 0 } })
-        .mockResolvedValueOnce({ _max: { seq: 1 } });
-      prisma.task.findUnique.mockResolvedValue(row());
 
-      await service.create(pid, userId, {
-        title: 'x',
-        agents: [{ agentId: 'a_developer' }, { agentId: 'a_developer' }],
-        mainAgentInstanceId: 'ta_0000000002',
-      } as any);
+      const result = await service.create(pid, userId, { title: '排队任务', teamId } as any);
 
-      expect(txModels.taskAgent.create).toHaveBeenCalledTimes(2);
-      expect(txModels.taskAgent.create).toHaveBeenNthCalledWith(1, {
-        data: {
-          id: 'ta_0000000001',
-          taskId: 't_0000000001',
-          agentId: 'a_developer',
-          alias: '开发者-1',
-          seq: 1,
-          workDir: '/data/vteam-worker/开发者',
-        },
-      });
-      expect(txModels.taskAgent.create).toHaveBeenNthCalledWith(2, {
-        data: {
-          id: 'ta_0000000002',
-          taskId: 't_0000000001',
-          agentId: 'a_developer',
-          alias: '开发者-2',
-          seq: 2,
-          workDir: '/data/vteam-worker/开发者-2',
-        },
-      });
-      // 主实例 = 第二个开发者实例（mainAgentInstanceId 入参优先）
-      expect(txModels.task.update).toHaveBeenCalledWith({
-        where: { id: 't_0000000001' },
-        data: {
-          mainAgentId: 'a_developer',
-          mainAgentInstanceId: 'ta_0000000002',
-        },
-      });
-      // 两个实例各自独立会话
-      expect(txModels.session.create).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({ status: 'queued' });
+      expect(tx.task.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'queued' }) }));
+      expect(tx.teamQueue.create).toHaveBeenCalledWith({ data: expect.objectContaining({ teamId, taskId, position: 2 }) });
+      expect(tx.team.updateMany).toHaveBeenCalledWith({ where: { id: teamId, version: 1 }, data: { version: { increment: 1 } } });
+      expect(realtime.broadcast).toHaveBeenCalledWith(EVENT_TYPES.TEAM_QUEUE_CHANGED, expect.objectContaining({ position: 2, status: 'queued' }), { type: 'team', id: teamId });
     });
 
-    it('创建任务可指定 workDir：显式传入原样落库，缺省用 /data/vteam-worker/<agent名称>', async () => {
-      idGen.nextId
-        .mockResolvedValueOnce('t_0000000001')
-        .mockResolvedValueOnce('c_0000000001')
-        .mockResolvedValueOnce('ta_0000000001')
-        .mockResolvedValueOnce('s_0000000001')
-        .mockResolvedValueOnce('te_0000000001');
-      const txModels = mockCreateTx(row());
-      const customWorkDir = '/data/vteam-worker/custom-agent';
+    it('并发：version CAS 重试3次，最终仅一个 pending 其余 queued（模拟首试冲突后重试成功）', async () => {
+      const taskId = 't_0000000003';
+      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' } as any);
+      // first attempt conflict, second attempt busy success
+      let attempt = 0;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        attempt++;
+        if (attempt === 1) {
+          const txConflict: any = {
+            team: { findUnique: jest.fn().mockResolvedValue(mockTeamIdle), updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+            teamMember: { findMany: jest.fn().mockResolvedValue(mockMembers) },
+            teamQueue: { create: jest.fn(), aggregate: jest.fn().mockResolvedValue({ _max: { position: 0 } }) },
+            task: { create: jest.fn().mockResolvedValue({ id: taskId }) },
+            chatChannel: { create: jest.fn().mockResolvedValue({ id: 'c_1' }) },
+            taskAgent: { create: jest.fn().mockResolvedValue({ id: 'ta_1' }) },
+            session: { create: jest.fn().mockResolvedValue({ id: 's_1' }) },
+            taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
+            $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+          };
+          return fn(txConflict);
+        }
+        const txOk: any = {
+          team: { findUnique: jest.fn().mockResolvedValue(mockTeamBusy), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          teamMember: { findMany: jest.fn().mockResolvedValue(mockMembers) },
+          teamQueue: { create: jest.fn().mockResolvedValue({ id: 'tq_0000000002' }), aggregate: jest.fn().mockResolvedValue({ _max: { position: 1 } }) },
+          task: { create: jest.fn().mockResolvedValue({ id: taskId, status: 'queued' }) },
+          chatChannel: { create: jest.fn().mockResolvedValue({ id: 'c_1' }) },
+          taskAgent: { create: jest.fn().mockResolvedValue({ id: 'ta_1' }) },
+          session: { create: jest.fn().mockResolvedValue({ id: 's_1' }) },
+          taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
+          $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+        };
+        return fn(txOk);
+      });
+      idGen.nextId.mockResolvedValue(taskId);
+      prisma.task.findUnique.mockResolvedValue(row({ id: taskId, teamId, status: 'queued' }) as any);
 
-      await service.create(pid, userId, {
-        title: 'x',
-        agents: [{ agentId: 'a_product', workDir: customWorkDir }],
-      } as any);
-
-      // 显式 workDir 原样落库
-      expect(txModels.taskAgent.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ workDir: customWorkDir }),
-        }),
-      );
-      // 缺省（未传 workDir）：默认 /data/vteam-worker/<sanitize(agent.name)>
-      expect(sanitizeWorkDirName('产品经理')).toBe('产品经理');
-      expect(sanitizeWorkDirName(' 开发/者 1 ')).toBe('开发-者-1');
-      expect(sanitizeWorkDirName('../../etc')).toBe('etc');
-      expect(sanitizeWorkDirName('')).toBe('agent');
+      const result = await service.create(pid, userId, { title: '并发任务', teamId } as any);
+      expect(result.status).toBe('queued');
+      expect(attempt).toBe(2);
     });
 
-    it('mainAgentInstanceId 不属于本次创建实例集合 → 400（事务回滚，task.update 不执行）', async () => {
-      idGen.nextId
-        .mockResolvedValueOnce('t_0000000001')
-        .mockResolvedValueOnce('c_0000000001')
-        .mockResolvedValueOnce('ta_0000000001')
-        .mockResolvedValueOnce('s_0000000001')
-        .mockResolvedValueOnce('te_0000000001');
-      const txModels = mockCreateTx(row());
-
-      await expect(
-        service.create(pid, userId, {
-          title: 'x',
-          agents: [{ agentId: 'a_product' }],
-          mainAgentInstanceId: 'ta_ghost',
-        } as any),
-      ).rejects.toThrow(BadRequestException);
-      expect(txModels.task.update).not.toHaveBeenCalled();
-    });
-
-    it('mainAgentId 不在 agents 的 agentId 内 → 400 MAIN_AGENT_NOT_IN_TEAM', async () => {
-      await expect(
-        service.create(pid, userId, {
-          title: 'x',
-          agents: [{ agentId: 'a_product' }],
-          mainAgentId: 'a_tester',
-        } as any),
-      ).rejects.toThrow(BadRequestException);
+    it('teamId 缺失 → 400 TEAM_REQUIRED', async () => {
+      await expect(service.create(pid, userId, { title: 'x' } as any)).rejects.toThrow(BadRequestException);
+      try { await service.create(pid, userId, { title: 'x' } as any); } catch (e) { expect((e as BadRequestException).getResponse()).toMatchObject({ code: TASK_ERRORS.TEAM_REQUIRED }); }
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it('agents 为空数组 → 400 TASK_EMPTY_TEAM', async () => {
-      await expect(
-        service.create(pid, userId, { title: 'x', agents: [] } as any),
-      ).rejects.toThrow(BadRequestException);
-      expect(prisma.$transaction).not.toHaveBeenCalled();
+    it('team 不存在 → 404 TEAM_NOT_FOUND', async () => {
+      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' } as any);
+      prisma.$transaction.mockImplementation(async (fn: any) => fn({ team: { findUnique: jest.fn().mockResolvedValue(null) }, $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('')) }));
+      idGen.nextId.mockResolvedValue('t_0000000001');
+      await expect(service.create(pid, userId, { title: 'x', teamId: 'tm_missing' } as any)).rejects.toThrow(NotFoundException);
     });
 
-    it('标题为空 → BadRequestException', async () => {
-      await expect(
-        service.create(pid, userId, {
-          title: ' ',
-          agents: [{ agentId: 'a_1' }],
-        } as any),
-      ).rejects.toThrow(BadRequestException);
+    it('非项目成员 → 403', async () => {
+      prisma.projectMember.findUnique.mockResolvedValue(null);
+      await expect(service.create(pid, userId, { title: 'x', teamId } as any)).rejects.toThrow(ForbiddenException);
     });
 
-    it('agents 中某 agent 不存在 → 404 AGENT_NOT_FOUND（事务回滚，不写主实例）', async () => {
-      idGen.nextId
-        .mockResolvedValueOnce('t_0000000001')
-        .mockResolvedValueOnce('c_0000000001')
-        .mockResolvedValueOnce('ta_0000000001')
-        .mockResolvedValueOnce('s_0000000001');
-      const txModels = mockCreateTx(row());
-      txModels.agent.findUnique.mockResolvedValueOnce({
-        id: 'a_product',
-        ...mockAgentMeta('a_product'),
-      });
-      txModels.agent.findUnique.mockResolvedValue(null);
+    it('团队成员为空 → 400 TASK_EMPTY_TEAM', async () => {
+      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' } as any);
+      prisma.$transaction.mockImplementation(async (fn: any) => fn({
+        team: { findUnique: jest.fn().mockResolvedValue(mockTeamIdle) },
+        teamMember: { findMany: jest.fn().mockResolvedValue([]) },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('')),
+      }));
+      idGen.nextId.mockResolvedValue('t_0000000001');
+      await expect(service.create(pid, userId, { title: 'x', teamId } as any)).rejects.toThrow(BadRequestException);
+    });
 
-      await expect(
-        service.create(pid, userId, {
-          title: 'x',
-          agents: [{ agentId: 'a_product' }, { agentId: 'ghost' }],
-        } as any),
-      ).rejects.toThrow(NotFoundException);
-      expect(txModels.taskAgent.create).toHaveBeenCalledTimes(1);
-      expect(txModels.task.update).not.toHaveBeenCalled();
+    it('标题为空 → 400', async () => {
+      await expect(service.create(pid, userId, { title: ' ', teamId } as any)).rejects.toThrow(BadRequestException);
     });
   });
 
@@ -687,6 +520,7 @@ describe('TasksService', () => {
           name: '开发者',
           role: 'developer',
           main: false,
+          enabled: true,
           sessionStatus: null,
           sessionId: null,
         },
@@ -699,6 +533,7 @@ describe('TasksService', () => {
           name: '产品经理',
           role: 'product',
           main: false,
+          enabled: true,
           sessionStatus: null,
           sessionId: null,
         },
@@ -1187,6 +1022,114 @@ describe('TasksService', () => {
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
+    it('start：团队空闲 + 孤儿 pending → 认领队首后启动（取消排队死锁自愈）', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(
+          row({
+            status: 'pending',
+            version: 3,
+            teamId: 'tm_1',
+            mainAgentId: 'a_product',
+            mainAgentInstanceId: 'ta_0000000001',
+          }),
+        )
+        .mockResolvedValue(
+          row({
+            status: 'in_progress',
+            version: 4,
+            teamId: 'tm_1',
+            mainAgentId: 'a_product',
+            mainAgentInstanceId: 'ta_0000000001',
+            startedAt: new Date(),
+          }),
+        );
+      // transition() 检查读到空闲 → 认领；其后 preflight 重读到已认领（生产 DB 真实推进，此处 mock 模拟）
+      (prisma.team.findUnique as jest.Mock)
+        .mockResolvedValueOnce({
+          id: 'tm_1',
+          version: 0,
+          currentTaskId: null,
+        })
+        .mockResolvedValue({
+          id: 'tm_1',
+          version: 1,
+          currentTaskId: 't_0000000001',
+        });
+      (prisma.team.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      prisma.chatChannel.findFirst
+        .mockResolvedValueOnce({ id: 'c_0000000001' })
+        .mockResolvedValueOnce({ id: 'c_0000000002' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001')
+        .mockResolvedValueOnce('m_0000000002');
+      const txModels = mockTransitionTx();
+
+      const result = await service.start('t_0000000001', userId);
+
+      expect(prisma.team.updateMany).toHaveBeenCalledWith({
+        where: { id: 'tm_1', currentTaskId: null, version: 0 },
+        data: { currentTaskId: 't_0000000001', version: { increment: 1 } },
+      });
+      expect(txModels.task.updateMany).toHaveBeenCalledWith({
+        where: { id: 't_0000000001', status: 'pending', version: 3 },
+        data: {
+          status: 'in_progress',
+          version: { increment: 1 },
+          startedAt: expect.any(Date),
+        },
+      });
+      expect(result.status).toBe('in_progress');
+    });
+
+    it('start：团队忙碌且非队首 → 409 TEAM_NOT_QUEUE_HEAD（认领仅限空闲）', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({
+          status: 'pending',
+          teamId: 'tm_1',
+          mainAgentId: 'a_product',
+          mainAgentInstanceId: 'ta_0000000001',
+        }),
+      );
+      (prisma.team.findUnique as jest.Mock).mockResolvedValue({
+        id: 'tm_1',
+        version: 1,
+        currentTaskId: 't_0000000009',
+      });
+
+      try {
+        await service.start('t_0000000001', userId);
+        fail('应抛出 ConflictException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ConflictException);
+        expect((e as ConflictException).getResponse()).toMatchObject({
+          code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD,
+        });
+      }
+      expect(prisma.team.updateMany).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('start：空闲认领并发冲突 → 409 VERSION_CONFLICT（可重试）', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({
+          status: 'pending',
+          teamId: 'tm_1',
+          mainAgentId: 'a_product',
+          mainAgentInstanceId: 'ta_0000000001',
+        }),
+      );
+      (prisma.team.findUnique as jest.Mock).mockResolvedValue({
+        id: 'tm_1',
+        version: 0,
+        currentTaskId: null,
+      });
+      (prisma.team.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+
+      await expect(service.start('t_0000000001', userId)).rejects.toThrow('团队并发冲突，请重试');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
     it('mark-pending-review：in_progress → pending_review，写 pendingReviewAt + 事件 + 广播 + 系统消息「任务已提交待验收」', async () => {
       prisma.task.findUnique
         .mockResolvedValueOnce(row({ status: 'in_progress', version: 5 }))
@@ -1404,7 +1347,7 @@ describe('TasksService', () => {
       assertSysMessageCreated(
         txModels,
         'c_0000000002',
-        '任务已验收完成，产出物基线已锁定。请在后续工作中调用 vteam MCP 的 memory_save 工具（参数 {taskId, selfInstanceId, level: "task", content, tags?}）总结本任务执行中的经验、教训与关键决策，沉淀为任务级记忆；如有跨任务复用价值，另存一条 level=project 记忆。',
+        '任务已验收完成，产出物基线已锁定。记忆收集已自动触发（见触发消息），请按其要求只沉淀可复用经验（做法/坑/约束），不要保存会话总结。',
         2,
       );
       // 系统消息事务后广播 chat.message.new（群聊 + 私信各一）
@@ -2825,35 +2768,47 @@ describe('TasksService', () => {
 
   describe('create（tc-flow）：executionMode 落库', () => {
     it('缺省 direct；显式 plan + managedMode 同时落库（与托管模式独立生效、互不干扰）', async () => {
-      prisma.task.findUnique.mockResolvedValue(row({}));
-
-      const txModels = mockCreateTx({ id: 't_0000000001' });
-      await service.create(pid, userId, {
-        title: '任务',
-        agents: [{ agentId: 'a_developer' }],
-      } as any);
-      expect(txModels.task.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            executionMode: EXECUTION_MODES.direct,
-          }),
-        }),
-      );
-
-      await service.create(pid, userId, {
-        title: '任务',
-        agents: [{ agentId: 'a_developer' }],
-        executionMode: EXECUTION_MODES.plan,
-        managedMode: true,
-      } as any);
-      expect(txModels.task.create).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            executionMode: EXECUTION_MODES.plan,
-            managedMode: true,
-          }),
-        }),
-      );
+      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' } as any);
+      const teamId = 'tm_0000000001';
+      const mockTeam = { id: teamId, version: 0, currentTaskId: null, reuseSession: true };
+      const members = [
+        { id: 'tmm_0000000001', teamId, agentId: 'a_developer', alias: '开发者-1', seq: 1, workDir: '/data/vteam-worker/开发者', agent: { id: 'a_developer', name: '开发者', role: 'developer' } },
+      ];
+      let captured: any[] = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => fn({
+        team: { findUnique: jest.fn().mockResolvedValue(mockTeam), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        teamMember: { findMany: jest.fn().mockResolvedValue(members) },
+        teamQueue: { create: jest.fn(), aggregate: jest.fn().mockResolvedValue({ _max: { position: 0 } }) },
+        task: { create: jest.fn().mockImplementation(({ data }: any) => { captured.push(data); return Promise.resolve(data); }) },
+        chatChannel: { create: jest.fn().mockResolvedValue({ id: 'c_1' }) },
+        taskAgent: { create: jest.fn().mockResolvedValue({ id: 'ta_1' }) },
+        session: { create: jest.fn().mockResolvedValue({ id: 's_1' }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+      }));
+      prisma.task.findUnique.mockResolvedValue(row({ id: 't_0000000001', teamId, executionMode: 'direct' }) as any);
+      idGen.nextId.mockResolvedValue('t_0000000001');
+      await service.create(pid, userId, { title: '任务', teamId } as any);
+      expect(captured[0].executionMode).toBe(EXECUTION_MODES.direct);
+      // second call with plan
+      prisma.task.findUnique.mockResolvedValue(row({ id: 't_0000000002', teamId, executionMode: 'plan' }) as any);
+      idGen.nextId.mockResolvedValue('t_0000000002');
+      captured = [];
+      // need new transaction mock to capture second
+      prisma.$transaction.mockImplementation(async (fn: any) => fn({
+        team: { findUnique: jest.fn().mockResolvedValue({ id: teamId, version: 1, currentTaskId: 't_0000000001', reuseSession: true }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        teamMember: { findMany: jest.fn().mockResolvedValue(members) },
+        teamQueue: { create: jest.fn().mockResolvedValue({ id: 'tq_1' }), aggregate: jest.fn().mockResolvedValue({ _max: { position: 0 } }) },
+        task: { create: jest.fn().mockImplementation(({ data }: any) => { captured.push(data); return Promise.resolve(data); }) },
+        chatChannel: { create: jest.fn().mockResolvedValue({ id: 'c_1' }) },
+        taskAgent: { create: jest.fn().mockResolvedValue({ id: 'ta_1' }) },
+        session: { create: jest.fn().mockResolvedValue({ id: 's_1' }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+      }));
+      await service.create(pid, userId, { title: '任务', teamId, executionMode: EXECUTION_MODES.plan, managedMode: true } as any);
+      expect(captured[0].executionMode).toBe(EXECUTION_MODES.plan);
+      expect(captured[0].managedMode).toBe(true);
     });
   });
 
@@ -3127,6 +3082,336 @@ describe('TasksService', () => {
           code: TASK_ERRORS.TASK_NOT_FOUND,
         });
       }
+    });
+  });
+
+  describe('queued 状态机扩展 queued 与自动拉起（promoteNext，含锁）', () => {
+    const teamId = 'tm_0000000001';
+    it('accept：事务内 FOR UPDATE 锁 team 行 promoteNext，队首 queued→pending，队列删除队首重排，广播 TEAM_QUEUE_CHANGED', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ id: 't_0000000001', status: 'pending_review', version: 4, teamId } as any))
+        .mockResolvedValue(row({ id: 't_0000000001', status: 'completed', version: 5, teamId } as any));
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      prisma.plan.findUnique.mockResolvedValue(null);
+      idGen.nextId.mockResolvedValueOnce('te_0000000001').mockResolvedValueOnce('m_0000000001');
+      const tx: any = {
+        task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
+        session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+        artifact: { findMany: jest.fn().mockResolvedValue([]) },
+        artifactVersion: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+        message: { create: jest.fn().mockImplementation(({ data }: any) => ({ id: data.id, channelId: data.channelId, senderType: data.senderType, senderId: data.senderId, content: data.content, mentions: data.mentions, status: data.status, createdAt: new Date() })) },
+        plan: { update: jest.fn().mockResolvedValue({ id: 'pl_1' }) },
+        team: { findUnique: jest.fn().mockResolvedValue({ id: teamId, version: 2, currentTaskId: 't_0000000001' }) },
+        teamQueue: {
+          findFirst: jest.fn().mockResolvedValue({ taskId: 't_0000000002', position: 1 }),
+          findMany: jest.fn().mockResolvedValue([{ id: 'tq_0000000003', position: 2, taskId: 't_0000000003' }]),
+          deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+          update: jest.fn().mockResolvedValue({ id: 'tq_0000000003' }),
+        },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+      };
+      // team updateMany + task queued→pending
+      tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      tx.task.updateMany = jest.fn().mockImplementation(async (args: any) => {
+        if (args.where?.status === 'queued') return { count: 1 };
+        return { count: 1 };
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+
+      await service.accept('t_0000000001', userId);
+
+      expect(tx.team.updateMany).toHaveBeenCalledWith({ where: { id: teamId, version: 2 }, data: { currentTaskId: 't_0000000002', version: { increment: 1 } } });
+      expect(tx.teamQueue.deleteMany).toHaveBeenCalledWith({ where: { taskId: 't_0000000002' } });
+      expect(tx.task.updateMany).toHaveBeenCalledWith({ where: { id: 't_0000000002', status: 'queued' }, data: { status: 'pending' } });
+      expect(realtime.broadcast).toHaveBeenCalledWith(EVENT_TYPES.TEAM_QUEUE_CHANGED, expect.objectContaining({ teamId, taskId: 't_0000000002', status: 'promoted' }), { type: 'team', id: teamId });
+    });
+
+    it('archive：队列空则 currentTaskId=null，广播 idle', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ id: 't_0000000001', status: 'completed', version: 4, teamId } as any))
+        .mockResolvedValue(row({ id: 't_0000000001', status: 'archived', version: 5, teamId } as any));
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      prisma.plan.findUnique.mockResolvedValue(null);
+      idGen.nextId.mockResolvedValueOnce('te_0000000001').mockResolvedValueOnce('m_0000000001');
+      const tx: any = {
+        task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
+        session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+        message: { create: jest.fn().mockImplementation(({ data }: any) => ({ id: data.id, channelId: data.channelId, senderType: data.senderType, senderId: data.senderId, content: data.content, mentions: data.mentions, status: data.status, createdAt: new Date() })) },
+        plan: { update: jest.fn().mockResolvedValue({ id: 'pl_1' }) },
+        team: { findUnique: jest.fn().mockResolvedValue({ id: teamId, version: 5, currentTaskId: 't_0000000001' }) },
+        teamQueue: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn(), update: jest.fn() },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+      };
+      tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+
+      await service.archive('t_0000000001', userId);
+
+      expect(tx.team.updateMany).toHaveBeenCalledWith({ where: { id: teamId, version: 5 }, data: { currentTaskId: null, version: { increment: 1 } } });
+      expect(realtime.broadcast).toHaveBeenCalledWith(EVENT_TYPES.TEAM_QUEUE_CHANGED, expect.objectContaining({ teamId, action: 'idle' }), { type: 'team', id: teamId });
+    });
+
+    it('start：非队首 409 TEAM_NOT_QUEUE_HEAD（pending 但非 currentTaskId）', async () => {
+      prisma.task.findUnique.mockResolvedValue(row({ id: 't_0000000002', status: 'pending', version: 0, teamId, mainAgentInstanceId: 'ta_0000000001', mainAgentId: 'a_product' } as any));
+      (prisma as any).team = { findUnique: jest.fn().mockResolvedValue({ id: teamId, currentTaskId: 't_0000000001', version: 0 }) };
+
+      try {
+        await service.start('t_0000000002', userId);
+        fail('应抛出 ConflictException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ConflictException);
+        expect((e as ConflictException).getResponse()).toMatchObject({ code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD });
+      }
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('start：queued 非队首 409 TEAM_NOT_QUEUE_HEAD', async () => {
+      prisma.task.findUnique.mockResolvedValue(row({ id: 't_0000000003', status: 'queued', version: 0, teamId } as any));
+      (prisma as any).team = { findUnique: jest.fn().mockResolvedValue({ id: teamId, currentTaskId: 't_0000000001', version: 0 }) };
+
+      try {
+        await service.start('t_0000000003', userId);
+        fail('应抛出 ConflictException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ConflictException);
+        expect((e as ConflictException).getResponse()).toMatchObject({ code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD });
+      }
+    });
+
+    it('start：队首 pending 可 start 成功', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ id: 't_0000000001', status: 'pending', version: 0, teamId, mainAgentId: 'a_product', mainAgentInstanceId: 'ta_0000000001' } as any))
+        .mockResolvedValue(row({ id: 't_0000000001', status: 'in_progress', version: 1, teamId, mainAgentId: 'a_product', mainAgentInstanceId: 'ta_0000000001' } as any));
+      (prisma as any).team = { findUnique: jest.fn().mockResolvedValue({ id: teamId, currentTaskId: 't_0000000001', version: 0 }) };
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId.mockResolvedValueOnce('te_0000000001').mockResolvedValueOnce('m_0000000001').mockResolvedValueOnce('m_0000000002');
+      const tx: any = {
+        task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
+        session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+        message: { create: jest.fn().mockImplementation(({ data }: any) => ({ id: data.id, channelId: data.channelId, senderType: data.senderType, senderId: data.senderId, content: data.content, mentions: data.mentions, status: data.status, createdAt: new Date() })) },
+        plan: { update: jest.fn() },
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      // mock second team lookup inside transition head check (same id)
+      prisma.team.findUnique = jest.fn().mockResolvedValue({ id: teamId, currentTaskId: 't_0000000001', version: 0 } as any);
+
+      const result = await service.start('t_0000000001', userId);
+      expect(result.status).toBe('in_progress');
+    });
+  });
+
+  describe('会话记忆开关 reuseSession + resetAfterComplete（Todo7）', () => {
+    const teamId = 'tm_0000000001';
+    it('reuse=true 且未勾选 → accept 不重置会话，instanceRef 保留', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ id: 't_0000000001', status: 'pending_review', version: 4, teamId, resetAfterComplete: false } as any))
+        .mockResolvedValue(row({ id: 't_0000000001', status: 'completed', version: 5, teamId } as any));
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      prisma.plan.findUnique.mockResolvedValue(null);
+      idGen.nextId.mockResolvedValue('te_0000000001');
+      const tx: any = {
+        task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({}) },
+        session: { updateMany: jest.fn().mockResolvedValue({}), findMany: jest.fn(), deleteMany: jest.fn(), create: jest.fn() },
+        message: { create: jest.fn().mockImplementation(({ data }: any) => ({ id: data.id, channelId: data.channelId, senderType: data.senderType, content: data.content, mentions: data.mentions, status: data.status, createdAt: new Date() })) },
+        artifact: { findMany: jest.fn().mockResolvedValue([]) },
+        artifactVersion: { updateMany: jest.fn() },
+        plan: { update: jest.fn() },
+        team: { findUnique: jest.fn().mockResolvedValue({ reuseSession: true }) },
+        teamQueue: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn(), update: jest.fn() },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+      };
+      tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      tx.task.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      (sessionLifecycle as any).resetTeamSessionsInTx.mockClear();
+
+      await service.accept('t_0000000001', userId);
+
+      expect((sessionLifecycle as any).resetTeamSessionsInTx).not.toHaveBeenCalled();
+      const messages = tx.message.create.mock.calls.map((c: any) => c[0].data.content.text);
+      expect(messages).not.toContain('已为下一任务开新会话');
+    });
+
+    it('reuse=false 或 resetAfterComplete=true → accept 事务内批量 reset + 系统消息分隔', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ id: 't_0000000001', status: 'pending_review', version: 4, teamId, resetAfterComplete: true } as any))
+        .mockResolvedValue(row({ id: 't_0000000001', status: 'completed', version: 5, teamId } as any));
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      prisma.plan.findUnique.mockResolvedValue(null);
+      idGen.nextId.mockResolvedValueOnce('te_0000000001').mockResolvedValueOnce('m_0000000001').mockResolvedValueOnce('m_0000000002');
+      const tx: any = {
+        task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({}) },
+        session: { updateMany: jest.fn().mockResolvedValue({}), findMany: jest.fn(), deleteMany: jest.fn(), create: jest.fn() },
+        message: { create: jest.fn().mockImplementation(({ data }: any) => ({ id: data.id, channelId: data.channelId, senderType: data.senderType, content: data.content, mentions: data.mentions, status: data.status, createdAt: new Date() })) },
+        artifact: { findMany: jest.fn().mockResolvedValue([]) },
+        artifactVersion: { updateMany: jest.fn() },
+        plan: { update: jest.fn() },
+        team: { findUnique: jest.fn().mockResolvedValue({ reuseSession: false }) },
+        teamQueue: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn(), update: jest.fn() },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+      };
+      tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      tx.task.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      (sessionLifecycle as any).resetTeamSessionsInTx.mockResolvedValue(2);
+
+      await service.accept('t_0000000001', userId);
+
+      expect((sessionLifecycle as any).resetTeamSessionsInTx).toHaveBeenCalledWith(expect.any(Object), teamId);
+      const messages = tx.message.create.mock.calls.map((c: any) => c[0].data.content.text);
+      expect(messages).toContain('已为下一任务开新会话');
+      expect(realtime.broadcast).toHaveBeenCalledWith(EVENT_TYPES.CHAT_MESSAGE_NEW, expect.objectContaining({ message: expect.objectContaining({ channelId: 'c_0000000001' }) }), { type: 'channel', id: 'c_0000000001' });
+    });
+
+    it('archive 带 reset 同样触发批量 reset', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ id: 't_0000000001', status: 'completed', version: 4, teamId, resetAfterComplete: true } as any))
+        .mockResolvedValue(row({ id: 't_0000000001', status: 'archived', version: 5, teamId } as any));
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      prisma.plan.findUnique.mockResolvedValue(null);
+      idGen.nextId.mockResolvedValueOnce('te_0000000001').mockResolvedValueOnce('m_0000000001').mockResolvedValueOnce('m_0000000002');
+      const tx: any = {
+        task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({}) },
+        session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+        message: { create: jest.fn().mockImplementation(({ data }: any) => ({ id: data.id, channelId: data.channelId, senderType: data.senderType, content: data.content, mentions: data.mentions, status: data.status, createdAt: new Date() })) },
+        plan: { update: jest.fn() },
+        team: { findUnique: jest.fn().mockResolvedValue({ reuseSession: true }) },
+        teamQueue: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn(), update: jest.fn() },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+      };
+      tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      (sessionLifecycle as any).resetTeamSessionsInTx.mockResolvedValue(1);
+
+      await service.archive('t_0000000001', userId);
+
+      expect((sessionLifecycle as any).resetTeamSessionsInTx).toHaveBeenCalledWith(expect.any(Object), teamId);
+    });
+
+    it('reject 同样走 promoteNext：事务内闲置则 currentTaskId=null 广播 idle', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ id: 't_0000000001', status: 'pending_review', version: 1, teamId, resetAfterComplete: false } as any))
+        .mockResolvedValue(row({ id: 't_0000000001', status: 'in_progress', version: 2, teamId } as any));
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      prisma.plan.findUnique.mockResolvedValue(null);
+      idGen.nextId.mockResolvedValueOnce('te_0000000001').mockResolvedValueOnce('m_0000000001');
+      const tx: any = {
+        task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({}) },
+        session: { updateMany: jest.fn().mockResolvedValue({}) },
+        message: { create: jest.fn().mockImplementation(({ data }: any) => ({ id: data.id, channelId: data.channelId, senderType: data.senderType, content: data.content, mentions: data.mentions, status: data.status, createdAt: new Date() })) },
+        plan: { update: jest.fn() },
+        team: { findUnique: jest.fn().mockResolvedValue({ id: teamId, version: 3, currentTaskId: 't_0000000001' }) },
+        teamQueue: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]) },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+      };
+      tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      await service.reject('t_0000000001', userId, { reason: 'nope' });
+      expect(tx.team.updateMany).toHaveBeenCalledWith({ where: { id: teamId, version: 3 }, data: { currentTaskId: null, version: { increment: 1 } } });
+      expect(realtime.broadcast).toHaveBeenCalledWith(EVENT_TYPES.TEAM_QUEUE_CHANGED, expect.objectContaining({ teamId, action: 'idle' }), { type: 'team', id: teamId });
+    });
+  });
+
+  describe('补充覆盖：并发 version 冲突重试边界与 onModuleInit/空队首', () => {
+    it('并发三试均 VERSION_CONFLICT → 抛最后一次错误', async () => {
+      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' } as any);
+      let attempt = 0;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        attempt++;
+        const tx: any = {
+          team: { findUnique: jest.fn().mockResolvedValue({ id: 'tm_0000000001', version: 0, currentTaskId: null, reuseSession: true }), updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+          teamMember: { findMany: jest.fn().mockResolvedValue([{ id: 'tmm_1', teamId: 'tm_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1, workDir: '/data/a', agent: { id: 'a_product', name: '产品经理', role: 'product' } }]) },
+          teamQueue: { create: jest.fn(), aggregate: jest.fn().mockResolvedValue({ _max: { position: 0 } }) },
+          task: { create: jest.fn().mockResolvedValue({ id: 't_0000000001' }) },
+          chatChannel: { create: jest.fn().mockResolvedValue({ id: 'c_1' }) },
+          taskAgent: { create: jest.fn().mockResolvedValue({ id: 'ta_1' }) },
+          session: { create: jest.fn().mockResolvedValue({ id: 's_1' }) },
+          taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
+          $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+        };
+        return fn(tx);
+      });
+      idGen.nextId.mockResolvedValue('t_0000000001');
+      prisma.task.findUnique.mockResolvedValue(row({ id: 't_0000000001', teamId: 'tm_0000000001', status: 'pending' }) as any);
+      await expect(service.create('p_seed_1', userId, { title: 'x', teamId: 'tm_0000000001' } as any)).rejects.toThrow(ConflictException);
+      expect(attempt).toBe(3);
+    });
+
+    it('onModuleInit 按最大 id 对齐 7 前缀 seed', async () => {
+      (prisma.task as any).findFirst = jest.fn().mockResolvedValue({ id: 't_0000000009' });
+      (prisma.chatChannel as any).findFirst = jest.fn().mockResolvedValue({ id: 'c_0000000003' });
+      (prisma.taskAgent as any).findFirst = jest.fn().mockResolvedValue({ id: 'ta_0000000007' });
+      (prisma.taskEvent as any).findFirst = jest.fn().mockResolvedValue({ id: 'te_0000000002' });
+      (prisma.message as any).findFirst = jest.fn().mockResolvedValue({ id: 'm_0000000004' });
+      (prisma.session as any).findFirst = jest.fn().mockResolvedValue({ id: 's_0000000006' });
+      (prisma as any).teamQueue = { findFirst: jest.fn().mockResolvedValue({ id: 'tq_0000000001' }) };
+      await service.onModuleInit();
+      expect(idGen.seed).toHaveBeenCalledWith('t', 9);
+      expect(idGen.seed).toHaveBeenCalledWith('c', 3);
+      expect(idGen.seed).toHaveBeenCalledWith('ta', 7);
+    });
+
+    it('promoteNext 独立事务入口：队首晋升与 idle 双分支', async () => {
+      const teamId = 'tm_0000000001';
+      const tx1: any = {
+        team: { findUnique: jest.fn().mockResolvedValue({ id: teamId, version: 0, currentTaskId: 't_old' }) },
+        teamQueue: {
+          findFirst: jest.fn().mockResolvedValue({ taskId: 't_0000000002', position: 1 }),
+          findMany: jest.fn().mockResolvedValue([]),
+          deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+          update: jest.fn(),
+        },
+        task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+      };
+      tx1.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      tx1.task.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      tx1.teamQueue.update = jest.fn().mockResolvedValue({});
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx1));
+      await service.promoteNext(teamId);
+      expect(tx1.teamQueue.deleteMany).toHaveBeenCalledWith({ where: { taskId: 't_0000000002' } });
+      const tx2: any = {
+        team: { findUnique: jest.fn().mockResolvedValue({ id: teamId, version: 1, currentTaskId: 't_0000000002' }) },
+        teamQueue: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn(), update: jest.fn() },
+        task: { updateMany: jest.fn() },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+      };
+      tx2.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx2));
+      await service.promoteNext(teamId);
+      expect(tx2.team.updateMany).toHaveBeenCalledWith({ where: { id: teamId, version: 1 }, data: { currentTaskId: null, version: { increment: 1 } } });
+    });
+
+    it('create：MAX(position) NaN 不 finite → 回落 0，仍 queued position=1', async () => {
+      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' } as any);
+      const tx: any = {
+        team: { findUnique: jest.fn().mockResolvedValue({ id: 'tm_0000000001', version: 0, currentTaskId: 't_busy', reuseSession: true }), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        teamMember: { findMany: jest.fn().mockResolvedValue([{ id: 'tmm_1', teamId: 'tm_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1, workDir: '/data/a', agent: { id: 'a_product', name: '产品经理', role: 'product' } }]) },
+        teamQueue: { create: jest.fn().mockResolvedValue({ id: 'tq_1' }), aggregate: jest.fn().mockResolvedValue({ _max: { position: NaN } }) },
+        task: { create: jest.fn().mockResolvedValue({ id: 't_0000000001', status: 'queued' }) },
+        chatChannel: { create: jest.fn().mockResolvedValue({ id: 'c_1' }) },
+        taskAgent: { create: jest.fn().mockResolvedValue({ id: 'ta_1' }) },
+        session: { create: jest.fn().mockResolvedValue({ id: 's_1' }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
+        $queryRawUnsafe: jest.fn().mockImplementation(async (sql: string) => {
+          if (sql.includes('FROM teams')) return [{ id: 'tm_0000000001', version: 0, currentTaskId: 't_busy', reuseSession: 1 }];
+          if (sql.includes('FROM team_queues')) return [{ maxPos: 'nan' }];
+          return [];
+        }),
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      idGen.nextId.mockResolvedValue('t_0000000001');
+      prisma.task.findUnique.mockResolvedValue(row({ id: 't_0000000001', teamId: 'tm_0000000001', status: 'queued' }) as any);
+      const result = await service.create('p_seed_1', userId, { title: 'queued-nan', teamId: 'tm_0000000001' } as any);
+      expect(result.status).toBe('queued');
+      expect(tx.teamQueue.create).toHaveBeenCalledWith({ data: expect.objectContaining({ position: 1 }) });
     });
   });
 });
