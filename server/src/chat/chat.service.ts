@@ -240,6 +240,34 @@ export class ChatService {
           message: '团队不存在',
         });
       }
+      // 团队成员门（“团队是中心”）：调用者是该团队 team_user_members 成员时，
+      // 团队归属即足够授权——跳过项目门（:243）与 tasked 交叉检查（:249-263），
+      // 直接列出频道；team_group 缺失时幂等补建（seed 旁路建团队的缺口）。
+      const teamUserMember = await (this.prisma as any).teamUserMember.findUnique({
+        where: {
+          teamId_userId: { teamId: resolvedTeamId, userId },
+        },
+        select: { id: true },
+      });
+      if (teamUserMember) {
+        if (!type || type === CHANNEL_TYPE.team_group) {
+          await this.ensureTeamChannel(resolvedTeamId);
+        }
+        const where: Prisma.ChatChannelWhereInput = {
+          teamId: resolvedTeamId,
+          deletedAt: null,
+          ...(type ? { type } : {}),
+        };
+        const [total, rows] = await this.prisma.$transaction([
+          this.prisma.chatChannel.count({ where }),
+          this.prisma.chatChannel.findMany({
+            where,
+            include: CHANNEL_TASK_SELECT,
+            orderBy: [{ pinned: 'desc' }, { createdAt: 'desc' }],
+          }),
+        ]);
+        return { items: rows.map((row) => this.toChannelDto(row)), total };
+      }
       if (projectIds.length === 0) {
         throw new ForbiddenException({
           code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,

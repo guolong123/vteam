@@ -754,10 +754,11 @@ export default function TeamSessionPage() {
     return <div data-testid="team-session-loading" style={{ padding: space.xl, color: neutral[400], ...baseFont }}>加载会话中…</div>;
   }
   if (!channel) {
+    const isForbidden = channelsQuery.isError && isApiError(channelsQuery.error) && channelsQuery.error.status === 403;
     return (
       <div data-testid="team-session-empty" style={{ padding: space.xl, ...baseFont }}>
-        <div style={{ color: neutral[600] }}>暂无团队群聊频道（team_group）</div>
-        <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: space.sm }}>请确认团队已创建，稍后重试</div>
+        <div style={{ color: neutral[600] }}>{isForbidden ? "无权访问该团队频道" : "暂无团队群聊频道（team_group）"}</div>
+        <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: space.sm }}>{isForbidden ? "请联系团队管理员将您加入团队成员后重试" : "请确认团队已创建，稍后重试"}</div>
         <button type="button" onClick={() => channelsQuery.refetch()} style={{ marginTop: space.md, padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", cursor: "pointer" }}>重试</button>
       </div>
     );

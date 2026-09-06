@@ -1621,6 +1621,90 @@ describe('ChatService', () => {
     });
   });
 
+  describe('findAccessibleChannels 团队成员门（channel-gate-fix）', () => {
+    it('团队成员但零项目成员 → 200 + 行（团队归属即授权，跳过项目门）', async () => {
+      prisma.projectMember.findMany.mockResolvedValue([]);
+      (prisma.teamUserMember.findUnique as jest.Mock).mockResolvedValue({ id: 'tum_1' });
+      prisma.team.findUnique.mockResolvedValue({ id: 'tm_0000000001' });
+      prisma.chatChannel.findFirst.mockResolvedValue(channelRow() as any);
+      prisma.$transaction.mockResolvedValue([1, [channelRow()]]);
+
+      const result = await service.findAccessibleChannels(userId, undefined, 'tm_0000000001');
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].teamId).toBe('tm_0000000001');
+      expect(prisma.chatChannel.create).not.toHaveBeenCalled();
+    });
+
+    it('团队成员 + team_group 缺失 → 调用后恰好创建 1 条 team_group', async () => {
+      prisma.projectMember.findMany.mockResolvedValue([]);
+      (prisma.teamUserMember.findUnique as jest.Mock).mockResolvedValue({ id: 'tum_1' });
+      prisma.team.findUnique.mockResolvedValue({ id: 'tm_0000000001' });
+      prisma.chatChannel.findFirst.mockResolvedValue(null);
+      idGen.nextId.mockResolvedValue('c_new');
+      prisma.chatChannel.create.mockResolvedValue(channelRow({ id: 'c_new' }) as any);
+      prisma.$transaction.mockResolvedValue([1, [channelRow({ id: 'c_new' })]]);
+
+      await service.findAccessibleChannels(userId, undefined, 'tm_0000000001');
+
+      expect(prisma.chatChannel.create).toHaveBeenCalledTimes(1);
+      expect(prisma.chatChannel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ teamId: 'tm_0000000001', type: 'team_group' }),
+        }),
+      );
+    });
+
+    it('团队成员 + type=private 过滤 → 200 且不补建 team_group', async () => {
+      prisma.projectMember.findMany.mockResolvedValue([]);
+      (prisma.teamUserMember.findUnique as jest.Mock).mockResolvedValue({ id: 'tum_1' });
+      prisma.team.findUnique.mockResolvedValue({ id: 'tm_0000000001' });
+      prisma.$transaction.mockResolvedValue([0, []]);
+
+      const result = await service.findAccessibleChannels(userId, 'private', 'tm_0000000001');
+
+      expect(result.total).toBe(0);
+      expect(prisma.chatChannel.findFirst).not.toHaveBeenCalled();
+      expect(prisma.chatChannel.create).not.toHaveBeenCalled();
+    });
+
+    it('非成员且零项目 → 仍 403 PROJECT NOT_MEMBER（不变）', async () => {
+      prisma.projectMember.findMany.mockResolvedValue([]);
+      (prisma.teamUserMember.findUnique as jest.Mock).mockResolvedValue(null);
+      prisma.team.findUnique.mockResolvedValue({ id: 'tm_0000000001' });
+      try {
+        await service.findAccessibleChannels(userId, undefined, 'tm_0000000001');
+        fail('应抛出 ForbiddenException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ForbiddenException);
+        expect((e as ForbiddenException).getResponse()).toMatchObject({
+          code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        });
+      }
+      expect(prisma.chatChannel.create).not.toHaveBeenCalled();
+    });
+
+    it('非成员有项目但无权访问 tasked 团队 → 仍 403 无权访问该团队频道（:249-263 原样）', async () => {
+      prisma.projectMember.findMany.mockResolvedValue([{ projectId: 'p_other' }]);
+      (prisma.teamUserMember.findUnique as jest.Mock).mockResolvedValue(null);
+      prisma.team.findUnique.mockResolvedValue({ id: 'tm_0000000001' });
+      (prisma.task.findMany as jest.Mock)
+        .mockResolvedValueOnce([{ teamId: 'tm_other' }] as any)
+        .mockResolvedValueOnce([{ projectId: 'p_unrelated' }] as any);
+      try {
+        await service.findAccessibleChannels(userId, undefined, 'tm_0000000001');
+        fail('应抛出 ForbiddenException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ForbiddenException);
+        expect((e as ForbiddenException).getResponse()).toMatchObject({
+          code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
+          message: '无权访问该团队频道',
+        });
+      }
+      expect(prisma.chatChannel.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('findOne（频道详情）', () => {
     it('返回频道信息 + 成员 Agent（团队成员）', async () => {
       allowAccess();
