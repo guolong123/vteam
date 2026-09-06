@@ -173,116 +173,130 @@ Agent 是平台中的 AI 协作者，每名 Agent 是一个可独立配置、可
 
 **主 Agent 与模板的关系（04 篇 FR-30 补充说明）**：预置产品经理模板（或团队克隆自它的自定义项目经理 Agent）可作为任务的主 Agent（负责人），牵头组织虚拟团队。主 Agent 同样是平台中的一名普通 Agent，其角色、配置项与默认模型按本篇规则统一维护（§5.2）。
 
-## 5. 虚拟团队模型（核心）
+## 5. 全局团队域（独立 Team 域，28 篇详述）
 
-### 5.1 任务虚拟团队（FR-02）
+本章为全局团队域的**概要**，完整设计见 28 篇《团队模型与排队设计》。团队是**独立于任务的全局实体**，一团队一群、多任务串行排队、成员多实例——任务通过 `teamId` 归属团队，不再每任务建群。
 
-**虚拟团队 = 任务选中的 Agent 集合**：创建任务时，成员从 Agent 角色列表勾选一个或多个 Agent（`POST /projects/:pid/tasks` 的 `agentIds[]`），组成该任务的虚拟团队。选中的 Agent 获得该任务的独立会话；**未选中的 Agent 不参与本任务**（不接收 @ 分派、无该任务会话）。团队组成在任务进行中可调整（§5.3）。
+### 5.1 团队创建与成员（Team / TeamMember）
 
-团队与群聊成员的关系（对齐 10 篇 §3.2）：
+| 项 | 约定 | 依据 |
+|----|------|------|
+| 创建 | `POST /teams` `{name!, description?, reuseSession?, members[]}`；`name` 全局唯一，`reuseSession` 默认 true | 09 §3.4，28 §2 |
+| 成员 | `team_members` 行：`team_id` + `agent_id`（模板）+ `alias`（默认「<角色>-<seq>」）+ `seq`（同模板同团队内序号，`SELECT MAX(seq) FOR UPDATE` 生成）+ `workDir` | 28 §2 |
+| 多实例 | 同一模板 Agent 可在同一团队内添加多次，`seq` 递增区分（`uk_team_members_team_agent_seq`），各实例独立会话/私聊/`@` | 28 §2 |
+| 调整 | `POST /teams/:id/members` 增、`PATCH /teams/:id/members/:memberId` 改 alias/workDir、`DELETE /teams/:id/members/:memberId` 删；仅空闲且队列空可删团队 | 28 §2，09 §3.4 |
+| 乐观锁 | `teams.version` CAS：`PATCH /teams/:id` 需携带 `version`，冲突 409 `VERSION_CONFLICT` | 28 §2 |
+| 权限 | 团队为全局域，需 `teams:view/create/edit/delete` 权限（非项目成员校验） | 28 §2 |
+
+团队与群聊成员的关系：
 
 | 成员类型 | 来源 | 参与方式 |
 |---------|------|---------|
-| 人类成员 | 项目成员（`project_members`，FR-24 权限范围） | 群聊发消息、@ 触发、验收判定（FR-04） |
-| Agent 成员 | **任务虚拟团队**（`task_agents` 表，task_id × agent_id，含 joined_at/removed_at，13 篇 §2.1） | 群聊 @ 被触发（FR-11/12）、Agent 互 @（FR-13）；**未入队 Agent 不参与**（FR-02） |
+| 人类成员 | 项目成员（`project_members`，FR-24） | 群聊发消息、@ 触发、验收判定（FR-04） |
+| Agent 成员 | **全局团队**（`team_members`，`team_id × agent_id × seq`） | 群聊 @ 被触发（FR-11/12）、Agent 互 @（FR-13）；未在团队内的 Agent 不参与该团队任务 |
 
-> **团队是任务侧关联，配置是 Agent 侧定义**：`task_agents` 只记录「该任务选了哪些 Agent」，Agent 的能力来自其自身配置（§3）——团队调整（增删关联）不修改 Agent 配置，同一 Agent 可在多个任务以不同团队组合协作（§6.3 任务间隔离）。
+> **团队是全局域，任务是归属关系**：`tasks.team_id` 指向团队，`team_queues` 决定串行顺序，`task_agents` 为创建时从 `team_members` 的快照（alias/seq/workDir 原样复制）——团队调整不改快照，已创建任务的快照保持不变。
 
-### 5.2 主 Agent（FR-08）
-
-组建虚拟团队且选择多个 Agent 时，成员须指定其中一个作为「主 Agent」（任务负责人）。主 Agent **默认取产品经理 Agent**（若已选入团队，可改选其他已选 Agent），**指定在任务启动时生效**（FR-07）。
+### 5.2 任务归属与排队（TeamQueue，FIFO）
 
 | 维度 | 约定 | 依据 |
 |------|------|------|
-| 默认人选 | 产品经理 Agent（若已选入团队）；可改选其他已选 Agent | FR-08 |
-| 指定时机 | 任务启动时生效（start 前置校验：多 Agent 未指定则提示先指定，FR-07） | FR-07/08 |
-| 单 Agent 任务 | 无需额外指定，该 Agent 即主 Agent（FR-07） | FR-07 |
-| API | 创建 `mainAgentId?`（须在 agentIds[] 内）；PATCH /tasks/:id 可改（须团队内，09 §3.4） | 09 §3.4 |
-| 存储 | `tasks.main_agent_id`（13 篇 §2.1） | 13 §2.1 |
+| 归属 | `POST /projects/:pid/tasks` `{teamId!, title!, resetAfterComplete?}`；`teamId` 必填（旧 `agentIds[]` 已废弃） | 09 §3.4，28 §3 |
+| 串行 | 一团队一次仅一任务进行中（`teams.current_task_id` 指队首）；其余入 `team_queues` 按 `position` 1..N FIFO 排队，状态 `queued` | 28 §3 |
+| 入队 | 团队空闲（`current_task_id` NULL）→ 任务 `pending` 并设 `current_task_id`；忙时 → `queued` + `team_queues` 追加（`MAX(position)+1`，`FOR UPDATE` 行锁 + `version` CAS） | 28 §3 |
+| 晋升 | `accept`/`archive`/`reject` 后事务内 `promoteNextInTx`：队首 `queued→pending`、删队首 `team_queues`、重排剩余 `position` 1..N、`current_task_id` 指向新队首或 NULL（空闲） | 28 §3 |
+| 取消 | `DELETE /teams/:id/queue/:taskId` 仅 `queued` 可取消（否则 409 `TASK_NOT_QUEUED`）；取消后重排 + 若队首被取消则晋升下一队首 | 28 §3 |
+| 看板 | `queued` 为第六态，看板新增「排队中」列；取消不支持拖拽重排 | 28 §3 |
+| 队列视图 | `GET /teams/:id` 返回 `queue: TeamQueue[]`（含 `taskTitle/taskStatus`），任务详情 `TeamQueueCard` 展示 FIFO 徽章与取消入口 | 28 §3 |
 
-**职责边界（FR-08，03 篇展开）**：
+### 5.3 群聊复用（一团队一群）
 
-| 职责 | 说明 | 边界 |
+| 维度 | 约定 | 依据 |
 |------|------|------|
-| 协调权 | 可 @ 其他 Agent 衔接协作（FR-13），牵头分工 | 互 @ 3 轮上限、循环检测（FR-13） |
-| 推进职责 | 启动后向团队同步目标与分工；环节间协调产出衔接；必要时向成员提示进度 | — |
-| 兜底设计 | 主 Agent 无产出不阻塞任务；处理失败不视为任务失败 | 成员仍可直接 @ 各 Agent；单 Agent 错误隔离（FR-21） |
-| **不越权验收** | 验收结论由成员作出 | 主 Agent 不替代成员验收判定权（FR-04/08） |
+| 频道 | `team_group` 一团队一群（`chat_channels(team_id, team_member_id)` 唯一，`team_member_id` NULL 表示群聊）；`task_group` 已废弃，请求返回 400 `CHANNEL_TYPE_DEPRECATED` | 28 §3，10 §3.1 |
+| 创建 | 懒创建：首任务创建时建 `team_group` 频道，复用团队后续任务不再新建 | 28 §3 |
+| 消息分区 | `messages.task_id` 分区；团队群跨任务复用时按 `taskId` 过滤历史 + 插入系统分隔「--- Task B started ---」；`idx_messages_channel_task` 保证分区查询 | 28 §3 |
+| 私聊 | `private` 按 `team_member_id` 复用（`uk_channels_team_member`），`teamId + teamMemberId` 维度幂等，`taskId` 滞空；`getSessionHistory` 按 `team_member_id` 跨任务保留历史 | 28 §3 |
+| @ 触发 | `@` 解析从 `team_members` 展开，`all` 展开未移除成员，`disabled` 400 | 10 §4，28 §3 |
+| 事件 | `POST /channels/:id/messages` 双广播 `channel:<id>` + `team:<teamId>`，SSE 订阅 `team:<teamId>` 可收团队群消息与 `team.queue.changed` | 28 §3 |
 
-### 5.3 团队调整（POST /tasks/:id/team，FR-02）
+### 5.4 主 Agent（FR-08，团队内指定）
 
-任务启动后团队仍可调整，`POST /tasks/:id/team` 请求 `{addAgentIds[]?, removeAgentIds[]?}`（09 篇 §3.4）：
+| 维度 | 约定 | 依据 |
+|------|------|------|
+| 默认人选 | 产品经理 Agent（若已在团队内）；可改选其他团队成员实例 | FR-08，28 §2 |
+| 指定时机 | 任务启动时校验：多实例团队需 `mainAgentInstanceId` 指向团队内成员，否则 400 | FR-07/08，28 §3 |
+| 存储 | `tasks.main_agent_id`（模板）+ `tasks.main_agent_instance_id`（实例，`tmm_`/`ta_`） | 28 §3 |
+| 职责 | 同前：协调权、推进职责、不越权验收；群聊无 @ 消息路由给主 Agent | FR-08 |
 
-| 动作 | 服务端行为 | 会话/产出语义 | 群聊联动 |
-|------|-----------|--------------|---------|
-| 添加 Agent | 写入 `task_agents`（joined_at）；**注入任务文档库内容作为其会话初始上下文**（FR-02/FR-15） | 新会话创建，Agent 加入后即可参与后续 @ 触发 | 系统消息「开发者 Agent 已加入团队」+ 广播 `team.changed`（FR-10，10 篇 §8.3） |
-| 移除 Agent | 写入 removed_at；该 Agent **不再接收本任务 @ 与消息**（@ 返回 `agent_removed`，09 篇 §5.1 第 2 步） | 会话冻结（`sessions.status=frozen`，08 篇 §6）；**已提交产出物保留在文档库不删除**；历史可查看但不再处理新消息（FR-02） | 系统消息「测试 Agent 已移出团队，其会话已冻结」+ 广播 `team.changed`（10 篇 §8.3） |
-
-**与 13 篇状态机联动（FR-02 边界）**：团队调整仅在任务「待开始 / 进行中」合法；待验收 / 已完成 / 已归档时调用返回 409（13 篇 §7.4 边界冲突表）。归档后任务群聊只读，不再有团队调整入口。
-
-**虚拟团队与任务/群聊/会话/文档库关系图（mermaid）：**
+**全局团队与任务/群聊/会话/文档库关系图（mermaid）：**
 
 ```mermaid
 flowchart LR
+    subgraph 全局团队域
+        TEAM[团队 Team<br/>version 乐观锁]
+        TM[成员 TeamMember<br/>team × agent × seq]
+        TQ[队列 TeamQueue<br/>FIFO position 1..N]
+        CH[团队群聊 team_group<br/>一团队一群]
+    end
     subgraph 任务侧
-        T[任务<br/>tasks.status 五态]
-        TA[虚拟团队 task_agents<br/>task_id × agent_id]
-        CH[任务群聊<br/>task_group 频道]
-        DL[任务文档库<br/>产出物 + 版本]
-        SESS[会话集合<br/>task × agent 独立会话]
+        T[任务 Task<br/>status 六态 queued 起]
+        TA[快照 TaskAgent<br/>源自 TeamMember]
+        DL[文档库<br/>产出物 + 版本]
+        SESS[会话 Session<br/>team_member_id 分区]
     end
-    subgraph Agent 侧
-        A1[产品经理 agent]
-        A2[架构师 agent]
-        A3[开发者 agent]
-        A4[测试 agent]
+    subgraph Agent 模板
+        A1[产品经理]
+        A2[架构师]
+        A3[开发者]
+        A4[测试]
     end
-    T --> CH
-    T --> DL
-    T --> TA
+    TEAM --> TM
+    TEAM --> TQ
+    TEAM --> CH
+    A1 --> TM
+    A2 --> TM
+    A3 --> TM
+    A4 --> TM
+    T -- teamId 归属 --> TEAM
+    TQ -- 队首晋升 --> T
+    TM -- 快照 alias/seq/workDir --> TA
     TA --> SESS
     CH -- @ 触发分派 --> SESS
-    DL -- FR-15/46 上下文注入 --> SESS
-    A1 --> TA
-    A2 --> TA
-    A3 --> TA
-    A4 --> TA
-    TA -- 主 Agent（FR-08）--> A1
-    SESS -- 产出物归档 append --> DL
+    DL -- 上下文注入 --> SESS
+    SESS -- 产出 append --> DL
+    CH -- taskId 分区 --> T
+    TM -- 主实例 --> T
 ```
 
-### 5.4 团队生命周期状态（task_agents 行）
+## 6. 会话模型（FR-37，teamMember 分区）
 
-| 状态 | 表示 | 迁移 |
-|------|------|------|
-| `joined` | Agent 在团队中，会话激活可被 @（joined_at 非空、removed_at 空） | team add → joined；team remove → removed |
-| `removed` | Agent 已移出（removed_at 非空），会话 frozen，产出保留 | 不可逆：本版不支持重新加入恢复原会话（新加入按 add 流程注入上下文，见 §9 开放问题③） |
+### 6.1 会话与 task × 实例一一对应（可跨任务复用）
 
-## 6. 会话模型（FR-37）
-
-### 6.1 会话与 task × agent 一一对应
-
-平台为每名 Agent 的每个任务维护**一个独立会话（session）**，`sessions` 表以 `task_id × agent_id` 唯一标识（10 篇 §3.3 表关系）：
+平台为每实例的每个任务维护会话，`sessions` 以 `task_id × task_agent_id` 唯一标识，`team_member_id` 决定是否跨任务复用（10 篇 §3.3 + 28 篇 §4）：
 
 | 入口 | 会话复用 | 依据 |
 |------|---------|------|
-| 群聊 @ 触发 | 分派到该 Agent 该任务会话 | FR-14/37 |
-| 私聊（POST /dm-channels） | 与群聊**共用同一会话**，上下文连续 | FR-14 |
-| 任务启动私信主 Agent | 主 Agent 的任务会话（启动消息作为会话首条上下文） | FR-07 / 13 §4.2 |
+| 群聊 @ 触发 | 分派到该实例该任务会话 | FR-14/37，28 §4 |
+| 私聊（POST /dm-channels） | 按 `team_member_id` 复用，与群聊**历史可跨任务保留**（`reuseSession` 时） | FR-14，28 §4 |
+| 任务启动私信主 Agent | 主实例的任务会话（启动消息作为会话首条上下文） | FR-07 / 13 §4.2 |
+| 跨任务复用 | `teams.reuseSession=true` 且 `tasks.reset_after_complete=false` 时，`sessions.team_member_id` 同行延续（`instanceRef` 保留）；任一为 false 时完成/归档同事务内批量 reset（`POST /teams/:id/reset-sessions` 同逻辑，幂等） | 28 §4 |
 
-> **一个 Agent 一个任务一个会话**：私聊深入讨论不刷群聊屏，Agent 始终记得任务上下文，不会因入口不同失忆（FR-14）——群聊/私聊只是寻址视图不同，底层落在同一会话（10 篇 §3.3）。
+> **一实例一任务一会话，团队维度可复用**：`team_member_id` 分区让同一成员在同一团队的多任务间可选择保留上下文（`reuseSession` 默认保留）或每任务新会话（reset）。私聊按 `team_member_id` 复用，群聊一团队一群按 `taskId` 分区过滤历史，底层会话是否复用由团队记忆开关与任务级覆盖共同决定。
 
 ### 6.2 会话生命周期
 
-会话沿「创建 → 激活 → 协作 → 冻结 → 归档」流转，与任务状态机（13 篇）和团队调整（§5.3）联动：
+会话沿「创建 → 激活 → 协作 → 冻结/重置 → 归档」流转，与任务状态机（13 篇）、团队队列（28 篇 §3）与记忆开关（28 篇 §4）联动：
 
 | 阶段 | sessions.status | 触发 | 语义 |
 |------|----------------|------|------|
-| 创建（入队） | `created` | 任务创建选入团队（13 篇 §4.1：团队已组但未投入协作） | Agent 获得会话记录，但任务未启动不接收 @ 分派前的处理 |
-| 激活 | `active` | 任务启动（start，13 篇 §4.2：创建 worker 实例） | 会话接入 worker 实例，可被 @ 分派与处理 |
-| 协作中 | `active` | @ 触发 / 私聊 / Agent 互 @ | **上下文连续**：@ 触发时注入群聊历史 + 文档库（FR-15/46，12 篇 §8） |
-| 冻结 | `frozen` | 团队移除 Agent（FR-02，§5.3） | 不再接收 @ 与消息；历史可查看；产出保留 |
-| 归档 | `archived` | 任务归档（archive，13 篇 §4.5） | 实例回收（DELETE /instances/{gid}）；会话只读可回看；无恢复路径 |
+| 创建（入队） | `created` | 任务创建（`task_agents` 快照 + `sessions` 创建，`team_member_id` 绑定） | 实例获得会话记录，`queued` 时不接入 worker，`pending` 时可被 @ |
+| 排队 | `created` | 团队忙时任务 `queued`（28 §3） | 会话已创但不分派，待队首晋升 `pending` 后激活 |
+| 激活 | `active` | 任务 `pending→in_progress`（start，13 篇 §4.2：创建 worker 实例） | 会话接入 worker 实例，可被 @ 分派与处理 |
+| 协作中 | `active` | @ 触发 / 私聊 / Agent 互 @ | **上下文连续**：@ 触发时注入群聊历史（按 `taskId` 分区）+ 文档库（FR-15/46，12 篇 §8） |
+| 冻结 | `frozen` | 团队移除成员（§5.1） | 不再接收 @ 与消息；历史可查看；产出保留 |
+| 重置（批量） | 删除旧行 → 新 `created` | 任务完成/归档且 `!reuseSession || resetAfterComplete` 时同事务批量 `resetTeamSessionsInTx`（含手动 `POST /teams/:id/reset-sessions`） | 软删 `task_group_instances` → 删 `sessions` → 建新 `created` 会话（`workerId/instanceRef` 清空）+ 系统消息「已为下一任务开新会话」 |
+| 归档 | `archived` | 任务归档（archive，13 篇 §4.5） | 实例回收（DELETE /instances/{gid}）；会话只读可回看；无恢复路径（晋升队首前先重置则新会话归档） |
 
 ### 6.3 任务间隔离（FR-37）
 
@@ -419,4 +433,4 @@ POST /tasks/:id/team
 | ④ | 自定义 Agent 的权限最小化默认 | 完全自定义 Agent（FR-32）空白创建时 permissionScope 与 toolEffects 为空，行为等效于全 allow，存在越权风险 | 出现自定义 Agent 误操作事故时，将默认收紧为「全 deny + 按需开放」并要求显式授权 |
 | ⑤ | 可用模型列表跨 worker 一致性 | `GET /agents/:id/available-models` 返回的是当前 worker 实际模型（§3.5）；worker 能力不同导致列表差异 | 多 worker 能力差异影响调度选择时，定义按能力声明的统一模型目录（07 §11.2 能力声明扩展） |
 
-**与既有文档的衔接。** 本文档是「Agent 定义 + 团队编排」的专章展开：§2~§4 落地 04 篇 FR-30~37/47/48 的配置侧，§5~§6 落地 03 篇 FR-02/08 与 FR-37 的协作侧，§3.6/§7 把 11 篇 §7.3 的「资源 × Agent 绑定」展开为完整配置生成与生效路径。09 篇的端点表（§3.7/§3.4）、10 篇的消息链路（§4/§8）、13 篇的状态机（§4/§6）为本文档的事实依据，两处表述冲突时以 09 篇为准并同步修正本文档。
+**与既有文档的衔接。** 本文档是「Agent 定义 + 团队编排」的专章展开：§2~§4 落地 04 篇 FR-30~37/47/48 的配置侧，§5 落地全局 Team 域（28 篇详述，独立于任务），§6 落地 `team_member_id` 分区的跨任务复用会话。09 篇端点表（§3.7/§3.4 团队域、§3.4 任务 `teamId`）、10 篇消息链路（§4/§8 一团队一群）、13 篇状态机（§4/§6 六态 `queued`）、15 篇 ER（Team/TeamMember/TeamQueue）为本文档的事实依据，两处表述冲突时以 09 篇与 15 篇落库为准并同步修正本文档。

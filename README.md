@@ -22,7 +22,7 @@ vteam 是任务驱动的多 Agent 虚拟团队协作平台。用户先创建**�
 
 ### 协作方式
 
- - 团队常驻会话：`/teams/:id/session` 按 `teamId` 复用群聊（`team_group` 单例，切任务不切群），看板/列表/团队详情的“进入会话”统一指向该路由，旧 `/tasks/:id` 群聊入口隐藏或 302 跳至团队会话；状态 Tab 改为任务列表（当前执行队首 `team.currentTaskId` + 等待队列 FIFO 可取消）
+ - 团队常驻会话：`/teams/:id/session` 为团队唯一聊天入口（群聊 + `team_member_id` 维度私聊 + 模型选择 + 成员管理 + 可拖拽面板 + 右侧状态/配置/产出三 Tab + 队列/记忆卡片），看板任务卡片点击改为任务详情抽屉（抽屉内“进入团队会话”统一指向该路由），团队列表/详情的“进入会话”统一指向该路由；`/tasks/:id` 已剥离中央聊天区（仅任务详情 + 右侧面板 + 迁移提示，深度编辑仍可跳该路由）
 - 群聊：一团队一群（`team_group` 复用，消息按 `taskId` 分区过滤 + 系统分隔），@ 触发、@all 广播、Agent 互 @（`notify_agent`）、SSE 流式输出（两阶段 loading），历史跨任务可见，按 `team:` + `channel:` 订阅
 - 私聊：按 `team_member_id` 复用（`teamId + teamMemberId` 维度幂等），与群聊并行，历史可跨任务保留（`reuseSession` 时）
 - 队列视图：团队详情队列预览与状态 Tab 任务列表 `TeamQueueCard`（FIFO 徽章、当前位置、取消排队，仅 `queued` 可取消）
