@@ -28,6 +28,13 @@ export interface TeamQueueDto {
   taskStatus?: string | null;
 }
 
+export interface TeamUserMemberDto {
+  id: string;
+  userId: string;
+  role: string;
+  joinedAt: string;
+}
+
 export interface TeamDto {
   id: string;
   name: string;
@@ -42,6 +49,7 @@ export interface TeamDto {
   createdAt: string;
   updatedAt: string;
   members: TeamMemberDto[];
+  userMembers: TeamUserMemberDto[];
   queue: TeamQueueDto[];
 }
 
@@ -79,6 +87,11 @@ export interface UpdateMemberPayload {
   workDir?: string;
 }
 
+export interface AddUserMemberPayload {
+  userId: string;
+  role?: string;
+}
+
 export const teamsApi = {
   list(params: { page?: number; pageSize?: number; name?: string }): Promise<TeamsPage> {
     return api.get<TeamsPage>("/teams", { query: params as Record<string, string | number | undefined> });
@@ -103,6 +116,12 @@ export const teamsApi = {
   },
   removeMember(teamId: string, memberId: string): Promise<TeamDto> {
     return api.delete<TeamDto>(`/teams/${teamId}/members/${memberId}`);
+  },
+  addUserMember(teamId: string, payload: AddUserMemberPayload): Promise<TeamDto> {
+    return api.post<TeamDto>(`/teams/${teamId}/users`, payload);
+  },
+  removeUserMember(teamId: string, userId: string): Promise<TeamDto> {
+    return api.delete<TeamDto>(`/teams/${teamId}/users/${userId}`);
   },
   resetSessions(teamId: string): Promise<{ reset: number; teamId: string }> {
     return api.post<{ reset: number; teamId: string }>(`/teams/${teamId}/reset-sessions`);

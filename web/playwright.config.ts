@@ -43,6 +43,12 @@ export default defineConfig({
       dependencies: ["setup"],
     },
     {
+      name: "team-users",
+      testMatch: /team-user-members\.spec\.ts/,
+      use: { storageState: ".auth/user.json" },
+      dependencies: ["setup"],
+    },
+    {
       name: "perf",
       testMatch: /perf\.spec\.ts/,
       use: { storageState: ".auth/user.json" },

@@ -16,6 +16,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { teamsApi, type TeamDto, type TeamMemberDto, type TeamQueueDto } from "@/src/api/teams";
+import { UserMembersSection } from "./user-members";
 import { AgentAvatar, ConfirmDialog } from "@/src/components/ui";
 import {
   type RoleKey,
@@ -472,6 +473,9 @@ export default function TeamDetailPage() {
           </div>
         )}
       </section>
+
+      {/* 用户成员（独立于 Agent 成员区） */}
+      <UserMembersSection teamId={team.id} members={team.userMembers ?? []} />
 
       <ConfirmDialog
         open={deleteConfirm}
