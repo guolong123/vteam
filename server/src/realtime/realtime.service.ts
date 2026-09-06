@@ -30,6 +30,13 @@ export interface RealtimeEvent {
   scopeId: string | null;
   /** 事件所属项目（scope=all 全量订阅时的可见项目过滤依据）；解析失败/无法归属 → null。 */
   projectId: string | null;
+  /**
+   * 团队域归属（scope=all 全量订阅时的可见团队过滤依据；内存路由字段，不落库、不下发）：
+   * - team scope → scopeId；channel scope → 频道 teamId（团队频道）；
+   * - task/global scope → null（走项目过滤）。
+   * 零任务团队频道无项目归属（projectId null），靠此字段对团队成员放行。
+   */
+  teamId?: string | null;
 }
 
 export type RealtimeEventType = string;
@@ -120,6 +127,7 @@ export class RealtimeService implements OnModuleInit {
     };
 
     event.projectId = await this.resolveProjectIdOfEvent(event);
+    event.teamId = await this.resolveTeamIdOfEvent(event);
 
     await this.prisma.realtimeEvent.create({
       data: {
@@ -174,18 +182,23 @@ export class RealtimeService implements OnModuleInit {
    * 按 scope 数组订阅实时事件流，返回取消订阅函数。
    * 无 scope = 全局全量；有 scope 数组时仅推送命中任一 scope 的事件
    * （多 scope 合并订阅，如 channel:<id> + task:<id> + global 一条连接）。
+   * scope=all 全量订阅时调用方传入可见项目集（visibleProjectIds）叠加团队集
+   * （visibleTeamIds，团队成员维度）：命中任一即放行；两者皆 null = 不过滤。
    */
   subscribe(
     listener: RealtimeEventListener,
     scopes?: RealtimeScope | RealtimeScope[],
     visibleProjectIds?: string[] | null,
+    visibleTeamIds?: string[] | null,
   ): () => void {
     const scopeList = this.toScopeList(scopes);
     const projectFilter = this.toProjectFilter(visibleProjectIds);
-    const needsFilter = scopeList.length > 0 || projectFilter !== null;
+    const teamFilter = this.toTeamFilter(visibleTeamIds);
+    const needsFilter =
+      scopeList.length > 0 || projectFilter !== null || teamFilter !== null;
     const wrapped: RealtimeEventListener = needsFilter
       ? (event) => {
-          if (projectFilter !== null && !projectFilter(event)) {
+          if (!this.passesVisibility(event, projectFilter, teamFilter)) {
             return;
           }
           if (
@@ -212,6 +225,7 @@ export class RealtimeService implements OnModuleInit {
     since?: string,
     scopes?: RealtimeScope | RealtimeScope[],
     visibleProjectIds?: string[] | null,
+    visibleTeamIds?: string[] | null,
   ): Promise<RealtimeEvent[]> {
     const where: Prisma.RealtimeEventWhereInput = this.buildScopeWhereList(
       scopes,
@@ -233,7 +247,44 @@ export class RealtimeService implements OnModuleInit {
       where,
       orderBy: { id: 'asc' },
     });
-    return rows.map(this.fromRow);
+    let events = rows.map(this.fromRow);
+    if (visibleTeamIds === null || visibleTeamIds === undefined) {
+      return events;
+    }
+    // scope=all 团队域补拉：projectId 为 null 的团队事件被主查询的项目过滤丢弃，
+    // 按可见团队二次候选查询后合并（与 live 订阅同一可见性谓词精确过滤）。
+    // 主查询行已有 DB 级项目授权，保持原样；仅候选行需 JS 过滤
+    // （visibleProjectIds 为 null 时主查询无项目约束，则全部行参与过滤）。
+    const teamRows = await this.prisma.realtimeEvent.findMany({
+      where: this.buildTeamCandidateWhere(scopes, where.id, visibleTeamIds),
+      orderBy: { id: 'asc' },
+    });
+    const seen = new Set(events.map((e) => e.id));
+    const extras = teamRows.map(this.fromRow).filter((e) => {
+      if (seen.has(e.id)) {
+        return false;
+      }
+      seen.add(e.id);
+      return true;
+    });
+    const projectFilter = this.toProjectFilter(visibleProjectIds);
+    const teamFilter = this.toTeamFilter(visibleTeamIds);
+    if (visibleProjectIds === null || visibleProjectIds === undefined) {
+      events = events.concat(extras);
+      await this.attachChannelTeams(events);
+      events = events.filter((e) =>
+        this.passesVisibility(e, projectFilter, teamFilter),
+      );
+    } else {
+      await this.attachChannelTeams(extras);
+      events = events.concat(
+        extras.filter((e) =>
+          this.passesVisibility(e, projectFilter, teamFilter),
+        ),
+      );
+    }
+    events.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return events;
   }
 
   /** 当前游标（最新已发事件 id）；无事件时返回 null。 */
@@ -302,6 +353,130 @@ export class RealtimeService implements OnModuleInit {
     }
     const visible = new Set(visibleProjectIds);
     return (event) => event.projectId !== null && visible.has(event.projectId);
+  }
+
+  /**
+   * 构造可见团队过滤谓词：null/undefined → null（不过滤，兼容现有调用）。
+   * 显式空数组 → 恒 false（调用方无任何可见团队，团队事件一律不放行）；
+   * 非空数组 → 仅放行 teamId ∈ 可见集合的团队域事件（teamId 为 null 的非团队事件一律不放行）。
+   * 与项目过滤为 OR 关系（见 passesVisibility），只放宽、不收紧既有项目语义。
+   */
+  private toTeamFilter(
+    visibleTeamIds?: string[] | null,
+  ): ((event: RealtimeEvent) => boolean) | null {
+    if (visibleTeamIds === null || visibleTeamIds === undefined) {
+      return null;
+    }
+    if (visibleTeamIds.length === 0) {
+      return () => false;
+    }
+    const visible = new Set(visibleTeamIds);
+    return (event) => {
+      const teamId =
+        event.teamId ?? (event.scopeType === 'team' ? event.scopeId : null);
+      return teamId !== null && teamId !== undefined && visible.has(teamId);
+    };
+  }
+
+  /**
+   * scope=all 可见性判定：项目过滤与团队过滤任一命中即放行；
+   * 两者皆 null（非全量订阅调用）→ 不过滤。
+   */
+  private passesVisibility(
+    event: RealtimeEvent,
+    projectFilter: ((event: RealtimeEvent) => boolean) | null,
+    teamFilter: ((event: RealtimeEvent) => boolean) | null,
+  ): boolean {
+    if (projectFilter === null && teamFilter === null) {
+      return true;
+    }
+    return (projectFilter?.(event) ?? false) || (teamFilter?.(event) ?? false);
+  }
+
+  /**
+   * 解析事件团队域归属（emit 落库时附带内存 teamId，供 scope=all 团队过滤）：
+   * - team scope → scopeId 即团队 id；
+   * - channel scope → 频道 teamId（团队频道；任务频道为 null，走项目过滤）；
+   * - task/global scope → null。
+   * 查询失败一律返回 null（不抛错，事件照常落库；null 仅意味着不走团队放行）。
+   */
+  private async resolveTeamIdOfEvent(
+    event: RealtimeEvent,
+  ): Promise<string | null> {
+    try {
+      if (event.scopeType === 'team') {
+        return event.scopeId;
+      }
+      if (event.scopeType === 'channel' && event.scopeId) {
+        const channel = await this.prisma.chatChannel.findUnique({
+          where: { id: event.scopeId },
+          select: { teamId: true },
+        });
+        return channel?.teamId ?? null;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 团队域补拉候选查询：可见团队的 team 事件 + 无项目归属的 channel 事件
+   * （后者按频道→团队批量归属后由 passesVisibility 精确过滤）。
+   * scope 约束与游标条件与主查询对齐（主查询已算好的 id 条件直接复用）。
+   */
+  private buildTeamCandidateWhere(
+    scopes: RealtimeScope | RealtimeScope[] | undefined,
+    idCond: Prisma.RealtimeEventWhereInput['id'],
+    visibleTeamIds: string[],
+  ): Prisma.RealtimeEventWhereInput {
+    const scopeList = this.toScopeList(scopes);
+    const and: Prisma.RealtimeEventWhereInput[] = [];
+    if (scopeList.length > 0) {
+      and.push({ OR: scopeList.map((scope) => this.buildScopeWhere(scope)) });
+    }
+    and.push({
+      OR: [
+        { scopeType: 'team', scopeId: { in: visibleTeamIds } },
+        { scopeType: 'channel', projectId: null },
+      ],
+    });
+    if (idCond !== undefined) {
+      and.push({ id: idCond });
+    }
+    return and.length === 1 ? and[0] : { AND: and };
+  }
+
+  /**
+   * 批量补齐 channel 事件的内存 teamId（补拉行无 teamId 时按频道查团队）；
+   * 已附带（live 事件）的不重复查询；查询失败保持 null（不抛错）。
+   */
+  private async attachChannelTeams(events: RealtimeEvent[]): Promise<void> {
+    const needy = events.filter(
+      (e) => e.scopeType === 'channel' && e.teamId === undefined,
+    );
+    const ids = [
+      ...new Set(
+        needy
+          .map((e) => e.scopeId)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    if (ids.length === 0) {
+      return;
+    }
+    try {
+      const rows = await this.prisma.chatChannel.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, teamId: true },
+      });
+      const byId = new Map(rows.map((r) => [r.id, r.teamId ?? null]));
+      for (const e of needy) {
+        e.teamId = byId.get(e.scopeId as string) ?? null;
+      }
+    } catch {
+      return;
+    }
   }
 
   /**

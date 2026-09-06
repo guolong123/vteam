@@ -14,8 +14,9 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
       create: jest.Mock;
       findMany: jest.Mock;
     };
-    task: { findUnique: jest.Mock };
-    chatChannel: { findUnique: jest.Mock };
+    task: { findUnique: jest.Mock; findFirst: jest.Mock };
+    chatChannel: { findUnique: jest.Mock; findMany: jest.Mock };
+    team: { findUnique: jest.Mock };
   };
 
   const row = (
@@ -52,8 +53,9 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
         ),
         findMany: jest.fn().mockResolvedValue([]),
       },
-      task: { findUnique: jest.fn() },
-      chatChannel: { findUnique: jest.fn() },
+      task: { findUnique: jest.fn(), findFirst: jest.fn() },
+      chatChannel: { findUnique: jest.fn(), findMany: jest.fn() },
+      team: { findUnique: jest.fn() },
     };
     service = new RealtimeService(
       prisma as unknown as PrismaService,
@@ -485,6 +487,93 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
       expect(received).toHaveLength(0);
       unsubscribe();
     });
+
+    it('零任务团队频道：团队成员经 teamId 放行 channel + team 广播（projectId null）', async () => {
+      // 频道归属 tm_1 且无任务分区（toMessageDto 无 taskId，团队无 currentTask）
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        teamId: 'tm_1',
+        taskId: null,
+      });
+      prisma.team.findUnique.mockResolvedValue({ currentTaskId: null });
+      prisma.task.findFirst.mockResolvedValue(null);
+      const received: RealtimeEvent[] = [];
+      const unsubscribe = service.subscribe(
+        (e) => received.push(e),
+        undefined,
+        ['p_other'],
+        ['tm_1'],
+      );
+
+      const ch = await service.emit(
+        'chat.message.new',
+        { message: { channelId: 'c_1' } },
+        { type: 'channel', id: 'c_1' },
+      );
+      const tm = await service.emit(
+        'chat.message.new',
+        { message: { channelId: 'c_1' } },
+        { type: 'team', id: 'tm_1' },
+      );
+
+      expect(ch.projectId).toBeNull();
+      expect(ch.teamId).toBe('tm_1');
+      expect(tm.projectId).toBeNull();
+      expect(tm.teamId).toBe('tm_1');
+      expect(received.map((e) => e.id)).toEqual([ch.id, tm.id]);
+      unsubscribe();
+    });
+
+    it('零任务团队频道：非成员收不到（项目未命中且团队未命中）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        teamId: 'tm_1',
+        taskId: null,
+      });
+      prisma.team.findUnique.mockResolvedValue({ currentTaskId: null });
+      prisma.task.findFirst.mockResolvedValue(null);
+      const received: RealtimeEvent[] = [];
+      const unsubscribe = service.subscribe(
+        (e) => received.push(e),
+        undefined,
+        ['p_other'],
+        ['tm_other'],
+      );
+
+      await service.emit(
+        'chat.message.new',
+        { message: { channelId: 'c_1' } },
+        { type: 'channel', id: 'c_1' },
+      );
+      await service.emit(
+        'chat.message.new',
+        { message: { channelId: 'c_1' } },
+        { type: 'team', id: 'tm_1' },
+      );
+
+      expect(received).toHaveLength(0);
+      unsubscribe();
+    });
+
+    it('有任务团队/任务事件：项目命中即放行（团队集不收紧既有语义）', async () => {
+      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_1' });
+      const received: RealtimeEvent[] = [];
+      const unsubscribe = service.subscribe(
+        (e) => received.push(e),
+        undefined,
+        ['p_1'],
+        ['tm_other'],
+      );
+
+      await service.emit(
+        'chat.message.new',
+        { messageId: 'm_1' },
+        { type: 'task', id: 't_1' },
+      );
+
+      expect(
+        received.map((e) => (e.payload as { messageId: string }).messageId),
+      ).toEqual(['m_1']);
+      unsubscribe();
+    });
   });
 
   describe('getEventsSince（DB 补拉，断线续拉）', () => {
@@ -597,6 +686,67 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
         where: { OR: [{ scopeType: 'global' }], id: { gt: 'ev_0000000001' } },
         orderBy: { id: 'asc' },
       });
+    });
+
+    it('visibleTeamIds 非空时团队候选二次查询合并：成员补拉零任务团队事件，非成员仍过滤', async () => {
+      const chRow = row(
+        'ev_0000000002',
+        'chat.message.new',
+        'channel',
+        'c_1',
+        null,
+      );
+      const tmRow = row(
+        'ev_0000000003',
+        'chat.message.new',
+        'team',
+        'tm_1',
+        null,
+      );
+      // 主查询（项目过滤）命中空；团队候选查询返回两条 projectId null 行
+      prisma.realtimeEvent.findMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([chRow, tmRow]);
+      prisma.chatChannel.findMany.mockResolvedValue([
+        { id: 'c_1', teamId: 'tm_1' },
+      ]);
+
+      const member = await service.getEventsSince(
+        'ev_0000000001',
+        undefined,
+        ['p_1'],
+        ['tm_1'],
+      );
+      expect(member.map((e) => e.id)).toEqual([
+        'ev_0000000002',
+        'ev_0000000003',
+      ]);
+      // 团队候选查询带 scope 游标对齐 + 团队/channel-null 条件
+      expect(prisma.realtimeEvent.findMany).toHaveBeenNthCalledWith(2, {
+        where: {
+          AND: [
+            {
+              OR: [
+                { scopeType: 'team', scopeId: { in: ['tm_1'] } },
+                { scopeType: 'channel', projectId: null },
+              ],
+            },
+            { id: { gt: 'ev_0000000001' } },
+          ],
+        },
+        orderBy: { id: 'asc' },
+      });
+
+      prisma.realtimeEvent.findMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([chRow, tmRow]);
+      const stranger = await service.getEventsSince(
+        'ev_0000000001',
+        undefined,
+        ['p_1'],
+        ['tm_other'],
+      );
+      expect(stranger).toEqual([]);
     });
 
     it('since=latest 时以最新已落库事件 id 为游标，仅返回其后新事件（首连跳过历史）', async () => {

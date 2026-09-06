@@ -84,6 +84,11 @@ export class RealtimeController {
     const visibleProjectIds = isAll
       ? await this.resolveVisibleProjectIds(userId)
       : null;
+    // scope=all 团队域可见性：团队无项目归属，项目过滤会吞掉零任务团队频道的
+    // 全部事件；叠加团队成员集，命中任一维度即放行（service 内 OR 语义）。
+    const visibleTeamIds = isAll
+      ? await this.resolveVisibleTeamIds(userId)
+      : null;
 
     return new Observable<MessageEvent>((subscriber) => {
       // 续拉期缓冲实时事件，避免「读历史 → 订阅实时」之间的事件缺口
@@ -100,6 +105,7 @@ export class RealtimeController {
         },
         parsedScopes,
         visibleProjectIds,
+        visibleTeamIds,
       );
 
       // 1) 先补拉历史（id > since，以 DB 为准），再对齐续拉期缓冲
@@ -108,6 +114,7 @@ export class RealtimeController {
           since !== undefined && since !== '' ? since : undefined,
           parsedScopes,
           visibleProjectIds,
+          visibleTeamIds,
         );
         replaying = false;
         const seen = new Set(backlog.map((e) => e.id));
@@ -291,6 +298,16 @@ export class RealtimeController {
       select: { projectId: true },
     });
     return memberships.map((m) => m.projectId);
+  }
+
+  /** scope=all：返回调用者作为成员的全部团队 id（teamUserMember 表，用户维度成员；建团队自动 owner 落行）。 */
+  private async resolveVisibleTeamIds(userId: string): Promise<string[]> {
+    const memberships: { teamId: string }[] =
+      (await (this.prisma as any).teamUserMember.findMany({
+        where: { userId },
+        select: { teamId: true },
+      })) ?? [];
+    return [...new Set(memberships.map((m) => m.teamId))];
   }
 
   private throwForbidden(): never {

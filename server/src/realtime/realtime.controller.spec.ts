@@ -25,8 +25,9 @@ describe('RealtimeController（SSE 端点）', () => {
       findMany: jest.Mock;
     };
     task: { findUnique: jest.Mock };
-    chatChannel: { findUnique: jest.Mock };
+    chatChannel: { findUnique: jest.Mock; findMany: jest.Mock };
     projectMember: { findUnique: jest.Mock; findMany: jest.Mock };
+    teamUserMember: { findMany: jest.Mock };
   };
   let jwt: { verifyAsync: jest.Mock };
 
@@ -62,9 +63,10 @@ describe('RealtimeController（SSE 端点）', () => {
         ),
         findMany: jest.fn().mockResolvedValue([]),
       },
-      task: { findUnique: jest.fn() },
-      chatChannel: { findUnique: jest.fn() },
-      projectMember: { findUnique: jest.fn(), findMany: jest.fn() },
+    task: { findUnique: jest.fn() },
+    chatChannel: { findUnique: jest.fn(), findMany: jest.fn() },
+    projectMember: { findUnique: jest.fn(), findMany: jest.fn() },
+    teamUserMember: { findMany: jest.fn() },
     };
     jwt = { verifyAsync: jest.fn() };
 
@@ -346,6 +348,67 @@ describe('RealtimeController（SSE 端点）', () => {
         where: { projectId: { in: [] } },
         orderBy: { id: 'asc' },
       });
+    });
+
+    it('scope=all 团队成员实时收到零任务团队频道的消息事件（团队维度放行）', async () => {
+      grantAccess();
+      prisma.projectMember.findMany.mockResolvedValue([
+        { projectId: 'p_other' },
+      ]);
+      prisma.teamUserMember.findMany.mockResolvedValue([{ teamId: 'tm_1' }]);
+      // 频道归属 tm_1 且无任务分区；团队无 currentTask（toMessageDto 亦无 taskId）
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        teamId: 'tm_1',
+        taskId: null,
+      });
+
+      const obs = await controller.events(undefined, 'all', accessToken);
+      expect(prisma.teamUserMember.findMany).toHaveBeenCalledWith({
+        where: { userId: 'u_admin' },
+        select: { teamId: true },
+      });
+      const eventsPromise = collectEvents(obs, 1);
+      await realtime.broadcast(
+        'chat.message.new',
+        { message: { channelId: 'c_1' } },
+        { type: 'channel', id: 'c_1' },
+      );
+      const events = await eventsPromise;
+
+      expect(events).toHaveLength(1);
+      expect((events[0].data as { type: string }).type).toBe(
+        'chat.message.new',
+      );
+    });
+
+    it('scope=all 非团队成员收不到零任务团队频道的消息事件', async () => {
+      grantAccess();
+      prisma.projectMember.findMany.mockResolvedValue([
+        { projectId: 'p_other' },
+      ]);
+      prisma.teamUserMember.findMany.mockResolvedValue([
+        { teamId: 'tm_other' },
+      ]);
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        teamId: 'tm_1',
+        taskId: null,
+      });
+
+      const obs = await controller.events(undefined, 'all', accessToken);
+      const eventsPromise = collectEvents(obs, 0);
+      await realtime.broadcast(
+        'chat.message.new',
+        { message: { channelId: 'c_1' } },
+        { type: 'channel', id: 'c_1' },
+      );
+      await realtime.broadcast(
+        'chat.message.new',
+        { message: { channelId: 'c_1' } },
+        { type: 'team', id: 'tm_1' },
+      );
+      const events = await eventsPromise;
+
+      expect(events).toHaveLength(0);
     });
   });
 
