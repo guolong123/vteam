@@ -4,11 +4,10 @@
       "/Users/mac/.nvm/versions/node/v24.14.0/bin/node",
       "/Users/mac/01work/git-project/vteam/web/node_modules/.bin/playwright",
       "test",
-      "-c",
-      "playwright.qa.config.ts",
-      "--project=qa"
+      "--project=team-users",
+      "-gteam-user-members"
     ],
-    "configFile": "/Users/mac/01work/git-project/vteam/web/playwright.qa.config.ts",
+    "configFile": "/Users/mac/01work/git-project/vteam/web/playwright.config.ts",
     "rootDir": "/Users/mac/01work/git-project/vteam/web/e2e",
     "failOnFlakyTests": false,
     "forbidOnly": false,
@@ -47,12 +46,76 @@
         "metadata": {
           "actualWorkers": 1
         },
-        "id": "qa",
-        "name": "qa",
+        "id": "login",
+        "name": "login",
         "testDir": "/Users/mac/01work/git-project/vteam/web/e2e",
         "testIgnore": [],
         "testMatch": [
-          "/qa-tools3\\.spec\\.ts/"
+          "/login\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Users/mac/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "pages",
+        "name": "pages",
+        "testDir": "/Users/mac/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/pages\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Users/mac/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "team-users",
+        "name": "team-users",
+        "testDir": "/Users/mac/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/team-user-members\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Users/mac/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "perf",
+        "name": "perf",
+        "testDir": "/Users/mac/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/perf\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Users/mac/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "guard",
+        "name": "guard",
+        "testDir": "/Users/mac/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/guard\\.spec\\.ts/"
         ],
         "timeout": 30000
       }
@@ -105,12 +168,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 1215,
+                  "duration": 888,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-05T09:26:06.243Z",
+                  "startTime": "2026-09-06T01:28:15.322Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -126,74 +189,61 @@
       ]
     },
     {
-      "title": "qa-tools3.spec.ts",
-      "file": "qa-tools3.spec.ts",
+      "title": "team-user-members.spec.ts",
+      "file": "team-user-members.spec.ts",
       "column": 0,
       "line": 0,
-      "specs": [
+      "specs": [],
+      "suites": [
         {
-          "title": "qa tools3",
-          "ok": true,
-          "tags": [],
-          "tests": [
+          "title": "team-user-members 团队用户成员管理",
+          "file": "team-user-members.spec.ts",
+          "line": 10,
+          "column": 6,
+          "specs": [
             {
-              "timeout": 30000,
-              "annotations": [],
-              "expectedStatus": "passed",
-              "projectId": "qa",
-              "projectName": "qa",
-              "results": [
+              "title": "team-user-members 添加/移除往返",
+              "ok": true,
+              "tags": [],
+              "tests": [
                 {
-                  "workerIndex": 1,
-                  "parallelIndex": 0,
-                  "status": "passed",
-                  "duration": 3668,
-                  "errors": [],
-                  "stdout": [
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "team-users",
+                  "projectName": "team-users",
+                  "results": [
                     {
-                      "text": "servers: \u001b[33m2\u001b[39m\n"
-                    },
-                    {
-                      "text": "items: \u001b[33m20\u001b[39m\n"
-                    },
-                    {
-                      "text": "desc \u001b[33m0\u001b[39m \"服务存活探针\"\n"
-                    },
-                    {
-                      "text": "desc \u001b[33m1\u001b[39m \"注册内置账号（默认角色 member）\"\n"
-                    },
-                    {
-                      "text": "desc \u001b[33m2\u001b[39m \"登录，签发 access+refresh token\"\n"
-                    },
-                    {
-                      "text": "desc \u001b[33m3\u001b[39m \"刷新 token（凭 refresh token）\"\n"
-                    },
-                    {
-                      "text": "desc \u001b[33m4\u001b[39m \"忘记密码：按用户名/邮箱生成一次性重置 token\"\n"
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1610,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-06T01:28:16.688Z",
+                      "annotations": [],
+                      "attachments": []
                     }
                   ],
-                  "stderr": [],
-                  "retry": 0,
-                  "startTime": "2026-09-05T09:26:08.696Z",
-                  "annotations": [],
-                  "attachments": []
+                  "status": "expected"
                 }
               ],
-              "status": "expected"
+              "id": "f89c328cd73c19981185-a733de214656976e0d6c",
+              "file": "team-user-members.spec.ts",
+              "line": 11,
+              "column": 7
             }
-          ],
-          "id": "2237ca21307e8ac15af3-6632c0825614d43ab251",
-          "file": "qa-tools3.spec.ts",
-          "line": 2,
-          "column": 5
+          ]
         }
       ]
     }
   ],
   "errors": [],
   "stats": {
-    "startTime": "2026-09-05T09:26:06.066Z",
-    "duration": 6602.551,
+    "startTime": "2026-09-06T01:28:15.149Z",
+    "duration": 3407.0249999999996,
     "expected": 2,
     "skipped": 0,
     "unexpected": 0,

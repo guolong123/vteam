@@ -79,7 +79,7 @@ Your next move: 批准后直接 $start-work team-free-chat。 Full execution det
 - 禁止把备份文件提交进仓库（如执行器顺手备了份也不许进仓库）
 
 ## Todos
-- [ ] 1. 执行上下文数据模型（sessions 解绑 + 团队用户成员）
+- [x] 1. 执行上下文数据模型（sessions 解绑 + 团队用户成员）
   What to do / Must NOT do: schema：`sessions.task_id` 改可空（`String?`），`sessions` 加 `team_id String?`（先可空方便回填；业务层保证 team-mode 必填），`sessions.task_agent_id` 改可空（team-mode 会话无任务实例），`task`/`taskAgent` 两个 relation 改可选（`Task?`/`TaskAgent?`，现有 Restrict 语义保留）；`task_group_instances.task_id` 改可空 + 加 `team_id String?`/`team_member_id String?`（team-mode 复用幂等行走新维度，task-mode 原样）；新建 `team_user_members(team_id,user_id,role,joined_at)`；新增唯一约束 `uk_sessions_team_member(team_id, team_member_id)`（task_id 为空行幂等用，`uk_sessions_task_agent` 保持不动）；迁移 `20260904000000_team_execution_context`（ALTER + CREATE TABLE + 回填 UPDATE：sessions 按 teamMember→team / taskAgent→task→team 回填 team_id；`migrate deploy` 验证）；`TeamsService.create` 事务内建团队者写入 owner 成员；`toTeamDto`（teams.service.ts:849-885）加 `userMembers`（id/userId/role/joinedAt）；`TeamDto` 前端类型（web teamsApi 处）同步加字段；jest 补用例（建团队自动含创建者成员；toTeamDto 含 userMembers）；Must NOT 动 task_agents/artifacts/issues/plans/queues 表，Must NOT 写运行时兼容分支
   Parallelization: Wave 1 | Blocked by: - | Blocks: 2,3,4,5,6
   References (executor has NO interview context - be exhaustive): server/prisma/schema.prisma Task/Session/TaskGroupInstance 模型区（Session :278-299，TaskGroupInstance :730-742，注意 taskAgent relation 必填改可选）, server/prisma/migrations/20260901000002_add_task_reset_after_complete/migration.sql（单语句风格）, server/src/teams/teams.service.ts:849-885 toTeamDto + create 事务, server/src/teams/teams.service.spec.ts, web teamsApi TeamDto 定义处（executor grep TeamDto）
@@ -87,7 +87,7 @@ Your next move: 批准后直接 $start-work team-free-chat。 Full execution det
   QA scenarios (name the exact tool + invocation): happy: npx jest teams.service.spec 绿；failure: 回填 SQL 报错则先修；Evidence .omo/evidence/team-free-chat/task-1.log
   Commit: Y | feat(server): team execution context model
 
-- [ ] 2. 团队权限守卫与频道接入
+- [x] 2. 团队权限守卫与频道接入
   What to do / Must NOT do: 新增 `TeamMembershipGuard`（仿 server/src/common/guards/project-membership.guard.ts 写法，查 team_user_members）；`resolveChannelAccess`（chat.service.ts:1200-1266）加团队路径：team 频道且解析不出任务上下文（现有 projectId:'' stub 分支处）→ 改要求 team_user_members 成员，否则 Forbidden（code 沿用 PROJECT_MEMBERSHIP NOT_MEMBER 语义）；新增 POST/DELETE `/teams/:id/users`（仿 teams.controller.ts:70-75 addMember 端点形状与 teams.service addMember 校验；body {userId, role?}，NOT_FOUND/MEMBER 校验，广播 TEAM_CHANGED 复用）；teams.controller.spec + service spec 补用例（成员可发/非成员 403/增删成员）；Must NOT 改项目资源的守卫，Must NOT 放宽到"登录即聊"
   Parallelization: Wave 1 | Blocked by: 1 | Blocks: 7
   References: server/src/common/guards/project-membership.guard.ts, server/src/chat/chat.service.ts:1200-1266 resolveChannelAccess + :776 resolveMentions 调用处, server/src/teams/teams.controller.ts（addMember 端点仿写）, server/src/teams/teams.controller.spec.ts
@@ -95,7 +95,7 @@ Your next move: 批准后直接 $start-work team-free-chat。 Full execution det
   QA scenarios: happy: jest 新用例绿；failure: 旧项目校验用例红则检查分支顺序；Evidence .omo/evidence/team-free-chat/task-2.log
   Commit: Y | feat(server): team membership guard
 
-- [ ] 3. Dispatcher team-mode（无任务执行）
+- [x] 3. Dispatcher team-mode（无任务执行）
   What to do / Must NOT do: worker-dispatcher.ts：会话定位按 `(teamId, teamMemberId)`（无 taskId 时跳过 task 相关查询；**会话创建走新增的 `ensureTeamSession(teamId, teamMemberId)`（放 session-lifecycle.service.ts，仿 bindSessionToWorker :62-117 事务写法：按新唯一键 `uk_sessions_team_member` 查到复用、查不到 create `{team_id 必填, task_id/task_agent_id 置空}`；注意 `bindSessionToWorker` 只绑定已存在行，缺失抛 404，不得复用它做创建**）；TaskGroupInstance team-mode 走新 team 维度列（`team_id`+`team_member_id`+workerId 幂等查复用，`task_id` 置空；task-mode 原样）；团队 workdir 扩展 `resolveAgentWorkDir`（worker-dispatcher.ts:3039，兼容回退见 :1199）：team-mode 返回 `<根>/teams/<teamId>`（mkdir -p，同 :3039 写法）与 tasks/<taskId> 并列；无任务主触发走团队路径（team.mainAgentMemberId → 成员，无主则首成员，语义照抄 buildMainAgentTrigger team 分支 chat.service.ts:1524-1544）；`buildSystemInstructions` 加 team-mode 接待块（taskId 为空时：主 Agent 接待员身份 + 意图明确→my_projects 查项目→task_create + 意图不明→追问三要素，禁建任务禁 QuestionModal，工具名写进话术）；执行键（`registerExecution`/`unregisterExecution`/`emitLoading` 调用处 worker-dispatcher.ts:751/773/1326/1475/1544/2124/2133/2716，executor 先核对签名再定键形状）team-mode 与 task-mode 必须可区分（`team:<teamId>` 命名空间仅为建议形状，键碰撞即 Bug）；`resetTeamSessions`（session-lifecycle.service.ts:168-229）现已按 teamMemberId 全量处理 team 行，无需改动；；`buildSystemInstructions` 单测 + dispatcher team-mode 单测（无任务派发建会话、主判定、话术包含断言）；Must NOT 改 task-mode 任何分支（回归靠旧单测），Must NOT 碰 FIFO/transition
   Parallelization: Wave 2 | Blocked by: 1 | Blocks: 7
   References: server/src/chat/worker-dispatcher.ts（taskId 166 处，重点 :213 buildSystemInstructions, :1301-1319 isMainAgent, :1443 调用点）, server/src/chat/chat.service.ts:1488-1544 buildMainAgentTrigger + :776 调用处, server/src/workers/session-lifecycle.service.ts:62-117 bindSessionToWorker（只绑定已存在行，team-mode 新建走新增 ensureTeamSession）, server/src/chat/worker-dispatcher.spec.ts（buildSystemInstructions 单测区）, server/src/workers/session-lifecycle.spec.ts
@@ -103,7 +103,7 @@ Your next move: 批准后直接 $start-work team-free-chat。 Full execution det
   QA scenarios: happy: jest dispatcher 相关 spec 全绿；failure: 旧 task-mode 用例红则 diff 分支隔离；Evidence .omo/evidence/team-free-chat/task-3.log
   Commit: Y | feat(server): dispatcher team mode
 
-- [ ] 4. MCP：taskId 可选 + task_create + my_projects
+- [x] 4. MCP：taskId 可选 + task_create + my_projects
   What to do / Must NOT do: platform-mcp.tools.ts（26 工具 :577 起）：`chat_history`、`group_post`、`notify_agent`、`memory_save`、`memory_search`** 的 taskId 改可选 + 加可选 teamId（`question_confirm` 因 agent_questions.task_id 非空保持必填，`channel_send` 无 taskId 参数无需改动，`my_profile`/`team_view` 为任务上下文工具保持必填；zod describe 写清"taskId 优先，无则用 teamId 定位团队会话"）；交付族（doclib/task_context/submit_artifact/issue_*/plan_*/task_transition/question_confirm 等）保持 taskId 必填，缺失报干净的错（非 500，文案"该工具需要任务上下文"）；新增 `task_create`（title*/description?/projectId*/priority?，projectId 必填不设默认；门控=主 Agent：team-mode 下 session teamMember == team.mainAgentMemberId，task-mode 沿用 task.mainAgentInstanceId 判定，参考 platform-mcp.service.ts:1386，违者 Forbidden；**projectId 越权防护：pid 必须 ∈（该团队已有任务的 project 去重集 ∪ 该团队用户成员的项目集），否则 Forbidden（主身份只证明是主 Agent，不证明对任意项目有处置权）**；成功走新增的 `TasksService.createByAgent`（不得直调 `create()`——其内含按调用 userId 的 projectMember 校验 tasks.service.ts:216-224，agent 调用必 403；抽取 create() 事务体为私有方法，projectMember 校验仅用户路径执行，createdBy 落调用方实例 id，projectId 存在性校验保留，归因仿 `issueCreate` 的 creatorAgentId 写法 platform-mcp.service.ts:743-766））；新增 `my_projects`（无参：查调用方所在团队的成员用户 → projectMember 反查去重，返回用户项目列表，team-mode 下无 task 可用时的项目发现通道）；service spec 补用例（可选参数矩阵/主门控/缺省报错/createByAgent 归因）；Must NOT 放宽交付族，Must NOT 给 task_create 加项目默认（默认会杀死引导追问）
   Parallelization: Wave 2 | Blocked by: 1 | Blocks: 7
   References: server/src/platform-mcp/platform-mcp.tools.ts:577-767, server/src/platform-mcp/platform-mcp.service.ts:1386-1393 isMain 门控 + issue_create 归因写法（executor grep）, server/src/platform-mcp/platform-mcp.service.spec.ts
@@ -111,7 +111,7 @@ Your next move: 批准后直接 $start-work team-free-chat。 Full execution det
   QA scenarios: happy: jest 新用例绿；failure: 门控误杀则对照 buildMainAgentTrigger 优先级；Evidence .omo/evidence/team-free-chat/task-4.log
   Commit: Y | feat(server): optional taskId MCP tools plus task_create
 
-- [ ] 5. 前端：零任务会话直聊（无选择器）
+- [x] 5. 前端：零任务会话直聊（无选择器）
   What to do / Must NOT do: 确认并加固 `web/app/(main)/teams/[id]/session/page.tsx` 在零任务下的降级（currentTaskId 为空时 queries 已 enabled 门控 :127-214、空闲态 :977、发送不带 taskId；实测走一遍修崩处）；**不做项目选择器、不建锚任务**；发消息失败行内报错不跳页；teamsApi TeamDto 加 userMembers 类型；Must NOT 改私聊 Tab 与右侧面板逻辑（锚任务不存在，有任务团队行为不变）
   Parallelization: Wave 3 | Blocked by: 1 | Blocks: 7
   References: web/app/(main)/teams/[id]/session/page.tsx:127-214 queries, :415 scope, :977 空闲态, web/e2e/pages.spec.ts（7b 会话冒烟仿写零任务用例）
@@ -119,7 +119,7 @@ Your next move: 批准后直接 $start-work team-free-chat。 Full execution det
   QA scenarios (name the exact tool + invocation): happy: npx playwright test -g"team-session zero-task" 通过；failure: 403 则查成员身份（Todo 2 联调）；Evidence .omo/evidence/team-free-chat/task-5.log + screenshot
   Commit: Y | feat(web): zero-task team session
 
-- [ ] 6. 前端：团队用户成员管理（极简）
+- [x] 6. 前端：团队用户成员管理（极简）
   What to do / Must NOT do: 团队详情页成员区旁加"用户成员"小段：列表（用户名/角色/加入时间）+ 按用户名添加 + 移除；调 Todo 2 的 users 端点（teamsApi 加方法）；失败行内报错；复用 MemberRow 视觉语言但独立小组件（别塞进 agent 成员组件）；Must NOT 做邀请/审批流，Must NOT 动 agent 成员区
   Parallelization: Wave 3 | Blocked by: 1,2 | Blocks: 7
   References: web/app/(main)/teams/[id]/page.tsx 成员区（executor 定位 MemberRow/import 段）, web/src/api/teams.ts
@@ -127,7 +127,7 @@ Your next move: 批准后直接 $start-work team-free-chat。 Full execution det
   QA scenarios: happy: Playwright 走一遍增删；failure: 端点 404 则查路由注册；Evidence .omo/evidence/team-free-chat/task-6.log + screenshot
   Commit: Y | feat(web): team user members UI
 
-- [ ] 7. 收尾验证（全链路冒烟）
+- [x] 7. 收尾验证（全链路冒烟）
   What to do / Must NOT do: 全新团队（零任务）→直接发明确需求→主 Agent（必要时先问项目）→task_create 建出真任务（指定项目；忙闲状态机正确）→再发模糊消息→只有追问、任务表零新增；非主调 task_create 403；**task_create 传无关项目 pid → 403（越权防护）**；非成员发消息 403；交付族无 taskId 调用干净报错；**无兼容死代码审计**：`grep -rn "存量\|回退\|兼容\|fallback\|legacy\|LEGACY" server/src/chat server/src/workers server/src/platform-mcp web/app/\(main\)/teams` 零命中（注释说明除外；migration SQL 与单测 mock 除外）；跑全量相关 jest + web build + Playwright 会话冒烟（含回归：有任务团队群聊/私聊/排队/状态机）；Must NOT 留测试脏数据（用后清理测试任务/团队/成员）
   Parallelization: Wave 3 | Blocked by: 2,3,4,5,6 | Blocks: -
   References: .omo/evidence/team-free-chat/task-*.log, web/e2e/pages.spec.ts, server/src/tasks/tasks.service.spec.ts, server/src/platform-mcp/platform-mcp.service.spec.ts
@@ -137,10 +137,10 @@ Your next move: 批准后直接 $start-work team-free-chat。 Full execution det
 
 ## Final verification wave
 > Runs in parallel after ALL todos. ALL must APPROVE. Surface results and wait for the user's explicit okay before declaring complete.
-- [ ] F1. Plan compliance audit
-- [ ] F2. Code quality review
-- [ ] F3. Real manual QA
-- [ ] F4. Scope fidelity
+- [x] F1. Plan compliance audit
+- [x] F2. Code quality review
+- [x] F3. Real manual QA
+- [x] F4. Scope fidelity
 
 ## Commit strategy
 - 每 Todo 独立提交，feat(server): / feat(web): / test: 前缀

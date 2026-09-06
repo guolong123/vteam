@@ -461,7 +461,7 @@
       "plan_name": "team-free-chat",
       "status": "active",
       "started_at": "2026-09-06T00:15:42.338Z",
-      "updated_at": "2026-09-06T00:25:41.884Z",
+      "updated_at": "2026-09-06T01:41:06.514Z",
       "session_ids": [
         "opencode:ses_f9b2984f0ffemHFexxvjsMHEaR",
         "opencode:ses_f8be57d26ffe7K7SNZqeXHsm2l",
@@ -473,13 +473,116 @@
         "opencode:ses_f8be4b16effef6n108tqL1j2D1": "direct"
       },
       "agent": "atlas",
-      "task_sessions": {}
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "执行上下文数据模型（sessions 解绑 + 团队用户成员）",
+          "session_id": "opencode:ses_f8be43e7bffewgETEjbRlq9A5h",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-06T00:35:24.231Z",
+          "started_at": "2026-09-06T00:33:44.241Z",
+          "status": "completed",
+          "ended_at": "2026-09-06T00:35:24.231Z",
+          "elapsed_ms": 99990
+        },
+        "final-wave:f1": {
+          "task_key": "final-wave:f1",
+          "task_label": "F1",
+          "task_title": "Plan compliance audit",
+          "session_id": "opencode:ses_f8bbf54cbffeb5bSYICSXBCccY",
+          "agent": "Sisyphus-Junior",
+          "started_at": "2026-09-06T00:35:08.023Z",
+          "status": "completed",
+          "updated_at": "2026-09-06T01:41:06.514Z",
+          "ended_at": "2026-09-06T01:41:06.514Z",
+          "elapsed_ms": 3958491
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "task_title": "团队权限守卫与频道接入",
+          "session_id": "opencode:ses_f8bdb5372ffeOViJr22HYWjvV7",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-06T00:55:31.304Z",
+          "started_at": "2026-09-06T00:39:12.844Z",
+          "status": "completed",
+          "ended_at": "2026-09-06T00:55:31.304Z",
+          "elapsed_ms": 978460
+        },
+        "todo:5": {
+          "task_key": "todo:5",
+          "task_label": "5",
+          "task_title": "前端：零任务会话直聊（无选择器）",
+          "session_id": "opencode:ses_f8bdb535affeF7VX4aJqBTNQmE",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "updated_at": "2026-09-06T00:55:31.304Z",
+          "started_at": "2026-09-06T00:44:58.652Z",
+          "status": "completed",
+          "ended_at": "2026-09-06T00:55:31.304Z",
+          "elapsed_ms": 632652
+        },
+        "todo:4": {
+          "task_key": "todo:4",
+          "task_label": "4",
+          "task_title": "MCP：taskId 可选 + task_create + my_projects",
+          "session_id": "opencode:ses_f8bdb5364ffeFJUDUEl3P0sKyJ",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-06T00:55:31.304Z",
+          "started_at": "2026-09-06T00:54:14.419Z",
+          "status": "completed",
+          "ended_at": "2026-09-06T00:55:31.304Z",
+          "elapsed_ms": 76885
+        },
+        "todo:6": {
+          "task_key": "todo:6",
+          "task_label": "6",
+          "task_title": "前端：团队用户成员管理（极简）",
+          "session_id": "opencode:ses_f8bc8fcddffe4oPsntROo6cynL",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "updated_at": "2026-09-06T01:06:10.897Z",
+          "started_at": "2026-09-06T00:59:11.974Z",
+          "status": "completed",
+          "ended_at": "2026-09-06T01:06:10.897Z",
+          "elapsed_ms": 418923
+        },
+        "todo:3": {
+          "task_key": "todo:3",
+          "task_label": "3",
+          "task_title": "Dispatcher team-mode（无任务执行）",
+          "session_id": "opencode:ses_f8bc8fd0dffe2lMpcwvEX5x37H",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-06T01:06:10.897Z",
+          "started_at": "2026-09-06T01:04:12.435Z",
+          "status": "completed",
+          "ended_at": "2026-09-06T01:06:10.897Z",
+          "elapsed_ms": 118462
+        },
+        "todo:7": {
+          "task_key": "todo:7",
+          "task_label": "7",
+          "task_title": "收尾验证（全链路冒烟）",
+          "session_id": "opencode:ses_f8bbf54cbffeb5bSYICSXBCccY",
+          "agent": "Sisyphus-Junior",
+          "started_at": "2026-09-06T01:29:48.461Z",
+          "status": "completed",
+          "updated_at": "2026-09-06T01:32:27.772Z",
+          "ended_at": "2026-09-06T01:32:27.772Z",
+          "elapsed_ms": 159311
+        }
+      }
     }
   },
   "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/team-free-chat.md",
   "started_at": "2026-09-06T00:15:42.338Z",
   "status": "active",
-  "updated_at": "2026-09-06T00:25:41.884Z",
+  "updated_at": "2026-09-06T01:41:06.514Z",
   "session_ids": [
     "opencode:ses_f9b2984f0ffemHFexxvjsMHEaR",
     "opencode:ses_f8be57d26ffe7K7SNZqeXHsm2l",
@@ -491,6 +594,109 @@
     "opencode:ses_f8be4b16effef6n108tqL1j2D1": "direct"
   },
   "plan_name": "team-free-chat",
-  "task_sessions": {},
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "执行上下文数据模型（sessions 解绑 + 团队用户成员）",
+      "session_id": "opencode:ses_f8be43e7bffewgETEjbRlq9A5h",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-09-06T00:35:24.231Z",
+      "started_at": "2026-09-06T00:33:44.241Z",
+      "status": "completed",
+      "ended_at": "2026-09-06T00:35:24.231Z",
+      "elapsed_ms": 99990
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "Plan compliance audit",
+      "session_id": "opencode:ses_f8bbf54cbffeb5bSYICSXBCccY",
+      "agent": "Sisyphus-Junior",
+      "started_at": "2026-09-06T00:35:08.023Z",
+      "status": "completed",
+      "updated_at": "2026-09-06T01:41:06.514Z",
+      "ended_at": "2026-09-06T01:41:06.514Z",
+      "elapsed_ms": 3958491
+    },
+    "todo:2": {
+      "task_key": "todo:2",
+      "task_label": "2",
+      "task_title": "团队权限守卫与频道接入",
+      "session_id": "opencode:ses_f8bdb5372ffeOViJr22HYWjvV7",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-09-06T00:55:31.304Z",
+      "started_at": "2026-09-06T00:39:12.844Z",
+      "status": "completed",
+      "ended_at": "2026-09-06T00:55:31.304Z",
+      "elapsed_ms": 978460
+    },
+    "todo:5": {
+      "task_key": "todo:5",
+      "task_label": "5",
+      "task_title": "前端：零任务会话直聊（无选择器）",
+      "session_id": "opencode:ses_f8bdb535affeF7VX4aJqBTNQmE",
+      "agent": "Sisyphus-Junior",
+      "category": "visual-engineering",
+      "updated_at": "2026-09-06T00:55:31.304Z",
+      "started_at": "2026-09-06T00:44:58.652Z",
+      "status": "completed",
+      "ended_at": "2026-09-06T00:55:31.304Z",
+      "elapsed_ms": 632652
+    },
+    "todo:4": {
+      "task_key": "todo:4",
+      "task_label": "4",
+      "task_title": "MCP：taskId 可选 + task_create + my_projects",
+      "session_id": "opencode:ses_f8bdb5364ffeFJUDUEl3P0sKyJ",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-09-06T00:55:31.304Z",
+      "started_at": "2026-09-06T00:54:14.419Z",
+      "status": "completed",
+      "ended_at": "2026-09-06T00:55:31.304Z",
+      "elapsed_ms": 76885
+    },
+    "todo:6": {
+      "task_key": "todo:6",
+      "task_label": "6",
+      "task_title": "前端：团队用户成员管理（极简）",
+      "session_id": "opencode:ses_f8bc8fcddffe4oPsntROo6cynL",
+      "agent": "Sisyphus-Junior",
+      "category": "visual-engineering",
+      "updated_at": "2026-09-06T01:06:10.897Z",
+      "started_at": "2026-09-06T00:59:11.974Z",
+      "status": "completed",
+      "ended_at": "2026-09-06T01:06:10.897Z",
+      "elapsed_ms": 418923
+    },
+    "todo:3": {
+      "task_key": "todo:3",
+      "task_label": "3",
+      "task_title": "Dispatcher team-mode（无任务执行）",
+      "session_id": "opencode:ses_f8bc8fd0dffe2lMpcwvEX5x37H",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-09-06T01:06:10.897Z",
+      "started_at": "2026-09-06T01:04:12.435Z",
+      "status": "completed",
+      "ended_at": "2026-09-06T01:06:10.897Z",
+      "elapsed_ms": 118462
+    },
+    "todo:7": {
+      "task_key": "todo:7",
+      "task_label": "7",
+      "task_title": "收尾验证（全链路冒烟）",
+      "session_id": "opencode:ses_f8bbf54cbffeb5bSYICSXBCccY",
+      "agent": "Sisyphus-Junior",
+      "started_at": "2026-09-06T01:29:48.461Z",
+      "status": "completed",
+      "updated_at": "2026-09-06T01:32:27.772Z",
+      "ended_at": "2026-09-06T01:32:27.772Z",
+      "elapsed_ms": 159311
+    }
+  },
   "agent": "atlas"
 }
