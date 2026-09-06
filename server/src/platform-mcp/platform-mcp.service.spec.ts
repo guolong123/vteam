@@ -4109,6 +4109,43 @@ describe('PlatformMcpService', () => {
       expect(prisma.session.findFirst).not.toHaveBeenCalled();
     });
 
+    it('tm_ 前缀 taskId → 干净 400 指引传 teamId（非 403，不查会话）', async () => {
+      const err = await service
+        .chatHistory(ctx, { taskId: 'tm_0000000001' })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as Error).message).toContain('团队会话请传 teamId');
+      expect(prisma.session.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('tm_ 前缀 taskId + 合法 teamId 同传 → 仍 400（守卫先于 taskId 优先分支）', async () => {
+      const err = await service
+        .chatHistory(ctx, { taskId: 'tm_0000000001', teamId: 'tm_1' })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as Error).message).toContain('团队会话请传 teamId');
+      expect(prisma.session.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('t_ 前缀 taskId 不受 tm_ 守卫影响（正常走任务维度）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      prisma.message.findMany.mockResolvedValue([]);
+
+      const result = await service.chatHistory(ctx, { taskId });
+
+      expect(result).toEqual([]);
+      expect(prisma.session.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { taskId, workerId } }),
+      );
+    });
+
     it('团队维度归属不匹配 → 403（维度间无回退）', async () => {
       prisma.session.findFirst.mockResolvedValue(null);
 

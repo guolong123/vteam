@@ -3535,6 +3535,11 @@ export class PlatformMcpService {
     ctx: PlatformMcpContext,
     args: { taskId?: string; teamId?: string; selfInstanceId?: string },
   ): Promise<ExecContext> {
+    if (typeof args.taskId === 'string' && args.taskId.startsWith('tm_')) {
+      throw new BadRequestException(
+        '团队会话请传 teamId，不要传 taskId（taskId 是任务 ID，t_ 前缀）',
+      );
+    }
     if (args.taskId) {
       const instanceId = await this.assertWorkerTask(
         ctx,

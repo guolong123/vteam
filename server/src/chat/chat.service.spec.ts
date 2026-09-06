@@ -1215,7 +1215,7 @@ describe('ChatService', () => {
       });
 
     it('dispatched + 有回复：返回 {agentId, status:dispatched, replyMessageId}', async () => {
-      allowAccess();
+      allowAccess(taskGroupRow());
       prisma.message.findUnique.mockResolvedValue(triggerMessage());
       prisma.taskAgent.findMany.mockResolvedValue([
         { agentId: 'a_product', removedAt: null },
@@ -1250,7 +1250,7 @@ describe('ChatService', () => {
     });
 
     it('no_session：无会话 → status no_session、无 replyMessageId（不判为已分派）', async () => {
-      allowAccess();
+      allowAccess(taskGroupRow());
       prisma.message.findUnique.mockResolvedValue(triggerMessage());
       prisma.taskAgent.findMany.mockResolvedValue([
         { agentId: 'a_product', removedAt: null },
@@ -1271,7 +1271,7 @@ describe('ChatService', () => {
     });
 
     it('agent_removed：已移除 → status agent_removed、不查会话', async () => {
-      allowAccess();
+      allowAccess(taskGroupRow());
       prisma.message.findUnique.mockResolvedValue(triggerMessage());
       prisma.taskAgent.findMany.mockResolvedValue([
         { agentId: 'a_product', removedAt: new Date('2026-08-01T00:00:00Z') },
@@ -1348,7 +1348,7 @@ describe('ChatService', () => {
     });
 
     it('{type:all} mentions → 展开为团队全部未移除 Agent', async () => {
-      allowAccess();
+      allowAccess(taskGroupRow());
       prisma.message.findUnique.mockResolvedValue(
         triggerMessage({ mentions: [{ type: 'all' }] }),
       );
@@ -1372,6 +1372,153 @@ describe('ChatService', () => {
       expect(result.triggers).toEqual([
         { agentId: 'a_product', status: 'dispatched' },
         { agentId: 'a_developer', status: 'dispatched' },
+      ]);
+    });
+  });
+
+  describe('getTriggerResults 团队维度（零任务 team_group，team-mention-fix）', () => {
+    const teamZeroTaskRow = () =>
+      channelRow({ teamId: 'tm_0000000001', taskId: null, task: null });
+    const allowZeroTaskTeam = (row = teamZeroTaskRow()) => {
+      prisma.chatChannel.findUnique.mockResolvedValue(row);
+      prisma.team.findUnique.mockResolvedValue({ id: 'tm_0000000001' });
+      prisma.task.findFirst.mockResolvedValue(null);
+      prisma.task.findUnique.mockResolvedValue(null);
+      (prisma as any).teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+    };
+    /** 生产 Prisma 行为：TaskAgent.taskId 为必填 String，where taskId=null 即校验抛错（线上 500 根因）。 */
+    const faithfulTaskAgent = () => {
+      prisma.taskAgent.findMany.mockImplementation(async (args: any) => {
+        if (args?.where?.taskId == null) {
+          throw new Error(
+            'Prisma validation failed: Argument `taskId`: Expected String, provided Null',
+          );
+        }
+        return [];
+      });
+    };
+
+    it('零任务团队 @all → 各成员 triggers（dispatched/no_session），200 不 500', async () => {
+      allowZeroTaskTeam();
+      faithfulTaskAgent();
+      (prisma.teamMember.findMany as jest.Mock).mockResolvedValue([
+        { id: 'tmm_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1 },
+        { id: 'tmm_0000000002', agentId: 'a_developer', alias: '开发者-1', seq: 1 },
+      ]);
+      prisma.message.findUnique.mockResolvedValue(
+        messageRow({ mentions: [{ type: 'all' }] }),
+      );
+      prisma.session.findFirst
+        .mockResolvedValueOnce({ id: 's_0000000001' })
+        .mockResolvedValueOnce(null);
+      prisma.message.findFirst.mockResolvedValue(null);
+
+      const result = await service.getTriggerResults(
+        channelId,
+        userId,
+        'm_0000000001',
+      );
+
+      expect(result.triggers).toEqual([
+        { agentId: 'a_product', instanceId: 'tmm_0000000001', status: 'dispatched' },
+        { agentId: 'a_developer', instanceId: 'tmm_0000000002', status: 'no_session' },
+      ]);
+      // 团队维度会话查询（teamId + teamMemberId），无 task 维度查询
+      expect(prisma.session.findFirst).toHaveBeenCalledWith({
+        where: { teamId: 'tm_0000000001', teamMemberId: 'tmm_0000000001' },
+        select: { id: true },
+      });
+      expect(prisma.taskAgent.findMany).not.toHaveBeenCalled();
+    });
+
+    it('零任务团队 @agent → 仅单个目标 + 回复定位（senderInstanceId=成员）', async () => {
+      allowZeroTaskTeam();
+      faithfulTaskAgent();
+      (prisma.teamMember.findMany as jest.Mock).mockResolvedValue([
+        { id: 'tmm_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1 },
+        { id: 'tmm_0000000002', agentId: 'a_developer', alias: '开发者-1', seq: 1 },
+      ]);
+      prisma.message.findUnique.mockResolvedValue(
+        messageRow({
+          mentions: [{ type: 'agent', agentId: 'a_developer', instanceId: 'tmm_0000000002' }],
+        }),
+      );
+      prisma.session.findFirst.mockResolvedValue({ id: 's_0000000002' });
+      prisma.message.findFirst.mockResolvedValue({ id: 'm_0000000005' });
+
+      const result = await service.getTriggerResults(
+        channelId,
+        userId,
+        'm_0000000001',
+      );
+
+      expect(result.triggers).toEqual([
+        {
+          agentId: 'a_developer',
+          instanceId: 'tmm_0000000002',
+          status: 'dispatched',
+          replyMessageId: 'm_0000000005',
+        },
+      ]);
+      expect(prisma.message.findFirst).toHaveBeenCalledWith({
+        where: {
+          channelId,
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_developer',
+          createdAt: { gt: new Date('2026-08-07T00:00:00Z') },
+          OR: [{ senderInstanceId: 'tmm_0000000002' }, { senderInstanceId: null }],
+        },
+        orderBy: { id: 'asc' },
+        select: { id: true },
+      });
+    });
+
+    it('零任务团队 @agent 指向已移除成员 → agent_removed（不查会话）', async () => {
+      allowZeroTaskTeam();
+      faithfulTaskAgent();
+      (prisma.teamMember.findMany as jest.Mock).mockResolvedValue([
+        {
+          id: 'tmm_0000000009',
+          agentId: 'a_gone',
+          alias: '离职-1',
+          seq: 9,
+          removedAt: new Date('2026-08-01T00:00:00Z'),
+        },
+      ]);
+      prisma.message.findUnique.mockResolvedValue(
+        messageRow({ mentions: [{ type: 'agent', agentId: 'a_gone' }] }),
+      );
+      prisma.message.findFirst.mockResolvedValue(null);
+
+      const result = await service.getTriggerResults(
+        channelId,
+        userId,
+        'm_0000000001',
+      );
+
+      expect(prisma.session.findFirst).not.toHaveBeenCalled();
+      expect(result.triggers).toEqual([
+        { agentId: 'a_gone', instanceId: 'tmm_0000000009', status: 'agent_removed' },
+      ]);
+    });
+
+    it('零任务团队 createMessage 带 @all → 不 500：团队分支降级 no_session（createMessage 无需动）', async () => {
+      allowZeroTaskTeam();
+      (prisma.teamMember.findMany as jest.Mock).mockResolvedValue([
+        { id: 'tmm_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1 },
+        { id: 'tmm_0000000002', agentId: 'a_developer', alias: '开发者-1', seq: 1 },
+      ]);
+      idGen.nextId.mockResolvedValue('m_0000000001');
+      prisma.message.create.mockResolvedValue(messageRow());
+
+      const result = await service.createMessage(channelId, userId, {
+        text: '@所有人',
+        mentions: [{ type: 'all' }],
+      } as any);
+
+      expect(result.triggers).toEqual([
+        { agentId: 'a_product', instanceId: 'tmm_0000000001', sessionId: null, status: 'no_session' },
+        { agentId: 'a_developer', instanceId: 'tmm_0000000002', sessionId: null, status: 'no_session' },
       ]);
     });
   });

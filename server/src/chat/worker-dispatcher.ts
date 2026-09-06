@@ -287,6 +287,22 @@ export const GROUP_TRIGGER_INSTRUCTION =
   '群聊只会显示你通过 group_post 发布的内容，完整处理过程保留在你的私聊会话。' +
   '如需向群聊发送文件：直接调用 group_post 并携带 fileRef（{taskId, content, fileRef: "文件路径"}），文件将作为群聊附件并自动归档为产出物。';
 
+/**
+ * 团队直聊群聊触发指令（仅 dispatchForTeamTarget 的 team_group 频道注入）：
+ * 团队维度传参（group_post、notify_agent、chat_history 均传 teamId；selfInstanceId
+ * 为 system 身份段中的团队成员 id，tmm_ 前缀）；团队直聊无 taskId，禁传 taskId；
+ * 需任务上下文的工具在团队直聊下不可用（先 task_create 建任务）。
+ */
+export const TEAM_GROUP_TRIGGER_INSTRUCTION =
+  '【群聊回复要求】本条消息来自团队直聊（无任务），你被 @ 定向分发。请在群聊中公开回复你的结论' +
+  '——调用 vteam MCP 的 group_post 工具发布到群聊（参数 {teamId, selfInstanceId, content, fileRef?}，selfInstanceId 为 system 身份段中的团队成员 id，tmm_ 前缀）。' +
+  '群聊只会显示你通过 group_post 发布的内容，完整处理过程保留在你的私聊会话。' +
+  '如需通知其他成员：调用 notify_agent（参数 {teamId, selfInstanceId, targetInstanceId, content}）；' +
+  '需要群聊历史时调用 chat_history（传 teamId）。' +
+  '团队直聊没有 taskId，禁止传递 taskId 参数（传了必 403）。' +
+  'my_profile、team_view、doclib、issue、plan、task_transition 类工具需要任务上下文，团队直聊下不要调用（如需任务，先调用 task_create 创建真实任务）。' +
+  '如需向群聊发送文件：直接调用 group_post 并携带 fileRef（{teamId, selfInstanceId, content, fileRef: "文件路径"}），文件将作为群聊附件。';
+
 export const WECOM_TRIGGER_INSTRUCTION =
   '【企微消息】此消息来自企业微信用户 via WeCom，请务必使用 wecom_reply 工具回复，不要使用 group_post，以确保用户在企微端收到@回复。' +
   '参数 {taskId, selfInstanceId, text, atUser?}，text 为回复正文（支持 markdown，≤4000字），atUser 默认 true（群聊@，私聊直回）。回复会同时同步到任务群聊。';
@@ -301,7 +317,10 @@ export const TEAM_SYSTEM_RECEPTION_INSTRUCTION =
   '用户意图明确（含做什么、可执行）→ 先调用 vteam MCP 的 `my_projects` 查用户可见项目' +
   '（恰好 1 个直接用，多于 1 个必须先问用户选哪个），再调用 `task_create` 创建真实任务并告知用户；' +
   '用户意图不明 → 普通回复追问三件事（做什么/归哪个项目/验收标准），禁止创建任务、' +
-  '禁止走 QuestionModal（问题确认弹窗仅任务内可用）。';
+  '禁止走 QuestionModal（问题确认弹窗仅任务内可用）。' +
+  '参数规则：chat_history、group_post、notify_agent、memory_save、memory_search 这 5 个工具在团队直聊下传 teamId，绝不传 taskId' +
+  '（团队直聊没有 taskId，传了必 403）；selfInstanceId 填写 system 身份段中的团队成员 id（tmm_ 前缀）；' +
+  'my_profile、team_view 与 delivery 相关工具需要任务上下文，团队直聊下不可用（如需任务，先 task_create 建任务）。';
 
 /**
  * 分派后等待回流的默认超时（D8 总超时；F3 MINOR-3：架构师 5 轮 tool 调用实测 72s > 60s，
@@ -1752,15 +1771,14 @@ export class WorkerDispatcher
     const promptBlocks: string[] = [];
     promptBlocks.push(
       `【团队上下文】你当前在团队 ${teamId} 直聊（无任务）。` +
-        '需要群聊历史/文档库信息时，调用 vteam 的 chat_history / doclib 工具（传 teamId）。' +
-        '需要向群聊发布消息时调用 vteam 的 group_post 工具。',
+        '需要群聊历史时调用 chat_history（传 teamId）；需要向群聊发布时调用 group_post（传 teamId）。',
     );
     const sourceChannel = await this.prisma.chatChannel.findUnique({
       where: { id: request.channelId },
       select: { type: true },
     });
     if (sourceChannel?.type === CHANNEL_TYPE.team_group) {
-      promptBlocks.push(GROUP_TRIGGER_INSTRUCTION);
+      promptBlocks.push(TEAM_GROUP_TRIGGER_INSTRUCTION);
     }
     if (request.text.includes('[WeCom:')) {
       const wecomMatch = /\[WeCom:([^\]]+)\]/.exec(request.text);

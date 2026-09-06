@@ -34,6 +34,7 @@ import {
   PENDING_INSTANCE_REF,
   PLAN_CAPABILITY_INSTRUCTION,
   PLAN_WORKFLOW_INSTRUCTION,
+  TEAM_GROUP_TRIGGER_INSTRUCTION,
   TEAM_SYSTEM_RECEPTION_INSTRUCTION,
   toExecutionScope,
   POLL_INTERVAL_MS,
@@ -343,6 +344,22 @@ describe('WorkerDispatcher', () => {
       expect(prompt).not.toContain(GROUP_TRIGGER_INSTRUCTION);
       expect(prompt).toContain(`任务 ID：${request.taskId}`);
       expect(prompt).toContain(request.text);
+    });
+
+    it('task-mode prompt 与 team-mode 隔离：不含 TEAM 指令/上下文行/taskId 禁令', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: request.channelId,
+        type: 'task_group',
+      });
+      const d = createDispatcher();
+      await d.dispatch(request);
+
+      const prompt = workerClient.execute.mock.calls[0][1].prompt[0]
+        .text as string;
+      expect(prompt).toContain(GROUP_TRIGGER_INSTRUCTION);
+      expect(prompt).not.toContain(TEAM_GROUP_TRIGGER_INSTRUCTION);
+      expect(prompt).not.toContain('【团队上下文】');
+      expect(prompt).not.toContain('禁止传递 taskId 参数');
     });
 
     it('system 注入 Agent 完整身份（buildSystemInstructions 含 id/name/role/prompt + selfInstanceId 引导）', async () => {
@@ -4757,6 +4774,47 @@ describe('WorkerDispatcher', () => {
       );
       expect(finals).toHaveLength(1);
       expect(d.isAgentExecuting('w_0000000001', 'team:tm_0000000001')).toBeNull();
+    });
+
+    it('team_group 触发：prompt 注入 TEAM 指令（含 teamId 传参与 taskId 禁令），不含任务版 GROUP_TRIGGER', async () => {
+      const d = createDispatcher();
+      await d.dispatch(teamRequest() as any);
+      const prompt = workerClient.execute.mock.calls[0][1].prompt[0].text as string;
+      expect(prompt).toContain(TEAM_GROUP_TRIGGER_INSTRUCTION);
+      expect(prompt).toContain('禁止传递 taskId 参数');
+      expect(prompt).not.toContain(GROUP_TRIGGER_INSTRUCTION);
+      expect(prompt).not.toContain('chat_history / doclib');
+    });
+
+    it('team-mode 团队上下文行：chat_history 与 group_post 均传 teamId', async () => {
+      const d = createDispatcher();
+      await d.dispatch(teamRequest() as any);
+      const prompt = workerClient.execute.mock.calls[0][1].prompt[0].text as string;
+      expect(prompt).toContain(
+        '需要群聊历史时调用 chat_history（传 teamId）；需要向群聊发布时调用 group_post（传 teamId）',
+      );
+    });
+
+    it('team-mode 私聊触发：不注入 TEAM 群聊指令，但保留团队上下文行', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_0000000001',
+        type: 'private',
+      } as any);
+      const d = createDispatcher();
+      await d.dispatch(teamRequest() as any);
+      const prompt = workerClient.execute.mock.calls[0][1].prompt[0].text as string;
+      expect(prompt).not.toContain(TEAM_GROUP_TRIGGER_INSTRUCTION);
+      expect(prompt).not.toContain(GROUP_TRIGGER_INSTRUCTION);
+      expect(prompt).toContain('【团队上下文】');
+    });
+
+    it('team-mode system 参数规则：5 个 team-free 工具传 teamId、禁 taskId，selfInstanceId 为 tmm_ 成员 id', async () => {
+      const d = createDispatcher();
+      await d.dispatch(teamRequest() as any);
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(system).toContain(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
+      expect(system).toContain('绝不传 taskId');
+      expect(system).toContain('tmm_ 前缀');
     });
   });
 });

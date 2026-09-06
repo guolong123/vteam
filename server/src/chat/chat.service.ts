@@ -611,10 +611,27 @@ export class ChatService {
       return { triggers: [] };
     }
 
-    const teamRows = await this.prisma.taskAgent.findMany({
-      where: { taskId: channel.taskId },
-      select: TEAM_AGENT_SELECT,
-    });
+    // 零任务团队频道（taskId null）：团队维度解析 teamMember。
+    // taskAgent.taskId 为必填列，null 即 Prisma 校验抛错（线上 500 根因），故团队分支只读 team 表。
+    const isTeamDimension = !channel.taskId && !!channel.teamId;
+    let teamRows: { id: string; agentId: string; removedAt: Date | null }[];
+    if (isTeamDimension) {
+      const members = await (this.prisma as any).teamMember.findMany({
+        where: { teamId: channel.teamId },
+        select: TEAM_MEMBER_SELECT,
+      });
+      // TeamMember 无 removedAt 列（schema 已核）：恒为有效；防御性透传以镜像 buildTrigger 语义。
+      teamRows = (members ?? []).map((m: any) => ({
+        id: m.id,
+        agentId: m.agentId,
+        removedAt: (m.removedAt ?? null) as Date | null,
+      }));
+    } else {
+      teamRows = await this.prisma.taskAgent.findMany({
+        where: { taskId: channel.taskId },
+        select: TEAM_AGENT_SELECT,
+      });
+    }
 
     // 被 @ Agent 集合：agent 型直取（带 instanceId 精确到实例）；all 型展开为团队未移除全部实例
     const targetRows: {
@@ -640,7 +657,9 @@ export class ChatService {
     for (const row of targetRows) {
       const agentId = row.agentId;
       const instanceId = row.id;
-      const base = await this.buildTrigger(channel.taskId, row);
+      const base = isTeamDimension
+        ? await this.buildTeamTrigger(channel.teamId as string, row)
+        : await this.buildTrigger(channel.taskId, row);
       // 回复：该实例（agentId+instanceId 定位）于原消息之后的回复消息（senderType=agent，id 升序取最早一条）
       const reply = await this.prisma.message.findFirst({
         where: {
@@ -1504,6 +1523,43 @@ export class ChatService {
     // T6 实例语义：按 taskAgentId 定位会话（同 agent 多实例会话独立，不再按 agentId 撞首条）
     const session = await this.prisma.session.findFirst({
       where: { taskId, taskAgentId: row.id },
+      select: { id: true },
+    });
+    return {
+      agentId: row.agentId,
+      instanceId: row.id,
+      sessionId: session?.id ?? null,
+      status: session ? 'dispatched' : 'no_session',
+    };
+  }
+
+  private async buildTeamTrigger(
+    teamId: string,
+    row: {
+      id: string;
+      agentId: string;
+      removedAt?: Date | null;
+      enabled?: boolean | null;
+    },
+  ): Promise<TriggerResult> {
+    if ((row as { removedAt?: Date | null }).removedAt) {
+      return {
+        agentId: row.agentId,
+        instanceId: row.id,
+        sessionId: null,
+        status: 'agent_removed',
+      };
+    }
+    if ((row as { enabled?: boolean | null }).enabled === false) {
+      return {
+        agentId: row.agentId,
+        instanceId: row.id,
+        sessionId: null,
+        status: 'agent_disabled',
+      };
+    }
+    const session = await this.prisma.session.findFirst({
+      where: { teamId, teamMemberId: row.id },
       select: { id: true },
     });
     return {
