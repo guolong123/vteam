@@ -1,8 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
+import {
+  IsArray,
+  IsOptional,
+  IsString,
+  MaxLength,
+  ValidateNested,
+} from 'class-validator';
 
-export class TaskAgentInput {
+export class TeamInstanceInput {
   @ApiProperty({ description: '模板 Agent id' })
   @IsString()
   agentId: string;
@@ -28,13 +34,13 @@ export class TaskAgentInput {
 export class UpdateTeamDto {
   @ApiPropertyOptional({
     description: '新增实例列表（agentId 可重复，服务端生成 seq）',
-    type: [TaskAgentInput],
+    type: [TeamInstanceInput],
   })
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
-  @Type(() => TaskAgentInput)
-  addInstances?: TaskAgentInput[];
+  @Type(() => TeamInstanceInput)
+  addInstances?: TeamInstanceInput[];
 
   @ApiPropertyOptional({
     description: '移除的实例 id 列表（不在团队/已移除者幂等跳过）',

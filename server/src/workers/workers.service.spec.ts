@@ -47,7 +47,7 @@ describe('WorkersService', () => {
     modelCredential: {
       findMany: jest.Mock;
     };
-    taskAgent: {
+    teamMember: {
       findMany: jest.Mock;
     };
     gitRepoGrant: {
@@ -118,7 +118,7 @@ describe('WorkersService', () => {
       modelCredential: {
         findMany: jest.fn(),
       },
-      taskAgent: {
+      teamMember: {
         findMany: jest.fn(),
       },
       gitRepoGrant: {
@@ -320,7 +320,7 @@ describe('WorkersService', () => {
     it('C5（R5）：无未吊销凭据时注册不产生命令', async () => {
       prisma.worker.upsert.mockResolvedValue(workerRow());
       prisma.modelCredential.findMany.mockResolvedValue([]);
-      prisma.taskAgent.findMany.mockResolvedValue([]);
+      prisma.teamMember.findMany.mockResolvedValue([]);
       prisma.gitRepoGrant.findMany.mockResolvedValue([]);
       prisma.gitCredential.findMany.mockResolvedValue([]);
       prisma.gitCredential.count.mockResolvedValue(0);
@@ -837,8 +837,8 @@ describe('WorkersService', () => {
         { id: 'w_0000000001' },
         { id: 'w_0000000002' },
       ]);
-      // 活跃 agent：mock 返回「已按 removedAt=null + task 未终态过滤后」的 agentId
-      prisma.taskAgent.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
+      // 活跃 agent：mock 返回「已按团队当前任务未终态过滤后」的 agentId
+      prisma.teamMember.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
       prisma.gitRepoGrant.findMany.mockResolvedValue([
         { repoUrl: 'git@gitee.com:xishuhq/repo-a', permission: 'read' },
         { repoUrl: 'git@gitee.com:xishuhq/repo-b', permission: 'write' },
@@ -865,10 +865,11 @@ describe('WorkersService', () => {
 
       const n = await service.dispatchGitCredentials();
 
-      expect(prisma.taskAgent.findMany).toHaveBeenCalledWith({
+      expect(prisma.teamMember.findMany).toHaveBeenCalledWith({
         where: {
-          removedAt: null,
-          task: { status: { notIn: ['completed', 'archived'] } },
+          team: {
+            currentTask: { status: { notIn: ['completed', 'archived'] } },
+          },
         },
         select: { agentId: true },
         distinct: ['agentId'],
@@ -912,7 +913,7 @@ describe('WorkersService', () => {
     });
 
     it('定向：targetWorkerIds 逐个精确下发，payload 带 targetWorkerIds', async () => {
-      prisma.taskAgent.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
+      prisma.teamMember.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
       prisma.gitRepoGrant.findMany.mockResolvedValue([
         { repoUrl: 'git@gitee.com:xishuhq/repo-a', permission: 'read' },
       ]);
@@ -952,7 +953,7 @@ describe('WorkersService', () => {
 
     it('无活跃 agent 授权 → credentials=[] 仍下发（吊销/撤权后清 worker 侧条目）', async () => {
       prisma.worker.findMany.mockResolvedValue([{ id: 'w_0000000001' }]);
-      prisma.taskAgent.findMany.mockResolvedValue([]);
+      prisma.teamMember.findMany.mockResolvedValue([]);
       // 存在未吊销凭证（历史录入）但无活跃 agent 授权 → 下发空 payload 清 worker
       prisma.gitCredential.findMany.mockResolvedValue([
         {
@@ -978,7 +979,7 @@ describe('WorkersService', () => {
 
     it('从未配置任何 git 凭证 → 不下发命令（对齐模型凭据跳过语义）', async () => {
       prisma.worker.findMany.mockResolvedValue([{ id: 'w_0000000001' }]);
-      prisma.taskAgent.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
+      prisma.teamMember.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
       prisma.gitRepoGrant.findMany.mockResolvedValue([
         { repoUrl: 'git@gitee.com:xishuhq/repo-a' },
       ]);
@@ -1005,7 +1006,7 @@ describe('WorkersService', () => {
 
   describe('replayGitCredentials（注册/offline→online 回放，复用 dispatch 过滤）', () => {
     it('定向调用 dispatchGitCredentials([workerId])，解密失败 warn 不阻断', async () => {
-      prisma.taskAgent.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
+      prisma.teamMember.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
       prisma.gitRepoGrant.findMany.mockResolvedValue([
         { repoUrl: 'git@gitee.com:xishuhq/repo-a' },
       ]);
@@ -1031,7 +1032,7 @@ describe('WorkersService', () => {
     });
 
     it('正常回放：凭证入队，payload 不含 targetWorkerIds（定向单 worker 语义）', async () => {
-      prisma.taskAgent.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
+      prisma.teamMember.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
       prisma.gitRepoGrant.findMany.mockResolvedValue([
         { repoUrl: 'git@gitee.com:xishuhq/repo-a' },
       ]);

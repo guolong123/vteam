@@ -387,7 +387,7 @@ export class WorkerEventIngress {
   /** agent.status：status=error/带 error → emit agent.error；否则 emit agent.loading（phase 透传）。 */
   private async handleAgentStatus(dto: WorkerEventDto): Promise<void> {
     const payload = dto.payload as AgentStatusPayload;
-    // T6 实例语义：反查会话实例 id（taskAgentId），emit 载荷带 instanceId——
+    // 团队实例语义：反查会话成员 id（teamMemberId），emit 载荷带 instanceId——
     // 同 agent 多实例各自 loading，前端按实例消费不再全体 loading。
     const platformSessionId = await this.resolvePlatformSessionId(
       this.str(payload.sessionId),
@@ -399,9 +399,9 @@ export class WorkerEventIngress {
     if (platformSessionId) {
       const sessionRow = await this.prisma.session.findUnique({
         where: { id: platformSessionId },
-        select: { taskAgentId: true },
+        select: { teamMemberId: true },
       });
-      instanceId = sessionRow?.taskAgentId ?? null;
+      instanceId = sessionRow?.teamMemberId ?? null;
     }
     const base = {
       taskId: payload.taskId,
@@ -452,10 +452,10 @@ export class WorkerEventIngress {
 
   /**
    * message.part.delta：流式中间态累积落库 + 广播 MESSAGE_PART_DELTA（方案 A worker 主动推）。
-   * - **目标频道 = agent 的 private 会话频道（内心独白）**：群聊 @ 触发的处理过程（含
-   *   reasoning/tool/text）统一落该 agent 的 private 频道，私聊页流式展示完整独白；
+   * - **目标频道 = 成员的 team 私聊频道（内心独白）**：群聊 @ 触发的处理过程（含
+   *   reasoning/tool/text）统一落该成员的 team 私聊频道，私聊页流式展示完整独白；
    *   群聊只显示最终结果（task.completed 转发），不显示处理过程。private 频道反查
-   *   失败（任务无该 agent 私聊）→ 回退来源 channelId。
+   *   失败（成员无 team 私聊）→ 回退来源 channelId。taskId 仅归因透传，不参与定位。
    * - 定位该会话最新一条 status=processing 的 agent 消息 → 累积更新其 content
    *   （parts 追加 + text 重新拼接）；无 processing 消息 → 新建（status=processing）。
    *   Message 表无 sessionId 列，以 channelId+senderId 唯一定位——同一 agent 在频道内
@@ -474,23 +474,20 @@ export class WorkerEventIngress {
       taskId,
       this.str(raw.agentId),
     );
-    // T6 实例语义：processing 消息落 senderInstanceId（会话 taskAgentId），
-    // 同 agent 多实例流式内容精确归属（终态化 handleTaskCompleted 已按实例落库）
+    // Todo 7 team-only：会话归属唯一读团队行（团队会话）；taskId 仅归因透传
+    // （activity 通知/日志），不参与频道定位。存量任务会话无团队行 → teamId 为
+    // 空 → privateTarget 为空 → 回退来源频道（私聊来源照常落库；群聊来源跳过）。
     let deltaSenderInstanceId: string | null | undefined;
     let teamIdOfSession: string | null = null;
     let teamMemberIdOfSession: string | null = null;
     if (sessionId) {
       const sRow = await this.prisma.session.findUnique({
         where: { id: sessionId },
-        select: { taskAgentId: true, teamId: true, teamMemberId: true },
+        select: { teamId: true, teamMemberId: true },
       });
-      // 团队维度仅在无 taskId 时启用：存量任务会话即便带 teamMemberId 也沿用 taskAgentId，不改变任务路径语义。
-      if (!taskId) {
-        teamIdOfSession = (sRow as any)?.teamId ?? null;
-        teamMemberIdOfSession = (sRow as any)?.teamMemberId ?? null;
-      }
-      deltaSenderInstanceId =
-        sRow?.taskAgentId ?? teamMemberIdOfSession ?? null;
+      teamIdOfSession = (sRow as any)?.teamId ?? null;
+      teamMemberIdOfSession = (sRow as any)?.teamMemberId ?? null;
+      deltaSenderInstanceId = teamMemberIdOfSession ?? null;
     }
     let agentId = this.str(raw.agentId);
     if (!sourceChannelId) {
@@ -517,28 +514,21 @@ export class WorkerEventIngress {
       });
       agentId = session?.agentId;
     }
-    // 群聊触发（来源 task_group）→ 处理过程落该 agent 的 private 会话频道（内心独白）；
-    // 私聊触发来源本就是 private，反查结果一致。反查失败回退来源频道（兼容无私聊场景）。
-    // F3 P1 修复：同 agent 多实例按 taskAgentId 精确匹配各自私聊频道（deltaSenderInstanceId
-    // 已从 session 反查）；存量会话 taskAgentId NULL → 回退 agentId 首实例兼容。
+    // 群聊触发（来源 task_group/team_group）→ 处理过程落该成员的 team 私聊频道
+    // （内心独白）；私聊触发来源本就是 private，反查结果一致。反查失败回退来源
+    // 频道（兼容无私聊场景）。Todo 7 team-only：任务只作归因数据，不再按任务查
+    // 私聊频道；同成员多任务/多实例按 teamMemberId 精确匹配各自私聊频道。
     const privateTarget =
-      taskId && agentId
+      teamIdOfSession && teamMemberIdOfSession
         ? await this.prisma.chatChannel.findFirst({
-            where: deltaSenderInstanceId
-              ? { taskId, taskAgentId: deltaSenderInstanceId }
-              : { taskId, agentId },
+            where: {
+              teamId: teamIdOfSession,
+              teamMemberId: teamMemberIdOfSession,
+              type: CHANNEL_TYPE.private,
+            },
             select: { id: true, type: true },
           })
-        : teamIdOfSession && teamMemberIdOfSession
-          ? await this.prisma.chatChannel.findFirst({
-              where: {
-                teamId: teamIdOfSession,
-                teamMemberId: teamMemberIdOfSession,
-                type: CHANNEL_TYPE.private,
-              },
-              select: { id: true, type: true },
-            })
-          : null;
+        : null;
     // 群聊回复只经 MCP group_post 工具直发：群聊触发的流式处理过程仅落该 agent 的
     // private 会话频道（内心独白）；任务未创建该 agent private 频道（如仅 task_group
     // 一个频道）→ 跳过落库，不把流式中间态写进群聊（曾致群聊每人 3 条：
@@ -821,16 +811,11 @@ export class WorkerEventIngress {
     this.logger.log(
       `[ingress] ${dto.type} 落库 requestId=${requestId} session=${storeSessionId} kind=${kind}（workerId=${dto.workerId}）`,
     );
-    // 托管模式检测：任务 managedMode=true → 请求改由主 Agent 确认（前端不弹窗）。
+    // 托管模式检测：团队 managedMode=true → 请求改由主 Agent 确认（前端不弹窗）。
     // payload 带 managed 标记（TaskProgressionScheduler 订阅 realtime bus 据此 dispatch 给主 Agent），
     // question.managedMode 供 GET /questions 补拉路径前端过滤弹窗。
     const managedMode = taskId
-      ? ((
-          await this.prisma.task.findUnique({
-            where: { id: taskId },
-            select: { managedMode: true },
-          })
-        )?.managedMode ?? false)
+      ? await this.teamManagedModeOfTask(taskId)
       : false;
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
@@ -893,6 +878,25 @@ export class WorkerEventIngress {
     return { type: 'global' };
   }
 
+  /** 任务归属团队的托管开关（Todo9 团队化：读 team.managedMode；无归属 → false）。 */
+  private async teamManagedModeOfTask(taskId: string): Promise<boolean> {
+    try {
+      const task = await this.prisma.task.findUnique({
+        where: { id: taskId },
+        select: { teamId: true },
+      });
+      const teamId = (task as { teamId?: string | null } | null)?.teamId;
+      if (!teamId) return false;
+      const team = await this.prisma.team.findUnique({
+        where: { id: teamId },
+        select: { managedMode: true },
+      });
+      return (team as { managedMode?: boolean | null } | null)?.managedMode ?? false;
+    } catch {
+      return false;
+    }
+  }
+
   private str(value: unknown): string | undefined {
     return typeof value === 'string' ? value : undefined;
   }
@@ -941,11 +945,9 @@ export class WorkerEventIngress {
    * instanceRef 回写为新会话 id（幂等），返回该 Session 平台主键。否则 worker 上送
    * session.updated(idle) 时反查失败 → idle 无法落库 → session 永久卡 running。
    *
-   * Bug2 修复（多 running 会话时唯一性兜底失败）：同 worker 存在多个 running Session 时
-   * adoptNewInstanceRef 无法可靠定位会放弃回写 → instanceRef 永为旧值 → 每次 dispatch
-   * 复用旧值 404 → 每次重建新会话（线上 Bug2 根因）。此处增加 taskId/agentId 精确兜底
-   * （worker 事件 payload 恒携带 taskId/agentId，Session 表同 task+agent 唯一）——按
-   * `{workerId, taskId, agentId}` 定位并回写，保证 404 重建后新 instanceRef 落库、后续复用。
+   * team-only（Todo 5）：任务锚定精确回写分支已删——未知
+   * instanceRef（含多 running 无法唯一、worker 缺失）→ undefined，调用方保留原始
+   * ses_ id 继续（reply 直传 worker 调 serve；落库走 payload 兜底），不误写他会话。
    */
   private async resolvePlatformSessionId(
     sessionId: string | undefined,
@@ -970,8 +972,7 @@ export class WorkerEventIngress {
     if (adopted) {
       return adopted;
     }
-    // 唯一 running 定位失败 → 用 taskId/agentId 精确兜底（同 task+agent 会话唯一）
-    return this.adoptNewInstanceRefByTask(sessionId, workerId, taskId, agentId);
+    return undefined;
   }
 
   /**
@@ -1011,44 +1012,6 @@ export class WorkerEventIngress {
           `[ingress] session ${session.id} instanceRef 回写失败: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-    }
-    return session.id;
-  }
-
-  /**
-   * Bug2 修复：adoptNewInstanceRef 唯一 running 兜底失效时的 taskId/agentId 精确回写。
-   * 同 worker 多 running 会话时唯一性定位失败 → 按事件携带的 `{workerId, taskId, agentId}`
-   * 定位（Session 表同 task+agent 唯一，buildTrigger 保证）→ 回写 instanceRef = 新会话 id。
-   * 返回平台主键供调用方继续；无 taskId/未命中 → undefined（不误写）。
-   */
-  private async adoptNewInstanceRefByTask(
-    newRef: string,
-    workerId: string,
-    taskId?: string,
-    agentId?: string,
-  ): Promise<string | undefined> {
-    if (!taskId) {
-      return undefined;
-    }
-    const session = await this.prisma.session.findFirst({
-      where: { workerId, taskId, ...(agentId ? { agentId } : {}) },
-      select: { id: true, instanceRef: true },
-    });
-    if (!session || session.instanceRef === newRef) {
-      return session?.id;
-    }
-    try {
-      await this.prisma.session.updateMany({
-        where: { id: session.id, instanceRef: { not: newRef } },
-        data: { instanceRef: newRef },
-      });
-      this.logger.log(
-        `[ingress] 回写 session ${session.id} instanceRef → ${newRef}（404 重建新会话，taskId=${taskId} workerId=${workerId}）`,
-      );
-    } catch (err) {
-      this.logger.warn(
-        `[ingress] session ${session.id} instanceRef 回写失败: ${err instanceof Error ? err.message : String(err)}`,
-      );
     }
     return session.id;
   }

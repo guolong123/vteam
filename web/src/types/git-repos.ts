@@ -10,7 +10,7 @@
 
 /** GET /git-repos 授权条目（join GitRepoGrant 未吊销 + Agent.name）。 */
 export interface GitGrantView {
-  /** 授权 agent id（TaskAgent 实例） */
+  /** 授权 agent id（模板 Agent） */
   agentId: string;
   /** 授权 agent 名（join Agent；查不到为 null） */
   name: string | null;

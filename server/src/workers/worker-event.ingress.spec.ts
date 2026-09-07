@@ -45,6 +45,7 @@ describe('WorkerEventIngress', () => {
       update: jest.Mock;
     };
     task: { findUnique: jest.Mock };
+    team: { findUnique: jest.Mock };
   };
   let realtime: { emit: jest.Mock };
   let idGen: { nextId: jest.Mock };
@@ -74,9 +75,10 @@ describe('WorkerEventIngress', () => {
         update: jest.fn().mockResolvedValue({ id: 'aq_1', status: 'pending' }),
       },
       task: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValue({ id: 't_1', managedMode: false }),
+        findUnique: jest.fn().mockResolvedValue({ id: 't_1', teamId: 'tm_1' }),
+      },
+      team: {
+        findUnique: jest.fn().mockResolvedValue({ managedMode: false }),
       },
     };
     realtime = { emit: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
@@ -258,14 +260,19 @@ describe('WorkerEventIngress', () => {
       );
     });
 
-    it('群聊触发 delta（来源=task_group）→ 落 agent private 频道全量 parts（内心独白）', async () => {
+    it('群聊触发 delta（来源=task_group）→ 落成员 team 私聊频道全量 parts（任务只归因，不参与定位）', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        agentId: 'a_1',
+        teamId: 'tm_1',
+        teamMemberId: 'tmm_1',
+      });
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
           return Promise.resolve({ id: 'c_group', type: 'task_group' });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
-        if (where?.agentId)
+        if ((where as any)?.teamMemberId === 'tmm_1')
           return Promise.resolve({ id: 'c_dm', type: 'private' });
         return Promise.resolve(null);
       });
@@ -358,15 +365,20 @@ describe('WorkerEventIngress', () => {
       expect(realtime.emit).not.toHaveBeenCalled();
     });
 
-    it('群聊触发 delta 且有 private 频道 → 仍落 private 独白（行为不变）', async () => {
-      // 来源频道=群聊；该 agent 有 private 频道（c_dm）→ 照旧落 private，不跳过
+    it('群聊触发 delta 且有 private 频道 → 仍落成员 team 私聊独白（带任务归因亦不走任务分支）', async () => {
+      // 来源频道=群聊；成员有 team 私聊频道（c_dm）→ 照旧落 private，不跳过
+      prisma.session.findUnique.mockResolvedValue({
+        agentId: 'a_1',
+        teamId: 'tm_1',
+        teamMemberId: 'tmm_1',
+      });
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
           return Promise.resolve({ id: 'c_group', type: 'task_group' });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
-        if (where?.agentId)
+        if ((where as any)?.teamMemberId === 'tmm_1')
           return Promise.resolve({ id: 'c_dm', type: 'private' });
         return Promise.resolve(null);
       });
@@ -409,10 +421,9 @@ describe('WorkerEventIngress', () => {
     });
 
     it('团队会话 delta 且无 private 频道 → 跳过落库（不写进群聊）', async () => {
-      // 团队会话行：taskAgentId null，有 teamId/teamMemberId；来源 team_group；无 private 频道
+      // 团队会话行：有 teamId/teamMemberId；来源 team_group；无 private 频道
       prisma.session.findUnique.mockResolvedValue({
         agentId: 'a_1',
-        taskAgentId: null,
         teamId: 'tm_1',
         teamMemberId: 'tmm_1',
       });
@@ -441,7 +452,6 @@ describe('WorkerEventIngress', () => {
     it('团队会话 delta 且有 private 频道 → 落成员私聊频道且 senderInstanceId=tmm_', async () => {
       prisma.session.findUnique.mockResolvedValue({
         agentId: 'a_1',
-        taskAgentId: null,
         teamId: 'tm_1',
         teamMemberId: 'tmm_1',
       });
@@ -497,12 +507,13 @@ describe('WorkerEventIngress', () => {
       );
     });
 
-    it('F3 P1：流式 delta 会话绑实例 → privateTarget 按 taskAgentId 精确匹配（同 agent 多实例各自频道）', async () => {
-      // 开发者-2 会话绑实例 ta_dev_2：流式中间态必须落开发者-2 私聊频道 c_dev2，
-      // 不得按 agentId findFirst 命中开发者-1 频道（F3 实测串扰缺陷根因）
+    it('Todo7 同成员多实例按 teamMemberId 精确匹配各自私聊频道（F3 P1 团队语义）', async () => {
+      // 开发者-2 团队成员 tmm_dev_2：流式中间态必须落开发者-2 私聊频道 c_dev2，
+      // 不得按 agentId 命中开发者-1 频道（F3 实测串扰缺陷根因，团队语义下按成员查）
       prisma.session.findUnique.mockResolvedValue({
         agentId: 'a_developer',
-        taskAgentId: 'ta_dev_2',
+        teamId: 'tm_1',
+        teamMemberId: 'tmm_dev_2',
       });
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
@@ -510,7 +521,7 @@ describe('WorkerEventIngress', () => {
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
-        if (where?.taskAgentId)
+        if ((where as any)?.teamMemberId)
           return Promise.resolve({ id: 'c_dev2', type: 'private' });
         return Promise.resolve(null);
       });
@@ -541,7 +552,7 @@ describe('WorkerEventIngress', () => {
       ).toBe(true);
 
       expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
-        where: { taskId: 't_1', taskAgentId: 'ta_dev_2' },
+        where: { teamId: 'tm_1', teamMemberId: 'tmm_dev_2', type: 'private' },
         select: { id: true, type: true },
       });
       expect(prisma.message.create).toHaveBeenCalledWith(
@@ -549,7 +560,7 @@ describe('WorkerEventIngress', () => {
           data: expect.objectContaining({
             channelId: 'c_dev2',
             senderId: 'a_developer',
-            senderInstanceId: 'ta_dev_2',
+            senderInstanceId: 'tmm_dev_2',
           }),
         }),
       );
@@ -625,14 +636,19 @@ describe('WorkerEventIngress', () => {
       );
     });
 
-    it('纯 reasoning delta（群聊触发）→ 落 private 独白全量（reasoning 亦入流式，不丢弃）', async () => {
+    it('纯 reasoning delta（群聊触发）→ 落成员 team 私聊独白全量（reasoning 亦入流式，不丢弃）', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        agentId: 'a_1',
+        teamId: 'tm_1',
+        teamMemberId: 'tmm_1',
+      });
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
           return Promise.resolve({ id: 'c_group', type: 'task_group' });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
-        if (where?.agentId)
+        if ((where as any)?.teamMemberId === 'tmm_1')
           return Promise.resolve({ id: 'c_dm', type: 'private' });
         return Promise.resolve(null);
       });
@@ -949,12 +965,10 @@ describe('WorkerEventIngress', () => {
       );
     });
 
-    it('Bug2：多 running + 事件带 taskId/agentId → task 兜底回写 instanceRef（修复不再每次 404 重建）', async () => {
-      // instanceRef 反查失败（findFirst#1）→ 唯一 running 定位失败（findMany 多条）
-      // → task 兜底命中（findFirst#2 返回待回写 session）
-      prisma.session.findFirst
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: 's_old', instanceRef: 'ses_stale' });
+    it('Todo5：多 running + 事件带 taskId/agentId → 任务兜底已删：不回写不误写（emit sessionId=null）', async () => {
+      // instanceRef 反查失败（findFirst）→ 唯一 running 定位失败（findMany 多条）
+      // → 任务兜底分支已删 → undefined，不回写他会话
+      prisma.session.findFirst.mockResolvedValue(null);
       prisma.session.findMany.mockResolvedValue([
         { id: 's_a', instanceRef: 'ses_a' },
         { id: 's_b', instanceRef: 'ses_b' },
@@ -968,19 +982,11 @@ describe('WorkerEventIngress', () => {
       });
       expect(await ingress.handleEvent(e)).toBe(true);
 
-      // 回写 instanceRef → 新会话 id（taskId+agentId 精确定位，不受多 running 影响）
-      expect(prisma.session.updateMany).toHaveBeenCalledWith({
-        where: { id: 's_old', instanceRef: { not: 'ses_new' } },
-        data: { instanceRef: 'ses_new' },
-      });
-      // 回写后 sessionId 归一为平台主键 → idle 状态也能落库（不再卡 running）
-      expect(prisma.session.updateMany).toHaveBeenCalledWith({
-        where: { id: 's_old', status: { not: 'idle' } },
-        data: { status: 'idle' },
-      });
+      // 无 instanceRef 回写（任务锚定兜底已删），状态不落库
+      expect(prisma.session.updateMany).not.toHaveBeenCalled();
       expect(realtime.emit).toHaveBeenCalledWith(
         'session.updated',
-        { sessionId: 's_old', status: 'idle', workerId: 'w_1' },
+        { sessionId: null, status: 'idle', workerId: 'w_1' },
         { type: 'task', id: 't_1' },
       );
     });
@@ -1008,11 +1014,9 @@ describe('WorkerEventIngress', () => {
       );
     });
 
-    it('Bug2：task 兜底命中但 instanceRef 已是新值 → 幂等，仅状态落库不重复回写', async () => {
-      prisma.session.findFirst
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: 's_old', instanceRef: 'ses_new' });
-      // 多 running 使唯一 running 分支失效，必须走 task 兜底（验证幂等分支）
+    it('Todo5：多 running 下任务兜底已删 → 未知 instanceRef 返回 undefined，不误写（emit sessionId=null）', async () => {
+      prisma.session.findFirst.mockResolvedValue(null);
+      // 多 running 使唯一 running 分支失效；任务兜底已删 → undefined
       prisma.session.findMany.mockResolvedValue([
         { id: 's_a', instanceRef: 'ses_a' },
         { id: 's_b', instanceRef: 'ses_b' },
@@ -1026,15 +1030,13 @@ describe('WorkerEventIngress', () => {
       });
       expect(await ingress.handleEvent(e)).toBe(true);
 
-      // 无 instanceRef 回写，仅状态落库
-      expect(prisma.session.updateMany).toHaveBeenCalledTimes(1);
-      expect(prisma.session.updateMany).not.toHaveBeenCalledWith(
-        expect.objectContaining({ data: { instanceRef: 'ses_new' } }),
+      // 无 instanceRef 回写，状态不落库
+      expect(prisma.session.updateMany).not.toHaveBeenCalled();
+      expect(realtime.emit).toHaveBeenCalledWith(
+        'session.updated',
+        { sessionId: null, status: 'running', workerId: 'w_1' },
+        { type: 'task', id: 't_1' },
       );
-      expect(prisma.session.updateMany).toHaveBeenCalledWith({
-        where: { id: 's_old', status: { not: 'running' } },
-        data: { status: 'running' },
-      });
     });
 
     it('task.completed 也触发回写：回调 sessionId 为平台主键（后续落库/反查命中）', async () => {
@@ -1766,6 +1768,87 @@ describe('WorkerEventIngress', () => {
       });
 
       await expect(ingress.handleEvent(e)).resolves.toBe(true);
+    });
+  });
+
+  describe('Todo7 ingress 收敛 team-only（delta/question/completed）', () => {
+    const deltaEvent = (seq: number, payload: Record<string, unknown>) =>
+      event('w_1', `evw_su7_${seq}`, 'message.part.delta', payload);
+
+    it('delta 团队唯一：带 taskId 归因 + 团队会话 → 只查成员私聊频道（不查任务频道），落库 senderInstanceId=tmm_', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        agentId: 'a_1',
+        teamId: 'tm_1',
+        teamMemberId: 'tmm_1',
+      });
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_tgroup',
+        type: 'team_group',
+      });
+      prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
+        if ((where as any)?.teamMemberId === 'tmm_1')
+          return Promise.resolve({ id: 'c_tpriv', type: 'private' });
+        return Promise.resolve(null);
+      });
+      prisma.message.create.mockResolvedValue({
+        id: 'm_su7_1',
+        channelId: 'c_tpriv',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        senderInstanceId: 'tmm_1',
+        content: { text: '处理中', parts: [] },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+
+      expect(
+        await ingress.handleEvent(
+          deltaEvent(1, {
+            taskId: 't_1',
+            agentId: 'a_1',
+            sessionId: 's_team',
+            channelId: 'c_tgroup',
+            parts: [{ type: 'text', text: '处理中', synthetic: false }],
+          }),
+        ),
+      ).toBe(true);
+
+      // 团队唯一分支：按（团队，成员）查私聊频道，不再按（任务，实例/agent）查询
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
+        where: { teamId: 'tm_1', teamMemberId: 'tmm_1', type: 'private' },
+        select: { id: true, type: true },
+      });
+      expect(prisma.message.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            channelId: 'c_tpriv',
+            senderInstanceId: 'tmm_1',
+            status: MESSAGE_STATUS.processing,
+          }),
+        }),
+      );
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.MESSAGE_PART_DELTA,
+        expect.anything(),
+        { type: 'channel', id: 'c_tpriv' },
+      );
+    });
+
+    it('question 缺 taskId → AgentQuestion.taskId 写空串归因（沿用既有写法）', async () => {
+      const e = event('w_1', 'evw_su7_q1', 'session.question', {
+        sessionId: 's_team',
+        agentId: 'a_1',
+        requestId: 'que_su7_1',
+        questions: [{ text: '确认吗？' }],
+      });
+
+      expect(await ingress.handleEvent(e)).toBe(true);
+      expect(prisma.agentQuestion.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ taskId: '', requestId: 'que_su7_1' }),
+        }),
+      );
     });
   });
 });

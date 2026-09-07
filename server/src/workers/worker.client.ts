@@ -166,8 +166,7 @@ export class WorkerClient {
    * `{ sessionID }` 契约，T10/T12 存 instanceRef 直接用。
    * ⚠️ serve 契约（实测 opencode 1.18.15）：POST /session **拒收 model 字段**
    * （带 model → 400，空 body → 200）——模型选择经 promptAsync 的 opts.model 指定。
-   * 签名保留 `model?` 参数仅为兼容调用方（worker-dispatcher.dispatchForTarget 传参），
-   * 请求体恒为 {}。
+   * 签名保留 `model?` 参数仅为兼容历史调用方，请求体恒为 {}。
    */
   async createSession(
     worker: WorkerEndpointRef,

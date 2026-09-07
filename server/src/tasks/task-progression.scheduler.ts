@@ -78,7 +78,12 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     config: ConfigService,
     @Optional()
     @Inject('MessageQuestionDispatcher')
-    private readonly questionDispatcher?: { dispatchQuestionCard: (taskId: string, q: { id: string; requestId?: string; kind: string; content: any }) => Promise<void> },
+    private readonly questionDispatcher?: {
+      dispatchQuestionCard: (
+        taskId: string,
+        q: { id: string; requestId?: string; kind: string; content: any },
+      ) => Promise<void>;
+    },
   ) {
     // env 经 ConfigService 返回字符串，Number() 归一（非法/缺省 → 默认值）
     const interval = Number(config.get('PROGRESSION_INTERVAL_MS'));
@@ -124,13 +129,16 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   async register(taskId: string): Promise<void> {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { id: true, status: true, mainAgentInstanceId: true },
+      select: { id: true, status: true, teamId: true },
     });
-    if (
-      !task ||
-      task.status !== TASK_STATUS.in_progress ||
-      !task.mainAgentInstanceId
-    ) {
+    if (!task || task.status !== TASK_STATUS.in_progress) {
+      this.loop.delete(taskId);
+      return;
+    }
+    const mainMemberId = await this.mainMemberOfTask(
+      (task as any).teamId ?? null,
+    );
+    if (!mainMemberId) {
       this.loop.delete(taskId);
       return;
     }
@@ -198,19 +206,22 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       }
       const task = await this.prisma.task.findUnique({
         where: { id: taskId },
-        select: { title: true, status: true, mainAgentInstanceId: true },
+        select: { title: true, status: true, teamId: true },
       });
       if (!task || task.status !== TASK_STATUS.in_progress) {
         this.unregister(taskId);
         continue;
       }
-      if (!task.mainAgentInstanceId) {
+      const mainMemberId = await this.mainMemberOfTask(
+        (task as any).teamId ?? null,
+      );
+      if (!mainMemberId) {
         this.unregister(taskId);
         continue;
       }
       try {
         const mainSession = await (this.prisma as any).session?.findFirst?.({
-          where: { taskAgentId: task.mainAgentInstanceId },
+          where: { teamMemberId: mainMemberId },
           select: { id: true },
         });
         if (mainSession) {
@@ -270,7 +281,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       '**不要保存**：任务流水账、时间线复盘、谁做了什么、当前状态描述、无普适性的一次性结论。\n' +
       '执行：① memory_search 查重避免重复；② 从执行过程提炼符合上述标准的经验条目（宁缺毋滥，0 条也可）；' +
       '③ 逐条 memory_save：content 写「场景 + 做法/坑 + 规避动作」，description 30 字内概括，' +
-      'level: 跨任务复用写 "project"，平台通用写 "global"，tags 用 howto/pitfall/constraint 等类型词。\n' +
+      'level: 跨任务复用写 "team"，平台通用写 "global"，tags 用 howto/pitfall/constraint 等类型词。\n' +
       '完成后无需回复本消息。';
     await this.dispatchToMainAgent(taskId, text);
     this.logger.log(
@@ -280,7 +291,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 定向 dispatch 给主 Agent（巡检/托管确认共用）：
-   * 主 Agent 定位 = task.mainAgentInstanceId → 会话；频道 private（按实例）优先，回退群聊。
+   * 主 Agent 定位 = team.mainAgentMemberId → 会话；频道 private（按成员）优先，回退群聊。
    * 复用 WorkerDispatcher.dispatchAgentMention（assignWorker → createSession/bind → execute → 回复回流）。
    * 目标无会话 → dispatchAgentMention 抛错（调用方捕获记日志，不阻断扫描）。
    */
@@ -288,48 +299,27 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     taskId: string,
     text: string,
   ): Promise<void> {
-    const task = await this.prisma.task.findUnique({
-      where: { id: taskId },
-      select: { mainAgentInstanceId: true },
-    });
-    if (!task?.mainAgentInstanceId) {
-      throw new Error(`任务 ${taskId} 无主实例，无法定向 dispatch`);
-    }
     const taskMeta = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: { teamId: true },
     });
-    const teamId = taskMeta?.teamId ?? null;
+    const teamId = (taskMeta as any)?.teamId ?? null;
+    const mainMemberId = await this.mainMemberOfTask(teamId);
+    if (!mainMemberId) {
+      throw new Error(`任务 ${taskId} 无主成员，无法定向 dispatch`);
+    }
     let channel: { id: string } | null = null;
     if (teamId) {
-      const tm = await (this.prisma as any).teamMember.findFirst({
-        where: { id: task.mainAgentInstanceId },
-        select: { id: true, teamId: true },
+      channel = await this.prisma.chatChannel.findFirst({
+        where: { teamId, teamMemberId: mainMemberId, deletedAt: null },
+        select: { id: true },
       });
-      if (tm?.id) {
-        channel = await this.prisma.chatChannel.findFirst({
-          where: { teamId, teamMemberId: tm.id, deletedAt: null },
-          select: { id: true },
-        });
-      }
       if (!channel) {
         channel = await this.prisma.chatChannel.findFirst({
           where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
           select: { id: true },
         });
       }
-      // 兼容存量 taskAgent 私聊（teamMember 未建）
-      if (!channel) {
-        channel = await this.prisma.chatChannel.findFirst({
-          where: { taskId, type: CHANNEL_TYPE.private, taskAgentId: task.mainAgentInstanceId },
-          select: { id: true },
-        });
-      }
-    } else {
-      channel = await this.prisma.chatChannel.findFirst({
-        where: { taskId, type: CHANNEL_TYPE.private, taskAgentId: task.mainAgentInstanceId },
-        select: { id: true },
-      });
     }
     if (!channel) {
       throw new Error(`任务 ${taskId} 无可用频道，无法定向 dispatch`);
@@ -338,8 +328,18 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       taskId,
       channelId: channel.id,
       text,
-      targetInstanceId: task.mainAgentInstanceId,
+      targetInstanceId: mainMemberId,
     });
+  }
+
+  /** 任务归属团队的主成员 id（team.mainAgentMemberId；无归属/未设置 → null）。 */
+  private async mainMemberOfTask(teamId: string | null): Promise<string | null> {
+    if (!teamId) return null;
+    const team = await (this.prisma as any).team.findUnique({
+      where: { id: teamId },
+      select: { mainAgentMemberId: true },
+    });
+    return (team as any)?.mainAgentMemberId ?? null;
   }
 
   /** 托管模式确认请求路由（realtime bus 订阅回调）：agent.question 事件 payload.managed=true 且未收敛 → dispatch 给主 Agent。 */
@@ -380,18 +380,21 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     }
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { title: true, mainAgentInstanceId: true },
+      select: { title: true, teamId: true },
     });
-    if (task?.mainAgentInstanceId && row.sessionId) {
+    const questionMainId = await this.mainMemberOfTask(
+      (task as any)?.teamId ?? null,
+    );
+    if (questionMainId && row.sessionId) {
       const reqSession = await this.prisma.session
         .findUnique({
           where: { id: row.sessionId },
-          select: { taskAgentId: true },
+          select: { teamMemberId: true },
         })
         .catch(() => null);
       if (
-        reqSession?.taskAgentId &&
-        reqSession.taskAgentId === task.mainAgentInstanceId
+        reqSession?.teamMemberId &&
+        reqSession.teamMemberId === questionMainId
       ) {
         this.logger.log(
           `[progression] 托管确认自环 taskId=${taskId} requestId=${row.requestId} 自身主实例权限请求不转发，改发企业微信卡片`,
@@ -404,15 +407,21 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
               kind: row.kind,
               content: row.content,
             });
-            this.logger.log(`[progression] 自环卡片已委托 MessageQuestionDispatcher taskId=${taskId} requestId=${row.requestId}`);
+            this.logger.log(
+              `[progression] 自环卡片已委托 MessageQuestionDispatcher taskId=${taskId} requestId=${row.requestId}`,
+            );
           } catch (err) {
-            this.logger.error(`[progression] 自环卡片委托失败 taskId=${taskId}: ${this.describeError(err)}`);
+            this.logger.error(
+              `[progression] 自环卡片委托失败 taskId=${taskId}: ${this.describeError(err)}`,
+            );
           }
         } else {
           try {
             await this.fallbackWecomCard(taskId, row);
           } catch (err) {
-            this.logger.error(`[progression] 自环卡片回退失败 taskId=${taskId}: ${this.describeError(err)}`);
+            this.logger.error(
+              `[progression] 自环卡片回退失败 taskId=${taskId}: ${this.describeError(err)}`,
+            );
           }
         }
         return;
@@ -491,10 +500,14 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       return;
     }
     if (!channels || channels.length === 0) {
-      this.logger.warn(`[progression] 自环无启用 wecom_aibot 渠道 taskId=${taskId}`);
+      this.logger.warn(
+        `[progression] 自环无启用 wecom_aibot 渠道 taskId=${taskId}`,
+      );
       return;
     }
-    this.logger.log(`[progression] 自环尝试直接发卡 taskId=${taskId} requestId=${row.requestId} channels=${channels.length}`);
+    this.logger.log(
+      `[progression] 自环尝试直接发卡 taskId=${taskId} requestId=${row.requestId} channels=${channels.length}`,
+    );
   }
 
   private describeError(err: unknown): string {

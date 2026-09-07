@@ -1,6 +1,12 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
-import { Injectable, Logger, OnModuleDestroy, Optional } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  Optional,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { WecomAibotAdapter } from '../message-channels/adapters/wecom-aibot.adapter';
@@ -44,9 +50,7 @@ import {
   MessageDispatcher,
 } from './message-dispatcher';
 import { inferErrorType, isQuotaError } from '../workers/infer-error-type';
-import { extractConclusionParts, normalizeParts } from './message-parts';
-import { sanitizeWorkDirName } from '../tasks/work-dir.util';
-
+import { normalizeParts } from './message-parts';
 
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
 const MESSAGE_ID_PREFIX = 'm';
@@ -80,7 +84,7 @@ export const GLOBAL_SYSTEM_INSTRUCTIONS = [
   'fileRef 可选：向群聊发送文件时直接传入文件路径（如 /tmp/opencode/x.txt），文件将作为群聊附件并自动归档为产出物。',
   '不调用工具发布则回复仅保留在私聊会话（不公开）。',
   '【@ 定向机制】群聊中 @ 你的消息会定向分发给你。需要定向触发/通知任务内的其他 Agent 时，' +
-    '调用 vteam MCP 的 notify_agent 工具（参数 {taskId: 你的任务ID, targetInstanceId: 目标实例 id（ta_ 前缀，见 task_context 的 agentMembers）, content: 消息内容}）' +
+    '调用 vteam MCP 的 notify_agent 工具（参数 {taskId: 你的任务ID, targetInstanceId: 目标成员 id（tmm_ 前缀，见 task_context 的 agentMembers）, content: 消息内容}）' +
     '——目标实例会收到你的消息并开始执行；回复时也可用 @用户名 在群聊中定向回复特定成员。' +
     '【@用户】需要用户确认/决策或完成后通知时，在 group_post 的 content 中写 @user 或 @all（系统动态注入当前任务相关用户，无需写死 @admin），也可写 @用户名 精确@某人；命中后消息对该用户高亮（蓝底+左蓝条+★@你）。',
   '【Issue 管理】任务内 issue 协作：创建 issue 调 vteam MCP 的 issue_create（参数 {taskId, selfInstanceId, title, description?, tags?, assigneeInstanceId?}）；查询 issue_list/issue_get；更新 issue_update；状态流转 issue_transition（action: start/resolve/close/reopen/reject）。产品/测试 Agent 负责创建需求或缺陷 issue 并指派（assigneeInstanceId 为目标实例 id），研发 Agent 处理指派给自己的 issue 并流转状态。issue 标签（tags）标识类型（如 需求/缺陷/优化）。',
@@ -90,13 +94,13 @@ export const GLOBAL_SYSTEM_INSTRUCTIONS = [
     '工作产物、git clone 的仓库、脚本、产出物文件等请写入该持久化目录，提交产出物（doc/file）时 fileRef 应指向该目录内的文件。',
   '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息（含 requestId、kind、问题详情）时，调用 vteam MCP 的 question_confirm 工具（参数 {taskId, selfInstanceId, requestId, kind, answers?/response?}）决策——question 传 answers（答案数组，null=拒绝）；permission 传 response（once 允许一次 / always 总是允许 / reject 拒绝）。仅主实例可调用 question_confirm。',
   '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名] 标记）时，请使用 wecom_reply 工具回复（参数 {taskId, selfInstanceId, text, atUser?}），不要用 group_post；wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到任务群聊，确保用户在企微端收到回复。',
-  '【记忆管理】记忆只存**可复用经验**，不存会话总结。可存：怎么做（有效路径/命令/配置，下次照做）、坑与规避（错误原因+规避动作，下次不再踩）、平台硬约束（工具限制/权限边界/容量上限，下次主动绕开）。禁存：任务流水账、时间线复盘、谁做了什么、当前状态、一次性结论。开始任务/需要历史经验时，调用 memory_search（参数 {taskId, query?, level?, tags?, limit?≤5}）检索（返回含 description 索引，命中后再取 content 正文，可多次翻页）；沉淀时调用 memory_save（参数 {taskId, selfInstanceId, level, content, description?:30字摘要, tags?}）——content 写「场景 + 做法/坑 + 规避动作」，description 概括，跨任务复用写 level=project，平台通用写 level=global，任务专属写 level=task，tags 用 howto/pitfall/constraint 等类型词。遇可用记忆索引时先用 tags 精搜，再用 query 精排，单次≤5条，摘要命中再取正文。',
+  '【记忆管理】记忆只存**可复用经验**，不存会话总结。可存：怎么做（有效路径/命令/配置，下次照做）、坑与规避（错误原因+规避动作，下次不再踩）、平台硬约束（工具限制/权限边界/容量上限，下次主动绕开）。禁存：任务流水账、时间线复盘、谁做了什么、当前状态、一次性结论。开始任务/需要历史经验时，调用 memory_search（参数 {taskId, query?, level?, tags?, limit?≤5}）检索（返回含 description 索引，命中后再取 content 正文，可多次翻页）；沉淀时调用 memory_save（参数 {taskId, selfInstanceId, level, content, description?:30字摘要, tags?}）——content 写「场景 + 做法/坑 + 规避动作」，description 概括，跨任务复用写 level=team，平台通用写 level=global，任务专属写 level=task，tags 用 howto/pitfall/constraint 等类型词。遇可用记忆索引时先用 tags 精搜，再用 query 精排，单次≤5条，摘要命中再取正文。',
 ].join('\n');
 
 /**
  * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
  * 身份（id + 名称 + 角色 + 用户设置的 prompt 职责），供 MCP 工具调用的 selfInstanceId 参数
- * 填写（服务端按 session.taskAgentId 校验后精确落库 senderId/senderInstanceId，
+ * 填写（服务端按 session.teamMemberId 校验后精确落库 senderId/senderInstanceId，
  * 修复"@测试 触发但回复显示开发者"）。
  * GLOBAL_SYSTEM_INSTRUCTIONS 常量保持不动（其他调用方兼容），本函数仅在 dispatch 下发时
  * 拼接身份段；agent 行查询不到时由调用方降级（name/role/prompt 置 null，回退用 agentId）。
@@ -112,13 +116,13 @@ export interface AgentIdentityInfo {
 
 /** 团队成员信息（dispatch 时从 TeamMember→Agent 组装，注入全局上下文供 agent 判断与谁协作）。
  *  TeamMember 维度：instanceId 为团队成员 id（tmm_ 前缀，TeamMember.id），alias/seq 来自团队模板；
- *  id/name/role 来自模板 agent。兼容期若团队未建（task.teamId 为空）则回退 TaskAgent  快照。 */
+ *  id/name/role 来自模板 agent。 */
 export interface TeamMemberInfo {
   /** 模板 agent id（继承 name/role/prompt/model）。 */
   id: string;
   name: string | null;
   role: string | null;
-  /** 团队成员 id（TeamMember.id，tmm_ 前缀）——团队成员唯一身份（@/指派/主实例判定依据）；兼容期回退 ta_。 */
+  /** 团队成员 id（TeamMember.id，tmm_ 前缀）——团队成员唯一身份（@/指派/主实例判定依据）。 */
   instanceId: string;
   /** 实例别名（默认「<角色中文名>-<seq>」）；缺省回退 name。 */
   alias: string | null;
@@ -127,15 +131,15 @@ export interface TeamMemberInfo {
 }
 
 export interface BuildSystemInstructionsOptions {
-  /** 当前 agent 是否任务主实例（session.taskAgentId === task.mainAgentInstanceId）→ true 时追加主 Agent 职责段。 */
+  /** 当前 agent 是否团队主成员（session.teamMemberId === team.mainAgentMemberId）→ true 时追加主 Agent 职责段。 */
   isMainAgent?: boolean;
   /** 任务团队成员（实例 id/别名/序号 + 模板 agent id/名称/角色）；空/缺省则不注入【团队成员】段。 */
   team?: TeamMemberInfo[];
   /** 任务主实例 id（用于团队成员段中标注主实例成员；无主实例时为 null）。 */
   mainAgentInstanceId?: string | null;
-  /** 当前 agent 的实例身份（TaskAgent.id，ta_ 前缀）；缺省（存量会话未绑实例）回退 agent.id 保持兼容。 */
+  /** 当前 agent 的实例身份（TeamMember.id，tmm_ 前缀）；缺省（存量会话未绑实例）回退 agent.id 保持兼容。 */
   selfInstanceId?: string;
-  /** 任务实例 id（TaskAgent.id，ta_ 前缀）：团队会话按团队成员（tmm_）调度时，
+  /** 任务实例 id（TeamMember.id，tmm_ 前缀）：团队会话按团队成员（tmm_）调度时，
    * selfInstanceId 为团队成员 id，此时用本字段明确其在本任务中的实例身份。
    * 缺省表示与 selfInstanceId 一致。 */
   taskInstanceId?: string | null;
@@ -148,7 +152,7 @@ export interface BuildSystemInstructionsOptions {
    *  轻量【执行计划】能力引导（PLAN_CAPABILITY_INSTRUCTION）；executionMode=plan 时额外
    *  追加完整【计划工作流】段（PLAN_WORKFLOW_INSTRUCTION）。 */
   executionMode?: string;
-  /** 可用记忆索引块（task/project/global 计数+Top tags+description 列表，已按预算截断 <400 token）；缺省不注入。 */
+  /** 可用记忆索引块（team/global 计数+Top tags+description 列表，已按预算截断 <400 token）；缺省不注入。 */
   memoryIndex?: string | null;
   /** team-mode 接待员模式（无任务团队直聊）：分派侧在 taskId 为空时置 true，追加【团队接待】话术段；缺省 = task-mode，系统文本字节不变。 */
   teamMode?: boolean;
@@ -207,7 +211,7 @@ export const PLAN_REVIEW_CHECKLIST_INSTRUCTION =
 /**
  * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
  * 身份（id + 名称 + 角色 + 用户设置的 prompt 职责），供 MCP 工具调用的 selfInstanceId 参数
- * 填写（服务端按 session.taskAgentId 校验后精确落库 senderId/senderInstanceId，
+ * 填写（服务端按 session.teamMemberId 校验后精确落库 senderId/senderInstanceId，
  * 修复"@测试 触发但回复显示开发者"）。
  * opts.isMainAgent=true → 追加主 Agent 职责段；opts.team 非空 → 追加【团队成员】段
  * （id/名称/角色，主 Agent 成员标注），使 agent 直接读取全局上下文即可了解团队构成，
@@ -221,10 +225,12 @@ export function buildSystemInstructions(
 ): string {
   const selfInstanceId = opts?.selfInstanceId ?? agent.id;
   const selfName = opts?.selfAlias ?? agent.name ?? agent.id;
-  // 双维度身份：团队会话按团队成员（tmm_）调度时，另行明确其任务实例 id（ta_），
-  // 避免 agent 拿 tmm_ 去任务成员表（ta_）自查时误判"不是任务团队成员"
+  // 双维度身份：团队会话按团队成员（tmm_）调度时，另行明确其任务实例 id，
+  // 避免 agent 拿成员 id 去任务成员表自查时误判"不是任务团队成员"
   const taskInstanceId =
-    opts?.taskInstanceId && opts.taskInstanceId !== selfInstanceId ? opts.taskInstanceId : null;
+    opts?.taskInstanceId && opts.taskInstanceId !== selfInstanceId
+      ? opts.taskInstanceId
+      : null;
   const identityLine = taskInstanceId
     ? `【你的身份】你是本任务的 ${selfName}（团队成员 id: ${selfInstanceId}，任务实例 id: ${taskInstanceId}，角色: ${agent.role ?? ''}）。` +
       `你在本任务团队中的实例就是 ${taskInstanceId}（【团队成员】段中标"主 Agent"的那一位若是你，请直接认领）；` +
@@ -237,7 +243,9 @@ export function buildSystemInstructions(
       (agent.prompt ? `\n【职责】${agent.prompt}` : '') +
       '\n调用 vteam MCP 工具时，落库类工具（group_post / notify_agent / submit_artifact）的' +
       'selfInstanceId 参数必须填写你的任务实例 id' +
-      (taskInstanceId ? `（${taskInstanceId}）` : '（ta_ 前缀，服务器按此校验归属并精确记录发送者）') +
+      (taskInstanceId
+        ? `（${taskInstanceId}）`
+        : '（tmm_ 前缀，服务器按此校验归属并精确记录发送者）') +
       '。',
     agent.persona ? renderPersonaSection(agent.persona) : '',
     opts?.persistentWorkDir
@@ -310,14 +318,15 @@ export const WECOM_TRIGGER_INSTRUCTION =
 
 /**
  * team-mode 团队接待话术段（无任务团队直聊，仅 teamMode 分派时注入 system）：
- * 主 Agent 接待员身份 + 意图明确→my_projects 查项目再 task_create 建真任务 +
- * 意图不明→追问三件事且禁建任务、禁 QuestionModal。task-mode 文本不受影响。
+ * 主 Agent 接待员身份 + 意图明确→直接 task_create 建真任务（团队由会话解析）+
+ * 意图不明→追问两件事且禁建任务、禁 QuestionModal。task-mode 文本不受影响。
  */
 export const TEAM_SYSTEM_RECEPTION_INSTRUCTION =
   '【团队接待】你是本团队的主 Agent 接待员（团队直聊，当前无任务上下文）。' +
-  '用户意图明确（含做什么、可执行）→ 先调用 vteam MCP 的 `my_projects` 查用户可见项目' +
-  '（恰好 1 个直接用，多于 1 个必须先问用户选哪个），再调用 `task_create` 创建真实任务并告知用户；' +
-  '用户意图不明 → 普通回复追问三件事（做什么/归哪个项目/验收标准），禁止创建任务、' +
+  '用户意图明确（含做什么、可执行）→ 直接调用 vteam MCP 的 `task_create` 创建真实任务' +
+  '（参数 {selfInstanceId, title, description?, priority?}，团队由当前会话解析、无需传归属，建好后告知用户）；' +
+  '所在团队不明确 → 先问用户用哪个团队，绝不猜测归属、绝不创建任务；' +
+  '用户意图不明 → 普通回复追问两件事（做什么/验收标准），禁止创建任务、' +
   '禁止走 QuestionModal（问题确认弹窗仅任务内可用）。' +
   '参数规则：chat_history、group_post、notify_agent、memory_save、memory_search 这 5 个工具在团队直聊下传 teamId，绝不传 taskId' +
   '（团队直聊没有 taskId，传了必 403）；selfInstanceId 填写 system 身份段中的团队成员 id（tmm_ 前缀）；' +
@@ -507,11 +516,13 @@ export function extractArtifacts(text: string): Array<Record<string, unknown>> {
   return out;
 }
 
-/** 待回流会话（watchdog 超时用）：key = `${taskId}:${agentId}`。 */
+/** 待回流会话（watchdog 超时用）：key = `<scope>:<agentId>`（scope 恒为
+ *  `team:<teamId>`，单团队入口统一团队域；任务只作数据透传，不参与键）。 */
 interface PendingDispatch {
-  taskId: string;
+  /** 执行作用域（恒 `team:<teamId>`）。 */
+  scope: string;
   agentId: string;
-  /** 执行实例 id（TaskAgent.id，ta_ 前缀）；存量会话（taskAgentId NULL）回退 agentId。 */
+  /** 执行实例 id（恒 teamMemberId，tmm_ 前缀；单成员单会话下同成员二次分派复用同一键）。 */
   instanceId: string;
   /** 平台 Session 主键（活动事件回调据此反查首字 watchdog）。 */
   sessionId: string;
@@ -724,9 +735,9 @@ export function escapeXml(text: string): string {
 
 /**
  * 执行作用域（team-free-chat team-mode key 隔离）：
- * taskId 非空 → taskId（task-mode 原语义）；为空 → `team:<teamId>`（team-mode，
- * 与 task-mode key 必然区分，key 碰撞即 bug）。register/unregister/isAgentExecuting、
- * 首字 watchdog、loading 事件统一经本函数取作用域，签名保持不变。
+ * 统一入口恒传 `team:<teamId>`（单团队分派/回流全链路同一键；任务只作数据透传，
+ * 不参与键，key 碰撞即 bug）。taskId 非空分支仅供存量任务回流路径过渡
+ * （归 Todo 7/10，收敛后删除），新代码一律传 scope。
  */
 export function toExecutionScope(
   taskId: string | null | undefined,
@@ -767,7 +778,7 @@ export class WorkerDispatcher
   /** 群聊历史注入上限（对齐 doclib 32KB 语义；公开字段便于测试覆盖）。 */
   public chatHistoryMaxBytes: number;
 
-  /** 待回流 watchdog：`${taskId}:${agentId}` → 定时器（首字超时：默认 60s 无首个事件 emitError）。 */
+  /** 待回流 watchdog：`<scope>:<agentId>` → 定时器（首字超时：默认 60s 无首个事件 emitError）。 */
   private readonly pending = new Map<string, PendingDispatch>();
 
   /** sessionId → watchdog key 反查（ingress 活动事件回调按 sessionId 清除首字 watchdog）。 */
@@ -786,11 +797,11 @@ export class WorkerDispatcher
   private readonly failedSessions = new Set<string>();
 
   /**
-   * 执行中注册表（workerId:taskId → 活跃执行集合）：dispatch 调 worker execute 前登记，
+   * 执行中注册表（workerId:scope → 活跃执行集合）：dispatch 调 worker execute 前登记，
    * task.completed / agent.status error / watchdog 超时注销。platform-mcp 的落库类工具
    * （group_post / notify_agent / submit_artifact）经 assertWorkerTask 用本表校验
-   * selfInstanceId 必须为当前活跃执行实例——修复多会话任务（taskId 下多个实例会话并存）
-   * 时 findFirst 定位歧义导致的冒充漏洞（曾误把 a_developer 判为执行 Agent）。
+   * selfInstanceId 必须为当前活跃执行实例。scope 恒 `team:<teamId>`，
+   * 登记 ref 恒 teamMemberId（tmm_ 前缀）。
    */
   private readonly activeExecutions = new Map<
     string,
@@ -798,39 +809,39 @@ export class WorkerDispatcher
   >();
   /** 执行注册 TTL（ms）：worker 崩溃/回流丢失时防活跃记录泄漏，超时视为不活跃。 */
   private readonly executionTtlMs = 30 * 60 * 1000;
-  private executionKey(workerId: string, taskId: string): string {
-    return `${workerId}:${taskId}`;
+  private executionKey(workerId: string, scope: string): string {
+    return `${workerId}:${scope}`;
   }
 
   /**
    * dispatch 下发 execute 前登记活跃执行（防冒充校验依据）。
-   * T4 实例语义：登记集合存**实例 id**（TaskAgent.id，ta_ 前缀）。instanceId 由调用方
-   * 传入 `session.taskAgentId`；存量会话（taskAgentId NULL）回退 agentId 保持兼容。
+   * 登记集合存 teamMemberId（tmm_ 前缀），由调用方传入团队成员 id；scope 恒
+   * `team:<teamId>`（经 toExecutionScope(null, teamId) 取）。
    */
   registerExecution(
     workerId: string,
-    taskId: string,
-    instanceId: string,
+    scope: string,
+    teamMemberId: string,
   ): void {
-    const key = this.executionKey(workerId, taskId);
+    const key = this.executionKey(workerId, scope);
     const entry = this.activeExecutions.get(key);
     if (entry) {
-      entry.agents.add(instanceId);
+      entry.agents.add(teamMemberId);
       entry.at = Date.now();
     } else {
       this.activeExecutions.set(key, {
-        agents: new Set([instanceId]),
+        agents: new Set([teamMemberId]),
         at: Date.now(),
       });
     }
   }
 
   /**
-   * task.completed / error / 超时 时注销活跃执行。ref 为实例 id（ta_ 前缀）；
-   * 兼容存量 agentId 回退登记（taskAgentId NULL 会话以 agentId 登记，注销同值匹配）。
+   * task.completed / error / 超时 时注销活跃执行。ref 恒 teamMemberId（tmm_ 前缀，
+   * 与登记同值匹配）；scope 恒 `team:<teamId>`。
    */
-  unregisterExecution(workerId: string, taskId: string, ref: string): void {
-    const key = this.executionKey(workerId, taskId);
+  unregisterExecution(workerId: string, scope: string, ref: string): void {
+    const key = this.executionKey(workerId, scope);
     const entry = this.activeExecutions.get(key);
     if (!entry) {
       return;
@@ -842,12 +853,12 @@ export class WorkerDispatcher
   }
 
   /**
-   * MCP assertWorkerTask 防冒充校验：返回该 worker+task 当前活跃执行实例集合。
+   * MCP assertWorkerTask 防冒充校验：返回该 worker+scope 当前活跃执行成员集合。
    * 无注册记录（非 dispatch 驱动/进程重启后）→ 返回 null，调用方回退 findFirst 兼容；
    * 有记录 → 调用方必须严格校验 selfInstanceId 在集合内（防止冒充）。
    */
-  isAgentExecuting(workerId: string, taskId: string): Set<string> | null {
-    const key = this.executionKey(workerId, taskId);
+  isAgentExecuting(workerId: string, scope: string): Set<string> | null {
+    const key = this.executionKey(workerId, scope);
     const entry = this.activeExecutions.get(key);
     if (!entry) {
       return null;
@@ -961,33 +972,36 @@ export class WorkerDispatcher
 
   /**
    * 下发分派（fire-and-forget，ChatService 不 await 结果）：
-   * 对每个 target 串行：定位/分配 worker → doclib 注入 → loading 两阶段 →
-   * createSession/bind 真实 instanceRef → promptAsync。
+   * 单团队入口：全量经 dispatchForTeamTarget（assignWorker → createSession/bind →
+   * execute → ingress 回流），任务只作数据经 taskContext 透传给 execute/回流归因。
    * 返回 `{replies: []}`——真实回复经 task.completed 回流（D5），不在此生成。
    * 单目标失败 emitError + 广播 agent.error，不阻塞其他目标（FR-21）。
    */
   async dispatch(request: DispatchRequest): Promise<DispatchResult> {
-    // team-mode（无任务团队直聊）：taskId 为空时走团队路径，teamId 经扩展字段透传；
-    // task-mode（taskId 非空）分支保持原语义
-    const teamMode = !request.taskId;
-    const teamId =
-      (request as DispatchRequest & { teamId?: string | null }).teamId ?? null;
+    const teamId = request.teamId ?? null;
+    if (!teamId) {
+      throw new BadRequestException({
+        code: 'TEAM_SESSION_MISSING_DIMENSION',
+        message: '分派缺少 teamId（单团队入口 teamId 必填）',
+      });
+    }
+    const executionMode = request.taskContext?.executionMode;
+    if (
+      executionMode !== undefined &&
+      executionMode !== EXECUTION_MODES.direct &&
+      executionMode !== EXECUTION_MODES.plan
+    ) {
+      throw new BadRequestException({
+        code: 'TASK_EXECUTION_MODE_INVALID',
+        message: `任务执行模式非法：${executionMode}（仅 direct/plan）`,
+      });
+    }
+    const scope = toExecutionScope(null, teamId);
     for (const target of request.targets) {
       try {
-        if (teamMode) {
-          if (!teamId) {
-            throw new Error(
-              '团队直聊分派缺少 teamId（taskId 为空时 teamId 必填）',
-            );
-          }
-          await this.dispatchForTeamTarget(request, target, teamId);
-        } else {
-          await this.dispatchForTarget(request, target);
-        }
+        await this.dispatchForTeamTarget(request, target, teamId);
       } catch (err) {
         const message = this.describeError(err);
-        // team-mode 错误事件键走 team: 作用域（与 task-mode 区分）；task-mode 原样
-        const scope = teamMode ? toExecutionScope(null, teamId) : request.taskId;
         this.logger.error(
           `agent ${target.agentId} dispatch failed: ${message}`,
           (err as Error).stack,
@@ -1004,7 +1018,7 @@ export class WorkerDispatcher
           level: 'message',
           errorType: 'dispatch_failed',
           message,
-          ...(teamMode && teamId ? { teamId } : {}),
+          teamId,
         });
       }
     }
@@ -1013,10 +1027,10 @@ export class WorkerDispatcher
 
   /**
    * FR-13：agent 互 @ 触发——MCP `notify_agent` 工具调用入口。
-   * TeamMember 维度：按 teamMemberId 定位会话（新键），找不到时回退 taskAgentId 快照关联
-   * （兼容存量/中间态）；复用 dispatch() 全链路（assignWorker → createSession/bind →
-   * execute → ingress 回流落库+广播，不复制 dispatchForTarget 逻辑）；单目标失败由
-   * dispatch() 统一 emitError + 广播 agent.error。
+   * team-only：经任务归属 teamId + targetInstanceId（tmm_）直查团队会话，
+   * 无 task 快照回退（adopt/双实现已删）；复用 dispatch() 单团队入口全链路
+   * （assignWorker → createSession/bind → execute → ingress 回流落库+广播，
+   * 不复制单目标分派逻辑）；单目标失败由 dispatch() 统一 emitError + 广播 agent.error。
    */
   async dispatchAgentMention(input: {
     taskId: string;
@@ -1024,28 +1038,31 @@ export class WorkerDispatcher
     channelId: string;
     /** 消息内容（含 @目标，透传给目标 agent 作为触发 prompt）。 */
     text: string;
-    /** 被 @ 的目标成员 id（TeamMember.id，tmm_ 前缀；兼容 ta_ 快照）。 */
+    /** 被 @ 的目标成员 id（TeamMember.id，tmm_ 前缀）。 */
     targetInstanceId: string;
   }): Promise<void> {
-    let session = await (this.prisma.session as any).findFirst({
-      where: { taskId: input.taskId, teamMemberId: input.targetInstanceId },
-      select: { id: true, agentId: true },
+    const taskRow = await (this.prisma as any).task.findUnique({
+      where: { id: input.taskId },
+      select: { teamId: true },
     });
-    if (!session) {
-      session = await this.prisma.session.findFirst({
-        where: { taskId: input.taskId, taskAgentId: input.targetInstanceId },
-        select: { id: true, agentId: true },
-      } as any);
-    }
+    const teamId = (taskRow as any)?.teamId ?? null;
+    const session = teamId
+      ? await (this.prisma.session as any).findFirst({
+          where: { teamId, teamMemberId: input.targetInstanceId },
+          select: { id: true, agentId: true },
+        })
+      : null;
     if (!session) {
       throw new Error(
-        `实例 ${input.targetInstanceId} 无会话（任务 ${input.taskId}）`,
+        `实例 ${input.targetInstanceId} 无团队会话（团队 ${teamId ?? '未知'}，任务 ${input.taskId}）`,
       );
     }
     await this.dispatch({
       messageId: await this.idGen.nextId(MESSAGE_ID_PREFIX),
       channelId: input.channelId,
       taskId: input.taskId,
+      teamId: taskRow?.teamId ?? null,
+      taskContext: { taskId: input.taskId },
       text: input.text,
       targets: [
         {
@@ -1057,520 +1074,8 @@ export class WorkerDispatcher
     });
   }
 
-  /**
-   * 单目标分派时序（对齐 Phase 2 mock 分派 replyFor 时序）：
-   * 1 查 Session → 已绑 worker 复用；未绑 assignWorker（无可用 → 报错不降级 D3）+
-   *   首次 bind（instanceRef 占位 pending）→ 2 查 Worker 行（capabilities）→
-   *   3 Agent.defaultModelId → {providerID, modelID} → 4 提示词构造（按需注入：任务
-   *   ID/MCP 工具引导 + 群聊触发指令 + 当前消息，doclib/群聊历史经 vteam 工具
-   *   自主拉取，不再自动注入）→
-   *   5 loading(thinking) → 6 createSession（未创建时）→ bind 更新真实 instanceRef →
-   *   7 execute（方案 A：调 worker 执行端点 POST /execute，202 即成功，不启动自持轮询）→
-   *   8 loading(operating) + 回流超时 watchdog。
-   */
-  private async dispatchForTarget(
-    request: DispatchRequest,
-    target: { agentId: string; sessionId: string | null },
-  ): Promise<void> {
-    const { taskId } = request;
-    if (!target.sessionId) {
-      throw new Error('会话缺失：目标无 sessionId，无法分派');
-    }
-
-    // 1. 定位 Session：已绑 workerId/instanceRef → 复用同一 opencode 会话（D3 二次 @ 复用同一 sessionId）。
-    // TeamMember 维度：优先 teamMemberId，兼容 taskAgentId 存量；instanceRef 为 opencode sessionId，复用时保留
-    const session = await (this.prisma.session as any).findUnique({
-      where: { id: target.sessionId },
-      select: {
-        id: true,
-        workerId: true,
-        instanceRef: true,
-        taskAgentId: true,
-        teamMemberId: true,
-      },
-    });
-    if (!session) {
-      throw new Error(`会话 ${target.sessionId} 不存在`);
-    }
-
-    // F2 M5（MAJOR）：残留 pending 绑定视为未绑定（上次分派在 createSession 前中断的
-    // 兜底回滚），重新分配 worker——防绑坏 worker 后永不重分配。
-    const hasStalePending = session.instanceRef === PENDING_INSTANCE_REF;
-    let workerId = session.workerId;
-    let opencodeSessionId =
-      !hasStalePending &&
-      session.instanceRef &&
-      session.instanceRef !== PENDING_INSTANCE_REF
-        ? session.instanceRef
-        : null;
-
-    let overrideModelId: string | null = null;
-    if (session.taskAgentId) {
-      const ta = await this.prisma.taskAgent.findUnique({
-        where: { id: session.taskAgentId },
-        select: { overrideModelId: true },
-      });
-      overrideModelId = ta?.overrideModelId ?? null;
-    }
-    const agentModelId =
-      overrideModelId ?? (await this.resolveAgentModelId(target.agentId));
-    const assignmentReq: AssignmentRequirement = agentModelId
-      ? { modelId: agentModelId }
-      : {};
-
-    if (!workerId || hasStalePending) {
-      // 未绑定：调度分配 worker（D3 无可用 → 抛错，调用方报错不降级 mock）
-      workerId = await this.workersService.assignWorker(assignmentReq);
-      if (!workerId) {
-        throw new Error(
-          '无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）',
-        );
-      }
-      // 首次绑定（T12）：占位 instanceRef，opencode 会话创建后第二次 bind 写入真实 id
-      // Todo7 记忆开关：reuseSession=true 时复用同一 instanceRef（TaskGroupInstance 幂等复用，不重建）
-      await this.sessionLifecycle.bindSessionToWorker(
-        target.sessionId,
-        workerId,
-        PENDING_INSTANCE_REF,
-      );
-    }
-
-    // 2. Worker 行（capabilities 供 WorkerClient 解析 baseUrl/port；defaultModelId 供 C7
-    // 模型解析阶段 2 兜底；顺带校验复用 worker 在线性）。
-    // 修复验收 e2e 缺陷：复用已绑定 worker 不校验在线 → offline worker 被复用 → fetch failed 首字超时。
-    // offline（心跳超时标记）或行缺失 → 解绑 + 重新分配；未绑定分支 assignWorker 已过滤 offline，
-    // 此检查只命中"复用已绑定"场景（复用语义保留：在线 worker 直接复用，见单测回归用例）。
-    let workerRow = await this.prisma.worker.findUnique({
-      where: { id: workerId },
-      select: {
-        id: true,
-        status: true,
-        capabilities: true,
-        defaultModelId: true,
-      },
-    });
-    if (!workerRow || workerRow.status === WORKER_STATUS.OFFLINE) {
-      const staleWorkerId = workerId;
-      this.logger.warn(
-        `agent ${target.agentId} 绑定的 worker ${staleWorkerId} 不可用` +
-          `${workerRow ? '（offline）' : '（不存在）'}，解绑并重新分配 worker`,
-      );
-      await this.sessionLifecycle.unbindSession(target.sessionId);
-      workerId = await this.workersService.assignWorker(assignmentReq);
-      if (!workerId) {
-        throw new Error(
-          '无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）',
-        );
-      }
-      workerRow = await this.prisma.worker.findUnique({
-        where: { id: workerId },
-        select: {
-          id: true,
-          status: true,
-          capabilities: true,
-          defaultModelId: true,
-        },
-      });
-      if (!workerRow) {
-        throw new Error(`worker ${workerId} 不存在`);
-      }
-      opencodeSessionId = null;
-      await this.sessionLifecycle.bindSessionToWorker(
-        target.sessionId,
-        workerId,
-        PENDING_INSTANCE_REF,
-      );
-    }
-    const worker: WorkerEndpointRef = {
-      id: workerId,
-      capabilities: workerRow.capabilities,
-    };
-
-    // 3. C7 模型解析（阶段 2）：最终模型 = Agent/模板解析结果 ?? 执行 worker 默认模型 ?? null。
-    // `provider/model` → {providerID, modelID}；null 不指定模型（serve 默认）。
-    const model = this.toModelSelection(
-      agentModelId ?? workerRow.defaultModelId ?? null,
-    );
-
-    // 4. 提示词构造（阶段 3 迁移：按需注入——移除 doclib/群聊历史自动注入，模型经
-    // vteam MCP 工具自主拉取上下文；buildDoclibContext/buildChatHistoryContext
-    // 方法保留不删，仅不再被 dispatch 调用，供回退/后续使用）
-    const promptBlocks: string[] = [];
-    // 动态任务上下文指令（含 taskId + MCP 工具引导）：需要群聊历史/文档库/任务信息时
-    // 调用 vteam 的 chat_history / doclib / task_context 工具，发布群聊走 group_post
-    promptBlocks.push(
-      `【任务上下文】你的当前任务 ID：${taskId}。` +
-        '需要群聊历史/文档库/任务信息时，调用 vteam 的 chat_history / doclib / task_context 工具（传 taskId）。' +
-        '需要向群聊发布消息时调用 vteam 的 group_post 工具（参数 {taskId, content, fileRef?}）。',
-    );
-    // 群聊触发强化：来源频道是群聊 → 注入显式指令（默认公开回复到群聊，见
-    // GROUP_TRIGGER_INSTRUCTION）；私聊触发不注入（保持私密独白）
-    const sourceChannel = await this.prisma.chatChannel.findUnique({
-      where: { id: request.channelId },
-      select: { type: true },
-    });
-    if (sourceChannel?.type === CHANNEL_TYPE.task_group || sourceChannel?.type === CHANNEL_TYPE.team_group) {
-      promptBlocks.push(GROUP_TRIGGER_INSTRUCTION);
-    }
-    if (request.text.includes('[WeCom:')) {
-      const wecomMatch = /\[WeCom:([^\]]+)\]/.exec(request.text);
-      const wecomUserLabel = wecomMatch ? wecomMatch[1].trim() : '';
-      const tailored = wecomUserLabel
-        ? `【企微消息】此消息来自企业微信用户 ${wecomUserLabel} via WeCom，请务必使用 wecom_reply 工具回复，不要使用 group_post，以确保用户在企微端收到@回复。参数 {taskId, selfInstanceId, text, atUser?}，atUser 默认 true（群聊@，私聊直回）。回复会同时同步到任务群聊。`
-        : WECOM_TRIGGER_INSTRUCTION;
-      promptBlocks.push(tailored);
-    }
-    promptBlocks.push(request.text);
-    const prompt = promptBlocks.join('\n\n');
-
-    // 5. loading(thinking)（对齐 Phase 2 mock 分派时序）——TeamMember 维度：广播带 instanceId 为 teamMemberId
-    await this.realtime.broadcast(
-      EVENT_TYPES.AGENT_LOADING,
-      {
-        taskId,
-        agentId: target.agentId,
-        instanceId: (session as any).teamMemberId ?? session.taskAgentId ?? null,
-        sessionId: target.sessionId,
-        phase: 'thinking',
-      },
-      { type: 'task', id: taskId },
-    );
-    this.emitLoading({
-      taskId,
-      agentId: target.agentId,
-      instanceId: (session as any).teamMemberId ?? session.taskAgentId ?? null,
-      sessionId: target.sessionId,
-      phase: 'thinking',
-    });
-
-    // 6. 创建 opencode 会话（未创建/占位时）→ 第二次 bind 写入真实 instanceRef
-    if (!opencodeSessionId) {
-      try {
-        const created = await this.workerClient.createSession(worker, model);
-        opencodeSessionId = created.sessionID;
-        await this.sessionLifecycle.bindSessionToWorker(
-          target.sessionId,
-          workerId,
-          opencodeSessionId,
-        );
-      } catch (err) {
-        // F2 M5（MAJOR）：分派失败回滚绑定——Session 恢复 created + workerId/instanceRef
-        // 清空 + TaskGroupInstance 软移除，下次 @ 重新分配 worker（防绑坏 worker 永不重分配）。
-        await this.sessionLifecycle
-          .unbindSession(target.sessionId)
-          .catch((rbErr: unknown) =>
-            this.logger.error(`回滚绑定失败: ${this.describeError(rbErr)}`),
-          );
-        throw err;
-      }
-    }
-
-    // 7. 下发执行（方案 A：fire-and-forget 调 worker 执行端点 POST /execute，202 accepted
-    // 即成功——worker 异步驱动 serve 并上送事件；回复经 ingress task.completed 回流
-    // （handleTaskCompleted 落库+广播+emitFinal），server 不再自持轮询。
-    // 自持轮询 pollForCompletion 方案 A 后不再调用（代码保留作兜底/测试，见方法注释）。
-    // is_0000000010：工作目录解析链（worker 持久化目录 = 每 agent 独立工作区）——
-    // 1. 实例 task_agents.work_dir（创建任务可指定，优先）
-    // 2. 缺省 /data/vteam-worker/<sanitize(agent.name)>-<seq>（与 tasks.service 同根，防分叉）
-    // 3. 任务级 <WORK_DIR>/tasks/<taskId> 兜底（兼容存量，见 resolveAgentWorkDir）
-    // 目录创建下沉两处兜底：server mkdir -p + worker 执行端点 mkdir（文件系统可能不共享）。
-    const taskWorkDir = await this.resolveAgentWorkDir(taskId, session, target);
-    const agentRow = await this.prisma.agent.findUnique({
-      where: { id: target.agentId },
-      select: { id: true, name: true, role: true, prompt: true, persona: true },
-    });
-    const agentIdentity: AgentIdentityInfo = {
-      id: target.agentId,
-      name: agentRow?.name ?? null,
-      role: agentRow?.role ?? null,
-      prompt: agentRow?.prompt ?? null,
-      persona: agentRow?.persona ?? null,
-    };
-    // 主 Agent 动态注入 + 团队成员注入（system 通道，不进入聊天记录）：一次轻量 task
-    // 查询取 mainAgentInstanceId + 团队成员（TeamMember + Agent，别名/seq 正确）。
-    // TeamMember 维度：team 段从 TeamMember 组装（tmm_ 前缀），若任务无 teamId 则回退 TaskAgent 快照兼容。
-    const taskRowRaw: any = await (this.prisma as any).task.findUnique({
-      where: { id: taskId },
-      select: {
-        projectId: true,
-        teamId: true,
-        mainAgentInstanceId: true,
-        executionMode: true,
-        taskAgents: {
-          include: { agent: { select: { id: true, name: true, role: true } } },
-        },
-      },
-    });
-    const taskRow: any = taskRowRaw;
-    let team: TeamMemberInfo[] = [];
-    let teamMemberRows: any[] = [];
-    if (taskRow?.teamId) {
-      try {
-        teamMemberRows = await (this.prisma as any).teamMember.findMany({
-          where: { teamId: taskRow.teamId },
-          include: { agent: { select: { id: true, name: true, role: true } } },
-        });
-      } catch {
-        teamMemberRows = [];
-      }
-      if (teamMemberRows.length > 0) {
-        team = teamMemberRows.map((tm: any) => ({
-          id: tm.agent.id,
-          name: tm.agent.name,
-          role: tm.agent.role,
-          instanceId: tm.id,
-          alias: tm.alias,
-          seq: tm.seq,
-        }));
-      } else {
-        team = (taskRow.taskAgents ?? [])
-          .filter((ta: any) => !ta.removedAt)
-          .map((ta: any) => ({
-            id: ta.agent.id,
-            name: ta.agent.name,
-            role: ta.agent.role,
-            instanceId: ta.id,
-            alias: ta.alias,
-            seq: ta.seq,
-          }));
-      }
-    } else {
-      team = (taskRow?.taskAgents ?? [])
-        .filter((ta: any) => !ta.removedAt)
-        .map((ta: any) => ({
-          id: ta.agent.id,
-          name: ta.agent.name,
-          role: ta.agent.role,
-          instanceId: ta.id,
-          alias: ta.alias,
-          seq: ta.seq,
-        }));
-    }
-    if (team.length === 0 && !(taskRow as any)?.teamId) {
-      const fallback: any = await (this.prisma as any).task.findUnique({
-        where: { id: taskId },
-        select: {
-          mainAgentInstanceId: true,
-          taskAgents: {
-            include: { agent: { select: { id: true, name: true, role: true } } },
-          },
-        },
-      });
-      if (fallback?.taskAgents) {
-        team = (fallback.taskAgents as any[])
-          .filter((ta: any) => !ta.removedAt)
-          .map((ta: any) => ({
-            id: ta.agent.id,
-            name: ta.agent.name,
-            role: ta.agent.role,
-            instanceId: ta.id,
-            alias: ta.alias,
-            seq: ta.seq,
-          }));
-        if (!taskRow) (taskRow as any) = fallback;
-        else if (!(taskRow as any).mainAgentInstanceId) (taskRow as any).mainAgentInstanceId = (fallback as any).mainAgentInstanceId;
-      }
-    }
-    // 当前实例：优先 teamMemberId 维度，其次 taskAgentId，缺失回退 agent 语义
-    const selfInstanceId = (session as any).teamMemberId ?? session.taskAgentId ?? undefined;
-    // 主实例判定：支持 teamMemberId 与 taskAgentId 双维度；若 mainAgentInstanceId 为 TaskAgent 但 team 为 TeamMember，映射比对
-    let isMainAgent = false;
-    if (selfInstanceId && taskRow?.mainAgentInstanceId) {
-      if (selfInstanceId === taskRow.mainAgentInstanceId) {
-        isMainAgent = true;
-      } else if (teamMemberRows.length > 0 && (session as any).teamMemberId) {
-        // main 可能是 TaskAgent，映射到 TeamMember：找对应 agentId/seq 的成员
-        try {
-          const mainTA = await this.prisma.taskAgent.findUnique({
-            where: { id: taskRow.mainAgentInstanceId },
-            select: { agentId: true, seq: true },
-          } as any);
-          if (mainTA) {
-            const matched = teamMemberRows.find(
-              (tm: any) => tm.agentId === (mainTA as any).agentId && tm.seq === (mainTA as any).seq,
-            );
-            if (matched && matched.id === selfInstanceId) isMainAgent = true;
-          }
-        } catch {}
-      }
-    }
-    const selfAlias = selfInstanceId
-      ? (team.find((m) => m.instanceId === selfInstanceId)?.alias ?? null)
-      : null;
-    // 登记活跃执行（platform-mcp assertWorkerTask 防冒充校验依据）；完成/错误注销。
-    // TeamMember 维度：登记 teamMemberId，存量回退 taskAgentId/agentId
-    this.registerExecution(
-      workerId,
-      taskId,
-      (session as any).teamMemberId ?? session.taskAgentId ?? target.agentId,
-    );
-    // 私聊 SSE 不刷新修复：同上，清理残留 processing；按 teamMemberId 维度定位频道（回退 taskAgentId）
-    const cleanupChannel = await this.resolveChannel(
-      taskId,
-      target.agentId,
-      (session as any).teamMemberId ?? session.taskAgentId ?? undefined,
-    );
-    if (cleanupChannel) {
-      await this.prisma.message.updateMany({
-        where: {
-          channelId: cleanupChannel.id,
-          senderType: SENDER_TYPE.agent,
-          senderId: target.agentId,
-          status: MESSAGE_STATUS.processing,
-        },
-        data: { status: MESSAGE_STATUS.failed },
-      });
-    }
-    let memoryIndex: string | null = null;
-    try {
-      const projectId = (taskRow as any)?.projectId as string | undefined;
-      const countWhere = (
-        level: string,
-        tid?: string | null,
-        pid?: string | null,
-      ) => {
-        if (level === 'task') return { level, taskId: tid, deletedAt: null };
-        if (level === 'project')
-          return { level, projectId: pid, deletedAt: null };
-        return { level, deletedAt: null };
-      };
-      const [taskCnt, projCnt, globCnt, recent] = await Promise.all([
-        this.prisma.memory.count({
-          where: countWhere('task', taskId, projectId),
-        } as any),
-        projectId
-          ? this.prisma.memory.count({
-              where: countWhere('project', null, projectId),
-            } as any)
-          : Promise.resolve(0),
-        this.prisma.memory.count({
-          where: countWhere('global', null, null),
-        } as any),
-        this.prisma.memory.findMany({
-          where: {
-            deletedAt: null,
-            OR: [
-              { level: 'task', taskId },
-              ...(projectId ? [{ level: 'project', projectId }] : []),
-              { level: 'global' },
-            ],
-          } as any,
-          orderBy: { createdAt: 'desc' },
-          take: 5,
-          select: {
-            id: true,
-            level: true,
-            description: true,
-            content: true,
-            tags: true,
-          },
-        } as any),
-      ]);
-      const tagMap = new Map<string, number>();
-      for (const r of recent as any[]) {
-        const tags = Array.isArray(r.tags) ? (r.tags as string[]) : [];
-        for (const t of tags) tagMap.set(t, (tagMap.get(t) ?? 0) + 1);
-      }
-      const topTags = [...tagMap.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10)
-        .map(([k]) => k);
-      const lines = (recent as any[]).map(
-        (r) =>
-          `- [${r.level}] ${r.description || String(r.content).slice(0, 60)} (tags:${Array.isArray(r.tags) ? (r.tags as string[]).join(',') : '-'})`,
-      );
-      if (taskCnt + projCnt + globCnt > 0) {
-        memoryIndex =
-          `【可用记忆索引 本任务可见 task:${taskCnt} project:${projCnt} global:${globCnt}${topTags.length ? ` Top tags:${topTags.join(',')}` : ''}】\n` +
-          (lines.length
-            ? lines.join('\n') +
-              '\n按需 memory_search({taskId, level/tags/query, limit≤5}) 拉正文，摘要命中再取 content。'
-            : '暂无记忆正文。');
-        if (memoryIndex.length > 1200) memoryIndex = memoryIndex.slice(0, 1200);
-      }
-    } catch {}
-    let mainAgentInstanceIdForTeam: string | null = taskRow?.mainAgentInstanceId ?? null;
-    if (mainAgentInstanceIdForTeam && teamMemberRows.length > 0) {
-      const raw = mainAgentInstanceIdForTeam as string;
-      const isTeamMember = team.some((m) => m.instanceId === raw);
-      if (!isTeamMember) {
-        try {
-          const mainTA = await this.prisma.taskAgent.findUnique({
-            where: { id: raw },
-            select: { agentId: true, seq: true },
-          } as any);
-          if (mainTA) {
-            const matched = teamMemberRows.find(
-              (tm: any) => tm.agentId === (mainTA as any).agentId && tm.seq === (mainTA as any).seq,
-            );
-            if (matched) mainAgentInstanceIdForTeam = matched.id;
-          }
-        } catch {}
-      }
-    }
-    // 问题二：触发消息带图片附件 → 引用随执行下发（worker 落盘后以 file part 并入 prompt）；
-    // 无附件/非图片时为 null，纯文本分派路径不变。
-    const imageAttach = await this.resolveImageAttachments(request.messageId);
-    const finalPrompt = imageAttach ? `${prompt}\n\n${imageAttach.pointer}` : prompt;
-    await this.workerClient.execute(worker, {
-      prompt: [{ type: 'text', text: finalPrompt }],
-      model,
-      directory: taskWorkDir,
-      taskId,
-      agentId: target.agentId,
-      channelId: request.channelId,
-      sessionId: opencodeSessionId,
-      ...(imageAttach ? { attachments: imageAttach.attachments } : {}),
-      system: buildSystemInstructions(agentIdentity, {
-        isMainAgent,
-        mainAgentInstanceId: mainAgentInstanceIdForTeam,
-        team,
-        selfInstanceId,
-        selfAlias,
-        taskInstanceId: (session as any)?.taskAgentId ?? null,
-        persistentWorkDir: taskWorkDir,
-        executionMode: taskRow?.executionMode,
-        memoryIndex,
-      }),
-    });
-
-    // F3 MAJOR-1：新一轮 dispatch 重置该会话的幂等/失败标记——复用同一 sessionId 时，
-    // 上一轮已落库（completedSessions）或超时（failedSessions）的标记会阻塞本轮回复
-    // 回流（静默失败，F3 QA 实测）。重置后本轮回复可重新落库；completedSessions 仍
-    // 防同一轮 ingress 双通道双写（方案 A 后唯一回流通道，防护不破坏）。
-    this.completedSessions.delete(target.sessionId);
-    this.failedSessions.delete(target.sessionId);
-
-    // 8. loading(operating)（工具执行阶段，FR-20）→ 回流超时 watchdog（TeamMember 维度）
-    await this.realtime.broadcast(
-      EVENT_TYPES.AGENT_LOADING,
-      {
-        taskId,
-        agentId: target.agentId,
-        instanceId: (session as any).teamMemberId ?? session.taskAgentId ?? null,
-        sessionId: target.sessionId,
-        phase: 'operating',
-      },
-      { type: 'task', id: taskId },
-    );
-    this.emitLoading({
-      taskId,
-      agentId: target.agentId,
-      instanceId: (session as any).teamMemberId ?? session.taskAgentId ?? null,
-      sessionId: target.sessionId,
-      phase: 'operating',
-    });
-    this.startPendingWatchdog(
-      taskId,
-      target.agentId,
-      target.sessionId,
-      workerId,
-      (session as any).teamMemberId ?? session.taskAgentId ?? target.agentId,
-    );
-  }
-
   // ------------------------------------------------------------------
-  // team-mode 无任务直聊分派（team-free-chat：taskId 为空走本区，task-mode 不动）
+  // 单团队分派入口（Todo 1 收敛：任务路径已删，全量走本区；任务只作数据经 taskContext）
   // ------------------------------------------------------------------
 
   /**
@@ -1607,9 +1112,11 @@ export class WorkerDispatcher
    * team-mode 主触发（无任务）：主成员判定 + ensureTeamSession，会话即建即返，
    * 供团队直聊无 @ 时默认触发主 Agent。空名册 → null。
    */
-  async buildTeamMainTrigger(
-    teamId: string,
-  ): Promise<{ agentId: string; instanceId: string; sessionId: string } | null> {
+  async buildTeamMainTrigger(teamId: string): Promise<{
+    agentId: string;
+    instanceId: string;
+    sessionId: string;
+  } | null> {
     const main = await this.resolveTeamMainMember(teamId);
     if (!main) {
       return null;
@@ -1629,7 +1136,7 @@ export class WorkerDispatcher
    * team-mode 成员触发（无任务 @-mention）：按 (teamId, teamMemberId) 定位成员 +
    * ensureTeamSession，会话即建即返，供零任务团队 @agent/@all 目标补会话
    * （createMessage 内 no_session → dispatched 翻转用）。
-   * 成员缺失即错，不回退 taskAgent（跨维度回退禁令）；会话创建复用
+   * 成员缺失即错，不做跨维度回退；会话创建复用
    * ensureTeamSession，无新会话逻辑（与 buildTeamMainTrigger 同形）。
    */
   async buildTeamMemberTrigger(
@@ -1670,10 +1177,72 @@ export class WorkerDispatcher
   }
 
   /**
-   * team-mode 单目标分派（无任务团队直聊）：会话按 (teamId, teamMemberId) 经
-   * ensureTeamSession 即建即得；task 相关查询全部跳过；主判定走团队门（session
-   * 团队成员 == team.mainAgentMemberId，对齐 task_create 门）；工作目录
-   * <根>/teams/<teamId>；执行注册/watchdog/loading 事件键走 `team:<teamId>` 作用域。
+    * 团队记忆索引（prompt hint 富集专用，session-unification Todo 9 起仅
+    * team+global 两域，任务级记忆已删除）：计数 + 最近 5 条 description 行拼成
+    * 索引块注入 system。仅读记忆表做提示词富集，不改 memorySave/memorySearch
+    * 写/可见语义。失败吞错返 null（无记忆 mock/表异常时分派照常）。
+    */
+  private async buildTeamMemoryIndex(teamId: string): Promise<string | null> {
+    try {
+      const [teamCnt, globCnt, recent] = await Promise.all([
+        this.prisma.memory.count({
+          where: { level: 'team', teamId, deletedAt: null },
+        } as any),
+        this.prisma.memory.count({
+          where: { level: 'global', deletedAt: null },
+        } as any),
+        this.prisma.memory.findMany({
+          where: {
+            deletedAt: null,
+            OR: [{ level: 'team', teamId }, { level: 'global' }],
+          } as any,
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+          select: {
+            id: true,
+            level: true,
+            description: true,
+            content: true,
+            tags: true,
+          },
+        } as any),
+      ]);
+      const tagMap = new Map<string, number>();
+      for (const r of recent as any[]) {
+        const tags = Array.isArray(r.tags) ? (r.tags as string[]) : [];
+        for (const t of tags) tagMap.set(t, (tagMap.get(t) ?? 0) + 1);
+      }
+      const topTags = [...tagMap.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([k]) => k);
+      const lines = (recent as any[]).map(
+        (r) =>
+          `- [${r.level}] ${r.description || String(r.content).slice(0, 60)} (tags:${Array.isArray(r.tags) ? (r.tags as string[]).join(',') : '-'})`,
+      );
+      if (teamCnt + globCnt > 0) {
+        let memoryIndex =
+          `【可用记忆索引 team:${teamCnt} global:${globCnt}${topTags.length ? ` Top tags:${topTags.join(',')}` : ''}】\n` +
+          (lines.length
+            ? lines.join('\n') +
+              '\n按需 memory_search({teamId, level/tags/query, limit≤5}) 拉正文，摘要命中再取 content。'
+            : '暂无记忆正文。');
+        if (memoryIndex.length > 1200) memoryIndex = memoryIndex.slice(0, 1200);
+        return memoryIndex;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 单团队入口单目标分派：会话按 (teamId, teamMemberId) 经
+   * ensureTeamSession 即建即得；任务只作数据（request.taskContext?.taskId 透传
+   * execute/回流归因，不参与会话/注册/watchdog 键）；主判定走团队门（session
+   * 团队成员 == team.mainAgentMemberId）；工作目录按任务隔离
+   * （taskContext.taskId → <根>/tasks/<taskId>，无任务 → <根>/teams/<teamId>）；
+   * 执行注册/watchdog/loading 事件键走 `team:<teamId>` 作用域。
    */
   private async dispatchForTeamTarget(
     request: DispatchRequest,
@@ -1732,7 +1301,9 @@ export class WorkerDispatcher
         ? session.instanceRef
         : null;
 
-    const agentModelId = await this.resolveAgentModelId(target.agentId);
+    const agentModelId =
+      request.taskContext?.overrideModelId ??
+      (await this.resolveAgentModelId(target.agentId));
     const assignmentReq: AssignmentRequirement = agentModelId
       ? { modelId: agentModelId }
       : {};
@@ -1802,18 +1373,33 @@ export class WorkerDispatcher
       agentModelId ?? workerRow.defaultModelId ?? null,
     );
 
-    // 3. 提示词：团队上下文 + 群聊触发（team_group）+ 当前消息；无任务 ID 行
+    // 3. 提示词：单触发器——任务段 + team 段按 taskContext 有无拼接；
+    // 群聊触发指令二选一（任务模式 GROUP 版 / 团队直聊 TEAM 版）。
+    const taskIdForPrompt = request.taskContext?.taskId ?? '';
     const promptBlocks: string[] = [];
-    promptBlocks.push(
-      `【团队上下文】你当前在团队 ${teamId} 直聊（无任务）。` +
-        '需要群聊历史时调用 chat_history（传 teamId）；需要向群聊发布时调用 group_post（传 teamId）。',
-    );
+    if (taskIdForPrompt) {
+      promptBlocks.push(
+        `【任务上下文】你的当前任务 ID：${taskIdForPrompt}。` +
+          '需要群聊历史/文档库/任务信息时，调用 vteam 的 chat_history / doclib / task_context 工具（传 taskId）。' +
+          '需要向群聊发布消息时调用 vteam 的 group_post 工具（参数 {taskId, content, fileRef?}）。',
+      );
+    } else {
+      promptBlocks.push(
+        `【团队上下文】你当前在团队 ${teamId} 直聊（无任务）。` +
+          '需要群聊历史时调用 chat_history（传 teamId）；需要向群聊发布时调用 group_post（传 teamId）。',
+      );
+    }
     const sourceChannel = await this.prisma.chatChannel.findUnique({
       where: { id: request.channelId },
       select: { type: true },
     });
-    if (sourceChannel?.type === CHANNEL_TYPE.team_group) {
-      promptBlocks.push(TEAM_GROUP_TRIGGER_INSTRUCTION);
+    if (
+      sourceChannel?.type === CHANNEL_TYPE.team_group ||
+      sourceChannel?.type === CHANNEL_TYPE.task_group
+    ) {
+      promptBlocks.push(
+        taskIdForPrompt ? GROUP_TRIGGER_INSTRUCTION : TEAM_GROUP_TRIGGER_INSTRUCTION,
+      );
     }
     if (request.text.includes('[WeCom:')) {
       const wecomMatch = /\[WeCom:([^\]]+)\]/.exec(request.text);
@@ -1866,11 +1452,10 @@ export class WorkerDispatcher
       }
     }
 
-    // 6. 团队工作目录 + 身份/名册/主判定（task 查询全部跳过；空名册 = 空列表）
+    // 6. 工作目录（任务隔离保留：taskContext.taskId → tasks/<taskId>；
+    // 无任务 → teams/<teamId>）+ 身份/名册/主判定（task 查询全部跳过；空名册 = 空列表）
     const teamWorkDir = await this.resolveAgentWorkDir(
-      '',
-      { taskAgentId: null },
-      target,
+      request.taskContext?.taskId ?? '',
       teamId,
     );
     const agentRow = await this.prisma.agent.findUnique({
@@ -1930,25 +1515,39 @@ export class WorkerDispatcher
       });
     }
     const imageAttach = await this.resolveImageAttachments(request.messageId);
-    const finalPrompt = imageAttach ? `${prompt}\n\n${imageAttach.pointer}` : prompt;
+    const finalPrompt = imageAttach
+      ? `${prompt}\n\n${imageAttach.pointer}`
+      : prompt;
+    const memoryIndex = taskIdForPrompt
+      ? await this.buildTeamMemoryIndex(teamId)
+      : null;
+    const systemOpts: BuildSystemInstructionsOptions = {
+      isMainAgent,
+      mainAgentInstanceId: mainAgentMemberId,
+      team,
+      selfInstanceId: teamMemberId,
+      selfAlias,
+      persistentWorkDir: teamWorkDir,
+    };
+    if (taskIdForPrompt) {
+      systemOpts.executionMode = request.taskContext?.executionMode;
+      if (memoryIndex) {
+        systemOpts.memoryIndex = memoryIndex;
+      }
+    } else {
+      systemOpts.teamMode = true;
+      systemOpts.taskId = '';
+    }
     await this.workerClient.execute(worker, {
       prompt: [{ type: 'text', text: finalPrompt }],
       model,
       directory: teamWorkDir,
+      taskId: request.taskContext?.taskId ?? '',
       agentId: target.agentId,
       channelId: request.channelId,
       sessionId: opencodeSessionId,
       ...(imageAttach ? { attachments: imageAttach.attachments } : {}),
-      system: buildSystemInstructions(agentIdentity, {
-        isMainAgent,
-        mainAgentInstanceId: mainAgentMemberId,
-        team,
-        selfInstanceId: teamMemberId,
-        selfAlias,
-        persistentWorkDir: teamWorkDir,
-        teamMode: true,
-        taskId: '',
-      }),
+      system: buildSystemInstructions(agentIdentity, systemOpts),
     });
 
     this.completedSessions.delete(sessionId);
@@ -1987,21 +1586,17 @@ export class WorkerDispatcher
   // ------------------------------------------------------------------
 
   /**
-   * task.completed 回流处理（T9 ingress onTaskCompleted 回调触发；单测直接调用断言）：
-   * 1 定位发件 Agent（payload.agentId 缺失 → sessionId 反查）→ 2 定位频道（私聊 →
-   * 群聊回退）→ 3 落库 message（senderType=agent）→ 4 广播 chat.message.new + emitFinal
-   * → 5 产出物归档（artifacts 声明 → ArtifactsService.append，12 篇 §5）。
+   * task.completed 回流唯一入口（Todo 7 team-only）：归属门 + 幂等门（F2 C1 双通道
+   * 防重）→ 团队唯一实现（handleTeamTaskCompleted 落库 + 广播 + emitFinal）→ 产出物
+   * 归档 + wecom 桥接。任务只作归因数据（message.taskId 照写；归档/桥接触发键），
+   * 不参与会话/频道定位；回流 scope 统一 team（emitFinal taskId 承载 scope 串兼容前端）。
    */
   async handleTaskCompleted(payload: TaskCompletedPayload): Promise<void> {
-    const { taskId, sessionId, channelId } = payload;
-    // team-mode 回流（execute 未带 taskId）：经平台 session 反查团队会话走团队路径
-    if (!taskId) {
-      if (sessionId) {
-        await this.handleTeamTaskCompleted(payload, sessionId);
-        return;
-      }
+    const { taskId, sessionId } = payload;
+    // 无归属（无 session/taskId/agentId）→ 不碰 DB 直接跳过
+    if (!taskId && !sessionId && !payload.agentId) {
       this.logger.error(
-        `task.completed 缺少 taskId，无法处理：${JSON.stringify(payload)}`,
+        `task.completed 缺少归属，无法处理：${JSON.stringify(payload)}`,
       );
       return;
     }
@@ -2018,163 +1613,26 @@ export class WorkerDispatcher
         return;
       }
     }
-    let agentId = payload.agentId;
-    // T4 实例语义：注销需定位实例 id——反查 session 取 taskAgentId（存量 NULL 回退 agentId）
-    let executionRef: string | undefined;
-    // F3 P1 修复：终态回复落库按实例精确匹配——session.taskAgentId（NULL 回退 agentId）
-    let sessionTaskAgentId: string | undefined;
-    if (sessionId) {
-      const session = await this.prisma.session.findUnique({
-        where: { id: sessionId },
-        select: { agentId: true, taskAgentId: true },
-      });
-      agentId = agentId ?? session?.agentId;
-      executionRef = session?.taskAgentId ?? session?.agentId;
-      sessionTaskAgentId = session?.taskAgentId ?? undefined;
-    }
-    if (!agentId) {
-      this.logger.error(
-        `task.completed 缺少 agentId/sessionId，无法定位发件人：${JSON.stringify(payload)}`,
-      );
-      return;
-    }
-    // 活跃执行注销（该实例已完成，MCP 落库类工具不再允许以它身份调用）
-    if (typeof payload.workerId === 'string' && payload.workerId) {
-      this.unregisterExecution(
-        payload.workerId,
-        taskId,
-        executionRef ?? agentId,
-      );
-    }
-    this.clearPendingWatchdog(taskId, agentId);
-    const text = payload.text ?? '';
-    // 群聊通知声明 + 私聊独白展示文本（函数级作用域：try 块内赋值，产出物归档后统一转发）
-    let groupPost: ReturnType<typeof extractGroupPost> = null;
-    let displayText = text;
-    let finalParts: Array<Record<string, unknown>> = [];
+    // 团队唯一路径：落库 + 广播 + emitFinal（无 task/team 双实现）
+    const settled = await this.handleTeamTaskCompleted(payload);
+    const agentId = settled.agentId;
+    const text = settled.text;
+    const displayText = settled.displayText;
+    const finalParts = settled.finalParts;
+    // wecom 镜像归属实例（团队成员；回退 agent）
+    const executionRef: string | undefined =
+      settled.teamMemberId ?? settled.agentId ?? undefined;
 
-    // 2~4. 落库 + 广播 + emitFinal（频道缺失时跳过落库，产出物仍归档）
-    // 架构：agent 最终回复落 private 会话频道（内心独白结尾）；群聊触发的处理额外
-    // 转发最终结果到群聊（对外消息，见 forwardToGroup）。resolveChannel 固定 private 优先。
-    const channel = await this.resolveChannel(
-      taskId,
-      agentId,
-      sessionTaskAgentId,
-    );
-    // 群聊回复只经 MCP group_post 工具直发：正文独白仅落 private 会话频道（内心独白）。
-    // 任务未创建该 agent private 频道（resolveChannel 回退群聊）时跳过正文落库——群聊
-    // 只展示 ACK + 工具直发内容，不再把私聊正文兜底写进群聊（曾致群聊每人 3 条：
-    // ACK / 终态化正文 / 工具直发）。回退频道含新老两型：task_group（存量）与
-    // team_group（一团队一群复用；线上实证：任务终态全文含 reasoning 经此漏进群聊）。
-    const groupFallback =
-      channel?.type === CHANNEL_TYPE.task_group ||
-      channel?.type === CHANNEL_TYPE.team_group;
-    if (channel && !groupFallback) {
-      try {
-        // 终态化（任务 3 定稿）：delta 流式期间创建的 processing 消息 → 更新为 sent +
-        // 内容最终化，避免双消息（收到确认 + 流式内容两处落库）；无 processing 消息
-        // （无 delta 直接完成）→ 走现有 create 落库路径保持兼容。
-        // F3 缺陷①：终态化路径与 delta 路径行为必须一致——task_group 只保留结论性
-        // text part（reasoning/tool 剔除，防群聊渲染折叠卡片）；private 全量保留
-        // （前端折叠展示 reasoning）。
-        const rawParts = Array.isArray(payload.parts) ? payload.parts : [];
-        finalParts =
-          channel.type === CHANNEL_TYPE.private
-            ? normalizeParts(rawParts)
-            : extractConclusionParts(rawParts);
-        // 群聊通知（agent 自主决策，像真人判断是否在群里公开回应）：回复含 group_post
-        // 声明 → 仅声明内容转发群聊（对外消息）；无声明 → 不公开，回复留在私聊独白。
-        // 私聊独白落库文本移除协议标签（stripGroupPostDeclarations），不显示 JSON/标签。
-        groupPost = extractGroupPost(text);
-        displayText =
-          groupPost !== null ? stripGroupPostDeclarations(text) : text;
-        const finalContent = {
-          text: displayText,
-          parts: finalParts,
-        } as Prisma.InputJsonValue;
-        const processingRow = await this.prisma.message.findFirst({
-          where: {
-            channelId: channel.id,
-            senderType: SENDER_TYPE.agent,
-            senderId: agentId,
-            status: MESSAGE_STATUS.processing,
-          },
-          orderBy: { createdAt: 'desc' },
-          select: { id: true },
-        });
-        const message = processingRow
-          ? await this.prisma.message.update({
-              where: { id: processingRow.id },
-              data: { content: finalContent, status: MESSAGE_STATUS.sent, taskId } as any,
-            })
-          : await this.prisma.message.create({
-              data: {
-                id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
-                channelId: channel.id,
-                taskId,
-                senderType: SENDER_TYPE.agent,
-                senderId: agentId,
-                senderInstanceId: executionRef ?? null,
-                content: finalContent,
-                mentions: null,
-                status: MESSAGE_STATUS.sent,
-              } as any,
-            });
-        if (processingRow) {
-          this.logger.log(
-            `agent ${agentId} 流式消息终态化 message=${processingRow.id} → sent`,
-          );
-        }
-        // F2 C1：落库成功即标记已完成（ingress/轮询双通道后续到达直接跳过，防重复落库）
-        if (sessionId) {
-          this.completedSessions.add(sessionId);
-        }
-        await this.realtime.broadcast(
-          EVENT_TYPES.CHAT_MESSAGE_NEW,
-          { message: this.toMessageDto(message) },
-          { type: 'channel', id: channel.id },
-        );
-        this.emitFinal({
-          taskId,
-          agentId,
-          messageId: message.id,
-          text: displayText,
-        });
-        // 群聊转发（对外消息）延后到产出物归档后执行（forwardGroupPost）——
-        // 需要归档收集的 fileRef→落盘 URL 映射来挂附件
-      } catch (err) {
-        this.logger.error(
-          `agent ${agentId} 回复落库失败: ${this.describeError(err)}`,
-          (err as Error).stack,
-        );
-        this.emitError({
-          taskId,
-          agentId,
-          error: `回复落库失败: ${this.describeError(err)}`,
-        });
-      }
-    } else if (channel) {
-      // 群聊回退（无该 agent private 频道）：正文独白不落群聊——结论内容由 MCP
-      // group_post 工具直发落库。此处仅完成幂等标记 + emitFinal（前端 loading 收尾）。
-      if (sessionId) {
-        this.completedSessions.add(sessionId);
-      }
-      this.emitFinal({ taskId, agentId, messageId: '', text });
-    } else {
-      this.logger.error(
-        `task.completed 无法定位频道（taskId=${taskId} agentId=${agentId}），跳过回复落库`,
-      );
-      this.emitError({
-        taskId,
-        agentId,
-        error: '回复回流失败：无法定位目标频道',
-      });
-    }
+    // （落库 + 广播 + emitFinal 已由上游 handleTeamTaskCompleted 完成；以下仅产出物归档 + wecom 桥接）
 
     try {
       if (payload.taskId) {
         let derivedText = (payload.text ?? displayText ?? '').trim();
-        if (!derivedText && Array.isArray(payload.parts) && payload.parts.length > 0) {
+        if (
+          !derivedText &&
+          Array.isArray(payload.parts) &&
+          payload.parts.length > 0
+        ) {
           const partsArr = payload.parts as Array<Record<string, unknown>>;
           const textParts = partsArr
             .filter((p) => p.type === 'text' && typeof p.text === 'string')
@@ -2208,11 +1666,20 @@ export class WorkerDispatcher
           const prismaAny = this.prisma as unknown as Record<string, unknown>;
           if (
             !prismaAny.taskMessageChannel ||
-            typeof (prismaAny.taskMessageChannel as { findMany?: unknown }).findMany !== 'function'
+            typeof (prismaAny.taskMessageChannel as { findMany?: unknown })
+              .findMany !== 'function'
           ) {
-            this.logger.warn(`wecom bridge: skip taskId=${payload.taskId} no taskMessageChannel model (test mock)`);
+            this.logger.warn(
+              `wecom bridge: skip taskId=${payload.taskId} no taskMessageChannel model (test mock)`,
+            );
           } else {
-            const bindings = await (prismaAny.taskMessageChannel as { findMany: (q: unknown) => Promise<Array<{ messageChannelId: string }>> }).findMany({
+            const bindings = await (
+              prismaAny.taskMessageChannel as {
+                findMany: (
+                  q: unknown,
+                ) => Promise<Array<{ messageChannelId: string }>>;
+              }
+            ).findMany({
               where: { taskId: payload.taskId },
               select: { messageChannelId: true },
             });
@@ -2220,7 +1687,15 @@ export class WorkerDispatcher
             const wecomChannelIds: string[] = [];
             for (const b of bindings) {
               try {
-                const c = await (this.prisma as unknown as { messageChannel: { findUnique: (q: unknown) => Promise<{ id: string; type: string } | null> } }).messageChannel.findUnique({
+                const c = await (
+                  this.prisma as unknown as {
+                    messageChannel: {
+                      findUnique: (
+                        q: unknown,
+                      ) => Promise<{ id: string; type: string } | null>;
+                    };
+                  }
+                ).messageChannel.findUnique({
                   where: { id: b.messageChannelId },
                   select: { id: true, type: true },
                 });
@@ -2234,76 +1709,156 @@ export class WorkerDispatcher
               `wecom bridge: taskId=${payload.taskId}, bindings=${bindings.length}, found wecom channels=${wecomChannelsCount}`,
             );
             if (bindings.length === 0) {
-              this.logger.warn(`wecom bridge: no bindings for taskId=${payload.taskId}`);
+              this.logger.warn(
+                `wecom bridge: no bindings for taskId=${payload.taskId}`,
+              );
             } else if (wecomChannelsCount === 0) {
-              this.logger.warn(`wecom bridge: no wecom channels among bindings taskId=${payload.taskId} bindings=${JSON.stringify(bindings.map((b) => b.messageChannelId))}`);
+              this.logger.warn(
+                `wecom bridge: no wecom channels among bindings taskId=${payload.taskId} bindings=${JSON.stringify(bindings.map((b) => b.messageChannelId))}`,
+              );
             }
             const wecomMirroredIds = new Set<string>();
             for (const b of bindings) {
               try {
-                const ch = await (this.prisma as unknown as { messageChannel: { findUnique: (q: unknown) => Promise<{ id: string; type: string; config?: unknown } | null> } }).messageChannel.findUnique({
+                const ch = await (
+                  this.prisma as unknown as {
+                    messageChannel: {
+                      findUnique: (q: unknown) => Promise<{
+                        id: string;
+                        type: string;
+                        config?: unknown;
+                      } | null>;
+                    };
+                  }
+                ).messageChannel.findUnique({
                   where: { id: b.messageChannelId },
                 });
                 if (!ch) {
-                  this.logger.warn(`wecom bridge: channel not found bindingsId=${b.messageChannelId} taskId=${payload.taskId}`);
+                  this.logger.warn(
+                    `wecom bridge: channel not found bindingsId=${b.messageChannelId} taskId=${payload.taskId}`,
+                  );
                   continue;
                 }
                 if (ch.type !== 'wecom_aibot') {
-                  this.logger.log(`wecom bridge: skip non-wecom channel ${ch.id} type=${ch.type}`);
+                  this.logger.log(
+                    `wecom bridge: skip non-wecom channel ${ch.id} type=${ch.type}`,
+                  );
                   continue;
                 }
-                const groupChatChannel = await (this.prisma as unknown as { chatChannel: { findFirst: (q: unknown) => Promise<{ id: string } | null> } }).chatChannel.findFirst({
-                  where: { taskId: payload.taskId, type: CHANNEL_TYPE.task_group },
+                const groupChatChannel = await (
+                  this.prisma as unknown as {
+                    chatChannel: {
+                      findFirst: (q: unknown) => Promise<{ id: string } | null>;
+                    };
+                  }
+                ).chatChannel.findFirst({
+                  where: {
+                    taskId: payload.taskId,
+                    type: CHANNEL_TYPE.task_group,
+                  },
                   select: { id: true },
                 });
                 if (!groupChatChannel) {
-                  this.logger.warn(`wecom bridge: no groupChannel for taskId=${payload.taskId}`);
+                  this.logger.warn(
+                    `wecom bridge: no groupChannel for taskId=${payload.taskId}`,
+                  );
                   continue;
                 }
-                const externalMsg = await (this.prisma as unknown as { message: { findFirst: (q: unknown) => Promise<{ id: string; content?: unknown } | null> } }).message.findFirst({
-                  where: { channelId: groupChatChannel.id, senderType: SENDER_TYPE.external },
+                const externalMsg = await (
+                  this.prisma as unknown as {
+                    message: {
+                      findFirst: (
+                        q: unknown,
+                      ) => Promise<{ id: string; content?: unknown } | null>;
+                    };
+                  }
+                ).message.findFirst({
+                  where: {
+                    channelId: groupChatChannel.id,
+                    senderType: SENDER_TYPE.external,
+                  },
                   orderBy: { createdAt: 'desc' },
                 });
-                const extContent = (externalMsg as unknown as { content?: { text?: string } })?.content;
-                const extTextLen = typeof extContent?.text === 'string' ? extContent.text.length : (extContent as unknown as string | undefined)?.length ?? 0;
+                const extContent = (
+                  externalMsg as unknown as { content?: { text?: string } }
+                )?.content;
+                const extTextLen =
+                  typeof extContent?.text === 'string'
+                    ? extContent.text.length
+                    : ((extContent as unknown as string | undefined)?.length ??
+                      0);
                 this.logger.log(
                   `wecom bridge: externalMsg id=${(externalMsg as unknown as { id?: string })?.id ?? 'null'} textLen=${extTextLen} groupChannelId=${groupChatChannel.id}`,
                 );
                 if (!externalMsg) {
-                  this.logger.warn(`wecom bridge: externalMsg not found groupChannelId=${groupChatChannel.id} taskId=${payload.taskId}`);
+                  this.logger.warn(
+                    `wecom bridge: externalMsg not found groupChannelId=${groupChatChannel.id} taskId=${payload.taskId}`,
+                  );
                   continue;
                 }
                 let ok = false;
-                let adapter: {
-                  finishStream?: (a: string, b: string) => Promise<boolean>;
-                  sendFallbackMessage?: (a: string, b: string) => Promise<boolean>;
-                  getStream?: (a: string) => { fromUserId?: string; fromUserName?: string; chattype?: string } | undefined;
-                  getPendingUser?: (a: string) => { fromUserId?: string; fromUserName?: string; chattype?: string } | undefined;
-                  type?: string;
-                } | undefined;
+                let adapter:
+                  | {
+                      finishStream?: (a: string, b: string) => Promise<boolean>;
+                      sendFallbackMessage?: (
+                        a: string,
+                        b: string,
+                      ) => Promise<boolean>;
+                      getStream?: (a: string) =>
+                        | {
+                            fromUserId?: string;
+                            fromUserName?: string;
+                            chattype?: string;
+                          }
+                        | undefined;
+                      getPendingUser?: (a: string) =>
+                        | {
+                            fromUserId?: string;
+                            fromUserName?: string;
+                            chattype?: string;
+                          }
+                        | undefined;
+                      type?: string;
+                    }
+                  | undefined;
                 try {
-                  adapter = this.moduleRef?.get(WecomAibotAdapter, { strict: false }) as unknown as typeof adapter;
+                  adapter = this.moduleRef?.get(WecomAibotAdapter, {
+                    strict: false,
+                  }) as unknown as typeof adapter;
                 } catch {}
                 if (!adapter) {
                   try {
                     const g = globalThis as unknown as Record<string, unknown>;
-                    adapter = (g['__wecomAdapter'] as typeof adapter) ?? undefined;
+                    adapter =
+                      (g['__wecomAdapter'] as typeof adapter) ?? undefined;
                   } catch {}
                 }
                 if (!adapter) {
-                  this.logger.warn(`wecom bridge: no wecom adapter taskId=${payload.taskId} (lazy ModuleRef miss, will skip finishStream)`);
+                  this.logger.warn(
+                    `wecom bridge: no wecom adapter taskId=${payload.taskId} (lazy ModuleRef miss, will skip finishStream)`,
+                  );
                 } else if (typeof adapter.finishStream !== 'function') {
-                  this.logger.warn(`wecom bridge: adapter missing finishStream taskId=${payload.taskId} adapterType=${(adapter as unknown as { type?: string }).type}`);
+                  this.logger.warn(
+                    `wecom bridge: adapter missing finishStream taskId=${payload.taskId} adapterType=${(adapter as unknown as { type?: string }).type}`,
+                  );
                 }
                 let directedWecomText = textToSend;
                 let mirrorText = textToSend;
-                let pendingInfo: { fromUserId?: string; fromUserName?: string; chattype?: string } | undefined;
+                let pendingInfo:
+                  | {
+                      fromUserId?: string;
+                      fromUserName?: string;
+                      chattype?: string;
+                    }
+                  | undefined;
                 let pendingFromCard = false;
                 if (adapter) {
                   // PRIORITY: card operator check first — post-card must NOT fall through to finishStream
                   // even if streams map still contains the placeholder (which it always does before discard)
                   try {
-                    const cardOp = (adapter as any).getPendingOperatorForTask?.(payload.taskId);
+                    const cardOp = (adapter as any).getPendingOperatorForTask?.(
+                      payload.taskId,
+                    );
                     if (cardOp) {
                       pendingInfo = cardOp;
                       pendingFromCard = true;
@@ -2317,12 +1872,18 @@ export class WorkerDispatcher
                       pendingInfo =
                         (adapter as any).getStream?.(externalMsg.id) ??
                         (adapter as any).getPendingUser?.(externalMsg.id);
-                      if (!pendingInfo && typeof (adapter as any).getPendingUser === 'function') {
-                        pendingInfo = (adapter as any).getPendingUser(externalMsg.id);
+                      if (
+                        !pendingInfo &&
+                        typeof (adapter as any).getPendingUser === 'function'
+                      ) {
+                        pendingInfo = (adapter as any).getPendingUser(
+                          externalMsg.id,
+                        );
                       }
                     } catch {}
                   }
-                  const fromName = pendingInfo?.fromUserName || pendingInfo?.fromUserId || '';
+                  const fromName =
+                    pendingInfo?.fromUserName || pendingInfo?.fromUserId || '';
                   const chattype = pendingInfo?.chattype ?? null;
                   if (fromName) {
                     if (chattype === 'group') {
@@ -2331,78 +1892,164 @@ export class WorkerDispatcher
                     mirrorText = `@${fromName} ${textToSend}`;
                   }
                   if (pendingInfo) {
-                    this.logger.log(`wecom bridge: pending chattype=${chattype} fromName=${fromName} directedWecomLen=${directedWecomText.length} fromCard=${pendingFromCard}`);
+                    this.logger.log(
+                      `wecom bridge: pending chattype=${chattype} fromName=${fromName} directedWecomLen=${directedWecomText.length} fromCard=${pendingFromCard}`,
+                    );
                   }
                   if (pendingFromCard) {
                     try {
-                      (adapter as any).consumePendingOperatorForTask?.(payload.taskId);
-                      this.logger.log(`wecom bridge: consumed pending operator for taskId=${payload.taskId}`);
+                      (adapter as any).consumePendingOperatorForTask?.(
+                        payload.taskId,
+                      );
+                      this.logger.log(
+                        `wecom bridge: consumed pending operator for taskId=${payload.taskId}`,
+                      );
                     } catch {}
                   }
                 }
                 if (pendingFromCard) {
-                  this.logger.log(`wecom post-card: discardStream + sendNewMessage taskId=${payload.taskId} internalMessageId=${externalMsg.id}`);
+                  this.logger.log(
+                    `wecom post-card: discardStream + sendNewMessage taskId=${payload.taskId} internalMessageId=${externalMsg.id}`,
+                  );
                   try {
-                    if (typeof (adapter as unknown as { discardStream?: unknown }).discardStream === 'function') {
-                      (adapter as unknown as { discardStream: (a: string) => boolean }).discardStream(externalMsg.id);
-                      this.logger.log(`wecom bridge: post-card discarded placeholder stream internalMessageId=${externalMsg.id} taskId=${payload.taskId}`);
+                    if (
+                      typeof (adapter as unknown as { discardStream?: unknown })
+                        .discardStream === 'function'
+                    ) {
+                      (
+                        adapter as unknown as {
+                          discardStream: (a: string) => boolean;
+                        }
+                      ).discardStream(externalMsg.id);
+                      this.logger.log(
+                        `wecom bridge: post-card discarded placeholder stream internalMessageId=${externalMsg.id} taskId=${payload.taskId}`,
+                      );
                     }
                   } catch {}
                   try {
                     const pcAdapter: any = adapter;
-                    const canNew = pcAdapter && typeof pcAdapter.sendNewMessage === 'function';
-                    const canFallback = pcAdapter && typeof pcAdapter.sendFallbackMessage === 'function';
+                    const canNew =
+                      pcAdapter &&
+                      typeof pcAdapter.sendNewMessage === 'function';
+                    const canFallback =
+                      pcAdapter &&
+                      typeof pcAdapter.sendFallbackMessage === 'function';
                     if (canNew) {
-                      this.logger.log(`wecom bridge: post-card sendNewMessage called channelId=${ch.id} textLen=${directedWecomText.length}`);
-                      const sendOk = await pcAdapter.sendNewMessage(ch.id, directedWecomText);
-                      this.logger.log(`wecom bridge: post-card sendNewMessage result=${sendOk} channelId=${ch.id}`);
+                      this.logger.log(
+                        `wecom bridge: post-card sendNewMessage called channelId=${ch.id} textLen=${directedWecomText.length}`,
+                      );
+                      const sendOk = await pcAdapter.sendNewMessage(
+                        ch.id,
+                        directedWecomText,
+                      );
+                      this.logger.log(
+                        `wecom bridge: post-card sendNewMessage result=${sendOk} channelId=${ch.id}`,
+                      );
                       ok = !!sendOk;
-                      if (!ok) this.logger.warn(`wecom post-card sendNewMessage failed channel ${ch.id}`);
+                      if (!ok)
+                        this.logger.warn(
+                          `wecom post-card sendNewMessage failed channel ${ch.id}`,
+                        );
                     } else if (canFallback) {
-                      this.logger.log(`wecom bridge: post-card fallback sendMessage called channelId=${ch.id} textLen=${directedWecomText.length}`);
-                      const fbOk = await pcAdapter.sendFallbackMessage(ch.id, directedWecomText);
-                      this.logger.log(`wecom bridge: post-card fallback result=${fbOk} channelId=${ch.id}`);
+                      this.logger.log(
+                        `wecom bridge: post-card fallback sendMessage called channelId=${ch.id} textLen=${directedWecomText.length}`,
+                      );
+                      const fbOk = await pcAdapter.sendFallbackMessage(
+                        ch.id,
+                        directedWecomText,
+                      );
+                      this.logger.log(
+                        `wecom bridge: post-card fallback result=${fbOk} channelId=${ch.id}`,
+                      );
                       ok = !!fbOk;
                     } else {
-                      this.logger.warn(`wecom bridge: post-card no send method for ${externalMsg.id}`);
+                      this.logger.warn(
+                        `wecom bridge: post-card no send method for ${externalMsg.id}`,
+                      );
                     }
                   } catch (e) {
-                    this.logger.warn(`wecom post-card send failed for ${externalMsg.id}: ${(e as Error).message}`);
+                    this.logger.warn(
+                      `wecom post-card send failed for ${externalMsg.id}: ${(e as Error).message}`,
+                    );
                   }
-                  if (ok) this.logger.log(`wecom post-card new message ok internalMessageId=${externalMsg.id} taskId=${payload.taskId}`);
+                  if (ok)
+                    this.logger.log(
+                      `wecom post-card new message ok internalMessageId=${externalMsg.id} taskId=${payload.taskId}`,
+                    );
                 } else {
-                  this.logger.log(`wecom simple: finishStream taskId=${payload.taskId} internalMessageId=${externalMsg.id}`);
+                  this.logger.log(
+                    `wecom simple: finishStream taskId=${payload.taskId} internalMessageId=${externalMsg.id}`,
+                  );
                   if (adapter && typeof adapter.finishStream === 'function') {
                     try {
-                      this.logger.log(`wecom bridge: finishStream called with internalMessageId=${externalMsg.id} textLen=${directedWecomText.length} channelId=${ch.id}`);
-                      ok = await adapter.finishStream(externalMsg.id, directedWecomText);
-                      this.logger.log(`wecom bridge: finishStream called with internalMessageId=${externalMsg.id} result=${ok}`);
+                      this.logger.log(
+                        `wecom bridge: finishStream called with internalMessageId=${externalMsg.id} textLen=${directedWecomText.length} channelId=${ch.id}`,
+                      );
+                      ok = await adapter.finishStream(
+                        externalMsg.id,
+                        directedWecomText,
+                      );
+                      this.logger.log(
+                        `wecom bridge: finishStream called with internalMessageId=${externalMsg.id} result=${ok}`,
+                      );
                     } catch (e) {
-                      this.logger.warn(`wecom finishStream error for ${externalMsg.id}: ${(e as Error).message}`);
+                      this.logger.warn(
+                        `wecom finishStream error for ${externalMsg.id}: ${(e as Error).message}`,
+                      );
                     }
                   }
                   if (ok) {
-                    this.logger.log(`wecom finishStream ok internalMessageId=${externalMsg.id} taskId=${payload.taskId}`);
+                    this.logger.log(
+                      `wecom finishStream ok internalMessageId=${externalMsg.id} taskId=${payload.taskId}`,
+                    );
                   } else {
-                    this.logger.warn(`wecom finishStream miss for ${externalMsg.id}, try fallback sendMessage channelId=${ch.id} textLen=${directedWecomText.length}`);
+                    this.logger.warn(
+                      `wecom finishStream miss for ${externalMsg.id}, try fallback sendMessage channelId=${ch.id} textLen=${directedWecomText.length}`,
+                    );
                     try {
                       const fallbackAdapter = adapter;
-                      if (fallbackAdapter && typeof (fallbackAdapter as unknown as { sendFallbackMessage?: unknown }).sendFallbackMessage === 'function') {
-                        this.logger.log(`wecom bridge: fallback sendMessage called channelId=${ch.id} textLen=${directedWecomText.length}`);
-                        const fbOk = await (fallbackAdapter as unknown as { sendFallbackMessage: (a: string, b: string) => Promise<boolean> }).sendFallbackMessage(ch.id, directedWecomText);
-                        this.logger.log(`wecom bridge: fallback sendMessage result=${fbOk} channelId=${ch.id}`);
+                      if (
+                        fallbackAdapter &&
+                        typeof (
+                          fallbackAdapter as unknown as {
+                            sendFallbackMessage?: unknown;
+                          }
+                        ).sendFallbackMessage === 'function'
+                      ) {
+                        this.logger.log(
+                          `wecom bridge: fallback sendMessage called channelId=${ch.id} textLen=${directedWecomText.length}`,
+                        );
+                        const fbOk = await (
+                          fallbackAdapter as unknown as {
+                            sendFallbackMessage: (
+                              a: string,
+                              b: string,
+                            ) => Promise<boolean>;
+                          }
+                        ).sendFallbackMessage(ch.id, directedWecomText);
+                        this.logger.log(
+                          `wecom bridge: fallback sendMessage result=${fbOk} channelId=${ch.id}`,
+                        );
                         if (!fbOk) {
-                          this.logger.warn(`wecom fallback sendMessage also failed for channel ${ch.id}`);
+                          this.logger.warn(
+                            `wecom fallback sendMessage also failed for channel ${ch.id}`,
+                          );
                         } else {
                           ok = true;
                         }
                       } else if (fallbackAdapter) {
-                        this.logger.warn(`wecom finishStream miss for ${externalMsg.id}, fallback not implemented`);
+                        this.logger.warn(
+                          `wecom finishStream miss for ${externalMsg.id}, fallback not implemented`,
+                        );
                       } else {
-                        this.logger.warn(`wecom bridge: fallback skipped no adapter for channel ${ch.id}`);
+                        this.logger.warn(
+                          `wecom bridge: fallback skipped no adapter for channel ${ch.id}`,
+                        );
                       }
                     } catch (fbErr) {
-                      this.logger.warn(`wecom fallback failed: ${(fbErr as Error).message}`);
+                      this.logger.warn(
+                        `wecom fallback failed: ${(fbErr as Error).message}`,
+                      );
                     }
                   }
                 }
@@ -2413,35 +2060,65 @@ export class WorkerDispatcher
 
                     let skipMirror = false;
                     try {
-                      const recent = await (this.prisma as unknown as {
-                        message: { findFirst: (q: unknown) => Promise<{ id: string; content?: unknown; createdAt: Date } | null> };
-                      }).message.findFirst({
-                        where: { channelId: groupChatChannel.id, senderType: SENDER_TYPE.agent },
+                      const recent = await (
+                        this.prisma as unknown as {
+                          message: {
+                            findFirst: (q: unknown) => Promise<{
+                              id: string;
+                              content?: unknown;
+                              createdAt: Date;
+                            } | null>;
+                          };
+                        }
+                      ).message.findFirst({
+                        where: {
+                          channelId: groupChatChannel.id,
+                          senderType: SENDER_TYPE.agent,
+                        },
                         orderBy: { createdAt: 'desc' },
                       });
                       if (recent) {
-                        const recentText = (recent.content as unknown as { text?: string })?.text ?? '';
+                        const recentText =
+                          (recent.content as unknown as { text?: string })
+                            ?.text ?? '';
                         const normMirror = mirrorText.trim();
                         const normRecent = String(recentText).trim();
-                        const ageMs = Date.now() - new Date(recent.createdAt).getTime();
+                        const ageMs =
+                          Date.now() - new Date(recent.createdAt).getTime();
                         // Hard dedup: any agent mirror within 120s suppresses second mirror (wecom_reply already updated placeholder)
                         if (ageMs < 120_000) {
                           // Strong match first (logs reason), else unconditional suppress for wecom tasks
-                          if (normRecent === normMirror || normMirror.includes(normRecent) || normRecent.includes(textToSend.trim().slice(0, 80))) {
+                          if (
+                            normRecent === normMirror ||
+                            normMirror.includes(normRecent) ||
+                            normRecent.includes(textToSend.trim().slice(0, 80))
+                          ) {
                             skipMirror = true;
-                            this.logger.log(`wecom bridge: dedup skip mirror taskId=${payload.taskId} recentId=${recent.id} ageMs=${ageMs} reason=textMatch`);
+                            this.logger.log(
+                              `wecom bridge: dedup skip mirror taskId=${payload.taskId} recentId=${recent.id} ageMs=${ageMs} reason=textMatch`,
+                            );
                           } else if (normRecent.length > 0) {
                             skipMirror = true;
-                            this.logger.log(`wecom bridge: dedup skip mirror taskId=${payload.taskId} recentId=${recent.id} ageMs=${ageMs} reason=cooldown120s`);
+                            this.logger.log(
+                              `wecom bridge: dedup skip mirror taskId=${payload.taskId} recentId=${recent.id} ageMs=${ageMs} reason=cooldown120s`,
+                            );
                           } else {
                             skipMirror = true;
-                            this.logger.log(`wecom bridge: dedup skip mirror taskId=${payload.taskId} recentId=${recent.id} ageMs=${ageMs} reason=anyRecent120s`);
+                            this.logger.log(
+                              `wecom bridge: dedup skip mirror taskId=${payload.taskId} recentId=${recent.id} ageMs=${ageMs} reason=anyRecent120s`,
+                            );
                           }
                         }
-                        if (!skipMirror && textToSend.trim() && normMirror.includes(textToSend.trim().slice(0, 80))) {
+                        if (
+                          !skipMirror &&
+                          textToSend.trim() &&
+                          normMirror.includes(textToSend.trim().slice(0, 80))
+                        ) {
                           if (ageMs < 120_000 && normRecent.length > 0) {
                             skipMirror = true;
-                            this.logger.log(`wecom bridge: dedup skip mirror by final text equality taskId=${payload.taskId}`);
+                            this.logger.log(
+                              `wecom bridge: dedup skip mirror by final text equality taskId=${payload.taskId}`,
+                            );
                           }
                         }
                       }
@@ -2449,9 +2126,12 @@ export class WorkerDispatcher
                     if (skipMirror) {
                     } else {
                       const prismaAny2 = this.prisma as unknown as {
-                        message: { create: (q: unknown) => Promise<{ id: string }> };
+                        message: {
+                          create: (q: unknown) => Promise<{ id: string }>;
+                        };
                       };
-                      const mirrorId = await this.idGen.nextId(MESSAGE_ID_PREFIX);
+                      const mirrorId =
+                        await this.idGen.nextId(MESSAGE_ID_PREFIX);
                       const mirrorMsg = await prismaAny2.message.create({
                         data: {
                           id: mirrorId,
@@ -2460,30 +2140,45 @@ export class WorkerDispatcher
                           senderType: SENDER_TYPE.agent,
                           senderId: agentId,
                           senderInstanceId: executionRef ?? null,
-                          content: { text: mirrorText, parts: finalParts } as unknown as Prisma.InputJsonValue,
+                          content: {
+                            text: mirrorText,
+                            parts: finalParts,
+                          } as unknown as Prisma.InputJsonValue,
                           mentions: null,
                           status: MESSAGE_STATUS.sent,
                         } as any,
                       });
                       await this.realtime.broadcast(
                         EVENT_TYPES.CHAT_MESSAGE_NEW,
-                        { message: this.toMessageDto(mirrorMsg as unknown as MessageRow) },
+                        {
+                          message: this.toMessageDto(
+                            mirrorMsg as unknown as MessageRow,
+                          ),
+                        },
                         { type: 'channel', id: groupChatChannel.id },
                       );
-                      this.logger.log(`wecom bridge: mirrored to task_group channel=${groupChatChannel.id} mirrorId=${mirrorId} textLen=${mirrorText.length}`);
+                      this.logger.log(
+                        `wecom bridge: mirrored to task_group channel=${groupChatChannel.id} mirrorId=${mirrorId} textLen=${mirrorText.length}`,
+                      );
                     }
                   }
                 } catch (mirrorErr) {
-                  this.logger.warn(`wecom bridge: mirror to task_group failed: ${(mirrorErr as Error).message}`);
+                  this.logger.warn(
+                    `wecom bridge: mirror to task_group failed: ${(mirrorErr as Error).message}`,
+                  );
                 }
               } catch (innerErr) {
-                this.logger.warn(`wecom per-channel handling failed: ${(innerErr as Error).message}`);
+                this.logger.warn(
+                  `wecom per-channel handling failed: ${(innerErr as Error).message}`,
+                );
               }
             }
           }
         }
       } else {
-        this.logger.warn(`wecom bridge: skip no taskId payload=${JSON.stringify(payload)}`);
+        this.logger.warn(
+          `wecom bridge: skip no taskId payload=${JSON.stringify(payload)}`,
+        );
       }
     } catch (e) {
       this.logger.warn(`wecom bridge failed: ${(e as Error).message}`);
@@ -2564,48 +2259,76 @@ export class WorkerDispatcher
     // 群聊回复只经 MCP group_post 工具直发（工具 handler 已落库群聊并广播）——
     // 不再做任何兜底转发（文本声明/群聊触发兜底转发完整回复均移除）：私聊正文
     // 独白留在 private 会话频道，群聊不展示私聊内容（曾致群聊每人 3 条）。
-    void groupPost;
   }
 
   /**
-   * team-mode task.completed 回流（无任务）：平台 session 反查 (teamId,
-   * teamMemberId) → 私聊优先/team_group 回退频道落库（taskId 置空）+ emitFinal；
-   * 执行注销/watchdog/事件键走 `team:<teamId>` 作用域。产出物归档跳过（Artifact 需 taskId）。
+   * task.completed 回流团队唯一实现（Todo 7）：团队归属解析 → 频道定位 →
+   * 落库（senderType=agent）→ 广播 chat.message.new + emitFinal。
+   * - 归属解析 team-only：sessionId → 团队会话直查 (teamId, teamMemberId)；
+   *   无 session 时经任务归属反查团队 + agent 反查成员（兜底不断流）；
+   *   任务只作归因数据（message.taskId 照写），不参与会话/频道定位。
+   * - 执行注销/watchdog/事件键走 `team:<teamId>` 作用域；emitFinal taskId 承载
+   *   scope 串兼容前端。产出物归档由调用方按归因 taskId 执行（Artifact 需 taskId）。
    */
   private async handleTeamTaskCompleted(
     payload: TaskCompletedPayload,
-    platformSessionId: string,
-  ): Promise<void> {
-    if (this.completedSessions.has(platformSessionId)) {
-      this.logger.debug(`session ${platformSessionId} 已落库，跳过重复回流`);
-      return;
+  ): Promise<{
+    agentId: string | null;
+    teamMemberId: string | null;
+    text: string;
+    displayText: string;
+    finalParts: Array<Record<string, unknown>>;
+  }> {
+    const { taskId, sessionId } = payload;
+    let teamId: string | null = null;
+    let teamMemberId: string | null = null;
+    let agentId: string | null = payload.agentId ?? null;
+    if (sessionId) {
+      const session = await (this.prisma as any).session.findUnique({
+        where: { id: sessionId },
+        select: { agentId: true, teamId: true, teamMemberId: true },
+      });
+      agentId = agentId ?? session?.agentId ?? null;
+      teamId = session?.teamId ?? null;
+      teamMemberId = session?.teamMemberId ?? null;
+    } else if (taskId && agentId) {
+      const task = await (this.prisma as any).task.findUnique({
+        where: { id: taskId },
+        select: { teamId: true },
+      });
+      teamId = task?.teamId ?? null;
+      if (teamId) {
+        const member = await (this.prisma as any).teamMember?.findFirst?.({
+          where: { teamId, agentId },
+          select: { id: true },
+        });
+        teamMemberId = member?.id ?? null;
+      }
     }
-    if (this.failedSessions.has(platformSessionId)) {
-      this.logger.warn(
-        `session ${platformSessionId} 已超时失败，迟到回流跳过落库`,
-      );
-      return;
-    }
-    const session = await (this.prisma as any).session.findUnique({
-      where: { id: platformSessionId },
-      select: { agentId: true, teamId: true, teamMemberId: true },
-    });
-    const teamId: string | null = session?.teamId ?? null;
-    const teamMemberId: string | null = session?.teamMemberId ?? null;
-    const agentId: string | null =
-      payload.agentId ?? session?.agentId ?? null;
+    const text = payload.text ?? '';
+    const unsettled = {
+      agentId,
+      teamMemberId,
+      text,
+      displayText: text,
+      finalParts: [] as Array<Record<string, unknown>>,
+    };
     if (!teamId || !teamMemberId || !agentId) {
       this.logger.error(
-        `team task.completed 无法定位团队会话（session=${platformSessionId}），跳过回复落库`,
+        `team task.completed 无法定位团队会话（session=${sessionId ?? '-'}），跳过回复落库`,
       );
-      return;
+      this.emitError({
+        taskId: taskId ?? 'unknown',
+        agentId: agentId ?? 'unknown',
+        error: '回复回流失败：无法定位目标频道',
+      });
+      return unsettled;
     }
     const scope = toExecutionScope(null, teamId);
     if (typeof payload.workerId === 'string' && payload.workerId) {
       this.unregisterExecution(payload.workerId, scope, teamMemberId);
     }
     this.clearPendingWatchdog(scope, agentId);
-    const text = payload.text ?? '';
     const channel = await this.resolveTeamChannel(teamId, teamMemberId);
     if (!channel) {
       this.logger.error(
@@ -2616,20 +2339,32 @@ export class WorkerDispatcher
         agentId,
         error: '回复回流失败：无法定位目标频道',
       });
-      return;
+      return unsettled;
     }
-    // team_group 回退时正文独白不落群聊（结论经 group_post 工具直发），仅收尾事件
-    if (channel.type === CHANNEL_TYPE.team_group) {
-      this.completedSessions.add(platformSessionId);
+    // 群聊回退（team_group；存量 task_group 防御）时正文独白不落群聊（结论经
+    // group_post 工具直发），仅幂等标记 + emitFinal 收尾
+    if (
+      channel.type === CHANNEL_TYPE.team_group ||
+      channel.type === CHANNEL_TYPE.task_group
+    ) {
+      if (sessionId) {
+        this.completedSessions.add(sessionId);
+      }
       this.emitFinal({ taskId: scope, agentId, messageId: '', text });
-      return;
+      return unsettled;
     }
+    // 私聊独白落库：group_post 声明剥离（协议标签不入独白）；parts 全量保留
+    // （reasoning/tool 前端折叠展示）；流式 processing 消息终态化为 sent 防双消息
+    const rawParts = Array.isArray(payload.parts) ? payload.parts : [];
+    const finalParts = normalizeParts(rawParts);
+    const groupPost = extractGroupPost(text);
+    const displayText =
+      groupPost !== null ? stripGroupPostDeclarations(text) : text;
+    const finalContent = {
+      text: displayText,
+      parts: finalParts,
+    } as Prisma.InputJsonValue;
     try {
-      const rawParts = Array.isArray(payload.parts) ? payload.parts : [];
-      const finalContent = {
-        text,
-        parts: normalizeParts(rawParts),
-      } as Prisma.InputJsonValue;
       const processingRow = await this.prisma.message.findFirst({
         where: {
           channelId: channel.id,
@@ -2643,13 +2378,17 @@ export class WorkerDispatcher
       const message = processingRow
         ? await this.prisma.message.update({
             where: { id: processingRow.id },
-            data: { content: finalContent, status: MESSAGE_STATUS.sent } as any,
+            data: {
+              content: finalContent,
+              status: MESSAGE_STATUS.sent,
+              taskId: taskId ?? null,
+            } as any,
           })
         : await this.prisma.message.create({
             data: {
               id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
               channelId: channel.id,
-              taskId: null,
+              taskId: taskId ?? null,
               senderType: SENDER_TYPE.agent,
               senderId: agentId,
               senderInstanceId: teamMemberId,
@@ -2658,7 +2397,14 @@ export class WorkerDispatcher
               status: MESSAGE_STATUS.sent,
             } as any,
           });
-      this.completedSessions.add(platformSessionId);
+      if (processingRow) {
+        this.logger.log(
+          `agent ${agentId} 流式消息终态化 message=${processingRow.id} → sent`,
+        );
+      }
+      if (sessionId) {
+        this.completedSessions.add(sessionId);
+      }
       await this.realtime.broadcast(
         EVENT_TYPES.CHAT_MESSAGE_NEW,
         { message: this.toMessageDto(message) },
@@ -2668,7 +2414,7 @@ export class WorkerDispatcher
         taskId: scope,
         agentId,
         messageId: message.id,
-        text,
+        text: displayText,
       });
     } catch (err) {
       this.logger.error(
@@ -2680,7 +2426,9 @@ export class WorkerDispatcher
         agentId,
         error: `回复落库失败: ${this.describeError(err)}`,
       });
+      return { agentId, teamMemberId, text, displayText, finalParts };
     }
+    return { agentId, teamMemberId, text, displayText, finalParts };
   }
 
   /** P3：合并多来源产出物声明（worker 上送 + 回复文本提取），按声明形状去重防重复归档。 */
@@ -2710,75 +2458,47 @@ export class WorkerDispatcher
   }
 
   /**
-   * agent.status 回流处理（T9 ingress onAgentStatus 回调触发）：
+   * agent.status 回流处理（T9 ingress onAgentStatus 回调触发，Todo10 团队归一）：
    * 仅做 emitLoading/emitError 本地回调通知（对齐 MessageDispatcher 订阅契约，供
    * ChatService onLoading/onError 日志）；SSE 的 agent.loading/agent.error emit 已由
    * T9 ingress 完成（worker-event.ingress.ts handleAgentStatus），此处不重复广播防双写。
    * P4：错误分支额外落库 failed 消息（processing → failed + 错误内容广播）——
    * 修复首字超时/模型错误后消息永久卡 processing、用户无失败反馈的问题。
+   * team-only：有 session → 经会话反查 (teamId, teamMemberId)；无 session →
+   * 经任务归属 teamId + (teamId, agentId) 成员定位（任务仅归因透传，不参与键）；
+   * 维度不全 → 跳过（未知 channel 不抛错）。失败回流唯一走
+   * failTeamProcessingMessage → resolveTeamChannel。
    */
   async handleAgentStatus(payload: AgentStatusPayload): Promise<void> {
     const { taskId, agentId, sessionId } = payload;
-    // team-mode（无任务）：taskId 缺失但 session 可反查团队会话 → 团队路径
-    if (!taskId && sessionId) {
-      await this.handleTeamAgentStatus(payload, sessionId);
-      return;
-    }
-    if (!taskId || !agentId) {
-      return;
-    }
-    const isError =
-      payload.status === 'error' ||
-      (typeof payload.error === 'string' && payload.error.length > 0);
-    if (isError) {
-      if (sessionId) {
-        this.failedSessions.add(sessionId);
-      }
-      if (typeof payload.workerId === 'string' && payload.workerId) {
-        // T4 实例语义：注销按实例 id（sessionId 反查 taskAgentId；存量 NULL 回退 agentId）
-        let executionRef: string = agentId;
-        if (sessionId) {
-          const session = await this.prisma.session.findUnique({
-            where: { id: sessionId },
-            select: { taskAgentId: true },
-          });
-          executionRef = session?.taskAgentId ?? agentId;
-        }
-        this.unregisterExecution(payload.workerId, taskId, executionRef);
-      }
-      await this.failProcessingMessage(payload);
-      this.emitError({
-        taskId,
-        agentId,
-        error: payload.error ?? 'agent 处理失败',
+    let teamId: string | null = null;
+    let teamMemberId: string | null = null;
+    let resolvedAgentId: string | null = agentId ?? null;
+    let emitSessionId: string | null = null;
+    if (sessionId) {
+      const session = await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { teamId: true, teamMemberId: true, agentId: true },
       });
-    } else {
-      this.emitLoading({
-        taskId,
-        agentId,
-        sessionId: sessionId ?? null,
-        phase: payload.phase === 'thinking' ? 'thinking' : 'operating',
+      teamId = session?.teamId ?? null;
+      teamMemberId = session?.teamMemberId ?? null;
+      resolvedAgentId = resolvedAgentId ?? session?.agentId ?? null;
+      emitSessionId = sessionId;
+    } else if (taskId && agentId) {
+      const taskRow = await (this.prisma as any).task.findUnique({
+        where: { id: taskId },
+        select: { teamId: true },
       });
+      teamId = (taskRow as any)?.teamId ?? null;
+      if (teamId) {
+        const member = await (this.prisma as any).teamMember.findFirst({
+          where: { teamId, agentId },
+          select: { id: true },
+        });
+        teamMemberId = member?.id ?? null;
+      }
     }
-  }
-
-  /**
-   * team-mode agent.status 回流（无任务）：错误分支注销 team: 作用域执行 +
-   * 团队频道 processing 失败落库；非错误仅本地 emitLoading（SSE emit 归 ingress）。
-   */
-  private async handleTeamAgentStatus(
-    payload: AgentStatusPayload,
-    platformSessionId: string,
-  ): Promise<void> {
-    const session = await (this.prisma as any).session.findUnique({
-      where: { id: platformSessionId },
-      select: { agentId: true, teamId: true, teamMemberId: true },
-    });
-    const teamId: string | null = session?.teamId ?? null;
-    const teamMemberId: string | null = session?.teamMemberId ?? null;
-    const agentId: string | null =
-      payload.agentId ?? session?.agentId ?? null;
-    if (!teamId || !teamMemberId || !agentId) {
+    if (!teamId || !teamMemberId || !resolvedAgentId) {
       return;
     }
     const scope = toExecutionScope(null, teamId);
@@ -2786,26 +2506,28 @@ export class WorkerDispatcher
       payload.status === 'error' ||
       (typeof payload.error === 'string' && payload.error.length > 0);
     if (isError) {
-      this.failedSessions.add(platformSessionId);
+      if (emitSessionId) {
+        this.failedSessions.add(emitSessionId);
+      }
       if (typeof payload.workerId === 'string' && payload.workerId) {
         this.unregisterExecution(payload.workerId, scope, teamMemberId);
       }
       await this.failTeamProcessingMessage(
         teamId,
         teamMemberId,
-        agentId,
+        resolvedAgentId,
         payload.error?.trim() || 'agent 处理失败',
       );
       this.emitError({
         taskId: scope,
-        agentId,
+        agentId: resolvedAgentId,
         error: payload.error ?? 'agent 处理失败',
       });
     } else {
       this.emitLoading({
         taskId: scope,
-        agentId,
-        sessionId: platformSessionId,
+        agentId: resolvedAgentId,
+        sessionId: emitSessionId,
         phase: payload.phase === 'thinking' ? 'thinking' : 'operating',
       });
     }
@@ -2867,78 +2589,6 @@ export class WorkerDispatcher
     }
   }
 
-  /** P4：agent 失败回流 → 频道内该 agent 最新 processing 消息标记 failed + 错误内容广播
-   *  （无 processing 消息则新建 failed 消息），用户可见失败提示。落库/广播失败仅记日志。 */
-  private async failProcessingMessage(
-    payload: AgentStatusPayload,
-  ): Promise<void> {
-    const { taskId, agentId } = payload;
-    if (!taskId || !agentId) {
-      return;
-    }
-    try {
-      const errorText = payload.error?.trim() || 'agent 处理失败';
-      // F3 P1 修复：失败消息落库按实例精确匹配——sessionId 反查 taskAgentId
-      // （存量 NULL 回退 agentId 首实例；无需反查时 resolveChannel 内部兼容）。
-      let failTaskAgentId: string | undefined;
-      if (payload.sessionId) {
-        const session = await this.prisma.session.findUnique({
-          where: { id: payload.sessionId },
-          select: { taskAgentId: true },
-        });
-        failTaskAgentId = session?.taskAgentId ?? undefined;
-      }
-      const channel = await this.resolveChannel(
-        taskId,
-        agentId,
-        failTaskAgentId,
-      );
-      if (!channel) {
-        return;
-      }
-      const processingRow = await this.prisma.message.findFirst({
-        where: {
-          channelId: channel.id,
-          senderType: SENDER_TYPE.agent,
-          senderId: agentId,
-          status: MESSAGE_STATUS.processing,
-        },
-        orderBy: { createdAt: 'desc' },
-        select: { id: true },
-      });
-      const content = { text: errorText, parts: [] } as Prisma.InputJsonValue;
-      const message = processingRow
-        ? await this.prisma.message.update({
-            where: { id: processingRow.id },
-            data: { content, status: MESSAGE_STATUS.failed, taskId } as any,
-          })
-        : await this.prisma.message.create({
-            data: {
-              id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
-              channelId: channel.id,
-              taskId,
-              senderType: SENDER_TYPE.agent,
-              senderId: agentId,
-              content,
-              mentions: null,
-              status: MESSAGE_STATUS.failed,
-            } as any,
-          });
-      await this.realtime.broadcast(
-        EVENT_TYPES.CHAT_MESSAGE_NEW,
-        { message: this.toMessageDto(message) },
-        { type: 'channel', id: channel.id },
-      );
-      this.logger.warn(
-        `agent ${agentId} 处理失败，消息 ${message.id} 标记 failed：${errorText}`,
-      );
-    } catch (err) {
-      this.logger.error(
-        `agent ${agentId} 失败消息落库失败: ${this.describeError(err)}`,
-      );
-    }
-  }
-
   // ------------------------------------------------------------------
   // 私有工具
   // ------------------------------------------------------------------
@@ -2961,7 +2611,7 @@ export class WorkerDispatcher
     sessionId: string;
     /**
      * F4 消息来源频道（DispatchRequest.channelId 透传）：轮询回流时作为
-     * preferredChannelId 交 resolveChannel 群聊优先（用户实际触发的路径）。
+     * preferredChannelId（用户实际触发的路径，群聊优先）。
      */
     channelId?: string;
     startedAt?: number;
@@ -3100,7 +2750,7 @@ export class WorkerDispatcher
       taskId: params.taskId,
       agentId: params.agentId,
       sessionId: params.sessionId,
-      // F4 回流频道透传：消息来源频道随 payload 交 handleTaskCompleted → resolveChannel
+      // F4 回流频道透传：消息来源频道随 payload 交 handleTaskCompleted 落库团队频道
       channelId: params.channelId,
       text,
       parts: (messages as PollMessageShape[]).flatMap((m) => m.parts ?? []),
@@ -3239,60 +2889,6 @@ export class WorkerDispatcher
     return '系统';
   }
 
-  private async resolveChannel(
-    taskId: string,
-    agentId: string,
-    taskAgentId?: string,
-  ) {
-    const task = await (this.prisma as any).task.findUnique({
-      where: { id: taskId },
-      select: { teamId: true },
-    });
-    const teamId = task?.teamId ?? null;
-    if (teamId) {
-      if (taskAgentId) {
-        try {
-          const tm = await (this.prisma as any).teamMember?.findFirst?.({
-            where: { id: taskAgentId },
-            select: { id: true },
-          });
-          if (tm) {
-            const dmByTm = await this.prisma.chatChannel.findFirst({
-              where: { teamId, teamMemberId: taskAgentId },
-              select: { id: true, type: true },
-            });
-            if (dmByTm) return dmByTm;
-          }
-        } catch {}
-        const dm = await this.prisma.chatChannel.findFirst({
-          where: { taskId, taskAgentId },
-          select: { id: true, type: true },
-        });
-        if (dm) return dm;
-      } else {
-        const dm = await this.prisma.chatChannel.findFirst({
-          where: { teamId, agentId, type: CHANNEL_TYPE.private },
-          select: { id: true, type: true },
-        });
-        if (dm) return dm;
-      }
-      const group = await this.prisma.chatChannel.findFirst({
-        where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
-        select: { id: true, type: true },
-      });
-      if (group) return group;
-    }
-    const dmLegacy = await this.prisma.chatChannel.findFirst({
-      where: taskAgentId ? { taskId, taskAgentId } : { taskId, agentId },
-      select: { id: true, type: true },
-    });
-    if (dmLegacy) return dmLegacy;
-    return this.prisma.chatChannel.findFirst({
-      where: { taskId, type: CHANNEL_TYPE.task_group },
-      select: { id: true, type: true },
-    });
-  }
-
   private async forwardToGroup(
     taskId: string,
     agentId: string,
@@ -3418,11 +3014,11 @@ export class WorkerDispatcher
    * 判死）。OBS-009：poll 已快速失败（failedSessions 已标记）时跳过注册。
    */
   private startPendingWatchdog(
-    taskId: string,
+    scope: string,
     agentId: string,
     sessionId: string,
     workerId: string,
-    instanceId: string,
+    teamMemberId: string,
   ): void {
     if (this.firstTokenTimeoutMs <= 0) {
       return;
@@ -3430,7 +3026,7 @@ export class WorkerDispatcher
     if (this.failedSessions.has(sessionId)) {
       return;
     }
-    const key = `${taskId}:${agentId}`;
+    const key = `${scope}:${agentId}`;
     const existing = this.pending.get(key);
     if (existing) {
       clearTimeout(existing.timer);
@@ -3441,13 +3037,13 @@ export class WorkerDispatcher
       this.pendingBySession.delete(sessionId);
       // F2 MINOR：超时标记失败会话——迟到的回流（ingress/轮询）跳过落库仅记日志
       this.failedSessions.add(sessionId);
-      this.unregisterExecution(workerId, taskId, instanceId ?? agentId);
+      this.unregisterExecution(workerId, scope, teamMemberId);
       this.lastActivityAt.delete(sessionId);
       const error = `agent 无响应（${this.firstTokenTimeoutMs / 1000}s 无事件回流），请稍后重试或检查 worker 状态`;
       this.logger.error(`agent ${agentId} ${error}`);
-      this.emitError({ taskId, agentId, error });
+      this.emitError({ taskId: scope, agentId, error });
       void this.broadcastAgentError({
-        taskId,
+        taskId: scope,
         agentId,
         sessionId,
         level: 'retry',
@@ -3457,9 +3053,9 @@ export class WorkerDispatcher
     }, this.firstTokenTimeoutMs);
     timer.unref?.();
     this.pending.set(key, {
-      taskId,
+      scope,
       agentId,
-      instanceId,
+      instanceId: teamMemberId,
       sessionId,
       workerId,
       timer,
@@ -3550,10 +3146,11 @@ export class WorkerDispatcher
         select: {
           status: true,
           taskId: true,
+          teamId: true,
+          teamMemberId: true,
           agentId: true,
           workerId: true,
           instanceRef: true,
-          taskAgentId: true,
         },
       });
       if (!row) {
@@ -3595,15 +3192,19 @@ export class WorkerDispatcher
       });
       this.failedSessions.add(sessionId);
       this.lastActivityAt.delete(sessionId);
-      const taskId = row.taskId ?? '';
+      // Todo10 团队化：键/广播统一走团队 scope（任务仅归因透传给自动恢复门）。
+      const teamId = row.teamId ?? null;
+      const teamMemberId = row.teamMemberId ?? null;
       const agentId = row.agentId ?? '';
-      if (!taskId || !agentId) return;
+      if (!teamId || !teamMemberId || !agentId) return;
+      const scope = toExecutionScope(null, teamId);
+      const taskId = row.taskId ?? null;
       if (forensicsError && isQuotaError(forensicsType)) {
         const quotaMsg = `agent 额度不足已暂停（${forensicsError}），请补充额度或更换模型后重试`;
         this.logger.error(`session ${sessionId} ${quotaMsg}`);
-        this.emitError({ taskId, agentId, error: quotaMsg });
+        this.emitError({ taskId: scope, agentId, error: quotaMsg });
         void this.broadcastAgentError({
-          taskId,
+          taskId: scope,
           agentId,
           sessionId,
           level: 'message',
@@ -3615,40 +3216,32 @@ export class WorkerDispatcher
       if (forensicsError) {
         const transientMsg = `agent 意外中断（${forensicsError}），已自动重试`;
         this.logger.warn(`session ${sessionId} ${transientMsg}，尝试自动拉起`);
-        this.emitError({ taskId, agentId, error: transientMsg });
+        this.emitError({ taskId: scope, agentId, error: transientMsg });
         void this.broadcastAgentError({
-          taskId,
+          taskId: scope,
           agentId,
           sessionId,
           level: 'retry',
           errorType: forensicsType,
           message: transientMsg,
         });
-        void this.tryAutoRestart(
-          taskId,
-          row.taskAgentId ?? agentId,
-          sessionId,
-        ).catch((e) =>
+        void this.tryAutoRestart(teamId, teamMemberId, taskId).catch((e) =>
           this.logger.error(`自动拉起失败: ${this.describeError(e)}`),
         );
         return;
       }
       const idleMsg = `agent 长时间无活动（超过 ${this.agentIdleTimeoutMs / 60000}min），已判死`;
       this.logger.error(`session ${sessionId} ${idleMsg}`);
-      this.emitError({ taskId, agentId, error: idleMsg });
+      this.emitError({ taskId: scope, agentId, error: idleMsg });
       void this.broadcastAgentError({
-        taskId,
+        taskId: scope,
         agentId,
         sessionId,
         level: 'retry',
         errorType: 'agent_idle_timeout',
         message: idleMsg,
       });
-      void this.tryAutoRestart(
-        taskId,
-        row.taskAgentId ?? agentId,
-        sessionId,
-      ).catch((e) =>
+      void this.tryAutoRestart(teamId, teamMemberId, taskId).catch((e) =>
         this.logger.error(`自动拉起失败: ${this.describeError(e)}`),
       );
     } catch (err) {
@@ -3658,46 +3251,30 @@ export class WorkerDispatcher
     }
   }
 
+  /**
+   * 自动拉起（Todo10 团队化）：频道经 resolveTeamChannel 团队定位，目标为成员
+   * tmm_ 直调 dispatchAgentMention；任务仅归因（进度门 + prompt 上下文）。
+   * taskId 缺失（纯团队直聊）→ 失败已落库+广播，自动恢复需任务上下文，跳过；
+   * 任务非 in_progress → 跳过；未知 channel → 跳过不抛错。
+   */
   private async tryAutoRestart(
-    taskId: string,
-    targetRef: string,
-    sessionId: string,
+    teamId: string,
+    teamMemberId: string,
+    taskId: string | null,
   ): Promise<void> {
+    if (!taskId) return;
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { status: true, mainAgentInstanceId: true },
+      select: { status: true },
     });
     if (!task || task.status !== 'in_progress') return;
-    let targetInstanceId: string | null = null;
-    if (targetRef.startsWith('ta_')) {
-      targetInstanceId = targetRef;
-    } else {
-      const s = await this.prisma.session.findUnique({
-        where: { id: sessionId },
-        select: { taskAgentId: true },
-      });
-      targetInstanceId = s?.taskAgentId ?? null;
-    }
-    if (!targetInstanceId) return;
-    const channel =
-      (await this.prisma.chatChannel.findFirst({
-        where: {
-          taskId,
-          type: CHANNEL_TYPE.private,
-          taskAgentId: targetInstanceId,
-        },
-        select: { id: true },
-      })) ??
-      (await this.prisma.chatChannel.findFirst({
-        where: { taskId, type: CHANNEL_TYPE.task_group },
-        select: { id: true },
-      }));
+    const channel = await this.resolveTeamChannel(teamId, teamMemberId);
     if (!channel) return;
     await this.dispatchAgentMention({
       taskId,
       channelId: channel.id,
       text: '【自动恢复】检测到会话意外中断，已自动重试，请继续执行未完成的任务',
-      targetInstanceId,
+      targetInstanceId: teamMemberId,
     });
   }
 
@@ -3787,69 +3364,18 @@ export class WorkerDispatcher
   }
 
   /**
-   * is_0000000010：实例工作目录解析链——优先实例 task_agents.work_dir（创建任务时
-   * 指定或服务端默认 `/data/vteam-worker/<sanitize(name)>[-seq]`）；缺失（存量实例/异常）
-   * 回落 `/data/vteam-worker/<sanitize(agent.name)>-<seq>`（与 tasks.service 同根，防两处默认
-   * 路径分叉——PR 审核建议），最终任务级目录兜底。mkdir -p 保证存在；worker 执行端点
-   * 亦有兜底创建（server/worker 文件系统可能不共享，依赖 /data/vteam-worker 持久卷）。
-   * team-mode（taskId 为空 + teamId 传入）：直接返回 <根>/teams/<teamId>；task-mode 不变。
+   * 执行工作目录（任务隔离保留）：taskId 非空 → <根>/tasks/<taskId>（同任务
+   * 多成员共享任务目录，随任务 FIFO 流转）；taskId 为空 → <根>/teams/<teamId>
+   * （团队直聊回退）。mkdir -p 保证存在后返回。
    */
   private async resolveAgentWorkDir(
     taskId: string,
-    session: { taskAgentId: string | null },
-    target: { agentId: string; sessionId: string | null },
     teamId?: string | null,
   ): Promise<string> {
-    if (!taskId && teamId) {
-      return this.ensureTeamWorkDir(teamId);
-    }
-    if (session.taskAgentId) {
-      const ta = await this.prisma.taskAgent.findUnique({
-        where: { id: session.taskAgentId },
-        select: {
-          workDir: true,
-          seq: true,
-          agent: { select: { id: true, name: true } },
-        },
-      });
-      if (ta) {
-        const dir = ta.workDir?.trim();
-        if (dir) {
-          try {
-            await fs.mkdir(dir, { recursive: true });
-          } catch {}
-          return dir;
-        }
-        const agentDir = this.defaultAgentWorkDirPath(
-          ta.agent.name ?? ta.agent.id,
-          ta.seq,
-        );
-        try {
-          await fs.mkdir(agentDir, { recursive: true });
-        } catch {}
-        return agentDir;
-      }
-    }
-    // 实例行缺失（存量会话未绑实例）：agent 名称兜底 → 任务级兜底
-    const agentRow = await this.prisma.agent.findUnique({
-      where: { id: target.agentId },
-      select: { id: true, name: true },
-    });
-    if (agentRow) {
-      const dir = this.defaultAgentWorkDirPath(agentRow.name ?? agentRow.id, 1);
-      try {
-        await fs.mkdir(dir, { recursive: true });
-      } catch {}
-      return dir;
+    if (!taskId) {
+      return this.ensureTeamWorkDir(teamId ?? '');
     }
     return this.ensureTaskWorkDir(taskId);
-  }
-
-  /** is_0000000010：默认 agent 目录 `/data/vteam-worker/<sanitize(name)>[-seq]`（对齐
-   *  tasks.service defaultAgentWorkDir，统一根路径防存量实例调度/DTO 展示分叉）。 */
-  private defaultAgentWorkDirPath(name: string, seq: number): string {
-    const base = sanitizeWorkDirName(name ?? 'agent');
-    return `/data/vteam-worker/${seq > 1 ? `${base}-${seq}` : base}`;
   }
 
   /** 可进执行上下文的图片扩展名（对齐 web IMAGE_EXTS + uploads 白名单交集；非图片行为不变）。 */
@@ -3860,7 +3386,9 @@ export class WorkerDispatcher
     'gif',
   ]);
 
-  private static readonly IMAGE_ATTACHMENT_MIME: Readonly<Record<string, string>> = {
+  private static readonly IMAGE_ATTACHMENT_MIME: Readonly<
+    Record<string, string>
+  > = {
     png: 'image/png',
     jpg: 'image/jpeg',
     jpeg: 'image/jpeg',
@@ -3888,7 +3416,8 @@ export class WorkerDispatcher
       if (!url || !url.startsWith('/uploads/')) return null;
       const ext = (row?.attachmentType ?? '').toLowerCase();
       if (!WorkerDispatcher.IMAGE_ATTACHMENT_EXTS.has(ext)) return null;
-      const filename = row?.attachmentName?.trim() || url.split('/').pop() || 'image';
+      const filename =
+        row?.attachmentName?.trim() || url.split('/').pop() || 'image';
       return {
         attachments: [
           {
@@ -3907,11 +3436,11 @@ export class WorkerDispatcher
     }
   }
 
-  private clearPendingWatchdog(taskId: string, agentId: string): void {
-    const existing = this.pending.get(`${taskId}:${agentId}`);
+  private clearPendingWatchdog(scope: string, agentId: string): void {
+    const existing = this.pending.get(`${scope}:${agentId}`);
     if (existing) {
       clearTimeout(existing.timer);
-      this.pending.delete(`${taskId}:${agentId}`);
+      this.pending.delete(`${scope}:${agentId}`);
       this.pendingBySession.delete(existing.sessionId);
     }
   }

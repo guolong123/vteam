@@ -16,6 +16,7 @@ describe('TaskProgressionScheduler', () => {
     task: { findUnique: jest.Mock; findMany: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
     agentQuestion: { findUnique: jest.Mock };
+    team: { findUnique: jest.Mock };
   };
   let realtime: { subscribe: jest.Mock };
   let workerDispatcher: { dispatchAgentMention: jest.Mock };
@@ -25,15 +26,27 @@ describe('TaskProgressionScheduler', () => {
     id: 't_0000000001',
     title: '巡检任务',
     status: TASK_STATUS.in_progress,
-    mainAgentInstanceId: 'ta_0000000001',
+    teamId: 'tm_0000000001',
     ...overrides,
   });
+
+  /** 主成员门默认放行（beforeEach 已置 tmm_0000000001；缺失用例各自覆写）。 */
+  const allowMainMember = () => {
+    prisma.team.findUnique.mockResolvedValue({
+      mainAgentMemberId: 'tmm_0000000001',
+    });
+  };
 
   beforeEach(async () => {
     prisma = {
       task: { findUnique: jest.fn(), findMany: jest.fn() },
       chatChannel: { findFirst: jest.fn() },
       agentQuestion: { findUnique: jest.fn() },
+      team: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ mainAgentMemberId: 'tmm_0000000001' }),
+      },
     };
     realtime = { subscribe: jest.fn(() => () => {}) };
     workerDispatcher = {
@@ -63,14 +76,16 @@ describe('TaskProgressionScheduler', () => {
   });
 
   describe('register', () => {
-    it('in_progress + 主实例存在 → 注册', async () => {
+    it('in_progress + 主成员存在 → 注册', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
       await scheduler.register('t_1');
       expect(scheduler.isRegistered('t_1')).toBe(true);
     });
 
     it('幂等：重复注册重置轮次计时', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
       await scheduler.register('t_1');
       await scheduler.register('t_1');
       const entry = (scheduler as any).loop.get('t_1') as {
@@ -89,10 +104,11 @@ describe('TaskProgressionScheduler', () => {
       expect(scheduler.isRegistered('t_1')).toBe(false);
     });
 
-    it('主 Agent 缺失 → 不注册', async () => {
-      prisma.task.findUnique.mockResolvedValue(
-        inProgressTask({ mainAgentInstanceId: null }),
-      );
+    it('主成员缺失 → 不注册', async () => {
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      (prisma as any).team = {
+        findUnique: jest.fn().mockResolvedValue({ mainAgentMemberId: null }),
+      };
       await scheduler.register('t_1');
       expect(scheduler.isRegistered('t_1')).toBe(false);
     });
@@ -101,6 +117,7 @@ describe('TaskProgressionScheduler', () => {
   describe('unregister', () => {
     it('删除循环条目', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
       await scheduler.register('t_1');
       scheduler.unregister('t_1');
       expect(scheduler.isRegistered('t_1')).toBe(false);
@@ -110,6 +127,7 @@ describe('TaskProgressionScheduler', () => {
   describe('scan', () => {
     it('nextRunAt <= now → dispatch 巡检消息给主 Agent + 轮次累计', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
       await scheduler.register('t_1');
       const entry = (scheduler as any).loop.get('t_1') as { nextRunAt: number };
       entry.nextRunAt = 0; // 强制到期
@@ -117,7 +135,7 @@ describe('TaskProgressionScheduler', () => {
       expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
       const call = workerDispatcher.dispatchAgentMention.mock.calls[0][0];
       expect(call.taskId).toBe('t_1');
-      expect(call.targetInstanceId).toBe('ta_0000000001');
+      expect(call.targetInstanceId).toBe('tmm_0000000001');
       expect(call.text).toContain('【任务巡检】');
       expect(call.channelId).toBe('c_private');
       expect((scheduler as any).loop.get('t_1').rounds).toBe(1);
@@ -125,6 +143,7 @@ describe('TaskProgressionScheduler', () => {
 
     it('任务状态非 in_progress → 注销且不 dispatch', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
       await scheduler.register('t_1');
       (scheduler as any).loop.get('t_1').nextRunAt = 0; // 强制到期
       prisma.task.findUnique.mockResolvedValue(
@@ -135,13 +154,15 @@ describe('TaskProgressionScheduler', () => {
       expect(scheduler.isRegistered('t_1')).toBe(false);
     });
 
-    it('主 Agent 缺失（团队调整移除）→ 注销防空转', async () => {
+    it('主成员缺失（团队调整移除）→ 注销防空转', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
       await scheduler.register('t_1');
       (scheduler as any).loop.get('t_1').nextRunAt = 0; // 强制到期
-      prisma.task.findUnique.mockResolvedValue(
-        inProgressTask({ mainAgentInstanceId: null }),
-      );
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      (prisma as any).team = {
+        findUnique: jest.fn().mockResolvedValue({ mainAgentMemberId: null }),
+      };
       await (scheduler as any).scan();
       expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
       expect(scheduler.isRegistered('t_1')).toBe(false);
@@ -149,6 +170,7 @@ describe('TaskProgressionScheduler', () => {
 
     it('未到期条目不触发', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
       await scheduler.register('t_1');
       const entry = (scheduler as any).loop.get('t_1') as { nextRunAt: number };
       entry.nextRunAt = Date.now() + 60_000; // 未到期
@@ -159,6 +181,7 @@ describe('TaskProgressionScheduler', () => {
 
     it('轮次上限：rounds >= maxRounds → 注销 + 不再 dispatch', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
       await scheduler.register('t_1');
       const entry = (scheduler as any).loop.get('t_1') as {
         rounds: number;
@@ -175,6 +198,7 @@ describe('TaskProgressionScheduler', () => {
   describe('patrolNow', () => {
     it('跳过 nextRunAt 判定直接 dispatch + 轮次累计', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
       await scheduler.register('t_1');
       await scheduler.patrolNow('t_1');
       expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);

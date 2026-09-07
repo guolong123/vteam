@@ -479,9 +479,9 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 仓库凭证下发（唯一化分发入口，凭证面=worker 级）。
-   * - 活跃 agent 判定：taskAgent.removedAt=null 且关联 task 未终态（completed/archived，
+   * - 活跃 agent 判定：团队成员归属团队当前任务未终态（completed/archived，
    *   沿用 tasks 模块 TASK_STATUS 常量）——worker 单容器承载多任务多 agent，按活跃
-   *   task 关联过滤，避免向已结束任务的 agent 下发凭证；
+   *   团队任务关联过滤，避免向已结束任务的 agent 下发凭证；
    * - 收集这些 agent 被授权且未吊销的 repoUrl 集合 → 过滤未吊销 GitCredential →
    *   解密 key 明文打包 GitCredentialsPayload → 对每个目标 worker enqueueCommand
    *   （**查库 orderBy repoUrl asc 保证幂等对比稳定**）；
@@ -544,26 +544,28 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 活跃 agent 授权仓库解析（dispatch/replay 复用，凭证池分离后）：
-   * ① taskAgent（removedAt=null）+ 关联 task 未终态 → 活跃 agent 集合；
+   * ① 团队成员（TeamMember）归属团队当前任务未终态（currentTask 非 completed/archived，
+   *   session-unification 后任务实例快照表已删除，活跃口径改由团队维度等价界定）→ 活跃 agent 集合；
    * ② 这些 agent 的未吊销 GitRepoGrant(repoId) → repoId → 最高权限映射；
    * ③ GitRepo(repoId→repoUrl) 转换为 repoUrl→permission，供 build 阶段按 repoUrl 过滤。
    * 返回空 Map → 无任何授权仓库（打包结果为 credentials=[]，仍下发清 worker 侧条目）。
    */
   private async resolveWorkerActiveRepoUrls(): Promise<Map<string, string>> {
-    const activeTaskAgents = await this.prisma.taskAgent.findMany({
+    const activeMembers = await this.prisma.teamMember.findMany({
       where: {
-        removedAt: null,
-        task: {
-          status: { notIn: [TASK_STATUS.completed, TASK_STATUS.archived] },
+        team: {
+          currentTask: {
+            status: { notIn: [TASK_STATUS.completed, TASK_STATUS.archived] },
+          },
         },
       },
       select: { agentId: true },
       distinct: ['agentId'],
     });
-    if (activeTaskAgents.length === 0) {
+    if (activeMembers.length === 0) {
       return new Map();
     }
-    const agentIds = activeTaskAgents.map((t) => t.agentId);
+    const agentIds = activeMembers.map((m) => m.agentId);
     const grants = await this.prisma.gitRepoGrant.findMany({
       where: { agentId: { in: agentIds }, revokedAt: null },
       select: { repoId: true, permission: true },

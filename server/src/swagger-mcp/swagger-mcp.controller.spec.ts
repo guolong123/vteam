@@ -42,7 +42,8 @@ describe('SwaggerMcpController (HTTP)', () => {
   let app: INestApplication;
   let prisma: {
     session: { findFirst: jest.Mock };
-    taskAgent: { findUnique: jest.Mock };
+    teamMember: { findUnique: jest.Mock };
+    task: { findUnique: jest.Mock };
     agentToolEffect: { findUnique: jest.Mock };
   };
   let handlerCall: jest.Mock;
@@ -107,7 +108,8 @@ describe('SwaggerMcpController (HTTP)', () => {
   beforeEach(async () => {
     prisma = {
       session: { findFirst: jest.fn() },
-      taskAgent: { findUnique: jest.fn() },
+      teamMember: { findUnique: jest.fn() },
+      task: { findUnique: jest.fn() },
       agentToolEffect: { findUnique: jest.fn() },
     };
     handlerCall = jest.fn().mockResolvedValue({ id: 't_1' });
@@ -204,10 +206,11 @@ describe('SwaggerMcpController (HTTP)', () => {
   });
 
   describe('tools/call 权限链路', () => {
-    /** 授权成功前置：worker 有活跃实例 + 实例对应 agent。 */
+    /** 授权成功前置：worker 有团队活跃会话（teamMemberId=tmm_1）+ 成员对应 agent + 任务归属团队。 */
     const allowContext = () => {
-      prisma.session.findFirst.mockResolvedValue({ taskAgentId: 'ta_1' });
-      prisma.taskAgent.findUnique.mockResolvedValue({ agentId: 'a_1' });
+      prisma.session.findFirst.mockResolvedValue({ teamMemberId: 'tmm_1' });
+      prisma.teamMember.findUnique.mockResolvedValue({ agentId: 'a_1' });
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
     };
 
     it('allow → 放行，handler 收到 workerId + 校验后的 args', async () => {
@@ -295,12 +298,60 @@ describe('SwaggerMcpController (HTTP)', () => {
       expect(handlerCall).not.toHaveBeenCalled();
     });
 
-    it('taskId 归属校验失败（该 worker 无绑定会话）→ -32603 拒绝', async () => {
+    it('团队会话 authorize：teamMemberId 解析 agentId 放行（team 感知断言）', async () => {
       allowContext();
+      prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'allow' });
+
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 30,
+          method: 'tools/call',
+          params: { name: 'gettask', arguments: { id: 't_1' } },
+        })
+        .expect(200);
+
+      expect(prisma.teamMember.findUnique).toHaveBeenCalledWith({
+        where: { id: 'tmm_1' },
+        select: { agentId: true },
+      });
+      expect(prisma.agentToolEffect.findUnique).toHaveBeenCalledWith({
+        where: {
+          agentId_toolAction: { agentId: 'a_1', toolAction: 'gettask' },
+        },
+      });
+      expect(res.body.error).toBeUndefined();
+      expect(handlerCall).toHaveBeenCalled();
+    });
+
+    it('遗留任务会话（无 teamMemberId）→ -32603 拒绝（任务会话已删除，只走团队会话）', async () => {
+      prisma.session.findFirst.mockResolvedValue({ teamMemberId: null });
+      prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'allow' });
+
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 31,
+          method: 'tools/call',
+          params: { name: 'gettask', arguments: { id: 't_1' } },
+        })
+        .expect(200);
+
+      expect(prisma.teamMember.findUnique).not.toHaveBeenCalled();
+      expect(res.body.error.code).toBe(-32603);
+      expect(res.body.error.message).toContain('无法解析调用实例上下文');
+      expect(handlerCall).not.toHaveBeenCalled();
+    });
+
+    it('taskId 归属校验失败（该 worker 无绑定会话）→ -32603 拒绝', async () => {
+      prisma.teamMember.findUnique.mockResolvedValue({ agentId: 'a_1' });
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
       prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'allow' });
       // assertWorkerTask 的 session.findFirst 返回 null（授权已消费第一次调用）
       prisma.session.findFirst
-        .mockResolvedValueOnce({ taskAgentId: 'ta_1' })
+        .mockResolvedValueOnce({ teamMemberId: 'tmm_1' })
         .mockResolvedValue(null);
 
       const res = await mcpPost()
@@ -373,8 +424,9 @@ describe('SwaggerMcpController (HTTP)', () => {
     });
 
     it('无 handler 映射的工具 → 200 + error NOT_IMPLEMENTED', async () => {
-      prisma.session.findFirst.mockResolvedValue({ taskAgentId: 'ta_1' });
-      prisma.taskAgent.findUnique.mockResolvedValue({ agentId: 'a_1' });
+      prisma.session.findFirst.mockResolvedValue({ teamMemberId: 'tmm_1' });
+      prisma.teamMember.findUnique.mockResolvedValue({ agentId: 'a_1' });
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
       prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'allow' });
 
       const res = await mcpPost()
@@ -429,7 +481,8 @@ describe('SwaggerMcpController (F2 前缀 + 自动绑定集成)', () => {
   let app: INestApplication;
   let prisma: {
     session: { findFirst: jest.Mock };
-    taskAgent: { findUnique: jest.Mock };
+    teamMember: { findUnique: jest.Mock };
+    task: { findUnique: jest.Mock };
     agentToolEffect: { findUnique: jest.Mock };
   };
   let tasksService: { findOne: jest.Mock };
@@ -490,15 +543,17 @@ describe('SwaggerMcpController (F2 前缀 + 自动绑定集成)', () => {
       .set('x-worker-token', 'dev-worker-token');
 
   const allowContext = () => {
-    prisma.session.findFirst.mockResolvedValue({ taskAgentId: 'ta_1' });
-    prisma.taskAgent.findUnique.mockResolvedValue({ agentId: 'a_1' });
+    prisma.session.findFirst.mockResolvedValue({ teamMemberId: 'tmm_1' });
+    prisma.teamMember.findUnique.mockResolvedValue({ agentId: 'a_1' });
+    prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
     prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'allow' });
   };
 
   beforeEach(async () => {
     prisma = {
       session: { findFirst: jest.fn() },
-      taskAgent: { findUnique: jest.fn() },
+      teamMember: { findUnique: jest.fn() },
+      task: { findUnique: jest.fn() },
       agentToolEffect: { findUnique: jest.fn() },
     };
     tasksService = { findOne: jest.fn().mockResolvedValue({ id: 't_1' }) };
@@ -545,8 +600,8 @@ describe('SwaggerMcpController (F2 前缀 + 自动绑定集成)', () => {
   it('① 手动映射命中：/api/v1/tasks/{id} GET → TasksService.findOne（前缀剥离修复 F2）', async () => {
     allowContext();
     prisma.session.findFirst
-      .mockResolvedValueOnce({ taskAgentId: 'ta_1' })
-      .mockResolvedValue({ id: 't_1' });
+      .mockResolvedValueOnce({ teamMemberId: 'tmm_1' })
+      .mockResolvedValue({ id: 's_team' });
 
     const res = await mcpPost()
       .set('x-worker-id', 'w_0001')

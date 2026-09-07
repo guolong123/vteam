@@ -81,7 +81,6 @@ describe('GitReposService（凭证池分离后：仓库引用凭证+授权按rep
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       agent: { findMany: jest.fn().mockResolvedValue([{ id: 'a_tester' }]) },
-      taskAgent: { findMany: jest.fn().mockResolvedValue([]) },
     };
     workers = { dispatchGitCredentials: jest.fn().mockResolvedValue(1) };
     const module: TestingModule = await Test.createTestingModule({

@@ -96,7 +96,7 @@ const groupPostSchema = z
     teamId: z.string().optional().describe(TEAM_ID_DESC),
     selfInstanceId: z
       .string()
-      .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
     content: z.string().describe('要发布到群聊的内容'),
     fileRef: z
       .string()
@@ -132,11 +132,11 @@ const notifyAgentSchema = z
     teamId: z.string().optional().describe(TEAM_ID_DESC),
     selfInstanceId: z
       .string()
-      .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
     targetInstanceId: z
       .string()
       .describe(
-        '目标实例 id（ta_ 前缀，见 task_context agentMembers / 团队提示，@ 定向触发目标）',
+        '目标成员 id（tmm_ 前缀，见 task_context agentMembers / 团队提示，@ 定向触发目标）',
       ),
     content: z.string().describe('要发送给目标实例的消息内容'),
   })
@@ -151,7 +151,7 @@ const submitArtifactSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   type: z
     .enum(['text', 'doc', 'file'])
     .describe(
@@ -171,7 +171,7 @@ const issueCreateSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   title: z.string().describe('issue 标题'),
   description: z.string().optional().describe('issue 描述（可选）'),
   tags: z
@@ -181,7 +181,7 @@ const issueCreateSchema = z.object({
   assigneeInstanceId: z
     .string()
     .optional()
-    .describe('指派实例 id（ta_ 前缀，须在任务团队未 removed；不传则不指派）'),
+    .describe('指派成员 id（tmm_ 前缀，须为任务归属团队成员；不传则不指派）'),
 });
 
 type IssueCreateArgs = z.infer<typeof issueCreateSchema>;
@@ -190,7 +190,7 @@ const issueListSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   status: z
     .enum(['open', 'in_progress', 'resolved', 'closed'])
     .optional()
@@ -203,7 +203,7 @@ const issueGetSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   issueId: z.string().describe('issue ID'),
 });
 
@@ -213,7 +213,7 @@ const issueUpdateSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   issueId: z.string().describe('issue ID'),
   title: z.string().optional().describe('issue 标题'),
   description: z.string().optional().describe('issue 描述'),
@@ -226,7 +226,7 @@ const issueTransitionSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   issueId: z.string().describe('issue ID'),
   action: z
     .enum(['start', 'resolve', 'close', 'reopen', 'reject'])
@@ -245,7 +245,7 @@ const taskTransitionSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   action: z
     .enum(['start', 'mark-pending-review', 'accept', 'reject', 'archive'])
     .describe(
@@ -265,7 +265,7 @@ const questionConfirmSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   requestId: z
     .string()
     .describe('待确认请求 id（que_/per_ 前缀，来自托管确认消息）'),
@@ -292,31 +292,31 @@ export const memorySaveSchema = z
     teamId: z.string().optional().describe(TEAM_ID_DESC),
     selfInstanceId: z
       .string()
-      .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
-  level: z
-    .enum(['task', 'project', 'global'])
-    .describe(
-      '记忆级别：task=任务级 / project=项目级（写入当前任务所属项目，跨任务共享）/ global=全局（仅主 Agent 可写）',
-    ),
-  content: z.string().min(1).max(20000).describe('记忆内容（1~20000 字符）'),
-  description: z
-    .string()
-    .min(1)
-    .max(255)
-    .optional()
-    .describe(
-      '记忆摘要（1~255 字符，模型携带，用于列表首屏/索引，按需拉正文）',
-    ),
-  tags: z
-    .array(z.string())
-    .max(20)
-    .optional()
-    .describe('记忆标签（≤20 个，memory_search 按标签过滤命中）'),
-})
-.refine((d) => !!d.taskId || !!d.teamId, {
-  message: REQUIRE_TASK_OR_TEAM_MSG,
-  path: ['taskId'],
-});
+      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+    level: z
+      .enum(['team', 'global'])
+      .describe(
+        '记忆级别：team=团队级（写入当前任务所属团队，跨任务共享）/ global=全局（仅主 Agent 可写）',
+      ),
+    content: z.string().min(1).max(20000).describe('记忆内容（1~20000 字符）'),
+    description: z
+      .string()
+      .min(1)
+      .max(255)
+      .optional()
+      .describe(
+        '记忆摘要（1~255 字符，模型携带，用于列表首屏/索引，按需拉正文）',
+      ),
+    tags: z
+      .array(z.string())
+      .max(20)
+      .optional()
+      .describe('记忆标签（≤20 个，memory_search 按标签过滤命中）'),
+  })
+  .refine((d) => !!d.taskId || !!d.teamId, {
+    message: REQUIRE_TASK_OR_TEAM_MSG,
+    path: ['taskId'],
+  });
 
 type MemorySaveArgs = z.infer<typeof memorySaveSchema>;
 
@@ -327,11 +327,13 @@ const memorySearchSchema = z
     query: z
       .string()
       .optional()
-      .describe('关键词过滤（content/description 包含即命中，多词空格分隔 AND）'),
+      .describe(
+        '关键词过滤（content/description 包含即命中，多词空格分隔 AND）',
+      ),
     level: z
-      .enum(['task', 'project', 'global'])
+      .enum(['team', 'global'])
       .optional()
-      .describe('级别过滤（缺省聚合当前任务可见的 task+project+global 三级）'),
+      .describe('级别过滤（缺省聚合当前任务可见的 team+global 两级）'),
     tags: z
       .array(z.string())
       .optional()
@@ -339,7 +341,7 @@ const memorySearchSchema = z
     sourceInstanceId: z
       .string()
       .optional()
-      .describe('来源实例过滤（ta_ 前缀，只看某 Agent 实例沉淀的记忆）'),
+      .describe('来源成员过滤（tmm_ 前缀，只看某团队成员沉淀的记忆）'),
     sourceAgentId: z
       .string()
       .optional()
@@ -367,7 +369,7 @@ export const planSubmitSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   title: z.string().min(1).describe('执行计划标题'),
   summary: z.string().optional().describe('计划摘要'),
   scopeIn: z.string().optional().describe('范围：包含'),
@@ -414,7 +416,7 @@ export const planReviewSchema = z
     taskId: z.string().describe('任务 ID'),
     selfInstanceId: z
       .string()
-      .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
     planId: z.string().optional().describe('计划 id（缺省取任务当前计划）'),
     verdict: z.enum(['approved', 'rejected']).describe('评审结论'),
     reason: z.string().optional().describe('评审说明（rejected 时必填）'),
@@ -431,7 +433,7 @@ const planTaskTransitionSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   planTaskId: z.string().describe('计划子任务 id（pt_ 前缀）'),
   status: z
     .enum(['in_progress', 'done', 'blocked', 'skipped'])
@@ -457,7 +459,7 @@ export const myProfileSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
 });
 
 type MyProfileArgs = z.infer<typeof myProfileSchema>;
@@ -481,10 +483,10 @@ export const planAssignReviewerSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   reviewerInstanceId: z
     .string()
-    .describe('被指派评审者实例 id（ta_ 前缀，须属于任务团队未移除成员）'),
+    .describe('被指派评审者成员 id（tmm_ 前缀，须为任务归属团队成员）'),
 });
 
 type PlanAssignReviewerArgs = z.infer<typeof planAssignReviewerSchema>;
@@ -498,7 +500,7 @@ export const teamAddMemberSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
     .string()
-    .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入）'),
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   agentId: z.string().describe('要加入团队的 Agent id'),
   alias: z.string().optional().describe('别名（缺省由服务端按角色生成）'),
   workDir: z.string().optional().describe('工作目录（缺省由服务端按角色生成）'),
@@ -524,7 +526,7 @@ const wecomReplySchema = z
     selfInstanceId: z
       .string()
       .optional()
-      .describe('调用方实例 id（ta_ 前缀，你的实例身份；缺省自动解析）'),
+      .describe('调用方成员 id（tmm_ 前缀，你的成员身份；缺省自动解析）'),
     msgtype: z
       .enum(['text', 'markdown', 'template_card', 'image', 'mpnews'])
       .optional()
@@ -541,7 +543,9 @@ const wecomReplySchema = z
     atUser: z
       .boolean()
       .optional()
-      .describe('是否@发送者（默认 true，群聊时 @，私聊直回；仅 text/markdown 生效）'),
+      .describe(
+        '是否@发送者（默认 true，群聊时 @，私聊直回；仅 text/markdown 生效）',
+      ),
     card: z
       .any()
       .optional()
@@ -557,22 +561,33 @@ const wecomReplySchema = z
     mediaId: z
       .string()
       .optional()
-      .describe('已上传媒体 ID（msgtype=image 时与 media 二选一，传 mediaId 则直接发送不再上传）'),
+      .describe(
+        '已上传媒体 ID（msgtype=image 时与 media 二选一，传 mediaId 则直接发送不再上传）',
+      ),
     filename: z
       .string()
       .optional()
-      .describe('文件名（msgtype=image 时可选，上传时透传，如 image.png；缺省从 media 推断）'),
+      .describe(
+        '文件名（msgtype=image 时可选，上传时透传，如 image.png；缺省从 media 推断）',
+      ),
     articles: z
       .array(
         z.object({
           title: z.string().min(1).describe('图文标题（必填）'),
           description: z.string().optional().describe('图文描述/摘要（可选）'),
           url: z.string().optional().describe('跳转链接（可选，HTTPS URL）'),
-          picurl: z.string().optional().describe('封面图片 URL（可选，HTTPS URL，无则不展示封面，不做上传）'),
+          picurl: z
+            .string()
+            .optional()
+            .describe(
+              '封面图片 URL（可选，HTTPS URL，无则不展示封面，不做上传）',
+            ),
         }),
       )
       .optional()
-      .describe('图文 articles（msgtype=mpnews 时必填其一：与 mpnews 二选一；picurl 可选，缺省也能发）'),
+      .describe(
+        '图文 articles（msgtype=mpnews 时必填其一：与 mpnews 二选一；picurl 可选，缺省也能发）',
+      ),
     mpnews: z
       .object({
         articles: z
@@ -602,7 +617,9 @@ const wecomReplySchema = z
         ),
       )
       .optional()
-      .describe('mpnews 原始体（兼容旧调用：{articles:[{title,digest,url,picurl}]} 或直接 articles 数组）；picurl 均为可选'),
+      .describe(
+        'mpnews 原始体（兼容旧调用：{articles:[{title,digest,url,picurl}]} 或直接 articles 数组）；picurl 均为可选',
+      ),
   })
   .refine(
     (data) => {
@@ -612,15 +629,17 @@ const wecomReplySchema = z
       }
       return true;
     },
-    { message: 'text 不能为空（msgtype=text/markdown 时必填）', path: ['text'] },
+    {
+      message: 'text 不能为空（msgtype=text/markdown 时必填）',
+      path: ['text'],
+    },
   );
 
 type WecomReplyArgs = z.infer<typeof wecomReplySchema>;
 
 /**
  * team-free-chat todo-4：task_create（主 Agent 在团队会话无任务时建任务）。
- * projectId 必填且无默认值（缺省默认会杀死引导式追问——模型须先调 my_projects
- * 发现可见项目再提问确认）；teamId 由服务端按会话上下文解析（不接收入参）。
+ * 团队由服务端按会话上下文解析（不接收入参，归属即团队，无项目维度）。
  */
 const taskCreateSchema = z
   .object({
@@ -628,15 +647,11 @@ const taskCreateSchema = z
     teamId: z.string().optional().describe(TEAM_ID_DESC),
     selfInstanceId: z
       .string()
-      .describe('调用方实例 id（ta_ 前缀，你的实例身份，由系统提示注入；仅主 Agent 可调）'),
+      .describe(
+        '调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入；仅主 Agent 可调）',
+      ),
     title: z.string().min(1).max(128).describe('任务标题（必填）'),
     description: z.string().optional().describe('任务描述（可选）'),
-    projectId: z
-      .string()
-      .min(1)
-      .describe(
-        '目标项目 ID（必填，无默认值；须与该团队有归属关系，否则 403；可先调 my_projects 发现可见项目）',
-      ),
     priority: z
       .string()
       .optional()
@@ -648,14 +663,6 @@ const taskCreateSchema = z
   });
 
 type TaskCreateArgs = z.infer<typeof taskCreateSchema>;
-
-/**
- * team-free-chat todo-4：my_projects（无任务团队会话的项目发现通道）。
- * 无入参：按调用方 worker 会话定位所在团队 → 团队用户成员 → 反查项目成员去重。
- */
-const myProjectsSchema = z.object({});
-
-type MyProjectsArgs = z.infer<typeof myProjectsSchema>;
 
 /**
  * 构建工具集（service 闭包注入，controller 构造时调用一次）。
@@ -771,14 +778,14 @@ export function buildPlatformMcpTools(
     {
       name: 'memory_save',
       description:
-        '写入平台记忆（只存可复用经验，禁存会话总结/流水账/一次性结论）。可存三类：howto=怎么做（有效路径/命令/配置）、pitfall=坑与规避（错误原因+规避动作）、constraint=平台硬约束。content 写「场景 + 做法/坑 + 规避动作」。level=task 任务专属；level=project 跨任务复用（projectId 自动解析）；level=global 平台通用（仅主 Agent 可写）。description 30字摘要（缺省回落 content 截断）。返回 {memoryId, level}。',
+        '写入平台记忆（只存可复用经验，禁存会话总结/流水账/一次性结论）。可存三类：howto=怎么做（有效路径/命令/配置）、pitfall=坑与规避（错误原因+规避动作）、constraint=平台硬约束。content 写「场景 + 做法/坑 + 规避动作」。level=team 跨任务复用（teamId 从任务或团队上下文自动解析）；level=global 平台通用（仅主 Agent 可写）。description 30字摘要（缺省回落 content 截断）。返回 {memoryId, level}。',
       inputSchema: memorySaveSchema,
       handler: (ctx, args) => service.memorySave(ctx, args as MemorySaveArgs),
     },
     {
       name: 'memory_search',
       description:
-        '检索平台记忆（按需检索，替代自动注入）。默认聚合当前任务可见的 task+project+global 三级记忆（已软删不返回），可按 query(level/content/description)/tags 过滤，结果按创建时间倒序。返回 [{id, level, content, description, tags, createdBy, createdAt}]。首屏用 description 索引，按需拉 content。',
+        '检索平台记忆（按需检索，替代自动注入）。默认聚合当前任务可见的 team+global 两级记忆（已软删不返回），可按 query(level/content/description)/tags 过滤，结果按创建时间倒序。返回 [{id, level, content, description, tags, createdBy, createdAt}]。首屏用 description 索引，按需拉 content。',
       inputSchema: memorySearchSchema,
       handler: (ctx, args) =>
         service.memorySearch(ctx, args as MemorySearchArgs),
@@ -859,16 +866,9 @@ export function buildPlatformMcpTools(
     {
       name: 'task_create',
       description:
-        '在团队会话无任务时创建任务（仅主 Agent 可调；projectId 必填无默认值，请先调 my_projects 发现可见项目并与用户确认）。团队由当前会话解析，任务建在该团队下。返回创建的任务 DTO。',
+        '在团队会话无任务时创建任务（仅主 Agent 可调）。团队由当前会话解析，任务建在该团队下。返回创建的任务 DTO。',
       inputSchema: taskCreateSchema,
       handler: (ctx, args) => service.taskCreate(ctx, args as TaskCreateArgs),
-    },
-    {
-      name: 'my_projects',
-      description:
-        '查询调用方可见项目列表（无入参，团队会话无任务时先调此工具发现项目，再向用户确认后调 task_create）。返回 {projects: [{id, name, description}]}。',
-      inputSchema: myProjectsSchema,
-      handler: (ctx) => service.myProjects(ctx),
     },
   ];
 }

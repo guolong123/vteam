@@ -78,7 +78,8 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     };
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
     task: { findUnique: jest.Mock };
-    taskAgent: { findUnique: jest.Mock };
+    team: { findUnique: jest.Mock };
+    teamMember: { findMany: jest.Mock };
   };
   let realtime: { emit: jest.Mock; broadcast: jest.Mock };
   let idGen: { nextId: jest.Mock };
@@ -103,8 +104,16 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     messageId: 'm_0000000001',
     channelId: 'c_0000000001',
     taskId: 't_0000000001',
+    teamId: 'tm_0000000001',
+    taskContext: { taskId: 't_0000000001' },
     text: '你好，请处理',
-    targets: [{ agentId: 'a_product', sessionId: 's_0000000001' }],
+    targets: [
+      {
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        instanceId: 'tmm_0000000001',
+      },
+    ],
   };
 
   /** private 频道 processing 流式消息行（delta 落库 + completed 终态化定位）。 */
@@ -130,7 +139,8 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
           id: 's_0000000001',
           workerId: 'w_0000000001',
           instanceRef: 'ses_0001',
-          taskAgentId: 'ta_0000000001',
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_0000000001',
         }),
         // instanceRef 反查：ses_ 前缀 → 平台 s_ 主键（wave1 对齐链路）
         findFirst: jest.fn().mockResolvedValue({ id: 's_0000000001' }),
@@ -155,29 +165,29 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
       task: {
         findUnique: jest.fn().mockResolvedValue({
           id: request.taskId,
-          mainAgentInstanceId: 'ta_0000000001',
-          taskAgents: [
-            {
-              id: 'ta_0000000001',
-              agentId: 'a_product',
-              seq: 1,
-              alias: '产品经理-1',
-              removedAt: null,
-              agent: { id: 'a_product', name: '产品经理', role: 'product' },
-            },
-          ],
+          teamId: 'tm_0000000001',
         }),
+      },
+      team: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'tm_0000000001',
+          mainAgentMemberId: 'tmm_0000000001',
+        }),
+      },
+      teamMember: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'tmm_0000000001',
+            teamId: 'tm_0000000001',
+            agentId: 'a_product',
+            alias: '产品经理-1',
+            seq: 1,
+            agent: { id: 'a_product', name: '产品经理', role: 'product' },
+          },
+        ]),
       },
       artifact: { findMany: jest.fn().mockResolvedValue([]) },
       artifactVersion: { findMany: jest.fn().mockResolvedValue([]) },
-      taskAgent: {
-        findUnique: jest.fn().mockResolvedValue({
-          id: 'ta_0000000001',
-          workDir: null,
-          seq: 1,
-          agent: { id: 'a_product', name: '产品经理' },
-        }),
-      },
       message: {
         create: jest.fn(),
         // 空历史（群聊历史查询）
@@ -380,10 +390,10 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
       ),
     );
     await flush();
-    // 架构：agent 最终回复落 private 会话频道（resolveChannel 固定 private 反查）；
-    // F3 P1 修复：session 绑实例 → 按 taskAgentId 精确匹配（同 agent 多实例各自频道）
+    // 架构：agent 最终回复落 private 会话频道（resolveTeamChannel 团队成员维度反查）；
+    // 同 agent 多实例按 teamMemberId 精确匹配各自频道
     expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
-      where: { taskId: request.taskId, taskAgentId: 'ta_0000000001' },
+      where: { teamId: 'tm_0000000001', teamMemberId: 'tmm_0000000001' },
       select: { id: true, type: true },
     });
     expect(prisma.message.update).toHaveBeenCalledWith({
@@ -406,7 +416,8 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     expect(finals).toHaveLength(1);
     expect(finals[0]).toEqual(
       expect.objectContaining({
-        taskId: request.taskId,
+        // 单团队入口：回流 scope 走团队维度
+        taskId: 'team:tm_0000000001',
         agentId: 'a_product',
         text: '最终结论',
       }),
@@ -469,7 +480,8 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
 
     expect(errors).toEqual([
       {
-        taskId: request.taskId,
+        // 单团队入口：watchdog scope 走团队维度
+        taskId: 'team:tm_0000000001',
         agentId: 'a_product',
         error: expect.stringMatching(/无响应/),
       },

@@ -15,7 +15,7 @@ import {
   SENDER_TYPE,
 } from '../common/constants/event.constants';
 import { TASK_STATUS } from '../common/constants/task.constants';
-import { PROJECT_MEMBERSHIP_ERRORS } from '../common/guards/project-membership.guard';
+import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -58,7 +58,6 @@ type ChannelRow = {
   teamMemberId?: string | null;
   taskId: string | null;
   agentId: string | null;
-  taskAgentId?: string | null;
   pinned: boolean;
   lastReadAt: Date | null;
   deletedAt: Date | null;
@@ -67,13 +66,17 @@ type ChannelRow = {
     id: string;
     title: string;
     status: string;
-    projectId: string;
     teamId?: string | null;
     mainAgentInstanceId?: string | null;
     mainAgentId?: string | null;
   } | null;
   team?: { id: string; name: string } | null;
-  teamMember?: { id: string; agentId: string; alias: string | null; seq: number } | null;
+  teamMember?: {
+    id: string;
+    agentId: string;
+    alias: string | null;
+    seq: number;
+  } | null;
   agent?: { id: string; name: string; role: string | null } | null;
 };
 
@@ -93,13 +96,6 @@ type MessageRow = {
   createdAt: Date;
 };
 
-const TEAM_AGENT_SELECT = {
-  id: true,
-  agentId: true,
-  removedAt: true,
-  enabled: true,
-} as const;
-
 const TEAM_MEMBER_SELECT = {
   id: true,
   agentId: true,
@@ -113,7 +109,7 @@ const CHANNEL_TASK_SELECT = {
       id: true,
       title: true,
       status: true,
-      projectId: true,
+      teamId: true,
       mainAgentInstanceId: true,
       mainAgentId: true,
     },
@@ -136,9 +132,9 @@ const CHANNEL_TASK_SELECT = {
  * - PATCH  /channels/:id             置顶/取消置顶（UX-09 {pinned: boolean}）
  * - PATCH  /channels/:id/read        标记已读（UX-09 lastReadAt=now，channel 级简化）
  *
- * 权限：channel → taskId → projectId → project_members 校验（service 层，
- * 路由参数是 :id 非 :pid，ProjectMembershipGuard 的 :id 反查为任务路由，
- * 故本模块自行解析频道归属，对齐 realtime.controller 的 resolveProjectId 链路）。
+ * 权限：channel → taskId → teamId → teamUserMember 校验（service 层，
+ * 路由参数是 :id（频道 id），团队归属需经频道反查任务/团队，
+ * 故本模块自行解析频道归属，对齐 realtime 的团队可见性链路）。
  */
 @Injectable()
 export class ChatService {
@@ -209,26 +205,19 @@ export class ChatService {
       });
       if (task?.teamId) resolvedTeamId = task.teamId;
     }
-    const memberships = await this.prisma.projectMember.findMany({
+    // 调用者团队：channel → taskId → teamId → teamUserMember ——
+    // 频道列表按调用者 team_user_members 的 teamIds 过滤（非成员无可见频道）。
+    const memberships = await (this.prisma as any).teamUserMember.findMany({
       where: { userId },
-      select: { projectId: true },
+      select: { teamId: true },
     });
-    const projectIds = memberships.map((m) => m.projectId);
-    const accessibleTeamIds: string[] = [];
-    if (projectIds.length > 0) {
-      try {
-        const taskClient: any = (this.prisma as any).task;
-        if (typeof taskClient?.findMany === 'function') {
-          const teamTasks = await taskClient.findMany({
-            where: { projectId: { in: projectIds }, teamId: { not: null } },
-            select: { teamId: true },
-          });
-          const set = new Set<string>();
-          for (const t of teamTasks) if (t.teamId) set.add(t.teamId);
-          accessibleTeamIds.push(...set);
-        }
-      } catch {}
-    }
+    const callerTeamIds = [
+      ...new Set(
+        ((memberships ?? []) as Array<{ teamId?: string | null }>).map(
+          (m) => m.teamId,
+        ),
+      ),
+    ].filter((id): id is string => !!id);
     if (resolvedTeamId) {
       const team = await (this.prisma as any).team.findUnique({
         where: { id: resolvedTeamId },
@@ -241,54 +230,14 @@ export class ChatService {
         });
       }
       // 团队成员门（“团队是中心”）：调用者是该团队 team_user_members 成员时，
-      // 团队归属即足够授权——跳过项目门（:243）与 tasked 交叉检查（:249-263），
-      // 直接列出频道；team_group 缺失时幂等补建（seed 旁路建团队的缺口）。
-      const teamUserMember = await (this.prisma as any).teamUserMember.findUnique({
-        where: {
-          teamId_userId: { teamId: resolvedTeamId, userId },
-        },
-        select: { id: true },
-      });
-      if (teamUserMember) {
-        if (!type || type === CHANNEL_TYPE.team_group) {
-          await this.ensureTeamChannel(resolvedTeamId);
-        }
-        const where: Prisma.ChatChannelWhereInput = {
-          teamId: resolvedTeamId,
-          deletedAt: null,
-          ...(type ? { type } : {}),
-        };
-        const [total, rows] = await this.prisma.$transaction([
-          this.prisma.chatChannel.count({ where }),
-          this.prisma.chatChannel.findMany({
-            where,
-            include: CHANNEL_TASK_SELECT,
-            orderBy: [{ pinned: 'desc' }, { createdAt: 'desc' }],
-          }),
-        ]);
-        return { items: rows.map((row) => this.toChannelDto(row)), total };
+      // 团队归属即足够授权——直接列出频道；team_group 缺失时幂等补建
+      // （seed 旁路建团队的缺口）。非成员返回空集（不泄漏频道存在性；
+      // 发消息侧由 resolveChannelAccess 以 403 PERMISSION_TEAM_NOT_MEMBER 拒绝）。
+      if (!callerTeamIds.includes(resolvedTeamId)) {
+        return { items: [], total: 0 };
       }
-      if (projectIds.length === 0) {
-        throw new ForbiddenException({
-          code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
-          message: '您不是该项目成员',
-        });
-      }
-      if (accessibleTeamIds.length > 0) {
-        const teamProjects = await (this.prisma as any).task.findMany({
-          where: { teamId: resolvedTeamId },
-          select: { projectId: true },
-        }).catch(() => []);
-        const teamProjectIds = [...new Set((teamProjects ?? []).map((t: any) => t.projectId).filter(Boolean))];
-        const isTeamAccessible =
-          accessibleTeamIds.includes(resolvedTeamId) ||
-          teamProjectIds.some((pid: string) => projectIds.includes(pid));
-        if (teamProjectIds.length > 0 && !isTeamAccessible) {
-          throw new ForbiddenException({
-            code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
-            message: '无权访问该团队频道',
-          });
-        }
+      if (!type || type === CHANNEL_TYPE.team_group) {
+        await this.ensureTeamChannel(resolvedTeamId);
       }
       const where: Prisma.ChatChannelWhereInput = {
         teamId: resolvedTeamId,
@@ -308,8 +257,8 @@ export class ChatService {
     const where: Prisma.ChatChannelWhereInput = {
       deletedAt: null,
       ...(type ? { type } : {}),
-      ...(accessibleTeamIds.length > 0
-        ? { teamId: { in: accessibleTeamIds } }
+      ...(callerTeamIds.length > 0
+        ? { teamId: { in: callerTeamIds } }
         : ({ id: { in: [] } } as any)),
     };
     const [total, rows] = await this.prisma.$transaction([
@@ -370,8 +319,20 @@ export class ChatService {
         agentMembers: teamRows.map((r: any) => r.agent),
       };
     }
-    const teamRows = await this.prisma.taskAgent.findMany({
-      where: { taskId: channel.taskId as string, removedAt: null },
+    // 存量任务频道（无 teamId）：经任务归属团队解析成员；无归属 → 空成员（任务实例快照表已删除）。
+    const ownerTask = channel.taskId
+      ? await this.prisma.task.findUnique({
+          where: { id: channel.taskId },
+          select: { teamId: true },
+        })
+      : null;
+    const ownerTeamId = (ownerTask as { teamId?: string | null } | null)
+      ?.teamId;
+    if (!ownerTeamId) {
+      return { ...this.toChannelDto(channel), agentMembers: [] };
+    }
+    const ownerRows = await (this.prisma as any).teamMember.findMany({
+      where: { teamId: ownerTeamId },
       select: {
         agentId: true,
         agent: { select: { id: true, name: true, role: true } },
@@ -379,7 +340,7 @@ export class ChatService {
     });
     return {
       ...this.toChannelDto(channel),
-      agentMembers: teamRows.map((r) => r.agent),
+      agentMembers: ownerRows.map((r: any) => r.agent),
     };
   }
 
@@ -416,15 +377,18 @@ export class ChatService {
   }
 
   /**
-   * 私聊历史 = opencode serve 会话完整历史（任务 DM 需求：任何时间进入私聊都能看到
-   * 最新消息 + 完整历史，含 agent 思考/工具调用过程——平台 messages 表只落 ACK+最终回复）。
+   * 私聊历史 = 平台 DB 全量为真源 + opencode serve 会话仅作 agent 增补
+   * （DM-own-message 修复：用户自己的消息只存在于平台 messages 表——worker 侧
+   * 用户文本经 prompt 注入拼进上下文消息，无独立条目，纯 session 源永远缺 own 消息；
+   * 且 POST 后立即 refetch 会遇到 worker 未 ingest 窗口。合并后 refetch 恒含 DB 行）。
    *
-   * private 频道且其 Session（taskId+taskAgentId → uk_sessions_task_agent）已绑定
-   * worker+instanceRef → 调 worker serve `GET /session/{id}/message` 拉全量消息，
-   * 转换为平台消息 DTO 返回 `{items, source:'session'}`（items 时间正序，无游标——
-   * 会话历史一次性全量返回，前端游标参数忽略）；未绑定 / worker 不可用 → 回退平台
-   * messages 表（`{items, nextCursor, source:'db'}`，复用 findMessages 首页语义）。
-   * 群聊（task_group）不支持 → 400 SESSION_HISTORY_NOT_SUPPORTED（群聊保持平台表）。
+   * private 频道且其 Session（teamMember 维度按 teamMemberId 查；无成员维度
+   * 回退平台表，任务锚定分支已删）已绑定 worker+instanceRef → 调 worker serve
+   * `GET /session/{id}/message` 拉会话消息，转换后与 DB 合并返回
+   * `{items, source:'session'}`（items 时间正序，无游标——前端游标参数忽略）；
+   * 未绑定 / worker 不可用 → 回退平台 messages 表（`{items, nextCursor, source:'db'}`，
+   * 复用 findMessages 首页语义）。群聊（task_group）不支持 → 400
+   * SESSION_HISTORY_NOT_SUPPORTED（群聊保持平台表）。
    */
   async getSessionHistory(channelId: string, userId: string) {
     const { channel } = await this.resolveChannelAccess(channelId, userId);
@@ -439,30 +403,32 @@ export class ChatService {
       nextCursor: null,
       source: 'db' as const,
     });
-    let session: { instanceRef: string | null; workerId: string | null; agentId: string; createdAt: Date } | null = null;
-    if ((channel as any).teamMemberId) {
-      const teamMemberId = (channel as any).teamMemberId as string;
-      const sessions = await this.prisma.session.findMany({
-        where: { teamMemberId },
-        orderBy: { updatedAt: 'desc' },
-        select: { instanceRef: true, workerId: true, agentId: true, createdAt: true },
-      });
-      session = sessions.find((s) => !!s.instanceRef && !!s.workerId) ?? sessions[0] ?? null;
-      if (!session?.instanceRef || !session.workerId) {
-        return fallback();
-      }
-    } else {
-      if (!channel.taskAgentId) {
-        return fallback();
-      }
-      const s = await this.prisma.session.findFirst({
-        where: { taskId: channel.taskId, taskAgentId: channel.taskAgentId },
-        select: { instanceRef: true, workerId: true, agentId: true, createdAt: true },
-      });
-      session = s;
-      if (!session?.instanceRef || !session.workerId) {
-        return fallback();
-      }
+    let session: {
+      instanceRef: string | null;
+      workerId: string | null;
+      agentId: string;
+      createdAt: Date;
+    } | null = null;
+    // team-only：私聊会话按 teamMemberId 定位团队会话（单成员单会话）；
+    // 无成员维度（存量任务锚定频道）→ 平台表回退，任务锚定分支已删。
+    const teamMemberId = (channel as any).teamMemberId as string | null;
+    if (!teamMemberId) {
+      return fallback();
+    }
+    const sessions = await this.prisma.session.findMany({
+      where: { teamMemberId },
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        instanceRef: true,
+        workerId: true,
+        agentId: true,
+        createdAt: true,
+      },
+    });
+    session =
+      sessions.find((s) => !!s.instanceRef && !!s.workerId) ?? sessions[0] ?? null;
+    if (!session?.instanceRef || !session.workerId) {
+      return fallback();
     }
     const workerRow = await this.prisma.worker.findUnique({
       where: { id: session.workerId },
@@ -480,8 +446,9 @@ export class ChatService {
         worker,
         session.instanceRef,
       );
+      const sessionItems = this.convertSessionMessages(raw, channel, session);
       return {
-        items: this.convertSessionMessages(raw, channel, session),
+        items: await this.mergeSessionWithPlatform(channelId, sessionItems),
         nextCursor: null,
         source: 'session' as const,
       };
@@ -500,7 +467,7 @@ export class ChatService {
    * - user 消息：senderType=user、senderId=null；content.text = 非 synthetic text parts 聚合；
    *   parts 仅保留 text（prompt 注入的 synthetic 内容剔除，不渲染）。
    * - assistant 消息：senderType=agent、senderId=频道模板 agent id（回退 Session.agentId）、
-   *   senderInstanceId=channel.taskAgentId；content.text = 非 synthetic text 聚合；
+   *   senderInstanceId=频道 teamMemberId；content.text = 非 synthetic text 聚合；
    *   parts 保留 text/reasoning/tool（前端折叠思考 / 工具调用卡片渲染），
    *   step-start/step-finish/snapshot/patch 等过程 part 忽略。
    * - status：serve 历史消息的 step-finish part 并非总是持久化（实测历史轮次常缺失），
@@ -513,7 +480,7 @@ export class ChatService {
     channel: {
       id: string;
       agentId: string | null;
-      taskAgentId?: string | null;
+      teamMemberId?: string | null;
     },
     session: { agentId: string; createdAt: Date },
   ): Array<Record<string, unknown>> {
@@ -579,7 +546,7 @@ export class ChatService {
           senderId:
             role === 'user' ? null : (channel.agentId ?? session.agentId),
           senderInstanceId:
-            role === 'user' ? null : (channel.taskAgentId ?? null),
+            role === 'user' ? null : ((channel as any).teamMemberId ?? null),
           content: { text, parts: kept },
           mentions: [],
           status: MESSAGE_STATUS.sent,
@@ -597,6 +564,49 @@ export class ChatService {
       last.dto.status = MESSAGE_STATUS.processing;
     }
     return converted.map((c) => c.dto);
+  }
+
+  /**
+   * DM 历史合并（DB 为真源 + worker 会话仅 agent 增补）：
+   * - DB 该频道全量消息（user/system/agent，最新 500，按 id 升序）全部保留。
+   * - session user 项为 prompt 注入伪影（上下文前缀 + 用户文本拼接）一律排除，
+   *   DB user 行为准，避免同一文本重复展示。
+   * - session agent 项仅当未被 DB 引用时保留：DB agent 行 content.parts[].messageID
+   *   == worker info.id 即已落库（含 reasoning/tool parts），DB 行为准；无引用
+   *   （流式中/未落库，含无 info.id 的 ses- 合成项）则作为增补保留过程渲染。
+   * - 合并按 createdAt 升序（稳定排序，同刻 DB 优先）。
+   */
+  private async mergeSessionWithPlatform(
+    channelId: string,
+    sessionItems: Array<Record<string, unknown>>,
+  ): Promise<Array<Record<string, unknown>>> {
+    const rows = await this.prisma.message.findMany({
+      where: { channelId },
+      orderBy: { id: 'desc' },
+      take: 500,
+    });
+    const dbItems = [...rows]
+      .reverse()
+      .map((row) => this.toMessageDto(row as any));
+    const persisted = new Set<string>();
+    for (const item of dbItems) {
+      const parts = (item.content as { parts?: unknown })?.parts;
+      if (!Array.isArray(parts)) continue;
+      for (const p of parts) {
+        const mid = (p as { messageID?: unknown })?.messageID;
+        if (typeof mid === 'string' && mid) persisted.add(mid);
+      }
+    }
+    const supplement = sessionItems.filter((item) => {
+      if (item.senderType !== SENDER_TYPE.agent) return false;
+      return typeof item.id !== 'string' || !persisted.has(item.id);
+    });
+    const merged = [...dbItems, ...supplement];
+    merged.sort(
+      (a, b) =>
+        Date.parse(a.createdAt as string) - Date.parse(b.createdAt as string),
+    );
+    return merged;
   }
 
   /** 错误信息归一（worker 拉取失败时用于日志）。 */
@@ -639,27 +649,32 @@ export class ChatService {
       return { triggers: [] };
     }
 
-    // 零任务团队频道（taskId null）：团队维度解析 teamMember。
-    // taskAgent.taskId 为必填列，null 即 Prisma 校验抛错（线上 500 根因），故团队分支只读 team 表。
-    const isTeamDimension = !channel.taskId && !!channel.teamId;
-    let teamRows: { id: string; agentId: string; removedAt: Date | null }[];
-    if (isTeamDimension) {
-      const members = await (this.prisma as any).teamMember.findMany({
-        where: { teamId: channel.teamId },
-        select: TEAM_MEMBER_SELECT,
+    // 团队维度解析 teamMember（team-only：任务仅作数据透传，不参与会话定位；
+    // 存量任务频道经任务归属 teamId 反查团队，频道本身无 team 归属时无法定位 → 空触发）。
+    const directTeamId =
+      channel.teamId ?? (channel as any).task?.teamId ?? null;
+    let resolvedTeamId: string | null = directTeamId;
+    if (!resolvedTeamId && channel.taskId) {
+      const ownerTask = await (this.prisma as any).task.findUnique({
+        where: { id: channel.taskId },
+        select: { teamId: true },
       });
-      // TeamMember 无 removedAt 列（schema 已核）：恒为有效；防御性透传以镜像 buildTrigger 语义。
-      teamRows = (members ?? []).map((m: any) => ({
+      resolvedTeamId = (ownerTask as any)?.teamId ?? null;
+    }
+    if (!resolvedTeamId) {
+      return { triggers: [] };
+    }
+    const members = await (this.prisma as any).teamMember.findMany({
+      where: { teamId: resolvedTeamId },
+      select: TEAM_MEMBER_SELECT,
+    });
+    // TeamMember 无 removedAt 列（schema 已核）：恒为有效；防御性透传以镜像 buildTrigger 语义。
+    const teamRows: { id: string; agentId: string; removedAt: Date | null }[] =
+      (members ?? []).map((m: any) => ({
         id: m.id,
         agentId: m.agentId,
         removedAt: (m.removedAt ?? null) as Date | null,
       }));
-    } else {
-      teamRows = await this.prisma.taskAgent.findMany({
-        where: { taskId: channel.taskId },
-        select: TEAM_AGENT_SELECT,
-      });
-    }
 
     // 被 @ Agent 集合：agent 型直取（带 instanceId 精确到实例）；all 型展开为团队未移除全部实例
     const targetRows: {
@@ -685,9 +700,7 @@ export class ChatService {
     for (const row of targetRows) {
       const agentId = row.agentId;
       const instanceId = row.id;
-      const base = isTeamDimension
-        ? await this.buildTeamTrigger(channel.teamId as string, row)
-        : await this.buildTrigger(channel.taskId, row);
+      const base = await this.buildTrigger(resolvedTeamId, row);
       // 回复：该实例（agentId+instanceId 定位）于原消息之后的回复消息（senderType=agent，id 升序取最早一条）
       const reply = await this.prisma.message.findFirst({
         where: {
@@ -751,7 +764,6 @@ export class ChatService {
     let channel: ChannelRow;
     let task: {
       id?: string;
-      projectId: string;
       status: string;
       teamId?: string | null;
       mainAgentInstanceId?: string | null;
@@ -771,13 +783,12 @@ export class ChatService {
       channel = row as unknown as ChannelRow;
       const ch: any = row as any;
       if (ch.teamId) {
-        task = ch.task ?? { projectId: '', status: 'pending', teamId: ch.teamId };
+        task = ch.task ?? { status: 'pending', teamId: ch.teamId };
         if (dtoTaskId) {
           const t = await (this.prisma as any).task.findUnique({
             where: { id: dtoTaskId },
             select: {
               id: true,
-              projectId: true,
               status: true,
               teamId: true,
               mainAgentInstanceId: true,
@@ -790,7 +801,11 @@ export class ChatService {
         task = ch.task;
       }
     } else {
-      const resolved = await this.resolveChannelAccess(channelId, userId, dtoTaskId ?? null);
+      const resolved = await this.resolveChannelAccess(
+        channelId,
+        userId,
+        dtoTaskId ?? null,
+      );
       channel = resolved.channel;
       task = resolved.task;
     }
@@ -801,8 +816,15 @@ export class ChatService {
       });
     }
 
-    const effectiveTaskId: string | null =
-      dtoTaskId ?? (task as any).id ?? (channel as any).taskId ?? null;
+    const isTeamPrivate =
+      channel.type === CHANNEL_TYPE.private && !!channel.teamId;
+    // 团队私聊为团队维度（teamId + teamMemberId），不按任务分区：不继承
+    // resolveChannelAccess 为无任务团队频道合成的 currentTask 上下文（否则私聊
+    // 误走 task-mode 分派：任务快照会话 + 回复落群聊，DM processing 悬空）。
+    // dtoTaskId 亦忽略（私聊无任务分区语义；DM 页从不发送 taskId）。
+    const effectiveTaskId: string | null = isTeamPrivate
+      ? null
+      : (dtoTaskId ?? (task as any).id ?? (channel as any).taskId ?? null);
 
     const resolveKey = channel.teamId
       ? { teamId: channel.teamId, taskId: effectiveTaskId }
@@ -817,10 +839,13 @@ export class ChatService {
     const isTaskGroup = channel.type === CHANNEL_TYPE.task_group;
     if ((isTeamGroup || isTaskGroup) && triggers.length === 0) {
       const triggerTaskId = effectiveTaskId ?? (channel as any).taskId;
-      if (triggerTaskId) {
-        const mainTrigger = await this.buildMainAgentTrigger(triggerTaskId, task);
+      // team-only 主回退：任务上下文经团队主成员门（mainAgentMemberId→首位）定位团队会话；
+      // 零任务团队直聊沿用分派器即建即得路径（语义不变）。
+      const mainTeamId = channel.teamId ?? (task as any)?.teamId ?? null;
+      if (triggerTaskId && mainTeamId) {
+        const mainTrigger = await this.buildMainAgentTrigger(mainTeamId);
         if (mainTrigger) triggers.push(mainTrigger);
-      } else if (isTeamGroup && channel.teamId) {
+      } else if (!triggerTaskId && isTeamGroup && channel.teamId) {
         // 零任务团队直聊：无 @ 时默认触发主 Agent（团队门；会话即建即得，会话 id 直接回填）
         try {
           const teamMain = await (
@@ -884,6 +909,43 @@ export class ChatService {
             (err as Error)?.stack,
           );
         }
+      }
+    }
+
+    // 团队私聊无 @ 回退：私聊即与该成员对话，无 mentions 时直接触发
+    // DM 对端成员（团队会话即建即得，会话 id 直接回填）。无此分支则
+    // triggers 为空 → dispatch 空 targets → worker 永不执行（DM 无流式、无回复）。
+    if (
+      isTeamPrivate &&
+      triggers.length === 0 &&
+      channel.teamMemberId
+    ) {
+      try {
+        const peer = await (
+          this.dispatcher as unknown as {
+            buildTeamMemberTrigger(
+              teamId: string,
+              teamMemberId: string,
+            ): Promise<{
+              agentId: string;
+              instanceId: string;
+              sessionId: string;
+            } | null>;
+          }
+        ).buildTeamMemberTrigger(channel.teamId as string, channel.teamMemberId);
+        if (peer) {
+          triggers.push({
+            agentId: peer.agentId,
+            instanceId: peer.instanceId,
+            sessionId: peer.sessionId,
+            status: 'dispatched',
+          });
+        }
+      } catch (err) {
+        this.logger.error(
+          `team 私聊触发失败 team=${channel.teamId} member=${channel.teamMemberId} channel=${channelId}: ${(err as Error)?.message ?? err}`,
+          (err as Error)?.stack,
+        );
       }
     }
 
@@ -962,10 +1024,88 @@ export class ChatService {
       );
     }
 
+    // 群触发 DM 镜像（dm-mirror）：team_group/task_group（同一 createMessage
+    // 主路径，task_group 共享码道故一并覆盖）来源的用户消息，为每个回答该消息
+    // 的 agent 在其私聊频道落一条触发消息的逐字拷贝，使 DM 呈现完整 Q&A 上下文
+    // （前端按 content parts 原样渲染）。
+    // - 显式 @agent：与 trigger 按 agentId 1:1 配对消费。
+    // - 无 @ 主回退（buildMainAgentTrigger/零任务 teamMain）：DM 即该 agent 的
+    //   会话，无人点名时主 Agent 回答一切群消息，其实名 DM 同样需要该问句上文，
+    //   故同规则镜像（verbatim + taskId 空 + 双 scope 广播 + 单目标 try/catch）。
+    // - @all 展开的全员 triggers 不镜像（一次 @all 污染全员 DM 得不偿失；
+    //   各 DM 的后续问答仍经私聊直发覆盖）。
+    // - DM 来源（isTeamPrivate）、triggers 为空、非用户发送均不镜像。
+    // - 幂等：本块处于单次 createMessage 主路径（dispatch 重试/fan-out 不进此
+    //   函数），每目标恰好一次。
+    // - DM 无任务分区语义：镜像 taskId 置空（与私聊直发一致，历史跨任务保留）。
+    if (
+      (isTeamGroup || isTaskGroup) &&
+      senderType === SENDER_TYPE.user &&
+      channel.teamId &&
+      triggers.length > 0
+    ) {
+      const consumed = new Set<number>();
+      const mirrorTargets: TriggerResult[] = [];
+      const hasExplicitAgentMention = (dto.mentions ?? []).some(
+        (m) => m.type === 'agent' && !!(m as { agentId?: string }).agentId,
+      );
+      if (hasExplicitAgentMention) {
+        for (const m of dto.mentions ?? []) {
+          if (m.type !== 'agent') continue;
+          const mentionAgentId = (m as { agentId?: string }).agentId;
+          if (!mentionAgentId) continue;
+          let idx = -1;
+          const wantedInstance = (m as { instanceId?: string }).instanceId;
+          if (wantedInstance) {
+            idx = triggers.findIndex(
+              (t, i) =>
+                !consumed.has(i) &&
+                t.status === 'dispatched' &&
+                t.instanceId === wantedInstance,
+            );
+          }
+          if (idx < 0) {
+            idx = triggers.findIndex(
+              (t, i) =>
+                !consumed.has(i) &&
+                t.status === 'dispatched' &&
+                t.agentId === mentionAgentId,
+            );
+          }
+          if (idx >= 0) {
+            consumed.add(idx);
+            mirrorTargets.push(triggers[idx]);
+          }
+        }
+      } else if (
+        !(dto.mentions ?? []).some((m) => m.type === 'all')
+      ) {
+        for (const t of triggers) {
+          if (t.status === 'dispatched') mirrorTargets.push(t);
+        }
+      }
+      for (const t of mirrorTargets) {
+        try {
+          await this.mirrorGroupMentionToDm(
+            channel.teamId,
+            t,
+            message as any,
+            senderId,
+          );
+        } catch (err) {
+          this.logger.error(
+            `dm-mirror 失败 team=${channel.teamId} agent=${t.agentId} channel=${channelId}: ${(err as Error)?.message ?? err}`,
+            (err as Error)?.stack,
+          );
+        }
+      }
+    }
+
     // FIFO 排队拦截：team_group 频道下，queued 或非队首任务不应触发模型 dispatch
     // 最小修复：消息仍落库可见，但不触发 dispatcher；前端依 triggers 空提示“排队中”
     let shouldDispatch = true;
-    let queueHint: { position: number; currentTaskId: string | null } | null = null;
+    let queueHint: { position: number; currentTaskId: string | null } | null =
+      null;
     if (channel.teamId && effectiveTaskId && (isTeamGroup || isTaskGroup)) {
       // 优先用 task.status 判定 queued；其次校验队首一致性（防 pending 双头脏数据）
       if (task.status === TASK_STATUS.queued) {
@@ -979,7 +1119,10 @@ export class ChatService {
             where: { id: channel.teamId },
             select: { currentTaskId: true },
           });
-          queueHint = { position: q?.position ?? -1, currentTaskId: team?.currentTaskId ?? null };
+          queueHint = {
+            position: q?.position ?? -1,
+            currentTaskId: team?.currentTaskId ?? null,
+          };
         } catch {}
       } else if ((task as any).teamId) {
         try {
@@ -994,7 +1137,10 @@ export class ChatService {
             });
             if (inQueue) {
               shouldDispatch = false;
-              queueHint = { position: inQueue.position, currentTaskId: team.currentTaskId };
+              queueHint = {
+                position: inQueue.position,
+                currentTaskId: team.currentTaskId,
+              };
             }
           }
         } catch {}
@@ -1002,7 +1148,8 @@ export class ChatService {
       if (!shouldDispatch) {
         // 将 dispatched 改为排队提示，避免前端 loading 悬空
         for (const t of triggers) {
-          if ((t as any).status === 'dispatched') (t as any).status = 'queued' as any;
+          if ((t as any).status === 'dispatched')
+            (t as any).status = 'queued' as any;
         }
         // 可选系统提示（不落库，仅日志；如需落库可插入 system 消息）
         this.logger.log(
@@ -1013,20 +1160,25 @@ export class ChatService {
 
     if (shouldDispatch) {
       const targets = triggers.filter((t) => t.status === 'dispatched');
-      const dispatchTaskId = effectiveTaskId ?? (channel as any).taskId ?? (task as any).id ?? '';
+      // 团队私聊恒走 team-mode（taskId 置空 + teamId 透传）：task-mode 会话/
+      // 快照与群聊优先的终态落库均不适用于 DM 对端直聊。
+      const dispatchTaskId = isTeamPrivate
+        ? ''
+        : (effectiveTaskId ?? (channel as any).taskId ?? (task as any).id ?? '');
       void this.dispatcher
         .dispatch({
           messageId: message.id,
           channelId,
           taskId: dispatchTaskId,
+          ...(channel.teamId ? { teamId: channel.teamId } : {}),
+          ...(dispatchTaskId ? { taskContext: { taskId: dispatchTaskId } } : {}),
           text: dto.text,
           targets: targets.map((t) => ({
             agentId: t.agentId,
             instanceId: t.instanceId,
             sessionId: t.sessionId,
           })),
-          ...(!dispatchTaskId && channel.teamId ? { teamId: channel.teamId } : {}),
-        } as Parameters<MessageDispatcher['dispatch']>[0] & { teamId?: string })
+        })
         .catch((err: Error) =>
           this.logger.error(`dispatch failed: ${err.message}`, err.stack),
         );
@@ -1078,13 +1230,19 @@ export class ChatService {
     if (legacyTaskId && !teamId) {
       const legacyTask = await this.prisma.task.findUnique({
         where: { id: legacyTaskId },
-        select: { projectId: true, teamId: true },
+        select: { teamId: true },
       });
       if (!legacyTask) {
-        throw new NotFoundException({ code: CHAT_ERRORS.TASK_NOT_FOUND, message: '任务不存在' });
+        throw new NotFoundException({
+          code: CHAT_ERRORS.TASK_NOT_FOUND,
+          message: '任务不存在',
+        });
       }
       if (!legacyTask.teamId) {
-        throw new BadRequestException({ code: CHAT_ERRORS.TEAM_NOT_FOUND, message: '任务未绑定团队，无法创建私聊' });
+        throw new BadRequestException({
+          code: CHAT_ERRORS.TEAM_NOT_FOUND,
+          message: '任务未绑定团队，无法创建私聊',
+        });
       }
       const legacyTeamMember = agentIdInput
         ? await (this.prisma as any).teamMember.findFirst({
@@ -1093,12 +1251,18 @@ export class ChatService {
           })
         : null;
       if (!legacyTeamMember && agentIdInput) {
-        throw new BadRequestException({ code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM, message: `Agent ${agentIdInput} 不在团队内` });
+        throw new BadRequestException({
+          code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,
+          message: `Agent ${agentIdInput} 不在团队内`,
+        });
       }
-      const teamMemberIdLegacy = (dto as any).taskAgentId ? null : (legacyTeamMember?.id ?? null);
+      const teamMemberIdLegacy = legacyTeamMember?.id ?? null;
       if (teamMemberIdLegacy) {
         const existingLegacy = await this.prisma.chatChannel.findFirst({
-          where: { teamId: legacyTask.teamId, teamMemberId: teamMemberIdLegacy } as any,
+          where: {
+            teamId: legacyTask.teamId,
+            teamMemberId: teamMemberIdLegacy,
+          } as any,
           include: CHANNEL_TASK_SELECT,
         });
         if (existingLegacy) {
@@ -1115,11 +1279,20 @@ export class ChatService {
       }
     }
     if (!teamId) {
-      throw new BadRequestException({ code: CHAT_ERRORS.TEAM_NOT_FOUND, message: 'teamId 必填' });
+      throw new BadRequestException({
+        code: CHAT_ERRORS.TEAM_NOT_FOUND,
+        message: 'teamId 必填',
+      });
     }
-    const team = await (this.prisma as any).team.findUnique({ where: { id: teamId }, select: { id: true } });
+    const team = await (this.prisma as any).team.findUnique({
+      where: { id: teamId },
+      select: { id: true },
+    });
     if (!team) {
-      throw new NotFoundException({ code: CHAT_ERRORS.TEAM_NOT_FOUND, message: '团队不存在' });
+      throw new NotFoundException({
+        code: CHAT_ERRORS.TEAM_NOT_FOUND,
+        message: '团队不存在',
+      });
     }
     let teamMember: { id: string; agentId: string } | null = null;
     if (teamMemberIdInput) {
@@ -1128,15 +1301,27 @@ export class ChatService {
         select: { id: true, agentId: true, teamId: true },
       });
       if (!teamMember) {
-        throw new NotFoundException({ code: CHAT_ERRORS.TEAM_NOT_FOUND, message: '团队成员不存在' });
+        throw new NotFoundException({
+          code: CHAT_ERRORS.TEAM_NOT_FOUND,
+          message: '团队成员不存在',
+        });
       }
       if ((teamMember as any).teamId !== teamId) {
-        throw new BadRequestException({ code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM, message: '团队成员不属于该团队' });
+        throw new BadRequestException({
+          code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,
+          message: '团队成员不属于该团队',
+        });
       }
     } else if (agentIdInput) {
-      const agent = await this.prisma.agent.findUnique({ where: { id: agentIdInput }, select: { id: true } });
+      const agent = await this.prisma.agent.findUnique({
+        where: { id: agentIdInput },
+        select: { id: true },
+      });
       if (!agent) {
-        throw new NotFoundException({ code: CHAT_ERRORS.AGENT_NOT_FOUND, message: 'Agent 不存在' });
+        throw new NotFoundException({
+          code: CHAT_ERRORS.AGENT_NOT_FOUND,
+          message: 'Agent 不存在',
+        });
       }
       teamMember = await (this.prisma as any).teamMember.findFirst({
         where: { teamId, agentId: agentIdInput },
@@ -1144,10 +1329,16 @@ export class ChatService {
         select: { id: true, agentId: true },
       });
       if (!teamMember) {
-        throw new BadRequestException({ code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM, message: `Agent ${agentIdInput} 不在团队内` });
+        throw new BadRequestException({
+          code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,
+          message: `Agent ${agentIdInput} 不在团队内`,
+        });
       }
     } else {
-      throw new BadRequestException({ code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM, message: 'teamMemberId 或 agentId 必填' });
+      throw new BadRequestException({
+        code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,
+        message: 'teamMemberId 或 agentId 必填',
+      });
     }
     const existing = await this.prisma.chatChannel.findFirst({
       where: { teamId, teamMemberId: teamMember.id } as any,
@@ -1230,6 +1421,101 @@ export class ChatService {
     };
   }
 
+  /**
+   * 群 @ 触发 DM 镜像：为单个已 dispatched 显式目标落一条触发用户消息的逐字拷贝。
+   * content/mentions 按落库行原样复制（含 parts 推理/工具/文本，前端渲染与群侧一致）；
+   * 附件三字段随行透传；senderType=user + 同 senderId；taskId 置空（DM 无任务分区）。
+   */
+  private async mirrorGroupMentionToDm(
+    teamId: string,
+    target: TriggerResult,
+    sourceMessage: MessageRow,
+    senderId: string | null,
+  ): Promise<void> {
+    let teamMemberId: string | null =
+      target.instanceId?.startsWith('tmm_') ? target.instanceId : null;
+    let agentId: string = target.agentId;
+    if (!teamMemberId) {
+      const member = await (this.prisma as any).teamMember.findFirst({
+        where: { teamId, agentId: target.agentId },
+        select: { id: true, agentId: true },
+      });
+      if (!member) return;
+      teamMemberId = member.id;
+      agentId = member.agentId;
+    }
+    const privateChannelId = await this.ensureMirrorPrivateChannel(
+      teamId,
+      teamMemberId,
+      agentId,
+    );
+    if (!privateChannelId) return;
+    const mirror = await this.prisma.message.create({
+      data: {
+        id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+        channelId: privateChannelId,
+        senderType: SENDER_TYPE.user,
+        senderId,
+        content: sourceMessage.content as Prisma.InputJsonValue,
+        mentions: (sourceMessage.mentions ??
+          []) as Prisma.InputJsonValue,
+        status: MESSAGE_STATUS.sent,
+        ...(sourceMessage.attachmentUrl
+          ? {
+              attachmentUrl: sourceMessage.attachmentUrl,
+              attachmentName: sourceMessage.attachmentName ?? null,
+              attachmentType: sourceMessage.attachmentType ?? null,
+            }
+          : {}),
+      },
+    });
+    await this.realtime.broadcast(
+      EVENT_TYPES.CHAT_MESSAGE_NEW,
+      { message: this.toMessageDto(mirror as any) },
+      { type: 'channel', id: privateChannelId },
+    );
+    await this.realtime.broadcast(
+      EVENT_TYPES.CHAT_MESSAGE_NEW,
+      { message: this.toMessageDto(mirror as any) },
+      { type: 'team', id: teamId } as any,
+    );
+  }
+
+  /**
+   * 镜像用私聊频道确保：复用 POST /dm-channels 的 teamId+teamMemberId 幂等语义
+   * （已存在复用、soft-delete 复活、缺失创建），无鉴权分支（调用方已过群授权）。
+   */
+  private async ensureMirrorPrivateChannel(
+    teamId: string,
+    teamMemberId: string,
+    agentId: string,
+  ): Promise<string | null> {
+    const existing = await this.prisma.chatChannel.findFirst({
+      where: { teamId, teamMemberId } as any,
+    });
+    if (existing) {
+      if ((existing as any).deletedAt) {
+        const revived = await this.prisma.chatChannel.update({
+          where: { id: existing.id },
+          data: { deletedAt: null },
+        });
+        return (revived as any)?.id ?? null;
+      }
+      return existing.id;
+    }
+    const created = await this.prisma.chatChannel.create({
+      data: {
+        id: await this.idGen.nextId(CHANNEL_ID_PREFIX),
+        type: CHANNEL_TYPE.private,
+        teamId,
+        teamMemberId,
+        agentId,
+        taskId: null,
+      } as any,
+    });
+    return (created as any)?.id ?? null;
+  }
+
   private async resolveChannelAccess(
     channelId: string,
     userId: string,
@@ -1238,7 +1524,6 @@ export class ChatService {
     channel: ChannelRow;
     task: {
       id?: string;
-      projectId: string;
       status: string;
       teamId?: string | null;
       mainAgentInstanceId?: string | null;
@@ -1273,7 +1558,6 @@ export class ChatService {
           where: { id: taskIdHint },
           select: {
             id: true,
-            projectId: true,
             status: true,
             teamId: true,
             mainAgentInstanceId: true,
@@ -1282,7 +1566,7 @@ export class ChatService {
         });
       } else if (row.taskId) {
         task = (row as any).task ?? null;
-      } else if ((row as any).task && (row as any).task.projectId) {
+      } else if ((row as any).task) {
         task = (row as any).task;
       } else {
         const teamId = row.teamId;
@@ -1295,7 +1579,6 @@ export class ChatService {
             where: { id: curTeam.currentTaskId },
             select: {
               id: true,
-              projectId: true,
               status: true,
               teamId: true,
               mainAgentInstanceId: true,
@@ -1309,7 +1592,6 @@ export class ChatService {
             orderBy: { createdAt: 'desc' },
             select: {
               id: true,
-              projectId: true,
               status: true,
               teamId: true,
               mainAgentInstanceId: true,
@@ -1319,22 +1601,31 @@ export class ChatService {
         }
       }
       if (task) {
-        const member = await this.prisma.projectMember.findUnique({
+        // channel → taskId → teamId → teamUserMember：任务归属团队即授权域。
+        // 无 teamId 归属的任务上下文 fail closed（project 维度已拆除，无回退链）。
+        const taskTeamId = (task.teamId as string | null | undefined) ?? null;
+        if (!taskTeamId) {
+          throw new ForbiddenException({
+            code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+            message: '您不是该团队成员',
+          });
+        }
+        const member = await (this.prisma as any).teamUserMember.findUnique({
           where: {
-            projectId_userId: { projectId: task.projectId, userId },
+            teamId_userId: { teamId: taskTeamId, userId },
           },
           select: { id: true },
         });
         if (!member) {
           throw new ForbiddenException({
-            code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
-            message: '您不是该项目成员',
+            code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+            message: '您不是该团队成员',
           });
         }
         return { channel: row, task };
       }
       // 团队频道无任务上下文：调用者须为 team_user_members 成员，否则 403
-      // （错误码复用 PROJECT_MEMBERSHIP NOT_MEMBER 语义；禁止放行到“登录即可聊”）。
+      // （PERMISSION_TEAM_NOT_MEMBER；禁止放行到“登录即可聊”）。
       const teamMember = await (this.prisma as any).teamUserMember.findUnique({
         where: {
           teamId_userId: { teamId: row.teamId, userId },
@@ -1343,14 +1634,13 @@ export class ChatService {
       });
       if (!teamMember) {
         throw new ForbiddenException({
-          code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
+          code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
           message: '您不是该团队成员',
         });
       }
       return {
         channel: row,
         task: {
-          projectId: '',
           status: 'pending',
           teamId: row.teamId,
         } as any,
@@ -1363,16 +1653,26 @@ export class ChatService {
         message: '频道不存在',
       });
     }
-    const member = await this.prisma.projectMember.findUnique({
+    // 旧 task_group 频道：任务有 teamId 归属时走团队成员校验，
+    // 无归属时 fail closed（project_members 表已拆除，无回退链）。
+    const legacyTeamId =
+      (legacyTask.teamId as string | null | undefined) ?? null;
+    if (!legacyTeamId) {
+      throw new ForbiddenException({
+        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: '您不是该团队成员',
+      });
+    }
+    const teamMember = await (this.prisma as any).teamUserMember.findUnique({
       where: {
-        projectId_userId: { projectId: legacyTask.projectId, userId },
+        teamId_userId: { teamId: legacyTeamId, userId },
       },
       select: { id: true },
     });
-    if (!member) {
+    if (!teamMember) {
       throw new ForbiddenException({
-        code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
-        message: '您不是该项目成员',
+        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: '您不是该团队成员',
       });
     }
     return { channel: row, task: legacyTask };
@@ -1390,138 +1690,27 @@ export class ChatService {
       teamId = key.teamId ?? null;
       taskId = key.taskId ?? null;
     }
-    if (teamId) {
-      const members = await (this.prisma as any).teamMember.findMany({
-        where: { teamId },
-        select: TEAM_MEMBER_SELECT,
+    // team-only：触发经团队成员定位团队会话；无 teamId 时经任务归属反查团队
+    // （任务只作归属数据，不再读任务实例快照）；无归属 → 空触发。
+    if (!teamId && taskId) {
+      const ownerTask = await (this.prisma as any).task.findUnique({
+        where: { id: taskId },
+        select: { teamId: true },
       });
-      if (!members || members.length === 0) {
-        if (!taskId) return { mentionsStored: mentions, triggers: [] };
-        const fallbackRows = await this.prisma.taskAgent.findMany({
-          where: { taskId },
-          select: TEAM_AGENT_SELECT,
-        });
-        const triggers: TriggerResult[] = [];
-        for (const mention of mentions) {
-          if (mention.type === 'all') {
-            for (const row of fallbackRows) {
-              if (!row.removedAt && (row as any).enabled !== false) triggers.push(await this.buildTrigger(taskId, row as any));
-            }
-          } else if (mention.type === 'agent') {
-            if (!mention.agentId) throw new BadRequestException({ code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM, message: 'agent mention 缺少 agentId' });
-            const row = mention.instanceId ? fallbackRows.find((r: any) => r.id === mention.instanceId) : (fallbackRows.find((r: any) => r.agentId === mention.agentId && !r.removedAt) ?? fallbackRows.find((r: any) => r.agentId === mention.agentId));
-            if (!row) throw new BadRequestException({ code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM, message: `Agent ${mention.agentId} 不在任务团队内` });
-            if ((row as any).enabled === false) throw new BadRequestException({ code: CHAT_ERRORS.AGENT_DISABLED, message: `Agent ${mention.agentId} 已禁用，无法发送消息` });
-            triggers.push(await this.buildTrigger(taskId, row as any));
-          } else if (mention.type === 'user') {
-            if (!(mention as { userId?: string }).userId) throw new BadRequestException({ code: CHAT_ERRORS.MENTION_TYPE_INVALID, message: 'user mention 缺少 userId' });
-          } else throw new BadRequestException({ code: CHAT_ERRORS.MENTION_TYPE_INVALID, message: 'mentions 项 type 仅支持 agent | all | user' });
-        }
-        return { mentionsStored: mentions, triggers };
-      }
-      const triggers: TriggerResult[] = [];
-      for (const mention of mentions) {
-        if (mention.type === 'all') {
-          for (const row of members) {
-            const ta = taskId
-              ? await this.prisma.taskAgent.findFirst({
-                  where: { taskId, agentId: row.agentId },
-                  select: TEAM_AGENT_SELECT,
-                })
-              : null;
-            const effectiveRow = ta ?? row;
-            if (!ta && taskId) {
-              triggers.push({
-                agentId: row.agentId,
-                instanceId: row.id,
-                sessionId: null,
-                status: 'no_session',
-              });
-              continue;
-            }
-            if ((effectiveRow as any).removedAt) continue;
-            if ((effectiveRow as any).enabled === false) continue;
-            const tId = taskId ?? '';
-            if (tId) triggers.push(await this.buildTrigger(tId, effectiveRow as any));
-            else
-              triggers.push({
-                agentId: row.agentId,
-                instanceId: row.id,
-                sessionId: null,
-                status: 'no_session',
-              });
-          }
-        } else if (mention.type === 'agent') {
-          if (!mention.agentId) {
-            throw new BadRequestException({
-              code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,
-              message: 'agent mention 缺少 agentId',
-            });
-          }
-          // 任务分区下前端携带的是任务实例 id（ta_），团队成员行是 tmm_：
-          // instanceId 未命中时按 agentId 回退匹配（同 agent 在团队内即有效，
-          // 后续 taskId 分支仍按 agentId 精确定位任务实例做分派）。
-          const memberRow =
-            (mention.instanceId
-              ? members.find((r: any) => r.id === mention.instanceId)
-              : undefined) ??
-            members.find((r: any) => r.agentId === mention.agentId);
-          if (!memberRow) {
-            throw new BadRequestException({
-              code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,
-              message: `Agent ${mention.agentId} 不在团队内`,
-            });
-          }
-          if (taskId) {
-            const ta = await this.prisma.taskAgent.findFirst({
-              where: { taskId, agentId: mention.agentId },
-              select: TEAM_AGENT_SELECT,
-            });
-            const eff = ta ?? memberRow;
-            if ((eff as any).enabled === false) {
-              throw new BadRequestException({
-                code: CHAT_ERRORS.AGENT_DISABLED,
-                message: `Agent ${mention.agentId} 已禁用，无法发送消息`,
-              });
-            }
-            triggers.push(await this.buildTrigger(taskId, eff as any));
-          } else {
-            triggers.push({
-              agentId: memberRow.agentId,
-              instanceId: memberRow.id,
-              sessionId: null,
-              status: 'no_session',
-            });
-          }
-        } else if (mention.type === 'user') {
-          if (!(mention as { userId?: string }).userId) {
-            throw new BadRequestException({
-              code: CHAT_ERRORS.MENTION_TYPE_INVALID,
-              message: 'user mention 缺少 userId',
-            });
-          }
-        } else {
-          throw new BadRequestException({
-            code: CHAT_ERRORS.MENTION_TYPE_INVALID,
-            message: 'mentions 项 type 仅支持 agent | all | user',
-          });
-        }
-      }
-      return { mentionsStored: mentions, triggers };
+      teamId = (ownerTask as any)?.teamId ?? null;
     }
-    const tId = taskId ?? '';
-    if (!tId) return { mentionsStored: mentions, triggers: [] };
-    const teamRows = await this.prisma.taskAgent.findMany({
-      where: { taskId: tId },
-      select: TEAM_AGENT_SELECT,
+    if (!teamId) return { mentionsStored: mentions, triggers: [] };
+    const members = await (this.prisma as any).teamMember.findMany({
+      where: { teamId },
+      select: TEAM_MEMBER_SELECT,
     });
     const triggers: TriggerResult[] = [];
     for (const mention of mentions) {
       if (mention.type === 'all') {
-        for (const row of teamRows) {
-          if (!row.removedAt && row.enabled !== false) {
-            triggers.push(await this.buildTrigger(tId, row));
-          }
+        for (const memberRow of members ?? []) {
+          if ((memberRow as any).removedAt) continue;
+          if ((memberRow as any).enabled === false) continue;
+          triggers.push(await this.buildTrigger(teamId, memberRow as any));
         }
       } else if (mention.type === 'agent') {
         if (!mention.agentId) {
@@ -1530,24 +1719,26 @@ export class ChatService {
             message: 'agent mention 缺少 agentId',
           });
         }
-        const row = mention.instanceId
-          ? teamRows.find((r) => r.id === mention.instanceId)
-          : (teamRows.find(
-              (r) => r.agentId === mention.agentId && !r.removedAt,
-            ) ?? teamRows.find((r) => r.agentId === mention.agentId));
-        if (!row) {
+        // 任务分区下前端携带的是成员 id（tmm_）：未命中成员 id 时
+        // 按 agentId 回退匹配（同 agent 在团队内即有效）。
+        const memberRow =
+          (mention.instanceId
+            ? (members ?? []).find((r: any) => r.id === mention.instanceId)
+            : undefined) ??
+          (members ?? []).find((r: any) => r.agentId === mention.agentId);
+        if (!memberRow) {
           throw new BadRequestException({
             code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,
-            message: `Agent ${mention.agentId} 不在任务团队内`,
+            message: `Agent ${mention.agentId} 不在团队内`,
           });
         }
-        if ((row as { enabled?: boolean | null }).enabled === false) {
+        if ((memberRow as any).enabled === false) {
           throw new BadRequestException({
             code: CHAT_ERRORS.AGENT_DISABLED,
             message: `Agent ${mention.agentId} 已禁用，无法发送消息`,
           });
         }
-        triggers.push(await this.buildTrigger(tId, row));
+        triggers.push(await this.buildTrigger(teamId, memberRow as any));
       } else if (mention.type === 'user') {
         if (!(mention as { userId?: string }).userId) {
           throw new BadRequestException({
@@ -1565,9 +1756,9 @@ export class ChatService {
     return { mentionsStored: mentions, triggers };
   }
 
-  /** 单个触发结果：已移除 → agent_removed；禁用 → agent_disabled；未移除查会话。 */
+  /** 单个触发结果：已移除 → agent_removed；禁用 → agent_disabled；未移除查团队会话。 */
   private async buildTrigger(
-    taskId: string,
+    teamId: string,
     row: {
       id: string;
       agentId: string;
@@ -1591,44 +1782,8 @@ export class ChatService {
         status: 'agent_disabled',
       };
     }
-    // T6 实例语义：按 taskAgentId 定位会话（同 agent 多实例会话独立，不再按 agentId 撞首条）
-    const session = await this.prisma.session.findFirst({
-      where: { taskId, taskAgentId: row.id },
-      select: { id: true },
-    });
-    return {
-      agentId: row.agentId,
-      instanceId: row.id,
-      sessionId: session?.id ?? null,
-      status: session ? 'dispatched' : 'no_session',
-    };
-  }
-
-  private async buildTeamTrigger(
-    teamId: string,
-    row: {
-      id: string;
-      agentId: string;
-      removedAt?: Date | null;
-      enabled?: boolean | null;
-    },
-  ): Promise<TriggerResult> {
-    if ((row as { removedAt?: Date | null }).removedAt) {
-      return {
-        agentId: row.agentId,
-        instanceId: row.id,
-        sessionId: null,
-        status: 'agent_removed',
-      };
-    }
-    if ((row as { enabled?: boolean | null }).enabled === false) {
-      return {
-        agentId: row.agentId,
-        instanceId: row.id,
-        sessionId: null,
-        status: 'agent_disabled',
-      };
-    }
+    // 团队直查：按 (teamId, teamMemberId) 定位团队会话（单成员单会话，
+    // 同 agent 多实例会话独立，不再按 agentId 撞首条；任务锚定分支已删）。
     const session = await this.prisma.session.findFirst({
       where: { teamId, teamMemberId: row.id },
       select: { id: true },
@@ -1641,77 +1796,29 @@ export class ChatService {
     };
   }
 
+  /** 团队主触发：team.mainAgentMemberId 优先，否则首位成员；无成员 → null。 */
   private async buildMainAgentTrigger(
-    taskId: string,
-    task: { mainAgentInstanceId?: string | null; mainAgentId?: string | null; teamId?: string | null },
+    teamId: string,
   ): Promise<TriggerResult | null> {
-    let row: { id: string; agentId: string; removedAt: Date | null } | null = null;
-    if (task.mainAgentInstanceId) {
-      row = await this.prisma.taskAgent.findFirst({
-        where: { id: task.mainAgentInstanceId, taskId },
-        select: TEAM_AGENT_SELECT,
-      });
-      if (!row && (task as any).teamId) {
-        row = await (this.prisma as any).teamMember.findFirst({
-          where: { id: task.mainAgentInstanceId, teamId: (task as any).teamId },
+    const t = await (this.prisma as any).team.findUnique({
+      where: { id: teamId },
+      select: { mainAgentMemberId: true },
+    });
+    const mainId = (t as any)?.mainAgentMemberId ?? null;
+    const row = mainId
+      ? await (this.prisma as any).teamMember.findFirst({
+          where: { id: mainId, teamId },
           select: TEAM_MEMBER_SELECT,
-        }) as any;
-        if (row) {
-          const ta = await this.prisma.taskAgent.findFirst({
-            where: { taskId, agentId: (row as any).agentId },
-            select: TEAM_AGENT_SELECT,
-          });
-          if (ta) row = ta as any;
-        }
-      }
-    } else if (task.mainAgentId) {
-      row = await this.prisma.taskAgent.findFirst({
-        where: { taskId, agentId: task.mainAgentId, removedAt: null },
-        orderBy: { seq: 'asc' },
-        select: TEAM_AGENT_SELECT,
-      });
-      if (!row && (task as any).teamId) {
-        const m = await (this.prisma as any).teamMember.findFirst({
-          where: { teamId: (task as any).teamId, agentId: task.mainAgentId },
+        })
+      : await (this.prisma as any).teamMember.findFirst({
+          where: { teamId },
+          orderBy: { seq: 'asc' },
           select: TEAM_MEMBER_SELECT,
         });
-        if (m) row = m as any;
-      }
-    } else if ((task as any).teamId) {
-      // 团队主 Agent 优先：team.mainAgentMemberId（团队设置修改后即时生效，不依赖任务快照回填）
-      const t = await (this.prisma as any).team.findUnique({
-        where: { id: (task as any).teamId },
-        select: { mainAgentMemberId: true },
-      });
-      const mainId = (t as any)?.mainAgentMemberId ?? null;
-      const m = mainId
-        ? await (this.prisma as any).teamMember.findFirst({
-            where: { id: mainId, teamId: (task as any).teamId },
-            select: TEAM_MEMBER_SELECT,
-          })
-        : await (this.prisma as any).teamMember.findFirst({
-            where: { teamId: (task as any).teamId },
-            orderBy: { seq: 'asc' },
-            select: TEAM_MEMBER_SELECT,
-          });
-      if (m) {
-        const ta = await this.prisma.taskAgent.findFirst({
-          where: { taskId, agentId: (m as any).agentId },
-          select: TEAM_AGENT_SELECT,
-        });
-        row = (ta as any) ?? (m as any);
-      }
-    }
-    if (!row || (row as any).removedAt || (row as any).enabled === false) return null;
-    if ((row as any).seq !== undefined && !(row as any).removedAt) {
-      const ta = await this.prisma.taskAgent.findFirst({
-        where: { taskId, agentId: (row as any).agentId },
-        select: TEAM_AGENT_SELECT,
-      });
-      if (ta) row = ta as any;
-    }
+    if (!row || (row as any).removedAt || (row as any).enabled === false)
+      return null;
     return this.buildTrigger(
-      taskId,
+      teamId,
       row as {
         id: string;
         agentId: string;
@@ -1729,7 +1836,6 @@ export class ChatService {
       teamMemberId: (row as any).teamMemberId ?? null,
       taskId: row.taskId,
       agentId: row.agentId,
-      taskAgentId: row.taskAgentId ?? null,
       pinned: row.pinned,
       lastReadAt: row.lastReadAt ? row.lastReadAt.toISOString() : null,
       task: row.task
@@ -1737,10 +1843,11 @@ export class ChatService {
             id: row.task.id,
             title: row.task.title,
             status: row.task.status,
-            projectId: row.task.projectId,
           }
         : undefined,
-      team: (row as any).team ? { id: (row as any).team.id, name: (row as any).team.name } : undefined,
+      team: (row as any).team
+        ? { id: (row as any).team.id, name: (row as any).team.name }
+        : undefined,
       agent: row.agent
         ? { id: row.agent.id, name: row.agent.name, role: row.agent.role }
         : undefined,

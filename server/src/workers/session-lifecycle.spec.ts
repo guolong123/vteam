@@ -125,47 +125,28 @@ describe('SessionLifecycleService', () => {
     });
   });
 
-  describe('bindSessionToWorker', () => {
-    it('首次 bind：Session 行写 workerId + instanceRef + status=active，TaskGroupInstance 落库（taskId 取 session）', async () => {
+  describe('bindSessionToWorker（Todo10：team-only，只认团队行）', () => {
+    it('任务归属会话（taskId 非空但无团队维度）→ 400，不写 Session 也不写实例行', async () => {
       const tx = mockBindTx({
-        session: { id: 's_0000000001', taskId: 't_0000000001' },
+        session: { id: 's_0000000001', taskId: 't_0000000001' } as any,
         existingInstance: null,
       });
 
-      const result = await service.bindSessionToWorker(
-        's_0000000001',
-        'w_0000000001',
-        'ses_0000000001',
-      );
-
-      expect(tx.session.update).toHaveBeenCalledWith({
-        where: { id: 's_0000000001' },
-        data: {
-          workerId: 'w_0000000001',
-          instanceRef: 'ses_0000000001',
-          status: SESSION_STATUS.active,
-        },
-      });
-      expect(tx.taskGroupInstance.create).toHaveBeenCalledWith({
-        data: {
-          id: 'ti_0000000001',
-          taskId: 't_0000000001',
-          workerId: 'w_0000000001',
-          instanceId: 'ses_0000000001',
-        },
-      });
-      expect(result).toEqual({
-        sessionId: 's_0000000001',
-        taskId: 't_0000000001',
-        workerId: 'w_0000000001',
-        instanceId: 'ses_0000000001',
-        instanceRowId: 'ti_0000000001',
-      });
+      await expect(
+        service.bindSessionToWorker('s_0000000001', 'w_0000000001', 'ses_0000000001'),
+      ).rejects.toThrow();
+      expect(tx.session.update).not.toHaveBeenCalled();
+      expect(tx.taskGroupInstance.create).not.toHaveBeenCalled();
     });
 
-    it('重复 bind 幂等：同 (taskId, workerId, instanceId) 已有实例行 → 复用不重复 create，Session 行照常更新', async () => {
+    it('重复 bind 幂等：同 (teamId, teamMemberId, workerId, instanceId) 已有实例行 → 复用不重复 create，Session 行照常更新', async () => {
       const tx = mockBindTx({
-        session: { id: 's_0000000001', taskId: 't_0000000001' },
+        session: {
+          id: 's_0000000001',
+          taskId: null,
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_0000000001',
+        } as any,
         existingInstance: { id: 'ti_0000000001' },
       });
 
@@ -200,7 +181,9 @@ describe('SessionLifecycleService', () => {
     const mockUnbindTx = (options: {
       session: {
         id: string;
-        taskId: string;
+        taskId: string | null;
+        teamId?: string | null;
+        teamMemberId?: string | null;
         workerId: string | null;
         instanceRef: string | null;
       } | null;
@@ -218,11 +201,13 @@ describe('SessionLifecycleService', () => {
       return txModels;
     };
 
-    it('清 workerId/instanceRef + status=created，实例行软移除（removedAt=now）', async () => {
+    it('清 workerId/instanceRef + status=created，实例行按团队键软移除（removedAt=now）', async () => {
       const tx = mockUnbindTx({
         session: {
           id: 's_0000000001',
-          taskId: 't_0000000001',
+          taskId: null,
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_0000000001',
           workerId: 'w_0000000001',
           instanceRef: 'ses_0000000001',
         },
@@ -232,7 +217,8 @@ describe('SessionLifecycleService', () => {
 
       expect(tx.taskGroupInstance.updateMany).toHaveBeenCalledWith({
         where: {
-          taskId: 't_0000000001',
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_0000000001',
           workerId: 'w_0000000001',
           instanceId: 'ses_0000000001',
           removedAt: null,
@@ -254,7 +240,9 @@ describe('SessionLifecycleService', () => {
       const tx = mockUnbindTx({
         session: {
           id: 's_0000000001',
-          taskId: 't_0000000001',
+          taskId: null,
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_0000000001',
           workerId: null,
           instanceRef: null,
         },
@@ -280,14 +268,21 @@ describe('SessionLifecycleService', () => {
     });
   });
 
-  describe('getInstancesByTask', () => {
-    it('返回任务全部未移除实例，createdAt 倒序', async () => {
+  describe('getInstancesByTeamMember（Todo10：任务键查询已删，团队键唯一）', () => {
+    it('返回成员全部未移除实例，createdAt 倒序', async () => {
       prisma.taskGroupInstance.findMany.mockResolvedValue([instanceRow()]);
 
-      const rows = await service.getInstancesByTask('t_0000000001');
+      const rows = await service.getInstancesByTeamMember(
+        'tm_0000000001',
+        'tmm_0000000001',
+      );
 
       expect(prisma.taskGroupInstance.findMany).toHaveBeenCalledWith({
-        where: { taskId: 't_0000000001', removedAt: null },
+        where: {
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_0000000001',
+          removedAt: null,
+        },
         orderBy: { createdAt: 'desc' },
       });
       expect(rows).toHaveLength(1);
@@ -296,9 +291,10 @@ describe('SessionLifecycleService', () => {
   });
 
   describe('getInstanceBySession', () => {
-    it('会话已绑定（workerId + instanceRef）→ 按 (taskId, workerId, instanceId) 查实例行', async () => {
+    it('会话已绑定（workerId + instanceRef）→ 按 (teamId, teamMemberId, workerId, instanceId) 查实例行', async () => {
       prisma.session.findUnique.mockResolvedValue({
-        taskId: 't_0000000001',
+        teamId: 'tm_0000000001',
+        teamMemberId: 'tmm_0000000001',
         workerId: 'w_0000000001',
         instanceRef: 'ses_0000000001',
       });
@@ -308,13 +304,28 @@ describe('SessionLifecycleService', () => {
 
       expect(prisma.taskGroupInstance.findFirst).toHaveBeenCalledWith({
         where: {
-          taskId: 't_0000000001',
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_0000000001',
           workerId: 'w_0000000001',
           instanceId: 'ses_0000000001',
           removedAt: null,
         },
       });
       expect(row).toMatchObject({ id: 'ti_0000000001' });
+    });
+
+    it('会话无团队维度 → null，不查实例行', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        teamId: null,
+        teamMemberId: null,
+        workerId: 'w_0000000001',
+        instanceRef: 'ses_0000000001',
+      });
+
+      const row = await service.getInstanceBySession('s_0000000001');
+
+      expect(row).toBeNull();
+      expect(prisma.taskGroupInstance.findFirst).not.toHaveBeenCalled();
     });
 
     it('会话未绑定（created 态，workerId/instanceRef 空）→ null，不查实例行', async () => {
@@ -368,7 +379,11 @@ describe('SessionLifecycleService', () => {
 
     it('未建过 → create 行（team_id 必填，task_id/task_agent_id 置空），reused=false', async () => {
       const tx = mockEnsureTx({
-        member: { id: 'tmm_0000000001', teamId: 'tm_0000000001', agentId: 'a_product' },
+        member: {
+          id: 'tmm_0000000001',
+          teamId: 'tm_0000000001',
+          agentId: 'a_product',
+        },
         existing: null,
       });
       idGen.nextId.mockResolvedValue('s_0000000001');
@@ -390,7 +405,6 @@ describe('SessionLifecycleService', () => {
             teamMemberId: 'tmm_0000000001',
             agentId: 'a_product',
             taskId: null,
-            taskAgentId: null,
             status: SESSION_STATUS.created,
           }),
         }),
@@ -409,7 +423,11 @@ describe('SessionLifecycleService', () => {
         status: SESSION_STATUS.created,
       };
       const tx = mockEnsureTx({
-        member: { id: 'tmm_0000000001', teamId: 'tm_0000000001', agentId: 'a_product' },
+        member: {
+          id: 'tmm_0000000001',
+          teamId: 'tm_0000000001',
+          agentId: 'a_product',
+        },
         existing,
       });
 
@@ -433,12 +451,20 @@ describe('SessionLifecycleService', () => {
         status: SESSION_STATUS.created,
       };
       const tx = mockEnsureTx({
-        member: { id: 'tmm_0000000001', teamId: 'tm_0000000001', agentId: 'a_product' },
+        member: {
+          id: 'tmm_0000000001',
+          teamId: 'tm_0000000001',
+          agentId: 'a_product',
+        },
         existing: null,
       });
-      const p2002 = Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
+      const p2002 = Object.assign(new Error('Unique constraint failed'), {
+        code: 'P2002',
+      });
       (tx.session.create as jest.Mock).mockRejectedValueOnce(p2002);
-      (tx.session.findUnique as jest.Mock).mockResolvedValueOnce(null).mockResolvedValueOnce(raced);
+      (tx.session.findUnique as jest.Mock)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(raced);
       idGen.nextId.mockResolvedValue('s_0000000001');
 
       const result = await service.ensureTeamSession(
@@ -466,7 +492,11 @@ describe('SessionLifecycleService', () => {
 
     it('成员不属该团队 → 404，不建行', async () => {
       const tx = mockEnsureTx({
-        member: { id: 'tmm_0000000001', teamId: 'tm_other', agentId: 'a_product' },
+        member: {
+          id: 'tmm_0000000001',
+          teamId: 'tm_other',
+          agentId: 'a_product',
+        },
         existing: null,
       });
 
@@ -574,7 +604,12 @@ describe('SessionLifecycleService', () => {
 
     it('task_id 与团队维度双空 → 400，不写 Session 也不写实例行', async () => {
       const tx = mockTeamBindTx({
-        session: { id: 's_0000000001', taskId: null, teamId: null, teamMemberId: null },
+        session: {
+          id: 's_0000000001',
+          taskId: null,
+          teamId: null,
+          teamMemberId: null,
+        },
         existingInstance: null,
       });
 
@@ -586,50 +621,109 @@ describe('SessionLifecycleService', () => {
     });
   });
 
-  describe('resetTeamSessionsInTx（Todo7 记忆开关）', () => {
-    it('批量 reset：soft-remove 先于 delete，再 delete+create 新 s_ 行，Memory 不删', async () => {
+  describe('resetTeamSessionsInTx（团队行批量重置，task 键已删）', () => {
+    it('批量 reset：soft-remove 先于 delete，再 delete+create 新 s_ 行（团队键，task 置空），Memory 不删', async () => {
       const tx: any = {
-        teamMember: { findMany: jest.fn().mockResolvedValue([{ id: 'tmm_0000000001' }, { id: 'tmm_0000000002' }]) },
+        teamMember: {
+          findMany: jest
+            .fn()
+            .mockResolvedValue([
+              { id: 'tmm_0000000001' },
+              { id: 'tmm_0000000002' },
+            ]),
+        },
         session: {
           findMany: jest.fn().mockResolvedValue([
-            { id: 's_0000000001', taskId: 't_0000000001', taskAgentId: 'ta_0000000001', agentId: 'a_product', teamMemberId: 'tmm_0000000001', workerId: 'w_1', instanceRef: 'ses_1' },
-            { id: 's_0000000002', taskId: 't_0000000001', taskAgentId: 'ta_0000000002', agentId: 'a_developer', teamMemberId: 'tmm_0000000002', workerId: null, instanceRef: null },
+            {
+              id: 's_0000000001',
+              teamId: 'tm_0000000001',
+              teamMemberId: 'tmm_0000000001',
+              agentId: 'a_product',
+              workerId: 'w_1',
+              instanceRef: 'ses_1',
+            },
+            {
+              id: 's_0000000002',
+              teamId: 'tm_0000000001',
+              teamMemberId: 'tmm_0000000002',
+              agentId: 'a_developer',
+              workerId: null,
+              instanceRef: null,
+            },
           ]),
           deleteMany: jest.fn().mockResolvedValue({ count: 2 }),
           create: jest.fn().mockResolvedValue({}),
         },
-        taskGroupInstance: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        taskGroupInstance: {
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
       };
       idGen.nextId.mockResolvedValue('s_0000000099');
 
-      const count = await service.resetTeamSessionsInTx(tx as any, 'tm_0000000001');
+      const count = await service.resetTeamSessionsInTx(
+        tx as any,
+        'tm_0000000001',
+      );
 
       expect(tx.taskGroupInstance.updateMany).toHaveBeenCalledTimes(1);
       expect(tx.taskGroupInstance.updateMany).toHaveBeenCalledWith({
-        where: { taskId: 't_0000000001', workerId: 'w_1', instanceId: 'ses_1', removedAt: null },
+        where: {
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_0000000001',
+          workerId: 'w_1',
+          instanceId: 'ses_1',
+          removedAt: null,
+        },
         data: { removedAt: expect.any(Date) },
       });
       const deleteOrder = tx.session.deleteMany.mock.invocationCallOrder[0];
       const createOrder = tx.session.create.mock.invocationCallOrder[0];
       expect(deleteOrder).toBeLessThan(createOrder);
-      expect(tx.session.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['s_0000000001', 's_0000000002'] } } });
+      expect(tx.session.deleteMany).toHaveBeenCalledWith({
+        where: { id: { in: ['s_0000000001', 's_0000000002'] } },
+      });
       expect(tx.session.create).toHaveBeenCalledTimes(2);
+      expect(tx.session.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            teamId: 'tm_0000000001',
+            teamMemberId: 'tmm_0000000001',
+            agentId: 'a_product',
+            taskId: null,
+            status: SESSION_STATUS.created,
+          }),
+        }),
+      );
       expect(count).toBe(2);
     });
 
     it('团队无成员或无会话 → 0，不报错', async () => {
       const txEmpty: any = {
         teamMember: { findMany: jest.fn().mockResolvedValue([]) },
-        session: { findMany: jest.fn(), deleteMany: jest.fn(), create: jest.fn() },
+        session: {
+          findMany: jest.fn(),
+          deleteMany: jest.fn(),
+          create: jest.fn(),
+        },
         taskGroupInstance: { updateMany: jest.fn() },
       };
-      expect(await service.resetTeamSessionsInTx(txEmpty as any, 'tm_0000000001')).toBe(0);
+      expect(
+        await service.resetTeamSessionsInTx(txEmpty as any, 'tm_0000000001'),
+      ).toBe(0);
       const txNoSess: any = {
-        teamMember: { findMany: jest.fn().mockResolvedValue([{ id: 'tmm_1' }]) },
-        session: { findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn(), create: jest.fn() },
+        teamMember: {
+          findMany: jest.fn().mockResolvedValue([{ id: 'tmm_1' }]),
+        },
+        session: {
+          findMany: jest.fn().mockResolvedValue([]),
+          deleteMany: jest.fn(),
+          create: jest.fn(),
+        },
         taskGroupInstance: { updateMany: jest.fn() },
       };
-      expect(await service.resetTeamSessionsInTx(txNoSess as any, 'tm_0000000001')).toBe(0);
+      expect(
+        await service.resetTeamSessionsInTx(txNoSess as any, 'tm_0000000001'),
+      ).toBe(0);
     });
   });
 });

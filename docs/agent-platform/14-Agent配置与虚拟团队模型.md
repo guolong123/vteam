@@ -76,7 +76,7 @@ Agent 是平台中的 AI 协作者，每名 Agent 是一个可独立配置、可
 
 | 维度 | 约定 | 依据 |
 |------|------|------|
-| 内容 | 角色定位 + 行为准则 + 输出边界；模板带默认提示词，克隆后按项目规范调整 | FR-33 |
+| 内容 | 角色定位 + 行为准则 + 输出边界；模板带默认提示词，克隆后按团队规范调整 | FR-33 |
 | 生效时点 | **作用于后续会话**：已进行中的会话维持原提示词，不中断重放；新 @ 触发（下次分派）开始使用新提示词 | FR-33 |
 | 角色解析落点 | v1：下发 prompt 时以 `system` 字段注入角色提示词（07 篇 §9.4 v1 resolveRole）；v2：插件 `ctx.agent.transform` 注册 agent 携带提示词 + `switchAgent` 切换 | 07 §9.4 |
 | API | `PATCH /agents/:id` 请求 `{prompt?}` | 09 §3.7 |
@@ -110,13 +110,13 @@ Agent 是平台中的 AI 协作者，每名 Agent 是一个可独立配置、可
 
 ### 3.4 权限范围配置（FR-36）
 
-权限范围限定 Agent 可访问的**资源与操作边界**（如仅可读取指定项目、仅可查看文档库、不可执行写操作）。超出范围的操作不直接执行，由平台**转交成员确认后放行**。
+权限范围限定 Agent 可访问的**资源与操作边界**（如仅可读取指定团队、仅可查看文档库、不可执行写操作）。超出范围的操作不直接执行，由平台**转交成员确认后放行**。
 
 | 维度 | 约定 | 依据 |
 |------|------|------|
-| 与工具权限的关系 | **正交、叠加生效**：工具权限 = 每个工具单独的 effect（该工具能否被调用、调用前是否确认）；权限范围 = 资源范围（被授权工具能触及哪些项目/文档/仓库） | 04 篇 FR-36 说明 |
+| 与工具权限的关系 | **正交、叠加生效**：工具权限 = 每个工具单独的 effect（该工具能否被调用、调用前是否确认）；权限范围 = 资源范围（被授权工具能触及哪些团队/文档/仓库） | 04 篇 FR-36 说明 |
 | 超范围处理 | 不直接执行 → 转成员确认（对接 opencode ask 流：`ctx.ask` 的 request → reply 事件经 worker → 控制面转成员确认，确认结果沿原路返回，07 篇 §5 权限链路第三步） | 07 §5 / 11 §6 |
-| 配置形态 | `permissionScope` 对象：如 `{ projects: ["p1"], write: false, doclibOnly: true }`；第一版以项目/读写/文档库为最小粒度，细粒度资源规则列为开放问题（§9） | FR-36 |
+| 配置形态 | `permissionScope` 对象：如 `{ teams: ["tm_0000000001"], write: false, doclibOnly: true }`；第一版以团队/读写/文档库为最小粒度，细粒度资源规则列为开放问题（§9） | FR-36 |
 | 落点 | 生成到 worker 的 permission 规则与 opencode 运行时过滤/确认机制一一对应；ask 确认流回到平台（08 篇 §7.6：平台转成员确认） | 08 §7.6 |
 
 **确认流闭环**：Agent 请求超出权限范围的操作 → worker 内 `ctx.ask` 触发 request → worker SSE 事件回流控制面 → 控制面向成员展示确认请求（群聊/私聊可见）→ 成员确认（once / always / reject）→ 确认结果经 WorkerClient 返回 worker → opencode 按确认结果执行或拒绝。成员拒绝后 Agent 收到拒绝说明，可换路径完成（FR-21 工具级错误语义）。
@@ -141,7 +141,7 @@ Agent 是平台中的 AI 协作者，每名 Agent 是一个可独立配置、可
 | prompt（FR-33） | v1：prompt 分派时 `system` 字段注入角色提示词；v2：agent 定义 prompt | v1 `{system: "以产品经理视角拆解需求…"}` | 07 §9.4 |
 | skillIds[]（FR-34） | SKILL.md 进入可见集合 + `permission.skill` deny 规则 | `permission.skill: { "*": "allow", "internal-*": "deny" }` | 11 §7.3 |
 | toolEffects{}（FR-35/48） | `permission` 节（含通配符）+ `tools: {action: false}` 停用 | `permission: { "bash": "ask", "jenkins-*": "allow" }` | 11 §7.3 |
-| permissionScope（FR-36） | permission 规则中的资源级约束（项目/读写边界） | 超范围操作触发 `ctx.ask` 确认流 | 07 §5 / 08 §7.6 |
+| permissionScope（FR-36） | permission 规则中的资源级约束（团队/读写边界） | 超范围操作触发 `ctx.ask` 确认流 | 07 §5 / 08 §7.6 |
 | defaultModelId（FR-47） | 会话创建/分派时指定的模型 | `model: "gpt-5-code"`（示例） | 09 §3.7 |
 | MCP 挂载（若配置） | opencode `mcp` 配置节 + `<server>_*` 服务器级权限规则 | `mcp: {"github": {...}}` + `permission: {"github_*": "ask"}` | 11 §7.3/§5.3 |
 
@@ -155,12 +155,12 @@ Agent 是平台中的 AI 协作者，每名 Agent 是一个可独立配置、可
 
 | 模板 | 默认提示词定位 | 默认技能 | 默认工具集（示例） | 默认权限范围 | 默认模型侧重 |
 |------|--------------|---------|-------------------|-------------|-------------|
-| 产品经理 | 需求拆解与文档化，输出需求文档与验收标准 | 需求分析、文档撰写、产出物协议 | `read`、`doclib`（文档库读取）、`webfetch`；写操作默认 ask | 项目内只读 + 文档库读写 | 通用对话模型，擅长结构化文本梳理 |
-| 架构师 | 技术方案设计与推演，权衡取舍输出设计文档 | 架构设计、方案评审、文档撰写 | `read`、`grep`、`glob`、`lsp`；`bash` 默认 ask | 项目内只读 | 推理模型，擅长复杂逻辑推演与方案权衡 |
-| 开发者 | 编码实现与问题排查，输出实现代码与说明 | 编码、代码审查、调试 | `read`/`edit`/`write`/`bash`（allow 或按团队收紧）、`grep` | 项目读写（写操作默认 ask） | 代码能力突出的通用模型 |
-| 测试 | 用例设计与缺陷验证，穷举边界输出验证结论 | 用例设计、缺陷验证、文档撰写 | `read`、`bash`（执行测试脚本，ask）、`webfetch` | 项目内只读 + 文档库读写 | 推理模型，擅长边界推演与场景穷举 |
+| 产品经理 | 需求拆解与文档化，输出需求文档与验收标准 | 需求分析、文档撰写、产出物协议 | `read`、`doclib`（文档库读取）、`webfetch`；写操作默认 ask | 团队内只读 + 文档库读写 | 通用对话模型，擅长结构化文本梳理 |
+| 架构师 | 技术方案设计与推演，权衡取舍输出设计文档 | 架构设计、方案评审、文档撰写 | `read`、`grep`、`glob`、`lsp`；`bash` 默认 ask | 团队内只读 | 推理模型，擅长复杂逻辑推演与方案权衡 |
+| 开发者 | 编码实现与问题排查，输出实现代码与说明 | 编码、代码审查、调试 | `read`/`edit`/`write`/`bash`（allow 或按团队收紧）、`grep` | 团队读写（写操作默认 ask） | 代码能力突出的通用模型 |
+| 测试 | 用例设计与缺陷验证，穷举边界输出验证结论 | 用例设计、缺陷验证、文档撰写 | `read`、`bash`（执行测试脚本，ask）、`webfetch` | 团队内只读 + 文档库读写 | 推理模型，擅长边界推演与场景穷举 |
 
-> 上表工具集为**出厂建议默认**：模板只读（§2.2），团队按项目规范通过**克隆**调整工具 effect 与权限范围（FR-31 是模板的扩展路径）；表中模型侧重对应 FR-47「未选择时沿用模板默认模型」的默认来源。
+> 上表工具集为**出厂建议默认**：模板只读（§2.2），团队按团队规范通过**克隆**调整工具 effect 与权限范围（FR-31 是模板的扩展路径）；表中模型侧重对应 FR-47「未选择时沿用模板默认模型」的默认来源。
 
 ### 4.2 模板只读 + 克隆为扩展路径（FR-30/31）
 
@@ -186,13 +186,13 @@ Agent 是平台中的 AI 协作者，每名 Agent 是一个可独立配置、可
 | 多实例 | 同一模板 Agent 可在同一团队内添加多次，`seq` 递增区分（`uk_team_members_team_agent_seq`），各实例独立会话/私聊/`@` | 28 §2 |
 | 调整 | `POST /teams/:id/members` 增、`PATCH /teams/:id/members/:memberId` 改 alias/workDir、`DELETE /teams/:id/members/:memberId` 删；仅空闲且队列空可删团队 | 28 §2，09 §3.4 |
 | 乐观锁 | `teams.version` CAS：`PATCH /teams/:id` 需携带 `version`，冲突 409 `VERSION_CONFLICT` | 28 §2 |
-| 权限 | 团队为全局域，需 `teams:view/create/edit/delete` 权限（非项目成员校验） | 28 §2 |
+| 权限 | 团队为全局域，需 `teams:view/create/edit/delete` 权限（非团队成员校验） | 28 §2 |
 
 团队与群聊成员的关系：
 
 | 成员类型 | 来源 | 参与方式 |
 |---------|------|---------|
-| 人类成员 | 项目成员（`project_members`，FR-24） | 群聊发消息、@ 触发、验收判定（FR-04） |
+| 人类成员 | 团队成员（`teamUserMember`，FR-24） | 群聊发消息、@ 触发、验收判定（FR-04） |
 | Agent 成员 | **全局团队**（`team_members`，`team_id × agent_id × seq`） | 群聊 @ 被触发（FR-11/12）、Agent 互 @（FR-13）；未在团队内的 Agent 不参与该团队任务 |
 
 > **团队是全局域，任务是归属关系**：`tasks.team_id` 指向团队，`team_queues` 决定串行顺序，`task_agents` 为创建时从 `team_members` 的快照（alias/seq/workDir 原样复制）——团队调整不改快照，已创建任务的快照保持不变。
@@ -201,7 +201,7 @@ Agent 是平台中的 AI 协作者，每名 Agent 是一个可独立配置、可
 
 | 维度 | 约定 | 依据 |
 |------|------|------|
-| 归属 | `POST /projects/:pid/tasks` `{teamId!, title!, resetAfterComplete?}`；`teamId` 必填（旧 `agentIds[]` 已废弃） | 09 §3.4，28 §3 |
+| 归属 | `POST /tasks` `{teamId!, title!, resetAfterComplete?}`；`teamId` 必填 | 09 §3.4，28 §3 |
 | 串行 | 一团队一次仅一任务进行中（`teams.current_task_id` 指队首）；其余入 `team_queues` 按 `position` 1..N FIFO 排队，状态 `queued` | 28 §3 |
 | 入队 | 团队空闲（`current_task_id` NULL）→ 任务 `pending` 并设 `current_task_id`；忙时 → `queued` + `team_queues` 追加（`MAX(position)+1`，`FOR UPDATE` 行锁 + `version` CAS） | 28 §3 |
 | 晋升 | `accept`/`archive`/`reject` 后事务内 `promoteNextInTx`：队首 `queued→pending`、删队首 `team_queues`、重排剩余 `position` 1..N、`current_task_id` 指向新队首或 NULL（空闲） | 28 §3 |
@@ -241,7 +241,6 @@ flowchart LR
     end
     subgraph 任务侧
         T[任务 Task<br/>status 六态 queued 起]
-        TA[快照 TaskAgent<br/>源自 TeamMember]
         DL[文档库<br/>产出物 + 版本]
         SESS[会话 Session<br/>team_member_id 分区]
     end
@@ -260,8 +259,7 @@ flowchart LR
     A4 --> TM
     T -- teamId 归属 --> TEAM
     TQ -- 队首晋升 --> T
-    TM -- 快照 alias/seq/workDir --> TA
-    TA --> SESS
+    TM -- 团队会话 team_member_id --> SESS
     CH -- @ 触发分派 --> SESS
     DL -- 上下文注入 --> SESS
     SESS -- 产出 append --> DL
@@ -273,7 +271,7 @@ flowchart LR
 
 ### 6.1 会话与 task × 实例一一对应（可跨任务复用）
 
-平台为每实例的每个任务维护会话，`sessions` 以 `task_id × task_agent_id` 唯一标识，`team_member_id` 决定是否跨任务复用（10 篇 §3.3 + 28 篇 §4）：
+平台为团队每成员维护会话，`sessions` 以 `team_member_key = team_id|team_member_id` 唯一标识（单成员单团队会话；存量 task 会话行已随 session-unification 删除，`uk_sessions_task_agent` 约束冻结保留），任务只作为数据经 `taskId` 归因（10 篇 §3.3 + 28 篇 §4）：
 
 | 入口 | 会话复用 | 依据 |
 |------|---------|------|
@@ -360,7 +358,7 @@ PATCH /agents/:id（skillIds 变更）
 
 ```mermaid
 sequenceDiagram
-    participant MEM as 项目成员
+    participant MEM as 团队成员
     participant CTRL as 控制面<br/>AgentsModule / TasksModule
     participant WK as WorkersModule / Worker
     participant MAIN as 主 Agent 会话
@@ -373,7 +371,7 @@ sequenceDiagram
     MEM->>CTRL: GET /agents/:id/available-models（FR-47，经 worker GET /models）
 
     Note over MEM,CTRL: ② 加入任务团队（§5）
-    MEM->>CTRL: POST /projects/:pid/tasks（agentIds[] + mainAgentId，FR-01/02/08）
+    MEM->>CTRL: POST /tasks（teamId! + title!，FR-01/02/08）
     CTRL->>CTRL: 写 task_agents；创建群聊 + 文档库（13 §4.1 三件套）
 
     Note over MEM,WK: ③ 启动（FR-07，13 §4.2）
@@ -421,7 +419,7 @@ POST /tasks/:id/team
 | 克隆不联动源 | 副本修改不回写源；源模板只读故无「源变更同步」问题 | FR-31 |
 | Agent 无删除端点 | 本版不支持删除 Agent（与工具停用替代删除一致，09 §3.8 尾注）；停用语义待开放问题③ | FR-35 |
 | 团队调整时间窗 | 仅待开始/进行中合法；待验收/已完成/已归档返回 409（13 §7.4） | FR-02 |
-| 权限范围最小粒度 | 第一版以项目/读写/文档库为粒度；细粒度资源规则（指定仓库、指定目录）留待后续 | FR-36 |
+| 权限范围最小粒度 | 第一版以团队/读写/文档库为粒度；细粒度资源规则（指定仓库、指定目录）留待后续 | FR-36 |
 
 ### 9.2 开放问题
 

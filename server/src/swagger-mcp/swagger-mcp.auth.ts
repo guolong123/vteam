@@ -18,8 +18,8 @@ export interface SwaggerMcpAuthContext {
   workerId: string;
   /** 模板 Agent id（AgentToolEffect 权限点主体）。 */
   agentId: string;
-  /** 任务实例 id（taskAgentId，worker 当前执行实例）。 */
-  taskAgentId: string;
+  /** 调用方成员 id（团队会话 teamMemberId=tmm_，单成员单会话唯一身份）。 */
+  instanceId: string;
 }
 
 /**
@@ -40,8 +40,9 @@ export class SwaggerMcpAuthService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * 工具级权限校验。返回 {agentId, taskAgentId} 供 controller 归属校验/透传；
+   * 工具级权限校验。返回 {agentId, instanceId} 供 controller 归属校验/透传；
    * 未授权一律抛 ForbiddenException（code=FORBIDDEN）。
+   * 团队会话（teamMemberId）经团队成员解析 agent（单成员单会话唯一路径）。
    */
   async authorize(
     workerId: string,
@@ -56,20 +57,32 @@ export class SwaggerMcpAuthService {
 
     const session = await this.prisma.session.findFirst({
       where: { workerId, status: 'running' },
-      select: { taskAgentId: true },
+      select: { teamMemberId: true },
     });
-    if (!session) {
+    if (!session || !session.teamMemberId) {
       throw new ForbiddenException({
         code: SWAGGER_MCP_ERRORS.FORBIDDEN,
         message: '无法解析调用实例上下文',
       });
     }
 
-    const ta = await this.prisma.taskAgent.findUnique({
-      where: { id: session.taskAgentId },
-      select: { agentId: true },
-    });
-    if (!ta) {
+    let agentId: string | null = null;
+    let instanceId: string | null = null;
+    if (session.teamMemberId) {
+      const member = await this.prisma.teamMember.findUnique({
+        where: { id: session.teamMemberId },
+        select: { agentId: true },
+      });
+      if (!member) {
+        throw new ForbiddenException({
+          code: SWAGGER_MCP_ERRORS.FORBIDDEN,
+          message: '无法解析调用实例上下文',
+        });
+      }
+      agentId = member.agentId;
+      instanceId = session.teamMemberId;
+    }
+    if (!agentId || !instanceId) {
       throw new ForbiddenException({
         code: SWAGGER_MCP_ERRORS.FORBIDDEN,
         message: '无法解析调用实例上下文',
@@ -78,15 +91,15 @@ export class SwaggerMcpAuthService {
 
     const effect = await this.prisma.agentToolEffect.findUnique({
       where: {
-        agentId_toolAction: { agentId: ta.agentId, toolAction: toolName },
+        agentId_toolAction: { agentId, toolAction: toolName },
       },
     });
     const eff = effect?.effect;
     if (eff === 'allow') {
       return {
         workerId,
-        agentId: ta.agentId,
-        taskAgentId: session.taskAgentId,
+        agentId,
+        instanceId,
       };
     }
     if (eff === 'ask') {
@@ -103,8 +116,8 @@ export class SwaggerMcpAuthService {
   }
 
   /**
-   * taskId 归属校验：该 worker 有绑定该任务的 Session 才放行。
-   * 无绑定 → 拒绝（防跨任务访问，安全不降级）。
+   * taskId 归属校验：该 worker 有绑定该任务的 Session（任务会话），或绑定该任务
+   * 所属团队的团队会话，才放行。无绑定 → 拒绝（防跨任务访问，安全不降级）。
    */
   async assertWorkerTask(workerId: string, taskId: string): Promise<void> {
     if (!workerId) {
@@ -113,8 +126,15 @@ export class SwaggerMcpAuthService {
         message: '缺少 x-worker-id header',
       });
     }
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { teamId: true },
+    });
     const session = await this.prisma.session.findFirst({
-      where: { taskId, workerId },
+      where: {
+        workerId,
+        OR: [{ taskId }, ...(task?.teamId ? [{ teamId: task.teamId }] : [])],
+      },
       select: { id: true },
     });
     if (!session) {

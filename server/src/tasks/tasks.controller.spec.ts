@@ -1,9 +1,13 @@
+import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { Test, TestingModule } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { REQUIRE_PERMISSION_KEY } from '../common/decorators/require-permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
-import { ProjectMembershipGuard } from '../common/guards/project-membership.guard';
+import {
+  TEAM_MEMBERSHIP_ERRORS,
+  TeamMembershipGuard,
+} from '../common/guards/team-membership.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { QueryTasksDto } from './dto/query-tasks.dto';
@@ -29,6 +33,9 @@ describe('TasksController', () => {
     reject: jest.Mock;
     archive: jest.Mock;
   };
+  let prisma: {
+    teamUserMember: { findUnique: jest.Mock; findMany: jest.Mock };
+  };
 
   beforeEach(async () => {
     service = {
@@ -44,20 +51,16 @@ describe('TasksController', () => {
       reject: jest.fn(),
       archive: jest.fn(),
     };
+    prisma = {
+      teamUserMember: { findUnique: jest.fn(), findMany: jest.fn() },
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [TasksController],
       providers: [
         { provide: TasksService, useValue: service },
-        ProjectMembershipGuard,
-        {
-          provide: PrismaService,
-          useValue: {
-            projectMember: { findUnique: jest.fn() },
-            task: { findUnique: jest.fn() },
-            user: { findUnique: jest.fn() },
-          },
-        },
+        { provide: PrismaService, useValue: prisma },
+        TeamMembershipGuard,
       ],
     })
       .overrideGuard(PermissionGuard)
@@ -67,26 +70,148 @@ describe('TasksController', () => {
     controller = module.get<TasksController>(TasksController);
   });
 
+  describe('路由形状（去 pid：POST /tasks + GET /tasks?teamId=）', () => {
+    const pathOf = (handler: (...args: never[]) => unknown) =>
+      Reflect.getMetadata(PATH_METADATA, handler);
+    const methodOf = (handler: (...args: never[]) => unknown) =>
+      Reflect.getMetadata(METHOD_METADATA, handler);
+
+    it('GET /tasks（findAll）无 pid 路由', () => {
+      expect(pathOf(controller.findAll)).toBe('tasks');
+      expect(methodOf(controller.findAll)).toBe(0); // RequestMethod.GET
+    });
+
+    it('POST /tasks（create）无 pid 路由', () => {
+      expect(pathOf(controller.create)).toBe('tasks');
+      expect(methodOf(controller.create)).toBe(1); // RequestMethod.POST
+    });
+
+    it('全控制器无 pid 残留路由（sweep 断言）', () => {
+      const names = Object.getOwnPropertyNames(
+        TasksController.prototype,
+      ).filter((n) => n !== 'constructor');
+      for (const name of names) {
+        const p = pathOf(
+          (controller as unknown as Record<string, () => unknown>)[name] as (
+            ...args: never[]
+          ) => unknown,
+        );
+        expect(String(p ?? '')).not.toContain('projects');
+        expect(String(p ?? '')).not.toContain(':pid');
+      }
+    });
+
+    it('Todo11：旧 POST tasks/:id/instances/:instanceId/reset-session 已删除（404）', () => {
+      expect(
+        (TasksController.prototype as any).resetInstanceSession,
+      ).toBeUndefined();
+      const names = Object.getOwnPropertyNames(
+        TasksController.prototype,
+      ).filter((n) => n !== 'constructor');
+      for (const name of names) {
+        const p = pathOf(
+          (TasksController.prototype as any)[name] as (
+            ...args: never[]
+          ) => unknown,
+        );
+        expect(String(p ?? '')).not.toContain('reset-session');
+      }
+    });
+  });
+
   describe('端点路由转发', () => {
-    it('GET projects/:pid/tasks 转发 pid + query 到 findAll', async () => {
+    it('GET tasks?teamId= 成员转发 teamId + query 到 findAll', async () => {
       const result = { items: [], total: 0, page: 1, pageSize: 20 };
       service.findAll.mockResolvedValue(result);
-
-      const out = await controller.findAll('p_1', {
-        status: 'pending',
-        page: 1,
-        pageSize: 20,
+      prisma.teamUserMember.findUnique.mockResolvedValue({
+        teamId: 'tm_1',
+        userId: 'u_admin',
       });
 
-      expect(service.findAll).toHaveBeenCalledWith('p_1', {
+      const out = await controller.findAll(
+        { id: 'u_admin', username: 'admin', roleId: 'r_admin' },
+        { status: 'pending', page: 1, pageSize: 20 },
+        'tm_1',
+      );
+
+      expect(prisma.teamUserMember.findUnique).toHaveBeenCalledWith({
+        where: { teamId_userId: { teamId: 'tm_1', userId: 'u_admin' } },
+      });
+      expect(service.findAll).toHaveBeenCalledWith({
         status: 'pending',
         page: 1,
         pageSize: 20,
+        teamId: 'tm_1',
       });
       expect(out).toEqual(result);
     });
 
-    it('POST projects/:pid/tasks 以 req.user.id 调用 create', async () => {
+    it('GET tasks?teamId= 非成员抛 403 PERMISSION_TEAM_NOT_MEMBER', async () => {
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+
+      const err = await controller
+        .findAll(
+          { id: 'u_out', username: 'outsider', roleId: 'r_member' },
+          { status: 'pending' },
+          'tm_1',
+        )
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as { status: number }).status).toBe(403);
+      expect((err as { getResponse: () => unknown }).getResponse()).toEqual({
+        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: '您不是该团队成员',
+      });
+      expect(service.findAll).not.toHaveBeenCalled();
+    });
+
+    it('GET tasks 无 teamId 按可见团队聚合分页（createdAt desc）', async () => {
+      prisma.teamUserMember.findMany.mockResolvedValue([
+        { teamId: 'tm_1' },
+        { teamId: 'tm_2' },
+      ]);
+      service.findAll.mockImplementation(async (q: { teamId?: string }) => ({
+        items:
+          q.teamId === 'tm_1'
+            ? [{ id: 't_old', createdAt: '2026-09-02T00:00:00.000Z' }]
+            : [{ id: 't_new', createdAt: '2026-09-03T00:00:00.000Z' }],
+        total: 1,
+        page: 1,
+        pageSize: 100,
+      }));
+
+      const out = (await controller.findAll(
+        { id: 'u_admin', username: 'admin', roleId: 'r_admin' },
+        { page: 1, pageSize: 20 },
+        undefined,
+      )) as {
+        items: { id: string }[];
+        total: number;
+        page: number;
+        pageSize: number;
+      };
+
+      expect(service.findAll).toHaveBeenCalledTimes(2);
+      expect(out.total).toBe(2);
+      expect(out.items.map((i) => i.id)).toEqual(['t_new', 't_old']);
+      expect(out.page).toBe(1);
+      expect(out.pageSize).toBe(20);
+    });
+
+    it('GET tasks 无 teamId 且用户无任何团队返回空页（不查 service）', async () => {
+      prisma.teamUserMember.findMany.mockResolvedValue([]);
+
+      const out = await controller.findAll(
+        { id: 'u_lonely', username: 'lonely', roleId: 'r_member' },
+        { page: 1, pageSize: 20 },
+        undefined,
+      );
+
+      expect(out).toEqual({ items: [], total: 0, page: 1, pageSize: 20 });
+      expect(service.findAll).not.toHaveBeenCalled();
+    });
+
+    it('POST tasks 以 req.user.id 调用 create(userId, dto)', async () => {
       const task = { id: 't_1' };
       service.create.mockResolvedValue(task);
       const dto = {
@@ -96,11 +221,10 @@ describe('TasksController', () => {
 
       const out = await controller.create(
         { id: 'u_admin', username: 'admin', roleId: 'r_admin' },
-        'p_1',
         dto as CreateTaskDto,
       );
 
-      expect(service.create).toHaveBeenCalledWith('p_1', 'u_admin', dto);
+      expect(service.create).toHaveBeenCalledWith('u_admin', dto);
       expect(out).toEqual(task);
     });
 
@@ -195,7 +319,7 @@ describe('TasksController', () => {
       });
       const dto = {
         addInstances: [{ agentId: 'a_2' }],
-        removeInstanceIds: ['ta_1'],
+        removeInstanceIds: ['tmm_1'],
       };
 
       const out = await controller.updateTeam(
@@ -309,7 +433,7 @@ describe('TasksController', () => {
           title: 'x',
           description: 'd',
           priority: 'low',
-          mainAgentInstanceId: 'ta_1',
+          mainAgentInstanceId: 'tmm_1',
           mainAgentId: 'a_1',
         }),
       ).toHaveLength(0);
@@ -328,7 +452,7 @@ describe('TasksController', () => {
       expect(
         await errorsOf(UpdateTeamDto, {
           addInstances: [{ agentId: 'a_1', alias: '开发者-2' }],
-          removeInstanceIds: ['ta_1', 'ta_2'],
+          removeInstanceIds: ['tmm_1', 'tmm_2'],
         }),
       ).toHaveLength(0);
       expect(

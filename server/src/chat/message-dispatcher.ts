@@ -16,9 +16,9 @@
  */
 export interface DispatchTarget {
   agentId: string;
-  /** 任务×Agent 会话 id（sessions 表 uk_sessions_task_agent）。 */
+  /** 团队成员会话 id（sessions 表 uk_sessions_team_member）。 */
   sessionId: string | null;
-  /** T6 实例语义：目标实例 id（TaskAgent.id，ta_ 前缀）。同 agent 多实例时
+  /** 团队实例语义：目标成员 id（TeamMember.id，tmm_ 前缀）。同 agent 多实例时
    * 用于 loading 广播按实例下发、回复落库 senderInstanceId 精确归属。 */
   instanceId?: string | null;
 }
@@ -28,6 +28,17 @@ export interface DispatchRequest {
   messageId: string;
   channelId: string;
   taskId: string;
+  /** 团队分派维度（单入口必填；缺失 → 400 TEAM_SESSION_MISSING_DIMENSION）。 */
+  teamId?: string | null;
+  /**
+   * 任务只作数据（非身份）：透传给 execute/回流归因，会话/注册/watchdog
+   * 键一律走团队维度。缺省 → taskId 按 '' 处理（团队直聊）。
+   */
+  taskContext?: {
+    taskId: string;
+    overrideModelId?: string;
+    executionMode?: string;
+  };
   /** 用户消息正文。 */
   text: string;
   /** 仅 dispatched 状态的目标（agent_removed / no_session 不参与分派）。 */

@@ -165,12 +165,9 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const taskDetail: any = taskQuery.data;
   const executionMode: string | undefined = taskDetail?.executionMode;
-  const teamSize: number = Array.isArray(taskDetail?.taskAgents)
-    ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      taskDetail.taskAgents.filter((t: any) => !t.removedAt).length
-    : Array.isArray(taskDetail?.instances)
-      ? taskDetail.instances.length
-      : 0;
+  const teamSize: number = Array.isArray(taskDetail?.instances)
+    ? taskDetail.instances.length
+    : 0;
   const hasMainAgent: boolean = !!taskDetail?.mainAgentInstanceId || !!taskDetail?.mainAgentId;
 
   const planQuery = useQuery({
