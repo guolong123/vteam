@@ -30,7 +30,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { EmptyState, ConfirmDialog } from "@/src/components/ui";
+import { EmptyState, ConfirmDialog, PageWindow } from "@/src/components/ui";
 import {
   neutral,
   space,
@@ -1198,19 +1198,9 @@ export default function UsersPage() {
   ];
 
   return (
-    <div
-      data-testid="user-management-root"
-      style={{
-        flex: 1,
-        minHeight: 0,
-        position: "relative",
-        display: "flex",
-        flexDirection: "column",
-        overflowY: "auto",
-        padding: `${space.xl}px ${space.xl}px ${space.xl}px 0`,
-        backgroundColor: neutral[50],
-        fontFamily: fontFamily.body,
-      }}
+    <PageWindow
+      testId="user-management-root"
+      style={{ position: "relative", backgroundColor: neutral[50], fontFamily: fontFamily.body }}
     >
       {/* 统计条（平台管理员视角：账号总量与角色分布） */}
       <div
@@ -1532,6 +1522,6 @@ export default function UsersPage() {
           setToggleTarget(null);
         }}
       />
-    </div>
+    </PageWindow>
   );
 }

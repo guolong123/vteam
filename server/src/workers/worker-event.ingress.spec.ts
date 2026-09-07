@@ -408,6 +408,95 @@ describe('WorkerEventIngress', () => {
       );
     });
 
+    it('团队会话 delta 且无 private 频道 → 跳过落库（不写进群聊）', async () => {
+      // 团队会话行：taskAgentId null，有 teamId/teamMemberId；来源 team_group；无 private 频道
+      prisma.session.findUnique.mockResolvedValue({
+        agentId: 'a_1',
+        taskAgentId: null,
+        teamId: 'tm_1',
+        teamMemberId: 'tmm_1',
+      });
+      prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
+        if (where?.id)
+          return Promise.resolve({ id: 'c_tgroup', type: 'team_group' });
+        return Promise.resolve(null);
+      });
+
+      expect(
+        await ingress.handleEvent(
+          deltaEvent(50, {
+            agentId: 'a_1',
+            sessionId: 's_team',
+            channelId: 'c_tgroup',
+            parts: [{ type: 'text', text: '处理中', synthetic: false }],
+          }),
+        ),
+      ).toBe(true);
+
+      // 群聊只收最终 group_post 直发：流式中间态无 private 可落 → 不落库不广播
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(realtime.emit).not.toHaveBeenCalled();
+    });
+
+    it('团队会话 delta 且有 private 频道 → 落成员私聊频道且 senderInstanceId=tmm_', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        agentId: 'a_1',
+        taskAgentId: null,
+        teamId: 'tm_1',
+        teamMemberId: 'tmm_1',
+      });
+      prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
+        if (where?.id)
+          return Promise.resolve({ id: 'c_tgroup', type: 'team_group' });
+        return Promise.resolve(null);
+      });
+      prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
+        if ((where as any)?.teamId === 'tm_1')
+          return Promise.resolve({ id: 'c_tpriv', type: 'private' });
+        return Promise.resolve(null);
+      });
+      prisma.message.create.mockResolvedValue({
+        id: 'm_0000000051',
+        channelId: 'c_tpriv',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        senderInstanceId: 'tmm_1',
+        content: {
+          text: '处理中',
+          parts: [{ type: 'text', text: '处理中', synthetic: false }],
+        },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+
+      expect(
+        await ingress.handleEvent(
+          deltaEvent(51, {
+            agentId: 'a_1',
+            sessionId: 's_team',
+            channelId: 'c_tgroup',
+            parts: [{ type: 'text', text: '处理中', synthetic: false }],
+          }),
+        ),
+      ).toBe(true);
+
+      expect(prisma.message.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            channelId: 'c_tpriv',
+            senderInstanceId: 'tmm_1',
+            status: MESSAGE_STATUS.processing,
+          }),
+        }),
+      );
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.MESSAGE_PART_DELTA,
+        expect.anything(),
+        { type: 'channel', id: 'c_tpriv' },
+      );
+    });
+
     it('F3 P1：流式 delta 会话绑实例 → privateTarget 按 taskAgentId 精确匹配（同 agent 多实例各自频道）', async () => {
       // 开发者-2 会话绑实例 ta_dev_2：流式中间态必须落开发者-2 私聊频道 c_dev2，
       // 不得按 agentId findFirst 命中开发者-1 频道（F3 实测串扰缺陷根因）

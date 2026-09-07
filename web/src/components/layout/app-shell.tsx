@@ -109,7 +109,6 @@ const KEY_TO_PATH: Record<string, string> = {
   "git-repos": "/git-repos",
   skills: "/skills",
   integrations: "/integrations",
-  messages: "/messages",
   users: "/users",
   roles: "/roles",
   memories: "/memories",
@@ -127,7 +126,7 @@ const KEY_LOOKUP: Record<string, string> = {
     Object.entries(KEY_TO_PATH).map(([key, path]) => [path.slice(1), key])
   ),
   /** Dock 无独立 board/tasks 图标：任务与项目为父子层级，任务相关路由
-   * （/board、/tasks/:id、/tasks/new、/artifacts）均高亮「项目」入口 */
+   * （/board、/tasks/new、/artifacts）均高亮「项目」入口 */
   board: "project",
   tasks: "project",
   artifacts: "project",
@@ -136,8 +135,6 @@ const KEY_LOOKUP: Record<string, string> = {
 /** 非导航页（无 Dock key）的标题兜底：全路径 → 页面标题 */
 const EXTRA_PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   "/tasks/new": { title: "创建任务", subtitle: "提交需求，组建虚拟 AI 团队" },
-  "/tasks/[id]": { title: "任务详情", subtitle: "查看任务信息与进展，协作请前往团队会话" },
-  "/messages/[id]": { title: "私聊", subtitle: "与 Agent 一对一对话" },
   "/workers/[id]": { title: "Worker 详情", subtitle: "查看节点能力与运行状态" },
   "/tools/register": { title: "注册工具", subtitle: "登记工具 manifest 并绑定执行方式" },
 };
@@ -153,7 +150,6 @@ const CMDK_NAV_PATH: Record<string, string> = {
   仓库管理: "/git-repos",
   技能与工具: "/skills",
   集成渠道: "/integrations",
-  消息中心: "/messages",
   用户管理: "/users",
   角色权限: "/roles",
   记忆管理: "/memories",
@@ -161,7 +157,7 @@ const CMDK_NAV_PATH: Record<string, string> = {
 
 /**
  * 导航 key → 可见性判定（对齐后端守卫语义，ISSUE-005 + Task 14 全局团队）：
- * - 无条目的 key（project/models/messages）→ 后端无权限点（登录即可 / 成员只读），始终显示；
+ * - 无条目的 key（project/models）→ 后端无权限点（登录即可 / 成员只读），始终显示；
  * - teams/agents/workers/skills → 矩阵 view 权限点（PermissionGuard teams:view 等）；
  * - users/roles → AdminGuard 语义（all:true 或 users.manage）。
  * 全局 team ≠ 开放：仍需 PermissionGuard teams:view，未授权限的不显示入口（后端同 403）。
@@ -216,21 +212,14 @@ const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   "git-repos": { title: "仓库管理", subtitle: "git 仓库凭证与 Agent 授权" },
   skills: { title: "技能与工具", subtitle: "管理技能库与工具注册" },
   integrations: { title: "集成渠道", subtitle: "外部渠道双向集成（企微智能机器人 + 通用 Webhook）" },
-  messages: { title: "消息中心", subtitle: "任务群聊与私聊会话" },
   users: { title: "用户管理", subtitle: "管理平台账号与角色分配" },
   roles: { title: "角色权限", subtitle: "管理平台角色与权限矩阵" },
   memories: { title: "记忆管理", subtitle: "查看与管理 Agent 记忆" },
 };
 
-/** 动态段路由优先判定：/tasks/:id（非 /tasks/new）→ 任务详情；/messages/:id → 私聊；/workers/:id → Worker 详情 */
+/** 动态段路由优先判定：/workers/:id → Worker 详情 */
 function resolvePageTitle(pathname: string): { title: string; subtitle: string } {
   const parts = pathname.split("/").filter(Boolean);
-  if (parts[0] === "tasks" && parts.length === 2 && parts[1] !== "new") {
-    return EXTRA_PAGE_TITLE["/tasks/[id]"];
-  }
-  if (parts[0] === "messages" && parts.length === 2) {
-    return EXTRA_PAGE_TITLE["/messages/[id]"];
-  }
   if (parts[0] === "workers" && parts.length === 2) {
     return EXTRA_PAGE_TITLE["/workers/[id]"];
   }
@@ -301,7 +290,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     router.replace(fallback ? KEY_TO_PATH[fallback] : "/projects");
   }, [hydrated, token, pathname, user, router]);
 
-  // 导航过滤：受限用户仅显示有权限项；project/models/messages 无后端权限点恒显示
+  // 导航过滤：受限用户仅显示有权限项；project/models 无后端权限点恒显示
   const visibleItems = useMemo(() => {
     if (!user) return NAV_ITEMS;
     return NAV_ITEMS.filter(

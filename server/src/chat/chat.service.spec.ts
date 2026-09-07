@@ -2166,6 +2166,18 @@ describe('ChatService', () => {
       await expect(service.createMessage(channelId, userId, { text: 'hi', mentions: [{ type: 'agent', agentId: 'a_ghost' }] } as any)).rejects.toThrow(BadRequestException);
     });
 
+    it('任务分区 ta_ instanceId 未命中成员行 → 按 agentId 回退匹配（非主 Agent 可 @）', async () => {
+      allowAccess(channelRow({ teamId: 'tm_0000000001', taskId: null } as any));
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        { id: 'tmm_0000000001', agentId: 'a_product', alias: '产品经理-1', seq: 1 },
+        { id: 'tmm_0000000002', agentId: 'a_project_manager', alias: '项目经理-1', seq: 1 },
+      ]);
+      idGen.nextId.mockResolvedValue('m_0000000001');
+      prisma.message.create.mockResolvedValue(messageRow());
+      const result = await service.createMessage(channelId, userId, { text: 'hi', mentions: [{ type: 'agent', agentId: 'a_project_manager', instanceId: 'ta_0000000002' }] } as any);
+      expect(result.triggers[0]).toMatchObject({ agentId: 'a_project_manager', instanceId: 'tmm_0000000002', status: 'no_session' });
+    });
+
     it('team @ 多次 disable/removed 跳过，仅 dispatched 目标进 dispatch', async () => {
       allowAccess(channelRow({ teamId: 'tm_0000000001' } as any));
       (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([

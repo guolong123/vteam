@@ -37,6 +37,7 @@ import { useState, type CSSProperties } from "react";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
+import { PageWindow } from "@/src/components/ui";
 import {
   neutral,
   roleText,
@@ -364,19 +365,6 @@ function InitCommandRow({
 
 /* ------------------------------ 页面主组件 ------------------------------ */
 
-/** 页面根容器样式（正常表单与无权限提示共用，保证布局一致） */
-const rootStyle: CSSProperties = {
-  flex: 1,
-  minHeight: 0,
-  position: "relative",
-  display: "flex",
-  flexDirection: "column",
-  overflowY: "auto",
-  padding: `${space.xl}px ${space.xl}px ${space.xl}px 0`,
-  backgroundColor: neutral[50],
-  fontFamily: fontFamily.body,
-};
-
 export default function ToolRegisterPage() {
   /* 权限判定：工具注册为 [admin] 专属（09 §3.8），非 admin 显示无权限提示
    * （对齐 skills 页 isAdmin 判断模式：roleName 取自登录响应 AuthUserView） */
@@ -589,11 +577,15 @@ export default function ToolRegisterPage() {
   /* 非 admin：只读提示（不渲染注册表单；后端 AdminGuard 403 兜底不变） */
   if (!isAdmin) {
     return (
-      <div data-testid="tool-register-root" style={rootStyle}>
+      <PageWindow
+        testId="tool-register-root"
+        style={{ position: "relative", backgroundColor: neutral[50], fontFamily: fontFamily.body }}
+      >
         <div
           style={{
             maxWidth: 760,
             margin: "0 auto",
+            width: "100%",
             display: "flex",
             flexDirection: "column",
             gap: space.xl,
@@ -625,19 +617,20 @@ export default function ToolRegisterPage() {
             </div>
           </div>
         </div>
-      </div>
+      </PageWindow>
     );
   }
 
   return (
-    <div
-      data-testid="tool-register-root"
-      style={rootStyle}
+    <PageWindow
+      testId="tool-register-root"
+      style={{ position: "relative", backgroundColor: neutral[50], fontFamily: fontFamily.body }}
     >
       <div
         style={{
           maxWidth: 760,
           margin: "0 auto",
+          width: "100%",
           display: "flex",
           flexDirection: "column",
           gap: space.xl,
@@ -2001,6 +1994,6 @@ export default function ToolRegisterPage() {
           </div>
         )}
       </div>
-    </div>
+    </PageWindow>
   );
 }

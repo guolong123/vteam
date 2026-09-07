@@ -31,7 +31,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { EmptyState, ConfirmDialog } from "@/src/components/ui";
+import { EmptyState, ConfirmDialog, PageWindow } from "@/src/components/ui";
 import {
   neutral,
   space,
@@ -1044,15 +1044,9 @@ export default function RolePermissionPage() {
   const matrix = activeRole && draftMatrix ? draftMatrix : blankMatrix();
 
   return (
-    <div
-      data-testid="role-permission-root"
-      style={{
-        flex: 1,
-        display: "flex",
-        flexDirection: "column",
-        padding: `${space.xl}px ${space.xl}px ${space.xl}px 0`,
-        fontFamily: fontFamily.body,
-      }}
+    <PageWindow
+      testId="role-permission-root"
+      style={{ ...baseFont }}
     >
       {isPending ? (
         <div data-testid="roles-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xl}px 0` }}>
@@ -1452,6 +1446,6 @@ export default function RolePermissionPage() {
           setDeleteConfirmOpen(false);
         }}
       />
-    </div>
+    </PageWindow>
   );
 }

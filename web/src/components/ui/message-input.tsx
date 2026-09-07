@@ -248,15 +248,24 @@ export function MessageInput({
   const extractMentions = (text: string): MessageMention[] =>
     mentionable.filter((a) => text.includes(`@${a.name}`));
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const text = value.trim();
     // UX-10：文本为空但已选附件也可发送（纯图片/文件消息）
     if ((!text && !pendingAttachment) || sending || attaching) return;
-    void onSend?.({
-      text,
-      mentions: extractMentions(value),
-      ...(pendingAttachment ? { attachment: pendingAttachment } : {}),
-    });
+    // 发送后清理待发送附件：否则下一条消息会重复带上同一附件；
+    // onSend 抛错（Promise caller）时保留附件供重试。
+    const attachment = pendingAttachment;
+    try {
+      await onSend?.({
+        text,
+        mentions: extractMentions(value),
+        ...(attachment ? { attachment } : {}),
+      });
+      setPendingAttachment(null);
+      setAttachError(null);
+    } catch {
+      // 发送失败：保留附件与错误提示，待用户重试
+    }
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {

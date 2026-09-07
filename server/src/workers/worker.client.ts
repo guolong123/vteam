@@ -105,6 +105,24 @@ export interface ExecuteOptions {
   sessionId?: string;
   /** 执行策略配置（服务端 ExecutionPolicy 下发，worker 盲翻成 opencode 配置）。 */
   executionConfig?: ExecutionConfig;
+  /**
+   * 用户消息图片附件（问题二：图片进执行上下文）。worker 下载到执行目录后以
+   * serve file part 形式并入 prompt；相对路径（/uploads/…）由 worker 按自身
+   * serverBaseUrl 拼接下载，绝不接受 file:// 本地路径（防路径穿越）。
+   */
+  attachments?: ExecuteAttachment[];
+}
+
+/**
+ * 下发给 worker 的单个图片附件引用（轻量引用，不含字节；字节由 worker 按需下载）。
+ */
+export interface ExecuteAttachment {
+  /** /uploads/… 相对路径或 http(s) 绝对 URL。 */
+  url: string;
+  /** MIME（如 image/png；缺省按扩展名推断）。 */
+  mime?: string;
+  /** 原文件名（缺省取 url basename）。 */
+  filename?: string;
 }
 
 /**
@@ -240,6 +258,7 @@ export class WorkerClient {
         ...(opts.executionConfig
           ? { executionConfig: opts.executionConfig }
           : {}),
+        ...(opts.attachments ? { attachments: opts.attachments } : {}),
         prompt: opts.prompt,
       }),
     });

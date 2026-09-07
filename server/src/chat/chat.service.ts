@@ -1458,9 +1458,14 @@ export class ChatService {
               message: 'agent mention 缺少 agentId',
             });
           }
-          const memberRow = mention.instanceId
-            ? members.find((r: any) => r.id === mention.instanceId)
-            : members.find((r: any) => r.agentId === mention.agentId);
+          // 任务分区下前端携带的是任务实例 id（ta_），团队成员行是 tmm_：
+          // instanceId 未命中时按 agentId 回退匹配（同 agent 在团队内即有效，
+          // 后续 taskId 分支仍按 agentId 精确定位任务实例做分派）。
+          const memberRow =
+            (mention.instanceId
+              ? members.find((r: any) => r.id === mention.instanceId)
+              : undefined) ??
+            members.find((r: any) => r.agentId === mention.agentId);
           if (!memberRow) {
             throw new BadRequestException({
               code: CHAT_ERRORS.MENTION_AGENT_NOT_IN_TEAM,

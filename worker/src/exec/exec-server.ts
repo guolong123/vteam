@@ -20,6 +20,7 @@
 
 import { promises as fsp } from 'fs';
 import * as http from 'http';
+import * as path from 'path';
 import { EventSender } from '../client/event-client';
 import {
   CompletionResult,
@@ -61,6 +62,13 @@ export interface ExecuteRequestPayload {
   agent?: string;
   /** 工作目录（prompt_async query 参数）。 */
   directory?: string;
+  /**
+   * 用户消息图片附件引用（问题二：图片进执行上下文）。worker 下载到执行目录后以
+   * serve file part 形式并入 prompt。url 仅接受 /uploads/… 相对路径（按
+   * serverBaseUrl 拼接）或与 serverBaseUrl 同源的 http(s) 绝对 URL；file://
+   * 等本地路径一律拒绝（server 不得指定 worker 本地路径，防路径穿越）。
+   */
+  attachments?: ExecuteAttachment[];
   /** P7：顶层 system 提示（产出物协议/@机制等，serve 拼入 LLM system message，不进会话记录）。 */
   system?: string;
   /** 执行策略配置（服务端 ExecutionPolicy 下发，worker 盲翻成 opencode 配置，A1 通道①）。 */
@@ -83,8 +91,26 @@ export interface QuestionReplyRequestPayload {
   response?: 'once' | 'always' | 'reject';
 }
 
+/** POST /execute 的单个图片附件引用（轻量引用，不含字节；worker 按需下载落盘）。 */
+export interface ExecuteAttachment {
+  /** /uploads/… 相对路径或 http(s) 绝对 URL（file:// 等本地路径拒绝）。 */
+  url: string;
+  /** MIME（如 image/png；缺省按扩展名推断）。 */
+  mime?: string;
+  /** 原文件名（缺省取 url basename，用于落盘命名与 file part）。 */
+  filename?: string;
+}
+
 /** FR-41：GET /file 单文件大小上限（10MB，超限 413，对齐 server FILE_SIZE_LIMIT）。 */
 export const MAX_FILE_FETCH_BYTES = 10 * 1024 * 1024;
+
+/**
+ * 问题二图片附件下载上限（5MB）。
+ * uploads 端允许 10MB，但进执行上下文的图片走模型视觉通道：5MB 覆盖手机截图/
+ * 相机直出常规尺寸，超限则跳过该图并在 prompt 内注明（模型如实告知用户重发，
+ * 不静默谎称看见）。与 MAX_FILE_FETCH_BYTES（控制面拉取）解耦，互不影响。
+ */
+export const MAX_IMAGE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
 export interface ExecServerOptions {
   /** 监听端口（WORKER_EXEC_PORT）。 */
@@ -115,6 +141,11 @@ export interface ExecServerOptions {
   serveErrorReader?: () => string[];
   /** 请求体大小上限 bytes；默认 1MB。 */
   maxBodyBytes?: number;
+  /**
+   * 控制面基址（config.serverUrl，如 http://server:3000）：附件相对路径
+   * （/uploads/…）按此拼接下载。缺省则只接受绝对 URL 的附件。
+   */
+  serverBaseUrl?: string;
   /** 日志输出；默认 console。 */
   logger?: Logger;
 }
@@ -174,6 +205,7 @@ export class ExecServer {
   private readonly pollMs: number;
   private readonly serveErrorReader: (() => string[]) | undefined;
   private readonly maxBodyBytes: number;
+  private readonly serverBaseUrl: string;
   private readonly logger: Logger;
   private server: http.Server | null = null;
 
@@ -186,6 +218,7 @@ export class ExecServer {
     this.pollMs = options.pollMs ?? 500;
     this.serveErrorReader = options.serveErrorReader;
     this.maxBodyBytes = options.maxBodyBytes ?? 1024 * 1024;
+    this.serverBaseUrl = (options.serverBaseUrl ?? '').replace(/\/+$/, '');
     this.logger = options.logger ?? console;
   }
 
@@ -556,6 +589,117 @@ export class ExecServer {
     return err instanceof DriverRequestError && err.status === 404;
   }
 
+  /**
+   * 附件图片落盘 + file parts 组装（问题二：用户发的图进执行上下文）。
+   * 成功 → serve 可读的本地 file part（实测 file:// URL 形状）；失败/超限/非法
+   * → notes 文本（并入 prompt 尾部，模型如实告知用户，不静默谎称看见）。
+   * 安全：只接受 /uploads/ 相对路径（按 serverBaseUrl 拼接）或与 serverBaseUrl
+   * 同源的 http(s) URL；file:// 等本地路径、异源 URL 一律拒绝并记 warn。
+   */
+  private async prepareAttachmentParts(
+    payload: ExecuteRequestPayload,
+  ): Promise<{ fileParts: unknown[]; notes: string[] }> {
+    const fileParts: unknown[] = [];
+    const notes: string[] = [];
+    const list = Array.isArray(payload.attachments) ? payload.attachments : [];
+    if (list.length === 0) return { fileParts, notes };
+    const directory = payload.directory?.trim();
+    if (!directory) {
+      notes.push('（附件图片未能送达：缺少执行目录，请如实告知用户重新发送）');
+      return { fileParts, notes };
+    }
+    const baseOrigin = this.serverBaseUrl ? this.originOf(this.serverBaseUrl) : null;
+    let index = 0;
+    for (const att of list) {
+      index += 1;
+      const label = att?.filename?.trim() || `图片${index}`;
+      const target = this.resolveAttachmentUrl(att?.url);
+      if (!target) {
+        this.logger.warn(`[exec] 附件跳过（非法引用）: ${att?.url ?? '-'}`);
+        notes.push(`（附件图片 ${label} 未能送达：引用非法，请如实告知用户重新发送）`);
+        continue;
+      }
+      if (baseOrigin && this.originOf(target) !== baseOrigin) {
+        this.logger.warn(`[exec] 附件跳过（异源 URL）: ${target}`);
+        notes.push(`（附件图片 ${label} 未能送达：来源不可信，请如实告知用户重新发送）`);
+        continue;
+      }
+      const mime = this.inferImageMime(att?.mime, target);
+      if (!mime) {
+        this.logger.warn(`[exec] 附件跳过（非图片类型）: ${target}`);
+        continue;
+      }
+      try {
+        const buf = await this.downloadAttachment(target);
+        if (buf === null) {
+          notes.push(`（附件图片 ${label} 未能送达：超过 ${MAX_IMAGE_ATTACHMENT_BYTES} bytes 上限，请如实告知用户压缩后重发）`);
+          continue;
+        }
+        const safeName = this.sanitizeAttachmentName(att?.filename, mime, index);
+        const destDir = path.join(directory, 'attachments');
+        await fsp.mkdir(destDir, { recursive: true });
+        const dest = path.join(destDir, safeName);
+        await fsp.writeFile(dest, buf);
+        fileParts.push({ type: 'file', mime, filename: safeName, url: `file://${dest}` });
+        this.logger.info(`[exec] 附件落盘 ${dest} (${buf.length} bytes)`);
+      } catch (err) {
+        this.logger.warn(
+          `[exec] 附件下载失败 ${target}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        notes.push(`（附件图片 ${label} 未能送达：下载失败，请如实告知用户重新发送）`);
+      }
+    }
+    return { fileParts, notes };
+  }
+
+  /** 附件引用归一为可下载的 http(s) URL；非法（file:// 等/异形）返回 null。 */
+  private resolveAttachmentUrl(raw: unknown): string | null {
+    if (typeof raw !== 'string') return null;
+    const ref = raw.trim();
+    if (!ref || ref.startsWith('file:') || ref.startsWith('data:')) return null;
+    if (ref.startsWith('/uploads/')) {
+      if (!this.serverBaseUrl) return null;
+      return `${this.serverBaseUrl}${ref}`;
+    }
+    if (/^https?:\/\//i.test(ref)) return ref;
+    return null;
+  }
+
+  private originOf(url: string): string | null {
+    try {
+      return new URL(url).origin;
+    } catch {
+      return null;
+    }
+  }
+
+  private inferImageMime(mime: unknown, url: string): string | null {
+    if (typeof mime === 'string' && mime.toLowerCase().startsWith('image/')) {
+      return mime.toLowerCase();
+    }
+    const ext = url.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+    if (ext === 'png') return 'image/png';
+    if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+    if (ext === 'gif') return 'image/gif';
+    return null;
+  }
+
+  private sanitizeAttachmentName(name: unknown, mime: string, index: number): string {
+    const fallbackExt = mime === 'image/png' ? 'png' : mime === 'image/gif' ? 'gif' : 'jpg';
+    const raw = typeof name === 'string' && name.trim() ? path.basename(name.trim()) : `image-${index}.${fallbackExt}`;
+    const safe = raw.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100) || `image-${index}.${fallbackExt}`;
+    return safe.includes('.') ? safe : `${safe}.${fallbackExt}`;
+  }
+
+  /** 下载附件（上限 MAX_IMAGE_ATTACHMENT_BYTES，超限返回 null；60s 超时抛错）。 */
+  private async downloadAttachment(url: string): Promise<Buffer | null> {
+    const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > MAX_IMAGE_ATTACHMENT_BYTES) return null;
+    return buf;
+  }
+
   /** sendAndAwait 封装：sendMessage → awaitCompletion（onPoll 增量上送 delta + pending 检测）。 */
   private async runSendAndAwait(
     payload: ExecuteRequestPayload,
@@ -566,13 +710,20 @@ export class ExecServer {
     // 每次任务独立 pending 检测器（去重集 + 防重入按任务隔离，任务结束即释放——
     // 实例级标志会跨任务残留 true，导致后续任务检测全部跳过）。
     const detector = new PendingQuestionDetector(this.driver, this.sender, this.logger);
+    // 问题二：附件图片先落盘再以 file part 并入（失败注记同样进 prompt，模型如实告知）。
+    const { fileParts, notes } = await this.prepareAttachmentParts(payload);
+    const parts: unknown[] = [
+      ...normalizeParts(payload.prompt),
+      ...fileParts,
+      ...(notes.length > 0 ? [{ type: 'text', text: notes.join('\n') }] : []),
+    ];
     return sendAndAwait(
       this.driver,
       sessionID,
       {
         model: payload.model ?? null,
         agent: payload.agent,
-        parts: normalizeParts(payload.prompt),
+        parts,
         directory: payload.directory,
         system: payload.system,
       },

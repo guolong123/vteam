@@ -369,12 +369,14 @@ export function TeamMembersPanel({
                   type="button"
                   data-testid={`agent-model-chip-${a.instanceId ?? a.id}`}
                   aria-label="设置模型"
+                  disabled={!onChangeModel}
                   onClick={(e) => {
+                    if (!onChangeModel) return;
                     e.stopPropagation();
                     setModelPicker(modelPicker === (a.instanceId ?? a.id) ? null : (a.instanceId ?? a.id));
                     setOpenMenu(null);
                   }}
-                  title={effectiveModel || "跟随模板（点击设置模型）"}
+                  title={onChangeModel ? (effectiveModel || "跟随模板（点击设置模型）") : "团队空闲时不可设置模型（需有进行中任务）"}
                   style={{
                     marginTop: 4,
                     display: "inline-flex",
@@ -390,7 +392,8 @@ export function TeamMembersPanel({
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
-                    cursor: "pointer",
+                    cursor: onChangeModel ? "pointer" : "not-allowed",
+                    opacity: onChangeModel ? 1 : 0.55,
                   }}
                 >
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -492,13 +495,16 @@ export function TeamMembersPanel({
                         setModelPicker(a.instanceId ?? a.id);
                         setOpenMenu(null);
                       }}
+                      disabled={!onChangeModel}
+                      title={onChangeModel ? undefined : "团队空闲时不可设置模型（需有进行中任务）"}
                       style={{
                         textAlign: "left",
                         padding: `6px 8px`,
                         borderRadius: radius.sm,
                         border: "none",
                         background: "transparent",
-                        cursor: "pointer",
+                        cursor: onChangeModel ? "pointer" : "not-allowed",
+                        opacity: onChangeModel ? 1 : 0.55,
                         fontSize: fontSize.sm,
                         color: "#2563EB",
                       }}

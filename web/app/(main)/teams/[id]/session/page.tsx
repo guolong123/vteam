@@ -26,6 +26,7 @@ import { teamsApi, type TeamDto, type TeamMemberDto } from "@/src/api/teams";
 import { LoadingIndicator, MsgError, QuestionModal, MsgParts } from "@/src/components/chat";
 import type { QuestionModalData } from "@/src/components/chat";
 import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
+import { TaskDetailDrawer } from "@/src/components/tasks/TaskDetailDrawer";
 import { TaskInfoEditModal } from "@/src/components/tasks/TaskInfoEditModal";
 import { TeamMembersPanel, roleOptionsOf, customAgentsOf, type AgentItem } from "@/src/components/teams/TeamMembersPanel";
 import { ResizeHandle } from "@/src/components/teams/ResizeHandle";
@@ -101,6 +102,7 @@ export default function TeamSessionPage() {
   const [questionSubmitting, setQuestionSubmitting] = useState(false);
   const [detailIssueId, setDetailIssueId] = useState<string | null>(null);
   const [taskEditOpen, setTaskEditOpen] = useState(false);
+  const [taskDetailOpen, setTaskDetailOpen] = useState(false);
 
   const membersPanel = useResizableWidth({
     storageKey: "team-session-members-width",
@@ -784,8 +786,8 @@ export default function TeamSessionPage() {
                 type="button"
                 data-testid="team-session-current-task"
                 data-task-id={currentTask.id}
-                onClick={() => router.push(`/tasks/${currentTask.id}`)}
-                title="打开任务详情（深度编辑）"
+                onClick={() => setTaskDetailOpen(true)}
+                title="打开任务详情抽屉"
                 style={{ fontSize: fontSize.xs, color: "#2563EB", backgroundColor: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.22)", padding: "1px 8px", borderRadius: radius.pill, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 240 }}
               >
                 {currentTask.title}
@@ -1001,6 +1003,11 @@ export default function TeamSessionPage() {
               queryClient.invalidateQueries({ queryKey: ["team", teamId] });
             }}
           />
+        ) : null}
+
+        {/* 任务详情抽屉（替代已删除的 /tasks/:id 路由页） */}
+        {currentTask && taskDetailOpen ? (
+          <TaskDetailDrawer taskId={currentTask.id} onClose={() => setTaskDetailOpen(false)} />
         ) : null}
 
         {/* Issue 详情弹窗 */}

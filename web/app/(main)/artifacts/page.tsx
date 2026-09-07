@@ -35,7 +35,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useRealtimeEvents } from "@/hooks/use-realtime";
-import { AgentAvatar, EmptyState } from "@/src/components/ui";
+import { AgentAvatar, EmptyState, PageWindow } from "@/src/components/ui";
 import {
   type RoleKey,
   roles,
@@ -851,16 +851,9 @@ export default function ArtifactsPage() {
   };
 
   return (
-    <div
-      data-testid="artifacts-root"
-      style={{
-        flex: 1,
-        minHeight: 0,
-        display: "flex",
-        flexDirection: "column",
-        backgroundColor: neutral[100],
-        ...baseFont,
-      }}
+    <PageWindow
+      testId="artifacts-root"
+      style={{ backgroundColor: neutral[100], ...baseFont }}
     >
       {/* 头部：项目名 + 产出物管理 + 文档站视图入口 */}
       <div
@@ -1079,6 +1072,6 @@ export default function ArtifactsPage() {
           ))
         )}
       </div>
-    </div>
+    </PageWindow>
   );
 }

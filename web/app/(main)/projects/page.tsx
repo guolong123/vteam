@@ -17,7 +17,7 @@ import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { AgentAvatar, EmptyState, StatusBadge } from "@/src/components/ui";
+import { AgentAvatar, EmptyState, PageWindow, StatusBadge } from "@/src/components/ui";
 import type { RoleKey, StatusKey } from "@/src/theme/tokens";
 import {
   neutral,
@@ -551,15 +551,9 @@ export default function ProjectsPage() {
       : projects.filter((p) => `${p.name} ${p.description ?? ""}`.toLowerCase().includes(kw));
 
   return (
-    <div
-      data-testid="project-list-root"
-      style={{
-        flex: 1,
-        display: "flex",
-        flexDirection: "column",
-        padding: `${space.xl}px ${space.xl}px ${space.xl}px 0`,
-        fontFamily: fontFamily.body,
-      }}
+    <PageWindow
+      testId="project-list-root"
+      style={{ fontFamily: fontFamily.body }}
     >
       {/* 卡片 hover 交互样式（仅 cursor + 轻微阴影，不改布局/配色） */}
       <style>{projectCardCss}</style>
@@ -752,6 +746,6 @@ export default function ProjectsPage() {
         onClose={() => setModalOpen(false)}
         onSubmit={handleCreate}
       />
-    </div>
+    </PageWindow>
   );
 }

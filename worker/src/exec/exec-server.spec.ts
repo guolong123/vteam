@@ -25,7 +25,7 @@ import {
   DriverRequestError,
 } from '../driver/v1-driver';
 import { getLoad, resetInstanceCount } from '../instance-tracker';
-import { ExecServer, MAX_FILE_FETCH_BYTES } from './exec-server';
+import { ExecServer, MAX_FILE_FETCH_BYTES, MAX_IMAGE_ATTACHMENT_BYTES } from './exec-server';
 
 function asstMsg(id: string, parts: ServePart[]): ServeMessage {
   return { info: { id, role: 'assistant' }, parts };
@@ -540,6 +540,100 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
       expect(noPrompt.status).toBe(400);
     } finally {
       await exec.stop();
+    }
+  });
+});
+
+describe('ExecServer：POST /execute 图片附件（问题二：图片进执行上下文）', () => {
+  const realFetch = (globalThis as unknown as { fetch: unknown }).fetch;
+  afterEach(() => {
+    (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
+  });
+
+  function stubDownload(bytes: Buffer, ok = true, status = 200): jest.Mock {
+    const stub = jest.fn().mockResolvedValue({ ok, status, arrayBuffer: async () => bytes });
+    (globalThis as unknown as { fetch: unknown }).fetch = stub;
+    return stub;
+  }
+
+  it('/uploads/ 相对路径 + serverBaseUrl → 下载落盘 attachments/ + file part 并入 prompt', async () => {
+    const stub = stubDownload(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const { driver, sendMessage } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, serverBaseUrl: 'http://server:3000', logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    const workDir = fs.mkdtempSync(join(os.tmpdir(), 'exec-attach-'));
+    try {
+      const res = await postExecute(bound, {
+        taskId: 't_1',
+        prompt: '看看图',
+        directory: workDir,
+        attachments: [{ url: '/uploads/a.png', mime: 'image/png', filename: 'a.png' }],
+      });
+      expect(res.status).toBe(202);
+      await waitFor(() => sendMessage.mock.calls.length > 0);
+      expect(stub).toHaveBeenCalledWith('http://server:3000/uploads/a.png', expect.anything());
+      const parts = (sendMessage.mock.calls[0][1] as { parts: Array<Record<string, unknown>> }).parts;
+      const file = parts.find((p) => p.type === 'file') as Record<string, unknown> | undefined;
+      expect(file).toMatchObject({ type: 'file', mime: 'image/png', filename: 'a.png' });
+      expect(String(file?.url)).toMatch(/^file:\/\//);
+      expect(fs.existsSync(join(workDir, 'attachments', 'a.png'))).toBe(true);
+      await waitFor(() => sent.length >= 5);
+    } finally {
+      await exec.stop();
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('file:// 引用一律拒绝 → 注记文本 part 入 prompt，无 file part', async () => {
+    const stub = stubDownload(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const { driver, sendMessage } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, serverBaseUrl: 'http://server:3000', logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    const workDir = fs.mkdtempSync(join(os.tmpdir(), 'exec-attach-'));
+    try {
+      await postExecute(bound, {
+        taskId: 't_1',
+        prompt: '看看图',
+        directory: workDir,
+        attachments: [{ url: 'file:///etc/passwd', mime: 'image/png', filename: 'x.png' }],
+      });
+      await waitFor(() => sendMessage.mock.calls.length > 0);
+      expect(stub).not.toHaveBeenCalled();
+      const parts = (sendMessage.mock.calls[0][1] as { parts: Array<Record<string, unknown>> }).parts;
+      expect(parts.some((p) => p.type === 'file')).toBe(false);
+      expect(parts.some((p) => p.type === 'text' && String(p.text).includes('未能送达'))).toBe(true);
+      await waitFor(() => sent.length >= 5);
+    } finally {
+      await exec.stop();
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('超 MAX_IMAGE_ATTACHMENT_BYTES → 跳过落盘 + 注记文本，不阻断执行', async () => {
+    stubDownload(Buffer.alloc(MAX_IMAGE_ATTACHMENT_BYTES + 1, 1));
+    const { driver, sendMessage } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, serverBaseUrl: 'http://server:3000', logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    const workDir = fs.mkdtempSync(join(os.tmpdir(), 'exec-attach-'));
+    try {
+      await postExecute(bound, {
+        taskId: 't_1',
+        prompt: '看看图',
+        directory: workDir,
+        attachments: [{ url: '/uploads/big.png', mime: 'image/png', filename: 'big.png' }],
+      });
+      await waitFor(() => sendMessage.mock.calls.length > 0);
+      const parts = (sendMessage.mock.calls[0][1] as { parts: Array<Record<string, unknown>> }).parts;
+      expect(parts.some((p) => p.type === 'file')).toBe(false);
+      expect(fs.existsSync(join(workDir, 'attachments', 'big.png'))).toBe(false);
+      expect(parts.some((p) => p.type === 'text' && String(p.text).includes('超过'))).toBe(true);
+      await waitFor(() => sent.length >= 5);
+    } finally {
+      await exec.stop();
+      fs.rmSync(workDir, { recursive: true, force: true });
     }
   });
 });

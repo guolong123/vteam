@@ -49,7 +49,6 @@ export const DEFAULT_CMDK_ITEMS: CmdKItem[] = [
   { group: "导航", label: "模型管理", icon: "◇" },
   { group: "导航", label: "仓库管理", icon: "⌗" },
   { group: "导航", label: "技能与工具", icon: "◫" },
-  { group: "导航", label: "消息中心", icon: "✉" },
   { group: "导航", label: "用户管理", icon: "☷" },
   { group: "导航", label: "角色权限", icon: "⚖" },
   { group: "操作", label: "新建任务", icon: "＋" },

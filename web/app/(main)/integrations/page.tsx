@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { ConfirmDialog } from "@/src/components/ui";
+import { ConfirmDialog, PageWindow } from "@/src/components/ui";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
@@ -734,7 +734,7 @@ function NotificationChannelModal({ mode, channel, submitting, error, onClose, o
 export default function IntegrationsPage() {
   const [activeTab, setActiveTab] = useState<"message" | "notification">("message");
   return (
-    <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: space.lg, padding: `${space.xl}px`, backgroundColor: neutral[50], overflowY: "auto", ...baseFont }}>
+    <PageWindow style={{ position: "relative", backgroundColor: neutral[50], ...baseFont }}>
       <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: fontSize.xxl, fontWeight: 700, color: neutral[900], lineHeight: 1.2 }}>外部渠道</div>
@@ -748,6 +748,6 @@ export default function IntegrationsPage() {
       <div data-testid="integration-tab-panel" data-tab={activeTab}>
         {activeTab === "message" ? <MessageChannelsTab /> : <NotificationChannelsTab />}
       </div>
-    </div>
+    </PageWindow>
   );
 }

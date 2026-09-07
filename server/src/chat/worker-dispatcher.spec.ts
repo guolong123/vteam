@@ -2082,6 +2082,41 @@ describe('WorkerDispatcher', () => {
       expect(finals).toHaveLength(1);
     });
 
+    it('F3 缺陷①：team_group 终态化（groupFallback）→ 全文含 reasoning 不漏进群聊', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue(null);
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: request.channelId,
+        type: CHANNEL_TYPE.team_group,
+      });
+      prisma.message.create.mockResolvedValue(messageRow());
+      const d = createDispatcher();
+      const finals: unknown[] = [];
+      d.onFinal((e) => finals.push(e));
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '让我先查一下成员是否有模型配置',
+        parts: [
+          { type: 'text', text: '让我先查一下成员是否有模型配置' },
+          { type: 'reasoning', text: '内心独白', synthetic: true },
+          {
+            type: 'tool',
+            name: 'read',
+            input: 'x',
+            output: 'y',
+            synthetic: true,
+          },
+        ],
+      });
+
+      // 一团队一群复用下 resolveChannel 回退 team_group：与 task_group 同语义，
+      // 正文独白不落群聊（结论经 group_post 工具直发），仅幂等标记 + emitFinal
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(finals).toHaveLength(1);
+    });
+
     it('F3 缺陷①：private 终态化 → parts 全量保留（reasoning/tool 前端折叠展示）', async () => {
       prisma.chatChannel.findFirst.mockResolvedValue({
         id: 'c_dm',
@@ -4784,6 +4819,41 @@ describe('WorkerDispatcher', () => {
       expect(prompt).toContain('禁止传递 taskId 参数');
       expect(prompt).not.toContain(GROUP_TRIGGER_INSTRUCTION);
       expect(prompt).not.toContain('chat_history / doclib');
+    });
+
+    it('触发消息带图片附件 → execute 携带 attachments + prompt 追加图片指引', async () => {
+      (prisma.message as any).findUnique = jest.fn().mockResolvedValue({
+        attachmentUrl: '/uploads/uuid-1.png',
+        attachmentName: 'shot.png',
+        attachmentType: 'png',
+      } as any);
+      const d = createDispatcher();
+      await d.dispatch(teamRequest() as any);
+      const execArgs = workerClient.execute.mock.calls[0][1] as {
+        prompt: Array<{ text: string }>;
+        attachments?: unknown;
+      };
+      expect(execArgs.attachments).toEqual([
+        { url: '/uploads/uuid-1.png', mime: 'image/png', filename: 'shot.png' },
+      ]);
+      expect(execArgs.prompt[0].text).toContain('【附件图片】');
+      expect(execArgs.prompt[0].text).toContain('shot.png');
+    });
+
+    it('触发消息带非图片附件（pdf）→ 不携带 attachments，纯文本分派不变', async () => {
+      (prisma.message as any).findUnique = jest.fn().mockResolvedValue({
+        attachmentUrl: '/uploads/uuid-2.pdf',
+        attachmentName: 'doc.pdf',
+        attachmentType: 'pdf',
+      } as any);
+      const d = createDispatcher();
+      await d.dispatch(teamRequest() as any);
+      const execArgs = workerClient.execute.mock.calls[0][1] as {
+        prompt: Array<{ text: string }>;
+        attachments?: unknown;
+      };
+      expect(execArgs.attachments).toBeUndefined();
+      expect(execArgs.prompt[0].text).not.toContain('【附件图片】');
     });
 
     it('team-mode 团队上下文行：chat_history 与 group_post 均传 teamId', async () => {

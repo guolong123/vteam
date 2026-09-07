@@ -21,6 +21,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import {
+  ExecuteAttachment,
   WorkerClient,
   WorkerEndpointRef,
   WorkerUnavailableException,
@@ -1507,14 +1508,19 @@ export class WorkerDispatcher
         } catch {}
       }
     }
+    // 问题二：触发消息带图片附件 → 引用随执行下发（worker 落盘后以 file part 并入 prompt）；
+    // 无附件/非图片时为 null，纯文本分派路径不变。
+    const imageAttach = await this.resolveImageAttachments(request.messageId);
+    const finalPrompt = imageAttach ? `${prompt}\n\n${imageAttach.pointer}` : prompt;
     await this.workerClient.execute(worker, {
-      prompt: [{ type: 'text', text: prompt }],
+      prompt: [{ type: 'text', text: finalPrompt }],
       model,
       directory: taskWorkDir,
       taskId,
       agentId: target.agentId,
       channelId: request.channelId,
       sessionId: opencodeSessionId,
+      ...(imageAttach ? { attachments: imageAttach.attachments } : {}),
       system: buildSystemInstructions(agentIdentity, {
         isMainAgent,
         mainAgentInstanceId: mainAgentInstanceIdForTeam,
@@ -1923,13 +1929,16 @@ export class WorkerDispatcher
         data: { status: MESSAGE_STATUS.failed },
       });
     }
+    const imageAttach = await this.resolveImageAttachments(request.messageId);
+    const finalPrompt = imageAttach ? `${prompt}\n\n${imageAttach.pointer}` : prompt;
     await this.workerClient.execute(worker, {
-      prompt: [{ type: 'text', text: prompt }],
+      prompt: [{ type: 'text', text: finalPrompt }],
       model,
       directory: teamWorkDir,
       agentId: target.agentId,
       channelId: request.channelId,
       sessionId: opencodeSessionId,
+      ...(imageAttach ? { attachments: imageAttach.attachments } : {}),
       system: buildSystemInstructions(agentIdentity, {
         isMainAgent,
         mainAgentInstanceId: mainAgentMemberId,
@@ -2055,8 +2064,11 @@ export class WorkerDispatcher
     // 群聊回复只经 MCP group_post 工具直发：正文独白仅落 private 会话频道（内心独白）。
     // 任务未创建该 agent private 频道（resolveChannel 回退群聊）时跳过正文落库——群聊
     // 只展示 ACK + 工具直发内容，不再把私聊正文兜底写进群聊（曾致群聊每人 3 条：
-    // ACK / 终态化正文 / 工具直发）。
-    const groupFallback = channel?.type === CHANNEL_TYPE.task_group;
+    // ACK / 终态化正文 / 工具直发）。回退频道含新老两型：task_group（存量）与
+    // team_group（一团队一群复用；线上实证：任务终态全文含 reasoning 经此漏进群聊）。
+    const groupFallback =
+      channel?.type === CHANNEL_TYPE.task_group ||
+      channel?.type === CHANNEL_TYPE.team_group;
     if (channel && !groupFallback) {
       try {
         // 终态化（任务 3 定稿）：delta 流式期间创建的 processing 消息 → 更新为 sent +
@@ -3838,6 +3850,61 @@ export class WorkerDispatcher
   private defaultAgentWorkDirPath(name: string, seq: number): string {
     const base = sanitizeWorkDirName(name ?? 'agent');
     return `/data/vteam-worker/${seq > 1 ? `${base}-${seq}` : base}`;
+  }
+
+  /** 可进执行上下文的图片扩展名（对齐 web IMAGE_EXTS + uploads 白名单交集；非图片行为不变）。 */
+  private static readonly IMAGE_ATTACHMENT_EXTS: ReadonlySet<string> = new Set([
+    'png',
+    'jpg',
+    'jpeg',
+    'gif',
+  ]);
+
+  private static readonly IMAGE_ATTACHMENT_MIME: Readonly<Record<string, string>> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+  };
+
+  /**
+   * 触发消息的图片附件 → 执行附件引用（问题二：用户发的图进执行上下文）。
+   * 仅 /uploads/ 落盘 + 图片扩展名才携带；其余（无附件/非图片/查询失败）返回 null，
+   * 调用方保持纯文本分派，行为与此前一致。
+   */
+  private async resolveImageAttachments(
+    messageId: string,
+  ): Promise<{ attachments: ExecuteAttachment[]; pointer: string } | null> {
+    try {
+      const row = await this.prisma.message.findUnique({
+        where: { id: messageId },
+        select: {
+          attachmentUrl: true,
+          attachmentName: true,
+          attachmentType: true,
+        },
+      });
+      const url = row?.attachmentUrl ?? null;
+      if (!url || !url.startsWith('/uploads/')) return null;
+      const ext = (row?.attachmentType ?? '').toLowerCase();
+      if (!WorkerDispatcher.IMAGE_ATTACHMENT_EXTS.has(ext)) return null;
+      const filename = row?.attachmentName?.trim() || url.split('/').pop() || 'image';
+      return {
+        attachments: [
+          {
+            url,
+            mime: WorkerDispatcher.IMAGE_ATTACHMENT_MIME[ext],
+            filename,
+          },
+        ],
+        pointer: `【附件图片】用户附了一张图片（${filename}），已放入本次执行的上下文，请查看图片内容后再作答。`,
+      };
+    } catch (err) {
+      this.logger.warn(
+        `触发消息 ${messageId} 附件查询失败，按纯文本分派: ${this.describeError(err)}`,
+      );
+      return null;
+    }
   }
 
   private clearPendingWatchdog(taskId: string, agentId: string): void {

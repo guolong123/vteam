@@ -28,7 +28,7 @@ export default function DocsPage() {
   const [tab, setTab] = useState<"docs" | "protos">(() => (searchParams.get("proto") ? "protos" : "docs"));
   const taskQuery = useQuery({
     queryKey: ["task", taskId],
-    queryFn: () => api.get<{ id: string; title: string; status: string }>(`/tasks/${taskId}`),
+    queryFn: () => api.get<{ id: string; title: string; status: string; teamId?: string | null; projectId?: string }>(`/tasks/${taskId}`),
     enabled: !!taskId && !!user?.id,
     retry: false,
   });
@@ -43,11 +43,11 @@ export default function DocsPage() {
   return (
     <div data-testid="docs-shell" style={{ display: "flex", minHeight: 0, flex: 1, flexDirection: "column", overflow: "hidden", backgroundColor: surface, fontFamily: fontFamily.body, WebkitFontSmoothing: "antialiased" }}>
       <nav aria-label="面包屑" style={{ display: "flex", height: 36, flexShrink: 0, alignItems: "center", gap: 6, borderBottom: `1px solid ${border}`, backgroundColor: surface, padding: `0 ${space.lg}px`, fontSize: fontSize.xs }}>
-        <Link href={`/tasks/${taskId}`} data-testid="docs-back-to-task" style={{ display: "flex", alignItems: "center", gap: 4, borderRadius: radius.sm, color: neutral[500], textDecoration: "none", transition: "color .15s", fontFamily: fontFamily.body }}>
+        <Link href={taskQuery.data?.teamId ? `/teams/${taskQuery.data.teamId}/session` : taskQuery.data?.projectId ? `/board?pid=${taskQuery.data.projectId}` : `/projects`} data-testid="docs-back-to-task" style={{ display: "flex", alignItems: "center", gap: 4, borderRadius: radius.sm, color: neutral[500], textDecoration: "none", transition: "color .15s", fontFamily: fontFamily.body }}>
           <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M19 12H5M12 19l-7-7 7-7" />
           </svg>
-          返回任务
+          返回团队会话
         </Link>
         <span style={{ color: neutral[300] }} aria-hidden>/</span>
         <span data-testid="docs-task-title" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500, color: neutral[700] }} title={taskQuery.data?.title ?? taskId}>{taskQuery.data?.title ?? taskId}</span>

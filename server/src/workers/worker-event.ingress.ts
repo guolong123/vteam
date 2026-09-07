@@ -477,12 +477,20 @@ export class WorkerEventIngress {
     // T6 实例语义：processing 消息落 senderInstanceId（会话 taskAgentId），
     // 同 agent 多实例流式内容精确归属（终态化 handleTaskCompleted 已按实例落库）
     let deltaSenderInstanceId: string | null | undefined;
+    let teamIdOfSession: string | null = null;
+    let teamMemberIdOfSession: string | null = null;
     if (sessionId) {
       const sRow = await this.prisma.session.findUnique({
         where: { id: sessionId },
-        select: { taskAgentId: true },
+        select: { taskAgentId: true, teamId: true, teamMemberId: true },
       });
-      deltaSenderInstanceId = sRow?.taskAgentId ?? null;
+      // 团队维度仅在无 taskId 时启用：存量任务会话即便带 teamMemberId 也沿用 taskAgentId，不改变任务路径语义。
+      if (!taskId) {
+        teamIdOfSession = (sRow as any)?.teamId ?? null;
+        teamMemberIdOfSession = (sRow as any)?.teamMemberId ?? null;
+      }
+      deltaSenderInstanceId =
+        sRow?.taskAgentId ?? teamMemberIdOfSession ?? null;
     }
     let agentId = this.str(raw.agentId);
     if (!sourceChannelId) {
@@ -521,14 +529,27 @@ export class WorkerEventIngress {
               : { taskId, agentId },
             select: { id: true, type: true },
           })
-        : null;
+        : teamIdOfSession && teamMemberIdOfSession
+          ? await this.prisma.chatChannel.findFirst({
+              where: {
+                teamId: teamIdOfSession,
+                teamMemberId: teamMemberIdOfSession,
+                type: CHANNEL_TYPE.private,
+              },
+              select: { id: true, type: true },
+            })
+          : null;
     // 群聊回复只经 MCP group_post 工具直发：群聊触发的流式处理过程仅落该 agent 的
     // private 会话频道（内心独白）；任务未创建该 agent private 频道（如仅 task_group
     // 一个频道）→ 跳过落库，不把流式中间态写进群聊（曾致群聊每人 3 条：
     // ACK / 流式处理过程 / 工具直发）。私聊来源或有 private 频道时行为不变。
-    if (source.type === CHANNEL_TYPE.task_group && privateTarget === null) {
+    if (
+      (source.type === CHANNEL_TYPE.task_group ||
+        source.type === CHANNEL_TYPE.team_group) &&
+      privateTarget === null
+    ) {
       this.logger.debug(
-        `[ingress] message.part.delta 群聊触发且无 private 频道，跳过落库（taskId=${taskId} agentId=${agentId ?? '-'}）`,
+        `[ingress] message.part.delta 群聊触发且无 private 频道，跳过落库（taskId=${taskId} teamId=${teamIdOfSession} agentId=${agentId ?? '-'})`,
       );
       return true;
     }

@@ -31,7 +31,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { hasPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { AgentAvatar, ConfirmDialog } from "@/src/components/ui";
+import { AgentAvatar, ConfirmDialog, PageWindow } from "@/src/components/ui";
 import { type AvailableModel } from "@/src/types/models";
 import {
   type RoleKey,
@@ -1920,21 +1920,12 @@ export default function AgentConfigPage() {
   const isTemplate = selectedAgent?.type === "template";
 
   return (
-    <div
-      data-testid="agent-config-root"
-      style={{
-        flex: 1,
-        minHeight: 0,
-        position: "relative",
-        display: "flex",
-        gap: space.lg,
-        alignItems: "flex-start",
-        padding: space.xl,
-        overflow: "auto",
-        backgroundColor: neutral[50],
-        ...baseFont,
-      }}
+    <PageWindow
+      testId="agent-config-root"
+      style={{ position: "relative", backgroundColor: neutral[50], ...baseFont }}
     >
+      {/* 窗口内保持左右双栏（列表 320px + 配置面板），原根容器行布局下移一层 */}
+      <div style={{ display: "flex", gap: space.lg, alignItems: "flex-start" }}>
       {/* 左：Agent 列表（320px） */}
       <div
         style={{
@@ -2099,6 +2090,7 @@ export default function AgentConfigPage() {
           if (selectedAgent) deleteMutation.mutate(selectedAgent.id);
         }}
       />
-    </div>
+      </div>
+    </PageWindow>
   );
 }

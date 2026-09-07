@@ -35,7 +35,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { hasPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { ConfirmDialog, EmptyState } from "@/src/components/ui";
+import { ConfirmDialog, EmptyState, PageWindow } from "@/src/components/ui";
 import {
   neutral,
   space,
@@ -515,19 +515,9 @@ export default function WorkersPage() {
   ];
 
   return (
-    <div
-      data-testid="worker-list-root"
-      style={{
-        flex: 1,
-        minHeight: 0,
-        position: "relative",
-        display: "flex",
-        flexDirection: "column",
-        overflowY: "auto",
-        padding: `${space.xl}px ${space.xl}px ${space.xl}px 0`,
-        backgroundColor: neutral[50],
-        fontFamily: fontFamily.body,
-      }}
+    <PageWindow
+      testId="worker-list-root"
+      style={{ position: "relative", backgroundColor: neutral[50], fontFamily: fontFamily.body }}
     >
       <style>{pulseCss}</style>
 
@@ -785,6 +775,6 @@ export default function WorkersPage() {
           if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
         }}
       />
-    </div>
+    </PageWindow>
   );
 }

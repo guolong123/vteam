@@ -85,6 +85,11 @@ a {
   --color-border: #e2e8f0;
   --color-text: #0f172a;
   --color-text-muted: #64748b;
+  /* @高亮（chat-bubble isMentionMe）：浅色=浅蓝底+蓝边，保持原外观 */
+  --color-mention-bg: #eff6ff;
+  --color-mention-border: #bfdbfe;
+  --color-mention-accent: #2563eb;
+  --color-mention-text: #2563eb;
 }
 
 .dark {
@@ -103,6 +108,10 @@ a {
   --color-border: #334155;
   --color-text: #f1f5f9;
   --color-text-muted: #94a3b8;
+  --color-mention-bg: rgba(37, 99, 235, 0.18);
+  --color-mention-border: rgba(147, 197, 253, 0.35);
+  --color-mention-accent: #93c5fd;
+  --color-mention-text: #bfdbfe;
 }
 
 /* ============================================================

@@ -15,7 +15,7 @@ import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { teamsApi, type TeamDto } from "@/src/api/teams";
 import { isApiError } from "@/lib/errors";
-import { AgentAvatar, EmptyState, Pagination } from "@/src/components/ui";
+import { AgentAvatar, EmptyState, PageWindow, Pagination } from "@/src/components/ui";
 import {
   type RoleKey,
   neutral,
@@ -174,9 +174,9 @@ export default function TeamsPage() {
   const total = query.data?.total ?? 0;
 
   return (
-    <div
-      data-testid="teams-list-root"
-      style={{ flex: 1, display: "flex", flexDirection: "column", padding: `${space.xl}px ${space.xl}px ${space.xl}px 0`, ...baseFont }}
+    <PageWindow
+      testId="teams-list-root"
+      style={{ ...baseFont }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: space.lg, marginBottom: space.lg }}>
         <div>
@@ -276,6 +276,6 @@ export default function TeamsPage() {
           </div>
         </>
       )}
-    </div>
+    </PageWindow>
   );
 }

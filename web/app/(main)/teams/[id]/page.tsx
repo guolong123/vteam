@@ -322,8 +322,8 @@ export default function TeamDetailPage() {
                 )}
                 <span style={{ flex: 1 }} />
                 {team.currentTaskId && (
-                  <button type="button" data-testid="goto-current-task" onClick={() => router.push(`/tasks/${team.currentTaskId}`)} style={{ padding: `2px ${space.md}px`, borderRadius: radius.pill, border: "none", background: "none", color: "#2563EB", fontSize: fontSize.xs, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>
-                    查看任务 →
+                  <button type="button" data-testid="goto-current-task" onClick={() => router.push(`/teams/${id}/session`)} style={{ padding: `2px ${space.md}px`, borderRadius: radius.pill, border: "none", background: "none", color: "#2563EB", fontSize: fontSize.xs, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>
+                    进入团队会话 →
                   </button>
                 )}
               </div>

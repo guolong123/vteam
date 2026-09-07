@@ -69,6 +69,14 @@ export const surface = "var(--color-surface)";
 export const bg = "var(--color-bg)";
 export const border = "var(--color-border)";
 
+/* @高亮：跟随 light/dark 自动切换（对齐 globals.css 双主题变量） */
+export const mention = {
+  bg: "var(--color-mention-bg)",
+  border: "var(--color-mention-border)",
+  accent: "var(--color-mention-accent)",
+  text: "var(--color-mention-text)",
+} as const;
+
 /* ---------------------------------- 间距（4px 基准） ---------------------------------- */
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;
 

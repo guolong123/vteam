@@ -734,6 +734,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     sender: eventSender,
     workerToken: config.workerToken,
     firstTokenTimeoutMs: config.workerFirstTokenTimeoutMs,
+    serverBaseUrl: config.serverUrl,
     // T17：serve 日志模型错误检测数据源——awaitCompletion 每轮轮询读 recentErrors()，
     // 命中模型 API 错误关键词（Rate limit/Free usage 等只写 stderr 不透传
     // message.info.error）时提前 abort + 抛错（错误文本透传前端，不再空等首字超时）

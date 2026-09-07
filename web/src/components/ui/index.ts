@@ -29,3 +29,5 @@ export { ConfirmDialog } from "./confirm-dialog";
 export type { ConfirmDialogProps } from "./confirm-dialog";
 export { Pagination } from "./pagination";
 export type { PaginationProps } from "./pagination";
+export { PageWindow } from "./page-window";
+export type { PageWindowProps } from "./page-window";

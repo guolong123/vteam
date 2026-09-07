@@ -90,50 +90,6 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("persona-select").first()).toBeEnabled();
   });
 
-  test("6/17 dm-chat /messages/c_0000000001", async ({ page }) => {
-    await page.goto("/messages/c_0000000001");
-    await expectNavShell(page);
-    await expect(page.getByTestId("dm-chat-root")).toBeVisible();
-    await expect(page.getByTestId("dm-agent-info")).toBeVisible();
-    await expect(page.getByTestId("chat-message-list")).toBeVisible();
-    // 错误操作链接（条件渲染：agent.error → quota 分支出现 msg-error-action）
-    const errAction = page.getByTestId("msg-error-action");
-    if ((await errAction.count()) > 0) {
-      await expect(errAction.first()).toBeVisible();
-    }
-  });
-
-  test("7/17 task-detail（去聊天化详情页，自建任务夹具）", async ({ page, request }) => {
-    // API 夹具需显式 Bearer（浏览器登录态 token 在 localStorage，request 上下文不共享）
-    const login = await request.post("/api/v1/auth/login", {
-      data: { username: "seed-admin", password: "Admin@123456" },
-    });
-    const { accessToken } = await login.json();
-    const headers = { Authorization: `Bearer ${accessToken}` };
-    let detailId: string | null = null;
-    const created = await request.post("/api/v1/projects/p_seed_1/tasks", {
-      headers,
-      data: { teamId: "tm_0000000001", title: "e2e-TaskDetail", description: "qa smoke", priority: "medium" },
-    });
-    if (created.ok()) {
-      detailId = ((await created.json()) as { id: string }).id;
-    } else {
-      const list = await request.get("/api/v1/projects/p_seed_1/tasks", { headers, params: { pageSize: 1 } });
-      detailId = (((await list.json()) as { items: { id: string }[] }).items ?? [])[0]?.id ?? null;
-    }
-    expect(detailId).toBeTruthy();
-    await page.goto(`/tasks/${detailId}`);
-    await expectNavShell(page);
-    await expect(page.getByTestId("group-chat-root")).toBeVisible();
-    await expect(page.getByTestId("members-panel")).toBeVisible();
-    await expect(page.getByTestId("member-item").first()).toBeVisible();
-    await expect(page.getByTestId("task-detail-header")).toBeVisible();
-    await expect(page.getByTestId("task-detail-meta")).toBeVisible();
-    await expect(page.getByTestId("execution-mode-toolbar")).toBeVisible();
-    // 聊天区已移除：无消息列表与输入框
-    await expect(page.getByTestId("chat-message-list")).toHaveCount(0);
-  });
-
   test("7b/17 team-session /teams/tm_0000000001/session（团队唯一聊天入口）", async ({ page }) => {
     await page.goto("/teams/tm_0000000001/session");
     await expectNavShell(page);

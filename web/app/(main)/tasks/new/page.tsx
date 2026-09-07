@@ -319,7 +319,7 @@ export default function TaskCreatePage() {
       const taskId = res.id;
       if (selectedMessageChannelIds.length > 0) { try { await api.post(`/tasks/${taskId}/message-channels`, { messageChannelIds: selectedMessageChannelIds }); } catch {} }
       if (selectedNotificationChannelIds.length > 0) { try { await api.post(`/tasks/${taskId}/notification-channels`, { notificationChannelIds: selectedNotificationChannelIds }); } catch {} }
-      router.push(`/tasks/${taskId}`);
+      router.push(`/teams/${selectedTeamId}/session`);
     } catch (err) {
       setCreateError(isApiError(err) ? err.message : "创建任务失败，请稍后重试");
     } finally { setSubmitting(false); }
