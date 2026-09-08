@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "active_work_id": "team-free-chat-faa942f7",
+  "active_work_id": "session-unification-901d3bc2",
   "works": {
     "vteam-team-refactor-f2fc70e5": {
       "work_id": "vteam-team-refactor-f2fc70e5",
@@ -579,128 +579,366 @@
       },
       "ended_at": "2026-09-06T01:45:48.393Z",
       "elapsed_ms": 5406055
+    },
+    "remove-project-dimension-b52c6b60": {
+      "work_id": "remove-project-dimension-b52c6b60",
+      "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/remove-project-dimension.md",
+      "plan_name": "remove-project-dimension",
+      "status": "completed",
+      "started_at": "2026-09-07T01:48:25.283Z",
+      "updated_at": "2026-09-07T03:37:30.660Z",
+      "session_ids": [
+        "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP"
+      ],
+      "session_origins": {
+        "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "TasksService 去 pid：签名、校验、DTO 映射与单测（含错误码改名）",
+          "session_id": "opencode:ses_f867139d7ffecZ22LkpBLPcuDM",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-07T01:56:05.133Z",
+          "started_at": "2026-09-07T01:55:28.958Z",
+          "status": "completed",
+          "ended_at": "2026-09-07T01:56:05.133Z",
+          "elapsed_ms": 36175
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "task_title": "TasksController 路由去 pid 与守卫切换",
+          "session_id": "opencode:ses_f866aaaf0ffeLcFEuIjiTqYPW1",
+          "agent": "Sisyphus-Junior",
+          "started_at": "2026-09-07T02:09:50.763Z",
+          "status": "completed",
+          "updated_at": "2026-09-07T02:18:16.248Z",
+          "ended_at": "2026-09-07T02:18:16.248Z",
+          "elapsed_ms": 505485
+        },
+        "todo:7": {
+          "task_key": "todo:7",
+          "task_label": "7",
+          "task_title": "platform-mcp：task_create 简化与 my_projects 删除",
+          "session_id": "opencode:ses_f865708eaffe1gh94Anp1yNCkN",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-07T02:24:57.315Z",
+          "started_at": "2026-09-07T02:22:50.373Z",
+          "status": "completed",
+          "ended_at": "2026-09-07T02:24:57.315Z",
+          "elapsed_ms": 126942
+        },
+        "todo:10": {
+          "task_key": "todo:10",
+          "task_label": "10",
+          "task_title": "前端去 pid：删项目页、四页切团队上下文",
+          "session_id": "opencode:ses_f8650ee08ffezh7zhDgCkS5sK4",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "updated_at": "2026-09-07T02:58:03.602Z",
+          "started_at": "2026-09-07T02:45:56.746Z",
+          "status": "completed",
+          "ended_at": "2026-09-07T02:58:03.602Z",
+          "elapsed_ms": 726856
+        },
+        "todo:11": {
+          "task_key": "todo:11",
+          "task_label": "11",
+          "task_title": "e2e 与测试脚手架去 pid",
+          "session_id": "opencode:ses_f862e6527ffe0282BuodvLBmaA",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "started_at": "2026-09-07T03:02:23.843Z",
+          "status": "completed",
+          "updated_at": "2026-09-07T03:21:50.859Z",
+          "ended_at": "2026-09-07T03:21:50.859Z",
+          "elapsed_ms": 1167016
+        },
+        "final-wave:f1": {
+          "task_key": "final-wave:f1",
+          "task_label": "F1",
+          "task_title": "计划合规审计：12 个 Todos 全部合入，残留 grep（`projectId|ProjectMember|/projects|:pid|p_seed_|PERMISSION_PROJECT_NOT_MEMBER|PROJECT_MEMBERSHIP`）逐条过审：允许项仅为 (a) spec 中断言“无 projectId”的反向断言行（如 `not.toHaveProperty('projectId')`、`'projectId' in` 为 false 断言、无 pid 路由 sweep），(b) `md-docs/`、`docs/test-reports/` 历史归档，(c) `.omo/` 计划/证据文档（记录拆除本身），(d) 根目录 scratch `*.mjs` 与 `.playwright-mcp/` 日志（计划外预存文件）——每条须逐项列出理由；其余零命中；`GET /api/v1/projects` 404；`POST /tasks` + `GET /tasks?teamId=` 正常。",
+          "session_id": "opencode:ses_f861c8b2bffeUoeOF3W0QtDS59",
+          "agent": "Sisyphus-Junior",
+          "started_at": "2026-09-07T03:30:06.755Z",
+          "status": "completed",
+          "updated_at": "2026-09-07T03:36:15.550Z",
+          "ended_at": "2026-09-07T03:36:15.550Z",
+          "elapsed_ms": 368795
+        }
+      },
+      "ended_at": "2026-09-07T03:37:30.660Z",
+      "elapsed_ms": 6545377
+    },
+    "session-unification-901d3bc2": {
+      "work_id": "session-unification-901d3bc2",
+      "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/session-unification.md",
+      "plan_name": "session-unification",
+      "status": "completed",
+      "started_at": "2026-09-07T09:07:31.618Z",
+      "updated_at": "2026-09-07T18:57:55.314Z",
+      "session_ids": [
+        "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP"
+      ],
+      "session_origins": {
+        "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "分派单入口：删任务路径，request 扁平化 + 执行键保留",
+          "session_id": "opencode:ses_f84dda22bffev2n3JzIIBQtA2Y",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-07T10:40:36.294Z",
+          "started_at": "2026-09-07T10:38:50.561Z",
+          "status": "completed",
+          "ended_at": "2026-09-07T10:40:36.294Z",
+          "elapsed_ms": 105733
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "task_title": "任务六要素数据化：prompt/模型/模式/记忆/main门",
+          "session_id": "opencode:ses_f848a975effeEa0YuP7rBX3USK",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-07T11:03:34.382Z",
+          "started_at": "2026-09-07T11:02:10.640Z",
+          "status": "completed",
+          "ended_at": "2026-09-07T11:03:34.382Z",
+          "elapsed_ms": 83742
+        },
+        "todo:3": {
+          "task_key": "todo:3",
+          "task_label": "3",
+          "task_title": "workdir 与执行键：任务目录保留，registry/watchdog 全量改写点归一",
+          "session_id": "opencode:ses_f84763997ffejswxYNC2XRATR3",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-07T11:38:03.393Z",
+          "started_at": "2026-09-07T11:36:51.912Z",
+          "status": "completed",
+          "ended_at": "2026-09-07T11:38:03.393Z",
+          "elapsed_ms": 71481
+        },
+        "todo:5": {
+          "task_key": "todo:5",
+          "task_label": "5",
+          "task_title": "触发与回填收敛：buildTrigger 系 + adopt（chat.service 本 Todo 唯一主人）",
+          "session_id": "opencode:ses_f84567a74ffeWKWgC4wzcnBMTX",
+          "agent": "Sisyphus-Junior",
+          "started_at": "2026-09-07T12:51:59.456Z",
+          "status": "completed",
+          "updated_at": "2026-09-07T12:56:33.971Z",
+          "ended_at": "2026-09-07T12:56:33.971Z",
+          "elapsed_ms": 274515
+        },
+        "todo:6": {
+          "task_key": "todo:6",
+          "task_label": "6",
+          "task_title": "删 TaskAgent 域：表 + 迁移删存量 task 会话行（需 Todo 8 先绿）",
+          "session_id": "opencode:ses_f83f2bcb0ffe1M1uDoYKpr1LW2",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "started_at": "2026-09-07T13:13:36.751Z",
+          "status": "completed",
+          "updated_at": "2026-09-07T13:36:41.578Z",
+          "ended_at": "2026-09-07T13:36:41.578Z",
+          "elapsed_ms": 1384827
+        },
+        "todo:9": {
+          "task_key": "todo:9",
+          "task_label": "9",
+          "task_title": "记忆任务级删除 + 托管模式迁团队",
+          "session_id": "opencode:ses_f839a585effezXGvxYy1qpEZfr",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "started_at": "2026-09-07T15:00:37.219Z",
+          "ended_at": "2026-09-07T17:54:44.483Z",
+          "elapsed_ms": 10447264,
+          "status": "completed",
+          "updated_at": "2026-09-07T17:54:44.483Z"
+        },
+        "todo:13": {
+          "task_key": "todo:13",
+          "task_label": "13",
+          "task_title": "seed/单测/e2e/文档跟进（含残留 taskAgent 读迁移）",
+          "session_id": "opencode:ses_f82fc7b79ffeg0RI5ccSiy5QiR",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-07T18:24:38.447Z",
+          "started_at": "2026-09-07T18:24:38.444Z",
+          "status": "completed",
+          "ended_at": "2026-09-07T18:24:38.447Z",
+          "elapsed_ms": 3
+        },
+        "todo:15": {
+          "task_key": "todo:15",
+          "task_label": "15",
+          "task_title": "种子 idGen 续号健壮性修复（T14 实测发现）",
+          "session_id": "opencode:ses_f82e11b48ffeHu6ZzxP0l1EdYP",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-09-07T18:42:02.883Z",
+          "started_at": "2026-09-07T18:40:03.702Z",
+          "status": "completed",
+          "ended_at": "2026-09-07T18:42:02.883Z",
+          "elapsed_ms": 119181
+        },
+        "final-wave:f1": {
+          "task_key": "final-wave:f1",
+          "task_label": "F1",
+          "task_title": "计划合规审计：工具 grep；命令 `grep -rn \"taskAgent\\|dispatchForTarget\\|adoptNewInstanceRefByTask\" server/src --include=\"*.ts\" | grep -v spec | grep -v \"冻结\\|frozen\"` 期望零命中；15/15 已合入；证据 `.omo/evidence/session-unification/final-F1.md`。",
+          "session_id": "opencode:ses_f82d2260dffeWK6aymQ4560dvG",
+          "agent": "Sisyphus-Junior",
+          "started_at": "2026-09-07T18:43:23.297Z",
+          "status": "completed",
+          "updated_at": "2026-09-07T18:56:50.265Z",
+          "ended_at": "2026-09-07T18:56:50.265Z",
+          "elapsed_ms": 806968
+        }
+      },
+      "ended_at": "2026-09-07T18:57:55.314Z",
+      "elapsed_ms": 35423696
     }
   },
-  "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/team-free-chat.md",
-  "started_at": "2026-09-06T00:15:42.338Z",
+  "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/session-unification.md",
+  "started_at": "2026-09-07T09:07:31.618Z",
   "status": "completed",
-  "updated_at": "2026-09-06T01:45:48.393Z",
+  "updated_at": "2026-09-07T18:57:55.314Z",
   "session_ids": [
-    "opencode:ses_f9b2984f0ffemHFexxvjsMHEaR",
-    "opencode:ses_f8be57d26ffe7K7SNZqeXHsm2l",
-    "opencode:ses_f8be4b16effef6n108tqL1j2D1"
+    "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP"
   ],
   "session_origins": {
-    "opencode:ses_f9b2984f0ffemHFexxvjsMHEaR": "direct",
-    "opencode:ses_f8be57d26ffe7K7SNZqeXHsm2l": "direct",
-    "opencode:ses_f8be4b16effef6n108tqL1j2D1": "direct"
+    "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP": "direct"
   },
-  "plan_name": "team-free-chat",
+  "plan_name": "session-unification",
   "task_sessions": {
     "todo:1": {
       "task_key": "todo:1",
       "task_label": "1",
-      "task_title": "执行上下文数据模型（sessions 解绑 + 团队用户成员）",
-      "session_id": "opencode:ses_f8be43e7bffewgETEjbRlq9A5h",
+      "task_title": "分派单入口：删任务路径，request 扁平化 + 执行键保留",
+      "session_id": "opencode:ses_f84dda22bffev2n3JzIIBQtA2Y",
       "agent": "Sisyphus-Junior",
       "category": "deep",
-      "updated_at": "2026-09-06T00:35:24.231Z",
-      "started_at": "2026-09-06T00:33:44.241Z",
+      "updated_at": "2026-09-07T10:40:36.294Z",
+      "started_at": "2026-09-07T10:38:50.561Z",
       "status": "completed",
-      "ended_at": "2026-09-06T00:35:24.231Z",
-      "elapsed_ms": 99990
-    },
-    "final-wave:f1": {
-      "task_key": "final-wave:f1",
-      "task_label": "F1",
-      "task_title": "Plan compliance audit",
-      "session_id": "opencode:ses_f8bbf54cbffeb5bSYICSXBCccY",
-      "agent": "Sisyphus-Junior",
-      "started_at": "2026-09-06T00:35:08.023Z",
-      "status": "completed",
-      "updated_at": "2026-09-06T01:41:06.514Z",
-      "ended_at": "2026-09-06T01:41:06.514Z",
-      "elapsed_ms": 3958491
+      "ended_at": "2026-09-07T10:40:36.294Z",
+      "elapsed_ms": 105733
     },
     "todo:2": {
       "task_key": "todo:2",
       "task_label": "2",
-      "task_title": "团队权限守卫与频道接入",
-      "session_id": "opencode:ses_f8bdb5372ffeOViJr22HYWjvV7",
+      "task_title": "任务六要素数据化：prompt/模型/模式/记忆/main门",
+      "session_id": "opencode:ses_f848a975effeEa0YuP7rBX3USK",
       "agent": "Sisyphus-Junior",
       "category": "deep",
-      "updated_at": "2026-09-06T00:55:31.304Z",
-      "started_at": "2026-09-06T00:39:12.844Z",
+      "updated_at": "2026-09-07T11:03:34.382Z",
+      "started_at": "2026-09-07T11:02:10.640Z",
       "status": "completed",
-      "ended_at": "2026-09-06T00:55:31.304Z",
-      "elapsed_ms": 978460
-    },
-    "todo:5": {
-      "task_key": "todo:5",
-      "task_label": "5",
-      "task_title": "前端：零任务会话直聊（无选择器）",
-      "session_id": "opencode:ses_f8bdb535affeF7VX4aJqBTNQmE",
-      "agent": "Sisyphus-Junior",
-      "category": "visual-engineering",
-      "updated_at": "2026-09-06T00:55:31.304Z",
-      "started_at": "2026-09-06T00:44:58.652Z",
-      "status": "completed",
-      "ended_at": "2026-09-06T00:55:31.304Z",
-      "elapsed_ms": 632652
-    },
-    "todo:4": {
-      "task_key": "todo:4",
-      "task_label": "4",
-      "task_title": "MCP：taskId 可选 + task_create + my_projects",
-      "session_id": "opencode:ses_f8bdb5364ffeFJUDUEl3P0sKyJ",
-      "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-09-06T00:55:31.304Z",
-      "started_at": "2026-09-06T00:54:14.419Z",
-      "status": "completed",
-      "ended_at": "2026-09-06T00:55:31.304Z",
-      "elapsed_ms": 76885
-    },
-    "todo:6": {
-      "task_key": "todo:6",
-      "task_label": "6",
-      "task_title": "前端：团队用户成员管理（极简）",
-      "session_id": "opencode:ses_f8bc8fcddffe4oPsntROo6cynL",
-      "agent": "Sisyphus-Junior",
-      "category": "visual-engineering",
-      "updated_at": "2026-09-06T01:06:10.897Z",
-      "started_at": "2026-09-06T00:59:11.974Z",
-      "status": "completed",
-      "ended_at": "2026-09-06T01:06:10.897Z",
-      "elapsed_ms": 418923
+      "ended_at": "2026-09-07T11:03:34.382Z",
+      "elapsed_ms": 83742
     },
     "todo:3": {
       "task_key": "todo:3",
       "task_label": "3",
-      "task_title": "Dispatcher team-mode（无任务执行）",
-      "session_id": "opencode:ses_f8bc8fd0dffe2lMpcwvEX5x37H",
+      "task_title": "workdir 与执行键：任务目录保留，registry/watchdog 全量改写点归一",
+      "session_id": "opencode:ses_f84763997ffejswxYNC2XRATR3",
       "agent": "Sisyphus-Junior",
       "category": "deep",
-      "updated_at": "2026-09-06T01:06:10.897Z",
-      "started_at": "2026-09-06T01:04:12.435Z",
+      "updated_at": "2026-09-07T11:38:03.393Z",
+      "started_at": "2026-09-07T11:36:51.912Z",
       "status": "completed",
-      "ended_at": "2026-09-06T01:06:10.897Z",
-      "elapsed_ms": 118462
+      "ended_at": "2026-09-07T11:38:03.393Z",
+      "elapsed_ms": 71481
     },
-    "todo:7": {
-      "task_key": "todo:7",
-      "task_label": "7",
-      "task_title": "收尾验证（全链路冒烟）",
-      "session_id": "opencode:ses_f8bbf54cbffeb5bSYICSXBCccY",
+    "todo:5": {
+      "task_key": "todo:5",
+      "task_label": "5",
+      "task_title": "触发与回填收敛：buildTrigger 系 + adopt（chat.service 本 Todo 唯一主人）",
+      "session_id": "opencode:ses_f84567a74ffeWKWgC4wzcnBMTX",
       "agent": "Sisyphus-Junior",
-      "started_at": "2026-09-06T01:29:48.461Z",
+      "started_at": "2026-09-07T12:51:59.456Z",
       "status": "completed",
-      "updated_at": "2026-09-06T01:32:27.772Z",
-      "ended_at": "2026-09-06T01:32:27.772Z",
-      "elapsed_ms": 159311
+      "updated_at": "2026-09-07T12:56:33.971Z",
+      "ended_at": "2026-09-07T12:56:33.971Z",
+      "elapsed_ms": 274515
+    },
+    "todo:6": {
+      "task_key": "todo:6",
+      "task_label": "6",
+      "task_title": "删 TaskAgent 域：表 + 迁移删存量 task 会话行（需 Todo 8 先绿）",
+      "session_id": "opencode:ses_f83f2bcb0ffe1M1uDoYKpr1LW2",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "started_at": "2026-09-07T13:13:36.751Z",
+      "status": "completed",
+      "updated_at": "2026-09-07T13:36:41.578Z",
+      "ended_at": "2026-09-07T13:36:41.578Z",
+      "elapsed_ms": 1384827
+    },
+    "todo:9": {
+      "task_key": "todo:9",
+      "task_label": "9",
+      "task_title": "记忆任务级删除 + 托管模式迁团队",
+      "session_id": "opencode:ses_f839a585effezXGvxYy1qpEZfr",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "started_at": "2026-09-07T15:00:37.219Z",
+      "ended_at": "2026-09-07T17:54:44.483Z",
+      "elapsed_ms": 10447264,
+      "status": "completed",
+      "updated_at": "2026-09-07T17:54:44.483Z"
+    },
+    "todo:13": {
+      "task_key": "todo:13",
+      "task_label": "13",
+      "task_title": "seed/单测/e2e/文档跟进（含残留 taskAgent 读迁移）",
+      "session_id": "opencode:ses_f82fc7b79ffeg0RI5ccSiy5QiR",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-09-07T18:24:38.447Z",
+      "started_at": "2026-09-07T18:24:38.444Z",
+      "status": "completed",
+      "ended_at": "2026-09-07T18:24:38.447Z",
+      "elapsed_ms": 3
+    },
+    "todo:15": {
+      "task_key": "todo:15",
+      "task_label": "15",
+      "task_title": "种子 idGen 续号健壮性修复（T14 实测发现）",
+      "session_id": "opencode:ses_f82e11b48ffeHu6ZzxP0l1EdYP",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-09-07T18:42:02.883Z",
+      "started_at": "2026-09-07T18:40:03.702Z",
+      "status": "completed",
+      "ended_at": "2026-09-07T18:42:02.883Z",
+      "elapsed_ms": 119181
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "计划合规审计：工具 grep；命令 `grep -rn \"taskAgent\\|dispatchForTarget\\|adoptNewInstanceRefByTask\" server/src --include=\"*.ts\" | grep -v spec | grep -v \"冻结\\|frozen\"` 期望零命中；15/15 已合入；证据 `.omo/evidence/session-unification/final-F1.md`。",
+      "session_id": "opencode:ses_f82d2260dffeWK6aymQ4560dvG",
+      "agent": "Sisyphus-Junior",
+      "started_at": "2026-09-07T18:43:23.297Z",
+      "status": "completed",
+      "updated_at": "2026-09-07T18:56:50.265Z",
+      "ended_at": "2026-09-07T18:56:50.265Z",
+      "elapsed_ms": 806968
     }
   },
   "agent": "atlas",
-  "ended_at": "2026-09-06T01:45:48.393Z",
-  "elapsed_ms": 5406055
+  "ended_at": "2026-09-07T18:57:55.314Z",
+  "elapsed_ms": 35423696
 }

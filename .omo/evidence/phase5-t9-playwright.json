@@ -4,8 +4,8 @@
       "/Users/mac/.nvm/versions/node/v24.14.0/bin/node",
       "/Users/mac/01work/git-project/vteam/web/node_modules/.bin/playwright",
       "test",
-      "--project=team-users",
-      "-gteam-user-members"
+      "--project=pages",
+      "--project=perf"
     ],
     "configFile": "/Users/mac/01work/git-project/vteam/web/playwright.config.ts",
     "rootDir": "/Users/mac/01work/git-project/vteam/web/e2e",
@@ -168,12 +168,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 888,
+                  "duration": 1218,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-06T01:28:15.322Z",
+                  "startTime": "2026-09-07T03:18:13.977Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -189,20 +189,20 @@
       ]
     },
     {
-      "title": "team-user-members.spec.ts",
-      "file": "team-user-members.spec.ts",
+      "title": "pages.spec.ts",
+      "file": "pages.spec.ts",
       "column": 0,
       "line": 0,
       "specs": [],
       "suites": [
         {
-          "title": "team-user-members 团队用户成员管理",
-          "file": "team-user-members.spec.ts",
-          "line": 10,
+          "title": "18 页 testid 断言（seed-admin 登录态）",
+          "file": "pages.spec.ts",
+          "line": 13,
           "column": 6,
           "specs": [
             {
-              "title": "team-user-members 添加/移除往返",
+              "title": "2/17 team-list /teams（项目列表已拆除，主工作台）",
               "ok": true,
               "tags": [],
               "tests": [
@@ -210,19 +210,19 @@
                   "timeout": 30000,
                   "annotations": [],
                   "expectedStatus": "passed",
-                  "projectId": "team-users",
-                  "projectName": "team-users",
+                  "projectId": "pages",
+                  "projectName": "pages",
                   "results": [
                     {
                       "workerIndex": 1,
                       "parallelIndex": 0,
                       "status": "passed",
-                      "duration": 1610,
+                      "duration": 727,
                       "errors": [],
                       "stdout": [],
                       "stderr": [],
                       "retry": 0,
-                      "startTime": "2026-09-06T01:28:16.688Z",
+                      "startTime": "2026-09-07T03:18:15.760Z",
                       "annotations": [],
                       "attachments": []
                     }
@@ -230,9 +230,894 @@
                   "status": "expected"
                 }
               ],
-              "id": "f89c328cd73c19981185-a733de214656976e0d6c",
-              "file": "team-user-members.spec.ts",
-              "line": 11,
+              "id": "9bb6bb2ed574bebb3c58-c1102dca3a2ebd867839",
+              "file": "pages.spec.ts",
+              "line": 24,
+              "column": 7
+            },
+            {
+              "title": "3/17 task-create /tasks/new?teamId=tm_0000000001（团队预选，直出 Agent 选项）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 628,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:18:16.667Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-f098a82eb4147708f94c",
+              "file": "pages.spec.ts",
+              "line": 32,
+              "column": 7
+            },
+            {
+              "title": "4/17 task-board /board?teamId=tm_0000000001",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 10680,
+                      "error": {
+                        "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByTestId('task-card').first()\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByTestId('task-card').first()\u001b[22m\n",
+                        "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByTestId('task-card').first()\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByTestId('task-card').first()\u001b[22m\n\n    at /Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts:49:57",
+                        "location": {
+                          "file": "/Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts",
+                          "column": 57,
+                          "line": 49
+                        },
+                        "snippet": "  47 |     await expect(page.getByTestId(\"task-board-root\")).toBeVisible();\n  48 |     await expect(page.getByTestId(\"status-filter\")).toBeVisible();\n> 49 |     await expect(page.getByTestId(\"task-card\").first()).toBeVisible();\n     |                                                         ^\n  50 |     await expect(page.getByTestId(\"status-badge\").first()).toBeVisible();\n  51 |     // plan-badge 仅 executionMode==='plan' 的任务渲染——seed 无 plan 任务时跳过\n  52 |     const badges = page.getByTestId(\"plan-badge\");"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "/Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts",
+                            "column": 57,
+                            "line": 49
+                          },
+                          "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByTestId('task-card').first()\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByTestId('task-card').first()\u001b[22m\n\n\n  47 |     await expect(page.getByTestId(\"task-board-root\")).toBeVisible();\n  48 |     await expect(page.getByTestId(\"status-filter\")).toBeVisible();\n> 49 |     await expect(page.getByTestId(\"task-card\").first()).toBeVisible();\n     |                                                         ^\n  50 |     await expect(page.getByTestId(\"status-badge\").first()).toBeVisible();\n  51 |     // plan-badge 仅 executionMode==='plan' 的任务渲染——seed 无 plan 任务时跳过\n  52 |     const badges = page.getByTestId(\"plan-badge\");\n    at /Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts:49:57"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:18:17.313Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/Users/mac/01work/git-project/vteam/web/test-results/pages-18-页-testid-断言（seed--bb06e--board-teamId-tm-0000000001-pages/error-context.md"
+                        },
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "/Users/mac/01work/git-project/vteam/web/test-results/pages-18-页-testid-断言（seed--bb06e--board-teamId-tm-0000000001-pages/trace.zip"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "/Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts",
+                        "column": 57,
+                        "line": 49
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-25cc7dec7bf94dbd31d1",
+              "file": "pages.spec.ts",
+              "line": 44,
+              "column": 7
+            },
+            {
+              "title": "4b/17 board-drawer 看板卡片开抽屉不进聊天",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 2,
+                      "parallelIndex": 0,
+                      "status": "timedOut",
+                      "duration": 30102,
+                      "error": {
+                        "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                        "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                      },
+                      "errors": [
+                        {
+                          "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                        },
+                        {
+                          "location": {
+                            "file": "/Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts",
+                            "column": 49,
+                            "line": 74
+                          },
+                          "message": "Error: locator.click: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByTestId('task-card').first()\u001b[22m\n\n\n  72 |       await page.reload();\n  73 |     }\n> 74 |     await page.getByTestId(\"task-card\").first().click();\n     |                                                 ^\n  75 |     await expect(page.getByTestId(\"task-detail-drawer\")).toBeVisible();\n  76 |     // 卡片点击不再跳转 /tasks/:id\n  77 |     expect(page.url()).toContain(\"/board\");\n    at /Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts:74:49"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:18:28.326Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/Users/mac/01work/git-project/vteam/web/test-results/pages-18-页-testid-断言（seed--48635-17-board-drawer-看板卡片开抽屉不进聊天-pages/error-context.md"
+                        },
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "/Users/mac/01work/git-project/vteam/web/test-results/pages-18-页-testid-断言（seed--48635-17-board-drawer-看板卡片开抽屉不进聊天-pages/trace.zip"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-1fcacf67bc031ab3b705",
+              "file": "pages.spec.ts",
+              "line": 58,
+              "column": 7
+            },
+            {
+              "title": "5/17 agent-config /agents",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 3,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1297,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:18:59.013Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-5305535633ca4fe4e795",
+              "file": "pages.spec.ts",
+              "line": 83,
+              "column": 7
+            },
+            {
+              "title": "7b/17 team-session /teams/tm_0000000001/session（团队唯一聊天入口）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 3,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 971,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:00.682Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-e4d3dfae9ec75244e277",
+              "file": "pages.spec.ts",
+              "line": 94,
+              "column": 7
+            },
+            {
+              "title": "team-session zero-task 零任务直聊（无选择器）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 3,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1241,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:01.662Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-c37c3e06cf43776f905a",
+              "file": "pages.spec.ts",
+              "line": 118,
+              "column": 7
+            },
+            {
+              "title": "8-10/17 导航变体（AppShell 融合导航承载）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 3,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 910,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:02.918Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-354460a1b1dcf28931a3",
+              "file": "pages.spec.ts",
+              "line": 161,
+              "column": 7
+            },
+            {
+              "title": "11/17 role-permission /roles",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 3,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 650,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:03.845Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-eace5903c3d48852f80e",
+              "file": "pages.spec.ts",
+              "line": 180,
+              "column": 7
+            },
+            {
+              "title": "12/17 skills-tools-manage /skills（双 Tab + 工具三子 Tab）",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 3,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 10721,
+                      "error": {
+                        "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByTestId('search-input')\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByTestId('search-input')\u001b[22m\n",
+                        "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByTestId('search-input')\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByTestId('search-input')\u001b[22m\n\n    at /Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts:194:52",
+                        "location": {
+                          "file": "/Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts",
+                          "column": 52,
+                          "line": 194
+                        },
+                        "snippet": "  192 |     await expect(page.getByTestId(\"skills-tools-manage-root\")).toBeVisible();\n  193 |     await expect(page.getByTestId(\"manage-tabs\")).toBeVisible();\n> 194 |     await expect(page.getByTestId(\"search-input\")).toBeVisible();\n      |                                                    ^\n  195 |     // 技能 Tab（初始）：skill-item 存在\n  196 |     await expect(page.getByTestId(\"skill-item\").first()).toBeVisible();\n  197 |     // 工具 Tab：tool-subtabs + tool-item（内置）"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "/Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts",
+                            "column": 52,
+                            "line": 194
+                          },
+                          "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByTestId('search-input')\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByTestId('search-input')\u001b[22m\n\n\n  192 |     await expect(page.getByTestId(\"skills-tools-manage-root\")).toBeVisible();\n  193 |     await expect(page.getByTestId(\"manage-tabs\")).toBeVisible();\n> 194 |     await expect(page.getByTestId(\"search-input\")).toBeVisible();\n      |                                                    ^\n  195 |     // 技能 Tab（初始）：skill-item 存在\n  196 |     await expect(page.getByTestId(\"skill-item\").first()).toBeVisible();\n  197 |     // 工具 Tab：tool-subtabs + tool-item（内置）\n    at /Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts:194:52"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:04.507Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/Users/mac/01work/git-project/vteam/web/test-results/pages-18-页-testid-断言（seed--2845d-nage-skills（双-Tab-工具三子-Tab）-pages/error-context.md"
+                        },
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "/Users/mac/01work/git-project/vteam/web/test-results/pages-18-页-testid-断言（seed--2845d-nage-skills（双-Tab-工具三子-Tab）-pages/trace.zip"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "/Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts",
+                        "column": 52,
+                        "line": 194
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-15bd86ea8a94085faed2",
+              "file": "pages.spec.ts",
+              "line": 189,
+              "column": 7
+            },
+            {
+              "title": "13/17 task-detail /artifacts?teamId=tm_0000000001（产出物聚合页）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "note",
+                      "description": "当前任务无产出物，artifact-row 跳过"
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 4,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 806,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:15.537Z",
+                      "annotations": [
+                        {
+                          "type": "note",
+                          "description": "当前任务无产出物，artifact-row 跳过"
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-70ba1542c02d28d11d27",
+              "file": "pages.spec.ts",
+              "line": 206,
+              "column": 7
+            },
+            {
+              "title": "14/17 tool-register /tools/register（4 执行形态）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 4,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1001,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:16.625Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-31c433b53b93512d07c1",
+              "file": "pages.spec.ts",
+              "line": 222,
+              "column": 7
+            },
+            {
+              "title": "15/17 user-management /users",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 4,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 834,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:17.640Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-759f3f1bdf0c2b71ce1c",
+              "file": "pages.spec.ts",
+              "line": 243,
+              "column": 7
+            },
+            {
+              "title": "16/17 worker-install /workers/install（独立路由 · 3 步安装向导）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 4,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 695,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:18.485Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-a9f7e36dd7bd564fafd4",
+              "file": "pages.spec.ts",
+              "line": 263,
+              "column": 7
+            },
+            {
+              "title": "17/18 worker-list /workers（列表 + 唯一安装入口）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 4,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 641,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:19.190Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-700dbc49475b6d46478a",
+              "file": "pages.spec.ts",
+              "line": 290,
+              "column": 7
+            },
+            {
+              "title": "18/18 models-manage /models（模型管理：双 Tab 模型目录 / Provider 管理）",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 4,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 10831,
+                      "error": {
+                        "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByTestId('manage-tabs')\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByTestId('manage-tabs')\u001b[22m\n",
+                        "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByTestId('manage-tabs')\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByTestId('manage-tabs')\u001b[22m\n\n    at /Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts:310:51",
+                        "location": {
+                          "file": "/Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts",
+                          "column": 51,
+                          "line": 310
+                        },
+                        "snippet": "  308 |     await expect(page.getByTestId(\"manage-toolbar\")).toBeVisible();\n  309 |     // 双 Tab（对齐 skills 页 manage-tabs/manage-tab 模式）\n> 310 |     await expect(page.getByTestId(\"manage-tabs\")).toBeVisible();\n      |                                                   ^\n  311 |     await expect(page.getByTestId(\"manage-tab\")).toHaveCount(2);\n  312 |     // Tab 1 模型目录（catalog，默认）：搜索 + 列表 + 只读徽章\n  313 |     await expect(page.getByTestId(\"model-search\")).toBeVisible();"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "/Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts",
+                            "column": 51,
+                            "line": 310
+                          },
+                          "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByTestId('manage-tabs')\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByTestId('manage-tabs')\u001b[22m\n\n\n  308 |     await expect(page.getByTestId(\"manage-toolbar\")).toBeVisible();\n  309 |     // 双 Tab（对齐 skills 页 manage-tabs/manage-tab 模式）\n> 310 |     await expect(page.getByTestId(\"manage-tabs\")).toBeVisible();\n      |                                                   ^\n  311 |     await expect(page.getByTestId(\"manage-tab\")).toHaveCount(2);\n  312 |     // Tab 1 模型目录（catalog，默认）：搜索 + 列表 + 只读徽章\n  313 |     await expect(page.getByTestId(\"model-search\")).toBeVisible();\n    at /Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts:310:51"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:19.836Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/Users/mac/01work/git-project/vteam/web/test-results/pages-18-页-testid-断言（seed--92fce-型管理：双-Tab-模型目录-Provider-管理）-pages/error-context.md"
+                        },
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "/Users/mac/01work/git-project/vteam/web/test-results/pages-18-页-testid-断言（seed--92fce-型管理：双-Tab-模型目录-Provider-管理）-pages/trace.zip"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "/Users/mac/01work/git-project/vteam/web/e2e/pages.spec.ts",
+                        "column": 51,
+                        "line": 310
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-6725ace2a6abdcc3d041",
+              "file": "pages.spec.ts",
+              "line": 304,
+              "column": 7
+            },
+            {
+              "title": "旧路由 /providers 重定向到 /models（单一入口兼容）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [
+                    {
+                      "workerIndex": 5,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1129,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:31.008Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-a2954c30060b6d17ebfd",
+              "file": "pages.spec.ts",
+              "line": 337,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "perf.spec.ts",
+      "file": "perf.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "性能 E2E",
+          "file": "perf.spec.ts",
+          "line": 94,
+          "column": 6,
+          "specs": [
+            {
+              "title": "页面加载性能（/login 与 /teams）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "perf",
+                      "description": "页面加载 /teams（dev）：domContentLoaded=147ms load=270ms"
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "perf",
+                  "projectName": "perf",
+                  "results": [
+                    {
+                      "workerIndex": 6,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1083,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:32.613Z",
+                      "annotations": [
+                        {
+                          "type": "perf",
+                          "description": "页面加载 /teams（dev）：domContentLoaded=147ms load=270ms"
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "73ed389be8d3d6a89cdb-480003ad7bec4cfac105",
+              "file": "perf.spec.ts",
+              "line": 95,
+              "column": 7
+            },
+            {
+              "title": "群聊 SSE 计时（无 @ 消息，零模型调用，3 采样中位数）",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "perf",
+                  "projectName": "perf",
+                  "results": [
+                    {
+                      "workerIndex": 6,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 698,
+                      "error": {
+                        "message": "Error: page.evaluate: Error: SSE 连接失败\n    at es.onerror (eval at evaluate (:311:30), <anonymous>:41:30)",
+                        "stack": "Error: page.evaluate: Error: SSE 连接失败\n    at es.onerror (eval at evaluate (:311:30), <anonymous>:41:30)\n    at es.onerror (eval at evaluate (:311:30), <anonymous>:41:30)\n    at sseRoundtrip (/Users/mac/01work/git-project/vteam/web/e2e/perf.spec.ts:34:15)\n    at /Users/mac/01work/git-project/vteam/web/e2e/perf.spec.ts:119:15",
+                        "location": {
+                          "file": "eval at evaluate (:311:30), <anonymous>",
+                          "column": 30,
+                          "line": 41
+                        }
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "eval at evaluate (:311:30), <anonymous>",
+                            "column": 30,
+                            "line": 41
+                          },
+                          "message": "Error: page.evaluate: Error: SSE 连接失败\n    at es.onerror (eval at evaluate (:311:30), <anonymous>:41:30)\n    at es.onerror (eval at evaluate (:311:30), <anonymous>:41:30)\n    at sseRoundtrip (/Users/mac/01work/git-project/vteam/web/e2e/perf.spec.ts:34:15)\n    at /Users/mac/01work/git-project/vteam/web/e2e/perf.spec.ts:119:15"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:33.902Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/Users/mac/01work/git-project/vteam/web/test-results/perf-性能-E2E-群聊-SSE-计时（无-消息，零模型调用，3-采样中位数）-perf/error-context.md"
+                        },
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "/Users/mac/01work/git-project/vteam/web/test-results/perf-性能-E2E-群聊-SSE-计时（无-消息，零模型调用，3-采样中位数）-perf/trace.zip"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "eval at evaluate (:311:30), <anonymous>",
+                        "column": 30,
+                        "line": 41
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "73ed389be8d3d6a89cdb-4ab0102127f3606f117e",
+              "file": "perf.spec.ts",
+              "line": 114,
+              "column": 7
+            },
+            {
+              "title": "首字计时 @a_product（1 次真实 opencode 调用，双线记录不阻断）",
+              "ok": false,
+              "tags": [
+                "a_product（1"
+              ],
+              "tests": [
+                {
+                  "timeout": 120000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "perf",
+                  "projectName": "perf",
+                  "results": [
+                    {
+                      "workerIndex": 7,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 908,
+                      "error": {
+                        "message": "Error: page.evaluate: Error: @ 消息发送失败 HTTP 404\n    at eval (eval at evaluate (:311:30), <anonymous>:26:15)\n    at async <anonymous>:337:30",
+                        "stack": "Error: page.evaluate: Error: @ 消息发送失败 HTTP 404\n    at eval (eval at evaluate (:311:30), <anonymous>:26:15)\n    at async <anonymous>:337:30\n    at eval (eval at evaluate (:311:30), <anonymous>:26:15)\n    at async <anonymous>:337:30\n    at /Users/mac/01work/git-project/vteam/web/e2e/perf.spec.ts:133:32",
+                        "location": {
+                          "file": "eval at evaluate (:311:30), <anonymous>",
+                          "column": 15,
+                          "line": 26
+                        }
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "eval at evaluate (:311:30), <anonymous>",
+                            "column": 15,
+                            "line": 26
+                          },
+                          "message": "Error: page.evaluate: Error: @ 消息发送失败 HTTP 404\n    at eval (eval at evaluate (:311:30), <anonymous>:26:15)\n    at async <anonymous>:337:30\n    at eval (eval at evaluate (:311:30), <anonymous>:26:15)\n    at async <anonymous>:337:30\n    at /Users/mac/01work/git-project/vteam/web/e2e/perf.spec.ts:133:32"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-07T03:19:34.851Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/Users/mac/01work/git-project/vteam/web/test-results/perf-性能-E2E-首字计时-a-product（1-次真实-opencode-调用，双线记录不阻断）-perf/error-context.md"
+                        },
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "/Users/mac/01work/git-project/vteam/web/test-results/perf-性能-E2E-首字计时-a-product（1-次真实-opencode-调用，双线记录不阻断）-perf/trace.zip"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "eval at evaluate (:311:30), <anonymous>",
+                        "column": 15,
+                        "line": 26
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "73ed389be8d3d6a89cdb-67aaddc6424d8a7f5c57",
+              "file": "perf.spec.ts",
+              "line": 130,
               "column": 7
             }
           ]
@@ -242,11 +1127,11 @@
   ],
   "errors": [],
   "stats": {
-    "startTime": "2026-09-06T01:28:15.149Z",
-    "duration": 3407.0249999999996,
-    "expected": 2,
+    "startTime": "2026-09-07T03:18:13.694Z",
+    "duration": 82358.441,
+    "expected": 15,
     "skipped": 0,
-    "unexpected": 0,
+    "unexpected": 6,
     "flaky": 0
   }
 }
