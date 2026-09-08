@@ -159,7 +159,11 @@ describe('PlatformMcpService', () => {
       },
       task: { findUnique: jest.fn(), findMany: jest.fn() },
       team: { findUnique: jest.fn() },
-      teamMember: { findFirst: jest.fn(), findMany: jest.fn(), findUnique: jest.fn() },
+      teamMember: {
+        findFirst: jest.fn(),
+        findMany: jest.fn(),
+        findUnique: jest.fn(),
+      },
       teamUserMember: { findMany: jest.fn() },
       projectMember: { findMany: jest.fn() },
       project: { findMany: jest.fn() },
@@ -367,7 +371,9 @@ describe('PlatformMcpService', () => {
         status: MESSAGE_STATUS.sent,
         createdAt: new Date('2026-08-07T00:00:00Z'),
       });
-      prisma.teamMember.findUnique.mockResolvedValue({ agentId: senderAgentId } as any);
+      prisma.teamMember.findUnique.mockResolvedValue({
+        agentId: senderAgentId,
+      } as any);
 
       await service.groupPost(ctx, {
         taskId,
@@ -432,7 +438,11 @@ describe('PlatformMcpService', () => {
         },
       ]);
       expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
-        where: { teamId: 'tm_1', type: CHANNEL_TYPE.team_group, deletedAt: null },
+        where: {
+          teamId: 'tm_1',
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
         select: { id: true },
       });
       expect(prisma.message.findMany).toHaveBeenCalledWith({
@@ -786,7 +796,9 @@ describe('PlatformMcpService', () => {
 
     beforeEach(() => {
       // resolveSenderAgentId：senderId=agent id 从 selfInstanceId 成员行解析
-      prisma.teamMember.findUnique.mockResolvedValue({ agentId: senderAgentId } as any);
+      prisma.teamMember.findUnique.mockResolvedValue({
+        agentId: senderAgentId,
+      } as any);
     });
 
     it('落库 agent 消息（senderId=agent id + senderInstanceId=实例 id 双写）+ 广播 chat.message.new（先落库后转发）', async () => {
@@ -2504,10 +2516,7 @@ describe('PlatformMcpService', () => {
         expect(prisma.memory.findMany).toHaveBeenCalledWith({
           where: {
             deletedAt: null,
-            OR: [
-              { level: 'team', teamId: taskTeamId },
-              { level: 'global' },
-            ],
+            OR: [{ level: 'team', teamId: taskTeamId }, { level: 'global' }],
           },
           orderBy: { createdAt: 'desc' },
         });

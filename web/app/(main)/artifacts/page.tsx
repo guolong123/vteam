@@ -3,10 +3,10 @@
 /**
  * 产出物管理聚合页（Phase 3 T12）
  * =============================================
- * 路由：/artifacts?pid=，与 /board?pid= 同模式（父子层级：项目 → 产出物）。
- * - 项目上下文：URL ?pid= 必填，缺省且已登录 → 重定向 /projects（禁止回退 seed）。
- * - 数据架构（项目级聚合）：GET /projects/:pid/tasks 拿任务列表（下拉数据源 + 任务名映射），
- *   对每个任务 GET /tasks/:id/artifacts（T6 任务级端点，无项目级总接口 → 前端循环聚合，
+ * 路由：/artifacts?teamId=，与 /board?teamId= 同模式（团队 → 产出物）。
+ * - 团队上下文：URL ?teamId= 必填，缺失且已登录 → 重定向 /teams。
+ * - 数据架构（团队级聚合）：GET /tasks?teamId= 拿任务列表（下拉数据源 + 任务名映射），
+ *   对每个任务 GET /tasks/:id/artifacts（任务级端点，无团队级总接口 → 前端循环聚合，
  *   数量少可接受）→ 聚合全部产出物并附 taskName。
  * - 三筛：任务下拉（全部/单任务）、类型筛（全部/结论文本/文档/文件，ARTIFACT_TYPES text/doc/file）、
  *   验收状态筛（全部/已验收/未验收，acceptedFlag 基于 currentVersion）；默认全部；
@@ -35,6 +35,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useRealtimeEvents } from "@/hooks/use-realtime";
+import { teamsApi } from "@/src/api/teams";
 import { AgentAvatar, EmptyState, PageWindow } from "@/src/components/ui";
 import {
   type RoleKey,
@@ -107,24 +108,15 @@ const AGENT_ID_ROLE: Record<string, RoleKey> = {
 const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
 
 /* ------------------------------ API 数据模型（T6/T14 契约） ------------------------------ */
-/** GET /projects/:pid/tasks 条目（仅取下拉/任务名所需字段）。 */
+/** GET /tasks?teamId= 条目（仅取下拉/任务名所需字段）。 */
 interface TaskItem {
   id: string;
-  projectId: string;
   title: string;
 }
 
-/** GET /projects/:pid/tasks 分页响应。 */
+/** GET /tasks?teamId= 分页响应。 */
 interface TasksResponse {
   items: TaskItem[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
-
-/** GET /projects 分页响应（仅取项目名供标题）。 */
-interface ProjectsResponse {
-  items: { id: string; name: string }[];
   total: number;
   page: number;
   pageSize: number;
@@ -776,8 +768,8 @@ export default function ArtifactsPage() {
   const userId = user?.id;
   const router = useRouter();
 
-  // pid：URL ?pid= 必填；无 pid 且已登录 → 重定向 /projects（effect 内读 window，避免 SSR 水合不一致）
-  const [pid, setPid] = useState<string | null>(null);
+  // teamId：URL ?teamId= 必填；无 teamId 且已登录 → 重定向 /teams（effect 内读 window，避免 SSR 水合不一致）
+  const [teamId, setTeamId] = useState<string | null>(null);
   // 三筛状态（默认全部）
   const [taskKey, setTaskKey] = useState("all");
   const [typeKey, setTypeKey] = useState("all");
@@ -786,27 +778,27 @@ export default function ArtifactsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
-    const urlPid = new URLSearchParams(window.location.search).get("pid");
-    if (urlPid) {
-      setPid(urlPid);
+    const urlTeamId = new URLSearchParams(window.location.search).get("teamId");
+    if (urlTeamId) {
+      setTeamId(urlTeamId);
     } else if (userId) {
-      router.replace("/projects");
+      router.replace("/teams");
     }
   }, [userId, router]);
 
-  // 项目名：复用 ["projects"] 缓存（与 board 页同 key 共享），缺失回退固定标题
-  const projectName = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => api.get<ProjectsResponse>("/projects"),
-    enabled: !!userId && !!pid,
-  }).data?.items.find((p) => p.id === pid)?.name;
+  // 团队名：GET /teams/:id（与 board 页同源），缺失回退固定标题
+  const teamName = useQuery({
+    queryKey: ["team", teamId],
+    queryFn: () => teamsApi.get(teamId!),
+    enabled: !!userId && !!teamId,
+  }).data?.name;
 
   // 聚合查询：任务列表 → 对目标任务循环请求产出物（任务下拉过滤目标集合，type/accepted 走请求参数）
   const artifactsQuery = useQuery({
-    queryKey: ["artifacts", pid, taskKey, typeKey, acceptedKey] as const,
+    queryKey: ["artifacts", teamId, taskKey, typeKey, acceptedKey] as const,
     queryFn: async () => {
-      const tasksResp = await api.get<TasksResponse>(`/projects/${pid}/tasks`, {
-        query: { page: 1, pageSize: 100 },
+      const tasksResp = await api.get<TasksResponse>("/tasks", {
+        query: { teamId: teamId!, page: 1, pageSize: 100 },
       });
       const tasks = tasksResp.items;
       const targetTasks = taskKey === "all" ? tasks : tasks.filter((t) => t.id === taskKey);
@@ -825,7 +817,7 @@ export default function ArtifactsPage() {
       );
       return { tasks, items: results.flat() as ArtifactRowItem[] };
     },
-    enabled: !!userId && !!pid,
+    enabled: !!userId && !!teamId,
   });
 
   const { data, isPending, isError, error, refetch } = artifactsQuery;
@@ -855,7 +847,7 @@ export default function ArtifactsPage() {
       testId="artifacts-root"
       style={{ backgroundColor: neutral[100], ...baseFont }}
     >
-      {/* 头部：项目名 + 产出物管理 + 文档站视图入口 */}
+      {/* 头部：团队名 + 产出物管理 + 文档站视图入口 */}
       <div
         data-testid="artifacts-title"
         style={{
@@ -867,7 +859,7 @@ export default function ArtifactsPage() {
         }}
       >
         <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>
-          {projectName ? `${projectName} · 产出物管理` : "产出物管理"}
+          {teamName ? `${teamName} · 产出物管理` : "产出物管理"}
         </div>
         {/* is_0000000024：文档站视图 → /docs/:taskId（需先在下拉选择具体任务） */}
         <button
@@ -909,7 +901,7 @@ export default function ArtifactsPage() {
           padding: `${space.lg}px ${space.xl}px 0`,
         }}
       >
-        {/* 任务下拉（该项目任务列表） */}
+        {/* 任务下拉（该团队任务列表） */}
         <select
           data-testid="task-filter-select"
           value={taskKey}
@@ -1052,7 +1044,7 @@ export default function ArtifactsPage() {
         ) : tasks.length === 0 ? (
           <EmptyState
             title="暂无任务"
-            description="该项目下还没有任务，创建任务后即可产出文档"
+            description="该团队下还没有任务，创建任务后即可产出文档"
             icon={<span aria-hidden>▤</span>}
           />
         ) : items.length === 0 ? (

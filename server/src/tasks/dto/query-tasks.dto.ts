@@ -6,7 +6,7 @@ import {
   TASK_STATUS,
 } from '../../common/constants/task.constants';
 
-/** GET /projects/:pid/tasks 看板查询参数（分页对齐 09 篇 §2.2：page/pageSize 默认 1/20）。 */
+/** GET /tasks?teamId= 看板查询参数（分页对齐 09 篇 §2.2：page/pageSize 默认 1/20，上限 100）。 */
 export class QueryTasksDto {
   @ApiPropertyOptional({
     description: '页码（从 1 起）',

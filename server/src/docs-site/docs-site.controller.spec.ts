@@ -6,7 +6,7 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
   let controller: DocsSiteController;
   let prisma: {
     task: { findUnique: jest.Mock };
-    projectMember: { findUnique: jest.Mock };
+    teamUserMember: { findUnique: jest.Mock };
   };
   let mirror: {
     buildRegistry: jest.Mock;
@@ -16,14 +16,14 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
   };
 
   const taskId = 't_0000000001';
-  const projectId = 'p_0000000001';
+  const teamId = 'tm_0000000001';
   const userId = 'u_admin';
   const user = { id: userId, username: 'admin', roleId: 'r_admin' };
 
   beforeEach(() => {
     prisma = {
       task: { findUnique: jest.fn() },
-      projectMember: { findUnique: jest.fn() },
+      teamUserMember: { findUnique: jest.fn() },
     };
     mirror = {
       buildRegistry: jest.fn().mockResolvedValue([]),
@@ -33,8 +33,8 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
     };
     controller = new DocsSiteController(prisma as never, mirror as never);
     // 成员校验通过默认
-    prisma.task.findUnique.mockResolvedValue({ projectId });
-    prisma.projectMember.findUnique.mockResolvedValue({ projectId, userId });
+    prisma.task.findUnique.mockResolvedValue({ teamId });
+    prisma.teamUserMember.findUnique.mockResolvedValue({ teamId, userId });
   });
 
   describe('registry 数据端点', () => {
@@ -45,10 +45,10 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
       const result = await controller.registry(taskId, user as never);
       expect(prisma.task.findUnique).toHaveBeenCalledWith({
         where: { id: taskId },
-        select: { projectId: true },
+        select: { teamId: true },
       });
-      expect(prisma.projectMember.findUnique).toHaveBeenCalledWith({
-        where: { projectId_userId: { projectId, userId } },
+      expect(prisma.teamUserMember.findUnique).toHaveBeenCalledWith({
+        where: { teamId_userId: { teamId, userId } },
       });
       expect(result).toEqual([{ id: 'doc1', name: '文档1', file: 'doc1.md' }]);
     });
@@ -61,8 +61,8 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
       expect(err.response?.code).toBe('DOCS_TASK_NOT_FOUND');
     });
 
-    it('非项目成员 → 403', async () => {
-      prisma.projectMember.findUnique.mockResolvedValue(null);
+    it('非团队成员 → 403', async () => {
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
       const err = (await controller
         .registry(taskId, user as never)
         .catch((e: unknown) => e)) as { response?: { code?: string } };
@@ -93,8 +93,8 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
       expect(err.response?.code).toBe('DOCS_DOC_NOT_FOUND');
     });
 
-    it('非项目成员 → 403', async () => {
-      prisma.projectMember.findUnique.mockResolvedValue(null);
+    it('非团队成员 → 403', async () => {
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
       const err = (await controller
         .prd(taskId, 'doc-1.md', user as never)
         .catch((e: unknown) => e)) as { response?: { code?: string } };
@@ -121,8 +121,8 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
       expect(result).toEqual({ items: [] });
     });
 
-    it('列表：非项目成员 → 403', async () => {
-      prisma.projectMember.findUnique.mockResolvedValue(null);
+    it('列表：非团队成员 → 403', async () => {
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
       const err = (await controller
         .prototypes(taskId, user as never)
         .catch((e: unknown) => e)) as { response?: { code?: string } };
@@ -170,8 +170,8 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
       expect(err.response?.code).toBe('DOCS_DOC_NOT_FOUND');
     });
 
-    it('内容：非项目成员 → 403', async () => {
-      prisma.projectMember.findUnique.mockResolvedValue(null);
+    it('内容：非团队成员 → 403', async () => {
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
       const err = (await controller
         .prototypeContent(taskId, 'my-proto/index.tsx', user as never)
         .catch((e: unknown) => e)) as { response?: { code?: string } };

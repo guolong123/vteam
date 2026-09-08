@@ -4,28 +4,25 @@ import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { MEMORY_LEVELS } from '../memory.constants';
 
 /**
- * GET /memories 查询参数（level/projectId/taskId 过滤 + keyword 内容搜索 + 分页，
+ * GET /memories 查询参数（level/teamId 过滤 + keyword 内容搜索 + 分页，
  * 对齐 QueryToolsDto 模式，返回 {items, total, page, pageSize}）。
  * 全端点 AdminGuard（Metis m6：记忆管理仅管理员可见，不扩展权限矩阵）。
+ * session-unification Todo 9：仅 team/global（任务级记忆已删除，level=task → 400，
+ * taskId 过滤已删除）。
  */
 export class QueryMemoriesDto {
   @ApiPropertyOptional({
-    description: '记忆等级过滤（task/project/global），缺省返回全部',
+    description: '记忆等级过滤（team/global），缺省返回全部',
     enum: Object.values(MEMORY_LEVELS),
   })
   @IsOptional()
   @IsIn(Object.values(MEMORY_LEVELS))
   level?: string;
 
-  @ApiPropertyOptional({ description: '项目级过滤（projectId 精确匹配）' })
+  @ApiPropertyOptional({ description: '团队级过滤（teamId 精确匹配）' })
   @IsOptional()
   @IsString()
-  projectId?: string;
-
-  @ApiPropertyOptional({ description: '任务级过滤（taskId 精确匹配）' })
-  @IsOptional()
-  @IsString()
-  taskId?: string;
+  teamId?: string;
 
   @ApiPropertyOptional({ description: '记忆内容模糊搜索（content contains）' })
   @IsOptional()

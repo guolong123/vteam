@@ -39,7 +39,6 @@ type TaskApiStatus =
 
 interface TaskDetail {
   id: string;
-  projectId: string;
   title: string;
   description: string | null;
   status: TaskApiStatus;

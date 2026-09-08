@@ -3,8 +3,9 @@
  *
  * 从 docs/agent-platform/prototypes/_shared/nav.tsx 原样迁移（rail 优先）。
  * 结构 / 样式 / data-testid 与原型一致；token 引用统一走 src/theme/tokens.ts。
- * 11 个导航项（project / teams / agents / workers / models / git-repos / skills / integrations / users / roles / memories），
- * 团队为全局入口（/teams，Task 14）；任务与项目为父子层级：任务从「项目」进入（/projects → /board?pid=），无独立看板入口。
+ * 10 个导航项（teams / agents / workers / models / git-repos / skills / integrations / users / roles / memories），
+ * 团队为全局入口与登录后默认工作台（/teams，Task 14）；任务看板/创建/产出物归属团队上下文
+ * （/board?teamId=、/tasks/new?teamId=、/artifacts?teamId=），无独立 Dock 图标。
  * 对齐 06 篇 Dock 导航与 Cmd+K 命令面板「导航」组。
  *
  * 铁律（T15）：浮层 position: absolute 相对宿主容器（宿主需 position: relative）。
@@ -33,7 +34,6 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { key: "project", label: "项目", icon: "▤" },
   { key: "teams", label: "团队管理", icon: "▣" },
   { key: "agents", label: "Agent 管理", icon: "◉" },
   { key: "workers", label: "Worker 节点", icon: "⚙" },

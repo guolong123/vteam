@@ -98,14 +98,13 @@ describe('MemoriesService', () => {
       expect(out).toEqual({ items: rows, total: 1, page: 1, pageSize: 20 });
     });
 
-    it('level/taskId/projectId/keyword 过滤透传（keyword → content OR description contains）', async () => {
+    it('level/teamId/keyword 过滤透传（keyword → content OR description contains）', async () => {
       prisma.memory.count.mockResolvedValue(0);
       prisma.memory.findMany.mockResolvedValue([]);
 
       await service.findAll({
-        level: 'task',
-        taskId: 't_1',
-        projectId: 'p_1',
+        level: 'team',
+        teamId: 'tm_1',
         keyword: '验收',
         page: 2,
         pageSize: 10,
@@ -114,9 +113,8 @@ describe('MemoriesService', () => {
       expect(prisma.memory.findMany).toHaveBeenCalledWith({
         where: {
           deletedAt: null,
-          level: 'task',
-          taskId: 't_1',
-          projectId: 'p_1',
+          level: 'team',
+          teamId: 'tm_1',
           OR: [
             { content: { contains: '验收' } },
             { description: { contains: '验收' } },
@@ -125,6 +123,46 @@ describe('MemoriesService', () => {
         orderBy: { createdAt: 'desc' },
         skip: 10,
         take: 10,
+      });
+    });
+
+    it('level=task → 400 MEMORY_LEVEL_INVALID（任务级记忆已删除，不触达 Prisma）', async () => {
+      await expect(
+        service.findAll({ level: 'task', teamId: 'tm_1' }),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'MEMORY_LEVEL_INVALID',
+        },
+      });
+      expect(prisma.memory.count).not.toHaveBeenCalled();
+      expect(prisma.memory.findMany).not.toHaveBeenCalled();
+    });
+
+    it('非法 level → 400 MEMORY_LEVEL_INVALID（不触达 Prisma）', async () => {
+      await expect(service.findAll({ level: 'bogus' })).rejects.toMatchObject({
+        response: {
+          code: 'MEMORY_LEVEL_INVALID',
+        },
+      });
+      expect(prisma.memory.findMany).not.toHaveBeenCalled();
+    });
+
+    it('GET /memories?teamId= 团队级过滤可用（teamId 精确匹配）', async () => {
+      prisma.memory.count.mockResolvedValue(1);
+      prisma.memory.findMany.mockResolvedValue([{ id: 'me_1', level: 'team' }]);
+
+      const out = await service.findAll({ level: 'team', teamId: 'tm_1' });
+
+      expect(prisma.memory.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ level: 'team', teamId: 'tm_1' }),
+        }),
+      );
+      expect(out).toEqual({
+        items: [{ id: 'me_1', level: 'team' }],
+        total: 1,
+        page: 1,
+        pageSize: 20,
       });
     });
 

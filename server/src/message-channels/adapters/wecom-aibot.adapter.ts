@@ -72,31 +72,66 @@ export class WecomAibotAdapter extends MessageAdapter {
   /** Also map by aqId for direct lookup before taskId is resolved */
   private readonly aqOperatorMap = new Map<
     string,
-    { channelId: string; fromUserId: string; fromUserName: string; chattype?: string; at: number }
+    {
+      channelId: string;
+      fromUserId: string;
+      fromUserName: string;
+      chattype?: string;
+      at: number;
+    }
   >();
 
   setPendingOperatorForTask(
     taskId: string,
-    info: { channelId: string; fromUserId: string; fromUserName: string; chattype?: string; aqId?: string; frameHeaders?: unknown; streamId?: string },
+    info: {
+      channelId: string;
+      fromUserId: string;
+      fromUserName: string;
+      chattype?: string;
+      aqId?: string;
+      frameHeaders?: unknown;
+      streamId?: string;
+    },
   ): void {
     const now = Date.now();
     this.taskPendingOperators.set(taskId, { taskId, ...info, at: now });
     if (info.aqId) {
-      this.aqOperatorMap.set(info.aqId, { channelId: info.channelId, fromUserId: info.fromUserId, fromUserName: info.fromUserName, chattype: info.chattype, at: now });
+      this.aqOperatorMap.set(info.aqId, {
+        channelId: info.channelId,
+        fromUserId: info.fromUserId,
+        fromUserName: info.fromUserName,
+        chattype: info.chattype,
+        at: now,
+      });
     }
-    this.logger.log(`wecom setPendingOperatorForTask taskId=${taskId} aqId=${info.aqId ?? ''} fromUserId=${info.fromUserId} fromUserName=${info.fromUserName} chattype=${info.chattype ?? ''}`);
+    this.logger.log(
+      `wecom setPendingOperatorForTask taskId=${taskId} aqId=${info.aqId ?? ''} fromUserId=${info.fromUserId} fromUserName=${info.fromUserName} chattype=${info.chattype ?? ''}`,
+    );
   }
 
   setPendingOperatorForAq(
     aqId: string,
-    info: { channelId: string; fromUserId: string; fromUserName: string; chattype?: string },
+    info: {
+      channelId: string;
+      fromUserId: string;
+      fromUserName: string;
+      chattype?: string;
+    },
   ): void {
     this.aqOperatorMap.set(aqId, { ...info, at: Date.now() });
-    this.logger.log(`wecom setPendingOperatorForAq aqId=${aqId} fromUserId=${info.fromUserId} fromUserName=${info.fromUserName}`);
+    this.logger.log(
+      `wecom setPendingOperatorForAq aqId=${aqId} fromUserId=${info.fromUserId} fromUserName=${info.fromUserName}`,
+    );
   }
 
   getPendingOperatorForTask(taskId: string):
-    | { fromUserId: string; fromUserName: string; chattype?: string; channelId: string; aqId?: string }
+    | {
+        fromUserId: string;
+        fromUserName: string;
+        chattype?: string;
+        channelId: string;
+        aqId?: string;
+      }
     | undefined {
     const e = this.taskPendingOperators.get(taskId);
     if (!e) return undefined;
@@ -105,23 +140,42 @@ export class WecomAibotAdapter extends MessageAdapter {
       if (e.aqId) this.aqOperatorMap.delete(e.aqId);
       return undefined;
     }
-    return { fromUserId: e.fromUserId, fromUserName: e.fromUserName, chattype: e.chattype, channelId: e.channelId, aqId: e.aqId };
+    return {
+      fromUserId: e.fromUserId,
+      fromUserName: e.fromUserName,
+      chattype: e.chattype,
+      channelId: e.channelId,
+      aqId: e.aqId,
+    };
   }
 
   consumePendingOperatorForTask(taskId: string):
-    | { fromUserId: string; fromUserName: string; chattype?: string; channelId: string; aqId?: string }
+    | {
+        fromUserId: string;
+        fromUserName: string;
+        chattype?: string;
+        channelId: string;
+        aqId?: string;
+      }
     | undefined {
     const v = this.getPendingOperatorForTask(taskId);
     if (v) {
       this.taskPendingOperators.delete(taskId);
       if (v.aqId) this.aqOperatorMap.delete(v.aqId);
-      this.logger.log(`wecom consumePendingOperatorForTask taskId=${taskId} fromUserId=${v.fromUserId}`);
+      this.logger.log(
+        `wecom consumePendingOperatorForTask taskId=${taskId} fromUserId=${v.fromUserId}`,
+      );
     }
     return v;
   }
 
   getPendingOperatorForAq(aqId: string):
-    | { channelId: string; fromUserId: string; fromUserName: string; chattype?: string }
+    | {
+        channelId: string;
+        fromUserId: string;
+        fromUserName: string;
+        chattype?: string;
+      }
     | undefined {
     const e = this.aqOperatorMap.get(aqId);
     if (!e) return undefined;
@@ -153,14 +207,18 @@ export class WecomAibotAdapter extends MessageAdapter {
       if (firstKey) {
         const evicted = this.streams.get(firstKey);
         if (evicted?.spinnerTimer) {
-          try { clearInterval(evicted.spinnerTimer); } catch {}
+          try {
+            clearInterval(evicted.spinnerTimer);
+          } catch {}
         }
         this.streams.delete(firstKey);
       }
     }
     const existing = this.streams.get(internalMessageId);
     if (existing?.spinnerTimer) {
-      try { clearInterval(existing.spinnerTimer); } catch {}
+      try {
+        clearInterval(existing.spinnerTimer);
+      } catch {}
     }
     this.streams.set(internalMessageId, ref);
     this.logger.log(
@@ -168,9 +226,7 @@ export class WecomAibotAdapter extends MessageAdapter {
     );
   }
 
-  getStream(
-    refId: string,
-  ):
+  getStream(refId: string):
     | {
         channelId: string;
         frameHeaders: unknown;
@@ -402,7 +458,9 @@ export class WecomAibotAdapter extends MessageAdapter {
       let spinnerIndex = 0;
       let spinnerTimer: NodeJS.Timeout | null = null;
       const frameHeadersForSpinner = (f as { headers?: unknown }).headers ?? f;
-      const spinnerPayload = { headers: frameHeadersForSpinner } as unknown as { headers: { req_id: string } };
+      const spinnerPayload = { headers: frameHeadersForSpinner } as unknown as {
+        headers: { req_id: string };
+      };
       try {
         await client.replyStream(
           spinnerPayload,
@@ -416,34 +474,51 @@ export class WecomAibotAdapter extends MessageAdapter {
         );
       }
       spinnerIndex = 1;
-      this.logger.log(`wecom spinner start stream=${streamId} channel=${channelId} interval=${WecomAibotAdapter.SPINNER_INTERVAL_MS}ms frames=${JSON.stringify(spinnerFrames)}`);
+      this.logger.log(
+        `wecom spinner start stream=${streamId} channel=${channelId} interval=${WecomAibotAdapter.SPINNER_INTERVAL_MS}ms frames=${JSON.stringify(spinnerFrames)}`,
+      );
       try {
         let pendingTick = false;
         spinnerTimer = setInterval(() => {
           if (pendingTick) {
-            this.logger.warn(`wecom spinner tick skipped (prev pending) stream=${streamId}`);
+            this.logger.warn(
+              `wecom spinner tick skipped (prev pending) stream=${streamId}`,
+            );
             return;
           }
           const tickText = spinnerFrames[spinnerIndex++ % spinnerFrames.length];
           const tickAt = new Date().toISOString();
-          this.logger.log(`wecom spinner tick ${JSON.stringify(tickText)} for stream ${streamId} at ${tickAt} idx=${spinnerIndex - 1}`);
+          this.logger.log(
+            `wecom spinner tick ${JSON.stringify(tickText)} for stream ${streamId} at ${tickAt} idx=${spinnerIndex - 1}`,
+          );
           pendingTick = true;
-          client.replyStream(spinnerPayload, streamId, tickText, false).then((res) => {
-            pendingTick = false;
-            const rc = (res as any)?.errcode;
-            if (typeof rc !== 'undefined' && rc !== 0) {
-              this.logger.warn(`wecom spinner replyStream non-zero errcode stream=${streamId} tickText=${JSON.stringify(tickText)} res=${JSON.stringify(res).slice(0, 500)}`);
-            } else {
-              this.logger.log(`wecom spinner replyStream ok stream=${streamId} tickText=${JSON.stringify(tickText)}`);
-            }
-          }).catch((e) => {
-            pendingTick = false;
-            this.logger.warn(`wecom spinner replyStream failed stream=${streamId} tickText=${JSON.stringify(tickText)} err=${(e as Error)?.message ?? String(e)}`);
-          });
+          client
+            .replyStream(spinnerPayload, streamId, tickText, false)
+            .then((res) => {
+              pendingTick = false;
+              const rc = (res as any)?.errcode;
+              if (typeof rc !== 'undefined' && rc !== 0) {
+                this.logger.warn(
+                  `wecom spinner replyStream non-zero errcode stream=${streamId} tickText=${JSON.stringify(tickText)} res=${JSON.stringify(res).slice(0, 500)}`,
+                );
+              } else {
+                this.logger.log(
+                  `wecom spinner replyStream ok stream=${streamId} tickText=${JSON.stringify(tickText)}`,
+                );
+              }
+            })
+            .catch((e) => {
+              pendingTick = false;
+              this.logger.warn(
+                `wecom spinner replyStream failed stream=${streamId} tickText=${JSON.stringify(tickText)} err=${(e as Error)?.message ?? String(e)}`,
+              );
+            });
         }, WecomAibotAdapter.SPINNER_INTERVAL_MS);
         if ((spinnerTimer as any)?.unref) (spinnerTimer as any).unref();
       } catch (e) {
-        this.logger.warn(`wecom spinner setInterval failed stream=${streamId}: ${(e as Error)?.message ?? String(e)}`);
+        this.logger.warn(
+          `wecom spinner setInterval failed stream=${streamId}: ${(e as Error)?.message ?? String(e)}`,
+        );
       }
       let result:
         | { results: Array<{ ok: boolean; internalMessageId?: string }> }
@@ -457,7 +532,9 @@ export class WecomAibotAdapter extends MessageAdapter {
       }
       const first = result?.results?.[0];
       if (first?.ok && first.internalMessageId) {
-        this.logger.log(`wecom spinner registered stream=${streamId} internalMessageId=${first.internalMessageId} hasTimer=${!!spinnerTimer}`);
+        this.logger.log(
+          `wecom spinner registered stream=${streamId} internalMessageId=${first.internalMessageId} hasTimer=${!!spinnerTimer}`,
+        );
         this.registerStreamCorrelation(first.internalMessageId, {
           channelId,
           frameHeaders: (f as { headers?: unknown }).headers ?? f,
@@ -487,8 +564,12 @@ export class WecomAibotAdapter extends MessageAdapter {
         } catch {}
       } else {
         if (spinnerTimer) {
-          try { clearInterval(spinnerTimer); } catch {}
-          this.logger.log(`wecom spinner cleared (no internalMessageId) stream=${streamId}`);
+          try {
+            clearInterval(spinnerTimer);
+          } catch {}
+          this.logger.log(
+            `wecom spinner cleared (no internalMessageId) stream=${streamId}`,
+          );
         }
       }
       try {
@@ -535,12 +616,23 @@ export class WecomAibotAdapter extends MessageAdapter {
         this.logger.log(
           `wecom inbound skipped unsupported ${ev} channel=${channelId}`,
         );
-        const body = (f as {
-          body?: { chatid?: string; chattype?: string; from?: { userid?: string } };
-        }).body;
-        const effectiveChatId = body?.chatid ?? (f as { body?: { from?: { userid?: string } } }).body?.from?.userid ?? null;
+        const body = (
+          f as {
+            body?: {
+              chatid?: string;
+              chattype?: string;
+              from?: { userid?: string };
+            };
+          }
+        ).body;
+        const effectiveChatId =
+          body?.chatid ??
+          (f as { body?: { from?: { userid?: string } } }).body?.from?.userid ??
+          null;
         const effectiveChattype = body?.chattype;
-        const senderExternalId = (f as { body?: { from?: { userid?: string } } }).body?.from?.userid ?? null;
+        const senderExternalId =
+          (f as { body?: { from?: { userid?: string } } }).body?.from?.userid ??
+          null;
         if (effectiveChatId) {
           try {
             await ctx.updateChannelRuntime(channelId, {
@@ -573,19 +665,28 @@ export class WecomAibotAdapter extends MessageAdapter {
         this.logger.log(
           `wecom template_card_event received channel=${channelId} headers=${JSON.stringify((f as any).headers ?? {})} body=${rawJson}`,
         );
-        this.logger.log(
-          `wecom template_card_event rawEvent=${evPreview}`,
-        );
+        this.logger.log(`wecom template_card_event rawEvent=${evPreview}`);
       } catch {}
       if (!rawEv) {
-        this.logger.warn(`wecom template_card_event skipped: missing event channel=${channelId}`);
+        this.logger.warn(
+          `wecom template_card_event skipped: missing event channel=${channelId}`,
+        );
         return;
       }
       const ev: any = rawEv.template_card_event ?? rawEv;
-      const eventtype: string | undefined = rawEv.eventtype ?? ev.eventtype ?? rawEv.event_type ?? ev.event_type;
-      const cardTypeRaw: string | undefined = ev.card_type ?? rawEv.card_type ?? ev.cardType ?? rawEv.cardType;
+      const eventtype: string | undefined =
+        rawEv.eventtype ?? ev.eventtype ?? rawEv.event_type ?? ev.event_type;
+      const cardTypeRaw: string | undefined =
+        ev.card_type ?? rawEv.card_type ?? ev.cardType ?? rawEv.cardType;
       const isTemplateCard = eventtype === 'template_card_event';
-      const hasVotePayload = !!(ev.selected_items ?? rawEv.selected_items ?? ev.selectedItems ?? rawEv.selectedItems ?? ev.selected_item ?? rawEv.selected_item);
+      const hasVotePayload = !!(
+        ev.selected_items ??
+        rawEv.selected_items ??
+        ev.selectedItems ??
+        rawEv.selectedItems ??
+        ev.selected_item ??
+        rawEv.selected_item
+      );
       if (!isTemplateCard && !hasVotePayload) {
         this.logger.log(
           `wecom template_card_event ignored non-card event channel=${channelId} eventtype=${String(eventtype ?? 'undefined')} card_type=${String(cardTypeRaw ?? 'undefined')}`,
@@ -598,10 +699,22 @@ export class WecomAibotAdapter extends MessageAdapter {
         );
       }
 
-      const taskId: string | undefined = ev.task_id ?? rawEv.task_id ?? ev.taskId ?? rawEv.taskId;
-      let eventKey: string | undefined = ev.event_key ?? rawEv.event_key ?? ev.eventKey ?? rawEv.eventKey ?? rawEv.key ?? ev.key;
+      const taskId: string | undefined =
+        ev.task_id ?? rawEv.task_id ?? ev.taskId ?? rawEv.taskId;
+      const eventKey: string | undefined =
+        ev.event_key ??
+        rawEv.event_key ??
+        ev.eventKey ??
+        rawEv.eventKey ??
+        rawEv.key ??
+        ev.key;
       const selectedItems: any =
-        ev.selected_items ?? rawEv.selected_items ?? ev.selectedItems ?? rawEv.selectedItems ?? ev.selected_item ?? rawEv.selected_item;
+        ev.selected_items ??
+        rawEv.selected_items ??
+        ev.selectedItems ??
+        rawEv.selectedItems ??
+        ev.selected_item ??
+        rawEv.selected_item;
 
       try {
         this.logger.log(
@@ -618,13 +731,23 @@ export class WecomAibotAdapter extends MessageAdapter {
         if (Array.isArray(si)) items = si;
         else if (Array.isArray(si.selected_item)) items = si.selected_item;
         else if (Array.isArray(si.selected_items)) items = si.selected_items;
-        else if (si.selected_item && !Array.isArray(si.selected_item)) items = [si.selected_item];
-        else if ((si as any).question_key && ((si as any).option_ids || (si as any).option_id)) {
+        else if (si.selected_item && !Array.isArray(si.selected_item))
+          items = [si.selected_item];
+        else if (
+          (si as any).question_key &&
+          ((si as any).option_ids || (si as any).option_id)
+        ) {
           items = [si];
         } else return undefined;
         if (!items || items.length === 0) return undefined;
         const first = items[0];
-        const oidContainer = first.option_ids ?? first.optionIds ?? first.option_id ?? first.optionId ?? first.options ?? first.optionIds;
+        const oidContainer =
+          first.option_ids ??
+          first.optionIds ??
+          first.option_id ??
+          first.optionId ??
+          first.options ??
+          first.optionIds;
         if (!oidContainer) {
           if (typeof first.id === 'string') return first.id;
           if (typeof first.option_id === 'string') return first.option_id;
@@ -633,15 +756,23 @@ export class WecomAibotAdapter extends MessageAdapter {
         if (typeof oidContainer === 'string') return oidContainer;
         if (Array.isArray(oidContainer)) return oidContainer[0];
         if (typeof oidContainer === 'object') {
-          const arr = (oidContainer as any).option_id ?? (oidContainer as any).optionId ?? (oidContainer as any).option_ids;
+          const arr =
+            (oidContainer as any).option_id ??
+            (oidContainer as any).optionId ??
+            (oidContainer as any).option_ids;
           if (Array.isArray(arr)) return arr[0];
           if (typeof arr === 'string') return arr;
-          if (typeof (oidContainer as any).option_id === 'string') return (oidContainer as any).option_id;
-          if (typeof (oidContainer as any).option_id === 'undefined' && typeof oidContainer === 'object') {
+          if (typeof (oidContainer as any).option_id === 'string')
+            return (oidContainer as any).option_id;
+          if (
+            typeof (oidContainer as any).option_id === 'undefined' &&
+            typeof oidContainer === 'object'
+          ) {
             const vals = Object.values(oidContainer as Record<string, unknown>);
             for (const v of vals) {
               if (typeof v === 'string') return v;
-              if (Array.isArray(v) && typeof v[0] === 'string') return v[0] as string;
+              if (Array.isArray(v) && typeof v[0] === 'string')
+                return v[0] as string;
             }
           }
         }
@@ -658,18 +789,42 @@ export class WecomAibotAdapter extends MessageAdapter {
       if (selectedOptionId && typeof selectedOptionId === 'string') {
         const sep2 = selectedOptionId.indexOf(':');
         if (sep2 !== -1) {
-          aqId = taskId ?? selectedOptionId.slice(0, sep2) ?? ev.question_key ?? rawEv.question_key;
+          aqId =
+            taskId ??
+            selectedOptionId.slice(0, sep2) ??
+            ev.question_key ??
+            rawEv.question_key;
           action = selectedOptionId.slice(sep2 + 1);
         } else {
-          const qk: string | undefined = ev.question_key ?? rawEv.question_key ?? (selectedItems as any)?.selected_item?.[0]?.question_key;
+          const qk: string | undefined =
+            ev.question_key ??
+            rawEv.question_key ??
+            (selectedItems as any)?.selected_item?.[0]?.question_key;
           let qk2: string | undefined = qk;
           if (!qk2 && selectedItems) {
             const siItems = (selectedItems as any).selected_item;
-            if (Array.isArray(siItems) && siItems[0]?.question_key) qk2 = siItems[0].question_key;
-            else if (!Array.isArray(siItems) && (siItems as any)?.question_key) qk2 = (siItems as any).question_key;
-            if (!qk2 && Array.isArray(selectedItems) && (selectedItems[0] as any)?.question_key) qk2 = (selectedItems[0] as any).question_key;
+            if (Array.isArray(siItems) && siItems[0]?.question_key)
+              qk2 = siItems[0].question_key;
+            else if (!Array.isArray(siItems) && (siItems as any)?.question_key)
+              qk2 = (siItems as any).question_key;
+            if (
+              !qk2 &&
+              Array.isArray(selectedItems) &&
+              (selectedItems[0] as any)?.question_key
+            )
+              qk2 = (selectedItems[0] as any).question_key;
           }
-          aqId = taskId ?? qk2 ?? (eventKey ? eventKey.slice(0, eventKey.indexOf(':') === -1 ? eventKey.length : eventKey.indexOf(':')) : undefined);
+          aqId =
+            taskId ??
+            qk2 ??
+            (eventKey
+              ? eventKey.slice(
+                  0,
+                  eventKey.indexOf(':') === -1
+                    ? eventKey.length
+                    : eventKey.indexOf(':'),
+                )
+              : undefined);
           action = selectedOptionId;
           if (!aqId && eventKey && eventKey.includes(':')) {
             aqId = eventKey.slice(0, eventKey.indexOf(':'));
@@ -722,10 +877,16 @@ export class WecomAibotAdapter extends MessageAdapter {
         }
       }
       const operatorExternalId = body?.from?.userid;
-      const operatorExternalName = (body?.from as any)?.name ?? (body as any)?.from_name ?? operatorExternalId ?? '';
+      const operatorExternalName =
+        (body?.from as any)?.name ??
+        (body as any)?.from_name ??
+        operatorExternalId ??
+        '';
       const operatorChattype = body?.chattype;
       const operatorChatId = body?.chatid as string | undefined;
-      this.logger.log(`wecom template_card_event operator userid=${operatorExternalId ?? ''} name=${operatorExternalName ?? ''} chattype=${operatorChattype ?? ''}`);
+      this.logger.log(
+        `wecom template_card_event operator userid=${operatorExternalId ?? ''} name=${operatorExternalName ?? ''} chattype=${operatorChattype ?? ''}`,
+      );
       if (aqId && operatorExternalId) {
         try {
           this.setPendingOperatorForAq(aqId, {
@@ -950,7 +1111,9 @@ export class WecomAibotAdapter extends MessageAdapter {
     }
     for (const entry of this.streams.values()) {
       if (entry.spinnerTimer) {
-        try { clearInterval(entry.spinnerTimer); } catch {}
+        try {
+          clearInterval(entry.spinnerTimer);
+        } catch {}
       }
     }
     this.clients.clear();
@@ -1002,7 +1165,9 @@ export class WecomAibotAdapter extends MessageAdapter {
         markdown: { content: text },
       } as unknown as Parameters<WSClient['sendMessage']>[1]);
       if (res && typeof res.errcode !== 'undefined' && res.errcode !== 0) {
-        throw new Error(res.errmsg ?? `wecom sendMessage failed errcode=${res.errcode}`);
+        throw new Error(
+          res.errmsg ?? `wecom sendMessage failed errcode=${res.errcode}`,
+        );
       }
       return { externalId: (res?.headers?.req_id ?? null) as string | null };
     };
@@ -1037,14 +1202,20 @@ export class WecomAibotAdapter extends MessageAdapter {
         template_card: card,
       } as unknown as Parameters<WSClient['sendMessage']>[1]);
       if (res && typeof res.errcode !== 'undefined' && res.errcode !== 0) {
-        throw new Error(res.errmsg ?? `wecom sendMessage failed errcode=${res.errcode}`);
+        throw new Error(
+          res.errmsg ?? `wecom sendMessage failed errcode=${res.errcode}`,
+        );
       }
-      this.logger.log(`wecom sendQuestionCard permission ok channel=${channel.id} aqId=${aqId} chatId=${chatId}`);
+      this.logger.log(
+        `wecom sendQuestionCard permission ok channel=${channel.id} aqId=${aqId} chatId=${chatId}`,
+      );
       return { externalId: (res?.headers?.req_id ?? null) as string | null };
     }
 
     if (kind === 'question') {
-      const questions: any[] = Array.isArray(content.questions) ? content.questions : [];
+      const questions: any[] = Array.isArray(content.questions)
+        ? content.questions
+        : [];
       if (questions.length === 1) {
         const q0 = questions[0] ?? {};
         const qText: string =
@@ -1081,18 +1252,31 @@ export class WecomAibotAdapter extends MessageAdapter {
                 option_list,
                 mode: 0,
               },
-              submit_button: { text: '提交', key: `${aqId}:submit`.slice(0, 1024) },
+              submit_button: {
+                text: '提交',
+                key: `${aqId}:submit`.slice(0, 1024),
+              },
               task_id: String(aqId).slice(0, 128),
             };
             const res: any = await client.sendMessage(chatId, {
               msgtype: 'template_card',
               template_card: card,
             } as unknown as Parameters<WSClient['sendMessage']>[1]);
-            if (res && typeof res.errcode !== 'undefined' && res.errcode !== 0) {
-              throw new Error(res.errmsg ?? `wecom sendMessage failed errcode=${res.errcode}`);
+            if (
+              res &&
+              typeof res.errcode !== 'undefined' &&
+              res.errcode !== 0
+            ) {
+              throw new Error(
+                res.errmsg ?? `wecom sendMessage failed errcode=${res.errcode}`,
+              );
             }
-            this.logger.log(`wecom sendQuestionCard question vote ok channel=${channel.id} aqId=${aqId} chatId=${chatId} options=${option_list.length}`);
-            return { externalId: (res?.headers?.req_id ?? null) as string | null };
+            this.logger.log(
+              `wecom sendQuestionCard question vote ok channel=${channel.id} aqId=${aqId} chatId=${chatId} options=${option_list.length}`,
+            );
+            return {
+              externalId: (res?.headers?.req_id ?? null) as string | null,
+            };
           }
           const buttons = opts.slice(0, 6).map((o: any) => {
             const labelRaw =
@@ -1121,10 +1305,16 @@ export class WecomAibotAdapter extends MessageAdapter {
             template_card: card,
           } as unknown as Parameters<WSClient['sendMessage']>[1]);
           if (res && typeof res.errcode !== 'undefined' && res.errcode !== 0) {
-            throw new Error(res.errmsg ?? `wecom sendMessage failed errcode=${res.errcode}`);
+            throw new Error(
+              res.errmsg ?? `wecom sendMessage failed errcode=${res.errcode}`,
+            );
           }
-          this.logger.log(`wecom sendQuestionCard question ok channel=${channel.id} aqId=${aqId} chatId=${chatId} options=${buttons.length}`);
-          return { externalId: (res?.headers?.req_id ?? null) as string | null };
+          this.logger.log(
+            `wecom sendQuestionCard question ok channel=${channel.id} aqId=${aqId} chatId=${chatId} options=${buttons.length}`,
+          );
+          return {
+            externalId: (res?.headers?.req_id ?? null) as string | null,
+          };
         }
       }
       const fallback =
@@ -1132,10 +1322,14 @@ export class WecomAibotAdapter extends MessageAdapter {
           ? `【待确认】${questions.length}个问题待处理，请前往Web处理`
           : `【待确认】${(() => {
               const q0 = questions[0] ?? {};
-              const t = (q0.question ?? q0.header ?? JSON.stringify(content)).toString().slice(0, 200);
+              const t = (q0.question ?? q0.header ?? JSON.stringify(content))
+                .toString()
+                .slice(0, 200);
               return t || '请前往Web处理';
             })()}`;
-      this.logger.log(`wecom sendQuestionCard fallback markdown channel=${channel.id} aqId=${aqId} reason=${questions.length > 1 ? 'multi-question' : 'no-options'}`);
+      this.logger.log(
+        `wecom sendQuestionCard fallback markdown channel=${channel.id} aqId=${aqId} reason=${questions.length > 1 ? 'multi-question' : 'no-options'}`,
+      );
       return sendMarkdown(fallback);
     }
 
@@ -1147,12 +1341,22 @@ export class WecomAibotAdapter extends MessageAdapter {
     const entry = this.streams.get(internalMessageId);
     const had = !!entry;
     if (entry?.spinnerTimer) {
-      try { clearInterval(entry.spinnerTimer); } catch {}
-      this.logger.log(`wecom spinner cleared on discardStream internalMessageId=${internalMessageId} stream=${entry.streamId}`);
+      try {
+        clearInterval(entry.spinnerTimer);
+      } catch {}
+      this.logger.log(
+        `wecom spinner cleared on discardStream internalMessageId=${internalMessageId} stream=${entry.streamId}`,
+      );
     }
     if (had) this.streams.delete(internalMessageId);
-    if (had) this.logger.log(`wecom discardStream post-card: removed placeholder stream internalMessageId=${internalMessageId} without replyStream (placeholder remains spinner, new reply will be sent via sendNewMessage after card)`);
-    else this.logger.log(`wecom discardStream miss internalMessageId=${internalMessageId}`);
+    if (had)
+      this.logger.log(
+        `wecom discardStream post-card: removed placeholder stream internalMessageId=${internalMessageId} without replyStream (placeholder remains spinner, new reply will be sent via sendNewMessage after card)`,
+      );
+    else
+      this.logger.log(
+        `wecom discardStream miss internalMessageId=${internalMessageId}`,
+      );
     return had;
   }
 
@@ -1177,17 +1381,26 @@ export class WecomAibotAdapter extends MessageAdapter {
     }
     if (!targetChatId) {
       try {
-        const raw = this.hosts.get(channelId) as unknown as { prisma?: unknown } | undefined;
+        const raw = this.hosts.get(channelId) as unknown as
+          { prisma?: unknown } | undefined;
         const prismaLike =
           (raw as unknown as { prisma?: unknown })?.prisma ??
           (this.attachedHost as unknown as { prisma?: unknown })?.prisma;
         if (
           prismaLike &&
-          typeof (prismaLike as Record<string, unknown>).messageChannel !== 'undefined'
+          typeof (prismaLike as Record<string, unknown>).messageChannel !==
+            'undefined'
         ) {
           const rows = await (
-            (prismaLike as { messageChannel: { findUnique: (q: unknown) => Promise<{ config?: unknown }> } })
-              .messageChannel.findUnique as (q: unknown) => Promise<{ config?: unknown }>
+            (
+              prismaLike as {
+                messageChannel: {
+                  findUnique: (q: unknown) => Promise<{ config?: unknown }>;
+                };
+              }
+            ).messageChannel.findUnique as (
+              q: unknown,
+            ) => Promise<{ config?: unknown }>
           )({ where: { id: channelId }, select: { config: true } });
           const cfg = (rows?.config ?? {}) as Record<string, unknown>;
           targetChatId =
@@ -1199,7 +1412,9 @@ export class WecomAibotAdapter extends MessageAdapter {
       } catch {}
     }
     if (!targetChatId) {
-      this.logger.warn(`wecom sendNewMessage no target chatId for channelId=${channelId}`);
+      this.logger.warn(
+        `wecom sendNewMessage no target chatId for channelId=${channelId}`,
+      );
       return false;
     }
     try {
@@ -1207,7 +1422,9 @@ export class WecomAibotAdapter extends MessageAdapter {
         msgtype: 'markdown',
         markdown: { content: text },
       } as unknown as Parameters<WSClient['sendMessage']>[1]);
-      this.logger.log(`wecom sendNewMessage ok channelId=${channelId} chatId=${targetChatId} textLen=${text.length}`);
+      this.logger.log(
+        `wecom sendNewMessage ok channelId=${channelId} chatId=${targetChatId} textLen=${text.length}`,
+      );
       return true;
     } catch (e) {
       this.logger.error(
@@ -1227,14 +1444,20 @@ export class WecomAibotAdapter extends MessageAdapter {
       `wecom finishStream called internalMessageId=${internalMessageId} found=${!!ref} channelId=${ref?.channelId ?? 'null'} streamId=${ref?.streamId ?? 'null'} chattype=${(ref as any)?.chattype ?? 'null'} fromUserId=${(ref as any)?.fromUserId ?? 'null'} textLen=${text?.length ?? 0} clientExists=${!!previewClient}`,
     );
     if (!ref) {
-      this.logger.warn(`wecom finishStream miss internalMessageId=${internalMessageId}`);
+      this.logger.warn(
+        `wecom finishStream miss internalMessageId=${internalMessageId}`,
+      );
       return false;
     }
     const hadSpinner = !!ref.spinnerTimer;
     if (ref.spinnerTimer) {
-      try { clearInterval(ref.spinnerTimer); } catch {}
+      try {
+        clearInterval(ref.spinnerTimer);
+      } catch {}
       ref.spinnerTimer = null;
-      this.logger.log(`wecom spinner cleared on finishStream stream=${ref.streamId} internalMessageId=${internalMessageId} hadSpinner=${hadSpinner}`);
+      this.logger.log(
+        `wecom spinner cleared on finishStream stream=${ref.streamId} internalMessageId=${internalMessageId} hadSpinner=${hadSpinner}`,
+      );
     }
     const client = this.clients.get(ref.channelId);
     if (!client) {
@@ -1285,7 +1508,9 @@ export class WecomAibotAdapter extends MessageAdapter {
   async sendFallbackMessage(channelId: string, text: string): Promise<boolean> {
     const client = this.clients.get(channelId);
     if (!client) {
-      this.logger.warn(`wecom sendFallbackMessage no client channelId=${channelId}`);
+      this.logger.warn(
+        `wecom sendFallbackMessage no client channelId=${channelId}`,
+      );
       return false;
     }
     const host = this.hosts.get(channelId) ?? this.attachedHost;
@@ -1303,17 +1528,26 @@ export class WecomAibotAdapter extends MessageAdapter {
     }
     if (!fallbackChatId) {
       try {
-        const raw = this.hosts.get(channelId) as unknown as { prisma?: unknown } | undefined;
+        const raw = this.hosts.get(channelId) as unknown as
+          { prisma?: unknown } | undefined;
         const prismaLike =
           (raw as unknown as { prisma?: unknown })?.prisma ??
           (this.attachedHost as unknown as { prisma?: unknown })?.prisma;
         if (
           prismaLike &&
-          typeof (prismaLike as Record<string, unknown>).messageChannel !== 'undefined'
+          typeof (prismaLike as Record<string, unknown>).messageChannel !==
+            'undefined'
         ) {
           const rows = await (
-            (prismaLike as { messageChannel: { findUnique: (q: unknown) => Promise<{ config?: unknown }> } })
-              .messageChannel.findUnique as (q: unknown) => Promise<{ config?: unknown }>
+            (
+              prismaLike as {
+                messageChannel: {
+                  findUnique: (q: unknown) => Promise<{ config?: unknown }>;
+                };
+              }
+            ).messageChannel.findUnique as (
+              q: unknown,
+            ) => Promise<{ config?: unknown }>
           )({ where: { id: channelId }, select: { config: true } });
           const cfg = (rows?.config ?? {}) as Record<string, unknown>;
           fallbackChatId =
@@ -1325,7 +1559,9 @@ export class WecomAibotAdapter extends MessageAdapter {
       } catch {}
     }
     if (!fallbackChatId) {
-      this.logger.warn(`wecom sendFallbackMessage no fallback chatId for channelId=${channelId}`);
+      this.logger.warn(
+        `wecom sendFallbackMessage no fallback chatId for channelId=${channelId}`,
+      );
       return false;
     }
     try {
@@ -1333,7 +1569,9 @@ export class WecomAibotAdapter extends MessageAdapter {
         msgtype: 'markdown',
         markdown: { content: text },
       } as unknown as Parameters<WSClient['sendMessage']>[1]);
-      this.logger.log(`wecom sendFallbackMessage ok channelId=${channelId} chatId=${fallbackChatId} textLen=${text.length}`);
+      this.logger.log(
+        `wecom sendFallbackMessage ok channelId=${channelId} chatId=${fallbackChatId} textLen=${text.length}`,
+      );
       return true;
     } catch (e) {
       this.logger.error(
@@ -1358,17 +1596,26 @@ export class WecomAibotAdapter extends MessageAdapter {
       } catch {}
     }
     try {
-      const raw = this.hosts.get(channelId) as unknown as { prisma?: unknown } | undefined;
+      const raw = this.hosts.get(channelId) as unknown as
+        { prisma?: unknown } | undefined;
       const prismaLike =
         (raw as unknown as { prisma?: unknown })?.prisma ??
         (this.attachedHost as unknown as { prisma?: unknown })?.prisma;
       if (
         prismaLike &&
-        typeof (prismaLike as Record<string, unknown>).messageChannel !== 'undefined'
+        typeof (prismaLike as Record<string, unknown>).messageChannel !==
+          'undefined'
       ) {
         const rows = await (
-          (prismaLike as { messageChannel: { findUnique: (q: unknown) => Promise<{ config?: unknown }> } })
-            .messageChannel.findUnique as (q: unknown) => Promise<{ config?: unknown }>
+          (
+            prismaLike as {
+              messageChannel: {
+                findUnique: (q: unknown) => Promise<{ config?: unknown }>;
+              };
+            }
+          ).messageChannel.findUnique as (
+            q: unknown,
+          ) => Promise<{ config?: unknown }>
         )({ where: { id: channelId }, select: { config: true } });
         const cfg = (rows?.config ?? {}) as Record<string, unknown>;
         return (
@@ -1385,37 +1632,66 @@ export class WecomAibotAdapter extends MessageAdapter {
   async sendTemplateCard(channelId: string, card: unknown): Promise<boolean> {
     const client = this.clients.get(channelId);
     if (!client) {
-      this.logger.warn(`wecom sendTemplateCard no client channelId=${channelId} card=${JSON.stringify(card).slice(0, 800)}`);
+      this.logger.warn(
+        `wecom sendTemplateCard no client channelId=${channelId} card=${JSON.stringify(card).slice(0, 800)}`,
+      );
       return false;
     }
     const chatId = await this.resolveChatId(channelId);
     if (!chatId) {
-      this.logger.warn(`wecom sendTemplateCard no chatId channelId=${channelId} card=${JSON.stringify(card).slice(0, 1200)}`);
+      this.logger.warn(
+        `wecom sendTemplateCard no chatId channelId=${channelId} card=${JSON.stringify(card).slice(0, 1200)}`,
+      );
       return false;
     }
     const cardObj: any = card as any;
     if (!cardObj || typeof cardObj !== 'object' || !cardObj.card_type) {
-      this.logger.warn(`wecom sendTemplateCard invalid card missing card_type channelId=${channelId} chatId=${chatId} card=${JSON.stringify(card).slice(0, 1200)}`);
+      this.logger.warn(
+        `wecom sendTemplateCard invalid card missing card_type channelId=${channelId} chatId=${chatId} card=${JSON.stringify(card).slice(0, 1200)}`,
+      );
       return false;
     }
     if ('card_style' in cardObj) delete cardObj.card_style;
-    if (!cardObj.source || typeof cardObj.source !== 'object') cardObj.source = { desc: 'vteam', desc_color: 0 };
-    else if (typeof (cardObj.source as any).desc_color !== 'undefined' && ![0, 1, 2, 3].includes((cardObj.source as any).desc_color)) (cardObj.source as any).desc_color = 0;
+    if (!cardObj.source || typeof cardObj.source !== 'object')
+      cardObj.source = { desc: 'vteam', desc_color: 0 };
+    else if (
+      typeof (cardObj.source as any).desc_color !== 'undefined' &&
+      ![0, 1, 2, 3].includes((cardObj.source as any).desc_color)
+    )
+      (cardObj.source as any).desc_color = 0;
     const _placeholder = 'https://work.weixin.qq.com';
-    const _isNoticeSend = cardObj.card_type === 'text_notice' || cardObj.card_type === 'news_notice';
-    const _isInteractiveSend = ['button_interaction', 'vote_interaction', 'multiple_interaction'].includes(cardObj.card_type);
+    const _isNoticeSend =
+      cardObj.card_type === 'text_notice' ||
+      cardObj.card_type === 'news_notice';
+    const _isInteractiveSend = [
+      'button_interaction',
+      'vote_interaction',
+      'multiple_interaction',
+    ].includes(cardObj.card_type);
     if (_isNoticeSend) {
       const ca: any = cardObj.card_action;
-      const ok1 = ca && typeof ca === 'object' && ca.type === 1 && ca.url && String(ca.url).trim();
-      const ok2 = ca && typeof ca === 'object' && ca.type === 2 && ca.appid && String(ca.appid).trim();
+      const ok1 =
+        ca &&
+        typeof ca === 'object' &&
+        ca.type === 1 &&
+        ca.url &&
+        String(ca.url).trim();
+      const ok2 =
+        ca &&
+        typeof ca === 'object' &&
+        ca.type === 2 &&
+        ca.appid &&
+        String(ca.appid).trim();
       if (!ok1 && !ok2) cardObj.card_action = { type: 1, url: _placeholder };
       else if (ca.type === 1 && !ca.url) ca.url = _placeholder;
     } else if (_isInteractiveSend) {
       if (cardObj.card_action && typeof cardObj.card_action === 'object') {
         const ca: any = cardObj.card_action;
         if (![0, 1, 2].includes(ca.type)) delete cardObj.card_action;
-        else if (ca.type === 1 && (!ca.url || !String(ca.url).trim())) ca.url = _placeholder;
-        else if (ca.type === 2 && (!ca.appid || !String(ca.appid).trim())) delete cardObj.card_action;
+        else if (ca.type === 1 && (!ca.url || !String(ca.url).trim()))
+          ca.url = _placeholder;
+        else if (ca.type === 2 && (!ca.appid || !String(ca.appid).trim()))
+          delete cardObj.card_action;
       }
     } else {
       if (cardObj.card_action && typeof cardObj.card_action === 'object') {
@@ -1429,11 +1705,25 @@ export class WecomAibotAdapter extends MessageAdapter {
       for (let i = 0; i < cardObj.button_list.length; i++) {
         const btn: any = cardObj.button_list[i];
         if (!btn || typeof btn !== 'object') continue;
-        if (!btn.key || !String(btn.key).trim()) btn.key = `btn_${i}_${Date.now()}`.slice(0, 1024);
-        if (typeof btn.style !== 'undefined' && ![1, 2, 3, 4].includes(btn.style)) btn.style = 1;
-        if (btn.type === 1 && (!btn.url || !String(btn.url).trim())) btn.url = _placeholder;
-        if (typeof btn.type !== 'undefined' && ![0, 1, 2].includes(btn.type)) { delete btn.type; if (btn.url) delete btn.url; if (btn.appid) delete btn.appid; }
-        if (btn.type === 2 && (!btn.appid || !String(btn.appid).trim())) { delete btn.type; delete btn.appid; if (btn.pagepath) delete btn.pagepath; }
+        if (!btn.key || !String(btn.key).trim())
+          btn.key = `btn_${i}_${Date.now()}`.slice(0, 1024);
+        if (
+          typeof btn.style !== 'undefined' &&
+          ![1, 2, 3, 4].includes(btn.style)
+        )
+          btn.style = 1;
+        if (btn.type === 1 && (!btn.url || !String(btn.url).trim()))
+          btn.url = _placeholder;
+        if (typeof btn.type !== 'undefined' && ![0, 1, 2].includes(btn.type)) {
+          delete btn.type;
+          if (btn.url) delete btn.url;
+          if (btn.appid) delete btn.appid;
+        }
+        if (btn.type === 2 && (!btn.appid || !String(btn.appid).trim())) {
+          delete btn.type;
+          delete btn.appid;
+          if (btn.pagepath) delete btn.pagepath;
+        }
       }
     }
     if (cardObj.card_type === 'news_notice') {
@@ -1443,24 +1733,53 @@ export class WecomAibotAdapter extends MessageAdapter {
       } else if (!/^https?:\/\//.test(String(ci.url).trim())) {
         ci.url = _placeholder;
       }
-      if (!cardObj.image_text_area || typeof cardObj.image_text_area !== 'object') {
+      if (
+        !cardObj.image_text_area ||
+        typeof cardObj.image_text_area !== 'object'
+      ) {
         const t = (cardObj.main_title as any)?.title ?? '图文消息';
         const d = (cardObj.main_title as any)?.desc ?? '';
-        cardObj.image_text_area = { type: 1, title: String(t).slice(0, 64), desc: String(d).slice(0, 512), url: _placeholder, image_url: _placeholder };
+        cardObj.image_text_area = {
+          type: 1,
+          title: String(t).slice(0, 64),
+          desc: String(d).slice(0, 512),
+          url: _placeholder,
+          image_url: _placeholder,
+        };
       }
     }
     if (cardObj.card_type === 'vote_interaction') {
       const cb: any = cardObj.checkbox;
       let optionList: any[] | null = null;
-      if (cb && typeof cb === 'object' && Array.isArray(cb.option_list) && cb.option_list.length > 0) optionList = cb.option_list;
+      if (
+        cb &&
+        typeof cb === 'object' &&
+        Array.isArray(cb.option_list) &&
+        cb.option_list.length > 0
+      )
+        optionList = cb.option_list;
       if (!optionList || optionList.length === 0) {
-        const raw: any = (cardObj as any).vote_list ?? (cardObj as any).option_list ?? (cardObj as any).options ?? (cardObj as any).select_list?.option_list ?? (cardObj as any).select_list;
+        const raw: any =
+          (cardObj as any).vote_list ??
+          (cardObj as any).option_list ??
+          (cardObj as any).options ??
+          (cardObj as any).select_list?.option_list ??
+          (cardObj as any).select_list;
         if (Array.isArray(raw) && raw.length > 0) optionList = raw;
-        else if (raw && typeof raw === 'object' && Array.isArray((raw as any).option_list)) optionList = (raw as any).option_list;
+        else if (
+          raw &&
+          typeof raw === 'object' &&
+          Array.isArray((raw as any).option_list)
+        )
+          optionList = (raw as any).option_list;
       }
       if (optionList && optionList.length > 0) {
         const seen = new Set<string>();
-        const qkRaw = cb?.question_key ?? (cardObj as any).vote_title ?? cardObj.main_title?.title ?? String(cardObj.task_id ?? 'q');
+        const qkRaw =
+          cb?.question_key ??
+          (cardObj as any).vote_title ??
+          cardObj.main_title?.title ??
+          String(cardObj.task_id ?? 'q');
         const qk = String(qkRaw).slice(0, 1024) || 'q';
         const titleRaw = (cardObj as any).vote_title ?? cb?.title ?? '';
         const mapped = optionList.slice(0, 20).map((o: any, idx: number) => {
@@ -1486,27 +1805,56 @@ export class WecomAibotAdapter extends MessageAdapter {
           const id = `${qk}:${text}_${idx}`.slice(0, 128);
           mapped.push({ id, text });
         }
-        cardObj.checkbox = { question_key: qk, title: String(titleRaw).slice(0, 64) || undefined, option_list: mapped, mode: typeof cb?.mode === 'number' ? cb.mode : 0 };
+        cardObj.checkbox = {
+          question_key: qk,
+          title: String(titleRaw).slice(0, 64) || undefined,
+          option_list: mapped,
+          mode: typeof cb?.mode === 'number' ? cb.mode : 0,
+        };
         if (!cardObj.checkbox.title) delete cardObj.checkbox.title;
         if ('vote_list' in cardObj) delete (cardObj as any).vote_list;
         if ('vote_title' in cardObj) delete (cardObj as any).vote_title;
         if ('select_list' in cardObj) delete (cardObj as any).select_list;
-        if (!cardObj.submit_button || typeof cardObj.submit_button !== 'object') {
-          cardObj.submit_button = { text: '提交', key: `${qk}:submit`.slice(0, 1024) };
+        if (
+          !cardObj.submit_button ||
+          typeof cardObj.submit_button !== 'object'
+        ) {
+          cardObj.submit_button = {
+            text: '提交',
+            key: `${qk}:submit`.slice(0, 1024),
+          };
         } else {
-          if (!(cardObj.submit_button as any).key) (cardObj.submit_button as any).key = `${qk}:submit`.slice(0, 1024);
-          if (!(cardObj.submit_button as any).text) (cardObj.submit_button as any).text = '提交';
+          if (!(cardObj.submit_button as any).key)
+            (cardObj.submit_button as any).key = `${qk}:submit`.slice(0, 1024);
+          if (!(cardObj.submit_button as any).text)
+            (cardObj.submit_button as any).text = '提交';
         }
-      } else if (!cb || !Array.isArray(cb.option_list) || cb.option_list.length < 2) {
-        const qk = String((cardObj as any).vote_title ?? cardObj.main_title?.title ?? String(cardObj.task_id ?? 'q')).slice(0, 1024);
-        const mapped = [{ id: `${qk}:选项1`.slice(0, 128), text: '选项1' }, { id: `${qk}:选项2`.slice(0, 128), text: '选项2' }];
+      } else if (
+        !cb ||
+        !Array.isArray(cb.option_list) ||
+        cb.option_list.length < 2
+      ) {
+        const qk = String(
+          (cardObj as any).vote_title ??
+            cardObj.main_title?.title ??
+            String(cardObj.task_id ?? 'q'),
+        ).slice(0, 1024);
+        const mapped = [
+          { id: `${qk}:选项1`.slice(0, 128), text: '选项1' },
+          { id: `${qk}:选项2`.slice(0, 128), text: '选项2' },
+        ];
         cardObj.checkbox = { question_key: qk, option_list: mapped, mode: 0 };
-        cardObj.submit_button = { text: '提交', key: `${qk}:submit`.slice(0, 1024) };
+        cardObj.submit_button = {
+          text: '提交',
+          key: `${qk}:submit`.slice(0, 1024),
+        };
         if ('vote_list' in cardObj) delete (cardObj as any).vote_list;
         if ('vote_title' in cardObj) delete (cardObj as any).vote_title;
       }
     }
-    this.logger.log(`wecom sendTemplateCard try channelId=${channelId} chatId=${chatId} card_type=${cardObj.card_type} task_id=${cardObj.task_id ?? ''} card=${JSON.stringify(cardObj).slice(0, 2000)}`);
+    this.logger.log(
+      `wecom sendTemplateCard try channelId=${channelId} chatId=${chatId} card_type=${cardObj.card_type} task_id=${cardObj.task_id ?? ''} card=${JSON.stringify(cardObj).slice(0, 2000)}`,
+    );
     try {
       const res: any = await client.sendMessage(chatId, {
         msgtype: 'template_card',
@@ -1514,60 +1862,107 @@ export class WecomAibotAdapter extends MessageAdapter {
       } as unknown as Parameters<WSClient['sendMessage']>[1]);
       const rc = res?.errcode ?? res?.errCode;
       if (typeof rc !== 'undefined' && rc !== 0) {
-        this.logger.warn(`wecom sendTemplateCard non-zero errcode channelId=${channelId} chatId=${chatId} card_type=${cardObj.card_type} res=${JSON.stringify(res).slice(0, 1200)}`);
+        this.logger.warn(
+          `wecom sendTemplateCard non-zero errcode channelId=${channelId} chatId=${chatId} card_type=${cardObj.card_type} res=${JSON.stringify(res).slice(0, 1200)}`,
+        );
         return false;
       }
-      this.logger.log(`wecom sendTemplateCard ok channelId=${channelId} chatId=${chatId} card_type=${cardObj.card_type} res=${JSON.stringify(res ?? {}).slice(0, 500)}`);
+      this.logger.log(
+        `wecom sendTemplateCard ok channelId=${channelId} chatId=${chatId} card_type=${cardObj.card_type} res=${JSON.stringify(res ?? {}).slice(0, 500)}`,
+      );
       return true;
     } catch (e) {
       const ee: any = e as any;
-      const detail = ee?.errcode ?? ee?.errCode ?? ee?.errmsg ?? ee?.message ?? String(e);
-      const raw = (() => { try { return JSON.stringify(e).slice(0, 1200); } catch { return String(e).slice(0, 800); } })();
-      this.logger.error(`wecom sendTemplateCard failed channelId=${channelId} chatId=${chatId} card_type=${(card as any)?.card_type ?? 'unknown'} card=${JSON.stringify(cardObj).slice(0, 1200)} err=${detail} raw=${raw} stack=${(e as Error).stack?.slice(0, 800) ?? ''}`);
+      const detail =
+        ee?.errcode ?? ee?.errCode ?? ee?.errmsg ?? ee?.message ?? String(e);
+      const raw = (() => {
+        try {
+          return JSON.stringify(e).slice(0, 1200);
+        } catch {
+          return String(e).slice(0, 800);
+        }
+      })();
+      this.logger.error(
+        `wecom sendTemplateCard failed channelId=${channelId} chatId=${chatId} card_type=${(card as any)?.card_type ?? 'unknown'} card=${JSON.stringify(cardObj).slice(0, 1200)} err=${detail} raw=${raw} stack=${(e as Error).stack?.slice(0, 800) ?? ''}`,
+      );
       return false;
     }
   }
 
-  async replyTemplateCard(internalMessageId: string, card: unknown): Promise<boolean> {
+  async replyTemplateCard(
+    internalMessageId: string,
+    card: unknown,
+  ): Promise<boolean> {
     const ref = this.streams.get(internalMessageId);
     if (!ref) {
-      this.logger.warn(`wecom replyTemplateCard miss no stream internalMessageId=${internalMessageId} card=${JSON.stringify(card).slice(0, 800)}`);
+      this.logger.warn(
+        `wecom replyTemplateCard miss no stream internalMessageId=${internalMessageId} card=${JSON.stringify(card).slice(0, 800)}`,
+      );
       return false;
     }
     if (ref.spinnerTimer) {
-      try { clearInterval(ref.spinnerTimer); } catch {}
+      try {
+        clearInterval(ref.spinnerTimer);
+      } catch {}
       ref.spinnerTimer = null;
     }
     const client = this.clients.get(ref.channelId);
     if (!client) {
-      this.logger.warn(`wecom replyTemplateCard no client channelId=${ref.channelId} internalMessageId=${internalMessageId}`);
+      this.logger.warn(
+        `wecom replyTemplateCard no client channelId=${ref.channelId} internalMessageId=${internalMessageId}`,
+      );
       this.streams.delete(internalMessageId);
       return false;
     }
     const cardObj: any = card as any;
     if (!cardObj || typeof cardObj !== 'object' || !cardObj.card_type) {
-      this.logger.warn(`wecom replyTemplateCard invalid card missing card_type internalMessageId=${internalMessageId} card=${JSON.stringify(card).slice(0, 1200)}`);
+      this.logger.warn(
+        `wecom replyTemplateCard invalid card missing card_type internalMessageId=${internalMessageId} card=${JSON.stringify(card).slice(0, 1200)}`,
+      );
       this.streams.delete(internalMessageId);
       return false;
     }
     if ('card_style' in cardObj) delete cardObj.card_style;
-    if (!cardObj.source || typeof cardObj.source !== 'object') cardObj.source = { desc: 'vteam', desc_color: 0 };
-    else if (typeof (cardObj.source as any).desc_color !== 'undefined' && ![0, 1, 2, 3].includes((cardObj.source as any).desc_color)) (cardObj.source as any).desc_color = 0;
+    if (!cardObj.source || typeof cardObj.source !== 'object')
+      cardObj.source = { desc: 'vteam', desc_color: 0 };
+    else if (
+      typeof (cardObj.source as any).desc_color !== 'undefined' &&
+      ![0, 1, 2, 3].includes((cardObj.source as any).desc_color)
+    )
+      (cardObj.source as any).desc_color = 0;
     const _ph2 = 'https://work.weixin.qq.com';
-    const _isNoticeReply = cardObj.card_type === 'text_notice' || cardObj.card_type === 'news_notice';
-    const _isInteractiveReply = ['button_interaction', 'vote_interaction', 'multiple_interaction'].includes(cardObj.card_type);
+    const _isNoticeReply =
+      cardObj.card_type === 'text_notice' ||
+      cardObj.card_type === 'news_notice';
+    const _isInteractiveReply = [
+      'button_interaction',
+      'vote_interaction',
+      'multiple_interaction',
+    ].includes(cardObj.card_type);
     if (_isNoticeReply) {
       const ca: any = cardObj.card_action;
-      const ok1 = ca && typeof ca === 'object' && ca.type === 1 && ca.url && String(ca.url).trim();
-      const ok2 = ca && typeof ca === 'object' && ca.type === 2 && ca.appid && String(ca.appid).trim();
+      const ok1 =
+        ca &&
+        typeof ca === 'object' &&
+        ca.type === 1 &&
+        ca.url &&
+        String(ca.url).trim();
+      const ok2 =
+        ca &&
+        typeof ca === 'object' &&
+        ca.type === 2 &&
+        ca.appid &&
+        String(ca.appid).trim();
       if (!ok1 && !ok2) cardObj.card_action = { type: 1, url: _ph2 };
       else if (ca.type === 1 && !ca.url) ca.url = _ph2;
     } else if (_isInteractiveReply) {
       if (cardObj.card_action && typeof cardObj.card_action === 'object') {
         const ca: any = cardObj.card_action;
         if (![0, 1, 2].includes(ca.type)) delete cardObj.card_action;
-        else if (ca.type === 1 && (!ca.url || !String(ca.url).trim())) ca.url = _ph2;
-        else if (ca.type === 2 && (!ca.appid || !String(ca.appid).trim())) delete cardObj.card_action;
+        else if (ca.type === 1 && (!ca.url || !String(ca.url).trim()))
+          ca.url = _ph2;
+        else if (ca.type === 2 && (!ca.appid || !String(ca.appid).trim()))
+          delete cardObj.card_action;
       }
     } else {
       if (cardObj.card_action && typeof cardObj.card_action === 'object') {
@@ -1581,11 +1976,25 @@ export class WecomAibotAdapter extends MessageAdapter {
       for (let i = 0; i < cardObj.button_list.length; i++) {
         const btn: any = cardObj.button_list[i];
         if (!btn || typeof btn !== 'object') continue;
-        if (!btn.key || !String(btn.key).trim()) btn.key = `btn_${i}_${Date.now()}`.slice(0, 1024);
-        if (typeof btn.style !== 'undefined' && ![1, 2, 3, 4].includes(btn.style)) btn.style = 1;
-        if (btn.type === 1 && (!btn.url || !String(btn.url).trim())) btn.url = _ph2;
-        if (typeof btn.type !== 'undefined' && ![0, 1, 2].includes(btn.type)) { delete btn.type; if (btn.url) delete btn.url; if (btn.appid) delete btn.appid; }
-        if (btn.type === 2 && (!btn.appid || !String(btn.appid).trim())) { delete btn.type; delete btn.appid; if (btn.pagepath) delete btn.pagepath; }
+        if (!btn.key || !String(btn.key).trim())
+          btn.key = `btn_${i}_${Date.now()}`.slice(0, 1024);
+        if (
+          typeof btn.style !== 'undefined' &&
+          ![1, 2, 3, 4].includes(btn.style)
+        )
+          btn.style = 1;
+        if (btn.type === 1 && (!btn.url || !String(btn.url).trim()))
+          btn.url = _ph2;
+        if (typeof btn.type !== 'undefined' && ![0, 1, 2].includes(btn.type)) {
+          delete btn.type;
+          if (btn.url) delete btn.url;
+          if (btn.appid) delete btn.appid;
+        }
+        if (btn.type === 2 && (!btn.appid || !String(btn.appid).trim())) {
+          delete btn.type;
+          delete btn.appid;
+          if (btn.pagepath) delete btn.pagepath;
+        }
       }
     }
     if (cardObj.card_type === 'news_notice') {
@@ -1595,24 +2004,53 @@ export class WecomAibotAdapter extends MessageAdapter {
       } else if (!/^https?:\/\//.test(String(ci.url).trim())) {
         ci.url = _ph2;
       }
-      if (!cardObj.image_text_area || typeof cardObj.image_text_area !== 'object') {
+      if (
+        !cardObj.image_text_area ||
+        typeof cardObj.image_text_area !== 'object'
+      ) {
         const t = (cardObj.main_title as any)?.title ?? '图文消息';
         const d = (cardObj.main_title as any)?.desc ?? '';
-        cardObj.image_text_area = { type: 1, title: String(t).slice(0, 64), desc: String(d).slice(0, 512), url: _ph2, image_url: _ph2 };
+        cardObj.image_text_area = {
+          type: 1,
+          title: String(t).slice(0, 64),
+          desc: String(d).slice(0, 512),
+          url: _ph2,
+          image_url: _ph2,
+        };
       }
     }
     if (cardObj.card_type === 'vote_interaction') {
       const cb: any = cardObj.checkbox;
       let optionList: any[] | null = null;
-      if (cb && typeof cb === 'object' && Array.isArray(cb.option_list) && cb.option_list.length > 0) optionList = cb.option_list;
+      if (
+        cb &&
+        typeof cb === 'object' &&
+        Array.isArray(cb.option_list) &&
+        cb.option_list.length > 0
+      )
+        optionList = cb.option_list;
       if (!optionList || optionList.length === 0) {
-        const raw: any = (cardObj as any).vote_list ?? (cardObj as any).option_list ?? (cardObj as any).options ?? (cardObj as any).select_list?.option_list ?? (cardObj as any).select_list;
+        const raw: any =
+          (cardObj as any).vote_list ??
+          (cardObj as any).option_list ??
+          (cardObj as any).options ??
+          (cardObj as any).select_list?.option_list ??
+          (cardObj as any).select_list;
         if (Array.isArray(raw) && raw.length > 0) optionList = raw;
-        else if (raw && typeof raw === 'object' && Array.isArray((raw as any).option_list)) optionList = (raw as any).option_list;
+        else if (
+          raw &&
+          typeof raw === 'object' &&
+          Array.isArray((raw as any).option_list)
+        )
+          optionList = (raw as any).option_list;
       }
       if (optionList && optionList.length > 0) {
         const seen = new Set<string>();
-        const qkRaw = cb?.question_key ?? (cardObj as any).vote_title ?? cardObj.main_title?.title ?? String(cardObj.task_id ?? 'q');
+        const qkRaw =
+          cb?.question_key ??
+          (cardObj as any).vote_title ??
+          cardObj.main_title?.title ??
+          String(cardObj.task_id ?? 'q');
         const qk = String(qkRaw).slice(0, 1024) || 'q';
         const titleRaw = (cardObj as any).vote_title ?? cb?.title ?? '';
         const mapped = optionList.slice(0, 20).map((o: any, idx: number) => {
@@ -1638,96 +2076,177 @@ export class WecomAibotAdapter extends MessageAdapter {
           const id = `${qk}:${text}_${idx}`.slice(0, 128);
           mapped.push({ id, text });
         }
-        cardObj.checkbox = { question_key: qk, title: String(titleRaw).slice(0, 64) || undefined, option_list: mapped, mode: typeof cb?.mode === 'number' ? cb.mode : 0 };
+        cardObj.checkbox = {
+          question_key: qk,
+          title: String(titleRaw).slice(0, 64) || undefined,
+          option_list: mapped,
+          mode: typeof cb?.mode === 'number' ? cb.mode : 0,
+        };
         if (!cardObj.checkbox.title) delete cardObj.checkbox.title;
         if ('vote_list' in cardObj) delete (cardObj as any).vote_list;
         if ('vote_title' in cardObj) delete (cardObj as any).vote_title;
         if ('select_list' in cardObj) delete (cardObj as any).select_list;
-        if (!cardObj.submit_button || typeof cardObj.submit_button !== 'object') {
-          cardObj.submit_button = { text: '提交', key: `${qk}:submit`.slice(0, 1024) };
+        if (
+          !cardObj.submit_button ||
+          typeof cardObj.submit_button !== 'object'
+        ) {
+          cardObj.submit_button = {
+            text: '提交',
+            key: `${qk}:submit`.slice(0, 1024),
+          };
         } else {
-          if (!(cardObj.submit_button as any).key) (cardObj.submit_button as any).key = `${qk}:submit`.slice(0, 1024);
-          if (!(cardObj.submit_button as any).text) (cardObj.submit_button as any).text = '提交';
+          if (!(cardObj.submit_button as any).key)
+            (cardObj.submit_button as any).key = `${qk}:submit`.slice(0, 1024);
+          if (!(cardObj.submit_button as any).text)
+            (cardObj.submit_button as any).text = '提交';
         }
-      } else if (!cb || !Array.isArray(cb.option_list) || cb.option_list.length < 2) {
-        const qk = String((cardObj as any).vote_title ?? cardObj.main_title?.title ?? String(cardObj.task_id ?? 'q')).slice(0, 1024);
-        const mapped = [{ id: `${qk}:选项1`.slice(0, 128), text: '选项1' }, { id: `${qk}:选项2`.slice(0, 128), text: '选项2' }];
+      } else if (
+        !cb ||
+        !Array.isArray(cb.option_list) ||
+        cb.option_list.length < 2
+      ) {
+        const qk = String(
+          (cardObj as any).vote_title ??
+            cardObj.main_title?.title ??
+            String(cardObj.task_id ?? 'q'),
+        ).slice(0, 1024);
+        const mapped = [
+          { id: `${qk}:选项1`.slice(0, 128), text: '选项1' },
+          { id: `${qk}:选项2`.slice(0, 128), text: '选项2' },
+        ];
         cardObj.checkbox = { question_key: qk, option_list: mapped, mode: 0 };
-        cardObj.submit_button = { text: '提交', key: `${qk}:submit`.slice(0, 1024) };
+        cardObj.submit_button = {
+          text: '提交',
+          key: `${qk}:submit`.slice(0, 1024),
+        };
         if ('vote_list' in cardObj) delete (cardObj as any).vote_list;
         if ('vote_title' in cardObj) delete (cardObj as any).vote_title;
       }
     }
-    this.logger.log(`wecom replyTemplateCard try internalMessageId=${internalMessageId} channelId=${ref.channelId} stream=${ref.streamId} card_type=${cardObj.card_type} task_id=${cardObj.task_id ?? ''} card=${JSON.stringify(cardObj).slice(0, 2000)}`);
+    this.logger.log(
+      `wecom replyTemplateCard try internalMessageId=${internalMessageId} channelId=${ref.channelId} stream=${ref.streamId} card_type=${cardObj.card_type} task_id=${cardObj.task_id ?? ''} card=${JSON.stringify(cardObj).slice(0, 2000)}`,
+    );
     try {
       const headersPayload =
-        ref.frameHeaders && typeof ref.frameHeaders === 'object' && 'req_id' in (ref.frameHeaders as Record<string, unknown>)
+        ref.frameHeaders &&
+        typeof ref.frameHeaders === 'object' &&
+        'req_id' in (ref.frameHeaders as Record<string, unknown>)
           ? { headers: ref.frameHeaders as unknown as { req_id: string } }
-          : ref.frameHeaders && typeof ref.frameHeaders === 'object' && 'headers' in (ref.frameHeaders as Record<string, unknown>)
+          : ref.frameHeaders &&
+              typeof ref.frameHeaders === 'object' &&
+              'headers' in (ref.frameHeaders as Record<string, unknown>)
             ? (ref.frameHeaders as unknown as { headers: { req_id: string } })
-            : ({ headers: ref.frameHeaders } as unknown as { headers: { req_id: string } });
-      const res: any = await (client as unknown as { replyTemplateCard: (f: unknown, c: unknown) => Promise<unknown> }).replyTemplateCard(headersPayload, cardObj as any);
+            : ({ headers: ref.frameHeaders } as unknown as {
+                headers: { req_id: string };
+              });
+      const res: any = await (
+        client as unknown as {
+          replyTemplateCard: (f: unknown, c: unknown) => Promise<unknown>;
+        }
+      ).replyTemplateCard(headersPayload, cardObj as any);
       const rc = res?.errcode ?? res?.errCode;
       if (typeof rc !== 'undefined' && rc !== 0) {
-        this.logger.warn(`wecom replyTemplateCard non-zero errcode internalMessageId=${internalMessageId} card_type=${cardObj.card_type} res=${JSON.stringify(res).slice(0, 1200)}`);
+        this.logger.warn(
+          `wecom replyTemplateCard non-zero errcode internalMessageId=${internalMessageId} card_type=${cardObj.card_type} res=${JSON.stringify(res).slice(0, 1200)}`,
+        );
         this.streams.delete(internalMessageId);
         return false;
       }
-      this.logger.log(`wecom replyTemplateCard ok internalMessageId=${internalMessageId} stream=${ref.streamId} card_type=${cardObj.card_type} res=${JSON.stringify(res ?? {}).slice(0, 500)}`);
+      this.logger.log(
+        `wecom replyTemplateCard ok internalMessageId=${internalMessageId} stream=${ref.streamId} card_type=${cardObj.card_type} res=${JSON.stringify(res ?? {}).slice(0, 500)}`,
+      );
       this.streams.delete(internalMessageId);
       return true;
     } catch (e) {
       const ee: any = e as any;
-      const detail = ee?.errcode ?? ee?.errCode ?? ee?.errmsg ?? ee?.message ?? String(e);
-      const raw = (() => { try { return JSON.stringify(e).slice(0, 1200); } catch { return String(e).slice(0, 800); } })();
-      this.logger.warn(`wecom replyTemplateCard failed internalMessageId=${internalMessageId} stream=${ref.streamId} card_type=${cardObj.card_type} card=${JSON.stringify(cardObj).slice(0, 1200)} err=${detail} raw=${raw} stack=${(e as Error).stack?.slice(0, 600) ?? ''}`);
+      const detail =
+        ee?.errcode ?? ee?.errCode ?? ee?.errmsg ?? ee?.message ?? String(e);
+      const raw = (() => {
+        try {
+          return JSON.stringify(e).slice(0, 1200);
+        } catch {
+          return String(e).slice(0, 800);
+        }
+      })();
+      this.logger.warn(
+        `wecom replyTemplateCard failed internalMessageId=${internalMessageId} stream=${ref.streamId} card_type=${cardObj.card_type} card=${JSON.stringify(cardObj).slice(0, 1200)} err=${detail} raw=${raw} stack=${(e as Error).stack?.slice(0, 600) ?? ''}`,
+      );
       this.streams.delete(internalMessageId);
       return false;
     }
   }
 
-  async uploadMediaBuffer(buffer: Buffer, mediaType: 'image' | 'file' | 'voice' | 'video', filename: string): Promise<string | null> {
+  async uploadMediaBuffer(
+    buffer: Buffer,
+    mediaType: 'image' | 'file' | 'voice' | 'video',
+    filename: string,
+  ): Promise<string | null> {
     const client = this.clients.values().next().value as WSClient | undefined;
     if (!client) {
       this.logger.warn('wecom uploadMediaBuffer no client available');
       return null;
     }
     try {
-      const res: any = await client.uploadMedia(buffer, { type: mediaType, filename });
-      this.logger.log(`wecom uploadMedia ok type=${mediaType} filename=${filename} media_id=${res?.media_id}`);
+      const res: any = await client.uploadMedia(buffer, {
+        type: mediaType,
+        filename,
+      });
+      this.logger.log(
+        `wecom uploadMedia ok type=${mediaType} filename=${filename} media_id=${res?.media_id}`,
+      );
       return res?.media_id ?? null;
     } catch (e) {
-      this.logger.error(`wecom uploadMedia failed type=${mediaType} filename=${filename}: ${(e as Error).message}`);
+      this.logger.error(
+        `wecom uploadMedia failed type=${mediaType} filename=${filename}: ${(e as Error).message}`,
+      );
       return null;
     }
   }
 
-  async sendMediaMessage(channelId: string, mediaType: 'image' | 'file' | 'voice' | 'video', mediaId: string): Promise<boolean> {
+  async sendMediaMessage(
+    channelId: string,
+    mediaType: 'image' | 'file' | 'voice' | 'video',
+    mediaId: string,
+  ): Promise<boolean> {
     const client = this.clients.get(channelId);
     if (!client) {
-      this.logger.warn(`wecom sendMediaMessage no client channelId=${channelId}`);
+      this.logger.warn(
+        `wecom sendMediaMessage no client channelId=${channelId}`,
+      );
       return false;
     }
     const chatId = await this.resolveChatId(channelId);
     if (!chatId) {
-      this.logger.warn(`wecom sendMediaMessage no chatId channelId=${channelId}`);
+      this.logger.warn(
+        `wecom sendMediaMessage no chatId channelId=${channelId}`,
+      );
       return false;
     }
     try {
       await client.sendMediaMessage(chatId, mediaType as any, mediaId);
-      this.logger.log(`wecom sendMediaMessage ok channelId=${channelId} chatId=${chatId} type=${mediaType} mediaId=${mediaId}`);
+      this.logger.log(
+        `wecom sendMediaMessage ok channelId=${channelId} chatId=${chatId} type=${mediaType} mediaId=${mediaId}`,
+      );
       return true;
     } catch (e) {
-      this.logger.error(`wecom sendMediaMessage failed channelId=${channelId}: ${(e as Error).message}`);
+      this.logger.error(
+        `wecom sendMediaMessage failed channelId=${channelId}: ${(e as Error).message}`,
+      );
       return false;
     }
   }
 
-  async replyMedia(internalMessageId: string, mediaType: 'image' | 'file' | 'voice' | 'video', mediaId: string): Promise<boolean> {
+  async replyMedia(
+    internalMessageId: string,
+    mediaType: 'image' | 'file' | 'voice' | 'video',
+    mediaId: string,
+  ): Promise<boolean> {
     const ref = this.streams.get(internalMessageId);
     if (!ref) return false;
     if (ref.spinnerTimer) {
-      try { clearInterval(ref.spinnerTimer); } catch {}
+      try {
+        clearInterval(ref.spinnerTimer);
+      } catch {}
       ref.spinnerTimer = null;
     }
     const client = this.clients.get(ref.channelId);
@@ -1737,17 +2256,31 @@ export class WecomAibotAdapter extends MessageAdapter {
     }
     try {
       const headersPayload =
-        ref.frameHeaders && typeof ref.frameHeaders === 'object' && 'req_id' in (ref.frameHeaders as Record<string, unknown>)
+        ref.frameHeaders &&
+        typeof ref.frameHeaders === 'object' &&
+        'req_id' in (ref.frameHeaders as Record<string, unknown>)
           ? { headers: ref.frameHeaders as unknown as { req_id: string } }
-          : ref.frameHeaders && typeof ref.frameHeaders === 'object' && 'headers' in (ref.frameHeaders as Record<string, unknown>)
+          : ref.frameHeaders &&
+              typeof ref.frameHeaders === 'object' &&
+              'headers' in (ref.frameHeaders as Record<string, unknown>)
             ? (ref.frameHeaders as unknown as { headers: { req_id: string } })
-            : ({ headers: ref.frameHeaders } as unknown as { headers: { req_id: string } });
-      await (client as unknown as { replyMedia: (f: unknown, t: string, id: string) => Promise<unknown> }).replyMedia(headersPayload, mediaType, mediaId);
-      this.logger.log(`wecom replyMedia ok internalMessageId=${internalMessageId} type=${mediaType} mediaId=${mediaId}`);
+            : ({ headers: ref.frameHeaders } as unknown as {
+                headers: { req_id: string };
+              });
+      await (
+        client as unknown as {
+          replyMedia: (f: unknown, t: string, id: string) => Promise<unknown>;
+        }
+      ).replyMedia(headersPayload, mediaType, mediaId);
+      this.logger.log(
+        `wecom replyMedia ok internalMessageId=${internalMessageId} type=${mediaType} mediaId=${mediaId}`,
+      );
       this.streams.delete(internalMessageId);
       return true;
     } catch (e) {
-      this.logger.warn(`wecom replyMedia failed internalMessageId=${internalMessageId}: ${(e as Error).message}`);
+      this.logger.warn(
+        `wecom replyMedia failed internalMessageId=${internalMessageId}: ${(e as Error).message}`,
+      );
       this.streams.delete(internalMessageId);
       return false;
     }

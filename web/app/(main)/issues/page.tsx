@@ -6,16 +6,16 @@
  * 任务内 issue 协作管理：列表（任务/状态筛选 + 状态/标签徽章 + 指派 +
  * 任务标题 + 创建者 + 时间）+ 创建/编辑弹窗 + 状态流转按钮组 + 删除确认。
  *
- * - 项目上下文（Metis M1）：仿 board 页 `?pid=` 必填——进入无 pid → 重定向
- *   /projects；任务下拉数据源 GET /projects/:pid/tasks（**不是 GET /tasks**）。
+ * - 团队上下文：仿 board 页 `?teamId=` 必填——进入无 teamId → 重定向
+ *   /teams；任务下拉数据源 GET /tasks?teamId=。
  * - 数据源：
  *   · useQuery(["issues", taskId, status]) → GET /issues?taskId=&status=（选中任务后）
- *   · GET /projects/:pid/tasks → 任务筛选下拉
+ *   · GET /tasks?teamId= → 任务筛选下拉
  *   · GET /tasks/:id → 团队实例（T5 指派下拉按实例：开发者-1/开发者-2 分开，提交 assigneeInstanceId）
  *   · 省略 GET /users 指派用户下拉——users 端点挂 AdminGuard（成员 403），
  *     assigneeUserId 仅经后端 DTO 透传支持，UI 仅保留成员实例指派。
  * - 工具条：任务筛选下拉 + 状态筛选下拉 + 新建按钮（已选任务即显示，
- *   成员可建——issue 是任务内协作，后端经 task.projectId 校验任务成员）。
+ *   成员可建——issue 是任务内协作，后端经 task.teamId 校验任务成员）。
  * - 状态流转：独立 IssueStatusActions（禁止复用 Task 的 start/reject 常量，
  *   Metis m6——两者 action 同名），POST /issues/:id/transition。
  * - 删除：ConfirmDialog → DELETE /issues/:id（软删）。
@@ -661,17 +661,17 @@ export default function IssuesPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
 
-  // 项目上下文：URL ?pid= 必填；无 pid 且已登录 → 重定向 /projects（effect 内读 window）
-  const [pid, setPid] = useState<string | null>(null);
+  // 团队上下文：URL ?teamId= 必填；无 teamId 且已登录 → 重定向 /teams（effect 内读 window）
+  const [teamId, setTeamId] = useState<string | null>(null);
   const [taskId, setTaskId] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<StatusFilterKey>("all");
 
   useEffect(() => {
-    const urlPid = new URLSearchParams(window.location.search).get("pid");
-    if (urlPid) {
-      setPid(urlPid);
+    const urlTeamId = new URLSearchParams(window.location.search).get("teamId");
+    if (urlTeamId) {
+      setTeamId(urlTeamId);
     } else if (user?.id) {
-      router.replace("/projects");
+      router.replace("/teams");
     }
   }, [user, router]);
 
@@ -684,34 +684,34 @@ export default function IssuesPage() {
   // Issue 详情弹窗（is_0000000012：IssueRow 主列点击）
   const [detailIssueId, setDetailIssueId] = useState<string | null>(null);
 
-  // 任务下拉：GET /projects/:pid/tasks
+  // 任务下拉：GET /tasks?teamId=
   const tasksQuery = useQuery({
-    queryKey: ["project-tasks", pid],
+    queryKey: ["team-tasks", teamId],
     queryFn: () =>
-      api.get<TasksResponse>(`/projects/${pid}/tasks`, { query: { page: 1, pageSize: 100 } }),
-    enabled: !!pid,
+      api.get<TasksResponse>("/tasks", { query: { teamId: teamId!, page: 1, pageSize: 100 } }),
+    enabled: !!teamId,
   });
   const tasks: TaskOption[] = (tasksQuery.data?.items ?? []).map((t) => ({ id: t.id, title: t.title }));
 
-  // pid 变化 → 重置任务选中（避免残留上项目任务）
+  // teamId 变化 → 重置任务选中（避免残留上团队任务）
   useEffect(() => {
     setTaskId("");
     setStatusFilter("all");
-  }, [pid]);
+  }, [teamId]);
 
-  // issue 列表：默认「全部任务」→ 按项目过滤（GET /issues?projectId=）；选中具体任务 → 按任务过滤
+  // issue 列表：默认「全部任务」→ 按团队过滤（GET /issues?teamId=）；选中具体任务 → 按任务过滤
   const issuesQuery = useQuery({
-    queryKey: ["issues", taskId, statusFilter, pid],
+    queryKey: ["issues", taskId, statusFilter, teamId],
     queryFn: () =>
       api.get<IssuesResponse>("/issues", {
         query: {
-          ...(taskId ? { taskId } : { projectId: pid ?? undefined }),
+          ...(taskId ? { taskId } : { teamId: teamId ?? undefined }),
           status: statusFilter === "all" ? undefined : statusFilter,
           page: 1,
           pageSize: 100,
         },
       }),
-    enabled: !!pid,
+    enabled: !!teamId,
   });
   const issues = issuesQuery.data?.items ?? [];
 
@@ -804,7 +804,7 @@ export default function IssuesPage() {
         >
           {/* ① 工具条：任务筛选 + 状态筛选 + 新建按钮 */}
           <div data-testid="issues-toolbar" style={{ display: "flex", alignItems: "center", gap: space.md, flexWrap: "wrap" }}>
-            {/* 任务筛选下拉（pid 下任务） */}
+            {/* 任务筛选下拉（teamId 下任务） */}
             <div
               style={{
                 display: "flex",
@@ -911,9 +911,9 @@ export default function IssuesPage() {
             )}
           </div>
 
-          {/* ② 列表区：未选项目引导（pid 缺失通常已重定向 /projects）；默认「全部任务」直接展示列表 */}
-          {!pid ? (
-            /* 未选项目：引导选择（空态） */
+          {/* ② 列表区：未选团队引导（teamId 缺失通常已重定向 /teams）；默认「全部任务」直接展示列表 */}
+          {!teamId ? (
+            /* 未选团队：引导选择（空态） */
             <div
               data-testid="issues-no-task"
               style={{
@@ -930,9 +930,9 @@ export default function IssuesPage() {
               }}
             >
               <span aria-hidden style={{ fontSize: 26, color: neutral[300] }}>☰</span>
-              <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[700] }}>请先选择项目</div>
+              <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[700] }}>请先选择团队</div>
               <div style={{ fontSize: fontSize.md, color: neutral[400] }}>
-                从项目卡片进入 Issue 管理，即可查看与管理该项目所有任务的 issue
+                从团队进入 Issue 管理，即可查看与管理该团队所有任务的 issue
               </div>
             </div>
           ) : issuesQuery.isPending ? (
@@ -1001,7 +1001,7 @@ export default function IssuesPage() {
                   padding: `${space.sm}px ${space.md}px`,
                 }}
               >
-                <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900] }}>{taskId ? "任务 Issue" : "项目 Issue"}</span>
+                <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900] }}>{taskId ? "任务 Issue" : "团队 Issue"}</span>
                 <span
                   style={{
                     fontSize: fontSize.xs,
@@ -1038,7 +1038,7 @@ export default function IssuesPage() {
               {issues.length === 0 && (
                 <EmptyState
                   title="暂无 Issue"
-                  description={taskId ? "该任务还没有 issue，点击「新建 Issue」创建第一条（如需求 / 缺陷）" : "该项目还没有 issue"}
+                  description={taskId ? "该任务还没有 issue，点击「新建 Issue」创建第一条（如需求 / 缺陷）" : "该团队还没有 issue"}
                   icon={<span aria-hidden>☰</span>}
                 />
               )}

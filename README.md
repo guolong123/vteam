@@ -33,7 +33,7 @@ vteam 是任务驱动的多 Agent 虚拟团队协作平台。用户先创建**�
 
 - 平台 MCP Server（`vteam`）：提供 `task_context`、`chat_history`、`doclib`、`group_post`、`notify_agent`、`issue_*`、`submit_artifact` 等工具，Agent 在会话内经 MCP 协议调用
 - Worker 节点：集成 opencode 执行引擎，负责会话创建、执行、事件回流、首字超时、空闲判死，并注入模型凭据
-- 权限矩阵（RBAC）：admin / member 角色 + 项目成员管理
+- 权限矩阵（RBAC）：admin / member 角色 + 团队成员管理
 - 实时事件：SSE 通道推送消息、事件与状态变更
 
 ## 架构
@@ -105,13 +105,13 @@ docker compose up -d --build
 | 账号 | 密码 | 角色 |
 |------|------|------|
 | admin | admin123 | 初始管理员 |
-| seed-admin | Admin@123456 | 种子管理员（项目 owner） |
+| seed-admin | Admin@123456 | 种子管理员 |
 | seed-member | Admin@123456 | 普通成员 |
 
 ### 种子数据
 
 - 5 个模板 Agent：产品经理 / 项目经理 / 架构师 / 开发者 / 测试
-- 2 个种子项目：`p_seed_1`（AI 智能体平台）、`p_seed_2`（文档协作平台）
+- 示例团队 `tm_0000000001`（5 角色各 1 实例）
 - 内置工具 + `vteam` MCP 工具注册、模型目录
 
 ### 本地开发

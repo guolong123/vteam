@@ -54,15 +54,15 @@ describe('MemoriesController', () => {
       service.findAll.mockResolvedValue(result);
 
       const out = await controller.findAll({
-        level: 'task',
-        taskId: 't_1',
+        level: 'team',
+        teamId: 'tm_1',
         page: 1,
         pageSize: 20,
       });
 
       expect(service.findAll).toHaveBeenCalledWith({
-        level: 'task',
-        taskId: 't_1',
+        level: 'team',
+        teamId: 'tm_1',
         page: 1,
         pageSize: 20,
       });

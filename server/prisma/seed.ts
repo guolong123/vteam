@@ -6,13 +6,13 @@ import {
 } from '../src/common/constants/agent.constants';
 
 /**
- * 种子脚本：为前端验收准备基础数据（FR-25 项目列表 / 创建）。
- * 幂等：角色 / 用户 / 项目均按唯一键 upsert。
+ * 种子脚本：为前端验收准备基础数据。
+ * 幂等：角色 / 用户 / 团队均按唯一键 upsert（项目维度已拆除，见 remove-project-dimension Todo 9）。
  *
  * 生成：
  *   - 平台角色：admin / member
- *   - 用户：seed-admin（owner / 已加入项目）、seed-member（未加入任何项目，用于验证成员可见性）
- *   - 项目：2 个，owner = seed-admin，project_members 落 owner 记录
+ *   - 用户：seed-admin（owner）、seed-member（未加入示例团队，用于验证成员可见性）
+ *   - 团队：示例全局团队 tm_0000000001（含 5 角色实例 + owner 行）
  */
 const prisma = new PrismaClient();
 
@@ -39,7 +39,6 @@ async function main() {
     agents: { view: true, create: true, edit: true, delete: false },
     artifacts: { view: true, create: true },
     chats: { view: true, create: true, edit: true, delete: false },
-    projects: { view: true, create: false },
     skills: { view: true, create: false, edit: false },
     tasks: { view: true, create: true, edit: true, review: true, delete: false },
     workers: { view: true, edit: false },
@@ -104,25 +103,6 @@ async function main() {
       enabled: true,
     },
   });
-
-  const projects = [
-    { id: 'p_seed_1', name: 'AI 智能体平台', description: '平台主项目', status: 'active' },
-    { id: 'p_seed_2', name: '文档协作平台', description: '文档与协议设计', status: 'active' },
-  ];
-
-  for (const p of projects) {
-    await prisma.project.upsert({
-      where: { id: p.id },
-      update: {},
-      create: { ...p, ownerId: admin.id },
-    });
-    // owner 也是 member（role=owner）
-    await prisma.projectMember.upsert({
-      where: { projectId_userId: { projectId: p.id, userId: admin.id } },
-      update: {},
-      create: { id: `pm_seed_${p.id}`, projectId: p.id, userId: admin.id, role: 'owner' },
-    });
-  }
 
   // 预置 template 角色 Agent（16 篇 §3~§7 五类角色提示词 + 项目经理新增；role 与前端 task-create data-role 对齐）
   // type=template 只读；permissionScope 按 16 篇 §2.1 默认权限范围最小化。
@@ -519,7 +499,7 @@ async function main() {
     { action: 'issue_transition', name: 'vteam_issue_transition', description: '流转 issue 状态' },
     { action: 'task_transition', name: 'vteam_task_transition', description: '流转任务状态（仅主 Agent）' },
     { action: 'question_confirm', name: 'vteam_question_confirm', description: '托管模式确认成员请求（仅主 Agent）' },
-    { action: 'memory_save', name: 'vteam_memory_save', description: '写入平台记忆（task/project/global 三级）' },
+    { action: 'memory_save', name: 'vteam_memory_save', description: '写入平台记忆（task/team/global 三级）' },
     { action: 'memory_search', name: 'vteam_memory_search', description: '检索平台记忆' },
     { action: 'plan_submit', name: 'vteam_plan_submit', description: '提交执行计划（仅主 Agent）' },
     { action: 'plan_review', name: 'vteam_plan_review', description: '评审执行计划' },
@@ -981,10 +961,22 @@ TSX 源码 (<kebab-name>/index.tsx)
     },
   });
 
+  // 平台初始管理员 admin(u_admin)亦为示例团队 owner，开箱即用可管理演示团队（seed-admin 仍保留 owner）。
+  await prisma.teamUserMember.upsert({
+    where: { teamId_userId: { teamId: seedTeamId, userId: adminUser.id } },
+    update: {},
+    create: {
+      id: 'tum_admin_seed',
+      teamId: seedTeamId,
+      userId: adminUser.id,
+      role: 'owner',
+      joinedAt: new Date(),
+    },
+  });
+
   console.log('Seed 完成：');
   console.log(`  - 角色：${adminRole.name} / ${memberRole.name}`);
   console.log(`  - 用户：admin(u_admin) / seed-admin(${admin.id}) / seed-member(u_seed_member)`);
-  console.log(`  - 项目：${projects.map((p) => p.name).join('、')}（owner=seed-admin）`);
   console.log(`  - 模板 Agent：${templateAgents.map((a) => `${a.name}(${a.role})`).join('、')}（type=template）`);
   console.log(`  - 内置工具：${builtinTools.map((t) => t.action).join('、')}（source=builtin）`);
   console.log(`  - MCP 工具：${vteamTools.map((t) => t.action).join('、')}（source=mcp，mcpServer=vteam）`);

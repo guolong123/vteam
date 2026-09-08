@@ -1,5 +1,3 @@
-import { TEMPLATE_DEFAULT_MODELS } from '../common/constants/agent.constants';
-
 jest.mock('@prisma/client', () => ({
   PrismaClient: jest.fn().mockImplementation(() => mockPrisma),
 }));
@@ -10,8 +8,6 @@ jest.mock('bcrypt', () => ({
 const mockPrisma = {
   role: { upsert: jest.fn().mockResolvedValue({ id: 'r_admin' }) },
   user: { upsert: jest.fn().mockResolvedValue({ id: 'u_admin' }) },
-  project: { upsert: jest.fn().mockResolvedValue({}) },
-  projectMember: { upsert: jest.fn().mockResolvedValue({}) },
   agent: { upsert: jest.fn().mockResolvedValue({}) },
   model: {
     findMany: jest.fn().mockResolvedValue([]),
@@ -20,6 +16,10 @@ const mockPrisma = {
   workerModelAvailability: { deleteMany: jest.fn().mockResolvedValue({}) },
   tool: { upsert: jest.fn().mockResolvedValue({}) },
   mcpServer: { upsert: jest.fn().mockResolvedValue({}) },
+  skill: { upsert: jest.fn().mockResolvedValue({}) },
+  team: { upsert: jest.fn().mockResolvedValue({ id: 'tm_0000000001' }) },
+  teamMember: { upsert: jest.fn().mockResolvedValue({}) },
+  teamUserMember: { upsert: jest.fn().mockResolvedValue({}) },
   $disconnect: jest.fn().mockResolvedValue(undefined),
 };
 
@@ -68,15 +68,15 @@ describe('seed（模板 Agent 预置）', () => {
     }
   });
 
-  it('首次创建模板 Agent 时 create 分支设置 TEMPLATE_DEFAULT_MODELS 默认模型', async () => {
+  it('首次创建模板 Agent 时 create 分支 defaultModelId 为 null（动态模型目录，不再静态预置）', async () => {
     await main();
 
     const templateCalls = mockPrisma.agent.upsert.mock.calls.filter((call) =>
       String(call[0].where.id).startsWith('a_'),
     );
     for (const call of templateCalls) {
-      const id = call[0].where.id as string;
-      expect(call[0].create.defaultModelId).toBe(TEMPLATE_DEFAULT_MODELS[id]);
+      // TEMPLATE_DEFAULT_MODELS 已清空（动态获取）：seed 落 null，模型按 worker 上报动态目录选择
+      expect(call[0].create.defaultModelId).toBeNull();
     }
   });
 
@@ -94,6 +94,20 @@ describe('seed（模板 Agent 预置）', () => {
       // 产品/项目经理本职描述仍保留（四方向结构不回归）
       expect(prompt).toContain('## 职责');
       expect(prompt).toContain('## 协同方式');
+    }
+  });
+
+  it('示例团队同时 upsert seed-admin 与 admin(u_admin) 为 owner（fresh deploy 下 admin 开箱可进群）', async () => {
+    await main();
+
+    const tumCalls = mockPrisma.teamUserMember.upsert.mock.calls;
+    expect(tumCalls).toHaveLength(2);
+    const createIds = tumCalls.map((call) => call[0].create.id).sort();
+    expect(createIds).toEqual(['tum_0000000001', 'tum_admin_seed']);
+    for (const call of tumCalls) {
+      expect(call[0].create.teamId).toBe('tm_0000000001');
+      expect(call[0].create.role).toBe('owner');
+      expect(call[0].update).toEqual({});
     }
   });
 });

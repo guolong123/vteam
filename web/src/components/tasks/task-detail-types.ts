@@ -33,7 +33,6 @@ export interface TaskInstance {
 
 export interface TaskDetail {
   id: string;
-  projectId: string;
   title: string;
   description: string | null;
   priority: string;

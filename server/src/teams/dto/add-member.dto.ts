@@ -6,7 +6,9 @@ export class AddMemberDto {
   @IsString()
   agentId: string;
 
-  @ApiPropertyOptional({ description: '实例别名（缺省 = `<角色中文名>-<seq>`）' })
+  @ApiPropertyOptional({
+    description: '实例别名（缺省 = `<角色中文名>-<seq>`）',
+  })
   @IsOptional()
   @IsString()
   alias?: string;

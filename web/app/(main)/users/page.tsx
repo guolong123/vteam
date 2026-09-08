@@ -21,7 +21,7 @@
  *   user-form-overlay/user-form/username-input/user-email-input/user-password-input/
  *   user-role-select/user-form-cancel/user-form-submit。
  * - 弹层铁律（T15）：absolute + 零 fixed/vh/vw，宿主 position:relative（对齐 projects 页 CreateProjectModal）。
- * - 所属项目数：GET /users 返回 _count.projectMembers 真实计数（MOCK-05，原硬编码 0）。
+ * - 所属团队数：GET /users 返回 _count.teamUserMembers 真实计数（MOCK-05，原硬编码 0）。
  * - 编辑按钮：PATCH /users/:id（UpdateUserDto）→ 编辑弹层预填用户名/邮箱/角色，
  *   保存后列表刷新（ISSUE-002 修复：原为无 onClick 占位）。
  */
@@ -76,7 +76,7 @@ function roleLabel(name: string): string {
 
 /* ------------------------------ API 数据模型（T8 DTO / 09 篇 §3.2） ------------------------------ */
 
-/** GET /users 条目（SAFE_USER_SELECT：不含 passwordHash，含 roleId、enabled 与 _count.projectMembers）。 */
+/** GET /users 条目（SAFE_USER_SELECT：不含 passwordHash，含 roleId、enabled 与 _count.teamUserMembers）。 */
 interface UserItem {
   id: string;
   username: string;
@@ -86,8 +86,8 @@ interface UserItem {
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
-  /** 所属项目数（findAll _count 关联统计，MOCK-05）。可选：findOne 等单用户端点不带。 */
-  _count?: { projectMembers: number };
+  /** 所属团队数（findAll _count 关联统计，MOCK-05）。可选：findOne 等单用户端点不带。 */
+  _count?: { teamUserMembers: number };
 }
 
 /** GET /users 分页响应。 */
@@ -258,10 +258,10 @@ function UserRow({
         </div>
       </div>
 
-      {/* 所属项目数（GET /users _count.projectMembers 真实计数，MOCK-05） */}
+      {/* 所属团队数（GET /users _count.teamUserMembers 真实计数，MOCK-05） */}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[700] }}>{user._count?.projectMembers ?? 0}</div>
-        <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>所属项目</div>
+        <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[700] }}>{user._count?.teamUserMembers ?? 0}</div>
+        <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>所属团队</div>
       </div>
 
       {/* 状态 */}
@@ -565,7 +565,7 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
             )}
           </div>
           <span style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}>
-            管理员可管理账号 / 项目 / 角色模板 / 全局策略；成员在所属项目内协作（02 篇 1.1 / 1.2）
+            管理员可管理账号 / 团队 / 角色模板 / 全局策略；成员在所属团队内协作（02 篇 1.1 / 1.2）
           </span>
         </div>
 
@@ -1258,7 +1258,7 @@ export default function UsersPage() {
         <div>
           <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>账号列表</div>
           <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: 2 }}>
-            {data?.total ?? items.length} 个账号 · 平台内置账号体系 · 成员在所属项目内协作
+            {data?.total ?? items.length} 个账号 · 平台内置账号体系 · 成员在所属团队内协作
           </div>
         </div>
 
@@ -1392,7 +1392,7 @@ export default function UsersPage() {
       ) : items.length === 0 ? (
         <EmptyState
           title="暂无用户"
-          description="创建第一个平台账号，开始分配角色与项目协作"
+          description="创建第一个平台账号，开始分配角色与团队协作"
           icon={<span aria-hidden>☷</span>}
         />
       ) : visibleItems.length === 0 ? (
@@ -1428,7 +1428,7 @@ export default function UsersPage() {
             }}
           >
             <span style={{ flex: 2, minWidth: 0 }}>用户</span>
-            <span style={{ flex: 1, minWidth: 0 }}>所属项目数</span>
+            <span style={{ flex: 1, minWidth: 0 }}>所属团队数</span>
             <span style={{ flex: 1, minWidth: 0 }}>状态</span>
             <span style={{ flex: 2, minWidth: 0, textAlign: "right" }}>操作</span>
           </div>
@@ -1463,8 +1463,8 @@ export default function UsersPage() {
         }}
       >
         <span style={{ fontWeight: 600, color: neutral[500] }}>组织模型</span> ·
-        平台采用「仅项目」模型：用户归属项目，在项目内以成员身份参与任务；平台管理员维护账号、
-        项目生命周期与角色模板（02 篇 1.1），成员承担产品 / 架构 / 开发 / 测试分工（02 篇 1.2）。
+        平台采用「团队」模型：用户归属团队，在团队内以成员身份参与任务；平台管理员维护账号、
+        团队与角色模板（02 篇 1.1），成员承担产品 / 架构 / 开发 / 测试分工（02 篇 1.2）。
       </div>
 
       {/* 新增用户弹层：受控开关（默认关闭） */}

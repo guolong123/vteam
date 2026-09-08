@@ -77,8 +77,8 @@ docker compose down -v
 
 ### 2.5 预置账号与种子数据
 
-- 账号：`admin/admin123`（初始管理员）、`seed-admin/Admin@123456`（种子管理员/项目 owner）、`seed-member/Admin@123456`（普通成员）
-- 种子数据：5 个模板 Agent（产品经理/项目经理/架构师/开发者/测试）、2 个种子项目（`p_seed_1`、`p_seed_2`）、内置工具 + `vteam` MCP 工具注册、模型目录
+- 账号：`admin/admin123`（初始管理员）、`seed-admin/Admin@123456`（种子管理员）、`seed-member/Admin@123456`（普通成员）
+- 种子数据：5 个模板 Agent（产品经理/项目经理/架构师/开发者/测试）、示例团队 `tm_0000000001`（5 角色各 1 实例）、内置工具 + `vteam` MCP 工具注册、模型目录
 
 ## 三、Kubernetes Helm 部署（推荐生产）
 

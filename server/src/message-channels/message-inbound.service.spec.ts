@@ -230,7 +230,10 @@ describe('MessageInboundService', () => {
         type: 'task_group',
         taskId,
       });
-      chatService.createMessage.mockResolvedValue({ message: { id: 'm_2' }, triggers: [] });
+      chatService.createMessage.mockResolvedValue({
+        message: { id: 'm_2' },
+        triggers: [],
+      });
       const res = await service.submitInbound(channelId, [
         {
           kind: 'post_message',

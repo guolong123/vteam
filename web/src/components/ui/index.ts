@@ -31,3 +31,5 @@ export { Pagination } from "./pagination";
 export type { PaginationProps } from "./pagination";
 export { PageWindow } from "./page-window";
 export type { PageWindowProps } from "./page-window";
+export { SegmentedTabs } from "./segmented-tabs";
+export type { SegmentedTabsProps, SegmentTabItem } from "./segmented-tabs";

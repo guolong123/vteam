@@ -5,7 +5,8 @@
  * =====================================================================
  * 保真迁移自 docs/agent-platform/prototypes/role-permission/index.tsx：
  * 左角色列表（240px，role-item）+ 右权限矩阵（8 资源 × 6 操作 ✓/◐/✗）+
- * PermissionScope（scope-project-select / scope-inner-role-select）+
+ * PermissionScope（全局-only 范围展示，项目候选池 scope-project-select 与
+ * 项目内角色 scope-inner-role-select 已随项目维度拆除）+
  * permission-note，data-testid 与原型一致。
  *
  * - 接真实 API：GET /roles（数组 {id,name,permissions,scopes,isBuiltin}）、
@@ -97,8 +98,8 @@ const ACTIONS = [
  *     消息 + dm-channels）/ edit（PATCH 置顶）/ delete（DELETE 会话）
  *   - artifacts.controller：view（GET 列表/详情/版本）/ create（POST 旁路补充提交）
  *   - agents.controller：view/create/edit/delete 全 4 操作
- *   - projects.controller：仅 create（projects 资源不在本页 RESOURCES 8 项中，
- *     故矩阵渲染永不命中，保留仅作集中审计参考）
+ *   - projects.controller 已随项目维度拆除（原仅 create；projects 资源不在本页 RESOURCES 8 项中，
+ *     矩阵渲染永不命中，此条保留仅作集中审计参考）
  *   - workers.controller：view / edit（GET workers.view、PATCH workers.edit，CONF-03 读写守卫同资源权限点）
  *   - skills.controller：view / create / edit（GET skills.view、POST skills.create、
  *     PATCH status skills.edit，CONF-03 读写守卫同资源权限点）
@@ -147,17 +148,6 @@ interface Role {
   createdAt: string;
   updatedAt: string;
 }
-
-/** GET /projects 分页响应（仅取 id/name 供权限范围「指定项目」选择器，对齐 board 页同款类型） */
-interface ProjectsResponse {
-  items: { id: string; name: string }[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
-
-/** 项目内角色候选池（对齐原型，静态池——项目内分工岗位，非项目实体） */
-const innerRolePool = ["产品经理", "项目经理", "架构师", "开发者", "测试", "验收"];
 
 /* ------------------------------ 数据映射 ------------------------------ */
 
@@ -224,7 +214,7 @@ function roleDesc(role: Role): string {
     return "管理平台账号 / 项目生命周期 / 角色模板 / 全局安全与权限策略";
   }
   if (role.name === "member") {
-    return "在所属项目内参与任务、群聊、产出物与 Agent 协作";
+    return "在所属团队内参与任务、群聊、产出物与 Agent 协作";
   }
   return "按需组合资源权限，如「验收员」「运维专员」等岗位化角色";
 }
@@ -402,52 +392,15 @@ function PermissionMatrix({
   );
 }
 
-/** 权限范围：全局 / 指定项目（多选）/ 项目内角色（受控版，自定义角色可编辑） */
+/** 权限范围：全局-only 展示（项目维度拆除后不再提供范围编辑器；
+ * scopes 全对象（含 projects/innerRoles 存量值）原样随 PATCH 透传后端，见 draftScopes） */
 function PermissionScope({
   value,
   theme,
-  editable,
-  projects,
-  onChange,
 }: {
   value: RoleScope;
   theme: RoleTheme;
-  editable: boolean;
-  /** 真实项目候选池（GET /projects 驱动；选择值存项目 id，渲染 name） */
-  projects: { id: string; name: string }[];
-  onChange?: (next: RoleScope) => void;
 }) {
-  const [scopeType, setScopeType] = useState<"global" | "projects">(
-    value.global ? "global" : "projects",
-  );
-
-  const switchScope = (t: "global" | "projects") => {
-    setScopeType(t);
-    onChange?.({ ...value, global: t === "global" });
-  };
-
-  const toggleProject = (p: { id: string; name: string }) => {
-    if (!editable || !onChange) return;
-    const active = value.projects.includes(p.id) || value.projects.includes(p.name);
-    onChange({
-      ...value,
-      projects: active
-        ? value.projects.filter((x) => x !== p.id && x !== p.name)
-        : [...value.projects, p.id],
-    });
-  };
-
-  const toggleInnerRole = (r: string) => {
-    if (!editable || !onChange) return;
-    const active = value.innerRoles.includes(r);
-    onChange({
-      ...value,
-      innerRoles: active
-        ? value.innerRoles.filter((x) => x !== r)
-        : [...value.innerRoles, r],
-    });
-  };
-
   return (
     <div
       data-testid="permission-scope"
@@ -462,145 +415,32 @@ function PermissionScope({
         ...baseFont,
       }}
     >
-      {/* 适用范围：全局 vs 指定项目（受控单选） */}
+      {/* 适用范围：全局-only（范围编辑器已随项目维度拆除） */}
       <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
         <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600] }}>适用范围</span>
-        <div style={{ display: "flex", gap: space.sm }}>
-          <button
-            type="button"
-            data-scope-type="global"
-            data-active={scopeType === "global" ? "true" : "false"}
-            onClick={() => switchScope("global")}
-            style={{
-              flex: 1,
-              padding: `${space.sm}px ${space.md}px`,
-              borderRadius: radius.md,
-              border: `1px solid ${scopeType === "global" ? theme.border : neutral[200]}`,
-              backgroundColor: scopeType === "global" ? theme.bg : "var(--color-surface)",
-              color: scopeType === "global" ? theme.color : neutral[600],
-              fontSize: fontSize.md,
-              fontWeight: scopeType === "global" ? 600 : 500,
-              cursor: "pointer",
-              fontFamily: fontFamily.body,
-            }}
-          >
-            全局（所有项目）
-          </button>
-          <button
-            type="button"
-            data-scope-type="projects"
-            data-active={scopeType === "projects" ? "true" : "false"}
-            onClick={() => switchScope("projects")}
-            style={{
-              flex: 1,
-              padding: `${space.sm}px ${space.md}px`,
-              borderRadius: radius.md,
-              border: `1px solid ${scopeType === "projects" ? theme.border : neutral[200]}`,
-              backgroundColor: scopeType === "projects" ? theme.bg : "var(--color-surface)",
-              color: scopeType === "projects" ? theme.color : neutral[600],
-              fontSize: fontSize.md,
-              fontWeight: scopeType === "projects" ? 600 : 500,
-              cursor: "pointer",
-              fontFamily: fontFamily.body,
-            }}
-          >
-            指定项目
-          </button>
-        </div>
-        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-          {scopeType === "global" ? "全局角色对所有项目生效（如平台管理员）" : "角色仅对所选项目生效（如项目成员）"}
+        <span
+          data-scope-type="global"
+          data-active={value.global ? "true" : "false"}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            padding: `${space.sm}px ${space.md}px`,
+            borderRadius: radius.md,
+            border: `1px solid ${value.global ? theme.border : neutral[200]}`,
+            backgroundColor: value.global ? theme.bg : "var(--color-surface)",
+            color: value.global ? theme.color : neutral[600],
+            fontSize: fontSize.md,
+            fontWeight: value.global ? 600 : 500,
+            fontFamily: fontFamily.body,
+          }}
+        >
+          {value.global ? "全局（所有团队）" : "非全局（存量范围透传保留）"}
         </span>
-      </div>
-
-      {/* 指定项目（多选） */}
-      <div
-        data-testid="scope-project-select"
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: space.sm,
-          opacity: scopeType === "projects" ? 1 : 0.55,
-        }}
-      >
-        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600] }}>指定项目（多选）</span>
-        <div style={{ display: "flex", gap: space.sm, flexWrap: "wrap" }}>
-          {projects.length === 0 ? (
-            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-              暂无可用项目（当前账号未加入任何项目）
-            </span>
-          ) : (
-            projects.map((p) => {
-              const active =
-                value.projects.includes(p.id) || value.projects.includes(p.name);
-              return (
-                <span
-                  key={p.id}
-                  data-project={p.id}
-                  data-project-name={p.name}
-                  data-active={active ? "true" : "false"}
-                  onClick={editable ? () => toggleProject(p) : undefined}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: space.xs,
-                    padding: `${space.xs + 1}px ${space.md}px`,
-                    borderRadius: radius.pill,
-                    border: `1px solid ${active ? theme.border : neutral[200]}`,
-                    backgroundColor: active ? theme.bg : "var(--color-surface)",
-                    color: active ? theme.color : neutral[600],
-                    fontSize: fontSize.md,
-                    cursor: editable
-                      ? scopeType === "projects"
-                        ? "pointer"
-                        : "not-allowed"
-                      : "default",
-                    fontFamily: fontFamily.body,
-                  }}
-                >
-                  {active && <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>✓</span>}
-                  {p.name}
-                </span>
-              );
-            })
-          )}
-        </div>
-      </div>
-
-      {/* 项目内角色（多选，成员可在项目内承担多种分工） */}
-      <div
-        data-testid="scope-inner-role-select"
-        style={{ display: "flex", flexDirection: "column", gap: space.sm }}
-      >
-        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600] }}>项目内角色</span>
-        <div style={{ display: "flex", gap: space.sm, flexWrap: "wrap" }}>
-          {innerRolePool.map((r) => {
-            const active = value.innerRoles.includes(r);
-            return (
-              <span
-                key={r}
-                data-inner-role={r}
-                data-active={active ? "true" : "false"}
-                onClick={editable ? () => toggleInnerRole(r) : undefined}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: space.xs,
-                  padding: `${space.xs + 1}px ${space.md}px`,
-                  borderRadius: radius.pill,
-                  border: `1px solid ${active ? theme.border : neutral[200]}`,
-                  backgroundColor: active ? theme.bg : "var(--color-surface)",
-                  color: active ? theme.color : neutral[600],
-                  fontSize: fontSize.md,
-                  cursor: editable ? "pointer" : "default",
-                  fontFamily: fontFamily.body,
-                }}
-              >
-                {active && <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>✓</span>}
-                {r}
-              </span>
-            );
-          })}
-        </div>
+        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+          {value.global
+            ? "全局角色对所有团队生效（如平台管理员）"
+            : "该角色含存量非全局范围（scopes.projects 透传保留，后端契约未变，不可编辑）"}
+        </span>
       </div>
     </div>
   );
@@ -926,15 +766,9 @@ export default function RolePermissionPage() {
     enabled: !!user?.id,
   });
 
-  /* 真实项目池（GET /projects，成员可见项目；与看板/产出物页同 key 同 queryFn，缓存共享） */
-  const { data: projectsData } = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => api.get<ProjectsResponse>("/projects"),
-    enabled: !!user?.id,
-  });
+  /* 范围编辑器已随项目维度拆除（全局-only 展示）；scopes 全对象仅透传后端存量值 */
 
   const rolesList = useMemo(() => data ?? [], [data]);
-  const projectOptions = useMemo(() => projectsData?.items ?? [], [projectsData]);
 
   /* 默认选中第一个角色（seed 顺序 admin 在前） */
   useEffect(() => {
@@ -1284,14 +1118,11 @@ export default function RolePermissionPage() {
               {/* 权限范围 */}
               <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
                 <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>权限范围</span>
-                {/* key=activeRole.id：角色切换时重挂载，scopeType 初始值（global/projects）随角色重置 */}
+                {/* key=activeRole.id：角色切换时重挂载，范围展示随角色重置（范围不可编辑，draftScopes 透传） */}
                 <PermissionScope
                   key={activeRole.id}
                   value={draftScopes}
                   theme={theme}
-                  editable={!activeRole.isBuiltin}
-                  projects={projectOptions}
-                  onChange={(next) => setDraftScopes(next)}
                 />
               </div>
 

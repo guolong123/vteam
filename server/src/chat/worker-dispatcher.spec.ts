@@ -163,7 +163,7 @@ describe('WorkerDispatcher', () => {
       task: { findUnique: jest.fn() },
       // 单团队入口（Todo 1）：分派统一走团队会话/名册；默认空名册 + 无主成员，
       // 需要团队数据的用例单独覆盖。
-      ...( {
+      ...({
         teamMember: {
           findMany: jest.fn().mockResolvedValue([]),
           findFirst: jest.fn().mockResolvedValue(null),
@@ -355,9 +355,7 @@ describe('WorkerDispatcher', () => {
       expect(prompt).toContain(request.text);
       expect(prompt).toContain(GROUP_TRIGGER_INSTRUCTION);
       expect(prompt).not.toContain(TEAM_GROUP_TRIGGER_INSTRUCTION);
-      expect(workerClient.execute.mock.calls[0][1].taskId).toBe(
-        request.taskId,
-      );
+      expect(workerClient.execute.mock.calls[0][1].taskId).toBe(request.taskId);
     });
 
     it('私聊触发：prompt 不注入群聊指令（保持私密独白），任务段保留', async () => {
@@ -4496,7 +4494,6 @@ describe('WorkerDispatcher', () => {
         ]),
       };
 
-
       const d = createDispatcher();
       await d.dispatch(request);
 
@@ -5069,9 +5066,7 @@ describe('WorkerDispatcher', () => {
         system: string;
       };
       const prompt = execArg.prompt.map((p) => p.text).join('\n\n');
-      expect(prompt).toContain(
-        '【任务上下文】你的当前任务 ID：t_0000000001',
-      );
+      expect(prompt).toContain('【任务上下文】你的当前任务 ID：t_0000000001');
       expect(prompt).toContain(GROUP_TRIGGER_INSTRUCTION);
       expect(prompt).not.toContain('无任务');
       expect(prompt).not.toContain(TEAM_GROUP_TRIGGER_INSTRUCTION);
@@ -5180,16 +5175,19 @@ describe('WorkerDispatcher', () => {
       expect((prisma as any).memory.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            OR: [{ level: 'team', teamId: expect.any(String) }, { level: 'global' }],
+            OR: [
+              { level: 'team', teamId: expect.any(String) },
+              { level: 'global' },
+            ],
           }),
         }),
       );
       workerClient.execute.mockClear();
       delete (prisma as any).memory;
       await d.dispatch(teamRequest() as any);
-      expect(workerClient.execute.mock.calls[0][1].system as string).not.toContain(
-        '【可用记忆索引',
-      );
+      expect(
+        workerClient.execute.mock.calls[0][1].system as string,
+      ).not.toContain('【可用记忆索引');
     });
 
     it('Todo2 非法 executionMode → 400 TASK_EXECUTION_MODE_INVALID，worker 零调用', async () => {

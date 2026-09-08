@@ -1,10 +1,15 @@
-import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueryMemoriesDto } from './dto/query-memories.dto';
-import { MEMORY_ERRORS } from './memory.constants';
+import { MEMORY_ERRORS, MEMORY_LEVELS } from './memory.constants';
 
 /** Memory 主键前缀（15 篇 §2.2：<prefix>_<零填充序号>，me_0000000001 起）。 */
 const MEMORY_ID_PREFIX = 'me';
@@ -33,18 +38,29 @@ export class MemoriesService implements OnModuleInit {
   }
 
   /**
-   * GET /memories：level/projectId/taskId 过滤 + keyword 内容模糊搜索 + 分页。
+   * GET /memories：level/teamId 过滤 + keyword 内容模糊搜索 + 分页。
    * 硬过滤 deletedAt: null（软删不可见，对齐 issue 列表语义）。
+   * session-unification Todo 9：仅 team/global；level=task（含任务级过滤 taskId，
+   * 已随任务级记忆删除）→ 400 MEMORY_LEVEL_INVALID。
    * 返回 {items, total, page, pageSize}（对齐 tools.findMany 模式）。
    */
   async findAll(query: QueryMemoriesDto = {}) {
+    if (
+      query.level !== undefined &&
+      query.level !== MEMORY_LEVELS.team &&
+      query.level !== MEMORY_LEVELS.global
+    ) {
+      throw new BadRequestException({
+        code: MEMORY_ERRORS.MEMORY_LEVEL_INVALID,
+        message: `非法记忆级别：${query.level}（仅支持 team/global，任务级记忆已删除）`,
+      });
+    }
     const page = this.normalizePage(query.page);
     const pageSize = this.normalizePageSize(query.pageSize);
     const where: Prisma.MemoryWhereInput = {
       deletedAt: null,
       ...(query.level ? { level: query.level } : {}),
-      ...(query.taskId ? { taskId: query.taskId } : {}),
-      ...(query.projectId ? { projectId: query.projectId } : {}),
+      ...(query.teamId ? { teamId: query.teamId } : {}),
       ...(query.keyword
         ? {
             OR: [

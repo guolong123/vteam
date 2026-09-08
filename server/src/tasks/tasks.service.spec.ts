@@ -811,7 +811,10 @@ describe('TasksService', () => {
       );
       expect(realtime.broadcast).toHaveBeenCalledWith(
         EVENT_TYPES.TASK_STATUS_CHANGED,
-        expect.objectContaining({ actorType: 'agent', actorId: 'tmm_caller_1' }),
+        expect.objectContaining({
+          actorType: 'agent',
+          actorId: 'tmm_caller_1',
+        }),
         { type: 'global' },
       );
     });
@@ -2767,7 +2770,9 @@ describe('TasksService', () => {
 
     it('add 实例：写 team_members 零会话写 + 系统消息「{别名} 已加入团队」+ 广播 team.changed(add 含 instanceId/alias)', async () => {
       prisma.task.findUnique
-        .mockResolvedValueOnce(row({ legacySnapshots: [memberRow('a_product')] }))
+        .mockResolvedValueOnce(
+          row({ legacySnapshots: [memberRow('a_product')] }),
+        )
         .mockResolvedValue(
           row({
             teamId: 'tm_0000000001',
@@ -2842,7 +2847,9 @@ describe('TasksService', () => {
 
     it('add 同 agent 第二个实例：seq = 已用最大 seq + 1（并发防重号）', async () => {
       prisma.task.findUnique
-        .mockResolvedValueOnce(row({ legacySnapshots: [memberRow('a_developer')] }))
+        .mockResolvedValueOnce(
+          row({ legacySnapshots: [memberRow('a_developer')] }),
+        )
         .mockResolvedValue(
           row({
             legacySnapshots: [
@@ -2898,7 +2905,10 @@ describe('TasksService', () => {
     it('add 实例：任务 in_progress 时亦零会话写（T4 衔接：会话归团队侧）', async () => {
       prisma.task.findUnique
         .mockResolvedValueOnce(
-          row({ status: 'in_progress', legacySnapshots: [memberRow('a_product')] }),
+          row({
+            status: 'in_progress',
+            legacySnapshots: [memberRow('a_product')],
+          }),
         )
         .mockResolvedValue(
           row({
@@ -3126,9 +3136,13 @@ describe('TasksService', () => {
 
     it('add 实例：写 team_add task_event 审计（actorType/actorId=user/userId）', async () => {
       prisma.task.findUnique
-        .mockResolvedValueOnce(row({ legacySnapshots: [memberRow('a_product')] }))
+        .mockResolvedValueOnce(
+          row({ legacySnapshots: [memberRow('a_product')] }),
+        )
         .mockResolvedValue(
-          row({ legacySnapshots: [memberRow('a_product'), memberRow('a_developer')] }),
+          row({
+            legacySnapshots: [memberRow('a_product'), memberRow('a_developer')],
+          }),
         );
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
       idGen.nextId
@@ -3159,9 +3173,13 @@ describe('TasksService', () => {
 
     it('确认门增员（opts actor/confirmedBy）→ 系统消息标注「经主 Agent 申请、<确认方> 确认」+ team_add 审计 actor=agent/主实例', async () => {
       prisma.task.findUnique
-        .mockResolvedValueOnce(row({ legacySnapshots: [memberRow('a_product')] }))
+        .mockResolvedValueOnce(
+          row({ legacySnapshots: [memberRow('a_product')] }),
+        )
         .mockResolvedValue(
-          row({ legacySnapshots: [memberRow('a_product'), memberRow('a_developer')] }),
+          row({
+            legacySnapshots: [memberRow('a_product'), memberRow('a_developer')],
+          }),
         );
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
       idGen.nextId
@@ -4233,23 +4251,23 @@ describe('TasksService', () => {
     });
 
     it('onModuleInit 按最大 id 对齐 6 前缀 seed（任务实例快照表已删除，不再 seed ta_）', async () => {
-      (prisma.task as any).findFirst = jest
+      (prisma.task as any).findMany = jest
         .fn()
-        .mockResolvedValue({ id: 't_0000000009' });
-      (prisma.chatChannel as any).findFirst = jest
+        .mockResolvedValue([{ id: 't_0000000009' }]);
+      (prisma.chatChannel as any).findMany = jest
         .fn()
-        .mockResolvedValue({ id: 'c_0000000003' });
-      (prisma.taskEvent as any).findFirst = jest
+        .mockResolvedValue([{ id: 'c_0000000003' }]);
+      (prisma.taskEvent as any).findMany = jest
         .fn()
-        .mockResolvedValue({ id: 'te_0000000002' });
-      (prisma.message as any).findFirst = jest
+        .mockResolvedValue([{ id: 'te_0000000002' }]);
+      (prisma.message as any).findMany = jest
         .fn()
-        .mockResolvedValue({ id: 'm_0000000004' });
-      (prisma.session as any).findFirst = jest
+        .mockResolvedValue([{ id: 'm_0000000004' }]);
+      (prisma.session as any).findMany = jest
         .fn()
-        .mockResolvedValue({ id: 's_0000000006' });
+        .mockResolvedValue([{ id: 's_0000000006' }]);
       (prisma as any).teamQueue = {
-        findFirst: jest.fn().mockResolvedValue({ id: 'tq_0000000001' }),
+        findMany: jest.fn().mockResolvedValue([{ id: 'tq_0000000001' }]),
       };
       await service.onModuleInit();
       expect(idGen.seed).toHaveBeenCalledWith('t', 9);

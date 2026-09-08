@@ -98,9 +98,8 @@ const RAIL_W = 56;
 /** 内容区左缘留白：Dock 宽度 + 呼吸间距（对齐 nav-rail / nav-hybrid 原型） */
 const CONTENT_LEFT_PAD = RAIL_W + 24;
 
-/** 导航 key → 路由路径（与 NAV_ITEMS 对齐） */
+/** 导航 key → 路由路径（与 NAV_ITEMS 对齐，团队为登录后默认工作台） */
 const KEY_TO_PATH: Record<string, string> = {
-  project: "/projects",
   teams: "/teams",
   issues: "/issues",
   agents: "/agents",
@@ -125,11 +124,11 @@ const KEY_LOOKUP: Record<string, string> = {
   ...Object.fromEntries(
     Object.entries(KEY_TO_PATH).map(([key, path]) => [path.slice(1), key])
   ),
-  /** Dock 无独立 board/tasks 图标：任务与项目为父子层级，任务相关路由
-   * （/board、/tasks/new、/artifacts）均高亮「项目」入口 */
-  board: "project",
-  tasks: "project",
-  artifacts: "project",
+  /** Dock 无独立 board/tasks 图标：任务看板/创建/产出物均归属团队上下文
+   * （/board?teamId=、/tasks/new?teamId=、/artifacts?teamId=）→ 高亮「团队管理」入口 */
+  board: "teams",
+  tasks: "teams",
+  artifacts: "teams",
 };
 
 /** 非导航页（无 Dock key）的标题兜底：全路径 → 页面标题 */
@@ -141,7 +140,6 @@ const EXTRA_PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
 
 /** 命令面板「导航」组 label → 路由路径 */
 const CMDK_NAV_PATH: Record<string, string> = {
-  切换项目: "/projects",
   团队管理: "/teams",
   "Issue 管理": "/issues",
   "Agent 管理": "/agents",
@@ -157,7 +155,7 @@ const CMDK_NAV_PATH: Record<string, string> = {
 
 /**
  * 导航 key → 可见性判定（对齐后端守卫语义，ISSUE-005 + Task 14 全局团队）：
- * - 无条目的 key（project/models）→ 后端无权限点（登录即可 / 成员只读），始终显示；
+ * - 无条目的 key（models）→ 后端无权限点（成员只读），始终显示；
  * - teams/agents/workers/skills → 矩阵 view 权限点（PermissionGuard teams:view 等）；
  * - users/roles → AdminGuard 语义（all:true 或 users.manage）。
  * 全局 team ≠ 开放：仍需 PermissionGuard teams:view，未授权限的不显示入口（后端同 403）。
@@ -186,7 +184,7 @@ function roleLabel(name?: string): string {
   return name ? (ROLE_LABEL[name] ?? name) : "";
 }
 
-/** GET /projects/:pid/tasks 分页响应（仅页头计数取 total，pageSize=1 最小化传输）。 */
+/** GET /tasks?teamId= 分页响应（仅页头计数取 total，pageSize=1 最小化传输）。 */
 interface BoardTasksResponse {
   items: unknown[];
   total: number;
@@ -202,7 +200,6 @@ interface WorkerSummaryRow {
 
 /** 页面标题（顶栏左侧，无面包屑时展示；对齐各页原型 NavTopBar） */
 const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
-  project: { title: "项目列表", subtitle: "选择项目进入 AI 协作工作区" },
   teams: { title: "团队管理", subtitle: "全局团队 · 成员多实例 · 队列与会话复用" },
   board: { title: "任务看板", subtitle: "" },
   issues: { title: "Issue 管理", subtitle: "任务内 issue 协作与状态流转" },
@@ -225,7 +222,7 @@ function resolvePageTitle(pathname: string): { title: string; subtitle: string }
   }
   const exact = EXTRA_PAGE_TITLE[pathname];
   if (exact) return exact;
-  // /board 页保留专属标题（Dock key 映射已并入 project，此处按路径先命中）
+  // /board 页保留专属标题（Dock key 映射已并入 teams，此处按路径先命中）
   if (parts[0] === "board") {
     return PAGE_TITLE.board;
   }
@@ -287,10 +284,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       (item) =>
         !NAV_VISIBLE[item.key] || NAV_VISIBLE[item.key](user.permissions),
     )?.key;
-    router.replace(fallback ? KEY_TO_PATH[fallback] : "/projects");
+    router.replace(fallback ? KEY_TO_PATH[fallback] : "/teams");
   }, [hydrated, token, pathname, user, router]);
 
-  // 导航过滤：受限用户仅显示有权限项；project/models 无后端权限点恒显示
+  // 导航过滤：受限用户仅显示有权限项；models 无后端权限点恒显示
   const visibleItems = useMemo(() => {
     if (!user) return NAV_ITEMS;
     return NAV_ITEMS.filter(
@@ -313,25 +310,25 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [user]);
 
   // /board 页头计数（ISSUE-001）：原 PAGE_TITLE.board subtitle 硬编码 mock 值
-  // （「5 个任务 · 4 个 Agent 在线」源自原型 mock），改为按 URL ?pid= 动态取数。
+  // （「5 个任务 · 4 个 Agent 在线」源自原型 mock），改为按 URL ?teamId= 动态取数。
   const isBoard = pathname.split("/")[1] === "board";
-  const [boardPid, setBoardPid] = useState<string | null>(null);
+  const [boardTeamId, setBoardTeamId] = useState<string | null>(null);
   useEffect(() => {
     if (pathname.split("/")[1] === "board") {
-      setBoardPid(new URLSearchParams(window.location.search).get("pid"));
+      setBoardTeamId(new URLSearchParams(window.location.search).get("teamId"));
     } else {
-      setBoardPid(null);
+      setBoardTeamId(null);
     }
   }, [pathname]);
 
-  // 任务总数：GET /projects/:pid/tasks 的 total（与看板页同源，三方对照基准）
+  // 任务总数：GET /tasks?teamId= 的 total（与看板页同源，三方对照基准）
   const boardTasks = useQuery({
-    queryKey: ["board-tasks", boardPid],
+    queryKey: ["board-tasks", boardTeamId],
     queryFn: () =>
-      api.get<BoardTasksResponse>(`/projects/${boardPid}/tasks`, {
-        query: { page: 1, pageSize: 1 },
+      api.get<BoardTasksResponse>("/tasks", {
+        query: { teamId: boardTeamId!, page: 1, pageSize: 1 },
       }),
-    enabled: hydrated && !!token && isBoard && !!boardPid,
+    enabled: hydrated && !!token && isBoard && !!boardTeamId,
   });
   // Agent 在线数：平台在线 worker（status != offline，Agent 无在线态，Worker 为在线源）
   const boardWorkers = useQuery({
@@ -367,9 +364,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const handleCmdKSelect = (label: string) => {
     setCmdkOpen(false);
-    // 「操作」组快捷命令：新建任务 → task-create 缺省项目（URL ?pid= 优先，缺省 p_seed_1）
+    // 「操作」组快捷命令：新建任务 → /tasks/new（团队在创建页内选择）
     if (label === "新建任务") {
-      const target = "/tasks/new?pid=p_seed_1";
+      const target = "/tasks/new";
       if (target !== pathname) router.push(target);
       return;
     }

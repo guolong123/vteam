@@ -6,13 +6,13 @@ import { test, expect } from "@playwright/test";
  */
 test.describe("未登录守卫", () => {
   const PROTECTED = [
-    "/projects",
-    "/board?pid=p_seed_1",
+    "/teams",
+    "/board?teamId=tm_0000000001",
     "/tasks/new",
     "/agents",
     "/roles",
     "/skills",
-    "/artifacts?pid=p_seed_1",
+    "/artifacts?teamId=tm_0000000001",
     "/tools/register",
     "/users",
     "/workers",

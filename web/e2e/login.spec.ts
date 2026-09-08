@@ -21,12 +21,12 @@ test.describe("1/17 login 登录页", () => {
     await expect(page.getByTestId("login-error")).toBeVisible();
   });
 
-  test("正确密码 → 跳转 /projects", async ({ page }) => {
+  test("正确密码 → 跳转 /teams", async ({ page }) => {
     await page.goto("/login");
     await page.getByTestId("username").fill("seed-admin");
     await page.getByTestId("password").fill("Admin@123456");
     await page.getByTestId("login-button").click();
-    await expect(page).toHaveURL(/\/projects/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/\/teams/, { timeout: 15_000 });
   });
 
   test("register-link → 跳转 /register（ISSUE-011 死链修复）", async ({ page }) => {

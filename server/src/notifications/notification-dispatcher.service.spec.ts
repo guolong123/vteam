@@ -122,7 +122,6 @@ describe('NotificationDispatcherService', () => {
         },
         scopeType: 'global' as const,
         scopeId: null,
-        projectId: null,
         timestamp: new Date().toISOString(),
       };
 
@@ -161,7 +160,6 @@ describe('NotificationDispatcherService', () => {
         },
         scopeType: 'global' as const,
         scopeId: null,
-        projectId: null,
         timestamp: new Date().toISOString(),
       };
       await service.handle(event);
@@ -192,7 +190,6 @@ describe('NotificationDispatcherService', () => {
         },
         scopeType: 'channel' as const,
         scopeId: 'c_1',
-        projectId: null,
         timestamp: new Date().toISOString(),
       };
       await service.handle(event);
@@ -208,9 +205,14 @@ describe('NotificationDispatcherService', () => {
 
     it('dispatchToChannel still sends via adapter and logs delivery', async () => {
       const ch = notificationChannel();
-      await service.dispatchToChannel(ch, { kind: 'markdown', text: 'manual hello' });
+      await service.dispatchToChannel(ch, {
+        kind: 'markdown',
+        text: 'manual hello',
+      });
       expect(adapterSendOutbound).toHaveBeenCalledTimes(1);
-      expect(adapterSendOutbound.mock.calls[0][1].text).toContain('manual hello');
+      expect(adapterSendOutbound.mock.calls[0][1].text).toContain(
+        'manual hello',
+      );
       expect(delivery.log).toHaveBeenCalledWith(
         'outbound',
         'markdown',
@@ -243,7 +245,9 @@ describe('NotificationDispatcherService', () => {
     it('sendToChannelByIdOrName throws if channel not bound to task', async () => {
       prisma.taskNotificationChannel.findMany.mockResolvedValue([]);
       prisma.notificationChannel.findMany.mockResolvedValue([]);
-      await expect(service.sendToChannelByIdOrName('t_1', 'nc_missing', 'hi')).rejects.toThrow();
+      await expect(
+        service.sendToChannelByIdOrName('t_1', 'nc_missing', 'hi'),
+      ).rejects.toThrow();
     });
 
     it('adapter error logged via finish failed and does not block other channels', async () => {

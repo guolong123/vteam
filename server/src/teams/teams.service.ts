@@ -13,6 +13,7 @@ import {
   SENDER_TYPE,
 } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { sanitizeWorkDirName } from '../tasks/work-dir.util';
@@ -53,13 +54,6 @@ const TEAM_ERRORS = {
   MAIN_AGENT_NOT_MEMBER: 'MAIN_AGENT_NOT_MEMBER',
 } as const;
 
-type SeqModel = {
-  findFirst(args: {
-    orderBy: { id: 'desc' };
-    select: { id: true };
-  }): Promise<{ id: string } | null>;
-};
-
 @Injectable()
 export class TeamsService implements OnModuleInit {
   private readonly logger = new Logger(TeamsService.name);
@@ -70,22 +64,23 @@ export class TeamsService implements OnModuleInit {
     private readonly realtime: RealtimeService,
   ) {}
 
+  /** 进程启动：按库内各前缀纯数字序号最大值对齐 id 生成器（resyncIdPrefix 跳过 tum_admin_seed 等非数字 id，防主键冲突）。 */
   async onModuleInit(): Promise<void> {
-    await this.seedPrefix(
-      ID_PREFIX.team,
-      this.prisma.team as unknown as SeqModel,
-    );
-    await this.seedPrefix(
+    await resyncIdPrefix(this.prisma.team, ID_PREFIX.team, this.idGen);
+    await resyncIdPrefix(
+      this.prisma.teamMember,
       ID_PREFIX.teamMember,
-      this.prisma.teamMember as unknown as SeqModel,
+      this.idGen,
     );
-    await this.seedPrefix(
+    await resyncIdPrefix(
+      (this.prisma as any).teamUserMember,
       ID_PREFIX.teamUserMember,
-      (this.prisma as any).teamUserMember as SeqModel,
+      this.idGen,
     );
-    await this.seedPrefix(
+    await resyncIdPrefix(
+      (this.prisma as any).teamQueue,
       ID_PREFIX.teamQueue,
-      (this.prisma as any).teamQueue as SeqModel,
+      this.idGen,
     );
   }
 
@@ -917,6 +912,7 @@ export class TeamsService implements OnModuleInit {
         data: {
           id: newId,
           taskId: null,
+          teamId: teamId,
           agentId: member.agentId,
           teamMemberId: memberId,
           status: 'created',
@@ -1193,19 +1189,6 @@ export class TeamsService implements OnModuleInit {
     const ps = Number(pageSize ?? 20);
     if (!Number.isFinite(ps)) return 20;
     return Math.min(Math.max(Math.floor(ps), 1), 100);
-  }
-
-  private async seedPrefix(prefix: string, model: SeqModel): Promise<void> {
-    const last = await model.findFirst({
-      orderBy: { id: 'desc' },
-      select: { id: true },
-    });
-    if (last) {
-      const seq = parseInt(last.id.slice(prefix.length + 1), 10);
-      if (Number.isFinite(seq)) {
-        this.idGen.seed(prefix, seq);
-      }
-    }
   }
 }
 

@@ -5,8 +5,8 @@
  * =============================================
  * 唯一来源：docs/agent-platform/prototypes/task-board/index.tsx。
  * - 状态筛选条（全部/待开始/进行中/待验收/已完成/已归档，FR-03 五态）+ 任务卡片网格；
- *   数据源：GET /api/v1/projects/:pid/tasks?status=&page=&pageSize=（T6）→ TanStack Query，
- *   pid 取 URL ?pid=，缺省 p_seed_1（对齐 task-create 页模式）。
+ *   数据源：GET /api/v1/tasks?teamId=&status=&page=&pageSize= → TanStack Query，
+ *   teamId 取 URL ?teamId=，缺失且已登录 → 重定向 /teams（团队为唯一工作台入口）。
  * - 卡片：标题 / 状态徽章 / 参与 Agent 头像 / 产出物数量；「待开始」卡片带「开始任务」
  *   按钮（FR-18/19）：点击真实调用 POST /api/v1/tasks/:id/start（T7），乐观更新 + 失败提示；
  *   启动中/失败时展示「开始前检查」提示（data-testid=start-task-hint）。
@@ -30,6 +30,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useSSE } from "@/hooks/use-sse";
+import { teamsApi } from "@/src/api/teams";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import { TaskDetailDrawer } from "@/src/components/tasks/TaskDetailDrawer";
 import { AgentAvatar, EmptyState, StatusBadge } from "@/src/components/ui";
@@ -110,10 +111,9 @@ type TaskApiStatus =
   | "completed"
   | "archived";
 
-/** GET /projects/:pid/tasks 条目（对齐 TasksService.toTaskDto）。 */
+/** GET /tasks?teamId= 条目（对齐 TasksService.toTaskDto）。 */
 interface TaskItem {
   id: string;
-  projectId: string;
   title: string;
   description: string | null;
   priority: string;
@@ -131,17 +131,9 @@ interface TaskItem {
   archivedAt: string | null;
 }
 
-/** GET /projects/:pid/tasks 分页响应。 */
+/** GET /tasks?teamId= 分页响应。 */
 interface TasksResponse {
   items: TaskItem[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
-
-/** GET /projects 分页响应（仅取项目名供看板标题）。 */
-interface ProjectsResponse {
-  items: { id: string; name: string }[];
   total: number;
   page: number;
   pageSize: number;
@@ -192,7 +184,7 @@ function toRoles(agentIds: string[]): RoleKey[] {
   return roles;
 }
 
-/* ------------------------------ 项目上下文：URL ?pid= 必填，无 pid 重定向 /projects（父子层级，禁止缺省 seed） ------------------------------ */
+/* ------------------------------ 团队上下文：URL ?teamId= 必填，无 teamId 重定向 /teams ------------------------------ */
 
 /* ------------------------------ 状态筛选（默认「全部」激活，点击切换 query 重新 fetch） ------------------------------ */
 interface StatusFilter {
@@ -215,11 +207,11 @@ const filters: StatusFilter[] = [
 interface TaskCardProps {
   task: TaskItem;
   onOpen: (taskId: string) => void;
-  /** 所属项目名（来自看板已查的 projects 缓存），渲染卡片项目徽章 */
-  projectName?: string;
+  /** 所属团队名（来自看板已查的团队详情），渲染卡片团队徽章 */
+  teamName?: string;
 }
 
-function TaskCard({ task, onOpen, projectName }: TaskCardProps) {
+function TaskCard({ task, onOpen, teamName }: TaskCardProps) {
   const router = useRouter();
   return (
     <section
@@ -242,12 +234,12 @@ function TaskCard({ task, onOpen, projectName }: TaskCardProps) {
         ...baseFont,
       }}
     >
-      {/* 头部：项目徽章 + 编号 + 状态 */}
+      {/* 头部：团队徽章 + 编号 + 状态 */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
         <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
-          {projectName && (
+          {teamName && (
             <span
-              data-testid="task-project-badge"
+              data-testid="task-team-badge"
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -261,7 +253,7 @@ function TaskCard({ task, onOpen, projectName }: TaskCardProps) {
                 maxWidth: 160,
               }}
             >
-              📁 {projectName}
+              📁 {teamName}
             </span>
           )}
           <span
@@ -411,32 +403,32 @@ export default function TaskBoardPage() {
   const queryClient = useQueryClient();
   const router = useRouter();
 
-  // pid：URL ?pid= 必填；无 pid 且已登录 → 重定向 /projects（effect 内读 window，避免 SSR 水合不一致）
-  const [pid, setPid] = useState<string | null>(null);
+  // teamId：URL ?teamId= 必填；无 teamId 且已登录 → 重定向 /teams（effect 内读 window，避免 SSR 水合不一致）
+  const [teamId, setTeamId] = useState<string | null>(null);
   const [activeKey, setActiveKey] = useState("all");
   // 抽屉详情：当前选中的任务 id（null = 关闭）；看板点击卡片只开抽屉，不跳 /tasks/:id
   const [drawerTaskId, setDrawerTaskId] = useState<string | null>(null);
 
   useEffect(() => {
-    const urlPid = new URLSearchParams(window.location.search).get("pid");
-    if (urlPid) {
-      setPid(urlPid);
+    const urlTeamId = new URLSearchParams(window.location.search).get("teamId");
+    if (urlTeamId) {
+      setTeamId(urlTeamId);
     } else if (userId) {
-      router.replace("/projects");
+      router.replace("/teams");
     }
   }, [userId, router]);
 
   const activeFilter = filters.find((f) => f.key === activeKey) ?? filters[0];
   // queryKey 含 status 依赖：点击筛选 → key 变化 → 重新 fetch（不传 status=全部）
-  const tasksKey = ["tasks", pid, activeFilter.status ?? "all"] as const;
+  const tasksKey = ["tasks", teamId, activeFilter.status ?? "all"] as const;
 
   const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: tasksKey,
     queryFn: () =>
-      api.get<TasksResponse>(`/projects/${pid}/tasks`, {
-        query: { status: activeFilter.status, page: 1, pageSize: 100 },
+      api.get<TasksResponse>("/tasks", {
+        query: { teamId: teamId!, status: activeFilter.status, page: 1, pageSize: 100 },
       }),
-    enabled: !!userId && !!pid,
+    enabled: !!userId && !!teamId,
   });
 
   // 实时联动：task.status.changed（T7/T6 广播，09 篇 §4.1 全局广播）→ 失效重取看板
@@ -455,12 +447,12 @@ export default function TaskBoardPage() {
     (t) => activeFilter.key !== "all" || t.status !== "archived"
   );
 
-  // 看板标题：?pid= 对应项目名（复用 projects 列表缓存，缺失时回退固定标题，不破坏布局）
-  const projectName = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => api.get<ProjectsResponse>("/projects"),
-    enabled: !!userId && !!pid,
-  }).data?.items.find((p) => p.id === pid)?.name;
+  // 看板标题：?teamId= 对应团队名（GET /teams/:id，缺失时回退固定标题，不破坏布局）
+  const teamName = useQuery({
+    queryKey: ["team", teamId],
+    queryFn: () => teamsApi.get(teamId!),
+    enabled: !!userId && !!teamId,
+  }).data?.name;
 
   return (
     <div
@@ -475,7 +467,7 @@ export default function TaskBoardPage() {
         ...baseFont,
       }}
     >
-      {/* 看板标题：?pid= 命中项目名时显示「{项目名} · 任务看板」，否则保持固定标题 */}
+      {/* 看板标题：?teamId= 命中团队名时显示「{团队名} · 任务看板」，否则保持固定标题 */}
       <div
         data-testid="board-title"
         style={{
@@ -487,15 +479,15 @@ export default function TaskBoardPage() {
         }}
       >
         <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>
-          {projectName ? `${projectName} · 任务看板` : "任务看板"}
+          {teamName ? `${teamName} · 任务看板` : "任务看板"}
         </div>
-        {/* 标题右侧操作：新建任务（主 CTA → /tasks/new?pid=，tasks/new 页读 URL ?pid=）+ 产出物入口（Phase 3） */}
-        {pid && (
+        {/* 标题右侧操作：新建任务（主 CTA → /tasks/new?teamId=，tasks/new 页读 URL ?teamId=）+ 产出物入口（Phase 3） */}
+        {teamId && (
           <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
             <button
               type="button"
               data-testid="create-task-button"
-              onClick={() => router.push(`/tasks/new?pid=${pid}`)}
+              onClick={() => router.push(`/tasks/new?teamId=${teamId}`)}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -519,7 +511,7 @@ export default function TaskBoardPage() {
             <button
               type="button"
               data-testid="artifacts-entry-button"
-              onClick={() => router.push(`/artifacts?pid=${pid}`)}
+              onClick={() => router.push(`/artifacts?teamId=${teamId}`)}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -639,15 +631,15 @@ export default function TaskBoardPage() {
         ) : tasks.length === 0 ? (
           <EmptyState
             title="暂无任务"
-            description="该项目下还没有任务，创建任务后即可在看板查看"
+            description="该团队下还没有任务，创建任务后即可在看板查看"
             icon={<span aria-hidden>▤</span>}
             style={{ gridColumn: "1 / -1" }}
             action={
-              pid && (
+              teamId && (
                 <button
                   type="button"
                   data-testid="empty-create-task-button"
-                  onClick={() => router.push(`/tasks/new?pid=${pid}`)}
+              onClick={() => router.push(`/tasks/new?teamId=${teamId}`)}
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
@@ -677,7 +669,7 @@ export default function TaskBoardPage() {
               key={task.id}
               task={task}
               onOpen={(taskId) => setDrawerTaskId(taskId)}
-              projectName={projectName}
+              teamName={teamName}
             />
           ))
         )}

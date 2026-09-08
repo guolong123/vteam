@@ -6,7 +6,7 @@
  * =============================================
  * - 左栏任务表单：标题* / 描述 / 背景文档上传 / 优先级 / 托管模式 / 执行模式（同原型）
  * - 右栏团队选择：团队下拉（GET /teams）+ 选中团队成员预览（只读）+ resetAfterComplete 勾选
- * - 提交：POST /projects/:pid/tasks {teamId, resetAfterComplete?, title, description, priority, managedMode, executionMode, backgroundDocs}
+ * - 提交：POST /tasks {teamId, resetAfterComplete?, title, description, priority, managedMode, executionMode, backgroundDocs}
  * - 移除 agents / 主 Agent 面板（团队域已全局复用）
  */
 import { useMemo, useState, useRef } from "react";
@@ -32,11 +32,10 @@ import type { CSSProperties } from "react";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-const DEFAULT_PID = "p_seed_1";
-
-function getProjectId(): string {
-  if (typeof window === "undefined") return DEFAULT_PID;
-  return new URLSearchParams(window.location.search).get("pid") || DEFAULT_PID;
+/** URL ?teamId= 预选团队（board/团队会话页带入；缺失则用户手动选择）。 */
+function getInitialTeamId(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("teamId");
 }
 
 /* ------------------------------ 背景文档（同原型） ------------------------------ */
@@ -276,7 +275,7 @@ export default function TaskCreatePage() {
     onError: (err) => setUploadError(isApiError(err) ? err.message : "文档上传失败，请稍后重试"),
   });
 
-  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(() => getInitialTeamId());
   const [resetAfterComplete, setResetAfterComplete] = useState(false);
   const [titleError, setTitleError] = useState<string | null>(null);
   const [teamError, setTeamError] = useState<string | null>(null);
@@ -305,7 +304,7 @@ export default function TaskCreatePage() {
     setSubmitting(true);
     setCreateError(null);
     try {
-      const res = await api.post<{ id: string }>(`/projects/${getProjectId()}/tasks`, {
+      const res = await api.post<{ id: string }>("/tasks", {
         title: title.trim(),
         description: description || undefined,
         priority: PRIORITY_API[priority],

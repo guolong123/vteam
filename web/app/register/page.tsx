@@ -46,7 +46,7 @@ function RegisterForm() {
   useEffect(() => {
     const token = useAuthStore.getState().token;
     if (token) {
-      router.replace("/projects");
+      router.replace("/teams");
     }
   }, [router]);
 

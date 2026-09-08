@@ -274,7 +274,7 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
         }
         case EVENT.TASK_STATUS_CHANGED: {
           const payload = ev.payload as TaskStatusEvent;
-          // 看板缓存 queryKey 前缀 ["tasks", pid, status] 一并失效重取
+          // 看板缓存 queryKey 前缀 ["tasks", teamId, status] 一并失效重取
           queryClient.invalidateQueries({ queryKey: ["tasks"] });
           onTaskStatusChanged?.(payload, ev as SSEEvent<TaskStatusEvent>);
           break;

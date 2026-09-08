@@ -42,4 +42,6 @@ export const QUESTIONS_ERRORS = {
   QUESTION_ALREADY_RESOLVED: 'QUESTION_ALREADY_RESOLVED',
   /** 僵尸/超期：serve 已无该请求（reply 转发 404 或 pending 超 TTL）→ 410 Gone，前端据此关闭弹窗。 */
   QUESTION_EXPIRED: 'QUESTION_EXPIRED',
+  /** 托管读团队行时团队归属存在但团队行缺失（session-unification Todo 9）→ 404。 */
+  QUESTION_TEAM_NOT_FOUND: 'QUESTION_TEAM_NOT_FOUND',
 } as const;

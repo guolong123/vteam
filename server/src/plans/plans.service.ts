@@ -13,7 +13,7 @@ import {
   SENDER_TYPE,
 } from '../common/constants/event.constants';
 import { TASK_ERRORS } from '../common/constants/task.constants';
-import { PROJECT_MEMBERSHIP_ERRORS } from '../common/guards/project-membership.guard';
+import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
@@ -62,8 +62,8 @@ export interface PlanTaskDto {
  * 协作计划服务（vteam-team-collaboration Todo 1 表结构 + 启动续号骨架；
  * Todo 5 填充业务方法 findByTask/review/findTasks/assignReviewer）。
  *
- * REST 权限模型（对齐 issues.controller）：不挂 AdminGuard / ProjectMembershipGuard，
- * 鉴权依赖全局 JwtAuthGuard，项目成员校验在本服务内完成（assertTaskMember）。
+ * REST 权限模型（对齐 issues.controller）：不挂 AdminGuard / TeamMembershipGuard，
+ * 鉴权依赖全局 JwtAuthGuard，团队成员校验在本服务内完成（assertTaskMember）。
  * onModuleInit 续号逻辑保留：只统计 pl_/pt_<数字> 行最大序号，命名 id 不参与
  * （parseInt NaN 防护见 common/id-resync.ts）。
  */
@@ -85,14 +85,14 @@ export class PlansService implements OnModuleInit {
     await resyncIdPrefix(this.prisma.planTask, PLAN_TASK_ID_PREFIX, this.idGen);
   }
 
-  /** 用户路径成员校验（对齐 issues.service.assertTaskMember）：任务存在（404）→ 调用者是任务所属项目成员（403）。 */
+  /** 用户路径成员校验（对齐 issues.service.assertTaskMember）：任务存在（404）→ 调用者是任务所属团队成员（403）。 */
   private async assertTaskMember(
     taskId: string,
     userId: string,
   ): Promise<void> {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { projectId: true },
+      select: { teamId: true },
     });
     if (!task) {
       throw new NotFoundException({
@@ -100,14 +100,14 @@ export class PlansService implements OnModuleInit {
         message: '任务不存在',
       });
     }
-    const member = await this.prisma.projectMember.findUnique({
-      where: { projectId_userId: { projectId: task.projectId, userId } },
+    const member = await (this.prisma as any).teamUserMember.findUnique({
+      where: { teamId_userId: { teamId: task.teamId, userId } },
       select: { id: true },
     });
     if (!member) {
       throw new ForbiddenException({
-        code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
-        message: '您不是该项目成员',
+        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: '您不是该团队成员',
       });
     }
   }
@@ -135,8 +135,9 @@ export class PlansService implements OnModuleInit {
   }
 
   /**
-   * 指派概览解析：planTask.assigneeInstanceId → taskAgent 行（alias + agent.name）。
-   * 未命中（已移除/未指派）→ 概览为 null，不阻断读取。
+   * 指派概览解析：planTask.assigneeInstanceId → 团队成员行（tmm_，alias + agent.name）。
+   * 归属经任务 teamId 约束（teamMember 无 task 维度）；未命中（已移除/未指派）→
+   * 概览为 null，不阻断读取。
    */
   private async resolveAssigneeOverview(
     taskId: string,
@@ -152,12 +153,20 @@ export class PlansService implements OnModuleInit {
     if (ids.length === 0) {
       return new Map();
     }
-    const agents = await this.prisma.taskAgent.findMany({
-      where: { id: { in: ids }, taskId },
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { teamId: true },
+    });
+    const teamId = task?.teamId ?? null;
+    if (!teamId) {
+      return new Map();
+    }
+    const members = await this.prisma.teamMember.findMany({
+      where: { id: { in: ids }, teamId },
       select: { id: true, alias: true, agent: { select: { name: true } } },
     });
     return new Map(
-      agents.map((a) => [a.id, { alias: a.alias, name: a.agent.name }]),
+      members.map((m) => [m.id, { alias: m.alias, name: m.agent.name }]),
     );
   }
 
@@ -187,7 +196,7 @@ export class PlansService implements OnModuleInit {
   }
 
   /**
-   * GET /plans?taskId=：查询任务执行计划（项目成员，一任务一计划）。
+   * GET /plans?taskId=：查询任务执行计划（团队成员，一任务一计划）。
    * 返回计划头（含 reviewerInstanceId）+ 子任务清单全文（含六要素 content + 指派概览）。
    */
   async findByTask(taskId: string, userId: string): Promise<PlanWithTasksDto> {
@@ -223,7 +232,7 @@ export class PlansService implements OnModuleInit {
   }
 
   /**
-   * GET /plans/:id/tasks：查询计划子任务清单（项目成员，含 assignee 概览）。
+   * GET /plans/:id/tasks：查询计划子任务清单（团队成员，含 assignee 概览）。
    */
   async findTasks(planId: string, userId: string): Promise<PlanTaskDto[]> {
     const plan = await this.findPlanOrThrow(planId);
@@ -237,7 +246,7 @@ export class PlansService implements OnModuleInit {
   }
 
   /**
-   * PATCH /plans/:id/review：评审执行计划（REST 入口，项目成员可评审——FR-04 验收判定权在成员）。
+   * PATCH /plans/:id/review：评审执行计划（REST 入口，团队成员可评审——FR-04 验收判定权在成员）。
    * 状态机：仅 reviewing 可评审（否则 400 PLAN_INVALID_STATUS）；rejected 无 reason → 400；
    * approved/rejected 更新 + reviewerInstanceId 置 null（R4，与 MCP plan_review 双入口一致）→
    * 群聊系统消息（驳回文案引导修改重提或切换 direct 模式，Oracle M5）。
@@ -316,9 +325,9 @@ export class PlansService implements OnModuleInit {
   }
 
   /**
-   * 指派评审者（plan_assign_reviewer MCP 通道复用，无 userId——调用方已做主实例校验）。
+   * 指派评审者（plan_assign_reviewer MCP 通道复用，无 userId——调用方已做主成员校验）。
    * 写入 plan.reviewerInstanceId + 群聊系统消息「已指派 <alias> 评审执行计划」；
-   * 评审者须在任务团队未 removed（否则 400 PLAN_STRUCTURE_INVALID，对齐 plan_submit 指派语义）。
+   * 评审者须是任务所属团队成员（tmm_，否则 400 PLAN_STRUCTURE_INVALID，对齐 plan_submit 指派语义）。
    */
   async assignReviewer(
     planId: string,
@@ -330,8 +339,12 @@ export class PlansService implements OnModuleInit {
     reviewerAlias: string;
   }> {
     const plan = await this.findPlanOrThrow(planId);
-    const reviewer = await this.prisma.taskAgent.findFirst({
-      where: { id: reviewerInstanceId, taskId: plan.taskId, removedAt: null },
+    const task = await this.prisma.task.findUnique({
+      where: { id: plan.taskId },
+      select: { teamId: true },
+    });
+    const reviewer = await this.prisma.teamMember.findFirst({
+      where: { id: reviewerInstanceId, teamId: task?.teamId ?? null },
       select: { id: true, alias: true, agentId: true },
     });
     if (!reviewer) {

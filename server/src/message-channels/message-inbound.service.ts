@@ -133,7 +133,9 @@ export class MessageInboundService implements MessageHost {
         ).registerStreamCorrelation(internalMessageId, ref);
       } catch {}
     }
-    const adapterFromRegistry = this.registry?.get?.('wecom_aibot') as unknown as
+    const adapterFromRegistry = this.registry?.get?.(
+      'wecom_aibot',
+    ) as unknown as
       | { registerStreamCorrelation?: (a: string, b: unknown) => void }
       | undefined;
     if (
@@ -391,11 +393,15 @@ export class MessageInboundService implements MessageHost {
         ) => {
           if (!taskIdForChat || !this.chatService) return;
           try {
-            const groupChannel = await (this.prisma as any).chatChannel.findFirst({
+            const groupChannel = await (
+              this.prisma as any
+            ).chatChannel.findFirst({
               where: { taskId: taskIdForChat, type: CHANNEL_TYPE.task_group },
             });
             if (!groupChannel) {
-              this.logger.warn(`card_action forward miss task_group taskId=${taskIdForChat}`);
+              this.logger.warn(
+                `card_action forward miss task_group taskId=${taskIdForChat}`,
+              );
               return;
             }
             const display = opNameForChat || opIdForChat || '用户';
@@ -407,9 +413,13 @@ export class MessageInboundService implements MessageHost {
               { text: chatText } as any,
               { senderType: SENDER_TYPE.external, senderId: null },
             );
-            this.logger.log(`card_action forwarded to chat channel=${groupChannel.id} taskId=${taskIdForChat} text=${chatText.slice(0, 200)}`);
+            this.logger.log(
+              `card_action forwarded to chat channel=${groupChannel.id} taskId=${taskIdForChat} text=${chatText.slice(0, 200)}`,
+            );
           } catch (e) {
-            this.logger.warn(`card_action forward to chat failed aqId=${aqId} taskId=${taskIdForChat}: ${(e as Error).message}`);
+            this.logger.warn(
+              `card_action forward to chat failed aqId=${aqId} taskId=${taskIdForChat}: ${(e as Error).message}`,
+            );
           }
         };
         const qRow = await (this.prisma as any).agentQuestion.findUnique({
@@ -430,8 +440,13 @@ export class MessageInboundService implements MessageHost {
           // Still forward selection to task chat for generic template_card interactions so model sees it even without pending question
           try {
             const fallbackTaskId = boundTaskIds[0] ?? null;
-            const opIdFb = (cmd as any).operatorExternalId as string | undefined;
-            const opNameFb = ((cmd as any).operatorExternalName as string | undefined) ?? ((cmd as any).operatorName as string | undefined) ?? opIdFb ?? '';
+            const opIdFb = (cmd as any).operatorExternalId as
+              string | undefined;
+            const opNameFb =
+              ((cmd as any).operatorExternalName as string | undefined) ??
+              ((cmd as any).operatorName as string | undefined) ??
+              opIdFb ??
+              '';
             await forwardSelectionToChat(fallbackTaskId, opIdFb, opNameFb);
           } catch {}
           results.push({ ok: false });
@@ -586,9 +601,7 @@ export class MessageInboundService implements MessageHost {
                 chattype: opChattype,
                 aqId,
               });
-            } else if (
-              typeof adapter.setPendingOperatorForAq === 'function'
-            ) {
+            } else if (typeof adapter.setPendingOperatorForAq === 'function') {
               adapter.setPendingOperatorForAq(aqId, {
                 channelId,
                 fromUserId: opId,

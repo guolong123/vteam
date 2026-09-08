@@ -15,7 +15,7 @@ import { PermissionGuard } from '../common/guards/permission.guard';
 import {
   AuthenticatedUser,
   CurrentUser,
-} from '../projects/current-user.decorator';
+} from '../common/decorators/current-user.decorator';
 import { AgentsService } from './agents.service';
 import { CloneAgentDto } from './dto/clone-agent.dto';
 import { CreateAgentDto } from './dto/create-agent.dto';

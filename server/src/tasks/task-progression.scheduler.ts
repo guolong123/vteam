@@ -333,7 +333,9 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   }
 
   /** 任务归属团队的主成员 id（team.mainAgentMemberId；无归属/未设置 → null）。 */
-  private async mainMemberOfTask(teamId: string | null): Promise<string | null> {
+  private async mainMemberOfTask(
+    teamId: string | null,
+  ): Promise<string | null> {
     if (!teamId) return null;
     const team = await (this.prisma as any).team.findUnique({
       where: { id: teamId },

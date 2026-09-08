@@ -4,26 +4,26 @@ import { IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { ISSUE_STATUS } from '../issues.constants';
 
 /**
- * GET /issues 查询参数（issue-management plan todo 2）。
- * taskId 与 projectId 二选一（taskId 优先，均缺 → 400）：
- * - taskId：按单任务过滤（任务成员校验）；
- * - projectId：按项目过滤（issue.task.projectId 命中该项目的全部任务 issue，项目成员校验）。
+ * GET /issues 查询参数（remove-project-dimension todo 4）。
+ * taskId 与 teamId 二选一（taskId 优先，均缺 → 400）：
+ * - taskId：按单任务过滤（任务所属团队成员校验）；
+ * - teamId：按团队过滤（issue.task.teamId 命中该团队的全部任务 issue，团队成员校验）。
  * status/assigneeAgentId 可选过滤；分页对齐 tasks 看板（page 默认 1、pageSize 默认 20）。
  */
 export class QueryIssuesDto {
   @ApiPropertyOptional({
-    description: '任务 id（按任务过滤，与 projectId 二选一）',
+    description: '任务 id（按任务过滤，与 teamId 二选一）',
   })
   @IsOptional()
   @IsString()
   taskId?: string;
 
   @ApiPropertyOptional({
-    description: '项目 id（按项目下全部任务过滤，与 taskId 二选一）',
+    description: '团队 id（按团队下全部任务过滤，与 taskId 二选一）',
   })
   @IsOptional()
   @IsString()
-  projectId?: string;
+  teamId?: string;
 
   @ApiPropertyOptional({
     description: '状态筛选（open/in_progress/resolved/closed）',

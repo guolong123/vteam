@@ -54,7 +54,9 @@ describe('WecomAibotAdapter (message-channels)', () => {
   });
 
   it('finishStream ok when stream and client present', async () => {
-    const mockClient: any = { replyStream: jest.fn().mockResolvedValue(undefined) };
+    const mockClient: any = {
+      replyStream: jest.fn().mockResolvedValue(undefined),
+    };
     (adapter as any).clients.set('mc_1', mockClient);
     adapter.registerStreamCorrelation('m_1', {
       channelId: 'mc_1',
@@ -78,7 +80,9 @@ describe('WecomAibotAdapter (message-channels)', () => {
   });
 
   it('finishStream handles frameHeaders wrapped in headers', async () => {
-    const mockClient: any = { replyStream: jest.fn().mockResolvedValue(undefined) };
+    const mockClient: any = {
+      replyStream: jest.fn().mockResolvedValue(undefined),
+    };
     (adapter as any).clients.set('mc_2', mockClient);
     adapter.registerStreamCorrelation('m_3', {
       channelId: 'mc_2',
@@ -123,11 +127,28 @@ describe('WecomAibotAdapter (message-channels)', () => {
   });
 
   it('sendQuestionCard permission builds button_interaction with approve/reject', async () => {
-    const mockClient: any = { sendMessage: jest.fn().mockResolvedValue({ errcode: 0, headers: { req_id: 'r1' } }) };
+    const mockClient: any = {
+      sendMessage: jest
+        .fn()
+        .mockResolvedValue({ errcode: 0, headers: { req_id: 'r1' } }),
+    };
     (adapter as any).clients.set('mc_1', mockClient);
-    const channel: any = { id: 'mc_1', type: 'wecom_aibot', config: { lastChatid: 'GuoLong' }, secrets: {}, enabled: true };
-    await adapter.sendQuestionCard(channel, { id: 'aq_1', kind: 'permission', content: { title: '写入文件', pattern: 'Write' } });
-    expect(mockClient.sendMessage).toHaveBeenCalledWith('GuoLong', expect.objectContaining({ msgtype: 'template_card' }));
+    const channel: any = {
+      id: 'mc_1',
+      type: 'wecom_aibot',
+      config: { lastChatid: 'GuoLong' },
+      secrets: {},
+      enabled: true,
+    };
+    await adapter.sendQuestionCard(channel, {
+      id: 'aq_1',
+      kind: 'permission',
+      content: { title: '写入文件', pattern: 'Write' },
+    });
+    expect(mockClient.sendMessage).toHaveBeenCalledWith(
+      'GuoLong',
+      expect.objectContaining({ msgtype: 'template_card' }),
+    );
     const body = mockClient.sendMessage.mock.calls[0][1];
     expect(body.template_card.button_list).toHaveLength(2);
     expect(body.template_card.button_list[0].key).toBe('aq_1:approve');
@@ -135,9 +156,17 @@ describe('WecomAibotAdapter (message-channels)', () => {
   });
 
   it('sendQuestionCard question with options builds buttons', async () => {
-    const mockClient: any = { sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }) };
+    const mockClient: any = {
+      sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+    };
     (adapter as any).clients.set('mc_1', mockClient);
-    const channel: any = { id: 'mc_1', type: 'wecom_aibot', config: { lastChatid: 'chat1' }, secrets: {}, enabled: true };
+    const channel: any = {
+      id: 'mc_1',
+      type: 'wecom_aibot',
+      config: { lastChatid: 'chat1' },
+      secrets: {},
+      enabled: true,
+    };
     await adapter.sendQuestionCard(channel, {
       id: 'aq_2',
       kind: 'question',
@@ -150,40 +179,87 @@ describe('WecomAibotAdapter (message-channels)', () => {
   });
 
   it('sendQuestionCard question with 3 options uses vote_interaction for full text', async () => {
-    const mockClient: any = { sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }) };
+    const mockClient: any = {
+      sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+    };
     (adapter as any).clients.set('mc_1', mockClient);
-    const channel: any = { id: 'mc_1', type: 'wecom_aibot', config: { lastChatid: 'chat1' }, secrets: {}, enabled: true };
+    const channel: any = {
+      id: 'mc_1',
+      type: 'wecom_aibot',
+      config: { lastChatid: 'chat1' },
+      secrets: {},
+      enabled: true,
+    };
     await adapter.sendQuestionCard(channel, {
       id: 'aq_2',
       kind: 'question',
-      content: { questions: [{ question: 'Pick?', options: ['选项一内容较长', '选项二内容', '选项三'] }] },
+      content: {
+        questions: [
+          {
+            question: 'Pick?',
+            options: ['选项一内容较长', '选项二内容', '选项三'],
+          },
+        ],
+      },
     });
     const body = mockClient.sendMessage.mock.calls[0][1];
     expect(body.template_card.card_type).toBe('vote_interaction');
     expect(body.template_card.checkbox.option_list).toHaveLength(3);
-    expect(body.template_card.checkbox.option_list[0].text).toBe('选项一内容较长');
-    expect(body.template_card.checkbox.option_list[0].id).toBe('aq_2:选项一内容较长');
+    expect(body.template_card.checkbox.option_list[0].text).toBe(
+      '选项一内容较长',
+    );
+    expect(body.template_card.checkbox.option_list[0].id).toBe(
+      'aq_2:选项一内容较长',
+    );
     expect(body.template_card.submit_button.key).toBe('aq_2:submit');
     expect(body.template_card.task_id).toBe('aq_2');
   });
 
   it('sendQuestionCard fallback markdown when no options', async () => {
-    const mockClient: any = { sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }) };
+    const mockClient: any = {
+      sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+    };
     (adapter as any).clients.set('mc_1', mockClient);
-    const channel: any = { id: 'mc_1', type: 'wecom_aibot', config: { lastChatid: 'chat1' }, secrets: {}, enabled: true };
-    await adapter.sendQuestionCard(channel, { id: 'aq_3', kind: 'question', content: { questions: [{ question: 'Q?', options: [] }] } });
-    expect(mockClient.sendMessage).toHaveBeenCalledWith('chat1', expect.objectContaining({ msgtype: 'markdown' }));
+    const channel: any = {
+      id: 'mc_1',
+      type: 'wecom_aibot',
+      config: { lastChatid: 'chat1' },
+      secrets: {},
+      enabled: true,
+    };
+    await adapter.sendQuestionCard(channel, {
+      id: 'aq_3',
+      kind: 'question',
+      content: { questions: [{ question: 'Q?', options: [] }] },
+    });
+    expect(mockClient.sendMessage).toHaveBeenCalledWith(
+      'chat1',
+      expect.objectContaining({ msgtype: 'markdown' }),
+    );
   });
 
   it('sendQuestionCard throws TASK_NOT_BOUND when no chatId', async () => {
-    const channel: any = { id: 'mc_1', type: 'wecom_aibot', config: {}, secrets: {}, enabled: true };
-    await expect(adapter.sendQuestionCard(channel, { id: 'aq_4', kind: 'permission', content: {} })).rejects.toThrow('TASK_NOT_BOUND');
+    const channel: any = {
+      id: 'mc_1',
+      type: 'wecom_aibot',
+      config: {},
+      secrets: {},
+      enabled: true,
+    };
+    await expect(
+      adapter.sendQuestionCard(channel, {
+        id: 'aq_4',
+        kind: 'permission',
+        content: {},
+      }),
+    ).rejects.toThrow('TASK_NOT_BOUND');
   });
 
   describe('handleTemplateCardEvent vote_interaction', () => {
-
     it('vote submit with selected_items triggers card_action with correct aqId/action', async () => {
-      const submitInbound = jest.fn().mockResolvedValue({ results: [{ ok: true }] });
+      const submitInbound = jest
+        .fn()
+        .mockResolvedValue({ results: [{ ok: true }] });
       const ctx: any = { submitInbound, updateChannelRuntime: jest.fn() };
       const mockClient: any = {
         on: jest.fn((ev: string, fn: any) => {
@@ -196,7 +272,9 @@ describe('WecomAibotAdapter (message-channels)', () => {
       };
       (adapter as any).clients.set('mc_vote', mockClient);
       (adapter as any).bindListeners('mc_vote', mockClient, ctx);
-      const handler = mockClient._handlers['event'] ?? mockClient._handlers['event.template_card_event'];
+      const handler =
+        mockClient._handlers['event'] ??
+        mockClient._handlers['event.template_card_event'];
       expect(handler).toBeDefined();
       const aqId = 'aq_vote_1';
       const frame: any = {
@@ -222,12 +300,18 @@ describe('WecomAibotAdapter (message-channels)', () => {
       };
       await handler(frame);
       expect(submitInbound).toHaveBeenCalledWith('mc_vote', [
-        expect.objectContaining({ kind: 'card_action', aqId, action: '选项一内容较长' }),
+        expect.objectContaining({
+          kind: 'card_action',
+          aqId,
+          action: '选项一内容较长',
+        }),
       ]);
     });
 
     it('vote submit handles nested template_card_event wrapper', async () => {
-      const submitInbound = jest.fn().mockResolvedValue({ results: [{ ok: true }] });
+      const submitInbound = jest
+        .fn()
+        .mockResolvedValue({ results: [{ ok: true }] });
       const ctx: any = { submitInbound, updateChannelRuntime: jest.fn() };
       const mockClient: any = {
         on: jest.fn((ev: string, fn: any) => {
@@ -249,7 +333,12 @@ describe('WecomAibotAdapter (message-channels)', () => {
               eventtype: 'template_card_event',
               task_id: aqId,
               selected_items: {
-                selected_item: [{ question_key: aqId, option_ids: { option_id: [`${aqId}:选项二内容`] } }],
+                selected_item: [
+                  {
+                    question_key: aqId,
+                    option_ids: { option_id: [`${aqId}:选项二内容`] },
+                  },
+                ],
               },
             },
           },
@@ -262,7 +351,9 @@ describe('WecomAibotAdapter (message-channels)', () => {
     });
 
     it('button_interaction still works for permission approve', async () => {
-      const submitInbound = jest.fn().mockResolvedValue({ results: [{ ok: true }] });
+      const submitInbound = jest
+        .fn()
+        .mockResolvedValue({ results: [{ ok: true }] });
       const ctx: any = { submitInbound, updateChannelRuntime: jest.fn() };
       const mockClient: any = {
         on: jest.fn((ev: string, fn: any) => {
@@ -278,17 +369,27 @@ describe('WecomAibotAdapter (message-channels)', () => {
         headers: { req_id: 'req_3' },
         body: {
           from: { userid: 'u1' },
-          event: { eventtype: 'template_card_event', task_id: 'aq_p1', event_key: 'aq_p1:approve' },
+          event: {
+            eventtype: 'template_card_event',
+            task_id: 'aq_p1',
+            event_key: 'aq_p1:approve',
+          },
         },
       };
       await handler(frame);
       expect(submitInbound).toHaveBeenCalledWith('mc_btn', [
-        expect.objectContaining({ kind: 'card_action', aqId: 'aq_p1', action: 'approve' }),
+        expect.objectContaining({
+          kind: 'card_action',
+          aqId: 'aq_p1',
+          action: 'approve',
+        }),
       ]);
     });
 
     it('vote submit without selection is ignored not recorded as submit', async () => {
-      const submitInbound = jest.fn().mockResolvedValue({ results: [{ ok: true }] });
+      const submitInbound = jest
+        .fn()
+        .mockResolvedValue({ results: [{ ok: true }] });
       const ctx: any = { submitInbound, updateChannelRuntime: jest.fn() };
       const mockClient: any = {
         on: jest.fn((ev: string, fn: any) => {
@@ -317,7 +418,9 @@ describe('WecomAibotAdapter (message-channels)', () => {
     });
 
     it('card update disables buttons for permission approve (button_list empty with replace_text)', async () => {
-      const submitInbound = jest.fn().mockResolvedValue({ results: [{ ok: true }] });
+      const submitInbound = jest
+        .fn()
+        .mockResolvedValue({ results: [{ ok: true }] });
       const ctx: any = { submitInbound, updateChannelRuntime: jest.fn() };
       const mockClient: any = {
         on: jest.fn((ev: string, fn: any) => {
@@ -333,7 +436,11 @@ describe('WecomAibotAdapter (message-channels)', () => {
         headers: { req_id: 'req_disable_1' },
         body: {
           from: { userid: 'u1' },
-          event: { eventtype: 'template_card_event', task_id: 'aq_p1', event_key: 'aq_p1:approve' },
+          event: {
+            eventtype: 'template_card_event',
+            task_id: 'aq_p1',
+            event_key: 'aq_p1:approve',
+          },
         },
       };
       await handler(frame);
@@ -374,7 +481,12 @@ describe('WecomAibotAdapter (message-channels)', () => {
             task_id: aqId,
             event_key: `${aqId}:submit`,
             selected_items: {
-              selected_item: [{ question_key: aqId, option_ids: { option_id: [`${aqId}:选项一`] } }],
+              selected_item: [
+                {
+                  question_key: aqId,
+                  option_ids: { option_id: [`${aqId}:选项一`] },
+                },
+              ],
             },
           },
         },
@@ -390,7 +502,9 @@ describe('WecomAibotAdapter (message-channels)', () => {
     });
 
     it('2-button permission card update also disables (reject case)', async () => {
-      const submitInbound = jest.fn().mockResolvedValue({ results: [{ ok: true }] });
+      const submitInbound = jest
+        .fn()
+        .mockResolvedValue({ results: [{ ok: true }] });
       const ctx: any = { submitInbound, updateChannelRuntime: jest.fn() };
       const mockClient: any = {
         on: jest.fn((ev: string, fn: any) => {
@@ -406,7 +520,11 @@ describe('WecomAibotAdapter (message-channels)', () => {
         headers: { req_id: 'req_reject' },
         body: {
           from: { userid: 'u2' },
-          event: { eventtype: 'template_card_event', task_id: 'aq_p2', event_key: 'aq_p2:reject' },
+          event: {
+            eventtype: 'template_card_event',
+            task_id: 'aq_p2',
+            event_key: 'aq_p2:reject',
+          },
         },
       };
       await handler(frame);
@@ -434,14 +552,22 @@ describe('WecomAibotAdapter (message-channels)', () => {
     });
 
     it('sendNewMessage sends markdown as new message after card (not finishStream replacement)', async () => {
-      const mockClient: any = { sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }) };
+      const mockClient: any = {
+        sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+      };
       (adapter as any).clients.set('mc_newmsg', mockClient);
       (adapter as any).hosts.set('mc_newmsg', {
-        getChannel: jest.fn().mockResolvedValue({ id: 'mc_newmsg', config: { lastChatid: 'chat_after_card' } }),
+        getChannel: jest.fn().mockResolvedValue({
+          id: 'mc_newmsg',
+          config: { lastChatid: 'chat_after_card' },
+        }),
       });
       const ok = await adapter.sendNewMessage('mc_newmsg', 'hello after card');
       expect(ok).toBe(true);
-      expect(mockClient.sendMessage).toHaveBeenCalledWith('chat_after_card', expect.objectContaining({ msgtype: 'markdown' }));
+      expect(mockClient.sendMessage).toHaveBeenCalledWith(
+        'chat_after_card',
+        expect.objectContaining({ msgtype: 'markdown' }),
+      );
       const body = mockClient.sendMessage.mock.calls[0][1];
       expect(body.markdown.content).toBe('hello after card');
     });

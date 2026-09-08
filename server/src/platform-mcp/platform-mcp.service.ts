@@ -1164,7 +1164,7 @@ export class PlatformMcpService {
     // 任务级记忆已删除，level=task → 400 MEMORY_LEVEL_INVALID；
     // team 级从 task 反查 teamId（不接收入参，防跨团队写入）；global 级仅主 Agent 可写（防全局污染，Metis M3）。
     // 非法 level 不再落入 global 分支（zod schema 已保证合法，此处防绕过 schema 直调 service）。
-    let memoryTaskId: string | null = null;
+    const memoryTaskId: string | null = null;
     let memoryTeamId: string | null = null;
     if (args.level === MEMORY_LEVELS.team) {
       memoryTeamId = (task as { teamId?: string | null }).teamId ?? null;
@@ -1174,8 +1174,7 @@ export class PlatformMcpService {
         );
       }
     } else if (args.level === MEMORY_LEVELS.global) {
-      const globalTeamId =
-        (task as { teamId?: string | null }).teamId ?? null;
+      const globalTeamId = (task as { teamId?: string | null }).teamId ?? null;
       const globalTeam = globalTeamId
         ? await this.prisma.team.findUnique({
             where: { id: globalTeamId },
@@ -1431,7 +1430,10 @@ export class PlatformMcpService {
       where: { id: task.teamId },
       select: { mainAgentMemberId: true },
     });
-    return { teamId: task.teamId, mainMemberId: team?.mainAgentMemberId ?? null };
+    return {
+      teamId: task.teamId,
+      mainMemberId: team?.mainAgentMemberId ?? null,
+    };
   }
 
   /**
@@ -1919,8 +1921,7 @@ export class PlatformMcpService {
       taskId: task.id,
       members: agentRows.map((r) => {
         const vs = viewSessionByMember.get(r.id) as
-          | { id: string; status: string }
-          | undefined;
+          { id: string; status: string } | undefined;
         return {
           id: r.id,
           agentId: r.agentId,

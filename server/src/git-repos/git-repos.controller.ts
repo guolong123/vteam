@@ -12,7 +12,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   CurrentUser,
   AuthenticatedUser,
-} from '../projects/current-user.decorator';
+} from '../common/decorators/current-user.decorator';
 import { AdminGuard } from '../users/admin.guard';
 import { CreateGitRepoDto } from './dto/create-git-repo.dto';
 import { UpdateGitRepoDto } from './dto/update-git-repo.dto';

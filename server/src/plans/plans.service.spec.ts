@@ -7,7 +7,7 @@ import {
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { PROJECT_MEMBERSHIP_ERRORS } from '../common/guards/project-membership.guard';
+import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { TASK_ERRORS } from '../common/constants/task.constants';
 import { PLAN_ERRORS, PLAN_STATUS } from './plan.constants';
 import { PlansService } from './plans.service';
@@ -25,8 +25,8 @@ describe('PlansService', () => {
     };
     planTask: { findMany: jest.Mock };
     task: { findUnique: jest.Mock };
-    projectMember: { findUnique: jest.Mock };
-    taskAgent: { findMany: jest.Mock; findFirst: jest.Mock };
+    teamUserMember: { findUnique: jest.Mock };
+    teamMember: { findMany: jest.Mock; findFirst: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
     message: { create: jest.Mock };
     $transaction: jest.Mock;
@@ -36,10 +36,10 @@ describe('PlansService', () => {
   const userId = 'u_member';
   const planId = 'pl_0000000001';
 
-  /** 项目成员校验通过：任务存在 + 项目成员记录命中。 */
+  /** 团队成员校验通过：任务存在 + 团队用户成员记录命中。 */
   const allowMember = () => {
-    prisma.task.findUnique.mockResolvedValue({ projectId: 'p_1' });
-    prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+    prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000001' });
+    prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
   };
 
   const planRow = (overrides: Record<string, unknown> = {}) => ({
@@ -50,8 +50,8 @@ describe('PlansService', () => {
     scopeIn: null,
     scopeOut: null,
     status: PLAN_STATUS.reviewing,
-    createdBy: 'ta_main',
-    reviewerInstanceId: 'ta_reviewer',
+    createdBy: 'tmm_main',
+    reviewerInstanceId: 'tmm_reviewer',
     createdAt: new Date('2026-08-16T00:00:00.000Z'),
     updatedAt: new Date('2026-08-16T00:00:00.000Z'),
     ...overrides,
@@ -70,7 +70,7 @@ describe('PlansService', () => {
       qa: null,
       commit: null,
     },
-    assigneeInstanceId: 'ta_assignee',
+    assigneeInstanceId: 'tmm_assignee',
     status: 'pending',
     createdAt: new Date('2026-08-16T00:00:00.000Z'),
     updatedAt: new Date('2026-08-16T00:00:00.000Z'),
@@ -118,8 +118,8 @@ describe('PlansService', () => {
       },
       planTask: { findMany: jest.fn() },
       task: { findUnique: jest.fn() },
-      projectMember: { findUnique: jest.fn() },
-      taskAgent: { findMany: jest.fn(), findFirst: jest.fn() },
+      teamUserMember: { findUnique: jest.fn() },
+      teamMember: { findMany: jest.fn(), findFirst: jest.fn() },
       chatChannel: { findFirst: jest.fn() },
       message: { create: jest.fn() },
       $transaction: jest.fn(),
@@ -202,23 +202,23 @@ describe('PlansService', () => {
     });
   });
 
-  describe('findByTask（GET /plans?taskId=）', () => {
-    it('项目成员查询返回计划头 + 子任务清单（含指派概览）', async () => {
+  describe('findByTask（GET /plans?taskId=，指派概览走团队成员 tmm_）', () => {
+    it('团队成员查询返回计划头 + 子任务清单（含团队成员指派概览）', async () => {
       allowMember();
       prisma.plan.findUnique.mockResolvedValue(planRow());
       prisma.planTask.findMany.mockResolvedValue([planTaskRow()]);
-      prisma.taskAgent.findMany.mockResolvedValue([
-        { id: 'ta_assignee', alias: '开发者-1', agent: { name: '开发者' } },
+      prisma.teamMember.findMany.mockResolvedValue([
+        { id: 'tmm_assignee', alias: '开发者-1', agent: { name: '开发者' } },
       ]);
 
       const out = await service.findByTask(taskId, userId);
 
       expect(prisma.task.findUnique).toHaveBeenCalledWith({
         where: { id: taskId },
-        select: { projectId: true },
+        select: { teamId: true },
       });
-      expect(prisma.projectMember.findUnique).toHaveBeenCalledWith({
-        where: { projectId_userId: { projectId: 'p_1', userId } },
+      expect(prisma.teamUserMember.findUnique).toHaveBeenCalledWith({
+        where: { teamId_userId: { teamId: 'tm_0000000001', userId } },
         select: { id: true },
       });
       expect(prisma.plan.findUnique).toHaveBeenCalledWith({
@@ -245,12 +245,28 @@ describe('PlansService', () => {
               qa: null,
               commit: null,
             },
-            assigneeInstanceId: 'ta_assignee',
+            assigneeInstanceId: 'tmm_assignee',
             assigneeAlias: '开发者-1',
             assigneeName: '开发者',
             status: 'pending',
           },
         ],
+      });
+    });
+
+    it('指派概览按团队成员表解析（teamId 归属 + tmm_ id）', async () => {
+      allowMember();
+      prisma.plan.findUnique.mockResolvedValue(planRow());
+      prisma.planTask.findMany.mockResolvedValue([planTaskRow()]);
+      prisma.teamMember.findMany.mockResolvedValue([
+        { id: 'tmm_assignee', alias: '开发者-1', agent: { name: '开发者' } },
+      ]);
+
+      await service.findByTask(taskId, userId);
+
+      expect(prisma.teamMember.findMany).toHaveBeenCalledWith({
+        where: { id: { in: ['tmm_assignee'] }, teamId: 'tm_0000000001' },
+        select: { id: true, alias: true, agent: { select: { name: true } } },
       });
     });
 
@@ -264,13 +280,13 @@ describe('PlansService', () => {
       expect(prisma.plan.findUnique).not.toHaveBeenCalled();
     });
 
-    it('非项目成员 → 403 PERMISSION_PROJECT_NOT_MEMBER', async () => {
-      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_1' });
-      prisma.projectMember.findUnique.mockResolvedValue(null);
+    it('非团队成员 → 403 PERMISSION_TEAM_NOT_MEMBER', async () => {
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000001' });
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
       await expectCode(
         service.findByTask(taskId, userId),
         ForbiddenException,
-        PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
       );
     });
 
@@ -286,16 +302,20 @@ describe('PlansService', () => {
   });
 
   describe('findTasks（GET /plans/:id/tasks）', () => {
-    it('项目成员查询返回子任务清单（含指派概览）', async () => {
+    it('团队成员查询返回子任务清单（含团队成员指派概览）', async () => {
       prisma.plan.findUnique.mockResolvedValue(planRow());
       allowMember();
       prisma.planTask.findMany.mockResolvedValue([planTaskRow()]);
-      prisma.taskAgent.findMany.mockResolvedValue([
-        { id: 'ta_assignee', alias: '开发者-1', agent: { name: '开发者' } },
+      prisma.teamMember.findMany.mockResolvedValue([
+        { id: 'tmm_assignee', alias: '开发者-1', agent: { name: '开发者' } },
       ]);
 
       const out = await service.findTasks(planId, userId);
 
+      expect(prisma.teamMember.findMany).toHaveBeenCalledWith({
+        where: { id: { in: ['tmm_assignee'] }, teamId: 'tm_0000000001' },
+        select: { id: true, alias: true, agent: { select: { name: true } } },
+      });
       expect(out).toEqual([
         {
           id: 'pt_0000000001',
@@ -309,7 +329,7 @@ describe('PlansService', () => {
             qa: null,
             commit: null,
           },
-          assigneeInstanceId: 'ta_assignee',
+          assigneeInstanceId: 'tmm_assignee',
           assigneeAlias: '开发者-1',
           assigneeName: '开发者',
           status: 'pending',
@@ -327,20 +347,20 @@ describe('PlansService', () => {
       expect(prisma.task.findUnique).not.toHaveBeenCalled();
     });
 
-    it('非项目成员 → 403 PERMISSION_PROJECT_NOT_MEMBER', async () => {
+    it('非团队成员 → 403 PERMISSION_TEAM_NOT_MEMBER', async () => {
       prisma.plan.findUnique.mockResolvedValue(planRow());
-      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_1' });
-      prisma.projectMember.findUnique.mockResolvedValue(null);
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000001' });
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
       await expectCode(
         service.findTasks(planId, userId),
         ForbiddenException,
-        PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
       );
     });
   });
 
   describe('review（PATCH /plans/:id/review）', () => {
-    it('approved：项目成员评审通过 → plan.update(status=approved, reviewerInstanceId=null) + 系统消息', async () => {
+    it('approved：团队成员评审通过 → plan.update(status=approved, reviewerInstanceId=null) + 系统消息', async () => {
       prisma.plan.findUnique.mockResolvedValue(planRow());
       allowMember();
       allowChannel();
@@ -450,37 +470,42 @@ describe('PlansService', () => {
       );
     });
 
-    it('非项目成员 → 403 PERMISSION_PROJECT_NOT_MEMBER', async () => {
+    it('非团队成员 → 403 PERMISSION_TEAM_NOT_MEMBER', async () => {
       prisma.plan.findUnique.mockResolvedValue(planRow());
-      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_1' });
-      prisma.projectMember.findUnique.mockResolvedValue(null);
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000001' });
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
       await expectCode(
         service.review(planId, userId, 'approved'),
         ForbiddenException,
-        PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
       );
       expect(prisma.plan.update).not.toHaveBeenCalled();
     });
   });
 
-  describe('assignReviewer（plan_assign_reviewer MCP 通道复用）', () => {
+  describe('assignReviewer（plan_assign_reviewer MCP 通道复用，评审者为团队成员 tmm_）', () => {
     it('写入 reviewerInstanceId + 系统消息「已指派 <alias> 评审执行计划」', async () => {
       prisma.plan.findUnique.mockResolvedValue(planRow());
-      prisma.taskAgent.findFirst.mockResolvedValue({
-        id: 'ta_reviewer',
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000001' });
+      prisma.teamMember.findFirst.mockResolvedValue({
+        id: 'tmm_reviewer',
         alias: '开发者-1',
         agentId: 'a_dev',
       });
       allowChannel();
       prisma.plan.update.mockResolvedValue(
-        planRow({ reviewerInstanceId: 'ta_reviewer' }),
+        planRow({ reviewerInstanceId: 'tmm_reviewer' }),
       );
 
-      const out = await service.assignReviewer(planId, 'ta_reviewer');
+      const out = await service.assignReviewer(planId, 'tmm_reviewer');
 
+      expect(prisma.teamMember.findFirst).toHaveBeenCalledWith({
+        where: { id: 'tmm_reviewer', teamId: 'tm_0000000001' },
+        select: { id: true, alias: true, agentId: true },
+      });
       expect(prisma.plan.update).toHaveBeenCalledWith({
         where: { id: planId },
-        data: { reviewerInstanceId: 'ta_reviewer' },
+        data: { reviewerInstanceId: 'tmm_reviewer' },
       });
       expect(prisma.message.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
@@ -490,16 +515,17 @@ describe('PlansService', () => {
       expect(out).toEqual({
         planId,
         taskId,
-        reviewerInstanceId: 'ta_reviewer',
+        reviewerInstanceId: 'tmm_reviewer',
         reviewerAlias: '开发者-1',
       });
     });
 
     it('评审者不在任务团队 → 400 PLAN_STRUCTURE_INVALID（不落库）', async () => {
       prisma.plan.findUnique.mockResolvedValue(planRow());
-      prisma.taskAgent.findFirst.mockResolvedValue(null);
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000001' });
+      prisma.teamMember.findFirst.mockResolvedValue(null);
       await expectCode(
-        service.assignReviewer(planId, 'ta_ghost'),
+        service.assignReviewer(planId, 'tmm_ghost'),
         BadRequestException,
         PLAN_ERRORS.PLAN_STRUCTURE_INVALID,
       );
@@ -509,7 +535,7 @@ describe('PlansService', () => {
     it('计划不存在 → 404 PLAN_NOT_FOUND', async () => {
       prisma.plan.findUnique.mockResolvedValue(null);
       await expectCode(
-        service.assignReviewer(planId, 'ta_reviewer'),
+        service.assignReviewer(planId, 'tmm_reviewer'),
         NotFoundException,
         PLAN_ERRORS.PLAN_NOT_FOUND,
       );

@@ -29,6 +29,7 @@ import {
   PLAN_TASK_STATUS,
 } from '../plans/plan.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import { resyncIdPrefix } from '../common/id-resync';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -104,14 +105,6 @@ type SysMessageRow = {
   createdAt: Date;
 };
 
-/** 只暴露 findFirst({orderBy:{id:'desc'},select:{id:true}}) 的结构化子集（重启续号用）。 */
-type SeqModel = {
-  findFirst(args: {
-    orderBy: { id: 'desc' };
-    select: { id: true };
-  }): Promise<{ id: string } | null>;
-};
-
 /** 状态迁移系统消息上下文（10 篇 §8.1 文案生成所需）。 */
 type SysMessageCtx = {
   task: TaskRow;
@@ -158,16 +151,25 @@ export class TasksService implements OnModuleInit {
     private readonly progression: TaskProgressionScheduler,
   ) {}
 
-  /** 进程启动：按库内各前缀最大序号对齐 id 生成器（重启续号，防主键冲突）。 */
+  /** 进程启动：按库内各前缀纯数字序号最大值对齐 id 生成器（resyncIdPrefix 跳过非数字 id，防主键冲突）。 */
   async onModuleInit(): Promise<void> {
-    await this.seedPrefix(ID_PREFIX.task, this.prisma.task);
-    await this.seedPrefix(ID_PREFIX.channel, this.prisma.chatChannel);
-    await this.seedPrefix(ID_PREFIX.taskEvent, this.prisma.taskEvent);
-    await this.seedPrefix(ID_PREFIX.message, this.prisma.message);
-    await this.seedPrefix(ID_PREFIX.session, this.prisma.session);
-    await this.seedPrefix(
+    await resyncIdPrefix(this.prisma.task, ID_PREFIX.task, this.idGen);
+    await resyncIdPrefix(
+      this.prisma.chatChannel,
+      ID_PREFIX.channel,
+      this.idGen,
+    );
+    await resyncIdPrefix(
+      this.prisma.taskEvent,
+      ID_PREFIX.taskEvent,
+      this.idGen,
+    );
+    await resyncIdPrefix(this.prisma.message, ID_PREFIX.message, this.idGen);
+    await resyncIdPrefix(this.prisma.session, ID_PREFIX.session, this.idGen);
+    await resyncIdPrefix(
+      (this.prisma as any).teamQueue,
       ID_PREFIX.teamQueue,
-      (this.prisma as any).teamQueue as SeqModel,
+      this.idGen,
     );
   }
 
@@ -411,7 +413,6 @@ export class TasksService implements OnModuleInit {
               }
             }
           } catch {}
-
 
           // FIFO + 版本双保险
           if (isIdle) {
@@ -667,13 +668,12 @@ export class TasksService implements OnModuleInit {
     }
     // 主实例校验口径团队化：实例唯一来源为任务归属团队的团队成员（tmm_）。
     const teamIdOf = (task as any).teamId ?? null;
-    const memberRows: Array<{ id: string; agentId: string }> =
-      teamIdOf
-        ? await (this.prisma as any).teamMember.findMany({
-            where: { teamId: teamIdOf },
-            select: { id: true, agentId: true },
-          })
-        : [];
+    const memberRows: Array<{ id: string; agentId: string }> = teamIdOf
+      ? await (this.prisma as any).teamMember.findMany({
+          where: { teamId: teamIdOf },
+          select: { id: true, agentId: true },
+        })
+      : [];
     const instances = memberRows ?? [];
     if (dto.mainAgentInstanceId !== undefined) {
       // 主实例：须为团队内实例，同步 mainAgentId 为其 agent（渲染兜底）
@@ -724,9 +724,9 @@ export class TasksService implements OnModuleInit {
    *   与 mark-pending-review.preflight（计划任务全完成 = 验收门）各自把关；
    * - 任务已 in_progress 时切到 plan：若计划存在且已批准/执行中（approved/executing）
    *   → 事务内顺带计划置 executing（执行态与计划态一致）；计划不存在或其他状态 → 仅切
-    *   executionMode，不碰计划。
-    * 执行模式与团队托管模式（team.managedMode）独立生效、互不干扰。
-    */
+   *   executionMode，不碰计划。
+   * 执行模式与团队托管模式（team.managedMode）独立生效、互不干扰。
+   */
   async updateExecutionMode(id: string, mode: string) {
     if (mode !== EXECUTION_MODES.direct && mode !== EXECUTION_MODES.plan) {
       throw new BadRequestException(`非法执行模式：${mode}`);
@@ -865,11 +865,7 @@ export class TasksService implements OnModuleInit {
 
     const { sysMessages, created } = await this.prisma.$transaction(
       async (tx) => {
-        const created = await this.createTeamMembers(
-          tx,
-          teamId,
-          addInstances,
-        );
+        const created = await this.createTeamMembers(tx, teamId, addInstances);
         const removed: any[] = [];
         for (const instanceId of toRemove) {
           removed.push(teamMap.get(instanceId)!);
@@ -1715,9 +1711,7 @@ export class TasksService implements OnModuleInit {
             status: { not: SESSION_STATUS.archived },
           },
           select: { id: true, status: true, teamMemberId: true },
-        })) as
-          | { id: string; status: string; teamMemberId: string }[]
-          | null;
+        })) as { id: string; status: string; teamMemberId: string }[] | null;
         for (const s of sessions ?? []) {
           if (s?.teamMemberId && !sessionByMember.has(s.teamMemberId)) {
             sessionByMember.set(s.teamMemberId, s);
@@ -1866,18 +1860,5 @@ export class TasksService implements OnModuleInit {
     const ps = Number(pageSize ?? 20);
     if (!Number.isFinite(ps)) return 20;
     return Math.min(Math.max(Math.floor(ps), 1), 100);
-  }
-
-  private async seedPrefix(prefix: string, model: SeqModel): Promise<void> {
-    const last = await model.findFirst({
-      orderBy: { id: 'desc' },
-      select: { id: true },
-    });
-    if (last) {
-      const seq = parseInt(last.id.slice(prefix.length + 1), 10);
-      if (Number.isFinite(seq)) {
-        this.idGen.seed(prefix, seq);
-      }
-    }
   }
 }

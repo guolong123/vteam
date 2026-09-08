@@ -17,7 +17,7 @@ description: 完整平台控制面对外契约：REST 端点清单、SSE 事件�
 | 08 篇基线 | 09 篇落地 |
 |-----------|----------|
 | 控制面为 NestJS 单体，REST `/api/v1`（JWT）+ 统一 SSE（08 篇 §2/§5） | 全部 REST 端点收敛在 `/api/v1` 前缀下；SSE 事件格式统一 `{id, type, data, timestamp}`（本文档 §4） |
-| 模块划分（Auth/Users/Projects/Tasks/Chat/Artifacts/Agents/SkillsTools/Workers/Permissions/Realtime，08 篇 §3.1） | 端点清单按模块组织，一模块一节（§3）；RealtimeModule 承载全部 SSE 端点（§4） |
+| 模块划分（Auth/Users/Teams/Tasks/Chat/Artifacts/Agents/SkillsTools/Workers/Permissions/Realtime，08 篇 §3.1） | 端点清单按模块组织，一模块一节（§3）；RealtimeModule 承载全部 SSE 端点（§4） |
 | Worker 控制协议（07 篇 11.3，08 篇 §3.3 WorkerClient/WorkerSseClient） | **对外契约 ≠ worker 协议**：前者是前端↔控制面的业务契约，后者是控制面↔worker 的内部协议，两者由控制面翻译衔接（§7） |
 | 数据模型（08 篇 §6：users/tasks/messages/artifacts/workers 等 21 表） | 端点请求/响应与表一一对应；消息与事件以主键为游标，SSE 与 REST 历史共用同一游标语义（§2.2/§4.4） |
 
@@ -67,15 +67,15 @@ description: 完整平台控制面对外契约：REST 端点清单、SSE 事件�
 
 ### 2.3 权限控制（FR-23/24 的 API 落地）
 
-权限判定在控制面统一执行：`AuthModule` 验证 JWT → `PermissionsModule` 按「角色权限矩阵（资源×操作）+ 权限范围（项目边界）」拦截（08 篇 §7.6）。端点表以两种标记标注：
+权限判定在控制面统一执行：`AuthModule` 验证 JWT → `PermissionsModule` 按「角色权限矩阵（资源×操作）+ 权限范围（团队边界）」拦截（08 篇 §7.6）。端点表以两种标记标注：
 
 - **`[admin]`**：平台管理员专属，对应矩阵中用户管理/权限配置/Worker 节点/技能工具资源行的「管理」操作（FR-22/23/26/27）。
-- **`[project]`**：项目内端点，校验调用者须为该项目成员（`project_members`，FR-24「指定项目」范围）；跨项目数据不可见（05 篇 1.2）。
+- **`[team]`**：团队内端点，校验调用者须为该团队成员（`teamUserMember`，FR-24「指定团队」范围）；跨团队数据不可见（05 篇 1.2）。
 - **`[worker]`**：Worker 注册/心跳端点，**不使用用户 JWT**，使用部署时下发的 worker 内部 token（`X-Worker-Token`），与用户权限体系完全隔离（§7）。
 
-项目成员默认具备：任务查看/创建（FR-01）、群聊发消息与 @（FR-09~13）、产出物查看（FR-44/45）、Agent 查看与克隆/自定义（FR-31/32）；不具备：用户管理、权限配置、Worker 管理、技能工具管理（均为 `[admin]`）。验收操作（FR-04）为项目内权限，不做单独角色门槛（验收员角色属自定义角色组合，FR-23）。
+团队成员默认具备：任务查看/创建（FR-01）、群聊发消息与 @（FR-09~13）、产出物查看（FR-44/45）、Agent 查看与克隆/自定义（FR-31/32）；不具备：用户管理、权限配置、Worker 管理、技能工具管理（均为 `[admin]`）。验收操作（FR-04）为团队内权限，不做单独角色门槛（验收员角色属自定义角色组合，FR-23）。
 
-**操作映射**：矩阵「查看/创建/编辑/删除/验收/管理」对应 HTTP 语义——GET=查看、POST=创建、PATCH=编辑、DELETE=删除、POST 状态迁移端点=验收/管理。矩阵中「删除」仅作用于本版可删对象（项目成员移除、自定义角色删除，FR-23 边界说明）；任务/消息/产出物无 DELETE 端点。
+**操作映射**：矩阵「查看/创建/编辑/删除/验收/管理」对应 HTTP 语义——GET=查看、POST=创建、PATCH=编辑、DELETE=删除、POST 状态迁移端点=验收/管理。矩阵中「删除」仅作用于本版可删对象（团队成员移除、自定义角色删除，FR-23 边界说明）；任务/消息/产出物无 DELETE 端点。
 
 ## 3. REST 端点清单（按模块）
 
@@ -85,7 +85,7 @@ description: 完整平台控制面对外契约：REST 端点清单、SSE 事件�
 
 | 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 依据 |
 |------|------|---------|---------|------|------|
-| POST | `/auth/register` | `{username, password, displayName, email?}` | `201` + `{id, username, displayName}`；默认角色 member、无项目 | 公开 | FR-22 |
+| POST | `/auth/register` | `{username, password, displayName, email?}` | `201` + `{id, username, displayName}`；默认角色 member、无团队 | 公开 | FR-22 |
 | POST | `/auth/login` | `{username, password}` | `{accessToken, refreshToken, user}` | 公开 | FR-22 |
 | POST | `/auth/refresh` | `{refreshToken}` | 新 `{accessToken, refreshToken}`；刷新失败 401 `AUTH_REFRESH_INVALID` | 公开（凭 refresh token） | 08 §7.6 |
 
@@ -94,38 +94,38 @@ description: 完整平台控制面对外契约：REST 端点清单、SSE 事件�
 | 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 依据 |
 |------|------|---------|---------|------|------|
 | GET | `/users` | `page/pageSize`、`search?`（用户名/姓名模糊） | `{items, total, ...}`；**不含 password_hash** | `[admin]` | FR-22 |
-| POST | `/users` | `{username, password, displayName, email?, roleId, projectIds[]}` | `201` + 用户对象 | `[admin]` | FR-22 |
-| GET | `/users/:id` | — | 用户详情（含角色、所属项目） | `[admin]`（本人可查自己） | FR-22 |
-| PATCH | `/users/:id` | `{displayName?, email?, roleId?, projectIds[]}` | 更新后用户对象 | `[admin]` | FR-22 |
+| POST | `/users` | `{username, password, displayName, email?, roleId, teamIds[]}` | `201` + 用户对象 | `[admin]` | FR-22 |
+| GET | `/users/:id` | — | 用户详情（含角色、所属团队） | `[admin]`（本人可查自己） | FR-22 |
+| PATCH | `/users/:id` | `{displayName?, email?, roleId?, teamIds[]}` | 更新后用户对象 | `[admin]` | FR-22 |
 | PATCH | `/users/:id/status` | `{enabled: boolean}` | 禁用/启用；禁用后该用户登录返回 401；**不删除账号数据** | `[admin]` | FR-22 |
 | POST | `/users/:id/reset-password` | 管理员生成新临时密码 `{newPassword}` | 返回新密码（仅此一次明文返回） | `[admin]` | FR-22 |
 
-### 3.3 Projects（FR-25 项目生命周期）
+### 3.3 Teams（团队生命周期）
 
 | 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 依据 |
 |------|------|---------|---------|------|------|
-| GET | `/projects` | `page/pageSize`、`status?` | 调用者所属项目列表（管理员可见全部） | `[project]`（成员仅见已加入） | FR-25 |
-| POST | `/projects` | `{name, description?}` | `201` + 项目对象（status=active）；创建者为主人 `owner` | `[admin]`（获授权成员可创建） | FR-25 |
-| GET | `/projects/:id` | — | 项目详情 + 成员列表 | `[project]` | FR-25 |
-| PATCH | `/projects/:id` | `{name?, description?}` | 更新后项目对象 | `[project]`（owner 或授权角色） | FR-25 |
-| POST | `/projects/:id/members` | `{userId, role: owner\|member}` | `201`；加入后该用户可在项目内创建任务 | `[admin]` | FR-25 |
-| DELETE | `/projects/:id/members/:userId` | — | `204`；**本版可删除对象之一**（FR-23 删除适用）；移除不删用户数据 | `[admin]` | FR-23/25 |
+| GET | `/teams` | `page/pageSize`、`status?` | 调用者所属团队列表 | `[team]`（成员仅见已加入） | FR-25 |
+| POST | `/teams` | `{name, description?}` | `201` + 团队对象；创建者为管理员 | `[admin]`（获授权成员可创建） | FR-25 |
+| GET | `/teams/:id` | — | 团队详情 + 成员列表 | `[team]` | FR-25 |
+| PATCH | `/teams/:id` | `{name?, description?}` | 更新后团队对象 | `[team]`（管理员或授权角色） | FR-25 |
+| POST | `/teams/:id/members` | `{userId, role}` | `201`；加入后该用户可在团队内创建任务 | `[admin]` | FR-25 |
+| DELETE | `/teams/:id/members/:userId` | — | `204`；**本版可删除对象之一**（FR-23 删除适用）；移除不删用户数据 | `[admin]` | FR-23/25 |
 
 ### 3.4 Tasks（FR-01~08 任务管理）
 
 | 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 依据 |
 |------|------|---------|---------|------|------|
-| GET | `/projects/:pid/tasks` | `page/pageSize`、`status?`（五态筛选）、`priority?` | 看板/列表数据（FR-03 五态对应） | `[project]` | FR-01/03 |
-| POST | `/projects/:pid/tasks` | `{title, description?, priority?, agentIds[], mainAgentId?, backgroundDocs[]?}` | `201` + 任务对象；**自动创建任务群聊频道与文档库**（FR-01/09）；背景文档入文档库（FR-06） | `[project]` | FR-01/02/06/09 |
-| GET | `/tasks/:id` | — | 任务详情（状态/团队/主 Agent/产出物摘要） | `[project]` | FR-01 |
-| PATCH | `/tasks/:id` | `{title?, description?, priority?, mainAgentId?}` | 更新后任务；mainAgentId 校验须为团队内已选 Agent（FR-08） | `[project]` | FR-01/08 |
-| POST | `/tasks/:id/start` | — | 状态 待开始→进行中；校验已选 Agent 与主 Agent（FR-07）；**启动消息私信主 Agent**（FR-07）；响应 `{task, mainAgentId}` | `[project]` | FR-07/08 |
-| POST | `/tasks/:id/mark-pending-review` | — | 状态 进行中→待验收（成员手动标记，FR-04）；**Agent 不自动触发** | `[project]` | FR-04 |
-| POST | `/tasks/:id/accept` | — | 状态 待验收→已完成；记录产出物验收基线 `accepted_flag`（FR-04/43） | `[project]` | FR-04 |
-| POST | `/tasks/:id/reject` | — | 状态 待验收→进行中；产出补齐后再入待验收（FR-04） | `[project]` | FR-04 |
-| POST | `/tasks/:id/archive` | — | 状态 已完成→已归档；**归档不删除任何内容**（FR-05）；归档后回收 worker 实例（08 篇 §3.3 DELETE instances） | `[project]` | FR-05 |
-| POST | `/tasks/:id/team` | `{addAgentIds[]?, removeAgentIds[]?}` | 团队调整（FR-02）；添加时注入文档库上下文（FR-15）；移除后会话冻结、产出物保留；群聊发系统消息（FR-10） | `[project]` | FR-02/10 |
-| POST | `/tasks/:id/background-docs` | `multipart/form-data` 多文件 | `201` + 文档元数据数组；进入任务文档库（FR-06） | `[project]` | FR-06 |
+| GET | `/tasks` | `teamId?`、`page/pageSize`、`status?`（五态筛选）、`priority?` | 看板/列表数据（FR-03 五态对应；无 `teamId` 时返回调用者所有可见团队任务） | `[team]` | FR-01/03 |
+| POST | `/tasks` | `{teamId!, title, description?, priority?, backgroundDocs[]?}` | `201` + 任务对象；任务直连团队（`teamId` 必填）；**自动创建任务群聊频道与文档库**（FR-01/09）；背景文档入文档库（FR-06） | `[team]` | FR-01/02/06/09 |
+| GET | `/tasks/:id` | — | 任务详情（状态/团队/主 Agent/产出物摘要） | `[team]` | FR-01 |
+| PATCH | `/tasks/:id` | `{title?, description?, priority?, mainAgentId?}` | 更新后任务；mainAgentId 校验须为团队内已选 Agent（FR-08） | `[team]` | FR-01/08 |
+| POST | `/tasks/:id/start` | — | 状态 待开始→进行中；校验已选 Agent 与主 Agent（FR-07）；**启动消息私信主 Agent**（FR-07）；响应 `{task, mainAgentId}` | `[team]` | FR-07/08 |
+| POST | `/tasks/:id/mark-pending-review` | — | 状态 进行中→待验收（成员手动标记，FR-04）；**Agent 不自动触发** | `[team]` | FR-04 |
+| POST | `/tasks/:id/accept` | — | 状态 待验收→已完成；记录产出物验收基线 `accepted_flag`（FR-04/43） | `[team]` | FR-04 |
+| POST | `/tasks/:id/reject` | — | 状态 待验收→进行中；产出补齐后再入待验收（FR-04） | `[team]` | FR-04 |
+| POST | `/tasks/:id/archive` | — | 状态 已完成→已归档；**归档不删除任何内容**（FR-05）；归档后回收 worker 实例（08 篇 §3.3 DELETE instances） | `[team]` | FR-05 |
+| POST | `/tasks/:id/team` | `{addAgentIds[]?, removeAgentIds[]?}` | 团队调整（FR-02）；添加时注入文档库上下文（FR-15）；移除后会话冻结、产出物保留；群聊发系统消息（FR-10） | `[team]` | FR-02/10 |
+| POST | `/tasks/:id/background-docs` | `multipart/form-data` 多文件 | `201` + 文档元数据数组；进入任务文档库（FR-06） | `[team]` | FR-06 |
 
 **状态迁移汇总**（FR-03 五态，服务端校验合法迁移，非法返回 409 `TASK_INVALID_TRANSITION`）：
 
@@ -139,12 +139,12 @@ description: 完整平台控制面对外契约：REST 端点清单、SSE 事件�
 
 | 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 依据 |
 |------|------|---------|---------|------|------|
-| GET | `/channels` | `type?`（task_group/private） | 调用者可访问的频道列表（任务群聊自动创建，FR-09） | `[project]` | FR-09/14 |
-| GET | `/channels/:id` | — | 频道信息（类型、关联任务、成员/Agent 列表） | `[project]` | FR-09 |
-| GET | `/channels/:id/messages` | `cursor?&limit?`（默认 50） | `{items, nextCursor}`；消息按 id 升序（FR-19 持久化，游标对齐 SSE） | `[project]` | FR-10/19 |
-| POST | `/channels/:id/messages` | `{text, mentions[]}`（@ 解析，见 §5.1 详设） | `201` + `{message, triggers[]}`；触发 Agent 进入 Loading（FR-20） | `[project]` | FR-10/11/12 |
-| POST | `/dm-channels` | `{taskId, agentId}` | 私聊频道；**与群聊共用该 Agent 会话**（FR-14），不发新消息 | `[project]` | FR-14 |
-| GET | `/channels/:id/trigger-results/:messageId` | — | @ 触发结果（被触发 Agent、dispatch 状态、回复消息 id）；轮询兜底，常态走 SSE（§4.2） | `[project]` | FR-11/12/20 |
+| GET | `/channels` | `type?`（task_group/private） | 调用者可访问的频道列表（任务群聊自动创建，FR-09） | `[team]` | FR-09/14 |
+| GET | `/channels/:id` | — | 频道信息（类型、关联任务、成员/Agent 列表） | `[team]` | FR-09 |
+| GET | `/channels/:id/messages` | `cursor?&limit?`（默认 50） | `{items, nextCursor}`；消息按 id 升序（FR-19 持久化，游标对齐 SSE） | `[team]` | FR-10/19 |
+| POST | `/channels/:id/messages` | `{text, mentions[]}`（@ 解析，见 §5.1 详设） | `201` + `{message, triggers[]}`；触发 Agent 进入 Loading（FR-20） | `[team]` | FR-10/11/12 |
+| POST | `/dm-channels` | `{taskId, agentId}` | 私聊频道；**与群聊共用该 Agent 会话**（FR-14），不发新消息 | `[team]` | FR-14 |
+| GET | `/channels/:id/trigger-results/:messageId` | — | @ 触发结果（被触发 Agent、dispatch 状态、回复消息 id）；轮询兜底，常态走 SSE（§4.2） | `[team]` | FR-11/12/20 |
 
 > 消息类型三态（用户/Agent 回复/系统，FR-10）由 `senderType` 区分，经 SSE 广播与历史查询均含该字段。Agent 间互 @（FR-13）不新增端点：Agent 回复中的 mentions 经 worker 事件（`task.completed` payload）回流，控制面按其语义继续分派（§4.3），互 @ 轮次上限（3 轮）与循环检测在分派链路校验（FR-13）。
 
@@ -152,10 +152,10 @@ description: 完整平台控制面对外契约：REST 端点清单、SSE 事件�
 
 | 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 依据 |
 |------|------|---------|---------|------|------|
-| GET | `/tasks/:id/artifacts` | `type?`（text/doc/file）、`search?` | 文档库列表（类型/标题/版本/作者/时间，FR-44） | `[project]` | FR-44 |
-| GET | `/artifacts/:id` | — | 产出物详情 + 版本列表（FR-45 版本切换入口） | `[project]` | FR-45 |
-| GET | `/artifacts/:id/versions/:version` | — | 指定版本内容（text/doc 返回正文，file 返回下载地址） | `[project]` | FR-43/45 |
-| POST | `/tasks/:id/artifacts` | `{type, title, content?}`（结论文本/文档） | `201` + 新版本（append 递增，FR-43）；**成员/主 Agent 辅助提交入口（P1）** | `[project]` | FR-40/43 |
+| GET | `/tasks/:id/artifacts` | `type?`（text/doc/file）、`search?` | 文档库列表（类型/标题/版本/作者/时间，FR-44） | `[team]` | FR-44 |
+| GET | `/artifacts/:id` | — | 产出物详情 + 版本列表（FR-45 版本切换入口） | `[team]` | FR-45 |
+| GET | `/artifacts/:id/versions/:version` | — | 指定版本内容（text/doc 返回正文，file 返回下载地址） | `[team]` | FR-43/45 |
+| POST | `/tasks/:id/artifacts` | `{type, title, content?}`（结论文本/文档） | `201` + 新版本（append 递增，FR-43）；**成员/主 Agent 辅助提交入口（P1）** | `[team]` | FR-40/43 |
 
 **产出物落库主路径是事件驱动，非本端点**：Agent 会话完成时按产出物协议（FR-38 json_schema）产出，经 worker 事件（`message.part.delta` 的 file part / `task.completed` payload）回流控制面，由 ArtifactsModule 校验后自动归档（FR-40 结论文本直接归档 / FR-41 文档平台拉取；拉取失败不产生不完整归档）。上述 `POST /tasks/:id/artifacts` 仅为成员手动补充提交的辅助入口（P1，FR-40 的「无需额外导出」不依赖它）。已验收版本不可覆盖（FR-43 边界）：对已验收产出物提交新内容返回 409 `ARTIFACT_ACCEPTED_IMMUTABLE`，Agent 只能 append 新版本。
 
@@ -163,12 +163,12 @@ description: 完整平台控制面对外契约：REST 端点清单、SSE 事件�
 
 | 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 依据 |
 |------|------|---------|---------|------|------|
-| GET | `/agents` | `type?`（template/clone/custom）、`page/pageSize` | Agent 列表（含四类预置模板，FR-30） | `[project]` | FR-30 |
-| GET | `/agents/:id` | — | Agent 详情：提示词/技能/工具 effect/权限范围/默认模型（FR-33~36/47/48） | `[project]` | FR-33~36/47 |
-| POST | `/agents` | `{name, type: custom, prompt?, skillIds[], toolEffects{}, permissionScope?, defaultModelId?}` | `201` + Agent 对象（完全自定义，FR-32） | `[project]` | FR-32/33~36/47 |
-| POST | `/agents/:id/clone` | `{name}` | `201` + 克隆副本（baseAgentId 记录克隆源，FR-31）；**原模板不受影响** | `[project]` | FR-31 |
-| PATCH | `/agents/:id` | `{prompt?, skillIds[], toolEffects{}, permissionScope?, defaultModelId?}` | 更新后 Agent；配置即时生效于后续会话（FR-33） | `[project]` | FR-33~36/47/48 |
-| GET | `/agents/:id/available-models` | — | 模型列表（经 worker `GET /models` 动态获取，FR-47） | `[project]` | FR-47 |
+| GET | `/agents` | `type?`（template/clone/custom）、`page/pageSize` | Agent 列表（含四类预置模板，FR-30） | `[team]` | FR-30 |
+| GET | `/agents/:id` | — | Agent 详情：提示词/技能/工具 effect/权限范围/默认模型（FR-33~36/47/48） | `[team]` | FR-33~36/47 |
+| POST | `/agents` | `{name, type: custom, prompt?, skillIds[], toolEffects{}, permissionScope?, defaultModelId?}` | `201` + Agent 对象（完全自定义，FR-32） | `[team]` | FR-32/33~36/47 |
+| POST | `/agents/:id/clone` | `{name}` | `201` + 克隆副本（baseAgentId 记录克隆源，FR-31）；**原模板不受影响** | `[team]` | FR-31 |
+| PATCH | `/agents/:id` | `{prompt?, skillIds[], toolEffects{}, permissionScope?, defaultModelId?}` | 更新后 Agent；配置即时生效于后续会话（FR-33） | `[team]` | FR-33~36/47/48 |
+| GET | `/agents/:id/available-models` | — | 模型列表（经 worker `GET /models` 动态获取，FR-47） | `[team]` | FR-47 |
 
 > `toolEffects` 结构：`{ "<action>": "allow" | "ask" | "deny" }`，支持通配 action（`jenkins-*`，FR-48）；工具名即权限点，随工具注册动态扩展（FR-48 开放命名空间）。Agent 配置改动对运行中任务的影响：提示词/技能/工具变更后，由控制面经 WorkerClient 下发「重启实例」使 v1 运行时生效（07 篇 10.3，API 层无需暴露）。
 
@@ -207,7 +207,7 @@ description: 完整平台控制面对外契约：REST 端点清单、SSE 事件�
 | GET | `/roles/:id` | — | 角色详情：权限矩阵（资源×操作） + 权限范围 | `[admin]` | FR-23/24 |
 | PATCH | `/roles/:id` | `{permissions?, scopes?}` | 更新矩阵/范围；生效于下一次权限校验 | `[admin]` | FR-23/24 |
 | DELETE | `/roles/:id` | — | `204`；**仅自定义角色可删除**（预置角色禁止，409 `ROLE_BUILTIN_IMMUTABLE`）；**本版可删除对象之一**（FR-23 边界） | `[admin]` | FR-23 |
-| GET | `/permission-scopes` | — | 权限范围选项（全局 / 指定项目多选 / 项目内分工，FR-24） | `[admin]` | FR-24 |
+| GET | `/permission-scopes` | — | 权限范围选项（全局 / 指定团队多选 / 团队内分工，FR-24） | `[admin]` | FR-24 |
 
 > 矩阵结构：`permissions: { "<资源>": { "<操作>": "allow" | "partial" | "deny" } }`，资源行 = 任务/群聊/产出物/Agent 配置/Worker 节点/技能工具/用户管理/权限配置（FR-23）。「删除」操作按 FR-23 边界仅对可删对象生效；对任务/消息/产出物一律 deny（无对应端点）。
 
@@ -320,7 +320,7 @@ interface CreateMessageResponse {
 
 **服务端处理流程（8 步）：**
 
-1. **权限校验**：调用者为频道所在项目成员（FR-24）；频道类型合法（任务群聊或私聊）。
+1. **权限校验**：调用者为频道所在团队成员（FR-24）；频道类型合法（任务群聊或私聊）。
 2. **@ 解析**：校验 `mentions` 中 agentId 均在任务虚拟团队内（FR-11 仅被 @ 者处理）；`all` 解析为当前团队全部 Agent（FR-12）；被移除 Agent 的 @ 返回 `agent_removed`（FR-02 移除语义）。
 3. **落库**：消息写入 `messages`（FR-19 持久化），携带解析后的 mentions。
 4. **广播**：RealtimeModule 推送 `chat.message.new` 到频道订阅者（目标 ≤1s，05 篇 1.1）。
@@ -357,7 +357,7 @@ sequenceDiagram
 
 - **按需订阅**：前端点击「查看 Agent 会话」时建立（FR-17）；**不广播到群聊、不并入统一事件流**（FR-18 内部过程不广播）——`session.stream.chunk` 仅对建立该订阅的成员推送。
 - **观看不打断**：订阅为只读观察，不向 worker 下发任何指令（FR-17 单向观察）。
-- **订阅鉴权**：调用者为会话所在任务的项目成员（FR-24）；会话对应 Agent 须在任务团队内（FR-02）。
+- **订阅鉴权**：调用者为会话所在任务的团队成员（FR-24）；会话对应 Agent 须在任务团队内（FR-02）。
 - **游标恢复**：断线后按 `since` 补拉会话增量（已幂等落库，§4.4）；延迟目标 ≤2s（05 篇 1.1）。
 - **订阅生命周期**：成员关闭查看页即断开；会话进入 frozen（Agent 被移除，FR-02）或 archived（任务归档，FR-05）时推送终止帧并关闭。
 

@@ -11,7 +11,7 @@ import { TASK_PRIORITY } from '../../common/constants/task.constants';
 import { EXECUTION_MODES } from '../../plans/plan.constants';
 
 /**
- * POST /projects/:pid/tasks 请求体（vteam-team-refactor：仅 teamId 必填，指派全局团队）。
+ * POST /tasks 请求体（仅 teamId 必填，指派全局团队）。
  * 移除 agents/mainAgentId/mainAgentInstanceId（不再由任务侧组建团队，改为快照 Team 成员）。
  */
 export class CreateTaskDto {
@@ -40,14 +40,6 @@ export class CreateTaskDto {
 
   @ApiPropertyOptional({
     description:
-      '托管模式（默认 false）：开启后成员 question/permission 请求不弹窗给用户，改由主 Agent 经 question_confirm 确认',
-  })
-  @IsOptional()
-  @IsBoolean()
-  managedMode?: boolean;
-
-  @ApiPropertyOptional({
-    description:
       '执行模式（direct/plan，默认 direct）：plan 模式按已评审通过的执行计划推进任务，direct 轻量直达；与托管模式独立生效、互不干扰',
     enum: Object.values(EXECUTION_MODES),
     default: EXECUTION_MODES.direct,
@@ -64,7 +56,8 @@ export class CreateTaskDto {
   backgroundDocs?: unknown[];
 
   @ApiPropertyOptional({
-    description: '完成后为下一任务开新会话（覆盖 Team.reuseSession，默认 false）',
+    description:
+      '完成后为下一任务开新会话（覆盖 Team.reuseSession，默认 false）',
   })
   @IsOptional()
   @IsBoolean()

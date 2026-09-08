@@ -13,7 +13,7 @@ import { join } from 'path';
 export const DOCS_SITE_ERRORS = {
   /** 任务不存在。 */
   TASK_NOT_FOUND: 'DOCS_TASK_NOT_FOUND',
-  /** 无文档站查看权限（非项目成员）。 */
+  /** 无文档站查看权限（非团队成员）。 */
   FORBIDDEN: 'DOCS_SITE_FORBIDDEN',
   /** 请求路径越界（taskId/文件名白名单校验失败）。 */
   PATH_OUT_OF_BOUNDS: 'DOCS_PATH_OUT_OF_BOUNDS',

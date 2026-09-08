@@ -47,9 +47,8 @@ describe('IssuesService', () => {
         update: jest.fn(),
       },
       task: { findUnique: jest.fn() },
-      project: { findUnique: jest.fn() },
-      projectMember: { findUnique: jest.fn() },
-      taskAgent: { findUnique: jest.fn(), findFirst: jest.fn() },
+      teamUserMember: { findUnique: jest.fn() },
+      teamMember: { findFirst: jest.fn(), findMany: jest.fn() },
       issueActivity: {
         create: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
@@ -93,25 +92,25 @@ describe('IssuesService', () => {
       });
     });
 
-    it('非项目成员 → 403 PERMISSION_PROJECT_NOT_MEMBER', async () => {
+    it('非团队成员 → 403 PERMISSION_TEAM_NOT_MEMBER', async () => {
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue(null);
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
       await expect(
         service.create('u_member', base as any),
       ).rejects.toMatchObject({
-        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
       });
     });
 
     it('任务已归档 → 409 ISSUE_TASK_ARCHIVED', async () => {
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'archived',
       });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
       await expect(
         service.create('u_admin', base as any),
       ).rejects.toMatchObject({
@@ -121,11 +120,11 @@ describe('IssuesService', () => {
 
     it('指派 Agent 不在任务团队 → 400 ASSIGNEE_NOT_IN_TEAM', async () => {
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
-      prisma.taskAgent.findFirst.mockResolvedValue(null); // 无团队记录
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.teamMember.findFirst.mockResolvedValue(null); // 无团队记录
       await expect(
         service.create('u_admin', { ...base, assigneeAgentId: 'a_x' } as any),
       ).rejects.toMatchObject({ response: { code: 'ASSIGNEE_NOT_IN_TEAM' } });
@@ -133,11 +132,14 @@ describe('IssuesService', () => {
 
     it('成功：status=open + tags 落库 + createdBy=userId', async () => {
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
-      prisma.taskAgent.findFirst.mockResolvedValue({ removedAt: null });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.teamMember.findFirst.mockResolvedValue({
+        id: 'tmm_dev',
+        agentId: 'a_developer',
+      });
       prisma.issue.create.mockResolvedValue({ id: 'is_0000000001' });
       prisma.issue.findUnique.mockResolvedValue(
         makeRow({
@@ -182,10 +184,10 @@ describe('IssuesService', () => {
 
     it('成功：广播 issue.changed（task scope，is_0000000020 右侧面板实时刷新）', async () => {
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
       prisma.issue.create.mockResolvedValue({ id: 'is_0000000001' });
       prisma.issue.findUnique.mockResolvedValue(makeRow());
 
@@ -215,21 +217,26 @@ describe('IssuesService', () => {
       ).rejects.toMatchObject({ response: { code: 'ISSUE_CREATOR_REQUIRED' } });
     });
 
-    it('agent 不在任务团队 → 403（非 project_members 校验）', async () => {
-      prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
-      prisma.taskAgent.findFirst.mockResolvedValue(null);
+    it('agent 不在任务团队 → 403', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        status: 'pending',
+        teamId: 'tm_0000000001',
+      });
+      prisma.teamMember.findFirst.mockResolvedValue(null);
       await expect(
         service.createByAgent('a_x', 't_0000000001', base as any),
       ).rejects.toMatchObject({
-        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
       });
     });
 
-    it('成功：creatorAgentId=agentId、createdBy=null（Metis B1）', async () => {
-      prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
-      prisma.taskAgent.findFirst.mockResolvedValue({
-        removedAt: null,
-        id: 'ta_0000000001',
+    it('成功：creatorAgentId=agentId、createdBy=null（Metis B1，模板 agent 归属走团队成员表）', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        status: 'pending',
+        teamId: 'tm_0000000001',
+      });
+      prisma.teamMember.findFirst.mockResolvedValue({
+        id: 'tmm_product',
         agentId: 'a_product',
       });
       prisma.issue.create.mockResolvedValue({ id: 'is_0000000001' });
@@ -262,12 +269,17 @@ describe('IssuesService', () => {
       });
     });
 
-    it('实例 id（ta_ 前缀）：按 task_agents.id 团队校验，creatorAgentId 落真实模板 agent id', async () => {
-      prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
-      prisma.taskAgent.findFirst.mockResolvedValue({
-        removedAt: null,
-        id: 'ta_dev_1',
-        agentId: 'a_developer',
+    it('成员 id（tmm_ 前缀）：按团队成员 id 团队校验，creatorAgentId 落真实模板 agent id', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        status: 'pending',
+        teamId: 'tm_0000000001',
+      });
+      prisma.teamMember.findFirst.mockImplementation(async ({ where }: any) => {
+        if (where.id === 'tmm_dev_1')
+          return { id: 'tmm_dev_1', agentId: 'a_developer' };
+        if (where.id === 'tmm_dev_2')
+          return { id: 'tmm_dev_2', agentId: 'a_developer_2' };
+        return null;
       });
       prisma.issue.create.mockResolvedValue({ id: 'is_0000000002' });
       prisma.issue.findUnique.mockResolvedValue(
@@ -275,19 +287,19 @@ describe('IssuesService', () => {
           createdBy: null,
           creatorAgentId: 'a_developer',
           creatorAgent: { name: '开发者' },
-          assigneeInstanceId: 'ta_dev_2',
+          assigneeInstanceId: 'tmm_dev_2',
         }),
       );
 
-      const out = await service.createByAgent('ta_dev_1', 't_0000000001', {
+      const out = await service.createByAgent('tmm_dev_1', 't_0000000001', {
         ...base,
-        assigneeInstanceId: 'ta_dev_2',
+        assigneeInstanceId: 'tmm_dev_2',
       } as any);
 
-      // 团队校验按实例 id（task_agents.id），而非 agent_id 列
-      expect(prisma.taskAgent.findFirst).toHaveBeenCalledWith(
+      // 团队校验按团队成员 id（team_members.id），而非模板 agent id 列
+      expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { taskId: 't_0000000001', id: 'ta_dev_1' },
+          where: { teamId: 'tm_0000000001', id: 'tmm_dev_1' },
         }),
       );
       // creatorAgentId 落真实模板 agent id（非 selfInstanceId 原文），assigneeInstanceId 精确落库
@@ -296,24 +308,27 @@ describe('IssuesService', () => {
           data: expect.objectContaining({
             createdBy: null,
             creatorAgentId: 'a_developer',
-            assigneeInstanceId: 'ta_dev_2',
+            assigneeInstanceId: 'tmm_dev_2',
           }),
         }),
       );
       expect(out).toMatchObject({
         creatorAgentId: 'a_developer',
         creatorAgentName: '开发者',
-        assigneeInstanceId: 'ta_dev_2',
+        assigneeInstanceId: 'tmm_dev_2',
       });
     });
 
-    it('实例 id（ta_ 前缀）不在任务团队 → 403，不落库', async () => {
-      prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
-      prisma.taskAgent.findFirst.mockResolvedValue(null);
+    it('成员 id（tmm_ 前缀）不在任务团队 → 403，不落库', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        status: 'pending',
+        teamId: 'tm_0000000001',
+      });
+      prisma.teamMember.findFirst.mockResolvedValue(null);
       await expect(
-        service.createByAgent('ta_not_member', 't_0000000001', base as any),
+        service.createByAgent('tmm_not_member', 't_0000000001', base as any),
       ).rejects.toMatchObject({
-        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
       });
       expect(prisma.issue.create).not.toHaveBeenCalled();
     });
@@ -322,46 +337,38 @@ describe('IssuesService', () => {
   describe('findAll', () => {
     it('非成员 → 403', async () => {
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue(null);
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
       await expect(
         service.findAll({ taskId: 't_1' } as any, 'u_member'),
       ).rejects.toMatchObject({
-        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
       });
     });
 
-    it('缺少过滤条件（taskId 与 projectId 均无）→ 400 ISSUE_FILTER_REQUIRED', async () => {
+    it('缺少过滤条件（taskId 与 teamId 均无）→ 400 ISSUE_FILTER_REQUIRED', async () => {
       await expect(service.findAll({} as any, 'u_admin')).rejects.toMatchObject(
         { response: { code: 'ISSUE_FILTER_REQUIRED' } },
       );
       expect(prisma.task.findUnique).not.toHaveBeenCalled();
+      expect(prisma.teamUserMember.findUnique).not.toHaveBeenCalled();
       expect(prisma.issue.count).not.toHaveBeenCalled();
     });
 
-    it('projectId 路径：项目不存在 → 404 PROJECT_NOT_FOUND', async () => {
-      prisma.project.findUnique.mockResolvedValue(null);
+    it('teamId 路径：非团队成员 → 403 PERMISSION_TEAM_NOT_MEMBER', async () => {
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
       await expect(
-        service.findAll({ projectId: 'p_x' } as any, 'u_admin'),
-      ).rejects.toMatchObject({ response: { code: 'PROJECT_NOT_FOUND' } });
-      expect(prisma.projectMember.findUnique).not.toHaveBeenCalled();
-    });
-
-    it('projectId 路径：非项目成员 → 403 PERMISSION_PROJECT_NOT_MEMBER', async () => {
-      prisma.project.findUnique.mockResolvedValue({ id: 'p_1' });
-      prisma.projectMember.findUnique.mockResolvedValue(null);
-      await expect(
-        service.findAll({ projectId: 'p_1' } as any, 'u_member'),
+        service.findAll({ teamId: 'tm_0000000001' } as any, 'u_member'),
       ).rejects.toMatchObject({
-        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
       });
+      expect(prisma.issue.count).not.toHaveBeenCalled();
     });
 
-    it('projectId 路径：按 issue.task.projectId 过滤该项目全部任务 issue', async () => {
-      prisma.project.findUnique.mockResolvedValue({ id: 'p_1' });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+    it('teamId 路径：按 issue.task.teamId 过滤该团队全部任务 issue', async () => {
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
       prisma.issue.count.mockResolvedValue(2);
       prisma.issue.findMany.mockResolvedValue([
         makeRow(),
@@ -369,7 +376,12 @@ describe('IssuesService', () => {
       ]);
 
       const out = await service.findAll(
-        { projectId: 'p_1', status: 'open', page: 1, pageSize: 20 } as any,
+        {
+          teamId: 'tm_0000000001',
+          status: 'open',
+          page: 1,
+          pageSize: 20,
+        } as any,
         'u_admin',
       );
 
@@ -377,7 +389,7 @@ describe('IssuesService', () => {
       expect(prisma.issue.count).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            task: { projectId: 'p_1' },
+            task: { teamId: 'tm_0000000001' },
             status: 'open',
             deletedAt: null,
           }),
@@ -385,7 +397,7 @@ describe('IssuesService', () => {
       );
       expect(prisma.issue.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ task: { projectId: 'p_1' } }),
+          where: expect.objectContaining({ task: { teamId: 'tm_0000000001' } }),
           skip: 0,
           take: 20,
         }),
@@ -409,10 +421,10 @@ describe('IssuesService', () => {
 
     it('按 taskId/status/assigneeAgentId 过滤 + 分页 + 排除软删', async () => {
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
       prisma.issue.count.mockResolvedValue(1);
       prisma.issue.findMany.mockResolvedValue([makeRow()]);
 
@@ -480,14 +492,14 @@ describe('IssuesService', () => {
     it('非任务成员 → 403', async () => {
       prisma.issue.findUnique.mockResolvedValue(makeRow());
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue(null);
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
       await expect(
         service.findOne('is_0000000001', 'u_member'),
       ).rejects.toMatchObject({
-        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
       });
     });
 
@@ -499,10 +511,10 @@ describe('IssuesService', () => {
         }),
       );
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
 
       const out = await service.findOne('is_0000000001', 'u_admin');
       expect(out).toMatchObject({
@@ -512,16 +524,64 @@ describe('IssuesService', () => {
         assigneeUserName: 'admin',
       });
     });
+
+    it('操作记录操作人展示名走团队成员表（tmm_ 实例别名优先）', async () => {
+      prisma.issue.findUnique.mockResolvedValue(
+        makeRow({
+          activities: [
+            {
+              id: 'ia_0000000001',
+              issueId: 'is_0000000001',
+              action: 'create',
+              fromStatus: null,
+              toStatus: null,
+              actorType: 'agent',
+              actorId: 'a_developer',
+              instanceId: 'tmm_dev_1',
+              metadata: null,
+              createdAt: FIXED_DATE,
+            },
+          ],
+        }),
+      );
+      prisma.task.findUnique.mockResolvedValue({
+        teamId: 'tm_0000000001',
+        status: 'pending',
+      });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.teamMember.findMany.mockResolvedValue([
+        {
+          id: 'tmm_dev_1',
+          alias: '开发者-1',
+          agent: { name: '开发者' },
+        },
+      ]);
+
+      const out = await service.findOne('is_0000000001', 'u_admin');
+
+      expect(prisma.teamMember.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: { in: ['tmm_dev_1'] } },
+        }),
+      );
+      expect(out.activities).toEqual([
+        expect.objectContaining({
+          id: 'ia_0000000001',
+          instanceId: 'tmm_dev_1',
+          actorName: '开发者-1',
+        }),
+      ]);
+    });
   });
 
   describe('update', () => {
     it('编辑 title/tags 生效', async () => {
       prisma.issue.findUnique.mockResolvedValue(makeRow());
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
       prisma.issue.update.mockResolvedValue(
         makeRow({ title: '改名', tags: ['缺陷'] }),
       );
@@ -545,11 +605,11 @@ describe('IssuesService', () => {
     it('assigneeAgentId 变更重新团队校验（不在团队 → 400）', async () => {
       prisma.issue.findUnique.mockResolvedValue(makeRow());
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
-      prisma.taskAgent.findFirst.mockResolvedValue(null);
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.teamMember.findFirst.mockResolvedValue(null);
 
       await expect(
         service.update('is_0000000001', 'u_admin', {
@@ -562,17 +622,17 @@ describe('IssuesService', () => {
     it('assigneeAgentId=null 清除指派（跳过团队校验）', async () => {
       prisma.issue.findUnique.mockResolvedValue(makeRow());
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
       prisma.issue.update.mockResolvedValue(makeRow({ assigneeAgentId: null }));
 
       await service.update('is_0000000001', 'u_admin', {
         assigneeAgentId: null,
       } as any);
 
-      expect(prisma.taskAgent.findFirst).not.toHaveBeenCalled();
+      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
       expect(prisma.issue.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ assigneeAgentId: null }),
@@ -584,10 +644,10 @@ describe('IssuesService', () => {
   describe('transition（状态机全迁移）', () => {
     const memberOk = () => {
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
     };
 
     it('start：open → in_progress', async () => {
@@ -844,10 +904,10 @@ describe('IssuesService', () => {
     it('置 deletedAt=now，返回 {id, deleted: true}', async () => {
       prisma.issue.findUnique.mockResolvedValue(makeRow());
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
       prisma.issue.update.mockResolvedValue({ id: 'is_0000000001' });
 
       const out = await service.remove('is_0000000001', 'u_admin');
@@ -862,15 +922,15 @@ describe('IssuesService', () => {
     it('非成员 → 403 不落软删', async () => {
       prisma.issue.findUnique.mockResolvedValue(makeRow());
       prisma.task.findUnique.mockResolvedValue({
-        projectId: 'p_1',
+        teamId: 'tm_0000000001',
         status: 'pending',
       });
-      prisma.projectMember.findUnique.mockResolvedValue(null);
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
 
       await expect(
         service.remove('is_0000000001', 'u_member'),
       ).rejects.toMatchObject({
-        response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
       });
       expect(prisma.issue.update).not.toHaveBeenCalled();
     });
@@ -878,18 +938,27 @@ describe('IssuesService', () => {
 
   describe('MCP 专用方法（findAllByAgent/findOneByAgent/updateByAgent/transitionByAgent）', () => {
     const agentTeamOk = () => {
-      prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
-      prisma.taskAgent.findFirst.mockResolvedValue({ removedAt: null });
+      prisma.task.findUnique.mockResolvedValue({
+        status: 'pending',
+        teamId: 'tm_0000000001',
+      });
+      prisma.teamMember.findFirst.mockResolvedValue({
+        id: 'tmm_dev',
+        agentId: 'a_developer',
+      });
     };
 
     describe('findAllByAgent', () => {
       it('agent 不在任务团队 → 403', async () => {
-        prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
-        prisma.taskAgent.findFirst.mockResolvedValue(null);
+        prisma.task.findUnique.mockResolvedValue({
+          status: 'pending',
+          teamId: 'tm_0000000001',
+        });
+        prisma.teamMember.findFirst.mockResolvedValue(null);
         await expect(
           service.findAllByAgent('a_x', 't_0000000001'),
         ).rejects.toMatchObject({
-          response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+          response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
         });
       });
 
@@ -934,20 +1003,22 @@ describe('IssuesService', () => {
         );
       });
 
-      it('实例 id（ta_ 前缀）：团队校验按 task_agents.id 通过', async () => {
-        prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
-        prisma.taskAgent.findFirst.mockResolvedValue({
-          removedAt: null,
-          id: 'ta_dev_1',
+      it('成员 id（tmm_ 前缀）：团队校验按团队成员 id 通过', async () => {
+        prisma.task.findUnique.mockResolvedValue({
+          status: 'pending',
+          teamId: 'tm_0000000001',
+        });
+        prisma.teamMember.findFirst.mockResolvedValue({
+          id: 'tmm_dev_1',
           agentId: 'a_developer',
         });
         prisma.issue.findMany.mockResolvedValue([makeRow()]);
 
-        const out = await service.findAllByAgent('ta_dev_1', 't_0000000001');
+        const out = await service.findAllByAgent('tmm_dev_1', 't_0000000001');
 
-        expect(prisma.taskAgent.findFirst).toHaveBeenCalledWith(
+        expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
           expect.objectContaining({
-            where: { taskId: 't_0000000001', id: 'ta_dev_1' },
+            where: { teamId: 'tm_0000000001', id: 'tmm_dev_1' },
           }),
         );
         expect(out).toEqual([expect.objectContaining({ id: 'is_0000000001' })]);
@@ -973,17 +1044,20 @@ describe('IssuesService', () => {
             'is_0000000001',
           ),
         ).rejects.toMatchObject({ response: { code: 'ISSUE_NOT_FOUND' } });
-        expect(prisma.taskAgent.findFirst).not.toHaveBeenCalled();
+        expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
       });
 
       it('agent 不在任务团队 → 403', async () => {
         prisma.issue.findUnique.mockResolvedValue(makeRow());
-        prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
-        prisma.taskAgent.findFirst.mockResolvedValue(null);
+        prisma.task.findUnique.mockResolvedValue({
+          status: 'pending',
+          teamId: 'tm_0000000001',
+        });
+        prisma.teamMember.findFirst.mockResolvedValue(null);
         await expect(
           service.findOneByAgent('a_x', 't_0000000001', 'is_0000000001'),
         ).rejects.toMatchObject({
-          response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+          response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
         });
       });
 
@@ -1050,24 +1124,32 @@ describe('IssuesService', () => {
 
       it('agent 不在任务团队 → 403（不落更新）', async () => {
         prisma.issue.findUnique.mockResolvedValue(makeRow());
-        prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
-        prisma.taskAgent.findFirst.mockResolvedValue(null);
+        prisma.task.findUnique.mockResolvedValue({
+          status: 'pending',
+          teamId: 'tm_0000000001',
+        });
+        prisma.teamMember.findFirst.mockResolvedValue(null);
         await expect(
           service.updateByAgent('a_x', 't_0000000001', 'is_0000000001', {
             title: 'x',
           } as any),
         ).rejects.toMatchObject({
-          response: { code: 'PERMISSION_PROJECT_NOT_MEMBER' },
+          response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
         });
         expect(prisma.issue.update).not.toHaveBeenCalled();
       });
 
       it('assigneeAgentId 变更重新团队校验（不在团队 → 400）', async () => {
         prisma.issue.findUnique.mockResolvedValue(makeRow());
-        prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
-        // 团队校验（assertAgentTaskMember）通过，assignee 校验（assertAssigneeInTeam）失败
-        prisma.taskAgent.findFirst.mockImplementation(async ({ where }: any) =>
-          where.agentId === 'a_x' ? null : { removedAt: null },
+        prisma.task.findUnique.mockResolvedValue({
+          status: 'pending',
+          teamId: 'tm_0000000001',
+        });
+        prisma.teamMember.findFirst.mockImplementation(
+          async ({ where }: any) =>
+            where.agentId === 'a_x'
+              ? null
+              : { id: 'tmm_dev', agentId: 'a_developer' },
         );
 
         await expect(
@@ -1132,12 +1214,14 @@ describe('IssuesService', () => {
         expect(prisma.issue.update).not.toHaveBeenCalled();
       });
 
-      it('实例 id（ta_ 前缀）：团队校验按 task_agents.id 通过并流转', async () => {
+      it('成员 id（tmm_ 前缀）：团队校验按团队成员 id 通过并流转', async () => {
         prisma.issue.findUnique.mockResolvedValue(makeRow({ status: 'open' }));
-        prisma.task.findUnique.mockResolvedValue({ status: 'pending' });
-        prisma.taskAgent.findFirst.mockResolvedValue({
-          removedAt: null,
-          id: 'ta_dev_1',
+        prisma.task.findUnique.mockResolvedValue({
+          status: 'pending',
+          teamId: 'tm_0000000001',
+        });
+        prisma.teamMember.findFirst.mockResolvedValue({
+          id: 'tmm_dev_1',
           agentId: 'a_developer',
         });
         prisma.issue.update.mockResolvedValue(
@@ -1145,15 +1229,15 @@ describe('IssuesService', () => {
         );
 
         const out = await service.transitionByAgent(
-          'ta_dev_1',
+          'tmm_dev_1',
           't_0000000001',
           'is_0000000001',
           'start',
         );
 
-        expect(prisma.taskAgent.findFirst).toHaveBeenCalledWith(
+        expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
           expect.objectContaining({
-            where: { taskId: 't_0000000001', id: 'ta_dev_1' },
+            where: { teamId: 'tm_0000000001', id: 'tmm_dev_1' },
           }),
         );
         expect(out.status).toBe('in_progress');

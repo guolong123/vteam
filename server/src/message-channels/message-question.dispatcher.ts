@@ -1,14 +1,25 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService, RealtimeEvent } from '../realtime/realtime.service';
 import { EVENT_TYPES } from '../common/constants/event.constants';
 import { MessageRegistryService } from './message-registry.service';
 import { MessageDeliveryService } from './message-delivery.service';
 import { WecomAibotAdapter } from './adapters/wecom-aibot.adapter';
-import { MESSAGE_CHANNEL_TYPES, DELIVERY_DIRECTIONS, DELIVERY_STATUS } from './message-channel.constants';
+import {
+  MESSAGE_CHANNEL_TYPES,
+  DELIVERY_DIRECTIONS,
+  DELIVERY_STATUS,
+} from './message-channel.constants';
 
 @Injectable()
-export class MessageQuestionDispatcher implements OnModuleInit, OnModuleDestroy {
+export class MessageQuestionDispatcher
+  implements OnModuleInit, OnModuleDestroy
+{
   private readonly logger = new Logger(MessageQuestionDispatcher.name);
   private unsubscribe: (() => void) | null = null;
   private readonly queues = new Map<string, Promise<void>>();
@@ -24,7 +35,9 @@ export class MessageQuestionDispatcher implements OnModuleInit, OnModuleDestroy 
     this.unsubscribe = this.realtime.subscribe((event) => {
       if (event.type !== EVENT_TYPES.AGENT_QUESTION) return;
       void this.handle(event).catch((err: unknown) =>
-        this.logger.error(`handle AGENT_QUESTION failed: ${(err as Error).message}`),
+        this.logger.error(
+          `handle AGENT_QUESTION failed: ${(err as Error).message}`,
+        ),
       );
     });
     this.logger.log('MessageQuestionDispatcher subscribed to AGENT_QUESTION');
@@ -59,9 +72,7 @@ export class MessageQuestionDispatcher implements OnModuleInit, OnModuleDestroy 
     if (status !== undefined && status !== 'pending') return;
 
     const taskId: string | null =
-      (question.taskId as string | null) ??
-      (payload as any).taskId ??
-      null;
+      (question.taskId as string | null) ?? (payload as any).taskId ?? null;
     if (!taskId) return;
 
     const isManaged =
@@ -70,28 +81,52 @@ export class MessageQuestionDispatcher implements OnModuleInit, OnModuleDestroy 
       payload.managed === true;
 
     if (isManaged) {
-      const shouldSendForManaged = await this.isSelfLoopTask(taskId, question as any);
+      const shouldSendForManaged = await this.isSelfLoopTask(
+        taskId,
+        question as any,
+      );
       if (!shouldSendForManaged) return;
-      this.logger.log(`managed self-loop question will still send WeCom card taskId=${taskId} requestId=${question.requestId ?? question.id}`);
+      this.logger.log(
+        `managed self-loop question will still send WeCom card taskId=${taskId} requestId=${question.requestId ?? question.id}`,
+      );
     }
 
     const channels = await this.resolveWecomChannelsForTask(taskId);
     if (channels.length === 0) return;
 
-    const aqId = (question.id as string) ?? (question.requestId as string) ?? '';
+    const aqId =
+      (question.id as string) ?? (question.requestId as string) ?? '';
     const kind = (question.kind as string) ?? 'question';
     const content = (question as any).content ?? question;
 
     const prismaRow = aqId
-      ? await (this.prisma as any).agentQuestion.findUnique({
-          where: { id: aqId },
-          select: { id: true, requestId: true, kind: true, content: true, status: true },
-        }).catch(() => null)
+      ? await (this.prisma as any).agentQuestion
+          .findUnique({
+            where: { id: aqId },
+            select: {
+              id: true,
+              requestId: true,
+              kind: true,
+              content: true,
+              status: true,
+            },
+          })
+          .catch(() => null)
       : null;
 
     const dispatchQuestion = prismaRow
-      ? { id: prismaRow.id, requestId: prismaRow.requestId, kind: prismaRow.kind, content: prismaRow.content }
-      : { id: aqId, requestId: question.requestId as string | undefined, kind, content };
+      ? {
+          id: prismaRow.id,
+          requestId: prismaRow.requestId,
+          kind: prismaRow.kind,
+          content: prismaRow.content,
+        }
+      : {
+          id: aqId,
+          requestId: question.requestId as string | undefined,
+          kind,
+          content,
+        };
 
     if (prismaRow && prismaRow.status !== 'pending') return;
 
@@ -106,7 +141,9 @@ export class MessageQuestionDispatcher implements OnModuleInit, OnModuleDestroy 
   ): Promise<void> {
     const channels = await this.resolveWecomChannelsForTask(taskId);
     if (channels.length === 0) {
-      this.logger.warn(`dispatchQuestionCard no wecom channels bound taskId=${taskId} aqId=${questionRow.id}`);
+      this.logger.warn(
+        `dispatchQuestionCard no wecom channels bound taskId=${taskId} aqId=${questionRow.id}`,
+      );
       return;
     }
     for (const ch of channels) {
@@ -114,18 +151,36 @@ export class MessageQuestionDispatcher implements OnModuleInit, OnModuleDestroy 
     }
   }
 
-  private async isSelfLoopTask(taskId: string, question: { sessionId?: string }): Promise<boolean> {
+  /**
+   * 托管自循环判定（session-unification Todo 9：团队主门）：
+   * 任务所属团队的 team.mainAgentMemberId === 提问会话的 teamMemberId 时，
+   * 托管 question 仍需下发 WeCom 卡片（主 Agent 在企微侧确认），余者跳过。
+   */
+  private async isSelfLoopTask(
+    taskId: string,
+    question: { sessionId?: string },
+  ): Promise<boolean> {
     try {
       const task = await (this.prisma as any).task.findUnique({
         where: { id: taskId },
-        select: { mainAgentInstanceId: true },
+        select: { teamId: true },
       });
-      if (!task?.mainAgentInstanceId || !question.sessionId) return false;
-      const sess = await (this.prisma as any).session.findUnique({
-        where: { id: question.sessionId },
-        select: { taskAgentId: true },
-      }).catch(() => null);
-      return sess?.taskAgentId === task.mainAgentInstanceId;
+      const teamId = task?.teamId as string | undefined;
+      if (!teamId || !question.sessionId) return false;
+      const [team, sess] = await Promise.all([
+        (this.prisma as any).team.findUnique({
+          where: { id: teamId },
+          select: { mainAgentMemberId: true },
+        }),
+        (this.prisma as any).session
+          .findUnique({
+            where: { id: question.sessionId },
+            select: { teamMemberId: true },
+          })
+          .catch(() => null),
+      ]);
+      if (!team?.mainAgentMemberId || !sess?.teamMemberId) return false;
+      return sess.teamMemberId === team.mainAgentMemberId;
     } catch {
       return false;
     }
@@ -147,7 +202,11 @@ export class MessageQuestionDispatcher implements OnModuleInit, OnModuleDestroy 
     let channels: any[];
     try {
       channels = await (this.prisma as any).messageChannel.findMany({
-        where: { id: { in: ids }, enabled: true, type: MESSAGE_CHANNEL_TYPES.wecom_aibot },
+        where: {
+          id: { in: ids },
+          enabled: true,
+          type: MESSAGE_CHANNEL_TYPES.wecom_aibot,
+        },
       });
     } catch {
       return [];
@@ -155,7 +214,10 @@ export class MessageQuestionDispatcher implements OnModuleInit, OnModuleDestroy 
     return channels;
   }
 
-  private async dispatchToChannel(channel: any, question: { id: string; kind: string; content: any }): Promise<void> {
+  private async dispatchToChannel(
+    channel: any,
+    question: { id: string; kind: string; content: any },
+  ): Promise<void> {
     const prev = this.queues.get(channel.id) ?? Promise.resolve();
     const next = prev
       .then(async () => {
@@ -169,9 +231,16 @@ export class MessageQuestionDispatcher implements OnModuleInit, OnModuleDestroy 
           );
           deliveryId = (logRes as { id: string })?.id ?? null;
 
-          const adapter = this.registry.get(MESSAGE_CHANNEL_TYPES.wecom_aibot) as WecomAibotAdapter | undefined;
-          if (!adapter || typeof (adapter as any).sendQuestionCard !== 'function') {
-            throw new Error(`adapter not found for type ${MESSAGE_CHANNEL_TYPES.wecom_aibot}`);
+          const adapter = this.registry.get(
+            MESSAGE_CHANNEL_TYPES.wecom_aibot,
+          ) as WecomAibotAdapter | undefined;
+          if (
+            !adapter ||
+            typeof (adapter as any).sendQuestionCard !== 'function'
+          ) {
+            throw new Error(
+              `adapter not found for type ${MESSAGE_CHANNEL_TYPES.wecom_aibot}`,
+            );
           }
           const resolved = {
             id: channel.id,
@@ -180,7 +249,10 @@ export class MessageQuestionDispatcher implements OnModuleInit, OnModuleDestroy 
             secrets: (channel.secrets as Record<string, any>) ?? {},
             enabled: channel.enabled ?? true,
           };
-          const res = await (adapter as any).sendQuestionCard(resolved, question);
+          const res = await (adapter as any).sendQuestionCard(
+            resolved,
+            question,
+          );
           if (deliveryId) {
             try {
               await this.delivery.finish(
@@ -192,10 +264,14 @@ export class MessageQuestionDispatcher implements OnModuleInit, OnModuleDestroy 
               );
             } catch {}
           }
-          this.logger.log(`wecom question card sent channel=${channel.id} aqId=${question.id} kind=${question.kind}`);
+          this.logger.log(
+            `wecom question card sent channel=${channel.id} aqId=${question.id} kind=${question.kind}`,
+          );
         } catch (e) {
           const errMsg = (e as Error).message ?? String(e);
-          this.logger.error(`dispatchToChannel failed channel=${channel.id} aqId=${question.id}: ${errMsg}`);
+          this.logger.error(
+            `dispatchToChannel failed channel=${channel.id} aqId=${question.id}: ${errMsg}`,
+          );
           try {
             if (deliveryId) {
               await this.delivery.finish(

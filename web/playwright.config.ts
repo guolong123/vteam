@@ -12,8 +12,8 @@ import { defineConfig } from "@playwright/test";
  *   pages  → pages.spec.ts  17 页 testid 断言（依赖 setup 的登录态）
  *   perf   → perf.spec.ts   性能 E2E（页面加载 + 群聊 SSE + 首字；依赖登录态）
  *   guard  → guard.spec.ts  未登录跳转 /login（无 storageState）
- * - 注意：QA 数据账号用 seed-admin（T8 实证：projectMember 归属 seed-admin，
- *   admin 登录后 /projects 为空 → 数据型 testid 无法断言）。
+ * - 注意：QA 数据账号用 seed-admin（种子团队 tm_0000000001 的成员归属 seed-admin，
+ *   admin 登录后 /teams 为空 → 数据型 testid 无法断言）。
  */
 export default defineConfig({
   testDir: "./e2e",

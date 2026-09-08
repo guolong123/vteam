@@ -21,27 +21,28 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     }
   }
 
-  test("2/17 project-list /projects", async ({ page }) => {
-    await page.goto("/projects");
+  test("2/17 team-list /teams（项目列表已拆除，主工作台）", async ({ page }) => {
+    await page.goto("/teams");
     await expectNavShell(page);
-    await expect(page.getByTestId("project-list-root")).toBeVisible();
-    await expect(page.getByTestId("project-card").first()).toBeVisible();
-    await expect(page.getByTestId("create-project-button")).toBeVisible();
+    await expect(page.getByTestId("teams-list-root")).toBeVisible();
+    await expect(page.getByTestId("team-card").first()).toBeVisible();
+    await expect(page.getByTestId("create-team-button")).toBeVisible();
   });
 
-  test("3/17 task-create /tasks/new", async ({ page }) => {
-    await page.goto("/tasks/new");
+  test("3/17 task-create /tasks/new?teamId=tm_0000000001（团队预选，直出 Agent 选项）", async ({ page }) => {
+    await page.goto("/tasks/new?teamId=tm_0000000001");
     await expectNavShell(page);
     await expect(page.getByTestId("task-create-root")).toBeVisible();
     await expect(page.getByTestId("task-title")).toBeVisible();
     await expect(page.getByTestId("priority-select")).toBeVisible();
-    await expect(page.getByTestId("agent-option").first()).toBeVisible();
+    // T10 起 Agent 选择改为团队成员只读预览（team-member-preview-item；agent-option 已拆除）
+    await expect(page.getByTestId("team-member-preview-item").first()).toBeVisible();
     await expect(page.getByTestId("create-task-button")).toBeVisible();
     await expect(page.getByTestId("execution-mode-select")).toBeVisible();
   });
 
-  test("4/17 task-board /board?pid=p_seed_1", async ({ page }) => {
-    await page.goto("/board?pid=p_seed_1");
+  test("4/17 task-board /board?teamId=tm_0000000001", async ({ page }) => {
+    await page.goto("/board?teamId=tm_0000000001");
     await expectNavShell(page);
     await expect(page.getByTestId("task-board-root")).toBeVisible();
     await expect(page.getByTestId("status-filter")).toBeVisible();
@@ -57,14 +58,14 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
   test("4b/17 board-drawer 看板卡片开抽屉不进聊天", async ({ page, request }) => {
     // 空库时自建一个看板任务夹具（Bearer 同 7/17 原因）
     const cards = page.getByTestId("task-card");
-    await page.goto("/board?pid=p_seed_1");
+    await page.goto("/board?teamId=tm_0000000001");
     await expectNavShell(page);
     if ((await cards.count()) === 0) {
       const login = await request.post("/api/v1/auth/login", {
         data: { username: "seed-admin", password: "Admin@123456" },
       });
       const { accessToken } = await login.json();
-      await request.post("/api/v1/projects/p_seed_1/tasks", {
+      await request.post("/api/v1/tasks", {
         headers: { Authorization: `Bearer ${accessToken}` },
         data: { teamId: "tm_0000000001", title: "e2e-BoardDrawer", priority: "medium" },
       });
@@ -160,7 +161,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
   test("8-10/17 导航变体（AppShell 融合导航承载）", async ({ page }) => {
     // nav-cmdk / nav-hybrid / nav-rail 三变体无独立路由，融合导航为终态——
     // 命令面板（nav-cmdk 核心）与 Dock 面板（nav-rail 核心）在登录页后全站可用
-    await page.goto("/projects");
+    await page.goto("/teams");
     await expect(page.getByTestId("cmdk-trigger")).toBeVisible();
     // 唤起命令面板 → cmdk-panel 全组件（nav-cmdk 变体核心）
     await page.getByTestId("cmdk-trigger").click();
@@ -202,8 +203,8 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("mcp-tool-item").first()).toBeVisible();
   });
 
-  test("13/17 task-detail /artifacts?pid=p_seed_1（产出物聚合页）", async ({ page }) => {
-    await page.goto("/artifacts?pid=p_seed_1");
+  test("13/17 task-detail /artifacts?teamId=tm_0000000001（产出物聚合页）", async ({ page }) => {
+    await page.goto("/artifacts?teamId=tm_0000000001");
     await expectNavShell(page);
     await expect(page.getByTestId("artifacts-root")).toBeVisible();
     await expect(page.getByTestId("artifacts-filter-bar")).toBeVisible();

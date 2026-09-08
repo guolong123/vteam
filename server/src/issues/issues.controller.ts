@@ -12,7 +12,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   AuthenticatedUser,
   CurrentUser,
-} from '../projects/current-user.decorator';
+} from '../common/decorators/current-user.decorator';
 import { CreateIssueDto } from './dto/create-issue.dto';
 import { QueryIssuesDto } from './dto/query-issues.dto';
 import { TransitionIssueDto } from './dto/transition-issue.dto';
@@ -23,9 +23,9 @@ import { IssuesService } from './issues.service';
  * Issue 端点（issue-management plan todo 2）。
  *
  * 权限模型（Metis M2/M3）：**不挂** AdminGuard（任务成员即可管理自己的任务 issue）、
- * **不挂** ProjectMembershipGuard（其 :id 路由反查会把 /issues/:id 的 :id 误解析为
+ * **不挂** TeamMembershipGuard（其 :id 路由反查会把 /issues/:id 的 :id 误解析为
  * taskId → 404 TASK_NOT_FOUND）。鉴权依赖全局 JwtAuthGuard（APP_GUARD），
- * 任务成员校验全部在 IssuesService 内经 issue.taskId → projectId 完成。
+ * 任务成员校验全部在 IssuesService 内经 issue.taskId → teamId 完成。
  *
  * 全局前缀 /api/v1（main.ts 已设置），实际路由 /api/v1/issues。
  */

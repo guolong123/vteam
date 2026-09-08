@@ -1,21 +1,21 @@
 /**
  * 原型：权限设计（角色权限矩阵 + 权限范围）
  * =============================================
- * 对应 02 篇「1.1 平台管理员」（账号 / 项目 / 角色模板 / 全局策略）与
- * 「1.2 项目成员」（项目内任务 / 群聊 / 产出物 / Agent）的用户角色定义，
+ * 对应 02 篇「1.1 平台管理员」（账号 / 团队 / 角色模板 / 全局策略）与
+ * 「1.2 团队成员」（团队内任务 / 群聊 / 产出物 / Agent）的用户角色定义，
  * 将「用户能操作什么」收敛为平台侧权限模型。
  *
  * 页面内容：
- * - 左侧角色列表（role-item ×3：平台管理员 / 项目成员 / 自定义角色，受控切换）。
+ * - 左侧角色列表（role-item ×3：平台管理员 / 团队成员 / 自定义角色，受控切换）。
  * - 右侧权限配置面板：
  *   · 权限矩阵（permission-matrix）：行=资源（任务/群聊/产出物/Agent 配置/
  *     Worker 节点/技能工具/用户管理/权限配置，对齐现有业务原型域），
  *     列=操作（查看/创建/编辑/删除/验收/管理），格=✓ 允许 / ◐ 部分 / ✗ 禁止。
- *   · 权限范围（permission-scope）：全局（所有项目） / 指定项目（多选） /
- *     项目内角色。
+ *   · 权限范围（permission-scope）：全局（所有团队） / 指定团队（多选） /
+ *     团队内角色。
  * - 说明文案：平台权限管「用户能操作什么」，与 opencode 权限（管 agent
  *   能做什么）相互独立——两条权限链路互不干扰。
- * - mock：平台管理员全 ✓；项目成员部分（任务查看/创建/验收 ✓、用户管理 ✗）。
+ * - mock：平台管理员全 ✓；团队成员部分（任务查看/创建/验收 ✓、用户管理 ✗）。
  * - 复用 ../_shared/nav（NavDock / NavTopBar / CmdKPanel）+ ../_shared/styles token。
  * - ⚠️ T15 铁律：root height:100% + minHeight:720 + position:relative，零 fixed/vh/vw；
  *   T20：CmdKPanel 受控开关默认关闭；T21：浅色主题。
@@ -76,15 +76,15 @@ interface RoleDef {
   /** 权限范围（permission-scope） */
   scope: {
     global: boolean;
-    projects: string[];
+    teams: string[];
     innerRoles: string[];
   };
 }
 
-/** 平台管理员：全 ✓（管理账号 / 项目 / 角色模板 / 全局策略） */
+/** 平台管理员：全 ✓（管理账号 / 团队 / 角色模板 / 全局策略） */
 const adminMatrix: Perm[][] = RESOURCES.map(() => Array(ACTIONS.length).fill("allow"));
 
-/** 项目成员：任务全协作（查看/创建/验收 ✓）、用户管理/权限配置 ✗、其余部分 */
+/** 团队成员：任务全协作（查看/创建/验收 ✓）、用户管理/权限配置 ✗、其余部分 */
 const memberMatrix: Perm[][] = [
   ["allow", "allow", "allow", "deny", "allow", "deny"], // 任务
   ["allow", "allow", "partial", "partial", "deny", "deny"], // 群聊
@@ -112,18 +112,18 @@ const ROLES: RoleDef[] = [
   {
     key: "admin",
     label: "平台管理员",
-    desc: "管理平台账号 / 项目生命周期 / 角色模板 / 全局安全与权限策略（02 篇 1.1）",
+    desc: "管理平台账号 / 团队生命周期 / 角色模板 / 全局安全与权限策略（02 篇 1.1）",
     matrix: adminMatrix,
-    scope: { global: true, projects: [], innerRoles: [] },
+    scope: { global: true, teams: [], innerRoles: [] },
   },
   {
     key: "member",
-    label: "项目成员",
-    desc: "在所属项目内参与任务、群聊、产出物与 Agent 协作（02 篇 1.2）",
+    label: "团队成员",
+    desc: "在所属团队内参与任务、群聊、产出物与 Agent 协作（02 篇 1.2）",
     matrix: memberMatrix,
     scope: {
       global: false,
-      projects: ["智能报表模块", "数据采集平台", "告警中心"],
+      teams: ["智能报表模块", "数据采集平台", "告警中心"],
       innerRoles: ["产品经理", "架构师", "开发者", "测试"],
     },
   },
@@ -132,17 +132,17 @@ const ROLES: RoleDef[] = [
     label: "自定义角色",
     desc: "按需组合资源权限，如「验收员」「运维专员」等岗位化角色",
     matrix: customMatrix,
-    scope: { global: false, projects: ["智能报表模块"], innerRoles: ["验收"] },
+    scope: { global: false, teams: ["智能报表模块"], innerRoles: ["验收"] },
   },
 ];
 
-/** 项目候选池 + 项目内角色候选池 */
-const projectPool = ["智能报表模块", "数据采集平台", "告警中心"];
+/** 团队候选池 + 团队内角色候选池 */
+const teamPool = ["智能报表模块", "数据采集平台", "告警中心"];
 const innerRolePool = ["产品经理", "架构师", "开发者", "测试", "验收"];
 
 /* Cmd+K 命令项：导航组图标与 Dock 一一对应，「用户管理」高亮呼应当前页 */
 const CMDK_ITEMS: CmdKItem[] = [
-  { group: "导航", label: "切换项目", icon: "▤" },
+  { group: "导航", label: "切换团队", icon: "▤" },
   { group: "导航", label: "任务看板", icon: "☰" },
   { group: "导航", label: "Agent 管理", icon: "◉" },
   { group: "导航", label: "Worker 节点", icon: "⚙" },
@@ -239,9 +239,9 @@ function PermissionMatrix({ matrix }: { matrix: Perm[][] }) {
   );
 }
 
-/** 权限范围：全局 / 指定项目（多选）/ 项目内角色 */
+/** 权限范围：全局 / 指定团队（多选）/ 团队内角色 */
 function PermissionScope({ def }: { def: RoleDef }) {
-  const [scopeType, setScopeType] = useState<"global" | "projects">(def.scope.global ? "global" : "projects");
+  const [scopeType, setScopeType] = useState<"global" | "teams">(def.scope.global ? "global" : "teams");
   const theme = roleThemes[def.key];
 
   return (
@@ -258,7 +258,7 @@ function PermissionScope({ def }: { def: RoleDef }) {
         ...baseFont,
       }}
     >
-      {/* 适用范围：全局 vs 指定项目（受控单选） */}
+      {/* 适用范围：全局 vs 指定团队（受控单选） */}
       <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
         <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600] }}>适用范围</span>
         <div style={{ display: "flex", gap: space.sm }}>
@@ -280,52 +280,52 @@ function PermissionScope({ def }: { def: RoleDef }) {
               fontFamily: fontFamily.body,
             }}
           >
-            全局（所有项目）
+            全局（所有团队）
           </button>
           <button
             type="button"
-            data-scope-type="projects"
-            data-active={scopeType === "projects" ? "true" : "false"}
-            onClick={() => setScopeType("projects")}
+            data-scope-type="teams"
+            data-active={scopeType === "teams" ? "true" : "false"}
+            onClick={() => setScopeType("teams")}
             style={{
               flex: 1,
               padding: `${space.sm}px ${space.md}px`,
               borderRadius: radius.md,
-              border: `1px solid ${scopeType === "projects" ? theme.border : neutral[200]}`,
-              backgroundColor: scopeType === "projects" ? theme.bg : "#FFFFFF",
-              color: scopeType === "projects" ? theme.color : neutral[600],
+              border: `1px solid ${scopeType === "teams" ? theme.border : neutral[200]}`,
+              backgroundColor: scopeType === "teams" ? theme.bg : "#FFFFFF",
+              color: scopeType === "teams" ? theme.color : neutral[600],
               fontSize: fontSize.md,
-              fontWeight: scopeType === "projects" ? 600 : 500,
+              fontWeight: scopeType === "teams" ? 600 : 500,
               cursor: "pointer",
               fontFamily: fontFamily.body,
             }}
           >
-            指定项目
+            指定团队
           </button>
         </div>
         <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-          {scopeType === "global" ? "全局角色对所有项目生效（如平台管理员）" : "角色仅对所选项目生效（如项目成员）"}
+          {scopeType === "global" ? "全局角色对所有团队生效（如平台管理员）" : "角色仅对所选团队生效（如团队成员）"}
         </span>
       </div>
 
-      {/* 指定项目（多选） */}
+      {/* 指定团队（多选） */}
       <div
-        data-testid="scope-project-select"
+        data-testid="scope-team-select"
         style={{
           display: "flex",
           flexDirection: "column",
           gap: space.sm,
-          opacity: scopeType === "projects" ? 1 : 0.55,
+          opacity: scopeType === "teams" ? 1 : 0.55,
         }}
       >
-        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600] }}>指定项目（多选）</span>
+        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600] }}>指定团队（多选）</span>
         <div style={{ display: "flex", gap: space.sm, flexWrap: "wrap" }}>
-          {projectPool.map((p) => {
-            const active = def.scope.projects.includes(p);
+          {teamPool.map((p) => {
+            const active = def.scope.teams.includes(p);
             return (
               <span
                 key={p}
-                data-project={p}
+                data-team={p}
                 data-active={active ? "true" : "false"}
                 style={{
                   display: "inline-flex",
@@ -337,7 +337,7 @@ function PermissionScope({ def }: { def: RoleDef }) {
                   backgroundColor: active ? theme.bg : "#FFFFFF",
                   color: active ? theme.color : neutral[600],
                   fontSize: fontSize.md,
-                  cursor: scopeType === "projects" ? "pointer" : "not-allowed",
+                  cursor: scopeType === "teams" ? "pointer" : "not-allowed",
                   fontFamily: fontFamily.body,
                 }}
               >
@@ -349,12 +349,12 @@ function PermissionScope({ def }: { def: RoleDef }) {
         </div>
       </div>
 
-      {/* 项目内角色（多选，成员可在项目内承担多种分工） */}
+      {/* 团队内角色（多选，成员可在团队内承担多种分工） */}
       <div
         data-testid="scope-inner-role-select"
         style={{ display: "flex", flexDirection: "column", gap: space.sm }}
       >
-        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600] }}>项目内角色</span>
+        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[600] }}>团队内角色</span>
         <div style={{ display: "flex", gap: space.sm, flexWrap: "wrap" }}>
           {innerRolePool.map((r) => {
             const active = def.scope.innerRoles.includes(r);
@@ -608,7 +608,7 @@ function RolePermissionPage() {
             {/* 权限范围 */}
             <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
               <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>权限范围</span>
-              {/* key=def.key：角色切换时重挂载，scopeType 初始值（global/projects）随角色重置 */}
+              {/* key=def.key：角色切换时重挂载，scopeType 初始值（global/teams）随角色重置 */}
               <PermissionScope def={def} key={def.key} />
             </div>
 
@@ -651,7 +651,7 @@ const def: PrototypeDef = {
     name: "角色与权限",
     group: "平台",
     description:
-      "角色列表（平台管理员/项目成员/自定义）+ 权限矩阵（资源×操作 ✓/◐/✗）+ 权限范围（全局/指定项目/项目内角色）",
+      "角色列表（平台管理员/团队成员/自定义）+ 权限矩阵（资源×操作 ✓/◐/✗）+ 权限范围（全局/指定团队/团队内角色）",
     device: "desktop",
   },
   Component: RolePermissionPage,

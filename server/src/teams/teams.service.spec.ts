@@ -1189,17 +1189,17 @@ describe('TeamsService', () => {
 
   describe('onModuleInit 与 seq 并发重号边界', () => {
     it('onModuleInit 按最大 id 对齐各前缀 seed', async () => {
-      (prisma.team as any).findFirst = jest
+      (prisma.team as any).findMany = jest
         .fn()
-        .mockResolvedValue({ id: 'tm_0000000005' });
-      (prisma.teamMember as any).findFirst = jest
+        .mockResolvedValue([{ id: 'tm_0000000005' }]);
+      (prisma.teamMember as any).findMany = jest
         .fn()
-        .mockResolvedValue({ id: 'tmm_0000000003' });
-      (prisma.teamUserMember as any).findFirst = jest
+        .mockResolvedValue([{ id: 'tmm_0000000003' }]);
+      (prisma.teamUserMember as any).findMany = jest
         .fn()
-        .mockResolvedValue({ id: 'tum_0000000004' });
+        .mockResolvedValue([{ id: 'tum_0000000004' }]);
       (prisma as any).teamQueue = {
-        findFirst: jest.fn().mockResolvedValue({ id: 'tq_0000000007' }),
+        findMany: jest.fn().mockResolvedValue([{ id: 'tq_0000000007' }]),
       };
       await service.onModuleInit();
       expect(idGen.seed).toHaveBeenCalledWith('tm', 5);
@@ -1750,6 +1750,7 @@ describe('TeamsService', () => {
         data: expect.objectContaining({
           id: 's_0000000099',
           taskId: null,
+          teamId: 'tm_0000000001',
           agentId: 'a_product',
           teamMemberId: 'tmm_0000000001',
           status: 'created',
@@ -1765,6 +1766,26 @@ describe('TeamsService', () => {
         teamId: 'tm_0000000001',
         memberId: 'tmm_0000000001',
       });
+      // 回归：重置行携带 teamId，团队域后续读取（memory_save 形）可解析
+      const createdData = (tx.session.create as jest.Mock).mock.calls[0][0]
+        .data;
+      expect(createdData.teamId).toBe('tm_0000000001');
+      expect(createdData.teamMemberId).toBe('tmm_0000000001');
+      (prisma as any).session = {
+        findFirst: jest.fn().mockImplementation(({ where }: any) => {
+          if (
+            where?.teamId === createdData.teamId &&
+            where?.teamMemberId === createdData.teamMemberId
+          ) {
+            return Promise.resolve(createdData);
+          }
+          return Promise.resolve(null);
+        }),
+      };
+      const followUp = await (prisma as any).session.findFirst({
+        where: { teamId: 'tm_0000000001', teamMemberId: 'tmm_0000000001' },
+      });
+      expect(followUp?.id).toBe('s_0000000099');
     });
 
     it('failure：未知成员 → 404 MEMBER_NOT_FOUND（不进事务）', async () => {

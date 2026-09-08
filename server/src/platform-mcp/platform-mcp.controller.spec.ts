@@ -119,7 +119,9 @@ describe('PlatformMcpController (HTTP)', () => {
         content: [{ type: 'text', text: '已发送至渠道 nc_0001: hi' }],
       }),
       wecomReply: jest.fn().mockResolvedValue({
-        content: [{ type: 'text', text: '已回复企微用户 @张三 并同步到任务群聊' }],
+        content: [
+          { type: 'text', text: '已回复企微用户 @张三 并同步到任务群聊' },
+        ],
       }),
     };
 
@@ -200,7 +202,7 @@ describe('PlatformMcpController (HTTP)', () => {
   });
 
   describe('tools/list', () => {
-    it('→ 返回 28 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search + plan_submit/plan_review/plan_task_transition + team_view/my_profile + plan_get/plan_assign_reviewer + team_add_member + channel_send + wecom_reply + task_create + my_projects）且 inputSchema 为 JSON Schema', async () => {
+    it('→ 返回 27 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search + plan_submit/plan_review/plan_task_transition + team_view/my_profile + plan_get/plan_assign_reviewer + team_add_member + channel_send + wecom_reply + task_create）且 inputSchema 为 JSON Schema', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
@@ -244,15 +246,10 @@ describe('PlatformMcpController (HTTP)', () => {
         'channel_send',
         'wecom_reply',
         'task_create',
-        'my_projects',
       ]);
 
       for (const tool of tools) {
         expect(tool.description).toEqual(expect.any(String));
-        if (tool.name === 'my_projects') {
-          // my_projects 无入参（团队会话项目发现通道），跳过 taskId 属性断言
-          continue;
-        }
         if (tool.name === 'channel_send') {
           expect(tool.inputSchema).toMatchObject({
             type: 'object',
@@ -433,20 +430,15 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(channelSend.inputSchema.properties.text).toEqual({
         type: 'string',
       });
-      // task_create：selfInstanceId/title/projectId 必填（projectId 无默认值），taskId/teamId 双可选
+      // task_create：selfInstanceId/title 必填（团队由会话解析），taskId/teamId 双可选
       const taskCreate = tools.find((t) => t.name === 'task_create')!;
       expect(taskCreate.inputSchema.required).toEqual([
         'selfInstanceId',
         'title',
-        'projectId',
       ]);
-      expect(taskCreate.inputSchema.properties.projectId).toEqual({
+      expect(taskCreate.inputSchema.properties.title).toEqual({
         type: 'string',
       });
-      // my_projects：无入参
-      const myProjects = tools.find((t) => t.name === 'my_projects')!;
-      expect(myProjects.inputSchema.required).toEqual([]);
-      expect(myProjects.inputSchema.properties).toEqual({});
     });
   });
 

@@ -891,7 +891,9 @@ export class WorkerEventIngress {
         where: { id: teamId },
         select: { managedMode: true },
       });
-      return (team as { managedMode?: boolean | null } | null)?.managedMode ?? false;
+      return (
+        (team as { managedMode?: boolean | null } | null)?.managedMode ?? false
+      );
     } catch {
       return false;
     }

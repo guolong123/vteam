@@ -8,6 +8,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { Observable, Subscription } from 'rxjs';
 import { IdGeneratorService } from '../common/id-generator';
+import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   RealtimeController,
@@ -24,10 +25,9 @@ describe('RealtimeController（SSE 端点）', () => {
       create: jest.Mock;
       findMany: jest.Mock;
     };
-    task: { findUnique: jest.Mock };
+    task: { findUnique: jest.Mock; findMany: jest.Mock };
     chatChannel: { findUnique: jest.Mock; findMany: jest.Mock };
-    projectMember: { findUnique: jest.Mock; findMany: jest.Mock };
-    teamUserMember: { findMany: jest.Mock };
+    teamUserMember: { findUnique: jest.Mock; findMany: jest.Mock };
   };
   let jwt: { verifyAsync: jest.Mock };
 
@@ -63,10 +63,9 @@ describe('RealtimeController（SSE 端点）', () => {
         ),
         findMany: jest.fn().mockResolvedValue([]),
       },
-    task: { findUnique: jest.fn() },
-    chatChannel: { findUnique: jest.fn(), findMany: jest.fn() },
-    projectMember: { findUnique: jest.fn(), findMany: jest.fn() },
-    teamUserMember: { findMany: jest.fn() },
+      task: { findUnique: jest.fn(), findMany: jest.fn() },
+      chatChannel: { findUnique: jest.fn(), findMany: jest.fn() },
+      teamUserMember: { findUnique: jest.fn(), findMany: jest.fn() },
     };
     jwt = { verifyAsync: jest.fn() };
 
@@ -116,6 +115,23 @@ describe('RealtimeController（SSE 端点）', () => {
     });
   }
 
+  /** 断言 403 响应码为 PERMISSION_TEAM_NOT_MEMBER。 */
+  async function expectTeamForbidden(promise: Promise<unknown>) {
+    try {
+      await promise;
+      throw new Error('expected ForbiddenException, but resolved');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ForbiddenException);
+      const res = (err as ForbiddenException).getResponse() as {
+        code: string;
+      };
+      expect(res.code).toBe(TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER);
+      expect(TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER).toBe(
+        'PERMISSION_TEAM_NOT_MEMBER',
+      );
+    }
+  }
+
   describe('query token 鉴权', () => {
     it('缺少 token → 401 AUTH_UNAUTHORIZED', async () => {
       await expect(controller.events()).rejects.toThrow(UnauthorizedException);
@@ -136,44 +152,63 @@ describe('RealtimeController（SSE 端点）', () => {
     });
   });
 
-  describe('scope 权限校验', () => {
-    it('scope=task:<id> 非项目成员 → 403 PERMISSION_PROJECT_NOT_MEMBER', async () => {
+  describe('scope 权限校验（团队成员链）', () => {
+    it('scope=task:<id> 非团队成员 → 403 PERMISSION_TEAM_NOT_MEMBER', async () => {
       grantAccess();
-      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_1' });
-      prisma.projectMember.findUnique.mockResolvedValue(null);
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
 
-      await expect(
+      await expectTeamForbidden(
         controller.events(undefined, 'task:t_1', accessToken),
-      ).rejects.toThrow(ForbiddenException);
+      );
+      expect(prisma.teamUserMember.findUnique).toHaveBeenCalledWith({
+        where: { teamId_userId: { teamId: 'tm_1', userId: 'u_admin' } },
+        select: { id: true },
+      });
     });
 
     it('scope=task:<id> 任务不存在 → 403（防信息泄露）', async () => {
       grantAccess();
       prisma.task.findUnique.mockResolvedValue(null);
 
-      await expect(
+      await expectTeamForbidden(
         controller.events(undefined, 'task:t_missing', accessToken),
-      ).rejects.toThrow(ForbiddenException);
+      );
     });
 
-    it('scope=channel:<id> 非项目成员 → 403', async () => {
+    it('scope=channel:<id> 非团队成员 → 403 PERMISSION_TEAM_NOT_MEMBER', async () => {
       grantAccess();
-      prisma.chatChannel.findUnique.mockResolvedValue({ taskId: 't_1' });
-      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_1' });
-      prisma.projectMember.findUnique.mockResolvedValue(null);
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        taskId: null,
+        teamId: 'tm_1',
+      });
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
 
-      await expect(
+      await expectTeamForbidden(
         controller.events(undefined, 'channel:c_1', accessToken),
-      ).rejects.toThrow(ForbiddenException);
+      );
     });
 
     it('scope=channel:<id> 频道不存在 → 403', async () => {
       grantAccess();
       prisma.chatChannel.findUnique.mockResolvedValue(null);
 
-      await expect(
+      await expectTeamForbidden(
         controller.events(undefined, 'channel:c_missing', accessToken),
-      ).rejects.toThrow(ForbiddenException);
+      );
+    });
+
+    it('scope=team:<id> 非团队成员 → 403 PERMISSION_TEAM_NOT_MEMBER', async () => {
+      grantAccess();
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+
+      await expectTeamForbidden(
+        controller.events(undefined, 'team:tm_1', accessToken),
+      );
+      expect(prisma.teamUserMember.findUnique).toHaveBeenCalledWith({
+        where: { teamId_userId: { teamId: 'tm_1', userId: 'u_admin' } },
+        select: { id: true },
+      });
     });
 
     it('scope 格式非法（无 : 分隔）→ 400 SCOPE_INVALID', async () => {
@@ -183,10 +218,10 @@ describe('RealtimeController（SSE 端点）', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('scope=task:<id> 为项目成员 → 放行并收到该 task 事件', async () => {
+    it('scope=task:<id> 为团队成员 → 放行并收到该 task 事件', async () => {
       grantAccess();
-      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_1' });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
 
       const obs = await controller.events(undefined, 'task:t_1', accessToken);
       const eventsPromise = collectEvents(obs, 1);
@@ -204,12 +239,30 @@ describe('RealtimeController（SSE 端点）', () => {
       expect(events[0].id).toBe('ev_0000000001');
     });
 
-    it('逗号分隔多 scope：逐 scope 校验权限，命中任一 scope 即推送', async () => {
+    it('scope=team:<id> 为团队成员 → 放行并收到该 team 事件', async () => {
       grantAccess();
-      // channel:c_1 → task t_1 → p_1；task:t_2 → p_1；global 跳过校验
-      prisma.chatChannel.findUnique.mockResolvedValue({ taskId: 't_1' });
-      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_1' });
-      prisma.projectMember.findUnique.mockResolvedValue({ id: 'pm_1' });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+
+      const obs = await controller.events(undefined, 'team:tm_1', accessToken);
+      const eventsPromise = collectEvents(obs, 1);
+      await realtime.broadcast(
+        'team.changed',
+        { teamId: 'tm_1' },
+        { type: 'team', id: 'tm_1' },
+      );
+      const events = await eventsPromise;
+      expect(events).toHaveLength(1);
+    });
+
+    it('逗号分隔多 scope：逐 scope 校验团队成员，命中任一 scope 即推送', async () => {
+      grantAccess();
+      // channel:c_1 → tm_1；task:t_2 → tm_1；global 跳过校验
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        taskId: null,
+        teamId: 'tm_1',
+      });
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
 
       const obs = await controller.events(
         undefined,
@@ -252,31 +305,28 @@ describe('RealtimeController（SSE 端点）', () => {
       });
     });
 
-    it('逗号分隔多 scope 中任一段无权限 → 403', async () => {
+    it('逗号分隔多 scope 中任一段无权限 → 403 PERMISSION_TEAM_NOT_MEMBER', async () => {
       grantAccess();
-      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_1' });
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
       // 第一次校验 task:t_1 放行；第二次校验 task:t_9 无权限 → 整体 403
-      prisma.projectMember.findUnique
-        .mockResolvedValueOnce({ id: 'pm_1' })
+      prisma.teamUserMember.findUnique
+        .mockResolvedValueOnce({ id: 'tum_1' })
         .mockResolvedValueOnce(null);
 
-      await expect(
+      await expectTeamForbidden(
         controller.events(undefined, 'task:t_1,task:t_9', accessToken),
-      ).rejects.toThrow(ForbiddenException);
+      );
     });
   });
 
-  describe('scope=all 全量订阅（按成员项目过滤）', () => {
-    it('scope=all 放行：可见项目 = 调用者全部成员项目，实时只收成员项目事件', async () => {
+  describe('scope=all 全量订阅（按成员团队过滤）', () => {
+    it('scope=all 放行：可见团队 = 调用者全部成员团队，实时只收成员团队事件', async () => {
       grantAccess();
-      // 调用者成员项目 p_1/p_2（projectMember.findMany 全量查）
-      prisma.projectMember.findMany.mockResolvedValue([
-        { projectId: 'p_1' },
-        { projectId: 'p_2' },
-      ]);
-      // emit 解析 projectId：t_1 → p_1（命中）、t_2 → p_9（非成员项目）
-      prisma.task.findUnique.mockResolvedValueOnce({ projectId: 'p_1' });
-      prisma.task.findUnique.mockResolvedValueOnce({ projectId: 'p_9' });
+      // 调用者成员团队 tm_1（teamUserMember.findMany 全量查）
+      prisma.teamUserMember.findMany.mockResolvedValue([{ teamId: 'tm_1' }]);
+      // emit 解析 teamId：t_1 → tm_1（命中）、t_2 → tm_9（非成员团队）
+      prisma.task.findUnique.mockResolvedValueOnce({ teamId: 'tm_1' });
+      prisma.task.findUnique.mockResolvedValueOnce({ teamId: 'tm_9' });
 
       const obs = await controller.events(undefined, 'all', accessToken);
       const eventsPromise = collectEvents(obs, 1);
@@ -292,9 +342,9 @@ describe('RealtimeController（SSE 端点）', () => {
       );
       const events = await eventsPromise;
 
-      expect(prisma.projectMember.findMany).toHaveBeenCalledWith({
+      expect(prisma.teamUserMember.findMany).toHaveBeenCalledWith({
         where: { userId: 'u_admin' },
-        select: { projectId: true },
+        select: { teamId: true },
       });
       expect(
         events.map(
@@ -304,15 +354,13 @@ describe('RealtimeController（SSE 端点）', () => {
       ).toEqual(['m_1']);
     });
 
-    it('scope=all 补拉按可见项目 in 过滤 DB 查询（含 since 叠加）', async () => {
+    it('scope=all 补拉按团队归属过滤（成员只收本团队事件，含 since 叠加）', async () => {
       grantAccess();
-      prisma.projectMember.findMany.mockResolvedValue([
-        { projectId: 'p_1' },
-        { projectId: 'p_2' },
-      ]);
+      prisma.teamUserMember.findMany.mockResolvedValue([{ teamId: 'tm_1' }]);
       prisma.realtimeEvent.findMany.mockResolvedValue([
         dbRow('ev_0000000003', 'c', 'task', 't_1'),
       ]);
+      prisma.task.findMany.mockResolvedValue([{ id: 't_1', teamId: 'tm_1' }]);
 
       const obs = await controller.events('ev_0000000002', 'all', accessToken);
       const events = await collectEvents(obs, 1);
@@ -320,17 +368,16 @@ describe('RealtimeController（SSE 端点）', () => {
       expect(events).toHaveLength(1);
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
         where: {
-          projectId: { in: ['p_1', 'p_2'] },
           id: { gt: 'ev_0000000002' },
         },
         orderBy: { id: 'asc' },
       });
     });
 
-    it('无成员项目时 scope=all 收不到任何 task/channel 事件', async () => {
+    it('无成员团队时 scope=all 收不到任何事件', async () => {
       grantAccess();
-      prisma.projectMember.findMany.mockResolvedValue([]);
-      prisma.task.findUnique.mockResolvedValue({ projectId: 'p_1' });
+      prisma.teamUserMember.findMany.mockResolvedValue([]);
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
 
       const obs = await controller.events(undefined, 'all', accessToken);
       const eventsPromise = collectEvents(obs, 0);
@@ -339,22 +386,14 @@ describe('RealtimeController（SSE 端点）', () => {
         { messageId: 'm_1' },
         { type: 'task', id: 't_1' },
       );
-      await realtime.broadcast('team.changed', { taskId: 't_1' }); // global projectId p_1 也拦截
+      await realtime.broadcast('team.changed', { taskId: 't_1' }); // global teamId tm_1 也拦截
       const events = await eventsPromise;
 
       expect(events).toHaveLength(0);
-      // 补拉 where 仅 projectId in []（Prisma 空 in 返回空集，服务端保证不误放行）
-      expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
-        where: { projectId: { in: [] } },
-        orderBy: { id: 'asc' },
-      });
     });
 
     it('scope=all 团队成员实时收到零任务团队频道的消息事件（团队维度放行）', async () => {
       grantAccess();
-      prisma.projectMember.findMany.mockResolvedValue([
-        { projectId: 'p_other' },
-      ]);
       prisma.teamUserMember.findMany.mockResolvedValue([{ teamId: 'tm_1' }]);
       // 频道归属 tm_1 且无任务分区；团队无 currentTask（toMessageDto 亦无 taskId）
       prisma.chatChannel.findUnique.mockResolvedValue({
@@ -381,11 +420,8 @@ describe('RealtimeController（SSE 端点）', () => {
       );
     });
 
-    it('scope=all 非团队成员收不到零任务团队频道的消息事件', async () => {
+    it('scope=all 伪造他团队 scope 订阅无事件（非团队成员收不到）', async () => {
       grantAccess();
-      prisma.projectMember.findMany.mockResolvedValue([
-        { projectId: 'p_other' },
-      ]);
       prisma.teamUserMember.findMany.mockResolvedValue([
         { teamId: 'tm_other' },
       ]);

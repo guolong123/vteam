@@ -11,9 +11,23 @@ function uniq(prefix: string): string {
 }
 
 // ── 内存模拟：极简版 Team/Queue/Task/Chat/Session 行为（对齐真实服务语义） ──
-type Team = { id: string; name: string; reuseSession: boolean; currentTaskId: string | null; version: number; queue: { taskId: string; position: number; enqueuedAt: Date }[]; members: { id: string; agentId: string }[] };
+type Team = {
+  id: string;
+  name: string;
+  reuseSession: boolean;
+  currentTaskId: string | null;
+  version: number;
+  queue: { taskId: string; position: number; enqueuedAt: Date }[];
+  members: { id: string; agentId: string }[];
+};
 type Task = { id: string; teamId: string; title: string; status: string };
-type Message = { id: string; channelId: string; taskId: string | null; text: string; createdAt: Date };
+type Message = {
+  id: string;
+  channelId: string;
+  taskId: string | null;
+  text: string;
+  createdAt: Date;
+};
 
 let seqCounters: Record<string, number> = {};
 function nextId(prefix: string): string {
@@ -26,15 +40,38 @@ class InMemDB {
   tasks = new Map<string, Task>();
   channels = new Map<string, { id: string; teamId: string; type: string }>();
   messages: Message[] = [];
-  sessions = new Map<string, { id: string; teamMemberId: string; taskId: string }>();
-  realtimeEvents: { id: string; type: string; scopeType: string; scopeId: string; payload: any; createdAt: Date }[] = [];
+  sessions = new Map<
+    string,
+    { id: string; teamMemberId: string; taskId: string }
+  >();
+  realtimeEvents: {
+    id: string;
+    type: string;
+    scopeType: string;
+    scopeId: string;
+    payload: any;
+    createdAt: Date;
+  }[] = [];
   version = 0;
 
   createTeam(name: string, agentIds: string[], reuseSession = true): Team {
-    for (const t of this.teams.values()) if (t.name === name) throw Object.assign(new Error('TEAM_NAME_CONFLICT'), { code: 'TEAM_NAME_CONFLICT', status: 409 });
+    for (const t of this.teams.values())
+      if (t.name === name)
+        throw Object.assign(new Error('TEAM_NAME_CONFLICT'), {
+          code: 'TEAM_NAME_CONFLICT',
+          status: 409,
+        });
     const id = nextId('tm');
     const members = agentIds.map((agentId) => ({ id: nextId('tmm'), agentId }));
-    const team: Team = { id, name, reuseSession, currentTaskId: null, version: 0, queue: [], members };
+    const team: Team = {
+      id,
+      name,
+      reuseSession,
+      currentTaskId: null,
+      version: 0,
+      queue: [],
+      members,
+    };
     this.teams.set(id, team);
     const chId = nextId('c');
     this.channels.set(chId, { id: chId, teamId: id, type: 'team_group' });
@@ -43,10 +80,28 @@ class InMemDB {
   }
 
   // 双保险：FOR UPDATE + version CAS 模拟（重试3次）
-  createTask(projectId: string, userId: string, teamId: string, title: string): Task {
+  // 签名对齐 TasksService.create(userId, dto)（remove-project-dimension T1：无 pid，
+  // teamId 必填走 dto；此处 InMemDB 仅模拟排队语义，不触真实 DB）
+  createTask(userId: string, dto: { teamId: string; title: string }): Task {
+    const { teamId, title } = dto;
+    if (!teamId || typeof teamId !== 'string' || teamId.trim().length === 0) {
+      throw Object.assign(new Error('TEAM_REQUIRED'), {
+        code: 'TEAM_REQUIRED',
+        status: 400,
+      });
+    }
+    void userId;
     const team = this.teams.get(teamId);
-    if (!team) throw Object.assign(new Error('TEAM_NOT_FOUND'), { code: 'TEAM_NOT_FOUND', status: 404 });
-    if (team.members.length === 0) throw Object.assign(new Error('TASK_EMPTY_TEAM'), { code: 'TASK_EMPTY_TEAM', status: 400 });
+    if (!team)
+      throw Object.assign(new Error('TEAM_NOT_FOUND'), {
+        code: 'TEAM_NOT_FOUND',
+        status: 404,
+      });
+    if (team.members.length === 0)
+      throw Object.assign(new Error('TASK_EMPTY_TEAM'), {
+        code: 'TASK_EMPTY_TEAM',
+        status: 400,
+      });
     for (let attempt = 0; attempt < 3; attempt++) {
       const expectedVersion = team.version;
       const isIdle = !team.currentTaskId;
@@ -72,60 +127,135 @@ class InMemDB {
       }
       return task;
     }
-    throw Object.assign(new Error('VERSION_CONFLICT'), { code: 'VERSION_CONFLICT', status: 409 });
+    throw Object.assign(new Error('VERSION_CONFLICT'), {
+      code: 'VERSION_CONFLICT',
+      status: 409,
+    });
   }
 
-  createMessage(channelId: string, taskId: string | null, text: string): Message {
+  createMessage(
+    channelId: string,
+    taskId: string | null,
+    text: string,
+  ): Message {
     const ch = this.channels.get(channelId);
-    if (!ch) throw Object.assign(new Error('CHANNEL_NOT_FOUND'), { code: 'CHANNEL_NOT_FOUND', status: 404 });
+    if (!ch)
+      throw Object.assign(new Error('CHANNEL_NOT_FOUND'), {
+        code: 'CHANNEL_NOT_FOUND',
+        status: 404,
+      });
     const id = nextId('m');
     const msg: Message = { id, channelId, taskId, text, createdAt: new Date() };
     // 系统分隔：同频道跨 task 切换时插入
-    const last = [...this.messages].reverse().find((m) => m.channelId === channelId);
+    const last = [...this.messages]
+      .reverse()
+      .find((m) => m.channelId === channelId);
     if (last && last.taskId && taskId && last.taskId !== taskId) {
-      const sep: Message = { id: nextId('m'), channelId, taskId, text: `--- Task ${taskId} started ---`, createdAt: new Date() };
+      const sep: Message = {
+        id: nextId('m'),
+        channelId,
+        taskId,
+        text: `--- Task ${taskId} started ---`,
+        createdAt: new Date(),
+      };
       this.messages.push(sep);
-      this.emitRealtime('chat.message.new', 'channel', channelId, { message: sep });
-      if (ch.teamId) this.emitRealtime('chat.message.new', 'team', ch.teamId, { message: sep });
+      this.emitRealtime('chat.message.new', 'channel', channelId, {
+        message: sep,
+      });
+      if (ch.teamId)
+        this.emitRealtime('chat.message.new', 'team', ch.teamId, {
+          message: sep,
+        });
     }
     this.messages.push(msg);
-    this.emitRealtime('chat.message.new', 'channel', channelId, { message: msg });
-    if (ch.teamId) this.emitRealtime('chat.message.new', 'team', ch.teamId, { message: msg });
+    this.emitRealtime('chat.message.new', 'channel', channelId, {
+      message: msg,
+    });
+    if (ch.teamId)
+      this.emitRealtime('chat.message.new', 'team', ch.teamId, {
+        message: msg,
+      });
     return msg;
   }
 
-  private emitRealtime(type: string, scopeType: string, scopeId: string, payload: any) {
-    this.realtimeEvents.push({ id: `ev_${String(this.realtimeEvents.length + 1).padStart(6, '0')}`, type, scopeType, scopeId, payload, createdAt: new Date() });
+  private emitRealtime(
+    type: string,
+    scopeType: string,
+    scopeId: string,
+    payload: any,
+  ) {
+    this.realtimeEvents.push({
+      id: `ev_${String(this.realtimeEvents.length + 1).padStart(6, '0')}`,
+      type,
+      scopeType,
+      scopeId,
+      payload,
+      createdAt: new Date(),
+    });
   }
 
   // 状态机：pending→in_progress→pending_review→completed→archived，queued 不可 start
   transition(taskId: string, action: string): Task {
     const task = this.tasks.get(taskId);
-    if (!task) throw Object.assign(new Error('TASK_NOT_FOUND'), { code: 'TASK_NOT_FOUND', status: 404 });
+    if (!task)
+      throw Object.assign(new Error('TASK_NOT_FOUND'), {
+        code: 'TASK_NOT_FOUND',
+        status: 404,
+      });
     const team = this.teams.get(task.teamId);
     if (action === 'start') {
-      if (task.status === 'queued') throw Object.assign(new Error('TEAM_NOT_QUEUE_HEAD'), { code: 'TEAM_NOT_QUEUE_HEAD', status: 409 });
-      if (task.status !== 'pending') throw Object.assign(new Error('TASK_INVALID_TRANSITION'), { code: 'TASK_INVALID_TRANSITION', status: 409 });
-      if (team && team.currentTaskId !== taskId) throw Object.assign(new Error('TEAM_NOT_QUEUE_HEAD'), { code: 'TEAM_NOT_QUEUE_HEAD', status: 409 });
+      if (task.status === 'queued')
+        throw Object.assign(new Error('TEAM_NOT_QUEUE_HEAD'), {
+          code: 'TEAM_NOT_QUEUE_HEAD',
+          status: 409,
+        });
+      if (task.status !== 'pending')
+        throw Object.assign(new Error('TASK_INVALID_TRANSITION'), {
+          code: 'TASK_INVALID_TRANSITION',
+          status: 409,
+        });
+      if (team && team.currentTaskId !== taskId)
+        throw Object.assign(new Error('TEAM_NOT_QUEUE_HEAD'), {
+          code: 'TEAM_NOT_QUEUE_HEAD',
+          status: 409,
+        });
       task.status = 'in_progress';
     } else if (action === 'mark-pending-review') {
-      if (task.status !== 'in_progress') throw Object.assign(new Error('TASK_INVALID_TRANSITION'), { status: 409 });
+      if (task.status !== 'in_progress')
+        throw Object.assign(new Error('TASK_INVALID_TRANSITION'), {
+          status: 409,
+        });
       task.status = 'pending_review';
     } else if (action === 'accept') {
-      if (task.status !== 'pending_review') throw Object.assign(new Error('TASK_INVALID_TRANSITION'), { status: 409 });
+      if (task.status !== 'pending_review')
+        throw Object.assign(new Error('TASK_INVALID_TRANSITION'), {
+          status: 409,
+        });
       task.status = 'completed';
       // promoteNext + reuse 处理
       if (team) {
         // reuseSession=false 触发批量 reset（内存模拟：清空 sessions 并发系统消息）
         const needReset = !team.reuseSession;
         if (needReset) {
-          for (const [sid, s] of [...this.sessions.entries()]) if (team.members.some((m) => m.id === s.teamMemberId)) this.sessions.delete(sid);
+          for (const [sid, s] of [...this.sessions.entries()])
+            if (team.members.some((m) => m.id === s.teamMemberId))
+              this.sessions.delete(sid);
           // 系统消息
-          const ch = [...this.channels.values()].find((c) => c.teamId === team.id);
+          const ch = [...this.channels.values()].find(
+            (c) => c.teamId === team.id,
+          );
           if (ch) {
-            const sys: Message = { id: nextId('m'), channelId: ch.id, taskId: task.id, text: '已为下一任务开新会话', createdAt: new Date() };
+            const sys: Message = {
+              id: nextId('m'),
+              channelId: ch.id,
+              taskId: task.id,
+              text: '已为下一任务开新会话',
+              createdAt: new Date(),
+            };
             this.messages.push(sys);
-            this.emitRealtime('chat.message.new', 'team', team.id, { message: sys });
+            this.emitRealtime('chat.message.new', 'team', team.id, {
+              message: sys,
+            });
           }
         }
         // promote
@@ -137,28 +267,42 @@ class InMemDB {
           // 重排
           team.queue.forEach((q, i) => (q.position = i + 1));
           team.version++;
-          this.emitRealtime('team.queue.changed', 'team', team.id, { action: 'promote', taskId: next.taskId });
+          this.emitRealtime('team.queue.changed', 'team', team.id, {
+            action: 'promote',
+            taskId: next.taskId,
+          });
         } else {
           team.currentTaskId = null;
           team.version++;
-          this.emitRealtime('team.queue.changed', 'team', team.id, { action: 'idle' });
+          this.emitRealtime('team.queue.changed', 'team', team.id, {
+            action: 'idle',
+          });
         }
       }
     } else if (action === 'archive') {
-      if (task.status !== 'completed') throw Object.assign(new Error('TASK_INVALID_TRANSITION'), { status: 409 });
+      if (task.status !== 'completed')
+        throw Object.assign(new Error('TASK_INVALID_TRANSITION'), {
+          status: 409,
+        });
       task.status = 'archived';
     }
     return task;
   }
 
   findMessages(channelId: string): Message[] {
-    return this.messages.filter((m) => m.channelId === channelId).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    return this.messages
+      .filter((m) => m.channelId === channelId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   }
 
   updateTeamReuse(teamId: string, reuse: boolean, version: number): Team {
     const t = this.teams.get(teamId);
     if (!t) throw Object.assign(new Error('TEAM_NOT_FOUND'), { status: 404 });
-    if (t.version !== version) throw Object.assign(new Error('VERSION_CONFLICT'), { code: 'VERSION_CONFLICT', status: 409 });
+    if (t.version !== version)
+      throw Object.assign(new Error('VERSION_CONFLICT'), {
+        code: 'VERSION_CONFLICT',
+        status: 409,
+      });
     t.reuseSession = reuse;
     t.version++;
     return t;
@@ -166,13 +310,24 @@ class InMemDB {
 
   resetSessions(teamId: string): { reset: number } {
     const team = this.teams.get(teamId);
-    if (!team) throw Object.assign(new Error('TEAM_NOT_FOUND'), { status: 404 });
+    if (!team)
+      throw Object.assign(new Error('TEAM_NOT_FOUND'), { status: 404 });
     let cnt = 0;
-    for (const [sid, s] of [...this.sessions.entries()]) if (team.members.some((m) => m.id === s.teamMemberId)) { this.sessions.delete(sid); cnt++; }
+    for (const [sid, s] of [...this.sessions.entries()])
+      if (team.members.some((m) => m.id === s.teamMemberId)) {
+        this.sessions.delete(sid);
+        cnt++;
+      }
     if (cnt > 0) {
       const ch = [...this.channels.values()].find((c) => c.teamId === teamId);
       if (ch) {
-        const sys: Message = { id: nextId('m'), channelId: ch.id, taskId: team.currentTaskId ?? '', text: '已为下一任务开新会话', createdAt: new Date() };
+        const sys: Message = {
+          id: nextId('m'),
+          channelId: ch.id,
+          taskId: team.currentTaskId ?? '',
+          text: '已为下一任务开新会话',
+          createdAt: new Date(),
+        };
         this.messages.push(sys);
         this.emitRealtime('chat.message.new', 'team', teamId, { message: sys });
       }
@@ -182,8 +337,8 @@ class InMemDB {
 }
 
 describe('Team Queue E2E (fresh DB) — team-queue', () => {
+  // 纯内存 InMemDB：零真实 DB 连接（不碰共享 dev DB，无需 scratch 库与清理）。
   const db = new InMemDB();
-  const projectId = 'p_e2e';
   const agentIds = ['a_0000000001', 'a_0000000002'];
   let team: Team;
   let teamChannelId: string;
@@ -208,13 +363,19 @@ describe('Team Queue E2E (fresh DB) — team-queue', () => {
   });
 
   it('建任务 A → pending 且 currentTaskId=A', () => {
-    taskA = db.createTask(projectId, 'u_admin', team.id, uniq('task-A'));
+    taskA = db.createTask('u_admin', {
+      teamId: team.id,
+      title: uniq('task-A'),
+    });
     expect(taskA.status).toBe('pending');
     expect(db.teams.get(team.id)!.currentTaskId).toBe(taskA.id);
   });
 
   it('建任务 B → queued 且 position=1，currentTaskId 仍为 A', () => {
-    taskB = db.createTask(projectId, 'u_admin', team.id, uniq('task-B'));
+    taskB = db.createTask('u_admin', {
+      teamId: team.id,
+      title: uniq('task-B'),
+    });
     expect(taskB.status).toBe('queued');
     const t = db.teams.get(team.id)!;
     expect(t.currentTaskId).toBe(taskA.id);
@@ -226,8 +387,12 @@ describe('Team Queue E2E (fresh DB) — team-queue', () => {
   it('并发队首竞争：并发生成 C/D，均 queued 且 position 去重 2/3，version CAS 仅一 pending', async () => {
     // 模拟并发：Promise.all 同时 createTask（内存同步，但验证重试与去重逻辑）
     const results = await Promise.all([
-      Promise.resolve().then(() => db.createTask(projectId, 'u_admin', team.id, uniq('task-C'))),
-      Promise.resolve().then(() => db.createTask(projectId, 'u_admin', team.id, uniq('task-D'))),
+      Promise.resolve().then(() =>
+        db.createTask('u_admin', { teamId: team.id, title: uniq('task-C') }),
+      ),
+      Promise.resolve().then(() =>
+        db.createTask('u_admin', { teamId: team.id, title: uniq('task-D') }),
+      ),
     ]);
     results.forEach((r) => expect(r.status).toBe('queued'));
     const t = db.teams.get(team.id)!;
@@ -240,14 +405,25 @@ describe('Team Queue E2E (fresh DB) — team-queue', () => {
   });
 
   it('发团队群聊消息（team_group 频道，带 taskId 分区，双广播 team+channel）', () => {
-    const msg = db.createMessage(teamChannelId, taskA.id, `e2e group chat A ${Date.now()}`);
+    const msg = db.createMessage(
+      teamChannelId,
+      taskA.id,
+      `e2e group chat A ${Date.now()}`,
+    );
     expect(msg.id).toMatch(/^m_/);
     const hist = db.findMessages(teamChannelId);
     expect(hist.length).toBeGreaterThanOrEqual(1);
     expect(hist.some((m) => m.text.includes('e2e group chat A'))).toBe(true);
     // 双广播验证
-    const teamEvents = db.realtimeEvents.filter((e) => e.scopeType === 'team' && e.scopeId === team.id && e.type === 'chat.message.new');
-    const channelEvents = db.realtimeEvents.filter((e) => e.scopeType === 'channel' && e.scopeId === teamChannelId);
+    const teamEvents = db.realtimeEvents.filter(
+      (e) =>
+        e.scopeType === 'team' &&
+        e.scopeId === team.id &&
+        e.type === 'chat.message.new',
+    );
+    const channelEvents = db.realtimeEvents.filter(
+      (e) => e.scopeType === 'channel' && e.scopeId === teamChannelId,
+    );
     expect(teamEvents.length).toBeGreaterThanOrEqual(1);
     expect(channelEvents.length).toBeGreaterThanOrEqual(1);
   });
@@ -290,7 +466,9 @@ describe('Team Queue E2E (fresh DB) — team-queue', () => {
     const r2 = db.resetSessions(team.id);
     expect(r2.reset).toBe(0);
     const hist = db.findMessages(teamChannelId);
-    expect(hist.some((m) => m.text.includes('已为下一任务开新会话'))).toBe(true);
+    expect(hist.some((m) => m.text.includes('已为下一任务开新会话'))).toBe(
+      true,
+    );
   });
 
   it('复用 bench.mjs SSE 测 team:<id> 订阅，team_group 频道 latency ≤1000ms（零模型）', async () => {
@@ -298,14 +476,28 @@ describe('Team Queue E2E (fresh DB) — team-queue', () => {
     const samples = 3;
     const latencies: number[] = [];
     for (let i = 0; i < samples; i++) {
-      const beforeCount = db.realtimeEvents.filter((e) => e.scopeType === 'team' && e.scopeId === team.id).length;
+      const beforeCount = db.realtimeEvents.filter(
+        (e) => e.scopeType === 'team' && e.scopeId === team.id,
+      ).length;
       const t0 = Date.now();
-      const msg = db.createMessage(teamChannelId, taskB.id, `[perf/e2e-team-bench] 采样 ${i + 1} team_group 零模型`);
+      const msg = db.createMessage(
+        teamChannelId,
+        taskB.id,
+        `[perf/e2e-team-bench] 采样 ${i + 1} team_group 零模型`,
+      );
       // 模拟 SSE 回流：轮询 realtimeEvents 含该 msg
       let found = false;
       for (let attempt = 0; attempt < 20; attempt++) {
-        const ev = db.realtimeEvents.find((e) => e.scopeType === 'team' && e.scopeId === team.id && JSON.stringify(e.payload).includes(msg.id));
-        if (ev) { found = true; break; }
+        const ev = db.realtimeEvents.find(
+          (e) =>
+            e.scopeType === 'team' &&
+            e.scopeId === team.id &&
+            JSON.stringify(e.payload).includes(msg.id),
+        );
+        if (ev) {
+          found = true;
+          break;
+        }
         await new Promise((r) => setTimeout(r, 10));
       }
       const latency = Date.now() - t0;
@@ -313,14 +505,23 @@ describe('Team Queue E2E (fresh DB) — team-queue', () => {
       expect(latency).toBeLessThanOrEqual(1000);
       latencies.push(latency);
       // channel 双广播亦验证
-      const chEv = db.realtimeEvents.find((e) => e.scopeType === 'channel' && e.scopeId === teamChannelId && JSON.stringify(e.payload).includes(msg.id));
+      const chEv = db.realtimeEvents.find(
+        (e) =>
+          e.scopeType === 'channel' &&
+          e.scopeId === teamChannelId &&
+          JSON.stringify(e.payload).includes(msg.id),
+      );
       expect(chEv).toBeDefined();
       void beforeCount;
     }
-    const median = [...latencies].sort((a, b) => a - b)[Math.floor(latencies.length / 2)];
+    const median = [...latencies].sort((a, b) => a - b)[
+      Math.floor(latencies.length / 2)
+    ];
     expect(median).toBeLessThanOrEqual(1000);
     // bench.mjs team scope 扩展验证：team:<id> 事件存在
-    const teamEvents = db.realtimeEvents.filter((e) => e.scopeType === 'team' && e.scopeId === team.id);
+    const teamEvents = db.realtimeEvents.filter(
+      (e) => e.scopeType === 'team' && e.scopeId === team.id,
+    );
     expect(teamEvents.length).toBeGreaterThanOrEqual(samples);
   });
 
@@ -328,11 +529,14 @@ describe('Team Queue E2E (fresh DB) — team-queue', () => {
     // 文件层校验：bench.mjs 已包含 resolveTeamScope / benchTeamGroupChat / SKIP_TEAM / teamId
     const fs = await import('node:fs');
     const path = await import('node:path');
-    const benchPath = path.resolve(__dirname, '../../../scripts/perf/bench.mjs');
+    const benchPath = path.resolve(
+      __dirname,
+      '../../../scripts/perf/bench.mjs',
+    );
     const content: string = fs.readFileSync(benchPath, 'utf-8');
     expect(content).toContain('benchTeamGroupChat');
     expect(content).toContain('resolveTeamScope');
-    expect(content).toContain("scope=team:");
+    expect(content).toContain('scope=team:');
     expect(content).toContain('TEAM_ID');
     expect(content).toContain('SKIP_TEAM');
     expect(content).toContain('teamGroupChat');

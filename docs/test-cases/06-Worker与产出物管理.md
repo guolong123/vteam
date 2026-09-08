@@ -39,7 +39,7 @@ curl -X POST http://192.168.10.78:13000/api/v1/auth/login \
 3. **worker 事件回流端点** `POST /api/v1/worker/events`（单数 worker，`worker-events.controller.ts`，X-Worker-Token 鉴权）恒返回 `202 Accepted`：未注册 workerId → 404 `WORKER_NOT_FOUND`；同一 `(workerId, eventId)` 重复投递被内存去重窗口（最近 1000 条）跳过；`task.completed`/`message.part.delta` 等的落库与广播由 `WorkerEventIngress` 消费。
 4. `GET /tasks/:id/artifacts` 对**不存在的任务返回 200 空列表**（无任务存在校验，实测 `{items:[],total:0}`）；而 `POST /tasks/:id/artifacts` 归档到不存在任务会因 `Artifact.taskId` 外键约束（schema `onDelete: Restrict`）触发数据库错误（500），非 404。
 5. 产出物列表**无 `search?` 参数**：`QueryArtifactsDto` 仅含 `type`/`accepted`/`page`/`pageSize`（`12 §6.1` 提及的名称筛选未实现）。
-6. 产出物端点仅挂 `artifacts.view` / `artifacts.create` 权限点（`PermissionGuard`），**未实现 09 §2.3 的 `[project]` 项目成员校验**：member 角色（`{all:false}`）对 `view` 放行、对 `create` 拒绝，即成员可查看任意任务产出物列表（跨项目也可见，属实现现状）。
+6. 产出物端点仅挂 `artifacts.view` / `artifacts.create` 权限点（`PermissionGuard`），**未实现 09 §2.3 的 `[project]` 团队成员校验**：member 角色（`{all:false}`）对 `view` 放行、对 `create` 拒绝，即成员可查看任意任务产出物列表（跨团队也可见，属实现现状）。
 7. **doc/file 产出物落盘**（P2 修复）：worker 回流携带真实内容（`content` 非空）时经 `FileStorageService.saveTextFile` 落盘 `server/uploads/` 生成可访问 `/uploads/<uuid>.<ext>` URL，替换 worker 容器路径占位；仅 `fileRef` 无 `content` 时 `fileUrl` 归一化为 `/uploads/<basename>`，磁盘缺失则 `fileSize=null`，前端降级为纯文本展示（不再渲染死链）。
 8. **上传大小上限为 10MB**（`uploads.constants` `FILE_SIZE_LIMIT`），非 12 篇 §5.2 所述 50MB（50MB 是控制面拉取产出物的协议上限，上传端点不适用）；类型白名单按**扩展名**校验：pdf/doc/docx/xls/xlsx/csv/png/jpg/jpeg/gif/md/txt。
 9. 心跳响应实际为 `{workerId, status, lastHeartbeatAt, commands?}`（携带下行命令数组，pull 模型，一次有效）；离线判定 30s（10s 心跳 × 3 周期，`WORKER_OFFLINE_TIMEOUT_MS=30_000`），HealthChecker 每 10s 扫描。

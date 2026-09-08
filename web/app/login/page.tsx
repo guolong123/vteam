@@ -5,7 +5,7 @@
  * =====================================================
  * 平台级登录入口：左品牌区（Logo 占位 + 产品名 + 价值主张）+ 右登录表单。
  * - 保真迁移自 docs/agent-platform/prototypes/login/index.tsx（布局/样式/data-testid/文案零改动）。
- * - 接入真实认证：表单提交 → POST /api/v1/auth/login → token 存 authStore → 跳 /projects。
+ * - 接入真实认证：表单提交 → POST /api/v1/auth/login → token 存 authStore → 跳 /teams。
  * - 错误凭证：显示错误提示（与原型视觉语言一致），不跳转。
  * - 桌面分栏布局；移动端品牌区折叠为顶栏、表单单列。
  * - 全站浅色主题：品牌区用极浅渐变（白 → 极淡蓝 → 极淡紫，呼应 Logo 但压到极浅），登录表单区保持浅色 radial。
@@ -72,7 +72,7 @@ function LoginForm() {
   useEffect(() => {
     const token = useAuthStore.getState().token;
     if (token) {
-      router.replace("/projects");
+      router.replace("/teams");
     }
   }, [router]);
 
@@ -106,7 +106,7 @@ function LoginForm() {
       // 记住我：勾选 → localStorage 跨会话；未勾选 → sessionStorage 会话级
       useAuthStore.getState().setPersistMode(rememberMe);
       setAuth(res.accessToken, res.user);
-      router.push("/projects");
+      router.push("/teams");
     } catch (err) {
       setError(isApiError(err) ? err.message : "登录失败，请稍后重试");
     } finally {

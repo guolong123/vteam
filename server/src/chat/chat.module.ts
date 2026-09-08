@@ -20,7 +20,7 @@ import { WorkerDispatcher } from './worker-dispatcher';
  * - imports：WorkersModule（WorkersService/WorkerClient/SessionLifecycleService）、
  *   ArtifactsModule（ArtifactsService.onArtifactSubmitted 产出物归档）——均已有 exports。
  * - PermissionGuard（CONF-02 方案②补齐矩阵守卫）：端点叠加 chats.view/create/edit/delete，
- *   频道成员校验在 service 层（channel → taskId → projectId → project_members）。
+ *   频道成员校验在 service 层（channel → taskId → teamId → teamUserMember）。
  * - WorkerDispatcher 以类 token 注册并导出（FR-13：platform-mcp 模块注入调用
  *   dispatchAgentMention），MessageDispatcher 抽象经 useExisting 复用同一实例——
  *   单一 WorkerDispatcher 实例（T9 接线/看门狗仅一份），两个 token 指向它。

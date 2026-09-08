@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { ConfirmDialog, PageWindow } from "@/src/components/ui";
+import { ConfirmDialog, PageWindow, SegmentedTabs } from "@/src/components/ui";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
@@ -741,10 +741,14 @@ export default function IntegrationsPage() {
           <div style={{ fontSize: fontSize.sm, color: neutral[500], marginTop: space.xs }}>消息渠道（入站）与通知渠道（出站）统一管理，任务侧绑定生效</div>
         </div>
       </div>
-      <div style={{ display: "flex", gap: space.sm, borderBottom: `1px solid ${neutral[200]}`, paddingBottom: space.sm }}>
-        <button type="button" data-testid="integration-tab-message" data-active={activeTab === "message" ? "true" : "false"} onClick={() => setActiveTab("message")} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: activeTab === "message" ? "1px solid #2563EB" : `1px solid ${neutral[200]}`, backgroundColor: activeTab === "message" ? "#2563EB" : "var(--color-surface)", color: activeTab === "message" ? "#FFF" : neutral[600], cursor: "pointer", fontWeight: activeTab === "message" ? 600 : 500, fontFamily: fontFamily.body }}>消息渠道</button>
-        <button type="button" data-testid="integration-tab-notification" data-active={activeTab === "notification" ? "true" : "false"} onClick={() => setActiveTab("notification")} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: activeTab === "notification" ? "1px solid #2563EB" : `1px solid ${neutral[200]}`, backgroundColor: activeTab === "notification" ? "#2563EB" : "var(--color-surface)", color: activeTab === "notification" ? "#FFF" : neutral[600], cursor: "pointer", fontWeight: activeTab === "notification" ? 600 : 500, fontFamily: fontFamily.body }}>通知渠道</button>
-      </div>
+      <SegmentedTabs
+        items={[
+          { key: "message", label: "消息渠道", icon: "✉" },
+          { key: "notification", label: "通知渠道", icon: "◎" },
+        ]}
+        active={activeTab}
+        onChange={(k) => setActiveTab(k as "message" | "notification")}
+      />
       <div data-testid="integration-tab-panel" data-tab={activeTab}>
         {activeTab === "message" ? <MessageChannelsTab /> : <NotificationChannelsTab />}
       </div>

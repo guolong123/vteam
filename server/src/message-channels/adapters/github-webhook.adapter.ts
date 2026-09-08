@@ -191,15 +191,18 @@ export class GithubWebhookAdapter extends MessageAdapter {
     config: Record<string, any>,
   ): Record<string, string> {
     const fieldMappings = (config as any)?.fieldMappings as
-      | Record<string, any>
-      | undefined;
+      Record<string, any> | undefined;
     if (
       fieldMappings &&
       typeof fieldMappings === 'object' &&
       !Array.isArray(fieldMappings)
     ) {
       const perEvent = fieldMappings[event];
-      if (perEvent && typeof perEvent === 'object' && !Array.isArray(perEvent)) {
+      if (
+        perEvent &&
+        typeof perEvent === 'object' &&
+        !Array.isArray(perEvent)
+      ) {
         return perEvent as Record<string, string>;
       }
       const def = fieldMappings['_default'];
@@ -219,8 +222,7 @@ export class GithubWebhookAdapter extends MessageAdapter {
       }
     }
     const legacy = (config as any)?.fieldMapping as
-      | Record<string, string>
-      | undefined;
+      Record<string, string> | undefined;
     if (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) {
       return legacy;
     }

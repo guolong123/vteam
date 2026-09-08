@@ -1177,11 +1177,11 @@ export class WorkerDispatcher
   }
 
   /**
-    * 团队记忆索引（prompt hint 富集专用，session-unification Todo 9 起仅
-    * team+global 两域，任务级记忆已删除）：计数 + 最近 5 条 description 行拼成
-    * 索引块注入 system。仅读记忆表做提示词富集，不改 memorySave/memorySearch
-    * 写/可见语义。失败吞错返 null（无记忆 mock/表异常时分派照常）。
-    */
+   * 团队记忆索引（prompt hint 富集专用，session-unification Todo 9 起仅
+   * team+global 两域，任务级记忆已删除）：计数 + 最近 5 条 description 行拼成
+   * 索引块注入 system。仅读记忆表做提示词富集，不改 memorySave/memorySearch
+   * 写/可见语义。失败吞错返 null（无记忆 mock/表异常时分派照常）。
+   */
   private async buildTeamMemoryIndex(teamId: string): Promise<string | null> {
     try {
       const [teamCnt, globCnt, recent] = await Promise.all([
@@ -1398,7 +1398,9 @@ export class WorkerDispatcher
       sourceChannel?.type === CHANNEL_TYPE.task_group
     ) {
       promptBlocks.push(
-        taskIdForPrompt ? GROUP_TRIGGER_INSTRUCTION : TEAM_GROUP_TRIGGER_INSTRUCTION,
+        taskIdForPrompt
+          ? GROUP_TRIGGER_INSTRUCTION
+          : TEAM_GROUP_TRIGGER_INSTRUCTION,
       );
     }
     if (request.text.includes('[WeCom:')) {

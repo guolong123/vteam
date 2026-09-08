@@ -75,10 +75,10 @@ describe('UsersService', () => {
       expect(prisma.$transaction).toHaveBeenCalled();
     });
 
-    it('附带所属项目数 _count.projectMembers（MOCK-05）', async () => {
+    it('附带所属团队数 _count.teamUserMembers（MOCK-05）', async () => {
       const listRow = {
         ...userRow,
-        _count: { projectMembers: 2 },
+        _count: { teamUserMembers: 2 },
       };
       prisma.$transaction.mockResolvedValue([[listRow], 1]);
 
@@ -87,11 +87,11 @@ describe('UsersService', () => {
       // Prisma select 透传 _count 关联计数
       const findManyArgs = prisma.user.findMany.mock.calls[0][0];
       expect(findManyArgs.select).toMatchObject({
-        _count: { select: { projectMembers: true } },
+        _count: { select: { teamUserMembers: true } },
       });
       // 响应原样透传真实计数（非硬编码 0）
       expect(result.items[0]).toEqual(listRow);
-      expect(result.items[0]).toHaveProperty('_count.projectMembers', 2);
+      expect(result.items[0]).toHaveProperty('_count.teamUserMembers', 2);
     });
 
     it('pageSize 上限收敛到 100（09 篇 §2.2）', async () => {

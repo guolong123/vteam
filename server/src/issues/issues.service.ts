@@ -7,7 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { PROJECT_MEMBERSHIP_ERRORS } from '../common/guards/project-membership.guard';
+import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { resyncIdPrefix } from '../common/id-resync';
 import { ACTOR_TYPE, EVENT_TYPES } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
@@ -50,7 +50,7 @@ type ActivityRow = Prisma.IssueActivityGetPayload<Record<string, never>>;
 interface TransitionActorOpts {
   actorType: string;
   actorId: string | null;
-  /** agent 操作时的 ta_ 实例 id（MCP 路径）。 */
+  /** agent 操作时的 tmm_ 成员 id（MCP 路径）。 */
   instanceId?: string | null;
   /** 拒绝原因（action=reject 必填）。 */
   reason?: string;
@@ -59,9 +59,9 @@ interface TransitionActorOpts {
 /**
  * Issue 服务（issue-management plan todo 2）。
  *
- * 权限模型（Metis M2/M3）：controller 不挂 AdminGuard/ProjectMembershipGuard
+ * 权限模型（Metis M2/M3）：controller 不挂 AdminGuard/TeamMembershipGuard
  * （:id 会被后者误解析为 taskId → 404），全部成员校验在 service 内完成——
- * 经 issue.taskId → task.projectId 查 project_members；MCP 路径（无 userId）
+ * 经 issue.taskId → task.teamId 查 team_user_members；MCP 路径（无 userId）
  * 改为校验 Agent 在任务团队（task_agents 未 removed）。
  */
 @Injectable()
@@ -82,14 +82,14 @@ export class IssuesService implements OnModuleInit {
     );
   }
 
-  /** 用户路径成员校验：任务存在（404）→ 调用者是任务所属项目成员（403）。返回任务状态供归档判定。 */
+  /** 用户路径成员校验：任务存在（404）→ 调用者是任务所属团队成员（403）。返回任务状态供归档判定。 */
   private async assertTaskMember(
     taskId: string,
     userId: string,
   ): Promise<{ status: string }> {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { projectId: true, status: true },
+      select: { teamId: true, status: true },
     });
     if (!task) {
       throw new NotFoundException({
@@ -97,69 +97,60 @@ export class IssuesService implements OnModuleInit {
         message: '任务不存在',
       });
     }
-    const member = await this.prisma.projectMember.findUnique({
-      where: { projectId_userId: { projectId: task.projectId, userId } },
+    const member = await (this.prisma as any).teamUserMember.findUnique({
+      where: { teamId_userId: { teamId: task.teamId, userId } },
       select: { id: true },
     });
     if (!member) {
       throw new ForbiddenException({
-        code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
-        message: '您不是该项目成员',
+        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: '您不是该团队成员',
       });
     }
     return task;
   }
 
-  /** 项目路径成员校验（GET /issues projectId 过滤用）：项目存在（404）→ 调用者是项目成员（403）。 */
-  private async assertProjectMember(
-    projectId: string,
+  /** 团队路径成员校验（GET /issues teamId 过滤用）：调用者是该团队成员（403 否则）。 */
+  private async assertTeamMember(
+    teamId: string,
     userId: string,
   ): Promise<void> {
-    const project = await this.prisma.project.findUnique({
-      where: { id: projectId },
-      select: { id: true },
-    });
-    if (!project) {
-      throw new NotFoundException({
-        code: ISSUE_ERRORS.PROJECT_NOT_FOUND,
-        message: '项目不存在',
-      });
-    }
-    const member = await this.prisma.projectMember.findUnique({
-      where: { projectId_userId: { projectId, userId } },
+    const member = await (this.prisma as any).teamUserMember.findUnique({
+      where: { teamId_userId: { teamId, userId } },
       select: { id: true },
     });
     if (!member) {
       throw new ForbiddenException({
-        code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
-        message: '您不是该项目成员',
+        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: '您不是该团队成员',
       });
     }
   }
 
   /**
-   * MCP 归属解析助手（统一实例化）：ref 为任务实例 id（ta_ 前缀）→ 按
-   * task_agents.id（实例行）匹配；否则为模板 agent id（a_ 前缀，存量调用兼容）→
-   * 按 task_agents.agent_id 匹配。返回实例行（含真实模板 agent id），未命中返回 null。
+   * MCP 归属解析助手（统一成员化）：ref 为团队成员 id（tmm_ 前缀）→ 按
+   * team_members.id 匹配；否则为模板 agent id（a_ 前缀，存量调用兼容）→
+   * 按 team_members.agent_id 匹配（归属经任务 teamId 约束）。返回成员行（含真实
+   * 模板 agent id），未命中返回 null。
    * 所有 agent 侧方法（assert/create/findAll/findOne/update/transition）经此前缀分流，
    * 避免散落 startsWith 判断。
    */
-  private async resolveAgentInstance(
-    taskId: string,
+  private async resolveMemberInstance(
+    teamId: string,
     ref: string,
-  ): Promise<{ id: string; agentId: string; removedAt: Date | null } | null> {
-    return this.prisma.taskAgent.findFirst({
-      where: ref.startsWith('ta_')
-        ? { taskId, id: ref }
-        : { taskId, agentId: ref },
-      select: { id: true, agentId: true, removedAt: true },
+  ): Promise<{ id: string; agentId: string } | null> {
+    return this.prisma.teamMember.findFirst({
+      where: ref.startsWith('tmm_')
+        ? { teamId, id: ref }
+        : { teamId, agentId: ref },
+      select: { id: true, agentId: true },
     });
   }
 
   /**
-   * MCP 路径成员校验（无 userId，Metis B1）：agentRef（任务实例 id ta_ 前缀或模板
-   * agent id，兼容）须是任务团队成员（task_agents 未 removed）。返回任务状态 + 真实
-   * 模板 agent id（从实例行解析，供 creatorAgentId 落库）。
+   * MCP 路径成员校验（无 userId，Metis B1）：agentRef（团队成员 id tmm_ 前缀或模板
+   * agent id，兼容）须是任务所属团队成员。返回任务状态 + 真实
+   * 模板 agent id（从成员行解析，供 creatorAgentId 落库）。
    */
   private async assertAgentTaskMember(
     taskId: string,
@@ -167,7 +158,7 @@ export class IssuesService implements OnModuleInit {
   ): Promise<{ status: string; agentId: string }> {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { status: true },
+      select: { status: true, teamId: true },
     });
     if (!task) {
       throw new NotFoundException({
@@ -175,28 +166,41 @@ export class IssuesService implements OnModuleInit {
         message: '任务不存在',
       });
     }
-    const ta = await this.resolveAgentInstance(taskId, agentRef);
-    if (!ta || ta.removedAt) {
+    if (!task.teamId) {
       throw new ForbiddenException({
-        code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
         message: 'Agent 不是该任务团队成员',
       });
     }
-    return { status: task.status, agentId: ta.agentId };
+    const member = await this.resolveMemberInstance(task.teamId, agentRef);
+    if (!member) {
+      throw new ForbiddenException({
+        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: 'Agent 不是该任务团队成员',
+      });
+    }
+    return { status: task.status, agentId: member.agentId };
   }
 
   /**
-   * 指派须在任务团队未 removed（400 ASSIGNEE_NOT_IN_TEAM）；null/undefined 跳过。
-   * assigneeRef 为实例 id（ta_ 前缀）→ 按 task_agents.id 校验；否则按 agentId 校验
-   * （用户路径仍按 Agent 指派，兼容）。前缀分流统一走 resolveAgentInstance。
+   * 指派须是任务所属团队成员（400 ASSIGNEE_NOT_IN_TEAM）；null/undefined 跳过。
+   * assigneeRef 为成员 id（tmm_ 前缀）→ 按 team_members.id 校验；否则按 agentId 校验
+   * （用户路径仍按 Agent 指派，兼容）。前缀分流统一走 resolveMemberInstance。
    */
   private async assertAssigneeInTeam(
     taskId: string,
     assigneeRef?: string | null,
   ): Promise<void> {
     if (!assigneeRef) return;
-    const ta = await this.resolveAgentInstance(taskId, assigneeRef);
-    if (!ta || ta.removedAt) {
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { teamId: true },
+    });
+    const member =
+      task?.teamId != null
+        ? await this.resolveMemberInstance(task.teamId, assigneeRef)
+        : null;
+    if (!member) {
       throw new BadRequestException({
         code: ISSUE_ERRORS.ASSIGNEE_NOT_IN_TEAM,
         message: '指派 Agent 不在任务团队中',
@@ -275,7 +279,7 @@ export class IssuesService implements OnModuleInit {
   }
 
   /**
-   * MCP 专用创建：无 userId；agentRef 为调用方任务实例 id（ta_ 前缀，platform-mcp
+   * MCP 专用创建：无 userId；agentRef 为调用方团队成员 id（tmm_ 前缀，platform-mcp
    * 传 selfInstanceId）或模板 agent id（存量兼容）。creatorAgentId 落真实模板 agent id
    * （从实例行解析，非实例 id——外键指向 agents 表），createdBy 留空（Metis B1）。
    */
@@ -341,7 +345,7 @@ export class IssuesService implements OnModuleInit {
     return result;
   }
 
-  /** GET /issues：taskId 或 projectId 二选一过滤（均缺 → 400）+ status/assigneeAgentId 筛选 + 分页（不含软删）。 */
+  /** GET /issues：taskId 或 teamId 二选一过滤（均缺 → 400）+ status/assigneeAgentId 筛选 + 分页（不含软删）。 */
   async findAll(query: QueryIssuesDto, userId: string) {
     const page = this.normalizePage(query.page);
     const pageSize = this.normalizePageSize(query.pageSize);
@@ -349,13 +353,13 @@ export class IssuesService implements OnModuleInit {
     if (query.taskId) {
       await this.assertTaskMember(query.taskId, userId);
       where.taskId = query.taskId;
-    } else if (query.projectId) {
-      await this.assertProjectMember(query.projectId, userId);
-      where.task = { projectId: query.projectId };
+    } else if (query.teamId) {
+      await this.assertTeamMember(query.teamId, userId);
+      where.task = { teamId: query.teamId };
     } else {
       throw new BadRequestException({
         code: ISSUE_ERRORS.ISSUE_FILTER_REQUIRED,
-        message: '缺少过滤条件：taskId 或 projectId 至少提供一个',
+        message: '缺少过滤条件：taskId 或 teamId 至少提供一个',
       });
     }
     where = {
@@ -549,7 +553,7 @@ export class IssuesService implements OnModuleInit {
   // ---------------------------------------------------------------------------
 
   /**
-   * MCP 专用列表：agentRef（实例 id ta_ 或模板 agent id）在任务团队 → 返回该任务
+   * MCP 专用列表：agentRef（成员 id tmm_ 或模板 agent id）在任务团队 → 返回该任务
    * 全部 issue 的 DTO 数组
    * （status 可选过滤，不含软删；对齐 findAll 的筛选语义，无分页——MCP 模型直读）。
    */
@@ -732,7 +736,7 @@ export class IssuesService implements OnModuleInit {
         else if (a.actorId) agentIds.add(a.actorId);
       }
     }
-    const [users, taskAgents, agents] = await Promise.all([
+    const [users, teamMembers, agents] = await Promise.all([
       userIds.size > 0
         ? this.prisma.user.findMany({
             where: { id: { in: [...userIds] } },
@@ -740,7 +744,7 @@ export class IssuesService implements OnModuleInit {
           })
         : [],
       instanceIds.size > 0
-        ? this.prisma.taskAgent.findMany({
+        ? this.prisma.teamMember.findMany({
             where: { id: { in: [...instanceIds] } },
             include: { agent: { select: { name: true } } },
           })
@@ -756,7 +760,7 @@ export class IssuesService implements OnModuleInit {
       users.map((u) => [u.id, u.username] as [string, string]),
     );
     const instMap = new Map(
-      taskAgents.map(
+      teamMembers.map(
         (t) => [t.id, t.alias ?? t.agent.name] as [string, string],
       ),
     );

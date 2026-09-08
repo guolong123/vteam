@@ -21,7 +21,7 @@ import { PermissionGuard } from '../common/guards/permission.guard';
 import {
   AuthenticatedUser,
   CurrentUser,
-} from '../projects/current-user.decorator';
+} from '../common/decorators/current-user.decorator';
 import { ChatService } from './chat.service';
 import { CreateDmChannelDto } from './dto/create-dm-channel.dto';
 import { CreateMessageDto } from './dto/create-message.dto';
@@ -31,9 +31,9 @@ import { UpdateChannelDto } from './dto/update-channel.dto';
 /**
  * 群聊端点（09 篇 §3.5 Chat，全局前缀 /api/v1）。
  *
- * 权限在 ChatService 层校验（channel → taskId → projectId → project_members）：
- * 路由参数是 :id（频道 id）非 :pid，且 POST /dm-channels 无资源路径参数，
- * ProjectMembershipGuard 的 :id 反查仅面向任务路由，故不适用本模块。
+ * 权限在 ChatService 层校验（channel → taskId → teamId → teamUserMember）：
+ * 路由参数是 :id（频道 id），团队归属需经频道反查任务/团队，
+ * 路径守卫无法直接取团队，故不适用本模块。
  * 调用者身份经全局 JwtAuthGuard 挂载的 req.user（@CurrentUser()）获取。
  * 叠加 PermissionGuard（CONF-02 方案②补齐矩阵守卫）：读端点 chats.view，
  * 写端点按语义 chats.create / chats.edit / chats.delete；标记已读（PATCH /read）
@@ -49,17 +49,36 @@ export class ChatController {
   @Get('channels')
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.view')
-  @ApiOperation({ summary: '可访问频道列表（team_group + private，type 过滤，支持 teamId）' })
-  @ApiQuery({ name: 'type', required: false, description: '频道类型过滤：team_group | private' })
-  @ApiQuery({ name: 'teamId', required: false, description: '团队 id 过滤（每团队一群）' })
-  @ApiQuery({ name: 'taskId', required: false, description: '过渡期 taskId，经 Task.teamId 映射到 team' })
+  @ApiOperation({
+    summary: '可访问频道列表（team_group + private，type 过滤，支持 teamId）',
+  })
+  @ApiQuery({
+    name: 'type',
+    required: false,
+    description: '频道类型过滤：team_group | private',
+  })
+  @ApiQuery({
+    name: 'teamId',
+    required: false,
+    description: '团队 id 过滤（每团队一群）',
+  })
+  @ApiQuery({
+    name: 'taskId',
+    required: false,
+    description: '过渡期 taskId，经 Task.teamId 映射到 team',
+  })
   findChannels(
     @CurrentUser() user: AuthenticatedUser,
     @Query('type') type?: string,
     @Query('teamId') teamId?: string,
     @Query('taskId') taskId?: string,
   ) {
-    return this.chatService.findAccessibleChannels(user.id, type, teamId, taskId);
+    return this.chatService.findAccessibleChannels(
+      user.id,
+      type,
+      teamId,
+      taskId,
+    );
   }
 
   /**

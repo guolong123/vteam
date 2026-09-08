@@ -13,7 +13,7 @@ import { Observable } from 'rxjs';
 import { AUTH_ERRORS } from '../auth/auth.constants';
 import { Public } from '../auth/decorators/public.decorator';
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
-import { PROJECT_MEMBERSHIP_ERRORS } from '../common/guards/project-membership.guard';
+import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   RealtimeEvent,
@@ -32,7 +32,7 @@ export const HEARTBEAT_INTERVAL_MS = 15000;
  *  - EventSource 兼容：text/event-stream，事件带字符串 id（ev_<序号> 游标）
  *  - ?token=<jwt>：query 鉴权（EventSource 无法带 header），无效 → 401 AUTH_UNAUTHORIZED
  *  - ?scope=global|task:<id>|channel:<id>：订阅粒度；支持逗号分隔多 scope（如 channel:c1,task:t1,global），
- *    task/channel 逐 scope 校验调用者是该资源所属项目成员（project_members），非成员 → 403 PERMISSION_PROJECT_NOT_MEMBER
+ *    task/channel 逐 scope 校验调用者是该资源所属团队成员（team_user_members），非成员 → 403 PERMISSION_TEAM_NOT_MEMBER
  *  - ?since=<eventId>：断线续拉，返回 id 大于 since 的历史事件后再续实时流（09 篇 §4.4）
  *  - 心跳保活：周期发送 heartbeat 事件（SSE 保活，09 篇 §4.4 retry 语义）
  */
@@ -61,7 +61,7 @@ export class RealtimeController {
     name: 'scope',
     required: false,
     description:
-      '订阅粒度：global（缺省）| task:<taskId> | channel:<channelId> | team:<teamId> | all；逗号分隔可合并订阅多 scope（如 channel:c1,task:t1,team:tm_1,global）；task/channel 需为项目成员；team 需鉴权；all = 全量订阅但仅收调用者成员项目的事件',
+      '订阅粒度：global（缺省）| task:<taskId> | channel:<channelId> | team:<teamId> | all；逗号分隔可合并订阅多 scope（如 channel:c1,task:t1,team:tm_1,global）；task/channel/team 需为所属团队成员；all = 全量订阅但仅收调用者成员团队的事件',
   })
   @ApiQuery({
     name: 'since',
@@ -75,17 +75,12 @@ export class RealtimeController {
     @Query('token') token?: string,
   ): Promise<Observable<MessageEvent>> {
     const userId = await this.authenticate(token);
-    // scope=all：全量订阅但仅收调用者成员项目的事件（projectMember 表推导可见项目集）
+    // scope=all：全量订阅但仅收调用者成员团队的事件（teamUserMember 表推导可见团队集）
     const isAll = scope === 'all';
     const parsedScopes = isAll ? [] : this.parseScope(scope);
     if (!isAll) {
       await this.assertScopeAccess(parsedScopes, userId);
     }
-    const visibleProjectIds = isAll
-      ? await this.resolveVisibleProjectIds(userId)
-      : null;
-    // scope=all 团队域可见性：团队无项目归属，项目过滤会吞掉零任务团队频道的
-    // 全部事件；叠加团队成员集，命中任一维度即放行（service 内 OR 语义）。
     const visibleTeamIds = isAll
       ? await this.resolveVisibleTeamIds(userId)
       : null;
@@ -104,7 +99,6 @@ export class RealtimeController {
           }
         },
         parsedScopes,
-        visibleProjectIds,
         visibleTeamIds,
       );
 
@@ -113,7 +107,6 @@ export class RealtimeController {
         const backlog = await this.realtime.getEventsSince(
           since !== undefined && since !== '' ? since : undefined,
           parsedScopes,
-          visibleProjectIds,
           visibleTeamIds,
         );
         replaying = false;
@@ -205,7 +198,8 @@ export class RealtimeController {
     if (colon === -1) {
       throw new BadRequestException({
         code: 'SCOPE_INVALID',
-        message: 'scope 格式非法，应为 global | task:<id> | channel:<id> | team:<id>',
+        message:
+          'scope 格式非法，应为 global | task:<id> | channel:<id> | team:<id>',
       });
     }
     const type = raw.slice(0, colon) as RealtimeScopeType;
@@ -227,9 +221,10 @@ export class RealtimeController {
 
   /**
    * scope 数组权限校验：逐 scope 校验，global 无过滤（登录即可）。
-   * task:<id> → tasks.projectId；channel:<id> → chat_channels.taskId → tasks.projectId；
-   * team:<id> → 校验 team 存在（鉴权已过，不做项目成员校验，按 team 维度隔离）。
-   * 任一非 global scope 调用者非该资源成员/资源不存在 → 403 PERMISSION_PROJECT_NOT_MEMBER。
+   * task:<id> → tasks.teamId；channel:<id> → chat_channels.teamId（团队频道直取，
+   * 任务频道经 taskId 回退查任务 teamId）；team:<id> → scopeId 即团队 id。
+   * 归属团队解析失败/资源不存在/调用者非团队成员（team_user_members 无行）
+   * → 403 PERMISSION_TEAM_NOT_MEMBER。
    */
   private async assertScopeAccess(
     scopes: RealtimeScope[],
@@ -239,23 +234,13 @@ export class RealtimeController {
       if (scope.type === 'global') {
         continue;
       }
-      if (scope.type === 'team') {
-        const team = await (this.prisma as any).team?.findUnique?.({
-          where: { id: scope.id },
-          select: { id: true },
-        });
-        if (!team) {
-          this.throwForbidden();
-        }
-        continue;
-      }
-      const projectId = await this.resolveProjectId(scope);
-      if (!projectId) {
+      const teamId = await this.resolveTeamId(scope);
+      if (!teamId) {
         this.throwForbidden();
       }
-      const member = await this.prisma.projectMember.findUnique({
+      const member = await (this.prisma as any).teamUserMember.findUnique({
         where: {
-          projectId_userId: { projectId, userId },
+          teamId_userId: { teamId, userId },
         },
         select: { id: true },
       });
@@ -265,39 +250,37 @@ export class RealtimeController {
     }
   }
 
-  /** 解析 scope 对应的所属项目 id；资源不存在返回 null（统一按无权处理，防信息泄露）。team scope 返回 null（全局资源）。 */
-  private async resolveProjectId(scope: RealtimeScope): Promise<string | null> {
+  /** 解析 scope 对应的所属团队 id；资源不存在返回 null（统一按无权处理，防信息泄露）。 */
+  private async resolveTeamId(scope: RealtimeScope): Promise<string | null> {
     if (scope.type === 'team') {
-      return null;
+      return scope.id ?? null;
     }
     if (scope.type === 'task') {
-      const task = await this.prisma.task.findUnique({
+      const task = await (this.prisma as any).task.findUnique({
         where: { id: scope.id },
-        select: { projectId: true },
+        select: { teamId: true },
       });
-      return task?.projectId ?? null;
+      return task?.teamId ?? null;
     }
     const channel = await this.prisma.chatChannel.findUnique({
       where: { id: scope.id },
-      select: { taskId: true },
+      select: { taskId: true, teamId: true },
     });
     if (!channel) {
       return null;
     }
-    const task = await this.prisma.task.findUnique({
-      where: { id: channel.taskId },
-      select: { projectId: true },
+    if ((channel as { teamId?: string | null }).teamId) {
+      return (channel as { teamId?: string | null }).teamId as string;
+    }
+    const taskId = (channel as { taskId?: string | null }).taskId;
+    if (!taskId) {
+      return null;
+    }
+    const task = await (this.prisma as any).task.findUnique({
+      where: { id: taskId },
+      select: { teamId: true },
     });
-    return task?.projectId ?? null;
-  }
-
-  /** scope=all：返回调用者作为成员的全部项目 id（projectMember 表，登录即查，无 403 语义）。 */
-  private async resolveVisibleProjectIds(userId: string): Promise<string[]> {
-    const memberships = await this.prisma.projectMember.findMany({
-      where: { userId },
-      select: { projectId: true },
-    });
-    return memberships.map((m) => m.projectId);
+    return task?.teamId ?? null;
   }
 
   /** scope=all：返回调用者作为成员的全部团队 id（teamUserMember 表，用户维度成员；建团队自动 owner 落行）。 */
@@ -312,8 +295,8 @@ export class RealtimeController {
 
   private throwForbidden(): never {
     throw new ForbiddenException({
-      code: PROJECT_MEMBERSHIP_ERRORS.NOT_MEMBER,
-      message: '您不是该资源所属项目的成员，无权订阅其事件',
+      code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+      message: '您不是该资源所属团队的成员，无权订阅其事件',
     });
   }
 

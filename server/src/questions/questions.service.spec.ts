@@ -25,9 +25,15 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       create: jest.Mock;
       update: jest.Mock;
     };
-    session: { findUnique: jest.Mock; findFirst: jest.Mock };
+    session: {
+      findUnique: jest.Mock;
+      findFirst: jest.Mock;
+      findMany: jest.Mock;
+    };
     worker: { findUnique: jest.Mock };
     task: { findUnique: jest.Mock; findMany: jest.Mock };
+    team: { findUnique: jest.Mock; findMany: jest.Mock };
+    teamMember: { findFirst: jest.Mock };
   };
   let realtime: { emit: jest.Mock };
   let workerClient: { questionReply: jest.Mock; permissionReply: jest.Mock };
@@ -59,12 +65,19 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         create: jest.fn(),
         update: jest.fn(),
       },
-      session: { findUnique: jest.fn(), findFirst: jest.fn() },
+      session: {
+        findUnique: jest.fn(),
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       worker: { findUnique: jest.fn() },
+      team: {
+        findUnique: jest.fn().mockResolvedValue({ managedMode: false }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      teamMember: { findFirst: jest.fn() },
       task: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValue({ id: 't_1', managedMode: false }),
+        findUnique: jest.fn().mockResolvedValue({ id: 't_1', teamId: 'tm_1' }),
         findMany: jest.fn().mockResolvedValue([]),
       },
     };
@@ -135,7 +148,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       expect(realtime.emit).toHaveBeenCalledWith(
         EVENT_TYPES.AGENT_QUESTION,
         expect.objectContaining({ resolved: true }),
-        { type: 'task', id: 't_1' },
+        { type: 'team', id: 'tm_1' },
       );
       expect(list).toEqual([]);
     });
@@ -146,6 +159,34 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       const list = await service.findAll({ taskId: 't_1', status: 'pending' });
       expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
       expect(realtime.emit).not.toHaveBeenCalled();
+      expect(list).toHaveLength(1);
+    });
+
+    it('teamId 过滤 → 任务归属 + 会话归属双路 OR（无 schema 变更）', async () => {
+      prisma.task.findMany.mockResolvedValue([{ id: 't_1' }, { id: 't_2' }]);
+      prisma.session.findMany.mockResolvedValue([{ id: 's_1' }]);
+      prisma.agentQuestion.findMany.mockResolvedValue([aqRow()]);
+
+      const list = await service.findAll({ teamId: 'tm_1' });
+
+      expect(prisma.task.findMany).toHaveBeenCalledWith({
+        where: { teamId: 'tm_1' },
+        select: { id: true },
+      });
+      expect(prisma.session.findMany).toHaveBeenCalledWith({
+        where: { teamId: 'tm_1' },
+        select: { id: true },
+      });
+      expect(prisma.agentQuestion.findMany).toHaveBeenCalledWith({
+        where: {
+          status: 'pending',
+          OR: [
+            { taskId: { in: ['t_1', 't_2'] } },
+            { sessionId: { in: ['s_1'] } },
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+      });
       expect(list).toHaveLength(1);
     });
   });
@@ -179,7 +220,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       expect(realtime.emit).toHaveBeenCalledWith(
         EVENT_TYPES.AGENT_QUESTION,
         expect.objectContaining({ resolved: true, taskId: 't_1' }),
-        { type: 'task', id: 't_1' },
+        { type: 'team', id: 'tm_1' },
       );
       expect(result.status).toBe('resolved');
     });
@@ -269,6 +310,28 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
+    it('Todo9 failing-first：任务有团队归属但团队行缺失 → 404 QUESTION_TEAM_NOT_FOUND（托管读团队行）', async () => {
+      prisma.agentQuestion.findUnique.mockResolvedValue(aqRow());
+      prisma.session.findUnique.mockResolvedValue({
+        workerId: 'w_1',
+        instanceRef: 'ses_abc',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      prisma.agentQuestion.update.mockResolvedValue(
+        aqRow({ status: 'resolved', answers: [['继续']] }),
+      );
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.team.findUnique.mockResolvedValue(null);
+      await expect(
+        service.reply('aq_1', { answers: [['继续']] } as ReplyQuestionDto),
+      ).rejects.toMatchObject({
+        response: { code: 'QUESTION_TEAM_NOT_FOUND' },
+      });
+    });
+
     it('已终态（resolved）→ 400 QUESTION_ALREADY_RESOLVED（防重复回复）', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValue(
         aqRow({ status: 'resolved' }),
@@ -289,7 +352,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       });
     });
 
-    it('ses_ 前缀 sessionId（ingress 反查失败兜底）→ 直接透传 worker，worker 按 taskId+agentId 反查', async () => {
+    it('ses_ 前缀 sessionId（ingress 反查失败兜底）→ 直接透传 worker，worker 按团队会话（teamId + 团队成员）反查', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValue(
         aqRow({
           id: 'aq_3',
@@ -300,6 +363,15 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         }),
       );
       prisma.session.findUnique.mockResolvedValue(null); // ses_ 无主键记录
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_9',
+        teamId: 'tm_9',
+        managedMode: false,
+      });
+      prisma.teamMember.findFirst.mockResolvedValue({
+        id: 'tmm_9',
+        agentId: 'a_9',
+      });
       prisma.session.findFirst.mockResolvedValue({ workerId: 'w_1' });
       prisma.worker.findUnique.mockResolvedValue({
         id: 'w_1',
@@ -311,6 +383,19 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
 
       await service.reply('aq_3', { answers: [['继续']] } as ReplyQuestionDto);
 
+      expect(prisma.teamMember.findFirst).toHaveBeenCalledWith({
+        where: { teamId: 'tm_9', agentId: 'a_9' },
+        select: { id: true },
+      });
+      expect(prisma.session.findFirst).toHaveBeenCalledWith({
+        where: {
+          teamId: 'tm_9',
+          teamMemberId: 'tmm_9',
+          workerId: { not: null },
+        },
+        select: { workerId: true },
+        orderBy: { updatedAt: 'desc' },
+      });
       expect(workerClient.questionReply).toHaveBeenCalledWith(
         { id: 'w_1', capabilities: {} },
         { sessionId: 'ses_abc', requestId: 'que_3', answers: [['继续']] },
@@ -401,7 +486,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       expect(realtime.emit).toHaveBeenCalledWith(
         EVENT_TYPES.AGENT_QUESTION,
         expect.objectContaining({ resolved: true, taskId: 't_1' }),
-        { type: 'task', id: 't_1' },
+        { type: 'team', id: 'tm_1' },
       );
     });
   });
@@ -438,12 +523,15 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       ...overrides,
     });
 
-  describe('createForPlatform（平台侧创建确认门 question，L2 自治）', () => {
-    it('创建落库：que_platform_ requestId + 主 Agent 会话占位 + content 前端形状(source=platform) + emit AGENT_QUESTION', async () => {
+  describe('createForPlatform（平台侧创建确认门 question，L2 自治，会话占位走团队主成员会话）', () => {
+    it('创建落库：que_platform_ requestId + 主成员团队会话占位 + content 前端形状(source=platform) + emit AGENT_QUESTION', async () => {
       prisma.task.findUnique.mockResolvedValue({
         id: 't_1',
-        mainAgentInstanceId: 'ta_main',
+        teamId: 'tm_1',
         managedMode: false,
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
       });
       prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
       prisma.agentQuestion.create.mockResolvedValue(platformRow());
@@ -490,17 +578,18 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
             requestId: 'que_platform_0000000001',
           }),
         }),
-        { type: 'task', id: 't_1' },
+        { type: 'team', id: 'tm_1' },
       );
       expect(result.requestId).toBe('que_platform_0000000001');
     });
 
-    it('无主 Agent 会话 → sessionId 占位符（s_placeholder，仅满足非空约束不实际转发）', async () => {
+    it('无主成员团队会话 → sessionId 占位符（s_placeholder，仅满足非空约束不实际转发）', async () => {
       prisma.task.findUnique.mockResolvedValue({
         id: 't_1',
-        mainAgentInstanceId: null,
+        teamId: 'tm_1',
         managedMode: false,
       });
+      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
       prisma.agentQuestion.create.mockResolvedValue(
         platformRow({ sessionId: 's_placeholder' }),
       );
@@ -522,9 +611,9 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       const hook = jest.fn().mockResolvedValue(undefined);
       prisma.task.findUnique.mockResolvedValue({
         id: 't_1',
-        mainAgentInstanceId: 'ta_main',
-        managedMode: false,
+        teamId: 'tm_1',
       });
+      prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_1' });
       prisma.agentQuestion.create.mockResolvedValue(platformRow());
       await service.createForPlatform(
         't_1',
@@ -544,7 +633,10 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       );
 
       expect(workerClient.questionReply).not.toHaveBeenCalled();
-      expect(prisma.session.findUnique).not.toHaveBeenCalled();
+      expect(prisma.session.findUnique).toHaveBeenCalledWith({
+        where: { id: 's_main' },
+        select: { teamId: true },
+      });
       expect(prisma.agentQuestion.update).toHaveBeenCalledWith({
         where: { id: 'aq_platform' },
         data: { status: 'resolved', answers: [['确认']] },
@@ -556,17 +648,20 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       expect(realtime.emit).toHaveBeenCalledWith(
         EVENT_TYPES.AGENT_QUESTION,
         expect.objectContaining({ resolved: true, taskId: 't_1' }),
-        { type: 'task', id: 't_1' },
+        { type: 'team', id: 'tm_1' },
       );
       expect(result.status).toBe('resolved');
     });
 
-    it('confirmByAgent 平台 question → 旁路 + hook actor={type:agent, id:主实例}', async () => {
+    it('confirmByAgent 平台 question → 旁路 + hook actor={type:agent, id:主成员}', async () => {
       const hook = jest.fn().mockResolvedValue(undefined);
       prisma.task.findUnique.mockResolvedValue({
         id: 't_1',
-        mainAgentInstanceId: 'ta_main',
-        managedMode: false,
+        teamId: 'tm_1',
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
+        managedMode: true,
       });
       prisma.agentQuestion.create.mockResolvedValue(platformRow());
       await service.createForPlatform(
@@ -582,7 +677,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
 
       const result = await service.confirmByAgent({
         taskId: 't_1',
-        instanceId: 'ta_main',
+        instanceId: 'tmm_main',
         requestId: 'que_platform_0000000001',
         kind: 'question',
         answers: [['确认']],
@@ -591,17 +686,39 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       expect(workerClient.questionReply).not.toHaveBeenCalled();
       expect(hook).toHaveBeenCalledWith({
         answers: [['确认']],
-        actor: { type: 'agent', id: 'ta_main' },
+        actor: { type: 'agent', id: 'tmm_main' },
       });
       expect(result.status).toBe('resolved');
+    });
+
+    it('confirmByAgent 非主成员 → 403（团队主门）', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_1',
+        teamId: 'tm_1',
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
+        managedMode: true,
+      });
+      prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
+      await expect(
+        service.confirmByAgent({
+          taskId: 't_1',
+          instanceId: 'tmm_other',
+          requestId: 'que_platform_0000000001',
+          kind: 'question',
+          answers: [['确认']],
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'TASK_STATUS_MAIN_AGENT_ONLY' },
+      });
     });
 
     it('拒绝（answers=null）→ 终态落库 rejected + hook 收到 answers=null（拒绝不执行）', async () => {
       const hook = jest.fn().mockResolvedValue(undefined);
       prisma.task.findUnique.mockResolvedValue({
         id: 't_1',
-        mainAgentInstanceId: 'ta_main',
-        managedMode: false,
+        teamId: 'tm_1',
       });
       prisma.agentQuestion.create.mockResolvedValue(platformRow());
       await service.createForPlatform(
@@ -636,8 +753,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       const hook = jest.fn().mockRejectedValue(new Error('updateTeam 409'));
       prisma.task.findUnique.mockResolvedValue({
         id: 't_1',
-        mainAgentInstanceId: 'ta_main',
-        managedMode: false,
+        teamId: 'tm_1',
       });
       prisma.agentQuestion.create.mockResolvedValue(platformRow());
       await service.createForPlatform(
@@ -661,7 +777,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       expect(realtime.emit).toHaveBeenCalledWith(
         EVENT_TYPES.AGENT_QUESTION,
         expect.objectContaining({ resolved: true }),
-        { type: 'task', id: 't_1' },
+        { type: 'team', id: 'tm_1' },
       );
     });
   });

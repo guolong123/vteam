@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { ConfirmDialog } from "@/src/components/ui";
+import { ConfirmDialog, SegmentedTabs } from "@/src/components/ui";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
 import type {
   ApiAgent,
@@ -351,10 +351,16 @@ export default function GitReposPage() {
             <span style={{ fontSize: fontSize.xs, color: neutral[400], marginLeft: "auto" }}>{isAdmin ? "凭证加密存储 · 按活跃 Agent 下发" : "成员只读"}</span>
           </div>
 
-          <div style={{ display: "flex", gap: space.sm, borderBottom: `1px solid ${neutral[200]}` }}>
-            <button data-testid="tab-repos" onClick={() => setTab("repos")} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: `${radius.md} ${radius.md} 0 0`, border: "none", borderBottom: tab === "repos" ? `2px solid #2563EB` : "2px solid transparent", backgroundColor: tab === "repos" ? "var(--color-surface)" : "transparent", color: tab === "repos" ? "#2563EB" : neutral[500], fontWeight: tab === "repos" ? 600 : 500, cursor: "pointer" }}>仓库</button>
-            <button data-testid="tab-credentials" onClick={() => setTab("credentials")} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: `${radius.md} ${radius.md} 0 0`, border: "none", borderBottom: tab === "credentials" ? `2px solid #2563EB` : "2px solid transparent", backgroundColor: tab === "credentials" ? "var(--color-surface)" : "transparent", color: tab === "credentials" ? "#2563EB" : neutral[500], fontWeight: tab === "credentials" ? 600 : 500, cursor: "pointer" }}>凭证</button>
-            <div style={{ marginLeft: "auto", display: "flex", gap: space.sm, paddingBottom: space.sm }}>
+          <div style={{ display: "flex", gap: space.sm, alignItems: "center" }}>
+            <SegmentedTabs
+              items={[
+                { key: "repos", label: "仓库", icon: "⌗" },
+                { key: "credentials", label: "凭证", icon: "◈" },
+              ]}
+              active={tab}
+              onChange={(k) => setTab(k as "repos" | "credentials")}
+            />
+            <div style={{ marginLeft: "auto", display: "flex", gap: space.sm, paddingBottom: 0 }}>
               {isAdmin && tab === "repos" && <ActionButton testid="git-repos-add" label="新增仓库" primary onClick={() => { setModalError(null); setRepoModal({ mode: "create" }); }} />}
               {isAdmin && tab === "credentials" && <ActionButton testid="git-credentials-add" label="新增凭证" primary onClick={() => { setModalError(null); setCredModal({ mode: "create" }); }} />}
             </div>

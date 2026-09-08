@@ -89,7 +89,7 @@ export function matchesScope(ev: SSEEvent<unknown>, scopeStr?: string): boolean 
       const id = scope.slice("team:".length);
       if (ev.type === "chat.message.new" || ev.type === "message.part.delta") {
         const payload = ev.payload as { message?: { channelId?: string }; taskId?: string } & Record<string, unknown>;
-        if ((payload as any)?.message?.channelId) return true;
+        if (payload.message?.channelId) return true;
         const scopeType = (ev as unknown as { scopeType?: string })?.scopeType;
         const scopeId = (ev as unknown as { scopeId?: string })?.scopeId;
         if (scopeType === "team" && scopeId === id) return true;

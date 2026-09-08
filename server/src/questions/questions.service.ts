@@ -41,7 +41,7 @@ export interface AgentQuestionDto {
   content: unknown;
   status: string;
   answers: unknown;
-  /** 托管模式标记：任务开启托管（managedMode=true）时该请求改由主 Agent 确认，前端不弹窗。 */
+  /** 托管模式标记：团队开启托管（team.managedMode=true）时该请求改由主 Agent 确认，前端不弹窗。 */
   managedMode: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -88,17 +88,37 @@ export class QuestionsService {
     );
   }
 
-  /** GET /questions：按 taskId/status 过滤（会话页补拉用；status 缺省 pending）。 */
+  /** GET /questions：按 taskId/teamId/status 过滤（会话页补拉用；status 缺省 pending）。teamId 经任务归属 + 会话归属双路实现，无 schema 变更。 */
   async findAll(query: {
     taskId?: string;
+    teamId?: string;
     status?: string;
   }): Promise<AgentQuestionDto[]> {
-    const where: Prisma.AgentQuestionWhereInput = {
-      ...(query.taskId ? { taskId: query.taskId } : {}),
-      ...(query.status
-        ? { status: query.status }
-        : { status: AGENT_QUESTION_STATUS.PENDING }),
-    };
+    const statusFilter = query.status
+      ? { status: query.status }
+      : { status: AGENT_QUESTION_STATUS.PENDING };
+    let where: Prisma.AgentQuestionWhereInput = { ...statusFilter };
+    if (query.teamId) {
+      const [tasks, sessions] = await Promise.all([
+        this.prisma.task.findMany({
+          where: { teamId: query.teamId },
+          select: { id: true },
+        }),
+        this.prisma.session.findMany({
+          where: { teamId: query.teamId },
+          select: { id: true },
+        }),
+      ]);
+      where = {
+        ...where,
+        OR: [
+          { taskId: { in: tasks.map((t) => t.id) } },
+          { sessionId: { in: sessions.map((s) => s.id) } },
+        ],
+      };
+    } else if (query.taskId) {
+      where = { ...where, taskId: query.taskId };
+    }
     const rows = await this.prisma.agentQuestion.findMany({
       where,
       orderBy: { createdAt: 'desc' },
@@ -126,18 +146,62 @@ export class QuestionsService {
     return this.toDtos(rows);
   }
 
-  /** 批量行 → DTO：一次查询关联任务 managedMode（托管标记，前端据此过滤弹窗）。 */
+  /** 批量行 → DTO：按团队归属一次查询关联团队 managedMode（托管标记，前端据此过滤弹窗）。 */
   private async toDtos(rows: AgentQuestion[]): Promise<AgentQuestionDto[]> {
     const taskIds = [...new Set(rows.map((r) => r.taskId).filter(Boolean))];
-    const tasks =
+    const sessionIds = [
+      ...new Set(rows.map((r) => r.sessionId).filter(Boolean)),
+    ];
+    const [tasks, sessions] = await Promise.all([
       taskIds.length > 0
         ? await this.prisma.task.findMany({
             where: { id: { in: taskIds } },
-            select: { id: true, managedMode: true },
+            select: { id: true, teamId: true },
           })
+        : [],
+      sessionIds.length > 0
+        ? await this.prisma.session.findMany({
+            where: { id: { in: sessionIds } },
+            select: { id: true, teamId: true },
+          })
+        : [],
+    ]);
+    const teamByTask = new Map(
+      tasks.map((t) => [t.id, (t as { teamId?: string | null }).teamId]),
+    );
+    const teamBySession = new Map(
+      sessions.map((s) => [s.id, (s as { teamId?: string | null }).teamId]),
+    );
+    const teamIds = [
+      ...new Set(
+        rows
+          .map(
+            (r) =>
+              teamBySession.get(r.sessionId) ??
+              teamByTask.get(r.taskId as string),
+          )
+          .filter(Boolean) as string[],
+      ),
+    ];
+    const teams =
+      teamIds.length > 0
+        ? ((await (this.prisma as any).team.findMany({
+            where: { id: { in: teamIds } },
+            select: { id: true, managedMode: true },
+          })) as Array<{ id: string; managedMode?: boolean | null }>)
         : [];
-    const managedByTask = new Map(tasks.map((t) => [t.id, t.managedMode]));
-    return rows.map((r) => this.toDto(r, managedByTask.get(r.taskId) ?? false));
+    const managedByTeam = new Map(
+      teams.map((t) => [t.id, t.managedMode ?? false]),
+    );
+    return rows.map((r) => {
+      const teamId =
+        teamBySession.get(r.sessionId) ??
+        (r.taskId ? teamByTask.get(r.taskId) : undefined);
+      return this.toDto(
+        r,
+        teamId ? (managedByTeam.get(teamId) ?? false) : false,
+      );
+    });
   }
 
   /**
@@ -188,8 +252,8 @@ export class QuestionsService {
   }
 
   /**
-   * 托管确认（question_confirm MCP 工具）：任务托管模式下由主 Agent 确认成员请求。
-   * 仅主实例可调（task.mainAgentInstanceId === instanceId，复用 task_transition 权限模式）；
+   * 托管确认（question_confirm MCP 工具）：团队托管模式下由主 Agent 确认成员请求。
+   * 仅团队主成员可调（team.mainAgentMemberId === instanceId，复用 task_transition 权限模式）；
    * requestId 精确命中 AgentQuestion（requestId 唯一键），kind 须与落库一致；
    * 回复语义与用户 reply 相同（question=answers / permission=response，answers=null=拒绝）。
    */
@@ -203,7 +267,7 @@ export class QuestionsService {
   }): Promise<AgentQuestionDto> {
     const task = await this.prisma.task.findUnique({
       where: { id: input.taskId },
-      select: { mainAgentInstanceId: true },
+      select: { teamId: true },
     });
     if (!task) {
       throw new NotFoundException({
@@ -211,10 +275,22 @@ export class QuestionsService {
         message: '任务不存在',
       });
     }
-    if (task.mainAgentInstanceId !== input.instanceId) {
+    const team = task.teamId
+      ? await this.prisma.team.findUnique({
+          where: { id: task.teamId },
+          select: { mainAgentMemberId: true },
+        })
+      : null;
+    if (!team) {
+      throw new NotFoundException({
+        code: QUESTIONS_ERRORS.QUESTION_TEAM_NOT_FOUND,
+        message: '团队不存在',
+      });
+    }
+    if (team.mainAgentMemberId !== input.instanceId) {
       throw new ForbiddenException({
         code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,
-        message: `仅主 Agent（${task.mainAgentInstanceId ?? '未设置'}）可确认托管模式下的请求`,
+        message: `仅主 Agent（${team.mainAgentMemberId ?? '未设置'}）可确认托管模式下的请求`,
       });
     }
     const row = await this.prisma.agentQuestion.findUnique({
@@ -273,21 +349,11 @@ export class QuestionsService {
       });
     }
     // worker 定位：s_ 前缀 → session.workerId；ses_ 前缀（无 Session 主键记录）→ 按
-    // taskId+agentId 反查该 agent 在任务下的会话绑定 worker。
+    // 任务所属团队 + 模板 agentId 定位团队成员，再取其团队会话绑定 worker。
     const workerId =
       session?.workerId ??
       (row.sessionId.startsWith('ses_')
-        ? (
-            await this.prisma.session.findFirst({
-              where: {
-                taskId: row.taskId,
-                agentId: row.agentId,
-                workerId: { not: null },
-              },
-              select: { workerId: true },
-              orderBy: { updatedAt: 'desc' },
-            })
-          )?.workerId
+        ? await this.findTeamSessionWorker(row.taskId, row.agentId)
         : null);
     const worker = workerId
       ? await this.prisma.worker.findUnique({
@@ -354,7 +420,10 @@ export class QuestionsService {
     this.logger.log(
       `[questions] ${row.kind === AGENT_QUESTION_KINDS.QUESTION ? 'reply' : 'confirm'} ${row.kind} id=${row.id} status=${status} requestId=${row.requestId}（worker=${worker.id}）`,
     );
-    const managedMode = await this.managedModeOf(updated.taskId);
+    const managedMode = await this.managedModeOf(
+      updated.taskId,
+      updated.sessionId,
+    );
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
@@ -364,24 +433,100 @@ export class QuestionsService {
         sessionId: updated.sessionId,
         resolved: true,
       },
-      this.scopeOf(updated.taskId),
+      await this.scopeOf(updated.taskId, updated.sessionId),
     );
     return this.toDto(updated, managedMode);
   }
 
-  private async managedModeOf(taskId: string): Promise<boolean> {
-    if (!taskId) {
-      return false;
+  /** ses_ 回退 worker 定位：任务 teamId + 模板 agentId → 团队成员 → 其团队会话绑定 worker。 */
+  private async findTeamSessionWorker(
+    taskId: string | null,
+    agentId: string | null,
+  ): Promise<string | null> {
+    if (!taskId || !agentId) {
+      return null;
     }
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { managedMode: true },
+      select: { teamId: true },
     });
-    return task?.managedMode ?? false;
+    if (!task?.teamId) {
+      return null;
+    }
+    const member = await this.prisma.teamMember.findFirst({
+      where: { teamId: task.teamId, agentId },
+      select: { id: true },
+    });
+    if (!member) {
+      return null;
+    }
+    const teamSession = await this.prisma.session.findFirst({
+      where: {
+        teamId: task.teamId,
+        teamMemberId: member.id,
+        workerId: { not: null },
+      },
+      select: { workerId: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+    return teamSession?.workerId ?? null;
   }
 
-  private scopeOf(taskId: string): RealtimeScope {
-    return taskId ? { type: 'task', id: taskId } : { type: 'global' };
+  /** 团队归属解析：会话 teamId 优先（session-unification Todo 9 经 session.teamId 读团队行），回退任务归属 teamId；均无 → null。 */
+  private async teamIdOf(
+    taskId: string | null,
+    sessionId?: string | null,
+  ): Promise<string | null> {
+    if (sessionId) {
+      const sess = await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { teamId: true },
+      });
+      if (sess?.teamId) {
+        return sess.teamId;
+      }
+    }
+    if (taskId) {
+      const task = await this.prisma.task.findUnique({
+        where: { id: taskId },
+        select: { teamId: true },
+      });
+      if (task?.teamId) {
+        return task.teamId;
+      }
+    }
+    return null;
+  }
+
+  /** 托管开关读团队行：team.managedMode；有归属但团队行缺失 → 404；无归属 → false。 */
+  private async managedModeOf(
+    taskId: string | null,
+    sessionId?: string | null,
+  ): Promise<boolean> {
+    const teamId = await this.teamIdOf(taskId, sessionId);
+    if (!teamId) {
+      return false;
+    }
+    const team = (await (this.prisma as any).team.findUnique({
+      where: { id: teamId },
+      select: { managedMode: true },
+    })) as { managedMode?: boolean | null } | null;
+    if (!team) {
+      throw new NotFoundException({
+        code: QUESTIONS_ERRORS.QUESTION_TEAM_NOT_FOUND,
+        message: '团队不存在',
+      });
+    }
+    return team.managedMode ?? false;
+  }
+
+  /** 问题事件 scope：团队域（session-unification Todo 9）；无团队归属回退 global。 */
+  private async scopeOf(
+    taskId: string | null,
+    sessionId?: string | null,
+  ): Promise<RealtimeScope> {
+    const teamId = await this.teamIdOf(taskId, sessionId);
+    return teamId ? { type: 'team', id: teamId } : { type: 'global' };
   }
 
   /**
@@ -403,13 +548,16 @@ export class QuestionsService {
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
-        question: this.toDto(updated, await this.managedModeOf(updated.taskId)),
+        question: this.toDto(
+          updated,
+          await this.managedModeOf(updated.taskId, updated.sessionId),
+        ),
         taskId: updated.taskId,
         agentId: updated.agentId,
         sessionId: updated.sessionId,
         resolved: true,
       },
-      this.scopeOf(updated.taskId),
+      await this.scopeOf(updated.taskId, updated.sessionId),
     );
   }
 
@@ -460,17 +608,20 @@ export class QuestionsService {
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
-        question: this.toDto(row, await this.managedModeOf(row.taskId)),
+        question: this.toDto(
+          row,
+          await this.managedModeOf(row.taskId, row.sessionId),
+        ),
         taskId: row.taskId,
         agentId: row.agentId,
         sessionId: row.sessionId,
       },
-      this.scopeOf(row.taskId),
+      await this.scopeOf(row.taskId, row.sessionId),
     );
     this.logger.log(
       `[questions] 平台创建 question id=${row.id} requestId=${requestId} taskId=${taskId}（确认门）`,
     );
-    return this.toDto(row, await this.managedModeOf(row.taskId));
+    return this.toDto(row, await this.managedModeOf(row.taskId, row.sessionId));
   }
 
   /** content.source === 'platform' 的平台 question 判定（旁路转发的标记分支）。 */
@@ -520,7 +671,10 @@ export class QuestionsService {
         this.platformResolvers.delete(row.requestId);
       }
     }
-    const managedMode = await this.managedModeOf(updated.taskId);
+    const managedMode = await this.managedModeOf(
+      updated.taskId,
+      updated.sessionId,
+    );
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
@@ -530,22 +684,29 @@ export class QuestionsService {
         sessionId: updated.sessionId,
         resolved: true,
       },
-      this.scopeOf(updated.taskId),
+      await this.scopeOf(updated.taskId, updated.sessionId),
     );
     return this.toDto(updated, managedMode);
   }
 
-  /** 任务主 Agent 会话 id（平台 question sessionId 占位；无主实例/会话时回退占位符）。 */
+  /** 团队主成员会话 id（平台 question sessionId 占位；无主成员/会话时回退占位符）。 */
   private async mainAgentSessionOf(taskId: string): Promise<string | null> {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { mainAgentInstanceId: true },
+      select: { teamId: true },
     });
-    if (!task?.mainAgentInstanceId) {
+    if (!task?.teamId) {
+      return null;
+    }
+    const team = await this.prisma.team.findUnique({
+      where: { id: task.teamId },
+      select: { mainAgentMemberId: true },
+    });
+    if (!team?.mainAgentMemberId) {
       return null;
     }
     const session = await this.prisma.session.findFirst({
-      where: { taskId, taskAgentId: task.mainAgentInstanceId },
+      where: { teamId: task.teamId, teamMemberId: team.mainAgentMemberId },
       select: { id: true },
     });
     return session?.id ?? null;

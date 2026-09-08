@@ -85,7 +85,7 @@ description: Agent 配置与克隆、模型目录与凭据管理功能测试用�
 | 优先级 | P0 |
 | 前置条件 | admin 已登录 |
 | 操作步骤 | 1. `GET /api/v1/agents/a_product` |
-| 预期结果 | 1) 200；2) `type=template`、`baseAgentId=null`、`defaultModelId=opencode/ling-3.0-tiny-free`、`permissionScope={projects:"*",write:false,doclibOnly:true}`（已实测） |
+| 预期结果 | 1) 200；2) `type=template`、`baseAgentId=null`、`defaultModelId=opencode/ling-3.0-tiny-free`、`permissionScope={teams:"*",write:false,doclibOnly:true}`（已实测） |
 
 #### TC-AGT-004 完全自定义创建 Agent（FR-32）
 
@@ -96,7 +96,7 @@ description: Agent 配置与克隆、模型目录与凭据管理功能测试用�
 | 用例类型 | 正向 |
 | 优先级 | P0 |
 | 前置条件 | admin 已登录；`defaultModelId` 取自 available-models 列表 |
-| 操作步骤 | 1. `POST /api/v1/agents`，body：`{"name":"数据分析师","type":"custom","role":"analyst","prompt":"以数据分析师视角…","skillIds":[],"toolEffects":[{"toolAction":"read","effect":"allow"},{"toolAction":"bash","effect":"ask"}],"permissionScope":{"projects":["p_seed_1"],"write":false},"defaultModelId":"opencode-go/deepseek-v4-flash"}` |
+| 操作步骤 | 1. `POST /api/v1/agents`，body：`{"name":"数据分析师","type":"custom","role":"analyst","prompt":"以数据分析师视角…","skillIds":[],"toolEffects":[{"toolAction":"read","effect":"allow"},{"toolAction":"bash","effect":"ask"}],"permissionScope":{"teams":["tm_0000000001"],"write":false},"defaultModelId":"opencode-go/deepseek-v4-flash"}` |
 | 预期结果 | 1) 201 + Agent 对象：`type=custom`、`baseAgentId=null`、`createdBy=当前用户id`、toolEffects 2 条、defaultModelId 原样保存；2) 页面侧「Agent 管理」列表出现该自定义 Agent（已实测） |
 
 #### TC-AGT-005 克隆预置模板与自定义 Agent（FR-31）
@@ -108,8 +108,8 @@ description: Agent 配置与克隆、模型目录与凭据管理功能测试用�
 | 用例类型 | 正向 |
 | 优先级 | P0 |
 | 前置条件 | admin 已登录；源模板 `a_product` 与 1 个 custom Agent（TC-AGT-004 数据）存在 |
-| 操作步骤 | 1. `POST /api/v1/agents/a_product/clone`，body：`{"name":"项目产品经理"}`；2. `POST /api/v1/agents/<customId>/clone`，body `{}`；3. 分别 `GET /api/v1/agents/<新id>` 核对 |
-| 预期结果 | 1) 201 + 克隆副本：`type=clone`、`baseAgentId=a_product`、`name=项目产品经理`、prompt/toolEffects/permissionScope/defaultModelId 与源一致；2) custom 源克隆成功，name 缺省时自动命名「源名副本」（如「数据分析师副本」）；3) `GET /agents/a_product` 源配置不变（深拷贝，已实测） |
+| 操作步骤 | 1. `POST /api/v1/agents/a_product/clone`，body：`{"name":"团队产品经理"}`；2. `POST /api/v1/agents/<customId>/clone`，body `{}`；3. 分别 `GET /api/v1/agents/<新id>` 核对 |
+| 预期结果 | 1) 201 + 克隆副本：`type=clone`、`baseAgentId=a_product`、`name=团队产品经理`、prompt/toolEffects/permissionScope/defaultModelId 与源一致；2) custom 源克隆成功，name 缺省时自动命名「源名副本」（如「数据分析师副本」）；3) `GET /agents/a_product` 源配置不变（深拷贝，已实测） |
 
 #### TC-AGT-007 克隆副本修改不影响源（隔离验证）
 
@@ -171,12 +171,12 @@ description: Agent 配置与克隆、模型目录与凭据管理功能测试用�
 | 操作步骤 | 1. `GET /api/v1/agents/a_product/available-models`（目录非空）；2.（受控环境）清空 enabled 模型且 worker 在线时重试；3.（受控环境）目录为空且无可用 worker 时重试 |
 | 预期结果 | 1) 200 纯数组 `[{id:"opencode-go/deepseek-v4-flash",name:"DeepSeek V4 Flash"},…]`，id 为 `providerID/modelID` 格式，共 17 条（目录优先路径，已实测）；2) 目录为空且 worker 在线 → 200 纯数组，为 worker `GET /models` 实测模型（无 source 标记）；3) 均不可用 → 200 + `{models:[...], source:"fallback"}`（静态降级，显式标记）。⚠️ 当前 seed 目录非空走路径 1，后两条降级路径需受控环境验证 |
 
-#### TC-AGT-013 项目成员查看与创建 Agent（[project] 权限）
+#### TC-AGT-013 团队成员查看与创建 Agent（[project] 权限）
 
 | 字段 | 内容 |
 |------|------|
 | 用例编号 | TC-AGT-013 |
-| 用例名称 | 项目成员（member）可查看、克隆与自定义 Agent |
+| 用例名称 | 团队成员（member）可查看、克隆与自定义 Agent |
 | 用例类型 | 正向 |
 | 优先级 | P1 |
 | 前置条件 | `seed-member` 登录；`GET /agents` 可见 |
@@ -573,7 +573,7 @@ description: Agent 配置与克隆、模型目录与凭据管理功能测试用�
 | 操作步骤 | 1. `POST /api/v1/models/:id/credentials` body `{"token":"sk-tc-1234567890"}`；2. 查询状态 |
 | 预期结果 | 1) 200 + `configured:true`、`revokedAt:null`（覆盖更新同时清除吊销标记）（已实测） |
 
-#### TC-MDL-015 项目成员只读可见模型目录与凭据状态
+#### TC-MDL-015 团队成员只读可见模型目录与凭据状态
 
 | 字段 | 内容 |
 |------|------|
@@ -785,5 +785,5 @@ description: Agent 配置与克隆、模型目录与凭据管理功能测试用�
 - **删除顺序约束（D6）**：删除 Agent 前须先删除其克隆链上的副本与被任务引用的记录，否则 500 外键冲突。
 - **凭据安全**：`token` 明文只出现在请求体与加密存储；任何用例断言响应不含明文 token/credentialRef，仅允许脱敏 `fingerprint`。
 - **凭据测试影响面**：`POST /models/:id/credentials` 保存成功会向 worker 触发凭据下发（失败不阻断保存，worker 注册回放兜底）；建议使用测试专用 provider（如 `tc-pvd`）以免影响既有 provider。
-- **跨模块前置**：TC-AGT-028（删除被任务引用的 Agent）需先在 `docs/test-cases/02-项目与任务管理.md` 的任务用例中创建引用该 Agent 的任务。
+- **跨模块前置**：TC-AGT-028（删除被任务引用的 Agent）需先在 `docs/test-cases/02-团队与任务管理.md` 的任务用例中创建引用该 Agent 的任务。
 - **实现缺陷跟踪**：D5（effect 枚举校验缺失）、D6（删除被引用 Agent 无业务拦截）、D7（available-models 不校验 Agent 存在）为已识别的实现缺陷，用例按当前行为断言并在结论中标注「待修复」。

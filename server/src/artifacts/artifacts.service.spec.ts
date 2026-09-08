@@ -70,10 +70,10 @@ describe('ArtifactsService', () => {
 
   describe('onModuleInit', () => {
     it('seed art/artv 两个前缀：按库内最大序号对齐 id 生成器', async () => {
-      prisma.artifact.findFirst.mockResolvedValue({ id: 'art_0000000005' });
-      prisma.artifactVersion.findFirst.mockResolvedValue({
-        id: 'artv_0000000012',
-      });
+      prisma.artifact.findMany.mockResolvedValue([{ id: 'art_0000000005' }]);
+      prisma.artifactVersion.findMany.mockResolvedValue([
+        { id: 'artv_0000000012' },
+      ]);
 
       await service.onModuleInit();
 

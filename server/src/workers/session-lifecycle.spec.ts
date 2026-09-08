@@ -133,7 +133,11 @@ describe('SessionLifecycleService', () => {
       });
 
       await expect(
-        service.bindSessionToWorker('s_0000000001', 'w_0000000001', 'ses_0000000001'),
+        service.bindSessionToWorker(
+          's_0000000001',
+          'w_0000000001',
+          'ses_0000000001',
+        ),
       ).rejects.toThrow();
       expect(tx.session.update).not.toHaveBeenCalled();
       expect(tx.taskGroupInstance.create).not.toHaveBeenCalled();

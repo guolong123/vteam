@@ -51,7 +51,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { AgentBadge, ConfirmDialog, Pagination } from "@/src/components/ui";
+import { AgentBadge, ConfirmDialog, Pagination, SegmentedTabs } from "@/src/components/ui";
 import {
   type RoleKey,
   neutral,
@@ -672,7 +672,7 @@ function ToolSubTabs({
               padding: `${space.xs + 1}px ${space.md}px`,
               borderRadius: radius.md,
               border: "none",
-              backgroundColor: isActive ? "var(--color-surface)" : "transparent",
+              backgroundColor: isActive ? "var(--color-segment-active)" : "transparent",
               boxShadow: isActive ? shadow.sm : "none",
               cursor: "pointer",
               fontFamily: fontFamily.body,
@@ -3138,67 +3138,8 @@ export default function SkillToolManagePage() {
             flexWrap: "wrap",
           }}
         >
-          {/* 二 Tab（受控切换） */}
-          <div
-            data-testid="manage-tabs"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: space.xs,
-              padding: space.xs,
-              borderRadius: radius.lg,
-              backgroundColor: neutral[100],
-              border: `1px solid ${neutral[200]}`,
-            }}
-          >
-            {tabs.map((t) => {
-              const active = tab === t.key;
-              return (
-                <button
-                  key={t.key}
-                  type="button"
-                  data-testid="manage-tab"
-                  data-kind={t.key}
-                  data-active={active ? "true" : "false"}
-                  onClick={() => setTab(t.key)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: space.sm,
-                    padding: `${space.sm + 1}px ${space.lg}px`,
-                    borderRadius: radius.md,
-                    border: "none",
-                    backgroundColor: active ? "var(--color-surface)" : "transparent",
-                    boxShadow: active ? shadow.sm : "none",
-                    cursor: "pointer",
-                    fontFamily: fontFamily.body,
-                    fontSize: fontSize.md,
-                    fontWeight: active ? 600 : 500,
-                    color: active ? neutral[900] : neutral[600],
-                  }}
-                >
-                  <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>
-                    {t.icon}
-                  </span>
-                  {t.label}
-                  <span
-                    aria-hidden
-                    style={{
-                      fontSize: fontSize.xs,
-                      color: active ? "#2563EB" : neutral[400],
-                      backgroundColor: active ? "rgba(37,99,235,0.10)" : neutral[100],
-                      padding: "0 7px",
-                      borderRadius: radius.pill,
-                      lineHeight: "16px",
-                      fontFamily: fontFamily.mono,
-                    }}
-                  >
-                    {t.count}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          {/* 二 Tab（受控切换，统一样式见 ui/SegmentedTabs） */}
+          <SegmentedTabs items={tabs} active={tab} onChange={(k) => setTab(k as TabKey)} />
 
           {/* 右上操作：随 Tab 切换（上传技能 → POST /skills multipart；注册工具 → 跳转
            * /tools/register 完整注册页）。

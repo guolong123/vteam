@@ -6,10 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService, RealtimeEvent } from '../realtime/realtime.service';
-import {
-  CHANNEL_TYPE,
-  EVENT_TYPES,
-} from '../common/constants/event.constants';
+import { CHANNEL_TYPE, EVENT_TYPES } from '../common/constants/event.constants';
 import { NotificationRegistryService } from './notification-registry.service';
 import { NotificationDeliveryService } from './notification-delivery.service';
 import {
@@ -322,8 +319,10 @@ export class NotificationDispatcherService
       if (msg) {
         if (msg.channelType === 'private' || msg.channelType === 'single')
           return true;
-        if (msg.chattype === 'single' || msg.chattype === 'private') return true;
-        if (msg.chatType === 'single' || msg.chatType === 'private') return true;
+        if (msg.chattype === 'single' || msg.chattype === 'private')
+          return true;
+        if (msg.chatType === 'single' || msg.chatType === 'private')
+          return true;
         const msgCh = msg.channel as Record<string, any> | undefined;
         if (msgCh && (msgCh.type === 'private' || msgCh.type === 'single'))
           return true;
@@ -367,7 +366,9 @@ export class NotificationDispatcherService
     // This is the authoritative check — vteam ChatChannel.type is 'private' vs 'task_group'.
     const channelIdCandidate: string | null =
       (typeof message.channelId === 'string' ? message.channelId : null) ??
-      (typeof payloadRaw.channelId === 'string' ? payloadRaw.channelId : null) ??
+      (typeof payloadRaw.channelId === 'string'
+        ? payloadRaw.channelId
+        : null) ??
       (typeof payloadRaw.channel?.id === 'string'
         ? payloadRaw.channel.id
         : null) ??

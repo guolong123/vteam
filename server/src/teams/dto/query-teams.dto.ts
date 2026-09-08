@@ -3,14 +3,22 @@ import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Min } from 'class-validator';
 
 export class QueryTeamsDto {
-  @ApiPropertyOptional({ description: '页码（从 1 起）', default: 1, minimum: 1 })
+  @ApiPropertyOptional({
+    description: '页码（从 1 起）',
+    default: 1,
+    minimum: 1,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   page?: number;
 
-  @ApiPropertyOptional({ description: '每页条数（上限 100）', default: 20, minimum: 1 })
+  @ApiPropertyOptional({
+    description: '每页条数（上限 100）',
+    default: 20,
+    minimum: 1,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

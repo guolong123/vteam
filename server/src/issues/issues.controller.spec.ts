@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { AdminGuard } from '../users/admin.guard';
-import { ProjectMembershipGuard } from '../common/guards/project-membership.guard';
+import { TeamMembershipGuard } from '../common/guards/team-membership.guard';
 import { CreateIssueDto } from './dto/create-issue.dto';
 import { QueryIssuesDto } from './dto/query-issues.dto';
 import { TransitionIssueDto } from './dto/transition-issue.dto';
@@ -160,11 +160,11 @@ describe('IssuesController', () => {
       }
     });
 
-    it('QueryIssuesDto：taskId 可选、projectId 可选、status 枚举、page/pageSize 正整数', async () => {
-      expect(await errorsOf(QueryIssuesDto, {})).toHaveLength(0); // taskId/projectId 均可选，二选一由 service 校验
-      expect(await errorsOf(QueryIssuesDto, { projectId: 'p_1' })).toHaveLength(
-        0,
-      );
+    it('QueryIssuesDto：taskId 可选、teamId 可选、status 枚举、page/pageSize 正整数', async () => {
+      expect(await errorsOf(QueryIssuesDto, {})).toHaveLength(0); // taskId/teamId 均可选，二选一由 service 校验
+      expect(
+        await errorsOf(QueryIssuesDto, { teamId: 'tm_0000000001' }),
+      ).toHaveLength(0);
       expect(
         await errorsOf(QueryIssuesDto, { taskId: 't_1', status: 'bogus' }),
       ).not.toHaveLength(0);
@@ -183,13 +183,13 @@ describe('IssuesController', () => {
   });
 
   describe('守卫（Metis M2/M3）', () => {
-    it('controller 类级不挂 AdminGuard / ProjectMembershipGuard（:id 会误解析为 taskId）', () => {
+    it('controller 类级不挂 AdminGuard / TeamMembershipGuard（:id 会误解析为 taskId）', () => {
       const guards =
         (Reflect.getMetadata('__guards__', IssuesController) as
           Array<{ name: string }> | undefined) ?? [];
       const guardNames = guards.map((g) => g.name);
       expect(guardNames).not.toContain(AdminGuard.name);
-      expect(guardNames).not.toContain(ProjectMembershipGuard.name);
+      expect(guardNames).not.toContain(TeamMembershipGuard.name);
     });
   });
 });

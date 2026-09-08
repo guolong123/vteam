@@ -90,6 +90,8 @@ a {
   --color-mention-border: #bfdbfe;
   --color-mention-accent: #2563eb;
   --color-mention-text: #2563eb;
+  /* 分段选择器选中项：浅色=白，深色=提亮一档（surface #1e293b 上可见） */
+  --color-segment-active: #ffffff;
 }
 
 .dark {
@@ -112,6 +114,7 @@ a {
   --color-mention-border: rgba(147, 197, 253, 0.35);
   --color-mention-accent: #93c5fd;
   --color-mention-text: #bfdbfe;
+  --color-segment-active: #334155;
 }
 
 /* ============================================================

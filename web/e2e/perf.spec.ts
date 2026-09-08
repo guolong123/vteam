@@ -14,7 +14,7 @@ const AGENT_ID = "a_product";
 
 async function readToken(page: import("@playwright/test").Page): Promise<string> {
   // 需先导航到同源页面（about:blank 下读 localStorage 会 SecurityError）
-  await page.goto("/projects");
+  await page.goto("/teams");
   const token = await page.evaluate(() => {
     const raw = localStorage.getItem("agent-platform-auth");
     return raw ? (JSON.parse(raw).state?.token ?? null) : null;
@@ -92,10 +92,10 @@ async function sseRoundtrip(
 }
 
 test.describe("性能 E2E", () => {
-  test("页面加载性能（/login 与 /projects）", async ({ page }) => {
+  test("页面加载性能（/login 与 /teams）", async ({ page }) => {
     // warmup：dev 首编译不计入
     await page.goto("/login");
-    await page.goto("/projects");
+    await page.goto("/teams");
     const t1 = await page.evaluate(() => {
       const t = performance.timing;
       return {
@@ -105,7 +105,7 @@ test.describe("性能 E2E", () => {
     });
     test.info().annotations.push({
       type: "perf",
-      description: `页面加载 /projects（dev）：domContentLoaded=${t1.domContentLoadedMs}ms load=${t1.loadMs}ms`,
+      description: `页面加载 /teams（dev）：domContentLoaded=${t1.domContentLoadedMs}ms load=${t1.loadMs}ms`,
     });
     // dev 模式宽松线：load ≤ 15s（生产 standalone 另行以 Lighthouse/构建产物衡量）
     expect(t1.loadMs).toBeLessThan(15_000);

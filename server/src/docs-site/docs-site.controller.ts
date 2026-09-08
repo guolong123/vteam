@@ -12,7 +12,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   AuthenticatedUser,
   CurrentUser,
-} from '../projects/current-user.decorator';
+} from '../common/decorators/current-user.decorator';
 import { DOCS_SITE_ERRORS } from './docs-site.constants';
 import { DocsMirrorService } from './docs-mirror.service';
 
@@ -22,7 +22,7 @@ import { DocsMirrorService } from './docs-mirror.service';
  * 深度集成形态：文档浏览/渲染组件内嵌 web（DocExplorer 移植），server 不再提供
  * 工具页 HTML/代理 upstream/cookie 换 token——web 组件经现有 `api.get`（Authorization
  * 头）直接调用本控制器的**纯数据端点**（registry + prd）。v3 的 query token/Set-Cookie/
- * 302/shell 全部移除，鉴权回归标准 JWT（全局 JwtAuthGuard）+ 项目成员校验。
+ * 302/shell 全部移除，鉴权回归标准 JWT（全局 JwtAuthGuard）+ 团队成员校验。
  *
  * 端点（路径均为 /api/v1 前缀，main.ts 全局前缀）：
  * - GET /docs-site/:taskId/registry     → 动态 DocDef[]（任务 doc 产出物，AC-3 文档树）
@@ -30,8 +30,8 @@ import { DocsMirrorService } from './docs-mirror.service';
  * - GET /docs-site/:taskId/prototypes       → 原型列表 { items: [{id, name, file}] }
  * - GET /docs-site/:taskId/prototypes/<file> → 原型源码（TSX / DSL JSON，文件白名单防路径穿越）
  *
- * 鉴权：全局 JwtAuthGuard 要求合法 access token；本控制器按 taskId → projectId →
- * 项目成员校验（AC-2 越权 401/403）。taskId 白名单 + 文件名白名单防路径穿越/跨任务。
+ * 鉴权：全局 JwtAuthGuard 要求合法 access token；本控制器按 taskId → teamId →
+ * teamUserMember 团队成员校验（AC-2 越权 401/403）。taskId 白名单 + 文件名白名单防路径穿越/跨任务。
  */
 @ApiTags('docs-site')
 @Controller('docs-site')
@@ -105,7 +105,7 @@ export class DocsSiteController {
     return content;
   }
 
-  /** 鉴权：taskId 白名单 → 任务存在 → 项目成员（AC-2 越权 401/403）。 */
+  /** 鉴权：taskId 白名单 → 任务存在 → 团队成员（AC-2 越权 401/403）。 */
   private async assertMember(taskId: string, userId: string): Promise<void> {
     if (!/^t_[a-zA-Z0-9_]+$/.test(taskId)) {
       throw new BadRequestException({
@@ -113,9 +113,9 @@ export class DocsSiteController {
         message: '非法 taskId',
       });
     }
-    const task = await this.prisma.task.findUnique({
+    const task = await (this.prisma as any).task.findUnique({
       where: { id: taskId },
-      select: { projectId: true },
+      select: { teamId: true },
     });
     if (!task) {
       throw new NotFoundException({
@@ -123,15 +123,16 @@ export class DocsSiteController {
         message: '任务不存在',
       });
     }
-    const member = await this.prisma.projectMember.findUnique({
+    // channel → taskId → teamId → teamUserMember：任务归属团队即授权域。
+    const member = await (this.prisma as any).teamUserMember.findUnique({
       where: {
-        projectId_userId: { projectId: task.projectId, userId },
+        teamId_userId: { teamId: task.teamId, userId },
       },
     });
     if (!member) {
       throw new ForbiddenException({
         code: DOCS_SITE_ERRORS.FORBIDDEN,
-        message: '您不是该项目成员，无权访问该任务文档站',
+        message: '您不是该团队成员，无权访问该任务文档站',
       });
     }
   }

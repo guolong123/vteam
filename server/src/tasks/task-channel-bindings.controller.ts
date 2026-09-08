@@ -11,7 +11,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../prisma/prisma.service';
 import { PermissionGuard } from '../common/guards/permission.guard';
-import { ProjectMembershipGuard } from '../common/guards/project-membership.guard';
+import { TeamMembershipGuard } from '../common/guards/team-membership.guard';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { INTEGRATIONS_ERRORS as MSG_ERRORS } from '../message-channels/message-channel.constants';
 import { INTEGRATIONS_ERRORS as NOTIF_ERRORS } from '../notifications/notification.constants';
@@ -41,7 +41,7 @@ function maskChannel(row: any): any {
 
 @ApiTags('tasks')
 @ApiBearerAuth()
-@UseGuards(ProjectMembershipGuard)
+@UseGuards(TeamMembershipGuard)
 @Controller('tasks/:taskId')
 export class TaskChannelBindingsController {
   constructor(private readonly prisma: PrismaService) {}

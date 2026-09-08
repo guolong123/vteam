@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { IdGeneratorService } from '../common/id-generator';
+import { resyncIdPrefix } from '../common/id-resync';
 import { RealtimeService } from '../realtime/realtime.service';
 import { ACTOR_TYPE, EVENT_TYPES } from '../common/constants/event.constants';
 import { TASK_STATUS } from '../common/constants/task.constants';
@@ -36,14 +37,6 @@ export interface AppendMeta {
   authorAgentId?: string;
   changeNote?: string;
 }
-
-/** 只暴露 findFirst({orderBy:{id:'desc'},select:{id:true}}) 的结构化子集（重启续号用）。 */
-type SeqModel = {
-  findFirst(args: {
-    orderBy: { id: 'desc' };
-    select: { id: true };
-  }): Promise<{ id: string } | null>;
-};
 
 /**
  * 轻量协议校验（12 篇 §3.1，不引入 json_schema 依赖）：
@@ -112,10 +105,14 @@ export class ArtifactsService implements OnModuleInit {
     private readonly docsMirror?: DocsMirrorService,
   ) {}
 
-  /** 进程启动：按库内各前缀最大序号对齐 id 生成器（重启续号，防主键冲突）。 */
+  /** 进程启动：按库内各前缀纯数字序号最大值对齐 id 生成器（resyncIdPrefix 跳过非数字 id，防主键冲突）。 */
   async onModuleInit(): Promise<void> {
-    await this.seedPrefix(ID_PREFIX.artifact, this.prisma.artifact);
-    await this.seedPrefix(ID_PREFIX.version, this.prisma.artifactVersion);
+    await resyncIdPrefix(this.prisma.artifact, ID_PREFIX.artifact, this.idGen);
+    await resyncIdPrefix(
+      this.prisma.artifactVersion,
+      ID_PREFIX.version,
+      this.idGen,
+    );
   }
 
   /**
@@ -595,18 +592,5 @@ export class ArtifactsService implements OnModuleInit {
     const ps = Number(pageSize ?? 20);
     if (!Number.isFinite(ps)) return 20;
     return Math.min(Math.max(Math.floor(ps), 1), 100);
-  }
-
-  private async seedPrefix(prefix: string, model: SeqModel): Promise<void> {
-    const last = await model.findFirst({
-      orderBy: { id: 'desc' },
-      select: { id: true },
-    });
-    if (last) {
-      const seq = parseInt(last.id.slice(prefix.length + 1), 10);
-      if (Number.isFinite(seq)) {
-        this.idGen.seed(prefix, seq);
-      }
-    }
   }
 }

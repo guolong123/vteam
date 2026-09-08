@@ -89,7 +89,7 @@
 
 ### C4. `web/app/page.tsx`（根路由占位脚手架）
 - 头注释标注为脚手架占位页（“业务页面见计划任务 …”），无守卫、无跳转，实际访问不到，属遗留占位。`app/(main)/providers/page.tsx` 为显式 `/providers → /models` redirect（URL 直达兼容）——已核实不在导航表 / 无 `router.push('/providers')`，仅兼容入口。
-- **判定**：`/` 占位页属遗留，建议改为 `redirect('/projects')` 或删除；`/providers` 兼容重定向若接受旧 URL 失效也可删。
+- **判定**：`/` 占位页属遗留，建议改为 `redirect('/teams')` 或删除；`/providers` 兼容重定向若接受旧 URL 失效也可删。
 
 ---
 

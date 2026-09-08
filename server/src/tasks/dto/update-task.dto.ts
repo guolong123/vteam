@@ -61,13 +61,8 @@ export class UpdateTaskDto {
 
   @ApiPropertyOptional({
     description:
-      '托管模式（默认 false）：开启后成员 question/permission 请求不弹窗给用户，改由主 Agent 经 question_confirm 确认',
+      '完成后为下一任务开新会话（覆盖团队 reuseSession，默认 false）',
   })
-  @IsOptional()
-  @IsBoolean()
-  managedMode?: boolean;
-
-  @ApiPropertyOptional({ description: '完成后为下一任务开新会话（覆盖团队 reuseSession，默认 false）' })
   @IsOptional()
   @IsBoolean()
   resetAfterComplete?: boolean;

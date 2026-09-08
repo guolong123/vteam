@@ -18,6 +18,7 @@ describe('TeamsController', () => {
     removeUserMember: jest.Mock;
     updateMember: jest.Mock;
     resetSessions: jest.Mock;
+    resetMemberSession: jest.Mock;
     cancelQueue: jest.Mock;
   };
 
@@ -34,6 +35,7 @@ describe('TeamsController', () => {
       removeUserMember: jest.fn(),
       updateMember: jest.fn(),
       resetSessions: jest.fn(),
+      resetMemberSession: jest.fn(),
       cancelQueue: jest.fn(),
     };
     const module: TestingModule = await Test.createTestingModule({
@@ -57,7 +59,10 @@ describe('TeamsController', () => {
 
   it('POST /teams 转发 userId + dto 到 create', async () => {
     service.create.mockResolvedValue({ id: 'tm_0000000001' });
-    const result = await controller.create({ id: 'u_1' } as any, { name: 'alpha' } as any);
+    const result = await controller.create(
+      { id: 'u_1' } as any,
+      { name: 'alpha' } as any,
+    );
     expect(service.create).toHaveBeenCalledWith('u_1', { name: 'alpha' });
     expect(result).toEqual({ id: 'tm_0000000001' });
   });
@@ -92,7 +97,9 @@ describe('TeamsController', () => {
 
   it('POST /teams/:id/members 转发到 addMember', async () => {
     service.addMember.mockResolvedValue({ id: 'tm_1' });
-    const result = await controller.addMember('tm_1', { agentId: 'a_1' } as any);
+    const result = await controller.addMember('tm_1', {
+      agentId: 'a_1',
+    } as any);
     expect(service.addMember).toHaveBeenCalledWith('tm_1', { agentId: 'a_1' });
     expect(result).toEqual({ id: 'tm_1' });
   });
@@ -106,8 +113,12 @@ describe('TeamsController', () => {
 
   it('PATCH /teams/:id/members/:memberId 转发到 updateMember', async () => {
     service.updateMember.mockResolvedValue({ id: 'tm_1' });
-    const result = await controller.updateMember('tm_1', 'tmm_1', { alias: 'x' } as any);
-    expect(service.updateMember).toHaveBeenCalledWith('tm_1', 'tmm_1', { alias: 'x' });
+    const result = await controller.updateMember('tm_1', 'tmm_1', {
+      alias: 'x',
+    } as any);
+    expect(service.updateMember).toHaveBeenCalledWith('tm_1', 'tmm_1', {
+      alias: 'x',
+    });
     expect(result).toEqual({ id: 'tm_1' });
   });
 
@@ -116,6 +127,21 @@ describe('TeamsController', () => {
     const result = await controller.resetSessions('tm_1');
     expect(service.resetSessions).toHaveBeenCalledWith('tm_1');
     expect(result).toEqual({ reset: 2, teamId: 'tm_1' });
+  });
+
+  it('Todo11：POST /teams/:id/members/:memberId/reset-session 转发到 resetMemberSession（空 body）', async () => {
+    service.resetMemberSession.mockResolvedValue({
+      teamId: 'tm_1',
+      memberId: 'tmm_1',
+      session: { id: 's_1' },
+    });
+    const result = await controller.resetMemberSession('tm_1', 'tmm_1');
+    expect(service.resetMemberSession).toHaveBeenCalledWith('tm_1', 'tmm_1');
+    expect(result).toEqual({
+      teamId: 'tm_1',
+      memberId: 'tmm_1',
+      session: { id: 's_1' },
+    });
   });
 
   it('DELETE /teams/:id/queue/:taskId 转发到 cancelQueue', async () => {
@@ -127,8 +153,12 @@ describe('TeamsController', () => {
 
   it('POST /teams/:id/users 转发到 addUserMember', async () => {
     service.addUserMember.mockResolvedValue({ id: 'tm_1' });
-    const result = await controller.addUserMember('tm_1', { userId: 'u_2' } as any);
-    expect(service.addUserMember).toHaveBeenCalledWith('tm_1', { userId: 'u_2' });
+    const result = await controller.addUserMember('tm_1', {
+      userId: 'u_2',
+    } as any);
+    expect(service.addUserMember).toHaveBeenCalledWith('tm_1', {
+      userId: 'u_2',
+    });
     expect(result).toEqual({ id: 'tm_1' });
   });
 

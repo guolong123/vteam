@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   AuthenticatedUser,
   CurrentUser,
-} from '../projects/current-user.decorator';
+} from '../common/decorators/current-user.decorator';
 import { QueryPlansDto } from './dto/query-plans.dto';
 import { ReviewPlanDto } from './dto/review-plan.dto';
 import { PlanReviewVerdict, PlansService } from './plans.service';
@@ -11,10 +11,10 @@ import { PlanReviewVerdict, PlansService } from './plans.service';
 /**
  * 协作计划 REST 端点（vteam-team-collaboration tc-review）。
  *
- * 权限模型（对齐 issues.controller）：**不挂** AdminGuard（项目成员即可查/评审自己
- * 任务的计划）、**不挂** ProjectMembershipGuard（其 :id 路由反查会把 /plans/:id
+ * 权限模型（对齐 issues.controller）：**不挂** AdminGuard（团队成员即可查/评审自己
+ * 任务的计划）、**不挂** TeamMembershipGuard（其 :id 路由反查会把 /plans/:id
  * 的 :id 误解析为 taskId → 404 TASK_NOT_FOUND）。鉴权依赖全局 JwtAuthGuard
- * （APP_GUARD），项目成员校验全部在 PlansService 内经 taskId → projectId 完成。
+ * （APP_GUARD），团队成员校验全部在 PlansService 内经 taskId → teamId 完成。
  *
  * 全局前缀 /api/v1（main.ts 已设置），实际路由 /api/v1/plans。
  */

@@ -103,8 +103,7 @@ export class GenericWebhookInboundAdapter extends MessageAdapter {
     config: Record<string, any>,
   ): Record<string, string> | undefined {
     const fieldMappings = (config as any)?.fieldMappings as
-      | Record<string, any>
-      | undefined;
+      Record<string, any> | undefined;
     if (
       fieldMappings &&
       typeof fieldMappings === 'object' &&
@@ -115,7 +114,11 @@ export class GenericWebhookInboundAdapter extends MessageAdapter {
         fieldMappings[event] ??
         fieldMappings[event?.toLowerCase?.()] ??
         undefined;
-      if (perEvent && typeof perEvent === 'object' && !Array.isArray(perEvent)) {
+      if (
+        perEvent &&
+        typeof perEvent === 'object' &&
+        !Array.isArray(perEvent)
+      ) {
         return perEvent as Record<string, string>;
       }
       const def = fieldMappings['_default'];
@@ -133,8 +136,7 @@ export class GenericWebhookInboundAdapter extends MessageAdapter {
       // fieldMappings present but no match → if legacy exists, return legacy via fallback below
       if (perEvent === undefined && def === undefined) {
         const legacy = (config as any)?.fieldMapping as
-          | Record<string, string>
-          | undefined;
+          Record<string, string> | undefined;
         if (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) {
           return legacy;
         }
@@ -142,8 +144,7 @@ export class GenericWebhookInboundAdapter extends MessageAdapter {
       }
     }
     const legacy = (config as any)?.fieldMapping as
-      | Record<string, string>
-      | undefined;
+      Record<string, string> | undefined;
     if (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) {
       return legacy;
     }

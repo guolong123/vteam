@@ -17,6 +17,7 @@ import {
 import { TASK_STATUS } from '../common/constants/task.constants';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { IdGeneratorService } from '../common/id-generator';
+import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WorkerClient, WorkerEndpointRef } from '../workers/worker.client';
@@ -169,10 +170,14 @@ export class ChatService {
       );
   }
 
-  /** 进程启动：对齐库内 m_/c_ 前缀最大序号（重启续号，防主键冲突）。 */
+  /** 进程启动：按库内 m_/c_ 前缀纯数字序号最大值对齐（resyncIdPrefix 跳过非数字 id，防主键冲突）。 */
   async onModuleInit(): Promise<void> {
-    await this.seedPrefix(MESSAGE_ID_PREFIX, this.prisma.message);
-    await this.seedPrefix(CHANNEL_ID_PREFIX, this.prisma.chatChannel);
+    await resyncIdPrefix(this.prisma.message, MESSAGE_ID_PREFIX, this.idGen);
+    await resyncIdPrefix(
+      this.prisma.chatChannel,
+      CHANNEL_ID_PREFIX,
+      this.idGen,
+    );
   }
 
   async findAccessibleChannels(
@@ -426,7 +431,9 @@ export class ChatService {
       },
     });
     session =
-      sessions.find((s) => !!s.instanceRef && !!s.workerId) ?? sessions[0] ?? null;
+      sessions.find((s) => !!s.instanceRef && !!s.workerId) ??
+      sessions[0] ??
+      null;
     if (!session?.instanceRef || !session.workerId) {
       return fallback();
     }
@@ -809,11 +816,26 @@ export class ChatService {
       channel = resolved.channel;
       task = resolved.task;
     }
+    // F-B team-mode degrade：团队频道（team_group/团队私聊）的 resolved/fallback
+    // 任务为 archived（或无可用任务）时，不再 409 拒绝 —— 团队直聊是独立于
+    // 任务队列的核心能力，降级为无任务上下文继续。legacy 非团队频道保持 409；
+    // 非成员 403 / 缺团队 404 在 resolveChannelAccess 内不变。
+    let archivedDegraded = false;
     if (task.status === TASK_STATUS.archived) {
-      throw new ConflictException({
-        code: CHAT_ERRORS.TASK_ARCHIVED,
-        message: '归档任务频道不允许发消息',
-      });
+      const degradeTeamId =
+        (channel as any).teamId ?? (task as any)?.teamId ?? null;
+      if (degradeTeamId && (channel as any).teamId) {
+        task = { status: 'pending', teamId: degradeTeamId } as any;
+        archivedDegraded = true;
+        this.logger.log(
+          `team-mode archived degrade: channel=${channelId} team=${degradeTeamId} → team direct chat`,
+        );
+      } else {
+        throw new ConflictException({
+          code: CHAT_ERRORS.TASK_ARCHIVED,
+          message: '归档任务频道不允许发消息',
+        });
+      }
     }
 
     const isTeamPrivate =
@@ -822,9 +844,12 @@ export class ChatService {
     // resolveChannelAccess 为无任务团队频道合成的 currentTask 上下文（否则私聊
     // 误走 task-mode 分派：任务快照会话 + 回复落群聊，DM processing 悬空）。
     // dtoTaskId 亦忽略（私聊无任务分区语义；DM 页从不发送 taskId）。
-    const effectiveTaskId: string | null = isTeamPrivate
+    // F-B 降级时同样置空（归档任务 id 不再分区/分派）。
+    let effectiveTaskId: string | null = archivedDegraded
       ? null
-      : (dtoTaskId ?? (task as any).id ?? (channel as any).taskId ?? null);
+      : isTeamPrivate
+        ? null
+        : (dtoTaskId ?? (task as any).id ?? (channel as any).taskId ?? null);
 
     const resolveKey = channel.teamId
       ? { teamId: channel.teamId, taskId: effectiveTaskId }
@@ -874,12 +899,11 @@ export class ChatService {
       }
     }
 
-    // 零任务团队 @-mention 补会话（mention-target-fix）：resolveMentions 在无 taskId
-    // 时只能降级 no_session（无 task 会话可查），此处对 tmm_ 目标经分派器即建即得
-    // 团队会话，翻 dispatched + 回填 sessionId，使下方 targets 过滤 + dispatch()
-    // 拾取。B2 无 @ 主触发不动；task-mode（effectiveTaskId 非空）不进本分支；
-    // 单成员失败仅日志并保留 no_session，不阻塞其他目标（FR-21 同形）。
-    if (!effectiveTaskId && channel.teamId && triggers.length > 0) {
+    // F-A task-mode @-mention 补会话：buildTrigger 无团队会话时只给 no_session，
+    // 冷启动（有 current task 但尚无 team session）此前直接静默丢弃。本分支对
+    // tmm_ 目标经分派器即建即得团队会话翻 dispatched，与零任务路径同形；单成员
+    // 失败仅日志保留 no_session（FR-21 同形）。queued 拦截在后，不受影响。
+    if (channel.teamId && triggers.length > 0) {
       for (const t of triggers) {
         if (t.status !== 'no_session') continue;
         const memberId = t.instanceId ?? null;
@@ -915,11 +939,7 @@ export class ChatService {
     // 团队私聊无 @ 回退：私聊即与该成员对话，无 mentions 时直接触发
     // DM 对端成员（团队会话即建即得，会话 id 直接回填）。无此分支则
     // triggers 为空 → dispatch 空 targets → worker 永不执行（DM 无流式、无回复）。
-    if (
-      isTeamPrivate &&
-      triggers.length === 0 &&
-      channel.teamMemberId
-    ) {
+    if (isTeamPrivate && triggers.length === 0 && channel.teamMemberId) {
       try {
         const peer = await (
           this.dispatcher as unknown as {
@@ -932,7 +952,10 @@ export class ChatService {
               sessionId: string;
             } | null>;
           }
-        ).buildTeamMemberTrigger(channel.teamId as string, channel.teamMemberId);
+        ).buildTeamMemberTrigger(
+          channel.teamId as string,
+          channel.teamMemberId,
+        );
         if (peer) {
           triggers.push({
             agentId: peer.agentId,
@@ -1077,9 +1100,7 @@ export class ChatService {
             mirrorTargets.push(triggers[idx]);
           }
         }
-      } else if (
-        !(dto.mentions ?? []).some((m) => m.type === 'all')
-      ) {
+      } else if (!(dto.mentions ?? []).some((m) => m.type === 'all')) {
         for (const t of triggers) {
           if (t.status === 'dispatched') mirrorTargets.push(t);
         }
@@ -1164,14 +1185,19 @@ export class ChatService {
       // 快照与群聊优先的终态落库均不适用于 DM 对端直聊。
       const dispatchTaskId = isTeamPrivate
         ? ''
-        : (effectiveTaskId ?? (channel as any).taskId ?? (task as any).id ?? '');
+        : (effectiveTaskId ??
+          (channel as any).taskId ??
+          (task as any).id ??
+          '');
       void this.dispatcher
         .dispatch({
           messageId: message.id,
           channelId,
           taskId: dispatchTaskId,
           ...(channel.teamId ? { teamId: channel.teamId } : {}),
-          ...(dispatchTaskId ? { taskContext: { taskId: dispatchTaskId } } : {}),
+          ...(dispatchTaskId
+            ? { taskContext: { taskId: dispatchTaskId } }
+            : {}),
           text: dto.text,
           targets: targets.map((t) => ({
             agentId: t.agentId,
@@ -1432,8 +1458,9 @@ export class ChatService {
     sourceMessage: MessageRow,
     senderId: string | null,
   ): Promise<void> {
-    let teamMemberId: string | null =
-      target.instanceId?.startsWith('tmm_') ? target.instanceId : null;
+    let teamMemberId: string | null = target.instanceId?.startsWith('tmm_')
+      ? target.instanceId
+      : null;
     let agentId: string = target.agentId;
     if (!teamMemberId) {
       const member = await (this.prisma as any).teamMember.findFirst({
@@ -1457,8 +1484,7 @@ export class ChatService {
         senderType: SENDER_TYPE.user,
         senderId,
         content: sourceMessage.content as Prisma.InputJsonValue,
-        mentions: (sourceMessage.mentions ??
-          []) as Prisma.InputJsonValue,
+        mentions: (sourceMessage.mentions ?? []) as Prisma.InputJsonValue,
         status: MESSAGE_STATUS.sent,
         ...(sourceMessage.attachmentUrl
           ? {
@@ -1587,8 +1613,10 @@ export class ChatService {
           });
         }
         if (!task) {
+          // F-B：fallback 跳过 archived，最新为归档时不再用归档任务占位；
+          // 无可用任务则走下方团队直聊合成上下文（createMessage 同步降级）。
           task = await (this.prisma as any).task.findFirst({
-            where: { teamId },
+            where: { teamId, status: { not: TASK_STATUS.archived } },
             orderBy: { createdAt: 'desc' },
             select: {
               id: true,
@@ -1877,26 +1905,5 @@ export class ChatService {
     const l = Number(limit ?? 50);
     if (!Number.isFinite(l)) return 50;
     return Math.min(Math.max(Math.floor(l), 1), 100);
-  }
-
-  private async seedPrefix(
-    prefix: string,
-    model: {
-      findFirst(args: {
-        orderBy: { id: 'desc' };
-        select: { id: true };
-      }): Promise<{ id: string } | null>;
-    },
-  ): Promise<void> {
-    const last = await model.findFirst({
-      orderBy: { id: 'desc' },
-      select: { id: true },
-    });
-    if (last) {
-      const seq = parseInt(last.id.slice(prefix.length + 1), 10);
-      if (Number.isFinite(seq)) {
-        this.idGen.seed(prefix, seq);
-      }
-    }
   }
 }

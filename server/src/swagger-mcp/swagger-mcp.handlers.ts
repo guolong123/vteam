@@ -19,7 +19,6 @@ import { ModelsService } from '../models/models.service';
 import { QuerySkillsDto } from '../skills/dto/query-skills.dto';
 import { UpdateSkillDto } from '../skills/dto/update-skill.dto';
 import { SkillsService } from '../skills/skills.service';
-import { QueryTasksDto } from '../tasks/dto/query-tasks.dto';
 import { UpdateTaskDto } from '../tasks/dto/update-task.dto';
 import { TasksService } from '../tasks/tasks.service';
 import { CreateToolDto } from '../tools/dto/create-tool.dto';
@@ -159,11 +158,6 @@ export class SwaggerMcpHandlers {
 
     return [
       // ---- tasks（TasksService：读 + 编辑，写状态流转需 userId 不绑定） ----
-      {
-        match: m('get', '/projects/{pid}/tasks'),
-        call: (_, args) =>
-          this.tasks.findAll(String(args.pid), asDto<QueryTasksDto>(args)),
-      },
       {
         match: m('get', '/tasks/{id}'),
         taskIdOf: taskIdFromArgs,

@@ -132,9 +132,14 @@ export class GiteeWebhookAdapter extends MessageAdapter {
     if ((GITEE_BUILTIN_TEMPLATES as Record<string, any>)[e]) return e;
     // hook_name mapping variations: Gitee sends "Push Hook" / "push_hooks" etc
     if (e.includes('tag_push')) return 'tag_push_hooks';
-    if (e === 'push hook' || e === 'push' || e.includes('push_hooks')) return 'push_hooks';
+    if (e === 'push hook' || e === 'push' || e.includes('push_hooks'))
+      return 'push_hooks';
     if (e.includes('issue')) return 'issue_hooks';
-    if (e.includes('merge_request') || e.includes('pull_request') || e.includes('merge request'))
+    if (
+      e.includes('merge_request') ||
+      e.includes('pull_request') ||
+      e.includes('merge request')
+    )
       return 'merge_request_hooks';
     if (e.includes('note') || e.includes('comment')) return 'note_hooks';
     return e;
@@ -156,8 +161,7 @@ export class GiteeWebhookAdapter extends MessageAdapter {
     config: Record<string, any>,
   ): Record<string, string> {
     const fieldMappings = (config as any)?.fieldMappings as
-      | Record<string, any>
-      | undefined;
+      Record<string, any> | undefined;
     if (
       fieldMappings &&
       typeof fieldMappings === 'object' &&
@@ -168,7 +172,11 @@ export class GiteeWebhookAdapter extends MessageAdapter {
       const candidates = [event, key, (event || '').toLowerCase()];
       for (const c of candidates) {
         const perEvent = fieldMappings[c];
-        if (perEvent && typeof perEvent === 'object' && !Array.isArray(perEvent)) {
+        if (
+          perEvent &&
+          typeof perEvent === 'object' &&
+          !Array.isArray(perEvent)
+        ) {
           return perEvent as Record<string, string>;
         }
       }
@@ -185,8 +193,7 @@ export class GiteeWebhookAdapter extends MessageAdapter {
       }
     }
     const legacy = (config as any)?.fieldMapping as
-      | Record<string, string>
-      | undefined;
+      Record<string, string> | undefined;
     if (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) {
       return legacy;
     }

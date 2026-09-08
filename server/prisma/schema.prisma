@@ -55,8 +55,6 @@ model User {
   updatedAt         DateTime  @updatedAt @map("updated_at")
 
   role           Role            @relation(fields: [roleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  projects       Project[]       @relation("UserProjects")
-  projectMembers ProjectMember[]
   taskCreated    Task[]          @relation("TaskCreator")
   agentsCreated  Agent[]         @relation("AgentCreator")
   assignedIssues Issue[]         @relation("IssueAssigneeUser")
@@ -82,42 +80,6 @@ model Role {
 }
 
 // ==================================================================
-// 项目域
-// ==================================================================
-
-model Project {
-  id          String   @id
-  name        String
-  // 项目描述可能超过 VARCHAR(191)，TEXT 承载（K8s 部署 500：value too long for column description）
-  description String?  @db.Text
-  ownerId     String   @map("owner_id")
-  status      String   @default("active")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-
-  owner    User            @relation("UserProjects", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  members  ProjectMember[]
-  tasks    Task[]
-  memories Memory[]
-
-  @@map("projects")
-}
-
-model ProjectMember {
-  id        String   @id
-  projectId String   @map("project_id")
-  userId    String   @map("user_id")
-  role      String
-  joinedAt  DateTime @default(now()) @map("joined_at")
-
-  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-
-  @@unique([projectId, userId], map: "uk_project_members_pid_uid")
-  @@map("project_members")
-}
-
-// ==================================================================
 // 团队域（全局团队 + FIFO 排队，vteam-team-refactor expand 阶段）
 // ==================================================================
 
@@ -126,6 +88,8 @@ model Team {
   name               String   @unique
   description        String?  @db.Text
   reuseSession       Boolean  @default(true) @map("reuse_session")
+  // 托管模式（session-unification Todo 6/9：从 tasks.managedMode 迁入，按团队行读取）
+  managedMode        Boolean  @default(false) @map("managed_mode")
   currentTaskId      String?  @map("current_task_id")
   mainAgentMemberId  String?  @map("main_agent_member_id")
   version            Int      @default(0) @map("version")
@@ -202,16 +166,13 @@ model TeamUserMember {
 
 model Task {
   id                  String    @id
-  projectId           String    @map("project_id")
   title               String
   // 任务描述可能超过 VARCHAR(191)，TEXT 承载（K8s 部署 500：value too long for column description）
   description         String?   @db.Text
   priority            String    @default("medium")
   status              String    @default("pending")
   mainAgentId         String?   @map("main_agent_id")
-  mainAgentInstanceId String?   @map("main_agent_instance_id") // 主 Agent 实例（决策依据，T2 起维护）
-  // 托管模式：开启后成员 question/permission 请求不弹窗给用户，改由主 Agent 经 question_confirm 确认
-  managedMode         Boolean   @default(false) @map("managed_mode")
+  mainAgentInstanceId String?   @map("main_agent_instance_id") // 主 Agent 实例（决策依据，T2 起维护；session-unification 后停止写入，历史值由 Todo 6 迁移置空，列保留）
   // 执行模式（vteam-team-collaboration）：direct|plan，默认 direct（轻量），plan 按需开启
   executionMode       String    @default("direct") @map("execution_mode")
   backgroundDocs      Json?     @map("background_docs")
@@ -226,13 +187,11 @@ model Task {
   completedAt         DateTime? @map("completed_at")
   archivedAt          DateTime? @map("archived_at")
 
-  project                  Project                   @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   creator                  User                      @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   mainAgent                Agent?                    @relation("TaskMainAgent", fields: [mainAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   team                     Team?                     @relation("TaskTeam", fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   currentInTeams           Team[]                    @relation("TeamCurrentTask")
   queue                    TeamQueue?
-  taskAgents               TaskAgent[]
   taskEvents               TaskEvent[]
   sessions                 Session[]
   chatChannels             ChatChannel[]
@@ -245,34 +204,15 @@ model Task {
   messageChannelLinks      TaskMessageChannel[]
   notificationChannelLinks TaskNotificationChannel[]
 
-  @@index([projectId, status], map: "idx_tasks_project_status")
+  @@index([teamId, status], map: "idx_tasks_team_status")
   @@map("tasks")
 }
 
 // 团队成员 = 实例（同一模板 agent 在任务内可多实例，seq 服务端生成防并发重号）
-model TaskAgent {
-  id              String    @id
-  taskId          String    @map("task_id")
-  agentId         String    @map("agent_id") // 模板 agent（继承 name/role/prompt/model）
-  alias           String? // 实例别名（默认「<角色中文名>-<seq>」，服务端生成）
-  seq             Int       @default(1) // 同 agent 同任务内序号（服务端生成，事务内防并发重号）
-  workDir         String?   @map("work_dir") // is_0000000010：实例独立持久化工作目录（创建任务可指定；缺省
-  // /data/worker/<sanitize(agent.name)>，同 agent 多实例追加 -<seq>）
-  joinedAt        DateTime  @default(now()) @map("joined_at")
-  removedAt       DateTime? @map("removed_at")
-  enabled         Boolean   @default(true)
-  overrideModelId String?   @map("override_model_id")
-
-  task     Task      @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  agent    Agent     @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  // 每实例独立会话（10 篇 §3.3；任务详情 instances 需回传会话状态 sessionStatus，真实状态源）
-  sessions Session[]
-
-  @@unique([taskId, agentId, seq], map: "uk_task_agents_task_agent_seq")
-  @@index([taskId, joinedAt], map: "idx_task_agents_task")
-  @@map("task_agents")
-}
-
+// session-unification Todo 6：TaskAgent 模型已删除（迁移 DROP TABLE task_agents）。
+// 反向关系同步删除：Task.taskAgents / Agent.taskAgents / Session.taskAgent。
+// 保留：tasks.main_agent_instance_id 纯字符串列（历史值已置空）；
+// 冻结：uk_sessions_task_agent 约束保留（Session 模型内注释，存量 task 会话行只删不回填）。
 model TaskEvent {
   id         String   @id
   taskId     String   @map("task_id")
@@ -313,10 +253,12 @@ model Session {
   team       Team?       @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent      Agent       @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   worker     Worker?     @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  // 绑任务实例（task_agent_id 已存在列，仅补 Prisma 关系便于任务详情 include sessions 状态；team-mode 下可空）
-  taskAgent  TaskAgent?  @relation(fields: [taskAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  // session-unification Todo 6：TaskAgent 模型已删，taskAgent 关系同步删除；
+  // task_agent_id 纯字符串列保留（历史残留只读，迁移不回填）；uk_sessions_task_agent 见下冻结注释。
   teamMember TeamMember? @relation(fields: [teamMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
+  // FROZEN (session-unification Todo 6)：uk_sessions_task_agent 约束保留冻结——存量 task 会话行只删不回填，
+  // 新写路径恒 taskId/taskAgentId=null（Todo 4/10 已收敛），本约束不再承载新语义，不得删除或复用。
   @@unique([taskId, taskAgentId], map: "uk_sessions_task_agent")
   @@unique([teamMemberKey], map: "uk_sessions_team_member")
   @@index([teamId], map: "idx_sessions_team_id")
@@ -514,7 +456,6 @@ model Agent {
   creator           User              @relation("AgentCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   skills            AgentSkill[]
   toolEffects       AgentToolEffect[]
-  taskAgents        TaskAgent[]
   teamMembers       TeamMember[]
   sessions          Session[]
   channels          ChatChannel[]
@@ -779,12 +720,10 @@ model RealtimeEvent {
   type      String
   scopeType String   @map("scope_type")
   scopeId   String?  @map("scope_id")
-  projectId String?  @map("project_id")
   payload   Json
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([scopeType, scopeId, id], map: "idx_realtime_events_scope_id")
-  @@index([projectId], map: "idx_realtime_events_project_id")
   @@map("realtime_events")
 }
 
@@ -840,15 +779,15 @@ model PlanTask {
 }
 
 // ==================================================================
-// 记忆域（memory-management：me_ 前缀主键；task|project|global 字符串枚举，
-// 双库兼容——不声明 Prisma enum；task 级冗余存 projectId 便于项目内检索）
+// 记忆域（memory-management：me_ 前缀主键；task|team|global 字符串枚举，
+// 双库兼容——不声明 Prisma enum；task 级冗余存 teamId 便于团队内检索）
 // ==================================================================
 
 model Memory {
   id               String    @id // me_ 前缀，服务层 IdGeneratorService 生成
-  level            String // task|project|global（字符串枚举，双库兼容——不声明 Prisma enum）
+  level            String // task|team|global（字符串枚举，双库兼容——不声明 Prisma enum）
   taskId           String?   @map("task_id")
-  projectId        String?   @map("project_id") // task 级冗余存 projectId 便于项目内检索
+  teamId           String?   @map("team_id") // team 级归属；task 级冗余存所属团队便于团队内检索
   content          String    @db.Text
   description      String?   @map("description") @db.VarChar(255) // 模型携带的30字摘要，用于索引/列表首屏，缺省回落 content.slice(0,120)
   tags             Json? // 标签数组
@@ -864,11 +803,10 @@ model Memory {
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
   task    Task?    @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  project Project? @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([level], map: "idx_memories_level")
   @@index([taskId, createdAt], map: "idx_memories_task_time")
-  @@index([projectId, createdAt], map: "idx_memories_project_time")
+  @@index([teamId, createdAt], map: "idx_memories_team_time")
   @@map("memories")
 }
 
