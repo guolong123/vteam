@@ -1,0 +1,14 @@
+{
+ "id": "m_0000000026",
+ "senderType": "agent",
+ "text": "我是测试-1，负责用例设计、缺陷验证与测试结论输出。",
+ "partTypes": [
+  "step-start",
+  "reasoning",
+  "text",
+  "step-finish"
+ ],
+ "messageIDs": [
+  "msg_07a82f465001G2AMKpzah14vZu"
+ ]
+}

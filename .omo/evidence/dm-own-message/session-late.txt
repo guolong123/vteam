@@ -1,0 +1,4 @@
+source: session
+items: 2
+msg_07a82f450001S6MPxY2w00FD3g user '【团队上下文】你当前在团队 tm_0000000001 直聊（无任务）。需要群聊历史时调用 chat_history（传 teamId）；需要向群聊发布时调用 group_post（传 teamId）。\n\nown-msg-probe-178'
+msg_07a82f465001G2AMKpzah14vZu agent '我是测试-1，负责用例设计、缺陷验证与测试结论输出。'

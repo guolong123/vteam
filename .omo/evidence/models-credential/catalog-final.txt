@@ -1,0 +1,6 @@
+provider_id	enabled	COUNT(*)
+opencode	0	5
+opencode	1	7
+opencode-go	0	8
+opencode-go	1	27
+zhipuai	0	15

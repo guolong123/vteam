@@ -35,6 +35,10 @@ import {
   ServeMessage,
   V1Driver,
 } from '../driver/v1-driver';
+import {
+  ensureBrowserProfileDir,
+  resolveBrowserScopeId,
+} from '../browser/browser-tools';
 import { trackInstanceEnd, trackInstanceStart } from '../instance-tracker';
 import { WORKER_EVENT_TYPES } from '../protocol/worker-protocol';
 import { collectFileArtifacts } from './artifact-extract';
@@ -148,6 +152,13 @@ export interface ExecServerOptions {
   serverBaseUrl?: string;
   /** 日志输出；默认 console。 */
   logger?: Logger;
+  /**
+   * Browser profile root（worker workDir，如 /data/vteam-worker）：runExecution
+   * 按 opencode 会话 id 预建 browser-profiles/<scope>/（per-agent 隔离落点，
+   * 见 browser-tools.ts）。缺省 = 不预建（shim 运行时仍会自建；单测默认关闭，
+   * 避免触碰真实文件系统）。
+   */
+  browserProfileRoot?: string;
 }
 
 /** 请求体解析失败（非 JSON / 缺字段）。 */
@@ -206,6 +217,7 @@ export class ExecServer {
   private readonly serveErrorReader: (() => string[]) | undefined;
   private readonly maxBodyBytes: number;
   private readonly serverBaseUrl: string;
+  private readonly browserProfileRoot: string;
   private readonly logger: Logger;
   private server: http.Server | null = null;
 
@@ -219,6 +231,7 @@ export class ExecServer {
     this.serveErrorReader = options.serveErrorReader;
     this.maxBodyBytes = options.maxBodyBytes ?? 1024 * 1024;
     this.serverBaseUrl = (options.serverBaseUrl ?? '').replace(/\/+$/, '');
+    this.browserProfileRoot = options.browserProfileRoot ?? '';
     this.logger = options.logger ?? console;
   }
 
@@ -502,6 +515,20 @@ export class ExecServer {
       }
       if (!opencodeSessionId) {
         opencodeSessionId = await this.driver.createSession(payload.model);
+      }
+      // Per-agent browser isolation (option A)：按 opencode 会话预建 profile
+      // 落点 browser-profiles/<scope>/（scope 派生规则见 browser-tools.ts
+      // resolveBrowserScopeId；shim 运行时以 ToolContext.sessionID 取同一 scope，
+      // 此处预建只为早失败可观测——best-effort，失败不阻断执行）。
+      if (this.browserProfileRoot) {
+        ensureBrowserProfileDir(
+          this.browserProfileRoot,
+          resolveBrowserScopeId({
+            sessionId: opencodeSessionId,
+            directory: payload.directory,
+            agent: payload.agent,
+          }),
+        );
       }
       const ctx: Record<string, string | undefined> = {
         taskId: payload.taskId,

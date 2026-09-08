@@ -40,6 +40,7 @@ export interface TeamDto {
   name: string;
   description: string | null;
   reuseSession: boolean;
+  managedMode: boolean;
   currentTaskId: string | null;
   currentTaskTitle?: string | null;
   currentTaskStatus?: string | null;
@@ -72,6 +73,7 @@ export interface UpdateTeamPayload {
   name?: string;
   description?: string | null;
   reuseSession?: boolean;
+  managedMode?: boolean;
   mainAgentMemberId?: string | null;
   version?: number;
 }

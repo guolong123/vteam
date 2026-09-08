@@ -1,0 +1,6 @@
+aiagents-compose-worker aiagents-worker 2026-09-08 15:40:24 +0800 CST Up 25 seconds
+aiagents-compose-server aiagents-server 2026-09-08 14:26:26 +0800 CST Up About an hour (healthy)
+aiagents-compose-web aiagents-web 2026-09-08 10:40:23 +0800 CST Up 5 hours (healthy)
+aiagents-compose-db mysql:8 2026-09-08 08:13:22 +0800 CST Up 7 hours (healthy)
+buildx_buildkit_ketadb-amd64-builder0 moby/buildkit:buildx-stable-1 2026-04-10 19:39:03 +0800 CST Up 9 days
+buildx_buildkit_cross-builder0 moby/buildkit:buildx-stable-1 2026-04-09 20:55:04 +0800 CST Up 9 days

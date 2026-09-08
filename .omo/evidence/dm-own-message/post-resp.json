@@ -1,0 +1,27 @@
+{
+    "message": {
+        "id": "m_0000000025",
+        "channelId": "c_0000000004",
+        "senderType": "user",
+        "senderId": "u_admin",
+        "senderInstanceId": null,
+        "content": {
+            "text": "own-msg-probe-1788761797 \u8bf7\u7528\u4e00\u53e5\u8bdd\u4ecb\u7ecd\u4f60\u81ea\u5df1",
+            "parts": []
+        },
+        "mentions": [],
+        "attachmentUrl": null,
+        "attachmentName": null,
+        "attachmentType": null,
+        "status": "sent",
+        "createdAt": "2026-09-07T06:16:37.460Z"
+    },
+    "triggers": [
+        {
+            "agentId": "a_tester",
+            "instanceId": "tmm_0000000005",
+            "sessionId": "s_0000000018",
+            "status": "dispatched"
+        }
+    ]
+}

@@ -847,15 +847,15 @@ export default function TeamSessionPage() {
     });
   };
 
-  /* ---------- 当前任务开关 + 评审 ---------- */
+  /* ---------- 当前任务开关 + 评审（托管模式为团队级：PATCH /teams/:id） ---------- */
   const managedModeMutation = useMutation({
-    mutationFn: (managed: boolean) => api.patch<TaskDetail>(`/tasks/${currentTaskId}`, { managedMode: managed }),
+    mutationFn: (managed: boolean) => teamsApi.update(teamId, { managedMode: managed }),
     onSuccess: (updated) => {
-      queryClient.setQueryData<TaskDetail>(["task", currentTaskId], updated);
-      queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+      queryClient.setQueryData<TeamDto>(["team", teamId], updated);
+      queryClient.invalidateQueries({ queryKey: ["team", teamId] });
     },
     onError: (err) => {
-      console.error("[TeamSession] toggle managed mode failed", { teamId, taskId: currentTaskId, error: err });
+      console.error("[TeamSession] toggle managed mode failed", { teamId, error: err });
     },
   });
   const executionModeMutation = useMutation({

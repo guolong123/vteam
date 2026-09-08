@@ -1,0 +1,1 @@
+avail total: 34 | zhipuai: 0 | opencode-go: 27 | opencode/: 7

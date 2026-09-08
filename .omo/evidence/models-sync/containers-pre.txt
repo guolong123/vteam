@@ -1,0 +1,4 @@
+/aiagents-compose-server image=aiagents-server created=2026-09-08T02:40:12.500593734Z started=2026-09-08T02:40:28.505098216Z
+/aiagents-compose-web image=aiagents-web created=2026-09-08T02:40:23.416113668Z started=2026-09-08T02:40:35.735886906Z
+/aiagents-compose-worker image=aiagents-worker created=2026-09-08T00:13:22.451698791Z started=2026-09-08T00:14:13.285125472Z
+/aiagents-compose-db image=mysql:8 created=2026-09-08T00:13:22.322532864Z started=2026-09-08T00:13:25.68525283Z

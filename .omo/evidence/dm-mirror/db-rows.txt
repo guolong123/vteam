@@ -1,0 +1,7 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	channel_id	sender_type	sender_id	task_id	JSON_EXTRACT(content,'$.text')	mentions
+m_0000000064	c_0000000001	user	u_seed_admin	t_0000000003	"@????-1 dm-mirror????????????"	[{"type": "agent", "agentId": "a_product", "instanceId": "tmm_0000000001"}]
+m_0000000065	c_0000000005	user	u_seed_admin	NULL	"@????-1 dm-mirror????????????"	[{"type": "agent", "agentId": "a_product", "instanceId": "tmm_0000000001"}]
+mysql: [Warning] Using a password on the command line interface can be insecure.
+dm_user_rows_after
+2

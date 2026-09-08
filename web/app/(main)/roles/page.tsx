@@ -201,17 +201,17 @@ function roleThemeFor(role: Role): RoleTheme {
   return roleThemes.custom;
 }
 
-/** 角色显示名（对齐原型 label：平台管理员 / 项目成员 / 自定义角色名） */
+/** 角色显示名（对齐原型 label：平台管理员 / 团队成员 / 自定义角色名） */
 function roleLabel(role: Role): string {
   if (role.name === "admin") return "平台管理员";
-  if (role.name === "member") return "项目成员";
+  if (role.name === "member") return "团队成员";
   return role.name;
 }
 
 /** 角色描述（对齐原型 desc；自定义角色用岗位化文案） */
 function roleDesc(role: Role): string {
   if (role.name === "admin") {
-    return "管理平台账号 / 项目生命周期 / 角色模板 / 全局安全与权限策略";
+    return "管理平台账号 / 团队管理 / 角色模板 / 全局安全与权限策略";
   }
   if (role.name === "member") {
     return "在所属团队内参与任务、群聊、产出物与 Agent 协作";

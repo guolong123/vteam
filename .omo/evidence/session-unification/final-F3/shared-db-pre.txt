@@ -1,0 +1,1 @@
+PRE teams=1 tasks=3 sessions=20 (aiagents shared DB, read-only)

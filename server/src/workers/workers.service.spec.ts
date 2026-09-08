@@ -63,6 +63,7 @@ describe('WorkersService', () => {
   let credentialCrypto: { decrypt: jest.Mock };
   let modelsService: {
     syncFromWorkerCapabilities: jest.Mock;
+    syncLiveModels: jest.Mock;
     findCatalogByRef: jest.Mock;
   };
 
@@ -142,6 +143,9 @@ describe('WorkersService', () => {
     credentialCrypto = { decrypt: jest.fn().mockReturnValue('sk-raw-token') };
     modelsService = {
       syncFromWorkerCapabilities: jest.fn().mockResolvedValue(2),
+      syncLiveModels: jest
+        .fn()
+        .mockResolvedValue({ synced: 0, disabled: 0, liveModels: [] }),
       findCatalogByRef: jest.fn().mockResolvedValue({
         id: 'md_0000000001',
         providerID: 'opencode-go',
@@ -285,6 +289,32 @@ describe('WorkersService', () => {
 
       expect(result.workerId).toBe('w_0000000001');
       expect(modelsService.syncFromWorkerCapabilities).toHaveBeenCalled();
+    });
+
+    it('models-credential：register 成功后触发 syncLiveModels（重注册即重收敛可见性）', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      const dto = registerDto();
+      dto.capabilities = {
+        maxInstances: 5,
+        skills: [],
+        tools: [],
+        executableModels: ['opencode/big-pickle'],
+      };
+
+      await service.register('secret-token', dto);
+
+      expect(modelsService.syncLiveModels).toHaveBeenCalledTimes(1);
+    });
+
+    it('models-credential：syncLiveModels 抛错不阻断注册（worker 仍上线）', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      modelsService.syncLiveModels.mockRejectedValue(new Error('sync down'));
+      const dto = registerDto();
+
+      const result = await service.register('secret-token', dto);
+
+      expect(result.workerId).toBe('w_0000000001');
+      expect(modelsService.syncLiveModels).toHaveBeenCalledTimes(1);
     });
 
     it('C5（R5）：注册成功后回放全部未吊销凭据（decrypt + enqueueCommand）', async () => {

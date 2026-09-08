@@ -7,6 +7,10 @@ export interface DocDef {
   parent?: string;
   order: number;
   artifactId?: string;
+  /** 非 md 文件：小写扩展名（docx/pdf/xlsx/pptx/png/jpg/...），前端据此决定渲染方式 */
+  fileExt?: string;
+  /** 非 md 文件：可访问 URL（/uploads/...），用于下载/预览 */
+  fileUrl?: string;
 }
 
 export interface TocItem {

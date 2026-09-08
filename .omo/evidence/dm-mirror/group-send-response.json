@@ -1,0 +1,33 @@
+{
+    "message": {
+        "id": "m_0000000064",
+        "channelId": "c_0000000001",
+        "senderType": "user",
+        "senderId": "u_seed_admin",
+        "senderInstanceId": null,
+        "content": {
+            "text": "@\u4ea7\u54c1\u7ecf\u7406-1 dm-mirror\u9a8c\u8bc1\uff1a\u8bf7\u7528\u4e00\u53e5\u8bdd\u56de\u590d\u6536\u5230",
+            "parts": []
+        },
+        "mentions": [
+            {
+                "type": "agent",
+                "agentId": "a_product",
+                "instanceId": "tmm_0000000001"
+            }
+        ],
+        "attachmentUrl": null,
+        "attachmentName": null,
+        "attachmentType": null,
+        "status": "sent",
+        "createdAt": "2026-09-07T07:46:59.696Z"
+    },
+    "triggers": [
+        {
+            "agentId": "a_product",
+            "instanceId": "ta_0000000013",
+            "sessionId": "s_0000000013",
+            "status": "dispatched"
+        }
+    ]
+}

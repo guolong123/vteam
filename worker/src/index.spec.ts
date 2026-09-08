@@ -20,6 +20,7 @@ import {
   handleGitCredentials,
   handleModelCredentials,
   onCommands,
+  resolveExecutableModels,
   resolveModels,
   warnLoopbackAdvertiseHost,
 } from './index';
@@ -237,6 +238,65 @@ describe('resolveModels（C2：serve 模型列表探测与降级）', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe('resolveExecutableModels（models-truth：opencode models CLI 可执行集）', () => {
+  const CLI_OUT = [
+    'opencode/big-pickle',
+    'opencode/ling-3.0-flash-fin-free',
+    'opencode/mimo-v2.5-free',
+    'opencode/muse-spark-1.2-contributor-free',
+    'opencode/muse-spark-1.3-contributor-free',
+    'opencode/nemotron-3-ultra-free',
+    'opencode/nemotron-3.5-lightning-free',
+  ].join('\n');
+
+  it('成功：逐行解析 providerID/modelID，去重保序', () => {
+    expect(resolveExecutableModels(() => `${CLI_OUT}\nopencode/big-pickle\n`)).toEqual([
+      'opencode/big-pickle',
+      'opencode/ling-3.0-flash-fin-free',
+      'opencode/mimo-v2.5-free',
+      'opencode/muse-spark-1.2-contributor-free',
+      'opencode/muse-spark-1.3-contributor-free',
+      'opencode/nemotron-3-ultra-free',
+      'opencode/nemotron-3.5-lightning-free',
+    ]);
+  });
+
+  it('非法行丢弃：空行/无斜杠/含空白不进入上报', () => {
+    expect(
+      resolveExecutableModels(() => 'opencode/big-pickle\n\njunk\ntwo words/x\n'),
+    ).toEqual(['opencode/big-pickle']);
+  });
+
+  it('探测抛错/空输出 → undefined（不携带，server 回退拉取，不阻断注册）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(
+        resolveExecutableModels(() => {
+          throw new Error('opencode: command not found');
+        }),
+      ).toBeUndefined();
+      expect(resolveExecutableModels(() => '')).toBeUndefined();
+      expect(resolveExecutableModels(() => '  \njunk\n')).toBeUndefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('buildCapabilities 透传 executableModels；缺省不携带', async () => {
+    const caps = await buildCapabilities(
+      4199,
+      'http://worker',
+      undefined,
+      undefined,
+      undefined,
+      5,
+      ['opencode/big-pickle'],
+    );
+    expect(caps.executableModels).toEqual(['opencode/big-pickle']);
+    expect((await buildCapabilities(4199, 'http://worker')).executableModels).toBeUndefined();
   });
 });
 

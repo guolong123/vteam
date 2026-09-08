@@ -1,0 +1,3 @@
+sync==cli: True
+avail==cli: True
+bogus disabled: 5/5

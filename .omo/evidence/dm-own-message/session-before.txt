@@ -1,0 +1,10 @@
+source: session
+items: 8
+msg_07a541136001QEGj3SIumdBRP3 user '【任务上下文】你的当前任务 ID：t_0000000003。需要群聊历史/文档库/任务信息时，调用 vteam 的 chat_history / doclib '
+msg_07a54113c001ihcdRyNXN0L5Ds agent ''
+msg_07a541d49001RH0qPyfBs3g2nh agent ''
+msg_07a5424e80015RYzPyRM14V15E agent '\n\n'
+msg_07a543618001r0RZ2QeGipeAwc agent '已在群聊完成自报信息。'
+msg_07a626a3b001n0oaldF0JOLSKi user '【任务上下文】你的当前任务 ID：t_0000000003。需要群聊历史/文档库/任务信息时，调用 vteam 的 chat_history / doclib '
+msg_07a626ab5001kz0rixoeXEB52N agent ''
+msg_07a627c72001rISOv9Wjxqe14a agent '已回复群聊。'

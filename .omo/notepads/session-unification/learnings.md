@@ -178,3 +178,70 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - `docker compose up -d --build web` 仅 web：aiagents-web 5ff199c05bec(08:12)→73dd8b727bdc(08:57)，healthy，:13001 200；db/server/worker uptime 连续未动。 served chunk 直 grep `dm-tab-spin` 命中 page-0a58d5732c3dd5b0.js——stale-bundle 排除法优先于反复点页面。
 - Spinner 抓拍教训（诚实未命中）：复用会话 DM dispatch→首回复实测恒 ~3s（3 次 POST 201 全周期完成），MCP roundtrip 数秒＋150ms 页内 observer 仍可能因“分派排队超 30s”（P0 风暴期 worker 饱和）而零命中。逻辑链已审计闭环：dispatcher 同步 broadcast AGENT_LOADING{instanceId: teamMemberId} team-scope → onAgentLoading 按 instanceId??agentId 入表 → isTabLoading 查 instKey/m.id/tmmAlias（DB senderInstanceId=tmm_0000000003 佐证同域）；附带机制 live 目击（红点 dm-tab-unread-tmm_0000000001/2/3＋会话运行中＋成员卡）。下次抓 spinner：重置成员会话后 cold-start（30s+ 窗口）或 observer 命中即自动截图脚本。
 - 并发 P0 时段 footprint 纪律：DM 回复经 group_post 工具会镜像进群（"在" m_0000000109 等），私聊验证也会漏群消息；误投群 1 条（active tab 切走后 fill+Enter 跟随当前 tab）。已在 web-rebuild-2/NOTES.md 全量披露未擅删；教训：先 GET activeTab/placeholder 断言再 send，且 P0 进行中尽量只观察不触发。
+
+## roles-rename — 角色页去项目化文案 (2026-09-08)
+
+- 改动仅 roles/page.tsx 3 行：roleLabel member `项目成员`→`团队成员`（含 204 行注释同步），roleDesc admin `项目生命周期`→`团队管理`；匹配全走 `role.name ===` 键（grep 实证），seed 键/permissionScope/IMPLEMENTED_PERMISSIONS/`projects.create` 零动。
+- sweep 结论：web 内 `项目成员` 仅此一处 UI 命中；server 残留全是注释/swagger（plans/docs-site/platform-mcp，属后端不碰）；users 页/app-shell ROLE_LABEL 无项目字样；`project_manager` 系 Agent 角色（tools/register、teams/new、tokens）一律不碰；nav-top-bar 默认 `userRole="项目管理员"` 仅 user=null 回退（app-shell 登录态恒传显式 roleLabel），属全局 chrome 非 roles/member flow，按 scoped-diff 纪律不动并如实记录。
+- e2e 零旧串断言（pages.spec roles 用例只查 testid），故 e2e 只读不改；验证链 tsc 0 + eslint 0（空日志）→ `up -d --build web`（web 镜像 bb681f8e，:13001 200；init/server 镜像连带重建属已知行为，server 重启后 health 200，db/worker uptime 未动）→ /tmp 外置 config 因模块解析失败，改放 web/ 根临时 spec+config（跑完即删，e2e/ 只读）→ live 断言新串可见+旧串 0 命中+截图。
+- Adversarial：dirty_worktree（scoped diff 仅 roles 页 3 行；tasks/new、session 页、use-sse 等为 sibling lane foreign，不碰）/ misleading_success_output（live :13001 断言+截图，非 dev）/ stale_state（新镜像 Created ~1min + 容器 Started 02:40:35Z 双时间戳）。
+
+## team-loading-filter — team: scope 丢 team: 前缀 loading (2026-09-08)
+
+- 根因单测先行：`team:` 分支旧 `payload.taskId === id` 对 `team:<id>` 恒 false（dispatcher 经 toExecutionScope 广播恒带前缀）；repro-pre.log 4 红（loading/error/status/question）5 绿，红项恰为四类前缀事件，与“红点正常走 channel: 分支”现象自洽。
+- 修法：`taskId === id || taskId === \`team:${id}\`` 双形状；SSEEvent 信封无 scopeType/scopeId（仅 id/type/payload/timestamp），故不依赖信封匹配，注释写明取舍。task:/channel:/global 三分支审计后不动：task: 对裸 taskId（toExecutionScope 有 taskId 即返裸 id）+ 会话页已不再订阅 task:；channel: 按 channelId 与前缀正交。
+- web 无 jest/vitest 且禁新依赖 → 回归用 node 内置 test/runner（`web/hooks/use-sse.scope.test.mjs`），从 shipped 源码实时提取 matchesScope 转译后测，非拷贝；`node --test` 9/9 绿。eslint 有 1 条 `no-assign-module-variable`（变量名 `module` 撞 Next 规则）→ 改名即过；use-sse.ts:253 exhaustive-deps 警告为 pre-existing（F2 画像内），不动。
+- `up -d --build web` 会连带 rebuild+recreate init/server 镜像与容器（源未改，内容同），db/worker 不动；server 重启后须验 health 200 + 登录 + 团队数（本次 4 个 intact），证据如实记 init/server Recreate。stale_state 对冲：源码 mtime（09:24）< 新镜像 Created（09:29:30，8129c8f0b523 ← 73dd8b727bdc）。
+- Live 抓 spinner：先调 reset-session 造 cold-start（s_0000000012）拉长窗口；DM tab 先断言 placeholder（“发送私聊给 …”）再 send 防误投群；命中后立刻全页截图 + tab 元素截图 + DOM 取证（visible testids + spinner innerHTML/aria-label）。旧代码下 spinner 永不可见，故 live 命中本身即新包生效证明。console 仅已知 /plans?taskId= 404 噪音。
+
+## managed-toggle — 托管模式团队级 rewiring (2026-09-08)
+
+- 死写定位：`managedModeMutation` PATCH `/tasks/:id` + 面板读 `task.managedMode` + 创建表单 POST 带 `managedMode`，三处全死（后端已搬 team，tasks 端忽略）；readers（question.managedMode 三处）不动。
+- 修法四文件：teams.ts DTO/update 加 managedMode（GET 本来就带，toTeamDto 输出确认后前端类型补齐即可）；mutation 经 `teamsApi.update(teamId, …)`，缓存键 `["task", id]`→`["team", teamId]`；面板 switch 读 `team?.managedMode ?? false`（props 形状不变）；TaskForm 为文件内私有单调用者，grep 确认后直接删 props/state/POST 字段。
+- 验证链：API PATCH→re-GET 双向持久 + Playwright live :13001（seed-admin，tm_0000000001）点 switch→断言 PATCH body→reload 后 `aria-checked` 保持→翻回原值零残留；证据 `.omo/evidence/managed-toggle/`（fix-note/tsc/eslint/playwright/api-persist/rebuild log + 3 截图）。
+- Adversarial：dirty_worktree（`web/hooks/use-sse.ts` + ledger/learnings 改动为先前 foreign 状态，scoped diff 仅 4 文件，未碰）；stale_state（`aiagents-compose-web` Created 01:53:19Z > rebuild 窗口，server/db/worker uptime 未动）；playwright 临时 spec/config 放 web/ 根跑完即删（e2e/ 只读未碰，git 无残留）。
+
+## models-sync — agent-config 下拉 stale 根因与可见性权威修复 (2026-09-08)
+
+- 根因双写者：可见性状态（models.enabled + worker_model_availabilities）有两个写者——live 权威 `syncLiveModels`（models.service.ts:444-555）与 worker 注册快照 `syncFromWorkerCapabilities → upsertCatalogModel`（356-390/629-649，后者新建行 enabled 缺省 true，schema @default(true)）。worker capabilities.models 是启动时快照（live 实测数千条），上游免费模型轮换后快照变 stale：注册即把 stale opencode 行以 enabled=true+availability 写回目录，page（available-models → listCatalogModels enabled∩availability，agents.service.ts:300-304）即显示 stale；仅手动 POST /sync 收敛（本次 sync disabled 6205，总 6213 行；之后 providerID=opencode 恰 8 行 md_1688-95）。
+- 修法（仅 models.service.ts）：快照路径新建 opencode/* 行 `enabled:false`（候选登记不授可见性，授權唯一归 sync 的 upsertAndEnable；非 opencode/local/custom/admin 语义不动）；同步清理 deleteMany 加 `model:{enabled:false}`（stale 快照不再 strip live 已确认行的 availability，CONF-01 假模型清理保留——假模型本就新建 disabled）。page 读路径零改（已是同一真相源），web/ 零硬编码模型表（grep 空命中实证，STATIC_AVAILABLE_MODELS=[]）。
+- 用户断言核验：`opencode/nemotron-3.5-lightning-free` 不在 sync liveModels 8 名单 → 按上游真相判 stale，排除正确。
+- spec 现状：models.service.spec 的 2 个 listCatalogModels 旧测在 availability 门加上后即红（mock 缺 findMany，属 T13 models 预存红一部分），本次顺手补齐（findMany mock + 行 id + select 含 id 断言对齐实现）；controller DTO×3 + workers git×5 共 8 红经 stash 前后对照证实为 pre-existing foreign，与本 diff 无关。
+- 验证链：jest models+agents 75/75（含 failing-first 2 红→绿：新建可见性 2 测 pre-fix 红，log 留存）+ server tsc/eslint 空 + web tsc 空/eslint 0 err；`up -d --build server` 仅 server 镜像 04659a6f→e25c6ea9（web/worker 镜像与 db/worker/web 容器 StartedAt 未动，teams=4 intact）；live :13001 Playwright：dropdown DOM 恰 8 live、4 stale 零命中（DROPDOWN_IDS 落 playwright.log）+ 双截图（原生 select 收起态，目检 "未设置" 下拉存在）。
+- 教训：原生 <select> 截图恒收起——可视化证据以 DOM 断言 + 日志为准，截图仅作页面状态佐证；workdir 陷阱：git pathspec 相对 repo 根，server/ 下跑 jest、根下跑 git stash（本次空转两次才对齐）。
+
+## models-truth — sync 真值源倒向 worker 可执行集 (2026-09-08)
+
+- 根因定锤三证据：旧 serve（00:14Z 启动）`/api/model` 26 行 8 active 恰等于 sync 8 bogus；新 serve（04:03Z 启动，同 Dockerfile pin 1.18.16）`/api/model` 31 行 7 active 恰等于 CLI 7——serve 注册表是启动时一次性加载、免费轮换即 stale；CLI（`opencode models`=Provider.list()，sst/opencode models.ts）每次 fresh 加载 + 鉴权过滤 = 可执行真值，且 1.18.29/1.18.16 双版本一致。Zen 公共端点（70 models，含全部 CLI 7）不含 ling-3.0-tiny/laguna/longcat/north-mini-code 四者 = 退市铁证。
+- 排除 naive-(a)：capabilities.models 是 7507 行无 key junk（V1Driver.listModels 注释/spec 写 key 过滤但实现全量 push，v1-driver.spec 2 红 pre-existing 在 HEAD 即红，本 diff 零碰该文件）——snapshot 永不授可见性，否则复活数千 junk。
+- 修法（server-only 不够，worker-report 唯一精确收敛）：worker `resolveExecutableModels()` spawnSync `opencode models`（15s 超时，仿 mcp-status-probe；失败/空→undefined 永不断言零可用）→ capabilities.executableModels（register/reRegister 全覆盖）；server DTO 加同名字段（whitelist 会 strip，不加 registration 链路丢字段——workers.service 逻辑零改）；syncLiveModels 优先 union 上报集、旧 worker 回退 /api/model；upsert+enable/孤儿禁用/快照 enabled:false 三语义全保留。
+- disabled 6205→0→1720 是预期剪枝（5 bogus + 1715 无凭据 junk，providers 全 configured=False 实证；total disabled 7925=6205+1720），非数据丢失；local/custom/凭据 provider 由既有孤儿规则跳过（未碰）。
+- 首 sync 空结果是正确行为：新 worker 容器仍在 boot probes（offline）→ offline 不剪枝；online 后重跑即 synced:7/disabled:1720/live=CLI 7。status 检查教训：sync 空先查 worker status 再怀疑代码。
+- 旧容器 CLI 1.18.29 vs Dockerfile pin 1.18.16：opencode 会自更新，容器内二进制版本会漂移——版本断言以 `opencode models` 输出为准，不以 --version 为准。
+- 脏 worktree 纪律：7 文件 scoped（models.service+spec、register-worker.dto、worker index+spec、protocol+contract），roles/session/use-sse/teams/TeamRightPanel/tasks-new 全系 sibling foreign；pre-existing 红（workers.service git-creds×5、v1-driver×2）以“零 diff 文件 + HEAD 即红”定性，不碰。
+- 原生 select 可视化仍以 DOM 断言为准（DROPDOWN_IDS 落 playwright.log），tmp spec/config 放 web/ 根跑完即删。
+
+## models-credential — 凭据可见性双触发收敛 (2026-09-08)
+
+- 用户症状根因是 STALE SYNC STATE 非逻辑 bug：DB 时间戳铁证——opencode-go 键 06:13:15Z 建，8 行 dis 禁于 03:19Z/04:05Z（当时无凭据，禁得对），27 行于 06:13:41Z 被用户手动 sync 救回。可见性重算此前只靠手动 POST /sync。
+- 双触发缺一不可（时序证明）：save 时 worker 还没拿到 key（heartbeat 下发~10s 后），saveATP同步旧 offering 无可见效果；reRegister 时 offering 已变但快照只恢复 availability 永不 enable——故 set/revoke 尾 + register 尾各 best-effort sync 一次，失败只 warn 永不阻断主流程（保存/注册）。
+- 凭据密钥零接触：live 验证用一次性 dummy key（value 永不落盘/日志，仅服务端 masked fingerprint），用户真 key 全程未读未用；事后 revoke 清零，残留仅 revoked 审计行（by design）+ worker auth.json 经 replay/restart 自愈。
+- 中止 run 收尾纪律：先查残留（model_credentials 表多出 mc_0000000002 dummy）再验证；revoke 本身即新代码路径的 live 演练。
+- 空 sync/空 prune 都是正常态：offline→空回（verified earlier）；converged 重 sync→零写（verified：re-register 后 DB 无 churn，log 无剪枝行）。
+- 脏 worktree 下 revert-check 标准动作：root 下 `git stash push -- <file>`→server/ 下跑 jest→pop；server/ 下直接 stash 会 pathspec 翻倍空转（已踩两次）。
+- Playwright 断言用 `go.length>0 + 关键 id + bogus 缺席` 三段式，比精确计数更抗轮换漂移（本 session 轮换稳定故 34 精确亦成立）。
+
+## worker-browser-diagnosis — agent-browser singleton contention (2026-09-08)
+- WHAT: agent-browser (Vercel Rust) + Chrome-for-Testing (x64) / apt chromium fallback (ARM64); NOT playwright/CDP-in-worker. Dockerfile:23,46-57; shim spawnSync bare in worker/src/browser/browser-tools.ts:67. Headless default; only Chrome flags AGENT_BROWSER_ARGS=--no-sandbox,--disable-gpu (Dockerfile:78, compose:144).
+- ISOLATION: none. No --session/--profile/--context/--cdp in worker/src (grep zero); single <workDir>/.opencode/tools/browser.ts (browser-tools.ts:78-87) on singleton serve (index.ts:555-559); concurrency = maxInstances=5 ses_* on one serve (exec-server.ts:13-14) with counter-only instance-tracker.ts (no lock).
+- CONTENTION: shared default daemon/profile in shared HOME /root (worker_home volume, compose:165) -> single active tab + single user-data-dir lock (DevToolsActivePort). Upstream #896/#1378: second launch with same profile attaches to first Chrome -> tab hijack/accumulation, nav timeout, cookie leak (--session alone != storage isolation, needs BrowserContext/--context per #1068/#1114).
+- VERDICT: cannot multi-open; breaks = tab hijack, @eX ref invalidation, cookie leak, concurrent open timeout. MIN SURFACE: inject --session/--profile|--context per ses_ in renderBrowserToolsFile, scope user-data-dir per agent under /data/vteam-worker, add mutex/queue or BrowserContext, handle daemon lifecycle/ports.
+
+## worker-browser-isolation — per-agent isolation option A (2026-09-08)
+- CLI 实证优先：`agent-browser 0.27.0` 有 `--session`（独立 daemon sock/tabs/cookies/storage，skill 文档原话）+ `--profile <path>`（真实 user-data-dir，DevToolsActivePort 锁在 dir 内），无 `--context`——诊断篇的 BrowserContext 假设被证伪，本版只需两 flag。
+- 身份透传关键：opencode plugin `ToolContext`（tool.d.ts）自带 `sessionID/directory/agent`——shim `execute(args, context)` 直接取，无全局可变 current-session，无需按执行重写共享工具文件（单 serve 单 browser.ts，多 ses_ 共存）。
+- `--profile ignored: daemon already running` 系良性（首次 open 已 honored、dir 落盘 Default/ 等；后继命令不能 retarget 已正确隔离的 live daemon）。
+- 并发无需 mutex：双 `--session` 并发 open 均 exit 0 + 独立 .sock（诊断篇担心的全局锁不存在）；`close --all` shim 内拒掉；profile 保留（登录持久，volume 持久化）。
+- 脏 worktree 纪律：index.ts/contract.spec 等含 sibling lane（models-truth）foreign hunks，本 diff 限定 browser-tools/exec-server/index.ts 一行 wiring + 新 spec；`git stash` 跑单测须在 repo 根且只列 tracked 文件（untracked 新 spec 会致 pathspec 失败）。
+- v1-driver.spec 2 红经 stash 证实 HEAD 即红（foreign pre-existing）；server eslint 6 errors 全在 chat.service(.spec).ts foreign 文件；worker 无 eslint 配置（tsc 即门）。
+- live 证明须进 NEW worker 容器（rebuild 后 Created 变更）跑真实 CLI；cookie/localStorage 值一律 redact（名断言留存）。

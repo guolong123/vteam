@@ -1,0 +1,5 @@
+NAME                      IMAGE             COMMAND                   SERVICE   CREATED        STATUS                  PORTS
+aiagents-compose-db       mysql:8           "docker-entrypoint.s…"   db        15 hours ago   Up 15 hours (healthy)   3306/tcp, 33060/tcp
+aiagents-compose-server   aiagents-server   "docker-entrypoint.s…"   server    11 hours ago   Up 11 hours (healthy)   0.0.0.0:13000->3000/tcp, [::]:13000->3000/tcp
+aiagents-compose-web      aiagents-web      "docker-entrypoint.s…"   web       11 hours ago   Up 11 hours (healthy)   0.0.0.0:13001->3000/tcp, [::]:13001->3000/tcp
+aiagents-compose-worker   aiagents-worker   "docker-entrypoint.s…"   worker    15 hours ago   Up 15 hours             0.0.0.0:14000->4000/tcp, [::]:14000->4000/tcp, 0.0.0.0:14848->4848/tcp, [::]:14848->4848/tcp

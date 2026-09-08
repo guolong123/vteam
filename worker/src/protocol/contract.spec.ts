@@ -82,6 +82,26 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {
     expect(parsed.capabilities.models).toEqual(['opencode-go/deepseek-v4-flash', 'opencode/glm-5.1']);
   });
 
+  it('models-truth：capabilities.executableModels 序列化/反序列化后完整（CLI 可执行集上报）', () => {
+    const registration: RegisterWorkerPayload = {
+      workerId: 'w_0000000005',
+      opencodeVersion: '1.18.29',
+      capabilities: {
+        maxInstances: 1,
+        skills: [],
+        tools: [],
+        executableModels: ['opencode/big-pickle', 'opencode/nemotron-3.5-lightning-free'],
+      },
+      load: { instances: 0 },
+    };
+
+    const parsed = JSON.parse(JSON.stringify(registration)) as RegisterWorkerPayload;
+    expect(parsed.capabilities.executableModels).toEqual([
+      'opencode/big-pickle',
+      'opencode/nemotron-3.5-lightning-free',
+    ]);
+  });
+
   it('C2：defaultModelId 序列化/反序列化后完整（配置 WORKER_DEFAULT_MODEL 上报链路）', () => {
     const registration: RegisterWorkerPayload = {
       workerId: 'w_0000000004',

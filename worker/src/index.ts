@@ -394,6 +394,55 @@ export async function resolveModels(
   return undefined;
 }
 
+/** `opencode models` CLI 探测超时 ms（184MB Bun 二进制冷启动 ~1-2s，15s 兜底防悬挂）。 */
+export const EXECUTABLE_MODELS_PROBE_TIMEOUT_MS = 15_000;
+
+/**
+ * 可执行模型探测：运行 `opencode models`（裸命令 = 全 provider 鉴权过滤后的可用集，
+ * 即 Provider.list() 真值，与 agent 实际执行时可用模型一致）并解析为 id 列表。
+ * models-sync 真值源：serve /api/model 是启动时加载的注册表快照（免费轮换后变 stale），
+ * CLI 进程每次 fresh 加载当前 offering，故以此为准。
+ * - 探测失败（二进制缺失/超时/非零退出）→ undefined（不携带，server 回退 /api/model 拉取）
+ * - 输出为空/无合法行 → undefined（不断言“零可用”，避免误导 sync 剪枝全部）
+ * - 非法行（无 `/` 分隔）丢弃；去重保序
+ * probe 可注入便于单测；默认 spawnSync 同步执行（注册路径本就同步组装）。
+ */
+export function resolveExecutableModels(
+  probe: () => string | undefined = defaultExecutableModelsProbe,
+): string[] | undefined {
+  let stdout: string | undefined;
+  try {
+    stdout = probe();
+  } catch (err) {
+    console.warn(`[worker] 可执行模型探测失败（注册降级不带 executableModels）: ${(err as Error).message}`);
+    return undefined;
+  }
+  if (!stdout) {
+    return undefined;
+  }
+  const ids = [...new Set(
+    stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.indexOf('/') > 0 && !/\s/.test(line)),
+  )];
+  return ids.length > 0 ? ids : undefined;
+}
+
+function defaultExecutableModelsProbe(): string | undefined {
+  const result = spawnSync('opencode', ['models'], {
+    encoding: 'utf8',
+    timeout: EXECUTABLE_MODELS_PROBE_TIMEOUT_MS,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`opencode models 退出码 ${result.status}: ${(result.stderr ?? '').trim()}`);
+  }
+  return result.stdout ?? undefined;
+}
+
 /**
  * T6：注册能力声明（T10 细化并发上限/技能清单；当前单实例 + 已注入的 git 工具族）。
  * F2 C2：serve 实际监听端口必须随注册上报——随机端口（OPENCODE_SERVE_PORT=0）场景下
@@ -417,6 +466,7 @@ export async function buildCapabilities(
   models?: string[],
   execPort?: number,
   maxInstances = 5,
+  executableModels?: string[],
 ): Promise<WorkerCapabilities> {
   const base = advertiseHost.replace(/\/+$/, '');
   const browserTools = isAgentBrowserAvailable() ? BROWSER_TOOLS.map((t) => t.name) : [];
@@ -429,6 +479,7 @@ export async function buildCapabilities(
     baseUrl: port !== null ? `${base}:${port}` : undefined,
     ...(models !== undefined ? { models } : {}),
     ...(execPort !== undefined ? { execPort } : {}),
+    ...(executableModels !== undefined ? { executableModels } : {}),
   };
 }
 
@@ -448,6 +499,7 @@ export async function buildRegisterOptions(
   injected: InjectReport = EMPTY_INJECT_REPORT,
   models?: string[],
   execPort?: number,
+  executableModels?: string[],
 ): Promise<RegistryClientOptions> {
   const capabilities = await buildCapabilities(
     port,
@@ -456,6 +508,7 @@ export async function buildRegisterOptions(
     models,
     execPort,
     config.workerMaxInstances,
+    executableModels,
   );
   return {
     serverUrl: config.serverUrl,
@@ -537,6 +590,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   // C3（CONF-01）：stability=2——预热期中间态假模型列表需连续 2 次探测一致才上报，杜绝假模型回流。
   const registerCurrent = async (): Promise<RegisterResponse | null> => {
     const models = await resolveModels(driver, { stability: 2 });
+    const executableModels = resolveExecutableModels();
     const result = await registerWorkerWithRetry(
       await buildRegisterOptions(
         config,
@@ -546,6 +600,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         lastInjectReport,
         models,
         execPort,
+        executableModels,
       ),
       { logger: { warn: (message: string) => console.warn(`[worker] ${message}`) } },
     ).catch((err: Error) => {
@@ -735,6 +790,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     workerToken: config.workerToken,
     firstTokenTimeoutMs: config.workerFirstTokenTimeoutMs,
     serverBaseUrl: config.serverUrl,
+    browserProfileRoot: config.workDir,
     // T17：serve 日志模型错误检测数据源——awaitCompletion 每轮轮询读 recentErrors()，
     // 命中模型 API 错误关键词（Rate limit/Free usage 等只写 stderr 不透传
     // message.info.error）时提前 abort + 抛错（错误文本透传前端，不再空等首字超时）

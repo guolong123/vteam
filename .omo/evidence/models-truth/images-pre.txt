@@ -1,0 +1,4 @@
+aiagents-server:latest ID=e25c6ea912e5 Created=2026-09-08 11:38:53 +0800 CST
+aiagents-init:latest ID=167fd2f204ab Created=2026-09-08 11:38:53 +0800 CST
+aiagents-web:latest ID=bb681f8edecd Created=2026-09-08 10:39:12 +0800 CST
+aiagents-worker:latest ID=925b809162d4 Created=2026-09-08 08:13:16 +0800 CST

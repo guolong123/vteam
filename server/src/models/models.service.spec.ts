@@ -36,6 +36,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     workerModelAvailability: {
       deleteMany: jest.Mock;
       upsert: jest.Mock;
+      findMany: jest.Mock;
       count: jest.Mock;
     };
     worker: {
@@ -114,6 +115,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       workerModelAvailability: {
         deleteMany: jest.fn(),
         upsert: jest.fn(),
+        findMany: jest.fn(),
         count: jest.fn().mockResolvedValue(0),
       },
       worker: {
@@ -536,11 +538,12 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         create: { workerId: 'w_0000000001', modelId: 'md_0000000001' },
         update: {},
       });
-      // 同步清理：删除该 worker 不在本次上报列表中的旧 availability
+      // 同步清理：删除该 worker 不在本次上报列表中的旧 availability（仅未启用行）
       expect(prisma.workerModelAvailability.deleteMany).toHaveBeenCalledWith({
         where: {
           workerId: 'w_0000000001',
           modelId: { notIn: ['md_0000000001', 'md_0000000002'] },
+          model: { enabled: false },
         },
       });
     });
@@ -582,6 +585,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
           modelId: {
             notIn: realModelRefs.map((ref) => `md_${ref.split('/')[1]}`),
           },
+          model: { enabled: false },
         },
       });
     });
@@ -594,12 +598,61 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       expect(prisma.workerModelAvailability.upsert).not.toHaveBeenCalled();
       expect(prisma.workerModelAvailability.deleteMany).not.toHaveBeenCalled();
     });
+
+    it('models-sync：worker 上报 stale 快照中的未知 opencode 模型 → 目录新建行 enabled=false（未 live 确认不进 dropdown）', async () => {
+      prisma.model.findUnique.mockResolvedValue(null);
+      prisma.model.create.mockResolvedValue({
+        ...modelRowFull,
+        id: 'md_0000000001',
+        providerID: 'opencode',
+        modelID: 'stale-model-x',
+      });
+      prisma.workerModelAvailability.upsert.mockResolvedValue({});
+      prisma.workerModelAvailability.deleteMany.mockResolvedValue({ count: 0 });
+
+      const n = await service.syncFromWorkerCapabilities('w_0000000001', [
+        'opencode/stale-model-x',
+      ]);
+
+      expect(n).toBe(1);
+      // 注册路径只做候选登记，不授予可见性；可见性唯一由 syncLiveModels 授予
+      expect(prisma.model.create).toHaveBeenCalledWith({
+        data: {
+          id: 'md_0000000001',
+          providerID: 'opencode',
+          modelID: 'stale-model-x',
+          name: 'stale-model-x',
+          enabled: false,
+        },
+      });
+    });
+
+    it('models-sync：同步清理仅删未启用行的 availability，已启用（live 确认）行保留（stale 快照不 strip 新模型）', async () => {
+      prisma.model.findUnique.mockResolvedValue({ id: 'md_live' });
+      prisma.workerModelAvailability.upsert.mockResolvedValue({});
+      prisma.workerModelAvailability.deleteMany.mockResolvedValue({ count: 0 });
+
+      await service.syncFromWorkerCapabilities('w_0000000001', [
+        'opencode/live-model',
+      ]);
+
+      expect(prisma.workerModelAvailability.deleteMany).toHaveBeenCalledWith({
+        where: {
+          workerId: 'w_0000000001',
+          modelId: { notIn: ['md_live'] },
+          model: { enabled: false },
+        },
+      });
+    });
   });
 
   describe('listCatalogModels（available-models 目录数据源）', () => {
     it('enabled=true 全部模型 → [{id: providerID/modelID, name}]（仅可用模型：免费或已配置凭据）', async () => {
       prisma.model.findMany.mockResolvedValue([modelRowFull]);
       prisma.modelCredential.findMany.mockResolvedValue([credentialRow]);
+      prisma.workerModelAvailability.findMany.mockResolvedValue([
+        { modelId: 'md_0000000001' },
+      ]);
 
       const result = await service.listCatalogModels();
 
@@ -607,6 +660,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         where: { enabled: true },
         orderBy: { createdAt: 'asc' },
         select: {
+          id: true,
           providerID: true,
           modelID: true,
           name: true,
@@ -624,22 +678,26 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
 
     it('未配置凭据的付费模型不返回，仅免费或已配置模型可见', async () => {
       const freeRow = {
+        id: 'md_free',
         providerID: 'opencode',
         modelID: 'free-model',
         name: 'Free',
       };
       const localRow = {
+        id: 'md_local',
         providerID: 'ollama',
         modelID: 'local-model',
         name: 'Local',
         providerType: 'local',
       };
       const paidNoCredRow = {
+        id: 'md_paid',
         providerID: 'opencode-go',
         modelID: 'paid-model',
         name: 'Paid',
       };
       const paidWithCredRow = {
+        id: 'md_paid2',
         providerID: 'zhipu',
         modelID: 'paid2',
         name: 'Paid2',
@@ -653,6 +711,12 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       prisma.modelCredential.findMany.mockResolvedValue([
         { providerID: 'zhipu' },
       ]);
+      prisma.workerModelAvailability.findMany.mockResolvedValue([
+        { modelId: 'md_free' },
+        { modelId: 'md_local' },
+        { modelId: 'md_paid' },
+        { modelId: 'md_paid2' },
+      ]);
 
       const result = await service.listCatalogModels();
 
@@ -664,6 +728,227 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       expect(
         result.find((r) => r.id === 'opencode-go/paid-model'),
       ).toBeUndefined();
+    });
+
+    it('models-sync：无 availability 的行不进 dropdown（sync 删孤儿 availability 即隐藏）', async () => {
+      prisma.model.findMany.mockResolvedValue([
+        {
+          id: 'md_live',
+          providerID: 'opencode',
+          modelID: 'big-pickle',
+          name: 'Big Pickle',
+        },
+        {
+          id: 'md_stale',
+          providerID: 'opencode',
+          modelID: 'stale-x',
+          name: 'Stale',
+        },
+      ]);
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.workerModelAvailability.findMany.mockResolvedValue([
+        { modelId: 'md_live' },
+      ]);
+
+      const result = await service.listCatalogModels();
+
+      expect(result).toEqual([
+        { id: 'opencode/big-pickle', name: 'Big Pickle' },
+      ]);
+    });
+  });
+
+  describe('syncLiveModels（live 拉取 + 孤儿禁用：sync-then-list 一致性）', () => {
+    const realFetch = (globalThis as any).fetch;
+
+    afterEach(() => {
+      (globalThis as any).fetch = realFetch;
+    });
+
+    it('models-sync：live 上架启用 + stale 孤儿禁用并删 availability（list 随后仅见 live）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_0000000001', capabilities: { baseUrl: 'http://worker:4199' } },
+      ]);
+      (globalThis as any).fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          data: [
+            {
+              id: 'big-pickle',
+              providerID: 'opencode',
+              status: 'active',
+              enabled: true,
+            },
+          ],
+        }),
+      });
+      prisma.model.findUnique.mockResolvedValue(null);
+      prisma.model.create.mockResolvedValue({
+        ...modelRowFull,
+        id: 'md_0000000001',
+        providerID: 'opencode',
+        modelID: 'big-pickle',
+      });
+      prisma.workerModelAvailability.upsert.mockResolvedValue({});
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.model.findMany.mockResolvedValue([
+        { id: 'md_stale', providerID: 'opencode', providerType: 'cloud' },
+      ]);
+      prisma.model.update.mockResolvedValue({});
+      prisma.workerModelAvailability.deleteMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.syncLiveModels();
+
+      expect(result).toEqual({
+        synced: 1,
+        disabled: 1,
+        liveModels: ['opencode/big-pickle'],
+      });
+      expect(prisma.model.update).toHaveBeenCalledWith({
+        where: { id: 'md_stale' },
+        data: { enabled: false },
+      });
+      expect(prisma.workerModelAvailability.deleteMany).toHaveBeenCalledWith({
+        where: { modelId: 'md_stale' },
+      });
+    });
+
+    it('models-sync：无在线 worker → 空结果不剪枝（offline 不误删）', async () => {
+      prisma.worker.findMany.mockResolvedValue([]);
+
+      const result = await service.syncLiveModels();
+
+      expect(result).toEqual({ synced: 0, disabled: 0, liveModels: [] });
+      expect(prisma.model.update).not.toHaveBeenCalled();
+      expect(prisma.workerModelAvailability.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('models-truth：worker 上报 executableModels（opencode models CLI 真值）→ sync 优先采用，不再拉取 stale /api/model', async () => {
+      const executableModels = [
+        'opencode/big-pickle',
+        'opencode/ling-3.0-flash-fin-free',
+        'opencode/mimo-v2.5-free',
+        'opencode/muse-spark-1.2-contributor-free',
+        'opencode/muse-spark-1.3-contributor-free',
+        'opencode/nemotron-3-ultra-free',
+        'opencode/nemotron-3.5-lightning-free',
+      ];
+      prisma.worker.findMany.mockResolvedValue([
+        {
+          id: 'w_0000000001',
+          capabilities: {
+            baseUrl: 'http://worker:4199',
+            executableModels,
+          },
+        },
+      ]);
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          data: [
+            {
+              id: 'ling-3.0-tiny-free',
+              providerID: 'opencode',
+              status: 'active',
+              enabled: true,
+            },
+          ],
+        }),
+      });
+      (globalThis as any).fetch = fetchMock;
+      prisma.model.findUnique.mockResolvedValue(null);
+      prisma.model.create.mockImplementation(async (args: any) => ({
+        ...modelRowFull,
+        id: `md_new_${args.data.modelID}`,
+        providerID: args.data.providerID,
+        modelID: args.data.modelID,
+      }));
+      prisma.workerModelAvailability.upsert.mockResolvedValue({});
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.model.findMany.mockResolvedValue([]);
+      prisma.workerModelAvailability.deleteMany.mockResolvedValue({ count: 0 });
+
+      const result = await service.syncLiveModels();
+
+      // 上报 worker 免拉取：stale serve 注册表不再作为真值
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result.liveModels).toEqual(executableModels);
+      expect(result.synced).toBe(executableModels.length);
+      expect(result.disabled).toBe(0);
+    });
+
+    it('models-truth：上报 worker 的 executableModels 含非法行 → 仅合法 provider/model 行进入 live 集', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        {
+          id: 'w_0000000001',
+          capabilities: {
+            baseUrl: 'http://worker:4199',
+            executableModels: [
+              'opencode/big-pickle',
+              '',
+              'junk-without-slash',
+              null,
+              42,
+            ],
+          },
+        },
+      ]);
+      const fetchMock = jest.fn();
+      (globalThis as any).fetch = fetchMock;
+      prisma.model.findUnique.mockResolvedValue(null);
+      prisma.model.create.mockImplementation(async (args: any) => ({
+        ...modelRowFull,
+        id: `md_new_${args.data.modelID}`,
+        providerID: args.data.providerID,
+        modelID: args.data.modelID,
+      }));
+      prisma.workerModelAvailability.upsert.mockResolvedValue({});
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.model.findMany.mockResolvedValue([]);
+      prisma.workerModelAvailability.deleteMany.mockResolvedValue({ count: 0 });
+
+      const result = await service.syncLiveModels();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result.liveModels).toEqual(['opencode/big-pickle']);
+    });
+
+    it('models-truth：旧 worker 未上报 executableModels → 回退 /api/model 拉取（兼容）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_0000000001', capabilities: { baseUrl: 'http://worker:4199' } },
+      ]);
+      (globalThis as any).fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          data: [
+            {
+              id: 'big-pickle',
+              providerID: 'opencode',
+              status: 'active',
+              enabled: true,
+            },
+          ],
+        }),
+      });
+      prisma.model.findUnique.mockResolvedValue(null);
+      prisma.model.create.mockResolvedValue({
+        ...modelRowFull,
+        id: 'md_0000000001',
+        providerID: 'opencode',
+        modelID: 'big-pickle',
+      });
+      prisma.workerModelAvailability.upsert.mockResolvedValue({});
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.model.findMany.mockResolvedValue([]);
+      prisma.workerModelAvailability.deleteMany.mockResolvedValue({ count: 0 });
+
+      const result = await service.syncLiveModels();
+
+      expect(result).toEqual({
+        synced: 1,
+        disabled: 0,
+        liveModels: ['opencode/big-pickle'],
+      });
     });
   });
 
@@ -832,6 +1117,79 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
 
       expect(result).toMatchObject({ configured: true });
       warnSpy.mockRestore();
+    });
+  });
+
+  describe('models-credential（凭据变更即时收敛可见性）', () => {
+    it('setCredential 保存成功后触发 syncLiveModels（未配前被禁用的凭据模型随 sync 回 enable）', async () => {
+      prisma.model.findUnique.mockResolvedValue(modelRow);
+      prisma.model.findMany.mockResolvedValue([{ providerType: 'cloud' }]);
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.modelCredential.create.mockResolvedValue(credentialRow);
+      const syncSpy = jest
+        .spyOn(service, 'syncLiveModels')
+        .mockResolvedValue({ synced: 1, disabled: 0, liveModels: [] });
+
+      await service.setCredential('md_0000000001', 'sk-raw-token');
+
+      expect(syncSpy).toHaveBeenCalledTimes(1);
+      syncSpy.mockRestore();
+    });
+
+    it('setCredential 后 sync 失败不阻断保存（返回脱敏视图）', async () => {
+      prisma.model.findUnique.mockResolvedValue(modelRow);
+      prisma.model.findMany.mockResolvedValue([{ providerType: 'cloud' }]);
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.modelCredential.create.mockResolvedValue(credentialRow);
+      const syncSpy = jest
+        .spyOn(service, 'syncLiveModels')
+        .mockRejectedValue(new Error('sync offline'));
+      const warnSpy = jest
+        .spyOn(service['logger'], 'warn')
+        .mockImplementation(() => {});
+
+      const result = await service.setCredential(
+        'md_0000000001',
+        'sk-raw-token',
+      );
+
+      expect(result).toMatchObject({ configured: true });
+      expect(syncSpy).toHaveBeenCalledTimes(1);
+      syncSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('revokeCredential 后触发 syncLiveModels（吊销即时剪枝）', async () => {
+      prisma.model.findUnique.mockResolvedValue(modelRow);
+      prisma.modelCredential.findUnique.mockResolvedValue(credentialRow);
+      prisma.modelCredential.update.mockResolvedValue({
+        ...credentialRow,
+        revokedAt: new Date(),
+      });
+      const syncSpy = jest
+        .spyOn(service, 'syncLiveModels')
+        .mockResolvedValue({ synced: 0, disabled: 1, liveModels: [] });
+
+      await service.revokeCredential('md_0000000001');
+
+      expect(syncSpy).toHaveBeenCalledTimes(1);
+      syncSpy.mockRestore();
+    });
+
+    it('revokeCredentialByProvider 后触发 syncLiveModels', async () => {
+      prisma.modelCredential.findUnique.mockResolvedValue(credentialRow);
+      prisma.modelCredential.update.mockResolvedValue({
+        ...credentialRow,
+        revokedAt: new Date(),
+      });
+      const syncSpy = jest
+        .spyOn(service, 'syncLiveModels')
+        .mockResolvedValue({ synced: 0, disabled: 1, liveModels: [] });
+
+      await service.revokeCredentialByProvider('opencode-go');
+
+      expect(syncSpy).toHaveBeenCalledTimes(1);
+      syncSpy.mockRestore();
     });
   });
 

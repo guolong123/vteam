@@ -1,0 +1,2 @@
+m_0000000027 user fix-verify-1788762148 请用两句话介绍你的测试专长
+triggers: [('a_tester', 'dispatched')]

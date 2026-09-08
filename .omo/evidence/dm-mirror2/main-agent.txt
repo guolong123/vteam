@@ -1,0 +1,10 @@
+id	main_agent_instance_id	main_agent_id	team_id	status
+t_0000000003	NULL	NULL	tm_0000000001	pending
+id	main_agent_member_id
+tm_0000000001	NULL
+id	agent_id	alias	seq
+tmm_0000000003	a_architect	???-1	1
+tmm_0000000004	a_developer	???-1	1
+tmm_0000000001	a_product	????-1	1
+tmm_0000000002	a_project_manager	????-1	1
+tmm_0000000005	a_tester	??-1	1

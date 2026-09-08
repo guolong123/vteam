@@ -4,9 +4,9 @@
 /**
  * 任务创建页（vteam-team-refactor Task 12）
  * =============================================
- * - 左栏任务表单：标题* / 描述 / 背景文档上传 / 优先级 / 托管模式 / 执行模式（同原型）
+ * - 左栏任务表单：标题* / 描述 / 背景文档上传 / 优先级 / 执行模式（同原型；托管模式为团队级，不在此设置）
  * - 右栏团队选择：团队下拉（GET /teams）+ 选中团队成员预览（只读）+ resetAfterComplete 勾选
- * - 提交：POST /tasks {teamId, resetAfterComplete?, title, description, priority, managedMode, executionMode, backgroundDocs}
+ * - 提交：POST /tasks {teamId, resetAfterComplete?, title, description, priority, executionMode, backgroundDocs}
  * - 移除 agents / 主 Agent 面板（团队域已全局复用）
  */
 import { useMemo, useState, useRef } from "react";
@@ -69,11 +69,11 @@ const executionModes: { value: ExecutionMode; label: string; desc: string }[] = 
 /* ================================ 左栏：任务表单 ================================ */
 function TaskForm({
   title, onTitleChange, description, onDescriptionChange, priority, onPriorityChange,
-  managedMode, onManagedModeChange, executionMode, onExecutionModeChange,
+  executionMode, onExecutionModeChange,
   titleError, docs, onRemoveDoc, uploading, uploadError, onUploadFile, onDismissUploadError,
 }: {
   title: string; onTitleChange: (v: string) => void; description: string; onDescriptionChange: (v: string) => void;
-  priority: Priority; onPriorityChange: (v: Priority) => void; managedMode: boolean; onManagedModeChange: (v: boolean) => void;
+  priority: Priority; onPriorityChange: (v: Priority) => void;
   executionMode: ExecutionMode; onExecutionModeChange: (v: ExecutionMode) => void; titleError: string | null;
   docs: BackgroundDoc[]; onRemoveDoc: (url: string) => void; uploading: boolean; uploadError: string | null;
   onUploadFile: (file: File) => void; onDismissUploadError: () => void;
@@ -124,17 +124,6 @@ function TaskForm({
         <select id="priority-select" data-testid="priority-select" value={priority} onChange={(e) => onPriorityChange(e.target.value as Priority)} aria-label="优先级" style={{ ...inputBase, width: 200, cursor: "pointer" }}>
           {priorities.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
-          <span role="switch" aria-checked={managedMode} data-testid="managed-mode-toggle" onClick={() => onManagedModeChange(!managedMode)} style={{ width: 40, height: 22, borderRadius: 11, border: "none", backgroundColor: managedMode ? "#2563EB" : neutral[300], position: "relative", flexShrink: 0, cursor: "pointer", transition: "background-color .2s" }}>
-            <span style={{ position: "absolute", top: 2, left: managedMode ? 20 : 2, width: 18, height: 18, borderRadius: "50%", backgroundColor: "var(--color-surface)", transition: "left .2s", boxShadow: shadow.sm }} />
-          </span>
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            <label style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800], cursor: "pointer" }}>托管模式</label>
-            <span style={{ fontSize: fontSize.sm, color: neutral[400] }}>开启后，成员提问/权限请求由主 Agent 确认，不再弹窗打扰</span>
-          </div>
-        </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column" }}>
         <label htmlFor="execution-mode-select" style={fieldLabel}>执行模式</label>
@@ -262,7 +251,6 @@ export default function TaskCreatePage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<Priority>("中");
-  const [managedMode, setManagedMode] = useState(false);
   const [executionMode, setExecutionMode] = useState<ExecutionMode>("direct");
   const [selectedMessageChannelIds, setSelectedMessageChannelIds] = useState<string[]>([]);
   const [selectedNotificationChannelIds, setSelectedNotificationChannelIds] = useState<string[]>([]);
@@ -309,7 +297,6 @@ export default function TaskCreatePage() {
         description: description || undefined,
         priority: PRIORITY_API[priority],
         backgroundDocs: backgroundDocs.map((d) => ({ name: d.name, url: d.url })),
-        managedMode,
         executionMode,
         teamId: selectedTeamId,
         ...(resetAfterComplete ? { resetAfterComplete: true } : {}),
@@ -332,7 +319,6 @@ export default function TaskCreatePage() {
             title={title} onTitleChange={setTitle}
             description={description} onDescriptionChange={setDescription}
             priority={priority} onPriorityChange={setPriority}
-            managedMode={managedMode} onManagedModeChange={setManagedMode}
             executionMode={executionMode} onExecutionModeChange={setExecutionMode}
             titleError={titleError} docs={backgroundDocs} onRemoveDoc={handleRemoveDoc}
             uploading={uploadMutation.isPending} uploadError={uploadError}

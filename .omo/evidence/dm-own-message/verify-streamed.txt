@@ -1,0 +1,8 @@
+source: session items: 7
+m_0000000017 user sent '你好，请用一句话介绍一下你自己' parts: 0
+m_0000000018 user sent '@测试-1 请用一句话介绍一下你自己' parts: 0
+m_0000000019 agent failed '已回复群聊。' parts: 7
+m_0000000025 user sent 'own-msg-probe-1788761797 请用一句话介绍你自己' parts: 0
+m_0000000026 agent sent '我是测试-1，负责用例设计、缺陷验证与测试结论输出。' parts: 4
+m_0000000027 user sent 'fix-verify-1788762148 请用两句话介绍你的测试专长' parts: 0
+m_0000000028 agent sent '我擅长基于验收标准设计全场景测试用例，覆盖正常流、边界值和异常输入。同时能发现缺陷并创建 issue，跟踪修复与回归验证。' parts: 4

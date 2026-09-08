@@ -379,8 +379,15 @@ export class ModelsService implements OnModuleInit {
     if (merged > 0) {
       // 同步清理：删除该 worker 本次未再上报的旧 availability（假模型随最新列表移除）。
       // catalogIds 去重：同一模型重复上报时 notIn 避免重复值。
+      // models-sync 可见性权威：仅清理未启用行的 availability——已启用（live 确认/
+      // admin 启用）行的 availability 即使不在某次 stale 快照中也保留，strip 权归
+      // syncLiveModels 孤儿禁用（其删 availability 与 enabled:false 同步）。
       const removed = await this.prisma.workerModelAvailability.deleteMany({
-        where: { workerId, modelId: { notIn: [...new Set(catalogIds)] } },
+        where: {
+          workerId,
+          modelId: { notIn: [...new Set(catalogIds)] },
+          model: { enabled: false },
+        },
       });
       this.logger.log(
         `worker ${workerId} 上报模型合并入库：${merged} 个（目录 + availability），清理未再上报的旧 availability ${removed.count} 条`,
@@ -437,9 +444,15 @@ export class ModelsService implements OnModuleInit {
   }
 
   /**
-   * Live 同步：实时拉取在线 worker 的 opencode 模型（GET /provider），与目录校正。
+   * Live 同步：worker 可执行集与目录校正（models-truth 真值源）。
    * - 无在线 worker → 不做剪枝，仅返回空结果（避免 offline 时误删）
-   * - 有在线 worker → union 所有 worker 的 live 模型，upsert 到目录（不存在则创建，存在则保证 enabled=true），并对已无任何 worker 持有且未配置凭据的孤儿模型置 enabled=false（软禁用，不删 ModelCredential，apikey 为 provider 粒度不受影响）
+   * - 真值优先级：worker 上报的 capabilities.executableModels（`opencode models`
+   *   CLI 输出 = Provider.list() 鉴权过滤后的真实可用集，fresh 进程每次加载当前
+   *   offering）> serve /api/model 拉取（serve 启动时加载的注册表快照，免费轮换
+   *   后变 stale——旧逻辑唯一真值，致 5 个退市免费模型驻留 dropdown）。
+   *   未上报 executableModels 的旧 worker 仍走 /api/model 拉取（兼容），与上报集 union。
+   * - 可见性唯一归 sync：upsertAndEnable 授予 + 孤儿禁用；快照路径仍只做 enabled:false
+   *   候选登记（不复活 stale 行）。
    */
   async syncLiveModels(): Promise<{
     synced: number;
@@ -454,7 +467,26 @@ export class ModelsService implements OnModuleInit {
       return { synced: 0, disabled: 0, liveModels: [] };
     }
     const liveSet = new Set<string>();
+    const legacyWorkers: typeof onlineWorkers = [];
     for (const w of onlineWorkers) {
+      const caps =
+        (w.capabilities as {
+          baseUrl?: string;
+          executableModels?: unknown;
+        } | null) ?? null;
+      const reported = caps?.executableModels;
+      if (Array.isArray(reported)) {
+        for (const raw of reported) {
+          if (typeof raw === 'string') {
+            const id = raw.trim();
+            if (id.indexOf('/') > 0 && !/\s/.test(id)) liveSet.add(id);
+          }
+        }
+      } else {
+        legacyWorkers.push(w);
+      }
+    }
+    for (const w of legacyWorkers) {
       const caps = (w.capabilities as { baseUrl?: string } | null) ?? null;
       const baseUrl = caps?.baseUrl ?? null;
       if (!baseUrl) continue;
@@ -625,7 +657,14 @@ export class ModelsService implements OnModuleInit {
     };
   }
 
-  /** 目录 upsert：按 (providerID, modelID) 唯一键查，存在复用；否则新建（name 缺省用 modelID 末段）。 */
+  /**
+   * 目录 upsert（worker 注册快照路径专用）：按 (providerID, modelID) 唯一键查，
+   * 存在复用（不碰 enabled）；否则新建。
+   * models-sync 可见性权威：快照上报 ≠ live 确认——新建的 opencode/* 行
+   * `enabled:false`（候选登记，不进 available-models/dropdown），可见性唯一由
+   * syncLiveModels 经 upsertAndEnableCatalogModel 授予；非 opencode 行保持
+   * `enabled` 缺省（local/custom/凭据模型的既有语义不动）。
+   */
   private async upsertCatalogModel(
     providerID: string,
     modelID: string,
@@ -643,6 +682,7 @@ export class ModelsService implements OnModuleInit {
         providerID,
         modelID,
         name: modelID,
+        ...(providerID === 'opencode' ? { enabled: false } : {}),
       },
     });
     return row.id;
@@ -788,6 +828,7 @@ export class ModelsService implements OnModuleInit {
           placeholder,
           targetWorkerIds,
         );
+        await this.resyncAfterCredentialChange();
         return this.toView(row);
       }
       throw new BadRequestException({
@@ -829,6 +870,7 @@ export class ModelsService implements OnModuleInit {
       trimmedToken,
       targetWorkerIds,
     );
+    await this.resyncAfterCredentialChange();
     return this.toView(row);
   }
 
@@ -894,6 +936,7 @@ export class ModelsService implements OnModuleInit {
     this.logger.log(
       `模型凭据吊销：model=${modelId} provider=${providerID} fingerprint=${row.fingerprint}`,
     );
+    await this.resyncAfterCredentialChange();
     return this.toView(row);
   }
 
@@ -922,7 +965,24 @@ export class ModelsService implements OnModuleInit {
     this.logger.log(
       `模型凭据吊销（provider 粒度）：provider=${providerID} fingerprint=${row.fingerprint}`,
     );
+    await this.resyncAfterCredentialChange();
     return this.toView(row);
+  }
+
+  /**
+   * 凭据变更后可见性重收敛（models-credential）：configuredSet 变化会改变孤儿禁用
+   * 判定——未配前被禁用的凭据模型需回 enable，已吊销 provider 的模型需剪枝；两者都只
+   * 有 syncLiveModels 能做（快照路径永不授可见性），故此处 best-effort 触发一次。
+   * 失败只 warn 不抛错：凭据已落库生效，手动 POST /models/sync 可补收敛。
+   */
+  private async resyncAfterCredentialChange(): Promise<void> {
+    try {
+      await this.syncLiveModels();
+    } catch (err) {
+      this.logger.warn(
+        `凭据变更后可见性重收敛失败（不阻断，手动 POST /models/sync 可补）: ${(err as Error).message}`,
+      );
+    }
   }
 
   /** 由 model id 解析 providerID；model 不存在 → 404 MODEL_NOT_FOUND。 */

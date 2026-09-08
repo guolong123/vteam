@@ -1,0 +1,21 @@
+{
+    "id": "c_0000000004",
+    "type": "private",
+    "teamId": "tm_0000000001",
+    "teamMemberId": "tmm_0000000005",
+    "taskId": null,
+    "agentId": "a_tester",
+    "taskAgentId": null,
+    "pinned": false,
+    "lastReadAt": null,
+    "team": {
+        "id": "tm_0000000001",
+        "name": "vteam\u5f00\u53d1\u56e2\u961f"
+    },
+    "agent": {
+        "id": "a_tester",
+        "name": "\u6d4b\u8bd5",
+        "role": "tester"
+    },
+    "createdAt": "2026-09-07T05:39:42.711Z"
+}

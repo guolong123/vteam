@@ -17,6 +17,30 @@ const TRASH_ICON = (
   </svg>
 );
 
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
+
+function FileContentCard({ fileUrl, fileExt, fileName }: { fileUrl: string; fileExt: string; fileName: string }) {
+  const isImage = IMAGE_EXTS.has(fileExt);
+  return (
+    <div style={{ margin: "0 auto", width: "100%", maxWidth: 720, padding: `${space.xl * 2}px ${space.xl}px` }}>
+      {isImage && (
+        <img src={fileUrl} alt={fileName} loading="lazy" style={{ maxWidth: "100%", maxHeight: 480, objectFit: "contain", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: neutral[50] }} />
+      )}
+      <div style={{ marginTop: space.lg, display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap", padding: space.lg, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: neutral[50] }}>
+        <span style={{ display: "flex", width: 36, height: 36, alignItems: "center", justifyContent: "center", borderRadius: radius.sm, backgroundColor: ACCENT_BG, fontSize: fontSize.sm, fontWeight: 700, color: ACCENT, fontFamily: fontFamily.body }}>{fileExt.slice(0, 4).toUpperCase()}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fileName}</div>
+          <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>{fileExt.toUpperCase()} 文件</div>
+        </div>
+        <a href={fileUrl} download style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.sm, border: "none", backgroundColor: ACCENT, color: "#FFF", fontSize: fontSize.sm, fontWeight: 500, textDecoration: "none", cursor: "pointer", fontFamily: fontFamily.body }}>
+          <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>↓</span>
+          下载
+        </a>
+      </div>
+    </div>
+  );
+}
+
 export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialDocId?: string }) {
   const [activeDocId, setActiveDocId] = useState<string>("");
   const [activeSection, setActiveSection] = useState<string>("");
@@ -48,14 +72,16 @@ export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialD
     });
   }, [activeDoc]);
   const toggleExpand = (id: string) => setExpanded((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const contentQuery = useDocContent(taskId, activeDoc?.file ?? "");
-  const source = contentQuery.data ?? null;
+  const contentQuery = useDocContent(taskId, activeDoc?.file ?? "", activeDoc?.fileExt, activeDoc?.fileUrl);
+  const content = contentQuery.data ?? null;
+  const isFileContent = content?.kind === "file";
+  const mdContent = content?.kind === "markdown" ? content.content : null;
   const error = contentQuery.isError ? `加载文档失败：${activeDoc?.file}` : null;
   const toc = useMemo(() => {
-    if (!source) return [] as { text: string; id: string; level: number }[];
+    if (!mdContent) return [] as { text: string; id: string; level: number }[];
     const items: { text: string; id: string; level: number }[] = [];
     const seen = new Set<string>();
-    for (const m of source.matchAll(/^(##|###)\s+(.+)$/gm)) {
+    for (const m of mdContent.matchAll(/^(##|###)\s+(.+)$/gm)) {
       const text = m[2].trim();
       const id = text.replace(/[`*_#[]()]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").toLowerCase();
       if (seen.has(id)) continue;
@@ -63,22 +89,22 @@ export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialD
       items.push({ text, id, level: m[1] === "##" ? 1 : 2 });
     }
     return items.slice(0, 80);
-  }, [source]);
+  }, [mdContent]);
   useEffect(() => {
-    if (!source) return;
+    if (!mdContent) return;
     const headings = toc.map((t) => document.getElementById(t.id)).filter((el): el is HTMLElement => el !== null);
     if (headings.length === 0) return;
     const observer = new IntersectionObserver((entries) => { for (const e of entries) if (e.isIntersecting) setActiveSection(e.target.id); }, { root: mainRef.current, rootMargin: "-80px 0px -30% 0px" });
     headings.forEach((h) => observer.observe(h));
     return () => observer.disconnect();
-  }, [source, toc]);
+  }, [mdContent, toc]);
   const scrollToHeading = (id: string) => { const el = document.getElementById(id); if (el) { el.scrollIntoView({ behavior: "smooth", block: "start" }); setActiveSection(id); } };
   return (
     <div data-testid="docs-explorer" style={{ display: "flex", minHeight: 0, flex: 1, backgroundColor: surface }}>
       <aside className="hidden lg:flex" style={{ width: 256, flexShrink: 0, flexDirection: "column", borderRight: `1px solid ${border}`, backgroundColor: neutral[50], fontFamily: fontFamily.body }}>
         <div style={{ flexShrink: 0, overflowY: "auto", borderBottom: `1px solid ${border}` }}>
           <p style={{ padding: `${space.lg}px ${space.lg}px ${space.sm}px`, fontSize: fontSize.xs, fontWeight: 600, color: neutral[400] }}>文档</p>
-          {registryQuery.isError ? <p style={{ padding: `0 ${space.lg}px ${space.lg}px`, fontSize: fontSize.xs, color: "#DC2626" }}>文档列表加载失败</p> : rootDocs.length === 0 ? <p style={{ padding: `0 ${space.lg}px ${space.lg}px`, fontSize: fontSize.xs, color: neutral[400] }}>{registryQuery.isPending ? "加载中…" : "暂无 doc 产出物"}</p> : (
+          {registryQuery.isError ? <p style={{ padding: `0 ${space.lg}px ${space.lg}px`, fontSize: fontSize.xs, color: "#DC2626" }}>文档列表加载失败</p> : rootDocs.length === 0 ? <p style={{ padding: `0 ${space.lg}px ${space.lg}px`, fontSize: fontSize.xs, color: neutral[400] }}>{registryQuery.isPending ? "加载中…" : "暂无产出物"}</p> : (
             <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: `${space.xs}px ${space.sm}px ${space.lg}px` }}>
               {rootDocs.map((root) => {
                 const kids = childrenOf(root.id);
@@ -94,7 +120,7 @@ export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialD
                     >
                       {kids.length > 0 ? <button type="button" onClick={() => toggleExpand(root.id)} style={{ display: "flex", width: 20, height: 20, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: radius.sm, color: neutral[400], background: "transparent", cursor: "pointer" }}>{isExpanded ? "▾" : "▸"}</button> : <span style={{ width: 20, height: 20, flexShrink: 0 }} />}
                       <button type="button" onClick={() => setActiveDocId(root.id)} aria-current={active ? "page" : undefined} style={{ display: "flex", minWidth: 0, flex: 1, alignItems: "center", gap: space.sm, borderRadius: radius.sm, padding: `${space.sm}px ${space.sm + 2}px`, textAlign: "left", cursor: "pointer", background: "transparent", color: active ? ACCENT : neutral[600], border: "none", fontFamily: fontFamily.body }}>
-                        <span style={{ display: "flex", width: 20, height: 20, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: radius.sm, fontSize: 9, fontWeight: 600, background: active ? "rgba(37,99,235,0.18)" : neutral[200], color: active ? ACCENT : neutral[500] }}>{root.kind.slice(0, 2)}</span>
+                        <span style={{ display: "flex", width: 20, height: 20, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: radius.sm, fontSize: 9, fontWeight: 600, background: active ? "rgba(37,99,235,0.18)" : neutral[200], color: active ? ACCENT : neutral[500] }}>{root.fileExt ? root.fileExt.slice(0, 2).toUpperCase() : root.kind.slice(0, 2)}</span>
                         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: fontSize.md, fontWeight: 500 }}>{root.name}</span>
                       </button>
                       {root.artifactId ? (
@@ -130,16 +156,16 @@ export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialD
         </div>
       </aside>
       <main ref={mainRef} style={{ minWidth: 0, flex: 1, overflowY: "auto", backgroundColor: surface, fontFamily: fontFamily.body }}>
-        {registryQuery.isError ? <div style={{ display: "flex", height: "100%", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: space.md, padding: `0 ${space.xl}px`, textAlign: "center" }}><p style={{ fontSize: fontSize.md, color: "#DC2626" }}>文档列表加载失败</p><button type="button" onClick={() => registryQuery.refetch()} style={{ borderRadius: radius.sm, border: `1px solid ${border}`, backgroundColor: surface, padding: "6px 12px", fontSize: fontSize.md, cursor: "pointer", color: neutral[700] }}>重试</button></div> : rootDocs.length === 0 ? <div style={{ display: "flex", height: "100%", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: `0 ${space.xl}px`, textAlign: "center" }}><p style={{ fontSize: fontSize.md, color: neutral[500] }}>该任务暂无 doc 产出物</p></div> : error ? <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", fontSize: fontSize.md, color: "#DC2626" }}>{error}</div> : !source ? <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", fontSize: fontSize.md, color: neutral[400] }}>加载文档…</div> : (
+        {registryQuery.isError ? <div style={{ display: "flex", height: "100%", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: space.md, padding: `0 ${space.xl}px`, textAlign: "center" }}><p style={{ fontSize: fontSize.md, color: "#DC2626" }}>文档列表加载失败</p><button type="button" onClick={() => registryQuery.refetch()} style={{ borderRadius: radius.sm, border: `1px solid ${border}`, backgroundColor: surface, padding: "6px 12px", fontSize: fontSize.md, cursor: "pointer", color: neutral[700] }}>重试</button></div> : rootDocs.length === 0 ? <div style={{ display: "flex", height: "100%", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: `0 ${space.xl}px`, textAlign: "center" }}><p style={{ fontSize: fontSize.md, color: neutral[500] }}>该任务暂无产出物</p></div> : error ? <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", fontSize: fontSize.md, color: "#DC2626" }}>{error}</div> : !content ? <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", fontSize: fontSize.md, color: neutral[400] }}>加载文档…</div> : isFileContent ? <FileContentCard fileUrl={content.fileUrl} fileExt={content.fileExt} fileName={activeDoc?.name ?? "file"} /> : (
           <article style={{ margin: "0 auto", width: "100%", maxWidth: 960, padding: `${space.xl * 2}px ${space.xl}px ${space.xl * 2}px` }}>
-            <DocsMarkdown markdown={source} prototypes={protos} taskId={taskId} />
+            <DocsMarkdown markdown={mdContent!} prototypes={protos} taskId={taskId} />
             <footer style={{ marginTop: space.xl * 2, borderTop: `1px solid ${border}`, paddingTop: space.lg, fontSize: fontSize.xs, color: neutral[400] }}>vteam docs · {activeDoc?.name}</footer>
           </article>
         )}
       </main>
       <aside className="hidden lg:block" style={{ width: 240, flexShrink: 0, overflowY: "auto", borderLeft: `1px solid ${border}`, backgroundColor: neutral[50], padding: `${space.lg}px 0`, fontFamily: fontFamily.body }}>
         <p style={{ padding: `0 ${space.lg}px ${space.md}px`, fontSize: fontSize.xs, fontWeight: 600, color: neutral[400] }}>章节</p>
-        {!source ? <p style={{ padding: `0 ${space.lg}px`, fontSize: fontSize.xs, color: neutral[400] }}>加载中…</p> : toc.length === 0 ? <p style={{ padding: `0 ${space.lg}px`, fontSize: fontSize.xs, color: neutral[400] }}>暂无章节</p> : (
+        {!mdContent ? <p style={{ padding: `0 ${space.lg}px`, fontSize: fontSize.xs, color: neutral[400] }}>{isFileContent ? "非 md 文件无章节" : "加载中…"}</p> : toc.length === 0 ? <p style={{ padding: `0 ${space.lg}px`, fontSize: fontSize.xs, color: neutral[400] }}>暂无章节</p> : (
           <nav style={{ display: "flex", flexDirection: "column", gap: 4, padding: `0 ${space.sm}px ${space.lg}px` }}>
             {toc.map((t) => (
               <button key={t.id} type="button" onClick={() => scrollToHeading(t.id)} style={{ display: "block", width: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", borderRadius: radius.sm, textAlign: "left", cursor: "pointer", border: "none", fontFamily: fontFamily.body, ...(t.level === 2 ? { marginLeft: space.md, borderLeft: `1px solid ${border}`, padding: `4px ${space.md}px`, fontSize: fontSize.xs, color: neutral[500] } : { padding: `${space.sm}px ${space.md}px`, fontSize: 13, fontWeight: 600, color: neutral[700] }), ...(activeSection === t.id ? { backgroundColor: ACCENT_BG, color: ACCENT } : {}) }}>{t.text}</button>

@@ -13,15 +13,29 @@ export function useDocsRegistry(taskId: string) {
   });
 }
 
-export function useDocContent(taskId: string, file: string) {
+export interface DocContentMd {
+  kind: "markdown";
+  content: string;
+}
+export interface DocContentFile {
+  kind: "file";
+  fileUrl: string;
+  fileExt: string;
+}
+export type DocContent = DocContentMd | DocContentFile;
+
+export function useDocContent(taskId: string, file: string, fileExt?: string, fileUrl?: string) {
   return useQuery({
     queryKey: ["docs-content", taskId, file],
-    queryFn: async () => {
+    queryFn: async (): Promise<DocContent> => {
+      if (fileExt && fileUrl) {
+        return { kind: "file", fileUrl, fileExt };
+      }
       const token = getAuthToken();
       const url = `${API_BASE_URL}/docs-site/${encodeURIComponent(taskId)}/prd/${encodeURIComponent(file)}`;
       const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.text();
+      return { kind: "markdown", content: await res.text() };
     },
     enabled: !!taskId && !!file,
     retry: false,

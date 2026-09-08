@@ -1,0 +1,6 @@
+post-restart avail total: 34 | go: 27 | oc: 7 | bogus-present: []
+sync==cli (opencode set): False
+bogus in dropdown: []
+dropdown==cli-exact: True | dropdown: 34 | cli: 34
+missing: []
+extra: []

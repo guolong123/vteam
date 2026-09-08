@@ -1,0 +1,4 @@
+CONTAINER                 REPOSITORY          TAG                 PLATFORM            IMAGE ID            SIZE                CREATED
+aiagents-compose-server   aiagents-server     latest              linux/arm64         04659a6f8eaa        619MB               58 minutes ago
+aiagents-compose-web      aiagents-web        latest              linux/arm64         bb681f8edecd        261MB               59 minutes ago
+aiagents-compose-worker   aiagents-worker     latest              linux/arm64         925b809162d4        1.87GB              3 hours ago

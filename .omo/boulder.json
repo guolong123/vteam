@@ -681,12 +681,14 @@
       "plan_name": "session-unification",
       "status": "completed",
       "started_at": "2026-09-07T09:07:31.618Z",
-      "updated_at": "2026-09-07T18:57:55.314Z",
+      "updated_at": "2026-09-08T07:08:01.710Z",
       "session_ids": [
-        "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP"
+        "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP",
+        "opencode:ses_f8027a50fffeWFlrqI03YfcheV"
       ],
       "session_origins": {
-        "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP": "direct"
+        "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP": "direct",
+        "opencode:ses_f8027a50fffeWFlrqI03YfcheV": "appended"
       },
       "agent": "atlas",
       "task_sessions": {
@@ -813,12 +815,14 @@
   "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/session-unification.md",
   "started_at": "2026-09-07T09:07:31.618Z",
   "status": "completed",
-  "updated_at": "2026-09-07T18:57:55.314Z",
+  "updated_at": "2026-09-08T07:08:01.710Z",
   "session_ids": [
-    "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP"
+    "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP",
+    "opencode:ses_f8027a50fffeWFlrqI03YfcheV"
   ],
   "session_origins": {
-    "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP": "direct"
+    "opencode:ses_f869e8e83ffeMJdD7RHyDn5kaP": "direct",
+    "opencode:ses_f8027a50fffeWFlrqI03YfcheV": "appended"
   },
   "plan_name": "session-unification",
   "task_sessions": {

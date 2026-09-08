@@ -1,0 +1,7 @@
+source: session items: 6
+m_0000000017 user sent '你好，请用一句话介绍一下你自己'
+m_0000000018 user sent '@测试-1 请用一句话介绍一下你自己'
+m_0000000019 agent failed '已回复群聊。'
+m_0000000025 user sent 'own-msg-probe-1788761797 请用一句话介绍你自己'
+m_0000000026 agent sent '我是测试-1，负责用例设计、缺陷验证与测试结论输出。'
+m_0000000027 user sent 'fix-verify-1788762148 请用两句话介绍你的测试专长'

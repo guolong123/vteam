@@ -57,6 +57,16 @@ export class WorkerCapabilitiesDto {
 
   @ApiPropertyOptional({
     description:
+      'models-truth：worker 可执行模型 id 列表（`opencode models` CLI 输出，鉴权过滤后的真实可用集；缺省时 sync 回退 /api/model 拉取）',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  executableModels?: string[];
+
+  @ApiPropertyOptional({
+    description:
       'T10：worker 执行端点端口（方案 A POST /execute；server 据此发现执行端点下发 prompt，缺省回退 serve origin + 4198）',
   })
   @IsOptional()

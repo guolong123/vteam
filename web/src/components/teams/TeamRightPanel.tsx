@@ -244,7 +244,7 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery,
               </div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span style={{ fontSize: fontSize.sm, color: neutral[600] }}>托管模式</span>
-                <span onClick={()=>onToggleManagedMode(!task.managedMode)} role="switch" aria-checked={task.managedMode} style={{ width: 36, height: 20, borderRadius: 10, backgroundColor: task.managedMode ? "#2563EB" : neutral[300], position: "relative", cursor: "pointer" }}><span style={{ position: "absolute", top: 2, left: task.managedMode ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} /></span>
+                <span onClick={()=>onToggleManagedMode(!(team?.managedMode ?? false))} role="switch" aria-checked={team?.managedMode ?? false} style={{ width: 36, height: 20, borderRadius: 10, backgroundColor: (team?.managedMode ?? false) ? "#2563EB" : neutral[300], position: "relative", cursor: "pointer" }}><span style={{ position: "absolute", top: 2, left: (team?.managedMode ?? false) ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} /></span>
               </div>
             </div>
             <TeamMemoryCard team={team} task={task} />

@@ -40,6 +40,12 @@ export interface WorkerCapabilities {
    */
   models?: string[];
   /**
+   * worker 可执行模型 id 列表（`opencode models` CLI 输出解析，Provider.list() 鉴权过滤后
+   * 的真实可用集，id 格式 providerID/modelID；探测失败/为空时缺省——server 侧 sync 以此为
+   * live 真值优先采用，缺省回退 serve /api/model 拉取）。
+   */
+  executableModels?: string[];
+  /**
    * serve 实际监听端口（F2 C2：随机端口场景必须上报，否则 server 回退连死端口 4199）。
    * 对齐 server worker.client.ts resolveBaseUrl：capabilities.port → http://localhost:{port}。
    */

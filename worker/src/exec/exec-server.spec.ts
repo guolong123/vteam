@@ -230,6 +230,22 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     }
   });
 
+  it('browserProfileRoot 指定时：执行前按 opencode 会话预建 browser-profiles/<scope>/（per-agent 隔离落点）', async () => {
+    const { driver, sendMessage } = mockDriver();
+    const { sender } = createSender();
+    const profileRoot = fs.mkdtempSync(join(os.tmpdir(), 'keta-profroot-'));
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, browserProfileRoot: profileRoot, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', sessionId: 'ses_iso', prompt: 'go' });
+      await waitFor(() => sendMessage.mock.calls.length > 0);
+      expect(fs.existsSync(join(profileRoot, 'browser-profiles', 'ses_iso'))).toBe(true);
+    } finally {
+      await exec.stop();
+      fs.rmSync(profileRoot, { recursive: true, force: true });
+    }
+  });
+
   it('复用会话：请求带 sessionId 时不 createSession（端点按 opencode 会话 id 区分）', async () => {
     const { driver, createSession, sendMessage } = mockDriver();
     const { sender, sent } = createSender();

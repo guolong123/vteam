@@ -425,7 +425,11 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
     return `${slug}.json`;
   }
 
-  /** 生成任务文档站的动态注册表 DocDef[]（与 prototype-viewer DocDef 形状对齐）。 */
+  /**
+   * 生成任务文档站的动态注册表 DocDef[]（与 prototype-viewer DocDef 形状对齐）。
+   * 包含所有文件类型（md/docx/pdf/xlsx/pptx/png/jpg/...），非 md 文件附带 fileExt/fileUrl
+   * 供前端决定渲染方式（md 渲染 / 图片内嵌 / 下载卡片）。
+   */
   async buildRegistry(taskId: string): Promise<
     Array<{
       id: string;
@@ -435,6 +439,8 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
       file: string;
       order: number;
       artifactId?: string;
+      fileExt?: string;
+      fileUrl?: string;
     }>
   > {
     const rows = await this.prisma.artifactVersion.findMany({
@@ -445,15 +451,16 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         artifact: { select: { id: true, title: true, currentVersion: true } },
       },
     });
-    const current = new Map<string, { id: string; title: string }>();
+    const current = new Map<
+      string,
+      { id: string; title: string; contentRef: string }
+    >();
     for (const r of rows) {
-      if (
-        r.version === r.artifact.currentVersion &&
-        /\.(md|markdown)$/i.test(r.contentRef ?? '')
-      ) {
+      if (r.version === r.artifact.currentVersion && r.contentRef) {
         current.set(r.artifact.id, {
           id: r.artifact.id,
           title: r.artifact.title,
+          contentRef: r.contentRef,
         });
       }
     }
@@ -473,16 +480,26 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         }
       }
       seen.add(id);
+      const ext = this.extractExt(a.contentRef);
+      const isMd = /^(md|markdown)$/i.test(ext);
       return {
         id,
         name: a.title,
         kind: '任务产出物',
         description: `任务产出物文档：${a.title}`,
-        file: `${id}.md`,
+        file: isMd ? `${id}.md` : id,
         order: i + 1,
         artifactId: a.id,
+        ...(isMd ? {} : { fileExt: ext, fileUrl: a.contentRef }),
       };
     });
+  }
+
+  private extractExt(contentRef: string): string {
+    const base = String(contentRef).split('/').pop() ?? '';
+    const dot = base.lastIndexOf('.');
+    if (dot <= 0 || dot === base.length - 1) return '';
+    return base.slice(dot + 1).toLowerCase();
   }
 
   /** 标题 → ASCII slug（文件名/文档 id；规避中文 id hash 路由 bug）。 */

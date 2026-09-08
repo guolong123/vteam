@@ -95,7 +95,13 @@ export function matchesScope(ev: SSEEvent<unknown>, scopeStr?: string): boolean 
         if (scopeType === "team" && scopeId === id) return true;
         return true;
       }
-      return (ev.payload as { taskId?: string })?.taskId === id;
+      // team loading 系(agent.loading/error/status/question):dispatcher 经
+      // toExecutionScope(null, teamId) 广播,payload.taskId 恒为 `team:<teamId>`
+      // scope 串(裸 id 兼容存量直调形状)。SSEEvent 信封无 scopeType/scopeId
+      // 字段(仅 id/type/payload/timestamp,见上接口定义),故不依赖信封匹配,
+      // 以 payload.taskId 双形状匹配为准。
+      const taskId = (ev.payload as { taskId?: string })?.taskId;
+      return taskId === id || taskId === `team:${id}`;
     }
     return false;
   });

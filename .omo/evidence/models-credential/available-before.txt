@@ -1,0 +1,36 @@
+available count: 34
+opencode-go in dropdown: 27
+opencode-go/qwen3.7-plus
+opencode-go/glm-5.1
+opencode-go/deepseek-v4-flash
+opencode-go/minimax-m2.7
+opencode-go/glm-5.2
+opencode-go/qwen3.7-max
+opencode-go/kimi-k2.6
+opencode-go/minimax-m3
+opencode-go/hy3
+opencode-go/deepseek-v4-pro
+opencode-go/qwen3.8-max
+opencode-go/mimo-v2.5
+opencode-go/gpt-5.6-luna
+opencode-go/kimi-k2.7-code
+opencode-go/kimi-k3
+opencode-go/mimo-v2.5-pro
+opencode-go/qwen3.6-plus
+opencode/mimo-v2.5-free
+opencode/big-pickle
+opencode/nemotron-3-ultra-free
+opencode/muse-spark-1.3-contributor-free
+opencode/muse-spark-1.2-contributor-free
+opencode/nemotron-3.5-lightning-free
+opencode/ling-3.0-flash-fin-free
+opencode-go/longcat-2.0
+opencode-go/deepseek-v4-flash-vision-exp
+opencode-go/muse-spark-1.2-contributor
+opencode-go/hy4-preview
+opencode-go/omen-alpha
+opencode-go/glm-5.3-flash
+opencode-go/muse-spark-1.3-contributor
+opencode-go/qwen3.8-flash
+opencode-go/grok-4.6
+opencode-go/glm-5.3

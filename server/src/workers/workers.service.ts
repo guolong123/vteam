@@ -269,6 +269,16 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         `worker ${worker.id} 模型能力合并入库失败（不阻断注册）: ${e}`,
       );
     }
+    // models-credential：重注册（含凭据注入后 serve 重启）意味着 offering 可能已变——
+    // 快照只恢复 availability 从不授可见性，此处 best-effort 跑一次 sync 做可见性重收敛
+    // （凭据刚下发、worker 刚重报可执行集时，未配前被禁用的行在此回 enable；失败不阻断注册）。
+    try {
+      await this.modelsService.syncLiveModels();
+    } catch (e) {
+      this.logger.warn(
+        `worker ${worker.id} 注册后可见性重收敛失败（不阻断注册）: ${e}`,
+      );
+    }
     // C5（R5）：注册后回放全部未吊销凭据。无条件调用（见上方 C5b 说明：容器重启
     // 后 auth.json 已被删除且 DB status 仍 ONLINE，必须每次启动回放）。回放失败
     // （解密错/DB 错）不阻断注册，只打 warn 日志。

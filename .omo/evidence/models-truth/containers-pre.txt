@@ -1,0 +1,6 @@
+aiagents-compose-server 55b7b92d76e5 20 minutes ago
+aiagents-compose-web 2b8deb5c3c6c About an hour ago
+aiagents-compose-worker b6ba4b71ef40 4 hours ago
+aiagents-compose-db 077430c0e0e0 4 hours ago
+/aiagents-compose-worker Image=sha256:925b809162d4496b5a58eefde25ebb459f0d06f7ea897c052914a3203f4421e0 Started=2026-09-08T00:14:13.285125472Z
+/aiagents-compose-server Image=sha256:e25c6ea912e56b104ea229d615e0211e65325c719af973b5ffdf0818d32e8f6d Started=2026-09-08T03:39:16.630285773Z
