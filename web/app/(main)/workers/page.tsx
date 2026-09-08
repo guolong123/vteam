@@ -90,10 +90,11 @@ function WorkerCard({
   const isOnline = worker.status === "online";
   const isOffline = worker.status === "offline";
 
-  /* 能力声明（11.2）：并发上限 + skill/tool 数量 */
-  const maxInstances = worker.capabilities.maxInstances ?? 0;
-  const skillCount = worker.capabilities.skills?.length ?? 0;
-  const toolCount = worker.capabilities.tools?.length ?? 0;
+  /* 能力声明（11.2）：并发上限 + skill/tool 数量。
+   capabilities 在 list 接口中不存在（避免大 JSON 触发 MySQL filesort OOM），单查才返回。 */
+  const maxInstances = worker.capabilities?.maxInstances ?? 0;
+  const skillCount = worker.capabilities?.skills?.length ?? 0;
+  const toolCount = worker.capabilities?.tools?.length ?? 0;
 
   /* 负载（11.2）：实例占用率驱动进度条（后端无 CPU 上报，取 load 真实语义） */
   const instances = worker.load?.instances ?? 0;

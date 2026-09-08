@@ -47,3 +47,7 @@ server/uploads/
 
 # worker 发布包（pack-worker.sh 构建产物，随 web 静态服务发布，不入库）
 web/public/worker-src.tar.gz
+
+# deploy-k8s.sh 持久化的 4 个 secret（DB_PASSWORD / JWT / WORKER_TOKEN / MODEL_KEY），
+# 不入库；删除后下次 deploy 会重新生成（破坏现有登录态 / MySQL root / worker 注册）
+.deploy-secrets.env

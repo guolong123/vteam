@@ -37,12 +37,13 @@ export interface ModelsResponse {
   pageSize: number;
 }
 
-/** GET /workers 条目（toWorkerView；capabilities.models 为 C2 上报模型 id 数组）。 */
+/** GET /workers 条目（toWorkerView；capabilities 可选——列表接口不 select capabilities，
+ *  单查接口 /workers/:id 仍返回完整字段；capabilities.models 为 C2 上报模型 id 数组）。 */
 export interface ApiWorker {
   id: string;
   name: string | null;
   status: string;
-  capabilities: { models?: string[] } | null;
+  capabilities?: { models?: string[] } | null;
 }
 
 /** GET /models/:id/credentials（脱敏视图，绝无明文 token）。 */

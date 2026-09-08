@@ -203,7 +203,7 @@ export default function WorkerDetailPage() {
   /* 主选 capabilities.models（C2 已上报持久化，离线可查）；未上报/空 → 目录 enabled 模型兜底 */
   const modelRefs = useMemo(
     () =>
-      worker?.capabilities.models?.length
+      worker?.capabilities?.models?.length
         ? worker.capabilities.models
         : (catalog?.items ?? []).map((m) => `${m.providerID}/${m.modelID}`),
     [worker, catalog],
@@ -401,10 +401,10 @@ export default function WorkerDetailPage() {
               <InfoRow label="版本" value={worker.opencodeVersion} />
               <InfoRow
                 label="serve 端口"
-                value={worker.capabilities.port !== undefined ? String(worker.capabilities.port) : "未上报"}
+                value={worker.capabilities?.port !== undefined ? String(worker.capabilities.port) : "未上报"}
               />
-              <InfoRow label="baseUrl" value={worker.capabilities.baseUrl ?? "未上报"} />
-              <InfoRow label="并发上限" value={`${worker.capabilities.maxInstances ?? 0} 并发`} />
+              <InfoRow label="baseUrl" value={worker.capabilities?.baseUrl ?? "未上报"} />
+              <InfoRow label="并发上限" value={`${worker.capabilities?.maxInstances ?? 0} 并发`} />
             </div>
           </section>
 
@@ -412,7 +412,7 @@ export default function WorkerDetailPage() {
           <section data-testid="worker-detail-load" style={cardStyle()}>
             <SectionHeader icon="▤" title="负载" />
             {(() => {
-              const maxInstances = worker.capabilities.maxInstances ?? 0;
+              const maxInstances = worker.capabilities?.maxInstances ?? 0;
               const instances = worker.load?.instances ?? 0;
               const loadPct = maxInstances > 0 ? Math.round((instances / maxInstances) * 100) : 0;
               return (
@@ -452,8 +452,8 @@ export default function WorkerDetailPage() {
 
           {/* skills 卡 */}
           <section data-testid="worker-detail-skills" style={cardStyle()}>
-            <SectionHeader icon="❋" title="已注入技能" count={worker.capabilities.skills?.length ?? 0} />
-            {worker.capabilities.skills && worker.capabilities.skills.length > 0 ? (
+            <SectionHeader icon="❋" title="已注入技能" count={worker.capabilities?.skills?.length ?? 0} />
+            {worker.capabilities && worker.capabilities.skills && worker.capabilities.skills.length > 0 ? (
               <div
                 data-testid="worker-skill-list"
                 style={{ display: "flex", flexWrap: "wrap", gap: space.sm }}
@@ -489,8 +489,8 @@ export default function WorkerDetailPage() {
 
           {/* tools 卡：内置 git 工具 + 自定义工具（T9 capabilities.tools 合并清单） */}
           <section data-testid="worker-detail-tools" style={cardStyle()}>
-            <SectionHeader icon="✚" title="可用工具" count={worker.capabilities.tools?.length ?? 0} />
-            {worker.capabilities.tools && worker.capabilities.tools.length > 0 ? (
+            <SectionHeader icon="✚" title="可用工具" count={worker.capabilities?.tools?.length ?? 0} />
+            {worker.capabilities && worker.capabilities.tools && worker.capabilities.tools.length > 0 ? (
               <div
                 data-testid="worker-tool-list"
                 style={{ display: "flex", flexWrap: "wrap", gap: space.sm }}
