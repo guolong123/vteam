@@ -41,8 +41,7 @@ const ROLE_LABELS: Record<string, string> = {
 const TEAM_ERRORS = {
   TEAM_NOT_FOUND: 'TEAM_NOT_FOUND',
   TEAM_NAME_CONFLICT: 'TEAM_NAME_CONFLICT',
-  TEAM_BUSY: 'TEAM_BUSY',
-  TEAM_QUEUE_NOT_EMPTY: 'TEAM_QUEUE_NOT_EMPTY',
+  TEAM_TASK_RUNNING: 'TEAM_TASK_RUNNING',
   AGENT_NOT_FOUND: 'AGENT_NOT_FOUND',
   MEMBER_NOT_FOUND: 'MEMBER_NOT_FOUND',
   USER_NOT_FOUND: 'USER_NOT_FOUND',
@@ -425,7 +424,10 @@ export class TeamsService implements OnModuleInit {
   async remove(id: string) {
     const team = await this.prisma.team.findUnique({
       where: { id },
-      include: { queues: true },
+      include: {
+        queues: true,
+        currentTask: { select: { id: true, status: true } },
+      },
     });
     if (!team) {
       throw new NotFoundException({
@@ -433,27 +435,146 @@ export class TeamsService implements OnModuleInit {
         message: '团队不存在',
       });
     }
-    if (team.currentTaskId) {
+    // 执行中的任务不可随删（worker 侧执行会变孤儿）：仅放行未开始/已终态任务的级联删除。
+    const runningTask = await this.prisma.task.findFirst({
+      where: {
+        teamId: id,
+        status: { in: ['in_progress', 'pending_review'] },
+      },
+      select: { id: true, status: true },
+    });
+    if (runningTask) {
       throw new ConflictException({
-        code: TEAM_ERRORS.TEAM_BUSY,
-        message: '团队正忙，无法删除',
-        details: { currentTaskId: team.currentTaskId },
+        code: TEAM_ERRORS.TEAM_TASK_RUNNING,
+        message: '团队有执行中的任务，请等待完成后再删除',
+        details: { taskId: runningTask.id, status: runningTask.status },
       });
     }
-    if (team.queues.length > 0) {
-      throw new ConflictException({
-        code: TEAM_ERRORS.TEAM_QUEUE_NOT_EMPTY,
-        message: '团队队列非空，无法删除',
-      });
-    }
+    // 待删任务：当前任务 + 队列任务 + 归属该团队的其余任务（执行中已在上方拦截，此处均为可删态）。
+    const queuedTaskIds = (team.queues ?? []).map((q: any) => q.taskId);
+    const ownedTasks = await this.prisma.task.findMany({
+      where: { teamId: id },
+      select: { id: true },
+    });
+    const taskIds = [
+      ...new Set(
+        [
+          team.currentTaskId,
+          ...queuedTaskIds,
+          ...ownedTasks.map((t: { id: string }) => t.id),
+        ].filter(Boolean) as string[],
+      ),
+    ];
     await this.prisma.$transaction(async (tx) => {
       try {
         if (tx.team?.update)
           await tx.team.update({
             where: { id },
-            data: { mainAgentMemberId: null },
+            data: { mainAgentMemberId: null, currentTaskId: null },
           });
       } catch {}
+      // 任务级联（依赖 → 被依赖：先清任务子表再删任务行）：
+      // 链接表(Cascade 兜底仍显式清) → 事件/计划子任务/问题动态 → 计划/问题/产出物版本 →
+      // 产出物/记忆 → 任务消息 → 会话/实例解绑任务 → 队列 → 任务行。
+      if (taskIds.length > 0) {
+        await tx.taskMessageChannel.deleteMany({
+          where: { taskId: { in: taskIds } },
+        });
+        await tx.taskNotificationChannel.deleteMany({
+          where: { taskId: { in: taskIds } },
+        });
+        await tx.taskEvent.deleteMany({
+          where: { taskId: { in: taskIds } },
+        });
+        const plans = await tx.plan.findMany({
+          where: { taskId: { in: taskIds } },
+          select: { id: true },
+        });
+        const planIds = plans.map((p: { id: string }) => p.id);
+        if (planIds.length > 0) {
+          await tx.planTask.deleteMany({
+            where: { planId: { in: planIds } },
+          });
+        }
+        await tx.plan.deleteMany({ where: { taskId: { in: taskIds } } });
+        const issues = await tx.issue.findMany({
+          where: { taskId: { in: taskIds } },
+          select: { id: true },
+        });
+        const issueIds = issues.map((i: { id: string }) => i.id);
+        if (issueIds.length > 0) {
+          await tx.issueActivity.deleteMany({
+            where: { issueId: { in: issueIds } },
+          });
+        }
+        await tx.issue.deleteMany({ where: { taskId: { in: taskIds } } });
+        const artifacts = await tx.artifact.findMany({
+          where: { taskId: { in: taskIds } },
+          select: { id: true },
+        });
+        const artifactIds = artifacts.map((a: { id: string }) => a.id);
+        if (artifactIds.length > 0) {
+          await tx.artifactVersion.deleteMany({
+            where: { artifactId: { in: artifactIds } },
+          });
+        }
+        await tx.artifact.deleteMany({ where: { taskId: { in: taskIds } } });
+        await tx.memory.deleteMany({ where: { taskId: { in: taskIds } } });
+        await tx.agentQuestion.deleteMany({
+          where: { taskId: { in: taskIds } },
+        });
+        await tx.message.deleteMany({ where: { taskId: { in: taskIds } } });
+        await tx.session.updateMany({
+          where: { taskId: { in: taskIds } },
+          data: { taskId: null },
+        });
+        await tx.taskGroupInstance.updateMany({
+          where: { taskId: { in: taskIds } },
+          data: { taskId: null },
+        });
+        await tx.teamQueue.deleteMany({ where: { taskId: { in: taskIds } } });
+        await tx.task.deleteMany({ where: { id: { in: taskIds } } });
+      }
+      // 级联清理（子表对 team/teamMember 全为 Restrict，必须先清否则 500）：
+      // 消息 → 频道 → 会话/实例（解绑成员+团队）→ 用户成员 → 成员 → 团队。
+      const memberIds = (
+        await tx.teamMember.findMany({
+          where: { teamId: id },
+          select: { id: true },
+        })
+      ).map((m: { id: string }) => m.id);
+      const channelIds = (
+        await tx.chatChannel.findMany({
+          where: { teamId: id },
+          select: { id: true },
+        })
+      ).map((c: { id: string }) => c.id);
+      if (channelIds.length > 0) {
+        await tx.message.deleteMany({
+          where: { channelId: { in: channelIds } },
+        });
+      }
+      await tx.chatChannel.deleteMany({ where: { teamId: id } });
+      if (memberIds.length > 0) {
+        await tx.session.updateMany({
+          where: { teamMemberId: { in: memberIds } },
+          data: { teamMemberId: null, teamId: null },
+        });
+        await tx.taskGroupInstance.updateMany({
+          where: { teamMemberId: { in: memberIds } },
+          data: { teamMemberId: null, teamId: null },
+        });
+      } else {
+        await tx.session.updateMany({
+          where: { teamId: id },
+          data: { teamId: null },
+        });
+        await tx.taskGroupInstance.updateMany({
+          where: { teamId: id },
+          data: { teamId: null },
+        });
+      }
+      await tx.teamUserMember.deleteMany({ where: { teamId: id } });
       await tx.teamMember.deleteMany({ where: { teamId: id } });
       await tx.team.delete({ where: { id } });
     });

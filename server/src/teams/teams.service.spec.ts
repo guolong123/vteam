@@ -518,18 +518,72 @@ describe('TeamsService', () => {
   });
 
   describe('remove', () => {
+    const mockCascadeTx = (overrides: Record<string, any> = {}) => {
+      const tx: any = {
+        team: {
+          update: jest.fn().mockResolvedValue({}),
+          delete: jest.fn().mockResolvedValue({}),
+        },
+        teamMember: {
+          findMany: jest.fn().mockResolvedValue([]),
+          deleteMany: jest.fn().mockResolvedValue({}),
+        },
+        chatChannel: {
+          findMany: jest.fn().mockResolvedValue([]),
+          deleteMany: jest.fn().mockResolvedValue({}),
+        },
+        message: { deleteMany: jest.fn().mockResolvedValue({}) },
+        session: { updateMany: jest.fn().mockResolvedValue({}) },
+        taskGroupInstance: { updateMany: jest.fn().mockResolvedValue({}) },
+        teamUserMember: { deleteMany: jest.fn().mockResolvedValue({}) },
+        teamQueue: { deleteMany: jest.fn().mockResolvedValue({}) },
+        taskMessageChannel: { deleteMany: jest.fn().mockResolvedValue({}) },
+        taskNotificationChannel: { deleteMany: jest.fn().mockResolvedValue({}) },
+        taskEvent: { deleteMany: jest.fn().mockResolvedValue({}) },
+        plan: {
+          findMany: jest.fn().mockResolvedValue([]),
+          deleteMany: jest.fn().mockResolvedValue({}),
+        },
+        planTask: { deleteMany: jest.fn().mockResolvedValue({}) },
+        issue: {
+          findMany: jest.fn().mockResolvedValue([]),
+          deleteMany: jest.fn().mockResolvedValue({}),
+        },
+        issueActivity: { deleteMany: jest.fn().mockResolvedValue({}) },
+        artifact: {
+          findMany: jest.fn().mockResolvedValue([]),
+          deleteMany: jest.fn().mockResolvedValue({}),
+        },
+        artifactVersion: { deleteMany: jest.fn().mockResolvedValue({}) },
+        memory: { deleteMany: jest.fn().mockResolvedValue({}) },
+        agentQuestion: { deleteMany: jest.fn().mockResolvedValue({}) },
+        task: {
+          updateMany: jest.fn().mockResolvedValue({}),
+          deleteMany: jest.fn().mockResolvedValue({}),
+        },
+        ...overrides,
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      return tx;
+    };
+
+    const mockNoTasks = () => {
+      prisma.task.findFirst.mockResolvedValue(null);
+      prisma.task.findMany.mockResolvedValue([]);
+    };
+
+    beforeEach(() => {
+      prisma.task = { findFirst: jest.fn(), findMany: jest.fn() };
+    });
+
     it('仅空闲且队列空时可删，成功广播 delete', async () => {
       prisma.team.findUnique.mockResolvedValue(
         teamRow({ currentTaskId: null, queues: [] }),
       );
+      mockNoTasks();
       prisma.teamMember.deleteMany = jest.fn().mockResolvedValue({ count: 0 });
       prisma.team.delete = jest.fn().mockResolvedValue(teamRow());
-      prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({
-          teamMember: { deleteMany: jest.fn().mockResolvedValue({}) },
-          team: { delete: jest.fn().mockResolvedValue({}) },
-        }),
-      );
+      mockCascadeTx();
       const result = await service.remove('tm_0000000001');
       expect(result.deleted).toBe(true);
       expect(realtime.broadcast).toHaveBeenCalledWith(
@@ -539,25 +593,87 @@ describe('TeamsService', () => {
       );
     });
 
-    it('忙时删除 409 TEAM_BUSY（currentTaskId 非空）', async () => {
-      prisma.team.findUnique.mockResolvedValue(
-        teamRow({ currentTaskId: 't_0000000001', queues: [] }),
-      );
-      await expect(service.remove('tm_0000000001')).rejects.toThrow(
-        ConflictException,
-      );
-    });
-
-    it('队列非空 409 TEAM_QUEUE_NOT_EMPTY', async () => {
+    it('执行中任务（in_progress）→ 409 TEAM_TASK_RUNNING，不进事务', async () => {
       prisma.team.findUnique.mockResolvedValue(
         teamRow({
-          currentTaskId: null,
-          queues: [{ id: 'tq_1', taskId: 't_1', position: 1 }],
+          currentTaskId: 't_0000000001',
+          queues: [],
+          currentTask: { id: 't_0000000001', status: 'in_progress' },
         } as any),
       );
+      prisma.task.findFirst.mockResolvedValue({
+        id: 't_0000000001',
+        status: 'in_progress',
+      });
       await expect(service.remove('tm_0000000001')).rejects.toThrow(
         ConflictException,
       );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('待评审任务（pending_review）→ 409 TEAM_TASK_RUNNING', async () => {
+      prisma.team.findUnique.mockResolvedValue(
+        teamRow({ currentTaskId: null, queues: [] }),
+      );
+      prisma.task.findFirst.mockResolvedValue({
+        id: 't_0000000002',
+        status: 'pending_review',
+      });
+      await expect(service.remove('tm_0000000001')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('排队/待开始任务随团队级联删除（任务子表按序清，返回任务 id）', async () => {
+      prisma.team.findUnique.mockResolvedValue(
+        teamRow({
+          currentTaskId: 't_0000000001',
+          queues: [{ id: 'tq_1', taskId: 't_0000000002', position: 1 }],
+        } as any),
+      );
+      prisma.task.findFirst.mockResolvedValue(null);
+      prisma.task.findMany.mockResolvedValue([
+        { id: 't_0000000001' },
+        { id: 't_0000000002' },
+      ]);
+      const tx = mockCascadeTx({
+        plan: {
+          findMany: jest.fn().mockResolvedValue([{ id: 'pl_1' }]),
+          deleteMany: jest.fn().mockResolvedValue({}),
+        },
+        issue: {
+          findMany: jest.fn().mockResolvedValue([{ id: 'is_1' }]),
+          deleteMany: jest.fn().mockResolvedValue({}),
+        },
+        artifact: {
+          findMany: jest.fn().mockResolvedValue([{ id: 'a_1' }]),
+          deleteMany: jest.fn().mockResolvedValue({}),
+        },
+      });
+      const result = await service.remove('tm_0000000001');
+      expect(result.deleted).toBe(true);
+      expect(tx.taskMessageChannel.deleteMany).toHaveBeenCalledWith({
+        where: { taskId: { in: ['t_0000000001', 't_0000000002'] } },
+      });
+      expect(tx.planTask.deleteMany).toHaveBeenCalledWith({
+        where: { planId: { in: ['pl_1'] } },
+      });
+      expect(tx.issueActivity.deleteMany).toHaveBeenCalledWith({
+        where: { issueId: { in: ['is_1'] } },
+      });
+      expect(tx.artifactVersion.deleteMany).toHaveBeenCalledWith({
+        where: { artifactId: { in: ['a_1'] } },
+      });
+      expect(tx.teamQueue.deleteMany).toHaveBeenCalledWith({
+        where: { taskId: { in: ['t_0000000001', 't_0000000002'] } },
+      });
+      expect(tx.task.deleteMany).toHaveBeenCalledWith({
+        where: { id: { in: ['t_0000000001', 't_0000000002'] } },
+      });
+      expect(tx.team.delete).toHaveBeenCalledWith({
+        where: { id: 'tm_0000000001' },
+      });
     });
   });
 
