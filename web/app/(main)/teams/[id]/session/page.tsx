@@ -9,7 +9,7 @@
  * - 可拖拽面板（useResizableWidth 左 224 / 右 300 + ResizeHandle，宽度持久化）
  * - 弹窗：QuestionModal / IssueDetailModal / TaskInfoEditModal（评审与计划内联于右侧三 Tab，不再单独成区）
  * - 右侧 TaskRightTabs（状态/配置/产出三 Tab，team.currentTaskId 驱动；队列与记忆已在状态 Tab 内展示）
- * - 实时：team: + channel:（群聊/私聊） + task:（当前任务） + global
+ * - 实时：team: + channel:（群聊/私聊） + global（会话统一团队域后不再订阅 task:）
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
@@ -92,8 +92,13 @@ export default function TeamSessionPage() {
 
   const [input, setInput] = useState("");
   const [loadingByAgent, setLoadingByAgent] = useState<Record<string, string>>({});
+  // loading key 最后更新时间（与 loadingByAgent 同 key；staleness 兜底 + 正常删除都同步维护）。
+  const loadingSeenRef = useRef<Record<string, number>>({});
   const [errorByAgent, setErrorByAgent] = useState<Record<string, string>>({});
   const [sessionByAgent, setSessionByAgent] = useState<Record<string, string>>({});
+  // DM Tab 未读红点（内存态，页面生命周期内有效；不持久化、不落 localStorage）：
+  // key 为 Tab 键（instanceId ?? agentId），value 恒 true；切到该 Tab 时清除。
+  const [unreadByInstance, setUnreadByInstance] = useState<Record<string, true>>({});
   const agentIdBySessionRef = useRef<Record<string, string>>({});
   const instanceIdBySessionRef = useRef<Record<string, string | null>>({});
   const [loadingMore, setLoadingMore] = useState(false);
@@ -287,9 +292,101 @@ export default function TeamSessionPage() {
     return map;
   }, [team]);
 
+  // loading key 归一化（stuck-"操作中" 修复）：同一 agent 有三路 key 形式——任务实例 id
+  // （ta_，agentMembers.instanceId）、agentId（a_，agentMembers.id）、团队成员 id（tmm_，
+  // team.members.id）。起工事件（常带 bare agentId）与终结事件（agent 回复按 senderInstanceId、
+  // status 带 instanceId）可能各执一端，精确单 key 删除会留下永久 "操作中"。
+  // 约定：写固定 canonical（instanceId ?? agentId），删则展开全量移除；
+  // 10min 无更新兜底见下方 LOADING_STALE_MS interval。
+  const agentKeysFor = useCallback(
+    (payload: { instanceId?: string | null; agentId?: string | null }) => {
+      const seeds = [payload.instanceId, payload.agentId].filter((k): k is string => !!k);
+      const out = new Set<string>(seeds);
+      for (const key of seeds) {
+        for (const a of agentMembers) {
+          if (a.id === key || (a.instanceId ?? a.id) === key) {
+            out.add(a.id);
+            out.add(a.instanceId ?? a.id);
+          }
+        }
+        for (const m of team?.members ?? []) {
+          if (m.id === key || m.agentId === key) {
+            out.add(m.id);
+            out.add(m.agentId);
+          }
+        }
+      }
+      return out;
+    },
+    [agentMembers, team],
+  );
+  // loading 全量删除（含 loadingSeenRef 同步清理；key 不存在时返回原引用，不触发重渲染）。
+  const removeLoadingKeys = useCallback((keys: Iterable<string>) => {
+    const list = [...keys];
+    for (const k of list) delete loadingSeenRef.current[k];
+    setLoadingByAgent((prev) => {
+      let next: Record<string, string> | null = null;
+      for (const k of list) {
+        if (k in prev) {
+          if (!next) next = { ...prev };
+          delete next[k];
+        }
+      }
+      return next ?? prev;
+    });
+  }, []);
+  // Staleness 兜底（单 interval 实现，60s 扫一次）：任何终结事件都丢了、key 形式出新花样时，
+  // 超过 LOADING_STALE_MS 无更新的 loading 条目在此被丢弃，"操作中" 最多再挂 10 分钟。
+  // 正常路径（终结事件全量删除）不受影响；spinner/红点/loadingLabel 语义零改动。
+  const LOADING_STALE_MS = 10 * 60 * 1000;
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setLoadingByAgent((prev) => {
+        let next: Record<string, string> | null = null;
+        for (const k of Object.keys(prev)) {
+          if (now - (loadingSeenRef.current[k] ?? 0) > LOADING_STALE_MS) {
+            if (!next) next = { ...prev };
+            delete next[k];
+            delete loadingSeenRef.current[k];
+          }
+        }
+        return next ?? prev;
+      });
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, [LOADING_STALE_MS]);
+
+  // loading/state 事件 key 可能是 agentId（多实例 fan-out 到各 Tab 键），清掉对应红点（working 态用 spinner 展示，不与红点叠加）。
+  const clearUnreadForStateKey = useCallback(
+    (stateKey: string) => {
+      setUnreadByInstance((prev) => {
+        const targets = new Set<string>([stateKey]);
+        for (const a of agentMembers) {
+          if (a.id === stateKey) targets.add(a.instanceId ?? a.id);
+        }
+        let next: Record<string, true> | null = null;
+        for (const t of targets) {
+          if (t in prev) {
+            if (!next) next = { ...prev };
+            delete next[t];
+          }
+        }
+        return next ?? prev;
+      });
+    },
+    [agentMembers],
+  );
+
   const handlePrivateTab = useCallback(
     async (instanceId: string) => {
-      if (!user?.id) return;
+      // 切到该 Tab 即视为已读：先清红点（即使后续建频道失败，已读语义仍成立；重渲染不恢复）。
+      setUnreadByInstance((prev) => {
+        if (!(instanceId in prev)) return prev;
+        const next = { ...prev };
+        delete next[instanceId];
+        return next;
+      });      if (!user?.id) return;
       const cached = privateChannelMap.get(instanceId);
       if (cached) {
         setActiveTab(`private:${cached}`);
@@ -415,33 +512,66 @@ export default function TeamSessionPage() {
     });
   }, [isGroupTab, channelId, activePrivateId, messagesQuery.data, privateMessagesQuery.data]);
   useRealtimeEvents({
-    scope: `team:${teamId}${channelId ? `,channel:${channelId}` : ""}${activePrivateId ? `,channel:${activePrivateId}` : ""}${currentTaskId ? `,task:${currentTaskId}` : ""},global`,
+    // 会话统一团队域：只订阅 team: + channel:（群聊/私聊） + global，不再订阅 task:。
+    // 回流载荷 taskId 恒 team scope 串/归因透传（LANE-A），守卫一律 team 域放行（见各回调）。
+    scope: `team:${teamId}${channelId ? `,channel:${channelId}` : ""}${activePrivateId ? `,channel:${activePrivateId}` : ""},global`,
     enabled: !!teamId && !!user?.id,
     onMessage: (payload) => {
       if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
       if (currentTaskId) queryClient.invalidateQueries({ queryKey: ["plans", currentTaskId] });
       const m = payload.message;
       if (m.senderType === "agent" && m.senderId) {
-        const senderKey = (m as unknown as { senderInstanceId?: string }).senderInstanceId ?? m.senderId;
-        setLoadingByAgent((prev) => {
-          if (!(senderKey in prev)) return prev;
-          const next = { ...prev };
-          delete next[senderKey];
-          return next;
-        });
+        const senderInstanceId = (m as unknown as { senderInstanceId?: string }).senderInstanceId ?? null;
+        // 终结信号的 key 形式（senderInstanceId/ta_、senderId/agentId 或 tmm_）可能与起工时
+        // 的 canonical key 不同，展开该 agent 全量 key 形式删除，否则残留永久 "操作中"。
+        const arrivedKeys = agentKeysFor({ instanceId: senderInstanceId, agentId: m.senderId });
+        removeLoadingKeys(arrivedKeys);
         setErrorByAgent((prev) => {
-          if (!(senderKey in prev)) return prev;
-          const next = { ...prev };
-          delete next[senderKey];
-          return next;
+          let next: Record<string, string> | null = null;
+          for (const k of arrivedKeys) {
+            if (k in prev) {
+              if (!next) next = { ...prev };
+              delete next[k];
+            }
+          }
+          return next ?? prev;
         });
         setSessionByAgent((prev) => {
-          const st = prev[senderKey];
-          if (st !== "active" && st !== "running") return prev;
-          const next = { ...prev };
-          delete next[senderKey];
-          return next;
+          let next: Record<string, string> | null = null;
+          for (const k of arrivedKeys) {
+            const st = prev[k];
+            if ((st === "active" || st === "running") && k in prev) {
+              if (!next) next = { ...prev };
+              delete next[k];
+            }
+          }
+          return next ?? prev;
         });
+        // DM 未读红点：agent 新输出落到某私聊频道（非群聊频道）且该 Tab 未激活 → 标记未读；
+        // 当前正打开的 Tab 不标（用户已在看）。loading 收敛后红点接替 spinner（见 Tab 渲染互斥）。
+        const chId = m.channelId;
+        if (chId && chId !== channelId) {
+          let instKey: string | null = null;
+          for (const [k, v] of privateChannelMap.entries()) {
+            if (v === chId) { instKey = k; break; }
+          }
+          if (!instKey) {
+            const senderInst = (m as unknown as { senderInstanceId?: string | null }).senderInstanceId ?? null;
+            const hit = agentMembers.find((a) =>
+              (senderInst && (a.instanceId ?? a.id) === senderInst) ||
+              a.id === m.senderId ||
+              (a.instanceId ?? a.id) === m.senderId,
+            );
+            instKey = hit ? (hit.instanceId ?? hit.id) : null;
+          }
+          if (instKey) {
+            const activePriv = activeTab.startsWith("private:") ? activeTab.slice(8) : null;
+            if (chId !== activePriv) {
+              const markKey = instKey;
+              setUnreadByInstance((prev) => (prev[markKey] ? prev : { ...prev, [markKey]: true }));
+            }
+          }
+        }
       }
     },
     onAgentLoading: (payload) => {
@@ -451,7 +581,9 @@ export default function TeamSessionPage() {
         instanceIdBySessionRef.current[sessionId] = payload.instanceId ?? null;
       }
       const key = payload.instanceId ?? payload.agentId;
+      loadingSeenRef.current[key] = Date.now();
       setLoadingByAgent((prev) => ({ ...prev, [key]: payload.phase }));
+      clearUnreadForStateKey(key);
     },
     onAgentError: (payload) => {
       const p = payload as { sessionId?: string | null; error?: unknown; message?: unknown };
@@ -464,7 +596,9 @@ export default function TeamSessionPage() {
       setErrorByAgent((prev) => ({ ...prev, [key]: detail }));
     },
     onAgentStatus: (payload: AgentStatusEvent) => {
-      if (currentTaskId && payload.taskId && payload.taskId !== currentTaskId) return;
+      // team 域放行：taskId 为归因/ team: scope 串，不再按当前任务过滤；
+      // 仅当事件明确归属另一团队时丢弃（任务分区群消息的过滤由服务端分区 + 历史接口承担）。
+      if (payload.taskId && payload.taskId.startsWith("team:") && payload.taskId !== `team:${teamId}`) return;
       const agentId = payload.agentId;
       if (!agentId) return;
       if (payload.sessionId) {
@@ -473,14 +607,11 @@ export default function TeamSessionPage() {
       }
       const key = payload.instanceId ?? agentId;
       if (payload.status === "running") {
+        loadingSeenRef.current[key] = Date.now();
         setLoadingByAgent((prev) => ({ ...prev, [key]: "operating" }));
+        clearUnreadForStateKey(key);
       } else if (payload.status === "completed" || payload.status === "failed") {
-        setLoadingByAgent((prev) => {
-          if (!(key in prev)) return prev;
-          const next = { ...prev };
-          delete next[key];
-          return next;
-        });
+        removeLoadingKeys(agentKeysFor(payload));
       }
     },
     onSessionUpdated: (payload: SessionUpdatedEvent) => {
@@ -490,12 +621,7 @@ export default function TeamSessionPage() {
       const key = instanceIdBySessionRef.current[payload.sessionId] ?? agentId;
       setSessionByAgent((prev) => ({ ...prev, [key]: payload.status }));
       if (payload.status === "idle" || payload.status === "frozen" || payload.status === "archived") {
-        setLoadingByAgent((prev) => {
-          if (!(key in prev)) return prev;
-          const next = { ...prev };
-          delete next[key];
-          return next;
-        });
+        removeLoadingKeys(agentKeysFor({ instanceId: instanceIdBySessionRef.current[payload.sessionId] ?? null, agentId }));
       }
     },
     onTeamChanged: (payload: any) => {
@@ -529,7 +655,8 @@ export default function TeamSessionPage() {
         return;
       }
       if (payload.question.status !== "pending") return;
-      if (currentTaskId && payload.taskId && payload.taskId !== currentTaskId) return;
+      // team 域放行：问题事件不再按当前任务过滤（与 onAgentStatus 同规则）。
+      if (payload.taskId && payload.taskId.startsWith("team:") && payload.taskId !== `team:${teamId}`) return;
       if (payload.question.managedMode) return;
       setPendingQuestion({
         id: payload.question.id,
@@ -672,14 +799,25 @@ export default function TeamSessionPage() {
     },
   });
   const resetSessionMutation = useMutation({
-    mutationFn: (instanceId: string) =>
-      api.post<{ task: TaskDetail; session: unknown }>(`/tasks/${currentTaskId}/instances/${instanceId}/reset-session`),
-    onSuccess: (res) => {
-      queryClient.setQueryData<TaskDetail>(["task", currentTaskId], res.task);
-      queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+    mutationFn: (instanceId: string) => {
+      // 实例 key → 团队成员 id（tmm_）：团队成员来源时 instanceId 本身即 tmm_；
+      // 任务实例来源时按 agentId+seq 匹配 team.members（与私聊建频道同规则）。
+      const member = agentMembers.find((a) => (a.instanceId ?? a.id) === instanceId);
+      const memberId = member?.instanceId?.startsWith("tmm_")
+        ? member.instanceId
+        : (team?.members.find((m) => m.agentId === member?.id && m.seq === member?.seq)?.id
+          ?? team?.members.find((m) => m.agentId === member?.id)?.id
+          ?? instanceId);
+      return api.post<{ teamId: string; memberId: string; session: unknown }>(
+        `/teams/${teamId}/members/${memberId}/reset-session`, {},
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+      if (currentTaskId) queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
     },
     onError: (err) => {
-      console.error("[TeamSession] reset session failed", { teamId, taskId: currentTaskId, error: err });
+      console.error("[TeamSession] reset session failed", { teamId, error: err });
     },
   });
   const addInstanceMutation = useMutation({
@@ -832,6 +970,7 @@ export default function TeamSessionPage() {
             data-testid="dm-tabs"
             style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.xl}px`, borderBottom: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", overflowX: "auto", ...baseFont }}
           >
+            <style>{`@keyframes dm-tab-spin { to { transform: rotate(360deg); } }`}</style>
             <button
               type="button"
               data-testid="dm-tab-group"
@@ -844,6 +983,14 @@ export default function TeamSessionPage() {
             {agentMembers.map((m) => {
               const chanId = privateChannelMap.get(m.instanceId ?? m.id);
               const isActive = chanId ? activeTab === `private:${chanId}` : false;
+              const instKey = m.instanceId ?? m.id;
+              // working 判定：loading key 可能是实例 id / agentId / 团队成员 id（tmm_），三路别名都查。
+              const tmmAlias = team?.members?.find((t) => t.agentId === m.id && t.seq === (m as { seq?: number }).seq)?.id;
+              const isTabLoading = loadingAgentIds.has(instKey)
+                || loadingAgentIds.has(m.id)
+                || (tmmAlias ? loadingAgentIds.has(tmmAlias) : false);
+              // done-unread 红点：仅非 working 且有未读标记时展示；切 Tab 清除（见 handlePrivateTab）。
+              const showUnread = !isTabLoading && !!unreadByInstance[instKey];
               return (
                 <button
                   key={m.instanceId ?? m.id}
@@ -851,9 +998,24 @@ export default function TeamSessionPage() {
                   data-testid={`dm-tab-private-${m.instanceId ?? m.id}`}
                   data-active={isActive ? "true" : "false"}
                   onClick={() => handlePrivateTab(m.instanceId ?? m.id)}
-                  style={{ padding: `${space.xs}px ${space.md}px`, borderRadius: radius.pill, border: `1px solid ${isActive ? "#2563EB" : neutral[200]}`, backgroundColor: isActive ? "#2563EB" : "var(--color-surface)", color: isActive ? "#FFFFFF" : neutral[600], fontSize: fontSize.sm, fontWeight: isActive ? 600 : 400, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}
+                  style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs}px ${space.md}px`, borderRadius: radius.pill, border: `1px solid ${isActive ? "#2563EB" : neutral[200]}`, backgroundColor: isActive ? "#2563EB" : "var(--color-surface)", color: isActive ? "#FFFFFF" : neutral[600], fontSize: fontSize.sm, fontWeight: isActive ? 600 : 400, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}
                 >
-                  私聊: {m.name}
+                  <span>私聊: {m.name}</span>
+                  {isTabLoading ? (
+                    <span
+                      data-testid={`dm-tab-loading-${instKey}`}
+                      role="status"
+                      aria-label={`${m.name} 回复中`}
+                      style={{ width: space.md, height: space.md, borderRadius: "50%", border: `2px solid ${neutral[300]}`, borderTopColor: "currentColor", animation: "dm-tab-spin 0.8s linear infinite", flexShrink: 0 }}
+                    />
+                  ) : showUnread ? (
+                    <span
+                      data-testid={`dm-tab-unread-${instKey}`}
+                      aria-label={`${m.name} 有新回复`}
+                      style={{ width: space.sm, height: space.sm, borderRadius: "50%", backgroundColor: "#DC2626", flexShrink: 0 }}
+                      // tokens.ts 无 danger/error 语义 token：沿用本文件既有错误红 #DC2626（发送失败/加载失败同色）。
+                    />
+                  ) : null}
                 </button>
               );
             })}
@@ -973,7 +1135,7 @@ export default function TeamSessionPage() {
                 plansQuery={plansQuery}
                 agents={agentMembers}
                 onEditTaskInfo={() => setTaskEditOpen(true)}
-                onOpenArtifacts={() => router.push(`/artifacts?pid=${currentTask.projectId}`)}
+                onOpenArtifacts={() => router.push(`/artifacts?teamId=${teamId}`)}
                 onOpenIssues={() => router.push(`/issues?taskId=${currentTask.id}`)}
                 onToggleManagedMode={(v: boolean) => { if (!managedModeMutation.isPending) managedModeMutation.mutate(v); }}
                 onToggleExecutionMode={(v: "direct" | "plan") => { if (!executionModeMutation.isPending) executionModeMutation.mutate(v); }}
