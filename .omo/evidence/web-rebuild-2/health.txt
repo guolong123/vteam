@@ -1,0 +1,7 @@
+aiagents-compose-db Up 44 minutes (healthy)
+aiagents-compose-server Up 18 minutes (healthy)
+aiagents-compose-web Up 48 seconds (healthy)
+aiagents-compose-worker Up 43 minutes
+web :13001 -> 200
+{"status":"ok","info":{},"error":{},"details":{}}
+aiagents-web:latest 2026-09-08 08:57:00 +0800 CST 73dd8b727bdc

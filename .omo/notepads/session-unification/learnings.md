@@ -170,3 +170,11 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - 红先行：新 group-send-fixes 三 spec 在 pre-fix 下 2 failed；修后 chat 110 / chat+teams 360 全绿，tsc clean；server 容器单独 rebuild 验证（`build server + up -d server`，未 down -v、未改存量行）。
 - 探针教训：python urllib 走环境 proxy 会 502 而 curl 直通 200——live 探针统一 curl 或 `ProxyHandler({})`；F-B 复现须 fresh team 走完 mainAgent→start→review→accept→archive 全链（start 前置 MAIN_AGENT_NOT_SET）。
 - 残留：tm_0000000003/t_0000000003(archived)/c_0000000004/s_0000000002/s_0000000003 + fa/fb 探针消息（m_0000000019-38 段）；证据 .omo/evidence/group-send-fixes/。
+
+## web-rebuild-2 — commit 保全 + web 单体重建 + spinner 取证 (2026-09-08)
+
+- 脏树含双 plan（SU todos 1-15 全 x＋RPD todos 1-12 全 x）＋DM 跟进＋外会话草稿：按 concern 拆三 commit（eb0baa0 refactor(session)! / 5e07244 fix(chat) session-page / 9e743d0 chore foreign），中文 CJK 文件名须 `core.quotepath=off` 否则 add 静默失败；149 改＋21 新增核对 `diff --cached --name-only` 与排除 5 项一致后才 commit；secrets 扫 diff 仅文档字样＋空 secrets 对象。
+- RPD 与 SU 同文件交织（tasks/teams/chat/memories/realtime/platform-mcp/session 页）无法按 hunk 经济拆分——合为原子 refactor 并在 body 注明 RPD 归属；SegmentedTabs（skills/memories/integrations/git-repos 统一样式，e2e testid 不变）无法确权归属则 keep＋note，不强行拆 foreign。
+- `docker compose up -d --build web` 仅 web：aiagents-web 5ff199c05bec(08:12)→73dd8b727bdc(08:57)，healthy，:13001 200；db/server/worker uptime 连续未动。 served chunk 直 grep `dm-tab-spin` 命中 page-0a58d5732c3dd5b0.js——stale-bundle 排除法优先于反复点页面。
+- Spinner 抓拍教训（诚实未命中）：复用会话 DM dispatch→首回复实测恒 ~3s（3 次 POST 201 全周期完成），MCP roundtrip 数秒＋150ms 页内 observer 仍可能因“分派排队超 30s”（P0 风暴期 worker 饱和）而零命中。逻辑链已审计闭环：dispatcher 同步 broadcast AGENT_LOADING{instanceId: teamMemberId} team-scope → onAgentLoading 按 instanceId??agentId 入表 → isTabLoading 查 instKey/m.id/tmmAlias（DB senderInstanceId=tmm_0000000003 佐证同域）；附带机制 live 目击（红点 dm-tab-unread-tmm_0000000001/2/3＋会话运行中＋成员卡）。下次抓 spinner：重置成员会话后 cold-start（30s+ 窗口）或 observer 命中即自动截图脚本。
+- 并发 P0 时段 footprint 纪律：DM 回复经 group_post 工具会镜像进群（"在" m_0000000109 等），私聊验证也会漏群消息；误投群 1 条（active tab 切走后 fill+Enter 跟随当前 tab）。已在 web-rebuild-2/NOTES.md 全量披露未擅删；教训：先 GET activeTab/placeholder 断言再 send，且 P0 进行中尽量只观察不触发。
