@@ -228,7 +228,7 @@ function RegisterForm() {
         <Link
           href="/login"
           data-testid="register-login-link"
-          style={{ color: "#2563EB", fontWeight: 500, marginLeft: space.xs, textDecoration: "none" }}
+          style={{ color: "#0D9488", fontWeight: 500, marginLeft: space.xs, textDecoration: "none" }}
         >
           去登录
         </Link>

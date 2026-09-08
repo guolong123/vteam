@@ -7,8 +7,8 @@ import { DeviceSwitcher } from "./device-switcher";
 import type { DeviceType } from "./types";
 import { neutral, surface, border, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
 
-const ACCENT = "#2563EB";
-const ACCENT_BG = "rgba(37,99,235,0.10)";
+const ACCENT = "#0D9488";
+const ACCENT_BG = "rgba(13,148,136,0.10)";
 
 const TRASH_ICON = (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -43,7 +43,7 @@ export function PrototypePanel({ taskId, initialProtoId }: { taskId: string; ini
     <div data-testid="docs-prototype-panel" className="flex-col md:flex-row" style={{ display: "flex", minHeight: 0, flex: 1, backgroundColor: surface, fontFamily: fontFamily.body }}>
       <div className="flex md:hidden" style={{ flexShrink: 0, gap: space.sm, overflowX: "auto", borderBottom: `1px solid ${border}`, backgroundColor: surface, padding: `${space.sm}px ${space.md}px` }}>
         {prototypes.map((p) => (
-          <button key={p.id} type="button" onClick={() => setSelectedId(p.id)} style={{ flexShrink: 0, borderRadius: radius.pill, padding: "6px 12px", fontSize: fontSize.md, cursor: "pointer", border: "none", fontFamily: fontFamily.body, ...(p.id === effectiveId ? { backgroundColor: "#2563EB", color: "#FFFFFF" } : { border: `1px solid ${border}`, backgroundColor: surface, color: neutral[600] }) }}>{p.name}</button>
+          <button key={p.id} type="button" onClick={() => setSelectedId(p.id)} style={{ flexShrink: 0, borderRadius: radius.pill, padding: "6px 12px", fontSize: fontSize.md, cursor: "pointer", border: "none", fontFamily: fontFamily.body, ...(p.id === effectiveId ? { backgroundColor: "#0D9488", color: "#FFFFFF" } : { border: `1px solid ${border}`, backgroundColor: surface, color: neutral[600] }) }}>{p.name}</button>
         ))}
       </div>
       <aside className="hidden md:flex" style={{ width: 256, flexShrink: 0, flexDirection: "column", borderRight: `1px solid ${border}`, backgroundColor: neutral[50] }}>
@@ -67,7 +67,7 @@ export function PrototypePanel({ taskId, initialProtoId }: { taskId: string; ini
                       style={{ display: "flex", alignItems: "center", gap: 4, borderRadius: radius.sm, ...(active ? { backgroundColor: ACCENT_BG } : {}) }}
                     >
                       <button type="button" onClick={() => setSelectedId(proto.id)} aria-current={active ? "page" : undefined} style={{ display: "flex", minWidth: 0, flex: 1, alignItems: "flex-start", gap: 10, borderRadius: radius.sm, padding: `${space.sm}px ${space.md}px`, textAlign: "left", cursor: "pointer", border: "none", fontFamily: fontFamily.body, backgroundColor: "transparent", color: active ? ACCENT : neutral[600] }}>
-                        <span style={{ marginTop: 4, width: 6, height: 6, flexShrink: 0, borderRadius: "50%", backgroundColor: active ? "#3B82F6" : neutral[300] }} />
+                        <span style={{ marginTop: 4, width: 6, height: 6, flexShrink: 0, borderRadius: "50%", backgroundColor: active ? "#0D9488" : neutral[300] }} />
                         <span style={{ minWidth: 0 }}><span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: fontSize.md, fontWeight: 500 }}>{proto.name}</span><span style={{ marginTop: 2, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: fontFamily.mono, fontSize: 11, color: neutral[400] }}>{proto.id}</span></span>
                       </button>
                       {proto.artifactId ? (

@@ -70,7 +70,7 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
  * 与角色色，遵循"扩展 token"范式在页面内定义具名常量并注释原因，不扩散共享层。
  */
 const sourceColors = {
-  内置: { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  内置: { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   上传: { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
 } as const;
 
@@ -101,9 +101,9 @@ const groupTheme = {
     icon: "⬢",
     title: "内置工具",
     desc: "平台预置，开箱即用",
-    color: "#2563EB",
-    bg: "rgba(37,99,235,0.10)",
-    border: "rgba(37,99,235,0.22)",
+    color: "#0D9488",
+    bg: "rgba(13,148,136,0.10)",
+    border: "rgba(13,148,136,0.22)",
   },
   custom: {
     icon: "✚",
@@ -124,7 +124,7 @@ const groupTheme = {
 } as const;
 
 /** 内置工具「开箱即用」徽章（平台预置语义，蓝系同内置来源） */
-const builtinReadyTheme = { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" };
+const builtinReadyTheme = { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" };
 
 /* ------------------------------ MCP 语义主题（页面内扩展 token） ------------------------------
  * MCP 的「类型 / 连接状态」语义独立于任务四态与角色色，遵循"扩展 token"范式在页面内
@@ -144,7 +144,7 @@ type McpStatus = "connected" | "failed" | "needs_auth" | "disconnected" | "conne
 
 /** 类型徽章主题：Local=本地二进制（蓝系）/ Remote=远程服务（紫系，与 v2 标识同族） */
 const mcpTypeTheme: Record<McpType, { label: string; color: string; bg: string; border: string }> = {
-  local: { label: "Local 本地", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  local: { label: "Local 本地", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   remote: { label: "Remote 远程", color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
 };
 
@@ -161,7 +161,7 @@ const mcpStatusTheme: Record<
   failed: { label: "连接失败", mark: "✗", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
   needs_auth: { label: "待授权", mark: "🔑", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
   disconnected: { label: "未连接", mark: "⚠️", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
-  connecting: { label: "连接中", mark: "◐", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  connecting: { label: "连接中", mark: "◐", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
 };
 
 /* 连接中 ◐ 旋转动画（scoped：stmmcp 前缀避免污染其他原型） */
@@ -1794,8 +1794,8 @@ function McpServerModal({
                     flex: 1,
                     padding: `${space.sm}px ${space.md}px`,
                     borderRadius: radius.md,
-                    border: type === t ? `1px solid #2563EB` : `1px solid ${neutral[200]}`,
-                    backgroundColor: type === t ? "rgba(37,99,235,0.10)" : "var(--color-surface)",
+                    border: type === t ? `1px solid #0D9488` : `1px solid ${neutral[200]}`,
+                    backgroundColor: type === t ? "rgba(13,148,136,0.10)" : "var(--color-surface)",
                     color: type === t ? "#1E40AF" : neutral[600],
                     fontSize: fontSize.sm,
                     fontWeight: type === t ? 600 : 500,
@@ -2085,13 +2085,13 @@ function McpServerModal({
                 padding: `${space.sm}px ${space.lg}px`,
                 borderRadius: radius.md,
                 border: "none",
-                backgroundColor: "#2563EB",
+                backgroundColor: "#0D9488",
                 color: "#FFFFFF",
                 fontSize: fontSize.md,
                 fontWeight: 500,
                 cursor: submitting ? "default" : "pointer",
                 opacity: submitting ? 0.6 : 1,
-                boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+                boxShadow: "0 6px 16px rgba(13,148,136,.3)",
                 fontFamily: fontFamily.body,
               }}
             >
@@ -2569,13 +2569,13 @@ function ToolEditModal({
               padding: `${space.sm}px ${space.lg}px`,
               borderRadius: radius.md,
               border: "none",
-              backgroundColor: "#2563EB",
+              backgroundColor: "#0D9488",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
               cursor: submitting ? "default" : "pointer",
               opacity: submitting ? 0.6 : 1,
-              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+              boxShadow: "0 6px 16px rgba(13,148,136,.3)",
               fontFamily: fontFamily.body,
             }}
           >
@@ -2604,7 +2604,7 @@ const modalInputStyle: CSSProperties = {
   color: neutral[800],
   fontSize: fontSize.md,
   fontFamily: fontFamily.body,
-  outline: "none",
+
 };
 
 /** 注册弹窗字段行（标签 + 输入槽） */
@@ -3111,9 +3111,9 @@ export default function SkillToolManagePage() {
               padding: `${space.sm + 2}px ${space.md}px`,
               borderRadius: radius.md,
               backgroundColor:
-                notice.kind === "success" ? "rgba(16,185,129,0.10)" : notice.kind === "error" ? "rgba(239,68,68,0.10)" : "rgba(37,99,235,0.10)",
+                notice.kind === "success" ? "rgba(16,185,129,0.10)" : notice.kind === "error" ? "rgba(239,68,68,0.10)" : "rgba(13,148,136,0.10)",
               border:
-                notice.kind === "success" ? "1px solid rgba(16,185,129,0.28)" : notice.kind === "error" ? "1px solid rgba(239,68,68,0.22)" : "1px solid rgba(37,99,235,0.22)",
+                notice.kind === "success" ? "1px solid rgba(16,185,129,0.28)" : notice.kind === "error" ? "1px solid rgba(239,68,68,0.22)" : "1px solid rgba(13,148,136,0.22)",
               color:
                 notice.kind === "success" ? "#065F46" : notice.kind === "error" ? "#DC2626" : "#1E40AF",
               fontSize: fontSize.sm,
@@ -3159,12 +3159,12 @@ export default function SkillToolManagePage() {
                     padding: `${space.sm + 1}px ${space.lg}px`,
                     borderRadius: radius.pill,
                     border: "none",
-                    backgroundColor: "#2563EB",
+                    backgroundColor: "#0D9488",
                     color: "#FFFFFF",
                     fontSize: fontSize.md,
                     fontWeight: 500,
                     cursor: "pointer",
-                    boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+                    boxShadow: "0 6px 16px rgba(13,148,136,.3)",
                     fontFamily: fontFamily.body,
                   }}
                 >
@@ -3208,12 +3208,12 @@ export default function SkillToolManagePage() {
                     padding: `${space.sm + 1}px ${space.lg}px`,
                     borderRadius: radius.pill,
                     border: "none",
-                    backgroundColor: "#2563EB",
+                    backgroundColor: "#0D9488",
                     color: "#FFFFFF",
                     fontSize: fontSize.md,
                     fontWeight: 500,
                     cursor: "pointer",
-                    boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+                    boxShadow: "0 6px 16px rgba(13,148,136,.3)",
                     fontFamily: fontFamily.body,
                   }}
                 >
@@ -3776,13 +3776,13 @@ export default function SkillToolManagePage() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.md,
                   border: "none",
-                  backgroundColor: "#2563EB",
+                  backgroundColor: "#0D9488",
                   color: "#FFFFFF",
                   fontSize: fontSize.md,
                   fontWeight: 500,
                   cursor: editMutation.isPending || editLoading ? "default" : "pointer",
                   opacity: editMutation.isPending || editLoading ? 0.6 : 1,
-                  boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+                  boxShadow: "0 6px 16px rgba(13,148,136,.3)",
                   fontFamily: fontFamily.body,
                 }}
               >
@@ -3966,7 +3966,7 @@ export default function SkillToolManagePage() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.md,
                   border: "none",
-                  backgroundColor: "#2563EB",
+                  backgroundColor: "#0D9488",
                   color: "#FFFFFF",
                   fontSize: fontSize.md,
                   fontWeight: 500,
@@ -3978,7 +3978,7 @@ export default function SkillToolManagePage() {
                     !csName.trim() || !csDescription.trim() || !csBody.trim() || createSkillMutation.isPending
                       ? 0.6
                       : 1,
-                  boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+                  boxShadow: "0 6px 16px rgba(13,148,136,.3)",
                   fontFamily: fontFamily.body,
                 }}
               >

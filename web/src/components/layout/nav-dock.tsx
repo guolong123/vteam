@@ -16,10 +16,10 @@ import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/them
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /* ------------------------------ 导航语义常量 ------------------------------ */
-/** 导航高亮蓝（与 styles.roles.product.color 一致） */
-const NAV_ACTIVE = "#3B82F6";
+/** 导航高亮青蓝（与 styles.roles.product.color 一致） */
+const NAV_ACTIVE = "#0D9488";
 /** 高亮深一档（用于文字 / 选中态底色） */
-const NAV_ACTIVE_DEEP = "#2563EB";
+const NAV_ACTIVE_DEEP = "#0F766E";
 
 /** Dock 收起 / 展开宽度（56→248px） */
 const RAIL_W = 56;
@@ -128,8 +128,8 @@ const dockCss = navAnimStyle + `
   font-family: ${fontFamily.body};
   transition: background-color .15s ease, color .15s ease, transform .15s ease;
 }
-.navdock-icon:hover { background: rgba(59,130,246,.1); color: ${NAV_ACTIVE_DEEP}; transform: translateY(-1px); }
-.navdock-icon[data-active="true"] { background: rgba(59,130,246,.12); color: ${NAV_ACTIVE}; }
+.navdock-icon:hover { background: rgba(13,148,136,.1); color: ${NAV_ACTIVE_DEEP}; transform: translateY(-1px); }
+.navdock-icon[data-active="true"] { background: rgba(13,148,136,.12); color: ${NAV_ACTIVE}; }
 /* Activity Bar 指示条 */
 .navdock-icon[data-active="true"]::before {
   content: "";
@@ -170,7 +170,7 @@ const dockCss = navAnimStyle + `
 .navdock-product-mark {
   width: 32px; height: 32px; flex-shrink: 0;
   border-radius: ${radius.md}px;
-  background: linear-gradient(135deg, ${NAV_ACTIVE}, #8B5CF6);
+  background: ${NAV_ACTIVE_DEEP};
   color: #FFFFFF;
   display: inline-flex; align-items: center; justify-content: center;
   font-weight: 700; font-size: ${fontSize.md}px;
@@ -189,7 +189,7 @@ const dockCss = navAnimStyle + `
   transition: background-color .15s ease, color .15s ease;
 }
 .navdock-nav-item:hover { background: rgba(15,23,42,.05); color: ${neutral[900]}; }
-.navdock-nav-item[data-active="true"] { background: rgba(59,130,246,.1); color: ${NAV_ACTIVE_DEEP}; font-weight: 600; }
+.navdock-nav-item[data-active="true"] { background: rgba(13,148,136,.1); color: ${NAV_ACTIVE_DEEP}; font-weight: 600; }
 .navdock-nav-item-icon { font-size: ${fontSize.md}px; line-height: 1; width: 18px; text-align: center; opacity: .9; }
 .navdock-nav-item[data-active="true"] .navdock-nav-item-icon { opacity: 1; }
 .navdock-extra {

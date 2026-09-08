@@ -378,7 +378,7 @@ export function MessageInput({
           width: "100%",
           minHeight: 40,
           border: "none",
-          outline: "none",
+
           resize: "none",
           background: "transparent",
           color: neutral[800],
@@ -505,7 +505,7 @@ export function MessageInput({
             gap: space.xs,
             padding: `${space.sm}px ${space.lg}px`,
             borderRadius: radius.pill,
-            backgroundColor: "#2563EB",
+            backgroundColor: "#0D9488",
             color: "#FFFFFF",
             fontSize: fontSize.md,
             fontWeight: 500,

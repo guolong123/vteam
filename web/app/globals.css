@@ -62,6 +62,60 @@ a {
   opacity: 1;
 }
 
+/* 全站键盘焦点环：内联 outline:none 抹掉默认焦点时，键盘用户仍可见落点 */
+:root {
+  --color-focus: oklch(0.52 0.12 195);
+  --color-primary: oklch(0.52 0.12 195);
+  --color-primary-hover: oklch(0.42 0.10 195);
+  --color-primary-light: oklch(0.97 0.02 195);
+}
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.dark :focus-visible {
+  outline-color: oklch(0.75 0.10 195);
+}
+
+/* 跳转链接：键盘用户跳到主内容的入口（视觉隐藏，聚焦时浮现） */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  padding: 8px 16px;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 0 0 8px 0;
+  text-decoration: none;
+}
+.skip-link:focus {
+  left: 0;
+}
+
+/* 移动端表单控件字号兜底：低于 16px 触发 iOS Safari 自动缩放 */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 1rem !important;
+  }
+}
+
+/* 尊重用户的动效偏好：关闭非必要过渡/动画 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Tailwind v4 dark variant：class 策略，html.dark 生效 */
 @custom-variant dark (&:is(.dark *));
 
@@ -85,11 +139,11 @@ a {
   --color-border: #e2e8f0;
   --color-text: #0f172a;
   --color-text-muted: #64748b;
-  /* @高亮（chat-bubble isMentionMe）：浅色=浅蓝底+蓝边，保持原外观 */
-  --color-mention-bg: #eff6ff;
-  --color-mention-border: #bfdbfe;
-  --color-mention-accent: #2563eb;
-  --color-mention-text: #2563eb;
+  /* @高亮（chat-bubble isMentionMe）：浅色=浅青蓝底+青蓝边 */
+  --color-mention-bg: #F0FDFA;
+  --color-mention-border: #99F6E4;
+  --color-mention-accent: #0D9488;
+  --color-mention-text: #0F766E;
   /* 分段选择器选中项：浅色=白，深色=提亮一档（surface #1e293b 上可见） */
   --color-segment-active: #ffffff;
 }
@@ -110,10 +164,10 @@ a {
   --color-border: #334155;
   --color-text: #f1f5f9;
   --color-text-muted: #94a3b8;
-  --color-mention-bg: rgba(37, 99, 235, 0.18);
-  --color-mention-border: rgba(147, 197, 253, 0.35);
-  --color-mention-accent: #93c5fd;
-  --color-mention-text: #bfdbfe;
+  --color-mention-bg: rgba(13, 148, 136, 0.18);
+  --color-mention-border: rgba(153, 246, 228, 0.35);
+  --color-mention-accent: #5EEAD4;
+  --color-mention-text: #99F6E4;
   --color-segment-active: #334155;
 }
 
@@ -131,17 +185,17 @@ a {
 @import "tailwindcss/utilities.css" layer(utilities);
 
 @theme {
-  /* 品牌色（对齐 prototype-viewer index.css @theme） */
-  --color-brand-50: #eef4ff;
-  --color-brand-100: #e0ebfe;
-  --color-brand-200: #c7dafe;
-  --color-brand-300: #a3c2fb;
-  --color-brand-400: #7ea2f6;
-  --color-brand-500: #5f83ef;
-  --color-brand-600: #4564e0;
-  --color-brand-700: #374fc4;
-  --color-brand-800: #2f429e;
-  --color-brand-900: #2c3c7d;
+  /* 品牌色（青蓝 H195，OKLCH 均匀色阶） */
+  --color-brand-50: oklch(0.98 0.01 195);
+  --color-brand-100: oklch(0.95 0.03 195);
+  --color-brand-200: oklch(0.90 0.06 195);
+  --color-brand-300: oklch(0.82 0.09 195);
+  --color-brand-400: oklch(0.72 0.11 195);
+  --color-brand-500: oklch(0.62 0.12 195);
+  --color-brand-600: oklch(0.52 0.12 195);
+  --color-brand-700: oklch(0.42 0.10 195);
+  --color-brand-800: oklch(0.35 0.08 195);
+  --color-brand-900: oklch(0.28 0.06 195);
 
   /* 语义色（状态 / 徽标，补齐原型用到的全色阶） */
   --color-success-50: #ecfdf5;

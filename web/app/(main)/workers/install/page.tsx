@@ -129,7 +129,7 @@ const inputStyle: CSSProperties = {
   color: neutral[800],
   fontSize: fontSize.md,
   fontFamily: fontFamily.mono,
-  outline: "none",
+
 };
 
 /** 步骤编号圆点（① ② ③，原型同款蓝阶） */
@@ -144,8 +144,8 @@ function StepBadge({ index }: { index: number }) {
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: "rgba(37,99,235,0.10)",
-        color: "#2563EB",
+        backgroundColor: "rgba(13,148,136,0.10)",
+        color: "#0D9488",
         fontSize: fontSize.md,
         fontWeight: 700,
       }}
@@ -244,9 +244,9 @@ function InstallSteps({ steps }: { steps: string[] }) {
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
-              backgroundColor: "rgba(37,99,235,0.10)",
-              border: "1px solid rgba(37,99,235,0.22)",
-              color: "#2563EB",
+              backgroundColor: "rgba(13,148,136,0.10)",
+              border: "1px solid rgba(13,148,136,0.22)",
+              color: "#0D9488",
               fontSize: fontSize.sm,
               fontWeight: 600,
               marginTop: 1,
@@ -292,9 +292,19 @@ export default function WorkerInstallPage() {
   const [mcpUrl, setMcpUrl] = useState("");
   const [workDir, setWorkDir] = useState("");
 
-  /* serverUrl 初始值跟随页面 origin（用户可手动修改） */
+  /* serverUrl 初始值：页面 origin 但端口 13001(web)→13000(server)修正——worker 须直连 server，
+     跟随 web origin 会连错（compose 反代架构）；用户可手动修改 */
   useEffect(() => {
-    setServerUrl((cur) => (cur ? cur : pageOrigin));
+    setServerUrl((cur) => {
+      if (cur) return cur;
+      try {
+        const u = new URL(pageOrigin);
+        if (u.port === "13001") u.port = "13000";
+        return u.toString().replace(/\/$/, "");
+      } catch {
+        return pageOrigin;
+      }
+    });
   }, [pageOrigin]);
 
   /* MCP 地址默认值 = 当前控制面地址 + /api/v1/platform-mcp（内置 MCP 入口；外部/集群外场景可手动改） */
@@ -408,7 +418,7 @@ export default function WorkerInstallPage() {
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>对齐 11.2 Worker 注册配置</span>
               </div>
 
-              <FieldRow label="控制面地址（serverUrl）" hint="worker 主动 outbound 连接，可跨网络边界">
+              <FieldRow label="控制面地址（serverUrl）" hint="worker 直连 server（非 web 端口）；默认已由页面地址自动修正，可手动改">
                 <input
                   data-testid="server-url-input"
                   value={serverUrl}
@@ -596,8 +606,8 @@ export default function WorkerInstallPage() {
                           display: "inline-flex",
                           alignItems: "center",
                           justifyContent: "center",
-                          backgroundColor: active ? "rgba(37,99,235,0.10)" : neutral[100],
-                          color: active ? "#2563EB" : neutral[400],
+                          backgroundColor: active ? "rgba(13,148,136,0.10)" : neutral[100],
+                          color: active ? "#0D9488" : neutral[400],
                           fontSize: fontSize.lg,
                         }}
                       >
@@ -651,12 +661,12 @@ export default function WorkerInstallPage() {
                 padding: `${space.sm + 2}px ${space.xl}px`,
                 borderRadius: radius.pill,
                 border: "none",
-                backgroundColor: "#2563EB",
+                backgroundColor: "#0D9488",
                 color: "#FFFFFF",
                 fontSize: fontSize.md,
                 fontWeight: 500,
                 cursor: "pointer",
-                boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+                boxShadow: "0 6px 16px rgba(13,148,136,.3)",
                 fontFamily: fontFamily.body,
               }}
             >

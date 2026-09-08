@@ -12,9 +12,9 @@ import { neutral, surface, border, space, radius, fontSize, fontFamily } from "@
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /* 品牌蓝（对齐 roleText.product / ui-markdown 链接色，双主题下保持可读） */
-const ACCENT = "#2563EB";
-const ACCENT_BG = "rgba(37,99,235,0.10)";
-const ACCENT_BORDER = "rgba(37,99,235,0.22)";
+const ACCENT = "#0D9488";
+const ACCENT_BG = "rgba(13,148,136,0.10)";
+const ACCENT_BORDER = "rgba(13,148,136,0.22)";
 
 function textOf(node: ReactNode): string {
   if (node == null) return "";
@@ -103,7 +103,7 @@ export function DocsMarkdown({ markdown, prototypes = [], taskId }: DocsMarkdown
             href={href}
             target="_blank"
             rel="noreferrer"
-            style={{ color: ACCENT, textDecoration: "underline", textUnderlineOffset: 2, textDecorationColor: "rgba(37,99,235,0.35)" }}
+            style={{ color: ACCENT, textDecoration: "underline", textUnderlineOffset: 2, textDecorationColor: "rgba(13,148,136,0.35)" }}
           >
             {children}
           </a>

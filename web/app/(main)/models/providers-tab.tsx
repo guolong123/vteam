@@ -61,7 +61,7 @@ const credentialTheme = {
 } as const;
 
 /** Provider 列表主色（与导航高亮蓝同族） */
-const activeBlue = "#2563EB";
+const activeBlue = "#0D9488";
 
 /** 行 hover / 过渡（scoped：pv 前缀避免污染） */
 const rowCss = `
@@ -216,7 +216,7 @@ export function ConfigureModal({
     backgroundColor: "var(--color-surface)",
     fontSize: fontSize.md,
     color: neutral[800],
-    outline: "none",
+
     fontFamily: fontFamily.body,
   };
 
@@ -425,8 +425,8 @@ export function ConfigureModal({
                     gap: space.sm,
                     padding: `${space.xs + 2}px ${space.md}px`,
                     borderRadius: radius.pill,
-                    backgroundColor: checked ? "rgba(37,99,235,0.10)" : "var(--color-surface)",
-                    border: `1px solid ${checked ? "rgba(37,99,235,0.22)" : neutral[200]}`,
+                    backgroundColor: checked ? "rgba(13,148,136,0.10)" : "var(--color-surface)",
+                    border: `1px solid ${checked ? "rgba(13,148,136,0.22)" : neutral[200]}`,
                     cursor: "pointer",
                     fontSize: fontSize.md,
                     color: neutral[700],
@@ -519,7 +519,7 @@ export function ConfigureModal({
               fontWeight: 500,
               cursor: submitting || (!isLocal && !token.trim()) ? "default" : "pointer",
               opacity: submitting || (!isLocal && !token.trim()) ? 0.6 : 1,
-              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+              boxShadow: "0 6px 16px rgba(13,148,136,.3)",
               fontFamily: fontFamily.body,
             }}
           >

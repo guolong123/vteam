@@ -23,7 +23,7 @@ import type {
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 const authTypeTheme = {
-  ssh_key: { label: "SSH", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  ssh_key: { label: "SSH", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   https_token: { label: "HTTPS", color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
 } as const;
 
@@ -43,7 +43,7 @@ const rowCss = `
 
 function ActionButton({ testid, label, onClick, disabled, primary }: { testid: string; label: string; onClick: () => void; disabled?: boolean; primary?: boolean }) {
   return (
-    <button type="button" data-testid={testid} onClick={onClick} disabled={disabled} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs + 2}px ${space.md + 2}px`, borderRadius: radius.pill, border: primary ? "none" : `1px solid ${neutral[200]}`, backgroundColor: primary ? "#2563EB" : "var(--color-surface)", color: primary ? "#FFFFFF" : neutral[600], fontSize: fontSize.sm, fontWeight: 500, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1, whiteSpace: "nowrap", fontFamily: fontFamily.body }}>
+    <button type="button" data-testid={testid} onClick={onClick} disabled={disabled} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs + 2}px ${space.md + 2}px`, borderRadius: radius.pill, border: primary ? "none" : `1px solid ${neutral[200]}`, backgroundColor: primary ? "#0D9488" : "var(--color-surface)", color: primary ? "#FFFFFF" : neutral[600], fontSize: fontSize.sm, fontWeight: 500, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1, whiteSpace: "nowrap", fontFamily: fontFamily.body }}>
       {label}
     </button>
   );
@@ -163,7 +163,7 @@ function GitRepoModal({ state, submitting, error, agents, credentials, onClose, 
   }, [open, editing, credentials]);
 
   if (!open) return null;
-  const inputBase: CSSProperties = { width: "100%", boxSizing: "border-box", padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], outline: "none", fontFamily: fontFamily.body };
+  const inputBase: CSSProperties = { width: "100%", boxSizing: "border-box", padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800],fontFamily: fontFamily.body };
   const toggleAgent = (id: string) => {
     setSelectedAgents((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
     if (selectedAgents.has(id)) setWriteAgents((prev) => { const next = new Set(prev); next.delete(id); return next; });
@@ -209,8 +209,8 @@ function GitRepoModal({ state, submitting, error, agents, credentials, onClose, 
               const checked = selectedAgents.has(a.id);
               const write = checked && writeAgents.has(a.id);
               return (
-                <label key={a.id} data-agent-id={a.id} data-checked={checked ? "true" : "false"} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.xs + 2}px ${space.md}px`, borderRadius: radius.md, backgroundColor: checked ? "rgba(37,99,235,0.10)" : "var(--color-surface)", border: `1px solid ${checked ? "rgba(37,99,235,0.22)" : neutral[200]}`, cursor: "pointer", fontSize: fontSize.md, color: neutral[700] }}>
-                  <input type="checkbox" checked={checked} onChange={() => toggleAgent(a.id)} style={{ accentColor: "#2563EB" }} />
+                <label key={a.id} data-agent-id={a.id} data-checked={checked ? "true" : "false"} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.xs + 2}px ${space.md}px`, borderRadius: radius.md, backgroundColor: checked ? "rgba(13,148,136,0.10)" : "var(--color-surface)", border: `1px solid ${checked ? "rgba(13,148,136,0.22)" : neutral[200]}`, cursor: "pointer", fontSize: fontSize.md, color: neutral[700] }}>
+                  <input type="checkbox" checked={checked} onChange={() => toggleAgent(a.id)} style={{ accentColor: "#0D9488" }} />
                   {a.name}
                   <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, marginLeft: "auto", padding: "0 6px", borderRadius: radius.sm, backgroundColor: write ? "rgba(245,158,11,0.10)" : "var(--color-surface)", border: `1px solid ${write ? "rgba(245,158,11,0.28)" : neutral[200]}`, opacity: checked ? 1 : 0.45 }}>
                     <input type="checkbox" data-testid="git-repo-modal-write" checked={write} disabled={!checked || submitting} onChange={() => toggleWrite(a.id)} style={{ accentColor: "#D97706" }} />
@@ -224,7 +224,7 @@ function GitRepoModal({ state, submitting, error, agents, credentials, onClose, 
         {error && <div data-testid="git-repo-modal-error" role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", display: "flex", alignItems: "center", gap: space.xs }}><span aria-hidden style={{ fontWeight: 700 }}>!</span>{error}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
           <button type="button" data-testid="git-repo-modal-cancel" onClick={onClose} disabled={submitting} style={{ padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], fontSize: fontSize.md, fontWeight: 500, cursor: "pointer" }}>取消</button>
-          <button type="button" data-testid="git-repo-modal-save" disabled={!canSave} onClick={handleSave} style={{ padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#FFFFFF", fontSize: fontSize.md, fontWeight: 500, cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : 0.6, boxShadow: "0 6px 16px rgba(37,99,235,.3)" }}>{submitting ? "保存中…" : editing ? "保存配置" : "创建并授权"}</button>
+          <button type="button" data-testid="git-repo-modal-save" disabled={!canSave} onClick={handleSave} style={{ padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFFFFF", fontSize: fontSize.md, fontWeight: 500, cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : 0.6, boxShadow: "0 6px 16px rgba(13,148,136,.3)" }}>{submitting ? "保存中…" : editing ? "保存配置" : "创建并授权"}</button>
         </div>
       </div>
     </div>
@@ -253,7 +253,7 @@ function CredentialModal({ state, submitting, error, onClose, onSubmit }: Creden
     else { setName(""); setAuthType("ssh_key"); setKey(""); setDescription(""); }
   }, [open, editing]);
   if (!open) return null;
-  const inputBase: CSSProperties = { width: "100%", boxSizing: "border-box", padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], outline: "none", fontFamily: fontFamily.body };
+  const inputBase: CSSProperties = { width: "100%", boxSizing: "border-box", padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800],fontFamily: fontFamily.body };
   const handleSave = () => {
     if (editing) onSubmit({ ...(name.trim() ? { name: name.trim() } : {}), ...(key.trim() ? { key: key.trim() } : {}), ...(description !== undefined ? { description: description.trim() } : {}) } as UpdateGitCredentialPayload);
     else onSubmit({ name: name.trim(), authType, key: key.trim(), description: description.trim() || undefined } as CreateGitCredentialPayload);
@@ -291,7 +291,7 @@ function CredentialModal({ state, submitting, error, onClose, onSubmit }: Creden
         {error && <div data-testid="git-credential-modal-error" role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626" }}>{error}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
           <button type="button" onClick={onClose} disabled={submitting} style={{ padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], fontSize: fontSize.md, fontWeight: 500, cursor: "pointer" }}>取消</button>
-          <button type="button" data-testid="git-credential-modal-save" disabled={!canSave} onClick={handleSave} style={{ padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#FFFFFF", fontSize: fontSize.md, fontWeight: 500, cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : 0.6 }}> {submitting ? "保存中…" : editing ? "保存" : "创建"}</button>
+          <button type="button" data-testid="git-credential-modal-save" disabled={!canSave} onClick={handleSave} style={{ padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFFFFF", fontSize: fontSize.md, fontWeight: 500, cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : 0.6 }}> {submitting ? "保存中…" : editing ? "保存" : "创建"}</button>
         </div>
       </div>
     </div>

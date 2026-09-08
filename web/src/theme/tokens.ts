@@ -15,22 +15,22 @@ export interface RoleTheme {
   border: string;
 }
 
-/** 五类 Agent 角色的语义色（产品=蓝 / 项目经理=sky / 架构=紫 / 开发=绿 / 测试=橙，深色下半透明跟随 surface） */
+/** 五类 Agent 角色的语义色（产品=青蓝 / 项目经理=蓝 / 架构=紫 / 开发=绿 / 测试=橙，深色下半透明跟随 surface） */
 export const roles: Record<RoleKey, RoleTheme> = {
-  product: { label: "产品经理", color: "#3B82F6", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
-  project_manager: { label: "项目经理", color: "#0EA5E9", bg: "rgba(14,165,233,0.10)", border: "rgba(14,165,233,0.22)" },
-  architect: { label: "架构师", color: "#8B5CF6", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
-  developer: { label: "开发者", color: "#10B981", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
-  tester: { label: "测试", color: "#F59E0B", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  product: { label: "产品经理", color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4" },
+  project_manager: { label: "项目经理", color: "#0284C7", bg: "#F0F9FF", border: "#BAE6FD" },
+  architect: { label: "架构师", color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
+  developer: { label: "开发者", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
+  tester: { label: "测试", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
 };
 
 /** 角色对应导航/面板上的强调色（深一档，用于文字） */
 export const roleText: Record<RoleKey, string> = {
-  product: "#2563EB",
-  project_manager: "#0284C7",
-  architect: "#7C3AED",
-  developer: "#059669",
-  tester: "#D97706",
+  product: "#0F766E",
+  project_manager: "#0369A1",
+  architect: "#6D28D9",
+  developer: "#047857",
+  tester: "#B45309",
 };
 
 /* ---------------------------------- 任务状态 ---------------------------------- */
@@ -42,11 +42,11 @@ export interface StatusTheme {
   border: string;
 }
 
-/** 任务状态四色：进行中=蓝 / 待验收=琥珀 / 已完成=绿 / 已归档=灰（深色下半透明） */
+/** 任务状态四色：进行中=青蓝 / 待验收=琥珀 / 已完成=绿 / 已归档=灰（深色下半透明） */
 export const statusColors: Record<StatusKey, StatusTheme> = {
-  "进行中": { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
-  "待验收": { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
-  "已完成": { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  "进行中": { color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4" },
+  "待验收": { color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
+  "已完成": { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
   "已归档": { color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
 };
 

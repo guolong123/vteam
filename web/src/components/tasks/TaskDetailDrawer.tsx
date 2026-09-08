@@ -304,7 +304,7 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
                 {STATUS_LABEL[task.status]}
               </span>
               {task.executionMode === "plan" ? (
-                <span style={{ fontSize: fontSize.xs, color: "#2563EB" }}>计划模式</span>
+                <span style={{ fontSize: fontSize.xs, color: "#0D9488" }}>计划模式</span>
               ) : null}
             </div>
 
@@ -409,7 +409,7 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
                   padding: `${space.sm}px ${space.md}px`,
                   borderRadius: radius.md,
                   border: "none",
-                  backgroundColor: "#2563EB",
+                  backgroundColor: "#0D9488",
                   color: "#FFFFFF",
                   fontSize: fontSize.md,
                   fontWeight: 600,

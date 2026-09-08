@@ -11,12 +11,13 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /* ------------------------------ 导航语义常量 ------------------------------ */
-const NAV_ACTIVE = "#3B82F6";
-const NAV_ACTIVE_DEEP = "#2563EB";
+const NAV_ACTIVE = "#0D9488";
+const NAV_ACTIVE_DEEP = "#0D9488";
 
 export interface CmdKItem {
   group: string;
@@ -185,6 +186,8 @@ export function CmdKPanel({
     return () => window.removeEventListener("keydown", handleKey);
   }, [open, onClose]);
 
+  const panelRef = useFocusTrap<HTMLDivElement>(open, onClose ?? (() => {}));
+
   if (!open) return null;
 
   // 过滤：大小写不敏感，按 label/group includes 匹配；空串时保留全部
@@ -215,7 +218,7 @@ export function CmdKPanel({
       <div aria-hidden className="navcmdk-mask" onClick={onClose} />
 
       {/* 面板：毛玻璃 + 圆角 + 阴影 */}
-      <div className="navcmdk-panel" style={style}>
+      <div ref={panelRef} className="navcmdk-panel" role="dialog" aria-modal="true" aria-label="命令面板" style={style}>
         {/* 搜索输入（光标闪烁模拟聚焦态） */}
         <div
           data-testid="cmdk-search"
@@ -241,7 +244,7 @@ export function CmdKPanel({
               flex: 1,
               minWidth: 0,
               border: "none",
-              outline: "none",
+
               background: "transparent",
               fontSize: fontSize.xl,
               fontWeight: 500,

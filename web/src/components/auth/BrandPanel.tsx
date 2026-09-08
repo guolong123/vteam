@@ -27,14 +27,14 @@ const brandBg =
 
 /** 品牌区文字/边框（跟随主题，浅底深字→深底浅字） */
 const brandOnDark = {
-  glow: "radial-gradient(70% 55% at 15% 85%, rgba(59,130,246,.1), transparent 70%)",
+  glow: "radial-gradient(70% 55% at 15% 85%, rgba(13,148,136,.1), transparent 70%)",
   text: "var(--color-neutral-900)",
   textStrong: "var(--color-neutral-800)",
   textSub: "var(--color-neutral-500)",
   textMuted: "var(--color-neutral-400)",
   textList: "var(--color-neutral-600)",
   border: "var(--color-neutral-200)",
-  accent: "#3B82F6",
+  accent: "#0D9488",
 } as const;
 
 /** 移动端检测：< breakpoint 视为 mobile（品牌区折叠为顶栏） */
@@ -86,14 +86,14 @@ export function BrandPanel({ compact }: { compact: boolean }) {
             width: compact ? 34 : 40,
             height: compact ? 34 : 40,
             borderRadius: radius.md,
-            background: "linear-gradient(135deg,#3B82F6,#8B5CF6)",
+            backgroundColor: "#0D9488",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             color: "#FFFFFF",
             fontWeight: 700,
             fontSize: compact ? fontSize.lg : fontSize.xl,
-            boxShadow: "0 8px 24px rgba(59,130,246,.35)",
+            boxShadow: "0 8px 24px rgba(13,148,136,.35)",
           }}
         >
           A
@@ -219,7 +219,7 @@ export function BrandPanel({ compact }: { compact: boolean }) {
           }}
         >
           <span>团队角色</span>
-          {(["#3B82F6", "#8B5CF6", "#10B981", "#F59E0B"] as const).map((c) => (
+          {(["#0D9488", "#0284C7", "#7C3AED", "#D97706"] as const).map((c) => (
             <span
               key={c}
               aria-hidden
@@ -256,7 +256,6 @@ export const authInputStyle: CSSProperties = {
   backgroundColor: "var(--color-surface)",
   fontSize: fontSize.md,
   color: neutral[800],
-  outline: "none",
   fontFamily: fontFamily.body,
 };
 
@@ -266,12 +265,12 @@ export const authSubmitStyle: CSSProperties = {
   padding: `${space.md + 2}px ${space.lg}px`,
   borderRadius: radius.md,
   border: "none",
-  backgroundColor: "#2563EB",
+  backgroundColor: "#0D9488",
   color: "#FFFFFF",
   fontSize: fontSize.lg,
   fontWeight: 600,
   cursor: "pointer",
-  boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+  boxShadow: "0 6px 16px rgba(13,148,136,.3)",
   fontFamily: fontFamily.body,
 };
 

@@ -41,7 +41,7 @@ export function TeamQueueCard({ team, taskId }: { team: TeamDto | null | undefin
   const isQueued = !!queuedEntry;
   const isCurrent = team.currentTaskId === taskId;
   return (
-    <div data-testid="team-queue-card" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: isQueued ? "rgba(245,158,11,0.10)" : isCurrent ? "rgba(37,99,235,0.08)" : neutral[50], border: `1px solid ${isQueued ? "rgba(245,158,11,0.28)" : isCurrent ? "rgba(37,99,235,0.22)" : neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
+    <div data-testid="team-queue-card" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: isQueued ? "rgba(245,158,11,0.10)" : isCurrent ? "rgba(13,148,136,0.08)" : neutral[50], border: `1px solid ${isQueued ? "rgba(245,158,11,0.28)" : isCurrent ? "rgba(13,148,136,0.22)" : neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ display: "flex", alignItems: "center", gap: space.xs }}>
           <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>团队队列</span>
@@ -67,7 +67,7 @@ export function TeamQueueCard({ team, taskId }: { team: TeamDto | null | undefin
           </button>
         </div>
       ) : isCurrent ? (
-        <div data-testid="queue-current" style={{ fontSize: fontSize.sm, color: "#2563EB", fontWeight: 500 }}>当前执行中（队首）</div>
+        <div data-testid="queue-current" style={{ fontSize: fontSize.sm, color: "#0D9488", fontWeight: 500 }}>当前执行中（队首）</div>
       ) : (
         <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>未在队列中 · 群聊按团队复用，历史跨任务可见</div>
       )}
@@ -126,18 +126,18 @@ export function TeamMemoryCard({ team, task }: { team: TeamDto | null | undefine
     <div data-testid="team-memory-card" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>记忆开关</span>
-        <span style={{ fontSize: 10, color: team?.reuseSession ? "#2563EB" : "#D97706", backgroundColor: team?.reuseSession ? "rgba(37,99,235,0.08)" : "rgba(245,158,11,0.10)", border: `1px solid ${team?.reuseSession ? "rgba(37,99,235,0.14)" : "rgba(245,158,11,0.22)"}`, padding: "0 6px", borderRadius: radius.pill, fontWeight: 600 }}>{team?.reuseSession ? "默认保留" : "每任务新会话"}</span>
+        <span style={{ fontSize: 10, color: team?.reuseSession ? "#0D9488" : "#D97706", backgroundColor: team?.reuseSession ? "rgba(13,148,136,0.08)" : "rgba(245,158,11,0.10)", border: `1px solid ${team?.reuseSession ? "rgba(13,148,136,0.14)" : "rgba(245,158,11,0.22)"}`, padding: "0 6px", borderRadius: radius.pill, fontWeight: 600 }}>{team?.reuseSession ? "默认保留" : "每任务新会话"}</span>
       </div>
       <div data-testid="reuse-explain" style={{ fontSize: fontSize.xs, color: neutral[500], lineHeight: 1.6, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
         {team?.reuseSession ? (
-          <span><span style={{ fontWeight: 600, color: "#2563EB" }}>团队默认保留</span>：会话跨任务复用，上下文与历史延续。</span>
+          <span><span style={{ fontWeight: 600, color: "#0D9488" }}>团队默认保留</span>：会话跨任务复用，上下文与历史延续。</span>
         ) : (
           <span><span style={{ fontWeight: 600, color: "#D97706" }}>团队每任务新会话</span>：每任务独立会话，历史隔离。</span>
         )}
         <span style={{ display: "block", marginTop: space.xs, color: neutral[400] }}>任务级勾选可覆盖团队默认。</span>
       </div>
-      <label style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: task.resetAfterComplete ? "rgba(37,99,235,0.06)" : neutral[50], border: `1px solid ${task.resetAfterComplete ? "rgba(37,99,235,0.14)" : neutral[200]}`, cursor: toggleMutation.isPending ? "default" : "pointer" }}>
-        <input type="checkbox" data-testid="reset-after-complete-toggle" checked={!!task.resetAfterComplete} disabled={toggleMutation.isPending} onChange={(e) => toggleMutation.mutate(e.target.checked)} style={{ width: 16, height: 16, accentColor: "#2563EB" }} />
+      <label style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: task.resetAfterComplete ? "rgba(13,148,136,0.06)" : neutral[50], border: `1px solid ${task.resetAfterComplete ? "rgba(13,148,136,0.14)" : neutral[200]}`, cursor: toggleMutation.isPending ? "default" : "pointer" }}>
+        <input type="checkbox" data-testid="reset-after-complete-toggle" checked={!!task.resetAfterComplete} disabled={toggleMutation.isPending} onChange={(e) => toggleMutation.mutate(e.target.checked)} style={{ width: 16, height: 16, accentColor: "#0D9488" }} />
         <span style={{ display: "flex", flexDirection: "column" }}>
           <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>完成后为下一任务开新会话</span>
           <span style={{ fontSize: 10, color: neutral[400] }}>勾选后，本任务完成/归档时为团队所有成员开新会话，下一任务上下文全新</span>
@@ -174,9 +174,9 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery,
               flex: 1,
               padding: `${space.sm}px ${space.md}px`,
               border: "none",
-              borderBottom: `2px solid ${active === tab.key ? "#2563EB" : "transparent"}`,
+              borderBottom: `2px solid ${active === tab.key ? "#0D9488" : "transparent"}`,
               backgroundColor: active === tab.key ? "var(--color-surface)" : "transparent",
-              color: active === tab.key ? "#2563EB" : neutral[500],
+              color: active === tab.key ? "#0D9488" : neutral[500],
               fontSize: fontSize.sm,
               fontWeight: active === tab.key ? 600 : 400,
               cursor: "pointer",
@@ -188,24 +188,24 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery,
             }}
           >
             {tab.label}
-            {tab.badge && <span style={{ fontSize: 10, color: "#FFF", backgroundColor: active === tab.key ? "#2563EB" : "#F59E0B", padding: "0 5px", borderRadius: radius.pill, fontWeight: 700 }}>{tab.badge}</span>}
+            {tab.badge && <span style={{ fontSize: 10, color: "#FFF", backgroundColor: active === tab.key ? "#0D9488" : "#F59E0B", padding: "0 5px", borderRadius: radius.pill, fontWeight: 700 }}>{tab.badge}</span>}
           </button>
         ))}
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: `${space.md}px ${space.lg}px`, display: "flex", flexDirection: "column", gap: space.lg }}>
         {active === "status" && (
           <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: isCurrent ? "rgba(37,99,235,0.06)" : waiting > 0 ? "rgba(245,158,11,0.06)" : "var(--color-surface)", border: `1px solid ${isCurrent ? "rgba(37,99,235,0.14)" : waiting > 0 ? "rgba(245,158,11,0.14)" : neutral[200]}` }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: isCurrent ? "rgba(13,148,136,0.06)" : waiting > 0 ? "rgba(245,158,11,0.06)" : "var(--color-surface)", border: `1px solid ${isCurrent ? "rgba(13,148,136,0.14)" : waiting > 0 ? "rgba(245,158,11,0.14)" : neutral[200]}` }}>
               <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: task.status === "in_progress" ? "#10B981" : task.status === "queued" ? "#F59E0B" : task.status === "pending" ? "#2563EB" : neutral[300] }} />
+                <span style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: task.status === "in_progress" ? "#10B981" : task.status === "queued" ? "#F59E0B" : task.status === "pending" ? "#0D9488" : neutral[300] }} />
                 <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[800] }}>{task.title}</span>
-                <span style={{ fontSize: fontSize.xs, color: "#FFF", backgroundColor: task.status === "queued" ? "#F59E0B" : task.status === "in_progress" ? "#10B981" : "#2563EB", padding: "1px 6px", borderRadius: radius.pill }}>{statusLabel}</span>
+                <span style={{ fontSize: fontSize.xs, color: "#FFF", backgroundColor: task.status === "queued" ? "#F59E0B" : task.status === "in_progress" ? "#10B981" : "#0D9488", padding: "1px 6px", borderRadius: radius.pill }}>{statusLabel}</span>
               </div>
               <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
                 {isCurrent ? "当前执行（队首）" : team?.currentTaskId ? `队首 ${team.currentTaskId.slice(0,8)}… 执行中` : "团队空闲"} · {waiting > 0 ? `等待中 ${waiting} 个` : "暂无等待"}
               </div>
               {team?.name && (
-                <div style={{ fontSize: fontSize.xs, color: neutral[600], backgroundColor: "rgba(37,99,235,0.04)", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px`, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
+                <div style={{ fontSize: fontSize.xs, color: neutral[600], backgroundColor: "rgba(13,148,136,0.04)", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px`, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
                   {team.name}
                 </div>
               )}
@@ -216,7 +216,7 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery,
             </div>
             <TeamQueueCard team={team} taskId={taskId} />
             <div style={{ fontSize: fontSize.xs, color: neutral[500], backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px`, display: "flex", alignItems: "center", gap: space.xs }}>
-              <span style={{ fontWeight: 600, color: team?.reuseSession ? "#2563EB" : "#D97706" }}>{team?.reuseSession ? "默认保留" : "每任务新会话"}</span>
+              <span style={{ fontWeight: 600, color: team?.reuseSession ? "#0D9488" : "#D97706" }}>{team?.reuseSession ? "默认保留" : "每任务新会话"}</span>
               <span>· {team?.reuseSession ? "会话跨任务复用" : "每任务新会话"}，{task.resetAfterComplete ? "本任务完成后为下一任务开新会话" : "下一任务复用当前会话"}</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
@@ -243,15 +243,40 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery,
                 </select>
               </div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: fontSize.sm, color: neutral[600] }}>托管模式</span>
-                <span onClick={()=>onToggleManagedMode(!(team?.managedMode ?? false))} role="switch" aria-checked={team?.managedMode ?? false} style={{ width: 36, height: 20, borderRadius: 10, backgroundColor: (team?.managedMode ?? false) ? "#2563EB" : neutral[300], position: "relative", cursor: "pointer" }}><span style={{ position: "absolute", top: 2, left: (team?.managedMode ?? false) ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} /></span>
+                <span id="managed-mode-label" style={{ fontSize: fontSize.sm, color: neutral[600] }}>托管模式</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={team?.managedMode ?? false}
+                  aria-labelledby="managed-mode-label"
+                  tabIndex={0}
+                  onClick={() => onToggleManagedMode(!(team?.managedMode ?? false))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onToggleManagedMode(!(team?.managedMode ?? false));
+                    }
+                  }}
+                  style={{
+                    width: 36,
+                    height: 20,
+                    borderRadius: 10,
+                    backgroundColor: (team?.managedMode ?? false) ? "#0D9488" : neutral[300],
+                    position: "relative",
+                    cursor: "pointer",
+                    border: "none",
+                    padding: 0,
+                  }}
+                >
+                  <span aria-hidden style={{ position: "absolute", top: 2, left: (team?.managedMode ?? false) ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} />
+                </button>
               </div>
             </div>
             <TeamMemoryCard team={team} task={task} />
             <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>
               <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>渠道绑定</div>
               <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>消息与通知渠道可在任务操作中配置，团队级记忆在状态 Tab 查看。</div>
-              <button type="button" onClick={()=>{ const el=document.querySelector('[data-testid="task-channel-binding-section"]') as HTMLElement; el?.scrollIntoView({behavior:"smooth", block:"center"}); el?.focus(); }} style={{ alignSelf: "flex-start", fontSize: fontSize.xs, color: "#2563EB", background: "none", border: "none", cursor: "pointer" }}>去配置 →</button>
+              <button type="button" onClick={()=>{ const el=document.querySelector('[data-testid="task-channel-binding-section"]') as HTMLElement; el?.scrollIntoView({behavior:"smooth", block:"center"}); el?.focus(); }} style={{ alignSelf: "flex-start", fontSize: fontSize.xs, color: "#0D9488", background: "none", border: "none", cursor: "pointer" }}>去配置 →</button>
             </div>
           </div>
         )}
@@ -296,7 +321,7 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery,
                       <div key={a.id} style={rowStyle}>{row}</div>
                     );
                   })}
-                  <button type="button" onClick={onOpenArtifacts} style={{ fontSize: fontSize.xs, color: "#2563EB", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>查看全部 →</button>
+                  <button type="button" onClick={onOpenArtifacts} style={{ fontSize: fontSize.xs, color: "#0D9488", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>查看全部 →</button>
                 </div>
               )}
             </div>
@@ -331,7 +356,7 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery,
                       <div key={it.id} style={rowStyle}>{row}</div>
                     );
                   })}
-                  <button type="button" onClick={onOpenIssues} style={{ fontSize: fontSize.xs, color: "#2563EB", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>查看全部 →</button>
+                  <button type="button" onClick={onOpenIssues} style={{ fontSize: fontSize.xs, color: "#0D9488", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>查看全部 →</button>
                 </div>
               )}
             </div>

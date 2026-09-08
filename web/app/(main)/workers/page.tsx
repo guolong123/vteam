@@ -512,7 +512,7 @@ export default function WorkersPage() {
     { label: "在线节点", value: onlineCount, theme: workerStatusTheme["在线"], pulse: true },
     { label: "离线节点", value: offlineCount, theme: workerStatusTheme["离线"], pulse: false },
     { label: "维护中", value: degradedCount, theme: workerStatusTheme["维护中"], pulse: false },
-    { label: "节点总数", value: items.length, theme: { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" }, pulse: false },
+    { label: "节点总数", value: items.length, theme: { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" }, pulse: false },
   ];
 
   return (

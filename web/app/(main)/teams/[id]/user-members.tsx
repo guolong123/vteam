@@ -209,7 +209,7 @@ export function UserMembersSection({
               backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
-              outline: "none",
+
               fontFamily: fontFamily.mono,
             }}
           />
@@ -229,7 +229,7 @@ export function UserMembersSection({
               backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
-              outline: "none",
+
               fontFamily: fontFamily.body,
             }}
           />
@@ -243,7 +243,7 @@ export function UserMembersSection({
             padding: `${space.sm + 2}px ${space.lg}px`,
             borderRadius: radius.md,
             border: "none",
-            backgroundColor: "#2563EB",
+            backgroundColor: "#0D9488",
             color: "#FFF",
             fontSize: fontSize.md,
             fontWeight: 500,

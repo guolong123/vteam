@@ -92,10 +92,14 @@ export interface MsgPartsProps {
   isMentionMe?: boolean;
   style?: CSSProperties;
   className?: string;
+  /** 消息终态（sent/failed）：part 仍为 pending/running 时收敛显示，避免"运行中"卡死 */
+  messageStatus?: string;
 }
 
-export function MsgParts({ parts, bodyText, author, role, time, streaming, attachment, isMentionMe, style, className }: MsgPartsProps) {
+export function MsgParts({ parts, bodyText, author, role, time, streaming, attachment, isMentionMe, style, className, messageStatus }: MsgPartsProps) {
   const list = (parts ?? []) as PartShape[];
+  /** 终态收敛：消息已 sent/failed 但 part 仍 pending/running → sent 收敛成功，failed 收敛失败 */
+  const terminal = messageStatus === "sent" || messageStatus === "failed";
 
   // 中断独占：aborted 时其余未完成 Part 不渲染（10 篇 §2.3）
   const aborted = list.find((p) => p.type === "aborted");
@@ -133,13 +137,17 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
             rawState !== undefined && rawState !== null && typeof rawState === "object"
               ? (rawState as unknown as Record<string, unknown>)
               : undefined;
+          let status = toToolStatus(st?.status ?? p.status);
+          if (terminal && status === "running") {
+            status = messageStatus === "failed" ? "failed" : "success";
+          }
           return (
             <MsgTool
               key={i}
               author={author}
               role={role}
               name={String(p.tool ?? p.name ?? "工具")}
-              status={toToolStatus(st?.status ?? p.status)}
+              status={status}
               input={formatToolIO(st?.input)}
               output={formatToolIO(st?.output)}
               time={time}

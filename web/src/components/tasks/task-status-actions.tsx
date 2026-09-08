@@ -57,7 +57,7 @@ const ACTION_SETS: Record<TaskApiStatus, TaskAction[] | null> = {
 /** 操作元信息：按钮文案 / 强调色 / pending 文案。颜色对齐既有状态语义（进行中蓝/完成绿/驳回琥珀/归档灰）。中性色用固定深灰（neutral token 在暗色下翻转会变浅，白字压不住）。 */
 const ACTION_META: Record<TaskAction, { label: string; color: string; pendingLabel: string }> = {
   start: { label: "开始任务", color: "#475569", pendingLabel: "启动中…" },
-  "mark-pending-review": { label: "提交验收", color: "#2563EB", pendingLabel: "提交中…" },
+  "mark-pending-review": { label: "提交验收", color: "#0D9488", pendingLabel: "提交中…" },
   accept: { label: "验收通过", color: "#059669", pendingLabel: "处理中…" },
   reject: { label: "驳回", color: "#D97706", pendingLabel: "驳回中…" },
   archive: { label: "归档", color: "#64748B", pendingLabel: "归档中…" },
@@ -416,7 +416,7 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
                 backgroundColor: "var(--color-surface)",
                 fontSize: fontSize.md,
                 color: neutral[800],
-                outline: "none",
+
                 resize: "vertical",
                 fontFamily: fontFamily.body,
               }}

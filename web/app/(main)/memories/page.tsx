@@ -61,7 +61,7 @@ const LEVEL_META: Record<
   MemoryItem["level"],
   { label: string; color: string; bg: string; border: string }
 > = {
-  task: { label: "任务", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  task: { label: "任务", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   team: { label: "团队", color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
   global: { label: "全局", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
 };
@@ -219,7 +219,7 @@ export default function MemoriesPage() {
                 flex: 1,
                 minWidth: 0,
                 border: "none",
-                outline: "none",
+
                 background: "transparent",
                 fontSize: fontSize.md,
                 color: neutral[800],
@@ -415,7 +415,7 @@ export default function MemoriesPage() {
                                   padding: 0,
                                   border: "none",
                                   background: "transparent",
-                                  color: "#2563EB",
+                                  color: "#0D9488",
                                   fontSize: fontSize.xs,
                                   fontWeight: 500,
                                   cursor: "pointer",

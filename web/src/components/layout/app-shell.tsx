@@ -379,6 +379,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       data-testid="app-shell"
       style={{ height: "100vh", display: "flex", flexDirection: "column", position: "relative", backgroundColor: neutral[50], ...baseFont }}
     >
+      {/* 跳转链接：键盘用户跳到主内容区 */}
+      <a href="#app-main-content" className="skip-link" style={{ position: "absolute", left: -9999, top: 0, zIndex: 100, padding: "8px 16px", background: "#0D9488", color: "#fff", fontSize: 14, fontWeight: 500, borderRadius: "0 0 8px 0", textDecoration: "none" }} onFocus={(e) => { (e.currentTarget as HTMLElement).style.left = "0"; }} onBlur={(e) => { (e.currentTarget as HTMLElement).style.left = "-9999px"; }}>跳到主内容</a>
+
       {/* 顶栏（文档流顶部） */}
       <NavTopBar
         title={page.title}
@@ -456,7 +459,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         data-testid="app-content"
         style={{ flex: 1, minHeight: 0, display: "flex", paddingLeft: CONTENT_LEFT_PAD }}
       >
-        <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "auto" }}>
+        <main id="app-main-content" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "auto" }}>
           {children}
         </main>
       </div>

@@ -111,8 +111,8 @@ function RoleInstanceCard({
           {instances.map((inst) => (
             <div key={inst.key} data-testid="instance-row" data-instance-key={inst.key} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}` }}>
               <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: theme.color, flexShrink: 0 }} />
-              <input data-testid="instance-alias-input" value={inst.alias} aria-label={`${theme.label}别名`} onChange={(e) => onRenameInstance(inst.key, e.target.value)} style={{ flex: 1, minWidth: 0, border: "none", outline: "none", background: "transparent", fontSize: fontSize.md, fontWeight: 500, color: neutral[800], fontFamily: fontFamily.body, padding: `${space.xs}px 0` }} />
-              <input data-testid="instance-workdir-input" value={inst.workDir} aria-label={`${theme.label}工作目录`} onChange={(e) => onWorkDirChange(inst.key, e.target.value)} placeholder="/data/vteam-worker/…" style={{ flex: 1, minWidth: 0, border: "none", outline: "none", background: "transparent", fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono, padding: `${space.xs}px 0` }} />
+              <input data-testid="instance-alias-input" value={inst.alias} aria-label={`${theme.label}别名`} onChange={(e) => onRenameInstance(inst.key, e.target.value)} style={{ flex: 1, minWidth: 0, border: "none",background: "transparent", fontSize: fontSize.md, fontWeight: 500, color: neutral[800], fontFamily: fontFamily.body, padding: `${space.xs}px 0` }} />
+              <input data-testid="instance-workdir-input" value={inst.workDir} aria-label={`${theme.label}工作目录`} onChange={(e) => onWorkDirChange(inst.key, e.target.value)} placeholder="/data/vteam-worker/…" style={{ flex: 1, minWidth: 0, border: "none",background: "transparent", fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono, padding: `${space.xs}px 0` }} />
               <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>#{inst.seq}</span>
               <button type="button" data-testid="instance-remove" aria-label={`移除 ${inst.alias}`} onClick={() => onRemoveInstance(inst.key)} style={{ border: "none", background: "none", fontSize: fontSize.sm, color: neutral[400], cursor: "pointer", padding: space.xs, fontFamily: fontFamily.body }}>✕</button>
             </div>
@@ -150,11 +150,11 @@ function CustomAgentCard({
             <div key={inst.key} data-testid="custom-instance-row" style={{ display: "flex", flexDirection: "column", gap: space.xs, padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}` }}>
               <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
                 <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: theme.color, flexShrink: 0 }} />
-                <input data-testid="instance-alias-input" value={inst.alias} onChange={(e) => onRenameInstance(inst.key, e.target.value)} style={{ flex: 1, minWidth: 0, border: "none", outline: "none", background: "transparent", fontSize: fontSize.md, fontWeight: 500, color: neutral[800], fontFamily: fontFamily.body, padding: `${space.xs}px 0` }} />
+                <input data-testid="instance-alias-input" value={inst.alias} onChange={(e) => onRenameInstance(inst.key, e.target.value)} style={{ flex: 1, minWidth: 0, border: "none",background: "transparent", fontSize: fontSize.md, fontWeight: 500, color: neutral[800], fontFamily: fontFamily.body, padding: `${space.xs}px 0` }} />
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>#{inst.seq}</span>
                 <button type="button" data-testid="instance-remove" onClick={() => onRemoveInstance(inst.key)} style={{ border: "none", background: "none", fontSize: fontSize.sm, color: neutral[400], cursor: "pointer", padding: space.xs, fontFamily: fontFamily.body }}>✕</button>
               </div>
-              <input data-testid="instance-workdir-input" value={inst.workDir} onChange={(e) => onWorkDirChange(inst.key, e.target.value)} placeholder="/data/vteam-worker/…" style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${neutral[200]}`, borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px`, fontSize: fontSize.xs, color: neutral[600], outline: "none", background: neutral[50], fontFamily: fontFamily.mono }} />
+              <input data-testid="instance-workdir-input" value={inst.workDir} onChange={(e) => onWorkDirChange(inst.key, e.target.value)} placeholder="/data/vteam-worker/…" style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${neutral[200]}`, borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px`, fontSize: fontSize.xs, color: neutral[600],background: neutral[50], fontFamily: fontFamily.mono }} />
             </div>
           ))}
         </div>
@@ -273,7 +273,7 @@ export default function TeamNewPage() {
 
   const inputBase: CSSProperties = {
     width: "100%", boxSizing: "border-box", padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md,
-    border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], outline: "none", fontFamily: fontFamily.body,
+    border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800],fontFamily: fontFamily.body,
   };
   const labelStyle: CSSProperties = { fontSize: fontSize.sm, fontWeight: 500, color: neutral[600], marginBottom: space.xs };
 
@@ -296,7 +296,7 @@ export default function TeamNewPage() {
             <textarea id="team-desc" data-testid="team-desc-input" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="团队职责与协作范围（可选）" style={{ ...inputBase, resize: "none", lineHeight: 1.6 }} />
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
-            <span role="switch" aria-checked={reuseSession} data-testid="reuse-session-toggle" onClick={() => setReuseSession(!reuseSession)} style={{ width: 40, height: 22, borderRadius: 11, border: "none", backgroundColor: reuseSession ? "#2563EB" : neutral[300], position: "relative", flexShrink: 0, cursor: "pointer", transition: "background-color .2s" }}>
+            <span role="switch" aria-checked={reuseSession} data-testid="reuse-session-toggle" onClick={() => setReuseSession(!reuseSession)} style={{ width: 40, height: 22, borderRadius: 11, border: "none", backgroundColor: reuseSession ? "#0D9488" : neutral[300], position: "relative", flexShrink: 0, cursor: "pointer", transition: "background-color .2s" }}>
               <span style={{ position: "absolute", top: 2, left: reuseSession ? 20 : 2, width: 18, height: 18, borderRadius: "50%", backgroundColor: "var(--color-surface)", transition: "left .2s", boxShadow: shadow.sm }} />
             </span>
             <div style={{ display: "flex", flexDirection: "column" }}>
@@ -305,7 +305,7 @@ export default function TeamNewPage() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, color: neutral[500], lineHeight: 1.6 }}>
-            <span aria-hidden style={{ color: "#2563EB", fontWeight: 700 }}>i</span>
+            <span aria-hidden style={{ color: "#0D9488", fontWeight: 700 }}>i</span>
             团队成员支持多实例（同一 Agent 可添加多个实例，alias/workDir 独立）。
           </div>
           {createError && <div data-testid="team-create-error" role="alert" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", fontSize: fontSize.sm, color: "#B91C1C" }}>{createError}</div>}
@@ -357,7 +357,7 @@ export default function TeamNewPage() {
             {mainAgentKey && <div style={{ fontSize: fontSize.xs, color: "#D97706" }}>★ 已选主 Agent：{allInstances.find((i) => i.key === mainAgentKey)?.alias}</div>}
           </div>
 
-          <button type="button" data-testid="create-team-submit" disabled={createMutation.isPending} onClick={handleCreate} style={{ width: "100%", padding: `${space.md + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#FFF", fontSize: fontSize.lg, fontWeight: 600, cursor: createMutation.isPending ? "default" : "pointer", opacity: createMutation.isPending ? 0.7 : 1, boxShadow: "0 6px 16px rgba(37,99,235,.3)", fontFamily: fontFamily.body }}>
+          <button type="button" data-testid="create-team-submit" disabled={createMutation.isPending} onClick={handleCreate} style={{ width: "100%", padding: `${space.md + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.lg, fontWeight: 600, cursor: createMutation.isPending ? "default" : "pointer", opacity: createMutation.isPending ? 0.7 : 1, boxShadow: "0 6px 16px rgba(13,148,136,.3)", fontFamily: fontFamily.body }}>
             {createMutation.isPending ? "创建中…" : "创建团队"}
           </button>
         </section>

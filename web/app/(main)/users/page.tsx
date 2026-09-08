@@ -47,7 +47,7 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
  * 与 Agent 角色色，遵循"扩展 token"范式在页面内定义具名常量并注释原因，不扩散共享层。
  */
 const roleTheme = {
-  管理员: { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)", mark: "◈" },
+  管理员: { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)", mark: "◈" },
   成员: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)", mark: "●" },
 } as const;
 
@@ -341,7 +341,7 @@ const formField: CSSProperties = {
   backgroundColor: "var(--color-surface)",
   fontSize: fontSize.md,
   color: neutral[800],
-  outline: "none",
+
   fontFamily: fontFamily.body,
 };
 
@@ -612,13 +612,13 @@ function UserFormModal({ open, roles, submitting, error, onClose, onSubmit }: Us
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: "none",
-              backgroundColor: "#2563EB",
+              backgroundColor: "#0D9488",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
               cursor: submitting ? "default" : "pointer",
               opacity: submitting || !username.trim() || !password || !roleId ? 0.6 : 1,
-              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+              boxShadow: "0 6px 16px rgba(13,148,136,.3)",
               fontFamily: fontFamily.body,
             }}
           >
@@ -802,13 +802,13 @@ function ResetPasswordModal({ open, target, submitting, error, onClose, onSubmit
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: "none",
-              backgroundColor: "#2563EB",
+              backgroundColor: "#0D9488",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
               cursor: submitting ? "default" : "pointer",
               opacity: submitting || !newPassword ? 0.6 : 1,
-              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+              boxShadow: "0 6px 16px rgba(13,148,136,.3)",
               fontFamily: fontFamily.body,
             }}
           >
@@ -1062,13 +1062,13 @@ function EditUserModal({ open, target, roles, submitting, error, onClose, onSubm
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: "none",
-              backgroundColor: "#2563EB",
+              backgroundColor: "#0D9488",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
               cursor: submitting ? "default" : "pointer",
               opacity: submitting || !username.trim() || !roleId ? 0.6 : 1,
-              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+              boxShadow: "0 6px 16px rgba(13,148,136,.3)",
               fontFamily: fontFamily.body,
             }}
           >
@@ -1191,7 +1191,7 @@ export default function UsersPage() {
 
   /* 统计条（对齐原型 4 卡；管理员/成员按角色名分组，已禁用按 enabled=false） */
   const stats = [
-    { label: "总用户", value: data?.total ?? items.length, theme: { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" } },
+    { label: "总用户", value: data?.total ?? items.length, theme: { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" } },
     { label: "管理员", value: items.filter((u) => resolveRoleLabel(u.roleId, roles) === "管理员").length, theme: roleTheme["管理员"] },
     { label: "成员", value: items.filter((u) => resolveRoleLabel(u.roleId, roles) === "成员").length, theme: roleTheme["成员"] },
     { label: "已禁用", value: items.filter((u) => !u.enabled).length, theme: statusTheme["禁用"] },
@@ -1292,7 +1292,7 @@ export default function UsersPage() {
               flex: 1,
               minWidth: 0,
               border: "none",
-              outline: "none",
+
               background: "transparent",
               fontSize: fontSize.md,
               color: neutral[800],
@@ -1312,12 +1312,12 @@ export default function UsersPage() {
             padding: `${space.sm + 2}px ${space.lg}px`,
             borderRadius: radius.pill,
             border: "none",
-            backgroundColor: "#2563EB",
+            backgroundColor: "#0D9488",
             color: "#FFFFFF",
             fontSize: fontSize.md,
             fontWeight: 500,
             cursor: "pointer",
-            boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+            boxShadow: "0 6px 16px rgba(13,148,136,.3)",
             fontFamily: fontFamily.body,
           }}
         >

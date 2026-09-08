@@ -92,8 +92,8 @@ export function SegmentedTabs({
                 aria-hidden
                 style={{
                   fontSize: fontSize.xs,
-                  color: isActive ? "#2563EB" : neutral[400],
-                  backgroundColor: isActive ? "rgba(37,99,235,0.10)" : neutral[100],
+                  color: isActive ? "#0D9488" : neutral[400],
+                  backgroundColor: isActive ? "rgba(13,148,136,0.10)" : neutral[100],
                   padding: "0 7px",
                   borderRadius: radius.pill,
                   lineHeight: "16px",

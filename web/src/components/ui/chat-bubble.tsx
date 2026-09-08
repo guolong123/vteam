@@ -209,7 +209,7 @@ export function ChatBubble({
               isUser
                 ? {
                     ...bubbleBase,
-                    backgroundColor: "#2563EB",
+                    backgroundColor: "#0D9488",
                     color: "#FFFFFF",
                     borderTopRightRadius: radius.sm,
                     boxShadow: shadow.sm,
@@ -222,7 +222,7 @@ export function ChatBubble({
                     border: isMentionMe ? `1px solid ${mention.border}` : `1px solid ${neutral[200]}`,
                     borderLeft: isMentionMe ? `3px solid ${mention.accent}` : `1px solid ${neutral[200]}`,
                     borderTopLeftRadius: radius.sm,
-                    boxShadow: isMentionMe ? `0 0 0 1px rgba(37,99,235,0.15)` : shadow.sm,
+                    boxShadow: isMentionMe ? `0 0 0 1px rgba(13,148,136,0.15)` : shadow.sm,
                     maxWidth: attachment ? 520 : undefined,
                   }
             }
@@ -398,7 +398,7 @@ export function AttachmentCard({
           alignItems: "center",
           gap: space.sm,
           padding: `${space.sm}px ${space.md}px`,
-          color: isUser ? "#FFFFFF" : "#2563EB",
+          color: isUser ? "#FFFFFF" : "#0D9488",
           fontSize: fontSize.sm,
           fontWeight: 500,
           textDecoration: "none",
@@ -418,8 +418,8 @@ export function AttachmentCard({
             width: 28,
             height: 28,
             borderRadius: radius.sm,
-            backgroundColor: isUser ? "rgba(255,255,255,0.2)" : "rgba(37,99,235,0.18)",
-            color: "#2563EB",
+            backgroundColor: isUser ? "rgba(255,255,255,0.2)" : "rgba(13,148,136,0.18)",
+            color: "#0D9488",
             fontSize: fontSize.xs,
             fontWeight: 600,
           }}
@@ -552,7 +552,7 @@ export function AttachmentCard({
             alignItems: "center",
             gap: space.sm,
             padding: `${space.sm}px ${space.md}px`,
-            color: isUser ? "#FFFFFF" : "#2563EB",
+            color: isUser ? "#FFFFFF" : "#0D9488",
             fontSize: fontSize.sm,
             fontWeight: 500,
             textDecoration: "none",
@@ -569,8 +569,8 @@ export function AttachmentCard({
               width: 28,
               height: 28,
               borderRadius: radius.sm,
-              backgroundColor: isUser ? "rgba(255,255,255,0.2)" : "rgba(37,99,235,0.18)",
-              color: "#2563EB",
+              backgroundColor: isUser ? "rgba(255,255,255,0.2)" : "rgba(13,148,136,0.18)",
+              color: "#0D9488",
               fontSize: fontSize.xs,
               fontWeight: 600,
             }}

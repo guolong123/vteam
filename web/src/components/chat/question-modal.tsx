@@ -16,6 +16,7 @@ import {
   fontFamily,
   shadow,
 } from "@/src/theme/tokens";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -95,6 +96,8 @@ export function QuestionModal({
     return () => window.removeEventListener("keydown", handleKey);
   }, [open, onClose]);
 
+  const dialogRef = useFocusTrap<HTMLDivElement>(open, onClose);
+
   if (!open || !question) return null;
 
   const isPermission = question.kind === "permission";
@@ -162,7 +165,9 @@ export function QuestionModal({
       />
       {/* 弹窗卡片 */}
       <div
+        ref={dialogRef}
         role="dialog"
+        aria-modal="true"
         aria-label={isPermission ? "权限确认" : "Agent 提问"}
         style={{
           position: "relative",
@@ -234,8 +239,8 @@ export function QuestionModal({
                             textAlign: "left",
                             padding: `${space.sm + 1}px ${space.md}px`,
                             borderRadius: radius.md,
-                            border: `1px solid ${isSelected ? "#2563EB" : neutral[200]}`,
-                            backgroundColor: isSelected ? "rgba(37,99,235,0.10)" : "var(--color-surface)",
+                            border: `1px solid ${isSelected ? "#0D9488" : neutral[200]}`,
+                            backgroundColor: isSelected ? "rgba(13,148,136,0.10)" : "var(--color-surface)",
                             color: neutral[800],
                             fontSize: fontSize.md,
                             cursor: "pointer",
@@ -245,7 +250,7 @@ export function QuestionModal({
                             fontFamily: fontFamily.body,
                           }}
                         >
-                          <span style={{ color: isSelected ? "#2563EB" : neutral[400], fontWeight: 600, flexShrink: 0 }}>
+                          <span style={{ color: isSelected ? "#0D9488" : neutral[400], fontWeight: 600, flexShrink: 0 }}>
                             {q.multiple ? (isSelected ? "☑" : "☐") : isSelected ? "◉" : "○"}
                           </span>
                           <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -271,7 +276,7 @@ export function QuestionModal({
                       border: `1px solid ${neutral[200]}`,
                       fontSize: fontSize.md,
                       fontFamily: fontFamily.body,
-                      outline: "none",
+
                     }}
                   />
                 )}
@@ -313,7 +318,7 @@ export function QuestionModal({
                     borderRadius: radius.pill,
                     border: "none",
                     backgroundColor:
-                      action.value === "reject" ? "#DC2626" : action.value === "always" ? "#059669" : "#2563EB",
+                      action.value === "reject" ? "#DC2626" : action.value === "always" ? "#059669" : "#0D9488",
                     color: "#FFFFFF",
                     fontSize: fontSize.md,
                     fontWeight: 500,
@@ -355,7 +360,7 @@ export function QuestionModal({
                   padding: `${space.sm + 1}px ${space.lg}px`,
                   borderRadius: radius.pill,
                   border: "none",
-                  backgroundColor: "#2563EB",
+                  backgroundColor: "#0D9488",
                   color: "#FFFFFF",
                   fontSize: fontSize.md,
                   fontWeight: 500,

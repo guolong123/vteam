@@ -91,19 +91,19 @@ function TeamCard({ team, onOpen }: { team: TeamDto; onOpen: () => void }) {
           {team.description}
         </p>
       )}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: `1px solid ${neutral[100]}`, paddingTop: space.md }}>
-        <div style={{ display: "flex", alignItems: "center", gap: space.xs, fontSize: fontSize.sm, color: neutral[400] }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm, borderTop: `1px solid ${neutral[100]}`, paddingTop: space.md }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space.xs, fontSize: fontSize.sm, color: neutral[400], minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}>
           <span style={{ fontWeight: 700, color: neutral[700] }}>{team.members.length}</span> 成员
           <span style={{ color: neutral[300] }}>·</span>
           <span style={{ color: team.queue.length > 0 ? "#D97706" : neutral[400] }}>{team.queue.length} 排队</span>
           {team.currentTaskId && (
             <>
               <span style={{ color: neutral[300] }}>·</span>
-              <span style={{ color: "#2563EB", fontSize: fontSize.xs, maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{team.currentTaskId}</span>
+              <span title={`当前任务：${team.currentTaskTitle ?? team.currentTaskId}（${team.currentTaskStatus ?? ""}）`} style={{ color: "#0D9488", fontSize: fontSize.xs, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>▶ {team.currentTaskTitle ?? team.currentTaskId}</span>
             </>
           )}
         </div>
-        <div style={{ display: "flex", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
           {team.members.slice(0, 5).map((m, idx) => (
             <span key={m.id} style={{ marginLeft: idx === 0 ? 0 : -8 }}>
               <AgentAvatar role={toAvatarRole(m.agent?.role ?? null)} size="sm" />
@@ -115,7 +115,7 @@ function TeamCard({ team, onOpen }: { team: TeamDto; onOpen: () => void }) {
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>v{team.version} · {new Date(team.updatedAt).toLocaleDateString()}</span>
+        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>v{team.version} · {new Date(team.updatedAt).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
         <span style={{ fontSize: fontSize.xs, color: neutral[400], fontFamily: fontFamily.mono }}>{team.id}</span>
       </div>
       <button
@@ -135,7 +135,7 @@ function TeamCard({ team, onOpen }: { team: TeamDto; onOpen: () => void }) {
           borderRadius: radius.md,
           border: `1px solid ${neutral[200]}`,
           backgroundColor: "var(--color-surface)",
-          color: "#2563EB",
+          color: "#0D9488",
           fontSize: fontSize.sm,
           fontWeight: 500,
           cursor: "pointer",
@@ -206,7 +206,7 @@ export default function TeamsPage() {
             onChange={(e) => handleSearch(e.target.value)}
             placeholder="搜索团队名…"
             aria-label="搜索团队"
-            style={{ flex: 1, minWidth: 0, border: "none", outline: "none", background: "transparent", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}
+            style={{ flex: 1, minWidth: 0, border: "none",background: "transparent", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}
           />
         </div>
         <button
@@ -220,12 +220,12 @@ export default function TeamsPage() {
             padding: `${space.sm + 2}px ${space.lg}px`,
             borderRadius: radius.pill,
             border: "none",
-            backgroundColor: "#2563EB",
+            backgroundColor: "#0D9488",
             color: "#FFFFFF",
             fontSize: fontSize.md,
             fontWeight: 500,
             cursor: "pointer",
-            boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+            boxShadow: "0 6px 16px rgba(13,148,136,.3)",
             fontFamily: fontFamily.body,
             flexShrink: 0,
           }}
@@ -258,7 +258,7 @@ export default function TeamsPage() {
               type="button"
               data-testid="create-team-empty"
               onClick={() => router.push("/teams/new")}
-              style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.pill, border: "none", backgroundColor: "#2563EB", color: "#FFF", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body }}
+              style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.sm + 2}px ${space.lg}px`, borderRadius: radius.pill, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body }}
             >
               新建团队
             </button>

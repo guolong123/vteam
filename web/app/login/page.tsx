@@ -290,7 +290,7 @@ function LoginForm() {
                 checked={rememberMe}
                 onChange={(e) => setRememberMe(e.target.checked)}
                 disabled={submitting}
-                style={{ width: 14, height: 14, accentColor: "#2563EB", cursor: "pointer" }}
+                style={{ width: 14, height: 14, accentColor: "#0D9488", cursor: "pointer" }}
               />
               记住我
             </label>
@@ -306,7 +306,7 @@ function LoginForm() {
                 border: "none",
                 padding: 0,
                 fontSize: fontSize.sm,
-                color: "#2563EB",
+                color: "#0D9488",
                 fontWeight: 500,
                 cursor: "pointer",
               }}
@@ -389,7 +389,7 @@ function LoginForm() {
             <Link
               href="/register"
               data-testid="register-link"
-              style={{ color: "#2563EB", fontWeight: 500, marginLeft: space.xs, textDecoration: "none" }}
+              style={{ color: "#0D9488", fontWeight: 500, marginLeft: space.xs, textDecoration: "none" }}
             >
               立即注册
             </Link>
@@ -457,7 +457,7 @@ function LoginForm() {
                 border: "none",
                 padding: 0,
                 fontSize: fontSize.md,
-                color: "#2563EB",
+                color: "#0D9488",
                 fontWeight: 500,
                 cursor: "pointer",
               }}
@@ -563,7 +563,7 @@ function LoginForm() {
                 border: "none",
                 padding: 0,
                 fontSize: fontSize.md,
-                color: "#2563EB",
+                color: "#0D9488",
                 fontWeight: 500,
                 cursor: "pointer",
               }}

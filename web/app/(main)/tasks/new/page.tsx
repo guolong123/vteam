@@ -39,7 +39,7 @@ function getInitialTeamId(): string | null {
 }
 
 /* ------------------------------ 背景文档（同原型） ------------------------------ */
-const docTypeColors = { pdf: "#EF4444", csv: "#10B981", docx: "#3B82F6" } as const;
+const docTypeColors = { pdf: "#EF4444", csv: "#10B981", docx: "#0D9488" } as const;
 const DEFAULT_DOC_COLOR = "var(--color-neutral-500)";
 interface UploadedFileMeta { url: string; name: string; size: number; ext: string; }
 interface BackgroundDoc { name: string; size: string; ext: string; color: string; url: string; }
@@ -82,7 +82,7 @@ function TaskForm({
   const fieldLabel: CSSProperties = { fontSize: fontSize.sm, fontWeight: 500, color: neutral[600], marginBottom: space.xs };
   const inputBase: CSSProperties = {
     width: "100%", boxSizing: "border-box", padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md,
-    border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], outline: "none", fontFamily: fontFamily.body,
+    border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800],fontFamily: fontFamily.body,
   };
   return (
     <section style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: space.lg, padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, ...baseFont }}>
@@ -102,7 +102,7 @@ function TaskForm({
       <div data-testid="doc-upload" style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
         <label style={fieldLabel}>背景文档</label>
         <button type="button" data-testid="doc-upload-btn" aria-label="上传背景文档" disabled={uploading} onClick={() => fileInputRef.current?.click()} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: space.xs, padding: `${space.xl}px ${space.lg}px`, borderRadius: radius.md, border: `1.5px dashed ${neutral[300]}`, backgroundColor: neutral[50], color: neutral[500], cursor: uploading ? "default" : "pointer", opacity: uploading ? 0.7 : 1, fontFamily: fontFamily.body }}>
-          <span aria-hidden style={{ fontSize: fontSize.xl, lineHeight: 1, color: "#2563EB" }}>↑</span>
+          <span aria-hidden style={{ fontSize: fontSize.xl, lineHeight: 1, color: "#0D9488" }}>↑</span>
           <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[600] }}>{uploading ? "上传中…" : "点击或拖拽上传背景文档"}</span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>支持 PDF / Word / CSV，文件将沉淀到任务文档库供团队查看</span>
         </button>
@@ -133,7 +133,7 @@ function TaskForm({
         <span style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>{executionModes.find((m) => m.value === executionMode)?.desc}</span>
       </div>
       <div style={{ display: "flex", alignItems: "flex-start", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, color: neutral[500], lineHeight: 1.6 }}>
-        <span aria-hidden style={{ color: "#2563EB", fontWeight: 700, lineHeight: 1.6 }}>i</span>
+        <span aria-hidden style={{ color: "#0D9488", fontWeight: 700, lineHeight: 1.6 }}>i</span>
         任务创建后进入「待开始」或「排队中」状态；团队忙时自动排队，完成按序拉起。
       </div>
     </section>
@@ -171,7 +171,7 @@ function TeamSelectPanel({
         ) : teams.length === 0 ? (
           <div data-testid="teams-empty" style={{ fontSize: fontSize.sm, color: neutral[400], padding: `${space.md}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}` }}>
             暂无团队，请先在「团队」页创建
-            <Link data-testid="goto-teams" href="/teams" style={{ display: "inline-block", marginTop: space.sm, fontSize: fontSize.sm, color: "#2563EB", textDecoration: "none" }}>去创建团队 →</Link>
+            <Link data-testid="goto-teams" href="/teams" style={{ display: "inline-block", marginTop: space.sm, fontSize: fontSize.sm, color: "#0D9488", textDecoration: "none" }}>去创建团队 →</Link>
           </div>
         ) : (
           <>
@@ -181,7 +181,7 @@ function TeamSelectPanel({
               data-testid="team-select"
               value={selectedTeamId ?? ""}
               onChange={(e) => onSelectTeam(e.target.value)}
-              style={{ width: "100%", boxSizing: "border-box", padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${teamError ? "#DC2626" : neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[800], fontSize: fontSize.md, fontWeight: 500, outline: "none", cursor: "pointer", fontFamily: fontFamily.body }}
+              style={{ width: "100%", boxSizing: "border-box", padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${teamError ? "#DC2626" : neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[800], fontSize: fontSize.md, fontWeight: 500,cursor: "pointer", fontFamily: fontFamily.body }}
             >
               <option value="">请选择团队</option>
               {teams.map((t) => (
@@ -223,7 +223,7 @@ function TeamSelectPanel({
 
         {/* resetAfterComplete 勾选 */}
         <label style={{ display: "flex", alignItems: "center", gap: space.md, cursor: "pointer", padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}` }}>
-          <input type="checkbox" data-testid="reset-after-complete-toggle" checked={resetAfterComplete} onChange={(e) => onResetChange(e.target.checked)} style={{ width: 16, height: 16, accentColor: "#2563EB" }} />
+          <input type="checkbox" data-testid="reset-after-complete-toggle" checked={resetAfterComplete} onChange={(e) => onResetChange(e.target.checked)} style={{ width: 16, height: 16, accentColor: "#0D9488" }} />
           <span style={{ display: "flex", flexDirection: "column" }}>
             <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>完成后重置会话</span>
             <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>覆盖团队 reuseSession，为下一任务开新会话</span>
@@ -231,10 +231,10 @@ function TeamSelectPanel({
         </label>
       </div>
 
-      <button type="button" data-testid="create-task-button" disabled={submitting} onClick={onCreate} style={{ width: "100%", padding: `${space.md + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#FFFFFF", fontSize: fontSize.lg, fontWeight: 600, cursor: submitting ? "default" : "pointer", opacity: submitting ? 0.7 : 1, boxShadow: "0 6px 16px rgba(37,99,235,.3)", fontFamily: fontFamily.body }}>
+      <button type="button" data-testid="create-task-button" disabled={submitting} onClick={onCreate} style={{ width: "100%", padding: `${space.md + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFFFFF", fontSize: fontSize.lg, fontWeight: 600, cursor: submitting ? "default" : "pointer", opacity: submitting ? 0.7 : 1, boxShadow: "0 6px 16px rgba(13,148,136,.3)", fontFamily: fontFamily.body }}>
         {submitting ? "创建中…" : "创建任务"}
       </button>
-      {created && <div data-testid="create-success" role="status" style={{ display: "flex", flexDirection: "column", gap: space.xs, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(16,185,129,0.10)", border: "1px solid rgba(16,185,129,0.28)", fontSize: fontSize.sm, color: "#065F46", lineHeight: 1.6 }}><span style={{ fontWeight: 600 }}>✓ 任务已创建</span><span>进入「待开始/排队中」状态，排队时按序自动拉起。</span></div>}
+      {created && <div data-testid="create-success" role="status" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(16,185,129,0.10)", border: "1px solid rgba(16,185,129,0.28)", fontSize: fontSize.sm, color: "#065F46", fontWeight: 600 }}>✓ 任务已创建</div>}
       {createError && <div data-testid="create-error" role="alert" style={{ display: "flex", alignItems: "flex-start", gap: space.xs, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", fontSize: fontSize.sm, color: "#B91C1C", lineHeight: 1.6 }}><span aria-hidden style={{ fontWeight: 700 }}>!</span>{createError}</div>}
       <div data-testid="create-hint" role="note" style={{ display: "flex", alignItems: "flex-start", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: pendingBg, border: `1px solid ${pendingBorder}`, fontSize: fontSize.sm, color: neutral[600], lineHeight: 1.6 }}>
         <span aria-hidden style={{ color: pendingColor, fontWeight: 700, lineHeight: 1.6 }}>⏱</span>

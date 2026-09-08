@@ -128,7 +128,7 @@ export const PLAN_STATUS_THEME: Record<string, { label: string; color: string; b
   reviewing: { label: "待评审", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
   approved: { label: "已通过", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   rejected: { label: "已驳回", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
-  executing: { label: "执行中", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  executing: { label: "执行中", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   completed: { label: "已完成", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
 };
 
@@ -153,7 +153,7 @@ export const ISSUE_STATUS_ORDER: Record<TaskIssueItem["status"], number> = {
 /** issue 状态徽章主题。 */
 export const ISSUE_STATUS_BADGE: Record<TaskIssueItem["status"], { label: string; color: string; bg: string; border: string }> = {
   open: { label: "待处理", color: "var(--color-neutral-600)", bg: "var(--color-neutral-50)", border: "var(--color-neutral-300)" },
-  in_progress: { label: "进行中", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  in_progress: { label: "进行中", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   resolved: { label: "已解决", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   closed: { label: "已关闭", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
   rejected: { label: "已拒绝", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
@@ -162,7 +162,7 @@ export const ISSUE_STATUS_BADGE: Record<TaskIssueItem["status"], { label: string
 /** 产出物类型三色：结论文本=紫 / 文档=蓝 / 文件=绿。 */
 export const ARTIFACT_TYPE_THEME: Record<ArtifactApiType, { color: string }> = {
   text: { color: "#7C3AED" },
-  doc: { color: "#2563EB" },
+  doc: { color: "#0D9488" },
   file: { color: "#059669" },
 };
 

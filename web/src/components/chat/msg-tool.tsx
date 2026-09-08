@@ -28,7 +28,7 @@ const toolStatus: Record<
   "running" | "success" | "failed",
   { label: string; color: string; bg: string; border: string }
 > = {
-  running: { label: "运行中", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  running: { label: "运行中", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   success: { label: "成功", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   failed: { label: "失败", color: "#B91C1C", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 };
@@ -67,14 +67,10 @@ export function MsgTool({ author, role, name, status, input, output, time, style
       }}
     >
       <AgentAvatar role={role} size="sm" dot={false} style={{ marginTop: 2 }} />
-      <div
-        role="button"
-        tabIndex={0}
+      <button
+        type="button"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") setOpen(!open);
-        }}
         style={{
           flex: 1,
           minWidth: 0,
@@ -85,6 +81,9 @@ export function MsgTool({ author, role, name, status, input, output, time, style
           boxShadow: shadow.sm,
           cursor: "pointer",
           transition: "border-color .15s ease",
+          textAlign: "left",
+          fontFamily: fontFamily.body,
+          fontSize: fontSize.sm,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
@@ -163,7 +162,7 @@ export function MsgTool({ author, role, name, status, input, output, time, style
             </div>
           </div>
         )}
-      </div>
+      </button>
     </div>
   );
 }

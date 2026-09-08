@@ -46,7 +46,7 @@ const credentialTheme = {
 } as const;
 
 /** 启用状态徽章主色（与导航高亮蓝同族） */
-const activeBlue = "#2563EB";
+const activeBlue = "#0D9488";
 
 /** 行 hover / 过渡（scoped：mmrow 前缀避免污染） */
 const rowCss = `
@@ -100,7 +100,7 @@ function CredentialBadge({ status }: { status: CredentialStatus }) {
 /** 启用状态只读徽章：已启用=蓝 / 已停用=灰（替代原 model-toggle 写操作开关）。 */
 function EnabledBadge({ enabled }: { enabled: boolean }) {
   const theme = enabled
-    ? { label: "已启用", color: activeBlue, bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" }
+    ? { label: "已启用", color: activeBlue, bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" }
     : { label: "已停用", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" };
   return (
     <span
@@ -591,16 +591,21 @@ export default function ModelsPage() {
                 <span style={{ fontSize: fontSize.xs, color: neutral[500], backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, borderRadius: radius.pill, padding: "2px 10px", fontFamily: fontFamily.mono }}>{providers.length} 个 Provider</span>
                 <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginLeft: "auto", flex: 1, maxWidth: 320, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm }}>
                   <span aria-hidden style={{ fontSize: fontSize.lg, color: neutral[400] }}>⌕</span>
-                  <input data-testid="provider-search" autoComplete="off" name="provider-search" value={providerKeyword} onChange={(e) => setProviderKeyword(e.target.value)} placeholder="搜索 provider…" style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }} />
+                  <input data-testid="provider-search" autoComplete="off" name="provider-search" value={providerKeyword} onChange={(e) => setProviderKeyword(e.target.value)} placeholder="搜索 provider…" style={{ flex: 1, border: "none",background: "transparent", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }} />
                 </div>
                 {isAdmin && (
                   <button type="button" data-testid="sync-models-button" disabled={syncMutation.isPending} onClick={() => syncMutation.mutate()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[700], fontSize: fontSize.md, fontWeight: 500, cursor: syncMutation.isPending ? "default" : "pointer", opacity: syncMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body }}>{syncMutation.isPending ? "同步中…" : "↻ 同步"}</button>
                 )}
                 {isAdmin && (
-                  <button type="button" data-testid="add-provider-button" onClick={() => { setAddProviderID(""); setAddModelID(""); setAddName(""); setAddProviderType("local"); setAddBaseUrl(""); setAddOpen(true); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#fff", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body }}>+ 新增 Provider</button>
+                  <button type="button" data-testid="add-provider-button" onClick={() => { setAddProviderID(""); setAddModelID(""); setAddName(""); setAddProviderType("local"); setAddBaseUrl(""); setAddOpen(true); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#fff", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body }}>+ 新增 Provider</button>
                 )}
               </div>
-              {syncHint && <div data-testid="sync-hint" style={{ fontSize: fontSize.sm, color: neutral[600], backgroundColor: "rgba(37,99,235,0.08)", border: `1px solid rgba(37,99,235,0.15)`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>{syncHint}</div>}
+              {syncHint && <div data-testid="sync-hint" style={{ fontSize: fontSize.sm, color: neutral[600], backgroundColor: "rgba(13,148,136,0.08)", border: `1px solid rgba(13,148,136,0.15)`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>{syncHint}</div>}
+              {!providersQuery.isPending && providers.length > 0 && providers.every((p) => !p.configured) && (
+                <div data-testid="providers-empty-guide" style={{ fontSize: fontSize.sm, color: "#92400E", backgroundColor: "rgba(245,158,11,0.10)", border: `1px solid rgba(245,158,11,0.25)`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+                  尚未配置任何 Provider 凭据：点任一 Provider 的「配置」录入 API Token，再点右上「↻ 同步」拉取可用模型。
+                </div>
+              )}
               {providersQuery.isPending ? (
                 <div data-testid="providers-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}>加载中…</div>
               ) : (
@@ -642,16 +647,16 @@ export default function ModelsPage() {
                 <span style={{ fontSize: fontSize.xs, color: neutral[500], backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, borderRadius: radius.pill, padding: "2px 10px", fontFamily: fontFamily.mono }}>{filteredModels.length} 个模型</span>
                 <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginLeft: "auto", flex: 1, maxWidth: 320, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm }}>
                   <span aria-hidden style={{ fontSize: fontSize.lg, color: neutral[400] }}>⌕</span>
-                  <input data-testid="model-search" autoComplete="off" name="model-search" value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="搜索模型名…" style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }} />
+                  <input data-testid="model-search" autoComplete="off" name="model-search" value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="搜索模型名…" style={{ flex: 1, border: "none",background: "transparent", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }} />
                 </div>
                 {isAdmin && (
                   <button type="button" data-testid="sync-models-button" disabled={syncMutation.isPending} onClick={() => syncMutation.mutate()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[700], fontSize: fontSize.md, fontWeight: 500, cursor: syncMutation.isPending ? "default" : "pointer", opacity: syncMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body }}>{syncMutation.isPending ? "同步中…" : "↻ 同步"}</button>
                 )}
                 {isAdmin && (
-                  <button type="button" data-testid="add-model-button" onClick={() => { setAddProviderID(selectedProvider); setAddModelID(""); setAddName(""); setAddProviderType("local"); setAddBaseUrl(providers.find(p=>p.providerID===selectedProvider)?.baseUrl ?? ""); setAddOpen(true); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#fff", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body }}>+ 新增模型</button>
+                  <button type="button" data-testid="add-model-button" onClick={() => { setAddProviderID(selectedProvider); setAddModelID(""); setAddName(""); setAddProviderType("local"); setAddBaseUrl(providers.find(p=>p.providerID===selectedProvider)?.baseUrl ?? ""); setAddOpen(true); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#fff", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body }}>+ 新增模型</button>
                 )}
               </div>
-              {syncHint && <div data-testid="sync-hint" style={{ fontSize: fontSize.sm, color: neutral[600], backgroundColor: "rgba(37,99,235,0.08)", border: `1px solid rgba(37,99,235,0.15)`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>{syncHint}</div>}
+              {syncHint && <div data-testid="sync-hint" style={{ fontSize: fontSize.sm, color: neutral[600], backgroundColor: "rgba(13,148,136,0.08)", border: `1px solid rgba(13,148,136,0.15)`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>{syncHint}</div>}
               {modelsQuery.isPending ? (
                 <div data-testid="models-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}>加载中…</div>
               ) : (
@@ -706,7 +711,7 @@ export default function ModelsPage() {
             <input data-testid="add-model-baseurl" autoComplete="off" name="add-baseurl" placeholder="baseUrl (http://.../v1)" value={addBaseUrl} onChange={(e) => setAddBaseUrl(e.target.value)} style={{ padding: `${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }} />
             <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
               <button type="button" onClick={() => setAddOpen(false)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>取消</button>
-              <button type="button" data-testid="add-model-submit" disabled={createModelMutation.isPending} onClick={() => { const payload: Record<string, string> = { providerID: addProviderID.trim(), modelID: addModelID.trim(), name: addName.trim(), providerType: addProviderType }; if (addBaseUrl.trim()) payload.baseUrl = addBaseUrl.trim(); createModelMutation.mutate(payload as never); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#fff" }}>{createModelMutation.isPending ? "创建中…" : "创建"}</button>
+              <button type="button" data-testid="add-model-submit" disabled={createModelMutation.isPending} onClick={() => { const payload: Record<string, string> = { providerID: addProviderID.trim(), modelID: addModelID.trim(), name: addName.trim(), providerType: addProviderType }; if (addBaseUrl.trim()) payload.baseUrl = addBaseUrl.trim(); createModelMutation.mutate(payload as never); }} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#fff" }}>{createModelMutation.isPending ? "创建中…" : "创建"}</button>
             </div>
           </div>
         </div>
@@ -729,7 +734,7 @@ export default function ModelsPage() {
             </label>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
               <button type="button" onClick={() => setEditTarget(null)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>取消</button>
-              <button type="button" data-testid="edit-model-submit" disabled={updateModelMutation.isPending} onClick={() => updateModelMutation.mutate({ id: editTarget.id, name: editName.trim(), providerType: editProviderType, baseUrl: editBaseUrl.trim() || null, enabled: editEnabled })} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#fff" }}>{updateModelMutation.isPending ? "保存中…" : "保存"}</button>
+              <button type="button" data-testid="edit-model-submit" disabled={updateModelMutation.isPending} onClick={() => updateModelMutation.mutate({ id: editTarget.id, name: editName.trim(), providerType: editProviderType, baseUrl: editBaseUrl.trim() || null, enabled: editEnabled })} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#fff" }}>{updateModelMutation.isPending ? "保存中…" : "保存"}</button>
             </div>
           </div>
         </div>
@@ -748,7 +753,7 @@ export default function ModelsPage() {
             <input data-testid="edit-provider-baseurl" autoComplete="off" name="edit-provider-baseurl" placeholder="baseUrl (http://.../v1)" value={providerEditBaseUrl} onChange={(e) => setProviderEditBaseUrl(e.target.value)} style={{ padding: `${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }} />
             <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
               <button type="button" onClick={() => setProviderEditTarget(null)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>取消</button>
-              <button type="button" data-testid="edit-provider-submit" disabled={updateProviderMutation.isPending} onClick={() => updateProviderMutation.mutate({ providerID: providerEditTarget, providerType: providerEditType, baseUrl: providerEditBaseUrl.trim() || null })} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#fff" }}>{updateProviderMutation.isPending ? "保存中…" : "保存"}</button>
+              <button type="button" data-testid="edit-provider-submit" disabled={updateProviderMutation.isPending} onClick={() => updateProviderMutation.mutate({ providerID: providerEditTarget, providerType: providerEditType, baseUrl: providerEditBaseUrl.trim() || null })} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#fff" }}>{updateProviderMutation.isPending ? "保存中…" : "保存"}</button>
             </div>
           </div>
         </div>

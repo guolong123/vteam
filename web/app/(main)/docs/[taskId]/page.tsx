@@ -15,8 +15,8 @@ const PrototypePanel = dynamic(
 );
 
 /* 品牌蓝（对齐 roleText.product，双主题下保持可读） */
-const ACCENT = "#2563EB";
-const ACCENT_BG = "rgba(37,99,235,0.10)";
+const ACCENT = "#0D9488";
+const ACCENT_BG = "rgba(13,148,136,0.10)";
 
 export default function DocsPage() {
   const params = useParams<{ taskId: string }>();
@@ -54,7 +54,7 @@ export default function DocsPage() {
         <span style={{ color: neutral[300] }} aria-hidden>/</span>
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: neutral[500] }}>{crumb}</span>
         <span className="hidden sm:inline-flex" style={{ marginLeft: "auto", alignItems: "center", gap: 6, borderRadius: radius.pill, border: `1px solid ${border}`, backgroundColor: neutral[50], padding: "2px 10px", fontSize: 11, fontWeight: 500, color: neutral[500] }}>
-          <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "#3B82F6" }} />文档站
+          <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "#0D9488" }} />文档站
         </span>
       </nav>
       <div data-testid="docs-tab-bar" style={{ display: "flex", height: 44, flexShrink: 0, alignItems: "center", gap: 4, borderBottom: `1px solid ${border}`, backgroundColor: surface, padding: `0 ${space.lg}px` }}>

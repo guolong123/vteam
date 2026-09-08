@@ -47,7 +47,7 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 /** Issue 状态五色：open=灰蓝 / in_progress=蓝 / resolved=绿 / closed=灰 / rejected=红（独立于任务态语义）。 */
 const ISSUE_STATUS_THEME: Record<IssueStatus, { label: string; color: string; bg: string; border: string }> = {
   open: { label: "待处理", color: "var(--color-neutral-600)", bg: "var(--color-neutral-50)", border: "var(--color-neutral-300)" },
-  in_progress: { label: "进行中", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  in_progress: { label: "进行中", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   resolved: { label: "已解决", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   closed: { label: "已关闭", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
   rejected: { label: "已拒绝", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
@@ -55,7 +55,7 @@ const ISSUE_STATUS_THEME: Record<IssueStatus, { label: string; color: string; bg
 
 /** tags 标签徽章多彩循环色板（需求/缺陷/优化 等自由标签按 index 循环取色）。 */
 const TAG_THEMES: { color: string; bg: string; border: string }[] = [
-  { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
   { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
@@ -286,7 +286,7 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
               backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
-              outline: "none",
+
               fontFamily: fontFamily.body,
             }}
           />
@@ -310,7 +310,7 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
               backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
-              outline: "none",
+
               resize: "vertical",
               fontFamily: fontFamily.body,
             }}
@@ -335,7 +335,7 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
               backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
-              outline: "none",
+
               fontFamily: fontFamily.body,
             }}
           />
@@ -356,7 +356,7 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
               backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
-              outline: "none",
+
               fontFamily: fontFamily.body,
             }}
           >
@@ -404,13 +404,13 @@ function IssueFormModal({ open, editing, taskId, agents, submitting, error, onCl
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: "none",
-              backgroundColor: "#2563EB",
+              backgroundColor: "#0D9488",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
               cursor: submitting ? "default" : "pointer",
               opacity: submitting ? 0.6 : 1,
-              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+              boxShadow: "0 6px 16px rgba(13,148,136,.3)",
               fontFamily: fontFamily.body,
             }}
           >
@@ -663,6 +663,7 @@ export default function IssuesPage() {
 
   // 团队上下文：URL ?teamId= 必填；无 teamId 且已登录 → 重定向 /teams（effect 内读 window）
   const [teamId, setTeamId] = useState<string | null>(null);
+  const [redirecting, setRedirecting] = useState(false);
   const [taskId, setTaskId] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<StatusFilterKey>("all");
 
@@ -671,7 +672,9 @@ export default function IssuesPage() {
     if (urlTeamId) {
       setTeamId(urlTeamId);
     } else if (user?.id) {
-      router.replace("/teams");
+      setRedirecting(true);
+      const t = setTimeout(() => router.replace("/teams"), 1500);
+      return () => clearTimeout(t);
     }
   }, [user, router]);
 
@@ -792,6 +795,11 @@ export default function IssuesPage() {
         overflow: "auto",
       }}
     >
+      {redirecting && (
+        <div data-testid="team-redirect-hint" style={{ padding: `${space.md}px ${space.xl}px`, backgroundColor: "rgba(13,148,136,0.08)", color: "#0D9488", fontSize: fontSize.sm }}>
+          未指定团队，正在返回团队列表，请从团队进入 Issue 列表…
+        </div>
+      )}
       <main style={{ flex: 1, minHeight: 0, padding: `${space.xl}px` }}>
         <div
           style={{
@@ -825,7 +833,7 @@ export default function IssuesPage() {
                 disabled={tasksQuery.isPending}
                 style={{
                   border: "none",
-                  outline: "none",
+
                   background: "transparent",
                   fontSize: fontSize.md,
                   color: neutral[800],
@@ -862,7 +870,7 @@ export default function IssuesPage() {
                 onChange={(e) => setStatusFilter(e.target.value as StatusFilterKey)}
                 style={{
                   border: "none",
-                  outline: "none",
+
                   background: "transparent",
                   fontSize: fontSize.md,
                   color: neutral[800],
@@ -896,12 +904,12 @@ export default function IssuesPage() {
                   padding: `${space.sm}px ${space.lg}px`,
                   borderRadius: radius.pill,
                   border: "none",
-                  backgroundColor: "#2563EB",
+                  backgroundColor: "#0D9488",
                   color: "#FFFFFF",
                   fontSize: fontSize.md,
                   fontWeight: 500,
                   cursor: "pointer",
-                  boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+                  boxShadow: "0 6px 16px rgba(13,148,136,.3)",
                   fontFamily: fontFamily.body,
                 }}
               >

@@ -46,7 +46,7 @@ const ACTION_SETS: Record<IssueStatus, IssueAction[]> = {
 
 /** 动作元信息：按钮文案 / 强调色。颜色对齐 issue 状态语义（开始蓝/解决绿/关闭灰/重开琥珀/拒绝红）。 */
 const ACTION_META: Record<IssueAction, { label: string; color: string; pendingLabel: string }> = {
-  start: { label: "开始处理", color: "#2563EB", pendingLabel: "处理中…" },
+  start: { label: "开始处理", color: "#0D9488", pendingLabel: "处理中…" },
   resolve: { label: "标记解决", color: "#059669", pendingLabel: "解决中…" },
   close: { label: "关闭", color: "var(--color-neutral-500)", pendingLabel: "关闭中…" },
   reopen: { label: "重新打开", color: "#D97706", pendingLabel: "重开中…" },
@@ -197,7 +197,7 @@ export function IssueStatusActions({ issueId, status, onSettled }: IssueStatusAc
               backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
-              outline: "none",
+
               resize: "vertical",
               fontFamily: fontFamily.body,
             }}

@@ -37,7 +37,7 @@ const mdStyles = `
 .md-render h4, .md-render h5, .md-render h6 { font-size: 1em; }
 .md-render ul, .md-render ol { margin: .4em 0; padding-left: 1.5em; }
 .md-render li { margin: .15em 0; }
-.md-render a { color: #2563EB; text-decoration: underline; word-break: break-all; }
+.md-render a { color: #0D9488; text-decoration: underline; word-break: break-all; }
 .md-render blockquote {
   margin: .5em 0;
   padding: .2em .9em;

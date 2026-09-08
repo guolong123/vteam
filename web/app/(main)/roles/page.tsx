@@ -58,7 +58,7 @@ type Perm = keyof typeof permCellTheme;
 
 /** 角色主题色（管理员蓝 / 成员绿 / 自定义紫），深色下用半透明以跟随 surface */
 const roleThemes = {
-  admin: { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)", icon: "◈" },
+  admin: { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)", icon: "◈" },
   member: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.22)", icon: "●" },
   custom: { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)", icon: "✦" },
 } as const;
@@ -157,7 +157,9 @@ function matrixFromPermissions(perms: unknown): Perm[][] {
   if (p.all === true) {
     return RESOURCES.map(() => ACTIONS.map(() => "allow" as Perm));
   }
-  if (p.all === false) {
+  // all:false 仅为"非超管"标记（seed member 为 {all:false + 完整资源矩阵}）：有资源键时按矩阵算，
+  // 仅纯 {all:false}（旧版简写）才全 deny；对齐后端 PermissionGuard 语义
+  if (p.all === false && !RESOURCES.some((r) => typeof p[r.key] === "object" && p[r.key] !== null)) {
     return RESOURCES.map(() => ACTIONS.map(() => "deny" as Perm));
   }
   return RESOURCES.map((r) =>
@@ -663,7 +665,7 @@ function CreateRoleModal({
               backgroundColor: "var(--color-surface)",
               fontSize: fontSize.md,
               color: neutral[800],
-              outline: "none",
+
               fontFamily: fontFamily.body,
             }}
           />
@@ -722,13 +724,13 @@ function CreateRoleModal({
               padding: `${space.sm + 2}px ${space.lg}px`,
               borderRadius: radius.md,
               border: "none",
-              backgroundColor: "#2563EB",
+              backgroundColor: "#0D9488",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
               cursor: submitting || !name.trim() ? "default" : "pointer",
               opacity: submitting || !name.trim() ? 0.6 : 1,
-              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+              boxShadow: "0 6px 16px rgba(13,148,136,.3)",
               fontFamily: fontFamily.body,
             }}
           >
@@ -938,12 +940,12 @@ export default function RolePermissionPage() {
                 padding: `${space.sm + 2}px ${space.lg}px`,
                 borderRadius: radius.pill,
                 border: "none",
-                backgroundColor: "#2563EB",
+                backgroundColor: "#0D9488",
                 color: "#FFFFFF",
                 fontSize: fontSize.md,
                 fontWeight: 500,
                 cursor: "pointer",
-                boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+                boxShadow: "0 6px 16px rgba(13,148,136,.3)",
                 fontFamily: fontFamily.body,
               }}
             >
@@ -1181,13 +1183,13 @@ export default function RolePermissionPage() {
                       padding: `${space.sm + 2}px ${space.lg}px`,
                       borderRadius: radius.md,
                       border: "none",
-                      backgroundColor: "#2563EB",
+                      backgroundColor: "#0D9488",
                       color: "#FFFFFF",
                       fontSize: fontSize.md,
                       fontWeight: 500,
                       cursor: !dirty || updateMutation.isPending ? "default" : "pointer",
                       opacity: !dirty || updateMutation.isPending ? 0.6 : 1,
-                      boxShadow: dirty ? "0 6px 16px rgba(37,99,235,.3)" : undefined,
+                      boxShadow: dirty ? "0 6px 16px rgba(13,148,136,.3)" : undefined,
                       fontFamily: fontFamily.body,
                     }}
                   >
@@ -1225,8 +1227,8 @@ export default function RolePermissionPage() {
                 style={{
                   padding: `${space.md}px ${space.lg}px`,
                   borderRadius: radius.md,
-                  backgroundColor: "rgba(37,99,235,0.10)",
-                  border: `1px solid rgba(37,99,235,0.22)`,
+                  backgroundColor: "rgba(13,148,136,0.10)",
+                  border: `1px solid rgba(13,148,136,0.22)`,
                   fontSize: fontSize.sm,
                   color: "#1D4ED8",
                   lineHeight: 1.7,

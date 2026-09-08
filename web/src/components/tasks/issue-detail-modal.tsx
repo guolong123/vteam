@@ -28,7 +28,7 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 /** Issue 状态徽章（对齐 issues 页 ISSUE_STATUS_THEME；is_0000000013 增 rejected 主题）。 */
 const ISSUE_STATUS_THEME: Record<IssueStatus, { label: string; color: string; bg: string; border: string }> = {
   open: { label: "待处理", color: "var(--color-neutral-600)", bg: "var(--color-neutral-50)", border: "var(--color-neutral-300)" },
-  in_progress: { label: "进行中", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  in_progress: { label: "进行中", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   resolved: { label: "已解决", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   closed: { label: "已关闭", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
   rejected: { label: "已拒绝", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
@@ -86,7 +86,7 @@ function IssueStatusBadge({ status }: { status: IssueStatus }) {
 
 /** tags 标签徽章（多彩，按 index 循环取色，对齐 issues 页 TAG_THEMES）。 */
 const TAG_THEMES: { color: string; bg: string; border: string }[] = [
-  { color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.22)" },
+  { color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
   { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
@@ -149,7 +149,7 @@ const inputBase: CSSProperties = {
   backgroundColor: "var(--color-surface)",
   fontSize: fontSize.md,
   color: neutral[800],
-  outline: "none",
+
   fontFamily: fontFamily.body,
 };
 
@@ -487,7 +487,7 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
                           borderRadius: "50%",
                           backgroundColor:
                             act.action === "transition"
-                              ? "#2563EB"
+                              ? "#0D9488"
                               : act.action === "update"
                                 ? "#D97706"
                                 : "#059669",
@@ -576,13 +576,13 @@ export function IssueDetailModal({ issueId, open, onClose, agents, onChanged }: 
                       padding: `${space.sm + 1}px ${space.lg}px`,
                       borderRadius: radius.pill,
                       border: "none",
-                      backgroundColor: "#2563EB",
+                      backgroundColor: "#0D9488",
                       color: "#FFFFFF",
                       fontSize: fontSize.md,
                       fontWeight: 500,
                       cursor: updateMutation.isPending ? "default" : "pointer",
                       opacity: updateMutation.isPending ? 0.6 : 1,
-                      boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+                      boxShadow: "0 6px 16px rgba(13,148,136,.3)",
                       fontFamily: fontFamily.body,
                     }}
                   >

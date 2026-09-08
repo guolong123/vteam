@@ -20,6 +20,7 @@ import {
   fontFamily,
   shadow,
 } from "@/src/theme/tokens";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -62,6 +63,8 @@ export function ConfirmDialog({
     return () => window.removeEventListener("keydown", handleKey);
   }, [open, onClose]);
 
+  const dialogRef = useFocusTrap<HTMLDivElement>(open, onClose);
+
   if (!open) return null;
 
   return (
@@ -91,8 +94,11 @@ export function ConfirmDialog({
       />
       {/* 弹窗卡片 */}
       <div
+        ref={dialogRef}
         role="alertdialog"
-        aria-label={title}
+        aria-modal="true"
+        aria-labelledby={`${testid}-title`}
+        aria-describedby={description ? `${testid}-desc` : undefined}
         style={{
           position: "relative",
           width: 400,
@@ -108,11 +114,12 @@ export function ConfirmDialog({
         }}
       >
         <div>
-          <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900], lineHeight: 1.3 }}>
+          <div id={`${testid}-title`} style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900], lineHeight: 1.3 }}>
             {title}
           </div>
           {description && (
             <div
+              id={`${testid}-desc`}
               style={{
                 fontSize: fontSize.sm,
                 color: neutral[500],
@@ -152,13 +159,13 @@ export function ConfirmDialog({
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: "none",
-              backgroundColor: danger ? "#DC2626" : "#2563EB",
+              backgroundColor: danger ? "#DC2626" : "#0D9488",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
               cursor: submitting ? "default" : "pointer",
               opacity: submitting ? 0.6 : 1,
-              boxShadow: `0 6px 16px ${danger ? "rgba(220,38,38,.3)" : "rgba(37,99,235,.3)"}`,
+              boxShadow: `0 6px 16px ${danger ? "rgba(220,38,38,.3)" : "rgba(13,148,136,.3)"}`,
               fontFamily: fontFamily.body,
             }}
           >

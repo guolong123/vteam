@@ -8,8 +8,8 @@ import { neutral, surface, border, space, radius, fontSize, fontFamily } from "@
 const EMPTY_DOCS: DocDef[] = [];
 
 /* 品牌蓝（对齐 roleText.product，双主题下保持可读） */
-const ACCENT = "#2563EB";
-const ACCENT_BG = "rgba(37,99,235,0.10)";
+const ACCENT = "#0D9488";
+const ACCENT_BG = "rgba(13,148,136,0.10)";
 
 const TRASH_ICON = (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -120,7 +120,7 @@ export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialD
                     >
                       {kids.length > 0 ? <button type="button" onClick={() => toggleExpand(root.id)} style={{ display: "flex", width: 20, height: 20, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: radius.sm, color: neutral[400], background: "transparent", cursor: "pointer" }}>{isExpanded ? "▾" : "▸"}</button> : <span style={{ width: 20, height: 20, flexShrink: 0 }} />}
                       <button type="button" onClick={() => setActiveDocId(root.id)} aria-current={active ? "page" : undefined} style={{ display: "flex", minWidth: 0, flex: 1, alignItems: "center", gap: space.sm, borderRadius: radius.sm, padding: `${space.sm}px ${space.sm + 2}px`, textAlign: "left", cursor: "pointer", background: "transparent", color: active ? ACCENT : neutral[600], border: "none", fontFamily: fontFamily.body }}>
-                        <span style={{ display: "flex", width: 20, height: 20, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: radius.sm, fontSize: 9, fontWeight: 600, background: active ? "rgba(37,99,235,0.18)" : neutral[200], color: active ? ACCENT : neutral[500] }}>{root.fileExt ? root.fileExt.slice(0, 2).toUpperCase() : root.kind.slice(0, 2)}</span>
+                        <span style={{ display: "flex", width: 20, height: 20, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: radius.sm, fontSize: 9, fontWeight: 600, background: active ? "rgba(13,148,136,0.18)" : neutral[200], color: active ? ACCENT : neutral[500] }}>{root.fileExt ? root.fileExt.slice(0, 2).toUpperCase() : root.kind.slice(0, 2)}</span>
                         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: fontSize.md, fontWeight: 500 }}>{root.name}</span>
                       </button>
                       {root.artifactId ? (
@@ -144,7 +144,7 @@ export function DocExplorer({ taskId, initialDocId }: { taskId: string; initialD
                       <div style={{ marginTop: 4, marginLeft: space.sm, display: "flex", flexDirection: "column", gap: 4, borderLeft: `1px solid ${border}`, paddingLeft: space.lg }}>
                         {kids.map((kid) => {
                           const kidActive = kid.id === activeDoc?.id;
-                          return <button key={kid.id} type="button" onClick={() => setActiveDocId(kid.id)} style={{ display: "flex", width: "100%", alignItems: "center", gap: space.sm, borderRadius: radius.sm, padding: `${space.sm}px ${space.sm + 2}px`, textAlign: "left", cursor: "pointer", background: kidActive ? ACCENT_BG : "transparent", color: kidActive ? ACCENT : neutral[500], border: "none", fontFamily: fontFamily.body }}><span style={{ width: 6, height: 6, flexShrink: 0, borderRadius: "50%", background: kidActive ? "#3B82F6" : neutral[300] }} /><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13 }}>{kid.name}</span></button>;
+                          return <button key={kid.id} type="button" onClick={() => setActiveDocId(kid.id)} style={{ display: "flex", width: "100%", alignItems: "center", gap: space.sm, borderRadius: radius.sm, padding: `${space.sm}px ${space.sm + 2}px`, textAlign: "left", cursor: "pointer", background: kidActive ? ACCENT_BG : "transparent", color: kidActive ? ACCENT : neutral[500], border: "none", fontFamily: fontFamily.body }}><span style={{ width: 6, height: 6, flexShrink: 0, borderRadius: "50%", background: kidActive ? "#0D9488" : neutral[300] }} /><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13 }}>{kid.name}</span></button>;
                         })}
                       </div>
                     )}

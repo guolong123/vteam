@@ -110,9 +110,9 @@ function ToolBadge({ name }: { name: string }) {
         gap: space.xs,
         padding: "2px 10px",
         borderRadius: radius.pill,
-        backgroundColor: builtin ? "rgba(37,99,235,0.10)" : "rgba(124,58,237,0.10)",
-        border: `1px solid ${builtin ? "rgba(37,99,235,0.22)" : "rgba(124,58,237,0.22)"}`,
-        color: builtin ? "#2563EB" : "#7C3AED",
+        backgroundColor: builtin ? "rgba(13,148,136,0.10)" : "rgba(124,58,237,0.10)",
+        border: `1px solid ${builtin ? "rgba(13,148,136,0.22)" : "rgba(124,58,237,0.22)"}`,
+        color: builtin ? "#0D9488" : "#7C3AED",
         fontSize: fontSize.sm,
         fontWeight: 500,
         fontFamily: fontFamily.mono,
@@ -415,14 +415,16 @@ export default function WorkerDetailPage() {
               const maxInstances = worker.capabilities?.maxInstances ?? 0;
               const instances = worker.load?.instances ?? 0;
               const loadPct = maxInstances > 0 ? Math.round((instances / maxInstances) * 100) : 0;
+              // 满载是正常水位（并发上限），用橙色提示而非红色告警
+              const barColor = loadPct >= 100 ? "#D97706" : loadColor(loadPct);
               return (
                 <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <span style={{ fontSize: fontSize.sm, color: neutral[500] }}>
                       当前活跃会话 · <span style={{ fontWeight: 600, color: neutral[800] }}>{instances}</span> 个
                     </span>
-                    <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: loadColor(loadPct) }}>
-                      占用 {loadPct}%
+                    <span title={`并发上限 ${maxInstances}`} style={{ fontSize: fontSize.sm, fontWeight: 600, color: barColor }}>
+                      {instances}/{maxInstances} 并发
                     </span>
                   </div>
                   <div
@@ -437,10 +439,10 @@ export default function WorkerDetailPage() {
                   >
                     <div
                       style={{
-                        width: `${loadPct}%`,
+                        width: `${Math.min(loadPct, 100)}%`,
                         height: "100%",
                         borderRadius: radius.pill,
-                        backgroundColor: loadColor(loadPct),
+                        backgroundColor: barColor,
                         transition: "width .4s ease",
                       }}
                     />

@@ -858,6 +858,16 @@ export default function TeamSessionPage() {
       console.error("[TeamSession] toggle managed mode failed", { teamId, error: err });
     },
   });
+  const setMainAgentMutation = useMutation({
+    mutationFn: (memberId: string) => teamsApi.update(teamId, { mainAgentMemberId: memberId }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<TeamDto>(["team", teamId], updated);
+      queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+    },
+    onError: (err) => {
+      console.error("[TeamSession] set main agent failed", { teamId, error: err });
+    },
+  });
   const executionModeMutation = useMutation({
     mutationFn: (mode: "direct" | "plan") =>
       api.patch<TaskDetail>(`/tasks/${currentTaskId}/execution-mode`, { mode }),
@@ -926,7 +936,7 @@ export default function TeamSessionPage() {
                 data-task-id={currentTask.id}
                 onClick={() => setTaskDetailOpen(true)}
                 title="打开任务详情抽屉"
-                style={{ fontSize: fontSize.xs, color: "#2563EB", backgroundColor: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.22)", padding: "1px 8px", borderRadius: radius.pill, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 240 }}
+                style={{ fontSize: fontSize.xs, color: "#0D9488", backgroundColor: "rgba(13,148,136,0.08)", border: "1px solid rgba(13,148,136,0.22)", padding: "1px 8px", borderRadius: radius.pill, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 240 }}
               >
                 {currentTask.title}
               </button>
@@ -958,6 +968,7 @@ export default function TeamSessionPage() {
           onToggleEnabled={hasCurrentTask ? (instanceId: string, enabled: boolean) => toggleEnabledMutation.mutate({ instanceId, enabled }) : undefined}
           onResetSession={hasCurrentTask ? (instanceId: string) => resetSessionMutation.mutate(instanceId) : undefined}
           onChangeModel={hasCurrentTask ? (instanceId: string, modelId: string | null) => instanceModelMutation.mutate({ instanceId, modelId }) : undefined}
+          onSetMainAgent={(memberId: string) => { if (!setMainAgentMutation.isPending) setMainAgentMutation.mutate(memberId); }}
           onSelectMember={(instanceId) => handlePrivateTab(instanceId)}
           selectedKey={selectedMemberKey}
           footerText={dmError ?? (hasCurrentTask ? "点击成员进入与该实例的私聊" : "点击成员进入私聊（成员管理需有进行中任务）")}
@@ -976,7 +987,7 @@ export default function TeamSessionPage() {
               data-testid="dm-tab-group"
               data-active={isGroupTab ? "true" : "false"}
               onClick={() => setActiveTab("group")}
-              style={{ padding: `${space.xs}px ${space.md}px`, borderRadius: radius.pill, border: `1px solid ${isGroupTab ? "#2563EB" : neutral[200]}`, backgroundColor: isGroupTab ? "#2563EB" : "var(--color-surface)", color: isGroupTab ? "#FFFFFF" : neutral[600], fontSize: fontSize.sm, fontWeight: isGroupTab ? 600 : 400, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}
+              style={{ padding: `${space.xs}px ${space.md}px`, borderRadius: radius.pill, border: `1px solid ${isGroupTab ? "#0D9488" : neutral[200]}`, backgroundColor: isGroupTab ? "#0D9488" : "var(--color-surface)", color: isGroupTab ? "#FFFFFF" : neutral[600], fontSize: fontSize.sm, fontWeight: isGroupTab ? 600 : 400, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}
             >
               群聊
             </button>
@@ -998,7 +1009,7 @@ export default function TeamSessionPage() {
                   data-testid={`dm-tab-private-${m.instanceId ?? m.id}`}
                   data-active={isActive ? "true" : "false"}
                   onClick={() => handlePrivateTab(m.instanceId ?? m.id)}
-                  style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs}px ${space.md}px`, borderRadius: radius.pill, border: `1px solid ${isActive ? "#2563EB" : neutral[200]}`, backgroundColor: isActive ? "#2563EB" : "var(--color-surface)", color: isActive ? "#FFFFFF" : neutral[600], fontSize: fontSize.sm, fontWeight: isActive ? 600 : 400, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}
+                  style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs}px ${space.md}px`, borderRadius: radius.pill, border: `1px solid ${isActive ? "#0D9488" : neutral[200]}`, backgroundColor: isActive ? "#0D9488" : "var(--color-surface)", color: isActive ? "#FFFFFF" : neutral[600], fontSize: fontSize.sm, fontWeight: isActive ? 600 : 400, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}
                 >
                   <span>私聊: {m.name}</span>
                   {isTabLoading ? (
@@ -1077,6 +1088,7 @@ export default function TeamSessionPage() {
                   <MsgParts
                     key={msg.id}
                     parts={parts}
+                    messageStatus={msg.status}
                     bodyText={((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string}
                     author={author}
                     role={role}
@@ -1149,7 +1161,7 @@ export default function TeamSessionPage() {
           ) : (
             <div data-testid="team-right-empty" style={{ padding: space.xl, fontSize: fontSize.sm, color: neutral[400], lineHeight: 1.6 }}>
               团队当前空闲，创建任务后此处展示队首任务的状态 / 配置 / 产出。
-              <button type="button" onClick={() => router.push(`/tasks/new?teamId=${teamId}`)} style={{ display: "block", marginTop: space.md, padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#2563EB", color: "#FFF", fontSize: fontSize.sm, cursor: "pointer" }}>创建任务</button>
+              <button type="button" onClick={() => router.push(`/tasks/new?teamId=${teamId}`)} style={{ display: "block", marginTop: space.md, padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, cursor: "pointer" }}>创建任务</button>
             </div>
           )}
         </div>

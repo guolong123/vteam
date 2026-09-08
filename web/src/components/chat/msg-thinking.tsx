@@ -55,13 +55,11 @@ export function MsgThinking({ author, role, state, text, time, style, className 
       }}
     >
       <AgentAvatar role={role} size="sm" dot={false} style={{ marginTop: 2 }} />
-      <div
-        role="button"
-        tabIndex={0}
+      <button
+        type="button"
+        aria-expanded={state === "done" ? open : undefined}
+        disabled={pending}
         onClick={() => setOpen(!open)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") setOpen(!open);
-        }}
         style={{
           flex: 1,
           minWidth: 0,
@@ -71,6 +69,9 @@ export function MsgThinking({ author, role, state, text, time, style, className 
           border: `1px dashed ${neutral[300]}`,
           cursor: pending ? "default" : "pointer",
           transition: "border-color .15s ease",
+          textAlign: "left",
+          fontFamily: fontFamily.body,
+          fontSize: fontSize.sm,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginBottom: open ? space.xs : 0, minWidth: 0 }}>
@@ -130,7 +131,7 @@ export function MsgThinking({ author, role, state, text, time, style, className 
             {pending ? text : text.trim() ? text : "（无详细思考内容）"}
           </div>
         )}
-      </div>
+      </button>
     </div>
   );
 }

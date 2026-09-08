@@ -28,7 +28,7 @@ export function ResizeHandle({
         transition: "background-color .15s ease",
       }}
       onMouseEnter={(e) => {
-        (e.currentTarget as HTMLDivElement).style.backgroundColor = "rgba(37,99,235,0.22)";
+        (e.currentTarget as HTMLDivElement).style.backgroundColor = "rgba(13,148,136,0.22)";
       }}
       onMouseLeave={(e) => {
         (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent";

@@ -101,19 +101,27 @@ export function PlanSection({
                 border: `1px solid ${neutral[200]}`, overflow: "hidden",
               }}
             >
-              <div
-                role="button"
-                tabIndex={0}
+              <button
+                type="button"
                 data-testid="plan-task-toggle"
+                aria-expanded={expanded}
                 onClick={() => setExpandedTaskId(expanded ? null : pt.id)}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedTaskId(expanded ? null : pt.id); } }}
                 style={{
-                  display: "flex", alignItems: "center", gap: space.sm,
-                  padding: `${space.sm}px ${space.md}px`, cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: space.sm,
+                  padding: `${space.sm}px ${space.md}px`,
+                  cursor: "pointer",
                   transition: "background-color .15s ease",
+                  background: "transparent",
+                  border: "none",
+                  textAlign: "left",
+                  width: "100%",
+                  fontFamily: fontFamily.body,
+                  fontSize: fontSize.md,
                 }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.backgroundColor = "var(--color-surface)"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent"; }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "var(--color-surface)"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent"; }}
               >
                 <span style={{ fontSize: fontSize.xs, color: neutral[400], fontWeight: 600, flexShrink: 0 }}>
                   #{pt.seq}
@@ -122,7 +130,7 @@ export function PlanSection({
                   {pt.title}
                 </span>
                 {pt.assigneeAlias ? (
-                  <span style={{ fontSize: fontSize.xs, color: "#2563EB", backgroundColor: "#EFF6FF", border: `1px solid #BFDBFE`, borderRadius: radius.pill, padding: "1px 6px", flexShrink: 0 }}>
+                  <span style={{ fontSize: fontSize.xs, color: "#0D9488", backgroundColor: "#EFF6FF", border: `1px solid #BFDBFE`, borderRadius: radius.pill, padding: "1px 6px", flexShrink: 0 }}>
                     {pt.assigneeAlias}
                   </span>
                 ) : (
@@ -134,7 +142,7 @@ export function PlanSection({
                 <span style={{ color: neutral[400], fontSize: fontSize.sm, transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s ease" }} aria-hidden>
                   ›
                 </span>
-              </div>
+              </button>
               {expanded && pt.content != null ? (
                 <div style={{ padding: `${space.sm}px ${space.md}px`, borderTop: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, color: neutral[600], lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                   {typeof pt.content === "string" ? pt.content : JSON.stringify(pt.content, null, 2)}

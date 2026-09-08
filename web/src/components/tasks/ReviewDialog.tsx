@@ -8,6 +8,7 @@ import {
   fontFamily,
   shadow,
 } from "@/src/theme/tokens";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -42,20 +43,22 @@ export function ReviewDialog({
     return () => window.removeEventListener("keydown", handleKey);
   }, [open, onClose]);
 
+  const dialogRef = useFocusTrap<HTMLDivElement>(open, onClose);
+
   if (!open || !planId) return null;
 
   const inputBase: CSSProperties = {
     width: "100%", boxSizing: "border-box",
     padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md,
     border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)",
-    fontSize: fontSize.md, color: neutral[800], outline: "none",
+    fontSize: fontSize.md, color: neutral[800],
     fontFamily: fontFamily.body,
   };
 
   return (
     <div data-testid="review-dialog-overlay" onClick={(e) => e.stopPropagation()} style={{ position: "absolute", inset: 0, zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "8%", ...baseFont }}>
       <div aria-hidden data-testid="review-dialog-mask" onClick={(e) => { e.stopPropagation(); onClose(); }} style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }} />
-      <div data-testid="review-dialog-modal" style={{ position: "relative", width: 440, maxWidth: "calc(100% - 48px)", display: "flex", flexDirection: "column", gap: space.md, padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.lg }}>
+      <div ref={dialogRef} data-testid="review-dialog-modal" role="dialog" aria-modal="true" aria-label="评审执行计划" style={{ position: "relative", width: 440, maxWidth: "calc(100% - 48px)", display: "flex", flexDirection: "column", gap: space.md, padding: space.xl, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.lg }}>
         <div>
           <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900], lineHeight: 1.3 }}>评审执行计划</div>
           <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>通过后任务可按计划驱动执行</div>

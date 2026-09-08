@@ -109,6 +109,7 @@ export function TeamMembersPanel({
   onToggleEnabled,
   onResetSession,
   onChangeModel,
+  onSetMainAgent,
   onSelectMember,
   selectedKey,
   footerText,
@@ -126,6 +127,7 @@ export function TeamMembersPanel({
   onToggleEnabled?: (instanceId: string, enabled: boolean) => void;
   onResetSession?: (instanceId: string) => void;
   onChangeModel?: (instanceId: string, modelId: string | null) => void;
+  onSetMainAgent?: (memberId: string) => void;
   onSelectMember?: (instanceId: string, agentId: string) => void;
   selectedKey?: string | null;
   footerText?: string;
@@ -328,7 +330,7 @@ export function TeamMembersPanel({
                         width: 6,
                         height: 6,
                         borderRadius: "50%",
-                        backgroundColor: "#2563EB",
+                        backgroundColor: "#0D9488",
                         marginRight: space.xs - 1,
                         animation: "groupchat-pulse 1.2s ease-in-out infinite",
                       }}
@@ -342,8 +344,8 @@ export function TeamMembersPanel({
                         width: 10,
                         height: 10,
                         borderRadius: "50%",
-                        border: "2px solid rgba(37,99,235,0.22)",
-                        borderTopColor: "#2563EB",
+                        border: "2px solid rgba(13,148,136,0.22)",
+                        borderTopColor: "#0D9488",
                         marginRight: space.xs,
                         verticalAlign: "-2px",
                         animation: "groupchat-spin .8s linear infinite",
@@ -384,9 +386,9 @@ export function TeamMembersPanel({
                     gap: 4,
                     padding: "1px 6px",
                     borderRadius: radius.pill,
-                    border: a.overrideModelId ? `1px solid rgba(37,99,235,0.35)` : `1px dashed ${neutral[300]}`,
-                    backgroundColor: a.overrideModelId ? "rgba(37,99,235,0.12)" : "transparent",
-                    color: a.overrideModelId ? "#2563EB" : neutral[500],
+                    border: a.overrideModelId ? `1px solid rgba(13,148,136,0.35)` : `1px dashed ${neutral[300]}`,
+                    backgroundColor: a.overrideModelId ? "rgba(13,148,136,0.12)" : "transparent",
+                    color: a.overrideModelId ? "#0D9488" : neutral[500],
                     fontSize: 10,
                     maxWidth: "100%",
                     overflow: "hidden",
@@ -448,6 +450,30 @@ export function TeamMembersPanel({
                       gap: 2,
                     }}
                   >
+                    {onSetMainAgent && !a.main && (
+                    <button
+                      type="button"
+                      data-testid={`agent-set-main-${a.instanceId ?? a.id}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSetMainAgent?.(a.instanceId ?? a.id);
+                        setOpenMenu(null);
+                      }}
+                      style={{
+                        textAlign: "left",
+                        padding: `6px 8px`,
+                        borderRadius: radius.sm,
+                        border: "none",
+                        background: "transparent",
+                        cursor: "pointer",
+                        fontSize: fontSize.sm,
+                        color: neutral[700],
+                        fontWeight: 600,
+                      }}
+                    >
+                      ★ 设为主 Agent
+                    </button>
+                    )}
                     <button
                       type="button"
                       onClick={(e) => {
@@ -506,14 +532,14 @@ export function TeamMembersPanel({
                         cursor: onChangeModel ? "pointer" : "not-allowed",
                         opacity: onChangeModel ? 1 : 0.55,
                         fontSize: fontSize.sm,
-                        color: "#2563EB",
+                        color: "#0D9488",
                       }}
                     >
                       模型设置…
                     </button>
                   </div>
                 )}
-                <span style={{ color: "#2563EB", fontSize: fontSize.lg, lineHeight: 1 }} aria-hidden>
+                <span style={{ color: "#0D9488", fontSize: fontSize.lg, lineHeight: 1 }} aria-hidden>
                   ›
                 </span>
               </span>
@@ -556,8 +582,8 @@ export function TeamMembersPanel({
                       textAlign: "left",
                       padding: `6px 8px`,
                       borderRadius: radius.sm,
-                      border: !a.overrideModelId ? `1px solid #2563EB` : `1px solid transparent`,
-                      backgroundColor: !a.overrideModelId ? "rgba(37,99,235,0.12)" : "transparent",
+                      border: !a.overrideModelId ? `1px solid #0D9488` : `1px solid transparent`,
+                      backgroundColor: !a.overrideModelId ? "rgba(13,148,136,0.12)" : "transparent",
                       cursor: "pointer",
                       fontSize: fontSize.sm,
                     }}
@@ -579,8 +605,8 @@ export function TeamMembersPanel({
                           textAlign: "left",
                           padding: `6px 8px`,
                           borderRadius: radius.sm,
-                          border: a.overrideModelId === m.id ? `1px solid #2563EB` : `1px solid transparent`,
-                          backgroundColor: a.overrideModelId === m.id ? "rgba(37,99,235,0.12)" : "transparent",
+                          border: a.overrideModelId === m.id ? `1px solid #0D9488` : `1px solid transparent`,
+                          backgroundColor: a.overrideModelId === m.id ? "rgba(13,148,136,0.12)" : "transparent",
                           cursor: "pointer",
                           fontSize: fontSize.sm,
                           display: "flex",
@@ -622,7 +648,7 @@ export function TeamMembersPanel({
             borderRadius: radius.md,
             border: `1.5px dashed ${teamEditable ? neutral[300] : neutral[200]}`,
             backgroundColor: "color-mix(in srgb, var(--color-surface) 70%, transparent)",
-            color: teamEditable ? "#2563EB" : neutral[300],
+            color: teamEditable ? "#0D9488" : neutral[300],
             fontSize: fontSize.sm,
             fontWeight: 500,
             cursor: teamEditable ? "pointer" : "not-allowed",
@@ -752,7 +778,7 @@ export function TeamMembersPanel({
                 backgroundColor: "var(--color-surface)",
                 fontSize: fontSize.md,
                 color: neutral[800],
-                outline: "none",
+
                 fontFamily: fontFamily.body,
               }}
             />
@@ -793,7 +819,7 @@ export function TeamMembersPanel({
                   padding: `${space.sm - 1}px ${space.md}px`,
                   borderRadius: radius.md,
                   border: "none",
-                  backgroundColor: "#2563EB",
+                  backgroundColor: "#0D9488",
                   color: "#FFFFFF",
                   fontSize: fontSize.sm,
                   fontWeight: 500,

@@ -127,7 +127,7 @@ const CLI_FREE_NOTE = (
     >
       {"{command}"}
     </code>{" "}
-    schema（与 <strong style={{ color: "#2563EB", fontWeight: 600 }}>opencode bash 工具</strong>
+    schema（与 <strong style={{ color: "#0D9488", fontWeight: 600 }}>opencode bash 工具</strong>
     同模式，符合工具协议 —— input schema 必填），模型像 bash 一样自由传命令字符串；
     适合通用 CLI 探索与快速接入。
   </>
@@ -167,7 +167,7 @@ const inputStyle: CSSProperties = {
   color: neutral[800],
   fontSize: fontSize.md,
   fontFamily: fontFamily.mono,
-  outline: "none",
+
 };
 
 /** 编号圆点（①②③ 步骤） */
@@ -182,8 +182,8 @@ function StepNum({ n }: { n: number }) {
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: "rgba(37,99,235,0.10)",
-        color: "#2563EB",
+        backgroundColor: "rgba(13,148,136,0.10)",
+        color: "#0D9488",
         fontSize: fontSize.md,
         fontWeight: 700,
         flexShrink: 0,
@@ -236,8 +236,8 @@ function ModeTab({
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
-          backgroundColor: active ? "rgba(37,99,235,0.10)" : neutral[100],
-          color: active ? "#2563EB" : neutral[400],
+          backgroundColor: active ? "rgba(13,148,136,0.10)" : neutral[100],
+          color: active ? "#0D9488" : neutral[400],
           fontSize: fontSize.lg,
         }}
       >
@@ -770,8 +770,8 @@ export default function ToolRegisterPage() {
                 gap: space.sm,
                 padding: `${space.md}px ${space.lg}px`,
                 borderRadius: radius.md,
-                backgroundColor: "rgba(37,99,235,0.10)",
-                border: `1px solid rgba(37,99,235,0.22)`,
+                backgroundColor: "rgba(13,148,136,0.10)",
+                border: `1px solid rgba(13,148,136,0.22)`,
                 fontSize: fontSize.sm,
                 color: neutral[600],
                 lineHeight: 1.6,
@@ -779,8 +779,8 @@ export default function ToolRegisterPage() {
             >
               <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1, marginTop: 2 }}>⚙</span>
               <span>
-                <strong style={{ color: "#2563EB", fontWeight: 600 }}>schema 是接口声明</strong>
-                （模型知道怎么调）；<strong style={{ color: "#2563EB", fontWeight: 600 }}>执行方式是实际干活的部分</strong>
+                <strong style={{ color: "#0D9488", fontWeight: 600 }}>schema 是接口声明</strong>
+                （模型知道怎么调）；<strong style={{ color: "#0D9488", fontWeight: 600 }}>执行方式是实际干活的部分</strong>
                 （真正执行逻辑）—— 只有 schema 没有执行逻辑的工具无法工作。
               </span>
             </div>
@@ -929,8 +929,8 @@ export default function ToolRegisterPage() {
                           gap: space.sm,
                           padding: `${space.md}px ${space.lg}px`,
                           borderRadius: radius.md,
-                          backgroundColor: "rgba(37,99,235,0.10)",
-                          border: `1px solid rgba(37,99,235,0.22)`,
+                          backgroundColor: "rgba(13,148,136,0.10)",
+                          border: `1px solid rgba(13,148,136,0.22)`,
                           fontSize: fontSize.sm,
                           color: neutral[600],
                           lineHeight: 1.6,
@@ -1047,9 +1047,9 @@ export default function ToolRegisterPage() {
                         gap: space.sm,
                         padding: `${space.md}px ${space.lg}px`,
                         borderRadius: radius.md,
-                        backgroundColor: "rgba(37,99,235,0.10)",
-                        border: `1px solid rgba(37,99,235,0.22)`,
-                        color: "#2563EB",
+                        backgroundColor: "rgba(13,148,136,0.10)",
+                        border: `1px solid rgba(13,148,136,0.22)`,
+                        color: "#0D9488",
                         fontSize: fontSize.sm,
                         lineHeight: 1.6,
                       }}
@@ -1057,7 +1057,7 @@ export default function ToolRegisterPage() {
                       <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1 }}>⚙</span>
                       <span>
                         已配置{" "}
-                        <strong style={{ color: "#2563EB", fontWeight: 600 }}>
+                        <strong style={{ color: "#0D9488", fontWeight: 600 }}>
                           {configuredInitCount}
                         </strong>{" "}
                         条初始化命令 —— worker 首次执行工具前自动运行，完成环境准备（与下方初始化区呼应）。
@@ -1201,9 +1201,9 @@ export default function ToolRegisterPage() {
                           gap: space.sm,
                           padding: `${space.md}px ${space.lg}px`,
                           borderRadius: radius.md,
-                          backgroundColor: "rgba(37,99,235,0.10)",
-                          border: `1px solid rgba(37,99,235,0.22)`,
-                          color: "#2563EB",
+                          backgroundColor: "rgba(13,148,136,0.10)",
+                          border: `1px solid rgba(13,148,136,0.22)`,
+                          color: "#0D9488",
                           fontSize: fontSize.sm,
                           lineHeight: 1.6,
                         }}
@@ -1253,8 +1253,8 @@ export default function ToolRegisterPage() {
                             gap: space.sm,
                             padding: `${space.xs}px ${space.md}px`,
                             borderRadius: radius.pill,
-                            border: `1px solid ${mcpOauth ? "rgba(37,99,235,0.22)" : neutral[200]}`,
-                            backgroundColor: mcpOauth ? "rgba(37,99,235,0.10)" : neutral[50],
+                            border: `1px solid ${mcpOauth ? "rgba(13,148,136,0.22)" : neutral[200]}`,
+                            backgroundColor: mcpOauth ? "rgba(13,148,136,0.10)" : neutral[50],
                             cursor: "pointer",
                             fontFamily: fontFamily.body,
                             alignSelf: "flex-start",
@@ -1266,7 +1266,7 @@ export default function ToolRegisterPage() {
                               width: 26,
                               height: 16,
                               borderRadius: radius.pill,
-                              backgroundColor: mcpOauth ? "#2563EB" : neutral[300],
+                              backgroundColor: mcpOauth ? "#0D9488" : neutral[300],
                               position: "relative",
                               transition: "background-color .15s ease",
                               flexShrink: 0,
@@ -1290,7 +1290,7 @@ export default function ToolRegisterPage() {
                             style={{
                               fontSize: fontSize.md,
                               fontWeight: 500,
-                              color: mcpOauth ? "#2563EB" : neutral[500],
+                              color: mcpOauth ? "#0D9488" : neutral[500],
                             }}
                           >
                             {mcpOauth ? "已开启" : "已关闭"}
@@ -1308,8 +1308,8 @@ export default function ToolRegisterPage() {
                       gap: space.sm,
                       padding: `${space.md}px ${space.lg}px`,
                       borderRadius: radius.md,
-                      backgroundColor: "rgba(37,99,235,0.10)",
-                      border: `1px solid rgba(37,99,235,0.22)`,
+                      backgroundColor: "rgba(13,148,136,0.10)",
+                      border: `1px solid rgba(13,148,136,0.22)`,
                       fontSize: fontSize.sm,
                       color: neutral[600],
                       lineHeight: 1.6,
@@ -1365,8 +1365,8 @@ export default function ToolRegisterPage() {
                 gap: space.sm,
                 padding: `${space.md}px ${space.lg}px`,
                 borderRadius: radius.md,
-                backgroundColor: "rgba(37,99,235,0.10)",
-                border: `1px solid rgba(37,99,235,0.22)`,
+                backgroundColor: "rgba(13,148,136,0.10)",
+                border: `1px solid rgba(13,148,136,0.22)`,
                 fontSize: fontSize.sm,
                 color: neutral[600],
                 lineHeight: 1.6,
@@ -1374,7 +1374,7 @@ export default function ToolRegisterPage() {
             >
               <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1, marginTop: 2 }}>◈</span>
               <span>
-                定义<strong style={{ color: "#2563EB", fontWeight: 600 }}>模型调用该工具的输入参数</strong>
+                定义<strong style={{ color: "#0D9488", fontWeight: 600 }}>模型调用该工具的输入参数</strong>
                 （模型据此生成调用）—— 所有执行类型统一在此声明（除 MCP 外），与执行方式无关。
               </span>
             </div>
@@ -1466,8 +1466,8 @@ export default function ToolRegisterPage() {
                     gap: space.sm,
                     padding: `${space.md}px ${space.lg}px`,
                     borderRadius: radius.md,
-                    backgroundColor: "rgba(37,99,235,0.10)",
-                    border: `1px solid rgba(37,99,235,0.22)`,
+                    backgroundColor: "rgba(13,148,136,0.10)",
+                    border: `1px solid rgba(13,148,136,0.22)`,
                     fontSize: fontSize.sm,
                     color: neutral[600],
                     lineHeight: 1.6,
@@ -1489,8 +1489,8 @@ export default function ToolRegisterPage() {
                   gap: space.sm,
                   padding: `${space.md}px ${space.lg}px`,
                   borderRadius: radius.md,
-                  backgroundColor: "rgba(37,99,235,0.10)",
-                  border: `1px solid rgba(37,99,235,0.22)`,
+                  backgroundColor: "rgba(13,148,136,0.10)",
+                  border: `1px solid rgba(13,148,136,0.22)`,
                   fontSize: fontSize.sm,
                   color: neutral[600],
                   lineHeight: 1.6,
@@ -1498,7 +1498,7 @@ export default function ToolRegisterPage() {
               >
                 <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1, marginTop: 2 }}>▣</span>
                 <span>
-                  <strong style={{ color: "#2563EB", fontWeight: 600 }}>无需配置输入 Schema</strong>
+                  <strong style={{ color: "#0D9488", fontWeight: 600 }}>无需配置输入 Schema</strong>
                   —— 连接后由 MCP server 声明工具的输入输出；暴露的工具注册为{" "}
                   <code
                     style={{
@@ -1543,8 +1543,8 @@ export default function ToolRegisterPage() {
                   gap: space.sm,
                   padding: `${space.md}px ${space.lg}px`,
                   borderRadius: radius.md,
-                  backgroundColor: "rgba(37,99,235,0.10)",
-                  border: `1px solid rgba(37,99,235,0.22)`,
+                  backgroundColor: "rgba(13,148,136,0.10)",
+                  border: `1px solid rgba(13,148,136,0.22)`,
                   fontSize: fontSize.sm,
                   color: neutral[600],
                   lineHeight: 1.6,
@@ -1552,7 +1552,7 @@ export default function ToolRegisterPage() {
               >
                 <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1, marginTop: 2 }}>⇄</span>
                 <span>
-                  模型按输入 Schema 传参；此处绑定<strong style={{ color: "#2563EB", fontWeight: 600 }}>参数如何拼入命令 / 请求</strong>
+                  模型按输入 Schema 传参；此处绑定<strong style={{ color: "#0D9488", fontWeight: 600 }}>参数如何拼入命令 / 请求</strong>
                   （执行期细节，模型无感知）。
                 </span>
               </div>
@@ -1599,8 +1599,8 @@ export default function ToolRegisterPage() {
                             style={{
                               fontSize: fontSize.sm,
                               fontWeight: 600,
-                              color: "#2563EB",
-                              backgroundColor: "rgba(37,99,235,0.10)",
+                              color: "#0D9488",
+                              backgroundColor: "rgba(13,148,136,0.10)",
                               padding: "1px 6px",
                               borderRadius: radius.sm,
                             }}
@@ -1826,8 +1826,8 @@ export default function ToolRegisterPage() {
                 gap: space.sm,
                 padding: `${space.md}px ${space.lg}px`,
                 borderRadius: radius.md,
-                backgroundColor: "rgba(37,99,235,0.10)",
-                border: `1px solid rgba(37,99,235,0.22)`,
+                backgroundColor: "rgba(13,148,136,0.10)",
+                border: `1px solid rgba(13,148,136,0.22)`,
                 fontSize: fontSize.sm,
                 color: neutral[600],
                 lineHeight: 1.6,
@@ -1835,7 +1835,7 @@ export default function ToolRegisterPage() {
             >
               <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1, marginTop: 2 }}>⚙</span>
               <span>
-                <strong style={{ color: "#2563EB", fontWeight: 600 }}>执行时机</strong>
+                <strong style={{ color: "#0D9488", fontWeight: 600 }}>执行时机</strong>
                 ：worker 节点在首次执行该工具前运行初始化命令；已初始化过的节点跳过
                 （可配置强制重跑）。平台不自动推断二进制，命令由工具注册者自行填写。
               </span>
@@ -1901,13 +1901,13 @@ export default function ToolRegisterPage() {
               padding: `${space.sm + 2}px ${space.xl}px`,
               borderRadius: radius.pill,
               border: "none",
-              backgroundColor: "#2563EB",
+              backgroundColor: "#0D9488",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
               cursor: registering ? "default" : "pointer",
               opacity: registering ? 0.6 : 1,
-              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+              boxShadow: "0 6px 16px rgba(13,148,136,.3)",
               fontFamily: fontFamily.body,
             }}
           >

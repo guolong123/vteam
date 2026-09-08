@@ -12,6 +12,7 @@ import {
   shadow,
 } from "@/src/theme/tokens";
 import type { TaskDetail } from "@/src/components/tasks/task-detail-types";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -111,6 +112,8 @@ export function TaskInfoEditModal({
     },
   });
 
+  const dialogRef = useFocusTrap<HTMLDivElement>(open, onClose);
+
   if (!open) return null;
 
   const handleSave = () => {
@@ -136,7 +139,7 @@ export function TaskInfoEditModal({
     backgroundColor: "var(--color-surface)",
     fontSize: fontSize.md,
     color: neutral[800],
-    outline: "none",
+
     fontFamily: fontFamily.body,
   };
 
@@ -167,7 +170,11 @@ export function TaskInfoEditModal({
       />
 
       <div
+        ref={dialogRef}
         data-testid="task-edit-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="编辑任务信息"
         style={{
           position: "relative",
           width: 560,
@@ -243,7 +250,7 @@ export function TaskInfoEditModal({
                       width: 8,
                       height: 8,
                       borderRadius: 2,
-                      backgroundColor: "#2563EB",
+                      backgroundColor: "#0D9488",
                       flexShrink: 0,
                     }}
                   />
@@ -260,28 +267,23 @@ export function TaskInfoEditModal({
                   >
                     {doc.name}
                   </span>
-                  <span
-                    role="button"
-                    tabIndex={0}
+                  <button
+                    type="button"
                     data-testid="task-edit-doc-remove"
                     aria-label={`移除 ${doc.name}`}
                     onClick={() => setDocs((prev) => prev.filter((d) => d.url !== doc.url))}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        setDocs((prev) => prev.filter((d) => d.url !== doc.url));
-                      }
-                    }}
                     style={{
                       fontSize: fontSize.sm,
                       color: neutral[400],
                       cursor: "pointer",
                       padding: space.xs,
                       flexShrink: 0,
+                      background: "none",
+                      border: "none",
                     }}
                   >
                     ✕
-                  </span>
+                  </button>
                 </div>
               ))}
             </div>
@@ -310,7 +312,7 @@ export function TaskInfoEditModal({
               fontFamily: fontFamily.body,
             }}
           >
-            <span aria-hidden style={{ color: "#2563EB" }}>↑</span>
+            <span aria-hidden style={{ color: "#0D9488" }}>↑</span>
             {uploadMutation.isPending ? "上传中…" : "上传背景文档"}
           </button>
           <input
@@ -369,13 +371,13 @@ export function TaskInfoEditModal({
               padding: `${space.sm + 1}px ${space.lg}px`,
               borderRadius: radius.pill,
               border: "none",
-              backgroundColor: "#2563EB",
+              backgroundColor: "#0D9488",
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
               cursor: saveMutation.isPending ? "default" : "pointer",
               opacity: saveMutation.isPending ? 0.6 : 1,
-              boxShadow: "0 6px 16px rgba(37,99,235,.3)",
+              boxShadow: "0 6px 16px rgba(13,148,136,.3)",
               fontFamily: fontFamily.body,
             }}
           >
