@@ -325,7 +325,7 @@ function TaskCard({ task, onOpen, teamName }: TaskCardProps) {
         </div>
       </div>
 
-      {/* 底部：参与 Agent 头像组 + 产出物数量 */}
+      {/* 底部：参与 Agent 头像组 + 产出物数量 + 文档站 */}
       <div
         style={{
           display: "flex",
@@ -342,22 +342,32 @@ function TaskCard({ task, onOpen, teamName }: TaskCardProps) {
             </span>
           ))}
         </div>
-        <span
-          data-testid="task-artifact-count"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: space.xs,
-            fontSize: fontSize.xs,
-            color: neutral[500],
-            fontWeight: 500,
-          }}
-        >
-          <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>
-            ▤
+        <div style={{ display: "flex", alignItems: "center", gap: space.md }}>
+          <span
+            data-testid="task-artifact-count"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: space.xs,
+              fontSize: fontSize.xs,
+              color: neutral[500],
+              fontWeight: 500,
+            }}
+          >
+            <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>
+              ▤
+            </span>
+            {EMPTY_ARTIFACT_COUNT} 项产出物
           </span>
-          {EMPTY_ARTIFACT_COUNT} 项产出物
-        </span>
+          <button
+            type="button"
+            data-testid="task-docs-link"
+            onClick={(e) => { e.stopPropagation(); router.push(`/docs/${task.id}`); }}
+            style={{ fontSize: fontSize.xs, color: "#0D9488", background: "none", border: "none", cursor: "pointer", fontWeight: 500, fontFamily: fontFamily.body }}
+          >
+            文档站 ›
+          </button>
+        </div>
       </div>
 
       {/* 状态流转操作（OBS-010：按状态渲染开始/提交验收/验收通过/驳回/归档，共享 TaskStatusActions） */}

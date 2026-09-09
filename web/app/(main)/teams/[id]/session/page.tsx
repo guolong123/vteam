@@ -1161,7 +1161,10 @@ export default function TeamSessionPage() {
           ) : (
             <div data-testid="team-right-empty" style={{ padding: space.xl, fontSize: fontSize.sm, color: neutral[400], lineHeight: 1.6 }}>
               团队当前空闲，创建任务后此处展示队首任务的状态 / 配置 / 产出。
-              <button type="button" onClick={() => router.push(`/tasks/new?teamId=${teamId}`)} style={{ display: "block", marginTop: space.md, padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, cursor: "pointer" }}>创建任务</button>
+              <div style={{ display: "flex", gap: space.sm, marginTop: space.md }}>
+                <button type="button" onClick={() => router.push(`/tasks/new?teamId=${teamId}`)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>创建任务</button>
+                <button type="button" onClick={() => router.push(`/teams/${teamId}/tasks`)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[700], fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>历史任务</button>
+              </div>
             </div>
           )}
         </div>
