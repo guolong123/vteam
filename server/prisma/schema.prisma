@@ -113,13 +113,14 @@ model Team {
 }
 
 model TeamMember {
-  id        String   @id
-  teamId    String   @map("team_id")
-  agentId   String   @map("agent_id")
-  alias     String?
-  seq       Int      @default(1)
-  workDir   String?  @map("work_dir")
-  createdAt DateTime @default(now()) @map("created_at")
+  id             String   @id
+  teamId         String   @map("team_id")
+  agentId        String   @map("agent_id")
+  alias          String?
+  seq            Int      @default(1)
+  workDir        String?  @map("work_dir")
+  overrideModelId String? @map("override_model_id")
+  createdAt      DateTime @default(now()) @map("created_at")
 
   team         Team          @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent        Agent         @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)

@@ -260,7 +260,7 @@ export default function TeamSessionPage() {
         seq: m.seq,
         main: isMain,
         enabled: true,
-        overrideModelId: null,
+        overrideModelId: m.overrideModelId ?? null,
       };
     });
   }, [currentTask, team]);
@@ -789,13 +789,12 @@ export default function TeamSessionPage() {
   });
   const instanceModelMutation = useMutation({
     mutationFn: ({ instanceId, modelId }: { instanceId: string; modelId: string | null }) =>
-      api.patch<TaskDetail>(`/tasks/${currentTaskId}/instances/${instanceId}`, { overrideModelId: modelId ?? "" }),
-    onSuccess: (updated) => {
-      queryClient.setQueryData<TaskDetail>(["task", currentTaskId], updated);
-      queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+      api.patch(`/teams/${teamId}/members/${instanceId}`, { overrideModelId: modelId ?? null }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["team", teamId] });
     },
     onError: (err) => {
-      console.error("[TeamSession] change instance model failed", { teamId, taskId: currentTaskId, error: err });
+      console.error("[TeamSession] change member model failed", { teamId, error: err });
     },
   });
   const resetSessionMutation = useMutation({
@@ -967,11 +966,11 @@ export default function TeamSessionPage() {
           width={membersPanel.width}
           onToggleEnabled={hasCurrentTask ? (instanceId: string, enabled: boolean) => toggleEnabledMutation.mutate({ instanceId, enabled }) : undefined}
           onResetSession={hasCurrentTask ? (instanceId: string) => resetSessionMutation.mutate(instanceId) : undefined}
-          onChangeModel={hasCurrentTask ? (instanceId: string, modelId: string | null) => instanceModelMutation.mutate({ instanceId, modelId }) : undefined}
+          onChangeModel={(instanceId: string, modelId: string | null) => instanceModelMutation.mutate({ instanceId, modelId })}
           onSetMainAgent={(memberId: string) => { if (!setMainAgentMutation.isPending) setMainAgentMutation.mutate(memberId); }}
           onSelectMember={(instanceId) => handlePrivateTab(instanceId)}
           selectedKey={selectedMemberKey}
-          footerText={dmError ?? (hasCurrentTask ? "点击成员进入与该实例的私聊" : "点击成员进入私聊（成员管理需有进行中任务）")}
+          footerText={dmError ?? "点击成员进入与该实例的私聊"}
         />
         <ResizeHandle label="调整成员面板宽度" onResizeStart={membersPanel.onResizeStart} />
 

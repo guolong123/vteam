@@ -14,6 +14,7 @@ export interface TeamMemberDto {
   alias: string;
   seq: number;
   workDir: string;
+  overrideModelId?: string | null;
   agent?: { id: string; name: string; role: string | null };
   createdAt?: string;
 }
@@ -87,6 +88,7 @@ export interface AddMemberPayload {
 export interface UpdateMemberPayload {
   alias?: string;
   workDir?: string;
+  overrideModelId?: string | null;
 }
 
 export interface AddUserMemberPayload {

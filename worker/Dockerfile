@@ -17,6 +17,10 @@ RUN npm run build && npm prune --omit=dev
 
 # ---- 阶段 2：runner ----
 FROM docker.ketaops.cc/library/node:22-bookworm-slim
+# 国内源加速（apt：阿里云镜像）
+RUN apt-get update && apt-get install -y ca-certificates && \
+    sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
 # 国内源加速（npm）
 RUN npm config set registry https://registry.npmmirror.com
 # opencode CLI 全局安装（serve spawn 依赖，需在 PATH；npm 全局 bin 默认进 PATH）

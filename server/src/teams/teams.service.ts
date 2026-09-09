@@ -822,6 +822,7 @@ export class TeamsService implements OnModuleInit {
     const data: any = {};
     if (dto.alias !== undefined) data.alias = dto.alias?.trim() || null;
     if (dto.workDir !== undefined) data.workDir = dto.workDir?.trim() || null;
+    if (dto.overrideModelId !== undefined) data.overrideModelId = dto.overrideModelId?.trim() || null;
     if (Object.keys(data).length === 0) {
       return this.findOne(teamId);
     }
@@ -1261,6 +1262,7 @@ export class TeamsService implements OnModuleInit {
       alias: m.alias,
       seq: m.seq,
       workDir: m.workDir,
+      overrideModelId: m.overrideModelId,
       agent: m.agent
         ? { id: m.agent.id, name: m.agent.name, role: m.agent.role }
         : undefined,
