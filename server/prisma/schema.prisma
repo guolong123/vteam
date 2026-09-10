@@ -107,6 +107,8 @@ model Team {
   queues       TeamQueue[]
   tasks        Task[]        @relation("TaskTeam")
   chatChannels ChatChannel[]
+  messageChannelLinks TeamMessageChannel[]
+  notificationChannelLinks TeamNotificationChannel[]
 
   @@index([mainAgentMemberId], map: "idx_teams_main_agent_member")
   @@map("teams")
@@ -854,6 +856,7 @@ model MessageChannel {
 
   deliveries MessageDelivery[]
   taskLinks  TaskMessageChannel[]
+  teamLinks  TeamMessageChannel[]
 
   @@map("message_channels")
 }
@@ -890,6 +893,7 @@ model NotificationChannel {
 
   deliveries NotificationDelivery[]
   taskLinks  TaskNotificationChannel[]
+  teamLinks  TeamNotificationChannel[]
 
   @@map("notification_channels")
 }
@@ -934,4 +938,28 @@ model TaskNotificationChannel {
   @@unique([taskId, notificationChannelId])
   @@index([taskId])
   @@map("task_notification_channels")
+}
+
+model TeamMessageChannel {
+ teamId           String         @map("team_id")
+ messageChannelId String         @map("message_channel_id")
+ team             Team           @relation(fields: [teamId], references: [id], onDelete: Cascade)
+ messageChannel   MessageChannel @relation(fields: [messageChannelId], references: [id], onDelete: Cascade)
+
+ @@id([teamId, messageChannelId])
+ @@unique([teamId, messageChannelId])
+ @@index([teamId])
+ @@map("team_message_channels")
+}
+
+model TeamNotificationChannel {
+ teamId                String              @map("team_id")
+ notificationChannelId String              @map("notification_channel_id")
+ team                  Team                @relation(fields: [teamId], references: [id], onDelete: Cascade)
+ notificationChannel   NotificationChannel @relation(fields: [notificationChannelId], references: [id], onDelete: Cascade)
+
+ @@id([teamId, notificationChannelId])
+ @@unique([teamId, notificationChannelId])
+ @@index([teamId])
+ @@map("team_notification_channels")
 }

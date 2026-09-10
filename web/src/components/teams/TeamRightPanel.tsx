@@ -275,8 +275,8 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery,
             <TeamMemoryCard team={team} task={task} />
             <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>
               <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>渠道绑定</div>
-              <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>消息与通知渠道可在任务操作中配置，团队级记忆在状态 Tab 查看。</div>
-              <button type="button" onClick={()=>{ const el=document.querySelector('[data-testid="task-channel-binding-section"]') as HTMLElement; el?.scrollIntoView({behavior:"smooth", block:"center"}); el?.focus(); }} style={{ alignSelf: "flex-start", fontSize: fontSize.xs, color: "#0D9488", background: "none", border: "none", cursor: "pointer" }}>去配置 →</button>
+              <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>消息与通知渠道可在创建任务时配置，已有任务暂不支持在线调整。</div>
+              <button type="button" onClick={() => window.location.href = `/tasks/new?teamId=${team?.id ?? ""}`} style={{ alignSelf: "flex-start", fontSize: fontSize.xs, color: "#0D9488", background: "none", border: "none", cursor: "pointer" }}>前往创建页 →</button>
             </div>
           </div>
         )}

@@ -456,17 +456,38 @@ export class NotificationDispatcherService
 
   /**
    * Core join-table routing:
-   * 1) TaskNotificationChannel.findMany where taskId
-   * 2) notificationChannel where id IN ids && enabled && config.events includes eventType
+   * 1) Find task's team
+   * 2) TeamNotificationChannel.findMany where teamId
+   * 3) notificationChannel where id IN ids && enabled && config.events includes eventType
    */
   private async resolveChannelsForTask(
     taskId: string,
     eventType: string,
   ): Promise<any[]> {
-    let links: Array<{ notificationChannelId: string }>;
+    // Find task's team
+    let teamId: string | null = null;
     try {
-      links = await (this.prisma as any).taskNotificationChannel.findMany({
-        where: { taskId },
+      const task = await (this.prisma as any).task.findUnique({
+        where: { id: taskId },
+        select: { teamId: true },
+      });
+      teamId = task?.teamId ?? null;
+    } catch {
+      return [];
+    }
+    if (!teamId) return [];
+
+    return this.resolveChannelsForTeam(teamId, eventType);
+  }
+
+  private async resolveChannelsForTeam(
+    teamId: string,
+    eventType: string,
+  ): Promise<any[]> {
+    let links: Array<{ notificationChannelId: string }> = [];
+    try {
+      links = await (this.prisma as any).teamNotificationChannel.findMany({
+        where: { teamId },
         select: { notificationChannelId: true },
       });
     } catch {
@@ -511,31 +532,44 @@ export class NotificationDispatcherService
   }
 
   /**
-   * MCP channel_send 兼容：按任务绑定的通知渠道 id/name 定向发送（供 PlatformMcpService 调用）。
-   * 在任务的 TaskNotificationChannel 绑定范围内查找匹配 id 或 name 的可用渠道，命中后经 dispatchToChannel 发送。
+   * MCP channel_send 兼容：按团队绑定的通知渠道 id/name 定向发送（供 PlatformMcpService 调用）。
+   * 在任务所属团队的 TeamNotificationChannel 绑定范围内查找匹配 id 或 name 的可用渠道，命中后经 dispatchToChannel 发送。
    */
   async sendToChannelByIdOrName(
     taskId: string,
     target: string,
     text: string,
   ): Promise<void> {
+    // Find task's team
+    let teamId: string | null = null;
+    try {
+      const task = await (this.prisma as any).task.findUnique({
+        where: { id: taskId },
+        select: { teamId: true },
+      });
+      teamId = task?.teamId ?? null;
+    } catch {
+      teamId = null;
+    }
+    if (!teamId) throw new Error(`任务 ${taskId} 未关联团队`);
+
     const links: Array<{ notificationChannelId: string }> = await (
       this.prisma as any
-    ).taskNotificationChannel.findMany({
-      where: { taskId },
+    ).teamNotificationChannel.findMany({
+      where: { teamId },
       select: { notificationChannelId: true },
     });
     const ids = (links ?? [])
       .map((l) => l.notificationChannelId)
       .filter(Boolean);
-    if (ids.length === 0) throw new Error(`任务 ${taskId} 未绑定任何通知渠道`);
+    if (ids.length === 0) throw new Error(`团队 ${teamId} 未绑定任何通知渠道`);
     const channels: any[] = await (
       this.prisma as any
     ).notificationChannel.findMany({
       where: { id: { in: ids }, enabled: true },
     });
     const ch = channels.find((c) => c.id === target || c.name === target);
-    if (!ch) throw new Error(`渠道 ${target} 不存在或未绑定到任务 ${taskId}`);
+    if (!ch) throw new Error(`渠道 ${target} 不存在或未绑定到团队 ${teamId}`);
     if (!ch.enabled) throw new Error(`渠道 ${target} 已停用`);
     await this.dispatchToChannel(ch, { kind: 'markdown', text });
   }

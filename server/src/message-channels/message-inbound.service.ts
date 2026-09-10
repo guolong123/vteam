@@ -191,18 +191,18 @@ export class MessageInboundService implements MessageHost {
         continue;
       }
 
-      // Resolve bound tasks via join table — do NOT read MessageChannel.taskId
-      let taskLinks: Array<{ taskId: string }> = [];
+      // Resolve bound teams via join table — do NOT read MessageChannel.teamId
+      let teamLinks: Array<{ teamId: string }> = [];
       try {
-        taskLinks = await (this.prisma as any).taskMessageChannel.findMany({
+        teamLinks = await (this.prisma as any).teamMessageChannel.findMany({
           where: { messageChannelId: channelRow.id },
-          select: { taskId: true },
+          select: { teamId: true },
         });
       } catch {
-        taskLinks = [];
+        teamLinks = [];
       }
 
-      if (taskLinks.length === 0) {
+      if (teamLinks.length === 0) {
         await this.delivery.log(
           DELIVERY_DIRECTIONS.inbound,
           (cmd as any).kind ?? null,
@@ -213,7 +213,7 @@ export class MessageInboundService implements MessageHost {
               (cmd as { dedupKey?: string }).dedupKey ??
               (cmd as { senderExternalId?: string }).senderExternalId ??
               null,
-            error: 'no tasks bound',
+            error: 'no teams bound',
             payload: cmd as unknown,
           },
         );
@@ -221,16 +221,16 @@ export class MessageInboundService implements MessageHost {
         continue;
       }
 
-      const boundTaskIds = taskLinks.map((l) => l.taskId);
+      const boundTeamIds = teamLinks.map((l) => l.teamId);
 
       if (cmd.kind === 'post_message') {
         let anyOk = false;
         let lastInternalId: string | undefined;
 
-        for (const taskId of boundTaskIds) {
+        for (const teamId of boundTeamIds) {
           const groupChannel = await (this.prisma as any).chatChannel.findFirst(
             {
-              where: { taskId, type: CHANNEL_TYPE.task_group },
+              where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
             },
           );
           if (!groupChannel) {
@@ -244,7 +244,7 @@ export class MessageInboundService implements MessageHost {
                   (cmd as { dedupKey?: string }).dedupKey ??
                   (cmd as { senderExternalId?: string }).senderExternalId ??
                   null,
-                error: 'task_group channel not found',
+                error: 'team_group channel not found',
                 payload: cmd as unknown,
               },
             );
@@ -255,7 +255,7 @@ export class MessageInboundService implements MessageHost {
             (cmd as { dedupKey?: string }).dedupKey ??
             (cmd as { senderExternalId?: string }).senderExternalId ??
             null;
-          const dedupKey = rawDedup ? `${rawDedup}_${taskId}` : null;
+          const dedupKey = rawDedup ? `${rawDedup}_${teamId}` : null;
 
           let ingressId: string | undefined;
           if (dedupKey) {
@@ -439,7 +439,8 @@ export class MessageInboundService implements MessageHost {
           );
           // Still forward selection to task chat for generic template_card interactions so model sees it even without pending question
           try {
-            const fallbackTaskId = boundTaskIds[0] ?? null;
+            // Use the question's task as fallback (team-based binding: question's task belongs to bound team)
+            const fallbackTaskId = qRow?.taskId ?? null;
             const opIdFb = (cmd as any).operatorExternalId as
               string | undefined;
             const opNameFb =
@@ -467,20 +468,33 @@ export class MessageInboundService implements MessageHost {
           results.push({ ok: false });
           continue;
         }
-        if (qRow.taskId && !boundTaskIds.includes(qRow.taskId)) {
-          await this.delivery.log(
-            DELIVERY_DIRECTIONS.inbound,
-            'card_action',
-            DELIVERY_STATUS.rejected,
-            {
-              channelId,
-              externalId: aqId,
-              error: 'task mismatch',
-              payload: cmd as unknown,
-            },
-          );
-          results.push({ ok: false });
-          continue;
+        // Check if question's task belongs to one of the bound teams
+        if (qRow.taskId) {
+          let taskTeamId: string | null = null;
+          try {
+            const task = await (this.prisma as any).task.findUnique({
+              where: { id: qRow.taskId },
+              select: { teamId: true },
+            });
+            taskTeamId = task?.teamId ?? null;
+          } catch {
+            taskTeamId = null;
+          }
+          if (!taskTeamId || !boundTeamIds.includes(taskTeamId)) {
+            await this.delivery.log(
+              DELIVERY_DIRECTIONS.inbound,
+              'card_action',
+              DELIVERY_STATUS.rejected,
+              {
+                channelId,
+                externalId: aqId,
+                error: 'team mismatch',
+                payload: cmd as unknown,
+              },
+            );
+            results.push({ ok: false });
+            continue;
+          }
         }
         const age = Date.now() - new Date(qRow.createdAt).getTime();
         if (age > QUESTION_PENDING_TTL_MS) {
