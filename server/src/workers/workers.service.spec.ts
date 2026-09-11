@@ -58,6 +58,7 @@ describe('WorkersService', () => {
       count: jest.Mock;
     };
     $transaction: jest.Mock;
+    $queryRawUnsafe: jest.Mock;
   };
   let mcpServers: { applyHeartbeatStatus: jest.Mock };
   let credentialCrypto: { decrypt: jest.Mock };
@@ -130,6 +131,7 @@ describe('WorkersService', () => {
         count: jest.fn(),
       },
       $transaction: jest.fn(),
+      $queryRawUnsafe: jest.fn(),
     };
     // remove 事务默认原样执行 batch 数组（各操作 mock 已就位）
     // PrismaPromise 是 thenable 而非函数，`await op` 即可触发其 then（mock 返回 undefined 亦安全）
@@ -1383,14 +1385,27 @@ describe('WorkersService', () => {
   });
 
   describe('列表/详情', () => {
+    /** 摘要查询（$queryRawUnsafe）返回的一行：capabilities 已拆为 3 个 JSON 摘要列。 */
+    const summaryRow = (overrides: Record<string, unknown> = {}) => ({
+      id: 'w_0000000001',
+      name: 'worker-1',
+      opencodeVersion: '1.18.14',
+      load: { instances: 1 },
+      status: WORKER_STATUS.ONLINE,
+      lastHeartbeatAt: new Date('2026-08-08T00:00:00Z'),
+      registeredAt: new Date('2026-08-08T00:00:00Z'),
+      defaultModelId: null,
+      maxInstances: 5,
+      skills: JSON.stringify(['coding']),
+      tools: JSON.stringify(['git']),
+      ...overrides,
+    });
+
     it('findAll 返回列表且剔除 tokenHash', async () => {
-      prisma.worker.findMany.mockResolvedValue([workerRow()]);
+      prisma.$queryRawUnsafe.mockResolvedValue([summaryRow()]);
 
       const rows = await service.findAll();
 
-      expect(prisma.worker.findMany).toHaveBeenCalledWith({
-        orderBy: { registeredAt: 'desc' },
-      });
       expect(rows).toHaveLength(1);
       expect(rows[0]).not.toHaveProperty('tokenHash');
       expect(rows[0]).toMatchObject({
@@ -1400,9 +1415,107 @@ describe('WorkersService', () => {
       });
     });
 
+    it('findAll 在 SQL 侧只取 capabilities 摘要（不 select 整列，避免 filesort OOM）', async () => {
+      prisma.$queryRawUnsafe.mockResolvedValue([summaryRow()]);
+
+      await service.findAll();
+
+      const sql = prisma.$queryRawUnsafe.mock.calls[0][0] as string;
+      // 关键：取摘要标量而非 capabilities 整列
+      expect(sql).toContain("JSON_EXTRACT(capabilities, '$.maxInstances')");
+      expect(sql).toContain("JSON_EXTRACT(capabilities, '$.skills')");
+      expect(sql).toContain("JSON_EXTRACT(capabilities, '$.tools')");
+      // 不整列读取大 JSON（OOM 根因）：capabilities 只能作为 JSON_EXTRACT 的入参出现，
+      // 不能作为独立投影列（`... , capabilities, ...`）
+      expect(sql).not.toMatch(/(^|,)\s*capabilities\s*(,|\s+FROM)/im);
+      // 必须先物化窄行再排序：内层主键序索引扫（无 filesort）+ LIMIT 护栏，外层再排序。
+      // 缺了这层，MySQL 仍按大表行宽估算 filesort → 1038（实测复现）。
+      expect(sql).toMatch(/ORDER BY id\s+LIMIT 1000000/i);
+      expect(sql).toMatch(/\)\s*AS t\s+ORDER BY t\.registeredAt DESC/i);
+      expect(prisma.worker.findMany).not.toHaveBeenCalled();
+    });
+
+    it('findAll 摘要列还原为 capabilities（skills/tools 数组 + maxInstances 数值）', async () => {
+      prisma.$queryRawUnsafe.mockResolvedValue([
+        summaryRow({
+          maxInstances: 5,
+          skills: JSON.stringify(['prototype-designer']),
+          tools: JSON.stringify(['git_clone', 'browser']),
+        }),
+      ]);
+
+      const rows = await service.findAll();
+
+      expect(rows[0].capabilities).toEqual({
+        maxInstances: 5,
+        skills: ['prototype-designer'],
+        tools: ['git_clone', 'browser'],
+      });
+      // 列表接口不返回 models 大数组（详情接口才有）
+      expect(rows[0].capabilities).not.toHaveProperty('models');
+    });
+
+    it('findAll 容错：驱动已解析数组 / 缺列 / 空 capabilities 均归一化', async () => {
+      prisma.$queryRawUnsafe.mockResolvedValue([
+        // 驱动直接回数组（已解析）
+        summaryRow({ id: 'w_arr', skills: ['a', 'b'], tools: [] }),
+        // 缺列（老引擎/降级）→ 0 与空数组，不得抛错
+        summaryRow({ id: 'w_missing', maxInstances: null, skills: null, tools: null }),
+      ]);
+
+      const rows = await service.findAll();
+
+      expect(rows[0].capabilities).toEqual({
+        maxInstances: 5,
+        skills: ['a', 'b'],
+        tools: [],
+      });
+      expect(rows[1].capabilities).toEqual({
+        maxInstances: 0,
+        skills: [],
+        tools: [],
+      });
+    });
+
+    it('findAll 容错：load 为未解析字符串时归一化为对象', async () => {
+      prisma.$queryRawUnsafe.mockResolvedValue([
+        summaryRow({ load: JSON.stringify({ instances: 3 }) }),
+      ]);
+
+      const rows = await service.findAll();
+
+      expect(rows[0].load).toEqual({ instances: 3 });
+    });
+
+    it('findAll 降级：摘要查询失败（如 SQLite 无 JSON_EXTRACT）→ 回退 findMany，不 500', async () => {
+      prisma.$queryRawUnsafe.mockRejectedValue(
+        new Error("no such function: JSON_EXTRACT"),
+      );
+      prisma.worker.findMany.mockResolvedValue([workerRow()]);
+
+      const rows = await service.findAll();
+
+      expect(prisma.worker.findMany).toHaveBeenCalledWith({
+        select: {
+          id: true,
+          name: true,
+          opencodeVersion: true,
+          load: true,
+          status: true,
+          lastHeartbeatAt: true,
+          registeredAt: true,
+          defaultModelId: true,
+        },
+        orderBy: { registeredAt: 'desc' },
+      });
+      // 降级路径不返回 capabilities（卡片计数显示 0，与 b000ac6 后行为一致）
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).not.toHaveProperty('tokenHash');
+    });
+
     it('C8：toWorkerView 透出 defaultModelId（findAll/详情均含；null=未配置）', async () => {
-      prisma.worker.findMany.mockResolvedValue([
-        workerRow({ defaultModelId: 'opencode-go/deepseek-v4-flash' }),
+      prisma.$queryRawUnsafe.mockResolvedValue([
+        summaryRow({ defaultModelId: 'opencode-go/deepseek-v4-flash' }),
       ]);
       prisma.worker.findUnique.mockResolvedValue(workerRow());
 

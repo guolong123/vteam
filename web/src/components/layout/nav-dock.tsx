@@ -6,7 +6,8 @@
  * 10 个导航项（teams / agents / workers / models / git-repos / skills / integrations / users / roles / memories），
  * 团队为全局入口与登录后默认工作台（/teams，Task 14）；任务看板/创建/产出物归属团队上下文
  * （/board?teamId=、/tasks/new?teamId=、/artifacts?teamId=），无独立 Dock 图标。
- * 对齐 06 篇 Dock 导航与 Cmd+K 命令面板「导航」组。
+ * 对齐 06 篇 Dock 导航与 Cmd+K 命令面板「导航」组——该组由 NAV_ITEMS **单源派生**
+ * （见 cmdk-panel.tsx DEFAULT_CMDK_NAV_ITEMS），增删导航项无需两处同步。
  *
  * 铁律（T15）：浮层 position: absolute 相对宿主容器（宿主需 position: relative）。
  */

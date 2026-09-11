@@ -69,6 +69,7 @@ type TeamMemberView = {
   alias: string | null;
   seq: number;
   workDir?: string | null;
+  overrideModelId?: string | null;
   agent: { id: string; name: string; role: string | null };
 };
 
@@ -1734,7 +1735,7 @@ export class TasksService implements OnModuleInit {
           role: m.agent.role,
           main: m.id === mainMemberId,
           enabled: true,
-          overrideModelId: null,
+          overrideModelId: m.overrideModelId ?? null,
           sessionStatus: s?.status ?? null,
           sessionId: s?.id ?? null,
         };

@@ -200,12 +200,14 @@ export default function TeamSessionPage() {
     enabled: !!currentTaskId && !!user?.id,
     refetchInterval: 30_000,
   });
+  /* 计划查询：仅「计划驱动」模式任务才有计划（direct 模式不请求 /plans）。
+   * 拉取失败（如 PLAN_NOT_FOUND）后停止 30s 轮询，避免 404 无限重试刷屏。 */
   const plansQuery = useQuery({
     queryKey: ["plans", currentTaskId],
     queryFn: () => api.get<PlanWithTasks>("/plans", { query: { taskId: currentTaskId! } }),
-    enabled: !!currentTaskId && !!user?.id,
-    refetchInterval: 30_000,
+    enabled: !!currentTaskId && !!user?.id && currentTask?.executionMode === "plan",
     retry: false,
+    refetchInterval: (query) => (query.state.status === "error" ? false : 30_000),
   });
 
   /* ---------- 添加实例选项 ---------- */
@@ -791,7 +793,12 @@ export default function TeamSessionPage() {
     mutationFn: ({ instanceId, modelId }: { instanceId: string; modelId: string | null }) =>
       api.patch(`/teams/${teamId}/members/${instanceId}`, { overrideModelId: modelId ?? null }),
     onSuccess: () => {
+      // 会话页 agentMembers 有任务实例时优先读 currentTask.instances（["task", currentTaskId]），
+      // 仅失效 team 缓存 UI 不刷新——需同时失效 task 缓存（成员模型覆盖展示断链修复）。
       queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+      if (currentTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+      }
     },
     onError: (err) => {
       console.error("[TeamSession] change member model failed", { teamId, error: err });
@@ -1133,39 +1140,27 @@ export default function TeamSessionPage() {
 
         <ResizeHandle label="调整任务面板宽度" onResizeStart={taskPanel.onResizeStart} />
 
-        {/* 右侧三 Tab（状态/配置/产出，队列与记忆已在状态 Tab 内展示） */}
+        {/* 右侧双 Tab（团队 / 任务，团队常显，任务有当前任务时显示） */}
         <div style={{ width: taskPanel.width, flexShrink: 0, display: "flex", flexDirection: "column", overflow: "hidden", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}` }}>
-          {currentTask ? (
-            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-              <TaskRightTabs
-                team={team}
-                task={currentTask}
-                taskId={currentTask.id}
-                artifactsQuery={artifactsQuery}
-                issuesQuery={issuesQuery}
-                plansQuery={plansQuery}
-                agents={agentMembers}
-                onEditTaskInfo={() => setTaskEditOpen(true)}
-                onOpenArtifacts={() => router.push(`/artifacts?teamId=${teamId}`)}
-                onOpenIssues={() => router.push(`/issues?taskId=${currentTask.id}`)}
-                onToggleManagedMode={(v: boolean) => { if (!managedModeMutation.isPending) managedModeMutation.mutate(v); }}
-                onToggleExecutionMode={(v: "direct" | "plan") => { if (!executionModeMutation.isPending) executionModeMutation.mutate(v); }}
-                  onOpenIssueDetail={(issueId: string) => setDetailIssueId(issueId)}
-                  onOpenArtifactDoc={(a: ArtifactItem) => {
-                    const items = (artifactsQuery.data?.items ?? []) as { id: string; title: string }[];
-                    router.push(`/docs/${currentTask.id}?doc=${docIdFor(a.title, a.id, items)}`);
-                  }}
-                />
-            </div>
-          ) : (
-            <div data-testid="team-right-empty" style={{ padding: space.xl, fontSize: fontSize.sm, color: neutral[400], lineHeight: 1.6 }}>
-              团队当前空闲，创建任务后此处展示队首任务的状态 / 配置 / 产出。
-              <div style={{ display: "flex", gap: space.sm, marginTop: space.md }}>
-                <button type="button" onClick={() => router.push(`/tasks/new?teamId=${teamId}`)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>创建任务</button>
-                <button type="button" onClick={() => router.push(`/teams/${teamId}/tasks`)} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[700], fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>历史任务</button>
-              </div>
-            </div>
-          )}
+          <TaskRightTabs
+            team={team}
+            task={currentTask}
+            taskId={currentTask?.id ?? ""}
+            artifactsQuery={artifactsQuery}
+            issuesQuery={issuesQuery}
+            plansQuery={plansQuery}
+            agents={agentMembers}
+            onEditTaskInfo={() => setTaskEditOpen(true)}
+            onOpenArtifacts={() => router.push(`/artifacts?teamId=${teamId}`)}
+            onOpenIssues={() => router.push(`/issues?taskId=${currentTask?.id ?? ""}`)}
+            onToggleManagedMode={(v: boolean) => { if (!managedModeMutation.isPending) managedModeMutation.mutate(v); }}
+            onToggleExecutionMode={(v: "direct" | "plan") => { if (!executionModeMutation.isPending) executionModeMutation.mutate(v); }}
+            onOpenIssueDetail={(issueId: string) => setDetailIssueId(issueId)}
+            onOpenArtifactDoc={(a: ArtifactItem) => {
+              const items = (artifactsQuery.data?.items ?? []) as { id: string; title: string }[];
+              if (currentTask) router.push(`/docs/${currentTask.id}?doc=${docIdFor(a.title, a.id, items)}`);
+            }}
+          />
         </div>
 
         {/* 任务信息编辑弹窗 */}

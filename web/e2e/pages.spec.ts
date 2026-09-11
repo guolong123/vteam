@@ -172,6 +172,29 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("rail-bar")).toBeVisible();
     await expect(page.getByTestId("rail-icon").first()).toBeVisible();
     await expect(page.getByTestId("nav-item").first()).toBeVisible();
+
+    // Dock「导航」↔ Cmd+K「导航」组一致性（防回归）：
+    // 两处曾各自硬编码，命令面板漏掉「团队管理」「记忆管理」→ 搜「记忆」无匹配命令。
+    // 现命令面板导航组由 NAV_ITEMS 派生，数量与标签必须逐项相同。
+    // nav-item 文本含图标 span，先剥离图标字符（保留标签内部空格）。
+    const stripIcon = (s: string) =>
+      s.replace(/[^\u4e00-\u9fa5A-Za-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+    const navLabels = (await page.getByTestId("nav-item").allInnerTexts())
+      .map(stripIcon)
+      .sort();
+    // 「导航」组 = 命令面板全部项去掉「操作」组（新建任务）
+    const cmdkNavLabels = (
+      await page.locator('[data-testid="cmdk-item"] span.navcmdk-item-label').allInnerTexts()
+    )
+      .map(stripIcon)
+      .filter((l) => l !== "新建任务")
+      .sort();
+    expect(cmdkNavLabels).toEqual(navLabels);
+    // 报告中的具体回归点：搜「记忆」必须命中「记忆管理」
+    await page.getByTestId("cmdk-search").locator("input").fill("记忆");
+    await expect(page.getByTestId("cmdk-item").first()).toBeVisible();
+    await expect(page.getByTestId("cmdk-item").first()).toContainText("记忆管理");
+
     // 关闭命令面板（Esc）
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("cmdk-panel")).not.toBeVisible();

@@ -3,10 +3,13 @@
 /**
  * 记忆管理页（Todo 6：mem-web）
  * =============================================
- * - 级别筛选 tab（全部 / 任务 / 团队 / 全局）+ keyword 搜索（防抖 300ms）+ 分页列表 + 删除
+ * - 级别筛选 tab（全部 / 团队 / 全局）+ keyword 搜索（防抖 300ms）+ 分页列表 + 删除
  * - 数据源：GET /api/v1/memories（level / keyword / page / pageSize 过滤，AdminGuard）
  * - 对齐 agents/models 页面 TanStack Query + api 封装模式
  * - 铁律（T15）：无 fixed / 100vh / 100vw；root flex:1 铺满（AppShell 提供导航）
+ *
+ * ⚠ 级别只含 team/global：任务级记忆已删除（session-unification Todo 9），
+ *   后端 level=task → 400 MEMORY_LEVEL_INVALID，故无「任务」筛选 Tab。
  */
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -29,7 +32,7 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 /** GET /memories 条目（对齐 MemoriesService.findAll 返回）。 */
 interface MemoryItem {
   id: string;
-  level: "task" | "team" | "global";
+  level: "team" | "global";
   content: string;
   description?: string | null;
   tags: string[] | null;
@@ -47,21 +50,19 @@ interface MemoriesResponse {
 
 /* ------------------------------ 级别筛选 Tab ------------------------------ */
 
-type LevelFilter = "" | "task" | "team" | "global";
+type LevelFilter = "" | "team" | "global";
 
 const LEVEL_TABS: { key: LevelFilter; label: string; icon: string }[] = [
   { key: "", label: "全部", icon: "◈" },
-  { key: "task", label: "任务", icon: "◧" },
   { key: "team", label: "团队", icon: "◨" },
   { key: "global", label: "全局", icon: "◎" },
 ];
 
-/** 级别 → 徽章配色（对齐 tokens 语义色系）。 */
+/** 级别 → 徽章配色（对齐 tokens 语义色系；任务级已删除，仅 team/global）。 */
 const LEVEL_META: Record<
   MemoryItem["level"],
   { label: string; color: string; bg: string; border: string }
 > = {
-  task: { label: "任务", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   team: { label: "团队", color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
   global: { label: "全局", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
 };

@@ -308,6 +308,16 @@ export default function WorkerDetailPage() {
           <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>
             {isApiError(error) ? error.message : "加载 Worker 详情失败"}
           </div>
+          {/* 路由主键是节点 ID（w_xxx），主机名（name，如容器短哈希）不是路由主键：
+              直接访问 /workers/<主机名> 会 404，这里给出可操作的指引避免误判为节点丢失。 */}
+          <div
+            data-testid="worker-detail-error-hint"
+            style={{ fontSize: fontSize.sm, color: neutral[400], lineHeight: 1.7, maxWidth: 520 }}
+          >
+            <span style={{ fontFamily: fontFamily.mono }}>{workerId}</span> 不是有效的节点 ID。
+            详情路由须使用「节点 ID」（形如 <span style={{ fontFamily: fontFamily.mono }}>w_xxx</span>），
+            主机名（如容器短哈希）仅作展示标识——请在节点列表按节点 ID 进入，或确认该节点是否已被删除。
+          </div>
           <button
             type="button"
             data-testid="worker-detail-retry"

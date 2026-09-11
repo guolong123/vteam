@@ -91,10 +91,16 @@ function WorkerCard({
   const isOffline = worker.status === "offline";
 
   /* 能力声明（11.2）：并发上限 + skill/tool 数量。
-   capabilities 在 list 接口中不存在（避免大 JSON 触发 MySQL filesort OOM），单查才返回。 */
-  const maxInstances = worker.capabilities?.maxInstances ?? 0;
-  const skillCount = worker.capabilities?.skills?.length ?? 0;
-  const toolCount = worker.capabilities?.tools?.length ?? 0;
+   list 接口返回**摘要** capabilities（maxInstances/skills/tools，服务端 SQL 侧 JSON 提取，
+   不含 models 大数组——整列读取 261KB 会触发 MySQL filesort OOM）。
+   capabilities 为 null 仅表示「本次列表未携带/节点从未上报」，与真实 0 不同：
+   用 reported 区分，避免把「未上报」显示成「0 并发 · 0 skill · 0 tool」误导资源评估
+   （历史缺陷：列表恒 0 而详情 5 并发 / 1 skill / 8 tool）。 */
+  const caps = worker.capabilities;
+  const capsReported = caps !== null && caps !== undefined;
+  const maxInstances = caps?.maxInstances ?? 0;
+  const skillCount = caps?.skills?.length ?? 0;
+  const toolCount = caps?.tools?.length ?? 0;
 
   /* 负载（11.2）：实例占用率驱动进度条（后端无 CPU 上报，取 load 真实语义） */
   const instances = worker.load?.instances ?? 0;
@@ -138,7 +144,7 @@ function WorkerCard({
       data-status={label}
       style={card}
     >
-      {/* 头部：workerId（mono）+ 状态徽章 */}
+      {/* 头部：workerId（mono）+ 状态徽章；name 为主机名/注册名，id 为路由主键 */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
         <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
           <span
@@ -154,12 +160,20 @@ function WorkerCard({
             }}
           />
           <span
+            data-testid="worker-id"
+            data-worker-id={worker.id}
+            title={`节点 ID：${worker.id}（详情路由主键）${
+              worker.name ? ` · 主机名：${worker.name}（非路由主键）` : ""
+            }`}
             style={{
               fontSize: fontSize.lg,
               fontWeight: 600,
               color: neutral[900],
               fontFamily: fontFamily.mono,
               letterSpacing: "-0.02em",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}
           >
             {worker.id}
@@ -168,7 +182,7 @@ function WorkerCard({
         <WorkerStatusBadge status={worker.status} />
       </div>
 
-      {/* 版本 + 节点名称（后端无 address 字段 → 展示注册名 name，缺省 hostname 语义） */}
+      {/* 版本 + 主机名（name 为主机名，id 为路由主键，hover 卡片头部查看对应关系） */}
       <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
         <span
           data-testid="worker-version"
@@ -193,8 +207,13 @@ function WorkerCard({
             <span aria-hidden style={{ fontWeight: 400, opacity: 0.7 }}>· V2Runtime</span>
           )}
         </span>
-        <span style={{ fontSize: fontSize.sm, color: neutral[400], fontFamily: fontFamily.mono }}>
-          {worker.name ?? "未命名节点"}
+        <span
+          data-testid="worker-hostname"
+          data-hostname={worker.name ?? ""}
+          title={`主机名：${worker.name ?? "未上报"}（仅展示标识，非详情路由主键——路由请用节点 ID ${worker.id}）`}
+          style={{ fontSize: fontSize.sm, color: neutral[400], fontFamily: fontFamily.mono }}
+        >
+          🖥 主机 {worker.name ?? "未命名节点"}
         </span>
       </div>
 
@@ -213,9 +232,20 @@ function WorkerCard({
           }}
         >
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>并发上限</span>
-          <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>
-            {maxInstances}
-            <span style={{ fontSize: fontSize.xs, fontWeight: 400, color: neutral[400], marginLeft: 2 }}>并发</span>
+          <span
+            data-testid="worker-capability-max-instances"
+            data-reported={capsReported ? "true" : "false"}
+            title={capsReported ? undefined : "该节点本次未携带能力声明（可能从未上报），非 0 并发"}
+            style={{
+              fontSize: fontSize.lg,
+              fontWeight: 600,
+              color: capsReported ? neutral[800] : neutral[400],
+            }}
+          >
+            {capsReported ? maxInstances : "未上报"}
+            {capsReported && (
+              <span style={{ fontSize: fontSize.xs, fontWeight: 400, color: neutral[400], marginLeft: 2 }}>并发</span>
+            )}
           </span>
         </div>
         <div
@@ -231,12 +261,27 @@ function WorkerCard({
           }}
         >
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>可用能力</span>
-          <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>
-            {skillCount}
-            <span style={{ fontSize: fontSize.xs, fontWeight: 400, color: neutral[400], marginLeft: 2 }}>skill</span>
-            <span style={{ fontSize: fontSize.xs, fontWeight: 400, color: neutral[300], margin: "0 4px" }}>·</span>
-            {toolCount}
-            <span style={{ fontSize: fontSize.xs, fontWeight: 400, color: neutral[400], marginLeft: 2 }}>tool</span>
+          <span
+            data-testid="worker-capability-counts"
+            data-reported={capsReported ? "true" : "false"}
+            title={capsReported ? undefined : "该节点本次未携带能力声明（可能从未上报），非 0 skill / 0 tool"}
+            style={{
+              fontSize: fontSize.lg,
+              fontWeight: 600,
+              color: capsReported ? neutral[800] : neutral[400],
+            }}
+          >
+            {capsReported ? (
+              <>
+                {skillCount}
+                <span style={{ fontSize: fontSize.xs, fontWeight: 400, color: neutral[400], marginLeft: 2 }}>skill</span>
+                <span style={{ fontSize: fontSize.xs, fontWeight: 400, color: neutral[300], margin: "0 4px" }}>·</span>
+                {toolCount}
+                <span style={{ fontSize: fontSize.xs, fontWeight: 400, color: neutral[400], marginLeft: 2 }}>tool</span>
+              </>
+            ) : (
+              "未上报"
+            )}
           </span>
         </div>
       </div>
@@ -247,8 +292,16 @@ function WorkerCard({
           <span style={{ fontSize: fontSize.sm, color: neutral[500] }}>
             负载 · <span style={{ fontWeight: 600, color: neutral[800] }}>{instances}</span> 个实例
           </span>
-          <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: loadColor(loadPct) }}>
-            占用 {loadPct}%
+          <span
+            data-testid="worker-load-percent"
+            style={{
+              fontSize: fontSize.sm,
+              fontWeight: 600,
+              color: capsReported ? loadColor(loadPct) : neutral[400],
+            }}
+            title={capsReported ? undefined : "并发上限未上报，无法计算占用率"}
+          >
+            占用 {capsReported ? `${loadPct}%` : "—"}
           </span>
         </div>
         <div

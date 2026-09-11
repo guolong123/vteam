@@ -138,7 +138,11 @@ const EXTRA_PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   "/tools/register": { title: "注册工具", subtitle: "登记工具 manifest 并绑定执行方式" },
 };
 
-/** 命令面板「导航」组 label → 路由路径 */
+/**
+ * 命令面板「导航」组 label → 路由路径。
+ * 必须与 cmdk-panel.tsx DEFAULT_CMDK_NAV_ITEMS 的标签一致（该组由 NAV_ITEMS 派生，
+ * 标签即 Dock 标签）；此处缺键会让对应命令项无法跳转，故随导航增删同步维护。
+ */
 const CMDK_NAV_PATH: Record<string, string> = {
   团队管理: "/teams",
   "Issue 管理": "/issues",

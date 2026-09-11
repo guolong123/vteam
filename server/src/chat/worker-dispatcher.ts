@@ -1301,7 +1301,14 @@ export class WorkerDispatcher
         ? session.instanceRef
         : null;
 
+    // 成员级模型覆盖优先（teamMember.overrideModelId，会话页「修改 agent 模型」落库字段），
+    // 其次 taskContext 透传，最后回退 agent 模板 defaultModelId。
+    // 查询缺失/失败不阻断分派：回退后续解析（覆盖查询本属增强，非主链路）。
+    const memberOverride = teamMemberId
+      ? await this.resolveMemberOverrideModelId(teamMemberId)
+      : null;
     const agentModelId =
+      memberOverride ??
       request.taskContext?.overrideModelId ??
       (await this.resolveAgentModelId(target.agentId));
     const assignmentReq: AssignmentRequirement = agentModelId
@@ -2960,6 +2967,25 @@ export class WorkerDispatcher
    * 取自 type=template 祖先或任意非空 defaultModelId 祖先，seed 已预置模板模型）。
    * 全链无配置 → null（不指定模型，由 worker 默认/serve 默认兜底）。
    */
+  private async resolveMemberOverrideModelId(
+    teamMemberId: string,
+  ): Promise<string | null> {
+    const repo = (this.prisma as any).teamMember;
+    if (!repo || typeof repo.findFirst !== 'function') {
+      return null;
+    }
+    try {
+      const row = (await repo.findFirst({
+        where: { id: teamMemberId },
+        select: { overrideModelId: true },
+      })) as { overrideModelId: string | null } | null;
+      return row?.overrideModelId ?? null;
+    } catch {
+      // 覆盖查询失败不阻断分派：回退 agent 默认模型（增强特性容错）
+      return null;
+    }
+  }
+
   private async resolveAgentModelId(agentId: string): Promise<string | null> {
     let currentId: string | null = agentId;
     for (

@@ -2291,7 +2291,7 @@ export class PlatformMcpService {
   /**
    * wecom_reply：回复企业微信用户（仅当消息来自企微时使用）。
    * - 解析当前任务（taskId/selfInstanceId 可选，未传则从 worker 会话自动解析）→ 校验归属
-   * - 查找该任务绑定的 wecom_aibot 渠道 → 通过 WecomAibotAdapter 发送到企微（@发送者，群聊时@）
+   * - 查找任务所属团队绑定的 wecom_aibot 渠道 → 通过 WecomAibotAdapter 发送到企微（@发送者，群聊时@）
    * - 同时镜像到任务群聊（@发送者 前缀），确保两端可见
    * - 成功/失败均返回 isError:false 的 content 文本，不中断 agent 会话
    */
@@ -2454,27 +2454,35 @@ export class PlatformMcpService {
 
     let wecomChannelId: string | null = null;
     try {
-      const bindings = await (this.prisma as any).taskMessageChannel.findMany({
-        where: { taskId },
-        select: { messageChannelId: true },
+      // 渠道绑定已迁移到团队：从 task 找到 team，再查团队绑定的 wecom 渠道
+      const task = await (this.prisma as any).task.findUnique({
+        where: { id: taskId },
+        select: { teamId: true },
       });
-      for (const b of bindings as Array<{ messageChannelId: string }>) {
-        try {
-          const ch = await (this.prisma as any).messageChannel.findUnique({
-            where: { id: b.messageChannelId },
-            select: { id: true, type: true },
-          });
-          if (ch && ch.type === 'wecom_aibot') {
-            wecomChannelId = ch.id;
-            break;
-          }
-        } catch {}
+      const teamId = task?.teamId ?? null;
+      if (teamId) {
+        const bindings = await (this.prisma as any).teamMessageChannel.findMany({
+          where: { teamId },
+          select: { messageChannelId: true },
+        });
+        for (const b of bindings as Array<{ messageChannelId: string }>) {
+          try {
+            const ch = await (this.prisma as any).messageChannel.findUnique({
+              where: { id: b.messageChannelId },
+              select: { id: true, type: true },
+            });
+            if (ch && ch.type === 'wecom_aibot') {
+              wecomChannelId = ch.id;
+              break;
+            }
+          } catch {}
+        }
       }
     } catch {}
     if (!wecomChannelId) {
       return {
         content: [
-          { type: 'text', text: '发送失败: 当前任务未绑定企业微信渠道' },
+          { type: 'text', text: '发送失败: 当前团队未绑定企业微信渠道' },
         ],
         isError: false,
       };
@@ -3797,10 +3805,10 @@ export class PlatformMcpService {
   }
 
   /**
-   * channel_send：向当前任务绑定的通知渠道发送文本（webhook / wecom_group_robot）。
+   * channel_send：向当前团队绑定的通知渠道发送文本（webhook / wecom_group_robot）。
    * - 入参仅 target(id/name, nc_ 前缀) + text(≤4000)，taskId 从 worker 会话上下文解析（当前任务边界）。
    * - text 越界 → 返回结构化错误文本（不抛断会话）。
-   * - outboundDispatcher.sendToChannelByIdOrName 查询 NotificationChannel (nc_) + TaskNotificationChannel 绑定；
+   * - outboundDispatcher.sendToChannelByIdOrName 按任务所属团队查询 NotificationChannel (nc_) + TeamNotificationChannel 绑定；
    *   失败返回错误文本 isError:false，避免 abort agent session。
    */
   async channelSend(

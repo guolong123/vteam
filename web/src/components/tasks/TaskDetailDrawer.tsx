@@ -162,6 +162,8 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
     enabled,
     retry: false,
   });
+  /* 计划仅存在于「计划驱动」任务（direct 模式无计划，不请求 /plans 避免 404）。 */
+  const planEnabled = enabled && taskQuery.data?.executionMode === "plan";
   const artifactsQuery = useQuery({
     queryKey: ["task", taskId, "artifacts"],
     queryFn: () =>
@@ -179,7 +181,7 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
   const plansQuery = useQuery({
     queryKey: ["plans", taskId],
     queryFn: () => api.get<PlanWithTasks>("/plans", { query: { taskId: taskId! } }),
-    enabled,
+    enabled: planEnabled,
     retry: false,
   });
 

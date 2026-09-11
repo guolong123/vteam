@@ -1,0 +1,12 @@
+# Taste
+- When asked to commit code, prefers a careful, minimal-path approach: only `git add` + `commit`, never modify source logic, and verify afterward that nothing was lost (clean working tree, no leftover stash, commit present at HEAD). Confidence: 0.8
+- Appreciates explicit confirmation at the end of a commit that no code logic was altered and no work was lost (esp. when stash or revert was used during verification). Confidence: 0.7
+- Prefers communication in Simplified Chinese for explanations, status updates, and summaries (user writes in Chinese). Confidence: 0.9
+- Wants a plan/design proposal (or a feature/field checklist) reviewed before the agent implements non-trivial changes; explicitly asks to "先定个计划" and to lay out what should be shown/implemented first. Confidence: 0.65
+- Prefers concise, plain-language answers; when an explanation runs long, asks to simplify ("简单点说，它是做什么的"). Confidence: 0.6
+- Workflow: pull the latest remote code before starting or verifying work (proactively asks to `git pull` when the remote has updates, and asks to pull + build + deploy locally before diagnosing an issue). Confidence: 0.6
+- For UI, prefers structured navigation (tabs / sub-tabs) over long scrolling panels; objects to a right panel whose content requires too much scrolling. Confidence: 0.55
+- Cares about correct domain ownership of attributes: properties like the main agent (leader) or message/notification channel bindings belong to the team, not the task. Confidence: 0.75
+- After implementing, expects the full cycle finished, not just local edits: commit, push to the remote (origin/main), and rebuild/redeploy locally via Docker Compose (web served at localhost:13001); checks in with "部署了吗" to confirm it was actually deployed. Confidence: 0.6
+- Expects UI settings/panels to be fully operable, not read-only placeholders: a binding or toggle must support direct selection/edit plus an entry point to create/manage the related item ("新增/管理渠道"), and anything that "只显示不能设置" is reported as a bug. Confidence: 0.7
+- Dev environment: Node is nvm-managed (v24.14.0, must export NVM_DIR/PATH before npm/npx) and Docker is at /usr/local/bin/docker (OrbStack) off the default PATH. Confidence: 0.55

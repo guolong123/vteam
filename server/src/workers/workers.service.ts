@@ -763,24 +763,141 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  /** GET /workers：worker 列表（不含 tokenHash——敏感字段只存库不返回）。
-   *  select 排除 capabilities（含 capabilities.models 7258 条，单行 ~300KB）；
-   *  此前全字段读取触发 MySQL filesort OOM（sort_buffer_size 256KB < 单行 304KB）。 */
+  /**
+   * GET /workers：worker 列表（不含 tokenHash——敏感字段只存库不返回）。
+   *
+   * capabilities 是含 `models`（生产实测 7523 条、单行 ~255KB）的大 JSON。两个约束同时成立：
+   *
+   * 1) **不能整列 select**：ORDER BY registered_at 无索引 → 必然 filesort，把 255KB 大列
+   *    拽进排序缓冲区会触发 MySQL error 1038 'Out of sort memory'（b000ac6 的原始故障）。
+   * 2) **仅去掉大列还不够**：MySQL filesort 的行宽按**表的行宽上限**估算，与 SELECT 投影
+   *    无关 —— 实测 sort_buffer_size=64KB 时，即使只投影 `id + JSON_EXTRACT(...)`，
+   *    带 ORDER BY 仍报 1038；而同一查询去掉 ORDER BY 立刻成功。所以必须**同时消除
+   *    filesort**，否则「只取摘要」仍是假安全。
+   *
+   * 因此改为两层结构：内层用主键索引扫（`ORDER BY id` 走 PRIMARY，无 filesort）**物化**
+   * 出窄行投影（id + 摘要标量 + registered_at），外层再对这已物化的窄派生表排序。
+   * 排序语义（registered_at DESC）与详情/分页完全一致，大 JSON 全程不进入排序缓冲区。
+   * 内层 `LIMIT 1000000` 是**强制物化的优化器护栏**：缺它时优化器会把外层 ORDER BY 下推、
+   * 重新退化成对大表 filesort（实测复现 1038）。
+   *
+   * 实测（sort_buffer_size=64KB，生产同款 255KB 行）：旧写法 1038；本写法返回
+   * maxInstances=5 / skills=1 / tools=8，与详情接口一致。
+   *
+   * 兼容性：JSON_EXTRACT 为 MySQL 专有；SQLite 回退（schema 注释中的 dev 模式）或引擎
+   * 不支持时由 catch 降级为「不含 capabilities 的常规查询」——卡片显示「未上报」而非
+   * 误导性的 0，功能不中断。
+   */
   async findAll() {
-    const rows = await this.prisma.worker.findMany({
-      select: {
-        id: true,
-        name: true,
-        opencodeVersion: true,
-        load: true,
-        status: true,
-        lastHeartbeatAt: true,
-        registeredAt: true,
-        defaultModelId: true,
-      },
-      orderBy: { registeredAt: 'desc' },
-    });
-    return rows.map((w) => this.toWorkerView(w));
+    try {
+      const rows = await this.prisma.$queryRawUnsafe<
+        Array<{
+          id: string;
+          name: string | null;
+          opencodeVersion: string;
+          load: unknown;
+          status: string;
+          lastHeartbeatAt: Date | null;
+          registeredAt: Date;
+          defaultModelId: string | null;
+          maxInstances: unknown;
+          skills: unknown;
+          tools: unknown;
+        }>
+      >(
+        `SELECT t.id, t.name, t.opencodeVersion, t.\`load\`, t.status,
+                t.lastHeartbeatAt, t.registeredAt, t.defaultModelId,
+                t.maxInstances, t.skills, t.tools
+           FROM (
+             SELECT id, name, opencode_version AS opencodeVersion, \`load\`, status,
+                    last_heartbeat_at AS lastHeartbeatAt, registered_at AS registeredAt,
+                    default_model_id AS defaultModelId,
+                    JSON_EXTRACT(capabilities, '$.maxInstances') AS maxInstances,
+                    JSON_EXTRACT(capabilities, '$.skills') AS skills,
+                    JSON_EXTRACT(capabilities, '$.tools') AS tools
+               FROM workers
+              ORDER BY id
+              LIMIT 1000000
+           ) AS t
+          ORDER BY t.registeredAt DESC`,
+      );
+      return rows.map((row) =>
+        this.toWorkerView({
+          ...row,
+          // load 为 Json 列：驱动可能回 string（未解析），统一归一化为对象
+          load: this.jsonToObject(row.load),
+          // 摘要重建为 capabilities 轻量对象：结构与详情一致（仅缺 models/port/baseUrl），
+          // 前端 WorkerItem.capabilities 的字段全部可选，故不会出现未上报误判。
+          capabilities: {
+            maxInstances: this.jsonScalarToNumber(row.maxInstances, 0),
+            skills: this.jsonArrayToStrings(row.skills),
+            tools: this.jsonArrayToStrings(row.tools),
+          },
+        }),
+      );
+    } catch (err) {
+      // 引擎不支持 JSON_EXTRACT / 连接异常 → 降级为无 capabilities 列表（卡片计数显示 0），
+      // 绝不因摘要字段失败而让整个节点列表 500。
+      this.logger.warn(
+        `[workers] findAll 摘要查询失败，降级为不含 capabilities 的列表：${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      const rows = await this.prisma.worker.findMany({
+        select: {
+          id: true,
+          name: true,
+          opencodeVersion: true,
+          load: true,
+          status: true,
+          lastHeartbeatAt: true,
+          registeredAt: true,
+          defaultModelId: true,
+        },
+        orderBy: { registeredAt: 'desc' },
+      });
+      return rows.map((w) => this.toWorkerView(w));
+    }
+  }
+
+  /** JSON 标量（驱动可能给 number/string/BigInt）→ number；非法/缺省回退 fallback。 */
+  private jsonScalarToNumber(value: unknown, fallback: number): number {
+    if (value === null || value === undefined) return fallback;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : fallback;
+    if (typeof value === 'bigint') return Number(value);
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  /** JSON 数组列 → string[]：驱动可能回 string（未解析）或已解析数组，两种都归一化。 */
+  private jsonArrayToStrings(value: unknown): string[] {
+    if (Array.isArray(value)) {
+      return value.filter((v): v is string => typeof v === 'string');
+    }
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed)
+          ? parsed.filter((v): v is string => typeof v === 'string')
+          : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  /** JSON 列 → 对象（load 列；驱动可能回 string，统一解析为对象，失败回 null）。 */
+  private jsonToObject(value: unknown): Prisma.JsonValue | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value) as Prisma.JsonValue;
+      } catch {
+        return null;
+      }
+    }
+    return value as Prisma.JsonValue;
   }
 
   /** GET /workers/:id：单查，不存在 → 404 WORKER_NOT_FOUND。 */

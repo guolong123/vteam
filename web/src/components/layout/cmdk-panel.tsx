@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
+import { NAV_ITEMS } from "./nav-dock";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -32,7 +33,7 @@ export interface CmdKPanelProps {
   open?: boolean;
   /** 关闭回调（✕ 按钮 / 遮罩点击 / Esc 键触发） */
   onClose?: () => void;
-  /** 命令项（默认提供「导航 / 操作」两组，导航 7 条与 Dock 图标对应） */
+  /** 命令项（默认 DEFAULT_CMDK_ITEMS：「导航」组由 Dock NAV_ITEMS 派生，「操作」组自理） */
   items?: CmdKItem[];
   /** 点击命令项回调 */
   onSelect?: (label: string) => void;
@@ -42,17 +43,29 @@ export interface CmdKPanelProps {
   className?: string;
 }
 
-export const DEFAULT_CMDK_ITEMS: CmdKItem[] = [
-  { group: "导航", label: "切换项目", icon: "▤" },
-  { group: "导航", label: "Issue 管理", icon: "☰" },
-  { group: "导航", label: "Agent 管理", icon: "◉" },
-  { group: "导航", label: "Worker 节点", icon: "⚙" },
-  { group: "导航", label: "模型管理", icon: "◇" },
-  { group: "导航", label: "仓库管理", icon: "⌗" },
-  { group: "导航", label: "技能与工具", icon: "◫" },
-  { group: "导航", label: "用户管理", icon: "☷" },
-  { group: "导航", label: "角色权限", icon: "⚖" },
+/**
+ * 「导航」组命令：**由 Dock 的 NAV_ITEMS 单源派生**，不手写第二份标签 / 图标。
+ *
+ * 历史缺陷（ISSUE-005 类）：此处曾硬编码 7 条「切换项目 / 任务看板 / …」，
+ * 与 Dock 的 10 项各自维护，先后漏掉「团队管理」「记忆管理」——命令面板搜「记忆」
+ * 返回「无匹配命令」，键盘用户无法直达该页（Dock 与 Cmd+K 双入口不一致）。
+ * 现改为 map 派生：NAV_ITEMS 增删一项，「导航」组自动跟随，结构上杜绝漂移。
+ * （keys：teams/agents/workers/models/git-repos/skills/integrations/users/roles/memories）
+ */
+export const DEFAULT_CMDK_NAV_ITEMS: CmdKItem[] = NAV_ITEMS.map((item) => ({
+  group: "导航",
+  label: item.label,
+  icon: item.icon,
+}));
+
+/** 「操作」组快捷命令（非导航目标，与 Dock 无关） */
+export const DEFAULT_CMDK_ACTION_ITEMS: CmdKItem[] = [
   { group: "操作", label: "新建任务", icon: "＋" },
+];
+
+export const DEFAULT_CMDK_ITEMS: CmdKItem[] = [
+  ...DEFAULT_CMDK_NAV_ITEMS,
+  ...DEFAULT_CMDK_ACTION_ITEMS,
 ];
 
 const navAnimStyle = `
