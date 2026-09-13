@@ -953,7 +953,8 @@ describe('ResourceInjector：agent 策略 + guard 制品（Todo 15 单写者）'
     });
     const cfg = readConfig(workDir);
     expect(cfg.mcp?.vteam).toBeDefined();
-    expect(cfg.plugin).toEqual(['oh-my-openagent@latest']);
+    // Todo 18：guard 插件条目与 OmO 共存（guard 在前：ensureGuard 先于 injectOmo）
+    expect(cfg.plugin).toEqual(['./.opencode/plugin/vteam-role-guard.ts', 'oh-my-openagent@latest']);
     expect(cfg.agent['vteam-developer']).toEqual({
       description: 'dev scope',
       mode: 'primary',
@@ -973,6 +974,9 @@ describe('ResourceInjector：agent 策略 + guard 制品（Todo 15 单写者）'
     expect(manifest.agentNames).toEqual(['vteam-developer', 'vteam-tester']);
     expect(manifest.guardRolesFile).toBe('.vteam-role-guard/roles.json');
     expect(manifest.guardSessionsDir).toBe('.vteam-role-guard/sessions');
+    // Todo 18：插件文件落盘 + manifest 登记正典路径
+    expect(fs.existsSync(path.join(workDir, GUARD_PLUGIN_REL))).toBe(true);
+    expect(manifest.guardPluginFile).toBe(GUARD_PLUGIN_REL);
 
     const call = fetchImpl.mock.calls.find((c) =>
       String(c[0]).includes('/api/v1/agent-policies'),
@@ -989,7 +993,10 @@ describe('ResourceInjector：agent 策略 + guard 制品（Todo 15 单写者）'
     const first = fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8');
     await injector.injectAll();
     expect(fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8')).toBe(first);
-    expect(readConfig(workDir).plugin).toEqual(['oh-my-openagent@latest']);
+    expect(readConfig(workDir).plugin).toEqual([
+      './.opencode/plugin/vteam-role-guard.ts',
+      'oh-my-openagent@latest',
+    ]);
     expect(readManifest(workDir).agentNames).toEqual(['vteam-developer', 'vteam-tester']);
   });
 

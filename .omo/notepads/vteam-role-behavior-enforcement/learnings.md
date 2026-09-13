@@ -131,3 +131,41 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   （handoff 优先同名工具键，否则首个非空值）。
 - spec 49 例全绿；`npx tsc -p tsconfig.json --noEmit` exit 0。全量 worker 套件中
   `src/driver/v1-driver.spec.ts` 2 例失败为基线预存（stash 后复现），与本模块无关。
+
+## Todo 19 — session→policy 映射 worker/src/role-guard/session-policy-map.ts
+
+- 新纯/IO 模块：`writeSessionPolicy`（同目录 tmp+`rename` 原子写，先 `mkdir -p sessions/`）、
+  `readSessionPolicy`（缺失/损坏/形状非法→null，pass-through）、`removeSessionPolicy`
+  （best-effort 吞错，幂等）；`sanitizeSessionId`（非法字符→`_`，空/`..`→占位，128 上限），
+  文件名消毒后 `path.join` 即无穿越（spec 用 `../../etc/passwd` 验证不出逃逸）。
+- `import * as fsp from 'node:fs/promises'`（`{ promises } from 'node:fs/promises'` 无此导出，
+  tsc TS2305）。`SessionPolicy` 类型从 `./policy` import（同进程纯模块，无 opencode 依赖）。
+- `runExecution` 接线：`trackGuardSession` 在 `createSession` 已知 id 后、prompt 发送前调用；
+  404 重建分支为新 id 追加映射（旧 id 由 finally 统一清）；finally `untrackGuardSessions` +
+  `trackInstanceEnd`。仅 `payload.agent` 具 `vteam-` 前缀才写（默认 agent/未传→未映射
+  pass-through）。写/删失败 catch+`logger.warn`，永不抛入执行链。
+- `resolveGuardWorkDir`：优先 `this.workDir`（与 injector 同根）；未配置时从
+  `<workDir>/tasks/<id>` 上跳两级推导；均无返回空串跳过（不阻断）。
+- exec-server.spec 用 sendMessage gate（deferred promise）观测“执行中文件存在、完成后删除”；
+  写失败用例以“workDir 指向已存在文件”强制 mkdir 失败，断言仍 task.completed 且无 error 事件。
+- `npx tsc -p tsconfig.json --noEmit` exit 0；新 11 例 + 全量 role-guard/exec 157 例绿。
+  全量 worker 另有 `injector.spec`（Todo 18 进行中改动所致）与 `v1-driver.spec`（基线预存）失败，
+  均与本 Todo 无关（injector.ts 未动，本模块仅 exec-server import）。
+
+## Todo 18 — guard 插件 vteam-role-guard + 注册 + spike
+
+- 新增 `worker/src/resources/role-guard-plugin.ts`：纯 `renderRoleGuardPlugin(): string`，发射自包含插件
+  （`tool.execute.before`，deny→`throw new Error(纠正)`；仅 `node:` 导入）。判定为 `policy.ts` 手工内联快照
+  （起止标记供 spec 提取）：`toString()` 不可用——policy 辅助函数模块私有，只能拿到导出外壳；
+  等价性由 20 例 parity 矩阵锁定（policy 改分支不同步快照即红）。
+- workDir 三锚点：`import.meta.url` 上两级 → `ctx.directory` findUp（`tasks/<id>` 上爬，含 roles.json 优先、
+  否则 opencode.json）→ 回退 directory/cwd。显式 `./.opencode/plugin/vteam-role-guard.ts` plugin 条目注册，
+  不依赖 `.opencode/plugins/`（复数）原生发现目录。
+- injector 成功路径：`writeGuardPluginFile()` + `ensureGuardPluginEntry()`（幂等：缺失追加、异写规范为正典、
+  用户条目保留且顺序稳定）+ 陈旧异路径文件删除（不碰数组，防宽匹配误删正典条目）；manifest 置
+  `guardPluginFile` 正典值。中性化路径不动（删文件+移除条目）。
+- `injector.spec.ts` (a)(b) plugin 数组期望同步为 `[guard, omo]`；resources 全目录 65/65 green；
+  新 `role-guard-plugin.spec.ts` 10/10（含 transpile 合法性 + 磁盘 harness deny/allow/pass-through）。
+- UNVERIFIED（待 Todo 21 live）：MCP 运行时 `input.tool` 是否确为 `vteam_<action>` 裸名（若带前缀，
+  映射会话 fail-closed deny 为安全方向）；hook 对 MCP/custom/git 全量触发为静态推理（prompt.ts 双调用点）。
+- hook 签名：`(input:{tool,sessionID,callID}, output:{args})`；工厂 ctx 含 `directory`；opencode 1.18.30。

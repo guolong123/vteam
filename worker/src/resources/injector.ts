@@ -24,6 +24,7 @@ import {
   AgentPoliciesResponse,
   buildAgentDefinitions,
 } from './opencode-config-builder';
+import { renderRoleGuardPlugin } from './role-guard-plugin';
 import {
   CustomToolArg,
   CustomToolArgType,
@@ -102,8 +103,9 @@ interface InjectManifest {
   guardRolesFile?: string | null;
   guardSessionsDir?: string | null;
   /**
-   * guard 插件文件相对路径。Todo 15 只管理该键 + 清理，不写插件体——插件体与
-   * `plugin` 数组注册由 Todo 18 负责（见 ROLE_GUARD_PLUGIN_* 注释）。
+   * guard 插件文件相对路径。Todo 15 建键 + 清理分支；Todo 18 起成功路径写入
+   * 插件体（`writeGuardPluginFile`）并注册 `plugin` 条目（`ensureGuardPluginEntry`），
+   * 本键同步更新为正典路径；中性化/停用路径仍走清理（删文件 + 移除条目）。
    */
   guardPluginFile?: string | null;
 }
@@ -121,15 +123,16 @@ const INVALID_FILE_CHARS = /[^a-z0-9-_.]/g;
 const ROLE_GUARD_DIR_REL = '.vteam-role-guard';
 const ROLE_GUARD_ROLES_REL = `${ROLE_GUARD_DIR_REL}/roles.json`;
 const ROLE_GUARD_SESSIONS_REL = `${ROLE_GUARD_DIR_REL}/sessions`;
-/**
- * guard 插件文件相对路径（`<workDir>/.opencode/plugin/vteam-role-guard.ts`）。
- *
- * 职责拆分（Todo 15 vs Todo 18）：Todo 15 只管理 manifest `guardPluginFile` 键 +
- * 清理分支（停用/中性化时删文件 + 移除 `plugin` 数组条目），**不写插件体、不注册
- * 条目**；插件体与注册由 Todo 18 负责。本文件成功路径故意不创建该文件，避免残留
- * 空插件干扰 serve 加载。
- */
-const ROLE_GUARD_PLUGIN_REL = '.opencode/plugin/vteam-role-guard.ts';
+  /**
+   * guard 插件文件相对路径（`<workDir>/.opencode/plugin/vteam-role-guard.ts`）。
+   *
+   * 职责拆分（Todo 15 vs Todo 18）：Todo 15 建 manifest `guardPluginFile` 键 +
+   * 清理分支；**Todo 18 完成插件体写入（`renderRoleGuardPlugin()`）+ `plugin`
+   * 数组注册（`ensureGuardPluginEntry`），见 `injectMcpAndAgents` 成功路径**。
+   * 成功路径故意保留 manifest 键的显式管理（陈旧异路径文件删除 + 键更新），
+   * 中性化/停用路径沿用清理分支（删文件 + 移除 `plugin` 条目）。
+   */
+  const ROLE_GUARD_PLUGIN_REL = '.opencode/plugin/vteam-role-guard.ts';
 /** guard 插件 `plugin` 数组条目匹配（任意写法均识别，清理时移除）。 */
 const ROLE_GUARD_ENTRY_RE = /vteam-role-guard/;
 
@@ -297,12 +300,12 @@ export class ResourceInjector {
    * read-modify-write 内完成（禁止第二处并行写同一文件）。
    *
    * - `policies` 非空 → `agent` 节 = `buildAgentDefinitions(agents, guard)`（用户
-   *   手写 agent 键保留），写 `roles.json{enabled:true}` + 确保 `sessions/`；
+   *   手写 agent 键保留），写 `roles.json{enabled:true}` + 确保 `sessions/` +
+   *   **写 guard 插件文件（`renderRoleGuardPlugin()`）并注册 `plugin` 条目**
+   *   （Todo 18；用户手写 plugin 条目保留，见 `ensureGuardPluginEntry`）；
    * - `policies` 为 null（拉取失败/角色集为空）→ **失败中性化**：移除受管 agent
    *   键、写 `roles.json{enabled:false}`、移除插件文件与 `plugin` 条目、删
    *   `sessions/`，报告 `{enabled:false, names:[]}`——绝不残留 `enabled:true`。
-   * guard 插件体与注册由 Todo 18 负责：成功路径沿用 manifest 已记录值（不删
-   * 不建），仅中性化路径清理。
    */
   async injectMcpAndAgents(
     policies: AgentPoliciesResponse | null,
@@ -330,16 +333,21 @@ export class ResourceInjector {
       }
       this.writeGuardRoles(true, policies.guard.roles);
       this.ensureGuardSessionsDir();
+      // Todo 18：写 guard 插件体 + 注册 plugin 条目（单写者：内存 config 改完后
+      // 由本方法尾部统一落盘，此处不另写 opencode.json）。
+      const guardPluginRel = this.writeGuardPluginFile();
+      this.ensureGuardPluginEntry(config);
       this.cleanupByManifest('agentNames', agentNames, config);
       this.cleanupByManifest('guardRolesFile', ROLE_GUARD_ROLES_REL);
       this.cleanupByManifest('guardSessionsDir', ROLE_GUARD_SESSIONS_REL);
-      this.cleanupByManifest('guardPluginFile', manifest.guardPluginFile ?? null, config);
+      this.removeStaleGuardPluginFile(manifest.guardPluginFile ?? null, guardPluginRel);
       this.writeManifest({
         ...this.readManifest(),
         mcpServers: names,
         agentNames,
         guardRolesFile: ROLE_GUARD_ROLES_REL,
         guardSessionsDir: ROLE_GUARD_SESSIONS_REL,
+        guardPluginFile: guardPluginRel,
       });
       agentPolicies = { enabled: true, names: agentNames };
     } else {
@@ -450,6 +458,49 @@ export class ResourceInjector {
   /** 确保 guard 会话映射目录 `<workDir>/.vteam-role-guard/sessions/` 存在。 */
   private ensureGuardSessionsDir(): void {
     fs.mkdirSync(path.join(this.workDir, ROLE_GUARD_SESSIONS_REL), { recursive: true });
+  }
+
+  /**
+   * 写 guard 插件文件 `<workDir>/.opencode/plugin/vteam-role-guard.ts`
+   *（内容见 `renderRoleGuardPlugin`，自包含：判定逻辑内联 + 仅 `node:` 导入）。
+   * 返回相对路径（manifest `guardPluginFile` 值）。
+   */
+  private writeGuardPluginFile(): string {
+    const filePath = path.join(this.workDir, ROLE_GUARD_PLUGIN_REL);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, renderRoleGuardPlugin(), 'utf8');
+    return ROLE_GUARD_PLUGIN_REL;
+  }
+
+  /**
+   * 注册 guard 插件条目到内存 `config.plugin`（调用方统一落盘，保持单写者）。
+   * 幂等：已存在任意 `vteam-role-guard` 写法时仅将其规范为正典相对条目
+   * `./.opencode/plugin/vteam-role-guard.ts`（显式路径注册，不依赖原生发现
+   * 目录；用户手写条目保留，顺序稳定——重跑不改变数组字节）。
+   */
+  private ensureGuardPluginEntry(config: Record<string, unknown>): void {
+    const entry = `./${ROLE_GUARD_PLUGIN_REL}`;
+    const raw = Array.isArray(config.plugin) ? (config.plugin as unknown[]).slice() : [];
+    const idx = raw.findIndex(
+      (item) => typeof item === 'string' && ROLE_GUARD_ENTRY_RE.test(item),
+    );
+    if (idx === -1) {
+      raw.push(entry);
+    } else if (raw[idx] !== entry) {
+      raw[idx] = entry;
+    }
+    config.plugin = raw;
+  }
+
+  /**
+   * 删除与正典路径不一致的陈旧 guard 插件文件（常量变更等极端情形）。
+   * 只删文件，不碰 `plugin` 数组（正典条目已由 `ensureGuardPluginEntry` 就位；
+   * `removeGuardPluginEntry` 的宽匹配会误删正典条目，此处禁用）。
+   */
+  private removeStaleGuardPluginFile(previousRel: string | null, currentRel: string): void {
+    if (previousRel && previousRel !== currentRel) {
+      fs.rmSync(path.join(this.workDir, previousRel), { force: true });
+    }
   }
 
   /**
