@@ -228,3 +228,15 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   (2) model satisficing (glob finds other tasks' files from global cwd) and model no-attempts are the dominant INCONCLUSIVE sources, not enforcement;
   (3) cross-task file leakage breaks (a) isolation — clean task dirs between runs; (4) no DELETE /tasks/:id — QA tasks t_0000000004-8 left queued.
 - Evidence: `.omo/evidence/role-enforcement/e2e-role-boundaries.txt` + `e2e-20260913-raw/` (24 files: serve JSONs, run logs, payloads).
+
+---
+
+## Todo 24 — matrix self-check (anti-drift)
+
+- New `server/src/execution-policies/agent-policies.matrix.spec.ts` (9 tests): all expectations derived from
+  `ROLE_BOUNDARIES` (single source, zero per-role literals) — service/constant divergence fails red.
+- `ExecutionPolicyService` instantiated with `{}` placeholders (`new ExecutionPolicyService({} as never, {} as never)`)
+  since `buildAgentPolicies()` is pure (no DB); tsc accepts `never` args, jest runs it in ~1.4s.
+- Namespace rule enforced both directions: every `toolAllows` key ∈ `VTEAM_MCP_TOOL_NAMES` ∪ `VTEAM_GIT_TOOL_NAMES`;
+  every `mcpDenies` ∈ MCP set and disjoint from that role's allows (= MCP complement by construction).
+- `jest src/execution-policies/agent-policies.matrix.spec.ts` 9/9 green; `tsc -p tsconfig.json --noEmit` exit 0.
