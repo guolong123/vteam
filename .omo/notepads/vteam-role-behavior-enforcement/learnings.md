@@ -240,3 +240,21 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - Namespace rule enforced both directions: every `toolAllows` key ∈ `VTEAM_MCP_TOOL_NAMES` ∪ `VTEAM_GIT_TOOL_NAMES`;
   every `mcpDenies` ∈ MCP set and disjoint from that role's allows (= MCP complement by construction).
 - `jest src/execution-policies/agent-policies.matrix.spec.ts` 9/9 green; `tsc -p tsconfig.json --noEmit` exit 0.
+
+---
+
+## Todo 23 — three-end regression (typecheck + lint + tests)
+
+- All three typechecks green (server/worker/web `tsc --noEmit` exit 0, empty output); web lint
+  exit 0 with 0 errors / 738 pre-existing warnings.
+- server `npm run lint` uses `--fix` (mutating) — regression runs MUST use
+  `npx eslint "{src,apps,libs,test}/**/*.ts"` WITHOUT `--fix`; exit 1 with 141 errors / 49 warn.
+- zsh gotcha: `cmd | tail; echo $?` reports tail's status (always 0); use `pipestatus[1]`
+  (zsh) / `PIPESTATUS[0]` (bash), or redirect to a file then echo `$?` with no pipe.
+- Baseline proof without reinstall: `git worktree add /tmp/vteam-baseline 2fb188a` + symlink
+  current `node_modules` into it, run the failing specs, then `git worktree remove --force`.
+  Result: IDENTICAL failures at baseline — server 34/184 in the same 7 suites, worker 2/45
+  listModels. Zero introduced failures.
+- Lint baseline spot-check: `git show 2fb188a:<file> | npx eslint --stdin --stdin-filename <file>`
+  proves prettier drift predates the plan (agents.service.ts 9=9; workers.service.ts 1=1).
+- Evidence: `.omo/evidence/role-enforcement/regression.txt` (commands + tails + table + classification).

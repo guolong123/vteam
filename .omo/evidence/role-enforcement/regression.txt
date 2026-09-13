@@ -1,0 +1,152 @@
+Three-end regression for plan: vteam role behavior enforcement (Todo 23)
+Date (UTC): 2026-09-13
+HEAD at run time: d1af244 (on top of 99318ea; plan commits through 99318ea/d1af244)
+Baseline commit for pre-existing check: 2fb188a ("chore: baseline before role enforcement")
+Working tree during run: clean w.r.t. product source (only .omo tracking files + 1 untracked
+spec modified/untracked per git status; no product source edits made by this task)
+
+Scripts inspected (package.json):
+- server: NO "typecheck" script -> used `npx tsc --noEmit -p tsconfig.json`;
+  "lint" is `eslint ... --fix` (MUTATING, so this run used `npx eslint "{src,apps,libs,test}/**/*.ts"`
+  WITHOUT --fix); "test" is `jest --runInBand`.
+- worker: "typecheck" = `tsc --noEmit`; "test" = `jest --runInBand`; NO lint script.
+- web: "lint" = `eslint` (no --fix, safe); NO typecheck script -> used `npx tsc --noEmit`;
+  NO unit-test script (only "test:e2e" playwright, not run here).
+
+================================================================
+COMMANDS + EXIT CODES + RAW TAILS
+================================================================
+
+--- server typecheck ---
+$ cd server && npx tsc --noEmit -p tsconfig.json
+SERVER_TSC_EXIT:0, output empty (0 lines) -> PASS
+
+--- worker typecheck ---
+$ cd worker && npx tsc --noEmit   (== npm run typecheck)
+WORKER_TSC_EXIT:0, output empty (0 lines) -> PASS
+
+--- web typecheck ---
+$ cd web && npx tsc --noEmit
+WEB_TSC_EXIT:0, output empty (0 lines) -> PASS
+
+--- web lint ---
+$ cd web && npm run lint
+WEB_LINT_EXIT:0
+tail:
+  /app/web/src/features/docs-site/prototype-sandbox.tsx
+    2:21  warning  'useRef' is defined but never used  @typescript-eslint/no-unused-vars
+  X 738 problems (0 errors, 738 warnings)
+  0 errors and 1 warning potentially fixable with the `--fix` option.
+-> PASS (0 errors; 738 warnings are pre-existing style/a11y/hook-deps warnings in
+   untouched docs-site and other web modules; web is untouched by this plan)
+
+--- server lint (WITHOUT --fix; package script would mutate sources) ---
+$ cd server && npx eslint "{src,apps,libs,test}/**/*.ts"
+SERVER_LINT_EXIT:1
+  X 190 problems (141 errors, 49 warnings)
+  141 errors and 0 warnings potentially fixable with the `--fix` option.
+tail (all prettier/prettier formatting errors, e.g.):
+  server/src/workers/workers.service.spec.ts:2010:6 Delete `⏎` prettier/prettier
+  server/src/workers/workers.service.ts:885:35 Insert `⏎·····` prettier/prettier
+per-file error counts (top, unix format):
+  22 src/chat/worker-dispatcher.spec.ts | 16 src/workers/worker.client.spec.ts
+  14 src/workers/workers.service.spec.ts | 12 src/workers/worker.client.ts
+  9 src/agents/agents.service.ts | 8 src/tasks/tasks.controller.spec.ts ...
+Baseline comparison (baseline file content piped via `git show 2fb188a:<f> |
+npx eslint --stdin --stdin-filename <f>`):
+  src/workers/workers.service.ts       current 1 problem  / baseline 1 problem (same rule, pre-existing)
+  src/workers/workers.service.spec.ts  current 14         / baseline 7  (same prettier drift family)
+  src/chat/worker-dispatcher.ts        current 5          / baseline 2  (same prettier drift family)
+  src/agents/agents.service.ts         current 9          / baseline 9  (identical count, pre-existing)
+-> FAIL but PRE-EXISTING CATEGORY: repo lint was already red at baseline (errors also
+   spread across plan-untouched modules: tasks/*, teams/*, chat.service.spec,
+   platform-mcp, git-repos, docs-site, message-channels, notifications, models).
+   Plan edits added more instances of the same prettier drift in 2 touched files
+   (workers.service.spec.ts 7->14, worker-dispatcher.ts 2->5). NOT fixed here per
+   task instructions (no product source modification); escalated to owning sessions.
+
+--- worker test ---
+$ cd worker && npm test   (== jest --runInBand)
+EXIT:1 (suite has 2 failing tests)
+tail:
+  Test Suites: 1 failed, 24 passed, 25 total
+  Tests:       2 failed, 579 passed, 581 total
+failing tests (both in src/driver/v1-driver.spec.ts, listModels group):
+  X listModels：GET /provider，有 key 的 provider 模型 + opencode 免费模型上报，无凭据外部 provider 不上报
+  X listModels：/provider models 项缺 name 用 modelID 兜底；key 空串视为无凭据不收集
+  representative diff tail: received extra {id:"opencode-go/glm-5.1",...} entry vs
+  expected single [{id:'ollama-local/qwen3.5',...}] — environment/model-catalog drift,
+  worker/src/driver/* is NOT touched by this plan (absent from `git diff 2fb188a --name-only`).
+-> FAIL, PRE-EXISTING (matches plan expectation of ~2 listModels failures).
+
+--- server test ---
+$ cd server && npm run test -- --runInBand   (== jest --runInBand)
+EXIT:1
+tail:
+  Test Suites: 7 failed, 80 passed, 87 total
+  Tests:       34 failed, 1894 passed, 1928 total
+failing suites (7):
+  FAIL src/git-repos/git-repos.controller.spec.ts
+  FAIL src/teams/seed.spec.ts
+  FAIL src/workers/workers.service.spec.ts
+  FAIL src/models/models.controller.spec.ts
+  FAIL src/docs-site/docs-mirror.service.spec.ts
+  FAIL src/notifications/notification-dispatcher.service.spec.ts
+  FAIL src/message-channels/message-inbound.service.spec.ts
+failing test names (34, `grep -E "● [^C]"`, sorted -u):
+  ● DocsMirrorService … › buildRegistry › 仅当前版本 doc 产出物 → DocDef[]…
+  ● DocsMirrorService … › listPrototypes / readPrototype › (4 cases: TSX+JSON 合并/TSX 目录/meta 回退/无目录空数组)
+  ● GitReposController DTO 校验 › CreateGitRepoDto (5 cases: authType 非法/grantedAgents 缺省/permission 越界/repoUrl+key 空/合法输入)
+  ● MessageInboundService › submitInbound card_action via TaskMessageChannel (6 cases)
+  ● MessageInboundService › submitInbound post_message via TaskMessageChannel (8 cases incl. fan-out/dedup/wecom)
+  ● ModelsController › DTO 校验 token 格式 (3 cases: 过短/非法格式/缺前缀)
+  ● NotificationDispatcherService › manual dispatch via MCP still works (1 case)
+  ● TeamsService seed续号 Todo15 (2 cases: fresh-seed 续号/全非数字表)
+  ● WorkersService › dispatchGitCredentials (4 cases: 从未配置/定向逐个/全量在线/无授权仍下发空)
+  ● WorkersService › replayGitCredentials › 正常回放：凭证入队… (1 case)
+-> FAIL, ALL PRE-EXISTING (see baseline proof below; includes the ~5
+   dispatchGitCredentials failures the plan anticipated).
+
+================================================================
+BASELINE PROOF (definitive, not heuristic)
+================================================================
+Method: `git worktree add /tmp/vteam-baseline 2fb188a` + symlinked current
+node_modules (no reinstall, same toolchain), ran the exact failing specs at baseline,
+then `git worktree remove --force /tmp/vteam-baseline` (worktree list afterwards
+shows only the main tree).
+- server baseline (7 specs, --runInBand):
+    Test Suites: 7 failed, 7 total
+    Tests:       34 failed, 150 passed, 184 total
+  => IDENTICAL 34 failures at baseline 2fb188a. All 7 suites fail without this plan.
+- worker baseline (src/driver/v1-driver.spec.ts, --runInBand):
+    Test Suites: 1 failed, 1 total
+    Tests:       2 failed, 43 passed, 45 total
+  => IDENTICAL 2 listModels failures at baseline.
+- server lint baseline spot-check (same-file stdin lint): prettier errors already
+  present at baseline in all 4 sampled files (see counts above); untouched modules
+  (tasks/teams/models/git-repos/docs-site/notifications/message-channels) carry lint
+  errors too and were never modified by this plan.
+
+================================================================
+PER-END PASS/FAIL TABLE
+================================================================
+| end    | typecheck            | lint                              | tests                                   |
+|--------|----------------------|-----------------------------------|-----------------------------------------|
+| server | PASS (tsc exit 0)    | FAIL exit 1, 141 err / 49 warn — PRE-EXISTING (red at baseline) | FAIL exit 1, 34/1928 — ALL PRE-EXISTING (identical 34 at baseline) |
+| worker | PASS (tsc exit 0)    | n/a (no lint script)              | FAIL exit 1, 2/581 — ALL PRE-EXISTING (identical 2 at baseline)   |
+| web    | PASS (tsc exit 0)    | PASS exit 0, 0 err / 738 warn (pre-existing warnings) | n/a (no unit-test script; e2e not in scope) |
+
+================================================================
+INTRODUCED vs PRE-EXISTING CLASSIFICATION
+================================================================
+- Introduced by THIS plan: NONE. Every failure reproduces identically at 2fb188a.
+- Pre-existing (recorded, not fixed here): all of the above —
+  worker v1-driver.spec.ts listModels x2; server 7 suites x34 (incl.
+  workers.service.spec.ts dispatchGitCredentials x4 + replayGitCredentials x1);
+  server eslint prettier drift (141 errors, red at baseline; plan edits added
+  instances in workers.service.spec.ts + worker-dispatcher.ts, same drift family);
+  web eslint 738 warnings.
+- Escalation: server lint is red repo-wide (even at baseline) and blocks any
+  `npm run lint`-gated workflow since the lint script uses --fix semantics only for
+  fixing, exit 1 on errors. Recommend a dedicated prettier-format pass as separate
+  work (NOT done here per instructions). No product source was modified by this task.
