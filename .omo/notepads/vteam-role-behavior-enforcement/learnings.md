@@ -103,3 +103,9 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - server 全局 `ValidationPipe({whitelist:true})` 会剔除未声明字段，故 `WorkerCapabilitiesDto` 必须显式声明 `agentPolicies` 嵌套 DTO，否则注册时能力位被 strip、门永假。
 - `workerSupportsAgentPolicies` 判定式 `enabled===true && Array.isArray(names) && names.includes(agentName)`；`enabled:1`/names 非数组等残缺形状一律 false（stale-true 防护）。
 - 基线 `workers.service.spec.ts` 已有 5 处 git-credential dispatch 失败（与 Todo 14 无关，未动）；本次新增 7 用例全绿，无回归。
+
+## Todo 17 (2026-09-13): config discovery / --pure / glob base
+- opencode 1.18.30 (`~/.opencode/bin/opencode --version`); `worker/Dockerfile:30` OPENCODE_CLI_SPEC unpinned.
+- `isPureMode()` pure sources confirmed; guard-not-loaded warning was MISSING -> added blocking-level warn in `spawnServe()` + spec; 28/28 green, tsc exit 0.
+- Universal glob `**tasks/*/<subdir>/**` hits both worktree bases via node Wildcard.match replica; absolute globs never match relative inputs -> forbidden.
+- Live serve e2e left UNVERIFIED (no serve spawned); deferred to Todo 21.

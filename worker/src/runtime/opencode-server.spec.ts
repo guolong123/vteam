@@ -219,6 +219,21 @@ describe('OpencodeServer', () => {
     }
   });
 
+  it('OPENCODE_PURE=1 → spawn 带 --pure 且阻断级 guard 降级告警；非 pure 无告警', async () => {
+    const logger = makeLogger();
+    process.env.OPENCODE_PURE = '1';
+    await newServer({ port: 4199, logger }).start();
+    expect(mockedSpawn.mock.calls[0][1]).toContain('--pure');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('guard 未加载/降级'));
+
+    jest.clearAllMocks();
+    delete process.env.OPENCODE_PURE;
+    const logger2 = makeLogger();
+    await newServer({ port: 4199, logger: logger2 }).start();
+    expect(mockedSpawn.mock.calls[0][1]).not.toContain('--pure');
+    expect(logger2.warn).not.toHaveBeenCalledWith(expect.stringContaining('guard 未加载/降级'));
+  });
+
   it('OPENCODE_PURE 为 0/false/no/未设 → 不带 --pure（只有显式真值才切纯净）', async () => {
     for (const falsy of ['0', 'false', 'no', 'off', 'n']) {
       jest.clearAllMocks();
