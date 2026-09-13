@@ -5,6 +5,39 @@
 > 关联：`.omo/plans/vteam-agent-strengthening.md` Wave3 T7  
 > 决策影响：决定 Wave4 A2 单通道形态（`ExecutionConfig → opencode`）
 
+## 0. 通道①已落地（2026-09-13，分层角色强制）
+
+本节记录通道①选型后的实际落地形态；§2 原选型结论保持为历史依据，不再复核。
+
+- **层①（主）opencode 原生 `permission`**：`edit` 为 edit/write/apply_patch 的唯一原生写闸门（无 `write` 键），路径 glob 做文件写约束；`permission.read` glob 约束读取。glob 用通用根无关形式 `**tasks/*/<subdir>/**`（两种 worktree 基址均命中：非 git `worktree="/"` 与 git `worktree=<WORK_DIR>`；绝对路径 glob 无效，禁用）。配置发现：`<workDir>/tasks/<id>` 无自有 `opencode.json` 时向上查找到 `<workDir>/opencode.json` 的 agent 节（worker injector 单写者写入）。
+- **opencode 版本**：实测 **1.18.30**；`worker/Dockerfile:30` 为未锁定的 `OPENCODE_CLI_SPEC`（`opencode-ai`，复现时用 `--build-arg OPENCODE_CLI_SPEC=opencode-ai@<ver>` 锁定）。
+- **全角色 `permission.task:"deny"`**：所有角色（含 `vteam-plan`）禁用子代理；运行时 task 调用经 `Permission.ask` 被拒绝（非工具隐藏）；不依赖子代理权限继承。
+- **层②（辅）guard 插件**：worker 注入 `vteam-role-guard`（`tool.execute.before`，opencode.json `plugin` 数组显式注册 `<workDir>/.opencode/plugin/vteam-role-guard.ts`），策略源 `.vteam-role-guard/roles.json`（`{enabled, roles}`）+ `.vteam-role-guard/sessions/<sessionID>.json`（`{agent, dir}`）。分支优先级：`roles.json` 缺失/`enabled!==true`/解析失败 → pass-through + 告警；session 未映射/agent 未知 → pass-through + 告警；角色条目残缺 → fail-closed；read 类交层①；edit 类按 writeGlobs；bash 仅按硬化清单；`task`/`execute` deny；其余未知/自定义/MCP 按 `tools` allowlist（未列出即 deny）；deny 回传纠正文案。`enabled` 为 sentinel：失败中性化时 injector 主动写 `roles.json{enabled:false}` 并移除插件文件与 `plugin` 条目，再置能力位假，杜绝残留 enabled guard 造成全平台 fail-closed。
+- **真实工具名**：MCP 工具一律 `vteam_<action>`（前缀取自注册的 MCP server 名 `vteam`）；自定义 git 工具为 `git_<action>`（独立命名空间，不带 `vteam_` 前缀）；`execute`/`task` 永不列入 allowlist。
+- **策略来源**：seed 5 条角色 `ExecutionPolicy`（`ep_product`/`ep_project_manager`/`ep_architect`/`ep_developer`/`ep_tester`，`type:'template'`，`config={permission, correction}`）+ 模板 Agent `policyId` 绑定（create/update，clone 继承）；`GET /agent-policies` 下发 opencode agent 定义（`vteam-plan` + 5 `vteam-<role>`）与 guard `{enabled, roles}`；dispatch 仅当能力位 `enabled && names.includes(agent)` 真时选用策略 agent，否则回退现状。
+
+### 0.1 Degradation states
+
+| 状态 | 层① 原生 permission | 层② guard |
+|---|---|---|
+| 正常（非 pure + guard 注入成功 + `roles.json.enabled=true` + session 已映射且角色条目完整） | 生效 | 生效（分支优先级见 §0） |
+| `--pure`（OPENCODE_PURE=1 或 OmO 关闭） | 仍生效（仅原生 edit/write 类） | 插件不加载：bash 绕过/自定义工具无守卫、无纠正；worker 阻断级告警 |
+| guard 加载但 `roles.json` 缺失或 `enabled!==true` | 生效 | pass-through + 告警 |
+| guard 加载、enabled、但 session 未映射或 agentName 不在 roles | 生效 | pass-through + 告警（非角色会话，避免误伤默认 agent） |
+| guard 加载、enabled、session 已映射但角色条目残缺 | 生效 | fail-closed：危险 bash、写类、`task`、`execute`、allowlist 外工具 deny + 纠正 |
+| `/agent-policies` 拉取失败或角色集为空 | 生效（旧 agent 节，但 server 不再选策略 agent） | 主动中性化：写 `roles.json{enabled:false}` + 移除插件文件与 `plugin` 条目 + 能力位置假 + 告警 |
+| worker 能力位假（未注入成功） | server 不下发策略 agent → 无角色强制（回退现状） | 按上一条已中性化 |
+
+### 0.2 回滚（回到无角色强制现状）
+
+1. 模板/custom agent 解绑 `policyId`（显式清空；重跑旧 seed 会重新加回，故须显式解绑）。
+2. 删除 `<workDir>/opencode.json` 的 injector 托管 agent 节（manifest `agentNames` 键，用户手写键保留）。
+3. 删除 `.vteam-role-guard/`（`roles.json` + `sessions/`）。
+4. 删除 guard 插件文件 + 移除 `opencode.json` 的 `plugin` 条目。
+5. 重启 worker；验证 `GET /agents?directory=<taskDir>` 不再列出 `vteam-*` 且能力位 `agentPolicies.enabled=false`。
+
+证据：`.omo/evidence/role-enforcement/config-discovery-pure-version.md`、`guard-plugin-spike.md`、`glob-base-spike.md`。
+
 ## 1. 背景与目标
 
 vteam 当前 `worker/src/runtime/opencode-server.ts:288` 以 `opencode serve --pure` 启动，`worker/src/driver/v1-driver.ts:200` 的 `createSession({})` 不携带任何 agent/permission 配置。B 线已完成服务端规则（plan quality guard、评审清单、驳回上限），A 线需将服务端为唯一规则源的 `ExecutionPolicy → ExecutionConfig` 下发给 worker 并盲翻成 opencode 可生效形态。

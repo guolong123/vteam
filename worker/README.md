@@ -67,7 +67,7 @@ npm run dev            # tsx src/index.ts
 | `WORKER_ID` | 否 | `w_<hostname>` | worker 唯一 id |
 | `WORKER_NAME` | 否 | `<hostname>` | worker 可读名称 |
 | `OPENCODE_SERVE_PORT` | 否 | `0` | opencode serve 端口；`0` = OS 随机空闲端口（占用则 +1 重试） |
-| `OPENCODE_SERVE_PASSWORD` | 否 | 空 | opencode serve 认证密码（Basic Auth username=opencode）；空 = 不设鉴权 |
+| `OPENCODE_SERVER_PASSWORD` | 否 | 空 | opencode serve 认证密码（Basic Auth username=opencode）；空 = 不设鉴权 |
 | `HEARTBEAT_INTERVAL_MS` | 否 | `10000` | 心跳间隔 ms（server 30s = 3 周期判 offline） |
 | `LOG_LEVEL` | 否 | `info` | 日志级别 |
 | `WORK_DIR` | 否 | `/data/vteam-worker` | opencode serve 工作目录（工具注入落点） |
