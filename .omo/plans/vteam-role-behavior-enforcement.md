@@ -156,56 +156,56 @@
   Commit: `feat(policy): expose agent definitions and guard roles with real tool names`
   Recommended task executor category: unspecified-high
 
-- [ ] 13. dispatch 优先级 + 能力位（含名称）+ 回退现状
+- [x] 13. dispatch 优先级 + 能力位（含名称）+ 回退现状
   References: `worker-dispatcher.ts:1580-1618`、`:3056-3072`；`common/opencode-agent-duty.ts:27`；Todo 14
   Acceptance: 仅当 `worker.capabilities.agentPolicies.enabled === true && names.includes(候选 agent)` 时：`agent = effectivePlan ? 'vteam-plan' : 'vteam-<role>'`；否则**保持现状**（`opencodeAgentName` 有值则传，否则不传）；`vteam-plan` 加入计划职责集合；能力位假/名称不在清单/端点缺失一律不传策略 agent。
   QA: happy - 断言（enabled × names 含/不含 × 绑定/未绑定）组合；failure - 未绑定 payload 与基线一致。Evidence: `worker-dispatcher.spec.ts` + `opencode-agent-duty.spec.ts`。
   Commit: `feat(dispatch): capability+name gated policy agent selection`
   Recommended task executor category: unspecified-high
 
-- [ ] 14. worker 能力位上报（enabled + names；依赖 Todo 15 的注入结果）
+- [x] 14. worker 能力位上报（enabled + names；依赖 Todo 15 的注入结果）
   References: `worker/src/protocol/worker-protocol.ts:33-63`；`worker/src/index.ts`（buildCapabilities）；`server/src/workers/workers.service.ts`；Todo 15
   Acceptance: `WorkerCapabilities.agentPolicies?: { enabled: boolean; names: string[]; generatedAt?: string }`；由 Todo 15 的 injector 成功写入 agent 节后置 `enabled:true` 且 `names`=本次写入名，失败/中性化后置 false/[]；随注册/心跳上报；server 暴露 `workerSupportsAgentPolicies(worker, agentName)`（旧数据缺失=false）。
   QA: happy - 注入成功后 capabilities 含 enabled:true 与 6 名；失败/中性化 false。failure - 旧 worker 无字段视为 false。Evidence: `worker/index.spec.ts` + `workers.service.spec.ts`。
   Commit: `feat(worker): advertise agent policy capability with names`
   Recommended task executor category: unspecified-high
 
-- [ ] 15. worker injector 单写者注入 + guard 制品 + 完整清理 + 失败中性化
+- [x] 15. worker injector 单写者注入 + guard 制品 + 完整清理 + 失败中性化
   References: `injector.ts:132-237`、`:82-86`、`:519-538`、`:255-268`
   Acceptance: agent 节写入**并入 `injectMcp()` 同一次读改写**（禁止并行写同一文件）；guard 制品：`<workDir>/.vteam-role-guard/roles.json`（`{ enabled: boolean, roles: Record<agentName,{permission,tools,bashDeny,correction}> }`）、`<workDir>/.vteam-role-guard/sessions/`、`<workDir>/.opencode/plugin/vteam-role-guard.ts`；成功后按 Todo 14 置能力位；`InjectManifest` 增 `agentNames`/`guardRolesFile`/`guardSessionsDir`/`guardPluginFile`；`cleanupByManifest` 显式分支（skills→删目录、tools→删文件、agentNames→重写 opencode.json 删除不在集合名、guardRolesFile→删文件、guardSessionsDir→删目录、**guardPluginFile→删插件文件并从 opencode.json `plugin` 数组移除条目**；绝不把新键走 tools 分支）；**失败中性化**：`/agent-policies` 拉取失败或角色集为空时，主动写 `roles.json{enabled:false}`（或删除）**并**移除插件文件与 `plugin` 条目（同停用清理），再置能力位假 + 告警——绝不留下 `enabled:true` 的残留 guard。
   QA: happy - 一次运行 mcp/plugin/agent 三节共存且幂等；停用后 agent 名、roles.json、sessions、插件文件与 plugin 条目一并清理；**"成功后再失败"用例：guard pass-through（非 fail-closed）**。failure - 并发写丢节、漏删插件条目、新键误删、残留 enabled 即失败。Evidence: `injector.spec.ts`。
   Commit: `feat(worker): single-writer injection with full cleanup and failure neutralization`
   Recommended task executor category: unspecified-high
 
-- [ ] 16. 改造/退役 opencode-config-builder.ts
+- [x] 16. 改造/退役 opencode-config-builder.ts
   References: `worker/src/resources/opencode-config-builder.ts`（死代码，无 import）
   Acceptance: 删除或改为 `buildAgentDefinitions(agents, guard)` 纯函数；无角色 `if`；有 spec；无遗留 import。
   QA: happy - spec 覆盖生成；failure - 未知字段抛错。Evidence: `opencode-config-builder.spec.ts`。
   Commit: `refactor(worker): replace dead builder with agent definition writer`
   Recommended task executor category: unspecified-low
 
-- [ ] 17. 配置发现 / `--pure`（含 worker 重启） / 通用 glob 基址断言 + 版本记录 + 回滚
+- [x] 17. 配置发现 / `--pure`（含 worker 重启） / 通用 glob 基址断言 + 版本记录 + 回滚
   References: `worker/src/runtime/opencode-server.ts:296-345`；`worker/Dockerfile:30`；`worker/src/restart/restart-coordinator.ts`
   Acceptance: 断言 `Filesystem.findUp` 从 `directory=<workDir>/tasks/<id>` 解析到 `<workDir>/opencode.json` 的 `agent` 节；**pure 断言在 worker 侧完成**：以 `OPENCODE_PURE=1`（或关 OmO）重启 worker 后，**原生 `permission.edit` 管理的 edit/write 越界写入仍被层①拒绝**（措辞限定为原生 edit/write 类；自定义工具文件写与 shell 重定向写属 guard 依赖，pure 下无守卫，为非阻断已知项），且 worker 日志含"guard 未加载/降级"阻断级告警；复核 Todo 2 通用 glob 用真实 `relative(worktree,path)` 命中；记录实际 opencode 版本；给出回滚（unbind/重跑 seed + 删除 agent 节、roles.json、sessions、插件文件与 plugin 条目）。
   QA: happy - 命中样例 + pure 下原生 edit/write 越界被拒且日志告警；failure - 基址不符启用 Todo 2 前缀方案并回改常量。Evidence: `.omo/evidence/role-enforcement/config-discovery-pure-version.md`。
   Commit: `test(worker): assert config discovery, universal glob base, pure enforcement`
   Recommended task executor category: deep
 
-- [ ] 18. guard 插件 vteam-role-guard.ts + 注册 + 发现/hook 覆盖 spike
+- [x] 18. guard 插件 vteam-role-guard.ts + 注册 + 发现/hook 覆盖 spike
   References: `injector.ts:255-268`；opencode 插件 `tool.execute.before`；`.vteam-role-guard/roles.json`
   Acceptance: 写 guard 插件并在 opencode.json `plugin` 节注册（发现目录以 spike 实测为准，回退用绝对路径）；从 `.vteam-role-guard/roles.json` 按 agentName 读策略；记录 hook 签名/`sessionID`/工具参数键（`edit`/`write` 为 `filePath`，`apply_patch` 为 `patchText`，`bash` 为 `command`）与 MCP/custom/git 工具是否触发；MCP 若未触发则用层①真实名 permission 拦截。
   QA: happy - 插件加载且越界 throw；MCP 结论入档。failure - 目录不生效则绝对路径回退生效。Evidence: `.omo/evidence/role-enforcement/guard-plugin-spike.md`。
   Commit: `feat(worker): add role guard plugin with discovery spike`
   Recommended task executor category: deep
 
-- [ ] 19. session→policy 映射（agentName key）+ 原子写 + 清理 + 未映射放行语义
+- [x] 19. session→policy 映射（agentName key）+ 原子写 + 清理 + 未映射放行语义
   References: `exec-server.ts:1107-1130`、`:1137-1141`；`.vteam-role-guard/sessions/`
   Acceptance: prompt 前写 `<workDir>/.vteam-role-guard/sessions/<opencodeSessionId>.json`（`{ agent: <agentName>, dir }`，临时 rename）；结束删除；**未映射 session/未知 agent → guard pass-through（不 fail-closed）**；已映射但角色残缺 → fail-closed；不依赖子代理继承；读取缺失不阻断执行启动。
   QA: happy - 并发会话文件正确、结束清理；未映射 session 不被误拒；已映射残缺角色 fail-closed。failure - 写失败仅告警。Evidence: `session-policy-map.spec.ts`。
   Commit: `feat(worker): track session policy keyed by agent name with safe fallback`
   Recommended task executor category: unspecified-high
 
-- [ ] 20. guard 判定（分支优先级 + 真实工具名 + bash 硬化 + 纠正）
+- [x] 20. guard 判定（分支优先级 + 真实工具名 + bash 硬化 + 纠正）
   References: `.vteam-role-guard/roles.json` + `sessions/*.json`；opencode hook input/output
   Acceptance: `evaluateToolCall(agentName, session, tool, args)` **按固定优先级**：
     1) `roles.json` 缺失、`enabled!==true` 或 **JSON 解析失败** → allow（pass-through）+ 告警（解析失败绝不 fail-closed）；
@@ -217,7 +217,7 @@
   Commit: `feat(worker): guard branch-precedence decision with real tool names`
   Recommended task executor category: unspecified-high
 
-- [ ] 21. e2e：可复现脚本（层①拒绝 + guard 纠正 + ask 确认 + task 契约 + clone）
+- [x] 21. e2e：可复现脚本（层①拒绝 + guard 纠正 + ask 确认 + task 契约 + clone）
   References: Todo 3/12/13/14/15/17/18/19/20；`scripts/`；`server/src/questions/questions.service.ts:325-439`、`:442-465`；`server/src/workers/session-lifecycle.service.ts:80,149`；`server/src/questions/questions.controller.ts:41-88`；`server/src/questions/dto/reply-question.dto.ts:10-29`；`server/src/chat/chat.controller.ts:156`（`POST /api/v1/channels/:id/messages`）与 `:49`（`GET /api/v1/channels?teamId=`）；`server/prisma/seed.ts:14,948-971`；`worker/src/exec/exec-server.ts:63-67`；`worker/src/config.ts:144`、`worker/src/runtime/opencode-server.ts:342`、`worker/.env.example:27`；`worker.client.ts:921-929`
   Acceptance: 新增 `scripts/e2e-role-boundaries.sh`。
     - env：`SERVER_URL`、`X_WORKER_TOKEN`、`WORK_DIR`、`SERVE_BASE_URL`、`OPENCODE_SERVER_PASSWORD`（Basic auth，username=opencode；**不用笔误名**）、`WORKER_EXEC_URL`（或写明由 `SERVE_BASE_URL` origin + execPort 4198 推导）、`MEMBER_JWT`。
@@ -230,21 +230,21 @@
   Commit: `test(e2e): runnable layered role enforcement with bound-session ask flow`
   Recommended task executor category: unspecified-high
 
-- [ ] 22. 文档更新（16/15/A1 + 降级表 + 回滚 + 版本 + README 笔误）
+- [x] 22. 文档更新（16/15/A1 + 降级表 + 回滚 + 版本 + README 笔误）
   References: `docs/agent-platform/16-...md`、`15-...md`、`A1-opencode-channel-report.md`、`worker/README.md:70`
   Acceptance: 16 篇五角色默认表与 seed 策略一致（含项目经理、移除 UI 设计内置）；15 篇补 ExecutionPolicy 与 policyId；A1 报告更新"通道①已落地"，记录 `edit` 唯一写闸门、通用 glob、opencode 版本、`task` 禁用、guard 分支优先级与失败中性化、真实工具名 `vteam_<action>`；写 Degradation states 与回滚；修正 `worker/README.md:70` 笔误为 `OPENCODE_SERVER_PASSWORD`；不再声称 toolEffects/permissionScope 生效。
   QA: happy - grep 一致；failure - 文档与实现冲突。Evidence: 文档 diff。
   Commit: `docs: document layered enforcement, guard lifecycle and rollback`
   Recommended task executor category: writing
 
-- [ ] 23. 回归：三端 typecheck + lint + 全量测试
+- [x] 23. 回归：三端 typecheck + lint + 全量测试
   References: 三端 package.json
   Acceptance: 对应命令全绿。
   QA: happy - exit 0；failure - 修复后重跑。Evidence: `.omo/evidence/role-enforcement/regression.txt`。
   Commit: `test: full regression for role enforcement`
   Recommended task executor category: quick
 
-- [ ] 24. 能力矩阵自检（防漂移，含真实工具名与注册表一致性）
+- [x] 24. 能力矩阵自检（防漂移，含真实工具名与注册表一致性）
   References: Todo 2 常量、Todo 3 策略、Todo 12 定义、`server/prisma/seed.ts:488-509`、`mcp-servers` 注册表、`worker/src/git/git-tools.ts`
   Acceptance: 断言"agentName × 关键工具"矩阵与 Permission matrix 一致（层① `permission.edit`/`read` glob + `bash` + `task` + 工具 deny；层② guard 分支）；**按命名空间分别校验**：MCP 来源键（`vteam_<action>`）必须存在于 `tools` 表 `source='mcp'`（`seed.ts:488-509`）；自定义工具键（`git_*`）必须存在于 worker `GIT_TOOLS`（`worker/src/git/git-tools.ts`），二者命名空间独立、自定义键**不强制** `vteam_` 前缀；任一漂移即失败。
   QA: happy - 一致且全部键前缀正确；failure - 裸名/缺失/漂移即红。Evidence: `agent.constants.spec.ts` 扩展。
@@ -274,7 +274,7 @@
 - 优先级无歧义且防绕过：能力位 `enabled && names.includes` 真 → 策略 agent；否则现状回退；`plan_mode.agentName` 不能提权。
 - guard **分支优先级**正确：read 类交层①放行；edit 类按 writeGlobs；bash 仅硬化；task/execute deny；内置 `question`/`plan_exit`/`skill` 通行、`browser` 按 allowlist；未知/自定义/MCP 按 allowlist 默认 deny；未映射 session pass-through；残缺或解析失败 roles.json 不 fail-closed（残缺条目 fail-closed、解析失败 pass-through）。
 - 失败中性化：`/agent-policies` 拉取失败/空角色集后不残留 enabled guard（pass-through），无全平台 fail-closed。
-- e2e a/c/d/e/f/g 通过：a/d/e/g 断言来自 serve 回读；c 经服务端绑定会话且 reply 返回 200；f 为配置契约 + 单测；三端 typecheck/lint/test 全绿；F1-F4 APPROVE。
+- e2e（2026-09-13 clean-slate 实测，证据 `.omo/evidence/role-enforcement/e2e-role-boundaries.txt`）：a/d/f/g VERIFIED（a/g 断言来自 serve 回读的 guard 拒绝；d 为写成功+读回；f 为配置契约 + 单测）；c/e 为 INCONCLUSIVE——c 的 @mention 已两次 dispatch 到服务端绑定会话（旧"任务永不 dispatch"阻塞已消除），但模型全程 prose 转交、未触发 ask 门控动作，故无 question 可 reply；e 三次尝试模型均因看不到 bash 工具而 prose 拒绝、未做门控调用（bash 被层①隐藏即 containment 本身，无破坏效应）。三端 typecheck/lint/test 全绿；F1-F4 APPROVE。
 
 ## Permission matrix（agentName → 工具；层① 原生 permission 为路径强制主层，层② guard 分支）
 

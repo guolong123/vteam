@@ -1,0 +1,76 @@
+seed evidence — clean-slate run (Todo 3, F-A fix)
+Date: 2026-09-13 (UTC)   Operator: Sisyphus-Junior
+Stack: fresh `docker compose down -v && docker compose up -d --build` 2026-09-13T09:56:52Z
+Init logs: "All migrations have been successfully applied." + Seed list:
+  角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester（type=template）
+  模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)（type=template）
+
+================================================================
+Q1. 5 execution_policies rows (id/name/type)
+SQL: docker compose exec db mysql --default-character-set=utf8mb4 -uroot -paiagents-root aiagents -e "SELECT id, name, type FROM execution_policies ORDER BY id;"
+---- raw output ----
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	name	type
+ep_architect	架构师	template
+ep_developer	开发者	template
+ep_product	产品经理	template
+ep_project_manager	项目经理	template
+ep_tester	测试	template
+
+================================================================
+Q2. nested {permission, correction} + permission.task=deny per policy
+SQL: docker compose exec db mysql --default-character-set=utf8mb4 -uroot -paiagents-root aiagents -e "SELECT id, JSON_KEYS(config) AS topkeys, JSON_KEYS(config->'$.permission') AS permkeys, config->'$.permission.task' AS taskval, LEFT(config->'$.correction',80) AS correction_head FROM execution_policies ORDER BY id;"
+---- raw output ----
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	topkeys	permkeys	taskval	correction_head
+ep_architect	["correction", "permission"]	["bash", "edit", "read", "task", "vteam_plan_mode", "vteam_wecom_reply", "vteam_channel_send", "vteam_issue_create", "vteam_issue_update", "vteam_task_transition", "vteam_team_add_member", "vteam_issue_transition", "vteam_question_confirm"]	"deny"	{"handoff": {"code": "vteam-developer", "test": "vteam-tester", "process": "vtea
+ep_developer	["correction", "permission"]	["bash", "edit", "read", "task", "vteam_doclib", "vteam_plan_mode", "vteam_wecom_reply", "vteam_channel_send", "vteam_issue_create", "vteam_task_transition", "vteam_team_add_member", "vteam_question_confirm"]	"deny"	{"handoff": {"test": "vteam-tester", "design": "vteam-architect", "process": "vt
+ep_product	["correction", "permission"]	["bash", "edit", "read", "task", "vteam_plan_mode", "vteam_wecom_reply", "vteam_channel_send", "vteam_task_transition", "vteam_team_add_member", "vteam_question_confirm"]	"deny"	{"handoff": {"code": "vteam-developer", "test": "vteam-tester", "design": "vteam
+ep_project_manager	["correction", "permission"]	["bash", "edit", "read", "task", "vteam_plan_mode", "vteam_wecom_reply", "vteam_channel_send", "vteam_chat_history", "vteam_submit_artifact", "vteam_task_transition", "vteam_team_add_member", "vteam_question_confirm"]	"deny"	{"handoff": {"code": "vteam-developer", "test": "vteam-tester", "design": "vteam
+ep_tester	["correction", "permission"]	["bash", "edit", "read", "task", "vteam_plan_mode", "vteam_wecom_reply", "vteam_channel_send", "vteam_issue_update", "vteam_task_transition", "vteam_team_add_member", "vteam_question_confirm"]	"deny"	{"handoff": {"code": "vteam-developer", "design": "vteam-architect", "process":
+(topkeys=["correction","permission"] on all 5 = nested {permission, correction} structure proven; taskval="deny" on all 5.)
+
+================================================================
+Q3. full config of ep_product (representative; all 5 share the same shape, see Q2)
+SQL: docker compose exec db mysql --default-character-set=utf8mb4 -uroot -paiagents-root aiagents -e "SELECT id, config FROM execution_policies WHERE id='ep_product'\G"
+---- raw output ----
+mysql: [Warning] Using a password on the command line interface can be insecure.
+*************************** 1. row ***************************
+    id: ep_product
+config: {"correction": {"handoff": {"code": "vteam-developer", "test": "vteam-tester", "design": "vteam-architect", "process": "vteam-project_manager"}, "denyTemplate": "【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。", "scopeSummary": "需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。"}, "permission": {"bash": "deny", "edit": {"*": "deny", "**tasks/*/docs/**": "allow", "**tasks/*/prototypes/**": "allow"}, "read": {"*": "allow"}, "task": "deny", "vteam_plan_mode": "deny", "vteam_wecom_reply": "deny", "vteam_channel_send": "deny", "vteam_task_transition": "deny", "vteam_team_add_member": "deny", "vteam_question_confirm": "deny"}}
+
+================================================================
+Q4. 5 template agents' policy_id bindings
+SQL: docker compose exec db mysql --default-character-set=utf8mb4 -uroot -paiagents-root aiagents -e "SELECT id, name, role, type, policy_id FROM agents WHERE type='template' ORDER BY id;"
+---- raw output ----
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	name	role	type	policy_id
+a_architect	架构师	architect	template	ep_architect
+a_developer	开发者	developer	template	ep_developer
+a_product	产品经理	product	template	ep_product
+a_project_manager	项目经理	project_manager	template	ep_project_manager
+a_tester	测试	tester	template	ep_tester
+
+================================================================
+Q5. no legacy `write` key in any policy config
+SQL: docker compose exec db mysql --default-character-set=utf8mb4 -uroot -paiagents-root aiagents -e "SELECT id, config LIKE '%\"write\"%' AS has_write_key FROM execution_policies;"
+---- raw output ----
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	has_write_key
+ep_architect	0
+ep_developer	0
+ep_product	0
+ep_project_manager	0
+ep_tester	0
+
+================================================================
+Q6. counts
+SQL: docker compose exec db mysql --default-character-set=utf8mb4 -uroot -paiagents-root aiagents -e "SELECT COUNT(*) AS policy_count FROM execution_policies WHERE type='template'; SELECT COUNT(*) AS bound_templates FROM agents WHERE type='template' AND policy_id IS NOT NULL;"
+---- raw output ----
+mysql: [Warning] Using a password on the command line interface can be insecure.
+policy_count
+5
+bound_templates
+5
+
+Verdict: F-A RESOLVED — 5 execution_policies (ep_product/ep_project_manager/ep_architect/ep_developer/ep_tester, type=template, nested {permission, correction}, task=deny, no write key) + 5 template agents bound via policy_id, from a fresh DB.

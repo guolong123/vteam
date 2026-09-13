@@ -258,3 +258,10 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - Lint baseline spot-check: `git show 2fb188a:<file> | npx eslint --stdin --stdin-filename <file>`
   proves prettier drift predates the plan (agents.service.ts 9=9; workers.service.ts 1=1).
 - Evidence: `.omo/evidence/role-enforcement/regression.txt` (commands + tails + table + classification).
+
+## 2026-09-13 clean-slate e2e (F1 REJECT fix, F-A/F-B)
+- `docker compose down -v && up -d --build` → all Created 09:56:52Z, init migrate+seed OK; seed-db.txt re-captured (5 policies + 5 bindings + no-write-key + counts).
+- Serve free-model behavior is sampling-dependent: same PM-bash prompt yielded guard-denial once (prior stack) vs 3× prose-decline (clean run, big-pickle). INCONCLUSIVE ≠ broken — containment (bash hidden layer-1, marker absent) verified separately.
+- (c) ask flow: clean DB task is team currentTask + pending → @mention dispatches to bound session (prior queued-blocker gone). But architect prose-handles + tester has no team session → no question. To fully verify (c), tester needs a live team session first.
+- Script `jget` pending-question extractor crashes on empty-list `[]` responses (`d.get` on list) — manual poll used null-safe variant; script fix deferred (script exited before (c) in clean run anyway).
+- (d) script ~10s `hello-e2e` match hits prompt echo; genuine allow proof = completed write + readback + file on disk (same raw file, re-fetched full set).
