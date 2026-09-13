@@ -209,3 +209,22 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   script auto-logins seed-admin (team owner) for MEMBER_JWT; (3) compose publishes serve 4000→host 14000
   but NOT worker exec 4198 → WORKER_EXEC_URL needs an in-network host/forwarder; (4) no DELETE /tasks/:id
   exists — probe task t_0000000003 left queued (archive → 409); (5) mention target 测试-1 = a_tester instance.
+
+## Todo 21 — e2e live run PARTIAL (2026-09-13, images rebuilt, a/d/e/f VERIFIED, c/g INCONCLUSIVE)
+
+- Deploy: `docker compose build server worker init` + `up -d --force-recreate server worker` (init auto-seed: 5 ExecutionPolicy rows).
+  server Created 2026-09-13T08:04:03Z (dc28efad, was 276f7452), worker 08:04:14Z (62d8faa4, was f53a6d28).
+  /agent-policies → 200, 6 agents all task=deny; opencode.json agent×6 task=deny; roles.json enabled/6 roles; serve 22 agents incl. 6 vteam-*.
+- Script bugs fixed (test tooling only): (F1) bash<4.4 empty-array+set -u abort → serve_curl(); (F2) worker_execute sys.argv[1:7]→[1:8] (prompt dropped → worker 400);
+  (F3) PM agent name `vteam-project-manager`→`vteam-project_manager` (nonexistent agent ⇒ serve 204-accepts but never runs, cost=0/tokens=0, 3 silent stalls);
+  (F4) (d) poll `text|part|…` matched prompt-echo envelope vacuously (PASS with model never run) → poll literal `hello-e2e` + explicit in-scope path
+  tasks/$TASK_ID/src/e2e-ok.txt (direct-serve sessions keep global cwd, ignoring taskDir; developer allow is `**tasks/*/**` only).
+- Results: (a) VERIFIED — product write denied verbatim 【越界拦截｜vteam-product】, model handed off via vteam_notify_agent, dispatcher ran developer
+  fulfillment (in-scope write, legitimate); (d) VERIFIED — developer write completed + readback hello-e2e (bonus: developer bash-with-`>` denied);
+  (e) VERIFIED — PM bash hidden by layer① (tool `invalid`: "unavailable tool 'bash'") + layer② guard correction on `invalid`, marker absent;
+  (f) VERIFIED — 6/6 task=deny both sides, no `write` key; (g) INCONCLUSIVE — 180s of reads only, no gated attempt (clone a_0000000001 inherits
+  policyId=ep_product server-side; same enforcement path as (a)); (c) INCONCLUSIVE — queued task never dispatched, zero questions in 180s.
+- Methods lessons: (1) serve POST /session + /execute accept unknown agent names with 204/202 yet never run — always check cost/tokens>0;
+  (2) model satisficing (glob finds other tasks' files from global cwd) and model no-attempts are the dominant INCONCLUSIVE sources, not enforcement;
+  (3) cross-task file leakage breaks (a) isolation — clean task dirs between runs; (4) no DELETE /tasks/:id — QA tasks t_0000000004-8 left queued.
+- Evidence: `.omo/evidence/role-enforcement/e2e-role-boundaries.txt` + `e2e-20260913-raw/` (24 files: serve JSONs, run logs, payloads).

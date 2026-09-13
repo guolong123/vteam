@@ -1,0 +1,7 @@
+[e2e] SERVER_URL=http://localhost:13000 TEAM_ID=tm_0000000001 WORKER_EXEC_URL=http://127.0.0.1:14198
+[e2e] login seed-admin ...
+[e2e] login seed-admin as MEMBER_JWT (team owner; seed-member is not in tm_0000000001) ...
+[e2e] taskId=t_0000000007 taskDir=/data/vteam-worker/tasks/t_0000000007
+[e2e] --- scenario (a): product edits server/src/foo.ts (out of scope) ---
+[e2e] scenario=a sid=ses_f66299559ffeahLPMvClyPOvpU
+[e2e] INCONCLUSIVE scenario=a reason=poll timeout 180s without match /【越界拦截|[Dd]eny|[Dd]enied|not allowed|拒绝/ (raw: /tmp/vteam-e2e-raw/serve-msg-a.json)
