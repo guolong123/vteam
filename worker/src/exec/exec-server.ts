@@ -52,7 +52,7 @@ import {
   writeOmoAgents,
 } from '../resources/omo-config';
 import { WORKER_EVENT_TYPES } from '../protocol/worker-protocol';
-import { removeSessionPolicy, writeSessionPolicy } from '../role-guard/session-policy-map';
+import { pruneStaleSessionPolicies, readSessionPolicy, removeSessionPolicy, writeSessionPolicy } from '../role-guard/session-policy-map';
 import { collectFileArtifacts } from './artifact-extract';
 
 export interface ExecutionConfig {
@@ -1110,9 +1110,12 @@ export class ExecServer {
     let opencodeSessionId = payload.sessionId ?? '';
     // Todo 19：session→policy 映射追踪（guard 插件按 opencode session id 查角色名；
     // 未映射会话 guard pass-through）。写/删失败只记 warn，永不阻断执行。
+    // 复用会话（reuseSession 默认 true，同一 ses_ id 跨任务/跨角色复用）下本映射
+    // 必须是"当前正在执行的 agent"权威：先读后写，落盘 agent 与本 payload 不一致
+    // 即重写，杜绝过期文件误标（如 architect 执行被标 vteam-product）。
     const mappedSessionIds: string[] = [];
     const trackGuardSession = async (sessionId: string): Promise<void> => {
-      if (!sessionId || mappedSessionIds.includes(sessionId)) {
+      if (!sessionId) {
         return;
       }
       const agent = payload.agent ?? '';
@@ -1125,8 +1128,16 @@ export class ExecServer {
         return;
       }
       try {
-        await writeSessionPolicy(root, sessionId, { agent, dir: payload.directory ?? '' });
-        mappedSessionIds.push(sessionId);
+        // 过期残留先清（worker 重启/崩溃孤儿文件；best-effort，不阻断）。
+        await pruneStaleSessionPolicies(root);
+        const current = await readSessionPolicy(root, sessionId);
+        if (!current || current.agent !== agent) {
+          // 缺失/损坏/角色不一致 → （重）写为当前执行的 agent（后写者权威）。
+          await writeSessionPolicy(root, sessionId, { agent, dir: payload.directory ?? '' });
+        }
+        if (!mappedSessionIds.includes(sessionId)) {
+          mappedSessionIds.push(sessionId);
+        }
       } catch (err) {
         this.logger.warn(
           `[exec] session policy 写入失败（不阻断执行）: ${err instanceof Error ? err.message : String(err)}`,
@@ -1138,8 +1149,17 @@ export class ExecServer {
       if (!root) {
         return;
       }
+      const ownAgent = payload.agent ?? '';
       for (const sessionId of mappedSessionIds.splice(0)) {
         try {
+          // 仅删仍属于本执行的映射：复用会话被并发的另一角色重写后，不删别人的
+          // 映射（误删会让对方执行中途回到未映射；残留由 TTL 清理兜底）。
+          if (ownAgent.startsWith('vteam-')) {
+            const current = await readSessionPolicy(root, sessionId);
+            if (current && current.agent !== ownAgent) {
+              continue;
+            }
+          }
           await removeSessionPolicy(root, sessionId);
         } catch (err) {
           this.logger.warn(

@@ -272,3 +272,25 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - PM keeps NO vteam_submit_artifact (plan intent: PM 不产出交付物); prompt 禁止 line now explicit "不产出具体交付物（无 vteam_submit_artifact 能力）" with real vteam_ prefix (bare submit_artifact would trip seed.spec no-bare-name rule `(?<!vteam_)\b<bare>\b`).
 - No prompt mentions permissionScope/toolEffects as enforcement (only layer① permission.edit/bash references, which ARE the enforced source); agent.constants.ts untouched (no value change needed, ROLE_BASH_DENY_PATTERNS unchanged).
 - seed.spec.ts needed NO changes: four-direction + 转交/vteam_notify_agent + banned-words + bare-name assertions all still green (22/22 with constants spec); tsc exit 0.
+# learnings
+
+## 2026-09-13 guard role-label mismatch（architect 执行被标 vteam-product）
+- 根因（已证实，非推测）：`worker/src/exec/exec-server.ts` `trackGuardSession`
+  对缺失/非 `vteam-` 前缀的 `payload.agent` 直接跳过写映射，且不清理已存在的
+  `sessions/<ses>.json`；而 server 在 Todo-13 策略门为假时（worker capabilities
+  缺失/过期、`workerSupportsAgentPolicies` 假）会省略 `/execute` 的 `agent` 键
+  （`server/src/chat/worker-dispatcher.ts:1706-1730`），模型仍以 system 身份执行
+  对应角色。叠加 `reuseSession=true` 默认（`teams.service.ts:118`，per-member
+  单会话、`instanceRef` 跨任务保留）导致同一 ses_ id 被复用，且 `sessions/*.json`
+  无任何 TTL/启动清理（grep 全仓无 prune；`untrackGuardSessions` 只删本轮写过的
+  id），worker 重启/崩溃的孤儿文件永久残留 → architect 复用旧 ses_ id 时读到
+  product 残留映射，guard 按 product 模板拦截并冠名。
+- 次要因素：`mappedSessionIds.includes` 写一次语义 + 结束无条件删，在并发复用
+  同一 ses_ id 时存在交叉覆盖/误删竞态；`resolveGuardWorkDir` 回退推导在
+  workDir 未配置时可能与插件 findUp 不一致（生产 workDir 恒定，已排除为主因）。
+- 修复（worker 内，`fix(worker): correct session-to-role mapping for guard`）：
+  `trackGuardSession` 改为先读后写（落盘 agent 与本 payload 不一致即重写，后写者
+  权威，写点仍在 prompt 发送前）；`untrack` 仅删仍属于本执行的映射（被并发他角
+  色重写则不删，残留交 TTL）；新增 `pruneStaleSessionPolicies`（默认 24h，
+  best-effort，删过期 json 只回 pass-through 不 fail-closed），每次 track 前调用。
+- 未映射 pass-through 语义保持；guard 判定优先级未动；无新增依赖。

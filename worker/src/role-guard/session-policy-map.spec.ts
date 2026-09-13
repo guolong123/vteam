@@ -9,6 +9,7 @@ import * as fsp from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  pruneStaleSessionPolicies,
   readSessionPolicy,
   removeSessionPolicy,
   sanitizeSessionId,
@@ -123,5 +124,41 @@ describe('session-policy-map', () => {
     expect(sanitizeSessionId('')).toBe('unknown-session');
     expect(sanitizeSessionId('..')).toBe('unknown-session');
     expect(sanitizeSessionId('ses_1')).toBe('ses_1');
+  });
+
+  it('同一会话 id 顺序重写 → 最新 agent 权威（复用会话换角色不误标）', async () => {
+    await writeSessionPolicy(workDir, 'ses_reuse', {
+      agent: 'vteam-product',
+      dir: '/w/tasks/t_1',
+    });
+    await writeSessionPolicy(workDir, 'ses_reuse', {
+      agent: 'vteam-architect',
+      dir: '/w/tasks/t_2',
+    });
+    await expect(readSessionPolicy(workDir, 'ses_reuse')).resolves.toEqual({
+      agent: 'vteam-architect',
+      dir: '/w/tasks/t_2',
+    });
+  });
+
+  it('TTL 清理：过期 json 删除，新鲜 json/非 json/缺失目录不动', async () => {
+    const sessionsDir = path.join(workDir, '.vteam-role-guard', 'sessions');
+    await fsp.mkdir(sessionsDir, { recursive: true });
+    const oldFile = path.join(sessionsDir, 'ses_old.json');
+    const freshFile = path.join(sessionsDir, 'ses_fresh.json');
+    const otherFile = path.join(sessionsDir, 'keep.txt');
+    await fsp.writeFile(oldFile, JSON.stringify({ agent: 'vteam-product', dir: '/w' }), 'utf8');
+    await fsp.writeFile(freshFile, JSON.stringify({ agent: 'vteam-architect', dir: '/w' }), 'utf8');
+    await fsp.writeFile(otherFile, 'not-a-mapping', 'utf8');
+    const aged = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    await fsp.utimes(oldFile, aged, aged);
+    await expect(pruneStaleSessionPolicies(workDir)).resolves.toBe(1);
+    expect(fs.existsSync(oldFile)).toBe(false);
+    expect(fs.existsSync(freshFile)).toBe(true);
+    expect(fs.existsSync(otherFile)).toBe(true);
+    // 缺失 sessions/ → 0，不抛
+    await expect(pruneStaleSessionPolicies(path.join(workDir, 'no-such-root'))).resolves.toBe(
+      0,
+    );
   });
 });

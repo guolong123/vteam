@@ -115,3 +115,52 @@ export async function removeSessionPolicy(workDir: string, sessionId: string): P
     /* best-effort：缺失或删除失败均不抛 */
   }
 }
+
+/**
+ * 会话映射默认存活时长（24h）：超过此年龄的 `sessions/*.json` 视为过期残留
+ * （worker 重启/崩溃导致 untrack 未执行、或复用会话上的跳过写残留），由
+ * `pruneStaleSessionPolicies` 清理，防止过期文件累积后误标后来的执行。
+ */
+export const SESSION_POLICY_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 按 TTL 清理过期会话映射（best-effort，永不抛）：
+ * - `sessions/` 缺失 → 返回 0（无残留可清）；
+ * - 仅删 `*.json` 且 `mtime < now - ttlMs` 的文件（`.tmp` 残留与非 json 文件不动，
+ *   由各自写入方负责；目录读取失败整体吞掉）；
+ * - 返回删除的文件数（调用方记 info/debug，不阻断执行）。
+ *
+ * 未映射会话 guard 语义不变：删文件只会让对应会话回到 pass-through，
+ * 绝不引入 fail-closed。
+ */
+export async function pruneStaleSessionPolicies(
+  workDir: string,
+  ttlMs: number = SESSION_POLICY_TTL_MS,
+): Promise<number> {
+  const dir = path.join(workDir, SESSION_GUARD_DIR_REL);
+  let entries: string[];
+  try {
+    entries = await fsp.readdir(dir);
+  } catch {
+    return 0;
+  }
+  const cutoff = Date.now() - ttlMs;
+  let pruned = 0;
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) {
+      continue;
+    }
+    const abs = path.join(dir, entry);
+    try {
+      const stat = await fsp.stat(abs);
+      if (!stat.isFile() || stat.mtimeMs >= cutoff) {
+        continue;
+      }
+      await fsp.unlink(abs);
+      pruned += 1;
+    } catch {
+      /* best-effort：单文件失败不影响其余 */
+    }
+  }
+  return pruned;
+}

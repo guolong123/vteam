@@ -2433,6 +2433,57 @@ describe('ExecServer：session→policy 映射（Todo 19 guard 会话映射）',
     expect(fs.existsSync(join(workDir, '.vteam-role-guard'))).toBe(false);
   });
 
+  it('复用会话残留错角色映射 → 执行中重写为当前 payload.agent（不误标）', async () => {
+    const { driver, sendMessage } = mockDriver();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    sendMessage.mockImplementation(() => gate);
+    const { sender, sent } = createSender();
+    const taskDir = join(workDir, 'tasks', 't_2');
+    // 预置过期残留：同一 ses_ id 上一次是 product 的映射（如 worker 重启孤儿文件）
+    const sessionsDir = join(workDir, '.vteam-role-guard', 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      sessionFile('ses_reuse'),
+      JSON.stringify({ agent: 'vteam-product', dir: join(workDir, 'tasks', 't_1') }),
+    );
+    const exec = new ExecServer({
+      port: 0, driver, sender, firstTokenTimeoutMs: 1000, workDir, logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await postExecute(bound, {
+        taskId: 't_2',
+        sessionId: 'ses_reuse',
+        agent: 'vteam-architect',
+        directory: taskDir,
+        prompt: 'go',
+      });
+      expect(res.status).toBe(202);
+      // prompt 发送中 → 映射已被重写为当前执行的 agent
+      await waitFor(() => {
+        if (!fs.existsSync(sessionFile('ses_reuse'))) {
+          return false;
+        }
+        return (
+          (JSON.parse(fs.readFileSync(sessionFile('ses_reuse'), 'utf8')) as { agent: string })
+            .agent === 'vteam-architect'
+        );
+      });
+      const onDisk = JSON.parse(fs.readFileSync(sessionFile('ses_reuse'), 'utf8'));
+      expect(onDisk).toEqual({ agent: 'vteam-architect', dir: taskDir });
+      release();
+      await waitFor(() => sent.some((s) => s.type === 'task.completed'));
+      // 本轮映射仍正常清理
+      await waitFor(() => !fs.existsSync(sessionFile('ses_reuse')));
+    } finally {
+      release();
+      await exec.stop();
+    }
+  });
+
   it('映射写失败只 warn 不阻断执行（仍 task.completed，无 error 事件）', async () => {
     const { driver } = mockDriver();
     const { sender, sent } = createSender();
