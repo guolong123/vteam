@@ -46,6 +46,7 @@ import {
 } from '../workers/worker-event.ingress';
 import {
   AssignmentRequirement,
+  workerSupportsAgentPolicies,
   WorkersService,
 } from '../workers/workers.service';
 import { renderPersonaSection } from '../agents/persona.constants';
@@ -1660,6 +1661,9 @@ export class WorkerDispatcher
       selfAlias,
       persistentWorkDir: teamWorkDir,
     };
+    // Todo 13 策略 agent 候选的计划侧输入（与下发 system 的 taskPlanMode 同源，
+    // 仅做只读镜像，不改变计划模式指令逻辑）。
+    let effectivePlanForPolicy = false;
     if (taskIdForPrompt) {
       if (memoryIndex) {
         systemOpts.memoryIndex = memoryIndex;
@@ -1678,6 +1682,7 @@ export class WorkerDispatcher
         effectivePlan = getOpencodeAgentDuty(mainAgentName) === 'plan';
       }
       systemOpts.taskPlanMode = effectivePlan;
+      effectivePlanForPolicy = effectivePlan;
     } else {
       systemOpts.teamMode = true;
       systemOpts.taskId = '';
@@ -1686,6 +1691,23 @@ export class WorkerDispatcher
     const opencodeAgentName = teamMemberId
       ? await this.resolveMemberOpencodeAgentName(teamMemberId)
       : null;
+    // Todo 13 dispatch 优先级（.omo/plans/vteam-role-behavior-enforcement.md
+    // Decision highlights 行 23）：绑定策略且 worker 能力位
+    // `enabled && names.includes(候选)` 真 → `agent = effectivePlan ? 'vteam-plan'
+    // : 'vteam-<role>'`（角色取目标 Agent 行的 `role`，经 roleToAgentName 映射；
+    // 缺席/未知 → 无候选，直接回退）；否则现状回退（opencodeAgentName 有值则传，
+    // 否则省略 agent 键，与引入前逐字节一致）。
+    // 显式成员选择（TeamMember.opencodeAgentName）与 plan_mode agentName 均不能绕过
+    // 此门：门真时一律用候选策略 agent 覆盖，门假时一律回退现状。
+    const policyCandidateAgent: VteamAgentName | null =
+      effectivePlanForPolicy
+        ? 'vteam-plan'
+        : roleToAgentName(agentIdentity.role);
+    const resolvedAgentName: string | null =
+      policyCandidateAgent &&
+      workerSupportsAgentPolicies(worker, policyCandidateAgent)
+        ? policyCandidateAgent
+        : opencodeAgentName;
     // Todo 4：目标 Agent 的职责边界段——优先显式 opencode agent 名，否则按模板角色
     // 回退解析；未知/未绑定 → 空串不注入（system 与引入前逐字节一致）。
     // Todo 11/12 will unify the source：改由 ExecutionPolicy 解析。
@@ -1705,7 +1727,7 @@ export class WorkerDispatcher
       agentId: target.agentId,
       channelId: request.channelId,
       sessionId: opencodeSessionId,
-      ...(opencodeAgentName ? { agent: opencodeAgentName } : {}),
+      ...(resolvedAgentName ? { agent: resolvedAgentName } : {}),
       ...(imageAttach ? { attachments: imageAttach.attachments } : {}),
       system: buildSystemInstructions(agentIdentity, systemOpts),
     });

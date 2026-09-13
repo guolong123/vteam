@@ -23,8 +23,14 @@ export type OpencodeAgentDuty = 'plan' | 'execute';
  *
  * - `plan`：opencode 原生 plan agent
  * - `prometheus`：OmO 的 "Prometheus - Plan Builder"（出计划）
+ * - `vteam-plan`：vteam 角色策略 agent（计划职责；Todo 13 dispatch 能力位门选中后，
+ *   其下发 payload 同 plan 职责处理，见 .omo/plans/vteam-role-behavior-enforcement.md）
  */
-const PLAN_DUTY_AGENTS: ReadonlySet<string> = new Set(['plan', 'prometheus']);
+const PLAN_DUTY_AGENTS: ReadonlySet<string> = new Set([
+  'plan',
+  'prometheus',
+  'vteam-plan',
+]);
 
 /** 约定为执行职责的 agent 名（小写基底名；列出仅为文档完备性，判定只认 PLAN 集）。 */
 const EXECUTE_DUTY_AGENTS: ReadonlySet<string> = new Set(['build', 'atlas']);

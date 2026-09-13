@@ -5424,6 +5424,151 @@ describe('WorkerDispatcher', () => {
       expect(prisma.task.findUnique).not.toHaveBeenCalled();
     });
 
+    describe('Todo 13 dispatch 优先级：能力位+名称门控策略 agent（门真→候选，否则现状回退）', () => {
+      const capsWith = (enabled: boolean, names: string[]) => {
+        prisma.worker.findUnique.mockResolvedValue({
+          id: 'w_0000000001',
+          status: 'online',
+          capabilities: {
+            maxInstances: 1,
+            agentPolicies: { enabled, names },
+          },
+          defaultModelId: null,
+        } as any);
+      };
+      const selectMemberAgent = (name: string | null) => {
+        (prisma as any).teamMember.findFirst.mockImplementation(
+          async (q: any) =>
+            q?.select?.opencodeAgentName !== undefined
+              ? { opencodeAgentName: name }
+              : { overrideModelId: null },
+        );
+      };
+      const execPayload = () => workerClient.execute.mock.calls[0][1] as any;
+      const withTask = (extra: Record<string, unknown> = {}) =>
+        teamRequest({
+          taskContext: { taskId: 't_0000000001', ...extra },
+        }) as any;
+
+      it('门真（enabled+names 含候选）→ 下发 vteam-<role>（目标角色 product，无显式选择）', async () => {
+        capsWith(true, ['vteam-product', 'vteam-plan']);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('vteam-product');
+      });
+
+      it('门真时显式成员选择不能绕过 → 仍下发候选策略 agent（不透传成员选择）', async () => {
+        capsWith(true, ['vteam-product', 'vteam-plan']);
+        selectMemberAgent('plan');
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('vteam-product');
+      });
+
+      it('门真时 plan_mode 显式选择不能绕过 → effectivePlan 下发 vteam-plan（不透传成员选择）', async () => {
+        capsWith(true, ['vteam-plan', 'vteam-product']);
+        selectMemberAgent('build');
+        const d = createDispatcher();
+        await d.dispatch(withTask({ planMode: true }));
+        expect(execPayload().agent).toBe('vteam-plan');
+      });
+
+      it('能力位假 → 回退现状（显式选择透传 plan）', async () => {
+        capsWith(false, ['vteam-product']);
+        selectMemberAgent('plan');
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('plan');
+      });
+
+      it('能力位假 + 无显式选择 → 省略 agent 键（与引入前基线一致）', async () => {
+        capsWith(false, []);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(
+          Object.prototype.hasOwnProperty.call(execPayload(), 'agent'),
+        ).toBe(false);
+      });
+
+      it('名称不在清单 → 回退现状（显式选择透传，不下发候选）', async () => {
+        capsWith(true, ['vteam-plan']);
+        selectMemberAgent('plan');
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('plan');
+      });
+
+      it('角色未知（无候选）→ 回退现状，且 payload 与同角色基线逐字节一致', async () => {
+        prisma.agent.findUnique.mockResolvedValue({
+          id: 'a_product',
+          name: '神秘角色',
+          role: 'mystery',
+          prompt: '负责未知',
+          persona: null,
+          defaultModelId: null,
+        } as any);
+        selectMemberAgent(null);
+        // 门其他条件为真（enabled+含 vteam-plan）但角色无映射 → 无候选 → 回退
+        capsWith(true, ['vteam-plan', 'vteam-product']);
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        const gated = execPayload();
+        expect(
+          Object.prototype.hasOwnProperty.call(gated, 'agent'),
+        ).toBe(false);
+        // 同角色、无能力位字段的基线 payload 必须逐字节一致
+        workerClient.execute.mockClear();
+        prisma.worker.findUnique.mockResolvedValue({
+          id: 'w_0000000001',
+          status: 'online',
+          capabilities: { maxInstances: 1 },
+          defaultModelId: null,
+        } as any);
+        await d.dispatch(withTask());
+        expect(execPayload()).toEqual(gated);
+      });
+
+      it('门假时 payload 与基线逐字节一致（enabled:false vs 无能力位字段）', async () => {
+        selectMemberAgent(null);
+        capsWith(false, []);
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        const fallback = execPayload();
+        expect(
+          Object.prototype.hasOwnProperty.call(fallback, 'agent'),
+        ).toBe(false);
+        workerClient.execute.mockClear();
+        prisma.worker.findUnique.mockResolvedValue({
+          id: 'w_0000000001',
+          status: 'online',
+          capabilities: { maxInstances: 1 },
+          defaultModelId: null,
+        } as any);
+        await d.dispatch(withTask());
+        expect(execPayload()).toEqual(fallback);
+      });
+
+      it('effectivePlan 真 + 门真 → 下发 vteam-plan', async () => {
+        capsWith(true, ['vteam-plan']);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask({ planMode: true }));
+        expect(execPayload().agent).toBe('vteam-plan');
+      });
+
+      it('effectivePlan 真 + 门假 → 回退现状（无显式选择则省略 agent 键）', async () => {
+        capsWith(false, ['vteam-plan']);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask({ planMode: true }));
+        expect(
+          Object.prototype.hasOwnProperty.call(execPayload(), 'agent'),
+        ).toBe(false);
+      });
+    });
+
     it('缺 teamId → throw 400 TEAM_SESSION_MISSING_DIMENSION（不触碰 worker 链路）', async () => {
       const d = createDispatcher();
       const errors: unknown[] = [];

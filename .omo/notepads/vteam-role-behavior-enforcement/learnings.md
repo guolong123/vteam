@@ -109,3 +109,10 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - `isPureMode()` pure sources confirmed; guard-not-loaded warning was MISSING -> added blocking-level warn in `spawnServe()` + spec; 28/28 green, tsc exit 0.
 - Universal glob `**tasks/*/<subdir>/**` hits both worktree bases via node Wildcard.match replica; absolute globs never match relative inputs -> forbidden.
 - Live serve e2e left UNVERIFIED (no serve spawned); deferred to Todo 21.
+
+## Todo 13 (2026-09-13): dispatch capability+name gated policy agent selection
+- `vteam-plan` 加入 `PLAN_DUTY_AGENTS`；`baseAgentName` 按 ` - ` 切分，`vteam-plan`（连字符无空格）不受影响，直接命中。
+- dispatch 单一下发点（`dispatchForTeamTarget` 唯一 `workerClient.execute`）：`effectivePlanForPolicy` 为只读镜像（与 `systemOpts.taskPlanMode` 同源赋值，不改计划指令逻辑）；候选 `effectivePlan ? 'vteam-plan' : roleToAgentName(agentIdentity.role)`（角色未知→null 无候选）；门真则覆盖（含显式成员选择），门假则 `resolvedAgentName = opencodeAgentName` 回退现状。
+- `WorkerEndpointRef.capabilities?: unknown` 与 `workerSupportsAgentPolicies({capabilities?: unknown})` 签名直接兼容，无需适配。
+- 回退断言用 `toEqual` 对整 payload 做逐字节比较（enabled:false vs 无能力位字段；未知角色门真 vs 无能力位），比只断言 `agent` 键更强。
+- `server` tsc exit 0；`worker-dispatcher.spec` + `opencode-agent-duty.spec` 193/193 green。

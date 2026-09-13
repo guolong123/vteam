@@ -13,6 +13,26 @@ describe('opencode agent 职责约定（计划/执行一对一映射）', () => 
     );
   });
 
+  it('Todo 13：vteam-plan 为计划职责（策略 agent 计划侧候选）', () => {
+    expect(getOpencodeAgentDuty('vteam-plan')).toBe('plan');
+    expect(listPlanDutyAgents()).toEqual(
+      expect.arrayContaining(['plan', 'prometheus', 'vteam-plan']),
+    );
+  });
+
+  it('Todo 13：vteam-<role> 均为执行职责（仅 vteam-plan 进计划集）', () => {
+    for (const name of [
+      'vteam-product',
+      'vteam-architect',
+      'vteam-developer',
+      'vteam-tester',
+      'vteam-project_manager',
+    ]) {
+      expect(getOpencodeAgentDuty(name)).toBe('execute');
+    }
+    expect(listPlanDutyAgents()).not.toContain('vteam-developer');
+  });
+
   it('约定执行职责：build / atlas', () => {
     expect(getOpencodeAgentDuty('build')).toBe('execute');
     expect(getOpencodeAgentDuty('atlas')).toBe('execute');
