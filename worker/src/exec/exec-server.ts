@@ -52,6 +52,7 @@ import {
   writeOmoAgents,
 } from '../resources/omo-config';
 import { WORKER_EVENT_TYPES } from '../protocol/worker-protocol';
+import { removeSessionPolicy, writeSessionPolicy } from '../role-guard/session-policy-map';
 import { collectFileArtifacts } from './artifact-extract';
 
 export interface ExecutionConfig {
@@ -1107,6 +1108,46 @@ export class ExecServer {
   private async runExecution(payload: ExecuteRequestPayload): Promise<void> {
     trackInstanceStart();
     let opencodeSessionId = payload.sessionId ?? '';
+    // Todo 19：session→policy 映射追踪（guard 插件按 opencode session id 查角色名；
+    // 未映射会话 guard pass-through）。写/删失败只记 warn，永不阻断执行。
+    const mappedSessionIds: string[] = [];
+    const trackGuardSession = async (sessionId: string): Promise<void> => {
+      if (!sessionId || mappedSessionIds.includes(sessionId)) {
+        return;
+      }
+      const agent = payload.agent ?? '';
+      // 仅策略 agent（`vteam-` 前缀）建映射；其余（默认 agent/未传）不写 → 未映射 pass-through。
+      if (!agent.startsWith('vteam-')) {
+        return;
+      }
+      const root = this.resolveGuardWorkDir(payload.directory);
+      if (!root) {
+        return;
+      }
+      try {
+        await writeSessionPolicy(root, sessionId, { agent, dir: payload.directory ?? '' });
+        mappedSessionIds.push(sessionId);
+      } catch (err) {
+        this.logger.warn(
+          `[exec] session policy 写入失败（不阻断执行）: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    };
+    const untrackGuardSessions = async (): Promise<void> => {
+      const root = this.resolveGuardWorkDir(payload.directory);
+      if (!root) {
+        return;
+      }
+      for (const sessionId of mappedSessionIds.splice(0)) {
+        try {
+          await removeSessionPolicy(root, sessionId);
+        } catch (err) {
+          this.logger.warn(
+            `[exec] session policy 清理失败（不阻断执行）: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+    };
     try {
       // is_0000000010：worker 侧兜底创建目录（server 与 worker 可能不共享文件系统，
       // server 侧 mkdir 无效——目录由 worker 执行端点确保存在，持久卷挂载 /data/vteam-worker）。
@@ -1127,6 +1168,8 @@ export class ExecServer {
       if (!opencodeSessionId) {
         opencodeSessionId = await this.driver.createSession(payload.model);
       }
+      // prompt 发送前建 session→policy 映射（guard 插件按此查角色；写失败只 warn）。
+      await trackGuardSession(opencodeSessionId);
       // Per-agent browser isolation (option A)：按 opencode 会话预建 profile
       // 落点 browser-profiles/<scope>/（scope 派生规则见 browser-tools.ts
       // resolveBrowserScopeId；shim 运行时以 ToolContext.sessionID 取同一 scope，
@@ -1176,6 +1219,8 @@ export class ExecServer {
           this.logger.warn(`[exec] 复用会话 ${opencodeSessionId} 会话不存在（HTTP 404），新建会话重试一次`);
           opencodeSessionId = await this.driver.createSession(payload.model);
           ctx.sessionId = opencodeSessionId;
+          // 重建会话 id 变更 → 为新 id 建映射（旧 id 残留由 finally 统一清理）。
+          await trackGuardSession(opencodeSessionId);
           result = await this.runSendAndAwait(payload, opencodeSessionId, ctx);
         } else {
           throw err;
@@ -1218,8 +1263,28 @@ export class ExecServer {
         status: 'failed',
       });
     } finally {
+      await untrackGuardSessions();
       trackInstanceEnd();
     }
+  }
+
+  /**
+   * guard 会话映射根目录解析：优先 worker workDir（injector 写入 roles.json/sessions
+   * 的同一根）；未配置时从 task 目录（`<workDir>/tasks/<id>`）上跳两级推导；
+   * 均无则返回空串（调用方跳过建映射，不阻断执行）。
+   */
+  private resolveGuardWorkDir(payloadDirectory?: string): string {
+    if (this.workDir) {
+      return this.workDir;
+    }
+    const dir = (payloadDirectory ?? '').trim();
+    if (!dir) {
+      return '';
+    }
+    if (path.basename(path.dirname(dir)) === 'tasks') {
+      return path.dirname(path.dirname(dir));
+    }
+    return dir;
   }
 
   /** 会话失效判定：DriverRequestError 且 HTTP 404（serve 重启后旧 ses_ 会话不存在）。 */

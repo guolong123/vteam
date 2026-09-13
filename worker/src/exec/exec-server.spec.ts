@@ -2356,3 +2356,120 @@ describe('ExecServer：GET /omo-agent-prompt（按需取单 agent 提示词）',
     }
   });
 });
+
+describe('ExecServer：session→policy 映射（Todo 19 guard 会话映射）', () => {
+  let workDir: string;
+
+  beforeEach(async () => {
+    workDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-guardmap-'));
+    resetInstanceCount();
+  });
+
+  afterEach(async () => {
+    await fsp.rm(workDir, { recursive: true, force: true });
+  });
+
+  function sessionFile(sessionId: string): string {
+    return join(workDir, '.vteam-role-guard', 'sessions', `${sessionId}.json`);
+  }
+
+  it('vteam agent 运行：prompt 前写映射，完成后删除', async () => {
+    const { driver, sendMessage } = mockDriver();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    sendMessage.mockImplementation(() => gate);
+    const { sender, sent } = createSender();
+    const taskDir = join(workDir, 'tasks', 't_1');
+    const exec = new ExecServer({
+      port: 0, driver, sender, firstTokenTimeoutMs: 1000, workDir, logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await postExecute(bound, {
+        taskId: 't_1',
+        sessionId: 'ses_map1',
+        agent: 'vteam-developer',
+        directory: taskDir,
+        prompt: 'go',
+      });
+      expect(res.status).toBe(202);
+      // prompt 发送中（sendMessage 被 gate 阻塞）→ 映射已先写好
+      await waitFor(() => fs.existsSync(sessionFile('ses_map1')));
+      const onDisk = JSON.parse(fs.readFileSync(sessionFile('ses_map1'), 'utf8'));
+      expect(onDisk).toEqual({ agent: 'vteam-developer', dir: taskDir });
+      release();
+      await waitFor(() => sent.some((s) => s.type === 'task.completed'));
+      // 完成后清理映射文件
+      await waitFor(() => !fs.existsSync(sessionFile('ses_map1')));
+    } finally {
+      release();
+      await exec.stop();
+    }
+  });
+
+  it('非 vteam agent / 未传 agent：不写映射（未映射 pass-through，不建目录）', async () => {
+    for (const agent of [undefined, 'build'] as const) {
+      const { driver } = mockDriver();
+      const { sender, sent } = createSender();
+      const exec = new ExecServer({
+        port: 0, driver, sender, firstTokenTimeoutMs: 1000, workDir, logger: SILENT_LOGGER,
+      });
+      const bound = await exec.start();
+      try {
+        const res = await postExecute(bound, {
+          taskId: 't_1',
+          sessionId: `ses_nomap_${agent ?? 'none'}`,
+          ...(agent ? { agent } : {}),
+          prompt: 'go',
+        });
+        expect(res.status).toBe(202);
+        await waitFor(() => sent.some((s) => s.type === 'task.completed'));
+      } finally {
+        await exec.stop();
+      }
+    }
+    expect(fs.existsSync(join(workDir, '.vteam-role-guard'))).toBe(false);
+  });
+
+  it('映射写失败只 warn 不阻断执行（仍 task.completed，无 error 事件）', async () => {
+    const { driver } = mockDriver();
+    const { sender, sent } = createSender();
+    const warns: string[] = [];
+    // workDir 指向已存在文件 → sessions mkdir 必败，写映射必抛
+    const fileAsDir = join(workDir, 'not-a-dir');
+    fs.writeFileSync(fileAsDir, 'x');
+    const taskDir = join(workDir, 'tasks', 't_9');
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 1000,
+      workDir: fileAsDir,
+      logger: {
+        info: () => undefined,
+        warn: (m: string) => warns.push(m),
+        error: () => undefined,
+      },
+    });
+    const bound = await exec.start();
+    try {
+      const res = await postExecute(bound, {
+        taskId: 't_1',
+        sessionId: 'ses_writefail',
+        agent: 'vteam-developer',
+        directory: taskDir,
+        prompt: 'go',
+      });
+      expect(res.status).toBe(202);
+      await waitFor(() => sent.some((s) => s.type === 'task.completed'));
+      expect(
+        sent.some((s) => s.type === 'agent.status' && s.payload.status === 'error'),
+      ).toBe(false);
+      expect(warns.some((m) => m.includes('session policy'))).toBe(true);
+    } finally {
+      await exec.stop();
+    }
+  });
+});
