@@ -6,6 +6,14 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import {
+  buildEditPermission,
+  buildReadPermission,
+  ROLE_BASH_DENY_PATTERNS,
+  ROLE_BOUNDARIES,
+  ROLE_POLICY_DENY_TEMPLATE,
+  type VteamAgentName,
+} from '../common/constants/agent.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
@@ -29,6 +37,38 @@ export interface ResolvedExecutionPolicy {
   permission: Record<string, unknown>;
   correction: Record<string, unknown>;
 }
+
+/** GET /agent-policies 单个 opencode agent 定义（Todo 12 worker injector 数据源）。 */
+export interface AgentPolicyDefinition {
+  name: VteamAgentName;
+  description: string;
+  mode: 'primary';
+  permission: Record<string, unknown>;
+}
+
+/** GET /agent-policies guard 单个角色条目（key = opencode agent 名）。 */
+export interface AgentGuardRole {
+  permission: Record<string, unknown>;
+  tools: Record<string, 'allow' | 'ask'>;
+  bashDeny: string[];
+  correction: Record<string, unknown>;
+}
+
+/** GET /agent-policies 响应体（opencode agent 定义 + guard 角色集）。 */
+export interface AgentPoliciesResponse {
+  agents: AgentPolicyDefinition[];
+  guard: { enabled: true; roles: Record<VteamAgentName, AgentGuardRole> };
+}
+
+/** /agent-policies 输出顺序（`vteam-plan` 首位 + 5 协作角色）。 */
+const AGENT_POLICIES_ORDER: readonly VteamAgentName[] = [
+  'vteam-plan',
+  'vteam-product',
+  'vteam-architect',
+  'vteam-developer',
+  'vteam-tester',
+  'vteam-project_manager',
+] as const;
 
 /**
  * 单一 ExecutionPolicy 服务（vteam-role-behavior-enforcement Todo 11 唯一来源）。
@@ -194,6 +234,43 @@ export class ExecutionPolicyService implements OnModuleInit {
   }
 
   /**
+   * 构建 opencode agent 定义 + guard 角色集（Todo 12，worker injector 数据源）。
+   * 纯函数（无 DB 依赖）：全部值由 `ROLE_BOUNDARIES` 派生——
+   * - `permission`：`{ edit: buildEditPermission(writeGlobs), read: buildReadPermission(), bash, task:'deny', ...mcpDenies:'deny' }`（无 `write` 键）；
+   * - `guard.roles` key 与 `agents[].name` 完全一致；
+   * - `tools` = `toolAllows`（真实暴露名），`bashDeny` = 共享硬化清单，
+   *   `correction` = `{ scopeSummary, handoff, denyTemplate }`。
+   */
+  buildAgentPolicies(): AgentPoliciesResponse {
+    const agents = AGENT_POLICIES_ORDER.map((name) => {
+      const boundary = ROLE_BOUNDARIES[name];
+      return {
+        name,
+        description: boundary.scopeSummary,
+        mode: 'primary' as const,
+        permission: this.buildRolePermission(name),
+      };
+    });
+    const roles = Object.fromEntries(
+      AGENT_POLICIES_ORDER.map((name) => {
+        const boundary = ROLE_BOUNDARIES[name];
+        const role: AgentGuardRole = {
+          permission: this.buildRolePermission(name),
+          tools: { ...boundary.toolAllows },
+          bashDeny: [...ROLE_BASH_DENY_PATTERNS],
+          correction: {
+            scopeSummary: boundary.scopeSummary,
+            handoff: { ...boundary.handoffTo },
+            denyTemplate: ROLE_POLICY_DENY_TEMPLATE,
+          },
+        };
+        return [name, role];
+      }),
+    ) as Record<VteamAgentName, AgentGuardRole>;
+    return { agents, guard: { enabled: true as const, roles } };
+  }
+
+  /**
    * config 合法性：必须为 `{ permission: object, correction: object }`
    *（两者均为非数组对象；旧 `{ permissions, writePaths }` 在此被拒绝）。
    */
@@ -215,6 +292,20 @@ export class ExecutionPolicyService implements OnModuleInit {
     return (
       typeof value === 'object' && value !== null && !Array.isArray(value)
     );
+  }
+
+  /** 层① 原生 permission（与 seed 角色策略同形：edit glob + read + bash + task deny + MCP deny，无 `write` 键）。 */
+  private buildRolePermission(name: VteamAgentName): Record<string, unknown> {
+    const boundary = ROLE_BOUNDARIES[name];
+    return {
+      edit: buildEditPermission(boundary.writeGlobs),
+      read: buildReadPermission(),
+      bash: boundary.bashEffect,
+      task: 'deny',
+      ...Object.fromEntries(
+        boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
+      ),
+    };
   }
 
   /** 模板策略写保护（seed 维护的平台内置角色策略只读）。 */

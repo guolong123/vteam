@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { AgentPoliciesController } from './agent-policies.controller';
 import { ExecutionPoliciesController } from './execution-policies.controller';
 import { ExecutionPolicyService } from './execution-policy.service';
 
@@ -10,11 +11,11 @@ import { ExecutionPolicyService } from './execution-policy.service';
  * （共享同一 id 生成器实例，与 tasks/agents/chat 同源，无循环依赖）。
  * PermissionGuard 注册供方法级 @UseGuards 解析（与 AgentsModule 同模式）。
  * ExecutionPolicyService export 供 ChatModule（dispatcher boundary 注入）与
- * 后续 `/agent-policies`（Todo 12）复用。
+ * `/agent-policies`（Todo 12）复用。
  */
 @Module({
   imports: [RealtimeModule],
-  controllers: [ExecutionPoliciesController],
+  controllers: [ExecutionPoliciesController, AgentPoliciesController],
   providers: [ExecutionPolicyService, PermissionGuard],
   exports: [ExecutionPolicyService],
 })

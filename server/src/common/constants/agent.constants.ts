@@ -207,6 +207,38 @@ export function buildReadPermission(): Record<string, 'allow'> {
   return { '*': 'allow' };
 }
 
+/**
+ * guard 层② bash 硬化模式清单（vteam-role-behavior-enforcement Todo 12）。
+ * worker 注入的 guard 插件 `tool.execute.before` 仅按此清单判定 `bash` 工具：
+ * 命令命中任一模式即 deny，未命中即放行（再由层① `permission.bash` 生效）。
+ * 纯字符串/子串模式（guard 侧做大小写不敏感的子串匹配），与 Todo 20 判定语义对齐。
+ */
+export const ROLE_BASH_DENY_PATTERNS: readonly string[] = [
+  '>',
+  '>>',
+  'tee',
+  'cp',
+  'mv',
+  'sed -i',
+  'truncate',
+  'dd',
+  'ln',
+  'python -c',
+  'node -e',
+  'perl -i',
+  'git apply',
+  'patch',
+  'git push',
+  'rm',
+] as const;
+
+/**
+ * 越界纠正文案模板（层② guard deny 回传，与 seed.ts ROLE_POLICY_DENY_TEMPLATE 同值）。
+ * 占位符：`{role}` 角色名、`{handoffTarget}` 转交目标、`{scopeSummary}` 由 correction.scopeSummary 填充。
+ */
+export const ROLE_POLICY_DENY_TEMPLATE =
+  '【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。' as const;
+
 /** 角色边界映射（key = opencode agent 名，值与 Permission matrix 严格一致）。 */
 export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
   'vteam-product': defineBoundary({

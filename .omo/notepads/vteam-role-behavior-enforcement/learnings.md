@@ -73,3 +73,9 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   (see skills/tasks/teams controller specs); otherwise Nest fails resolving `PrismaService` in RootTestModule.
 - Permission points reuse agents domain: reads `agents.view`, writes `agents.edit`; template rows 403 via service `assertWritable`.
 - `resolveByAgent`: `policyId` first, else `ep_<role>` naming lookup; agentName `vteam-<role>`/`vteam-plan`; invalid config → null (caller falls back).
+
+## Todo 12 — GET /api/v1/agent-policies (2026-09-13)
+- `ExecutionPolicyService.buildAgentPolicies()` 纯函数：值全部由 `ROLE_BOUNDARIES` + `buildEditPermission`/`buildReadPermission` 派生，与 seed 角色策略同形（`task:'deny'`、无 `write` 键、MCP deny 全 `vteam_` 前缀）。
+- 新增 `ROLE_BASH_DENY_PATTERNS`（16 项，含 `>`/`>>`/`tee`/`cp`/`mv`/`sed -i`/`truncate`/`dd`/`ln`/`python -c`/`node -e`/`perl -i`/`git apply`/`patch`/`git push`/`rm`）+ `ROLE_POLICY_DENY_TEMPLATE`（与 seed 同值，seed.ts 未动）。
+- 端点鉴权复用 `@Public() + WorkerOrJwtGuard`（mcp-servers/tools/skills GET 同模式）；unauth → 401。
+- spec 用 supertest 真实 guard：worker token 走 worker 通道 200；jwt 通道 stub 401（测试环境无 passport 策略）；`onModuleInit` 需 `executionPolicy.findMany` mock。

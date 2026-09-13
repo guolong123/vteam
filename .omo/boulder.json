@@ -817,7 +817,7 @@
       "plan_name": "vteam-role-behavior-enforcement",
       "status": "active",
       "started_at": "2026-09-13T04:00:13.774Z",
-      "updated_at": "2026-09-13T04:00:13.774Z",
+      "updated_at": "2026-09-13T07:28:50.858Z",
       "session_ids": [
         "opencode:ses_f6a42e747ffet3F3IF0aZQe5qc"
       ],
@@ -825,13 +825,90 @@
         "opencode:ses_f6a42e747ffet3F3IF0aZQe5qc": "direct"
       },
       "agent": "atlas",
-      "task_sessions": {}
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "动代码前提交当前工作区基线",
+          "session_id": "opencode:ses_f6712ad17ffeN2AoiGyyZXWwR3",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-09-13T04:05:58.798Z",
+          "started_at": "2026-09-13T04:04:40.497Z",
+          "status": "completed",
+          "ended_at": "2026-09-13T04:05:58.798Z",
+          "elapsed_ms": 78301
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "task_title": "glob 基址 spike + 定义角色边界映射常量（agent 名 + 真实工具名）",
+          "session_id": "opencode:ses_f670b40c7ffeQCA42rpoavPypK",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-13T04:53:56.049Z",
+          "started_at": "2026-09-13T04:53:18.725Z",
+          "status": "completed",
+          "ended_at": "2026-09-13T04:53:56.049Z",
+          "elapsed_ms": 37324
+        },
+        "todo:3": {
+          "task_key": "todo:3",
+          "task_label": "3",
+          "task_title": "seed：新增 5 条角色 ExecutionPolicy 并绑定模板 Agent policyId",
+          "session_id": "opencode:ses_f66e1df47ffe99D8r5LpmfOubr",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-high",
+          "updated_at": "2026-09-13T05:39:54.502Z",
+          "started_at": "2026-09-13T05:37:44.011Z",
+          "status": "completed",
+          "ended_at": "2026-09-13T05:39:54.502Z",
+          "elapsed_ms": 130491
+        },
+        "todo:10": {
+          "task_key": "todo:10",
+          "task_label": "10",
+          "task_title": "更新 seed.spec.ts",
+          "session_id": "opencode:ses_f66b3c193ffezlwZukM6gTiqMO",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-high",
+          "updated_at": "2026-09-13T06:19:04.708Z",
+          "started_at": "2026-09-13T06:18:20.513Z",
+          "status": "completed",
+          "ended_at": "2026-09-13T06:19:04.708Z",
+          "elapsed_ms": 44195
+        },
+        "todo:11": {
+          "task_key": "todo:11",
+          "task_label": "11",
+          "task_title": "单一 ExecutionPolicyService + ExecutionPolicy 模块 + DTO/clone policyId 绑定",
+          "session_id": "opencode:ses_f665d5b53fferRSIZuBqEA6IjH",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-low",
+          "started_at": "2026-09-13T07:15:39.092Z",
+          "status": "completed",
+          "updated_at": "2026-09-13T07:25:24.637Z",
+          "ended_at": "2026-09-13T07:25:24.637Z",
+          "elapsed_ms": 585545
+        },
+        "todo:12": {
+          "task_key": "todo:12",
+          "task_label": "12",
+          "task_title": "GET /agent-policies：生成 opencode agent 定义 + guard `{enabled, roles}`（agent 名 + 真实工具名）",
+          "session_id": "opencode:ses_f6657a520ffendJSoeCSytAZWD",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-low",
+          "updated_at": "2026-09-13T07:28:50.858Z",
+          "started_at": "2026-09-13T07:28:50.858Z",
+          "status": "running"
+        }
+      }
     }
   },
   "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/vteam-role-behavior-enforcement.md",
   "started_at": "2026-09-13T04:00:13.774Z",
   "status": "active",
-  "updated_at": "2026-09-13T04:00:13.774Z",
+  "updated_at": "2026-09-13T07:28:50.858Z",
   "session_ids": [
     "opencode:ses_f6a42e747ffet3F3IF0aZQe5qc"
   ],
@@ -839,6 +916,83 @@
     "opencode:ses_f6a42e747ffet3F3IF0aZQe5qc": "direct"
   },
   "plan_name": "vteam-role-behavior-enforcement",
-  "task_sessions": {},
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "动代码前提交当前工作区基线",
+      "session_id": "opencode:ses_f6712ad17ffeN2AoiGyyZXWwR3",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-09-13T04:05:58.798Z",
+      "started_at": "2026-09-13T04:04:40.497Z",
+      "status": "completed",
+      "ended_at": "2026-09-13T04:05:58.798Z",
+      "elapsed_ms": 78301
+    },
+    "todo:2": {
+      "task_key": "todo:2",
+      "task_label": "2",
+      "task_title": "glob 基址 spike + 定义角色边界映射常量（agent 名 + 真实工具名）",
+      "session_id": "opencode:ses_f670b40c7ffeQCA42rpoavPypK",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-09-13T04:53:56.049Z",
+      "started_at": "2026-09-13T04:53:18.725Z",
+      "status": "completed",
+      "ended_at": "2026-09-13T04:53:56.049Z",
+      "elapsed_ms": 37324
+    },
+    "todo:3": {
+      "task_key": "todo:3",
+      "task_label": "3",
+      "task_title": "seed：新增 5 条角色 ExecutionPolicy 并绑定模板 Agent policyId",
+      "session_id": "opencode:ses_f66e1df47ffe99D8r5LpmfOubr",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-09-13T05:39:54.502Z",
+      "started_at": "2026-09-13T05:37:44.011Z",
+      "status": "completed",
+      "ended_at": "2026-09-13T05:39:54.502Z",
+      "elapsed_ms": 130491
+    },
+    "todo:10": {
+      "task_key": "todo:10",
+      "task_label": "10",
+      "task_title": "更新 seed.spec.ts",
+      "session_id": "opencode:ses_f66b3c193ffezlwZukM6gTiqMO",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-09-13T06:19:04.708Z",
+      "started_at": "2026-09-13T06:18:20.513Z",
+      "status": "completed",
+      "ended_at": "2026-09-13T06:19:04.708Z",
+      "elapsed_ms": 44195
+    },
+    "todo:11": {
+      "task_key": "todo:11",
+      "task_label": "11",
+      "task_title": "单一 ExecutionPolicyService + ExecutionPolicy 模块 + DTO/clone policyId 绑定",
+      "session_id": "opencode:ses_f665d5b53fferRSIZuBqEA6IjH",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-low",
+      "started_at": "2026-09-13T07:15:39.092Z",
+      "status": "completed",
+      "updated_at": "2026-09-13T07:25:24.637Z",
+      "ended_at": "2026-09-13T07:25:24.637Z",
+      "elapsed_ms": 585545
+    },
+    "todo:12": {
+      "task_key": "todo:12",
+      "task_label": "12",
+      "task_title": "GET /agent-policies：生成 opencode agent 定义 + guard `{enabled, roles}`（agent 名 + 真实工具名）",
+      "session_id": "opencode:ses_f6657a520ffendJSoeCSytAZWD",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-low",
+      "updated_at": "2026-09-13T07:28:50.858Z",
+      "started_at": "2026-09-13T07:28:50.858Z",
+      "status": "running"
+    }
+  },
   "agent": "atlas"
 }
