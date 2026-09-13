@@ -1,0 +1,59 @@
+e2e role boundaries — live-run attempt (Todo 21 script: scripts/e2e-role-boundaries.sh)
+Date: 2026-09-13 (UTC+8)   Operator: Sisyphus-Junior
+Verdict: INCONCLUSIVE (feature not deployed in live stack) — scenarios a/c/d/e/f/g NOT passed, none claimed.
+
+Stack probed (all reachable):
+- server  : http://localhost:13000 (docker aiagents-compose-server, healthy) — GET /api/v1/health → 200
+- worker  : aiagents-compose-worker, status=online, load.instances=0, opencodeVersion=1.18.30,
+            capabilities.baseUrl=http://worker:4000, execPort=4198, mcp vteam=connected
+- serve   : http://localhost:14000 (host-mapped 14000→container 4000), no Basic auth
+            (OPENCODE_SERVER_PASSWORD unset in compose) — POST /session → 200 {id: ses_*}
+- tokens  : X_WORKER_TOKEN=compose-worker-token (compose default), WORK_DIR=/data/vteam-worker
+
+Commands attempted + exact results (raw JSON in /tmp/vteam-e2e/, Projeto paths below):
+1. POST /api/v1/auth/login {seed-admin/Admin@123456} → 200, accessToken len 235. OK
+2. POST /api/v1/auth/login {seed-member/Admin@123456} → 200. OK (auth fine; membership NOT fine, see 7)
+3. POST /api/v1/tasks {title:"e2e-role-boundaries-probe", teamId:"tm_0000000001"} → 201,
+   id=t_0000000003, status=queued. (No DELETE /tasks/:id exists; POST .../archive → 409
+   TASK_INVALID_TRANSITION.    Probe row left queued; manual cleanup of task t_0000000003.)
+4. POST http://localhost:14000/session (no auth) → 200 {id:"ses_f663718ccffej1YrFG1Sur4twj",...}. OK
+   (plus one earlier inert probe session ses_f66381139ffeAC4y2V03D6ZEJt, no prompt ever sent)
+5. GET /api/v1/agent-policies (X-Worker-Token: compose-worker-token)
+   → 404 {"message":"Cannot GET /api/v1/agent-policies","error":"Not Found","statusCode":404}
+   Swagger /api/v1/docs-json (111 paths) contains NO *polic* route. /questions routes exist.
+6. GET http://localhost:14000/agent?directory=/data/vteam-worker/tasks/t_probe → 16 agents,
+   names: Atlas/Metis/Momus/Prometheus/Sisyphus-*/build/compaction/explore/general/librarian/
+   multimodal-looker/oracle/plan/summary — NO vteam-* roles.
+   docker cp worker:/data/vteam-worker/opencode.json → keys [$schema, mcp, plugin] only, NO agent
+   section. /data/vteam-worker/.vteam-role-guard/ → missing (ls: cannot access).
+7. GET /api/v1/questions?taskId=t_0000000003&status=pending (Bearer seed-member JWT)
+   → 403 {"code":"PERMISSION_TEAM_NOT_MEMBER","message":"您不是该团队成员"}.
+   GET /api/v1/teams/tm_0000000001 → userMembers=[u_seed_admin(owner), u_admin(owner)];
+   agent instances: 架构师-1/开发者-1/产品经理-1/项目经理-1/测试-1 (agentIds a_architect/
+   a_developer/a_product/a_project_manager/a_tester). seed-member is NOT in the team.
+
+Why INCONCLUSIVE (not FAIL, not PASS):
+- The deployed images predate role-enforcement Todos 12/15 (no /agent-policies route, no injected
+  agent section, no guard dir, no vteam-* serve agents). There is no policy to assert against:
+  firing POST /execute prompts (scenarios a/d/e/g) could only produce unguarded model runs —
+  denial substrings can never appear, and each 202 would start a real background agent loop
+  burning shared-stack model budget. The ask flow (c) additionally cannot yield a permission
+  question without bound-session dispatch of a guarded agent. So model executions were
+  deliberately NOT fired; scenarios a/c/d/e/f/g are unexecuted → INCONCLUSIVE by the script's
+  own rule (never pass by default).
+- Deterministic finding recorded instead: enforcement contract absent from live stack.
+
+Script corrections applied from this probe (scripts/e2e-role-boundaries.sh):
+- MEMBER_JWT auto-login changed seed-member → seed-admin (team owner); header documents that
+  seed-member is not in tm_0000000001 (live-verified 403 above).
+- Added INJECTED_OPENCODE_JSON override for containerized WORK_DIR in scenario (f).
+- WORKER_EXEC_URL derivation (SERVE_BASE_URL origin + 4198) kept per plan; operator override
+  documented (compose does not publish 4198 to host; use a forwarder or in-network host).
+
+To run for real once the feature is deployed (server image with /agent-policies + worker image
+with injector/guard, team membership for MEMBER_JWT):
+  SERVER_URL=http://localhost:13000 X_WORKER_TOKEN=compose-worker-token WORK_DIR=/data/vteam-worker \
+  SERVE_BASE_URL=http://localhost:14000 WORKER_EXEC_URL=http://<in-network-worker-host>:4198 \
+  INJECTED_OPENCODE_JSON=/tmp/vteam-opencode.json \
+  bash scripts/e2e-role-boundaries.sh
+  (bash -n scripts/e2e-role-boundaries.sh → SYNTAX_OK, verified 2026-09-13)

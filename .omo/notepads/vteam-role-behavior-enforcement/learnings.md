@@ -169,3 +169,43 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - UNVERIFIED（待 Todo 21 live）：MCP 运行时 `input.tool` 是否确为 `vteam_<action>` 裸名（若带前缀，
   映射会话 fail-closed deny 为安全方向）；hook 对 MCP/custom/git 全量触发为静态推理（prompt.ts 双调用点）。
 - hook 签名：`(input:{tool,sessionID,callID}, output:{args})`；工厂 ctx 含 `directory`；opencode 1.18.30。
+
+---
+
+## Todo 22 — docs update (16/15/A1 + README typo)
+
+- 16 doc: §2.1 table now mirrors shipped `ROLE_BOUNDARIES` (per-agent edit globs, bash effect, `ep_<role>`
+  seed id); §4 UI-design replaced by project_manager section (UI design demoted to custom-agent path note);
+  product/developer handoffs de-UI'd to match seed prompts (Todo 5 removed UI handoff).
+- 16 doc §8.2 rewritten: enforcement source = `ExecutionPolicy` + opencode native permission + guard;
+  `agent_tool_effects`/`permissionScope` explicitly labeled legacy non-enforcement in a table row plus §8.5,
+  §9.2, per-role mapping tables, and closing paragraph. Grep-asserted zero live-enforcement claims.
+- 15 doc: added `execution_policies` table + `agents.policyId` row + clone-inheritance note + config shape;
+  ER diagram gained entity + relation; table count header 21→22; legacy columns annotated non-enforcement.
+- A1 doc: §0 landing section records edit sole gate, universal glob, 1.18.30 + unpinned spec, all-roles
+  task deny, guard branch precedence + enabled sentinel + neutralization, real `vteam_<action>` names,
+  Degradation table + rollback; old §2 kept as history.
+- worker README:70 `OPENCODE_SERVE_PASSWORD` → `OPENCODE_SERVER_PASSWORD` (matches `config.ts:144`).
+- Commit `7a780ce` stages only the 4 doc files (worktree has parallel-todo files: .omo, md-docs/, scripts/).
+
+---
+
+## Todo 21 — e2e script + live probe (INCONCLUSIVE, feature not deployed)
+
+- Script `scripts/e2e-role-boundaries.sh` (bash, set -euo pipefail, curl+python3 only, no new deps)
+  covers a/c/d/e/f/g per plan: serve session create (POST /session → {id}), worker /execute 202,
+  poll GET /session/$SID/message for guard literal `【越界拦截` or native deny markers, bound-session
+  ask flow via POST /channels/:id/messages (@mention) → poll /questions?taskId&status=pending →
+  POST /questions/:id/reply {"response":"once"} asserting 200 (503 QUESTION_WORKER_UNAVAILABLE = fail),
+  deterministic task=deny contract on /agent-policies + injected opencode.json. Any poll timeout →
+  INCONCLUSIVE + non-zero exit, never pass by default. `bash -n` clean.
+- Live stack (compose, 2026-09-13) is reachable but PREDATES enforcement: /agent-policies → 404
+  (swagger 111 paths, no *polic* route), serve /agent → 16 agents with no vteam-*, injected
+  opencode.json has only {mcp, plugin} (no agent section), no .vteam-role-guard dir. Model executions
+  deliberately not fired (no policy → denial strings unproovable; 202 would start real background agent
+  loops on the shared stack). Evidence: `.omo/evidence/role-enforcement/e2e-role-boundaries.txt`.
+- Gotchas live-verified: (1) serve needs no Basic auth in compose (OPENCODE_SERVER_PASSWORD unset);
+  (2) seed-member is NOT in tm_0000000001 → /questions returns 403 PERMISSION_TEAM_NOT_MEMBER, so the
+  script auto-logins seed-admin (team owner) for MEMBER_JWT; (3) compose publishes serve 4000→host 14000
+  but NOT worker exec 4198 → WORKER_EXEC_URL needs an in-network host/forwarder; (4) no DELETE /tasks/:id
+  exists — probe task t_0000000003 left queued (archive → 409); (5) mention target 测试-1 = a_tester instance.
