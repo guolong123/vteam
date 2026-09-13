@@ -116,3 +116,18 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - `WorkerEndpointRef.capabilities?: unknown` 与 `workerSupportsAgentPolicies({capabilities?: unknown})` 签名直接兼容，无需适配。
 - 回退断言用 `toEqual` 对整 payload 做逐字节比较（enabled:false vs 无能力位字段；未知角色门真 vs 无能力位），比只断言 `agent` 键更强。
 - `server` tsc exit 0；`worker-dispatcher.spec` + `opencode-agent-duty.spec` 193/193 green。
+
+## Todo 20 — guard 纯判定模块 worker/src/role-guard/policy.ts
+
+- `evaluateToolCall({rolesDoc, session, tool, args})` 纯函数实现固定分支优先级：rolesDoc 缺失/非法/`enabled!==true`
+  → allow；session 未映射/未知 agent → allow（两者绝不 fail-closed）；角色条目残缺（permission/tools 缺失或非对象）
+  → fail-closed deny；read 类 9 名（read/grep/glob/lsp/webfetch/websearch/list/todowrite/todoread）allow 交层①；
+  edit 类 5 名按 `permission.edit` glob（`*:"deny"`+无 allow 命中即 deny，显式 deny 优先，不可解析路径时 allow 交层①）；
+  bash 仅按 bashDeny（与服务端 `ROLE_BASH_DENY_PATTERNS` 语义对齐：大小写不敏感子串，含 `*`/`?` 按 glob）；
+  task/execute 恒 deny；question/plan_exit/skill 通行；browser 按 tools allowlist；其余未知/自定义/MCP
+  （`vteam_<action>`、`git_*`）按 tools（allow/ask 放行）默认拒绝。
+- 本地 `wildcardMatch` 复刻 `Wildcard.match`（转义正则特殊字符，`*`→`.*` 跨分隔符，`?`→`.`，`^...$` 锚定），
+  worker 零 opencode 依赖；纠正文案替换 `{role}`/`<tool>`/`{tool}`/`<scopeSummary>`/`{scopeSummary}`/`{handoffTarget}`
+  （handoff 优先同名工具键，否则首个非空值）。
+- spec 49 例全绿；`npx tsc -p tsconfig.json --noEmit` exit 0。全量 worker 套件中
+  `src/driver/v1-driver.spec.ts` 2 例失败为基线预存（stash 后复现），与本模块无关。
