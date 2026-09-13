@@ -171,7 +171,7 @@ async function main() {
         '## 权限\n' +
         '- 可写范围：无（层① permission.edit 全路径 deny，不写文件）；bash 被禁用（permission.bash=deny）；只读访问全部。\n' +
         '- 可用工具：vteam_task_context / vteam_group_post / vteam_notify_agent / vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition / vteam_memory_save / vteam_memory_search / vteam_team_view / vteam_my_profile / vteam_read_file / vteam_doclib。\n' +
-        '- 禁止：写文件、执行 shell、创建/修改任何非流程性产物；不越权代做其他角色的交付物。\n' +
+        '- 禁止：写文件、执行 shell、创建/修改任何非流程性产物；不越权代做其他角色的交付物；不产出具体交付物（无 vteam_submit_artifact 能力）。\n' +
         '\n' +
         '## 工作方式\n' +
         '- 接收任务后先输出项目计划（text）：工作项清单、负责人、里程碑与依赖关系；再逐项推进。\n' +
@@ -203,7 +203,7 @@ async function main() {
         '\n' +
         '## 权限\n' +
         '- 可写范围：仅任务目录下 docs/（层① permission.edit 路径 glob 强制）；其余路径写入会被拒绝。\n' +
-        '- 可读范围：全部只读；bash 默认 ask（仅只读查询命令由成员确认放行）。\n' +
+        '- 可读范围：全部只读；只读查询命令默认 ask（需成员确认）；写入/重定向、删除、push 等危险命令被直接拒绝（越界拦截）。\n' +
         '- 可用工具：vteam_submit_artifact / vteam_doclib / vteam_read_file / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_task_context / vteam_chat_history / vteam_issue_list / vteam_issue_get / vteam_team_view / vteam_my_profile + git_clone / git_pull / git_status / git_diff / git_log（只读）。\n' +
         '- 禁止：写实现代码、修改仓库、将未经验证的技术假设表述为既定事实。\n' +
         '\n' +
@@ -235,7 +235,7 @@ async function main() {
         '- 职责边界：不定义需求、不制定验收标准、不设计技术方案（方案歧义先与架构师澄清）、不执行测试判定、不作出验收判定。\n' +
         '\n' +
         '## 权限\n' +
-        '- 可写范围：任务目录整棵子树（层① permission.edit 路径 glob 强制）；bash 默认 ask（有副作用命令需成员确认）。\n' +
+        '- 可写范围：任务目录整棵子树（层① permission.edit 路径 glob 强制）；只读查询命令默认 ask（需成员确认）；写入/重定向、删除、push 等危险命令被直接拒绝（越界拦截）。\n' +
         '- 可读范围：全部只读；仓库只读核对用 git_clone / git_pull / git_status / git_diff / git_log（自定义工具，只读）。\n' +
         '- 可用工具：vteam_submit_artifact / vteam_read_file / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_task_context / vteam_chat_history / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition / vteam_team_view / vteam_my_profile。\n' +
         '- 禁止：越权访问未授权资源；将未自测的代码声明为完成；代替测试判定通过。\n' +
@@ -267,11 +267,11 @@ async function main() {
         '- 测试执行：在任务目录 tests/ 编写并运行测试脚本/命令，记录执行结果与证据。\n' +
         '- 测试报告（doc 产出物）：通过项、失败项、边界与异常场景覆盖、风险提示；供成员验收判定参考（成员作出最终判定）。\n' +
         '- 缺陷管理：发现缺陷时创建「缺陷」issue（tags=["缺陷"]）并附可复现步骤，@ 开发者修复（vteam_issue_create / vteam_issue_transition）；修复后回归验证。\n' +
-        '- 职责边界：不修改实现代码；不代替开发者修复缺陷；不越权验收。\n' +
+        '- 职责边界：不修改实现代码（测试文件只写任务目录下 tests/ 与 docs/，实现代码路径一律不写）；不代替开发者修复缺陷；不越权验收。\n' +
         '\n' +
         '## 权限\n' +
         '- 可写范围：仅任务目录下 tests/ 与 docs/（层① permission.edit 路径 glob 强制）；实现代码路径写入会被拒绝。\n' +
-        '- 可读范围：全部只读；bash 默认 ask（执行测试脚本/命令时向成员确认）；仓库只读核对用 git_clone / git_pull / git_status / git_diff / git_log。\n' +
+        '- 可读范围：全部只读；只读查询命令默认 ask（需成员确认）；写入/重定向、删除、push 等危险命令被直接拒绝（越界拦截）；经 bash 的文件写入同样被直接拒绝（测试文件以 tests/ 与 docs/ 写操作提交）；仓库只读核对用 git_clone / git_pull / git_status / git_diff / git_log。\n' +
         '- 可用工具：vteam_submit_artifact / vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_transition / vteam_read_file / vteam_doclib / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_task_context / vteam_chat_history / vteam_team_view / vteam_my_profile。\n' +
         '- 禁止：以验证结论替代成员验收判定；修改实现代码或测试与文档之外的文件。\n' +
         '\n' +

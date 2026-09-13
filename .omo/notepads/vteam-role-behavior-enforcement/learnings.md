@@ -265,3 +265,10 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - (c) ask flow: clean DB task is team currentTask + pending → @mention dispatches to bound session (prior queued-blocker gone). But architect prose-handles + tester has no team session → no question. To fully verify (c), tester needs a live team session first.
 - Script `jget` pending-question extractor crashes on empty-list `[]` responses (`d.get` on list) — manual poll used null-safe variant; script fix deferred (script exited before (c) in clean run anyway).
 - (d) script ~10s `hello-e2e` match hits prompt echo; genuine allow proof = completed write + readback + file on disk (same raw file, re-fetched full set).
+
+## Prompt-vs-behavior alignment fix (2026-09-13, live chat c_0000000001)
+- Architect/Developer/Tester bash lines no longer say bare "bash 默认 ask"; now "只读查询命令默认 ask（需成员确认）；写入/重定向、删除、push 等危险命令被直接拒绝（越界拦截）。" — matches layer① permission.bash='ask' + layer② guard ROLE_BASH_DENY_PATTERNS hard-deny (worker/src/role-guard/policy.ts bash branch: hit → deny, miss → allow to layer①).
+- Tester 职责边界 keeps 不修改实现代码 + explicit "测试文件只写任务目录下 tests/ 与 docs/，实现代码路径一律不写"; bash-writes-denied note added so tester expects no ask prompt for redirects.
+- PM keeps NO vteam_submit_artifact (plan intent: PM 不产出交付物); prompt 禁止 line now explicit "不产出具体交付物（无 vteam_submit_artifact 能力）" with real vteam_ prefix (bare submit_artifact would trip seed.spec no-bare-name rule `(?<!vteam_)\b<bare>\b`).
+- No prompt mentions permissionScope/toolEffects as enforcement (only layer① permission.edit/bash references, which ARE the enforced source); agent.constants.ts untouched (no value change needed, ROLE_BASH_DENY_PATTERNS unchanged).
+- seed.spec.ts needed NO changes: four-direction + 转交/vteam_notify_agent + banned-words + bare-name assertions all still green (22/22 with constants spec); tsc exit 0.
