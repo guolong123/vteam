@@ -153,6 +153,25 @@ export interface WorkerCommand {
 type HealthTimer = ReturnType<typeof setInterval>;
 
 /**
+ * Todo 14 能力位门（含名称校验，供 Todo 13 dispatch 选用策略 agent 前调用）。
+ * 判定式：`capabilities.agentPolicies?.enabled === true && Array.isArray(names) && names.includes(agentName)`。
+ * 旧 worker（无 agentPolicies 字段）/残缺形状一律返回 false（stale-true 防护：仅 enabled=true 不够，候选名必须在本次写入清单内）。
+ */
+export function workerSupportsAgentPolicies(
+  worker: { capabilities?: unknown } | null | undefined,
+  agentName: string,
+): boolean {
+  const caps = (worker?.capabilities ?? {}) as Partial<{
+    agentPolicies?: { enabled?: unknown; names?: unknown };
+  }>;
+  const gate = caps.agentPolicies;
+  if (!gate || gate.enabled !== true) {
+    return false;
+  }
+  return Array.isArray(gate.names) && gate.names.includes(agentName);
+}
+
+/**
  * Worker 控制面服务（T7：WorkerRegistry + Heartbeat + Scheduler + LifecycleManager 骨架）。
  *
  * - register：X-Worker-Token 校验由 guard 完成，此处 upsert Worker 行 + tokenHash(bcrypt)

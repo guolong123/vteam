@@ -12,6 +12,7 @@ import {
   WORKER_STATUS,
 } from './workers.constants';
 import { WorkersService } from './workers.service';
+import { workerSupportsAgentPolicies } from './workers.service';
 
 jest.mock('bcrypt', () => ({
   hash: jest.fn(),
@@ -1935,6 +1936,76 @@ describe('WorkersService', () => {
       });
       const view = await service.findOne('w_2');
       expect(view.capabilities).toBeNull();
+    });
+  });
+
+  describe('workerSupportsAgentPolicies（Todo 14 能力位门：enabled && names.includes）', () => {
+    const NAMES = ['vteam-plan', 'vteam-product', 'vteam-architect', 'vteam-developer', 'vteam-tester', 'vteam-project_manager'];
+
+    it('enabled=true 且 names 含候选 agent → true', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          { capabilities: { maxInstances: 5, agentPolicies: { enabled: true, names: NAMES } } },
+          'vteam-developer',
+        ),
+      ).toBe(true);
+    });
+
+    it('enabled=true 但 names 不含候选 agent → false（stale-true 防护）', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          { capabilities: { maxInstances: 5, agentPolicies: { enabled: true, names: NAMES } } },
+          'vteam-unknown',
+        ),
+      ).toBe(false);
+    });
+
+    it('enabled=false（含完整 names）→ false', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          { capabilities: { maxInstances: 5, agentPolicies: { enabled: false, names: NAMES } } },
+          'vteam-developer',
+        ),
+      ).toBe(false);
+    });
+
+    it('enabled=false + names=[]（中性化）→ false', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          { capabilities: { maxInstances: 5, agentPolicies: { enabled: false, names: [] } } },
+          'vteam-plan',
+        ),
+      ).toBe(false);
+    });
+
+    it('旧 worker（无 agentPolicies 字段）→ false', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          { capabilities: { maxInstances: 5, skills: [], tools: [] } },
+          'vteam-developer',
+        ),
+      ).toBe(false);
+    });
+
+    it('worker 为 null/undefined 或 capabilities 缺失 → false，不抛错', () => {
+      expect(workerSupportsAgentPolicies(null, 'vteam-developer')).toBe(false);
+      expect(workerSupportsAgentPolicies(undefined, 'vteam-developer')).toBe(false);
+      expect(workerSupportsAgentPolicies({}, 'vteam-developer')).toBe(false);
+    });
+
+    it('残缺形状（names 非数组 / enabled 非 true）→ false', () => {
+      expect(
+        workerSupportsAgentPolicies(
+          { capabilities: { agentPolicies: { enabled: true, names: 'vteam-developer' } } },
+          'vteam-developer',
+        ),
+      ).toBe(false);
+      expect(
+        workerSupportsAgentPolicies(
+          { capabilities: { agentPolicies: { enabled: 1, names: NAMES } } },
+          'vteam-developer',
+        ),
+      ).toBe(false);
     });
   });
 

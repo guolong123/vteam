@@ -129,6 +129,32 @@ describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
   it('F4：显式传入 maxInstances 时按传入值上报（替代硬编码 1）', async () => {
     expect((await buildCapabilities(4199, 'http://worker', undefined, undefined, undefined, 3)).maxInstances).toBe(3);
   });
+
+  it('Todo 14：注入成功 → capabilities.agentPolicies.enabled=true 且 names=写入名（6 agent）', async () => {
+    const names = ['vteam-plan', 'vteam-product', 'vteam-architect', 'vteam-developer', 'vteam-tester', 'vteam-project_manager'];
+    const report: InjectReport = { skills: [], tools: [], mcpServers: [], agentPolicies: { enabled: true, names } };
+    const caps = await buildCapabilities(4199, 'http://worker', report);
+    expect(caps.agentPolicies).toEqual({ enabled: true, names });
+  });
+
+  it('Todo 14：注入失败/中性化 → enabled=false 且 names=[]', async () => {
+    const report: InjectReport = { skills: [], tools: [], mcpServers: [], agentPolicies: { enabled: false, names: [] } };
+    const caps = await buildCapabilities(4199, 'http://worker', report);
+    expect(caps.agentPolicies).toEqual({ enabled: false, names: [] });
+  });
+
+  it('Todo 14：未传注入报告（默认空报告）→ agentPolicies 缺省为 enabled=false/[]（旧 worker 兼容）', async () => {
+    const caps = await buildCapabilities(4199, 'http://worker');
+    expect(caps.agentPolicies).toEqual({ enabled: false, names: [] });
+  });
+
+  it('Todo 14：names 防御式拷贝（调用方篡改注入报告不影响已组装 capabilities）', async () => {
+    const names = ['vteam-plan'];
+    const report: InjectReport = { skills: [], tools: [], mcpServers: [], agentPolicies: { enabled: true, names } };
+    const caps = await buildCapabilities(4199, 'http://worker', report);
+    names.push('vteam-evil');
+    expect(caps.agentPolicies?.names).toEqual(['vteam-plan']);
+  });
 });
 
 describe('resolveModels（C2：serve 模型列表探测与降级）', () => {
@@ -784,6 +810,19 @@ describe('buildRegisterOptions（T4c：重启后重新注册携带新端口）',
       'cli-version',
     );
     expect(opts.capabilities.maxInstances).toBe(3);
+  });
+
+  it('Todo 14：注入报告透传——注册选项携带 agentPolicies 能力位（成功：enabled=true + 6 名）', async () => {
+    const names = ['vteam-plan', 'vteam-product', 'vteam-architect', 'vteam-developer', 'vteam-tester', 'vteam-project_manager'];
+    const report: InjectReport = { skills: [], tools: [], mcpServers: [], agentPolicies: { enabled: true, names } };
+    const opts = await buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version', report);
+    expect(opts.capabilities.agentPolicies).toEqual({ enabled: true, names });
+  });
+
+  it('Todo 14：注入失败/中性化——注册选项携带 enabled=false/names=[]', async () => {
+    const report: InjectReport = { skills: [], tools: [], mcpServers: [], agentPolicies: { enabled: false, names: [] } };
+    const opts = await buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version', report);
+    expect(opts.capabilities.agentPolicies).toEqual({ enabled: false, names: [] });
   });
 });
 

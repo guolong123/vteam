@@ -60,6 +60,13 @@ export interface WorkerCapabilities {
    * 随注册上报——server 据此发现 worker 执行端点（方案 A：server 下发 prompt → worker 驱动 serve 主动上送事件）。
    */
   execPort?: number;
+  /**
+   * 角色 agent 策略能力位（Todo 14：由 injector `injectAll()` 结果驱动）。
+   * - 成功写入 agent 节 → `{ enabled: true, names: 本次写入名 }`；
+   * - 拉取失败/角色集为空（中性化）→ `{ enabled: false, names: [] }`。
+   * 旧 worker 无此字段 → server 视为 false（向后兼容，加法可选字段）。
+   */
+  agentPolicies?: { enabled: boolean; names: string[]; generatedAt?: string };
 }
 
 /** 负载快照（对齐 schema Worker.load Json 与 server WorkerLoadDto）。 */

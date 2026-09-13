@@ -96,3 +96,10 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - 同名注意：`credentials/model-credential-injector.ts` 有个同名异构 `buildOpencodeConfig`
  （auth.json 内容构造），与死掉的 ExecutionConfig-builder 无关，未动。
 - 基线已有 2 个 `v1-driver.spec.ts` 失败（stash 验证过，与本改动无关）。
+# learnings (append-only)
+
+## 2026-09-13 — Todo 14 worker agentPolicies capability + gate helper
+- `WorkerCapabilities.agentPolicies` 为加法可选字段；`buildCapabilities` 恒带该键（默认空报告 → enabled:false/names:[]），旧 worker 缺字段 → server 门返回 false。
+- server 全局 `ValidationPipe({whitelist:true})` 会剔除未声明字段，故 `WorkerCapabilitiesDto` 必须显式声明 `agentPolicies` 嵌套 DTO，否则注册时能力位被 strip、门永假。
+- `workerSupportsAgentPolicies` 判定式 `enabled===true && Array.isArray(names) && names.includes(agentName)`；`enabled:1`/names 非数组等残缺形状一律 false（stale-true 防护）。
+- 基线 `workers.service.spec.ts` 已有 5 处 git-credential dispatch 失败（与 Todo 14 无关，未动）；本次新增 7 用例全绿，无回归。

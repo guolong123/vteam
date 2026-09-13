@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsInt,
   IsNotEmpty,
   IsObject,
@@ -10,6 +11,23 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+
+/** worker agent 策略能力位（Todo 14：injector 注入结果透传；旧 worker 缺省=不支持）。 */
+export class WorkerAgentPoliciesDto {
+  @ApiProperty({ description: 'agent 策略注入是否成功（成功写入 agent 节=true，失败/中性化=false）' })
+  @IsBoolean()
+  enabled: boolean;
+
+  @ApiProperty({ description: '本次写入 opencode.json agent 节的 agent 名列表', type: [String] })
+  @IsArray()
+  @IsString({ each: true })
+  names: string[];
+
+  @ApiPropertyOptional({ description: '能力位生成时间（ISO 8601，可选）' })
+  @IsOptional()
+  @IsString()
+  generatedAt?: string;
+}
 
 /** worker 能力声明（对齐 schema Worker.capabilities Json，T1 契约基座）。 */
 export class WorkerCapabilitiesDto {
@@ -73,6 +91,17 @@ export class WorkerCapabilitiesDto {
   @IsInt()
   @Min(0)
   execPort?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Todo 14：agent 策略能力位（injector 注入结果透传；旧 worker 缺省=不支持，whitelist 下须显式声明否则被剔除）',
+    type: WorkerAgentPoliciesDto,
+  })
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => WorkerAgentPoliciesDto)
+  agentPolicies?: WorkerAgentPoliciesDto;
 }
 
 /** worker 负载快照（对齐 schema Worker.load Json）。 */

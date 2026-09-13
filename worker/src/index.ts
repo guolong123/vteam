@@ -463,6 +463,10 @@ function defaultExecutableModelsProbe(): string | undefined {
  * F4：maxInstances 并发上限配置化——由调用方传入 config.workerMaxInstances（env
  * WORKER_MAX_INSTANCES，默认 5），替代原硬编码 1（单实例导致长任务执行期间新消息
  * 全部被拒"无可用 worker"）；serve 实测支持多 session 并行。
+ * Todo 14：capabilities.agentPolicies 透传 injector 注入报告（`injectAll()` 返回
+ * `InjectReport.agentPolicies`）——成功 `{enabled:true, names:写入名}`，
+ * 失败/中性化 `{enabled:false, names:[]}`；随注册上报（心跳不带 capabilities，
+ * 注册/reRegister 经 buildRegisterOptions 间接携带）。
  * 异步化语义：与调用点（serve 就绪后）保持一致，供 registerCurrent/reRegister 链 await。
  */
 export async function buildCapabilities(
@@ -486,6 +490,11 @@ export async function buildCapabilities(
     ...(models !== undefined ? { models } : {}),
     ...(execPort !== undefined ? { execPort } : {}),
     ...(executableModels !== undefined ? { executableModels } : {}),
+    // Todo 14：能力位上报（injector 注入结果透传；防御式拷贝 names 防调用方篡改）。
+    agentPolicies: {
+      enabled: injected.agentPolicies.enabled,
+      names: [...injected.agentPolicies.names],
+    },
   };
 }
 
