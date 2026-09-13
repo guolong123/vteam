@@ -92,4 +92,13 @@ export class UpdateAgentDto {
   @IsString()
   @ValidateIf((o) => o.workerId !== null)
   workerId?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      '绑定的 ExecutionPolicy id（custom 经 PATCH 改 policyId 生效；模板 policyId 由 seed 维护）',
+    example: 'ep_developer',
+  })
+  @IsOptional()
+  @IsString()
+  policyId?: string;
 }

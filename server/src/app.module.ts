@@ -22,6 +22,7 @@ import { PlatformMcpModule } from './platform-mcp/platform-mcp.module';
 import { QuestionsModule } from './questions/questions.module';
 import { IssuesModule } from './issues/issues.module';
 import { DocsSiteModule } from './docs-site/docs-site.module';
+import { ExecutionPoliciesModule } from './execution-policies/execution-policies.module';
 import { SwaggerMcpModule } from './swagger-mcp/swagger-mcp.module';
 import { MemoriesModule } from './memories/memories.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -64,6 +65,7 @@ import { TeamsModule } from './teams/teams.module';
     QuestionsModule,
     IssuesModule,
     DocsSiteModule,
+    ExecutionPoliciesModule,
     SwaggerMcpModule,
     MemoriesModule,
     MessageChannelsModule,

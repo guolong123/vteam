@@ -207,6 +207,7 @@ describe('AgentsService', () => {
           'defaultModelId',
           'persona',
           'permissionScope',
+          'policyId',
           'skillIds',
           'toolEffects',
           'workerId',
@@ -1147,6 +1148,126 @@ describe('AgentsService', () => {
 
       expect(result.degraded).toBe(true);
       expect(result.agents).toEqual([]);
+    });
+  });
+
+  describe('policyId 绑定（Todo 11：create/clone/update 持久化 + toAgentDto 返回）', () => {
+    it('create：DTO 传 policyId → 落库 policyId，toAgentDto 返回', async () => {
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      prisma.agent.create.mockResolvedValue({
+        ...customRow,
+        policyId: 'ep_developer',
+      });
+
+      const dto: CreateAgentDto = {
+        name: '策略分析师',
+        type: 'custom',
+        role: 'analyst',
+        prompt: 'prompt-custom',
+        policyId: 'ep_developer',
+      };
+
+      const result = await service.create('u_admin', dto);
+
+      expect(prisma.agent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ policyId: 'ep_developer' }),
+        }),
+      );
+      expect(result).toMatchObject({ policyId: 'ep_developer' });
+    });
+
+    it('create：不传 policyId → 落库 policyId=null（向后兼容）', async () => {
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      prisma.agent.create.mockResolvedValue({ ...customRow, policyId: null });
+
+      const result = await service.create('u_admin', {
+        name: '无策略分析师',
+        type: 'custom',
+      });
+
+      expect(prisma.agent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ policyId: null }),
+        }),
+      );
+      expect(result).toMatchObject({ policyId: null });
+    });
+
+    it('clone：复制源 policyId（custom 经 clone 继承策略绑定）', async () => {
+      const source = { ...templateRows[0], policyId: 'ep_product' };
+      prisma.agent.findUnique.mockResolvedValue(source);
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      prisma.agent.create.mockResolvedValue({
+        ...source,
+        id: 'a_0000000005',
+        name: '产品经理副本',
+        type: 'clone',
+        baseAgentId: 'a_product',
+      });
+
+      const result = await service.clone('u_admin', 'a_product', {});
+
+      expect(prisma.agent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ policyId: 'ep_product' }),
+        }),
+      );
+      expect(result).toMatchObject({ policyId: 'ep_product' });
+    });
+
+    it('update：DTO 传 policyId → 更新落库，toAgentDto 返回（custom 经 PATCH 改 policyId 生效）', async () => {
+      prisma.agent.findUnique
+        .mockResolvedValueOnce(customRow)
+        .mockResolvedValueOnce({
+          ...customRow,
+          policyId: 'ep_developer',
+        });
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      prisma.agent.update.mockResolvedValue(customRow);
+
+      const dto: UpdateAgentDto = { policyId: 'ep_developer' };
+      const result = await service.update('a_0000000005', dto);
+
+      expect(prisma.agent.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ policyId: 'ep_developer' }),
+        }),
+      );
+      expect(result).toMatchObject({ policyId: 'ep_developer' });
+    });
+
+    it('update：不传 policyId → 不触碰原绑定', async () => {
+      prisma.agent.findUnique
+        .mockResolvedValueOnce({ ...customRow, policyId: 'ep_developer' })
+        .mockResolvedValueOnce({
+          ...customRow,
+          policyId: 'ep_developer',
+          name: '仅改名',
+        });
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      prisma.agent.update.mockResolvedValue(customRow);
+
+      const result = await service.update('a_0000000005', { name: '仅改名' });
+
+      expect(prisma.agent.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.not.objectContaining({ policyId: expect.anything() }) }),
+      );
+      expect(result).toMatchObject({
+        name: '仅改名',
+        policyId: 'ep_developer',
+      });
+    });
+
+    it('toAgentDto：findOne 返回 policyId（详情含策略绑定）', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        ...templateRows[0],
+        policyId: 'ep_product',
+      });
+
+      const result = await service.findOne('a_product');
+
+      expect(result).toMatchObject({ id: 'a_product', policyId: 'ep_product' });
     });
   });
 });

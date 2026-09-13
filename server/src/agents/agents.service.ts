@@ -46,6 +46,7 @@ type AgentRow = {
   persona: string | null;
   workerId: string | null;
   permissionScope: Prisma.JsonValue | null;
+  policyId: string | null;
   createdAt: Date;
   updatedAt: Date;
   skills: { skillId: string }[];
@@ -173,6 +174,7 @@ export class AgentsService implements OnModuleInit {
           permissionScope: dto.permissionScope
             ? (dto.permissionScope as Prisma.InputJsonValue)
             : undefined,
+          policyId: dto.policyId ?? null,
           createdBy: userId,
         },
       });
@@ -217,6 +219,7 @@ export class AgentsService implements OnModuleInit {
           persona: source.persona,
           permissionScope: source.permissionScope as
             Prisma.InputJsonValue | undefined,
+          policyId: source.policyId ?? null,
           createdBy: userId,
         },
       });
@@ -266,6 +269,7 @@ export class AgentsService implements OnModuleInit {
           ...(dto.permissionScope !== undefined
             ? { permissionScope: dto.permissionScope as Prisma.InputJsonValue }
             : {}),
+          ...(dto.policyId !== undefined ? { policyId: dto.policyId } : {}),
         },
       });
 
@@ -501,6 +505,7 @@ export class AgentsService implements OnModuleInit {
       persona: agent.persona,
       workerId: agent.workerId,
       permissionScope: agent.permissionScope,
+      policyId: agent.policyId,
       skillIds: agent.skills.map((s) => s.skillId),
       toolEffects: agent.toolEffects.map((t) => ({
         toolAction: t.toolAction,

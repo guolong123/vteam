@@ -111,4 +111,13 @@ export class CreateAgentDto {
       'defaultModelId 需为 provider/model 格式（如 opencode-go/deepseek-v4-flash）',
   })
   defaultModelId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '绑定的 ExecutionPolicy id（角色模板策略 ep_<role>；custom 经 PATCH 改 policyId 生效）',
+    example: 'ep_developer',
+  })
+  @IsOptional()
+  @IsString()
+  policyId?: string;
 }
