@@ -38,6 +38,11 @@ import {
 } from './platform-mcp.constants';
 import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service';
 import { ModuleRef } from '@nestjs/core';
+import {
+  containsTeamWideMention,
+  MentionThrottle,
+} from '../chat/mention-throttle';
+import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
 
 /**
  * 消息主键前缀：与 ChatService/WorkerDispatcher 共享 IdGeneratorService 的 'm' 计数
@@ -127,7 +132,19 @@ export class PlatformMcpService {
     private readonly outboundDispatcher: NotificationDispatcherService,
     @Optional()
     private readonly moduleRef?: ModuleRef,
+    // 生效策略解析（my_profile effectivePermission 唯一事实来源；缺省可空——
+    // 单测/旧装配未提供时回退 effectivePermission=null，不阻断 legacy 字段）。
+    @Optional()
+    @Inject(ExecutionPolicyService)
+    private readonly executionPolicyService?: ExecutionPolicyService,
   ) {}
+
+  /**
+   * Agent-originated mention 触发硬节流（@ storm 熔断，进程内滑动窗口）。
+   * 仅 MCP 路径（groupPost / notifyAgent）咨询；用户路径（chat.service
+   * createMessage）永不经过此处。
+   */
+  private readonly mentionThrottle = new MentionThrottle();
 
   /**
    * chat_history：任务群聊历史消息（按需拉取，替代自动注入的群聊历史）。
@@ -377,8 +394,30 @@ export class PlatformMcpService {
     // is_0000000015：@ 提及 → 定向分派每个被 @ 实例（含主 Agent），失败不阻断发布。
     // 团队维度跳过分派：dispatchAgentMention 是任务域执行链路（需 taskId），团队会话
     // 无任务可执行——被 @ 成员经频道广播可见消息。
+    // @ storm 熔断（仅 agent-originated）：@all/team-wide 内容永不展开为触发
+    // （display-only：落库 + 广播已完成）；其余按滑动窗口节流——被拦仅 warn，
+    // 不阻断发布（消息已落库），返回仍成功。
     if (!isTeam) {
+      const teamWide = containsTeamWideMention(args.content);
       for (const target of mentionedInstances) {
+        if (teamWide) {
+          this.logger.warn(
+            `[mcp] group_post @all 抑制触发 task=${effTaskId} from=${instanceId} to=${target}（display-only，消息已发布）`,
+          );
+          continue;
+        }
+        const decision = this.mentionThrottle.shouldDispatch({
+          taskId: effTaskId as string,
+          fromInstanceId: instanceId,
+          toInstanceId: target,
+          now: Date.now(),
+        });
+        if (!decision.allow) {
+          this.logger.warn(
+            `[mcp] group_post 提及触发被节流 task=${effTaskId} from=${instanceId} to=${target} reason=${decision.reason}（消息已发布）`,
+          );
+          continue;
+        }
         await this.workerDispatcher
           .dispatchAgentMention({
             taskId: effTaskId as string,
@@ -639,13 +678,28 @@ export class PlatformMcpService {
 
     // 团队维度跳过触发：dispatchAgentMention 是任务域执行链路（需 taskId），团队会话
     // 无任务可执行——@ 消息落库加广播后目标成员经频道可见。
+    // @ storm 熔断（仅 agent-originated）：滑动窗口节流——被拦仅 warn，
+    // 不阻断发布（消息已落库广播），返回仍成功。notify_agent 为单显式目标，
+    // 内容含 @all 也不展开 fan-out（仅触发 targetInstanceId）。
     if (!isTeam) {
-      await this.workerDispatcher.dispatchAgentMention({
+      const decision = this.mentionThrottle.shouldDispatch({
         taskId: effTaskId as string,
-        channelId: channel.id,
-        text,
-        targetInstanceId: args.targetInstanceId,
+        fromInstanceId: args.selfInstanceId,
+        toInstanceId: args.targetInstanceId,
+        now: Date.now(),
       });
+      if (!decision.allow) {
+        this.logger.warn(
+          `[mcp] notify_agent 触发被节流 task=${effTaskId} from=${args.selfInstanceId} to=${args.targetInstanceId} reason=${decision.reason}（消息已发布）`,
+        );
+      } else {
+        await this.workerDispatcher.dispatchAgentMention({
+          taskId: effTaskId as string,
+          channelId: channel.id,
+          text,
+          targetInstanceId: args.targetInstanceId,
+        });
+      }
     }
 
     return {
@@ -1487,8 +1541,30 @@ export class PlatformMcpService {
     seq: number;
     workDir: string | null;
     defaultModelId: string | null;
+    /** 遗留快照（仅兼容保留，非 enforcement 来源；见 deprecated 字段）。 */
     permissionScope: Prisma.JsonValue | null;
+    /** 遗留快照（仅兼容保留，非 enforcement 来源；见 deprecated 字段）。 */
     toolEffects: Array<{ toolAction: string; effect: string }>;
+    /** 遗留字段弃用标记：permissionScope/toolEffects 不再是事实来源。 */
+    deprecated: {
+      permissionScope: true;
+      toolEffects: true;
+      note: string;
+    };
+    /**
+     * 生效权限（唯一事实来源）：经 ExecutionPolicyService.resolveByAgent 按
+     * agent 绑定策略解析（层① opencode 原生 permission + 层② guard correction），
+     * 与 live enforcement 同源。未绑定/策略缺失时为 null（调用方回退提示词边界）。
+     */
+    effectivePermission: {
+      policyId: string;
+      policyName: string;
+      agentName: string;
+      permission: Record<string, unknown>;
+      correction: Record<string, unknown>;
+    } | null;
+    /** 调用方 opencode agent 名（`vteam-<role>`，无 role 回退 `vteam-plan`）。 */
+    agentName: string;
     promptSummary: string;
     promptTruncated: boolean;
   }> {
@@ -1514,6 +1590,7 @@ export class PlatformMcpService {
             role: true,
             prompt: true,
             defaultModelId: true,
+            policyId: true,
             permissionScope: true,
             toolEffects: { select: { toolAction: true, effect: true } },
           },
@@ -1529,6 +1606,25 @@ export class PlatformMcpService {
     const profile = member;
     const prompt = profile.agent.prompt;
     const truncated = prompt.length > 500;
+    const agentRole = profile.agent.role as string | null;
+    const agentPolicyId = (profile.agent as { policyId?: string | null })
+      .policyId ?? null;
+    let effectivePermission: {
+      policyId: string;
+      policyName: string;
+      agentName: string;
+      permission: Record<string, unknown>;
+      correction: Record<string, unknown>;
+    } | null = null;
+    try {
+      effectivePermission =
+        (await this.executionPolicyService?.resolveByAgent({
+          policyId: agentPolicyId,
+          role: agentRole,
+        })) ?? null;
+    } catch {
+      effectivePermission = null;
+    }
     return {
       taskId: args.taskId,
       instanceId: profile.id,
@@ -1544,6 +1640,13 @@ export class PlatformMcpService {
         toolAction: t.toolAction,
         effect: t.effect,
       })),
+      deprecated: {
+        permissionScope: true as const,
+        toolEffects: true as const,
+        note: 'permissionScope/toolEffects 为遗留快照，仅兼容保留；effectivePermission 为唯一事实来源（live enforcement 同源：ExecutionPolicy + opencode 原生 permission + guard），自审计请以 effectivePermission 为准',
+      },
+      effectivePermission,
+      agentName: agentRole ? `vteam-${agentRole}` : 'vteam-plan',
       promptSummary: truncated ? prompt.slice(0, 500) : prompt,
       promptTruncated: truncated,
     };

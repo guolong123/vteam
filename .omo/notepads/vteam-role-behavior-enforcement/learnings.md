@@ -294,3 +294,10 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   色重写则不删，残留交 TTL）；新增 `pruneStaleSessionPolicies`（默认 24h，
   best-effort，删过期 json 只回 pass-through 不 fail-closed），每次 track 前调用。
 - 未映射 pass-through 语义保持；guard 判定优先级未动；无新增依赖。
+
+## 2026-09-13 agent @ storm 熔断 + my_profile effectivePermission（fix(chat))
+- Storm 根因：agent-originated 触发（group_post/notify_agent → dispatchAgentMention）无服务端配额，仅 prompt 软约束；`@all` 在 agent 内容中无展开抑制。
+- 修法：新增 `server/src/chat/mention-throttle.ts`（纯内存滑动窗口，时钟经 `now` 注入）：无序对 3 次/60s + 单任务 20 次/120s + `containsTeamWideMention`（@all/@所有人/@全体/@here）display-only。仅 MCP 两路径咨询（groupPost mentionedInstances 循环、notifyAgent 分派前），被拦 warn + 照常返回成功；`chat.service` 用户路径零触碰（spec 断言源码不引用 throttle）。
+- 实现坑：prune 用 max 窗口淘汰时，计数必须按各自窗口过滤（pair 60s vs task 120s），否则 pair 配额被 task 窗口拉长——被单测抓出，已修（计数侧 `r.at > now - windowMs`）。
+- my_profile：新增 `effectivePermission{policyId,policyName,agentName,permission,correction}`（`ExecutionPolicyService.resolveByAgent({policyId,role})`，`@Optional` 注入 + try/catch 回退 null）与 `agentName(vteam-<role>)`；legacy `permissionScope/toolEffects` 保留但加 `deprecated{permissionScope:true,toolEffects:true,note}` 指明 effectivePermission 为唯一事实来源。`PlatformMcpModule` 新增 `ExecutionPoliciesModule` import（该模块仅依赖 Realtime，无环）。
+- 验证：mention-throttle 7 + platform-mcp.service 150 + controller/chat/worker-dispatcher 313 全绿；`tsc --noEmit` 干净。

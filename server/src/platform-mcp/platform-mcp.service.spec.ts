@@ -28,6 +28,7 @@ import { IssuesService } from '../issues/issues.service';
 import { TasksService } from '../tasks/tasks.service';
 import { QuestionsService } from '../questions/questions.service';
 import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service';
+import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
 
 describe('PlatformMcpService', () => {
   let service: PlatformMcpService;
@@ -103,6 +104,16 @@ describe('PlatformMcpService', () => {
   };
   let plansService: { assignReviewer: jest.Mock };
   let outboundDispatcher: { sendToChannelByIdOrName: jest.Mock };
+  let executionPolicyService: { resolveByAgent: jest.Mock };
+  const allowPolicy = () => {
+    executionPolicyService.resolveByAgent.mockResolvedValue({
+      policyId: 'ep_developer',
+      policyName: '开发者策略',
+      agentName: 'vteam-developer',
+      permission: { edit: 'allow', bash: 'ask' },
+      correction: { scopeSummary: '开发者边界' },
+    });
+  };
 
   const taskId = 't_0000000001';
   const workerId = 'w_0000000001';
@@ -219,6 +230,7 @@ describe('PlatformMcpService', () => {
     outboundDispatcher = {
       sendToChannelByIdOrName: jest.fn().mockResolvedValue(undefined),
     };
+    executionPolicyService = { resolveByAgent: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -236,6 +248,7 @@ describe('PlatformMcpService', () => {
           provide: NotificationDispatcherService,
           useValue: outboundDispatcher,
         },
+        { provide: ExecutionPolicyService, useValue: executionPolicyService },
       ],
     }).compile();
 
@@ -960,6 +973,75 @@ describe('PlatformMcpService', () => {
       );
     });
 
+    it('@ storm 熔断：同一对第 4 次 @ 被节流（warn，消息照常落库广播+返回成功）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      idGen.nextId.mockResolvedValue('m_0000000100');
+      prisma.message.create.mockResolvedValue(createdMessage);
+      prisma.teamMember.findMany.mockResolvedValue([
+        {
+          id: 'tmm_pm',
+          agentId: 'a_project_manager',
+          alias: '鲍勃',
+          agent: { name: '项目经理' },
+        },
+      ]);
+      const throttle = (service as any).mentionThrottle;
+      for (let i = 0; i < 3; i++) {
+        throttle.shouldDispatch({
+          taskId,
+          fromInstanceId: senderInstanceId,
+          toInstanceId: 'tmm_pm',
+          now: Date.now(),
+        });
+      }
+
+      const result = await service.groupPost(ctx, {
+        taskId,
+        content: '@鲍勃 请审核本次方案',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(prisma.message.create).toHaveBeenCalled();
+      expect(realtime.broadcast).toHaveBeenCalled();
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        messageId: 'm_0000000100',
+        channelId,
+        attachment: null,
+      });
+    });
+
+    it('@ storm 熔断：agent 内容含 @all → 不展开触发（display-only，消息照常发布）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      idGen.nextId.mockResolvedValue('m_0000000100');
+      prisma.message.create.mockResolvedValue(createdMessage);
+      prisma.teamMember.findMany.mockResolvedValue([
+        {
+          id: 'tmm_pm',
+          agentId: 'a_project_manager',
+          alias: '鲍勃',
+          agent: { name: '项目经理' },
+        },
+      ]);
+
+      const result = await service.groupPost(ctx, {
+        taskId,
+        content: '@鲍勃 @all 请大家看一下',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(prisma.message.create).toHaveBeenCalled();
+      expect(realtime.broadcast).toHaveBeenCalled();
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        messageId: 'm_0000000100',
+        channelId,
+        attachment: null,
+      });
+    });
+
     it('is_0000000028：内存活跃集合未命中但 DB 有绑定会话 → 放行（修复间歇性误拒合法成员）', async () => {
       // 模拟并发/超时导致的内存集合陈旧：isAgentExecuting 返回不含调用方的集合
       workerDispatcher.isAgentExecuting.mockReturnValue(
@@ -1390,6 +1472,64 @@ describe('PlatformMcpService', () => {
       );
       expect(prisma.message.create).not.toHaveBeenCalled();
       expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+
+    it('@ storm 熔断：配额耗尽后不触发但仍返回成功（消息已落库广播）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      mockTeamMemberRows();
+      idGen.nextId.mockResolvedValue('m_0000000200');
+      prisma.message.create.mockResolvedValue(createdMessage);
+      const throttle = (service as any).mentionThrottle;
+      for (let i = 0; i < 3; i++) {
+        throttle.shouldDispatch({
+          taskId,
+          fromInstanceId: senderInstanceId,
+          toInstanceId: 'tmm_tester',
+          now: Date.now(),
+        });
+      }
+
+      const result = await service.notifyAgent(ctx, {
+        taskId,
+        targetInstanceId: 'tmm_tester',
+        content: '请查看这个文件',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(prisma.message.create).toHaveBeenCalled();
+      expect(realtime.broadcast).toHaveBeenCalled();
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        messageId: 'm_0000000200',
+        channelId,
+        targetInstanceId: 'tmm_tester',
+      });
+    });
+
+    it('@all 内容不 fan-out：notify_agent 仅触发显式单目标', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      mockTeamMemberRows();
+      idGen.nextId.mockResolvedValue('m_0000000200');
+      prisma.message.create.mockResolvedValue(createdMessage);
+
+      const result = await service.notifyAgent(ctx, {
+        taskId,
+        targetInstanceId: 'tmm_tester',
+        content: '请查看这个文件 @all 顺带周知',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith(
+        expect.objectContaining({ targetInstanceId: 'tmm_tester' }),
+      );
+      expect(result).toEqual({
+        messageId: 'm_0000000200',
+        channelId,
+        targetInstanceId: 'tmm_tester',
+      });
     });
   });
 
@@ -2866,6 +3006,7 @@ describe('PlatformMcpService', () => {
           role: 'developer',
           prompt: longPrompt,
           defaultModelId: 'm_1',
+          policyId: 'ep_developer',
           permissionScope: { tools: ['read', 'write'] },
           toolEffects: [{ toolAction: 'read_file', effect: '读取工作区文件' }],
         },
@@ -2874,6 +3015,7 @@ describe('PlatformMcpService', () => {
 
       it('返回自身配置：角色/权限范围/toolEffects/模型 + prompt 摘要截断（前 500 字符）', async () => {
         allowWorker();
+        allowPolicy();
         prisma.teamMember.findFirst.mockResolvedValue(agentRow() as any);
 
         const out = await service.myProfile(ctx, {
@@ -2893,6 +3035,7 @@ describe('PlatformMcpService', () => {
               agent: expect.objectContaining({
                 select: expect.objectContaining({
                   prompt: true,
+                  policyId: true,
                   permissionScope: true,
                   toolEffects: { select: { toolAction: true, effect: true } },
                 }),
@@ -2900,6 +3043,10 @@ describe('PlatformMcpService', () => {
             }),
           }),
         );
+        expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
+          policyId: 'ep_developer',
+          role: 'developer',
+        });
         expect(out).toEqual({
           taskId,
           instanceId: senderInstanceId,
@@ -2912,6 +3059,19 @@ describe('PlatformMcpService', () => {
           defaultModelId: 'm_1',
           permissionScope: { tools: ['read', 'write'] },
           toolEffects: [{ toolAction: 'read_file', effect: '读取工作区文件' }],
+          deprecated: {
+            permissionScope: true,
+            toolEffects: true,
+            note: expect.stringContaining('effectivePermission'),
+          },
+          effectivePermission: {
+            policyId: 'ep_developer',
+            policyName: '开发者策略',
+            agentName: 'vteam-developer',
+            permission: { edit: 'allow', bash: 'ask' },
+            correction: { scopeSummary: '开发者边界' },
+          },
+          agentName: 'vteam-developer',
           promptSummary: 'x'.repeat(500),
           promptTruncated: true,
         });
@@ -2940,6 +3100,62 @@ describe('PlatformMcpService', () => {
 
         expect(out.promptSummary).toBe('简短提示词');
         expect(out.promptTruncated).toBe(false);
+      });
+
+      it('未绑定策略（resolveByAgent=null）→ effectivePermission=null，legacy 字段仍保留且标 deprecated', async () => {
+        allowWorker();
+        executionPolicyService.resolveByAgent.mockResolvedValue(null);
+        prisma.teamMember.findFirst.mockResolvedValue(agentRow() as any);
+
+        const out = await service.myProfile(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+        });
+
+        expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
+          policyId: 'ep_developer',
+          role: 'developer',
+        });
+        expect(out.effectivePermission).toBeNull();
+        expect(out.agentName).toBe('vteam-developer');
+        expect(out.deprecated).toMatchObject({
+          permissionScope: true,
+          toolEffects: true,
+        });
+        expect(out.permissionScope).toEqual({ tools: ['read', 'write'] });
+        expect(out.toolEffects).toEqual([
+          { toolAction: 'read_file', effect: '读取工作区文件' },
+        ]);
+      });
+
+      it('role 为空 → agentName 回退 vteam-plan', async () => {
+        allowWorker();
+        allowPolicy();
+        prisma.teamMember.findFirst.mockResolvedValue(
+          agentRow({
+            agent: {
+              id: senderAgentId,
+              name: '未命名',
+              role: null,
+              prompt: 'p',
+              defaultModelId: null,
+              policyId: null,
+              permissionScope: null,
+              toolEffects: [],
+            },
+          }),
+        );
+
+        const out = await service.myProfile(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+        });
+
+        expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
+          policyId: null,
+          role: null,
+        });
+        expect(out.agentName).toBe('vteam-plan');
       });
 
       it('实例不在任务团队 → 404 PLATFORM_MCP_TASK_NOT_FOUND', async () => {

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ArtifactsModule } from '../artifacts/artifacts.module';
+import { ExecutionPoliciesModule } from '../execution-policies/execution-policies.module';
 import { NotificationChannelsModule } from '../notifications/notification-channels.module';
 import { ChatModule } from '../chat/chat.module';
 import { IssuesModule } from '../issues/issues.module';
@@ -43,6 +44,7 @@ import { PlatformMcpService } from './platform-mcp.service';
     WorkersModule,
     ChatModule,
     ArtifactsModule,
+    ExecutionPoliciesModule,
     IssuesModule,
     TasksModule,
     QuestionsModule,
