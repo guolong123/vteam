@@ -8,6 +8,7 @@ import {
   SENDER_TYPE,
 } from '../common/constants/event.constants';
 import { ArtifactsService } from '../artifacts/artifacts.service';
+import { ROLE_BOUNDARIES } from '../common/constants/agent.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import {
   WorkerClient,
@@ -30,8 +31,11 @@ import {
   stripGroupPostDeclarations,
   GLOBAL_SYSTEM_INSTRUCTIONS,
   GROUP_TRIGGER_INSTRUCTION,
+  isVteamAgentName,
   MAIN_AGENT_INSTRUCTION,
   PENDING_INSTANCE_REF,
+  renderBoundarySection,
+  roleToAgentName,
   ARTIFACT_SUBMISSION_INSTRUCTION,
   PLAN_PRODUCE_INSTRUCTION,
   PLAN_REVIEW_INSTRUCTION,
@@ -429,6 +433,51 @@ describe('WorkerDispatcher', () => {
       );
       expect(execArgs.system).not.toContain('【职责】');
       expect(execArgs.system).toContain('selfInstanceId');
+    });
+
+    it('Todo 4：角色已知的目标 Agent → system 注入【职责边界】+ 角色 scopeSummary', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        name: '产品经理助手',
+        role: 'product',
+        prompt: '负责需求拆解。',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      const d = createDispatcher();
+      await d.dispatch(request);
+
+      const execArgs = workerClient.execute.mock.calls[0][1] as {
+        system: string;
+      };
+      expect(execArgs.system).toContain('【职责边界】');
+      expect(execArgs.system).toContain(
+        ROLE_BOUNDARIES['vteam-product'].scopeSummary,
+      );
+      expect(execArgs.system).toContain('越界处理：');
+    });
+
+    it('Todo 4：角色未知（未绑定）目标 → 不注入【职责边界】，与基线构造逐字节一致', async () => {
+      // 默认 mock agent 无 role → roleToAgentName 返回 null → 省略 boundarySection
+      const d = createDispatcher();
+      await d.dispatch(request);
+
+      const execArgs = workerClient.execute.mock.calls[0][1] as {
+        system: string;
+      };
+      expect(execArgs.system).not.toContain('【职责边界】');
+      // 与"无 boundarySection"（预变更调用形态）构造的期望逐字节一致
+      const expected = buildSystemInstructions(
+        { id: 'a_product', name: null, role: null, prompt: null, persona: null },
+        {
+          isMainAgent: false,
+          mainAgentInstanceId: null,
+          team: [],
+          selfInstanceId: 'tmm_0000000001',
+          selfAlias: null,
+          persistentWorkDir: `${workRoot}/tasks/${request.taskId}`,
+        },
+      );
+      expect(execArgs.system).toBe(expected);
     });
 
     it('主成员目标：system 注入主 Agent 职责段 + 团队成员段（mainAgentMemberId 判定，TeamMember 组装）', async () => {
@@ -1175,6 +1224,47 @@ describe('WorkerDispatcher', () => {
       const s = buildSystemInstructions(agent);
       expect(s).not.toContain('【运行时工作目录】');
       expect(s).toContain('【持久化目录】');
+    });
+
+    it('Todo 4：boundarySection 非空 → 追加【职责边界】段（scopeSummary + 越界处理）', () => {
+      const section = renderBoundarySection('vteam-product');
+      expect(section).toContain('【职责边界】');
+      expect(section).toContain(ROLE_BOUNDARIES['vteam-product'].scopeSummary);
+      expect(section).toContain('越界处理：');
+
+      const s = buildSystemInstructions(agent, { boundarySection: section });
+      expect(s).toContain('【职责边界】');
+      expect(s).toContain(ROLE_BOUNDARIES['vteam-product'].scopeSummary);
+    });
+
+    it('Todo 4：boundarySection 缺省/空串 → 与基线输出逐字节一致（不新增段）', () => {
+      const baseline = buildSystemInstructions(agent);
+      expect(baseline).not.toContain('【职责边界】');
+      expect(buildSystemInstructions(agent, { boundarySection: '' })).toBe(
+        baseline,
+      );
+      expect(
+        buildSystemInstructions(agent, { boundarySection: undefined }),
+      ).toBe(baseline);
+    });
+
+    it('Todo 4：renderBoundarySection 未知/空 agent 名 → 空串（不注入）', () => {
+      expect(renderBoundarySection('vteam-unknown')).toBe('');
+      expect(renderBoundarySection('product')).toBe('');
+      expect(renderBoundarySection(null)).toBe('');
+      expect(renderBoundarySection(undefined)).toBe('');
+    });
+
+    it('Todo 4：roleToAgentName / isVteamAgentName 映射（角色 key → vteam-<role>）', () => {
+      expect(roleToAgentName('product')).toBe('vteam-product');
+      expect(roleToAgentName('project_manager')).toBe('vteam-project_manager');
+      expect(roleToAgentName('unknown')).toBeNull();
+      expect(roleToAgentName('')).toBeNull();
+      expect(roleToAgentName(null)).toBeNull();
+      expect(isVteamAgentName('vteam-developer')).toBe(true);
+      expect(isVteamAgentName('vteam-plan')).toBe(true);
+      expect(isVteamAgentName('developer')).toBe(false);
+      expect(isVteamAgentName(null)).toBe(false);
     });
 
     it('persona 拼接：agent.persona=strict 时注入【性格】段（含安全阀文案），不改写 prompt', () => {

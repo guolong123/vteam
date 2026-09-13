@@ -23,6 +23,10 @@ import {
   SESSION_STATUS,
 } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import {
+  ROLE_BOUNDARIES,
+  type VteamAgentName,
+} from '../common/constants/agent.constants';
 import { getOpencodeAgentDuty } from '../common/opencode-agent-duty';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -58,6 +62,76 @@ const MESSAGE_ID_PREFIX = 'm';
 
 /** 首次 bind 的 instanceRef 占位（opencode 会话尚未创建；第二次 bind 写入真实 sessionId）。 */
 export const PENDING_INSTANCE_REF = 'pending';
+
+/**
+ * vteam 注册的 opencode agent 名全集（`vteam-<role>` / `vteam-plan`）。
+ * 与 Todo 2 的 `VteamAgentName` + `ROLE_BOUNDARIES` 键严格一致（单一命名空间来源）。
+ */
+const VTEAM_AGENT_NAMES: readonly VteamAgentName[] = [
+  'vteam-product',
+  'vteam-architect',
+  'vteam-developer',
+  'vteam-tester',
+  'vteam-project_manager',
+  'vteam-plan',
+];
+
+/**
+ * 是否为 vteam 注册的 opencode agent 名（Todo 4）。
+ * 仅已知角色命名空间（`vteam-<role>` / `vteam-plan`）才注入【职责边界】段；
+ * 未知 agent 名 → false，调用方省略 boundarySection（保持基线输出字节不变）。
+ */
+export function isVteamAgentName(x: unknown): x is VteamAgentName {
+  return (
+    typeof x === 'string' &&
+    (VTEAM_AGENT_NAMES as readonly string[]).includes(x)
+  );
+}
+
+/**
+ * 由模板 Agent 的角色 key 解析 opencode agent 名（`role` → `vteam-<role>`，Todo 4）。
+ * 目标成员未显式绑定 `opencodeAgentName` 时按角色回退；未知/空角色返回 null
+ * （调用方据此省略 boundarySection，与引入前逐字节一致）。
+ */
+export function roleToAgentName(
+  role: string | null | undefined,
+): VteamAgentName | null {
+  if (!role) {
+    return null;
+  }
+  const candidate = `vteam-${role}`;
+  return isVteamAgentName(candidate) ? candidate : null;
+}
+
+/**
+ * 由角色边界渲染【职责边界】提示段（Todo 4）。
+ *
+ * 纯函数：从 `ROLE_BOUNDARIES`（Todo 2 单一来源）取 `scopeSummary` + `handoffTo`，
+ * 输出 `【职责边界】<scopeSummary>\n越界处理：<转交指引>`；未知/空 agent 名返回空串
+ * （调用方不注入 → 无边界时系统提示字节不变）。
+ *
+ * // Todo 11/12 will unify the source：ExecutionPolicy 落地后改由解析出的策略提供
+ * scopeSummary/转交目标；当前服务器侧直接读 `ROLE_BOUNDARIES`。
+ */
+export function renderBoundarySection(
+  agentName: string | null | undefined,
+): string {
+  if (!isVteamAgentName(agentName)) {
+    return '';
+  }
+  const boundary = ROLE_BOUNDARIES[agentName];
+  if (!boundary) {
+    return '';
+  }
+  const handoff = Object.entries(boundary.handoffTo)
+    .map(([scope, target]) => `${scope}→${target}`)
+    .join('、');
+  return (
+    `【职责边界】${boundary.scopeSummary}\n` +
+    `越界处理：超出上述职责范围的请求必须拒绝（不要执行），说明你的职责边界，` +
+    `并通过 notify_agent 或群聊 @ 转交对应角色（${handoff}）。`
+  );
+}
 
 /** C7：baseAgentId 链向上遍历的最大深度（防御异常链/环导致的无限查询）。 */
 const MAX_BASE_AGENT_CHAIN_DEPTH = 20;
@@ -239,6 +313,12 @@ export interface BuildSystemInstructionsOptions {
    * （只评审不起草，越界拒绝）；false/缺省不注入任何计划段（行为与引入前一致）。
    */
   taskPlanMode?: boolean;
+  /**
+   * 角色职责边界段（Todo 4）：调用方先由目标 Agent 的角色/opencode agent 名渲染
+   * （renderBoundarySection）后传入；非空时追加【职责边界】段，空/缺省不注入
+   * （系统提示与引入前逐字节一致）。
+   */
+  boundarySection?: string;
 }
 
 /**
@@ -298,6 +378,8 @@ export function buildSystemInstructions(
       ? `\n【运行时工作目录】本任务为你分配的实际持久化工作目录为：${opts.persistentWorkDir}。` +
         '工作产物、脚本、中间文件等请写入该目录（提交 doc/file 产出物时 fileRef 使用该目录下的路径）。'
       : '',
+    // Todo 4：非空才注入（空串被下方 filter 剔除 → 无边界时输出字节不变）
+    opts?.boundarySection ?? '',
   ];
   if (opts?.isMainAgent) {
     blocks.push(MAIN_AGENT_INSTRUCTION);
@@ -1604,6 +1686,17 @@ export class WorkerDispatcher
     const opencodeAgentName = teamMemberId
       ? await this.resolveMemberOpencodeAgentName(teamMemberId)
       : null;
+    // Todo 4：目标 Agent 的职责边界段——优先显式 opencode agent 名，否则按模板角色
+    // 回退解析；未知/未绑定 → 空串不注入（system 与引入前逐字节一致）。
+    // Todo 11/12 will unify the source：改由 ExecutionPolicy 解析。
+    const boundarySection = renderBoundarySection(
+      isVteamAgentName(opencodeAgentName)
+        ? opencodeAgentName
+        : roleToAgentName(agentIdentity.role),
+    );
+    if (boundarySection) {
+      systemOpts.boundarySection = boundarySection;
+    }
     await this.workerClient.execute(worker, {
       prompt: [{ type: 'text', text: finalPrompt }],
       model,
