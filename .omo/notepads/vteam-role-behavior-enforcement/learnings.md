@@ -79,3 +79,20 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - 新增 `ROLE_BASH_DENY_PATTERNS`（16 项，含 `>`/`>>`/`tee`/`cp`/`mv`/`sed -i`/`truncate`/`dd`/`ln`/`python -c`/`node -e`/`perl -i`/`git apply`/`patch`/`git push`/`rm`）+ `ROLE_POLICY_DENY_TEMPLATE`（与 seed 同值，seed.ts 未动）。
 - 端点鉴权复用 `@Public() + WorkerOrJwtGuard`（mcp-servers/tools/skills GET 同模式）；unauth → 401。
 - spec 用 supertest 真实 guard：worker token 走 worker 通道 200；jwt 通道 stub 401（测试环境无 passport 策略）；`onModuleInit` 需 `executionPolicy.findMany` mock。
+
+---
+
+## Todo 15 + 16 — injector single-writer + builder pure fn
+
+- `injectAll` 串行结构：skills/tools 并行（沿用旧行为）→ `fetchAgentPoliciesSafe`（永不抛错，
+  null=中性化）→ `injectMcpAndAgents` 单次 opencode.json read-modify-write（mcp+plugin+agent）。
+  旧 `injectMcp()` 保留原行为供注册后 MCP 重注入复用（保留 agent 节、不碰 guard、不中性化）。
+- `cleanupByManifest` 用 TS overloads 实现显式分支；impl 签名末尾对 `mcpServers` 加了防御性
+  throw（新键误入即炸，绝不进 tools 删除分支）。
+- Todo 15 不写 guard 插件体：成功路径 `guardPluginFile` 沿用 manifest 已记录值（Todo 18 写入），
+  仅中性化/停用路径删文件+清 `plugin` 条目；另 `removeGuardPluginEntry` 兜底清无 manifest 记录的残留条目。
+- Todo 16 `buildAgentDefinitions(agents, guard)`：`permission.write` 键显式拒绝（层①唯一写闸门是
+  edit）；guard.enabled 才做 roles 交叉校验（中性化路径不被校验阻断）；未知字段抛错。
+- 同名注意：`credentials/model-credential-injector.ts` 有个同名异构 `buildOpencodeConfig`
+ （auth.json 内容构造），与死掉的 ExecutionConfig-builder 无关，未动。
+- 基线已有 2 个 `v1-driver.spec.ts` 失败（stash 验证过，与本改动无关）。

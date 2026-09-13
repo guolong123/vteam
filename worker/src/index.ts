@@ -64,7 +64,12 @@ import {
 } from './credentials/model-credential-injector';
 
 /** 无注入时的空报告（buildCapabilities/buildRegisterOptions 默认值；main() 总会传入真实报告）。 */
-const EMPTY_INJECT_REPORT: InjectReport = { skills: [], tools: [], mcpServers: [] };
+const EMPTY_INJECT_REPORT: InjectReport = {
+  skills: [],
+  tools: [],
+  mcpServers: [],
+  agentPolicies: { enabled: false, names: [] },
+};
 
 /** 探测 opencode CLI 版本（T3 前仅用于启动信息展示；失败不阻断启动）。 */
 export function detectOpencodeVersion(): string {

@@ -21,6 +21,10 @@ import * as path from 'path';
 import { apiUrl, WORKER_TOKEN_HEADER } from '../client/registry-client';
 import { readOmoAgents, writeOmoAgents } from './omo-config';
 import {
+  AgentPoliciesResponse,
+  buildAgentDefinitions,
+} from './opencode-config-builder';
+import {
   CustomToolArg,
   CustomToolArgType,
   CustomToolFileDef,
@@ -51,6 +55,12 @@ export interface InjectReport {
   skills: string[];
   tools: string[];
   mcpServers: string[];
+  /**
+   * agent 策略注入结果（Todo 14 上报能力位的成功/报告信号）：
+   * - 成功（`/agent-policies` 拉取成功且角色集非空）→ `{ enabled: true, names: 本次写入名 }`；
+   * - 失败中性化（拉取失败或角色集为空）→ `{ enabled: false, names: [] }`。
+   */
+  agentPolicies: { enabled: boolean; names: string[] };
 }
 
 /** 控制面资源记录最小形态（来自 GET /skills、/tools、/mcp-servers）。 */
@@ -83,12 +93,48 @@ interface InjectManifest {
   skills?: string[];
   tools?: string[];
   mcpServers?: string[];
+  /**
+   * 上次写入 opencode.json `agent` 节的受管 agent 名（仅注入器写入的名；用户手写
+   * 的 agent 键不在此列，清理时保留）。
+   */
+  agentNames?: string[];
+  /** guard 制品相对路径（相对 workDir；null = 未管理/已清理）。 */
+  guardRolesFile?: string | null;
+  guardSessionsDir?: string | null;
+  /**
+   * guard 插件文件相对路径。Todo 15 只管理该键 + 清理，不写插件体——插件体与
+   * `plugin` 数组注册由 Todo 18 负责（见 ROLE_GUARD_PLUGIN_* 注释）。
+   */
+  guardPluginFile?: string | null;
 }
 
 const MANIFEST_REL = '.opencode-worker-inject.json';
 const DEFAULT_PAGE_SIZE = 100;
 /** tools 注入文件名非法字符（opencode 工具名约束，安全兜底）。 */
 const INVALID_FILE_CHARS = /[^a-z0-9-_.]/g;
+
+/**
+ * guard 制品路径（单一路径方案，相对 workDir）：
+ * - roles.json：guard 判定唯一数据源 `{ enabled, roles }`；
+ * - sessions/：session→agent 映射目录（Todo 19 写入 `<sessionId>.json`）。
+ */
+const ROLE_GUARD_DIR_REL = '.vteam-role-guard';
+const ROLE_GUARD_ROLES_REL = `${ROLE_GUARD_DIR_REL}/roles.json`;
+const ROLE_GUARD_SESSIONS_REL = `${ROLE_GUARD_DIR_REL}/sessions`;
+/**
+ * guard 插件文件相对路径（`<workDir>/.opencode/plugin/vteam-role-guard.ts`）。
+ *
+ * 职责拆分（Todo 15 vs Todo 18）：Todo 15 只管理 manifest `guardPluginFile` 键 +
+ * 清理分支（停用/中性化时删文件 + 移除 `plugin` 数组条目），**不写插件体、不注册
+ * 条目**；插件体与注册由 Todo 18 负责。本文件成功路径故意不创建该文件，避免残留
+ * 空插件干扰 serve 加载。
+ */
+const ROLE_GUARD_PLUGIN_REL = '.opencode/plugin/vteam-role-guard.ts';
+/** guard 插件 `plugin` 数组条目匹配（任意写法均识别，清理时移除）。 */
+const ROLE_GUARD_ENTRY_RE = /vteam-role-guard/;
+
+/** guard 插件文件相对路径（单一路径方案，导出供 Todo 18 与 spec 共用）。 */
+export const GUARD_PLUGIN_REL = ROLE_GUARD_PLUGIN_REL;
 
 /**
  * OmO 插件在 opencode.json plugin 节里的条目。
@@ -128,14 +174,46 @@ export class ResourceInjector {
     this.logger = options.logger;
   }
 
-  /** 注入全部三类资源，返回报告。 */
+  /**
+   * 注入全部四类资源，返回报告。
+   *
+   * 单写者保证：`opencode.json` 全程只有 `injectMcpAndAgents()` 内的一次
+   * read-modify-write（mcp + plugin + agent 三节同写）；skills/tools 只碰各自
+   * 目录。mcp/agent 合并放在 skills/tools 之后串行执行，避免 manifest 并发读写。
+   */
   async injectAll(): Promise<InjectReport> {
-    const [skills, tools, mcpServers] = await Promise.all([
-      this.injectSkills(),
-      this.injectTools(),
-      this.injectMcp(),
-    ]);
-    return { skills, tools, mcpServers };
+    const policiesPromise = this.fetchAgentPoliciesSafe();
+    const [skills, tools] = await Promise.all([this.injectSkills(), this.injectTools()]);
+    const policies = await policiesPromise;
+    const { mcpServers, agentPolicies } = await this.injectMcpAndAgents(policies);
+    return { skills, tools, mcpServers, agentPolicies };
+  }
+
+  /**
+   * 拉取 `GET /agent-policies`（与 `/mcp-servers` 同鉴权：`X-Worker-Token` +
+   * `x-worker-id`，见 `getJson`）。失败/形状非法/角色集为空 → 返回 null（调用方
+   * 走失败中性化），**永不抛错**（注入链不因策略拉取失败而中断 skills/tools/mcp）。
+   */
+  async fetchAgentPoliciesSafe(): Promise<AgentPoliciesResponse | null> {
+    let data: AgentPoliciesResponse;
+    try {
+      data = await this.getJson<AgentPoliciesResponse>('/agent-policies', {});
+    } catch (err) {
+      this.logger?.warn?.(
+        `[inject] /agent-policies 拉取失败，中性化 guard（roles.json enabled=false）：${(err as Error).message}`,
+      );
+      return null;
+    }
+    const roles = data?.guard?.roles;
+    if (!Array.isArray(data?.agents) || !roles || typeof roles !== 'object') {
+      this.logger?.warn?.('[inject] /agent-policies 响应形状非法，中性化 guard');
+      return null;
+    }
+    if (data.agents.length === 0 || Object.keys(roles).length === 0) {
+      this.logger?.warn?.('[inject] /agent-policies 角色集为空，中性化 guard');
+      return null;
+    }
+    return data;
   }
 
   /** 注入启用技能：<workDir>/.opencode/skills/<name>/SKILL.md。返回注入的 skill 名。 */
@@ -196,6 +274,8 @@ export class ResourceInjector {
    * - 注入启用服务器（local/remote 两型，11 篇 §5.1 格式）
    * - manifest 比对清理：上次注入过、本次不在启用集的条目从 mcp 节移除；
    *   用户手动配置的条目（不在 manifest 中）保留不误删
+   * - `agent` 节与 guard 制品原样保留（agent 刷新只发生在 `injectMcpAndAgents`
+   *   的 injectAll 主链；本方法供注册后 MCP 重注入复用，不得中性化 guard）
    * 返回注入的服务器名。
    */
   async injectMcp(): Promise<string[]> {
@@ -204,11 +284,108 @@ export class ResourceInjector {
     });
     const configPath = path.join(this.workDir, 'opencode.json');
     const config = this.readConfig(configPath);
-
-    // manifest 记录过的名 = 注入器管理域：不在本次启用集的移除；未记录过的（用户手动）保留
     const manifest = this.readManifest();
-    const previouslyInjected = manifest.mcpServers ?? [];
+    const names = this.mergeMcpSection(config, servers, manifest.mcpServers ?? []);
+    this.injectOmoPlugin(config);
+    this.writeConfig(configPath, config);
+    this.writeManifest({ ...manifest, mcpServers: names });
+    return names;
+  }
 
+  /**
+   * 单写者合并写：`opencode.json` 的 mcp + plugin + agent 三节在同一次
+   * read-modify-write 内完成（禁止第二处并行写同一文件）。
+   *
+   * - `policies` 非空 → `agent` 节 = `buildAgentDefinitions(agents, guard)`（用户
+   *   手写 agent 键保留），写 `roles.json{enabled:true}` + 确保 `sessions/`；
+   * - `policies` 为 null（拉取失败/角色集为空）→ **失败中性化**：移除受管 agent
+   *   键、写 `roles.json{enabled:false}`、移除插件文件与 `plugin` 条目、删
+   *   `sessions/`，报告 `{enabled:false, names:[]}`——绝不残留 `enabled:true`。
+   * guard 插件体与注册由 Todo 18 负责：成功路径沿用 manifest 已记录值（不删
+   * 不建），仅中性化路径清理。
+   */
+  async injectMcpAndAgents(
+    policies: AgentPoliciesResponse | null,
+  ): Promise<{ mcpServers: string[]; agentPolicies: { enabled: boolean; names: string[] } }> {
+    const servers = await this.fetchAll<McpServerRecord>('/mcp-servers', {
+      enabled: 'true',
+    });
+    const configPath = path.join(this.workDir, 'opencode.json');
+    const config = this.readConfig(configPath);
+    const manifest = this.readManifest();
+    const names = this.mergeMcpSection(config, servers, manifest.mcpServers ?? []);
+
+    let agentPolicies: { enabled: boolean; names: string[] };
+    if (policies !== null) {
+      let agentNames: string[];
+      try {
+        const section = buildAgentDefinitions(policies.agents, policies.guard);
+        agentNames = Object.keys(section);
+        config.agent = { ...this.readAgentSection(config), ...section };
+      } catch (err) {
+        this.logger?.warn?.(
+          `[inject] agent 定义构造失败，中性化 guard：${(err as Error).message}`,
+        );
+        return this.writeNeutralized(config, configPath, names);
+      }
+      this.writeGuardRoles(true, policies.guard.roles);
+      this.ensureGuardSessionsDir();
+      this.cleanupByManifest('agentNames', agentNames, config);
+      this.cleanupByManifest('guardRolesFile', ROLE_GUARD_ROLES_REL);
+      this.cleanupByManifest('guardSessionsDir', ROLE_GUARD_SESSIONS_REL);
+      this.cleanupByManifest('guardPluginFile', manifest.guardPluginFile ?? null, config);
+      this.writeManifest({
+        ...this.readManifest(),
+        mcpServers: names,
+        agentNames,
+        guardRolesFile: ROLE_GUARD_ROLES_REL,
+        guardSessionsDir: ROLE_GUARD_SESSIONS_REL,
+      });
+      agentPolicies = { enabled: true, names: agentNames };
+    } else {
+      return this.writeNeutralized(config, configPath, names);
+    }
+
+    this.injectOmoPlugin(config);
+    this.writeConfig(configPath, config);
+    return { mcpServers: names, agentPolicies };
+  }
+
+  /**
+   * 失败中性化写盘（拉取失败 / 角色集为空 / 定义构造失败三入口共用）：
+   * 移除受管 agent 键 + `roles.json{enabled:false}` + 删插件文件与 `plugin` 条目
+   * + 删 `sessions/`，manifest 相应键清零，报告 `{enabled:false, names:[]}`。
+   */
+  private writeNeutralized(
+    config: Record<string, unknown>,
+    configPath: string,
+    mcpNames: string[],
+  ): { mcpServers: string[]; agentPolicies: { enabled: boolean; names: string[] } } {
+    this.cleanupByManifest('agentNames', [], config);
+    this.writeGuardRoles(false, {});
+    this.cleanupByManifest('guardRolesFile', ROLE_GUARD_ROLES_REL);
+    this.cleanupByManifest('guardSessionsDir', null);
+    this.cleanupByManifest('guardPluginFile', null, config);
+    this.writeManifest({
+      ...this.readManifest(),
+      mcpServers: mcpNames,
+      agentNames: [],
+      guardRolesFile: ROLE_GUARD_ROLES_REL,
+      guardSessionsDir: null,
+      guardPluginFile: null,
+    });
+    this.removeGuardPluginEntry(config);
+    this.injectOmoPlugin(config);
+    this.writeConfig(configPath, config);
+    return { mcpServers: mcpNames, agentPolicies: { enabled: false, names: [] } };
+  }
+
+  /** mcp 节合并（注入器管理域清理 + 用户手动条目保留），返回本次启用名。 */
+  private mergeMcpSection(
+    config: Record<string, unknown>,
+    servers: McpServerRecord[],
+    previouslyInjected: string[],
+  ): string[] {
     const mcp: Record<string, unknown> = {};
     const existingMcp = this.readMcpSection(config);
     for (const name of Object.keys(existingMcp)) {
@@ -216,7 +393,6 @@ export class ResourceInjector {
         mcp[name] = existingMcp[name];
       }
     }
-
     const names: string[] = [];
     for (const server of servers) {
       const entry = this.buildMcpEntry(server);
@@ -230,9 +406,6 @@ export class ResourceInjector {
       names.push(server.name);
     }
     config.mcp = mcp;
-    this.injectOmoPlugin(config);
-    this.writeConfig(configPath, config);
-    this.writeManifest({ ...manifest, mcpServers: names });
     return names;
   }
 
@@ -265,6 +438,35 @@ export class ResourceInjector {
       existing.push(OMO_PLUGIN_ENTRY);
     }
     config.plugin = existing;
+  }
+
+  /** 写 guard 判定数据源 `<workDir>/.vteam-role-guard/roles.json`。 */
+  private writeGuardRoles(enabled: boolean, roles: Record<string, unknown>): void {
+    const filePath = path.join(this.workDir, ROLE_GUARD_ROLES_REL);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, `${JSON.stringify({ enabled, roles }, null, 2)}\n`, 'utf8');
+  }
+
+  /** 确保 guard 会话映射目录 `<workDir>/.vteam-role-guard/sessions/` 存在。 */
+  private ensureGuardSessionsDir(): void {
+    fs.mkdirSync(path.join(this.workDir, ROLE_GUARD_SESSIONS_REL), { recursive: true });
+  }
+
+  /**
+   * 从 opencode.json `plugin` 数组移除 guard 插件条目（任意写法均匹配）。
+   * 文件删除由 `cleanupByManifest('guardPluginFile', …)` 负责；此处只清数组条目，
+   * 供中性化路径在 manifest 键为 null（无记录）时兜底清理残留条目。
+   */
+  private removeGuardPluginEntry(config: Record<string, unknown>): void {
+    if (!Array.isArray(config.plugin)) {
+      return;
+    }
+    const filtered = (config.plugin as unknown[]).filter(
+      (entry) => !(typeof entry === 'string' && ROLE_GUARD_ENTRY_RE.test(entry)),
+    );
+    if (filtered.length !== (config.plugin as unknown[]).length) {
+      config.plugin = filtered;
+    }
   }
 
   /** 写入 OmO 的 agent→模型配置（委托 omo-config 模块，与 exec-server 共用同一实现）。 */
@@ -488,6 +690,14 @@ export class ResourceInjector {
       : {};
   }
 
+  /** 读取配置的 agent 节（非对象/数组时返回空对象；用户手写键一并返回）。 */
+  private readAgentSection(config: Record<string, unknown>): Record<string, unknown> {
+    const agent = config.agent;
+    return agent && typeof agent === 'object' && !Array.isArray(agent)
+      ? (agent as Record<string, unknown>)
+      : {};
+  }
+
   private writeConfig(configPath: string, config: Record<string, unknown>): void {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -512,29 +722,96 @@ export class ResourceInjector {
   }
 
   /**
-   * 停用资源清理：删除 manifest 中记录过、但本次不在启用集的注入文件/目录。
-   * 只操作 manifest 记录过的路径——git.ts（内置 installGitTools 注入）与用户手动
-   * 文件不在 manifest 中，不会被误删。无论是否有删除动作都更新 manifest 为最新注入集。
+   * 停用资源清理：各 manifest 键走显式分支，绝不混用——
+   * - `skills` → 删目录（`.opencode/skills/<name>`）；
+   * - `tools` → 删文件（`.opencode/tools/<file>`）；
+   * - `agentNames` → 重写内存中 `config.agent`，删除受管（上次注入）且不在本次
+   *   集合的 agent 键（用户手写键保留；删空后移除 `agent` 节；调用方统一落盘，
+   *   保持 `opencode.json` 单写者）；
+   * - `guardRolesFile` → 删文件；
+   * - `guardSessionsDir` → 删目录；
+   * - `guardPluginFile` → 删插件文件 **并** 从内存 `config.plugin` 数组移除
+   *   guard 条目（调用方统一落盘）。
+   * 新键永不进入 `tools` 文件删除分支。
    */
-  private cleanupByManifest(kind: keyof InjectManifest, current: string[]): void {
+  private cleanupByManifest(kind: 'skills' | 'tools', current: string[]): void;
+  private cleanupByManifest(
+    kind: 'agentNames',
+    current: string[],
+    config: Record<string, unknown>,
+  ): void;
+  private cleanupByManifest(
+    kind: 'guardRolesFile' | 'guardSessionsDir' | 'guardPluginFile',
+    current: string | null,
+    config?: Record<string, unknown>,
+  ): void;
+  private cleanupByManifest(
+    kind: keyof InjectManifest,
+    current: string[] | string | null,
+    config?: Record<string, unknown>,
+  ): void {
     const manifest = this.readManifest();
-    const previous = manifest[kind] ?? [];
-    const removed = previous.filter((p) => !current.includes(p));
-    if (removed.length > 0) {
-      if (kind === 'skills') {
-        for (const name of removed) {
-          fs.rmSync(path.join(this.workDir, '.opencode', 'skills', name), {
-            recursive: true,
-            force: true,
-          });
-        }
-      } else {
-        for (const file of removed) {
-          fs.rmSync(path.join(this.workDir, '.opencode', 'tools', file), { force: true });
+    if (kind === 'skills' || kind === 'tools') {
+      const names = current as string[];
+      const previous: string[] = kind === 'skills' ? (manifest.skills ?? []) : (manifest.tools ?? []);
+      const removed = previous.filter((p) => !names.includes(p));
+      if (removed.length > 0) {
+        if (kind === 'skills') {
+          for (const name of removed) {
+            fs.rmSync(path.join(this.workDir, '.opencode', 'skills', name), {
+              recursive: true,
+              force: true,
+            });
+          }
+        } else {
+          for (const file of removed) {
+            fs.rmSync(path.join(this.workDir, '.opencode', 'tools', file), { force: true });
+          }
         }
       }
+      this.writeManifest({ ...manifest, [kind]: names });
+      return;
     }
-    this.writeManifest({ ...manifest, [kind]: current });
+    if (kind === 'agentNames') {
+      if (!config) {
+        throw new Error('[inject] cleanupByManifest(agentNames) 缺少 opencode 配置对象');
+      }
+      const names = current as string[];
+      const previous = manifest.agentNames ?? [];
+      const removed = previous.filter((n) => !names.includes(n));
+      if (removed.length > 0) {
+        const agents = this.readAgentSection(config);
+        for (const name of removed) {
+          delete agents[name];
+        }
+        if (Object.keys(agents).length === 0) {
+          delete config.agent;
+        } else {
+          config.agent = agents;
+        }
+      }
+      this.writeManifest({ ...manifest, agentNames: names });
+      return;
+    }
+    const rel = current as string | null;
+    if (kind !== 'guardRolesFile' && kind !== 'guardSessionsDir' && kind !== 'guardPluginFile') {
+      throw new Error(
+        `[inject] cleanupByManifest 不支持的键: ${String(kind)}（新键必须走显式分支，禁止进入 tools 删除分支）`,
+      );
+    }
+    const previousRel = manifest[kind] ?? null;
+    if (previousRel && previousRel !== rel) {
+      const abs = path.join(this.workDir, previousRel);
+      if (kind === 'guardSessionsDir') {
+        fs.rmSync(abs, { recursive: true, force: true });
+      } else {
+        fs.rmSync(abs, { force: true });
+      }
+      if (kind === 'guardPluginFile' && config) {
+        this.removeGuardPluginEntry(config);
+      }
+    }
+    this.writeManifest({ ...manifest, [kind]: rel });
   }
 }
 

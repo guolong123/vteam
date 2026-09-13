@@ -80,6 +80,7 @@ describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
       skills: ['audit-log-analysis', 'review'],
       tools: ['jira-query', 'echo-hello'],
       mcpServers: ['gitee-ent'],
+      agentPolicies: { enabled: false, names: [] },
     };
     const caps = await buildCapabilities(4199, 'http://worker', report);
     expect(caps.skills).toEqual(['audit-log-analysis', 'review']);
@@ -91,6 +92,7 @@ describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
       skills: [],
       tools: ['git_status', 'jira-query', 'git_clone'],
       mcpServers: [],
+      agentPolicies: { enabled: false, names: [] },
     };
     const caps = await buildCapabilities(4199, 'http://worker', report);
     const expected = [...new Set([...GIT_TOOLS.map((t) => t.name), 'git_status', 'jira-query', 'git_clone'])];
@@ -705,6 +707,7 @@ describe('buildRegisterOptions（T4c：重启后重新注册携带新端口）',
       skills: ['audit-log-analysis'],
       tools: ['jira-query'],
       mcpServers: ['gitee-ent'],
+      agentPolicies: { enabled: false, names: [] },
     };
     const opts = await buildRegisterOptions(CONFIG, 4199, '1.18.15', 'cli-version', report);
     expect(opts.capabilities.skills).toEqual(['audit-log-analysis']);
