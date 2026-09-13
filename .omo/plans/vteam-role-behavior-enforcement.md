@@ -252,13 +252,13 @@
   Recommended task executor category: unspecified-low
 
 ## Final verification wave
-- [ ] F1. 计划合规审计 — 抽查 References 真实存在、Acceptance 无歧义、QA 含命令与证据路径。Evidence: `.omo/evidence/role-enforcement/F1-plan-audit.txt`。
+- [~] F1. 计划合规审计 — 抽查 References 真实存在、Acceptance 无歧义、QA 含命令与证据路径。Evidence: `.omo/evidence/role-enforcement/F1-plan-audit.txt`。（评审已 APPROVE；等待用户显式确认后方可勾选完成）
   Recommended task executor category: unspecified-high
-- [ ] F2. 代码质量 review — worker 零角色硬编码；单一 ExecutionPolicyService；`edit` 唯一写闸门且全角色 `task` deny；工具名全用真实名；`opencode.json` 单写者；guard 三制品单一路径且 cleanup 完整、失败中性化；无死代码。Evidence: `.omo/evidence/role-enforcement/F2-code-quality.txt`。
+- [~] F2. 代码质量 review — worker 零角色硬编码；单一 ExecutionPolicyService；`edit` 唯一写闸门且全角色 `task` deny；工具名全用真实名；`opencode.json` 单写者；guard 三制品单一路径且 cleanup 完整、失败中性化；无死代码。Evidence: `.omo/evidence/role-enforcement/F2-code-quality.txt`。（评审已 APPROVE；等待用户显式确认）
   Recommended task executor category: unspecified-high
-- [ ] F3. 真实手动 QA — 跑 Todo 21 脚本 a/c/d/e/f/g（含服务端绑定 ask 流与 INCONCLUSIVE 判定），确认 pure 下原生 edit/write 仍拒（Todo 17）、guard 分支与文案可操作、clone 正确。Evidence: `.omo/evidence/role-enforcement/F3-manual-qa.txt`。
+- [~] F3. 真实手动 QA — 跑 Todo 21 脚本 a/c/d/e/f/g（含服务端绑定 ask 流与 INCONCLUSIVE 判定），确认 pure 下原生 edit/write 仍拒（Todo 17）、guard 分支与文案可操作、clone 正确。Evidence: `.omo/evidence/role-enforcement/F3-manual-qa.txt`。（评审 APPROVE：a/d/f/g VERIFIED，c/e INCONCLUSIVE 属模型非确定性；等待用户显式确认）
   Recommended task executor category: unspecified-high
-- [ ] F4. 范围保真 — 未重构 4 角色、无双轨、无 worker 角色语义、未动 MCP 主 Agent 门、未覆盖自定义 prompt、未用绝对路径 glob、未依赖子代理继承、未用裸 MCP 名。Evidence: `.omo/evidence/role-enforcement/F4-scope-fidelity.txt`。
+- [~] F4. 范围保真 — 未重构 4 角色、无双轨、无 worker 角色语义、未动 MCP 主 Agent 门、未覆盖自定义 prompt、未用绝对路径 glob、未依赖子代理继承、未用裸 MCP 名。Evidence: `.omo/evidence/role-enforcement/F4-scope-fidelity.txt`。（评审已 APPROVE；等待用户显式确认）
   Recommended task executor category: unspecified-high
 
 ## Commit strategy

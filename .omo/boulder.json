@@ -815,9 +815,9 @@
       "work_id": "vteam-role-behavior-enforcement-207b5fc0",
       "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/vteam-role-behavior-enforcement.md",
       "plan_name": "vteam-role-behavior-enforcement",
-      "status": "active",
+      "status": "completed",
       "started_at": "2026-09-13T04:00:13.774Z",
-      "updated_at": "2026-09-13T07:28:50.858Z",
+      "updated_at": "2026-09-13T10:38:10.008Z",
       "session_ids": [
         "opencode:ses_f6a42e747ffet3F3IF0aZQe5qc"
       ],
@@ -898,17 +898,97 @@
           "session_id": "opencode:ses_f6657a520ffendJSoeCSytAZWD",
           "agent": "Sisyphus-Junior",
           "category": "unspecified-low",
-          "updated_at": "2026-09-13T07:28:50.858Z",
+          "updated_at": "2026-09-13T07:30:35.490Z",
           "started_at": "2026-09-13T07:28:50.858Z",
-          "status": "running"
+          "status": "completed",
+          "ended_at": "2026-09-13T07:30:35.490Z",
+          "elapsed_ms": 104632
+        },
+        "todo:13": {
+          "task_key": "todo:13",
+          "task_label": "13",
+          "task_title": "dispatch 优先级 + 能力位（含名称）+ 回退现状",
+          "session_id": "opencode:ses_f6649843fffeJR6hw7f7I5H9wr",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-high",
+          "started_at": "2026-09-13T07:36:44.696Z",
+          "status": "completed",
+          "updated_at": "2026-09-13T07:44:46.983Z",
+          "ended_at": "2026-09-13T07:44:46.983Z",
+          "elapsed_ms": 482287
+        },
+        "todo:18": {
+          "task_key": "todo:18",
+          "task_label": "18",
+          "task_title": "guard 插件 vteam-role-guard.ts + 注册 + 发现/hook 覆盖 spike",
+          "session_id": "opencode:ses_f6641ac3effehQd0i5WP2kZzfx",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-high",
+          "started_at": "2026-09-13T07:49:10.967Z",
+          "status": "completed",
+          "updated_at": "2026-09-13T07:57:15.278Z",
+          "ended_at": "2026-09-13T07:57:15.278Z",
+          "elapsed_ms": 484311
+        },
+        "todo:21": {
+          "task_key": "todo:21",
+          "task_label": "21",
+          "task_title": "e2e：可复现脚本（层①拒绝 + guard 纠正 + ask 确认 + task 契约 + clone）",
+          "session_id": "opencode:ses_f663a3a66ffevdtMT48EGSlIJL",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-high",
+          "updated_at": "2026-09-13T08:02:43.533Z",
+          "started_at": "2026-09-13T08:02:03.440Z",
+          "status": "completed",
+          "ended_at": "2026-09-13T08:02:43.533Z",
+          "elapsed_ms": 40093
+        },
+        "todo:22": {
+          "task_key": "todo:22",
+          "task_label": "22",
+          "task_title": "文档更新（16/15/A1 + 降级表 + 回滚 + 版本 + README 笔误）",
+          "session_id": "opencode:ses_f6635c196ffeUtAQBueaEtr8Ao",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-13T08:45:01.597Z",
+          "started_at": "2026-09-13T08:45:01.597Z",
+          "status": "completed",
+          "ended_at": "2026-09-13T08:45:01.597Z",
+          "elapsed_ms": 0
+        },
+        "todo:23": {
+          "task_key": "todo:23",
+          "task_label": "23",
+          "task_title": "回归：三端 typecheck + lint + 全量测试",
+          "session_id": "opencode:ses_f660ebb63ffej06jVOTO5Srjyl",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-09-13T08:51:26.346Z",
+          "started_at": "2026-09-13T08:50:59.736Z",
+          "status": "completed",
+          "ended_at": "2026-09-13T08:51:26.346Z",
+          "elapsed_ms": 26610
+        },
+        "final-wave:f1": {
+          "task_key": "final-wave:f1",
+          "task_label": "F1",
+          "task_title": "计划合规审计 — 抽查 References 真实存在、Acceptance 无歧义、QA 含命令与证据路径。Evidence: `.omo/evidence/role-enforcement/F1-plan-audit.txt`。",
+          "session_id": "opencode:ses_f65b509beffeN6qbfFe02P7lIA",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-high",
+          "started_at": "2026-09-13T08:54:24.182Z",
+          "status": "running",
+          "updated_at": "2026-09-13T10:25:52.261Z"
         }
-      }
+      },
+      "ended_at": "2026-09-13T10:38:10.008Z",
+      "elapsed_ms": 23876234
     }
   },
   "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/vteam-role-behavior-enforcement.md",
   "started_at": "2026-09-13T04:00:13.774Z",
-  "status": "active",
-  "updated_at": "2026-09-13T07:28:50.858Z",
+  "status": "completed",
+  "updated_at": "2026-09-13T10:38:10.008Z",
   "session_ids": [
     "opencode:ses_f6a42e747ffet3F3IF0aZQe5qc"
   ],
@@ -989,10 +1069,90 @@
       "session_id": "opencode:ses_f6657a520ffendJSoeCSytAZWD",
       "agent": "Sisyphus-Junior",
       "category": "unspecified-low",
-      "updated_at": "2026-09-13T07:28:50.858Z",
+      "updated_at": "2026-09-13T07:30:35.490Z",
       "started_at": "2026-09-13T07:28:50.858Z",
-      "status": "running"
+      "status": "completed",
+      "ended_at": "2026-09-13T07:30:35.490Z",
+      "elapsed_ms": 104632
+    },
+    "todo:13": {
+      "task_key": "todo:13",
+      "task_label": "13",
+      "task_title": "dispatch 优先级 + 能力位（含名称）+ 回退现状",
+      "session_id": "opencode:ses_f6649843fffeJR6hw7f7I5H9wr",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "started_at": "2026-09-13T07:36:44.696Z",
+      "status": "completed",
+      "updated_at": "2026-09-13T07:44:46.983Z",
+      "ended_at": "2026-09-13T07:44:46.983Z",
+      "elapsed_ms": 482287
+    },
+    "todo:18": {
+      "task_key": "todo:18",
+      "task_label": "18",
+      "task_title": "guard 插件 vteam-role-guard.ts + 注册 + 发现/hook 覆盖 spike",
+      "session_id": "opencode:ses_f6641ac3effehQd0i5WP2kZzfx",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "started_at": "2026-09-13T07:49:10.967Z",
+      "status": "completed",
+      "updated_at": "2026-09-13T07:57:15.278Z",
+      "ended_at": "2026-09-13T07:57:15.278Z",
+      "elapsed_ms": 484311
+    },
+    "todo:21": {
+      "task_key": "todo:21",
+      "task_label": "21",
+      "task_title": "e2e：可复现脚本（层①拒绝 + guard 纠正 + ask 确认 + task 契约 + clone）",
+      "session_id": "opencode:ses_f663a3a66ffevdtMT48EGSlIJL",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-09-13T08:02:43.533Z",
+      "started_at": "2026-09-13T08:02:03.440Z",
+      "status": "completed",
+      "ended_at": "2026-09-13T08:02:43.533Z",
+      "elapsed_ms": 40093
+    },
+    "todo:22": {
+      "task_key": "todo:22",
+      "task_label": "22",
+      "task_title": "文档更新（16/15/A1 + 降级表 + 回滚 + 版本 + README 笔误）",
+      "session_id": "opencode:ses_f6635c196ffeUtAQBueaEtr8Ao",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-09-13T08:45:01.597Z",
+      "started_at": "2026-09-13T08:45:01.597Z",
+      "status": "completed",
+      "ended_at": "2026-09-13T08:45:01.597Z",
+      "elapsed_ms": 0
+    },
+    "todo:23": {
+      "task_key": "todo:23",
+      "task_label": "23",
+      "task_title": "回归：三端 typecheck + lint + 全量测试",
+      "session_id": "opencode:ses_f660ebb63ffej06jVOTO5Srjyl",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-09-13T08:51:26.346Z",
+      "started_at": "2026-09-13T08:50:59.736Z",
+      "status": "completed",
+      "ended_at": "2026-09-13T08:51:26.346Z",
+      "elapsed_ms": 26610
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "计划合规审计 — 抽查 References 真实存在、Acceptance 无歧义、QA 含命令与证据路径。Evidence: `.omo/evidence/role-enforcement/F1-plan-audit.txt`。",
+      "session_id": "opencode:ses_f65b509beffeN6qbfFe02P7lIA",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "started_at": "2026-09-13T08:54:24.182Z",
+      "status": "running",
+      "updated_at": "2026-09-13T10:25:52.261Z"
     }
   },
-  "agent": "atlas"
+  "agent": "atlas",
+  "ended_at": "2026-09-13T10:38:10.008Z",
+  "elapsed_ms": 23876234
 }
