@@ -31,34 +31,13 @@ import { TaskTransitionAction } from '../common/constants/task.constants';
 import { TasksService } from '../tasks/tasks.service';
 import { QuestionsService } from '../questions/questions.service';
 import { AGENT_QUESTION_STATUS } from '../questions/questions.constants';
-import { PlansService } from '../plans/plans.service';
 import { MEMORY_LEVELS, MemoryLevel } from '../memories/memory.constants';
-import {
-  PLAN_ERRORS,
-  PLAN_STATUS,
-  PLAN_TASK_STATUS,
-} from '../plans/plan.constants';
 import {
   PLATFORM_MCP_ERRORS,
   validateTsxPrototype,
 } from './platform-mcp.constants';
-import { validatePlanTaskQuality } from './plan-quality.guard';
 import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service';
 import { ModuleRef } from '@nestjs/core';
-
-/**
- * Plan 主键前缀（与 plans.service.ts 对齐：pl_/pt_ 前缀零填充序号）。
- */
-const PLAN_ID_PREFIX = 'pl';
-const PLAN_TASK_ID_PREFIX = 'pt';
-
-/** plan_submit 覆盖重提只允许从终态（rejected/completed）进入；活动态重复提交 → 409。 */
-const PLAN_ACTIVE_STATUSES = [
-  PLAN_STATUS.draft,
-  PLAN_STATUS.reviewing,
-  PLAN_STATUS.approved,
-  PLAN_STATUS.executing,
-] as const;
 
 /**
  * 消息主键前缀：与 ChatService/WorkerDispatcher 共享 IdGeneratorService 的 'm' 计数
@@ -143,7 +122,6 @@ export class PlatformMcpService {
     private readonly issuesService: IssuesService,
     private readonly tasksService: TasksService,
     private readonly questionsService: QuestionsService,
-    private readonly plansService: PlansService,
     @Optional()
     @Inject(NotificationDispatcherService)
     private readonly outboundDispatcher: NotificationDispatcherService,
@@ -912,19 +890,9 @@ export class PlatformMcpService {
     },
   ) {
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-    if (args.action === 'start') {
-      const t = await this.prisma.task.findUnique({
-        where: { id: args.taskId },
-        select: { executionMode: true },
-      });
-      if (t?.executionMode === 'plan') {
-        throw new ForbiddenException({
-          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-          message:
-            '计划模式下需由用户在任务管理界面手动启动任务，Agent 不可自动 start；评审通过后请等待用户点击“开始任务”',
-        });
-      }
-    }
+    // 注：已删除旧自造 plan 域的 start 门禁（executionMode 列恒 direct）。
+    // 新计划模式（task.planMode）不拦截 start：计划评审通过后的执行确认走
+    // opencode question/permission → QuestionModal 由用户明确批准（见 P4）。
     return this.tasksService.transitionByAgent(
       args.taskId,
       args.selfInstanceId,
@@ -960,7 +928,7 @@ export class PlatformMcpService {
    * task_create：团队会话无任务时由主 Agent 建任务（team-free-chat todo-4；
    * remove-project-dimension Todo 7 去 pid：团队即归属，无项目防提权门）。
    * 上下文解析：taskId 优先走任务维度（门 = task.mainAgentInstanceId === 调用方，
-   * 对齐 plan_review 的 isMain 语义；建任务目标团队取该任务所属团队）；无 taskId
+   * 对齐 task_transition 的 isMain 语义；建任务目标团队取该任务所属团队）；无 taskId
    * 走团队维度（门 = session 团队成员 === team.mainAgentMemberId）。
    * 成功路径经 TasksService.createByAgent（attribution createdBy = 团队用户成员
    * owner 回填；永不直调 create，其按调用方 userId 的团队成员校验会 403 agent）。
@@ -1406,438 +1374,13 @@ export class PlatformMcpService {
   }
 
   /**
-   * plan 系团队归属门：任务存在（404 否则）+ 所属团队主成员 id（tmm_，主成员门比较依据）。
-   * 任务无团队/团队无主成员 → 对应 null（调用方按 403 处理）。
-   */
-  private async findPlanTeamGate(taskId: string): Promise<{
-    teamId: string | null;
-    mainMemberId: string | null;
-  }> {
-    const task = await this.prisma.task.findUnique({
-      where: { id: taskId },
-      select: { teamId: true },
-    });
-    if (!task) {
-      throw new NotFoundException({
-        code: PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
-        message: '任务不存在',
-      });
-    }
-    if (!task.teamId) {
-      return { teamId: null, mainMemberId: null };
-    }
-    const team = await this.prisma.team.findUnique({
-      where: { id: task.teamId },
-      select: { mainAgentMemberId: true },
-    });
-    return {
-      teamId: task.teamId,
-      mainMemberId: team?.mainAgentMemberId ?? null,
-    };
-  }
-
-  /**
-   * plan_submit：主 Agent 提交执行计划（vteam-team-collaboration Todo 2）。
-   * 严格顺序：归属校验 → 主成员校验（团队主成员，对齐 task_transition 语义）→ 未终态查重
-   * （活动态 409；rejected/completed 覆盖重提）→ 结构校验（tasks what 非空，
-   * zod 已保证）→ assignee 校验（指派成员须是任务所属团队成员，对齐 issue_create
-   * 指派语义）→ $transaction（plan.upsert + 批量 planTask 重建，seq 递增；
-   * 覆盖重提时 reviewerInstanceId=null 防幽灵评审者）→ 群聊系统消息。
-   */
-  async planSubmit(
-    ctx: PlatformMcpContext,
-    args: {
-      taskId: string;
-      selfInstanceId: string;
-      title: string;
-      summary?: string;
-      scopeIn?: string;
-      scopeOut?: string;
-      tasks: Array<{
-        title: string;
-        what: string;
-        mustNot?: string;
-        references?: string;
-        acceptance?: string;
-        qa?: string;
-        commit?: string;
-        assigneeInstanceId?: string;
-      }>;
-    },
-  ): Promise<{
-    planId: string;
-    status: string;
-    taskCount: number;
-    qualityWarnings?: string[];
-  }> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-
-    const { teamId, mainMemberId } = await this.findPlanTeamGate(args.taskId);
-    if (mainMemberId !== args.selfInstanceId) {
-      throw new ForbiddenException({
-        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message: `仅主 Agent（${mainMemberId ?? '未设置'}）可提交执行计划；请知会主 Agent 调用 plan_submit`,
-      });
-    }
-
-    const existing = await this.prisma.plan.findUnique({
-      where: { taskId: args.taskId },
-      select: { id: true, status: true, rejectCount: true },
-    });
-    if (
-      existing &&
-      (PLAN_ACTIVE_STATUSES as readonly string[]).includes(existing.status)
-    ) {
-      throw new ConflictException({
-        code: PLAN_ERRORS.PLAN_INVALID_STATUS,
-        message: `执行计划处于 ${existing.status} 状态（评审中/已批准/实施中），不可重复提交`,
-      });
-    }
-    if (
-      existing &&
-      (existing as { rejectCount?: number }).rejectCount !== undefined &&
-      (existing.rejectCount as number) >= 3
-    ) {
-      throw new ConflictException({
-        code: PLAN_ERRORS.PLAN_REVIEW_ROUNDS_EXCEEDED,
-        message: `执行计划已驳回 ${existing.rejectCount} 次，请向用户同步分歧点并请求人工裁决后再提交`,
-      });
-    }
-
-    const taskCount = args.tasks.length;
-    for (const t of args.tasks) {
-      if (!t.what || !t.what.trim()) {
-        throw new BadRequestException({
-          code: PLAN_ERRORS.PLAN_STRUCTURE_INVALID,
-          message: '计划子任务 what 不能为空',
-        });
-      }
-    }
-
-    const qualityErrors: string[] = [];
-    const qualityWarnings: string[] = [];
-    for (const t of args.tasks) {
-      const result = validatePlanTaskQuality({
-        title: t.title,
-        what: t.what,
-        references: t.references,
-        acceptance: t.acceptance ?? '',
-        qa: t.qa ?? '',
-      });
-      qualityErrors.push(...result.errors);
-      qualityWarnings.push(...result.warnings);
-    }
-    if (qualityErrors.length > 0) {
-      throw new BadRequestException({
-        code: PLAN_ERRORS.PLAN_STRUCTURE_INVALID,
-        message: `计划质量预检未通过（${qualityErrors.length} 项），请修正后重新提交：${qualityErrors.join('；')}`,
-      });
-    }
-
-    const assigneeIds = args.tasks
-      .map((t) => t.assigneeInstanceId)
-      .filter((id): id is string => !!id);
-    if (assigneeIds.length > 0) {
-      const uniqueIds = [...new Set(assigneeIds)];
-      const teamRows = teamId
-        ? await this.prisma.teamMember.findMany({
-            where: { teamId, id: { in: uniqueIds } },
-            select: { id: true },
-          })
-        : [];
-      const validIds = new Set(teamRows.map((r) => r.id));
-      const invalidIds = uniqueIds.filter((id) => !validIds.has(id));
-      if (invalidIds.length > 0) {
-        throw new BadRequestException({
-          code: PLAN_ERRORS.PLAN_STRUCTURE_INVALID,
-          message: `指派 Agent 不在任务团队中：${invalidIds.join('、')}`,
-        });
-      }
-    }
-
-    const channel = await this.findTaskGroupChannel(args.taskId);
-    const sysText = '主 Agent 提交执行计划，请评审';
-    const plan = await this.prisma.$transaction(async (tx) => {
-      const upserted = await tx.plan.upsert({
-        where: { taskId: args.taskId },
-        update: {
-          title: args.title,
-          summary: args.summary ?? null,
-          scopeIn: args.scopeIn ?? null,
-          scopeOut: args.scopeOut ?? null,
-          status: PLAN_STATUS.reviewing,
-          reviewerInstanceId: null,
-        },
-        create: {
-          id: await this.idGen.nextId(PLAN_ID_PREFIX),
-          taskId: args.taskId,
-          title: args.title,
-          summary: args.summary ?? null,
-          scopeIn: args.scopeIn ?? null,
-          scopeOut: args.scopeOut ?? null,
-          status: PLAN_STATUS.reviewing,
-          createdBy: args.selfInstanceId,
-          reviewerInstanceId: null,
-        },
-      });
-      if (existing) {
-        await tx.planTask.deleteMany({ where: { planId: upserted.id } });
-      }
-      for (let i = 0; i < args.tasks.length; i++) {
-        const t = args.tasks[i];
-        await tx.planTask.create({
-          data: {
-            id: await this.idGen.nextId(PLAN_TASK_ID_PREFIX),
-            planId: upserted.id,
-            seq: i + 1,
-            title: t.title,
-            content: {
-              what: t.what,
-              mustNot: t.mustNot ?? null,
-              references: t.references ?? null,
-              acceptance: t.acceptance ?? null,
-              qa: t.qa ?? null,
-              commit: t.commit ?? null,
-            } as Prisma.InputJsonValue,
-            assigneeInstanceId: t.assigneeInstanceId ?? null,
-            status: PLAN_TASK_STATUS.pending,
-          },
-        });
-      }
-      if (channel) {
-        await tx.message.create({
-          data: {
-            id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
-            channelId: channel.id,
-            senderType: SENDER_TYPE.system,
-            senderId: null,
-            content: { text: sysText, parts: [] } as Prisma.InputJsonValue,
-            mentions: null,
-            status: MESSAGE_STATUS.sent,
-          },
-        });
-      }
-      return upserted;
-    });
-
-    if (channel) {
-      await this.realtime.broadcast(
-        EVENT_TYPES.CHAT_MESSAGE_NEW,
-        { message: { text: sysText, channelId: channel.id } },
-        { type: 'channel', id: channel.id },
-      );
-    }
-    return {
-      planId: plan.id,
-      status: plan.status,
-      taskCount,
-      ...(qualityWarnings.length > 0 ? { qualityWarnings } : {}),
-    };
-  }
-
-  /**
-   * plan_review：评审执行计划（vteam-team-collaboration Todo 2）。
-   * 权限（Oracle B1）：主成员或 plan.reviewerInstanceId（可能为 null——
-   * null 时仅主成员可调）；仅 reviewing 可评审（否则 400 PLAN_INVALID_STATUS）；
-   * approved/rejected（rejected 附 reason 必填，zod refine + 服务层二次校验）；
-   * 评审完成后 reviewerInstanceId 置 null（R4 防幽灵评审者）→ 群聊系统消息
-   * （驳回文案引导修改重提或切换 direct 模式，Oracle M5）。
-   */
-  async planReview(
-    ctx: PlatformMcpContext,
-    args: {
-      taskId: string;
-      selfInstanceId: string;
-      planId?: string;
-      verdict: 'approved' | 'rejected';
-      reason?: string;
-    },
-  ): Promise<{ planId: string; status: string }> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-
-    const { mainMemberId } = await this.findPlanTeamGate(args.taskId);
-
-    const plan = args.planId
-      ? await this.prisma.plan.findFirst({
-          where: { id: args.planId, taskId: args.taskId },
-          select: { id: true, status: true, reviewerInstanceId: true },
-        })
-      : await this.prisma.plan.findUnique({
-          where: { taskId: args.taskId },
-          select: { id: true, status: true, reviewerInstanceId: true },
-        });
-    if (!plan) {
-      throw new NotFoundException({
-        code: PLAN_ERRORS.PLAN_NOT_FOUND,
-        message: '执行计划不存在',
-      });
-    }
-
-    const isMain = mainMemberId === args.selfInstanceId;
-    const isReviewer = plan.reviewerInstanceId === args.selfInstanceId;
-    if (!isMain && !isReviewer) {
-      throw new ForbiddenException({
-        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message: `仅主 Agent 或该计划的评审者可评审执行计划；请知会主 Agent 调用 plan_review`,
-      });
-    }
-
-    if (plan.status !== PLAN_STATUS.reviewing) {
-      throw new BadRequestException({
-        code: PLAN_ERRORS.PLAN_INVALID_STATUS,
-        message: `执行计划当前状态（${plan.status}）不可评审，仅 reviewing 可评审`,
-      });
-    }
-
-    if (args.verdict === 'rejected' && !(args.reason ?? '').trim()) {
-      throw new BadRequestException({
-        code: PLAN_ERRORS.PLAN_STRUCTURE_INVALID,
-        message: '评审驳回必须填写 reason',
-      });
-    }
-
-    const approved = args.verdict === 'approved';
-    const sysText = approved
-      ? '执行计划已通过评审，请等待用户手动启动任务后再实施'
-      : `执行计划被驳回：${args.reason}（可修改后重提或切换 direct 模式）`;
-    const channel = await this.findTaskGroupChannel(args.taskId);
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const p = await tx.plan.update({
-        where: { id: plan.id },
-        data: approved
-          ? { status: PLAN_STATUS.approved, reviewerInstanceId: null }
-          : {
-              status: PLAN_STATUS.rejected,
-              reviewerInstanceId: null,
-              rejectCount: { increment: 1 },
-            },
-      });
-      if (channel) {
-        await tx.message.create({
-          data: {
-            id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
-            channelId: channel.id,
-            senderType: SENDER_TYPE.system,
-            senderId: null,
-            content: { text: sysText, parts: [] } as Prisma.InputJsonValue,
-            mentions: null,
-            status: MESSAGE_STATUS.sent,
-          },
-        });
-      }
-      return p;
-    });
-
-    if (channel) {
-      await this.realtime.broadcast(
-        EVENT_TYPES.CHAT_MESSAGE_NEW,
-        { message: { text: sysText, channelId: channel.id } },
-        { type: 'channel', id: channel.id },
-      );
-    }
-    return { planId: updated.id, status: updated.status };
-  }
-
-  /**
-   * plan_task_transition：流转计划子任务状态（vteam-team-collaboration Todo 2）。
-   * 归属校验 → planTask 属于该任务 + 调用成员为该子任务 assigneeInstanceId 或主
-   * 成员（否则 403）→ 更新 status → 若全部子任务均达终态（done/blocked/skipped）
-   * 且无 pending/in_progress → 群聊系统消息「执行计划任务已全部完成，可提交验收」。
-   */
-  async planTaskTransition(
-    ctx: PlatformMcpContext,
-    args: {
-      taskId: string;
-      selfInstanceId: string;
-      planTaskId: string;
-      status: 'in_progress' | 'done' | 'blocked' | 'skipped';
-    },
-  ): Promise<{ planTaskId: string; status: string }> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-
-    const { mainMemberId } = await this.findPlanTeamGate(args.taskId);
-
-    const planTask = await this.prisma.planTask.findUnique({
-      where: { id: args.planTaskId },
-      select: {
-        id: true,
-        planId: true,
-        assigneeInstanceId: true,
-        status: true,
-        plan: { select: { taskId: true } },
-      },
-    });
-    if (!planTask || planTask.plan.taskId !== args.taskId) {
-      throw new NotFoundException({
-        code: PLAN_ERRORS.PLAN_NOT_FOUND,
-        message: '计划子任务不存在或不属于该任务',
-      });
-    }
-
-    const isAssignee = planTask.assigneeInstanceId === args.selfInstanceId;
-    const isMain = mainMemberId === args.selfInstanceId;
-    if (!isAssignee && !isMain) {
-      throw new ForbiddenException({
-        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message: `仅该子任务的指派实例（${planTask.assigneeInstanceId ?? '未指派'}）或主 Agent 可流转；未指派任务请@主Agent指派或让主Agent调用plan_assign_reviewer/直接操作`,
-      });
-    }
-
-    const updated = await this.prisma.planTask.update({
-      where: { id: args.planTaskId },
-      data: { status: args.status },
-    });
-
-    const siblings = await this.prisma.planTask.findMany({
-      where: { planId: planTask.planId },
-      select: { status: true },
-    });
-    const FINAL_STATES = new Set<string>([
-      PLAN_TASK_STATUS.done,
-      PLAN_TASK_STATUS.blocked,
-      PLAN_TASK_STATUS.skipped,
-    ]);
-    if (
-      siblings.length > 0 &&
-      siblings.every((t) => FINAL_STATES.has(t.status))
-    ) {
-      const channel = await this.findTaskGroupChannel(args.taskId);
-      if (channel) {
-        const sysText = '执行计划任务已全部完成，可提交验收';
-        await this.prisma.message.create({
-          data: {
-            id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
-            channelId: channel.id,
-            senderType: SENDER_TYPE.system,
-            senderId: null,
-            content: { text: sysText, parts: [] } as Prisma.InputJsonValue,
-            mentions: null,
-            status: MESSAGE_STATUS.sent,
-          },
-        });
-        await this.realtime.broadcast(
-          EVENT_TYPES.CHAT_MESSAGE_NEW,
-          { message: { text: sysText, channelId: channel.id } },
-          { type: 'channel', id: channel.id },
-        );
-      }
-    }
-
-    return { planTaskId: updated.id, status: updated.status };
-  }
-
-  /**
    * team_view：任务团队实时视图（只读，vteam-team-collaboration Todo 3）。
-   * 与 task_context 的差异增量（Metis MINOR-3）：会话实时状态（sessionStatus/sessionId，
-   * 复用 toTaskDto instances 构造逻辑）+ 计划子任务分配概览（planSummary）+ 全量角色视图。
+   * 与 task_context 的差异增量：会话实时状态（sessionStatus/sessionId，复用 toTaskDto
+   * instances 构造逻辑）+ 全量角色视图。
    * 1. 归属校验（无 selfInstanceId，仅校验 worker 有该任务会话——对齐 memorySearch 只读先例）。
    * 2. task 行校验存在（404）。
-   * 3. 并行查：task_agents（未 removed，含 agent 关联 + 各自 sessions）与 plan_tasks
-   *    （经 plan relation 反查该任务子任务，status 概览）。
-   * 4. members：{id, agentId, alias, role, seq, main, sessionStatus, sessionId}；
-   *    planSummary：{total, done, pending}——done 为终态子任务数（done/blocked/skipped，
-   *    对齐 planTaskTransition 全终态判定），pending 为未完成数（pending/in_progress）。
+   * 3. 并行查：task_agents（未 removed，含 agent 关联 + 各自 sessions）。
+   * 4. members：{id, agentId, alias, role, seq, main, sessionStatus, sessionId}。
    */
   async teamView(
     ctx: PlatformMcpContext,
@@ -1854,7 +1397,6 @@ export class PlatformMcpService {
       sessionStatus: string | null;
       sessionId: string | null;
     }>;
-    planSummary: { total: number; done: number; pending: number };
   }> {
     await this.assertWorkerTask(ctx, args.taskId);
     const task = await this.prisma.task.findUnique({
@@ -1877,7 +1419,7 @@ export class PlatformMcpService {
     const viewMainId =
       (viewTeam as { mainAgentMemberId?: string | null } | null)
         ?.mainAgentMemberId ?? null;
-    const [agentRows, planTaskRows] = await Promise.all([
+    const [agentRows] = await Promise.all([
       viewTeamId
         ? this.prisma.teamMember.findMany({
             where: { teamId: viewTeamId },
@@ -1891,10 +1433,6 @@ export class PlatformMcpService {
             },
           })
         : Promise.resolve([]),
-      this.prisma.planTask.findMany({
-        where: { plan: { taskId: args.taskId } },
-        select: { status: true },
-      }),
     ]);
     const viewSessions =
       agentRows.length > 0
@@ -1909,14 +1447,6 @@ export class PlatformMcpService {
     const viewSessionByMember = new Map(
       (viewSessions ?? []).map((x: any) => [x.teamMemberId, x]),
     );
-    const FINAL_PLAN_TASK_STATUSES = new Set<string>([
-      PLAN_TASK_STATUS.done,
-      PLAN_TASK_STATUS.blocked,
-      PLAN_TASK_STATUS.skipped,
-    ]);
-    const done = planTaskRows.filter((r) =>
-      FINAL_PLAN_TASK_STATUSES.has(r.status),
-    ).length;
     return {
       taskId: task.id,
       members: agentRows.map((r) => {
@@ -1933,11 +1463,6 @@ export class PlatformMcpService {
           sessionId: vs?.id ?? null,
         };
       }),
-      planSummary: {
-        total: planTaskRows.length,
-        done,
-        pending: planTaskRows.length - done,
-      },
     };
   }
 
@@ -2025,41 +1550,17 @@ export class PlatformMcpService {
   }
 
   /**
-   * plan_get：读取任务执行计划（只读，评审者读计划通道——Metis MAJOR-4 闭环，
-   * vteam-team-collaboration Todo 5）。无 selfInstanceId，仅校验 worker 有该任务
-   * 会话（对齐 team_view/memorySearch 只读先例）。返回计划头（含 reviewerInstanceId）
-   * + 子任务清单全文（content 六要素 + 指派概览），供评审者评审前通读计划。
+   * 任务团队归属门：任务存在（404 否则）+ 所属团队主成员 id（tmm_，主成员门比较依据）。
+   * 任务无团队/团队无主成员 → 对应 null（调用方按 403 处理）。
+   * 供 team_add_member 等「仅主 Agent 可调」工具复用。
    */
-  async planGet(
-    ctx: PlatformMcpContext,
-    args: { taskId: string; planId?: string },
-  ): Promise<{
-    id: string;
-    taskId: string;
-    title: string;
-    summary: string | null;
-    scopeIn: string | null;
-    scopeOut: string | null;
-    status: string;
-    createdBy: string;
-    reviewerInstanceId: string | null;
-    createdAt: string;
-    updatedAt: string;
-    tasks: Array<{
-      id: string;
-      seq: number;
-      title: string;
-      content: Prisma.JsonValue;
-      assigneeInstanceId: string | null;
-      assigneeAlias: string | null;
-      assigneeName: string | null;
-      status: string;
-    }>;
+  private async findTaskTeamGate(taskId: string): Promise<{
+    teamId: string | null;
+    mainMemberId: string | null;
   }> {
-    await this.assertWorkerTask(ctx, args.taskId);
     const task = await this.prisma.task.findUnique({
-      where: { id: args.taskId },
-      select: { id: true, teamId: true },
+      where: { id: taskId },
+      select: { teamId: true },
     });
     if (!task) {
       throw new NotFoundException({
@@ -2067,107 +1568,17 @@ export class PlatformMcpService {
         message: '任务不存在',
       });
     }
-    const plan = args.planId
-      ? await this.prisma.plan.findFirst({
-          where: { id: args.planId, taskId: args.taskId },
-        })
-      : await this.prisma.plan.findUnique({
-          where: { taskId: args.taskId },
-        });
-    if (!plan) {
-      throw new NotFoundException({
-        code: PLAN_ERRORS.PLAN_NOT_FOUND,
-        message: '执行计划不存在',
-      });
+    if (!task.teamId) {
+      return { teamId: null, mainMemberId: null };
     }
-    const tasks = await this.prisma.planTask.findMany({
-      where: { planId: plan.id },
-      orderBy: { seq: 'asc' },
+    const team = await this.prisma.team.findUnique({
+      where: { id: task.teamId },
+      select: { mainAgentMemberId: true },
     });
-    const ids = [
-      ...new Set(
-        tasks
-          .map((t) => t.assigneeInstanceId)
-          .filter((id): id is string => !!id),
-      ),
-    ];
-    let assigneeMap = new Map<string, { alias: string | null; name: string }>();
-    if (ids.length > 0 && task.teamId) {
-      const members = await this.prisma.teamMember.findMany({
-        where: { id: { in: ids }, teamId: task.teamId },
-        select: { id: true, alias: true, agent: { select: { name: true } } },
-      });
-      assigneeMap = new Map(
-        members.map((m) => [m.id, { alias: m.alias, name: m.agent.name }]),
-      );
-    }
     return {
-      id: plan.id,
-      taskId: plan.taskId,
-      title: plan.title,
-      summary: plan.summary,
-      scopeIn: plan.scopeIn,
-      scopeOut: plan.scopeOut,
-      status: plan.status,
-      createdBy: plan.createdBy,
-      reviewerInstanceId: plan.reviewerInstanceId,
-      createdAt: plan.createdAt.toISOString(),
-      updatedAt: plan.updatedAt.toISOString(),
-      tasks: tasks.map((t) => {
-        const overview = assigneeMap.get(t.assigneeInstanceId ?? '');
-        return {
-          id: t.id,
-          seq: t.seq,
-          title: t.title,
-          content: t.content,
-          assigneeInstanceId: t.assigneeInstanceId,
-          assigneeAlias: overview?.alias ?? null,
-          assigneeName: overview?.name ?? null,
-          status: t.status,
-        };
-      }),
+      teamId: task.teamId,
+      mainMemberId: team?.mainAgentMemberId ?? null,
     };
-  }
-
-  /**
-   * plan_assign_reviewer：指派执行计划评审者（Oracle R3 独立工具，
-   * vteam-team-collaboration Todo 5）。归属校验 → 任务存在（404）→ 仅主成员可调
-   * （团队主成员 === selfInstanceId，否则 403）→ 按 taskId 解析当前计划
-   * （404 PLAN_NOT_FOUND）→ 复用 PlansService.assignReviewer 落库 reviewerInstanceId
-   * + 群聊系统消息「已指派 <alias> 评审执行计划」——评审指派通道。
-   */
-  async planAssignReviewer(
-    ctx: PlatformMcpContext,
-    args: {
-      taskId: string;
-      selfInstanceId: string;
-      reviewerInstanceId: string;
-    },
-  ): Promise<{
-    planId: string;
-    taskId: string;
-    reviewerInstanceId: string;
-    reviewerAlias: string;
-  }> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-    const { mainMemberId } = await this.findPlanTeamGate(args.taskId);
-    if (mainMemberId !== args.selfInstanceId) {
-      throw new ForbiddenException({
-        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message: `仅主 Agent（${mainMemberId ?? '未设置'}）可指派评审者；请知会主 Agent 调用 plan_assign_reviewer`,
-      });
-    }
-    const plan = await this.prisma.plan.findUnique({
-      where: { taskId: args.taskId },
-      select: { id: true },
-    });
-    if (!plan) {
-      throw new NotFoundException({
-        code: PLAN_ERRORS.PLAN_NOT_FOUND,
-        message: '执行计划不存在',
-      });
-    }
-    return this.plansService.assignReviewer(plan.id, args.reviewerInstanceId);
   }
 
   /**
@@ -2195,7 +1606,7 @@ export class PlatformMcpService {
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
 
     const { teamId: addTeamId, mainMemberId: addMainId } =
-      await this.findPlanTeamGate(args.taskId);
+      await this.findTaskTeamGate(args.taskId);
     if (!addMainId || addMainId !== args.selfInstanceId) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
@@ -2285,6 +1696,66 @@ export class PlatformMcpService {
       taskId: args.taskId,
       agentId: args.agentId,
       alias,
+    };
+  }
+
+  /**
+   * plan_mode：切换任务计划模式开关（仅主 Agent 可调）。
+   * enabled=true → 主 Agent 先出计划文档（写到工作目录 .opencode/plans/ 下），其他成员只评审
+   * 不起草；enabled=false → 直接执行。agentName 可选：同步指定主 Agent 的执行 agent
+   * （显式名；空串=回跟随默认；不传=保持当前）。agent 名不做存在性强校验（弱校验告警，
+   * 执行期由 opencode 报错并经 agent.status error 回流，对齐 teams.updateMember 口径）。
+   */
+  async planMode(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId: string;
+      selfInstanceId: string;
+      enabled: boolean;
+      agentName?: string;
+    },
+  ): Promise<{
+    taskId: string;
+    planMode: boolean;
+    agentName: string | null;
+  }> {
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+
+    const { mainMemberId } = await this.findTaskTeamGate(args.taskId);
+    if (!mainMemberId || mainMemberId !== args.selfInstanceId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: `仅主 Agent（${mainMemberId ?? '未设置'}）可切换计划模式；请知会主 Agent 调用 plan_mode`,
+      });
+    }
+
+    let agentName: string | null | undefined;
+    if (args.agentName !== undefined) {
+      // 空串 → null（回跟随默认）；非空 → 原值透传（弱校验：存在性由执行期裁决）
+      agentName = args.agentName?.trim() || null;
+      await this.prisma.teamMember.update({
+        where: { id: mainMemberId },
+        data: { opencodeAgentName: agentName },
+      });
+    } else {
+      const row = await this.prisma.teamMember.findUnique({
+        where: { id: mainMemberId },
+        select: { opencodeAgentName: true },
+      });
+      agentName = row?.opencodeAgentName ?? null;
+    }
+
+    const updated = await this.prisma.task.update({
+      where: { id: args.taskId },
+      data: { planMode: args.enabled },
+    });
+    this.logger.log(
+      `[plan-mode] 主 Agent 切换计划模式 task=${args.taskId} planMode=${updated.planMode} agent=${agentName ?? '(保持)'}`,
+    );
+    return {
+      taskId: args.taskId,
+      planMode: updated.planMode,
+      agentName: agentName ?? null,
     };
   }
 

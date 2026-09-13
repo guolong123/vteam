@@ -148,6 +148,117 @@ describe('V1Driver.getMessages', () => {
   });
 });
 
+describe('V1Driver.listAgents', () => {
+  it('GET /agent 裸数组（实测形状）→ 原样返回，含 plan/build 与 native/hidden 字段', async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse([
+        { name: 'build', description: 'default', mode: 'primary', native: true },
+        { name: 'plan', description: 'Plan mode.', mode: 'primary', native: true },
+        { name: 'explore', mode: 'subagent', native: true },
+        { name: 'title', mode: 'primary', native: true, hidden: true },
+        { name: 'my-agent', mode: 'primary', native: false },
+      ]),
+    );
+    const driver = newDriver();
+    const agents = await driver.listAgents();
+    const [url] = mockFetch.mock.calls[0];
+    // 不传 directory → 不带 query（serve 用自身 cwd）
+    expect(url).toBe('http://127.0.0.1:4199/agent');
+    expect(agents).toHaveLength(5);
+    expect(agents.map((a) => a.name)).toEqual([
+      'build',
+      'plan',
+      'explore',
+      'title',
+      'my-agent',
+    ]);
+    expect(agents[1].mode).toBe('primary');
+    expect(agents[3].hidden).toBe(true);
+    // 自定义 agent：native=false（实测字段名，非 SDK 的 builtIn）
+    expect(agents[4].native).toBe(false);
+  });
+
+  it('directory 参数拼进 query（与 prompt_async 同规约，per-directory 隔离依赖它）', async () => {
+    mockFetch.mockResolvedValue(jsonResponse([]));
+    const driver = newDriver();
+    await driver.listAgents('/data/vteam-worker/tasks/t_1');
+    const [url] = mockFetch.mock.calls[0];
+    // URLSearchParams 会转义 `/`；断言解码后含完整目录
+    expect(decodeURIComponent(url)).toBe(
+      'http://127.0.0.1:4199/agent?directory=/data/vteam-worker/tasks/t_1',
+    );
+  });
+
+  it('兼容 {data:[...]} 包裹（防御旧版/变体 serve）', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ data: [{ name: 'build', mode: 'primary' }] }));
+    const driver = newDriver();
+    const agents = await driver.listAgents();
+    expect(agents).toHaveLength(1);
+    expect(agents[0].name).toBe('build');
+  });
+
+  it('HTTP 404（旧版 serve 无该端点）→ 抛 DriverRequestError 且带 status（降级由调用层决定）', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ error: 'not found' }, 404));
+    const driver = newDriver();
+    await expect(driver.listAgents()).rejects.toBeInstanceOf(DriverRequestError);
+    await expect(driver.listAgents()).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('网络错 → 抛 DriverRequestError（不吞异常）', async () => {
+    mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
+    const driver = newDriver();
+    await expect(driver.listAgents()).rejects.toBeInstanceOf(DriverRequestError);
+  });
+});
+
+describe('V1Driver.listTodos', () => {
+  it('GET /session/{id}/todo 裸数组 → 原样返回（含 content/status 实测字段）', async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse([
+        { id: 't1', content: '拆解任务', status: 'completed', priority: 'high' },
+        { id: 't2', content: '写代码', status: 'in_progress', priority: 'medium' },
+        { id: 't3', content: '跑测试', status: 'pending' },
+      ]),
+    );
+    const driver = newDriver();
+    const todos = await driver.listTodos('ses_1');
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:4199/session/ses_1/todo');
+    expect(todos).toHaveLength(3);
+    expect(todos[1]).toMatchObject({ content: '写代码', status: 'in_progress' });
+  });
+
+  it('空数组（agent 未用 todo 工具）→ 返回 []（正常情况）', async () => {
+    mockFetch.mockResolvedValue(jsonResponse([]));
+    const driver = newDriver();
+    await expect(driver.listTodos('ses_1')).resolves.toEqual([]);
+  });
+
+  it('directory 透传 query（与执行期目录一致）', async () => {
+    mockFetch.mockResolvedValue(jsonResponse([]));
+    const driver = newDriver();
+    await driver.listTodos('ses_1', '/data/vteam-worker/tasks/t_1');
+    const [url] = mockFetch.mock.calls[0];
+    expect(decodeURIComponent(url)).toBe(
+      'http://127.0.0.1:4199/session/ses_1/todo?directory=/data/vteam-worker/tasks/t_1',
+    );
+  });
+
+  it('兼容 {data:[...]} 包裹', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ data: [{ content: 'x', status: 'pending' }] }));
+    const driver = newDriver();
+    const todos = await driver.listTodos('ses_1');
+    expect(todos).toHaveLength(1);
+  });
+
+  it('HTTP 404（会话不存在/旧版无该端点）→ 抛 DriverRequestError 带 status', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ error: 'not found' }, 404));
+    const driver = newDriver();
+    await expect(driver.listTodos('ses_missing')).rejects.toBeInstanceOf(DriverRequestError);
+    await expect(driver.listTodos('ses_missing')).rejects.toMatchObject({ status: 404 });
+  });
+});
+
 describe('V1Driver.abort / listModels / isHealthy', () => {
   it('abort：POST /session/{id}/abort', async () => {
     mockFetch.mockResolvedValue(jsonResponse(null, 200));
@@ -156,6 +267,52 @@ describe('V1Driver.abort / listModels / isHealthy', () => {
     const [url, init] = mockFetch.mock.calls[0];
     expect(url).toBe('http://127.0.0.1:4199/session/ses_1/abort');
     expect(init.method).toBe('POST');
+  });
+
+  it('listModels 缓存：同一 serve 实例内第二次不再请求 /provider（5.98MB 只拉一次）', async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({ all: [{ id: 'opencode', models: { 'm1': { name: 'M1' } } }] }),
+    );
+    const driver = newDriver();
+    const a = await driver.listModels();
+    const b = await driver.listModels();
+    expect(a).toEqual(b);
+    // 只发了 1 次 /provider（第二次命中缓存）
+    const providerCalls = mockFetch.mock.calls.filter((c) =>
+      String(c[0]).endsWith('/provider'),
+    );
+    expect(providerCalls).toHaveLength(1);
+  });
+
+  it('listModels 缓存失效：baseUrl 变化（serve 重启换端口）后重新拉取', async () => {
+    // ⚠️ 必须每次返回**新的** Response：Response body 只能读一次，
+    // mockResolvedValue 复用同一对象会在第二次读取时报 Body is unusable
+    mockFetch.mockImplementation(async () =>
+      jsonResponse({ all: [{ id: 'opencode', models: { 'm1': { name: 'M1' } } }] }),
+    );
+    const driver = newDriver();
+    await driver.listModels();
+    // 模拟 serve 重启后 index.ts 注入新 baseUrl
+    driver.baseUrl = 'http://127.0.0.1:4299';
+    await driver.listModels();
+    const providerCalls = mockFetch.mock.calls.filter((c) =>
+      String(c[0]).endsWith('/provider'),
+    );
+    expect(providerCalls).toHaveLength(2);
+  });
+
+  it('listModels 缓存：baseUrl 未变（重复 set 同值）不误伤缓存', async () => {
+    mockFetch.mockImplementation(async () =>
+      jsonResponse({ all: [{ id: 'opencode', models: { 'm1': { name: 'M1' } } }] }),
+    );
+    const driver = newDriver();
+    await driver.listModels();
+    driver.baseUrl = 'http://127.0.0.1:4199'; // 同值
+    await driver.listModels();
+    const providerCalls = mockFetch.mock.calls.filter((c) =>
+      String(c[0]).endsWith('/provider'),
+    );
+    expect(providerCalls).toHaveLength(1);
   });
 
   it('listModels：GET /provider，有 key 的 provider 模型 + opencode 免费模型上报，无凭据外部 provider 不上报', async () => {

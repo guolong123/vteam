@@ -36,6 +36,7 @@ import {
   SectionHeader,
   type WorkerDetail,
 } from "../shared";
+import { OmoPanel } from "./omo-panel";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -182,11 +183,16 @@ export default function WorkerDetailPage() {
     refetchInterval: 10_000,
   });
 
-  /* C8 模型卡：目录兜底数据源 + 模型名映射（capabilities.models 主选上报值） */
+  /**
+   * 模型目录：只取 **enabled** 的（与"可用模型"口径一致，也是模型名映射的数据源）。
+   * 全量目录有 8000+ 条且多为无凭据的元数据，拉全量既慢又无意义。
+   */
   const { data: catalog } = useQuery({
-    queryKey: ["models", "catalog"],
+    queryKey: ["models", "catalog", "enabled"],
     queryFn: () =>
-      api.get<ModelsPage>("/models", { query: { page: 1, pageSize: 100 } }),
+      api.get<ModelsPage>("/models", {
+        query: { enabled: "true", pageSize: 500 },
+      }),
     enabled: !!token,
     staleTime: 60_000,
   });
@@ -200,14 +206,25 @@ export default function WorkerDetailPage() {
     return map;
   }, [catalog]);
 
-  /* 主选 capabilities.models（C2 已上报持久化，离线可查）；未上报/空 → 目录 enabled 模型兜底 */
-  const modelRefs = useMemo(
-    () =>
-      worker?.capabilities?.models?.length
-        ? worker.capabilities.models
-        : (catalog?.items ?? []).map((m) => `${m.providerID}/${m.modelID}`),
-    [worker, catalog],
-  );
+  /**
+   * 可用模型 = **真正可执行**的模型，按优先级取：
+   *   1. capabilities.executableModels —— worker 用 CLI 探测（带鉴权过滤）的可执行清单，
+   *      与 agent 模型下拉同源，是权威值；
+   *   2. 目录中 enabled 的模型 —— 兜底（老 worker 未上报 executableModels 时）；
+   *   3. 两者皆无 → 空（显示"未上报"，**不再退回全量目录**）。
+   *
+   * ⚠️ 不要用 capabilities.models：那是 serve 探测到的**全部模型目录**（实测 7699 条），
+   * 绝大多数没有可用凭据，直接渲染会把页面撑爆且严重误导（实测踩坑）。
+   */
+  const modelRefs = useMemo(() => {
+    const executable = worker?.capabilities?.executableModels ?? [];
+    if (executable.length > 0) {
+      return executable;
+    }
+    return (catalog?.items ?? [])
+      .filter((m) => m.enabled)
+      .map((m) => `${m.providerID}/${m.modelID}`);
+  }, [worker, catalog]);
 
   if (!workerId) {
     return (
@@ -634,6 +651,12 @@ export default function WorkerDetailPage() {
               <SectionEmpty text="该节点未上报可用模型" />
             )}
           </section>
+
+          {/* OmO 编排插件卡：开关 + agent 模型配置。
+              放在这里而不是全局页面，因为 OmO 是**与 worker 绑定**的能力：
+              插件装在镜像里、配置写在 worker workDir、开关只影响该 worker 的 serve 启动。
+              镜像未内置 OmO 时该组件自身返回 null（不渲染空卡）。 */}
+          <OmoPanel workerId={workerId} enabled={worker.status !== "offline"} />
         </div>
       )}
     </div>

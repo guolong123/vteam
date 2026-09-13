@@ -1887,4 +1887,55 @@ describe('WorkersService', () => {
       expect(service['pendingCommands'].has('w_0000000001')).toBe(false);
     });
   });
+
+  describe('toWorkerView：capabilities 剔除重量级 models（回归：详情响应曾达 253KB）', () => {
+    it('findOne 返回的 capabilities 不含 models，但保留其余字段', async () => {
+      const bigModels = Array.from({ length: 5000 }, (_, i) => `prov/m${i}`);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        name: 'w',
+        opencodeVersion: '1.18.30',
+        capabilities: {
+          maxInstances: 5,
+          skills: ['s1'],
+          tools: ['t1'],
+          port: 4000,
+          baseUrl: 'http://worker:4000',
+          execPort: 4198,
+          models: bigModels, // serve 探测的全量目录（仅注册入库用）
+          executableModels: ['opencode/big-pickle'], // 真正可执行（前端展示用）
+        },
+        load: { instances: 0 },
+        status: 'online',
+        lastHeartbeatAt: new Date(),
+        registeredAt: new Date(),
+        defaultModelId: null,
+      });
+
+      const view = await service.findOne('w_1');
+      const caps = view.capabilities as Record<string, unknown>;
+
+      // 重量级字段必须剔除
+      expect(caps.models).toBeUndefined();
+      // 其余字段原样保留（前端各卡片依赖）
+      expect(caps.maxInstances).toBe(5);
+      expect(caps.skills).toEqual(['s1']);
+      expect(caps.tools).toEqual(['t1']);
+      expect(caps.port).toBe(4000);
+      expect(caps.baseUrl).toBe('http://worker:4000');
+      expect(caps.execPort).toBe(4198);
+      expect(caps.executableModels).toEqual(['opencode/big-pickle']);
+    });
+
+    it('capabilities 为 null/缺失 → 原样返回 null，不抛错', async () => {
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_2', name: 'w', opencodeVersion: '1.18.30',
+        capabilities: null, load: null, status: 'online',
+        lastHeartbeatAt: null, registeredAt: new Date(), defaultModelId: null,
+      });
+      const view = await service.findOne('w_2');
+      expect(view.capabilities).toBeNull();
+    });
+  });
+
 });

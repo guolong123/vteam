@@ -28,13 +28,12 @@ import type { QuestionModalData } from "@/src/components/chat";
 import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
 import { TaskDetailDrawer } from "@/src/components/tasks/TaskDetailDrawer";
 import { TaskInfoEditModal } from "@/src/components/tasks/TaskInfoEditModal";
-import { TeamMembersPanel, roleOptionsOf, customAgentsOf, type AgentItem } from "@/src/components/teams/TeamMembersPanel";
+import { TeamMembersPanel, roleOptionsOf, customAgentsOf, type AgentItem, type OpencodeAgentItem, isSelectableOpencodeAgent } from "@/src/components/teams/TeamMembersPanel";
 import { ResizeHandle } from "@/src/components/teams/ResizeHandle";
-import { TaskRightTabs } from "@/src/components/teams/TeamRightPanel";
+import { TaskRightTabs, type PlanStepItem } from "@/src/components/teams/TeamRightPanel";
 import { useResizableWidth } from "@/src/hooks/use-resizable";
 import type {
   TaskDetail,
-  PlanWithTasks,
   ArtifactItem,
   ArtifactsResponse,
 } from "@/src/components/tasks/task-detail-types";
@@ -82,6 +81,23 @@ interface AgentsResponse {
   total: number;
 }
 
+/**
+ * GET /tasks/:id/plan-docs 响应：任务目录 `.opencode/plans/*.md` 的实时同步。
+ * degraded=true 表示读不到（非"没有计划"）；directory 是服务端定位的任务目录。
+ */
+interface PlanDocsResponse {
+  files: Array<{
+    name: string;
+    updatedAt: string;
+    size: number;
+    content: string;
+    truncated: boolean;
+  }>;
+  workerId: string | null;
+  directory: string | null;
+  degraded: boolean;
+}
+
 export default function TeamSessionPage() {
   const params = useParams<{ id: string }>();
   const teamId = params?.id ?? "";
@@ -105,9 +121,14 @@ export default function TeamSessionPage() {
   const [addError, setAddError] = useState<string | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState<QuestionModalData | null>(null);
   const [questionSubmitting, setQuestionSubmitting] = useState(false);
+  /** 批准并切换失败时的显式报错（弹窗保持打开，不静默半吊子）。 */
+  const [approveSwitchError, setApproveSwitchError] = useState<string | null>(null);
   const [detailIssueId, setDetailIssueId] = useState<string | null>(null);
   const [taskEditOpen, setTaskEditOpen] = useState(false);
   const [taskDetailOpen, setTaskDetailOpen] = useState(false);
+  /** 计划文件上传：隐藏 input 触发（无原生控件样式依赖）+ 错误提示。 */
+  const planUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const [planUploadError, setPlanUploadError] = useState<string | null>(null);
 
   const membersPanel = useResizableWidth({
     storageKey: "team-session-members-width",
@@ -194,20 +215,71 @@ export default function TeamSessionPage() {
     enabled: !!currentTaskId && !!user?.id,
     refetchInterval: 30_000,
   });
+  /**
+   * 计划文档查询（计划 Tab 上半区）：读任务目录 `.opencode/plans/*.md` 的实时内容。
+   *
+   * 数据源是文件本身（agent 写的 / 用户上传的），vteam 不落库、不维护版本——正文随
+   * 列表一次下发，Modal 直接渲染免二次请求。degraded=true 表示读不到（主会话未建立 /
+   * worker 离线），与"目录为空"区分展示。
+   */
+  const planDocsQuery = useQuery({
+    queryKey: ["task", currentTaskId, "plan-docs"],
+    queryFn: () => api.get<PlanDocsResponse>(`/tasks/${currentTaskId}/plan-docs`),
+    enabled: !!currentTaskId && !!user?.id,
+    refetchInterval: 10_000,
+  });
+  /**
+   * 上传计划文件：写进任务目录 `.opencode/plans/<name>`，agent 同目录可读——
+   * vteam 只做文件同步，不解析内容、不改 agent 行为。
+   */
+  const uploadPlanDocMutation = useMutation({
+    mutationFn: (input: { name: string; content: string }) =>
+      api.post(`/tasks/${currentTaskId}/plan-docs`, input),
+    onSuccess: () => {
+      setPlanUploadError(null);
+      void planDocsQuery.refetch();
+    },
+    onError: (err: unknown) => {
+      setPlanUploadError(err instanceof Error ? err.message : "上传失败");
+    },
+  });
+  /**
+   * 执行步骤查询（计划 Tab 下半区）：主 Agent 会话的 opencode todo 只读透传。
+   * degraded 时 steps 为空（主会话未建立/worker 离线），由 TaskSubTabs 展示"暂不可用"。
+   */
+  const planStepsQuery = useQuery({
+    queryKey: ["task", currentTaskId, "plan-steps"],
+    queryFn: () => api.get<{ steps: PlanStepItem[]; workerId: string | null; degraded: boolean }>(`/tasks/${currentTaskId}/plan-steps`),
+    enabled: !!currentTaskId && !!user?.id,
+    refetchInterval: 30_000,
+  });
+  /**
+   * 选择本地 .md 文件 → 读文本 → POST /tasks/:id/plan-docs（写进任务目录）。
+   * 文件名原样保留（同目录同名即覆盖，与 agent 写文件同一套语义）。
+   */
+  const handlePlanFilePicked = useCallback(
+    async (file: File | null | undefined) => {
+      if (!file) return;
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.\-]*\.md$/i.test(file.name)) {
+        setPlanUploadError("仅支持 .md 文件（文件名需以字母数字开头）");
+        return;
+      }
+      setPlanUploadError(null);
+      try {
+        const content = await file.text();
+        uploadPlanDocMutation.mutate({ name: file.name, content });
+      } catch {
+        setPlanUploadError("文件读取失败");
+      }
+    },
+    [uploadPlanDocMutation],
+  );
+
   const issuesQuery = useQuery({
     queryKey: ["task-issues", currentTaskId],
     queryFn: () => api.get("/issues", { query: { taskId: currentTaskId!, page: 1, pageSize: 100 } }),
     enabled: !!currentTaskId && !!user?.id,
     refetchInterval: 30_000,
-  });
-  /* 计划查询：仅「计划驱动」模式任务才有计划（direct 模式不请求 /plans）。
-   * 拉取失败（如 PLAN_NOT_FOUND）后停止 30s 轮询，避免 404 无限重试刷屏。 */
-  const plansQuery = useQuery({
-    queryKey: ["plans", currentTaskId],
-    queryFn: () => api.get<PlanWithTasks>("/plans", { query: { taskId: currentTaskId! } }),
-    enabled: !!currentTaskId && !!user?.id && currentTask?.executionMode === "plan",
-    retry: false,
-    refetchInterval: (query) => (query.state.status === "error" ? false : 30_000),
   });
 
   /* ---------- 添加实例选项 ---------- */
@@ -246,6 +318,7 @@ export default function TeamSessionPage() {
           main: inst.main || inst.id === currentTask?.mainAgentInstanceId,
           enabled: (inst as { enabled?: boolean | null }).enabled ?? true,
           overrideModelId: (inst as { overrideModelId?: string | null }).overrideModelId ?? null,
+          opencodeAgentName: (inst as { opencodeAgentName?: string | null }).opencodeAgentName ?? null,
         };
       });
     }
@@ -263,6 +336,7 @@ export default function TeamSessionPage() {
         main: isMain,
         enabled: true,
         overrideModelId: m.overrideModelId ?? null,
+        opencodeAgentName: (m as { opencodeAgentName?: string | null }).opencodeAgentName ?? null,
       };
     });
   }, [currentTask, team]);
@@ -692,11 +766,53 @@ export default function TeamSessionPage() {
       }
     },
   });
-  const handleQuestionSubmit = (payload: { answers?: string[][] | null; response?: "once" | "always" | "reject" }) => {
+  const handleQuestionSubmit = (payload: { answers?: string[][] | null; response?: "once" | "always" | "reject"; andSwitchToExecute?: boolean }) => {
     if (!pendingQuestion) return;
     setQuestionSubmitting(true);
-    questionReplyMutation.mutate(payload);
+    setApproveSwitchError(null);
+    if (!payload.andSwitchToExecute) {
+      const { andSwitchToExecute: _drop, ...reply } = payload;
+      questionReplyMutation.mutate(reply);
+      return;
+    }
+    // 批准并切换到执行模式：先批准（reply 成功）→ 再关计划模式 → 主 Agent 回跟随默认。
+    // 任一步失败都明确报错、不静默：批准成功但切换失败时弹窗保持打开并显示错误。
+    const questionId = pendingQuestion.id;
+    const reply = (({ andSwitchToExecute: _drop, ...r }) => r)(payload);
+    const mainId = team?.mainAgentMemberId ?? null;
+    (async () => {
+      try {
+        await api.post(`/questions/${questionId}/reply`, reply);
+        if (!currentTaskId || !mainId) {
+          throw new Error("缺少任务或主 Agent，无法完成切换");
+        }
+        await api.patch<TaskDetail>(`/tasks/${currentTaskId}`, { planMode: false });
+        await api.patch(`/teams/${teamId}/members/${mainId}`, { opencodeAgentName: "" });
+        setPendingQuestion(null);
+        queryClient.invalidateQueries({ queryKey: ["questions"] });
+        if (currentTaskId) {
+          queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+        }
+        queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+      } catch (err) {
+        console.error("[TeamSession] approve and switch failed", { questionId, error: err });
+        setApproveSwitchError(isApiError(err) ? err.message : "切换失败，请重试或手动切换");
+      } finally {
+        setQuestionSubmitting(false);
+      }
+    })();
   };
+
+  /**
+   * "批准并切换到执行模式"按钮展示条件：任务计划模式开 + 该 pending 项归属主 Agent。
+   * 归属判定用模板 agentId 比对（pendingQuestion.agentId 为模板 id，agentMembers 的 id 同义）；
+   * agentId 缺失时无法归因则不展示（宁缺毋滥，避免给错会话一切换）。
+   */
+  const showApproveAndSwitch = !!(currentTask?.effectivePlanMode ?? currentTask?.planMode) && !!pendingQuestion && (() => {
+    const main = agentMembers.find((m) => m.main);
+    if (!main || !pendingQuestion.agentId) return false;
+    return main.id === pendingQuestion.agentId;
+  })();
 
   /* ---------- 发送（群聊/私聊路由） ---------- */
   const targetChannelId = isGroupTab ? channelId : (activePrivateId ?? channelId);
@@ -804,6 +920,38 @@ export default function TeamSessionPage() {
       console.error("[TeamSession] change member model failed", { teamId, error: err });
     },
   });
+  /**
+   * opencode 原生 agent 清单（GET /agents/opencode）。
+   * 数据来自该 team 所属 worker 的实际 opencode 实例（serve GET /agent），非硬编码；
+   * degraded=true（无在线 worker / worker 离线 / 旧版无该端点）时 agents 为空，
+   * 此时成员面板不展示 agent 选择入口（避免给出无效选项）。
+   */
+  const opencodeAgentsQuery = useQuery({
+    queryKey: ["opencode-agents", teamId],
+    queryFn: () =>
+      api.get<{ agents: OpencodeAgentItem[]; workerId: string | null; degraded: boolean }>(
+        "/agents/opencode",
+      ),
+    enabled: !!user?.id,
+    staleTime: 60_000,
+  });
+  /** 切换实例使用的 opencode agent（null = 回 opencode 默认 agent）。 */
+  const instanceOpencodeAgentMutation = useMutation({
+    mutationFn: ({ instanceId, agentName }: { instanceId: string; agentName: string | null }) =>
+      api.patch(`/teams/${teamId}/members/${instanceId}`, {
+        opencodeAgentName: agentName ?? "",
+      }),
+    onSuccess: () => {
+      // 同 instanceModelMutation：会话页成员展示优先读 ["task", currentTaskId]，需双失效。
+      queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+      if (currentTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+      }
+    },
+    onError: (err) => {
+      console.error("[TeamSession] change member opencode agent failed", { teamId, error: err });
+    },
+  });
   const resetSessionMutation = useMutation({
     mutationFn: (instanceId: string) => {
       // 实例 key → 团队成员 id（tmm_）：团队成员来源时 instanceId 本身即 tmm_；
@@ -874,18 +1022,6 @@ export default function TeamSessionPage() {
       console.error("[TeamSession] set main agent failed", { teamId, error: err });
     },
   });
-  const executionModeMutation = useMutation({
-    mutationFn: (mode: "direct" | "plan") =>
-      api.patch<TaskDetail>(`/tasks/${currentTaskId}/execution-mode`, { mode }),
-    onSuccess: (updated) => {
-      queryClient.setQueryData<TaskDetail>(["task", currentTaskId], updated);
-      queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
-    },
-    onError: (err) => {
-      console.error("[TeamSession] toggle execution mode failed", { teamId, taskId: currentTaskId, error: err });
-    },
-  });
-
   const selectedMemberKey = useMemo(() => {
     if (!activePrivateId) return null;
     const hit = Array.from(privateChannelMap.entries()).find(([, cid]) => cid === activePrivateId)?.[0];
@@ -1132,6 +1268,17 @@ export default function TeamSessionPage() {
               mentionable={mentionable}
               sending={sendMutation.isPending}
               taskId={currentTaskId ?? undefined}
+              agentOptions={(opencodeAgentsQuery.data?.agents ?? []).filter(isSelectableOpencodeAgent)}
+              agentValue={agentMembers.find((m) => m.main && (m.instanceId ?? m.id) === team?.mainAgentMemberId)?.opencodeAgentName ?? agentMembers.find((m) => m.main)?.opencodeAgentName ?? null}
+              onChangeAgent={
+                team?.mainAgentMemberId
+                  ? (name) => {
+                      const mainId: string = team.mainAgentMemberId as string;
+                      instanceOpencodeAgentMutation.mutate({ instanceId: mainId, agentName: name });
+                    }
+                  : undefined
+              }
+              agentSelectDisabled={!team?.mainAgentMemberId}
               placeholder={isGroupTab ? "输入消息，@ 成员或 @all 广播…" : `发送私聊给 ${agentMembers.find((m) => `private:${privateChannelMap.get(m.instanceId ?? m.id)}` === activeTab)?.name ?? "私聊对象"}…`}
             />
             <div style={{ marginTop: space.xs, fontSize: fontSize.xs, color: neutral[400] }}>按团队复用 · 群聊消息按当前任务分区归属 {team.name}</div>
@@ -1142,23 +1289,45 @@ export default function TeamSessionPage() {
 
         {/* 右侧双 Tab（团队 / 任务，团队常显，任务有当前任务时显示） */}
         <div style={{ width: taskPanel.width, flexShrink: 0, display: "flex", flexDirection: "column", overflow: "hidden", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}` }}>
+          {/* 计划文件上传：隐藏 input + 错误条（计划 Tab 的"上传"按钮触发） */}
+          <input
+            ref={planUploadInputRef}
+            type="file"
+            accept=".md,text/markdown"
+            data-testid="plan-doc-upload-input"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              void handlePlanFilePicked(file);
+            }}
+          />
+          {planUploadError && (
+            <div data-testid="plan-doc-upload-error" style={{ flexShrink: 0, padding: `${space.xs}px ${space.md}px`, fontSize: fontSize.xs, color: "#B91C1C", backgroundColor: "rgba(220,38,38,0.08)", borderBottom: `1px solid rgba(220,38,38,0.20)` }}>
+              {planUploadError}
+            </div>
+          )}
           <TaskRightTabs
             team={team}
             task={currentTask}
             taskId={currentTask?.id ?? ""}
             artifactsQuery={artifactsQuery}
+            planDocsQuery={planDocsQuery}
+            planStepsQuery={planStepsQuery}
             issuesQuery={issuesQuery}
-            plansQuery={plansQuery}
             agents={agentMembers}
             onEditTaskInfo={() => setTaskEditOpen(true)}
             onOpenArtifacts={() => router.push(`/artifacts?teamId=${teamId}`)}
             onOpenIssues={() => router.push(`/issues?taskId=${currentTask?.id ?? ""}`)}
             onToggleManagedMode={(v: boolean) => { if (!managedModeMutation.isPending) managedModeMutation.mutate(v); }}
-            onToggleExecutionMode={(v: "direct" | "plan") => { if (!executionModeMutation.isPending) executionModeMutation.mutate(v); }}
             onOpenIssueDetail={(issueId: string) => setDetailIssueId(issueId)}
             onOpenArtifactDoc={(a: ArtifactItem) => {
               const items = (artifactsQuery.data?.items ?? []) as { id: string; title: string }[];
               if (currentTask) router.push(`/docs/${currentTask.id}?doc=${docIdFor(a.title, a.id, items)}`);
+            }}
+            onUploadPlanDoc={() => {
+              setPlanUploadError(null);
+              planUploadInputRef.current?.click();
             }}
           />
         </div>
@@ -1191,12 +1360,18 @@ export default function TeamSessionPage() {
         />
 
         {/* Agent 提问/权限确认弹窗 */}
+        {approveSwitchError && pendingQuestion && (
+          <div data-testid="approve-switch-error" role="alert" style={{ margin: `0 ${space.xl}px ${space.sm}px`, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: "1px solid rgba(220,38,38,0.35)", backgroundColor: "rgba(220,38,38,0.06)", color: "#DC2626", fontSize: fontSize.sm }}>
+            批准成功，但切换到执行模式失败：{approveSwitchError}
+          </div>
+        )}
         <QuestionModal
           open={!!pendingQuestion}
           question={pendingQuestion}
           submitting={questionSubmitting}
-          onClose={() => setPendingQuestion(null)}
+          onClose={() => { setPendingQuestion(null); setApproveSwitchError(null); }}
           onSubmit={handleQuestionSubmit}
+          showApproveAndSwitch={showApproveAndSwitch}
         />
       </div>
     </div>

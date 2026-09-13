@@ -118,7 +118,6 @@ interface TaskItem {
   description: string | null;
   priority: string;
   status: TaskApiStatus;
-  executionMode?: "direct" | "plan";
   mainAgentId: string | null;
   backgroundDocs: unknown[];
   teamAgentIds: string[];
@@ -269,38 +268,6 @@ function TaskCard({ task, onOpen, teamName }: TaskCardProps) {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: space.xs }}>
           {renderStatusBadge(toBoardStatus(task.status))}
-          {task.executionMode === "plan" && (
-            <span
-              data-testid="plan-badge"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: space.xs,
-                padding: `${space.xs - 1}px ${space.sm + 1}px`,
-                borderRadius: radius.pill,
-                backgroundColor: "rgba(13,148,136,0.10)",
-                border: "1px solid rgba(13,148,136,0.22)",
-                color: "#0D9488",
-                fontSize: fontSize.xs,
-                fontWeight: 500,
-                lineHeight: 1.4,
-                whiteSpace: "nowrap",
-                ...baseFont,
-              }}
-            >
-              <span
-                aria-hidden
-                style={{
-                  width: 5,
-                  height: 5,
-                  borderRadius: "50%",
-                  backgroundColor: "#0D9488",
-                  flexShrink: 0,
-                }}
-              />
-              计划
-            </span>
-          )}
         </div>
       </div>
 

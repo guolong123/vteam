@@ -1,6 +1,6 @@
 # worker 镜像（Phase 5 T3，D4 Oracle 实测方案；2026-08 agent-browser 集成版）。
 # 双阶段：build（TS 编译）→ runner（全局安装 opencode CLI + agent-browser + 运行 dist）。
-# opencode CLI = npm 包 opencode-ai@1.18.16（与宿主/SDK 版本一致，D4）。
+# opencode CLI = npm 包 opencode-ai（**不锁版本**，每次构建取最新；见下方 OPENCODE_CLI_SPEC）。
 # agent-browser = Vercel / vercel-labs/agent-browser（Rust + Chrome CDP，给 opencode Agent 补浏览器能力）。
 #
 # 基座说明：原 node:22-alpine (musl) 跑不了 Chrome(glibc)，切到 debian bookworm-slim；
@@ -24,7 +24,35 @@ RUN apt-get update && apt-get install -y ca-certificates && \
 # 国内源加速（npm）
 RUN npm config set registry https://registry.npmmirror.com
 # opencode CLI 全局安装（serve spawn 依赖，需在 PATH；npm 全局 bin 默认进 PATH）
-RUN npm i -g opencode-ai@1.18.16 agent-browser
+# 不锁版本：每次构建取 npm registry 上的最新版。如需复现某次构建，构建时覆盖
+#   --build-arg OPENCODE_CLI_SPEC=opencode-ai@1.18.30
+# 构建日志会打印实际装到的版本（下方 echo），便于事后追溯"这个镜像用的是哪版"。
+ARG OPENCODE_CLI_SPEC=opencode-ai
+# bun：omo 官方安装器（bunx oh-my-openagent install）的运行依赖，仅构建期需要。
+RUN npm i -g "${OPENCODE_CLI_SPEC}" agent-browser bun && \
+    echo "opencode CLI installed: $(opencode --version)" && \
+    echo "bun installed: $(bun --version)"
+# oh-my-openagent（OmO）：官方 opencode 编排插件，11 个 agent + 生命周期 hook + 内置 MCP。
+# 用**官方安装器**装（README 明确要求走 install，会做订阅检测/模型映射/配置迁移）：
+#   非交互参数：--no-tui --skip-auth（容器内无浏览器/无 OAuth）
+#   所有 provider 显式 no —— 模型此时不由安装器决定，改由 vteam 的 omo 配置页统一指定
+#   （默认全部指向 opencode 免费模型，见 worker 侧 writeOmoConfig）。
+# 安装器把插件注册进 $HOME/.config/opencode/opencode.json；真正的 opencode 运行时
+# 工作目录是 /data/vteam-worker，其 opencode.json 由 worker 注入器维护（含本插件条目）。
+ARG OMO_INSTALL_SPEC=oh-my-openagent@latest
+RUN bunx "${OMO_INSTALL_SPEC}" install --no-tui --platform=opencode --skip-auth \
+      --claude=no --openai=no --gemini=no --copilot=no --opencode-zen=no \
+      --zai-coding-plan=no --opencode-go=no --kimi-for-coding=no \
+      --bailian-coding-plan=no --minimax-cn-coding-plan=no --minimax-coding-plan=no \
+      --vercel-ai-gateway=no 2>&1 | tail -20 && \
+    test -f /root/.config/opencode/opencode.json && \
+    echo "omo plugin registered by installer:" && cat /root/.config/opencode/opencode.json && \
+    # 能力标记：运行期据此判断"本镜像是否内置 OmO"，决定是否展示/允许开启开关。
+    # 写在镜像里（不是数据卷）——没有内置 OmO 的镜像就不会有这个文件。
+    OMO_VER="$(bunx "${OMO_INSTALL_SPEC}" --version 2>/dev/null | tail -1 || echo unknown)" && \
+    printf '{"bundled":true,"spec":"%s","version":"%s"}' "${OMO_INSTALL_SPEC}" "${OMO_VER}" \
+      > /opt/omo-bundled.json && \
+    echo "omo capability marker: $(cat /opt/omo-bundled.json)"
 
 # 系统依赖：git 工具链 + Agent 常用命令 + Chrome 运行库
 # 说明：git/openssh-client 为 git 工具链路保留；python3/pip3（Agent 跑脚本/数据分析）、

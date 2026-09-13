@@ -2,7 +2,7 @@
  * OpencodeServer 单元测试（T3）。
  *
  * mock child_process.spawn / http.get / net.createServer，覆盖：
- * - spawn 参数（--pure 必带 / --port / --hostname / detached:true / env 注入）
+ * - spawn 参数（--port / --hostname / --pure 受 OPENCODE_PURE 控制 / detached:true / env 注入）
  * - start 成功 + 健康检查通过 → baseUrl
  * - 端口冲突重试（占用 → +1）、随机端口（port=0）
  * - stop 进程组 kill(-pid) + SIGKILL 兜底
@@ -75,6 +75,9 @@ let fakeProc: FakeChild;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // OPENCODE_PURE 默认不设 → spawn 不带 --pure（让内置插件 omo 生效）。
+  // 显式清空避免宿主环境变量泄漏进用例断言（case 里按需临时设置）。
+  delete process.env.OPENCODE_PURE;
   netBehaviors = [];
   httpBehavior = 'ok';
   killSpy = jest
@@ -183,7 +186,7 @@ describe('OpencodeServer', () => {
     expect(() => new OpencodeServer({ port: 0 })).not.toThrow();
   });
 
-  it('start 成功：spawn 参数含 --pure/--port/--hostname，detached:true，健康检查通过后返回 baseUrl', async () => {
+  it('start 成功：spawn 参数含 --port/--hostname，detached:true，健康检查通过后返回 baseUrl', async () => {
     const logger = makeLogger();
     const server = newServer({ port: 4199, logger });
     const baseUrl = await server.start();
@@ -195,16 +198,47 @@ describe('OpencodeServer', () => {
     expect(server.isRunning).toBe(true);
     expect(server.version).toBe('1.18.15');
 
-    // D2 铁律：--pure 必带
+    // 默认非 --pure：内置插件（omo）需非 pure 才会加载
     expect(mockedSpawn).toHaveBeenCalledWith(
       'opencode',
-      ['serve', '--port', '4199', '--hostname', '127.0.0.1', '--pure'],
+      ['serve', '--port', '4199', '--hostname', '127.0.0.1'],
       expect.objectContaining({ detached: true, stdio: ['ignore', 'pipe', 'pipe'] }),
     );
     const args = mockedSpawn.mock.calls[0][1] as string[];
-    expect(args).toContain('--pure');
+    expect(args).not.toContain('--pure');
     // 健康检查使用带鉴权的 GET
     expect(mockedHttpGet).toHaveBeenCalled();
+  });
+
+  it('OPENCODE_PURE=1 → spawn 带 --pure（可切回纯净基线做 token 对照）', async () => {
+    for (const truthy of ['1', 'true', 'yes', 'on', 'y', 'TRUE', ' Yes ']) {
+      jest.clearAllMocks();
+      process.env.OPENCODE_PURE = truthy;
+      await newServer({ port: 4199 }).start();
+      expect(mockedSpawn.mock.calls[0][1]).toContain('--pure');
+    }
+  });
+
+  it('OPENCODE_PURE 为 0/false/no/未设 → 不带 --pure（只有显式真值才切纯净）', async () => {
+    for (const falsy of ['0', 'false', 'no', 'off', 'n']) {
+      jest.clearAllMocks();
+      process.env.OPENCODE_PURE = falsy;
+      await newServer({ port: 4199 }).start();
+      expect(mockedSpawn.mock.calls[0][1]).not.toContain('--pure');
+    }
+  });
+
+  it('OPENCODE_PURE 为空串/纯空白 → 删除该变量，绝不把空串透传给 serve', async () => {
+    // 回归：opencode 自己解析 OPENCODE_PURE，空串会让它 SchemaError 直接启动失败
+    //（compose 里写过 ${OPENCODE_PURE:-} 导致线上 worker 起不来）。
+    for (const blank of ['', '   ', '\t']) {
+      jest.clearAllMocks();
+      process.env.OPENCODE_PURE = blank;
+      await newServer({ port: 4199 }).start();
+      expect(mockedSpawn.mock.calls[0][1]).not.toContain('--pure');
+      const env = mockedSpawn.mock.calls[0][2].env as NodeJS.ProcessEnv;
+      expect(env.OPENCODE_PURE).toBeUndefined();
+    }
   });
 
   it('serverPassword 注入 env 的 OPENCODE_SERVER_PASSWORD；为空时不注入', async () => {
@@ -397,7 +431,6 @@ describe('OpencodeServer', () => {
       '4199',
       '--hostname',
       '0.0.0.0',
-      '--pure',
     ]);
   });
 

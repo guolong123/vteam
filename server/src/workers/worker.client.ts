@@ -1,4 +1,8 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DEFAULT_WORKER_TOKEN } from './workers.constants';
 
@@ -69,6 +73,60 @@ export interface WorkerModel {
   name: string;
   providerID: string;
   modelID: string;
+}
+
+/**
+ * opencode 原生 agent 项（worker `GET /agents` → serve `GET /agent` 透传）。
+ *
+ * 形状对齐 worker 侧 DriverAgentInfo（**实测**形状，非 SDK 声明的 Agent 类型）：
+ * `native`（非 builtIn）、`permission` 为数组、hidden 标记隐藏系统 agent。
+ * vteam 仅做「同步 + 展示 + 切换」，agent 的 prompt/permission 语义完全由 opencode 侧定义。
+ */
+export interface WorkerAgentInfo {
+  /** agent 名（下发 prompt_async 的 agent 字段取值）。 */
+  name: string;
+  description?: string;
+  /** primary=可作为会话主 agent；subagent=仅由主 agent 派生；all=两者皆可。 */
+  mode: 'primary' | 'subagent' | 'all';
+  /** 是否 opencode 内置（实测字段 native）。 */
+  native?: boolean;
+  /** 隐藏系统 agent（compaction/summary/title），前端不应展示。 */
+  hidden?: boolean;
+  /** agent 覆盖的模型（缺省继承全局）。 */
+  model?: { providerID: string; modelID: string };
+  /** 权限声明（实测数组形状，透传供展示/诊断）。 */
+  permission?: unknown;
+}
+
+/**
+ * opencode todo 执行步骤项（worker `GET /todos` → serve `GET /session/{id}/todo` 透传）。
+ * 对齐 SDK `Todo` 类型：content/status/priority/id；
+ * status ∈ pending | in_progress | completed | cancelled（计划 Tab checklist 映射依据）。
+ * vteam 只读展示，状态由 agent 经 opencode todo 工具推进。
+ */
+export interface WorkerTodoInfo {
+  id?: string;
+  content: string;
+  status: string;
+  priority?: string;
+}
+
+/**
+ * 计划文档项（worker `GET /plan-files` → 任务目录 `.opencode/plans/*.md` 直读）。
+ *
+ * vteam 不自维护计划内容：文件即真相（opencode 原生约定目录），本结构只做搬运。
+ * 正文随列表一次下发（Modal 打开免二次请求）；超 MAX_PLAN_DOC_BYTES 时截断并标记。
+ */
+export interface WorkerPlanFileInfo {
+  /** 文件名（计划 Tab 行标识 / 上传覆盖键）。 */
+  name: string;
+  /** 最后修改时间（ISO 字符串）。 */
+  updatedAt: string;
+  /** 真实字节数（截断时大于 content 长度）。 */
+  size: number;
+  content: string;
+  /** 正文是否被截断（仅展示用，不代表文件损坏）。 */
+  truncated: boolean;
 }
 
 /**
@@ -397,6 +455,337 @@ export class WorkerClient {
       // 网络失败/旧版无 /api/model/空数据 → 降级 capabilities 声明（T11 动态化前占位）。
       return this.modelsFromCapabilities(worker);
     }
+  }
+
+  /**
+   * GET /agents（worker 执行端点）：列出该目录可见的 opencode 原生 agent。
+   *
+   * 用于 vteam 页面展示与切换 opencode agent。`directory` 必须与执行期 prompt_async 的
+   * directory 同值（serve 按 directory 发现 opencode.json 的 agent 节，per-directory 隔离）。
+   *
+   * 降级策略**对齐 listModels**：列表类端点失败不阻断页面——网络错/worker 离线/旧版无该
+   * 端点/空结果一律返回 `[]`，由调用方以 degraded 标记提示前端。故本方法不抛
+   * WorkerUnavailableException（与 execute/abort 等写路径的失败语义相反）。
+   */
+  async listAgents(
+    worker: WorkerEndpointRef,
+    directory?: string,
+  ): Promise<WorkerAgentInfo[]> {
+    try {
+      const qs = directory
+        ? `?directory=${encodeURIComponent(directory)}`
+        : '';
+      const res = await this.requestExec(worker, `/agents${qs}`, {
+        method: 'GET',
+        headers: { 'X-Worker-Token': this.workerToken },
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const body = (await res.json()) as {
+        agents?: WorkerAgentInfo[];
+      };
+      return Array.isArray(body.agents) ? body.agents : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * GET /todos（worker 执行端点）：读取 opencode 会话的 todo 执行步骤。
+   *
+   * 用于计划 Tab 步骤区展示。sessionId 必填（opencode ses_ 会话 id）；
+   * directory 可选（与执行期 prompt_async 同值，serve 按目录定位会话上下文）。
+   *
+   * 降级策略**对齐 listAgents**：列表类端点失败不阻断页面——网络错/worker 离线/
+   * 会话不存在/旧版无该端点/空结果一律返回 `[]`。
+   */
+  async listTodos(
+    worker: WorkerEndpointRef,
+    sessionId: string,
+    directory?: string,
+  ): Promise<WorkerTodoInfo[]> {
+    try {
+      const params = new URLSearchParams({ sessionId });
+      if (directory) {
+        params.set('directory', directory);
+      }
+      const res = await this.requestExec(worker, `/todos?${params.toString()}`, {
+        method: 'GET',
+        headers: { 'X-Worker-Token': this.workerToken },
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const body = (await res.json()) as {
+        todos?: WorkerTodoInfo[];
+      };
+      return Array.isArray(body.todos) ? body.todos : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * GET /plan-files（worker 执行端点）：读取任务目录 `.opencode/plans/*.md` 计划文档。
+   *
+   * 计划 Tab 唯一数据源：vteam 不落库、不解析、不生成计划，文件由 opencode agent 写
+   * （或用户上传），本方法只把 worker 的结果搬给前端。
+   *
+   * 降级策略**对齐 listAgents**：目录不存在/worker 离线/旧版无该端点一律返回 `[]`，
+   * 由调用方以 degraded 标记提示前端（"没有计划"与"读不到"在 UI 上要能区分）。
+   */
+  async listPlanFiles(
+    worker: WorkerEndpointRef,
+    directory?: string,
+  ): Promise<WorkerPlanFileInfo[]> {
+    try {
+      const qs = directory
+        ? `?directory=${encodeURIComponent(directory)}`
+        : '';
+      const res = await this.requestExec(worker, `/plan-files${qs}`, {
+        method: 'GET',
+        headers: { 'X-Worker-Token': this.workerToken },
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const body = (await res.json()) as { files?: WorkerPlanFileInfo[] };
+      return Array.isArray(body.files) ? body.files : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * POST /plan-file（worker 执行端点）：把计划文件写进任务目录 `.opencode/plans/`。
+   *
+   * "上传计划文件"入口的落点——写完后 agent 侧同目录可读、计划 Tab 下轮询可见。
+   * 与 listPlanFiles 相反，这是写路径：失败必须抛出（用户需要知道上传没成功），
+   * 故不吞异常，交由 controller 映射为 HTTP 错误。
+   */
+  async writePlanFile(
+    worker: WorkerEndpointRef,
+    input: { directory: string; name: string; content: string },
+  ): Promise<{ name: string; updatedAt: string }> {
+    const res = await this.requestExec(worker, '/plan-file', {
+      method: 'POST',
+      headers: {
+        'X-Worker-Token': this.workerToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
+    });
+    const raw = await res.text();
+    if (!res.ok) {
+      let detail = raw;
+      try {
+        detail = (JSON.parse(raw) as { error?: string }).error ?? raw;
+      } catch {
+        /* 非 JSON 响应体：保留原文 */
+      }
+      throw new WorkerUnavailableException(
+        worker.id,
+        `plan-file HTTP ${res.status}: ${detail}`,
+      );
+    }
+    const body = JSON.parse(raw || '{}') as { name?: string; updatedAt?: string };
+    return {
+      name: body.name ?? input.name,
+      updatedAt: body.updatedAt ?? new Date().toISOString(),
+    };
+  }
+
+  /**
+   * GET /omo-config（worker 执行端点）：读取 OmO 的 agent→模型配置。
+   *
+   * 数据源是 `<workDir>/.opencode/oh-my-openagent.jsonc`（OmO 按 cwd 读取的项目级配置），
+   * vteam 不落库——配置文件即真相。
+   *
+   * 降级策略对齐 listPlanFiles：worker 离线/旧版无该端点 → 返回空结构 + `degraded:true`，
+   * 由调用方提示"暂不可用"（与"尚未配置任何覆盖"区分）。
+   */
+  async getOmoConfig(worker: WorkerEndpointRef): Promise<{
+    agents: Record<string, string>;
+    available: string[];
+    /** 实际生效的配置文件（相对 workDir）；用于前端提示"改的是哪份"。 */
+    configPath?: string;
+    configKind?: 'new' | 'legacy' | 'none';
+    /** 用户开关：是否加载 OmO 插件。 */
+    enabled?: boolean;
+    /** 本镜像是否内置 OmO（false → 前端不展示该区块）。 */
+    bundled?: boolean;
+    /** 已注册到 serve 的 agent 基底名（未含者当前模型下不会激活）。 */
+    registered?: string[];
+    /** agent 元数据（描述/mode/native）；缺失=该 agent 未注册。 */
+    runtime?: Record<string, { description?: string; mode?: string; native?: boolean }>;
+    degraded: boolean;
+  }> {
+    try {
+      const res = await this.requestExec(worker, '/omo-config', {
+        method: 'GET',
+        headers: { 'X-Worker-Token': this.workerToken },
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const body = (await res.json()) as {
+        agents?: unknown;
+        available?: unknown;
+        configPath?: unknown;
+        configKind?: unknown;
+        enabled?: unknown;
+        bundled?: unknown;
+        registered?: unknown;
+        runtime?: unknown;
+      };
+      return {
+        agents:
+          body.agents && typeof body.agents === 'object'
+            ? (body.agents as Record<string, string>)
+            : {},
+        available: Array.isArray(body.available) ? (body.available as string[]) : [],
+        configPath:
+          typeof body.configPath === 'string' ? body.configPath : undefined,
+        configKind:
+          body.configKind === 'new' || body.configKind === 'legacy' || body.configKind === 'none'
+            ? body.configKind
+            : undefined,
+        enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+        bundled: typeof body.bundled === 'boolean' ? body.bundled : undefined,
+        registered: Array.isArray(body.registered)
+          ? (body.registered as string[])
+          : undefined,
+        runtime:
+          body.runtime && typeof body.runtime === 'object'
+            ? (body.runtime as Record<
+                string,
+                { description?: string; mode?: string; native?: boolean }
+              >)
+            : undefined,
+        degraded: false,
+      };
+    } catch {
+      return { agents: {}, available: [], degraded: true };
+    }
+  }
+
+  /**
+   * POST /omo-config（worker 执行端点）：写入 OmO 的 agent→模型配置（增量合并）。
+   *
+   * 写路径：失败必须抛出（用户需要明确成败反馈），不静默降级。
+   */
+  async setOmoConfig(
+    worker: WorkerEndpointRef,
+    agents: Record<string, string>,
+    enabled?: boolean,
+  ): Promise<{
+    written: string;
+    agents: Record<string, string>;
+    configPath?: string;
+    configKind?: 'new' | 'legacy' | 'none';
+    enabled?: boolean;
+    bundled?: boolean;
+    /** 写盘后的 serve 重启结果：executed=已重启（新会话即生效）/ pending=挂起（有活跃会话）/ skipped=未重启。 */
+    restart?: 'executed' | 'pending' | 'skipped';
+  }> {
+    const res = await this.requestExec(worker, '/omo-config', {
+      method: 'POST',
+      headers: {
+        'X-Worker-Token': this.workerToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(
+        enabled === undefined ? { agents } : { agents, enabled },
+      ),
+    });
+    const raw = await res.text();
+    if (!res.ok) {
+      let detail = raw;
+      try {
+        detail = (JSON.parse(raw) as { error?: string }).error ?? raw;
+      } catch {
+        /* 非 JSON 响应体：保留原文 */
+      }
+      // 4xx = 请求本身不合法（如"镜像未内置 OmO，无法开启"、agents 值类型错），
+      // 原样透传为 400，不要包成 503——《worker 不可用》会误导用户去查节点状态。
+      // 5xx = worker 侧故障，才是真正的不可用。
+      if (res.status >= 400 && res.status < 500) {
+        throw new BadRequestException(detail);
+      }
+      throw new WorkerUnavailableException(
+        worker.id,
+        `omo-config HTTP ${res.status}: ${detail}`,
+      );
+    }
+    const body = JSON.parse(raw || '{}') as {
+      written?: string;
+      agents?: Record<string, string>;
+      configPath?: string;
+      configKind?: 'new' | 'legacy' | 'none';
+      enabled?: boolean;
+      bundled?: boolean;
+      restart?: 'executed' | 'pending' | 'skipped';
+    };
+    return {
+      written: body.written ?? '',
+      agents: body.agents ?? {},
+      configPath: body.configPath,
+      configKind: body.configKind,
+      enabled: body.enabled,
+      bundled: body.bundled,
+      restart: body.restart,
+    };
+  }
+
+  /**
+   * GET /omo-agent-prompt（worker 执行端点）：取单个 agent 的系统提示词全文。
+   *
+   * 按需拉取而非随列表下发：全部 agent 的 prompt 合计约 106KB（单个最大 33KB），
+   * 列表接口只带描述，用户点"查看提示词"时才请求本端点。
+   *
+   * 写失败语义：agent 未注册（当前模型下不激活）→ worker 返回 404，此处抛 BadRequest
+   * （是"该 agent 不存在"，不是"worker 不可用"）；5xx 才归为 worker 不可用。
+   */
+  async getOmoAgentPrompt(
+    worker: WorkerEndpointRef,
+    name: string,
+  ): Promise<{ name: string; description: string; mode?: string; prompt: string; empty: boolean }> {
+    const res = await this.requestExec(
+      worker,
+      `/omo-agent-prompt?name=${encodeURIComponent(name)}`,
+      { method: 'GET', headers: { 'X-Worker-Token': this.workerToken } },
+    );
+    const raw = await res.text();
+    if (!res.ok) {
+      let detail = raw;
+      try {
+        detail = (JSON.parse(raw) as { error?: string }).error ?? raw;
+      } catch {
+        /* 保留原文 */
+      }
+      if (res.status >= 400 && res.status < 500) {
+        throw new BadRequestException(detail);
+      }
+      throw new WorkerUnavailableException(
+        worker.id,
+        `omo-agent-prompt HTTP ${res.status}: ${detail}`,
+      );
+    }
+    const body = JSON.parse(raw || '{}') as {
+      name?: string;
+      description?: string;
+      mode?: string;
+      prompt?: string;
+      empty?: boolean;
+    };
+    return {
+      name: body.name ?? name,
+      description: body.description ?? '',
+      mode: body.mode,
+      prompt: body.prompt ?? '',
+      empty: body.empty ?? !body.prompt,
+    };
   }
 
   /** POST /session/{id}/abort：中止会话（计划 D2：abort 后无 step-finish，轮询判定需配套）。 */

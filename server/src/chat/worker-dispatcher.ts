@@ -13,6 +13,7 @@ import { WecomAibotAdapter } from '../message-channels/adapters/wecom-aibot.adap
 import { Prisma } from '@prisma/client';
 import { validateArtifactDeclaration } from '../artifacts/artifacts.service';
 import { ArtifactsService } from '../artifacts/artifacts.service';
+import { DEFAULT_TASK_WORK_DIR, taskDirOf } from '../tasks/work-dir.util';
 import { FileStorageService } from '../uploads/uploads.service';
 import {
   CHANNEL_TYPE,
@@ -22,6 +23,7 @@ import {
   SESSION_STATUS,
 } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import { getOpencodeAgentDuty } from '../common/opencode-agent-duty';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
@@ -43,7 +45,6 @@ import {
   WorkersService,
 } from '../workers/workers.service';
 import { renderPersonaSection } from '../agents/persona.constants';
-import { EXECUTION_MODES } from '../plans/plan.constants';
 import {
   DispatchRequest,
   DispatchResult,
@@ -130,6 +131,84 @@ export interface TeamMemberInfo {
   seq: number;
 }
 
+/**
+ * 产出物提交引导段（dispatch 时对所有任务注入）。
+ *
+ * 计划文档与任意交付物统一走 vteam MCP 既有 `submit_artifact` 工具（type=text 直传
+ * content；type=doc/file 传 fileRef，控制面自动从 worker 工作区拉取并归档为产出物版本），
+ * 无需专用"提交计划"工具——计划文档只是 doc 类型产出物的一种。
+ * 群聊同步另行使用 group_post（仅经该工具发布的内容才会显示在群聊）。
+ */
+export const ARTIFACT_SUBMISSION_INSTRUCTION =
+  '【产出物提交】交付物请用 vteam MCP 的 submit_artifact 提交归档：' +
+  '纯文本结论用 {type:"text", title, content}；' +
+  '文件类用 {type:"doc" 或 "file", title, fileRef:"工作目录下的文件路径"}（控制面自动拉取归档）。' +
+  '如需在群聊同步结论，用 group_post 发布（群聊只显示经 group_post 发送的内容）。';
+
+/**
+ * 计划编制指令（仅主 Agent + 任务计划模式开启时注入）。
+ *
+ * 本任务的执行计划只能由主 Agent 产出一份：分析任务、拆解步骤（用 opencode todo 工具
+ * 登记，便于在计划 Tab 跟踪进度），并**把计划正文写成文件** `<工作目录>/.opencode/plans/<名字>.md`。
+ *
+ * 为什么是文件而不是 submit_artifact：计划 Tab 直接同步该目录下的 .md 文件，文件即真相——
+ * vteam 不落库、不做版本，用户也可能自己往同一目录上传计划。写文件是 opencode 的原生能力，
+ * vteam 不额外增加约束；具体能否写由 opencode 的权限配置决定（不在这里替它做判断）。
+ * 写完后在群聊提示成员评审；收到评审意见后由你裁决修订，裁决通过前不要进入执行。
+ */
+export const PLAN_PRODUCE_INSTRUCTION =
+  '【计划编制】本任务已开启计划模式，你是主 Agent，负责产出本任务唯一的执行计划：' +
+  '先分析任务并拆解执行步骤（用 opencode todo 工具登记步骤，步骤状态会同步到计划 Tab）；' +
+  '再把计划正文写成 Markdown 文件：工作目录下 `.opencode/plans/` 目录，文件名自取（如 `plan.md`）；' +
+  '该文件会被计划 Tab 实时展示，用户也可能直接上传/修改同名文件（以文件最新内容为准）；' +
+  '写完后在群聊提示成员评审；收到评审意见后由你裁决是否修订（直接改写该文件即可），裁决通过前不要进入执行。';
+
+/**
+ * 计划评审指令（非主 Agent + 任务计划模式开启时注入，omo task-rejection 思想）。
+ * 执行计划只能由主 Agent 产出——你不要另起计划：即使被用户直接要求出计划，也应拒绝
+ * 并指引对方找主 Agent。请阅读工作目录 `.opencode/plans/` 下的计划文件（或向主 Agent 索要），
+ * 按三段式发表评审结论并经 group_post 发布到群聊：1 同意点、2 分歧及理由（定位到具体条目）、
+ * 3 遗留疑问。最终是否修订/执行由主 Agent 裁决。
+ */
+export const PLAN_REVIEW_INSTRUCTION =
+  '【计划评审】本任务已开启计划模式，执行计划只能由主 Agent 产出——你不要另起计划：' +
+  '即使被用户直接要求出计划，也应拒绝并指引对方找主 Agent。请阅读工作目录 `.opencode/plans/` ' +
+  '下的计划文件（或向主 Agent 索要），按三段式发表评审结论并经 group_post 发布到群聊：1 同意点、' +
+  '2 分歧及理由（定位到具体条目）、3 遗留疑问。最终是否修订/执行由主 Agent 裁决。';
+
+/**
+ * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
+ * 身份（id + 名称 + 角色 + 用户设置的 prompt 职责），供 MCP 工具调用的 selfInstanceId 参数
+ * 填写（服务端按 session.teamMemberId 校验后精确落库 senderId/senderInstanceId，
+ * 修复"@测试 触发但回复显示开发者"）。
+ * GLOBAL_SYSTEM_INSTRUCTIONS 常量保持不动（其他调用方兼容），本函数仅在 dispatch 下发时
+ * 拼接身份段；agent 行查询不到时由调用方降级（name/role/prompt 置 null，回退用 agentId）。
+ */
+export interface AgentIdentityInfo {
+  id: string;
+  name: string | null;
+  role: string | null;
+  prompt: string | null;
+  /** Agent 性格 key（PERSONA_LIBRARY 预设 key；null=无性格）。运行时按此拼接【性格】段进系统提示。 */
+  persona: string | null;
+}
+
+/** 团队成员信息（dispatch 时从 TeamMember→Agent 组装，注入全局上下文供 agent 判断与谁协作）。
+ *  TeamMember 维度：instanceId 为团队成员 id（tmm_ 前缀，TeamMember.id），alias/seq 来自团队模板；
+ *  id/name/role 来自模板 agent。 */
+export interface TeamMemberInfo {
+  /** 模板 agent id（继承 name/role/prompt/model）。 */
+  id: string;
+  name: string | null;
+  role: string | null;
+  /** 团队成员 id（TeamMember.id，tmm_ 前缀）——团队成员唯一身份（@/指派/主实例判定依据）。 */
+  instanceId: string;
+  /** 实例别名（默认「<角色中文名>-<seq>」）；缺省回退 name。 */
+  alias: string | null;
+  /** 同 agent 同团队内序号（服务端生成，唯一键 teamId+agentId+seq）。 */
+  seq: number;
+}
+
 export interface BuildSystemInstructionsOptions {
   /** 当前 agent 是否团队主成员（session.teamMemberId === team.mainAgentMemberId）→ true 时追加主 Agent 职责段。 */
   isMainAgent?: boolean;
@@ -148,16 +227,18 @@ export interface BuildSystemInstructionsOptions {
   /** 任务级独立工作目录（<WORK_DIR>/tasks/<taskId>，prompt_async directory）；注入
    *  提示词作为运行时持久化目录（k8s 只有该目录重启后保留），引导 agent 把工作文件写入。 */
   persistentWorkDir?: string;
-  /** 任务执行模式（tasks.execution_mode，direct/plan；Todo 4 tc-flow 引入）。所有任务注入
-   *  轻量【执行计划】能力引导（PLAN_CAPABILITY_INSTRUCTION）；executionMode=plan 时额外
-   *  追加完整【计划工作流】段（PLAN_WORKFLOW_INSTRUCTION）。 */
-  executionMode?: string;
   /** 可用记忆索引块（team/global 计数+Top tags+description 列表，已按预算截断 <400 token）；缺省不注入。 */
   memoryIndex?: string | null;
   /** team-mode 接待员模式（无任务团队直聊）：分派侧在 taskId 为空时置 true，追加【团队接待】话术段；缺省 = task-mode，系统文本字节不变。 */
   teamMode?: boolean;
   /** 当前任务 id（team-mode 传空串；仅 teamMode=true 且 taskId 为空时触发接待段，task-mode 调用方不传本字段）。 */
   taskId?: string | null;
+  /**
+   * 任务计划模式开关（task.planMode）：true 时追加计划分流指令——主 Agent（isMainAgent）
+   * 收 PLAN_PRODUCE_INSTRUCTION（出唯一计划），其他成员收 PLAN_REVIEW_INSTRUCTION
+   * （只评审不起草，越界拒绝）；false/缺省不注入任何计划段（行为与引入前一致）。
+   */
+  taskPlanMode?: boolean;
 }
 
 /**
@@ -172,41 +253,6 @@ export const MAIN_AGENT_INSTRUCTION =
   '推进受阻或需要协作时，通过 notify_agent / 群聊 @ 定向协调成员（FR-13，互 @ 不超 3 轮）；' +
   '收尾时可汇总各角色产出与验收材料，供成员验收判定（FR-11）。' +
   '任务开启托管模式时，成员的 question/permission 请求由你确认——收到【托管确认】消息时调用 question_confirm 工具决策。';
-
-/**
- * 计划流程可用轻量引导段（dispatch 时对所有任务注入）：让模型始终知晓「计划驱动」能力——
- * 任意任务不经切换执行模式即可走计划流程（对齐 omo 哲学：工具无条件可用 + 提示引导，无需切换模式）。
- * 仅注入能力引导文案，不注入任何计划数据（按需注入哲学）。plan 模式任务再叠加
- * PLAN_WORKFLOW_INSTRUCTION 完整工作流段（轻量 + 完整两段）。
- */
-export const PLAN_CAPABILITY_INSTRUCTION =
-  '【执行计划】如需计划驱动，主 Agent 可调用 vteam MCP 的 plan_submit 工具产出执行计划' +
-  '（六要素任务清单），经成员评审通过后按计划逐项推进（plan_task_transition 汇报进度）；' +
-  '计划流程对任意任务可用，无需切换模式。若任务执行模式为 plan，按完整计划工作流执行。';
-
-/**
- * 计划工作流完整引导段（dispatch 时注入 executionMode=plan 的任务）：任务采用「计划驱动」执行模式
- * （tc-flow）时，主 Agent 启动前须先产出执行计划并提交评审，评审通过后按计划子任务逐项推进。
- * 本段为独立常量——GLOBAL_SYSTEM_INSTRUCTIONS 静态数组保持不动（其他调用方兼容），由
- * buildSystemInstructions 在 dispatch 时按 executionMode 条件动态追加（对齐 MAIN_AGENT_INSTRUCTION /
- * persistentWorkDir 动态注入先例）。仅注入工作流引导文案，不注入任何计划数据（按需注入哲学）。
- */
-export const PLAN_WORKFLOW_INSTRUCTION =
-  '【计划工作流】（本任务执行模式=plan）任务启动前主 Agent 须产出执行计划：经 plan_submit 提交' +
-  '（tasks 每项含 目标/边界/引用/验收/QA/提交 六要素，其中验收/qa 必填且 qa 须含工具＋步骤＋预期结果）；' +
-  '计划结构对齐 TL;DR/范围/验证策略/执行策略/Todos/终验/提交策略/成功标准八段模板；' +
-  '计划评审由成员确认或主 Agent 指派成员（评审者可经 plan_get 读计划、plan_review 提交结论；评审默认放行、驳回须附理由）；' +
-  '评审通过后等待用户在任务管理界面手动点击“开始任务”再按 plan_task 逐项推进（plan_task_transition 汇报进度，状态 done/blocked），Agent 不可自动调用 task_transition start；' +
-  '全部完成后主 Agent 提交验收（task_transition mark-pending-review）。' +
-  '计划前如关键假设不明，先向成员确认再提交。驳回重提有 3 次上限，超限需人工裁决。';
-
-export const PLAN_REVIEW_CHECKLIST_INSTRUCTION =
-  '【计划评审清单】评审执行计划（plan_get 读取全文）时只查四件事：' +
-  '1 引用核查—references 提到的文件/模块是否真实存在且内容相符（用只读工具核实）；' +
-  '2 可起步—每个子任务是否有足够上下文动手（知道改哪、参照什么）；' +
-  '3 一致性—子任务之间无矛盾、无遗漏依赖；' +
-  '4 QA 可执行—每条 qa 是否含具体工具＋步骤＋预期结果、能否机器执行。' +
-  '判定：四项全过→approved；有阻塞问题→rejected 附 reason，最多列 3 个最致命问题，每个含子任务定位与改法；风格/“可以更好”类建议不构成驳回理由。';
 
 /**
  * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
@@ -264,10 +310,13 @@ export function buildSystemInstructions(
   if (isTeamMode) {
     blocks.push(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
   }
-  blocks.push(PLAN_CAPABILITY_INSTRUCTION);
-  if (opts?.executionMode === EXECUTION_MODES.plan) {
-    blocks.push(PLAN_WORKFLOW_INSTRUCTION);
-    blocks.push(PLAN_REVIEW_CHECKLIST_INSTRUCTION);
+  blocks.push(ARTIFACT_SUBMISSION_INSTRUCTION);
+  // 计划分流：仅任务计划模式开启时注入；主 Agent 出唯一计划，其他成员只评审不起草。
+  // taskPlanMode=false/缺省 → 不注入（字节级保持原行为）。
+  if (opts?.taskPlanMode === true) {
+    blocks.push(
+      opts?.isMainAgent ? PLAN_PRODUCE_INSTRUCTION : PLAN_REVIEW_INSTRUCTION,
+    );
   }
   if (opts?.team && opts.team.length > 0) {
     const teamLines = opts.team.map(
@@ -356,8 +405,10 @@ export const IDLE_SCAN_INTERVAL_MS = 60_000;
 
 /** F3 MINOR-3：任务工作目录根（env WORK_DIR，默认 /data/vteam-worker）。
  *  任务级独立工作目录 = <根>/tasks/<taskId>（server 侧 mkdir -p 保证存在），
- *  作为 prompt_async 的 directory 传入——防模型在仓库根真实写文件污染（F4 零污染关键）。 */
-export const DEFAULT_TASK_WORK_DIR = '/data/vteam-worker';
+ *  作为 prompt_async 的 directory 传入——防模型在仓库根真实写文件污染（F4 零污染关键）。
+ *  实现与常量已下沉到 ../tasks/work-dir.util（plan-docs.service 要用同一拼法，
+ *  从本文件导入会造成 tasks ↔ chat 循环依赖）；此处 re-export 保持既有导入方兼容。 */
+export { DEFAULT_TASK_WORK_DIR };
 
 /** 自持轮询间隔 ms（F2 C1：对齐 worker 侧 prompt-await.ts pollMs=500，计划 D8）。 */
 export const POLL_INTERVAL_MS = 500;
@@ -985,17 +1036,6 @@ export class WorkerDispatcher
         message: '分派缺少 teamId（单团队入口 teamId 必填）',
       });
     }
-    const executionMode = request.taskContext?.executionMode;
-    if (
-      executionMode !== undefined &&
-      executionMode !== EXECUTION_MODES.direct &&
-      executionMode !== EXECUTION_MODES.plan
-    ) {
-      throw new BadRequestException({
-        code: 'TASK_EXECUTION_MODE_INVALID',
-        message: `任务执行模式非法：${executionMode}（仅 direct/plan）`,
-      });
-    }
     const scope = toExecutionScope(null, teamId);
     for (const target of request.targets) {
       try {
@@ -1539,14 +1579,31 @@ export class WorkerDispatcher
       persistentWorkDir: teamWorkDir,
     };
     if (taskIdForPrompt) {
-      systemOpts.executionMode = request.taskContext?.executionMode;
       if (memoryIndex) {
         systemOpts.memoryIndex = memoryIndex;
       }
+      // 有效计划模式 = 显式开关 OR 主 Agent 职责约定（t_0000000010 实测教训：
+      // 用户下拉只写成员行时 task.planMode 保持 0，若只认开关则计划指令永不下发。
+      // 职责按约定映射（plan/prometheus→plan，其余→执行），UI 侧保持零附加逻辑。
+      // 显式开短路（省一次成员查询）；查询失败回退 false（不阻断分派）。
+      const explicitPlan =
+        request.taskContext?.planMode ??
+        (await this.resolveTaskPlanMode(taskIdForPrompt));
+      let effectivePlan = explicitPlan;
+      if (!effectivePlan && mainAgentMemberId) {
+        const mainAgentName =
+          await this.resolveMemberOpencodeAgentName(mainAgentMemberId);
+        effectivePlan = getOpencodeAgentDuty(mainAgentName) === 'plan';
+      }
+      systemOpts.taskPlanMode = effectivePlan;
     } else {
       systemOpts.teamMode = true;
       systemOpts.taskId = '';
     }
+    // opencode 原生 agent：成员显式选择时才传（null → 不带 agent 字段，保持原行为）
+    const opencodeAgentName = teamMemberId
+      ? await this.resolveMemberOpencodeAgentName(teamMemberId)
+      : null;
     await this.workerClient.execute(worker, {
       prompt: [{ type: 'text', text: finalPrompt }],
       model,
@@ -1555,6 +1612,7 @@ export class WorkerDispatcher
       agentId: target.agentId,
       channelId: request.channelId,
       sessionId: opencodeSessionId,
+      ...(opencodeAgentName ? { agent: opencodeAgentName } : {}),
       ...(imageAttach ? { attachments: imageAttach.attachments } : {}),
       system: buildSystemInstructions(agentIdentity, systemOpts),
     });
@@ -2986,8 +3044,56 @@ export class WorkerDispatcher
     }
   }
 
-  private async resolveAgentModelId(agentId: string): Promise<string | null> {
-    let currentId: string | null = agentId;
+  /**
+   * 团队成员选择的 opencode 原生 agent 名（TeamMember.opencodeAgentName）。
+   *
+   * 非空 → 分派时下发 prompt_async 的 `agent` 字段，由 opencode 内核按该 agent 的
+   * prompt/permission 执行（vteam 只做传递，不自造 agent 语义）；null → 不带该字段，
+   * 行为与引入本特性前逐字节一致（零回归）。
+   *
+   * 容错：查询失败不阻断分派，回退 null（同 resolveMemberOverrideModelId 的增强特性容错）。
+   */
+  private async resolveMemberOpencodeAgentName(
+    teamMemberId: string,
+  ): Promise<string | null> {
+    const repo = (this.prisma as any).teamMember;
+    if (!repo || typeof repo.findFirst !== 'function') {
+      return null;
+    }
+    try {
+      const row = (await repo.findFirst({
+        where: { id: teamMemberId },
+        select: { opencodeAgentName: true },
+      })) as { opencodeAgentName: string | null } | null;
+      return row?.opencodeAgentName ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 任务计划模式开关（Task.planMode）。
+   * 容错：查询失败不阻断分派，回退 false（同 resolveMemberOpencodeAgentName 的增强特性容错）。
+   */
+  private async resolveTaskPlanMode(
+    taskId: string,
+  ): Promise<boolean> {
+    const repo = (this.prisma as any).task;
+    if (!repo || typeof repo.findUnique !== 'function') {
+      return false;
+    }
+    try {
+      const row = (await repo.findUnique({
+        where: { id: taskId },
+        select: { planMode: true },
+      })) as { planMode: boolean | null } | null;
+      return row?.planMode ?? false;
+    } catch {
+      return false;
+    }
+  }
+
+  private async resolveAgentModelId(agentId: string): Promise<string | null> {    let currentId: string | null = agentId;
     for (
       let depth = 0;
       currentId && depth < MAX_BASE_AGENT_CHAIN_DEPTH;
@@ -3371,7 +3477,7 @@ export class WorkerDispatcher
 
   /** F3 MINOR-3：任务级工作目录（<根>/tasks/<taskId>），mkdir -p 保证存在后返回。 */
   private async ensureTaskWorkDir(taskId: string): Promise<string> {
-    const dir = path.join(this.taskWorkDirRoot, 'tasks', taskId);
+    const dir = taskDirOf(this.taskWorkDirRoot, taskId);
     try {
       await fs.mkdir(dir, { recursive: true });
     } catch {}

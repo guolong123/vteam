@@ -17,6 +17,8 @@ import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { sanitizeWorkDirName } from '../tasks/work-dir.util';
+import { WorkerClient } from '../workers/worker.client';
+import { WorkersService } from '../workers/workers.service';
 import { CreateTeamDto } from './dto/create-team.dto';
 import { QueryTeamsDto } from './dto/query-teams.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
@@ -61,6 +63,8 @@ export class TeamsService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly idGen: IdGeneratorService,
     private readonly realtime: RealtimeService,
+    private readonly workerClient: WorkerClient,
+    private readonly workersService: WorkersService,
   ) {}
 
   /** 进程启动：按库内各前缀纯数字序号最大值对齐 id 生成器（resyncIdPrefix 跳过 tum_admin_seed 等非数字 id，防主键冲突）。 */
@@ -823,6 +827,16 @@ export class TeamsService implements OnModuleInit {
     if (dto.alias !== undefined) data.alias = dto.alias?.trim() || null;
     if (dto.workDir !== undefined) data.workDir = dto.workDir?.trim() || null;
     if (dto.overrideModelId !== undefined) data.overrideModelId = dto.overrideModelId?.trim() || null;
+    if (dto.opencodeAgentName !== undefined) {
+      // 空串 → null（清除选择，回 opencode 默认 agent）；非空 → 弱校验后落库。
+      // 弱校验：worker 可能离线，无法实时核对，故仅在取得清单时告警、不阻断写入
+      // （执行期若 agent 不存在，由 opencode 报错并经既有 agent.status error 通路回流）。
+      const name = dto.opencodeAgentName?.trim() || null;
+      data.opencodeAgentName = name;
+      if (name) {
+        await this.warnIfOpencodeAgentUnknown(name, member.agentId);
+      }
+    }
     if (Object.keys(data).length === 0) {
       return this.findOne(teamId);
     }
@@ -844,6 +858,38 @@ export class TeamsService implements OnModuleInit {
       { type: 'team', id: teamId },
     );
     return this.findOne(teamId);
+  }
+
+  /**
+   * opencodeAgentName 弱校验：能取到清单则核对，取不到（无在线 worker/worker 离线/
+   * 旧版无 GET /agent）静默放行——**绝不因校验失败阻断用户写入**。
+   *
+   * 设计取舍：agent 是否真实存在，权威判定在 opencode 执行期（不存在则报错并经
+   * agent.status error 回流前端）。此处仅做「尽力告警」，避免把 worker 可用性
+   * 耦合进团队成员编辑这一纯配置操作。
+   */
+  private async warnIfOpencodeAgentUnknown(
+    agentName: string,
+    agentId: string,
+  ): Promise<void> {
+    try {
+      const workerId = await this.workersService.assignWorker();
+      if (!workerId) {
+        return;
+      }
+      const agents = await this.workerClient.listAgents({ id: workerId });
+      if (agents.length === 0) {
+        return;
+      }
+      if (!agents.some((a) => a.name === agentName)) {
+        this.logger.warn(
+          `[teams] opencodeAgentName="${agentName}"（agent=${agentId}）不在 worker ${workerId} 的 agent 清单中，` +
+            `仍按用户意图写入；执行期若不存在将由 opencode 报错`,
+        );
+      }
+    } catch {
+      // 弱校验：任何异常都不影响写入
+    }
   }
 
   /**
@@ -1263,6 +1309,9 @@ export class TeamsService implements OnModuleInit {
       seq: m.seq,
       workDir: m.workDir,
       overrideModelId: m.overrideModelId,
+      // opencode 原生 agent 选择（null = 用 opencode 默认 agent）——前端成员面板据此
+      // 渲染/高亮当前选择；缺此字段会导致「切换后回显丢失」。
+      opencodeAgentName: m.opencodeAgentName,
       agent: m.agent
         ? { id: m.agent.id, name: m.agent.name, role: m.agent.role }
         : undefined,

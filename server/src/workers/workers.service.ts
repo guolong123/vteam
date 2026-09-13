@@ -1111,8 +1111,16 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     return (caps.maxInstances ?? 0) - (load.instances ?? 0);
   }
 
-  /** Worker 行 → 对外视图（剔除 tokenHash；T9：合并该 worker 最近上报的 mcpStatus）。
-   *  capabilities 可选：findAll 列表接口不 select 该字段，单查（findOne）/派发等仍 select。 */
+  /**
+   * Worker 行 → 对外视图（剔除 tokenHash；T9：合并该 worker 最近上报的 mcpStatus）。
+   *
+   * capabilities 会**剔除 `models`** 再返回：那是 serve 探测到的全量模型目录
+   * （实测 7701 项，约 250KB），只用于注册时入库同步（syncFromWorkerCapabilities），
+   * 对前端展示毫无用处——详情接口原样透传会让单次响应达 253KB。
+   * 展示"可用模型"请用 `executableModels`（真正可执行的那几个，见 worker 详情页）。
+   *
+   * findAll 列表接口本就用 SQL 摘要重建轻量 capabilities（不含 models），此处统一口径。
+   */
   private toWorkerView(worker: {
     id: string;
     name: string | null;
@@ -1128,7 +1136,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       id: worker.id,
       name: worker.name,
       opencodeVersion: worker.opencodeVersion,
-      capabilities: worker.capabilities ?? null,
+      capabilities: this.stripHeavyCapabilities(worker.capabilities),
       load: worker.load,
       status: worker.status,
       lastHeartbeatAt: worker.lastHeartbeatAt,
@@ -1136,5 +1144,21 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       defaultModelId: worker.defaultModelId,
       mcpStatus: this.workerMcpStatus.get(worker.id) ?? [],
     };
+  }
+
+  /**
+   * 去掉 capabilities 中的重量级字段（仅 `models`）。
+   *
+   * 保留其余字段（maxInstances/skills/tools/port/baseUrl/execPort/executableModels）——
+   * 那些都是小数组且前端在用。非对象/缺失 → 原样返回，不抛错。
+   */
+  private stripHeavyCapabilities(
+    caps: Prisma.JsonValue | undefined | null,
+  ): Prisma.JsonValue | null {
+    if (!caps || typeof caps !== 'object' || Array.isArray(caps)) {
+      return caps ?? null;
+    }
+    const { models: _dropped, ...rest } = caps as Record<string, unknown>;
+    return rest as Prisma.JsonValue;
   }
 }

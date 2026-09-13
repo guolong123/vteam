@@ -106,6 +106,27 @@ export interface MessageInputProps {
   taskId?: string;
   style?: CSSProperties;
   className?: string;
+  /**
+   * 主 Agent 执行 agent 选择（计划模式输入框下拉）。
+   * options 由调用方按展示规则过滤好传入（subagent/hidden 不在内）；
+   * 选择只作用于主 Agent 成员行（TeamMember.opencodeAgentName），与当前 tab 无关。
+   * 三者成组出现：缺 onChangeAgent 则不渲染选择器。
+   */
+  agentOptions?: InputAgentOption[];
+  /** 当前值（null=跟随默认）。 */
+  agentValue?: string | null;
+  onChangeAgent?: (name: string | null) => void;
+  /** 无主 Agent 时禁用选择器（调用方判定）。 */
+  agentSelectDisabled?: boolean;
+}
+
+/**
+ * 输入框 agent 下拉选项（调用方已按 isSelectableOpencodeAgent 过滤；
+ * 此处定义最小形状，避免 ui 层反向依赖 teams 层类型）。
+ */
+export interface InputAgentOption {
+  name: string;
+  description?: string;
 }
 
 export function MessageInput({
@@ -119,6 +140,10 @@ export function MessageInput({
   taskId,
   style,
   className,
+  agentOptions,
+  agentValue,
+  onChangeAgent,
+  agentSelectDisabled = false,
 }: MessageInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -428,6 +453,52 @@ export function MessageInput({
               </svg>
             )}
           </button>
+          {/* 主 Agent 执行 agent 选择（仅主 Agent 生效；与群聊/私聊 tab 无关） */}
+          {onChangeAgent && (() => {
+            // 默认 agent 名：opencode 不在 GET /agent 里声明，按原生约定默认 primary 即 build；
+            // 列表里有 build 就直接显示它（omo 等无 build 的环境才回落"跟随默认"）。
+            // 有 build 时隐藏同名单独选项（两者原生行为一致，留两项反而像 bug）；
+            // 存量 agentValue==='build' 显示时归一到默认项（用户重选后自然写回空值，自愈）。
+            const defaultName = (agentOptions ?? []).some((a) => a.name === "build") ? "build" : null;
+            const visibleOptions = defaultName
+              ? (agentOptions ?? []).filter((a) => a.name !== defaultName)
+              : (agentOptions ?? []);
+            const displayValue = agentValue === defaultName ? "" : (agentValue ?? "");
+            return (
+            <select
+              data-testid="message-agent-select"
+              value={displayValue}
+              disabled={agentSelectDisabled || sending}
+              onChange={(e) => onChangeAgent(e.target.value === "" ? null : e.target.value)}
+              title={
+                agentSelectDisabled
+                  ? "需先设置主 Agent"
+                  : "主 Agent 的执行 agent（仅主 Agent 生效）"
+              }
+              aria-label="主 Agent 执行 agent"
+              style={{
+                maxWidth: 132,
+                height: 34,
+                padding: "0 6px",
+                borderRadius: radius.pill,
+                border: `1px solid ${displayValue ? "rgba(13,148,136,0.35)" : neutral[200]}`,
+                backgroundColor: displayValue ? "rgba(13,148,136,0.12)" : "var(--color-surface)",
+                color: displayValue ? "#0D9488" : neutral[600],
+                fontSize: fontSize.sm,
+                cursor: agentSelectDisabled || sending ? "not-allowed" : "pointer",
+                opacity: agentSelectDisabled || sending ? 0.6 : 1,
+                fontFamily: fontFamily.body,
+              }}
+            >
+              <option value="">{defaultName ? `${defaultName}（默认）` : "跟随默认"}</option>
+              {visibleOptions.map((a) => (
+                <option key={a.name} value={a.name} title={a.description ?? a.name}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+            );
+          })()}
           {/* 待发送附件预览（可移除） */}
           {pendingAttachment && (
             <span

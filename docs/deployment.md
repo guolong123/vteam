@@ -256,6 +256,173 @@ helm upgrade vteam chart/vteam -n vteam -f /tmp/opencode/vteam-baseline.yaml --w
 - 存量部署修复（不重装）：`UPDATE mcp_servers SET url='http://vteam-server:3000/api/v1/platform-mcp' WHERE name='keta-platform';` 然后 `kubectl rollout restart sts/vteam-worker`（injectMcp 启动时执行）。
 - 注意 worker 容器默认 cwd 是镜像 WORKDIR，探测 MCP 必须 `cd /data/vteam-worker && opencode mcp list --pure` 才能读到注入的 opencode.json。
 
+### 4.5 内置插件 OmO（oh-my-openagent）
+
+worker 镜像**内置** OmO 插件，用**官方安装器**在构建期完成安装，无需目标环境联网。
+
+| 项 | 值 |
+|----|----|
+| 上游 | https://github.com/code-yeongyu/oh-my-openagent（npm 包 `oh-my-opencode`，别名 `oh-my-openagent`） |
+| 安装方式 | `bunx oh-my-openagent@latest install --no-tui --platform=opencode --skip-auth`（Dockerfile 构建期） |
+| 插件声明 | `<WORK_DIR>/opencode.json` 的 `plugin` 节（worker 启动注入时写入，幂等） |
+| agent 模型配置 | `<WORK_DIR>/.omo/omo.jsonc`（**实际生效**；旧位置 `.opencode/oh-my-openagent.jsonc` 仅在其不存在时接管） |
+| 生效前提 | serve **不能**带 `--pure`（`--pure` = 不加载外部插件） |
+
+> ⚠️ **不要与 `oh-my-opencode-slim` 混淆**。后者（`alvinunreal/oh-my-opencode-slim`）是第三方
+> 精简 fork，agent 集（orchestrator/explorer/…）与 OmO 完全不同。早期 vteam 误装过 slim；
+> worker 的注入器现在会**自动清除**配置里的 slim 条目并写入 OmO，避免两者并存冲突。
+
+**`--pure` 与环境变量 `OPENCODE_PURE`**
+
+serve 默认**不带** `--pure`，以便加载 OmO。需要纯净基线（对照 token 开销）时设 `OPENCODE_PURE`：
+
+| 取值 | 行为 |
+|------|------|
+| 未设置（默认） | 非 pure，加载插件（OmO 生效） |
+| `true`/`1`/`yes`/`on`/`y` | `--pure`，不加载插件（input tokens 约 1900，非 pure 约 7601） |
+
+> ⚠️ **`OPENCODE_PURE` 不能设为空串**：它同时是 opencode 自身解析的布尔环境变量，空串会让 serve
+> 直接启动失败（`SchemaError: Expected "true"|...|"false"..., got ""`）。因此 compose 里**不要**
+> 写成 `OPENCODE_PURE: ${OPENCODE_PURE:-}`（未设时会生成空串）；默认整条注释掉即可。
+> worker 侧对空串/纯空白会主动删除该变量兜底（见 `opencode-server.ts` 的 `isPureMode()`）。
+
+**验证 OmO 是否真的加载**（serve 静默加载插件，stdout 无提示）：
+
+```bash
+# 1) serve 命令行不含 --pure
+docker compose exec worker sh -c 'tr "\0" " " < /proc/$(pgrep -f "opencode serve" | head -1)/cmdline'
+
+# 2) 看 GET /agent 是否出现 OmO 的 agent（出现 Sisyphus/Prometheus 即已加载）
+curl -s -H "Authorization: Bearer $TOKEN" http://<server>/api/v1/agents/opencode | jq '.agents[].name'
+#   期望可见：Sisyphus - ultraworker / Hephaestus - Deep Agent / Prometheus - Plan Builder 等
+```
+
+**OmO agent 与 vteam 职责映射**
+
+OmO 注册的 primary agent（`GET /agent` 返回的**展示名**）：
+
+| agent | 展示名 | vteam 职责 |
+|-------|--------|-----------|
+| sisyphus | `Sisyphus - ultraworker` | 执行（主编排/派发） |
+| prometheus | `Prometheus - Plan Builder` | **计划** |
+| hephaestus | `Hephaestus - Deep Agent` | 执行 |
+| atlas | `Atlas`（执行落地） | 执行 |
+
+> ⚠️ OmO 的 agent 名是**展示名**（`<Name> - <描述>`），而配置文件里用小写键（`prometheus`）。
+> `opencode-agent-duty.ts` 为此取 ` - ` 前的基底名再判定——若按整串精确匹配，OmO 的 agent
+> 永远命中不了职责表，表现为"选了计划 agent 却不进计划模式"（实测踩坑，已加回归测试）。
+
+**开关与配置入口：worker 详情页**
+
+OmO 是**与 worker 绑定**的能力（插件在镜像里、配置在 worker workDir、开关只影响该 worker
+的 serve 启动），因此入口在 **Worker 详情页**内的「OmO 编排插件」卡片，不是全局页面。
+
+| 操作 | 效果 |
+|------|------|
+| 开关**关闭** | serve 以 `--pure` 启动，**不加载插件**（agent 列表只剩 opencode 原生）；模型配置**保留**，重开即恢复 |
+| 开关**开启** | 正常加载插件；此时可配置各 agent 模型 |
+| 保存配置 | 写盘后**自动重启 serve** 生效（有会话进行中则排队，见下） |
+
+> ⚠️ **镜像未内置 OmO 时不显示该卡片，也无法开启**：worker 启动时读镜像内能力标记
+> `/opt/omo-bundled.json`（Dockerfile 构建期写入），`GET /agents/omo-config` 返回
+> `bundled` 字段供前端判断；对未内置的 worker 调用 `enabled:true` 返回 **400**
+> （明确告知镜像不含 OmO），而不是静默接受一个永远不生效的 true。
+>
+> 开关状态存 `<WORK_DIR>/.omo/omo-enabled.json`，**不写进 OmO 自己的配置文件**——
+> 那个文件由 OmO 管理（会迁移/重写），混进去迟早被覆盖。读取缺省为 true，
+> 坏文件也不会把功能悄悄关掉。
+
+**`capabilities.models` 不下发给前端（重要）**
+
+`GET /workers/:id` 返回的 `capabilities` 已**剔除 `models` 字段**：那是 serve 探测到的
+**全量模型目录**（实测 7701 项），只用于注册时入库同步（`syncFromWorkerCapabilities`），
+对展示无用。原样透传会让单次响应达 **253KB**；剔除后 **0.8KB**（缩小约 330 倍）。
+
+> 需要"可用模型"请看 `capabilities.executableModels`（真正可执行的那几个）。
+> `models` 仍照常入库到模型目录，删除的只是 API 响应里的冗余。
+
+**「可用模型」的口径（重要）**
+
+worker 详情页的「可用模型」取 `capabilities.executableModels`——worker 侧用 CLI
+（`opencode models`，带鉴权过滤）探测的**真正可执行**清单，与 OmO 配置页的模型下拉同源。
+
+> ⚠️ **不要用 `capabilities.models`**：那是 serve 探测到的**全部模型目录**（实测 7699 条），
+> 绝大多数没有可用凭据；直接渲染会把页面撑到几万像素且严重误导（实测踩坑）。
+> 兜底顺序：`executableModels` → 目录中 `enabled=true` 的模型 → 空（显示"未上报"）。
+
+**API**（供脚本/自动化；页面走同一组接口）
+
+- `GET /api/v1/agents/omo-config?workerId=` → `{agents, available, enabled, bundled, configPath, configKind, workerId, degraded}`
+  （`available` 是 OmO 的可配 agent 清单，来自其包内 schema，不硬编码在 vteam；
+  `bundled`=镜像是否内置 OmO，`enabled`=用户开关）
+- `GET /api/v1/agents/omo-agent-prompt?workerId=&name=` → 单个 agent 的系统提示词
+  （`{name, description, mode, prompt, empty}`）。**按需拉取**：全部 agent 的 prompt 合计
+  约 106KB（Sisyphus 单个 33KB），故不随列表下发；动作页「提示词」按钮点开才请求。
+  `name` 支持配置键（`prometheus`）或 serve 展示名（`Prometheus - Plan Builder`）；
+  该 agent 当前未注册（如 `hephaestus` 需 GPT 系模型）→ **400** 并说明原因。
+- `PATCH /api/v1/agents/omo-config?workerId=` body：
+  - `{agents:{"<name>":"<providerID>/<modelID>"}}` —— **增量合并**（只改提交项）；
+    值传空串 = 清除该 agent 的覆盖，回落 OmO 默认
+  - `{enabled: true|false}` —— 切换插件开关（与 agents 可同时提交，也可只提交其一）
+  - 响应含 `restart`（`executed`/`pending`/`skipped`），表示 serve 是否已重启
+
+> 模型值必须是 `providerID/modelID`（如 `opencode/big-pickle`）。
+> ⚠️ 不要用 `/models` 接口返回的 `id`——那是模型目录主键（`md_` 前缀），写进 OmO 配置无法解析。
+
+**配置落点与优先级（实测确认，勿凭直觉改）**
+
+OmO 按以下顺序找配置，**先命中者胜**：
+
+| 顺序 | 路径 | 说明 |
+|------|------|------|
+| 1 | `<WORK_DIR>/.omo/omo.jsonc` | **当前生效**（OmO 迁移后的新位置；带 `"[opencode]"` 平台分段与 `_migrations`） |
+| 2 | `<WORK_DIR>/.opencode/oh-my-openagent.jsonc` | 旧位置；**仅当上面不存在时**才被读取（扁平 `agents`） |
+
+> ⚠️ 两份同时存在时 `.omo/omo.jsonc` 胜出，旧文件变成**死配置**——改它完全不生效。
+> 实证：分别把两份设成不同模型、重启、看会话实际使用的模型，只有 `.omo` 那份生效。
+> worker 的读写逻辑（`resources/omo-config.ts`）会自动选择生效的那份，并在接口
+> `configPath` / `configKind` 字段回传实际路径，配置页顶部也会显示"生效配置：…"。
+
+**OmO 会自动迁移**：它检测到旧位置的配置后，会把文件搬到 `.omo/omo.jsonc`
+（旧文件备份进 `.omo/migration-backup-<时间戳>/` 并删除原文件）。这是 OmO 自身行为，
+不是 vteam 写的——所以**不要**手工在 `.opencode/` 下维护这份配置。
+
+配置**在 serve 启动时读取**：改完配置需要重启 serve 才生效。
+
+**保存后自动重启**：配置页（`PATCH /api/v1/agents/omo-config`）保存后，worker 会复用
+`RestartCoordinator` 触发 serve 重启，响应 `restart` 字段给出结果：
+
+| restart | 含义 |
+|---------|------|
+| `executed` | 无活跃会话，已立即重启 —— 下个会话即用新模型 |
+| `pending` | 有活跃会话，重启**已排队**，会话归零后自动执行（不会打断进行中的 agent） |
+| `skipped` | 未注入重启回调，或重启失败（配置已落盘，下次自然重启生效） |
+
+> 重启失败**不会**让保存失败：配置已写盘，只是本次未即时生效，日志会告警。
+
+**格式**：新位置带平台分段 `{ "[opencode]": { "agents": {…} }, "_migrations": […] }`，
+旧位置是扁平 `{ "agents": {…} }`。worker 读写时**保持该文件原有形状**，不动其他键。
+### 4.6 opencode CLI 版本策略（不锁版本）
+
+worker 镜像**不锁** opencode CLI 版本：`npm i -g opencode-ai`（Dockerfile ARG `OPENCODE_CLI_SPEC`），
+每次构建取 registry 最新版。
+
+**为什么可以浮动**：worker 运行时用 `opencode --version` 探测真实版本并随注册上报
+（`opencode_version` 列），vteam 侧不硬编码版本号、不按版本分支——升级不需要改代码。
+
+**构建产物如何追溯版本**：构建日志打印 `opencode CLI installed: <版本>`；运行期 `docker compose logs worker`
+的启动横幅也打印 `opencodeVersion = <版本>`，worker 详情页可见。
+
+**如需复现某次构建**（临时锁回指定版本）：
+
+```bash
+docker compose build --build-arg OPENCODE_CLI_SPEC=opencode-ai@1.18.30 worker
+```
+
+> 注意：`AssignmentRequirement.opencodeVersion` 是**精确字符串匹配**（`workers.service.ts` 的
+> `assignWorker`）。当前分派链路不传该字段，故不受版本浮动影响；但若未来有调用方显式指定版本，
+> 多 worker 版本不一致会导致匹配失败——此时应改为语义化版本范围匹配而非浮版本。
+
 #### 4.4.1 集群外 worker 配置（WORKER_MCP_URL + 可达地址三件套）
 
 集群外独立部署的 worker（install-worker.sh 一键安装场景）与 server 不在同一集群网络，需同时解决

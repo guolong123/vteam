@@ -122,6 +122,11 @@ model TeamMember {
   seq            Int      @default(1)
   workDir        String?  @map("work_dir")
   overrideModelId String? @map("override_model_id")
+  /// opencode 原生 agent 名（opencode.json 的 agent 节 key，如 build/plan/自定义名）。
+  /// null = 不指定（prompt_async 不带 agent 字段，用 serve 默认 agent）——存量行 NULL 行为不变。
+  /// 非 null 时 dispatch 下发 prompt_async 的 agent 字段，由 opencode 内核按该 agent 的
+  /// prompt/permission 执行（vteam 只传递，不自造 agent 语义）。
+  opencodeAgentName String? @map("opencode_agent_name")
   createdAt      DateTime @default(now()) @map("created_at")
 
   team         Team          @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
@@ -176,8 +181,13 @@ model Task {
   status              String    @default("pending")
   mainAgentId         String?   @map("main_agent_id")
   mainAgentInstanceId String?   @map("main_agent_instance_id") // 主 Agent 实例（决策依据，T2 起维护；session-unification 后停止写入，历史值由 Todo 6 迁移置空，列保留）
-  // 执行模式（vteam-team-collaboration）：direct|plan，默认 direct（轻量），plan 按需开启
+  // @deprecated 2026-09：vteam 自造 plan 域已下线（改由 opencode 原生 agent 承担计划动作）。
+  // 列保留但恒写 "direct"、业务层不再读取；随下次重建库删除。
   executionMode       String    @default("direct") @map("execution_mode")
+  /// 计划模式开关（2026-09 新计划域）：true=主 Agent 先出计划文档（submit_artifact type:plan），
+  /// 其他成员只评审不起草。开启路径：用户在输入框切计划开关 / 主 Agent 调 plan_mode MCP 工具。
+  /// 与已废弃的 executionMode 正交（该列恒 direct，不再表达语义）。
+  planMode            Boolean   @default(false) @map("plan_mode")
   backgroundDocs      Json?     @map("background_docs")
   /// 完成后为下一任务开新会话（覆盖 Team.reuseSession，默认 false，Todo7）
   resetAfterComplete  Boolean   @default(false) @map("reset_after_complete")
@@ -203,6 +213,8 @@ model Task {
   taskGroupInstances       TaskGroupInstance[]
   issues                   Issue[]
   memories                 Memory[]
+  // @deprecated 2026-09：vteam 自造 plan 域下线，业务层不再读写；关系保留仅为 schema 合法性
+  // （Plan 表空置保留，见 Plan 模型注释）。
   plan                     Plan?
   messageChannelLinks      TaskMessageChannel[]
   notificationChannelLinks TaskNotificationChannel[]
@@ -741,6 +753,9 @@ model RealtimeEvent {
 
 // 任务执行计划（一任务一计划，taskId 唯一；status 字符串枚举：
 // draft/reviewing/approved/rejected/executing/completed，draft 为预留态）
+// @deprecated 2026-09：vteam 自造计划域（plan/planTask）已整体下线——计划动作改由 opencode
+// 原生 agent（built-in `plan` 或自定义 agent）在其内核内完成，vteam 只传递 agent 名。
+// 两表保留空置（不读不写、无外部引用），避免破坏性 DROP 迁移；随下次重建库删除。
 model Plan {
   id                 String   @id // pl_ 前缀，服务层 IdGeneratorService 生成
   taskId             String   @unique @map("task_id") // 一任务一计划

@@ -140,6 +140,12 @@ services:
       # installGitTools/injector 会在空卷上自动重建 .opencode；镜像内 /tmp/keta-worker
       # 的 dist/node_modules 不受影响，WORKDIR 未变）。
       WORK_DIR: /data/vteam-worker
+      # 注意：OPENCODE_PURE 由 opencode 自己解析为布尔环境变量，**空串会让 serve 直接启动失败**
+      # （SchemaError: Expected "true"|...|"false"..., got ""）。因此这里绝不能写成
+      # ${OPENCODE_PURE:-}（未设时会产生空串）。默认整条注释掉 = 不设该变量 = 非 pure
+      #（内置插件 omo 生效）；需要纯净基线对照 token（约 1900 pure vs 7601 非 pure）时
+      # 取消注释并设 true。
+      # OPENCODE_PURE: "true"
       # agent-browser 容器内默认参数（覆盖 Dockerfile ENV，可通过 env 调整）
       AGENT_BROWSER_ARGS: --no-sandbox,--disable-gpu
       # 可选：agent-browser 额外配置（按需覆盖）

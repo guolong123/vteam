@@ -7,6 +7,7 @@ import { isApiError } from "@/lib/errors";
 import { teamsApi, type TeamDto, type TeamQueueDto } from "@/src/api/teams";
 import { AgentAvatar } from "@/src/components/ui";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
+import { PlanDocModal, type PlanDocContent } from "@/src/components/teams/PlanDocModal";
 import {
   type RoleKey,
   roles,
@@ -415,15 +416,45 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
 /* ------------------------------------------------------------------ */
 /* 任务子 Tab                                                          */
 /* ------------------------------------------------------------------ */
-type TaskSubTab = "status" | "config" | "output";
+/** opencode todo 步骤项（对齐 GET /tasks/:id/plan-steps → steps[]）。 */
+export interface PlanStepItem {
+  id?: string;
+  content: string;
+  /** pending | in_progress | completed | cancelled（未知状态按未完成渲染）。 */
+  status: string;
+  priority?: string;
+}
 
-function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, plansQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onToggleExecutionMode, onOpenIssueDetail, onOpenArtifactDoc }: {
-  team: any; task: any; taskId: string; artifactsQuery: any; issuesQuery: any; plansQuery: any; agents: any[];
+type TaskSubTab = "status" | "plan" | "config" | "output";
+
+function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onOpenIssueDetail, onOpenArtifactDoc, onUploadPlanDoc, planDocsQuery, planStepsQuery }: {
+  team: any; task: any; taskId: string; artifactsQuery: any; issuesQuery: any; agents: any[];
   onEditTaskInfo: () => void; onOpenArtifacts: () => void; onOpenIssues: () => void;
-  onToggleExecutionMode: (v: "direct" | "plan") => void;
   onOpenIssueDetail?: (issueId: string) => void; onOpenArtifactDoc?: (artifact: ArtifactItem) => void;
+  /** 上传计划文件（写进任务目录 .opencode/plans/）；缺省则不显示上传入口。 */
+  onUploadPlanDoc?: () => void;
+  /** 计划文档查询（GET tasks/:id/plan-docs，由会话页提供并轮询）。 */
+  planDocsQuery?: any;
+  /** 执行步骤查询（GET /tasks/:id/plan-steps，由会话页提供，30s 轮询）。 */
+  planStepsQuery?: any;
 }) {
   const [subTab, setSubTab] = useState<TaskSubTab>("status");
+  /** 计划文档 Modal 选中的文件（null=关闭；正文随列表已下发，打开即渲染）。 */
+  const [planDoc, setPlanDoc] = useState<PlanDocContent | null>(null);
+  /**
+   * 计划文档列表：来自 `GET /tasks/:id/plan-docs`——任务目录 `.opencode/plans/*.md`
+   * 的实时同步（agent 写的 / 用户上传的），vteam 不维护计划状态。
+   */
+  const planFiles: PlanDocContent[] = planDocsQuery?.data?.files ?? [];
+  const planDocsDegraded: boolean = planDocsQuery?.data?.degraded ?? false;
+  const planDocsPending: boolean = !!planDocsQuery?.isPending;
+  const planDocTotal = planFiles.length;
+  /** 执行步骤（opencode todo 只读透传；degraded 时 steps 为空并提示不可用）。 */
+  const planSteps: PlanStepItem[] = planStepsQuery?.data?.steps ?? [];
+  const planStepsDegraded: boolean = planStepsQuery?.data?.degraded ?? false;
+  const planStepsPending: boolean = !!planStepsQuery?.isPending;
+  /** 任务计划模式开关（task.planMode；缺省 false=直接执行）。 */
+  const planModeOn: boolean = !!(task?.effectivePlanMode ?? task?.planMode);
   const waiting = (team?.queue ?? []).filter((q: TeamQueueDto) => q.taskStatus === "queued" || !q.taskStatus).length;
   const isCurrent = team?.currentTaskId === taskId;
   const statusLabel = task ? (task.status === "queued" ? "排队中" : task.status === "pending" ? "待开始" : task.status === "in_progress" ? "进行中" : task.status === "pending_review" ? "待验收" : task.status === "completed" ? "已完成" : "已归档") : "";
@@ -433,6 +464,7 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, plansQue
       <div style={{ display: "flex", borderBottom: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], flexShrink: 0, overflowX: "auto" }}>
         {([
           { key: "status" as const, label: "状态", badge: waiting > 0 ? String(waiting) : null },
+          { key: "plan" as const, label: "计划", badge: planDocTotal ? String(planDocTotal) : null },
           { key: "config" as const, label: "配置", badge: null },
           { key: "output" as const, label: "产出", badge: artifactsQuery.data?.total ? String(artifactsQuery.data.total) : null },
         ]).map((tab) => (
@@ -466,11 +498,93 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, plansQue
         )}
         {subTab === "config" && (
           <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}>
-            <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>执行模式</div>
-            <select value={task.executionMode} onChange={(e) => onToggleExecutionMode(e.target.value as "direct" | "plan")} style={{ padding: `2px 8px`, borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, color: neutral[700] }}>
-              <option value="direct">轻量执行</option>
-              <option value="plan">计划驱动</option>
-            </select>
+            <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>任务信息</div>
+            <button type="button" onClick={onEditTaskInfo} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>编辑任务信息</button>
+          </div>
+        )}
+        {subTab === "plan" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: space.sm }}>
+                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>计划文档</span>
+                <span style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+                  <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{planDocTotal} 个</span>
+                  <button
+                    type="button"
+                    data-testid="plan-doc-upload"
+                    disabled={!onUploadPlanDoc}
+                    onClick={onUploadPlanDoc}
+                    title="上传 Markdown 到任务目录 .opencode/plans/（agent 同目录可读）"
+                    style={{ padding: "2px 8px", borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], fontSize: fontSize.xs, cursor: onUploadPlanDoc ? "pointer" : "not-allowed", fontFamily: fontFamily.body }}
+                  >
+                    上传
+                  </button>
+                </span>
+              </div>
+              {planDocsPending ? (
+                <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>加载中…</div>
+              ) : planDocsDegraded && planFiles.length === 0 ? (
+                <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂不可用（主 Agent 会话未建立或 worker 离线）</div>
+              ) : planFiles.length === 0 ? (
+                <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>
+                  {planModeOn ? "等待主 Agent 写入计划（.opencode/plans/）…" : "暂无计划文件（可上传，或让 agent 在计划模式下产出）"}
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+                  {planFiles.map((f) => (
+                    <button
+                      key={f.name}
+                      type="button"
+                      data-testid={`plan-doc-row-${f.name}`}
+                      title="点击查看全文"
+                      onClick={() => setPlanDoc(f)}
+                      style={{ display: "flex", alignItems: "center", gap: space.sm, width: "100%", boxSizing: "border-box", fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", cursor: "pointer", textAlign: "left", fontFamily: fontFamily.body }}
+                    >
+                      <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "#0D9488", flexShrink: 0 }} />
+                      <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{f.name}</span>
+                        <span style={{ fontSize: 10, color: neutral[400] }}>
+                          {planDocUpdatedLabel(f.updatedAt)}{f.truncated ? " · 已截断" : ""}
+                        </span>
+                      </span>
+                      <span aria-hidden style={{ color: neutral[300], fontSize: fontSize.xs, flexShrink: 0 }}>›</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: space.sm }}>
+                <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>执行步骤</span>
+                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{planSteps.length} 项</span>
+              </div>
+              {planStepsPending ? (
+                <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>加载中…</div>
+              ) : planStepsDegraded && planSteps.length === 0 ? (
+                <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂不可用（主 Agent 会话未建立或 worker 离线）</div>
+              ) : planSteps.length === 0 ? (
+                <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无执行步骤（agent 拆解后自动出现）</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+                  {planSteps.map((s: PlanStepItem, i: number) => {
+                    const st = PLAN_STEP_THEME[s.status] ?? PLAN_STEP_THEME.pending;
+                    return (
+                      <div
+                        key={s.id ?? `${i}-${s.content}`}
+                        data-testid={`plan-step-${s.status}`}
+                        title={s.priority ? `优先级 ${s.priority}` : undefined}
+                        style={{ display: "flex", alignItems: "center", gap: space.sm, fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}
+                      >
+                        <span aria-hidden style={{ color: st.color, fontSize: fontSize.sm, flexShrink: 0, width: 16, textAlign: "center" }}>{st.icon}</span>
+                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: s.status === "cancelled" ? "line-through" : "none", color: s.status === "cancelled" ? neutral[400] : neutral[700] }}>
+                          {s.content}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
         {subTab === "output" && (
@@ -545,29 +659,46 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, plansQue
                 </div>
               )}
             </div>
-            <div>
-              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], marginBottom: space.sm }}>执行计划</div>
-              {plansQuery.data ? (
-                <div style={{ fontSize: fontSize.xs, color: neutral[600], padding: `${space.sm}px ${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md }}>{plansQuery.data?.title ?? "已有计划"}</div>
-              ) : (
-                <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无执行计划</div>
-              )}
-            </div>
           </div>
         )}
       </div>
+      {/* 计划文档弹窗：正文随列表已下发，纯展示不取数 */}
+      <PlanDocModal doc={planDoc} onClose={() => setPlanDoc(null)} />
     </div>
   );
+}
+
+/** 执行步骤状态主题（对齐 serve todo status：pending/in_progress/completed/cancelled）。 */
+const PLAN_STEP_THEME: Record<string, { icon: string; color: string }> = {
+  completed: { icon: "✓", color: "#10B981" },
+  in_progress: { icon: "◐", color: "#0D9488" },
+  cancelled: { icon: "✕", color: neutral[300] },
+  pending: { icon: "○", color: neutral[400] },
+};
+
+/** 计划文件更新时间短标签（文件被 agent 反复覆盖写，绝对时间意义不大）。 */
+function planDocUpdatedLabel(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "";
+  const diff = Date.now() - t;
+  if (diff < 60_000) return "刚刚更新";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前更新`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前更新`;
+  return new Date(t).toLocaleString();
 }
 
 /* ------------------------------------------------------------------ */
 /* 主组件：团队 / 任务 双 Tab                                           */
 /* ------------------------------------------------------------------ */
-export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery, plansQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onToggleManagedMode, onToggleExecutionMode, onOpenIssueDetail, onOpenArtifactDoc }: {
-  team: any; task: any; taskId: string; artifactsQuery: any; issuesQuery: any; plansQuery: any; agents: any[];
+export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onToggleManagedMode, onOpenIssueDetail, onOpenArtifactDoc, onUploadPlanDoc, planDocsQuery, planStepsQuery }: {
+  team: any; task: any; taskId: string; artifactsQuery: any; issuesQuery: any; agents: any[];
   onEditTaskInfo: () => void; onOpenArtifacts: () => void; onOpenIssues: () => void;
-  onToggleManagedMode: (v: boolean) => void; onToggleExecutionMode: (v: "direct" | "plan") => void;
+  onToggleManagedMode: (v: boolean) => void;
   onOpenIssueDetail?: (issueId: string) => void; onOpenArtifactDoc?: (artifact: ArtifactItem) => void;
+  /** 上传计划文件入口（计划 Tab）；缺省不显示。 */
+  onUploadPlanDoc?: () => void;
+  /** 计划文档/执行步骤查询（计划 Tab 用；会话页提供并轮询）。 */
+  planDocsQuery?: any; planStepsQuery?: any;
 }) {
   const [activeMainTab, setActiveMainTab] = React.useState<"team" | "task">("team");
   const hasTask = !!task;
@@ -591,10 +722,12 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery,
         {activeMainTab === "task" && hasTask && (
           <TaskSubTabs
             team={team} task={task} taskId={taskId}
-            artifactsQuery={artifactsQuery} issuesQuery={issuesQuery} plansQuery={plansQuery}
+            artifactsQuery={artifactsQuery} issuesQuery={issuesQuery}
             agents={agents} onEditTaskInfo={onEditTaskInfo} onOpenArtifacts={onOpenArtifacts}
-            onOpenIssues={onOpenIssues} onToggleExecutionMode={onToggleExecutionMode}
+            onOpenIssues={onOpenIssues}
             onOpenIssueDetail={onOpenIssueDetail} onOpenArtifactDoc={onOpenArtifactDoc}
+            onUploadPlanDoc={onUploadPlanDoc}
+            planDocsQuery={planDocsQuery} planStepsQuery={planStepsQuery}
           />
         )}
       </div>

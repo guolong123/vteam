@@ -39,4 +39,13 @@ export class UpdateMemberDto {
   @IsOptional()
   @IsString()
   overrideModelId?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      'opencode 原生 agent 名（如 build/plan；空字符串或 null 表示不指定，用 opencode 默认 agent）',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  opencodeAgentName?: string | null;
 }

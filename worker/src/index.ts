@@ -50,6 +50,7 @@ import {
 import { OpencodeServer } from './runtime/opencode-server';
 import { ExecServer } from './exec/exec-server';
 import { InjectReport, ResourceInjector } from './resources/injector';
+import { readOmoEnabled } from './resources/omo-enabled';
 import {
   RestartCoordinator,
   RestartDecision,
@@ -556,6 +557,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     port: config.opencodeServePort,
     serverPassword: config.serverPassword,
     cwd: config.workDir,
+    // OmO 开关：用户关掉后 serve 以 --pure 启动（不加载插件）。每次 spawn 时读取，
+    // 故开关变更后只要重启 serve 即生效（配置页保存时会触发重启）。
+    omoEnabled: () => readOmoEnabled(config.workDir),
   });
 
   // T4：V1Driver（封装 serve REST API）；serve 随机端口启动成功后在 .then 注入 baseUrl。
@@ -588,8 +592,18 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   // 重试耗尽返回 null（由调用方决定退出或降级）。
   // C2：serve 就绪后先探测真实模型列表（resolveModels 失败降级 undefined，不带 models 不阻断注册）。
   // C3（CONF-01）：stability=2——预热期中间态假模型列表需连续 2 次探测一致才上报，杜绝假模型回流。
-  const registerCurrent = async (): Promise<RegisterResponse | null> => {
-    const models = await resolveModels(driver, { stability: 2 });
+  /**
+   * @param reuseModels true=复用上次探测结果（重注册快路径，跳过 6MB /provider 探测）
+   */
+  const registerCurrent = async (
+    reuseModels = false,
+  ): Promise<RegisterResponse | null> => {
+    // 重注册快路径（reuseModels）：既不复探（省 ~5s），也不重报全量模型目录
+    // （`models` 实测 7702 项 / 253KB 请求体，服务端要逐条 upsert——目录在首次注册
+    //  已入库且不会因 serve 重启而变，重复上报纯属浪费，实测注册接口因此耗时 4.8s）。
+    const models = reuseModels
+      ? undefined
+      : await resolveModels(driver, { stability: 2 });
     const executableModels = resolveExecutableModels();
     const result = await registerWorkerWithRetry(
       await buildRegisterOptions(
@@ -627,7 +641,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   // T4c：重启后重新注册——serve 随机端口重启后可能变化，用当前 port 重新组装注册选项；
   // 失败不退出（serve 已在新端口运行，server 连旧端口报 degraded，再次 reload-config 可修复）。
   const reRegister = async (): Promise<void> => {
-    const result = await registerCurrent();
+    // 重注册快路径：模型目录没变，跳过稳定性探测（省 ~9s）
+    const result = await registerCurrent(true);
     if (result === null) {
       console.warn(
         '[worker] 重启后重新注册失败：serve 已在新端口运行，server 可能连不上（可再次触发 reload-config 修复）',
@@ -791,10 +806,16 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     firstTokenTimeoutMs: config.workerFirstTokenTimeoutMs,
     serverBaseUrl: config.serverUrl,
     browserProfileRoot: config.workDir,
+    // GET /agents 未显式传 directory 时的回落值：与 serve cwd（config.workDir）一致，
+    // 保证列出的 opencode agent 集合与实际执行时发现的集合相同
+    workDir: config.workDir,
     // T17：serve 日志模型错误检测数据源——awaitCompletion 每轮轮询读 recentErrors()，
     // 命中模型 API 错误关键词（Rate limit/Free usage 等只写 stderr 不透传
     // message.info.error）时提前 abort + 抛错（错误文本透传前端，不再空等首字超时）
     serveErrorReader: () => serveServer.recentErrors(),
+    // OmO 配置保存后重启 serve：opencode 只在启动时读 OmO 配置，不重启则新会话仍用旧模型。
+    // 复用 RestartCoordinator（无活跃会话立即重启 / 有则挂起等归零），故不会打断进行中的会话。
+    restartServe: (reason: string) => restartCoordinator.requestRestart(reason),
   });
   // T10：执行端点上报端口（start 成功 = 实际监听端口；失败置 undefined，注册不带 execPort）
   let execPort: number | undefined = config.workerExecPort;

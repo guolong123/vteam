@@ -79,8 +79,18 @@ export interface WorkerItem {
     port?: number;
     /** opencode serve 对外基址（WORKER_ADVERTISE_HOST 语义）。 */
     baseUrl?: string;
-    /** C2：serve 实际可用模型 id 列表（providerID/modelID；注册/reload-config 后刷新）。 */
+    /**
+     * C2：serve **探测到的全部模型** id 列表（providerID/modelID）。
+     * ⚠️ 这是模型目录级的大列表（实测 7699 条），**不代表真正可用**——
+     * 展示"可用模型"请用 executableModels。
+     */
     models?: string[];
+    /**
+     * C7：**真正可执行**的模型 id 列表（providerID/modelID），由 worker 侧 CLI
+     * （`opencode models`，带鉴权过滤）探测，只含当前凭据实际能用、且已启用的模型。
+     * 这是"可用模型"的权威来源，与 agent 配置的模型下拉口径一致。
+     */
+    executableModels?: string[];
   };
   load: { instances: number } | null;
   status: WorkerStatusKey;

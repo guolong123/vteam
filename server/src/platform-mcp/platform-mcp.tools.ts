@@ -21,7 +21,7 @@ export interface PlatformMcpToolContext {
  * team-free-chat（todo-4）：任务/团队双上下文字段语义（5 个 team-free 工具共用）。
  * taskId 与 teamId 至少传一个（refine 在 zod 层保证，双空 → tools/call -32602）；
  * taskId 优先，无 taskId 时用 teamId 定位团队会话；两个维度之间无回退（mismatch → 403）。
- * delivery-family 工具（doclib、task_context、submit_artifact、issue 系列、plan 系列、
+ * delivery-family 工具（doclib、task_context、submit_artifact、issue 系列、
  * task_transition、question_confirm、team_view、my_profile 等）保持 taskId 必填，不用此语义.
  */
 const OPTIONAL_TASK_ID_DESC =
@@ -365,88 +365,6 @@ const memorySearchSchema = z
 
 type MemorySearchArgs = z.infer<typeof memorySearchSchema>;
 
-export const planSubmitSchema = z.object({
-  taskId: z.string().describe('任务 ID'),
-  selfInstanceId: z
-    .string()
-    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-  title: z.string().min(1).describe('执行计划标题'),
-  summary: z.string().optional().describe('计划摘要'),
-  scopeIn: z.string().optional().describe('范围：包含'),
-  scopeOut: z.string().optional().describe('范围：不包含'),
-  tasks: z
-    .array(
-      z.object({
-        title: z.string().min(1).describe('子任务标题'),
-        what: z.string().min(1).describe('子任务内容（六要素必填项）'),
-        mustNot: z.string().optional().describe('禁止事项'),
-        references: z
-          .string()
-          .optional()
-          .describe(
-            '参考依据（涉代码改动时必填：给出具体文件路径或模块名，评审将核查其真实性）',
-          ),
-        acceptance: z
-          .string()
-          .min(1)
-          .describe(
-            '验收标准（必填）。必须可判定：明确"怎样算通过/不通过"，如"访问 /login 提交错误密码返回 401 且提示文案包含『密码错误』"。禁止空泛表述（"功能正常""可用"）',
-          ),
-        qa: z
-          .string()
-          .min(1)
-          .describe(
-            'QA 要求（必填）。格式＝工具＋步骤＋预期结果，如 "playwright 打开 /login，输入错误密码提交，断言出现错误提示"；或 "curl POST /api/v1/users 缺少 name 字段，断言 400"。禁止无工具无步骤的表述（"测试一下""验证功能"）',
-          ),
-        commit: z.string().optional().describe('交付产物'),
-        assigneeInstanceId: z
-          .string()
-          .optional()
-          .describe('指派实例 id（须属于任务团队未移除成员）'),
-      }),
-    )
-    .min(1)
-    .describe('计划子任务（至少 1 项）'),
-});
-
-type PlanSubmitArgs = z.infer<typeof planSubmitSchema>;
-
-export const planReviewSchema = z
-  .object({
-    taskId: z.string().describe('任务 ID'),
-    selfInstanceId: z
-      .string()
-      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-    planId: z.string().optional().describe('计划 id（缺省取任务当前计划）'),
-    verdict: z.enum(['approved', 'rejected']).describe('评审结论'),
-    reason: z.string().optional().describe('评审说明（rejected 时必填）'),
-  })
-  .refine(
-    (data) =>
-      data.verdict !== 'rejected' || (data.reason ?? '').trim().length > 0,
-    { message: '评审驳回必须填写 reason', path: ['reason'] },
-  );
-
-type PlanReviewArgs = z.infer<typeof planReviewSchema>;
-
-const planTaskTransitionSchema = z.object({
-  taskId: z.string().describe('任务 ID'),
-  selfInstanceId: z
-    .string()
-    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-  planTaskId: z.string().describe('计划子任务 id（pt_ 前缀）'),
-  status: z
-    .enum(['in_progress', 'done', 'blocked', 'skipped'])
-    .describe(
-      '子任务新状态：in_progress 进行中 / done 完成 / blocked 阻塞 / skipped 跳过',
-    ),
-});
-
-type PlanTaskTransitionArgs = z.infer<typeof planTaskTransitionSchema>;
-
-/** team_view：任务团队实时视图（只读，无 selfInstanceId——仅校验 worker 有该任务会话）。
- * team-free-chat todo-4：保持 task-bound（团队实时视图按任务聚合实例快照与计划概览，
- * 无任务锚点语义不清），不加入可选 5 工具。 */
 export const teamViewSchema = z.object({
   taskId: z.string().describe('任务 ID'),
 });
@@ -465,33 +383,6 @@ export const myProfileSchema = z.object({
 type MyProfileArgs = z.infer<typeof myProfileSchema>;
 
 /**
- * plan_get：读取任务执行计划（只读，评审者读计划通道——Metis MAJOR-4 闭环）。
- * 无 selfInstanceId：仅校验 worker 有该任务会话（对齐 team_view/memorySearch 只读先例）。
- */
-export const planGetSchema = z.object({
-  taskId: z.string().describe('任务 ID'),
-  planId: z.string().optional().describe('计划 id（缺省取任务当前计划）'),
-});
-
-type PlanGetArgs = z.infer<typeof planGetSchema>;
-
-/**
- * plan_assign_reviewer：指派执行计划评审者（Oracle R3 独立工具，仅主 Agent 可调）。
- * 评审者可经 plan_get 读取计划全文、经 plan_review 完成评审（reviewer 权限联动）。
- */
-export const planAssignReviewerSchema = z.object({
-  taskId: z.string().describe('任务 ID'),
-  selfInstanceId: z
-    .string()
-    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-  reviewerInstanceId: z
-    .string()
-    .describe('被指派评审者成员 id（tmm_ 前缀，须为任务归属团队成员）'),
-});
-
-type PlanAssignReviewerArgs = z.infer<typeof planAssignReviewerSchema>;
-
-/**
  * team_add_member：主 Agent 申请将 Agent 加入团队（L2 自治确认门，vteam-team-collaboration
  * Todo 8）。仅主 Agent 可调；创建平台 question 确认请求（question_confirm 确认门），用户
  * 确认后才会真正加入团队并写 team_add 审计。
@@ -507,6 +398,29 @@ export const teamAddMemberSchema = z.object({
 });
 
 type TeamAddMemberArgs = z.infer<typeof teamAddMemberSchema>;
+
+/**
+ * plan_mode：切换任务计划模式开关（仅主 Agent 可调）。
+ * enabled=true → 主 Agent 先出计划文件（工作目录 `.opencode/plans/*.md`，计划 Tab 直接同步展示），
+ * 其他成员只评审不起草；
+ * enabled=false → 直接执行。agentName 可选：同步指定主 Agent 的执行 agent
+ * （如切到 'build'；空串=回跟随默认；不传=保持当前选择）。
+ */
+export const planModeSchema = z.object({
+  taskId: z.string().describe('任务 ID'),
+  selfInstanceId: z
+    .string()
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  enabled: z.boolean().describe('计划模式开关（true=开启，false=关闭/切回直接执行）'),
+  agentName: z
+    .string()
+    .optional()
+    .describe(
+      '同步指定的主 Agent 执行 agent 名（如 build；空串=回跟随默认；不传=保持当前）',
+    ),
+});
+
+type PlanModeArgs = z.infer<typeof planModeSchema>;
 
 const channelSendSchema = z.object({
   // team-free-chat todo-4：channel_send 无 taskId 入参（任务上下文由服务端按 worker 会话
@@ -791,31 +705,9 @@ export function buildPlatformMcpTools(
         service.memorySearch(ctx, args as MemorySearchArgs),
     },
     {
-      name: 'plan_submit',
-      description:
-        '提交执行计划（仅主 Agent 可调用）。必填：title + tasks[].title/what/acceptance/qa（acceptance 需可判定如“访问 /login 提交错误密码返回 401 且提示包含密码错误”、qa 需“工具+步骤+预期”如“curl POST /api/v1/users 缺少 name 断言 400”或“playwright 打开 /login 输入错误密码提交断言提示”；白名单工具词：curl/playwright/http/fetch/api/request/test/执行/验证/断言/assert/check/preview 等，无工具词将触发质量预检 -32602）。六要素完整：what/mustNot/references/acceptance/qa/commit（前3可空后2必填）。评审通过后可实施。重复提交：已处于 rejected/completed 的旧计划将被覆盖重提（原评审者自动失效），否则 409。返回 {planId, status: "reviewing", taskCount}。',
-      inputSchema: planSubmitSchema,
-      handler: (ctx, args) => service.planSubmit(ctx, args as PlanSubmitArgs),
-    },
-    {
-      name: 'plan_review',
-      description:
-        '评审执行计划（主 Agent 或已被指派的评审者可调用）。评审时只查四件事：1 引用核查（references 文件是否真实存在）2 可起步（子任务有足够上下文）3 一致性（子任务无矛盾）4 QA 可执行（qa 含工具＋步骤＋预期结果）。四项全过 approved；有阻塞 rejected 附 reason 最多 3 个致命问题。verdict=approved 通过后可实施；rejected 驳回后可修改重提或切换 direct 模式，连续驳回 3 次后需人工裁决。评审完成后评审者身份即失效。返回 {planId, status: "approved"|"rejected"}。',
-      inputSchema: planReviewSchema,
-      handler: (ctx, args) => service.planReview(ctx, args as PlanReviewArgs),
-    },
-    {
-      name: 'plan_task_transition',
-      description:
-        '流转计划子任务状态（子任务指派者或主 Agent 可调用）：in_progress/done/blocked/skipped。所有子任务均达终态（done/blocked/skipped）时自动在群聊提示可提交验收。返回 {planTaskId, status}。',
-      inputSchema: planTaskTransitionSchema,
-      handler: (ctx, args) =>
-        service.planTaskTransition(ctx, args as PlanTaskTransitionArgs),
-    },
-    {
       name: 'team_view',
       description:
-        '查询任务团队的实时视图（只读，无需 selfInstanceId）：成员列表（实例 id/agent id/别名/角色/序号/主标注 + 会话实时状态 sessionStatus/sessionId）+ 执行计划子任务分配概览 planSummary（total 总子任务数 / done 已终态 / pending 未完成）。返回 {taskId, members: [{id, agentId, alias, role, seq, main, sessionStatus, sessionId}], planSummary: {total, done, pending}}。',
+        '查询任务团队的实时视图（只读，无需 selfInstanceId）：成员列表（实例 id/agent id/别名/角色/序号/主标注 + 会话实时状态 sessionStatus/sessionId）。返回 {taskId, members: [{id, agentId, alias, role, seq, main, sessionStatus, sessionId}]}。',
       inputSchema: teamViewSchema,
       handler: (ctx, args) => service.teamView(ctx, args as TeamViewArgs),
     },
@@ -827,27 +719,19 @@ export function buildPlatformMcpTools(
       handler: (ctx, args) => service.myProfile(ctx, args as MyProfileArgs),
     },
     {
-      name: 'plan_get',
-      description:
-        '读取任务执行计划（只读，评审者读计划通道，无需 selfInstanceId）：计划头（含 reviewerInstanceId）+ 子任务清单全文（六要素 content + 指派概览）。评审者读取后按四项清单核查：引用真实性/可起步/一致性/QA 可执行性。返回 {id, taskId, title, summary, scopeIn, scopeOut, status, createdBy, reviewerInstanceId, createdAt, updatedAt, tasks: [{id, seq, title, content, assigneeInstanceId, assigneeAlias, assigneeName, status}]}。',
-      inputSchema: planGetSchema,
-      handler: (ctx, args) => service.planGet(ctx, args as PlanGetArgs),
-    },
-    {
-      name: 'plan_assign_reviewer',
-      description:
-        '指派执行计划评审者（仅主 Agent 可调用）：写入计划评审者 + 群聊提示「已指派 <alias> 评审执行计划」。被指派评审者可经 plan_get 读取计划全文、经 plan_review 完成评审。返回 {planId, taskId, reviewerInstanceId, reviewerAlias}。',
-      inputSchema: planAssignReviewerSchema,
-      handler: (ctx, args) =>
-        service.planAssignReviewer(ctx, args as PlanAssignReviewerArgs),
-    },
-    {
       name: 'team_add_member',
       description:
         '申请将 Agent 加入团队（仅主 Agent 可调用，L2 自治确认门）：创建用户确认请求（question_confirm 确认门，question 弹窗「是否确认」），用户确认后才真正加入团队并写 team_add 审计；重复申请（已加入/有 pending 申请）被拒绝。返回 {requestId, taskId, agentId, alias}。',
       inputSchema: teamAddMemberSchema,
       handler: (ctx, args) =>
         service.teamAddMember(ctx, args as TeamAddMemberArgs),
+    },
+    {
+      name: 'plan_mode',
+      description:
+        '切换任务计划模式开关（仅主 Agent 可调用）：enabled=true 开启（主 Agent 先出计划文档，其他成员只评审不起草）；enabled=false 关闭切回直接执行。agentName 可选同步指定主 Agent 的执行 agent（如 build；空串=回跟随默认；不传=保持当前）。返回 {taskId, planMode, agentName}。',
+      inputSchema: planModeSchema,
+      handler: (ctx, args) => service.planMode(ctx, args as PlanModeArgs),
     },
     {
       name: 'channel_send',

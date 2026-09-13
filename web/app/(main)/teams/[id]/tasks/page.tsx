@@ -23,7 +23,6 @@ interface TaskItem {
   description: string | null;
   priority: string;
   status: TaskApiStatus;
-  executionMode: "direct" | "plan";
   teamAgentIds: string[];
   createdAt: string;
   completedAt: string | null;
@@ -243,28 +242,6 @@ export default function TeamTasksPage() {
                       <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>
                         {task.title}
                       </div>
-                      {task.executionMode === "plan" && (
-                        <span
-                          data-testid="plan-badge"
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: space.xs,
-                            padding: `${space.xs - 1}px ${space.sm}px`,
-                            borderRadius: radius.pill,
-                            backgroundColor: "rgba(13,148,136,0.10)",
-                            border: "1px solid rgba(13,148,136,0.22)",
-                            color: "#0D9488",
-                            fontSize: fontSize.xs,
-                            fontWeight: 500,
-                            lineHeight: 1.4,
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          <span aria-hidden style={{ width: 5, height: 5, borderRadius: "50%", backgroundColor: "#0D9488", flexShrink: 0 }} />
-                          计划
-                        </span>
-                      )}
                     </div>
                     {task.description && (
                       <div

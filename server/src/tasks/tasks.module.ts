@@ -10,6 +10,8 @@ import { TasksController } from './tasks.controller';
 import { MigrateController } from './migrate.controller';
 import { TaskChannelBindingsController } from './task-channel-bindings.controller';
 import { TasksService } from './tasks.service';
+import { PlanStepsService } from './plan-steps.service';
+import { PlanDocsService } from './plan-docs.service';
 
 /**
  * 任务模块（09 篇 §3.4 Tasks；13 篇 §4.1 创建）。
@@ -40,6 +42,8 @@ import { TasksService } from './tasks.service';
   ],
   providers: [
     TasksService,
+    PlanStepsService,
+    PlanDocsService,
     TaskProgressionScheduler,
     TeamMembershipGuard,
     PermissionGuard,

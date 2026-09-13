@@ -38,7 +38,6 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     // T10 起 Agent 选择改为团队成员只读预览（team-member-preview-item；agent-option 已拆除）
     await expect(page.getByTestId("team-member-preview-item").first()).toBeVisible();
     await expect(page.getByTestId("create-task-button")).toBeVisible();
-    await expect(page.getByTestId("execution-mode-select")).toBeVisible();
   });
 
   test("4/17 task-board /board?teamId=tm_0000000001", async ({ page }) => {
@@ -48,11 +47,6 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("status-filter")).toBeVisible();
     await expect(page.getByTestId("task-card").first()).toBeVisible();
     await expect(page.getByTestId("status-badge").first()).toBeVisible();
-    // plan-badge 仅 executionMode==='plan' 的任务渲染——seed 无 plan 任务时跳过
-    const badges = page.getByTestId("plan-badge");
-    if ((await badges.count()) > 0) {
-      await expect(badges.first()).toBeVisible();
-    }
   });
 
   test("4b/17 board-drawer 看板卡片开抽屉不进聊天", async ({ page, request }) => {

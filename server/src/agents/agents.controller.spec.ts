@@ -19,6 +19,10 @@ describe('AgentsController', () => {
     update: jest.Mock;
     remove: jest.Mock;
     getAvailableModels: jest.Mock;
+    listOpencodeAgents: jest.Mock;
+    getOmoConfig: jest.Mock;
+    setOmoConfig: jest.Mock;
+    getOmoAgentPrompt: jest.Mock;
   };
 
   const user = { id: 'u_admin', username: 'admin', roleId: 'r_admin' };
@@ -32,6 +36,10 @@ describe('AgentsController', () => {
       update: jest.fn(),
       remove: jest.fn(),
       getAvailableModels: jest.fn(),
+      listOpencodeAgents: jest.fn(),
+      getOmoConfig: jest.fn(),
+      setOmoConfig: jest.fn(),
+      getOmoAgentPrompt: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -144,6 +152,133 @@ describe('AgentsController', () => {
 
     expect(service.getAvailableModels).toHaveBeenCalledWith('a_product');
     expect(result).toHaveLength(1);
+  });
+
+  it('GET /agents/opencode 转发 listOpencodeAgents（workerId/directory 透传）', async () => {
+    service.listOpencodeAgents.mockResolvedValue({
+      agents: [{ name: 'plan', mode: 'primary', native: true }],
+      workerId: 'w_1',
+      degraded: false,
+    });
+
+    const result = await controller.listOpencodeAgents(
+      'w_1',
+      '/data/vteam-worker/tasks/t_1',
+    );
+
+    expect(service.listOpencodeAgents).toHaveBeenCalledWith({
+      workerId: 'w_1',
+      directory: '/data/vteam-worker/tasks/t_1',
+    });
+    expect(result.agents[0].name).toBe('plan');
+  });
+
+  it('GET /agents/opencode 无参数 → service 收到 undefined（由 service 选 worker）', async () => {
+    service.listOpencodeAgents.mockResolvedValue({
+      agents: [],
+      workerId: null,
+      degraded: true,
+    });
+
+    await controller.listOpencodeAgents(undefined, undefined);
+
+    expect(service.listOpencodeAgents).toHaveBeenCalledWith({
+      workerId: undefined,
+      directory: undefined,
+    });
+  });
+
+  /**
+   * 路由顺序回归（关键）：`GET /agents/opencode` 必须早于 `GET /agents/:id` 声明，
+   * 否则 Nest 按声明顺序匹配会把 "opencode" 当作 :id 吞掉（落到 findOne → 404）。
+   * 直接断言装饰器元数据里的路由声明顺序，防止后续重构把静态路由挪到 :id 之后。
+   */
+  it('路由顺序：opencode 静态路由声明早于 :id 通配路由', () => {
+    const path = require('path');
+    const src = require('fs').readFileSync(
+      path.join(__dirname, 'agents.controller.ts'),
+      'utf8',
+    );
+    // 用行首锚定（^\s*@Get(...)）避免匹配到注释里提到的路由文本
+    const opencodeIdx = src.search(/^\s*@Get\('opencode'\)/m);
+    const idIdx = src.search(/^\s*@Get\(':id'\)/m);
+    expect(opencodeIdx).toBeGreaterThan(-1);
+    expect(idIdx).toBeGreaterThan(-1);
+    expect(opencodeIdx).toBeLessThan(idIdx);
+  });
+
+  it('路由顺序：omo-config 的 GET/PATCH 均早于对应 :id（回归：PATCH 曾被 :id 吞成 404）', () => {
+    const path = require('path');
+    const src = require('fs').readFileSync(
+      path.join(__dirname, 'agents.controller.ts'),
+      'utf8',
+    );
+    const getOmo = src.search(/^\s*@Get\('omo-config'\)/m);
+    const getById = src.search(/^\s*@Get\(':id'\)/m);
+    expect(getOmo).toBeGreaterThan(-1);
+    expect(getOmo).toBeLessThan(getById);
+
+    // PATCH 同样必须在前：@Patch(':id') 更早时 PATCH /agents/omo-config 会被当作
+    // id="omo-config" 落到 update() → 404 AGENT_NOT_FOUND（实测踩坑）
+    const patchOmo = src.search(/^\s*@Patch\('omo-config'\)/m);
+    const patchById = src.search(/^\s*@Patch\(':id'\)/m);
+    expect(patchOmo).toBeGreaterThan(-1);
+    expect(patchById).toBeGreaterThan(-1);
+    expect(patchOmo).toBeLessThan(patchById);
+
+    // omo-agent-prompt 同样必须早于 :id（否则被当作 id=omo-agent-prompt → 404）
+    const promptOmo = src.search(/^\s*@Get\('omo-agent-prompt'\)/m);
+    expect(promptOmo).toBeGreaterThan(-1);
+    expect(promptOmo).toBeLessThan(getById);
+  });
+
+  it('GET /agents/omo-agent-prompt 透传 name + workerId', async () => {
+    service.getOmoAgentPrompt.mockResolvedValue({
+      name: 'Prometheus - Plan Builder',
+      description: 'Plan agent',
+      prompt: 'You are Prometheus…',
+      empty: false,
+    });
+
+    const result = await controller.getOmoAgentPrompt('prometheus', 'w_1');
+
+    expect(service.getOmoAgentPrompt).toHaveBeenCalledWith('prometheus', {
+      workerId: 'w_1',
+    });
+    expect(result.prompt).toContain('Prometheus');
+  });
+
+  it('GET /agents/omo-config 转发 workerId 到 service', async () => {
+    service.getOmoConfig.mockResolvedValue({
+      agents: { sisyphus: 'opencode/big-pickle' },
+      available: ['sisyphus'],
+      workerId: 'w_1',
+      degraded: false,
+    });
+
+    const result = await controller.getOmoConfig('w_1');
+
+    expect(service.getOmoConfig).toHaveBeenCalledWith({ workerId: 'w_1' });
+    expect(result.agents).toEqual({ sisyphus: 'opencode/big-pickle' });
+  });
+
+  it('PATCH /agents/omo-config 只把 agents 透传（workerId 走 query）', async () => {
+    service.setOmoConfig.mockResolvedValue({
+      written: '/p',
+      agents: { sisyphus: 'a/b' },
+      workerId: 'w_1',
+    });
+
+    const result = await controller.setOmoConfig(
+      { agents: { sisyphus: 'a/b' } } as never,
+      'w_1',
+    );
+
+    expect(service.setOmoConfig).toHaveBeenCalledWith(
+      { sisyphus: 'a/b' },
+      { workerId: 'w_1' },
+    );
+    expect(result.workerId).toBe('w_1');
   });
 
   describe('DTO 校验（class-validator，QA ISSUE-009 空名）', () => {

@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
   Query,
+  ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -29,11 +30,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { QueryTasksDto } from './dto/query-tasks.dto';
 import { RejectTaskDto } from './dto/reject-task.dto';
-import { UpdateExecutionModeDto } from './dto/update-execution-mode.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { UpdateInstanceDto } from './dto/update-instance.dto';
 import { TasksService } from './tasks.service';
+import { PlanStepsService } from './plan-steps.service';
+import { PlanDocsService } from './plan-docs.service';
+import { UploadPlanDocDto } from './dto/upload-plan-doc.dto';
 
 /**
  * 任务端点（09 篇 §3.4 Tasks 部分）。
@@ -56,6 +59,8 @@ export class TasksController {
   constructor(
     private readonly tasksService: TasksService,
     private readonly prisma: PrismaService,
+    private readonly planStepsService: PlanStepsService,
+    private readonly planDocsService: PlanDocsService,
   ) {}
 
   /**
@@ -159,6 +164,68 @@ export class TasksController {
   }
 
   /**
+   * 计划执行步骤（只读，计划 Tab 步骤区数据源）。
+   * GET /api/v1/tasks/:id/plan-steps → {steps, workerId, degraded}
+   *
+   * 定位链：任务 → 团队主 Agent 成员 session（workerId + instanceRef）→
+   * worker GET /todos → serve GET /session/{id}/todo。任一环节缺失 → degraded，
+   * 不抛错（列表类端点不阻断页面）。步骤状态只由 agent 经 opencode todo 工具推进，
+   * vteam 不写。
+   */
+  @Get('tasks/:id/plan-steps')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('tasks.view')
+  @ApiOperation({ summary: '计划执行步骤（opencode todo 只读透传）' })
+  listPlanSteps(@Param('id') id: string) {
+    return this.planStepsService.listPlanSteps(id);
+  }
+
+  /**
+   * 计划文档列表（只读，计划 Tab 列表区数据源）。
+   * GET /api/v1/tasks/:id/plan-docs → {files, workerId, directory, degraded}
+   *
+   * 数据源是任务目录 `.opencode/plans/*.md` 的真实文件（agent 写的、或用户上传的），
+   * 一并下发正文供 Modal 直接渲染（免二次请求）。vteam 不落库、不维护版本——文件即真相；
+   * 目录为空是常态（degraded=false + files=[]），读不到才是 degraded=true。
+   */
+  @Get('tasks/:id/plan-docs')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('tasks.view')
+  @ApiOperation({ summary: '计划文档列表（任务目录 .opencode/plans 只读同步）' })
+  listPlanDocs(@Param('id') id: string) {
+    return this.planDocsService.listPlanDocs(id);
+  }
+
+  /**
+   * 上传/覆盖计划文档（写路径）。
+   * POST /api/v1/tasks/:id/plan-docs {name, content} → {name, updatedAt, directory}
+   *
+   * 文件写进任务目录 `.opencode/plans/<name>`——agent 侧同目录立即可读，页面下轮轮询可见。
+   * 只做文件同步：不解析内容、不改 agent 行为（要不要采纳计划由 agent 自己决定）。
+   * 权限点用 tasks.edit（与任务编辑同级：都会影响任务的执行输入）。
+   */
+  @Post('tasks/:id/plan-docs')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('tasks.edit')
+  @ApiOperation({ summary: '上传计划文档（写入任务目录 .opencode/plans）' })
+  async uploadPlanDoc(@Param('id') id: string, @Body() dto: UploadPlanDocDto) {
+    try {
+      return await this.planDocsService.writePlanDoc(id, {
+        name: dto.name,
+        content: dto.content,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // 定位不到 worker（团队无主 Agent / 无会话 / 离线）是"暂时不可用"而非服务端 bug，
+      // 用 503 + 可读原因回给前端（否则用户只看到 500，无法判断该找主 Agent 还是重试）。
+      if (message.includes('未定位到可用的 worker')) {
+        throw new ServiceUnavailableException(message);
+      }
+      throw err;
+    }
+  }
+
+  /**
    * 编辑任务（标题/描述/优先级/主 Agent）。
    * PATCH /api/v1/tasks/:id
    */
@@ -202,21 +269,6 @@ export class TasksController {
     @Body() dto: UpdateInstanceDto,
   ) {
     return this.tasksService.updateInstance(id, instanceId, dto);
-  }
-
-  /**
-   * 切换任务执行模式（tc-flow）：direct ↔ plan。
-   * PATCH /api/v1/tasks/:id/execution-mode
-   */
-  @Patch('tasks/:id/execution-mode')
-  @UseGuards(PermissionGuard)
-  @RequirePermission('tasks.edit')
-  @ApiOperation({ summary: '切换任务执行模式（direct/plan）' })
-  updateExecutionMode(
-    @Param('id') id: string,
-    @Body() dto: UpdateExecutionModeDto,
-  ) {
-    return this.tasksService.updateExecutionMode(id, dto.mode);
   }
 
   /**

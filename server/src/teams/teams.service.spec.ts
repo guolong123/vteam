@@ -10,12 +10,17 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { TeamsService } from './teams.service';
 import { sanitizeWorkDirName } from '../tasks/work-dir.util';
+import { WorkerClient } from '../workers/worker.client';
+import { WorkersService } from '../workers/workers.service';
 
 describe('TeamsService', () => {
   let service: TeamsService;
   let prisma: any;
   let idGen: { nextId: jest.Mock; seed: jest.Mock };
   let realtime: { broadcast: jest.Mock };
+  /** opencodeAgentName 弱校验用（默认无在线 worker + 空清单 → 静默放行）。 */
+  let workerClient: { listAgents: jest.Mock };
+  let workersService: { assignWorker: jest.Mock };
 
   const userId = 'u_admin';
 
@@ -89,6 +94,9 @@ describe('TeamsService', () => {
     };
     idGen = { nextId: jest.fn(), seed: jest.fn() };
     realtime = { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
+    // 默认：无在线 worker（assignWorker → null）→ opencodeAgentName 弱校验静默放行
+    workerClient = { listAgents: jest.fn().mockResolvedValue([]) };
+    workersService = { assignWorker: jest.fn().mockResolvedValue(null) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -96,6 +104,8 @@ describe('TeamsService', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: IdGeneratorService, useValue: idGen },
         { provide: RealtimeService, useValue: realtime },
+        { provide: WorkerClient, useValue: workerClient },
+        { provide: WorkersService, useValue: workersService },
       ],
     }).compile();
     service = module.get<TeamsService>(TeamsService);
@@ -938,6 +948,121 @@ describe('TeamsService', () => {
         expect.objectContaining({ action: 'member_update' }),
         { type: 'team', id: 'tm_0000000001' },
       );
+    });
+
+    it('opencodeAgentName：非空 → 落库原值（弱校验通过，不进事务失败）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findUnique = jest
+        .fn()
+        .mockResolvedValue({ id: 'tmm_0000000001', teamId: 'tm_0000000001' });
+      const updateMock = jest.fn().mockResolvedValue({ id: 'tmm_0000000001' });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          teamMember: { update: updateMock },
+          team: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+      // worker 在线且清单含 plan → 弱校验通过
+      workersService.assignWorker.mockResolvedValue('w_1');
+      workerClient.listAgents.mockResolvedValue([
+        { name: 'build', mode: 'primary' },
+        { name: 'plan', mode: 'primary' },
+      ]);
+
+      await service.updateMember('tm_0000000001', 'tmm_0000000001', {
+        opencodeAgentName: 'plan',
+      } as any);
+
+      expect(updateMock).toHaveBeenCalledWith({
+        where: { id: 'tmm_0000000001' },
+        data: { opencodeAgentName: 'plan' },
+      });
+    });
+
+    it('opencodeAgentName：空串 → 归一为 null（清除选择，回 opencode 默认 agent）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findUnique = jest
+        .fn()
+        .mockResolvedValue({ id: 'tmm_0000000001', teamId: 'tm_0000000001' });
+      const updateMock = jest.fn().mockResolvedValue({ id: 'tmm_0000000001' });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          teamMember: { update: updateMock },
+          team: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+
+      await service.updateMember('tm_0000000001', 'tmm_0000000001', {
+        opencodeAgentName: '  ',
+      } as any);
+
+      expect(updateMock).toHaveBeenCalledWith({
+        where: { id: 'tmm_0000000001' },
+        data: { opencodeAgentName: null },
+      });
+      // 空值不做弱校验（无需查 worker）
+      expect(workerClient.listAgents).not.toHaveBeenCalled();
+    });
+
+    it('opencodeAgentName：清单中不存在 → 仍写入（弱校验只告警，不阻断用户意图）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findUnique = jest
+        .fn()
+        .mockResolvedValue({ id: 'tmm_0000000001', teamId: 'tm_0000000001' });
+      const updateMock = jest.fn().mockResolvedValue({ id: 'tmm_0000000001' });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          teamMember: { update: updateMock },
+          team: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+      workersService.assignWorker.mockResolvedValue('w_1');
+      workerClient.listAgents.mockResolvedValue([{ name: 'build' }]);
+
+      await service.updateMember('tm_0000000001', 'tmm_0000000001', {
+        opencodeAgentName: 'nonexistent-agent',
+      } as any);
+
+      expect(updateMock).toHaveBeenCalledWith({
+        where: { id: 'tmm_0000000001' },
+        data: { opencodeAgentName: 'nonexistent-agent' },
+      });
+    });
+
+    it('opencodeAgentName：弱校验抛错（worker 离线）不阻断写入', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findUnique = jest
+        .fn()
+        .mockResolvedValue({ id: 'tmm_0000000001', teamId: 'tm_0000000001' });
+      const updateMock = jest.fn().mockResolvedValue({ id: 'tmm_0000000001' });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          teamMember: { update: updateMock },
+          team: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+      workersService.assignWorker.mockRejectedValue(new Error('no worker'));
+
+      await service.updateMember('tm_0000000001', 'tmm_0000000001', {
+        opencodeAgentName: 'plan',
+      } as any);
+
+      expect(updateMock).toHaveBeenCalledWith({
+        where: { id: 'tmm_0000000001' },
+        data: { opencodeAgentName: 'plan' },
+      });
     });
 
     it('空更新 → 直接返回 findOne，不进事务', async () => {

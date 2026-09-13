@@ -5,7 +5,7 @@
  * =============================================
  * 看板 TaskCard 去聊天化：点击卡片打开本抽屉，不再 router.push(/tasks/:id) 聊天页。
  * 数据源：GET /tasks/:id + GET /tasks/:id/artifacts + GET /issues?taskId= +
- * GET /plans?taskId= + GET /teams/:teamId；无任何聊天组件（MessageList/输入/SSE）。
+ * GET /teams/:teamId；无任何聊天组件（MessageList/输入/SSE）。
  * 铁律 T15：无 fixed / 100vh / 100vw，浮层 absolute 相对宿主 + 遮罩 + Esc 关闭。
  */
 import { useEffect, type CSSProperties, type ReactNode } from "react";
@@ -42,7 +42,6 @@ interface TaskDetail {
   title: string;
   description: string | null;
   status: TaskApiStatus;
-  executionMode?: "direct" | "plan";
   mainAgentId: string | null;
   mainAgentInstanceId?: string | null;
   teamAgentIds: string[];
@@ -75,15 +74,6 @@ interface IssueItem {
 interface IssuesResponse {
   items: IssueItem[];
   total: number;
-}
-
-interface PlanWithTasks {
-  id: string;
-  taskId: string;
-  title: string;
-  summary: string | null;
-  status: string;
-  tasks: { id: string; seq: number; title: string; status: string }[];
 }
 
 const STATUS_LABEL: Record<TaskApiStatus, string> = {
@@ -162,8 +152,6 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
     enabled,
     retry: false,
   });
-  /* 计划仅存在于「计划驱动」任务（direct 模式无计划，不请求 /plans 避免 404）。 */
-  const planEnabled = enabled && taskQuery.data?.executionMode === "plan";
   const artifactsQuery = useQuery({
     queryKey: ["task", taskId, "artifacts"],
     queryFn: () =>
@@ -176,12 +164,6 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
     queryFn: () =>
       api.get<IssuesResponse>("/issues", { query: { taskId: taskId!, page: 1, pageSize: 100 } }),
     enabled,
-    retry: false,
-  });
-  const plansQuery = useQuery({
-    queryKey: ["plans", taskId],
-    queryFn: () => api.get<PlanWithTasks>("/plans", { query: { taskId: taskId! } }),
-    enabled: planEnabled,
     retry: false,
   });
 
@@ -203,9 +185,6 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
     if (issuesQuery.error) console.error("[TaskDetailDrawer] GET /issues?taskId= failed", { taskId, error: issuesQuery.error });
   }, [issuesQuery.error, taskId]);
   useEffect(() => {
-    if (plansQuery.error) console.error("[TaskDetailDrawer] GET /plans?taskId= failed", { taskId, error: plansQuery.error });
-  }, [plansQuery.error, taskId]);
-  useEffect(() => {
     if (teamQuery.error) console.error("[TaskDetailDrawer] GET /teams/:id failed", { taskId, teamId, error: teamQuery.error });
   }, [teamQuery.error, taskId, teamId]);
 
@@ -214,7 +193,6 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
   const task = taskQuery.data;
   const artifacts = artifactsQuery.data?.items ?? [];
   const issues = [...(issuesQuery.data?.items ?? [])];
-  const plan = plansQuery.data ?? null;
   const team = teamQuery.data ?? null;
 
   return (
@@ -305,9 +283,6 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
               >
                 {STATUS_LABEL[task.status]}
               </span>
-              {task.executionMode === "plan" ? (
-                <span style={{ fontSize: fontSize.xs, color: "#0D9488" }}>计划模式</span>
-              ) : null}
             </div>
 
             {task.description ? (
@@ -375,22 +350,6 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
                     </li>
                   ))}
                 </ul>
-              )}
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-              <SectionTitle>执行计划</SectionTitle>
-              {plansQuery.isPending ? (
-                <div style={{ fontSize: fontSize.sm, color: neutral[400] }}>加载中…</div>
-              ) : !plan ? (
-                <div data-testid="task-drawer-plan-empty" style={{ fontSize: fontSize.sm, color: neutral[400] }}>暂无执行计划</div>
-              ) : (
-                <div data-testid="task-drawer-plan" style={{ fontSize: fontSize.sm, color: neutral[800] }}>
-                  <div style={{ fontWeight: 600 }}>{plan.title}</div>
-                  <div style={{ color: neutral[500], marginTop: space.xs }}>
-                    状态：{plan.status} · 子任务 {plan.tasks.length} 项
-                  </div>
-                </div>
               )}
             </div>
 

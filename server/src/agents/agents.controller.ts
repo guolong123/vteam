@@ -18,6 +18,7 @@ import {
 } from '../common/decorators/current-user.decorator';
 import { AgentsService } from './agents.service';
 import { CloneAgentDto } from './dto/clone-agent.dto';
+import { UpdateOmoConfigDto } from './dto/update-omo-config.dto';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { QueryAgentsDto } from './dto/query-agents.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
@@ -77,6 +78,51 @@ export class AgentsController {
   }
 
   /**
+   * OmO（oh-my-openagent）agent→模型配置：读 + 写。
+   *
+   * ⚠️ 路由声明必须早于 `@Get(':id')`（同 listOpencodeAgents 的原因）：
+   * 否则 "omo-config" 会被 :id 通配捕获落到 findOne 报 404。
+   *
+   * 数据源是 worker 侧 `<workDir>/.opencode/oh-my-openagent.jsonc`（OmO 按 cwd 读取的
+   * 项目级配置）——vteam 不落库，配置文件即真相，本组端点只是它的读写通道。
+   *
+   * GET  /agents/omo-config?workerId= → {agents, available, workerId, degraded}
+   * PATCH /agents/omo-config {agents:{name:model}} → 增量合并；空串=清除该覆盖
+   */
+  @Get('omo-config')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('agents.view')
+  @ApiOperation({ summary: 'OmO agent→模型配置（读，透传 worker 配置文件）' })
+  getOmoConfig(@Query('workerId') workerId?: string) {
+    return this.agentsService.getOmoConfig({ workerId });
+  }
+
+  @Get('omo-agent-prompt')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('agents.view')
+  @ApiOperation({ summary: 'OmO 单个 agent 的系统提示词（按需拉取，避免列表下发 100KB+）' })
+  getOmoAgentPrompt(
+    @Query('name') name: string,
+    @Query('workerId') workerId?: string,
+  ) {
+    return this.agentsService.getOmoAgentPrompt(name, { workerId });
+  }
+
+  @Patch('omo-config')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('agents.edit')
+  @ApiOperation({ summary: 'OmO agent→模型配置（写，增量合并到 worker 配置文件）' })
+  setOmoConfig(
+    @Body() dto: UpdateOmoConfigDto,
+    @Query('workerId') workerId?: string,
+  ) {
+    return this.agentsService.setOmoConfig(dto.agents, {
+      workerId,
+      enabled: dto.enabled,
+    });
+  }
+
+  /**
    * 更新 Agent（is_0000000030：template/内置也可修改设置字段，agentId/type 不可改）。
    * PATCH /api/v1/agents/:id {prompt?, role?, skillIds?, toolEffects?, permissionScope?, defaultModelId?}
    * skillIds/toolEffects 显式传入时重建关联。
@@ -101,6 +147,29 @@ export class AgentsController {
   @ApiOperation({ summary: '删除 Agent（template → 403；custom 含关联清理）' })
   remove(@Param('id') id: string) {
     return this.agentsService.remove(id);
+  }
+
+  /**
+   * opencode 原生 agent 列表（vteam 同步/展示/切换的数据源）。
+   * GET /api/v1/agents/opencode?workerId=&directory= → {agents, workerId, degraded}
+   *
+   * ⚠️ 路由声明必须早于 `@Get(':id')`：否则 "opencode" 会被 :id 通配捕获
+   * （同一 controller 内路由按声明顺序匹配），导致请求落到 findOne 报 404。
+   *
+   * 数据经 worker 执行端点透传 opencode serve `GET /agent`（非硬编码）；directory 应传
+   * 与执行期相同的任务工作目录（serve 按目录发现 opencode.json 的 agent 节）。
+   */
+  @Get('opencode')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('agents.view')
+  @ApiOperation({
+    summary: 'opencode 原生 agent 列表（透传 serve GET /agent）',
+  })
+  listOpencodeAgents(
+    @Query('workerId') workerId?: string,
+    @Query('directory') directory?: string,
+  ) {
+    return this.agentsService.listOpencodeAgents({ workerId, directory });
   }
 
   /**

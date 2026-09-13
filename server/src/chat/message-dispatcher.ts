@@ -38,6 +38,12 @@ export interface DispatchRequest {
     taskId: string;
     overrideModelId?: string;
     executionMode?: string;
+    /**
+     * 任务计划模式开关（task.planMode 透传）。
+     * 调用方已知时传入 → dispatcher 免一次 task 表读取；缺省 dispatcher 按 taskId
+     * 回查（select planMode 单字段）。注意与已废弃的 executionMode 区分。
+     */
+    planMode?: boolean;
   };
   /** 用户消息正文。 */
   text: string;

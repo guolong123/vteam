@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
   OnModuleInit,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
@@ -13,7 +14,7 @@ import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { ModelsService } from '../models/models.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { WorkerClient } from '../workers/worker.client';
+import { WorkerClient, WorkerAgentInfo } from '../workers/worker.client';
 import { WorkersService } from '../workers/workers.service';
 import { CloneAgentDto } from './dto/clone-agent.dto';
 import { CreateAgentDto } from './dto/create-agent.dto';
@@ -62,6 +63,18 @@ type FallbackModelsResult = {
 
 /** available-models 返回联合（正常=动态数组，降级=对象带 source）。 */
 export type AvailableModelsResult = LiveModelsResult | FallbackModelsResult;
+
+/**
+ * opencode 原生 agent 列表返回（GET /agents/opencode）。
+ * degraded=true 表示未能取到真实清单（无在线 worker / worker 离线 / 旧版无端点），
+ * agents 为空数组——前端据此提示"暂不可用"而非展示空列表误导用户。
+ */
+export interface OpencodeAgentsResult {
+  agents: WorkerAgentInfo[];
+  /** 实际取数的 worker id；降级且未选出 worker 时为 null。 */
+  workerId: string | null;
+  degraded: boolean;
+}
 
 /**
  * Agent 服务：列表/详情 + 完整 CRUD（Phase 3 T5）。
@@ -305,11 +318,168 @@ export class AgentsService implements OnModuleInit {
     try {
       const workerId = await this.workersService.assignWorker();
       if (!workerId) return this.fallbackModels();
-      const models = await this.workerClient.listModels({ id: workerId });
+      // 同 listOpencodeAgents：必须带 capabilities 才能解析到 worker 的 serve 基址，
+      // 否则回退 WORKER_BASE_URL（localhost）在跨容器部署下必然失败并静默降级。
+      const worker = await this.prisma.worker.findUnique({
+        where: { id: workerId },
+        select: { id: true, capabilities: true },
+      });
+      const models = await this.workerClient.listModels(
+        worker ?? { id: workerId },
+      );
       if (models.length === 0) return this.fallbackModels();
       return models.map((m) => ({ id: m.id, name: m.name }));
     } catch {
       return this.fallbackModels();
+    }
+  }
+
+  /**
+   * GET /agents/omo-config：读取 OmO 的 agent→模型配置（+ 可配置 agent 清单）。
+   *
+   * 数据源是 worker 侧 `<workDir>/.opencode/oh-my-openagent.jsonc`（OmO 按 cwd 读取的
+   * 项目级配置）。vteam 不落库、不缓存——配置文件即真相，配置页只是它的编辑器。
+   *
+   * workerId 显式传入则用之；缺省经 assignWorker 选一个可用 worker。
+   * 任一失败（无在线 worker / 离线 / 旧版无端点）→ `degraded:true`，不抛错。
+   */
+  async getOmoConfig(opts: { workerId?: string } = {}): Promise<{
+    agents: Record<string, string>;
+    available: string[];
+    workerId: string | null;
+    /** 实际生效的配置文件（相对 workDir）+ 命中位置。 */
+    configPath?: string;
+    configKind?: 'new' | 'legacy' | 'none';
+    /** 用户开关：是否加载 OmO 插件（本镜像未内置时无意义）。 */
+    enabled?: boolean;
+    /** 本镜像是否内置 OmO；false → 前端不展示该区块。 */
+    bundled?: boolean;
+    /** 已注册到 serve 的 agent 基底名 + 元数据（描述/mode）。 */
+    registered?: string[];
+    runtime?: Record<string, { description?: string; mode?: string; native?: boolean }>;
+    degraded: boolean;
+  }> {
+    try {
+      const workerId = opts.workerId ?? (await this.workersService.assignWorker());
+      if (!workerId) {
+        return { agents: {}, available: [], workerId: null, degraded: true };
+      }
+      // ⚠️ 必须带 capabilities：exec baseUrl 从 capabilities 解析，只传 { id } 会回退
+      // localhost 并在跨容器部署下静默降级（listOpencodeAgents 同类踩坑）。
+      const worker = await this.prisma.worker.findUnique({
+        where: { id: workerId },
+        select: { id: true, capabilities: true },
+      });
+      const result = await this.workerClient.getOmoConfig(
+        worker ?? { id: workerId },
+      );
+      return { ...result, workerId };
+    } catch {
+      return { agents: {}, available: [], workerId: null, degraded: true };
+    }
+  }
+
+  /**
+   * 写入 OmO 的 agent→模型配置（增量合并）。
+   * 写路径：定位失败/worker 不可达一律抛错（用户需要明确的成败反馈）。
+   */
+  async setOmoConfig(
+    agents: Record<string, string>,
+    opts: { workerId?: string; enabled?: boolean } = {},
+  ): Promise<{
+    written: string;
+    agents: Record<string, string>;
+    workerId: string;
+    configPath?: string;
+    configKind?: 'new' | 'legacy' | 'none';
+    enabled?: boolean;
+    bundled?: boolean;
+    /** serve 重启结果（配置需重启才生效）：executed / pending / skipped。 */
+    restart?: 'executed' | 'pending' | 'skipped';
+  }> {
+    const workerId = opts.workerId ?? (await this.workersService.assignWorker());
+    if (!workerId) {
+      throw new ServiceUnavailableException('未定位到可用的 worker（无在线 worker 节点）');
+    }
+    const worker = await this.prisma.worker.findUnique({
+      where: { id: workerId },
+      select: { id: true, capabilities: true },
+    });
+    if (!worker) {
+      throw new ServiceUnavailableException('指定的 worker 不存在');
+    }
+    const result = await this.workerClient.setOmoConfig(
+      worker,
+      agents,
+      opts.enabled,
+    );
+    return { ...result, workerId };
+  }
+
+  /**
+   * 取单个 OmO agent 的系统提示词全文（配置页"查看提示词"弹窗的数据源）。
+   * 按需拉取：prompt 体积大（合计约 106KB），不随列表下发。
+   */
+  async getOmoAgentPrompt(
+    name: string,
+    opts: { workerId?: string } = {},
+  ): Promise<{ name: string; description: string; mode?: string; prompt: string; empty: boolean }> {
+    const workerId = opts.workerId ?? (await this.workersService.assignWorker());
+    if (!workerId) {
+      throw new ServiceUnavailableException('未定位到可用的 worker（无在线 worker 节点）');
+    }
+    // 必须带 capabilities：exec baseUrl 由它解析（同类踩坑见 listOpencodeAgents）
+    const worker = await this.prisma.worker.findUnique({
+      where: { id: workerId },
+      select: { id: true, capabilities: true },
+    });
+    if (!worker) {
+      throw new ServiceUnavailableException('指定的 worker 不存在');
+    }
+    return this.workerClient.getOmoAgentPrompt(worker, name);
+  }
+
+  /**
+   * GET /agents/opencode：列出 opencode 原生 agent（vteam 同步/展示/切换的数据源）。
+   *
+   * 数据来自 worker 执行端点 `GET /agents`（→ opencode serve `GET /agent`），非硬编码：
+   * vteam 只做「同步 + 展示 + 切换」，agent 的 prompt/permission 语义完全由 opencode 侧
+   * 定义并强制执行（如内置 plan agent 的 edit/bash 受限）。
+   *
+   * - `directory` 必须与执行期 prompt_async 的 directory 同值：serve 按目录发现
+   *   `opencode.json` 的 agent 节（per-directory 隔离，不需要重启 serve）。
+   * - workerId 显式传入则用之；缺省经 assignWorker 选一个可用 worker。
+   * - 任一失败（无在线 worker / worker 离线 / 旧版无该端点）→ `{agents: [], degraded: true}`，
+   *   不抛错（列表类端点不阻断页面，对齐 getAvailableModels 的降级哲学）。
+   */
+  async listOpencodeAgents(opts: {
+    workerId?: string;
+    directory?: string;
+  }): Promise<OpencodeAgentsResult> {
+    try {
+      const workerId = opts.workerId ?? (await this.workersService.assignWorker());
+      if (!workerId) {
+        return { agents: [], workerId: null, degraded: true };
+      }
+      // ⚠️ 必须查 worker 行取 capabilities 再传入：exec 端点 baseUrl 从
+      // capabilities.execBaseUrl（或 capabilities.baseUrl + execPort）解析；只传 { id }
+      // 会回退到 WORKER_BASE_URL（默认 localhost:4199）——server 与 worker 分处不同容器
+      // 时必然连不上，而 listAgents 的降级 catch 会静默返回 []，症状只是 degraded=true，
+      // 极难定位（本地部署实测踩坑）。
+      const worker = await this.prisma.worker.findUnique({
+        where: { id: workerId },
+        select: { id: true, capabilities: true },
+      });
+      const agents = await this.workerClient.listAgents(
+        worker ?? { id: workerId },
+        opts.directory,
+      );
+      if (agents.length === 0) {
+        return { agents: [], workerId, degraded: true };
+      }
+      return { agents, workerId, degraded: false };
+    } catch {
+      return { agents: [], workerId: null, degraded: true };
     }
   }
 

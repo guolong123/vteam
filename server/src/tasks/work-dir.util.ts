@@ -18,3 +18,19 @@ export function sanitizeWorkDirName(name: string): string {
       .replace(/\.{2,}/g, '.') || 'agent';
   return base;
 }
+
+/**
+ * 任务工作目录根（env WORK_DIR 的缺省值）：任务目录 = `<根>/tasks/<taskId>`。
+ *
+ * 放在本纯函数模块而非 worker-dispatcher：plan-docs.service 也要用它拼同一个任务目录，
+ * 若从 worker-dispatcher 导入会重演上面注释里的循环依赖（tasks 模块 ↔ chat 模块）。
+ */
+export const DEFAULT_TASK_WORK_DIR = '/data/vteam-worker';
+
+/**
+ * 任务目录绝对路径（`<根>/tasks/<taskId>`，去尾斜杠避免 `//tasks`）。
+ * worker-dispatcher 与 plan-docs.service 共用，保证"agent 写的"与"页面读的"同目录。
+ */
+export function taskDirOf(root: string, taskId: string): string {
+  return `${String(root ?? '').replace(/\/+$/, '')}/tasks/${taskId}`;
+}

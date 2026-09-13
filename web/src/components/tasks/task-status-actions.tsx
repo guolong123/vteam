@@ -155,31 +155,18 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
   }, [rejectOpen]);
 
   const taskQuery = useQuery({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     queryKey: ["task", taskId],
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     queryFn: () => api.get<any>(`/tasks/${taskId}`),
     enabled: status === "pending",
     retry: false,
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const taskDetail: any = taskQuery.data;
-  const executionMode: string | undefined = taskDetail?.executionMode;
   const teamSize: number = Array.isArray(taskDetail?.instances)
     ? taskDetail.instances.length
     : 0;
   const hasMainAgent: boolean = !!taskDetail?.mainAgentInstanceId || !!taskDetail?.mainAgentId;
 
-  const planQuery = useQuery({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    queryKey: ["plans", taskId],
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    queryFn: () => api.get<any>("/plans", { query: { taskId } }),
-    enabled: status === "pending" && executionMode === "plan",
-    retry: false,
-  });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const plan: any = planQuery.data;
   // 排队等待 mutation 必须位于 early return 之前（hooks 顺序规则）；teamId 取自任务详情查询
   const teamId: string | null = taskDetail?.teamId ?? null;
   const enqueueMutation = useMutation({
@@ -202,11 +189,9 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
   // 排队等待：pending 孤儿重入队（有团队才展示，无团队的任务先去详情指派）
   const showStartHint = status === "pending" && (pending || !!actionError);
   const showErrorBar = status !== "pending" && !!actionError;
-  const planStatus: string | undefined = plan?.status;
   const errText: string = actionError ?? "";
   const isEmptyTeamErr = /TASK_EMPTY_TEAM|团队为空/.test(errText);
   const isMainAgentErr = /MAIN_AGENT_NOT_SET|主 Agent/.test(errText) && !/额度|plan/.test(errText);
-  const isPlanErr = /PLAN_NOT_APPROVED|执行计划/.test(errText);
 
   const handleAction = (action: TaskAction) => {
     setActionError(null);
@@ -295,13 +280,10 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
           {(() => {
             const teamOk = teamSize > 0;
             const mainOk = teamSize <= 1 ? hasMainAgent || teamSize === 0 : hasMainAgent;
-            const planOk = executionMode !== "plan" || planStatus === "approved" || planStatus === "executing";
             const teamColor = isEmptyTeamErr ? "#DC2626" : teamOk ? "#059669" : neutral[600];
             const mainColor = isMainAgentErr ? "#DC2626" : mainOk ? "#059669" : neutral[600];
-            const planColor = isPlanErr ? "#DC2626" : planOk ? "#059669" : "#D97706";
             const teamIcon = teamOk ? "✓" : "✗";
             const mainIcon = mainOk ? "✓" : "✗";
-            const planIcon = planOk ? "✓" : executionMode === "plan" && !plan ? "✗" : planStatus === "reviewing" ? "○" : planStatus === "rejected" ? "✗" : "✗";
             return (
               <>
                 <div style={{ display: "flex", alignItems: "center", gap: space.xs, color: teamColor }}>
@@ -312,22 +294,6 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
                   <span style={{ fontWeight: 700 }}>{mainIcon}</span>
                   <span>{mainOk ? "已指定主 Agent（任务负责人）" : "多 Agent 需指定主 Agent 作为任务负责人（默认产品经理）"}</span>
                 </div>
-                {executionMode === "plan" && (
-                  <div style={{ display: "flex", alignItems: "center", gap: space.xs, color: planColor }}>
-                    <span style={{ fontWeight: 700 }}>{planIcon}</span>
-                    <span>
-                      {planOk
-                        ? "执行计划已评审通过"
-                        : !plan
-                          ? "执行计划未提交 — 请让主 Agent 用 plan_submit 提交"
-                          : planStatus === "reviewing"
-                            ? "执行计划待评审 — 请评审通过后再启动"
-                            : planStatus === "rejected"
-                              ? "执行计划已驳回 — 请修改后重提或切 direct 模式"
-                              : "执行计划未评审通过 — 需 approved 后再启动"}
-                    </span>
-                  </div>
-                )}
               </>
             );
           })()}

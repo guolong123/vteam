@@ -8,7 +8,6 @@ import {
   MaxLength,
 } from 'class-validator';
 import { TASK_PRIORITY } from '../../common/constants/task.constants';
-import { EXECUTION_MODES } from '../../plans/plan.constants';
 
 /**
  * POST /tasks 请求体（仅 teamId 必填，指派全局团队）。
@@ -39,16 +38,6 @@ export class CreateTaskDto {
   teamId: string;
 
   @ApiPropertyOptional({
-    description:
-      '执行模式（direct/plan，默认 direct）：plan 模式按已评审通过的执行计划推进任务，direct 轻量直达；与托管模式独立生效、互不干扰',
-    enum: Object.values(EXECUTION_MODES),
-    default: EXECUTION_MODES.direct,
-  })
-  @IsOptional()
-  @IsIn(Object.values(EXECUTION_MODES))
-  executionMode?: string;
-
-  @ApiPropertyOptional({
     description: '背景文档元数据数组（FR-06，存 tasks.background_docs Json）',
   })
   @IsOptional()
@@ -62,4 +51,13 @@ export class CreateTaskDto {
   @IsOptional()
   @IsBoolean()
   resetAfterComplete?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      '计划模式（默认 false=直接执行；true=主 Agent 先出计划文档，其他成员只评审不起草）',
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  planMode?: boolean;
 }

@@ -14,7 +14,13 @@ describe('AgentsService', () => {
   let service: AgentsService;
   let idGen: { nextId: jest.Mock; seed: jest.Mock };
   let workersService: { assignWorker: jest.Mock };
-  let workerClient: { listModels: jest.Mock };
+  let workerClient: {
+    listModels: jest.Mock;
+    listAgents: jest.Mock;
+    getOmoConfig: jest.Mock;
+    setOmoConfig: jest.Mock;
+    getOmoAgentPrompt: jest.Mock;
+  };
   let modelsService: { listCatalogModels: jest.Mock };
   let prisma: {
     agent: {
@@ -27,6 +33,7 @@ describe('AgentsService', () => {
     };
     agentSkill: { create: jest.Mock; deleteMany: jest.Mock };
     agentToolEffect: { create: jest.Mock; deleteMany: jest.Mock };
+    worker: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
 
@@ -118,7 +125,13 @@ describe('AgentsService', () => {
       seed: jest.fn(),
     };
     workersService = { assignWorker: jest.fn() };
-    workerClient = { listModels: jest.fn() };
+    workerClient = {
+      listModels: jest.fn(),
+      listAgents: jest.fn(),
+      getOmoConfig: jest.fn(),
+      setOmoConfig: jest.fn(),
+      getOmoAgentPrompt: jest.fn(),
+    };
     // C3：available-models 目录优先——默认空目录走 pull 兜底（兼容既有测试语义），
     // 目录优先路径由专门的用例显式 mock 非空目录。
     modelsService = { listCatalogModels: jest.fn().mockResolvedValue([]) };
@@ -134,6 +147,8 @@ describe('AgentsService', () => {
       },
       agentSkill: { create: jest.fn(), deleteMany: jest.fn() },
       agentToolEffect: { create: jest.fn(), deleteMany: jest.fn() },
+      // listOpencodeAgents / getAvailableModels 需读 worker.capabilities 解析 exec 基址
+      worker: { findUnique: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn(),
     };
 
@@ -930,6 +945,208 @@ describe('AgentsService', () => {
 
       expect(result).toMatchObject({ source: 'fallback' });
       expect(result.models).toEqual([]);
+    });
+  });
+
+  describe('getOmoConfig / setOmoConfig（OmO agent→模型配置）', () => {
+    it('getOmoConfig 成功：透传 agents/available，带 capabilities 调 worker', async () => {
+      workersService.assignWorker.mockResolvedValue('w_1');
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: { execBaseUrl: 'http://worker:4198' },
+      });
+      workerClient.getOmoConfig.mockResolvedValue({
+        agents: { sisyphus: 'opencode/big-pickle' },
+        available: ['sisyphus', 'prometheus', 'atlas'],
+        degraded: false,
+      });
+
+      const result = await service.getOmoConfig({});
+
+      // ⚠️ 同 listOpencodeAgents：必须带 capabilities，否则 baseUrl 回退 localhost
+      expect(workerClient.getOmoConfig).toHaveBeenCalledWith({
+        id: 'w_1',
+        capabilities: { execBaseUrl: 'http://worker:4198' },
+      });
+      expect(result).toEqual({
+        agents: { sisyphus: 'opencode/big-pickle' },
+        available: ['sisyphus', 'prometheus', 'atlas'],
+        workerId: 'w_1',
+        degraded: false,
+      });
+    });
+
+    it('getOmoConfig：无在线 worker → degraded=true（不抛错）', async () => {
+      workersService.assignWorker.mockResolvedValue(null);
+      const result = await service.getOmoConfig({});
+      expect(result).toEqual({ agents: {}, available: [], workerId: null, degraded: true });
+    });
+
+    it('getOmoConfig：worker 抛错 → degraded=true（列表端点不阻断页面）', async () => {
+      workersService.assignWorker.mockResolvedValue('w_1');
+      workerClient.getOmoConfig.mockRejectedValue(new Error('down'));
+      const result = await service.getOmoConfig({});
+      expect(result.degraded).toBe(true);
+    });
+
+    it('setOmoConfig 成功：透传 agents 并回传 written/workerId', async () => {
+      workersService.assignWorker.mockResolvedValue('w_1');
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: { execBaseUrl: 'http://worker:4198' },
+      });
+      workerClient.setOmoConfig.mockResolvedValue({
+        written: '/data/vteam-worker/.omo/omo.jsonc',
+        agents: { sisyphus: 'opencode/big-pickle' },
+      });
+
+      const result = await service.setOmoConfig({ sisyphus: 'opencode/big-pickle' });
+
+      // 第三参 enabled 不传时为 undefined（表示不改动开关）
+      expect(workerClient.setOmoConfig).toHaveBeenCalledWith(
+        { id: 'w_1', capabilities: { execBaseUrl: 'http://worker:4198' } },
+        { sisyphus: 'opencode/big-pickle' },
+        undefined,
+      );
+      expect(result.workerId).toBe('w_1');
+      expect(result.agents).toEqual({ sisyphus: 'opencode/big-pickle' });
+    });
+
+    it('setOmoConfig：无可用 worker → 抛 503（写路径不静默降级）', async () => {
+      workersService.assignWorker.mockResolvedValue(null);
+      await expect(service.setOmoConfig({ a: 'b/c' })).rejects.toThrow(
+        /未定位到可用的 worker/,
+      );
+    });
+
+    it('setOmoConfig：worker 行不存在 → 抛 503', async () => {
+      workersService.assignWorker.mockResolvedValue('w_gone');
+      prisma.worker.findUnique.mockResolvedValue(null);
+      await expect(service.setOmoConfig({ a: 'b/c' })).rejects.toThrow(
+        /指定的 worker 不存在/,
+      );
+    });
+  });
+
+  describe('getOmoAgentPrompt（按需拉单个 agent 提示词）', () => {
+    it('成功：带 capabilities 调 worker，透传 prompt', async () => {
+      workersService.assignWorker.mockResolvedValue('w_1');
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: { execBaseUrl: 'http://worker:4198' },
+      });
+      workerClient.getOmoAgentPrompt.mockResolvedValue({
+        name: 'Prometheus - Plan Builder',
+        description: 'Plan agent',
+        prompt: 'You are Prometheus',
+        empty: false,
+      });
+
+      const out = await service.getOmoAgentPrompt('prometheus');
+
+      expect(workerClient.getOmoAgentPrompt).toHaveBeenCalledWith(
+        { id: 'w_1', capabilities: { execBaseUrl: 'http://worker:4198' } },
+        'prometheus',
+      );
+      expect(out.prompt).toBe('You are Prometheus');
+    });
+
+    it('无可用 worker → 抛 503（写/取路径不静默降级）', async () => {
+      workersService.assignWorker.mockResolvedValue(null);
+      await expect(service.getOmoAgentPrompt('oracle')).rejects.toThrow(
+        /未定位到可用的 worker/,
+      );
+    });
+
+    it('worker 行不存在 → 抛 503', async () => {
+      workersService.assignWorker.mockResolvedValue('w_gone');
+      prisma.worker.findUnique.mockResolvedValue(null);
+      await expect(service.getOmoAgentPrompt('oracle')).rejects.toThrow(
+        /指定的 worker 不存在/,
+      );
+    });
+  });
+
+  describe('listOpencodeAgents（GET /agents/opencode：opencode 原生 agent 清单）', () => {
+    it('成功：透传 agents + degraded=false + 实际 workerId', async () => {
+      workersService.assignWorker.mockResolvedValue('w_1');
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: { execBaseUrl: 'http://worker:4198' },
+      });
+      const agents = [
+        { name: 'build', mode: 'primary', native: true },
+        { name: 'plan', mode: 'primary', native: true },
+      ];
+      workerClient.listAgents.mockResolvedValue(agents);
+
+      const result = await service.listOpencodeAgents({});
+
+      // ⚠️ 回归断言（本地部署实测踩坑）：必须把 worker 行（含 capabilities）传给
+      // listAgents —— exec 端点 baseUrl 由 capabilities 解析；只传 { id } 会回退
+      // WORKER_BASE_URL（localhost:4199），跨容器部署必然连不上且被 catch 静默吞成
+      // degraded=true（症状隐蔽）。此处锁定必须带 capabilities。
+      expect(workerClient.listAgents).toHaveBeenCalledWith(
+        { id: 'w_1', capabilities: { execBaseUrl: 'http://worker:4198' } },
+        undefined,
+      );
+      expect(result).toEqual({
+        agents,
+        workerId: 'w_1',
+        degraded: false,
+      });
+    });
+
+    it('workerId + directory 显式传入 → 直接用该 worker 并透传 directory', async () => {
+      workerClient.listAgents.mockResolvedValue([
+        { name: 'plan', mode: 'primary' },
+      ]);
+
+      await service.listOpencodeAgents({
+        workerId: 'w_explicit',
+        directory: '/data/vteam-worker/tasks/t_1',
+      });
+
+      expect(workersService.assignWorker).not.toHaveBeenCalled();
+      expect(workerClient.listAgents).toHaveBeenCalledWith(
+        { id: 'w_explicit' },
+        '/data/vteam-worker/tasks/t_1',
+      );
+    });
+
+    it('无在线 worker → {agents: [], workerId: null, degraded: true}（不抛错）', async () => {
+      workersService.assignWorker.mockResolvedValue(null);
+
+      const result = await service.listOpencodeAgents({});
+
+      expect(result).toEqual({ agents: [], workerId: null, degraded: true });
+    });
+
+    it('worker 返回空清单（旧版无 /agent 或降级）→ degraded=true', async () => {
+      workersService.assignWorker.mockResolvedValue('w_1');
+      workerClient.listAgents.mockResolvedValue([]);
+
+      const result = await service.listOpencodeAgents({});
+
+      expect(result).toEqual({ agents: [], workerId: 'w_1', degraded: true });
+    });
+
+    it('listAgents 抛错 → degraded=true（列表端点不阻断页面）', async () => {
+      workersService.assignWorker.mockResolvedValue('w_1');
+      workerClient.listAgents.mockRejectedValue(new Error('worker down'));
+
+      const result = await service.listOpencodeAgents({});
+
+      expect(result).toEqual({ agents: [], workerId: null, degraded: true });
+    });
+
+    it('assignWorker 抛错 → degraded=true（不冒泡到 HTTP 层）', async () => {
+      workersService.assignWorker.mockRejectedValue(new Error('db down'));
+
+      const result = await service.listOpencodeAgents({});
+
+      expect(result.degraded).toBe(true);
+      expect(result.agents).toEqual([]);
     });
   });
 });

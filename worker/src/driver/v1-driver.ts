@@ -85,6 +85,54 @@ export interface ServeTokens {
 }
 
 /**
+ * serve `GET /agent` 元素（opencode 原生 agent 定义）。
+ *
+ * ⚠️ 实测形状与 SDK 类型声明**不一致**（勿照抄 `@opencode-ai/sdk` 的 `Agent` 类型）：
+ * - 实测 `native: boolean`（SDK 声明为 `builtIn`）；缺失视为非内置（自定义 agent）。
+ * - 实测 `permission` 为**数组** `[{permission, pattern, action}]`（SDK 声明为对象），
+ *   且不同 agent 条目数不同（配置覆盖叠加），故按 unknown 原样透传，不在 driver 层归一。
+ * - 内置 hidden 系统 agent（compaction/summary/title）带 `hidden: true`。
+ *
+ * 实测（opencode 1.18.16 生产 worker 与 1.18.30 本地，`--pure` 下均同）：恒返回 7 个
+ * 内置 agent（build/plan/explore/general + 3 hidden），含 primary 型 `plan`（"Plan mode.
+ * Disallows all edit tools."）——即 `--pure` **不会**移除内置 agent（仅去全局注入/插件）。
+ */
+export interface DriverAgentInfo {
+  /** agent 名（`prompt_async` 的 `agent` 字段取值，如 build/plan/自定义名）。 */
+  name: string;
+  description?: string;
+  /** primary=可作为会话主 agent；subagent=仅由主 agent 派生；all=两者皆可。 */
+  mode: 'primary' | 'subagent' | 'all';
+  /** 是否 opencode 内置（实测字段名 native，非 SDK 声明的 builtIn）。 */
+  native?: boolean;
+  /** 隐藏系统 agent（compaction/summary/title），不应出现在用户可选列表。 */
+  hidden?: boolean;
+  /** agent 覆盖的模型（缺省 = 继承全局/主 agent 模型）。 */
+  model?: DriverModelRef;
+  /** 权限声明（实测为数组形状，原样透传供上层展示/诊断）。 */
+  permission?: unknown;
+  /**
+   * 系统提示词全文（实测字段名 prompt）。
+   * ⚠️ 体积大：全部 agent 合计约 106KB，Sisyphus 单个 33KB——**不要随列表下发**，
+   * 按需单独取（见 exec-server 的 /omo-agent-prompt）。opencode 原生 agent 可能为空串。
+   */
+  prompt?: string;
+}
+
+/**
+ * serve `GET /session/{id}/todo` 元素（opencode todo 工具登记的执行步骤）。
+ * 对齐 SDK `Todo` 类型：content/status/priority/id；
+ * status ∈ pending | in_progress | completed | cancelled（计划 Tab checklist 映射依据）。
+ * agent 未用 todo 工具时返回空数组（非错误）。
+ */
+export interface DriverTodo {
+  id?: string;
+  content: string;
+  status: string;
+  priority?: string;
+}
+
+/**
  * serve part（宽松结构，便于轮询完成判定 + T6 事件上送透传原始字段）。
  * 实测 types：step-start / text / reasoning / tool / step-finish / snapshot / patch / agent / retry / compaction。
  */
@@ -164,6 +212,16 @@ export class DriverRequestError extends Error {
 
 export class V1Driver {
   private baseUrlValue: string;
+  /**
+   * `/provider` 模型列表缓存（该响应实测 5.98MB / 7701 项，拉一次约 0.3-0.6s）。
+   *
+   * 为什么缓存：注册流程可能多轮探测（stability=2 需连续两次一致），而 serve 稳定后
+   * 结果**逐字节相同**（实测两次 7701 项完全一致）。缓存后同一 serve 实例内只拉一次。
+   *
+   * 失效条件（`baseUrlValue` 变化）——serve 重启会换端口/地址，此时必须重取；
+   * 这条同时也覆盖了 reload-config 触发重启的场景。
+   */
+  private providerModelsCache: { baseUrl: string; models: DriverModelInfo[] } | null = null;
   private readonly serverPassword: string;
   private readonly timeoutMs: number;
   private readonly logger: Logger;
@@ -182,7 +240,12 @@ export class V1Driver {
 
   /** serve 启动成功后注入实际 baseUrl（随机端口场景 index.ts 在 start() 后调用）。 */
   set baseUrl(url: string) {
-    this.baseUrlValue = url.replace(/\/+$/, '');
+    const next = url.replace(/\/+$/, '');
+    if (next !== this.baseUrlValue) {
+      // serve 换了实例（重启/换端口）→ 之前的模型列表可能已变，作废缓存
+      this.providerModelsCache = null;
+    }
+    this.baseUrlValue = next;
     this.logger.info(`[v1-driver] baseUrl 更新: ${this.baseUrlValue}`);
   }
 
@@ -239,8 +302,10 @@ export class V1Driver {
     const modelLabel = input.model
       ? `${input.model.providerID}/${input.model.modelID}`
       : '(default)';
+    // agent 一并入日志：opencode 原生 agent 是否真正透传是"计划模式由内核执行"的关键
+    // 可观测点（vteam 只做传递，故发送侧日志是唯一的执行前证据）。
     this.logger.info(
-      `[v1-driver] sendMessage -> ${sessionID} model=${modelLabel} (HTTP ${res.status})`,
+      `[v1-driver] sendMessage -> ${sessionID} model=${modelLabel} agent=${input.agent ?? '(default)'} (HTTP ${res.status})`,
     );
   }
 
@@ -372,7 +437,71 @@ export class V1Driver {
    * 统一输出 status='active'（上报即视为可用）；/provider 失败（网络错/旧版 serve
    * 404）→ 回退 /api/model 逻辑（status===active 过滤，兼容旧版 serve，不阻断上报）。
    */
+  /**
+   * GET /agent：列出 opencode 原生 agent（vteam 同步/展示/切换的数据源）。
+   *
+   * `directory` 为 **query 参数**（与 prompt_async 同规约）：serve 按该目录发现
+   * `opencode.json` 的 `agent` 节与 `.opencode/agent/*.md`，**无需重启 serve**。
+   * 实测：同一 serve 进程对不同 directory 返回不同 agent 集合（per-directory 隔离），
+   * 故调用方必须传入与执行期 `prompt_async` 完全相同的 directory，否则列出的 agent
+   * 与实际可用集合不一致。
+   *
+   * 实测响应为**裸数组**（非 `{data:[]}`），此处仿 getMessages 做包裹兼容兜底。
+   * 失败（网络错/非 2xx）抛 DriverRequestError——降级决策留给调用层（exec-server 转 502）。
+   */
+  async listAgents(directory?: string): Promise<DriverAgentInfo[]> {    const query = new URLSearchParams();
+    if (directory) {
+      query.set('directory', directory);
+    }
+    const qs = query.toString();
+    const res = await this.request(`/agent${qs ? `?${qs}` : ''}`);
+    const body = (await res.json()) as
+      | DriverAgentInfo[]
+      | { data?: DriverAgentInfo[] };
+    const agents = Array.isArray(body) ? body : (body.data ?? []);
+    this.logger.info(
+      `[v1-driver] listAgents -> ${agents.length} 个${directory ? ` (directory=${directory})` : ''}`,
+    );
+    return agents;
+  }
+
+  /**
+   * GET /session/{id}/todo：读取该 opencode 会话的 todo 执行步骤（计划 Tab 步骤区数据源）。
+   *
+   * `directory` 为可选 query 参数（与 /agent、prompt_async 同规约；serve 按目录定位
+   * 会话上下文，调用方传与执行期相同的任务工作目录）。
+   * 实测响应为裸数组（SDK 声明 `Array<Todo>`），此处仿 listAgents 做 `{data:[]}` 包裹
+   * 兼容兜底。agent 未用 todo 工具 → 空数组（正常情况，非错误）。
+   * 失败（网络错/非 2xx/旧版无该端点）抛 DriverRequestError——降级决策留给调用层。
+   */
+  async listTodos(
+    sessionID: string,
+    directory?: string,
+  ): Promise<DriverTodo[]> {
+    const query = new URLSearchParams();
+    if (directory) {
+      query.set('directory', directory);
+    }
+    const qs = query.toString();
+    const res = await this.request(
+      `/session/${encodeURIComponent(sessionID)}/todo${qs ? `?${qs}` : ''}`,
+    );
+    const body = (await res.json()) as DriverTodo[] | { data?: DriverTodo[] };
+    const todos = Array.isArray(body) ? body : (body.data ?? []);
+    this.logger.info(
+      `[v1-driver] listTodos -> ${todos.length} 个 (session=${sessionID})`,
+    );
+    return todos;
+  }
+
   async listModels(): Promise<DriverModelInfo[]> {
+    // 同一次 serve 实例内复用（5.98MB/0.3-0.6s，稳定性探测会连拉多次）
+    if (
+      this.providerModelsCache &&
+      this.providerModelsCache.baseUrl === this.baseUrlValue
+    ) {
+      return this.providerModelsCache.models;
+    }
     try {
       const res = await this.request('/provider');
       if (!res.ok) {
@@ -398,6 +527,7 @@ export class V1Driver {
           });
         }
       }
+      this.providerModelsCache = { baseUrl: this.baseUrlValue, models };
       return models;
     } catch {
       return this.listModelsFromApiModel();

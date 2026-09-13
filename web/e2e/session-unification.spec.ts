@@ -88,7 +88,6 @@ function taskFixture(sessionStatuses: [string | null, string | null, string | nu
     pendingReviewAt: null,
     completedAt: null,
     archivedAt: null,
-    executionMode: "direct",
   };
 }
 
@@ -147,7 +146,6 @@ async function installMocks(page: Page, taskSessions: [string | null, string | n
       return route.fulfill({ json: { items: [], total: 0, page: 1, pageSize: 10 } });
     }
     if (method === "GET" && apiPath === "/issues") return route.fulfill({ json: { items: [], total: 0, page: 1, pageSize: 100 } });
-    if (method === "GET" && apiPath === "/plans") return route.fulfill({ json: {} });
     if (method === "GET" && apiPath === "/questions") return route.fulfill({ json: [] });
     return route.fallback();
   });

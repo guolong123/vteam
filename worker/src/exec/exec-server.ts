@@ -40,6 +40,17 @@ import {
   resolveBrowserScopeId,
 } from '../browser/browser-tools';
 import { trackInstanceEnd, trackInstanceStart } from '../instance-tracker';
+import {
+  isOmoBundled,
+  readOmoEnabled,
+  writeOmoEnabled,
+} from '../resources/omo-enabled';
+import {
+  OMO_AGENT_NAMES,
+  readOmoAgents,
+  resolveOmoConfigPath,
+  writeOmoAgents,
+} from '../resources/omo-config';
 import { WORKER_EVENT_TYPES } from '../protocol/worker-protocol';
 import { collectFileArtifacts } from './artifact-extract';
 
@@ -109,6 +120,33 @@ export interface ExecuteAttachment {
 export const MAX_FILE_FETCH_BYTES = 10 * 1024 * 1024;
 
 /**
+ * 计划文档目录（按顺序探测，先命中者胜）。
+ *
+ * ⚠️ 两个位置都要看，原因与 OmO 配置文件同理（见 resources/omo-config.ts）：
+ * OmO 把工作区元数据统一收进 `.omo/`，**当前版本实际把 agent 产出的计划写在
+ * `.omo/plans/`**；而 `.opencode/plans/` 是 opencode 原生 plan agent 的约定位置
+ * （也是 vteam 早期版本约定的位置）。
+ *
+ * 实测：装了 OmO 后，主 Agent 在计划模式下产出的文件落在 `<taskDir>/.omo/plans/plan.md`，
+ * 只读 `.opencode/plans/` 会得到空列表——计划明明写出来了，页面却显示"暂无计划"。
+ *
+ * 读取时**两个目录都扫**（合并结果，按文件名去重），因此不论 agent 用哪个位置都能展示；
+ * 写入（用户上传）统一落 `PLAN_DOCS_DIR`（首个位置）。
+ */
+export const PLAN_DOCS_DIRS = ['.omo/plans', '.opencode/plans'] as const;
+/** 计划文档写入位置（上传落点）：取探测列表首位。 */
+export const PLAN_DOCS_DIR = PLAN_DOCS_DIRS[0];
+/** 计划文档读取上限（单文件 256KB，超限截断 + truncated 标记，防大文件撑爆列表响应）。 */
+export const MAX_PLAN_DOC_BYTES = 256 * 1024;
+/** 计划文档上传上限（1MB，与 maxBodyBytes 默认对齐；超限 413）。 */
+export const MAX_PLAN_UPLOAD_BYTES = 1024 * 1024;
+/**
+ * 计划文件名白名单（路径穿越唯一防线）：字母数字开头，仅含字母数字/`_`.`-`，
+ * 必须 `.md` 结尾。`basename` 之后仍校验——`a/../b.md` 之类全部拒绝。
+ */
+export const PLAN_DOC_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.\-]*\.md$/;
+
+/**
  * 问题二图片附件下载上限（5MB）。
  * uploads 端允许 10MB，但进执行上下文的图片走模型视觉通道：5MB 覆盖手机截图/
  * 相机直出常规尺寸，超限则跳过该图并在 prompt 内注明（模型如实告知用户重发，
@@ -159,6 +197,24 @@ export interface ExecServerOptions {
    * 避免触碰真实文件系统）。
    */
   browserProfileRoot?: string;
+  /**
+   * opencode serve 工作目录（worker workDir，如 /data/vteam-worker）。
+   * GET /agents 未显式传 directory 时的回落值——必须与 serve 的 cwd 一致，
+   * 否则列出的 agent 集合与实际执行时不符（serve 按 directory 发现 opencode.json）。
+   * 缺省 = 不回落（返回 400 要求调用方显式传 directory）。
+   */
+  workDir?: string;
+  /**
+   * OmO 配置保存后重启 serve 使新配置生效（index.ts 注入 RestartCoordinator.requestRestart）。
+   *
+   * 为什么必须重启：opencode 在 serve **启动时**读取 OmO 配置，改文件不热生效——不重启则
+   * 新会话仍用旧模型（实测确认）。这里复用 RestartCoordinator 而非直接 restart，因为后者
+   * 会先判断有无活跃会话：无 → 立即重启；有 → 挂起等归零，**不会中断进行中的会话**。
+   *
+   * 返回值透传给前端：'executed'（已重启，下个会话即生效）/ 'pending'（有活跃会话，
+   * 已挂起等归零）。缺省不注入 = 保存后不重启（配置留待下次自然重启生效）。
+   */
+  restartServe?: (reason: string) => Promise<'executed' | 'pending'>;
 }
 
 /** 请求体解析失败（非 JSON / 缺字段）。 */
@@ -180,15 +236,54 @@ export function normalizeParts(prompt: string | unknown[]): unknown[] {
   return prompt;
 }
 
+/**
+ * 请求体超限后丢弃剩余字节（自身也有上限，防止恶意无限流），使本次响应能被对端读完。
+ * 与 readBody 的"超限即 reject 但不 destroy"配合：错误码要送得出去。
+ */
+function drainRequest(req: http.IncomingMessage, maxDrainBytes = 64 * 1024 * 1024): Promise<void> {
+  return new Promise((resolve) => {
+    let drained = 0;
+    let settled = false;
+    const done = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      req.removeListener('data', onData);
+      req.removeListener('end', done);
+      req.removeListener('error', done);
+      resolve();
+    };
+    const onData = (chunk: Buffer): void => {
+      drained += chunk.length;
+      if (drained > maxDrainBytes) {
+        req.destroy();
+        done();
+      }
+    };
+    req.on('data', onData);
+    req.on('end', done);
+    req.on('error', done);
+    if (req.readableEnded) {
+      done();
+    }
+  });
+}
+
 function readBody(req: http.IncomingMessage, maxBytes: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
+    let exceeded = false;
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
       if (size > maxBytes) {
-        reject(new ExecuteRequestError(`请求体超过 ${maxBytes} bytes 上限`));
-        req.destroy();
+        if (!exceeded) {
+          exceeded = true;
+          // 不 destroy：413 响应仍需送达（否则对端只看到 socket hang up）。
+          // 其余字节交给调用方的 drainRequest 丢弃，这里不再累积内存。
+          reject(new ExecuteRequestError(`请求体超过 ${maxBytes} bytes 上限`));
+        }
         return;
       }
       chunks.push(chunk);
@@ -218,6 +313,10 @@ export class ExecServer {
   private readonly maxBodyBytes: number;
   private readonly serverBaseUrl: string;
   private readonly browserProfileRoot: string;
+  /** GET /agents 的 directory 回落值（worker workDir；缺省空串 = 不回落）。 */
+  private readonly workDir: string;
+  /** OmO 配置保存后的 serve 重启回调（缺省 undefined = 不重启）。 */
+  private readonly restartServe?: (reason: string) => Promise<'executed' | 'pending'>;
   private readonly logger: Logger;
   private server: http.Server | null = null;
 
@@ -232,6 +331,8 @@ export class ExecServer {
     this.maxBodyBytes = options.maxBodyBytes ?? 1024 * 1024;
     this.serverBaseUrl = (options.serverBaseUrl ?? '').replace(/\/+$/, '');
     this.browserProfileRoot = options.browserProfileRoot ?? '';
+    this.workDir = options.workDir ?? '';
+    this.restartServe = options.restartServe;
     this.logger = options.logger ?? console;
   }
 
@@ -307,7 +408,261 @@ export class ExecServer {
       await this.handleQuestionReply(req, res);
       return;
     }
+    if (url.pathname === '/agents') {
+      await this.handleAgentsList(req, res, url);
+      return;
+    }
+    if (url.pathname === '/todos') {
+      await this.handleTodosList(req, res, url);
+      return;
+    }
+    if (url.pathname === '/plan-files') {
+      await this.handlePlanFilesList(req, res, url);
+      return;
+    }
+    if (url.pathname === '/plan-file') {
+      await this.handlePlanFileWrite(req, res);
+      return;
+    }
+    if (url.pathname === '/omo-config') {
+      await this.handleOmoConfig(req, res);
+      return;
+    }
+    if (url.pathname === '/omo-agent-prompt') {
+      await this.handleOmoAgentPrompt(req, res, url);
+      return;
+    }
     sendJson(res, 404, { error: `未支持的路径: ${url.pathname}` });
+  }
+
+  /**
+   * GET/POST /omo-config——OmO 的 agent→模型配置读写。
+   *
+   * 配置落点 `<workDir>/.opencode/oh-my-openagent.jsonc`（OmO 按 cwd 读取的项目级配置）。
+   * vteam 只做搬运与增量合并，不校验模型是否真的可用（那是用户在配置页里选的），
+   * 也不碰 OmO 的其他配置项（顶层其他键原样保留）。
+   *
+   * - GET  → {agents: {name: model}, available: [...可配 agent 名]}
+   * - POST {agents: {name: model}} → 增量合并；空串删除覆盖；返回 {written, agents}
+   * - 鉴权：X-Worker-Token（写操作，与 /file 同级敏感）
+   * - 未配置 workDir → 400（不猜目录）
+   */
+  private async handleOmoConfig(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (req.method !== 'GET' && req.method !== 'POST') {
+      sendJson(res, 405, { error: `仅支持 GET/POST，收到 ${req.method}` });
+      return;
+    }
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      this.logger.warn('[exec] omo-config -> 拒绝（X-Worker-Token 无效） (HTTP 401)');
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return;
+    }
+    if (!this.workDir) {
+      sendJson(res, 400, { error: '未配置 workDir，无法定位 OmO 配置' });
+      return;
+    }
+    if (req.method === 'GET') {
+      // 运行时 agent 元数据（描述/mode/是否已注册）：供配置页展示每个 agent 是干什么的。
+      // 数据源是 serve `GET /agent`——与执行期同一份事实；拿不到（serve 未就绪）则留空，
+      // 前端降级为只显示 agent 名（不阻断配置）。
+      let runtime: Record<string, { description?: string; mode?: string; native?: boolean }> = {};
+      try {
+        const list = await this.driver.listAgents(this.workDir);
+        for (const a of list) {
+          // serve 的 name 是展示名（"Prometheus - Plan Builder"），配置键是基底名（prometheus）
+          const key = (a.name.split(' - ')[0] ?? a.name).trim().toLowerCase();
+          runtime[key] = {
+            description: a.description,
+            mode: a.mode,
+            native: a.native,
+          };
+        }
+      } catch {
+        runtime = {};
+      }
+      sendJson(res, 200, {
+        agents: readOmoAgents(this.workDir),
+        available: OMO_AGENT_NAMES,
+        /** 已注册到 serve 的 agent 基底名（未包含者在当前模型下不会被激活，如 hephaestus 需 GPT 系模型）。 */
+        registered: Object.keys(runtime),
+        /** agent 元数据：描述/mode/native（缺失=该 agent 当前未注册）。 */
+        runtime,
+        // 实际生效的配置文件（OmO 优先 .omo/omo.jsonc，其次旧的 .opencode/…）：
+        // 透出给前端展示，避免"改了却不生效"时无从判断
+        configPath: resolveOmoConfigPath(this.workDir).relPath,
+        configKind: resolveOmoConfigPath(this.workDir).kind,
+        // 开关：enabled=用户选择；bundled=本镜像是否内置 OmO（false 时前端不展示该区块）
+        enabled: readOmoEnabled(this.workDir),
+        bundled: isOmoBundled(),
+      });
+      return;
+    }
+    let raw: string;
+    try {
+      raw = await readBody(req, this.maxBodyBytes);
+    } catch (err) {
+      await drainRequest(req);
+      sendJson(res, 413, { error: err instanceof Error ? err.message : '请求体过大' });
+      return;
+    }
+    let body: { agents?: unknown; enabled?: unknown };
+    try {
+      body = JSON.parse(raw || '{}');
+    } catch {
+      sendJson(res, 400, { error: '请求体必须是合法 JSON' });
+      return;
+    }
+
+    // ── 开关变更（可选，与 agents 互不依赖）──────────────────────────────
+    // 只在"本镜像内置了 OmO"时允许开启——没内置的镜像开启毫无意义（插件不存在），
+    // 直接 400 明确告知，而不是静默写入一个永远不生效的 true。
+    const hasEnabled = typeof body.enabled === 'boolean';
+    if (body.enabled !== undefined && !hasEnabled) {
+      sendJson(res, 400, { error: 'enabled 必须是布尔值' });
+      return;
+    }
+    if (body.enabled === true && !isOmoBundled()) {
+      sendJson(res, 400, {
+        error: '本 worker 镜像未内置 OmO，无法开启（请使用内置 OmO 的镜像）',
+      });
+      return;
+    }
+    if (!hasEnabled && body.agents === undefined) {
+      sendJson(res, 400, { error: 'agents 或 enabled 至少提供一个' });
+      return;
+    }
+
+    let patch: Record<string, string> = {};
+    if (body.agents !== undefined) {
+      const input = body.agents;
+      if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        sendJson(res, 400, { error: 'agents 必须是对象：{agent名: 模型}' });
+        return;
+      }
+      for (const [name, value] of Object.entries(input as Record<string, unknown>)) {
+        if (typeof value !== 'string') {
+          sendJson(res, 400, { error: `agents.${name} 必须是字符串（模型名，空串=清除覆盖）` });
+          return;
+        }
+        patch[name] = value;
+      }
+    }
+
+    try {
+      // 开关先落盘（serve 重启时读它决定是否 --pure）
+      if (hasEnabled) {
+        const enabledFile = writeOmoEnabled(this.workDir, body.enabled as boolean);
+        this.logger.info(
+          `[exec] omo 开关 -> ${body.enabled ? 'on' : 'off'} (${enabledFile})`,
+        );
+      }
+      const written =
+        body.agents !== undefined
+          ? writeOmoAgents(this.workDir, patch)
+          : resolveOmoConfigPath(this.workDir).absPath;
+      if (body.agents !== undefined) {
+        this.logger.info(
+          `[exec] omo-config 已更新: ${Object.keys(patch).length} 项 (${written})`,
+        );
+      }
+      // 写盘后重启 serve 使新配置生效：opencode 只在**启动时**读 OmO 配置，不重启则
+      // 新会话仍用旧模型（实测确认）。复用 RestartCoordinator：无活跃会话才立即重启，
+      // 有则挂起等归零——所以这一步不会打断正在跑的 agent。
+      const restartReason = hasEnabled
+        ? `omo 开关（${body.enabled ? '启用' : '停用'}）`
+        : 'omo-config（agent 模型配置更新）';
+      const restart = this.restartServe
+        ? await this.restartServe(restartReason).catch(
+            (err: unknown) => {
+              // 重启失败不上抛：配置已落盘，下次自然重启即生效，不该让保存动作整体失败
+              this.logger.warn(
+                `[exec] omo-config 保存后重启失败（配置已落盘）: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+              return 'skipped' as const;
+            },
+          )
+        : 'skipped';
+      sendJson(res, 200, {
+        written,
+        agents: readOmoAgents(this.workDir),
+        configPath: resolveOmoConfigPath(this.workDir).relPath,
+        configKind: resolveOmoConfigPath(this.workDir).kind,
+        enabled: readOmoEnabled(this.workDir),
+        bundled: isOmoBundled(),
+        restart,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[exec] omo-config 写入失败: ${message} (HTTP 502)`);
+      sendJson(res, 502, { error: message });
+    }
+  }
+
+  /**
+   * GET /omo-agent-prompt?name=<agent>——取单个 agent 的系统提示词全文。
+   *
+   * 为什么单独成端点：全部 agent 的 prompt 合计约 106KB（Sisyphus 单个就 33KB），
+   * 塞进 `/omo-config` 会让配置页每次加载都背上 100KB+。故列表只带描述（几百字节），
+   * prompt 按需单独拉取（用户点"查看提示词"时才请求）。
+   *
+   * - 鉴权：X-Worker-Token
+   * - name 支持 OmO 配置键（prometheus）或 serve 展示名（"Prometheus - Plan Builder"）
+   * - 该 agent 未注册（当前模型下不激活，如 hephaestus）→ 404 + 明确原因
+   */
+  private async handleOmoAgentPrompt(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: `仅支持 GET，收到 ${req.method}` });
+      return;
+    }
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return;
+    }
+    const raw = (url.searchParams.get('name') ?? '').trim();
+    if (!raw) {
+      sendJson(res, 400, { error: '缺少 query 参数 name' });
+      return;
+    }
+    const want = raw.split(' - ')[0].trim().toLowerCase();
+    try {
+      const list = await this.driver.listAgents(this.workDir);
+      const hit = list.find(
+        (a) => (a.name.split(' - ')[0] ?? a.name).trim().toLowerCase() === want,
+      );
+      if (!hit) {
+        sendJson(res, 404, {
+          error: `agent "${raw}" 当前未注册到 opencode（可能未激活或名称不匹配）`,
+        });
+        return;
+      }
+      const prompt = (hit as { prompt?: string }).prompt ?? '';
+      sendJson(res, 200, {
+        name: hit.name,
+        description: hit.description ?? '',
+        mode: hit.mode,
+        prompt,
+        /** prompt 是否为空（opencode 原生 agent 可能无自定义 prompt）。 */
+        empty: prompt.length === 0,
+      });
+      this.logger.info(
+        `[exec] omo-agent-prompt -> ${hit.name} (${prompt.length} chars)`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[exec] omo-agent-prompt 失败: ${message} (HTTP 502)`);
+      sendJson(res, 502, { error: message });
+    }
   }
 
   /** POST /execute：校验 prompt → 202 {accepted:true} → fire-and-forget 驱动 serve。 */
@@ -395,6 +750,262 @@ export class ExecServer {
     res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
     res.end(content);
     this.logger.info(`[exec] file fetch -> ${filePath} (HTTP 200)`);
+  }
+
+  /**
+   * GET /agents?directory=<工作目录>——列出该目录可见的 opencode 原生 agent。
+   *
+   * 控制面（WorkerClient.listAgents）经本端点拉取，用于 vteam 页面展示与切换。
+   * - 鉴权：X-Worker-Token === workerToken（与 GET /file 同规格——未配置 token 一律 401）。
+   * - directory 可选；缺省回落 workDir（与执行期 serve cwd 一致，避免列出集合与实际不符）。
+   *   实测 serve 按 directory 发现 opencode.json 的 agent 节，per-directory 隔离，
+   *   故调用方应传与执行期 prompt_async 相同的 directory。
+   * - driver 失败（serve 未就绪/网络错/旧版无该端点）→ 502 {error}，不抛未捕获异常。
+   */
+  private async handleAgentsList(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: `仅支持 GET，收到 ${req.method}` });
+      return;
+    }
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      this.logger.warn(`[exec] agents list -> 拒绝（X-Worker-Token 无效） (HTTP 401)`);
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return;
+    }
+    const directory = (url.searchParams.get('directory') ?? '').trim() || this.workDir;
+    if (!directory) {
+      this.logger.warn('[exec] agents list -> 缺少 directory 且未配置 workDir (HTTP 400)');
+      sendJson(res, 400, { error: '缺少 query 参数 directory（且 worker 未配置 workDir 回落）' });
+      return;
+    }
+    try {
+      const agents = await this.driver.listAgents(directory);
+      sendJson(res, 200, { agents });
+      this.logger.info(`[exec] agents list -> ${agents.length} 个 (directory=${directory})`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[exec] agents list 失败: ${message} (HTTP 502)`);
+      sendJson(res, 502, { error: message });
+    }
+  }
+
+  /**
+   * GET /todos?sessionId=<ses_>&directory=<工作目录>——读取 opencode 会话的 todo 执行步骤。
+   *
+   * 控制面（WorkerClient.listTodos）经本端点拉取，用于计划 Tab 步骤区展示。
+   * - 鉴权：X-Worker-Token === workerToken（与 GET /agents 同规格）。
+   * - sessionId 必填（opencode ses_ 会话 id，缺失 → 400）；directory 可选透传 serve。
+   * - driver 失败（会话不存在/serve 未就绪/旧版无该端点）→ 502 {error}，不抛未捕获异常。
+   * - agent 未用 todo 工具 → 200 {todos: []}（正常情况，非错误）。
+   */
+  private async handleTodosList(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: `仅支持 GET，收到 ${req.method}` });
+      return;
+    }
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      this.logger.warn(`[exec] todos list -> 拒绝（X-Worker-Token 无效） (HTTP 401)`);
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return;
+    }
+    const sessionId = (url.searchParams.get('sessionId') ?? '').trim();
+    if (!sessionId) {
+      this.logger.warn('[exec] todos list -> 缺少 sessionId (HTTP 400)');
+      sendJson(res, 400, { error: '缺少必填 query 参数 sessionId' });
+      return;
+    }
+    const directory = (url.searchParams.get('directory') ?? '').trim() || undefined;
+    try {
+      const todos = await this.driver.listTodos(sessionId, directory);
+      sendJson(res, 200, { todos });
+      this.logger.info(`[exec] todos list -> ${todos.length} 个 (session=${sessionId})`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[exec] todos list 失败: ${message} (HTTP 502)`);
+      sendJson(res, 502, { error: message });
+    }
+  }
+
+  /**
+   * GET /plan-files?directory=——列出任务目录 `.opencode/plans/*.md`（正文内联）。
+   *
+   * 计划 Tab 唯一数据源：vteam 不自维护计划，文件即真相（opencode 原生约定，
+   * plan agent 唯一可写目录）。正文一次下发（Modal 免二次请求），单文件超
+   * MAX_PLAN_DOC_BYTES 截断 + truncated 标记。
+   * - 鉴权：X-Worker-Token（同 /agents 规格）。
+   * - directory 缺省回落 workDir；目录不存在 → 200 {files: []}（agent 还没写过是常态）。
+   * - 只收小写 .md 普通文件（子目录/隐藏文件/其他扩展名忽略）；读失败单文件跳过不整单失败。
+   */
+  private async handlePlanFilesList(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: `仅支持 GET，收到 ${req.method}` });
+      return;
+    }
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      this.logger.warn(`[exec] plan-files list -> 拒绝（X-Worker-Token 无效） (HTTP 401)`);
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return;
+    }
+    const directory = (url.searchParams.get('directory') ?? '').trim() || this.workDir;
+    if (!directory) {
+      this.logger.warn('[exec] plan-files list -> 缺少 directory 且未配置 workDir (HTTP 400)');
+      sendJson(res, 400, { error: '缺少 query 参数 directory（且 worker 未配置 workDir 回落）' });
+      return;
+    }
+    try {
+      // 两个候选目录都扫：OmO 把计划写在 .omo/plans/，原生 plan agent 用 .opencode/plans/。
+      // 同名文件以**先命中的目录**为准（PLAN_DOCS_DIRS 顺序即优先级）。
+      const seen = new Set<string>();
+      const files: Array<{
+        name: string;
+        updatedAt: string;
+        size: number;
+        content: string;
+        truncated: boolean;
+      }> = [];
+      for (const rel of PLAN_DOCS_DIRS) {
+        const plansDir = path.join(directory, rel);
+        let entries: string[];
+        try {
+          entries = await fsp.readdir(plansDir);
+        } catch {
+          // 该目录不存在 = 该位置还没写过计划（常态），继续看下一个
+          continue;
+        }
+        for (const name of entries.sort()) {
+          if (!name.endsWith('.md') || name.startsWith('.') || seen.has(name)) {
+            continue;
+          }
+          const full = path.join(plansDir, name);
+          try {
+            const stat = await fsp.stat(full);
+            if (!stat.isFile()) {
+              continue;
+            }
+            const buf = await fsp.readFile(full);
+            const truncated = buf.length > MAX_PLAN_DOC_BYTES;
+            files.push({
+              name,
+              updatedAt: stat.mtime.toISOString(),
+              size: stat.size,
+              content: buf.subarray(0, MAX_PLAN_DOC_BYTES).toString('utf8'),
+              truncated,
+            });
+            seen.add(name);
+          } catch {
+            // 单文件失败跳过（被删/权限），不整单失败
+            continue;
+          }
+        }
+      }
+      sendJson(res, 200, { files });
+      this.logger.info(
+        `[exec] plan-files list -> ${files.length} 个 (directory=${directory}, dirs=${PLAN_DOCS_DIRS.join(',')})`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[exec] plan-files list 失败: ${message} (HTTP 502)`);
+      sendJson(res, 502, { error: message });
+    }
+  }
+
+  /**
+   * POST /plan-file {directory, name, content}——把计划文件直传进任务目录。
+   *
+   * Web"上传计划文件"入口的落点：文件进 `<directory>/.omo/plans/`（`PLAN_DOCS_DIR`，
+   * 即 agent 实际读写计划的位置）后，agent 侧立即可读，计划 Tab 下轮询出现。
+   * vteam 只做文件同步，不解析内容、不改 agent 行为。
+   * - 鉴权：X-Worker-Token（写操作，与 /file 同级敏感）。
+   * - 路径穿越防线：name 经 basename + PLAN_DOC_NAME_RE 白名单（`a/../b.md` 类全部 400）。
+   * - content 必须为字符串且 ≤ MAX_PLAN_UPLOAD_BYTES，否则 400/413；覆盖写允许。
+   */
+  private async handlePlanFileWrite(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { error: `仅支持 POST，收到 ${req.method}` });
+      return;
+    }
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      this.logger.warn(`[exec] plan-file write -> 拒绝（X-Worker-Token 无效） (HTTP 401)`);
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return;
+    }
+    let raw: string;
+    try {
+      raw = await readBody(req, this.maxBodyBytes);
+    } catch (err) {
+      // 超限：先把手上的请求体读完再回 413。若在 data 事件里立刻 destroy，
+      // 客户端还没发完 → 收到 socket hang up 而不是 413（回归：content 超限用例）。
+      await drainRequest(req);
+      sendJson(res, 413, { error: err instanceof Error ? err.message : '请求体过大' });
+      return;
+    }
+    let body: { directory?: unknown; name?: unknown; content?: unknown };
+    try {
+      body = JSON.parse(raw || '{}');
+    } catch {
+      sendJson(res, 400, { error: '请求体必须是合法 JSON' });
+      return;
+    }
+    const directory = (typeof body.directory === 'string' ? body.directory : '').trim() || this.workDir;
+    if (!directory) {
+      sendJson(res, 400, { error: '缺少 directory（且 worker 未配置 workDir 回落）' });
+      return;
+    }
+    const rawName = (typeof body.name === 'string' ? body.name : '').trim();
+    const safeName = path.basename(rawName);
+    // basename 会静默把 `../evil.md` 收敛成 `evil.md`——那样"穿越"虽被化解，但调用方
+    // 以为写进了上级目录，实际落点不同。这里显式拒绝任何非纯文件名（含路径分隔符/..），
+    // 再把白名单正则作为第二道防线（字符集 + .md 后缀）。
+    if (rawName !== safeName || rawName === '.' || rawName === '..') {
+      this.logger.warn('[exec] plan-file write -> name 含路径分隔符 (HTTP 400)');
+      sendJson(res, 400, { error: 'name 非法：必须是纯文件名，不允许路径分隔符或 ..' });
+      return;
+    }
+    if (!PLAN_DOC_NAME_RE.test(safeName)) {
+      this.logger.warn('[exec] plan-file write -> 非法文件名 (HTTP 400)');
+      sendJson(res, 400, { error: 'name 非法：仅允许字母数字开头、含字母数字/下划线/点/连字符的 .md 文件名' });
+      return;
+    }
+    if (typeof body.content !== 'string') {
+      sendJson(res, 400, { error: 'content 必填（字符串）' });
+      return;
+    }
+    if (Buffer.byteLength(body.content, 'utf8') > MAX_PLAN_UPLOAD_BYTES) {
+      sendJson(res, 413, { error: `content 超过 ${MAX_PLAN_UPLOAD_BYTES} bytes 上限` });
+      return;
+    }
+    try {
+      const plansDir = path.join(directory, PLAN_DOCS_DIR);
+      await fsp.mkdir(plansDir, { recursive: true });
+      const full = path.join(plansDir, safeName);
+      await fsp.writeFile(full, body.content, 'utf8');
+      const stat = await fsp.stat(full);
+      sendJson(res, 200, { name: safeName, updatedAt: stat.mtime.toISOString() });
+      this.logger.info(`[exec] plan-file write -> ${safeName} (directory=${directory})`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[exec] plan-file write 失败: ${message} (HTTP 502)`);
+      sendJson(res, 502, { error: message });
+    }
   }
 
   /**

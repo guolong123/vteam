@@ -43,7 +43,7 @@ export class CreateArtifactDto {
 /** GET /tasks/:id/artifacts 查询参数（type/accepted 筛选 + 分页，对齐 QueryTasksDto 模式）。 */
 export class QueryArtifactsDto {
   @ApiPropertyOptional({
-    description: '产出物类型筛选（text/doc/file），缺省返回全部',
+    description: '产出物类型筛选（text/doc/file/plan），缺省返回全部',
     enum: ARTIFACT_TYPES,
   })
   @IsOptional()

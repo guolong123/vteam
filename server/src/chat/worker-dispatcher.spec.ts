@@ -32,9 +32,9 @@ import {
   GROUP_TRIGGER_INSTRUCTION,
   MAIN_AGENT_INSTRUCTION,
   PENDING_INSTANCE_REF,
-  PLAN_CAPABILITY_INSTRUCTION,
-  PLAN_REVIEW_CHECKLIST_INSTRUCTION,
-  PLAN_WORKFLOW_INSTRUCTION,
+  ARTIFACT_SUBMISSION_INSTRUCTION,
+  PLAN_PRODUCE_INSTRUCTION,
+  PLAN_REVIEW_INSTRUCTION,
   TEAM_GROUP_TRIGGER_INSTRUCTION,
   TEAM_SYSTEM_RECEPTION_INSTRUCTION,
   toExecutionScope,
@@ -1196,29 +1196,54 @@ describe('WorkerDispatcher', () => {
       expect(s).toContain('【职责】负责需求拆解与文档化。');
     });
 
-    it('executionMode=plan：追加轻量能力引导 + 完整【计划工作流】两段（含 plan_submit/plan_task_transition 工具名）', () => {
-      const s = buildSystemInstructions(agent, { executionMode: 'plan' });
-      expect(s).toContain(PLAN_CAPABILITY_INSTRUCTION);
-      expect(s).toContain('【执行计划】');
-      expect(s).toContain(PLAN_WORKFLOW_INSTRUCTION);
-      expect(s).toContain('【计划工作流】');
-      expect(s).toContain('本任务执行模式=plan');
-      expect(s).toContain('plan_submit');
-      expect(s).toContain('plan_review');
-      expect(s).toContain('plan_task_transition');
-      expect(s).toContain('task_transition mark-pending-review');
+    it('计划关（缺省）：不注入任何计划段（字节级保持原行为）', () => {
+      const s = buildSystemInstructions(agent);
+      expect(s).not.toContain(PLAN_PRODUCE_INSTRUCTION);
+      expect(s).not.toContain(PLAN_REVIEW_INSTRUCTION);
+      expect(s).not.toContain('【计划编制】');
+      expect(s).not.toContain('【计划评审】');
+      const s2 = buildSystemInstructions(agent, { taskPlanMode: false });
+      expect(s2).not.toContain(PLAN_PRODUCE_INSTRUCTION);
+      expect(s2).not.toContain(PLAN_REVIEW_INSTRUCTION);
     });
 
-    it('executionMode 非 plan（direct/缺省）：注入轻量【执行计划】引导、不注入完整【计划工作流】段', () => {
-      const s = buildSystemInstructions(agent, { executionMode: 'direct' });
-      expect(s).toContain(PLAN_CAPABILITY_INSTRUCTION);
-      expect(s).toContain('【执行计划】');
+    it('计划开+主 Agent：注入出计划指令（写入 .opencode/plans/ + todo 步骤）', () => {
+      const s = buildSystemInstructions(agent, {
+        isMainAgent: true,
+        taskPlanMode: true,
+      });
+      expect(s).toContain(PLAN_PRODUCE_INSTRUCTION);
+      expect(s).toContain('【计划编制】');
+      // 计划 Tab 同步的是任务目录下的 .md 文件，不再走 submit_artifact type:"plan"
+      expect(s).toContain('.opencode/plans/');
+      expect(s).not.toContain('type:"plan"');
+      expect(s).toContain('todo');
+      expect(s).not.toContain(PLAN_REVIEW_INSTRUCTION);
+    });
+
+    it('计划开+非主 Agent：注入评审指令（含三段式与禁另起计划）', () => {
+      const s = buildSystemInstructions(agent, {
+        isMainAgent: false,
+        taskPlanMode: true,
+      });
+      expect(s).toContain(PLAN_REVIEW_INSTRUCTION);
+      expect(s).toContain('【计划评审】');
+      expect(s).toContain('不要另起计划');
+      expect(s).toContain('group_post');
+      expect(s).toContain('.opencode/plans/');
+      expect(s).not.toContain(PLAN_PRODUCE_INSTRUCTION);
+    });
+
+    it('产出物提交引导：恒注入 submit_artifact 用法（计划文档/交付物统一走该工具）', () => {
+      const s = buildSystemInstructions(agent);
+      expect(s).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      expect(s).toContain('submit_artifact');
+      expect(s).toContain('fileRef');
+      expect(s).toContain('group_post');
+      // 自造计划域已下线：不再注入 plan_submit / plan_review 等提示词
+      expect(s).not.toContain('plan_submit');
+      expect(s).not.toContain('plan_review');
       expect(s).not.toContain('【计划工作流】');
-      expect(s).not.toContain(PLAN_WORKFLOW_INSTRUCTION);
-      // 缺省（存量调用未传 executionMode）同样只注入轻量引导——向后兼容
-      const s2 = buildSystemInstructions(agent);
-      expect(s2).toContain(PLAN_CAPABILITY_INSTRUCTION);
-      expect(s2).not.toContain('【计划工作流】');
       // 既有段不受影响
       expect(s).toContain(GLOBAL_SYSTEM_INSTRUCTIONS);
     });
@@ -4791,8 +4816,8 @@ describe('WorkerDispatcher', () => {
       expect(base).not.toContain('团队接待');
       expect(teamOut).toBe(
         base.replace(
-          PLAN_CAPABILITY_INSTRUCTION,
-          `${TEAM_SYSTEM_RECEPTION_INSTRUCTION}\n${PLAN_CAPABILITY_INSTRUCTION}`,
+          ARTIFACT_SUBMISSION_INSTRUCTION,
+          `${TEAM_SYSTEM_RECEPTION_INSTRUCTION}\n${ARTIFACT_SUBMISSION_INSTRUCTION}`,
         ),
       );
     });
@@ -4815,7 +4840,6 @@ describe('WorkerDispatcher', () => {
         selfInstanceId: 'tmm_0000000001',
         selfAlias: '产品经理-1',
         persistentWorkDir: '/data/vteam-worker/tasks/t_1',
-        executionMode: 'direct',
         memoryIndex: '【可用记忆索引】',
       });
       expect(out).not.toContain('团队接待');
@@ -4876,6 +4900,9 @@ describe('WorkerDispatcher', () => {
       prisma.chatChannel.findFirst.mockResolvedValue(null as any);
       (prisma as any).teamMember = {
         findMany: jest.fn().mockResolvedValue([]),
+        // 默认未选择 opencode agent / 无覆盖模型（零回归基线）；
+        // 相关用例按 select 字段覆盖 mockImplementation。
+        findFirst: jest.fn().mockResolvedValue(null),
       };
       (prisma as any).team = {
         findUnique: jest.fn().mockResolvedValue({ mainAgentMemberId: null }),
@@ -5125,28 +5152,111 @@ describe('WorkerDispatcher', () => {
       });
     });
 
-    it('Todo2 plan 注入：executionMode=plan → system 含完整计划工作流 + 评审清单；direct 仅能力引导', async () => {
+    it('opencode agent：成员选了 opencodeAgentName → execute 收到 agent 字段（透传给 opencode 内核执行）', async () => {
+      // 两个 resolver（overrideModelId / opencodeAgentName）各查一次同表：
+      // 按 select 字段返回，避免互相覆盖。
+      (prisma as any).teamMember.findFirst.mockImplementation(
+        async (q: any) =>
+          q?.select?.opencodeAgentName !== undefined
+            ? { opencodeAgentName: 'plan' }
+            : { overrideModelId: null },
+      );
+      const d = createDispatcher();
+      await d.dispatch(
+        teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
+      );
+      expect(workerClient.execute.mock.calls[0][1].agent).toBe('plan');
+    });
+
+    it('opencode agent 零回归：opencodeAgentName 为 null → execute 不含 agent 键（行为与引入前逐字节一致）', async () => {
+      // 默认 mock：teamMember.findFirst → null（未选择任何 opencode agent）
+      const d = createDispatcher();
+      await d.dispatch(
+        teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
+      );
+      // 必须"不含该键"而非"值为 undefined"——worker 侧以 key 存在与否决定是否下发 agent
+      expect(
+        Object.prototype.hasOwnProperty.call(
+          workerClient.execute.mock.calls[0][1],
+          'agent',
+        ),
+      ).toBe(false);
+    });
+
+    it('opencode agent：查询异常不阻断分派（回退不带 agent 字段）', async () => {
+      // 仅让 opencodeAgentName 那次查询失败，验证其 try/catch 容错
+      (prisma as any).teamMember.findFirst.mockImplementation(
+        async (q: any) => {
+          if (q?.select?.opencodeAgentName !== undefined) {
+            throw new Error('db down');
+          }
+          return { overrideModelId: null };
+        },
+      );
+      const d = createDispatcher();
+      await d.dispatch(
+        teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
+      );
+      expect(
+        Object.prototype.hasOwnProperty.call(
+          workerClient.execute.mock.calls[0][1],
+          'agent',
+        ),
+      ).toBe(false);
+    });
+
+    it('开关关但主 Agent 职责为 plan（如下拉选 plan）：仍注入编制指令（有效计划模式）', async () => {
+      (prisma as any).team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_0000000001',
+      });
+      // 主成员行选了 plan agent（task.planMode 保持 false：单控件零附加逻辑）
+      (prisma as any).teamMember.findFirst.mockImplementation(
+        async (q: any) =>
+          q?.select?.opencodeAgentName !== undefined
+            ? { opencodeAgentName: 'plan' }
+            : { overrideModelId: null },
+      );
+      const d = createDispatcher();
+      await d.dispatch(
+        teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
+      );
+      expect(workerClient.execute.mock.calls[0][1].system).toContain(
+        '【计划编制】',
+      );
+    });
+
+    it('开关关且主 Agent 为执行职责：不注入（默认安全）', async () => {
+      (prisma as any).team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_0000000001',
+      });
+      (prisma as any).teamMember.findFirst.mockImplementation(
+        async (q: any) =>
+          q?.select?.opencodeAgentName !== undefined
+            ? { opencodeAgentName: 'build' }
+            : { overrideModelId: null },
+      );
+      const d = createDispatcher();
+      await d.dispatch(
+        teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
+      );
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(system).not.toContain('【计划编制】');
+      expect(system).not.toContain('【计划评审】');
+    });
+
+    it('计划域已下线：dispatch 不再注入 plan_submit/plan_review 提示词，改注入产出物引导', async () => {
       const d = createDispatcher();
       await d.dispatch(
         teamRequest({
-          taskContext: { taskId: 't_0000000001', executionMode: 'plan' },
+          taskContext: { taskId: 't_0000000001' },
         }) as any,
       );
-      const planSystem = workerClient.execute.mock.calls[0][1].system as string;
-      expect(planSystem).toContain(PLAN_WORKFLOW_INSTRUCTION);
-      expect(planSystem).toContain(PLAN_REVIEW_CHECKLIST_INSTRUCTION);
-      expect(planSystem).toContain(PLAN_CAPABILITY_INSTRUCTION);
-
-      workerClient.execute.mockClear();
-      await d.dispatch(
-        teamRequest({
-          taskContext: { taskId: 't_0000000001', executionMode: 'direct' },
-        }) as any,
-      );
-      const directSystem = workerClient.execute.mock.calls[0][1]
-        .system as string;
-      expect(directSystem).toContain(PLAN_CAPABILITY_INSTRUCTION);
-      expect(directSystem).not.toContain(PLAN_WORKFLOW_INSTRUCTION);
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(system).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      expect(system).toContain('submit_artifact');
+      expect(system).not.toContain('plan_submit');
+      expect(system).not.toContain('plan_review');
+      expect(system).not.toContain('【计划工作流】');
     });
 
     it('Todo9 memoryIndex：team+global 计数 + 最近条目进 system（任务级记忆已删除，prompt hint 富集）', async () => {
@@ -5190,30 +5300,7 @@ describe('WorkerDispatcher', () => {
       ).not.toContain('【可用记忆索引');
     });
 
-    it('Todo2 非法 executionMode → 400 TASK_EXECUTION_MODE_INVALID，worker 零调用', async () => {
-      const d = createDispatcher();
-      let caught: unknown = null;
-      try {
-        await d.dispatch(
-          teamRequest({
-            taskContext: { taskId: 't_0000000001', executionMode: 'bogus' },
-          }) as any,
-        );
-      } catch (err) {
-        caught = err;
-      }
-      expect(caught).not.toBeNull();
-      expect((caught as any)?.response?.code).toBe(
-        'TASK_EXECUTION_MODE_INVALID',
-      );
-      expect((caught as any)?.status).toBe(400);
-      expect(workerClient.execute).not.toHaveBeenCalled();
-      expect(
-        (sessionLifecycle as any).ensureTeamSession,
-      ).not.toHaveBeenCalled();
-    });
-
-    it('Todo2 主门唯一来源 team.mainAgentMemberId；任务模式零 task 表读取', async () => {
+    it('Todo2 主门唯一来源 team.mainAgentMemberId；task 表只允许 planMode 单字段读取', async () => {
       (prisma as any).team.findUnique.mockResolvedValue({
         mainAgentMemberId: 'tmm_0000000001',
       });
@@ -5223,6 +5310,26 @@ describe('WorkerDispatcher', () => {
       );
       expect(workerClient.execute.mock.calls[0][1].system).toContain(
         MAIN_AGENT_INSTRUCTION,
+      );
+      // 计划模式开关是 task 表唯一的合法读取（select planMode 单字段，主门判定仍只看 team 表）
+      expect(prisma.task.findUnique).toHaveBeenCalledTimes(1);
+      expect(prisma.task.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ select: { planMode: true } }),
+      );
+    });
+
+    it('taskContext 透传 planMode → 免 task 表读取（零读路径保留）', async () => {
+      (prisma as any).team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_0000000001',
+      });
+      const d = createDispatcher();
+      await d.dispatch(
+        teamRequest({
+          taskContext: { taskId: 't_0000000001', planMode: true },
+        }) as any,
+      );
+      expect(workerClient.execute.mock.calls[0][1].system).toContain(
+        '【计划编制】',
       );
       expect(prisma.task.findUnique).not.toHaveBeenCalled();
     });

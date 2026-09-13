@@ -1,6 +1,6 @@
 /**
  * 任务详情域共享类型（任务详情页 / 团队会话页 / 抽屉复用）。
- * 对齐 server DTO：TasksService.toTaskDto / toArtifactListItem / issues / plans.
+ * 对齐 server DTO：TasksService.toTaskDto / toArtifactListItem / issues.
  */
 import type { RoleKey } from "@/src/theme/tokens";
 
@@ -40,6 +40,13 @@ export interface TaskDetail {
   mainAgentId: string | null;
   mainAgentInstanceId: string | null;
   managedMode: boolean;
+  /** 计划模式开关（task.planMode；true=主 Agent 先出计划，其他成员只评审）。 */
+  planMode?: boolean | null;
+  /**
+   * 有效计划模式（服务端唯一真相：planMode OR 主 Agent 职责约定为 plan）。
+   * 展示判断一律用它（缺省回退 planMode 兼容旧响应）。
+   */
+  effectivePlanMode?: boolean | null;
   backgroundDocs: unknown[];
   teamAgentIds: string[];
   instances: TaskInstance[];
@@ -51,7 +58,6 @@ export interface TaskDetail {
   pendingReviewAt: string | null;
   completedAt: string | null;
   archivedAt: string | null;
-  executionMode: "direct" | "plan";
 }
 
 /** 产出物 API 类型（对齐 ARTIFACT_TYPES：text/doc/file）。 */
@@ -95,52 +101,6 @@ export interface TaskIssuesResponse {
   pageSize: number;
 }
 
-/** 计划子任务条目（GET /plans?taskId= → tasks[]）。 */
-export interface PlanTaskItem {
-  id: string;
-  seq: number;
-  title: string;
-  content: unknown;
-  assigneeInstanceId: string | null;
-  assigneeAlias: string | null;
-  assigneeName: string | null;
-  status: string;
-}
-
-/** 计划头 + 子任务清单（GET /plans?taskId= 响应）。 */
-export interface PlanWithTasks {
-  id: string;
-  taskId: string;
-  title: string;
-  summary: string | null;
-  scopeIn: string | null;
-  scopeOut: string | null;
-  status: string;
-  createdBy: string;
-  reviewerInstanceId: string | null;
-  createdAt: string;
-  updatedAt: string;
-  tasks: PlanTaskItem[];
-}
-
-/** 计划状态 → 视觉主题（徽章色）。 */
-export const PLAN_STATUS_THEME: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  reviewing: { label: "待评审", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
-  approved: { label: "已通过", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
-  rejected: { label: "已驳回", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
-  executing: { label: "执行中", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
-  completed: { label: "已完成", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
-};
-
-/** 计划子任务状态 → 中文标签。 */
-export const PLAN_TASK_STATUS_LABEL: Record<string, string> = {
-  pending: "待开始",
-  in_progress: "进行中",
-  done: "已完成",
-  blocked: "已阻塞",
-  skipped: "已跳过",
-};
-
 /** issue 状态排序优先级（待办在前）。 */
 export const ISSUE_STATUS_ORDER: Record<TaskIssueItem["status"], number> = {
   open: 0,
@@ -159,7 +119,7 @@ export const ISSUE_STATUS_BADGE: Record<TaskIssueItem["status"], { label: string
   rejected: { label: "已拒绝", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 };
 
-/** 产出物类型三色：结论文本=紫 / 文档=蓝 / 文件=绿。 */
+/** 产出物类型四色：结论文本=紫 / 文档=蓝 / 文件=绿 / 计划=青。 */
 export const ARTIFACT_TYPE_THEME: Record<ArtifactApiType, { color: string }> = {
   text: { color: "#7C3AED" },
   doc: { color: "#0D9488" },

@@ -19,6 +19,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { apiUrl, WORKER_TOKEN_HEADER } from '../client/registry-client';
+import { readOmoAgents, writeOmoAgents } from './omo-config';
 import {
   CustomToolArg,
   CustomToolArgType,
@@ -88,6 +89,27 @@ const MANIFEST_REL = '.opencode-worker-inject.json';
 const DEFAULT_PAGE_SIZE = 100;
 /** tools 注入文件名非法字符（opencode 工具名约束，安全兜底）。 */
 const INVALID_FILE_CHARS = /[^a-z0-9-_.]/g;
+
+/**
+ * OmO 插件在 opencode.json plugin 节里的条目。
+ *
+ * 用包名 + @latest（与官方安装器写入 $HOME 配置的写法一致）而非镜像内绝对路径：
+ * OmO 是"安装器 + 插件"形态，包由 bun 在运行时按此说明解析，写死路径反而与安装器
+ * 生成的状态脱节。
+ */
+const OMO_PLUGIN_ENTRY = 'oh-my-openagent@latest';
+/**
+ * 判定 plugin 条目是否指向 OmO（正式名 oh-my-openagent，旧正式名 oh-my-opencode）。
+ *
+ * ⚠️ 必须**排除** `oh-my-opencode-slim`——那是第三方精简 fork，与 OmO 是两个不同插件。
+ * 早期 vteam 误装过 slim，其条目残留在持久化卷的 opencode.json 里；若用宽松匹配
+ * （如 /oh-my-(openagent|opencode)/ 会被 "oh-my-opencode-slim" 命中），就会把 slim
+ * 误判成"OmO 已在"，于是永不写入真正的 OmO 条目 → 插件静默不加载（实测踩坑）。
+ */
+const OMO_ENTRY_RE = /(^|\/)oh-my-(openagent|opencode)(@|$|\/)/;
+/** 第三方精简 fork 条目：从配置中清除，避免与 OmO 并存冲突。 */
+const OMO_SLIM_ENTRY_RE = /oh-my-opencode-slim/;
+
 
 export class ResourceInjector {
   private readonly serverUrl: string;
@@ -208,9 +230,51 @@ export class ResourceInjector {
       names.push(server.name);
     }
     config.mcp = mcp;
+    this.injectOmoPlugin(config);
     this.writeConfig(configPath, config);
     this.writeManifest({ ...manifest, mcpServers: names });
     return names;
+  }
+
+  /**
+   * 声明 OmO（oh-my-openagent）到 opencode.json 的 plugin 节。
+   *
+   * 插件由**官方安装器在镜像构建期**注册（见 Dockerfile：`bunx oh-my-openagent install
+   * --no-tui --platform=opencode --skip-auth`），它会把条目写进 $HOME/.config/opencode/
+   * opencode.json。但 opencode 运行时的 cwd 是 <workDir>（/data/vteam-worker），读的是
+   * <workDir>/opencode.json——两份配置不是同一个文件，所以这里必须把插件条目同步进来，
+   * 否则 serve 根本不会加载 OmO。
+   *
+   * 配套前提：serve 不能带 `--pure`（--pure = 不加载外部插件），见 opencode-server.ts
+   * 的 isPureMode()——默认非 pure，插件才会真正加载。
+   *
+   * 合并策略（与 mcp 节同思路，幂等）：
+   * - 已存在指向 OmO 的条目（任意写法：包名 / @latest / 路径）→ 不重复追加；
+   * - 用户手写的其他 plugin 条目一律保留。
+   */
+  private injectOmoPlugin(config: Record<string, unknown>): void {
+    const raw = Array.isArray(config.plugin) ? config.plugin.slice() : [];
+    // 迁移清理：移除历史误装的 slim fork 条目（与 OmO 不是同一个插件）
+    const existing = raw.filter(
+      (entry) => !(typeof entry === 'string' && OMO_SLIM_ENTRY_RE.test(entry)),
+    );
+    const already = existing.some(
+      (entry) => typeof entry === 'string' && OMO_ENTRY_RE.test(entry),
+    );
+    if (!already) {
+      existing.push(OMO_PLUGIN_ENTRY);
+    }
+    config.plugin = existing;
+  }
+
+  /** 写入 OmO 的 agent→模型配置（委托 omo-config 模块，与 exec-server 共用同一实现）。 */
+  async writeOmoConfig(agents: Record<string, string>): Promise<string> {
+    return writeOmoAgents(this.workDir, agents);
+  }
+
+  /** 读取 OmO 的 agent→模型配置（扁平 name→model）。 */
+  readOmoConfig(): Record<string, string> {
+    return readOmoAgents(this.workDir);
   }
 
   // ------------------------------------------------------------------

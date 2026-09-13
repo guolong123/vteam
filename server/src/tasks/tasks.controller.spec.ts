@@ -1,4 +1,5 @@
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -12,11 +13,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { QueryTasksDto } from './dto/query-tasks.dto';
 import { RejectTaskDto } from './dto/reject-task.dto';
-import { UpdateExecutionModeDto } from './dto/update-execution-mode.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
+import { UploadPlanDocDto } from './dto/upload-plan-doc.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { TasksController } from './tasks.controller';
 import { TasksService } from './tasks.service';
+import { PlanStepsService } from './plan-steps.service';
+import { PlanDocsService } from './plan-docs.service';
 
 describe('TasksController', () => {
   let controller: TasksController;
@@ -26,7 +29,6 @@ describe('TasksController', () => {
     findOne: jest.Mock;
     update: jest.Mock;
     updateTeam: jest.Mock;
-    updateExecutionMode: jest.Mock;
     start: jest.Mock;
     markPendingReview: jest.Mock;
     accept: jest.Mock;
@@ -44,7 +46,6 @@ describe('TasksController', () => {
       findOne: jest.fn(),
       update: jest.fn(),
       updateTeam: jest.fn(),
-      updateExecutionMode: jest.fn(),
       start: jest.fn(),
       markPendingReview: jest.fn(),
       accept: jest.fn(),
@@ -60,6 +61,11 @@ describe('TasksController', () => {
       providers: [
         { provide: TasksService, useValue: service },
         { provide: PrismaService, useValue: prisma },
+        { provide: PlanStepsService, useValue: { listPlanSteps: jest.fn() } },
+        {
+          provide: PlanDocsService,
+          useValue: { listPlanDocs: jest.fn(), writePlanDoc: jest.fn() },
+        },
         TeamMembershipGuard,
       ],
     })
@@ -237,6 +243,77 @@ describe('TasksController', () => {
       expect(out).toEqual({ id: 't_1' });
     });
 
+    it('GET tasks/:id/plan-steps 转发 id 到 planStepsService（计划 Tab 步骤区）', async () => {
+      const planSteps = { listPlanSteps: jest.fn().mockResolvedValue({ steps: [], workerId: null, degraded: true }) };
+      (controller as any).planStepsService = planSteps;
+
+      const out = await controller.listPlanSteps('t_1');
+
+      expect(planSteps.listPlanSteps).toHaveBeenCalledWith('t_1');
+      expect(out).toEqual({ steps: [], workerId: null, degraded: true });
+    });
+
+    it('GET tasks/:id/plan-docs 转发 id 到 planDocsService（计划 Tab 列表区）', async () => {
+      const planDocs = {
+        listPlanDocs: jest.fn().mockResolvedValue({
+          files: [],
+          workerId: null,
+          directory: '/data/vteam-worker/tasks/t_1',
+          degraded: true,
+        }),
+      };
+      (controller as any).planDocsService = planDocs;
+
+      const out = await controller.listPlanDocs('t_1');
+
+      expect(planDocs.listPlanDocs).toHaveBeenCalledWith('t_1');
+      expect(out.degraded).toBe(true);
+    });
+
+    it('POST tasks/:id/plan-docs 只把 name/content 透传（directory 由服务端定位，不由前端指定）', async () => {
+      const planDocs = {
+        writePlanDoc: jest
+          .fn()
+          .mockResolvedValue({ name: 'up.md', updatedAt: 'x', directory: '/d' }),
+      };
+      (controller as any).planDocsService = planDocs;
+
+      const out = await controller.uploadPlanDoc('t_1', {
+        name: 'up.md',
+        content: '# 正文',
+      } as UploadPlanDocDto);
+
+      expect(planDocs.writePlanDoc).toHaveBeenCalledWith('t_1', {
+        name: 'up.md',
+        content: '# 正文',
+      });
+      expect(out.name).toBe('up.md');
+    });
+
+    it('POST tasks/:id/plan-docs 定位不到 worker → 503（不是 500，用户需能区分"暂不可用"与"服务端故障"）', async () => {
+      const planDocs = {
+        writePlanDoc: jest
+          .fn()
+          .mockRejectedValue(new Error('未定位到可用的 worker（团队无主 Agent / 无会话 / worker 离线）')),
+      };
+      (controller as any).planDocsService = planDocs;
+
+      await expect(
+        controller.uploadPlanDoc('t_1', { name: 'a.md', content: 'x' } as UploadPlanDocDto),
+      ).rejects.toThrow(ServiceUnavailableException);
+    });
+
+    it('POST tasks/:id/plan-docs 其他错误原样抛出（如 worker 侧 400 不伪装成 503）', async () => {
+      const planDocs = {
+        writePlanDoc: jest.fn().mockRejectedValue(new Error('plan-file HTTP 400: name 非法')),
+      };
+      (controller as any).planDocsService = planDocs;
+
+      await expect(
+        controller.uploadPlanDoc('t_1', { name: 'a.md', content: 'x' } as UploadPlanDocDto),
+      ).rejects.toThrow(/name 非法/);
+    });
+
     it('PATCH tasks/:id 转发 id + dto 到 update', async () => {
       service.update.mockResolvedValue({ id: 't_1', title: '改名' });
       const dto = { title: '改名' };
@@ -331,22 +408,6 @@ describe('TasksController', () => {
       expect(service.updateTeam).toHaveBeenCalledWith('t_1', dto, 'u_admin');
       expect(out).toEqual({ id: 't_1', teamAgentIds: ['a_1'] });
     });
-
-    it('PATCH tasks/:id/execution-mode 转发 id + mode 到 updateExecutionMode', async () => {
-      service.updateExecutionMode.mockResolvedValue({
-        id: 't_1',
-        executionMode: 'plan',
-      });
-      const dto = { mode: 'plan' };
-
-      const out = await controller.updateExecutionMode(
-        't_1',
-        dto as UpdateExecutionModeDto,
-      );
-
-      expect(service.updateExecutionMode).toHaveBeenCalledWith('t_1', 'plan');
-      expect(out).toEqual({ id: 't_1', executionMode: 'plan' });
-    });
   });
 
   describe('DTO 校验（class-validator）', () => {
@@ -381,33 +442,6 @@ describe('TasksController', () => {
           backgroundDocs: [{ name: 'd' }],
         }),
       ).toHaveLength(0);
-    });
-
-    it('CreateTaskDto：executionMode 缺省通过，仅 direct/plan 合法', async () => {
-      expect(
-        await errorsOf(CreateTaskDto, {
-          title: 'x',
-          teamId: 'tm_0000000001',
-          executionMode: 'plan',
-        }),
-      ).toHaveLength(0);
-      expect(
-        await errorsOf(CreateTaskDto, {
-          title: 'x',
-          teamId: 'tm_0000000001',
-          executionMode: 'agile',
-        }),
-      ).not.toHaveLength(0);
-    });
-
-    it('UpdateExecutionModeDto：mode 必填且仅 direct/plan', async () => {
-      expect(await errorsOf(UpdateExecutionModeDto, {})).not.toHaveLength(0);
-      expect(
-        await errorsOf(UpdateExecutionModeDto, { mode: 'plan' }),
-      ).toHaveLength(0);
-      expect(
-        await errorsOf(UpdateExecutionModeDto, { mode: 'agile' }),
-      ).not.toHaveLength(0);
     });
 
     it('QueryTasksDto：status 须为五态之一，page/pageSize 正整数', async () => {
@@ -469,28 +503,68 @@ describe('TasksController', () => {
         }),
       ).not.toHaveLength(0);
     });
+
+    it('UploadPlanDocDto：合法 .md 通过（与 worker PLAN_DOC_NAME_RE 对齐）', async () => {
+      expect(
+        await errorsOf(UploadPlanDocDto, { name: 'plan-v1.2.md', content: '# 正文' }),
+      ).toHaveLength(0);
+      expect(
+        await errorsOf(UploadPlanDocDto, { name: 'a.md', content: 'x' }),
+      ).toHaveLength(0);
+    });
+
+    it('UploadPlanDocDto：非法 name（穿越/子目录/非 .md/点开头/空格/空串）一律拒绝', async () => {
+      for (const name of [
+        '../evil.md',
+        'a/b.md',
+        '/tmp/evil.md',
+        'a.txt',
+        'noext',
+        '.hidden.md',
+        '-bad.md',
+        'a b.md',
+        '',
+      ]) {
+        expect(
+          await errorsOf(UploadPlanDocDto, { name, content: '# x' }),
+        ).not.toHaveLength(0);
+      }
+    });
+
+    it('UploadPlanDocDto：content 缺省/非字符串/空串 → 拒绝（不允许落空文件）', async () => {
+      expect(await errorsOf(UploadPlanDocDto, { name: 'a.md' })).not.toHaveLength(0);
+      expect(
+        await errorsOf(UploadPlanDocDto, { name: 'a.md', content: 123 }),
+      ).not.toHaveLength(0);
+      expect(
+        await errorsOf(UploadPlanDocDto, { name: 'a.md', content: '' }),
+      ).not.toHaveLength(0);
+    });
   });
 
   describe('权限点守卫（CONF-02 方案②补齐矩阵守卫）', () => {
     const permOf = (handler: (...args: unknown[]) => unknown) =>
       Reflect.getMetadata(REQUIRE_PERMISSION_KEY, handler);
 
-    it('读端点挂 tasks.view（列表/详情）', () => {
+    it('读端点挂 tasks.view（列表/详情/计划步骤/计划文档）', () => {
       expect(permOf(controller.findAll)).toBe('tasks.view');
       expect(permOf(controller.findOne)).toBe('tasks.view');
+      expect(permOf(controller.listPlanSteps)).toBe('tasks.view');
+      expect(permOf(controller.listPlanDocs)).toBe('tasks.view');
     });
 
     it('创建端点挂 tasks.create', () => {
       expect(permOf(controller.create)).toBe('tasks.create');
     });
 
-    it('编辑类端点挂 tasks.edit（update/team/start/mark-pending-review/archive/execution-mode）', () => {
+    it('编辑类端点挂 tasks.edit（update/team/start/mark-pending-review/archive/上传计划文档）', () => {
       expect(permOf(controller.update)).toBe('tasks.edit');
       expect(permOf(controller.updateTeam)).toBe('tasks.edit');
-      expect(permOf(controller.updateExecutionMode)).toBe('tasks.edit');
       expect(permOf(controller.start)).toBe('tasks.edit');
       expect(permOf(controller.markPendingReview)).toBe('tasks.edit');
       expect(permOf(controller.archive)).toBe('tasks.edit');
+      // 上传计划文档会改变 agent 的执行输入，与任务编辑同级
+      expect(permOf(controller.uploadPlanDoc)).toBe('tasks.edit');
     });
 
     it('验收类端点挂 tasks.review（accept/reject）', () => {

@@ -14,6 +14,7 @@
  */
 
 import * as fs from 'fs';
+import * as fsp from 'fs/promises';
 import * as http from 'http';
 import * as os from 'os';
 import { join } from 'path';
@@ -25,7 +26,13 @@ import {
   DriverRequestError,
 } from '../driver/v1-driver';
 import { getLoad, resetInstanceCount } from '../instance-tracker';
-import { ExecServer, MAX_FILE_FETCH_BYTES, MAX_IMAGE_ATTACHMENT_BYTES } from './exec-server';
+import {
+  ExecServer,
+  MAX_FILE_FETCH_BYTES,
+  MAX_IMAGE_ATTACHMENT_BYTES,
+  MAX_PLAN_DOC_BYTES,
+  MAX_PLAN_UPLOAD_BYTES,
+} from './exec-server';
 
 function asstMsg(id: string, parts: ServePart[]): ServeMessage {
   return { info: { id, role: 'assistant' }, parts };
@@ -760,6 +767,314 @@ describe('ExecServer：GET /file（FR-41 文件拉取端点）', () => {
   });
 });
 
+describe('ExecServer：GET /agents（opencode 原生 agent 清单端点）', () => {
+  const TOKEN = 'tok';
+  const WORK_DIR = '/data/vteam-worker';
+
+  /** 发 GET /agents（可选 directory / token）。 */
+  function getAgents(
+    port: number,
+    opts: { directory?: string; token?: string } = {},
+  ): Promise<{ status: number; body: any }> {
+    return new Promise((resolve, reject) => {
+      const headers: Record<string, string> = {};
+      if (opts.token !== undefined) {
+        headers['X-Worker-Token'] = opts.token;
+      }
+      const qs = opts.directory
+        ? `?directory=${encodeURIComponent(opts.directory)}`
+        : '';
+      const req = http.request(
+        { host: '127.0.0.1', port, path: `/agents${qs}`, method: 'GET', headers },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            const raw = Buffer.concat(chunks).toString('utf8');
+            let body: any = raw;
+            try {
+              body = JSON.parse(raw);
+            } catch {
+              /* 保留原始文本 */
+            }
+            resolve({ status: res.statusCode ?? 0, body });
+          });
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  function serverWith(listAgents: jest.Mock, workDir?: string): ExecServer {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    (driver as any).listAgents = listAgents;
+    return new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: TOKEN,
+      workDir,
+      logger: SILENT_LOGGER,
+    });
+  }
+
+  it('鉴权：缺失 token / 错误 token → 401', async () => {
+    const listAgents = jest.fn().mockResolvedValue([]);
+    const exec = serverWith(listAgents, WORK_DIR);
+    const bound = await exec.start();
+    try {
+      expect((await getAgents(bound)).status).toBe(401);
+      expect((await getAgents(bound, { token: 'wrong' })).status).toBe(401);
+      expect(listAgents).not.toHaveBeenCalled();
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('未配置 workerToken → 一律 401', async () => {
+    const listAgents = jest.fn().mockResolvedValue([]);
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    (driver as any).listAgents = listAgents;
+    const exec = new ExecServer({ port: 0, driver, sender, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    try {
+      expect((await getAgents(bound, { token: 'anything' })).status).toBe(401);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('成功：200 {agents} 透传 driver 结果', async () => {
+    const agents = [
+      { name: 'build', mode: 'primary', native: true },
+      { name: 'plan', mode: 'primary', native: true },
+      { name: 'my-agent', mode: 'primary', native: false },
+    ];
+    const listAgents = jest.fn().mockResolvedValue(agents);
+    const exec = serverWith(listAgents, WORK_DIR);
+    const bound = await exec.start();
+    try {
+      const res = await getAgents(bound, { token: TOKEN });
+      expect(res.status).toBe(200);
+      expect(res.body.agents).toEqual(agents);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('directory 显式传入 → 原样透传 driver（per-directory 隔离依赖它）', async () => {
+    const listAgents = jest.fn().mockResolvedValue([]);
+    const exec = serverWith(listAgents, WORK_DIR);
+    const bound = await exec.start();
+    try {
+      await getAgents(bound, { token: TOKEN, directory: '/data/vteam-worker/tasks/t_1' });
+      expect(listAgents).toHaveBeenCalledWith('/data/vteam-worker/tasks/t_1');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('未传 directory → 回落 workDir（与 serve cwd 一致）', async () => {
+    const listAgents = jest.fn().mockResolvedValue([]);
+    const exec = serverWith(listAgents, WORK_DIR);
+    const bound = await exec.start();
+    try {
+      await getAgents(bound, { token: TOKEN });
+      expect(listAgents).toHaveBeenCalledWith(WORK_DIR);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('未传 directory 且未配置 workDir → 400（不猜测目录，避免列出集合与实际不符）', async () => {
+    const listAgents = jest.fn().mockResolvedValue([]);
+    const exec = serverWith(listAgents, undefined);
+    const bound = await exec.start();
+    try {
+      const res = await getAgents(bound, { token: TOKEN });
+      expect(res.status).toBe(400);
+      expect(listAgents).not.toHaveBeenCalled();
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('driver 抛错（serve 未就绪/旧版无该端点）→ 502 {error}，不抛未捕获异常', async () => {
+    const listAgents = jest.fn().mockRejectedValue(new Error('serve 未就绪'));
+    const exec = serverWith(listAgents, WORK_DIR);
+    const bound = await exec.start();
+    try {
+      const res = await getAgents(bound, { token: TOKEN });
+      expect(res.status).toBe(502);
+      expect(String(res.body.error)).toContain('serve 未就绪');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('非 GET 方法 → 405', async () => {
+    const listAgents = jest.fn().mockResolvedValue([]);
+    const exec = serverWith(listAgents, WORK_DIR);
+    const bound = await exec.start();
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          {
+            host: '127.0.0.1',
+            port: bound,
+            path: '/agents',
+            method: 'POST',
+            headers: { 'X-Worker-Token': TOKEN },
+          },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          },
+        );
+        req.on('error', reject);
+        req.end();
+      });
+      expect(status).toBe(405);
+    } finally {
+      await exec.stop();
+    }
+  });
+});
+
+describe('ExecServer：GET /todos（opencode 会话 todo 步骤端点）', () => {
+  const TOKEN = 'tok';
+
+  /** 发 GET /todos（可选 sessionId/directory/token）。 */
+  function getTodos(
+    port: number,
+    opts: { sessionId?: string; directory?: string; token?: string } = {},
+  ): Promise<{ status: number; body: any }> {
+    return new Promise((resolve, reject) => {
+      const headers: Record<string, string> = {};
+      if (opts.token !== undefined) {
+        headers['X-Worker-Token'] = opts.token;
+      }
+      const params = new URLSearchParams();
+      if (opts.sessionId !== undefined) params.set('sessionId', opts.sessionId);
+      if (opts.directory !== undefined) params.set('directory', opts.directory);
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const req = http.request(
+        { host: '127.0.0.1', port, path: `/todos${qs}`, method: 'GET', headers },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            const raw = Buffer.concat(chunks).toString('utf8');
+            let body: any = raw;
+            try {
+              body = JSON.parse(raw);
+            } catch {
+              /* 保留原始文本 */
+            }
+            resolve({ status: res.statusCode ?? 0, body });
+          });
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  function serverWith(listTodos: jest.Mock): ExecServer {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    (driver as any).listTodos = listTodos;
+    return new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: TOKEN,
+      logger: SILENT_LOGGER,
+    });
+  }
+
+  it('鉴权：缺失 token / 错误 token → 401', async () => {
+    const listTodos = jest.fn().mockResolvedValue([]);
+    const exec = serverWith(listTodos);
+    const bound = await exec.start();
+    try {
+      expect((await getTodos(bound, { sessionId: 'ses_1' })).status).toBe(401);
+      expect(
+        (await getTodos(bound, { sessionId: 'ses_1', token: 'wrong' })).status,
+      ).toBe(401);
+      expect(listTodos).not.toHaveBeenCalled();
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('缺少 sessionId → 400（不猜测会话）', async () => {
+    const listTodos = jest.fn().mockResolvedValue([]);
+    const exec = serverWith(listTodos);
+    const bound = await exec.start();
+    try {
+      const res = await getTodos(bound, { token: TOKEN });
+      expect(res.status).toBe(400);
+      expect(listTodos).not.toHaveBeenCalled();
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('成功：200 {todos} 透传 driver 结果（含 directory 透传）', async () => {
+    const todos = [
+      { content: '拆解任务', status: 'completed' },
+      { content: '写代码', status: 'in_progress' },
+    ];
+    const listTodos = jest.fn().mockResolvedValue(todos);
+    const exec = serverWith(listTodos);
+    const bound = await exec.start();
+    try {
+      const res = await getTodos(bound, {
+        token: TOKEN,
+        sessionId: 'ses_1',
+        directory: '/data/vteam-worker/tasks/t_1',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.todos).toEqual(todos);
+      expect(listTodos).toHaveBeenCalledWith(
+        'ses_1',
+        '/data/vteam-worker/tasks/t_1',
+      );
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('directory 缺省 → 传 undefined（serve 按会话 id 定位，与 per-directory 发现语义不同）', async () => {
+    const listTodos = jest.fn().mockResolvedValue([]);
+    const exec = serverWith(listTodos);
+    const bound = await exec.start();
+    try {
+      await getTodos(bound, { token: TOKEN, sessionId: 'ses_1' });
+      expect(listTodos).toHaveBeenCalledWith('ses_1', undefined);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('driver 抛错（会话不存在/旧版无该端点）→ 502 {error}', async () => {
+    const listTodos = jest.fn().mockRejectedValue(new Error('session 不存在'));
+    const exec = serverWith(listTodos);
+    const bound = await exec.start();
+    try {
+      const res = await getTodos(bound, { token: TOKEN, sessionId: 'ses_x' });
+      expect(res.status).toBe(502);
+      expect(String(res.body.error)).toContain('session 不存在');
+    } finally {
+      await exec.stop();
+    }
+  });
+});
+
 describe('ExecServer：question/权限确认旁路检测（onPoll 轮询 pending 上送）', () => {
   function mockDriverWithPending(): {
     driver: V1Driver;
@@ -1070,6 +1385,972 @@ describe('ExecServer：POST /question-reply（server 下行转发用户回复）
       );
       expect(res.status).toBe(400);
       expect(String(res.body.error)).toContain('HTTP 500');
+    } finally {
+      await exec.stop();
+    }
+  });
+});
+
+describe('ExecServer：GET /plan-files（计划文件同步端点）', () => {
+  const TOKEN = 'tok';
+  let workDir: string;
+
+  beforeEach(async () => {
+    workDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-plan-'));
+  });
+
+  afterEach(async () => {
+    await fsp.rm(workDir, { recursive: true, force: true });
+  });
+
+  /** 直接往 `<dir>/.opencode/plans/` 落文件（模拟 opencode plan agent 写盘）。 */
+  async function seedPlan(
+    dir: string,
+    name: string,
+    content: string,
+    mtime?: Date,
+  ): Promise<string> {
+    const plansDir = join(dir, '.opencode', 'plans');
+    await fsp.mkdir(plansDir, { recursive: true });
+    const full = join(plansDir, name);
+    await fsp.writeFile(full, content, 'utf8');
+    if (mtime) {
+      await fsp.utimes(full, mtime, mtime);
+    }
+    return full;
+  }
+
+  function getPlanFiles(
+    port: number,
+    opts: { directory?: string; token?: string; method?: string } = {},
+  ): Promise<{ status: number; body: any }> {
+    return new Promise((resolve, reject) => {
+      const headers: Record<string, string> = {};
+      if (opts.token !== undefined) {
+        headers['X-Worker-Token'] = opts.token;
+      }
+      const qs = opts.directory ? `?directory=${encodeURIComponent(opts.directory)}` : '';
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: `/plan-files${qs}`,
+          method: opts.method ?? 'GET',
+          headers,
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            const raw = Buffer.concat(chunks).toString('utf8');
+            let body: any = raw;
+            try {
+              body = JSON.parse(raw);
+            } catch {
+              /* 保留原始文本 */
+            }
+            resolve({ status: res.statusCode ?? 0, body });
+          });
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  function serverWith(opts: { workDir?: string; workerToken?: string } = {}): ExecServer {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    return new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: opts.workerToken ?? TOKEN,
+      workDir: opts.workDir,
+      logger: SILENT_LOGGER,
+    });
+  }
+
+  it('鉴权：缺失 token / 错误 token → 401（不泄露目录结构，不读盘）', async () => {
+    await seedPlan(workDir, 'a.md', '# A');
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      expect((await getPlanFiles(bound)).status).toBe(401);
+      expect((await getPlanFiles(bound, { token: 'wrong' })).status).toBe(401);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('未配置 workerToken → 一律 401', async () => {
+    const exec = serverWith({ workDir, workerToken: '' });
+    const bound = await exec.start();
+    try {
+      expect((await getPlanFiles(bound, { token: 'anything' })).status).toBe(401);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('成功：200 {files} 含正文/大小/updatedAt/truncated（计划 Tab 一次拿全）', async () => {
+    const mtime = new Date('2026-03-01T02:03:04.000Z');
+    await seedPlan(workDir, 'plan.md', '# 计划正文\n步骤一', mtime);
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await getPlanFiles(bound, { token: TOKEN });
+      expect(res.status).toBe(200);
+      expect(res.body.files).toHaveLength(1);
+      expect(res.body.files[0]).toEqual({
+        name: 'plan.md',
+        updatedAt: mtime.toISOString(),
+        size: Buffer.byteLength('# 计划正文\n步骤一', 'utf8'),
+        content: '# 计划正文\n步骤一',
+        truncated: false,
+      });
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('directory 显式传入 → 读该任务目录（per-task 隔离）；未传回落 workDir', async () => {
+    const taskDir = join(workDir, 'tasks', 't_1');
+    await seedPlan(taskDir, 't1.md', 'task1');
+    await seedPlan(workDir, 'root.md', 'root');
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const scoped = await getPlanFiles(bound, { token: TOKEN, directory: taskDir });
+      expect(scoped.body.files.map((f: any) => f.name)).toEqual(['t1.md']);
+      const fallback = await getPlanFiles(bound, { token: TOKEN });
+      expect(fallback.body.files.map((f: any) => f.name)).toEqual(['root.md']);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('目录不存在 → 200 {files: []}（agent 还没写过计划是常态，不是错误）', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await getPlanFiles(bound, { token: TOKEN });
+      expect(res.status).toBe(200);
+      expect(res.body.files).toEqual([]);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('未传 directory 且未配置 workDir → 400（不猜测目录）', async () => {
+    const exec = serverWith({ workDir: undefined });
+    const bound = await exec.start();
+    try {
+      expect((await getPlanFiles(bound, { token: TOKEN })).status).toBe(400);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('过滤：非 .md / 大写 .MD / 隐藏文件 / 子目录一律忽略，且按名排序', async () => {
+    await seedPlan(workDir, 'b.md', 'B');
+    await seedPlan(workDir, 'a.md', 'A');
+    await fsp.writeFile(join(workDir, '.opencode', 'plans', 'note.txt'), 'x', 'utf8');
+    await fsp.writeFile(join(workDir, '.opencode', 'plans', 'UP.MD'), 'x', 'utf8');
+    await fsp.writeFile(join(workDir, '.opencode', 'plans', '.hidden.md'), 'x', 'utf8');
+    await fsp.mkdir(join(workDir, '.opencode', 'plans', 'sub.md'), { recursive: true });
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await getPlanFiles(bound, { token: TOKEN });
+      expect(res.body.files.map((f: any) => f.name)).toEqual(['a.md', 'b.md']);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('回归：agent 把计划写在 .omo/plans/ 时也能读到（OmO 实际落点）', async () => {
+    // 装了 OmO 后，计划模式下主 Agent 产出的文件落在 <dir>/.omo/plans/，
+    // 只读 .opencode/plans/ 会得到空列表（实测：计划已写出但页面显示"暂无计划"）
+    const plansDir = join(workDir, '.omo', 'plans');
+    await fsp.mkdir(plansDir, { recursive: true });
+    await fsp.writeFile(join(plansDir, 'plan.md'), '# OmO 计划', 'utf8');
+
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await getPlanFiles(bound, { token: TOKEN });
+      expect(res.status).toBe(200);
+      expect(res.body.files.map((f: any) => f.name)).toEqual(['plan.md']);
+      expect(res.body.files[0].content).toBe('# OmO 计划');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('两个位置都有文件时合并返回（.omo 优先，同名去重）', async () => {
+    await seedPlan(workDir, 'only-opencode.md', 'A');
+    const omoDir = join(workDir, '.omo', 'plans');
+    await fsp.mkdir(omoDir, { recursive: true });
+    await fsp.writeFile(join(omoDir, 'only-omo.md'), 'B', 'utf8');
+    await fsp.writeFile(join(omoDir, 'only-opencode.md'), 'B-wins', 'utf8');
+
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await getPlanFiles(bound, { token: TOKEN });
+      const byName = Object.fromEntries(
+        res.body.files.map((f: any) => [f.name, f.content]),
+      );
+      expect(Object.keys(byName).sort()).toEqual(['only-omo.md', 'only-opencode.md']);
+      // 同名时以 .omo/plans（优先级首位）为准
+      expect(byName['only-opencode.md']).toBe('B-wins');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('超 MAX_PLAN_DOC_BYTES 的单文件 → 截断 + truncated:true（size 仍为真实字节数）', async () => {
+    const big = 'x'.repeat(MAX_PLAN_DOC_BYTES + 100);
+    await seedPlan(workDir, 'big.md', big);
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await getPlanFiles(bound, { token: TOKEN });
+      const file = res.body.files[0];
+      expect(file.truncated).toBe(true);
+      expect(file.content).toHaveLength(MAX_PLAN_DOC_BYTES);
+      expect(file.size).toBe(MAX_PLAN_DOC_BYTES + 100);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('非 GET 方法 → 405', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      expect((await getPlanFiles(bound, { token: TOKEN, method: 'POST' })).status).toBe(405);
+    } finally {
+      await exec.stop();
+    }
+  });
+});
+
+describe('ExecServer：POST /plan-file（计划文件直传端点）', () => {
+  const TOKEN = 'tok';
+  let workDir: string;
+
+  beforeEach(async () => {
+    workDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-plan-up-'));
+  });
+
+  afterEach(async () => {
+    await fsp.rm(workDir, { recursive: true, force: true });
+  });
+
+  function postPlanFile(
+    port: number,
+    body: unknown,
+    opts: { token?: string; method?: string } = {},
+  ): Promise<{ status: number; body: any }> {
+    return new Promise((resolve, reject) => {
+      const data = JSON.stringify(body);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(data)),
+      };
+      if (opts.token !== undefined) {
+        headers['X-Worker-Token'] = opts.token;
+      }
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/plan-file',
+          method: opts.method ?? 'POST',
+          headers,
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            const raw = Buffer.concat(chunks).toString('utf8');
+            let parsed: any = raw;
+            try {
+              parsed = JSON.parse(raw);
+            } catch {
+              /* 保留原始文本 */
+            }
+            resolve({ status: res.statusCode ?? 0, body: parsed });
+          });
+        },
+      );
+      req.on('error', reject);
+      req.write(data);
+      req.end();
+    });
+  }
+
+  function serverWith(opts: { workDir?: string; workerToken?: string } = {}): ExecServer {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    return new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: opts.workerToken ?? TOKEN,
+      workDir: opts.workDir,
+      logger: SILENT_LOGGER,
+    });
+  }
+
+  it('鉴权：缺失 token / 错误 token → 401，不落盘', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const body = { directory: workDir, name: 'up.md', content: '# x' };
+      expect((await postPlanFile(bound, body)).status).toBe(401);
+      expect((await postPlanFile(bound, body, { token: 'wrong' })).status).toBe(401);
+      await expect(fsp.stat(join(workDir, '.opencode', 'plans', 'up.md'))).rejects.toThrow();
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('未配置 workerToken → 一律 401', async () => {
+    const exec = serverWith({ workDir, workerToken: '' });
+    const bound = await exec.start();
+    try {
+      const res = await postPlanFile(
+        bound,
+        { directory: workDir, name: 'up.md', content: '# x' },
+        { token: 'anything' },
+      );
+      expect(res.status).toBe(401);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('成功：200 {name, updatedAt} 且 <directory>/.omo/plans/ 出现该文件（目录自动创建）', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await postPlanFile(
+        bound,
+        { directory: workDir, name: 'uploaded.md', content: '# 上传的计划' },
+        { token: TOKEN },
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.name).toBe('uploaded.md');
+      expect(typeof res.body.updatedAt).toBe('string');
+      const written = await fsp.readFile(
+        join(workDir, '.omo', 'plans', 'uploaded.md'),
+        'utf8',
+      );
+      expect(written).toBe('# 上传的计划');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('同目录同名覆盖写（上传即替换，不做版本堆叠）', async () => {
+    const plansDir = join(workDir, '.omo', 'plans');
+    await fsp.mkdir(plansDir, { recursive: true });
+    await fsp.writeFile(join(plansDir, 'same.md'), '旧内容', 'utf8');
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await postPlanFile(
+        bound,
+        { directory: workDir, name: 'same.md', content: '新内容' },
+        { token: TOKEN },
+      );
+      expect(res.status).toBe(200);
+      expect(await fsp.readFile(join(plansDir, 'same.md'), 'utf8')).toBe('新内容');
+      expect(await fsp.readdir(plansDir)).toEqual(['same.md']);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('directory 缺省 → 回落 workDir；两者都缺 → 400', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const ok = await postPlanFile(
+        bound,
+        { name: 'fallback.md', content: '# f' },
+        { token: TOKEN },
+      );
+      expect(ok.status).toBe(200);
+      await expect(
+        fsp.stat(join(workDir, '.omo', 'plans', 'fallback.md')),
+      ).resolves.toBeTruthy();
+    } finally {
+      await exec.stop();
+    }
+    const noDir = serverWith({ workDir: undefined });
+    const bound2 = await noDir.start();
+    try {
+      const res = await postPlanFile(
+        bound2,
+        { name: 'x.md', content: '# x' },
+        { token: TOKEN },
+      );
+      expect(res.status).toBe(400);
+    } finally {
+      await noDir.stop();
+    }
+  });
+
+  it.each([
+    ['路径穿越 ../evil.md', '../evil.md'],
+    ['子目录 a/b.md', 'a/b.md'],
+    ['绝对路径 /tmp/evil.md', '/tmp/evil.md'],
+    ['非 .md 扩展名 a.txt', 'a.txt'],
+    ['无扩展名', 'noext'],
+    ['以点开头', '.hidden.md'],
+    ['非法字符 a b.md', 'a b.md'],
+    ['空串', ''],
+  ])('非法 name（%s）→ 400 且不落盘', async (_label, name) => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await postPlanFile(
+        bound,
+        { directory: workDir, name, content: '# x' },
+        { token: TOKEN },
+      );
+      expect(res.status).toBe(400);
+      expect(await fsp.readdir(workDir)).toEqual([]);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('content 非字符串（缺省/null/数字）→ 400', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      for (const content of [undefined, null, 123, { a: 1 }]) {
+        const res = await postPlanFile(
+          bound,
+          { directory: workDir, name: 'c.md', content },
+          { token: TOKEN },
+        );
+        expect(res.status).toBe(400);
+      }
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('content 超 MAX_PLAN_UPLOAD_BYTES → 413 且不落盘', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await postPlanFile(
+        bound,
+        { directory: workDir, name: 'huge.md', content: 'x'.repeat(MAX_PLAN_UPLOAD_BYTES + 1) },
+        { token: TOKEN },
+      );
+      expect(res.status).toBe(413);
+      expect(await fsp.readdir(workDir)).toEqual([]);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('请求体非合法 JSON → 400', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          {
+            host: '127.0.0.1',
+            port: bound,
+            path: '/plan-file',
+            method: 'POST',
+            headers: { 'X-Worker-Token': TOKEN, 'Content-Type': 'application/json' },
+          },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          },
+        );
+        req.on('error', reject);
+        req.end('not-json');
+      });
+      expect(status).toBe(400);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('非 POST 方法 → 405', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await postPlanFile(
+        bound,
+        { directory: workDir, name: 'm.md', content: '# x' },
+        { token: TOKEN, method: 'GET' },
+      );
+      expect(res.status).toBe(405);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('写入后 GET /plan-files 立即可见（上传→展示闭环）', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      await postPlanFile(
+        bound,
+        { directory: workDir, name: 'loop.md', content: '# 闭环' },
+        { token: TOKEN },
+      );
+      const listed = await new Promise<any>((resolve, reject) => {
+        const req = http.request(
+          {
+            host: '127.0.0.1',
+            port: bound,
+            path: `/plan-files?directory=${encodeURIComponent(workDir)}`,
+            method: 'GET',
+            headers: { 'X-Worker-Token': TOKEN },
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (c: Buffer) => chunks.push(c));
+            res.on('end', () => resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))));
+          },
+        );
+        req.on('error', reject);
+        req.end();
+      });
+      expect(listed.files.map((f: any) => f.name)).toEqual(['loop.md']);
+      expect(listed.files[0].content).toBe('# 闭环');
+    } finally {
+      await exec.stop();
+    }
+  });
+});
+
+describe('ExecServer：GET/POST /omo-config（OmO agent 模型配置读写）', () => {
+  const TOKEN = 'tok';
+  let workDir: string;
+
+  beforeEach(async () => {
+    workDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-omo-'));
+  });
+
+  afterEach(async () => {
+    await fsp.rm(workDir, { recursive: true, force: true });
+  });
+
+  function serverFor(opts: { workDir?: string | null; token?: string } = {}): ExecServer {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    return new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: opts.token ?? TOKEN,
+      // 缺省用本用例的临时 workDir；显式传 null 才表示"未配置 workDir"
+      workDir: opts.workDir === null ? undefined : (opts.workDir ?? workDir),
+      logger: SILENT_LOGGER,
+    });
+  }
+
+  function req(
+    port: number,
+    method: string,
+    body?: unknown,
+    token?: string,
+  ): Promise<{ status: number; body: any }> {
+    return new Promise((resolve, reject) => {
+      const data = body === undefined ? '' : JSON.stringify(body);
+      const headers: Record<string, string> = {};
+      if (token !== undefined) headers['X-Worker-Token'] = token;
+      if (data) {
+        headers['Content-Type'] = 'application/json';
+        headers['Content-Length'] = String(Buffer.byteLength(data));
+      }
+      const r = http.request(
+        { host: '127.0.0.1', port, path: '/omo-config', method, headers },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            const raw = Buffer.concat(chunks).toString('utf8');
+            let parsed: any = raw;
+            try { parsed = JSON.parse(raw); } catch { /* 原文 */ }
+            resolve({ status: res.statusCode ?? 0, body: parsed });
+          });
+        },
+      );
+      r.on('error', reject);
+      if (data) r.write(data);
+      r.end();
+    });
+  }
+
+  it('鉴权：缺失/错误 token → 401', async () => {
+    const exec = serverFor();
+    const bound = await exec.start();
+    try {
+      expect((await req(bound, 'GET')).status).toBe(401);
+      expect((await req(bound, 'GET', undefined, 'wrong')).status).toBe(401);
+      expect((await req(bound, 'POST', { agents: {} }, 'wrong')).status).toBe(401);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('未配置 workDir → 400（不猜目录）', async () => {
+    const exec = serverFor({ workDir: null });
+    const bound = await exec.start();
+    try {
+      expect((await req(bound, 'GET', undefined, TOKEN)).status).toBe(400);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('GET：无配置时返回空 agents + available 全量 agent 名', async () => {
+    const exec = serverFor();
+    const bound = await exec.start();
+    try {
+      const res = await req(bound, 'GET', undefined, TOKEN);
+      expect(res.status).toBe(200);
+      expect(res.body.agents).toEqual({});
+      expect(res.body.available).toEqual(
+        expect.arrayContaining(['sisyphus', 'prometheus', 'atlas']),
+      );
+      expect(res.body.available).toHaveLength(14);
+      // 透出生效文件路径：全新环境（无文件）→ 指向新位置
+      expect(res.body.configPath).toBe(join('.omo', 'omo.jsonc'));
+      expect(res.body.configKind).toBe('none');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('POST：写入后 GET 回读一致，且落到实际生效的 .omo/omo.jsonc', async () => {
+    const exec = serverFor();
+    const bound = await exec.start();
+    try {
+      const post = await req(
+        bound,
+        'POST',
+        { agents: { sisyphus: 'opencode/big-pickle', prometheus: 'opencode/big-pickle' } },
+        TOKEN,
+      );
+      expect(post.status).toBe(200);
+      expect(post.body.agents).toEqual({
+        sisyphus: 'opencode/big-pickle',
+        prometheus: 'opencode/big-pickle',
+      });
+      const get = await req(bound, 'GET', undefined, TOKEN);
+      expect(get.body.agents).toEqual(post.body.agents);
+      // OmO 优先读 .omo/omo.jsonc（实测：同时存在时它胜出），故写入必须落这里
+      const onDisk = JSON.parse(
+        await fsp.readFile(join(workDir, '.omo', 'omo.jsonc'), 'utf8'),
+      );
+      expect(onDisk.agents.sisyphus).toEqual({ model: 'opencode/big-pickle' });
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('POST：增量合并（只改传入项，其余保留）+ 空串清除覆盖', async () => {
+    const exec = serverFor();
+    const bound = await exec.start();
+    try {
+      await req(bound, 'POST', { agents: { sisyphus: 'a/one', atlas: 'a/two' } }, TOKEN);
+      const merged = await req(bound, 'POST', { agents: { sisyphus: 'b/three' } }, TOKEN);
+      expect(merged.body.agents).toEqual({ sisyphus: 'b/three', atlas: 'a/two' });
+      const cleared = await req(bound, 'POST', { agents: { sisyphus: '' } }, TOKEN);
+      expect(cleared.body.agents).toEqual({ atlas: 'a/two' });
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('POST：agents 缺失/非对象/值非字符串 → 400', async () => {
+    const exec = serverFor();
+    const bound = await exec.start();
+    try {
+      expect((await req(bound, 'POST', {}, TOKEN)).status).toBe(400);
+      expect((await req(bound, 'POST', { agents: [] }, TOKEN)).status).toBe(400);
+      expect((await req(bound, 'POST', { agents: 'x' }, TOKEN)).status).toBe(400);
+      expect(
+        (await req(bound, 'POST', { agents: { sisyphus: 123 } }, TOKEN)).status,
+      ).toBe(400);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('保存后触发重启：响应带 restart=executed（配置需重启才生效）', async () => {
+    const restartServe = jest.fn().mockResolvedValue('executed');
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: TOKEN,
+      workDir,
+      restartServe,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await req(bound, 'POST', { agents: { sisyphus: 'a/b' } }, TOKEN);
+      expect(res.status).toBe(200);
+      expect(res.body.restart).toBe('executed');
+      expect(restartServe).toHaveBeenCalledTimes(1);
+      // 重启原因要能区分是 OmO 配置触发的（便于日志排障）
+      expect(String(restartServe.mock.calls[0][0])).toContain('omo-config');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('有活跃会话时重启挂起：restart=pending 透传给前端（保存仍算成功）', async () => {
+    const restartServe = jest.fn().mockResolvedValue('pending');
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    const exec = new ExecServer({
+      port: 0, driver, sender, workerToken: TOKEN, workDir,
+      restartServe, logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await req(bound, 'POST', { agents: { atlas: 'a/b' } }, TOKEN);
+      expect(res.status).toBe(200);
+      expect(res.body.restart).toBe('pending');
+      // 配置已落盘（不因挂起而回滚）
+      const onDisk = JSON.parse(
+        await fsp.readFile(join(workDir, '.omo', 'omo.jsonc'), 'utf8'),
+      );
+      expect(onDisk.agents.atlas).toEqual({ model: 'a/b' });
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('未注入 restartServe → restart=skipped，保存照常成功（旧行为兼容）', async () => {
+    const exec = serverFor();
+    const bound = await exec.start();
+    try {
+      const res = await req(bound, 'POST', { agents: { sisyphus: 'a/b' } }, TOKEN);
+      expect(res.status).toBe(200);
+      expect(res.body.restart).toBe('skipped');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('重启失败不导致保存失败：restart=skipped，配置仍落盘', async () => {
+    const restartServe = jest.fn().mockRejectedValue(new Error('serve 起不来'));
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    const exec = new ExecServer({
+      port: 0, driver, sender, workerToken: TOKEN, workDir,
+      restartServe, logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await req(bound, 'POST', { agents: { sisyphus: 'a/b' } }, TOKEN);
+      expect(res.status).toBe(200);
+      expect(res.body.restart).toBe('skipped');
+      const onDisk = JSON.parse(
+        await fsp.readFile(join(workDir, '.omo', 'omo.jsonc'), 'utf8'),
+      );
+      expect(onDisk.agents.sisyphus).toEqual({ model: 'a/b' });
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('GET 不触发重启（只有写路径才重启）', async () => {
+    const restartServe = jest.fn().mockResolvedValue('executed');
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    const exec = new ExecServer({
+      port: 0, driver, sender, workerToken: TOKEN, workDir,
+      restartServe, logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await req(bound, 'GET', undefined, TOKEN);
+      expect(restartServe).not.toHaveBeenCalled();
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('非 GET/POST 方法 → 405', async () => {
+    const exec = serverFor();
+    const bound = await exec.start();
+    try {
+      expect((await req(bound, 'DELETE', undefined, TOKEN)).status).toBe(405);
+    } finally {
+      await exec.stop();
+    }
+  });
+});
+
+describe('ExecServer：GET /omo-agent-prompt（按需取单 agent 提示词）', () => {
+  const TOKEN = 'tok';
+  let workDir: string;
+
+  beforeEach(async () => {
+    workDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-omo-prompt-'));
+  });
+  afterEach(async () => {
+    await fsp.rm(workDir, { recursive: true, force: true });
+  });
+
+  function serverWith(listAgents: jest.Mock): ExecServer {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    (driver as any).listAgents = listAgents;
+    return new ExecServer({
+      port: 0, driver, sender, workerToken: TOKEN, workDir, logger: SILENT_LOGGER,
+    });
+  }
+
+  function get(port: number, qs: string, token?: string): Promise<{ status: number; body: any }> {
+    return new Promise((resolve, reject) => {
+      const headers: Record<string, string> = {};
+      if (token !== undefined) headers['X-Worker-Token'] = token;
+      const r = http.request(
+        { host: '127.0.0.1', port, path: `/omo-agent-prompt${qs}`, method: 'GET', headers },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            const raw = Buffer.concat(chunks).toString('utf8');
+            let parsed: any = raw;
+            try { parsed = JSON.parse(raw); } catch { /* 原文 */ }
+            resolve({ status: res.statusCode ?? 0, body: parsed });
+          });
+        },
+      );
+      r.on('error', reject);
+      r.end();
+    });
+  }
+
+  const AGENTS = [
+    { name: 'Prometheus - Plan Builder', description: 'Plan agent', mode: 'primary', prompt: 'You are Prometheus' },
+    { name: 'oracle', description: 'Read-only consultant', mode: 'subagent', prompt: 'You are Oracle' },
+  ];
+
+  it('鉴权：缺失/错误 token → 401', async () => {
+    const exec = serverWith(jest.fn().mockResolvedValue(AGENTS));
+    const bound = await exec.start();
+    try {
+      expect((await get(bound, '?name=oracle')).status).toBe(401);
+      expect((await get(bound, '?name=oracle', 'wrong')).status).toBe(401);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('缺 name → 400', async () => {
+    const exec = serverWith(jest.fn().mockResolvedValue(AGENTS));
+    const bound = await exec.start();
+    try {
+      expect((await get(bound, '', TOKEN)).status).toBe(400);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('配置键名（prometheus）能匹配 serve 展示名（"Prometheus - Plan Builder"）', async () => {
+    const exec = serverWith(jest.fn().mockResolvedValue(AGENTS));
+    const bound = await exec.start();
+    try {
+      const res = await get(bound, '?name=prometheus', TOKEN);
+      expect(res.status).toBe(200);
+      expect(res.body.prompt).toBe('You are Prometheus');
+      expect(res.body.name).toBe('Prometheus - Plan Builder');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('展示名（含 " - 描述" 后缀）也能匹配', async () => {
+    const exec = serverWith(jest.fn().mockResolvedValue(AGENTS));
+    const bound = await exec.start();
+    try {
+      const res = await get(bound, `?name=${encodeURIComponent('Prometheus - Plan Builder')}`, TOKEN);
+      expect(res.status).toBe(200);
+      expect(res.body.prompt).toBe('You are Prometheus');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('未注册的 agent → 404 且说明原因（不是 500）', async () => {
+    const exec = serverWith(jest.fn().mockResolvedValue(AGENTS));
+    const bound = await exec.start();
+    try {
+      const res = await get(bound, '?name=hephaestus', TOKEN);
+      expect(res.status).toBe(404);
+      expect(String(res.body.error)).toContain('未注册');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('prompt 为空的原生 agent → 200 + empty:true（不报错）', async () => {
+    const exec = serverWith(
+      jest.fn().mockResolvedValue([{ name: 'build', description: 'Build', mode: 'primary', prompt: '' }]),
+    );
+    const bound = await exec.start();
+    try {
+      const res = await get(bound, '?name=build', TOKEN);
+      expect(res.status).toBe(200);
+      expect(res.body.empty).toBe(true);
+      expect(res.body.prompt).toBe('');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('driver 抛错 → 502', async () => {
+    const exec = serverWith(jest.fn().mockRejectedValue(new Error('serve down')));
+    const bound = await exec.start();
+    try {
+      expect((await get(bound, '?name=oracle', TOKEN)).status).toBe(502);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('非 GET → 405', async () => {
+    const exec = serverWith(jest.fn().mockResolvedValue(AGENTS));
+    const bound = await exec.start();
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const r = http.request(
+          { host: '127.0.0.1', port: bound, path: '/omo-agent-prompt?name=oracle', method: 'POST',
+            headers: { 'X-Worker-Token': TOKEN } },
+          (res) => { res.resume(); resolve(res.statusCode ?? 0); },
+        );
+        r.on('error', reject);
+        r.end();
+      });
+      expect(status).toBe(405);
     } finally {
       await exec.stop();
     }

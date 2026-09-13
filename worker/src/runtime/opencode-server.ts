@@ -2,8 +2,10 @@
  * T3 V1Runtime：opencode serve 子进程管理。
  *
  * 职责（对齐计划 D2 铁律，Oracle 实测）：
- * 1. spawn `opencode serve --port <p> --hostname 127.0.0.1 --pure`
- *    —— --pure 必带（去插件/MEMORY 注入/默认 agent；非 --pure input tokens 高达 7601）；
+ * 1. spawn `opencode serve --port <p> --hostname 127.0.0.1 [--pure]`
+ *    —— `--pure`（不加载外部插件）由 OPENCODE_PURE 控制：默认**不加**，让 workDir/opencode.json
+ *    里 plugin 节声明的内置插件（omo）生效；设 OPENCODE_PURE=1 可切回纯净基线做 token 对照
+ *    （历史实测 --pure 约 1900 input tokens，非 --pure 约 7601）。
  *    env 注入 OPENCODE_SERVER_PASSWORD（Basic Auth，username=opencode，空则不设）。
  * 2. 端口管理：start 前用 net.createServer 探测空闲端口，占用则 +1 重试（最多 5 次）；
  *    port=0 时由 OS 分配随机空闲端口（已实测 `opencode serve --help` 默认 --port 0 即随机）。
@@ -48,6 +50,12 @@ export interface OpencodeServerOptions {
   serveHostname?: string;
   /** 日志输出；默认 console */
   logger?: Logger;
+  /**
+   * OmO 启用开关的读取回调（index.ts 注入 readOmoEnabled(workDir)）。
+   * 返回 false → serve 以 `--pure` 启动（不加载插件）。
+   * 缺省不注入 = 恒为启用（保持既有行为）。
+   */
+  omoEnabled?: () => boolean;
 }
 
 const DEFAULT_COMMAND = 'opencode';
@@ -285,6 +293,34 @@ export class OpencodeServer {
     );
   }
 
+  /**
+   * 是否以 `--pure` 启动（不加载外部插件）。
+   *
+   * 两个来源，任一为「关」即不加载插件：
+   *   1. `OPENCODE_PURE` 环境变量为真值 —— 运维级一刀切（对照 token 开销/排障用）；
+   *   2. `omoEnabledProvider()` 返回 false —— 用户在 worker 详情页关掉了 OmO 开关。
+   *
+   * 两者取或：运维没设 pure 且用户开着开关时，插件才真正加载。
+   *
+   * ⚠️ OPENCODE_PURE 同时是 **opencode 自己**解析的布尔环境变量，且它不接受空串
+   * （SchemaError: Expected "true"|...|"false"..., got ""）→ serve 直接启动失败。
+   * 所以这里对空串/纯空白一律**删除该变量**，绝不把空值透传给子进程。
+   * 真值词表与 opencode 的布尔解析保持一致（true/yes/on/1/y）。
+   */
+  private isPureMode(): boolean {
+    const raw = process.env.OPENCODE_PURE;
+    if (raw !== undefined && raw.trim() === '') {
+      delete process.env.OPENCODE_PURE;
+    } else {
+      const normalized = (raw ?? '').trim().toLowerCase();
+      if (['1', 'true', 'yes', 'on', 'y'].includes(normalized)) {
+        return true;
+      }
+    }
+    // 用户开关（缺省注入时视为开启，保持既有行为）
+    return this.options.omoEnabled ? !this.options.omoEnabled() : false;
+  }
+
   /** spawn serve 子进程；detached + stdio pipe；env 注入 OPENCODE_SERVER_PASSWORD。 */
   private spawnServe(port: number): ChildProcess {
     const args = [
@@ -293,9 +329,14 @@ export class OpencodeServer {
       String(port),
       '--hostname',
       this.options.serveHostname!,
-      // D2 铁律：--pure 必带（去插件/MEMORY 注入/默认 agent），缺失将导致 input tokens 高达 7601
-      '--pure',
     ];
+    // --pure = 不加载外部插件。/data/vteam-worker/opencode.json 的 plugin 节（omo）与之互斥：
+    // 带 --pure 时 omo 静默不生效。默认不加（让内置插件生效），需要"纯净基线"时用
+    // OPENCODE_PURE=1 切回——保留该开关是为了能对照插件对 input tokens 的影响
+    // （历史实测 --pure 约 1900 tokens，非 --pure 约 7601）。
+    if (this.isPureMode()) {
+      args.push('--pure');
+    }
     const env: NodeJS.ProcessEnv = { ...process.env };
     if (this.options.serverPassword) {
       env.OPENCODE_SERVER_PASSWORD = this.options.serverPassword;

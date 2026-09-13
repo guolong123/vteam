@@ -7,6 +7,7 @@ import {
   ResourceInjector,
   schemaToArgs,
 } from './injector';
+import { OMO_AGENT_NAMES } from './omo-config';
 
 /** 构造按 URL pathname 路由的 mock fetch（Response 最小形态）。 */
 function makeFetch(
@@ -601,5 +602,244 @@ describe('ResourceInjector 清理与组合', () => {
     expect(report.tools).toEqual([]);
     expect(report.mcpServers).toEqual([]);
     expect(fs.existsSync(path.join(workDir, 'opencode.json'))).toBe(true);
+  });
+});
+
+describe('ResourceInjector：OmO 插件声明与 agent 模型配置', () => {
+  function injectorFor(workDir: string): ResourceInjector {
+    return new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({
+        '/api/v1/mcp-servers': () => ({ items: [], total: 0, page: 1, pageSize: 100 }),
+      }),
+    });
+  }
+
+  function readJson(workDir: string, rel: string): any {
+    return JSON.parse(fs.readFileSync(path.join(workDir, rel), 'utf8'));
+  }
+
+  describe('plugin 节（opencode.json）', () => {
+    it('写入 oh-my-openagent 条目', async () => {
+      const workDir = workDirFor();
+      await injectorFor(workDir).injectMcp();
+      expect(readJson(workDir, 'opencode.json').plugin).toEqual([
+        'oh-my-openagent@latest',
+      ]);
+    });
+
+    it('重复注入不追加重复条目（幂等）', async () => {
+      const workDir = workDirFor();
+      const injector = injectorFor(workDir);
+      await injector.injectMcp();
+      await injector.injectMcp();
+      expect(readJson(workDir, 'opencode.json').plugin).toEqual([
+        'oh-my-openagent@latest',
+      ]);
+    });
+
+    it('各种等价写法都识别为已存在（不重复追加）', async () => {
+      for (const entry of [
+        'oh-my-openagent',
+        'oh-my-openagent@latest',
+        'oh-my-opencode@latest',
+        '/opt/omo/node_modules/oh-my-openagent',
+      ]) {
+        const workDir = workDirFor();
+        fs.writeFileSync(
+          path.join(workDir, 'opencode.json'),
+          JSON.stringify({ plugin: [entry] }),
+        );
+        await injectorFor(workDir).injectMcp();
+        expect(readJson(workDir, 'opencode.json').plugin).toEqual([entry]);
+      }
+    });
+
+    it('用户手写的其他 plugin 条目保留，OmO 追加在后', async () => {
+      const workDir = workDirFor();
+      fs.writeFileSync(
+        path.join(workDir, 'opencode.json'),
+        JSON.stringify({ plugin: ['./my-local-plugin.js'] }),
+      );
+      await injectorFor(workDir).injectMcp();
+      expect(readJson(workDir, 'opencode.json').plugin).toEqual([
+        './my-local-plugin.js',
+        'oh-my-openagent@latest',
+      ]);
+    });
+  });
+
+  describe('agent→模型配置（位置与格式自适应）', () => {
+    it('无任何文件时：新建到新位置 .omo/omo.jsonc', async () => {
+      const workDir = workDirFor();
+      const written = await injectorFor(workDir).writeOmoConfig({
+        sisyphus: 'opencode/big-pickle',
+      });
+      expect(written).toBe(path.join(workDir, '.omo', 'omo.jsonc'));
+      expect(readJson(workDir, '.omo/omo.jsonc')).toEqual({
+        agents: { sisyphus: { model: 'opencode/big-pickle' } },
+      });
+    });
+
+    it('新位置存在时写新位置（回归：曾误写 .opencode 那份→完全不生效）', async () => {
+      const workDir = workDirFor();
+      fs.mkdirSync(path.join(workDir, '.omo'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workDir, '.omo', 'omo.jsonc'),
+        JSON.stringify({ '[opencode]': { agents: {} }, _migrations: ['x'] }),
+      );
+      const injector = injectorFor(workDir);
+      const written = await injector.writeOmoConfig({ atlas: 'opencode/big-pickle' });
+      expect(written).toBe(path.join(workDir, '.omo', 'omo.jsonc'));
+      // 写进 [opencode].agents，且保留 $schema/_migrations 等其他键
+      const cfg = readJson(workDir, '.omo/omo.jsonc');
+      expect(cfg['[opencode]'].agents.atlas).toEqual({ model: 'opencode/big-pickle' });
+      expect(cfg._migrations).toEqual(['x']);
+    });
+
+    it('仅旧位置存在时写回旧位置（保持既有部署落点不变）', async () => {
+      const workDir = workDirFor();
+      fs.mkdirSync(path.join(workDir, '.opencode'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workDir, '.opencode', 'oh-my-openagent.jsonc'),
+        JSON.stringify({ agents: {} }),
+      );
+      const written = await injectorFor(workDir).writeOmoConfig({ atlas: 'a/b' });
+      expect(written).toBe(
+        path.join(workDir, '.opencode', 'oh-my-openagent.jsonc'),
+      );
+    });
+
+    it('两份都存在时以新位置为准（实测：.omo/omo.jsonc 胜出）', async () => {
+      const workDir = workDirFor();
+      fs.mkdirSync(path.join(workDir, '.omo'), { recursive: true });
+      fs.mkdirSync(path.join(workDir, '.opencode'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workDir, '.omo', 'omo.jsonc'),
+        JSON.stringify({ '[opencode]': { agents: { sisyphus: { model: 'new/win' } } } }),
+      );
+      fs.writeFileSync(
+        path.join(workDir, '.opencode', 'oh-my-openagent.jsonc'),
+        JSON.stringify({ agents: { sisyphus: { model: 'old/lose' } } }),
+      );
+      const injector = injectorFor(workDir);
+      // 读要读生效的那份，而不是旧的
+      expect(injector.readOmoConfig()).toEqual({ sisyphus: 'new/win' });
+      await injector.writeOmoConfig({ atlas: 'a/b' });
+      // 旧文件不得被改动
+      expect(readJson(workDir, '.opencode/oh-my-openagent.jsonc').agents).toEqual({
+        sisyphus: { model: 'old/lose' },
+      });
+    });
+
+    it('读旧格式（顶层 agents）与新格式（[opencode].agents）都认', async () => {
+      const legacy = workDirFor();
+      fs.mkdirSync(path.join(legacy, '.opencode'), { recursive: true });
+      fs.writeFileSync(
+        path.join(legacy, '.opencode', 'oh-my-openagent.jsonc'),
+        JSON.stringify({ agents: { oracle: { model: 'a/b' } } }),
+      );
+      expect(injectorFor(legacy).readOmoConfig()).toEqual({ oracle: 'a/b' });
+
+      const modern = workDirFor();
+      fs.mkdirSync(path.join(modern, '.omo'), { recursive: true });
+      fs.writeFileSync(
+        path.join(modern, '.omo', 'omo.jsonc'),
+        JSON.stringify({ '[opencode]': { agents: { oracle: { model: 'c/d' } } } }),
+      );
+      expect(injectorFor(modern).readOmoConfig()).toEqual({ oracle: 'c/d' });
+    });
+
+    it('JSONC 注释与尾逗号可解析（新位置文件带 // 注释）', async () => {
+      const workDir = workDirFor();
+      fs.mkdirSync(path.join(workDir, '.omo'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workDir, '.omo', 'omo.jsonc'),
+        `// OMO configuration\n{\n  "[opencode]": {\n    "agents": {\n      "sisyphus": { "model": "a/b" },\n    },\n  },\n}\n`,
+      );
+      expect(injectorFor(workDir).readOmoConfig()).toEqual({ sisyphus: 'a/b' });
+    });
+
+    it('增量合并：只改传入项，其余保留；空串清除覆盖', async () => {
+      const workDir = workDirFor();
+      const injector = injectorFor(workDir);
+      await injector.writeOmoConfig({ sisyphus: 'a/one', atlas: 'a/two' });
+      await injector.writeOmoConfig({ sisyphus: 'b/three' });
+      expect(injector.readOmoConfig()).toEqual({ sisyphus: 'b/three', atlas: 'a/two' });
+      await injector.writeOmoConfig({ sisyphus: '' });
+      expect(injector.readOmoConfig()).toEqual({ atlas: 'a/two' });
+    });
+
+    it('保留 agent 的其他键（variant），只覆盖 model', async () => {
+      const workDir = workDirFor();
+      fs.mkdirSync(path.join(workDir, '.omo'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workDir, '.omo', 'omo.jsonc'),
+        JSON.stringify({
+          '[opencode]': { agents: { sisyphus: { model: 'old/m', variant: 'high' } } },
+        }),
+      );
+      await injectorFor(workDir).writeOmoConfig({ sisyphus: 'new/m' });
+      expect(
+        readJson(workDir, '.omo/omo.jsonc')['[opencode]'].agents.sisyphus,
+      ).toEqual({ model: 'new/m', variant: 'high' });
+    });
+
+    it('文件不存在/损坏 → readOmoConfig 返回空对象不抛错', () => {
+      const workDir = workDirFor();
+      expect(injectorFor(workDir).readOmoConfig()).toEqual({});
+      fs.mkdirSync(path.join(workDir, '.omo'), { recursive: true });
+      fs.writeFileSync(path.join(workDir, '.omo', 'omo.jsonc'), '{ broken');
+      expect(injectorFor(workDir).readOmoConfig()).toEqual({});
+    });
+
+    it('OMO_AGENT_NAMES 覆盖 OmO schema 的全部 agent（含 prometheus/atlas）', () => {
+      expect(OMO_AGENT_NAMES).toEqual(
+        expect.arrayContaining(['sisyphus', 'prometheus', 'atlas', 'hephaestus']),
+      );
+      expect(OMO_AGENT_NAMES.length).toBe(14);
+    });
+  });
+});
+
+describe('ResourceInjector：从 slim fork 迁移到 OmO', () => {
+  function injectorFor(workDir: string): ResourceInjector {
+    return new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({
+        '/api/v1/mcp-servers': () => ({ items: [], total: 0, page: 1, pageSize: 100 }),
+      }),
+    });
+  }
+
+  it('残留的 oh-my-opencode-slim 条目被替换为 OmO（回归：宽松匹配会导致 OmO 永不加载）', async () => {
+    const workDir = workDirFor();
+    fs.writeFileSync(
+      path.join(workDir, 'opencode.json'),
+      JSON.stringify({ plugin: ['/opt/omo/node_modules/oh-my-opencode-slim'] }),
+    );
+    await injectorFor(workDir).injectMcp();
+    const cfg = JSON.parse(fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'));
+    expect(cfg.plugin).toEqual(['oh-my-openagent@latest']);
+    expect(JSON.stringify(cfg.plugin)).not.toContain('slim');
+  });
+
+  it('slim 与 OmO 并存时只保留 OmO，且顺序稳定', async () => {
+    const workDir = workDirFor();
+    fs.writeFileSync(
+      path.join(workDir, 'opencode.json'),
+      JSON.stringify({
+        plugin: ['oh-my-opencode-slim', 'oh-my-openagent@latest', './mine.js'],
+      }),
+    );
+    await injectorFor(workDir).injectMcp();
+    const cfg = JSON.parse(fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'));
+    expect(cfg.plugin).toEqual(['oh-my-openagent@latest', './mine.js']);
   });
 });

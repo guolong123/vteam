@@ -6,6 +6,30 @@
  * onSelectMember 提供时成员行可点击（团队会话私聊入口），缺省纯展示。
  */
 import React, { useEffect, useMemo, useState, type CSSProperties } from "react";
+
+/**
+ * opencode 原生 agent 项（对齐后端 GET /agents/opencode → WorkerAgentInfo）。
+ * vteam 只做同步/展示/切换；prompt/permission 语义全由 opencode 侧定义并在内核强制执行。
+ */
+export interface OpencodeAgentItem {
+  name: string;
+  description?: string;
+  /** primary=可作为会话主 agent；subagent=仅由主 agent 派生（不可直接选）；all=皆可。 */
+  mode: "primary" | "subagent" | "all";
+  /** false = 自定义 agent（非 opencode 内置）。 */
+  native?: boolean;
+  /** 隐藏系统 agent（compaction/summary/title），不在选择器展示。 */
+  hidden?: boolean;
+}
+
+/**
+ * 用户可选的 opencode agent 判定（展示层统一规则）。
+ * subagent 用户不可控（只能由主 agent 派生），hidden 为系统内部——两者都不展示。
+ * 后端 GET /agents/opencode 保持全量返回（dispatcher 透传需要），过滤只在展示层做。
+ */
+export function isSelectableOpencodeAgent(a: OpencodeAgentItem): boolean {
+  return !a.hidden && a.mode !== "subagent";
+}
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { AgentAvatar } from "@/src/components/ui";

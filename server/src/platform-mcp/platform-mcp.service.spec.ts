@@ -24,11 +24,9 @@ import {
 import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
 import { PlatformMcpService } from './platform-mcp.service';
 import { buildPlatformMcpTools, memorySaveSchema } from './platform-mcp.tools';
-import { PLAN_ERRORS } from '../plans/plan.constants';
 import { IssuesService } from '../issues/issues.service';
 import { TasksService } from '../tasks/tasks.service';
 import { QuestionsService } from '../questions/questions.service';
-import { PlansService } from '../plans/plans.service';
 import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service';
 
 describe('PlatformMcpService', () => {
@@ -49,12 +47,13 @@ describe('PlatformMcpService', () => {
       create: jest.Mock;
       findFirst: jest.Mock;
     };
-    task: { findUnique: jest.Mock; findMany: jest.Mock };
+    task: { findUnique: jest.Mock; findMany: jest.Mock; update: jest.Mock };
     team: { findUnique: jest.Mock };
     teamMember: {
       findFirst: jest.Mock;
       findMany: jest.Mock;
       findUnique: jest.Mock;
+      update: jest.Mock;
     };
     teamUserMember: { findMany: jest.Mock };
     projectMember: { findMany: jest.Mock };
@@ -157,12 +156,13 @@ describe('PlatformMcpService', () => {
         create: jest.fn(),
         findFirst: jest.fn(),
       },
-      task: { findUnique: jest.fn(), findMany: jest.fn() },
+      task: { findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn() },
       team: { findUnique: jest.fn() },
       teamMember: {
         findFirst: jest.fn(),
         findMany: jest.fn(),
         findUnique: jest.fn(),
+        update: jest.fn(),
       },
       teamUserMember: { findMany: jest.fn() },
       projectMember: { findMany: jest.fn() },
@@ -232,7 +232,6 @@ describe('PlatformMcpService', () => {
         { provide: IssuesService, useValue: issuesService },
         { provide: TasksService, useValue: tasksService },
         { provide: QuestionsService, useValue: questionsService },
-        { provide: PlansService, useValue: plansService },
         {
           provide: NotificationDispatcherService,
           useValue: outboundDispatcher,
@@ -2740,572 +2739,12 @@ describe('PlatformMcpService', () => {
     });
   });
 
-  describe('plan_submit / plan_review / plan_task_transition（协作计划，tc-mcp-plan Todo 2，主成员门走团队 tmm_）', () => {
-    const mainInstanceId = 'tmm_main';
-    const reviewerId = 'tmm_reviewer';
-    const assigneeId = 'tmm_assignee';
-    const planId = 'pl_0000000001';
-    const planTaskId = 'pt_0000000001';
-    const submitArgs = {
-      taskId,
-      selfInstanceId: mainInstanceId,
-      title: '实施稻邕线消缺',
-      tasks: [
-        {
-          title: '步骤一',
-          what: '定位故障点',
-          acceptance: '访问 /login 提交错误密码返回 401 且提示文案包含密码错误',
-          qa: 'curl POST /api/v1/users 缺少 name 字段，断言返回 400',
-          assigneeInstanceId: assigneeId,
-        },
-        {
-          title: '步骤二',
-          what: '执行消缺',
-          acceptance: '执行消缺后巡检通过',
-          qa: 'playwright 打开 /status 断言显示正常',
-        },
-      ],
-    };
-    const validSubmitArgs = submitArgs;
-    /** 主实例任务行（plan 工具主成员校验通过：任务归属团队，团队主成员门另由 allowMainMember mock）。 */
-    const mainTaskRow = (overrides: Record<string, unknown> = {}) => ({
-      teamId: 'tm_0000000001',
-      ...overrides,
-    });
-    /** 主成员门通过：任务所属团队主成员为指定成员 id（默认主实例；403 用例覆写为他值）。 */
-    const allowMainMember = (mainId = mainInstanceId) => {
-      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: mainId });
-    };
-    beforeEach(() => {
-      allowMainMember();
-    });
-    /** 群聊频道 mock：planSubmit/planReview 系统消息落库目标。 */
-    const allowChannel = () => {
-      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
-    };
-
-    describe('plan_submit', () => {
-      it('首次提交合法落库：plan.upsert(create) + planTask 批量创建 + 群聊系统消息，返回 reviewing', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.teamMember.findMany.mockResolvedValue([{ id: assigneeId }]);
-        prisma.plan.findUnique.mockResolvedValue(null);
-        allowChannel();
-        idGen.nextId.mockResolvedValueOnce('pl_0000000001');
-        idGen.nextId.mockResolvedValueOnce('pt_0000000001');
-        idGen.nextId.mockResolvedValueOnce('pt_0000000002');
-        idGen.nextId.mockResolvedValueOnce('m_0000000099');
-        prisma.plan.upsert.mockResolvedValue({
-          id: planId,
-          status: 'reviewing',
-        });
-        prisma.planTask.create.mockResolvedValue({ id: planTaskId });
-
-        const out = await service.planSubmit(ctx, validSubmitArgs);
-
-        expect(prisma.plan.upsert).toHaveBeenCalledWith({
-          where: { taskId },
-          update: expect.objectContaining({
-            title: '实施稻邕线消缺',
-            status: 'reviewing',
-            reviewerInstanceId: null,
-          }),
-          create: expect.objectContaining({
-            taskId,
-            status: 'reviewing',
-            createdBy: mainInstanceId,
-            reviewerInstanceId: null,
-          }),
-        });
-        expect(prisma.planTask.create).toHaveBeenCalledTimes(2);
-        expect(prisma.planTask.create).toHaveBeenNthCalledWith(1, {
-          data: expect.objectContaining({
-            planId,
-            seq: 1,
-            assigneeInstanceId: assigneeId,
-            status: 'pending',
-            content: {
-              what: '定位故障点',
-              mustNot: null,
-              references: null,
-              acceptance:
-                '访问 /login 提交错误密码返回 401 且提示文案包含密码错误',
-              qa: 'curl POST /api/v1/users 缺少 name 字段，断言返回 400',
-              commit: null,
-            },
-          }),
-        });
-        expect(prisma.message.create).toHaveBeenCalledWith({
-          data: expect.objectContaining({
-            channelId,
-            senderType: SENDER_TYPE.system,
-            senderId: null,
-            content: { text: '主 Agent 提交执行计划，请评审', parts: [] },
-          }),
-        });
-        expect(out).toEqual({ planId, status: 'reviewing', taskCount: 2 });
-      });
-
-      it('结构校验 400：子任务 what 为空 → PLAN_STRUCTURE_INVALID，不触达事务', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.plan.findUnique.mockResolvedValue(null);
-        await expectCode(
-          service.planSubmit(ctx, {
-            ...submitArgs,
-            tasks: [{ title: '空任务', what: '   ' }],
-          }),
-          BadRequestException,
-          PLAN_ERRORS.PLAN_STRUCTURE_INVALID,
-        );
-        expect(prisma.plan.upsert).not.toHaveBeenCalled();
-      });
-
-      it('归属 403：无 Session → PLATFORM_MCP_FORBIDDEN', async () => {
-        denyWorker();
-        await expectCode(
-          service.planSubmit(ctx, submitArgs),
-          ForbiddenException,
-          PLATFORM_MCP_ERRORS.FORBIDDEN,
-        );
-      });
-
-      it('非主成员 403：团队主成员与 selfInstanceId 不一致 → PLATFORM_MCP_FORBIDDEN', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        allowMainMember('tmm_other');
-        await expectCode(
-          service.planSubmit(ctx, submitArgs),
-          ForbiddenException,
-          PLATFORM_MCP_ERRORS.FORBIDDEN,
-        );
-        expect(prisma.plan.upsert).not.toHaveBeenCalled();
-      });
-
-      it('未终态重复 409：status=reviewing 时重复提交 → PLAN_INVALID_STATUS', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.plan.findUnique.mockResolvedValue({
-          id: planId,
-          status: 'reviewing',
-        });
-        await expectCode(
-          service.planSubmit(ctx, submitArgs),
-          ConflictException,
-          PLAN_ERRORS.PLAN_INVALID_STATUS,
-        );
-        expect(prisma.plan.upsert).not.toHaveBeenCalled();
-      });
-
-      it('assignee 校验 400：指派成员不在任务团队 → PLAN_STRUCTURE_INVALID', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.plan.findUnique.mockResolvedValue(null);
-        prisma.teamMember.findMany.mockResolvedValue([]);
-        await expectCode(
-          service.planSubmit(ctx, submitArgs),
-          BadRequestException,
-          PLAN_ERRORS.PLAN_STRUCTURE_INVALID,
-        );
-        expect(prisma.teamMember.findMany).toHaveBeenCalledWith({
-          where: { teamId: 'tm_0000000001', id: { in: [assigneeId] } },
-          select: { id: true },
-        });
-      });
-
-      it('覆盖重提（rejected → upsert update）：reviewerInstanceId=null + 删旧建新重建 planTask（Oracle B2/R1/R5）', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.teamMember.findMany.mockResolvedValue([{ id: assigneeId }]);
-        prisma.plan.findUnique.mockResolvedValue({
-          id: planId,
-          status: 'rejected',
-        });
-        allowChannel();
-        idGen.nextId.mockResolvedValue('pt_0000000010');
-        prisma.plan.upsert.mockResolvedValue({
-          id: planId,
-          status: 'reviewing',
-        });
-
-        await service.planSubmit(ctx, submitArgs);
-
-        expect(prisma.plan.upsert).toHaveBeenCalledWith({
-          where: { taskId },
-          update: expect.objectContaining({
-            status: 'reviewing',
-            reviewerInstanceId: null,
-          }),
-          create: expect.any(Object),
-        });
-        expect(prisma.planTask.deleteMany).toHaveBeenCalledWith({
-          where: { planId },
-        });
-        expect(prisma.planTask.create).toHaveBeenCalledTimes(2);
-        expect(
-          prisma.planTask.create.mock.calls.map(
-            (c) => (c[0] as { data: { seq: number } }).data.seq,
-          ),
-        ).toEqual([1, 2]);
-      });
-
-      it('completed 终态同样可覆盖重提（不属于 409 活动态集合）', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.teamMember.findMany.mockResolvedValue([{ id: assigneeId }]);
-        prisma.plan.findUnique.mockResolvedValue({
-          id: planId,
-          status: 'completed',
-        });
-        prisma.plan.upsert.mockResolvedValue({
-          id: planId,
-          status: 'reviewing',
-        });
-        await service.planSubmit(ctx, submitArgs);
-        expect(prisma.plan.upsert).toHaveBeenCalled();
-      });
-    });
-
-    describe('plan_review', () => {
-      it('approved：主 Agent 评审通过 → plan.update(status=approved, reviewerInstanceId=null) + 系统消息', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.plan.findUnique.mockResolvedValue({
-          id: planId,
-          status: 'reviewing',
-          reviewerInstanceId: reviewerId,
-        });
-        allowChannel();
-        prisma.plan.update.mockResolvedValue({
-          id: planId,
-          status: 'approved',
-        });
-
-        const out = await service.planReview(ctx, {
-          taskId,
-          selfInstanceId: mainInstanceId,
-          verdict: 'approved',
-        });
-
-        expect(prisma.plan.update).toHaveBeenCalledWith({
-          where: { id: planId },
-          data: { status: 'approved', reviewerInstanceId: null },
-        });
-        expect(prisma.message.create).toHaveBeenCalledWith({
-          data: expect.objectContaining({
-            content: {
-              text: '执行计划已通过评审，请等待用户手动启动任务后再实施',
-              parts: [],
-            },
-          }),
-        });
-        expect(out).toEqual({ planId, status: 'approved' });
-      });
-
-      it('rejected 无 reason → 400 PLAN_STRUCTURE_INVALID（zod refine 失败路径）', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.plan.findUnique.mockResolvedValue({
-          id: planId,
-          status: 'reviewing',
-          reviewerInstanceId: reviewerId,
-        });
-        await expectCode(
-          service.planReview(ctx, {
-            taskId,
-            selfInstanceId: mainInstanceId,
-            verdict: 'rejected',
-          }),
-          BadRequestException,
-          PLAN_ERRORS.PLAN_STRUCTURE_INVALID,
-        );
-        expect(prisma.plan.update).not.toHaveBeenCalled();
-      });
-
-      it('rejected 附 reason：评审驳回 → plan.update(status=rejected) + 引导文案系统消息', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.plan.findUnique.mockResolvedValue({
-          id: planId,
-          status: 'reviewing',
-          reviewerInstanceId: reviewerId,
-        });
-        allowChannel();
-        prisma.plan.update.mockResolvedValue({
-          id: planId,
-          status: 'rejected',
-        });
-
-        const out = await service.planReview(ctx, {
-          taskId,
-          selfInstanceId: mainInstanceId,
-          verdict: 'rejected',
-          reason: '缺少验收标准',
-        });
-
-        expect(prisma.plan.update).toHaveBeenCalledWith({
-          where: { id: planId },
-          data: {
-            status: 'rejected',
-            reviewerInstanceId: null,
-            rejectCount: { increment: 1 },
-          },
-        });
-        expect(prisma.message.create).toHaveBeenCalledWith({
-          data: expect.objectContaining({
-            content: {
-              text: '执行计划被驳回：缺少验收标准（可修改后重提或切换 direct 模式）',
-              parts: [],
-            },
-          }),
-        });
-        expect(out).toEqual({ planId, status: 'rejected' });
-      });
-
-      it('权限 403：非主成员且非评审者 → PLATFORM_MCP_FORBIDDEN', async () => {
-        allowWorkerAs(reviewerId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        allowMainMember('tmm_other');
-        prisma.plan.findUnique.mockResolvedValue({
-          id: planId,
-          status: 'reviewing',
-          reviewerInstanceId: null,
-        });
-        await expectCode(
-          service.planReview(ctx, {
-            taskId,
-            selfInstanceId: reviewerId,
-            verdict: 'approved',
-          }),
-          ForbiddenException,
-          PLATFORM_MCP_ERRORS.FORBIDDEN,
-        );
-      });
-
-      it('仅 reviewing 可评审：status=approved → 400 PLAN_INVALID_STATUS', async () => {
-        allowWorkerAs(reviewerId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.plan.findUnique.mockResolvedValue({
-          id: planId,
-          status: 'approved',
-          reviewerInstanceId: reviewerId,
-        });
-        await expectCode(
-          service.planReview(ctx, {
-            taskId,
-            selfInstanceId: reviewerId,
-            verdict: 'approved',
-          }),
-          BadRequestException,
-          PLAN_ERRORS.PLAN_INVALID_STATUS,
-        );
-      });
-
-      it('被指派 reviewer 经 plan_review 成功（reviewer 权限联动，tc-review）：assignReviewer 后评审者通过 → 置 null + 系统消息', async () => {
-        allowWorkerAs(reviewerId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        // plan_assign_reviewer 已写入 reviewerInstanceId → 评审者可评审
-        prisma.plan.findUnique.mockResolvedValue({
-          id: planId,
-          status: 'reviewing',
-          reviewerInstanceId: reviewerId,
-        });
-        allowChannel();
-        prisma.plan.update.mockResolvedValue({
-          id: planId,
-          status: 'approved',
-        });
-
-        const out = await service.planReview(ctx, {
-          taskId,
-          selfInstanceId: reviewerId,
-          verdict: 'approved',
-        });
-
-        expect(prisma.plan.update).toHaveBeenCalledWith({
-          where: { id: planId },
-          data: { status: 'approved', reviewerInstanceId: null },
-        });
-        expect(prisma.message.create).toHaveBeenCalledWith({
-          data: expect.objectContaining({
-            content: {
-              text: '执行计划已通过评审，请等待用户手动启动任务后再实施',
-              parts: [],
-            },
-          }),
-        });
-        expect(out).toEqual({ planId, status: 'approved' });
-      });
-
-      it('幽灵评审者回归（Oracle MED-A）：覆盖重提后 reviewerInstanceId=null，原评审者再评审 → 403', async () => {
-        allowWorkerAs(reviewerId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        allowMainMember('tmm_other');
-        // 覆盖重提（rejected → reviewing）后 reviewerInstanceId 被置 null
-        prisma.plan.findUnique.mockResolvedValue({
-          id: planId,
-          status: 'reviewing',
-          reviewerInstanceId: null,
-        });
-        await expectCode(
-          service.planReview(ctx, {
-            taskId,
-            selfInstanceId: reviewerId,
-            verdict: 'approved',
-          }),
-          ForbiddenException,
-          PLATFORM_MCP_ERRORS.FORBIDDEN,
-        );
-      });
-    });
-
-    describe('plan_task_transition', () => {
-      const planTaskRow = (overrides: Record<string, unknown> = {}) => ({
-        id: planTaskId,
-        planId,
-        assigneeInstanceId: assigneeId,
-        status: 'pending',
-        plan: { taskId },
-        ...overrides,
-      });
-
-      it('指派实例更新状态：planTask.update(status) 生效', async () => {
-        allowWorkerAs(assigneeId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.planTask.findUnique.mockResolvedValue(planTaskRow());
-        prisma.planTask.update.mockResolvedValue({
-          id: planTaskId,
-          status: 'in_progress',
-        });
-        prisma.planTask.findMany.mockResolvedValue([{ status: 'in_progress' }]);
-
-        const out = await service.planTaskTransition(ctx, {
-          taskId,
-          selfInstanceId: assigneeId,
-          planTaskId,
-          status: 'in_progress',
-        });
-
-        expect(prisma.planTask.update).toHaveBeenCalledWith({
-          where: { id: planTaskId },
-          data: { status: 'in_progress' },
-        });
-        expect(out).toEqual({ planTaskId, status: 'in_progress' });
-      });
-
-      it('主 Agent 也可流转非本人指派的子任务（assignee/主实例双权限）', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.planTask.findUnique.mockResolvedValue(planTaskRow());
-        prisma.planTask.update.mockResolvedValue({
-          id: planTaskId,
-          status: 'done',
-        });
-        prisma.planTask.findMany.mockResolvedValue([{ status: 'pending' }]);
-        await service.planTaskTransition(ctx, {
-          taskId,
-          selfInstanceId: mainInstanceId,
-          planTaskId,
-          status: 'done',
-        });
-        expect(prisma.planTask.update).toHaveBeenCalled();
-      });
-
-      it('权限 403：非指派实例且非主实例 → PLATFORM_MCP_FORBIDDEN', async () => {
-        allowWorkerAs(reviewerId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.planTask.findUnique.mockResolvedValue(planTaskRow());
-        await expectCode(
-          service.planTaskTransition(ctx, {
-            taskId,
-            selfInstanceId: reviewerId,
-            planTaskId,
-            status: 'done',
-          }),
-          ForbiddenException,
-          PLATFORM_MCP_ERRORS.FORBIDDEN,
-        );
-        expect(prisma.planTask.update).not.toHaveBeenCalled();
-      });
-
-      it('planTask 不属于该任务 → 404 PLAN_NOT_FOUND', async () => {
-        allowWorkerAs(assigneeId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.planTask.findUnique.mockResolvedValue(
-          planTaskRow({ plan: { taskId: 't_other' } }),
-        );
-        await expectCode(
-          service.planTaskTransition(ctx, {
-            taskId,
-            selfInstanceId: assigneeId,
-            planTaskId,
-            status: 'done',
-          }),
-          NotFoundException,
-          PLAN_ERRORS.PLAN_NOT_FOUND,
-        );
-      });
-
-      it('全部子任务达终态（done/blocked/skipped 且无 pending/in_progress）→ 群聊提示可提交验收', async () => {
-        allowWorkerAs(assigneeId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.planTask.findUnique.mockResolvedValue(
-          planTaskRow({ status: 'in_progress' }),
-        );
-        prisma.planTask.update.mockResolvedValue({
-          id: planTaskId,
-          status: 'done',
-        });
-        prisma.planTask.findMany.mockResolvedValue([
-          { status: 'done' },
-          { status: 'blocked' },
-        ]);
-        allowChannel();
-
-        await service.planTaskTransition(ctx, {
-          taskId,
-          selfInstanceId: assigneeId,
-          planTaskId,
-          status: 'done',
-        });
-
-        expect(prisma.message.create).toHaveBeenCalledWith({
-          data: expect.objectContaining({
-            content: { text: '执行计划任务已全部完成，可提交验收', parts: [] },
-          }),
-        });
-      });
-
-      it('仍有 pending/in_progress 子任务 → 不生成完成提示', async () => {
-        allowWorkerAs(assigneeId);
-        prisma.task.findUnique.mockResolvedValue(mainTaskRow());
-        prisma.planTask.findUnique.mockResolvedValue(planTaskRow());
-        prisma.planTask.update.mockResolvedValue({
-          id: planTaskId,
-          status: 'done',
-        });
-        prisma.planTask.findMany.mockResolvedValue([
-          { status: 'done' },
-          { status: 'pending' },
-        ]);
-
-        await service.planTaskTransition(ctx, {
-          taskId,
-          selfInstanceId: assigneeId,
-          planTaskId,
-          status: 'done',
-        });
-
-        expect(prisma.message.create).not.toHaveBeenCalled();
-      });
-    });
-  });
 
   describe('team_view / my_profile（团队感知，只读，tc-mcp-l1 Todo 3）', () => {
     const mainInstanceId = 'tmm_main';
 
     describe('team_view', () => {
-      it('返回成员列表（含会话实时状态 sessionStatus/sessionId）+ planSummary 计数', async () => {
+      it('返回成员列表（含会话实时状态 sessionStatus/sessionId）', async () => {
         allowWorker();
         prisma.task.findUnique.mockResolvedValue({
           id: taskId,
@@ -3333,13 +2772,6 @@ describe('PlatformMcpService', () => {
         prisma.session.findMany.mockResolvedValue([
           { id: 's_1', status: 'running', teamMemberId: mainInstanceId },
         ]);
-        prisma.planTask.findMany.mockResolvedValue([
-          { status: 'done' },
-          { status: 'blocked' },
-          { status: 'pending' },
-          { status: 'in_progress' },
-        ]);
-
         const out = await service.teamView(ctx, { taskId });
 
         expect(prisma.session.findFirst).toHaveBeenCalledWith(
@@ -3358,10 +2790,6 @@ describe('PlatformMcpService', () => {
             },
           }),
         );
-        expect(prisma.planTask.findMany).toHaveBeenCalledWith({
-          where: { plan: { taskId } },
-          select: { status: true },
-        });
         expect(out).toEqual({
           taskId,
           members: [
@@ -3386,11 +2814,10 @@ describe('PlatformMcpService', () => {
               sessionId: null,
             },
           ],
-          planSummary: { total: 4, done: 2, pending: 2 },
         });
       });
 
-      it('无计划子任务 → planSummary 全 0', async () => {
+      it('无团队成员 → members 为空数组', async () => {
         allowWorker();
         prisma.task.findUnique.mockResolvedValue({
           id: taskId,
@@ -3398,11 +2825,8 @@ describe('PlatformMcpService', () => {
         });
         prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
         prisma.teamMember.findMany.mockResolvedValue([]);
-        prisma.planTask.findMany.mockResolvedValue([]);
-
         const out = await service.teamView(ctx, { taskId });
 
-        expect(out.planSummary).toEqual({ total: 0, done: 0, pending: 0 });
         expect(out.members).toEqual([]);
       });
 
@@ -3550,273 +2974,6 @@ describe('PlatformMcpService', () => {
     });
   });
 
-  describe('plan_get / plan_assign_reviewer（评审通道，tc-review Todo 5，指派概览与主成员门走团队 tmm_）', () => {
-    const planId = 'pl_0000000001';
-    const mainInstanceId = 'tmm_main';
-    const reviewerId = 'tmm_reviewer';
-
-    describe('plan_get', () => {
-      const planRow = (overrides: Record<string, unknown> = {}) => ({
-        id: planId,
-        taskId,
-        title: '实施稻邕线消缺',
-        summary: null,
-        scopeIn: null,
-        scopeOut: null,
-        status: 'reviewing',
-        createdBy: mainInstanceId,
-        reviewerInstanceId: reviewerId,
-        createdAt: new Date('2026-08-16T00:00:00.000Z'),
-        updatedAt: new Date('2026-08-16T00:00:00.000Z'),
-        ...overrides,
-      });
-
-      it('只读返回计划头 + 任务清单全文（content 六要素 + 团队成员指派概览）', async () => {
-        allowWorker();
-        prisma.task.findUnique.mockResolvedValue({
-          id: taskId,
-          teamId: 'tm_0000000001',
-        });
-        prisma.plan.findUnique.mockResolvedValue(planRow());
-        prisma.planTask.findMany.mockResolvedValue([
-          {
-            id: 'pt_0000000001',
-            seq: 1,
-            title: '定位故障点',
-            content: {
-              what: '定位故障点',
-              mustNot: '禁止带电作业',
-              references: null,
-              acceptance: '故障点定位准确',
-              qa: null,
-              commit: null,
-            },
-            assigneeInstanceId: reviewerId,
-            status: 'pending',
-          },
-        ]);
-        prisma.teamMember.findMany.mockResolvedValue([
-          {
-            id: reviewerId,
-            alias: '开发者-1',
-            agent: { name: '开发者' },
-          },
-        ]);
-
-        const out = await service.planGet(ctx, { taskId });
-
-        expect(prisma.session.findFirst).toHaveBeenCalledWith(
-          expect.objectContaining({
-            where: { teamId: 'tm_0000000001', workerId },
-          }),
-        );
-        expect(prisma.teamMember.findMany).toHaveBeenCalledWith({
-          where: { id: { in: [reviewerId] }, teamId: 'tm_0000000001' },
-          select: { id: true, alias: true, agent: { select: { name: true } } },
-        });
-        expect(prisma.planTask.findMany).toHaveBeenCalledWith({
-          where: { planId },
-          orderBy: { seq: 'asc' },
-        });
-        expect(out).toEqual({
-          id: planId,
-          taskId,
-          title: '实施稻邕线消缺',
-          summary: null,
-          scopeIn: null,
-          scopeOut: null,
-          status: 'reviewing',
-          createdBy: mainInstanceId,
-          reviewerInstanceId: reviewerId,
-          createdAt: '2026-08-16T00:00:00.000Z',
-          updatedAt: '2026-08-16T00:00:00.000Z',
-          tasks: [
-            {
-              id: 'pt_0000000001',
-              seq: 1,
-              title: '定位故障点',
-              content: {
-                what: '定位故障点',
-                mustNot: '禁止带电作业',
-                references: null,
-                acceptance: '故障点定位准确',
-                qa: null,
-                commit: null,
-              },
-              assigneeInstanceId: reviewerId,
-              assigneeAlias: '开发者-1',
-              assigneeName: '开发者',
-              status: 'pending',
-            },
-          ],
-        });
-      });
-
-      it('planId 提供时按归属校验（findFirst id+taskId），planId 属于他任务 → 404 PLAN_NOT_FOUND', async () => {
-        allowWorker();
-        prisma.task.findUnique.mockResolvedValue({
-          id: taskId,
-          teamId: 'tm_0000000001',
-        });
-        prisma.plan.findFirst.mockResolvedValue(null);
-
-        await expectCode(
-          service.planGet(ctx, { taskId, planId }),
-          NotFoundException,
-          PLAN_ERRORS.PLAN_NOT_FOUND,
-        );
-        expect(prisma.plan.findFirst).toHaveBeenCalledWith({
-          where: { id: planId, taskId },
-        });
-      });
-
-      it('任务无计划 → 404 PLAN_NOT_FOUND', async () => {
-        allowWorker();
-        prisma.task.findUnique.mockResolvedValue({
-          id: taskId,
-          teamId: 'tm_0000000001',
-        });
-        prisma.plan.findUnique.mockResolvedValue(null);
-
-        await expectCode(
-          service.planGet(ctx, { taskId }),
-          NotFoundException,
-          PLAN_ERRORS.PLAN_NOT_FOUND,
-        );
-      });
-
-      it('只读归属 403：无 Session → PLATFORM_MCP_FORBIDDEN', async () => {
-        denyWorker();
-        await expectCode(
-          service.planGet(ctx, { taskId }),
-          ForbiddenException,
-          PLATFORM_MCP_ERRORS.FORBIDDEN,
-        );
-        expect(prisma.plan.findUnique).not.toHaveBeenCalled();
-      });
-
-      it('任务不存在 → 404 PLATFORM_MCP_TASK_NOT_FOUND', async () => {
-        allowWorker();
-        prisma.task.findUnique.mockResolvedValue(null);
-        await expectCode(
-          service.planGet(ctx, { taskId }),
-          NotFoundException,
-          PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
-        );
-        expect(prisma.plan.findUnique).not.toHaveBeenCalled();
-      });
-    });
-
-    describe('plan_assign_reviewer', () => {
-      it('主成员指派评审者 → 复用 PlansService.assignReviewer 落库 + 系统消息', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue({
-          teamId: 'tm_0000000001',
-        });
-        prisma.team.findUnique.mockResolvedValue({
-          mainAgentMemberId: mainInstanceId,
-        });
-        prisma.plan.findUnique.mockResolvedValue({ id: planId });
-        plansService.assignReviewer.mockResolvedValue({
-          planId,
-          taskId,
-          reviewerInstanceId: reviewerId,
-          reviewerAlias: '开发者-1',
-        });
-
-        const out = await service.planAssignReviewer(ctx, {
-          taskId,
-          selfInstanceId: mainInstanceId,
-          reviewerInstanceId: reviewerId,
-        });
-
-        expect(prisma.plan.findUnique).toHaveBeenCalledWith({
-          where: { taskId },
-          select: { id: true },
-        });
-        expect(plansService.assignReviewer).toHaveBeenCalledWith(
-          planId,
-          reviewerId,
-        );
-        expect(out).toEqual({
-          planId,
-          taskId,
-          reviewerInstanceId: reviewerId,
-          reviewerAlias: '开发者-1',
-        });
-      });
-
-      it('仅主成员可调：非主成员 → 403 PLATFORM_MCP_FORBIDDEN（不触达 assignReviewer）', async () => {
-        allowWorkerAs(reviewerId);
-        prisma.task.findUnique.mockResolvedValue({
-          teamId: 'tm_0000000001',
-        });
-        prisma.team.findUnique.mockResolvedValue({
-          mainAgentMemberId: mainInstanceId,
-        });
-
-        await expectCode(
-          service.planAssignReviewer(ctx, {
-            taskId,
-            selfInstanceId: reviewerId,
-            reviewerInstanceId: reviewerId,
-          }),
-          ForbiddenException,
-          PLATFORM_MCP_ERRORS.FORBIDDEN,
-        );
-        expect(prisma.plan.findUnique).not.toHaveBeenCalled();
-        expect(plansService.assignReviewer).not.toHaveBeenCalled();
-      });
-
-      it('任务不存在 → 404 PLATFORM_MCP_TASK_NOT_FOUND', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue(null);
-        await expectCode(
-          service.planAssignReviewer(ctx, {
-            taskId,
-            selfInstanceId: mainInstanceId,
-            reviewerInstanceId: reviewerId,
-          }),
-          NotFoundException,
-          PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
-        );
-      });
-
-      it('任务无计划 → 404 PLAN_NOT_FOUND', async () => {
-        allowWorkerAs(mainInstanceId);
-        prisma.task.findUnique.mockResolvedValue({
-          teamId: 'tm_0000000001',
-        });
-        prisma.team.findUnique.mockResolvedValue({
-          mainAgentMemberId: mainInstanceId,
-        });
-        prisma.plan.findUnique.mockResolvedValue(null);
-        await expectCode(
-          service.planAssignReviewer(ctx, {
-            taskId,
-            selfInstanceId: mainInstanceId,
-            reviewerInstanceId: reviewerId,
-          }),
-          NotFoundException,
-          PLAN_ERRORS.PLAN_NOT_FOUND,
-        );
-        expect(plansService.assignReviewer).not.toHaveBeenCalled();
-      });
-
-      it('归属 403：无 Session → PLATFORM_MCP_FORBIDDEN', async () => {
-        denyWorker();
-        await expectCode(
-          service.planAssignReviewer(ctx, {
-            taskId,
-            selfInstanceId: mainInstanceId,
-            reviewerInstanceId: reviewerId,
-          }),
-          ForbiddenException,
-          PLATFORM_MCP_ERRORS.FORBIDDEN,
-        );
-      });
-    });
-  });
 
   describe('team_add_member（主 Agent 申请增员确认门，L2 自治）', () => {
     const mainInstanceId = 'tmm_main';
@@ -4101,6 +3258,85 @@ describe('PlatformMcpService', () => {
       await expect(
         getHook()!({ answers: [['确认']], actor: { type: 'user', id: 'u_1' } }),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('plan_mode（计划模式开关，仅主 Agent 可调）', () => {
+    const mainInstanceId = 'tmm_main';
+    const ctx = { workerId: 'w_1' } as any;
+
+    const mockGate = (mainId: string | null) => {
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: mainId });
+    };
+
+    it('非主成员 → 403（仅主 Agent 可切换）', async () => {
+      allowWorkerAs('tmm_other');
+      mockGate(mainInstanceId);
+      await expect(
+        service.planMode(ctx, {
+          taskId: 't_1',
+          selfInstanceId: 'tmm_other',
+          enabled: true,
+        }),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(prisma.task.update).not.toHaveBeenCalled();
+    });
+
+    it('开启：写 task.planMode=true；不带 agentName 时保持成员选择并回显', async () => {
+      allowWorkerAs(mainInstanceId);
+      mockGate(mainInstanceId);
+      prisma.teamMember.findUnique.mockResolvedValue({
+        opencodeAgentName: 'build',
+      });
+      prisma.task.update.mockImplementation(async (q: any) => ({
+        id: 't_1',
+        planMode: q.data.planMode,
+      }));
+
+      const out = await service.planMode(ctx, {
+        taskId: 't_1',
+        selfInstanceId: mainInstanceId,
+        enabled: true,
+      });
+
+      expect(prisma.task.update).toHaveBeenCalledWith({
+        where: { id: 't_1' },
+        data: { planMode: true },
+      });
+      expect(prisma.teamMember.update).not.toHaveBeenCalled();
+      expect(out).toEqual({ taskId: 't_1', planMode: true, agentName: 'build' });
+    });
+
+    it('带 agentName → 同步写主成员行；空串归 null（回跟随默认）', async () => {
+      allowWorkerAs(mainInstanceId);
+      mockGate(mainInstanceId);
+      prisma.task.update.mockImplementation(async (q: any) => ({
+        id: 't_1',
+        planMode: q.data.planMode,
+      }));
+
+      await service.planMode(ctx, {
+        taskId: 't_1',
+        selfInstanceId: mainInstanceId,
+        enabled: false,
+        agentName: 'build',
+      });
+      expect(prisma.teamMember.update).toHaveBeenCalledWith({
+        where: { id: mainInstanceId },
+        data: { opencodeAgentName: 'build' },
+      });
+
+      await service.planMode(ctx, {
+        taskId: 't_1',
+        selfInstanceId: mainInstanceId,
+        enabled: false,
+        agentName: '  ',
+      });
+      expect(prisma.teamMember.update).toHaveBeenCalledWith({
+        where: { id: mainInstanceId },
+        data: { opencodeAgentName: null },
+      });
     });
   });
 

@@ -4,9 +4,9 @@
 /**
  * 任务创建页（vteam-team-refactor Task 12）
  * =============================================
- * - 左栏任务表单：标题* / 描述 / 背景文档上传 / 优先级 / 执行模式（同原型；托管模式为团队级，不在此设置）
+ * - 左栏任务表单：标题* / 描述 / 背景文档上传 / 优先级（同原型；托管模式为团队级，不在此设置）
  * - 右栏团队选择：团队下拉（GET /teams）+ 选中团队成员预览（只读）+ resetAfterComplete 勾选
- * - 提交：POST /tasks {teamId, resetAfterComplete?, title, description, priority, executionMode, backgroundDocs}
+ * - 提交：POST /tasks {teamId, resetAfterComplete?, title, description, priority, backgroundDocs}
  * - 移除 agents / 主 Agent 面板（团队域已全局复用）
  */
 import { useMemo, useState, useRef } from "react";
@@ -60,21 +60,13 @@ const priorities = ["低", "中", "高"] as const;
 type Priority = (typeof priorities)[number];
 const PRIORITY_API: Record<Priority, string> = { 低: "low", 中: "medium", 高: "high" };
 
-type ExecutionMode = "direct" | "plan";
-const executionModes: { value: ExecutionMode; label: string; desc: string }[] = [
-  { value: "direct", label: "轻量执行（默认）", desc: "直接启动，无需预先制定计划" },
-  { value: "plan", label: "计划驱动", desc: "任务启动前主 Agent 产出执行计划，评审通过后实施" },
-];
-
 /* ================================ 左栏：任务表单 ================================ */
 function TaskForm({
   title, onTitleChange, description, onDescriptionChange, priority, onPriorityChange,
-  executionMode, onExecutionModeChange,
   titleError, docs, onRemoveDoc, uploading, uploadError, onUploadFile, onDismissUploadError,
 }: {
   title: string; onTitleChange: (v: string) => void; description: string; onDescriptionChange: (v: string) => void;
-  priority: Priority; onPriorityChange: (v: Priority) => void;
-  executionMode: ExecutionMode; onExecutionModeChange: (v: ExecutionMode) => void; titleError: string | null;
+  priority: Priority; onPriorityChange: (v: Priority) => void; titleError: string | null;
   docs: BackgroundDoc[]; onRemoveDoc: (url: string) => void; uploading: boolean; uploadError: string | null;
   onUploadFile: (file: File) => void; onDismissUploadError: () => void;
 }) {
@@ -124,13 +116,6 @@ function TaskForm({
         <select id="priority-select" data-testid="priority-select" value={priority} onChange={(e) => onPriorityChange(e.target.value as Priority)} aria-label="优先级" style={{ ...inputBase, width: 200, cursor: "pointer" }}>
           {priorities.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column" }}>
-        <label htmlFor="execution-mode-select" style={fieldLabel}>执行模式</label>
-        <select id="execution-mode-select" data-testid="execution-mode-select" value={executionMode} onChange={(e) => onExecutionModeChange(e.target.value as ExecutionMode)} aria-label="执行模式" style={{ ...inputBase, width: 240, cursor: "pointer" }}>
-          {executionModes.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-        </select>
-        <span style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>{executionModes.find((m) => m.value === executionMode)?.desc}</span>
       </div>
       <div style={{ display: "flex", alignItems: "flex-start", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, color: neutral[500], lineHeight: 1.6 }}>
         <span aria-hidden style={{ color: "#0D9488", fontWeight: 700, lineHeight: 1.6 }}>i</span>
@@ -251,7 +236,6 @@ export default function TaskCreatePage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<Priority>("中");
-  const [executionMode, setExecutionMode] = useState<ExecutionMode>("direct");
   const [selectedMessageChannelIds, setSelectedMessageChannelIds] = useState<string[]>([]);
   const [selectedNotificationChannelIds, setSelectedNotificationChannelIds] = useState<string[]>([]);
   const [backgroundDocs, setBackgroundDocs] = useState<BackgroundDoc[]>([]);
@@ -297,7 +281,6 @@ export default function TaskCreatePage() {
         description: description || undefined,
         priority: PRIORITY_API[priority],
         backgroundDocs: backgroundDocs.map((d) => ({ name: d.name, url: d.url })),
-        executionMode,
         teamId: selectedTeamId,
         ...(resetAfterComplete ? { resetAfterComplete: true } : {}),
       });
@@ -319,7 +302,6 @@ export default function TaskCreatePage() {
             title={title} onTitleChange={setTitle}
             description={description} onDescriptionChange={setDescription}
             priority={priority} onPriorityChange={setPriority}
-            executionMode={executionMode} onExecutionModeChange={setExecutionMode}
             titleError={titleError} docs={backgroundDocs} onRemoveDoc={handleRemoveDoc}
             uploading={uploadMutation.isPending} uploadError={uploadError}
             onUploadFile={(file) => { setUploadError(null); uploadMutation.mutate(file); }}

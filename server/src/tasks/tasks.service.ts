@@ -22,13 +22,8 @@ import {
   TASK_STATUS,
   TASK_TRANSITIONS,
 } from '../common/constants/task.constants';
-import {
-  EXECUTION_MODES,
-  PLAN_ERRORS,
-  PLAN_STATUS,
-  PLAN_TASK_STATUS,
-} from '../plans/plan.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import { getOpencodeAgentDuty } from '../common/opencode-agent-duty';
 import { resyncIdPrefix } from '../common/id-resync';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { PrismaService } from '../prisma/prisma.service';
@@ -70,6 +65,8 @@ type TeamMemberView = {
   seq: number;
   workDir?: string | null;
   overrideModelId?: string | null;
+  /** opencode 原生 agent 选择（null = 用 opencode 默认 agent）。 */
+  opencodeAgentName?: string | null;
   agent: { id: string; name: string; role: string | null };
 };
 
@@ -83,6 +80,8 @@ type TaskRow = {
   mainAgentId: string | null;
   mainAgentInstanceId: string | null;
   executionMode: string;
+  /** 计划模式开关（true=主 Agent 先出计划，其他成员只评审）。 */
+  planMode?: boolean | null;
   backgroundDocs: Prisma.JsonValue | null;
   resetAfterComplete?: boolean | null;
   teamId?: string | null;
@@ -363,10 +362,13 @@ export class TasksService implements OnModuleInit {
               teamId,
               mainAgentId: null,
               mainAgentInstanceId: null,
-              executionMode: dto.executionMode ?? EXECUTION_MODES.direct,
+              // executionMode 列保留但已停用（vteam 自造 plan 域下线，改由 opencode agent 承担）；
+              // 不再从 DTO 取值，恒写 direct 以保持列非空默认语义。
+              executionMode: 'direct',
               backgroundDocs: (dto.backgroundDocs ??
                 []) as Prisma.InputJsonValue,
               resetAfterComplete: (dto as any).resetAfterComplete ?? false,
+              planMode: (dto as any).planMode ?? false,
               createdBy: opts.createdBy,
               version: 0,
             },
@@ -667,6 +669,9 @@ export class TasksService implements OnModuleInit {
     if ((dto as any).resetAfterComplete !== undefined) {
       data.resetAfterComplete = (dto as any).resetAfterComplete;
     }
+    if ((dto as any).planMode !== undefined) {
+      data.planMode = (dto as any).planMode;
+    }
     // 主实例校验口径团队化：实例唯一来源为任务归属团队的团队成员（tmm_）。
     const teamIdOf = (task as any).teamId ?? null;
     const memberRows: Array<{ id: string; agentId: string }> = teamIdOf
@@ -713,69 +718,6 @@ export class TasksService implements OnModuleInit {
     const updated = await this.prisma.task.update({
       where: { id },
       data,
-    });
-    return this.toTaskDto(updated);
-  }
-
-  /**
-   * 切换任务执行模式（tc-flow）：
-   * - 双向切换均即时生效（direct ↔ plan 无前置校验）——切换 = 用户意图声明/提示
-   *   （对齐 omo keyword-detector 哲学：说 ultrawork 立即生效，零前置校验）；
-   * - 计划门不放在切换点：start.preflight（plan 模式须 approved 计划 = approval gate）
-   *   与 mark-pending-review.preflight（计划任务全完成 = 验收门）各自把关；
-   * - 任务已 in_progress 时切到 plan：若计划存在且已批准/执行中（approved/executing）
-   *   → 事务内顺带计划置 executing（执行态与计划态一致）；计划不存在或其他状态 → 仅切
-   *   executionMode，不碰计划。
-   * 执行模式与团队托管模式（team.managedMode）独立生效、互不干扰。
-   */
-  async updateExecutionMode(id: string, mode: string) {
-    if (mode !== EXECUTION_MODES.direct && mode !== EXECUTION_MODES.plan) {
-      throw new BadRequestException(`非法执行模式：${mode}`);
-    }
-    const task = await this.prisma.task.findUnique({
-      where: { id },
-    });
-    if (!task) {
-      throw new NotFoundException({
-        code: TASK_ERRORS.TASK_NOT_FOUND,
-        message: '任务不存在',
-      });
-    }
-    if (task.executionMode === mode) {
-      return this.toTaskDto(task);
-    }
-    if (
-      mode === EXECUTION_MODES.plan &&
-      task.status === TASK_STATUS.in_progress
-    ) {
-      const plan = await this.prisma.plan.findUnique({
-        where: { taskId: id },
-        select: { status: true },
-      });
-      // in_progress 切 plan：计划已批准（approved）或正在执行（executing——曾批准且已启动，
-      // 回切无需重新评审）→ 顺带置 executing，消除「plan→direct→plan」切换死锁；
-      // 计划不存在/其他状态（reviewing/completed 等）→ 仅切模式，由 start 门把关。
-      if (
-        plan &&
-        (plan.status === PLAN_STATUS.approved ||
-          plan.status === PLAN_STATUS.executing)
-      ) {
-        const updated = await this.prisma.$transaction(async (tx) => {
-          await tx.plan.update({
-            where: { taskId: id },
-            data: { status: PLAN_STATUS.executing },
-          });
-          return tx.task.update({
-            where: { id },
-            data: { executionMode: mode },
-          });
-        });
-        return this.toTaskDto(updated);
-      }
-    }
-    const updated = await this.prisma.task.update({
-      where: { id },
-      data: { executionMode: mode },
     });
     return this.toTaskDto(updated);
   }
@@ -1058,7 +1000,6 @@ export class TasksService implements OnModuleInit {
   ): TransitionOptions {
     switch (action) {
       case 'start': {
-        let planStarted = false;
         return {
           eventType: 'status_change',
           fields: { startedAt: new Date() },
@@ -1097,19 +1038,6 @@ export class TasksService implements OnModuleInit {
                 message: '请先指定主 Agent',
               });
             }
-            if (task.executionMode === EXECUTION_MODES.plan) {
-              const plan = await this.prisma.plan.findUnique({
-                where: { taskId: task.id },
-                select: { status: true },
-              });
-              if (!plan || plan.status !== PLAN_STATUS.approved) {
-                throw new BadRequestException({
-                  code: PLAN_ERRORS.PLAN_NOT_APPROVED,
-                  message: '计划未通过评审，请先提交并评审通过',
-                });
-              }
-              planStarted = true;
-            }
           },
           // T4：启动时全部 created 会话置 active（active 全库唯一写入点；Phase 4 worker 分派依赖）
           afterCommit: async (tx) => {
@@ -1117,12 +1045,6 @@ export class TasksService implements OnModuleInit {
               where: { taskId: id, status: SESSION_STATUS.created },
               data: { status: SESSION_STATUS.active },
             });
-            if (planStarted) {
-              await tx.plan.update({
-                where: { taskId: id },
-                data: { status: PLAN_STATUS.executing },
-              });
-            }
           },
           // 10 篇 §8.1：群聊系统消息含主实例名（FR-07/08）
           sysMessage: ({ task, mainAgentName }) =>
@@ -1151,46 +1073,17 @@ export class TasksService implements OnModuleInit {
         return {
           eventType: 'status_change',
           fields: { pendingReviewAt: new Date() },
-          preflight: async (task) => {
-            if (task.executionMode !== EXECUTION_MODES.plan) {
-              return;
-            }
-            const incomplete = await this.prisma.planTask.findFirst({
-              where: {
-                plan: { taskId: task.id },
-                status: {
-                  in: [PLAN_TASK_STATUS.pending, PLAN_TASK_STATUS.in_progress],
-                },
-              },
-              select: { id: true },
-            });
-            if (incomplete) {
-              throw new ConflictException({
-                code: PLAN_ERRORS.PLAN_TASKS_INCOMPLETE,
-                message:
-                  '执行计划仍有子任务未完成，请先完成全部计划子任务后再提交验收',
-              });
-            }
-          },
           sysMessage: () => '任务已提交待验收',
           privateMessage: () =>
             '任务已提交待验收。作为主 Agent，请牵头收集本任务各 Agent 在执行过程中遇到的问题、解决办法及用户提示，整理后调用 vteam MCP 的 memory_save 工具沉淀为记忆：先用 memory_search 回顾已有记忆避免重复，再按问题/解决/用户提示分类保存（level: "task" 写本任务沉淀，level: "project" 写跨任务复用价值，level: "global" 仅平台通用知识，tags 标注问题类型如 bugfix/workflow/prompt）。如暂无可沉淀内容可跳过，不影响验收流程。',
         };
       case 'accept': {
-        let planCompletable = false;
         let acceptTeamId: string | null = null;
         return {
           eventType: 'accept',
           fields: { completedAt: new Date() },
           preflight: async (task) => {
             acceptTeamId = (task as any).teamId ?? null;
-            if (task.executionMode === EXECUTION_MODES.plan) {
-              const plan = await this.prisma.plan.findUnique({
-                where: { taskId: task.id },
-                select: { id: true },
-              });
-              planCompletable = Boolean(plan);
-            }
           },
           afterCommit: async (tx) => {
             const artifacts = await tx.artifact.findMany({
@@ -1206,12 +1099,6 @@ export class TasksService implements OnModuleInit {
                   })),
                 },
                 data: { acceptedFlag: true },
-              });
-            }
-            if (planCompletable) {
-              await tx.plan.update({
-                where: { taskId: id },
-                data: { status: PLAN_STATUS.completed },
               });
             }
             if (acceptTeamId) await this.promoteNextInTx(tx, acceptTeamId);
@@ -1241,32 +1128,18 @@ export class TasksService implements OnModuleInit {
         };
       }
       case 'archive': {
-        let planCompletable = false;
         let archiveTeamId: string | null = null;
         return {
           eventType: 'archive',
           fields: { archivedAt: new Date() },
           preflight: async (task) => {
             archiveTeamId = (task as any).teamId ?? null;
-            if (task.executionMode === EXECUTION_MODES.plan) {
-              const plan = await this.prisma.plan.findUnique({
-                where: { taskId: task.id },
-                select: { id: true },
-              });
-              planCompletable = Boolean(plan);
-            }
           },
           afterCommit: async (tx) => {
             await tx.session.updateMany({
               where: { taskId: id },
               data: { status: SESSION_STATUS.archived },
             });
-            if (planCompletable) {
-              await tx.plan.update({
-                where: { taskId: id },
-                data: { status: PLAN_STATUS.completed },
-              });
-            }
             if (archiveTeamId) await this.promoteNextInTx(tx, archiveTeamId);
           },
           // 10 篇 §8.1：明确内容保留（FR-05）；记忆管理（mem-trigger）补充提示：任务级记忆已随验收沉淀
@@ -1736,6 +1609,11 @@ export class TasksService implements OnModuleInit {
           main: m.id === mainMemberId,
           enabled: true,
           overrideModelId: m.overrideModelId ?? null,
+          // opencode 原生 agent 选择（null = 用 opencode 默认 agent）。
+          // ⚠️ 必须与 team DTO 同步返回：会话页成员面板优先读 currentTask.instances
+          // （web session/page.tsx agentMembers），任务 DTO 缺此字段会把团队侧的正确值
+          // 覆盖成 null，表现为「切换后徽章回显丢失」（实测踩坑，同 overrideModelId 旧坑）。
+          opencodeAgentName: m.opencodeAgentName ?? null,
           sessionStatus: s?.status ?? null,
           sessionId: s?.id ?? null,
         };
@@ -1748,7 +1626,14 @@ export class TasksService implements OnModuleInit {
       status: task.status,
       mainAgentId: task.mainAgentId,
       mainAgentInstanceId: task.mainAgentInstanceId ?? null,
-      executionMode: task.executionMode ?? EXECUTION_MODES.direct,
+      executionMode: task.executionMode ?? 'direct',
+      planMode: (task as any).planMode ?? false,
+      effectivePlanMode:
+        ((task as any).planMode ?? false) ||
+        getOpencodeAgentDuty(
+          members.find((m) => m.id === mainMemberId)?.opencodeAgentName ??
+            null,
+        ) === 'plan',
       backgroundDocs: task.backgroundDocs ?? [],
       teamId: (task as any).teamId ?? null,
       teamAgentIds: members.map((m) => m.agentId),

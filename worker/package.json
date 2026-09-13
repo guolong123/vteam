@@ -14,9 +14,6 @@
     "typecheck": "tsc --noEmit",
     "test": "jest --runInBand"
   },
-  "dependencies": {
-    "@opencode-ai/sdk": "1.18.16"
-  },
   "devDependencies": {
     "@types/jest": "^29.5.2",
     "@types/node": "^20.3.1",

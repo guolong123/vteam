@@ -24,7 +24,6 @@ import { IssuesModule } from './issues/issues.module';
 import { DocsSiteModule } from './docs-site/docs-site.module';
 import { SwaggerMcpModule } from './swagger-mcp/swagger-mcp.module';
 import { MemoriesModule } from './memories/memories.module';
-import { PlansModule } from './plans/plans.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { MessageChannelsModule } from './message-channels/message-channels.module';
 import { NotificationChannelsModule } from './notifications/notification-channels.module';
@@ -67,7 +66,6 @@ import { TeamsModule } from './teams/teams.module';
     DocsSiteModule,
     SwaggerMcpModule,
     MemoriesModule,
-    PlansModule,
     MessageChannelsModule,
     NotificationChannelsModule,
     TeamsModule,
