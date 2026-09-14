@@ -111,3 +111,14 @@ Baseline HEAD at start: `5ad2e2f docs(plan): mark plan-skills-rewrite F1-F4 comp
 - QA：`npx tsc -p tsconfig.json --noEmit` exit 0；目标三套件 8 suites / 88 tests / 1 snapshot 全绿。
 - 注意：仓库有基线前即脏文件（`.omo/boulder.json`、`platform-mcp.controller.spec.ts` 等），commit 仅
   `git add` 本改单 3 文件 + 本 learnings，不碰他处。
+
+## e2e-plan-member run1 (2026-09-14) — REJECT: worker injector rejects mode:'all' (no product fix per task)
+
+- Harness: `scripts/e2e-plan-member.sh` (new, mirrors e2e-permission-matrix conventions). Run1 aborted at step-0c sentinel (worker never re-injected); evidence under `.omo/evidence/plan-member/`.
+- Step 0 (build+seed): PASS. Images were stale (built 05:37/05:45 UTC, plan commits 06:33-06:44 UTC); rebuilt, server healthy, dist contains a_plan, `node dist/prisma/seed.js` exit 0.
+- Step 1 (seed truth): PASS (script asserts not yet executed, verified manually with same predicates): a_plan=template/plan/plan/ep_plan, ep_plan=template, tmm_0000000006=a_plan alias 计划员-1, main=tmm_0000000002 (not plan), 6 members; /agents lists a_plan template; /teams has 计划员.
+- Server /agent-policies: CORRECT — vteam-plan mode=all, task=allow, edit={`*:deny`,`**.opencode/plans/**:allow`}, guard tools vteam_group_post=allow (layer-1 carries no group_post key: allowlist-complement design, same as the 5 gated tools).
+- REJECT root cause: worker `buildAgentDefinitions`/`assertAgentShape` (`worker/src/resources/opencode-config-builder.ts:58-116`) hard-enforces `mode==='primary'` and hardcodes `mode:'primary'` in output. Live payload mode='all' throws `agent vteam-plan mode 非法：仅支持 'primary'` → injector `writeNeutralized` → roles.json `{enabled:false,roles:{}}` + opencode.json agent section stripped + guard plugin/sessions removed. Reproduced with worker's own dist code (see `reject-builder-throw.txt`); server access log proves the worker's pull was HTTP 200 with full body (`reject-server-200-pull.txt` req id=19); neutralized on-disk state in `reject-roles-neutralized.json`/`reject-neutralized-state.txt`.
+- D1 said "AgentPolicyDefinition.mode 类型同步放宽" but only the server side was widened; the worker's local double-write (`AgentSectionEntry.mode: 'primary'`) was missed, and its docstring ("全程无角色名 if 分支…同一条校验与构造路径") now contradicts D1's per-name mode branch. Fix (NOT applied): widen worker type + assert to accept 'all' (scoped to vteam-plan or generally) and emit `agent.mode` instead of hardcoded 'primary'.
+- Script correction made during run1: vteam_group_post must be ABSENT from layer-1 permission (not `allow`); allow is asserted in live roles.json guard tools. Fixed in script for post-fix re-run.
+- Leftovers: none (killed before any live dispatch: no plan files, no group posts, no serve sessions; DB reseed = intended seed truth; images rebuilt).

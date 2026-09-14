@@ -1,0 +1,11 @@
+[e2e] SERVER_URL=http://localhost:13000 SERVE_BASE_URL=http://localhost:14000 TEAM_ID=tm_0000000001 TASK_ID=t_0000000001
+[e2e] baseline HEAD=680aa5a507d6347079ef21543b6b5ba47f4eae06 (recorded in baseline-git.txt)
+[e2e] --- step 0: rebuild server+worker images (plan code must be in the running dist) ---
+[e2e] images rebuilt; waiting for server health ...
+[e2e] server healthy
+[e2e] running server dist contains plan seed code (a_plan x3)
+[e2e] [32mPASS[0m 0 (images rebuilt, server healthy, dist fresh)
+[e2e] --- step 0b: re-seed (idempotent upserts, same command as compose init) ---
+[e2e] re-seed exit 0
+[e2e] --- step 0c: restart worker (injection happens at start only) + sentinel wait ---
+[e2e] [31mFAIL[0m step=0-restart reason=worker re-injection sentinel not hasPlan:allow after 240s (last=noPlan:allow)

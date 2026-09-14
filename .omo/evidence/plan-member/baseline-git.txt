@@ -1,0 +1,30 @@
+680aa5a fix(policies): drop deleted plan_review from MCP tool namespace
+0806770 feat(policies): plan role member capabilities and scoped task spawn
+8f36c91 refactor: remove server-orchestrated plan review in favor of member subagents
+448ff62 feat(seed): vteam-plan as built-in member role
+5ad2e2f docs(plan): mark plan-skills-rewrite F1-F4 complete
+3c896a6 docs(plan): complete plan-skills-rewrite with F1-F4 approvals
+cd0d74f test(e2e): rewritten plan skills
+3f48000 feat(seed): flesh out plan skills with OmO review doctrine
+ M .omo/boulder.json
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+?? .omo/drafts/agent-tool-permission-align.md
+?? .omo/drafts/vteam-role-behavior-enforcement.md
+?? .omo/evidence/custom-agent-opencode/permission-matrix-audit.txt
+?? .omo/evidence/plan-member/
+?? .omo/evidence/role-enforcement/F1-plan-audit.txt
+?? .omo/evidence/role-enforcement/F2-code-quality.txt
+?? .omo/evidence/role-enforcement/F3-manual-qa.txt
+?? .omo/evidence/role-enforcement/F3-own/
+?? .omo/evidence/role-enforcement/F3-raw/
+?? .omo/evidence/role-enforcement/F4-scope-fidelity.txt
+?? .omo/evidence/role-enforcement/baseline-git.txt
+?? .omo/evidence/role-enforcement/seed-spec.txt
+?? .omo/notepads/vteam-role-behavior-enforcement/decisions.md
+?? .omo/notepads/vteam-role-behavior-enforcement/issues.md
+?? .omo/notepads/vteam-role-behavior-enforcement/problems.md
+?? .omo/plans/vteam-omo-toggle-agent-split.md
+?? .omo/plans/vteam-plan-member-subagents.md
+?? md-docs/
+?? scripts/e2e-plan-member.sh
+?? web/shot-omo3.tmp.cjs

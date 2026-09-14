@@ -1,0 +1,3 @@
+REPRO: worker's OWN dist builder rejects the live server payload.
+CMD: docker compose exec -T worker node -e '<buildAgentDefinitions(dist) over GET http://server:3000/api/v1/agent-policies>'
+THROW: [agent-definitions] agent vteam-plan mode 非法：仅支持 'primary'（实收 "all"）
