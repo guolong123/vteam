@@ -6,7 +6,7 @@
  */
 
 /* ---------------------------------- 角色 ---------------------------------- */
-export type RoleKey = "product" | "project_manager" | "architect" | "developer" | "tester";
+export type RoleKey = "product" | "project_manager" | "architect" | "developer" | "tester" | "plan";
 
 export interface RoleTheme {
   label: string;
@@ -15,13 +15,14 @@ export interface RoleTheme {
   border: string;
 }
 
-/** 五类 Agent 角色的语义色（产品=青蓝 / 项目经理=蓝 / 架构=紫 / 开发=绿 / 测试=橙，深色下半透明跟随 surface） */
+/** 六类 Agent 角色的语义色（产品=青蓝 / 项目经理=蓝 / 架构=紫 / 开发=绿 / 测试=橙 / 计划员= slate 灰，深色下半透明跟随 surface） */
 export const roles: Record<RoleKey, RoleTheme> = {
   product: { label: "产品经理", color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4" },
   project_manager: { label: "项目经理", color: "#0284C7", bg: "#F0F9FF", border: "#BAE6FD" },
   architect: { label: "架构师", color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
   developer: { label: "开发者", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
   tester: { label: "测试", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
+  plan: { label: "计划员", color: "#475569", bg: "#F8FAFC", border: "#CBD5E1" },
 };
 
 /** 角色对应导航/面板上的强调色（深一档，用于文字） */
@@ -31,6 +32,7 @@ export const roleText: Record<RoleKey, string> = {
   architect: "#6D28D9",
   developer: "#047857",
   tester: "#B45309",
+  plan: "#334155",
 };
 
 /* ---------------------------------- 任务状态 ---------------------------------- */

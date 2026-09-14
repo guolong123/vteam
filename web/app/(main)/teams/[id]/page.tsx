@@ -30,7 +30,7 @@ import {
 } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
-const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"] as const;
+const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"] as const;
 function toAvatarRole(role: string | null): RoleKey {
   return role && (ROLE_KEYS as readonly string[]).includes(role as RoleKey) ? (role as RoleKey) : "developer";
 }

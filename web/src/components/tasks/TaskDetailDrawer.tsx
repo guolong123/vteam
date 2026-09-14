@@ -99,9 +99,10 @@ const AGENT_ID_ROLE: Record<string, RoleKey> = {
   a_architect: "architect",
   a_developer: "developer",
   a_tester: "tester",
+  a_plan: "plan",
 };
 
-const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
+const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 
 function toRoles(agentIds: string[]): RoleKey[] {
   const roles: RoleKey[] = [];

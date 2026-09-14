@@ -44,6 +44,7 @@ const FIXED_DESC: Record<RoleKey, string> = {
   architect: "技术方案与架构设计",
   developer: "编码实现与自测",
   tester: "用例设计与质量验收",
+  plan: "执行计划编制与评审",
 };
 const ROLE_AGENT_ID: Record<RoleKey, string> = {
   product: "a_product",
@@ -51,8 +52,9 @@ const ROLE_AGENT_ID: Record<RoleKey, string> = {
   architect: "a_architect",
   developer: "a_developer",
   tester: "a_tester",
+  plan: "a_plan",
 };
-const ROLE_ORDER: RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
+const ROLE_ORDER: RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 
 interface InstanceDraft {
   key: string;

@@ -103,9 +103,10 @@ const AGENT_ID_ROLE: Record<string, RoleKey> = {
   a_architect: "architect",
   a_developer: "developer",
   a_tester: "tester",
+  a_plan: "plan",
 };
 
-const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
+const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 
 /* ------------------------------ API 数据模型（T6/T14 契约） ------------------------------ */
 /** GET /tasks?teamId= 条目（仅取下拉/任务名所需字段）。 */

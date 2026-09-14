@@ -172,7 +172,7 @@ const subTabStyle = (active: boolean): CSSProperties => ({
 type TeamSubTab = "overview" | "settings" | "memory" | "channels" | "actions";
 
 /** 角色字符串 → RoleKey（团队成员的角色在 m.agent.role，非法值归一 developer） */
-const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
+const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 function toRoleKey(role: string | null | undefined): RoleKey {
   return role && (ROLE_KEYS as readonly string[]).includes(role) ? (role as RoleKey) : "developer";
 }

@@ -53,9 +53,10 @@ const AGENT_ID_ROLE: Record<string, RoleKey> = {
   a_architect: "architect",
   a_developer: "developer",
   a_tester: "tester",
+  a_plan: "plan",
 };
 
-const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
+const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 
 /** seed 模板 Agent 角色 → id 兜底。 */
 const ROLE_AGENT_ID: Record<RoleKey, string> = {
@@ -64,6 +65,7 @@ const ROLE_AGENT_ID: Record<RoleKey, string> = {
   architect: "a_architect",
   developer: "a_developer",
   tester: "a_tester",
+  plan: "a_plan",
 };
 
 /** 自定义 agent 中性主题（teal）。 */
@@ -694,7 +696,7 @@ export function TeamMembersPanel({
             }}
           >
             <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>添加实例</div>
-            {/* 角色选择：五角色行（角色色点 + 中文名），点击选中（选中态 = 角色主题边框/背景） */}
+            {/* 角色选择：六角色行（角色色点 + 中文名），点击选中（选中态 = 角色主题边框/背景） */}
             <div style={{ display: "flex", flexDirection: "column", gap: space.xs }} role="radiogroup" aria-label="选择角色">
               {ROLE_KEYS.map((role) => {
                 const t = roles[role] ?? roles.developer;

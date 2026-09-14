@@ -61,12 +61,13 @@ const PRIORITY_LABEL: Record<string, { label: string; color: string }> = {
   low: { label: "低", color: "var(--color-neutral-500)" },
 };
 
-const AGENT_ID_ROLE: Record<string, "product" | "project_manager" | "architect" | "developer" | "tester"> = {
+const AGENT_ID_ROLE: Record<string, "product" | "project_manager" | "architect" | "developer" | "tester" | "plan"> = {
   a_product: "product",
   a_project_manager: "project_manager",
   a_architect: "architect",
   a_developer: "developer",
   a_tester: "tester",
+  a_plan: "plan",
 };
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };

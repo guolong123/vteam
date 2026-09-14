@@ -436,7 +436,7 @@ const TYPE_LABEL: Record<string, string> = {
   clone: "克隆",
 };
 
-const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester"];
+const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 
 /** 真实 role → AgentAvatar 可用 RoleKey（未知/自定义 → developer 兜底，对齐原型 custom 头像）。 */
 function toAvatarRole(role: string | null): RoleKey {
@@ -582,13 +582,13 @@ function roleBorder(role: RoleKey): string {
   return ROLE_BORDERS[role];
 }
 const ROLE_COLORS: Record<RoleKey, string> = {
-  product: "#0D9488", project_manager: "#0EA5E9", architect: "#8B5CF6", developer: "#10B981", tester: "#F59E0B",
+  product: "#0D9488", project_manager: "#0EA5E9", architect: "#8B5CF6", developer: "#10B981", tester: "#F59E0B", plan: "#475569",
 };
 const ROLE_BGS: Record<RoleKey, string> = {
-  product: "rgba(13,148,136,0.10)", project_manager: "rgba(14,165,233,0.10)", architect: "rgba(124,58,237,0.10)", developer: "rgba(16,185,129,0.10)", tester: "rgba(245,158,11,0.10)",
+  product: "rgba(13,148,136,0.10)", project_manager: "rgba(14,165,233,0.10)", architect: "rgba(124,58,237,0.10)", developer: "rgba(16,185,129,0.10)", tester: "rgba(245,158,11,0.10)", plan: "rgba(71,85,105,0.10)",
 };
 const ROLE_BORDERS: Record<RoleKey, string> = {
-  product: "rgba(13,148,136,0.22)", project_manager: "rgba(14,165,233,0.22)", architect: "rgba(124,58,237,0.22)", developer: "rgba(16,185,129,0.28)", tester: "rgba(245,158,11,0.28)",
+  product: "rgba(13,148,136,0.22)", project_manager: "rgba(14,165,233,0.22)", architect: "rgba(124,58,237,0.22)", developer: "rgba(16,185,129,0.28)", tester: "rgba(245,158,11,0.28)", plan: "rgba(71,85,105,0.22)",
 };
 
 /* ================================ 生效权限（只读，执行策略唯一事实来源） ================================ */

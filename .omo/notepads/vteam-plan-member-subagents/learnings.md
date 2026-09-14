@@ -153,3 +153,21 @@ Baseline HEAD at start: `5ad2e2f docs(plan): mark plan-skills-rewrite F1-F4 comp
 - macOS bash 3.2 traps fixed in-script: (1) `$VAR` directly followed by CJK punctuation inside heredocs mis-scans the name (`PLAN_MEMBER_ID）` → unbound) — braced; (2) `${4:-{}}` parses as `${4:-{}` + literal `}` → `mcp_post` params default rewritten without braces; (3) worker-exec cwd is `/app`, so all worker `find/rm/test` paths absolutised to `/data/vteam-worker/...`, stale-file pre-clean moved BEFORE the taskdir snapshot and verified.
 - Step-5 marker matching reads assistant-role text + tool outputs only (`assistant_text()`): serve transcripts echo the prompt double-escaped, which defeats echo-scrubbing and false-positives marker greps. Live proof (run-7 session `ses_f610f3d08ffeOhgShEhDHF1fys`, supplemental `serve-msg-5-run7-supplemental.json`; rerun green in-suite): parent `task[subagent_type=vteam-plan]` → completed, child `PROBE-OK # E2E 角色边界验证计划`, nested attempt → `Subagent depth limit reached (1)`.
 - Step-4 `E2E-PLAN-DONE` check is WARN-level by design (member's group_post summary + file are the contract; final回流 text varies). Runs 8-9 full PASS twice consecutively, `needs-attention.txt` empty.
+
+## e2e-plan-member.sh run (2026-09-14T08:38:47Z) HEAD=4a0f9bf35398b2ceac3101478b72bd920547028f
+- seed: a_plan(ep_plan)/tmm_0000000006 non-main/6 members; /agents template; /teams 计划员.
+- injection: vteam-plan mode=all task=allow plans-scoped edit group_post guard-only; other five split-aware parity vs F3-own baseline (baseline predates allowlist-split); plan diff limited to mode/task/plans-glob + deny removals.
+- guard: 12/12 (task gate allow-only plan+plan; execute deny; unmapped pass-through; plans-write allow / src-write deny).
+- live step4 (group @): yes; live step5 path: live.
+- plan_review: tools/list clean; POST /review HTTP 404; /agent-policies clean; repo non-spec grep zero hits.
+- cleanup: plan file removed, task dir identical, serve sessions aborted. needs-attention: 
+
+## 2026-09-14 — web: plan as sixth first-class role (frontend-only follow-up)
+
+- Baseline HEAD at start: `4a0f9bf test(e2e): plan member subagent flow`. Backend needs nothing (role is free string; DB already has a_plan/plan) — purely frontend gap: `RoleKey` 5-union + 5-entry theme tables made plan fall back to developer-green everywhere.
+- Theme (tokens.ts): `RoleKey` += `"plan"`; `roles.plan = { label: "计划员", color: "#475569", bg: "#F8FAFC", border: "#CBD5E1" }` (slate-gray, distinct from teal/blue/purple/green/amber, follows light-bg/dark-border pattern); `roleText.plan = "#334155"`.
+- Lists extended (append after tester, order preserved): all ten `ROLE_KEYS` literals (TeamMembersPanel, TeamRightPanel, teams/page, session/page, teams/[id]/page, TaskDetailDrawer, board/page, tasks/new/page, artifacts/page, agents/page) + `ROLE_ORDER` (teams/new) + `allRoles` (tools/register).
+- Maps: all six `AGENT_ID_ROLE` reverse maps += `a_plan: "plan"` (TeamMembersPanel, session/page, TaskDetailDrawer, board/page, artifacts/page, teams/[id]/tasks inline-union variant); both `ROLE_AGENT_ID` (teams/new, TeamMembersPanel) += `plan: "a_plan"`; `FIXED_DESC` += `plan: "执行计划编制与评审"`.
+- tsc-as-safety-net extras it forced: agents/page `ROLE_COLORS/ROLE_BGS/ROLE_BORDERS` (plan: #475569 / rgba(71,85,105,0.10/0.22)) + tools/register `ROLE_LABEL` (+= 计划员). No exhaustive role switch exists; no hardcoded-5 role counts (`slice(0,5)` hits are avatar-overflow caps, left alone); `roleOptionsOf`/`agentIdForRole`/`toRole`/`defaultAliasOf`/`defaultWorkDirOf` all pick up plan automatically via ROLE_KEYS/roles table.
+- Render verification by inspection: AgentAvatar/AgentBadge (`roles[x] ?? roles.developer`) and chat-bubble (`roles[role]` + `roleText[role!]`) now resolve plan directly. New-team buckets render from `ROLE_ORDER.map` with `ROLE_AGENT_ID[role]` toggle/add; add-instance rows render from `ROLE_KEYS.map` + `agentIdForRole` — both include plan.
+- QA: `cd web && npx tsc --noEmit` exit 0; eslint on 14 changed files: 0 errors, 8 warnings all pre-existing in untouched regions (`deleting` unused proven in HEAD via `git show`; img/useMemo/_drop/unused-imports far from edited hunks). Also updated stale "五类/五角色" wording (tokens comment, TeamMembersPanel comment, web/README count + table row).
