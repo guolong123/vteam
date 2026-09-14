@@ -1,0 +1,9 @@
+{
+  "reason": "rpc-error-infra",
+  "contract": "VERDICT:/APPROVE|REJECT/i else NEEDS-ATTENTION",
+  "cases": {
+    "approve": "APPROVE",
+    "reject": "REJECT",
+    "garbage": "NEEDS-ATTENTION"
+  }
+}

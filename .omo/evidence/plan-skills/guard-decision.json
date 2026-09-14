@@ -1,0 +1,14 @@
+[
+  {
+    "agent": "vteam-project_manager",
+    "tool": "vteam_plan_review",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-developer",
+    "tool": "vteam_plan_review",
+    "action": "allow",
+    "message": null
+  }
+]

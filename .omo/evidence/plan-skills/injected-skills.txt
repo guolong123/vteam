@@ -1,0 +1,17 @@
+total 0
+drwxr-xr-x 1 root root 274 Sep 14 04:32 .
+drwxr-xr-x 1 root root 136 Sep 13 09:57 ..
+drwxr-xr-x 1 root root  16 Sep 14 04:32 plan-creation
+drwxr-xr-x 1 root root  16 Sep 14 04:32 plan-review-architect
+drwxr-xr-x 1 root root  16 Sep 14 04:32 plan-review-developer
+drwxr-xr-x 1 root root  16 Sep 14 04:32 plan-review-product
+drwxr-xr-x 1 root root  16 Sep 14 04:32 plan-review-project_manager
+drwxr-xr-x 1 root root  16 Sep 14 04:32 plan-review-tester
+drwxr-xr-x 1 root root  16 Sep 13 09:57 prototype-designer
+2730 /data/vteam-worker/.opencode/skills/plan-creation/SKILL.md
+1332 /data/vteam-worker/.opencode/skills/plan-review-architect/SKILL.md
+1347 /data/vteam-worker/.opencode/skills/plan-review-developer/SKILL.md
+1433 /data/vteam-worker/.opencode/skills/plan-review-product/SKILL.md
+1410 /data/vteam-worker/.opencode/skills/plan-review-project_manager/SKILL.md
+1245 /data/vteam-worker/.opencode/skills/plan-review-tester/SKILL.md
+9497 total

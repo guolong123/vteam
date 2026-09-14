@@ -1,0 +1,51 @@
+[e2e] SERVER_URL=http://localhost:13000 WORKER_ID=w_compose_worker TEAM_ID=tm_0000000001 TASK_ID=t_0000000001
+[e2e] server live (via /api/v1/health)
+[e2e] db baseline: {  "tasks": 2,  "team_members": 5,  "sessions": 5,  "skills": 7,  "tools": 202,  "execution_policies": 6,  "team_queues": 1,  "_done": true}
+[e2e] --- step 0: restart worker (injector runs at start only), wait for 6 skill files ---
+[e2e] worker re-injected; 6 plan skill files present
+[e2e] [32mPASS[0m 0 (worker restarted, injector ran)
+[e2e] --- step 1: DB skills + tools rows + injected SKILL.md files ---
+[e2e] skill rows: [{"name":"plan-creation","enabled":true},{"name":"plan-review-architect","enabled":true},{"name":"plan-review-developer","enabled":true},{"name":"plan-review-product","enabled":true},{"name":"plan-review-project_manager","enabled":true},{"name":"plan-review-tester","enabled":true}]
+[e2e] tools row: [{"action":"plan_review","name":"vteam_plan_review"}]
+[e2e] injected skills:\ntotal 0
+drwxr-xr-x 1 root root 274 Sep 14 04:32 .
+drwxr-xr-x 1 root root 136 Sep 13 09:57 ..
+drwxr-xr-x 1 root root  16 Sep 14 04:32 plan-creation
+drwxr-xr-x 1 root root  16 Sep 14 04:32 plan-review-architect
+drwxr-xr-x 1 root root  16 Sep 14 04:32 plan-review-developer
+drwxr-xr-x 1 root root  16 Sep 14 04:32 plan-review-product
+drwxr-xr-x 1 root root  16 Sep 14 04:32 plan-review-project_manager
+drwxr-xr-x 1 root root  16 Sep 14 04:32 plan-review-tester
+drwxr-xr-x 1 root root  16 Sep 13 09:57 prototype-designer
+2730 /data/vteam-worker/.opencode/skills/plan-creation/SKILL.md
+1332 /data/vteam-worker/.opencode/skills/plan-review-architect/SKILL.md
+1347 /data/vteam-worker/.opencode/skills/plan-review-developer/SKILL.md
+1433 /data/vteam-worker/.opencode/skills/plan-review-product/SKILL.md
+1410 /data/vteam-worker/.opencode/skills/plan-review-project_manager/SKILL.md
+1245 /data/vteam-worker/.opencode/skills/plan-review-tester/SKILL.md
+9497 total
+[e2e] [32mPASS[0m 1 (6 skills enabled in DB, tools row present, 6 SKILL.md injected with VERDICT/plan_review markers)
+[e2e] --- step 2: ROLE_SERVER_GATED_TOOLS == SERVER_GATED_TOOLS (6 values) ---
+[e2e] [32mPASS[0m 2 (server ROLE_SERVER_GATED_TOOLS == worker SERVER_GATED_TOOLS, 6 values incl. vteam_plan_review)
+[e2e] --- step 3: worker guard evaluateToolCall allows vteam_plan_review ---
+[e2e] guard decision: [{"agent":"vteam-project_manager","tool":"vteam_plan_review","action":"allow","message":null},{"agent":"vteam-developer","tool":"vteam_plan_review","action":"allow","message":null}]
+[e2e] [32mPASS[0m 3 (guard: project_manager + developer -> vteam_plan_review = allow)
+[e2e] --- step 4: server main-instance gate via POST /api/v1/platform-mcp ---
+[e2e] main=tmm_0000000002 (role=project_manager) nonmain=tmm_0000000001 task=t_0000000001 smokeRole=developer
+[e2e] non-main plan_review raw: {"jsonrpc":"2.0","id":21,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_FORBIDDEN 仅主 Agent（tmm_0000000002）可发起计划评审；请知会主 Agent 调用 plan_review"}}
+[e2e] [32mPASS[0m 4 (server gate: non-main plan_review rejected with 403 main-instance message)
+[e2e] --- step 5: live single-reviewer smoke (bounded 420s) ---
+[e2e] worker exec base URL (server-side view): http://worker:4198
+[e2e] worker exec endpoint ready (GET /plan-files -> 200 from server container)
+[e2e] smoke plan placed at worker:/data/vteam-worker/tasks/t_0000000001/.opencode/plans/e2e-plan-skills-smoke.md
+[e2e] smoke curl rc=0 http=200
+[e2e] smoke raw (first 2000 chars): {"jsonrpc":"2.0","id":31,"result":{"content":[{"type":"text","text":"{\"verdicts\":[{\"role\":\"developer\",\"memberId\":\"tmm_0000000004\",\"verdict\":\"NEEDS-ATTENTION\",\"findings\":\"worker w_compose_worker 不可用：review HTTP 502\"}],\"notes\":[]}"}]}}
+[e2e] smoke summary: verdicts=["NEEDS-ATTENTION"] notes=[]
+[e2e] [32mPASS[0m 5 (smoke LIVE-DEGRADED path: parseable NEEDS-ATTENTION-by-infra, contract held)
+[e2e] smoke path: live-degraded-infra (NEEDS-ATTENTION-by-infra, LLM unreachable/slow)
+[e2e] --- step 6: cleanup smoke plan file, verify DB + /agent-policies back to baseline ---
+[e2e] smoke plan file removed from worker
+[e2e] seed task t_0000000001 status unchanged (pending)
+[e2e] [32mPASS[0m 6 (cleanup: smoke file removed, task unmutated, DB + /agent-policies at baseline)
+[e2e] ALL STEPS DONE: 0/1/2/3/4/5/6 (smoke path: live-degraded-infra (NEEDS-ATTENTION-by-infra, LLM unreachable/slow))
+[e2e] [32mPASS[0m plan-skills (evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/plan-skills)

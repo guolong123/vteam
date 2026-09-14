@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":31,"result":{"content":[{"type":"text","text":"{\"verdicts\":[{\"role\":\"developer\",\"memberId\":\"tmm_0000000004\",\"verdict\":\"NEEDS-ATTENTION\",\"findings\":\"worker w_compose_worker 不可用：review HTTP 502\"}],\"notes\":[]}"}]}}

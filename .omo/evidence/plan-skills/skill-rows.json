@@ -1,0 +1,26 @@
+[
+  {
+    "name": "plan-creation",
+    "enabled": true
+  },
+  {
+    "name": "plan-review-architect",
+    "enabled": true
+  },
+  {
+    "name": "plan-review-developer",
+    "enabled": true
+  },
+  {
+    "name": "plan-review-product",
+    "enabled": true
+  },
+  {
+    "name": "plan-review-project_manager",
+    "enabled": true
+  },
+  {
+    "name": "plan-review-tester",
+    "enabled": true
+  }
+]
