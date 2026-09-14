@@ -14,6 +14,8 @@
  * - MCP 工具按 `mcpServer` 分组（GET /mcp-servers + GET /tools?source=mcp&includeDisabled=true
  *   解析归属；匹配按工具 name/action 双键，vteam_ 前缀兼容裸名）；
  *   停用 server 的分组默认收起（aria-expanded 可展开），启用 server 默认展开。
+ * - 服务端门控工具（effectivePermission.serverGated，主 Agent 专属）渲染只读「仅主 Agent」
+ *   徽章（data-server-gated），无分段控制、不可 PATCH；判定权在服务端主实例。
  * - 交互：
  *   · clone-template-button → POST /agents/:id/clone → 刷新列表并选中克隆体（可继续编辑）
  *   · 新建自定义 → 弹窗 POST /agents（type=custom）→ 刷新列表并选中新建
@@ -63,6 +65,8 @@ interface EffectivePermission {
   bashDeny?: unknown;
   /** 层② guard 纠正：scopeSummary/handoff/denyTemplate */
   correction: Record<string, unknown>;
+  /** 服务端门控工具（主 Agent 专属；服务端按 mainAgentInstanceId 判定，前端只读、不可 PATCH）。 */
+  serverGated?: string[];
 }
 
 /** GET /agents 条目（对齐 AgentsService.toAgentDto 扩展字段）。 */
@@ -278,6 +282,52 @@ function EffectBadge({ value }: { value: unknown }) {
         }}
       />
       {label}
+    </span>
+  );
+}
+
+/** 服务端门控只读徽章主题（主 Agent 专属；sky 系区别于 allow/ask/deny 三态色）。 */
+const serverGatedTheme = { label: "仅主 Agent", color: "#0369A1", bg: "rgba(14,165,233,0.10)", border: "rgba(14,165,233,0.28)" };
+
+/** 服务端门控提示：判定权在服务端（主实例），前端只读、不可修改。 */
+const SERVER_GATED_HINT = "仅主 Agent 可调用，由服务端按主实例判定，不可修改";
+
+/** 服务端门控只读徽章（无分段控制、不可点击；EffectBadge 同款 pill 尺寸）。 */
+function ServerGatedBadge({ toolName }: { toolName: string }) {
+  return (
+    <span
+      data-testid="server-gated-badge"
+      data-server-gated="true"
+      data-tool={toolName}
+      title={SERVER_GATED_HINT}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: space.xs,
+        padding: `1px ${space.sm + 2}px`,
+        borderRadius: radius.pill,
+        backgroundColor: serverGatedTheme.bg,
+        border: `1px solid ${serverGatedTheme.border}`,
+        color: serverGatedTheme.color,
+        fontSize: fontSize.sm,
+        fontWeight: 500,
+        lineHeight: 1.4,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+        fontFamily: fontFamily.body,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          backgroundColor: serverGatedTheme.color,
+          flexShrink: 0,
+        }}
+      />
+      {serverGatedTheme.label}
     </span>
   );
 }
@@ -580,6 +630,17 @@ function EffectivePermissionSection({ effective, agentId, agentType, mcpServers,
       ? (raw as Record<string, unknown>)
       : {};
   }, [effective]);
+  const serverGated = useMemo(() => new Set(effective?.serverGated ?? []), [effective]);
+
+  /** 工具三别名（与 effectOf 同一优先级：name / action / vteam_<action>；去重）。 */
+  const matrixAliasesOf = (tool: ApiTool): string[] => {
+    const prefixed = `vteam_${tool.action}`;
+    return [...new Set([tool.name, tool.action, prefixed])];
+  };
+
+  /** 单一门控判定：三别名任一命中 serverGated 即为服务端门控（只读，不可 PATCH）。 */
+  const isServerGated = (tool: ApiTool): boolean =>
+    matrixAliasesOf(tool).some((alias) => serverGated.has(alias));
 
   /** 分组以 MCP server 目录为准：每个 server 列出其全部工具行，effect 取策略值，未列出→默认 deny。 */
   const groups = useMemo(() => {
@@ -648,6 +709,7 @@ function EffectivePermissionSection({ effective, agentId, agentType, mcpServers,
 
   const handleToolChange = (tool: ApiTool, next: ToolEffect) => {
     if (!editable || !effective || pendingKey) return;
+    if (isServerGated(tool)) return;
     const current = normalizeToolEffect(effectOf(tool));
     if (current === next) return;
     setPolicyError(null);
@@ -749,6 +811,7 @@ function EffectivePermissionSection({ effective, agentId, agentType, mcpServers,
                 </div>
               ) : (
                 tools.map((tool) => {
+                  const gated = isServerGated(tool);
                   const effect = normalizeToolEffect(effectOf(tool));
                   const meta = toolEffectMeta[effect];
                   const key = matrixKeyOf(tool);
@@ -758,6 +821,7 @@ function EffectivePermissionSection({ effective, agentId, agentType, mcpServers,
                       data-testid="effective-mcp-tool"
                       data-tool={tool.name}
                       data-enabled={String(tool.enabled)}
+                      data-server-gated={gated ? "true" : "false"}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -786,21 +850,34 @@ function EffectivePermissionSection({ effective, agentId, agentType, mcpServers,
                           {tool.name}
                         </span>
                         <span style={{ fontSize: fontSize.xs }}>
-                          <span style={{ color: meta.color, fontWeight: 500 }}>{meta.label}</span>
-                          <span style={{ color: neutral[400] }}> · {meta.desc}</span>
+                          {gated ? (
+                            <span title={SERVER_GATED_HINT}>
+                              <span style={{ color: serverGatedTheme.color, fontWeight: 500 }}>{serverGatedTheme.label}</span>
+                              <span style={{ color: neutral[400] }}> · 服务端判定（主实例）</span>
+                            </span>
+                          ) : (
+                            <span>
+                              <span style={{ color: meta.color, fontWeight: 500 }}>{meta.label}</span>
+                              <span style={{ color: neutral[400] }}> · {meta.desc}</span>
+                            </span>
+                          )}
                         </span>
                       </span>
                       <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
                         {!tool.enabled && (
                           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>已停用</span>
                         )}
-                        <ToolEffectSelect
-                          toolName={tool.name}
-                          value={effect}
-                          readOnly={!editable}
-                          pending={pendingKey === key}
-                          onChange={(next) => handleToolChange(tool, next)}
-                        />
+                        {gated ? (
+                          <ServerGatedBadge toolName={tool.name} />
+                        ) : (
+                          <ToolEffectSelect
+                            toolName={tool.name}
+                            value={effect}
+                            readOnly={!editable}
+                            pending={pendingKey === key}
+                            onChange={(next) => handleToolChange(tool, next)}
+                          />
+                        )}
                       </span>
                     </div>
                   );

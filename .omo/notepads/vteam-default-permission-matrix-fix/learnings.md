@@ -53,3 +53,53 @@
 - 注意：工作区另有他人未暂存改动（`server/prisma/seed.ts`、`.omo/boulder.json`），
   本次提交仅含 4 个 worker 文件 + 本 notepad，未纳入他人改动，未 push。
 - Commit：`feat(guard): pass through server-gated tools to the main-agent gate`。
+
+## 2026-09-14 · seed 角色 prompt 与 tool allowlist 对齐（Todo seed DoneClaim 要点）
+
+- 五角色 prompt「可用工具」行按 `ROLE_BOUNDARIES[*].toolAllows` 补齐（prompt 跟随常量）：
+  product +`wecom_reply`/`channel_send`（16→18）；architect +同2项（18→20，git 5 项本就在行内）；
+  developer +`doclib`/`wecom_reply`/`channel_send` 并把 git 5 项并入「可用工具」行
+  （14→17+5，沿用 architect 的 `+ git_…（只读）` 行格式）；tester +`wecom_reply`/
+  `channel_send`+git 5 项（15→17+5，同格式）；project_manager +`chat_history`/
+  `wecom_reply`/`channel_send`（14→17）。
+- 六列表均不含 server-gated 5 工具（`task_transition`/`question_confirm`/`task_create`/
+  `plan_mode`/`team_add_member`）；`vteam-plan` 无 seed 模板 prompt（5 模板外），跳过。
+- `vteamTools` 注册表 +`task_create`（22→23）：`{ action: 'task_create',
+  name: 'vteam_task_create', description: '在团队会话无任务时创建任务（仅主 Agent 可调）' }`，
+  与 `platform-mcp.tools.ts` 同名同义（seed 侧短描述风格）。
+- `seed.spec.ts` 新增「可用工具」集合相等断言：解析 prompt 行（按 `/`/`+` 切分、去
+  `（只读）` 后缀）与 `ROLE_BOUNDARIES[agentName].toolAllows` 键集逐项比对 + 门控工具
+  不得出现；漂移即失败。
+- 验证：`cd server && npx tsc -p tsconfig.json --noEmit` exit 0；
+  `npx jest src/prisma/seed.spec.ts` → 12/12 全绿（含新增断言）。
+- 注意：工作区另有并行改动（worker 4 文件、`.omo/boulder.json` 前人遗留、本 notepad
+  的 worker 段），本次提交仅含 2 个 seed 文件，未纳入他人改动，未 push。
+- Commit：`docs(seed): align role prompts with effective tool allowlist`。
+
+## 2026-09-14 · web 门控工具只读徽章（Todo web DoneClaim 要点）
+
+- `EffectivePermission` +`serverGated?: string[]`（可选，后端未返回时按空集处理，
+  非门控行行为零变）。
+- 单一判定 `isServerGated(tool)`：经 `matrixAliasesOf` 取三别名
+  `[name, action, vteam_<action>]`（去重，与 `effectOf` 同一优先级），任一命中
+  `serverGated` 即门控；`effectOf` 保持 allow/ask/deny 唯一出口不动，
+  `matrixKeyOf`/PATCH 路径不动；`handleToolChange` 首行拒掉门控行（纵深防御，
+  双保险不可 PATCH）。
+- 门控行渲染：左侧文案 `仅主 Agent · 服务端判定（主实例）`（不再走 effectOf 的
+  拒绝红字），右侧 `ServerGatedBadge` 只读 pill（sky 系 `#0369A1`，区别于三态色，
+  EffectBadge 同款 padding/radius/字号，`title` 提示判定权在服务端主实例）；
+  无 `ToolEffectSelect`、不可点击。行 `data-server-gated="true"/"false"`，
+  徽章 `data-testid="server-gated-badge"` + `data-server-gated="true"`。
+  custom/clone 同一渲染路径，天然同徽章（永不可编辑）。
+- Live 验证：`GET /agents/a_developer` 的 `serverGated` 5 项齐全；但库内种子数据
+  陈旧——`permission` 仍含门控 deny 键（`vteam_plan_mode` 等）且 `/tools?source=mcp`
+  无 `vteam_task_create`（22 项旧种子）。Web 以 `serverGated` 为准绳先行判定，
+  所以页面正确（4 行徽章，第 5 项无目录行可渲染；重跑 seed 后自动补齐，无需改 web）。
+- 验证：`cd web && npx tsc --noEmit` exit 0；
+  `npx next lint --file 'app/(main)/agents/page.tsx'` 唯一 warning
+  （`deleting` 未使用）经 `git diff` 确认不在本次 diff，属基线遗留。
+- 证据：`.omo/evidence/permission-matrix/web-server-gated.png`（dev 服
+  `API_PROXY_TARGET=http://localhost:13000` + Playwright 登录截图；脚本放 /tmp，
+  未落仓）：4 门控行均 `仅主 Agent` 蓝徽章、零分段控制，其余行三态控制照常。
+- Commit：`feat(web): show server-gated tools as main-agent-only`（仅 page.tsx +
+  截图 + 本 notepad，未 push）。
