@@ -103,6 +103,7 @@ const SERVER_GATED_TOOLS = new Set([
   'vteam_task_create',
   'vteam_plan_mode',
   'vteam_team_add_member',
+  'vteam_plan_review',
 ]);
 
 /**

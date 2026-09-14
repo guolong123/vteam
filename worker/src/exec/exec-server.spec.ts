@@ -32,6 +32,7 @@ import {
   MAX_IMAGE_ATTACHMENT_BYTES,
   MAX_PLAN_DOC_BYTES,
   MAX_PLAN_UPLOAD_BYTES,
+  REVIEW_DEFAULT_TIMEOUT_MS,
 } from './exec-server';
 
 function asstMsg(id: string, parts: ServePart[]): ServeMessage {
@@ -2519,6 +2520,202 @@ describe('ExecServer：session→policy 映射（Todo 19 guard 会话映射）',
         sent.some((s) => s.type === 'agent.status' && s.payload.status === 'error'),
       ).toBe(false);
       expect(warns.some((m) => m.includes('session policy'))).toBe(true);
+    } finally {
+      await exec.stop();
+    }
+  });
+});
+
+describe('ExecServer：POST /review（单轮同步评审执行，D4）', () => {
+  beforeEach(() => {
+    resetInstanceCount();
+  });
+
+  function postReview(
+    port: number,
+    body: unknown,
+    method = 'POST',
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    return new Promise((resolve, reject) => {
+      const data = JSON.stringify(body);
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/review',
+          method,
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(data),
+          },
+        },
+        (res) => {
+          let chunks = '';
+          res.on('data', (c: Buffer) => {
+            chunks += c.toString('utf8');
+          });
+          res.on('end', () =>
+            resolve({ status: res.statusCode ?? 0, body: JSON.parse(chunks || '{}') }),
+          );
+        },
+      );
+      req.on('error', reject);
+      req.write(data);
+      req.end();
+    });
+  }
+
+  function sessionFile(workDir: string, sessionId: string): string {
+    return join(workDir, '.vteam-role-guard', 'sessions', `${sessionId}.json`);
+  }
+
+  it('成功：恒新会话（夹带 sessionId 也被忽略）+ guard 映射 + 文本透出 + sender 零调用', async () => {
+    const { driver, createSession, sendMessage } = mockDriver();
+    const { sender, sent } = createSender();
+    const workDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-review-'));
+    const taskDir = join(workDir, 'tasks', 't_1');
+    const exec = new ExecServer({
+      port: 0, driver, sender, firstTokenTimeoutMs: 5000, pollMs: 10, workDir, logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await postReview(bound, {
+        taskId: 't_1',
+        agentId: 'a_1',
+        channelId: 'c_1',
+        // 请求形状无 sessionId 字段——即使夹带也必须被忽略（恒全新会话）
+        sessionId: 'ses_old_smuggled',
+        agent: 'vteam-architect',
+        directory: taskDir,
+        system: '只评审，不修改文件',
+        prompt: '请评审该计划',
+      });
+      expect(res.status).toBe(200);
+      // 冻结契约：响应恰为 {text, sessionId}
+      expect(Object.keys(res.body).sort()).toEqual(['sessionId', 'text']);
+      expect(res.body.sessionId).toBe('ses_1');
+      // 文本透出（mock serve 首轮完成 FINISH_MSGS 的 'Hello'）
+      expect(res.body.text).toContain('Hello');
+      // 全新会话：createSession 恰一次（无复用参），sendMessage 用新 id 而非夹带 id
+      expect(createSession).toHaveBeenCalledTimes(1);
+      expect(createSession).toHaveBeenCalledWith(undefined);
+      expect(sendMessage).toHaveBeenCalledWith('ses_1', expect.anything());
+      // guard 映射按传入 agent 落盘（供 guard 插件 enforcement）
+      const onDisk = JSON.parse(fs.readFileSync(sessionFile(workDir, 'ses_1'), 'utf8'));
+      expect(onDisk).toEqual({ agent: 'vteam-architect', dir: taskDir });
+      // 零 realtime 广播：SESSION_UPDATED/AGENT_STATUS/TASK_COMPLETED/delta 一律不上送
+      expect(sent).toEqual([]);
+    } finally {
+      await exec.stop();
+      await fsp.rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('缺省超时为 10min（与 server plan_review 单评审超时对齐）', () => {
+    expect(REVIEW_DEFAULT_TIMEOUT_MS).toBe(10 * 60 * 1000);
+  });
+
+  it('超时：runSendAndAwait 不完成 → 504 + 明确超时文案 + best-effort abort + sender 零调用', async () => {
+    const createSession = jest.fn().mockResolvedValue('ses_timeout');
+    const sendMessage = jest.fn().mockResolvedValue(undefined);
+    // 前 20 次轮询无输出（覆盖 timeoutMs 窗口），之后完成（让后台任务自行收敛，不 hanging）
+    let polls = 0;
+    const getMessages = jest.fn().mockImplementation(async () => {
+      polls += 1;
+      return polls <= 20 ? [] : FINISH_MSGS;
+    }) as jest.Mock;
+    const abort = jest.fn().mockResolvedValue(undefined);
+    const driver = { createSession, sendMessage, getMessages, abort } as unknown as V1Driver;
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({
+      port: 0, driver, sender, firstTokenTimeoutMs: 60_000, pollMs: 10, logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await postReview(bound, { prompt: 'slow', timeoutMs: 50 });
+      expect(res.status).toBe(504);
+      expect(String(res.body.error)).toMatch(/review 超时/);
+      expect(abort).toHaveBeenCalledWith('ses_timeout');
+      expect(sent).toEqual([]);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('createSession 失败 → 502 + 原文透出 + sender 零调用', async () => {
+    const { driver, createSession } = mockDriver();
+    createSession.mockRejectedValue(new Error('serve 未就绪'));
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({
+      port: 0, driver, sender, firstTokenTimeoutMs: 1000, pollMs: 10, logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await postReview(bound, { prompt: 'go' });
+      expect(res.status).toBe(502);
+      expect(String(res.body.error)).toContain('serve 未就绪');
+      expect(sent).toEqual([]);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('非 vteam agent：不写 guard 映射（未映射 pass-through，不建目录）', async () => {
+    const { driver } = mockDriver();
+    const { sender, sent } = createSender();
+    const workDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-review-nomap-'));
+    const exec = new ExecServer({
+      port: 0, driver, sender, firstTokenTimeoutMs: 5000, pollMs: 10, workDir, logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await postReview(bound, { prompt: 'go', agent: 'build' });
+      expect(res.status).toBe(200);
+      expect(fs.existsSync(join(workDir, '.vteam-role-guard'))).toBe(false);
+      expect(sent).toEqual([]);
+    } finally {
+      await exec.stop();
+      await fsp.rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('校验：非 POST → 405；缺 prompt → 400；非法 timeoutMs → 400；非法 JSON → 400', async () => {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    const exec = new ExecServer({
+      port: 0, driver, sender, firstTokenTimeoutMs: 1000, pollMs: 10, logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      expect((await postReview(bound, { prompt: 'x' }, 'GET')).status).toBe(405);
+      const missing = await postReview(bound, { taskId: 't_1' });
+      expect(missing.status).toBe(400);
+      expect(String(missing.body.error)).toContain('prompt');
+      // NaN 经 JSON 传输变为 null（按缺省处理），此处只测可传输的非法值
+      for (const bad of [-5, 0, 'abc']) {
+        const res = await postReview(bound, { prompt: 'x', timeoutMs: bad });
+        expect(res.status).toBe(400);
+      }
+      // 非法 JSON 原始体
+      const rawStatus = await new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          {
+            host: '127.0.0.1',
+            port: bound,
+            path: '/review',
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          },
+          (res) => {
+            res.resume();
+            res.on('end', () => resolve(res.statusCode ?? 0));
+          },
+        );
+        req.on('error', reject);
+        req.write('not-json{');
+        req.end();
+      });
+      expect(rawStatus).toBe(400);
     } finally {
       await exec.stop();
     }
