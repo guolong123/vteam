@@ -130,7 +130,7 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
     expect(agents).toHaveLength(6);
     expect(agents.map((a) => a.name).sort()).toEqual([...agentNames].sort());
     for (const agent of agents) {
-      expect(agent.mode).toBe('primary');
+      expect(agent.mode).toBe(agent.name === 'vteam-plan' ? 'all' : 'primary');
       expect(typeof agent.description).toBe('string');
       expect(agent.description.length).toBeGreaterThan(0);
     }
@@ -153,7 +153,9 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
     for (const agent of agents) {
       const permission = agent.permission;
       expect(permission).not.toHaveProperty('write');
-      expect(permission.task).toBe('deny');
+      expect(permission.task).toBe(
+        agent.name === 'vteam-plan' ? 'allow' : 'deny',
+      );
       expect(permission.edit).toMatchObject({ '*': 'deny' });
       expect(permission.read).toMatchObject({ '*': 'allow' });
       for (const key of Object.keys(permission)) {
@@ -201,7 +203,7 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
       );
       expect(typeof role.correction.denyTemplate).toBe('string');
       expect(role.permission).not.toHaveProperty('write');
-      expect(role.permission.task).toBe('deny');
+      expect(role.permission.task).toBe(name === 'vteam-plan' ? 'allow' : 'deny');
     }
   });
 

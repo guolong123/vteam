@@ -53,7 +53,7 @@ export interface ResolvedExecutionPolicy {
 export interface AgentPolicyDefinition {
   name: string;
   description: string;
-  mode: 'primary';
+  mode: 'primary' | 'all';
   permission: Record<string, unknown>;
 }
 
@@ -321,7 +321,7 @@ export class ExecutionPolicyService implements OnModuleInit {
       return {
         name,
         description: boundary.scopeSummary,
-        mode: 'primary' as const,
+        mode: name === 'vteam-plan' ? 'all' : ('primary' as const),
         permission: this.buildRolePermission(name),
       };
     });
@@ -512,14 +512,16 @@ export class ExecutionPolicyService implements OnModuleInit {
     return Object.fromEntries(entries);
   }
 
-  /** 层① 原生 permission（与 seed 角色策略同形：edit glob + read + bash + task deny + MCP deny，无 `write` 键）。 */
+  /** 层① 原生 permission（与 seed 角色策略同形：edit glob + read + bash + task + MCP deny，无 `write` 键）。 */
   private buildRolePermission(name: VteamAgentName): Record<string, unknown> {
     const boundary = ROLE_BOUNDARIES[name];
     return {
       edit: buildEditPermission(boundary.writeGlobs),
       read: buildReadPermission(),
       bash: boundary.bashEffect,
-      task: 'deny',
+      // opencode 原生 ctx.ask({permission:'task'}) 先于 guard 生效，两道门须同时打开：
+      // 仅 vteam-plan 放行 task（可扇出只读评审 subagent），其余角色保持 deny。
+      task: name === 'vteam-plan' ? 'allow' : 'deny',
       ...Object.fromEntries(
         boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
       ),

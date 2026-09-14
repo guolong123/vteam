@@ -152,7 +152,6 @@ export const ROLE_SERVER_GATED_TOOLS: readonly string[] = [
   'vteam_task_create',
   'vteam_plan_mode',
   'vteam_team_add_member',
-  'vteam_plan_review',
 ] as const;
 
 /** server-gated 集合（`defineBoundary` 的 `mcpDenies` 推导用，避免逐次线性扫描）。 */
@@ -220,6 +219,13 @@ export function taskSubdirGlob(subdir: string): string {
 // 派生任务目录整棵子树的通用写 glob（**tasks/*/ + **）。
 export function taskAllGlob(): string {
   return `${ROLE_TASK_GLOB_BASE}/**`;
+}
+
+// 计划目录写 glob：命中任意基址下的 `.opencode/plans/` 子树
+// （与 taskSubdirGlob 同风格的根无关形式；`*` 跨分隔符，故省略基址与 worktree
+// 相对前缀两种形式均命中）。仅匹配 plans 子树，不匹配仓库常规路径。
+export function planDirGlob(): string {
+  return '**.opencode/plans/**';
 }
 
 /**
@@ -469,7 +475,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       test: 'vteam-tester',
       process: 'vteam-project_manager',
     },
-    writeGlobs: [],
+    writeGlobs: [planDirGlob()],
     readGlobs: ['*'],
     bashEffect: 'deny',
     toolAllows: {
@@ -480,6 +486,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_my_profile: 'allow',
       vteam_chat_history: 'allow',
       vteam_wecom_reply: 'allow',
+      vteam_group_post: 'allow',
     },
   }),
 };

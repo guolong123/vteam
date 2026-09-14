@@ -31,12 +31,12 @@ describe('agent-policies custom agents (Todo 2)', () => {
       return {
         name,
         description: boundary.scopeSummary,
-        mode: 'primary' as const,
+        mode: (name === 'vteam-plan' ? 'all' : 'primary') as 'primary' | 'all',
         permission: {
           edit: buildEditPermission(boundary.writeGlobs),
           read: buildReadPermission(),
           bash: boundary.bashEffect,
-          task: 'deny',
+          task: name === 'vteam-plan' ? 'allow' : 'deny',
           ...Object.fromEntries(
             boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
           ),
@@ -54,7 +54,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
               edit: buildEditPermission(boundary.writeGlobs),
               read: buildReadPermission(),
               bash: boundary.bashEffect,
-              task: 'deny',
+              task: name === 'vteam-plan' ? 'allow' : 'deny',
               ...Object.fromEntries(
                 boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
               ),

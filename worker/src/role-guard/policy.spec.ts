@@ -225,12 +225,43 @@ describe('evaluateToolCall 分支优先级', () => {
     });
   });
 
-  describe('4d) task/execute → deny', () => {
-    const session = sess('vteam-developer');
-    const rolesDoc = doc({ 'vteam-developer': role() });
-    it.each(['task', 'execute'])('%s 拒绝', (tool) => {
-      const message = expectDeny(call(rolesDoc, session, tool, {}));
-      expect(message).toContain(`不能调用 ${tool}`);
+  describe('4d) task 精确开口（仅 vteam-plan + subagent_type vteam-plan）/ execute 恒 deny', () => {
+    it('他角色 task 拒绝', () => {
+      const session = sess('vteam-developer');
+      const rolesDoc = doc({ 'vteam-developer': role() });
+      const message = expectDeny(
+        call(rolesDoc, session, 'task', { subagent_type: 'vteam-plan' }),
+      );
+      expect(message).toContain('不能调用 task');
+    });
+    it('vteam-plan + task + subagent_type vteam-plan → allow', () => {
+      const session = sess('vteam-plan');
+      const rolesDoc = doc({ 'vteam-plan': role() });
+      expectAllow(
+        call(rolesDoc, session, 'task', { subagent_type: 'vteam-plan' }),
+      );
+    });
+    it('vteam-plan task + 他名 subagent_type → deny', () => {
+      const session = sess('vteam-plan');
+      const rolesDoc = doc({ 'vteam-plan': role() });
+      expectDeny(
+        call(rolesDoc, session, 'task', { subagent_type: 'vteam-developer' }),
+      );
+    });
+    it('vteam-plan task + 缺失 args → deny', () => {
+      const session = sess('vteam-plan');
+      const rolesDoc = doc({ 'vteam-plan': role() });
+      expectDeny(call(rolesDoc, session, 'task', {}));
+      expectDeny(call(rolesDoc, session, 'task', null));
+      expectDeny(call(rolesDoc, session, 'task', { description: 'x' }));
+    });
+    it('execute 恒 deny（含 vteam-plan 会话，即使 subagent_type 匹配）', () => {
+      const session = sess('vteam-plan');
+      const rolesDoc = doc({ 'vteam-plan': role() });
+      const message = expectDeny(
+        call(rolesDoc, session, 'execute', { subagent_type: 'vteam-plan' }),
+      );
+      expect(message).toContain('不能调用 execute');
     });
   });
 
@@ -251,6 +282,11 @@ describe('evaluateToolCall 分支优先级', () => {
       const rolesDoc = doc({ 'vteam-developer': unlisted });
       expectDeny(call(rolesDoc, session, 'task', {}));
       expectDeny(call(rolesDoc, session, 'execute', {}));
+    });
+    it('vteam_plan_review 不再是 server-gated（未列入 allowlist → deny）', () => {
+      const unlisted = role({ tools: {} });
+      const rolesDoc = doc({ 'vteam-developer': unlisted });
+      expectDeny(call(rolesDoc, session, 'vteam_plan_review', {}));
     });
     it('非门控未列入 MCP 仍 deny（负对照）', () => {
       const unlisted = role({ tools: {} });

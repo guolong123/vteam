@@ -5,19 +5,19 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
   "agents": [
     {
       "description": "计划职责：只读分析并产出实施计划；不写文件、不执行变更。",
-      "mode": "primary",
+      "mode": "all",
       "name": "vteam-plan",
       "permission": {
         "bash": "deny",
         "edit": {
           "*": "deny",
+          "**.opencode/plans/**": "allow",
         },
         "read": {
           "*": "allow",
         },
-        "task": "deny",
+        "task": "allow",
         "vteam_channel_send": "deny",
-        "vteam_group_post": "deny",
         "vteam_issue_create": "deny",
         "vteam_issue_get": "deny",
         "vteam_issue_list": "deny",
@@ -26,6 +26,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
         "vteam_memory_save": "deny",
         "vteam_memory_search": "deny",
         "vteam_notify_agent": "deny",
+        "vteam_plan_review": "deny",
         "vteam_submit_artifact": "deny",
       },
     },
@@ -44,6 +45,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           "*": "allow",
         },
         "task": "deny",
+        "vteam_plan_review": "deny",
       },
     },
     {
@@ -63,6 +65,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
         "vteam_issue_create": "deny",
         "vteam_issue_transition": "deny",
         "vteam_issue_update": "deny",
+        "vteam_plan_review": "deny",
       },
     },
     {
@@ -80,6 +83,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
         },
         "task": "deny",
         "vteam_issue_create": "deny",
+        "vteam_plan_review": "deny",
       },
     },
     {
@@ -98,6 +102,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
         },
         "task": "deny",
         "vteam_issue_update": "deny",
+        "vteam_plan_review": "deny",
       },
     },
     {
@@ -113,6 +118,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           "*": "allow",
         },
         "task": "deny",
+        "vteam_plan_review": "deny",
         "vteam_submit_artifact": "deny",
       },
     },
@@ -162,6 +168,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           "vteam_issue_create": "deny",
           "vteam_issue_transition": "deny",
           "vteam_issue_update": "deny",
+          "vteam_plan_review": "deny",
         },
         "tools": {
           "git_clone": "allow",
@@ -226,6 +233,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           },
           "task": "deny",
           "vteam_issue_create": "deny",
+          "vteam_plan_review": "deny",
         },
         "tools": {
           "git_clone": "allow",
@@ -286,13 +294,13 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           "bash": "deny",
           "edit": {
             "*": "deny",
+            "**.opencode/plans/**": "allow",
           },
           "read": {
             "*": "allow",
           },
-          "task": "deny",
+          "task": "allow",
           "vteam_channel_send": "deny",
-          "vteam_group_post": "deny",
           "vteam_issue_create": "deny",
           "vteam_issue_get": "deny",
           "vteam_issue_list": "deny",
@@ -301,11 +309,13 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           "vteam_memory_save": "deny",
           "vteam_memory_search": "deny",
           "vteam_notify_agent": "deny",
+          "vteam_plan_review": "deny",
           "vteam_submit_artifact": "deny",
         },
         "tools": {
           "vteam_chat_history": "allow",
           "vteam_doclib": "allow",
+          "vteam_group_post": "allow",
           "vteam_my_profile": "allow",
           "vteam_read_file": "allow",
           "vteam_task_context": "allow",
@@ -353,6 +363,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
             "*": "allow",
           },
           "task": "deny",
+          "vteam_plan_review": "deny",
         },
         "tools": {
           "vteam_channel_send": "allow",
@@ -413,6 +424,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
             "*": "allow",
           },
           "task": "deny",
+          "vteam_plan_review": "deny",
           "vteam_submit_artifact": "deny",
         },
         "tools": {
@@ -476,6 +488,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           },
           "task": "deny",
           "vteam_issue_update": "deny",
+          "vteam_plan_review": "deny",
         },
         "tools": {
           "git_clone": "allow",

@@ -93,7 +93,6 @@ const SERVER_GATED_TOOLS = new Set([
   "vteam_task_create",
   "vteam_plan_mode",
   "vteam_team_add_member",
-  "vteam_plan_review",
 ]);
 const BUILTIN_PASSTHROUGH = new Set(["question", "plan_exit", "skill"]);
 
@@ -146,6 +145,9 @@ function evaluateToolCall(params) {
     return matchesBashDeny(command, patterns)
       ? denyWithCorrection(agent, tool, policy.correction)
       : { action: "allow" };
+  }
+  if (tool === "task" && agent === "vteam-plan" && isPlainObject(args) && args.subagent_type === "vteam-plan") {
+    return { action: "allow" };
   }
   if (TASK_TOOLS.has(tool)) {
     return denyWithCorrection(agent, tool, policy.correction);

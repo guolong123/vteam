@@ -2,6 +2,7 @@ import {
   buildEditPermission,
   buildModelSeedRows,
   buildReadPermission,
+  planDirGlob,
   ROLE_BOUNDARIES,
   ROLE_SERVER_GATED_TOOLS,
   STATIC_AVAILABLE_MODELS,
@@ -76,7 +77,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     }
   });
 
-  it('ROLE_SERVER_GATED_TOOLS 为 6 个主实例专属真实名（server-gated，guard 层② pass-through）', () => {
+  it('ROLE_SERVER_GATED_TOOLS 为 5 个主实例专属真实名（server-gated，guard 层② pass-through）', () => {
     expect([...ROLE_SERVER_GATED_TOOLS].sort()).toEqual(
       [
         'vteam_task_transition',
@@ -84,7 +85,6 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
         'vteam_task_create',
         'vteam_plan_mode',
         'vteam_team_add_member',
-        'vteam_plan_review',
       ].sort(),
     );
     for (const gated of ROLE_SERVER_GATED_TOOLS) {
@@ -166,9 +166,24 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     for (const name of ROLE_NAMES) {
       for (const glob of ROLE_BOUNDARIES[name].writeGlobs) {
         expect(glob.startsWith('/')).toBe(false);
-        expect(glob).toMatch(/^\*\*tasks\/\*/);
+        const isTaskGlob = /^\*\*tasks\/\*/.test(glob);
+        const isPlansGlob = glob === planDirGlob();
+        expect(isTaskGlob || isPlansGlob).toBe(true);
       }
     }
+    expect(ROLE_BOUNDARIES['vteam-plan'].writeGlobs).toEqual([planDirGlob()]);
+  });
+
+  it('planDirGlob 命中 plans 子树、不命中仓库常规路径', () => {
+    const glob = planDirGlob();
+    expect(glob.startsWith('/')).toBe(false);
+    expect(wildcardMatch('.opencode/plans/x.md', glob)).toBe(true);
+    expect(wildcardMatch('data/vteam-worker/.opencode/plans/x.md', glob)).toBe(
+      true,
+    );
+    expect(wildcardMatch('tasks/t_1/.opencode/plans/x.md', glob)).toBe(true);
+    expect(wildcardMatch('src/a.ts', glob)).toBe(false);
+    expect(wildcardMatch('tasks/t_1/code/x.ts', glob)).toBe(false);
   });
 
   it('readGlobs 统一为 ["*"]（= {"*":"allow"}）', () => {
@@ -244,7 +259,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     ).toEqual({ '*': 'deny' });
     expect(
       buildEditPermission(ROLE_BOUNDARIES['vteam-plan'].writeGlobs),
-    ).toEqual({ '*': 'deny' });
+    ).toEqual({ '*': 'deny', [planDirGlob()]: 'allow' });
 
     expect(ROLE_BOUNDARIES['vteam-plan'].toolAllows).toEqual({
       vteam_task_context: 'allow',
@@ -254,6 +269,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       vteam_my_profile: 'allow',
       vteam_chat_history: 'allow',
       vteam_wecom_reply: 'allow',
+      vteam_group_post: 'allow',
     });
     for (const name of ROLE_NAMES) {
       for (const gated of ROLE_SERVER_GATED_TOOLS) {

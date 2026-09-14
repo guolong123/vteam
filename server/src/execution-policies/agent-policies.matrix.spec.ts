@@ -80,7 +80,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
         edit: buildEditPermission(boundary.writeGlobs),
         read: buildReadPermission(),
         bash: boundary.bashEffect,
-        task: 'deny',
+        task: name === 'vteam-plan' ? 'allow' : 'deny',
         ...Object.fromEntries(
           boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
         ),
@@ -91,7 +91,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       );
       expect(expected.read).toEqual(buildReadPermission());
       expect(expected.bash).toBe(boundary.bashEffect);
-      expect(expected.task).toBe('deny');
+      expect(expected.task).toBe(name === 'vteam-plan' ? 'allow' : 'deny');
       expect(expected).not.toHaveProperty('write');
       for (const denied of boundary.mcpDenies) {
         expect(expected[denied]).toBe('deny');
@@ -160,13 +160,13 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       }
     });
 
-    it('agent/role permission 与层①派生 map 一致；全员 task deny、无 write', () => {      for (const agent of policies.agents) {
+    it('agent/role permission 与层①派生 map 一致；仅 vteam-plan task allow、无 write', () => {      for (const agent of policies.agents) {
         const boundary = ROLE_BOUNDARIES[agent.name];
         const expectedPermission = {
           edit: buildEditPermission(boundary.writeGlobs),
           read: buildReadPermission(),
           bash: boundary.bashEffect,
-          task: 'deny',
+          task: agent.name === 'vteam-plan' ? 'allow' : 'deny',
           ...Object.fromEntries(
             boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
           ),
@@ -179,9 +179,38 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
         expect(
           policies.guard.roles[agent.name].permission,
         ).not.toHaveProperty('write');
-        expect(agent.permission.task).toBe('deny');
-        expect(policies.guard.roles[agent.name].permission.task).toBe('deny');
+        expect(agent.permission.task).toBe(
+          agent.name === 'vteam-plan' ? 'allow' : 'deny',
+        );
+        expect(policies.guard.roles[agent.name].permission.task).toBe(
+          agent.name === 'vteam-plan' ? 'allow' : 'deny',
+        );
       }
+    });
+
+    it('mode 仅 vteam-plan 为 all，其余为 primary', () => {
+      for (const agent of policies.agents) {
+        expect(agent.mode).toBe(
+          agent.name === 'vteam-plan' ? 'all' : 'primary',
+        );
+      }
+    });
+
+    it('vteam-plan 层①含 plans 窄写 + 层②含 group_post', () => {
+      const plan = policies.agents.find((a) => a.name === 'vteam-plan');
+      expect(plan).toBeDefined();
+      const edit = (plan?.permission.edit ?? {}) as Record<string, string>;
+      const plansGlobs = Object.keys(edit).filter((glob) =>
+        glob.includes('.opencode/plans'),
+      );
+      expect(plansGlobs.length).toBeGreaterThan(0);
+      for (const glob of plansGlobs) {
+        expect(edit[glob]).toBe('allow');
+      }
+      expect(policies.guard.roles['vteam-plan'].tools).toHaveProperty(
+        'vteam_group_post',
+        'allow',
+      );
     });
   });
 });

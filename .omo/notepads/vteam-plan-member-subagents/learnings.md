@@ -28,3 +28,70 @@
 - 坑：`head > tmp && mv` 跨卷 mv 报 owner/group 错但内容已替换（以 `wc`+`tail` 为准）；zsh 下 `echo ===...` 会触发 `== not found` 解析错，改用 bare 命令。
 - grep 零证明（非 spec）：仅剩 `agent.constants.ts:140`（Todo 1 领地）+ 2 处 RBAC 通用注释 `view/create/edit/delete/review/manage`（无关旧词）+ 1 处 tasks.module 注释；spec 侧仅剩"断言缺席"类引用（dispatcher 自有 + sibling 领地的 seed/guard spec）。
 - QA：server/worker `tsc --noEmit` 均 exit 0；jest：controller+service+client 226/226，dispatcher 188/188，exec-server 101/101。
+# Learnings — Todo 1 [policy+guard] plan role member capabilities and scoped task spawn
+
+Baseline HEAD at start: `5ad2e2f docs(plan): mark plan-skills-rewrite F1-F4 complete`.
+
+## What changed (owned files only)
+
+- `server/src/common/constants/agent.constants.ts`
+  - `ROLE_SERVER_GATED_TOOLS`: removed `vteam_plan_review` → back to 5.
+  - New exported helper `planDirGlob()` → `'**.opencode/plans/**'` (root-independent style like
+    `taskSubdirGlob`: `**` crosses separators, so bare and worktree-prefixed paths both hit).
+  - `ROLE_BOUNDARIES['vteam-plan']`: `writeGlobs: [planDirGlob()]`, `toolAllows += vteam_group_post`.
+    `readGlobs: ['*']`, `bashEffect: 'deny'` unchanged. No other role touched (verified by diff).
+- `server/src/execution-policies/execution-policy.service.ts`
+  - `AgentPolicyDefinition.mode`: widened to `'primary' | 'all'`.
+  - `buildAgentPolicies` builtin site: `mode` is `'all'` only for `vteam-plan`, `'primary'` otherwise;
+    custom-agent site stays `'primary'`.
+  - `buildRolePermission`: `task` is `'allow'` only for `vteam-plan`, `'deny'` otherwise.
+    Comment records why: opencode native `ctx.ask({permission:'task'})` runs before guard, both gates must open.
+  - `guardForAgent` unchanged (reads `toolAllows`; new entries flow automatically).
+- `worker/src/role-guard/policy.ts` (+ inline snapshot in `worker/src/resources/role-guard-plugin.ts`, parity kept)
+  - `SERVER_GATED_TOOLS`: removed `vteam_plan_review` → exactly 5
+    (`vteam_task_transition, vteam_question_confirm, vteam_task_create, vteam_plan_mode, vteam_team_add_member`).
+  - Precise `task` gate inserted before the `TASK_TOOLS` deny branch: allow iff mapped agent is
+    exactly `'vteam-plan'` AND `args.subagent_type === 'vteam-plan'`; otherwise fall through to deny
+    (`execute` always denies, malformed args deny). Header comment updated (branch 4 + the
+    role-name-hardcode constraint now records this single exception).
+- Specs: constants spec (plans glob match/mismatch, group_post addition, gated back to 5);
+  matrix + custom-agents specs (vteam-plan layer-① task allow + group_post + plans glob + mode all;
+  builtin fixture + snapshot regenerated); controller spec branched for vteam-plan mode/task
+  (needed for green; sibling spec of the same service); policy.spec (gate truth table) + parity spec
+  (plan allow/other-role deny/wrong-name deny/missing-args deny/execute deny; plan_review now deny; 29 cases).
+
+## Glob match/mismatch proof (`planDirGlob() = '**.opencode/plans/**'`, spec-locked)
+
+- MATCH: `.opencode/plans/x.md`, `data/vteam-worker/.opencode/plans/x.md`, `tasks/t_1/.opencode/plans/x.md`
+- NO MATCH: `src/a.ts`, `tasks/t_1/code/x.ts`
+
+## Guard gate truth table (policy.spec + parity spec, all green)
+
+| mapped agent | tool | args | decision |
+|---|---|---|---|
+| vteam-plan | task | `{subagent_type:'vteam-plan'}` | allow |
+| vteam-developer | task | `{subagent_type:'vteam-plan'}` | deny |
+| vteam-plan | task | `{subagent_type:'vteam-developer'}` | deny |
+| vteam-plan | task | `{}`, `null`, `{description}` | deny |
+| vteam-plan | execute | `{subagent_type:'vteam-plan'}` | deny |
+| any | task/execute | rolesDoc null / session unmapped | allow (pass-through, unchanged) |
+
+## Verification
+
+- `cd server && npx tsc -p tsconfig.json --noEmit` → exit 0.
+- `cd worker && npx tsc --noEmit` → exit 0.
+- server: `execution-policies` + `common/constants` + `prisma/seed.spec.ts` → 8 suites / 88 tests green
+  (incl. regenerated custom-agents snapshot; seed.spec passes with gated-back-to-5).
+- worker: `role-guard/policy.spec.ts` + `resources/role-guard-plugin.spec.ts` → 70 tests green.
+- worker FULL suite: 593/595 pass; 2 failures in `driver/v1-driver.spec.ts` listModels `/provider`
+  tests (extra `anthropic/claude-3-5-sonnet` entries in received) — pre-existing, unrelated to this
+  todo (driver files untouched; failure is provider-model mock drift, not role-guard).
+
+## Gotchas for later todos
+
+- `agent.constants.spec.ts` `writeGlobs` shape test now accepts `**tasks/**` OR `planDirGlob()` — Todo 2/4
+  adding more globs must extend that allowlist, not revert it.
+- `agent-policies.controller.spec.ts` branches mode/task expectations on `vteam-plan` — e2e (Todo 4)
+  asserting uniform `primary`/`deny` must branch the same way.
+- The inline snapshot in `role-guard-plugin.ts` must stay byte-parity with `policy.ts`; the parity spec
+  (now 29 cases) fails on any drift — edit both together.

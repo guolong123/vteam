@@ -15,7 +15,8 @@
  *        目标路径不可解析时 allow（交层①）。
  *      - `bash` → 仅按 `bashDeny` 硬化清单（大小写不敏感子串，含 `*`/`?`
  *        的条目按 glob），未命中即 allow（再由层① `permission.bash` 生效）。
- *      - `task`/`execute` → deny。
+ *      - `task`/`execute` → deny（例外：映射 agent 为 `vteam-plan` 且
+ *        `args.subagent_type === 'vteam-plan'` 时 `task` 放行；`execute` 恒 deny）。
  *      - 内置通行集 `question|plan_exit|skill` → allow；`browser` 仅当列入
  *        角色 `tools` allowlist 才 allow。
  *      - 其余未知/自定义/MCP 工具（真实名，如 `vteam_<action>`、`git_clone`）
@@ -28,7 +29,8 @@
  *   复刻 `*`→`.*` 跨分隔符语义）；
  * - 类型本地双写：对齐控制面 `/agent-policies` 下发的 guard roles 形状
  *  （`{ permission, tools, bashDeny, correction }`），绝不 import server 代码；
- * - 无角色名 `if` 分支：不 hardcode 任何 `vteam-<role>` 语义，策略全来自 `rolesDoc`。
+ * - 唯一角色名硬编码例外：`task` 精确开口仅 `vteam-plan` 会话 +
+ *   `subagent_type === 'vteam-plan'` 放行，其余策略全来自 `rolesDoc`。
  */
 
 /** guard 判定数据源（`<workDir>/.vteam-role-guard/roles.json` 解析后形状）。 */
@@ -103,7 +105,6 @@ const SERVER_GATED_TOOLS = new Set([
   'vteam_task_create',
   'vteam_plan_mode',
   'vteam_team_add_member',
-  'vteam_plan_review',
 ]);
 
 /**
@@ -175,6 +176,14 @@ export function evaluateToolCall(params: EvaluateToolCallParams): GuardDecision 
     return matchesBashDeny(command, patterns)
       ? denyWithCorrection(agent, tool, policy.correction)
       : { action: 'allow' };
+  }
+  if (
+    tool === 'task' &&
+    agent === 'vteam-plan' &&
+    isPlainObject(args) &&
+    (args as Record<string, unknown>).subagent_type === 'vteam-plan'
+  ) {
+    return { action: 'allow' };
   }
   if (TASK_TOOLS.has(tool)) {
     return denyWithCorrection(agent, tool, policy.correction);

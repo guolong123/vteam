@@ -69,6 +69,16 @@ function session(): SessionPolicy {
   return { agent: 'vteam-developer', dir: 'tasks/t_1' };
 }
 
+/** vteam-plan 角色文档（task 精确开口 parity 用，与 developer 同形）。 */
+function planRolesDoc(): RolesDoc {
+  const base = rolesDoc();
+  return { enabled: true, roles: { 'vteam-plan': base.roles['vteam-developer'] } };
+}
+
+function planSession(): SessionPolicy {
+  return { agent: 'vteam-plan', dir: 'tasks/t_1' };
+}
+
 /** parity 矩阵：双方同输入必须逐字节一致。 */
 const PARITY_CASES: Array<{ name: string; params: EvaluateToolCallParams }> = [
   { name: 'rolesDoc null → pass-through', params: { rolesDoc: null, session: session(), tool: 'write', args: { filePath: 'x' } } },
@@ -86,14 +96,18 @@ const PARITY_CASES: Array<{ name: string; params: EvaluateToolCallParams }> = [
   { name: 'edit 无目标路径 → 交层①放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'edit', args: {} } },
   { name: 'bash 命中硬化 deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'bash', args: { command: 'git push origin main' } } },
   { name: 'bash 未命中放行（交层①）', params: { rolesDoc: rolesDoc(), session: session(), tool: 'bash', args: { command: 'ls -la' } } },
-  { name: 'task 恒 deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'task', args: { description: 'x' } } },
+  { name: 'task 他角色恒 deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'task', args: { description: 'x' } } },
+  { name: 'vteam-plan task + subagent vteam-plan 放行', params: { rolesDoc: planRolesDoc(), session: planSession(), tool: 'task', args: { subagent_type: 'vteam-plan' } } },
+  { name: 'vteam-plan task + 他名 subagent deny', params: { rolesDoc: planRolesDoc(), session: planSession(), tool: 'task', args: { subagent_type: 'vteam-developer' } } },
+  { name: 'vteam-plan task + 缺失 args deny', params: { rolesDoc: planRolesDoc(), session: planSession(), tool: 'task', args: {} } },
+  { name: 'vteam-plan execute 恒 deny', params: { rolesDoc: planRolesDoc(), session: planSession(), tool: 'execute', args: { subagent_type: 'vteam-plan' } } },
   { name: 'execute 恒 deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'execute', args: {} } },
   { name: 'server-gated vteam_task_transition 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_task_transition', args: {} } },
   { name: 'server-gated vteam_question_confirm 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_question_confirm', args: {} } },
   { name: 'server-gated vteam_task_create 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_task_create', args: {} } },
   { name: 'server-gated vteam_plan_mode 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_plan_mode', args: {} } },
   { name: 'server-gated vteam_team_add_member 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_team_add_member', args: {} } },
-  { name: 'server-gated vteam_plan_review 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_plan_review', args: {} } },
+  { name: 'vteam_plan_review 不再是 server-gated（deny）', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_plan_review', args: {} } },
   { name: 'question 通行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'question', args: {} } },
   { name: 'browser 未 allowlist deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'browser', args: {} } },
   { name: 'allowlist 内 MCP 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_submit_artifact', args: {} } },
@@ -128,7 +142,7 @@ describe('renderRoleGuardPlugin（渲染产物 spike）', () => {
     expect(renderRoleGuardPlugin()).toBe(renderRoleGuardPlugin());
   });
 
-  it('内联判定快照与 policy.ts parity（26 例矩阵逐字节一致）', () => {
+  it('内联判定快照与 policy.ts parity（29 例矩阵逐字节一致）', () => {
     const snapshotEval = extractDecisionFn();
     for (const c of PARITY_CASES) {
       const expected = evaluateToolCall(c.params);
