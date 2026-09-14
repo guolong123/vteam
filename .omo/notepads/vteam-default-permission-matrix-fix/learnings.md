@@ -103,3 +103,36 @@
   未落仓）：4 门控行均 `仅主 Agent` 蓝徽章、零分段控制，其余行三态控制照常。
 - Commit：`feat(web): show server-gated tools as main-agent-only`（仅 page.tsx +
   截图 + 本 notepad，未 push）。
+
+## 2026-09-14 · e2e 矩阵拆分复现脚本（Todo e2e DoneClaim 要点）
+
+- 新增 `scripts/e2e-permission-matrix.sh`（唯一源码改动），10 步全绿、连续 3 次
+  `PASS permission-matrix`（exit 0）：0 哨兵新鲜度 → 1 门控 6 角色×5 工具 allow +
+  `vteam_member_remove` deny（含越界拦截文案）→ 3 新增 allow（PM chat_history、
+  dev doclib、6 角色 wecom_reply）→ 6 回归 deny（plan group_post、dev
+  issue_create）→ 2 层① 6 内置 agent permission 无门控键 → 4a/4c 非主实例
+  plan_mode/task_transition 双 -32003 403 → 4b 主实例 plan_mode 同值写成功 →
+  4d 主实例 task_transition 状态非法动作仅 409 → 5 两侧常量逐项一致。
+- 服务端门用真实 HTTP（`POST /api/v1/platform-mcp` + `x-worker-id`/
+  `x-worker-token`，JSON-RPC `tools/call`）：注意 controller 恒回 HTTP 200，
+  403 体现在 body `error.code=-32003` + `message=[403] …仅主 Agent…`——断言必须
+  看 body 而非 HTTP 状态。非主实例用 DB 会话兜底选
+  `sessions.team_member_id <> main`（本次为 `tmm_0000000001`）；主实例
+  `tmm_0000000002`，任务 `t_0000000001`（pending/planMode=0）。
+- 幂等设计：plan_mode 传 DB 当前值（同值 no-op）；task_transition 按状态选永非法
+  动作（completed→start，其余→archive），主实例恒得 409
+  `TASK_INVALID_TRANSITION` 不落库；4d 额外断言任务 status 未变。脚本业务只读，
+  无行创建，无需清理（EXIT trap 仅清 mktemp）。
+- `docker compose cp` 会保留容器源文件 mtime（evidence 中
+  injected-opencode.json 显示旧时间戳属正常），新鲜度以字节比对为准，脚本断言
+  内容不看 mtime。鲜度门用 guard 哨兵（PM task_transition）而非 mtime：失活才
+  `up -d --force-recreate worker` + 轮询。
+- 主从实例 id 来源：`teams.main_agent_member_id` + `sessions(worker_id,
+  team_member_id)`；token 链 `X_WORKER_TOKEN → WORKER_TOKEN → repo .env →
+  compose-worker-token`，worker id 默认 `w_compose_worker`。
+- 证据：`.omo/evidence/permission-matrix/` 下 `guard-decision.json`（41 条原始
+  判定）、`server-gate-nonmain-*.json`（双 403 body）、
+  `server-gate-main-*.json`、`injected-opencode.json`、`roles.json`、
+  `constants-{server,worker}.json` + `constants-compare.txt`、`e2e.txt`。
+- Commit：`test(e2e): verify default permission matrix split`（仅本脚本 + 证据 +
+  本 notepad，未 push）。

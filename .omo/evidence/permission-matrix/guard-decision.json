@@ -1,0 +1,248 @@
+[
+  {
+    "agent": "vteam-plan",
+    "tool": "vteam_task_transition",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-plan",
+    "tool": "vteam_question_confirm",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-plan",
+    "tool": "vteam_task_create",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-plan",
+    "tool": "vteam_plan_mode",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-plan",
+    "tool": "vteam_team_add_member",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-product",
+    "tool": "vteam_task_transition",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-product",
+    "tool": "vteam_question_confirm",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-product",
+    "tool": "vteam_task_create",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-product",
+    "tool": "vteam_plan_mode",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-product",
+    "tool": "vteam_team_add_member",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-architect",
+    "tool": "vteam_task_transition",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-architect",
+    "tool": "vteam_question_confirm",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-architect",
+    "tool": "vteam_task_create",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-architect",
+    "tool": "vteam_plan_mode",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-architect",
+    "tool": "vteam_team_add_member",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-developer",
+    "tool": "vteam_task_transition",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-developer",
+    "tool": "vteam_question_confirm",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-developer",
+    "tool": "vteam_task_create",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-developer",
+    "tool": "vteam_plan_mode",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-developer",
+    "tool": "vteam_team_add_member",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-tester",
+    "tool": "vteam_task_transition",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-tester",
+    "tool": "vteam_question_confirm",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-tester",
+    "tool": "vteam_task_create",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-tester",
+    "tool": "vteam_plan_mode",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-tester",
+    "tool": "vteam_team_add_member",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-project_manager",
+    "tool": "vteam_task_transition",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-project_manager",
+    "tool": "vteam_question_confirm",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-project_manager",
+    "tool": "vteam_task_create",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-project_manager",
+    "tool": "vteam_plan_mode",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-project_manager",
+    "tool": "vteam_team_add_member",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-project_manager",
+    "tool": "vteam_chat_history",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-project_manager",
+    "tool": "vteam_wecom_reply",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-developer",
+    "tool": "vteam_doclib",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-developer",
+    "tool": "vteam_wecom_reply",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-plan",
+    "tool": "vteam_wecom_reply",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-product",
+    "tool": "vteam_wecom_reply",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-architect",
+    "tool": "vteam_wecom_reply",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-tester",
+    "tool": "vteam_wecom_reply",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "agent": "vteam-project_manager",
+    "tool": "vteam_member_remove",
+    "action": "deny",
+    "message": "【越界拦截｜角色：vteam-project_manager】不能调用 vteam_member_remove。职责：流程控制：负责任务拆解编排、进度跟踪、风险与阻塞协调；不产出需求/方案/代码/用例、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+  },
+  {
+    "agent": "vteam-plan",
+    "tool": "vteam_group_post",
+    "action": "deny",
+    "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_group_post。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+  },
+  {
+    "agent": "vteam-developer",
+    "tool": "vteam_issue_create",
+    "action": "deny",
+    "message": "【越界拦截｜角色：vteam-developer】不能调用 vteam_issue_create。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+  }
+]
