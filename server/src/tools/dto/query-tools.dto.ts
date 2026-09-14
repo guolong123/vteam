@@ -25,7 +25,8 @@ export class QueryToolsDto {
   execution?: string;
 
   @ApiPropertyOptional({
-    description: '启用状态过滤（true 仅启用 / false 仅停用），缺省返回全部',
+    description:
+      '启用状态过滤（true 仅启用 / false 仅停用，任何 viewer 显式传入均按值过滤；缺省时成员默认仅启用、admin/无 viewer 全量）',
   })
   @IsOptional()
   @Transform(({ value }) => {

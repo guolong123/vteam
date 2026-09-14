@@ -3007,13 +3007,11 @@ describe('PlatformMcpService', () => {
           prompt: longPrompt,
           defaultModelId: 'm_1',
           policyId: 'ep_developer',
-          permissionScope: { tools: ['read', 'write'] },
-          toolEffects: [{ toolAction: 'read_file', effect: '读取工作区文件' }],
         },
         ...overrides,
       });
 
-      it('返回自身配置：角色/权限范围/toolEffects/模型 + prompt 摘要截断（前 500 字符）', async () => {
+      it('返回自身配置：角色/effectivePermission/模型 + prompt 摘要截断（前 500 字符）', async () => {
         allowWorker();
         allowPolicy();
         prisma.teamMember.findFirst.mockResolvedValue(agentRow() as any);
@@ -3036,10 +3034,15 @@ describe('PlatformMcpService', () => {
                 select: expect.objectContaining({
                   prompt: true,
                   policyId: true,
-                  permissionScope: true,
-                  toolEffects: { select: { toolAction: true, effect: true } },
                 }),
               }),
+            }),
+          }),
+        );
+        expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            select: expect.not.objectContaining({
+              permissionScope: expect.anything(),
             }),
           }),
         );
@@ -3057,13 +3060,6 @@ describe('PlatformMcpService', () => {
           seq: 1,
           workDir: '/data/vteam-worker/developer-1',
           defaultModelId: 'm_1',
-          permissionScope: { tools: ['read', 'write'] },
-          toolEffects: [{ toolAction: 'read_file', effect: '读取工作区文件' }],
-          deprecated: {
-            permissionScope: true,
-            toolEffects: true,
-            note: expect.stringContaining('effectivePermission'),
-          },
           effectivePermission: {
             policyId: 'ep_developer',
             policyName: '开发者策略',
@@ -3087,8 +3083,6 @@ describe('PlatformMcpService', () => {
               role: 'developer',
               prompt: '简短提示词',
               defaultModelId: null,
-              permissionScope: null,
-              toolEffects: [],
             },
           }),
         );
@@ -3102,7 +3096,7 @@ describe('PlatformMcpService', () => {
         expect(out.promptTruncated).toBe(false);
       });
 
-      it('未绑定策略（resolveByAgent=null）→ effectivePermission=null，legacy 字段仍保留且标 deprecated', async () => {
+      it('未绑定策略（resolveByAgent=null）→ effectivePermission=null，仅返回生效权限与基础配置', async () => {
         allowWorker();
         executionPolicyService.resolveByAgent.mockResolvedValue(null);
         prisma.teamMember.findFirst.mockResolvedValue(agentRow() as any);
@@ -3118,14 +3112,9 @@ describe('PlatformMcpService', () => {
         });
         expect(out.effectivePermission).toBeNull();
         expect(out.agentName).toBe('vteam-developer');
-        expect(out.deprecated).toMatchObject({
-          permissionScope: true,
-          toolEffects: true,
-        });
-        expect(out.permissionScope).toEqual({ tools: ['read', 'write'] });
-        expect(out.toolEffects).toEqual([
-          { toolAction: 'read_file', effect: '读取工作区文件' },
-        ]);
+        expect(out).not.toHaveProperty('permissionScope');
+        expect(out).not.toHaveProperty('toolEffects');
+        expect(out).not.toHaveProperty('deprecated');
       });
 
       it('role 为空 → agentName 回退 vteam-plan', async () => {
@@ -3140,8 +3129,6 @@ describe('PlatformMcpService', () => {
               prompt: 'p',
               defaultModelId: null,
               policyId: null,
-              permissionScope: null,
-              toolEffects: [],
             },
           }),
         );

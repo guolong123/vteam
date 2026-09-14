@@ -2,6 +2,7 @@ import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AGENT_ERRORS } from '../common/constants/agent.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
 import { ModelsService } from '../models/models.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WorkerClient } from '../workers/worker.client';
@@ -32,10 +33,10 @@ describe('AgentsService', () => {
       delete: jest.Mock;
     };
     agentSkill: { create: jest.Mock; deleteMany: jest.Mock };
-    agentToolEffect: { create: jest.Mock; deleteMany: jest.Mock };
     worker: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
+  let executionPolicyService: { resolveManyByAgents: jest.Mock };
 
   const templateRows = [
     {
@@ -46,12 +47,13 @@ describe('AgentsService', () => {
       prompt: 'prompt1',
       baseAgentId: null,
       defaultModelId: null,
-      permissionScope: null,
+      persona: 'innovative',
+      workerId: null,
+      policyId: 'ep_product',
       createdBy: 'u_admin',
       createdAt: new Date('2026-08-07T00:00:00Z'),
       updatedAt: new Date('2026-08-07T00:00:00Z'),
       skills: [{ skillId: 's_skill1' }],
-      toolEffects: [{ toolAction: 'read', effect: '允许读取' }],
     },
     {
       id: 'a_architect',
@@ -61,12 +63,13 @@ describe('AgentsService', () => {
       prompt: 'prompt2',
       baseAgentId: null,
       defaultModelId: null,
-      permissionScope: null,
+      persona: 'steady',
+      workerId: null,
+      policyId: 'ep_architect',
       createdBy: 'u_admin',
       createdAt: new Date('2026-08-07T00:00:01Z'),
       updatedAt: new Date('2026-08-07T00:00:01Z'),
       skills: [],
-      toolEffects: [],
     },
     {
       id: 'a_developer',
@@ -76,12 +79,13 @@ describe('AgentsService', () => {
       prompt: 'prompt3',
       baseAgentId: null,
       defaultModelId: null,
-      permissionScope: null,
+      persona: 'conservative',
+      workerId: null,
+      policyId: 'ep_developer',
       createdBy: 'u_admin',
       createdAt: new Date('2026-08-07T00:00:02Z'),
       updatedAt: new Date('2026-08-07T00:00:02Z'),
       skills: [],
-      toolEffects: [],
     },
     {
       id: 'a_tester',
@@ -91,16 +95,16 @@ describe('AgentsService', () => {
       prompt: 'prompt4',
       baseAgentId: null,
       defaultModelId: null,
-      permissionScope: null,
+      persona: 'strict',
+      workerId: null,
+      policyId: 'ep_tester',
       createdBy: 'u_admin',
       createdAt: new Date('2026-08-07T00:00:03Z'),
       updatedAt: new Date('2026-08-07T00:00:03Z'),
       skills: [],
-      toolEffects: [],
     },
   ];
 
-  /** custom 可写 Agent（基于模板行改 type，含关联字段）。 */
   const customRow = {
     ...templateRows[0],
     id: 'a_0000000005',
@@ -110,7 +114,9 @@ describe('AgentsService', () => {
     role: 'analyst',
     prompt: 'prompt-custom',
     defaultModelId: 'opencode-go/deepseek-v4-flash',
-    permissionScope: { projects: ['p1'], write: false },
+    persona: null,
+    workerId: null,
+    policyId: null,
   };
 
   let seq = 0;
@@ -146,10 +152,35 @@ describe('AgentsService', () => {
         delete: jest.fn(),
       },
       agentSkill: { create: jest.fn(), deleteMany: jest.fn() },
-      agentToolEffect: { create: jest.fn(), deleteMany: jest.fn() },
       // listOpencodeAgents / getAvailableModels 需读 worker.capabilities 解析 exec 基址
       worker: { findUnique: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn(),
+    };
+    executionPolicyService = {
+      resolveManyByAgents: jest.fn(
+        async (
+          agents: { policyId?: string | null; role?: string | null }[],
+        ) =>
+          agents.map((a) => {
+            const key = a.policyId ?? (a.role ? `ep_${a.role}` : null);
+            return key &&
+              [
+                'ep_product',
+                'ep_project_manager',
+                'ep_architect',
+                'ep_developer',
+                'ep_tester',
+              ].includes(key)
+              ? {
+                  policyId: key,
+                  policyName: `${key}-name`,
+                  agentName: a.role ? `vteam-${a.role}` : 'vteam-plan',
+                  permission: { edit: 'allow' },
+                  correction: { scopeSummary: 'test' },
+                }
+              : null;
+          }),
+      ),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -160,6 +191,7 @@ describe('AgentsService', () => {
         { provide: WorkersService, useValue: workersService },
         { provide: WorkerClient, useValue: workerClient },
         { provide: ModelsService, useValue: modelsService },
+        { provide: ExecutionPolicyService, useValue: executionPolicyService },
       ],
     }).compile();
 
@@ -167,7 +199,7 @@ describe('AgentsService', () => {
   });
 
   describe('findAll（列表：type 过滤 + 分页 + 扩展字段）', () => {
-    it('无参返回全部 Agent，含扩展字段（skillIds/toolEffects/baseAgentId/permissionScope/defaultModelId）', async () => {
+    it('无参返回全部 Agent，含扩展字段（skillIds/policyId/effectivePermission/baseAgentId/defaultModelId）', async () => {
       prisma.$transaction.mockResolvedValue([
         templateRows.length,
         templateRows,
@@ -188,14 +220,17 @@ describe('AgentsService', () => {
         prompt: 'prompt1',
         baseAgentId: null,
         defaultModelId: null,
-        permissionScope: null,
+        policyId: 'ep_product',
         skillIds: ['s_skill1'],
-        toolEffects: [{ toolAction: 'read', effect: '允许读取' }],
+        effectivePermission: {
+          policyId: 'ep_product',
+          agentName: 'vteam-product',
+        },
       });
       // role 与前端 task-create 的 data-role 对齐
       const roles = result.items.map((i) => i.role);
       expect(roles).toEqual(['product', 'architect', 'developer', 'tester']);
-      // 扩展字段契约：扁平数组 + 关联映射
+      // 扩展字段契约：扁平数组 + 策略绑定 + 生效权限
       expect(Object.keys(result.items[0]).sort()).toEqual(
         [
           'id',
@@ -206,15 +241,46 @@ describe('AgentsService', () => {
           'baseAgentId',
           'defaultModelId',
           'persona',
-          'permissionScope',
           'policyId',
           'skillIds',
-          'toolEffects',
+          'effectivePermission',
           'workerId',
           'createdAt',
           'updatedAt',
         ].sort(),
       );
+    });
+
+    it('effectivePermission 与各行 policyId 一一对应（批量单次解析，无 N+1）', async () => {
+      prisma.$transaction.mockResolvedValue([
+        templateRows.length,
+        templateRows,
+      ]);
+
+      const result = await service.findAll();
+
+      expect(executionPolicyService.resolveManyByAgents).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(executionPolicyService.resolveManyByAgents).toHaveBeenCalledWith([
+        { policyId: 'ep_product', role: 'product' },
+        { policyId: 'ep_architect', role: 'architect' },
+        { policyId: 'ep_developer', role: 'developer' },
+        { policyId: 'ep_tester', role: 'tester' },
+      ]);
+      expect(
+        result.items.map((i) => i.effectivePermission?.policyId),
+      ).toEqual(['ep_product', 'ep_architect', 'ep_developer', 'ep_tester']);
+    });
+
+    it('未绑定策略的行 → effectivePermission=null', async () => {
+      prisma.$transaction.mockResolvedValue([1, [customRow]]);
+
+      const result = await service.findAll();
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]).toMatchObject({ policyId: null });
+      expect(result.items[0].effectivePermission).toBeNull();
     });
 
     it('无 type 时不过滤（where.type 为 undefined），skip/take 按缺省分页', async () => {
@@ -227,7 +293,7 @@ describe('AgentsService', () => {
       });
       expect(prisma.agent.findMany).toHaveBeenCalledWith({
         where: { type: undefined },
-        include: { skills: true, toolEffects: true },
+        include: { skills: true },
         orderBy: { createdAt: 'asc' },
         skip: 0,
         take: 20,
@@ -244,7 +310,7 @@ describe('AgentsService', () => {
       });
       expect(prisma.agent.findMany).toHaveBeenCalledWith({
         where: { type: { equals: 'template' } },
-        include: { skills: true, toolEffects: true },
+        include: { skills: true },
         orderBy: { createdAt: 'asc' },
         skip: 10,
         take: 10,
@@ -263,21 +329,26 @@ describe('AgentsService', () => {
   });
 
   describe('findOne（详情）', () => {
-    it('返回完整关联（skills + toolEffects + 基本字段）', async () => {
+    it('返回完整关联（skills + 基本字段 + policyId + effectivePermission）', async () => {
       prisma.agent.findUnique.mockResolvedValue(templateRows[0]);
 
       const result = await service.findOne('a_product');
 
       expect(prisma.agent.findUnique).toHaveBeenCalledWith({
         where: { id: 'a_product' },
-        include: { skills: true, toolEffects: true },
+        include: { skills: true },
       });
       expect(result).toMatchObject({
         id: 'a_product',
         name: '产品经理',
         type: 'template',
         skillIds: ['s_skill1'],
-        toolEffects: [{ toolAction: 'read', effect: '允许读取' }],
+        policyId: 'ep_product',
+        effectivePermission: {
+          policyId: 'ep_product',
+          policyName: 'ep_product-name',
+          agentName: 'vteam-product',
+        },
       });
     });
 
@@ -293,8 +364,8 @@ describe('AgentsService', () => {
     });
   });
 
-  describe('create（POST /agents，custom 三表事务）', () => {
-    it('custom 创建：Agent + agent_skills + agent_tool_effects 同事务写入', async () => {
+  describe('create（POST /agents，custom 二表事务）', () => {
+    it('custom 创建：Agent + agent_skills 同事务写入', async () => {
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
       prisma.agent.create.mockResolvedValue(customRow);
 
@@ -304,8 +375,6 @@ describe('AgentsService', () => {
         role: 'analyst',
         prompt: 'prompt-custom',
         skillIds: ['s_skill1', 's_skill2'],
-        toolEffects: [{ toolAction: 'read', effect: 'allow' }],
-        permissionScope: { projects: ['p1'], write: false },
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       };
 
@@ -322,7 +391,6 @@ describe('AgentsService', () => {
             prompt: 'prompt-custom',
             baseAgentId: null,
             defaultModelId: 'opencode-go/deepseek-v4-flash',
-            permissionScope: { projects: ['p1'], write: false },
             createdBy: 'u_admin',
           }),
         }),
@@ -337,24 +405,14 @@ describe('AgentsService', () => {
           }),
         }),
       );
-      expect(prisma.agentToolEffect.create).toHaveBeenCalledTimes(1);
-      expect(prisma.agentToolEffect.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            agentId: 'a_0000000005',
-            toolAction: 'read',
-            effect: 'allow',
-          }),
-        }),
-      );
-      // 返回 toAgentDto 格式
+      // 返回 toAgentDto 格式（未绑定策略 → effectivePermission=null）
       expect(result).toMatchObject({
         id: 'a_0000000005',
         type: 'custom',
         baseAgentId: null,
         skillIds: ['s_skill1', 's_skill2'],
-        toolEffects: [{ toolAction: 'read', effect: 'allow' }],
         defaultModelId: 'opencode-go/deepseek-v4-flash',
+        effectivePermission: null,
       });
     });
 
@@ -413,8 +471,8 @@ describe('AgentsService', () => {
   });
 
   describe('clone（POST /agents/:id/clone，深拷贝）', () => {
-    it('克隆源：type=clone + baseAgentId 血缘 + 复制三表关联，源不被触碰', async () => {
-      prisma.agent.findUnique.mockResolvedValue(templateRows[0]); // a_product 带 1 skill + 1 toolEffect
+    it('克隆源：type=clone + baseAgentId 血缘 + 复制 skills 关联，源不被触碰', async () => {
+      prisma.agent.findUnique.mockResolvedValue(templateRows[0]); // a_product 带 1 skill
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
       prisma.agent.create.mockResolvedValue({
         ...templateRows[0],
@@ -440,7 +498,7 @@ describe('AgentsService', () => {
           }),
         }),
       );
-      // 关联深拷贝：1 skill + 1 toolEffect
+      // 关联深拷贝：1 skill
       expect(prisma.agentSkill.create).toHaveBeenCalledTimes(1);
       expect(prisma.agentSkill.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -450,15 +508,18 @@ describe('AgentsService', () => {
           }),
         }),
       );
-      expect(prisma.agentToolEffect.create).toHaveBeenCalledTimes(1);
-      // 克隆体返回带血缘与复制关联
+      // 克隆体返回带血缘与复制关联（含继承的 policyId + 解析后的 effectivePermission）
       expect(result).toMatchObject({
         id: 'a_0000000005',
         name: '产品经理副本',
         type: 'clone',
         baseAgentId: 'a_product',
         skillIds: ['s_skill1'],
-        toolEffects: [{ toolAction: 'read', effect: '允许读取' }],
+        policyId: 'ep_product',
+        effectivePermission: {
+          policyId: 'ep_product',
+          agentName: 'vteam-product',
+        },
       });
       // 源未被改写：无 update/delete 调用
       expect(prisma.agent.update).not.toHaveBeenCalled();
@@ -586,7 +647,7 @@ describe('AgentsService', () => {
       expect(result).toBeDefined();
     });
 
-    it('is_0000000030：type=template 可修改 skillIds/toolEffects（重建关联）', async () => {
+    it('is_0000000030：type=template 可修改 skillIds（重建关联）', async () => {
       prisma.agent.findUnique
         .mockResolvedValueOnce(templateRows[0])
         .mockResolvedValueOnce(templateRows[0]);
@@ -596,12 +657,10 @@ describe('AgentsService', () => {
 
       const result = await service.update('a_product', {
         skillIds: ['skill_1'],
-        toolEffects: [{ toolAction: 'bash', effect: 'allow' }],
       });
 
       expect(prisma.agent.update).toHaveBeenCalled();
       expect(prisma.agentSkill.deleteMany).toHaveBeenCalled();
-      expect(prisma.agentToolEffect.deleteMany).toHaveBeenCalled();
       expect(result).toBeDefined();
     });
 
@@ -612,7 +671,7 @@ describe('AgentsService', () => {
       );
     });
 
-    it('custom 更新：标量字段 + skillIds/toolEffects 显式传入时重建关联', async () => {
+    it('custom 更新：标量字段 + skillIds 显式传入时重建关联', async () => {
       prisma.agent.findUnique
         .mockResolvedValueOnce(customRow) // 存在性/只读检查
         .mockResolvedValueOnce({
@@ -622,7 +681,6 @@ describe('AgentsService', () => {
           prompt: 'new-prompt',
           defaultModelId: 'deepseek-v4-pro',
           skills: [{ skillId: 's_new' }],
-          toolEffects: [{ toolAction: 'bash', effect: 'ask' }],
         });
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
       prisma.agent.update.mockResolvedValue(customRow);
@@ -632,7 +690,6 @@ describe('AgentsService', () => {
         prompt: 'new-prompt',
         defaultModelId: 'deepseek-v4-pro',
         skillIds: ['s_new'],
-        toolEffects: [{ toolAction: 'bash', effect: 'ask' }],
       };
 
       const result = await service.update('a_0000000005', dto);
@@ -650,29 +707,23 @@ describe('AgentsService', () => {
       expect(prisma.agentSkill.deleteMany).toHaveBeenCalledWith({
         where: { agentId: 'a_0000000005' },
       });
-      expect(prisma.agentToolEffect.deleteMany).toHaveBeenCalledWith({
-        where: { agentId: 'a_0000000005' },
-      });
       expect(prisma.agentSkill.create).toHaveBeenCalledTimes(1);
-      expect(prisma.agentToolEffect.create).toHaveBeenCalledTimes(1);
       // 返回更新后完整 DTO
       expect(result).toMatchObject({
         id: 'a_0000000005',
         name: '新数据分析师',
         prompt: 'new-prompt',
         skillIds: ['s_new'],
-        toolEffects: [{ toolAction: 'bash', effect: 'ask' }],
       });
     });
 
-    it('custom 更新不传 skillIds/toolEffects 时不重建关联', async () => {
+    it('custom 更新不传 skillIds 时不重建关联', async () => {
       prisma.agent.findUnique
         .mockResolvedValueOnce(customRow)
         .mockResolvedValueOnce({
           ...customRow,
           name: '仅改名',
           skills: [{ skillId: 's_skill1' }],
-          toolEffects: [{ toolAction: 'read', effect: '允许读取' }],
         });
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
       prisma.agent.update.mockResolvedValue(customRow);
@@ -680,52 +731,35 @@ describe('AgentsService', () => {
       await service.update('a_0000000005', { name: '仅改名' });
 
       expect(prisma.agentSkill.deleteMany).not.toHaveBeenCalled();
-      expect(prisma.agentToolEffect.deleteMany).not.toHaveBeenCalled();
       expect(prisma.agentSkill.create).not.toHaveBeenCalled();
-      expect(prisma.agentToolEffect.create).not.toHaveBeenCalled();
     });
 
-    it('仅传 toolEffects 时只重建 toolEffects，skills 关联保留（不被清空）', async () => {
+    it('skillIds 传空数组 → 清空关联（显式传入即重建）', async () => {
       prisma.agent.findUnique
         .mockResolvedValueOnce(customRow)
         .mockResolvedValueOnce({
           ...customRow,
-          prompt: 'new-prompt',
-          skills: [{ skillId: 's_skill1' }], // 原 skills 保留
-          toolEffects: [{ toolAction: 'bash', effect: 'ask' }],
+          skills: [],
         });
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
       prisma.agent.update.mockResolvedValue(customRow);
 
-      const result = await service.update('a_0000000005', {
-        prompt: 'new-prompt',
-        toolEffects: [{ toolAction: 'bash', effect: 'ask' }],
-      });
+      const result = await service.update('a_0000000005', { skillIds: [] });
 
-      // skills 关联表零触碰
-      expect(prisma.agentSkill.deleteMany).not.toHaveBeenCalled();
-      expect(prisma.agentSkill.create).not.toHaveBeenCalled();
-      // toolEffects 表清空后重建
-      expect(prisma.agentToolEffect.deleteMany).toHaveBeenCalledWith({
+      expect(prisma.agentSkill.deleteMany).toHaveBeenCalledWith({
         where: { agentId: 'a_0000000005' },
       });
-      expect(prisma.agentToolEffect.create).toHaveBeenCalledTimes(1);
-      // 返回 DTO：skillIds 保留原值
-      expect(result).toMatchObject({
-        prompt: 'new-prompt',
-        skillIds: ['s_skill1'],
-        toolEffects: [{ toolAction: 'bash', effect: 'ask' }],
-      });
+      expect(prisma.agentSkill.create).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ skillIds: [] });
     });
 
-    it('仅传 skillIds 时只重建 skills，toolEffects 保留（不被清空）', async () => {
+    it('skillIds 显式传入时清空后重建并返回新关联', async () => {
       prisma.agent.findUnique
         .mockResolvedValueOnce(customRow)
         .mockResolvedValueOnce({
           ...customRow,
           prompt: 'new-prompt',
           skills: [{ skillId: 's_new' }],
-          toolEffects: [{ toolAction: 'read', effect: '允许读取' }], // 原 toolEffects 保留
         });
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
       prisma.agent.update.mockResolvedValue(customRow);
@@ -735,51 +769,14 @@ describe('AgentsService', () => {
         skillIds: ['s_new'],
       });
 
-      // toolEffects 关联表零触碰
-      expect(prisma.agentToolEffect.deleteMany).not.toHaveBeenCalled();
-      expect(prisma.agentToolEffect.create).not.toHaveBeenCalled();
       // skills 表清空后重建
       expect(prisma.agentSkill.deleteMany).toHaveBeenCalledWith({
         where: { agentId: 'a_0000000005' },
       });
       expect(prisma.agentSkill.create).toHaveBeenCalledTimes(1);
-      // 返回 DTO：toolEffects 保留原值
       expect(result).toMatchObject({
         prompt: 'new-prompt',
         skillIds: ['s_new'],
-        toolEffects: [{ toolAction: 'read', effect: '允许读取' }],
-      });
-    });
-
-    it('skillIds/toolEffects 都传时两表各自清空后重建', async () => {
-      prisma.agent.findUnique
-        .mockResolvedValueOnce(customRow)
-        .mockResolvedValueOnce({
-          ...customRow,
-          prompt: 'new-prompt',
-          skills: [{ skillId: 's_new' }],
-          toolEffects: [{ toolAction: 'bash', effect: 'ask' }],
-        });
-      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
-      prisma.agent.update.mockResolvedValue(customRow);
-
-      const result = await service.update('a_0000000005', {
-        prompt: 'new-prompt',
-        skillIds: ['s_new'],
-        toolEffects: [{ toolAction: 'bash', effect: 'ask' }],
-      });
-
-      expect(prisma.agentSkill.deleteMany).toHaveBeenCalledWith({
-        where: { agentId: 'a_0000000005' },
-      });
-      expect(prisma.agentToolEffect.deleteMany).toHaveBeenCalledWith({
-        where: { agentId: 'a_0000000005' },
-      });
-      expect(prisma.agentSkill.create).toHaveBeenCalledTimes(1);
-      expect(prisma.agentToolEffect.create).toHaveBeenCalledTimes(1);
-      expect(result).toMatchObject({
-        skillIds: ['s_new'],
-        toolEffects: [{ toolAction: 'bash', effect: 'ask' }],
       });
     });
 
@@ -842,16 +839,13 @@ describe('AgentsService', () => {
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it('custom：事务内删 agent_skills + agent_tool_effects + agent 本体', async () => {
+    it('custom：事务内删 agent_skills + agent 本体', async () => {
       prisma.agent.findUnique.mockResolvedValue(customRow);
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
 
       await service.remove('a_0000000005');
 
       expect(prisma.agentSkill.deleteMany).toHaveBeenCalledWith({
-        where: { agentId: 'a_0000000005' },
-      });
-      expect(prisma.agentToolEffect.deleteMany).toHaveBeenCalledWith({
         where: { agentId: 'a_0000000005' },
       });
       expect(prisma.agent.delete).toHaveBeenCalledWith({
@@ -1268,6 +1262,30 @@ describe('AgentsService', () => {
       const result = await service.findOne('a_product');
 
       expect(result).toMatchObject({ id: 'a_product', policyId: 'ep_product' });
+    });
+
+    it('toAgentDto：findOne 返回 effectivePermission（与 policyId 对应，未绑定 → null）', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        ...templateRows[0],
+        policyId: 'ep_product',
+      });
+
+      const bound = await service.findOne('a_product');
+
+      expect(bound.effectivePermission).toMatchObject({
+        policyId: 'ep_product',
+        policyName: 'ep_product-name',
+        agentName: 'vteam-product',
+        permission: { edit: 'allow' },
+        correction: { scopeSummary: 'test' },
+      });
+
+      prisma.agent.findUnique.mockResolvedValue(customRow);
+
+      const unbound = await service.findOne('a_0000000005');
+
+      expect(unbound).toMatchObject({ policyId: null });
+      expect(unbound.effectivePermission).toBeNull();
     });
   });
 });

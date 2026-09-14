@@ -460,7 +460,6 @@ model Agent {
   // 性格（vteam-team-collaboration tc-persona：PERSONA_LIBRARY 的 key，可空；
   // 存量 agent 不动，运行时由 buildSystemInstructions 拼接进系统提示，不改写 prompt）
   persona         String?
-  permissionScope Json?    @map("permission_scope")
   policyId        String?  @map("policy_id")
   createdBy       String   @map("created_by")
   createdAt       DateTime @default(now()) @map("created_at")
@@ -470,7 +469,6 @@ model Agent {
   clones            Agent[]           @relation("AgentClone")
   creator           User              @relation("AgentCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   skills            AgentSkill[]
-  toolEffects       AgentToolEffect[]
   teamMembers       TeamMember[]
   sessions          Session[]
   channels          ChatChannel[]
@@ -505,19 +503,6 @@ model AgentSkill {
 
   @@unique([agentId, skillId], map: "uk_agent_skills_agent_skill")
   @@map("agent_skills")
-}
-
-model AgentToolEffect {
-  id         String   @id
-  agentId    String   @map("agent_id")
-  toolAction String   @map("tool_action")
-  effect     String
-  updatedAt  DateTime @updatedAt @map("updated_at")
-
-  agent Agent @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-
-  @@unique([agentId, toolAction], map: "uk_agent_tool_effects")
-  @@map("agent_tool_effects")
 }
 
 // ==================================================================

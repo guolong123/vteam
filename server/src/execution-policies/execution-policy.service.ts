@@ -207,7 +207,7 @@ export class ExecutionPolicyService implements OnModuleInit {
     policyId?: string | null;
     role?: string | null;
   }): Promise<ResolvedExecutionPolicy | null> {
-    const policyId = agent.policyId ?? (agent.role ? `ep_${agent.role}` : null);
+    const policyId = this.policyKeyOf(agent);
     if (!policyId) {
       return null;
     }
@@ -231,6 +231,53 @@ export class ExecutionPolicyService implements OnModuleInit {
       permission: config.permission as Record<string, unknown>,
       correction: config.correction as Record<string, unknown>,
     };
+  }
+
+  /**
+   * 批量按 agent 解析其绑定策略（GET /agents 列表用，避免 N+1）。
+   * 语义与 `resolveByAgent` 完全一致（policyId 优先、无则 role → `ep_<role>`、
+   * 策略缺失/config 残缺 → null），单次 `findMany` 拉取去重后的策略全集后内存映射。
+   * 返回与入参同序同长的 `(ResolvedExecutionPolicy | null)[]`。
+   */
+  async resolveManyByAgents(
+    agents: { policyId?: string | null; role?: string | null }[],
+  ): Promise<(ResolvedExecutionPolicy | null)[]> {
+    const keys = agents.map((a) => this.policyKeyOf(a));
+    const ids = [...new Set(keys.filter((k): k is string => k !== null))];
+    if (ids.length === 0) {
+      return agents.map(() => null);
+    }
+    const policies = await this.prisma.executionPolicy.findMany({
+      where: { id: { in: ids } },
+    });
+    const byId = new Map(policies.map((p) => [p.id, p]));
+    return agents.map((agent, i) => {
+      const key = keys[i];
+      if (!key) {
+        return null;
+      }
+      const policy = byId.get(key);
+      if (!policy) {
+        return null;
+      }
+      const config = policy.config as unknown as {
+        permission?: unknown;
+        correction?: unknown;
+      } | null;
+      if (
+        !this.isPlainObject(config?.permission) ||
+        !this.isPlainObject(config?.correction)
+      ) {
+        return null;
+      }
+      return {
+        policyId: policy.id,
+        policyName: policy.name,
+        agentName: agent.role ? `vteam-${agent.role}` : 'vteam-plan',
+        permission: config.permission as Record<string, unknown>,
+        correction: config.correction as Record<string, unknown>,
+      };
+    });
   }
 
   /**
@@ -292,6 +339,13 @@ export class ExecutionPolicyService implements OnModuleInit {
     return (
       typeof value === 'object' && value !== null && !Array.isArray(value)
     );
+  }
+
+  private policyKeyOf(agent: {
+    policyId?: string | null;
+    role?: string | null;
+  }): string | null {
+    return agent.policyId ?? (agent.role ? `ep_${agent.role}` : null);
   }
 
   /** 层① 原生 permission（与 seed 角色策略同形：edit glob + read + bash + task deny + MCP deny，无 `write` 键）。 */

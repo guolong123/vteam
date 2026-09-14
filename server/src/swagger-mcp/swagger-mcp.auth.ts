@@ -16,7 +16,7 @@ export type SwaggerMcpErrorCode =
 /** 权限校验通过后的调用方上下文（controller 透传给 handler 前的归属校验依据）。 */
 export interface SwaggerMcpAuthContext {
   workerId: string;
-  /** 模板 Agent id（AgentToolEffect 权限点主体）。 */
+  /** 调用方所属 Agent id（实例归属解析）。 */
   agentId: string;
   /** 调用方成员 id（团队会话 teamMemberId=tmm_，单成员单会话唯一身份）。 */
   instanceId: string;
@@ -26,10 +26,8 @@ export interface SwaggerMcpAuthContext {
  * 权限点校验（阶段 2 任务 12）。
  *
  * 每个 Swagger 工具 = 一个 toolAction 权限点。tools/call 时解析调用实例 →
- * 所属 Agent → 读 `AgentToolEffect[agentId+toolName]`：
- * - effect=allow → 放行；
- * - effect=deny / 未配置 → 拒绝（默认 deny 兜底管理面 API）；
- * - effect=ask → v1 降级为 deny（ask 确认流未实现）。
+ * 所属 Agent。管理面 API 默认拒绝（安全默认）：调用方须经 ExecutionPolicy
+ * 授权路径放行，v1 未实现按工具点的 allow 配置——未授权一律拒绝。
  *
  * 解析失败（worker 无活跃会话 / 实例缺失）→ 拒绝——无 agent 上下文时禁止匿名
  * 调用。归属校验（assertWorkerTask）：workerId + taskId → 该 worker 有绑定会话，
@@ -43,6 +41,7 @@ export class SwaggerMcpAuthService {
    * 工具级权限校验。返回 {agentId, instanceId} 供 controller 归属校验/透传；
    * 未授权一律抛 ForbiddenException（code=FORBIDDEN）。
    * 团队会话（teamMemberId）经团队成员解析 agent（单成员单会话唯一路径）。
+   * 管理面 API 默认拒绝（安全默认，与退役前 0 行时的实际行为一致：未配置即拒绝）。
    */
   async authorize(
     workerId: string,
@@ -89,29 +88,12 @@ export class SwaggerMcpAuthService {
       });
     }
 
-    const effect = await this.prisma.agentToolEffect.findUnique({
-      where: {
-        agentId_toolAction: { agentId, toolAction: toolName },
-      },
-    });
-    const eff = effect?.effect;
-    if (eff === 'allow') {
-      return {
-        workerId,
-        agentId,
-        instanceId,
-      };
-    }
-    if (eff === 'ask') {
-      throw new ForbiddenException({
-        code: SWAGGER_MCP_ERRORS.FORBIDDEN,
-        message: 'ask 确认流 v1 未支持，请配置为 allow',
-      });
-    }
-    // effect=deny / 未配置 → 默认 deny（安全默认）
+    // 管理面 API 默认拒绝（安全默认）：per-agent tool effect 机制已退役，
+    // 权限唯一来源为 ExecutionPolicy；v1 按工具点的 allow 配置未实现，
+    // 此处保持拒绝（与退役前 0 行时的实际行为一致）。
     throw new ForbiddenException({
       code: SWAGGER_MCP_ERRORS.FORBIDDEN,
-      message: '工具未授权，请在 Agent 配置中开启',
+      message: `工具 ${toolName} 未授权，请联系管理员配置 ExecutionPolicy`,
     });
   }
 

@@ -108,7 +108,7 @@ async function main() {
   });
 
   // 预置 template 角色 Agent（16 篇 §3~§7 五类角色提示词 + 项目经理新增；role 与前端 task-create data-role 对齐）
-  // type=template 只读；permissionScope 按 16 篇 §2.1 默认权限范围最小化。
+  // type=template 只读；权限唯一来源为 ExecutionPolicy 绑定（下文角色策略种子，agent.policyId 指向）。
   // persona 为「出厂默认性格」（PERSONA_LIBRARY 的 key，tc-persona 第五维）：产品经理=innovative（创新）/
   // 项目经理=aggressive（激进）/架构师=steady（沉稳）/开发者=conservative（保守）/测试=strict（苛刻），
   // 按当前 k8s 环境已配置值固化；仅首次 create 时生效，不覆盖存量已设值（幂等）。
@@ -150,7 +150,6 @@ async function main() {
         '- 越界拒绝与转交：编码实现→开发者（vteam-developer）、测试用例与验证→测试（vteam-tester）、技术方案与设计文档→架构师（vteam-architect）、流程编排与进度→项目经理（vteam-project_manager）。\n' +
         '- 拒绝话术：被要求编写实现代码、设计技术方案、编写测试用例或作出验收判定时，明确说明「这超出产品经理职责」并拒绝，再用 vteam_notify_agent 定向通知对应角色转交。\n' +
         '- 验收边界：不越权验收，验收结论由成员作出；可协助整理验收材料。',
-      permissionScope: { projects: '*', write: false, doclibOnly: true },
     },
     {
       id: 'a_project_manager',
@@ -184,7 +183,6 @@ async function main() {
         '- 越界拒绝与转交：需求→产品经理（vteam-product）、技术方案与设计→架构师（vteam-architect）、编码实现→开发者（vteam-developer）、测试→测试（vteam-tester）；用 vteam_notify_agent 定向通知。\n' +
         '- 拒绝话术：被要求产出需求/方案/代码/用例时，明确说明「这超出项目经理职责」并拒绝，再转交对应角色。\n' +
         '- 验收边界：不越权验收——验收判定权在成员，可协助整理验收材料与进度汇总。',
-      permissionScope: { projects: '*', write: false, doclibOnly: true },
     },
     {
       id: 'a_architect',
@@ -217,7 +215,6 @@ async function main() {
         '- 越界拒绝与转交：编码实现与改仓库→开发者（vteam-developer）；需求澄清→产品经理（vteam-product）；测试执行→测试（vteam-tester）；流程/进度→项目经理（vteam-project_manager）。\n' +
         '- 拒绝话术：被要求直接编写实现代码或修改仓库时，明确说明「这超出架构师职责」并拒绝，再用 vteam_notify_agent 定向通知开发者转交。\n' +
         '- 验收边界：不参与验收判定，可配合成员核对方案符合度。',
-      permissionScope: { projects: '*', write: false },
     },
     {
       id: 'a_developer',
@@ -251,7 +248,6 @@ async function main() {
         '- 越界拒绝与转交：需求定义→产品经理（vteam-product）；技术方案与设计→架构师（vteam-architect）；测试执行与判定→测试（vteam-tester）；流程/进度→项目经理（vteam-project_manager）。\n' +
         '- 拒绝话术：被要求定义需求、制定验收标准或直接判定验收通过时，明确说明「这超出开发者职责」并拒绝，再用 vteam_notify_agent 定向通知对应角色转交。\n' +
         '- 验收边界：不参与验收判定，可配合成员解释实现细节。',
-      permissionScope: { projects: '*', write: true, ask: true },
     },
     {
       id: 'a_tester',
@@ -286,7 +282,6 @@ async function main() {
         '- 越界拒绝与转交：需求/验收标准缺失→产品经理（vteam-product）；设计歧义→架构师（vteam-architect）；代码缺陷修复→开发者（vteam-developer）；流程/进度→项目经理（vteam-project_manager）。\n' +
         '- 拒绝话术：被要求直接修复实现代码或作出验收判定时，明确说明「这超出测试职责」并拒绝，再用 vteam_notify_agent 定向通知对应角色转交。\n' +
         '- 验收边界：不越权验收——只输出验证结论与风险提示，验收判定权在成员。',
-      permissionScope: { projects: '*', write: false, doclibOnly: true },
     },
   ];
 
@@ -355,7 +350,7 @@ async function main() {
   // update 同步 prompt 与 policyId（平台维护的模板出厂默认提示词，16 篇 §8.4「模板提示词随平台版本升级」——
   // 存量部署重跑 seed 时把「出厂默认」升级为最新版本；用户自定义过 prompt 的模板若想保持定制，
   // 应在平台上再次修改，seed 不承担保留用户定制的义务）。
-  // 其余字段（defaultModelId/name/permissionScope/persona 等）保持 update:{} 语义——不覆盖用户已改配置，
+  // 其余字段（defaultModelId/name/persona 等）保持 update:{} 语义——不覆盖用户已改配置，
   // defaultModelId 与 persona 模板默认值仅首次 create 时生效（存量环境已设 persona 不被 seed 覆盖）。
   for (const agent of templateAgents) {
     const { policyId } = resolvePolicyBinding(agent.role);

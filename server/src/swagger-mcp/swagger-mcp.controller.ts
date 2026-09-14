@@ -22,7 +22,7 @@ import { generateSwaggerTools, SwaggerMcpTool } from './swagger-tools';
 
 /**
  * x-worker-id header：worker 注入的会话归属标识（与 platform-mcp 一致）。
- * 权限与 taskId 归属校验在 auth service 内完成（worker → 实例 → agent → AgentToolEffect）。
+ * 权限与 taskId 归属校验在 auth service 内完成（worker → 实例 → agent）。
  */
 const WORKER_ID_HEADER = 'x-worker-id';
 

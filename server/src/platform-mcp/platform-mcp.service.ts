@@ -133,7 +133,7 @@ export class PlatformMcpService {
     @Optional()
     private readonly moduleRef?: ModuleRef,
     // 生效策略解析（my_profile effectivePermission 唯一事实来源；缺省可空——
-    // 单测/旧装配未提供时回退 effectivePermission=null，不阻断 legacy 字段）。
+    // 单测/旧装配未提供时回退 effectivePermission=null，不阻断其余字段）。
     @Optional()
     @Inject(ExecutionPolicyService)
     private readonly executionPolicyService?: ExecutionPolicyService,
@@ -1522,9 +1522,9 @@ export class PlatformMcpService {
 
   /**
    * my_profile：自身 Agent 配置视图（只读，vteam-team-collaboration Todo 3）。
-   * 增量价值（Oracle m2）：权限/工具效应视角——permissionScope/toolEffects/defaultModelId
-   * 不在 task_context/task 详情中出现；prompt 仅返回前 500 字符摘要（promptTruncated 标记），
-   * 不暴露完整提示词敏感信息。
+   * 返回生效权限 effectivePermission（唯一事实来源，经绑定 ExecutionPolicy 解析，
+   * 与 live enforcement 同源）+ 任务实例别名/序号/工作目录/默认模型；
+   * prompt 仅返回前 500 字符摘要（promptTruncated 标记），不暴露完整提示词。
    * 1. 归属校验（selfInstanceId 必填，返回活跃成员 id）。
    * 2. 团队成员（含 agent 关联）查自身配置；缺失或不在任务团队 → 404。
    */
@@ -1541,16 +1541,6 @@ export class PlatformMcpService {
     seq: number;
     workDir: string | null;
     defaultModelId: string | null;
-    /** 遗留快照（仅兼容保留，非 enforcement 来源；见 deprecated 字段）。 */
-    permissionScope: Prisma.JsonValue | null;
-    /** 遗留快照（仅兼容保留，非 enforcement 来源；见 deprecated 字段）。 */
-    toolEffects: Array<{ toolAction: string; effect: string }>;
-    /** 遗留字段弃用标记：permissionScope/toolEffects 不再是事实来源。 */
-    deprecated: {
-      permissionScope: true;
-      toolEffects: true;
-      note: string;
-    };
     /**
      * 生效权限（唯一事实来源）：经 ExecutionPolicyService.resolveByAgent 按
      * agent 绑定策略解析（层① opencode 原生 permission + 层② guard correction），
@@ -1591,8 +1581,6 @@ export class PlatformMcpService {
             prompt: true,
             defaultModelId: true,
             policyId: true,
-            permissionScope: true,
-            toolEffects: { select: { toolAction: true, effect: true } },
           },
         },
       },
@@ -1635,16 +1623,6 @@ export class PlatformMcpService {
       seq: profile.seq,
       workDir: profile.workDir,
       defaultModelId: profile.agent.defaultModelId,
-      permissionScope: profile.agent.permissionScope,
-      toolEffects: profile.agent.toolEffects.map((t) => ({
-        toolAction: t.toolAction,
-        effect: t.effect,
-      })),
-      deprecated: {
-        permissionScope: true as const,
-        toolEffects: true as const,
-        note: 'permissionScope/toolEffects 为遗留快照，仅兼容保留；effectivePermission 为唯一事实来源（live enforcement 同源：ExecutionPolicy + opencode 原生 permission + guard），自审计请以 effectivePermission 为准',
-      },
       effectivePermission,
       agentName: agentRole ? `vteam-${agentRole}` : 'vteam-plan',
       promptSummary: truncated ? prompt.slice(0, 500) : prompt,

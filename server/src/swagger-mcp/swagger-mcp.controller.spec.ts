@@ -34,8 +34,8 @@ import { SwaggerMcpHandler, SwaggerMcpHandlers } from './swagger-mcp.handlers';
  * POST /api/v1/vteam-api/mcp 端点测试（阶段 2 任务 10/12/13）。
  * - X-Worker-Token 鉴权（401/放行，WorkerTokenGuard）。
  * - JSON-RPC 分发：initialize / tools/list / tools/call / 未知 method / 通知 202。
- * - 权限链路：真实 SwaggerMcpAuthService + mock PrismaService——allow 放行 /
- *   deny 拒绝 / 未配置默认 deny / 无 agent 上下文拒绝；ajv 校验失败 -32602。
+ * - 权限链路：真实 SwaggerMcpAuthService + mock PrismaService——管理面 API 默认拒绝 /
+ *   无 agent 上下文拒绝；ajv 校验失败 -32602。
  * - 注意：WorkerTokenGuard 在 compile 时实例化，必须补 ConfigService mock。
  */
 describe('SwaggerMcpController (HTTP)', () => {
@@ -44,7 +44,6 @@ describe('SwaggerMcpController (HTTP)', () => {
     session: { findFirst: jest.Mock };
     teamMember: { findUnique: jest.Mock };
     task: { findUnique: jest.Mock };
-    agentToolEffect: { findUnique: jest.Mock };
   };
   let handlerCall: jest.Mock;
 
@@ -110,7 +109,6 @@ describe('SwaggerMcpController (HTTP)', () => {
       session: { findFirst: jest.fn() },
       teamMember: { findUnique: jest.fn() },
       task: { findUnique: jest.fn() },
-      agentToolEffect: { findUnique: jest.fn() },
     };
     handlerCall = jest.fn().mockResolvedValue({ id: 't_1' });
 
@@ -206,16 +204,15 @@ describe('SwaggerMcpController (HTTP)', () => {
   });
 
   describe('tools/call 权限链路', () => {
-    /** 授权成功前置：worker 有团队活跃会话（teamMemberId=tmm_1）+ 成员对应 agent + 任务归属团队。 */
+    /** 实例上下文可解析前置：worker 有团队活跃会话（teamMemberId=tmm_1）+ 成员对应 agent + 任务归属团队。 */
     const allowContext = () => {
       prisma.session.findFirst.mockResolvedValue({ teamMemberId: 'tmm_1' });
       prisma.teamMember.findUnique.mockResolvedValue({ agentId: 'a_1' });
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
     };
 
-    it('allow → 放行，handler 收到 workerId + 校验后的 args', async () => {
+    it('管理面 API 默认拒绝（-32603）：实例上下文可解析仍不放行', async () => {
       allowContext();
-      prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'allow' });
 
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
@@ -227,22 +224,18 @@ describe('SwaggerMcpController (HTTP)', () => {
         })
         .expect(200);
 
-      expect(prisma.agentToolEffect.findUnique).toHaveBeenCalledWith({
-        where: {
-          agentId_toolAction: { agentId: 'a_1', toolAction: 'gettask' },
-        },
+      // 归属解析仍发生（worker → 实例 → agent），但授权默认拒绝
+      expect(prisma.teamMember.findUnique).toHaveBeenCalledWith({
+        where: { id: 'tmm_1' },
+        select: { agentId: true },
       });
-      expect(handlerCall).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
-        { id: 't_1' },
-      );
-      const text = res.body.result.content[0].text as string;
-      expect(JSON.parse(text)).toEqual({ id: 't_1' });
+      expect(res.body.error.code).toBe(-32603);
+      expect(res.body.error.message).toContain('未授权');
+      expect(handlerCall).not.toHaveBeenCalled();
     });
 
-    it('deny → 200 + error -32603（message 提示未授权）', async () => {
+    it('拒绝 message 指引 ExecutionPolicy（不再提示 Agent 配置页开关）', async () => {
       allowContext();
-      prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'deny' });
 
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
@@ -255,28 +248,7 @@ describe('SwaggerMcpController (HTTP)', () => {
         .expect(200);
 
       expect(res.body.error.code).toBe(-32603);
-      expect(res.body.error.message).toContain(
-        '工具未授权，请在 Agent 配置中开启',
-      );
-      expect(handlerCall).not.toHaveBeenCalled();
-    });
-
-    it('未配置 → 默认 deny（-32603）', async () => {
-      allowContext();
-      prisma.agentToolEffect.findUnique.mockResolvedValue(null);
-
-      const res = await mcpPost()
-        .set('x-worker-id', 'w_0001')
-        .send({
-          jsonrpc: '2.0',
-          id: 5,
-          method: 'tools/call',
-          params: { name: 'gettask', arguments: { id: 't_1' } },
-        })
-        .expect(200);
-
-      expect(res.body.error.code).toBe(-32603);
-      expect(res.body.error.message).toContain('工具未授权');
+      expect(res.body.error.message).toContain('ExecutionPolicy');
       expect(handlerCall).not.toHaveBeenCalled();
     });
 
@@ -298,9 +270,8 @@ describe('SwaggerMcpController (HTTP)', () => {
       expect(handlerCall).not.toHaveBeenCalled();
     });
 
-    it('团队会话 authorize：teamMemberId 解析 agentId 放行（team 感知断言）', async () => {
+    it('团队会话 authorize：teamMemberId 解析 agentId 后仍默认拒绝（team 感知断言）', async () => {
       allowContext();
-      prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'allow' });
 
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
@@ -316,18 +287,13 @@ describe('SwaggerMcpController (HTTP)', () => {
         where: { id: 'tmm_1' },
         select: { agentId: true },
       });
-      expect(prisma.agentToolEffect.findUnique).toHaveBeenCalledWith({
-        where: {
-          agentId_toolAction: { agentId: 'a_1', toolAction: 'gettask' },
-        },
-      });
-      expect(res.body.error).toBeUndefined();
-      expect(handlerCall).toHaveBeenCalled();
+      expect(res.body.error.code).toBe(-32603);
+      expect(res.body.error.message).toContain('未授权');
+      expect(handlerCall).not.toHaveBeenCalled();
     });
 
     it('遗留任务会话（无 teamMemberId）→ -32603 拒绝（任务会话已删除，只走团队会话）', async () => {
       prisma.session.findFirst.mockResolvedValue({ teamMemberId: null });
-      prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'allow' });
 
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
@@ -345,48 +311,28 @@ describe('SwaggerMcpController (HTTP)', () => {
       expect(handlerCall).not.toHaveBeenCalled();
     });
 
-    it('taskId 归属校验失败（该 worker 无绑定会话）→ -32603 拒绝', async () => {
+    it('assertWorkerTask 直调：该 worker 无绑定会话 → 拒绝（防跨任务访问）', async () => {
       prisma.teamMember.findUnique.mockResolvedValue({ agentId: 'a_1' });
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
-      prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'allow' });
-      // assertWorkerTask 的 session.findFirst 返回 null（授权已消费第一次调用）
-      prisma.session.findFirst
-        .mockResolvedValueOnce({ teamMemberId: 'tmm_1' })
-        .mockResolvedValue(null);
+      prisma.session.findFirst.mockResolvedValue(null);
 
-      const res = await mcpPost()
-        .set('x-worker-id', 'w_0001')
-        .send({
-          jsonrpc: '2.0',
-          id: 7,
-          method: 'tools/call',
-          params: { name: 'gettask', arguments: { id: 't_other' } },
-        })
-        .expect(200);
+      const auth = app.get(SwaggerMcpAuthService);
 
-      expect(res.body.error.code).toBe(-32603);
-      expect(res.body.error.message).toContain('禁止跨任务访问');
+      await expect(auth.assertWorkerTask('w_0001', 't_other')).rejects.toThrow(
+        '该 worker 无此任务会话，禁止跨任务访问',
+      );
       expect(handlerCall).not.toHaveBeenCalled();
     });
 
-    it('ask → v1 降级 deny（-32603）', async () => {
-      allowContext();
-      prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'ask' });
+    it('assertWorkerTask 直调：有绑定会话 → 放行（不抛错）', async () => {
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      prisma.session.findFirst.mockResolvedValue({ id: 's_team' });
 
-      const res = await mcpPost()
-        .set('x-worker-id', 'w_0001')
-        .send({
-          jsonrpc: '2.0',
-          id: 8,
-          method: 'tools/call',
-          params: { name: 'gettask', arguments: { id: 't_1' } },
-        })
-        .expect(200);
+      const auth = app.get(SwaggerMcpAuthService);
 
-      expect(res.body.error.message).toContain(
-        'ask 确认流 v1 未支持，请配置为 allow',
-      );
-      expect(handlerCall).not.toHaveBeenCalled();
+      await expect(
+        auth.assertWorkerTask('w_0001', 't_1'),
+      ).resolves.toBeUndefined();
     });
   });
 
@@ -420,14 +366,14 @@ describe('SwaggerMcpController (HTTP)', () => {
 
       expect(res.body.error.code).toBe(-32602);
       expect(res.body.error.message).toContain('id');
-      expect(prisma.agentToolEffect.findUnique).not.toHaveBeenCalled();
+      expect(prisma.session.findFirst).not.toHaveBeenCalled();
+      expect(handlerCall).not.toHaveBeenCalled();
     });
 
-    it('无 handler 映射的工具 → 200 + error NOT_IMPLEMENTED', async () => {
+    it('无 handler 映射的工具 → 授权先拒绝（-32603 未授权，不再到达 NOT_IMPLEMENTED）', async () => {
       prisma.session.findFirst.mockResolvedValue({ teamMemberId: 'tmm_1' });
       prisma.teamMember.findUnique.mockResolvedValue({ agentId: 'a_1' });
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
-      prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'allow' });
 
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
@@ -443,7 +389,8 @@ describe('SwaggerMcpController (HTTP)', () => {
         .expect(200);
 
       expect(res.body.error.code).toBe(-32603);
-      expect(res.body.error.message).toContain('该 API 暂未接入 service 绑定');
+      expect(res.body.error.message).toContain('未授权');
+      expect(handlerCall).not.toHaveBeenCalled();
     });
   });
 
@@ -476,6 +423,8 @@ describe('SwaggerMcpController (HTTP)', () => {
  * ② 自动绑定命中（operationId → service 方法调用，ModuleRef 字符串 token 与
  *    DiscoveryService 全局扫描两条路径）；
  * ③ 自动解析失败（service 不存在）→ NOT_IMPLEMENTED。
+ * 授权用 mock 放行（真实 authorize 管理面默认拒绝，见上一 describe）——此处聚焦
+ * handler 绑定链路；assertWorkerTask 仍走真实实现（session/task mock 保留）。
  */
 describe('SwaggerMcpController (F2 前缀 + 自动绑定集成)', () => {
   let app: INestApplication;
@@ -483,7 +432,6 @@ describe('SwaggerMcpController (F2 前缀 + 自动绑定集成)', () => {
     session: { findFirst: jest.Mock };
     teamMember: { findUnique: jest.Mock };
     task: { findUnique: jest.Mock };
-    agentToolEffect: { findUnique: jest.Mock };
   };
   let tasksService: { findOne: jest.Mock };
   let skillsService: { create: jest.Mock };
@@ -546,7 +494,6 @@ describe('SwaggerMcpController (F2 前缀 + 自动绑定集成)', () => {
     prisma.session.findFirst.mockResolvedValue({ teamMemberId: 'tmm_1' });
     prisma.teamMember.findUnique.mockResolvedValue({ agentId: 'a_1' });
     prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
-    prisma.agentToolEffect.findUnique.mockResolvedValue({ effect: 'allow' });
   };
 
   beforeEach(async () => {
@@ -554,7 +501,6 @@ describe('SwaggerMcpController (F2 前缀 + 自动绑定集成)', () => {
       session: { findFirst: jest.fn() },
       teamMember: { findUnique: jest.fn() },
       task: { findUnique: jest.fn() },
-      agentToolEffect: { findUnique: jest.fn() },
     };
     tasksService = { findOne: jest.fn().mockResolvedValue({ id: 't_1' }) };
     skillsService = { create: jest.fn().mockResolvedValue({ id: 's_1' }) };
@@ -583,7 +529,18 @@ describe('SwaggerMcpController (F2 前缀 + 自动绑定集成)', () => {
         { provide: ConfigService, useValue: { get: jest.fn(() => undefined) } },
         { provide: ModuleRef, useValue: moduleRefMock },
         { provide: DiscoveryService, useValue: discoveryMock },
-        SwaggerMcpAuthService,
+        // 授权 mock 放行（聚焦 handler 绑定；真实 authorize 默认拒绝见上一 describe）
+        {
+          provide: SwaggerMcpAuthService,
+          useValue: {
+            authorize: jest.fn(async () => ({
+              workerId: 'w_0001',
+              agentId: 'a_1',
+              instanceId: 'tmm_1',
+            })),
+            assertWorkerTask: jest.fn(async () => undefined),
+          },
+        },
         { provide: PrismaService, useValue: prisma },
         WorkerTokenGuard,
       ],

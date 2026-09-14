@@ -246,7 +246,7 @@ describe('ToolsService', () => {
       });
     });
 
-    it('成员 viewer → 强制 enabled=true（agent 配置页工具区仅可见启用工具）', async () => {
+    it('成员 viewer + enabled 缺省 → 默认 enabled=true（agent 配置页工具区仅可见启用工具）', async () => {
       prisma.user.findUnique.mockResolvedValue({
         id: 'u_member',
         enabled: true,
@@ -254,10 +254,7 @@ describe('ToolsService', () => {
       });
       prisma.$transaction.mockResolvedValue([1, [toolRows[0]]]);
 
-      const result = await service.findAll(
-        { enabled: false },
-        { id: 'u_member' },
-      );
+      const result = await service.findAll({}, { id: 'u_member' });
 
       expect(prisma.user.findUnique).toHaveBeenCalledWith({
         where: { id: 'u_member' },
@@ -272,6 +269,32 @@ describe('ToolsService', () => {
         },
       });
       expect(result.items).toHaveLength(1);
+    });
+
+    it('成员 viewer + 显式 enabled=false → 按传入值返回停用工具（含 disabled 行）', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u_member',
+        enabled: true,
+        role: { permissions: { all: false } },
+      });
+      const disabledRow = { ...toolRows[1], enabled: false };
+      prisma.$transaction.mockResolvedValue([1, [disabledRow]]);
+
+      const result = await service.findAll(
+        { enabled: false },
+        { id: 'u_member' },
+      );
+
+      expect(prisma.tool.count).toHaveBeenCalledWith({
+        where: {
+          source: undefined,
+          execution: undefined,
+          enabled: false,
+          name: undefined,
+        },
+      });
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]).toMatchObject({ enabled: false });
     });
 
     it('admin viewer（permissions.all）→ 遵循 query.enabled 不强制过滤', async () => {

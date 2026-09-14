@@ -68,9 +68,9 @@ describe('AgentsController', () => {
         prompt: 'p',
         baseAgentId: null,
         defaultModelId: null,
-        permissionScope: null,
+        policyId: 'ep_product',
         skillIds: [],
-        toolEffects: [],
+        effectivePermission: null,
       },
     ];
     service.findAll.mockResolvedValue({

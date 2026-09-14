@@ -20,18 +20,20 @@ import { CloneAgentDto } from './dto/clone-agent.dto';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { QueryAgentsDto } from './dto/query-agents.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
+import {
+  ExecutionPolicyService,
+  ResolvedExecutionPolicy,
+} from '../execution-policies/execution-policy.service';
 
 /** Agent 域主键前缀（对齐 15 篇 §2.2：<prefix>_<零填充序号>）。 */
 const ID_PREFIX = {
   agent: 'a',
   agentSkill: 'as',
-  agentToolEffect: 'ate',
 } as const;
 
-/** 列表/详情共用的关联 include（agent_skills → skillId 数组、agent_tool_effects）。 */
+/** 列表/详情共用的关联 include（agent_skills → skillId 数组）。 */
 const AGENT_INCLUDE = {
   skills: true,
-  toolEffects: true,
 } as const;
 
 /** Agent 行（含关联，toAgentDto 输入）。 */
@@ -45,12 +47,10 @@ type AgentRow = {
   defaultModelId: string | null;
   persona: string | null;
   workerId: string | null;
-  permissionScope: Prisma.JsonValue | null;
   policyId: string | null;
   createdAt: Date;
   updatedAt: Date;
   skills: { skillId: string }[];
-  toolEffects: { toolAction: string; effect: string }[];
 };
 
 /** available-models 动态路径：纯数组（保持前端契约 [{id, name}]）。 */
@@ -80,9 +80,11 @@ export interface OpencodeAgentsResult {
 /**
  * Agent 服务：列表/详情 + 完整 CRUD（Phase 3 T5）。
  * - 列表（type 过滤 + 分页 + 扩展字段）、详情（404 AGENT_ERRORS.AGENT_NOT_FOUND）
- * - create：custom 三表事务（Agent + agent_skills + agent_tool_effects）
- * - clone：深拷贝副本（baseAgentId 血缘指向源，同事务复制三表，不改源）
+ * - create：custom 二表事务（Agent + agent_skills）
+ * - clone：深拷贝副本（baseAgentId 血缘指向源，同事务复制 skills，不改源）
  * - update/remove：type=template → 403 PERMISSION_AGENT_READONLY；clone/custom 可写
+ * - 权限唯一来源：agent.policyId 绑定的 ExecutionPolicy（toAgentDto 返回
+ *   effectivePermission，未绑定 → null）
  * - available-models：T11 起动态（WorkerClient.listModels），失败降级 STATIC_AVAILABLE_MODELS
  */
 @Injectable()
@@ -93,6 +95,7 @@ export class AgentsService implements OnModuleInit {
     private readonly workersService: WorkersService,
     private readonly workerClient: WorkerClient,
     private readonly modelsService: ModelsService,
+    private readonly executionPolicyService: ExecutionPolicyService,
   ) {}
 
   /**
@@ -105,11 +108,6 @@ export class AgentsService implements OnModuleInit {
     await resyncIdPrefix(
       this.prisma.agentSkill,
       ID_PREFIX.agentSkill,
-      this.idGen,
-    );
-    await resyncIdPrefix(
-      this.prisma.agentToolEffect,
-      ID_PREFIX.agentToolEffect,
       this.idGen,
     );
   }
@@ -134,13 +132,13 @@ export class AgentsService implements OnModuleInit {
       }),
     ]);
 
-    const items = rows.map((agent) => this.toAgentDto(agent));
+    const items = await this.toAgentDtoList(rows);
 
     return { items, total, page, pageSize };
   }
 
   /**
-   * GET /agents/:id：详情（含 skills/toolEffects 完整关联）。
+   * GET /agents/:id：详情（含 skills 关联 + effectivePermission）。
    * 不存在 → 404 `AGENT_NOT_FOUND`（AGENT_ERRORS，值与 task/chat 域一致）。
    */
   async findOne(id: string) {
@@ -156,8 +154,8 @@ export class AgentsService implements OnModuleInit {
 
   /**
    * POST /agents：完全自定义（FR-32）。
-   * 三表事务：Agent（type=custom、baseAgentId=null、createdBy=当前用户）
-   * + agent_skills 批量 + agent_tool_effects 批量，返回 toAgentDto 格式。
+   * 二表事务：Agent（type=custom、baseAgentId=null、createdBy=当前用户）
+   * + agent_skills 批量，返回 toAgentDto 格式。
    */
   async create(userId: string, dto: CreateAgentDto) {
     return this.prisma.$transaction(async (tx) => {
@@ -171,29 +169,21 @@ export class AgentsService implements OnModuleInit {
           baseAgentId: null,
           defaultModelId: dto.defaultModelId ?? null,
           persona: dto.persona ?? null,
-          permissionScope: dto.permissionScope
-            ? (dto.permissionScope as Prisma.InputJsonValue)
-            : undefined,
           policyId: dto.policyId ?? null,
           createdBy: userId,
         },
       });
 
-      const skills = await this.createAssociations(
-        tx,
-        agent.id,
-        dto.skillIds,
-        dto.toolEffects,
-      );
+      const skills = await this.createSkills(tx, agent.id, dto.skillIds);
 
-      return this.toAgentDto({ ...agent, ...skills });
+      return this.toAgentDto({ ...agent, skills });
     });
   }
 
   /**
    * POST /agents/:id/clone：深拷贝副本（FR-31）。
    * 源不存在 → 404；新行 type=clone、baseAgentId=源.id、name=请求名或「源名副本」；
-   * 同事务复制三表（不含会话/任务关系），克隆不触碰源行。
+   * 同事务复制 skills（不含会话/任务关系），克隆不触碰源行。
    */
   async clone(userId: string, id: string, dto: CloneAgentDto) {
     const source = await this.prisma.agent.findUnique({
@@ -217,22 +207,16 @@ export class AgentsService implements OnModuleInit {
           prompt: source.prompt,
           defaultModelId: source.defaultModelId,
           persona: source.persona,
-          permissionScope: source.permissionScope as
-            Prisma.InputJsonValue | undefined,
           policyId: source.policyId ?? null,
           createdBy: userId,
         },
       });
 
-      await this.copyAssociations(tx, source, clone.id);
+      await this.copySkills(tx, source, clone.id);
 
       return this.toAgentDto({
         ...clone,
         skills: source.skills.map((s) => ({ skillId: s.skillId })),
-        toolEffects: source.toolEffects.map((t) => ({
-          toolAction: t.toolAction,
-          effect: t.effect,
-        })),
       });
     });
   }
@@ -240,11 +224,11 @@ export class AgentsService implements OnModuleInit {
   /**
    * PATCH /agents/:id（is_0000000030 放开内置 agent 设置修改）：
    * - template（内置）允许修改全部**设置字段**（name/role/prompt/defaultModelId/
-   *   permissionScope/workerId + skillIds/toolEffects 关联重建），
+   *   workerId/policyId + skillIds 关联重建），
    *   使内置 agent 可自定义配置；agentId/type 不可改（不在 DTO，天然安全红线）；
    * - clone/custom → 同规则更新；
    * - 删除（remove）仍对 template 403（销毁性操作不在"设置修改"范围）。
-   * skillIds/toolEffects 各自显式传入时单独重建对应关联（不传的一侧保持原关联，避免半更新清空另一张表）。
+   * skillIds 显式传入时重建关联（不传保持原关联）。
    */
   async update(id: string, dto: UpdateAgentDto) {
     const agent = await this.prisma.agent.findUnique({ where: { id } });
@@ -266,18 +250,12 @@ export class AgentsService implements OnModuleInit {
             ? { persona: dto.persona ?? null }
             : {}),
           ...(dto.workerId !== undefined ? { workerId: dto.workerId } : {}),
-          ...(dto.permissionScope !== undefined
-            ? { permissionScope: dto.permissionScope as Prisma.InputJsonValue }
-            : {}),
           ...(dto.policyId !== undefined ? { policyId: dto.policyId } : {}),
         },
       });
 
       if (dto.skillIds !== undefined) {
         await this.replaceSkills(tx, id, dto.skillIds);
-      }
-      if (dto.toolEffects !== undefined) {
-        await this.replaceToolEffects(tx, id, dto.toolEffects);
       }
 
       const full = await tx.agent.findUnique({
@@ -290,7 +268,7 @@ export class AgentsService implements OnModuleInit {
 
   /**
    * DELETE /agents/:id：type=template → 403 PERMISSION_AGENT_READONLY；
-   * clone/custom → 事务删除 agent_skills + agent_tool_effects + agent 本体。
+   * clone/custom → 事务删除 agent_skills + agent 本体。
    */
   async remove(id: string) {
     const agent = await this.prisma.agent.findUnique({ where: { id } });
@@ -301,7 +279,6 @@ export class AgentsService implements OnModuleInit {
 
     return this.prisma.$transaction(async (tx) => {
       await tx.agentSkill.deleteMany({ where: { agentId: id } });
-      await tx.agentToolEffect.deleteMany({ where: { agentId: id } });
       await tx.agent.delete({ where: { id } });
     });
   }
@@ -492,8 +469,26 @@ export class AgentsService implements OnModuleInit {
     return { models: STATIC_AVAILABLE_MODELS, source: 'fallback' };
   }
 
-  /** 行 → DTO：基本字段 + 扩展字段（关联表映射为扁平数组）。 */
-  private toAgentDto(agent: AgentRow) {
+  private async toAgentDto(agent: AgentRow): Promise<{
+    id: string;
+    name: string;
+    role: string | null;
+    type: string;
+    prompt: string;
+    baseAgentId: string | null;
+    defaultModelId: string | null;
+    persona: string | null;
+    workerId: string | null;
+    policyId: string | null;
+    skillIds: string[];
+    effectivePermission: ResolvedExecutionPolicy | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> {
+    const [effectivePermission] =
+      await this.executionPolicyService.resolveManyByAgents([
+        { policyId: agent.policyId, role: agent.role },
+      ]);
     return {
       id: agent.id,
       name: agent.name,
@@ -504,35 +499,38 @@ export class AgentsService implements OnModuleInit {
       defaultModelId: agent.defaultModelId,
       persona: agent.persona,
       workerId: agent.workerId,
-      permissionScope: agent.permissionScope,
       policyId: agent.policyId,
       skillIds: agent.skills.map((s) => s.skillId),
-      toolEffects: agent.toolEffects.map((t) => ({
-        toolAction: t.toolAction,
-        effect: t.effect,
-      })),
+      effectivePermission,
       createdAt: agent.createdAt,
       updatedAt: agent.updatedAt,
     };
   }
 
-  /**
-   * 创建 Agent 关联（agent_skills + agent_tool_effects），仅 create/clone 使用（全量新建）。
-   * 返回 {skills, toolEffects} 供 toAgentDto 直接使用（避免事务内二次查询）。
-   */
-  private async createAssociations(
-    tx: Prisma.TransactionClient,
-    agentId: string,
-    skillIds: string[] | undefined,
-    toolEffects: { toolAction: string; effect: string }[] | undefined,
-  ): Promise<{
-    skills: { skillId: string }[];
-    toolEffects: { toolAction: string; effect: string }[];
-  }> {
-    return {
-      skills: await this.createSkills(tx, agentId, skillIds),
-      toolEffects: await this.createToolEffects(tx, agentId, toolEffects),
-    };
+  private async toAgentDtoList(rows: AgentRow[]) {
+    const permissions =
+      await this.executionPolicyService.resolveManyByAgents(
+        rows.map((agent) => ({
+          policyId: agent.policyId,
+          role: agent.role,
+        })),
+      );
+    return rows.map((agent, i) => ({
+      id: agent.id,
+      name: agent.name,
+      role: agent.role,
+      type: agent.type,
+      prompt: agent.prompt,
+      baseAgentId: agent.baseAgentId,
+      defaultModelId: agent.defaultModelId,
+      persona: agent.persona,
+      workerId: agent.workerId,
+      policyId: agent.policyId,
+      skillIds: agent.skills.map((s) => s.skillId),
+      effectivePermission: permissions[i],
+      createdAt: agent.createdAt,
+      updatedAt: agent.updatedAt,
+    }));
   }
 
   /** PATCH 语义：清空 agent_skills 后按新列表重建（skillIds 未传时调用方不触发）。 */
@@ -543,16 +541,6 @@ export class AgentsService implements OnModuleInit {
   ): Promise<void> {
     await tx.agentSkill.deleteMany({ where: { agentId } });
     await this.createSkills(tx, agentId, skillIds);
-  }
-
-  /** PATCH 语义：清空 agent_tool_effects 后按新配置重建（toolEffects 未传时调用方不触发）。 */
-  private async replaceToolEffects(
-    tx: Prisma.TransactionClient,
-    agentId: string,
-    toolEffects: { toolAction: string; effect: string }[],
-  ): Promise<void> {
-    await tx.agentToolEffect.deleteMany({ where: { agentId } });
-    await this.createToolEffects(tx, agentId, toolEffects);
   }
 
   /** 批量写入 agent_skills（去重，@@unique([agentId, skillId]) 防冲突）。 */
@@ -577,34 +565,8 @@ export class AgentsService implements OnModuleInit {
     return skills;
   }
 
-  /** 批量写入 agent_tool_effects（按 toolAction 去重，@@unique([agentId, toolAction]) 防冲突）。 */
-  private async createToolEffects(
-    tx: Prisma.TransactionClient,
-    agentId: string,
-    toolEffects: { toolAction: string; effect: string }[] | undefined,
-  ): Promise<{ toolAction: string; effect: string }[]> {
-    const effects: { toolAction: string; effect: string }[] = [];
-    if (toolEffects) {
-      const seen = new Set<string>();
-      for (const t of toolEffects) {
-        if (seen.has(t.toolAction)) continue;
-        seen.add(t.toolAction);
-        await tx.agentToolEffect.create({
-          data: {
-            id: await this.idGen.nextId(ID_PREFIX.agentToolEffect),
-            agentId,
-            toolAction: t.toolAction,
-            effect: t.effect,
-          },
-        });
-        effects.push({ toolAction: t.toolAction, effect: t.effect });
-      }
-    }
-    return effects;
-  }
-
-  /** 克隆时复制源关联（不重建，源保持只读语义）。 */
-  private async copyAssociations(
+  /** 克隆时复制源 skills（不重建，源保持只读语义）。 */
+  private async copySkills(
     tx: Prisma.TransactionClient,
     source: AgentRow,
     cloneId: string,
@@ -615,16 +577,6 @@ export class AgentsService implements OnModuleInit {
           id: await this.idGen.nextId(ID_PREFIX.agentSkill),
           agentId: cloneId,
           skillId: s.skillId,
-        },
-      });
-    }
-    for (const t of source.toolEffects) {
-      await tx.agentToolEffect.create({
-        data: {
-          id: await this.idGen.nextId(ID_PREFIX.agentToolEffect),
-          agentId: cloneId,
-          toolAction: t.toolAction,
-          effect: t.effect,
         },
       });
     }

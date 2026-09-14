@@ -1,23 +1,20 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
 import {
   IsArray,
   IsIn,
   IsNotEmpty,
-  IsObject,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
   ValidateIf,
-  ValidateNested,
 } from 'class-validator';
 import { PERSONA_LIBRARY } from '../persona.constants';
-import { ToolEffectDto } from './create-agent.dto';
 
 /**
  * PATCH /agents/:id 请求体（09 篇 §3.7：FR-33~36/47/48）。
- * skillIds/toolEffects 显式传入时重建关联（deleteMany + create），不传则保持原关联。
+ * skillIds 显式传入时重建关联（deleteMany + create），不传则保持原关联。
+ * 权限只读经 policyId 绑定 ExecutionPolicy（effectivePermission 经服务端解析返回）。
  */
 export class UpdateAgentDto {
   @ApiPropertyOptional({ description: 'Agent 名称', maxLength: 64 })
@@ -55,21 +52,6 @@ export class UpdateAgentDto {
   @IsArray()
   @IsString({ each: true })
   skillIds?: string[];
-
-  @ApiPropertyOptional({
-    description: '工具 effect 配置（重建 agent_tool_effects 关联）',
-    type: [ToolEffectDto],
-  })
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => ToolEffectDto)
-  toolEffects?: ToolEffectDto[];
-
-  @ApiPropertyOptional({ description: '权限范围对象（FR-36）', type: Object })
-  @IsOptional()
-  @IsObject()
-  permissionScope?: Record<string, unknown>;
 
   @ApiPropertyOptional({
     description: '默认模型 id（D7：opencode 模型 id，provider/model 格式）',

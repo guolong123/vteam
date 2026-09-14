@@ -48,27 +48,27 @@ export class AgentsController {
   }
 
   /**
-   * 创建自定义 Agent（三表事务：Agent + agent_skills + agent_tool_effects）。
-   * POST /api/v1/agents {name, type: 'custom', prompt?, role?, skillIds?, toolEffects?, permissionScope?, defaultModelId?}
-   *   → 201 + Agent 对象（type=custom，baseAgentId=null）
+   * 创建自定义 Agent（二表事务：Agent + agent_skills）。
+   * POST /api/v1/agents {name, type: 'custom', prompt?, role?, skillIds?, defaultModelId?, policyId?}
+   *   → 201 + Agent 对象（type=custom，baseAgentId=null，含 policyId + effectivePermission）
    */
   @Post()
   @UseGuards(PermissionGuard)
   @RequirePermission('agents.create')
-  @ApiOperation({ summary: '创建自定义 Agent（custom，三表事务）' })
+  @ApiOperation({ summary: '创建自定义 Agent（custom，Agent + skills）' })
   create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateAgentDto) {
     return this.agentsService.create(user.id, dto);
   }
 
   /**
-   * 克隆 Agent（baseAgentId 血缘 + 三表深拷贝，原 Agent 不受影响）。
+   * 克隆 Agent（baseAgentId 血缘 + skills 深拷贝，原 Agent 不受影响）。
    * POST /api/v1/agents/:id/clone {name?} → 201 + 克隆副本（type=clone）
    * 源不存在 → 404 `AGENT_NOT_FOUND`
    */
   @Post(':id/clone')
   @UseGuards(PermissionGuard)
   @RequirePermission('agents.create')
-  @ApiOperation({ summary: '克隆 Agent（baseAgentId 血缘 + 三表深拷贝）' })
+  @ApiOperation({ summary: '克隆 Agent（baseAgentId 血缘 + skills 深拷贝）' })
   clone(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -124,8 +124,8 @@ export class AgentsController {
 
   /**
    * 更新 Agent（is_0000000030：template/内置也可修改设置字段，agentId/type 不可改）。
-   * PATCH /api/v1/agents/:id {prompt?, role?, skillIds?, toolEffects?, permissionScope?, defaultModelId?}
-   * skillIds/toolEffects 显式传入时重建关联。
+   * PATCH /api/v1/agents/:id {prompt?, role?, skillIds?, defaultModelId?, policyId?}
+   * skillIds 显式传入时重建关联。
    */
   @Patch(':id')
   @UseGuards(PermissionGuard)
@@ -138,7 +138,7 @@ export class AgentsController {
   }
 
   /**
-   * 删除 Agent（type=template → 403；clone/custom 可删，含 agent_skills/agent_tool_effects 关联清理）。
+   * 删除 Agent（type=template → 403；clone/custom 可删，含 agent_skills 关联清理）。
    * DELETE /api/v1/agents/:id → 200
    */
   @Delete(':id')
@@ -188,13 +188,13 @@ export class AgentsController {
   }
 
   /**
-   * Agent 详情（含 skills/toolEffects 完整关联）。
+   * Agent 详情（含 skills 关联 + policyId + effectivePermission）。
    * GET /api/v1/agents/:id → 200 完整对象；不存在 → 404 `AGENT_NOT_FOUND`
    */
   @Get(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission('agents.view')
-  @ApiOperation({ summary: 'Agent 详情（含 skills/toolEffects 关联）' })
+  @ApiOperation({ summary: 'Agent 详情（含 skills 关联 + effectivePermission）' })
   findOne(@Param('id') id: string) {
     return this.agentsService.findOne(id);
   }

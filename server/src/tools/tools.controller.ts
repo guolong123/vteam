@@ -37,11 +37,12 @@ export class ToolsController {
   constructor(private readonly toolsService: ToolsService) {}
 
   /**
-   * 工具列表（source/execution/enabled 过滤 + name 搜索 + 分页，含来源徽章）。
+   * 工具列表（source/execution/enabled 过滤 + name 搜索 + mcpServer 分组键 + 分页，含来源徽章）。
    * GET /api/v1/tools?source=mcp&enabled=true&page=1&pageSize=20
-   *   → 200 {items, total, page, pageSize}；成员只读可见（不挂守卫）。
-   * 成员只读：service 内强制 enabled=true（仅可见已启用工具，agent 配置页工具区数据源）；
-   * admin 遵循 query.enabled（缺省全量）。worker（X-Worker-Token）viewer 为空不强制过滤，
+   *   → 200 {items, total, page, pageSize}；成员默认可见（不挂守卫）。
+   * 成员默认：enabled 缺省时仅返回已启用工具（agent 配置页工具区数据源）；
+   * enabled 显式传入（含 false）时按传入值返回——任何 viewer 均可显式查询停用工具。
+   * admin 缺省全量。worker（X-Worker-Token）viewer 为空不强制过滤，
    * 显式带 enabled=true 即只取启用工具。
    */
   @Public()

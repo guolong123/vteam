@@ -12,10 +12,9 @@ import { generateSwaggerTools, SwaggerMcpTool } from './swagger-tools';
  * 逐条 upsert 进 tools 表（source=mcp、execution=mcp、mcpServer=vteam-api），
  * 使 agents 页工具配置区可见可配（GET /tools?enabled=true 自动返回）。
  *
- * 权限模型（对齐 seed 的 vteam 工具与 swagger-mcp.auth.ts）：tools.action @unique
- * 即权限点键，运行时校验（agentToolEffect.toolAction）直接按 Swagger 工具名匹配——
- * 故 action = tool.name（工具名即权限点 FR-48）。tools 表仅管理面展示/配置入口，
- * 运行时授权不依赖 tools 表行（swagger-mcp.auth.ts 直读 AgentToolEffect）。
+ * 权限模型：tools.action @unique 即权限点键（工具名即权限点 FR-48），
+ * 故 action = tool.name。tools 表仅管理面展示/配置入口；
+ * 运行时授权在 swagger-mcp.auth.ts（实例归属 + 默认拒绝管理面 API）。
  *
  * 幂等：upsert by action（@unique），重复执行只更新不产生重复行。
  * 同步失败 warn 不阻断启动（文档未 initialize 时 getDocument 返回 null，跳过）。
