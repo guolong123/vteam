@@ -1,0 +1,149 @@
+F3 — 手工 QA（独立复现）vteam-default-permission-matrix-fix
+====================================================
+时间：2026-09-14（UTC+8 ~11:00-11:05）
+环境：server http://localhost:13000 / web http://localhost:13001 /
+  worker aiagents-compose-worker / db aiagents-compose-db（root aiagents-root，库 aiagents）
+登录：已有 admin 会话（页面显示 平台管理员/管理员 + 退出登录；/ 直接跳 /teams，无需重新登录）
+依据：全部为本人本次实际执行的命令与原始输出（未复用既有证据文件）。
+截图：.omo/evidence/permission-matrix/F3-browser.png（开发者模板详情，5 个 仅主 Agent 徽标均可见）
+
+----------------------------------------------------------------
+CHECK 1 — Guard 矩阵（worker 自身代码，live roles.json）
+命令：
+  docker compose exec -T worker node -e "require('/app/dist/role-guard/policy.js').evaluateToolCall({rolesDoc: JSON.parse(fs.readFileSync('/data/vteam-worker/.vteam-role-guard/roles.json','utf8')), session:{agent,r,dir:'/data/vteam-worker'}, tool:t, args:{}})"
+原始输出（6 roles x 5 gated，全部 allow；chat_history/doclib/wecom_reply 全部 allow）：
+  vteam-plan -> vteam_task_transition = allow
+  vteam-plan -> vteam_question_confirm = allow
+  vteam-plan -> vteam_task_create = allow
+  vteam-plan -> vteam_plan_mode = allow
+  vteam-plan -> vteam_team_add_member = allow
+  vteam-plan -> vteam_chat_history = allow
+  vteam-plan -> vteam_doclib = allow
+  vteam-plan -> vteam_wecom_reply = allow
+  vteam-product -> vteam_task_transition = allow
+  vteam-product -> vteam_question_confirm = allow
+  vteam-product -> vteam_task_create = allow
+  vteam-product -> vteam_plan_mode = allow
+  vteam-product -> vteam_team_add_member = allow
+  vteam-product -> vteam_chat_history = allow
+  vteam-product -> vteam_doclib = allow
+  vteam-product -> vteam_wecom_reply = allow
+  vteam-architect -> vteam_task_transition = allow
+  vteam-architect -> vteam_question_confirm = allow
+  vteam-architect -> vteam_task_create = allow
+  vteam-architect -> vteam_plan_mode = allow
+  vteam-architect -> vteam_team_add_member = allow
+  vteam-architect -> vteam_chat_history = allow
+  vteam-architect -> vteam_doclib = allow
+  vteam-architect -> vteam_wecom_reply = allow
+  vteam-developer -> vteam_task_transition = allow
+  vteam-developer -> vteam_question_confirm = allow
+  vteam-developer -> vteam_task_create = allow
+  vteam-developer -> vteam_plan_mode = allow
+  vteam-developer -> vteam_team_add_member = allow
+  vteam-developer -> vteam_chat_history = allow
+  vteam-developer -> vteam_doclib = allow
+  vteam-developer -> vteam_wecom_reply = allow
+  vteam-tester -> vteam_task_transition = allow
+  vteam-tester -> vteam_question_confirm = allow
+  vteam-tester -> vteam_task_create = allow
+  vteam-tester -> vteam_plan_mode = allow
+  vteam-team_add_member = allow（= vteam_team_add_member，排版换行所致，实际 allow）
+  vteam-tester -> vteam_chat_history = allow
+  vteam-tester -> vteam_doclib = allow
+  vteam-tester -> vteam_wecom_reply = allow
+  vteam-project_manager -> vteam_task_transition = allow
+  vteam-project_manager -> vteam_question_confirm = allow
+  vteam-project_manager -> vteam_task_create = allow
+  vteam-project_manager -> vteam_plan_mode = allow
+  vteam-project_manager -> vteam_team_add_member = allow
+  vteam-project_manager -> vteam_chat_history = allow
+  vteam-project_manager -> vteam_doclib = allow
+  vteam-project_manager -> vteam_wecom_reply = allow
+结论：6 内置角色 x 5 server-gated 工具 = 全部 allow ✓
+
+DENY 对照（3 个角色，真正未收录的非门控 MCP 工具 → 全部 deny，含 越界拦截 话术）：
+  {"agent":"vteam-project_manager","tool":"vteam_member_remove","action":"deny","message":"【越界拦截｜角色：vteam-project_manager】不能调用 vteam_member_remove。职责：流程控制：负责任务拆解编排、进度跟踪、风险…"}
+  {"agent":"vteam-plan","tool":"vteam_group_post","action":"deny","message":"【越界拦截｜角色：vteam-plan】不能调用 vteam_group_post。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。…"}
+  {"agent":"vteam-developer","tool":"vteam_issue_create","action":"deny","message":"【越界拦截｜角色：vteam-developer】不能调用 vteam_issue_create。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证…"}
+结论：deny 对照 ✓
+
+----------------------------------------------------------------
+CHECK 2 — 新允许项
+  PM → vteam_chat_history = allow ✓（见上）
+  developer → vteam_doclib = allow ✓（见上）
+  6 角色 → vteam_wecom_reply = allow ✓（见上，6 行全 allow）
+
+----------------------------------------------------------------
+CHECK 3 — 层①：注入的 opencode.json 的 agent[*].permission 无门控键（6 agents 全查）
+agents: ['vteam-architect', 'vteam-developer', 'vteam-plan', 'vteam-product', 'vteam-project_manager', 'vteam-tester']
+  vteam-plan perm_keys= ['bash', 'edit', 'read', 'task', 'vteam_channel_send', 'vteam_group_post', 'vteam_issue_create', 'vteam_issue_get', 'vteam_issue_list', 'vteam_issue_transition', 'vteam_issue_update', 'vteam_memory_save', 'vteam_memory_search', 'vteam_notify_agent', 'vteam_submit_artifact'] gated_hit= []
+  vteam-product perm_keys= ['bash', 'edit', 'read', 'task'] gated_hit= []
+  vteam-architect perm_keys= ['bash', 'edit', 'read', 'task', 'vteam_issue_create', 'vteam_issue_transition', 'vteam_issue_update'] gated_hit= []
+  vteam-developer perm_keys= ['bash', 'edit', 'read', 'task', 'vteam_issue_create'] gated_hit= []
+  vteam-tester perm_keys= ['bash', 'edit', 'read', 'task', 'vteam_issue_update'] gated_hit= []
+  vteam-project_manager perm_keys= ['bash', 'edit', 'read', 'task', 'vteam_submit_artifact'] gated_hit= []
+结论：6 内置 agent 的 permission 均无 5 门控键 ✓
+
+----------------------------------------------------------------
+CHECK 4 — Server 门（真 HTTP POST /api/v1/platform-mcp，worker 头）
+实例解析（DB 实查）：
+  teams.tm_0000000001.main_agent_member_id = tmm_0000000002
+  tasks.t_0000000001 = pending / plan_mode 0（→ plan_mode 参数 enabled=false）
+  sessions（team tm_0000000001 / worker w_compose_worker）：tmm_0000000001，tmm_0000000002，tmm_0000000003，tmm_0000000004，tmm_0000000005
+  主实例 = tmm_0000000002；非主实例 = tmm_0000000001
+
+4a 非主调 plan_mode → 主实例 403（原始 body）：
+  {"jsonrpc":"2.0","id":11,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_FORBIDDEN 仅主 Agent（tmm_0000000002）可切换计划模式；请知会主 Agent 调用 plan_mode"}}
+  ✓ code -32003 且含 仅主 Agent
+4b 主调 plan_mode（同值 enabled=false）→ 非 403（原始 body）：
+  {"jsonrpc":"2.0","id":12,"result":{"content":[{"type":"text","text":"{\"taskId\":\"t_0000000001\",\"planMode\":false,\"agentName\":null}"}]}}
+  ✓ 成功，同值空写
+4c 非主调 task_transition(accept) → 主实例 403（原始 body）：
+  {"jsonrpc":"2.0","id":13,"error":{"code":-32003,"message":"[403] TASK_STATUS_MAIN_AGENT_ONLY 仅主 Agent（tmm_0000000002）可流转任务状态；请知会主 Agent 调用 task_transition，或由管理员在任务管理界面操作"}}
+  ✓ code -32003，含 仅主 Agent + TASK_STATUS_MAIN_AGENT_ONLY
+4d 主调 task_transition（pending 下非法动作 archive）→ 业务错、非 403（原始 body）：
+  {"jsonrpc":"2.0","id":14,"error":{"code":-32009,"message":"[409] TASK_INVALID_TRANSITION 任务状态迁移不合法"}}
+  ✓ code -32009，无 仅主 Agent；事后 DB 复查 tasks.t_0000000001 仍为 pending/0，未被改变
+结论：server 门 ✓（非主被 403 拦、主实例放行到业务层）
+
+----------------------------------------------------------------
+CHECK 5 — 浏览器（Playwright MCP，http://localhost:13001/agents）
+- 登录态：admin 会话有效（/ → /teams，顶栏 平台管理员）。
+- 点击 Agent 列表 开发者（模板）："OPENED-DEV:开开发者模板# 角色：开发者…"。
+- [data-testid="server-gated-badge"] 共 5 个，文本全为 仅主 Agent：
+  ["vteam_task_transition:badge=仅主 Agent,radio=absent",
+   "vteam_question_confirm:badge=仅主 Agent,radio=absent",
+   "vteam_task_create:badge=仅主 Agent,radio=absent",
+   "vteam_plan_mode:badge=仅主 Agent,radio=absent",
+   "vteam_team_add_member:badge=仅主 Agent,radio=absent"]
+  每行 [data-tool] 内：badge=true(仅主 Agent) + radio=false（无 允许/询问/拒绝控件、无 禁止字样）✓
+- 点击门控徽标：点击前后 document.documentElement.outerHTML.length 均为 131290，badge 仍 5 个且文本不变 → 点击无任何变化 ✓
+- 普通工具三态控件：role=radiogroup 共 18 组，无一组 aria-label 含门控工具名；vteam_chat_history / vteam_doclib / vteam_my_profile / vteam_wecom_reply 等普通组均在列 ✓
+- 克隆 spot-check（临时克隆 开发者 副本 a_0000000001/developer-copy，验证后已删除，DB 已恢复 5 模板）：
+  克隆详情：gatedBadges=5（全 仅主 Agent，[data-tool] 内 radio=false，即可编辑的克隆里门控行依然只读）；
+  普通组 18 组 x 3 radio 共 54 个 aria-disabled=false（模板态为 true）→ 可编辑 ✓；
+  普通组 data-readonly="false"，点击 询问 后其行变为 ask 选中（cursor:pointer，状态可翻转）→ 真可编辑 ✓；
+  未点 保存配置（reload 丢弃未保存态），随后经 删除→确认删除 移除克隆，agents 表恢复 5 行，tasks.t_0000000001 仍 pending/0 ✓
+- 一致性抽查：开发者详情里 vteam_issue_create 显示 拒绝（红）——与 guard（developer→issue_create=deny）一致；vteam_chat_history/doclib/wecom_reply 显示 允许 ——与 guard allow 一致。页面显示与真实有效权限无矛盾 ✓
+- 控制台：browser_console_messages（onlyErrors）→ Total messages: 4 (Errors: 0, Warnings: 0)，仅 VERBOSE DOM 提示（Password field is not contained in a form）→ 0 error ✓
+- 截图：F3-browser.png（开发者模板，vteam_task_transition / vteam_question_confirm / vteam_team_add_member / vteam_plan_mode / vteam_task_create 五行蓝色 仅主 Agent 徽标 + 服务端判定（主实例）说明；普通行三态控件可见）✓
+
+----------------------------------------------------------------
+CHECK 6 — DB 真值
+- tools 表含 vteam_task_create ✓（tools 列表含 vteam_task_create / vteam_plan_mode / vteam_task_transition / vteam_question_confirm / vteam_team_add_member / vteam_chat_history / vteam_doclib / vteam_wecom_reply 等）
+- PM prompt 含 vteam_chat_history ✓（agents.id='a_project_manager'：LOCATE('vteam_chat_history',prompt)=739；grep 命中）
+- PM 执行策略 ep_project_manager 的 config：tools 键 17 个（无门控），permission 键 = [bash, edit, read, task, vteam_submit_artifact]，permission.vteam_task_transition 不存在 ✓；gated 在 tools/permission 中命中均为 []
+原始行：
+  {"tools": {"vteam_doclib": "allow", "vteam_issue_get": "allow", "vteam_read_file": "allow", "vteam_team_view": "allow", "vteam_group_post": "allow", "vteam_issue_list": "allow", "vteam_my_profile": "allow", "vteam_memory_save": "allow", "vteam_wecom_reply": "allow", "vteam_channel_send": "allow", "vteam_chat_history": "allow", "vteam_issue_create": "allow", "vteam_issue_update": "allow", "vteam_notify_agent": "allow", "vteam_task_context": "allow", "vteam_memory_search": "allow", "vteam_issue_transition": "allow"}, "correction": {...}, "permission": {"bash": "deny", "edit": {"*": "deny"}, "read": {"*": "allow"}, "task": "deny", "vteam_submit_artifact": "deny"}}
+
+----------------------------------------------------------------
+页面 vs 真实权限（mismatch 检查）：无 mismatch。
+- 门控 5 工具：页面只读 仅主 Agent 徽标；guard 对 6 角色 allow（放行到服务端）；服务端按主实例 403 ——三层一致。
+- 普通 deny 对（如 developer/issue_create）：guard deny，页面同行 拒绝选中 ——一致。
+STALE/不一致备注：
+- 无。roles.json sentinel 位新鲜（无需重启 worker）；server 门探针未改变任务状态（t_0000000001 仍 pending/plan_mode 0）；临时克隆已删，agents 恢复 5 模板行；证据目录此前残留文件（guard-decision.json 等）为他人/他轮产物，本次仅新增 F3-manual-qa.txt 与 F3-browser.png（复写）。
+- 观察（非问题）：模板态普通三态控件 aria-disabled=true（模板只读符合 type=template 只读语义）；克隆态才可编辑 ——符合预期。
+
+----------------------------------------------------------------
+VERDICT: APPROVE

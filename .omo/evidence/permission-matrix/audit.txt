@@ -1,0 +1,9 @@
+=== 默认 Agent 权限矩阵合理性核查（实测，2026-09-14T02:25:16Z）===
+
+方法：读运行中 worker 的 .vteam-role-guard/roles.json，用 worker 自身 dist/role-guard/policy.js
+evaluateToolCall 逐个判定；并对照各角色 seeded prompt 的『可用工具』与全局系统提示。
+
+--- A. 对所有角色都被 deny 的 MCP 工具（含主 Agent）---
+vteam_task_transition        PM=denyvteam_question_confirm       PM=denyvteam_plan_mode              PM=denyvteam_task_create            PM=denyvteam_team_add_member        PM=denyvteam_wecom_reply            PM=denyvteam_channel_send           PM=deny
+--- B. 用户报告：PM vteam_chat_history ---
+vteam_chat_history PM=deny

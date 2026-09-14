@@ -1,0 +1,62 @@
+F2 — Code quality review: vteam-default-permission-matrix-fix
+Commits: 22e95ee (policies) / d65ece2 (guard) / 72aca9f (seed) / c3d967a (web) / d27a065 (e2e)
+Date: 2026-09-14 · Reviewer: Sisyphus-Junior · Method: git show <sha> per commit + file reads + 3x tsc + jest
+Scope: product code touched by the 5 commits only. Pre-existing issues elsewhere are noted as such and do NOT block.
+
+[VERIFICATION RUNS]
+- cd server && npx tsc -p tsconfig.json --noEmit → exit 0
+- cd worker && npx tsc --noEmit → exit 0
+- cd web && npx tsc --noEmit → exit 0
+- cd server && npx jest agent.constants / agent-policies.matrix / agent-policies.custom-agents / seed.spec → 4 suites / 46 tests PASS (1 snapshot PASS)
+- cd worker && npx jest src/role-guard src/resources → 7 suites / 131 tests PASS
+
+[1] NO SLOP — PASS, no findings in touched code
+- `as any`: zero matches in worker/src/role-guard, server/src/execution-policies, server/src/common/constants, web/app/(main)/agents. (server custom-agent path uses `as Record<string, unknown>` / `as never` in specs — typed casts, allowed.)
+- `@ts-ignore`: zero matches in all touched areas.
+- Empty catch (`} catch {}`): zero in touched files. ~95 hits exist repo-wide (platform-mcp.service.ts, wecom-aibot.adapter.ts, chat/*, tasks/* …) — ALL pre-existing, none introduced by these 5 commits.
+- `console.log` in product code: zero in touched product files (only jest `console.log` noise from seed.ts runtime output, pre-existing).
+- TODO/FIXME/HACK: zero in touched files.
+- Dead code / unused vars: none found. tsc --noEmit clean on all three packages (noUnusedLocals-style errors would surface); no commented-out blocks left by the diffs.
+- Over-long restating comments: comments are normative (gate ownership, branch order, lock mechanism) not restatements. The longest (policy.ts:94-99, agent.constants.ts:142-147, execution-policy.service.ts:307-317) each state WHY (server authority, wire-format exclusion, derivation source) — justified, not slop.
+- Snapshot churn check: agent-policies.custom-agents.spec.ts.snap diff is deny-key deletions + D4 allow additions only (per commit message; snapshot suite passes) — no unrelated churn.
+
+[2] SINGLE SOURCE OF TRUTH — PASS
+- Canonical definitions: exactly ONE server-side (server/src/common/constants/agent.constants.ts:148-154 `ROLE_SERVER_GATED_TOOLS`, 5 real names) and exactly ONE worker-side per runtime copy (worker/src/role-guard/policy.ts:100-106 + worker/src/resources/role-guard-plugin.ts:90-96 inline snapshot). The worker↔plugin duplication is the documented intentional split (worker must not import server code; plugin body is an emitted self-contained snapshot) — NOT a violation.
+- Lock is REAL (both halves verified present, not just claimed):
+  (a) parity spec: worker/src/resources/role-guard-plugin.spec.ts:130 (`25 例矩阵逐字节一致`, snapshot-eval vs policy.ts over 25 cases incl. 5 gated) — PASS in run above;
+  (b) e2e step 5: scripts/e2e-permission-matrix.sh:419-445 (server dist require vs worker dist regex-extract, sorted-compare + length==5, fail() on mismatch, evidence constants-server.json/constants-worker.json/constants-compare.txt) — script present and structurally sound (live-stack execution is F3's job, not F2's).
+- No THIRD product-code literal: `vteam_team_add_member` occurs in product code only at agent.constants.ts:135 (inside the 23-item VTEAM_MCP_TOOL_NAMES registry — expected subset overlap, not a gated-list copy), agent.constants.ts:148-154 (canonical), policy.ts:100-106, plugin.ts:90-96. All other occurrences are specs (agent.constants.spec.ts:86, policy.spec.ts:244, plugin.spec.ts:95 — assertion locks, desired) and the e2e script GATED arrays (test code, desired). No stray copy in seed.ts, execution-policy.service.ts, web page, injector, or config-builder.
+- `defineBoundary` uses module-level `SERVER_GATED_SET` (agent.constants.ts:157) — precomputed Set, `Set.has` O(1) inside the filter. No per-call linear scan of the gated list (the VTEAM_MCP_TOOL_NAMES filter iteration itself is inherent and unchanged).
+
+[3] CORRECTNESS RISKS — all PASS
+- (a) Guard branch order: policy.ts:178-186 `TASK_TOOLS` deny FIRST, then `SERVER_GATED_TOOLS` allow, then `BUILTIN_PASSTHROUGH`. `task`/`execute` still deny (spec-locked policy.spec.ts:250-255). No shadowing: gated names are disjoint from TASK_TOOLS/READ/EDIT/bash/BUILTIN sets; unknown-tool fallthrough (policy.ts:192-195) unchanged. Inline snapshot mirrors the same order (plugin.ts:149-157). PASS.
+- (b) `effectOf` single resolver: web/app/(main)/agents/page.tsx:669-678 unchanged in structure (permission-name/action/prefixed → guardTools-name/action/prefixed → "deny"); the gated path does NOT fork effectOf — `isServerGated` (642-643) is a separate display/edit gate. PASS.
+- (c) Alias precedence parity: `matrixAliasesOf` (636-639: [name, action, vteam_<action>] deduped) vs `effectOf` (670-676: same three keys, same order). `isServerGated` uses `.some()` over the same triple — no divergence. serverGated values are real `vteam_` names so the prefixed alias is the operative one; name/action aliases are harmless supersets. PASS.
+- (d) Web gated row genuinely non-editable: `handleToolChange` early-returns (710-712 `if (isServerGated(tool)) return;` before any state/mutation), render branch (868-878) shows `<ServerGatedBadge>` INSTEAD of `<ToolEffectSelect>` (no segmented control in DOM), row carries data-server-gated + title hint. `policyMutation` untouched for other tools. PASS.
+- (e) No wire-format leak: `AgentGuardRole` (worker/src/resources/opencode-config-builder.ts:23-28) = {permission, tools, bashDeny, correction} only; `ROLE_ALLOWED_FIELDS` (53) same four — a `serverGated` key in guard.roles would throw via `assertNoUnknownFields` (127). `buildAgentPolicies` (execution-policy.service.ts:328-343) constructs role entries with exactly those four fields. `serverGated` appears ONLY on `ResolvedExecutionPolicy` (48-49, set at 250/302 in resolveByAgent/resolveManyByAgents — API/UI path). Specs assert guard.roles.*.tools lacks gated keys (custom-agents.spec.ts:109-113). PASS.
+
+[4] TEST QUALITY — PASS
+- Real-behavior assertions throughout: guard allow/deny via evaluateToolCall return values (policy.spec.ts:237-261 incl. negative controls vteam_member_remove/vteam_bogus + task/execute independence); permission-map key absence via not.toHaveProperty (matrix.spec.ts:99-117, custom-agents.spec.ts:95-114); parity loop compares snapshot-eval vs policy.ts per case (plugin.spec.ts:130-...). No `expect(true).toBe(true)` or tautologies (grep zero).
+- Bug-as-contract spec CORRECTED, not deleted: old agent.constants.spec.ts asserted toolAllows must NOT contain task_transition/question_confirm (bare 2-tool check) + old seed.spec.ts asserted `permission.vteam_task_transition === 'deny'`. New code asserts the RIGHT invariants: gated ∉ toolAllows for ALL roles looping over the constant (agent.constants.spec.ts:254-261), gated ∉ mcpDenies for all roles (new tests), permission not.toHaveProperty(gated) (seed.spec.ts:138-141, matrix.spec), union tri-partition coverage (agent.constants.spec.ts three-way test). The old assertions would now FAIL against fixed code for the right reason (gated must be absent from BOTH allowlist and deny-map). PASS.
+- D4 coverage present (agent.constants.spec.ts D4 test: wecom_reply ×5 +channel_send ×5, plan chat_history+wecom_reply but NOT channel_send, PM chat_history, dev doclib). Seed drift-lock present (seed.spec.ts:257+ prompt-listed set == toolAllows key set + gated exclusion). PASS.
+
+[5] SCRIPTS (scripts/e2e-permission-matrix.sh, 448 lines) — PASS
+- `set -euo pipefail` (line 51). Every assertion failure routes to `fail()` which prints FAIL + `exit 1` (62-65); need_cmd exits 2 on missing deps. Non-zero on failure: yes.
+- Cleanup trap: `trap cleanup EXIT` + TMP_FILES registry + mktmp (76-86). `docker compose cp` artifacts go to $EVIDENCE_DIR (persistent evidence, correct); only temp bodies are removed. PASS.
+- No fake/tautological assertions: step 1 asserts 30 live guard evals == allow + negative control deny WITH correction-literal check; step 2 asserts 6 injected permissions lack gated keys; step 4 uses REAL HTTP (mcp_call → platform-mcp tools/call) asserting -32003 + 403/仅主 Agent message for non-main and NO -32003 + task-unmutated for main; step 5 sorted-compares live dist constants with length==5. All falsifiable. PASS.
+- [MINOR] (non-blocking, pre-existing-style nits, do NOT affect verdict): (i) X_WORKER_TOKEN fallback greps `^WORKER_TOKEN=` from repo-root .env without skipping commented lines — could pick a commented value; mitigated by documented default chain. (ii) `mktmp` appends to space-separated TMP_FILES with `rm -f $TMP_FILES` unquoted (shellcheck SC2086 suppressed inline) — safe here since mktemp paths contain no spaces. (iii) step 0 sentinel + restart path mutates live state (worker restart, plan_mode same-value write) — documented in header as intended/read-only-against-business-data. None are correctness risks to the product change.
+
+[6] CONSISTENCY (old buggy behavior remnants) — PASS
+- Grep for `permission.vteam_task_transition.*deny` / `toContain('vteam_task_transition')` in server/src: zero hits. Remaining `toBe('deny')` hits are the builtin `task` tool and bash/edit denies — correct and unrelated. Old seed.spec `expect(permission.vteam_task_transition).toBe('deny')` replaced by not.toHaveProperty loop. Old agent.constants.spec 2-tool not.toContain replaced by constant-driven loop. No file asserts gated tools must be denied or must appear in toolAllows. PASS.
+- Repo rules: no `as any`, no `@ts-ignore`, no stubs, no dual-track/AB, no "retired" annotations in any of the 5 diffs. PASS.
+
+FINDINGS SUMMARY (severity-tagged, file:line; pre-existing vs introduced):
+- BLOCKER: none.
+- MAJOR: none.
+- MINOR (all in scripts/e2e-permission-matrix.sh, test-only, non-blocking):
+  - scripts/e2e-permission-matrix.sh:57-63 — WORKER_TOKEN grep may match commented .env line (pre-existing pattern class; introduced in d27a065 but test-only, mitigated by default chain).
+  - scripts/e2e-permission-matrix.sh:76-86 — unquoted `rm -f $TMP_FILES` (SC2086 suppressed; safe for mktemp paths; introduced in d27a065, test-only).
+- NIT: worker/src/role-guard/policy.ts:100 `const SERVER_GATED_TOOLS = new Set([...])` lacks the `: ReadonlySet<string>` annotation its neighbours (READ_TOOLS/EDIT_TOOLS/TASK_TOOLS/BUILTIN_PASSTHROUGH) carry — cosmetic inconsistency, zero behavioral impact. Could annotate in a future touch; NOT to be fixed here (F2 must not change product code).
+- Pre-existing (not introduced, not counted): ~95 `} catch {}` across server chat/platform-mcp/notifications/message-channels (unchanged files).
+
+VERDICT: APPROVE

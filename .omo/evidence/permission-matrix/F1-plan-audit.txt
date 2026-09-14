@@ -1,0 +1,105 @@
+F1 计划合规审计 — vteam-default-permission-matrix-fix
+Plan: .omo/plans/vteam-default-permission-matrix-fix.md
+Baseline: 1ad4aeb | Chain: 22e95ee → d65ece2 → 72aca9f → c3d967a → d27a065
+Auditor run: 2026-09-14 (independent re-verification, code read directly, tests re-run)
+Method: no trust in plan prose; every claim located in code at file:line, tsc/jest/e2e re-executed.
+
+=== COMMIT CHAIN (git log 1ad4aeb..HEAD) ===
+d27a065 test(e2e): verify default permission matrix split
+c3d967a feat(web): show server-gated tools as main-agent-only
+72aca9f docs(seed): align role prompts with effective tool allowlist
+d65ece2 feat(guard): pass through server-gated tools to the main-agent gate
+22e95ee feat(policies): split server-gated tools from guard allowlist
+(stats verified via git show --stat for each sha; file sets match plan Todos 1–5.)
+
+=== TODO 1 [server] ROLE_SERVER_GATED_TOOLS + mcpDenies 排除 + task_create + D4 allow + serverGated → PASS ===
+Acceptance mapping:
+- ROLE_SERVER_GATED_TOOLS 5 真实名: server/src/common/constants/agent.constants.ts:148-154
+  (vteam_task_transition, vteam_question_confirm, vteam_task_create, vteam_plan_mode, vteam_team_add_member). PASS
+- defineBoundary mcpDenies 排除 server-gated: agent.constants.ts:157 (SERVER_GATED_SET) + :203-205
+  (filter: !allowed && !SERVER_GATED_SET.has). PASS
+- VTEAM_MCP_TOOL_NAMES 23 项含 vteam_task_create: agent.constants.ts:116-140 (count 23, :139 vteam_task_create). PASS
+- D4 六角色 toolAllows 补齐: agent.constants.ts:290/302/305-306 (product: chat_history+wecom_reply+channel_send),
+  :325/:332/:337-338 (architect 同), :363/:369/:376-377 (developer 含 doclib+wecom_reply+channel_send),
+  :406/:412/:415-416 (tester), :452-455 (project_manager: doclib+chat_history+wecom_reply+channel_send),
+  :476/:479-480 (plan: doclib+chat_history+wecom_reply, 无 channel_send — 与 D4 一致).
+  Locked by agent.constants.spec.ts:142-163 (D4 test). PASS
+- ResolvedExecutionPolicy.serverGated 由 BOTH resolve 函数返回:
+  server/src/execution-policies/execution-policy.service.ts:40-50 (interface, :48-49 注释"不进 worker wire 格式"),
+  :250 (resolveByAgent), :302 (resolveManyByAgents). PASS
+- worker wire 格式不变: AgentGuardRole (:60-66) 无 serverGated 键; guardForAgent (:476-482) 仅返回 {tools, bashDeny};
+  buildRolePermission (:516-527) 仍 {edit,read,bash,task:'deny',...mcpDenies}. assertGuardRole 零改动
+  (chain 内无 worker assertGuardRole diff). PASS
+Evidence tests: agent.constants.spec.ts (gated 5 名 :79-88, mcpDenies 补集 :94-107, 永不含 gated :111-117,
+  三者互斥覆盖 :120-139, D4 :142-163, plan toolAllows :248-256); agent-policies.matrix.spec.ts:57-73 (mcpDenies 互斥),
+  :77-116 (层① 无 gated deny 键); agent-policies.custom-agents.spec.ts:238-256 (resolveByAgent serverGated).
+
+=== TODO 2 [worker] guard SERVER_GATED_TOOLS pass-through (policy.ts + 内联体) + parity → PASS ===
+- SERVER_GATED_TOOLS 两处同值 5 项: worker/src/role-guard/policy.ts:100-106 ==
+  worker/src/resources/role-guard-plugin.ts:90-96 (逐项相同: task_transition/question_confirm/task_create/plan_mode/team_add_member). PASS
+- 分支位于 TASK_TOOLS 之后: policy.ts:178-183 (TASK_TOOLS deny → SERVER_GATED allow),
+  role-guard-plugin.ts:149-154 (同序); BUILTIN_PASSTHROUGH 之前. 命中返回 {action:'allow'}. PASS
+- parity 覆盖: role-guard-plugin.spec.ts:91-95 (5 gated 放行例) + :130 (25 例矩阵逐字节一致);
+  policy.spec.ts:237-249 (4d2 server-gated pass-through, task/execute 仍 deny). PASS
+- wire 零改动: chain 中 worker diff 仅 policy.ts + plugin.ts + specs (git show --stat d65ece2: 5 files,
+  无 protocol/injector/assertGuardRole 改动). PASS
+
+=== TODO 3 [seed] prompt「可用工具」对齐 D4 → PASS (1 说明见 NOTE) ===
+- seed.ts vteamTools 注册表 23 项含 task_create: server/prisma/seed.ts:564-588
+  (:587 task_create; 计数 23: chat_history/doclib/task_context/group_post/read_file/notify_agent/submit_artifact/
+  issue_create/issue_list/issue_get/issue_update/issue_transition/task_transition/question_confirm/memory_save/
+  memory_search/team_view/my_profile/team_add_member/plan_mode/channel_send/wecom_reply/task_create). PASS
+- prompt 行 == ROLE_BOUNDARIES[role].toolAllows 键集 + 不含 gated: server/src/prisma/seed.spec.ts:257-281
+  (逐模板断言 listed==toolAllows keys, gated 全 not.toContain). PASS (jest seed.spec 随 46 项全绿)
+- NOTE (plan prose 非实现问题): plan 写"六角色 prompt", 实际 seed 仅 5 个模板 Agent (无 plan 模板;
+  spec templateCalls==5). vteam-plan 边界本身 D4 正确 (chat_history+wecom_reply, 无 channel_send —
+  agent.constants.ts:476-480 + spec :155-157). 实现与测试一致, 仅 plan 文字多写"六", 不扣分.
+
+=== TODO 4 [web] server-gated 只读「仅主 Agent」 → PASS ===
+- serverGated 类型: web/app/(main)/agents/page.tsx:69 (serverGated?: string[]); effective 管线 :633
+  (new Set(effective?.serverGated ?? [])); 判定 :641-643 (matrixAliasesOf 任一命中即 gated). PASS
+- 只读徽标无分段控制、不可 PATCH: :290 (serverGatedTheme label"仅主 Agent"), :299-300
+  (ServerGatedBadge data-testid/data-server-gated), :853-857 (gated 行渲染徽标+服务端判定说明),
+  :870-880 (gated → <ServerGatedBadge/>; 非 gated → <ToolEffectSelect onChange=handleToolChange/> —
+  gated 分支无 onChange/PATCH 路径). PASS
+- 不改变 allow/ask/deny 编辑逻辑: 非 gated 分支保持原 ToolEffectSelect (readOnly=!editable, pendingKey). PASS
+Evidence: .omo/evidence/permission-matrix/web-server-gated.png (chain 内已存在, 本审计未重拍; 代码路径已独立确认).
+
+=== TODO 5 [e2e] scripts/e2e-permission-matrix.sh → PASS (独立重跑 exit 0) ===
+- 脚本存在: scripts/e2e-permission-matrix.sh (448 行, d27a065 新增). 独立重跑 tail:
+  PASS 0 (live guard fresh) / PASS 1 (6 roles x 5 gated = allow; vteam_member_remove = deny) /
+  PASS 3 (PM chat_history, dev doclib, all-6 wecom_reply = allow) /
+  PASS 6 (plan group_post + developer issue_create 仍 deny, 无回归) /
+  PASS 2 (layer-① 6 内置 agent permission 无 gated 键) /
+  PASS 4a (non-main plan_mode → -32003 403 仅主 Agent) / PASS 4b (main plan_mode 同值写放行) /
+  PASS 4c (non-main task_transition → -32003 TASK_STATUS_MAIN_AGENT_ONLY) /
+  PASS 4d (main task_transition 过身份门, 仅业务 409 TASK_INVALID_TRANSITION, 任务未变) /
+  PASS 5 (server ROLE_SERVER_GATED_TOOLS == worker SERVER_GATED_TOOLS, 同值 5 项) /
+  ALL STEPS DONE. E2E_EXIT=0. PASS
+- acceptance ①–⑤ 全覆盖 (guard allow / 层① 无 deny / 新 allow 生效 / server 门主与非主 / 常量一致 + 无回归). PASS
+
+=== GREP 禁止项 ===
+- chain diff (1ad4aeb..HEAD, 5 产品文件) 含 toolEffects|permissionScope|as any|ts-ignore|ts-expect-error → 无命中. PASS
+  (命中仅存于历史 docs/旧表/遗留列注释, 非本次 chain 引入.)
+- 当前 5 文件 as any|ts-ignore|ts-expect-error → 无命中. PASS
+- 旧错断言: baseline spec:186-193 "全角色 not.toContain task_transition/question_confirm" (bug 当契约) 已改写为
+  当前 spec:258-267 "全角色 not.toContain SERVER_GATED 5 项" — 语义已纠正 (gated 不进 guard allowlist 系 D1 设计,
+  且层① 不写 deny + server 门兜底); matrix.spec 无 "task_transition 必须显式 deny" 断言, 反有 :112-126
+  "层① 对 gated 无 deny 键". GONE-or-corrected. PASS
+
+=== 独立重跑的构建/测试 ===
+- cd server && npx tsc -p tsconfig.json --noEmit → exit 0. PASS
+- cd worker && npx tsc --noEmit → exit 0. PASS
+- cd web && npx tsc --noEmit → exit 0. PASS
+- server jest (agent.constants + custom-agents + matrix + seed): 4 suites / 46 tests 全绿. PASS
+- worker jest (policy + plugin parity): 2 suites / 66 tests 全绿. PASS
+- bash scripts/e2e-permission-matrix.sh: 全步骤 PASS, exit 0. PASS
+
+=== PER-TODO ===
+Todo 1 (server split, 22e95ee): PASS
+Todo 2 (worker guard, d65ece2): PASS
+Todo 3 (seed prompts, 72aca9f): PASS (NOTE: plan"六角色 prompt"实为 5 模板, 实现与测试一致)
+Todo 4 (web badge, c3d967a): PASS
+Todo 5 (e2e, d27a065): PASS
+
+VERDICT: APPROVE

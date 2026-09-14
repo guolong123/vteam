@@ -1,0 +1,174 @@
+F4 — Scope Fidelity Review: vteam-default-permission-matrix-fix
+Range: 1ad4aeb..HEAD (commits 22e95ee, d65ece2, 72aca9f, c3d967a, d27a065)
+Date: 2026-09-14 UTC
+Reviewer: Sisyphus-Junior (F4 lane)
+
+VERDICT: APPROVE
+
+================================================================
+1. CHANGED-FILE ENUMERATION (git diff --name-only 1ad4aeb..HEAD)
+================================================================
+26 files changed, 1783 insertions(+), 110 deletions(-). Classification
+against the declared in-scope set (constants+spec, execution-policies/**,
+seed.ts+seed.spec, worker policy + plugin + specs, agents/page.tsx,
+scripts/e2e-permission-matrix.sh, .omo/**):
+
+IN-SCOPE (26/26):
+  [server constants]
+  IN : server/src/common/constants/agent.constants.ts
+  IN : server/src/common/constants/agent.constants.spec.ts
+  [server execution-policies/**]
+  IN : server/src/execution-policies/execution-policy.service.ts
+  IN : server/src/execution-policies/agent-policies.custom-agents.spec.ts
+  IN : server/src/execution-policies/agent-policies.matrix.spec.ts
+  IN : server/src/execution-policies/__snapshots__/agent-policies.custom-agents.spec.ts.snap
+  [seed] (note: seed.spec lives at server/src/prisma/seed.spec.ts; the
+   task's "server/prisma/seed.spec" is shorthand — same spec, IN)
+  IN : server/prisma/seed.ts
+  IN : server/src/prisma/seed.spec.ts
+  [worker guard]
+  IN : worker/src/role-guard/policy.ts
+  IN : worker/src/role-guard/policy.spec.ts
+  IN : worker/src/resources/role-guard-plugin.ts
+  IN : worker/src/resources/role-guard-plugin.spec.ts
+  [web]
+  IN : web/app/(main)/agents/page.tsx
+  [e2e script]
+  IN : scripts/e2e-permission-matrix.sh (new file, 448 insertions, 0 deletions)
+  [.omo/** — evidence + notepad, 12 files]
+  IN : .omo/evidence/permission-matrix/constants-compare.txt
+  IN : .omo/evidence/permission-matrix/constants-server.json
+  IN : .omo/evidence/permission-matrix/constants-worker.json
+  IN : .omo/evidence/permission-matrix/e2e.txt
+  IN : .omo/evidence/permission-matrix/guard-decision.json
+  IN : .omo/evidence/permission-matrix/injected-opencode.json
+  IN : .omo/evidence/permission-matrix/roles.json
+  IN : .omo/evidence/permission-matrix/server-gate-main-plan_mode.json
+  IN : .omo/evidence/permission-matrix/server-gate-main-task_transition.json
+  IN : .omo/evidence/permission-matrix/server-gate-nonmain-plan_mode.json
+  IN : .omo/evidence/permission-matrix/server-gate-nonmain-task_transition.json
+  IN : .omo/notepads/vteam-default-permission-matrix-fix/learnings.md
+
+OUT-OF-SCOPE: (none — 0 files outside the declared set)
+
+================================================================
+2. toolAllows BEFORE (1ad4aeb) vs AFTER (HEAD) — per role
+================================================================
+Extracted by parsing toolAllows blocks from both revisions of
+server/src/common/constants/agent.constants.ts. Result — ONLY additions,
+ZERO removals, and the addition set equals the frozen D4 table exactly:
+
+  vteam-product:       ADD [vteam_wecom_reply, vteam_channel_send]  REM []
+  vteam-architect:     ADD [vteam_wecom_reply, vteam_channel_send]  REM []
+  vteam-developer:     ADD [vteam_doclib, vteam_wecom_reply, vteam_channel_send]  REM []
+  vteam-tester:        ADD [vteam_wecom_reply, vteam_channel_send]  REM []
+  vteam-project_manager: ADD [vteam_chat_history, vteam_wecom_reply, vteam_channel_send]  REM []
+  vteam-plan:          ADD [vteam_chat_history, vteam_wecom_reply]  REM []
+
+D4 cross-check (plan .omo/plans/vteam-default-permission-matrix-fix.md:48-59):
+  product/architect/tester +wecom_reply+channel_send ......... MATCH
+  developer +doclib+wecom_reply+channel_send ................ MATCH
+  project_manager +chat_history+wecom_reply+channel_send ..... MATCH
+  plan +chat_history+wecom_reply, NO channel_send ............ MATCH
+  (plan read-only role correctly excludes channel_send)
+No other key added or removed in any role. No removals anywhere.
+
+Corroboration from the committed snapshot
+(server/src/execution-policies/__snapshots__/agent-policies.custom-agents.spec.ts.snap):
+  added "deny" keys: 0 (grep "^+.*deny" → 0 matches — no new denials)
+  removed "deny" keys: only the 5 server-gated tools + the D4 newly-allowed
+    tools (intended: mcpDenies no longer lists either class)
+  added "allow" keys (guard roles): only vteam_channel_send,
+    vteam_chat_history, vteam_doclib, vteam_wecom_reply (= D4 set)
+
+================================================================
+3. OUT-OF-SCOPE BEHAVIOR PRESERVED
+================================================================
+[PASS] read/edit/bash guard decisions unchanged.
+  Evidence: diff of agent.constants.ts touches only VTEAM_MCP_TOOL_NAMES
+  (+vteam_task_create), new ROLE_SERVER_GATED_TOOLS/SERVER_GATED_SET, the
+  mcpDenies filter, and the six D4 toolAllows blocks. No change to
+  writeGlobs, buildEditPermission/buildReadPermission, or
+  ROLE_BASH_DENY_PATTERNS. Worker READ_TOOLS/EDIT_TOOLS/bash handling
+  untouched (worker diff = SERVER_GATED_TOOLS block + one allow branch only).
+[PASS] Ordinary MCP tool boundaries unchanged.
+  vteam-plan → vteam_group_post still deny (group_post absent from plan
+    toolAllows before AND after — ADD list contains no group_post).
+  developer → vteam_submit_artifact unchanged (present before, no REM).
+  PM → vteam_submit_artifact still denied (absent before, not in ADD list).
+  General proof: REM[] is empty for all six roles, and the only ADDs are
+  the D4 list — every other allow/deny boundary is byte-identical.
+[PASS] task/execute still DENY for all roles.
+  Evidence: TASK_TOOLS set untouched in both worker/src/role-guard/policy.ts
+  and worker/src/resources/role-guard-plugin.ts; the new SERVER_GATED_TOOLS
+  branch is inserted AFTER the TASK_TOOLS deny branch in both files, so
+  task/execute can never fall through to it. Specs lock it:
+  worker/src/role-guard/policy.spec.ts "task/execute 仍 deny（与 server-gated
+  分支独立）" + parity case "task 恒 deny / execute 恒 deny" retained.
+[PASS] Template agent/policy read-only (403) semantics untouched.
+  Evidence: zero changed files under server/src/agents/ or any template-gate
+  path; diff grep for 403/template/readonly in server+policy paths shows
+  only snapshot-context lines, no logic change. Seed template upsert block
+  (server/prisma/seed.ts:296-370) unmodified.
+[PASS] Worker wire format unchanged; worker imports zero server code.
+  Evidence: grep "serverGated" → only server/src/execution-policies/
+  execution-policy.service.ts, agent-policies.custom-agents.spec.ts, and
+  web/app/(main)/agents/page.tsx. worker/src: zero references.
+  assertGuardRole / opencode-config-builder / guard roles shape
+  ({permission,tools,bashDeny,correction}) untouched — serverGated is a
+  sibling field on ResolvedExecutionPolicy (resolveByAgent/resolveManyByAgents
+  return), exactly as D3 mandates ("仅 API/UI 用，不进 worker wire 格式").
+  No new import/require lines in either worker guard file.
+[PASS] No new dependencies.
+  Evidence: git diff for */package.json, package-lock, pnpm/yarn locks is empty.
+
+================================================================
+4. FORBIDDEN PATTERNS — none found
+================================================================
+[PASS] No toolEffects / permissionScope strings in the product diff
+  (grep over `git diff 1ad4aeb..HEAD -- . ':!.omo'` → no match).
+[PASS] No dual-track/AB (no ab_test/AB_TEST/dual/compat/COMPAT strings).
+[PASS] No "retired" annotations or compat shims (no retired/Retired/RETIRE).
+  (The two "wire format" grep hits are prose inside
+  .omo/notepads/.../learnings.md stating the wire format is unchanged —
+  documentation, not code.)
+
+================================================================
+5. NO UNRELATED REFACTORS
+================================================================
+[PASS] No changes to chat/tasks/issues/artifacts/workers/model/session
+  modules — the file list contains only the in-scope set. Seed non-prompt
+  delta is exactly one line: the vteam_task_create tool registration row
+  (server/prisma/seed.ts, "在团队会话无任务时创建任务（仅主 Agent 可调）"),
+  i.e. registry alignment for the D3-mandated VTEAM_MCP_TOOL_NAMES 22→23
+  fix, not a refactor. Web delta is confined to EffectivePermissionSection
+  (serverGated badge + isServerGated early-return in handleToolChange);
+  allow/ask/deny edit logic for non-gated tools is untouched, per Todo-4
+  acceptance ("server-gated 不可编辑").
+[NOTE] agent.constants.spec.ts lines ~186-193 previously asserted "no role
+  may contain task_transition/question_confirm" (the plan itself, line 19,
+  identifies this as the bug locked in as contract). Generalizing it to all
+  five gated tools is plan-mandated (Todo 1 acceptance), not scope creep.
+
+================================================================
+6. E2E SCRIPT IS ADDITIVE
+================================================================
+[PASS] scripts/e2e-permission-matrix.sh is a new file (commit d27a065,
+  --diff-filter=A hits it; 448 insertions, 0 deletions, no other scripts/
+  file touched). It performs no product-code modification (no sed -i, no
+  redirection into src, no patch application — grep confirms). It additionally
+  asserts ordinary-boundary non-regression live (vteam-plan → group_post and
+  developer → issue_create remain deny).
+
+================================================================
+7. FINDINGS (severity-tagged)
+================================================================
+(none — zero violations. No [FAIL], no [WARN] rising to a finding.)
+
+================================================================
+VERDICT: APPROVE
+================================================================
+Scope fidelity holds: 26/26 changed files in-scope, 0 out-of-scope;
+toolAllows delta == D4 list with zero removals; all seven out-of-scope
+behavior gates preserved; no forbidden patterns; no unrelated refactors;
+e2e script purely additive.
