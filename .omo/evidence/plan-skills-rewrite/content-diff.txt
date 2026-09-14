@@ -1,0 +1,37 @@
+plan-skills rewrite：before/after 证据（baseline d180c76）
+范围：仅 server/prisma/seed.ts 内 6 个 skill content + server/src/prisma/seed.spec.ts 断言。
+改名前/后字数以 DB content 为准（下为 seed.ts 模板字符串行数变化）：plan-creation 约 63 行 → 约 100 行；各 review skill 约 40 行 → 约 75 行。
+
+[plan-creation]（D1，保留 7 步骨架 + sibling 互引）
+- BEFORE：步骤 1 只有"分波次"一句话，无波次定义；步骤 2 只有"T1 格式"一行；无证据/假设/反模式/送审段落；"不虚构并行度"只有半句。
+- AFTER 新增：
+  1. D1.1 波次结构（步骤 1 下）：Wave 1 = task_context 拿任务+成员清单（事实来源）；Wave 2 = 并行扇出 read_file/doclib（+chat_history 补结论）；Wave N 收敛；每波只答本波问题、缺证据记假设不硬编。
+  2. D1.2 证据要求（步骤 2 下）：每项附证据（文件路径/成员输入/群聊结论）；无证据标 `[假设]`。
+  3. D1.3 假设清单（新 ## 节，步骤 5 后）：最佳实践决策集中列出（内容/影响项/回退路径），供评审质疑。
+  4. D1.4 反模式（新 ## 节）：保留"不虚构并行度"原句并加 ❌/✅ 例；新增不臆测成员能力（以 task_context 为准）、不写无验收项、一次只出一份计划，各配 ❌/✅。
+  5. D1.5 送审预判（新 ## 节，步骤 7 后）：APPROVAL BIAS（存疑放行），只拦真阻塞；对"能开工"负责不对"完美"负责。
+- 删除：无（纯增量；仅把原模板字符串中 `[假设]` 处反引号转义为 \`，属语法必需）。
+
+[plan-review-product]（D2，保留 5 条产品视角 + 输入/禁令原文）
+- BEFORE：视角 5 条各 1 句；"风格参照 momus"1 句；输出 1 句；禁令 2 句。
+- AFTER 新增：目的句（能否不卡住地执行 + APPROVAL BIAS/存疑放行）；每条视角补 PASS/FAIL 线（如验收可判定性 PASS=阈值可测、FAIL=无法判定）；反模式（"更清楚/更完整不是 blocker"各配 ✅/❌）+ REJECT 最多 3 条；输出格式（VERDICT 首行 + 聚合正则 + 篇幅上限每条≤2句）；范围纪律（不 redesign、不扩面，拿不准则声明假设或只问 1 个精确问题）。
+- 删除：输出节旧句"先给 VERDICT……再逐条列依据"被更严格的首行格式替代（VERDICT 字符串本身保留，聚合契约不变）。
+
+[plan-review-architect]（D2，保留 3 条架构视角原文）
+- AFTER：统一骨架同上；PASS/FAIL 按架构调（如技术合理性 FAIL=选型装反按此做必返工）；反模式例按架构调（"更优选型/更细粒度不是 blocker"）。
+
+[plan-review-developer]（D2，保留 3 条开发视角原文）
+- AFTER：统一骨架同上；PASS/FAIL 按开发调（可执行性 PASS=至少知道从哪下手、FAIL=零上下文无法开工）；反模式例按开发调（"估时更准/写法更顺不是 blocker"）。
+
+[plan-review-tester]（D2，保留 2 条测试视角原文）
+- AFTER：统一骨架同上；PASS/FAIL 按测试调（覆盖度 FAIL=整块验收无验证对应）；反模式例按测试调（"用例更多/工具链更顺不是 blocker"）。
+
+[plan-review-project_manager]（D2，保留 4 条项目管理视角原文）
+- AFTER：统一骨架同上；PASS/FAIL 按项目管理调（并行合理性 FAIL=虚构并行开工即打架）；反模式例按项目管理调（"排期更紧/风险更多不是 blocker"）。
+
+[seed.spec.ts] 断言补强
+- 新增 3 个用例：plan-creation D1 五要素关键词；5 评审统一骨架关键词（APPROVAL BIAS/存疑放行、最多 3 条、篇幅上限/每条≤2句、范围纪律/不 redesign、PASS/FAIL、✅/❌、第一行必须是）；5 角色主关键词各异（用户视角/技术合理性/步骤可执行性/测试覆盖度/排期真实性各仅出现一次）。
+- 旧断言全保留（VERDICT 双值、禁止修改计划文件、禁止执行计划、frontmatter 工具集、skill 点名、无交叉污染）。
+
+未动：skill 名/id、frontmatter allowed-tools、description、enabled；dispatch/guard/MCP/worker/web 零改动。
+验证：tsc --noEmit exit 0；jest src/prisma/seed.spec.ts 21/21 通过。

@@ -402,6 +402,93 @@ describe('seed（计划 skills + 评审子句）', () => {
     }
   });
 
+  it('plan-creation 含 OmO 编制五要素（波次/证据/假设清单/反模式/送审预判）', async () => {
+    await main();
+
+    const byName = new Map(
+      planSkillCalls().map((call) => [String(call[0].where.name), call[0].create.content as string]),
+    );
+    const creation = byName.get('plan-creation')!;
+    // D1.1 波次结构：Wave 1/2/N + task_context 事实来源
+    expect(creation).toContain('Wave 1');
+    expect(creation).toContain('Wave 2');
+    // D1.2 证据要求：每项附证据，无证据标假设
+    expect(creation).toContain('证据要求');
+    expect(creation).toContain('[假设]');
+    // D1.3 假设清单段
+    expect(creation).toContain('## 假设清单');
+    // D1.4 反模式：不虚构并行度（旧句保留）+ ✅/❌ 例
+    expect(creation).toContain('不虚构并行度');
+    expect(creation).toContain('## 反模式');
+    expect(creation).toContain('❌');
+    expect(creation).toContain('✅');
+    // D1.5 送审预判：APPROVAL BIAS / 存疑放行，能开工而非完美
+    expect(creation).toContain('APPROVAL BIAS');
+    expect(creation).toContain('存疑放行');
+    // 7 步骨架与 sibling 互引仍在
+    for (const step of ['步骤 1', '步骤 7', '任务分配']) {
+      expect(creation).toContain(step);
+    }
+    expect(creation).toContain('plan-review-product');
+    expect(creation).toContain('plan-review-project_manager');
+  });
+
+  it('5 个评审 skills 含统一 Momus/Oracle 骨架（目的句/放行偏置/上限/篇幅/范围纪律）', async () => {
+    await main();
+
+    const byName = new Map(
+      planSkillCalls().map((call) => [String(call[0].where.name), call[0].create.content as string]),
+    );
+    const reviewContents = Object.values(REVIEW_SKILL_BY_AGENT).map((name) => byName.get(name)!);
+    for (const content of reviewContents) {
+      // D2.1 目的句 + APPROVAL BIAS（存疑放行）
+      expect(content).toContain('能否不卡住地执行');
+      expect(content.includes('APPROVAL BIAS') || content.includes('存疑放行')).toBe(true);
+      // D2.2 每条视角补 PASS/FAIL 线
+      expect(content).toContain('PASS');
+      expect(content).toContain('FAIL');
+      // D2.3 反模式 + REJECT 最多 3 条
+      expect(content).toContain('## 反模式');
+      expect(content.includes('最多 3 条') || content.includes('不超过 3 条')).toBe(true);
+      expect(content).toContain('✅');
+      expect(content).toContain('❌');
+      // D2.4 严格输出格式：VERDICT 首行 + 篇幅上限
+      expect(content).toContain('第一行必须是');
+      expect(content).toContain('VERDICT: APPROVE');
+      expect(content).toContain('VERDICT: REJECT');
+      expect(content.includes('篇幅上限') || content.includes('每条≤2句')).toBe(true);
+      // D2.5 范围纪律：不 redesign、不扩面
+      expect(content.includes('范围纪律') || content.includes('不 redesign')).toBe(true);
+      // D2.6 旧禁令保留：只读不改文件、不执行
+      expect(content).toContain('禁止修改计划文件');
+      expect(content).toContain('禁止执行计划');
+    }
+  });
+
+  it('5 个评审 skills 视角关键词各异（每角色主关键词仅出现一次）', async () => {
+    await main();
+
+    const byName = new Map(
+      planSkillCalls().map((call) => [String(call[0].where.name), call[0].create.content as string]),
+    );
+    const roleKeyword: Record<string, string> = {
+      'plan-review-product': '用户视角',
+      'plan-review-architect': '技术合理性',
+      'plan-review-developer': '步骤可执行性',
+      'plan-review-tester': '测试覆盖度',
+      'plan-review-project_manager': '排期真实性',
+    };
+    const reviewContents = Object.values(REVIEW_SKILL_BY_AGENT).map((name) => byName.get(name)!);
+    for (const [skillName, keyword] of Object.entries(roleKeyword)) {
+      const owner = byName.get(skillName)!;
+      expect(owner).toContain(keyword);
+      for (const other of reviewContents) {
+        if (other === owner) continue;
+        expect(other).not.toContain(keyword);
+      }
+    }
+  });
+
   it('每个角色 prompt 点名其专属评审 skill（skill(plan-review-<role>)）', async () => {
     await main();
 
