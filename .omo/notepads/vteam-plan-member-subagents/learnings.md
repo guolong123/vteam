@@ -122,3 +122,10 @@ Baseline HEAD at start: `5ad2e2f docs(plan): mark plan-skills-rewrite F1-F4 comp
 - D1 said "AgentPolicyDefinition.mode 类型同步放宽" but only the server side was widened; the worker's local double-write (`AgentSectionEntry.mode: 'primary'`) was missed, and its docstring ("全程无角色名 if 分支…同一条校验与构造路径") now contradicts D1's per-name mode branch. Fix (NOT applied): widen worker type + assert to accept 'all' (scoped to vteam-plan or generally) and emit `agent.mode` instead of hardcoded 'primary'.
 - Script correction made during run1: vteam_group_post must be ABSENT from layer-1 permission (not `allow`); allow is asserted in live roles.json guard tools. Fixed in script for post-fix re-run.
 - Leftovers: none (killed before any live dispatch: no plan files, no group posts, no serve sessions; DB reseed = intended seed truth; images rebuilt).
+
+## 2026-09-14 — worker builder 接受 mode:'all'（Todo 1 follow-up fix）
+
+- 根因：worker `opencode-config-builder.ts` 本地双写 `AgentPolicyDefinition.mode: 'primary'` + `assertAgentShape` 硬拒非 primary + 输出硬编码 `mode:'primary'`；server 下发 vteam-plan `mode:'all'` 即抛错 → injector 中性化。server 侧早已放宽（仅 vteam-plan 发 all），worker 侧遗漏。
+- 改单（2 文件，worker/ 域内）：`opencode-config-builder.ts` — `AgentPolicyDefinition.mode` 与 `AgentSectionEntry.mode` 放宽为 `'primary' | 'all'`；`assertAgentShape` 接受两者、拒其他（报错文案更新为 `仅支持 'primary' | 'all'`）；`buildAgentDefinitions` 输出 `mode: agent.mode` 原样透出；doc 注释 `{ name, description, mode:'primary'|'all', permission }` 同步。spec 新增 `mode:'all'` 原样透出 + `mode:'bogus'` 抛错两用例；既有 primary 行为断言不动。
+- grep 复核（`worker/src/resources/`）：`primary` 残留仅放宽后的校验/类型/文案 + 既有 primary 用例 + injector/role-guard spec 的用户配置透传 fixture（与 builder 校验无关）；`mode` 残留确认 injector.ts 无 mode 硬编码。
+- QA：`cd worker && npx tsc --noEmit` exit 0；`npx jest src/resources/opencode-config-builder.spec.ts` 8/8 绿。

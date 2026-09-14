@@ -72,6 +72,26 @@ describe('buildAgentDefinitions', () => {
     );
   });
 
+  it('mode:all 通过形状校验并原样透出（vteam-plan 计划成员子 agent 可启动）', () => {
+    const section = buildAgentDefinitions(
+      [agent('vteam-plan', { mode: 'all' })],
+      guardFor(['vteam-plan']),
+    );
+    expect(section['vteam-plan']).toEqual({
+      description: 'vteam-plan scope',
+      mode: 'all',
+      permission: { edit: { '*': 'deny' }, task: 'deny' },
+    });
+  });
+
+  it("mode:'bogus' 仍抛错（仅允许 'primary' | 'all'）", () => {
+    const badMode = agent('vteam-a');
+    (badMode as unknown as Record<string, unknown>).mode = 'bogus';
+    expect(() => buildAgentDefinitions([badMode], guardFor(['vteam-a']))).toThrow(
+      "仅支持 'primary' | 'all'",
+    );
+  });
+
   it('permission 含 write 键 / mode 非 primary / 重名 / 非数组一律抛错', () => {
     const withWrite = agent('vteam-a');
     (withWrite.permission as Record<string, unknown>).write = { '*': 'deny' };

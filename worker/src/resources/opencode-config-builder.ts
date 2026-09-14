@@ -16,7 +16,7 @@
 export interface AgentPolicyDefinition {
   name: string;
   description: string;
-  mode: 'primary';
+  mode: 'primary' | 'all';
   permission: Record<string, unknown>;
 }
 
@@ -37,10 +37,10 @@ export interface AgentPoliciesResponse {
   guard: AgentPoliciesGuard;
 }
 
-/** opencode.json `agent` 节单个条目（`{ <name>: { description, mode, permission } }`）。 */
+/** opencode.json `agent` 节单个条目（`{ <name>: { description, mode, permission } }`，mode 为 'primary' | 'all'）。 */
 export interface AgentSectionEntry {
   description: string;
-  mode: 'primary';
+  mode: 'primary' | 'all';
   permission: Record<string, unknown>;
 }
 
@@ -55,7 +55,7 @@ const ROLE_ALLOWED_FIELDS = ['permission', 'tools', 'bashDeny', 'correction'] as
 /**
  * 由控制面 agent 策略构造 opencode `agent` 节。
  *
- * - 每个 agent 必须恰为 `{ name, description, mode:'primary', permission }`；
+ * - 每个 agent 必须恰为 `{ name, description, mode:'primary'|'all', permission }`；
  *   `permission` 必须为普通对象且**不得含 `write` 键**（层①唯一写闸门是 `edit`，
  *   计划 Success criteria；`write` 键出现即视为控制面漂移，显式拒绝）。
  * - `guard.enabled === true` 时，每个 agent 名必须在 `guard.roles` 中存在且条目
@@ -81,7 +81,7 @@ export function buildAgentDefinitions(
     }
     section[agent.name] = {
       description: agent.description,
-      mode: 'primary',
+      mode: agent.mode,
       permission: agent.permission,
     };
   }
@@ -100,9 +100,9 @@ function assertAgentShape(agent: AgentPolicyDefinition): void {
   if (typeof agent.description !== 'string') {
     throw new Error(`[agent-definitions] agent ${agent.name} description 非法：必须为字符串`);
   }
-  if (agent.mode !== 'primary') {
+  if (agent.mode !== 'primary' && agent.mode !== 'all') {
     throw new Error(
-      `[agent-definitions] agent ${agent.name} mode 非法：仅支持 'primary'（实收 ${JSON.stringify(agent.mode)}）`,
+      `[agent-definitions] agent ${agent.name} mode 非法：仅支持 'primary' | 'all'（实收 ${JSON.stringify(agent.mode)}）`,
     );
   }
   if (!isPlainObject(agent.permission)) {
