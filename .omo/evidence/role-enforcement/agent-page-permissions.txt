@@ -1,0 +1,84 @@
+agent tool-permission page end-to-end verification
+date: 2026-09-14 (UTC+8)
+baseline HEAD: 9c70dac fix(tools): support includeDisabled catalog query and page the agent page MCP list
+stack: docker compose build server web + up -d --force-recreate server web
+
+== 1. REDEPLOY ==
+- server: Up (healthy), web: Up (healthy)
+- server logs DI check (grep -iE "error|exception|nest.*fail|cannot resolve|undefined.*depend", tail 60): NO MATCHES -> no Nest DI errors
+- recheck (tail 30, DI patterns): 0 matches
+
+== 2. API (admin JWT via POST /api/v1/auth/login admin/admin123; TOKEN_LEN=221) ==
+
+[T1] GET /api/v1/tools?source=mcp&includeDisabled=true&page=1&pageSize=100
+  raw: total=194 page=1 pageSize=100
+  servers present: ['vteam', 'vteam-api']
+  mcpServer missing on rows: 0 (every row carries mcpServer)
+  sample p1: [('vteam_chat_history','vteam'), ('vteam_doclib','vteam'), ('vteam_task_context','vteam')]
+  counts: vteam=22, vteam-api=172 (22+172=194)
+  -> PASS: total>=194, BOTH servers, mcpServer on each
+
+[T1b] same + page=2&pageSize=100
+  raw: total=194 page=2 p2count=94, p2servers=['vteam-api']
+  sample p2: [('chatcontroller_findmessages','vteam-api'), ...]
+  -> PASS: paging returns the rest, no truncation (100+94=194)
+
+[T2] GET /api/v1/tools?source=mcp&enabled=true&pageSize=100
+  raw: total=194 count=100 servers=['vteam','vteam-api'] ('vteam-api' rows have enabled=True)
+  enabled=false -> total=0 count=0 (filter itself functions on the row flag)
+  analysis: `enabled` filters the TOOL-ROW flag, not server state; seed data has ALL 194
+  tool rows enabled=true (incl. all 172 vteam-api rows), so both servers match. This is
+  pre-existing by-design semantics (QueryToolsDto: includeDisabled default false "保持现有语义";
+  worker MCP injection does NOT use this path for servers).
+  worker-injector paths (worker/src/resources/injector.ts):
+    - injectTools(): GET /tools {enabled:true} -> renders custom tool FILES, mcp-type excluded
+    - injectMcp(): GET /mcp-servers {enabled:true} -> generates opencode.json mcp section
+  [T2b] GET /api/v1/mcp-servers?enabled=true -> [('vteam', True)] ONLY vteam
+  -> PASS-WITH-NOTE: no code regression; server-level gating intact via /mcp-servers?enabled=true
+     (vteam only). The literal "(vteam only)" for /tools?enabled=true does not hold for current
+     seed data because vteam-api tool ROWS are enabled=true while the SERVER is disabled.
+
+[T3] GET /api/v1/mcp-servers
+  raw: count=2: vteam | enabled=True status=connected ; vteam-api | enabled=False status=None
+  -> PASS: both servers, vteam enabled / vteam-api disabled
+
+== 3. BROWSER (Playwright chromium, login admin/admin123 -> /agents -> 开发者 template) ==
+- effective-permission-section: PRESENT
+- policy meta: "开发者·vteam-developer" + description (policyName=开发者 display name; agentName=vteam-developer) -> PASS
+- native rows data-key: ["edit","read","bash","task"] -> PASS
+- MCP groups: [{"server":"vteam","toggle":"▾vteam启用8 个工具","expanded":"true","ntools":8}], empty=false
+  - vteam group EXPANDED by default (aria-expanded=true, 8 tool rows visible) -> PASS
+  - vteam-api group: ABSENT (not collapsed-hidden, not in DOM at all) -> FAIL (see analysis)
+- toggle mechanics (vteam group): true/8rows -> click -> false/0rows -> click -> true/8rows -> PASS
+- console errors (level=error, all=true): 0 -> PASS
+- network: page fetched BOTH catalog pages:
+    GET /api/v1/tools?source=mcp&includeDisabled=true&page=1&pageSize=100 -> 200
+    GET /api/v1/tools?source=mcp&includeDisabled=true&page=2&pageSize=100 -> 200
+
+== 4. WHY vteam-api GROUP CANNOT APPEAR (root cause, no code change made) ==
+web/app/(main)/agents/page.tsx EffectivePermissionSection `groups` (L488-504) iterates
+Object.entries(effective.permission) keeping ONLY keys starting with "vteam_", resolving the
+server via the catalog (name/action, incl. vteam_-stripped fallback).
+/api/v1/agent-policies for ALL 6 policies: every vteam_* key resolves to server `vteam`;
+ZERO keys resolve to vteam-api (vteam-api catalog tools are named `*controller_*`, never
+appear as vteam_* permission keys):
+  vteam-plan 17->vteam / product 6->vteam / architect 9->vteam / developer 8->vteam / tester 7->vteam / project_manager 8->vteam
+Hence with current code+seed data no agent page can render a vteam-api group. Either the page
+must render all catalog servers as (possibly empty) groups, or policies must include vteam-api
+tools. Per task rules product code was NOT modified; failure reported for owning task session.
+
+== 5. PER-ASSERTION VERDICT ==
+[A1] compose build+up, server healthy, no Nest DI errors ............ PASS
+[A2] tools includeDisabled: total>=194, vteam+vteam-api, mcpServer .. PASS
+[A3] paging page2 returns rest, no truncation ....................... PASS
+[A4] enabled=true worker-injector semantics intact .................. PASS-WITH-NOTE (row-flag filter by design; /mcp-servers?enabled=true -> vteam only)
+[A5] mcp-servers lists vteam(enabled)+vteam-api(disabled) ........... PASS
+[A6] page: effective-permission-section + policy meta + native rows . PASS
+[A7] page: vteam group expanded ..................................... PASS
+[A8] page: vteam-api group present AND collapsed by default ......... FAIL (absent; root cause above)
+[A9] vteam-api expandable on click (aria-expanded toggle) ........... FAIL-BLOCKED (no group to click; toggle mechanics proven on vteam group)
+[A10] console no errors ............................................ PASS
+
+evidence: .omo/evidence/role-enforcement/agent-page-permissions.txt (this file)
+screenshot: .omo/evidence/role-enforcement/agent-page-permissions.png (291470 bytes)
+stack left healthy (server+web healthy); no temp scripts created (only /tmp/*.json + /tmp/adm_tok.txt outside repo).

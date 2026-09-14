@@ -332,3 +332,7 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - Server：`QueryToolsDto` 新增 `includeDisabled?: boolean`（"true"/"false" 字符串 Transform + IsIn，与 enabled 同模式）；`findAll` 中 `includeDisabled===true` 时 where.enabled 置 undefined 且跳过成员默认 `enabled=true`；优先级 includeDisabled > enabled（文档写进 class/method JSDoc + DTO 描述 + controller 注释保留原语义说明）。显式 `enabled=true|false` 语义不变，worker injector（恒传 enabled=true）不受影响。
 - Web：`mcp-tools` 改 `source=mcp&includeDisabled=true`，`mcp-servers` 与 `mcp-tools` 均 pageSize 100 循环拉全（items.length >= total 或空页停，上限 20 页防死循环）；分组 + 停用默认收起逻辑零改动。
 - 验证：tools.service.spec 28 全绿（含 3 新增：includeDisabled 返回混合行、优先于 enabled、成员默认被绕过）；web `tsc --noEmit` exit 0；web lint 0 errors；server 改动文件 eslint 干净（spec 2 处 prettier 已 --fix）。
+
+## 2026-09-14 agent-permission-page e2e (9c70dac redeploy)
+- `enabled` on GET /tools filters the tool-ROW flag, not server state; all 194 rows (22 vteam + 172 vteam-api) are enabled=true in seed, so `enabled=true` returns both. Server-level gating lives in GET /mcp-servers?enabled=true (vteam only) which is what worker injectMcp() uses. No code regression.
+- EffectivePermissionSection groups ONLY effective-policy `vteam_*` entries; no policy key resolves to vteam-api (catalog names are `*controller_*`), so the vteam-api group can never render with current code+seed. Needs owning-task decision: render all catalog servers as groups vs add vteam-api tools to policies. Evidence: .omo/evidence/role-enforcement/agent-page-permissions.txt/.png
