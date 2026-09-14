@@ -336,3 +336,16 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 ## 2026-09-14 agent-permission-page e2e (9c70dac redeploy)
 - `enabled` on GET /tools filters the tool-ROW flag, not server state; all 194 rows (22 vteam + 172 vteam-api) are enabled=true in seed, so `enabled=true` returns both. Server-level gating lives in GET /mcp-servers?enabled=true (vteam only) which is what worker injectMcp() uses. No code regression.
 - EffectivePermissionSection groups ONLY effective-policy `vteam_*` entries; no policy key resolves to vteam-api (catalog names are `*controller_*`), so the vteam-api group can never render with current code+seed. Needs owning-task decision: render all catalog servers as groups vs add vteam-api tools to policies. Evidence: .omo/evidence/role-enforcement/agent-page-permissions.txt/.png
+
+---
+
+## Agent 双层生效权限展示修复（2026-09-14）
+
+- 症状：agent 页 `effectOf` 只读层① `permission`，`vteam_*` 协作工具（`vteam_group_post` 等）全显 禁止。
+- 根因：运行时语义 = 层① key 存在即胜出，否则层② `tools` allowlist，否则 deny；页面缺了层②分支。
+- 修复：`ExecutionPolicyService.resolveByAgent/resolveManyByAgents` 经 `guardForAgent(agentName)` 附带
+  `tools` + `bashDeny`（与 `buildAgentPolicies()` 同源 `ROLE_BOUNDARIES` + `ROLE_BASH_DENY_PATTERNS`，
+  未知角色 → `{}`/`[]`）；前端 `effectOf` 按 层①(name/action/vteam_action) → 层②(同三键) → deny 解析。
+- 验证：`GET /agents/a_developer` → `tools` 19 项、`vteam_group_post: allow`；Playwright
+  `http://localhost:13001/agents` 开发者行 `vteam_group_post/chat_history/notify_agent/submit_artifact` 均 允许；
+  截图 `.omo/evidence/vteam-agents-developer-permission.png`。

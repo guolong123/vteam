@@ -1,6 +1,10 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { AGENT_ERRORS } from '../common/constants/agent.constants';
+import {
+  AGENT_ERRORS,
+  ROLE_BASH_DENY_PATTERNS,
+  ROLE_BOUNDARIES,
+} from '../common/constants/agent.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
 import { ModelsService } from '../models/models.service';
@@ -163,22 +167,29 @@ describe('AgentsService', () => {
         ) =>
           agents.map((a) => {
             const key = a.policyId ?? (a.role ? `ep_${a.role}` : null);
-            return key &&
-              [
+            if (
+              !key ||
+              ![
                 'ep_product',
                 'ep_project_manager',
                 'ep_architect',
                 'ep_developer',
                 'ep_tester',
               ].includes(key)
-              ? {
-                  policyId: key,
-                  policyName: `${key}-name`,
-                  agentName: a.role ? `vteam-${a.role}` : 'vteam-plan',
-                  permission: { edit: 'allow' },
-                  correction: { scopeSummary: 'test' },
-                }
-              : null;
+            ) {
+              return null;
+            }
+            const agentName = a.role ? `vteam-${a.role}` : 'vteam-plan';
+            const boundary = (ROLE_BOUNDARIES as Record<string, { toolAllows?: Record<string, 'allow' | 'ask'> }>)[agentName];
+            return {
+              policyId: key,
+              policyName: `${key}-name`,
+              agentName,
+              permission: { edit: 'allow' },
+              tools: { ...(boundary?.toolAllows ?? {}) },
+              bashDeny: [...ROLE_BASH_DENY_PATTERNS],
+              correction: { scopeSummary: 'test' },
+            };
           }),
       ),
     };
@@ -1279,6 +1290,17 @@ describe('AgentsService', () => {
         permission: { edit: 'allow' },
         correction: { scopeSummary: 'test' },
       });
+      expect(bound.effectivePermission).toMatchObject({
+        tools: ROLE_BOUNDARIES['vteam-product'].toolAllows,
+      });
+      expect(bound.effectivePermission?.bashDeny).toEqual([
+        ...ROLE_BASH_DENY_PATTERNS,
+      ]);
+      expect(
+        (bound.effectivePermission?.tools as Record<string, string>)[
+          'vteam_group_post'
+        ],
+      ).toBe('allow');
 
       prisma.agent.findUnique.mockResolvedValue(customRow);
 

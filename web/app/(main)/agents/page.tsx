@@ -57,6 +57,10 @@ interface EffectivePermission {
   agentName: string;
   /** 层① opencode 原生 permission：edit/read 路径 glob map + bash/task + vteam_<action> deny */
   permission: Record<string, unknown>;
+  /** 层② guard allowlist：tools 真实暴露名 → allow|ask（与 /agent-policies 同源；缺失时按空表处理） */
+  tools?: Record<string, unknown>;
+  /** 层② bash 硬化清单（展示不消费，保留供一致性校验） */
+  bashDeny?: unknown;
   /** 层② guard 纠正：scopeSummary/handoff/denyTemplate */
   correction: Record<string, unknown>;
 }
@@ -468,6 +472,12 @@ interface EffectivePermissionSectionProps {
 function EffectivePermissionSection({ effective, mcpServers, mcpTools, loading }: EffectivePermissionSectionProps) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const permission = useMemo(() => effective?.permission ?? {}, [effective]);
+  const guardTools = useMemo(() => {
+    const raw = effective?.tools;
+    return raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+  }, [effective]);
 
   /** 分组以 MCP server 目录为准：每个 server 列出其全部工具行，effect 取策略值，未列出→默认 deny。 */
   const groups = useMemo(() => {
@@ -492,12 +502,15 @@ function EffectivePermissionSection({ effective, mcpServers, mcpTools, loading }
     return ordered;
   }, [mcpTools, mcpServers]);
 
-  /** 工具在当前角色策略下的 effect：目录 name/action/vteam_ 兼容键均命中，未列出→默认 deny。 */
+  /** 工具在当前角色策略下的 effect：层① permission key 存在即胜出，否则层② tools allowlist，否则默认 deny。 */
   const effectOf = (tool: ApiTool): unknown => {
     if (tool.name in permission) return permission[tool.name];
     if (tool.action in permission) return permission[tool.action];
     const prefixed = `vteam_${tool.action}`;
     if (prefixed in permission) return permission[prefixed];
+    if (tool.name in guardTools) return guardTools[tool.name];
+    if (tool.action in guardTools) return guardTools[tool.action];
+    if (prefixed in guardTools) return guardTools[prefixed];
     return "deny";
   };
 

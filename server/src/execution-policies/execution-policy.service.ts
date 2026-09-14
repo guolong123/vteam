@@ -25,9 +25,12 @@ import { UpdateExecutionPolicyDto } from './dto/update-execution-policy.dto';
 const POLICY_ID_PREFIX = 'ep';
 
 /**
- * resolveByAgent 返回（Todo 11/12 契约）：
+ * resolveByAgent 返回（Todo 11/12 契约 + agent 详情双层展示）：
  * - `agentName`：opencode agent 名（`vteam-<role>`，无 role 回退 `vteam-plan`）；
  * - `permission`：config 嵌套 `permission`（层① opencode 原生权限）；
+ * - `tools`：层② guard allowlist（`ROLE_BOUNDARIES.toolAllows`，按 `agentName` 解析，
+ *   与 `/agent-policies` 同源；未知角色 → `{}`）；
+ * - `bashDeny`：层② bash 硬化清单（`ROLE_BASH_DENY_PATTERNS` 拷贝；未知角色 → `[]`）；
  * - `correction`：config 嵌套 `correction`（层② guard 越界纠正）。
  */
 export interface ResolvedExecutionPolicy {
@@ -35,6 +38,8 @@ export interface ResolvedExecutionPolicy {
   policyName: string;
   agentName: string;
   permission: Record<string, unknown>;
+  tools: Record<string, 'allow' | 'ask'>;
+  bashDeny: string[];
   correction: Record<string, unknown>;
 }
 
@@ -224,11 +229,15 @@ export class ExecutionPolicyService implements OnModuleInit {
     if (!this.isPlainObject(config?.permission) || !this.isPlainObject(config?.correction)) {
       return null;
     }
+    const agentName = agent.role ? `vteam-${agent.role}` : 'vteam-plan';
+    const guard = this.guardForAgent(agentName);
     return {
       policyId: policy.id,
       policyName: policy.name,
-      agentName: agent.role ? `vteam-${agent.role}` : 'vteam-plan',
+      agentName,
       permission: config.permission as Record<string, unknown>,
+      tools: guard.tools,
+      bashDeny: guard.bashDeny,
       correction: config.correction as Record<string, unknown>,
     };
   }
@@ -270,11 +279,15 @@ export class ExecutionPolicyService implements OnModuleInit {
       ) {
         return null;
       }
+      const agentName = agent.role ? `vteam-${agent.role}` : 'vteam-plan';
+      const guard = this.guardForAgent(agentName);
       return {
         policyId: policy.id,
         policyName: policy.name,
-        agentName: agent.role ? `vteam-${agent.role}` : 'vteam-plan',
+        agentName,
         permission: config.permission as Record<string, unknown>,
+        tools: guard.tools,
+        bashDeny: guard.bashDeny,
         correction: config.correction as Record<string, unknown>,
       };
     });
@@ -346,6 +359,27 @@ export class ExecutionPolicyService implements OnModuleInit {
     role?: string | null;
   }): string | null {
     return agent.policyId ?? (agent.role ? `ep_${agent.role}` : null);
+  }
+
+  /**
+   * 层② guard 数据（与 `buildAgentPolicies()` 同源：`ROLE_BOUNDARIES.toolAllows` +
+   * `ROLE_BASH_DENY_PATTERNS`，按 `agentName` 解析）。
+   * 未知角色（自定义 agent）→ `{ tools: {}, bashDeny: [] }`（展示层默认 deny）。
+   */
+  private guardForAgent(agentName: string): {
+    tools: Record<string, 'allow' | 'ask'>;
+    bashDeny: string[];
+  } {
+    const boundary = (ROLE_BOUNDARIES as Record<string, unknown>)[
+      agentName
+    ] as { toolAllows?: Record<string, 'allow' | 'ask'> } | undefined;
+    if (!boundary || typeof boundary.toolAllows !== 'object') {
+      return { tools: {}, bashDeny: [] };
+    }
+    return {
+      tools: { ...boundary.toolAllows },
+      bashDeny: [...ROLE_BASH_DENY_PATTERNS],
+    };
   }
 
   /** 层① 原生 permission（与 seed 角色策略同形：edit glob + read + bash + task deny + MCP deny，无 `write` 键）。 */
