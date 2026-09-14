@@ -293,4 +293,13 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       expect(call[0].update).toEqual({});
     }
   });
+
+  it('工具目录 upsert 包含 plan_review（vteam_plan_review，主 Agent 冷评审聚合）', async () => {
+    await main();
+
+    const toolCalls = mockPrisma.tool.upsert.mock.calls;
+    const planReview = toolCalls.find((call) => call[0].where.action === 'plan_review');
+    expect(planReview).toBeDefined();
+    expect(planReview[0].create.name).toBe('vteam_plan_review');
+  });
 });

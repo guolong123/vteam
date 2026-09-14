@@ -585,6 +585,7 @@ async function main() {
     { action: 'channel_send', name: 'vteam_channel_send', description: 'Agent 主动推送通知到通知渠道（webhook/企微机器人）' },
     { action: 'wecom_reply', name: 'vteam_wecom_reply', description: '回复企业微信用户（仅当消息来自企微时使用）' },
     { action: 'task_create', name: 'vteam_task_create', description: '在团队会话无任务时创建任务（仅主 Agent 可调）' },
+    { action: 'plan_review', name: 'vteam_plan_review', description: '发起计划评审（仅主 Agent）：一次调用扇出多评审者冷评审并聚合 VERDICT' },
   ];
 
   for (const t of vteamTools) {
