@@ -1,27 +1,29 @@
 "use client";
 
 /**
- * Agent 管理页（Phase 3 T9：agent-config 原型保真迁移 + 真实 API 接入）
+ * Agent 管理页（Lane W：生效权限只读展示 + 真实 API 接入）
  * =============================================
  * 唯一来源：docs/agent-platform/prototypes/agent-config/index.tsx（布局/间距/文案/data-testid 零改动）。
- * - 左 Agent 列表（320px，data-testid=agent-list-item）+ 右 ConfigPanel 四块配置面板：
+ * - 左 Agent 列表（320px，data-testid=agent-list-item）+ 右 ConfigPanel 配置面板：
  *   提示词（prompt-editor）/ 默认模型（model-select）/
- *   工具（tool-permission-list + tool-effect-select）/ 权限范围（permission-config）。
+ *   权限（effective-permission-section 只读：执行策略生效权限）。
  * - 数据源：GET /api/v1/agents（type 过滤 + 分页 + 扩展字段）→ TanStack Query；
  *   选中 Agent → GET /api/v1/agents/:id 详情（列表条目已含扩展字段，详情查询保证选中态最新）。
+ * - 权限区只读渲染 `effectivePermission`（ExecutionPolicy 解析：edit/read glob + bash/task
+ *   + vteam_* MCP 工具 deny），不做任何编辑与保存；未绑定策略时中性提示，不做历史回退。
+ * - MCP 工具按 `mcpServer` 分组（GET /mcp-servers + GET /tools?source=mcp&enabled=false
+ *   解析归属；匹配按工具 name/action 双键，vteam_ 前缀兼容裸名）；
+ *   停用 server 的分组默认收起（aria-expanded 可展开），启用 server 默认展开。
  * - 交互：
  *   · clone-template-button → POST /agents/:id/clone → 刷新列表并选中克隆体（可继续编辑）
  *   · 新建自定义 → 弹窗 POST /agents（type=custom）→ 刷新列表并选中新建
- *   · type=custom / clone / template → 均可编辑设置（提示词 / 默认模型 / 工具 effect）→ PATCH 保存
+ *   · type=custom / clone / template → 均可编辑设置（提示词 / 默认模型）→ PATCH 保存
  * - is_0000000030：内置（template）agent 设置可编辑（后端已放开，agentId/type 不可改）；
  *   删除仍对 template 隐藏（后端 DELETE 403 PERMISSION_AGENT_READONLY 兜底），
  *   isTemplate 仅用于主题色展示，不再作为只读态。
- * - 页面内扩展 token（仿原型 :156-170）：toolEffectMeta（allow/ask/deny 三态色）、
- *   toolSourceMeta（builtin/custom/mcp 真实 source 徽章色），不写 tokens.ts 基线。
+ * - 页面内扩展 token（仿原型 :156-170）：effectBadgeMeta（allow/ask/deny 三态色，
+ *   与 opencode PermissionV2 对齐），不写 tokens.ts 基线。
  * - 技能注入为全局机制（worker 级全局注入，不按 agent 绑定），前端移除绑定配置。
- * - 工具区目录驱动（T7）：GET /tools?enabled=true 为工具行数据源（action + 真实 source 徽章
- *   + enabled 恒启用），effect 三态编辑 → PATCH 提交 toolEffects 重建 agent_tool_effects；
- *   手动添加/停用残留 action 不在目录时按命名启发式兜底标注来源。
  * - 导航（NavTopBar/NavDock/CmdKPanel）由 AppShell 提供，本页仅渲染内容区。
  * - 铁律（T15）：无 fixed / 100vh / 100vw；新建弹窗 absolute 相对页面 root（flex:1 铺满）。
  */
@@ -48,6 +50,17 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /* ------------------------------ API 数据模型（T5/T3 契约） ------------------------------ */
 
+/** 生效权限（GET /agents + GET /agents/:id 返回；ExecutionPolicy 按绑定策略解析）。 */
+interface EffectivePermission {
+  policyId: string;
+  policyName: string;
+  agentName: string;
+  /** 层① opencode 原生 permission：edit/read 路径 glob map + bash/task + vteam_<action> deny */
+  permission: Record<string, unknown>;
+  /** 层② guard 纠正：scopeSummary/handoff/denyTemplate */
+  correction: Record<string, unknown>;
+}
+
 /** GET /agents 条目（对齐 AgentsService.toAgentDto 扩展字段）。 */
 interface AgentItem {
   id: string;
@@ -61,11 +74,12 @@ interface AgentItem {
   defaultModelId: string | null;
   /** 首选 worker id（软绑定，可空 null=自动调度，C1/C6） */
   workerId: string | null;
-  permissionScope: Record<string, unknown> | null;
+  /** 绑定的 ExecutionPolicy id（ep_<role>；null=未绑定） */
+  policyId: string | null;
   /** 技能 id 数组（关联 skills 表） */
   skillIds: string[];
-  /** 工具 effect 配置（toolAction 自由字符串 + 三态） */
-  toolEffects: { toolAction: string; effect: string }[];
+  /** 生效权限（唯一事实来源；null=未绑定执行策略） */
+  effectivePermission: EffectivePermission | null;
   /** Agent 性格 key（steady/strict/aggressive/conservative/innovative；null=未配置） */
   persona: string | null;
   createdAt: string;
@@ -86,19 +100,29 @@ interface UpdateAgentPayload {
   defaultModelId?: string;
   /** 首选 worker id（软绑定；显式 null=自动调度） */
   workerId?: string | null;
-  /** 工具 effect 配置（重建 agent_tool_effects 关联） */
-  toolEffects?: { toolAction: string; effect: string }[];
   /** Agent 性格（显式 null 清除） */
   persona?: string | null;
 }
 
-/** GET /tools 条目（对齐 ToolsService.findAll 返回；source 为注册推导/seed 内置）。 */
+/** GET /tools 条目（对齐 ToolsService.findAll 返回；mcpServer 可空：builtin/custom 为 null）。 */
 interface ApiTool {
   id: string;
   name: string;
   action: string;
   source: "builtin" | "custom" | "mcp";
+  /** 所属 MCP server（name/id 双键其一；非 MCP 工具为 null） */
+  mcpServer: string | null;
   enabled: boolean;
+}
+
+/** GET /mcp-servers 条目（对齐 McpServersService.findAll 返回；status 为心跳合并状态）。 */
+interface ApiMcpServer {
+  id: string;
+  name: string;
+  type: string;
+  url: string | null;
+  enabled: boolean;
+  status: string | null;
 }
 
 /** 后端分页响应（skills/tools/agents 同构）。 */
@@ -151,31 +175,63 @@ const PERSONA_OPTIONS = [
 
 /* ------------------------------ 页面内扩展 token（仿原型 :156-170，不写 tokens.ts） ------------------------------ */
 
-/** 工具 effect 三态（与 opencode PermissionV2 对齐）。 */
-type ToolEffectKey = "allow" | "ask" | "deny";
+/** 生效权限 effect 三态（与 opencode PermissionV2 对齐：allow/ask/deny）。 */
+type PermissionEffectKey = "allow" | "ask" | "deny";
 
-/** effect 语义与配色（与 statusColors 同构）。 */
-const toolEffectMeta: Record<
-  ToolEffectKey,
-  { label: string; desc: string; color: string; bg: string; border: string }
+/** effect 语义与配色（只读徽章；allow 绿 / ask 琥珀 / deny 红）。 */
+const effectBadgeMeta: Record<
+  PermissionEffectKey,
+  { label: string; color: string; bg: string; border: string }
 > = {
-  allow: { label: "允许", desc: "无需确认 · 只读/低风险", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
-  ask: { label: "确认", desc: "每次调用需确认 · 有副作用", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
-  deny: { label: "禁止", desc: "白名单排除", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  allow: { label: "允许", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  ask: { label: "确认", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  deny: { label: "禁止", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 };
 
-/** 工具来源徽章色（真实 source 值：builtin/custom/mcp，来自 GET /tools）。 */
-type ToolSourceKey = "builtin" | "custom" | "mcp";
-const toolSourceMeta: Record<ToolSourceKey, { label: string; color: string; bg: string; border: string }> = {
-  builtin: { label: "内置", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
-  custom: { label: "自定义", color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
-  mcp: { label: "MCP", color: "#0891B2", bg: "#ECFEFF", border: "#A5F3FC" },
-};
+/** 未知 effect 值兜底徽章（中性灰，原值直显）。 */
+const unknownEffectMeta = { label: "", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" };
 
-/** 基础内置工具 action（read/write/bash 等裸权限名）→ 来源=内置（仅兜底：未在工具目录的 action）。 */
-const BUILTIN_TOOL_ACTIONS = new Set([
-  "read", "write", "bash", "execute", "edit", "search", "grep", "glob", "list", "view",
-]);
+/** 只读 effect 徽章（allow/ask/deny 三态色；未知值灰底直显）。 */
+function EffectBadge({ value }: { value: unknown }) {
+  const meta = typeof value === "string" && value in effectBadgeMeta
+    ? effectBadgeMeta[value as PermissionEffectKey]
+    : unknownEffectMeta;
+  const label = typeof value === "string" && value in effectBadgeMeta
+    ? (effectBadgeMeta[value as PermissionEffectKey].label)
+    : String(value);
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: space.xs,
+        padding: `1px ${space.sm + 2}px`,
+        borderRadius: radius.pill,
+        backgroundColor: meta.bg,
+        border: `1px solid ${meta.border}`,
+        color: meta.color,
+        fontSize: fontSize.sm,
+        fontWeight: 500,
+        lineHeight: 1.4,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+        fontFamily: fontFamily.body,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          backgroundColor: meta.color,
+          flexShrink: 0,
+        }}
+      />
+      {label}
+    </span>
+  );
+}
 
 /** 凭据状态双态（与 models-manage 页内定义完全一致；"扩展 token"范式页面内定义）。 */
 const credentialTheme = {
@@ -222,19 +278,6 @@ function CredentialBadge({ status }: { status: "configured" | "missing" }) {
   );
 }
 
-/**
- * 工具来源推断（**兜底路径**）：主路径 = GET /tools 真实 source；
- * 仅当 action 不在启用工具目录（手动添加的通配/残留）时使用：
- * - 基础裸权限名 → 内置
- * - 含下划线（<server>_<tool>，如 jira_query / github_create_issue）→ MCP
- * - 其余（含连字符等，如 my-custom-tool）→ 自定义
- */
-function inferToolSource(action: string): ToolSourceKey {
-  if (BUILTIN_TOOL_ACTIONS.has(action)) return "builtin";
-  if (action.includes("_")) return "mcp";
-  return "custom";
-}
-
 /** 模型 id → 产品名（目录查询 modelNameById 提供；未知/存量 id 显示原始值）。 */
 
 /** Agent 类型 → 徽章文案（模板只读 / 自定义 / 克隆副本）。 */
@@ -253,31 +296,6 @@ function toAvatarRole(role: string | null): RoleKey {
 
 /** 模板/自定义 徽章主题：模板按角色色，自定义/克隆用灰蓝系（对齐原型 AgentListItem）。 */
 const CUSTOM_THEME = { color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" };
-
-/** permissionScope 对象 → 权限范围面板三行可读文本（对齐原型 permission-config 行结构）。 */
-function permissionRows(scope: Record<string, unknown> | null): { label: string; value: string }[] {
-  const write = scope?.write === true;
-  const ask = scope?.ask === true;
-  return [
-    {
-      label: "可访问资源",
-      value:
-        scope?.projects === "*" || scope === null
-          ? "本项目 · 任务文档库 · 关联仓库"
-          : scope?.projects !== undefined
-            ? String(scope.projects)
-            : "本项目 · 任务文档库 · 关联仓库",
-    },
-    {
-      label: "可执行操作",
-      value: write ? "读取 + 写任务文档库" : "仅读取",
-    },
-    {
-      label: "写操作确认",
-      value: ask ? "默认开启，写操作需成员确认" : "默认关闭，首次写操作需成员确认",
-    },
-  ];
-}
 
 /* ================================ Agent 列表项 ================================ */
 
@@ -424,314 +442,289 @@ const ROLE_BORDERS: Record<RoleKey, string> = {
   product: "rgba(13,148,136,0.22)", project_manager: "rgba(14,165,233,0.22)", architect: "rgba(124,58,237,0.22)", developer: "rgba(16,185,129,0.28)", tester: "rgba(245,158,11,0.28)",
 };
 
-/* ================================ 工具权限列表（可编辑，对齐原型 ToolPermissionList） ================================ */
+/* ================================ 生效权限（只读，执行策略唯一事实来源） ================================ */
 
-interface ToolEffectRow {
-  toolAction: string;
-  effect: ToolEffectKey;
+/** 原生 permission key → 中文标签（edit/read 为 glob map，其余为三态字符串）。 */
+const NATIVE_PERMISSION_KEYS = [
+  { key: "edit", label: "文件写入" },
+  { key: "read", label: "文件读取" },
+  { key: "bash", label: "终端命令" },
+  { key: "task", label: "子任务" },
+] as const;
+
+/** 未收录工具分组 key（permission 中 vteam_* 键在工具目录无匹配时保留展示）。 */
+const UNKNOWN_MCP_GROUP = "__unknown";
+
+interface EffectivePermissionSectionProps {
+  effective: EffectivePermission | null;
+  /** GET /mcp-servers 全量（含停用；分组标题 + 默认收起依据）。 */
+  mcpServers: ApiMcpServer[];
+  /** GET /tools?source=mcp&enabled=false（含停用；解析条目归属 server）。 */
+  mcpTools: ApiTool[];
+  /** MCP 目录加载中（原生行照常渲染，分组区占位）。 */
+  loading: boolean;
 }
 
-interface ToolPermissionListProps {
-  tools: ToolEffectRow[];
-  /** 启用工具目录（GET /tools?enabled=true）；action 命中目录 → 真实 source 徽章 */
-  catalog: ApiTool[];
-  /** 模板只读：effect 切换 / 添加 / 删除 全部禁用 */
-  readOnly: boolean;
-  onChange: (next: ToolEffectRow[]) => void;
-}
+function EffectivePermissionSection({ effective, mcpServers, mcpTools, loading }: EffectivePermissionSectionProps) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const permission = useMemo(() => effective?.permission ?? {}, [effective]);
 
-function ToolPermissionList({ tools, catalog, readOnly, onChange }: ToolPermissionListProps) {
-  const [adding, setAdding] = useState(false);
-  const [draftAction, setDraftAction] = useState("");
-
-  const setEffect = (action: string, effect: ToolEffectKey) => {
-    onChange(tools.map((t) => (t.toolAction === action ? { ...t, effect } : t)));
-  };
-
-  const removeTool = (action: string) => {
-    onChange(tools.filter((t) => t.toolAction !== action));
-  };
-
-  const commitAdd = () => {
-    const action = draftAction.trim();
-    if (!action) return;
-    if (!tools.some((t) => t.toolAction === action)) {
-      onChange([...tools, { toolAction: action, effect: "allow" as ToolEffectKey }]);
+  /** 工具目录双键索引：name（vteam_<action> 真实暴露名）+ action（裸名）均可命中。 */
+  const toolByKey = useMemo(() => {
+    const map = new Map<string, ApiTool>();
+    for (const t of mcpTools) {
+      if (!map.has(t.name)) map.set(t.name, t);
+      if (!map.has(t.action)) map.set(t.action, t);
     }
-    setDraftAction("");
-    setAdding(false);
-  };
+    return map;
+  }, [mcpTools]);
 
-  // 行集合 = 目录工具（catalog，effect 取当前配置或默认 allow）+ 未收录 action（手动添加/残留，原 effect）
-  const catalogByAction = new Map(catalog.map((t) => [t.action, t]));
-  const rows: ToolEffectRow[] = [
-    ...catalog.map((t) => {
-      const existing = tools.find((r) => r.toolAction === t.action);
-      return { toolAction: t.action, effect: (existing?.effect ?? "allow") as ToolEffectKey };
-    }),
-    ...tools.filter((t) => !catalogByAction.has(t.toolAction)),
-  ];
+  const serverOf = useCallback(
+    (groupKey: string) => mcpServers.find((s) => s.id === groupKey || s.name === groupKey),
+    [mcpServers]
+  );
+
+  /** permission 中 vteam_* 条目按 mcpServer 分组（启用在前，停用次之，未收录末尾）。 */
+  const groups = useMemo(() => {
+    const grouped = new Map<string, { key: string; effect: unknown }[]>();
+    for (const [key, effect] of Object.entries(permission)) {
+      if (!key.startsWith("vteam_")) continue;
+      const hit = toolByKey.get(key) ?? toolByKey.get(key.replace(/^vteam_/, ""));
+      const groupKey = hit?.mcpServer ?? UNKNOWN_MCP_GROUP;
+      const list = grouped.get(groupKey) ?? [];
+      list.push({ key, effect });
+      grouped.set(groupKey, list);
+    }
+    const rank = (groupKey: string) => {
+      if (groupKey === UNKNOWN_MCP_GROUP) return 2;
+      const server = mcpServers.find((s) => s.id === groupKey || s.name === groupKey);
+      return server && !server.enabled ? 1 : 0;
+    };
+    return [...grouped.entries()].sort(([a], [b]) => rank(a) - rank(b));
+  }, [permission, toolByKey, mcpServers]);
+
+  if (!effective) {
+    return (
+      <div
+        data-testid="effective-permission-empty"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: space.sm,
+          padding: space.md,
+          borderRadius: radius.md,
+          border: `1px dashed ${neutral[300]}`,
+          backgroundColor: neutral[50],
+          fontSize: fontSize.sm,
+          color: neutral[400],
+        }}
+      >
+        未绑定执行策略
+      </div>
+    );
+  }
+
+  const scopeSummary = effective.correction?.scopeSummary;
+  const nativeRows = NATIVE_PERMISSION_KEYS.filter(({ key }) => key in permission);
 
   return (
     <div
-      data-testid="tool-permission-list"
+      data-testid="effective-permission-section"
       style={{ display: "flex", flexDirection: "column", gap: space.sm }}
     >
-      {rows.map((tool) => {
-        const effect = toolEffectMeta[tool.effect] ?? toolEffectMeta.allow;
-        const inCatalog = catalogByAction.get(tool.toolAction);
-        // 真实 source 优先；未收录 action（手动添加/停用残留）启发式兜底
-        const sourceKey: ToolSourceKey = inCatalog ? inCatalog.source : inferToolSource(tool.toolAction);
-        const source = toolSourceMeta[sourceKey];
+      {/* 策略元信息：策略名 · 执行体 + 生效范围 */}
+      <div
+        data-testid="effective-policy-meta"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: space.sm,
+          flexWrap: "wrap",
+          fontSize: fontSize.sm,
+        }}
+      >
+        <span style={{ fontFamily: fontFamily.mono, fontWeight: 600, color: neutral[800] }}>
+          {effective.policyName}
+        </span>
+        <span aria-hidden style={{ color: neutral[300] }}>·</span>
+        <span style={{ fontFamily: fontFamily.mono, color: neutral[500] }}>
+          {effective.agentName}
+        </span>
+        {typeof scopeSummary === "string" && scopeSummary && (
+          <span data-testid="effective-permission-scope" style={{ color: neutral[400], fontSize: fontSize.xs }}>
+            {scopeSummary}
+          </span>
+        )}
+      </div>
+
+      {/* 原生权限行：glob map 可读渲染，其余三态徽章 */}
+      {nativeRows.map(({ key, label }) => {
+        const value = permission[key];
         return (
           <div
-            key={tool.toolAction}
-            data-testid="tool-permission-item"
-            data-tool={tool.toolAction}
-            data-enabled="true"
+            key={key}
+            data-testid="effective-permission-row"
+            data-key={key}
             style={{
               display: "flex",
-              alignItems: "center",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
               gap: space.md,
               padding: `${space.sm}px ${space.md}px`,
               borderRadius: radius.md,
               backgroundColor: "var(--color-surface)",
               border: `1px solid ${neutral[200]}`,
+              fontSize: fontSize.sm,
             }}
           >
-            {/* 启用开关（后端无 enabled 字段，真实数据恒启用；模板只读时禁点） */}
-            <span
-              data-testid="tool-toggle-item"
-              aria-hidden
-              style={{
-                flexShrink: 0,
-                width: 34,
-                height: 19,
-                borderRadius: radius.pill,
-                backgroundColor: "#10B981",
-                position: "relative",
-                opacity: readOnly ? 0.85 : 1,
-              }}
-            >
-              <span
-                style={{
-                  position: "absolute",
-                  top: 2,
-                  left: 17,
-                  width: 15,
-                  height: 15,
-                  borderRadius: "50%",
-                  backgroundColor: "var(--color-surface)",
-                }}
-              />
+            <span style={{ color: neutral[500], flexShrink: 0 }}>
+              <span style={{ fontFamily: fontFamily.mono, fontWeight: 600, color: neutral[700] }}>{key}</span>
+              <span style={{ color: neutral[300] }}> · </span>
+              {label}
             </span>
-
-            {/* 工具名（action）+ 来源徽章 + effect 说明 */}
-            <div
-              style={{
-                minWidth: 0,
-                flex: 1,
-                display: "flex",
-                flexDirection: "column",
-                gap: 2,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-                <span
-                  style={{
-                    fontFamily: fontFamily.mono,
-                    fontSize: fontSize.md,
-                    fontWeight: 600,
-                    color: neutral[800],
-                  }}
-                >
-                  {tool.toolAction}
-                </span>
-                <span
-                  style={{
-                    fontSize: fontSize.xs,
-                    color: source.color,
-                    backgroundColor: source.bg,
-                    border: `1px solid ${source.border}`,
-                    padding: "1px 6px",
-                    borderRadius: radius.pill,
-                  }}
-                >
-                  {source.label}
-                </span>
-              </div>
-              <span style={{ fontSize: fontSize.xs }}>
-                <span style={{ color: effect.color, fontWeight: 500 }}>{effect.label}</span>
-                <span style={{ color: neutral[400] }}> · {effect.desc}</span>
-              </span>
-            </div>
-
-            {/* effect 三选（allow / ask / deny）+ 删除（可编辑态） */}
-            <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-              <div
-                data-testid="tool-effect-select"
-                role="radiogroup"
-                aria-label={`${tool.toolAction} 权限`}
-                style={{
-                  flexShrink: 0,
-                  display: "inline-flex",
-                  gap: 2,
-                  padding: 3,
-                  borderRadius: radius.pill,
-                  backgroundColor: neutral[50],
-                  border: `1px solid ${neutral[200]}`,
-                }}
-              >
-                {(Object.keys(toolEffectMeta) as ToolEffectKey[]).map((key) => {
-                  const meta = toolEffectMeta[key];
-                  const active = tool.effect === key;
-                  return (
-                    <span
-                      key={key}
-                      data-effect={key}
-                      aria-checked={active}
-                      role="radio"
-                      onClick={readOnly ? undefined : () => setEffect(tool.toolAction, key)}
-                      style={{
-                        padding: `2px ${space.sm}px`,
-                        borderRadius: radius.pill,
-                        fontSize: fontSize.xs,
-                        fontWeight: 500,
-                        cursor: readOnly ? "default" : "pointer",
-                        fontFamily: fontFamily.mono,
-                        color: active ? "#FFFFFF" : neutral[500],
-                        backgroundColor: active ? meta.color : "transparent",
-                      }}
-                    >
-                      {key}
+            <span style={{ textAlign: "right", minWidth: 0 }}>
+              {typeof value === "object" && value !== null && !Array.isArray(value) ? (
+                <span style={{ lineHeight: 1.8 }}>
+                  {Object.entries(value).map(([glob, eff], i) => (
+                    <span key={glob}>
+                      {i > 0 && <span style={{ color: neutral[300] }}>；</span>}
+                      <span style={{ fontFamily: fontFamily.mono, color: neutral[700] }}>{glob}</span>
+                      {" "}
+                      <EffectBadge value={eff} />
                     </span>
-                  );
-                })}
-              </div>
-              {!readOnly && (
-                <button
-                  type="button"
-                  aria-label={`移除工具 ${tool.toolAction}`}
-                  onClick={() => removeTool(tool.toolAction)}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    width: 22,
-                    height: 22,
-                    flexShrink: 0,
-                    borderRadius: radius.sm,
-                    border: `1px solid ${neutral[200]}`,
-                    backgroundColor: "var(--color-surface)",
-                    color: neutral[400],
-                    fontSize: fontSize.sm,
-                    lineHeight: 1,
-                    cursor: "pointer",
-                    fontFamily: fontFamily.body,
-                  }}
-                >
-                  ✕
-                </button>
+                  ))}
+                </span>
+              ) : (
+                <EffectBadge value={value} />
               )}
-            </div>
+            </span>
           </div>
         );
       })}
 
-      {/* 工具为空：空态提示 */}
-      {tools.length === 0 && (
+      {/* MCP 工具分组：停用 server 默认收起，启用默认展开 */}
+      {loading ? (
         <div
-          data-testid="tool-empty"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: space.sm,
-            padding: `${space.md}px`,
-            borderRadius: radius.md,
-            border: `1px dashed ${neutral[300]}`,
-            backgroundColor: neutral[50],
-            fontSize: fontSize.sm,
-            color: neutral[400],
-          }}
+          data-testid="effective-mcp-loading"
+          style={{ fontSize: fontSize.sm, color: neutral[400], padding: `${space.sm}px 0` }}
         >
-          {readOnly ? "模板未配置工具权限" : "暂无工具权限配置，可点击下方「添加工具」"}
+          MCP 工具加载中…
         </div>
-      )}
-
-      {/* 添加工具（仅可编辑态） */}
-      {!readOnly && (
-        <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-          {adding ? (
-            <>
-              <input
-                data-testid="tool-action-input"
-                autoFocus
-                placeholder="工具 action（如 my_custom_tool）"
-                value={draftAction}
-                onChange={(e) => setDraftAction(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commitAdd();
-                  if (e.key === "Escape") setAdding(false);
-                }}
-                style={{
-                  flex: 1,
-                  padding: `${space.sm}px ${space.md}px`,
-                  borderRadius: radius.md,
-                  border: `1px solid ${neutral[300]}`,
-                  backgroundColor: "var(--color-surface)",
-                  fontSize: fontSize.sm,
-                  fontFamily: fontFamily.mono,
-                  color: neutral[800],
-
-                }}
-              />
-              <button
-                type="button"
-                data-testid="tool-add-confirm"
-                onClick={commitAdd}
-                disabled={!draftAction.trim()}
-                style={{
-                  padding: `${space.sm}px ${space.lg}px`,
-                  borderRadius: radius.md,
-                  border: "none",
-                  backgroundColor: "#0D9488",
-                  color: "#FFFFFF",
-                  fontSize: fontSize.sm,
-                  fontWeight: 500,
-                  cursor: draftAction.trim() ? "pointer" : "default",
-                  opacity: draftAction.trim() ? 1 : 0.6,
-                  fontFamily: fontFamily.body,
-                }}
-              >
-                添加
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              data-testid="tool-add-button"
-              onClick={() => setAdding(true)}
+      ) : groups.length === 0 ? (
+        <div
+          data-testid="effective-mcp-empty"
+          style={{ fontSize: fontSize.sm, color: neutral[400], padding: `${space.sm}px 0` }}
+        >
+          暂无 MCP 工具条目
+        </div>
+      ) : (
+        groups.map(([groupKey, entries]) => {
+          const server = serverOf(groupKey);
+          const isCollapsed = collapsed[groupKey] ?? (server ? !server.enabled : false);
+          const title = server?.name ?? (groupKey === UNKNOWN_MCP_GROUP ? "未收录工具" : groupKey);
+          return (
+            <div
+              key={groupKey}
+              data-testid="effective-mcp-group"
+              data-server={groupKey}
               style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: space.xs,
-                padding: `${space.sm}px ${space.lg}px`,
-                borderRadius: radius.pill,
-                border: `1px dashed ${neutral[300]}`,
-                backgroundColor: "transparent",
-                color: neutral[500],
-                fontSize: fontSize.sm,
-                fontWeight: 500,
-                cursor: "pointer",
-                fontFamily: fontFamily.body,
+                borderRadius: radius.md,
+                backgroundColor: "var(--color-surface)",
+                border: `1px solid ${neutral[200]}`,
+                overflow: "hidden",
               }}
             >
-              + 添加工具
-            </button>
-          )}
-        </div>
+              <button
+                type="button"
+                data-testid="effective-mcp-group-toggle"
+                aria-expanded={!isCollapsed}
+                onClick={() => setCollapsed((prev) => ({ ...prev, [groupKey]: !isCollapsed }))}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: space.sm,
+                  padding: `${space.sm}px ${space.md}px`,
+                  border: "none",
+                  backgroundColor: "transparent",
+                  cursor: "pointer",
+                  fontFamily: fontFamily.body,
+                  fontSize: fontSize.sm,
+                  textAlign: "left",
+                }}
+              >
+                <span aria-hidden style={{ color: neutral[400], fontSize: fontSize.xs }}>
+                  {isCollapsed ? "▸" : "▾"}
+                </span>
+                <span style={{ fontFamily: fontFamily.mono, fontWeight: 600, color: neutral[800] }}>
+                  {title}
+                </span>
+                <span
+                  style={{
+                    fontSize: fontSize.xs,
+                    color: server && !server.enabled ? neutral[500] : "#0D9488",
+                    backgroundColor: server && !server.enabled ? neutral[100] : "rgba(13,148,136,0.10)",
+                    border: `1px solid ${server && !server.enabled ? neutral[200] : "rgba(13,148,136,0.22)"}`,
+                    padding: "1px 6px",
+                    borderRadius: radius.pill,
+                  }}
+                >
+                  {server ? (server.enabled ? "启用" : "停用") : "未知来源"}
+                </span>
+                <span style={{ marginLeft: "auto", fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>
+                  {entries.length} 个工具
+                </span>
+              </button>
+              {!isCollapsed && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: space.xs,
+                    padding: `0 ${space.md}px ${space.md}px`,
+                  }}
+                >
+                  {entries.map(({ key, effect }) => {
+                    const tool = toolByKey.get(key) ?? toolByKey.get(key.replace(/^vteam_/, ""));
+                    return (
+                      <div
+                        key={key}
+                        data-testid="effective-mcp-tool"
+                        data-tool={key}
+                        data-enabled={tool ? String(tool.enabled) : "unknown"}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: space.sm,
+                          fontSize: fontSize.sm,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontFamily: fontFamily.mono,
+                            color: neutral[700],
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {key}
+                        </span>
+                        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
+                          {tool && !tool.enabled && (
+                            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>已停用</span>
+                          )}
+                          <EffectBadge value={effect} />
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })
       )}
-
     </div>
   );
 }
@@ -744,8 +737,12 @@ interface ConfigPanelProps {
   readOnly: boolean;
   /** 可用模型列表（available-models，目录读取） */
   models: AvailableModel[];
-  /** 启用工具目录（GET /tools?enabled=true，工具行 + 来源徽章） */
-  tools: ApiTool[];
+  /** MCP server 全量（GET /mcp-servers，权限分组标题 + 收起依据） */
+  mcpServers: ApiMcpServer[];
+  /** MCP 工具目录（GET /tools?source=mcp&enabled=false，解析条目归属 server） */
+  mcpTools: ApiTool[];
+  /** MCP 目录加载中（分组区占位） */
+  mcpLoading: boolean;
   /** 模型目录（GET /models）：名称查询 + 存量校验 + 凭据端点 md id 解析 */
   catalogByRef: Map<string, CatalogRow>;
   /** 可用 worker 列表（GET /workers，首选 worker 选择数据源） */
@@ -768,7 +765,7 @@ interface ConfigPanelProps {
   deleteError: string | null;
 }
 
-function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, saving, saveError, onSave, onSaveToken, onClone, canCreate, canDelete, onDelete, deleting, deleteError }: ConfigPanelProps) {
+function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading, catalogByRef, workers, saving, saveError, onSave, onSaveToken, onClone, canCreate, canDelete, onDelete, deleting, deleteError }: ConfigPanelProps) {
   // is_0000000030：readOnly 不再按 type 区分（template 也可编辑）；isTemplate 仅用于主题色
   const isTemplate = agent.type === "template";
   const accent = isTemplate
@@ -780,12 +777,6 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
   const [personaDraft, setPersonaDraft] = useState<string | null>(agent.persona ?? null);
   const [modelDraft, setModelDraft] = useState<string | null>(agent.defaultModelId ?? null);
   const [workerDraft, setWorkerDraft] = useState<string>(agent.workerId ?? "");
-  const [toolDrafts, setToolDrafts] = useState<ToolEffectRow[]>(
-    agent.toolEffects.map((t) => ({
-      toolAction: t.toolAction,
-      effect: (toolEffectMeta[t.effect as ToolEffectKey] ? t.effect : "allow") as ToolEffectKey,
-    }))
-  );
 
   // token 输入（POST /models/:mdId/credentials，type=password）
   const [tokenInput, setTokenInput] = useState("");
@@ -801,30 +792,14 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
   const tokenConfigured = tokenQuery.data?.configured ?? false;
   const tokenFingerprint = tokenQuery.data?.fingerprint ?? null;
 
-  // 工具目录加载完成后补入草稿（默认 allow）：目录 = agent 配置页工具行数据源，
-  // 空 agent 也应展示全部启用工具；已存在/用户已删除的 action 不覆盖。
-  useEffect(() => {
-    if (tools.length === 0) return;
-    setToolDrafts((prev) => {
-      const merged = [...prev];
-      for (const t of tools) {
-        if (!merged.some((r) => r.toolAction === t.action)) {
-          merged.push({ toolAction: t.action, effect: "allow" });
-        }
-      }
-      return merged;
-    });
-  }, [tools]);
-
   const handleSave = () => {
     // is_0000000030：内置（template）agent 设置也可修改（后端已放开，agentId/type 不可改）；
-    // 提交全部设置字段（prompt/模型/worker/技能/工具 effect/确认文案）
+    // 提交可编辑设置字段（prompt/模型/worker/性格）；权限由服务端执行策略拥有，前端只读
     const payload: UpdateAgentPayload = {
       prompt: promptDraft.trim(),
       defaultModelId: modelDraft ?? undefined,
       // 软绑定首选 worker：显式提交（空=自动调度，null 清除绑定）
       workerId: workerDraft || null,
-      toolEffects: toolDrafts.map((t) => ({ toolAction: t.toolAction, effect: t.effect })),
       persona: personaDraft,
     };
     onSave(payload);
@@ -1423,7 +1398,7 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
         </div>
       </div>
 
-      {/* ④ 工具配置（开关 + 权限矩阵，可编辑 effect） */}
+      {/* ④ 权限（只读：执行策略生效权限，原生行 + MCP 按 server 分组） */}
       <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
         <div
           style={{
@@ -1433,78 +1408,18 @@ function ConfigPanel({ agent, readOnly, models, tools, catalogByRef, workers, sa
           }}
         >
           <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>
-            工具配置
+            权限
           </span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            工具 · 停用后 Agent 无法调用
+            执行策略 · 只读
           </span>
         </div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: space.xs,
-            fontSize: fontSize.xs,
-            color: neutral[400],
-          }}
-        >
-          <span aria-hidden style={{ color: accent, fontSize: fontSize.xs }}>
-            ◈
-          </span>
-          工具名即权限 action，支持通配符批量授权
-        </div>
-        <ToolPermissionList
-          tools={toolDrafts}
-          catalog={tools}
-          readOnly={isTemplate}
-          onChange={setToolDrafts}
+        <EffectivePermissionSection
+          effective={agent.effectivePermission ?? null}
+          mcpServers={mcpServers}
+          mcpTools={mcpTools}
+          loading={mcpLoading}
         />
-      </div>
-
-      {/* ⑤ 权限范围配置（FR-36，从 permissionScope 渲染，静态展示） */}
-      <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>
-            权限范围
-          </span>
-          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            权限 · 超出范围的操作转交用户确认
-          </span>
-        </div>
-        <div
-          data-testid="permission-config"
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: space.sm,
-            padding: space.md,
-            borderRadius: radius.md,
-            backgroundColor: neutral[50],
-            border: `1px solid ${neutral[200]}`,
-          }}
-        >
-          {permissionRows(agent.permissionScope).map((row) => (
-            <div
-              key={row.label}
-              style={{
-                display: "flex",
-                alignItems: "flex-start",
-                justifyContent: "space-between",
-                gap: space.md,
-                fontSize: fontSize.sm,
-              }}
-            >
-              <span style={{ color: neutral[500], flexShrink: 0 }}>{row.label}</span>
-              <span style={{ color: neutral[800], textAlign: "right" }}>{row.value}</span>
-            </div>
-          ))}
-        </div>
       </div>
     </section>
   );
@@ -1621,7 +1536,7 @@ function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: Create
               新建自定义 Agent
             </div>
             <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>
-              完全自定义，创建后可编辑提示词 / 模型 / 工具权限
+              完全自定义，创建后可编辑提示词 / 模型
             </div>
           </div>
           <button
@@ -1875,13 +1790,21 @@ export default function AgentConfigPage() {
     },
   });
 
-  // 工具目录：GET /tools?enabled=true（T3 成员只读过滤保证停用工具不可见）
-  const toolsQuery = useQuery({
-    queryKey: ["tools"],
-    queryFn: () => api.get<PageResponse<ApiTool>>("/tools", { query: { page: 1, pageSize: 100, enabled: true } }),
+  // MCP server 全量：GET /mcp-servers（含停用；权限分组标题 + 默认收起依据）
+  const mcpServersQuery = useQuery({
+    queryKey: ["mcp-servers"],
+    queryFn: () => api.get<PageResponse<ApiMcpServer>>("/mcp-servers", { query: { page: 1, pageSize: 100 } }),
     enabled: !!userId,
   });
-  const tools = toolsQuery.data?.items ?? [];
+  const mcpServers = mcpServersQuery.data?.items ?? [];
+
+  // MCP 工具目录：GET /tools?source=mcp&enabled=false（含停用；解析条目归属 server）
+  const mcpToolsQuery = useQuery({
+    queryKey: ["mcp-tools"],
+    queryFn: () => api.get<PageResponse<ApiTool>>("/tools", { query: { source: "mcp", enabled: false, page: 1, pageSize: 200 } }),
+    enabled: !!userId,
+  });
+  const mcpTools = mcpToolsQuery.data?.items ?? [];
 
   // 选中 Agent：详情查询结果优先，未命中时回退列表条目（即时渲染）
   const selectedAgent: AgentItem | undefined =
@@ -2258,7 +2181,9 @@ export default function AgentConfigPage() {
           // is_0000000030：内置（template）agent 设置可编辑；删除仍对 template 隐藏（后端 403 兜底）
           readOnly={false}
           models={models}
-          tools={tools}
+          mcpServers={mcpServers}
+          mcpTools={mcpTools}
+          mcpLoading={mcpServersQuery.isPending || mcpToolsQuery.isPending}
           catalogByRef={catalogByRef}
           workers={workers}
           saving={saveMutation.isPending}
