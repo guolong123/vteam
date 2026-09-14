@@ -1,11 +1,3 @@
-5d416a2 fix(worker): accept mode all in agent definitions
-5287563 test(e2e): plan member subagent flow
-680aa5a fix(policies): drop deleted plan_review from MCP tool namespace
-0806770 feat(policies): plan role member capabilities and scoped task spawn
-8f36c91 refactor: remove server-orchestrated plan review in favor of member subagents
-448ff62 feat(seed): vteam-plan as built-in member role
-5ad2e2f docs(plan): mark plan-skills-rewrite F1-F4 complete
-3c896a6 docs(plan): complete plan-skills-rewrite with F1-F4 approvals
  M .omo/boulder.json
  M .omo/evidence/plan-member/baseline-git.txt
  M .omo/evidence/plan-member/e2e.txt

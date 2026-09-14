@@ -1,0 +1,5 @@
+live path taken: live
+parent spawn gate (guard): vteam-plan task+subagent_type=vteam-plan -> allow (see guard-decisions.json)
+parent spawn gate (layer-1): injected vteam-plan permission.task=allow (see injected-opencode.json)
+nesting block (guard): vteam-plan task+missing/other-subagent -> deny; execute -> deny (see guard-decisions.json)
+nesting block (layer-1/opencode native): subagent sessions derive stricter permissions; task self-deny at depth>=1 (opencode childToolDenies). Live nested attempt result: see serve-msg-5.json when path=live.

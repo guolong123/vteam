@@ -1,0 +1,7 @@
+/data/vteam-worker/tasks/t_0000000001/docs/_permission_check.txt
+/data/vteam-worker/tasks/t_0000000001/docs/implementation-note.md
+/data/vteam-worker/tasks/t_0000000001/prototypes/_permission_check.txt
+/data/vteam-worker/tasks/t_0000000001/src/e2e-ok.txt
+/data/vteam-worker/tasks/t_0000000001/tests/F3-c-hello.txt
+/data/vteam-worker/tasks/t_0000000001/tests/e2e-c-hello.txt
+/data/vteam-worker/tasks/t_0000000001/tests/test-execution-e2e-c-f3c.md

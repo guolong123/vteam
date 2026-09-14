@@ -1,0 +1,62 @@
+[
+  {
+    "name": "plan task+plan -> allow",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "name": "developer task+plan -> deny",
+    "action": "deny",
+    "message": "【越界拦截｜角色：vteam-developer】不能调用 task。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+  },
+  {
+    "name": "plan task+developer -> deny",
+    "action": "deny",
+    "message": "【越界拦截｜角色：vteam-plan】不能调用 task。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+  },
+  {
+    "name": "plan task+missing -> deny",
+    "action": "deny",
+    "message": "【越界拦截｜角色：vteam-plan】不能调用 task。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+  },
+  {
+    "name": "plan task+nullargs -> deny",
+    "action": "deny",
+    "message": "【越界拦截｜角色：vteam-plan】不能调用 task。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+  },
+  {
+    "name": "plan execute -> deny",
+    "action": "deny",
+    "message": "【越界拦截｜角色：vteam-plan】不能调用 execute。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+  },
+  {
+    "name": "unmapped session -> pass-through",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "name": "null session -> pass-through",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "name": "plan write plans/x.md -> allow",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "name": "plan write plans/x.md (relative) -> allow",
+    "action": "allow",
+    "message": null
+  },
+  {
+    "name": "plan write src/app.ts -> deny",
+    "action": "deny",
+    "message": "【越界拦截｜角色：vteam-plan】不能调用 write。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+  },
+  {
+    "name": "plan write src/app.ts (relative) -> deny",
+    "action": "deny",
+    "message": "【越界拦截｜角色：vteam-plan】不能调用 write。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+  }
+]

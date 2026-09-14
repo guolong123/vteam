@@ -9,10 +9,11 @@
 #      /teams members include 计划员.
 #   2) injection truth: worker restart re-injects opencode.json agent['vteam-plan']
 #      with mode='all', permission.task='allow', edit glob covering .opencode/plans/,
-#      NO edit rights outside; the other 5 roles are byte-identical to the
-#      F3-own baseline built-in subset (vteam-plan's own entry is EXPECTED to
-#      differ — the other five must be identical, and the vteam-plan diff is
-#      limited to mode/task/group_post/plans-glob).
+#      NO edit rights outside; the other 5 roles keep split-aware parity with the
+#      F3-own baseline built-in subset (retained keys byte-identical, no new keys;
+#      baseline-only deny keys allowed iff guard-moved or server-gated — the
+#      baseline predates the allowlist-split design; vteam-plan's own entry is
+#      EXPECTED to differ — mode/task/plans-glob flip + split-aware removals).
 #   3) guard gate: the worker's OWN guard code (dist/role-guard/policy.js
 #      evaluateToolCall, same code the injected plugin snapshots) decides
 #      (vteam-plan, task + subagent_type=vteam-plan) -> allow;
@@ -22,13 +23,18 @@
 #      (vteam-plan, execute) -> deny;
 #      unmapped session -> pass-through (allow).
 #      Plus file-write scoping: .opencode/plans/x.md write -> allow, src/ -> deny.
-#   4) live @-flow smoke (bounded, direct dispatch to the plan member for the seed
-#      task — an explicitly allowed trigger path): the plan member drafts a plan,
-#      a plan .md lands under the task .opencode/plans/ with non-trivial content
-#      AND the member replies in group. LLM-infra failure -> NEEDS-ATTENTION
-#      (suite does not fail); contract violations (file outside plans dir,
-#      missing reply) -> FAIL.
-#   5) live subagent spawn smoke (bounded, same session): vteam-plan session calls
+#   4) live @-flow smoke (bounded, real group @ for the seed task — the production
+#      path: group mention → resolveMentions + task-mode @-mention session backfill
+#      → dispatcher.registerExecution → worker execute, so group_post is
+#      registered and allowed): the plan member drafts a plan, a plan .md lands
+#      under the task .opencode/plans/ with non-trivial content AND the member
+#      replies in group. LLM-infra stall (dispatch accepted, nothing returns) ->
+#      NEEDS-ATTENTION (suite does not fail); contract violations (file outside
+#      plans dir, reply missing despite proof of execution) -> FAIL.
+#      (Direct worker /execute is intentionally NOT the trigger here: it bypasses
+#      server execution registration, so group_post 403s by design.)
+#   5) live subagent spawn smoke (bounded, own vteam-plan session via direct
+#      worker /execute — explicitly allowed trigger for a session-scoped probe):
 #      task with subagent_type='vteam-plan' for a trivial read-only probe -> must
 #      succeed and return; a nested spawn attempt must be blocked (deny/depth
 #      error, not success). Infra failure -> NEEDS-ATTENTION + guard+layer-1
@@ -141,13 +147,14 @@ jget() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); v='"$2"'; 
 
 # db_query <sql> : single-value DB lookup against the compose db (stdout, no header).
 db_query() {
-  docker compose exec -T db mysql -uroot -paiagents-root -D aiagents -N -e "$1" 2>/dev/null \
-    || docker exec aiagents-compose-db mysql -uroot -paiagents-root -D aiagents -N -e "$1" 2>/dev/null
+  docker compose exec -T db mysql --default-character-set=utf8mb4 -uroot -paiagents-root -D aiagents -N -e "$1" 2>/dev/null \
+    || docker exec aiagents-compose-db mysql --default-character-set=utf8mb4 -uroot -paiagents-root -D aiagents -N -e "$1" 2>/dev/null
 }
 
 # mcp_post <out-file> <id> <method> [params-json] : POST platform-mcp, saves raw body.
 mcp_post() {
-  local out="$1" id="$2" method="$3" params="${4:-{}}"
+  local out="$1" id="$2" method="$3" params="{}"
+  if [[ $# -ge 4 ]]; then params="$4"; fi
   local body
   body="$(mktmp)"
   python3 - "$body" "$id" "$method" "$params" <<'EOF'
@@ -252,6 +259,32 @@ EOF
     || fail "live-exec" "docker compose cp execute result out of worker failed"
   docker compose exec -T worker rm -f /tmp/"$body" /tmp/"$remote_out" >/dev/null 2>&1 || true
   printf '%s' "$code"
+}
+
+# assistant_text <serve-msg-json> <out> : concatenate ASSISTANT-role text parts
+# plus assistant tool-call outputs (never the user prompt: prompt echoes in
+# serve transcripts are often double-escaped, so echo-scrubbing misses them
+# and marker greps false-positive on the prompt itself).
+assistant_text() {
+  python3 - "$1" "$2" <<'EOF'
+import json,sys
+d = json.load(open(sys.argv[1]))
+items = d if isinstance(d, list) else d.get("messages") or d.get("items") or []
+out = []
+for it in items:
+    if not isinstance(it, dict): continue
+    if (it.get("info") or {}).get("role") != "assistant": continue
+    for p in it.get("parts") or []:
+        if not isinstance(p, dict): continue
+        if p.get("type") == "text" and isinstance(p.get("text"), str):
+            out.append(p["text"])
+        elif p.get("type") == "tool":
+            st = p.get("state") or {}
+            for k in ("output", "error"):
+                if isinstance(st.get(k), str) and st[k].strip():
+                    out.append(st[k])
+open(sys.argv[2], "w").write("\n".join(out))
+EOF
 }
 
 # serve_create_session : prints serve session id (POST $SERVE_BASE_URL/session).
@@ -462,34 +495,70 @@ assert "vteam_group_post" not in perm, \
   "vteam-plan layer-1 must not carry vteam_group_post key (allowlist-complement design): %r" % perm
 rep("vteam-plan: no layer-1 vteam_group_post key (guard-allowlisted)")
 roles = json.load(open(sys.argv[4]))
-rtools = ((roles.get("roles") or {}).get("vteam-plan") or {}).get("tools") or {}
+guard_by_role = {rn: ((r or {}).get("tools") or {}) for rn, r in (roles.get("roles") or {}).items()}
+guard_union = {t for tools in guard_by_role.values() for t in tools}
+rtools = guard_by_role.get("vteam-plan") or {}
 assert rtools.get("vteam_group_post") == "allow", \
   "live roles.json guard tools vteam_group_post=%r (want allow)" % rtools.get("vteam_group_post")
 rep("live roles.json: vteam-plan guard tools vteam_group_post=allow")
-# --- other five roles byte-identical to baseline ---
+# Baseline staleness note: F3-own/injected-opencode.json predates the
+# allowlist-split design (22e95ee, in HEAD history): layer-1 permission now
+# carries ONLY {edit,read,bash,task} + mcpDenies (non-allowlisted, non-gated
+# MCP tools as deny). Guard-allowlisted tools moved to guard roles only, and
+# ROLE_SERVER_GATED_TOOLS (task_transition/question_confirm/task_create/
+# plan_mode/team_add_member) live in NEITHER layer (server-side 401/403).
+# Hence a baseline-only key is legitimate IFF it was deny-valued AND either
+# moved to this role's guard tools or vanished from both layers (gated).
+def assert_split_aware_parity(name, nj, bj):
+    assert nj.get("mode") == bj.get("mode"), \
+      "%s mode changed: %r vs %r" % (name, nj.get("mode"), bj.get("mode"))
+    assert nj.get("description") == bj.get("description"), \
+      "%s description changed" % name
+    np, bp = dict(nj.get("permission") or {}), dict(bj.get("permission") or {})
+    added = set(np) - set(bp)
+    assert not added, "%s has NEW layer-1 keys vs baseline: %r" % (name, sorted(added))
+    for k in set(np) & set(bp):
+        assert json.dumps(np[k], sort_keys=True) == json.dumps(bp[k], sort_keys=True), \
+          "%s key %r value changed: %r vs %r" % (name, k, np[k], bp[k])
+    gtools = guard_by_role.get(name) or {}
+    for k in set(bp) - set(np):
+        assert bp[k] == "deny", \
+          "%s removed key %r was not deny-valued in baseline: %r" % (name, k, bp[k])
+        assert k in gtools or k not in guard_union, \
+          "%s removed key %r neither in its guard tools nor server-gated (union has it but role lacks it)" % (name, k)
+    rep("%s: parity ok (retained keys identical; %d baseline-only deny keys split-aware)" % (name, len(set(bp) - set(np))))
+# --- other five roles: split-aware parity (mode primary/task deny enforced) ---
 for b in BUILTINS[1:]:
-    nj = json.dumps(na[b], sort_keys=True, ensure_ascii=False)
-    bj = json.dumps(ba[b], sort_keys=True, ensure_ascii=False)
-    assert nj == bj, "role %s differs from baseline:\nnew =%s\nbase=%s" % (b, nj, bj)
-rep("other five roles byte-identical to baseline")
-# --- vteam-plan diff limited to mode/task/group_post/plans-glob ---
+    assert na[b].get("mode") == "primary", "role %s mode=%r (want primary)" % (b, na[b].get("mode"))
+    assert (na[b].get("permission") or {}).get("task") == "deny", "role %s task not deny" % b
+    assert_split_aware_parity(b, na[b], ba[b])
+rep("other five roles parity ok (no new/changed keys; removals only guard-moved or server-gated denies)")
+# --- vteam-plan diff limited to mode/task/plans-glob + split-aware removals ---
 nb, bb = dict(na["vteam-plan"]), dict(ba["vteam-plan"])
 assert set(nb.keys()) == set(bb.keys()), \
   "vteam-plan top-level keys changed: %r vs %r" % (sorted(nb.keys()), sorted(bb.keys()))
 assert nb.get("description") == bb.get("description"), "vteam-plan description changed (not in allowed diff)"
 assert nb.get("mode") != bb.get("mode"), "vteam-plan mode unexpectedly unchanged"
 np, bp = dict(nb.get("permission") or {}), dict(bb.get("permission") or {})
-assert set(np.keys()) == set(bp.keys()), \
-  "vteam-plan permission keys changed: %r vs %r" % (sorted(np.keys()), sorted(bp.keys()))
-diff = {k for k in np if json.dumps(np[k], sort_keys=True) != json.dumps(bp.get(k), sort_keys=True)}
-assert diff == {"task", "edit", "vteam_group_post"}, \
-  "vteam-plan permission diff = %r (want exactly {task, edit, vteam_group_post})" % diff
-rep("vteam-plan diff limited to mode/task/group_post/plans-glob")
+added = set(np) - set(bp)
+assert not added, "vteam-plan has NEW layer-1 keys vs baseline: %r" % sorted(added)
+diff = {k for k in set(np) & set(bp) if json.dumps(np[k], sort_keys=True) != json.dumps(bp.get(k), sort_keys=True)}
+assert diff == {"task", "edit"}, \
+  "vteam-plan changed-value keys = %r (want exactly {task, edit}; group_post moved to guard-only)" % diff
+assert np.get("task") == "allow" and bp.get("task") == "deny", "vteam-plan task must flip deny->allow"
+assert bp.get("vteam_group_post") == "deny" and "vteam_group_post" not in np, \
+  "vteam-plan group_post must move baseline-deny -> guard-only"
+gtools = guard_by_role.get("vteam-plan") or {}
+for k in set(bp) - set(np) - {"vteam_group_post"}:
+    assert bp[k] == "deny", "vteam-plan removed key %r was not deny-valued: %r" % (k, bp[k])
+    assert k in gtools or k not in guard_union, \
+      "vteam-plan removed key %r neither in its guard tools nor server-gated" % k
+rep("vteam-plan diff limited to mode/task/plans-glob + split-aware deny removals")
 EOF
 then
   fail "2-inject" "injection assertions failed (raw: $INJECTED_OUT, report: $EVIDENCE_DIR/injection-compare.txt)"
 fi
-pass "2 (vteam-plan mode all/task allow/plans-scoped edit/group_post; other five byte-identical; plan diff limited)"
+pass "2 (vteam-plan mode all/task allow/plans-scoped edit/group_post guard-only; other five split-aware parity; plan diff limited)"
 
 # ---------------------------------------------------------------- step 3: guard gate (worker's OWN guard code)
 log "--- step 3: guard decisions via worker dist role-guard/policy.js ---"
@@ -559,8 +628,13 @@ pass "3 (guard gate: plan task+plan allow; others deny; execute deny; unmapped p
 
 # ---------------------------------------------------------------- live prep: snapshots + channel watermark
 log "--- live prep: task-dir snapshot + group watermark ---"
+# Pre-clean any stale e2e plan file from a previous run (idempotency) BEFORE
+# the snapshot, so the before/after diff only sees this run's writes.
+docker compose exec -T worker rm -f "/data/vteam-worker/tasks/$TASK_ID/.opencode/plans/e2e-plan-member.md" >/dev/null 2>&1 || true
+docker compose exec -T worker test '!' -f "/data/vteam-worker/tasks/$TASK_ID/.opencode/plans/e2e-plan-member.md" 2>/dev/null \
+  || fail "live-prep" "stale e2e plan file not removed before snapshot"
 TASKDIR_BEFORE="$EVIDENCE_DIR/taskdir-before.txt"
-docker compose exec -T worker sh -c "find tasks/$TASK_ID -type f 2>/dev/null | sort" >"$TASKDIR_BEFORE" 2>/dev/null || : >"$TASKDIR_BEFORE"
+docker compose exec -T worker sh -c "find /data/vteam-worker/tasks/$TASK_ID -type f 2>/dev/null | sort" >"$TASKDIR_BEFORE" 2>/dev/null || : >"$TASKDIR_BEFORE"
 CHAN_OUT="$EVIDENCE_DIR/channels.json"
 code="$(api GET "/channels?teamId=$TEAM_ID" "$ADMIN_JWT" '' "$CHAN_OUT")"
 [[ "$code" == "200" ]] || fail "4-live" "GET /channels HTTP $code (raw: $CHAN_OUT)"
@@ -580,41 +654,64 @@ code="$(api GET "/channels/$GROUP_CHANNEL/messages?limit=100" "$ADMIN_JWT" '' "$
 [[ "$code" == "200" ]] || fail "4-live" "GET group messages HTTP $code (raw: $WATERMARK_OUT)"
 WATERMARK="$(jget "$WATERMARK_OUT" 'max([m.get("id","") for m in (d if isinstance(d,list) else d.get("items") or [])] or [""])')"
 log "group watermark=$WATERMARK"
-# Pre-clean any stale e2e plan file from a previous run (idempotency).
-docker compose exec -T worker rm -f "tasks/$TASK_ID/.opencode/plans/e2e-plan-member.md" >/dev/null 2>&1 || true
 
-# ---------------------------------------------------------------- step 4: live @-flow smoke (direct dispatch to plan member)
-log "--- step 4: live plan-member dispatch (bounded ${LIVE_TIMEOUT_SEC}s) ---"
+# ---------------------------------------------------------------- step 4: live @-flow smoke (real group @ → server dispatch)
+log "--- step 4: live group-@ plan-member dispatch (bounded ${LIVE_TIMEOUT_SEC}s) ---"
 PLAN_FILE="tasks/$TASK_ID/.opencode/plans/e2e-plan-member.md"
-PROMPT4="$(mktmp)"
-cat >"$PROMPT4" <<EOF
-你是计划员（vteam-plan，成员ID $PLAN_MEMBER_ID）。e2e 验证派活（任务ID $TASK_ID），按序执行：
-
-1. 起草一份简短中文验证计划（须含“背景”“验证步骤”（至少3条）“验收标准”三节，20行以上），写入文件 /data/vteam-worker/$PLAN_FILE。只允许写 .opencode/plans/ 目录，不得写任何其他路径。
-2. 用 vteam_group_post 工具向任务群聊发布一条摘要（参数 taskId="$TASK_ID"，selfInstanceId="$PLAN_MEMBER_ID"，content 须包含字符串 E2E-PLAN-POSTED）。
-3. 最后单独回复一行 E2E-PLAN-DONE。
+MSG4="$(mktmp)"
+PLAN_MEMBER_ID="$PLAN_MEMBER_ID" TASK_ID="$TASK_ID" python3 - "$MSG4" <<'PYEOF'
+import json,os,sys
+mid = os.environ["PLAN_MEMBER_ID"]; tid = os.environ["TASK_ID"]
+text = ("@计划员-1 e2e 验证派活（成员ID " + mid + "，任务ID " + tid + "），按序执行：\n"
+  "1. 起草一份简短中文验证计划（须含“背景”“验证步骤”（至少3条）“验收标准”三节，20行以上），"
+  "写入文件 /data/vteam-worker/tasks/" + tid + "/.opencode/plans/e2e-plan-member.md。"
+  "只允许写 .opencode/plans/ 目录，不得写任何其他路径。\n"
+  "2. 用 vteam_group_post 工具向任务群聊发布一条摘要（参数 taskId=\"" + tid + "\"，selfInstanceId=\"" + mid + "\"，"
+  "content 须包含字符串 E2E-PLAN-POSTED）。\n"
+  "3. 最后单独回复一行 E2E-PLAN-DONE。")
+json.dump({"text": text,
+  "mentions": [{"type": "agent", "agentId": "a_plan", "instanceId": mid}],
+  "taskId": tid}, open(sys.argv[1], "w"), ensure_ascii=False)
+PYEOF
+TRIGGER_OUT="$EVIDENCE_DIR/group-trigger.json"
+LIVE4_OK=""; TRIGGER_OK=""
+code="$(api POST "/channels/$GROUP_CHANNEL/messages" "$ADMIN_JWT" "$MSG4" "$TRIGGER_OUT")" || code="000"
+log "POST group @ -> HTTP $code (raw: $TRIGGER_OUT)"
+if [[ "$code" != "200" && "$code" != "201" ]]; then
+  needs_attention "4-live" "POST group @ message HTTP $code (infra?) raw: $TRIGGER_OUT"
+else
+  if PLAN_MID="$PLAN_MEMBER_ID" python3 - "$TRIGGER_OUT" <<'EOF'; then
+import json,sys,os
+d = json.load(open(sys.argv[1])); mid = os.environ["PLAN_MID"]
+trigs = d.get("triggers") or d.get("message", {}).get("triggers") or []
+hit = [t for t in trigs if t.get("instanceId") == mid or t.get("agentId") == "a_plan"]
+assert hit, "no plan-member trigger in response"
+st = {t.get("status") for t in hit}
+assert st <= {"dispatched"}, "plan-member trigger status=%r (want dispatched)" % st
+print("trigger dispatched to plan member")
 EOF
-SID4="$(serve_create_session)" || { needs_attention "4-live" "POST serve /session failed (serve/LLM infra?)"; SID4=""; }
-EXEC4_OUT="$EVIDENCE_DIR/execute-4.json"
-LIVE4_OK=""
-if [[ -n "${SID4:-}" ]]; then
-  log "step4 sid=$SID4"
-  CODE4="$(worker_exec 'vteam-plan' "/data/vteam-worker/tasks/$TASK_ID" "$SID4" "$TASK_ID" "$PLAN_AGENT_ID" "$PROMPT4" "$EXEC4_OUT")" \
-    || fail "4-live" "worker /execute call failed"
-  [[ "$CODE4" == "202" ]] || { needs_attention "4-live" "POST worker /execute HTTP $CODE4 (infra?) raw: $EXEC4_OUT"; CODE4="infra"; }
-  if [[ "$CODE4" == "202" ]]; then
-    SERVE4_OUT="$EVIDENCE_DIR/serve-msg-4.json"
-    SCRUB4_OUT="$EVIDENCE_DIR/serve-msg-4-scrubbed.txt"
-    GROUP4_OUT="$EVIDENCE_DIR/group-after-4.json"
-    deadline=$((SECONDS + LIVE_TIMEOUT_SEC))
-    while [[ $SECONDS -lt $deadline ]]; do
-      curl -sS "$SERVE_BASE_URL/session/$SID4/message" -o "$SERVE4_OUT" 2>/dev/null || true
-      code="000"
-      code="$(api GET "/channels/$GROUP_CHANNEL/messages?limit=100" "$ADMIN_JWT" '' "$GROUP4_OUT" 2>/dev/null)" || code="000"
-      file_ok=""; group_ok=""
-      docker compose exec -T worker test -f "/data/vteam-worker/$PLAN_FILE" 2>/dev/null && file_ok="yes"
-      if [[ "$code" == "200" ]]; then
-        if PLAN_MID="$PLAN_MEMBER_ID" python3 - "$GROUP4_OUT" "$WATERMARK" <<'EOF'; then
+    TRIGGER_OK="yes"
+  else
+    needs_attention "4-live" "group @ posted but plan-member trigger not dispatched (raw: $TRIGGER_OUT)"
+  fi
+fi
+if [[ "$TRIGGER_OK" == "yes" ]]; then
+  # Post-trigger watermark: the @ trigger message itself contains the marker
+  # strings, so it must never self-match the reply checks below.
+  WM4_OUT="$EVIDENCE_DIR/group-watermark-4.json"
+  api GET "/channels/$GROUP_CHANNEL/messages?limit=100" "$ADMIN_JWT" '' "$WM4_OUT" >/dev/null || true
+  WM4="$(jget "$WM4_OUT" 'max([m.get("id","") for m in (d if isinstance(d,list) else d.get("items") or [])] or [""])')"
+  [[ -n "$WM4" ]] || WM4="$WATERMARK"
+  log "step4 post-trigger watermark=$WM4"
+  GROUP4_OUT="$EVIDENCE_DIR/group-after-4.json"
+  deadline=$((SECONDS + LIVE_TIMEOUT_SEC))
+  while [[ $SECONDS -lt $deadline ]]; do
+    code="000"
+    code="$(api GET "/channels/$GROUP_CHANNEL/messages?limit=100" "$ADMIN_JWT" '' "$GROUP4_OUT" 2>/dev/null)" || code="000"
+    file_ok=""; group_ok=""
+    docker compose exec -T worker test -f "/data/vteam-worker/$PLAN_FILE" 2>/dev/null && file_ok="yes"
+    if [[ "$code" == "200" ]]; then
+      if PLAN_MID="$PLAN_MEMBER_ID" python3 - "$GROUP4_OUT" "$WM4" <<'EOF'; then
 import json,sys,os
 d = json.load(open(sys.argv[1])); wm = sys.argv[2]; mid = os.environ.get("PLAN_MID", "")
 items = d if isinstance(d, list) else d.get("items") or []
@@ -622,17 +719,15 @@ news = [m for m in items if m.get("id", "") > wm]
 hit = [m for m in news if m.get("senderInstanceId") == mid or "E2E-PLAN-POSTED" in json.dumps(m.get("content") or {}, ensure_ascii=False)]
 assert hit, "no new plan-member group message yet"
 EOF
-          group_ok="yes"
-        fi
+        group_ok="yes"
       fi
-      if [[ -n "$file_ok" && -n "$group_ok" ]]; then LIVE4_OK="yes"; break; fi
-      sleep "$POLL_INTERVAL_SEC"
-    done
-    # Final state capture (raw transcripts are the evidence).
-    curl -sS "$SERVE_BASE_URL/session/$SID4/message" -o "$SERVE4_OUT" 2>/dev/null || true
-    docker compose exec -T worker cat "/data/vteam-worker/$PLAN_FILE" >"$EVIDENCE_DIR/plan-file-4.md" 2>/dev/null || : >"$EVIDENCE_DIR/plan-file-4.md"
-    api GET "/channels/$GROUP_CHANNEL/messages?limit=100" "$ADMIN_JWT" '' "$GROUP4_OUT" >/dev/null || true
-  fi
+    fi
+    if [[ -n "$file_ok" && -n "$group_ok" ]]; then LIVE4_OK="yes"; break; fi
+    sleep "$POLL_INTERVAL_SEC"
+  done
+  # Final state capture (raw transcripts are the evidence).
+  docker compose exec -T worker cat "/data/vteam-worker/$PLAN_FILE" >"$EVIDENCE_DIR/plan-file-4.md" 2>/dev/null || : >"$EVIDENCE_DIR/plan-file-4.md"
+  api GET "/channels/$GROUP_CHANNEL/messages?limit=100" "$ADMIN_JWT" '' "$GROUP4_OUT" >/dev/null || true
 fi
 if [[ "$LIVE4_OK" == "yes" ]]; then
   # Contract asserts on the captured raw evidence.
@@ -649,7 +744,7 @@ EOF
     fail "4-live" "plan file content too trivial (raw: $EVIDENCE_DIR/plan-file-4.md)"
   fi
   TASKDIR_AFTER="$EVIDENCE_DIR/taskdir-after-4.txt"
-  docker compose exec -T worker sh -c "find tasks/$TASK_ID -type f 2>/dev/null | sort" >"$TASKDIR_AFTER" 2>/dev/null || : >"$TASKDIR_AFTER"
+  docker compose exec -T worker sh -c "find /data/vteam-worker/tasks/$TASK_ID -type f 2>/dev/null | sort" >"$TASKDIR_AFTER" 2>/dev/null || : >"$TASKDIR_AFTER"
   if ! python3 - "$TASKDIR_BEFORE" "$TASKDIR_AFTER" <<'EOF'
 import sys
 before = set(l.strip() for l in open(sys.argv[1], encoding="utf-8", errors="replace") if l.strip())
@@ -663,48 +758,73 @@ EOF
   then
     fail "4-live" "file-write scoping violated (before: $TASKDIR_BEFORE after: $TASKDIR_AFTER)"
   fi
-  scrub_transcript "$SERVE4_OUT" "$SCRUB4_OUT" "$PROMPT4"
-  if ! grep -q 'E2E-PLAN-DONE' "$SCRUB4_OUT" 2>/dev/null; then
-    warn "4-live completion marker E2E-PLAN-DONE absent in model-produced transcript (file+group asserts hold; raw: $SERVE4_OUT)"
+  if ! PLAN_MID="$PLAN_MEMBER_ID" python3 - "$GROUP4_OUT" "$WM4" <<'EOF'; then
+import json,sys,os
+d = json.load(open(sys.argv[1])); wm = sys.argv[2]
+items = d if isinstance(d, list) else d.get("items") or []
+news = [m for m in items if m.get("id", "") > wm]
+blob = json.dumps([m.get("content") for m in news], ensure_ascii=False)
+assert "E2E-PLAN-DONE" in blob, "E2E-PLAN-DONE absent from new group messages"
+EOF
+    warn "4-live completion marker E2E-PLAN-DONE absent from new group messages (file+group asserts hold; raw: $GROUP4_OUT)"
   fi
   pass "4 (plan .md landed under .opencode/plans/ non-trivial + member replied in group)"
 else
-  if [[ -z "${SID4:-}" || "${CODE4:-}" == "infra" ]]; then
-    warn "step 4 skipped live asserts (infra); see needs-attention"
-  elif [[ -z "${SERVE4_OUT:-}" || ! -s "${SERVE4_OUT}" ]]; then
-    needs_attention "4-live" "serve session returned nothing within ${LIVE_TIMEOUT_SEC}s (LLM infra?)"
+  if [[ "$TRIGGER_OK" != "yes" ]]; then
+    warn "step 4 skipped live asserts (infra/dispatch; see needs-attention)"
   else
-    fail "4-live" "contract violation: plan file and/or group reply missing despite live session (serve: ${SERVE4_OUT} plan: $EVIDENCE_DIR/plan-file-4.md group: $EVIDENCE_DIR/group-after-4.json)"
+    file_present=""; group_present=""
+    docker compose exec -T worker test -f "/data/vteam-worker/$PLAN_FILE" 2>/dev/null && file_present="yes"
+    if PLAN_MID="$PLAN_MEMBER_ID" python3 - "$GROUP4_OUT" "$WM4" <<'EOF' 2>/dev/null; then
+import json,sys,os
+d = json.load(open(sys.argv[1])); wm = sys.argv[2]; mid = os.environ.get("PLAN_MID", "")
+items = d if isinstance(d, list) else d.get("items") or []
+news = [m for m in items if m.get("id", "") > wm]
+hit = [m for m in news if m.get("senderInstanceId") == mid or "E2E-PLAN-POSTED" in json.dumps(m.get("content") or {}, ensure_ascii=False)]
+assert hit, "no new plan-member group message"
+EOF
+      group_present="yes"
+    fi
+    if [[ -n "$file_present" && -z "$group_present" ]]; then
+      fail "4-live" "contract violation: plan file landed but member group reply missing (raw plan: $EVIDENCE_DIR/plan-file-4.md group: $GROUP4_OUT trigger: $TRIGGER_OUT)"
+    elif [[ -z "$file_present" && -n "$group_present" ]]; then
+      fail "4-live" "contract violation: member replied in group but no plan file under .opencode/plans/ (raw group: $GROUP4_OUT trigger: $TRIGGER_OUT)"
+    else
+      needs_attention "4-live" "dispatch accepted but no file/reply within ${LIVE_TIMEOUT_SEC}s (LLM/worker stall?) raw: trigger $TRIGGER_OUT group $GROUP4_OUT"
+    fi
   fi
 fi
 
-# ---------------------------------------------------------------- step 5: live subagent spawn smoke (same session)
+# ---------------------------------------------------------------- step 5: live subagent spawn smoke (own vteam-plan session)
 log "--- step 5: live subagent spawn + nesting-blocked (bounded ${LIVE_TIMEOUT_SEC}s) ---"
 LIVE5_PATH="guard-fallback"
-if [[ "$LIVE4_OK" == "yes" && -n "${SID4:-}" ]]; then
+if [[ "$LIVE4_OK" == "yes" ]]; then
   PROMPT5="$(mktmp)"
   cat >"$PROMPT5" <<EOF
-继续 e2e（同一会话）。调用 task 工具发起一个子会话，参数 subagent_type 固定为 'vteam-plan'，子会话指令为：“读取文件 /data/vteam-worker/$PLAN_FILE 的首行并原样返回，返回文本以 PROBE-OK 开头；然后你自己再调用一次 task 工具（subagent_type 仍为 'vteam-plan'，指令为任意只读查看），把第二次调用的返回结果或报错原文用 NESTED-RESULT: 开头单行报告并一并带回”。等待子会话返回后，把结果全文回复，并以 E2E-SUBAGENT-DONE 结尾。
+e2e 子会话探测（vteam-plan 会话直调）。调用 task 工具发起一个子会话，参数 subagent_type 固定为 'vteam-plan'，子会话指令为：“读取文件 /data/vteam-worker/$PLAN_FILE 的首行并原样返回，返回文本以 PROBE-OK 开头；然后你自己再调用一次 task 工具（subagent_type 仍为 'vteam-plan'，指令为任意只读查看），把第二次调用的返回结果或报错原文用 NESTED-RESULT: 开头单行报告并一并带回”。等待子会话返回后，把结果全文回复，并以 E2E-SUBAGENT-DONE 结尾。
 EOF
+  SID5="$(serve_create_session)" || { needs_attention "5-live" "POST serve /session failed (serve/LLM infra?)"; SID5=""; }
+  if [[ -n "${SID5:-}" ]]; then
+  log "step5 sid=$SID5"
   EXEC5_OUT="$EVIDENCE_DIR/execute-5.json"
-  CODE5="$(worker_exec 'vteam-plan' "/data/vteam-worker/tasks/$TASK_ID" "$SID4" "$TASK_ID" "$PLAN_AGENT_ID" "$PROMPT5" "$EXEC5_OUT")" \
+  CODE5="$(worker_exec 'vteam-plan' "/data/vteam-worker/tasks/$TASK_ID" "$SID5" "$TASK_ID" "$PLAN_AGENT_ID" "$PROMPT5" "$EXEC5_OUT")" \
     || fail "5-live" "worker /execute call failed"
   if [[ "$CODE5" != "202" ]]; then
     needs_attention "5-live" "POST worker /execute HTTP $CODE5 (infra?) raw: $EXEC5_OUT"
   else
     SERVE5_OUT="$EVIDENCE_DIR/serve-msg-5.json"
-    SCRUB5_OUT="$EVIDENCE_DIR/serve-msg-5-scrubbed.txt"
+    ASSIST5_OUT="$EVIDENCE_DIR/serve-msg-5-assistant.txt"
     deadline=$((SECONDS + LIVE_TIMEOUT_SEC))
     while [[ $SECONDS -lt $deadline ]]; do
-      curl -sS "$SERVE_BASE_URL/session/$SID4/message" -o "$SERVE5_OUT" 2>/dev/null || true
-      scrub_transcript "$SERVE5_OUT" "$SCRUB5_OUT" "$PROMPT5" "$PROMPT4"
-      grep -q 'E2E-SUBAGENT-DONE' "$SCRUB5_OUT" 2>/dev/null && break
+      curl -sS "$SERVE_BASE_URL/session/$SID5/message" -o "$SERVE5_OUT" 2>/dev/null || true
+      assistant_text "$SERVE5_OUT" "$ASSIST5_OUT"
+      grep -q 'E2E-SUBAGENT-DONE' "$ASSIST5_OUT" 2>/dev/null && break
       sleep "$POLL_INTERVAL_SEC"
     done
-    curl -sS "$SERVE_BASE_URL/session/$SID4/message" -o "$SERVE5_OUT" 2>/dev/null || true
-    scrub_transcript "$SERVE5_OUT" "$SCRUB5_OUT" "$PROMPT5" "$PROMPT4"
-    if grep -q 'PROBE-OK' "$SCRUB5_OUT" 2>/dev/null; then
-      if ! python3 - "$SCRUB5_OUT" <<'EOF'; then
+    curl -sS "$SERVE_BASE_URL/session/$SID5/message" -o "$SERVE5_OUT" 2>/dev/null || true
+    assistant_text "$SERVE5_OUT" "$ASSIST5_OUT"
+    if grep -q 'PROBE-OK' "$ASSIST5_OUT" 2>/dev/null; then
+      if ! python3 - "$ASSIST5_OUT" <<'EOF'; then
 import re,sys
 text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 m = re.search(r'NESTED-RESULT\s*[:：]\s*(.{0,800})', text, re.S)
@@ -714,8 +834,8 @@ assert re.search(r'denied|越界|not allowed|forbidden|blocked|childToolDenies|d
   "nested call NOT blocked, window=%r" % window[:200]
 print("nested spawn blocked, window=%r" % window[:200])
 EOF
-        if grep -q 'NESTED-RESULT' "$SCRUB5_OUT" 2>/dev/null; then
-          fail "5-live" "nested spawn NOT blocked per NESTED-RESULT window (raw: $SERVE5_OUT)"
+        if grep -q 'NESTED-RESULT' "$ASSIST5_OUT" 2>/dev/null; then
+          fail "5-live" "nested spawn NOT blocked per NESTED-RESULT window (raw: $SERVE5_OUT assistant: $ASSIST5_OUT)"
         else
           needs_attention "5-live" "PROBE-OK ok but subagent did not report NESTED-RESULT label (LLM format drift?) raw: $SERVE5_OUT"
         fi
@@ -726,6 +846,7 @@ EOF
     else
       needs_attention "5-live" "no PROBE-OK within ${LIVE_TIMEOUT_SEC}s (LLM infra?) raw: $SERVE5_OUT"
     fi
+  fi
   fi
 else
   needs_attention "5-live" "step 4 not live-ok; subagent spawn proven via guard+layer-1 fallback (see live-path.txt)"
@@ -797,13 +918,13 @@ pass "6d (repo grep plan_review in server/src+worker/src non-spec: zero hits)"
 
 # ---------------------------------------------------------------- step 7: cleanup + baseline restore
 log "--- step 7: cleanup (plan file, serve sessions, task-dir verify) ---"
-[[ -n "${SID4:-}" ]] && curl -sS -o /dev/null -X DELETE "$SERVE_BASE_URL/session/$SID4" 2>/dev/null || true
+[[ -n "${SID5:-}" ]] && curl -sS -o /dev/null -X DELETE "$SERVE_BASE_URL/session/$SID5" 2>/dev/null || true
 [[ -n "${PROBE_SID:-}" ]] && curl -sS -o /dev/null -X DELETE "$SERVE_BASE_URL/session/$PROBE_SID" 2>/dev/null || true
-docker compose exec -T worker rm -f "tasks/$TASK_ID/.opencode/plans/e2e-plan-member.md" >/dev/null 2>&1 || true
-docker compose exec -T worker test '!' -f "tasks/$TASK_ID/.opencode/plans/e2e-plan-member.md" 2>/dev/null \
+docker compose exec -T worker rm -f "/data/vteam-worker/tasks/$TASK_ID/.opencode/plans/e2e-plan-member.md" >/dev/null 2>&1 || true
+docker compose exec -T worker test '!' -f "/data/vteam-worker/tasks/$TASK_ID/.opencode/plans/e2e-plan-member.md" 2>/dev/null \
   || fail "7-cleanup" "e2e plan file not removed"
 TASKDIR_FINAL="$EVIDENCE_DIR/taskdir-final.txt"
-docker compose exec -T worker sh -c "find tasks/$TASK_ID -type f 2>/dev/null | sort" >"$TASKDIR_FINAL" 2>/dev/null || : >"$TASKDIR_FINAL"
+docker compose exec -T worker sh -c "find /data/vteam-worker/tasks/$TASK_ID -type f 2>/dev/null | sort" >"$TASKDIR_FINAL" 2>/dev/null || : >"$TASKDIR_FINAL"
 if ! diff -q "$TASKDIR_BEFORE" "$TASKDIR_FINAL" >/dev/null 2>&1; then
   fail "7-cleanup" "task dir differs after cleanup (before: $TASKDIR_BEFORE final: $TASKDIR_FINAL)"
 fi
@@ -816,9 +937,9 @@ if [[ -d "$(dirname "$NOTEPAD")" ]]; then
     echo ""
     echo "## e2e-plan-member.sh run ($(date -u +%FT%TZ)) HEAD=$BASELINE_HEAD"
     echo "- seed: a_plan(ep_plan)/tmm_0000000006 non-main/6 members; /agents template; /teams 计划员."
-    echo "- injection: vteam-plan mode=all task=allow plans-scoped edit group_post=allow; other five byte-identical to F3-own baseline; plan diff limited to mode/task/group_post/plans-glob."
+    echo "- injection: vteam-plan mode=all task=allow plans-scoped edit group_post guard-only; other five split-aware parity vs F3-own baseline (baseline predates allowlist-split); plan diff limited to mode/task/plans-glob + deny removals."
     echo "- guard: 12/12 (task gate allow-only plan+plan; execute deny; unmapped pass-through; plans-write allow / src-write deny)."
-    echo "- live step4 (direct dispatch): ${LIVE4_OK:-infra-skipped}; live step5 path: $LIVE5_PATH."
+    echo "- live step4 (group @): ${LIVE4_OK:-infra-skipped}; live step5 path: $LIVE5_PATH."
     echo "- plan_review: tools/list clean; POST /review HTTP $REVIEW_CODE; /agent-policies clean; repo non-spec grep zero hits."
     echo "- cleanup: plan file removed, task dir identical, serve sessions aborted. needs-attention: $(cat "$NEEDS_FILE" 2>/dev/null | tr '\n' ';')"
   } >>"$NOTEPAD" 2>/dev/null || warn "could not append to $NOTEPAD"

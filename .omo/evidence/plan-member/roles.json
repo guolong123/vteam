@@ -1,0 +1,388 @@
+{
+  "enabled": true,
+  "roles": {
+    "vteam-plan": {
+      "permission": {
+        "edit": {
+          "*": "deny",
+          "**.opencode/plans/**": "allow"
+        },
+        "read": {
+          "*": "allow"
+        },
+        "bash": "deny",
+        "task": "allow",
+        "vteam_notify_agent": "deny",
+        "vteam_submit_artifact": "deny",
+        "vteam_issue_create": "deny",
+        "vteam_issue_list": "deny",
+        "vteam_issue_get": "deny",
+        "vteam_issue_update": "deny",
+        "vteam_issue_transition": "deny",
+        "vteam_memory_save": "deny",
+        "vteam_memory_search": "deny",
+        "vteam_channel_send": "deny"
+      },
+      "tools": {
+        "vteam_task_context": "allow",
+        "vteam_read_file": "allow",
+        "vteam_doclib": "allow",
+        "vteam_team_view": "allow",
+        "vteam_my_profile": "allow",
+        "vteam_chat_history": "allow",
+        "vteam_wecom_reply": "allow",
+        "vteam_group_post": "allow"
+      },
+      "bashDeny": [
+        ">",
+        ">>",
+        "tee",
+        "cp",
+        "mv",
+        "sed -i",
+        "truncate",
+        "dd",
+        "ln",
+        "python -c",
+        "node -e",
+        "perl -i",
+        "git apply",
+        "patch",
+        "git push",
+        "rm"
+      ],
+      "correction": {
+        "scopeSummary": "计划职责：只读分析并产出实施计划；不写文件、不执行变更。",
+        "handoff": {
+          "requirements": "vteam-product",
+          "design": "vteam-architect",
+          "code": "vteam-developer",
+          "test": "vteam-tester",
+          "process": "vteam-project_manager"
+        },
+        "denyTemplate": "【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。"
+      }
+    },
+    "vteam-product": {
+      "permission": {
+        "edit": {
+          "*": "deny",
+          "**tasks/*/prototypes/**": "allow",
+          "**tasks/*/docs/**": "allow"
+        },
+        "read": {
+          "*": "allow"
+        },
+        "bash": "deny",
+        "task": "deny"
+      },
+      "tools": {
+        "vteam_submit_artifact": "allow",
+        "vteam_doclib": "allow",
+        "vteam_issue_create": "allow",
+        "vteam_issue_list": "allow",
+        "vteam_issue_get": "allow",
+        "vteam_issue_update": "allow",
+        "vteam_issue_transition": "allow",
+        "vteam_group_post": "allow",
+        "vteam_notify_agent": "allow",
+        "vteam_memory_save": "allow",
+        "vteam_memory_search": "allow",
+        "vteam_read_file": "allow",
+        "vteam_task_context": "allow",
+        "vteam_chat_history": "allow",
+        "vteam_team_view": "allow",
+        "vteam_my_profile": "allow",
+        "vteam_wecom_reply": "allow",
+        "vteam_channel_send": "allow"
+      },
+      "bashDeny": [
+        ">",
+        ">>",
+        "tee",
+        "cp",
+        "mv",
+        "sed -i",
+        "truncate",
+        "dd",
+        "ln",
+        "python -c",
+        "node -e",
+        "perl -i",
+        "git apply",
+        "patch",
+        "git push",
+        "rm"
+      ],
+      "correction": {
+        "scopeSummary": "需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。",
+        "handoff": {
+          "design": "vteam-architect",
+          "code": "vteam-developer",
+          "test": "vteam-tester",
+          "process": "vteam-project_manager"
+        },
+        "denyTemplate": "【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。"
+      }
+    },
+    "vteam-architect": {
+      "permission": {
+        "edit": {
+          "*": "deny",
+          "**tasks/*/docs/**": "allow"
+        },
+        "read": {
+          "*": "allow"
+        },
+        "bash": "ask",
+        "task": "deny",
+        "vteam_issue_create": "deny",
+        "vteam_issue_update": "deny",
+        "vteam_issue_transition": "deny"
+      },
+      "tools": {
+        "vteam_submit_artifact": "allow",
+        "vteam_doclib": "allow",
+        "vteam_read_file": "allow",
+        "vteam_group_post": "allow",
+        "vteam_notify_agent": "allow",
+        "vteam_memory_save": "allow",
+        "vteam_memory_search": "allow",
+        "vteam_task_context": "allow",
+        "vteam_chat_history": "allow",
+        "vteam_issue_list": "allow",
+        "vteam_issue_get": "allow",
+        "vteam_team_view": "allow",
+        "vteam_my_profile": "allow",
+        "vteam_wecom_reply": "allow",
+        "vteam_channel_send": "allow",
+        "git_clone": "allow",
+        "git_pull": "allow",
+        "git_status": "allow",
+        "git_diff": "allow",
+        "git_log": "allow"
+      },
+      "bashDeny": [
+        ">",
+        ">>",
+        "tee",
+        "cp",
+        "mv",
+        "sed -i",
+        "truncate",
+        "dd",
+        "ln",
+        "python -c",
+        "node -e",
+        "perl -i",
+        "git apply",
+        "patch",
+        "git push",
+        "rm"
+      ],
+      "correction": {
+        "scopeSummary": "技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码、不写仓库。",
+        "handoff": {
+          "requirements": "vteam-product",
+          "code": "vteam-developer",
+          "test": "vteam-tester",
+          "process": "vteam-project_manager"
+        },
+        "denyTemplate": "【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。"
+      }
+    },
+    "vteam-developer": {
+      "permission": {
+        "edit": {
+          "*": "deny",
+          "**tasks/*/**": "allow"
+        },
+        "read": {
+          "*": "allow"
+        },
+        "bash": "ask",
+        "task": "deny",
+        "vteam_issue_create": "deny"
+      },
+      "tools": {
+        "vteam_submit_artifact": "allow",
+        "vteam_read_file": "allow",
+        "vteam_doclib": "allow",
+        "vteam_group_post": "allow",
+        "vteam_notify_agent": "allow",
+        "vteam_memory_save": "allow",
+        "vteam_memory_search": "allow",
+        "vteam_task_context": "allow",
+        "vteam_chat_history": "allow",
+        "vteam_issue_list": "allow",
+        "vteam_issue_get": "allow",
+        "vteam_issue_update": "allow",
+        "vteam_issue_transition": "allow",
+        "vteam_team_view": "allow",
+        "vteam_my_profile": "allow",
+        "vteam_wecom_reply": "allow",
+        "vteam_channel_send": "allow",
+        "git_clone": "allow",
+        "git_pull": "allow",
+        "git_status": "allow",
+        "git_diff": "allow",
+        "git_log": "allow"
+      },
+      "bashDeny": [
+        ">",
+        ">>",
+        "tee",
+        "cp",
+        "mv",
+        "sed -i",
+        "truncate",
+        "dd",
+        "ln",
+        "python -c",
+        "node -e",
+        "perl -i",
+        "git apply",
+        "patch",
+        "git push",
+        "rm"
+      ],
+      "correction": {
+        "scopeSummary": "编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。",
+        "handoff": {
+          "requirements": "vteam-product",
+          "design": "vteam-architect",
+          "test": "vteam-tester",
+          "process": "vteam-project_manager"
+        },
+        "denyTemplate": "【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。"
+      }
+    },
+    "vteam-tester": {
+      "permission": {
+        "edit": {
+          "*": "deny",
+          "**tasks/*/tests/**": "allow",
+          "**tasks/*/docs/**": "allow"
+        },
+        "read": {
+          "*": "allow"
+        },
+        "bash": "ask",
+        "task": "deny",
+        "vteam_issue_update": "deny"
+      },
+      "tools": {
+        "vteam_submit_artifact": "allow",
+        "vteam_issue_create": "allow",
+        "vteam_issue_list": "allow",
+        "vteam_issue_get": "allow",
+        "vteam_issue_transition": "allow",
+        "vteam_read_file": "allow",
+        "vteam_doclib": "allow",
+        "vteam_group_post": "allow",
+        "vteam_notify_agent": "allow",
+        "vteam_memory_save": "allow",
+        "vteam_memory_search": "allow",
+        "vteam_task_context": "allow",
+        "vteam_chat_history": "allow",
+        "vteam_team_view": "allow",
+        "vteam_my_profile": "allow",
+        "vteam_wecom_reply": "allow",
+        "vteam_channel_send": "allow",
+        "git_clone": "allow",
+        "git_pull": "allow",
+        "git_status": "allow",
+        "git_diff": "allow",
+        "git_log": "allow"
+      },
+      "bashDeny": [
+        ">",
+        ">>",
+        "tee",
+        "cp",
+        "mv",
+        "sed -i",
+        "truncate",
+        "dd",
+        "ln",
+        "python -c",
+        "node -e",
+        "perl -i",
+        "git apply",
+        "patch",
+        "git push",
+        "rm"
+      ],
+      "correction": {
+        "scopeSummary": "测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。",
+        "handoff": {
+          "requirements": "vteam-product",
+          "design": "vteam-architect",
+          "code": "vteam-developer",
+          "process": "vteam-project_manager"
+        },
+        "denyTemplate": "【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。"
+      }
+    },
+    "vteam-project_manager": {
+      "permission": {
+        "edit": {
+          "*": "deny"
+        },
+        "read": {
+          "*": "allow"
+        },
+        "bash": "deny",
+        "task": "deny",
+        "vteam_submit_artifact": "deny"
+      },
+      "tools": {
+        "vteam_task_context": "allow",
+        "vteam_group_post": "allow",
+        "vteam_notify_agent": "allow",
+        "vteam_issue_create": "allow",
+        "vteam_issue_list": "allow",
+        "vteam_issue_get": "allow",
+        "vteam_issue_update": "allow",
+        "vteam_issue_transition": "allow",
+        "vteam_memory_save": "allow",
+        "vteam_memory_search": "allow",
+        "vteam_team_view": "allow",
+        "vteam_my_profile": "allow",
+        "vteam_read_file": "allow",
+        "vteam_doclib": "allow",
+        "vteam_chat_history": "allow",
+        "vteam_wecom_reply": "allow",
+        "vteam_channel_send": "allow"
+      },
+      "bashDeny": [
+        ">",
+        ">>",
+        "tee",
+        "cp",
+        "mv",
+        "sed -i",
+        "truncate",
+        "dd",
+        "ln",
+        "python -c",
+        "node -e",
+        "perl -i",
+        "git apply",
+        "patch",
+        "git push",
+        "rm"
+      ],
+      "correction": {
+        "scopeSummary": "流程控制：负责任务拆解编排、进度跟踪、风险与阻塞协调；不产出需求/方案/代码/用例、不越权验收。",
+        "handoff": {
+          "requirements": "vteam-product",
+          "design": "vteam-architect",
+          "code": "vteam-developer",
+          "test": "vteam-tester"
+        },
+        "denyTemplate": "【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。"
+      }
+    }
+  }
+}

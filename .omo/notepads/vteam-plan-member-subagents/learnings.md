@@ -129,3 +129,27 @@ Baseline HEAD at start: `5ad2e2f docs(plan): mark plan-skills-rewrite F1-F4 comp
 - 改单（2 文件，worker/ 域内）：`opencode-config-builder.ts` — `AgentPolicyDefinition.mode` 与 `AgentSectionEntry.mode` 放宽为 `'primary' | 'all'`；`assertAgentShape` 接受两者、拒其他（报错文案更新为 `仅支持 'primary' | 'all'`）；`buildAgentDefinitions` 输出 `mode: agent.mode` 原样透出；doc 注释 `{ name, description, mode:'primary'|'all', permission }` 同步。spec 新增 `mode:'all'` 原样透出 + `mode:'bogus'` 抛错两用例；既有 primary 行为断言不动。
 - grep 复核（`worker/src/resources/`）：`primary` 残留仅放宽后的校验/类型/文案 + 既有 primary 用例 + injector/role-guard spec 的用户配置透传 fixture（与 builder 校验无关）；`mode` 残留确认 injector.ts 无 mode 硬编码。
 - QA：`cd worker && npx tsc --noEmit` exit 0；`npx jest src/resources/opencode-config-builder.spec.ts` 8/8 绿。
+
+## e2e-plan-member.sh run (2026-09-14T08:19:55Z) HEAD=5d416a2ca09dd68f255006b7f1fbe692d9435a94
+- seed: a_plan(ep_plan)/tmm_0000000006 non-main/6 members; /agents template; /teams 计划员.
+- injection: vteam-plan mode=all task=allow plans-scoped edit group_post guard-only; other five split-aware parity vs F3-own baseline (baseline predates allowlist-split); plan diff limited to mode/task/plans-glob + deny removals.
+- guard: 12/12 (task gate allow-only plan+plan; execute deny; unmapped pass-through; plans-write allow / src-write deny).
+- live step4 (group @): yes; live step5 path: live.
+- plan_review: tools/list clean; POST /review HTTP 404; /agent-policies clean; repo non-spec grep zero hits.
+- cleanup: plan file removed, task dir identical, serve sessions aborted. needs-attention: 
+
+## e2e-plan-member.sh run (2026-09-14T08:26:38Z) HEAD=5d416a2ca09dd68f255006b7f1fbe692d9435a94
+- seed: a_plan(ep_plan)/tmm_0000000006 non-main/6 members; /agents template; /teams 计划员.
+- injection: vteam-plan mode=all task=allow plans-scoped edit group_post guard-only; other five split-aware parity vs F3-own baseline (baseline predates allowlist-split); plan diff limited to mode/task/plans-glob + deny removals.
+- guard: 12/12 (task gate allow-only plan+plan; execute deny; unmapped pass-through; plans-write allow / src-write deny).
+- live step4 (group @): yes; live step5 path: live.
+- plan_review: tools/list clean; POST /review HTTP 404; /agent-policies clean; repo non-spec grep zero hits.
+- cleanup: plan file removed, task dir identical, serve sessions aborted. needs-attention: 
+
+## e2e-plan-member.sh stabilisation notes (runs 2-9, same HEAD 5d416a2, script-only changes, no product diff)
+
+- Direct worker /execute is NOT a valid step-4 trigger (proven, kept as evidence `serve-msg-4.json`): it bypasses server `registerExecution`, so the member's correct `vteam_group_post` call 403s by design (`PLATFORM_MCP_FORBIDDEN ... 禁止冒充`). Step 4 now uses the production group-@ path (mention → resolveMentions + task-mode session backfill → dispatch registers `tmm_0000000006` → execute); `group_post` then succeeds and the reply lands in group (run-5..9: `m_0000000252/0256/...` from `tmm_0000000006` with `E2E-PLAN-POSTED`).
+- F3-own `injected-opencode.json` baseline predates allowlist-split `22e95ee`: five-role check is now split-aware parity (retained keys byte-identical, zero new keys; baseline-only deny keys allowed iff guard-moved into that role's live guard tools or server-gated out of both layers). Any new/changed key still fails.
+- macOS bash 3.2 traps fixed in-script: (1) `$VAR` directly followed by CJK punctuation inside heredocs mis-scans the name (`PLAN_MEMBER_ID）` → unbound) — braced; (2) `${4:-{}}` parses as `${4:-{}` + literal `}` → `mcp_post` params default rewritten without braces; (3) worker-exec cwd is `/app`, so all worker `find/rm/test` paths absolutised to `/data/vteam-worker/...`, stale-file pre-clean moved BEFORE the taskdir snapshot and verified.
+- Step-5 marker matching reads assistant-role text + tool outputs only (`assistant_text()`): serve transcripts echo the prompt double-escaped, which defeats echo-scrubbing and false-positives marker greps. Live proof (run-7 session `ses_f610f3d08ffeOhgShEhDHF1fys`, supplemental `serve-msg-5-run7-supplemental.json`; rerun green in-suite): parent `task[subagent_type=vteam-plan]` → completed, child `PROBE-OK # E2E 角色边界验证计划`, nested attempt → `Subagent depth limit reached (1)`.
+- Step-4 `E2E-PLAN-DONE` check is WARN-level by design (member's group_post summary + file are the contract; final回流 text varies). Runs 8-9 full PASS twice consecutively, `needs-attention.txt` empty.

@@ -1,0 +1,18 @@
+<task id="ses_f60fa50cbffe0v04yw3Lj4fwbW" state="completed">
+<task_result>
+PROBE-OK # E2E 角色边界验证计划
+NESTED-RESULT: Subagent depth limit reached (1). Increase "subagent_depth" to allow nested subagents.
+</task_result>
+</task>
+子会话返回结果：
+
+```
+PROBE-OK # E2E 角色边界验证计划
+NESTED-RESULT: Subagent depth limit reached (1). Increase "subagent_depth" to allow nested subagents.
+```
+
+**解析：**
+1. **首行读取成功** — 文件首行内容为 `# E2E 角色边界验证计划`，子会话已按要求加上 `PROBE-OK` 前缀原样返回。
+2. **嵌套子会话被拦截** — 子会话内部尝试再次调用 `task` 工具（`subagent_type: vteam-plan`）时，命中了深度限制（当前限制为 1），未能真正发起嵌套会话，返回了错误提示。
+
+E2E-SUBAGENT-DONE
