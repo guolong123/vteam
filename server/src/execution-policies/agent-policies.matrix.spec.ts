@@ -3,6 +3,7 @@ import {
   buildReadPermission,
   ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
+  ROLE_SERVER_GATED_TOOLS,
   VTEAM_GIT_TOOL_NAMES,
   VTEAM_MCP_TOOL_NAMES,
   type VteamAgentName,
@@ -53,17 +54,21 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
     }
   });
 
-  it('mcpDenies ∈ MCP 注册表且与该角色 toolAllows 互斥', () => {
+  it('mcpDenies ∈ MCP 注册表、非 server-gated，且与该角色 toolAllows 互斥', () => {
+    const gated = new Set<string>(ROLE_SERVER_GATED_TOOLS);
     for (const name of AGENT_NAMES) {
       const { toolAllows, mcpDenies } = ROLE_BOUNDARIES[name];
       const allowed = new Set(Object.keys(toolAllows));
       for (const denied of mcpDenies) {
         expect(MCP_SET.has(denied)).toBe(true);
         expect(allowed.has(denied)).toBe(false);
+        expect(gated.has(denied)).toBe(false);
       }
-      // mcpDenies 即 MCP 全集减 allowlist（与 defineBoundary 补集语义一致）。
+      // mcpDenies 即 MCP 全集减 allowlist 再减 server-gated（与 defineBoundary 补集语义一致）。
       expect([...mcpDenies].sort()).toEqual(
-        VTEAM_MCP_TOOL_NAMES.filter((mcp) => !allowed.has(mcp)).sort(),
+        VTEAM_MCP_TOOL_NAMES.filter(
+          (mcp) => !allowed.has(mcp) && !gated.has(mcp),
+        ).sort(),
       );
     }
   });
@@ -90,6 +95,25 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       expect(expected).not.toHaveProperty('write');
       for (const denied of boundary.mcpDenies) {
         expect(expected[denied]).toBe('deny');
+      }
+    }
+  });
+
+  it('内置层① permission 对 server-gated 工具无 deny 键（仅 platform-mcp 服务端判定）', async () => {
+    const service = new ExecutionPolicyService(
+      {
+        agent: { findMany: jest.fn().mockResolvedValue([]) },
+        executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
+      } as never,
+      {} as never,
+    );
+    const policies = await service.buildAgentPolicies();
+    for (const agent of policies.agents) {
+      for (const gated of ROLE_SERVER_GATED_TOOLS) {
+        expect(agent.permission).not.toHaveProperty(gated);
+        expect(policies.guard.roles[agent.name].permission).not.toHaveProperty(
+          gated,
+        );
       }
     }
   });
@@ -136,8 +160,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       }
     });
 
-    it('agent/role permission 与层①派生 map 一致；全员 task deny、无 write', () => {
-      for (const agent of policies.agents) {
+    it('agent/role permission 与层①派生 map 一致；全员 task deny、无 write', () => {      for (const agent of policies.agents) {
         const boundary = ROLE_BOUNDARIES[agent.name];
         const expectedPermission = {
           edit: buildEditPermission(boundary.writeGlobs),

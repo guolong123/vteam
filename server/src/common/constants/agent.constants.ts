@@ -136,7 +136,25 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_plan_mode',
   'vteam_channel_send',
   'vteam_wecom_reply',
+  'vteam_task_create',
 ] as const;
+
+/**
+ * 主实例专属（server-gated）MCP 工具真实名：由 platform-mcp 服务端按
+ * `task.mainAgentInstanceId` / `team.mainAgentMemberId` 权威判定（401/403），
+ * guard 层② 不参与判定（pass-through）。
+ * 因此本清单既不进 `toolAllows`（guard 白名单），也不进 `mcpDenies`（层① deny）。
+ */
+export const ROLE_SERVER_GATED_TOOLS: readonly string[] = [
+  'vteam_task_transition',
+  'vteam_question_confirm',
+  'vteam_task_create',
+  'vteam_plan_mode',
+  'vteam_team_add_member',
+] as const;
+
+/** server-gated 集合（`defineBoundary` 的 `mcpDenies` 推导用，避免逐次线性扫描）。 */
+const SERVER_GATED_SET: ReadonlySet<string> = new Set(ROLE_SERVER_GATED_TOOLS);
 
 /**
  * worker 注入的自定义 git 工具真实 action 名（`worker/src/git/git-tools.ts` GIT_TOOLS）。
@@ -182,7 +200,9 @@ function defineBoundary(
   const allowed = new Set(Object.keys(base.toolAllows));
   return {
     ...base,
-    mcpDenies: VTEAM_MCP_TOOL_NAMES.filter((name) => !allowed.has(name)),
+    mcpDenies: VTEAM_MCP_TOOL_NAMES.filter(
+      (name) => !allowed.has(name) && !SERVER_GATED_SET.has(name),
+    ),
   };
 }
 
@@ -282,6 +302,8 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_chat_history: 'allow',
       vteam_team_view: 'allow',
       vteam_my_profile: 'allow',
+      vteam_wecom_reply: 'allow',
+      vteam_channel_send: 'allow',
     },
   }),
 
@@ -312,6 +334,8 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_issue_get: 'allow',
       vteam_team_view: 'allow',
       vteam_my_profile: 'allow',
+      vteam_wecom_reply: 'allow',
+      vteam_channel_send: 'allow',
       git_clone: 'allow',
       git_pull: 'allow',
       git_status: 'allow',
@@ -336,6 +360,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     toolAllows: {
       vteam_submit_artifact: 'allow',
       vteam_read_file: 'allow',
+      vteam_doclib: 'allow',
       vteam_group_post: 'allow',
       vteam_notify_agent: 'allow',
       vteam_memory_save: 'allow',
@@ -348,6 +373,8 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_issue_transition: 'allow',
       vteam_team_view: 'allow',
       vteam_my_profile: 'allow',
+      vteam_wecom_reply: 'allow',
+      vteam_channel_send: 'allow',
       git_clone: 'allow',
       git_pull: 'allow',
       git_status: 'allow',
@@ -385,6 +412,8 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_chat_history: 'allow',
       vteam_team_view: 'allow',
       vteam_my_profile: 'allow',
+      vteam_wecom_reply: 'allow',
+      vteam_channel_send: 'allow',
       git_clone: 'allow',
       git_pull: 'allow',
       git_status: 'allow',
@@ -421,6 +450,9 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_my_profile: 'allow',
       vteam_read_file: 'allow',
       vteam_doclib: 'allow',
+      vteam_chat_history: 'allow',
+      vteam_wecom_reply: 'allow',
+      vteam_channel_send: 'allow',
     },
   }),
 
@@ -444,6 +476,8 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_doclib: 'allow',
       vteam_team_view: 'allow',
       vteam_my_profile: 'allow',
+      vteam_chat_history: 'allow',
+      vteam_wecom_reply: 'allow',
     },
   }),
 };

@@ -29,6 +29,7 @@ const mockPrisma = {
 import { main } from '../../prisma/seed';
 import {
   ROLE_BOUNDARIES,
+  ROLE_SERVER_GATED_TOOLS,
   VTEAM_MCP_TOOL_NAMES,
 } from '../common/constants/agent.constants';
 
@@ -123,17 +124,24 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       expect(['allow', 'ask', 'deny']).toContain(permission.bash);
       expect(permission.task).toBe('deny');
 
-      // 其余键一律为真实暴露名 `vteam_<action>` 的 deny（禁裸 MCP 名、禁未知键）
+      // 其余键一律为真实暴露名 `vteam_<action>` 的 deny（禁裸 MCP 名、禁未知键），
+      // 且与该角色 `ROLE_BOUNDARIES.mcpDenies` 逐项一致（product 全 allow 非门控工具时可为空）。
       const otherKeys = Object.keys(permission).filter(
         (key) => !['edit', 'read', 'bash', 'task'].includes(key),
       );
-      expect(otherKeys.length).toBeGreaterThan(0);
+      const agentName = AGENT_NAME_BY_POLICY[String(call[0].where.id)];
+      expect([...otherKeys].sort()).toEqual(
+        [...ROLE_BOUNDARIES[agentName].mcpDenies].sort(),
+      );
       for (const key of otherKeys) {
         expect(key.startsWith('vteam_')).toBe(true);
         expect(permission[key]).toBe('deny');
       }
-      // 所有角色均不开放 task_transition（仅主 Agent），必须显式 deny
-      expect(permission.vteam_task_transition).toBe('deny');
+      // 主实例专属工具（server-gated）由 platform-mcp 服务端判定：
+      // 层① permission 不写 deny 键（guard 层② 亦不列入 allowlist）。
+      for (const gated of ROLE_SERVER_GATED_TOOLS) {
+        expect(permission).not.toHaveProperty(gated);
+      }
 
       // 层② 纠正配置：越界话术指向真实工具名 + 角色摘要非空
       expect(create.config.correction.scopeSummary.length).toBeGreaterThan(0);

@@ -14,6 +14,7 @@ import {
   ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
   ROLE_POLICY_DENY_TEMPLATE,
+  ROLE_SERVER_GATED_TOOLS,
   type VteamAgentName,
 } from '../common/constants/agent.constants';
 import { IdGeneratorService } from '../common/id-generator';
@@ -31,6 +32,7 @@ import { UpdateExecutionPolicyDto } from './dto/update-execution-policy.dto';
  *   与 `/agent-policies` 同源；未知角色 → `{}`）；
  * - `bashDeny`：层② bash 硬化清单（`ROLE_BASH_DENY_PATTERNS` 拷贝；未知角色 → `[]`）；
  * - `correction`：config 嵌套 `correction`（层② guard 越界纠正）。
+ * - `serverGated`：主实例专属工具（`ROLE_SERVER_GATED_TOOLS` 拷贝，API/UI 展示用，不进 worker wire 格式）；
  */
 /** 层② guard 单个工具三态（可编辑矩阵：allow/ask/deny；内置 allowlist 仅用前两者）。 */
 export type AgentToolState = 'allow' | 'ask' | 'deny';
@@ -43,6 +45,8 @@ export interface ResolvedExecutionPolicy {
   tools: Record<string, AgentToolState>;
   bashDeny: string[];
   correction: Record<string, unknown>;
+  /** 主实例专属工具（API/UI 展示用；不进 worker wire 格式的 guard.roles）。 */
+  serverGated: string[];
 }
 
 /** GET /agent-policies 单个 opencode agent 定义（Todo 12 worker injector 数据源）。 */
@@ -243,6 +247,7 @@ export class ExecutionPolicyService implements OnModuleInit {
       tools: guard.tools,
       bashDeny: guard.bashDeny,
       correction: config.correction as Record<string, unknown>,
+      serverGated: [...ROLE_SERVER_GATED_TOOLS],
     };
   }
 
@@ -294,6 +299,7 @@ export class ExecutionPolicyService implements OnModuleInit {
         tools: guard.tools,
         bashDeny: guard.bashDeny,
         correction: config.correction as Record<string, unknown>,
+        serverGated: [...ROLE_SERVER_GATED_TOOLS],
       };
     });
   }

@@ -4,6 +4,7 @@ import {
   ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
   ROLE_POLICY_DENY_TEMPLATE,
+  ROLE_SERVER_GATED_TOOLS,
 } from '../common/constants/agent.constants';
 import { ExecutionPolicyService } from './execution-policy.service';
 
@@ -89,6 +90,27 @@ describe('agent-policies custom agents (Todo 2)', () => {
       expect(policies).toEqual(expected);
       expect(JSON.stringify(policies)).toBe(JSON.stringify(expected));
       expect(policies).toMatchSnapshot();
+    });
+
+    it('内置层① permission 对 server-gated 工具无 deny 键（guard pass-through，server 门判定）', async () => {
+      const service = serviceWith({
+        agent: { findMany: jest.fn().mockResolvedValue([]) },
+        executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
+      });
+      const policies = await service.buildAgentPolicies();
+      for (const agent of policies.agents) {
+        for (const gated of ROLE_SERVER_GATED_TOOLS) {
+          expect(agent.permission).not.toHaveProperty(gated);
+          expect(
+            policies.guard.roles[agent.name].permission,
+          ).not.toHaveProperty(gated);
+        }
+      }
+      for (const role of Object.values(policies.guard.roles)) {
+        for (const gated of ROLE_SERVER_GATED_TOOLS) {
+          expect(role.tools).not.toHaveProperty(gated);
+        }
+      }
     });
 
     it('policyId 缺失的 agent 行不进入自定义块（仍纯 6 内置）', async () => {
@@ -211,6 +233,27 @@ describe('agent-policies custom agents (Todo 2)', () => {
         vteam_task_context: 'ask',
       });
       expect(resolved?.bashDeny).toEqual([...ROLE_BASH_DENY_PATTERNS]);
+    });
+
+    it('resolveByAgent 返回 serverGated（ROLE_SERVER_GATED_TOOLS 拷贝，API/UI 用）', async () => {
+      const service = serviceWith({
+        agent: { findMany: jest.fn().mockResolvedValue([]) },
+        executionPolicy: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'ep_product',
+            name: 'product',
+            config: {
+              permission: { task: 'deny' },
+              correction: { scopeSummary: 'x' },
+            },
+          }),
+        },
+      });
+      const resolved = await service.resolveByAgent({
+        role: 'product',
+        policyId: 'ep_product',
+      });
+      expect(resolved?.serverGated).toEqual([...ROLE_SERVER_GATED_TOOLS]);
     });
 
     it('resolveByAgent 对内置名忽略 config.tools（今日常量不变）', async () => {

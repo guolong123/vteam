@@ -3,6 +3,7 @@ import {
   buildModelSeedRows,
   buildReadPermission,
   ROLE_BOUNDARIES,
+  ROLE_SERVER_GATED_TOOLS,
   STATIC_AVAILABLE_MODELS,
   TEMPLATE_DEFAULT_MODELS,
   VTEAM_GIT_TOOL_NAMES,
@@ -75,20 +76,89 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     }
   });
 
-  it('mcpDenies = 全部 MCP 工具中未列入 toolAllows 者，且全为 vteam_ 真实名', () => {
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(22);
+  it('ROLE_SERVER_GATED_TOOLS 为 5 个主实例专属真实名（server-gated，guard 层② pass-through）', () => {
+    expect([...ROLE_SERVER_GATED_TOOLS].sort()).toEqual(
+      [
+        'vteam_task_transition',
+        'vteam_question_confirm',
+        'vteam_task_create',
+        'vteam_plan_mode',
+        'vteam_team_add_member',
+      ].sort(),
+    );
+    for (const gated of ROLE_SERVER_GATED_TOOLS) {
+      expect(VTEAM_MCP_TOOL_NAMES).toContain(gated);
+    }
+  });
+
+  it('mcpDenies = 全部 MCP 工具中未列入 toolAllows 且非 server-gated 者，且全为 vteam_ 真实名', () => {
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(23);
     for (const mcp of VTEAM_MCP_TOOL_NAMES) expect(mcp).toMatch(/^vteam_/);
+    const gated = new Set<string>(ROLE_SERVER_GATED_TOOLS);
     for (const name of ROLE_NAMES) {
       const { toolAllows, mcpDenies } = ROLE_BOUNDARIES[name];
       const allowedMcp = Object.keys(toolAllows).filter((t) =>
         VTEAM_MCP_TOOL_NAMES.includes(t),
       );
       const expectedDenies = VTEAM_MCP_TOOL_NAMES.filter(
-        (mcp) => !allowedMcp.includes(mcp),
+        (mcp) => !allowedMcp.includes(mcp) && !gated.has(mcp),
       );
       expect([...mcpDenies].sort()).toEqual(expectedDenies.sort());
       for (const denied of mcpDenies) expect(denied).toMatch(/^vteam_/);
     }
+  });
+
+  it('mcpDenies 永不含 server-gated 工具（层① 不写 deny）', () => {
+    const gated = new Set<string>(ROLE_SERVER_GATED_TOOLS);
+    for (const name of ROLE_NAMES) {
+      for (const denied of ROLE_BOUNDARIES[name].mcpDenies) {
+        expect(gated.has(denied)).toBe(false);
+      }
+    }
+  });
+
+  it('mcpDenies ∪ toolAllows(MCP) ∪ server-gated 恰覆盖 VTEAM_MCP_TOOL_NAMES（三者互斥、无遗漏）', () => {
+    const gated = new Set<string>(ROLE_SERVER_GATED_TOOLS);
+    for (const name of ROLE_NAMES) {
+      const { toolAllows, mcpDenies } = ROLE_BOUNDARIES[name];
+      const allowedMcp = new Set(
+        Object.keys(toolAllows).filter((t) =>
+          VTEAM_MCP_TOOL_NAMES.includes(t),
+        ),
+      );
+      const denied = new Set(mcpDenies);
+      for (const tool of allowedMcp) {
+        expect(denied.has(tool)).toBe(false);
+        expect(gated.has(tool)).toBe(false);
+      }
+      for (const tool of denied) {
+        expect(gated.has(tool)).toBe(false);
+      }
+      const union = new Set([...allowedMcp, ...denied, ...gated]);
+      expect([...union].sort()).toEqual([...VTEAM_MCP_TOOL_NAMES].sort());
+    }
+  });
+
+  it('D4 按角色 allow 补齐（wecom_reply/channel_send/chat_history/doclib）', () => {
+    const allowsOf = (name: VteamAgentName): ReadonlySet<string> =>
+      new Set(Object.keys(ROLE_BOUNDARIES[name].toolAllows));
+    for (const name of [
+      'vteam-product',
+      'vteam-architect',
+      'vteam-developer',
+      'vteam-tester',
+      'vteam-project_manager',
+    ] as const) {
+      expect(allowsOf(name).has('vteam_wecom_reply')).toBe(true);
+      expect(allowsOf(name).has('vteam_channel_send')).toBe(true);
+    }
+    expect(allowsOf('vteam-plan').has('vteam_chat_history')).toBe(true);
+    expect(allowsOf('vteam-plan').has('vteam_wecom_reply')).toBe(true);
+    expect(allowsOf('vteam-plan').has('vteam_channel_send')).toBe(false);
+    expect(allowsOf('vteam-project_manager').has('vteam_chat_history')).toBe(
+      true,
+    );
+    expect(allowsOf('vteam-developer').has('vteam_doclib')).toBe(true);
   });
 
   it('writeGlobs 使用根无关通用形式且不含绝对路径', () => {
@@ -181,14 +251,15 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       vteam_doclib: 'allow',
       vteam_team_view: 'allow',
       vteam_my_profile: 'allow',
+      vteam_chat_history: 'allow',
+      vteam_wecom_reply: 'allow',
     });
     for (const name of ROLE_NAMES) {
-      expect(Object.keys(ROLE_BOUNDARIES[name].toolAllows)).not.toContain(
-        'vteam_task_transition',
-      );
-      expect(Object.keys(ROLE_BOUNDARIES[name].toolAllows)).not.toContain(
-        'vteam_question_confirm',
-      );
+      for (const gated of ROLE_SERVER_GATED_TOOLS) {
+        expect(Object.keys(ROLE_BOUNDARIES[name].toolAllows)).not.toContain(
+          gated,
+        );
+      }
       expect(Object.keys(ROLE_BOUNDARIES[name].toolAllows)).not.toContain(
         'execute',
       );
