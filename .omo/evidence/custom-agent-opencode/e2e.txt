@@ -3,10 +3,10 @@
 [e2e] cleanup: removing QA rows (agent/policy) ...
 [e2e] cleanup done
 [e2e] --- step 1: create custom policy 'e2e-demo-agent policy' (vteam_group_post=deny) ---
-[e2e] policyId=ep_0000000005
+[e2e] policyId=ep_0000000001
 [e2e] [32mPASS[0m 1 (custom policy created with deny matrix)
-[e2e] --- step 2: create custom agent agentKey='demo-agent' bound to ep_0000000005 ---
-[e2e] agentId=a_0000000006
+[e2e] --- step 2: create custom agent agentKey='demo-agent' bound to ep_0000000001 ---
+[e2e] agentId=a_0000000002
 [e2e] [32mPASS[0m 2 (custom agent created and policy-bound)
 [e2e] --- step 3: GET /agent-policies contains vteam-demo-agent in agents + guard.roles ---
 [e2e] [32mPASS[0m 3 (vteam-demo-agent in agents + guard.roles with matrix)
@@ -19,8 +19,8 @@
 [e2e] [32mPASS[0m 5 (6 built-ins byte-identical to baseline; custom entries only additive)
 [e2e] --- step 6: cleanup QA rows and re-verify /agent-policies is baseline-clean ---
 [e2e] cleanup: removing QA rows (agent/policy) ...
-[e2e] cleanup: DELETE /agents/a_0000000006 done
-[e2e] cleanup: DELETE /execution-policies/ep_0000000005 done
+[e2e] cleanup: DELETE /agents/a_0000000002 done
+[e2e] cleanup: DELETE /execution-policies/ep_0000000001 done
 [e2e] cleanup done
 [e2e] db agents with agent_key='demo-agent': 0
 [e2e] [32mPASS[0m 6 (cleanup complete; /agent-policies back to baseline)

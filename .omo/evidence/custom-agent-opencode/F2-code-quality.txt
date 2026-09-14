@@ -1,0 +1,296 @@
+F2 — Code quality review: plan vteam-custom-agent-opencode (d83fd86..8a1c509)
+==============================================================================
+Scope: git show for each of d83fd86, f353adb, 4564b45, a28e6af, d0f00d1, 2e24119, 8a1c509.
+Plan: .omo/plans/vteam-custom-agent-opencode.md. Repo rules: no `as any` /
+no `@ts-ignore` / no stubs / no AB-dual-track / no "retired" annotations in product code.
+
+Type checks (run 2026-09-14, working tree at 8a1c509):
+- `cd server && npx tsc -p tsconfig.json --noEmit` → exit 0, no output.
+- `cd web && npx tsc --noEmit` → exit 0, no output.
+
+--------------------------------------------------------------------------------
+1. No slop — CLEAR (product code)
+- `as any` / `@ts-ignore` / `@ts-expect-error` / `console.log` / TODO / FIXME /
+  HACK / `toolEffects` / `permissionScope` / `deprecat*` / `retired`: zero hits
+  in the combined product-code diff (agents.service.ts, execution-policy.service.ts,
+  worker-dispatcher.ts, all three agents DTOs, agents.controller.ts, seed.ts,
+  policy-config.dto.ts, agent-policies.controller.ts, web agents/page.tsx).
+- `console.log` hits in the range diff are ONLY inside
+  scripts/e2e-custom-agent-opencode.sh embedded `node -e` guard-probe snippets
+  (stdout piped via `tee` into evidence files guard-decision.txt) — script/evidence
+  output, not product code. Acceptable. NIT at most (could be console.error, but
+  tee captures both; no change requested).
+- `as any` in NEW test code: 5 added lines, all in
+  server/src/chat/worker-dispatcher.spec.ts new dispatch describe block
+  (`(prisma as any)`, `mock.calls[0][1] as any`). Pre-existing file convention:
+  177 `as any` on the pre-change baseline of the same file. Test-only, matches
+  file style, tsc-clean. NIT (not a finding against product code).
+
+--------------------------------------------------------------------------------
+2. Single source of truth — 1x MINOR (web), rest CLEAR
+- CLEAR: `AGENT_KEY_PATTERN` defined once at
+  server/src/common/constants/agent.constants.ts:85. All server consumers reuse
+  via `new RegExp(AGENT_KEY_PATTERN)`: execution-policy.service.ts (custom block
+  + agentNameOf path), worker-dispatcher.ts:resolvePolicyAgentCandidate,
+  CreateAgentDto / UpdateAgentDto / CloneAgentDto `@Matches(...)`,
+  agents.service.ts:assertValidAgentKey. No duplicated regex literal server-side.
+- CLEAR: built-in role knowledge only in `ROLE_BOUNDARIES`; no hardcoded custom
+  role lists. Custom block is fully DB-driven; built-in-name collision guard
+  (`builtInNames` set, execution-policy.service.ts custom loop) skips rather
+  than forks.
+- CLEAR (good dedup): d0f00d1 moves `ROLE_POLICY_DENY_TEMPLATE` out of
+  server/prisma/seed.ts local const into the shared `agent.constants.ts` export —
+  reduces sources from 2 to 1.
+- [MINOR] web/app/(main)/agents/page.tsx:208 — `validateAgentKey` embeds the
+  literal `/^[a-z][a-z0-9_-]{0,62}$/` instead of sharing the pattern. Value is
+  identical to AGENT_KEY_PATTERN so behavior is consistent (client pre-check;
+  server DTO + assertValidAgentKey remain authoritative), but it is a second
+  literal that can drift. Mitigation noted: web cannot import server constants
+  directly; a web-side shared const (or codegen) would close it. No behavior
+  risk today — MINOR, non-blocking.
+- [NIT] `POLICY_ID_PREFIX = 'ep'` now exists in two services:
+  server/src/execution-policies/execution-policy.service.ts:26 (pre-existing)
+  and server/src/agents/agents.service.ts:43 (introduced d0f00d1). Trivial 2-char
+  id-prefix duplicated across module boundary. Suggest a shared export later.
+  NIT, non-blocking.
+
+--------------------------------------------------------------------------------
+3. No dual-track / retired code — CLEAR
+- No `toolEffects`/`permissionScope` reintroduction anywhere in the range.
+- No `deprecated`/`retired` markers added; no old-path-kept-beside-new-path.
+- Type widening (`AgentPolicyDefinition.name: string`,
+  `guard.roles: Record<string, AgentGuardRole>`,
+  `tools: Record<string, AgentToolState>`) is a single-track widening, not a
+  parallel track: built-in entries flow through the same interfaces and the same
+  `guardForAgent` (built-in branch returns the same constants as before —
+  byte-identity snapshot proves it).
+
+--------------------------------------------------------------------------------
+4. Correctness risks — all EXPLICITLY CLEARED
+(a) guardForAgent built-in branch ignores config (byte-identity):
+    CLEAR. server/src/execution-policies/execution-policy.service.ts:477-495 —
+    built-in hit returns `{ ...boundary.toolAllows }` + bashDeny BEFORE any
+    config access; `config` param untouched on that path. Locked by spec
+    `agent-policies.custom-agents.spec.ts` ("resolveByAgent 对内置名忽略
+    config.tools") AND the byte-identity snapshot test (JSON.stringify equality
+    + committed .snap). No risk.
+(b) provisionCustomPolicy deep-copy (no shared refs between policy rows):
+    CLEAR. server/src/agents/agents.service.ts:687-705 —
+    `config: JSON.parse(JSON.stringify(opts.config))`. JSON round-trip severs all
+    references (nested `tools` included). Locked by agents.service.spec.ts
+    assertions `expect(policyData.config).not.toBe(sourceConfig)` and
+    `expect(policyData.config.tools).not.toBe(sourceConfig.tools)` (clone path),
+    plus post-mutation check `expect(sourceConfig.tools).toEqual(...)` proving
+    the source row was not aliased. One known limitation (acceptable): JSON
+    round-trip drops `undefined`/functions — config is plain JSON (`permission/
+    correction/tools` objects), so no data loss in practice.
+(c) toAgentDto moved OUTSIDE the transaction in create/clone:
+    CLEAR and the RIGHT call. d0f00d1 keeps ALL writes (provisionCustomPolicy +
+    agent.create + skills) inside a single `$transaction`; only the READ
+    (`toAgentDto` → `resolveManyByAgents`) moved after commit, because the
+    read goes through a different connection that cannot see uncommitted rows.
+    No lost update (tx already committed; toAgentDto performs no writes) and no
+    leak (failure before commit still rolls back everything; failure in the
+    post-commit read surfaces as 500 AFTER a committed create — standard
+    read-after-write, and strictly better than the alternative of resolving
+    against uncommitted state). Comment in code states the reason. Correct.
+(d) filterToolsMatrix drops invalid values defensively:
+    CLEAR. server/src/execution-policies/execution-policy.service.ts:502-511 —
+    non-object → `{}`; entries filtered by `typeof === 'string' && states.has()`;
+    `bogus_tool: 'whatever'` case covered by spec (demo-agent matrix test asserts
+    exact `{ allow, deny, ask }` triple). `assertValidConfig` also rejects an
+    explicitly-passed non-object `tools` with 400 while missing `tools` stays
+    legal. Defense in depth on both layers.
+(e) resolvePolicyAgentCandidate never fabricates a name from an invalid key:
+    CLEAR. server/src/chat/worker-dispatcher.ts:116-128 — invalid `agentKey`
+    falls through to `roleToAgentName(role)`; both-absent → null; unknown role
+    → null (isVteamAgentName gate). Spec covers `Bad-Key`+role (falls back),
+    `Bad-Key`+null (null), and the dispatch-level test (e) proves even a
+    capability list containing `vteam-Bad-Key` yields NO `agent` key. No
+    injection of unsanitized names into worker payloads.
+
+--------------------------------------------------------------------------------
+5. Transaction integrity — CLEAR
+- create: provisionCustomPolicy + agent.create + createSkills in ONE `$transaction`
+  (agents.service.ts). Explicit `dto.policyId` path binds as-is with no extra
+  write — still inside the same tx scope, no partial state possible.
+- clone: resolveTemplateSource reads + provision + clone.create + copySkills in
+  ONE `$transaction`. Source row never mutated (read via outer prisma, not tx —
+  correct: it must not lock/mutate the source).
+- update: no provisioning; single-tx update + replaceSkills + re-read. Consistent.
+- Failure mapping (`throwOnAgentKeyConflict`, P2002 → 409) happens OUTSIDE the
+  tx closure after rollback — correct placement, cannot mask a half-commit
+  because the tx already rolled back before the catch runs.
+
+--------------------------------------------------------------------------------
+6. API consistency — CLEAR
+- `AGENT_KEY_CONFLICT` (409) and `AGENT_KEY_INVALID` (400) declared once as
+  module consts (agents.service.ts:46/49) and applied uniformly via
+  `assertValidAgentKey` (pre-write, all three paths) + `throwOnAgentKeyConflict`
+  (P2002 catch, all three paths). DTO layer mirrors the same rules with
+  `@Matches(new RegExp(AGENT_KEY_PATTERN))` + `vteam-` negative lookahead, so
+  client gets 400 before the service layer even runs.
+- Edge: update only validates when `agentKey !== undefined` (agents.service.ts:319)
+  — correct opt-in semantics; `agentKey` cannot be nulled (DTO type `agentKey?: string`,
+  no null), so no key-erasure path. No inconsistency.
+
+--------------------------------------------------------------------------------
+7. Web — CLEAR (with the one MINOR from §2)
+- Single resolver: `effectOf(tool)` remains the sole read path; new
+  `normalizeToolEffect` (page.tsx:198) is a pure totalizer (unknown → deny)
+  wrapping effectOf at both call sites (:648, :749) — no second derivation.
+- Full-config PATCH: page.tsx:630-632 sends
+  `{ permission: effective.permission, correction: effective.correction, tools: nextTools }`
+  — full config, no partial merge (server replaces config wholesale). Correct.
+- Template never PATCHes: `editable = agentType === "custom" || agentType === "clone"`;
+  `handleToolChange` early-returns when `!editable`; `ToolEffectSelect` gets
+  `readOnly={!editable}` with `onClick` undefined + `aria-disabled`. Template
+  renders read-only control with "模板只读" title. Two independent guards.
+- agentKey validation: same pattern VALUE as server (see §2 MINOR on literal
+  duplication); `vteam-` prefix + length + empty checks all mirrored;
+  server errors mapped (`AGENT_KEY_CONFLICT` → "该标识已被占用",
+  `AGENT_KEY_INVALID` → detailed message). Consistent UX.
+- No `any` in new web code (typed `ToolEffect`, `Record<string, unknown>`
+  for nextTools, typed modal payloads). tsc clean.
+- Pre-existing note (per task brief, not a finding against this plan):
+  page.tsx is 2767 lines pre-existing; new code follows local conventions
+  (inline styles, data-testid). No refactor demanded. NIT only: `matrixKeyOf`
+  fallback chain (page.tsx:617-623) silently maps unknown tools to `tool.name`;
+  a wrong-but-plausible key would create a new matrix entry rather than error.
+  Server-side `filterToolsMatrix` bounds the damage (unknown VALUES dropped;
+  unknown KEYS are accepted by design — matrix is open-ended). Acceptable.
+
+--------------------------------------------------------------------------------
+8. Tests — CLEAR (real behavior assertions)
+- No `expect(true).toBe(true)` / placeholder assertions anywhere in the range.
+- Byte-identity test is meaningful: independent `builtinFixture()` re-derives
+  all 6 built-ins from `ROLE_BOUNDARIES` (not from the code under test),
+  then asserts `toEqual` + `JSON.stringify` equality + committed snapshot —
+  three layers; any drift in order/fields/values fails loudly.
+- Deep-copy assertions (`not.toBe` on config AND nested tools + post-mutation
+  source check) assert the actual risk, not the shape.
+- Dispatcher tests cover all five routing cases incl. adversarial
+  (`vteam-Bad-Key` in capabilities → key omitted). Controller DTO tests cover
+  missing/invalid/`vteam-`-prefixed keys on create/clone/update.
+- agents.service.spec.ts new provisioning tests assert `type: 'custom'`,
+  `id` novelty (`not.toBe('ep_product')`), skeleton fallback, and template-miss
+  fallback. Substantive.
+
+--------------------------------------------------------------------------------
+9. Scripts (scripts/e2e-custom-agent-opencode.sh, 452 lines, new) — CLEAR
+- `set -euo pipefail`; `fail()` helper prints step+reason and `exit 1` (non-zero
+  on any failed assertion); every network/docker step checks `$code` or guards
+  with `|| fail`; required-command preflight (`curl jq python3 docker`, exit 2).
+- Cleanup: `trap cleanup EXIT` installed before any creation (line 168; no work
+  before it except login+preflight), cleanup deletes QA agent+policy and
+  re-verifies `/agent-policies` is baseline-clean; idempotent pre-sweep handles
+  leftovers from a prior run. EXIT trap covers success AND failure paths.
+- Evidence artifacts written per step (policy-create.json, agent-create.json,
+  agent-policies.json, guard-decision.txt, injected-opencode.json, roles.json,
+  byte-identity.txt, e2e.txt) — auditable.
+
+--------------------------------------------------------------------------------
+10. Module size / misc — notes only
+- agents.service.ts 849 lines, execution-policy.service.ts 558,
+  worker-dispatcher.ts 3807 (pre-existing bulk), page.tsx 2767 (pre-existing
+  bulk). Growth is additive methods following existing patterns; no new
+  god-module created by this plan. No 250-LOC-ceiling violation attributable
+  to NEW code as a standalone module (new methods are small; spec/snap files
+  are test artifacts). No action.
+- [MINOR] Dead export: `PolicyToolsConfig` interface
+  (server/src/execution-policies/execution-policy.service.ts:41-43) is exported
+  but referenced nowhere (single grep hit = its own declaration). Unused
+  surface; remove or use it as the `guardForAgent config` param type. MINOR.
+- Pre-existing issues (NOT introduced, NOT counted): worker-dispatcher.ts
+  duplicate `AgentIdentityInfo` interface declarations (both correctly extended
+  with `agentKey` via replaceAll — consistent); 177 baseline `as any` in the
+  dispatcher spec; page.tsx size. None attributable to this plan.
+
+--------------------------------------------------------------------------------
+Findings summary (severity-tagged):
+- [MINOR] (introduced) web/app/(main)/agents/page.tsx:208 — agentKey regex as
+  duplicated literal instead of a shared pattern source. Same value, no behavior
+  risk. Suggest web-side shared const.
+- [MINOR] (introduced) server/src/execution-policies/execution-policy.service.ts:41 —
+  exported `PolicyToolsConfig` is dead code (zero references). Remove or adopt.
+- [NIT] (introduced) server/src/agents/agents.service.ts:43 — `POLICY_ID_PREFIX`
+  duplicates execution-policy.service.ts:26. Share via constants module.
+- [NIT] (introduced, test-only) worker-dispatcher.spec.ts new block — 5x `as any`,
+  consistent with 177 pre-existing in-file; test-only.
+- [NIT] (pre-existing, acknowledged) page.tsx size / dispatcher duplicate
+  interface / baseline spec `as any` — out of plan scope, no action.
+- No BLOCKER. No MAJOR.
+
+VERDICT: APPROVE
+
+================================================================================
+## RE-REVIEW (e7279d8) — 2026-09-14, working tree at e7279d8
+Scope: `git show e7279d8` (refactor: single-source policy id prefix and agent
+key pattern) + re-verification of the 3 prior findings on FINAL code at HEAD.
+Product-code diff of e7279d8 touches exactly 4 files:
+server/src/agents/agents.service.ts, server/src/common/constants/agent.constants.ts,
+server/src/execution-policies/execution-policy.service.ts,
+web/app/(main)/agents/page.tsx (+ learnings.md notes only).
+
+Resolution table (all 3 items RESOLVED, file:line evidence on final code):
+1. [MINOR §2 web regex literal] RESOLVED.
+   - web/app/(main)/agents/page.tsx:202-203 — module-level
+     `const AGENT_KEY_PATTERN = /^[a-z][a-z0-9_-]{0,62}$/;` with comment noting
+     same value as server (web cannot cross-package import).
+   - page.tsx:211 — `validateAgentKey` now calls `AGENT_KEY_PATTERN.test(v)`.
+   - Only remaining `^[a-z]` hit in the file is line 203 (the single declaration);
+     no leftover inline literal anywhere else in the file.
+   - Behavior preserved: pattern VALUE unchanged
+     (server agent.constants.ts:85 `AGENT_KEY_PATTERN = '^[a-z][a-z0-9_-]{0,62}$'`
+     vs web literal — identical char-for-char).
+2. [MINOR §10 dead export PolicyToolsConfig] RESOLVED.
+   - `grep -rn PolicyToolsConfig server/src` → EMPTY (zero hits, verified).
+   - Diff deletes the interface block (execution-policy.service.ts old lines 40-43);
+     still-exported `AgentToolState` retained and in use. No new dead code added.
+3. [NIT §2 POLICY_ID_PREFIX duplication] RESOLVED.
+   - Single declaration: server/src/common/constants/agent.constants.ts:88
+     `export const POLICY_ID_PREFIX = 'ep' as const;` (with doc comment carried over).
+   - Both services import it (agents.service.ts:16, execution-policy.service.ts:13)
+     via the pre-existing `../common/constants/agent.constants` import statement
+     (extended, not a new import line) and use it at agents.service.ts:695 and
+     execution-policy.service.ts:103/156. No local re-declaration remains
+     (`grep -rn POLICY_ID_PREFIX server/src` shows 1 declaration + 2 imports +
+     3 use sites only).
+   - Value/semantics unchanged (`'ep'` in both old sites → `'ep'` in one export).
+
+NEW issues introduced by e7279d8: NONE.
+- `git show e7279d8 | grep -E "as any|ts-ignore|ts-expect-error"` → empty.
+- No TODO/FIXME/HACK/console.log/deprecat/retired in the diff.
+- No behavior change: pure move/rename of constants; web pattern same value;
+  server prefix same value `'ep'`; deleted interface had zero references.
+- Import hygiene: both services reuse the existing agent.constants import block;
+  no new module, no cycle (constants module has no imports from services).
+
+Verification (re-run on final HEAD e7279d8):
+- `cd server && npx tsc -p tsconfig.json --noEmit` → exit 0, no output.
+- `cd web && npx tsc --noEmit` → exit 0, no output.
+- `cd server && npx jest src/agents src/execution-policies src/prisma/seed.spec.ts`
+  → 8 suites / 140 tests passed, 1 snapshot passed.
+
+Correctness risks re-confirmed on FINAL code (all still hold):
+(a) guardForAgent ignores config on built-in path: CLEAR.
+    execution-policy.service.ts:470-487 — built-in hit returns
+    `{ ...boundary.toolAllows }` + bashDeny BEFORE any `config` access.
+(b) provisionCustomPolicy deep-copies: CLEAR.
+    agents.service.ts:699 — `config: JSON.parse(JSON.stringify(opts.config))`.
+(c) toAgentDto outside tx: CLEAR (and unchanged by e7279d8).
+    create (agents.service.ts:186-222) and clone (:247-298): all writes inside
+    ONE `$transaction`; `return this.toAgentDto(created)` after commit in both.
+(d) filterToolsMatrix filters: CLEAR.
+    execution-policy.service.ts:495-503 — non-object → `{}`; entries filtered by
+    `typeof === 'string' && states.has()` over allow/ask/deny.
+(e) resolvePolicyAgentCandidate never fabricates: CLEAR.
+    worker-dispatcher.ts:116-124 — invalid key falls through to
+    `roleToAgentName`; both-absent/unknown → null; valid key gated by
+    `new RegExp(AGENT_KEY_PATTERN)` (shared server constant, unchanged).
+
+Prior NITs NOT in scope of e7279d8 (unchanged, still non-blocking):
+- worker-dispatcher.spec.ts test-only `as any` (pre-existing convention);
+- page.tsx / worker-dispatcher.ts pre-existing size notes.
+
+VERDICT: APPROVE

@@ -1,0 +1,84 @@
+F1 Plan Compliance Audit — vteam-custom-agent-opencode
+Date: 2026-09-14 | Auditor: Sisyphus-Junior | Scope: todos 1–7, audit only (no product code modified)
+Commit chain: d83fd86 (schema) → f353adb (agent-policies) → 4564b45 (dispatcher) → a28e6af (CRUD) → d0f00d1 (provisioning) → 2e24119 (e2e) → 8a1c509 (web); `git log --oneline d83fd86..HEAD` = 6 commits above base, HEAD = 8a1c509.
+
+Todo 1 [foundation] Agent.agentKey schema + migration + seed — PASS
+  Criterion: agents gains agent_key VARCHAR(63) NULL UNIQUE.
+    Actual: server/prisma/migrations/20260914000000_add_agent_key/migration.sql:10-12 (ADD COLUMN agent_key VARCHAR(63) NULL + UNIQUE INDEX uk_agents_agent_key). Commit d83fd86.
+  Criterion: migration backfills 5 templates agent_key = role.
+    Actual: migration.sql:12 (UPDATE agents SET agent_key=role WHERE type='template' AND role IS NOT NULL AND agent_key IS NULL). Commit d83fd86.
+  Criterion: seed upserts templates with agentKey = role.
+    Actual: server/prisma/seed.ts:363 (update: agentKey: agent.role), :369 (create agentKey: agent.role). Commit d83fd86.
+  Criterion: format ^[a-z][a-z0-9_-]{0,62}$.
+    Actual: server/src/common/constants/agent.constants.ts:85 (AGENT_KEY_PATTERN). Enforced server/src/agents/agents.service.ts:812, DTOs create-agent.dto.ts:39-40, update-agent.dto.ts:40-41, clone-agent.dto.ts:35-36. Tests: server/src/prisma/seed.spec.ts (PASS, 16 total incl. custom-agents spec).
+  Unimplemented: none.
+
+Todo 2 [server] /agent-policies DB generalization + tools matrix + guardForAgent fallback — PASS
+  Criterion: buildAgentPolicies async; 6 built-ins from ROLE_BOUNDARIES byte-identical, then append agentKey!=null && policyId!=null entries (name=vteam-<agentKey>).
+    Actual: server/src/execution-policies/execution-policy.service.ts:317 (doc), :244/:295/:391 (guard wiring), :366 (agentKeyPattern). Byte-identity locked by server/src/execution-policies/agent-policies.matrix.spec.ts + agent-policies.custom-agents.spec.ts (+570-line .snap). Commit f353adb.
+  Criterion: PolicyConfigDto/assertValidConfig accept optional tools tri-state map.
+    Actual: server/src/execution-policies/dto/policy-config.dto.ts (tools field, commit f353adb).
+  Criterion: guardForAgent built-ins→constants, custom→config.tools.
+    Actual: execution-policy.service.ts:477-507 (guardForAgent: ROLE_BOUNDARIES hit returns constants; else filterToolsMatrix(config.tools) allow/ask/deny only; null → {tools:{},bashDeny:[]}). Verified by reading lines 470-530.
+  Verified: built-in /agent-policies output equals .omo/evidence/role-enforcement/F3-own/agent-policies.json — all 6 agents IDENTICAL, guard roles identical, only additive vteam-demo-agent extra (python diff, RESULT: PASS). e2e byte-identity.txt: 18/18 IDENTICAL/PRESENT.
+  Unimplemented: none.
+
+Todo 3 [server] Agent CRUD agentKey + effectivePermission dual-layer — PASS
+  Criterion: Create/Update/Clone DTOs gain agentKey.
+    Actual: server/src/agents/dto/create-agent.dto.ts:39, update-agent.dto.ts:40, clone-agent.dto.ts:35 (@Matches AGENT_KEY_PATTERN). Commit a28e6af.
+  Criterion: service validates format+unique; duplicate → 409 AGENT_KEY_CONFLICT.
+    Actual: server/src/agents/agents.service.ts:46 (AGENT_KEY_CONFLICT), :49 (AGENT_KEY_INVALID), :805-834 (assertValidAgentKey: required/format/vteam-prefix/unique→409). Tests agents.service.spec.ts:1478-1541 assert 400 AGENT_KEY_INVALID + 409 AGENT_KEY_CONFLICT.
+  Criterion: toAgentDto returns agentKey + effectivePermission with layer② tools/bashDeny.
+    Actual: agents.service.ts:565-627 (toAgentDto incl. agentKey:565-590, effectivePermission:574-627). Spec happy paths PASS.
+  Unimplemented: none.
+
+Todo 4 [dispatcher] custom target → vteam-<agentKey> + capability gate — PASS
+  Criterion: target Agent with agentKey → candidate vteam-<agentKey>; gate workerSupportsAgentPolicies on that name.
+    Actual: server/src/chat/worker-dispatcher.ts:116-120 (resolvePolicyAgentCandidate: valid agentKey → vteam-<key>, else role fallback/null), :1728-1740 (mapping + workerSupportsAgentPolicies(policyCandidateAgent) gate; explicit opencodeAgentName cannot bypass:1731). Commit 4564b45.
+  Criterion: isVteamAgentName/renderBoundarySection don't misjudge custom names (no ROLE_BOUNDARIES boundary injection; correction from policy).
+    Actual: worker-dispatcher.ts:1745-1746 (isVteamAgentName branch), spec worker-dispatcher.spec.ts:1279-1301 (agentKey priority, illegal/absent fallback). Suite PASS.
+  Criterion: no behavior change without agentKey.
+    Actual: fallback path unchanged (null → existing opencodeAgentName/omit-agent logic :1730); regression tests green.
+  Unimplemented: none.
+
+Todo 5 [server] template tools backfill + clone/create auto-provision editable custom policy — PASS
+  Criterion ①: seed template policy config gains tools = {...ROLE_BOUNDARIES[agentName].toolAllows}; built-in output still byte-identical (guardForAgent hits constants first).
+    Actual: server/prisma/seed.ts (tools backfill, commit d0f00d1); guardForAgent:477-493 returns constants before touching config → output unchanged (verified IDENTICAL above).
+  Criterion ②: AgentsService.clone auto-clones a type=custom policy (deep copy) and binds it (template OR custom source; never shared writable).
+    Actual: server/src/agents/agents.service.ts:257-268 (resolveTemplateSource + provisionCustomPolicy on clone path). Evidence .omo/evidence/custom-agent-opencode/policy-provision.txt present (commit d0f00d1).
+  Criterion ③: AgentsService.create (custom) without policyId copies template by role, or deny-by-default skeleton without role (edit {'*':'deny'}/read {'*':'allow'}/bash deny/task deny/tools {}/correction ROLE_POLICY_DENY_TEMPLATE).
+    Actual: agents.service.ts:192-194 (create: resolveTemplateSource ?? buildSkeletonConfig), :713 (resolveTemplateSource), :763 (buildSkeletonConfig), :687 (provisionCustomPolicy). Spec covers skeleton existence.
+  Criterion ④: explicit policyId bound as-is.
+    Actual: create/clone paths only provision when policyId absent (lines 194/268 conditional). Spec PASS.
+  Unimplemented: none.
+
+Todo 6 [web] three-state control + template read-only + agentKey forms — PASS
+  Criterion: tool rows render 允许/询问/拒绝 segmented control; type=template read-only (data-readonly, click no-op); type=custom|clone switchable + PATCH to custom policy config.tools.
+    Actual: web/app/(main)/agents/page.tsx:282-288 (tool-effect-select + data-readonly), :630 (api.patch /execution-policies/${effective.policyId}). Screenshot .omo/evidence/custom-agent-opencode/web-three-state.png present.
+  Criterion: create form has agentKey input with live validation + error; clone form has agentKey.
+    Actual: page.tsx:1649-1694 (create: agentKey state + validateAgentKey + submit), :1811-1820 (create label/input), :1948-1988 (clone form + default <sourceKey>-copy:1959), :2090-2099 (clone label/input), :2329-2354 (mutations POST /agents/:id/clone + POST /agents with agentKey). Commit 8a1c509.
+  Criterion: layer① rows keep existing read-only display.
+    Actual: layer① display untouched in diff (519 insertions mostly additive three-state + forms). `cd web && npx tsc --noEmit` exit 0.
+  Unimplemented: none.
+
+Todo 7 [e2e] injection + guard deny + byte-identity + cleanup — PASS
+  Criterion ①: new custom agent (key=demo-agent) + cloned policy with a deny tool.
+    Actual: scripts/e2e-custom-agent-opencode.sh (executable, 452 lines, commit 2e24119); .omo/evidence/custom-agent-opencode/e2e.txt: step1 policyId=ep_0000000007 PASS, step2 agentId=a_0000000008 PASS.
+  Criterion ②: injected opencode.json agent contains vteam-demo-agent + guard roles same key.
+    Actual: e2e.txt step3 PASS (agents + guard.roles); injected-opencode.json (179 lines) + roles.json (449 lines) present; offline+live asserts step4a/4b PASS.
+  Criterion ③: denied tool call to vteam-demo-agent rejected by guard (correction text).
+    Actual: e2e.txt step4a PASS (offline denies vteam_group_post, allows vteam_submit_artifact) + step4b live guard denies; guard-decision.txt present.
+  Criterion ④: built-in 6-role injection byte-identical to baseline.
+    Actual: e2e.txt step5 PASS; byte-identity.txt 18/18 IDENTICAL/PRESENT; independent python re-diff PASS (6/6 agents + guard roles identical).
+  Cleanup: e2e.txt shows cleanup QA rows removed before+after. Evidence: e2e.txt + injected-opencode.json committed (2e24119).
+  Unimplemented: none.
+
+Cross-cutting confirmations
+  - Built-in /agent-policies == .omo/evidence/role-enforcement/F3-own/agent-policies.json: PASS (6/6 IDENTICAL, additive-only custom).
+  - toolEffects/permissionScope remnants: none in product code (grep server/src web/app worker/src non-spec → no matches; only specs asserting absence: seed.spec.ts:208, platform-mcp.service.spec.ts:3115-3116). PASS.
+  - Repo rules: no `as any`/`@ts-ignore`/`@ts-expect-error` in d83fd86^..HEAD diff for server/src+web/app+e2e script (count 0). PASS.
+  - Typecheck: `cd server && npx tsc -p tsconfig.json --noEmit` exit 0; `cd web && npx tsc --noEmit` exit 0. PASS.
+  - Jest: agents.service + agent-policies.matrix + worker-dispatcher = 262/262 PASS; seed + custom-agents = 16/16 PASS (1 snapshot PASS). PASS.
+  - Working tree notes (not blocking): .omo/evidence/custom-agent-opencode/agent-create.json + e2e.txt show as modified (M) vs HEAD — rerun artifacts, content still PASS; untracked drafts/notepads/md-docs unrelated to plan scope.
+
+VERDICT: APPROVE — all 7 todos implemented with concrete code+commit evidence, byte-identity holds, typechecks and 278 jest tests green, no remnants or banned patterns.

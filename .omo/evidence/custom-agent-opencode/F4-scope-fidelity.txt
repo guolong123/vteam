@@ -1,0 +1,150 @@
+F4 — Scope fidelity review for plan `vteam-custom-agent-opencode`
+Range: git diff --stat d83fd86^..8a1c509 (commits d83fd86, f353adb, 4564b45, a28e6af, d0f00d1, 2e24119, 8a1c509)
+Reviewer method: read every diff hunk cited below; no code modified.
+
+== 1. IN/OUT-OF-SCOPE FILE TABLE (36 files) ==
+
+# .omo/** — IN SCOPE (evidence/notepads, 13 files)
+IN  .omo/evidence/custom-agent-opencode/agent-create.json
+IN  .omo/evidence/custom-agent-opencode/agent-policies-after.json
+IN  .omo/evidence/custom-agent-opencode/agent-policies-after.txt
+IN  .omo/evidence/custom-agent-opencode/agent-policies.json
+IN  .omo/evidence/custom-agent-opencode/byte-identity.txt
+IN  .omo/evidence/custom-agent-opencode/e2e.txt
+IN  .omo/evidence/custom-agent-opencode/guard-decision.txt
+IN  .omo/evidence/custom-agent-opencode/guard-roles-doc.json
+IN  .omo/evidence/custom-agent-opencode/injected-opencode.json
+IN  .omo/evidence/custom-agent-opencode/policy-create.json
+IN  .omo/evidence/custom-agent-opencode/policy-provision.txt
+IN  .omo/evidence/custom-agent-opencode/roles.json
+IN  .omo/notepads/vteam-custom-agent-opencode/learnings.md
+
+# scripts — IN SCOPE
+IN  scripts/e2e-custom-agent-opencode.sh (new, 452 lines; Todo 7)
+
+# Prisma — IN SCOPE (schema + one migration + seed)
+IN  server/prisma/migrations/20260914000000_add_agent_key/migration.sql (new; §5 additive-only)
+IN  server/prisma/schema.prisma (Agent.agentKey String? @unique @map("agent_key") + doc comment)
+IN  server/prisma/seed.ts (template policy config += tools copy; agent upsert += agentKey=role)
+
+# server/src/agents/** — IN SCOPE (6 files)
+IN  server/src/agents/agents.controller.spec.ts (agentKey assertions)
+IN  server/src/agents/agents.controller.ts (doc-comment only: agentKey in POST/clone signatures)
+IN  server/src/agents/agents.service.spec.ts (layered permission + provision tests)
+IN  server/src/agents/agents.service.ts (agentKey CRUD + custom policy provisioning)
+IN  server/src/agents/dto/clone-agent.dto.ts (required agentKey + pattern + no-vteam-prefix)
+IN  server/src/agents/dto/create-agent.dto.ts (required agentKey + same validators)
+IN  server/src/agents/dto/update-agent.dto.ts (optional agentKey)
+
+# server/src/execution-policies/** — IN SCOPE (6 files)
+IN  server/src/execution-policies/__snapshots__/agent-policies.custom-agents.spec.ts.snap (new)
+IN  server/src/execution-policies/agent-policies.controller.spec.ts (prisma mock += agent.findMany; DB-driven comment)
+IN  server/src/execution-policies/agent-policies.controller.ts (getAgentPolicies() -> async; required by DB-backed buildAgentPolicies)
+IN  server/src/execution-policies/agent-policies.custom-agents.spec.ts (new; custom-agent matrix)
+IN  server/src/execution-policies/agent-policies.matrix.spec.ts (service constructed with stub prisma; comment updates)
+IN  server/src/execution-policies/dto/policy-config.dto.ts (optional tools?: Record<string,'allow'|'ask'|'deny'>)
+IN  server/src/execution-policies/execution-policy.service.ts (DB-backed buildAgentPolicies + guardForAgent fallback + tools validation)
+
+# server/src/chat — IN SCOPE
+IN  server/src/chat/worker-dispatcher.ts (resolvePolicyAgentCandidate + agentKey select/plumb; Todo 4)
+IN  server/src/chat/worker-dispatcher.spec.ts (Todo 4 Evidence explicitly cites this spec file)
+
+# Plan-referenced support files — IN SCOPE (cited in plan Todos/ Evidence, no behavior drift)
+IN* server/src/common/constants/agent.constants.ts (+8: AGENT_KEY_PATTERN const only; no boundary value touched; explicitly in Todo 2 + Todo 5 References)
+IN* server/src/prisma/seed.spec.ts (Todo 1 Evidence explicitly cites this file; test-only additions)
+
+# web — IN SCOPE
+IN  web/app/(main)/agents/page.tsx (ToolEffectSelect three-state; template data-readonly; agentKey forms)
+
+OUT-OF-SCOPE FILES CHANGED: none. A repo-wide filter excluding the sets above
+(.omo, e2e script, server/prisma, server/src/agents, server/src/execution-policies,
+worker-dispatcher.*, seed.spec, agent.constants, agents page) returns zero files.
+No chat/tasks/issues/artifacts/workers/platform-mcp changes; no package.json/lock changes.
+
+== 2. OUT-OF-SCOPE BEHAVIOR PRESERVED ==
+[PASS] Built-in /agent-policies byte-identical: programmatic compare of
+  .omo/evidence/custom-agent-opencode/agent-policies.json built-in 6 agents
+  vs .omo/evidence/role-enforcement/F3-own/agent-policies.json -> identical True;
+  byte-identity.txt records IDENTICAL for all 6 agents + 6 guard.roles + 6 injected agents.
+[PASS] Template agents read-only preserved: agents.service.ts DELETE path still
+  `if (type === 'template')` -> 403 AGENT_READONLY (agents.service.ts:785-791);
+  update() template-settings semantics byte-identical to base d83fd86^ (is_0000000030
+  comment + body unchanged except added agentKey passthrough); remove guard untouched.
+[PASS] Template ExecutionPolicies read-only preserved: execution-policy.service.ts:150-156
+  (explicit type='template' -> 403) and :532-534 (update/delete target template -> 403
+  POLICY_TEMPLATE_READONLY) both present; diff touches neither hunk.
+[PASS] task/execute denied, edit-only gate: execution-policy.service.ts:523
+  `task: 'deny'` retained; agents.service.ts:740 + execution-policy.service.ts:520 still
+  derive edit via buildEditPermission(writeGlobs); diff grep for `'write'`/`"write"`/write:
+  in agents+policies+chat diff -> zero hits; no `write` key introduced anywhere.
+[PASS] seed template-policy `tools` addition is behavior-neutral for built-ins:
+  guardForAgent hits ROLE_BOUNDARIES constant first for built-in names (service unchanged
+  in that branch); seed.ts comment states it explicitly; byte-identity evidence confirms.
+
+== 3. FORBIDDEN PATTERNS ==
+[PASS] toolEffects/permissionScope: `git grep` at 8a1c509 for server/src + web/app hits only
+  pre-existing spec assertions that they are ABSENT (platform-mcp.service.spec.ts:3045,3115-3116;
+  seed.spec.ts:208) — explicitly allowed by this review's charter. Zero product-code occurrences.
+[PASS] No dual-track/AB: case-insensitive diff grep for retired|deprecated|compat|shim|dual|ab-test
+  -> zero hits.
+[PASS] No new dependencies: diff --name-only filtered for package/lock (package.json,
+  server/package.json, web/package.json, pnpm/yarn lock) -> zero hits.
+
+== 4. NO UNRELATED REFACTORS ==
+[PASS] Every product-code hunk serves agentKey / tools-matrix / DB-backed policies /
+  dispatch routing / three-state UI. Controller changes are mechanical (async getter for
+  DB-backed service; doc comments). Duplicate AgentIdentityInfo interface blocks in
+  worker-dispatcher.ts pre-date this plan (both blocks extended identically, no dedup
+  refactor attempted — correctly left alone).
+
+== 5. MIGRATION ADDITIVE-ONLY ==
+[PASS] server/prisma/migrations/20260914000000_add_agent_key/migration.sql contains ONLY:
+  1. ALTER TABLE `agents` ADD COLUMN `agent_key` VARCHAR(63) NULL;
+  2. CREATE UNIQUE INDEX `uk_agents_agent_key` ON `agents` (`agent_key`);
+  3. UPDATE `agents` SET `agent_key`=`role` WHERE type='template' AND role IS NOT NULL
+     AND `agent_key` IS NULL;
+  No DROP/ALTER COLUMN/DELETE; no other tables touched. NULL-able column keeps legacy
+  custom/clone rows legal; NOT NULL enforced at service layer (assertValidAgentKey ->
+  400 AGENT_KEY_INVALID; conflicts -> 409 AGENT_KEY_CONFLICT).
+
+== FINDINGS ==
+- [MINOR] server/src/common/constants/agent.constants.ts, server/src/prisma/seed.spec.ts,
+  server/src/chat/worker-dispatcher.spec.ts are outside §1's shorthand file list, but each is
+  explicitly named in the plan's Todo References/Evidence (Todos 1, 2, 4, 5); changes are
+  additive/test-only with zero boundary-value drift. Not a scope violation; noting only so a
+  future strict file-allowlist review accounts for plan-cited support files.
+- No BLOCKER. No MAJOR.
+
+VERDICT: APPROVE
+
+## RE-REVIEW (e7279d8)
+Range delta: exactly ONE new commit since prior review (`8a1c509..e7279d8` = `e7279d8 refactor: single-source policy id prefix and agent key pattern`).
+Full final chain: `git diff --stat d83fd86^..e7279d8` = 36 files, identical set to prior review (count verified: 36; name-only list byte-identical to §1 table). Reviewer method: read full `git show e7279d8` hunk-by-hunk; no code modified.
+
+== 1. e7279d8 FILE LIST (5 files), classified ==
+IN  .omo/notepads/vteam-custom-agent-opencode/learnings.md (+8: F2-review cleanup log entry only)
+IN  server/src/agents/agents.service.ts (+1/-4: delete local `POLICY_ID_PREFIX='ep'` decl; add `POLICY_ID_PREFIX` to existing agent.constants import)
+IN  server/src/common/constants/agent.constants.ts (+3: add `export const POLICY_ID_PREFIX = 'ep'` with moved doc-comment)
+IN  server/src/execution-policies/execution-policy.service.ts (+1/-9: delete local `POLICY_ID_PREFIX='ep'` decl; delete dead `PolicyToolsConfig` interface; add `POLICY_ID_PREFIX` to existing import)
+IN  web/app/(main)/agents/page.tsx (+5/-1: hoist inline `/^[a-z][a-z0-9_-]{0,62}$/` to module-level `const AGENT_KEY_PATTERN`; single call-site `AGENT_KEY_PATTERN.test(v)`)
+OUT-OF-SCOPE FILES IN e7279d8: none. All 5 files were already IN/IN* in the §1 table; zero new files added to the full-chain file set.
+
+== 2. PURE-REFACTOR CONFIRMATION ==
+[PASS] Regex VALUE unchanged: server `AGENT_KEY_PATTERN` string untouched (`'^[a-z][a-z0-9_-]{0,62}$'`, agent.constants.ts:85); web literal hoisted verbatim (`/^[a-z][a-z0-9_-]{0,62}$/`, page.tsx:203) with comment noting same-value single-point (no cross-package import; separate builds). `git grep AGENT_KEY_PATTERN` shows all consumers (service:810,813; clone/create/update DTOs; worker-dispatcher:120; execution-policy.service.ts:359) still resolve the same constant value.
+[PASS] POLICY_ID_PREFIX VALUE unchanged: `'ep'` in all three places before and after (two local `const` decls deleted, one canonical `export const POLICY_ID_PREFIX = 'ep'` added; three runtime call-sites `idGen.nextId(POLICY_ID_PREFIX)` — agents.service.ts:695, execution-policy.service.ts:103,156 — semantically identical).
+[PASS] Error codes/messages unchanged: `AGENT_KEY_CONFLICT`/`AGENT_KEY_INVALID`/`AGENT_READONLY`/`POLICY_TEMPLATE_READONLY` sites listed by `git grep` at e7279d8 match prior review line semantics; e7279d8 diff touches none of those hunks (only import lines + dead-interface deletion).
+[PASS] Dead-code deletion is safe: `PolicyToolsConfig` had exactly one repo-wide reference (its own definition; learnings.md records the grep); the live type is `AgentToolState`, retained and untouched.
+[PASS] No new dependencies: `git show e7279d8 -- package.json server/package.json web/package.json package-lock.json **/package-lock.json pnpm-lock.yaml --stat` -> empty output.
+[PASS] No toolEffects/permissionScope reintroduction: `git grep` at e7279d8 for `server/src/** web/app/** worker/src/**` hits only the 3 pre-existing spec ABSENCE-assertions (platform-mcp.service.spec.ts:3045,3115-3116; seed.spec.ts:208) — same as prior review. Zero product-code occurrences.
+[PASS] No dual-track/retired: case-insensitive grep for retired|deprecated|compat|shim|dual over agents/execution-policies/chat/constants/agents-page hits only the pre-existing `CHANNEL_TYPE_DEPRECATED` task_group-abolition constant (chat.constants.ts:17, chat.service.ts:191 + its spec) — predates both plans, untouched by e7279d8. No new annotations introduced by e7279d8 (its diff adds zero such tokens).
+
+== 3. FULL FINAL CHAIN (d83fd86^..e7279d8) STILL ADDITIVE-ONLY, ZERO OUT-OF-SCOPE ==
+[PASS] File set unchanged at 36 files (§1 table stands as-is; e7279d8 adds no 37th file). A repo-wide filter excluding the §1 sets still returns zero files.
+[PASS] Migration still additive-only (file untouched by e7279d8): ALTER TABLE ADD COLUMN + CREATE UNIQUE INDEX + backfill UPDATE only.
+[PASS] Built-in `/agent-policies` byte-identity RE-VERIFIED LIVE at e7279d8: login admin/admin123 at http://localhost:13000, authed `GET /api/v1/agent-policies` canonical-JSON (sort_keys, compact separators) compared against `.omo/evidence/role-enforcement/F3-own/agent-policies.json` -> EQUAL (top-level {agents, guard}; both sides same key sets). No behavior drift from the refactor (expected: e7279d8 touches no runtime value).
+
+== FINDINGS ==
+- No BLOCKER. No MAJOR. No MINOR beyond the §FINDINGS note already on record (unchanged).
+- LSP diagnostics unavailable (typescript server not installed, install previously declined) — review compensated by reading every hunk + live API byte-identity check + value-level grep verification.
+
+VERDICT: APPROVE

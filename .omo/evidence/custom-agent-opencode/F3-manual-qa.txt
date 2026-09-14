@@ -1,0 +1,148 @@
+# F3 — Real hands-on manual QA for plan vteam-custom-agent-opencode
+Date (UTC): 2026-09-14 ~02:00-02:10 | Operator: Sisyphus-Junior | Stack: server :13000 / web :13001 / worker aiagents-compose-worker / db aiagents-compose-db
+Login: admin / admin123. All commands below were executed by THIS run (no prior evidence trusted).
+
+## 0. Preconditions (raw)
+```
+$ docker compose ps
+aiagents-compose-db      Up 16 hours (healthy)
+aiagents-compose-server  Up 11 minutes (healthy)   0.0.0.0:13000->3000/tcp
+aiagents-compose-web     Up 4 minutes (healthy)    0.0.0.0:13001->3000/tcp
+aiagents-compose-worker  Up 5 minutes              0.0.0.0:14000->4000/tcp
+$ curl -o /dev/null -w "%{http_code}" http://localhost:13000/api/v1/agent-policies  -> 401 (auth required, expected)
+$ curl -o /dev/null -w "%{http_code}" http://localhost:13001/agents                   -> 200
+$ login admin/admin123 -> JWT len 221
+```
+
+## 1. Built-in byte-identity regression (BEFORE creating anything)
+```
+GET /api/v1/agent-policies (authed) ->
+  agents: ['vteam-plan','vteam-product','vteam-architect','vteam-developer','vteam-tester','vteam-project_manager']
+  roles:  ['vteam-architect','vteam-developer','vteam-plan','vteam-product','vteam-project_manager','vteam-tester']
+canonical-JSON compare vs .omo/evidence/role-enforcement/F3-own/agent-policies.json:
+  vteam-architect IDENTICAL / vteam-developer IDENTICAL / vteam-plan IDENTICAL
+  vteam-product IDENTICAL / vteam-project_manager IDENTICAL / vteam-tester IDENTICAL
+  role vteam-architect IDENTICAL / role vteam-developer IDENTICAL / role vteam-plan IDENTICAL
+  role vteam-product IDENTICAL / role vteam-project_manager IDENTICAL / role vteam-tester IDENTICAL
+  live extra agents: [] / live extra roles: []
+=> PASS (check 1)
+```
+
+## 2. Create custom agent (raw)
+```
+POST /execution-policies {"name":"f3-qa-agent policy","type":"custom",
+  "config":{"permission":{"edit":{"*":"deny"},"read":{"*":"allow"},"bash":"deny","task":"deny"},
+  "correction":{"scopeSummary":"f3 qa agent: only submit artifacts",
+                "denyTemplate":"【越界拦截｜角色：{role}】不能调用 <tool>。"},
+  "tools":{"vteam_group_post":"deny","vteam_submit_artifact":"allow"}}}
+-> HTTP:201 {"id":"ep_0000000009", ...}
+
+POST /agents {"name":"F3 QA Agent","type":"custom","agentKey":"f3-qa-agent",
+  "prompt":"f3 qa agent","policyId":"ep_0000000009"}
+-> HTTP:201 {"id":"a_0000000010","agentKey":"f3-qa-agent","policyId":"ep_0000000009",
+  "effectivePermission":{"agentName":"vteam-f3-qa-agent",
+  "tools":{"vteam_group_post":"deny","vteam_submit_artifact":"allow"}, ...}}
+
+GET /agents/a_0000000010 ->
+  agentKey = "f3-qa-agent", effectivePermission.agentName = "vteam-f3-qa-agent"  => PASS (check 2)
+```
+
+## 3. Validation (raw)
+```
+POST /agents {"agentKey":"Bad-Key",...}  -> HTTP:400
+  {"message":["agentKey 格式非法：需匹配 ^[a-z][a-z0-9_-]{0,62}$（小写字母开头，仅含小写字母/数字/_/-，最长 63 字符）"],"error":"Bad Request","statusCode":400}
+POST /agents {"agentKey":"vteam-x",...}  -> HTTP:400
+  {"message":["agentKey 不能以 `vteam-` 开头，否则 opencode agent 名会变成 `vteam-vteam-<key>`"],"error":"Bad Request","statusCode":400}
+POST /agents {"agentKey":"f3-qa-agent",...} (duplicate) -> HTTP:409
+  {"code":"AGENT_KEY_CONFLICT","message":"agentKey 已被占用，请换一个 machine-safe 标识"}
+=> PASS (check 3: 400 / 400 / 409)
+```
+
+## 4. /agent-policies contains the custom agent (raw)
+```
+GET /agent-policies ->
+  vteam-f3-qa-agent in agents: True
+  vteam-f3-qa-agent in guard.roles: True
+  tools: {"vteam_group_post": "deny", "vteam_submit_artifact": "allow"}
+  agent entry mode: primary, keys: ['description','mode','name','permission']
+=> PASS (check 4)
+```
+
+## 5. Guard really blocks — worker's OWN guard code (raw)
+```
+$ docker compose cp /tmp/f3-guard-roles.json worker:/tmp/f3-guard-roles.json
+$ docker compose exec -T worker node -e "require('/app/dist/role-guard/policy.js').evaluateToolCall(...)"
+vteam_group_post -> {"action":"deny","message":"【越界拦截｜角色：vteam-f3-qa-agent】不能调用 vteam_group_post。"}
+vteam_submit_artifact -> {"action":"allow"}
+(live roles.json after worker restart:)
+live vteam_group_post -> {"action":"deny","message":"【越界拦截｜角色：vteam-f3-qa-agent】不能调用 vteam_group_post。"}
+live vteam_submit_artifact -> {"action":"allow"}
+=> PASS (check 5: deny carries correction message; allow is positive control)
+```
+
+## 6. Worker injection (raw)
+```
+$ docker compose up -d --force-recreate worker -> Started; roles.json contains vteam-f3-qa-agent after ~10s
+/data/vteam-worker/.vteam-role-guard/roles.json keys:
+  ['vteam-architect','vteam-developer','vteam-f3-qa-agent','vteam-plan','vteam-product','vteam-project_manager','vteam-tester']
+  f3 tools: {'vteam_group_post': 'deny', 'vteam_submit_artifact': 'allow'}
+/data/vteam-worker/opencode.json agent keys:
+  ['vteam-architect','vteam-developer','vteam-f3-qa-agent','vteam-plan','vteam-product','vteam-project_manager','vteam-tester']
+  plugin: ['./.opencode/plugin/vteam-role-guard.ts', 'oh-my-openagent@latest'], mcp keys: ['vteam']
+=> PASS (check 6)
+```
+
+## 7. Browser — http://localhost:13001/agents (Playwright MCP, raw DOM probes)
+(a) Template (产品经理) selected by default; header "执行策略 · 只读":
+    22 radiogroups, EVERY option aria-disabled="true".
+    e.g. vteam_group_post: 允许 checked=true/disabled=true, 询问 false/true, 拒绝 false/true.
+    Click 拒绝 on template vteam_group_post -> before [true,false,false], after [true,false,false], unchanged=true.
+    => template rows show 允许/询问/拒绝 and are read-only; click does NOT change state. PASS.
+(b) Clicked list button "F3 QA Agent" -> detail switches to custom agent:
+    vteam_group_post: 允许 false/false, 询问 false/false, 拒绝 true/false (aria-disabled=false on all).
+    vteam_submit_artifact: 允许 true/false, rest false/false.
+    UI state EXACTLY matches effective permission (deny/allow) — no display mismatch.
+    Clicked 询问 on vteam_group_post -> re-GET /agent-policies guard.tools =
+      {"vteam_group_post": "ask", "vteam_submit_artifact": "allow"}  (persisted).
+    Clicked 拒绝 again -> re-GET guard.tools =
+      {"vteam_group_post": "deny", "vteam_submit_artifact": "allow"} (restored).
+    => custom rows interactive; change persists. PASS.
+(c) Create form: "+ 新建自定义 Agent" opens "新建自定义 Agent" dialog with required
+    "标识 agentKey *" input (placeholder "小写字母开头，如 release-manager") + helper text
+    "执行体名为 vteam-<标识>；小写字母开头，仅含小写字母/数字/_/-，最多63字符，且不能以 vteam- 开头".
+    Typed "Bad-Key" via native setter -> "创建 Agent" submit button disabled=true (blocked).
+    Dialog cancelled afterwards (no QA agent created via UI).
+    => agentKey field with validation present. PASS.
+(d) Console: browser_console_messages -> Total 2 (Errors: 0, Warnings: 0); only VERBOSE DOM notes. PASS.
+(e) Screenshot: .omo/evidence/custom-agent-opencode/F3-browser.png (253480 bytes, full page, custom agent selected).
+=> PASS (check 7)
+
+## 8. UI vs effective-permission mismatch report
+None found. Template detail (允许 group_post for 产品经理) matches baseline policy bytes;
+custom detail (拒绝 group_post / 允许 submit_artifact) matches GET /agents effectivePermission
+and /agent-policies guard.tools at every step, including after both UI-driven mutations.
+
+## 9. Cleanup (raw)
+```
+DELETE /agents/a_0000000010 -> HTTP:200
+DELETE /execution-policies/ep_0000000009 -> HTTP:200
+GET /agent-policies canonical-JSON vs baseline -> byte-identical: True
+  agents: ['vteam-plan','vteam-product','vteam-architect','vteam-developer','vteam-tester','vteam-project_manager']
+  f3 present: False
+DB: SELECT COUNT(*) FROM agents WHERE agent_key='f3-qa-agent'; -> 0
+=> PASS (check 8: no QA data remains)
+```
+
+## Summary
+| # | Check | Result |
+|---|-------|--------|
+| 1 | Built-in byte-identity regression | PASS |
+| 2 | Create custom agent (agentKey + effectivePermission.agentName) | PASS |
+| 3 | Validation 400 / 400 / 409 | PASS |
+| 4 | /agent-policies agents + guard.roles deny/allow matrix | PASS |
+| 5 | Worker guard code deny + correction / allow | PASS |
+| 6 | Worker injection (opencode.json + roles.json) | PASS |
+| 7 | Browser: template read-only / custom interactive+persist / agentKey field / 0 console errors / screenshot | PASS |
+| 8 | Cleanup: byte-identical + 0 rows | PASS |
+
+VERDICT: APPROVE
