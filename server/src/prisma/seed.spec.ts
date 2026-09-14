@@ -293,6 +293,126 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       expect(call[0].update).toEqual({});
     }
   });
+});
+
+describe('seed（计划 skills + 评审子句）', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  /** 计划 skill 名 → 期望的 frontmatter allowed-tools（seed 冻结契约）。 */
+  const PLAN_SKILL_TOOLS: Record<string, string[]> = {
+    'plan-creation': [
+      'task_context',
+      'read_file',
+      'doclib',
+      'chat_history',
+      'question',
+      'vteam_plan_review',
+    ],
+    'plan-review-product': ['read_file', 'task_context', 'chat_history', 'skill'],
+    'plan-review-architect': ['read_file', 'task_context', 'chat_history', 'skill'],
+    'plan-review-developer': ['read_file', 'task_context', 'chat_history', 'skill'],
+    'plan-review-tester': ['read_file', 'task_context', 'chat_history', 'skill'],
+    'plan-review-project_manager': ['read_file', 'task_context', 'chat_history', 'skill'],
+  };
+
+  /** 模板 Agent id → 其角色专属评审 skill 名（下划线原样保留）。 */
+  const REVIEW_SKILL_BY_AGENT: Record<string, string> = {
+    a_product: 'plan-review-product',
+    a_project_manager: 'plan-review-project_manager',
+    a_architect: 'plan-review-architect',
+    a_developer: 'plan-review-developer',
+    a_tester: 'plan-review-tester',
+  };
+
+  const planSkillCalls = () =>
+    mockPrisma.skill.upsert.mock.calls.filter((call) =>
+      Object.prototype.hasOwnProperty.call(PLAN_SKILL_TOOLS, String(call[0].where.name)),
+    );
+
+  /** 从 skill content 中解析 frontmatter allowed-tools 列表。 */
+  const parseAllowedTools = (content: string): string[] => {
+    const match = content.match(/^---\n([\s\S]*?)\n---/);
+    expect(match).not.toBeNull();
+    const frontmatter = match![1];
+    const toolsSection = frontmatter.split('allowed-tools:')[1];
+    expect(toolsSection).toBeDefined();
+    return toolsSection
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('- '))
+      .map((line) => line.slice(2).trim());
+  };
+
+  it('6 个计划 skills upsert 且 enabled（1 编制 + 5 评审）', async () => {
+    await main();
+
+    const calls = planSkillCalls();
+    expect(calls.map((call) => String(call[0].where.name)).sort()).toEqual(
+      Object.keys(PLAN_SKILL_TOOLS).sort(),
+    );
+    for (const call of calls) {
+      expect(call[0].create.enabled).toBe(true);
+      expect(call[0].update.enabled).toBe(true);
+      expect(call[0].create.name).toBe(call[0].where.name);
+      expect(typeof call[0].create.content).toBe('string');
+      expect(call[0].create.content.length).toBeGreaterThan(100);
+    }
+  });
+
+  it('计划 skills frontmatter 含 name/description/version/allowed-tools 且工具集精确匹配', async () => {
+    await main();
+
+    const calls = planSkillCalls();
+    expect(calls).toHaveLength(6);
+    for (const call of calls) {
+      const name = String(call[0].where.name);
+      const content = call[0].create.content as string;
+      expect(content).toContain(`name: ${name}`);
+      expect(content).toContain('description:');
+      expect(content).toContain('version:');
+      expect(parseAllowedTools(content).sort()).toEqual([...PLAN_SKILL_TOOLS[name]].sort());
+    }
+  });
+
+  it('plan-creation 覆盖编制全要素，评审 skills 统一输出 VERDICT 并禁改文件', async () => {
+    await main();
+
+    const byName = new Map(
+      planSkillCalls().map((call) => [String(call[0].where.name), call[0].create.content as string]),
+    );
+    const creation = byName.get('plan-creation')!;
+    for (const keyword of [
+      '.opencode/plans/',
+      'agentMembers',
+      'vteam_plan_review',
+      'question',
+      'REJECT',
+    ]) {
+      expect(creation).toContain(keyword);
+    }
+    for (const name of Object.keys(REVIEW_SKILL_BY_AGENT).map((id) => REVIEW_SKILL_BY_AGENT[id])) {
+      const content = byName.get(name)!;
+      expect(content).toContain('VERDICT: APPROVE');
+      expect(content).toContain('VERDICT: REJECT');
+      expect(content).toContain('禁止修改计划文件');
+      expect(content).toContain('禁止执行计划');
+      expect(content).toContain('read_file');
+    }
+  });
+
+  it('每个角色 prompt 点名其专属评审 skill（skill(plan-review-<role>)）', async () => {
+    await main();
+
+    const templateCalls = templateAgentCalls();
+    expect(templateCalls).toHaveLength(5);
+    for (const call of templateCalls) {
+      const id = String(call[0].where.id);
+      const prompt = call[0].update.prompt as string;
+      expect(prompt).toContain(`skill(${REVIEW_SKILL_BY_AGENT[id]})`);
+    }
+  });
 
   it('工具目录 upsert 包含 plan_review（vteam_plan_review，主 Agent 冷评审聚合）', async () => {
     await main();
@@ -301,5 +421,21 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     const planReview = toolCalls.find((call) => call[0].where.action === 'plan_review');
     expect(planReview).toBeDefined();
     expect(planReview[0].create.name).toBe('vteam_plan_review');
+  });
+
+  it('评审 skill 名不出现在非属角色的 prompt 中（无交叉污染）', async () => {
+    await main();
+
+    const templateCalls = templateAgentCalls();
+    expect(templateCalls).toHaveLength(5);
+    const allSkills = Object.values(REVIEW_SKILL_BY_AGENT);
+    for (const call of templateCalls) {
+      const id = String(call[0].where.id);
+      const prompt = call[0].update.prompt as string;
+      for (const skillName of allSkills) {
+        if (skillName === REVIEW_SKILL_BY_AGENT[id]) continue;
+        expect(prompt).not.toContain(`skill(${skillName})`);
+      }
+    }
   });
 });

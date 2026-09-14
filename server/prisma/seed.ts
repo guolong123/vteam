@@ -145,6 +145,7 @@ async function main() {
         '- 需求条目可追踪、验收标准可判定、表述无歧义；信息不足时先确认关键假设，不臆测需求。\n' +
         '- 需求相关 issue 创建时 tags=["需求"]，指派责任人并随进展流转状态。\n' +
         '- 原型与文档均经 vteam_submit_artifact 提交为任务产出物。\n' +
+        '- 计划评审：被要求评审计划时，先加载 `skill(plan-review-product)` 并严格按其执行冷评审，只输出 VERDICT 与依据，不修改计划文件、不执行计划。\n' +
         '\n' +
         '## 协同方式\n' +
         '- 响应 @ 触发；被 @all 广播时同步目标与分工。\n' +
@@ -178,6 +179,7 @@ async function main() {
         '- 工作项可追踪（编号关联 issue）；信息不足时先确认，不臆测。\n' +
         '- Issue 编排：用 vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition 维护工作项与责任流转。\n' +
         '- 不产出具体交付物：需求交产品经理、方案交架构师、实现交开发者、用例与验证交测试。\n' +
+        '- 计划评审：被要求评审计划时，先加载 `skill(plan-review-project_manager)` 并严格按其执行冷评审，只输出 VERDICT 与依据，不修改计划文件、不执行计划。\n' +
         '\n' +
         '## 协同方式\n' +
         '- 响应 @ 触发；被 @all 广播时同步项目目标与分工。\n' +
@@ -210,6 +212,7 @@ async function main() {
         '- 接收需求后先澄清技术边界（现有系统、约束、目标），再产出设计文档；方案可被开发者无歧义实现，权衡有明确依据。\n' +
         '- 核心链路与高风险点优先设计；不确定项标注「待验证」并给出验证路径，不阻塞推进。\n' +
         '- 版本更新 append 新版本；需求变更影响方案时响应更新。\n' +
+        '- 计划评审：被要求评审计划时，先加载 `skill(plan-review-architect)` 并严格按其执行冷评审，只输出 VERDICT 与依据，不修改计划文件、不执行计划。\n' +
         '\n' +
         '## 协同方式\n' +
         '- 响应 @ 触发；产出方案后 @ 开发者衔接实现。\n' +
@@ -243,6 +246,7 @@ async function main() {
         '- 关键路径必须自测，并在实现说明中写清验证方式（命令、预期输出）。\n' +
         '- 处理指派 issue：开始→开发→自测→流转 resolve（关联提交说明），成员确认后 close。\n' +
         '- 优先级：阻塞性缺陷优先；缺陷修复后交测试者回归验证；方案歧义时先与架构师澄清。\n' +
+        '- 计划评审：被要求评审计划时，先加载 `skill(plan-review-developer)` 并严格按其执行冷评审，只输出 VERDICT 与依据，不修改计划文件、不执行计划。\n' +
         '\n' +
         '## 协同方式\n' +
         '- 响应 @ 触发；实现完成 @ 测试者提供可验证清单（实现说明中的验证方式）。\n' +
@@ -277,6 +281,7 @@ async function main() {
         '- 穷举边界：覆盖正常流、边界值、异常输入、并发/时序等场景；P0 条目优先。\n' +
         '- 缺陷流转：创建「缺陷」issue（tags=["缺陷"]）附复现步骤→指派开发者→修复后回归验证→确认关闭。\n' +
         '- 未通过项必须给出可复现证据与影响范围，不以「环境问题」草率放过。\n' +
+        '- 计划评审：被要求评审计划时，先加载 `skill(plan-review-tester)` 并严格按其执行冷评审，只输出 VERDICT 与依据，不修改计划文件、不执行计划。\n' +
         '\n' +
         '## 协同方式\n' +
         '- 响应 @ 触发；缺陷 @ 开发者修复（互 @ 不超 3 轮，达到上限提示成员介入）。\n' +
@@ -941,6 +946,282 @@ TSX 源码 (<kebab-name>/index.tsx)
 | 语法错误（JSX/TS） | 提交前确保 TSX 语法合法 |
 | 数据留空 | 全部写演示值 |
 | 嵌入原型不存在 | 确保 \`id\` 与原型 \`meta.id\` 一致，且原型属于当前任务（同 \`taskId\` 反查）；跨任务引用会渲染为黄底提示 |
+`,
+    },
+    {
+      id: 'sk_builtin_plan_creation',
+      name: 'plan-creation',
+      description:
+        '计划编制技能——主 Agent 以 explore-first 方式起草执行计划：并行探索、任务拆解、依赖分析、团队能力映射，落盘 .opencode/plans/ 后经 question 选评审者并调用 vteam_plan_review 送审。',
+      content: `---
+name: plan-creation
+description: 计划编制技能——主 Agent 以 explore-first 方式起草执行计划：并行探索、任务拆解、依赖分析、团队能力映射，落盘 .opencode/plans/ 后经 question 选评审者并调用 vteam_plan_review 送审。
+version: 1.0.0
+allowed-tools:
+  - task_context
+  - read_file
+  - doclib
+  - chat_history
+  - question
+  - vteam_plan_review
+---
+
+# 计划编制（Plan Creation）
+
+## 目标
+
+为当前任务起草一份**决策完备、可直接执行**的计划。只起草，不执行：本技能内绝不进入实现。
+
+## 步骤 1：Explore-first 并行探索
+
+Prometheus 式探索：多路并行、分波次扇出，只收敛必要信息。
+
+1. 用 \`task_context\` 拿任务标题/描述/背景与团队实例清单；用 \`read_file\` / \`doclib\` 读关键产出物与文档；用 \`chat_history\` 补群聊上下文。
+2. 探索分波次并行推进：每波只回答本波能回答的问题，不臆测、不提前下结论。
+3. 只收敛计划真正需要的信息；真正的分叉才向用户确认，其余按最佳实践直接决策并在计划中注明假设。
+
+## 步骤 2：任务拆解
+
+把任务拆为可执行、可验证的工作项，格式统一：
+
+- T1 <标题>：<一句话目标>（验收：<可判定标准>）
+
+## 步骤 3：并行/串行依赖分析
+
+- 标出每项的前置依赖；无依赖的工作项分为并行组，有依赖的排为串行链。
+- 依赖存疑时宁可标串行，不虚构并行度。
+
+## 步骤 4：团队能力映射
+
+- 经 \`task_context\` 的 agentMembers 动态读取团队实例与各自能力，按能力认领工作项。
+- 绝不硬编码角色：自建 custom agent 与内置角色同等可规划，有什么人、就排什么活。
+
+## 步骤 5：任务分配章节
+
+计划必须含"任务分配"章节，每项四要素齐全：内容（content）、负责人（owner）、依赖（dependencies）、验收（acceptance）。
+
+## 步骤 6：落盘
+
+计划全文写入 \`.opencode/plans/<kebab-name>.md\`（唯一落盘位置）。
+
+## 步骤 7：送审
+
+1. 起草完成后在群聊发布计划摘要，通知团队。
+2. 用 \`question\`（多选）请用户选择本次的评审者角色。
+3. 调用 \`vteam_plan_review(reviewers=[...])\` 送审（reviewers 为用户选定的角色名数组）。
+4. 任一评审返回 REJECT 即按 findings 修订计划；修订后可再问用户是否重审。
+
+## 约束
+
+- 一次只产出一份决策完备的计划；本技能内绝不进入实现。
+- 评审侧由 sibling 技能承接：\`plan-review-product\` / \`plan-review-architect\` / \`plan-review-developer\` / \`plan-review-tester\` / \`plan-review-project_manager\`（评审者会话内加载，本技能只负责送审）。
+`,
+    },
+    {
+      id: 'sk_builtin_plan_review_product',
+      name: 'plan-review-product',
+      description:
+        '计划评审技能（产品视角）——只读冷评审计划的用户视角、完整性、必要性、易用性与验收可判定性，输出 VERDICT: APPROVE/REJECT 与依据；不修改计划文件。',
+      content: `---
+name: plan-review-product
+description: 计划评审技能（产品视角）——只读冷评审计划的用户视角、完整性、必要性、易用性与验收可判定性，输出 VERDICT: APPROVE/REJECT 与依据；不修改计划文件。
+version: 1.0.0
+allowed-tools:
+  - read_file
+  - task_context
+  - chat_history
+  - skill
+---
+
+# 计划评审（产品视角）
+
+风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。
+
+## 输入
+
+- 经 \`read_file\` 读取待评审计划全文——这是唯一评审对象。
+- 必要时经 \`task_context\` / \`chat_history\` 核对任务背景；需要其他能力时经 \`skill(<name>)\` 加载。
+
+## 评审视角：产品
+
+- 用户视角：目标用户是否说得清，使用场景是否真实。
+- 完整性：需求条目有无遗漏，上下游衔接是否断档。
+- 必要性：有无镀金条目，能否砍掉而不伤目标。
+- 易用性：交付物是否好用，信息与交互是否清晰。
+- 验收可判定性：每条验收标准能否明确判通过/不通过。
+
+## 输出（严格）
+
+先给 \`VERDICT: APPROVE\` 或 \`VERDICT: REJECT\`，再逐条列依据 findings（每条指向计划具体章节）。
+
+## 禁止
+
+- 禁止修改计划文件（只读评审）；禁止执行计划中任何步骤。
+- 只输出 VERDICT 与依据，不做其他发挥。
+`,
+    },
+    {
+      id: 'sk_builtin_plan_review_architect',
+      name: 'plan-review-architect',
+      description:
+        '计划评审技能（架构视角）——只读冷评审计划的技术合理性、设计一致性与边界完整性，输出 VERDICT: APPROVE/REJECT 与依据；不修改计划文件。',
+      content: `---
+name: plan-review-architect
+description: 计划评审技能（架构视角）——只读冷评审计划的技术合理性、设计一致性与边界完整性，输出 VERDICT: APPROVE/REJECT 与依据；不修改计划文件。
+version: 1.0.0
+allowed-tools:
+  - read_file
+  - task_context
+  - chat_history
+  - skill
+---
+
+# 计划评审（架构视角）
+
+风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。
+
+## 输入
+
+- 经 \`read_file\` 读取待评审计划全文——这是唯一评审对象。
+- 必要时经 \`task_context\` / \`chat_history\` 核对任务背景；需要其他能力时经 \`skill(<name>)\` 加载。
+
+## 评审视角：架构
+
+- 技术合理性：技术选型与分层划分是否成立，有无明显反模式。
+- 设计一致性：方案内部是否自洽，与需求之间是否对得上。
+- 边界完整性：模块边界是否清晰，风险与待验证项是否齐备、有无验证路径。
+
+## 输出（严格）
+
+先给 \`VERDICT: APPROVE\` 或 \`VERDICT: REJECT\`，再逐条列依据 findings（每条指向计划具体章节）。
+
+## 禁止
+
+- 禁止修改计划文件（只读评审）；禁止执行计划中任何步骤。
+- 只输出 VERDICT 与依据，不做其他发挥。
+`,
+    },
+    {
+      id: 'sk_builtin_plan_review_developer',
+      name: 'plan-review-developer',
+      description:
+        '计划评审技能（开发视角）——只读冷评审计划的步骤可执行性、依赖真实性与工作量合理性，输出 VERDICT: APPROVE/REJECT 与依据；不修改计划文件。',
+      content: `---
+name: plan-review-developer
+description: 计划评审技能（开发视角）——只读冷评审计划的步骤可执行性、依赖真实性与工作量合理性，输出 VERDICT: APPROVE/REJECT 与依据；不修改计划文件。
+version: 1.0.0
+allowed-tools:
+  - read_file
+  - task_context
+  - chat_history
+  - skill
+---
+
+# 计划评审（开发视角）
+
+风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。
+
+## 输入
+
+- 经 \`read_file\` 读取待评审计划全文——这是唯一评审对象。
+- 必要时经 \`task_context\` / \`chat_history\` 核对任务背景；需要其他能力时经 \`skill(<name>)\` 加载。
+
+## 评审视角：开发
+
+- 步骤可执行性：每步能否无歧义落地，有无缺前置、缺口径的步骤。
+- 依赖真实性：前置依赖是否真实存在，顺序是否成立，并行分组是否真可并行。
+- 工作量合理性：估时是否离谱，有无遗漏返工与联调成本。
+
+## 输出（严格）
+
+先给 \`VERDICT: APPROVE\` 或 \`VERDICT: REJECT\`，再逐条列依据 findings（每条指向计划具体章节）。
+
+## 禁止
+
+- 禁止修改计划文件（只读评审）；禁止执行计划中任何步骤。
+- 只输出 VERDICT 与依据，不做其他发挥。
+`,
+    },
+    {
+      id: 'sk_builtin_plan_review_tester',
+      name: 'plan-review-tester',
+      description:
+        '计划评审技能（测试视角）——只读冷评审计划的测试覆盖度与验证可操作性，输出 VERDICT: APPROVE/REJECT 与依据；不修改计划文件。',
+      content: `---
+name: plan-review-tester
+description: 计划评审技能（测试视角）——只读冷评审计划的测试覆盖度与验证可操作性，输出 VERDICT: APPROVE/REJECT 与依据；不修改计划文件。
+version: 1.0.0
+allowed-tools:
+  - read_file
+  - task_context
+  - chat_history
+  - skill
+---
+
+# 计划评审（测试视角）
+
+风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。
+
+## 输入
+
+- 经 \`read_file\` 读取待评审计划全文——这是唯一评审对象。
+- 必要时经 \`task_context\` / \`chat_history\` 核对任务背景；需要其他能力时经 \`skill(<name>)\` 加载。
+
+## 评审视角：测试
+
+- 测试覆盖度：验收标准是否全量覆盖，边界值与异常场景有无遗漏。
+- 验证可操作性：验证步骤能否复现，证据是否可采集，环境与数据需求是否说清。
+
+## 输出（严格）
+
+先给 \`VERDICT: APPROVE\` 或 \`VERDICT: REJECT\`，再逐条列依据 findings（每条指向计划具体章节）。
+
+## 禁止
+
+- 禁止修改计划文件（只读评审）；禁止执行计划中任何步骤。
+- 只输出 VERDICT 与依据，不做其他发挥。
+`,
+    },
+    {
+      id: 'sk_builtin_plan_review_project_manager',
+      name: 'plan-review-project_manager',
+      description:
+        '计划评审技能（项目管理视角）——只读冷评审计划的排期真实性、并行合理性、阻塞风险与里程碑，输出 VERDICT: APPROVE/REJECT 与依据；不修改计划文件。',
+      content: `---
+name: plan-review-project_manager
+description: 计划评审技能（项目管理视角）——只读冷评审计划的排期真实性、并行合理性、阻塞风险与里程碑，输出 VERDICT: APPROVE/REJECT 与依据；不修改计划文件。
+version: 1.0.0
+allowed-tools:
+  - read_file
+  - task_context
+  - chat_history
+  - skill
+---
+
+# 计划评审（项目管理视角）
+
+风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。
+
+## 输入
+
+- 经 \`read_file\` 读取待评审计划全文——这是唯一评审对象。
+- 必要时经 \`task_context\` / \`chat_history\` 核对任务背景；需要其他能力时经 \`skill(<name>)\` 加载。
+
+## 评审视角：项目管理
+
+- 排期真实性：里程碑与估时是否可信，有无压缩过度的环节。
+- 并行合理性：并行分组是否真可并行，人力是否超配。
+- 阻塞与风险：依赖阻塞是否识别，风险项有无遗漏、有无缓解建议。
+- 里程碑：是否清晰可跟踪，交付口径是否明确。
+
+## 输出（严格）
+
+先给 \`VERDICT: APPROVE\` 或 \`VERDICT: REJECT\`，再逐条列依据 findings（每条指向计划具体章节）。
+
+## 禁止
+
+- 禁止修改计划文件（只读评审）；禁止执行计划中任何步骤。
+- 只输出 VERDICT 与依据，不做其他发挥。
 `,
     },
   ];

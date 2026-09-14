@@ -466,3 +466,9 @@ flowchart LR
 | ③ | 角色提示词与技能的重叠 | 提示词「工作方式」块与技能（SKILL.md）都可能描述执行流程，二者并存时的优先级未显式定义 | 出现提示词与技能指令冲突的实际案例时，明确「提示词为角色级行为、技能为能力级指令」的裁决规则（11 篇 §4.3 按名路由加载） |
 
 **与既有文档的衔接。** 本文档是「内置角色提示词」的专章展开：§3~§7 把五类模板（产品经理/项目经理/架构师/开发者/测试者，对齐 seed 五个模板 Agent 与 `ep_<role>` 策略）展开为可直接使用的完整提示词，四方向结构对齐 14 篇 §3.1 的提示词配置语义（行为方式 + 角色边界）；§2 协同图落地 03 篇 FR-08 的主 Agent 职责与产物衔接方向；§8 的边界声明 vs 强约束分工定义运行时强制来源为 `ExecutionPolicy` + opencode 原生 permission + guard（`agent_tool_effects` / `permissionScope` 不参与强制）；提示词全文落库 15 篇 §3.7 `agents.prompt`，强制策略落库 15 篇 §3.8 `execution_policies`。
+
+## 10. 备注（2026-09-14）：计划评审子句的分歧记录
+
+- 本文档 §3~§7 的提示词全文为模板出厂默认值的文档侧版本（含 `{taskTitle}` 等占位符），与 `server/prisma/seed.ts` 当前落库的出厂默认提示词在结构上已分歧：seed 侧为 enforcement-hardened 版本（含 `vteam_<action>` 真实工具名、「可用工具」行与角色边界收敛），故未按 seed 逐字同步，仅记录分歧。
+- seed 侧 5 个模板 prompt 已各追加一句计划评审子句：被要求评审计划时先加载 `skill(plan-review-<role>)`（`product` / `project_manager` / `architect` / `developer` / `tester` 各对专属名）冷评审，只输出 VERDICT 与依据，不修改计划文件、不执行计划。
+- 6 个计划 skills（`plan-creation` + 5 个 `plan-review-<role>`）定义见 seed `BUILTIN_SKILLS`，本文档暂不展开。
