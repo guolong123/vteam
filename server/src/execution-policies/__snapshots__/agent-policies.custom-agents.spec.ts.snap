@@ -26,7 +26,6 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
         "vteam_memory_save": "deny",
         "vteam_memory_search": "deny",
         "vteam_notify_agent": "deny",
-        "vteam_plan_review": "deny",
         "vteam_submit_artifact": "deny",
       },
     },
@@ -45,7 +44,6 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           "*": "allow",
         },
         "task": "deny",
-        "vteam_plan_review": "deny",
       },
     },
     {
@@ -65,7 +63,6 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
         "vteam_issue_create": "deny",
         "vteam_issue_transition": "deny",
         "vteam_issue_update": "deny",
-        "vteam_plan_review": "deny",
       },
     },
     {
@@ -83,7 +80,6 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
         },
         "task": "deny",
         "vteam_issue_create": "deny",
-        "vteam_plan_review": "deny",
       },
     },
     {
@@ -102,7 +98,6 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
         },
         "task": "deny",
         "vteam_issue_update": "deny",
-        "vteam_plan_review": "deny",
       },
     },
     {
@@ -118,7 +113,6 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           "*": "allow",
         },
         "task": "deny",
-        "vteam_plan_review": "deny",
         "vteam_submit_artifact": "deny",
       },
     },
@@ -168,7 +162,6 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           "vteam_issue_create": "deny",
           "vteam_issue_transition": "deny",
           "vteam_issue_update": "deny",
-          "vteam_plan_review": "deny",
         },
         "tools": {
           "git_clone": "allow",
@@ -233,7 +226,6 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           },
           "task": "deny",
           "vteam_issue_create": "deny",
-          "vteam_plan_review": "deny",
         },
         "tools": {
           "git_clone": "allow",
@@ -309,7 +301,6 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           "vteam_memory_save": "deny",
           "vteam_memory_search": "deny",
           "vteam_notify_agent": "deny",
-          "vteam_plan_review": "deny",
           "vteam_submit_artifact": "deny",
         },
         "tools": {
@@ -363,7 +354,6 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
             "*": "allow",
           },
           "task": "deny",
-          "vteam_plan_review": "deny",
         },
         "tools": {
           "vteam_channel_send": "allow",
@@ -424,7 +414,6 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
             "*": "allow",
           },
           "task": "deny",
-          "vteam_plan_review": "deny",
           "vteam_submit_artifact": "deny",
         },
         "tools": {
@@ -488,7 +477,6 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           },
           "task": "deny",
           "vteam_issue_update": "deny",
-          "vteam_plan_review": "deny",
         },
         "tools": {
           "git_clone": "allow",

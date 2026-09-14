@@ -137,7 +137,6 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_channel_send',
   'vteam_wecom_reply',
   'vteam_task_create',
-  'vteam_plan_review',
 ] as const;
 
 /**

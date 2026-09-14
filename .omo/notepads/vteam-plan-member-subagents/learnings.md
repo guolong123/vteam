@@ -95,3 +95,19 @@ Baseline HEAD at start: `5ad2e2f docs(plan): mark plan-skills-rewrite F1-F4 comp
   asserting uniform `primary`/`deny` must branch the same way.
 - The inline snapshot in `role-guard-plugin.ts` must stay byte-parity with `policy.ts`; the parity spec
   (now 29 cases) fails on any drift — edit both together.
+
+## 2026-09-14 — namespace 常量补删 dead `vteam_plan_review`（Todo 3 遗留收尾）
+
+- Baseline HEAD：`0806770 feat(policies): plan role member capabilities and scoped task spawn`；改前基线
+  `npx jest src/common/constants src/execution-policies src/prisma/seed.spec.ts` → 8 suites / 88 tests 全绿。
+- 改单（3 文件）：`agent.constants.ts` 删 `'vteam_plan_review',` 单行（L140）→ 23 工具；
+  `agent.constants.spec.ts` `toHaveLength(24)` → 23；`agent-policies.custom-agents.spec.ts.snap`
+  经 `jest -u`（仅此文件）更新。snapshot diff 死键唯一性证明：`git diff -- snap | grep ^[+-]` 去重后仅
+  12 行 `- "vteam_plan_review": "deny",`（6+6 两种缩进），零新增行。
+- 三向覆盖测试（mcpDenies ∪ toolAllows ∪ serverGated == VTEAM_MCP_TOOL_NAMES）零改动直接过：
+  plan_review 本就不在三集合任一中，删除只缩小全集。
+- grep 复核：`toHaveLength(24)` 零残留；`vteam_plan_review` 仅剩 4 处，皆为缺席断言
+  （seed.spec.ts L457/459 + worker-dispatcher.spec.ts L1340 关键字环/L1370），按要求保留不动。
+- QA：`npx tsc -p tsconfig.json --noEmit` exit 0；目标三套件 8 suites / 88 tests / 1 snapshot 全绿。
+- 注意：仓库有基线前即脏文件（`.omo/boulder.json`、`platform-mcp.controller.spec.ts` 等），commit 仅
+  `git add` 本改单 3 文件 + 本 learnings，不碰他处。
