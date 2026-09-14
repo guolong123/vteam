@@ -1,0 +1,193 @@
+F4 — Scope fidelity review for `vteam-plan-member-subagents`
+Baseline: 5ad2e2f (pre-plan) .. HEAD (4a0f9bf) + working tree
+Date: 2026-09-14 | Reviewer: Sisyphus-Junior (F4)
+
+VERDICT: APPROVE
+
+Method: `git diff --stat 5ad2e2f..HEAD` (65 files) + `git diff HEAD` (working
+tree) + targeted `git diff` hunk inspection + repo-wide greps. All citations
+are post-change file:line unless prefixed with baseline SHA.
+
+================================================================
+1. CHANGED-FILE TABLE (in-scope vs out-of-scope)
+================================================================
+Legend: [IN] explicitly in plan §Todos References / task in-scope set.
+[IN-E] not named but mechanical entailment of an approved deletion
+(spec must match deleted tool). [NOTE] untracked scratch, uncommitted.
+
+# Tracked commits 5ad2e2f..HEAD
+[IN] server/src/common/constants/agent.constants.ts (+12/-3: planDirGlob(),
+      vteam-plan writeGlobs/toolAllows, 2× plan_review list removals; D1/D4)
+[IN] server/src/common/constants/agent.constants.spec.ts (planDirGlob hit/
+      miss + vteam-plan assertions; +spec)
+[IN] server/src/execution-policies/execution-policy.service.ts (mode ternary
+      L324, task ternary L519 + comments; D1)
+[IN] server/src/execution-policies/agent-policies.matrix.spec.ts (plan-branch
+      parity cases; +specs/snap family)
+[IN] server/src/execution-policies/agent-policies.controller.spec.ts (+specs)
+[IN] server/src/execution-policies/agent-policies.custom-agents.spec.ts (+specs)
+[IN] server/src/execution-policies/__snapshots__/agent-policies.custom-agents.spec.ts.snap (3 hunks, all vteam-plan blocks — §3)
+[IN] worker/src/role-guard/policy.ts (+9: task allow iff agent=vteam-plan &&
+      subagent_type=vteam-plan, L180-187; comment L18-19,32-33; D2)
+[IN] worker/src/role-guard/policy.spec.ts (task-branch matrix; +specs)
+[IN] worker/src/resources/role-guard-plugin.ts (+3: same gate L149-151,
+      SERVER_GATED 6→5; parity with policy.ts; D2/D4)
+[IN] worker/src/resources/role-guard-plugin.spec.ts (+specs)
+[IN] worker/src/resources/opencode-config-builder.ts (mode passthrough
+      agent.mode, type widen; listed file)
+[IN] worker/src/resources/opencode-config-builder.spec.ts (+spec)
+[IN] server/prisma/seed.ts (+106/-~: a_plan/ep_plan/member/prompt/skill
+      rewrite/tool-registry deletion; D3/D4)
+[IN] server/src/prisma/seed.spec.ts (+172: a_plan/ep_plan/member/prompt/skill
+      assertions incl. template-type + non-main checks)
+[IN] docs/agent-platform/16-*.md (+62: only §7.5 计划员 + 7.5.1-7.5.4; plan
+      section only — `git diff` headings grep shows no other section touched)
+[IN] server/src/platform-mcp/platform-mcp.tools.ts (-39: registration
+      deletion only, zero added lines; D4)
+[IN] server/src/platform-mcp/platform-mcp.service.ts (-326: handler + privates
+      resolveReviewPlan/runSingleReview/reviewWithTimeout/buildReviewPrompt/
+      toReviewVerdict/normalizeReviewTimeout + timeout const; zero added lines)
+[IN] server/src/platform-mcp/platform-mcp.plan-review.spec.ts (deleted 389; D4)
+[IN] server/src/workers/worker.client.ts (-70: review() + ReviewOptions +
+      DEFAULT_REVIEW_TIMEOUT_MS + REVIEW_TIMEOUT_MARGIN_MS; deletion only)
+[IN] server/src/workers/worker.client.spec.ts (-61 review specs)
+[IN] worker/src/exec/exec-server.ts (-225/+~0: /review route + handleReview +
+      ReviewRequestPayload + ReviewTimeoutError + REVIEW_DEFAULT_TIMEOUT_MS +
+      silent-option collapse; §4 for the single added hunk)
+[IN] worker/src/exec/exec-server.spec.ts (-196 review specs)
+[IN] server/src/chat/worker-dispatcher.ts (single hunk @@ -244: ONLY
+      PLAN_PRODUCE_INSTRUCTION literal + doc comment → D5 text; §2 proof)
+[IN-E] server/src/chat/worker-dispatcher.spec.ts (expectations track new
+      instruction text; asserts NOT vteam_plan_review/plan-creation)
+[IN] scripts/e2e-plan-member.sh (new, 957 lines; Todo 4)
+[IN] scripts/e2e-permission-matrix.sh (3 lines: comment + assert 6→5 + pass
+      message; count-only as allowed)
+[IN] scripts/e2e-plan-skills.sh (deleted 607; D4 named target)
+[IN] .omo/** (ALL: evidence/plan-member/*, plans/vteam-plan-member-subagents.md,
+      learnings.md, boulder.json working-tree mod — blanket in-scope)
+
+# Working tree (uncommitted)
+[IN-E/MINOR] server/src/platform-mcp/platform-mcp.controller.spec.ts — NOT
+      named in in-scope set (set lists tools/service "（+specs)" only for
+      exec-server, but controller.spec is the tools/list contract test that
+      MUST change when a tool is deleted: 24→23, plan_review entry +
+      inputSchema assertions removed, L189/L229/L357-367). Test-only knock-on
+      of approved D4 deletion; zero product-code impact. Filed as MINOR note,
+      not a scope break. Recommend: commit alongside plan work.
+[NOTE/INFO] untracked scratch outside set: md-docs/ (contains dist/
+      dist-cli/docs/index.html/node_modules — build-output-like scratch),
+      web/shot-omo3.tmp.cjs (playwright screenshot scratch). Both UNTRACKED,
+      never committed, unrelated to plan diff. Not a change-scope violation;
+      recommend delete/ignore. No severity.
+
+OUT-OF-SCOPE committed changes: NONE. Zero files outside the table above in
+`git diff --stat 5ad2e2f..HEAD` beyond .omo/** blanket.
+
+================================================================
+2. DISPATCH DIFF IS TEXT-ONLY (no logic change) — PROVEN
+================================================================
+server/src/chat/worker-dispatcher.ts: `git diff` yields EXACTLY ONE hunk
+(@@ -244,25 +244,21 @@, context label ARTIFACT_SUBMISSION_INSTRUCTION =
+adjacent const). Every -/+ line lies inside the PLAN_PRODUCE_INSTRUCTION
+string literal concatenation or its doc comment (old: 主Agent产出+todo登记+
+skill→question→vteam_plan_review; new: @计划员派起草→question选视角→@计划员
+评审→VERDICT聚合→feedback重派→task_transition). Zero control-flow, signature,
+call-site, or plan-off-path lines touched. Companion spec change is
+expectation-only. Conclusion: dispatch logic untouched. PASS.
+
+================================================================
+3. OUT-OF-SCOPE BEHAVIOR PRESERVED — PROVEN
+================================================================
+(a) Other 5 roles byte-identical:
+  - agent.constants.ts diff: only vteam-plan ROLE_BOUNDARIES hunk changed
+    (writeGlobs []→[planDirGlob()], +vteam_group_post allow); grep for changed
+    per-role lines of product/project_manager/architect/developer/tester → zero
+    hits. Global-list removals (VTEAM_MCP_TOOL_NAMES, ROLE_SERVER_GATED_TOOLS
+    6→5) are intended D4, affect all roles equally by design.
+  - Committed snap: all 3 hunks inside vteam-plan blocks only — agents[0]
+    (L9 "name": "vteam-plan") and guard.roles["vteam-plan"] (L255 block key);
+    nearest "name" entries for other 5 roles (L35/52/71/88/106) untouched.
+  - Live evidence .omo/evidence/plan-member/injection-compare.txt: all five
+    roles "parity ok (retained keys identical…)"; "other five roles parity ok
+    (no new/changed keys; removals only guard-moved or server-gated denies)".
+  PASS.
+(b) `execute` deny for ALL incl. vteam-plan: worker/src/role-guard/policy.ts
+    L94 TASK_TOOLS={'task','execute'}; the L180-187 allow-branch matches
+    tool==='task' ONLY, then L188 falls through to TASK_TOOLS deny — execute
+    can never hit the allow branch. plugin L83/L149-151 identical shape.
+    E2E guard-decisions.json: "plan execute -> deny" recorded. PASS.
+(c) `task` deny for all non-plan roles: layer①
+    execution-policy.service.ts L519 ternary (name==='vteam-plan'?'allow':
+    'deny'); guard requires agent==='vteam-plan' (mapped session) AND
+    args.subagent_type==='vteam-plan'; evidence: "developer task+plan ->
+    deny", "plan task+developer -> deny", "plan task+missing/nullargs ->
+    deny". Subagent self-spawn blocked by layer① task self-deny in derived
+    child permission (禁套娃, e2e step). PASS.
+(d) Template read-only untouched: seed upsert still type='template' for all
+    six template agents (seed.spec asserts "6 类模板 Agent … template 类型（含
+    计划员 a_plan)"); diff touched no upsert mechanics/type branches. PASS.
+(e) Worker wire format unchanged: opencode-config-builder still emits exactly
+    {description, mode, permission} per agent (L83-87, mode value now
+    passthrough 'primary'|'all' — same keys, widened enum only for plan);
+    permission still rejects `write` key; WorkerClient deletion removed only
+    review(); remaining tool call shapes untouched. PASS.
+(f) task/execute semantics for non-plan sessions unchanged: guard/plugin diffs
+    are purely additive allow-branch before the pre-existing deny lines; all
+    pre-existing branches/denylists byte-identical. PASS.
+
+================================================================
+4. NO FORBIDDEN PATTERNS — PROVEN (grep-zero in product code)
+================================================================
+- toolEffects/permissionScope: hits ONLY in spec absence-assertions
+  (server/src/prisma/seed.spec.ts:233; platform-mcp.service.spec.ts:3045,3115-3116).
+  Zero in non-spec product code. PASS.
+- dual-track/AB ("dual.track|A/B|AB test"), "retired", compat shims, legacy-
+  review: zero hits in non-spec server/src+worker/src. PASS.
+- New dependencies: `git diff 5ad2e2f..HEAD -- package.json/lockfiles` empty.
+  PASS.
+
+================================================================
+5. DELETIONS COMPLETE — PROVEN
+================================================================
+- plan_review: `grep -rn plan_review server/src worker/src --include=*.ts |
+  grep -v .spec.ts` → zero hits (only new e2e-plan-member.sh absence-
+  assertions reference it, which is the test proving absence). Remaining
+  *.spec.ts hits (dispatcher/seed/plan-removal.guard/role-guard-plugin/policy
+  specs) are absence-assertions, explicitly allowed.
+- Handler privates (resolveReviewPlan/runSingleReview/reviewWithTimeout/
+  buildReviewPrompt/toReviewVerdict/normalizeReviewTimeout) + timeout consts +
+  ReviewOptions/ReviewRequestPayload/ReviewTimeoutError + WorkerClient.review +
+  /review route + e2e-plan-skills.sh + seed tool-registry row + constants
+  entries: all gone per diffs above. PASS.
+- tl_vteam_plan_review: repo-wide grep → zero hits. PASS.
+- /review route: grep in exec-server.ts → zero hits; POST /review now 404/405
+  per e2e step 6. PASS.
+- `silent` flag disposition CONSISTENT (removed because review-only): baseline
+  had exactly 6 hits, all in worker/src/exec/exec-server.ts (:743/:752
+  comments, :886 single call site `{silent:true}` in handleReview, :1638
+  option def, :1672/:1675 spread) — sole caller was the deleted review path;
+  now zero hits. The one surviving hunk (old L1669 spread → unconditional
+  onPoll with IDENTICAL handler body: sendDelta + detector.detect) is pure
+  deletion fallout, no new logic. PASS.
+
+================================================================
+6. NO UNRELATED REFACTORS
+================================================================
+Every +/- line maps to D1-D5 or its mechanical spec/snap/e2e entailment
+(deletion-only files have zero added non-comment lines except the onPoll
+collapse proven in §5). No formatting sweeps, renames, or drive-by fixes
+observed in any hunk. PASS.
+
+================================================================
+VIOLATIONS (file:line + severity)
+================================================================
+1. [MINOR] server/src/platform-mcp/platform-mcp.controller.spec.ts:189,229,
+   357-367 (working tree, uncommitted) — changed file not literally named in
+   in-scope set; content is mandatory D4 knock-on (tools/list 24→23). No
+   product impact. Action: commit with plan work; no REJECT.
+2. [INFO] md-docs/ + web/shot-omo3.tmp.cjs — untracked scratch, not part of
+   the change. Action: delete or gitignore; no REJECT.
+
+No MAJOR / BLOCKER findings.
+
+VERDICT: APPROVE

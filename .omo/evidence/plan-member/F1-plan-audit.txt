@@ -1,0 +1,214 @@
+F1 plan compliance audit — vteam-plan-member-subagents
+Plan: .omo/plans/vteam-plan-member-subagents.md
+Auditor: independent re-verification (code read + tsc + jest + e2e re-run)
+Date (UTC): 2026-09-14
+HEAD at audit: 4a0f9bf
+
+== COMMIT CHAIN (git log --oneline --reverse 448ff62..4a0f9bf) ==
+actual chronological order:
+  448ff62 feat(seed): vteam-plan as built-in member role
+  8f36c91 refactor: remove server-orchestrated plan review in favor of member subagents
+  0806770 feat(policies): plan role member capabilities and scoped task spawn
+  680aa5a fix(policies): drop deleted plan_review from MCP tool namespace
+  5287563 test(e2e): plan member subagent flow (first iteration)
+  5d416a2 fix(worker): accept mode all in agent definitions
+  4a0f9bf test(e2e): plan member subagent flow (final)
+NOTE: all 6 expected SHAs present (verified via git show --stat each); landing
+order differs from the task statement (0806770 landed after 8f36c91, not before)
+plus one extra iteration commit 5287563. Order is immaterial — content verified
+at HEAD. Chain verdict: PASS (with note).
+
+== TODO 1 [policy+guard] (commit 0806770) ==
+T1.1 vteam-plan toolAllows contains group_post, no other additions
+  Evidence: server/src/common/constants/agent.constants.ts:466-490
+  (toolAllows 8 entries: task_context/read_file/doclib/team_view/my_profile/
+  chat_history/wecom_reply/group_post:488; no submit_artifact/issue_*/notify_agent/memory_*).
+  Exact-equality locked by server/src/common/constants/agent.constants.spec.ts:264.
+  PASS
+T1.2 writeGlobs has plans glob; hits plans paths, misses repo paths (both sides)
+  Evidence: planDirGlob() server/src/common/constants/agent.constants.ts:226-228
+  ('**.opencode/plans/**'); boundary wiring :477; hit/miss unit test
+  server/src/common/constants/agent.constants.spec.ts:174,177-178;
+  worker-side parity via guard specs + e2e step 3 (plans-write allow / src-write deny).
+  PASS
+T1.3 layer-1 task allow ONLY for vteam-plan
+  Evidence: server/src/execution-policies/execution-policy.service.ts:523-524
+  (task: name==='vteam-plan' ? 'allow' : 'deny'); matrix spec
+  server/src/execution-policies/agent-policies.matrix.spec.ts:163-186.
+  PASS
+T1.4 mode 'all' ONLY for vteam-plan (+ type widened)
+  Evidence: execution-policy.service.ts:56 (mode:'primary'|'all'), :324
+  (mode: name==='vteam-plan' ? 'all' : 'primary'); matrix spec :191-194.
+  PASS
+T1.5 guard task exact opening, both sites + parity
+  Evidence: worker/src/role-guard/policy.ts:180-190 ==
+  worker/src/resources/role-guard-plugin.ts:149-154
+  (allow iff agent==='vteam-plan' && args.subagent_type==='vteam-plan';
+  else TASK_TOOLS deny incl. execute always).
+  Truth table: worker/src/role-guard/policy.spec.ts:228-262
+  (other-role deny / plan+plan allow / plan+other-name deny / missing-args deny /
+  execute-always-deny) + role-guard-plugin.spec.ts:100-103.
+  PASS
+T1.6 server-gated back to exactly 5 (no plan_review)
+  Evidence: agent.constants.ts:148-154 (5 entries: task_transition,
+  question_confirm, task_create, plan_mode, team_add_member);
+  spec agent.constants.spec.ts:80-81 sorts vs 5-value expectation.
+  PASS
+T1.7 VTEAM_MCP_TOOL_NAMES has no plan_review
+  Evidence: agent.constants.ts:116-140 (23 entries, no plan_review);
+  spec :96 asserts length 23.
+  PASS
+TODO 1 overall: PASS
+
+== TODO 2 [seed] (commit 448ff62) ==
+T2.1 a_plan template row (plan/agentKey plan/policyId ep_plan)
+  Evidence: server/prisma/seed.ts:298 (id:'a_plan') + :298-321 (template/role plan
+  prompt) + :358 (plan:{policyId:'ep_plan',agentName:'vteam-plan'}) + :414-422
+  (policyId/agentKey sync on upsert).
+  PASS
+T2.2 ep_plan template policy row
+  Evidence: seed.ts:346-405 (policy upsert loop; :353-358 binding map incl.
+  plan->ep_plan; :394-398 upsert by policyId). Type=template per loop.
+  PASS
+T2.3 seed team plan member (non-main; tmm_0000000006)
+  Evidence: seed.ts:1458-1496 (teamRoleMap/teamRoleLabels + plan:'计划员' :1472;
+  member list :1489-1490 plan last, main stays PM). Literal id tmm_0000000006 is
+  sequential-DB-assigned (not a seed literal) — confirmed live by e2e step 1
+  (DB: a_plan + ep_plan + tmm_0000000006 计划员 non-main, independently re-run PASS).
+  PASS
+T2.4 plan four-direction prompt
+  Evidence: seed.ts:299-328 (identity/duty/boundary/collab incl. :308 subagent
+  fan-out line, :321 skill(plan-creation) load, :328越界拒绝转交).
+  seed.spec.ts:291 asserts subagent_type恒为vteam-plan in prompt.
+  PASS
+T2.5 skill retarget (plan-creation user=plan member; no question/plan_review calls;
+  fan-out section present)
+  Evidence: seed.ts:1001-1081 (user line :1020; fan-out discipline :1074-1081:
+  subagent_type恒为vteam-plan :1078, foreground-block, 2~4 lanes, no-nesting);
+  absence locked by server/src/prisma/seed.spec.ts:443-459
+  (not.toContain question-call / vteam_plan_review); grep seed.ts for
+  question|vteam_plan_review hits only unrelated tool-registry line :632
+  (vteam_question_confirm) — no calls inside creation body.
+  PASS
+T2.6 review skill notes
+  Evidence: seed.ts:1122,1190,1254,1318,1380 (each plan-review-* skill:
+  可能在计划成员扇出的子会话（subagent）内运行…).
+  PASS
+T2.7 tl_vteam_plan_review row ABSENT
+  Evidence: seed.ts:649 builds tool rows dynamically as tl_vteam_${action} from
+  the live tools table (plan_review tool deleted => no row); absence locked by
+  seed.spec.ts:585-589 (no plan_review upsert).
+  PASS
+T2.8 docs 16篇 synced
+  Evidence: commit 448ff62 stat (docs 16-内置Agent角色与提示词库.md +62);
+  seed.spec full-green (see verification section).
+  PASS
+TODO 2 overall: PASS
+
+== TODO 3 [flow/removal] (commit 8f36c91 + namespace 680aa5a) ==
+T3.1 plan_review tool/handler/client/endpoint/specs/e2e-script gone
+  Evidence (git show --stat 8f36c91): platform-mcp.plan-review.spec.ts -389 (deleted),
+  platform-mcp.service.ts -326, platform-mcp.tools.ts -39, worker.client.ts -70,
+  exec-server.ts -225, e2e-plan-skills.sh -607 (deleted),
+  e2e-permission-matrix.sh 6-value assert back to 5.
+  Live grep-zero: `grep -rn plan_review server/src worker/src --include='*.ts' |
+  grep -v spec` => zero hits (exit 1, independently re-run; e2e step 6d agrees).
+  Remaining *.spec.ts hits are intentional absence-assertions:
+  worker-dispatcher.spec.ts:1340,1370,1398,5401,5412;
+  plan-removal.guard.spec.ts:73; seed.spec.ts:457,459,585-589;
+  policy.spec.ts:286-289; role-guard-plugin.spec.ts:110.
+  plan-review-<role> strings are skill names (different namespace, legitimate).
+  PASS
+T3.2 PLAN_PRODUCE_INSTRUCTION rewritten to @-orchestration (D5)
+  Evidence: server/src/chat/worker-dispatcher.ts:247-261
+  (@计划员起草→收摘要→question选视角→@计划员评审→VERDICT聚合→REJECT重派/
+  APPROVE宣布→task_transition); spec :1346-1368 asserts the flow tokens
+  (@计划员, task_transition) and :1370 asserts no vteam_plan_review.
+  PASS
+T3.3 dispatch logic untouched
+  Evidence: 8f36c91 worker-dispatcher.ts delta is instruction text only
+  (+30/-~30 per stat: 22 spec + 30 source lines); worker-dispatcher.spec.ts
+  188/188 green on re-run.
+  PASS
+T3.4 namespace cleanup (680aa5a): plan_review dropped from MCP tool namespace
+  Evidence: agent.constants.ts -1 + spec sync (commit stat 4 files).
+  PASS
+TODO 3 overall: PASS
+
+== WORKER MODE FIX (commit 5d416a2) ==
+T5.1 worker accepts mode 'all' in agent definitions
+  Evidence: worker/src/resources/opencode-config-builder.ts:19,43
+  (mode:'primary'|'all'), :103 (reject only non-primary/all);
+  spec opencode-config-builder.spec.ts:75-87 (all passes through, bogus rejected).
+  PASS
+
+== TODO 4 [e2e] (commits 5287563 -> 4a0f9bf; script scripts/e2e-plan-member.sh, 957 lines) ==
+Independent re-run 2026-09-14 (bounded wait, live path): ALL STEPS DONE 0/1/2/3/4/5/6/7.
+T4.1 seed truth — PASS (step 1a/1b: a_plan + ep_plan + tmm_0000000006 计划员 non-main)
+T4.2 injection truth — PASS (step 2: vteam-plan mode all / task allow /
+  plans-scoped edit / group_post guard-only; other-five parity; plan diff limited)
+T4.3 guard gate truth table — PASS (step 3: plan task+plan allow; other-role deny;
+  wrong-name deny; execute deny; unmapped pass-through; plans-write allow/src deny)
+T4.4 live @-flow — PASS (step 4: plan .md landed, 30 lines non-trivial, only
+  plans-dir files added; member replied in group. One WARN only: optional
+  E2E-PLAN-DONE completion marker absent — file+group asserts hold, step PASS.)
+T4.5 live spawn + nesting blocked — PASS (step 5: PROBE-OK returned;
+  NESTED-RESULT 'Subagent depth limit reached (1)')
+T4.6 plan_review absence — PASS (step 6a-d: tools/list 23 tools none plan_review;
+  POST /review HTTP 404; /agent-policies 6 agents no plan_review key; repo non-spec grep zero)
+T4.7 built-in byte-identity — PASS (step 2 parity + step 7 cleanup; 5 others identical,
+  vteam-plan diff limited to expected D1 changes)
+T4.8 cleanup — PASS (step 7: task dir restored, serve sessions aborted)
+Tail recorded from live run (steps 4-7 + ALL STEPS DONE + PASS plan-member).
+TODO 4 overall: PASS
+
+== CROSS-CONTRACT ==
+C1 skill names referenced by prompts == seeded names
+  Evidence: seed.spec.ts:300-302,360-364,551-554,568-578 (plan-review-<role>
+  registered ×5 and referenced; creation references plan-review-product/
+  project_manager per :508-509).
+  PASS
+C2 subagent_type='vteam-plan' consistent everywhere
+  Evidence: seed.ts:308,1078; policy.ts:184; role-guard-plugin.ts:149;
+  policy.spec.ts:237-256; plugin.spec.ts:100-103; seed.spec.ts:291,446.
+  PASS
+C3 no toolEffects / permissionScope reintroduction
+  Evidence: chain diff (448ff62^..4a0f9bf, server/src+worker/src+seed.ts):
+  grep -c toolEffects = 0; grep -c permissionScope = 0.
+  Plus seed.spec.ts:233 asserts update has no permissionScope.
+  PASS
+C4 no as any / @ts-ignore in the chain
+  Evidence: same chain diff: grep -c 'as any' = 0; grep -c 'ts-ignore' = 0.
+  (Repo-wide pre-existing as-any casts untouched — out of chain scope.)
+  PASS
+
+== INDEPENDENT VERIFICATION (re-run by auditor) ==
+- server tsc --noEmit: exit 0. PASS
+- worker tsc --noEmit: exit 0. PASS
+- jest server (agent.constants.spec + seed.spec + execution-policies + plan-removal.guard.spec):
+  7 suites / 87 tests PASS (1 snapshot PASS).
+- jest worker (policy.spec + role-guard-plugin.spec + opencode-config-builder.spec):
+  3 suites / 78 tests PASS.
+- jest server worker-dispatcher.spec.ts: 188 tests PASS.
+- bash scripts/e2e-plan-member.sh: ALL STEPS DONE 0/1/2/3/4/5/6/7, PASS plan-member (live path).
+
+== OBSERVATIONS (non-blocking, for F4/scope owner) ==
+O1 Landing order differs from task statement (0806770 after 8f36c91) + extra
+  iteration commit 5287563 superseded by 4a0f9bf. Content-equivalent; no action.
+O2 Working tree has pre-existing modification
+  server/src/platform-mcp/platform-mcp.controller.spec.ts (1 ins/15 del, last
+  committed touch 8c34392 — predates this plan chain; not made by this audit;
+  e2e script does not touch product code). Flagged for F4 scope-fidelity, not
+  a plan-compliance failure.
+O3 E2E step-4 WARN (E2E-PLAN-DONE marker absent) is an optional completion-marker
+  nicety; file+group contract asserts held and step reports PASS. No action.
+
+== PER-TODO SUMMARY ==
+Todo 1 [policy+guard]: PASS (7/7)
+Todo 2 [seed]: PASS (8/8)
+Todo 3 [flow/removal]: PASS (4/4)
+Worker mode fix: PASS (1/1)
+Todo 4 [e2e]: PASS (8/8)
+Cross-contract C1-C4: PASS (4/4)
+
+VERDICT: APPROVE

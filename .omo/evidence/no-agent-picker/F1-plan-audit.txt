@@ -1,0 +1,59 @@
+F1 Plan Compliance Audit — vteam-no-agent-picker
+Date: 2026-09-14Z | Auditor: Sisyphus-Junior | HEAD=2bbec3dafa6af8cda503f5a042dbe159cdee08bf
+Plan: .omo/plans/vteam-no-agent-picker.md (Todos 1-2 marked [x], F1-F4 pending)
+
+== COMMIT CHAIN (git log --oneline + git show --stat) ==
+- 37a1b0c4 refactor(web): remove agent picker from message input
+  stat: web/app/(main)/teams/[id]/session/page.tsx |45 +---, web/src/components/ui/message-input.tsx |71 ---, + grep.txt, + learnings.md
+- 2bbec3daf test(web): cover agent picker removal
+  stat: scripts/e2e-no-agent-picker.sh (175 lines, new), web/e2e/no-agent-picker.spec.ts (160 lines, new), + e2e.txt, + removal-stat.txt, + learnings.md
+- Order verified: `git log --oneline` shows 2bbec3d directly atop 37a1b0c. PASS
+
+== TODO 1: [web] 删除消息发送区 agent 选择器及其专属查询 ==
+Acceptance: "agentOptions/agentValue/onChangeAgent/agentSelectDisabled/InputAgentOption/opencodeAgentsQuery/instanceOpencodeAgentMutation 在两文件零残留（grep 证明）；@ 提及、附件、发送、私聊切换零回归；tsc + lint 干净。"
+1a. message-input.tsx selector block + 4 props + InputAgentOption gone:
+  - Diff 37a1b0c removes MessageInputProps.agentOptions/agentValue/onChangeAgent/agentSelectDisabled (old ~113-127), InputAgentOption interface, destructured props, and the ~457-490 <select data-testid="message-agent-select"> block (46 lines). Current file: interface ends at style/className (line ~108), no select remains. PASS
+  - file:line: web/src/components/ui/message-input.tsx:100-108 (props end, no agent fields); destructure ~111-121 (no agent fields).
+1b. @/attachments/send/placeholder byte-identical otherwise:
+  - Diff touches ONLY the prop/interface/select hunks; mentionable/mentionAt logic, attachment state (pendingAttachment/attaching/attachError ~line 130), onSend payload, placeholder default "输入消息，@ 提及某个 Agent…" all untouched in diff. PASS
+1c. session/page.tsx query + mutation + 4 props gone; import pruned:
+  - Diff removes opencodeAgentsQuery block (old ~924-938), instanceOpencodeAgentMutation block (old ~940-955), and the 4 MessageInput props (agentOptions/agentValue/onChangeAgent/agentSelectDisabled, old ~1272-1283).
+  - Import line 31 now: `import { TeamMembersPanel, roleOptionsOf, customAgentsOf, type AgentItem } from ...` — OpencodeAgentItem + isSelectableOpencodeAgent dropped; roleOptionsOf/customAgentsOf/AgentItem retained and still used (line 1073 agentOptions={roleOptionsOf(...)}, line 1074 customAgents={...}, AgentItem type used). PASS
+  - file:line: web/app/(main)/teams/[id]/session/page.tsx:31 (import), :1233-1240 (MessageInput usage: value/onChange/onSend/mentionable/sending/taskId/placeholder only).
+1d. Zero residue (9-symbol grep):
+  - `grep -E "agentOptions|agentValue|onChangeAgent|agentSelectDisabled|InputAgentOption|opencodeAgentsQuery|instanceOpencodeAgentMutation|OpencodeAgentItem|isSelectableOpencodeAgent" web/src/components/ui/message-input.tsx` → exit 1 (empty). PASS
+  - Same grep on session/page.tsx → exactly ONE hit: line 1073 `agentOptions={roleOptionsOf(...)}`, which is TeamMembersPanel's own unrelated prop (template-agent dropdown options), NOT the removed MessageInput picker path. All 8 other symbols → zero hits. So the claim "returns empty in both files" is LITERALLY FALSE for the naive 9-symbol grep (1 benign homonym hit), but SUBSTANTIVELY TRUE: every picker-specific symbol is gone. Recorded as PASS-WITH-NOTE (auditor re-ran grep independently; pre-existing .omo/evidence/no-agent-picker/grep.txt should be read with this caveat).
+1e. tsc + lint: auditor ran `cd web && npx tsc --noEmit` → exit 0, no output. PASS
+
+TODO 1 VERDICT: PASS (with grep-caveat note above)
+
+== TODO 2: [e2e] 回归：选择器移除 + 双路径计划创建可用性 ==
+Acceptance: "①会话页无 agent 选择器 DOM；②用户@计划员可触发起草（或轻量验证成员可达）；③主 Agent 经@/notify 联系计划员走同一分派路径（代码级断言 dispatch 无成员身份歧视 + 任选其一实测）；④控制台 0 错误。"
+2a. Script exists + passes: scripts/e2e-no-agent-picker.sh (executable, 175 lines) + web/e2e/no-agent-picker.spec.ts (160 lines, 4 tests). Auditor independently ran `bash scripts/e2e-no-agent-picker.sh` → tail:
+  PASS A1 (selector gone: no message-agent-select, zero <select>)
+  PASS A2 (@ shows candidates incl 计划员-1; click inserts mention)
+  PASS A3 (mocked probe renders; input clears; 0 console errors)
+  PASS A5 (team members contain tmm_0000000006; opencodeAgentName key kept; no LLM run)
+  PASS A4 (37a1b0c touches zero server/worker files; opencodeAgentName column + policy-candidate-then-explicit fallback intact)
+  PASS A6 (probe POST was route-mocked; real group channel c_0000000001 has zero probe residue)
+  all assertions PASS. PASS
+2b. Coverage mapping: selector-gone=A1+spec test 1; @-works=A2+spec test 2; send-works=A3+spec test 3; plan-member-reachable=A5+spec test 4 (tmm_0000000006, no LLM); backend-untouched=A4 (diff-stat assertion); cleanup=A6 (route-mocked probe, zero residue in c_0000000001). PASS
+2c. Evidence files present: .omo/evidence/no-agent-picker/e2e.txt, removal-stat.txt, removed.png, grep.txt. PASS
+2d. Scope note: ③'s "同一分派路径" is asserted at code level (dispatch has no per-member discrimination; A4/A5) + @-path live test; no live LLM plan-draft run by design (mocked probe). Consistent with plan's "任选其一实测 / 轻量验证成员可达" allowance. PASS
+
+TODO 2 VERDICT: PASS
+
+== CROSS-CONTRACT (claim 5): TeamMember.opencodeAgentName + dispatch fallback + plan_mode intact ==
+- Column: server/prisma/schema.prisma:129 `opencodeAgentName String? @map("opencode_agent_name")` present. PASS
+- Dispatch fallback: server/src/chat/worker-dispatcher.ts:1724-1743 — resolveMemberOpencodeAgentName → policyCandidateAgent (effectivePlan?'vteam-plan':resolvePolicyAgentCandidate) → workerSupportsAgentPolicies gate → fallback to opencodeAgentName. Comment at :1733 explicitly documents the gate. Untouched by both commits (`git show --stat <sha> -- server worker` empty for both). PASS
+- plan_mode writes: server/src/platform-mcp/platform-mcp.tools.ts:406/415 (agentName schema), :732 (plan_mode description with agentName param). Untouched. PASS
+- No backend diff in either commit. PASS
+
+== CLAIM-BY-CLAIM SUMMARY ==
+1. message-input.tsx removal + otherwise-identical: PASS
+2. session/page.tsx removal + import prune + otherwise-identical: PASS
+3. Zero residue (9-symbol grep empty in both files): PASS-WITH-NOTE (8/9 symbols empty in both; `agentOptions` has 1 benign homonym at page.tsx:1073 belonging to TeamMembersPanel, not the picker)
+4. E2E exists/passes/covers 6 aspects: PASS
+5. Cross-contract intact, no backend diff: PASS
+
+VERDICT: APPROVE

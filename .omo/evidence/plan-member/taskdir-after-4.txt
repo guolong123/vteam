@@ -1,4 +1,5 @@
 /data/vteam-worker/tasks/t_0000000001/.opencode/plans/e2e-plan-member.md
+/data/vteam-worker/tasks/t_0000000001/.opencode/plans/f3-manual-qa.md
 /data/vteam-worker/tasks/t_0000000001/docs/_permission_check.txt
 /data/vteam-worker/tasks/t_0000000001/docs/implementation-note.md
 /data/vteam-worker/tasks/t_0000000001/prototypes/_permission_check.txt

@@ -1,0 +1,120 @@
+F2 CODE QUALITY REVIEW — vteam-role-behavior-enforcement
+=========================================================
+Range: 5c38304..ebb2e57 (17 commits, 78 files, +6799/-279)
+Date: 2026-09-13 | Reviewer: F2 wave | Scope: read-only (this file only write)
+
+Commits in range:
+  ebb2e57 test: assert role tool matrix and real tool names match registries
+  d1af244 test(e2e): record layered role enforcement run
+  99318ea test(e2e): runnable layered role enforcement with bound-session ask flow
+  7a780ce docs: document layered enforcement, guard lifecycle and rollback
+  4eaf3a7 feat(worker): add role guard plugin with discovery spike
+  1e275cd feat(worker): track session policy keyed by agent name with safe fallback
+  c8c8c4c feat(worker): guard branch-precedence decision with real tool names
+  7c87c15 feat(dispatch): capability+name gated policy agent selection
+  e316032 test(worker): assert config discovery, universal glob base, pure enforcement
+  d4fc99f feat(worker): advertise agent policy capability with names
+  920fb38 feat(worker): single-writer agent/guard injection with full cleanup and failure neutralization
+  99b1ed6 feat(policy): expose agent definitions and guard roles with real tool names
+  b4c25bc feat(policy): unify service, bind policyId on agent create/clone/update
+  ca899b8 test(seed): cover role policies and prompt boundaries
+  fef82ff feat(seed): add role execution policies and bind template agents
+  0443da3 feat(dispatch): inject role boundary section from execution policy
+  (+1 more; see git log)
+
+[1] WORKER ZERO ROLE HARDCODING — PASS
+  - worker/src/role-guard/policy.ts:105-125 — evaluateToolCall branches only on
+    tool category (READ_TOOLS/EDIT_TOOLS/bash/TASK_TOOLS/passthrough/allowlist);
+    role is a lookup key: `roles[agent]` (line 121), policy from rolesDoc only.
+    Header contract line 31: "无角色名 if 分支".
+  - worker/src/resources/opencode-config-builder.ts:66-89 — buildAgentDefinitions
+    loops generically; cross-check assertGuardRole(name, roles) is shape-only.
+  - worker/src/resources/role-guard-plugin.ts:86-150 — emitted snapshot mirrors
+    policy.ts branches 1:1 (parity locked by role-guard-plugin.spec.ts); no role names.
+  - Non-violations (checked, not role policy):
+    * worker/src/exec/exec-server.ts:1119-1121 `agent.startsWith('vteam-')` — routing
+      gate for session-tracking only (untracked => pass-through), not policy semantics.
+    * worker/src/role-guard/session-policy-map.ts:51 `vteam-developer` — doc comment only.
+    * worker/src/driver/prompt-await.ts:172,278,294 `role==='assistant'` — opencode
+      message role, unrelated to vteam roles.
+  - Role knowledge lives server-side only: server/src/common/constants/agent.constants.ts
+    ROLE_BOUNDARIES (allowed — control-plane policy source, shipped via roles.json).
+
+[2] SINGLE ExecutionPolicyService — PASS
+  - Deleted: server/src/platform-mcp/execution-policy.service.ts (diff shows full-file
+    deletion; `ls` confirms absent; old {permissions,writePaths} shape gone).
+  - Single definition: server/src/execution-policies/execution-policy.service.ts:86
+    `export class ExecutionPolicyService` — only hit for "class ExecutionPolicyService"
+    outside specs. No duplicates.
+
+[3] edit SOLE NATIVE WRITE GATE; task=deny x6; NO `write` KEY — PASS
+  - Layer① permission built generically (no per-role branch):
+    * service:298-309 buildRolePermission() => {edit, read, bash, task:'deny', ...mcpDenies:'deny'}.
+    * seed.ts:328-335 same shape in template-agent loop (5 template roles; 6th agent
+      vteam-plan covered by AGENT_POLICIES_ORDER service:64-71 + same builder).
+  - Explicit `write`-key rejection: opencode-config-builder.ts:111-115 throws if
+    `permission` contains 'write'; agent.constants.ts:194 documents "无 `write` 键".
+  - `write` string hits are NOT permission keys (verified):
+    * policy.ts:85 / role-guard-plugin.ts:78 — EDIT_TOOLS tool-name set ('write' as a
+      tool alias routed to the edit-glob check; consistent with seed.ts:298 "edit 同时
+      覆盖 edit/write/apply_patch").
+    * seed.ts:153,187,220,254,289 `permissionScope:{write:...}` — legacy agent-table
+      field, not an opencode permission key.
+    * git-tools.ts:539 / git-repos / workers.service.ts:606 — git-domain `write`
+      (repo permission / push guard), unrelated to opencode.json permission maps.
+
+[4] REAL TOOL NAMES ONLY — PASS
+  - toolAllows keys across all 6 boundaries (agent.constants.ts:257-437) are all
+    `vteam_*` / `git_*` prefixed; `task`/`execute` never listed (comment line 152;
+    grep for task/execute literals in constants+execution-policies returns nothing).
+  - mcpDenies derived as complement of VTEAM_MCP_TOOL_NAMES (line 174) => always real
+    names; spread as layer① denies service:305-307 and seed.ts:334.
+  - Bare MCP names (task_context/chat_history/submit_artifact/group_post/notify_agent)
+    appear ONLY in prompt prose/comments (worker-dispatcher.ts prompts, exec-server.ts:11
+    comment, artifacts/task comments) — never in permission maps or guard allowlists.
+  - Guard plugin snapshot uses identical real-name sets (role-guard-plugin.ts:65-84,
+    142-149 default-deny for unlisted unknown/custom/MCP tools).
+
+[5] SINGLE-WRITER opencode.json + PATH SCHEME + CLEANUP + NEUTRALIZATION — PASS (2 notes)
+  - Single-writer: injector.ts:310-360 injectMcpAndAgents() is the only read-modify-write
+    on the mcp+plugin+agent sections (one writeConfig per path, lines 358/387).
+    injectMcp() (284-296) is a second CODE path but strictly sequential, never concurrent:
+    startup awaits injectAll() (index.ts:879) before registerCurrent→injectMcp (index.ts:643);
+    reload-config path uses injectAll() only (index.ts:698). injectMcp() preserves
+    agent/guard sections by contract (280-282). No concurrent writer found.
+    NOTE-A (non-blocking): omo-enabled.ts:73-74 comment claims opencode.json plugin sync,
+    but writeOmoEnabled() (78-87) writes ONLY `.omo/omo-enabled.json` — stale comment,
+    no second writer. Suggest fixing the comment.
+  - One path scheme: injector.ts:123-125 ROLE_GUARD_DIR_REL/ROLES_REL/SESSIONS_REL +
+    135 ROLE_GUARD_PLUGIN_REL (exported as GUARD_PLUGIN_REL, line 140), consistent with
+    session-policy-map.ts:22 and plugin locateWorkDir (role-guard-plugin.ts:375-424).
+  - cleanupByManifest explicit per key, never via tools branch: overloads 788-798;
+    skills/tools isolated 805-825; agentNames 826-846; guardRolesFile/guardSessionsDir/
+    guardPluginFile 847-866; unknown keys throw 848-852. Stale plugin file handled
+    separately (500-504) without touching the plugin array.
+  - Failure neutralization present: fetchAgentPoliciesSafe→null never throws (injector.ts:
+    200-220); buildAgentDefinitions throw caught → writeNeutralized (328-333); 
+    writeNeutralized removes managed agents, writes roles.json{enabled:false}, deletes
+    plugin file+entry and sessions/, zeroes manifest (367-389). Pure-mode degradation
+    warned in opencode-server.ts:337-345.
+
+[6] NO DEAD CODE — PASS
+  - opencode-config-builder repurposed: old buildOpencodeConfig gone from that module;
+    now exports only buildAgentDefinitions + AgentPolicies* types, consumed by
+    injector.ts:24-26. Remaining `buildOpencodeConfig` in
+    credentials/model-credential-injector.ts:65 is a DIFFERENT function (auth.json) with
+    a live caller (line 85) — not dead.
+  - ExecutionConfig interfaces in exec-server.ts:58 / worker-protocol.ts:209 /
+    worker.client.ts:140 are the live dispatch payload type (still referenced) — legacy
+    but live, not dead.
+  - New exports all consumed: buildAgentDefinitions→injector; renderRoleGuardPlugin→
+    injector.writeGuardPluginFile; DECISION_MARKERS→spec parity; policy.ts helpers→
+    specs/plugin snapshot; session-policy-map→exec-server track/untrack.
+
+DIFF COVERAGE (5c38304..ebb2e57): old service deletion, new execution-policies service +
+  controller/DTOs, agent.constants boundaries, seed role policies, dispatcher boundary
+  injection + capability gating, worker injector/guard-plugin/policy/session-map/
+  exec-server tracking, opencode-server pure warning, matrix + e2e + seed specs — all
+  reviewed above at file:line precision.
+
+F2 VERDICT: APPROVE

@@ -1,40 +1,23 @@
  M .omo/boulder.json
+ M .omo/evidence/plan-member/agents.json
  M .omo/evidence/plan-member/baseline-git.txt
  M .omo/evidence/plan-member/e2e.txt
- M .omo/notepads/vteam-plan-member-subagents/learnings.md
- M scripts/e2e-plan-member.sh
+ M .omo/evidence/plan-member/git-status-final.txt
+ M .omo/evidence/plan-member/group-after-4.json
+ M .omo/evidence/plan-member/group-trigger.json
+ M .omo/evidence/plan-member/group-watermark-4.json
+ M .omo/evidence/plan-member/group-watermark.json
+ M .omo/evidence/plan-member/serve-msg-5-assistant.txt
+ M .omo/evidence/plan-member/serve-msg-5.json
+ M .omo/evidence/plan-member/taskdir-after-4.txt
+ M .omo/evidence/plan-member/taskdir-before.txt
+ M .omo/evidence/plan-member/taskdir-final.txt
  M server/src/platform-mcp/platform-mcp.controller.spec.ts
 ?? .omo/drafts/agent-tool-permission-align.md
 ?? .omo/drafts/vteam-role-behavior-enforcement.md
 ?? .omo/evidence/custom-agent-opencode/permission-matrix-audit.txt
-?? .omo/evidence/plan-member/agent-policies.json
-?? .omo/evidence/plan-member/agents.json
-?? .omo/evidence/plan-member/channels.json
-?? .omo/evidence/plan-member/execute-5.json
-?? .omo/evidence/plan-member/git-status-final.txt
-?? .omo/evidence/plan-member/group-after-4.json
-?? .omo/evidence/plan-member/group-trigger.json
-?? .omo/evidence/plan-member/group-watermark-4.json
-?? .omo/evidence/plan-member/group-watermark.json
-?? .omo/evidence/plan-member/guard-decisions.json
-?? .omo/evidence/plan-member/injected-opencode.json
-?? .omo/evidence/plan-member/injection-compare.txt
-?? .omo/evidence/plan-member/live-path.txt
-?? .omo/evidence/plan-member/plan-file-4.md
-?? .omo/evidence/plan-member/plan-review-grep.txt
-?? .omo/evidence/plan-member/review-gone.txt
-?? .omo/evidence/plan-member/review-gone.txt.body
-?? .omo/evidence/plan-member/roles.json
-?? .omo/evidence/plan-member/seed-db.txt
-?? .omo/evidence/plan-member/serve-msg-4.json
-?? .omo/evidence/plan-member/serve-msg-5-assistant.txt
-?? .omo/evidence/plan-member/serve-msg-5-run7-supplemental.json
-?? .omo/evidence/plan-member/serve-msg-5.json
-?? .omo/evidence/plan-member/taskdir-after-4.txt
-?? .omo/evidence/plan-member/taskdir-before.txt
-?? .omo/evidence/plan-member/taskdir-final.txt
-?? .omo/evidence/plan-member/team.json
-?? .omo/evidence/plan-member/tools-list.json
+?? .omo/evidence/plan-member/F2-code-quality.txt
+?? .omo/evidence/plan-member/F4-scope-fidelity.txt
 ?? .omo/evidence/role-enforcement/F1-plan-audit.txt
 ?? .omo/evidence/role-enforcement/F2-code-quality.txt
 ?? .omo/evidence/role-enforcement/F3-manual-qa.txt

@@ -1,0 +1,16 @@
+<task id="ses_f60eedd1effe7eH4BUuncA0scU" state="completed">
+<task_result>
+F3-PROBE-OK: `# F3 手工 QA 验证计划`
+
+F3-NESTED-RESULT: `Subagent depth limit reached (1). Increase "subagent_depth" to allow nested subagents.`
+</task_result>
+</task>
+子会话返回结果如下：
+
+```
+F3-PROBE-OK: `# F3 手工 QA 验证计划`
+
+F3-NESTED-RESULT: `Subagent depth limit reached (1). Increase "subagent_depth" to allow nested subagents.`
+```
+
+F3-SUBAGENT-DONE

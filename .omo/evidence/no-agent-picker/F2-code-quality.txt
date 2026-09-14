@@ -1,0 +1,43 @@
+F2 — Code quality review: vteam-no-agent-picker (37a1b0c + 2bbec3d)
+Date: 2026-09-14T UTC | Reviewer: Sisyphus-Junior | Scope: actual diffs, base = 37a1b0c^
+Commits: 37a1b0c "refactor(web): remove agent picker from message input" (2 product files),
+         2bbec3d "test(web): cover agent picker removal" (spec + script + evidence only)
+
+1. No slop
+- [CLEAN] web/src/components/ui/message-input.tsx: grep `as any|ts-ignore|ts-expect-error|console.log|TODO|FIXME|HACK` → 0 hits. No new TODO/retirement notes, no AB dual-track.
+- [CLEAN] web/app/(main)/teams/[id]/session/page.tsx: same grep (plus removed-symbol names) → 0 hits.
+- [CLEAN] web/e2e/no-agent-picker.spec.ts: `as any|ts-ignore|console.log|TODO|FIXME|HACK|debugger` → 0 hits. No `as any` casts; JSON body cast is a typed `as { text?: string }` (spec.ts:71), acceptable.
+- [CLEAN] scripts/e2e-no-agent-picker.sh: only hit is comment line 26 "never pushes" (policy statement, not a push). No `git push`, no `rm -rf`, no product-source writes.
+- [INFO/pre-existing] web/src/components/ui/message-input.tsx:266-268 `catch { // 发送失败：保留附件… }` — empty-ish catch with explanatory comment, predates 37a1b0c (untouched by diff). Not slop, not introduced. No action.
+- [CLEAN] No dead code introduced: removed render block used only inline styles (no CSS file orphan); remaining imports in both files still live (message-input.tsx still uses radius/neutral/fontSize/fontFamily in attach/send rows; session page still uses TeamMembersPanel/roleOptionsOf/customAgentsOf/AgentItem — AgentItem/roleOptionsOf live at page.tsx:1073 `agentOptions={roleOptionsOf(...)}`). TeamMembersPanel.tsx:14-32 `OpencodeAgentItem/isSelectableOpencodeAgent` and :129 `agentOptions: AgentOption[]` serve the add-instance member flow (untouched file) — NOT orphaned. omo-panel.tsx:394 `interface OpencodeAgentItem` is a separate local worker-panel type — unrelated, not dead.
+- [CLEAN] tsc `--noEmit` in web/: exit 0 (no unused-import/typing fallout from the removal).
+
+2. Deletion completeness
+- [CLEAN] Product code zero residue: `message-agent-select|InputAgentOption|agentValue|onChangeAgent|agentSelectDisabled|opencodeAgentsQuery|instanceOpencodeAgentMutation` → 0 hits in web/src + web/app (only remaining `agentOptions=` at session/page.tsx:1073 is TeamMembersPanel's distinct `AgentOption` prop, live and unrelated).
+- [CLEAN] No dead testids in other tests' DOM queries: only two files reference `message-agent-select` — the new spec (intentional `toHaveCount(0)` negative assertion, spec.ts:93) and the reference inventory below.
+- [MINOR/pre-existing-file, introduced-staleness] web/e2e/reference/testids.ts:210 and :570 still list "message-agent-select" ("17 页 data-testid 全量清单（reference）", Phase-5 T9 audit inventory). The testid no longer exists in the DOM, so the inventory is now stale. Reference-only doc (no test asserts against it; header states it is a T9对照全量, not a live assertion list) → doc drift, not a functional regression. Suggest updating the two entries in a follow-up; not a merge blocker.
+
+3. No collateral damage (diff inspection, not just tests)
+- [CLEAN] Diff stat 37a1b0c: only `web/app/(main)/teams/[id]/session/page.tsx` + `web/src/components/ui/message-input.tsx` (plus .omo evidence/notepad). Zero server/ worker/ files.
+- [CLEAN] @ mention flow untouched: `mentionable={mentionable}` prop, refreshMention/insertMention/extractMentions/candidates block (message-input.tsx:202-249,348-363) byte-identical; the only diff-context hits for "mention" are unchanged context lines.
+- [CLEAN] Attachments untouched: uploadFile/handleFileChange/handlePaste/pendingAttachment/attachError blocks (message-input.tsx:135-200,391-496) outside diff hunks.
+- [CLEAN] Send untouched: handleSend/onSend/send button (message-input.tsx:251-269,497-519) outside diff hunks.
+- [CLEAN] Private tabs untouched: `privateChannelMap` placeholder line is unchanged context (diff line 68), DM tab logic not in hunks.
+- [CLEAN] Member panel untouched: TeamMembersPanel.tsx not in either commit; session page keeps its import/usage (roleOptionsOf/customAgentsOf/AgentItem).
+- [CLEAN] plan_mode writes untouched: question/planMode flow (page.tsx:770-790, incl. `api.patch(.../tasks/... { planMode: false })`) byte-identical to pre-image; backend `TeamMember.opencodeAgentName` column + dispatcher fallback intact (server/src/teams/teams.service.ts:830-835 write path, :1314 serialization; server/src/chat/worker-dispatcher.ts:1724-1748 policy-candidate-then-explicit chain — none in diff).
+
+4. Test quality
+- [CLEAN] Real-behavior assertions, no tautologies: A1 negative DOM assertion (`message-agent-select` count 0 + page-wide `select` count 0, spec.ts:92-94, anchored by positive `message-input`/`message-input-send` visibility so a broken page can't pass); A2 types `@`, waits for real candidate box, clicks 计划员-1, asserts input value regex (spec.ts:97-110); A3 polls the intercepted POST payload, asserts echo render + input cleared + zero console/page errors (spec.ts:112-135); test 4 asserts real member id + alias via live server (spec.ts:138-160).
+- [CLEAN] Mocks don't mask regressions: POST /channels/:id/messages is fulfilled (never persisted — A6 verifies the real group channel has zero probe residue); GET messages mocked (seed + echo); ALL other `/api/v1/*` via `route.fallback()` to the real backend (spec.ts:87), so team/member reads (incl. test 4's GET /teams, backed by teams.service.ts:1314 serialization — confirmed key present) hit the real server. Evidence e2e.txt shows 4/4 passed against compose stack.
+- [NIT] Page-wide `locator("select")` count-0 (spec.ts:94) is a deliberate tripwire: any future legitimate `<select>` on this page will fail A1. Acceptable by design (forces conscious update), flagged for awareness only.
+
+5. Consistency (e2e script conventions)
+- [CLEAN] scripts/e2e-no-agent-picker.sh: `set -euo pipefail` (line 34); `trap cleanup EXIT` removing mktemp files + temp playwright config/report; `fail()` prints FAIL + `exit 1` (non-zero); `need_cmd` guards for curl/python3/git/npx; per-assertion PASS/FAIL to .omo/evidence/no-agent-picker/e2e.txt; pre-flight stack health checks that FAIL (non-zero) when down; verifies (never modifies) product source, never pushes. Mirrors repo e2e-script conventions.
+
+6. Tool runs (MUST DO)
+- `cd web && npx tsc --noEmit` → exit 0, no output.
+- `npx next lint --file src/components/ui/message-input.tsx --file "app/(main)/teams/[id]/session/page.tsx"` → exit 0; only 2 warnings, both PRE-EXISTING and unrelated: page.tsx:775 `_drop` assigned-never-used, page.tsx:782 `_drop` defined-never-used (destructuring-rest omit pattern in handleQuestionSubmit; byte-identical in 37a1b0c^ pre-image, outside diff hunks). No new warnings; message-input.tsx clean.
+
+Findings count: 0 BLOCKER, 0 MAJOR, 1 MINOR (stale testids.ts reference entries), 2 NIT/INFO (pre-existing empty-catch w/ comment; select-count-0 tripwire). Lint warnings pre-existing. No product-code changes made by this review; no writes outside this file.
+
+VERDICT: APPROVE

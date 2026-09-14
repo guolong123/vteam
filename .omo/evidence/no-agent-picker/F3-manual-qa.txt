@@ -1,0 +1,90 @@
+F3 — 手工 QA：vteam-no-agent-picker（独立复现，非重跑旧脚本）
+================================================================
+date=2026-09-14T09:3xZ (UTC+8 17:3x)  HEAD=2bbec3dafa6af8cda503f5a042dbe159cdee08bf
+stack: web http://localhost:13001 + server http://localhost:13000 (compose 运行栈)
+login: admin/admin123   team: tm_0000000001   plan-member: tmm_0000000006（计划员-1）
+method: Playwright MCP (skill_mcp mcp_name="playwright": browser_navigate /
+  browser_evaluate / browser_take_screenshot / browser_console_messages)
+  + 自写脚本 /tmp/f3-manual-qa.mjs（自写，镜像 e2e-no-agent-picker.sh 手法：
+  route.fulfill mock POST + mocked GET 回显；POST 永不落库）+ curl 直调 API。
+  旧证据（.omo/evidence/no-agent-picker/e2e.txt 等）未被采信，仅复现参考。
+
+---- 0. stack health（curl 原始输出） ----
+$ curl -sS -o /dev/null -w 'web_login:%{http_code}\n' http://localhost:13001/login
+web_login:200
+$ curl -sS -o /dev/null -w 'server_health:%{http_code}\n' http://localhost:13000/api/v1/health
+server_health:200
+
+---- 1. Selector gone（Playwright MCP，browser_evaluate 原始返回） ----
+$ goto http://localhost:13001/teams/tm_0000000001/session（已有 admin 会话，/login 自动跳 /teams）
+{
+  "url": "http://localhost:13001/teams/tm_0000000001/session",
+  "selects": 0,
+  "agentSelectTestid": 0,
+  "hasSessionRoot": true,
+  "hasInput": true,
+  "hasSend": true,
+  "inputHTML": "<div ...><textarea data-testid=\"message-input\" placeholder=\"输入消息，@ 成员或 @all 广播…\" ...></textarea><div ...><input data-testid=\"message-attach-input\" type=\"file\" ...><button ... data-testid=\"message-attach-button\" ...>...（输入区仅 textarea + 附件按钮 + 发送按钮，无 select 残留）"
+}
+=> PASS：全页 0 <select>，0 message-agent-select testid；输入区/发送按钮存在。
+screenshot: .omo/evidence/no-agent-picker/F3-input-area.png（254003 bytes，输入区实拍）
+自写脚本复核（全新 headless chrome 上下文，独立登录）：
+{"check1":{"selects":0,"agentSelectTestid":0}} => PASS（与 MCP 一致）
+
+---- 2. @ works（Playwright MCP，browser_evaluate 原始返回） ----
+$ input execCommand('insertText','@') => {execOk: true, val: "@"}
+$ 1200ms 后：{visible: true, text: "架构师-1开发者-1计划员-1产品经理-1项目经理-1测试-1"}
+=> popup 列出全部 6 成员，含 计划员-1。
+screenshot: .omo/evidence/no-agent-picker/F3-mention-popup.png（260485 bytes，popup 实拍）
+$ 点击 计划员-1（clicked BUTTON）=> 800ms 后：{val: "@计划员-1 ", popupGone: true}
+=> PASS：mention 插入为 "@计划员-1 "，popup 关闭。
+
+---- 3. Send works（自写脚本 /tmp/f3-manual-qa.mjs，route-mock，原始输出） ----
+{"check1":{"selects":0,"agentSelectTestid":0}}
+{"check3":{"posted":1,"postedText":"F3-manual probe (mocked, never persisted) @ 1789378393181","rendered":true,"inputCleared":true,"consoleErrors":[]}}
+F3-SEND-RESULT: PASS
+=> POST /channels/:id/messages 发出 1 次（被 mock fulfill 吞掉，永不落库）；
+   探针渲染于 chat-message-list；输入清空；console/pageerror 0 错误。
+MCP 会话侧 browser_console_messages（onlyErrors）：Total messages: 0 (Errors: 0, Warnings: 0)
+screenshot: .omo/evidence/no-agent-picker/F3-send-probe.png（150660 bytes，探针渲染实拍）
+=> PASS（mock 语义：零持久化，见 §6；未触发任何 LLM 执行）
+
+---- 4. @plan-member reachability（API + 代码语义，未触发 LLM） ----
+$ GET /api/v1/teams/tm_0000000001（admin JWT）原始输出：
+member_count=6
+tmm_0000000003 '架构师-1' agentKey= None hasOpencodeAgentName= True opencodeAgentName= None
+tmm_0000000004 '开发者-1' agentKey= None hasOpencodeAgentName= True opencodeAgentName= None
+tmm_0000000006 '计划员-1' agentKey= None hasOpencodeAgentName= True opencodeAgentName= None
+tmm_0000000001 '产品经理-1' agentKey= None hasOpencodeAgentName= True opencodeAgentName= None
+tmm_0000000002 '项目经理-1' agentKey= None hasOpencodeAgentName= True opencodeAgentName= None
+tmm_0000000005 '测试-1' agentKey= None hasOpencodeAgentName= True opencodeAgentName= None
+=> tmm_0000000006 在成员列表中（alias 计划员-1），成员行保留 opencodeAgentName 键（回退链载体未动）。
+代码语义（server/src/chat/worker-dispatcher.ts:1290 buildTeamMemberTrigger）：
+ 按 (teamId, teamMemberId) findFirst { id, agentId } → 缺失即抛错 → ensureTeamSession
+ 补会话；成员存在即触发链可达。成员存在性已由上 API 证实。
+政策门回退链仍在（:1724 opencodeAgentName 读取，:1735 policyCandidateAgent，
+ :1739-1742 workerSupportsAgentPolicies 门控覆盖）——仅读代码确认，未改后端。
+=> PASS（明确声明：代码级证明 + 成员在场证明；未触发真实 LLM 执行）
+
+---- 5. No other breakage（同页 testid 普查，browser_evaluate 原始返回） ----
+testids present: members-panel, member-item, dm-tabs, dm-tab-group,
+ dm-tab-private-tmm_0000000001..0000000006（6 私聊 tab）, agent-model-chip-tmm_*（6 模型 chip）,
+ agent-more-tmm_*（6 更多菜单）, chat-message-list, chat-bubble*, message-input,
+ message-input-send, message-attach-button/input, team-session-root/current-task/refresh,
+ plan-doc-upload-input（唯一 plan 相关 testid；页内无 plan-mode toggle/按钮文本，记为 not-visible）
+absent: message-agent-select（全 testid 列表无此项）
+=> PASS：成员面板、私聊 tabs、模型 chip、附件按钮均渲染；plan_mode 相关 UI 在此页不可见，无可坏之处。
+
+---- 6. Cleanup（curl 原始输出） ----
+$ GET /channels?teamId=tm_0000000001 => group_channel=c_0000000001
+$ GET /channels/c_0000000001/messages?limit=100 => msg_count=93, probe_residue=0
+（93 条真实消息中无 "F3-manual probe" 亦无 "e2e-no-agent-picker probe"）
+=> PASS：§3 探针走 mock 从未落库；真实群频道零残留。MCP 会话中 @ 插入仅改本地
+   textarea 未发送；无其他测试产物。git status 确认本次未改任何产品源码
+   （仅新增 .omo/evidence/no-agent-picker/F3-* + 本文件；/tmp 脚本在证据目录外，
+   属一次性复现工具，已说明）。
+
+---- MISMATCH ----
+无。全部断言一次通过；UI 文案/结构与计划 D1 一致（删选择器，不动 @/附件/发送/后端）。
+
+VERDICT: APPROVE

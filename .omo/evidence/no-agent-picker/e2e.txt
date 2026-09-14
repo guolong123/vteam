@@ -1,16 +1,16 @@
-[e2e] date=2026-09-14T09:27:59Z HEAD=37a1b0c4d32bedf54d7541b8fa632f63c04a95fe REMOVAL_HEAD=37a1b0c
+[e2e] date=2026-09-14T09:31:29Z HEAD=2bbec3dafa6af8cda503f5a042dbe159cdee08bf REMOVAL_HEAD=37a1b0c
 [e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 TEAM_ID=tm_0000000001
 [e2e] stack healthy (web + server)
 ----- playwright raw -----
 
 Running 4 tests using 1 worker
 
-  ✓  1 e2e/no-agent-picker.spec.ts:84:7 › no-agent-picker 选择器移除回归 › 1. 选择器消失：无 testid、无 select (1.7s)
-  ✓  2 e2e/no-agent-picker.spec.ts:97:7 › no-agent-picker 选择器移除回归 › 2. @ 可用：候选含计划员-1，点击插入 (1.3s)
-  ✓  3 e2e/no-agent-picker.spec.ts:112:7 › no-agent-picker 选择器移除回归 › 3. 发送可用：探针渲染 + 输入清空 + 零 console 错误 (1.7s)
-  ✓  4 e2e/no-agent-picker.spec.ts:138:7 › no-agent-picker 选择器移除回归 › 4. 计划员可达：团队成员含 tmm_0000000006 且保留 opencodeAgentName（无 LLM 执行） (118ms)
+  ✓  1 e2e/no-agent-picker.spec.ts:84:7 › no-agent-picker 选择器移除回归 › 1. 选择器消失：无 testid、无 select (3.9s)
+  ✓  2 e2e/no-agent-picker.spec.ts:97:7 › no-agent-picker 选择器移除回归 › 2. @ 可用：候选含计划员-1，点击插入 (1.7s)
+  ✓  3 e2e/no-agent-picker.spec.ts:112:7 › no-agent-picker 选择器移除回归 › 3. 发送可用：探针渲染 + 输入清空 + 零 console 错误 (1.4s)
+  ✓  4 e2e/no-agent-picker.spec.ts:138:7 › no-agent-picker 选择器移除回归 › 4. 计划员可达：团队成员含 tmm_0000000006 且保留 opencodeAgentName（无 LLM 执行） (97ms)
 
-  4 passed (6.1s)
+  4 passed (7.9s)
 ----- end playwright raw -----
 [e2e] playwright exit 0; parsing per-test results ...
 [e2e] PASS A1 (selector gone: no message-agent-select, zero <select>)

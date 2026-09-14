@@ -1,0 +1,114 @@
+F4 SCOPE FIDELITY — vteam-role-behavior-enforcement
+Range: 2fb188a..3c756d3 (HEAD) | Date: 2026-09-13 | Mode: read-only (wrote only this file)
+Plan ref: .omo/plans/vteam-role-behavior-enforcement.md "Out / Must-NOT-Have" (8 checked items)
+
+Diff inventory (git diff --stat 2fb188a..HEAD, 81 files, +7644/-353):
+- server/prisma/seed.ts, server/src/common/constants/agent.constants.ts (+361),
+  server/src/execution-policies/execution-policy.service.ts (+339, new single source),
+  server/src/platform-mcp/execution-policy.service.ts (-40, legacy stub removed),
+  server/src/agents/agents.service.ts (+5: policyId bind), worker/src/role-guard/policy.ts,
+  session-policy-map.ts, role-guard-plugin.ts, injector.ts, opencode-config-builder.ts,
+  worker-dispatcher.ts (boundarySection + policy candidate), specs + evidence.
+- platform-mcp.service.ts: NOT in diff (see item 4).
+
+FINDINGS (PASS = Must-NOT-Have honored):
+
+[1] Did NOT collapse 5 roles to 4; architect retained — PASS
+- server/src/common/constants/agent.constants.ts:88-92 VteamAgentName =
+  'vteam-product' | 'vteam-architect' | 'vteam-developer' | 'vteam-tester'
+  | 'vteam-project_manager' (+ 'vteam-plan' non-role helper, line 93; VteamRoleAgentName
+  excludes it, line 96).
+- ROLE_BOUNDARIES keys (5): 'vteam-product' :244, 'vteam-architect' :277,
+  'vteam-developer' :312, + tester/project_manager (same file, 5-key record).
+- server/prisma/seed.ts:310-314 ROLE_POLICY_BINDINGS 5 entries
+  (ep_product/ep_project_manager/ep_architect/ep_developer/ep_tester);
+  server/src/prisma/seed.spec.ts:127 expects exactly 5 template upserts.
+- No commit deletes architect (log 2fb188a..HEAD: feat(seed) role policies,
+  feat(policy) unify — additive only).
+
+[2] No dual-track: toolEffects/permissionScope NOT runtime enforcement — PASS
+- toolEffects/permissionScope appear only as legacy CRUD/association fields:
+  server/src/agents/dto/create-agent.dto.ts:91,100; update-agent.dto.ts:67,72;
+  agents.service.ts:34,48-53,143,174-186,220-232,243-280,503-555 (create/clone/update
+  association copy, no enforcement branch).
+- Enforcement path is ExecutionPolicy single source:
+  server/src/execution-policies/execution-policy.service.ts (new, 339 lines;
+  :239 config shape, :304 task:'deny'); GET /agent-policies consumed by worker
+  injector (worker/src/resources/injector.ts:196 fetches /agent-policies) and guard
+  rolesDoc (worker/src/role-guard/policy.ts).
+- worker-dispatcher.ts:114,1713 comments "Todo 11/12 will unify the source:
+  ExecutionPolicy 落地后改由解析出的策略提供" — boundarySection currently reads
+  ROLE_BOUNDARIES (the sanctioned single constant, same object seed derives
+  ExecutionPolicy config from), NOT toolEffects/permissionScope.
+- Negative guard: seed.spec asserts template update has NO permissionScope
+  (server/src/prisma/seed.spec.ts:155 `not.toHaveProperty('permissionScope')`).
+
+[3] No worker-embedded role semantics — PASS
+- worker/src/role-guard/policy.ts header (~L30-35): "无角色名 if 分支：
+  不 hardcode 任何 vteam-<role> 语义，策略全来自 rolesDoc"; RolePolicy =
+  { permission, tools, bashDeny, correction } server-provided shape; pure function,
+  no IO/fetch, no server import.
+- grep `architect|产品经理|ROLE_BOUNDAR` over worker/src (*.ts, non-spec) → single
+  hit: worker/src/resources/opencode-config-builder.ts:10 comment
+  "角色知识只活在 server ROLE_BOUNDARIES + 控制面下发数据里" (doctrine, not semantics).
+- injector.ts writes only fetched structures (GET /skills /tools /mcp-servers
+  /agent-policies → opencode.json + roles.json + sessions/*); role-guard-plugin.ts
+  delegates判定 to policy.ts with injected rolesDoc/session map.
+
+[4] vteam MCP "仅主 Agent" gate unchanged in platform-mcp.service.ts — PASS
+- `git diff 2fb188a..HEAD --name-only | grep platform-mcp.service` → empty (exit 1);
+  only platform-mcp path changed is execution-policy.service.ts (legacy stub removal,
+  commit b4c25bc unify service).
+- Gate strings intact: platform-mcp.service.ts:904 (question_confirm),
+  :931/:963/:983 (task_create), :1043/:1087/:1158 (memory global),
+  :1585 (team_add_member), :1703 (plan_mode) — all "仅主 Agent …" 403 semantics present.
+
+[5] Custom/clone prompts NOT overwritten by seed — PASS (sanctioned template sync only)
+- Seed agent upsert loop targets template ids only: seed.spec templateAgentCalls
+  filters where.id startsWith 'a_' and expects exactly 5 (seed.spec.ts:47-48,127,149);
+  update keys strictly ['policyId','prompt'] (seed.spec.ts:152) with prompt = factory
+  default per §8.4 (seed.ts:355-364 comment: 存量部署重跑 seed 把出厂默认升级为最新版本；
+  其余字段 update:{} 不覆盖；defaultModelId/persona 仅 create 生效）.
+- Clone/custom path: agents.service.ts:177 create accepts dto.policyId;
+  :210-222 clone sets type='clone', baseAgentId=source.id,
+  policyId=source.policyId ?? null (inheritance only, no prompt rewrite);
+  :272 update accepts policyId only. No seed write to custom/clone rows.
+
+[6] No absolute-path globs — PASS
+- agent.constants.ts:180 ROLE_TASK_GLOB_BASE = '**tasks/*'; :183-190
+  taskSubdirGlob/taskAllGlob compose `${BASE}/<subdir>/**` / `${BASE}/**` with
+  comment "禁止绝对路径" (:183); writeGlobs per role (:254,:287,:322,:358) all derived.
+- grep `'"/'` in agent.constants.ts → zero hits; seed.ts `'"/|^/'` hits only at
+  :912/:914/:920 (esbuild wasmURL doc string + react import-flow strings), none in
+  policy globs (policy globs built via buildEditPermission(boundary.writeGlobs),
+  seed.ts:333ff).
+- Seed prompt boundary text mentions "任务目录下" relative semantics (:137,:205,:238,:273).
+
+[7] No dependency on subagent permission inheritance (all roles task="deny") — PASS
+- seed.ts:333 `task: 'deny'` inside the per-agent loop over all 5 templateAgents
+  (+ :334 mcpDenies spread) → every role policy carries task deny.
+- execution-policy.service.ts:304 same `task: 'deny'` in layer-① permission builder.
+- agent.constants.spec.ts:196 asserts 'task' (and 'execute', vteam_task_transition,
+  vteam_question_confirm) never in any role's toolAllows; policy.spec 4d (:228-231)
+  asserts task/execute → deny; TASK_TOOLS set (policy.ts:92) hard-denies both.
+
+[8] No bare MCP tool names in denies/allowlists — PASS
+- toolAllows keys across all 5 roles are exclusively vteam_* / git_* prefixed
+  (e.g. :257-267 product, :290-300 architect, :325+ developer…; sorted-unique key scan
+  confirms no bare keys); mcpDenies derived by complement over VTEAM_MCP_TOOL_NAMES
+  (agent.constants.ts:168-175 defineBoundary), the single namespace source (:102-103
+  comment "禁止裸 MCP 名").
+- Guard unknown/MCP branch uses real names (policy.ts:22-24 `vteam_<action>`,
+  `git_clone`); seed registry action:'chat_history' style entries (seed.ts:565-584)
+  are tool-table action fields always paired with name:'vteam_*' — not denies/allowlists.
+- seed.spec.ts:45 BARE_MCP_NAMES + :189-190 regex `(?<!vteam_)\b<bare>\b` forbids bare
+  names in prompts; agent.constants.spec asserts vteam_task_transition /
+  vteam_question_confirm excluded from allowlists.
+
+Out-of-F4 notes (not Must-NOT-Have failures): plan also lists "不迁移 omo 全量 hooks"
+and "不做 ExecutionPolicy 管理前端页" — no frontend page added in diff
+(execution-policy controller is REST only); hooks untouched.
+
+VERDICT: APPROVE — all 8 Must-NOT-Have constraints honored with file:line evidence above.
+
+F4 VERDICT: APPROVE

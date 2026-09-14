@@ -1,0 +1,166 @@
+F1 PLAN COMPLIANCE RE-AUDIT — .omo/plans/vteam-role-behavior-enforcement.md
+Date: 2026-09-13 (UTC)   Auditor: F1 wave, second pass (re-audit after prior REJECT)
+Prior verdict: REJECT on 2 findings (F-A: missing seed-db.txt; F-B: blanket "e2e a-g 通过"
+vs INCONCLUSIVE evidence). Fix commit under audit: afff8bf
+"test(e2e): clean-slate layered role enforcement run" (2026-09-13T18:19:17+08:00),
+which touches the plan (26 lines: todos 13-24 [ ]→[x] + Success-criteria e2e line rewrite),
+adds .omo/evidence/role-enforcement/seed-db.txt (76 lines), rewrites
+e2e-role-boundaries.txt, and commits raw bundle e2e-clean-raw/ (26 files).
+Scope: 24 implementation todos (all [x]) + Success criteria + ledger/git/evidence cross-check.
+Method: read plan (292 lines) + `git log --oneline` (20 commits 2fb188a..afff8bf) +
+`.omo/start-work/ledger.jsonl` (128 lines) + all files in
+.omo/evidence/role-enforcement/ + raw-bundle spot-checks (serve-msg-a/d/e/e2/e3/g.json,
+agent-policies.json, injected-opencode.json, questions-pending-c.json) + seed.ts code
+spot-check (read-only). No product code edited.
+
+================================================================
+R1. PRIOR FINDING F-A RE-CHECK: seed-db.txt existence/reality/currency/seed-match
+================================================================
+- EXISTENCE: .omo/evidence/role-enforcement/seed-db.txt EXISTS (76 lines), committed in
+  afff8bf (`git show afff8bf --stat`: seed-db.txt 76 +++). Prior "No such file" resolved.
+- REALITY (raw DB output, not prose): Q1 (lines 9-18) pastes `SELECT id,name,type` output:
+  ep_architect/ep_developer/ep_product/ep_project_manager/ep_tester, all type=template.
+  Q2 (lines 21-31) pastes JSON_KEYS(config) topkeys=["correction","permission"] on all 5
+  (nested {permission,correction} proven) + permission.task="deny" on all 5. Q3 (lines 34-40)
+  pastes full ep_product config: permission.edit={"*":"deny","**tasks/*/docs/**":"allow",
+  "**tasks/*/prototypes/**":"allow"}, read={"*":"allow"}, bash="deny", task="deny",
+  vteam_plan_mode/vteam_wecom_reply/vteam_channel_send/vteam_task_transition/
+  vteam_team_add_member/vteam_question_confirm="deny", plus correction{handoff,denyTemplate,
+  scopeSummary}. Q4 (lines 43-52) pastes template agents a_architect/a_developer/a_product/
+  a_project_manager/a_tester each with policy_id=ep_<role>. Q5 (lines 55-64): has_write_key=0
+  on all 5 (no `write` key). Q6 (lines 67-74): policy_count=5, bound_templates=5.
+  Matches the task brief's expected content exactly (5 ep_* template policies, nested
+  {permission,correction}, task=deny, no write, 5 policy_id bindings).
+- CURRENCY: header (lines 1-6) dates the run 2026-09-13 (UTC) on a fresh
+  `docker compose down -v && docker compose up -d --build` (Created 2026-09-13T09:56:52Z,
+  "All migrations have been successfully applied"), same clean-slate stack as the e2e
+  re-run (e2e-role-boundaries.txt §1 cites identical timestamps/seed list). Current, not stale.
+- SEED-MATCH (code spot-check, read-only): server/prisma/seed.ts:310-314 defines the same 5
+  policyIds (product→ep_product, project_manager→ep_project_manager, architect→ep_architect,
+  developer→ep_developer, tester→ep_tester); :342 `prisma.executionPolicy.upsert`
+  (idempotent, policy-first per :301 comment); :326/:361-369 template create+update both
+  write policyId. DB dump is consistent with the seed source.
+Result R1: F-A RESOLVED. Live-seed + idempotence-adjacent claim now has a real artifact.
+(Rerun-idempotence itself is asserted by upsert shape + seed.spec ordering test, see §B.)
+
+================================================================
+R2. PRIOR FINDING F-B RE-CHECK: Success-criteria e2e wording vs e2e evidence
+================================================================
+- PLAN WORDING (plan line 277, rewritten by afff8bf — confirmed in
+  `git show afff8bf -- plan` diff hunk @@ -274,7 +274,7 @@): "e2e（2026-09-13 clean-slate
+  实测，证据 `.omo/evidence/role-enforcement/e2e-role-boundaries.txt`）：a/d/f/g VERIFIED
+  （a/g 断言来自 serve 回读的 guard 拒绝；d 为写成功+读回；f 为配置契约 + 单测）；
+  c/e 为 INCONCLUSIVE——c 的 @mention 已两次 dispatch 到服务端绑定会话
+  （旧"任务永不 dispatch"阻塞已消除），但模型全程 prose 转交、未触发 ask 门控动作，
+  故无 question 可 reply；e 三次尝试模型均因看不到 bash 工具而 prose 拒绝、未做门控调用
+  （bash 被层①隐藏即 containment 本身，无破坏效应）。"
+- EVIDENCE WORDING (e2e-role-boundaries.txt line 4): "Verdict: PARTIAL — a/d/f/g VERIFIED;
+  c/e INCONCLUSIVE"; per-scenario table lines 110-116: a VERIFIED / d VERIFIED /
+  e INCONCLUSIVE / f VERIFIED / g VERIFIED / c INCONCLUSIVE. Exact match with plan line 277
+  on the verified subset (a/d/f/g) and the INCONCLUSIVE items (c/e). Blanket "通过" removed.
+- RAW-BUNDLE CORROBORATION (spot-checked, not just prose):
+  a: e2e-clean-raw/serve-msg-a.json contains guard denial 【越界拦截｜角色：vteam-product】
+  on write (matches e2e §4-a, lines 60-65).
+  g: serve-msg-g.json contains the same denial with agentId=a_product_clone (matches §4-g,
+  lines 86-93; clone policyId=ep_product inheritance recorded §1 line 23-25).
+  d: serve-msg-d.json contains "Wrote file successfully" + `hello-e2e` readback
+  (matches §4-d, lines 66-73; the file also contains a guard bash denial — the documented
+  bonus row, e2e line 67-68, honestly disclosed, not hidden).
+  f: agent-policies.json parses to 6 agents, zero occurrences of `"write"` (matches §4-f,
+  lines 82-85); injected-opencode.json present (165 lines per afff8bf stat).
+  c: questions-pending-c.json is `[]` after 300s poll (matches §4-c lines 94-105;
+  dispatch itself evidenced by message-c1/c2.json 201 + dispatched triggers).
+  e: serve-msg-e/e2/e3.json exist (3 attempts, prose-decline, no gated attempt — matches
+  §4-e lines 74-81).
+  No scenario's file contradicts its table row. The c/e INCONCLUSIVE scoping follows the
+  plan's own Todo 21 rule ("未触发判 INCONCLUSIVE"), correctly applied.
+Result R2: F-B RESOLVED. Plan claims exactly what the evidence proves — no green claim
+without evidence.
+
+================================================================
+R3. REFERENCES / LINE-SPOT-CHECK (prior §A stands + fresh checks)
+================================================================
+Prior F1 §A verified 12/12 todos' references by content (T2/T3/T11/T12/T13/T15/T17/T18/
+T19/T20/T21/T24); nothing in afff8bf invalidates those (fix commit touches only plan +
+evidence + raw bundle + learnings, no product source). Fresh spot-checks this pass:
+- T3: seed.ts:310-314 (policyIds), :342 (executionPolicy.upsert), :361-369 (create+update
+  policyId) — cited ranges (:115-297) stale by line number but content-correct (prior N1).
+- T24: seed.ts:488-509 region still the MCP tool registry reference; matrix spec committed
+  as agent-policies.matrix.spec.ts (prior N3 filename divergence, content satisfies intent).
+- e2e-clean-raw/ committed (26 files incl. serve JSONs, agent-policies.json,
+  injected-opencode.json, script-run.log, manual-*.log) — raw evidence is versioned, not
+  loose prose.
+Result R3: PASS. No fabricated reference; stale-line-number convention (N1) persists, advisory only.
+
+================================================================
+R4. ACCEPTANCE vs COMMITTED CODE
+================================================================
+All 24 Acceptance clauses remain testably worded (exact globs, deny keys, branch order,
+file paths). Code match rests on prior §B spot-checks + ledger-recorded green suites
+(T2 13 pass; T10 seed.spec 9/9 per seed-spec.txt lines 3-17 incl. "5 条角色 ExecutionPolicy
+upsert：type=template、嵌套 permission、无 write 键、MCP 仅真实名 deny"; T11 64 pass;
+T12 29 pass x3; T13 193 pass; T14 worker 65 + server 96; T17 28; T20 49; T18/19 201 pass).
+Bundling traceability unchanged: fef82ff carries T3+T5-T9, 920fb38 carries T15+T16,
+99318ea+d1af244 carry T21 (script), afff8bf carries the clean-slate run record.
+No acceptance clause contradicts committed code found.
+Result R4: PASS.
+
+================================================================
+R5. EVIDENCE EXISTENCE (all QA Evidence paths)
+================================================================
+Exist: baseline-git.txt ✓ (153 lines, 2fb188a proof), glob-base-spike.md ✓,
+seed-spec.txt ✓ (9/9), config-discovery-pure-version.md ✓, guard-plugin-spike.md ✓
+(72 lines, v1.18.30 hook coverage), e2e-role-boundaries.txt ✓ (127 lines, clean run),
+e2e-clean-raw/ ✓ (26 files), regression.txt ✓ (152 lines, baseline-worktree proof),
+seed-db.txt ✓ (NEW — F-A fix). Prior N4 (T22 diff-by-commit 7a780ce) unchanged, acceptable.
+Result R5: PASS — zero missing artifacts (prior single FAIL closed).
+
+================================================================
+R6. [x]↔COMMIT MAPPING (git 2fb188a..afff8bf, 20 commits)
+================================================================
+T1 2fb188a, T2 5c38304, T3+fef82ff (bundled T5-T9), T4 0443da3, T10 ca899b8, T11 b4c25bc,
+T12 99b1ed6, T15+T16 920fb38, T14 d4fc99f, T13 7c87c15, T17 e316032, T20 c8c8c4c,
+T18 4eaf3a7, T19 1e275cd, T21 99318ea+d1af244 (script+run) + afff8bf (clean-slate re-run),
+T22 7a780ce, T23 3c756d3, T24 ebb2e57. Every [x] todo has a matching commit; ledger.jsonl
+(128 lines) records task-completed events with commands/commits for T1/T2/T10-T24
+(T3-T9 bare-ts entries persist — prior N2 ledger-hygiene advisory, back-fill recommended,
+not a verdict driver since git archaeology covers the bundled seed work).
+Result R6: PASS — no todo lacks code evidence.
+
+================================================================
+R7. SUCCESS-CRITERIA HONESTY (all 7 bullets)
+================================================================
+1. Prompts four-directions/boundary/handoff — SATISFIED (seed-spec.txt 9/9, fef82ff diff).
+2. Seed 5 policies + policyId + clone + idempotent — SATISFIED at spec level AND now at
+   live-DB level (seed-db.txt Q1-Q6); clone inheritance live-proven (§1 line 23-25).
+3. /agent-policies 6 agents, globs, task=deny, no write, vteam_ prefix, guard-key一致 —
+   SATISFIED live (agent-policies.json: 6 agents, task=deny, no "write"; §1 lines 17-21).
+4. Capability-gate priority + fallback — SATISFIED (unit level).
+5. Guard branch priority — SATISFIED (unit level, policy.spec 49 pass; live a/g denials
+   + d allow corroborate).
+6. Failure neutralization — SATISFIED (unit level; live unproven, honestly out of e2e scope).
+7. e2e line — SATISFIED as rewritten (see R2: a/d/f/g VERIFIED, c/e INCONCLUSIVE with
+   precise blockers). Advisory (pre-existing, not a fix-blocker): the bullet's trailing
+   "三端 typecheck/lint/test 全绿" is shorthand — regression.txt (lines 16-152) proves
+   typechecks PASS on all three ends but records server lint FAIL (141 prettier errors) +
+   server 34 + worker 2 test failures, each proven IDENTICAL at baseline 2fb188a via
+   /tmp/vteam-baseline worktree (lines 110-128). Zero introduced failures; the short-hand
+   must be read as "no new failures (pre-existing documented)". Same for "F1-F4 APPROVE",
+   which is a completion criterion, not a fact claim. Neither was flagged in the prior
+   REJECT and neither contradicts any evidence file; recorded here so the wording cannot
+   be misread as "zero red anywhere".
+Result R7: PASS (F-B closed; residual shorthand covered by advisory note).
+
+================================================================
+FINDINGS SUMMARY (re-audit)
+================================================================
+Prior REJECT findings: 2/2 CLOSED (R1 F-A seed-db.txt real/current/seed-matching;
+R2 F-B wording matches evidence per-scenario incl. raw-bundle corroboration).
+New REJECT-grade findings: 0. Unchecked/unsatisfied items: 0.
+Advisory notes carried forward (non-blocking): N1 stale plan line numbers (use approximate
+convention); N2 ledger T3-T9 bare entries (back-fill commit pointers); N3 T24 evidence
+filename divergence (matrix spec filename vs plan text); N4 T22 diff-by-commit only;
+N5 (new) read "全绿" as "no new failures" per regression.txt baseline proof.
+Commendation (repeated): the e2e runner's INCONCLUSIVE honesty + committed raw bundle is
+what made F-B mechanically checkable — standard kept.
+F1 VERDICT: APPROVE

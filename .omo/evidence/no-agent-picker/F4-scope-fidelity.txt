@@ -1,0 +1,57 @@
+F4 — Scope fidelity review: vteam-no-agent-picker (commits 37a1b0c, 2bbec3d)
+Date: 2026-09-14Z | Baseline: 7d3bea2 (parent of 37a1b0c) | HEAD at review: 2bbec3d
+Plan: .omo/plans/vteam-no-agent-picker.md (D1 deletion scope: frontend display layer only)
+
+VERDICT: APPROVE
+
+1. IN/OUT-OF-SCOPE TABLE (committed change 7d3bea2..HEAD = the reviewed change)
+Allowed set: web/src/components/ui/message-input.tsx,
+  web/app/(main)/teams/[id]/session/page.tsx, web/e2e/no-agent-picker.spec.ts,
+  scripts/e2e-no-agent-picker.sh, .omo/**
+
+| # | File (7d3bea2..HEAD --name-only) | Commit | Classification |
+|---|----------------------------------|--------|----------------|
+| 1 | web/src/components/ui/message-input.tsx (-71) | 37a1b0c | IN-SCOPE |
+| 2 | web/app/(main)/teams/[id]/session/page.tsx (-45/+net) | 37a1b0c | IN-SCOPE |
+| 3 | web/e2e/no-agent-picker.spec.ts (new, +160) | 2bbec3d | IN-SCOPE |
+| 4 | scripts/e2e-no-agent-picker.sh (new, +175) | 2bbec3d | IN-SCOPE |
+| 5 | .omo/evidence/no-agent-picker/grep.txt | 37a1b0c | IN-SCOPE (.omo/**) |
+| 6 | .omo/evidence/no-agent-picker/removal-stat.txt | 2bbec3d | IN-SCOPE (.omo/**) |
+| 7 | .omo/evidence/no-agent-picker/e2e.txt | 2bbec3d | IN-SCOPE (.omo/**) |
+| 8 | .omo/notepads/vteam-no-agent-picker/learnings.md | both | IN-SCOPE (.omo/**) |
+Out-of-scope files touched by 37a1b0c + 2bbec3d: NONE (8/8 in-scope).
+
+Working-tree items OUTSIDE the allowed set (present in `git status`, NOT part of
+37a1b0c/2bbec3d — pre-existing or concurrent debris, listed per MUST DO):
+| File | Nature | Severity |
+|------|--------|----------|
+| server/src/platform-mcp/platform-mcp.controller.spec.ts:189,229,357-366 (uncommitted edit: "24 tools"→"23 tools", drops plan_review assertions) | Prior-plan (plan-skills-rewrite) working-tree residue, unrelated to picker removal | [SEVERITY: INFO — not attributable to reviewed commits; recommend separate commit, do not bundle] |
+| md-docs/ (untracked dir, own .git, dated Aug 24) | Pre-existing nested checkout debris | [SEVERITY: INFO — not introduced by reviewed commits] |
+| web/shot-omo3.tmp.cjs (untracked, dated 09-14 11:22, before 37a1b0c 17:15) | Pre-existing temp screenshot helper | [SEVERITY: INFO — not introduced by reviewed commits] |
+| .omo/** uncommitted mods + untracked (.omo/boulder.json, plan-member evidences, drafts, notepads, .omo/plans/vteam-no-agent-picker.md, .omo/plans/vteam-omo-toggle-agent-split.md) | Blanket in-scope (.omo/**) | [SEVERITY: NONE — in-scope by definition] |
+No violation attributable to the reviewed change. No file:line violation inside
+37a1b0c/2bbec3d.
+
+2. OUT-OF-SCOPE BEHAVIOR PRESERVED (diff inspection, HEAD working tree)
+- server/ + worker/ committed diff: `git diff --stat 7d3bea2..HEAD -- server/ worker/` → EMPTY (zero diff). A4 in .omo/evidence/no-agent-picker/e2e.txt independently asserts `git diff 37a1b0c^ 37a1b0c -- server/ worker/` empty → PASS.
+- @ mentions: intact — message-input.tsx `mentionable` x8 refs; page.tsx `mentionable` memo (~line 497) + `mentionable={mentionable}` (~line 1237) untouched; e2e A2 PASS (@ shows 计划员-1, click inserts).
+- Attachments: intact — message-input.tsx `pendingAttachment` x9, `fileInputRef` x3; removal hunk only deleted the agent-<select> block, attachment preview block directly below it untouched.
+- Send: intact — page.tsx `sendMutation` x3, `sending={sendMutation.isPending}` (~line 1238) untouched; message-input.tsx `onSend` x6, `handleSend` x3, `textareaRef` x3; e2e A3 PASS (mocked probe renders, input clears, 0 console errors).
+- Private tabs: intact — page.tsx `privateChannelMap` x9 (lines ~182,467,494,632,821,996,998,1106,1240 placeholder) all retained.
+- Member panel: intact — `TeamMembersPanel` x3 (import line 31, render ~1068), `roleOptionsOf`/`customAgentsOf` retained in import + usage (~1073-1074); `web/src/components/teams/TeamMembersPanel.tsx` ZERO diff; model path `instanceModelMutation` x2 + `onChangeModel` (~1081) retained.
+- Model selection: intact (instanceModelMutation block ~909 retained; only the sibling instanceOpencodeAgentMutation block removed, which is the in-scope deletion).
+- Backend mechanism intact (code present AND unmodified by this change): `TeamMember.opencodeAgentName` column present (server/prisma/schema.prisma x1); `server/src/chat/worker-dispatcher.ts` x16 hits incl. policy-candidate-then-explicit fallback (lines 95,113,1724,1732-1742: `policyCandidateAgent` + capability gate → policy wins, else `opencodeAgentName`); `plan_mode` writers present (worker-dispatcher.ts, platform-mcp.tools.ts, platform-mcp.service.ts + specs). Member-panel export `OpencodeAgentItem`/`isSelectableOpencodeAgent` (TeamMembersPanel.tsx:14,30) retained for the member-panel path; page.tsx still reads `opencodeAgentName` for display/mapping (lines 322,340,791) — only the WRITER UI (picker) was removed, per plan D1.
+- Zero residue: `agentOptions/agentValue/onChangeAgent/agentSelectDisabled/InputAgentOption/opencodeAgentsQuery/instanceOpencodeAgentMutation/message-agent-select` → zero hits in both files EXCEPT the documented benign `agentOptions={roleOptionsOf(...)}` at page.tsx:1073 (TeamMembersPanel role-options prop, different component — recorded in .omo/evidence/no-agent-picker/grep.txt).
+- Prior-plan guarantees survive: dispatch fallback + plan_mode + member-panel model/role paths untouched; server/worker zero diff.
+
+3. FORBIDDEN PATTERNS: NONE
+- `git diff 7d3bea2..HEAD` grep for `toolEffects|permissionScope|dual-track|AB test|retired|compat shim|deprecat` → no hits. No "retired" annotations, no compat shims, no dual-track/AB code in the diff.
+- No new dependencies: `git diff … -- */package.json web/package.json *-lock.json` → empty.
+4. UNRELATED REFACTORS: NONE — hunks are purely subtractive picker removal (import trim line 31; query+mutation block deletion ~921-952; 4-prop removal ~1237-1248; props interface + select JSX deletion in message-input) plus new test assets. No behavior edits to surrounding code; placeholder/div below the removed props untouched.
+
+Method: `git log --oneline`, `git show 37a1b0c --stat`, `git show 2bbec3d --stat`,
+`git diff --stat 7d3bea2..HEAD`, `git diff --stat -- .`, `git diff --stat -- server/ worker/`,
+`git show 37a1b0c -- web/`, `git show 2bbec3d -- web/ scripts/`, grep counts above,
+prior e2e evidence (.omo/evidence/no-agent-picker/e2e.txt: A1-A6 all PASS).
+
+VERDICT: APPROVE

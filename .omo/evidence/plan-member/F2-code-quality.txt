@@ -1,0 +1,179 @@
+F2 — Code quality review: vteam-plan-member-subagents
+=====================================================
+Scope: commits 0806770, 448ff62, 8f36c91, 680aa5a, 5d416a2, 4a0f9bf
+      (plus 5287563 intermediate e2e commit in range). Base = 5ad2e2f (pre-plan HEAD).
+Plan: .omo/plans/vteam-plan-member-subagents.md
+Reviewer method: read actual diffs (5ad2e2f..4a0f9bf), ran tsc + jest, ran glob adversarial tests.
+No product code changed by this review. No BLOCKER / MAJOR found.
+
+VERIFICATION EVIDENCE (run by reviewer)
+---------------------------------------
+- server `npx tsc --noEmit` → exit 0 (note: server tsconfig is lenient:
+  strictNullChecks:false, noImplicitAny:false — pre-existing).
+- worker `npm run typecheck` (strict:true) → exit 0.
+- server jest: agent.constants.spec + execution-policies/* + seed.spec +
+  worker.client.spec → 7 suites, 131 tests PASS (1 snapshot PASS).
+- server jest worker-dispatcher.spec → 188 tests PASS.
+- worker jest policy.spec + role-guard-plugin.spec + opencode-config-builder.spec
+  → 3 suites, 78 tests PASS. exec-server.spec → 101 tests PASS.
+- Glob adversarial test (reviewer ran guard `wildcardMatch` logic in node against
+  `planDirGlob()='**.opencode/plans/**'`):
+  ALLOW (correct): `.opencode/plans/x.md`, `data/vteam-worker/tasks/t_1/.opencode/plans/x.md`,
+    `tasks/t_1/.opencode/plans/x.md`, `.opencode/plans/sub/deep.md`, `aplans/.opencode/plans/x.md`
+  DENY (correct): `src/a.ts`, `tasks/t_1/code/x.ts`, `.opencode/plans-backup/x.md`,
+    `.opencode/plans_extra/x.md`, `PLANS/x.md`
+  MATCH (by construction, acceptable): `../.opencode/plans/evil.md`, `x.opencode/plans/y.md`
+    — `*` crosses separators by design (same convention as pre-existing
+    `taskSubdirGlob`/`ROLE_TASK_GLOB_BASE='**tasks/*'`); `..` normalizes away in absolute
+    paths and opencode executes under the task workdir. No new risk vs status quo.
+
+1. NO SLOP
+---------
+- [PASS] No introduced `as any` / `@ts-ignore` / `@ts-nocheck` / empty catch /
+  `console.log` / TODO/FIXME/HACK in product code. Diff-scoped grep
+  (`git diff 5ad2e2f..4a0f9bf -U0 -- server/src worker/src scripts`) finds `console.log`
+  additions ONLY in scripts/e2e-plan-member.sh (node -e probe snippets inside a test
+  script — not product code; see NIT-1). The 1500+ `as any` hits repo-wide are
+  pre-existing (specs, prisma fallbacks), untouched by this plan.
+- [PASS] No unused imports/vars from deletions: `node:path`, `taskDirOf`,
+  `WorkersService` imports removed with the plan_review code
+  (server/src/platform-mcp/platform-mcp.service.ts); `ReviewOptions`/`review()` removed
+  with specs updated (server/src/workers/worker.client.ts + .spec.ts); `silent` option
+  fully removed (worker/src/exec/exec-server.ts, ex-`runSendAndAwait(...,{silent:true})`
+  call site gone, remaining 2 callers 3-arg, signature 3-arg — tsc strict clean).
+- [MINOR-1] Dead defensive branch (introduced, never-taken):
+  server/prisma/seed.ts:372-380 — `(boundary as unknown as { taskEffect?: unknown }).taskEffect`
+  reads a field that does not exist on `RoleBoundary`, so it is always `undefined` and
+  always falls through to the `agentName === 'vteam-plan'` name branch. Harmless
+  (correct result), but YAGNI forward-compat indirection; the `as unknown as` cast
+  is also the only new type-escape in product code. Suggest simplifying to the plain
+  name branch to match execution-policy.service.ts:329. Not blocking (behavior correct,
+  covered by seed.spec task-effect assertions).
+
+2. SECURITY-CRITICAL REVIEW
+---------------------------
+- [PASS] Guard carve-out precision — worker/src/role-guard/policy.ts:180-187 AND
+  worker/src/resources/role-guard-plugin.ts:149 (parity pair). Allows `task` iff ALL hold:
+  (a) `tool === 'task'`, (b) `agent === 'vteam-plan'` where agent comes from the
+  server-written session-mapping file (not from model-controlled args),
+  (c) `isPlainObject(args)`, (d) `args.subagent_type === 'vteam-plan'` (strict equality).
+  Missing/malformed args (`{}`, `null`, `{description:'x'}`, wrong-type subagent_type,
+  `execute` even with matching subagent_type) all fall through to `TASK_TOOLS` deny —
+  each case has an explicit unit test on BOTH sides (policy.spec.ts "4d" 5 cases;
+  role-guard-plugin.spec.ts parity cases incl. null-args). A non-plan session cannot
+  smuggle a passing check: `agent` is resolved from `session` mapping (policy.ts:132-135;
+  unmapped/unknown → pass-through, never mapped-as-plan), and the worker writes that
+  mapping at execute time from dispatch assignment, not from model output.
+- [PASS] Narrow edit glob — `planDirGlob()` (agent.constants.ts:226-228) +
+  `ROLE_BOUNDARIES['vteam-plan'].writeGlobs=[planDirGlob()]` (agent.constants.ts:477) +
+  `buildEditPermission` → layer① `{'*':'deny','**.opencode/plans/**':'allow'}` (locked by
+  agent.constants.spec.ts:259-262). Adversarial paths tested by reviewer above:
+  `plans-backup/`, `plans_extra/`, repo source paths all deny; only genuine plans
+  subtrees allow. Same `**`-prefix convention as pre-existing `taskSubdirGlob`
+  (agent.constants.ts:211-216), so no novel glob semantics introduced.
+- [PASS] Layer① `task:'allow'` blast radius — name-branched in exactly one place,
+  `buildRolePermission` (execution-policy.service.ts:324-329); seed ep_plan mirrors it
+  (seed.ts:372-384, via MINOR-1 branch, same result). Matrix spec locks
+  `task === (name==='vteam-plan' ? 'allow' : 'deny')` for every agent in BOTH the
+  agent permission and the guard roles permission (agent-policies.matrix.spec.ts:160-186),
+  plus dedicated `mode` test (all others must stay 'primary'). A compromised non-plan
+  session gets no benefit: its own native permission has `task:'deny'` (opencode
+  `ctx.ask` gate fires before guard) AND guard denies its `task` calls.
+- [PASS] `mode:'all'` blast radius — consumers enumerated: (1) opencode native only
+  (spawn eligibility for subagents; that IS the feature); (2) opencode-config-builder.ts:84
+  passes `agent.mode` through with strict `primary|all` validation, `'bogus'`/`'subagent'`
+  still throw (spec locked); (3) exec-server omo-config endpoints only READ/DISPLAY mode
+  (exec-server.ts:481,654 — serve `GET /agent` metadata for the config page, no branching);
+  (4) v1-driver.ts:105 type already admitted `'all'` pre-plan; (5) duty mapping
+  `getOpencodeAgentDuty` is name-based, untouched, no mode input; (6) web TeamMembersPanel
+  reads `/agents` template rows, no mode consumption. Nothing else branches on mode.
+- [PASS] question/skill passthrough untouched — `BUILTIN_PASSTHROUGH = {question, plan_exit,
+  skill}` identical in both guard files; the diff to each guard file is EXACTLY
+  (i) task carve-out + (ii) `vteam_plan_review` removed from `SERVER_GATED_TOOLS`
+  (6→5, mirrored in `ROLE_SERVER_GATED_TOOLS` + `VTEAM_MCP_TOOL_NAMES` 24→23 with count
+  assertions). No smuggled guard change.
+- [REVIEWER CONTAINMENT — stated plainly] Unmapped review subagent sessions pass through
+  the guard by design (policy.ts:131-135), so a rogue reviewer (running as vteam-plan
+  config) is constrained ONLY by: layer① native permission (read `*:allow`; edit ONLY
+  `.opencode/plans/**`; `bash:deny`; `task:deny`-at-depth via opencode native
+  `childToolDenies` + no-`task_id`-means-fresh-session) + server-side gates (group_post
+  requires `assertWorkerTask`-valid active-execution `selfInstanceId`, which a subagent
+  does not possess — platform-mcp.service.ts:340-361; server-gated tools require main-agent
+  identity; `submit_artifact`/`issue_*`/`memory_*` are in vteam-plan `mcpDenies` → native deny).
+  Concretely a rogue reviewer CAN: read every file, WRITE/OVERWRITE files under
+  `.opencode/plans/`, and call read-only MCP tools (task_context/read_file/doclib/
+  chat_history/notify). It CANNOT: run bash, spawn nested subagents (blocked at native
+  layer; e2e step 5 asserts live), post to group chat (server gate), transition modes,
+  submit artifacts, or touch any path outside plans. The residual plans-write is
+  plan-accepted by design (D2 comment in both guard files) and bounded/visible (plans dir
+  is git-visible and main-agent-reviewed before use). ACCEPTABLE — recorded as MINOR-3
+  for a future hardening (read-only subagent permission) but not a reject reason.
+- [PASS] Seed prompt injection surface — the a_plan prompt (seed.ts:297-328) and rewritten
+  plan-creation skill (v2.0.0, user=plan member, no question/plan_review calls, fan-out
+  discipline pins `subagent_type`恒为`vteam-plan` matching the guard) contain no instruction
+  that weakens guardrails: no bypass/ignore-permissions language, explicit prohibitions
+  (no implementation code, no execution, no direct user questioning, plans-dir-only writes).
+  Review-skill notes ("may run inside a subagent, still read-only") are prose guardrails
+  consistent with enforcement. `planToolLine` (seed.ts:122-124) derives the tool list from
+  `ROLE_BOUNDARIES` at runtime — cannot drift from enforcement.
+
+3. CORRECTNESS RISKS
+--------------------
+- [PASS w/ MINOR-2] `planDirGlob()` native-vs-guard consistency: guard side proven by unit
+  tests (server spec) + guard-decision matrix (e2e guard-decisions.json: plans-write allow /
+  src-write deny); native side proven LIVE for the absolute form (e2e step 4: member wrote
+  `/data/vteam-worker/tasks/<T>/.opencode/plans/e2e-plan-member.md` through the real stack)
+  and by precedent (`**tasks/*` convention already enforced natively in production).
+  Gap (MINOR-2): no LIVE native-deny proof for a non-plans write (only guard-level), and the
+  relative-prefix form (`tasks/<T>/.opencode/plans/…`) is proven guard-side only. Suggest one
+  live negative probe (ask member to write outside plans, assert refusal) in a follow-up.
+- [PASS] `toAgentDto` outside tx — untouched by this plan (zero diff in
+  server/src/agents/agents.service.ts); prior-plan behavior unchanged. N/A, still correct.
+- [PASS] Deletion completeness — `plan_review` fully removed: tools registration+schema
+  (platform-mcp.tools.ts), service handler + 6 private methods + timeout constants +
+  `WorkersService` optional injection (platform-mcp.service.ts), WorkerClient.review +
+  ReviewOptions + constants (worker.client.ts), worker `/review` route/handler/types
+  (exec-server.ts), all 3 spec files (plan-review.spec.ts deleted; worker.client.spec.ts -61;
+  exec-server.spec.ts -196), e2e-plan-skills.sh deleted, permission-matrix 6→5. `tl_` rows
+  were generated dynamically (`tl_vteam_${t.action}`) so deleting the tool entry removes the
+  row — no hardcoded residual (verified: no `tl_vteam_plan_review` in base or current seed).
+  Remaining `plan_review` strings are absence-assertions in specs and historical prose in
+  plan-removal.guard.spec.ts (pre-existing, out of scope) — each accounted for, none is a
+  live reference. `grep -rn plan_review server/src worker/src --include='*.ts' | grep -v spec`
+  → zero product hits (replicated by reviewer).
+- [PASS] `silent` flag removal — complete (see Slop section); no caller left behind.
+
+4. TEST QUALITY
+---------------
+- [PASS] Real assertions + negative controls at unit level: guard task matrix (allow-only +
+  4 deny shapes incl. null args, both guard copies + 29-case parity snapshot test);
+  `execute`-always-deny incl. plan session; `vteam_plan_review`-no-longer-gated deny;
+  mode bogus/subagent rejection; gated-count 6→5 and MCP-name-count 24→23; per-role
+  task allow/deny matrix; seed absence checks (`not.toContain('vteam_plan_review')`,
+  tool-registry lookup undefined); dispatcher instruction assertions (contains new flow,
+  not-contains plan_review).
+- [PASS] E2E (scripts/e2e-plan-member.sh, 957 lines) asserts behavior not just exit codes:
+  live plan file landed non-trivial under plans dir + member group reply (step 4, with
+  task-dir diff proving NO files outside plans); live subagent VERDICT text (step 5);
+  live nesting-blocked probe (step 5); guard-decision JSON expectations incl. all deny
+  cases (12/12); injection byte-compare with vteam-plan-only diff allowance (steps 2-3).
+  Implementers' run recorded in .omo/evidence/plan-member/e2e.txt (PASS steps 0+ shown;
+  full docker stack not re-runnable in this review environment).
+- [MINOR-4] E2E soft spots (follow-up, non-blocking): the live nesting-block assertion
+  matches model-output text via regex (`denied|越界|…|fail|error`, e2e-plan-member.sh:833)
+  rather than a tool-denial event — a model paraphrase could flake either way; and there is
+  no live negative file-write probe (see MINOR-2).
+
+NITS
+----
+- NIT-1: `console.log` in scripts/e2e-plan-member.sh node -e probes (3 added lines) —
+  test script only, consistent with file's existing style. Ignore.
+- NIT-2: missing spaces in `subagent_type恒为vteam-plan` (seed.ts:308,1078) — cosmetic,
+  harmless for matching (exact token `vteam-plan` intact).
+
+FINDING SEVERITY TALLY: 0 BLOCKER, 0 MAJOR, 4 MINOR (MINOR-1 dead branch seed.ts:372;
+MINOR-2 live-deny gap; MINOR-3 by-design reviewer plans-write residual, accepted;
+MINOR-4 e2e text-regex softness), 2 NITs. All findings cite file:line; all introduced
+(unless marked pre-existing: server tsconfig leniency, repo-wide `as any` style).
+
+VERDICT: APPROVE

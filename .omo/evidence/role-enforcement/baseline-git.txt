@@ -1,0 +1,153 @@
+# Role Enforcement — Baseline Git Evidence
+# repo: /Users/mac/01work/git-project/vteam
+# purpose: Todo 1 — clean, rollback-safe baseline before role-enforcement code changes
+
+## command: git status --porcelain  (captured BEFORE baseline commit)
+$ git status --porcelain
+ M .omo/boulder.json
+ M .omo/start-work/ledger.jsonl
+ M docker-compose.yml
+ M docs/deployment.md
+ M server/prisma/schema.prisma
+ M server/prisma/seed.ts
+ M server/src/agents/agents.controller.spec.ts
+ M server/src/agents/agents.controller.ts
+ M server/src/agents/agents.service.spec.ts
+ M server/src/agents/agents.service.ts
+ M server/src/app.module.ts
+ M server/src/artifacts/dto/artifact.dto.ts
+ M server/src/chat/message-dispatcher.ts
+ M server/src/chat/worker-dispatcher.spec.ts
+ M server/src/chat/worker-dispatcher.ts
+ D server/src/plans/dto/query-plans.dto.ts
+ D server/src/plans/dto/review-plan.dto.ts
+ D server/src/plans/plan.constants.ts
+ D server/src/plans/plans.controller.spec.ts
+ D server/src/plans/plans.controller.ts
+ D server/src/plans/plans.module.ts
+ D server/src/plans/plans.service.spec.ts
+ D server/src/plans/plans.service.ts
+ D server/src/platform-mcp/plan-quality.guard.spec.ts
+ D server/src/platform-mcp/plan-quality.guard.ts
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.module.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M server/src/tasks/dto/create-task.dto.ts
+ D server/src/tasks/dto/update-execution-mode.dto.ts
+ M server/src/tasks/dto/update-task.dto.ts
+ M server/src/tasks/tasks.controller.spec.ts
+ M server/src/tasks/tasks.controller.ts
+ M server/src/tasks/tasks.module.ts
+ M server/src/tasks/tasks.service.spec.ts
+ M server/src/tasks/tasks.service.ts
+ M server/src/tasks/work-dir.util.ts
+ M server/src/teams/dto/add-member.dto.ts
+ M server/src/teams/teams.module.ts
+ M server/src/teams/teams.service.spec.ts
+ M server/src/teams/teams.service.ts
+ M server/src/workers/worker.client.spec.ts
+ M server/src/workers/worker.client.ts
+ M server/src/workers/workers.service.spec.ts
+ M server/src/workers/workers.service.ts
+ M web/app/(main)/agents/page.tsx
+ M web/app/(main)/board/page.tsx
+ M web/app/(main)/skills/page.tsx
+ M web/app/(main)/tasks/new/page.tsx
+ M web/app/(main)/teams/[id]/session/page.tsx
+ M web/app/(main)/teams/[id]/tasks/page.tsx
+ M web/app/(main)/workers/[id]/page.tsx
+ M web/app/(main)/workers/shared.tsx
+ M web/e2e/pages.spec.ts
+ M web/e2e/reference/testids.ts
+ M web/e2e/session-unification.spec.ts
+ M web/src/components/chat/question-modal.tsx
+ D web/src/components/tasks/PlanSection.tsx
+ D web/src/components/tasks/ReviewDialog.tsx
+ M web/src/components/tasks/TaskDetailDrawer.tsx
+ M web/src/components/tasks/task-detail-types.ts
+ M web/src/components/tasks/task-status-actions.tsx
+ M web/src/components/teams/TeamMembersPanel.tsx
+ M web/src/components/teams/TeamRightPanel.tsx
+ M web/src/components/ui/message-input.tsx
+ M worker/Dockerfile
+ M worker/package-lock.json
+ M worker/package.json
+ M worker/src/driver/v1-driver.spec.ts
+ M worker/src/driver/v1-driver.ts
+ M worker/src/exec/exec-server.spec.ts
+ M worker/src/exec/exec-server.ts
+ M worker/src/index.ts
+ M worker/src/resources/injector.spec.ts
+ M worker/src/resources/injector.ts
+ M worker/src/runtime/opencode-server.spec.ts
+ M worker/src/runtime/opencode-server.ts
+?? .omo/drafts/vteam-role-behavior-enforcement.md
+?? .omo/notepads/vteam-role-behavior-enforcement/
+?? .omo/plans/vteam-role-behavior-enforcement.md
+?? "docs/test-cases/07-\350\256\241\345\210\222\345\220\214\346\255\245.md"
+?? md-docs/
+?? server/prisma/migrations/20260911000000_add_member_opencode_agent/
+?? server/prisma/migrations/20260912000000_add_task_plan_mode/
+?? server/src/common/opencode-agent-duty.spec.ts
+?? server/src/common/opencode-agent-duty.ts
+?? server/src/platform-mcp/plan-removal.guard.spec.ts
+?? server/src/tasks/dto/upload-plan-doc.dto.ts
+?? server/src/tasks/plan-docs.service.spec.ts
+?? server/src/tasks/plan-docs.service.ts
+?? server/src/tasks/plan-steps.service.spec.ts
+?? server/src/tasks/plan-steps.service.ts
+?? web/src/components/teams/PlanDocModal.tsx
+
+## command: git diff --stat  (tracked unstaged, BEFORE commit — summary)
+$ git diff --stat
+ 79 files changed, 6186 insertions(+), 5186 deletions(-)
+
+## staging scope decision
+- STAGED: all tracked modifications/deletions (git add -u) — includes tracked .omo/boulder.json + .omo/start-work/ledger.jsonl
+- STAGED: intended untracked product files:
+  docs/test-cases/07-计划同步.md
+  server/prisma/migrations/20260911000000_add_member_opencode_agent/
+  server/prisma/migrations/20260912000000_add_task_plan_mode/
+  server/src/agents/dto/update-omo-config.dto.ts
+  server/src/common/opencode-agent-duty.{ts,spec.ts}
+  server/src/platform-mcp/plan-removal.guard.spec.ts
+  server/src/tasks/dto/upload-plan-doc.dto.ts
+  server/src/tasks/plan-docs.service.{ts,spec.ts}
+  server/src/tasks/plan-steps.service.{ts,spec.ts}
+  web/app/(main)/workers/[id]/omo-panel.tsx
+  web/src/components/teams/PlanDocModal.tsx
+  worker/src/resources/omo-config.ts
+  worker/src/resources/omo-enabled.{ts,spec.ts}
+- EXCLUDED (left untracked): .omo scratch (.omo/drafts, .omo/notepads, .omo/plans/vteam-role-behavior-enforcement.md)
+- EXCLUDED: md-docs/ — nested git repository (contains its own .git), must not be committed into vteam
+- NO secrets staged: .env files are gitignored; no .env/credential/token paths in status
+
+## command: git add -u + git add <explicit product files>; git diff --staged --stat
+$ git diff --staged --stat
+ 96 files changed, 8761 insertions(+), 5186 deletions(-)
+
+## command: git commit -m "chore: baseline before role enforcement"
+$ git commit -m "chore: baseline before role enforcement"
+[main 2fb188a] chore: baseline before role enforcement
+ 96 files changed, 8761 insertions(+), 5186 deletions(-)
+
+## gitignore check
+$ git check-ignore -v .omo/boulder.json .omo/plans/vteam-role-behavior-enforcement.md
+(no output; exit=1)  => .omo is NOT gitignored; .omo/boulder.json + ledger are tracked, scratch dirs are untracked
+
+## command: git log -1 --oneline  (AFTER baseline commit)
+$ git log -1 --oneline
+2fb188a chore: baseline before role enforcement
+
+## command: git status --porcelain  (AFTER baseline commit)
+$ git status --porcelain
+?? .omo/drafts/vteam-role-behavior-enforcement.md
+?? .omo/notepads/vteam-role-behavior-enforcement/
+?? .omo/plans/vteam-role-behavior-enforcement.md
+?? md-docs/
+
+## RESULT
+- Baseline commit created: 2fb188a chore: baseline before role enforcement
+- Working tree after commit contains only untracked scratch (.omo plan/draft/notepad) and md-docs/ (nested repo) — expected, no tracked dirtiness.

@@ -1,5 +1,5 @@
 [e2e] SERVER_URL=http://localhost:13000 SERVE_BASE_URL=http://localhost:14000 TEAM_ID=tm_0000000001 TASK_ID=t_0000000001
-[e2e] baseline HEAD=5d416a2ca09dd68f255006b7f1fbe692d9435a94 (recorded in baseline-git.txt)
+[e2e] baseline HEAD=4a0f9bf35398b2ceac3101478b72bd920547028f (recorded in baseline-git.txt)
 [e2e] --- step 0: rebuild server+worker images (plan code must be in the running dist) ---
 [e2e] images rebuilt; waiting for server health ...
 [e2e] server healthy
@@ -31,14 +31,14 @@ tm_0000000001	tmm_0000000002
 [e2e] [32mPASS[0m 3 (guard gate: plan task+plan allow; others deny; execute deny; unmapped pass-through; plans-write allow / src-write deny)
 [e2e] --- live prep: task-dir snapshot + group watermark ---
 [e2e] group channel=c_0000000001
-[e2e] group watermark=m_0000000270
+[e2e] group watermark=m_0000000280
 [e2e] --- step 4: live group-@ plan-member dispatch (bounded 600s) ---
 [e2e] POST group @ -> HTTP 201 (raw: /Users/mac/01work/git-project/vteam/.omo/evidence/plan-member/group-trigger.json)
-[e2e] step4 post-trigger watermark=m_0000000272
+[e2e] step4 post-trigger watermark=m_0000000281
 [e2e] [33mWARN[0m 4-live completion marker E2E-PLAN-DONE absent from new group messages (file+group asserts hold; raw: /Users/mac/01work/git-project/vteam/.omo/evidence/plan-member/group-after-4.json)
 [e2e] [32mPASS[0m 4 (plan .md landed under .opencode/plans/ non-trivial + member replied in group)
 [e2e] --- step 5: live subagent spawn + nesting-blocked (bounded 600s) ---
-[e2e] step5 sid=ses_f60fae983ffejfZLEz5w1GDMGk
+[e2e] step5 sid=ses_f60ef2b20ffexApCvk19hRjXvm
 [e2e] [32mPASS[0m 5 (subagent probe PROBE-OK returned + nested spawn blocked per NESTED-RESULT)
 [e2e] --- step 6: plan_review absence (tools/list + POST /review + /agent-policies + repo grep) ---
 [e2e] [32mPASS[0m 6a (tools/list has no plan_review)

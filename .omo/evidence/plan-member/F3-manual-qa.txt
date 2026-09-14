@@ -1,0 +1,103 @@
+F3 MANUAL QA — vteam-plan-member-subagents (independent reproduction on RUNNING stack)
+Date (UTC): 2026-09-14 ~08:30-08:50 | Executor: F3 agent (own commands, NOT a re-run of scripts/e2e-plan-member.sh)
+Stack: server http://localhost:13000 (healthy), worker aiagents-compose-worker, db aiagents-compose-db.
+Login: admin/admin123 (admin JWT) for API checks. Raw transcripts: f3-*.json/md/txt alongside this file.
+
+BASELINE / ENV (own commands)
+- git HEAD at run time: 4a0f9bf test(e2e): plan member subagent flow (git log --oneline -5 head).
+- Running server dist freshness: `docker compose exec -T server grep -c a_plan dist/prisma/seed.js` => 3 (fresh, no rebuild needed).
+- Re-seed (idempotent): `docker compose exec -T server node dist/prisma/seed.js` => EXIT 0, "示例团队 vteam开发团队(tm_0000000001) 含 6 成员（5 角色 + 计划员各 1，主 Agent 为产品经理）".
+- Worker restarted (`docker compose up -d --force-recreate worker`); re-injection sentinel hasPlan:allow on first poll;
+  opencode serve back (POST /session returned id ses_f60f27b08ffehWgABWGDkH8bl7, probe session deleted 200).
+- Pre-existing residue noted (NOT mine, left untouched): 6 prior E2E-PLAN-POSTED group msgs from tmm_0000000006
+  (m_0000000252..m_0000000275) + task-dir files (docs/, prototypes/, src/e2e-ok.txt, tests/). My markers used F3-* to avoid confusion.
+
+CHECK 1 — Member visibility: PASS
+- GET /api/v1/agents (200): 6 items incl `a_plan template plan plan ep_plan` (id/type/role/agentKey/policyId).
+- GET /api/v1/teams/tm_0000000001 (200): 6 members: tmm_0000000003 架构师-1/a_architect,
+  tmm_0000000004 开发者-1/a_developer, tmm_0000000006 计划员-1/a_plan, tmm_0000000001 产品经理-1/a_product,
+  tmm_0000000002 项目经理-1/a_project_manager (== mainAgentMemberId, NOT the plan member),
+  tmm_0000000005 测试-1/a_tester. Blob contains 计划员 + a_plan.
+- DB: agents=6, execution_policies=7; a_plan row = (a_plan,template,plan,plan,ep_plan);
+  ep_plan row = (ep_plan,template); tmm_0000000006 = (tm_0000000001,a_plan,计划员-1);
+  teams.main_agent_member_id = tmm_0000000002; team member count = 6.
+- Group channel: c_0000000001 (team_group). @-mentionability proven functionally in Check 2
+  (mention {type:agent, agentId:a_plan, instanceId:tmm_0000000006} => triggers[0] status=dispatched, executed).
+
+CHECK 2 — Live draft via group @: PASS (with one deviation, see WARN)
+- Pre-cleaned stale f3-manual-qa.md; snapshotted task dir; watermark m_0000000275.
+- POST /channels/c_0000000001/messages (own F3 wording, file f3-manual-qa.md, markers F3-PLAN-POSTED/F3-PLAN-DONE)
+  => 201, message m_0000000277, triggers=[{agentId:a_plan, instanceId:tmm_0000000006, sessionId:s_0000000011, status:dispatched}].
+  Raw: f3-group-trigger.json.
+- Poll: plan file present at ~30s; group reply at ~40s (BOTH_READY poll4).
+- Plan file /data/vteam-worker/tasks/t_0000000001/.opencode/plans/f3-manual-qa.md: 32 lines / 27 non-empty,
+  contains 背景 / 验证步骤 (5 numbered steps) / 验收标准. Raw: f3-plan-file-4.md.
+- Write scoping: task-dir diff before->after = exactly ONE added file, inside .opencode/plans/ (diff exit 1, single `>` line).
+- Group reply: m_0000000280 sender=agent tmm_0000000006:
+  "F3 手工 QA 验证计划已完成并落盘 `.opencode/plans/f3-manual-qa.md`（含背景/验证步骤5条/验收标准，共34行）。F3-PLAN-POSTED"
+  Raw: f3-group-after-4.json.
+- WARN (deviation, non-blocking): my extra "F3-PLAN-DONE" closing line never arrived (12x10s re-polls, max id moved only
+  due to an unrelated concurrent e2e trigger m_0000000281 from another session). Mandatory asserts (file landed under
+  plans dir + member replied in group) both hold; the member summarized instead of emitting the final marker line.
+  Same leniency as e2e script (DONE-marker absence = warn).
+
+CHECK 3 — Live spawn task(subagent_type='vteam-plan') + nested block: PASS (fully live)
+- Own vteam-plan session via direct worker /execute (POST http://localhost:4198/execute inside worker container):
+  agent=vteam-plan, directory=/data/vteam-worker/tasks/t_0000000001, sessionId=ses_f60ef0429ffeyoCZDV5S1Go0U0,
+  taskId=t_0000000001, agentId=a_plan, own F3 probe prompt => exec_http=202 {"accepted":true}.
+- Serve transcript poll => F3-SUBAGENT-DONE at ~40s (poll4). Raw: f3-serve-msg-5.json + f3-serve-msg-5-assistant.txt.
+- Parent spawn SUCCEEDED and returned (state=completed, task id ses_f60eedd1effe7eH4BUuncA0scU):
+  "F3-PROBE-OK: `# F3 手工 QA 验证计划`" (actual first line of my Check-2 plan file — proves real read, not hallucination).
+- Nested spawn BLOCKED (not success): child relayed
+  "F3-NESTED-RESULT: `Subagent depth limit reached (1). Increase "subagent_depth" to allow nested subagents.`"
+  Mechanism observed = opencode depth gate (rather than guard deny text), which satisfies "blocked, not success".
+
+CHECK 4 — Negative controls: PASS (all four)
+- Worker guard code eval (dist/role-guard/policy.js evaluateToolCall, live roles.json). Raw: f3-guard-decisions.json:
+  (developer, task+vteam-plan) => deny + 越界拦截 message
+  (product, task+vteam-plan) => deny
+  (tester, task+vteam-plan) => deny        [non-plan roles calling task denied]
+  (vteam-plan, task+vteam-developer) => deny
+  (vteam-plan, task+missing-args) => deny
+  (vteam-plan, execute) => deny
+  control (vteam-plan, task+vteam-plan) => allow, message null
+- POST http://localhost:4198/review {} (inside worker) => review_http=404, body {"error":"未支持的路径: /review"}. Gone.
+- POST /api/v1/platform-mcp tools/list (200): 23 tools, "plan_review" absent from raw, zero review-like names. Raw: f3-tools-list.json.
+- GET /api/v1/agent-policies (200): 6 agents [vteam-architect, vteam-developer, vteam-plan, vteam-product,
+  vteam-project_manager, vteam-tester], "plan_review" absent. Raw: f3-agent-policies.json.
+
+CHECK 5 — Agent-page visibility: PASS WITH RECORDED DIFFERENCES
+- No Playwright MCP available in this environment; per task allowance used API check + code inspection.
+- http://localhost:13001/agents via plain HTTP GET => 200, 10577 bytes, client-rendered shell (no role names in HTML;
+  page is "use client", data from GET /api/v1/agents via TanStack Query — confirmed in web/app/(main)/agents/page.tsx header comment).
+- API truth: /agents lists a_plan as template (Check 1) => the Agents page list (renders all items generically,
+  AgentListItem maps over items with no role filter) WILL include the plan template row like other templates
+  (模板 badge via TYPE_LABEL, name, config panel). Structural parity holds.
+- EXACT DIFFERENCES RECORDED (frontend still 5-role themed; product source NOT touched by me):
+  (a) web/app/(main)/agents/page.tsx:439 `ROLE_KEYS = [product, project_manager, architect, developer, tester]`;
+      toAvatarRole() falls back unknown role => "developer". => a_plan renders with developer-green avatar/theme, no distinct plan color.
+  (b) web/src/components/teams/TeamMembersPanel.tsx:50-67 AGENT_ID_ROLE/ROLE_KEYS/ROLE_AGENT_ID hardcode the same 5;
+      roleOptionsOf() iterates ROLE_KEYS only => a_plan NOT offered in add-instance role selector.
+  (c) web/app/(main)/teams/new/page.tsx:48-55 ROLE_AGENT_ID/ROLE_ORDER/FIXED_DESC hardcode 5 buckets => new-team flow has no plan bucket
+      (plan's "新建团队零改动即用户可选" claim does not hold at UI level; backend/member APIs accept it).
+  (d) web/app/(main)/teams/[id]/session/page.tsx:311,328,365,1191 `toRole(...) ?? "developer"` => existing 计划员-1 member row
+      @-mention WORKS (proven live, Check 2) but is developer-themed as fallback.
+  None of (a)-(d) breaks the mandatory asserts; listed here exactly as required ("record exactly what differs").
+
+CHECK 6 — Cleanup: DONE, VERIFIED
+- Deleted: worker plan file f3-manual-qa.md (verified absent), worker tmp files
+  (/tmp/f3-manual-exec-body.json, /tmp/f3-manual-exec-out.json, /tmp/f3-manual-guard.js),
+  serve parent session ses_f60ef0429ffeyoCZDV5S1Go0U0 (DELETE 200; child ses_f60eedd1effe7eH4BUuncA0scU already gone => 404 cascade).
+- Task-dir final diff vs before snapshot: IDENTICAL (concurrent foreign e2e-plan-member.md also gone — its owner cleaned it).
+- DB counts back to baseline: agents=6, execution_policies=7, team_members(tm_0000000001)=6; /agent-policies re-checked: no plan_review.
+- Left intentionally (same precedent as e2e scripts): group trace messages m_0000000277 (my @ trigger) + m_0000000280
+  (plan member F3-PLAN-POSTED reply). No product source changes (git untouched by me).
+- LSP diagnostics: N/A (no code changes made — evidence + raw transcripts only, per MUST NOT DO).
+
+MISMATCHES / WARN SUMMARY
+- W1: F3-PLAN-DONE closing line never posted (member stopped after summary post). Non-blocking; asserts hold.
+- W2: Frontend theming/selection is 5-role hardcoded (Check 5 (a)-(d)); @-mention + APIs fully plan-capable.
+- W3: Concurrent foreign e2e run interleaved (its trigger m_0000000281 appeared mid-poll); did not corrupt my artifacts
+  (distinct F3 markers/file); its residue self-cleaned.
+
+VERDICT: APPROVE

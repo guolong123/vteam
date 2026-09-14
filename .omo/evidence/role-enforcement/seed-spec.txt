@@ -1,0 +1,20 @@
+# Todo 10 seed.spec evidence
+
+## jest src/prisma/seed.spec.ts --runInBand
+```
+PASS src/prisma/seed.spec.ts
+    ✓ 5 类模板 Agent upsert create 分支均预置为 template 类型 (21 ms)
+    ✓ 已移除默认 ACK 文案（收到，正在处理… 机制已下线） (2 ms)
+    ✓ 5 条角色 ExecutionPolicy upsert：type=template、嵌套 permission、无 write 键、MCP 仅真实名 deny (4 ms)
+    ✓ 模板 Agent create 与 update 均绑定角色策略 policyId (1 ms)
+    ✓ ExecutionPolicy upsert 先于模板 Agent upsert（绑定指向已存在策略行） (2 ms)
+    ✓ 已存在模板 Agent 时 update 分支仅同步出厂默认 prompt 与 policyId，不覆盖用户修改字段 (13 ms)
+    ✓ 首次创建模板 Agent 时 create 分支 defaultModelId 为 null（动态模型目录，不再静态预置） (2 ms)
+    ✓ 模板 prompt 四方向齐全、含越界转交，且不含禁用词/裸 MCP 名 (7 ms)
+    ✓ 示例团队同时 upsert seed-admin 与 admin(u_admin) 为 owner（fresh deploy 下 admin 开箱可进群） (2 ms)
+Test Suites: 1 passed, 1 total
+Tests:       9 passed, 9 total
+```
+
+## tsc -p tsconfig.json --noEmit
+exit=0
