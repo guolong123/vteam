@@ -244,25 +244,21 @@ export const ARTIFACT_SUBMISSION_INSTRUCTION =
 /**
  * 计划编制指令（仅主 Agent + 任务计划模式开启时注入）。
  *
- * 本任务的执行计划只能由主 Agent 产出一份：分析任务、拆解步骤（用 opencode todo 工具
- * 登记，便于在计划 Tab 跟踪进度），并**把计划正文写成文件** `<工作目录>/.opencode/plans/<名字>.md`。
- *
- * 为什么是文件而不是 submit_artifact：计划 Tab 直接同步该目录下的 .md 文件，文件即真相——
- * vteam 不落库、不做版本，用户也可能自己往同一目录上传计划。写文件是 opencode 的原生能力，
- * vteam 不额外增加约束；具体能否写由 opencode 的权限配置决定（不在这里替它做判断）。
- * 写完后在群聊提示成员评审；收到评审意见后由你裁决修订，裁决通过前不要进入执行。
+ * 本任务的执行计划由计划成员（群聊 @计划员）起草与评审，主 Agent 只做编排：
+ * 派起草（含任务简报）→ 收群聊摘要 → question 选评审视角 → 带视角清单派评审 →
+ * 收 VERDICT 聚合 → REJECT 带 feedback 重派 → APPROVE 宣布 → task_transition 出计划模式。
+ * 计划正文即 `<工作目录>/.opencode/plans/` 下的 .md 文件（计划 Tab 直接同步展示，
+ * 以文件最新内容为准）；裁决通过前不要进入执行。
  */
 export const PLAN_PRODUCE_INSTRUCTION =
-  '【计划编制】本任务已开启计划模式，你是主 Agent，负责产出本任务唯一的执行计划：' +
-  '先分析任务并拆解执行步骤（用 opencode todo 工具登记步骤，步骤状态会同步到计划 Tab）；' +
-  '再把计划正文写成 Markdown 文件：工作目录下 `.opencode/plans/` 目录，文件名自取（如 `plan.md`）；' +
-  '该文件会被计划 Tab 实时展示，用户也可能直接上传/修改同名文件（以文件最新内容为准）；' +
-  '写完后在群聊提示成员评审；收到评审意见后由你裁决是否修订（直接改写该文件即可），裁决通过前不要进入执行。' +
-  '动笔前先用 skill 工具加载 skill(plan-creation) 并严格按其执行；' +
-  '起草完成并在群聊提示成员评审后，用 question 工具（多选）向用户确认本次要运行的评审者角色' +
-  '（候选：product、architect、developer、tester、project_manager）；' +
-  '再调用 vteam MCP 的 vteam_plan_review 工具传入所选评审者发起评审，收到 REJECT 裁决时修订计划' +
-  '（可再用 question 问用户是否重跑评审）。';
+  '【计划编制】本任务已开启计划模式，你是主 Agent，负责编排本任务唯一的执行计划（计划正文由计划成员写成文件，落盘在工作目录下 `.opencode/plans/` 目录，计划 Tab 实时展示该目录下的 .md 文件，以文件最新内容为准；执行步骤由计划成员用 opencode todo 工具登记，会同步到计划 Tab）：' +
+  '1. 在群聊 @计划员 派起草任务，附上任务简报（目标/背景/约束/验收标准）；' +
+  '2. 收到计划成员经 group_post 发到群聊的计划摘要后，用 question 工具（多选）向用户确认本次要运行的评审视角' +
+  '（如用户视角、技术合理性、步骤可执行性、测试覆盖度、排期真实性）；' +
+  '3. 再在群聊 @计划员 派评审任务，附上选定的视角清单，要求按视角逐项给出 VERDICT: APPROVE 或 VERDICT: REJECT 及依据；' +
+  '4. 收齐群聊中的 VERDICT 后由你聚合裁决：有 REJECT 则带上 feedback（驳回意见）在群聊 @计划员 重派修订；' +
+  '全 APPROVE 则在群聊宣布评审通过；' +
+  '5. 评审通过后调用 vteam MCP 的 task_transition 切出计划模式，进入执行；裁决通过前不要进入执行。';
 
 /**
  * 计划评审指令（非主 Agent + 任务计划模式开启时注入，omo task-rejection 思想）。

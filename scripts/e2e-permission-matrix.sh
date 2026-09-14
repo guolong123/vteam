@@ -22,7 +22,7 @@
 #      403). Main vs non-main instance ids come from the DB
 #      (teams.main_agent_member_id + sessions bound to this worker).
 #   5) cross-side constant consistency: server ROLE_SERVER_GATED_TOOLS
-#      (dist require) == worker SERVER_GATED_TOOLS (dist extract), same 6 values.
+#      (dist require) == worker SERVER_GATED_TOOLS (dist extract), same 5 values.
 #   6) no regression on ordinary boundaries: genuinely-denied pairs
 #      (vteam-plan -> vteam_group_post, vteam-developer -> vteam_issue_create)
 #      remain deny.
@@ -435,14 +435,14 @@ if ! python3 - "$SERVER_CONST_OUT" "$WORKER_CONST_OUT" "$EVIDENCE_DIR/constants-
 import json,sys
 srv = json.load(open(sys.argv[1])); wrk = json.load(open(sys.argv[2]))
 assert sorted(srv) == sorted(wrk), "mismatch server=%r worker=%r" % (srv, wrk)
-assert len(srv) == 6, "want exactly 6 gated tools, got %r" % (srv,)
+assert len(srv) == 5, "want exactly 5 gated tools, got %r" % (srv,)
 open(sys.argv[3], "w").write("server == worker == %s\n" % json.dumps(sorted(srv), ensure_ascii=False))
 print("constants: server == worker == %s" % sorted(srv))
 EOF
 then
   fail "5-constants" "constant sets differ (server: $SERVER_CONST_OUT, worker: $WORKER_CONST_OUT)"
 fi
-pass "5 (server ROLE_SERVER_GATED_TOOLS == worker SERVER_GATED_TOOLS, 6 values)"
+pass "5 (server ROLE_SERVER_GATED_TOOLS == worker SERVER_GATED_TOOLS, 5 values)"
 
 log "ALL STEPS DONE: 0/1/2/3/4a/4b/4c/4d/5/6"
 printf '[e2e] \033[32mPASS\033[0m permission-matrix (evidence: %s)\n' "$EVIDENCE_DIR" | tee -a "$E2E_LOG"

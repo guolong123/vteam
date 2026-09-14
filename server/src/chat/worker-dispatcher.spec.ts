@@ -1343,7 +1343,7 @@ describe('WorkerDispatcher', () => {
       }
     });
 
-    it('计划开+主 Agent：注入出计划指令（写入 .opencode/plans/ + todo 步骤）', () => {
+    it('计划开+主 Agent：注入编排指令（@计划员起草→question选视角→@计划员评审→VERDICT聚合→task_transition）', () => {
       const s = buildSystemInstructions(agent, {
         isMainAgent: true,
         taskPlanMode: true,
@@ -1355,16 +1355,20 @@ describe('WorkerDispatcher', () => {
       expect(s).not.toContain('type:"plan"');
       expect(s).toContain('todo');
       expect(s).not.toContain(PLAN_REVIEW_INSTRUCTION);
-      // skill→question→plan_review 三步（D2 点名流程）
-      expect(s).toContain('plan-creation');
+      // 主 Agent 编排流：@计划员派起草（含任务简报）→ question 选评审视角 →
+      // @计划员带视角清单派评审 → VERDICT 聚合 → REJECT带feedback重派 → APPROVE宣布 → task_transition
+      expect(s).toContain('@计划员');
+      expect(s).toContain('任务简报');
       expect(s).toContain('question');
-      expect(s).toContain('vteam_plan_review');
-      expect(s).toContain('product');
-      expect(s).toContain('architect');
-      expect(s).toContain('developer');
-      expect(s).toContain('tester');
-      expect(s).toContain('project_manager');
+      expect(s).toContain('评审视角');
+      expect(s).toContain('VERDICT');
       expect(s).toContain('REJECT');
+      expect(s).toContain('feedback');
+      expect(s).toContain('APPROVE');
+      expect(s).toContain('task_transition');
+      // 服务端扇出的 plan_review 工具已下线：编排指令不再引用
+      expect(s).not.toContain('vteam_plan_review');
+      expect(s).not.toContain('plan-creation');
     });
 
     it('计划开+非主 Agent：注入评审指令（含三段式与禁另起计划）', () => {

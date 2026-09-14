@@ -10,7 +10,6 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
-import * as path from 'node:path';
 import {
   ACTOR_TYPE,
   CHANNEL_TYPE,
@@ -26,7 +25,6 @@ import { WorkerDispatcher } from '../chat/worker-dispatcher';
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import { FileStorageService } from '../uploads/uploads.service';
 import { WorkerClient } from '../workers/worker.client';
-import { WorkersService } from '../workers/workers.service';
 import { IssuesService } from '../issues/issues.service';
 import { IssueStatus, IssueTransitionAction } from '../issues/issues.constants';
 import { TaskTransitionAction } from '../common/constants/task.constants';
@@ -45,7 +43,6 @@ import {
   MentionThrottle,
 } from '../chat/mention-throttle';
 import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
-import { taskDirOf } from '../tasks/work-dir.util';
 
 /**
  * 消息主键前缀：与 ChatService/WorkerDispatcher 共享 IdGeneratorService 的 'm' 计数
@@ -101,25 +98,6 @@ export interface ReadFileResult {
 const READ_FILE_DEFAULT_MAX_BYTES = 256 * 1024;
 const READ_FILE_MAX_BYTES = 1024 * 1024;
 
-/** plan_review：单评审者默认超时 10min（可经 timeoutMs 入参覆盖，上限 30min）。 */
-export const PLAN_REVIEW_TIMEOUT_MS = 10 * 60_000;
-const PLAN_REVIEW_MAX_TIMEOUT_MS = 30 * 60_000;
-
-/** plan_review 单条评审结论（VERDICT 解析失败/超时/异常一律 NEEDS-ATTENTION）。 */
-export type PlanReviewVerdict = 'APPROVE' | 'REJECT' | 'NEEDS-ATTENTION';
-
-export interface PlanReviewVerdictItem {
-  role: string;
-  memberId: string;
-  verdict: PlanReviewVerdict;
-  findings: string;
-}
-
-export interface PlanReviewResult {
-  verdicts: PlanReviewVerdictItem[];
-  notes: string[];
-}
-
 /**
  * 平台 MCP 工具实现（阶段 1）。
  *
@@ -159,11 +137,6 @@ export class PlatformMcpService {
     @Optional()
     @Inject(ExecutionPolicyService)
     private readonly executionPolicyService?: ExecutionPolicyService,
-    // 评审扇出时的 worker 选择（与 dispatch 同源 assignWorker；缺省可空——
-    // 旧装配未提供时评审逐个记 NEEDS-ATTENTION，不阻断其余评审者）。
-    @Optional()
-    @Inject(WorkersService)
-    private readonly workersService?: WorkersService,
   ) {}
 
   /**
@@ -1865,305 +1838,6 @@ export class PlatformMcpService {
       planMode: updated.planMode,
       agentName: agentName ?? null,
     };
-  }
-
-  async planReview(
-    ctx: PlatformMcpContext,
-    args: {
-      taskId: string;
-      selfInstanceId: string;
-      reviewers: string[];
-      planPath?: string;
-      timeoutMs?: number;
-    },
-  ): Promise<PlanReviewResult> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-
-    const { teamId: reviewTeamId, mainMemberId } = await this.findTaskTeamGate(
-      args.taskId,
-    );
-    if (!mainMemberId || mainMemberId !== args.selfInstanceId) {
-      throw new ForbiddenException({
-        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message: `仅主 Agent（${mainMemberId ?? '未设置'}）可发起计划评审；请知会主 Agent 调用 plan_review`,
-      });
-    }
-
-    const members = reviewTeamId
-      ? await this.prisma.teamMember.findMany({
-          where: { teamId: reviewTeamId },
-          orderBy: [{ agentId: 'asc' }, { seq: 'asc' }],
-          select: {
-            id: true,
-            agentId: true,
-            agent: { select: { id: true, role: true } },
-          },
-        })
-      : [];
-
-    const notes: string[] = [];
-    const seenMemberIds = new Set<string>();
-    const targets: Array<{ role: string; memberId: string; agentId: string }> =
-      [];
-    for (const role of args.reviewers ?? []) {
-      const hit = members.find((m) => m.agent.role === role);
-      if (!hit) {
-        notes.push(`评审角色 ${role} 在任务团队中无成员，已跳过`);
-        continue;
-      }
-      if (hit.id === args.selfInstanceId) {
-        notes.push(`评审角色 ${role} 为主 Agent 自身（作者不自评），已跳过`);
-        continue;
-      }
-      if (seenMemberIds.has(hit.id)) {
-        notes.push(`评审角色 ${role} 与已选评审者为同一成员（${hit.id}），已去重`);
-        continue;
-      }
-      seenMemberIds.add(hit.id);
-      targets.push({ role, memberId: hit.id, agentId: hit.agent.id });
-    }
-
-    const taskWorkDir = taskDirOf(
-      this.workerDispatcher.taskWorkDirRoot,
-      args.taskId,
-    );
-    const { content: planMarkdown, label: planLabel } =
-      await this.resolveReviewPlan(ctx, args.taskId, taskWorkDir, args.planPath);
-
-    const perReviewerTimeout = this.normalizeReviewTimeout(args.timeoutMs);
-    const settled = await Promise.allSettled(
-      targets.map((t) =>
-        this.runSingleReview({
-          taskId: args.taskId,
-          teamId: reviewTeamId as string,
-          taskWorkDir,
-          planLabel,
-          planMarkdown,
-          role: t.role,
-          memberId: t.memberId,
-          agentId: t.agentId,
-          timeoutMs: perReviewerTimeout,
-        }),
-      ),
-    );
-    const verdicts = settled.map((s, i) =>
-      s.status === 'fulfilled'
-        ? s.value
-        : {
-            role: targets[i].role,
-            memberId: targets[i].memberId,
-            verdict: 'NEEDS-ATTENTION' as const,
-            findings: `评审扇出异常：${this.describeReviewError(s.reason)}`,
-          },
-    );
-    return { verdicts, notes };
-  }
-
-  private async resolveReviewPlan(
-    ctx: PlatformMcpContext,
-    taskId: string,
-    taskWorkDir: string,
-    planPath?: string,
-  ): Promise<{ content: string; label: string }> {
-    const workerRow = await this.prisma.worker.findUnique({
-      where: { id: ctx.workerId },
-      select: { capabilities: true },
-    });
-    if (!workerRow) {
-      throw new NotFoundException({
-        code: PLATFORM_MCP_ERRORS.FILE_NOT_FOUND,
-        message: '执行该任务的 worker 不存在，无法读取计划文档',
-      });
-    }
-    const planWorker = { id: ctx.workerId, capabilities: workerRow.capabilities };
-    if (typeof planPath === 'string' && planPath.trim()) {
-      const normalized = path.posix.normalize(planPath.trim());
-      const absolute = normalized.startsWith('/')
-        ? normalized
-        : path.posix.join(taskWorkDir, normalized);
-      if (absolute !== taskWorkDir && !absolute.startsWith(`${taskWorkDir}/`)) {
-        throw new BadRequestException({
-          code: PLATFORM_MCP_ERRORS.ARTIFACT_INVALID,
-          message: `planPath 须位于任务工作目录（${taskWorkDir}）内，禁止路径穿越`,
-        });
-      }
-      const buffer = await this.workerClient.fetchFile(planWorker, absolute);
-      const content = this.decodeContent(buffer).trim();
-      if (!content) {
-        throw new BadRequestException({
-          code: PLATFORM_MCP_ERRORS.ARTIFACT_INVALID,
-          message: `计划文档 ${absolute} 内容为空，请主 Agent 先起草计划再发起评审`,
-        });
-      }
-      return { content, label: absolute };
-    }
-    const files = await this.workerClient.listPlanFiles(planWorker, taskWorkDir);
-    const mdFiles = (files ?? []).filter((f) => f.name.endsWith('.md'));
-    if (mdFiles.length === 0) {
-      throw new BadRequestException({
-        code: PLATFORM_MCP_ERRORS.ARTIFACT_INVALID,
-        message: `任务目录 ${taskWorkDir}/.opencode/plans/ 下暂无计划文档（.md），请主 Agent 先起草计划再发起评审`,
-      });
-    }
-    const latest = mdFiles.sort((a, b) =>
-      a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0,
-    )[0];
-    const content = (latest.content ?? '').trim();
-    if (!content) {
-      throw new BadRequestException({
-        code: PLATFORM_MCP_ERRORS.ARTIFACT_INVALID,
-        message: `计划文档 ${latest.name} 内容为空，请主 Agent 先起草计划再发起评审`,
-      });
-    }
-    return {
-      content,
-      label: path.posix.join(taskWorkDir, '.opencode/plans', latest.name),
-    };
-  }
-
-  private async runSingleReview(input: {
-    taskId: string;
-    teamId: string;
-    taskWorkDir: string;
-    planLabel: string;
-    planMarkdown: string;
-    role: string;
-    memberId: string;
-    agentId: string;
-    timeoutMs: number;
-  }): Promise<PlanReviewVerdictItem> {
-    const base = { role: input.role, memberId: input.memberId };
-    try {
-      const workerId = await this.workersService?.assignWorker({});
-      if (!workerId) {
-        return {
-          ...base,
-          verdict: 'NEEDS-ATTENTION',
-          findings:
-            '无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）',
-        };
-      }
-      const workerRow = await this.prisma.worker.findUnique({
-        where: { id: workerId },
-        select: { capabilities: true },
-      });
-      if (!workerRow) {
-        return {
-          ...base,
-          verdict: 'NEEDS-ATTENTION',
-          findings: `worker ${workerId} 不存在，无法发起评审`,
-        };
-      }
-      const worker = { id: workerId, capabilities: workerRow.capabilities };
-      const scope = `team:${input.teamId}`;
-      this.workerDispatcher.registerExecution(worker.id, scope, input.memberId);
-      try {
-        const text = await this.reviewWithTimeout(worker, input);
-        return this.toReviewVerdict(input.role, input.memberId, text);
-      } catch (err) {
-        return {
-          ...base,
-          verdict: 'NEEDS-ATTENTION',
-          findings: this.describeReviewError(err),
-        };
-      } finally {
-        this.workerDispatcher.unregisterExecution(
-          worker.id,
-          scope,
-          input.memberId,
-        );
-      }
-    } catch (err) {
-      return {
-        ...base,
-        verdict: 'NEEDS-ATTENTION',
-        findings: this.describeReviewError(err),
-      };
-    }
-  }
-
-  private async reviewWithTimeout(
-    worker: { id: string; capabilities: unknown },
-    input: {
-      taskId: string;
-      taskWorkDir: string;
-      planLabel: string;
-      planMarkdown: string;
-      role: string;
-      agentId: string;
-      timeoutMs: number;
-    },
-  ): Promise<string> {
-    const pending = this.workerClient.review(worker, {
-      prompt: this.buildReviewPrompt(input),
-      agent: `vteam-${input.role}`,
-      directory: input.taskWorkDir,
-      taskId: input.taskId,
-      agentId: input.agentId,
-      system: `你是 vteam 团队的${input.role}评审者，正在全新会话中冷评审一份执行计划：只输出 VERDICT 与评审依据，不修改任何文件，不执行任何操作。`,
-      timeoutMs: input.timeoutMs,
-    });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        pending.then((r) => r.text),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () =>
-              reject(new Error(`评审超时（>${input.timeoutMs}ms），已记为 NEEDS-ATTENTION`)),
-            input.timeoutMs,
-          );
-        }),
-      ]);
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-    }
-  }
-
-  private buildReviewPrompt(input: {
-    role: string;
-    taskId: string;
-    planLabel: string;
-    planMarkdown: string;
-  }): string {
-    return [
-      `你是${input.role}评审者，正以全新会话冷评审任务 ${input.taskId} 的执行计划。`,
-      `先加载技能：skill(plan-review-${input.role})，严格按其执行。`,
-      `# 待评审计划（${input.planLabel} 全文）`,
-      input.planMarkdown,
-      `# 输出（严格）：先给 VERDICT: APPROVE 或 VERDICT: REJECT，再列依据 findings。`,
-      `只评审，不修改任何文件，不执行计划。`,
-    ].join('\n');
-  }
-
-  private toReviewVerdict(
-    role: string,
-    memberId: string,
-    text: string,
-  ): PlanReviewVerdictItem {
-    const matched = /VERDICT:\s*(APPROVE|REJECT)/i.exec(text ?? '');
-    if (!matched) {
-      const raw = (text ?? '').trim();
-      return {
-        role,
-        memberId,
-        verdict: 'NEEDS-ATTENTION',
-        findings: raw || '评审返回为空，无法解析 VERDICT',
-      };
-    }
-    const verdict = matched[1].toUpperCase() as 'APPROVE' | 'REJECT';
-    const rest = (text ?? '').slice(matched.index + matched[0].length).trim();
-    return { role, memberId, verdict, findings: rest || (text ?? '').trim() };
-  }
-
-  private describeReviewError(err: unknown): string {
-    return err instanceof Error ? err.message : String(err);
-  }
-
-  private normalizeReviewTimeout(timeoutMs?: number): number {
-    const parsed = Number(timeoutMs ?? PLAN_REVIEW_TIMEOUT_MS);
-    if (!Number.isFinite(parsed) || parsed <= 0) return PLAN_REVIEW_TIMEOUT_MS;
-    return Math.min(Math.floor(parsed), PLAN_REVIEW_MAX_TIMEOUT_MS);
   }
 
   /**

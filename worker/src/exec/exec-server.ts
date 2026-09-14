@@ -221,42 +221,6 @@ export interface ExecServerOptions {
 /** 请求体解析失败（非 JSON / 缺字段）。 */
 export class ExecuteRequestError extends Error {}
 
-/** review 同步执行超时（`timeoutMs` 内 `runSendAndAwait` 未完成 → fail-closed，映射为 HTTP 504）。 */
-export class ReviewTimeoutError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ReviewTimeoutError';
-  }
-}
-
-/**
- * POST /review 请求体（server `plan_review` 扇出形状，vteam-plan-skills-review D4）。
- * **无 sessionId**——恒全新会话（`driver.createSession` 新建，调用方不得复用）。
- */
-export interface ReviewRequestPayload {
-  /** 提示内容：字符串（转单 text part）或 parts 数组（透传 serve）。 */
-  prompt: string | unknown[];
-  /** 模型选择（可选，缺省 serve 默认模型）。 */
-  model?: DriverModelRef | null;
-  /** opencode agent 名（评审者角色 agent，如 `vteam-architect`，写 guard 映射用）。 */
-  agent?: string | null;
-  /** 工作目录（prompt_async query 参数）。 */
-  directory?: string;
-  /** 平台 Task 主键（t_ 前缀，仅透传 ctx，不建 vteam 行）。 */
-  taskId?: string;
-  /** Agent id（a_ 前缀，仅透传 ctx）。 */
-  agentId?: string | null;
-  /** 消息来源频道 id（仅透传 ctx）。 */
-  channelId?: string | null;
-  /** 顶层 system 提示（拼入 LLM system message，不进会话记录）。 */
-  system?: string | null;
-  /** 同步等待上限 ms（缺省 10min；超时 abort + fail-closed 抛错）。 */
-  timeoutMs?: number;
-}
-
-/** POST /review 缺省同步超时（10min，对齐 server `plan_review` 单评审超时默认值）。 */
-export const REVIEW_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
-
 /** model 可读描述（providerID/modelID；缺省 → 标记 serve 默认模型，供日志排障确认实际模型）。 */
 function describeModel(model: DriverModelRef | null | undefined): string {
   if (!model) {
@@ -435,10 +399,6 @@ export class ExecServer {
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (url.pathname === '/execute') {
       await this.handleExecute(req, res);
-      return;
-    }
-    if (url.pathname === '/review') {
-      await this.handleReview(req, res);
       return;
     }
     if (url.pathname === '/file') {
@@ -732,173 +692,6 @@ export class ExecServer {
     }
     sendJson(res, 202, { accepted: true });
     void this.runExecution(payload);
-  }
-
-  /**
-   * POST /review：单轮同步评审执行（server `plan_review` 扇出原语，D4）。
-   *
-   * 契约：请求 `ReviewRequestPayload`（无 sessionId——恒全新会话）→
-   * 成功 200 `{text, sessionId}`；校验失败 400/405/413；驱动失败 502；超时 504。
-   * 行为：`driver.createSession(model)` 全新会话 → 写 guard 映射（`agent` 即评审者
-   * 角色 agent 名，guard 按此 enforcement）→ 复用 `runSendAndAwait`（`silent` 模式）
-   * → 返回收集文本 + 新会话 id。
-   *
-   * 与 `/execute` 的刻意差异（勿"对齐"回 fire-and-forget）：
-   * - 同步：prompt→completion 全程在请求内 await，调用方拿到文本才返回（server 聚合
-   *   VERDICT 用）；超时（`timeoutMs`，缺省 `REVIEW_DEFAULT_TIMEOUT_MS`）先 best-effort
-   *   `driver.abort` 再抛 `ReviewTimeoutError` fail-closed（镜像 awaitCompletion 首字
-   *   超时 abort + 抛错模式）。
-   * - 零 realtime 广播：不发 SESSION_UPDATED / AGENT_STATUS / TASK_COMPLETED，且
-   *   `runSendAndAwait` 以 `silent` 运行跳过 onPoll 的增量 delta（MESSAGE_PART_DELTA）
-   *   与 question/权限旁路检测上送。评审会话是 server 侧聚合用的临时会话，从未建 vteam
-   *   Session 行——若上送事件，/execute 的事件会按 taskId/agentId 驱动前端 loading 与
-   *   会话状态机，评审事件无归属会话承接，将污染 UI。
-   * - guard 映射写后不删：评审会话一次性、用后即弃；残留文件由既有 TTL 裁剪机制
-   *  （`pruneStaleSessionPolicies`，下次建映射时 best-effort 清理）兜底回收——/execute
-   *   的复用会话才需 finally 清理（`untrackGuardSessions`）。
-   */
-  private async handleReview(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    if (req.method !== 'POST') {
-      sendJson(res, 405, { error: `仅支持 POST，收到 ${req.method}` });
-      return;
-    }
-    let raw: string;
-    try {
-      raw = await readBody(req, this.maxBodyBytes);
-    } catch (err) {
-      await drainRequest(req);
-      sendJson(res, 413, { error: err instanceof Error ? err.message : '请求体过大' });
-      return;
-    }
-    let body: ReviewRequestPayload;
-    try {
-      body = JSON.parse(raw || '{}') as ReviewRequestPayload;
-    } catch {
-      sendJson(res, 400, { error: '请求体必须是合法 JSON' });
-      return;
-    }
-    if (body.prompt === undefined || body.prompt === null) {
-      sendJson(res, 400, { error: '缺少必填字段 prompt' });
-      return;
-    }
-    let timeoutMs = REVIEW_DEFAULT_TIMEOUT_MS;
-    if (body.timeoutMs !== undefined && body.timeoutMs !== null) {
-      if (typeof body.timeoutMs !== 'number' || !Number.isFinite(body.timeoutMs) || body.timeoutMs <= 0) {
-        sendJson(res, 400, { error: 'timeoutMs 必须是正数（毫秒）' });
-        return;
-      }
-      timeoutMs = Math.floor(body.timeoutMs);
-    }
-    // runSendAndAwait 复用形状（ExecuteRequestPayload；刻意不带 sessionId——恒新会话）。
-    const execPayload: ExecuteRequestPayload = {
-      prompt: body.prompt,
-      ...(body.model !== undefined ? { model: body.model } : {}),
-      ...(typeof body.agent === 'string' ? { agent: body.agent } : {}),
-      ...(typeof body.directory === 'string' ? { directory: body.directory } : {}),
-      ...(typeof body.system === 'string' ? { system: body.system } : {}),
-      ...(typeof body.taskId === 'string' ? { taskId: body.taskId } : {}),
-      ...(typeof body.agentId === 'string' ? { agentId: body.agentId } : {}),
-      ...(typeof body.channelId === 'string' ? { channelId: body.channelId } : {}),
-    };
-    trackInstanceStart();
-    try {
-      if (execPayload.directory) {
-        await fsp.mkdir(execPayload.directory, { recursive: true });
-      }
-      // 恒全新会话：绝不接受/复用调用方传的 sessionId（请求形状里根本没有该字段）。
-      const opencodeSessionId = await this.driver.createSession(execPayload.model);
-      // prompt 发送前建 session→policy 映射（guard 插件按此查评审者角色；写失败只 warn）。
-      await this.trackReviewGuardSession(opencodeSessionId, execPayload.agent, execPayload.directory);
-      const ctx: Record<string, string | undefined> = {
-        taskId: execPayload.taskId,
-        agentId: execPayload.agentId,
-        channelId: execPayload.channelId,
-        sessionId: opencodeSessionId,
-      };
-      const result = await this.runReviewWithTimeout(execPayload, opencodeSessionId, ctx, timeoutMs);
-      sendJson(res, 200, { text: result.text, sessionId: opencodeSessionId });
-      this.logger.info(
-        `[exec] review 完成 session=${opencodeSessionId} taskId=${execPayload.taskId ?? '-'} model=${describeModel(execPayload.model)} text=${result.text.length} chars`,
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.logger.error(`[exec] review 失败: ${message}`);
-      if (!res.headersSent) {
-        if (err instanceof ReviewTimeoutError) {
-          sendJson(res, 504, { error: message });
-        } else {
-          sendJson(res, 502, { error: message });
-        }
-      }
-    } finally {
-      trackInstanceEnd();
-    }
-  }
-
-  /**
-   * review guard 会话映射（单次写，不删）——逻辑镜像 `runExecution` 内的
-   * `trackGuardSession`（同 `vteam-` 前缀门、同 `resolveGuardWorkDir` 根、同写前 TTL
-   * 裁剪），复用同一批底层函数（`pruneStaleSessionPolicies`/`readSessionPolicy`/
-   * `writeSessionPolicy`），不另起映射格式。写失败只 warn，永不阻断评审。
-   */
-  private async trackReviewGuardSession(
-    sessionId: string,
-    agent: string | undefined,
-    directory: string | undefined,
-  ): Promise<void> {
-    if (!sessionId) {
-      return;
-    }
-    const name = agent ?? '';
-    // 仅策略 agent（`vteam-` 前缀）建映射；其余（默认 agent/未传）不写 → 未映射 pass-through。
-    if (!name.startsWith('vteam-')) {
-      return;
-    }
-    const root = this.resolveGuardWorkDir(directory);
-    if (!root) {
-      return;
-    }
-    try {
-      await pruneStaleSessionPolicies(root);
-      const current = await readSessionPolicy(root, sessionId);
-      if (!current || current.agent !== name) {
-        await writeSessionPolicy(root, sessionId, { agent: name, dir: directory ?? '' });
-      }
-    } catch (err) {
-      this.logger.warn(
-        `[exec] review session policy 写入失败（不阻断执行）: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
-
-  /**
-   * `runSendAndAwait` 的 review 同步包裹：`timeoutMs` 内未完成 → 先 best-effort abort
-   * 释放 serve 侧资源，再抛 `ReviewTimeoutError` fail-closed（调用方映射为 HTTP 504）。
-   */
-  private async runReviewWithTimeout(
-    payload: ExecuteRequestPayload,
-    sessionID: string,
-    ctx: Record<string, string | undefined>,
-    timeoutMs: number,
-  ): Promise<CompletionResult> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const pending = this.runSendAndAwait(payload, sessionID, ctx, { silent: true });
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          // 超时先 abort（镜像 awaitCompletion 超时语义；失败吞错，抛错本身才是主路径）。
-          void this.driver.abort(sessionID).catch(() => undefined);
-          reject(
-            new ReviewTimeoutError(`review 超时（${timeoutMs}ms 内未完成，session=${sessionID}）`),
-          );
-        }, timeoutMs);
-      });
-      return await Promise.race([pending, timeout]);
-    } finally {
-      if (timer !== undefined) {
-        clearTimeout(timer);
-      }
-    }
   }
 
   /**
@@ -1635,7 +1428,6 @@ export class ExecServer {
     payload: ExecuteRequestPayload,
     sessionID: string,
     ctx: Record<string, string | undefined>,
-    options?: { silent?: boolean },
   ): Promise<CompletionResult> {
     const tracker = new MessageDeltaTracker();
     // 每次任务独立 pending 检测器（去重集 + 防重入按任务隔离，任务结束即释放——
@@ -1669,18 +1461,11 @@ export class ExecServer {
           /stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i.test(
             text,
           ),
-        // review 同步路径（`silent`）跳过 onPoll：增量 delta 上送（MESSAGE_PART_DELTA）与
-        // question/权限旁路检测均经 sender 发 realtime 事件——评审临时会话无归属 vteam
-        // Session，绝不能污染 UI loading/会话状态（见 handleReview 注释）。
-        ...(options?.silent
-          ? {}
-          : {
-              onPoll: (messages: ServeMessage[], _elapsedMs: number) => {
-                void this.sendDelta(ctx, tracker, messages);
-                // question/权限确认旁路检测：serve 侧 pending 时上送事件（不 abort，等用户）
-                void detector.detect(ctx, sessionID);
-              },
-            }),
+        onPoll: (messages: ServeMessage[], _elapsedMs: number) => {
+          void this.sendDelta(ctx, tracker, messages);
+          // question/权限确认旁路检测：serve 侧 pending 时上送事件（不 abort，等用户）
+          void detector.detect(ctx, sessionID);
+        },
       },
     );
   }

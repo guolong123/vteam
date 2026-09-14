@@ -257,67 +257,6 @@ describe('WorkerClient', () => {
     });
   });
 
-  describe('review（计划评审 POST /review，单轮同步）', () => {
-    const reviewWorker = {
-      id: 'w_1',
-      capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 },
-    };
-
-    it('200 + {text, sessionId} → 透传返回；body 含 prompt/agent/directory/taskId/agentId/system/timeoutMs', async () => {
-      const client = makeClient();
-      mockFetch.mockResolvedValue(
-        response({
-          json: async () => ({ text: 'VERDICT: APPROVE\n好', sessionId: 'ses_r' }),
-        }),
-      );
-
-      await expect(
-        client.review(reviewWorker, {
-          prompt: '评审 prompt',
-          agent: 'vteam-developer',
-          directory: '/data/vteam-worker/tasks/t_1',
-          taskId: 't_1',
-          agentId: 'a_dev',
-          system: '评审 framing',
-          timeoutMs: 600_000,
-        }),
-      ).resolves.toEqual({ text: 'VERDICT: APPROVE\n好', sessionId: 'ses_r' });
-
-      const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe('http://worker:4198/review');
-      expect(init.method).toBe('POST');
-      expect(JSON.parse(String(init.body))).toEqual({
-        agent: 'vteam-developer',
-        directory: '/data/vteam-worker/tasks/t_1',
-        taskId: 't_1',
-        agentId: 'a_dev',
-        system: '评审 framing',
-        timeoutMs: 600_000,
-        prompt: '评审 prompt',
-      });
-    });
-
-    it('HTTP 非 2xx → WorkerUnavailableException（503，带 workerId）', async () => {
-      const client = makeClient();
-      mockFetch.mockResolvedValue(response({ ok: false, status: 500 }));
-
-      await expect(
-        client.review(reviewWorker, { prompt: 'x' }),
-      ).rejects.toMatchObject({ workerId: 'w_1', status: 503 });
-    });
-
-    it('响应缺 text/sessionId → WorkerUnavailableException', async () => {
-      const client = makeClient();
-      mockFetch.mockResolvedValue(
-        response({ json: async () => ({ text: 'ok' }) }),
-      );
-
-      await expect(
-        client.review(reviewWorker, { prompt: 'x' }),
-      ).rejects.toThrow(WorkerUnavailableException);
-    });
-  });
-
   describe('fetchFile（FR-41：GET /file 从 worker 工作区拉取文件）', () => {
     const execWorker = {
       id: 'w_1',
