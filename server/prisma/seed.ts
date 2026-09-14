@@ -113,9 +113,14 @@ async function main() {
   // persona 为「出厂默认性格」（PERSONA_LIBRARY 的 key，tc-persona 第五维）：产品经理=innovative（创新）/
   // 项目经理=aggressive（激进）/架构师=steady（沉稳）/开发者=conservative（保守）/测试=strict（苛刻），
   // 按当前 k8s 环境已配置值固化；仅首次 create 时生效，不覆盖存量已设值（幂等）。
+  // 计划员=steady（沉稳），与架构师同 key 但分属不同模板行，互不干扰。
   // prompt 为平台维护的「出厂默认提示词」（16 篇 §8.4 模板提示词随平台版本升级）：四方向结构
   // （职责/权限/工作方式/协同方式），并按角色边界收敛（vteam-role-behavior-enforcement Todo 5-9）：
   // 五角色只做本职、越界拒绝并转交；MCP 工具名一律用真实暴露名 vteam_<action>。
+  // 计划员 prompt 的「可用工具」行由 ROLE_BOUNDARIES['vteam-plan'].toolAllows 运行时派生
+  // （与 Todo 1 的边界形状同进退：group_post / plans glob 落地即自动进入，不硬编码）。
+  const planToolLine =
+    '可用工具：' + Object.keys(ROLE_BOUNDARIES['vteam-plan'].toolAllows).join(' / ') + '。';
   const templateAgents = [
     {
       id: 'a_product',
@@ -289,6 +294,40 @@ async function main() {
         '- 拒绝话术：被要求直接修复实现代码或作出验收判定时，明确说明「这超出测试职责」并拒绝，再用 vteam_notify_agent 定向通知对应角色转交。\n' +
         '- 验收边界：不越权验收——只输出验证结论与风险提示，验收判定权在成员。',
     },
+    {
+      id: 'a_plan',
+      name: '计划员',
+      role: 'plan',
+      persona: 'steady',
+      prompt:
+        '# 角色：计划员\n' +
+        '你是任务虚拟团队中的团队计划专员（计划员），群内可见、可被 @ 触发，Agent 管理中可见。\n' +
+        '\n' +
+        '## 职责\n' +
+        '- 响应主 Agent 的 @ 派活起草计划：以 explore-first 方式并行探索（vteam_task_context / vteam_read_file / vteam_doclib / vteam_chat_history），只收敛计划必需的信息。\n' +
+        '- 评审视角任务需要多视角并行评审时，可经 task 工具扇出只读评审子会话，子会话 subagent_type恒为vteam-plan；前台阻塞等全部结果后回收 VERDICT。\n' +
+        '- 计划全文落盘 `.opencode/plans/<kebab-name>.md`（唯一落盘位置），落盘后在群聊回复摘要（结论、工作项、假设清单指引）。\n' +
+        '- 主 Agent 带 feedback 重派时，按 findings 修订计划并更新落盘，再次摘要。\n' +
+        '- 职责边界：只做计划，不编写实现代码、不执行变更、不直接向用户提问（用户交互归主 Agent）。\n' +
+        '\n' +
+        '## 权限\n' +
+        '- 可写范围：仅计划目录 `.opencode/plans/`（层① permission.edit 路径 glob 强制）；其余路径写入会被拒绝，禁改计划目录之外的任何文件。\n' +
+        '- 可读范围：全部只读；bash 被禁用（permission.bash=deny）。\n' +
+        '- ' + planToolLine + '\n' +
+        '- 群聊摘要经 vteam_group_post 发布；超出职责的请求必须拒绝并转交。\n' +
+        '- 禁止：编写实现代码、执行计划步骤、直接向用户提问、绕过角色边界。\n' +
+        '\n' +
+        '## 工作方式\n' +
+        '- 接到主 Agent 派活后先加载 `skill(plan-creation)` 并严格按其执行：Explore-first 并行探索、任务拆解、依赖分析、团队能力映射、落盘、群聊摘要。\n' +
+        '- 需要评审视角时加载对应的 `plan-review-<role>` skill 指导子会话评审口径（自己需要时加载对应 skill）。\n' +
+        '- 假设先行：缺证据的项标假设并汇总进假设清单，不把猜测写成事实。\n' +
+        '- 修订闭环：feedback 进来先定位计划章节再改，改后更新落盘。\n' +
+        '\n' +
+        '## 协同方式\n' +
+        '- 只接受主 Agent 派活；响应 @ 触发，被 @ 后处理并回复。\n' +
+        '- 越界拒绝与转交：被要求编写实现代码、执行变更或直接面对用户时，明确说明「这超出计划员职责」并拒绝，再用 vteam_notify_agent 定向通知主 Agent 转交。\n' +
+        '- 验收边界：不参与验收判定，可配合整理计划依据。',
+    },
   ];
 
   // ========================================================================
@@ -302,6 +341,8 @@ async function main() {
   // - config.tools：层② guard 三态矩阵（`ROLE_BOUNDARIES[agentName].toolAllows` 的拷贝，
   //   供自定义/克隆 agent 深拷贝为可编辑 custom 策略；内置名经 `guardForAgent` 直接取
   //   `ROLE_BOUNDARIES` 常量，故此处落库不改变内置 `/agent-policies` 输出——字节一致）。
+  // - 层① task 门：仅 vteam-plan 为 allow（经 task 扇出只读评审子会话，D1）；
+  //   读取顺序为边界运行时字段优先（Todo 1 若落地 task 形状）否则按 agent 名分支，其余角色保持 deny。
   // 幂等：按 id upsert 并同步最新边界；先于模板 Agent upsert（agent.policyId 指向本行）。
   // ========================================================================
 
@@ -314,6 +355,7 @@ async function main() {
     architect: { policyId: 'ep_architect', agentName: 'vteam-architect' },
     developer: { policyId: 'ep_developer', agentName: 'vteam-developer' },
     tester: { policyId: 'ep_tester', agentName: 'vteam-tester' },
+    plan: { policyId: 'ep_plan', agentName: 'vteam-plan' },
   };
 
   const resolvePolicyBinding = (role: string) => {
@@ -327,12 +369,19 @@ async function main() {
   for (const agent of templateAgents) {
     const { policyId, agentName } = resolvePolicyBinding(agent.role);
     const boundary = ROLE_BOUNDARIES[agentName];
+    const boundaryTaskEffect = (boundary as unknown as { taskEffect?: unknown }).taskEffect;
+    const taskEffect =
+      boundaryTaskEffect === 'allow' || boundaryTaskEffect === 'deny'
+        ? boundaryTaskEffect
+        : agentName === 'vteam-plan'
+          ? 'allow'
+          : 'deny';
     const config = {
       permission: {
         edit: buildEditPermission(boundary.writeGlobs),
         read: buildReadPermission(),
         bash: boundary.bashEffect,
-        task: 'deny',
+        task: taskEffect,
         ...Object.fromEntries(boundary.mcpDenies.map((tool) => [tool, 'deny' as const])),
       },
       correction: {
@@ -590,7 +639,6 @@ async function main() {
     { action: 'channel_send', name: 'vteam_channel_send', description: 'Agent 主动推送通知到通知渠道（webhook/企微机器人）' },
     { action: 'wecom_reply', name: 'vteam_wecom_reply', description: '回复企业微信用户（仅当消息来自企微时使用）' },
     { action: 'task_create', name: 'vteam_task_create', description: '在团队会话无任务时创建任务（仅主 Agent 可调）' },
-    { action: 'plan_review', name: 'vteam_plan_review', description: '发起计划评审（仅主 Agent）：一次调用扇出多评审者冷评审并聚合 VERDICT' },
   ];
 
   for (const t of vteamTools) {
@@ -952,21 +1000,24 @@ TSX 源码 (<kebab-name>/index.tsx)
       id: 'sk_builtin_plan_creation',
       name: 'plan-creation',
       description:
-        '计划编制技能——主 Agent 以 explore-first 方式起草执行计划：并行探索、任务拆解、依赖分析、团队能力映射，落盘 .opencode/plans/ 后经 question 选评审者并调用 vteam_plan_review 送审。',
+        '计划编制技能——计划成员（计划员）响应主 Agent @ 派活，以 explore-first 方式起草执行计划：并行探索、任务拆解、依赖分析、团队能力映射，落盘 .opencode/plans/ 后在群聊回复摘要并按 feedback 修订。',
       content: `---
 name: plan-creation
-description: 计划编制技能——主 Agent 以 explore-first 方式起草执行计划：并行探索、任务拆解、依赖分析、团队能力映射，落盘 .opencode/plans/ 后经 question 选评审者并调用 vteam_plan_review 送审。
-version: 1.0.0
+description: 计划编制技能——计划成员（计划员）响应主 Agent @ 派活，以 explore-first 方式起草执行计划：并行探索、任务拆解、依赖分析、团队能力映射，落盘 .opencode/plans/ 后在群聊回复摘要并按 feedback 修订。
+version: 2.0.0
 allowed-tools:
   - task_context
   - read_file
   - doclib
   - chat_history
-  - question
-  - vteam_plan_review
+  - task
 ---
 
 # 计划编制（Plan Creation）
+
+## 使用者
+
+本 skill 的使用者是团队计划成员（计划员），不是主 Agent：只响应主 Agent 的 @ 派活起草计划。用户交互与正式送审归主 Agent，本 skill 内绝不直接问用户、不调用送审工具。
 
 ## 目标
 
@@ -979,7 +1030,7 @@ Prometheus 式探索：多路并行、分波次扇出，只收敛必要信息。
 1. 用 \`task_context\` 拿任务标题/描述/背景与团队实例清单；用 \`read_file\` / \`doclib\` 读关键产出物与文档；用 \`chat_history\` 补群聊上下文。
 2. 探索分波次并行推进：每波只回答本波能回答的问题，不臆测、不提前下结论。
 波次结构（Prometheus waves）：Wave 1 用 \`task_context\` 拿任务标题/描述/背景与团队实例清单（含 agentMembers 成员与能力），这是后续一切映射的事实来源；Wave 2 基于 Wave 1 识别出的关键文件/产出物，并行扇出 \`read_file\` / \`doclib\` 读取，必要时用 \`chat_history\` 补群聊结论，各路并行互不等待；Wave N 收敛各波结果拼出工作项初稿。每波只回答本波能回答的问题，不臆测缺失信息、不提前下结论，缺证据就记假设、不硬编。
-3. 只收敛计划真正需要的信息；真正的分叉才向用户确认，其余按最佳实践直接决策并在计划中注明假设。
+3. 只收敛计划真正需要的信息；真正的分叉记为假设交主 Agent 定夺，其余按最佳实践直接决策并在计划中注明假设。
 
 ## 步骤 2：任务拆解
 
@@ -1018,18 +1069,27 @@ Prometheus 式探索：多路并行、分波次扇出，只收敛必要信息。
 - 不写无验收项：每个工作项必须有可判定验收，无验收的工作项不进计划。
   - ❌ "T5 优化一下体验"（无验收，不可判定）。
   - ✅ "T5 首屏加载 <2s（验收：在测试环境复测 3 次取中位）"。
-- 一次只产出一份决策完备的计划：不一次给多候选方案让评审挑，拿不准的走假设清单 + \`question\` 确认。
+- 一次只产出一份决策完备的计划：不一次给多候选方案让评审挑，拿不准的走假设清单，确需用户拍板的项记为假设交主 Agent 定夺。
+
+## 扇出纪律（Subagent fan-out）
+
+评审视角任务需要多视角并行评审时，可经 task 工具扇出只读评审子会话：
+
+- 子会话 subagent_type恒为vteam-plan（防越权硬约束，其他值一律拒绝）。
+- 前台阻塞等结果：一次扇出后等待全部子会话返回再收敛，不 fire-and-forget。
+- 2~4 路并行：按评审视角数扇出 2~4 路，不超 4 路；视角不足 2 个就不扇出，直接自检。
+- 禁套娃：子会话内不再扇出（task 在子会话内 deny），评审子会话只读计划、只输出 VERDICT 与依据。
+- VERDICT 回收：逐路回收 \`VERDICT: APPROVE\` / \`VERDICT: REJECT\` 与 findings，汇总后按 feedback 修订计划；任一评审返回 REJECT 即按 findings 修订，修订后更新落盘。
 
 ## 步骤 6：落盘
 
 计划全文写入 \`.opencode/plans/<kebab-name>.md\`（唯一落盘位置）。
 
-## 步骤 7：送审
+## 步骤 7：群聊摘要与按 feedback 修订
 
-1. 起草完成后在群聊发布计划摘要，通知团队。
-2. 用 \`question\`（多选）请用户选择本次的评审者角色。
-3. 调用 \`vteam_plan_review(reviewers=[...])\` 送审（reviewers 为用户选定的角色名数组）。
-4. 任一评审返回 REJECT 即按 findings 修订计划；修订后可再问用户是否重审。
+1. 落盘后在群聊回复计划摘要（结论、工作项、假设清单指引），通知主 Agent。
+2. 主 Agent 带 feedback 重派时，按 findings 修订计划；修订后更新落盘并再次摘要。
+3. 本 skill 内不直接问用户、不送审：用户交互与正式送审归主 Agent。
 
 ## 送审预判（Review calibration）
 
@@ -1038,7 +1098,7 @@ Prometheus 式探索：多路并行、分波次扇出，只收敛必要信息。
 ## 约束
 
 - 一次只产出一份决策完备的计划；本技能内绝不进入实现。
-- 评审侧由 sibling 技能承接：\`plan-review-product\` / \`plan-review-architect\` / \`plan-review-developer\` / \`plan-review-tester\` / \`plan-review-project_manager\`（评审者会话内加载，本技能只负责送审）。
+- 评审侧由 sibling 技能承接：\`plan-review-product\` / \`plan-review-architect\` / \`plan-review-developer\` / \`plan-review-tester\` / \`plan-review-project_manager\`（评审子会话内加载，本技能只负责起草与修订）。
 `,
     },
     {
@@ -1059,7 +1119,7 @@ allowed-tools:
 
 # 计划评审（产品视角）
 
-风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。
+风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。本 skill 可能在计划成员扇出的子会话（subagent）内运行，届时同样只读评审、不修改计划文件、不执行计划。
 
 ## 目的
 
@@ -1127,7 +1187,7 @@ allowed-tools:
 
 # 计划评审（架构视角）
 
-风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。
+风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。本 skill 可能在计划成员扇出的子会话（subagent）内运行，届时同样只读评审、不修改计划文件、不执行计划。
 
 ## 目的
 
@@ -1191,7 +1251,7 @@ allowed-tools:
 
 # 计划评审（开发视角）
 
-风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。
+风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。本 skill 可能在计划成员扇出的子会话（subagent）内运行，届时同样只读评审、不修改计划文件、不执行计划。
 
 ## 目的
 
@@ -1255,7 +1315,7 @@ allowed-tools:
 
 # 计划评审（测试视角）
 
-风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。
+风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。本 skill 可能在计划成员扇出的子会话（subagent）内运行，届时同样只读评审、不修改计划文件、不执行计划。
 
 ## 目的
 
@@ -1317,7 +1377,7 @@ allowed-tools:
 
 # 计划评审（项目管理视角）
 
-风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。
+风格参照 momus（只读 + 二值裁决）与 oracle（高智商咨询）：冷评审、给结论、附证据。上游编制流程见 sibling 技能 \`plan-creation\`。本 skill 可能在计划成员扇出的子会话（subagent）内运行，届时同样只读评审、不修改计划文件、不执行计划。
 
 ## 目的
 
@@ -1401,6 +1461,7 @@ allowed-tools:
     a_architect: 'architect',
     a_developer: 'developer',
     a_tester: 'tester',
+    a_plan: 'plan',
   };
   const teamRoleLabels: Record<string, string> = {
     product: '产品经理',
@@ -1408,6 +1469,7 @@ allowed-tools:
     architect: '架构师',
     developer: '开发者',
     tester: '测试',
+    plan: '计划员',
   };
   function sanitizeWorkDirNameSeed(name: string): string {
     const raw = String(name ?? '').trim();
@@ -1424,6 +1486,8 @@ allowed-tools:
     { agentId: 'a_architect', name: '架构师' },
     { agentId: 'a_developer', name: '开发者' },
     { agentId: 'a_tester', name: '测试' },
+    // 计划员附在末位：非主 Agent，主 Agent 保持首位的产品经理（PM）。
+    { agentId: 'a_plan', name: '计划员' },
   ];
   for (let i = 0; i < seedMemberAgents.length; i++) {
     const m = seedMemberAgents[i];
@@ -1480,7 +1544,7 @@ allowed-tools:
   console.log(`  - MCP 工具：${vteamTools.map((t) => t.action).join('、')}（source=mcp，mcpServer=vteam）`);
   console.log(`  - MCP Server：vteam（remote，${platformMcpUrl}）`);
   console.log(`  - 模型目录：${modelRows.length} 个模型（${modelRows.map((m) => m.modelID).join('、')}）`);
-  console.log(`  - 示例团队：${seedTeamName}(${seedTeamId}) 含 ${seedMemberAgents.length} 成员（5 角色各 1）`);
+  console.log(`  - 示例团队：${seedTeamName}(${seedTeamId}) 含 ${seedMemberAgents.length} 成员（5 角色 + 计划员各 1，主 Agent 为产品经理）`);
   console.log(`  - 管理员密码：${ADMIN_PASSWORD}`);
   console.log(`  - 初始 admin 账号：admin / admin123`);
 }

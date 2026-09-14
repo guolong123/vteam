@@ -28,6 +28,9 @@ const mockPrisma = {
 
 import { main } from '../../prisma/seed';
 import {
+  AGENT_KEY_PATTERN,
+  buildEditPermission,
+  buildReadPermission,
   ROLE_BOUNDARIES,
   ROLE_SERVER_GATED_TOOLS,
   VTEAM_MCP_TOOL_NAMES,
@@ -40,6 +43,7 @@ const POLICY_BY_AGENT: Record<string, string> = {
   a_architect: 'ep_architect',
   a_developer: 'ep_developer',
   a_tester: 'ep_tester',
+  a_plan: 'ep_plan',
 };
 
 /** 模板 Agent id → role（seed templateAgents 的 role，模板 agentKey 固定等于 role）。 */
@@ -49,6 +53,7 @@ const ROLE_BY_AGENT: Record<string, string> = {
   a_architect: 'architect',
   a_developer: 'developer',
   a_tester: 'tester',
+  a_plan: 'plan',
 };
 
 /** 角色 ExecutionPolicy id → opencode agent 名（ROLE_BOUNDARIES 的 key）。 */
@@ -58,6 +63,14 @@ const AGENT_NAME_BY_POLICY: Record<string, keyof typeof ROLE_BOUNDARIES> = {
   ep_architect: 'vteam-architect',
   ep_developer: 'vteam-developer',
   ep_tester: 'vteam-tester',
+  ep_plan: 'vteam-plan',
+};
+
+/** 层① task 门期望：运行时先读边界 taskEffect 形状（Todo 1 若落地），否则仅 vteam-plan allow。 */
+const expectedTaskEffect = (agentName: keyof typeof ROLE_BOUNDARIES): string => {
+  const runtime = (ROLE_BOUNDARIES[agentName] as unknown as { taskEffect?: unknown }).taskEffect;
+  if (runtime === 'allow' || runtime === 'deny') return runtime;
+  return agentName === 'vteam-plan' ? 'allow' : 'deny';
 };
 
 /**
@@ -74,14 +87,15 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     jest.clearAllMocks();
   });
 
-  it('5 类模板 Agent upsert create 分支均预置为 template 类型', async () => {
+  it('6 类模板 Agent upsert create 分支均预置为 template 类型（含计划员 a_plan）', async () => {
     await main();
 
     const agentUpserts = mockPrisma.agent.upsert.mock.calls;
     const templateIds = agentUpserts
       .map((call) => call[0].where.id)
       .filter((id) => id.startsWith('a_'));
-    expect(templateIds).toHaveLength(5);
+    expect(templateIds).toHaveLength(6);
+    expect(templateIds).toContain('a_plan');
     for (const id of templateIds) {
       const call = agentUpserts.find((c) => c[0].where.id === id);
       expect(call[0].create.type).toBe('template');
@@ -97,11 +111,11 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     expect(ackValues).toEqual([]);
   });
 
-  it('5 条角色 ExecutionPolicy upsert：type=template、嵌套 permission、无 write 键、MCP 仅真实名 deny', async () => {
+  it('6 条角色 ExecutionPolicy upsert：type=template、permission 全量派生自 ROLE_BOUNDARIES', async () => {
     await main();
 
     const policyCalls = mockPrisma.executionPolicy.upsert.mock.calls;
-    expect(policyCalls).toHaveLength(5);
+    expect(policyCalls).toHaveLength(6);
     expect(policyCalls.map((call) => call[0].where.id).sort()).toEqual(
       Object.values(POLICY_BY_AGENT).sort(),
     );
@@ -112,24 +126,24 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       expect(update.type).toBe('template');
       expect(update.config).toEqual(create.config);
 
+      const agentName = AGENT_NAME_BY_POLICY[String(call[0].where.id)];
+      const boundary = ROLE_BOUNDARIES[agentName];
       const permission = create.config.permission;
-      // 层① 结构：edit/read 为 glob map，无 write 键（edit 是 edit/write/apply_patch 唯一闸门）
+      // 层① 全量派生自边界运行时值（不硬编码 glob：Todo 1 的 plans glob 形状同进退）：
+      // edit 经 buildEditPermission(writeGlobs)、read 全 allow、bash 取 bashEffect、
+      // task 取边界 taskEffect 形状（仅 vteam-plan allow）。
       expect(permission).not.toHaveProperty('write');
+      expect(permission.edit).toEqual(buildEditPermission(boundary.writeGlobs));
+      expect(permission.read).toEqual(buildReadPermission());
+      expect(permission.bash).toBe(boundary.bashEffect);
+      expect(permission.task).toBe(expectedTaskEffect(agentName));
       expect(permission.edit['*']).toBe('deny');
-      for (const [glob, effect] of Object.entries(permission.edit)) {
-        expect(typeof glob).toBe('string');
-        expect(effect).toBe(glob === '*' ? 'deny' : 'allow');
-      }
-      expect(permission.read).toEqual({ '*': 'allow' });
-      expect(['allow', 'ask', 'deny']).toContain(permission.bash);
-      expect(permission.task).toBe('deny');
 
       // 其余键一律为真实暴露名 `vteam_<action>` 的 deny（禁裸 MCP 名、禁未知键），
       // 且与该角色 `ROLE_BOUNDARIES.mcpDenies` 逐项一致（product 全 allow 非门控工具时可为空）。
       const otherKeys = Object.keys(permission).filter(
         (key) => !['edit', 'read', 'bash', 'task'].includes(key),
       );
-      const agentName = AGENT_NAME_BY_POLICY[String(call[0].where.id)];
       expect([...otherKeys].sort()).toEqual(
         [...ROLE_BOUNDARIES[agentName].mcpDenies].sort(),
       );
@@ -153,7 +167,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     await main();
 
     const policyCalls = mockPrisma.executionPolicy.upsert.mock.calls;
-    expect(policyCalls).toHaveLength(5);
+    expect(policyCalls).toHaveLength(6);
     for (const call of policyCalls) {
       const policyId = String(call[0].where.id);
       const agentName = AGENT_NAME_BY_POLICY[policyId];
@@ -171,8 +185,11 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
   it('模板 Agent create 与 update 均写入 agentKey = role（opencode 注入名 vteam-<agentKey> 与现状一致）', async () => {
     await main();
 
+    // agentKey='plan' 满足 AGENT_KEY_PATTERN（小写开头，不假设、直接验证）
+    expect('plan').toMatch(new RegExp(AGENT_KEY_PATTERN));
+
     const templateCalls = templateAgentCalls();
-    expect(templateCalls).toHaveLength(5);
+    expect(templateCalls).toHaveLength(6);
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
       expect(call[0].create.agentKey).toBe(ROLE_BY_AGENT[id]);
@@ -184,7 +201,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     await main();
 
     const templateCalls = templateAgentCalls();
-    expect(templateCalls).toHaveLength(5);
+    expect(templateCalls).toHaveLength(6);
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
       expect(call[0].create.policyId).toBe(POLICY_BY_AGENT[id]);
@@ -195,10 +212,10 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
   it('ExecutionPolicy upsert 先于模板 Agent upsert（绑定指向已存在策略行）', async () => {
     await main();
 
-    const policyOrder = mockPrisma.executionPolicy.upsert.mock.invocationCallOrder.slice(-5);
-    const agentOrder = mockPrisma.agent.upsert.mock.invocationCallOrder.slice(-5);
-    expect(policyOrder).toHaveLength(5);
-    expect(agentOrder).toHaveLength(5);
+    const policyOrder = mockPrisma.executionPolicy.upsert.mock.invocationCallOrder.slice(-6);
+    const agentOrder = mockPrisma.agent.upsert.mock.invocationCallOrder.slice(-6);
+    expect(policyOrder).toHaveLength(6);
+    expect(agentOrder).toHaveLength(6);
     expect(Math.max(...policyOrder)).toBeLessThan(Math.min(...agentOrder));
   });
 
@@ -206,7 +223,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     await main();
 
     const templateCalls = templateAgentCalls();
-    expect(templateCalls).toHaveLength(5);
+    expect(templateCalls).toHaveLength(6);
     for (const call of templateCalls) {
       // prompt 为平台出厂默认值，seed 随平台升级同步（16 篇 §8.4）；policyId 为角色策略绑定；
       // agentKey 为模板固定绑定（= role）；其余字段不 touch
@@ -234,8 +251,9 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     await main();
 
     const templateCalls = templateAgentCalls();
-    expect(templateCalls).toHaveLength(5);
+    expect(templateCalls).toHaveLength(6);
     for (const call of templateCalls) {
+      const id = String(call[0].where.id);
       const prompt = call[0].update.prompt as string;
       for (const section of ['## 职责', '## 权限', '## 工作方式', '## 协同方式']) {
         expect(prompt).toContain(section);
@@ -243,7 +261,12 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       // 越界拒绝与转交（vteam_notify_agent 为真实暴露名）
       expect(prompt).toContain('转交');
       expect(prompt).toContain('vteam_notify_agent');
-      expect(prompt).not.toContain('主 Agent');
+      // 主 Agent 禁令仅约束旧五角色：计划员 prompt 必须写明只接受主 Agent 派活
+      if (id === 'a_plan') {
+        expect(prompt).toContain('主 Agent');
+      } else {
+        expect(prompt).not.toContain('主 Agent');
+      }
       expect(prompt).not.toContain('牵头协调者');
       expect(prompt).not.toContain('UI 设计');
       // 裸 MCP 工具名（不带 vteam_ 前缀）一律禁止
@@ -254,11 +277,36 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     }
   });
 
+  it('计划员 prompt 四方向内容齐全（身份/职责/边界/协同）', async () => {
+    await main();
+
+    const planCall = templateAgentCalls().find((call) => String(call[0].where.id) === 'a_plan');
+    expect(planCall).toBeDefined();
+    const prompt = planCall![0].update.prompt as string;
+    // 身份：团队计划专员，群内可见可@，agent 管理可见
+    expect(prompt).toContain('计划专员');
+    expect(prompt).toContain('@');
+    // 职责：响应主 Agent @ 派活起草计划（explore-first，可 fan-out task 子会话）
+    expect(prompt).toContain('派活');
+    expect(prompt).toContain('subagent_type恒为vteam-plan');
+    // 职责：落盘 .opencode/plans/；群聊回复摘要；按 feedback 修订
+    expect(prompt).toContain('.opencode/plans/');
+    expect(prompt).toContain('摘要');
+    expect(prompt).toContain('feedback');
+    // 边界：只读分析 + 计划目录窄写 + 群聊回复；禁实现/禁执行/禁直接问用户；禁改他文件
+    expect(prompt).toContain('只读');
+    expect(prompt).toContain('禁改');
+    expect(prompt).toContain('不执行变更');
+    // 协同：只接受主 Agent 派活；评审视角任务走各 plan-review-<role> skill
+    expect(prompt).toContain('只接受主 Agent 派活');
+    expect(prompt).toContain('plan-review-');
+  });
+
   it('模板 prompt「可用工具」行集合等于 ROLE_BOUNDARIES[agentName].toolAllows 键集（漂移即失败）', async () => {
     await main();
 
     const templateCalls = templateAgentCalls();
-    expect(templateCalls).toHaveLength(5);
+    expect(templateCalls).toHaveLength(6);
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
       const agentName = AGENT_NAME_BY_POLICY[POLICY_BY_AGENT[id]];
@@ -307,8 +355,7 @@ describe('seed（计划 skills + 评审子句）', () => {
       'read_file',
       'doclib',
       'chat_history',
-      'question',
-      'vteam_plan_review',
+      'task',
     ],
     'plan-review-product': ['read_file', 'task_context', 'chat_history', 'skill'],
     'plan-review-architect': ['read_file', 'task_context', 'chat_history', 'skill'],
@@ -376,22 +423,40 @@ describe('seed（计划 skills + 评审子句）', () => {
     }
   });
 
-  it('plan-creation 覆盖编制全要素，评审 skills 统一输出 VERDICT 并禁改文件', async () => {
+  it('plan-creation 使用者为计划成员：无 question 交互与送审调用，有扇出纪律节', async () => {
     await main();
 
     const byName = new Map(
       planSkillCalls().map((call) => [String(call[0].where.name), call[0].create.content as string]),
     );
     const creation = byName.get('plan-creation')!;
+    // 计划成员侧：响应主 Agent @ 派活，落盘后群聊摘要、按 feedback 修订
     for (const keyword of [
       '.opencode/plans/',
       'agentMembers',
-      'vteam_plan_review',
-      'question',
+      '计划成员',
+      'feedback',
       'REJECT',
     ]) {
       expect(creation).toContain(keyword);
     }
+    // 扇出纪律节：subagent_type 恒为 vteam-plan、前台阻塞等结果、2~4 路、禁套娃、VERDICT 回收
+    for (const keyword of [
+      '扇出纪律',
+      'subagent_type恒为vteam-plan',
+      '前台阻塞',
+      '2~4 路',
+      '禁套娃',
+      'VERDICT',
+    ]) {
+      expect(creation).toContain(keyword);
+    }
+    // 用户交互与正式送审归主 Agent：本 skill 内无 question 工具使用、无送审调用
+    expect(parseAllowedTools(creation)).toContain('task');
+    expect(parseAllowedTools(creation)).not.toContain('question');
+    expect(parseAllowedTools(creation)).not.toContain('vteam_plan_review');
+    expect(creation).not.toContain('question');
+    expect(creation).not.toContain('vteam_plan_review');
     for (const name of Object.keys(REVIEW_SKILL_BY_AGENT).map((id) => REVIEW_SKILL_BY_AGENT[id])) {
       const content = byName.get(name)!;
       expect(content).toContain('VERDICT: APPROVE');
@@ -399,6 +464,17 @@ describe('seed（计划 skills + 评审子句）', () => {
       expect(content).toContain('禁止修改计划文件');
       expect(content).toContain('禁止执行计划');
       expect(content).toContain('read_file');
+    }
+  });
+
+  it('5 个评审 skills 各加一句 subagent 注记（检查清单不动）', async () => {
+    await main();
+
+    const byName = new Map(
+      planSkillCalls().map((call) => [String(call[0].where.name), call[0].create.content as string]),
+    );
+    for (const name of Object.values(REVIEW_SKILL_BY_AGENT)) {
+      expect(byName.get(name)).toContain('subagent');
     }
   });
 
@@ -489,32 +565,56 @@ describe('seed（计划 skills + 评审子句）', () => {
     }
   });
 
-  it('每个角色 prompt 点名其专属评审 skill（skill(plan-review-<role>)）', async () => {
+  it('旧五角色 prompt 点名其专属评审 skill（skill(plan-review-<role>)）；计划员走按需加载', async () => {
     await main();
 
     const templateCalls = templateAgentCalls();
-    expect(templateCalls).toHaveLength(5);
+    expect(templateCalls).toHaveLength(6);
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
       const prompt = call[0].update.prompt as string;
+      if (id === 'a_plan') {
+        // 计划员无专属评审 skill：协同写明评审视角任务走各 plan-review-<role>、自己需要时加载对应 skill
+        expect(prompt).toContain('plan-review-');
+        continue;
+      }
       expect(prompt).toContain(`skill(${REVIEW_SKILL_BY_AGENT[id]})`);
     }
   });
 
-  it('工具目录 upsert 包含 plan_review（vteam_plan_review，主 Agent 冷评审聚合）', async () => {
+  it('工具目录不再 upsert plan_review（D4 单路径：server 编排评审已删，评审走成员子会话）', async () => {
     await main();
 
     const toolCalls = mockPrisma.tool.upsert.mock.calls;
     const planReview = toolCalls.find((call) => call[0].where.action === 'plan_review');
-    expect(planReview).toBeDefined();
-    expect(planReview[0].create.name).toBe('vteam_plan_review');
+    expect(planReview).toBeUndefined();
   });
 
-  it('评审 skill 名不出现在非属角色的 prompt 中（无交叉污染）', async () => {
+  it('示例团队 6 成员：a_plan 末位 tmm_0000000006 别名计划员-1，非主 Agent（主 Agent 保持首位 PM）', async () => {
+    await main();
+
+    const memberCalls = mockPrisma.teamMember.upsert.mock.calls;
+    expect(memberCalls).toHaveLength(6);
+    expect(memberCalls.map((call) => String(call[0].where.id))).toEqual([
+      'tmm_0000000001',
+      'tmm_0000000002',
+      'tmm_0000000003',
+      'tmm_0000000004',
+      'tmm_0000000005',
+      'tmm_0000000006',
+    ]);
+    const first = memberCalls[0][0].create;
+    expect(first.agentId).toBe('a_product');
+    const plan = memberCalls[5][0].create;
+    expect(plan.agentId).toBe('a_plan');
+    expect(plan.alias).toBe('计划员-1');
+  });
+
+  it('评审 skill 名不出现在非属角色的 prompt 中（无交叉污染，含计划员）', async () => {
     await main();
 
     const templateCalls = templateAgentCalls();
-    expect(templateCalls).toHaveLength(5);
+    expect(templateCalls).toHaveLength(6);
     const allSkills = Object.values(REVIEW_SKILL_BY_AGENT);
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
