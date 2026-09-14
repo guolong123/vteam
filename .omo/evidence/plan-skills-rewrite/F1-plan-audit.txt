@@ -1,0 +1,60 @@
+F1 — Plan compliance audit: vteam-plan-skills-rewrite
+Date: 2026-09-14 | Auditor: Sisyphus-Junior | Chain: 3f48000 (rewrite) + cd0d74f (e2e)
+Plan authority: .omo/plans/vteam-plan-skills-rewrite.md (D1/D2/D3)
+
+=== TODO 1: [seed] 重写 6 个 skills 正文 + 断言补强 (commit 3f48000) ===
+
+[T1-AC1] plan-creation 含 D1 五要素 → PASS
+  D1.1 波次结构: server/prisma/seed.ts:981 (Wave 1 task_context 事实来源 / Wave 2 并行扇出 / Wave N 收敛)
+  D1.2 证据要求: seed.ts:990 (每项附证据;无证据标 `[假设]`)
+  D1.3 假设清单: seed.ts:1006-1008 (## 假设清单,内容/影响项/回退路径)
+  D1.4 反模式: seed.ts:1010-1021 (## 反模式:不虚构并行度原句保留+❌/✅;不臆测能力;不写无验收项;一次只出一份)
+  D1.5 送审预判: seed.ts:1034-1036 (## 送审预判:APPROVAL BIAS 存疑放行,"能开工"不对"完美"负责)
+  骨架保留: 步骤1(seed.ts:975) 步骤7(seed.ts:1027) 任务分配(seed.ts:1002)
+
+[T1-AC2] 5 个 review skills 含 D2 六要素且检查清单各异 → PASS
+  D2.1 目的句+APPROVAL BIAS: product seed.ts:1064-1066; architect :1132-1134; developer :1196-1198; tester :1260-1262; pm :1322-1324 (措辞一致,"能否不卡住地执行"+存疑放行)
+  D2.2 fleshed 视角+PASS/FAIL 线: product :1073-1084 (5条); architect :1141-1148 (3条); developer :1205-1212 (3条); tester :1269-1274 (2条); pm :1331-1340 (4条) — 每条均有 PASS/FAIL 行
+  D2.3 反模式✅❌+REJECT 上限3条: product :1086-1094; architect :1150-1158; developer :1214-1222; tester :1276-1284; pm :1342-1350 (例按角色调:产品"更清楚/更完整"/架构"更优选型/更细粒度"/开发"估时更准/写法更顺"/测试"用例更多/工具链更顺"/PM"排期更紧/风险更多")
+  D2.4 VERDICT 首行严格格式+篇幅上限: product :1096-1100; architect :1160-1164; developer :1224-1228; tester :1286-1290; pm :1352-1356 ("第一行必须是"+聚合正则字面+每条≤2句/REJECT≤3条/总量≤6条)
+  D2.5 范围纪律: product :1102-1104; architect :1166-1168; developer :1230-1232; tester :1292-1294; pm :1358-1360 (不 redesign、不扩面,假设声明或只问1个精确问题)
+  D2.6 禁令保留: product :1106-1109; architect :1170-1173; developer :1234-1237; tester :1296-1299; pm :1362-1365 (禁止修改计划文件+禁止执行计划)
+  角色差异化: spec 独立断言用户视角/技术合理性/步骤可执行性/测试覆盖度/排期真实性各仅出现一次 (seed.spec.ts:468-490)
+
+[T1-AC3] allowed-tools/frontmatter/names/descriptions/enabled 不变 + sibling 互引 → PASS
+  `git diff 3f48000^..cd0d74f -- server/prisma/seed.ts | grep '^[-+].*(description|enabled|allowed-tools|version)'` → 零命中
+  删行仅 5 条旧输出句"先给 VERDICT……再逐条列依据"(被更严格首行格式替代,VERDICT 字符串与聚合契约保留)
+  cross-ref: creation→5 reviews (seed.ts:1041); 每 review→creation (seed.ts:1062,1130,1194,1258,1320)
+
+[T1-AC4] spec 断言补强 + tsc/seed.spec 绿 (auditor re-run) → PASS
+  新增 3 用例: D1 五要素 (seed.spec.ts:405-434), D2 统一骨架 (seed.spec.ts:436-466), 角色关键词互斥 (seed.spec.ts:468-490); 旧断言全保留 (VERDICT 双值/禁改文件/禁执行/frontmatter/点名/无交叉污染)
+  Re-run: `cd server && npx tsc -p tsconfig.json --noEmit` → exit 0; `npx jest src/prisma/seed.spec.ts` → 21/21 passed
+
+=== TODO 2: [e2e] 重 seed + 注入验证 + 真实评审回归 (commit cd0d74f) ===
+
+[T2-AC1] 重 seed 证明 → PASS (evidence)
+  .omo/evidence/plan-skills-rewrite/e2e.txt:4-10 (server+init 双镜像 rebuild, init 重跑 seed;"No pending migrations"+Seed 完成); DB plan-% 6/6 enabled=1, markers APPROVAL BIAS=6/存疑放行=6/最多3条=5/篇幅上限=5/不redesign=5 (e2e.txt:12-15)
+  Auditor 复核 seed.ts 现状: APPROVAL BIAS=6, 存疑放行=6, 最多3条=5, 篇幅上限=5, 不redesign=5, 假设清单=4, 第一行必须是=5 — 与 e2e.txt:15 分布一致 (DB 假设清单=2=creation+architect, 符合 D1/D3)
+
+[T2-AC2] 注入文件内容检查 (markers, 非仅存在) → PASS (evidence)
+  e2e.txt:17-20: worker 重启后 6/6 SKILL.md, 按 marker grep 文件数与 DB/seed.ts 三方分布一致
+
+[T2-AC3] live smoke 可解析 VERDICT → PASS (evidence, 文件级复核)
+  e2e.txt:22-27: plan_review taskId=t_0000000001 reviewer=[developer], curl rc=0 http=200 live-llm, transcript smoke-transcript-standalone.json 含 "verdict":"APPROVE" (auditor 已读该文件确认: role=developer memberId=tmm_0000000004 verdict=APPROVE); 定性观察 findings 短纪律 (server 只回传解析后结构,VERDICT 首行字面不可直接观测 — 以服务端正则解析为准, 合约成立)
+
+[T2-AC4] 旧 e2e 全回归绿 → PASS (evidence)
+  e2e.txt:29-37 PASS 0-6; 全量日志 .omo/evidence/plan-skills/e2e.txt 尾部 "ALL STEPS DONE: 0/1/2/3/4/5/6 (smoke path: live-llm)" (auditor 已读确认)
+  脚本 scripts/e2e-plan-skills.sh 存在且未被本链修改 (范式复用)
+  Auditor 未重跑 docker 全栈 (耗时), 但重跑了关键断言: tsc + seed.spec + seed.ts marker 分布 + transcript/日志文件内容 — 与证据一致
+
+[T2-AC5] cleanup 完整 → PASS (evidence)
+  e2e.txt:39-42: workdir plans 为空, task 状态 pending 未变, DB 计数与 /agent-policies 回基线, server/worker/web 零源码改动
+
+=== 横向: 机制零改动 + 解析器契约 ===
+
+[MECH] `git diff 3f48000^..cd0d74f --stat` 9 文件: content-diff.txt, e2e.txt, 4×smoke 证据, learnings.md, server/prisma/seed.ts, server/src/prisma/seed.spec.ts → PASS (仅 seed 文本+spec+证据/学习笔记; dispatch/guard/MCP/worker/web 零改动; `git log` 该区间对 platform-mcp/worker 路径零提交)
+  Uncommitted (git status): 仅 .omo/boulder.json + .omo/evidence/plan-skills/* (旧计划证据, 非本链) 被修改; 未跟踪 web/shot-omo3.tmp.cjs 为 playwright 截图临时脚本, 非本链产物 — 均非机制源码改动 → PASS (带注记)
+[PARSER] 聚合契约 `/VERDICT:\s*(APPROVE|REJECT)/i` 在 server/src/platform-mcp/platform-mcp.service.ts:2144 原样存在, 本链未碰该文件; 5 评审 skill 输出节均逐字引用该正则 → PASS
+[STUB-SCAN] 本链 seed/seed.spec diff 中 retired|stub|TODO|as any|ts-ignore 零命中 → PASS
+
+VERDICT: APPROVE

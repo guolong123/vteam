@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":202,"error":{"code":-32602,"message":"[400] PLATFORM_MCP_ARTIFACT_INVALID planPath 须位于任务工作目录（/data/vteam-worker/tasks/t_0000000001）内，禁止路径穿越"}}

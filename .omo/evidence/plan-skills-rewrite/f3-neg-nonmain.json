@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":201,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_FORBIDDEN 仅主 Agent（tmm_0000000002）可发起计划评审；请知会主 Agent 调用 plan_review"}}

@@ -1,0 +1,89 @@
+F3 手工 QA — vteam-plan-skills-rewrite（独立复现，非信任既有证据）
+================================================================================
+时间: 2026-09-14 ~05:44-05:50 UTC | 执行: 独立命令复现 | 栈: server http://localhost:13000,
+worker aiagents-compose-worker, db aiagents-compose-db | 团队 tm_0000000001, 主 tmm_0000000002(project_manager), 任务 t_0000000001(pending)
+MCP: POST /api/v1/platform-mcp, JSON-RPC tools/call, x-worker-id w_compose_worker / x-worker-token compose-worker-token（与 .env WORKER_TOKEN=compose-worker-token 一致）
+同目录原始 transcript: f3-plan.md, f3-transcript.json, f3-curl-stderr.txt(空=无curl错误),
+f3-neg-nonmain.json, f3-neg-planpath.json, f3-agent-policies-before/after.json
+
+--------------------------------------------------------------------------------
+[1] Seed truth — DB 有 6 个 skills 且全 enabled；抽读 plan-creation + plan-review-developer 全文，新 doctrine 逐字存在
+--------------------------------------------------------------------------------
+RAW (docker exec aiagents-compose-db mysql -uroot -D aiagents -N -e "SELECT name, enabled, CHAR_LENGTH(content) FROM skills WHERE name LIKE 'plan-%' ORDER BY name;"):
+  plan-creation           1  2503
+  plan-review-architect   1  1593
+  plan-review-developer   1  1582
+  plan-review-product     1  1709
+  plan-review-project_manager 1 1629
+  plan-review-tester      1  1487
+RAW tools: "plan_review  vteam_plan_review"（一行，映射正确）
+plan-creation 全文抽查（逐字命中）: "波次结构（Prometheus waves）" FOUND / "证据要求：每个工作项必须附证据" FOUND /
+"## 假设清单" FOUND / "## 反模式（不要做）" FOUND / "评审者按 APPROVAL BIAS（存疑放行）判定" FOUND /
+"本计划按“能开工”而非“完美”来写" FOUND
+plan-review-developer 全文抽查（逐字命中）: "存疑时放行（APPROVAL BIAS / 存疑放行）" FOUND /
+"REJECT 上限：最多 3 条" FOUND / "篇幅上限（Oracle 纪律）：每条≤2句，总 findings 不超过 6 条" FOUND /
+"## 范围纪律（Oracle）" FOUND / "第一行必须是 `VERDICT: APPROVE` 或 `VERDICT: REJECT`" FOUND /
+"拿不准时：要么在 finding 中显式声明假设后继续判" FOUND（假设机制）
+结论: PASS — 6 skills enabled，新 doctrine 四要素（APPROVAL BIAS / REJECT cap / 篇幅上限 / 假设清单）在 DB 正文逐字存在。
+
+--------------------------------------------------------------------------------
+[2] Injection truth — 重启 worker 后 workdir 6 份 SKILL.md 含新 markers（非仅文件存在）
+--------------------------------------------------------------------------------
+RAW: docker compose up -d --force-recreate worker → "Container aiagents-compose-worker Started" @2026-09-14T05:44:04Z；
+5s 后 6 文件就绪。wc -c: plan-creation 5153, architect 3379, developer 3302, product 3658, project_manager 3449, tester 3095。
+marker grep 计数（plan-creation）: "APPROVAL BIAS"=1, "假设清单"=3, "波次结构"=1, "证据要求"=1。
+marker grep 计数（5 个 review 每个文件）: "APPROVAL BIAS"=1, "最多 3 条"=1, "不超过 6 条"=1, "范围纪律"=1, "VERDICT"=3 —— 五个文件完全一致。
+结论: PASS — 注入器读取 DB content 落盘，新 markers 全部存在。
+
+--------------------------------------------------------------------------------
+[3] Discipline observable — 独立 live 单评审者回合（main tmm_0000000002 + ONE reviewer tester, timeoutMs 300000, curl --max-time 420）
+--------------------------------------------------------------------------------
+自写测试计划 worker:/data/vteam-worker/tasks/t_0000000001/.opencode/plans/f3-manual-qa-plan.md（805B，本地副本 f3-plan.md，e2e 烟雾文件不同名、无复用）。
+RAW 调用: id=101 plan_review {taskId t_0000000001, selfInstanceId tmm_0000000002, reviewers [tester], timeoutMs 300000}
+RAW 结果 (CALL 05:44:30Z → 05:44:54Z, 24s, http=200, curl rc=0, 全文见 f3-transcript.json):
+  verdicts=[{role tester, memberId tmm_0000000005, verdict APPROVE}],
+  findings="依据 findings：
+  - 【验收覆盖】T2 验证输出格式与 skill 严格输出纪律一致（首行 VERDICT 可被 `/VERDICT:\s*(APPROVE|REJECT)/i` 解析），T1 验证 read_file 读取与章节引用，两个验收条目均有直接可观察的验证动作，主干全覆盖。findings≤2句限制与 skill 篇幅纪律对齐。
+  - 【边界/异常】假设清单对 LLM 不可达给出显式兜底（NEEDS-ATTENTION-by-infra 计为可解析），异常路径有处置方案，非空白。
+  - 【可操作性】评审者步骤仅"读取+输出"，证据即输出文本本身，无环境/数据/工具依赖，可复现可采集；验收标准明确声明只读不改不执行。
+
+  说明（非 blocker）：计划采用标题分节而非数字编号，"引用章节号"验收在无编号时可用标题名代替，可操作性不受影响。"
+  notes=[]
+定性评估:
+  a) 可解析 VERDICT: PASS — verdicts[0].verdict=APPROVE（结构化枚举即解析后 VERDICT，与 e2e 契约一致）。
+  b) findings 有界（≤6）: PASS — 3 条 bullets + 1 条"说明（非 blocker）" = 4 项。
+  c) 每条 ≤2 句: PASS — bullet1=2句 / bullet2=1句 / bullet3=1句 / 说明=1句（程序计数：按 。！？ 切分）。
+  d) 首行 verdict: 轻微 mismatch（已记录，非 fail 理由）— findings 文本内无字面 "VERDICT:" 首行，verdict 由聚合器放入结构化 verdict 字段；reviewer 在 bullet1 中引用了 VERDICT 解析规则，属 harness 提取形态差异，与 e2e 脚本注释（"literal VERDICT: line need not be repeated inside findings"）一致。skill 文本要求 vs 观测行为的差异在此如实记录。
+  e) 无 redesign/扩面: PASS — 仅一条非 blocker 说明（标题 vs 数字编号的验收口径备注），无重写方案、无新需求、无连环追问；范围纪律可观察生效。
+结论: PASS（带 1 条已记录的形态备注 d）。
+
+--------------------------------------------------------------------------------
+[4] Negative control — 非主 403；planPath 越权 400（均为真实 HTTP）
+--------------------------------------------------------------------------------
+NEG1 RAW (id=201, selfInstanceId=tmm_0000000004 developer, reviewers=[architect]):
+  {"jsonrpc":"2.0","id":201,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_FORBIDDEN 仅主 Agent（tmm_0000000002）可发起计划评审；请知会主 Agent 调用 plan_review"}}
+  → PASS：-32003 + 含 403 + 含"仅主 Agent" + 含 plan_review。
+NEG2 RAW (id=202, main, reviewers=[tester], planPath="../../evil.md"，形状取自 platform-mcp.plan-review.spec.ts 第191行用例）:
+  {"jsonrpc":"2.0","id":202,"error":{"code":-32602,"message":"[400] PLATFORM_MCP_ARTIFACT_INVALID planPath 须位于任务工作目录（/data/vteam-worker/tasks/t_0000000001）内，禁止路径穿越"}}
+  → PASS：-32602 + 含 400 + 路径穿越被拦。
+结论: PASS — 双否定对照均符合预期。
+
+--------------------------------------------------------------------------------
+[5] Regression — bash scripts/e2e-plan-skills.sh 全程通过（独立于 [3] 的第二轮 live 评审）
+--------------------------------------------------------------------------------
+RAW tail: PASS 2（常量 6 值一致 incl. vteam_plan_review）/ PASS 3（guard PM+developer→allow）/
+PASS 4（non-main 403）/ PASS 5（smoke LIVE path: developer→APPROVE, parseable）/
+PASS 6（cleanup + DB + agent-policies 回基线）/ "ALL STEPS DONE: 0/1/2/3/4/5/6 (smoke path: live-llm)" / E2E-EXIT=0。
+结论: PASS。
+
+--------------------------------------------------------------------------------
+[6] Cleanup — 测试产物全删；DB 计数 + /agent-policies 回基线
+--------------------------------------------------------------------------------
+RAW: worker plans 目录已空（total 0，仅 . 与 ..）；t_0000000001 status=pending（前后未变）；
+DB: tasks=2 team_members=5 sessions=5 skills=7 tools=202 execution_policies=6 team_queues=1（与 F3 前基线一致，e2e step6 亦确认无差）；
+/agent-policies before vs after: IDENTICAL（python json ==）。
+结论: PASS — 无残留。
+
+--------------------------------------------------------------------------------
+VERDICT: APPROVE
+理由：Seed/注入/单评审者纪律/双否定对照/回归/清理六项全部复现通过；唯一观测到的 skill 文本与行为差异（findings 内无字面 VERDICT 首行、verdict 走结构化字段）属 harness 已知提取形态、e2e 契约明确覆盖，不构成机制回归。

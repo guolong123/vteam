@@ -1,0 +1,93 @@
+F2 — Code quality review of vteam-plan-skills-rewrite (3f48000, cd0d74f)
+Date: 2026-09-14 | Reviewer: F2 worker | Scope: diff 3f48000^..cd0d74f (seed text + spec + evidence only)
+
+METHOD
+- Read plan .omo/plans/vteam-plan-skills-rewrite.md (D1/D2/D3), full diff of both commits.
+- Grepped added lines for slop markers; cross-checked every tool/path/regex claim in new
+  skill text against implementation (platform-mcp.tools.ts, platform-mcp.service.ts).
+- Ran: cd server && npx tsc -p tsconfig.json --noEmit (exit 0);
+  npx jest src/prisma/seed.spec.ts (21/21 pass, incl. 3 new tests).
+
+1. NO SLOP — PASS, no findings
+- Added lines (235 +/- lines in 3f48000) contain zero `as any`, `@ts-ignore/@ts-expect`,
+  `console.log`, TODO/FIXME/HACK, empty catch, dead code (verified by grep over the diff).
+- Seed content backtick-escaping correct (tsc exit 0 proves template literals intact).
+- Skill prose: no TODO-style placeholders; all ✅/❌ examples are complete pairs, no stubs.
+
+2. SKILL TEXT QUALITY — PASS, no BLOCKER/MAJOR
+- Exposed tool names verified to exist:
+  `task_context` / `read_file` / `doclib` / `chat_history` / `group_post` all defined in
+  server/src/platform-mcp/platform-mcp.tools.ts:623-653; `vteam_plan_review` is the
+  exposed server-gated name (tools row plan_review -> vteam_plan_review, asserted by spec);
+  `skill(...)` + `question` are opencode built-ins, same pattern already used by
+  PLAN_PRODUCE_INSTRUCTION in server/src/chat/worker-dispatcher.ts (pre-existing).
+- No hallucinated regex: skill text (server/prisma/seed.ts:1098,1162,1226,1288,1354)
+  cites aggregator regex `/VERDICT:\s*(APPROVE|REJECT)/i`, byte-identical to the real
+  parser at server/src/platform-mcp/platform-mcp.service.ts:2144. Claim is factual.
+- No hallucinated paths: `.opencode/plans/<kebab-name>.md` matches the dispatcher +
+  e2e convention; `docs/api.md` appears only inside a ❌/✅ illustrative example, not as
+  a required file; sibling cross-ref `plan-creation` <-> 5x `plan-review-*` names exist.
+- Role differentiation is genuine (not copy-paste): perspectives differ per role with
+  distinct PASS/FAIL lines and distinct anti-pattern examples —
+  product seed.ts:1073-1083 (5 items: 用户视角/完整性/必要性/易用性/验收可判定性) vs
+  architect seed.ts:1141-1147 (技术合理性/设计一致性/边界完整性) vs
+  developer seed.ts:1205-1211 (步骤可执行性/依赖真实性/工作量合理性) vs
+  tester seed.ts:1269-1273 (测试覆盖度/验证可操作性) vs
+  project_manager seed.ts:1331-1339 (排期真实性/并行合理性/阻塞与风险/里程碑);
+  anti-pattern pairs are role-specific (e.g. tester "工具链品味" vs architect "选型品味"
+  vs developer "半天估时差距"). Backed by spec negative control (see §4).
+- Wave structure coherent: seed.ts:981 Wave 1 task_context fact-source -> Wave 2 parallel
+  read_file/doclib/chat_history fan-out -> Wave N converge; matches frozen D1 design.
+- No contradictions: creation 送审预判 (seed.ts:1036, APPROVAL BIAS/能开工不求完美) agrees
+  with all five review 目的 paragraphs (seed.ts:1066,1134,1198,1262,1324, 存疑放行);
+  creation "一次只出一份计划" consistent with retained 约束; review "REJECT ≤3条" consistent
+  with "总 findings ≤6条" (subset relation, no conflict).
+
+3. NO MECHANISM DRIFT — PASS, no findings
+- 3f48000 touches only server/prisma/seed.ts (content insertions), server/src/prisma/
+  seed.spec.ts (new assertions), evidence + learnings. cd0d74f touches only evidence files.
+- Skill names/ids, frontmatter `allowed-tools`, `description`, `enabled` untouched
+  (diff context lines only, zero modifications).
+- The 5 deleted lines are all the same old output sentence
+  ("先给 VERDICT…再逐条列依据"), each replaced by a stricter first-line rule that
+  RETAINS both `VERDICT: APPROVE` / `VERDICT: REJECT` strings — aggregator contract intact.
+- dispatch/guard/MCP/worker/web: zero changes in these two commits
+  (mechanism diffs in range 9fe0b7a..cd0d74f belong to earlier commits, out of scope).
+
+4. TESTS — PASS, no BLOCKER/MAJOR
+- Assertions test real content: creation test checks Wave 1/Wave 2/证据要求/[假设]/
+  ## 假设清单/不虚构并行度/❌✅/APPROVAL BIAS/存疑放行/7-step skeleton + sibling refs;
+  review test checks 目的句/PASS+FAIL/反模式/3条上限/VERDICT双值/篇幅上限/范围纪律/
+  旧禁令 (禁止修改计划文件/禁止执行计划) — all keyword-presence on real doctrine, plus
+  old-constraint retention. Not tautological.
+- Negative control present: "5 个评审 skills 视角关键词各异" asserts each role keyword
+  (用户视角/技术合理性/步骤可执行性/测试覆盖度/排期真实性) appears in its owner and in
+  NO other review skill — genuine cross-role leakage check, complements the pre-existing
+  无交叉污染 test. All green (21/21).
+
+5. SCRIPTS — PASS, no findings introduced
+- scripts/e2e-plan-skills.sh untouched by these commits (last touched 4dee5da, pre-existing).
+  Pre-existing script already satisfies the bar: `set -euo pipefail` (line 68),
+  `fail()` exits 1 on any failed assertion, `trap cleanup EXIT` (line 122) removes temp
+  files + worker smoke file even on failure.
+- Pre-existing (NOT introduced, NOT a blocker for this rewrite): smoke step accepts
+  NEEDS-ATTENTION-by-infra with a mocked-VERDICT-parser fallback (script header lines
+  22-30). Design decision from an earlier commit; flagging for awareness only.
+
+NITS (non-blocking, introduced or touched by these commits)
+- [NIT] server/src/prisma/seed.spec.ts:446,452,459,461 — `expect(a.includes(X) ||
+  a.includes(Y)).toBe(true)` redundant ORs: both alternatives are always present in the
+  new content, so the fallback arm never fires. Harmless; could assert both conjunctively.
+- [NIT] .omo/evidence/plan-skills-rewrite/smoke-curl-stderr-standalone.txt — 0-byte
+  placeholder committed by cd0d74f. Harmless evidence stub; consider omitting empty files.
+- [NIT] (pre-existing, plan-wording only) Plan D2 says "沿用各角色现有 3 条视角" but
+  tester review carries 2 items (server/prisma/seed.ts:1269-1273) — rewrite faithfully
+  preserved the pre-existing count and only thickened lines, so this is plan-text
+  imprecision, not a code defect. No action required.
+
+VERIFICATION
+- `cd server && npx tsc -p tsconfig.json --noEmit` -> exit 0.
+- `npx jest src/prisma/seed.spec.ts` -> 21/21 pass (3 new tests green).
+- No product code changes made by this review; no writes outside this file.
+
+VERDICT: APPROVE

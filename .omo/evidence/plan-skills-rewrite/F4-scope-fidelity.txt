@@ -1,0 +1,49 @@
+F4 Scope Fidelity Review — vteam-plan-skills-rewrite
+Baseline: d180c76 | Commits: 3f48000, cd0d74f | + worktree diff | Date: 2026-09-14
+Plan: .omo/plans/vteam-plan-skills-rewrite.md (Todos 1-2 + F1-F4; scope = seed text only, no dispatch/guard/MCP/worker)
+
+VERDICT: APPROVE
+
+1. CHANGED-FILE ENUMERATION (git diff d180c76..HEAD --name-only + worktree)
+Committed under 3f48000 (4 files):
+  [IN]  server/prisma/seed.ts — skill bodies + prompts only (+151/-5 across 6 skills) — IN SCOPE
+  [IN]  server/src/prisma/seed.spec.ts — +87 assertion lines — IN SCOPE
+  [IN]  .omo/evidence/plan-skills-rewrite/content-diff.txt — new evidence — IN SCOPE
+  [IN]  .omo/notepads/vteam-plan-skills-rewrite/learnings.md (partial, 8 lines) — IN SCOPE
+Committed under cd0d74f (6 files, learnings.md appended):
+  [IN]  .omo/evidence/plan-skills-rewrite/e2e.txt — IN SCOPE
+  [IN]  .omo/evidence/plan-skills-rewrite/smoke-curl-stderr-standalone.txt (0-byte) — IN SCOPE
+  [IN]  .omo/evidence/plan-skills-rewrite/smoke-path-fullrun.txt — IN SCOPE
+  [IN]  .omo/evidence/plan-skills-rewrite/smoke-transcript-fullrun.json — IN SCOPE
+  [IN]  .omo/evidence/plan-skills-rewrite/smoke-transcript-standalone.json — IN SCOPE
+  [IN]  .omo/notepads/vteam-plan-skills-rewrite/learnings.md (+7) — IN SCOPE
+Uncommitted worktree modifications (git diff d180c76 --name-only adds 4 over HEAD):
+  [OUT-INFO] .omo/boulder.json — harness task-state bookkeeping only (todo:1 title/status timestamps); no source. Severity: INFO. Not attributable to plan commits.
+  [OUT-LOW]  .omo/evidence/plan-skills/e2e.txt — regenerated e2e log; only byte-count lines 2730->5153 etc. + one smoke-verdict wording line (expected downstream artifact of new seed content, no source change). Severity: LOW. Recommendation: accept as consistent side-effect or revert before merge; not a REJECT.
+  [OUT-LOW]  .omo/evidence/plan-skills/injected-skills.txt — same byte-count refresh. Severity: LOW, same note.
+  [OUT-LOW]  .omo/evidence/plan-skills/smoke-transcript.json — 2-line refresh. Severity: LOW, same note.
+Untracked (excluded from `git diff --stat`; parallel-work noise, NOT from 3f48000/cd0d74f):
+  [OUT-INFO] .omo/plans/vteam-plan-skills-rewrite.md — untracked but EXPLICITLY IN-SCOPE per task file set (§3.1). Plan text confirms scope ("只换 seed 文本，不碰 dispatch/guard/MCP/worker"). Severity: INFO (should be committed with plan).
+  [OUT-INFO] .omo/drafts/*, .omo/evidence/role-enforcement/**, .omo/evidence/custom-agent-opencode/**, .omo/notepads/vteam-role-behavior-enforcement/*, .omo/plans/vteam-omo-toggle-agent-split.md — parallel plans' artifacts. Severity: INFO, ignore for this verdict.
+  [OUT-INFO] md-docs/ — separate nested git repo (has own .git, dated Aug 2026), pre-existing. Severity: INFO, ignore.
+  [OUT-INFO] web/shot-omo3.tmp.cjs (2026-09-14 11:22) — temp screenshot helper, not referenced by plan commits. Severity: INFO, remove before merge.
+Result: `git diff --stat d180c76..HEAD` = 9 files, ALL in-scope. Zero committed files outside the allowed set.
+
+2. OUT-OF-SCOPE BEHAVIOR PRESERVED (diffs vs d180c76, all EMPTY = PASS)
+  - `git diff d180c76 --stat -- server/src/dispatch server/src/guard server/src/mcp server/src/worker web/src web/app server/src/routes` → empty (PASS)
+  - `git diff d180c76 --name-only -- server/ | grep -v seed` → "(no other server files)" (PASS)
+  - `git diff d180c76 --name-only -- web/` → empty (PASS)
+  - `git diff d180c76 -- package.json server/package.json web/package.json pnpm-lock.yaml` → empty, no new dependencies (PASS)
+  - seed.ts diff sampled (head -80): additions are prompt prose only — Prometheus wave structure, evidence requirement, 假设清单, 反模式 (parallelism/capability/acceptance examples), 送审预判 calibration, review 目的句 + PASS/FAIL lines. No logic/dispatch/guard/MCP/worker edits. No unrelated refactors (PASS)
+
+3. FORBIDDEN PATTERNS (all CLEAN)
+  - `git diff d180c76 -- server/prisma/seed.ts | grep toolEffects|permissionScope|dual-track|AB test|retired|compat|shim` → no match (PASS)
+  - Same grep on seed.spec.ts diff → clean (PASS)
+  - Same grep on full worktree diff → clean (PASS)
+  - No "retired" annotations, no compat shims, no dual-track/AB, no toolEffects/permissionScope (PASS)
+
+4. PRIOR-PLAN GUARANTEES: no source touched outside seed content + spec; enforcement/custom-agent/matrix-fix/review guarantees intact by vacuity (nothing in their paths changed).
+
+5. VIOLATIONS: none at WARN or higher. Only INFO/LOW notes above (§1), none blocking.
+
+CONCLUSION: change stayed in scope (seed bodies/prompts + spec + own evidence/notepads/plan) and preserved out-of-scope behavior. VERDICT: APPROVE.
