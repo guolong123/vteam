@@ -1334,6 +1334,13 @@ describe('WorkerDispatcher', () => {
       const s2 = buildSystemInstructions(agent, { taskPlanMode: false });
       expect(s2).not.toContain(PLAN_PRODUCE_INSTRUCTION);
       expect(s2).not.toContain(PLAN_REVIEW_INSTRUCTION);
+      // 计划模式关闭时无新流程关键字泄漏，且与缺省调用逐字节一致
+      // （注：裸词 question 不断言——存量 MAIN_AGENT_INSTRUCTION 含 question_confirm）
+      expect(s2).toBe(s);
+      for (const kw of ['plan-creation', 'vteam_plan_review', '用 question 工具']) {
+        expect(s).not.toContain(kw);
+        expect(s2).not.toContain(kw);
+      }
     });
 
     it('计划开+主 Agent：注入出计划指令（写入 .opencode/plans/ + todo 步骤）', () => {
@@ -1348,6 +1355,16 @@ describe('WorkerDispatcher', () => {
       expect(s).not.toContain('type:"plan"');
       expect(s).toContain('todo');
       expect(s).not.toContain(PLAN_REVIEW_INSTRUCTION);
+      // skill→question→plan_review 三步（D2 点名流程）
+      expect(s).toContain('plan-creation');
+      expect(s).toContain('question');
+      expect(s).toContain('vteam_plan_review');
+      expect(s).toContain('product');
+      expect(s).toContain('architect');
+      expect(s).toContain('developer');
+      expect(s).toContain('tester');
+      expect(s).toContain('project_manager');
+      expect(s).toContain('REJECT');
     });
 
     it('计划开+非主 Agent：注入评审指令（含三段式与禁另起计划）', () => {
@@ -1361,6 +1378,9 @@ describe('WorkerDispatcher', () => {
       expect(s).toContain('group_post');
       expect(s).toContain('.opencode/plans/');
       expect(s).not.toContain(PLAN_PRODUCE_INSTRUCTION);
+      // 评审在全新会话、输入仅计划文件，结论须自包含
+      expect(s).toContain('全新会话');
+      expect(s).toContain('自包含');
     });
 
     it('产出物提交引导：恒注入 submit_artifact 用法（计划文档/交付物统一走该工具）', () => {

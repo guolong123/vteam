@@ -257,7 +257,12 @@ export const PLAN_PRODUCE_INSTRUCTION =
   '先分析任务并拆解执行步骤（用 opencode todo 工具登记步骤，步骤状态会同步到计划 Tab）；' +
   '再把计划正文写成 Markdown 文件：工作目录下 `.opencode/plans/` 目录，文件名自取（如 `plan.md`）；' +
   '该文件会被计划 Tab 实时展示，用户也可能直接上传/修改同名文件（以文件最新内容为准）；' +
-  '写完后在群聊提示成员评审；收到评审意见后由你裁决是否修订（直接改写该文件即可），裁决通过前不要进入执行。';
+  '写完后在群聊提示成员评审；收到评审意见后由你裁决是否修订（直接改写该文件即可），裁决通过前不要进入执行。' +
+  '动笔前先用 skill 工具加载 skill(plan-creation) 并严格按其执行；' +
+  '起草完成并在群聊提示成员评审后，用 question 工具（多选）向用户确认本次要运行的评审者角色' +
+  '（候选：product、architect、developer、tester、project_manager）；' +
+  '再调用 vteam MCP 的 vteam_plan_review 工具传入所选评审者发起评审，收到 REJECT 裁决时修订计划' +
+  '（可再用 question 问用户是否重跑评审）。';
 
 /**
  * 计划评审指令（非主 Agent + 任务计划模式开启时注入，omo task-rejection 思想）。
@@ -270,7 +275,8 @@ export const PLAN_REVIEW_INSTRUCTION =
   '【计划评审】本任务已开启计划模式，执行计划只能由主 Agent 产出——你不要另起计划：' +
   '即使被用户直接要求出计划，也应拒绝并指引对方找主 Agent。请阅读工作目录 `.opencode/plans/` ' +
   '下的计划文件（或向主 Agent 索要），按三段式发表评审结论并经 group_post 发布到群聊：1 同意点、' +
-  '2 分歧及理由（定位到具体条目）、3 遗留疑问。最终是否修订/执行由主 Agent 裁决。';
+  '2 分歧及理由（定位到具体条目）、3 遗留疑问。最终是否修订/执行由主 Agent 裁决。' +
+  '评审在全新会话中进行、唯一输入即计划文件正文（无作者上下文），因此结论须自包含（定位到具体条目、写清依据）。';
 
 /**
  * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
