@@ -137,7 +137,7 @@ async function main() {
         '## 权限\n' +
         '- 可写范围：仅任务目录下 prototypes/ 与 docs/（层① permission.edit 路径 glob 强制）；其余路径写入会被拒绝。\n' +
         '- 可读范围：全部只读；bash 被禁用（permission.bash=deny）。\n' +
-        '- 可用工具：vteam_submit_artifact / vteam_doclib / vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_read_file / vteam_task_context / vteam_chat_history / vteam_team_view / vteam_my_profile。\n' +
+        '- 可用工具：vteam_submit_artifact / vteam_doclib / vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_read_file / vteam_task_context / vteam_chat_history / vteam_team_view / vteam_my_profile / vteam_wecom_reply / vteam_channel_send。\n' +
         '- 禁止：越界写文件、执行 shell、绕过角色边界；超出职责的请求必须拒绝并转交。\n' +
         '\n' +
         '## 工作方式\n' +
@@ -170,7 +170,7 @@ async function main() {
         '\n' +
         '## 权限\n' +
         '- 可写范围：无（层① permission.edit 全路径 deny，不写文件）；bash 被禁用（permission.bash=deny）；只读访问全部。\n' +
-        '- 可用工具：vteam_task_context / vteam_group_post / vteam_notify_agent / vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition / vteam_memory_save / vteam_memory_search / vteam_team_view / vteam_my_profile / vteam_read_file / vteam_doclib。\n' +
+        '- 可用工具：vteam_task_context / vteam_group_post / vteam_notify_agent / vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition / vteam_memory_save / vteam_memory_search / vteam_team_view / vteam_my_profile / vteam_read_file / vteam_doclib / vteam_chat_history / vteam_wecom_reply / vteam_channel_send。\n' +
         '- 禁止：写文件、执行 shell、创建/修改任何非流程性产物；不越权代做其他角色的交付物；不产出具体交付物（无 vteam_submit_artifact 能力）。\n' +
         '\n' +
         '## 工作方式\n' +
@@ -203,7 +203,7 @@ async function main() {
         '## 权限\n' +
         '- 可写范围：仅任务目录下 docs/（层① permission.edit 路径 glob 强制）；其余路径写入会被拒绝。\n' +
         '- 可读范围：全部只读；只读查询命令默认 ask（需成员确认）；写入/重定向、删除、push 等危险命令被直接拒绝（越界拦截）。\n' +
-        '- 可用工具：vteam_submit_artifact / vteam_doclib / vteam_read_file / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_task_context / vteam_chat_history / vteam_issue_list / vteam_issue_get / vteam_team_view / vteam_my_profile + git_clone / git_pull / git_status / git_diff / git_log（只读）。\n' +
+        '- 可用工具：vteam_submit_artifact / vteam_doclib / vteam_read_file / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_task_context / vteam_chat_history / vteam_issue_list / vteam_issue_get / vteam_team_view / vteam_my_profile / vteam_wecom_reply / vteam_channel_send + git_clone / git_pull / git_status / git_diff / git_log（只读）。\n' +
         '- 禁止：写实现代码、修改仓库、将未经验证的技术假设表述为既定事实。\n' +
         '\n' +
         '## 工作方式\n' +
@@ -235,7 +235,7 @@ async function main() {
         '## 权限\n' +
         '- 可写范围：任务目录整棵子树（层① permission.edit 路径 glob 强制）；只读查询命令默认 ask（需成员确认）；写入/重定向、删除、push 等危险命令被直接拒绝（越界拦截）。\n' +
         '- 可读范围：全部只读；仓库只读核对用 git_clone / git_pull / git_status / git_diff / git_log（自定义工具，只读）。\n' +
-        '- 可用工具：vteam_submit_artifact / vteam_read_file / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_task_context / vteam_chat_history / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition / vteam_team_view / vteam_my_profile。\n' +
+        '- 可用工具：vteam_submit_artifact / vteam_read_file / vteam_doclib / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_task_context / vteam_chat_history / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition / vteam_team_view / vteam_my_profile / vteam_wecom_reply / vteam_channel_send + git_clone / git_pull / git_status / git_diff / git_log（只读）。\n' +
         '- 禁止：越权访问未授权资源；将未自测的代码声明为完成；代替测试判定通过。\n' +
         '\n' +
         '## 工作方式\n' +
@@ -269,7 +269,7 @@ async function main() {
         '## 权限\n' +
         '- 可写范围：仅任务目录下 tests/ 与 docs/（层① permission.edit 路径 glob 强制）；实现代码路径写入会被拒绝。\n' +
         '- 可读范围：全部只读；只读查询命令默认 ask（需成员确认）；写入/重定向、删除、push 等危险命令被直接拒绝（越界拦截）；经 bash 的文件写入同样被直接拒绝（测试文件以 tests/ 与 docs/ 写操作提交）；仓库只读核对用 git_clone / git_pull / git_status / git_diff / git_log。\n' +
-        '- 可用工具：vteam_submit_artifact / vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_transition / vteam_read_file / vteam_doclib / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_task_context / vteam_chat_history / vteam_team_view / vteam_my_profile。\n' +
+        '- 可用工具：vteam_submit_artifact / vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_transition / vteam_read_file / vteam_doclib / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_task_context / vteam_chat_history / vteam_team_view / vteam_my_profile / vteam_wecom_reply / vteam_channel_send + git_clone / git_pull / git_status / git_diff / git_log（只读）。\n' +
         '- 禁止：以验证结论替代成员验收判定；修改实现代码或测试与文档之外的文件。\n' +
         '\n' +
         '## 工作方式\n' +
@@ -584,6 +584,7 @@ async function main() {
     { action: 'plan_mode', name: 'vteam_plan_mode', description: '切换任务计划模式开关（仅主 Agent）' },
     { action: 'channel_send', name: 'vteam_channel_send', description: 'Agent 主动推送通知到通知渠道（webhook/企微机器人）' },
     { action: 'wecom_reply', name: 'vteam_wecom_reply', description: '回复企业微信用户（仅当消息来自企微时使用）' },
+    { action: 'task_create', name: 'vteam_task_create', description: '在团队会话无任务时创建任务（仅主 Agent 可调）' },
   ];
 
   for (const t of vteamTools) {

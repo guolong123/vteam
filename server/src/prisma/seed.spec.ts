@@ -254,6 +254,32 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     }
   });
 
+  it('模板 prompt「可用工具」行集合等于 ROLE_BOUNDARIES[agentName].toolAllows 键集（漂移即失败）', async () => {
+    await main();
+
+    const templateCalls = templateAgentCalls();
+    expect(templateCalls).toHaveLength(5);
+    for (const call of templateCalls) {
+      const id = String(call[0].where.id);
+      const agentName = AGENT_NAME_BY_POLICY[POLICY_BY_AGENT[id]];
+      expect(agentName).toBeDefined();
+      const prompt = call[0].update.prompt as string;
+      // 「可用工具：a / b + c（只读）。」行：按 / 与 + 切分，去掉（只读）后缀后即工具名集合
+      const line = prompt.match(/可用工具：([^。]+)。/);
+      expect(line).not.toBeNull();
+      const listed = line![1]
+        .split(/[/+]/)
+        .map((token) => token.trim().replace(/（.*）$/, ''))
+        .filter((token) => token.length > 0);
+      expect([...listed].sort()).toEqual(
+        [...Object.keys(ROLE_BOUNDARIES[agentName].toolAllows)].sort(),
+      );
+      for (const gated of ROLE_SERVER_GATED_TOOLS) {
+        expect(listed).not.toContain(gated);
+      }
+    }
+  });
+
   it('示例团队同时 upsert seed-admin 与 admin(u_admin) 为 owner（fresh deploy 下 admin 开箱可进群）', async () => {
     await main();
 
