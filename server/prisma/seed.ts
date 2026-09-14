@@ -5,6 +5,7 @@ import {
   buildModelSeedRows,
   buildReadPermission,
   ROLE_BOUNDARIES,
+  ROLE_POLICY_DENY_TEMPLATE,
   TEMPLATE_DEFAULT_MODELS,
 } from '../src/common/constants/agent.constants';
 
@@ -293,10 +294,11 @@ async function main() {
   //   `edit` 为唯一写闸门路径 glob（无 `write` 键，edit 同时覆盖 edit/write/apply_patch）；
   //   MCP 工具按真实暴露名 vteam_<action> 显式 deny（未列入该角色 toolAllows 者）。
   // - config.correction：层② guard 越界纠正（scopeSummary / handoff / denyTemplate，Todo 20）。
+  // - config.tools：层② guard 三态矩阵（`ROLE_BOUNDARIES[agentName].toolAllows` 的拷贝，
+  //   供自定义/克隆 agent 深拷贝为可编辑 custom 策略；内置名经 `guardForAgent` 直接取
+  //   `ROLE_BOUNDARIES` 常量，故此处落库不改变内置 `/agent-policies` 输出——字节一致）。
   // 幂等：按 id upsert 并同步最新边界；先于模板 Agent upsert（agent.policyId 指向本行）。
   // ========================================================================
-  const ROLE_POLICY_DENY_TEMPLATE =
-    '【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。';
 
   const ROLE_POLICY_BINDINGS: Record<
     string,
@@ -333,6 +335,7 @@ async function main() {
         handoff: boundary.handoffTo,
         denyTemplate: ROLE_POLICY_DENY_TEMPLATE,
       },
+      tools: { ...boundary.toolAllows },
     };
     await prisma.executionPolicy.upsert({
       where: { id: policyId },

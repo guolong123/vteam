@@ -11,7 +11,12 @@ import { Prisma } from '@prisma/client';
 import {
   AGENT_ERRORS,
   AGENT_KEY_PATTERN,
+  buildEditPermission,
+  buildReadPermission,
+  ROLE_BOUNDARIES,
+  ROLE_POLICY_DENY_TEMPLATE,
   STATIC_AVAILABLE_MODELS,
+  type VteamAgentName,
 } from '../common/constants/agent.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
@@ -33,6 +38,9 @@ const ID_PREFIX = {
   agent: 'a',
   agentSkill: 'as',
 } as const;
+
+/** ExecutionPolicy 域主键前缀（`ep_<零填充序号>`；模板用命名 id `ep_<role>`）。 */
+const POLICY_ID_PREFIX = 'ep' as const;
 
 /** agentKey 唯一冲突 → 409 的稳定错误码（覆盖 create/clone/update 三路径）。 */
 const AGENT_KEY_CONFLICT = 'AGENT_KEY_CONFLICT' as const;
@@ -166,15 +174,33 @@ export class AgentsService implements OnModuleInit {
    * POST /agents：完全自定义（FR-32）。
    * 二表事务：Agent（type=custom、baseAgentId=null、createdBy=当前用户）
    * + agent_skills 批量，返回 toAgentDto 格式。
+   * 策略装配（custom agent 必有可编辑 custom 策略）：
+   * - 显式 `dto.policyId` → 原样绑定，不建策略；
+   * - 无 policyId + `dto.role` 命中模板策略（`ep_<role>`）→ 深拷贝为新 custom 策略并绑定；
+   * - 无 policyId + 无命中 → 建 deny-by-default 骨架 custom 策略并绑定。
+   * 写操作全在同事务内（失败不留半装配行）；effectivePermission 在提交后解析，
+   * 保证新建策略行提交可见（事务内经别连接读不到未提交行）。
    */
   async create(userId: string, dto: CreateAgentDto) {
     this.assertValidAgentKey(dto.agentKey);
+    let created: AgentRow;
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      created = await this.prisma.$transaction(async (tx) => {
+        const name = dto.name.trim();
+        let policyId: string | null = dto.policyId ?? null;
+        if (!policyId) {
+          const source = await this.resolveTemplateSource(tx, dto.role ?? null);
+          const config = source?.config ?? this.buildSkeletonConfig(name);
+          policyId = await this.provisionCustomPolicy(tx, {
+            agentName: name,
+            config,
+            description: source?.description ?? null,
+          });
+        }
         const agent = await tx.agent.create({
           data: {
             id: await this.idGen.nextId(ID_PREFIX.agent),
-            name: dto.name.trim(),
+            name,
             type: dto.type,
             role: dto.role ?? null,
             agentKey: dto.agentKey,
@@ -182,25 +208,29 @@ export class AgentsService implements OnModuleInit {
             baseAgentId: null,
             defaultModelId: dto.defaultModelId ?? null,
             persona: dto.persona ?? null,
-            policyId: dto.policyId ?? null,
+            policyId,
             createdBy: userId,
           },
         });
 
         const skills = await this.createSkills(tx, agent.id, dto.skillIds);
 
-        return this.toAgentDto({ ...agent, skills });
+        return { ...agent, skills };
       });
     } catch (e) {
       this.throwOnAgentKeyConflict(e);
       throw e;
     }
+    return this.toAgentDto(created);
   }
 
   /**
    * POST /agents/:id/clone：深拷贝副本（FR-31）。
    * 源不存在 → 404；新行 type=clone、baseAgentId=源.id、name=请求名或「源名副本」；
    * 同事务复制 skills（不含会话/任务关系），克隆不触碰源行。
+   * 策略装配：恒为源策略 config 的深拷贝新 `type='custom'` 策略（源为 template/custom
+   * 均不共享可写策略；源无策略时回退模板/骨架），写操作全在同事务内；
+   * effectivePermission 在提交后解析（理由同 create）。
    */
   async clone(userId: string, id: string, dto: CloneAgentDto) {
     const source = await this.prisma.agent.findUnique({
@@ -214,8 +244,32 @@ export class AgentsService implements OnModuleInit {
     const newName = dto.name?.trim() || `${source.name}副本`;
     this.assertValidAgentKey(dto.agentKey);
 
+    let created: AgentRow;
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      created = await this.prisma.$transaction(async (tx) => {
+        const bound = source.policyId
+          ? await tx.executionPolicy.findUnique({
+              where: { id: source.policyId },
+            })
+          : null;
+        const template = bound
+          ? null
+          : await this.resolveTemplateSource(tx, source.role);
+        const config =
+          (bound ? (bound.config as unknown) : undefined) ??
+          template?.config ??
+          this.buildSkeletonConfig(newName);
+        const description =
+          (bound && typeof bound.description === 'string'
+            ? bound.description
+            : null) ??
+          template?.description ??
+          null;
+        const policyId = await this.provisionCustomPolicy(tx, {
+          agentName: newName,
+          config,
+          description,
+        });
         const clone = await tx.agent.create({
           data: {
             id: await this.idGen.nextId(ID_PREFIX.agent),
@@ -227,22 +281,23 @@ export class AgentsService implements OnModuleInit {
             prompt: source.prompt,
             defaultModelId: source.defaultModelId,
             persona: source.persona,
-            policyId: source.policyId ?? null,
+            policyId,
             createdBy: userId,
           },
         });
 
         await this.copySkills(tx, source, clone.id);
 
-        return this.toAgentDto({
+        return {
           ...clone,
           skills: source.skills.map((s) => ({ skillId: s.skillId })),
-        });
+        };
       });
     } catch (e) {
       this.throwOnAgentKeyConflict(e);
       throw e;
     }
+    return this.toAgentDto(created);
   }
 
   /**
@@ -622,6 +677,108 @@ export class AgentsService implements OnModuleInit {
         },
       });
     }
+  }
+
+  /**
+   * 新建可编辑 custom 策略（clone/create 装配用，不暴露 HTTP 端点）。
+   * config 恒深拷贝（JSON 回环），两行永不共享同一对象引用；
+   * name 取 `${agentName} 策略` 以便识别归属。
+   */
+  private async provisionCustomPolicy(
+    tx: Prisma.TransactionClient,
+    opts: {
+      agentName: string;
+      config: unknown;
+      description: string | null;
+    },
+  ): Promise<string> {
+    const policy = await tx.executionPolicy.create({
+      data: {
+        id: await this.idGen.nextId(POLICY_ID_PREFIX),
+        name: `${opts.agentName} 策略`,
+        description: opts.description,
+        type: 'custom',
+        config: JSON.parse(JSON.stringify(opts.config)) as Prisma.InputJsonValue,
+      },
+    });
+    return policy.id;
+  }
+
+  /**
+   * 按 role 解析模板策略来源（create 无 policyId / clone 源无绑定时回退）。
+   * 优先库内 `ep_<role>` 行的 config（seed 已含 tools 矩阵）；行缺失但 role 命中
+   * `ROLE_BOUNDARIES` 时按同一形状派生（与 seed 同源，保证 tools 非空）；
+   * 均无 → null（调用方建骨架）。
+   */
+  private async resolveTemplateSource(
+    tx: Prisma.TransactionClient,
+    role: string | null,
+  ): Promise<{ config: unknown; description: string | null } | null> {
+    if (!role) {
+      return null;
+    }
+    const stored = await tx.executionPolicy.findUnique({
+      where: { id: `ep_${role}` },
+    });
+    if (stored) {
+      return {
+        config: stored.config as unknown,
+        description:
+          typeof stored.description === 'string' ? stored.description : null,
+      };
+    }
+    const agentName = `vteam-${role}` as VteamAgentName;
+    const boundary = (
+      ROLE_BOUNDARIES as Record<string, (typeof ROLE_BOUNDARIES)[VteamAgentName] | undefined>
+    )[agentName];
+    if (!boundary) {
+      return null;
+    }
+    return {
+      config: {
+        permission: {
+          edit: buildEditPermission(boundary.writeGlobs),
+          read: buildReadPermission(),
+          bash: boundary.bashEffect,
+          task: 'deny',
+          ...Object.fromEntries(
+            boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
+          ),
+        },
+        correction: {
+          scopeSummary: boundary.scopeSummary,
+          handoff: boundary.handoffTo,
+          denyTemplate: ROLE_POLICY_DENY_TEMPLATE,
+        },
+        tools: { ...boundary.toolAllows },
+      },
+      description: boundary.scopeSummary,
+    };
+  }
+
+  /**
+   * 未配置 agent 的 deny-by-default 骨架 config（无命中 role 时的安全默认）：
+   * 不写文件、bash 禁用、tools 空矩阵（协作工具默认拒绝）。
+   */
+  private buildSkeletonConfig(agentName: string): {
+    permission: Record<string, unknown>;
+    correction: Record<string, unknown>;
+    tools: Record<string, never>;
+  } {
+    return {
+      permission: {
+        edit: { '*': 'deny' },
+        read: { '*': 'allow' },
+        bash: 'deny',
+        task: 'deny',
+      },
+      correction: {
+        scopeSummary: agentName,
+        handoff: {},
+        denyTemplate: ROLE_POLICY_DENY_TEMPLATE,
+      },
+      tools: {},
+    };
   }
 
   /**

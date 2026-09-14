@@ -1,0 +1,38 @@
+=== CHECK 1: GET /agent-policies vs baseline ===
+bytes:    11993 vs baseline    11993
+RESULT: BYTE-IDENTICAL
+
+=== CHECK 2: clone a_product agentKey=qa-clone-1 ===
+clone id: a_0000000002 | type: clone | policyId: ep_0000000001
+effectivePermission: ('vteam-qa-clone-1', 'tools=16', 'group_post=allow')
+--- /agent-policies vteam-qa-clone-1 ---
+present: True | tools count: 16
+group_post: allow
+RESULT: NON-EMPTY
+
+=== CHECK 3: PATCH clone custom policy tools (group_post -> deny) ===
+patched tools count: 16
+--- PATCH ---
+{"id":"ep_0000000001","name":"QA Clone 1 策略","description":"需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。","type":"custom","config":{"tools":{"vteam_doclib":"allow","vteam_issue_get":"allow","vteam_read_file":"allow","vteam_team_view":"allow","vteam_group_post":"deny","vteam_issue_list":"allow","vteam_my_profile":"allow","vteam_memory_save":"allow","vteam_chat_history":"allow","vteam_issue_c
+--- re-GET /agent-policies ---
+group_post now: deny
+RESULT: EDITABLE-REFLECTED
+
+=== CHECK 4: template PATCH still 403 + cleanup QA rows ===
+--- PATCH ep_product (expect 403) ---
+
+HTTP:403
+{"code":"POLICY_TEMPLATE_READONLY","message":"模板策略只读（seed 维护），请克隆为 custom 策略再修改"}
+--- cleanup ---
+del-agent HTTP:200
+del-policy HTTP:200
+--- remaining QA rows ---
+a_product product template ep_product
+a_project_manager project_manager template ep_project_manager
+a_architect architect template ep_architect
+a_developer developer template ep_developer
+a_tester tester template ep_tester
+a_0000000001 None custom None
+custom policies: []
+--- /agent-policies back to baseline? ---
+RESULT: CLEAN, BASELINE RESTORED

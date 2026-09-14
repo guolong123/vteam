@@ -27,7 +27,10 @@ const mockPrisma = {
 };
 
 import { main } from '../../prisma/seed';
-import { VTEAM_MCP_TOOL_NAMES } from '../common/constants/agent.constants';
+import {
+  ROLE_BOUNDARIES,
+  VTEAM_MCP_TOOL_NAMES,
+} from '../common/constants/agent.constants';
 
 /** 模板 Agent id → 角色 ExecutionPolicy id（seed ROLE_POLICY_BINDINGS 的绑定产物）。 */
 const POLICY_BY_AGENT: Record<string, string> = {
@@ -45,6 +48,15 @@ const ROLE_BY_AGENT: Record<string, string> = {
   a_architect: 'architect',
   a_developer: 'developer',
   a_tester: 'tester',
+};
+
+/** 角色 ExecutionPolicy id → opencode agent 名（ROLE_BOUNDARIES 的 key）。 */
+const AGENT_NAME_BY_POLICY: Record<string, keyof typeof ROLE_BOUNDARIES> = {
+  ep_product: 'vteam-product',
+  ep_project_manager: 'vteam-project_manager',
+  ep_architect: 'vteam-architect',
+  ep_developer: 'vteam-developer',
+  ep_tester: 'vteam-tester',
 };
 
 /**
@@ -126,6 +138,25 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       // 层② 纠正配置：越界话术指向真实工具名 + 角色摘要非空
       expect(create.config.correction.scopeSummary.length).toBeGreaterThan(0);
       expect(create.config.correction.denyTemplate).toContain('vteam_notify_agent');
+    }
+  });
+
+  it('模板策略 config.tools 为 ROLE_BOUNDARIES allowlist 的拷贝（克隆深拷贝来源）', async () => {
+    await main();
+
+    const policyCalls = mockPrisma.executionPolicy.upsert.mock.calls;
+    expect(policyCalls).toHaveLength(5);
+    for (const call of policyCalls) {
+      const policyId = String(call[0].where.id);
+      const agentName = AGENT_NAME_BY_POLICY[policyId];
+      expect(agentName).toBeDefined();
+      expect(call[0].create.config.tools).toEqual(
+        ROLE_BOUNDARIES[agentName].toolAllows,
+      );
+      expect(Object.keys(call[0].create.config.tools).length).toBeGreaterThan(
+        0,
+      );
+      expect(call[0].update.config).toEqual(call[0].create.config);
     }
   });
 

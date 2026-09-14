@@ -47,3 +47,11 @@ _Append new entries below - never overwrite._
 - Spec 连带修复：controller.spec 的必填 DTO 构造（create/clone）+ `errorsOf` 负向用例（`{}` 对 clone 现为失败）；service.spec 既有 create/clone 调用补 key、列表键契约加 `agentKey`；新增 7 个 it（create 有效/非法/`vteam-`/409、clone 新 key+409、update set/skip、toAgentDto 分层断言）。
 - 验证：`npx tsc -p tsconfig.json --noEmit` exit 0；`npx jest src/agents` 96/96 green（3 suites）。
 - Commit：`feat(agents): manage agentKey with layered effective permission`。
+
+## Todo 5 — custom/clone agent 可编辑 custom 策略装配 (2026-09-14)
+
+- 根因：模板策略 `config` 无 `tools` 矩阵 + `type='template'` PATCH 403 → 克隆继承模板绑定后 `guardForAgent('vteam-<customKey>', config)` 走非内置分支读 `config.tools` → `{}` 全拒。修法：seed 模板 `config` 补 `tools: {...boundary.toolAllows}`（内置输出走 `ROLE_BOUNDARIES` 常量直取，落库不影响字节一致，实测 live diff 11993 字节逐字节一致）；`AgentsService.create/clone` 恒新建 `type='custom'` 策略（源 config JSON 深拷贝，`name=${agentName} 策略`），三路径：显式 policyId 原样绑 / role 命中 `ep_<role>` 深拷贝 / 兜底 deny-by-default 骨架（edit 全 deny + bash/task deny + tools `{}` + `denyTemplate: ROLE_POLICY_DENY_TEMPLATE`）。
+- 模板行缺失时的二级回退：`resolveTemplateSource` 先查库 `ep_<role>`，缺失但 role 命中 `ROLE_BOUNDARIES` 时按 seed 同形派生（含 tools 拷贝）；`ROLE_POLICY_DENY_TEMPLATE` 由 seed 局部常量改为 `agent.constants.ts` 导入（单源）。
+- Live 坑两则：(1) `docker compose build server + up --force-recreate server` 不重跑 `init`（独立镜像/容器），模板 tools 须 `docker compose run --rm server node dist/prisma/seed.js` 另行同步，否则克隆仍拷贝无 tools 旧 config；(2) `toAgentDto` 原在事务内调 `resolveManyByAgents`（经全局 Prisma 别连接读不到未提交的新策略行 → effectivePermission=null），改为写事务提交后解析——创建/克隆响应即带完整 tools（clone 实测 `tools=16, group_post=allow`）。
+- 验证：`tsc --noEmit` exit 0；`jest src/agents src/execution-policies src/prisma/seed.spec.ts` 140/140（含新增 clone-模板/自定义独立性、create-role/骨架/显式绑定 5 用例 + seed tools 拷贝断言）；live 四项全过（字节一致/克隆 16 tools/PATCH 200 即时反射/模板 403 不动），证据 `.omo/evidence/custom-agent-opencode/policy-provision.txt`，QA 行已清（`a_0000000001` 无 key 无策略历史残留，非本次产生，保留）。
+- Commit：`feat(policies): provision editable custom policies for custom agents`。
