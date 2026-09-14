@@ -81,6 +81,19 @@ const EDIT_TOOLS = new Set([
   "multiedit",
 ]);
 const TASK_TOOLS = new Set(["task", "execute"]);
+/**
+ * 主实例专属（server-gated）MCP 工具：判定权在 platform-mcp 服务端
+ * （task.mainAgentInstanceId / team.mainAgentMemberId），guard 一律放行、不参与。
+ * 与 server \`ROLE_SERVER_GATED_TOOLS\`（agent.constants.ts）同值，两侧一致性由
+ * parity spec + e2e 锁定。
+ */
+const SERVER_GATED_TOOLS = new Set([
+  "vteam_task_transition",
+  "vteam_question_confirm",
+  "vteam_task_create",
+  "vteam_plan_mode",
+  "vteam_team_add_member",
+]);
 const BUILTIN_PASSTHROUGH = new Set(["question", "plan_exit", "skill"]);
 
 function evaluateToolCall(params) {
@@ -135,6 +148,9 @@ function evaluateToolCall(params) {
   }
   if (TASK_TOOLS.has(tool)) {
     return denyWithCorrection(agent, tool, policy.correction);
+  }
+  if (SERVER_GATED_TOOLS.has(tool)) {
+    return { action: "allow" };
   }
   if (BUILTIN_PASSTHROUGH.has(tool)) {
     return { action: "allow" };

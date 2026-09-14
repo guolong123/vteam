@@ -88,6 +88,11 @@ const PARITY_CASES: Array<{ name: string; params: EvaluateToolCallParams }> = [
   { name: 'bash 未命中放行（交层①）', params: { rolesDoc: rolesDoc(), session: session(), tool: 'bash', args: { command: 'ls -la' } } },
   { name: 'task 恒 deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'task', args: { description: 'x' } } },
   { name: 'execute 恒 deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'execute', args: {} } },
+  { name: 'server-gated vteam_task_transition 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_task_transition', args: {} } },
+  { name: 'server-gated vteam_question_confirm 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_question_confirm', args: {} } },
+  { name: 'server-gated vteam_task_create 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_task_create', args: {} } },
+  { name: 'server-gated vteam_plan_mode 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_plan_mode', args: {} } },
+  { name: 'server-gated vteam_team_add_member 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_team_add_member', args: {} } },
   { name: 'question 通行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'question', args: {} } },
   { name: 'browser 未 allowlist deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'browser', args: {} } },
   { name: 'allowlist 内 MCP 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_submit_artifact', args: {} } },
@@ -122,7 +127,7 @@ describe('renderRoleGuardPlugin（渲染产物 spike）', () => {
     expect(renderRoleGuardPlugin()).toBe(renderRoleGuardPlugin());
   });
 
-  it('内联判定快照与 policy.ts parity（20 例矩阵逐字节一致）', () => {
+  it('内联判定快照与 policy.ts parity（25 例矩阵逐字节一致）', () => {
     const snapshotEval = extractDecisionFn();
     for (const c of PARITY_CASES) {
       const expected = evaluateToolCall(c.params);

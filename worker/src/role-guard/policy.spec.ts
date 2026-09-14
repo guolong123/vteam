@@ -234,6 +234,32 @@ describe('evaluateToolCall 分支优先级', () => {
     });
   });
 
+  describe('4d2) server-gated MCP → pass-through（一律 allow，判定权在服务端）', () => {
+    const session = sess('vteam-developer');
+    it.each([
+      'vteam_task_transition',
+      'vteam_question_confirm',
+      'vteam_task_create',
+      'vteam_plan_mode',
+      'vteam_team_add_member',
+    ])('%s 未列入 tools 仍 allow', (tool) => {
+      const unlisted = role({ tools: {} });
+      expectAllow(call(doc({ 'vteam-developer': unlisted }), session, tool, {}));
+    });
+    it('task/execute 仍 deny（与 server-gated 分支独立）', () => {
+      const unlisted = role({ tools: {} });
+      const rolesDoc = doc({ 'vteam-developer': unlisted });
+      expectDeny(call(rolesDoc, session, 'task', {}));
+      expectDeny(call(rolesDoc, session, 'execute', {}));
+    });
+    it('非门控未列入 MCP 仍 deny（负对照）', () => {
+      const unlisted = role({ tools: {} });
+      const rolesDoc = doc({ 'vteam-developer': unlisted });
+      expectDeny(call(rolesDoc, session, 'vteam_member_remove', {}));
+      expectDeny(call(rolesDoc, session, 'vteam_bogus', {}));
+    });
+  });
+
   describe('4e) 内置通行集 + browser allowlist', () => {
     it.each(['question', 'plan_exit', 'skill'])('%s 未列入 tools 仍 allow', (tool) => {
       const minimal = role({ tools: {} });
