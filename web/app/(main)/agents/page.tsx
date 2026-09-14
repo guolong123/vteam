@@ -71,6 +71,8 @@ interface AgentItem {
   name: string;
   /** product | architect | developer | tester | null（自定义可为任意角色 key） */
   role: string | null;
+  /** 机器安全标识（opencode agent 名 = vteam-<agentKey>；模板回填 role；自定义/克隆必填） */
+  agentKey: string | null;
   /** template（只读）/ custom（自定义）/ clone（克隆副本，可写） */
   type: string;
   prompt: string;
@@ -179,6 +181,46 @@ const PERSONA_OPTIONS = [
 
 /* ------------------------------ 页面内扩展 token（仿原型 :156-170，不写 tokens.ts） ------------------------------ */
 
+/** 工具三态（与 opencode PermissionV2 对齐：allow/ask/deny；tools 矩阵唯一值域）。 */
+type ToolEffect = "allow" | "ask" | "deny";
+
+/** 三态分段控制元信息（复刻 ce3edd1^ toolEffectMeta 配色；标签按任务要求为 允许/询问/拒绝）。 */
+const toolEffectMeta: Record<
+  ToolEffect,
+  { label: string; desc: string; color: string; bg: string; border: string }
+> = {
+  allow: { label: "允许", desc: "无需确认 · 只读/低风险", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  ask: { label: "询问", desc: "每次调用需确认 · 有副作用", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
+  deny: { label: "拒绝", desc: "白名单排除", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+};
+
+/** 未知 effect 值归一化为 deny（effectOf 唯一出口之外不另设解析）。 */
+function normalizeToolEffect(value: unknown): ToolEffect {
+  return value === "allow" || value === "ask" || value === "deny" ? value : "deny";
+}
+
+/** agentKey 即时校验：返回错误文案，null=合法。 */
+function validateAgentKey(raw: string): string | null {
+  const v = raw.trim();
+  if (!v) return "标识不能为空";
+  if (v.startsWith("vteam-")) return "标识不能以 vteam- 开头";
+  if (v.length > 63) return "标识最多 63 个字符";
+  if (!/^[a-z][a-z0-9_-]{0,62}$/.test(v)) return "小写字母开头，仅含小写字母/数字/_/-，最多63字符";
+  return null;
+}
+
+/** 后端错误归一化：AGENT_KEY_* 映射中文，其余透传（validator 数组已由 api 层拼接）。 */
+function formatAgentKeyError(err: unknown): string {
+  if (isApiError(err)) {
+    if (err.code === "AGENT_KEY_CONFLICT") return "该标识已被占用";
+    if (err.code === "AGENT_KEY_INVALID") {
+      return err.message && err.message !== "请求失败" ? `标识格式不正确：${err.message}` : "标识格式不正确：小写字母开头，仅含小写字母/数字/_/-，最多63字符，且不能以 vteam- 开头";
+    }
+    return err.message;
+  }
+  return "请求失败，请稍后重试";
+}
+
 /** 生效权限 effect 三态（与 opencode PermissionV2 对齐：allow/ask/deny）。 */
 type PermissionEffectKey = "allow" | "ask" | "deny";
 
@@ -234,6 +276,57 @@ function EffectBadge({ value }: { value: unknown }) {
       />
       {label}
     </span>
+  );
+}
+
+/** 三态分段控制（复刻 ce3edd1^ tool-effect-select 视觉；模板只读时 data-readonly，点击无操作）。 */
+function ToolEffectSelect({ toolName, value, readOnly, pending, onChange }: { toolName: string; value: ToolEffect; readOnly: boolean; pending: boolean; onChange: (next: ToolEffect) => void }) {
+  return (
+    <div
+      data-testid="tool-effect-select"
+      data-tool={toolName}
+      data-readonly={readOnly ? "true" : "false"}
+      role="radiogroup"
+      aria-label={`${toolName} 权限`}
+      title={readOnly ? "模板只读" : undefined}
+      style={{
+        flexShrink: 0,
+        display: "inline-flex",
+        gap: 2,
+        padding: 3,
+        borderRadius: radius.pill,
+        backgroundColor: neutral[50],
+        border: `1px solid ${neutral[200]}`,
+        opacity: pending ? 0.6 : 1,
+      }}
+    >
+      {(Object.keys(toolEffectMeta) as ToolEffect[]).map((key) => {
+        const meta = toolEffectMeta[key];
+        const active = value === key;
+        return (
+          <span
+            key={key}
+            data-effect={key}
+            aria-checked={active}
+            role="radio"
+            aria-disabled={readOnly || pending}
+            onClick={readOnly || pending ? undefined : () => onChange(key)}
+            style={{
+              padding: `2px ${space.sm}px`,
+              borderRadius: radius.pill,
+              fontSize: fontSize.xs,
+              fontWeight: 500,
+              cursor: readOnly || pending ? "default" : "pointer",
+              fontFamily: fontFamily.mono,
+              color: active ? "#FFFFFF" : neutral[500],
+              backgroundColor: active ? meta.color : "transparent",
+            }}
+          >
+            {meta.label}
+          </span>
+        );
+      })}
+    </div>
   );
 }
 
@@ -461,6 +554,8 @@ const UNKNOWN_MCP_GROUP = "__unknown";
 
 interface EffectivePermissionSectionProps {
   effective: EffectivePermission | null;
+  agentId: string;
+  agentType: string;
   /** GET /mcp-servers 全量（含停用；分组标题 + 默认收起依据）。 */
   mcpServers: ApiMcpServer[];
   /** GET /tools?source=mcp&includeDisabled=true（含停用；解析条目归属 server）。 */
@@ -469,8 +564,12 @@ interface EffectivePermissionSectionProps {
   loading: boolean;
 }
 
-function EffectivePermissionSection({ effective, mcpServers, mcpTools, loading }: EffectivePermissionSectionProps) {
+function EffectivePermissionSection({ effective, agentId, agentType, mcpServers, mcpTools, loading }: EffectivePermissionSectionProps) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const queryClient = useQueryClient();
+  const [pendingKey, setPendingKey] = useState<string | null>(null);
+  const [policyError, setPolicyError] = useState<string | null>(null);
+  const editable = agentType === "custom" || agentType === "clone";
   const permission = useMemo(() => effective?.permission ?? {}, [effective]);
   const guardTools = useMemo(() => {
     const raw = effective?.tools;
@@ -512,6 +611,45 @@ function EffectivePermissionSection({ effective, mcpServers, mcpTools, loading }
     if (tool.action in guardTools) return guardTools[tool.action];
     if (prefixed in guardTools) return guardTools[prefixed];
     return "deny";
+  };
+
+  /** tools 矩阵写入键：命中现有键则复用，避免分叉；否则用真实暴露名（tool.name）。 */
+  const matrixKeyOf = (tool: ApiTool): string => {
+    if (tool.name in guardTools) return tool.name;
+    if (tool.action in guardTools) return tool.action;
+    const prefixed = `vteam_${tool.action}`;
+    if (prefixed in guardTools) return prefixed;
+    return tool.name;
+  };
+
+  /** 单工具切换：全量回写 { permission, correction, tools }（config 非部分合并）。 */
+  const policyMutation = useMutation({
+    mutationFn: ({ key, next }: { key: string; next: ToolEffect }) => {
+      if (!effective) throw new Error("未绑定执行策略");
+      const nextTools: Record<string, unknown> = { ...guardTools, [key]: next };
+      return api.patch(`/execution-policies/${effective.policyId}`, {
+        config: { permission: effective.permission, correction: effective.correction, tools: nextTools },
+      });
+    },
+    onSuccess: () => {
+      setPolicyError(null);
+      setPendingKey(null);
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
+    },
+    onError: (err) => {
+      setPendingKey(null);
+      setPolicyError(isApiError(err) ? err.message : "保存权限失败，请稍后重试");
+    },
+  });
+
+  const handleToolChange = (tool: ApiTool, next: ToolEffect) => {
+    if (!editable || !effective || pendingKey) return;
+    const current = normalizeToolEffect(effectOf(tool));
+    if (current === next) return;
+    setPolicyError(null);
+    setPendingKey(matrixKeyOf(tool));
+    policyMutation.mutate({ key: matrixKeyOf(tool), next });
   };
 
   /** MCP 分组区块：停用 server 默认收起，启用默认展开；目录未就绪时占位。 */
@@ -607,38 +745,63 @@ function EffectivePermissionSection({ effective, mcpServers, mcpTools, loading }
                   该服务下暂无工具
                 </div>
               ) : (
-                tools.map((tool) => (
-                  <div
-                    key={tool.id}
-                    data-testid="effective-mcp-tool"
-                    data-tool={tool.name}
-                    data-enabled={String(tool.enabled)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: space.sm,
-                      fontSize: fontSize.sm,
-                    }}
-                  >
-                    <span
+                tools.map((tool) => {
+                  const effect = normalizeToolEffect(effectOf(tool));
+                  const meta = toolEffectMeta[effect];
+                  const key = matrixKeyOf(tool);
+                  return (
+                    <div
+                      key={tool.id}
+                      data-testid="effective-mcp-tool"
+                      data-tool={tool.name}
+                      data-enabled={String(tool.enabled)}
                       style={{
-                        fontFamily: fontFamily.mono,
-                        color: neutral[700],
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: space.sm,
+                        fontSize: fontSize.sm,
                       }}
                     >
-                      {tool.name}
-                    </span>
-                    <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
-                      {!tool.enabled && (
-                        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>已停用</span>
-                      )}
-                      <EffectBadge value={effectOf(tool)} />
-                    </span>
-                  </div>
-                ))
+                      <span
+                        style={{
+                          minWidth: 0,
+                          flex: 1,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 2,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontFamily: fontFamily.mono,
+                            color: neutral[700],
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {tool.name}
+                        </span>
+                        <span style={{ fontSize: fontSize.xs }}>
+                          <span style={{ color: meta.color, fontWeight: 500 }}>{meta.label}</span>
+                          <span style={{ color: neutral[400] }}> · {meta.desc}</span>
+                        </span>
+                      </span>
+                      <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
+                        {!tool.enabled && (
+                          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>已停用</span>
+                        )}
+                        <ToolEffectSelect
+                          toolName={tool.name}
+                          value={effect}
+                          readOnly={!editable}
+                          pending={pendingKey === key}
+                          onChange={(next) => handleToolChange(tool, next)}
+                        />
+                      </span>
+                    </div>
+                  );
+                })
               )}
             </div>
           )}
@@ -754,6 +917,26 @@ function EffectivePermissionSection({ effective, mcpServers, mcpTools, loading }
 
       {/* MCP 工具分组（server 目录驱动）：停用 server 默认收起，启用默认展开 */}
       {renderMcpGroups()}
+      {policyError && (
+        <div
+          data-testid="policy-save-error"
+          role="alert"
+          style={{
+            fontSize: fontSize.sm,
+            color: "#DC2626",
+            display: "flex",
+            alignItems: "center",
+            gap: space.xs,
+            padding: `${space.sm}px ${space.md}px`,
+            borderRadius: radius.md,
+            backgroundColor: "rgba(239,68,68,0.10)",
+            border: "1px solid rgba(239,68,68,0.22)",
+          }}
+        >
+          <span aria-hidden style={{ fontWeight: 700 }}>!</span>
+          {policyError}
+        </div>
+      )}
     </div>
   );
 }
@@ -1427,7 +1610,7 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
         </div>
       </div>
 
-      {/* ④ 权限（只读：执行策略生效权限，原生行 + MCP 按 server 分组） */}
+      {/* ④ 权限（执行策略生效权限：原生行只读 + MCP 按 server 分组三态可配；模板只读） */}
       <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
         <div
           style={{
@@ -1440,11 +1623,13 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
             权限
           </span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            执行策略 · 只读
+            {agent.type === "custom" || agent.type === "clone" ? "执行策略 · 可编辑" : "执行策略 · 只读"}
           </span>
         </div>
         <EffectivePermissionSection
           effective={agent.effectivePermission ?? null}
+          agentId={agent.id}
+          agentType={agent.type}
           mcpServers={mcpServers}
           mcpTools={mcpTools}
           loading={mcpLoading}
@@ -1461,13 +1646,15 @@ interface CreateAgentModalProps {
   submitting: boolean;
   error: string | null;
   onClose: () => void;
-  onSubmit: (payload: { name: string; prompt?: string; persona?: string | null }) => void;
+  onSubmit: (payload: { name: string; prompt?: string; persona?: string | null; agentKey: string }) => void;
 }
 
 function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: CreateAgentModalProps) {
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [persona, setPersona] = useState<string | null>(null);
+  const [agentKey, setAgentKey] = useState("");
+  const [touchedKey, setTouchedKey] = useState(false);
 
   // Esc 关闭
   useEffect(() => {
@@ -1485,18 +1672,26 @@ function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: Create
       setName("");
       setPrompt("");
       setPersona(null);
+      setAgentKey("");
+      setTouchedKey(false);
     }
   }, [open]);
 
   if (!open) return null;
 
+  const keyError = validateAgentKey(agentKey);
+  const showKeyError = touchedKey && keyError !== null;
+  const canSubmit = name.trim() !== "" && keyError === null && !submitting;
+
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || submitting) return;
+    setTouchedKey(true);
+    if (!canSubmit) return;
     onSubmit({
       name: name.trim(),
       prompt: prompt.trim() ? prompt.trim() : undefined,
       persona: persona,
+      agentKey: agentKey.trim(),
     });
   };
 
@@ -1612,6 +1807,37 @@ function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: Create
             />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+            <label htmlFor="agent-key" style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
+              标识 agentKey <span aria-hidden style={{ color: "#DC2626" }}>*</span>
+            </label>
+            <input
+              id="agent-key"
+              data-testid="agent-key-input"
+              type="text"
+              placeholder="小写字母开头，如 release-manager"
+              autoComplete="off"
+              spellCheck={false}
+              value={agentKey}
+              onChange={(e) => setAgentKey(e.target.value)}
+              onBlur={() => setTouchedKey(true)}
+              disabled={submitting}
+              aria-invalid={showKeyError}
+              style={{
+                ...inputBase,
+                borderColor: showKeyError ? "#DC2626" : neutral[200],
+                fontFamily: fontFamily.mono,
+              }}
+            />
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+              执行体名为 vteam-{"<标识>"}；小写字母开头，仅含小写字母/数字/_/-，最多63字符，且不能以 vteam- 开头
+            </span>
+            {showKeyError && (
+              <span data-testid="agent-key-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626" }}>
+                {keyError}
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
             <label htmlFor="agent-prompt" style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
               角色提示词
             </label>
@@ -1689,7 +1915,7 @@ function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: Create
           <button
             type="submit"
             data-testid="create-agent-confirm"
-            disabled={submitting || !name.trim()}
+            disabled={!canSubmit}
             style={{
               padding: `${space.sm + 2}px ${space.lg}px`,
               borderRadius: radius.md,
@@ -1698,13 +1924,240 @@ function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: Create
               color: "#FFFFFF",
               fontSize: fontSize.md,
               fontWeight: 500,
-              cursor: submitting || !name.trim() ? "default" : "pointer",
-              opacity: submitting || !name.trim() ? 0.6 : 1,
+              cursor: !canSubmit ? "default" : "pointer",
+              opacity: !canSubmit ? 0.6 : 1,
               boxShadow: "0 6px 16px rgba(13,148,136,.3)",
               fontFamily: fontFamily.body,
             }}
           >
             {submitting ? "创建中…" : "创建 Agent"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* ================================ 克隆 Agent 弹窗 ================================ */
+
+interface CloneAgentModalProps {
+  source: AgentItem | null;
+  submitting: boolean;
+  error: string | null;
+  onClose: () => void;
+  onSubmit: (payload: { name?: string; agentKey: string }) => void;
+}
+
+function CloneAgentModal({ source, submitting, error, onClose, onSubmit }: CloneAgentModalProps) {
+  const [name, setName] = useState("");
+  const [agentKey, setAgentKey] = useState("");
+  const [touchedKey, setTouchedKey] = useState(false);
+
+  useEffect(() => {
+    if (source) {
+      setName(`${source.name} 副本`);
+      const base = (source.agentKey ?? "").trim();
+      const candidate = base ? `${base}-copy` : "";
+      setAgentKey(validateAgentKey(candidate) === null ? candidate : "");
+      setTouchedKey(false);
+    }
+  }, [source]);
+
+  useEffect(() => {
+    if (!source) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [source, onClose]);
+
+  if (!source) return null;
+
+  const keyError = validateAgentKey(agentKey);
+  const showKeyError = touchedKey && keyError !== null;
+  const canSubmit = keyError === null && !submitting;
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    setTouchedKey(true);
+    if (!canSubmit) return;
+    const trimmedName = name.trim();
+    onSubmit({
+      ...(trimmedName && trimmedName !== source.name ? { name: trimmedName } : {}),
+      agentKey: agentKey.trim(),
+    });
+  };
+
+  const inputBase: CSSProperties = {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: `${space.md}px ${space.lg}px`,
+    borderRadius: radius.md,
+    border: `1px solid ${neutral[200]}`,
+    backgroundColor: "var(--color-surface)",
+    fontSize: fontSize.md,
+    color: neutral[800],
+    fontFamily: fontFamily.body,
+  };
+
+  return (
+    <div
+      data-testid="clone-agent-modal"
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 40,
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "center",
+        paddingTop: "12%",
+      }}
+    >
+      <div
+        aria-hidden
+        onClick={onClose}
+        style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }}
+      />
+      <form
+        onSubmit={handleSubmit}
+        noValidate
+        style={{
+          position: "relative",
+          width: 420,
+          maxWidth: "calc(100% - 48px)",
+          display: "flex",
+          flexDirection: "column",
+          gap: space.lg,
+          padding: `${space.xl}px`,
+          borderRadius: radius.lg,
+          backgroundColor: "var(--color-surface)",
+          border: `1px solid ${neutral[200]}`,
+          boxShadow: shadow.lg,
+          fontFamily: fontFamily.body,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: space.sm }}>
+          <div>
+            <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900] }}>
+              克隆 Agent
+            </div>
+            <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>
+              来源：{source.name}（{source.agentKey ?? "无标识"}）
+            </div>
+          </div>
+          <button
+            type="button"
+            data-testid="clone-agent-close"
+            aria-label="关闭克隆 Agent 弹窗"
+            onClick={onClose}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 26,
+              height: 26,
+              flexShrink: 0,
+              borderRadius: "50%",
+              border: "none",
+              cursor: "pointer",
+              backgroundColor: "transparent",
+              color: neutral[400],
+              fontSize: fontSize.lg,
+              lineHeight: 1,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+            <label htmlFor="clone-name" style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
+              Agent 名称
+            </label>
+            <input
+              id="clone-name"
+              data-testid="clone-name-input"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              disabled={submitting}
+              style={inputBase}
+            />
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+            <label htmlFor="clone-key" style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
+              标识 agentKey <span aria-hidden style={{ color: "#DC2626" }}>*</span>
+            </label>
+            <input
+              id="clone-key"
+              data-testid="agent-key-input"
+              type="text"
+              placeholder="如 release-manager-copy"
+              autoComplete="off"
+              spellCheck={false}
+              value={agentKey}
+              onChange={(e) => setAgentKey(e.target.value)}
+              onBlur={() => setTouchedKey(true)}
+              disabled={submitting}
+              aria-invalid={showKeyError}
+              style={{ ...inputBase, borderColor: showKeyError ? "#DC2626" : neutral[200], fontFamily: fontFamily.mono }}
+            />
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+              执行体名为 vteam-{"<标识>"}；小写字母开头，仅含小写字母/数字/_/-，最多63字符，且不能以 vteam- 开头
+            </span>
+            {showKeyError && (
+              <span data-testid="agent-key-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626" }}>
+                {keyError}
+              </span>
+            )}
+          </div>
+        </div>
+        {error && (
+          <div data-testid="clone-agent-error" role="alert" style={{ fontSize: fontSize.sm, color: "#DC2626", display: "flex", alignItems: "center", gap: space.xs }}>
+            <span aria-hidden style={{ fontWeight: 700 }}>!</span>
+            {error}
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
+          <button
+            type="button"
+            data-testid="clone-agent-cancel"
+            onClick={onClose}
+            disabled={submitting}
+            style={{
+              padding: `${space.sm + 2}px ${space.lg}px`,
+              borderRadius: radius.md,
+              border: `1px solid ${neutral[200]}`,
+              backgroundColor: "var(--color-surface)",
+              color: neutral[600],
+              fontSize: fontSize.md,
+              fontWeight: 500,
+              cursor: "pointer",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            取消
+          </button>
+          <button
+            type="submit"
+            data-testid="clone-agent-confirm"
+            disabled={!canSubmit}
+            style={{
+              padding: `${space.sm + 2}px ${space.lg}px`,
+              borderRadius: radius.md,
+              border: "none",
+              backgroundColor: "#0D9488",
+              color: "#FFFFFF",
+              fontSize: fontSize.md,
+              fontWeight: 500,
+              cursor: !canSubmit ? "default" : "pointer",
+              opacity: !canSubmit ? 0.6 : 1,
+              boxShadow: "0 6px 16px rgba(13,148,136,.3)",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            {submitting ? "克隆中…" : "克隆 Agent"}
           </button>
         </div>
       </form>
@@ -1725,6 +2178,7 @@ export default function AgentConfigPage() {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [cloneTarget, setCloneTarget] = useState<AgentItem | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -1870,10 +2324,12 @@ export default function AgentConfigPage() {
   const selectedAgent: AgentItem | undefined =
     detailQuery.data ?? agents.find((a) => a.id === selectedId);
 
-  // 克隆：POST /agents/:id/clone → 刷新列表并选中克隆体
+  // 克隆：POST /agents/:id/clone（必填 agentKey）→ 刷新列表并选中克隆体
   const cloneMutation = useMutation({
-    mutationFn: (id: string) => api.post<AgentItem>(`/agents/${id}/clone`, {}),
+    mutationFn: ({ id, name, agentKey }: { id: string; name?: string; agentKey: string }) =>
+      api.post<AgentItem>(`/agents/${id}/clone`, { ...(name ? { name } : {}), agentKey }),
     onSuccess: (clone) => {
+      setCloneTarget(null);
       queryClient.invalidateQueries({ queryKey: ["agents"] });
       setSelectedId(clone.id);
     },
@@ -1893,9 +2349,9 @@ export default function AgentConfigPage() {
     },
   });
 
-  // 新建：POST /agents（type=custom）→ 刷新列表并选中新建
+  // 新建：POST /agents（type=custom，必填 agentKey）→ 刷新列表并选中新建
   const createMutation = useMutation({
-    mutationFn: (payload: { name: string; prompt?: string; persona?: string | null }) =>
+    mutationFn: (payload: { name: string; prompt?: string; persona?: string | null; agentKey: string }) =>
       api.post<AgentItem>("/agents", { ...payload, type: "custom" }),
     onSuccess: (created) => {
       setCreateOpen(false);
@@ -2250,7 +2706,7 @@ export default function AgentConfigPage() {
           saveError={saveError}
           onSave={(payload) => saveMutation.mutate({ id: selectedAgent.id, payload })}
           onSaveToken={(payload) => saveTokenMutation.mutate(payload)}
-          onClone={() => cloneMutation.mutate(selectedAgent.id)}
+          onClone={() => setCloneTarget(selectedAgent)}
           canCreate={canCreateAgent}
           canDelete={isTemplate ? false : canDeleteAgent}
           deleting={deleteMutation.isPending}
@@ -2272,15 +2728,20 @@ export default function AgentConfigPage() {
       <CreateAgentModal
         open={createOpen}
         submitting={createMutation.isPending}
-        error={
-          createMutation.isError
-            ? isApiError(createMutation.error)
-              ? createMutation.error.message
-              : "创建失败，请稍后重试"
-            : null
-        }
+        error={createMutation.isError ? formatAgentKeyError(createMutation.error) : null}
         onClose={() => setCreateOpen(false)}
         onSubmit={(payload) => createMutation.mutate(payload)}
+      />
+
+      {/* 克隆 Agent 弹窗（必填 agentKey，默认 <sourceKey>-copy） */}
+      <CloneAgentModal
+        source={cloneTarget}
+        submitting={cloneMutation.isPending}
+        error={cloneMutation.isError ? formatAgentKeyError(cloneMutation.error) : null}
+        onClose={() => setCloneTarget(null)}
+        onSubmit={(payload) => {
+          if (cloneTarget) cloneMutation.mutate({ id: cloneTarget.id, ...payload });
+        }}
       />
 
       {/* 删除 Agent 二次确认弹窗（UX-14：确认后才 DELETE，复用 confirm-delete-modal） */}

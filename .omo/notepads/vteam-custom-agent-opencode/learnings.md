@@ -65,3 +65,12 @@ _Append new entries below - never overwrite._
 - 清理双保险：API 按 `agentKey`/`policyName` 扫荡 + `DELETE FROM agents WHERE agent_key=`；复验 `/agent-policies` 无残留 + DB `COUNT(*)=0`。不做清理后 worker 重启（注入文件下次启动自刷新；验收只要求 DB + `/agent-policies` 回基线）。
 - 坑：`docker compose cp` 往 worker 传参文件需经 `worker:/tmp` 中转；`zsh` 下 `echo ===` 会报 `== not found`（脚本内避用裸 `===` 回显）；`EVIDENCE_DIR` 相对路径按 repo-root 归一（compose cp 要求宿主机绝对/相对一致）。
 - Commit：`test(e2e): custom agent opencode injection and guard enforcement`。
+
+## Todo 6 — web：自定义 agent 三态工具矩阵可编辑 + agentKey 表单 (2026-09-14)
+
+- `toolEffectMeta` 复刻 `ce3edd1^` 配色（allow `#059669` / ask `#D97706` / deny `#DC2626` + 同式 bg/border），标签按任务要求为 允许/询问/拒绝（原文件为 允许/确认/禁止），分段控制容器样式逐字复用（pill + `neutral[50]` + `padding: 3` + 选项 `2px space.sm` + 激活态白字+meta 色）；选项文案用中文 label（原文件为裸 key）。
+- `effectOf` 零改动（唯一解析出口）；新增 `normalizeToolEffect`（非 allow/ask/deny → deny）与 `matrixKeyOf`（命中现有 tools 键复用，否则 `tool.name`，不分叉）；`ToolEffectSelect` 带 `data-testid="tool-effect-select"` + `data-readonly`，模板点击无操作（`onClick={undefined}` + `title="模板只读"`）。
+- 策略 PATCH 在 `EffectivePermissionSection` 内聚（`useMutation` + `pendingKey` 行级禁用 + `policy-save-error` 内联）：body `{ config: { permission: effective.permission, correction: effective.correction, tools: { ...guardTools, [key]: next } } }`，成功 invalidate `["agents"]` + `["agent", agentId]`；模板永不调用（`editable = type custom||clone` 门控）。
+- `AgentItem` 增 `agentKey: string | null`；`validateAgentKey`（空/`vteam-` 前缀/63 字符/正则）+ `formatAgentKeyError`（409→「该标识已被占用」，400→格式提示透传 validator 文案）；新建/克隆弹窗各带 `agent-key-input` + `agent-key-error`，`canSubmit` 门控提交按钮；克隆经新 `CloneAgentModal`（默认名 `<源名> 副本`，默认 key `<sourceKey>-copy` 合法才预填），`onClone` 改为开弹窗（不再直调 POST）。
+- 验证：`cd web && npx tsc --noEmit` exit 0；`npx next lint` 仅剩既有 `deleting` 未使用 warning（基线同在，非本次引入）；web 无 agent 单测/e2e 断言需同步（`pages.spec.ts` 仅到 `agent-config-root` + 首个列表项）。
+- Commit：`feat(web): editable three-state tool matrix for custom agents`。
