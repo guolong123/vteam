@@ -31,7 +31,8 @@ export interface ToolViewer {
  * Tool 服务：列表/详情 + 注册/启停（T2 重构对齐 09 §3.8）。
  * - findAll：source/execution/enabled/mcpServer 过滤 + name 模糊搜索 + 分页 {items, total}；
  *   **成员默认 enabled=true**（agent 配置页工具区数据源，FR-35 启用开关），但 enabled
- *   显式传入时按传入值过滤（含 enabled=false 可查停用工具）；admin/无 viewer 全量按 query
+ *   显式传入时按传入值过滤（含 enabled=false 可查停用工具）；includeDisabled=true 时
+ *   忽略 enabled 过滤返回启用+停用全量（优先级高于 enabled）；admin/无 viewer 全量按 query
  * - create：action 唯一（撞 @unique → 409 TOOL_ACTION_EXISTS），id=tl_<seq>，
  *   **无独立 source 入参**：execution=mcp → source=mcp，其余 → custom（builtin 走 seed）；
  *   schema/initCommand 透传 Json，mcpServer 可空，enabled 默认 true
@@ -67,15 +68,22 @@ export class ToolsService implements OnModuleInit {
    * viewer 为空（无鉴权上下文）不强制过滤；admin 遵循 query.enabled（缺省全量）；
    * 成员：enabled 缺省时默认 enabled=true（09 §3.8 成员默认仅见启用工具，FR-35 启用开关）；
    * enabled 显式传入（含 false）时按传入值过滤——任何 viewer 均可显式查询停用工具。
+   * includeDisabled=true 时忽略 enabled 过滤、返回启用+停用全量（任何 viewer 均可查，
+   * agent 配置页 MCP 目录数据源）；includeDisabled 与 enabled 同时传入时前者优先。
    * 返回 {items, total, page, pageSize}（对齐 agents.findMany 模式，items 为 Tool 全行，含 mcpServer）。
    */
   async findAll(query: QueryToolsDto = {}, viewer?: ToolViewer) {
     const page = this.normalizePage(query.page);
     const pageSize = this.normalizePageSize(query.pageSize);
+    const includeDisabled = query.includeDisabled === true;
     const where: Prisma.ToolWhereInput = {
       source: query.source ? { equals: query.source } : undefined,
       execution: query.execution ? { equals: query.execution } : undefined,
-      enabled: query.enabled === undefined ? undefined : query.enabled,
+      enabled: includeDisabled
+        ? undefined
+        : query.enabled === undefined
+          ? undefined
+          : query.enabled,
       name: query.name ? { contains: query.name } : undefined,
       mcpServer: query.mcpServer ? { equals: query.mcpServer } : undefined,
     };
@@ -83,6 +91,7 @@ export class ToolsService implements OnModuleInit {
     if (
       viewer &&
       query.enabled === undefined &&
+      !includeDisabled &&
       !(await this.isPlatformAdmin(viewer))
     ) {
       where.enabled = true;

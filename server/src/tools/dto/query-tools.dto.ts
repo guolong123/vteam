@@ -38,6 +38,20 @@ export class QueryToolsDto {
   @IsIn([true, false])
   enabled?: boolean;
 
+  @ApiPropertyOptional({
+    description:
+      '包含停用工具（true 时忽略 enabled 过滤、返回启用+停用全量；优先级高于 enabled；缺省 false 保持现有语义）',
+  })
+  @IsOptional()
+  @Transform(({ value }) => {
+    // "true"/"false" 字符串 → 布尔；其余非法值忽略（视为缺省）
+    if (value === 'true' || value === true) return true;
+    if (value === 'false' || value === false) return false;
+    return undefined;
+  })
+  @IsIn([true, false])
+  includeDisabled?: boolean;
+
   @ApiPropertyOptional({ description: '工具名称模糊搜索（name contains）' })
   @IsOptional()
   @IsString()

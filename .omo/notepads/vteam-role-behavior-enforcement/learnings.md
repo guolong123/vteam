@@ -301,3 +301,34 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - 实现坑：prune 用 max 窗口淘汰时，计数必须按各自窗口过滤（pair 60s vs task 120s），否则 pair 配额被 task 窗口拉长——被单测抓出，已修（计数侧 `r.at > now - windowMs`）。
 - my_profile：新增 `effectivePermission{policyId,policyName,agentName,permission,correction}`（`ExecutionPolicyService.resolveByAgent({policyId,role})`，`@Optional` 注入 + try/catch 回退 null）与 `agentName(vteam-<role>)`；legacy `permissionScope/toolEffects` 保留但加 `deprecated{permissionScope:true,toolEffects:true,note}` 指明 effectivePermission 为唯一事实来源。`PlatformMcpModule` 新增 `ExecutionPoliciesModule` import（该模块仅依赖 Realtime，无环）。
 - 验证：mention-throttle 7 + platform-mcp.service 150 + controller/chat/worker-dispatcher 313 全绿；`tsc --noEmit` 干净。
+---
+
+## 2026-09-14 Lane W：Agent 页生效权限只读展示（feat(web))
+- 移除：`ToolPermissionList`（effect 三态编辑 + 添加工具）、`permissionRows`/`permission-config` 块、`toolEffects` 保存字段、`ToolEffectKey/toolEffectMeta/toolSourceMeta/BUILTIN_TOOL_ACTIONS/inferToolSource`；`CreateAgentModal` 仅改副文案（去“工具权限”字样，字段本就只有 name/prompt/persona）。
+- 新增 `EffectivePermissionSection`（只读）：策略元信息（policyName · agentName + correction.scopeSummary）→ 原生行（edit/read glob map 可读渲染 `glob effect` 以；分隔，bash/task 三态徽章）→ MCP 分组（permission 中 `vteam_*` 键经工具目录 name/action 双键匹配 → 按 `mcpServer` 分组；停用 server 默认收起 `aria-expanded` 可展开，启用默认展开；未命中目录进“未收录工具”组保留展示；目录工具 `enabled=false` 标“已停用”）。
+- 数据：`GET /mcp-servers` 全量 + `GET /tools?source=mcp&enabled=false`（enabled=false 按冻结契约取含停用全量，不传 enabled 语义依赖 admin 默认故显式传参）；`effectivePermission===null`（含 Lane S 未落地前的 undefined）→ 中性“未绑定执行策略”，无历史回退。
+- 坑：勿用 `git stash` 验证基线——并行 Lane S 同树作业，stash 会卷走对方未提交改动且 pop 冲突；只读验证用 `git stash show`/`git diff` 或直接读文件。恢复时用 `git checkout stash@{0} -- <own-file>` 定向取回，不碰他人文件。
+- 验证：`npx tsc --noEmit` exit 0；`npm run lint` 0 errors（agents/page 仅剩基线既有 `deleting` 未用警告）；全仓 grep 确认零 `toolEffects/permissionScope/tool-permission-list` 残留。
+---
+
+## 2026-09-14 Lane S：移除退役 per-agent 权限机制 + effectivePermission（refactor(server))
+- 移除：`AgentToolEffect` 模型 + `Agent.toolEffects` 关系 + `agents.permission_scope` 列（schema + 新迁移 `20260913000000_drop_agent_tool_effects_permission_scope` 手写 SQL：DROP TABLE + DROP COLUMN，0 行无需数据迁移）；`agents.service` 的 AGENT_INCLUDE/toolEffects 全套关联方法（createAssociations/replaceToolEffects/createToolEffects/copyAssociations→copySkills）；DTO 的 `ToolEffectDto`/`toolEffects`/`permissionScope`；seed 5 模板 `permissionScope`；my_profile 的 `permissionScope/toolEffects/deprecated`。
+- 新增：`ExecutionPolicyService.resolveManyByAgents`（单次 findMany + 内存映射，语义与 resolveByAgent 一致，resolveByAgent 改调内部 `policyKeyOf`）；`AgentsService.toAgentDto/toAgentDtoList` async 返回 `policyId + effectivePermission`（未绑定 null）；`AgentsModule` import `ExecutionPoliciesModule`（仅依赖 Realtime，无环）。
+- `GET /tools`：成员 enabled 缺省仍默认 true，显式传入（含 false）任何 viewer 按值过滤（与 Lane W `enabled=false` 取全量契约对齐；worker injector 恒传 `enabled=true` 不受影响）；items 本就是 Tool 全行（含 mcpServer）。
+- 隐藏消费者：`swagger-mcp.auth.ts` 直读 `AgentToolEffect`（与“无运行时消费”说法矛盾，但表 0 行故实际恒 deny）→ 改为实例归属解析后默认拒绝（行为不变，message 改指引 ExecutionPolicy）；其 spec 的 allow 用例改 deny 断言，F2 集成块改 mock authorize 放行（assertWorkerTask 改直调单测保留覆盖）。
+- 坑：同消息多 edit 并发写同一文件会静默丢失（报成功但 git diff 为空）——同一文件必须逐个串行 edit 并抽查 `git status`；spec 先改会导致 tsc 报 DTO 不存在（属正常中间态，按产品→规格顺序收敛）。
+- 验证：`npx tsc -p tsconfig.json --noEmit` exit 0；`npx jest src/agents src/tools src/platform-mcp src/prisma --runInBand` 303 全绿；`src/swagger-mcp src/execution-policies` 59 全绿。
+
+## 2026-09-14 Stack 重建验证（DI fix 91a1613）
+- `npx tsc -p tsconfig.json --noEmit` exit 0（server）。
+- `docker compose build server worker web init` + `up -d --force-recreate server worker web`：server 由 CrashLoop（Nest can't resolve AgentsService → ExecutionPolicyService at index [5] in SwaggerMcpModule）恢复 healthy；新容器日志 0 条 "can't resolve dependencies"，"Nest application successfully started"；`docker compose run --rm init` "No pending migrations" + seed 完成 exit 0。
+- DB：`agent_tool_effects` 表无（SHOW TABLES 空）、`agents.permission_scope` 列无（SHOW COLUMNS 仅 policy_id 等）、5 模板俱在。
+- API：`GET /agents?type=template` 5 条各有 policyId + effectivePermission（permission.edit/read/bash/task 齐全，task 全 deny），无 permissionScope/toolEffects。
+- **跨 Lane 契约断裂（未改代码，仅报告）**：Lane W（web agents/page.tsx:1804）以 `GET /tools?source=mcp&enabled=false` 取“含停用全量”；Lane S（tools.controller）实现为显式 enabled 按值过滤 → 当前 200 工具全 enabled=true，故该查询恒返回 `{"items":[],"total":0}`。Playwright 实测（admin 登录 → /agents → 模板 agent）：effective-permission-section 渲染正常（policyMeta + 4 原生行，0 console errors），但 MCP 分组退化为单组 `__unknown`“未收录工具”6 条，`vteam-api` 停用默认收起不可观察。server 日志证实浏览器确发 `.../tools?source=mcp&enabled=false&page=1&pageSize=200`。另：server pageSize 上限 100，mcp 工具 194 条，单页取不全。修复方向（二选一，需产品决策）：web 端分两次取（enabled=true/false 合并）或 server 加 `includeDisabled` 语义；勿动 DI fix 之外的代码。
+---
+
+## 2026-09-14 fix(tools)：includeDisabled 目录查询 + Agent 页 MCP 全量分页
+- 断裂根因：Agent 页以 `GET /tools?source=mcp&enabled=false` 取“全量 MCP 目录”，但 server 显式 enabled 为严格过滤 → 返回 `[]`（停用 0 行），页面退化为 `__unknown` 单组；另目录 194 行超单页 100 上限。
+- Server：`QueryToolsDto` 新增 `includeDisabled?: boolean`（"true"/"false" 字符串 Transform + IsIn，与 enabled 同模式）；`findAll` 中 `includeDisabled===true` 时 where.enabled 置 undefined 且跳过成员默认 `enabled=true`；优先级 includeDisabled > enabled（文档写进 class/method JSDoc + DTO 描述 + controller 注释保留原语义说明）。显式 `enabled=true|false` 语义不变，worker injector（恒传 enabled=true）不受影响。
+- Web：`mcp-tools` 改 `source=mcp&includeDisabled=true`，`mcp-servers` 与 `mcp-tools` 均 pageSize 100 循环拉全（items.length >= total 或空页停，上限 20 页防死循环）；分组 + 停用默认收起逻辑零改动。
+- 验证：tools.service.spec 28 全绿（含 3 新增：includeDisabled 返回混合行、优先于 enabled、成员默认被绕过）；web `tsc --noEmit` exit 0；web lint 0 errors；server 改动文件 eslint 干净（spec 2 处 prettier 已 --fix）。

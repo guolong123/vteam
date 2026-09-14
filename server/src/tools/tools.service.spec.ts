@@ -330,6 +330,63 @@ describe('ToolsService', () => {
       );
     });
 
+    it('includeDisabled=true 返回停用行（忽略 enabled 过滤，where.enabled 为 undefined）', async () => {
+      const mixed = [toolRows[0], { ...toolRows[1], enabled: false }];
+      prisma.$transaction.mockResolvedValue([2, mixed]);
+
+      const result = await service.findAll({ includeDisabled: true });
+
+      expect(prisma.tool.count).toHaveBeenCalledWith({
+        where: {
+          source: undefined,
+          execution: undefined,
+          enabled: undefined,
+          name: undefined,
+        },
+      });
+      expect(result.items).toHaveLength(2);
+    });
+
+    it('includeDisabled=true 优先于显式 enabled（同时传入时忽略 enabled=false）', async () => {
+      prisma.$transaction.mockResolvedValue([2, toolRows]);
+
+      await service.findAll({ enabled: false, includeDisabled: true });
+
+      expect(prisma.tool.count).toHaveBeenCalledWith({
+        where: {
+          source: undefined,
+          execution: undefined,
+          enabled: undefined,
+          name: undefined,
+        },
+      });
+    });
+
+    it('成员 viewer + includeDisabled=true → 不强制 enabled=true（返回启用+停用全量）', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u_member',
+        enabled: true,
+        role: { permissions: { all: false } },
+      });
+      const mixed = [toolRows[0], { ...toolRows[1], enabled: false }];
+      prisma.$transaction.mockResolvedValue([2, mixed]);
+
+      const result = await service.findAll(
+        { includeDisabled: true },
+        { id: 'u_member' },
+      );
+
+      expect(prisma.tool.count).toHaveBeenCalledWith({
+        where: {
+          source: undefined,
+          execution: undefined,
+          enabled: undefined,
+          name: undefined,
+        },
+      });
+      expect(result.items).toHaveLength(2);
+    });
+
     it('pageSize 超上限 100 时收敛为 100', async () => {
       prisma.$transaction.mockResolvedValue([0, []]);
 

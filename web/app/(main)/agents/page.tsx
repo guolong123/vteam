@@ -11,7 +11,7 @@
  *   选中 Agent → GET /api/v1/agents/:id 详情（列表条目已含扩展字段，详情查询保证选中态最新）。
  * - 权限区只读渲染 `effectivePermission`（ExecutionPolicy 解析：edit/read glob + bash/task
  *   + vteam_* MCP 工具 deny），不做任何编辑与保存；未绑定策略时中性提示，不做历史回退。
- * - MCP 工具按 `mcpServer` 分组（GET /mcp-servers + GET /tools?source=mcp&enabled=false
+ * - MCP 工具按 `mcpServer` 分组（GET /mcp-servers + GET /tools?source=mcp&includeDisabled=true
  *   解析归属；匹配按工具 name/action 双键，vteam_ 前缀兼容裸名）；
  *   停用 server 的分组默认收起（aria-expanded 可展开），启用 server 默认展开。
  * - 交互：
@@ -459,7 +459,7 @@ interface EffectivePermissionSectionProps {
   effective: EffectivePermission | null;
   /** GET /mcp-servers 全量（含停用；分组标题 + 默认收起依据）。 */
   mcpServers: ApiMcpServer[];
-  /** GET /tools?source=mcp&enabled=false（含停用；解析条目归属 server）。 */
+  /** GET /tools?source=mcp&includeDisabled=true（含停用；解析条目归属 server）。 */
   mcpTools: ApiTool[];
   /** MCP 目录加载中（原生行照常渲染，分组区占位）。 */
   loading: boolean;
@@ -739,7 +739,7 @@ interface ConfigPanelProps {
   models: AvailableModel[];
   /** MCP server 全量（GET /mcp-servers，权限分组标题 + 收起依据） */
   mcpServers: ApiMcpServer[];
-  /** MCP 工具目录（GET /tools?source=mcp&enabled=false，解析条目归属 server） */
+  /** MCP 工具目录（GET /tools?source=mcp&includeDisabled=true，解析条目归属 server） */
   mcpTools: ApiTool[];
   /** MCP 目录加载中（分组区占位） */
   mcpLoading: boolean;
@@ -1790,18 +1790,49 @@ export default function AgentConfigPage() {
     },
   });
 
-  // MCP server 全量：GET /mcp-servers（含停用；权限分组标题 + 默认收起依据）
+  // MCP server 全量：GET /mcp-servers（含停用；权限分组标题 + 默认收起依据；
+  // 分页拉全量：pageSize 100 循环直到 items 凑齐 total 或无更多页）
   const mcpServersQuery = useQuery({
     queryKey: ["mcp-servers"],
-    queryFn: () => api.get<PageResponse<ApiMcpServer>>("/mcp-servers", { query: { page: 1, pageSize: 100 } }),
+    queryFn: async () => {
+      const first = await api.get<PageResponse<ApiMcpServer>>("/mcp-servers", { query: { page: 1, pageSize: 100 } });
+      const all = [...first.items];
+      const total = first.total ?? first.items.length;
+      let page = 1;
+      while (all.length < total) {
+        page += 1;
+        if (page > 20) break;
+        const next = await api.get<PageResponse<ApiMcpServer>>("/mcp-servers", { query: { page, pageSize: 100 } });
+        if (next.items.length === 0) break;
+        all.push(...next.items);
+        if (all.length >= (next.total ?? total)) break;
+      }
+      return { items: all, total, page: 1, pageSize: all.length };
+    },
     enabled: !!userId,
   });
   const mcpServers = mcpServersQuery.data?.items ?? [];
 
-  // MCP 工具目录：GET /tools?source=mcp&enabled=false（含停用；解析条目归属 server）
+  // MCP 工具目录：GET /tools?source=mcp&includeDisabled=true（含停用；解析条目归属 server；
+  // 分页拉全量：目录 194 行超单页 100 上限，pageSize 100 循环直到 items 凑齐 total 或无更多页）
   const mcpToolsQuery = useQuery({
     queryKey: ["mcp-tools"],
-    queryFn: () => api.get<PageResponse<ApiTool>>("/tools", { query: { source: "mcp", enabled: false, page: 1, pageSize: 200 } }),
+    queryFn: async () => {
+      const baseQuery = { source: "mcp", includeDisabled: true };
+      const first = await api.get<PageResponse<ApiTool>>("/tools", { query: { ...baseQuery, page: 1, pageSize: 100 } });
+      const all = [...first.items];
+      const total = first.total ?? first.items.length;
+      let page = 1;
+      while (all.length < total) {
+        page += 1;
+        if (page > 20) break;
+        const next = await api.get<PageResponse<ApiTool>>("/tools", { query: { ...baseQuery, page, pageSize: 100 } });
+        if (next.items.length === 0) break;
+        all.push(...next.items);
+        if (all.length >= (next.total ?? total)) break;
+      }
+      return { items: all, total, page: 1, pageSize: all.length };
+    },
     enabled: !!userId,
   });
   const mcpTools = mcpToolsQuery.data?.items ?? [];
