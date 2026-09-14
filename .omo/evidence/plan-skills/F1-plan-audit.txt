@@ -1,0 +1,124 @@
+F1 — vteam-plan-skills-review 计划合规审计
+Plan: .omo/plans/vteam-plan-skills-review.md
+Date: 2026-09-14 (UTC+8) | Auditor: Sisyphus-Junior (independent run)
+Method: 每条 claim 定位具体代码 (file:line)，不采信 prose；tsc + jest 实跑；e2e 独立实跑。
+
+== COMMIT CHAIN (git log --oneline 实测) ==
+- 4dee5da test(e2e): plan skills and review flow (22 files: scripts/e2e-plan-skills.sh 607 lines + evidence)
+- 8b8a7c5 fix(seed): register plan_review in tool catalog (server/prisma/seed.ts +1, seed.spec.ts +9)
+- NOTE: 上述 2 个 commit 之外，Todo 1~4 的实现主体当前位于未提交工作区
+  (git status M: seed.ts/dispatcher/tools/service/client/constants/exec-server/role-guard-plugin+policy+specs)。
+  本审计直接以工作区代码为准逐条验证，commit-state 仅如实记录，不计入 PASS/FAIL。
+
+== TODO 1 [seed] 6 skills + 5 角色 prompt 评审子句 → PASS ==
+- 6 skills in BUILTIN_SKILLS, server/prisma/seed.ts:614-1227:
+  plan-creation 952-1018; plan-review-product 1021-1061; -architect 1064-1102;
+  -developer 1105-1143; -tester 1146-1183; -project_manager 1186-1225.
+- enabled:true 双向: update 1232 + create 1238 (upsert where name).
+- plan-creation 含 D1 全要素: explore-first/并串分组 975-992, 能力映射(不硬编码) 994-997,
+  分配章节四要素 999-1001, 落盘 .opencode/plans/ 1003-1005,
+  question 选评审者+调 vteam_plan_review+REJECT 修订 1007-1012.
+- frontmatter accurate: creation allowed-tools = task_context/read_file/doclib/chat_history/question/vteam_plan_review
+  (seed.ts:960-966); 5 review skills = read_file/task_context/chat_history/skill (1029-1033 等 5 处一致)。
+- review skills 禁改/禁执行: 5×"禁止修改计划文件（只读评审）；禁止执行计划中任何步骤" (1059/1100/1141/1181/1223);
+  VERDICT 严格格式 5× (1055/1096/1137/1177/1219); 职业视角各异 (product 1047-1051 / architect 1090-1092 /
+  developer 1131-1133 / tester 1172-1173 / PM 1212-1215)。
+- 5 role prompts 点名 exact skill: seed.ts:148 plan-review-product, :182 plan-review-project_manager,
+  :215 plan-review-architect, :249 plan-review-developer, :284 plan-review-tester.
+- QA evidence: server/src/prisma/seed.spec.ts (seed 后 DB 断言; seed-fix commit 加 plan_review 目录断言)。
+
+== TODO 2 [dispatcher] PLAN_PRODUCE 接入 → PASS ==
+- PRODUCE 三步: server/src/chat/worker-dispatcher.ts:261-265
+  (skill(plan-creation) → question 多选 product/architect/developer/tester/project_manager →
+  vteam_plan_review → REJECT 修订/可重问)。
+- REVIEW 注明 fresh-session/self-contained: worker-dispatcher.ts:274-279
+  ("评审在全新会话中进行、唯一输入即计划文件正文…结论须自包含")。
+- plan-off byte-identical: worker-dispatcher.spec.ts:1328-1344
+  (缺省/planMode=false 均不含两段指令, 且 expect(s2).toBe(s) 逐字节一致)。
+- 不改现有注入字节由上条单测锁定；produce 三步单测 :1346-1368; review 单测 :1370-1384。
+
+== TODO 3 [mcp] plan_review + 聚合 + WorkerClient.review → PASS ==
+- 注册: server/src/platform-mcp/platform-mcp.tools.ts:587-609 schema
+  (taskId/selfInstanceId/reviewers 必填, planPath/timeoutMs 可选, 缺省 10min/上限 30min),
+  :790 name:'plan_review' + handler service.planReview (:794)。
+- 主门: platform-mcp.service.ts:1880 assertWorkerTask → 1882 findTaskTeamGate →
+  1885-1890 非主 Forbidden (message 点名 plan_review)。
+- 成员解析 (首个该 role, skip-notes): 1906-1924 (缺席/主自身/去重 → notes, 不报错)。
+- plan 定位 traversal-safe: resolveReviewPlan 1962-2021; normalize+越界拒绝 1979-1989;
+  缺省最新 .md、无文件 400 明示 2000-2007。
+- register/fan-out/unregister(finally): 2059 registerExecution / 1934 Promise.allSettled /
+  2069-2075 finally unregister; scope team:<teamId> 2058。
+- VERDICT 解析: 2144 /VERDICT:\s*(APPROVE|REJECT)/i, 失败→NEEDS-ATTENTION 2145-2152。
+- aggregate-never-drop: 1949-1958 (rejected→NEEDS-ATTENTION 附原文, verdicts 与 targets 等长)。
+- WorkerClient.review POSTs /review: server/src/workers/worker.client.ts:359-398
+  (timeout 可配 363, margin 382, 响应 {text,sessionId} 严格校验 391-397)。
+- gated 常量: agent.constants.ts:116-141 VTEAM_MCP_TOOL_NAMES 24 项 (vteam_plan_review :140);
+  :149-156 ROLE_SERVER_GATED_TOOLS 6 项 (vteam_plan_review :155)。
+- QA: server/src/platform-mcp/platform-mcp.plan-review.spec.ts (new, 主门/解析/聚合单测);
+  controller.spec.ts:189 (24 工具) / :229 名单含 plan_review / :358-359 schema 断言。
+
+== TODO 4 [worker] POST /review → PASS ==
+- 路由: worker/src/exec/exec-server.ts:440 '/review' → handleReview 760-836。
+- 无 sessionId by design: ReviewRequestPayload 236-255 (字段 prompt/model/agent/directory/taskId/
+  agentId/channelId/system/timeoutMs, 无 sessionId; 注释 234 明示恒新会话)。
+- always-fresh: 809 driver.createSession (调用方 sessionId 无处传入, 注释 808)。
+- guard 映射 (passed agent): 811 trackReviewGuardSession; 844-872 (vteam- 前缀门, 同根+TTL 裁剪, 写失败 warn 不阻断)。
+- 复用 runSendAndAwait: 886 silent:true。
+- silent 零 realtime: silent→无 onPoll (1675-1683); handleReview 内零 sender.send;
+  全文件 sender.send 仅 1420-1485 (/execute 路径) 与 1698/1743/1758 (仅非 silent onPoll 可达);
+  driver 层 (worker/src/driver) 零 sender 引用。
+- timeout→504: 827-828 ReviewTimeoutError→504, 其余→502; runReviewWithTimeout 878-902
+  (先 best-effort abort 再 fail-closed)。
+- worker SERVER_GATED_TOOLS 第 6 值: role-guard-plugin.ts:90-97 (vteam_plan_review :96);
+  policy.ts:100-106 镜像; parity spec role-guard-plugin.spec.ts:96 用例 + :131 26 例矩阵。
+- QA: worker/src/exec/exec-server.spec.ts (+197 行: createSession 被调/sessionId 未复用/文本透出/504)。
+
+== TODO 5 [e2e] + SEED FIX → PASS ==
+- seed fix commit 8b8a7c5: vteamTools plan_review 行 seed.ts:593
+  ({action:'plan_review', name:'vteam_plan_review', …} 经 596-610 upsert, enabled:true);
+  seed.spec.ts:417-423 断言 action plan_review → name vteam_plan_review。
+- e2e commit 4dee5da: scripts/e2e-plan-skills.sh + 全套 evidence。
+- 独立实跑 (本审计, 2026-09-14): ALL STEPS 0/1/2/3/4/5/6 PASS, smoke path = live-llm。
+  - step1: 6 skills enabled + tools 行 + 6 SKILL.md 注入 (VERDICT/plan_review markers) PASS
+  - step2: server == worker == 6 gated 值 (含 vteam_plan_review) PASS
+  - step3: guard PM+developer → vteam_plan_review = allow PASS
+  - step4: 非主调 plan_review → -32003 + 403 仅主 Agent 消息 PASS
+  - step5: LIVE 单评审者返回可解析 VERDICT: verdicts=["APPROVE"] (developer/tmm_0000000004, findings 含可执行性/依赖真实性/工作量/完整性四条依据) PASS
+  - step6: smoke 文件已删, task 未变, DB + /agent-policies 回基线 PASS
+- 历史 evidence 另含 degraded 路径 (NEEDS-ATTENTION-by-infra, contract held); 本次独立跑为 live-llm, 无需 fallback。
+
+== CLAIM 6 跨契约一致性 → PASS ==
+- skill 名: dispatcher 文本 (plan-creation, vteam_plan_review) == seed 名 (plan-creation; review 5 名; tool 名 vteam_plan_review) ✓。
+- MCP 名: 注册 plan_review (tools.ts:790) 于 vteam server → 有效名 vteam_plan_review
+  (<server>_<tool> 约定) == server-gated 条目 (constants :140/:155) == worker pass-through 条目
+  (role-guard-plugin :96, policy.ts :106); e2e step3+4 实证 guard 放行 + 服务端主门拦截 ✓。
+- HTTP 形状: 请求 ReviewOptions (client.ts:359-380: prompt/model/agent/directory/taskId/agentId/channelId/system/timeoutMs)
+  == ReviewRequestPayload (exec-server.ts:236-255 同字段, 无 sessionId) ✓;
+  响应 {text, sessionId} 两侧一致 (exec-server.ts:819 发送 / client.ts:390-397 校验接收) ✓。
+
+== 全局 GREP (链路 diff) → PASS ==
+- 新增行中 as any / @ts-ignore / toolEffects / permissionScope: 0 处
+  (git diff -U0 chain files | grep -c = 0)。
+- 注: dispatcher.spec 旧测试内既有 (prisma.task as any) 属存量, 非本链路新增。
+
+== 实跑验证 ==
+- cd server && npx tsc -p tsconfig.json --noEmit → rc=0
+- cd worker && npx tsc --noEmit → rc=0
+- server jest: seed.spec + agent.constants.spec + worker.client.spec + plan-review.spec + controller.spec
+  → 5 suites / 125 tests PASS
+- server jest worker-dispatcher.spec → 188 tests PASS
+- worker jest exec-server.spec + role-guard-plugin.spec → 2 suites / 117 tests PASS
+- bash scripts/e2e-plan-skills.sh (独立) → 0/1/2/3/4/5/6 全 PASS, live-llm APPROVE
+
+== TODO ACCEPTANCE MATRIX ==
+| Todo | Acceptance | Evidence | Result |
+| 1 seed 6 skills+prompt 子句 | D1 要素/frontmatter/enabled/点名 | seed.ts:148/182/215/249/284/593/952-1241; seed.spec.ts | PASS |
+| 2 dispatcher 流程 | skill→question→plan_review; fresh/self-contained; plan-off 字节一致 | dispatcher.ts:255-279; spec :1328-1384 | PASS |
+| 3 mcp 聚合+client | 注册/主门/解析/聚合/gated/review POST | tools.ts:587-794; service.ts:1870-2164; client.ts:359-398; constants :116-156 | PASS |
+| 4 worker /review | 新会话/guard/silent/504/第6值/parity | exec-server.ts:236-255/440/760-902/1634-1683; plugin :90-97; policy :100-106 | PASS |
+| 5 e2e+文档 | seed 行/脚本绿/live VERDICT/文档同步 | 8b8a7c5; e2e-plan-skills.sh; 独立跑全绿; 16 篇 +6 行 | PASS |
+| seed fix | vteamTools plan_review 行 | seed.ts:593; seed.spec.ts:417-423; 8b8a7c5 | PASS |
+| cross-contract | 三处命名/HTTP 形状一致 | 见 CLAIM 6 | PASS |
+| hygiene | 无 toolEffects/permissionScope/as any/@ts-ignore 新增 | chain diff grep = 0 | PASS |
+
+VERDICT: APPROVE

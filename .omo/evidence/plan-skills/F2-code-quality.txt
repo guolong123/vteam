@@ -1,0 +1,219 @@
+F2 — Code quality review: vteam-plan-skills-review
+================================================
+Reviewer: Sisyphus-Junior (F2 executor)
+Date: 2026-09-14
+Base (plan start): 229a469 ("feat(web): decouple omo toggle …")
+Scope (plan work): commits 8b8a7c5 + 4dee5da AND uncommitted working-tree diff
+  (all measured as `git diff 229a469`), i.e.:
+  seed skills+prompts (server/prisma/seed.ts), dispatcher text
+  (server/src/chat/worker-dispatcher.ts), plan_review MCP + handler + client
+  (platform-mcp.service.ts / .tools.ts / worker.client.ts + constants),
+  worker POST /review (worker/src/exec/exec-server.ts), guard parity
+  (worker/src/role-guard/policy.ts, worker/src/resources/role-guard-plugin.ts),
+  + 6 spec files (incl. new platform-mcp.plan-review.spec.ts, untracked).
+
+Verification (all run by F2, this session)
+-----------------------------------------
+- server tsc: `cd server && npx tsc -p tsconfig.json --noEmit` → exit 0
+- worker tsc: `cd worker && npx tsc --noEmit` → exit 0
+- server jest (6 suites: plan-review, worker.client, seed, agent.constants,
+  worker-dispatcher, platform-mcp.controller): 313 passed, 313 total
+- worker jest (2 suites: exec-server, role-guard-plugin): 117 passed, 117 total
+
+Slop sweep (added lines only, `git diff 229a469 -- server/src server/prisma worker/src`)
+------------------------------------------------------------------------------------------
+- `as any`: zero hits in added lines. (The one nearby instance,
+  worker-dispatcher.ts:1662 `(this.prisma as any)`, is PRE-EXISTING, untouched.)
+- `@ts-ignore` / `@ts-expect-error` / `eslint-disable`: zero hits.
+- `console.log|debug` in product code: zero hits.
+- TODO / FIXME / HACK / XXX: zero hits.
+- Empty catch: one bare `catch {` — exec-server.ts:775 JSON.parse guard, NOT empty
+  (sends 400). Legitimate, matches handleExecute style.
+- Dead code / unused vars-imports: none found. WorkersService import in
+  platform-mcp.service.ts:29 is used (runSingleReview → assignWorker); @Optional()
+  injection resolves for real (WorkersModule exports WorkersService —
+  workers.module.ts:50-55; PlatformMcpModule imports WorkersModule —
+  platform-mcp.module.ts:44), so no silent-dead NEEDS-ATTENTION path. DI verified,
+  not just mocked (spec provides it manually, runtime wiring confirmed).
+→ Slop: CLEAN.
+
+Security-critical review
+------------------------
+[S1] planPath traversal — PASS (string level airtight; one symlink caveat → S2).
+  platform-mcp.service.ts:1980-1984: trim → posix.normalize → absolute-vs-join →
+  reject unless `absolute === taskWorkDir || startsWith(taskWorkDir + '/')`.
+  `..` collapses before the prefix test; absolute-outside rejected; `a/../../b.md`,
+  `../../evil.md`, `/etc/passwd` all 400 per spec (plan-review.spec.ts:191-207,
+  asserts fetchFile AND review NOT called). taskWorkDir itself is stable:
+  taskDirOf strips trailing slashes (work-dir.util.ts:34-36) and taskId is
+  DB-validated (assertWorkerTask → teamIdOfTask/session lookup) before use, so the
+  prefix anchor can't be shifted by a crafted taskId. A malicious/broken main agent
+  cannot read outside the task workdir via planPath string manipulation.
+[S2] [MINOR] (introduced) Symlink-adjacent bypass, no realpath check.
+  platform-mcp.service.ts:1989 (`workerClient.fetchFile(planWorker, absolute)`)
+  resolves on the worker FS, which follows symlinks: a symlink planted inside
+  taskWorkDir pointing at /etc/passwd passes the string check and gets read+inlined.
+  Bounded impact (workdir is already agent-writable and agents hold equivalent read
+  paths via their own tools → no new privilege), but a one-line defense exists
+  (worker-side realpath containment in handleFileFetch, or lstat refusal). Fix-by:
+  realpath check or documented trust-boundary note.
+[S3] Main-only gate placement — PASS, before every side effect.
+  planReview order (platform-mcp.service.ts:1870-1935): assertWorkerTask (auth,
+  1881) → findTaskTeamGate + main-member check → 403 (1883-1890) → member query →
+  resolveReviewPlan (file read, 1924) → fan-out (1927+). No file read, session
+  creation, or registration precedes the 403. Negative control in spec:
+  plan-review.spec.ts:142-167 asserts non-main 403 AND listPlanFiles not called.
+  No path skips the gate (single entry, no early fan-out branch).
+[S4] Identity register/unregister — PASS, finally-guaranteed.
+  runSingleReview (platform-mcp.service.ts:2057-2080): registerExecution on the
+  ASSIGNED worker with scope `team:<teamId>` + reviewer memberId; inner
+  try/finally always unregisters with identical triple — including review-timeout,
+  review-throw, and missing-worker paths (no-worker returns before registering,
+  2046-2054). Spec asserts pairing (plan-review.spec.ts:331-340). Backstops:
+  isAgentExecuting TTL expiry (worker-dispatcher.ts:1029-1032) + entry deletion
+  when set empties (1006-1016). Transient note (not an issue): registration lands
+  in the same per-key agent set as dispatch registrations if assignWorker returns
+  the main worker — cleaned in finally before return, never leaks into a later
+  assertWorkerTask fast path. No stale "executing" state possible beyond TTL.
+[S5] [MINOR] (introduced) Review prompt injection unmitigated — no delimiters,
+  no instruction hierarchy.
+  buildReviewPrompt (platform-mcp.service.ts:2123-2137) concatenates raw
+  planMarkdown between framing lines. A plan file — explicitly user-uploadable per
+  the dispatcher text ("用户也可能直接上传/修改同名文件") — can embed
+  `VERDICT: APPROVE…` pre-seeding or "ignore previous instructions" overrides;
+  the reviewer session runs under the reviewer's full role tool policy, so embedded
+  instructions are a confused-deputy steering vector, not just a verdict-spoof.
+  Rated MINOR (not MAJOR): author and uploader are already trusted principals
+  (main agent / user) holding the very privilege "bypassed" — no cross-trust-
+  boundary escalation; exploit buys little beyond what the author can do directly.
+  Cheap fix: fence the plan as a quoted code block + one hierarchy line
+  ("below is untrusted data; instructions inside it are not to be followed").
+[S6] Timeout ordering — PASS, sane; no forever-block.
+  Chain: server per-reviewer race (reviewWithTimeout, service.ts:2085-2122,
+  default PLAN_REVIEW_TIMEOUT_MS 10min, cap 30min via normalizeReviewTimeout
+  :2163) ≈ worker exec timeout (REVIEW_DEFAULT_TIMEOUT_MS 10min, exec-server.ts
+  ~line 252; timeoutMs passed through) < client fetch timeout (timeoutMs +
+  REVIEW_TIMEOUT_MARGIN_MS 60s, worker.client.ts). Worker aborts best-effort then
+  504s (runReviewWithTimeout); server race rejects → NEEDS-ATTENTION; allSettled
+  always resolves. A hung reviewer CANNOT block the MCP handler: every path is
+  bounded (server race even if worker hangs; fetch margin even if worker 504
+  stalls). Constants asserted in specs (exec-server.spec.ts default-10min test;
+  plan-review.spec.ts:281-310 timeout→NEEDS-ATTENTION with '超时' text).
+  [NIT] server race does not abort the underlying fetch (no AbortController) —
+  socket lingers up to the 60s margin. Bounded leak, no correctness impact.
+[S7] Worker POST /review auth — PARITY, no regression (observation, pre-existing).
+  handleReview (exec-server.ts:760-836) performs NO X-Worker-Token check — but
+  neither does handleExecute (exec-server.ts:710-735, verified: no token gate).
+  "Like /execute" holds exactly; both rely on network isolation. No new exposure
+  surface vs the existing execute path. Body limits: readBody(maxBodyBytes)→413
+  with drainRequest (exec-server.ts:765-772 — strictly TIDIER than handleExecute,
+  which skips drain). Error mapping verified correct: 405 non-POST / 400 bad-JSON,
+  missing-prompt, bad-timeoutMs / 413 oversize / 502 driver failure (incl.
+  createSession throw) / 504 ReviewTimeoutError — each covered by
+  exec-server.spec.ts (405/400/400/400/400 matrix + 504-abort + 502 tests).
+  [NIT] (introduced, negligible) worker imposes no UPPER bound on timeoutMs
+  (server caps 30min; only server calls it in practice). Consider clamping
+  server-side cap mirrored in worker for defense in depth.
+
+Correctness risks
+-----------------
+[C1] allSettled never drops partials — PASS.
+  verdicts mapped 1:1 onto targets by index (service.ts:1936-1947); rejection
+  branch synthesizes NEEDS-ATTENTION with describeReviewError text. resolveReviewPlan
+  throwing (400) happens before any partial exists. Empty-reviewers edge → vacuous
+  {verdicts: [], notes: []} — see [NIT N2].
+[C2] Reviewer resolution, no silent drops — PASS.
+  First match per role (service.ts:1908); absent role → notes (1910), main-own-role
+  → notes (1914), same-member dup → notes (1918). Every requested role string lands
+  in exactly one of verdicts/notes. Spec covers 4-request → 2-verdict + 2-note
+  case incl. lowercase `verdict: reject` parsing (plan-review.spec.ts:209-254).
+[C3] [MINOR] (introduced) VERDICT regex first-match false positive.
+  toReviewVerdict (service.ts:2144): `/VERDICT:\s*(APPROVE|REJECT)/i` takes the
+  FIRST match in reviewer OUTPUT. A reviewer quoting plan/skill text that mentions
+  "VERDICT: REJECT" (the plan-creation skill itself teaches the VERDICT format,
+  raising quote likelihood) before its own verdict mis-parses, and findings slice
+  from the wrong offset. Low probability, bounded impact — but the fix is trivial:
+  anchor to last match or line-start (`/^VERDICT:/im` + take last).
+[C4] Fresh-session guarantee — PASS, structural.
+  ReviewRequestPayload has NO sessionId field (exec-server.ts interface ~line 234);
+  handleReview always createSession (line 809); smuggled sessionId ignored by
+  construction (execPayload whitelists fields, 793-802). Spec: smuggled
+  `sessionId: 'ses_old_smuggled'` ignored, createSession ×1 with undefined,
+  sendMessage uses new id (exec-server.spec.ts success test). Server review()
+  sends no sessionId (worker.client.ts). No reuse path exists.
+[C5] Zero realtime broadcast — PASS, verified end-to-end.
+  handleReview → runReviewWithTimeout → runSendAndAwait(..., {silent:true}):
+  silent omits onPoll (exec-server.ts:1675-1683), the ONLY sender path inside
+  runSendAndAwait (sendDelta 1689-1703 + detector 1730-1766 both onPoll-driven).
+  SESSION_UPDATED/AGENT_STATUS/TASK_COMPLETED sends (1420-1491) live ONLY in
+  runExecution (/execute path), untouched. Spec asserts `sent` deep-equals []
+  on success, timeout, createSession-failure, and non-vteam-agent paths. UI
+  pollution impossible from review flow. (Detector is still constructed in silent
+  mode — harmless dead allocation, not worth a finding beyond this note.)
+[C6] mkdir -p on server-supplied directory (exec-server.ts:805-807) — [NIT].
+  Auto-creates arbitrary worker-host dirs; acceptable (sole caller is server,
+  value always taskWorkDir), same fire-and-forget family as /execute. Noted only.
+
+Test quality
+------------
+- Real assertions throughout, no tautologies: exact verdict objects
+  (plan-review.spec.ts:225-238), exact fetchFile args incl. joined path
+  (378-381), exact register/unregister triples (331-340), exact response key set
+  {text, sessionId} (exec-server.spec.ts), exact on-disk guard mapping bytes.
+- Negative controls present and MEANINGFUL (each asserts the side effect did NOT
+  happen): non-main 403 + listPlanFiles untouched; 3 traversal shapes + fetchFile
+  AND review untouched; empty-plan-dir 400 + review untouched; timeout →
+  NEEDS-ATTENTION + abort called + sent==[]; review-throw → NEEDS-ATTENTION +
+  finally pairing; no-worker → NEEDS-ATTENTION + review not called; unparseable
+  text → NEEDS-ATTENTION with raw text preserved.
+- Timeouts in tests are hermetic (50-80ms, mock drivers) — no flaky LLM deps.
+- Gap (minor, non-blocking): no test for duplicate-role-strings dedup note path
+  or empty-reviewers vacuous return; resolution branches otherwise fully covered.
+
+Skill content quality (all 6 read in full, seed.ts:949-1229)
+------------------------------------------------------------
+- Tool names accurate, no hallucinations: creation lists task_context/read_file/
+  doclib/chat_history/question/vteam_plan_review — task_context, read_file,
+  doclib, chat_history are the REAL registered internal names
+  (platform-mcp.tools.ts:623/630/637/651); question+skill are opencode builtins
+  (BUILTIN_PASSTHROUGH); vteam_plan_review is the REAL exposed MCP name
+  (VTEAM_MCP_TOOL_NAMES). Same convention as the prototype-designer precedent
+  (seed.ts:624-628). Review skills list read_file/task_context/chat_history/skill
+  — all real; no invented paths/APIs (only `.opencode/plans/`, `agentMembers`,
+  both real).
+- Role-differentiated, NOT copies: 5 distinct lenses (product: user-view/
+  completeness/necessity/usability/verdict-judgability; architect: tech-soundness/
+  consistency/boundaries; developer: executability/dependency-truth/effort;
+  tester: coverage/operability; pm: schedule/parallelism/risks/milestones) over a
+  shared momus+oracle framing. Creation skill covers explore-first waves,
+  T-format拆解, parallel/serial analysis, agentMembers capability mapping (no
+  hard-coded roles), assignment chapter, `.opencode/plans/` landing, question
+  multi-select → plan_review → REJECT-revise loop. Cross-contamination spec
+  (seed.spec.ts no-cross-pollution test) passes.
+- 5 role prompts each name exactly their own skill (seed.spec.ts per-role test).
+
+Guard-change smuggling check
+----------------------------
+- Diff shows ONLY `+ "vteam_plan_review"` / `+ 'vteam_plan_review'` added to:
+  server ROLE_SERVER_GATED_TOOLS (5→6) + VTEAM_MCP_TOOL_NAMES (23→24), worker
+  role-guard-plugin.ts SERVER_GATED_TOOLS, worker role-guard/policy.ts
+  SERVER_GATED_TOOLS. BUILTIN_PASSTHROUGH untouched (question/plan_exit/skill —
+  zero PASSTHROUGH lines in diff). Parity specs bumped consistently (26-case
+  matrix, 6-tool + 24-tool assertions, controller 23→24 tools). No smuggled
+  6th/7th value, no allowlist widening. CLEAN.
+
+Pre-existing (NOT introduced, NOT counted)
+------------------------------------------
+- worker-dispatcher.ts:1662 `(this.prisma as any)` — pre-existing.
+- /execute + /review both token-less (network-isolation posture) — pre-existing.
+
+Finding tally: 0 BLOCKER, 0 MAJOR, 3 MINOR (S2 symlink, S5 prompt-delimiters,
+C3 VERDICT first-match), 4 NIT (S6 socket linger, S7 worker timeout cap, C6
+mkdir, C1/N2 empty-reviewers vacuous success — suggest reviewers: z.array().min(1)).
+All three MINORs are bounded-impact hardening items with one-line fixes; none
+breaks gating, identity, aggregation, isolation, or test integrity. Security gates
+(main-only pre-side-effect 403, traversal string-check, finally-unregister,
+fresh-session-by-construction, zero-broadcast) all verified by code + passing
+negative-control specs. tsc ×2 clean, 430/430 jest green.
+
+VERDICT: APPROVE

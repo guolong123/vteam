@@ -39,7 +39,7 @@ drwxr-xr-x 1 root root  16 Sep 13 09:57 prototype-designer
 [e2e] worker exec endpoint ready (GET /plan-files -> 200 from server container)
 [e2e] smoke plan placed at worker:/data/vteam-worker/tasks/t_0000000001/.opencode/plans/e2e-plan-skills-smoke.md
 [e2e] smoke curl rc=0 http=200
-[e2e] smoke raw (first 2000 chars): {"jsonrpc":"2.0","id":31,"result":{"content":[{"type":"text","text":"{\"verdicts\":[{\"role\":\"developer\",\"memberId\":\"tmm_0000000004\",\"verdict\":\"APPROVE\",\"findings\":\"依据：\\n- 可执行性：T1/T2 均为只读动作，无歧义——T1「确认计划文档可读」我已实际完成（该文件存在且可正常读取，共 11 行）；T2「输出 VERDICT+依据」输出格式已严格定义，本评审即为该步执行。\\n- 依赖真实性：T1→T2 顺序成立；单评审者场景无并行分组需求，前置条件（服务端定位到计划文件）经本人收到计划全文得到证实。\\n- 工作量合理性：两步微操作，无估时离谱问题，无返工/联调成本。\\n- 验收可判定：唯一验收标准「只输出 VERDICT 与依据、不修改任何文件」可精确判定——本次评审未对任何文件做写操作。\\n- 轻微观察（不阻塞）：T1 完成后缺少显式的「可读性结论」回填步骤，但于 smoke 场景无碍。\"}],\"notes\":[]}"}]}}
+[e2e] smoke raw (first 2000 chars): {"jsonrpc":"2.0","id":31,"result":{"content":[{"type":"text","text":"{\"verdicts\":[{\"role\":\"developer\",\"memberId\":\"tmm_0000000004\",\"verdict\":\"APPROVE\",\"findings\":\"依据：\\n- 步骤可执行性：T1「确认计划文档可读」我已实际执行验证——计划文件存在于 `/data/vteam-worker/tasks/t_0000000001/.opencode/plans/e2e-plan-skills-smoke.md`（11 行，内容完整），只读即满足；T2「输出 VERDICT + 依据」无歧义、无外部依赖，本会话即可落地。\\n- 依赖真实性：唯一前置依赖「计划文件可被服务端定位」真实成立（文件路径存在且内容可读）；T1→T2 顺序成立。\\n- 工作量合理性：两步纯只读/输出动作，无编码、无联调，估时兼容，无遗漏返工成本。\\n- 完整性：作为 plan-skills 管线冒烟测试，最小化设计（验证扇出与冷评审本身即测试目标），验收标准「只输出 VERDICT 与依据、不修改文件」可判定且本评审已满足。\"}],\"notes\":[]}"}]}}
 [e2e] smoke summary: verdicts=["APPROVE"] notes=[]
 [e2e] [32mPASS[0m 5 (smoke LIVE path: single reviewer returned parseable APPROVE/REJECT)
 [e2e] smoke path: live-llm (parseable APPROVE/REJECT)

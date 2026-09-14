@@ -1,0 +1,174 @@
+F4 — Scope fidelity review for `vteam-plan-skills-review`
+Date: 2026-09-14 | Reviewer: Sisyphus-Junior (F4 executor)
+Plan: .omo/plans/vteam-plan-skills-review.md
+Baseline (pre-plan commit): 229a469 "feat(web): decouple omo toggle from agent list and show opencode agents"
+  (first plan-skills commit is 8b8a7c5; 229a469 is its parent-side tip before plan work)
+Method: `git diff 229a469 --stat` (tracked) + `git status --short` / `git ls-files --others`
+  (untracked) + per-file `git diff 229a469 -- <file>` hunk inspection.
+
+VERDICT: APPROVE
+
+================================================================
+1. CHANGED-FILE ENUMERATION + IN/OUT-OF-SCOPE TABLE
+================================================================
+Legend: IN = within task §3 in-scope set; OUT* = outside set but justified
+(severity INFO, no behavior impact); OUT = true violation (none found).
+
+# -- Tracked: committed 229a469..HEAD (24 files) --
+IN  | .omo/evidence/plan-skills/agent-policies-after.json            | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/agent-policies-before.json           | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/constants-compare.txt                | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/constants-server.json                | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/constants-worker.json                | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/db-after.json                        | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/db-baseline.json                     | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/e2e-degraded-run.txt                 | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/e2e.txt                              | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/guard-decision.json                  | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/injected-skills.txt                  | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/server-gate-nonmain-plan_review.json | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/skill-rows.json                      | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/smoke-curl-stderr.txt                | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/smoke-path.txt                       | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/smoke-plan.md                        | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/smoke-transcript-degraded-needs-attention.json | evidence
+IN  | .omo/evidence/plan-skills/smoke-transcript.json                | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/tools-row.json                       | evidence (`.omo/**`)
+IN  | .omo/evidence/plan-skills/verdict-parser-check.json            | evidence (`.omo/**`)
+IN  | .omo/notepads/vteam-plan-skills-review/learnings.md            | notepad (`.omo/**`)
+IN  | scripts/e2e-plan-skills.sh (new, 607 lines)                    | explicitly in-scope
+IN  | server/prisma/seed.ts (1 line, committed part)                 | explicitly in-scope
+IN  | server/src/prisma/seed.spec.ts (9 lines, committed part)       | explicitly in-scope
+
+# -- Tracked: uncommitted working-tree modifications (19 files) --
+IN  | .omo/boulder.json                                              | `.omo/**` (progress bookkeeping only; minus-lines are timestamps)
+IN  | docs/agent-platform/16-内置Agent角色与提示词库.md (+6)          | explicitly in-scope ("note only") — see §2
+OUT*| scripts/e2e-permission-matrix.sh (+3/-3)                       | NOT in §3 set — INFO only, see §5 justification
+IN  | server/prisma/seed.ts (+282 worktree)                          | explicitly in-scope
+IN  | server/src/chat/worker-dispatcher.ts (+10/-2 join chars)       | explicitly in-scope
+IN  | server/src/chat/worker-dispatcher.spec.ts (+20)                | explicitly in-scope (+spec)
+IN  | server/src/common/constants/agent.constants.ts (+2)            | explicitly in-scope
+IN  | server/src/common/constants/agent.constants.spec.ts (+5/-2)    | explicitly in-scope (+spec)
+IN  | server/src/platform-mcp/platform-mcp.tools.ts (+39)            | explicitly in-scope
+IN  | server/src/platform-mcp/platform-mcp.service.ts (+326)         | explicitly in-scope
+IN  | server/src/platform-mcp/platform-mcp.controller.spec.ts (+16/-2) | in-scope (`*.spec.ts`)
+IN  | server/src/prisma/seed.spec.ts (+145 worktree)                 | explicitly in-scope
+IN  | server/src/workers/worker.client.ts (+70)                      | explicitly in-scope
+IN  | server/src/workers/worker.client.spec.ts (+61)                 | explicitly in-scope (+spec)
+IN  | worker/src/exec/exec-server.ts (+225/-8 re-indent)             | explicitly in-scope
+IN  | worker/src/exec/exec-server.spec.ts (+197)                     | explicitly in-scope (+spec)
+IN  | worker/src/role-guard/policy.ts (+1)                           | explicitly in-scope (6th value only)
+IN  | worker/src/resources/role-guard-plugin.ts (+1)                 | explicitly in-scope (6th value only)
+IN  | worker/src/resources/role-guard-plugin.spec.ts (+3/-1)         | explicitly in-scope (+spec)
+
+# -- Untracked but in-scope via patterns --
+IN  | server/src/platform-mcp/platform-mcp.plan-review.spec.ts (389 lines, new) | `platform-mcp/*.spec.ts`
+IN  | .omo/drafts/*, .omo/evidence/**, .omo/notepads/**, .omo/plans/*           | `.omo/**`
+IN  | .omo/evidence/plan-skills/F4-scope-fidelity.txt (this file)               | `.omo/**`
+
+# -- Untracked scratch, NOT in git diff vs baseline (no committed/worktree tracked impact) --
+OUT-of-diff (INFO, not violations; local QA scratch, uncommitted, untracked):
+  - md-docs/ (extracted scratch tree: dist/dist-cli/docs/src/public/…)
+  - web/shot-omo3.tmp.cjs (playwright login/screenshot scratch)
+  Neither appears in `git diff 229a469 --stat`; neither is staged or committed.
+
+True out-of-scope TRACKED violations: NONE (0 files).
+
+================================================================
+2. APPEND-ONLY CHECK — plan-mode instruction change
+================================================================
+PASS. server/src/chat/worker-dispatcher.ts hunks (vs 229a469):
+- PLAN_PRODUCE_INSTRUCTION (worker-dispatcher.ts:257-267): pre-existing final
+  sentence "…裁决通过前不要进入执行。" preserved byte-for-byte; diff minus-line is
+  only the string terminator `';` → `' +` to allow concatenation, followed by
+  pure additions (skill(plan-creation) → question multiselect → vteam_plan_review
+  → REJECT-revise). No existing-sentence byte modified.
+- PLAN_REVIEW_INSTRUCTION (worker-dispatcher.ts:275-279): pre-existing three-part
+  text preserved; only terminator re-join + one appended sentence ("评审在全新会话
+  中进行…结论须自包含"). No existing-sentence byte modified.
+- seed.ts: `git diff 229a469 -- server/prisma/seed.ts | grep -c "^-[^-]"` = 0.
+  All 5 role-prompt hunks (seed.ts:148,182,215,249,284 each +1 review-clause line),
+  tool-catalog row (+1 plan_review), and BUILTIN_SKILLS block (+276) are pure
+  additions. Template read-only semantics untouched (no type/enabled/prompt-body edit).
+
+================================================================
+3. OUT-OF-SCOPE BEHAVIOR PRESERVED
+================================================================
+(a) Normal dispatch path untouched — PASS.
+  worker-dispatcher.ts diff contains exactly 2 hunks, both inside the
+  PLAN_PRODUCE_INSTRUCTION / PLAN_REVIEW_INSTRUCTION string constants. No dispatch
+  logic, routing, session, or injection-byte hunk. Spec additionally asserts
+  plan-mode-off system is byte-identical to default
+  (worker-dispatcher.spec.ts:1337 `expect(s2).toBe(s)`) and leaks no new keywords.
+
+(b) Guard decisions for non-plan_review tools unchanged — PASS.
+  worker/src/role-guard/policy.ts:106 (+1 line only: `"vteam_plan_review",`);
+  worker/src/resources/role-guard-plugin.ts:96 (+1 line only, same value).
+  Zero hunks touch allow/deny logic, task/execute rules (policy.ts:18,91),
+  BUILTIN_PASSTHROUGH (policy.ts:113), or edit-glob handling.
+  Spot-check vs pre-change PARITY_CASES (role-guard-plugin.spec.ts:80-99; 25 old
+  cases byte-unchanged, 1 new case added at :96):
+  ALLOW unchanged: (1) server-gated vteam_task_create (:93) passthrough,
+    (2) question builtin passthrough (:97), (3) allowlist vteam_submit_artifact (:99).
+  DENY unchanged: (1) browser non-allowlist deny (:98),
+    (2) genuinely-denied pairs still asserted by e2e step 6
+    (vteam-plan→vteam_group_post, vteam-developer→vteam_issue_create),
+    (3) task/execute deny path (policy.ts:18 `task`/`execute` → deny, no diff hunk).
+
+(c) Existing MCP tools untouched (excl. plan_review hunk) — PASS.
+  platform-mcp.tools.ts diff = exactly 2 addition hunks: planReviewSchema block
+  (+32) and one {name:'plan_review'} entry (+7). No minus-line touches any of the
+  other 23 tool registrations; descriptions/inputSchemas of all pre-existing tools
+  have zero diff hunks. Controller spec only bumps count 23→24 and adds plan_review
+  assertions (platform-mcp.controller.spec.ts:189,229,358-370).
+
+(d) task/execute deny; template read-only; worker wire format — PASS.
+  - task/execute deny: no diff hunk in policy.ts outside the +1 gated-tool line;
+    full-diff minus-line scan shows no task/execute/glob-edit line removed.
+  - Template read-only: seed minus-lines = 0 (see §2); no template update touches
+    anything but appending the review clause.
+  - Worker wire format: worker.client.ts has zero minus-lines (pure +70: ReviewOptions
+    + review() + 2 timeout consts); execute()/fetchFile/listPlanFiles paths have no
+    hunks. exec-server.ts /execute path (handleExecute/runExecution) has no hunks;
+    the single re-indent hunk (exec-server.ts:1672-1685) wraps onPoll in
+    `...(options?.silent ? {} : { onPoll… })` with byte-identical onPoll body, so the
+    non-silent (/execute) path is behavior-identical; silent mode is only reachable
+    from the new handleReview.
+
+================================================================
+4. FORBIDDEN PATTERNS — none introduced
+================================================================
+- `toolEffects`/`permissionScope`: full-diff grep hits exactly 1 line — pre-existing
+  docs context sentence ("…`agent_tool_effects` / `permissionScope` 不参与强制…",
+  docs 16-§8衔接段, context not addition). Zero additions in code. PASS.
+- Dual-track/AB: no experiment flags, no alternate code path, no A/B gating. PASS.
+- "retired" annotations / compat shims: zero matches in diff. PASS.
+- New dependencies: `git diff 229a469 --stat -- **/package*.json` empty (no manifest
+  change). New imports in service diff are stdlib `node:path` + pre-existing internal
+  modules (`../workers/workers.service`, `../tasks/work-dir.util`) — both @Optional()
+  injected, no new package. PASS.
+
+================================================================
+5. UNRELATED REFACTORS — none (one justified consequential edit)
+================================================================
+Every tracked hunk maps to plan Todos 1-5 or their spec parity updates (counts
+5→6 / 23→24 / 25→26). Single exception:
+- [SEV-INFO] scripts/e2e-permission-matrix.sh:3 (comment) + :438 (assert len==5→6)
+  + :445 (pass label) — file NOT in §3 in-scope set, but edit is a DIRECTLY REQUIRED
+  consequential update: matrix-fix plan guarantees server ROLE_SERVER_GATED_TOOLS ==
+  worker SERVER_GATED_TOOLS with exact-count assertion; adding the 6th gated value
+  without this edit would break the prior plan's e2e gate. 3-line mechanical
+  count bump, no enforcement-logic change. Justified; not a scope violation in spirit.
+  Cited: scripts/e2e-permission-matrix.sh:25,438,445.
+- .omo/boulder.json minus-lines are timestamp/progress bookkeeping (`.omo/**`
+  in-scope). Not a refactor.
+- Untracked md-docs/, web/shot-omo3.tmp.cjs are local QA scratch outside the
+  baseline diff; flagged for hygiene only (no severity).
+
+Prior-plan guarantees surviving: enforcement role boundaries (guard +1-line only,
+deny paths intact), custom-agent agentKey/policies (no policy-file shape change),
+matrix-fix server-gated split (both sides +1 same value, e2e count updated in lockstep).
+
+================================================================
+VERDICT: APPROVE
+================================================================

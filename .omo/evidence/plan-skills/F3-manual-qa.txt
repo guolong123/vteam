@@ -1,0 +1,135 @@
+F3 — Manual QA for vteam-plan-skills-review (independent reproduction on RUNNING stack)
+Date (UTC): 2026-09-14 ~04:40-04:50 | Operator: Sisyphus-Junior | Stack: localhost:13000 + aiagents-compose-worker/db
+Seed refs: team tm_0000000001, main tmm_0000000002 (project_manager), task t_0000000001
+MCP: POST http://localhost:13000/api/v1/platform-mcp, JSON-RPC tools/call,
+     headers x-worker-id: w_compose_worker / x-worker-token: compose-worker-token
+     (token verified from repo .env: WORKER_TOKEN=compose-worker-token — not hardcoded blindly)
+Method: own commands mirroring scripts/e2e-plan-skills.sh technique; script was NOT re-run.
+Raw live transcript: .omo/evidence/plan-skills/F3-smoke-transcript.json (copy of smoke HTTP body)
+
+=== ENV ===
+$ docker compose ps
+  aiagents-compose-db      Up 19 hours (healthy)
+  aiagents-compose-server  Up 12 minutes (healthy)  0.0.0.0:13000->3000/tcp
+  aiagents-compose-web    Up ~1 hour (healthy)
+  aiagents-compose-worker Up 3 minutes (at check start; restarted again below for injector proof)
+$ curl /api/v1/health -> 200 (server live). No rebuild/reseed needed: seed rows verified present (below).
+
+=== CHECK 1: Skills present ===
+DB (own query, before worker restart):
+  mysql> SELECT name, enabled FROM skills WHERE name LIKE 'plan-%' ORDER BY name;
+  plan-creation  1
+  plan-review-architect  1
+  plan-review-developer  1
+  plan-review-product  1
+  plan-review-project_manager  1
+  plan-review-tester  1
+  mysql> SELECT action,name FROM tools WHERE action='plan_review';
+  plan_review  vteam_plan_review
+  => 6 skills enabled + tools row plan_review -> vteam_plan_review. PASS.
+Worker restart (injector runs at start only — mandated first step):
+  $ docker compose up -d --force-recreate worker -> Started; skill files present on FIRST poll (~15s).
+  $ docker compose exec -T worker sh -c 'ls /data/vteam-worker/.opencode/skills/; wc -c .../plan-*/SKILL.md'
+  plan-creation / plan-review-architect / plan-review-developer / plan-review-product /
+  plan-review-project_manager / plan-review-tester / prototype-designer
+  2730 plan-creation/SKILL.md, 1332 architect, 1347 developer, 1433 product,
+  1410 project_manager, 1245 tester (9497 total)
+  $ grep -c VERDICT plan-review-*/SKILL.md -> 3 hits each (5 files)
+  $ grep -c vteam_plan_review plan-creation/SKILL.md -> 3
+  $ head plan-creation/SKILL.md frontmatter: name: plan-creation, allowed-tools includes
+    task_context, read_file, doclib, chat_history, question, vteam_plan_review
+  $ head plan-review-developer/SKILL.md: "先给 VERDICT: APPROVE 或 VERDICT: REJECT，再逐条列依据 findings…
+    禁止修改计划文件（只读评审）" — each review file contains VERDICT, creation file references vteam_plan_review. PASS.
+
+=== CHECK 2: Reviewer selection UX (question path reachable in plan mode) ===
+(a) Main-agent plan-mode system prompt (own eval in server container):
+  $ docker compose exec -T server node -e "…require('…/worker-dispatcher.js'); console.log(m.PLAN_PRODUCE_INSTRUCTION)"
+  Raw (zh, verbatim):
+  "【计划编制】本任务已开启计划模式，你是主 Agent，负责产出本任务唯一的执行计划：先分析任务并拆解执行步骤
+  （用 opencode todo 工具登记步骤，步骤状态会同步到计划 Tab）；再把计划正文写成 Markdown 文件：工作目录下
+  `.opencode/plans/` 目录，文件名自取（如 `plan.md`）；该文件会被计划 Tab 实时展示，用户也可能直接上传/修改
+  同名文件（以文件最新内容为准）；写完后在群聊提示成员评审；收到评审意见后由你裁决是否修订（直接改写该文件
+  即可），裁决通过前不要进入执行。动笔前先用 skill 工具加载 skill(plan-creation) 并严格按其执行；起草完成并在
+  群聊提示成员评审后，用 question 工具（多选）向用户确认本次要运行的评审者角色（候选：product、architect、
+  developer、tester、project_manager）；再调用 vteam MCP 的 vteam_plan_review 工具传入所选评审者发起评审，
+  收到 REJECT 裁决时修订计划（可再用 question 问用户是否重跑评审）。"
+  => contains the question-for-reviewers instruction (多选用 question 确认评审者角色 + vteam_plan_review). PASS.
+(b) question passes worker guard for vteam-plan roles (own eval of worker guard code):
+  $ docker compose exec -T worker node -e "…evaluateToolCall({rolesDoc, session:{agent, dir}, tool:'question', args:{}})"
+  {"agent":"vteam-project_manager","tool":"question","action":"allow","message":null}
+  {"agent":"vteam-developer","tool":"question","action":"allow","message":null}
+  + vteam_plan_review for project_manager -> {"action":"allow"}. PASS.
+
+=== CHECK 3: plan_review end-to-end with REAL LLM (single reviewer, main caller) ===
+Sessions BEFORE (own DB query):
+  s_0000000008  ses_f62e2bfe2ffeUFjC1hkrWco5gI  idle  tmm_0000000001 (product)
+  s_0000000009  ses_f62e2bf3affeQqqb2O8xdxpRxl  idle  tmm_0000000002 (project_manager = MAIN)
+  s_0000000006  ses_f62e3495cffeev2tNdG23WUI1w  idle  tmm_0000000003 (architect)
+  s_0000000007  ses_f62e2c171ffeYQ0ZZGQ9H2WAK6  idle  tmm_0000000004 (developer = reviewer)
+  s_0000000010  ses_f62e2be65ffe2s40qJ9QP0qdAb  idle  tmm_0000000005 (tester)
+Test plan placed (own file, distinct name, auto-discovery path — NO planPath arg sent):
+  /data/vteam-worker/tasks/t_0000000001/.opencode/plans/f3-manual-qa-plan.md (336 bytes, 11 lines)
+  content: "# F3 manual QA test plan…" / T1 read-only readability / T2 emit VERDICT + findings.
+Request (own body, id 101, timeoutMs 600000):
+  {"jsonrpc":"2.0","id":101,"method":"tools/call","params":{"name":"plan_review",
+   "arguments":{"taskId":"t_0000000001","selfInstanceId":"tmm_0000000002",
+   "reviewers":["developer"],"timeoutMs":600000}}}
+  $ curl --max-time 700 POST …/platform-mcp -> HTTP:200, RC:0, elapsed ~13s (2026-09-14T04:46:07Z -> 04:46:20Z).
+  Well under the ~12 min bound; REAL LLM path (not mock — worker log shows live driver round-trip).
+Raw response body (1043 bytes; full copy in F3-smoke-transcript.json):
+  {"jsonrpc":"2.0","id":101,"result":{"content":[{"type":"text","text":
+  "{\"verdicts\":[{\"role\":\"developer\",\"memberId\":\"tmm_0000000004\",\"verdict\":\"APPROVE\",
+  \"findings\":\"依据 findings：\\n- T1「确认计划文档可读（只读）」可无歧义落地：已实测读取
+  /data/vteam-worker/tasks/t_0000000001/.opencode/plans/f3-manual-qa-plan.md 成功（11 行全文），
+  且以只读方式完成，符合 T1 口径。\\n- T2「输出 VERDICT: APPROVE/REJECT + findings」与
+  plan-review-developer 技能的严格输出格式一致…\\n- 依赖真实且顺序成立…\\n- 工作量合理…
+  \\n- 轻微提示（不构成拒绝）：计划未显式写明 findings 需逐条指向计划章节…\"}],\"notes\":[]}"}]}}
+Assertion: verdicts[0].verdict = "APPROVE" ∈ {APPROVE, REJECT, NEEDS-ATTENTION} → parseable. PASS.
+Note: reviewer demonstrably READ the actual plan file (cites exact path + "11 行全文", read-only) —
+auto-discovery of the newest .md worked; findings reference real file content, not canned text.
+
+=== CHECK 4: Freshness proof (NEW opencode session; working session untouched) ===
+Worker log (own grep, --since 10m):
+  [v1-driver] createSession -> ses_f61c35aa0ffeXh0AWNMu6VRTpT
+  [v1-driver] sendMessage -> ses_f61c35aa0ffeXh0AWNMu6VRTpT model=(default) agent=vteam-developer (HTTP 204)
+  [exec] review 完成 session=ses_f61c35aa0ffeXh0AWNMu6VRTpT taskId=t_0000000001 model=(default) text=436 chars
+  => review session ses_f61c35aa0… DIFFERS from developer canonical ses_f62e2c171ffeYQ0ZZGQ9H2WAK6. NEW session. PASS.
+DB sessions AFTER (own query) — byte-identical to BEFORE:
+  s_0000000008  ses_f62e2bfe2ffeUFjC1hkrWco5gI  idle  tmm_0000000001
+  s_0000000009  ses_f62e2bf3affeQqqb2O8xdxpRxl  idle  tmm_0000000002
+  s_0000000006  ses_f62e3495cffeev2tNdG23WUI1w  idle  tmm_0000000003
+  s_0000000007  ses_f62e2c171ffeYQ0ZZGQ9H2WAK6  idle  tmm_0000000004
+  s_0000000010  ses_f62e2be65ffe2s40qJ9QP0qdAb  idle  tmm_0000000005
+  => member working sessions untouched; no vteam Session row written for the review (design D1/D4 holds). PASS.
+
+=== CHECK 5: Negative controls (all own calls, raw) ===
+NEG1 non-main caller (selfInstanceId=tmm_0000000004 developer, reviewers=[architect]), id 201:
+  {"jsonrpc":"2.0","id":201,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_FORBIDDEN
+  仅主 Agent（tmm_0000000002）可发起计划评审；请知会主 Agent 调用 plan_review"}}
+  => 403 main-instance gate, names 仅主 Agent + plan_review. PASS.
+NEG2 reviewer role with no member (reviewers=[ghost_role_xyz]), id 202:
+  {"jsonrpc":"2.0","id":202,"result":{"content":[{"type":"text","text":
+  "{\"verdicts\":[],\"notes\":[\"评审角色 ghost_role_xyz 在任务团队中无成员，已跳过\"]}"}]}}
+  => skipped with note, no error. PASS.
+NEG3 bogus planPath traversal (planPath=../../etc/passwd), id 203:
+  {"jsonrpc":"2.0","id":203,"error":{"code":-32602,"message":"[400]
+  PLATFORM_MCP_ARTIFACT_INVALID planPath 须位于任务工作目录
+  （/data/vteam-worker/tasks/t_0000000001）内，禁止路径穿越"}}
+  => 400, traversal rejected with explicit message. PASS.
+
+=== CHECK 6: Cleanup + baseline ===
+  $ docker compose exec -T worker rm -f …/f3-manual-qa-plan.md -> plans/ dir empty (total 0). PASS.
+  DB counts after: tasks=2 team_members=5 sessions=5 skills=7 tools=202 — matches e2e db-baseline.json
+  (tasks 2, team_members 5, sessions 5, skills 7, tools 202, execution_policies 6, team_queues 1). PASS.
+  GET /agent-policies after-run body == .omo/evidence/plan-skills/agent-policies-before.json (python == → True). PASS.
+  Task t_0000000001 status after: pending (seed default; review is read-only, no mutation path exercised).
+  Caveat: task status was NOT snapshotted before the run, so "unchanged" is inferred from read-only
+  semantics + pending==seed default, not from a before/after diff. No other test artifacts remain
+  (only this file + F3-smoke-transcript.json added under .omo/evidence/plan-skills/).
+
+=== MISMATCHES / DRIFT ===
+None. No reused working session, no unparseable VERDICT, no missing skill file.
+Minor note: worker log line uses Chinese "review 完成" prefix ([exec] review 完成 session=… text=436 chars) —
+cosmetic only, does not affect the VERDICT contract.
+
+VERDICT: APPROVE
