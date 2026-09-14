@@ -26,3 +26,14 @@ _Append new entries below - never overwrite._
 - Agent 模型无 `description` 列：自定义 `agents[].description` 取 `policy.description → agent.name` 回退。
 - 验证：`npx tsc --noEmit` exit 0；`npx jest src/execution-policies` 30/30 green（含新增 `agent-policies.custom-agents.spec.ts`：字节一致快照 + demo-agent 矩阵 + resolve 双路径）。
 - Commit：`feat(policies): emit db-backed custom agent definitions with tool matrix`。
+
+## Todo 4 — dispatcher 按 agentKey 路由自定义 agent (2026-09-14)
+
+- 新导出纯函数 `resolvePolicyAgentCandidate(row)`（worker-dispatcher.ts，紧随 `roleToAgentName`）：`agentKey` 合法（`new RegExp(AGENT_KEY_PATTERN)` 复用、`agent.constants.ts:85` 单一来源，禁止重复字面量）→ `vteam-<agentKey>`；缺席/非法视为缺席 → 回退 `roleToAgentName(role)`；均无 → null。返回类型用 `string | null`（自定义名不在 `VteamAgentName` 联合内），调用方 `policyCandidateAgent` 同步放宽类型。
+- 接线（一处）：`effectivePlanForPolicy ? 'vteam-plan' : resolvePolicyAgentCandidate(agentIdentity)`，能力位门 `workerSupportsAgentPolicies` 与 `opencodeAgentName` 回退原样保留；`renderBoundarySection` 零改动（自定义名过不了 `isVteamAgentName` → `''`，已用单测锁定）。
+- `AgentIdentityInfo` 增 `agentKey: string | null`（文件内有两个声明合并的同名 interface，`replaceAll` 同步加；spec 内 3 处字面量各补 `agentKey: null`——grep 只找 `AgentIdentityInfo` 会漏掉第 3 处内联字面量，tsc 是唯一兜底）。
+- `agentRow` select 仅加 `agentKey: true`（`policyId` 未使用就不加）；默认 mock 行无 `agentKey` → `?? null` → 角色回退，既有 180 用例零改动全过。
+- 非法 key 测试技巧：能力位 `names` 故意含 `vteam-Bad-Key`，断言仍省略 `agent` 键——证明非法名连门都进不了（不是“门假回退”，是“无候选”）。
+- 环境坑：工作树有 Todo 3 未提交的 `agents/**` 改动（DTO 加必填 `agentKey`，spec 未同步），`tsc --noEmit` exit 1 的 13 个 error 全在该目录；自有文件用 `grep error TS | sed | uniq -c` 按文件分组自证清白，不碰越界文件。
+- 验证：`npx jest src/chat/worker-dispatcher.spec.ts` 188/188 green（新增 7 个 it：helper 映射 1 + 边界缺席 1 + 分派 (a)~(e) 5）。
+- Commit：`feat(dispatch): route custom agents by agentKey`。

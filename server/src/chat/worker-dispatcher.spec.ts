@@ -35,6 +35,7 @@ import {
   MAIN_AGENT_INSTRUCTION,
   PENDING_INSTANCE_REF,
   renderBoundarySection,
+  resolvePolicyAgentCandidate,
   roleToAgentName,
   ARTIFACT_SUBMISSION_INSTRUCTION,
   PLAN_PRODUCE_INSTRUCTION,
@@ -467,7 +468,14 @@ describe('WorkerDispatcher', () => {
       expect(execArgs.system).not.toContain('【职责边界】');
       // 与"无 boundarySection"（预变更调用形态）构造的期望逐字节一致
       const expected = buildSystemInstructions(
-        { id: 'a_product', name: null, role: null, prompt: null, persona: null },
+        {
+          id: 'a_product',
+          name: null,
+          role: null,
+          prompt: null,
+          persona: null,
+          agentKey: null,
+        },
         {
           isMainAgent: false,
           mainAgentInstanceId: null,
@@ -1074,6 +1082,7 @@ describe('WorkerDispatcher', () => {
       role: 'product',
       prompt: '负责需求拆解与文档化。',
       persona: null,
+      agentKey: null,
     };
     const team: TeamMemberInfo[] = [
       {
@@ -1265,6 +1274,36 @@ describe('WorkerDispatcher', () => {
       expect(isVteamAgentName('vteam-plan')).toBe(true);
       expect(isVteamAgentName('developer')).toBe(false);
       expect(isVteamAgentName(null)).toBe(false);
+    });
+
+    it('Todo custom-agent：resolvePolicyAgentCandidate 优先 agentKey，非法/缺席回退角色', () => {
+      // 自定义 agent：agentKey 优先（role=null 也不影响）
+      expect(
+        resolvePolicyAgentCandidate({ agentKey: 'demo-agent', role: null }),
+      ).toBe('vteam-demo-agent');
+      // 模板行 agentKey = role → 与 roleToAgentName 同值
+      expect(
+        resolvePolicyAgentCandidate({ agentKey: 'product', role: 'product' }),
+      ).toBe('vteam-product');
+      // 存量行 agentKey=null → 角色回退（零行为差）
+      expect(
+        resolvePolicyAgentCandidate({ agentKey: null, role: 'developer' }),
+      ).toBe('vteam-developer');
+      // 非法 key 视为缺席 → 回退角色（绝不拼出非法 agent 名）
+      expect(
+        resolvePolicyAgentCandidate({ agentKey: 'Bad-Key', role: 'product' }),
+      ).toBe('vteam-product');
+      expect(
+        resolvePolicyAgentCandidate({ agentKey: 'Bad-Key', role: null }),
+      ).toBeNull();
+      expect(resolvePolicyAgentCandidate(null)).toBeNull();
+      expect(
+        resolvePolicyAgentCandidate({ agentKey: null, role: 'mystery' }),
+      ).toBeNull();
+    });
+
+    it('Todo custom-agent：自定义 agent 名不在角色命名空间 → 无【职责边界】段（纠正文案走策略 guard）', () => {
+      expect(renderBoundarySection('vteam-demo-agent')).toBe('');
     });
 
     it('persona 拼接：agent.persona=strict 时注入【性格】段（含安全阀文案），不改写 prompt', () => {
@@ -4885,6 +4924,7 @@ describe('WorkerDispatcher', () => {
       role: 'product',
       prompt: '负责需求',
       persona: null,
+      agentKey: null,
     };
 
     it('teamMode=true → 追加【团队接待】段（task_create 直接建任务，已删项目发现，禁 QuestionModal）', () => {
@@ -5563,6 +5603,94 @@ describe('WorkerDispatcher', () => {
         selectMemberAgent(null);
         const d = createDispatcher();
         await d.dispatch(withTask({ planMode: true }));
+        expect(
+          Object.prototype.hasOwnProperty.call(execPayload(), 'agent'),
+        ).toBe(false);
+      });
+    });
+
+    describe('Todo custom-agent dispatch：agentKey → vteam-<agentKey>（能力位门控不绕过）', () => {
+      const capsWith = (enabled: boolean, names: string[]) => {
+        prisma.worker.findUnique.mockResolvedValue({
+          id: 'w_0000000001',
+          status: 'online',
+          capabilities: {
+            maxInstances: 1,
+            agentPolicies: { enabled, names },
+          },
+          defaultModelId: null,
+        } as any);
+      };
+      const selectMemberAgent = (name: string | null) => {
+        (prisma as any).teamMember.findFirst.mockImplementation(
+          async (q: any) =>
+            q?.select?.opencodeAgentName !== undefined
+              ? { opencodeAgentName: name }
+              : { overrideModelId: null },
+        );
+      };
+      const mockAgentRow = (row: Record<string, unknown>) => {
+        prisma.agent.findUnique.mockResolvedValue({
+          id: 'a_custom',
+          name: '自定义 Agent',
+          role: null,
+          prompt: '负责专项',
+          persona: null,
+          agentKey: null,
+          defaultModelId: null,
+          ...row,
+        } as any);
+      };
+      const execPayload = () => workerClient.execute.mock.calls[0][1] as any;
+      const withTask = (extra: Record<string, unknown> = {}) =>
+        teamRequest({
+          taskContext: { taskId: 't_0000000001', ...extra },
+        }) as any;
+
+      it('(a) 自定义 agent + 能力位含 vteam-demo-agent → 下发 vteam-demo-agent', async () => {
+        mockAgentRow({ agentKey: 'demo-agent', role: null });
+        capsWith(true, ['vteam-demo-agent', 'vteam-plan']);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('vteam-demo-agent');
+      });
+
+      it('(b) 自定义 agent + 能力位不含候选 → 省略 agent 键（不绕过门控）', async () => {
+        mockAgentRow({ agentKey: 'demo-agent', role: null });
+        capsWith(true, ['vteam-product']);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(
+          Object.prototype.hasOwnProperty.call(execPayload(), 'agent'),
+        ).toBe(false);
+      });
+
+      it('(c) 内置角色 agent（agentKey=role）→ 下发 vteam-<role>（与引入前一致）', async () => {
+        mockAgentRow({ agentKey: 'product', role: 'product' });
+        capsWith(true, ['vteam-product', 'vteam-plan']);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('vteam-product');
+      });
+
+      it('(d) 计划职责 → 仍下发 vteam-plan（自定义 agent 不抢占计划位）', async () => {
+        mockAgentRow({ agentKey: 'demo-agent', role: null });
+        capsWith(true, ['vteam-plan', 'vteam-demo-agent']);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask({ planMode: true }));
+        expect(execPayload().agent).toBe('vteam-plan');
+      });
+
+      it("(e) 非法 agentKey（'Bad-Key'）→ 不拼出 agent 名（即使能力位含该名也省略）", async () => {
+        mockAgentRow({ agentKey: 'Bad-Key', role: null });
+        capsWith(true, ['vteam-Bad-Key', 'vteam-plan']);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask());
         expect(
           Object.prototype.hasOwnProperty.call(execPayload(), 'agent'),
         ).toBe(false);

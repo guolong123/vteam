@@ -24,6 +24,7 @@ import {
 } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import {
+  AGENT_KEY_PATTERN,
   ROLE_BOUNDARIES,
   type VteamAgentName,
 } from '../common/constants/agent.constants';
@@ -102,6 +103,24 @@ export function roleToAgentName(
   }
   const candidate = `vteam-${role}`;
   return isVteamAgentName(candidate) ? candidate : null;
+}
+
+/**
+ * 由 Agent 行解析策略 agent 候选名（vteam-custom-agent-opencode Todo 4）。
+ * 优先 `agentKey` → `vteam-<agentKey>`（自定义/克隆 agent；模板行 `agentKey = role`
+ * 故与 roleToAgentName 同值，零行为差）；`agentKey` 缺席/非法（`AGENT_KEY_PATTERN`
+ * 未命中 → 视为缺席，绝不拼出非法 agent 名）时回退 `roleToAgentName(role)`；
+ * 均无 → null（调用方回退现状：`opencodeAgentName` 或省略 `agent` 键）。
+ * 纯函数；worker 能力位门控由调用方执行（此处不判定）。
+ */
+export function resolvePolicyAgentCandidate(
+  row: { agentKey?: string | null; role?: string | null } | null | undefined,
+): string | null {
+  const key = row?.agentKey;
+  if (typeof key === 'string' && new RegExp(AGENT_KEY_PATTERN).test(key)) {
+    return `vteam-${key}`;
+  }
+  return roleToAgentName(row?.role ?? null);
 }
 
 /**
@@ -188,6 +207,8 @@ export interface AgentIdentityInfo {
   prompt: string | null;
   /** Agent 性格 key（PERSONA_LIBRARY 预设 key；null=无性格）。运行时按此拼接【性格】段进系统提示。 */
   persona: string | null;
+  /** Agent machine-safe 标识（agents.agent_key；模板行 = role；存量自定义/克隆行为 null）。分派策略候选名即 `vteam-<agentKey>`。 */
+  agentKey: string | null;
 }
 
 /** 团队成员信息（dispatch 时从 TeamMember→Agent 组装，注入全局上下文供 agent 判断与谁协作）。
@@ -266,6 +287,8 @@ export interface AgentIdentityInfo {
   prompt: string | null;
   /** Agent 性格 key（PERSONA_LIBRARY 预设 key；null=无性格）。运行时按此拼接【性格】段进系统提示。 */
   persona: string | null;
+  /** Agent machine-safe 标识（agents.agent_key；模板行 = role；存量自定义/克隆行为 null）。分派策略候选名即 `vteam-<agentKey>`。 */
+  agentKey: string | null;
 }
 
 /** 团队成员信息（dispatch 时从 TeamMember→Agent 组装，注入全局上下文供 agent 判断与谁协作）。
@@ -1592,7 +1615,14 @@ export class WorkerDispatcher
     );
     const agentRow = await this.prisma.agent.findUnique({
       where: { id: target.agentId },
-      select: { id: true, name: true, role: true, prompt: true, persona: true },
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        prompt: true,
+        persona: true,
+        agentKey: true,
+      },
     });
     const agentIdentity: AgentIdentityInfo = {
       id: target.agentId,
@@ -1600,6 +1630,7 @@ export class WorkerDispatcher
       role: agentRow?.role ?? null,
       prompt: agentRow?.prompt ?? null,
       persona: agentRow?.persona ?? null,
+      agentKey: agentRow?.agentKey ?? null,
     };
     let teamMemberRows: any[] = [];
     try {
@@ -1694,15 +1725,14 @@ export class WorkerDispatcher
     // Todo 13 dispatch 优先级（.omo/plans/vteam-role-behavior-enforcement.md
     // Decision highlights 行 23）：绑定策略且 worker 能力位
     // `enabled && names.includes(候选)` 真 → `agent = effectivePlan ? 'vteam-plan'
-    // : 'vteam-<role>'`（角色取目标 Agent 行的 `role`，经 roleToAgentName 映射；
-    // 缺席/未知 → 无候选，直接回退）；否则现状回退（opencodeAgentName 有值则传，
-    // 否则省略 agent 键，与引入前逐字节一致）。
+    // : 'vteam-<agentKey|role>'`（目标 Agent 行经 resolvePolicyAgentCandidate 映射：
+    // agentKey 优先，非法/缺席回退角色；缺席/未知 → 无候选，直接回退）；否则现状回退
+    // （opencodeAgentName 有值则传，否则省略 agent 键，与引入前逐字节一致）。
     // 显式成员选择（TeamMember.opencodeAgentName）与 plan_mode agentName 均不能绕过
     // 此门：门真时一律用候选策略 agent 覆盖，门假时一律回退现状。
-    const policyCandidateAgent: VteamAgentName | null =
-      effectivePlanForPolicy
-        ? 'vteam-plan'
-        : roleToAgentName(agentIdentity.role);
+    const policyCandidateAgent: string | null = effectivePlanForPolicy
+      ? 'vteam-plan'
+      : resolvePolicyAgentCandidate(agentIdentity);
     const resolvedAgentName: string | null =
       policyCandidateAgent &&
       workerSupportsAgentPolicies(worker, policyCandidateAgent)
