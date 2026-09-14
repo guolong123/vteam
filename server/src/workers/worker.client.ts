@@ -42,6 +42,10 @@ export const DEFAULT_WORKER_BASE_URL = 'http://localhost:4199';
 export const DEFAULT_EXEC_PORT = 4198;
 /** 单次 HTTP 请求超时：已从 15s 调整为 60s，适配长命令/思考执行 */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+/** 计划评审默认单评审者超时（10min，与 server 侧 PLAN_REVIEW_TIMEOUT_MS 对齐）。 */
+export const DEFAULT_REVIEW_TIMEOUT_MS = 10 * 60_000;
+/** 评审请求客户端超时余量：fetch 超时 = worker 执行超时 + 本余量（防客户端先断）。 */
+export const REVIEW_TIMEOUT_MARGIN_MS = 60_000;
 /** FR-41：GET /file 文件拉取超时（较大文件/网络慢） */
 export const DEFAULT_FILE_FETCH_TIMEOUT_MS = 60_000;
 
@@ -181,6 +185,31 @@ export interface ExecuteAttachment {
   mime?: string;
   /** 原文件名（缺省取 url basename）。 */
   filename?: string;
+}
+
+/**
+ * 计划评审请求体（对齐 worker POST /review 契约，无 sessionId——恒全新会话）。
+ * 字段与 ExecuteOptions 同源（执行端点同一家族），唯独不带 sessionId/executionConfig/attachments。
+ */
+export interface ReviewOptions {
+  /** 评审提示词（服务端组装的 D5 评审 prompt，计划全文已内联）。 */
+  prompt: string;
+  /** 模型选择（opencode serve 格式 { providerID, modelID }）。 */
+  model?: { providerID: string; modelID: string } | null;
+  /** opencode agent 名（评审者角色 agent，如 vteam-developer）。 */
+  agent?: string;
+  /** 工作目录（任务目录，评审 prompt 内计划路径的解析基准）。 */
+  directory?: string;
+  /** 平台 Task 主键（t_ 前缀），归属与日志透传。 */
+  taskId?: string;
+  /** 评审者 Agent id（a_ 前缀），MCP 身份归属透传。 */
+  agentId?: string;
+  /** 消息来源频道 id（可选，评审默认不回群聊，可省略）。 */
+  channelId?: string;
+  /** 顶层 system 提示（评审者最小 framing，角色策略由 agent 侧提供）。 */
+  system?: string;
+  /** worker 侧执行超时 ms（缺省 DEFAULT_REVIEW_TIMEOUT_MS，透传给 /review）。 */
+  timeoutMs?: number;
 }
 
 /**
@@ -325,6 +354,47 @@ export class WorkerClient {
         `execute HTTP ${res.status}`,
       );
     }
+  }
+
+  async review(
+    worker: WorkerEndpointRef,
+    opts: ReviewOptions,
+  ): Promise<{ text: string; sessionId: string }> {
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_REVIEW_TIMEOUT_MS;
+    const res = await this.requestExec(
+      worker,
+      '/review',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(opts.model ? { model: { ...opts.model } } : {}),
+          ...(opts.agent ? { agent: opts.agent } : {}),
+          ...(opts.directory ? { directory: opts.directory } : {}),
+          ...(opts.taskId ? { taskId: opts.taskId } : {}),
+          ...(opts.agentId ? { agentId: opts.agentId } : {}),
+          ...(opts.channelId ? { channelId: opts.channelId } : {}),
+          ...(opts.system ? { system: opts.system } : {}),
+          timeoutMs,
+          prompt: opts.prompt,
+        }),
+      },
+      timeoutMs + REVIEW_TIMEOUT_MARGIN_MS,
+    );
+    if (!res.ok) {
+      throw new WorkerUnavailableException(
+        worker.id,
+        `review HTTP ${res.status}`,
+      );
+    }
+    const body = (await res.json()) as { text?: unknown; sessionId?: unknown };
+    if (typeof body.text !== 'string' || typeof body.sessionId !== 'string') {
+      throw new WorkerUnavailableException(
+        worker.id,
+        `review 响应缺少 text/sessionId：${JSON.stringify(body).slice(0, 200)}`,
+      );
+    }
+    return { text: body.text, sessionId: body.sessionId };
   }
 
   /**

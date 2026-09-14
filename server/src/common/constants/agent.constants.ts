@@ -137,6 +137,7 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_channel_send',
   'vteam_wecom_reply',
   'vteam_task_create',
+  'vteam_plan_review',
 ] as const;
 
 /**
@@ -151,6 +152,7 @@ export const ROLE_SERVER_GATED_TOOLS: readonly string[] = [
   'vteam_task_create',
   'vteam_plan_mode',
   'vteam_team_add_member',
+  'vteam_plan_review',
 ] as const;
 
 /** server-gated 集合（`defineBoundary` 的 `mcpDenies` 推导用，避免逐次线性扫描）。 */

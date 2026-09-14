@@ -186,7 +186,7 @@ describe('PlatformMcpController (HTTP)', () => {
   });
 
   describe('tools/list', () => {
-    it('→ 返回 23 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search + team_view/my_profile + team_add_member + plan_mode + channel_send + wecom_reply + task_create；自造 plan 域 5 工具已下线，plan_mode 为新计划开关）且 inputSchema 为 JSON Schema', async () => {
+    it('→ 返回 24 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search + team_view/my_profile + team_add_member + plan_mode + channel_send + wecom_reply + task_create + plan_review；自造 plan 域 5 工具已下线，plan_mode 为新计划开关）且 inputSchema 为 JSON Schema', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
@@ -226,6 +226,7 @@ describe('PlatformMcpController (HTTP)', () => {
         'channel_send',
         'wecom_reply',
         'task_create',
+        'plan_review',
       ]);
 
       for (const tool of tools) {
@@ -352,6 +353,19 @@ describe('PlatformMcpController (HTTP)', () => {
         type: 'string',
       });
       expect(teamAddMember.inputSchema.properties.workDir).toEqual({
+        type: 'string',
+      });
+      // plan_review：taskId/selfInstanceId/reviewers 必填，planPath/timeoutMs 可选；reviewers 数组归为 array
+      const planReview = tools.find((t) => t.name === 'plan_review')!;
+      expect(planReview.inputSchema.required).toEqual([
+        'taskId',
+        'selfInstanceId',
+        'reviewers',
+      ]);
+      expect(planReview.inputSchema.properties.reviewers).toEqual({
+        type: 'array',
+      });
+      expect(planReview.inputSchema.properties.planPath).toEqual({
         type: 'string',
       });
       const channelSend = tools.find((t) => t.name === 'channel_send')!;

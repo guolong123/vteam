@@ -76,7 +76,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     }
   });
 
-  it('ROLE_SERVER_GATED_TOOLS 为 5 个主实例专属真实名（server-gated，guard 层② pass-through）', () => {
+  it('ROLE_SERVER_GATED_TOOLS 为 6 个主实例专属真实名（server-gated，guard 层② pass-through）', () => {
     expect([...ROLE_SERVER_GATED_TOOLS].sort()).toEqual(
       [
         'vteam_task_transition',
@@ -84,6 +84,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
         'vteam_task_create',
         'vteam_plan_mode',
         'vteam_team_add_member',
+        'vteam_plan_review',
       ].sort(),
     );
     for (const gated of ROLE_SERVER_GATED_TOOLS) {
@@ -92,7 +93,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
   });
 
   it('mcpDenies = 全部 MCP 工具中未列入 toolAllows 且非 server-gated 者，且全为 vteam_ 真实名', () => {
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(23);
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(24);
     for (const mcp of VTEAM_MCP_TOOL_NAMES) expect(mcp).toMatch(/^vteam_/);
     const gated = new Set<string>(ROLE_SERVER_GATED_TOOLS);
     for (const name of ROLE_NAMES) {

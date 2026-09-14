@@ -579,6 +579,38 @@ const taskCreateSchema = z
 type TaskCreateArgs = z.infer<typeof taskCreateSchema>;
 
 /**
+ * plan_review：主 Agent 一次调用扇出多评审者冷评审（vteam-plan-skills-review Todo 3）。
+ * reviewers 为角色名数组（按任务团队中首个该 role 的成员解析；缺席 role 与主 Agent
+ * 自身 role 自动跳过并附 notes 说明）；planPath 缺省取任务目录 `.opencode/plans/`
+ * 下最新 `.md`（须位于任务工作目录内，禁止路径穿越）。
+ */
+export const planReviewSchema = z.object({
+  taskId: z.string().describe('任务 ID'),
+  selfInstanceId: z
+    .string()
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入；仅主 Agent 可调）'),
+  reviewers: z
+    .array(z.string())
+    .describe(
+      '评审者角色名数组（如 ["architect", "tester"]，按任务团队中首个该 role 的成员解析；缺席 role 与主 Agent 自身 role 自动跳过并附 notes 说明）',
+    ),
+  planPath: z
+    .string()
+    .optional()
+    .describe(
+      '待评审计划文件路径（worker 工作区路径，须位于任务工作目录内；缺省取任务目录 .opencode/plans/ 下最新 .md）',
+    ),
+  timeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('单评审者超时毫秒数（缺省 600000 即 10 分钟，上限 30 分钟）'),
+});
+
+type PlanReviewArgs = z.infer<typeof planReviewSchema>;
+
+/**
  * 构建工具集（service 闭包注入，controller 构造时调用一次）。
  * handler 签名 `(ctx, args)`：ctx.workerId 为 controller 透传的 header 值；
  * args 已在 tools/call 内经 inputSchema.safeParse 校验，此处收窄为具体类型。
@@ -753,6 +785,13 @@ export function buildPlatformMcpTools(
         '在团队会话无任务时创建任务（仅主 Agent 可调）。团队由当前会话解析，任务建在该团队下。返回创建的任务 DTO。',
       inputSchema: taskCreateSchema,
       handler: (ctx, args) => service.taskCreate(ctx, args as TaskCreateArgs),
+    },
+    {
+      name: 'plan_review',
+      description:
+        '发起计划评审（仅主 Agent 可调用）：一次调用把计划分发给多个评审者（reviewers 为角色名数组，按任务团队中首个该 role 的成员解析；缺席 role 与主 Agent 自身 role 自动跳过并附 notes 说明），每位评审者在全新会话中冷评审（加载 skill(plan-review-<role>)，计划全文内联进提示词，评审者只读不改），并行收集 VERDICT: APPROVE/REJECT 后聚合返回 {verdicts: [{role, memberId, verdict, findings}], notes}（超时/不可解析记为 NEEDS-ATTENTION，部分结果永不丢弃）。',
+      inputSchema: planReviewSchema,
+      handler: (ctx, args) => service.planReview(ctx, args as PlanReviewArgs),
     },
   ];
 }
