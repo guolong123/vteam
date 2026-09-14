@@ -38,6 +38,15 @@ const POLICY_BY_AGENT: Record<string, string> = {
   a_tester: 'ep_tester',
 };
 
+/** 模板 Agent id → role（seed templateAgents 的 role，模板 agentKey 固定等于 role）。 */
+const ROLE_BY_AGENT: Record<string, string> = {
+  a_product: 'product',
+  a_project_manager: 'project_manager',
+  a_architect: 'architect',
+  a_developer: 'developer',
+  a_tester: 'tester',
+};
+
 /**
  * 裸 MCP 工具名（剥离 vteam_ 前缀）：prompt 中只允许真实暴露名 `vteam_<action>`，
  * 禁止裸名（`agent.constants.ts` VTEAM_MCP_TOOL_NAMES 为命名空间单一来源）。
@@ -120,6 +129,18 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     }
   });
 
+  it('模板 Agent create 与 update 均写入 agentKey = role（opencode 注入名 vteam-<agentKey> 与现状一致）', async () => {
+    await main();
+
+    const templateCalls = templateAgentCalls();
+    expect(templateCalls).toHaveLength(5);
+    for (const call of templateCalls) {
+      const id = String(call[0].where.id);
+      expect(call[0].create.agentKey).toBe(ROLE_BY_AGENT[id]);
+      expect(call[0].update.agentKey).toBe(ROLE_BY_AGENT[id]);
+    }
+  });
+
   it('模板 Agent create 与 update 均绑定角色策略 policyId', async () => {
     await main();
 
@@ -148,8 +169,9 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     const templateCalls = templateAgentCalls();
     expect(templateCalls).toHaveLength(5);
     for (const call of templateCalls) {
-      // prompt 为平台出厂默认值，seed 随平台升级同步（16 篇 §8.4）；policyId 为角色策略绑定；其余字段不 touch
-      expect(Object.keys(call[0].update).sort()).toEqual(['policyId', 'prompt']);
+      // prompt 为平台出厂默认值，seed 随平台升级同步（16 篇 §8.4）；policyId 为角色策略绑定；
+      // agentKey 为模板固定绑定（= role）；其余字段不 touch
+      expect(Object.keys(call[0].update).sort()).toEqual(['agentKey', 'policyId', 'prompt']);
       expect(typeof call[0].update.prompt).toBe('string');
       expect(call[0].update.prompt.length).toBeGreaterThan(50);
       expect(call[0].update).not.toHaveProperty('permissionScope');

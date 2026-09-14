@@ -76,6 +76,14 @@ export function buildModelSeedRows(): ModelSeedRow[] {
  */
 export const TEMPLATE_DEFAULT_MODELS: Record<string, string> = {} as const;
 
+/**
+ * Agent machine-safe 标识格式（vteam-custom-agent-opencode Todo 1）。
+ * opencode agent 名 = `vteam-<agentKey>`；模板 `agentKey = role`；
+ * 自定义/克隆由用户提供（service 层强制必填，DB 列保持可空以兼容存量行）。
+ * 后续 todo 一律引用本常量，禁止重复字面量。
+ */
+export const AGENT_KEY_PATTERN = '^[a-z][a-z0-9_-]{0,62}$' as const;
+
 /* -------------------------------------------------------------------------- */
 /* 角色边界映射（Role Boundaries）—— 单一口径来源（vteam-role-behavior-enforcement Todo 2）   */
 /* -------------------------------------------------------------------------- */

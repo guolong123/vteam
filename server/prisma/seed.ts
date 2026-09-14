@@ -347,21 +347,23 @@ async function main() {
     });
   }
 
-  // update 同步 prompt 与 policyId（平台维护的模板出厂默认提示词，16 篇 §8.4「模板提示词随平台版本升级」——
+  // update 同步 prompt、policyId 与 agentKey（平台维护的模板出厂默认提示词，16 篇 §8.4「模板提示词随平台版本升级」——
   // 存量部署重跑 seed 时把「出厂默认」升级为最新版本；用户自定义过 prompt 的模板若想保持定制，
   // 应在平台上再次修改，seed 不承担保留用户定制的义务）。
+  // agentKey = role（模板固定绑定，opencode 注入名与现状逐字节一致；自定义/克隆行不触碰）。
   // 其余字段（defaultModelId/name/persona 等）保持 update:{} 语义——不覆盖用户已改配置，
   // defaultModelId 与 persona 模板默认值仅首次 create 时生效（存量环境已设 persona 不被 seed 覆盖）。
   for (const agent of templateAgents) {
     const { policyId } = resolvePolicyBinding(agent.role);
     await prisma.agent.upsert({
       where: { id: agent.id },
-      update: { prompt: agent.prompt, policyId },
+      update: { prompt: agent.prompt, policyId, agentKey: agent.role },
       create: {
         ...agent,
         type: 'template',
         baseAgentId: null,
         policyId,
+        agentKey: agent.role,
         defaultModelId: TEMPLATE_DEFAULT_MODELS[agent.id] ?? null,
         createdBy: adminUser.id,
       },
