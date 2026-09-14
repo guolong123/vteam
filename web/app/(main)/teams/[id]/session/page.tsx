@@ -28,7 +28,7 @@ import type { QuestionModalData } from "@/src/components/chat";
 import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
 import { TaskDetailDrawer } from "@/src/components/tasks/TaskDetailDrawer";
 import { TaskInfoEditModal } from "@/src/components/tasks/TaskInfoEditModal";
-import { TeamMembersPanel, roleOptionsOf, customAgentsOf, type AgentItem, type OpencodeAgentItem, isSelectableOpencodeAgent } from "@/src/components/teams/TeamMembersPanel";
+import { TeamMembersPanel, roleOptionsOf, customAgentsOf, type AgentItem } from "@/src/components/teams/TeamMembersPanel";
 import { ResizeHandle } from "@/src/components/teams/ResizeHandle";
 import { TaskRightTabs, type PlanStepItem } from "@/src/components/teams/TeamRightPanel";
 import { useResizableWidth } from "@/src/hooks/use-resizable";
@@ -921,38 +921,6 @@ export default function TeamSessionPage() {
       console.error("[TeamSession] change member model failed", { teamId, error: err });
     },
   });
-  /**
-   * opencode 原生 agent 清单（GET /agents/opencode）。
-   * 数据来自该 team 所属 worker 的实际 opencode 实例（serve GET /agent），非硬编码；
-   * degraded=true（无在线 worker / worker 离线 / 旧版无该端点）时 agents 为空，
-   * 此时成员面板不展示 agent 选择入口（避免给出无效选项）。
-   */
-  const opencodeAgentsQuery = useQuery({
-    queryKey: ["opencode-agents", teamId],
-    queryFn: () =>
-      api.get<{ agents: OpencodeAgentItem[]; workerId: string | null; degraded: boolean }>(
-        "/agents/opencode",
-      ),
-    enabled: !!user?.id,
-    staleTime: 60_000,
-  });
-  /** 切换实例使用的 opencode agent（null = 回 opencode 默认 agent）。 */
-  const instanceOpencodeAgentMutation = useMutation({
-    mutationFn: ({ instanceId, agentName }: { instanceId: string; agentName: string | null }) =>
-      api.patch(`/teams/${teamId}/members/${instanceId}`, {
-        opencodeAgentName: agentName ?? "",
-      }),
-    onSuccess: () => {
-      // 同 instanceModelMutation：会话页成员展示优先读 ["task", currentTaskId]，需双失效。
-      queryClient.invalidateQueries({ queryKey: ["team", teamId] });
-      if (currentTaskId) {
-        queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
-      }
-    },
-    onError: (err) => {
-      console.error("[TeamSession] change member opencode agent failed", { teamId, error: err });
-    },
-  });
   const resetSessionMutation = useMutation({
     mutationFn: (instanceId: string) => {
       // 实例 key → 团队成员 id（tmm_）：团队成员来源时 instanceId 本身即 tmm_；
@@ -1269,17 +1237,6 @@ export default function TeamSessionPage() {
               mentionable={mentionable}
               sending={sendMutation.isPending}
               taskId={currentTaskId ?? undefined}
-              agentOptions={(opencodeAgentsQuery.data?.agents ?? []).filter(isSelectableOpencodeAgent)}
-              agentValue={agentMembers.find((m) => m.main && (m.instanceId ?? m.id) === team?.mainAgentMemberId)?.opencodeAgentName ?? agentMembers.find((m) => m.main)?.opencodeAgentName ?? null}
-              onChangeAgent={
-                team?.mainAgentMemberId
-                  ? (name) => {
-                      const mainId: string = team.mainAgentMemberId as string;
-                      instanceOpencodeAgentMutation.mutate({ instanceId: mainId, agentName: name });
-                    }
-                  : undefined
-              }
-              agentSelectDisabled={!team?.mainAgentMemberId}
               placeholder={isGroupTab ? "输入消息，@ 成员或 @all 广播…" : `发送私聊给 ${agentMembers.find((m) => `private:${privateChannelMap.get(m.instanceId ?? m.id)}` === activeTab)?.name ?? "私聊对象"}…`}
             />
             <div style={{ marginTop: space.xs, fontSize: fontSize.xs, color: neutral[400] }}>按团队复用 · 群聊消息按当前任务分区归属 {team.name}</div>
