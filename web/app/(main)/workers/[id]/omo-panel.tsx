@@ -14,7 +14,8 @@
  *
  * 关键交互约束：
  * - **镜像未内置 OmO 时不展示本卡**（bundled=false）——没有插件，开关与配置都无意义；
- * - 关闭开关时配置表**折叠但保留**（配置不丢，重新打开即恢复），避免"关了再开要重配"；
+ * - 开关只控制插件是否加载（关 = serve 以 --pure 启动），配置表始终可见、可编辑，
+ *   关闭时仅提示回退语义，配置不丢，重新打开即恢复；
  * - 保存后自动重启 serve，结果（executed/pending/skipped）在概览区明示，
  *   避免用户以为"保存了却没生效"。
  */
@@ -234,7 +235,7 @@ export function OmoPanel({ workerId, enabled }: { workerId: string; enabled: boo
         >
           {enabledNow ? "已开启" : "已关闭"}
         </span>
-        {enabledNow && config?.configPath && (
+        {config?.configPath && (
           <span
             data-testid="omo-config-path"
             title="OmO 优先读取 .omo/omo.jsonc；不存在时才用 .opencode/oh-my-openagent.jsonc。本面板始终读写实际生效的那份。"
@@ -257,7 +258,7 @@ export function OmoPanel({ workerId, enabled }: { workerId: string; enabled: boo
             {dirtyCount} 项待保存
           </span>
         )}
-        {enabledNow && (dirtyCount > 0 || configQuery.isFetching) && (
+        {(dirtyCount > 0 || configQuery.isFetching) && (
           <button
             type="button"
             data-testid="omo-save"
@@ -268,7 +269,7 @@ export function OmoPanel({ workerId, enabled }: { workerId: string; enabled: boo
             {saveMutation.isPending ? "保存中…" : "保存"}
           </button>
         )}
-        {enabledNow && dirtyCount > 0 && (
+        {dirtyCount > 0 && (
           <button
             type="button"
             data-testid="omo-reset"
@@ -319,13 +320,13 @@ export function OmoPanel({ workerId, enabled }: { workerId: string; enabled: boo
         </div>
       )}
 
-      {enabledNow && configQuery.isPending && <SectionEmpty text="加载中…" />}
+      {configQuery.isPending && <SectionEmpty text="加载中…" />}
 
-      {enabledNow && config?.degraded && (
+      {config?.degraded && (
         <SectionEmpty text="暂不可用（worker 离线或未安装 OmO 插件）" />
       )}
 
-      {enabledNow && !config?.degraded && config && (
+      {!config?.degraded && config && (
         <>
           {/* 折叠开关：关掉时配置仍保留在服务端，这里只是不占版面 */}
           <button
@@ -382,6 +383,146 @@ export function OmoPanel({ workerId, enabled }: { workerId: string; enabled: boo
           onClose={() => setPromptAgent(null)}
         />
       )}
+    </section>
+  );
+}
+
+/**
+ * opencode 原生 agent 项（对齐 GET /agents/opencode）。
+ * 注意：展示层只过滤 hidden（系统内部 agent 不出现），subagent 保留展示并标注。
+ */
+interface OpencodeAgentItem {
+  name: string;
+  description?: string;
+  mode: "primary" | "subagent" | "all";
+  native?: boolean;
+  hidden?: boolean;
+}
+
+/** GET /agents/opencode 响应。 */
+interface OpencodeAgentsResponse {
+  agents: OpencodeAgentItem[];
+  workerId: string | null;
+  degraded: boolean;
+}
+
+const OPENCODE_MODE_META: Record<OpencodeAgentItem["mode"], { text: string; title: string; tone: "accent" | "muted" }> = {
+  primary: { text: "主Agent", title: "可作为会话主 agent", tone: "accent" },
+  subagent: { text: "子Agent", title: "仅由主 agent 派生，不可直接选择", tone: "muted" },
+  all: { text: "通用", title: "既可作主 agent，也可被派生", tone: "muted" },
+};
+
+/**
+ * opencode Agents 只读卡（worker 详情页内与 OmO 面板平级的独立卡）。
+ * 数据源 GET /agents/opencode?workerId=…（worker 真实上报的 agent 清单），
+ * 与 OmO 开关状态无关——开关只控制 OmO 插件是否加载，不影响本卡展示。
+ */
+export function OpencodeAgentsPanel({ workerId }: { workerId: string }) {
+  const agentsQuery = useQuery({
+    queryKey: ["opencode-agents", "worker", workerId],
+    queryFn: () =>
+      api.get<OpencodeAgentsResponse>("/agents/opencode", { query: { workerId } }),
+    retry: false,
+  });
+
+  const visible = (agentsQuery.data?.agents ?? []).filter((a) => !a.hidden);
+  const degraded = agentsQuery.data?.degraded ?? false;
+
+  return (
+    <section data-testid="worker-detail-opencode-agents" style={cardStyle()}>
+      <SectionHeader
+        icon="◍"
+        title="opencode Agents"
+        count={agentsQuery.data ? visible.length : undefined}
+      />
+
+      {agentsQuery.isPending && <SectionEmpty text="加载中…" />}
+
+      {!agentsQuery.isPending &&
+        (agentsQuery.isError || degraded || visible.length === 0) && (
+          <SectionEmpty text="未获取到（worker 离线或版本不支持）" />
+        )}
+
+      {!agentsQuery.isPending &&
+        !agentsQuery.isError &&
+        !degraded &&
+        visible.length > 0 && (
+          <div
+            data-testid="opencode-agent-list"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+              gap: space.sm,
+            }}
+          >
+            {visible.map((agent) => {
+              const modeMeta = OPENCODE_MODE_META[agent.mode];
+              const native = agent.native === true;
+              return (
+                <div
+                  key={agent.name}
+                  data-testid={`opencode-agent-row-${agent.name}`}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: space.xs,
+                    padding: `${space.sm}px ${space.md}px`,
+                    height: "100%",
+                    borderRadius: radius.md,
+                    border: `1px solid ${neutral[200]}`,
+                    backgroundColor: "var(--color-surface)",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: space.xs,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: fontFamily.mono,
+                        fontSize: fontSize.sm,
+                        fontWeight: 600,
+                        color: neutral[800],
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                      title={agent.name}
+                    >
+                      {agent.name}
+                    </span>
+                    <Badge text={modeMeta.text} title={modeMeta.title} tone={modeMeta.tone} />
+                    <Badge
+                      text={native ? "原生" : "自定义"}
+                      title={native ? "opencode 自带 agent" : "worker 侧自定义 agent"}
+                      tone="muted"
+                    />
+                  </div>
+                  {agent.description && (
+                    <div
+                      style={{
+                        fontSize: fontSize.xs,
+                        color: neutral[500],
+                        lineHeight: 1.55,
+                        display: "-webkit-box",
+                        WebkitLineClamp: 3,
+                        WebkitBoxOrient: "vertical",
+                        overflow: "hidden",
+                      }}
+                      title={agent.description}
+                    >
+                      {agent.description}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
     </section>
   );
 }
