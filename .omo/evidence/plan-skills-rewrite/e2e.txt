@@ -1,0 +1,44 @@
+[e2e] plan-skills-rewrite verification — 2026-09-14 (HEAD 3f48000, seed rewrite committed)
+[e2e] Plan: .omo/plans/vteam-plan-skills-rewrite.md Todo 2. Full-run log: .omo/evidence/plan-skills/e2e.txt
+
+--- A. rebuild + re-seed proof ---
+[e2e] docker compose build server        -> Image aiagents-server Built
+[e2e] docker compose build init          -> Image aiagents-init Built (NOTE: init is a SEPARATE image from server;
+      `build server` alone leaves init stale — first seed attempt ran old dist and showed 0 Chinese markers.
+      Rebuilt init, re-ran seed -> markers present. Lesson recorded in learnings.md.)
+[e2e] docker compose up -d --force-recreate server -> healthy (GET /api/v1/health -> 200)
+[e2e] docker compose run --rm init       -> "No pending migrations to apply" + Seed 完成 (seed path that applies: init service)
+
+--- B. DB verification (mysql --default-character-set=utf8mb4; NOTE: latin1 client mangles CJK LIKE -> false 0s) ---
+[e2e] skills plan-% rows: plan-creation, plan-review-architect, plan-review-developer, plan-review-product, plan-review-project_manager, plan-review-tester — all enabled=1 (6/6)
+[e2e] marker counts over plan-% contents: APPROVAL BIAS=6, 存疑放行=6, 最多 3 条=5, 篇幅上限=5, 不 redesign=5, VERDICT:=5, 假设清单=2 (plan-creation + plan-review-architect)
+[e2e] distribution matches seed.ts source (grep seed.ts: VERDICT: x25, 不 redesign x5, 存疑放行 x6, 假设清单 x4, 篇幅上限 x5, 最多 3 条 x5) — review-only markers at 5/5 expected per D2; 假设清单 in creation+architect per D1/D3
+
+--- C. injector proof (worker restarted, workdir .opencode/skills content grep — not just existence) ---
+[e2e] 6/6 SKILL.md EXIST after `docker compose up -d --force-recreate worker`
+[e2e] grep -l per marker over workdir SKILL.md: APPROVAL BIAS=6 files, 存疑放行=6, 最多 3 条=5 (reviews), 篇幅上限=5 (reviews), 不 redesign=5 (reviews), 假设清单=2 (creation+architect), VERDICT=5 (reviews, 3 hits each; creation 0)
+[e2e] workdir distribution == DB distribution == seed.ts source. Injection of new doctrine PROVEN.
+
+--- D. standalone live single-reviewer smoke (this task's required round) ---
+[e2e] smoke path: live-llm (no fallback; curl rc=0 http=200 in ~17s, 2026-09-14T05:39:26Z->43Z)
+[e2e] call: plan_review taskId=t_0000000001 selfInstanceId=tmm_0000000002 (main, project_manager) reviewers=[developer] timeoutMs=300000
+[e2e] raw transcript: smoke-transcript-standalone.json (523 bytes)
+[e2e] parseable VERDICT: APPROVE (role=developer memberId=tmm_0000000004)
+[e2e] qualitative (observed, NOT hard-asserted): findings = 1 block, 4 bullets, 314 chars total, bullets 56-113 chars each (short, disciplined); raw review text is NOT retained in the response (only server-parsed structured verdict), so literal "VERDICT-first-line" not directly observable — parseability via server regex is the contract and it held.
+
+--- E. full regression: bash scripts/e2e-plan-skills.sh ---
+[e2e] PASS 0 (worker restarted, injector ran)
+[e2e] PASS 1 (6 skills enabled in DB, tools row present, 6 SKILL.md injected)
+[e2e] PASS 2 (server ROLE_SERVER_GATED_TOOLS == worker SERVER_GATED_TOOLS, 6 values incl. vteam_plan_review)
+[e2e] PASS 3 (guard: project_manager + developer -> vteam_plan_review = allow)
+[e2e] PASS 4 (server gate: non-main plan_review rejected with 403 main-instance message)
+[e2e] PASS 5 (smoke LIVE path: single reviewer returned parseable APPROVE — full-run transcript: smoke-transcript-fullrun.json, 3 numbered short findings, disciplined)
+[e2e] PASS 6 (cleanup: smoke file removed, task unmutated, DB + /agent-policies at baseline)
+[e2e] ALL STEPS DONE: 0/1/2/3/4/5/6 (smoke path: live-llm). Full log: .omo/evidence/plan-skills/e2e.txt. No regression from text change.
+
+--- F. cleanup confirmation ---
+[e2e] worker /data/vteam-worker/tasks/t_0000000001/.opencode/plans/ : empty (standalone rewrite-smoke.md removed; e2e smoke file removed by script step 6)
+[e2e] DB: skills plan-% enabled=6, task t_0000000001 status=pending (unchanged); script step 6 asserted counts {tasks:2 team_members:5 sessions:5 skills:7 tools:202 execution_policies:6 team_queues:1} == baseline and /agent-policies identical
+[e2e] No test rows left. Verification-only: zero server/worker/web source changes (git status clean on those paths).
+
+[e2e] PASS plan-skills-rewrite (evidence: .omo/evidence/plan-skills-rewrite/)
