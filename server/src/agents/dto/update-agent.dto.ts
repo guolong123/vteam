@@ -10,6 +10,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { PERSONA_LIBRARY } from '../persona.constants';
+import { AGENT_KEY_PATTERN } from '../../common/constants/agent.constants';
 
 /**
  * PATCH /agents/:id 请求体（09 篇 §3.7：FR-33~36/47/48）。
@@ -28,6 +29,22 @@ export class UpdateAgentDto {
   @IsOptional()
   @IsString()
   role?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Agent machine-safe 标识（opencode agent 名 = `vteam-<agentKey>`；仅显式传入时更新）',
+    example: 'demo-agent',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(new RegExp(AGENT_KEY_PATTERN), {
+    message: `agentKey 格式非法：需匹配 ${AGENT_KEY_PATTERN}（小写字母开头，仅含小写字母/数字/_/-，最长 63 字符）`,
+  })
+  @Matches(/^(?!vteam-).+$/, {
+    message:
+      'agentKey 不能以 `vteam-` 开头，否则 opencode agent 名会变成 `vteam-vteam-<key>`',
+  })
+  agentKey?: string;
 
   @ApiPropertyOptional({ description: '角色提示词（FR-33，作用于后续会话）' })
   @IsOptional()

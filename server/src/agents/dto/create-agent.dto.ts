@@ -9,6 +9,7 @@ import {
   MaxLength,
 } from 'class-validator';
 import { PERSONA_LIBRARY } from '../persona.constants';
+import { AGENT_KEY_PATTERN } from '../../common/constants/agent.constants';
 
 /**
  * POST /agents 请求体（09 篇 §3.7：完全自定义 FR-32）。
@@ -28,6 +29,21 @@ export class CreateAgentDto {
   })
   @IsIn(['custom'])
   type: 'custom';
+
+  @ApiProperty({
+    description:
+      'Agent machine-safe 标识（opencode agent 名 = `vteam-<agentKey>`；克隆须换新 key，源 key 不可复用）',
+    example: 'demo-agent',
+  })
+  @IsString()
+  @Matches(new RegExp(AGENT_KEY_PATTERN), {
+    message: `agentKey 格式非法：需匹配 ${AGENT_KEY_PATTERN}（小写字母开头，仅含小写字母/数字/_/-，最长 63 字符）`,
+  })
+  @Matches(/^(?!vteam-).+$/, {
+    message:
+      'agentKey 不能以 `vteam-` 开头，否则 opencode agent 名会变成 `vteam-vteam-<key>`',
+  })
+  agentKey: string;
 
   @ApiPropertyOptional({
     description: '角色 key（与前端 task-create data-role 对齐）',

@@ -98,7 +98,11 @@ describe('AgentsController', () => {
   });
 
   it('POST /agents 以 req.user.id 转发 create', async () => {
-    const dto: CreateAgentDto = { name: '数据分析师', type: 'custom' };
+    const dto: CreateAgentDto = {
+      name: '数据分析师',
+      type: 'custom',
+      agentKey: 'data-analyst',
+    };
     service.create.mockResolvedValue({
       id: 'a_0000000005',
       name: '数据分析师',
@@ -111,7 +115,7 @@ describe('AgentsController', () => {
   });
 
   it('POST /agents/:id/clone 以 req.user.id 转发 clone', async () => {
-    const dto: CloneAgentDto = { name: '副本' };
+    const dto: CloneAgentDto = { name: '副本', agentKey: 'copy-agent' };
     service.clone.mockResolvedValue({
       id: 'a_0000000005',
       name: '副本',
@@ -297,10 +301,40 @@ describe('AgentsController', () => {
       ).not.toHaveLength(0);
     });
 
-    it('CreateAgentDto：合法 name → 校验通过', async () => {
+    it('CreateAgentDto：合法 name + agentKey → 校验通过', async () => {
+      expect(
+        await errorsOf(CreateAgentDto, {
+          name: '数据分析师',
+          type: 'custom',
+          agentKey: 'data-analyst',
+        }),
+      ).toHaveLength(0);
+    });
+
+    it('CreateAgentDto：缺失 agentKey → 校验失败（custom 必填 key）', async () => {
       expect(
         await errorsOf(CreateAgentDto, { name: '数据分析师', type: 'custom' }),
-      ).toHaveLength(0);
+      ).not.toHaveLength(0);
+    });
+
+    it('CreateAgentDto：非法 agentKey → 校验失败（大小写/符号越界）', async () => {
+      expect(
+        await errorsOf(CreateAgentDto, {
+          name: '数据分析师',
+          type: 'custom',
+          agentKey: 'Invalid_Key!',
+        }),
+      ).not.toHaveLength(0);
+    });
+
+    it('CreateAgentDto：`vteam-` 前缀 agentKey → 校验失败（防 `vteam-vteam-x`）', async () => {
+      expect(
+        await errorsOf(CreateAgentDto, {
+          name: '数据分析师',
+          type: 'custom',
+          agentKey: 'vteam-demo',
+        }),
+      ).not.toHaveLength(0);
     });
 
     it('UpdateAgentDto：显式传空串 name → 校验失败（@IsNotEmpty）', async () => {
@@ -315,8 +349,26 @@ describe('AgentsController', () => {
       expect(await errorsOf(CloneAgentDto, { name: '' })).not.toHaveLength(0);
     });
 
-    it('CloneAgentDto：不传 name → 校验通过（缺省源名称+副本）', async () => {
-      expect(await errorsOf(CloneAgentDto, {})).toHaveLength(0);
+    it('CloneAgentDto：不传 name 但传合法 agentKey → 校验通过（缺省源名称+副本）', async () => {
+      expect(
+        await errorsOf(CloneAgentDto, { agentKey: 'copy-agent' }),
+      ).toHaveLength(0);
+    });
+
+    it('CloneAgentDto：缺失 agentKey → 校验失败（克隆须分配新 key）', async () => {
+      expect(await errorsOf(CloneAgentDto, {})).not.toHaveLength(0);
+    });
+
+    it('UpdateAgentDto：合法 agentKey → 校验通过（显式传入时更新）', async () => {
+      expect(
+        await errorsOf(UpdateAgentDto, { agentKey: 'new-key' }),
+      ).toHaveLength(0);
+    });
+
+    it('UpdateAgentDto：非法 agentKey → 校验失败', async () => {
+      expect(
+        await errorsOf(UpdateAgentDto, { agentKey: 'vteam-demo' }),
+      ).not.toHaveLength(0);
     });
   });
 });

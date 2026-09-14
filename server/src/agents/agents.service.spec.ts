@@ -1,4 +1,10 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { Test, TestingModule } from '@nestjs/testing';
 import {
   AGENT_ERRORS,
@@ -247,6 +253,7 @@ describe('AgentsService', () => {
           'id',
           'name',
           'role',
+          'agentKey',
           'type',
           'prompt',
           'baseAgentId',
@@ -378,11 +385,15 @@ describe('AgentsService', () => {
   describe('create（POST /agents，custom 二表事务）', () => {
     it('custom 创建：Agent + agent_skills 同事务写入', async () => {
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
-      prisma.agent.create.mockResolvedValue(customRow);
+      prisma.agent.create.mockResolvedValue({
+        ...customRow,
+        agentKey: 'data-analyst',
+      });
 
       const dto: CreateAgentDto = {
         name: ' 数据分析师 ',
         type: 'custom',
+        agentKey: 'data-analyst',
         role: 'analyst',
         prompt: 'prompt-custom',
         skillIds: ['s_skill1', 's_skill2'],
@@ -399,6 +410,7 @@ describe('AgentsService', () => {
             name: '数据分析师',
             type: 'custom',
             role: 'analyst',
+            agentKey: 'data-analyst',
             prompt: 'prompt-custom',
             baseAgentId: null,
             defaultModelId: 'opencode-go/deepseek-v4-flash',
@@ -420,6 +432,7 @@ describe('AgentsService', () => {
       expect(result).toMatchObject({
         id: 'a_0000000005',
         type: 'custom',
+        agentKey: 'data-analyst',
         baseAgentId: null,
         skillIds: ['s_skill1', 's_skill2'],
         defaultModelId: 'opencode-go/deepseek-v4-flash',
@@ -434,6 +447,7 @@ describe('AgentsService', () => {
       await service.create('u_admin', {
         name: '数据分析师',
         type: 'custom',
+        agentKey: 'dedup-agent',
         skillIds: ['s1', 's1', 's2'],
       });
 
@@ -450,6 +464,7 @@ describe('AgentsService', () => {
       await service.create('u_admin', {
         name: '数据分析师',
         type: 'custom',
+        agentKey: 'persona-agent',
         prompt: 'prompt-custom',
         persona: 'strict',
       });
@@ -471,6 +486,7 @@ describe('AgentsService', () => {
       await service.create('u_admin', {
         name: '数据分析师',
         type: 'custom',
+        agentKey: 'plain-agent',
       });
 
       expect(prisma.agent.create).toHaveBeenCalledWith(
@@ -490,11 +506,14 @@ describe('AgentsService', () => {
         id: 'a_0000000005',
         name: '产品经理副本',
         type: 'clone',
+        agentKey: 'product-copy',
         baseAgentId: 'a_product',
         createdBy: 'u_admin',
       });
 
-      const result = await service.clone('u_admin', 'a_product', {});
+      const result = await service.clone('u_admin', 'a_product', {
+        agentKey: 'product-copy',
+      });
 
       expect(prisma.agent.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -504,6 +523,7 @@ describe('AgentsService', () => {
             type: 'clone',
             baseAgentId: 'a_product',
             role: 'product',
+            agentKey: 'product-copy',
             prompt: 'prompt1',
             createdBy: 'u_admin',
           }),
@@ -524,6 +544,7 @@ describe('AgentsService', () => {
         id: 'a_0000000005',
         name: '产品经理副本',
         type: 'clone',
+        agentKey: 'product-copy',
         baseAgentId: 'a_product',
         skillIds: ['s_skill1'],
         policyId: 'ep_product',
@@ -545,10 +566,14 @@ describe('AgentsService', () => {
         id: 'a_0000000005',
         name: '自定义副本名',
         type: 'clone',
+        agentKey: 'named-copy',
         baseAgentId: 'a_product',
       });
 
-      await service.clone('u_admin', 'a_product', { name: ' 自定义副本名 ' });
+      await service.clone('u_admin', 'a_product', {
+        name: ' 自定义副本名 ',
+        agentKey: 'named-copy',
+      });
 
       expect(prisma.agent.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -561,10 +586,14 @@ describe('AgentsService', () => {
       prisma.agent.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.clone('u_admin', 'a_nonexistent', {}),
+        service.clone('u_admin', 'a_nonexistent', {
+          agentKey: 'ghost-copy',
+        }),
       ).rejects.toThrow(NotFoundException);
       await expect(
-        service.clone('u_admin', 'a_nonexistent', {}),
+        service.clone('u_admin', 'a_nonexistent', {
+          agentKey: 'ghost-copy',
+        }),
       ).rejects.toMatchObject({
         response: { code: AGENT_ERRORS.AGENT_NOT_FOUND },
       });
@@ -1167,6 +1196,7 @@ describe('AgentsService', () => {
       const dto: CreateAgentDto = {
         name: '策略分析师',
         type: 'custom',
+        agentKey: 'policy-analyst',
         role: 'analyst',
         prompt: 'prompt-custom',
         policyId: 'ep_developer',
@@ -1189,6 +1219,7 @@ describe('AgentsService', () => {
       const result = await service.create('u_admin', {
         name: '无策略分析师',
         type: 'custom',
+        agentKey: 'nopolicy-analyst',
       });
 
       expect(prisma.agent.create).toHaveBeenCalledWith(
@@ -1208,10 +1239,13 @@ describe('AgentsService', () => {
         id: 'a_0000000005',
         name: '产品经理副本',
         type: 'clone',
+        agentKey: 'policy-copy',
         baseAgentId: 'a_product',
       });
 
-      const result = await service.clone('u_admin', 'a_product', {});
+      const result = await service.clone('u_admin', 'a_product', {
+        agentKey: 'policy-copy',
+      });
 
       expect(prisma.agent.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1308,6 +1342,206 @@ describe('AgentsService', () => {
 
       expect(unbound).toMatchObject({ policyId: null });
       expect(unbound.effectivePermission).toBeNull();
+    });
+  });
+
+  describe('agentKey（custom/clone 必填 key + 分层 effectivePermission）', () => {
+    it('create：有效 agentKey 原样持久化并经 toAgentDto 返回', async () => {
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      prisma.agent.create.mockResolvedValue({
+        ...customRow,
+        agentKey: 'data-analyst',
+      });
+
+      const result = await service.create('u_admin', {
+        name: '数据分析师',
+        type: 'custom',
+        agentKey: 'data-analyst',
+        role: 'analyst',
+      });
+
+      expect(prisma.agent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ agentKey: 'data-analyst' }),
+        }),
+      );
+      expect(result).toMatchObject({ agentKey: 'data-analyst' });
+    });
+
+    it('create：非法 agentKey → 400 AGENT_KEY_INVALID（不落库）', async () => {
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+
+      await expect(
+        service.create('u_admin', {
+          name: '数据分析师',
+          type: 'custom',
+          agentKey: 'Invalid_Key!',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.create('u_admin', {
+          name: '数据分析师',
+          type: 'custom',
+          agentKey: 'Invalid_Key!',
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'AGENT_KEY_INVALID' },
+      });
+      expect(prisma.agent.create).not.toHaveBeenCalled();
+    });
+
+    it('create：`vteam-` 前缀 agentKey → 400（防 `vteam-vteam-x`）', async () => {
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+
+      await expect(
+        service.create('u_admin', {
+          name: '数据分析师',
+          type: 'custom',
+          agentKey: 'vteam-demo',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.create('u_admin', {
+          name: '数据分析师',
+          type: 'custom',
+          agentKey: 'vteam-demo',
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'AGENT_KEY_INVALID' },
+      });
+      expect(prisma.agent.create).not.toHaveBeenCalled();
+    });
+
+    it('create：重复 agentKey → 409 AGENT_KEY_CONFLICT（非原生 Prisma 错误）', async () => {
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      prisma.agent.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError(
+          'Unique constraint failed on the fields: (`agent_key`)',
+          { code: 'P2002', clientVersion: 'test' },
+        ),
+      );
+
+      await expect(
+        service.create('u_admin', {
+          name: '数据分析师',
+          type: 'custom',
+          agentKey: 'data-analyst',
+        }),
+      ).rejects.toThrow(ConflictException);
+      await expect(
+        service.create('u_admin', {
+          name: '数据分析师',
+          type: 'custom',
+          agentKey: 'data-analyst',
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'AGENT_KEY_CONFLICT' },
+      });
+    });
+
+    it('clone：使用新 agentKey（不复制源 key）；冲突 → 409', async () => {
+      const source = { ...templateRows[0], agentKey: 'product' };
+      prisma.agent.findUnique.mockResolvedValue(source);
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      prisma.agent.create.mockResolvedValue({
+        ...source,
+        id: 'a_0000000005',
+        name: '产品经理副本',
+        type: 'clone',
+        agentKey: 'product-copy',
+        baseAgentId: 'a_product',
+      });
+
+      const result = await service.clone('u_admin', 'a_product', {
+        agentKey: 'product-copy',
+      });
+
+      expect(prisma.agent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ agentKey: 'product-copy' }),
+        }),
+      );
+      expect(result).toMatchObject({ agentKey: 'product-copy' });
+
+      prisma.agent.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError(
+          'Unique constraint failed on the fields: (`agent_key`)',
+          { code: 'P2002', clientVersion: 'test' },
+        ),
+      );
+
+      await expect(
+        service.clone('u_admin', 'a_product', {
+          agentKey: 'product-copy',
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'AGENT_KEY_CONFLICT' },
+      });
+    });
+
+    it('update：显式传入 agentKey 时更新落库；不传不触碰', async () => {
+      prisma.agent.findUnique
+        .mockResolvedValueOnce({ ...customRow, agentKey: 'old-key' })
+        .mockResolvedValueOnce({
+          ...customRow,
+          agentKey: 'new-key',
+          skills: [{ skillId: 's_skill1' }],
+        });
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      prisma.agent.update.mockResolvedValue(customRow);
+
+      const result = await service.update('a_0000000005', {
+        agentKey: 'new-key',
+      });
+
+      expect(prisma.agent.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ agentKey: 'new-key' }),
+        }),
+      );
+      expect(result).toMatchObject({ agentKey: 'new-key' });
+    });
+
+    it('toAgentDto：返回 agentKey，自定义 agent 按 key 解析 agentName 与三态 tools', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        ...customRow,
+        agentKey: 'demo-agent',
+        role: 'analyst',
+        policyId: 'ep_demo',
+        skills: [],
+      });
+      executionPolicyService.resolveManyByAgents.mockResolvedValueOnce([
+        {
+          policyId: 'ep_demo',
+          policyName: 'demo 策略',
+          agentName: 'vteam-demo-agent',
+          permission: { edit: 'allow' },
+          tools: {
+            vteam_group_post: 'allow',
+            vteam_read_file: 'ask',
+            git_push: 'deny',
+          },
+          bashDeny: [...ROLE_BASH_DENY_PATTERNS],
+          correction: { scopeSummary: 'demo' },
+        },
+      ]);
+
+      const result = await service.findOne('a_0000000005');
+
+      expect(
+        executionPolicyService.resolveManyByAgents,
+      ).toHaveBeenCalledWith([
+        { policyId: 'ep_demo', role: 'analyst', agentKey: 'demo-agent' },
+      ]);
+      expect(result).toMatchObject({ agentKey: 'demo-agent' });
+      expect(result.effectivePermission).toMatchObject({
+        agentName: 'vteam-demo-agent',
+        tools: {
+          vteam_group_post: 'allow',
+          vteam_read_file: 'ask',
+          git_push: 'deny',
+        },
+      });
     });
   });
 });

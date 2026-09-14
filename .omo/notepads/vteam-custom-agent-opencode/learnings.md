@@ -37,3 +37,13 @@ _Append new entries below - never overwrite._
 - 环境坑：工作树有 Todo 3 未提交的 `agents/**` 改动（DTO 加必填 `agentKey`，spec 未同步），`tsc --noEmit` exit 1 的 13 个 error 全在该目录；自有文件用 `grep error TS | sed | uniq -c` 按文件分组自证清白，不碰越界文件。
 - 验证：`npx jest src/chat/worker-dispatcher.spec.ts` 188/188 green（新增 7 个 it：helper 映射 1 + 边界缺席 1 + 分派 (a)~(e) 5）。
 - Commit：`feat(dispatch): route custom agents by agentKey`。
+
+## Todo 3 — Agent CRUD 穿透 `agentKey` + 分层 effectivePermission (2026-09-14)
+
+- DTO 三件套：`CreateAgentDto.agentKey` 必填、`UpdateAgentDto.agentKey?` 可选、`CloneAgentDto.agentKey` 必填；统一 `@Matches(new RegExp(AGENT_KEY_PATTERN))`（`agent.constants.ts:85` 单一来源）+ 第二个 `@Matches(/^(?!vteam-).+$/)` 显式拒绝 `vteam-` 前缀（防 `vteam-vteam-x`）。
+- Service 双层校验（DTO pipe 旁路时单测直调 service 仍生效）：`assertValidAgentKey`（缺失/空串→400 `AGENT_KEY_INVALID`； pattern 不符→400；`vteam-` 前缀→400，原样存储不 trim/小写）；`throwOnAgentKeyConflict` 捕获 `PrismaClientKnownRequestError P2002` → 409 `AGENT_KEY_CONFLICT`（create/clone/update 三路径 try/catch 包事务，冲突码为 service 内局部常量——`common/constants` 不在本次 scope 内，不碰）。
+- 顺序语义：clone/update 先查源（404 `AGENT_NOT_FOUND` 优先）再验 key；update 仅 `dto.agentKey !== undefined` 时 set；clone 持久化新 key、源 key 永不复制；template 只读/可改设置语义零改动。
+- `AgentRow` + 两 builder 返回均增 `agentKey: string | null`；`resolveManyByAgents` 入参补 `agentKey`（custom 解析出 `agentName = vteam-<key>` + 绑定策略 `config.tools` 三态）。存量 fixture 无 key → 传 `undefined`，`toHaveBeenCalledWith` 的 toEqual 语义忽略 undefined 属性，既有断言零改动通过。
+- Spec 连带修复：controller.spec 的必填 DTO 构造（create/clone）+ `errorsOf` 负向用例（`{}` 对 clone 现为失败）；service.spec 既有 create/clone 调用补 key、列表键契约加 `agentKey`；新增 7 个 it（create 有效/非法/`vteam-`/409、clone 新 key+409、update set/skip、toAgentDto 分层断言）。
+- 验证：`npx tsc -p tsconfig.json --noEmit` exit 0；`npx jest src/agents` 96/96 green（3 suites）。
+- Commit：`feat(agents): manage agentKey with layered effective permission`。

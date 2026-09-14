@@ -49,7 +49,7 @@ export class AgentsController {
 
   /**
    * 创建自定义 Agent（二表事务：Agent + agent_skills）。
-   * POST /api/v1/agents {name, type: 'custom', prompt?, role?, skillIds?, defaultModelId?, policyId?}
+   * POST /api/v1/agents {name, type: 'custom', agentKey, prompt?, role?, skillIds?, defaultModelId?, policyId?}
    *   → 201 + Agent 对象（type=custom，baseAgentId=null，含 policyId + effectivePermission）
    */
   @Post()
@@ -62,7 +62,7 @@ export class AgentsController {
 
   /**
    * 克隆 Agent（baseAgentId 血缘 + skills 深拷贝，原 Agent 不受影响）。
-   * POST /api/v1/agents/:id/clone {name?} → 201 + 克隆副本（type=clone）
+   * POST /api/v1/agents/:id/clone {name?, agentKey} → 201 + 克隆副本（type=clone）
    * 源不存在 → 404 `AGENT_NOT_FOUND`
    */
   @Post(':id/clone')

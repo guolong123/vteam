@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -8,6 +10,7 @@ import {
 import { Prisma } from '@prisma/client';
 import {
   AGENT_ERRORS,
+  AGENT_KEY_PATTERN,
   STATIC_AVAILABLE_MODELS,
 } from '../common/constants/agent.constants';
 import { IdGeneratorService } from '../common/id-generator';
@@ -31,6 +34,12 @@ const ID_PREFIX = {
   agentSkill: 'as',
 } as const;
 
+/** agentKey 唯一冲突 → 409 的稳定错误码（覆盖 create/clone/update 三路径）。 */
+const AGENT_KEY_CONFLICT = 'AGENT_KEY_CONFLICT' as const;
+
+/** agentKey 非法 → 400 的稳定错误码（格式不符 / `vteam-` 前缀 / 缺失必填）。 */
+const AGENT_KEY_INVALID = 'AGENT_KEY_INVALID' as const;
+
 /** 列表/详情共用的关联 include（agent_skills → skillId 数组）。 */
 const AGENT_INCLUDE = {
   skills: true,
@@ -41,6 +50,7 @@ type AgentRow = {
   id: string;
   name: string;
   role: string | null;
+  agentKey: string | null;
   type: string;
   prompt: string;
   baseAgentId: string | null;
@@ -158,26 +168,33 @@ export class AgentsService implements OnModuleInit {
    * + agent_skills 批量，返回 toAgentDto 格式。
    */
   async create(userId: string, dto: CreateAgentDto) {
-    return this.prisma.$transaction(async (tx) => {
-      const agent = await tx.agent.create({
-        data: {
-          id: await this.idGen.nextId(ID_PREFIX.agent),
-          name: dto.name.trim(),
-          type: dto.type,
-          role: dto.role ?? null,
-          prompt: dto.prompt ?? '',
-          baseAgentId: null,
-          defaultModelId: dto.defaultModelId ?? null,
-          persona: dto.persona ?? null,
-          policyId: dto.policyId ?? null,
-          createdBy: userId,
-        },
+    this.assertValidAgentKey(dto.agentKey);
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const agent = await tx.agent.create({
+          data: {
+            id: await this.idGen.nextId(ID_PREFIX.agent),
+            name: dto.name.trim(),
+            type: dto.type,
+            role: dto.role ?? null,
+            agentKey: dto.agentKey,
+            prompt: dto.prompt ?? '',
+            baseAgentId: null,
+            defaultModelId: dto.defaultModelId ?? null,
+            persona: dto.persona ?? null,
+            policyId: dto.policyId ?? null,
+            createdBy: userId,
+          },
+        });
+
+        const skills = await this.createSkills(tx, agent.id, dto.skillIds);
+
+        return this.toAgentDto({ ...agent, skills });
       });
-
-      const skills = await this.createSkills(tx, agent.id, dto.skillIds);
-
-      return this.toAgentDto({ ...agent, skills });
-    });
+    } catch (e) {
+      this.throwOnAgentKeyConflict(e);
+      throw e;
+    }
   }
 
   /**
@@ -195,30 +212,37 @@ export class AgentsService implements OnModuleInit {
     }
 
     const newName = dto.name?.trim() || `${source.name}副本`;
+    this.assertValidAgentKey(dto.agentKey);
 
-    return this.prisma.$transaction(async (tx) => {
-      const clone = await tx.agent.create({
-        data: {
-          id: await this.idGen.nextId(ID_PREFIX.agent),
-          name: newName,
-          type: 'clone',
-          baseAgentId: source.id,
-          role: source.role,
-          prompt: source.prompt,
-          defaultModelId: source.defaultModelId,
-          persona: source.persona,
-          policyId: source.policyId ?? null,
-          createdBy: userId,
-        },
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const clone = await tx.agent.create({
+          data: {
+            id: await this.idGen.nextId(ID_PREFIX.agent),
+            name: newName,
+            type: 'clone',
+            baseAgentId: source.id,
+            role: source.role,
+            agentKey: dto.agentKey,
+            prompt: source.prompt,
+            defaultModelId: source.defaultModelId,
+            persona: source.persona,
+            policyId: source.policyId ?? null,
+            createdBy: userId,
+          },
+        });
+
+        await this.copySkills(tx, source, clone.id);
+
+        return this.toAgentDto({
+          ...clone,
+          skills: source.skills.map((s) => ({ skillId: s.skillId })),
+        });
       });
-
-      await this.copySkills(tx, source, clone.id);
-
-      return this.toAgentDto({
-        ...clone,
-        skills: source.skills.map((s) => ({ skillId: s.skillId })),
-      });
-    });
+    } catch (e) {
+      this.throwOnAgentKeyConflict(e);
+      throw e;
+    }
   }
 
   /**
@@ -236,34 +260,44 @@ export class AgentsService implements OnModuleInit {
       this.throwNotFound(id);
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.agent.update({
-        where: { id },
-        data: {
-          ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
-          ...(dto.role !== undefined ? { role: dto.role } : {}),
-          ...(dto.prompt !== undefined ? { prompt: dto.prompt } : {}),
-          ...(dto.defaultModelId !== undefined
-            ? { defaultModelId: dto.defaultModelId }
-            : {}),
-          ...(dto.persona !== undefined
-            ? { persona: dto.persona ?? null }
-            : {}),
-          ...(dto.workerId !== undefined ? { workerId: dto.workerId } : {}),
-          ...(dto.policyId !== undefined ? { policyId: dto.policyId } : {}),
-        },
-      });
+    if (dto.agentKey !== undefined) {
+      this.assertValidAgentKey(dto.agentKey);
+    }
 
-      if (dto.skillIds !== undefined) {
-        await this.replaceSkills(tx, id, dto.skillIds);
-      }
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.agent.update({
+          where: { id },
+          data: {
+            ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+            ...(dto.role !== undefined ? { role: dto.role } : {}),
+            ...(dto.agentKey !== undefined ? { agentKey: dto.agentKey } : {}),
+            ...(dto.prompt !== undefined ? { prompt: dto.prompt } : {}),
+            ...(dto.defaultModelId !== undefined
+              ? { defaultModelId: dto.defaultModelId }
+              : {}),
+            ...(dto.persona !== undefined
+              ? { persona: dto.persona ?? null }
+              : {}),
+            ...(dto.workerId !== undefined ? { workerId: dto.workerId } : {}),
+            ...(dto.policyId !== undefined ? { policyId: dto.policyId } : {}),
+          },
+        });
 
-      const full = await tx.agent.findUnique({
-        where: { id },
-        include: AGENT_INCLUDE,
+        if (dto.skillIds !== undefined) {
+          await this.replaceSkills(tx, id, dto.skillIds);
+        }
+
+        const full = await tx.agent.findUnique({
+          where: { id },
+          include: AGENT_INCLUDE,
+        });
+        return this.toAgentDto(full!);
       });
-      return this.toAgentDto(full!);
-    });
+    } catch (e) {
+      this.throwOnAgentKeyConflict(e);
+      throw e;
+    }
   }
 
   /**
@@ -473,6 +507,7 @@ export class AgentsService implements OnModuleInit {
     id: string;
     name: string;
     role: string | null;
+    agentKey: string | null;
     type: string;
     prompt: string;
     baseAgentId: string | null;
@@ -487,12 +522,17 @@ export class AgentsService implements OnModuleInit {
   }> {
     const [effectivePermission] =
       await this.executionPolicyService.resolveManyByAgents([
-        { policyId: agent.policyId, role: agent.role },
+        {
+          policyId: agent.policyId,
+          role: agent.role,
+          agentKey: agent.agentKey,
+        },
       ]);
     return {
       id: agent.id,
       name: agent.name,
       role: agent.role,
+      agentKey: agent.agentKey,
       type: agent.type,
       prompt: agent.prompt,
       baseAgentId: agent.baseAgentId,
@@ -513,12 +553,14 @@ export class AgentsService implements OnModuleInit {
         rows.map((agent) => ({
           policyId: agent.policyId,
           role: agent.role,
+          agentKey: agent.agentKey,
         })),
       );
     return rows.map((agent, i) => ({
       id: agent.id,
       name: agent.name,
       role: agent.role,
+      agentKey: agent.agentKey,
       type: agent.type,
       prompt: agent.prompt,
       baseAgentId: agent.baseAgentId,
@@ -601,6 +643,40 @@ export class AgentsService implements OnModuleInit {
       code: AGENT_ERRORS.AGENT_NOT_FOUND,
       message: `Agent ${id} 不存在`,
     });
+  }
+
+  private assertValidAgentKey(agentKey: unknown): asserts agentKey is string {
+    if (typeof agentKey !== 'string' || agentKey.length === 0) {
+      throw new BadRequestException({
+        code: AGENT_KEY_INVALID,
+        message: 'agentKey 必填：自定义/克隆 Agent 须提供 machine-safe 标识',
+      });
+    }
+    if (!new RegExp(AGENT_KEY_PATTERN).test(agentKey)) {
+      throw new BadRequestException({
+        code: AGENT_KEY_INVALID,
+        message: `agentKey 格式非法：需匹配 ${AGENT_KEY_PATTERN}（小写字母开头，仅含小写字母/数字/_/-，最长 63 字符）`,
+      });
+    }
+    if (agentKey.startsWith('vteam-')) {
+      throw new BadRequestException({
+        code: AGENT_KEY_INVALID,
+        message:
+          'agentKey 不能以 `vteam-` 开头，否则 opencode agent 名会变成 `vteam-vteam-<key>`',
+      });
+    }
+  }
+
+  private throwOnAgentKeyConflict(e: unknown): void {
+    if (
+      e instanceof Prisma.PrismaClientKnownRequestError &&
+      e.code === 'P2002'
+    ) {
+      throw new ConflictException({
+        code: AGENT_KEY_CONFLICT,
+        message: 'agentKey 已被占用，请换一个 machine-safe 标识',
+      });
+    }
   }
 
   private normalizePage(page?: number): number {
