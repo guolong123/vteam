@@ -13,6 +13,7 @@ import {
   AGENT_KEY_PATTERN,
   buildEditPermission,
   buildReadPermission,
+  POLICY_ID_PREFIX,
   ROLE_BOUNDARIES,
   ROLE_POLICY_DENY_TEMPLATE,
   STATIC_AVAILABLE_MODELS,
@@ -38,9 +39,6 @@ const ID_PREFIX = {
   agent: 'a',
   agentSkill: 'as',
 } as const;
-
-/** ExecutionPolicy 域主键前缀（`ep_<零填充序号>`；模板用命名 id `ep_<role>`）。 */
-const POLICY_ID_PREFIX = 'ep' as const;
 
 /** agentKey 唯一冲突 → 409 的稳定错误码（覆盖 create/clone/update 三路径）。 */
 const AGENT_KEY_CONFLICT = 'AGENT_KEY_CONFLICT' as const;

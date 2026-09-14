@@ -199,13 +199,16 @@ function normalizeToolEffect(value: unknown): ToolEffect {
   return value === "allow" || value === "ask" || value === "deny" ? value : "deny";
 }
 
+/** agentKey 格式（与 server `AGENT_KEY_PATTERN` 同值；web 无法跨包引用，故此处单点声明）。 */
+const AGENT_KEY_PATTERN = /^[a-z][a-z0-9_-]{0,62}$/;
+
 /** agentKey 即时校验：返回错误文案，null=合法。 */
 function validateAgentKey(raw: string): string | null {
   const v = raw.trim();
   if (!v) return "标识不能为空";
   if (v.startsWith("vteam-")) return "标识不能以 vteam- 开头";
   if (v.length > 63) return "标识最多 63 个字符";
-  if (!/^[a-z][a-z0-9_-]{0,62}$/.test(v)) return "小写字母开头，仅含小写字母/数字/_/-，最多63字符";
+  if (!AGENT_KEY_PATTERN.test(v)) return "小写字母开头，仅含小写字母/数字/_/-，最多63字符";
   return null;
 }
 

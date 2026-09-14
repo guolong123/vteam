@@ -10,6 +10,7 @@ import {
   AGENT_KEY_PATTERN,
   buildEditPermission,
   buildReadPermission,
+  POLICY_ID_PREFIX,
   ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
   ROLE_POLICY_DENY_TEMPLATE,
@@ -22,9 +23,6 @@ import { CreateExecutionPolicyDto } from './dto/create-execution-policy.dto';
 import { QueryExecutionPoliciesDto } from './dto/query-execution-policies.dto';
 import { UpdateExecutionPolicyDto } from './dto/update-execution-policy.dto';
 
-/** ExecutionPolicy 域主键前缀（`ep_<零填充序号>`，如 ep_0000000001；模板用命名 id ep_<role>）。 */
-const POLICY_ID_PREFIX = 'ep';
-
 /**
  * resolveByAgent 返回（Todo 11/12 契约 + agent 详情双层展示）：
  * - `agentName`：opencode agent 名（`vteam-<role>`，无 role 回退 `vteam-plan`）；
@@ -36,11 +34,6 @@ const POLICY_ID_PREFIX = 'ep';
  */
 /** 层② guard 单个工具三态（可编辑矩阵：allow/ask/deny；内置 allowlist 仅用前两者）。 */
 export type AgentToolState = 'allow' | 'ask' | 'deny';
-
-/** 自定义 agent policy config 的 tools 矩阵（`PolicyConfigDto.tools` 落库形状）。 */
-export interface PolicyToolsConfig {
-  tools?: unknown;
-}
 
 export interface ResolvedExecutionPolicy {
   policyId: string;

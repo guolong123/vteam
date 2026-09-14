@@ -84,6 +84,9 @@ export const TEMPLATE_DEFAULT_MODELS: Record<string, string> = {} as const;
  */
 export const AGENT_KEY_PATTERN = '^[a-z][a-z0-9_-]{0,62}$' as const;
 
+/** ExecutionPolicy 域主键前缀（`ep_<零填充序号>`；模板用命名 id `ep_<role>`）。 */
+export const POLICY_ID_PREFIX = 'ep' as const;
+
 /* -------------------------------------------------------------------------- */
 /* 角色边界映射（Role Boundaries）—— 单一口径来源（vteam-role-behavior-enforcement Todo 2）   */
 /* -------------------------------------------------------------------------- */

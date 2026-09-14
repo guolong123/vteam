@@ -74,3 +74,11 @@ _Append new entries below - never overwrite._
 - `AgentItem` 增 `agentKey: string | null`；`validateAgentKey`（空/`vteam-` 前缀/63 字符/正则）+ `formatAgentKeyError`（409→「该标识已被占用」，400→格式提示透传 validator 文案）；新建/克隆弹窗各带 `agent-key-input` + `agent-key-error`，`canSubmit` 门控提交按钮；克隆经新 `CloneAgentModal`（默认名 `<源名> 副本`，默认 key `<sourceKey>-copy` 合法才预填），`onClone` 改为开弹窗（不再直调 POST）。
 - 验证：`cd web && npx tsc --noEmit` exit 0；`npx next lint` 仅剩既有 `deleting` 未使用 warning（基线同在，非本次引入）；web 无 agent 单测/e2e 断言需同步（`pages.spec.ts` 仅到 `agent-config-root` + 首个列表项）。
 - Commit：`feat(web): editable three-state tool matrix for custom agents`。
+
+## F2-review cleanup：删除死导出 + 单源 POLICY_ID_PREFIX + web agentKey 正则提升 (2026-09-14)
+
+- Fix A：删 `execution-policy.service.ts` 未引用 `PolicyToolsConfig`（`grep -rn PolicyToolsConfig server/src` 仅自身定义）；保留在用 `AgentToolState`。
+- Fix B：`POLICY_ID_PREFIX='ep'` 在 `agents.service.ts` 与 `execution-policy.service.ts` 各声明一次 → 统一 export 自 `agent.constants.ts`（紧随 `AGENT_KEY_PATTERN`），两处改 import 复用既有 `../common/constants/agent.constants` 语句，删本地声明；值/语义零变。
+- Fix C：web `page.tsx` 内联 `/^[a-z][a-z0-9_-]{0,62}$/`（仅 `validateAgentKey` 一处；`formatAgentKeyError` 只有提示文案无正则）→ 提升为模块级 `AGENT_KEY_PATTERN` 常量并复用；web 与 server 分构建故不跨包 import，仅同值单点声明。
+- 验证：`cd server && npx tsc -p tsconfig.json --noEmit` exit 0；`cd web && npx tsc --noEmit` exit 0；`cd server && npx jest src/agents src/execution-policies src/prisma/seed.spec.ts` 8 suites / 140 tests 全绿。
+- Commit：`refactor: single-source policy id prefix and agent key pattern`。
