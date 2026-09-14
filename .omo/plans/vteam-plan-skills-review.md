@@ -91,13 +91,13 @@
 
 ## Final verification wave
 
-- [ ] F1. 计划合规审计 — Todos 全合入；References 真实存在；skill 名/MCP 名/端点契约三处一致。Evidence: `.omo/evidence/plan-skills/F1-plan-audit.txt`。
+- [x] F1. 计划合规审计 — Todos 全合入；References 真实存在；skill 名/MCP 名/端点契约三处一致。Evidence: `.omo/evidence/plan-skills/F1-plan-audit.txt`。
   Recommended task executor category: unspecified-high
-- [ ] F2. 代码质量 review — 无 `as any`/`@ts-ignore`/stub；无 AB 双轨/退役说明；新通路无安全回退（主门、身份注册、超时、finally 清理齐全）。Evidence: `.omo/evidence/plan-skills/F2-code-quality.txt`。
+- [x] F2. 代码质量 review — 无 `as any`/`@ts-ignore`/stub；无 AB 双轨/退役说明；新通路无安全回退（主门、身份注册、超时、finally 清理齐全）。Evidence: `.omo/evidence/plan-skills/F2-code-quality.txt`。
   Recommended task executor category: unspecified-high
-- [ ] F3. 真实手工 QA — skills 注入可见；`question` 选评审者可用；一次真实 plan_review 回合（VERDICT 可解析；REJECT 能触发修订）。Evidence: `.omo/evidence/plan-skills/F3-manual-qa.txt`。
+- [x] F3. 真实手工 QA — skills 注入可见；`question` 选评审者可用；一次真实 plan_review 回合（VERDICT 可解析；REJECT 能触发修订）。Evidence: `.omo/evidence/plan-skills/F3-manual-qa.txt`。
   Recommended task executor category: unspecified-high
-- [ ] F4. 范围保真 — 未越界（dispatch 主路径、guard 判定、普通 MCP 工具零回归）。Evidence: `.omo/evidence/plan-skills/F4-scope-fidelity.txt`。
+- [x] F4. 范围保真 — 未越界（dispatch 主路径、guard 判定、普通 MCP 工具零回归）。Evidence: `.omo/evidence/plan-skills/F4-scope-fidelity.txt`。
   Recommended task executor category: unspecified-high
 
 ## Success criteria
