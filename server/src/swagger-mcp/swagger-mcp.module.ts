@@ -3,6 +3,7 @@ import { DiscoveryModule } from '@nestjs/core';
 import { TerminusModule } from '@nestjs/terminus';
 import { AgentsService } from '../agents/agents.service';
 import { ArtifactsModule } from '../artifacts/artifacts.module';
+import { ExecutionPoliciesModule } from '../execution-policies/execution-policies.module';
 import { McpServersModule } from '../mcp-servers/mcp-servers.module';
 import { ModelsModule } from '../models/models.module';
 import { RealtimeModule } from '../realtime/realtime.module';
@@ -55,6 +56,7 @@ import { SwaggerToolSyncService } from './swagger-tools.sync';
     McpServersModule,
     TasksModule,
     ArtifactsModule,
+    ExecutionPoliciesModule,
     TerminusModule,
   ],
   controllers: [SwaggerMcpController],
