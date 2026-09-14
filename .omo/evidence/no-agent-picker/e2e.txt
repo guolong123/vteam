@@ -1,0 +1,34 @@
+[e2e] date=2026-09-14T09:27:59Z HEAD=37a1b0c4d32bedf54d7541b8fa632f63c04a95fe REMOVAL_HEAD=37a1b0c
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 TEAM_ID=tm_0000000001
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+  ✓  1 e2e/no-agent-picker.spec.ts:84:7 › no-agent-picker 选择器移除回归 › 1. 选择器消失：无 testid、无 select (1.7s)
+  ✓  2 e2e/no-agent-picker.spec.ts:97:7 › no-agent-picker 选择器移除回归 › 2. @ 可用：候选含计划员-1，点击插入 (1.3s)
+  ✓  3 e2e/no-agent-picker.spec.ts:112:7 › no-agent-picker 选择器移除回归 › 3. 发送可用：探针渲染 + 输入清空 + 零 console 错误 (1.7s)
+  ✓  4 e2e/no-agent-picker.spec.ts:138:7 › no-agent-picker 选择器移除回归 › 4. 计划员可达：团队成员含 tmm_0000000006 且保留 opencodeAgentName（无 LLM 执行） (118ms)
+
+  4 passed (6.1s)
+----- end playwright raw -----
+[e2e] playwright exit 0; parsing per-test results ...
+[e2e] PASS A1 (selector gone: no message-agent-select, zero <select>)
+[e2e] PASS A2 (@ shows candidates incl 计划员-1; click inserts mention)
+[e2e] PASS A3 (mocked probe renders; input clears; 0 console errors)
+[e2e] PASS A5 (team members contain tmm_0000000006; opencodeAgentName key kept; no LLM run)
+[e2e] removal stat (web + evidence only):
+[e2e]   commit 37a1b0c4d32bedf54d7541b8fa632f63c04a95fe
+[e2e]   Author: guolong <guolong@xishuhq.com>
+[e2e]   Date:   Mon Sep 14 17:15:04 2026 +0800
+[e2e]   
+[e2e]       refactor(web): remove agent picker from message input
+[e2e]   
+[e2e]    .omo/evidence/no-agent-picker/grep.txt           |  1 +
+[e2e]    .omo/notepads/vteam-no-agent-picker/learnings.md | 35 ++++++++++++
+[e2e]    web/app/(main)/teams/[id]/session/page.tsx       | 45 +--------------
+[e2e]    web/src/components/ui/message-input.tsx          | 71 ------------------------
+[e2e]    4 files changed, 37 insertions(+), 115 deletions(-)
+[e2e] PASS A4 (37a1b0c touches zero server/worker files; opencodeAgentName column + policy-candidate-then-explicit fallback intact)
+[e2e] PASS A6 (probe POST was route-mocked; real group channel c_0000000001 has zero probe residue)
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/no-agent-picker/e2e.txt

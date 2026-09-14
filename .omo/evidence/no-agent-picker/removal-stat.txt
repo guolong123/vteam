@@ -1,0 +1,11 @@
+commit 37a1b0c4d32bedf54d7541b8fa632f63c04a95fe
+Author: guolong <guolong@xishuhq.com>
+Date:   Mon Sep 14 17:15:04 2026 +0800
+
+    refactor(web): remove agent picker from message input
+
+ .omo/evidence/no-agent-picker/grep.txt           |  1 +
+ .omo/notepads/vteam-no-agent-picker/learnings.md | 35 ++++++++++++
+ web/app/(main)/teams/[id]/session/page.tsx       | 45 +--------------
+ web/src/components/ui/message-input.tsx          | 71 ------------------------
+ 4 files changed, 37 insertions(+), 115 deletions(-)

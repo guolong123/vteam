@@ -33,3 +33,23 @@
 - `git stash` path gotcha: from `web/` workdir use repo-relative-without-prefix paths (`src/...`, `app/...`), not `web/...`.
 - Standalone node scripts under /tmp can't `require("playwright")`; copy the proof script into `web/` so node resolves
   `web/node_modules`, run, then delete. Screenshot path is cwd-relative — run from repo root or move the file after.
+- Playwright temp config must also live inside `web/` (same module-resolution reason);
+  the JSON report (`.nap.report.json`) must be trap-removed alongside the temp config.
+- Bash health check needs `curl -w '%{http_code}'`; `-o /dev/null` alone prints nothing for grep.
+
+## e2e regression (Todo 2, 2026-09-14, HEAD 37a1b0c)
+- Method: `bash scripts/e2e-no-agent-picker.sh` — drives Playwright spec
+  `web/e2e/no-agent-picker.spec.ts` (temp config, baseURL compose web :13001, channel=chrome).
+- Web image rebuilt + force-recreated before the run (`docker compose build web &&
+  docker compose up -d --force-recreate web`); build fully cached (removal already in image).
+- Results (`.omo/evidence/no-agent-picker/e2e.txt`, all PASS):
+  A1 selector gone (no `message-agent-select`, zero `<select>`); A2 `@` candidates
+  incl 计划员-1, click inserts `@计划员-1 `; A3 mocked probe renders + input clears +
+  0 console/page errors; A4 `37a1b0c^..37a1b0c -- server/ worker/` empty,
+  `opencodeAgentName` in schema.prisma + policy-candidate-then-explicit
+  (`policyCandidateAgent` → `opencodeAgentName`) intact in worker-dispatcher.ts:1735-1742;
+  A5 team members contain `tmm_0000000006` 计划员-1 with `opencodeAgentName` key
+  (`buildTeamMemberTrigger` resolves by (teamId, memberId), :1290) — no LLM executed;
+  A6 real group channel `c_0000000001` has zero probe residue (POST was route-mocked).
+- Raw removal stat: `.omo/evidence/no-agent-picker/removal-stat.txt`.
+- `cd web && npx tsc --noEmit` → exit 0 (covers the new spec).
