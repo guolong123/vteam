@@ -1,0 +1,19 @@
+agent-policies agents[vteam-plan]: IDENTICAL
+agent-policies agents[vteam-product]: IDENTICAL
+agent-policies agents[vteam-architect]: IDENTICAL
+agent-policies agents[vteam-developer]: IDENTICAL
+agent-policies agents[vteam-tester]: IDENTICAL
+agent-policies agents[vteam-project_manager]: IDENTICAL
+guard.roles[vteam-plan]: IDENTICAL
+guard.roles[vteam-product]: IDENTICAL
+guard.roles[vteam-architect]: IDENTICAL
+guard.roles[vteam-developer]: IDENTICAL
+guard.roles[vteam-tester]: IDENTICAL
+guard.roles[vteam-project_manager]: IDENTICAL
+injected agent[vteam-plan]: IDENTICAL
+injected agent[vteam-product]: IDENTICAL
+injected agent[vteam-architect]: IDENTICAL
+injected agent[vteam-developer]: IDENTICAL
+injected agent[vteam-tester]: IDENTICAL
+injected agent[vteam-project_manager]: IDENTICAL
+injected plugin+mcp skeleton: PRESENT

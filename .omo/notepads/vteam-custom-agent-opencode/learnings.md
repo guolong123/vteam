@@ -55,3 +55,13 @@ _Append new entries below - never overwrite._
 - Live 坑两则：(1) `docker compose build server + up --force-recreate server` 不重跑 `init`（独立镜像/容器），模板 tools 须 `docker compose run --rm server node dist/prisma/seed.js` 另行同步，否则克隆仍拷贝无 tools 旧 config；(2) `toAgentDto` 原在事务内调 `resolveManyByAgents`（经全局 Prisma 别连接读不到未提交的新策略行 → effectivePermission=null），改为写事务提交后解析——创建/克隆响应即带完整 tools（clone 实测 `tools=16, group_post=allow`）。
 - 验证：`tsc --noEmit` exit 0；`jest src/agents src/execution-policies src/prisma/seed.spec.ts` 140/140（含新增 clone-模板/自定义独立性、create-role/骨架/显式绑定 5 用例 + seed tools 拷贝断言）；live 四项全过（字节一致/克隆 16 tools/PATCH 200 即时反射/模板 403 不动），证据 `.omo/evidence/custom-agent-opencode/policy-provision.txt`，QA 行已清（`a_0000000001` 无 key 无策略历史残留，非本次产生，保留）。
 - Commit：`feat(policies): provision editable custom policies for custom agents`。
+
+## Todo 7 — e2e：自建 agent 注入 opencode + guard 真拦截 + 字节一致回归 (2026-09-14)
+
+- 脚本 `scripts/e2e-custom-agent-opencode.sh`（`e2e-role-boundaries.sh` 同构：login/jget/api 三件套、tee 进 `e2e.txt` 的彩色 PASS/FAIL、EXIT-trap 清理）：policy→agent→agent-policies→guard(offline)→worker 重启(live)→字节一致→清理复验，七步全绿，两次连跑 exit 0（预清理保证幂等）。
+- Guard 证明用 worker 自身编译产物：`docker compose exec -T worker node -e "require('/app/dist/role-guard/policy.js').evaluateToolCall(...)"`（offline 吃 `/agent-policies` 的 role——injector 原样 `JSON.stringify({enabled, roles})` 落盘，同一字节；live 直接读容器内 `/data/vteam-worker/.vteam-role-guard/roles.json`）。deny 附 `【越界拦截` 纠正文案断言 + submit_artifact 阳性对照。
+- 服务端 `guard.roles[].tools` 保留 `deny` 条目（spec 锁 `toEqual({group_post: allow, member_remove: deny, ...})`），worker `isToolAllowed` 仅放行 allow/ask——deny 与缺席同效，脚本断 `tools.vteam_group_post == 'deny'` 即证明拦截语义。
+- 字节一致用 canonical JSON（`sort_keys + separators`）逐项比 6 内置：`agent-policies agents[]`、`guard.roles[]`（对 F3-own `agent-policies.json`）、`injected agent[]`（对 F3-own `injected-opencode.json`，另断言 plugin 含 guard 条目 + mcp 含 vteam 骨架）。基线 `injected-opencode.json` 的 agent 键恰为 6 内置（脚本内 assert 锁死，防止基线漂移悄悄加键）。
+- 清理双保险：API 按 `agentKey`/`policyName` 扫荡 + `DELETE FROM agents WHERE agent_key=`；复验 `/agent-policies` 无残留 + DB `COUNT(*)=0`。不做清理后 worker 重启（注入文件下次启动自刷新；验收只要求 DB + `/agent-policies` 回基线）。
+- 坑：`docker compose cp` 往 worker 传参文件需经 `worker:/tmp` 中转；`zsh` 下 `echo ===` 会报 `== not found`（脚本内避用裸 `===` 回显）；`EVIDENCE_DIR` 相对路径按 repo-root 归一（compose cp 要求宿主机绝对/相对一致）。
+- Commit：`test(e2e): custom agent opencode injection and guard enforcement`。

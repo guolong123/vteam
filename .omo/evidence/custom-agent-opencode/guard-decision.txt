@@ -1,0 +1,4 @@
+vteam_group_post -> {"action":"deny","message":"【越界拦截｜角色：vteam-demo-agent】不能调用 vteam_group_post。"}
+vteam_submit_artifact -> {"action":"allow"}
+live-roles vteam_group_post -> {"action":"deny","message":"【越界拦截｜角色：vteam-demo-agent】不能调用 vteam_group_post。"}
+live-roles vteam_submit_artifact -> {"action":"allow"}
