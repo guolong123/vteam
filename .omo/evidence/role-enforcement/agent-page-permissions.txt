@@ -46,9 +46,12 @@ stack: docker compose build server web + up -d --force-recreate server web
 - effective-permission-section: PRESENT
 - policy meta: "开发者·vteam-developer" + description (policyName=开发者 display name; agentName=vteam-developer) -> PASS
 - native rows data-key: ["edit","read","bash","task"] -> PASS
-- MCP groups: [{"server":"vteam","toggle":"▾vteam启用8 个工具","expanded":"true","ntools":8}], empty=false
-  - vteam group EXPANDED by default (aria-expanded=true, 8 tool rows visible) -> PASS
-  - vteam-api group: ABSENT (not collapsed-hidden, not in DOM at all) -> FAIL (see analysis)
+- MCP groups: [{"server":"vteam","toggle":"▾vteam启用22 个工具","expanded":"true","ntools":22}, {"server":"vteam-api","toggle":"▸vteam-api停用172 个工具","expanded":"false","ntools":0}], empty=false
+  - vteam group EXPANDED by default (aria-expanded=true, 22 tool rows visible) -> PASS
+  - vteam-api group: PRESENT and COLLAPSED by default (aria-expanded=false) -> PASS (§6 re-verify)
+  - NOTE (first run): agent selected via hasText-substring matched all 5 prompts and stayed on
+    a_product; re-run selected [data-agent-id="a_developer"] explicitly (active=[a_developer],
+    meta=开发者·vteam-developer). Groups are server-catalog-driven so identical across roles.
 - toggle mechanics (vteam group): true/8rows -> click -> false/0rows -> click -> true/8rows -> PASS
 - console errors (level=error, all=true): 0 -> PASS
 - network: page fetched BOTH catalog pages:
@@ -75,10 +78,28 @@ tools. Per task rules product code was NOT modified; failure reported for owning
 [A5] mcp-servers lists vteam(enabled)+vteam-api(disabled) ........... PASS
 [A6] page: effective-permission-section + policy meta + native rows . PASS
 [A7] page: vteam group expanded ..................................... PASS
-[A8] page: vteam-api group present AND collapsed by default ......... FAIL (absent; root cause above)
-[A9] vteam-api expandable on click (aria-expanded toggle) ........... FAIL-BLOCKED (no group to click; toggle mechanics proven on vteam group)
+[A8] page: vteam-api group present AND collapsed by default ......... PASS (§6: present, aria-expanded=false, 0 rows pre-click)
+[A9] vteam-api expandable on click (aria-expanded toggle) ........... PASS (§6: click -> true, 172 tool rows; click again restores collapsed)
 [A10] console no errors ............................................ PASS
 
 evidence: .omo/evidence/role-enforcement/agent-page-permissions.txt (this file)
-screenshot: .omo/evidence/role-enforcement/agent-page-permissions.png (291470 bytes)
+screenshot: .omo/evidence/role-enforcement/agent-page-permissions.png (238531 bytes)
 stack left healthy (server+web healthy); no temp scripts created (only /tmp/*.json + /tmp/adm_tok.txt outside repo).
+
+== 6. RE-VERIFY AFTER FIX (web-only: server-catalog-driven groups) ==
+fix: web/app/(main)/agents/page.tsx EffectivePermissionSection groups now iterate the
+mcp-servers catalog (every server renders, enabled-first, unknown-mcpServer last) with
+all catalog tools per server; per-tool effect = permission[name] ?? permission[action] ??
+permission[vteam_+action] ?? default "deny". Policy-key-only grouping removed (no dual impl).
+No-effectivePermission agents still render groups (all deny) under the neutral note.
+date: 2026-09-14 (UTC+8), stack: docker compose build web + up -d --force-recreate web
+(server untouched, healthy); web healthy.
+browser (Playwright chromium, admin/admin123 -> /agents -> a_developer):
+- section PRESENT; meta "开发者 · vteam-developer" + scope text -> PASS
+- native rows ["edit","read","bash","task"] -> PASS
+- vteam group: expanded=true, 22/22 tool rows (all 禁止) -> PASS
+- vteam-api group: present, expanded=false, 0 rows pre-click -> PASS (A8 fixed)
+- click vteam-api toggle -> expanded=true, 172 tool rows (e.g. appcontroller_gethello 禁止) -> PASS (A9 fixed)
+- console errors: 0 -> PASS
+- static: npx tsc --noEmit exit 0; npm run lint 0 errors (only pre-existing `deleting` unused warning)
+screenshot re-captured (vteam-api expanded state showing tool rows).

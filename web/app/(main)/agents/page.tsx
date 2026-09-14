@@ -469,57 +469,194 @@ function EffectivePermissionSection({ effective, mcpServers, mcpTools, loading }
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const permission = useMemo(() => effective?.permission ?? {}, [effective]);
 
-  /** 工具目录双键索引：name（vteam_<action> 真实暴露名）+ action（裸名）均可命中。 */
-  const toolByKey = useMemo(() => {
-    const map = new Map<string, ApiTool>();
-    for (const t of mcpTools) {
-      if (!map.has(t.name)) map.set(t.name, t);
-      if (!map.has(t.action)) map.set(t.action, t);
-    }
-    return map;
-  }, [mcpTools]);
-
-  const serverOf = useCallback(
-    (groupKey: string) => mcpServers.find((s) => s.id === groupKey || s.name === groupKey),
-    [mcpServers]
-  );
-
-  /** permission 中 vteam_* 条目按 mcpServer 分组（启用在前，停用次之，未收录末尾）。 */
+  /** 分组以 MCP server 目录为准：每个 server 列出其全部工具行，effect 取策略值，未列出→默认 deny。 */
   const groups = useMemo(() => {
-    const grouped = new Map<string, { key: string; effect: unknown }[]>();
-    for (const [key, effect] of Object.entries(permission)) {
-      if (!key.startsWith("vteam_")) continue;
-      const hit = toolByKey.get(key) ?? toolByKey.get(key.replace(/^vteam_/, ""));
-      const groupKey = hit?.mcpServer ?? UNKNOWN_MCP_GROUP;
-      const list = grouped.get(groupKey) ?? [];
-      list.push({ key, effect });
-      grouped.set(groupKey, list);
+    const byServerId = new Map<string, ApiTool[]>();
+    const unknown: ApiTool[] = [];
+    for (const t of mcpTools) {
+      const server = t.mcpServer
+        ? mcpServers.find((s) => s.id === t.mcpServer || s.name === t.mcpServer)
+        : undefined;
+      if (server) {
+        const list = byServerId.get(server.id) ?? [];
+        list.push(t);
+        byServerId.set(server.id, list);
+      } else {
+        unknown.push(t);
+      }
     }
-    const rank = (groupKey: string) => {
-      if (groupKey === UNKNOWN_MCP_GROUP) return 2;
-      const server = mcpServers.find((s) => s.id === groupKey || s.name === groupKey);
-      return server && !server.enabled ? 1 : 0;
-    };
-    return [...grouped.entries()].sort(([a], [b]) => rank(a) - rank(b));
-  }, [permission, toolByKey, mcpServers]);
+    const ordered: { server: ApiMcpServer | null; tools: ApiTool[] }[] = [...mcpServers]
+      .sort((a, b) => Number(b.enabled) - Number(a.enabled))
+      .map((server) => ({ server, tools: byServerId.get(server.id) ?? [] }));
+    if (unknown.length > 0) ordered.push({ server: null, tools: unknown });
+    return ordered;
+  }, [mcpTools, mcpServers]);
+
+  /** 工具在当前角色策略下的 effect：目录 name/action/vteam_ 兼容键均命中，未列出→默认 deny。 */
+  const effectOf = (tool: ApiTool): unknown => {
+    if (tool.name in permission) return permission[tool.name];
+    if (tool.action in permission) return permission[tool.action];
+    const prefixed = `vteam_${tool.action}`;
+    if (prefixed in permission) return permission[prefixed];
+    return "deny";
+  };
+
+  /** MCP 分组区块：停用 server 默认收起，启用默认展开；目录未就绪时占位。 */
+  const renderMcpGroups = () => {
+    if (loading) {
+      return (
+        <div
+          data-testid="effective-mcp-loading"
+          style={{ fontSize: fontSize.sm, color: neutral[400], padding: `${space.sm}px 0` }}
+        >
+          MCP 工具加载中…
+        </div>
+      );
+    }
+    if (groups.length === 0) {
+      return (
+        <div
+          data-testid="effective-mcp-empty"
+          style={{ fontSize: fontSize.sm, color: neutral[400], padding: `${space.sm}px 0` }}
+        >
+          暂无 MCP 工具条目
+        </div>
+      );
+    }
+    return groups.map(({ server, tools }) => {
+      const groupKey = server?.id ?? UNKNOWN_MCP_GROUP;
+      const isCollapsed = collapsed[groupKey] ?? (server ? !server.enabled : false);
+      const title = server?.name ?? "未收录工具";
+      return (
+        <div
+          key={groupKey}
+          data-testid="effective-mcp-group"
+          data-server={server?.name ?? UNKNOWN_MCP_GROUP}
+          style={{
+            borderRadius: radius.md,
+            backgroundColor: "var(--color-surface)",
+            border: `1px solid ${neutral[200]}`,
+            overflow: "hidden",
+          }}
+        >
+          <button
+            type="button"
+            data-testid="effective-mcp-group-toggle"
+            aria-expanded={!isCollapsed}
+            onClick={() => setCollapsed((prev) => ({ ...prev, [groupKey]: !isCollapsed }))}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              gap: space.sm,
+              padding: `${space.sm}px ${space.md}px`,
+              border: "none",
+              backgroundColor: "transparent",
+              cursor: "pointer",
+              fontFamily: fontFamily.body,
+              fontSize: fontSize.sm,
+              textAlign: "left",
+            }}
+          >
+            <span aria-hidden style={{ color: neutral[400], fontSize: fontSize.xs }}>
+              {isCollapsed ? "▸" : "▾"}
+            </span>
+            <span style={{ fontFamily: fontFamily.mono, fontWeight: 600, color: neutral[800] }}>
+              {title}
+            </span>
+            <span
+              style={{
+                fontSize: fontSize.xs,
+                color: server && !server.enabled ? neutral[500] : "#0D9488",
+                backgroundColor: server && !server.enabled ? neutral[100] : "rgba(13,148,136,0.10)",
+                border: `1px solid ${server && !server.enabled ? neutral[200] : "rgba(13,148,136,0.22)"}`,
+                padding: "1px 6px",
+                borderRadius: radius.pill,
+              }}
+            >
+              {server ? (server.enabled ? "启用" : "停用") : "未知来源"}
+            </span>
+            <span style={{ marginLeft: "auto", fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>
+              {tools.length} 个工具
+            </span>
+          </button>
+          {!isCollapsed && (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: space.xs,
+                padding: `0 ${space.md}px ${space.md}px`,
+              }}
+            >
+              {tools.length === 0 ? (
+                <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+                  该服务下暂无工具
+                </div>
+              ) : (
+                tools.map((tool) => (
+                  <div
+                    key={tool.id}
+                    data-testid="effective-mcp-tool"
+                    data-tool={tool.name}
+                    data-enabled={String(tool.enabled)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: space.sm,
+                      fontSize: fontSize.sm,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: fontFamily.mono,
+                        color: neutral[700],
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {tool.name}
+                    </span>
+                    <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
+                      {!tool.enabled && (
+                        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>已停用</span>
+                      )}
+                      <EffectBadge value={effectOf(tool)} />
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      );
+    });
+  };
 
   if (!effective) {
     return (
       <div
-        data-testid="effective-permission-empty"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: space.sm,
-          padding: space.md,
-          borderRadius: radius.md,
-          border: `1px dashed ${neutral[300]}`,
-          backgroundColor: neutral[50],
-          fontSize: fontSize.sm,
-          color: neutral[400],
-        }}
+        data-testid="effective-permission-section"
+        style={{ display: "flex", flexDirection: "column", gap: space.sm }}
       >
-        未绑定执行策略
+        <div
+          data-testid="effective-permission-empty"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.sm,
+            padding: space.md,
+            borderRadius: radius.md,
+            border: `1px dashed ${neutral[300]}`,
+            backgroundColor: neutral[50],
+            fontSize: fontSize.sm,
+            color: neutral[400],
+          }}
+        >
+          未绑定执行策略
+        </div>
+        {renderMcpGroups()}
       </div>
     );
   }
@@ -602,129 +739,8 @@ function EffectivePermissionSection({ effective, mcpServers, mcpTools, loading }
         );
       })}
 
-      {/* MCP 工具分组：停用 server 默认收起，启用默认展开 */}
-      {loading ? (
-        <div
-          data-testid="effective-mcp-loading"
-          style={{ fontSize: fontSize.sm, color: neutral[400], padding: `${space.sm}px 0` }}
-        >
-          MCP 工具加载中…
-        </div>
-      ) : groups.length === 0 ? (
-        <div
-          data-testid="effective-mcp-empty"
-          style={{ fontSize: fontSize.sm, color: neutral[400], padding: `${space.sm}px 0` }}
-        >
-          暂无 MCP 工具条目
-        </div>
-      ) : (
-        groups.map(([groupKey, entries]) => {
-          const server = serverOf(groupKey);
-          const isCollapsed = collapsed[groupKey] ?? (server ? !server.enabled : false);
-          const title = server?.name ?? (groupKey === UNKNOWN_MCP_GROUP ? "未收录工具" : groupKey);
-          return (
-            <div
-              key={groupKey}
-              data-testid="effective-mcp-group"
-              data-server={groupKey}
-              style={{
-                borderRadius: radius.md,
-                backgroundColor: "var(--color-surface)",
-                border: `1px solid ${neutral[200]}`,
-                overflow: "hidden",
-              }}
-            >
-              <button
-                type="button"
-                data-testid="effective-mcp-group-toggle"
-                aria-expanded={!isCollapsed}
-                onClick={() => setCollapsed((prev) => ({ ...prev, [groupKey]: !isCollapsed }))}
-                style={{
-                  width: "100%",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: space.sm,
-                  padding: `${space.sm}px ${space.md}px`,
-                  border: "none",
-                  backgroundColor: "transparent",
-                  cursor: "pointer",
-                  fontFamily: fontFamily.body,
-                  fontSize: fontSize.sm,
-                  textAlign: "left",
-                }}
-              >
-                <span aria-hidden style={{ color: neutral[400], fontSize: fontSize.xs }}>
-                  {isCollapsed ? "▸" : "▾"}
-                </span>
-                <span style={{ fontFamily: fontFamily.mono, fontWeight: 600, color: neutral[800] }}>
-                  {title}
-                </span>
-                <span
-                  style={{
-                    fontSize: fontSize.xs,
-                    color: server && !server.enabled ? neutral[500] : "#0D9488",
-                    backgroundColor: server && !server.enabled ? neutral[100] : "rgba(13,148,136,0.10)",
-                    border: `1px solid ${server && !server.enabled ? neutral[200] : "rgba(13,148,136,0.22)"}`,
-                    padding: "1px 6px",
-                    borderRadius: radius.pill,
-                  }}
-                >
-                  {server ? (server.enabled ? "启用" : "停用") : "未知来源"}
-                </span>
-                <span style={{ marginLeft: "auto", fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>
-                  {entries.length} 个工具
-                </span>
-              </button>
-              {!isCollapsed && (
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: space.xs,
-                    padding: `0 ${space.md}px ${space.md}px`,
-                  }}
-                >
-                  {entries.map(({ key, effect }) => {
-                    const tool = toolByKey.get(key) ?? toolByKey.get(key.replace(/^vteam_/, ""));
-                    return (
-                      <div
-                        key={key}
-                        data-testid="effective-mcp-tool"
-                        data-tool={key}
-                        data-enabled={tool ? String(tool.enabled) : "unknown"}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: space.sm,
-                          fontSize: fontSize.sm,
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontFamily: fontFamily.mono,
-                            color: neutral[700],
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {key}
-                        </span>
-                        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
-                          {tool && !tool.enabled && (
-                            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>已停用</span>
-                          )}
-                          <EffectBadge value={effect} />
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })
-      )}
+      {/* MCP 工具分组（server 目录驱动）：停用 server 默认收起，启用默认展开 */}
+      {renderMcpGroups()}
     </div>
   );
 }
