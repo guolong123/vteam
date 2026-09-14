@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsObject } from 'class-validator';
+import { IsObject, IsOptional } from 'class-validator';
 
 /**
  * ExecutionPolicy.config 请求体（新嵌套形状，vteam-role-behavior-enforcement Todo 11）。
@@ -41,4 +41,18 @@ export class PolicyConfigDto {
   })
   @IsObject()
   correction: Record<string, unknown>;
+
+  @ApiProperty({
+    description:
+      '层② guard 三态工具矩阵（可选；键为工具真实名，值为 allow|ask|deny；自定义 agent 专属，内置策略行缺失合法）',
+    type: Object,
+    required: false,
+    example: {
+      vteam_group_post: 'allow',
+      vteam_member_remove: 'deny',
+    },
+  })
+  @IsOptional()
+  @IsObject()
+  tools?: Record<string, 'allow' | 'ask' | 'deny'>;
 }

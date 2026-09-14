@@ -66,11 +66,15 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
               key === 'WORKER_TOKEN' ? WORKER_TOKEN : undefined,
           },
         },
-        // buildAgentPolicies 为纯函数（无 DB 依赖）；onModuleInit 的 resync
-        // 仅需 executionPolicy.findMany 占位
+        // buildAgentPolicies 为 DB 驱动（agent/executionPolicy.findMany 占位空数组
+        // 即无自定义 agent 的纯内置输出）；onModuleInit 的 resync 仅需
+        // executionPolicy.findMany 占位
         {
           provide: PrismaService,
-          useValue: { executionPolicy: { findMany: jest.fn().mockResolvedValue([]) } },
+          useValue: {
+            agent: { findMany: jest.fn().mockResolvedValue([]) },
+            executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
+          },
         },
         { provide: IdGeneratorService, useValue: { seed: jest.fn() } },
       ],

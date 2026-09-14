@@ -1,0 +1,241 @@
+import {
+  buildEditPermission,
+  buildReadPermission,
+  ROLE_BASH_DENY_PATTERNS,
+  ROLE_BOUNDARIES,
+  ROLE_POLICY_DENY_TEMPLATE,
+} from '../common/constants/agent.constants';
+import { ExecutionPolicyService } from './execution-policy.service';
+
+/**
+ * Todo 2（DB-backed agent-policies）契约测试：
+ * - 内置字节一致：自定义块为空时输出与改前纯函数逐字节一致（顺序 + 全字段深比较 + 序列化快照）；
+ * - 自定义块：agentKey/policyId 双非空行按 agentKey 升序追加 `vteam-<agentKey>`，
+ *   permission 取策略 config，guard.roles tools 取三态矩阵（非法值丢弃）。
+ */
+describe('agent-policies custom agents (Todo 2)', () => {
+  const BUILTIN_ORDER = [
+    'vteam-plan',
+    'vteam-product',
+    'vteam-architect',
+    'vteam-developer',
+    'vteam-tester',
+    'vteam-project_manager',
+  ];
+
+  function builtinFixture() {
+    const agents = BUILTIN_ORDER.map((name) => {
+      const boundary =
+        ROLE_BOUNDARIES[name as keyof typeof ROLE_BOUNDARIES];
+      return {
+        name,
+        description: boundary.scopeSummary,
+        mode: 'primary' as const,
+        permission: {
+          edit: buildEditPermission(boundary.writeGlobs),
+          read: buildReadPermission(),
+          bash: boundary.bashEffect,
+          task: 'deny',
+          ...Object.fromEntries(
+            boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
+          ),
+        },
+      };
+    });
+    const roles = Object.fromEntries(
+      BUILTIN_ORDER.map((name) => {
+        const boundary =
+          ROLE_BOUNDARIES[name as keyof typeof ROLE_BOUNDARIES];
+        return [
+          name,
+          {
+            permission: {
+              edit: buildEditPermission(boundary.writeGlobs),
+              read: buildReadPermission(),
+              bash: boundary.bashEffect,
+              task: 'deny',
+              ...Object.fromEntries(
+                boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
+              ),
+            },
+            tools: { ...boundary.toolAllows },
+            bashDeny: [...ROLE_BASH_DENY_PATTERNS],
+            correction: {
+              scopeSummary: boundary.scopeSummary,
+              handoff: { ...boundary.handoffTo },
+              denyTemplate: ROLE_POLICY_DENY_TEMPLATE,
+            },
+          },
+        ];
+      }),
+    );
+    return { agents, guard: { enabled: true as const, roles } };
+  }
+
+  function serviceWith(prisma: unknown) {
+    return new ExecutionPolicyService(prisma as never, {} as never);
+  }
+
+  describe('内置字节一致（无自定义 agent）', () => {
+    it('6 内置首位输出、顺序固定、全字段与独立推导夹具深一致', async () => {
+      const service = serviceWith({
+        agent: { findMany: jest.fn().mockResolvedValue([]) },
+        executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
+      });
+      const policies = await service.buildAgentPolicies();
+      const expected = builtinFixture();
+
+      expect(policies.agents.map((a) => a.name)).toEqual(BUILTIN_ORDER);
+      expect(policies).toEqual(expected);
+      expect(JSON.stringify(policies)).toBe(JSON.stringify(expected));
+      expect(policies).toMatchSnapshot();
+    });
+
+    it('policyId 缺失的 agent 行不进入自定义块（仍纯 6 内置）', async () => {
+      const service = serviceWith({
+        agent: {
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+        executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
+      });
+      const policies = await service.buildAgentPolicies();
+      expect(policies.agents).toHaveLength(6);
+      expect(Object.keys(policies.guard.roles)).toHaveLength(6);
+    });
+  });
+
+  describe('自定义块（mocked DB）', () => {
+    const customRow = {
+      id: 'a_0000000001',
+      name: 'Demo Agent',
+      type: 'custom',
+      baseAgentId: null,
+      role: null,
+      agentKey: 'demo-agent',
+      prompt: 'demo',
+      defaultModelId: null,
+      workerId: null,
+      ackMessage: null,
+      persona: null,
+      policyId: 'ep_demo',
+      createdBy: 'u_1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const zetaRow = {
+      ...customRow,
+      id: 'a_0000000002',
+      name: 'Zeta Agent',
+      agentKey: 'zeta',
+      policyId: 'ep_zeta',
+    };
+    const demoPolicy = {
+      id: 'ep_demo',
+      name: 'Demo policy',
+      description: 'demo policy desc',
+      type: 'custom',
+      config: {
+        permission: { edit: { '*': 'deny' }, task: 'deny' },
+        correction: { scopeSummary: 'demo' },
+        tools: {
+          vteam_group_post: 'allow',
+          vteam_member_remove: 'deny',
+          vteam_task_context: 'ask',
+          bogus_tool: 'whatever',
+        },
+      },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const zetaPolicy = {
+      ...demoPolicy,
+      id: 'ep_zeta',
+      name: 'Zeta policy',
+      config: {
+        permission: { edit: { '*': 'deny' }, task: 'deny' },
+        correction: { scopeSummary: 'zeta' },
+        tools: { vteam_group_post: 'ask' },
+      },
+    };
+
+    function customService() {
+      return serviceWith({
+        agent: { findMany: jest.fn().mockResolvedValue([zetaRow, customRow]) },
+        executionPolicy: {
+          findMany: jest.fn().mockResolvedValue([demoPolicy, zetaPolicy]),
+          findUnique: jest.fn().mockImplementation(({ where }: never) => {
+            const id = (where as { id: string }).id;
+            const found = [demoPolicy, zetaPolicy].find((p) => p.id === id);
+            return Promise.resolve(found ?? null);
+          }),
+        },
+      });
+    }
+
+    it('/agent-policies 同时在 agents 与 guard.roles 含 vteam-demo-agent（tools 矩阵透出，非法值丢弃）', async () => {
+      const policies = await customService().buildAgentPolicies();
+
+      expect(policies.agents.map((a) => a.name).slice(0, 6)).toEqual(
+        BUILTIN_ORDER,
+      );
+      const names = policies.agents.map((a) => a.name);
+      expect(names).toContain('vteam-demo-agent');
+      expect(names.indexOf('vteam-demo-agent')).toBeLessThan(
+        names.indexOf('vteam-zeta'),
+      );
+
+      const role = policies.guard.roles['vteam-demo-agent'];
+      expect(role).toBeDefined();
+      expect(role.tools).toEqual({
+        vteam_group_post: 'allow',
+        vteam_member_remove: 'deny',
+        vteam_task_context: 'ask',
+      });
+      expect(role.bashDeny).toEqual([...ROLE_BASH_DENY_PATTERNS]);
+
+      const def = policies.agents.find((a) => a.name === 'vteam-demo-agent');
+      expect(def?.mode).toBe('primary');
+      expect(def?.permission).toEqual(demoPolicy.config.permission);
+      expect(def?.description).toBe('demo policy desc');
+    });
+
+    it('resolveByAgent 对自定义 agent 经 agentKey 命名并透出三态 tools（含 deny）', async () => {
+      const resolved = await customService().resolveByAgent({
+        agentKey: 'demo-agent',
+        policyId: 'ep_demo',
+      });
+      expect(resolved?.agentName).toBe('vteam-demo-agent');
+      expect(resolved?.tools).toEqual({
+        vteam_group_post: 'allow',
+        vteam_member_remove: 'deny',
+        vteam_task_context: 'ask',
+      });
+      expect(resolved?.bashDeny).toEqual([...ROLE_BASH_DENY_PATTERNS]);
+    });
+
+    it('resolveByAgent 对内置名忽略 config.tools（今日常量不变）', async () => {
+      const service = serviceWith({
+        agent: { findMany: jest.fn().mockResolvedValue([]) },
+        executionPolicy: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'ep_product',
+            name: 'product',
+            config: {
+              permission: { task: 'deny' },
+              correction: { scopeSummary: 'x' },
+              tools: { vteam_group_post: 'deny', bogus: 'allow' },
+            },
+          }),
+        },
+      });
+      const resolved = await service.resolveByAgent({
+        role: 'product',
+        policyId: 'ep_product',
+      });
+      expect(resolved?.agentName).toBe('vteam-product');
+      expect(resolved?.tools).toEqual(
+        ROLE_BOUNDARIES['vteam-product'].toolAllows,
+      );
+    });
+  });
+});

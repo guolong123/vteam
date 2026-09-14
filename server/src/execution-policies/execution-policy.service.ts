@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
+  AGENT_KEY_PATTERN,
   buildEditPermission,
   buildReadPermission,
   ROLE_BASH_DENY_PATTERNS,
@@ -33,19 +34,27 @@ const POLICY_ID_PREFIX = 'ep';
  * - `bashDeny`：层② bash 硬化清单（`ROLE_BASH_DENY_PATTERNS` 拷贝；未知角色 → `[]`）；
  * - `correction`：config 嵌套 `correction`（层② guard 越界纠正）。
  */
+/** 层② guard 单个工具三态（可编辑矩阵：allow/ask/deny；内置 allowlist 仅用前两者）。 */
+export type AgentToolState = 'allow' | 'ask' | 'deny';
+
+/** 自定义 agent policy config 的 tools 矩阵（`PolicyConfigDto.tools` 落库形状）。 */
+export interface PolicyToolsConfig {
+  tools?: unknown;
+}
+
 export interface ResolvedExecutionPolicy {
   policyId: string;
   policyName: string;
   agentName: string;
   permission: Record<string, unknown>;
-  tools: Record<string, 'allow' | 'ask'>;
+  tools: Record<string, AgentToolState>;
   bashDeny: string[];
   correction: Record<string, unknown>;
 }
 
 /** GET /agent-policies 单个 opencode agent 定义（Todo 12 worker injector 数据源）。 */
 export interface AgentPolicyDefinition {
-  name: VteamAgentName;
+  name: string;
   description: string;
   mode: 'primary';
   permission: Record<string, unknown>;
@@ -54,7 +63,7 @@ export interface AgentPolicyDefinition {
 /** GET /agent-policies guard 单个角色条目（key = opencode agent 名）。 */
 export interface AgentGuardRole {
   permission: Record<string, unknown>;
-  tools: Record<string, 'allow' | 'ask'>;
+  tools: Record<string, AgentToolState>;
   bashDeny: string[];
   correction: Record<string, unknown>;
 }
@@ -62,7 +71,7 @@ export interface AgentGuardRole {
 /** GET /agent-policies 响应体（opencode agent 定义 + guard 角色集）。 */
 export interface AgentPoliciesResponse {
   agents: AgentPolicyDefinition[];
-  guard: { enabled: true; roles: Record<VteamAgentName, AgentGuardRole> };
+  guard: { enabled: true; roles: Record<string, AgentGuardRole> };
 }
 
 /** /agent-policies 输出顺序（`vteam-plan` 首位 + 5 协作角色）。 */
@@ -211,6 +220,7 @@ export class ExecutionPolicyService implements OnModuleInit {
   async resolveByAgent(agent: {
     policyId?: string | null;
     role?: string | null;
+    agentKey?: string | null;
   }): Promise<ResolvedExecutionPolicy | null> {
     const policyId = this.policyKeyOf(agent);
     if (!policyId) {
@@ -225,12 +235,13 @@ export class ExecutionPolicyService implements OnModuleInit {
     const config = policy.config as unknown as {
       permission?: unknown;
       correction?: unknown;
+      tools?: unknown;
     } | null;
     if (!this.isPlainObject(config?.permission) || !this.isPlainObject(config?.correction)) {
       return null;
     }
-    const agentName = agent.role ? `vteam-${agent.role}` : 'vteam-plan';
-    const guard = this.guardForAgent(agentName);
+    const agentName = this.agentNameOf(agent);
+    const guard = this.guardForAgent(agentName, config);
     return {
       policyId: policy.id,
       policyName: policy.name,
@@ -249,7 +260,7 @@ export class ExecutionPolicyService implements OnModuleInit {
    * 返回与入参同序同长的 `(ResolvedExecutionPolicy | null)[]`。
    */
   async resolveManyByAgents(
-    agents: { policyId?: string | null; role?: string | null }[],
+    agents: { policyId?: string | null; role?: string | null; agentKey?: string | null }[],
   ): Promise<(ResolvedExecutionPolicy | null)[]> {
     const keys = agents.map((a) => this.policyKeyOf(a));
     const ids = [...new Set(keys.filter((k): k is string => k !== null))];
@@ -272,6 +283,7 @@ export class ExecutionPolicyService implements OnModuleInit {
       const config = policy.config as unknown as {
         permission?: unknown;
         correction?: unknown;
+        tools?: unknown;
       } | null;
       if (
         !this.isPlainObject(config?.permission) ||
@@ -279,8 +291,8 @@ export class ExecutionPolicyService implements OnModuleInit {
       ) {
         return null;
       }
-      const agentName = agent.role ? `vteam-${agent.role}` : 'vteam-plan';
-      const guard = this.guardForAgent(agentName);
+      const agentName = this.agentNameOf(agent);
+      const guard = this.guardForAgent(agentName, config);
       return {
         policyId: policy.id,
         policyName: policy.name,
@@ -295,14 +307,17 @@ export class ExecutionPolicyService implements OnModuleInit {
 
   /**
    * 构建 opencode agent 定义 + guard 角色集（Todo 12，worker injector 数据源）。
-   * 纯函数（无 DB 依赖）：全部值由 `ROLE_BOUNDARIES` 派生——
-   * - `permission`：`{ edit: buildEditPermission(writeGlobs), read: buildReadPermission(), bash, task:'deny', ...mcpDenies:'deny' }`（无 `write` 键）；
-   * - `guard.roles` key 与 `agents[].name` 完全一致；
-   * - `tools` = `toolAllows`（真实暴露名），`bashDeny` = 共享硬化清单，
+   * - 内置 6 项（`AGENT_POLICIES_ORDER` 顺序）全部值由 `ROLE_BOUNDARIES` 派生——
+   *   `permission`：`{ edit: buildEditPermission(writeGlobs), read: buildReadPermission(), bash, task:'deny', ...mcpDenies:'deny' }`（无 `write` 键）；
+   *   `guard.roles` key 与 `agents[].name` 完全一致；
+   *   `tools` = `toolAllows`（真实暴露名），`bashDeny` = 共享硬化清单，
    *   `correction` = `{ scopeSummary, handoff, denyTemplate }`。
+   * - 自定义块：`agentKey != null AND policyId != null` 的 Agent 行（按 `agentKey`
+   *   升序稳定输出），其绑定策略存在且 `config.permission` 为对象时追加一项
+   *   `vteam-<agentKey>`（permission 取策略 config，其余经 `guardForAgent` 解析）。
    */
-  buildAgentPolicies(): AgentPoliciesResponse {
-    const agents = AGENT_POLICIES_ORDER.map((name) => {
+  async buildAgentPolicies(): Promise<AgentPoliciesResponse> {
+    const agents: AgentPolicyDefinition[] = AGENT_POLICIES_ORDER.map((name) => {
       const boundary = ROLE_BOUNDARIES[name];
       return {
         name,
@@ -311,7 +326,7 @@ export class ExecutionPolicyService implements OnModuleInit {
         permission: this.buildRolePermission(name),
       };
     });
-    const roles = Object.fromEntries(
+    const roles: Record<string, AgentGuardRole> = Object.fromEntries(
       AGENT_POLICIES_ORDER.map((name) => {
         const boundary = ROLE_BOUNDARIES[name];
         const role: AgentGuardRole = {
@@ -326,20 +341,96 @@ export class ExecutionPolicyService implements OnModuleInit {
         };
         return [name, role];
       }),
-    ) as Record<VteamAgentName, AgentGuardRole>;
+    );
+    const builtInNames = new Set<string>(AGENT_POLICIES_ORDER);
+    const customAgents = (
+      await this.prisma.agent.findMany({
+        where: { agentKey: { not: null }, policyId: { not: null } },
+        orderBy: { agentKey: 'asc' },
+      })
+    ).sort((a, b) =>
+      String(a.agentKey).localeCompare(String(b.agentKey)),
+    );
+    if (customAgents.length > 0) {
+      const policyIds = [
+        ...new Set(
+          customAgents
+            .map((a) => a.policyId)
+            .filter((id): id is string => typeof id === 'string'),
+        ),
+      ];
+      const policies = await this.prisma.executionPolicy.findMany({
+        where: { id: { in: policyIds } },
+      });
+      const byId = new Map(policies.map((p) => [p.id, p]));
+      const agentKeyPattern = new RegExp(AGENT_KEY_PATTERN);
+      for (const custom of customAgents) {
+        const agentKey = custom.agentKey;
+        if (typeof agentKey !== 'string' || !agentKeyPattern.test(agentKey)) {
+          continue;
+        }
+        const name = `vteam-${agentKey}`;
+        if (builtInNames.has(name)) {
+          continue;
+        }
+        const policy =
+          typeof custom.policyId === 'string'
+            ? byId.get(custom.policyId)
+            : undefined;
+        if (!policy) {
+          continue;
+        }
+        const config = policy.config as unknown as {
+          permission?: unknown;
+          correction?: unknown;
+          tools?: unknown;
+        } | null;
+        if (!this.isPlainObject(config?.permission)) {
+          continue;
+        }
+        const guard = this.guardForAgent(name, config);
+        const correction = this.isPlainObject(config?.correction)
+          ? (config.correction as Record<string, unknown>)
+          : {};
+        agents.push({
+          name,
+          description:
+            typeof policy.description === 'string' &&
+            policy.description.length > 0
+              ? policy.description
+              : custom.name,
+          mode: 'primary' as const,
+          permission: config.permission as Record<string, unknown>,
+        });
+        roles[name] = {
+          permission: config.permission as Record<string, unknown>,
+          tools: guard.tools,
+          bashDeny: guard.bashDeny,
+          correction,
+        };
+        builtInNames.add(name);
+      }
+    }
     return { agents, guard: { enabled: true as const, roles } };
   }
 
   /**
    * config 合法性：必须为 `{ permission: object, correction: object }`
    *（两者均为非数组对象；旧 `{ permissions, writePaths }` 在此被拒绝）。
+   * `tools` 可选：缺失合法；显式传入时须为非数组对象（三态矩阵由
+   * `guardForAgent` 防御式过滤，非法条目丢弃）。
    */
   private assertValidConfig(config: unknown): void {
-    const cfg = config as { permission?: unknown; correction?: unknown } | null;
+    const cfg = config as {
+      permission?: unknown;
+      correction?: unknown;
+      tools?: unknown;
+    } | null;
     if (
       !this.isPlainObject(cfg) ||
       !this.isPlainObject(cfg.permission) ||
-      !this.isPlainObject(cfg.correction)
+      !this.isPlainObject(cfg.correction) ||
+      (cfg.tools !== undefined && !this.isPlainObject(cfg.tools))
     ) {
       throw new BadRequestException({
         code: 'POLICY_CONFIG_INVALID',
@@ -357,29 +448,69 @@ export class ExecutionPolicyService implements OnModuleInit {
   private policyKeyOf(agent: {
     policyId?: string | null;
     role?: string | null;
+    agentKey?: string | null;
   }): string | null {
     return agent.policyId ?? (agent.role ? `ep_${agent.role}` : null);
+  }
+
+  private agentNameOf(agent: {
+    role?: string | null;
+    agentKey?: string | null;
+  }): string {
+    return agent.agentKey
+      ? `vteam-${agent.agentKey}`
+      : agent.role
+        ? `vteam-${agent.role}`
+        : 'vteam-plan';
   }
 
   /**
    * 层② guard 数据（与 `buildAgentPolicies()` 同源：`ROLE_BOUNDARIES.toolAllows` +
    * `ROLE_BASH_DENY_PATTERNS`，按 `agentName` 解析）。
-   * 未知角色（自定义 agent）→ `{ tools: {}, bashDeny: [] }`（展示层默认 deny）。
+   * 内置名命中 `ROLE_BOUNDARIES` 即返回今日常量（`config` 参数整体忽略）；
+   * 非内置且带策略 `config` 的自定义 agent 返回其 `config.tools` 三态矩阵
+   * （仅保留值为 `allow`/`ask`/`deny` 的条目，其余防御式丢弃）——bash 硬化清单是
+   * 作用于全部 agent（含自定义）的共享全局底线，故自定义同样返回完整
+   * `ROLE_BASH_DENY_PATTERNS` 拷贝；无 config 的未知名保持旧语义
+   * `{ tools: {}, bashDeny: [] }`（纯展示路径默认 deny）。
    */
-  private guardForAgent(agentName: string): {
-    tools: Record<string, 'allow' | 'ask'>;
+  private guardForAgent(
+    agentName: string,
+    config?: { tools?: unknown } | null,
+  ): {
+    tools: Record<string, AgentToolState>;
     bashDeny: string[];
   } {
     const boundary = (ROLE_BOUNDARIES as Record<string, unknown>)[
       agentName
-    ] as { toolAllows?: Record<string, 'allow' | 'ask'> } | undefined;
-    if (!boundary || typeof boundary.toolAllows !== 'object') {
+    ] as { toolAllows?: Record<string, AgentToolState> } | undefined;
+    if (boundary && typeof boundary.toolAllows === 'object') {
+      return {
+        tools: { ...boundary.toolAllows },
+        bashDeny: [...ROLE_BASH_DENY_PATTERNS],
+      };
+    }
+    if (config === undefined || config === null) {
       return { tools: {}, bashDeny: [] };
     }
     return {
-      tools: { ...boundary.toolAllows },
+      tools: this.filterToolsMatrix(config.tools),
       bashDeny: [...ROLE_BASH_DENY_PATTERNS],
     };
+  }
+
+  private filterToolsMatrix(
+    tools: unknown,
+  ): Record<string, AgentToolState> {
+    if (!this.isPlainObject(tools)) {
+      return {};
+    }
+    const states: ReadonlySet<string> = new Set(['allow', 'ask', 'deny']);
+    const entries = Object.entries(tools).filter((entry): entry is [
+      string,
+      AgentToolState,
+    ] => typeof entry[1] === 'string' && states.has(entry[1]));
+    return Object.fromEntries(entries);
   }
 
   /** 层① 原生 permission（与 seed 角色策略同形：edit glob + read + bash + task deny + MCP deny，无 `write` 键）。 */

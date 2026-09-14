@@ -16,7 +16,7 @@ import { ExecutionPolicyService } from './execution-policy.service';
  * - toolAllows 键命名空间（MCP `vteam_*` / 自定义 `git_*`，无裸名、无未知键）；
  * - mcpDenies 成员 + 与 toolAllows 互斥；
  * - 层① permission 派生形状（edit/read/bash/task/mcpDenies，无 write）；
- * - `buildAgentPolicies()`（直接调用 service 纯函数，无 HTTP/DB）6 agents +
+ * - `buildAgentPolicies()`（直接调用 service，无 HTTP；自定义块空即纯内置输出）6 agents +
  *   guard 一致性 + permission 全 `task:'deny'` 且无 `write`。
  */
 describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
@@ -94,13 +94,20 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
     }
   });
 
-  describe('buildAgentPolicies()（直接调用 service，无 HTTP/DB）', () => {
-    // 纯函数：prisma/idGen 仅占位构造参数，调用路径不触 DB。
+  describe('buildAgentPolicies()（service 直接调用，无 HTTP；自定义块空时即纯内置输出）', () => {
+    // DB 依赖：prisma.agent/executionPolicy.findMany 占位空数组（无自定义 agent）。
     const service = new ExecutionPolicyService(
-      {} as never,
+      {
+        agent: { findMany: jest.fn().mockResolvedValue([]) },
+        executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
+      } as never,
       {} as never,
     );
-    const policies = service.buildAgentPolicies();
+    let policies: Awaited<ReturnType<typeof service.buildAgentPolicies>>;
+
+    beforeAll(async () => {
+      policies = await service.buildAgentPolicies();
+    });
 
     it('返回 6 agents（vteam-plan + 5 角色），guard.enabled === true', () => {
       expect(policies.agents).toHaveLength(6);
