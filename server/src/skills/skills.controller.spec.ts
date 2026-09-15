@@ -8,7 +8,7 @@ import { UpdateSkillDto } from './dto/update-skill.dto';
 import { UpdateSkillStatusDto } from './dto/update-skill-status.dto';
 import { UploadedSkillFile } from './skill-frontmatter.util';
 import { SkillsController } from './skills.controller';
-import { SkillsService } from './skills.service';
+import { SkillsService, SKILL_VERSION_NOT_FOUND } from './skills.service';
 
 /** 断言同步抛出的 400 业务异常（code 校验，response 为 HttpException getter 需显式读取）。 */
 function expectBadRequest(fn: () => unknown, code: string): void {
@@ -31,6 +31,7 @@ describe('SkillsController', () => {
     updateStatus: jest.Mock;
     update: jest.Mock;
     findContent: jest.Mock;
+    rollback: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -40,6 +41,7 @@ describe('SkillsController', () => {
       updateStatus: jest.fn(),
       update: jest.fn(),
       findContent: jest.fn(),
+      rollback: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -190,6 +192,29 @@ describe('SkillsController', () => {
     expect(service.update).toHaveBeenCalledWith('sk_0000000001', dto);
     expect(result).toMatchObject({ name: 'git-ops-v2' });
   });
+
+  it('POST /skills/:id/rollback/:version 转发 rollback（version 转正整数）', async () => {
+    service.rollback.mockResolvedValue({
+      id: 'sk_0000000001',
+      currentVersion: 3,
+    });
+
+    const result = await controller.rollback('sk_0000000001', '2');
+
+    expect(service.rollback).toHaveBeenCalledWith('sk_0000000001', 2);
+    expect(result).toMatchObject({ currentVersion: 3 });
+  });
+
+  it.each(['0', '-1', 'x', '1.5'])(
+    'POST /skills/:id/rollback/%s → 400 SKILL_VERSION_NOT_FOUND（不进 service）',
+    (version) => {
+      expectBadRequest(
+        () => controller.rollback('sk_0000000001', version),
+        SKILL_VERSION_NOT_FOUND,
+      );
+      expect(service.rollback).not.toHaveBeenCalled();
+    },
+  );
 
   it('GET /skills/:id/content 转发 findContent（worker 注入拉取）', async () => {
     service.findContent.mockResolvedValue({

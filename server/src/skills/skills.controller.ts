@@ -34,7 +34,7 @@ import {
   parseSkillMarkdown,
   UploadedSkillFile,
 } from './skill-frontmatter.util';
-import { SkillsService } from './skills.service';
+import { SkillsService, SKILL_VERSION_NOT_FOUND } from './skills.service';
 
 /** SKILL.md 单文件上传上限（内存存储，frontmatter + 正文通常 < 100KB）。 */
 const SKILL_FILE_SIZE_LIMIT = 100 * 1024;
@@ -47,6 +47,7 @@ const SKILL_FILE_SIZE_LIMIT = 100 * 1024;
  * - PATCH /api/v1/skills/:id/status：{enabled} 启停专用端点
  * - PATCH /api/v1/skills/:id：{name?, description?, content?} 编辑元信息/内容（UX-15，JSON body，
  *   name/description 同步重写 content frontmatter，维持 DB 列与注入原文一致）
+ * - POST /api/v1/skills/:id/rollback/:version：回滚到历史版本（P3 append-as-new，skills.edit）
  * - 无 DELETE（09 §3.8 不提供；停用 enabled=false 替代物理删除）
  * 鉴权：全局 JwtAuthGuard（APP_GUARD）兜底认证；写端点挂 PermissionGuard +
  * 同资源权限点（POST → skills.create、PATCH status → skills.edit，CONF-03 读写守卫
@@ -154,6 +155,29 @@ export class SkillsController {
   })
   update(@Param('id') id: string, @Body() dto: UpdateSkillDto) {
     return this.skillsService.update(id, dto);
+  }
+
+  /**
+   * 回滚技能到历史版本（P3：append-as-new，历史内容作为新版本追加，currentVersion +1）。
+   * POST /api/v1/skills/:id/rollback/:version → 200 + Skill 对象；
+   * version 非正整数 → 400 SKILL_VERSION_NOT_FOUND；技能不存在 → 404 SKILL_NOT_FOUND；
+   * 版本行缺失 → 404 SKILL_VERSION_NOT_FOUND。守卫与 PATCH 编辑端点一致（skills.edit）。
+   */
+  @Post(':id/rollback/:version')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('skills.edit')
+  @ApiOperation({
+    summary: '回滚技能到历史版本（内容作为新版本追加，skills.edit）',
+  })
+  rollback(@Param('id') id: string, @Param('version') version: string) {
+    const v = Number(version);
+    if (!Number.isInteger(v) || v < 1) {
+      throw new BadRequestException({
+        code: SKILL_VERSION_NOT_FOUND,
+        message: `技能版本「${version}」非法（须为正整数）`,
+      });
+    }
+    return this.skillsService.rollback(id, v);
   }
 
   /**

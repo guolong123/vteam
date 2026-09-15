@@ -22,5 +22,8 @@ import { SkillsService } from './skills.service';
   imports: [RealtimeModule, WorkersModule],
   controllers: [SkillsController],
   providers: [SkillsService, AdminGuard, WorkerOrJwtGuard, PermissionGuard],
+  // F2-M4：导出 SkillsService 供 PlatformMcpModule 复用（消除双实例）；
+  // 本模块仅依赖 RealtimeModule/WorkersModule（均不反向依赖 SkillsModule），无环。
+  exports: [SkillsService],
 })
 export class SkillsModule {}

@@ -28,6 +28,15 @@ import {
 /** Skill 域主键前缀（对齐 15 篇 §2.2：`sk_<零填充序号>`，本域首个 `sk_` 前缀域）。 */
 const ID_PREFIX = 'sk' as const;
 
+/** Skill 版本历史行主键前缀（P3：`skv_<零填充序号>`，onModuleInit 按此前缀续号，回填行 `skv_backfill_*` 非数字尾缀天然跳过）。 */
+const VERSION_ID_PREFIX = 'skv' as const;
+
+/**
+ * 技能版本不存在 → 404（P3 rollback 目标版本缺失/序号非法）。
+ * 放本域 service 而非常量文件：server/src/common/constants 不在本次作用域内（MUST NOT DO）。
+ */
+export const SKILL_VERSION_NOT_FOUND = 'SKILL_VERSION_NOT_FOUND' as const;
+
 /** 上传入参：frontmatter 元数据 + SKILL.md 全文（content 落库原文）+ 文件信息（fileMeta）。 */
 export interface CreateSkillInput {
   frontmatter: SkillFrontmatter;
@@ -60,6 +69,11 @@ export class SkillsService implements OnModuleInit {
   /** 进程启动对齐 skill 域前缀序号（重启续号，只统计 sk_<数字> 行）。 */
   async onModuleInit(): Promise<void> {
     await resyncIdPrefix(this.prisma.skill, ID_PREFIX, this.idGen);
+    await resyncIdPrefix(
+      this.prisma.skillVersion,
+      VERSION_ID_PREFIX,
+      this.idGen,
+    );
   }
 
   /**
@@ -68,6 +82,7 @@ export class SkillsService implements OnModuleInit {
    * name 全局唯一 → 409 SKILL_NAME_EXISTS（先查 + P2002 并发兜底）；
    * fileMeta 存 {name, description, version, allowedTools, originalname, size, mimetype}；
    * content 列存 SKILL.md 全文（worker 注入需原文写出）；enabled 固定 false（默认停用）。
+   * P3：skill 行与 v1 历史行同一事务落库（currentVersion=1），回滚/审计有起点。
    */
   async create(input: CreateSkillInput) {
     const name = assertSkillName(input.frontmatter);
@@ -83,15 +98,28 @@ export class SkillsService implements OnModuleInit {
       mimetype: input.file.mimetype,
     };
     try {
-      const skill = await this.prisma.skill.create({
-        data: {
-          id: await this.idGen.nextId(ID_PREFIX),
-          name,
-          description,
-          content: input.content,
-          fileMeta: fileMeta as Prisma.InputJsonValue,
-          enabled: false,
-        },
+      const skill = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.skill.create({
+          data: {
+            id: await this.idGen.nextId(ID_PREFIX),
+            name,
+            description,
+            content: input.content,
+            fileMeta: fileMeta as Prisma.InputJsonValue,
+            enabled: false,
+            currentVersion: 1,
+          },
+        });
+        await tx.skillVersion.create({
+          data: {
+            id: await this.idGen.nextId(VERSION_ID_PREFIX),
+            skillId: created.id,
+            version: 1,
+            content: input.content,
+            fileMeta: fileMeta as Prisma.InputJsonValue,
+          },
+        });
+        return created;
       });
       await this.broadcastReloadConfig();
       return skill;
@@ -159,6 +187,8 @@ export class SkillsService implements OnModuleInit {
    * - 一致性（不变量「DB 列 = content frontmatter」）：显式提供的 name/description 用
    *   rewriteFrontmatterField 同步重写 content frontmatter；未显式提供但更新了 content 时，
    *   name/description 列反向取 content frontmatter 解析值。
+   * - P3：历史行追加 + skill 行覆盖 + currentVersion +1 包同一事务（快照先行）；
+   *   fileMeta.version/allowedTools 同步新 content frontmatter（修复 create 时 stale 值不跟随更新问题）。
    */
   async update(id: string, dto: UpdateSkillDto) {
     if (
@@ -207,12 +237,103 @@ export class SkillsService implements OnModuleInit {
       content = rewriteFrontmatterField(content, 'description', description);
     }
 
-    const updated = await this.prisma.skill.update({
-      where: { id },
-      data: { name, description, content },
+    const prevMeta = this.readFileMetaObject(existing.fileMeta);
+    const fileMeta = {
+      name,
+      description,
+      version: parsedFrontmatter
+        ? (parsedFrontmatter.version ?? null)
+        : this.readMetaString(prevMeta, 'version'),
+      // 存量 fileMeta 用 camelCase `allowedTools`（create 落库形状），frontmatter 用 `allowed-tools`，读旧值时取前者
+      allowedTools: parsedFrontmatter
+        ? (parsedFrontmatter['allowed-tools'] ?? [])
+        : this.readMetaStringArray(prevMeta, 'allowedTools'),
+      originalname: prevMeta['originalname'] ?? null,
+      size: prevMeta['size'] ?? null,
+      mimetype: prevMeta['mimetype'] ?? null,
+    };
+    const nextVersion = (existing.currentVersion ?? 1) + 1;
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.skillVersion.create({
+        data: {
+          id: await this.idGen.nextId(VERSION_ID_PREFIX),
+          skillId: id,
+          version: nextVersion,
+          content,
+          fileMeta: fileMeta as Prisma.InputJsonValue,
+        },
+      });
+      return tx.skill.update({
+        where: { id },
+        data: {
+          name,
+          description,
+          content,
+          fileMeta: fileMeta as Prisma.InputJsonValue,
+          currentVersion: nextVersion,
+        },
+      });
     });
     await this.broadcastReloadConfig();
     return updated;
+  }
+
+  /**
+   * POST /skills/:id/rollback/:version：回滚到历史版本（P3）。
+   * 技能不存在 → 404 SKILL_NOT_FOUND；版本行缺失 → 404 SKILL_VERSION_NOT_FOUND。
+   * append-as-new：历史内容作为新版本追加（旧行只读不动，currentVersion +1），
+   * 与 artifacts restore 语义对齐；落库成功后同样广播 reload-config。
+   */
+  async rollback(id: string, version: number) {
+    const existing = await this.prisma.skill.findUnique({ where: { id } });
+    if (!existing) {
+      this.throwNotFound(id);
+    }
+    const target = await this.prisma.skillVersion.findUnique({
+      where: { skillId_version: { skillId: id, version } },
+    });
+    if (!target) {
+      throw new NotFoundException({
+        code: SKILL_VERSION_NOT_FOUND,
+        message: `技能 ${id} 版本 ${version} 不存在`,
+      });
+    }
+
+    const frontmatter = parseSkillMarkdown(target.content).frontmatter;
+    const name =
+      frontmatter.name !== undefined
+        ? assertSkillName(frontmatter)
+        : existing.name;
+    if (name !== existing.name) {
+      await this.assertNameFree(name, id);
+    }
+    const description = frontmatter.description?.trim() || null;
+    const targetMeta = this.readFileMetaObject(target.fileMeta);
+    const fileMeta = { ...targetMeta, name, description };
+    const nextVersion = (existing.currentVersion ?? 1) + 1;
+    const restored = await this.prisma.$transaction(async (tx) => {
+      await tx.skillVersion.create({
+        data: {
+          id: await this.idGen.nextId(VERSION_ID_PREFIX),
+          skillId: id,
+          version: nextVersion,
+          content: target.content,
+          fileMeta: fileMeta as Prisma.InputJsonValue,
+        },
+      });
+      return tx.skill.update({
+        where: { id },
+        data: {
+          name,
+          description,
+          content: target.content,
+          fileMeta: fileMeta as Prisma.InputJsonValue,
+          currentVersion: nextVersion,
+        },
+      });
+    });
+    await this.broadcastReloadConfig();
+    return restored;
   }
 
   /**
@@ -265,6 +386,28 @@ export class SkillsService implements OnModuleInit {
     } catch (e) {
       this.logger.warn(`技能变更后广播 reload-config 失败: ${e}`);
     }
+  }
+
+  /** fileMeta 旧值读作普通对象（null/数组/标量 → 空对象；update/rollback 透传上传文件字段用）。 */
+  private readFileMetaObject(value: Prisma.JsonValue | null): Prisma.JsonObject {
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      return value;
+    }
+    return {};
+  }
+
+  /** fileMeta 字符串字段读取（类型不符 → null；缺失 → null）。 */
+  private readMetaString(meta: Prisma.JsonObject, key: string): string | null {
+    const v = meta[key];
+    return typeof v === 'string' ? v : null;
+  }
+
+  /** fileMeta 字符串数组字段读取（类型不符/缺失 → []，非字符串元素丢弃）。 */
+  private readMetaStringArray(meta: Prisma.JsonObject, key: string): string[] {
+    const v = meta[key];
+    return Array.isArray(v)
+      ? v.filter((x): x is string => typeof x === 'string')
+      : [];
   }
 
   /** name 唯一预检：已存在同名技能 → 409 SKILL_NAME_EXISTS。excludeId 用于 update 排除自身。 */

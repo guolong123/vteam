@@ -10,7 +10,11 @@ import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { WorkersService } from '../workers/workers.service';
 import { QuerySkillsDto } from './dto/query-skills.dto';
-import { CreateSkillInput, SkillsService } from './skills.service';
+import {
+  CreateSkillInput,
+  SkillsService,
+  SKILL_VERSION_NOT_FOUND,
+} from './skills.service';
 
 /** 构造 Prisma 已知错误（P2002 兜底路径验证）。 */
 function prismaError(code: string): Prisma.PrismaClientKnownRequestError {
@@ -33,7 +37,17 @@ describe('SkillsService', () => {
       create: jest.Mock;
       update: jest.Mock;
     };
+    skillVersion: {
+      create: jest.Mock;
+      findUnique: jest.Mock;
+      findMany: jest.Mock;
+    };
     $transaction: jest.Mock;
+  };
+  // 交互式事务回调拿到的 tx（与直调共用同一套 mock，便于断言版本行写入）。
+  let tx: {
+    skill: unknown;
+    skillVersion: unknown;
   };
 
   const skillRow = {
@@ -43,6 +57,7 @@ describe('SkillsService', () => {
     content: '---\nname: git-ops\n---\n# git-ops',
     fileMeta: { version: '1.0.0', allowedTools: ['Bash'] },
     enabled: false,
+    currentVersion: 1,
     createdAt: new Date('2026-08-08T00:00:00Z'),
     updatedAt: new Date('2026-08-08T00:00:00Z'),
   };
@@ -58,15 +73,16 @@ describe('SkillsService', () => {
     role: { permissions: { users: { manage: false } } },
   };
 
-  let seq = 0;
+  const counters = new Map<string, number>();
 
   beforeEach(async () => {
-    seq = 0;
+    counters.clear();
     idGen = {
-      nextId: jest.fn(
-        async (prefix: string) =>
-          `${prefix}_${String(++seq).padStart(10, '0')}`,
-      ),
+      nextId: jest.fn(async (prefix: string) => {
+        const n = (counters.get(prefix) ?? 0) + 1;
+        counters.set(prefix, n);
+        return `${prefix}_${String(n).padStart(10, '0')}`;
+      }),
       seed: jest.fn(),
     };
     prisma = {
@@ -78,8 +94,22 @@ describe('SkillsService', () => {
         create: jest.fn(),
         update: jest.fn(),
       },
+      skillVersion: {
+        create: jest.fn(),
+        findUnique: jest.fn(),
+        findMany: jest.fn(),
+      },
       $transaction: jest.fn(),
     };
+    tx = { skill: prisma.skill, skillVersion: prisma.skillVersion };
+    prisma.$transaction.mockImplementation((arg: unknown) => {
+      if (Array.isArray(arg)) {
+        return Promise.all(arg as Array<Promise<unknown>>);
+      }
+      return (arg as (t: unknown) => unknown)(tx);
+    });
+    prisma.skill.count.mockResolvedValue(0);
+    prisma.skill.findMany.mockResolvedValue([]);
     workersService = { broadcastCommand: jest.fn().mockResolvedValue(1) };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -134,6 +164,7 @@ describe('SkillsService', () => {
             description: 'git 工具族',
             content: input.content,
             enabled: false,
+            currentVersion: 1,
             fileMeta: expect.objectContaining({
               version: '1.0.0',
               allowedTools: ['Bash', 'Read'],
@@ -144,6 +175,31 @@ describe('SkillsService', () => {
         }),
       );
       expect(result).toMatchObject({ name: 'git-ops' });
+    });
+
+    it('P3：create 同一事务落库 v1 历史行（content/fileMeta 与 live 行一致）', async () => {
+      prisma.skill.findUnique.mockResolvedValue(null);
+      prisma.skill.create.mockImplementation(async (args: {
+        data: Record<string, unknown>;
+      }) => ({ ...skillRow, ...args.data }));
+      prisma.skillVersion.create.mockResolvedValue({ version: 1 });
+
+      const input = makeInput();
+      await service.create(input);
+
+      expect(idGen.nextId).toHaveBeenNthCalledWith(1, 'sk');
+      expect(idGen.nextId).toHaveBeenNthCalledWith(2, 'skv');
+      expect(prisma.skillVersion.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            id: 'skv_0000000001',
+            skillId: 'sk_0000000001',
+            version: 1,
+            content: input.content,
+            fileMeta: expect.objectContaining({ version: '1.0.0' }),
+          }),
+        }),
+      );
     });
 
     it('F1 MAJOR：create 落库成功后广播 reload-config 到在线 worker', async () => {
@@ -377,9 +433,66 @@ describe('SkillsService', () => {
           name: 'git-ops-v2',
           description: '新描述',
           content: '---\nname: git-ops-v2\ndescription: 新描述\n---\n# git-ops',
+          fileMeta: {
+            name: 'git-ops-v2',
+            description: '新描述',
+            version: '1.0.0',
+            allowedTools: ['Bash'],
+            originalname: null,
+            size: null,
+            mimetype: null,
+          },
+          currentVersion: 2,
         },
       });
       expect(result).toMatchObject({ name: 'git-ops-v2' });
+    });
+
+    it('P3：update 先追加历史行再覆盖（version=旧currentVersion+1，id 取 skv 前缀）', async () => {
+      prisma.skill.findUnique
+        .mockResolvedValueOnce({ ...skillRow, currentVersion: 2 })
+        .mockResolvedValueOnce(null);
+      prisma.skill.update.mockResolvedValue(skillRow);
+      prisma.skillVersion.create.mockResolvedValue({ version: 3 });
+
+      await service.update('sk_0000000001', { description: '第三版' });
+
+      expect(prisma.skillVersion.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            id: 'skv_0000000001',
+            skillId: 'sk_0000000001',
+            version: 3,
+            content:
+              '---\nname: git-ops\ndescription: 第三版\n---\n# git-ops',
+          }),
+        }),
+      );
+      expect(prisma.skill.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ currentVersion: 3 }),
+        }),
+      );
+    });
+
+    it('P3：仅改元信息时 fileMeta.version/allowedTools 沿用旧值（content 未动）', async () => {
+      prisma.skill.findUnique
+        .mockResolvedValueOnce(skillRow)
+        .mockResolvedValueOnce(null);
+      prisma.skill.update.mockResolvedValue(skillRow);
+
+      await service.update('sk_0000000001', { description: '新描述' });
+
+      expect(prisma.skill.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            fileMeta: expect.objectContaining({
+              version: '1.0.0',
+              allowedTools: ['Bash'],
+            }),
+          }),
+        }),
+      );
     });
 
     it('frontmatter 无 description 时重写会追加该字段', async () => {
@@ -396,6 +509,16 @@ describe('SkillsService', () => {
           name: 'git-ops',
           description: '追加描述',
           content: '---\nname: git-ops\ndescription: 追加描述\n---\n# git-ops',
+          fileMeta: {
+            name: 'git-ops',
+            description: '追加描述',
+            version: '1.0.0',
+            allowedTools: ['Bash'],
+            originalname: null,
+            size: null,
+            mimetype: null,
+          },
+          currentVersion: 2,
         },
       });
     });
@@ -418,8 +541,40 @@ describe('SkillsService', () => {
           name: 'git-ops',
           description: '从内容同步',
           content: newContent,
+          fileMeta: {
+            name: 'git-ops',
+            description: '从内容同步',
+            version: '2.0.0',
+            allowedTools: [],
+            originalname: null,
+            size: null,
+            mimetype: null,
+          },
+          currentVersion: 2,
         },
       });
+    });
+
+    it('P3：update content 时 fileMeta.version 同步新 frontmatter version（修复 stale 值）', async () => {
+      prisma.skill.findUnique.mockResolvedValueOnce(skillRow);
+      const newContent =
+        '---\nname: git-ops\nversion: 3.1.0\nallowed-tools:\n  - Bash\n---\n正文';
+      prisma.skill.update.mockResolvedValue(skillRow);
+
+      await service.update('sk_0000000001', { content: newContent });
+
+      expect(prisma.skillVersion.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            version: 2,
+            content: newContent,
+            fileMeta: expect.objectContaining({
+              version: '3.1.0',
+              allowedTools: ['Bash'],
+            }),
+          }),
+        }),
+      );
     });
 
     it('F1 MAJOR：编辑落库成功后广播 reload-config', async () => {
@@ -502,6 +657,124 @@ describe('SkillsService', () => {
         response: { code: SKILL_ERRORS.SKILL_FRONTMATTER_INVALID },
       });
       expect(prisma.skill.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('rollback（POST /skills/:id/rollback/:version，P3 append-as-new）', () => {
+    const v1Row = {
+      id: 'skv_0000000001',
+      skillId: 'sk_0000000001',
+      version: 1,
+      content: '---\nname: git-ops\ndescription: 旧描述\n---\n旧正文',
+      fileMeta: { version: '1.0.0', allowedTools: ['Bash'] },
+    };
+
+    it('回滚 v1：历史内容作为新版本追加（currentVersion 2→3），旧行不动并广播', async () => {
+      prisma.skill.findUnique.mockResolvedValue({
+        ...skillRow,
+        currentVersion: 2,
+        description: '新描述',
+      });
+      prisma.skillVersion.findUnique.mockResolvedValue(v1Row);
+      prisma.skillVersion.create.mockResolvedValue({ version: 3 });
+      prisma.skill.update.mockResolvedValue(skillRow);
+
+      const result = await service.rollback('sk_0000000001', 1);
+
+      expect(prisma.skillVersion.findUnique).toHaveBeenCalledWith({
+        where: { skillId_version: { skillId: 'sk_0000000001', version: 1 } },
+      });
+      expect(prisma.skillVersion.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            skillId: 'sk_0000000001',
+            version: 3,
+            content: v1Row.content,
+          }),
+        }),
+      );
+      expect(prisma.skill.update).toHaveBeenCalledWith({
+        where: { id: 'sk_0000000001' },
+        data: {
+          name: 'git-ops',
+          description: '旧描述',
+          content: v1Row.content,
+          fileMeta: {
+            version: '1.0.0',
+            allowedTools: ['Bash'],
+            name: 'git-ops',
+            description: '旧描述',
+          },
+          currentVersion: 3,
+        },
+      });
+      expect(workersService.broadcastCommand).toHaveBeenCalledWith({
+        type: 'reload-config',
+        resourceVersion: expect.any(String),
+      });
+      expect(result).toBeDefined();
+    });
+
+    it('回滚恢复历史名称（改名后回滚旧版）：name 取历史值并查重', async () => {
+      prisma.skill.findUnique
+        .mockResolvedValueOnce({ ...skillRow, name: 'git-ops-v2' })
+        .mockResolvedValueOnce(null);
+      prisma.skillVersion.findUnique.mockResolvedValue(v1Row);
+      prisma.skill.update.mockResolvedValue(skillRow);
+
+      await service.rollback('sk_0000000001', 1);
+
+      expect(prisma.skill.findUnique).toHaveBeenNthCalledWith(2, {
+        where: { name: 'git-ops' },
+      });
+      expect(prisma.skill.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ name: 'git-ops' }),
+        }),
+      );
+    });
+
+    it('技能不存在 → 404 SKILL_NOT_FOUND（不查版本不落库）', async () => {
+      prisma.skill.findUnique.mockResolvedValue(null);
+
+      await expect(service.rollback('sk_ghost', 1)).rejects.toMatchObject({
+        response: { code: SKILL_ERRORS.SKILL_NOT_FOUND },
+      });
+      expect(prisma.skillVersion.findUnique).not.toHaveBeenCalled();
+      expect(prisma.skill.update).not.toHaveBeenCalled();
+    });
+
+    it('版本行缺失 → 404 SKILL_VERSION_NOT_FOUND（不落库不广播）', async () => {
+      prisma.skill.findUnique.mockResolvedValue({
+        ...skillRow,
+        currentVersion: 2,
+      });
+      prisma.skillVersion.findUnique.mockResolvedValue(null);
+
+      await expect(service.rollback('sk_0000000001', 9)).rejects.toMatchObject({
+        response: { code: SKILL_VERSION_NOT_FOUND },
+      });
+      expect(prisma.skillVersion.create).not.toHaveBeenCalled();
+      expect(prisma.skill.update).not.toHaveBeenCalled();
+      expect(workersService.broadcastCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onModuleInit（P3：sk/skv 双前缀续号）', () => {
+    it('同时按 skill 与 skillVersion 表最大数字序号 seed', async () => {
+      prisma.skill.findMany.mockResolvedValue([
+        { id: 'sk_0000000002' },
+        { id: 'sk_builtin_x' },
+      ]);
+      prisma.skillVersion.findMany.mockResolvedValue([
+        { id: 'skv_0000000003' },
+        { id: 'skv_backfill_sk_0000000001' },
+      ]);
+
+      await service.onModuleInit();
+
+      expect(idGen.seed).toHaveBeenCalledWith('sk', 2);
+      expect(idGen.seed).toHaveBeenCalledWith('skv', 3);
     });
   });
 

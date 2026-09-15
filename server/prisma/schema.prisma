@@ -257,7 +257,9 @@ model Session {
   agentId      String   @map("agent_id") // 保留（角色渲染/模型解析），不再是唯一键维度
   teamMemberId String?  @map("team_member_id")
   // team-mode 幂等键承载列（STORED 生成列：task_id 为空时 = team_id|team_member_id，其余为 NULL；DB 唯一索引仅约束 task-less 行，task 绑定行沿用 uk_sessions_task_agent）
-  teamMemberKey String?  @map("team_member_key")
+  // @db.VarChar(384)：对齐 20260904000000 迁移实际 DDL（VARCHAR(384) 生成列）；
+  // 之前无长度声明（默认 191）与库漂移，导致 migrate dev 误提无关 ALTER（P3 skill 版本迁移前置修复，只对齐类型，不碰生成表达式）。
+  teamMemberKey String?  @db.VarChar(384) @map("team_member_key")
   workerId     String?  @map("worker_id")
   instanceRef  String?  @map("instance_ref")
   status       String   @default("created")
@@ -524,12 +526,34 @@ model Skill {
   content     String   @db.Text
   fileMeta    Json?    @map("file_meta")
   enabled     Boolean  @default(false)
+  // 当前版本号（P3 skill 版本：每次 update/rollback 追加 SkillVersion 行后 +1，v1 由回填/create 落库）
+  currentVersion Int      @default(1) @map("current_version")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   agentSkills AgentSkill[]
+  versions    SkillVersion[]
 
   @@map("skills")
+}
+
+// 技能版本历史（P3：append-only，update/rollback 追加新行从不改旧行；
+// skill 删除级联清历史，versions 行 id `skv_` 前缀，onModuleInit 按前缀续号）
+model SkillVersion {
+  id        String   @id
+  skillId   String   @map("skill_id")
+  version   Int
+  // 该版本的 SKILL.md 全文（回滚即取此列作为新版本内容）
+  content   String   @db.Text
+  fileMeta  Json?    @map("file_meta")
+  createdBy String?  @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  skill Skill @relation(fields: [skillId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([skillId, version], map: "uk_skill_versions_skill_version")
+  @@index([skillId], map: "idx_skill_versions_skill")
+  @@map("skill_versions")
 }
 
 model Tool {
@@ -796,6 +820,9 @@ model Memory {
   taskId           String?   @map("task_id")
   teamId           String?   @map("team_id") // team 级归属；task 级冗余存所属团队便于团队内检索
   content          String    @db.Text
+  // 精确去重键（T4 记忆演进）：sha256(归一化 content)，save 前按 level+归属+hash 查命中
+  // 即返 duplicate（check-then-insert 竞态接受，不建唯一键）；可空兼容存量行回填前。
+  contentHash      String?   @map("content_hash")
   description      String?   @map("description") @db.VarChar(255) // 模型携带的30字摘要，用于索引/列表首屏，缺省回落 content.slice(0,120)
   tags             Json? // 标签数组
   createdBy        String    @map("created_by") // agent 实例 id 或 user id（兼容）
@@ -814,6 +841,7 @@ model Memory {
   @@index([level], map: "idx_memories_level")
   @@index([taskId, createdAt], map: "idx_memories_task_time")
   @@index([teamId, createdAt], map: "idx_memories_team_time")
+  @@index([contentHash], map: "idx_memories_content_hash")
   @@map("memories")
 }
 
