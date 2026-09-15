@@ -1940,7 +1940,7 @@ describe('WorkersService', () => {
   });
 
   describe('workerSupportsAgentPolicies（Todo 14 能力位门：enabled && names.includes）', () => {
-    const NAMES = ['vteam-plan', 'vteam-product', 'vteam-architect', 'vteam-developer', 'vteam-tester', 'vteam-project_manager'];
+    const NAMES = ['vteam-plan', 'vteam-product', 'vteam-architect', 'vteam-developer', 'vteam-tester', 'vteam-project_manager', 'vteam-librarian'];
 
     it('enabled=true 且 names 含候选 agent → true', () => {
       expect(

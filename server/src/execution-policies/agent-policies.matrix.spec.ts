@@ -17,7 +17,7 @@ import { ExecutionPolicyService } from './execution-policy.service';
  * - toolAllows 键命名空间（MCP `vteam_*` / 自定义 `git_*`，无裸名、无未知键）；
  * - mcpDenies 成员 + 与 toolAllows 互斥；
  * - 层① permission 派生形状（edit/read/bash/task/mcpDenies，无 write）；
- * - `buildAgentPolicies()`（直接调用 service，无 HTTP；自定义块空即纯内置输出）6 agents +
+ * - `buildAgentPolicies()`（直接调用 service，无 HTTP；自定义块空即纯内置输出）7 agents +
  *   guard 一致性 + permission 全 `task:'deny'` 且无 `write`。
  */
 describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
@@ -25,12 +25,13 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
   const MCP_SET = new Set<string>(VTEAM_MCP_TOOL_NAMES);
   const GIT_SET = new Set<string>(VTEAM_GIT_TOOL_NAMES);
 
-  it('6 agents：vteam-plan + 5 角色（key 即 opencode agent 名）', () => {
-    expect(AGENT_NAMES).toHaveLength(6);
+  it('7 agents：vteam-plan + 5 角色 + vteam-librarian（key 即 opencode agent 名）', () => {
+    expect(AGENT_NAMES).toHaveLength(7);
     expect(AGENT_NAMES).toEqual(
       [
         'vteam-architect',
         'vteam-developer',
+        'vteam-librarian',
         'vteam-plan',
         'vteam-product',
         'vteam-project_manager',
@@ -133,8 +134,8 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       policies = await service.buildAgentPolicies();
     });
 
-    it('返回 6 agents（vteam-plan + 5 角色），guard.enabled === true', () => {
-      expect(policies.agents).toHaveLength(6);
+    it('返回 7 agents（vteam-plan + 5 角色 + vteam-librarian），guard.enabled === true', () => {
+      expect(policies.agents).toHaveLength(7);
       expect(policies.guard.enabled).toBe(true);
     });
 

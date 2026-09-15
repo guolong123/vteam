@@ -15,7 +15,7 @@ import { ExecutionPolicyService } from './execution-policy.service';
 /**
  * GET /agent-policies 单测（Todo 12 证据）：
  * - happy：worker token（X-Worker-Token，走 WorkerOrJwtGuard worker 通道）
- *   → 200，6 个 agent 定义（vteam-plan + 5 vteam-<role>），`guard.roles` key 与
+ *   → 200，7 个 agent 定义（vteam-plan + 5 vteam-<role> + vteam-librarian），`guard.roles` key 与
  *   `agents[].name` 完全一致，所有 MCP 键带 `vteam_` 前缀，无 `write` 键；
  * - 未鉴权（无 token，用户 JWT 通道被 stub 为 401）→ 401；
  * - 错误 token → 401。
@@ -32,6 +32,7 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
     'vteam-developer',
     'vteam-tester',
     'vteam-project_manager',
+    'vteam-librarian',
   ];
 
   const REQUIRED_BASH_DENY = [
@@ -100,7 +101,7 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
     await app.close();
   });
 
-  it('worker token → 200：6 个 agent 定义 + guard.roles key 完全一致', async () => {
+  it('worker token → 200：7 个 agent 定义 + guard.roles key 完全一致', async () => {
     const res = await request(app.getHttpServer())
       .get('/agent-policies')
       .set('x-worker-token', WORKER_TOKEN)
@@ -127,7 +128,7 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
       };
     };
 
-    expect(agents).toHaveLength(6);
+    expect(agents).toHaveLength(7);
     expect(agents.map((a) => a.name).sort()).toEqual([...agentNames].sort());
     for (const agent of agents) {
       expect(agent.mode).toBe(agent.name === 'vteam-plan' ? 'all' : 'primary');

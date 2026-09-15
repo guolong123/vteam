@@ -101,9 +101,10 @@ export type VteamAgentName =
   | 'vteam-developer'
   | 'vteam-tester'
   | 'vteam-project_manager'
-  | 'vteam-plan';
+  | 'vteam-plan'
+  | 'vteam-librarian';
 
-/** 五类协作角色（不含 `vteam-plan`）：`handoffTo` 的合法目标集。 */
+/** 协作角色（不含 `vteam-plan`）：`handoffTo` 的合法目标集。 */
 export type VteamRoleAgentName = Exclude<VteamAgentName, 'vteam-plan'>;
 
 /** vteam 注册的 MCP server 名（seed `mcpServer.upsert name:'vteam'`）。 */
@@ -130,6 +131,7 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_question_confirm',
   'vteam_memory_save',
   'vteam_memory_search',
+  'vteam_memory_update',
   'vteam_team_view',
   'vteam_my_profile',
   'vteam_team_add_member',
@@ -137,6 +139,8 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_channel_send',
   'vteam_wecom_reply',
   'vteam_task_create',
+  'vteam_skill_create',
+  'vteam_git_repos_list',
 ] as const;
 
 /**
@@ -151,6 +155,7 @@ export const ROLE_SERVER_GATED_TOOLS: readonly string[] = [
   'vteam_task_create',
   'vteam_plan_mode',
   'vteam_team_add_member',
+  'vteam_skill_create',
 ] as const;
 
 /** server-gated 集合（`defineBoundary` 的 `mcpDenies` 推导用，避免逐次线性扫描）。 */
@@ -304,6 +309,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_notify_agent: 'allow',
       vteam_memory_save: 'allow',
       vteam_memory_search: 'allow',
+      vteam_memory_update: 'allow',
       vteam_read_file: 'allow',
       vteam_task_context: 'allow',
       vteam_chat_history: 'allow',
@@ -335,6 +341,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_notify_agent: 'allow',
       vteam_memory_save: 'allow',
       vteam_memory_search: 'allow',
+      vteam_memory_update: 'allow',
       vteam_task_context: 'allow',
       vteam_chat_history: 'allow',
       vteam_issue_list: 'allow',
@@ -372,6 +379,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_notify_agent: 'allow',
       vteam_memory_save: 'allow',
       vteam_memory_search: 'allow',
+      vteam_memory_update: 'allow',
       vteam_task_context: 'allow',
       vteam_chat_history: 'allow',
       vteam_issue_list: 'allow',
@@ -415,6 +423,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_notify_agent: 'allow',
       vteam_memory_save: 'allow',
       vteam_memory_search: 'allow',
+      vteam_memory_update: 'allow',
       vteam_task_context: 'allow',
       vteam_chat_history: 'allow',
       vteam_team_view: 'allow',
@@ -453,6 +462,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_issue_transition: 'allow',
       vteam_memory_save: 'allow',
       vteam_memory_search: 'allow',
+      vteam_memory_update: 'allow',
       vteam_team_view: 'allow',
       vteam_my_profile: 'allow',
       vteam_read_file: 'allow',
@@ -486,6 +496,39 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_chat_history: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_group_post: 'allow',
+    },
+  }),
+
+  'vteam-librarian': defineBoundary({
+    scopeSummary:
+      '私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。',
+    deliverables: ['知识问答'],
+    handoffTo: {
+      requirements: 'vteam-product',
+      design: 'vteam-architect',
+      code: 'vteam-developer',
+      test: 'vteam-tester',
+      process: 'vteam-project_manager',
+    },
+    writeGlobs: [],
+    readGlobs: ['*'],
+    bashEffect: 'deny',
+    toolAllows: {
+      vteam_chat_history: 'allow',
+      vteam_task_context: 'allow',
+      vteam_doclib: 'allow',
+      vteam_read_file: 'allow',
+      vteam_memory_search: 'allow',
+      vteam_team_view: 'allow',
+      vteam_my_profile: 'allow',
+      vteam_group_post: 'allow',
+      vteam_git_repos_list: 'allow',
+      git_clone: 'allow',
+      git_pull: 'allow',
+      git_fetch: 'allow',
+      git_status: 'allow',
+      git_diff: 'allow',
+      git_log: 'allow',
     },
   }),
 };

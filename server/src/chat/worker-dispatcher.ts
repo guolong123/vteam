@@ -76,6 +76,7 @@ const VTEAM_AGENT_NAMES: readonly VteamAgentName[] = [
   'vteam-tester',
   'vteam-project_manager',
   'vteam-plan',
+  'vteam-librarian',
 ];
 
 /**

@@ -19,6 +19,7 @@ const ROLE_NAMES: VteamAgentName[] = [
   'vteam-tester',
   'vteam-project_manager',
   'vteam-plan',
+  'vteam-librarian',
 ];
 
 const COORDINATION_ROLES = [
@@ -53,9 +54,9 @@ describe('模型目录 seed 预置（改为动态：静态目录清空，防空�
 });
 
 describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名）', () => {
-  it('6 个 opencode agent 名 key 齐全（5 角色 + vteam-plan）', () => {
+  it('7 个 opencode agent 名 key 齐全（5 角色 + vteam-plan + vteam-librarian）', () => {
     expect(Object.keys(ROLE_BOUNDARIES).sort()).toEqual([...ROLE_NAMES].sort());
-    expect(Object.keys(ROLE_BOUNDARIES)).toHaveLength(6);
+    expect(Object.keys(ROLE_BOUNDARIES)).toHaveLength(7);
   });
 
   it('toolAllows 的 MCP 键必须带 vteam_ 前缀（禁止裸 MCP 名）', () => {
@@ -77,7 +78,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     }
   });
 
-  it('ROLE_SERVER_GATED_TOOLS 为 5 个主实例专属真实名（server-gated，guard 层② pass-through）', () => {
+  it('ROLE_SERVER_GATED_TOOLS 为 6 个主实例专属真实名（server-gated，guard 层② pass-through）', () => {
     expect([...ROLE_SERVER_GATED_TOOLS].sort()).toEqual(
       [
         'vteam_task_transition',
@@ -85,6 +86,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
         'vteam_task_create',
         'vteam_plan_mode',
         'vteam_team_add_member',
+        'vteam_skill_create',
       ].sort(),
     );
     for (const gated of ROLE_SERVER_GATED_TOOLS) {
@@ -93,7 +95,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
   });
 
   it('mcpDenies = 全部 MCP 工具中未列入 toolAllows 且非 server-gated 者，且全为 vteam_ 真实名', () => {
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(23);
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(26);
     for (const mcp of VTEAM_MCP_TOOL_NAMES) expect(mcp).toMatch(/^vteam_/);
     const gated = new Set<string>(ROLE_SERVER_GATED_TOOLS);
     for (const name of ROLE_NAMES) {
@@ -240,6 +242,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     expect(ROLE_BOUNDARIES['vteam-tester'].bashEffect).toBe('ask');
     expect(ROLE_BOUNDARIES['vteam-project_manager'].bashEffect).toBe('deny');
     expect(ROLE_BOUNDARIES['vteam-plan'].bashEffect).toBe('deny');
+    expect(ROLE_BOUNDARIES['vteam-librarian'].bashEffect).toBe('deny');
 
     expect(
       buildEditPermission(ROLE_BOUNDARIES['vteam-architect'].writeGlobs),
@@ -270,6 +273,23 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       vteam_chat_history: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_group_post: 'allow',
+    });
+    expect(ROLE_BOUNDARIES['vteam-librarian'].toolAllows).toEqual({
+      vteam_chat_history: 'allow',
+      vteam_task_context: 'allow',
+      vteam_doclib: 'allow',
+      vteam_read_file: 'allow',
+      vteam_memory_search: 'allow',
+      vteam_team_view: 'allow',
+      vteam_my_profile: 'allow',
+      vteam_group_post: 'allow',
+      vteam_git_repos_list: 'allow',
+      git_clone: 'allow',
+      git_pull: 'allow',
+      git_fetch: 'allow',
+      git_status: 'allow',
+      git_diff: 'allow',
+      git_log: 'allow',
     });
     for (const name of ROLE_NAMES) {
       for (const gated of ROLE_SERVER_GATED_TOOLS) {

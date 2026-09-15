@@ -22,6 +22,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
     'vteam-developer',
     'vteam-tester',
     'vteam-project_manager',
+    'vteam-librarian',
   ];
 
   function builtinFixture() {
@@ -78,7 +79,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
   }
 
   describe('内置字节一致（无自定义 agent）', () => {
-    it('6 内置首位输出、顺序固定、全字段与独立推导夹具深一致', async () => {
+    it('7 内置首位输出、顺序固定、全字段与独立推导夹具深一致', async () => {
       const service = serviceWith({
         agent: { findMany: jest.fn().mockResolvedValue([]) },
         executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
@@ -113,7 +114,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
       }
     });
 
-    it('policyId 缺失的 agent 行不进入自定义块（仍纯 6 内置）', async () => {
+    it('policyId 缺失的 agent 行不进入自定义块（仍纯 7 内置）', async () => {
       const service = serviceWith({
         agent: {
           findMany: jest.fn().mockResolvedValue([]),
@@ -121,8 +122,8 @@ describe('agent-policies custom agents (Todo 2)', () => {
         executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
       });
       const policies = await service.buildAgentPolicies();
-      expect(policies.agents).toHaveLength(6);
-      expect(Object.keys(policies.guard.roles)).toHaveLength(6);
+      expect(policies.agents).toHaveLength(7);
+      expect(Object.keys(policies.guard.roles)).toHaveLength(7);
     });
   });
 
@@ -197,7 +198,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
     it('/agent-policies 同时在 agents 与 guard.roles 含 vteam-demo-agent（tools 矩阵透出，非法值丢弃）', async () => {
       const policies = await customService().buildAgentPolicies();
 
-      expect(policies.agents.map((a) => a.name).slice(0, 6)).toEqual(
+      expect(policies.agents.map((a) => a.name).slice(0, 7)).toEqual(
         BUILTIN_ORDER,
       );
       const names = policies.agents.map((a) => a.name);

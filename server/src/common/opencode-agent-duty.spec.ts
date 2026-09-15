@@ -20,13 +20,14 @@ describe('opencode agent 职责约定（计划/执行一对一映射）', () => 
     );
   });
 
-  it('Todo 13：vteam-<role> 均为执行职责（仅 vteam-plan 进计划集）', () => {
+  it('Todo 13：vteam-<role> 均为执行职责（仅 vteam-plan 进计划集，含只读 vteam-librarian）', () => {
     for (const name of [
       'vteam-product',
       'vteam-architect',
       'vteam-developer',
       'vteam-tester',
       'vteam-project_manager',
+      'vteam-librarian',
     ]) {
       expect(getOpencodeAgentDuty(name)).toBe('execute');
     }

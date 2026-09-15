@@ -71,7 +71,7 @@ export interface AgentPoliciesResponse {
   guard: { enabled: true; roles: Record<string, AgentGuardRole> };
 }
 
-/** /agent-policies 输出顺序（`vteam-plan` 首位 + 5 协作角色）。 */
+/** /agent-policies 输出顺序（`vteam-plan` 首位 + 5 协作角色 + 只读 `vteam-librarian` 末位）。 */
 const AGENT_POLICIES_ORDER: readonly VteamAgentName[] = [
   'vteam-plan',
   'vteam-product',
@@ -79,6 +79,7 @@ const AGENT_POLICIES_ORDER: readonly VteamAgentName[] = [
   'vteam-developer',
   'vteam-tester',
   'vteam-project_manager',
+  'vteam-librarian',
 ] as const;
 
 /**
@@ -306,7 +307,7 @@ export class ExecutionPolicyService implements OnModuleInit {
 
   /**
    * 构建 opencode agent 定义 + guard 角色集（Todo 12，worker injector 数据源）。
-   * - 内置 6 项（`AGENT_POLICIES_ORDER` 顺序）全部值由 `ROLE_BOUNDARIES` 派生——
+   * - 内置 7 项（`AGENT_POLICIES_ORDER` 顺序）全部值由 `ROLE_BOUNDARIES` 派生——
    *   `permission`：`{ edit: buildEditPermission(writeGlobs), read: buildReadPermission(), bash, task:'deny', ...mcpDenies:'deny' }`（无 `write` 键）；
    *   `guard.roles` key 与 `agents[].name` 完全一致；
    *   `tools` = `toolAllows`（真实暴露名），`bashDeny` = 共享硬化清单，
