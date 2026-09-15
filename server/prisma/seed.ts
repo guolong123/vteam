@@ -1,13 +1,401 @@
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import {
-  buildEditPermission,
-  buildModelSeedRows,
-  buildReadPermission,
-  ROLE_BOUNDARIES,
-  ROLE_POLICY_DENY_TEMPLATE,
-  TEMPLATE_DEFAULT_MODELS,
-} from '../src/common/constants/agent.constants';
+import { createHash } from 'node:crypto';
+
+// ========================================================================
+// 自包含常量（dev-path parity）：本文件不再 import `../src/...`。
+// 原因：生产 runner 镜像仅含 dist/node_modules/package.json/prisma（无 src/、
+// 无 tsconfig.json），`npm run seed`（ts-node，全量类型检查 + strict 默认）
+// 在该环境下报 TS2307（找不到 agent.constants / memory.constants）并连带
+// TS7006（隐式 any）。规范 seed 路径（init 容器 `node dist/prisma/seed.js`）
+// 不受影响；本镜像使 ts-node 路径在有无 src/ 的环境下均可编译运行。
+// 值与 `src/common/constants/agent.constants.ts` /
+// `src/memories/memory.constants.ts` 逐字节一致；`src/prisma/seed.spec.ts`
+// 逐项断言 seed 落库输出与 src 常量派生值相等——改 src 边界必须同步改此处，
+// 否则单测失败（唯一事实来源仍是 src 常量，本块为其镜像）。
+// ========================================================================
+
+type VteamAgentName =
+  | 'vteam-product'
+  | 'vteam-architect'
+  | 'vteam-developer'
+  | 'vteam-tester'
+  | 'vteam-project_manager'
+  | 'vteam-plan'
+  | 'vteam-librarian';
+
+interface RoleBoundary {
+  scopeSummary: string;
+  deliverables: string[];
+  handoffTo: Record<string, string>;
+  writeGlobs: string[];
+  readGlobs: string[];
+  bashEffect: 'allow' | 'ask' | 'deny';
+  mcpDenies: string[];
+  toolAllows: Record<string, 'allow' | 'ask'>;
+}
+
+const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
+  'vteam_chat_history',
+  'vteam_doclib',
+  'vteam_task_context',
+  'vteam_group_post',
+  'vteam_read_file',
+  'vteam_notify_agent',
+  'vteam_submit_artifact',
+  'vteam_issue_create',
+  'vteam_issue_list',
+  'vteam_issue_get',
+  'vteam_issue_update',
+  'vteam_issue_transition',
+  'vteam_task_transition',
+  'vteam_question_confirm',
+  'vteam_memory_save',
+  'vteam_memory_search',
+  'vteam_memory_update',
+  'vteam_team_view',
+  'vteam_my_profile',
+  'vteam_team_add_member',
+  'vteam_plan_mode',
+  'vteam_channel_send',
+  'vteam_wecom_reply',
+  'vteam_task_create',
+  'vteam_skill_create',
+  'vteam_git_repos_list',
+] as const;
+
+const ROLE_SERVER_GATED_TOOLS: readonly string[] = [
+  'vteam_task_transition',
+  'vteam_question_confirm',
+  'vteam_task_create',
+  'vteam_plan_mode',
+  'vteam_team_add_member',
+  'vteam_skill_create',
+] as const;
+
+const SERVER_GATED_SET: ReadonlySet<string> = new Set(ROLE_SERVER_GATED_TOOLS);
+
+function defineBoundary(base: Omit<RoleBoundary, 'mcpDenies'>): RoleBoundary {
+  const allowed = new Set(Object.keys(base.toolAllows));
+  return {
+    ...base,
+    mcpDenies: VTEAM_MCP_TOOL_NAMES.filter(
+      (name) => !allowed.has(name) && !SERVER_GATED_SET.has(name),
+    ),
+  };
+}
+
+const ROLE_TASK_GLOB_BASE = '**tasks/*' as const;
+
+function taskSubdirGlob(subdir: string): string {
+  return `${ROLE_TASK_GLOB_BASE}/${subdir}/**`;
+}
+
+function taskAllGlob(): string {
+  return `${ROLE_TASK_GLOB_BASE}/**`;
+}
+
+function planDirGlob(): string {
+  return '**.opencode/plans/**';
+}
+
+function buildEditPermission(writeGlobs: readonly string[]): Record<string, 'allow' | 'deny'> {
+  return {
+    '*': 'deny',
+    ...Object.fromEntries(writeGlobs.map((glob) => [glob, 'allow' as const])),
+  };
+}
+
+function buildReadPermission(): Record<string, 'allow'> {
+  return { '*': 'allow' };
+}
+
+const ROLE_POLICY_DENY_TEMPLATE =
+  '【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。' as const;
+
+const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
+  'vteam-product': defineBoundary({
+    scopeSummary:
+      '需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。',
+    deliverables: ['需求文档', '原型设计'],
+    handoffTo: {
+      design: 'vteam-architect',
+      code: 'vteam-developer',
+      test: 'vteam-tester',
+      process: 'vteam-project_manager',
+    },
+    writeGlobs: [taskSubdirGlob('prototypes'), taskSubdirGlob('docs')],
+    readGlobs: ['*'],
+    bashEffect: 'deny',
+    toolAllows: {
+      vteam_submit_artifact: 'allow',
+      vteam_doclib: 'allow',
+      vteam_issue_create: 'allow',
+      vteam_issue_list: 'allow',
+      vteam_issue_get: 'allow',
+      vteam_issue_update: 'allow',
+      vteam_issue_transition: 'allow',
+      vteam_group_post: 'allow',
+      vteam_notify_agent: 'allow',
+      vteam_memory_save: 'allow',
+      vteam_memory_search: 'allow',
+      vteam_memory_update: 'allow',
+      vteam_read_file: 'allow',
+      vteam_task_context: 'allow',
+      vteam_chat_history: 'allow',
+      vteam_team_view: 'allow',
+      vteam_my_profile: 'allow',
+      vteam_wecom_reply: 'allow',
+      vteam_channel_send: 'allow',
+    },
+  }),
+
+  'vteam-architect': defineBoundary({
+    scopeSummary:
+      '技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码、不写仓库。',
+    deliverables: ['技术方案', '设计文档'],
+    handoffTo: {
+      requirements: 'vteam-product',
+      code: 'vteam-developer',
+      test: 'vteam-tester',
+      process: 'vteam-project_manager',
+    },
+    writeGlobs: [taskSubdirGlob('docs')],
+    readGlobs: ['*'],
+    bashEffect: 'ask',
+    toolAllows: {
+      vteam_submit_artifact: 'allow',
+      vteam_doclib: 'allow',
+      vteam_read_file: 'allow',
+      vteam_group_post: 'allow',
+      vteam_notify_agent: 'allow',
+      vteam_memory_save: 'allow',
+      vteam_memory_search: 'allow',
+      vteam_memory_update: 'allow',
+      vteam_task_context: 'allow',
+      vteam_chat_history: 'allow',
+      vteam_issue_list: 'allow',
+      vteam_issue_get: 'allow',
+      vteam_team_view: 'allow',
+      vteam_my_profile: 'allow',
+      vteam_wecom_reply: 'allow',
+      vteam_channel_send: 'allow',
+      git_clone: 'allow',
+      git_pull: 'allow',
+      git_status: 'allow',
+      git_diff: 'allow',
+      git_log: 'allow',
+    },
+  }),
+
+  'vteam-developer': defineBoundary({
+    scopeSummary:
+      '编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。',
+    deliverables: ['实现代码', '实现说明'],
+    handoffTo: {
+      requirements: 'vteam-product',
+      design: 'vteam-architect',
+      test: 'vteam-tester',
+      process: 'vteam-project_manager',
+    },
+    writeGlobs: [taskAllGlob()],
+    readGlobs: ['*'],
+    bashEffect: 'ask',
+    toolAllows: {
+      vteam_submit_artifact: 'allow',
+      vteam_read_file: 'allow',
+      vteam_doclib: 'allow',
+      vteam_group_post: 'allow',
+      vteam_notify_agent: 'allow',
+      vteam_memory_save: 'allow',
+      vteam_memory_search: 'allow',
+      vteam_memory_update: 'allow',
+      vteam_task_context: 'allow',
+      vteam_chat_history: 'allow',
+      vteam_issue_list: 'allow',
+      vteam_issue_get: 'allow',
+      vteam_issue_update: 'allow',
+      vteam_issue_transition: 'allow',
+      vteam_team_view: 'allow',
+      vteam_my_profile: 'allow',
+      vteam_wecom_reply: 'allow',
+      vteam_channel_send: 'allow',
+      git_clone: 'allow',
+      git_pull: 'allow',
+      git_status: 'allow',
+      git_diff: 'allow',
+      git_log: 'allow',
+    },
+  }),
+
+  'vteam-tester': defineBoundary({
+    scopeSummary:
+      '测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。',
+    deliverables: ['测试用例', '测试计划', '测试执行', '测试报告'],
+    handoffTo: {
+      requirements: 'vteam-product',
+      design: 'vteam-architect',
+      code: 'vteam-developer',
+      process: 'vteam-project_manager',
+    },
+    writeGlobs: [taskSubdirGlob('tests'), taskSubdirGlob('docs')],
+    readGlobs: ['*'],
+    bashEffect: 'ask',
+    toolAllows: {
+      vteam_submit_artifact: 'allow',
+      vteam_issue_create: 'allow',
+      vteam_issue_list: 'allow',
+      vteam_issue_get: 'allow',
+      vteam_issue_transition: 'allow',
+      vteam_read_file: 'allow',
+      vteam_doclib: 'allow',
+      vteam_group_post: 'allow',
+      vteam_notify_agent: 'allow',
+      vteam_memory_save: 'allow',
+      vteam_memory_search: 'allow',
+      vteam_memory_update: 'allow',
+      vteam_task_context: 'allow',
+      vteam_chat_history: 'allow',
+      vteam_team_view: 'allow',
+      vteam_my_profile: 'allow',
+      vteam_wecom_reply: 'allow',
+      vteam_channel_send: 'allow',
+      git_clone: 'allow',
+      git_pull: 'allow',
+      git_status: 'allow',
+      git_diff: 'allow',
+      git_log: 'allow',
+    },
+  }),
+
+  'vteam-project_manager': defineBoundary({
+    scopeSummary:
+      '流程控制：负责任务拆解编排、进度跟踪、风险与阻塞协调；不产出需求/方案/代码/用例、不越权验收。',
+    deliverables: ['任务拆解', '进度与风险', '协调记录'],
+    handoffTo: {
+      requirements: 'vteam-product',
+      design: 'vteam-architect',
+      code: 'vteam-developer',
+      test: 'vteam-tester',
+    },
+    writeGlobs: [],
+    readGlobs: ['*'],
+    bashEffect: 'deny',
+    toolAllows: {
+      vteam_task_context: 'allow',
+      vteam_group_post: 'allow',
+      vteam_notify_agent: 'allow',
+      vteam_issue_create: 'allow',
+      vteam_issue_list: 'allow',
+      vteam_issue_get: 'allow',
+      vteam_issue_update: 'allow',
+      vteam_issue_transition: 'allow',
+      vteam_memory_save: 'allow',
+      vteam_memory_search: 'allow',
+      vteam_memory_update: 'allow',
+      vteam_team_view: 'allow',
+      vteam_my_profile: 'allow',
+      vteam_read_file: 'allow',
+      vteam_doclib: 'allow',
+      vteam_chat_history: 'allow',
+      vteam_wecom_reply: 'allow',
+      vteam_channel_send: 'allow',
+    },
+  }),
+
+  'vteam-plan': defineBoundary({
+    scopeSummary: '计划职责：只读分析并产出实施计划；不写文件、不执行变更。',
+    deliverables: ['实施计划'],
+    handoffTo: {
+      requirements: 'vteam-product',
+      design: 'vteam-architect',
+      code: 'vteam-developer',
+      test: 'vteam-tester',
+      process: 'vteam-project_manager',
+    },
+    writeGlobs: [planDirGlob()],
+    readGlobs: ['*'],
+    bashEffect: 'deny',
+    toolAllows: {
+      vteam_task_context: 'allow',
+      vteam_read_file: 'allow',
+      vteam_doclib: 'allow',
+      vteam_team_view: 'allow',
+      vteam_my_profile: 'allow',
+      vteam_chat_history: 'allow',
+      vteam_wecom_reply: 'allow',
+      vteam_group_post: 'allow',
+    },
+  }),
+
+  'vteam-librarian': defineBoundary({
+    scopeSummary:
+      '私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。',
+    deliverables: ['知识问答'],
+    handoffTo: {
+      requirements: 'vteam-product',
+      design: 'vteam-architect',
+      code: 'vteam-developer',
+      test: 'vteam-tester',
+      process: 'vteam-project_manager',
+    },
+    writeGlobs: [],
+    readGlobs: ['*'],
+    bashEffect: 'deny',
+    toolAllows: {
+      vteam_chat_history: 'allow',
+      vteam_task_context: 'allow',
+      vteam_doclib: 'allow',
+      vteam_read_file: 'allow',
+      vteam_memory_search: 'allow',
+      vteam_team_view: 'allow',
+      vteam_my_profile: 'allow',
+      vteam_group_post: 'allow',
+      vteam_git_repos_list: 'allow',
+      git_clone: 'allow',
+      git_pull: 'allow',
+      git_fetch: 'allow',
+      git_status: 'allow',
+      git_diff: 'allow',
+      git_log: 'allow',
+    },
+  }),
+};
+
+interface ModelSeedRow {
+  id: string;
+  providerID: string;
+  modelID: string;
+  name: string;
+  enabled: boolean;
+}
+
+const STATIC_AVAILABLE_MODELS: readonly { id: string; name: string }[] = [];
+
+function buildModelSeedRows(): ModelSeedRow[] {
+  return STATIC_AVAILABLE_MODELS.map((m, idx) => {
+    const slash = m.id.indexOf('/');
+    const providerID = slash > 0 ? m.id.slice(0, slash) : 'opencode';
+    const modelID = slash > 0 ? m.id.slice(slash + 1) : m.id;
+    return {
+      id: `md_${String(idx + 1).padStart(10, '0')}`,
+      providerID,
+      modelID,
+      name: m.name,
+      enabled: true,
+    };
+  });
+}
+
+const TEMPLATE_DEFAULT_MODELS: Record<string, string> = {};
+
+function normalizeMemoryContent(content: string): string {
+  return content.replace(/\r\n/g, '\n').trim();
+}
+
+function computeMemoryContentHash(content: string): string {
+  return createHash('sha256').update(normalizeMemoryContent(content), 'utf8').digest('hex');
+}
 
 /**
  * 种子脚本：为前端验收准备基础数据。
@@ -16,7 +404,7 @@ import {
  * 生成：
  *   - 平台角色：admin / member
  *   - 用户：seed-admin（owner）、seed-member（未加入示例团队，用于验证成员可见性）
- *   - 团队：示例全局团队 tm_0000000001（含 5 角色实例 + owner 行）
+   *   - 团队：示例全局团队 tm_0000000001（含 5 角色 + 计划员 + 知识管理员各 1 实例 + owner 行）
  */
 const prisma = new PrismaClient();
 
@@ -156,7 +544,12 @@ async function main() {
         '- 响应 @ 触发；被 @all 广播时同步目标与分工。\n' +
         '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）。\n' +
         '- 拒绝话术：被要求编写实现代码、设计技术方案、编写测试用例或作出验收判定时，明确说明「这超出产品经理职责」并拒绝，再用 vteam_notify_agent 定向通知对应角色转交。\n' +
-        '- 验收边界：不越权验收，验收结论由成员作出；可协助整理验收材料。',
+        '- 验收边界：不越权验收，验收结论由成员作出；可协助整理验收材料。\n' +
+        '- 团队协作规约（全文见 docs/agent-platform/30-团队协作规约.md）：\n' +
+        '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
+        '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。\n' +
+        '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。\n' +
+        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
     },
     {
       id: 'a_project_manager',
@@ -190,7 +583,12 @@ async function main() {
         '- 响应 @ 触发；被 @all 广播时同步项目目标与分工。\n' +
         '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）。\n' +
         '- 拒绝话术：被要求产出需求/方案/代码/用例时，明确说明「这超出项目经理职责」并拒绝，再转交对应角色。\n' +
-        '- 验收边界：不越权验收——验收判定权在成员，可协助整理验收材料与进度汇总。',
+        '- 验收边界：不越权验收——验收判定权在成员，可协助整理验收材料与进度汇总。\n' +
+        '- 团队协作规约（全文见 docs/agent-platform/30-团队协作规约.md）：\n' +
+        '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
+        '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。\n' +
+        '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。\n' +
+        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
     },
     {
       id: 'a_architect',
@@ -223,7 +621,12 @@ async function main() {
         '- 响应 @ 触发；产出方案后 @ 开发者衔接实现。\n' +
         '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）。\n' +
         '- 拒绝话术：被要求直接编写实现代码或修改仓库时，明确说明「这超出架构师职责」并拒绝，再用 vteam_notify_agent 定向通知开发者转交。\n' +
-        '- 验收边界：不参与验收判定，可配合成员核对方案符合度。',
+        '- 验收边界：不参与验收判定，可配合成员核对方案符合度。\n' +
+        '- 团队协作规约（全文见 docs/agent-platform/30-团队协作规约.md）：\n' +
+        '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
+        '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。\n' +
+        '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。\n' +
+        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
     },
     {
       id: 'a_developer',
@@ -257,7 +660,12 @@ async function main() {
         '- 响应 @ 触发；实现完成 @ 测试者提供可验证清单（实现说明中的验证方式）。\n' +
         '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）。\n' +
         '- 拒绝话术：被要求定义需求、制定验收标准或直接判定验收通过时，明确说明「这超出开发者职责」并拒绝，再用 vteam_notify_agent 定向通知对应角色转交。\n' +
-        '- 验收边界：不参与验收判定，可配合成员解释实现细节。',
+        '- 验收边界：不参与验收判定，可配合成员解释实现细节。\n' +
+        '- 团队协作规约（全文见 docs/agent-platform/30-团队协作规约.md）：\n' +
+        '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
+        '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。\n' +
+        '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。\n' +
+        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
     },
     {
       id: 'a_tester',
@@ -292,7 +700,12 @@ async function main() {
         '- 响应 @ 触发；缺陷 @ 开发者修复（互 @ 不超 3 轮，达到上限提示成员介入）。\n' +
         '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）。\n' +
         '- 拒绝话术：被要求直接修复实现代码或作出验收判定时，明确说明「这超出测试职责」并拒绝，再用 vteam_notify_agent 定向通知对应角色转交。\n' +
-        '- 验收边界：不越权验收——只输出验证结论与风险提示，验收判定权在成员。',
+        '- 验收边界：不越权验收——只输出验证结论与风险提示，验收判定权在成员。\n' +
+        '- 团队协作规约（全文见 docs/agent-platform/30-团队协作规约.md）：\n' +
+        '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
+        '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。\n' +
+        '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。\n' +
+        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
     },
     {
       id: 'a_plan',
@@ -326,14 +739,56 @@ async function main() {
         '## 协同方式\n' +
         '- 只接受主 Agent 派活；响应 @ 触发，被 @ 后处理并回复。\n' +
         '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES），计划员越界明确说明「这超出计划员职责」并拒绝，再用 vteam_notify_agent 定向通知主 Agent。\n' +
-        '- 验收边界：不参与验收判定，可配合整理计划依据。',
+        '- 验收边界：不参与验收判定，可配合整理计划依据。\n' +
+        '- 团队协作规约（全文见 docs/agent-platform/30-团队协作规约.md）：\n' +
+        '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
+        '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。\n' +
+        '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。\n' +
+        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
+    },
+    {
+      id: 'a_librarian',
+      name: '知识管理员',
+      role: 'librarian',
+      persona: 'steady',
+      prompt:
+        '# 角色：知识管理员\n' +
+        '你是任务虚拟团队中的知识管理员 Agent，只回答已沉淀的私域知识。\n' +
+        '\n' +
+        '## 职责\n' +
+        '- 只读问答：依据团队已沉淀知识回答提问，检索顺序为 vteam_memory_search → vteam_doclib → vteam_read_file → 授权仓库只读核对（git_clone / git_pull / git_fetch / git_status / git_diff / git_log）。\n' +
+        '- 回答格式固定三段：结论 + 出处（记忆条目 id / 产出物 artifactId + 版本 / 文件路径 fileRef）+ 置信度；每条结论必须有出处对应。\n' +
+        '- 无出处固定认不知：沉淀知识中找不到依据时，一律回复固定话术「不知——已检索沉淀知识（记忆/文档库/文件/授权仓库），未找到相关出处。」不编造出处，不推测作答。\n' +
+        '- 职责边界：不编写实现代码、不设计技术方案、不编写测试用例、不作出验收判定、不沉淀新知识（不写记忆、不提交产出物、不创建 issue）。\n' +
+        '\n' +
+        '## 权限\n' +
+        '- 可写范围：无（层① permission.edit 全路径 deny，不写文件）；bash 被禁用（permission.bash=deny）；只读访问全部。\n' +
+        '- 可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝。\n' +
+        '- 禁止：写文件、执行 shell、提交产出物（vteam_submit_artifact）、创建或流转 issue（vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition）、写入或更新记忆（vteam_memory_save / vteam_memory_update）、推送通知（vteam_channel_send / vteam_wecom_reply）、推送远端（git push 由越界拦截直接拒绝）；超出职责的请求必须拒绝。\n' +
+        '\n' +
+        '## 工作方式\n' +
+        '- 被 @ 提问后先按检索顺序取证，再按三段格式作答；证据不足即用固定不知话术收尾，不追问、不反问、不要求补充信息。\n' +
+        '- 同一问题多次被问时每次重新检索，以最新沉淀为准；不缓存、不臆测。\n' +
+        '- 引用记忆条目注明 id，引用产出物注明 artifactId 与版本，引用文件注明 fileRef。\n' +
+        '\n' +
+        '## 协同方式\n' +
+        '- 响应 @ 触发；在群聊中经 vteam_group_post 发布回答；被 @all 广播时仅回答与沉淀知识相关的问题。\n' +
+        '- 永不调用 vteam_notify_agent（防环：由他人经 vteam_notify_agent 定向唤起你，你只作答不回叫）。\n' +
+        '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）。\n' +
+        '- 拒绝话术：被要求写代码、做方案、写用例、验收、沉淀知识或主动通知他人时，明确说明「这超出知识管理员职责」并拒绝。\n' +
+        '- 验收边界：不越权验收——只输出知识问答结论与出处，验收判定权在成员。\n' +
+        '- 团队协作规约（全文见 docs/agent-platform/30-团队协作规约.md）：\n' +
+        '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
+        '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。\n' +
+        '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。\n' +
+        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
     },
   ];
 
   // ========================================================================
   // 角色 ExecutionPolicy 种子（vteam-role-behavior-enforcement Todo 3）
-  // 单一事实来源：src/common/constants/agent.constants.ts 的 ROLE_BOUNDARIES
-  // （Todo 2）——permission / correction 全部由角色边界派生，本文件禁止重复字面量。
+  // 值来源：本文件顶部自包含镜像（与 src/common/constants/agent.constants.ts 的
+  // ROLE_BOUNDARIES 逐字节一致，seed.spec.ts 逐项断言——改 src 边界必须同步改此处）。
   // - config.permission：层① opencode agent 权限（/agent-policies 直接下发，Todo 12）；
   //   `edit` 为唯一写闸门路径 glob（无 `write` 键，edit 同时覆盖 edit/write/apply_patch）；
   //   MCP 工具按真实暴露名 vteam_<action> 显式 deny（未列入该角色 toolAllows 者）。
@@ -356,6 +811,7 @@ async function main() {
     developer: { policyId: 'ep_developer', agentName: 'vteam-developer' },
     tester: { policyId: 'ep_tester', agentName: 'vteam-tester' },
     plan: { policyId: 'ep_plan', agentName: 'vteam-plan' },
+    librarian: { policyId: 'ep_librarian', agentName: 'vteam-librarian' },
   };
 
   const resolvePolicyBinding = (role: string) => {
@@ -382,7 +838,7 @@ async function main() {
         read: buildReadPermission(),
         bash: boundary.bashEffect,
         task: taskEffect,
-        ...Object.fromEntries(boundary.mcpDenies.map((tool) => [tool, 'deny' as const])),
+        ...Object.fromEntries(boundary.mcpDenies.map((tool: string) => [tool, 'deny' as const])),
       },
       correction: {
         scopeSummary: boundary.scopeSummary,
@@ -639,6 +1095,9 @@ async function main() {
     { action: 'channel_send', name: 'vteam_channel_send', description: 'Agent 主动推送通知到通知渠道（webhook/企微机器人）' },
     { action: 'wecom_reply', name: 'vteam_wecom_reply', description: '回复企业微信用户（仅当消息来自企微时使用）' },
     { action: 'task_create', name: 'vteam_task_create', description: '在团队会话无任务时创建任务（仅主 Agent 可调）' },
+    { action: 'memory_update', name: 'vteam_memory_update', description: '更新平台记忆（团队隔离校验）' },
+    { action: 'skill_create', name: 'vteam_skill_create', description: '创建技能（仅主 Agent，默认停用）' },
+    { action: 'git_repos_list', name: 'vteam_git_repos_list', description: '查询被授权仓库只读清单（脱敏）' },
   ];
 
   for (const t of vteamTools) {
@@ -1421,12 +1880,112 @@ allowed-tools:
 - 只输出 VERDICT 与依据，不做其他发挥。
 `,
     },
+    {
+      id: 'sk_builtin_learning_mode',
+      name: 'learning-mode',
+      description:
+        '师徒单步带教：群内触发进入学习模式后先问主题目标完成标准，再单步复述执行汇报等待，每步至多 5 次工具调用，遇错歧义多方案停下问，只认触发者，结束输出新 skill 草案加记忆条目加归档索引。',
+      content: `---
+name: learning-mode
+description: 师徒单步带教：群内触发进入学习模式后先问主题目标完成标准，再单步复述执行汇报等待，每步至多 5 次工具调用，遇错歧义多方案停下问，只认触发者，结束输出新 skill 草案加记忆条目加归档索引。
+version: 0.1.0
+---
+
+# learning-mode（师徒学习模式）
+
+> 本 skill 适用于挂载了本 skill 的全部 Agent（D2：所有 Agent 均可进入带教态）。
+> 软约束声明（D1）：单步 5 次工具调用为 prompt 级软约束，本轮不做硬性计数闸门。
+
+## 1. 触发（Trigger）
+
+- 触发短语：\`进入学习模式\`（群聊消息正文包含该短语即触发，允许前后有称呼或标点）。
+- 触发后进入学习态，并在群内用一句话确认，例如：
+  \`已进入学习模式，我是你的学生，请告诉我：主题 / 目标 / 完成标准。\`
+- 若同时有多人发送触发短语：以第一条触发消息的发送者为老师（见 §6），后触发者按普通消息处理。
+
+## 2. 首动作：必问三要素（First action）
+
+- 进入学习态后的第一个动作必须是提问，不做任何工具调用、不做任何探索。
+- 必须问清以下三项才可开始带教：
+  1. \`主题\`：这次要学什么（具体任务或知识点）；
+  2. \`目标\`：学会后能做到什么（可观察的行为）；
+  3. \`完成标准\`：做到什么程度算学会（done-criteria，可验证的判据）。
+- 三项缺任何一项都不得进入单步循环；逐项追问，直到三项齐备，并复述确认：
+  \`我理解的主题是 X，目标是 Y，完成标准是 Z，对吗？请确认或纠正。\`
+- 用户确认后才进入 §3。
+
+## 3. 单步循环（Single-step loop，每步至多 5 次工具调用）
+
+每个用户指令只走一轮以下四步，完成后必须停下等待，不自行进入下一步：
+
+1. \`复述理解（restate-understanding）\`：用 1-3 句话复述本步要做什么以及为什么，不复述不执行。
+2. \`执行（execute）\`：执行本步。同一用户指令下工具调用（tool calls）上限为 5 次
+   （含 MCP 工具、文件读写、命令执行等一切工具调用，D1 软约束：达到 5 次无论是否做完都必须停下）。
+3. \`汇报（report）\`：汇报本步做了什么、结果是什么、还剩什么；若 5 次用满仍未做完，必须如实报告
+   \`本步已用满 5 次调用，停在此处，剩余部分请指示。\`并列出已用调用清单。
+4. \`等待（wait）\`：明确请求下一步指示，例如 \`请给出下一步指示。\`然后停止输出，等待老师消息。
+
+- 禁止一次用户指令执行多步；禁止“顺手把下一步也做了”。
+- 汇报必须与执行结果一致，不编造未执行的结果。
+
+## 4. 停下问（Stop-and-ask）
+
+出现以下任一情况时，必须立即停止执行并提问，不猜测、不二选一自决：
+
+- \`出错\`：工具报错、结果与预期明显不符、前置条件缺失；
+- \`歧义\`：指令有多种合理解释、关键参数缺失或模糊；
+- \`多方案\`：存在两种以上可行做法且各有代价（必须列出选项 + 各自利弊 + 推荐项，等老师拍板）。
+
+提问格式：\`卡住原因 + 已知信息 + 需要老师决定的问题（尽量给选项）\`。等到老师回复后，从 §3 第 1 步重新开始本步。
+
+- 工具缺失判据（实测教训）：若所需工具不在自己的可用函数列表中，先用 \`my_profile\`
+  核对 \`effectivePermission\` 与 \`serverGated\` 名单——在名单但不在函数列表 = 会话启动早于工具上线，
+  不得臆断为“被拒绝”；停下问老师（建议老师重启会话或代建），不自行改道。
+
+## 5. 禁止自主探索与后台委托（No autonomous exploration）
+
+- 学习态下禁止自主探索：不得在没有老师明确授权的情况下自行扩大范围、深挖调用链、批量检索或试错。
+- 禁止后台委托：不得使用后台任务、子 Agent 委托、并行探索等机制，除非老师在当前学习任务中明确说出
+  （如 \`你可以后台去查\` / \`去委托子 Agent\`）。口头授权仅对当步有效，不延续到后续步骤。
+- 抽查判据：无明确授权却发生自主探索，即视为违反本 skill。
+
+## 6. 只认触发者（Teacher identity，D3）
+
+- 老师身份 = 触发消息的 \`senderInstanceId\`。学习态全程只认该 ID。
+- 只有老师的消息能推进步骤（确认、纠正、下一步指示、结束学习）。
+- 非老师（其他 sender）的群消息一律不推进步骤：不执行、不计入确认、不重置等待；
+  可简短说明 \`当前在学习模式中，只跟随老师 <senderInstanceId> 的指示。\`然后继续等待老师。
+- 老师身份在一次学习任务中不可变更；换老师须先结束当前学习（见 §7），再重新触发。
+
+## 7. 结束与三件套（Closing）
+
+- 老师说 \`结束学习\` / \`学完了\` / 确认已达成完成标准时，进入结算。
+- 结算输出必须包含以下三件套草案，并逐项请求确认（不经确认不得调用任何沉淀类工具）：
+  1. \`新 skill 草案（new-skill draft）\`：含 \`name\`（小写字母数字中划线分段）、\`description\`、
+     \`version\` 及正文要点，标注 \`默认停用、须人审启用\`；
+  2. \`记忆条目（memory entries）\`：按条列出拟写入团队记忆的知识点（每条一句话 + 出处步骤）；
+  3. \`归档索引（archive index）\`：本次学习涉及的产出物/关键消息索引（标题 + 位置/链接占位）。
+- 确认语示例：
+  \`以上三件套请确认：可用 / 需修改（请指出条目）。确认后我再走沉淀流程（skill 默认停用+人审）。\`
+- 老师确认前不写记忆、不建 skill、不归档；老师要求修改则改后重新确认。
+- 入库门（实测教训）：只有老师说出明确的入库指令（如 \`可以入库\` / \`开始沉淀\` / \`调用 skill_create\`）
+  才可调用沉淀类工具；\`确认可用\` / \`学会了\` / \`收下了\` 等评价性词语不是入库授权，不得据此写记忆或建 skill。
+  每次调用沉淀工具前逐项报备（调什么工具、写什么内容），等老师逐项放行。
+
+## 8. 退出条件
+
+- 老师明确说结束；或三件套已确认交付后，用一句话总结并退出学习态，恢复常规行为。
+- 退出后在本会话内不再自称学生，不再沿用单步循环。
+`,
+    },
   ];
 
   for (const skill of BUILTIN_SKILLS) {
     await prisma.skill.upsert({
       where: { name: skill.name },
-      update: { description: skill.description, content: skill.content, enabled: true },
+      // L1：重跑不覆盖 enabled——管理员手动停用（enabled=false）后重跑 seed 不得强制启用；
+      // 新建行默认启用（create.enabled=true）。
+      update: { description: skill.description, content: skill.content },
       create: {
         id: skill.id,
         name: skill.name,
@@ -1458,6 +2017,7 @@ allowed-tools:
     a_developer: 'developer',
     a_tester: 'tester',
     a_plan: 'plan',
+    a_librarian: 'librarian',
   };
   const teamRoleLabels: Record<string, string> = {
     product: '产品经理',
@@ -1466,6 +2026,7 @@ allowed-tools:
     developer: '开发者',
     tester: '测试',
     plan: '计划员',
+    librarian: '知识管理员',
   };
   function sanitizeWorkDirNameSeed(name: string): string {
     const raw = String(name ?? '').trim();
@@ -1484,6 +2045,8 @@ allowed-tools:
     { agentId: 'a_tester', name: '测试' },
     // 计划员附在末位：非主 Agent，主 Agent 保持首位的产品经理（PM）。
     { agentId: 'a_plan', name: '计划员' },
+    // 知识管理员附于计划员之后：只读问答，同样非主 Agent。
+    { agentId: 'a_librarian', name: '知识管理员' },
   ];
   for (let i = 0; i < seedMemberAgents.length; i++) {
     const m = seedMemberAgents[i];
@@ -1531,6 +2094,36 @@ allowed-tools:
     },
   });
 
+  // 团队协作规约 team 记忆（30 篇转正）：示例团队预置一条 team 级记忆，供 librarian 检索作答。
+  // 幂等：按固定 id me_team_collab_charter upsert；contentHash 经 computeMemoryContentHash 与 save 语义一致。
+  const charterMemoryContent =
+    '团队协作规约（全文见 docs/agent-platform/30-团队协作规约.md）。\n' +
+    '总则：群聊是工作区；默认点对点，能 @ 单人就不 @all；谁接活谁闭环（做完/做不了/转给谁）。\n' +
+    '求助三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
+    '转交闭环：责任转移一律落 issue（标题 + 指派到实例 + 验收口径）；格式为事项 + 已有材料 + 期望动作，被转交人须回执；越界拒绝 + 指路不代做；转交链超 3 轮未闭环升级主 Agent。\n' +
+    '广播纪律：@all 仅用于全员需知的结论/决策、点名长期不回复者、紧急阻塞；私域问答先问 librarian，再定向问对口角色；无关 @all 不回复，禁 @all 收尾。\n' +
+    '超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应升级主 Agent 改派或落 issue；失败即报（不伪造成功，核对 team_view 后汇报 + 给替代路径）。\n' +
+    '升级路径：成员互助 → 主 Agent 协调 → 落 issue 跟踪 → 提示成员介入，全程留痕。';
+  await prisma.memory.upsert({
+    where: { id: 'me_team_collab_charter' },
+    update: {
+      content: charterMemoryContent,
+      contentHash: computeMemoryContentHash(charterMemoryContent),
+      teamId: seedTeamId,
+    },
+    create: {
+      id: 'me_team_collab_charter',
+      level: 'team',
+      taskId: null,
+      teamId: seedTeamId,
+      content: charterMemoryContent,
+      contentHash: computeMemoryContentHash(charterMemoryContent),
+      description: '团队协作规约：求助三要素/转交落 issue/广播纪律/10 分钟超时升级',
+      createdBy: admin.id,
+      sourceType: 'system',
+    },
+  });
+
   console.log('Seed 完成：');
   console.log(`  - 角色：${adminRole.name} / ${memberRole.name}`);
   console.log(`  - 用户：admin(u_admin) / seed-admin(${admin.id}) / seed-member(u_seed_member)`);
@@ -1539,14 +2132,20 @@ allowed-tools:
   console.log(`  - 内置工具：${builtinTools.map((t) => t.action).join('、')}（source=builtin）`);
   console.log(`  - MCP 工具：${vteamTools.map((t) => t.action).join('、')}（source=mcp，mcpServer=vteam）`);
   console.log(`  - MCP Server：vteam（remote，${platformMcpUrl}）`);
-  console.log(`  - 模型目录：${modelRows.length} 个模型（${modelRows.map((m) => m.modelID).join('、')}）`);
-  console.log(`  - 示例团队：${seedTeamName}(${seedTeamId}) 含 ${seedMemberAgents.length} 成员（5 角色 + 计划员各 1，主 Agent 为产品经理）`);
+  console.log(`  - 模型目录：${modelRows.length} 个模型（${modelRows.map((m: ModelSeedRow) => m.modelID).join('、')}）`);
+  console.log(`  - 示例团队：${seedTeamName}(${seedTeamId}) 含 ${seedMemberAgents.length} 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）`);
   console.log(`  - 管理员密码：${ADMIN_PASSWORD}`);
   console.log(`  - 初始 admin 账号：admin / admin123`);
 }
 
 // 直接执行（npm run seed）时自动运行；被测试 import 时由测试手动 await main()。
-if (require.main === module) {
+// 双模式判定：CJS（宿主 ts-node 走 tsconfig commonjs / dist 产物）用 require.main；
+// ESM（无 tsconfig 环境下 Node ≥22 原生 .ts strip-types 以 ESM 加载，无 require）
+// 用 argv[1] 文件名回退。被 import 时 argv[1] 为 jest/prisma 等宿主进程，不触发。
+const isDirectRun =
+  (typeof require !== 'undefined' && require.main === module) ||
+  /(^|[\\/])seed\.(ts|js)$/.test(process.argv[1] ?? '');
+if (isDirectRun) {
   main()
     .catch((e) => {
       console.error(e);

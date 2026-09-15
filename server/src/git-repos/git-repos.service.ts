@@ -52,6 +52,15 @@ export function normalizeRepoUrl(url: string): string {
   });
 }
 
+/**
+ * URL 内嵌凭证探针（F2-H1）：`scheme://` 后首个 `/` 前出现 `@` 即含 userinfo
+ * （`user@` / `user:password@`），token 不得随 repoUrl 落库/进日志，
+ * 须走凭证池 credentialId 引用。scp 形（`git@host:path`，无 `://`）天然不命中。
+ */
+export function hasEmbeddedCredentials(url: string): boolean {
+  return /:\/\/[^/\s]*@/i.test(url ?? '');
+}
+
 @Injectable()
 export class GitReposService implements OnModuleInit {
   private readonly logger = new Logger(GitReposService.name);
@@ -112,6 +121,13 @@ export class GitReposService implements OnModuleInit {
       throw new BadRequestException({
         code: GIT_REPOS_ERRORS.REPO_NOT_FOUND,
         message: 'repoUrl 不能为空',
+      });
+    }
+    if (hasEmbeddedCredentials(repoUrl)) {
+      throw new BadRequestException({
+        code: GIT_REPOS_ERRORS.REPO_URL_CREDENTIALS,
+        message:
+          'repoUrl 不得内嵌凭证（user:password@），请移除 URL 中的用户信息并通过 credentialId 引用凭证池凭证',
       });
     }
     const credential = await this.prisma.gitCredential.findUnique({

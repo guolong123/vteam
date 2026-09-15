@@ -48,6 +48,8 @@ export type GitEffect = (typeof GIT_EFFECTS)[keyof typeof GIT_EFFECTS];
  * - 凭证不存在 → 404 CREDENTIAL_NOT_FOUND
  * - 凭证名称已存在 → 409 CREDENTIAL_NAME_EXISTS
  * - 凭证被仓库引用，删除阻断 → 409 CREDENTIAL_IN_USE
+ * - repoUrl 内嵌 userinfo 凭证（user:password@）→ 400 REPO_URL_CREDENTIALS
+ *  （F2-H1：URL 内嵌 token 不得落库，须走凭证池 credentialId 引用）
  */
 export const GIT_REPOS_ERRORS = {
   REPO_NOT_FOUND: 'REPO_NOT_FOUND',
@@ -57,6 +59,7 @@ export const GIT_REPOS_ERRORS = {
   CREDENTIAL_NOT_FOUND: 'CREDENTIAL_NOT_FOUND',
   CREDENTIAL_NAME_EXISTS: 'CREDENTIAL_NAME_EXISTS',
   CREDENTIAL_IN_USE: 'CREDENTIAL_IN_USE',
+  REPO_URL_CREDENTIALS: 'REPO_URL_CREDENTIALS',
 } as const;
 
 export type GitReposErrorCode =

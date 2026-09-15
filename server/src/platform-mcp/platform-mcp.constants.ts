@@ -42,6 +42,9 @@ export const PLATFORM_MCP_TOOLS = [
   'notify_agent',
   'submit_artifact',
   'channel_send',
+  'skill_create',
+  'memory_update',
+  'git_repos_list',
 ] as const;
 
 /** 平台 MCP server 标识（seed 阶段 2 的 mcp-servers 记录 name 对齐）。 */

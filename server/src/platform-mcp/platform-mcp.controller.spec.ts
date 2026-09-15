@@ -31,6 +31,10 @@ describe('PlatformMcpController (HTTP)', () => {
     planMode: jest.Mock;
     channelSend: jest.Mock;
     wecomReply: jest.Mock;
+    taskCreate: jest.Mock;
+    skillCreate: jest.Mock;
+    memoryUpdate: jest.Mock;
+    gitReposList: jest.Mock;
   };
 
   /** 手写 JSON-RPC 端点：无需 Accept 头，直接 POST JSON 即可。 */
@@ -107,6 +111,18 @@ describe('PlatformMcpController (HTTP)', () => {
           { type: 'text', text: '已回复企微用户 @张三 并同步到任务群聊' },
         ],
       }),
+      taskCreate: jest.fn().mockResolvedValue({ id: 't_new' }),
+      skillCreate: jest.fn().mockResolvedValue({
+        id: 'sk_0000000001',
+        name: 'git-ops',
+        enabled: false,
+      }),
+      memoryUpdate: jest.fn().mockResolvedValue({
+        memoryId: 'me_0000000001',
+        level: 'team',
+        status: 'updated',
+      }),
+      gitReposList: jest.fn().mockResolvedValue({ repos: [] }),
     };
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -186,7 +202,7 @@ describe('PlatformMcpController (HTTP)', () => {
   });
 
   describe('tools/list', () => {
-    it('→ 返回 23 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search + team_view/my_profile + team_add_member + plan_mode + channel_send + wecom_reply + task_create；自造 plan 域 5 工具已下线，plan_mode 为新计划开关）且 inputSchema 为 JSON Schema', async () => {
+    it('→ 返回 26 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search/memory_update + team_view/my_profile + team_add_member + plan_mode + channel_send + wecom_reply + task_create + skill_create + git_repos_list；自造 plan 域 5 工具已下线，plan_mode 为新计划开关）且 inputSchema 为 JSON Schema', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
@@ -218,6 +234,7 @@ describe('PlatformMcpController (HTTP)', () => {
         'task_transition',
         'question_confirm',
         'memory_save',
+        'memory_update',
         'memory_search',
         'team_view',
         'my_profile',
@@ -226,6 +243,8 @@ describe('PlatformMcpController (HTTP)', () => {
         'channel_send',
         'wecom_reply',
         'task_create',
+        'skill_create',
+        'git_repos_list',
       ]);
 
       for (const tool of tools) {
@@ -247,6 +266,10 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(chatHistory.inputSchema.required).toEqual([]);
       expect(chatHistory.inputSchema.properties.limit).toEqual({
         type: 'number',
+      });
+      // H3：DM 模式实例级绑定——selfInstanceId 可选（群聊兼容），DM 传 teamMemberId 时必填由服务层 403
+      expect(chatHistory.inputSchema.properties.selfInstanceId).toEqual({
+        type: 'string',
       });
       // group_post：selfInstanceId/content 必填，taskId/teamId 双可选，fileRef 可选
       const groupPost = tools.find((t) => t.name === 'group_post')!;
@@ -319,6 +342,18 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(memorySearch.inputSchema.properties.limit).toEqual({
         type: 'number',
       });
+      // memory_update：selfInstanceId/memoryId 必填，taskId/teamId 双可选，content/description/tags 可选（至少一个）
+      const memoryUpdate = tools.find((t) => t.name === 'memory_update')!;
+      expect(memoryUpdate.inputSchema.required).toEqual([
+        'selfInstanceId',
+        'memoryId',
+      ]);
+      expect(memoryUpdate.inputSchema.properties.memoryId).toEqual({
+        type: 'string',
+      });
+      expect(memoryUpdate.inputSchema.properties.tags).toEqual({
+        type: 'array',
+      });
       // team_view：仅 taskId 必填（只读，无 selfInstanceId）
       const teamView = tools.find((t) => t.name === 'team_view')!;
       expect(teamView.inputSchema.required).toEqual(['taskId']);
@@ -369,6 +404,29 @@ describe('PlatformMcpController (HTTP)', () => {
         'title',
       ]);
       expect(taskCreate.inputSchema.properties.title).toEqual({
+        type: 'string',
+      });
+      // skill_create：selfInstanceId/name/content 必填，taskId/teamId 双可选，description 可选
+      const skillCreate = tools.find((t) => t.name === 'skill_create')!;
+      expect(skillCreate.inputSchema.required).toEqual([
+        'selfInstanceId',
+        'name',
+        'content',
+      ]);
+      expect(skillCreate.inputSchema.properties.content).toEqual({
+        type: 'string',
+      });
+      expect(skillCreate.inputSchema.properties.description).toEqual({
+        type: 'string',
+      });
+      // git_repos_list：selfInstanceId 必填，taskId/teamId 双可选（task_create 式）
+      const gitReposList = tools.find((t) => t.name === 'git_repos_list')!;
+      expect(gitReposList.inputSchema.required).toEqual(['selfInstanceId']);
+      expect(gitReposList.inputSchema.properties.taskId).toEqual({
+        type: 'string',
+      });
+      // chat_history DM：teamMemberId 可选（传即 DM 模式），仍无必填
+      expect(chatHistory.inputSchema.properties.teamMemberId).toEqual({
         type: 'string',
       });
     });
@@ -686,6 +744,159 @@ describe('PlatformMcpController (HTTP)', () => {
         planMode: true,
         agentName: 'plan',
       });
+    });
+
+    it('skill_create → service.skillCreate 收到 taskId/selfInstanceId/name/content', async () => {
+      const content = '---\nname: git-ops\ndescription: Git ops\n---\n# Git Ops\n';
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 18,
+          method: 'tools/call',
+          params: {
+            name: 'skill_create',
+            arguments: {
+              taskId: 't_1',
+              selfInstanceId: 'ta_main',
+              name: 'git-ops',
+              content,
+            },
+          },
+        })
+        .expect(200);
+
+      expect(service.skillCreate).toHaveBeenCalledWith(
+        { workerId: 'w_0001' },
+        {
+          taskId: 't_1',
+          selfInstanceId: 'ta_main',
+          name: 'git-ops',
+          content,
+        },
+      );
+      const text = res.body.result.content[0].text as string;
+      expect(JSON.parse(text)).toEqual({
+        id: 'sk_0000000001',
+        name: 'git-ops',
+        enabled: false,
+      });
+    });
+
+    it('memory_update → service.memoryUpdate 收到 taskId/selfInstanceId/memoryId/content', async () => {
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 19,
+          method: 'tools/call',
+          params: {
+            name: 'memory_update',
+            arguments: {
+              taskId: 't_1',
+              selfInstanceId: 'ta_main',
+              memoryId: 'me_0000000001',
+              content: '新版经验',
+            },
+          },
+        })
+        .expect(200);
+
+      expect(service.memoryUpdate).toHaveBeenCalledWith(
+        { workerId: 'w_0001' },
+        {
+          taskId: 't_1',
+          selfInstanceId: 'ta_main',
+          memoryId: 'me_0000000001',
+          content: '新版经验',
+        },
+      );
+      const text = res.body.result.content[0].text as string;
+      expect(JSON.parse(text)).toEqual({
+        memoryId: 'me_0000000001',
+        level: 'team',
+        status: 'updated',
+      });
+    });
+
+    it('git_repos_list → service.gitReposList 收到 taskId/selfInstanceId', async () => {
+      service.gitReposList.mockResolvedValue({
+        repos: [
+          {
+            id: 'gro_0000000001',
+            repoUrl: 'git@gitee.com:xishuhq/test-repo',
+            credentialName: 'gitee-main',
+            authType: 'ssh_key',
+            fingerprint: 'ssh-rsa AAAA****',
+            permission: 'read',
+            effect: 'allow',
+          },
+        ],
+      });
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 20,
+          method: 'tools/call',
+          params: {
+            name: 'git_repos_list',
+            arguments: {
+              taskId: 't_1',
+              selfInstanceId: 'tmm_dev1',
+            },
+          },
+        })
+        .expect(200);
+
+      expect(service.gitReposList).toHaveBeenCalledWith(
+        { workerId: 'w_0001' },
+        {
+          taskId: 't_1',
+          selfInstanceId: 'tmm_dev1',
+        },
+      );
+      const text = res.body.result.content[0].text as string;
+      expect(JSON.parse(text)).toEqual({
+        repos: [
+          {
+            id: 'gro_0000000001',
+            repoUrl: 'git@gitee.com:xishuhq/test-repo',
+            credentialName: 'gitee-main',
+            authType: 'ssh_key',
+            fingerprint: 'ssh-rsa AAAA****',
+            permission: 'read',
+            effect: 'allow',
+          },
+        ],
+      });
+    });
+
+    it('chat_history DM → service.chatHistory 收到 teamMemberId', async () => {
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 21,
+          method: 'tools/call',
+          params: {
+            name: 'chat_history',
+            arguments: {
+              taskId: 't_1',
+              teamMemberId: 'tmm_dev1',
+            },
+          },
+        })
+        .expect(200);
+
+      expect(service.chatHistory).toHaveBeenCalledWith(
+        { workerId: 'w_0001' },
+        {
+          taskId: 't_1',
+          teamMemberId: 'tmm_dev1',
+        },
+      );
+      expect(res.body.result.content).toBeDefined();
     });
 
     it('channel_send → service.channelSend 收到 target/text', async () => {

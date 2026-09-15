@@ -7,7 +7,11 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { WorkersService } from '../workers/workers.service';
-import { GitReposService, normalizeRepoUrl } from './git-repos.service';
+import {
+  GitReposService,
+  hasEmbeddedCredentials,
+  normalizeRepoUrl,
+} from './git-repos.service';
 import { GIT_REPOS_ERRORS } from './git-repos.constants';
 
 describe('GitReposService（凭证池分离后：仓库引用凭证+授权按repoId）', () => {
@@ -188,6 +192,38 @@ describe('GitReposService（凭证池分离后：仓库引用凭证+授权按rep
       ).rejects.toMatchObject({
         response: { code: GIT_REPOS_ERRORS.REPO_EXISTS },
       });
+    });
+    it('repoUrl 内嵌 userinfo 凭证 → 400 REPO_URL_CREDENTIALS（不查凭证不落库）', async () => {
+      await expect(
+        service.create(
+          {
+            repoUrl: 'https://oauth2:glpat-xxxx@gitee.com/xishuhq/test-repo.git',
+            credentialId: 'gc_0000000001',
+          } as any,
+          'u_admin',
+        ),
+      ).rejects.toMatchObject({
+        response: { code: GIT_REPOS_ERRORS.REPO_URL_CREDENTIALS },
+      });
+      expect(prisma.gitCredential.findUnique).not.toHaveBeenCalled();
+      expect(prisma.gitRepo.create).not.toHaveBeenCalled();
+    });
+    it('hasEmbeddedCredentials：scp 形 git@host:path 不命中，https userinfo 命中', () => {
+      expect(hasEmbeddedCredentials('git@gitee.com:xishuhq/test-repo')).toBe(
+        false,
+      );
+      expect(hasEmbeddedCredentials('https://gitee.com/xishuhq/test')).toBe(
+        false,
+      );
+      expect(
+        hasEmbeddedCredentials('https://user:gitee.com/xishuhq/test'),
+      ).toBe(false);
+      expect(
+        hasEmbeddedCredentials('https://user@gitee.com/xishuhq/test'),
+      ).toBe(true);
+      expect(
+        hasEmbeddedCredentials('https://user:pass@gitee.com/xishuhq/test'),
+      ).toBe(true);
     });
     it('同一凭证可被多仓库复用（无 repoUrl+authType 复合唯一限制）', async () => {
       prisma.gitCredential.findUnique.mockResolvedValue(cred);

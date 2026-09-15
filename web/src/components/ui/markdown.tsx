@@ -21,6 +21,8 @@ const mdStyles = `
   word-break: break-word;
   line-height: 1.6;
   font-size: inherit;
+  max-width: 100%;
+  min-width: 0;
 }
 .md-render > :first-child { margin-top: 0; }
 .md-render > :last-child { margin-bottom: 0; }
@@ -58,12 +60,18 @@ const mdStyles = `
   background: #0F172A;
   color: var(--color-neutral-200);
   overflow-x: auto;
+  max-width: 100%;
+  min-width: 0;
+  white-space: pre;
 }
 .md-render pre code {
   background: transparent;
   color: inherit;
   padding: 0;
   font-size: .88em;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .md-render table {
   margin: .6em 0;

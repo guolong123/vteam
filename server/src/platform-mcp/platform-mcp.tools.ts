@@ -49,6 +49,18 @@ const chatHistorySchema = z
   .object({
     taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
     teamId: z.string().optional().describe(TEAM_ID_DESC),
+    teamMemberId: z
+      .string()
+      .optional()
+      .describe(
+        'DM 对端成员 id（tmm_ 前缀）：传即进 DM 模式，仅同团队且调用方为该私聊端点时可读（带审计），否则 403',
+      ),
+    selfInstanceId: z
+      .string()
+      .optional()
+      .describe(
+        '调用方成员 id（tmm_ 前缀）：DM 模式必填（实例级归属绑定，缺失/冒充 403）；群聊模式可选（传即按实例精确绑定）',
+      ),
     sinceId: z
       .string()
       .optional()
@@ -320,6 +332,49 @@ export const memorySaveSchema = z
 
 type MemorySaveArgs = z.infer<typeof memorySaveSchema>;
 
+export const memoryUpdateSchema = z
+  .object({
+    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+    teamId: z.string().optional().describe(TEAM_ID_DESC),
+    selfInstanceId: z
+      .string()
+      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+    memoryId: z.string().describe('记忆条目 id（me_ 前缀）'),
+    content: z
+      .string()
+      .min(1)
+      .max(20000)
+      .optional()
+      .describe('记忆内容（1~20000 字符，更新后同步重算去重键）'),
+    description: z
+      .string()
+      .min(1)
+      .max(255)
+      .optional()
+      .describe('记忆摘要（1~255 字符，不传则保留原摘要）'),
+    tags: z
+      .array(z.string())
+      .max(20)
+      .optional()
+      .describe('记忆标签（≤20 个，全量替换）'),
+  })
+  .refine((d) => !!d.taskId || !!d.teamId, {
+    message: REQUIRE_TASK_OR_TEAM_MSG,
+    path: ['taskId'],
+  })
+  .refine(
+    (d) =>
+      d.content !== undefined ||
+      d.description !== undefined ||
+      d.tags !== undefined,
+    {
+      message: '至少提供 content/description/tags 之一',
+      path: ['content'],
+    },
+  );
+
+type MemoryUpdateArgs = z.infer<typeof memoryUpdateSchema>;
+
 const memorySearchSchema = z
   .object({
     taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
@@ -579,6 +634,54 @@ const taskCreateSchema = z
 type TaskCreateArgs = z.infer<typeof taskCreateSchema>;
 
 /**
+ * skill_create（learning-mode P2）：主 Agent 沉淀新 SKILL.md（默认停用，
+ * 人审后启用）。团队由双上下文解析（taskId 优先，无 taskId 时 teamId），
+ * 主身份门在 service 内按 task.mainAgentInstanceId / team.mainAgentMemberId
+ * 判定（对齐 task_create 的双维度主门语义）。
+ * content 为 SKILL.md 全文（含 frontmatter，service 先 parse 400 再调
+ * SkillsService.create，file 适配由 service 合成）。
+ */
+const skillCreateSchema = z
+  .object({
+    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+    teamId: z.string().optional().describe(TEAM_ID_DESC),
+    selfInstanceId: z
+      .string()
+      .describe(
+        '调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入；仅主 Agent 可调）',
+      ),
+    name: z.string().min(1).describe('技能名（小写字母数字，中划线分段）'),
+    description: z.string().optional().describe('技能描述（可选）'),
+    content: z.string().min(1).describe('SKILL.md 全文（含 YAML frontmatter）'),
+  })
+  .refine((d) => !!d.taskId || !!d.teamId, {
+    message: REQUIRE_TASK_OR_TEAM_MSG,
+    path: ['taskId'],
+  });
+
+type SkillCreateArgs = z.infer<typeof skillCreateSchema>;
+
+/**
+ * git_repos_list（T6 P6 读取补齐）：调用方被授权仓库只读清单。
+ * task_create 式双上下文 + selfInstanceId（resolveExecContext 归属 + 冒充 403）；
+ * 仅返回调用方模板 Agent 持有未吊销授权的行，脱敏（无凭证 key，repoUrl 敏感）。
+ */
+const gitReposListSchema = z
+  .object({
+    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+    teamId: z.string().optional().describe(TEAM_ID_DESC),
+    selfInstanceId: z
+      .string()
+      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  })
+  .refine((d) => !!d.taskId || !!d.teamId, {
+    message: REQUIRE_TASK_OR_TEAM_MSG,
+    path: ['taskId'],
+  });
+
+type GitReposListArgs = z.infer<typeof gitReposListSchema>;
+
+/**
  * 构建工具集（service 闭包注入，controller 构造时调用一次）。
  * handler 签名 `(ctx, args)`：ctx.workerId 为 controller 透传的 header 值；
  * args 已在 tools/call 内经 inputSchema.safeParse 校验，此处收窄为具体类型。
@@ -692,9 +795,17 @@ export function buildPlatformMcpTools(
     {
       name: 'memory_save',
       description:
-        '写入平台记忆（只存可复用经验，禁存会话总结/流水账/一次性结论）。可存三类：howto=怎么做（有效路径/命令/配置）、pitfall=坑与规避（错误原因+规避动作）、constraint=平台硬约束。content 写「场景 + 做法/坑 + 规避动作」。level=team 跨任务复用（teamId 从任务或团队上下文自动解析）；level=global 平台通用（仅主 Agent 可写）。description 30字摘要（缺省回落 content 截断）。返回 {memoryId, level}。',
+        '写入平台记忆（只存可复用经验，禁存会话总结/流水账/一次性结论）。可存三类：howto=怎么做（有效路径/命令/配置）、pitfall=坑与规避（错误原因+规避动作）、constraint=平台硬约束。content 写「场景 + 做法/坑 + 规避动作」。level=team 跨任务复用（teamId 从任务或团队上下文自动解析）；level=global 平台通用（仅主 Agent 可写）。description 30字摘要（缺省回落 content 截断）。内容完全重复（同级同归属同去重键）直接返回既有条目 status:"duplicate"，不新增。返回 {memoryId, level, status:"created"|"duplicate"}。',
       inputSchema: memorySaveSchema,
       handler: (ctx, args) => service.memorySave(ctx, args as MemorySaveArgs),
+    },
+    {
+      name: 'memory_update',
+      description:
+        '按 id 更新平台记忆（content/description/tags 部分更新，至少传一个；content 更新同步重算去重键）。team 级记忆仅归属团队可改（跨团队 403）；global 级仅主 Agent 可改；已删除条目 404。返回 {memoryId, level, status:"updated"}。',
+      inputSchema: memoryUpdateSchema,
+      handler: (ctx, args) =>
+        service.memoryUpdate(ctx, args as MemoryUpdateArgs),
     },
     {
       name: 'memory_search',
@@ -753,6 +864,21 @@ export function buildPlatformMcpTools(
         '在团队会话无任务时创建任务（仅主 Agent 可调）。团队由当前会话解析，任务建在该团队下。返回创建的任务 DTO。',
       inputSchema: taskCreateSchema,
       handler: (ctx, args) => service.taskCreate(ctx, args as TaskCreateArgs),
+    },
+    {
+      name: 'skill_create',
+      description:
+        '沉淀新技能 SKILL.md（仅主 Agent 可调，默认停用，需人审启用）。content 为 SKILL.md 全文（含 frontmatter）；name/description 声明技能元信息。返回创建的技能行（含 id/name/enabled=false）。',
+      inputSchema: skillCreateSchema,
+      handler: (ctx, args) => service.skillCreate(ctx, args as SkillCreateArgs),
+    },
+    {
+      name: 'git_repos_list',
+      description:
+        '查询调用方被授权的 git 仓库只读清单（仅返回调用方持有未吊销授权的行；脱敏，无凭证 key 明文，repoUrl 敏感仅授权可见）。返回 {repos: [{id, repoUrl, credentialName, authType, fingerprint, permission, effect}]}。',
+      inputSchema: gitReposListSchema,
+      handler: (ctx, args) =>
+        service.gitReposList(ctx, args as GitReposListArgs),
     },
   ];
 }

@@ -3,6 +3,7 @@ import { ArtifactsModule } from '../artifacts/artifacts.module';
 import { ExecutionPoliciesModule } from '../execution-policies/execution-policies.module';
 import { NotificationChannelsModule } from '../notifications/notification-channels.module';
 import { ChatModule } from '../chat/chat.module';
+import { GitReposModule } from '../git-repos/git-repos.module';
 import { IssuesModule } from '../issues/issues.module';
 import { QuestionsModule } from '../questions/questions.module';
 import { RealtimeModule } from '../realtime/realtime.module';
@@ -11,6 +12,7 @@ import { WorkersModule } from '../workers/workers.module';
 import { WorkerTokenGuard } from '../workers/worker-token.guard';
 import { PlatformMcpController } from './platform-mcp.controller';
 import { PlatformMcpService } from './platform-mcp.service';
+import { SkillsModule } from '../skills/skills.module';
 
 /**
  * 平台 MCP 模块（阶段 1：server 平台 MCP 端点，SDK + StreamableHTTP）。
@@ -45,10 +47,14 @@ import { PlatformMcpService } from './platform-mcp.service';
     ChatModule,
     ArtifactsModule,
     ExecutionPoliciesModule,
+    GitReposModule,
     IssuesModule,
     TasksModule,
     QuestionsModule,
     NotificationChannelsModule,
+    // F2-M4：SkillsService 改由 SkillsModule 导出（单实例复用）；
+    // SkillsModule 仅依赖 RealtimeModule/WorkersModule（均不反向依赖本模块），无环。
+    SkillsModule,
   ],
   controllers: [PlatformMcpController],
   providers: [PlatformMcpService, WorkerTokenGuard],

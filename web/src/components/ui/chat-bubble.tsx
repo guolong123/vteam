@@ -79,6 +79,8 @@ export function ChatBubble({
   const bubbleBase: CSSProperties = {
     width: "fit-content",
     maxWidth: "100%",
+    minWidth: 0,
+    overflowWrap: "break-word",
     padding: `${space.md}px ${space.lg}px`,
     borderRadius: radius.lg,
     fontSize: fontSize.md,
@@ -213,7 +215,8 @@ export function ChatBubble({
                     color: "#FFFFFF",
                     borderTopRightRadius: radius.sm,
                     boxShadow: shadow.sm,
-                    maxWidth: attachment ? 520 : undefined,
+                    overflow: "hidden",
+                    maxWidth: attachment ? 520 : "100%",
                   }
                 : {
                     ...bubbleBase,
@@ -223,7 +226,8 @@ export function ChatBubble({
                     borderLeft: isMentionMe ? `3px solid ${mention.accent}` : `1px solid ${neutral[200]}`,
                     borderTopLeftRadius: radius.sm,
                     boxShadow: isMentionMe ? `0 0 0 1px rgba(13,148,136,0.15)` : shadow.sm,
-                    maxWidth: attachment ? 520 : undefined,
+                    overflow: "hidden",
+                    maxWidth: attachment ? 520 : "100%",
                   }
             }
           >

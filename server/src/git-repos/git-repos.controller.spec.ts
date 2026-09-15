@@ -129,41 +129,37 @@ describe('GitReposController DTO 校验（class-validator）', () => {
   it('CreateGitRepoDto：合法输入无错误', async () => {
     const dto = plainToInstance(CreateGitRepoDto, {
       repoUrl: 'git@gitee.com:xishuhq/test-repo.git',
-      authType: 'ssh_key',
-      key: '-----BEGIN OPENSSH PRIVATE KEY-----',
+      credentialId: 'gc_0000000001',
       grantedAgents: [{ agentId: 'a_tester' }],
     });
     const errors = await validate(dto);
     expect(errors).toHaveLength(0);
   });
 
-  it('CreateGitRepoDto：authType 非法 → 400 校验错误', async () => {
+  it('CreateGitRepoDto：credentialId 空 → 400 校验错误', async () => {
     const dto = plainToInstance(CreateGitRepoDto, {
       repoUrl: 'git@gitee.com:xishuhq/test-repo',
-      authType: 'plain',
-      key: 'k',
+      credentialId: '',
     });
     const errors = await validate(dto);
     expect(errors).toHaveLength(1);
-    expect(errors[0].property).toBe('authType');
+    expect(errors[0].property).toBe('credentialId');
   });
 
-  it('CreateGitRepoDto：repoUrl 空 / key 空 → 校验错误', async () => {
+  it('CreateGitRepoDto：repoUrl 空 / credentialId 空 → 校验错误', async () => {
     const dto = plainToInstance(CreateGitRepoDto, {
       repoUrl: '',
-      authType: 'https_token',
-      key: '',
+      credentialId: '',
     });
     const errors = await validate(dto);
     const props = errors.map((e) => e.property).sort();
-    expect(props).toEqual(['key', 'repoUrl']);
+    expect(props).toEqual(['credentialId', 'repoUrl']);
   });
 
   it('CreateGitRepoDto：grantedAgents.permission 越界 → 嵌套校验错误', async () => {
     const dto = plainToInstance(CreateGitRepoDto, {
       repoUrl: 'git@gitee.com:xishuhq/test-repo',
-      authType: 'ssh_key',
-      key: 'k',
+      credentialId: 'gc_0000000001',
       grantedAgents: [{ agentId: 'a_tester', permission: 'admin' }],
     });
     const errors = await validate(dto);
@@ -174,8 +170,7 @@ describe('GitReposController DTO 校验（class-validator）', () => {
   it('CreateGitRepoDto：grantedAgents 缺省合法（创建不授权）', async () => {
     const dto = plainToInstance(CreateGitRepoDto, {
       repoUrl: 'git@gitee.com:xishuhq/test-repo',
-      authType: 'ssh_key',
-      key: 'k',
+      credentialId: 'gc_0000000001',
     });
     const errors = await validate(dto);
     expect(errors).toHaveLength(0);

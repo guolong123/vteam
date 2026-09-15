@@ -7,6 +7,7 @@ import {
   Logger,
   NotFoundException,
   Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
@@ -31,12 +32,22 @@ import { TaskTransitionAction } from '../common/constants/task.constants';
 import { TasksService } from '../tasks/tasks.service';
 import { QuestionsService } from '../questions/questions.service';
 import { AGENT_QUESTION_STATUS } from '../questions/questions.constants';
-import { MEMORY_LEVELS, MemoryLevel } from '../memories/memory.constants';
+import {
+  MEMORY_ERRORS,
+  MEMORY_LEVELS,
+  MemoryLevel,
+  MemorySaveStatus,
+  MemoryUpdateStatus,
+  computeMemoryContentHash,
+} from '../memories/memory.constants';
 import {
   PLATFORM_MCP_ERRORS,
   validateTsxPrototype,
 } from './platform-mcp.constants';
 import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service';
+import { SkillsService } from '../skills/skills.service';
+import { GitReposService, GitRepoView } from '../git-repos/git-repos.service';
+import { parseSkillMarkdown } from '../skills/skill-frontmatter.util';
 import { ModuleRef } from '@nestjs/core';
 import {
   containsTeamWideMention,
@@ -94,9 +105,29 @@ export interface ReadFileResult {
   truncated?: boolean;
 }
 
+/**
+ * git_repos_list 返回的脱敏仓库行（T6 P6 读取补齐）。
+ * - 无任何凭证 key 明文（GitRepoView 本身即脱敏：credentialRef 永不进视图）。
+ * - repoUrl 视同敏感：调用方仅凭授权可见，服务端永不打进日志（日志仅记条数/id）。
+ */
+export interface GitRepoListItem {
+  id: string;
+  /** 敏感：仓库地址，仅授权实例可见，禁止日志输出。 */
+  repoUrl: string;
+  credentialName: string | null;
+  authType: string;
+  fingerprint: string;
+  /** 调用方自身授权（该行 grantedAgents 中属于调用方模板 Agent 的那条）。 */
+  permission: string;
+  effect: string;
+}
+
 /** read_file 常量：默认读取上限 256KB，上限 1MB（与 tools.ts inputSchema max 对齐）。 */
 const READ_FILE_DEFAULT_MAX_BYTES = 256 * 1024;
 const READ_FILE_MAX_BYTES = 1024 * 1024;
+
+/** skill_create 常量：SKILL.md 全文服务端强制上限 100KB（与 skills.controller multipart 上限对齐）。 */
+const SKILL_CREATE_MAX_BYTES = 100 * 1024;
 
 /**
  * 平台 MCP 工具实现（阶段 1）。
@@ -127,6 +158,7 @@ export class PlatformMcpService {
     private readonly issuesService: IssuesService,
     private readonly tasksService: TasksService,
     private readonly questionsService: QuestionsService,
+    private readonly gitRepos: GitReposService,
     @Optional()
     @Inject(NotificationDispatcherService)
     private readonly outboundDispatcher: NotificationDispatcherService,
@@ -137,6 +169,11 @@ export class PlatformMcpService {
     @Optional()
     @Inject(ExecutionPolicyService)
     private readonly executionPolicyService?: ExecutionPolicyService,
+    // 技能沉淀（skill_create）：缺省可空——单测/旧装配未提供时调用抛 503
+    // 而非启动期崩溃；生产装配由 PlatformMcpModule 提供。
+    @Optional()
+    @Inject(SkillsService)
+    private readonly skillsService?: SkillsService,
   ) {}
 
   /**
@@ -156,11 +193,27 @@ export class PlatformMcpService {
     args: {
       taskId?: string;
       teamId?: string;
+      /** DM 对端成员 id（tmm_ 前缀）：传即进 DM 模式，按 (团队, 该成员) 定位私聊频道。 */
+      teamMemberId?: string;
+      /** 调用方实例 id：DM 模式必填（实例级归属绑定），群聊模式可选。 */
+      selfInstanceId?: string;
       sinceId?: string;
       limit?: number;
     },
   ): Promise<ChatHistoryItem[]> {
+    if (args.teamMemberId && !args.selfInstanceId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: '私聊历史需声明调用方身份（selfInstanceId），禁止匿名访问',
+      });
+    }
     const exec = await this.resolveExecContext(ctx, args);
+    if (args.teamMemberId) {
+      return this.chatHistoryDm(exec, ctx, args.teamMemberId, {
+        sinceId: args.sinceId,
+        limit: args.limit,
+      });
+    }
     const channel =
       exec.kind === 'task'
         ? await this.findTaskGroupChannel(exec.taskId)
@@ -181,6 +234,129 @@ export class PlatformMcpService {
       take: limit,
     });
     return rows.map((row) => this.toChatHistoryItem(row));
+  }
+
+  /**
+   * chat_history DM 模式（T6 D6：同团队 DM + 审计，不做全量 DM 开放）。
+   * 按 (执行团队, peerMemberId) 定位 private 频道，三门：
+   * caller-is-endpoint（callerId === channel.teamMemberId）+ 同 teamId +
+   * worker-team 会话绑定（assertWorkerTeam，经 resolveExecContext 按
+   * selfInstanceId 实例级绑定，对齐 memoryUpdate/gitReposList 落库先例；
+   * DM 模式 selfInstanceId 必填，缺失 403）。
+   * 任一不满足 → 403；频道不存在 → 404。每次访问写审计日志（仅 id，不记内容）。
+   */
+  private async chatHistoryDm(
+    exec: ExecContext,
+    ctx: PlatformMcpContext,
+    peerMemberId: string,
+    opts: { sinceId?: string; limit?: number },
+  ): Promise<ChatHistoryItem[]> {
+    const execTeamId =
+      exec.kind === 'team' ? exec.teamId : await this.teamIdOfTask(exec.taskId);
+    if (!execTeamId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: '私聊历史需要团队上下文，禁止跨团队访问',
+      });
+    }
+    await this.assertWorkerTeam(ctx, execTeamId);
+    const channel = await this.prisma.chatChannel.findFirst({
+      where: {
+        teamMemberId: peerMemberId,
+        type: CHANNEL_TYPE.private,
+        deletedAt: null,
+      },
+    });
+    if (!channel) {
+      throw new NotFoundException({
+        code: PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
+        message: '私聊频道不存在',
+      });
+    }
+    if ((channel as { teamId?: string | null }).teamId !== execTeamId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: '仅同团队私聊可读，禁止跨团队访问',
+      });
+    }
+    if (
+      (channel as { teamMemberId?: string | null }).teamMemberId !==
+      exec.callerId
+    ) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: '仅私聊端点可读该私聊历史',
+      });
+    }
+    this.logger.log(
+      `[mcp] chat_history DM 访问 team=${execTeamId} channel=${channel.id} caller=${exec.callerId}`,
+    );
+    const limit = this.normalizeLimit(opts.limit);
+    const rows = await this.prisma.message.findMany({
+      where: {
+        channelId: channel.id,
+        ...(opts.sinceId ? { id: { gt: opts.sinceId } } : {}),
+      },
+      orderBy: { id: 'asc' },
+      take: limit,
+    });
+    return rows.map((row) => this.toChatHistoryItem(row));
+  }
+
+  /**
+   * git_repos_list：调用方被授权仓库只读清单（T6 P6 读取补齐）。
+   * task_create 式双上下文 + selfInstanceId：resolveExecContext 解析执行上下文
+   * （归属冒充先行 403）；授权按模板 Agent 过滤——GitRepoGrant 以模板 agentId
+   * 键控，调用方实例 id 先经 TeamMember 解析为模板 agentId（解析不到时回退
+   * callerId 本身，兼容 session.agentId 形态）。
+   * 仅返回调用方持有未吊销授权的行（findAll 本身只含未吊销行）；行脱敏：
+   * 无凭证 key 明文（视图天然不含 credentialRef），repoUrl 视同敏感（不记日志）。
+   * 已知局限：worker 凭证下发是 worker 级共享（同 worker 多实例 key 明文共存，
+   * 见 WorkersService.dispatchGitCredentials），本工具只做实例级读控制，
+   * 非执行隔离——真隔离需下发期按实例过滤或 git 执行层强制 permission。
+   */
+  async gitReposList(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId?: string;
+      teamId?: string;
+      selfInstanceId: string;
+    },
+  ): Promise<{ repos: GitRepoListItem[] }> {
+    const exec = await this.resolveExecContext(ctx, args);
+    const callerAgentId = await this.resolveCallerAgentId(exec.callerId);
+    const views: GitRepoView[] = await this.gitRepos.findAll();
+    const repos: GitRepoListItem[] = [];
+    for (const view of views) {
+      const grant = view.grantedAgents.find(
+        (g) => g.agentId === callerAgentId,
+      );
+      if (!grant) continue;
+      repos.push({
+        id: view.id,
+        repoUrl: view.repoUrl,
+        credentialName: view.credentialName,
+        authType: view.authType,
+        fingerprint: view.fingerprint,
+        permission: grant.permission,
+        effect: grant.effect,
+      });
+    }
+    this.logger.log(
+      `[mcp] git_repos_list caller=${exec.callerId} repos=${repos.length}`,
+    );
+    return { repos };
+  }
+
+  /**
+   * 调用方实例 → 模板 Agent：授权表以模板 agentId 键控，实例 id 需经成员行换算。
+   */
+  private async resolveCallerAgentId(callerId: string): Promise<string> {
+    const member = await this.prisma.teamMember.findUnique({
+      where: { id: callerId },
+      select: { agentId: true },
+    });
+    return member?.agentId ?? callerId;
   }
 
   /**
@@ -1048,11 +1224,108 @@ export class PlatformMcpService {
   }
 
   /**
+   * skill_create：主 Agent 沉淀新 SKILL.md（learning-mode P2）。
+   * 双上下文主门（对齐 task_create）：任务维度门 = task.mainAgentInstanceId
+   * === 调用方，否则 403；团队维度门 = team.mainAgentMemberId === 调用方，
+   * 否则 403。归属冒充（selfInstanceId 非会话成员）由 resolveExecContext
+   * 经 assertWorkerTask/Team 先行 403。
+   * 内容门：全文超 100KB → 400；parseSkillMarkdown 先行（frontmatter
+   * 非法 → 400 SKILL_FRONTMATTER_INVALID）；file 适配由 MCP 输入合成
+   * （originalname `<name>.md` + utf8 byte length + text/markdown）。
+   * 落库复用 SkillsService.create（事务 + v1 历史，enabled 固定 false
+   * 默认停用，name 重复 409 由其抛出）。
+   */
+  async skillCreate(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId?: string;
+      teamId?: string;
+      selfInstanceId: string;
+      name: string;
+      description?: string;
+      content: string;
+    },
+  ): Promise<unknown> {
+    const exec = await this.resolveExecContext(ctx, args);
+    if (exec.kind === 'task') {
+      const task = await this.prisma.task.findUnique({
+        where: { id: exec.taskId },
+        select: { id: true, teamId: true, mainAgentInstanceId: true },
+      });
+      if (!task) {
+        throw new NotFoundException({
+          code: PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
+          message: '任务不存在',
+        });
+      }
+      if (task.mainAgentInstanceId !== exec.callerId) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: `仅主 Agent（${task.mainAgentInstanceId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`,
+        });
+      }
+    } else {
+      const team = await this.prisma.team.findUnique({
+        where: { id: exec.teamId },
+        select: { id: true, mainAgentMemberId: true },
+      });
+      if (!team) {
+        throw new NotFoundException('团队不存在');
+      }
+      if (team.mainAgentMemberId !== exec.callerId) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: `仅主 Agent（${team.mainAgentMemberId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`,
+        });
+      }
+    }
+    const skills = this.skillsService;
+    if (!skills) {
+      throw new ServiceUnavailableException('技能服务未就绪，无法沉淀技能');
+    }
+    const byteLen = Buffer.byteLength(args.content, 'utf8');
+    if (byteLen > SKILL_CREATE_MAX_BYTES) {
+      throw new BadRequestException(
+        `SKILL.md 全文超过 100KB 上限（实际 ${byteLen} 字节），请精简后重试`,
+      );
+    }
+    const { frontmatter, content } = parseSkillMarkdown(args.content);
+    return skills.create({
+      frontmatter,
+      content,
+      file: {
+        originalname: `${args.name}.md`,
+        size: byteLen,
+        mimetype: 'text/markdown',
+        buffer: Buffer.from(args.content, 'utf8'),
+      },
+    });
+  }
+
+  /**
+   * 精确去重探针（T4 记忆演进，mirror submit_artifact duplicate 语义）。
+   * 同 level + 同归属（team 级按 teamId，global 级 teamId=null）+ 同 contentHash
+   * 的未删除行即命中 → 调用方直接返 duplicate，不新增行。check-then-insert
+   * 竞态接受（不建唯一键）；相似文本合并只做 prompt 提示，不阻塞。
+   */
+  private async findDuplicateMemory(
+    level: MemoryLevel,
+    teamId: string | null,
+    contentHash: string,
+  ): Promise<{ id: string } | null> {
+    return this.prisma.memory.findFirst({
+      where: { deletedAt: null, level, teamId, contentHash },
+      select: { id: true },
+    });
+  }
+
+  /**
    * memory_save 团队维度：仅 team/global（session-unification Todo 9：任务级记忆
    * 已删除，level=task → 400 MEMORY_LEVEL_INVALID）；
    * project 级已下线（400 指引改用 team）；team 级直接落 teamId；
    * global 级仅团队主 Agent 可写（成员 === team.mainAgentMemberId，否则 403）。
    * 落库 taskId 置空（团队记忆无任务归属），createdBy = 团队成员 id。
+   * T4：先按 contentHash 精确去重，命中即返 {status:'duplicate'} 不落库。
    */
   private async memorySaveForTeam(
     teamId: string,
@@ -1064,7 +1337,11 @@ export class PlatformMcpService {
       description?: string;
       tags?: string[];
     },
-  ): Promise<{ memoryId: string; level: MemoryLevel }> {
+  ): Promise<{
+    memoryId: string;
+    level: MemoryLevel;
+    status: MemorySaveStatus;
+  }> {
     if ((args.level as string) === 'project') {
       throw new BadRequestException({
         code: PLATFORM_MCP_ERRORS.MEMORY_INVALID,
@@ -1100,6 +1377,15 @@ export class PlatformMcpService {
     const description = (
       args.description?.trim() || args.content.slice(0, 120)
     ).slice(0, 255);
+    const contentHash = computeMemoryContentHash(args.content);
+    const duplicate = await this.findDuplicateMemory(
+      args.level,
+      args.level === MEMORY_LEVELS.team ? teamId : null,
+      contentHash,
+    );
+    if (duplicate) {
+      return { memoryId: duplicate.id, level: args.level, status: 'duplicate' };
+    }
     const tm = await this.prisma.teamMember.findFirst({
       where: { id: memberId, teamId },
       select: { agentId: true, alias: true },
@@ -1116,6 +1402,7 @@ export class PlatformMcpService {
         taskId: null,
         teamId: args.level === MEMORY_LEVELS.team ? teamId : null,
         content: args.content,
+        contentHash,
         description,
         tags: (args.tags ?? null) as Prisma.InputJsonValue | null,
         createdBy: memberId,
@@ -1127,7 +1414,7 @@ export class PlatformMcpService {
         channelId: channel?.id ?? null,
       } as any,
     });
-    return { memoryId: memory.id, level: args.level };
+    return { memoryId: memory.id, level: args.level, status: 'created' };
   }
 
   /**
@@ -1142,7 +1429,10 @@ export class PlatformMcpService {
    *     否则 403 PLATFORM_MCP_FORBIDDEN，防全局污染）。
    * - 落库 memories（me_ 前缀 IdGenerator 生成；createdBy=selfInstanceId 精确归属；
    *   tags 为 Json 列，无标签传 null）。
-   * 返回 {memoryId, level}。
+   * - T4 精确去重：同 level + 同归属 + 同 contentHash（sha256 归一化 content）的
+   *   未删除行已存在 → 返回 {memoryId, level, status:'duplicate'}，不新增行
+   *   （mirror submit_artifact duplicate 语义；相似文本合并只做 prompt 提示）。
+   * 返回 {memoryId, level, status}。
    */
   async memorySave(
     ctx: PlatformMcpContext,
@@ -1155,7 +1445,11 @@ export class PlatformMcpService {
       description?: string;
       tags?: string[];
     },
-  ): Promise<{ memoryId: string; level: MemoryLevel }> {
+  ): Promise<{
+    memoryId: string;
+    level: MemoryLevel;
+    status: MemorySaveStatus;
+  }> {
     const exec = await this.resolveExecContext(ctx, args);
     // 团队维度：task 级记忆必须有任务锚点（干净 400 指引传 taskId）；
     // team/global 级走团队分支（team.mainAgentMemberId 仅约束 global）。
@@ -1223,6 +1517,15 @@ export class PlatformMcpService {
     const description = (
       args.description?.trim() || args.content.slice(0, 120)
     ).slice(0, 255);
+    const contentHash = computeMemoryContentHash(args.content);
+    const duplicate = await this.findDuplicateMemory(
+      args.level,
+      memoryTeamId,
+      contentHash,
+    );
+    if (duplicate) {
+      return { memoryId: duplicate.id, level: args.level, status: 'duplicate' };
+    }
     let sourceAgentId: string | null = null;
     let sessionId: string | null = null;
     let sessionTitle: string | null = null;
@@ -1265,6 +1568,7 @@ export class PlatformMcpService {
         taskId: memoryTaskId,
         teamId: memoryTeamId,
         content: args.content,
+        contentHash,
         description,
         tags: (args.tags ?? null) as Prisma.InputJsonValue | null,
         createdBy: args.selfInstanceId,
@@ -1276,7 +1580,124 @@ export class PlatformMcpService {
         channelId,
       } as any,
     });
-    return { memoryId: memory.id, level: args.level };
+    return { memoryId: memory.id, level: args.level, status: 'created' };
+  }
+
+  /**
+   * memory_update：按 id 更新平台记忆（T4 记忆演进，content/description/tags 部分更新）。
+   * 1. 双上下文归属校验（resolveExecContext：worker 会话 + selfInstanceId 防冒充，
+   *    复用 assertWorkerTask/Team）。
+   * 2. 先读行：不存在/已软删 → 404 MEMORY_NOT_FOUND。
+   * 3. 团队所有权：team 级行要求行 teamId === 执行团队（task 维度取任务所属团队），
+   *    否则 403；global 级行仅执行团队主 Agent 可改（mirror save 的主门），否则 403；
+   *    存量 task 级行要求同任务，否则 403。
+   * 4. 全空 → 400；content 传空字串/空白 → 400（防空内容覆盖有效记忆）；
+   *    content 更新同步重算 contentHash。
+   * 返回 {memoryId, level, status:'updated'}。
+   */
+  async memoryUpdate(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId?: string;
+      teamId?: string;
+      selfInstanceId: string;
+      memoryId: string;
+      content?: string;
+      description?: string;
+      tags?: string[];
+    },
+  ): Promise<{
+    memoryId: string;
+    level: string;
+    status: MemoryUpdateStatus;
+  }> {
+    const exec = await this.resolveExecContext(ctx, args);
+    const row = await this.prisma.memory.findUnique({
+      where: { id: args.memoryId },
+    });
+    if (!row || row.deletedAt) {
+      throw new NotFoundException({
+        code: MEMORY_ERRORS.MEMORY_NOT_FOUND,
+        message: '记忆条目不存在',
+      });
+    }
+    let execTeamId: string | null = null;
+    if (exec.kind === 'team') {
+      execTeamId = exec.teamId;
+    } else {
+      const task = await this.prisma.task.findUnique({
+        where: { id: exec.taskId },
+        select: { teamId: true },
+      });
+      if (!task) {
+        throw new NotFoundException({
+          code: PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
+          message: '任务不存在',
+        });
+      }
+      execTeamId = task.teamId ?? null;
+    }
+    if (row.level === MEMORY_LEVELS.team) {
+      if (!execTeamId || row.teamId !== execTeamId) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: '仅归属团队可更新该记忆，禁止跨团队更新',
+        });
+      }
+    } else if (row.level === MEMORY_LEVELS.global) {
+      const mainTeam = execTeamId
+        ? await this.prisma.team.findUnique({
+            where: { id: execTeamId },
+            select: { mainAgentMemberId: true },
+          })
+        : null;
+      if (!mainTeam || mainTeam.mainAgentMemberId !== exec.callerId) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: '仅主 Agent 可更新全局记忆，禁止普通成员改 global 级',
+        });
+      }
+    } else if (exec.kind !== 'task' || row.taskId !== exec.taskId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: '仅归属任务可更新该记忆，禁止跨任务更新',
+      });
+    }
+    if (
+      args.content === undefined &&
+      args.description === undefined &&
+      args.tags === undefined
+    ) {
+      throw new BadRequestException({
+        code: PLATFORM_MCP_ERRORS.MEMORY_INVALID,
+        message: '至少提供 content/description/tags 之一',
+      });
+    }
+    if (args.content !== undefined && args.content.trim().length === 0) {
+      throw new BadRequestException({
+        code: PLATFORM_MCP_ERRORS.MEMORY_INVALID,
+        message: 'content 不得为空（空白字符视为未提供有效内容）',
+      });
+    }
+    const data: Prisma.MemoryUpdateInput = {};
+    if (args.content !== undefined) {
+      data.content = args.content;
+      data.contentHash = computeMemoryContentHash(args.content);
+    }
+    if (args.description !== undefined) {
+      data.description = (
+        args.description.trim() ||
+        (args.content ?? row.content).slice(0, 120)
+      ).slice(0, 255);
+    }
+    if (args.tags !== undefined) {
+      data.tags = args.tags as Prisma.InputJsonValue;
+    }
+    const updated = await this.prisma.memory.update({
+      where: { id: row.id },
+      data,
+    });
+    return { memoryId: updated.id, level: updated.level, status: 'updated' };
   }
 
   /**
