@@ -76,3 +76,12 @@ export class QueryArtifactsDto {
   @Min(1)
   pageSize?: number;
 }
+
+/** POST /artifacts/:id/restore body（T5 append-as-new：历史版本复制为新当前版本）。 */
+export class RestoreArtifactDto {
+  @ApiProperty({ description: '待恢复的历史版本号（从 1 起）', minimum: 1 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  version: number;
+}

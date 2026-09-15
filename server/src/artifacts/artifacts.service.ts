@@ -32,10 +32,12 @@ export interface ArtifactSubmittedPayload {
   fileRef?: string;
 }
 
-/** append 元信息（12 篇 §4.1：作者 Agent / 变更说明）。 */
+/** append 元信息（12 篇 §4.1：作者 Agent / 变更说明；T5：force 绕过 sha256 去重）。 */
 export interface AppendMeta {
   authorAgentId?: string;
   changeNote?: string;
+  /** force=true 时跳过 sha256 幂等去重、强制 append 新版（T5 restore 恢复相同内容用）。 */
+  force?: boolean;
 }
 
 /**
@@ -153,16 +155,19 @@ export class ArtifactsService implements OnModuleInit {
     const content = submission.content ?? '';
     const sha256 = createHash('sha256').update(content).digest('hex');
 
-    // 幂等去重（12 篇 §4.3 / 09 §5.4）：同 taskId+type+sha256 已归档 → 跳过，版本不增
-    const dup = await this.prisma.artifactVersion.findFirst({
-      where: { sha256, artifact: { taskId, type } },
-      include: { artifact: true },
-    });
-    if (dup) {
-      return {
-        status: 'duplicate',
-        artifact: this.toArtifactListItem(dup.artifact, dup),
-      };
+    // 幂等去重（12 篇 §4.3 / 09 §5.4）：同 taskId+type+sha256 已归档 → 跳过，版本不增；
+    // force=true（T5 restore）→ 绕过去重强制新版，否则恢复相同内容会静默 duplicate 不递增
+    if (!meta.force) {
+      const dup = await this.prisma.artifactVersion.findFirst({
+        where: { sha256, artifact: { taskId, type } },
+        include: { artifact: true },
+      });
+      if (dup) {
+        return {
+          status: 'duplicate',
+          artifact: this.toArtifactListItem(dup.artifact, dup),
+        };
+      }
     }
 
     // 归档：同 taskId+type+title → append 新版本（FR-43）；否则新建 v1
@@ -271,6 +276,105 @@ export class ArtifactsService implements OnModuleInit {
     return {
       status: 'archived',
       artifact: this.toArtifactListItem(artifact, current),
+    };
+  }
+
+  /**
+   * 历史版本恢复（T5 append-as-new，15 篇私域 §3-P5/§4-T5/§7-item-4）。
+   * 定 append-as-new：指针回退会孤立版本、与 acceptedFlag 审计冲突，明确禁用；
+   * 本方法复用 append 的版本递增事务 + append 后副作用（completed 退回 in_progress、
+   * docsMirror 同步），但显式绕过 sha256 幂等去重（force 语义：恢复相同内容也必须
+   * 递增，新版本 changeNote=`restore from vX`），内容与源版本逐字段相同。
+   * - 产出物不存在 → 404 ARTIFACT_NOT_FOUND；源版本不存在 → 404 ARTIFACT_VERSION_NOT_FOUND
+   * - 当前版本 acceptedFlag=true → 409 ARTIFACT_ACCEPTED_IMMUTABLE（与 append 同语义）
+   */
+  async restore(
+    artifactId: string,
+    version: number,
+  ): Promise<{ status: string; artifact?: unknown }> {
+    const artifact = await this.prisma.artifact.findUnique({
+      where: { id: artifactId },
+    });
+    if (!artifact) {
+      throw new NotFoundException({
+        code: ARTIFACT_ERRORS.ARTIFACT_NOT_FOUND,
+        message: `产出物 ${artifactId} 不存在`,
+      });
+    }
+    const source = await this.prisma.artifactVersion.findFirst({
+      where: { artifactId, version },
+    });
+    if (!source) {
+      throw new NotFoundException({
+        code: ARTIFACT_ERRORS.ARTIFACT_VERSION_NOT_FOUND,
+        message: `产出物 ${artifactId} 版本 ${version} 不存在`,
+      });
+    }
+    const current = await this.prisma.artifactVersion.findUnique({
+      where: {
+        artifactId_version: {
+          artifactId,
+          version: artifact.currentVersion,
+        },
+      },
+      select: { acceptedFlag: true },
+    });
+    if (current?.acceptedFlag) {
+      throw new ConflictException({
+        code: ARTIFACT_ERRORS.ARTIFACT_ACCEPTED_IMMUTABLE,
+        message: `产出物「${artifact.title}」当前版本已验收锁定（v${artifact.currentVersion}），不可恢复`,
+      });
+    }
+
+    const { updated, created } = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.artifact.update({
+        where: { id: artifactId },
+        data: { currentVersion: artifact.currentVersion + 1 },
+      });
+      const created = await tx.artifactVersion.create({
+        data: {
+          id: await this.idGen.nextId(ID_PREFIX.version),
+          artifactId,
+          version: updated.currentVersion,
+          contentRef: source.contentRef,
+          filePath: source.filePath,
+          sha256: source.sha256,
+          acceptedFlag: false,
+          authorAgentId: null,
+          changeNote: `restore from v${version}`,
+        },
+      });
+      return { updated, created };
+    });
+
+    const reverted = await this.prisma.task.updateMany({
+      where: { id: artifact.taskId, status: TASK_STATUS.completed },
+      data: { status: TASK_STATUS.in_progress, version: { increment: 1 } },
+    });
+    if (reverted.count > 0) {
+      await this.realtime.broadcast(
+        EVENT_TYPES.TASK_STATUS_CHANGED,
+        {
+          taskId: artifact.taskId,
+          from: TASK_STATUS.completed,
+          to: TASK_STATUS.in_progress,
+          actorType: ACTOR_TYPE.system,
+          actorId: null,
+        },
+        { type: 'global' },
+      );
+    }
+
+    if (
+      (artifact.type === 'doc' || artifact.type === 'file') &&
+      this.docsMirror
+    ) {
+      void this.docsMirror.syncTask(artifact.taskId);
+    }
+
+    return {
+      status: 'restored',
+      artifact: this.toArtifactListItem(updated, created),
     };
   }
 

@@ -13,7 +13,11 @@ import { UseGuards } from '@nestjs/common';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { ArtifactsService } from './artifacts.service';
-import { CreateArtifactDto, QueryArtifactsDto } from './dto/artifact.dto';
+import {
+  CreateArtifactDto,
+  QueryArtifactsDto,
+  RestoreArtifactDto,
+} from './dto/artifact.dto';
 
 /**
  * 产出物端点（09 篇 §3.6 Artifacts / 12 篇 §6 文档库）。
@@ -91,6 +95,21 @@ export class ArtifactsController {
       content: dto.content ?? '',
       fileRef: dto.fileRef,
     });
+  }
+
+  /**
+   * 历史版本恢复（T5 append-as-new：复制 vX 内容为新当前版本，不做指针回退）。
+   * POST /api/v1/artifacts/:id/restore body {version}
+   *   → 201 {status: 'restored', artifact}；源版本不存在 → 404
+   *   `ARTIFACT_VERSION_NOT_FOUND`；当前版本已验收锁定 → 409
+   *   `ARTIFACT_ACCEPTED_IMMUTABLE`
+   */
+  @Post('artifacts/:id/restore')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('artifacts.edit')
+  @ApiOperation({ summary: '恢复历史版本为新版本（append-as-new）' })
+  restore(@Param('id') id: string, @Body() dto: RestoreArtifactDto) {
+    return this.artifactsService.restore(id, dto.version);
   }
 
   /**

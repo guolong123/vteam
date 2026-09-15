@@ -14,6 +14,7 @@ describe('ArtifactsController', () => {
     findOne: jest.fn(),
     findVersion: jest.fn(),
     append: jest.fn(),
+    restore: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -96,6 +97,20 @@ describe('ArtifactsController', () => {
     });
   });
 
+  it('POST /artifacts/:id/restore：转发 restore（id + version）', async () => {
+    service.restore.mockResolvedValue({
+      status: 'restored',
+      artifact: { id: 'art_0000000001' },
+    });
+    await expect(
+      controller.restore('art_0000000001', { version: 1 }),
+    ).resolves.toEqual({
+      status: 'restored',
+      artifact: { id: 'art_0000000001' },
+    });
+    expect(service.restore).toHaveBeenCalledWith('art_0000000001', 1);
+  });
+
   describe('权限点守卫（CONF-02 方案②补齐矩阵守卫）', () => {
     const permOf = (handler: (...args: unknown[]) => unknown) =>
       Reflect.getMetadata(REQUIRE_PERMISSION_KEY, handler);
@@ -108,6 +123,10 @@ describe('ArtifactsController', () => {
 
     it('旁路补充提交挂 artifacts.create', () => {
       expect(permOf(controller.append)).toBe('artifacts.create');
+    });
+
+    it('恢复历史版本挂 artifacts.edit（改写当前版本指针语义，需编辑权）', () => {
+      expect(permOf(controller.restore)).toBe('artifacts.edit');
     });
   });
 });

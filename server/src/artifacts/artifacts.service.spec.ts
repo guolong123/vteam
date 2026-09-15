@@ -552,6 +552,127 @@ describe('ArtifactsService', () => {
     });
   });
 
+  describe('restore（T5 append-as-new：历史版本复制为新当前版本）', () => {
+    const artifactRow = {
+      id: 'art_0000000001',
+      taskId: 't_0000000001',
+      type: 'text',
+      title: '验收结论',
+      currentVersion: 2,
+    };
+    const sourceV1 = {
+      id: 'artv_0000000001',
+      artifactId: 'art_0000000001',
+      version: 1,
+      contentRef: '旧内容',
+      filePath: null,
+      sha256: sha('旧内容'),
+      acceptedFlag: false,
+      authorAgentId: null,
+      changeNote: null,
+      createdAt: FIXED_DATE,
+    };
+
+    it('restore-creates-new-version：复制 v1 内容为 v3（内容相同，changeNote=restore from v1）', async () => {
+      prisma.artifact.findUnique.mockResolvedValue(artifactRow);
+      prisma.artifactVersion.findFirst.mockResolvedValue(sourceV1);
+      prisma.artifactVersion.findUnique.mockResolvedValue({
+        acceptedFlag: false,
+      });
+      prisma.artifact.update.mockResolvedValue({
+        ...artifactRow,
+        currentVersion: 3,
+        createdAt: FIXED_DATE,
+        updatedAt: FIXED_DATE,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000003',
+        artifactId: 'art_0000000001',
+        version: 3,
+        contentRef: '旧内容',
+        filePath: null,
+        sha256: sha('旧内容'),
+        acceptedFlag: false,
+        authorAgentId: null,
+        changeNote: 'restore from v1',
+        createdAt: FIXED_DATE,
+      });
+
+      const result = await service.restore('art_0000000001', 1);
+
+      // 去重绕过：内容与 v1 完全相同仍强制递增，不走 duplicate 短路
+      expect(result.status).toBe('restored');
+      expect(prisma.artifact.update).toHaveBeenCalledWith({
+        where: { id: 'art_0000000001' },
+        data: { currentVersion: 3 },
+      });
+      expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          artifactId: 'art_0000000001',
+          version: 3,
+          contentRef: '旧内容',
+          filePath: null,
+          sha256: sha('旧内容'),
+          acceptedFlag: false,
+          changeNote: 'restore from v1',
+        }),
+      });
+      expect(result.artifact).toEqual(
+        expect.objectContaining({
+          id: 'art_0000000001',
+          currentVersion: 3,
+        }),
+      );
+    });
+
+    it('restore-nonexistent-version：源版本不存在 → 404 ARTIFACT_VERSION_NOT_FOUND（不写库）', async () => {
+      prisma.artifact.findUnique.mockResolvedValue(artifactRow);
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+
+      await expect(service.restore('art_0000000001', 99)).rejects.toMatchObject(
+        {
+          status: 404,
+          response: { code: 'ARTIFACT_VERSION_NOT_FOUND' },
+        },
+      );
+      expect(prisma.artifact.update).not.toHaveBeenCalled();
+      expect(prisma.artifactVersion.create).not.toHaveBeenCalled();
+      expect(prisma.task.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('产出物不存在 → 404 ARTIFACT_NOT_FOUND（不写库）', async () => {
+      prisma.artifact.findUnique.mockResolvedValue(null);
+
+      await expect(service.restore('art_999', 1)).rejects.toMatchObject({
+        status: 404,
+        response: { code: 'ARTIFACT_NOT_FOUND' },
+      });
+      expect(prisma.artifact.update).not.toHaveBeenCalled();
+      expect(prisma.artifactVersion.create).not.toHaveBeenCalled();
+    });
+
+    it('restore-locked：当前版本已验收 → 409 ARTIFACT_ACCEPTED_IMMUTABLE（不写库）', async () => {
+      prisma.artifact.findUnique.mockResolvedValue(artifactRow);
+      prisma.artifactVersion.findFirst.mockResolvedValue(sourceV1);
+      prisma.artifactVersion.findUnique.mockResolvedValue({
+        acceptedFlag: true,
+      });
+
+      try {
+        await service.restore('art_0000000001', 1);
+        fail('应抛出 ConflictException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ConflictException);
+        expect((e as ConflictException).getResponse()).toMatchObject({
+          code: 'ARTIFACT_ACCEPTED_IMMUTABLE',
+        });
+      }
+      expect(prisma.artifact.update).not.toHaveBeenCalled();
+      expect(prisma.artifactVersion.create).not.toHaveBeenCalled();
+      expect(prisma.task.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
   describe('archiveFile（文件归档公共方法，POST /uploads 与 submit_artifact doc/file 共用）', () => {
     it('新建 v1：无幂等命中、无同 title file 产出物 → create artifact(currentVersion=1) + version 1（contentRef=storedUrl、filePath=fileRef 原文）', async () => {
       prisma.artifactVersion.findFirst.mockResolvedValue(null);
