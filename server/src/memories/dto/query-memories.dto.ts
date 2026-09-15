@@ -1,6 +1,17 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+} from 'class-validator';
 import { MEMORY_LEVELS } from '../memory.constants';
 
 /**
@@ -52,4 +63,32 @@ export class QueryMemoriesDto {
   @Min(1)
   @Max(100)
   pageSize?: number;
+}
+
+/**
+ * PATCH /memories/:id 部分更新体（T4 记忆演进）。
+ * content/description/tags 至少传一个（全空 → 400 MEMORY_UPDATE_EMPTY）；
+ * content 更新时服务端同步重算 contentHash（精确去重键保持与正文一致）。
+ */
+export class UpdateMemoryDto {
+  @ApiPropertyOptional({ description: '记忆正文（更新后重算去重键）' })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(20000)
+  content?: string;
+
+  @ApiPropertyOptional({ description: '记忆摘要（1~255 字符）' })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  description?: string;
+
+  @ApiPropertyOptional({ description: '记忆标签（≤20 个，全量替换）' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(20)
+  tags?: string[];
 }

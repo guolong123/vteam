@@ -14,6 +14,9 @@ describe('MemoriesService', () => {
       findUnique: jest.Mock;
       update: jest.Mock;
     };
+    teamUserMember: {
+      findUnique: jest.Mock;
+    };
   };
 
   beforeEach(async () => {
@@ -30,6 +33,9 @@ describe('MemoriesService', () => {
         count: jest.fn(),
         findUnique: jest.fn(),
         update: jest.fn(),
+      },
+      teamUserMember: {
+        findUnique: jest.fn(),
       },
     };
 
@@ -235,6 +241,186 @@ describe('MemoriesService', () => {
         response: { code: 'MEMORY_NOT_FOUND' },
       });
       expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
+
+    it('team 级行非成员 → 403 PERMISSION_TEAM_NOT_MEMBER（不删除，与 PATCH 对齐）', async () => {
+      prisma.memory.findUnique.mockResolvedValue({
+        id: 'me_0000000001',
+        teamId: 'tm_1',
+        deletedAt: null,
+      });
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.remove('me_0000000001', { id: 'u_stranger' }),
+      ).rejects.toMatchObject({
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
+      });
+      expect(prisma.teamUserMember.findUnique).toHaveBeenCalledWith({
+        where: { teamId_userId: { teamId: 'tm_1', userId: 'u_stranger' } },
+        select: { id: true },
+      });
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
+
+    it('team 级行成员可删：软删落库', async () => {
+      prisma.memory.findUnique.mockResolvedValue({
+        id: 'me_0000000001',
+        teamId: 'tm_1',
+        deletedAt: null,
+      });
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.memory.update.mockResolvedValue({
+        id: 'me_0000000001',
+        deletedAt: new Date('2026-08-15T00:00:00Z'),
+      });
+
+      const out = await service.remove('me_0000000001', { id: 'u_1' });
+
+      expect(prisma.memory.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'me_0000000001' },
+          data: expect.objectContaining({ deletedAt: expect.any(Date) }),
+        }),
+      );
+      expect(out.deletedAt).toBeInstanceOf(Date);
+    });
+
+    it('global 级行（teamId 为空）不查成员表，直接软删', async () => {
+      prisma.memory.findUnique.mockResolvedValue({
+        id: 'me_0000000001',
+        teamId: null,
+        deletedAt: null,
+      });
+      prisma.memory.update.mockResolvedValue({
+        id: 'me_0000000001',
+        deletedAt: new Date('2026-08-15T00:00:00Z'),
+      });
+
+      await service.remove('me_0000000001', { id: 'u_admin' });
+
+      expect(prisma.teamUserMember.findUnique).not.toHaveBeenCalled();
+      expect(prisma.memory.update).toHaveBeenCalled();
+    });
+  });
+
+  describe('update（PATCH 部分更新 + 团队归属）', () => {
+    const row = (overrides: Record<string, unknown> = {}) => ({
+      id: 'me_0000000001',
+      level: 'team',
+      teamId: 'tm_1',
+      content: '旧经验',
+      description: '旧摘要',
+      tags: null,
+      deletedAt: null,
+      ...overrides,
+    });
+
+    it('条目不存在 → 404 MEMORY_NOT_FOUND（不更新）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.update('me_missing', { content: 'x' }, { id: 'u_1' }),
+      ).rejects.toMatchObject({
+        response: { code: 'MEMORY_NOT_FOUND', message: '记忆条目不存在' },
+      });
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
+
+    it('已软删条目 → 404 MEMORY_NOT_FOUND（不更新）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(
+        row({ deletedAt: new Date('2026-08-10T00:00:00Z') }),
+      );
+
+      await expect(
+        service.update('me_0000000001', { content: 'x' }, { id: 'u_1' }),
+      ).rejects.toMatchObject({ response: { code: 'MEMORY_NOT_FOUND' } });
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
+
+    it('全空 → 400 MEMORY_UPDATE_EMPTY（不更新）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+
+      await expect(
+        service.update('me_0000000001', {}, { id: 'u_1' }),
+      ).rejects.toMatchObject({ response: { code: 'MEMORY_UPDATE_EMPTY' } });
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
+
+    it('team 级行非成员 → 403 PERMISSION_TEAM_NOT_MEMBER（不更新）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.update('me_0000000001', { content: 'x' }, { id: 'u_stranger' }),
+      ).rejects.toMatchObject({
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
+      });
+      expect(prisma.teamUserMember.findUnique).toHaveBeenCalledWith({
+        where: { teamId_userId: { teamId: 'tm_1', userId: 'u_stranger' } },
+        select: { id: true },
+      });
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
+
+    it('成员更新 content：同步重算 contentHash（sha256 hex）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.memory.update.mockResolvedValue({
+        id: 'me_0000000001',
+        content: '新经验',
+      });
+
+      const out = await service.update(
+        'me_0000000001',
+        { content: '新经验' },
+        { id: 'u_1' },
+      );
+
+      expect(prisma.memory.update).toHaveBeenCalledWith({
+        where: { id: 'me_0000000001' },
+        data: expect.objectContaining({
+          content: '新经验',
+          contentHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        }),
+      });
+      expect(out).toMatchObject({ id: 'me_0000000001' });
+    });
+
+    it('成员部分更新 tags：仅透传 tags，不碰 contentHash', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.memory.update.mockResolvedValue({ id: 'me_0000000001' });
+
+      await service.update(
+        'me_0000000001',
+        { tags: ['复盘'] },
+        { id: 'u_1' },
+      );
+
+      expect(prisma.memory.update).toHaveBeenCalledWith({
+        where: { id: 'me_0000000001' },
+        data: { tags: ['复盘'] },
+      });
+    });
+
+    it('global 级行（teamId 为空）不查成员表，直接更新', async () => {
+      prisma.memory.findUnique.mockResolvedValue(
+        row({ level: 'global', teamId: null }),
+      );
+      prisma.memory.update.mockResolvedValue({ id: 'me_0000000001' });
+
+      await service.update(
+        'me_0000000001',
+        { description: '新摘要' },
+        { id: 'u_admin' },
+      );
+
+      expect(prisma.teamUserMember.findUnique).not.toHaveBeenCalled();
+      expect(prisma.memory.update).toHaveBeenCalledWith({
+        where: { id: 'me_0000000001' },
+        data: { description: '新摘要' },
+      });
     });
   });
 });

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -7,9 +8,14 @@ import {
 import { Prisma } from '@prisma/client';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
+import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { PrismaService } from '../prisma/prisma.service';
-import { QueryMemoriesDto } from './dto/query-memories.dto';
-import { MEMORY_ERRORS, MEMORY_LEVELS } from './memory.constants';
+import { QueryMemoriesDto, UpdateMemoryDto } from './dto/query-memories.dto';
+import {
+  MEMORY_ERRORS,
+  MEMORY_LEVELS,
+  computeMemoryContentHash,
+} from './memory.constants';
 
 /** Memory 主键前缀（15 篇 §2.2：<prefix>_<零填充序号>，me_0000000001 起）。 */
 const MEMORY_ID_PREFIX = 'me';
@@ -85,16 +91,94 @@ export class MemoriesService implements OnModuleInit {
   }
 
   /**
-   * DELETE /memories/:id：软删（deletedAt=now，GET 列表/详情不可见）。
-   * 不存在（含已软删条目）→ 404 MEMORY_NOT_FOUND；存在 → 返回软删后的条目。
+   * PATCH /memories/:id：部分更新 content/description/tags（T4 记忆演进）。
+   * 不存在（含已软删）→ 404 MEMORY_NOT_FOUND；全空 → 400 MEMORY_UPDATE_EMPTY；
+   * team 级行要求调用者是该团队成员（403 PERMISSION_TEAM_NOT_MEMBER，AdminGuard
+   * 已前置，此处叠加团队归属）；global 级行仅管理员可改（AdminGuard 已保证）。
+   * content 更新时同步重算 contentHash（去重键与正文一致）。
    */
-  async remove(id: string) {
+  async update(
+    id: string,
+    dto: UpdateMemoryDto,
+    viewer?: { id: string },
+  ) {
     const existing = await this.prisma.memory.findUnique({ where: { id } });
     if (!existing || existing.deletedAt) {
       throw new NotFoundException({
         code: MEMORY_ERRORS.MEMORY_NOT_FOUND,
         message: '记忆条目不存在',
       });
+    }
+    if (
+      dto.content === undefined &&
+      dto.description === undefined &&
+      dto.tags === undefined
+    ) {
+      throw new BadRequestException({
+        code: MEMORY_ERRORS.MEMORY_UPDATE_EMPTY,
+        message: '至少提供 content/description/tags 之一',
+      });
+    }
+    if (existing.teamId) {
+      const member = viewer?.id
+        ? await this.prisma.teamUserMember.findUnique({
+            where: {
+              teamId_userId: { teamId: existing.teamId, userId: viewer.id },
+            },
+            select: { id: true },
+          })
+        : null;
+      if (!member) {
+        throw new ForbiddenException({
+          code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+          message: '您不是该团队成员',
+        });
+      }
+    }
+    const data: Prisma.MemoryUpdateInput = {};
+    if (dto.content !== undefined) {
+      data.content = dto.content;
+      data.contentHash = computeMemoryContentHash(dto.content);
+    }
+    if (dto.description !== undefined) {
+      data.description = dto.description;
+    }
+    if (dto.tags !== undefined) {
+      data.tags = dto.tags as Prisma.InputJsonValue;
+    }
+    return this.prisma.memory.update({ where: { id }, data });
+  }
+
+  /**
+   * DELETE /memories/:id：软删（deletedAt=now，GET 列表/详情不可见）。
+   * 不存在（含已软删条目）→ 404 MEMORY_NOT_FOUND；存在 → 返回软删后的条目。
+   * F2-M5：与 PATCH 对齐团队归属校验——team 级行要求调用者是该团队成员
+   * （403 PERMISSION_TEAM_NOT_MEMBER，AdminGuard 已前置，此处叠加团队归属）；
+   * global 级行仅管理员可删（AdminGuard 已保证）。
+   */
+  async remove(id: string, viewer?: { id: string }) {
+    const existing = await this.prisma.memory.findUnique({ where: { id } });
+    if (!existing || existing.deletedAt) {
+      throw new NotFoundException({
+        code: MEMORY_ERRORS.MEMORY_NOT_FOUND,
+        message: '记忆条目不存在',
+      });
+    }
+    if (existing.teamId) {
+      const member = viewer?.id
+        ? await this.prisma.teamUserMember.findUnique({
+            where: {
+              teamId_userId: { teamId: existing.teamId, userId: viewer.id },
+            },
+            select: { id: true },
+          })
+        : null;
+      if (!member) {
+        throw new ForbiddenException({
+          code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+          message: '您不是该团队成员',
+        });
+      }
     }
     return this.prisma.memory.update({
       where: { id },

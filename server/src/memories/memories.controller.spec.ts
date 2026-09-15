@@ -10,12 +10,14 @@ describe('MemoriesController', () => {
   let service: {
     findAll: jest.Mock;
     remove: jest.Mock;
+    update: jest.Mock;
   };
 
   beforeEach(async () => {
     service = {
       findAll: jest.fn(),
       remove: jest.fn(),
+      update: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -46,6 +48,14 @@ describe('MemoriesController', () => {
       );
       expect(guards).toContain(AdminGuard);
     });
+
+    it('PATCH /memories/:id 挂 AdminGuard（更新不移除 admin，仅叠加团队归属）', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        MemoriesController.prototype.update,
+      );
+      expect(guards).toContain(AdminGuard);
+    });
   });
 
   describe('端点路由转发', () => {
@@ -69,16 +79,40 @@ describe('MemoriesController', () => {
       expect(out).toMatchObject({ items: [], total: 0, page: 1, pageSize: 20 });
     });
 
-    it('DELETE /memories/:id 转发 id 到 remove', async () => {
+    it('DELETE /memories/:id 转发 id/viewer 到 remove（团队归属下沉 service，与 PATCH 对齐）', async () => {
       service.remove.mockResolvedValue({
         id: 'me_0000000001',
         deletedAt: new Date('2026-08-15T00:00:00Z'),
       });
+      const req = { user: { id: 'u_admin' } };
 
-      const out = await controller.remove('me_0000000001');
+      const out = await controller.remove('me_0000000001', req as never);
 
-      expect(service.remove).toHaveBeenCalledWith('me_0000000001');
+      expect(service.remove).toHaveBeenCalledWith('me_0000000001', {
+        id: 'u_admin',
+      });
       expect(out.deletedAt).toBeInstanceOf(Date);
+    });
+
+    it('PATCH /memories/:id 转发 id/dto/ viewer 到 update（团队归属下沉 service）', async () => {
+      service.update.mockResolvedValue({
+        id: 'me_0000000001',
+        content: '新经验',
+      });
+      const req = { user: { id: 'u_admin' } };
+
+      const out = await controller.update(
+        'me_0000000001',
+        { content: '新经验' },
+        req as never,
+      );
+
+      expect(service.update).toHaveBeenCalledWith(
+        'me_0000000001',
+        { content: '新经验' },
+        { id: 'u_admin' },
+      );
+      expect(out).toMatchObject({ id: 'me_0000000001' });
     });
 
     it('service 抛 404 MEMORY_NOT_FOUND 时透传给客户端', async () => {
@@ -89,7 +123,9 @@ describe('MemoriesController', () => {
         }),
       );
 
-      await expect(controller.remove('me_9999999999')).rejects.toMatchObject({
+      await expect(
+        controller.remove('me_9999999999', { user: { id: 'u_1' } } as never),
+      ).rejects.toMatchObject({
         response: { code: 'MEMORY_NOT_FOUND', message: '记忆条目不存在' },
       });
     });
