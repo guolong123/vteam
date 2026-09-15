@@ -32,7 +32,8 @@ export const PERSONA_LIBRARY = {
 export type PersonaKey = keyof typeof PERSONA_LIBRARY;
 
 /**
- * 渲染【性格】段（纯函数）：命中 PERSONA_LIBRARY → 返回以 `\n## 性格\n` 开头的段文案；
+ * 渲染【性格】段（纯函数）：命中 PERSONA_LIBRARY → 返回以 `【性格】\n` 开头的段文案
+ * （段间空行分隔统一由调用方 blocks 的 join 承担，本函数不带前导换行）；
  * 未知 / 空 key → 返回空串（不抛错），由调用方过滤后不注入系统提示。
  */
 export function renderPersonaSection(personaKey: string): string {
@@ -40,5 +41,5 @@ export function renderPersonaSection(personaKey: string): string {
   if (!text) {
     return '';
   }
-  return `\n## 性格\n${text}`;
+  return `【性格】\n${text}`;
 }

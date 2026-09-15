@@ -11,6 +11,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { MCP_SERVER_ERRORS } from '../common/constants/mcp-server.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   WORKER_COMMAND_TYPES,
@@ -20,9 +21,32 @@ import { CreateMcpServerDto } from './dto/create-mcp-server.dto';
 import { MCP_STATUS, McpStatusEntryDto } from './dto/mcp-status.dto';
 import { QueryMcpServersDto } from './dto/query-mcp-servers.dto';
 import { UpdateMcpServerDto } from './dto/update-mcp-server.dto';
+import {
+  DiscoveredMcpTool,
+  discoverMcpTools,
+  McpServerRecordLike,
+} from './mcp-discovery';
 
 /** MCP 服务器域主键前缀（对齐 15 篇 §2.2：`ms_<零填充序号>`，如 ms_0000000001）。 */
 const MCP_SERVER_ID_PREFIX = 'ms';
+
+/** 同步物化 Tool 行的主键前缀（对齐 tools.service.ts：`tl_<零填充序号>`）。 */
+const TOOL_ID_PREFIX = 'tl';
+
+/** Tool action 合法形态（对齐 create-mcp-server.dto name 规则：小写开头）。 */
+const TOOL_ACTION_RE = /^[a-z0-9][a-z0-9-_.]*$/;
+
+/**
+ * 远端工具名 → Tool action：小写 + 非法字符替换为 '-'；
+ * 置空/替换后仍不满足 TOOL_ACTION_RE → null（调用方记 skipped）。
+ */
+function toToolAction(remoteName: string): string | null {
+  const sanitized = remoteName.toLowerCase().replace(/[^a-z0-9-_.]/g, '-');
+  if (!sanitized || !TOOL_ACTION_RE.test(sanitized)) {
+    return null;
+  }
+  return sanitized;
+}
 
 /** T8c：单条服务器状态的内存形态（serverName → status + 上报时间）。 */
 interface StoredMcpStatus {
@@ -54,18 +78,18 @@ export class McpServersService implements OnModuleInit {
     private readonly workersService: WorkersService,
   ) {}
 
-  /** 进程启动对齐 mcp-servers 域前缀序号（重启续号，对齐 tools.onModuleInit 模式）。 */
+  /**
+   * 进程启动对齐 mcp-servers 域前缀序号（重启续号）。
+   * 复用 common/id-resync.ts 的 resyncIdPrefix：只统计 ms_ 纯数字序号 max，
+   * 跳过 ms_vteam 等命名 id——原 findFirst orderBy id desc 会取到字典序更大的
+   * 命名 id → parseInt NaN → seed 失败 → 计数器从 0 起 → 下次 create 撞 PRIMARY 主键 500。
+   */
   async onModuleInit(): Promise<void> {
-    const last = await this.prisma.mcpServer.findFirst({
-      orderBy: { id: 'desc' },
-      select: { id: true },
-    });
-    if (last) {
-      const seq = parseInt(last.id.slice(MCP_SERVER_ID_PREFIX.length + 1), 10);
-      if (Number.isFinite(seq)) {
-        this.idGen.seed(MCP_SERVER_ID_PREFIX, seq);
-      }
-    }
+    await resyncIdPrefix(
+      this.prisma.mcpServer,
+      MCP_SERVER_ID_PREFIX,
+      this.idGen,
+    );
   }
 
   /**
@@ -100,6 +124,44 @@ export class McpServersService implements OnModuleInit {
     return { ...row, status: stored ? stored.status : null };
   }
 
+  /**
+   * toolCount 聚合：Tool.mcpServer 是弱字符串引用，同步写 server.name、
+   * 历史种子用名（如 'vteam'），故同时匹配 server.id 与 server.name。
+   * 单轮 DB（一次 findMany 只取 mcpServer 列 + 内存 tally），无 N+1；
+   * 未绑定（null/他值）的 Tool 行天然被 `in` 过滤忽略。
+   * 返回 server.id → tool 总数（含 0）。
+   */
+  private async countToolsForServers(
+    rows: Array<{ id: string; name: string }>,
+  ): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    if (rows.length === 0) {
+      return counts;
+    }
+    const ownerOf = new Map<string, string>();
+    for (const row of rows) {
+      counts.set(row.id, 0);
+      if (!ownerOf.has(row.id)) {
+        ownerOf.set(row.id, row.id);
+      }
+      if (!ownerOf.has(row.name)) {
+        ownerOf.set(row.name, row.id);
+      }
+    }
+    const tools = await this.prisma.tool.findMany({
+      where: { mcpServer: { in: [...ownerOf.keys()] } },
+      select: { mcpServer: true },
+    });
+    for (const tool of tools ?? []) {
+      const ownerId =
+        tool?.mcpServer != null ? ownerOf.get(tool.mcpServer) : undefined;
+      if (ownerId !== undefined) {
+        counts.set(ownerId, (counts.get(ownerId) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }
+
   /** GET /mcp-servers：type/enabled 过滤 + name 模糊搜索 + 分页（成员只读可见）。
    * 返回 {items, total, page, pageSize}（对齐 tools.findAll 模式）。
    * workerId（worker 拉取时带 x-worker-id）：若该 worker 注册时上报了 mcpUrl
@@ -125,7 +187,12 @@ export class McpServersService implements OnModuleInit {
       }),
     ]);
 
-    let items = rows.map((row) => this.withStatus(row));
+    const counts = await this.countToolsForServers(rows);
+
+    let items = rows.map((row) => ({
+      ...this.withStatus(row),
+      toolCount: counts.get(row.id) ?? 0,
+    }));
 
     // 按 worker 覆盖内置 vteam 的地址（集群外 worker 场景：seed 的
     // PLATFORM_MCP_URL 是 K8s 内网服务名，集群外解析失败）
@@ -162,7 +229,8 @@ export class McpServersService implements OnModuleInit {
     if (!row) {
       this.throwNotFound(id);
     }
-    return this.withStatus(row);
+    const counts = await this.countToolsForServers([row]);
+    return { ...this.withStatus(row), toolCount: counts.get(row.id) ?? 0 };
   }
 
   /**
@@ -235,7 +303,11 @@ export class McpServersService implements OnModuleInit {
     return server;
   }
 
-  /** DELETE /mcp-servers/:id：物理删除（11 篇 §5.8 平台 MCP 管理 CRUD）。 */
+  /**
+   * DELETE /mcp-servers/:id：物理删除 + 级联删除其物化的 MCP 工具行。
+   * tools.mcpServer 是弱关联字符串（存 id/name）；server 删除后遗留的行即孤儿，
+   * 占着全局唯一 action 会导致其他 server 同步永久跳过（删了重建也救不回来），故必须级联。
+   */
   async remove(id: string) {
     const existing = await this.prisma.mcpServer.findUnique({
       where: { id },
@@ -244,7 +316,156 @@ export class McpServersService implements OnModuleInit {
       this.throwNotFound(id);
     }
     await this.prisma.mcpServer.delete({ where: { id } });
+    await this.prisma.tool.deleteMany({
+      where: { mcpServer: { in: [existing.id, existing.name] } },
+    });
     await this.broadcastReloadConfig();
+  }
+
+  /**
+   * POST /mcp-servers/:id/sync：经 MCP SDK 发现远端工具并物化为 Tool 行
+   * （execution=mcp，使同步工具进入权限命名空间可见/可授权）。
+   * 不存在 → 404；连接/发现失败 → 400 MCP_SERVER_SYNC_FAILED。
+   * 物化规则（单行失败记 skipped，不中断整批）：
+   * - action = 远端名小写 + 非法字符转 '-'（非法 → skipped）；
+   *   name = `${server.name}_${远端名}`
+   * - action 已存在且归属本服务器（mcpServer 为本 server id 或 name）→ 更新
+   *   {schema, enabled: true}（updated++）；归属他服务器 → skipped（action 冲突）
+   * - 不存在 → 创建 {source/execution: mcp/mcp, mcpServer: server.name}（created++）
+   * - 本服务器名下 action 不在发现集合的存量行 → enabled=false（disabled++）
+   * 仅 created+updated+disabled > 0 时广播 reload-config。
+   */
+  async syncTools(id: string) {
+    const server = await this.prisma.mcpServer.findUnique({ where: { id } });
+    if (!server) {
+      this.throwNotFound(id);
+    }
+
+    let discovered: DiscoveredMcpTool[];
+    try {
+      discovered = await this.discoverTools(server);
+    } catch (e) {
+      throw new BadRequestException({
+        code: MCP_SERVER_ERRORS.MCP_SERVER_SYNC_FAILED,
+        message: `MCP 服务器 ${server.name} 同步失败：${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+
+    let created = 0;
+    let updated = 0;
+    let disabled = 0;
+    const skipped: { action: string; reason: string }[] = [];
+    const tools: { id: string; name: string; action: string }[] = [];
+    const seenActions = new Set<string>();
+
+    for (const item of discovered ?? []) {
+      const remoteName = item && typeof item.name === 'string' ? item.name : '';
+      const action = remoteName ? toToolAction(remoteName) : null;
+      if (!action) {
+        skipped.push({
+          action: remoteName || '(unnamed)',
+          reason: `工具名无法映射为合法 action（需满足 ${TOOL_ACTION_RE}），已跳过`,
+        });
+        continue;
+      }
+      if (seenActions.has(action)) {
+        skipped.push({
+          action,
+          reason: `发现列表内 action 重复（${remoteName}），已跳过`,
+        });
+        continue;
+      }
+      seenActions.add(action);
+      const name = `${server.name}_${remoteName}`;
+      const schema = (item.inputSchema ?? null) as Prisma.InputJsonValue | null;
+      try {
+        const existing = await this.prisma.tool.findUnique({
+          where: { action },
+        });
+        if (
+          existing &&
+          (existing.mcpServer === server.id ||
+            existing.mcpServer === server.name)
+        ) {
+          const row = await this.prisma.tool.update({
+            where: { id: existing.id },
+            data: { schema, enabled: true },
+          });
+          updated += 1;
+          tools.push({ id: row.id, name: row.name, action: row.action });
+        } else if (existing) {
+          skipped.push({
+            action,
+            reason: `action 已被其他服务器的工具占用（tool=${existing.id}，mcpServer=${existing.mcpServer ?? 'null'}），已跳过`,
+          });
+        } else {
+          const row = await this.prisma.tool.create({
+            data: {
+              id: await this.idGen.nextId(TOOL_ID_PREFIX),
+              name,
+              action,
+              source: 'mcp',
+              execution: 'mcp',
+              mcpServer: server.name,
+              schema,
+              enabled: true,
+            },
+          });
+          created += 1;
+          tools.push({ id: row.id, name: row.name, action: row.action });
+        }
+      } catch (e) {
+        skipped.push({
+          action,
+          reason: `落库失败：${e instanceof Error ? e.message : String(e)}`,
+        });
+      }
+    }
+
+    const owned = await this.prisma.tool.findMany({
+      where: { OR: [{ mcpServer: server.id }, { mcpServer: server.name }] },
+    });
+    for (const row of owned ?? []) {
+      if (seenActions.has(row.action) || row.enabled === false) {
+        continue;
+      }
+      try {
+        await this.prisma.tool.update({
+          where: { id: row.id },
+          data: { enabled: false },
+        });
+        disabled += 1;
+      } catch (e) {
+        skipped.push({
+          action: row.action,
+          reason: `停用失败：${e instanceof Error ? e.message : String(e)}`,
+        });
+      }
+    }
+
+    if (created + updated + disabled > 0) {
+      await this.broadcastReloadConfig();
+    }
+
+    return {
+      server: { id: server.id, name: server.name, type: server.type },
+      discovered: (discovered ?? []).length,
+      created,
+      updated,
+      disabled,
+      skipped,
+      tools,
+    };
+  }
+
+  /**
+   * 协议调用接缝：默认走 mcp-discovery.discoverMcpTools；
+   * 单测可 jest.spyOn 覆盖，隔离真实 MCP 连接。
+   */
+  protected discoverTools(
+    record: McpServerRecordLike,
+  ): Promise<DiscoveredMcpTool[]> {
+    return discoverMcpTools(record);
   }
 
   /** MCP 服务器变更落库成功后向全部在线 worker 广播 reload-config（F1 MAJOR 闭环）。 */

@@ -15,6 +15,7 @@ describe('McpServersController', () => {
     create: jest.Mock;
     update: jest.Mock;
     remove: jest.Mock;
+    syncTools: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -24,6 +25,7 @@ describe('McpServersController', () => {
       create: jest.fn(),
       update: jest.fn(),
       remove: jest.fn(),
+      syncTools: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -56,6 +58,7 @@ describe('McpServersController', () => {
         headers: null,
         oauth: null,
         enabled: true,
+        toolCount: 3,
         createdAt: new Date('2026-08-08T00:00:00Z'),
         updatedAt: new Date('2026-08-08T00:00:00Z'),
       },
@@ -77,6 +80,7 @@ describe('McpServersController', () => {
 
     expect(service.findAll).toHaveBeenCalledWith(query, undefined);
     expect(result).toMatchObject({ items, total: 1, page: 1, pageSize: 20 });
+    expect(result.items[0]).toMatchObject({ toolCount: 3 });
   });
 
   it('GET /mcp-servers/:id 转发 findOne', async () => {
@@ -84,12 +88,13 @@ describe('McpServersController', () => {
       id: 'ms_0000000001',
       name: 'gitee-ent',
       type: 'local',
+      toolCount: 3,
     });
 
     const result = await controller.findOne('ms_0000000001');
 
     expect(service.findOne).toHaveBeenCalledWith('ms_0000000001');
-    expect(result).toMatchObject({ id: 'ms_0000000001' });
+    expect(result).toMatchObject({ id: 'ms_0000000001', toolCount: 3 });
   });
 
   it('POST /mcp-servers 转发 create', async () => {
@@ -130,5 +135,28 @@ describe('McpServersController', () => {
     await controller.remove('ms_0000000001');
 
     expect(service.remove).toHaveBeenCalledWith('ms_0000000001');
+  });
+
+  it('POST /mcp-servers/:id/sync 转发 syncTools', async () => {
+    service.syncTools.mockResolvedValue({
+      server: { id: 'ms_0000000001', name: 'ketacli', type: 'remote' },
+      discovered: 1,
+      created: 1,
+      updated: 0,
+      disabled: 0,
+      skipped: [],
+      tools: [
+        {
+          id: 'tl_0000000042',
+          name: 'ketacli_aliases.list',
+          action: 'aliases.list',
+        },
+      ],
+    });
+
+    const result = await controller.syncTools('ms_0000000001');
+
+    expect(service.syncTools).toHaveBeenCalledWith('ms_0000000001');
+    expect(result).toMatchObject({ discovered: 1, created: 1 });
   });
 });

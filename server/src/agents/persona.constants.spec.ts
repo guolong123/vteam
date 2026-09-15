@@ -13,15 +13,15 @@ describe('persona.constants', () => {
         expect(
           PERSONA_LIBRARY[key as keyof typeof PERSONA_LIBRARY].length,
         ).toBeGreaterThan(0);
-        expect(renderPersonaSection(key)).toContain('## 性格');
+        expect(renderPersonaSection(key)).toContain('【性格】');
       }
     });
   });
 
   describe('renderPersonaSection', () => {
-    it('命中库：返回以 `\\n## 性格\\n` 开头的段文案', () => {
+    it('命中库：返回以 `【性格】\n` 开头的段文案（无前导换行，分隔由调用方 join 承担）', () => {
       expect(renderPersonaSection('steady')).toBe(
-        `\n## 性格\n${PERSONA_LIBRARY.steady}`,
+        `【性格】\n${PERSONA_LIBRARY.steady}`,
       );
     });
 

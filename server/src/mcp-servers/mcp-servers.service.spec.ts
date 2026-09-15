@@ -26,6 +26,16 @@ describe('McpServersService', () => {
       update: jest.Mock;
       delete: jest.Mock;
     };
+    tool: {
+      findUnique: jest.Mock;
+      findMany: jest.Mock;
+      create: jest.Mock;
+      update: jest.Mock;
+      deleteMany: jest.Mock;
+    };
+    worker: {
+      findUnique: jest.Mock;
+    };
     $transaction: jest.Mock;
   };
 
@@ -70,6 +80,16 @@ describe('McpServersService', () => {
         update: jest.fn(),
         delete: jest.fn(),
       },
+      tool: {
+        findUnique: jest.fn(),
+        findMany: jest.fn(),
+        create: jest.fn(),
+        update: jest.fn(),
+        deleteMany: jest.fn(),
+      },
+      worker: {
+        findUnique: jest.fn(),
+      },
       $transaction: jest.fn(),
     };
     workersService = { broadcastCommand: jest.fn().mockResolvedValue(1) };
@@ -86,21 +106,26 @@ describe('McpServersService', () => {
     service = module.get<McpServersService>(McpServersService);
   });
 
-  describe('onModuleInit（重启续号）', () => {
-    it('库内已有最大 id 时对齐 ms 前缀序号', async () => {
-      prisma.mcpServer.findFirst.mockResolvedValue({ id: 'ms_0000000042' });
+  describe('onModuleInit（重启续号，忽略 ms_vteam 等命名 id）', () => {
+    it('混入命名 id 时仍按数字序号续号（不被字典序更大的命名 id 干扰）', async () => {
+      prisma.mcpServer.findMany.mockResolvedValue([
+        { id: 'ms_vteam' },
+        { id: 'ms_vteam_api' },
+        { id: 'ms_0000000001' },
+        { id: 'ms_0000000002' },
+      ]);
 
       await service.onModuleInit();
 
-      expect(prisma.mcpServer.findFirst).toHaveBeenCalledWith({
-        orderBy: { id: 'desc' },
+      expect(prisma.mcpServer.findMany).toHaveBeenCalledWith({
+        where: { id: { startsWith: 'ms_' } },
         select: { id: true },
       });
-      expect(idGen.seed).toHaveBeenCalledWith('ms', 42);
+      expect(idGen.seed).toHaveBeenCalledWith('ms', 2);
     });
 
     it('空库/无记录时跳过续号', async () => {
-      prisma.mcpServer.findFirst.mockResolvedValue(null);
+      prisma.mcpServer.findMany.mockResolvedValue([]);
 
       await service.onModuleInit();
 
@@ -173,6 +198,114 @@ describe('McpServersService', () => {
       expect(prisma.mcpServer.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ skip: 0, take: 100 }),
       );
+    });
+  });
+
+  describe('toolCount（findAll/findOne 聚合 Tool.mcpServer id/name 双键）', () => {
+    const vteamRow = {
+      id: 'ms_vteam',
+      name: 'vteam',
+      type: 'remote',
+      command: null,
+      url: 'http://platform-mcp:3000/mcp',
+      headers: null,
+      oauth: null,
+      enabled: true,
+      createdAt: new Date('2026-08-08T00:00:03Z'),
+      updatedAt: new Date('2026-08-08T00:00:03Z'),
+    };
+
+    it('混合 id/name 绑定计数 + 未绑定忽略 + 零计数返回 0（单轮 findMany）', async () => {
+      prisma.$transaction.mockResolvedValue([2, [localRow, remoteRow]]);
+      prisma.tool.findMany.mockResolvedValue([
+        { mcpServer: 'ms_0000000001' },
+        { mcpServer: 'gitee-ent' },
+        { mcpServer: 'gitee-ent' },
+        { mcpServer: null },
+        { mcpServer: 'other-server' },
+      ]);
+
+      const result = await service.findAll();
+
+      expect(prisma.tool.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.tool.findMany).toHaveBeenCalledWith({
+        where: {
+          mcpServer: {
+            in: expect.arrayContaining([
+              'ms_0000000001',
+              'gitee-ent',
+              'ms_0000000002',
+              'swagger',
+            ]),
+          },
+        },
+        select: { mcpServer: true },
+      });
+      expect(result.items[0]).toMatchObject({
+        name: 'gitee-ent',
+        toolCount: 3,
+      });
+      expect(result.items[1]).toMatchObject({
+        name: 'swagger',
+        toolCount: 0,
+      });
+    });
+
+    it('无工具行 → toolCount 均为 0', async () => {
+      prisma.$transaction.mockResolvedValue([2, [localRow, remoteRow]]);
+      prisma.tool.findMany.mockResolvedValue([]);
+
+      const result = await service.findAll();
+
+      expect(result.items[0]).toMatchObject({ toolCount: 0 });
+      expect(result.items[1]).toMatchObject({ toolCount: 0 });
+    });
+
+    it('空列表不查 Tool 表（零额外轮次）', async () => {
+      prisma.$transaction.mockResolvedValue([0, []]);
+
+      const result = await service.findAll();
+
+      expect(result.items).toEqual([]);
+      expect(prisma.tool.findMany).not.toHaveBeenCalled();
+    });
+
+    it('workerId 覆盖 vteam url 时保留 toolCount', async () => {
+      prisma.$transaction.mockResolvedValue([1, [vteamRow]]);
+      prisma.tool.findMany.mockResolvedValue([{ mcpServer: 'vteam' }]);
+      prisma.worker.findUnique.mockResolvedValue({
+        capabilities: { mcpUrl: 'http://ext:9999/mcp' },
+      });
+
+      const result = await service.findAll({}, 'wk_0000000001');
+
+      expect(result.items[0]).toMatchObject({
+        name: 'vteam',
+        url: 'http://ext:9999/mcp',
+        toolCount: 1,
+      });
+    });
+
+    it('findOne 返回 toolCount（id/name 双键合计，单轮查询）', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(localRow);
+      prisma.tool.findMany.mockResolvedValue([
+        { mcpServer: 'gitee-ent' },
+        { mcpServer: 'ms_0000000001' },
+      ]);
+
+      const result = await service.findOne('ms_0000000001');
+
+      expect(prisma.tool.findMany).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ id: 'ms_0000000001', toolCount: 2 });
+    });
+
+    it('findOne 无工具行 → toolCount 为 0', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(localRow);
+      prisma.tool.findMany.mockResolvedValue([]);
+
+      const result = await service.findOne('ms_0000000001');
+
+      expect(result).toMatchObject({ id: 'ms_0000000001', toolCount: 0 });
     });
   });
 
@@ -498,14 +631,18 @@ describe('McpServersService', () => {
   });
 
   describe('remove（DELETE /mcp-servers/:id）', () => {
-    it('服务器存在时物理删除', async () => {
+    it('服务器存在时物理删除 + 级联删除其物化的工具行（id/name 双键）', async () => {
       prisma.mcpServer.findUnique.mockResolvedValue(localRow);
       prisma.mcpServer.delete.mockResolvedValue(localRow);
+      prisma.tool.deleteMany.mockResolvedValue({ count: 3 });
 
       await service.remove('ms_0000000001');
 
       expect(prisma.mcpServer.delete).toHaveBeenCalledWith({
         where: { id: 'ms_0000000001' },
+      });
+      expect(prisma.tool.deleteMany).toHaveBeenCalledWith({
+        where: { mcpServer: { in: ['ms_0000000001', 'gitee-ent'] } },
       });
     });
 
@@ -531,6 +668,359 @@ describe('McpServersService', () => {
         response: { code: MCP_SERVER_ERRORS.MCP_SERVER_NOT_FOUND },
       });
       expect(prisma.mcpServer.delete).not.toHaveBeenCalled();
+      expect(prisma.tool.deleteMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('syncTools（POST /mcp-servers/:id/sync）', () => {
+    const ketacliRow = {
+      id: 'ms_0000000009',
+      name: 'ketacli',
+      type: 'remote',
+      command: null,
+      url: 'http://192.168.10.78:14010/mcp',
+      headers: null,
+      oauth: null,
+      enabled: true,
+      createdAt: new Date('2026-08-08T00:00:02Z'),
+      updatedAt: new Date('2026-08-08T00:00:02Z'),
+    };
+
+    function mockDiscovery(tools: unknown[]) {
+      return jest
+        .spyOn(
+          service as unknown as {
+            discoverTools: () => Promise<unknown[]>;
+          },
+          'discoverTools',
+        )
+        .mockResolvedValue(tools);
+    }
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('id 未知 → 404 MCP_SERVER_NOT_FOUND（不触发发现）', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(null);
+      const spy = mockDiscovery([]);
+
+      await expect(service.syncTools('ms_nonexistent')).rejects.toThrow(
+        NotFoundException,
+      );
+      await expect(service.syncTools('ms_nonexistent')).rejects.toMatchObject({
+        response: { code: MCP_SERVER_ERRORS.MCP_SERVER_NOT_FOUND },
+      });
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('连接/发现失败 → 400 MCP_SERVER_SYNC_FAILED（携带可读原因）', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(ketacliRow);
+      jest
+        .spyOn(
+          service as unknown as {
+            discoverTools: () => Promise<unknown[]>;
+          },
+          'discoverTools',
+        )
+        .mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+      await expect(service.syncTools('ms_0000000009')).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.syncTools('ms_0000000009')).rejects.toMatchObject({
+        response: {
+          code: MCP_SERVER_ERRORS.MCP_SERVER_SYNC_FAILED,
+          message: expect.stringContaining('ECONNREFUSED'),
+        },
+      });
+      expect(prisma.tool.create).not.toHaveBeenCalled();
+    });
+
+    it('服务端要求 OAuth → 400 MCP_SERVER_SYNC_FAILED（可读提示）', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(ketacliRow);
+      jest
+        .spyOn(
+          service as unknown as {
+            discoverTools: () => Promise<unknown[]>;
+          },
+          'discoverTools',
+        )
+        .mockRejectedValue(new Error('MCP 服务器 ketacli 要求 OAuth 认证'));
+
+      await expect(service.syncTools('ms_0000000009')).rejects.toMatchObject({
+        response: {
+          code: MCP_SERVER_ERRORS.MCP_SERVER_SYNC_FAILED,
+          message: expect.stringContaining('OAuth'),
+        },
+      });
+    });
+
+    it('新工具：创建行（tl_ 前缀/source+execution=mcp/mcpServer=server.name）+ 广播', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(ketacliRow);
+      mockDiscovery([
+        {
+          name: 'aliases.list',
+          description: 'list aliases',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ]);
+      prisma.tool.findUnique.mockResolvedValue(null);
+      prisma.tool.findMany.mockResolvedValue([]);
+      idGen.nextId.mockResolvedValue('tl_0000000042');
+      prisma.tool.create.mockResolvedValue({
+        id: 'tl_0000000042',
+        name: 'ketacli_aliases.list',
+        action: 'aliases.list',
+        source: 'mcp',
+        execution: 'mcp',
+        mcpServer: 'ketacli',
+        schema: { type: 'object', properties: {} },
+        enabled: true,
+      });
+
+      const result = await service.syncTools('ms_0000000009');
+
+      expect(idGen.nextId).toHaveBeenCalledWith('tl');
+      expect(prisma.tool.create).toHaveBeenCalledWith({
+        data: {
+          id: 'tl_0000000042',
+          name: 'ketacli_aliases.list',
+          action: 'aliases.list',
+          source: 'mcp',
+          execution: 'mcp',
+          mcpServer: 'ketacli',
+          schema: { type: 'object', properties: {} },
+          enabled: true,
+        },
+      });
+      expect(result).toMatchObject({
+        server: { id: 'ms_0000000009', name: 'ketacli', type: 'remote' },
+        discovered: 1,
+        created: 1,
+        updated: 0,
+        disabled: 0,
+        skipped: [],
+      });
+      expect(result.tools).toEqual([
+        {
+          id: 'tl_0000000042',
+          name: 'ketacli_aliases.list',
+          action: 'aliases.list',
+        },
+      ]);
+      expect(workersService.broadcastCommand).toHaveBeenCalledWith({
+        type: 'reload-config',
+        resourceVersion: expect.any(String),
+      });
+    });
+
+    it('远端名大小写/非法字符清洗为合法 action（首字母小写，非法转 -）', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(ketacliRow);
+      mockDiscovery([
+        { name: 'Allocation.List', inputSchema: { type: 'object' } },
+      ]);
+      prisma.tool.findUnique.mockResolvedValue(null);
+      prisma.tool.findMany.mockResolvedValue([
+        {
+          id: 'tl_0000000042',
+          name: 'ketacli_allocation.list',
+          action: 'allocation.list',
+          mcpServer: 'ketacli',
+          enabled: true,
+        },
+      ]);
+      idGen.nextId.mockResolvedValue('tl_0000000043');
+      prisma.tool.create.mockResolvedValue({
+        id: 'tl_0000000043',
+        name: 'ketacli_Allocation.List',
+        action: 'allocation.list',
+        enabled: true,
+      });
+
+      const result = await service.syncTools('ms_0000000009');
+
+      expect(prisma.tool.findUnique).toHaveBeenCalledWith({
+        where: { action: 'allocation.list' },
+      });
+      expect(result).toMatchObject({ created: 1 });
+    });
+
+    it('已存在且归属本服务器（name/id 均可）→ 更新 schema + enabled:true', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(ketacliRow);
+      mockDiscovery([
+        { name: 'aliases.list', inputSchema: { type: 'object' } },
+        { name: 'allocation.list', inputSchema: { type: 'object' } },
+      ]);
+      prisma.tool.findUnique
+        .mockResolvedValueOnce({
+          id: 'tl_0000000001',
+          name: 'ketacli_aliases.list',
+          action: 'aliases.list',
+          mcpServer: 'ketacli',
+          enabled: false,
+        })
+        .mockResolvedValueOnce({
+          id: 'tl_0000000002',
+          name: 'ketacli_allocation.list',
+          action: 'allocation.list',
+          mcpServer: 'ms_0000000009',
+          enabled: true,
+        });
+      prisma.tool.findMany.mockResolvedValue([]);
+      prisma.tool.update.mockImplementation(
+        ({ where }: { where: { id: string } }) =>
+          Promise.resolve({
+            id: where.id,
+            name: `ketacli_row`,
+            action: 'aliases.list',
+          }),
+      );
+
+      const result = await service.syncTools('ms_0000000009');
+
+      expect(prisma.tool.update).toHaveBeenCalledWith({
+        where: { id: 'tl_0000000001' },
+        data: { schema: { type: 'object' }, enabled: true },
+      });
+      expect(prisma.tool.update).toHaveBeenCalledWith({
+        where: { id: 'tl_0000000002' },
+        data: { schema: { type: 'object' }, enabled: true },
+      });
+      expect(prisma.tool.create).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ created: 0, updated: 2, disabled: 0 });
+      expect(workersService.broadcastCommand).toHaveBeenCalled();
+    });
+
+    it('action 被他服务器占用 → skipped（action 冲突，不覆盖）', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(ketacliRow);
+      mockDiscovery([{ name: 'chat_history', inputSchema: null }]);
+      prisma.tool.findUnique.mockResolvedValue({
+        id: 'tl_vteam_chat_history',
+        name: 'vteam_chat_history',
+        action: 'chat_history',
+        mcpServer: 'vteam',
+        enabled: true,
+      });
+      prisma.tool.findMany.mockResolvedValue([]);
+
+      const result = await service.syncTools('ms_0000000009');
+
+      expect(prisma.tool.create).not.toHaveBeenCalled();
+      expect(prisma.tool.update).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        discovered: 1,
+        created: 0,
+        updated: 0,
+        disabled: 0,
+      });
+      expect(result.skipped).toHaveLength(1);
+      expect(result.skipped[0]).toMatchObject({ action: 'chat_history' });
+      expect(result.skipped[0].reason).toContain('占用');
+      expect(result.tools).toEqual([]);
+      expect(workersService.broadcastCommand).not.toHaveBeenCalled();
+    });
+
+    it('非法工具名（置空/非法开头）→ skipped；单行落库失败不中断整批', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(ketacliRow);
+      mockDiscovery([
+        { name: '!!!' },
+        { name: '' },
+        { name: 'fail.tool', inputSchema: { type: 'object' } },
+        { name: 'ok.tool', inputSchema: { type: 'object' } },
+      ]);
+      prisma.tool.findUnique.mockResolvedValue(null);
+      prisma.tool.findMany.mockResolvedValue([]);
+      idGen.nextId.mockResolvedValue('tl_0000000050');
+      prisma.tool.create.mockRejectedValueOnce(new Error('db down'));
+      prisma.tool.create.mockResolvedValueOnce({
+        id: 'tl_0000000050',
+        name: 'ketacli_ok.tool',
+        action: 'ok.tool',
+        enabled: true,
+      });
+
+      const result = await service.syncTools('ms_0000000009');
+
+      expect(result).toMatchObject({
+        discovered: 4,
+        created: 1,
+        updated: 0,
+        disabled: 0,
+      });
+      expect(result.skipped).toHaveLength(3);
+      expect(result.skipped.map((s) => s.action)).toContain('!!!');
+      expect(result.skipped.map((s) => s.action)).toContain('fail.tool');
+      expect(result.tools).toEqual([
+        { id: 'tl_0000000050', name: 'ketacli_ok.tool', action: 'ok.tool' },
+      ]);
+    });
+
+    it('存量行 action 不在发现集合 → enabled=false（disabled++）；无变更不广播', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(ketacliRow);
+      mockDiscovery([{ name: 'aliases.list', inputSchema: null }]);
+      prisma.tool.findUnique.mockResolvedValue({
+        id: 'tl_0000000001',
+        name: 'ketacli_aliases.list',
+        action: 'aliases.list',
+        mcpServer: 'ketacli',
+        enabled: true,
+      });
+      prisma.tool.findMany.mockResolvedValue([
+        {
+          id: 'tl_0000000001',
+          name: 'ketacli_aliases.list',
+          action: 'aliases.list',
+          mcpServer: 'ketacli',
+          enabled: true,
+        },
+        {
+          id: 'tl_0000000007',
+          name: 'ketacli_old.tool',
+          action: 'old.tool',
+          mcpServer: 'ms_0000000009',
+          enabled: true,
+        },
+        {
+          id: 'tl_0000000008',
+          name: 'ketacli_gone.tool',
+          action: 'gone.tool',
+          mcpServer: 'ketacli',
+          enabled: false,
+        },
+      ]);
+      prisma.tool.update.mockImplementation(
+        ({ where }: { where: { id: string } }) =>
+          Promise.resolve({ id: where.id, name: 'x', action: 'y' }),
+      );
+
+      const result = await service.syncTools('ms_0000000009');
+
+      expect(prisma.tool.update).toHaveBeenCalledWith({
+        where: { id: 'tl_0000000007' },
+        data: { enabled: false },
+      });
+      expect(result).toMatchObject({ updated: 1, disabled: 1 });
+      expect(workersService.broadcastCommand).toHaveBeenCalled();
+    });
+
+    it('空发现 + 无存量行 → 零变更且不广播', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(ketacliRow);
+      mockDiscovery([]);
+      prisma.tool.findMany.mockResolvedValue([]);
+      workersService.broadcastCommand.mockClear();
+
+      const result = await service.syncTools('ms_0000000009');
+
+      expect(result).toMatchObject({
+        discovered: 0,
+        created: 0,
+        updated: 0,
+        disabled: 0,
+        skipped: [],
+        tools: [],
+      });
+      expect(workersService.broadcastCommand).not.toHaveBeenCalled();
     });
   });
 });

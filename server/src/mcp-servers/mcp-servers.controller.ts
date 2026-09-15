@@ -93,4 +93,17 @@ export class McpServersController {
   remove(@Param('id') id: string) {
     return this.mcpServersService.remove(id);
   }
+
+  /**
+   * 同步服务器工具（经 MCP SDK 发现并物化为 Tool 行）。
+   * POST /api/v1/mcp-servers/:id/sync
+   *   → 200 {server, discovered, created, updated, disabled, skipped, tools}；
+   * 不存在 → 404；连接/发现失败 → 400 MCP_SERVER_SYNC_FAILED
+   */
+  @Post(':id/sync')
+  @UseGuards(AdminGuard)
+  @ApiOperation({ summary: '同步 MCP 服务器工具（发现并物化为 Tool 行）' })
+  syncTools(@Param('id') id: string) {
+    return this.mcpServersService.syncTools(id);
+  }
 }

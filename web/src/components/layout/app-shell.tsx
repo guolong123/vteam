@@ -135,7 +135,6 @@ const KEY_LOOKUP: Record<string, string> = {
 const EXTRA_PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   "/tasks/new": { title: "创建任务", subtitle: "提交需求，组建虚拟 AI 团队" },
   "/workers/[id]": { title: "Worker 详情", subtitle: "查看节点能力与运行状态" },
-  "/tools/register": { title: "注册工具", subtitle: "登记工具 manifest 并绑定执行方式" },
 };
 
 /**
@@ -174,10 +173,9 @@ const NAV_VISIBLE: Record<string, (perms: RolePermissions) => boolean> = {
   memories: isPlatformAdmin,
 };
 
-/** 路由首段 → 访问所需判定（与导航过滤同源；/tools 属 skills 资源；无条目 = 登录即可，teams 走 teams:view） */
+/** 路由首段 → 访问所需判定（与导航过滤同源；无条目 = 登录即可，teams 走 teams:view） */
 const ROUTE_GUARD: Record<string, (perms: RolePermissions) => boolean> = {
   ...NAV_VISIBLE,
-  tools: (p) => hasPermission(p, "skills"),
   memories: isPlatformAdmin,
 };
 

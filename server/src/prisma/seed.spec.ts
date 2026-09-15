@@ -302,7 +302,28 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     expect(prompt).toContain('plan-review-');
   });
 
-  it('模板 prompt「可用工具」行集合等于 ROLE_BOUNDARIES[agentName].toolAllows 键集（漂移即失败）', async () => {
+  it('模板 prompt 越界转交去重：统一一句以【职责边界】为准，不再手写全量映射（a_plan 保留主 Agent 转交语义）', async () => {
+    await main();
+
+    const templateCalls = templateAgentCalls();
+    expect(templateCalls).toHaveLength(6);
+    for (const call of templateCalls) {
+      const id = String(call[0].where.id);
+      const prompt = call[0].update.prompt as string;
+      // 新文案：单一来源 ROLE_BOUNDARIES，映射表由系统提示【职责边界】动态渲染
+      expect(prompt).toContain(
+        '越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）',
+      );
+      // 旧全量映射句已删除
+      expect(prompt).not.toContain('越界拒绝与转交');
+      if (id === 'a_plan') {
+        expect(prompt).toContain('主 Agent');
+        expect(prompt).toContain('vteam_notify_agent');
+      }
+    }
+  });
+
+  it('模板 prompt「可用工具」去重：旧五角色用统一句，计划员保留 planToolLine 动态派生', async () => {
     await main();
 
     const templateCalls = templateAgentCalls();
@@ -312,18 +333,26 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       const agentName = AGENT_NAME_BY_POLICY[POLICY_BY_AGENT[id]];
       expect(agentName).toBeDefined();
       const prompt = call[0].update.prompt as string;
-      // 「可用工具：a / b + c（只读）。」行：按 / 与 + 切分，去掉（只读）后缀后即工具名集合
-      const line = prompt.match(/可用工具：([^。]+)。/);
-      expect(line).not.toBeNull();
-      const listed = line![1]
-        .split(/[/+]/)
-        .map((token) => token.trim().replace(/（.*）$/, ''))
-        .filter((token) => token.length > 0);
-      expect([...listed].sort()).toEqual(
-        [...Object.keys(ROLE_BOUNDARIES[agentName].toolAllows)].sort(),
+      if (id === 'a_plan') {
+        // 计划员：planToolLine 动态派生保留，仍可解析出 toolAllows 键集
+        const line = prompt.match(/可用工具：([^。]+)。/);
+        expect(line).not.toBeNull();
+        const listed = line![1]
+          .split(/[/+]/)
+          .map((token) => token.trim().replace(/（.*）$/, ''))
+          .filter((token) => token.length > 0);
+        expect([...listed].sort()).toEqual(
+          [...Object.keys(ROLE_BOUNDARIES[agentName].toolAllows)].sort(),
+        );
+        continue;
+      }
+      // 旧五角色：统一一句，不再手写全量工具列表
+      expect(prompt).toContain(
+        '可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝',
       );
+      expect(prompt).not.toMatch(/可用工具：vteam_/);
       for (const gated of ROLE_SERVER_GATED_TOOLS) {
-        expect(listed).not.toContain(gated);
+        expect(prompt).not.toContain(gated);
       }
     }
   });

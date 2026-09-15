@@ -13,7 +13,6 @@ test.describe("未登录守卫", () => {
     "/roles",
     "/skills",
     "/artifacts?teamId=tm_0000000001",
-    "/tools/register",
     "/users",
     "/workers",
   ];

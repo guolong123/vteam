@@ -817,7 +817,7 @@
       "plan_name": "vteam-role-behavior-enforcement",
       "status": "completed",
       "started_at": "2026-09-13T04:00:13.774Z",
-      "updated_at": "2026-09-13T10:38:10.008Z",
+      "updated_at": "2026-09-14T09:36:26.203Z",
       "session_ids": [
         "opencode:ses_f6a42e747ffet3F3IF0aZQe5qc"
       ],
@@ -829,15 +829,15 @@
         "todo:1": {
           "task_key": "todo:1",
           "task_label": "1",
-          "task_title": "动代码前提交当前工作区基线",
-          "session_id": "opencode:ses_f6712ad17ffeN2AoiGyyZXWwR3",
+          "task_title": "`\"message-agent-select\"` (in the `/teams/[id]/session` PAGE_SMOKE list) — the selector was deleted from the message input.",
+          "session_id": "opencode:ses_f60baa354ffe1dHYQc5ABRwRKn",
           "agent": "Sisyphus-Junior",
           "category": "quick",
-          "updated_at": "2026-09-13T04:05:58.798Z",
           "started_at": "2026-09-13T04:04:40.497Z",
+          "ended_at": "2026-09-14T09:36:26.203Z",
+          "elapsed_ms": 106305706,
           "status": "completed",
-          "ended_at": "2026-09-13T04:05:58.798Z",
-          "elapsed_ms": 78301
+          "updated_at": "2026-09-14T09:36:26.203Z"
         },
         "todo:2": {
           "task_key": "todo:2",
@@ -988,7 +988,7 @@
   "active_plan": "/Users/mac/01work/git-project/vteam/.omo/plans/vteam-role-behavior-enforcement.md",
   "started_at": "2026-09-13T04:00:13.774Z",
   "status": "completed",
-  "updated_at": "2026-09-13T10:38:10.008Z",
+  "updated_at": "2026-09-14T09:36:26.203Z",
   "session_ids": [
     "opencode:ses_f6a42e747ffet3F3IF0aZQe5qc"
   ],
@@ -1000,15 +1000,15 @@
     "todo:1": {
       "task_key": "todo:1",
       "task_label": "1",
-      "task_title": "动代码前提交当前工作区基线",
-      "session_id": "opencode:ses_f6712ad17ffeN2AoiGyyZXWwR3",
+      "task_title": "`\"message-agent-select\"` (in the `/teams/[id]/session` PAGE_SMOKE list) — the selector was deleted from the message input.",
+      "session_id": "opencode:ses_f60baa354ffe1dHYQc5ABRwRKn",
       "agent": "Sisyphus-Junior",
       "category": "quick",
-      "updated_at": "2026-09-13T04:05:58.798Z",
       "started_at": "2026-09-13T04:04:40.497Z",
+      "ended_at": "2026-09-14T09:36:26.203Z",
+      "elapsed_ms": 106305706,
       "status": "completed",
-      "ended_at": "2026-09-13T04:05:58.798Z",
-      "elapsed_ms": 78301
+      "updated_at": "2026-09-14T09:36:26.203Z"
     },
     "todo:2": {
       "task_key": "todo:2",

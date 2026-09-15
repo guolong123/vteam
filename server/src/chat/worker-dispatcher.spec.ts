@@ -31,17 +31,26 @@ import {
   stripGroupPostDeclarations,
   GLOBAL_SYSTEM_INSTRUCTIONS,
   GROUP_TRIGGER_INSTRUCTION,
+  isPlanRole,
   isVteamAgentName,
+  roleNeedsIssueDetail,
   MAIN_AGENT_INSTRUCTION,
+  MEMORY_INSTRUCTION,
   PENDING_INSTANCE_REF,
   renderBoundarySection,
   resolvePolicyAgentCandidate,
   roleToAgentName,
   ARTIFACT_SUBMISSION_INSTRUCTION,
+  ISSUE_FULL_INSTRUCTION,
+  TASK_TRANSITION_INSTRUCTION,
+  HOSTED_CONFIRM_INSTRUCTION,
+  NON_MAIN_AGENT_NOTE,
+  WECOM_SYSTEM_INSTRUCTION,
   PLAN_PRODUCE_INSTRUCTION,
   PLAN_REVIEW_INSTRUCTION,
   TEAM_GROUP_TRIGGER_INSTRUCTION,
   TEAM_SYSTEM_RECEPTION_INSTRUCTION,
+  WECOM_TRIGGER_INSTRUCTION,
   toExecutionScope,
   POLL_INTERVAL_MS,
   aggregateText,
@@ -395,6 +404,42 @@ describe('WorkerDispatcher', () => {
       expect(prompt).toContain(request.text);
     });
 
+    it('P0 互斥（wecom 优先）：企微触发 → prompt 注入企微指令且不注入 GROUP 指令，system 注入企微段', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: request.channelId,
+        type: 'task_group',
+      });
+      const d = createDispatcher();
+      await d.dispatch({
+        ...request,
+        text: '[WeCom:GuoLong] 请帮我看看进度',
+      });
+
+      const prompt = workerClient.execute.mock.calls[0][1].prompt[0]
+        .text as string;
+      expect(prompt).toContain('【企微消息】');
+      expect(prompt).toContain('vteam_wecom_reply');
+      expect(prompt).not.toContain(GROUP_TRIGGER_INSTRUCTION);
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(system).toContain(WECOM_SYSTEM_INSTRUCTION);
+    });
+
+    it('P0 默认不注入企微：非企微群聊触发 → prompt 注入 GROUP 指令，system 无企微段', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: request.channelId,
+        type: 'task_group',
+      });
+      const d = createDispatcher();
+      await d.dispatch(request);
+
+      const prompt = workerClient.execute.mock.calls[0][1].prompt[0]
+        .text as string;
+      expect(prompt).toContain(GROUP_TRIGGER_INSTRUCTION);
+      expect(prompt).not.toContain('【企微消息】');
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(system).not.toContain(WECOM_SYSTEM_INSTRUCTION);
+    });
+
     it('system 注入 Agent 完整身份（buildSystemInstructions 含 id/name/role/prompt + selfInstanceId 引导）', async () => {
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_product',
@@ -410,7 +455,7 @@ describe('WorkerDispatcher', () => {
         system: string;
       };
       expect(execArgs.system).toContain(GLOBAL_SYSTEM_INSTRUCTIONS);
-      expect(execArgs.system).toContain('issue_create');
+      expect(execArgs.system).toContain('vteam_issue_create');
       // 单入口：目标实例即团队成员 → 身份段实例 id 为 tmm_（会话 teamMemberId）
       expect(execArgs.system).toContain(
         '你是本任务的 产品经理助手（实例 id: tmm_0000000001，角色: 产品经理）',
@@ -434,6 +479,37 @@ describe('WorkerDispatcher', () => {
       );
       expect(execArgs.system).not.toContain('【职责】');
       expect(execArgs.system).toContain('selfInstanceId');
+    });
+
+    it('plan 目标：dispatch 按 role 传入 agentRole → system 无【记忆管理】段（guard 不拒）', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_plan',
+        name: '计划员',
+        role: 'plan',
+        prompt: '负责计划编制。',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      const d = createDispatcher();
+      await d.dispatch({
+        ...request,
+        targets: [
+          {
+            agentId: 'a_plan',
+            instanceId: 'tmm_0000000001',
+            sessionId: 's_0000000001',
+          },
+        ],
+      });
+
+      const execArgs = workerClient.execute.mock.calls[0][1] as {
+        system: string;
+      };
+      expect(execArgs.system).not.toContain('【记忆管理】');
+      expect(execArgs.system).not.toContain('vteam_memory_search');
+      expect(execArgs.system).not.toContain('vteam_memory_save');
+      // 非记忆段不受影响
+      expect(execArgs.system).toContain('【持久化目录】');
+      expect(execArgs.system).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
     });
 
     it('Todo 4：角色已知的目标 Agent → system 注入【职责边界】+ 角色 scopeSummary', async () => {
@@ -1160,7 +1236,7 @@ describe('WorkerDispatcher', () => {
       expect(s).toContain('【主 Agent 职责】');
       expect(s).toContain('牵头拆解工作并分派');
       expect(s).toContain('群聊提示进度');
-      expect(s).toContain('notify_agent');
+      expect(s).toContain('vteam_notify_agent');
       expect(s).toContain('汇总各角色产出与验收材料');
     });
 
@@ -1189,33 +1265,196 @@ describe('WorkerDispatcher', () => {
       expect(s).not.toContain(' —— 主 Agent');
     });
 
-    it('GLOBAL 常量含静态【持久化目录】段：约定默认 /data/vteam-worker/<agent名称> + 重启保留语义 + 写入指引', () => {
+    it('GLOBAL 常量含压缩【持久化目录】段：一句话、以【运行时工作目录】注入实际路径为准（纯用户语言，无代码味）', () => {
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('【持久化目录】');
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain(
-        '/data/vteam-worker/<agent名称>',
+        '唯一持久化位置以【运行时工作目录】注入的实际路径为准',
       );
-      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('容器重启后保留');
-      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain(
-        'fileRef 应指向该目录内的文件',
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('仅该目录重启后保留');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('opts.persistentWorkDir');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('work-dir.util');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('taskDirOf');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('<WORK_DIR');
+      // P0：消除“/data/vteam-worker/<agent名称> vs /data/vteam-worker/tasks/<taskId>”二义性
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('<agent名称>');
+      // P0：fileRef 示例不再用 /tmp（与持久化语义矛盾），改用工作目录下路径示例
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('/tmp');
+      // P1：产出物详版下沉为 ARTIFACT_SUBMISSION_INSTRUCTION（【公开与归档】唯一详版），GLOBAL 不再留引用句
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('【公开与归档】');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain(
+        '详见本次分派注入的产出物指引段',
       );
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('【产出物声明】');
+      expect(ARTIFACT_SUBMISSION_INSTRUCTION).toContain('text/doc/file 三类');
+      expect(ARTIFACT_SUBMISSION_INSTRUCTION).toContain('自动拉取归档');
+    });
+
+    it('GLOBAL 工具名统一为真实暴露名（与 VTEAM_MCP_TOOL_NAMES 一致，无短名混用）', () => {
+      for (const name of [
+        'vteam_group_post',
+        'vteam_notify_agent',
+        'vteam_issue_*',
+        'vteam_memory_search',
+        'vteam_memory_save',
+      ]) {
+        expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain(name);
+      }
+      // 【公开与归档】引用行已删：GLOBAL 不再提 submit，唯一详版在 ARTIFACT 段
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('vteam_submit_artifact');
+      expect(ARTIFACT_SUBMISSION_INSTRUCTION).toContain('vteam_submit_artifact');
+      // P1：issue 完整版下沉为 ISSUE_FULL_INSTRUCTION（仅 product/tester/developer 注入），GLOBAL 只留一句版
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('【Issue协作】');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('【Issue 管理】');
+      for (const name of [
+        'vteam_issue_create',
+        'vteam_issue_list',
+        'vteam_issue_get',
+        'vteam_issue_update',
+        'vteam_issue_transition',
+      ]) {
+        expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain(name);
+        expect(ISSUE_FULL_INSTRUCTION).toContain(name);
+      }
+      // P0：条件段已下沉为独立常量，不再出现在 GLOBAL
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('【任务状态】');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('【托管模式】');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('【企业微信】');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('task_transition');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('question_confirm');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('wecom_reply');
     });
 
     it('GLOBAL 常量含【记忆管理】段：引导经 memory_search/memory_save 按需存取记忆（21 篇按需注入哲学）', () => {
       // 三个 sentinel 全部在 join 后的 GLOBAL prompt 中（机器可断言，非"模型会调用工具"行为）
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('【记忆管理】');
-      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('memory_search');
-      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('memory_save');
-      // 工具参数契约完整（含自检索/沉淀的 level 语义）
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('vteam_memory_search');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('vteam_memory_save');
+      // P1：压缩为 2 行（只存可复用经验 howto/pitfall/constraint + 存取调用一句，limit≤5）
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('只存可复用经验');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('howto');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('pitfall');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('constraint');
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain(
-        '{taskId, query?, level?, tags?, limit?≤5}',
+        '调 vteam_memory_search 检索，沉淀时调 vteam_memory_save 保存',
       );
-      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain(
-        '{taskId, selfInstanceId, level, content, description?:30字摘要, tags?}',
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('参数细节查工具 schema');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('{taskId, query?');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain(
+        '{taskId, selfInstanceId',
       );
-      // 既有段不被改动（顺序保留：记忆管理段追加在【托管模式】之后）
+      // P1：禁存清单/翻页/tags 精搜等细节已删（移到 task_context/doclib 按需查，注释注明去向）
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('禁存');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('翻页');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('精搜');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('task_context');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('doclib');
+      // 既有段不被改动（顺序保留：记忆管理段追加在【持久化目录】之后；
+      // P0：【托管模式】已下沉为 HOSTED_CONFIRM_INSTRUCTION，仅主 Agent 条件注入）
       expect(
         GLOBAL_SYSTEM_INSTRUCTIONS.indexOf('【记忆管理】'),
-      ).toBeGreaterThan(GLOBAL_SYSTEM_INSTRUCTIONS.indexOf('【托管模式】'));
+      ).toBeGreaterThan(GLOBAL_SYSTEM_INSTRUCTIONS.indexOf('【持久化目录】'));
+      expect(HOSTED_CONFIRM_INSTRUCTION).toContain('vteam_question_confirm');
+      expect(TASK_TRANSITION_INSTRUCTION).toContain('vteam_task_transition');
+      expect(WECOM_SYSTEM_INSTRUCTION).toContain('vteam_wecom_reply');
+    });
+
+    it('去参数化：核心提示词正文不含行内工具参数 JSON，工具名与硬约束保留', () => {
+      const paramJson = /\{(taskId|type:|teamId|selfInstanceId)/;
+      for (const text of [
+        GLOBAL_SYSTEM_INSTRUCTIONS,
+        MEMORY_INSTRUCTION,
+        ARTIFACT_SUBMISSION_INSTRUCTION,
+        GROUP_TRIGGER_INSTRUCTION,
+        TEAM_GROUP_TRIGGER_INSTRUCTION,
+        WECOM_SYSTEM_INSTRUCTION,
+        WECOM_TRIGGER_INSTRUCTION,
+        TASK_TRANSITION_INSTRUCTION,
+        HOSTED_CONFIRM_INSTRUCTION,
+        TEAM_SYSTEM_RECEPTION_INSTRUCTION,
+      ]) {
+        expect(text).not.toMatch(paramJson);
+      }
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('vteam_notify_agent');
+      expect(TASK_TRANSITION_INSTRUCTION).toContain('vteam_task_transition');
+      expect(TASK_TRANSITION_INSTRUCTION).toContain('403');
+      expect(HOSTED_CONFIRM_INSTRUCTION).toContain('vteam_question_confirm');
+      expect(HOSTED_CONFIRM_INSTRUCTION).toContain('仅主实例可调用');
+      expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('禁止传递 taskId 参数');
+      expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('tmm_ 前缀');
+      expect(ARTIFACT_SUBMISSION_INSTRUCTION).toContain('vteam_submit_artifact');
+      expect(GROUP_TRIGGER_INSTRUCTION).toContain('vteam_group_post');
+      expect(GROUP_TRIGGER_INSTRUCTION).toContain('自动归档为产出物');
+    });
+
+    it('plan 屏蔽记忆段：role=plan 不注入【记忆管理】2行（toolAllows 无 memory 工具，防 guard 拒）', () => {
+      const plan: AgentIdentityInfo = {
+        id: 'a_plan',
+        name: '计划员',
+        role: 'plan',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      };
+      expect(isPlanRole(plan.role)).toBe(true);
+      const s = buildSystemInstructions(plan);
+      expect(s).not.toContain(MEMORY_INSTRUCTION);
+      expect(s).not.toContain('【记忆管理】');
+      expect(s).not.toContain('vteam_memory_search');
+      expect(s).not.toContain('vteam_memory_save');
+      // 非记忆段不受影响
+      expect(s).toContain('【持久化目录】');
+      expect(s).toContain('【公开与归档】');
+      expect(s).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+    });
+
+    it('plan 角色判定兼容大小写及中文“计划员”（参考 roleNeedsIssueDetail 写法）', () => {
+      for (const role of ['plan', 'Plan', 'PLAN', '计划员', '计划']) {
+        expect(isPlanRole(role)).toBe(true);
+        const s = buildSystemInstructions({
+          id: 'a_plan',
+          name: null,
+          role,
+          prompt: null,
+          persona: null,
+          agentKey: null,
+        });
+        expect(s).not.toContain('【记忆管理】');
+      }
+      for (const role of [
+        'product',
+        'developer',
+        'project_manager',
+        'architect',
+        'tester',
+        null,
+        undefined,
+      ]) {
+        expect(isPlanRole(role)).toBe(false);
+      }
+    });
+
+    it('product 有记忆段（非 plan 照常注入，向后兼容）', () => {
+      const product: AgentIdentityInfo = {
+        id: 'a_product',
+        name: '产品经理',
+        role: 'product',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      };
+      const s = buildSystemInstructions(product);
+      expect(s).toContain(MEMORY_INSTRUCTION);
+      expect(s).toContain('【记忆管理】');
+      // GLOBAL 导出值不变（MEMORY 拆分前后逐字一致）
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain(MEMORY_INSTRUCTION);
+      // opts.agentRole 显式覆盖：agent.role 非 plan 但 agentRole=plan → 仍屏蔽
+      expect(
+        buildSystemInstructions(product, { agentRole: 'plan' }),
+      ).not.toContain('【记忆管理】');
+      // agentRole 缺省回退 agent.role：plan agent 不传 opts 照样屏蔽
+      expect(
+        buildSystemInstructions({ ...product, role: 'plan' }),
+      ).not.toContain('【记忆管理】');
     });
 
     it('persistentWorkDir 注入：提示词含动态【运行时工作目录】段（实际解析路径）', () => {
@@ -1229,9 +1468,9 @@ describe('WorkerDispatcher', () => {
       expect(s).toContain('【持久化目录】');
     });
 
-    it('persistentWorkDir 缺省：仅静态【持久化目录】段，不注入动态【运行时工作目录】段（向后兼容）', () => {
+    it('persistentWorkDir 缺省：仅静态【持久化目录】段，不注入动态分配路径句（向后兼容）', () => {
       const s = buildSystemInstructions(agent);
-      expect(s).not.toContain('【运行时工作目录】');
+      expect(s).not.toContain('本任务为你分配的实际持久化工作目录为');
       expect(s).toContain('【持久化目录】');
     });
 
@@ -1308,20 +1547,19 @@ describe('WorkerDispatcher', () => {
 
     it('persona 拼接：agent.persona=strict 时注入【性格】段（含安全阀文案），不改写 prompt', () => {
       const s = buildSystemInstructions({ ...agent, persona: 'strict' });
-      expect(s).toContain('## 性格');
+      expect(s).toContain('【性格】');
       expect(s).toContain('附改进建议');
       expect(s).toContain('【职责】负责需求拆解与文档化。'); // prompt 原样保留，未被性格污染
     });
 
     it('persona 为 null：不注入【性格】段（缺省/存量 agent 无性格，向后兼容）', () => {
       const s = buildSystemInstructions(agent);
-      expect(s).not.toContain('## 性格');
       expect(s).not.toContain('【性格】');
     });
 
     it('persona 未知 key：renderPersonaSection 返回空串 → 不注入【性格】段且不抛错', () => {
       const s = buildSystemInstructions({ ...agent, persona: 'unknown-key' });
-      expect(s).not.toContain('## 性格');
+      expect(s).not.toContain('【性格】');
       expect(s).toContain('【职责】负责需求拆解与文档化。');
     });
 
@@ -1335,7 +1573,7 @@ describe('WorkerDispatcher', () => {
       expect(s2).not.toContain(PLAN_PRODUCE_INSTRUCTION);
       expect(s2).not.toContain(PLAN_REVIEW_INSTRUCTION);
       // 计划模式关闭时无新流程关键字泄漏，且与缺省调用逐字节一致
-      // （注：裸词 question 不断言——存量 MAIN_AGENT_INSTRUCTION 含 question_confirm）
+      // （注：裸词 question 不断言——主 Agent【托管模式】段含 question_confirm）
       expect(s2).toBe(s);
       for (const kw of ['plan-creation', 'vteam_plan_review', '用 question 工具']) {
         expect(s).not.toContain(kw);
@@ -1365,7 +1603,7 @@ describe('WorkerDispatcher', () => {
       expect(s).toContain('REJECT');
       expect(s).toContain('feedback');
       expect(s).toContain('APPROVE');
-      expect(s).toContain('task_transition');
+      expect(s).toContain('vteam_task_transition');
       // 服务端扇出的 plan_review 工具已下线：编排指令不再引用
       expect(s).not.toContain('vteam_plan_review');
       expect(s).not.toContain('plan-creation');
@@ -1379,7 +1617,7 @@ describe('WorkerDispatcher', () => {
       expect(s).toContain(PLAN_REVIEW_INSTRUCTION);
       expect(s).toContain('【计划评审】');
       expect(s).toContain('不要另起计划');
-      expect(s).toContain('group_post');
+      expect(s).toContain('vteam_group_post');
       expect(s).toContain('.opencode/plans/');
       expect(s).not.toContain(PLAN_PRODUCE_INSTRUCTION);
       // 评审在全新会话、输入仅计划文件，结论须自包含
@@ -1390,15 +1628,219 @@ describe('WorkerDispatcher', () => {
     it('产出物提交引导：恒注入 submit_artifact 用法（计划文档/交付物统一走该工具）', () => {
       const s = buildSystemInstructions(agent);
       expect(s).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
-      expect(s).toContain('submit_artifact');
-      expect(s).toContain('fileRef');
-      expect(s).toContain('group_post');
+      expect(s).toContain('vteam_submit_artifact');
+      expect(s).toContain('text/doc/file 三类');
+      expect(s).toContain('自动拉取归档');
+      expect(s).toContain('vteam_group_post');
       // 自造计划域已下线：不再注入 plan_submit / plan_review 等提示词
       expect(s).not.toContain('plan_submit');
       expect(s).not.toContain('plan_review');
       expect(s).not.toContain('【计划工作流】');
       // 既有段不受影响
       expect(s).toContain(GLOBAL_SYSTEM_INSTRUCTIONS);
+    });
+
+    it('短工具名批量改真实名：面向模型的自然语言指引无裸短名（协议/注释除外）', () => {
+      const noBareShort =
+        /(?<!vteam_)(group_post|notify_agent|chat_history|wecom_reply|submit_artifact|task_context|task_transition|question_confirm|task_create|memory_search|memory_save|team_view|my_profile|doclib|issue_create|issue_list|issue_get|issue_update|issue_transition)/;
+      for (const text of [
+        GROUP_TRIGGER_INSTRUCTION,
+        TEAM_GROUP_TRIGGER_INSTRUCTION,
+        WECOM_TRIGGER_INSTRUCTION,
+        PLAN_PRODUCE_INSTRUCTION,
+        PLAN_REVIEW_INSTRUCTION,
+        MAIN_AGENT_INSTRUCTION,
+      ]) {
+        expect(text).not.toMatch(noBareShort);
+      }
+      expect(GROUP_TRIGGER_INSTRUCTION).toContain('vteam_group_post');
+      expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('vteam_group_post');
+      expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('vteam_notify_agent');
+      expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('vteam_chat_history');
+      expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('vteam_task_create');
+      expect(WECOM_TRIGGER_INSTRUCTION).toContain('vteam_wecom_reply');
+      expect(WECOM_TRIGGER_INSTRUCTION).toContain('vteam_group_post');
+      expect(PLAN_PRODUCE_INSTRUCTION).toContain('vteam_group_post');
+      expect(PLAN_PRODUCE_INSTRUCTION).toContain('vteam_task_transition');
+      // question 为 opencode 原生多选工具（非 vteam MCP），保留原名
+      expect(PLAN_PRODUCE_INSTRUCTION).toContain('question');
+      expect(PLAN_PRODUCE_INSTRUCTION).not.toContain('vteam_question');
+      expect(PLAN_REVIEW_INSTRUCTION).toContain('vteam_group_post');
+      expect(MAIN_AGENT_INSTRUCTION).toContain('vteam_notify_agent');
+      expect(MAIN_AGENT_INSTRUCTION).not.toContain('vteam_question_confirm');
+    });
+
+    it('P0 条件注入：isMainAgent=true 注入【任务状态】+【托管模式】工具段（含真实名）', () => {
+      const s = buildSystemInstructions(agent, { isMainAgent: true });
+      expect(s).toContain(TASK_TRANSITION_INSTRUCTION);
+      expect(s).toContain(HOSTED_CONFIRM_INSTRUCTION);
+      expect(s).toContain('vteam_task_transition');
+      expect(s).toContain('vteam_question_confirm');
+      expect(s).not.toContain(NON_MAIN_AGENT_NOTE);
+    });
+
+    it('P0 条件注入：非主/缺省仅注协作指引一句，不教必 403 工具', () => {
+      for (const opts of [
+        undefined,
+        {},
+        { isMainAgent: false },
+      ] as const) {
+        const s = buildSystemInstructions(agent, opts);
+        expect(s).toContain(NON_MAIN_AGENT_NOTE);
+        expect(s).toContain('状态流转/托管确认由主Agent操作，有事@主Agent');
+        expect(s).not.toContain(TASK_TRANSITION_INSTRUCTION);
+        expect(s).not.toContain(HOSTED_CONFIRM_INSTRUCTION);
+        expect(s).not.toContain('【任务状态】');
+        expect(s).not.toContain('【托管模式】');
+      }
+    });
+
+    it('复读消除：全文【公开与归档】仅一处（ARTIFACT 完整版，GLOBAL 无引用行）', () => {
+      const s = buildSystemInstructions(agent, { isMainAgent: true });
+      const occurrences = s.split('【公开与归档】').length - 1;
+      expect(occurrences).toBe(1);
+      expect(s).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('【公开与归档】');
+    });
+
+    it('复读消除：MAIN 不含托管句但主仍有 HOSTED 全版（非主走协作指引不受影响）', () => {
+      expect(MAIN_AGENT_INSTRUCTION).not.toContain('任务开启托管模式时');
+      expect(MAIN_AGENT_INSTRUCTION).not.toContain('vteam_question_confirm');
+      const main = buildSystemInstructions(agent, { isMainAgent: true });
+      expect(main).toContain(MAIN_AGENT_INSTRUCTION);
+      expect(main).toContain(HOSTED_CONFIRM_INSTRUCTION);
+      expect(main).toContain('【托管模式】');
+      const nonMain = buildSystemInstructions(agent, { isMainAgent: false });
+      expect(nonMain).toContain(NON_MAIN_AGENT_NOTE);
+      expect(nonMain).not.toContain(HOSTED_CONFIRM_INSTRUCTION);
+      expect(nonMain).not.toContain(MAIN_AGENT_INSTRUCTION);
+    });
+
+    it('P0 漏网：boundary 越界句用真实暴露名 vteam_notify_agent', () => {
+      const section = renderBoundarySection('vteam-product');
+      expect(section).toContain('vteam_notify_agent');
+      expect(section).not.toMatch(/(?<!vteam_)notify_agent/);
+    });
+
+    it('性格段前空行：plan 外角色性格段前有空行分隔', () => {
+      const s = buildSystemInstructions({ ...agent, persona: 'steady' });
+      expect(s).toContain('\n\n【性格】\n');
+    });
+
+    it('段落分隔：协议段/身份/职责/性格之间均为空行分隔，且全文无三换行及以上', () => {
+      const s = buildSystemInstructions({ ...agent, persona: 'steady' });
+      // GLOBAL 内【群聊通知】与【@定向机制】之间空行分隔
+      expect(s).toContain('vteam_group_post 发布。\n\n【@ 定向机制】');
+      // GLOBAL 内【@定向机制】与【@用户】之间空行分隔
+      expect(s).toContain('定向回复特定成员。\n\n【@用户】');
+      // 【你的身份】与【职责】之间空行分隔
+      expect(s).toContain('必须填写你的实例 id（a_product）。\n\n【职责】');
+      // 性格段前为空行分隔
+      expect(s).toContain('\n\n【性格】\n');
+      // 全文无三换行及以上（join 与段首前导换行不得叠出多余空行）
+      expect(s).not.toMatch(/\n{3,}/);
+    });
+
+    it('P0 条件注入：isWecomChannel=true 才注入【企业微信】段，缺省不注入', () => {
+      expect(buildSystemInstructions(agent)).not.toContain(
+        WECOM_SYSTEM_INSTRUCTION,
+      );
+      expect(
+        buildSystemInstructions(agent, { isWecomChannel: false }),
+      ).not.toContain(WECOM_SYSTEM_INSTRUCTION);
+      const s = buildSystemInstructions(agent, { isWecomChannel: true });
+      expect(s).toContain(WECOM_SYSTEM_INSTRUCTION);
+      expect(s).toContain('vteam_wecom_reply');
+      expect(s).toContain('【企业微信】');
+    });
+
+    it('P0 去重 selfInstanceId：身份段只保留一处指引，无复读句', () => {
+      const s = buildSystemInstructions(agent);
+      expect(s).not.toContain('落库类工具');
+      expect(s).toContain('selfInstanceId 参数必须填写你的实例 id');
+      const s2 = buildSystemInstructions(agent, {
+        selfInstanceId: 'tmm_0000000002',
+        selfAlias: '产品经理-1',
+        taskInstanceId: 'ta_0000000004',
+      });
+      expect(s2).not.toContain('落库类工具');
+      expect(s2).toContain(
+        'selfInstanceId 参数必须填写你的任务实例 id（ta_0000000004）',
+      );
+    });
+
+    it('P1 issue 按角色裁剪：product 显式 issueDetail=true 收完整版（含创建+指派+流转 action）', () => {
+      const product: AgentIdentityInfo = {
+        id: 'a_product',
+        name: '产品经理',
+        role: 'product',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      };
+      expect(roleNeedsIssueDetail(product.role)).toBe(true);
+      const s = buildSystemInstructions(product, { issueDetail: true });
+      expect(s).toContain(ISSUE_FULL_INSTRUCTION);
+      expect(s).toContain('vteam_issue_create');
+      expect(s).toContain('vteam_issue_transition');
+      expect(s).toContain('action: start/resolve/close/reopen/reject');
+      expect(s).toContain('assigneeInstanceId');
+      // 一句版仍在（GLOBAL 恒带）
+      expect(s).toContain('【Issue协作】');
+    });
+
+    it('P1 issue 按角色裁剪：architect 缺省只收一句版，不收完整版', () => {
+      const architect: AgentIdentityInfo = {
+        id: 'a_architect',
+        name: '架构师',
+        role: 'architect',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      };
+      expect(roleNeedsIssueDetail(architect.role)).toBe(false);
+      for (const opts of [undefined, {}, { issueDetail: false }] as const) {
+        const s = buildSystemInstructions(architect, opts);
+        expect(s).toContain('【Issue协作】');
+        expect(s).not.toContain(ISSUE_FULL_INSTRUCTION);
+        expect(s).not.toContain('vteam_issue_create');
+        expect(s).not.toContain('action: start/resolve/close/reopen/reject');
+      }
+    });
+
+    it('P1 issue 角色判定：tester/developer（含中文名）收完整版，project_manager/plan/未知只收一句版', () => {
+      for (const role of [
+        'product',
+        'tester',
+        'developer',
+        '产品经理',
+        '测试',
+        '开发者',
+      ]) {
+        expect(roleNeedsIssueDetail(role)).toBe(true);
+      }
+      for (const role of [
+        'architect',
+        'project_manager',
+        'plan',
+        '架构师',
+        '项目经理',
+        null,
+        undefined,
+      ]) {
+        expect(roleNeedsIssueDetail(role)).toBe(false);
+      }
+      // 缺省不注入完整版（兼容存量调用）：product 裸调也只收一句版
+      const s = buildSystemInstructions({
+        id: 'a_product',
+        name: '产品经理',
+        role: 'product',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      });
+      expect(s).toContain('【Issue协作】');
+      expect(s).not.toContain(ISSUE_FULL_INSTRUCTION);
     });
   });
 
@@ -1723,7 +2165,7 @@ describe('WorkerDispatcher', () => {
       expect(promptText).not.toContain('需求正文 v3');
       // 单触发器任务段（任务上下文行 + 当前消息）
       expect(promptText).toContain('【任务上下文】');
-      expect(promptText).toContain('chat_history');
+      expect(promptText).toContain('vteam_chat_history');
       expect(promptText).toContain(request.text);
     });
 
@@ -4089,7 +4531,7 @@ describe('WorkerDispatcher', () => {
       expect(prompt).not.toContain('群聊里聊过需求细节');
       // 含任务上下文行 + 当前消息
       expect(prompt).toContain('【任务上下文】');
-      expect(prompt).toContain('chat_history');
+      expect(prompt).toContain('vteam_chat_history');
       expect(prompt).toContain(request.text);
     });
 
@@ -4971,7 +5413,7 @@ describe('WorkerDispatcher', () => {
       expect(teamOut).toBe(
         base.replace(
           ARTIFACT_SUBMISSION_INSTRUCTION,
-          `${TEAM_SYSTEM_RECEPTION_INSTRUCTION}\n${ARTIFACT_SUBMISSION_INSTRUCTION}`,
+          `${TEAM_SYSTEM_RECEPTION_INSTRUCTION}\n\n${ARTIFACT_SUBMISSION_INSTRUCTION}`,
         ),
       );
     });
@@ -5407,7 +5849,7 @@ describe('WorkerDispatcher', () => {
       );
       const system = workerClient.execute.mock.calls[0][1].system as string;
       expect(system).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
-      expect(system).toContain('submit_artifact');
+      expect(system).toContain('vteam_submit_artifact');
       expect(system).not.toContain('plan_submit');
       expect(system).not.toContain('plan_review');
       expect(system).not.toContain('【计划工作流】');
@@ -5879,7 +6321,7 @@ describe('WorkerDispatcher', () => {
       expect(prompt).toContain(TEAM_GROUP_TRIGGER_INSTRUCTION);
       expect(prompt).toContain('禁止传递 taskId 参数');
       expect(prompt).not.toContain(GROUP_TRIGGER_INSTRUCTION);
-      expect(prompt).not.toContain('chat_history / doclib');
+      expect(prompt).not.toContain('vteam_chat_history / vteam_doclib / vteam_task_context');
     });
 
     it('触发消息带图片附件 → execute 携带 attachments + prompt 追加图片指引', async () => {
@@ -5923,7 +6365,7 @@ describe('WorkerDispatcher', () => {
       const prompt = workerClient.execute.mock.calls[0][1].prompt[0]
         .text as string;
       expect(prompt).toContain(
-        '需要群聊历史时调用 chat_history（传 teamId）；需要向群聊发布时调用 group_post（传 teamId）',
+        '需要群聊历史时调用 vteam_chat_history（传 teamId）；需要向群聊发布时调用 vteam_group_post（传 teamId）',
       );
     });
 

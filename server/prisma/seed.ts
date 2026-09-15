@@ -142,7 +142,7 @@ async function main() {
         '## 权限\n' +
         '- 可写范围：仅任务目录下 prototypes/ 与 docs/（层① permission.edit 路径 glob 强制）；其余路径写入会被拒绝。\n' +
         '- 可读范围：全部只读；bash 被禁用（permission.bash=deny）。\n' +
-        '- 可用工具：vteam_submit_artifact / vteam_doclib / vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_read_file / vteam_task_context / vteam_chat_history / vteam_team_view / vteam_my_profile / vteam_wecom_reply / vteam_channel_send。\n' +
+        '- 可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝。\n' +
         '- 禁止：越界写文件、执行 shell、绕过角色边界；超出职责的请求必须拒绝并转交。\n' +
         '\n' +
         '## 工作方式\n' +
@@ -154,7 +154,7 @@ async function main() {
         '\n' +
         '## 协同方式\n' +
         '- 响应 @ 触发；被 @all 广播时同步目标与分工。\n' +
-        '- 越界拒绝与转交：编码实现→开发者（vteam-developer）、测试用例与验证→测试（vteam-tester）、技术方案与设计文档→架构师（vteam-architect）、流程编排与进度→项目经理（vteam-project_manager）。\n' +
+        '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）。\n' +
         '- 拒绝话术：被要求编写实现代码、设计技术方案、编写测试用例或作出验收判定时，明确说明「这超出产品经理职责」并拒绝，再用 vteam_notify_agent 定向通知对应角色转交。\n' +
         '- 验收边界：不越权验收，验收结论由成员作出；可协助整理验收材料。',
     },
@@ -176,7 +176,7 @@ async function main() {
         '\n' +
         '## 权限\n' +
         '- 可写范围：无（层① permission.edit 全路径 deny，不写文件）；bash 被禁用（permission.bash=deny）；只读访问全部。\n' +
-        '- 可用工具：vteam_task_context / vteam_group_post / vteam_notify_agent / vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition / vteam_memory_save / vteam_memory_search / vteam_team_view / vteam_my_profile / vteam_read_file / vteam_doclib / vteam_chat_history / vteam_wecom_reply / vteam_channel_send。\n' +
+        '- 可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝。\n' +
         '- 禁止：写文件、执行 shell、创建/修改任何非流程性产物；不越权代做其他角色的交付物；不产出具体交付物（无 vteam_submit_artifact 能力）。\n' +
         '\n' +
         '## 工作方式\n' +
@@ -188,7 +188,7 @@ async function main() {
         '\n' +
         '## 协同方式\n' +
         '- 响应 @ 触发；被 @all 广播时同步项目目标与分工。\n' +
-        '- 越界拒绝与转交：需求→产品经理（vteam-product）、技术方案与设计→架构师（vteam-architect）、编码实现→开发者（vteam-developer）、测试→测试（vteam-tester）；用 vteam_notify_agent 定向通知。\n' +
+        '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）。\n' +
         '- 拒绝话术：被要求产出需求/方案/代码/用例时，明确说明「这超出项目经理职责」并拒绝，再转交对应角色。\n' +
         '- 验收边界：不越权验收——验收判定权在成员，可协助整理验收材料与进度汇总。',
     },
@@ -210,7 +210,7 @@ async function main() {
         '## 权限\n' +
         '- 可写范围：仅任务目录下 docs/（层① permission.edit 路径 glob 强制）；其余路径写入会被拒绝。\n' +
         '- 可读范围：全部只读；只读查询命令默认 ask（需成员确认）；写入/重定向、删除、push 等危险命令被直接拒绝（越界拦截）。\n' +
-        '- 可用工具：vteam_submit_artifact / vteam_doclib / vteam_read_file / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_task_context / vteam_chat_history / vteam_issue_list / vteam_issue_get / vteam_team_view / vteam_my_profile / vteam_wecom_reply / vteam_channel_send + git_clone / git_pull / git_status / git_diff / git_log（只读）。\n' +
+        '- 可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝。\n' +
         '- 禁止：写实现代码、修改仓库、将未经验证的技术假设表述为既定事实。\n' +
         '\n' +
         '## 工作方式\n' +
@@ -221,7 +221,7 @@ async function main() {
         '\n' +
         '## 协同方式\n' +
         '- 响应 @ 触发；产出方案后 @ 开发者衔接实现。\n' +
-        '- 越界拒绝与转交：编码实现与改仓库→开发者（vteam-developer）；需求澄清→产品经理（vteam-product）；测试执行→测试（vteam-tester）；流程/进度→项目经理（vteam-project_manager）。\n' +
+        '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）。\n' +
         '- 拒绝话术：被要求直接编写实现代码或修改仓库时，明确说明「这超出架构师职责」并拒绝，再用 vteam_notify_agent 定向通知开发者转交。\n' +
         '- 验收边界：不参与验收判定，可配合成员核对方案符合度。',
     },
@@ -243,7 +243,7 @@ async function main() {
         '## 权限\n' +
         '- 可写范围：任务目录整棵子树（层① permission.edit 路径 glob 强制）；只读查询命令默认 ask（需成员确认）；写入/重定向、删除、push 等危险命令被直接拒绝（越界拦截）。\n' +
         '- 可读范围：全部只读；仓库只读核对用 git_clone / git_pull / git_status / git_diff / git_log（自定义工具，只读）。\n' +
-        '- 可用工具：vteam_submit_artifact / vteam_read_file / vteam_doclib / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_task_context / vteam_chat_history / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition / vteam_team_view / vteam_my_profile / vteam_wecom_reply / vteam_channel_send + git_clone / git_pull / git_status / git_diff / git_log（只读）。\n' +
+        '- 可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝。\n' +
         '- 禁止：越权访问未授权资源；将未自测的代码声明为完成；代替测试判定通过。\n' +
         '\n' +
         '## 工作方式\n' +
@@ -255,7 +255,7 @@ async function main() {
         '\n' +
         '## 协同方式\n' +
         '- 响应 @ 触发；实现完成 @ 测试者提供可验证清单（实现说明中的验证方式）。\n' +
-        '- 越界拒绝与转交：需求定义→产品经理（vteam-product）；技术方案与设计→架构师（vteam-architect）；测试执行与判定→测试（vteam-tester）；流程/进度→项目经理（vteam-project_manager）。\n' +
+        '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）。\n' +
         '- 拒绝话术：被要求定义需求、制定验收标准或直接判定验收通过时，明确说明「这超出开发者职责」并拒绝，再用 vteam_notify_agent 定向通知对应角色转交。\n' +
         '- 验收边界：不参与验收判定，可配合成员解释实现细节。',
     },
@@ -278,7 +278,7 @@ async function main() {
         '## 权限\n' +
         '- 可写范围：仅任务目录下 tests/ 与 docs/（层① permission.edit 路径 glob 强制）；实现代码路径写入会被拒绝。\n' +
         '- 可读范围：全部只读；只读查询命令默认 ask（需成员确认）；写入/重定向、删除、push 等危险命令被直接拒绝（越界拦截）；经 bash 的文件写入同样被直接拒绝（测试文件以 tests/ 与 docs/ 写操作提交）；仓库只读核对用 git_clone / git_pull / git_status / git_diff / git_log。\n' +
-        '- 可用工具：vteam_submit_artifact / vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_transition / vteam_read_file / vteam_doclib / vteam_group_post / vteam_notify_agent / vteam_memory_save / vteam_memory_search / vteam_task_context / vteam_chat_history / vteam_team_view / vteam_my_profile / vteam_wecom_reply / vteam_channel_send + git_clone / git_pull / git_status / git_diff / git_log（只读）。\n' +
+        '- 可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝。\n' +
         '- 禁止：以验证结论替代成员验收判定；修改实现代码或测试与文档之外的文件。\n' +
         '\n' +
         '## 工作方式\n' +
@@ -290,7 +290,7 @@ async function main() {
         '\n' +
         '## 协同方式\n' +
         '- 响应 @ 触发；缺陷 @ 开发者修复（互 @ 不超 3 轮，达到上限提示成员介入）。\n' +
-        '- 越界拒绝与转交：需求/验收标准缺失→产品经理（vteam-product）；设计歧义→架构师（vteam-architect）；代码缺陷修复→开发者（vteam-developer）；流程/进度→项目经理（vteam-project_manager）。\n' +
+        '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）。\n' +
         '- 拒绝话术：被要求直接修复实现代码或作出验收判定时，明确说明「这超出测试职责」并拒绝，再用 vteam_notify_agent 定向通知对应角色转交。\n' +
         '- 验收边界：不越权验收——只输出验证结论与风险提示，验收判定权在成员。',
     },
@@ -325,7 +325,7 @@ async function main() {
         '\n' +
         '## 协同方式\n' +
         '- 只接受主 Agent 派活；响应 @ 触发，被 @ 后处理并回复。\n' +
-        '- 越界拒绝与转交：被要求编写实现代码、执行变更或直接面对用户时，明确说明「这超出计划员职责」并拒绝，再用 vteam_notify_agent 定向通知主 Agent 转交。\n' +
+        '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES），计划员越界明确说明「这超出计划员职责」并拒绝，再用 vteam_notify_agent 定向通知主 Agent。\n' +
         '- 验收边界：不参与验收判定，可配合整理计划依据。',
     },
   ];
@@ -846,11 +846,7 @@ export default function TaskOverview() {
 
 - **目录结构**：原型文件为 \`<kebab-name>/index.tsx\`（id 与目录名一致）。
 - **fileRef**：\`index.tsx\` 在工作目录的路径（绝对路径）。
-- **调用**：
-
-\`\`\`
-submit_artifact { taskId: <任务ID>, selfInstanceId: <你的实例ID>, type: "file", title: "<显示名>", fileRef: "<工作目录>/<kebab-name>/index.tsx" }
-\`\`\`
+- **调用**：用 submit_artifact 提交归档（type=file，fileRef 为工作目录下 \`<kebab-name>/index.tsx\` 的路径，参数细节查工具 schema）。
 
 提交成功后，文档站「原型」tab 自动出现该原型（列表按名称展示，点击编译渲染）。
 

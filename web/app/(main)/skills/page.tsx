@@ -6,13 +6,11 @@
  * 唯一来源：docs/agent-platform/prototypes/skills-tools-manage/index.tsx
  * （布局/间距/文案/data-testid 零改动；token 统一走 src/theme/tokens.ts）。
  * - 二 Tab（技能 / 工具）+ 随 Tab 切换的操作入口
- *   （技能→「上传技能」；工具→「注册工具」）。
+ *   （技能→「上传技能」/「新建技能」；工具→ MCP 子 Tab「新建服务器」）。
  * - 技能 Tab（skill-item 列表）：技能名 / 版本 / 描述 / 绑定角色（AgentBadge）/
  *   来源（内置/上传）/ 状态（启用/停用）。
- * - 工具 Tab 内三子 Tab（tool-subtab：builtin / custom / mcp，受控互斥）：
+ * - 工具 Tab 内二子 Tab（tool-subtab：builtin / mcp，受控互斥）：
  *   · 内置工具（builtin）：平台预置，开箱即用（git-status / code-format / secret-scan）。
- *   · 自定义工具（custom）：用户注册的 代码/HTTP/CLI 工具，标注实现类型
- *     （代码=绿 / HTTP=橙 / CLI=紫）+ 依赖状态（依赖已安装 ✅ / 依赖缺失 ⚠️）。
  *   · MCP 工具（mcp）：MCP server 暴露的工具，标注「来自 MCP server，命名
  *     <server>_<tool>」，显示 server 类型（Local 本地蓝 / Remote 远程紫）
  *     与连接状态（已连接 ✅ / 未连接 ⚠️ / 连接中 ◐，连接中 ◐ 旋转动画 stmmcp- scoped）。
@@ -23,8 +21,8 @@
  *   （TanStack Query，对齐 agents 页模式）；上传技能 → POST /skills multipart
  *   （FormData file=SKILL.md，name/description/version 由后端 frontmatter 解析）、
  *   启停 → skill PATCH /skills/:id/status / tool PATCH /tools/:id {enabled}、
- *   注册工具 → 跳转 /tools/register 完整注册页（tool-register 原型保真迁移，5 区块表单）、
- *   MCP server 本体由 MCP 子 Tab「新建服务器」弹窗管理（POST /mcp-servers）；
+ *   MCP server 本体由 MCP 子 Tab「新建服务器」弹窗管理（POST /mcp-servers，
+ *   MCP 服务（含本地/远端）的唯一新增入口）；
  *   技能编辑 → PATCH /skills/:id
  *   {name?, description?, content?} 弹窗（UX-15 补齐：编辑元信息 + SKILL.md 全文，
  *   name/description 变更后端同步重写 content frontmatter）；skills/tools 管理为 [admin] 专属 → 非 admin
@@ -33,20 +31,18 @@
  *     有 fileMeta=上传 / 无=内置；version 读 fileMeta.version 缺省 v1；roles 后端无绑定
  *     信息 → 显示「未绑定」）。
  *   - Tool{name/action/source/execution/mcpServer/schema/initCommand/enabled}：desc 显示
- *     「调用标识 <action>」；自定义工具 kind 由 execution 映射（code→代码/http→HTTP/cli→CLI）；
- *     MCP 工具展示 <server>_<action>，server type/连接状态（T8c）从 GET /mcp-servers 真实
+ *     「调用标识 <action>」；MCP 工具展示 <server>_<action>，server type/连接状态（T8c）从 GET /mcp-servers 真实
  *     拉取（worker 心跳节流探测上报的三态 connected/failed/needs_auth，11 篇 §5.8）；
  *     无上报数据 → 中性默认 remote/未连接。
  * - 导航（NavTopBar/NavDock/CmdKPanel）由 AppShell 提供，本页仅渲染内容区；
- *   原型 NavDock 的统计子面板（技能/内置/自定义/MCP/依赖缺失计数）随 AppShell
+ *   原型 NavDock 的统计子面板（技能/内置/MCP/依赖缺失计数）随 AppShell
  *   无 children 插槽不迁移（workers 页先例），关键计数已含于 Tab 徽章与子 Tab 徽章。
- * - 页面内扩展 token（仿原型 :72-153）：sourceColors / enableColors / depStateColors /
- *   toolKindTheme / groupTheme / builtinReadyTheme / mcpTypeTheme / mcpStatusTheme，
+ * - 页面内扩展 token（仿原型 :72-153）：sourceColors / enableColors /
+ *   groupTheme / builtinReadyTheme / mcpTypeTheme / mcpStatusTheme，
  *   遵循「扩展 token」范式不写 tokens.ts 基线。
  * - 铁律（T15）：无 fixed / 100vh / 100vw；scoped 动画 stmmcp- 前缀防污染。
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -79,22 +75,9 @@ const enableColors = {
   停用: { color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
 } as const;
 
-/** 工具依赖状态：ok=依赖已安装 ✅ / missing=依赖缺失 ⚠️（worker 节点需按安装命令下载） */
-const depStateColors = {
-  ok: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)", label: "依赖已安装", mark: "✅" },
-  missing: { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)", label: "依赖缺失", mark: "⚠️" },
-} as const;
-
-/** 自定义工具的实现类型：代码=绿 / HTTP=橙 / CLI=紫（与角色/状态色系区分） */
-const toolKindTheme: Record<"代码" | "HTTP" | "CLI", { color: string; bg: string; border: string }> = {
-  代码: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
-  HTTP: { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
-  CLI: { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
-};
-
 /* ------------------------------ 工具子 Tab 主题（页面内扩展 token） ------------------------------
- * 工具 Tab 按来源分三子 Tab：内置=平台预置（蓝系）/ 自定义=用户注册（紫系）/ MCP=MCP
- * server 暴露（青系），三子 Tab 图标/计数色与行内徽章（来源/类型/连接）语义一一对应。
+ * 工具 Tab 按来源分二子 Tab：内置=平台预置（蓝系）/ MCP=MCP server 暴露（青系），
+ * 二子 Tab 图标/计数色与行内徽章（来源/类型/连接）语义一一对应。
  */
 const groupTheme = {
   builtin: {
@@ -104,14 +87,6 @@ const groupTheme = {
     color: "#0D9488",
     bg: "rgba(13,148,136,0.10)",
     border: "rgba(13,148,136,0.22)",
-  },
-  custom: {
-    icon: "✚",
-    title: "自定义工具",
-    desc: "用户注册的 代码 · HTTP · CLI 工具",
-    color: "#7C3AED",
-    bg: "rgba(124,58,237,0.10)",
-    border: "rgba(124,58,237,0.22)",
   },
   mcp: {
     icon: "◈",
@@ -171,7 +146,7 @@ const mcpAnimCss = `
 
 /* ------------------------------ API 数据模型（对齐 SkillsModule / ToolsModule 返回） ------------------------------
  * GET /skills 与 GET /tools 均返回 {items, total, page, pageSize} 分页结构（对齐 agents 模式）；
- * 展示层模型（SkillItem/BuiltinTool/CustomTool/McpToolItem）保持原型语义，
+ * 展示层模型（SkillItem/BuiltinTool/McpToolItem）保持原型语义，
  * 后端缺失的纯展示字段（version/roles/type/status 等）经适配器降级处理，见 to* 函数注释。
  */
 
@@ -220,6 +195,8 @@ interface ApiMcpServer {
   enabled: boolean;
   /** T8c：connected / failed / needs_auth；未上报 → null */
   status: string | null;
+  /** 已同步物化的工具行数（后端聚合；老版本无此字段时按 undefined 容错） */
+  toolCount?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -229,6 +206,17 @@ interface PageResponse<T> {
   total: number;
   page: number;
   pageSize: number;
+}
+
+/** POST /mcp-servers/:id/sync 响应（发现物化报告；跳过项即重复/冲突告警数据源） */
+interface McpSyncResult {
+  server?: { id: string; name: string; type: string };
+  discovered?: number;
+  created?: number;
+  updated?: number;
+  disabled?: number;
+  skipped?: { action: string; reason: string }[];
+  tools?: { id: string; name: string; action: string }[];
 }
 
 interface SkillItem {
@@ -248,20 +236,6 @@ interface BuiltinTool {
   version: string;
   desc: string;
   roles: RoleKey[];
-  enabled: EnableKey;
-  icon: string;
-}
-
-interface CustomTool {
-  id: string;
-  name: string;
-  version: string;
-  desc: string;
-  roles: RoleKey[];
-  /** 实现类型：代码 / HTTP / CLI（决定 kind 徽章语义色，由 execution 映射） */
-  kind: "代码" | "HTTP" | "CLI";
-  /** 依赖的二进制清单（后端无依赖采集数据 → 恒空数组，视为已就绪） */
-  deps: { bin: string; ok: boolean }[];
   enabled: EnableKey;
   icon: string;
 }
@@ -291,7 +265,6 @@ interface McpToolItem {
  * - version：后端无版本字段，读 fileMeta.version（上传时可携带），缺省 "v1"；
  * - roles：Skill/Tool 表无角色绑定列（agent_skills 为技能反向引用），显示「未绑定」；
  * - 工具 desc：Tool 表无描述列，显示「调用标识 <action>」保留标识信息；
- * - 自定义工具 kind：execution code→代码 / http→HTTP / cli→CLI；
  * - MCP 工具（T8c）：type/status 从 GET /mcp-servers 真实拉取（worker 心跳节流探测三态），
  *   未上报（null）→ 中性默认 remote + disconnected，避免伪造已连接状态。
  */
@@ -339,29 +312,6 @@ function toBuiltinTool(t: ApiTool): BuiltinTool {
     roles: [],
     enabled: t.enabled ? "启用" : "停用",
     icon: BUILTIN_ICON,
-  };
-}
-
-const EXEC_TO_KIND: Record<ApiTool["execution"], CustomTool["kind"]> = {
-  code: "代码",
-  http: "HTTP",
-  cli: "CLI",
-  mcp: "代码",
-};
-
-const CUSTOM_ICON = "✚";
-
-function toCustomTool(t: ApiTool): CustomTool {
-  return {
-    id: t.id,
-    name: t.name,
-    version: "v1",
-    desc: `调用标识 ${t.action}`,
-    roles: [],
-    kind: EXEC_TO_KIND[t.execution],
-    deps: [],
-    enabled: t.enabled ? "启用" : "停用",
-    icon: CUSTOM_ICON,
   };
 }
 
@@ -477,17 +427,23 @@ function ActionButton({
   danger,
   onClick,
   testid,
+  disabled,
+  serverId,
 }: {
   label: string;
   danger?: boolean;
   onClick?: () => void;
   testid?: string;
+  disabled?: boolean;
+  serverId?: string;
 }) {
   return (
     <button
       type="button"
       data-testid={testid}
+      data-server-id={serverId}
       onClick={onClick}
+      disabled={disabled}
       style={{
         padding: `${space.xs}px ${space.md}px`,
         borderRadius: radius.md,
@@ -495,7 +451,8 @@ function ActionButton({
         backgroundColor: "var(--color-surface)",
         color: danger ? "#DC2626" : neutral[600],
         fontSize: fontSize.sm,
-        cursor: "pointer",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.6 : 1,
         fontFamily: fontFamily.body,
         whiteSpace: "nowrap",
       }}
@@ -505,6 +462,53 @@ function ActionButton({
   );
 }
 
+/** MCP 操作下拉菜单项：整行左对齐 + 悬停高亮（行内局部 hover 态） */
+function McpMenuItem({
+  label,
+  danger,
+  onClick,
+  testid,
+  disabled,
+  serverId,
+}: {
+  label: string;
+  danger?: boolean;
+  onClick?: () => void;
+  testid?: string;
+  disabled?: boolean;
+  serverId?: string;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      data-testid={testid}
+      data-server-id={serverId}
+      onClick={onClick}
+      disabled={disabled}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: "block",
+        width: "100%",
+        textAlign: "left",
+        padding: `${space.sm}px ${space.md}px`,
+        borderRadius: radius.sm,
+        border: "none",
+        backgroundColor: hover && !disabled ? neutral[100] : "transparent",
+        color: danger ? "#DC2626" : neutral[700],
+        fontSize: fontSize.sm,
+        fontWeight: 500,
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.6 : 1,
+        fontFamily: fontFamily.body,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
 /** 技能行卡片：图标 + 名称/版本/描述（左），角色 + 来源 + 状态 + 操作（右） */
 function SkillItemRow({
   s,
@@ -621,12 +625,11 @@ function SkillItemRow({
   );
 }
 
-/** 工具子 Tab 类型：内置（平台预置）/ 自定义（用户注册）/ MCP（MCP server 暴露） */
-type ToolTabKey = "builtin" | "custom" | "mcp";
+/** 工具子 Tab 类型：内置（平台预置）/ MCP（MCP server 暴露） */
+type ToolTabKey = "builtin" | "mcp";
 
 const TOOL_SUBTABS: { key: ToolTabKey; label: string; icon: string; color: string }[] = [
   { key: "builtin", label: "内置工具", icon: groupTheme.builtin.icon, color: groupTheme.builtin.color },
-  { key: "custom", label: "自定义工具", icon: groupTheme.custom.icon, color: groupTheme.custom.color },
   { key: "mcp", label: "MCP 工具", icon: groupTheme.mcp.icon, color: groupTheme.mcp.color },
 ];
 
@@ -818,138 +821,6 @@ function BuiltinToolRow({
             onClick={onToggle}
             testid="tool-toggle-button"
           />
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** 自定义工具行卡片：在技能基础上多「实现类型 + 依赖状态」列 */
-function CustomToolRow({
-  t,
-  onView,
-  onEdit,
-  onToggle,
-  canManage,
-}: {
-  t: CustomTool;
-  onView: () => void;
-  onEdit: () => void;
-  onToggle: () => void;
-  canManage: boolean;
-}) {
-  const missing = t.deps.some((d) => !d.ok);
-  const depTheme = missing ? depStateColors.missing : depStateColors.ok;
-  const depLabel = missing
-    ? `${depStateColors.missing.label} ${t.deps.filter((d) => !d.ok).map((d) => d.bin).join("/")}`
-    : depStateColors.ok.label;
-  return (
-    <div
-      data-testid="tool-item"
-      data-group="custom"
-      data-tool-id={t.id}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: space.lg,
-        padding: `${space.lg}px ${space.xl}px`,
-        borderRadius: radius.lg,
-        backgroundColor: "var(--color-surface)",
-        border: `1px solid ${neutral[200]}`,
-        boxShadow: shadow.sm,
-        ...baseFont,
-      }}
-    >
-      {/* 图标块（角色色系） */}
-      <span
-        aria-hidden
-        style={{
-          flexShrink: 0,
-          width: 40,
-          height: 40,
-          borderRadius: radius.md,
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          backgroundColor: roleText[t.roles[0]] + "14",
-          color: roleText[t.roles[0]],
-          fontSize: fontSize.xl,
-          lineHeight: 1,
-        }}
-      >
-        {t.icon}
-      </span>
-
-      {/* 信息区 */}
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-          <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>
-            {t.name}
-          </span>
-          <VersionPill version={t.version} />
-        </div>
-        <span
-          style={{
-            fontSize: fontSize.md,
-            color: neutral[500],
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
-          {t.desc}
-        </span>
-      </div>
-
-      {/* 绑定角色（后端 Tool 无角色列 → 空态显示「未绑定」） */}
-      <div style={{ display: "flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
-        {t.roles.length === 0 ? (
-          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>未绑定</span>
-        ) : (
-          t.roles.map((r) => (
-            <AgentBadge key={r} role={r} />
-          ))
-        )}
-      </div>
-
-      {/* 实现类型（代码/HTTP/CLI） */}
-      <PillBadge
-        theme={toolKindTheme[t.kind]}
-        label={t.kind}
-        testid="tool-kind"
-        status={t.kind}
-      />
-
-      {/* 依赖状态 */}
-      <PillBadge
-        theme={depTheme}
-        mark={depTheme.mark}
-        label={depLabel}
-        testid="tool-dep-status"
-        status={missing ? "missing" : "ok"}
-      />
-
-      {/* 启用状态 */}
-      <PillBadge
-        theme={enableColors[t.enabled]}
-        label={t.enabled}
-        testid="tool-status"
-        status={t.enabled}
-      />
-
-      {/* 操作（查看全员放开；编辑/启停 [admin] 专属，成员只读不渲染） */}
-      <div style={{ display: "flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
-        <ActionButton label="查看" onClick={onView} testid="tool-view-button" />
-        {canManage && (
-          <>
-            <ActionButton label="编辑" onClick={onEdit} testid="tool-edit-button" />
-            <ActionButton
-              label={t.enabled === "启用" ? "停用" : "启用"}
-              danger={t.enabled === "启用"}
-              onClick={onToggle}
-              testid="tool-toggle-button"
-            />
-          </>
         )}
       </div>
     </div>
@@ -1238,6 +1109,10 @@ function McpServerRow({
   onDelete,
   onToggle,
   onSelect,
+  onSync,
+  syncPending,
+  actionsOpen,
+  onToggleActions,
 }: {
   server: ApiMcpServer;
   canManage: boolean;
@@ -1246,8 +1121,13 @@ function McpServerRow({
   onDelete: () => void;
   onToggle: (s: ApiMcpServer) => void;
   onSelect: () => void;
+  onSync: (s: ApiMcpServer) => void;
+  syncPending: boolean;
+  actionsOpen: boolean;
+  onToggleActions: (s: ApiMcpServer | null) => void;
 }) {
   const builtin = isBuiltinMcpServer(server.name);
+  const closeMenu = () => onToggleActions(null);
   return (
     <div
       data-testid="mcp-server-item"
@@ -1256,6 +1136,7 @@ function McpServerRow({
       data-status={toFrontendStatus(server.status)}
       onClick={onSelect}
       style={{
+        position: "relative",
         display: "flex",
         alignItems: "center",
         gap: space.lg,
@@ -1310,58 +1191,123 @@ function McpServerRow({
       {/* 连接状态徽章 */}
       <McpStatusBadge status={toFrontendStatus(server.status)} />
 
-      {/* 启用状态（[admin] 可点击切换 → PATCH /mcp-servers/:id {enabled}，内置/自定义通用；
-       * 视觉保持启用/停用配色；成员只读展示） */}
-      {canManage ? (
+      {/* 工具数量（后端 toolCount 聚合，已同步物化的工具行数） */}
+      <span
+        data-testid="mcp-server-tool-count"
+        data-count={server.toolCount ?? 0}
+        title={`已同步工具 ${server.toolCount ?? 0} 个`}
+        style={{
+          fontSize: fontSize.xs,
+          color: neutral[500],
+          backgroundColor: "var(--color-neutral-200)",
+          padding: "0 7px",
+          borderRadius: radius.pill,
+          lineHeight: "16px",
+          fontFamily: fontFamily.mono,
+          whiteSpace: "nowrap",
+        }}
+      >
+        工具 {server.toolCount ?? 0}
+      </span>
+
+      {/* 启用态徽章（只展示；切换收进下方操作区，[admin] 可点，内置/自定义通用；成员只读） */}
+      <PillBadge
+        theme={enableColors[server.enabled ? "启用" : "停用"]}
+        label={server.enabled ? "启用" : "停用"}
+        testid="mcp-server-status"
+        status={server.enabled ? "启用" : "停用"}
+      />
+
+      {/* 操作列：下拉触发器（徽章行只展示标签，按钮统一收进下拉菜单） */}
+      <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
         <button
           type="button"
-          data-testid="mcp-server-toggle-button"
-          data-status={server.enabled ? "启用" : "停用"}
-          onClick={(e) => { e.stopPropagation(); onToggle(server); }}
-          title={server.enabled ? "点击停用" : "点击启用"}
+          data-testid="mcp-server-actions-toggle"
+          data-open={actionsOpen ? "true" : "false"}
+          data-server-id={server.id}
+          onClick={() => onToggleActions(actionsOpen ? null : server)}
+          title={actionsOpen ? "收起操作" : "展开操作"}
           style={{
             display: "inline-flex",
             alignItems: "center",
             gap: space.xs,
             padding: `${space.xs}px ${space.sm + 2}px`,
-            borderRadius: radius.pill,
-            backgroundColor: enableColors[server.enabled ? "启用" : "停用"].bg,
-            border: `1px solid ${enableColors[server.enabled ? "启用" : "停用"].border}`,
-            color: enableColors[server.enabled ? "启用" : "停用"].color,
+            borderRadius: radius.md,
+            border: `1px solid ${neutral[200]}`,
+            backgroundColor: "var(--color-surface)",
+            color: neutral[600],
             fontSize: fontSize.sm,
             fontWeight: 500,
-            lineHeight: 1.4,
-            whiteSpace: "nowrap",
             cursor: "pointer",
+            whiteSpace: "nowrap",
             fontFamily: fontFamily.body,
           }}
         >
-          {server.enabled ? "启用" : "停用"}
+          <span aria-hidden>{actionsOpen ? "▴" : "▾"}</span>
+          操作
         </button>
-      ) : (
-        <PillBadge
-          theme={enableColors[server.enabled ? "启用" : "停用"]}
-          label={server.enabled ? "启用" : "停用"}
-          testid="mcp-server-status"
-          status={server.enabled ? "启用" : "停用"}
-        />
-      )}
-
-      {/* 操作（查看全员放开；编辑/删除 [admin] 专属；内置 server 只读不渲染编辑/删除） */}
-      <div style={{ display: "flex", alignItems: "center", gap: space.xs, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
-        <ActionButton label="查看" onClick={onView} testid="mcp-server-view-button" />
-        {canManage && !builtin && (
-          <>
-            <ActionButton label="编辑" onClick={onEdit} testid="mcp-server-edit-button" />
-            <ActionButton
-              label="删除"
-              danger
-              onClick={onDelete}
-              testid="mcp-server-delete-button"
-            />
-          </>
-        )}
       </div>
+
+      {/* 操作下拉菜单：查看全员放开；同步工具/启停/编辑/删除 [admin] 专属；
+       * 内置 server 只读（仅查看）；启停内置/自定义通用 */}
+      {actionsOpen && (
+        <>
+          <div
+            aria-hidden
+            data-testid="mcp-server-actions-overlay"
+            onClick={(e) => { e.stopPropagation(); closeMenu(); }}
+            style={{ position: "fixed", inset: 0, zIndex: 40 }}
+          />
+          <div
+            data-testid="mcp-server-actions-panel"
+            data-server-id={server.id}
+            style={{
+              position: "absolute",
+              top: "calc(100% + 4px)",
+              right: 0,
+              zIndex: 41,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "stretch",
+              gap: 2,
+              minWidth: 148,
+              padding: space.xs,
+              borderRadius: radius.md,
+              backgroundColor: "var(--color-surface)",
+              border: `1px solid ${neutral[200]}`,
+              boxShadow: shadow.lg,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+          <McpMenuItem label="查看" onClick={() => { closeMenu(); onView(); }} testid="mcp-server-view-button" />
+          {canManage && !builtin && (
+            <>
+              <McpMenuItem
+                label={syncPending ? "同步中…" : "同步工具"}
+                onClick={() => { closeMenu(); onSync(server); }}
+                testid="mcp-server-sync-button"
+                disabled={syncPending}
+                serverId={server.id}
+              />
+              <McpMenuItem label="编辑" onClick={() => { closeMenu(); onEdit(); }} testid="mcp-server-edit-button" />
+              <McpMenuItem
+                label="删除"
+                danger
+                onClick={() => { closeMenu(); onDelete(); }}
+                testid="mcp-server-delete-button"
+              />
+            </>
+          )}
+          {canManage && (
+            <McpMenuItem
+              label={server.enabled ? "停用" : "启用"}
+              onClick={() => { closeMenu(); onToggle(server); }}
+              testid="mcp-server-toggle-button"
+            />
+          )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1376,6 +1322,8 @@ function McpServerSection({
   onDelete,
   onToggle,
   onSelect,
+  onSync,
+  pendingSyncId,
 }: {
   servers: ApiMcpServer[];
   canManage: boolean;
@@ -1385,7 +1333,11 @@ function McpServerSection({
   onDelete: (s: ApiMcpServer) => void;
   onToggle: (s: ApiMcpServer) => void;
   onSelect: (s: ApiMcpServer) => void;
+  onSync: (s: ApiMcpServer) => void;
+  pendingSyncId: string | null;
 }) {
+  /* 操作下拉菜单一次只开一个（行内无局部 state，由列表统一控制） */
+  const [openActionsId, setOpenActionsId] = useState<string | null>(null);
   return (
     <div
       data-testid="mcp-server-section"
@@ -1473,6 +1425,10 @@ function McpServerSection({
             onDelete={() => onDelete(s)}
             onToggle={onToggle}
             onSelect={() => onSelect(s)}
+            onSync={onSync}
+            syncPending={pendingSyncId === s.id}
+            actionsOpen={openActionsId === s.id}
+            onToggleActions={(t) => setOpenActionsId(t ? t.id : null)}
           />
         ))
       )}
@@ -1663,7 +1619,8 @@ function McpServerModal({
     let remoteUrl: string | null | undefined;
     let headers: Record<string, unknown> | null | undefined;
     if (type === "local") {
-      const lines = commandLines.map((l) => l.trim()).filter(Boolean);
+      // 每行按空白拆分为 argv 元素（spawn 按元素传参，带空格的单元素无法执行）
+      const lines = commandLines.flatMap((l) => l.trim().split(/\s+/).filter(Boolean));
       if (lines.length === 0) {
         setFormError("Local 服务器必须至少填写一条 command 命令");
         return;
@@ -2105,11 +2062,9 @@ function McpServerModal({
   );
 }
 
-/* ------------------------------ 工具详情 / 编辑弹窗 ------------------------------
- * - ToolDetailModal：三种来源（内置/自定义/MCP）通用的只读详情（全员放开）：
- *   基础信息 + 自定义工具 schema/initCommand（格式化 JSON）+ MCP 工具 server 反查
- * - ToolEditModal：自定义工具编辑（[admin]）——name/action/execution 只读，
- *   schema（JSON）/ initCommand（JSON）/ enabled 可改 → PATCH /tools/:id
+/* ------------------------------ 工具详情弹窗 ------------------------------
+ * - ToolDetailModal：内置/MCP 通用的只读详情（全员放开）：
+ *   基础信息 + MCP 工具 server 反查。
  */
 
 /** 只读字段行（详情弹窗内 label + value 两栏） */
@@ -2135,10 +2090,11 @@ const SOURCE_LABEL: Record<ApiTool["source"], string> = {
   mcp: "MCP",
 };
 
-/** 工具来源三态徽章（内置=蓝 / 自定义=紫 / MCP=青，对齐 groupTheme 子 Tab 色系） */
+/** 工具来源三态徽章（内置=蓝 / 自定义=紫 / MCP=青，对齐 groupTheme 子 Tab 色系；
+ * 后端 source 仍为三值联合，custom 主题内联保留以满足 Record 类型） */
 const toolSourceTheme: Record<ApiTool["source"], { color: string; bg: string; border: string }> = {
   builtin: groupTheme.builtin,
-  custom: groupTheme.custom,
+  custom: { color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
   mcp: groupTheme.mcp,
 };
 
@@ -2152,8 +2108,6 @@ function ToolDetailModal({
   mcpServer?: { name: string; type: "local" | "remote"; status: string | null };
   onClose: () => void;
 }) {
-  const schemaJson = tool.schema ? JSON.stringify(tool.schema, null, 2) : "";
-  const initJson = tool.initCommand ? JSON.stringify(tool.initCommand, null, 2) : "";
   return (
     <div
       data-testid="tool-detail-modal-root"
@@ -2280,44 +2234,6 @@ function ToolDetailModal({
           </DetailFieldRow>
         )}
 
-        {tool.source === "custom" && (
-          <>
-            {tool.execution === "code" && (
-              <DetailFieldRow label="Handler 代码">
-                <ModalJsonTextArea
-                  value={(tool.schema as { "x-execution"?: { code?: string } } | null)?.["x-execution"]?.code ?? ""}
-                  rows={8}
-                  readOnly
-                  testid="tool-detail-code"
-                  placeholder="未配置"
-                />
-              </DetailFieldRow>
-            )}
-            {schemaJson && (
-              <DetailFieldRow label="Schema（JSON）">
-                <ModalJsonTextArea
-                  value={schemaJson}
-                  rows={Math.min(10, Math.max(4, schemaJson.split("\n").length))}
-                  readOnly
-                  testid="tool-detail-schema"
-                  placeholder="未配置"
-                />
-              </DetailFieldRow>
-            )}
-            {initJson && (
-              <DetailFieldRow label="初始化命令（JSON）">
-                <ModalJsonTextArea
-                  value={initJson}
-                  rows={Math.min(8, Math.max(3, initJson.split("\n").length))}
-                  readOnly
-                  testid="tool-detail-init"
-                  placeholder="未配置"
-                />
-              </DetailFieldRow>
-            )}
-          </>
-        )}
-
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button
             type="button"
@@ -2342,252 +2258,12 @@ function ToolDetailModal({
   );
 }
 
-/**
- * 自定义工具编辑弹窗（[admin]）：name/action/execution 只读（后端 PATCH /tools/:id
- * 仅支持 {schema?, initCommand?, enabled?}，注册后不可改），schema/initCommand JSON
- * textarea 可改 + 启用开关。
- */
-function ToolEditModal({
-  tool,
-  submitting,
-  error,
-  onClose,
-  onSave,
-}: {
-  tool: ApiTool;
-  submitting: boolean;
-  error: string | null;
-  onClose: () => void;
-  onSave: (payload: {
-    schema?: Record<string, unknown>;
-    initCommand?: Array<Record<string, unknown>>;
-    enabled?: boolean;
-  }) => void;
-}) {
-  const [schemaJson, setSchemaJson] = useState("");
-  const [initJson, setInitJson] = useState("");
-  const [enabled, setEnabled] = useState(true);
-  const [formError, setFormError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setFormError(null);
-    setSchemaJson(tool.schema ? JSON.stringify(tool.schema, null, 2) : "");
-    setInitJson(tool.initCommand ? JSON.stringify(tool.initCommand, null, 2) : "");
-    setEnabled(tool.enabled);
-  }, [tool]);
-
-  const handleSubmit = () => {
-    const payload: {
-      schema?: Record<string, unknown>;
-      initCommand?: Array<Record<string, unknown>>;
-      enabled?: boolean;
-    } = {};
-    const s = schemaJson.trim();
-    if (s) {
-      try {
-        payload.schema = JSON.parse(s) as Record<string, unknown>;
-      } catch {
-        setFormError("Schema 不是合法 JSON");
-        return;
-      }
-    }
-    const i = initJson.trim();
-    if (i) {
-      try {
-        const parsed = JSON.parse(i);
-        if (!Array.isArray(parsed)) {
-          setFormError("初始化命令需为 JSON 数组");
-          return;
-        }
-        payload.initCommand = parsed as Array<Record<string, unknown>>;
-      } catch {
-        setFormError("初始化命令不是合法 JSON");
-        return;
-      }
-    }
-    payload.enabled = enabled;
-    onSave(payload);
-  };
-
-  return (
-    <div
-      data-testid="tool-edit-modal-root"
-      style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 50,
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "center",
-        paddingTop: "8%",
-      }}
-    >
-      <div
-        aria-hidden
-        onClick={onClose}
-        style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }}
-      />
-      <div
-        style={{
-          position: "relative",
-          width: 520,
-          maxWidth: "calc(100% - 48px)",
-          maxHeight: "72vh",
-          overflowY: "auto",
-          display: "flex",
-          flexDirection: "column",
-          gap: space.lg,
-          padding: `${space.xl}px`,
-          borderRadius: radius.lg,
-          backgroundColor: "var(--color-surface)",
-          border: `1px solid ${neutral[200]}`,
-          boxShadow: shadow.lg,
-          fontFamily: fontFamily.body,
-        }}
-      >
-        <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900] }}>
-          编辑工具 {tool.name}
-        </div>
-
-        <div style={{ display: "flex", gap: space.md, flexWrap: "wrap" }}>
-          <DetailFieldRow label="调用标识（action，不可改）">
-            <span
-              data-testid="tool-edit-action"
-              style={{
-                fontSize: fontSize.md,
-                color: neutral[500],
-                fontFamily: fontFamily.mono,
-              }}
-            >
-              {tool.action}
-            </span>
-          </DetailFieldRow>
-          <DetailFieldRow label="执行方式（不可改）">
-            <span
-              data-testid="tool-edit-execution"
-              style={{ fontSize: fontSize.md, color: neutral[500] }}
-            >
-              {EXEC_LABEL[tool.execution]}
-            </span>
-          </DetailFieldRow>
-        </div>
-
-        <ModalFieldRow label="Schema（JSON）">
-          <ModalJsonTextArea
-            value={schemaJson}
-            onChange={setSchemaJson}
-            rows={10}
-            placeholder={'{\n  "type": "object",\n  "properties": {}\n}'}
-            testid="tool-edit-schema-input"
-          />
-        </ModalFieldRow>
-
-        <ModalFieldRow label="初始化命令（JSON 数组，可选）">
-          <ModalJsonTextArea
-            value={initJson}
-            onChange={setInitJson}
-            rows={5}
-            placeholder={'[\n  { "command": "npm install" }\n]'}
-            testid="tool-edit-init-input"
-          />
-        </ModalFieldRow>
-
-        <ModalFieldRow label="启用状态">
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: space.sm,
-              cursor: "pointer",
-              fontSize: fontSize.md,
-              color: neutral[700],
-              fontFamily: fontFamily.body,
-            }}
-          >
-            <input
-              type="checkbox"
-              data-testid="tool-edit-enabled-input"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
-            启用该工具
-          </label>
-        </ModalFieldRow>
-
-        <div style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.6 }}>
-          名称 / 调用标识 / 执行方式注册后不可修改（工具名即权限 action）；填写非法 JSON 将被拒绝。
-        </div>
-
-        {error || formError ? (
-          <div
-            role="alert"
-            data-testid="tool-edit-modal-error"
-            style={{
-              padding: `${space.sm}px ${space.md}px`,
-              borderRadius: radius.md,
-              backgroundColor: "rgba(239,68,68,0.10)",
-              border: "1px solid rgba(239,68,68,0.22)",
-              color: "#DC2626",
-              fontSize: fontSize.sm,
-              lineHeight: 1.6,
-            }}
-          >
-            {error ?? formError}
-          </div>
-        ) : null}
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
-          <button
-            type="button"
-            data-testid="tool-edit-modal-cancel"
-            onClick={onClose}
-            disabled={submitting}
-            style={{
-              padding: `${space.sm}px ${space.lg}px`,
-              borderRadius: radius.md,
-              border: `1px solid ${neutral[200]}`,
-              backgroundColor: "var(--color-surface)",
-              color: neutral[600],
-              fontSize: fontSize.md,
-              cursor: submitting ? "default" : "pointer",
-              fontFamily: fontFamily.body,
-            }}
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            data-testid="tool-edit-confirm-button"
-            disabled={submitting}
-            onClick={handleSubmit}
-            style={{
-              padding: `${space.sm}px ${space.lg}px`,
-              borderRadius: radius.md,
-              border: "none",
-              backgroundColor: "#0D9488",
-              color: "#FFFFFF",
-              fontSize: fontSize.md,
-              fontWeight: 500,
-              cursor: submitting ? "default" : "pointer",
-              opacity: submitting ? 0.6 : 1,
-              boxShadow: "0 6px 16px rgba(13,148,136,.3)",
-              fontFamily: fontFamily.body,
-            }}
-          >
-            {submitting ? "保存中…" : "保存"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ------------------------------ 页面主组件 ------------------------------ */
 
 type TabKey = "skill" | "tool";
 
 /**
- * 注册弹窗共享输入框样式（对齐 tool-register 的 inputStyle 浅色主题）。
+ * 注册弹窗共享输入框样式（浅色主题）。
  */
 const modalInputStyle: CSSProperties = {
   width: "100%",
@@ -2619,19 +2295,17 @@ export default function SkillToolManagePage() {
    * roleName 取自登录响应 AuthUserView；旧持久化 user 无该字段 → 视为非 admin（只读）。 */
   const isAdmin = useAuthStore((s) => s.user?.roleName === "admin");
 
-  /* 「注册工具」跳转 /tools/register 完整注册页（原型保真迁移，5 区块表单）；
-   * MCP server 本体由 MCP 子 Tab 的「新建服务器」弹窗管理（POST /mcp-servers）。 */
-  const router = useRouter();
+  /* MCP server 本体由 MCP 子 Tab 的「新建服务器」弹窗管理（POST /mcp-servers，
+   * MCP 服务（含本地/远端）的唯一新增入口）。 */
 
   /* 二 Tab（受控）：技能 / 工具 */
   const [tab, setTab] = useState<TabKey>("skill");
 
-  /* 工具 Tab 内子 Tab（受控互斥）：内置 / 自定义 / MCP，默认内置 */
+  /* 工具 Tab 内子 Tab（受控互斥）：内置 / MCP，默认内置 */
   const [toolTab, setToolTab] = useState<ToolTabKey>("builtin");
 
   /* 服务端分页 state（每页 20 条） */
   const [skillPage, setSkillPage] = useState(1);
-  const [customToolPage, setCustomToolPage] = useState(1);
   const [mcpToolPage, setMcpToolPage] = useState(1);
   const [mcpServersPage, setMcpServersPage] = useState(1);
   const [serverToolsPage, setServerToolsPage] = useState(1);
@@ -2650,9 +2324,8 @@ export default function SkillToolManagePage() {
   } | null>(null);
   const [deletingMcpServer, setDeletingMcpServer] = useState<ApiMcpServer | null>(null);
 
-  /* 工具详情/编辑弹窗（viewingTool 全员放开；editingTool [admin]，仅自定义工具） */
+  /* 工具详情弹窗（viewingTool 全员放开） */
   const [viewingTool, setViewingTool] = useState<ApiTool | null>(null);
-  const [editingTool, setEditingTool] = useState<ApiTool | null>(null);
 
   /* 新建技能弹窗（交互式创建）：字段 → 前端组装 SKILL.md → FormData 复用 POST /skills */
   const [createSkillOpen, setCreateSkillOpen] = useState(false);
@@ -2672,7 +2345,6 @@ export default function SkillToolManagePage() {
     if (tab === "skill") setSkillPage(1);
   }, [tab]);
   useEffect(() => {
-    if (tab === "tool" && toolTab === "custom") setCustomToolPage(1);
     if (tab === "tool" && toolTab === "mcp") {
       setMcpToolPage(1);
       setSelectedServer(null);
@@ -2693,11 +2365,6 @@ export default function SkillToolManagePage() {
     queryKey: ["tools", { source: "builtin" }],
     queryFn: () =>
       api.get<PageResponse<ApiTool>>("/tools", { query: { source: "builtin", page: 1, pageSize: 100 } }),
-  });
-  const customToolsQuery = useQuery({
-    queryKey: ["tools", { source: "custom", page: customToolPage }],
-    queryFn: () =>
-      api.get<PageResponse<ApiTool>>("/tools", { query: { source: "custom", page: customToolPage, pageSize: 20 } }),
   });
   const mcpToolsQuery = useQuery({
     queryKey: ["tools", { source: "mcp", page: mcpToolPage }],
@@ -2739,10 +2406,6 @@ export default function SkillToolManagePage() {
     () => (builtinToolsQuery.data?.items ?? []).map(toBuiltinTool),
     [builtinToolsQuery.data]
   );
-  const customData = useMemo(
-    () => (customToolsQuery.data?.items ?? []).map(toCustomTool),
-    [customToolsQuery.data]
-  );
   // T8c：mcp-servers 建索引（type + 三态 status）。双键：tool.mcpServer 为弱关联
   // 存 server id（ms_xxx），用户注册时也可能直接写 server 名 → id/name 均可命中
   const mcpServerMap = useMemo(() => {
@@ -2754,14 +2417,13 @@ export default function SkillToolManagePage() {
     }
     return map;
   }, [allMcpServersQuery.data]);
-  // 合并三查询 items 供 handleViewTool/handleOpenEditTool 反查
+  // 合并工具查询 items 供 handleViewTool 反查
   const allToolsItems = useMemo(
     () => [
       ...(builtinToolsQuery.data?.items ?? []),
-      ...(customToolsQuery.data?.items ?? []),
       ...(mcpToolsQuery.data?.items ?? []),
     ],
-    [builtinToolsQuery.data, customToolsQuery.data, mcpToolsQuery.data]
+    [builtinToolsQuery.data, mcpToolsQuery.data]
   );
   // 二级视图用 serverToolsQuery items 补充反查
   const allToolsWithServer = useMemo(
@@ -2771,7 +2433,6 @@ export default function SkillToolManagePage() {
 
   // totalPages 计算
   const skillTotalPages = Math.max(1, Math.ceil((skillsQuery.data?.total ?? 0) / 20));
-  const customTotalPages = Math.max(1, Math.ceil((customToolsQuery.data?.total ?? 0) / 20));
   const mcpServersTotalPages = Math.max(1, Math.ceil((mcpServersQuery.data?.total ?? 0) / 20));
   const serverToolsTotalPages = Math.max(1, Math.ceil((serverToolsQuery.data?.total ?? 0) / 20));
   // effectiveSelectedServer：allMcpServersQuery 数据重派生（防止 selectedServer 被删除后失效）
@@ -2780,11 +2441,11 @@ export default function SkillToolManagePage() {
     : null;
 
   const loadError = (() => {
-    const err = skillsQuery.error ?? builtinToolsQuery.error ?? customToolsQuery.error ?? mcpToolsQuery.error ?? mcpServersQuery.error;
+    const err = skillsQuery.error ?? builtinToolsQuery.error ?? mcpToolsQuery.error ?? mcpServersQuery.error;
     if (!err) return null;
     return isApiError(err) ? err.message : "加载技能/工具列表失败";
   })();
-  const isLoading = skillsQuery.isPending || builtinToolsQuery.isPending || customToolsQuery.isPending || mcpToolsQuery.isPending || mcpServersQuery.isPending;
+  const isLoading = skillsQuery.isPending || builtinToolsQuery.isPending || mcpToolsQuery.isPending || mcpServersQuery.isPending;
 
   /* 启停：skill → PATCH /skills/:id/status、tool → PATCH /tools/:id {enabled}（09 §3.8）→ 刷新对应列表 */
   const toggleMutation = useMutation({
@@ -2865,12 +2526,30 @@ export default function SkillToolManagePage() {
       queryClient.invalidateQueries({ queryKey: ["tools"] });
       setMcpServerModal(null);
       showNotice("success", `MCP 服务器「${updated.name}」${vars.id ? "保存" : "注册"}成功`);
+      /* 保存后自动同步：create 必触发（新服务工具数为 0）；edit 仅连接字段
+       * （type/url/command/headers）变更时触发，改名/启停不触发 */
+      if (pendingSyncId !== null) return;
+      if (!vars.id) {
+        syncMcpServerMutation.mutate({ id: updated.id, auto: true });
+        return;
+      }
+      const baseline = editBaselineRef.current;
+      editBaselineRef.current = null;
+      if (!baseline) return;
+      const norm = (v: unknown) => JSON.stringify(v ?? null);
+      if (
+        vars.payload.type !== baseline.type ||
+        norm(vars.payload.url) !== norm(baseline.url) ||
+        norm(vars.payload.command) !== norm(baseline.command) ||
+        norm(vars.payload.headers) !== norm(baseline.headers)
+      ) {
+        syncMcpServerMutation.mutate({ id: vars.id, auto: true });
+      }
     },
     onError: (err) => showNotice("error", isApiError(err) ? err.message : "保存失败，请稍后重试"),
   });
 
-  /* MCP server 删除：DELETE /mcp-servers/:id（ConfirmDialog 确认；物理删除，依赖该 server 的
-   * mcp 工具反查将回退原始引用） */
+  /* MCP server 删除：DELETE /mcp-servers/:id（ConfirmDialog 确认；物理删除 + 级联删除其物化的工具行） */
   const deleteMcpServerMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/mcp-servers/${id}`),
     onSuccess: () => {
@@ -2897,26 +2576,54 @@ export default function SkillToolManagePage() {
     onError: (err) => showNotice("error", isApiError(err) ? err.message : "操作失败，请稍后重试"),
   });
 
-  /* 工具编辑：PATCH /tools/:id {schema?, initCommand?, enabled?}（自定义工具 [admin]；
-   * name/action/execution 注册后不可改，由弹窗只读展示） */
-  const editToolMutation = useMutation({
-    mutationFn: ({
-      id,
-      payload,
-    }: {
-      id: string;
-      payload: {
-        schema?: Record<string, unknown>;
-        initCommand?: Array<Record<string, unknown>>;
-        enabled?: boolean;
-      };
-    }) => api.patch<ApiTool>(`/tools/${id}`, payload),
-    onSuccess: (updated) => {
+  /* MCP server 工具同步：POST /mcp-servers/:id/sync（将已发现的工具物化为 tools 表行，
+   * serverToolsQuery 读的正是该表）→ 刷新 mcp-servers + tools（含选中 server 的二级工具列表）。
+   * 保存后自动同步（create 必触发；edit 仅连接字段变更时触发，见 editBaselineRef），
+   * 跳过项（重复/冲突）落 syncReport 告警卡常驻展示（3s 反馈条放不下）。 */
+  const [pendingSyncId, setPendingSyncId] = useState<string | null>(null);
+  const [syncReport, setSyncReport] = useState<{
+    serverName: string;
+    discovered: number;
+    created: number;
+    updated: number;
+    disabled: number;
+    skipped: { action: string; reason: string }[];
+  } | null>(null);
+  const syncMcpServerMutation = useMutation({
+    mutationFn: (vars: { id: string; auto?: boolean }) =>
+      api.post<McpSyncResult>(`/mcp-servers/${vars.id}/sync`, {}),
+    onMutate: ({ id }) => setPendingSyncId(id),
+    onSettled: () => setPendingSyncId(null),
+    onSuccess: (res, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+      queryClient.invalidateQueries({ queryKey: ["mcp-servers-all"] });
       queryClient.invalidateQueries({ queryKey: ["tools"] });
-      setEditingTool(null);
-      showNotice("success", `工具「${updated.name}」保存成功`);
+      if (selectedServer) void serverToolsQuery.refetch();
+      const discovered = res.discovered ?? 0;
+      const created = res.created ?? 0;
+      const updated = res.updated ?? 0;
+      const disabled = res.disabled ?? 0;
+      const skipped = res.skipped ?? [];
+      const serverName = res.server?.name ?? "";
+      if (skipped.length > 0) {
+        setSyncReport({ serverName, discovered, created, updated, disabled, skipped });
+      } else {
+        setSyncReport(null);
+      }
+      showNotice(
+        vars.auto ? "info" : "success",
+        `${vars.auto ? "已保存并自动同步" : "同步完成"}${serverName ? `「${serverName}」` : ""}：发现${discovered} · 新增${created} · 更新${updated} · 停用${disabled} · 跳过${skipped.length}`
+      );
     },
-    onError: (err) => showNotice("error", isApiError(err) ? err.message : "保存失败，请稍后重试"),
+    onError: (err, vars) =>
+      showNotice(
+        "error",
+        isApiError(err)
+          ? vars.auto
+            ? `已保存，自动同步失败：${err.message}（可在操作列手动同步）`
+            : `同步失败：${err.message}`
+          : "同步失败，请稍后重试"
+      ),
   });
 
   /* 编辑弹窗 state：editingSkill=目标行；editContent 打开时经 GET /skills/:id/content 拉取
@@ -3007,9 +2714,13 @@ export default function SkillToolManagePage() {
     setMcpServerModal({ mode: effective, server });
   };
 
-  /* MCP server 保存：edit → PATCH /mcp-servers/:id / create → POST /mcp-servers */
+  /* MCP server 保存：edit → PATCH /mcp-servers/:id / create → POST /mcp-servers。
+   * editBaselineRef 记录编辑前快照，供保存成功后判定连接字段是否变更（自动同步依据） */
+  const editBaselineRef = useRef<ApiMcpServer | null>(null);
   const handleMcpServerSave: Parameters<typeof McpServerModal>[0]["onSave"] = (payload) => {
     const target = mcpServerModal?.server;
+    editBaselineRef.current =
+      target && mcpServerModal?.mode === "edit" ? target : null;
     mcpServerMutation.mutate(
       target && mcpServerModal?.mode === "edit" ? { id: target.id, payload } : { payload }
     );
@@ -3020,17 +2731,16 @@ export default function SkillToolManagePage() {
     toggleMcpServerMutation.mutate({ id: s.id, enabled: !s.enabled });
   };
 
+  /* MCP server 工具同步：触发 POST /mcp-servers/:id/sync（逐行 pending，见 pendingSyncId） */
+  const handleSyncMcpServer = (s: ApiMcpServer) => {
+    if (pendingSyncId !== null) return;
+    syncMcpServerMutation.mutate({ id: s.id });
+  };
+
   /* 工具详情：从合并工具列表反查原始 ApiTool（含 schema/initCommand/mcpServer） */
   const handleViewTool = (toolId: string) => {
     const raw = allToolsWithServer.find((x) => x.id === toolId);
     if (raw) setViewingTool(raw);
-  };
-
-  /* 打开工具编辑（[admin]，自定义工具）：重置错误态 + 反查原始记录 */
-  const handleOpenEditTool = (toolId: string) => {
-    editToolMutation.reset();
-    const raw = allToolsWithServer.find((x) => x.id === toolId);
-    if (raw) setEditingTool(raw);
   };
 
   /* 保存编辑：name 需为小写 slug（与后端 assertSkillName 一致），三个字段全量提交 */
@@ -3047,8 +2757,8 @@ export default function SkillToolManagePage() {
     });
   };
 
-  /* 工具总数 = 内置 + 自定义 + MCP（Tab 徽章计数） */
-  const toolTotal = (builtinToolsQuery.data?.total ?? 0) + (customToolsQuery.data?.total ?? 0) + (mcpToolsQuery.data?.total ?? 0);
+  /* 工具总数 = 内置 + MCP（Tab 徽章计数） */
+  const toolTotal = (builtinToolsQuery.data?.total ?? 0) + (mcpToolsQuery.data?.total ?? 0);
 
   const tabs: { key: TabKey; label: string; icon: string; count: number }[] = [
     { key: "skill", label: "技能", icon: "✦", count: skillsQuery.data?.total ?? 0 },
@@ -3063,7 +2773,7 @@ export default function SkillToolManagePage() {
     },
     tool: {
       title: "平台工具",
-      hint: "子 Tab 分来源：内置（平台预置）/ 自定义（代码·HTTP·CLI）/ MCP（<server>_<tool>）",
+      hint: "子 Tab 分来源：内置（平台预置）/ MCP（<server>_<tool>）",
     },
   };
 
@@ -3123,6 +2833,77 @@ export default function SkillToolManagePage() {
           </div>
         )}
 
+        {/* 同步重复/冲突告警卡（sync 跳过项常驻展示，手动关闭；3s 反馈条放不下明细） */}
+        {syncReport && syncReport.skipped.length > 0 && (
+          <div
+            data-testid="sync-report"
+            role="alert"
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: space.sm,
+              padding: `${space.md}px ${space.lg}px`,
+              borderRadius: radius.md,
+              backgroundColor: "rgba(245,158,11,0.10)",
+              border: "1px solid rgba(245,158,11,0.28)",
+              color: "#92400E",
+              fontSize: fontSize.sm,
+              lineHeight: 1.6,
+              ...baseFont,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+              <span aria-hidden style={{ fontSize: fontSize.lg, lineHeight: 1 }}>⚠️</span>
+              <span style={{ fontWeight: 600 }}>
+                「{syncReport.serverName}」同步发现 {syncReport.skipped.length} 个重复工具未入库（发现{syncReport.discovered} · 新增{syncReport.created} · 更新{syncReport.updated} · 停用{syncReport.disabled}）
+              </span>
+              <button
+                type="button"
+                data-testid="sync-report-dismiss"
+                onClick={() => setSyncReport(null)}
+                style={{
+                  marginLeft: "auto",
+                  padding: `${space.xs}px ${space.sm + 2}px`,
+                  borderRadius: radius.md,
+                  border: `1px solid rgba(245,158,11,0.35)`,
+                  backgroundColor: "var(--color-surface)",
+                  color: "#92400E",
+                  fontSize: fontSize.sm,
+                  cursor: "pointer",
+                  fontFamily: fontFamily.body,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                知道了
+              </button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {syncReport.skipped.slice(0, 8).map((sk) => (
+                <div
+                  key={sk.action}
+                  data-testid="sync-report-skip-item"
+                  data-action={sk.action}
+                  style={{ display: "flex", gap: space.sm, alignItems: "baseline" }}
+                >
+                  <code
+                    style={{
+                      fontFamily: fontFamily.mono,
+                      fontWeight: 600,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {sk.action}
+                  </code>
+                  <span style={{ color: "#B45309" }}>{sk.reason}</span>
+                </div>
+              ))}
+              {syncReport.skipped.length > 8 && (
+                <span>等另外 {syncReport.skipped.length - 8} 个（建议删除重复指向同一服务的 server 后重新同步）</span>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* 工具条：二 Tab + 右上操作按钮（随 Tab 切换） */}
         <div
           data-testid="manage-toolbar"
@@ -3136,9 +2917,9 @@ export default function SkillToolManagePage() {
           {/* 二 Tab（受控切换，统一样式见 ui/SegmentedTabs） */}
           <SegmentedTabs items={tabs} active={tab} onChange={(k) => setTab(k as TabKey)} />
 
-          {/* 右上操作：随 Tab 切换（上传技能 → POST /skills multipart；注册工具 → 跳转
-           * /tools/register 完整注册页）。
-           * [admin] 专属（09 §3.8）；成员只读不渲染操作入口。 */}
+          {/* 右上操作：随 Tab 切换（新建/上传技能 → POST /skills multipart）。
+           * [admin] 专属（09 §3.8）；成员只读不渲染操作入口。
+           * 工具 Tab 无独立操作入口：MCP 服务的新增统一走 MCP 子 Tab「新建服务器」弹窗。 */}
           <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginLeft: "auto" }}>
             {tab === "skill" && isAdmin && (
               <>
@@ -3186,34 +2967,6 @@ export default function SkillToolManagePage() {
                 >
                   <span aria-hidden>⧉</span>
                   上传技能
-                </button>
-              </>
-            )}
-            {tab === "tool" && isAdmin && (
-              <>
-                {/* 注册工具 = 主入口（跳转完整注册页 /tools/register，原型保真 5 区块表单） */}
-                <button
-                  type="button"
-                  data-testid="register-tool-button"
-                  onClick={() => router.push("/tools/register")}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: space.xs,
-                    padding: `${space.sm + 1}px ${space.lg}px`,
-                    borderRadius: radius.pill,
-                    border: "none",
-                    backgroundColor: "#0D9488",
-                    color: "#FFFFFF",
-                    fontSize: fontSize.md,
-                    fontWeight: 500,
-                    cursor: "pointer",
-                    boxShadow: "0 6px 16px rgba(13,148,136,.3)",
-                    fontFamily: fontFamily.body,
-                  }}
-                >
-                  <span aria-hidden>✚</span>
-                  注册工具
                 </button>
               </>
             )}
@@ -3289,7 +3042,6 @@ export default function SkillToolManagePage() {
                   onClick={() => {
                     skillsQuery.refetch();
                     builtinToolsQuery.refetch();
-                    customToolsQuery.refetch();
                     mcpToolsQuery.refetch();
                     mcpServersQuery.refetch();
                   }}
@@ -3347,7 +3099,7 @@ export default function SkillToolManagePage() {
               </div>
             )}
 
-          {/* 工具列表：三子 Tab 互斥切换（内置 / 自定义 / MCP） */}
+          {/* 工具列表：二子 Tab 互斥切换（内置 / MCP） */}
           {tab === "tool" && (
             <>
               <ToolSubTabs
@@ -3355,7 +3107,6 @@ export default function SkillToolManagePage() {
                 onChange={setToolTab}
                 counts={{
                   builtin: builtinToolsQuery.data?.total ?? 0,
-                  custom: customToolsQuery.data?.total ?? 0,
                   mcp: mcpToolsQuery.data?.total ?? 0,
                 }}
               />
@@ -3386,7 +3137,6 @@ export default function SkillToolManagePage() {
                     onClick={() => {
                       skillsQuery.refetch();
                       builtinToolsQuery.refetch();
-                      customToolsQuery.refetch();
                       mcpToolsQuery.refetch();
                       mcpServersQuery.refetch();
                     }}
@@ -3434,46 +3184,6 @@ export default function SkillToolManagePage() {
                     />
                   ))
                 )
-              ) : toolTab === "custom" ? (
-                customData.length === 0 ? (
-                  <div
-                    data-testid="tool-empty"
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      gap: space.sm,
-                      padding: `${space.xl}px`,
-                      fontSize: fontSize.md,
-                      color: neutral[400],
-                      textAlign: "center",
-                    }}
-                  >
-                    <span aria-hidden style={{ fontSize: fontSize.xl }}>✚</span>
-                    <span>暂无自定义工具，点击右上「注册工具」创建</span>
-                  </div>
-                ) : (
-                  <>
-                    {customData.map((t) => (
-                      <CustomToolRow
-                        key={t.id}
-                        t={t}
-                        onView={() => handleViewTool(t.id)}
-                        onEdit={() => handleOpenEditTool(t.id)}
-                        onToggle={() => handleToggleEnabled("tool", t.id, t.enabled === "启用")}
-                        canManage={isAdmin}
-                      />
-                    ))}
-                    <div style={{ display: "flex", justifyContent: "center", paddingTop: space.sm }}>
-                      <Pagination
-                        page={customToolPage}
-                        totalPages={customTotalPages}
-                        onPageChange={setCustomToolPage}
-                        dataTestId="tools-custom-pagination"
-                      />
-                    </div>
-                  </>
-                )
               ) : (
                 <>
                   {!effectiveSelectedServer ? (
@@ -3487,6 +3197,8 @@ export default function SkillToolManagePage() {
                         onDelete={(s) => setDeletingMcpServer(s)}
                         onToggle={(s) => handleToggleMcpServer(s)}
                         onSelect={(s) => { setSelectedServer(s); setServerToolsPage(1); }}
+                        onSync={(s) => handleSyncMcpServer(s)}
+                        pendingSyncId={pendingSyncId}
                       />
                       {mcpServersQuery.data?.items && mcpServersQuery.data.items.length > 0 && (
                         <div style={{ display: "flex", justifyContent: "center", paddingTop: space.sm }}>
@@ -4002,12 +3714,12 @@ export default function SkillToolManagePage() {
         />
       )}
 
-      {/* MCP server 删除确认（物理删除；依赖该 server 的 mcp 工具为弱关联，工具本身保留） */}
+      {/* MCP server 删除确认（物理删除 + 级联删除其物化的工具行，避免孤儿占 action） */}
       <ConfirmDialog
         open={deletingMcpServer !== null}
         testid="delete-mcp-server"
         title={`删除 MCP 服务器 ${deletingMcpServer?.name ?? ""}`}
-        description="删除后无法恢复；依赖该服务器的 MCP 工具将失去 server 关联（工具本身保留，仅 server 反查回退）。"
+        description={`删除后无法恢复；该服务器已同步的 ${deletingMcpServer?.toolCount ?? 0} 个工具将一并删除（释放 action 占用）。`}
         confirmLabel="删除"
         submitting={deleteMcpServerMutation.isPending}
         onClose={() => setDeletingMcpServer(null)}
@@ -4016,7 +3728,7 @@ export default function SkillToolManagePage() {
         }
       />
 
-      {/* 工具详情弹窗（内置/自定义/MCP 通用，全员放开：基础信息 + schema/initCommand 只读 JSON + MCP server 反查） */}
+      {/* 工具详情弹窗（内置/MCP 通用，全员放开：基础信息 + MCP server 反查） */}
       {viewingTool && (
         <ToolDetailModal
           tool={viewingTool}
@@ -4026,23 +3738,6 @@ export default function SkillToolManagePage() {
               : undefined
           }
           onClose={() => setViewingTool(null)}
-        />
-      )}
-
-      {/* 工具编辑弹窗（[admin]，自定义工具：schema/initCommand JSON + enabled → PATCH /tools/:id） */}
-      {editingTool && (
-        <ToolEditModal
-          tool={editingTool}
-          submitting={editToolMutation.isPending}
-          error={
-            editToolMutation.isError
-              ? isApiError(editToolMutation.error)
-                ? editToolMutation.error.message
-                : "保存失败，请稍后重试"
-              : null
-          }
-          onClose={() => setEditingTool(null)}
-          onSave={(payload) => editToolMutation.mutate({ id: editingTool.id, payload })}
         />
       )}
     </div>

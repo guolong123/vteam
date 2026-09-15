@@ -376,6 +376,10 @@ export class SwaggerMcpHandlers {
         match: m('delete', '/mcp-servers/{id}'),
         call: (_, args) => this.mcpServers.remove(String(args.id)),
       },
+      {
+        match: m('post', '/mcp-servers/{id}/sync'),
+        call: (_, args) => this.mcpServers.syncTools(String(args.id)),
+      },
 
       // ---- users / roles（UsersService / RolesService，管理面） ----
       {

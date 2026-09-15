@@ -236,27 +236,6 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     }
   });
 
-  test("14/17 tool-register /tools/register（4 执行形态）", async ({ page }) => {
-    await page.goto("/tools/register");
-    await expectNavShell(page);
-    await expect(page.getByTestId("tool-register-root")).toBeVisible();
-    await expect(page.getByTestId("tool-basic-section")).toBeVisible();
-    await expect(page.getByTestId("tool-name-input")).toBeVisible();
-    await expect(page.getByTestId("execution-type-list")).toBeVisible();
-    await expect(page.getByTestId("register-tool-button")).toBeVisible();
-    // 平台代码形态（初始）
-    await expect(page.getByTestId("handler-code-editor")).toBeVisible();
-    // CLI 形态
-    await page.getByTestId("execution-type").filter({ hasText: /CLI/ }).click();
-    await expect(page.getByTestId("cli-mode-select")).toBeVisible();
-    // HTTP 形态
-    await page.getByTestId("execution-type").filter({ hasText: /HTTP|http/i }).click();
-    await expect(page.getByTestId("http-callback-url")).toBeVisible();
-    // MCP 形态
-    await page.getByTestId("execution-type").filter({ hasText: /MCP|mcp/i }).click();
-    await expect(page.getByTestId("mcp-type-select")).toBeVisible();
-  });
-
   test("15/17 user-management /users", async ({ page }) => {
     await page.goto("/users");
     await expectNavShell(page);

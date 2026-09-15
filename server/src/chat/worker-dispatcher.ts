@@ -149,7 +149,7 @@ export function renderBoundarySection(
   return (
     `【职责边界】${boundary.scopeSummary}\n` +
     `越界处理：超出上述职责范围的请求必须拒绝（不要执行），说明你的职责边界，` +
-    `并通过 notify_agent 或群聊 @ 转交对应角色（${handoff}）。`
+    `并通过 vteam_notify_agent 或群聊 @ 转交对应角色（${handoff}）。`
   );
 }
 
@@ -167,30 +167,51 @@ export const DEFAULT_CHAT_HISTORY_MAX_BYTES = 32 * 1024;
  * P7：全局系统提示（注入 prompt_async 顶层 system 字段，serve 拼入 LLM system message）：
  * 产出物协议 + @定向机制说明——Agent 默认知晓如何声明可归档产出物，无需每条消息显式要求。
  * 经 system 通道注入（非 parts 文本）→ 不进入会话 user 消息，不会出现在聊天记录回复中。
+ *
+ * 【记忆管理】2 行独立为 MEMORY_INSTRUCTION 常量：plan 角色（toolAllows 无
+ * memory_save/search，教了会被 guard 拒）由 buildSystemInstructions 按 role 跳过该块，
+ * 其余角色照常注入；GLOBAL_SYSTEM_INSTRUCTIONS 导出值保持不变。
  */
-export const GLOBAL_SYSTEM_INSTRUCTIONS = [
+export const MEMORY_INSTRUCTION =
+  '【记忆管理】只存可复用经验：怎么做（howto）、坑与规避（pitfall）、平台硬约束（constraint），不存会话总结。\n' +
+  '开始任务/需要经验时调 vteam_memory_search 检索，沉淀时调 vteam_memory_save 保存；参数细节查工具 schema，文档查 doclib。';
+
+/** GLOBAL 前 6 行（【记忆管理】之前的不变段；与 MEMORY_INSTRUCTION 拼出完整 GLOBAL）。 */
+const GLOBAL_BASE_LINES = [
   '你是 AI 协作平台的 Agent，请遵守以下平台协议：',
-  '【产出物声明】你的工作产出可交付内容时，调用 vteam MCP 的 submit_artifact 工具提交：',
-  '参数 {taskId: 你的任务ID, type: "text"|"doc"|"file", title: 标题, content?: 内容(text 必填), fileRef?: 文件路径(doc/file 必填)}。',
-  'text 类型直接提交内容；doc/file 类型提交你写入工作目录的文件（自动拉取归档为产出物）。',
-  '【群聊通知】你在群聊被 @ 时，完整处理过程（思考/工具调用）在你的私聊会话中完成，不会公开。',
-  '你像真人一样自行决定是否在群里公开回应：要发布结论/进展时，调用 vteam MCP 的 group_post 工具发布。',
-  '工具参数：{taskId: 你的任务ID, content: 要发布到群聊的内容, fileRef?: 产出物文件引用}。',
-  'fileRef 可选：向群聊发送文件时直接传入文件路径（如 /tmp/opencode/x.txt），文件将作为群聊附件并自动归档为产出物。',
-  '不调用工具发布则回复仅保留在私聊会话（不公开）。',
+  '【群聊通知】私聊默认不公开，需公开结论/进展时调用 vteam MCP 的 vteam_group_post 发布。',
   '【@ 定向机制】群聊中 @ 你的消息会定向分发给你。需要定向触发/通知任务内的其他 Agent 时，' +
-    '调用 vteam MCP 的 notify_agent 工具（参数 {taskId: 你的任务ID, targetInstanceId: 目标成员 id（tmm_ 前缀，见 task_context 的 agentMembers）, content: 消息内容}）' +
-    '——目标实例会收到你的消息并开始执行；回复时也可用 @用户名 在群聊中定向回复特定成员。' +
-    '【@用户】需要用户确认/决策或完成后通知时，在 group_post 的 content 中写 @user 或 @all（系统动态注入当前任务相关用户，无需写死 @admin），也可写 @用户名 精确@某人；命中后消息对该用户高亮（蓝底+左蓝条+★@你）。',
-  '【Issue 管理】任务内 issue 协作：创建 issue 调 vteam MCP 的 issue_create（参数 {taskId, selfInstanceId, title, description?, tags?, assigneeInstanceId?}）；查询 issue_list/issue_get；更新 issue_update；状态流转 issue_transition（action: start/resolve/close/reopen/reject）。产品/测试 Agent 负责创建需求或缺陷 issue 并指派（assigneeInstanceId 为目标实例 id），研发 Agent 处理指派给自己的 issue 并流转状态。issue 标签（tags）标识类型（如 需求/缺陷/优化）。',
-  '【任务状态】主 Agent 可调用 vteam MCP 的 task_transition 工具（参数 {taskId, selfInstanceId, action: start/mark-pending-review/accept/reject/archive, reason?}）流转任务状态：start 开始 / mark-pending-review 提交验收 / accept 验收通过 / reject 驳回（可附 reason）/ archive 归档。仅主实例可调用 task_transition，其余成员调用将返回 403 提示（请知会主实例或由管理员在任务管理界面操作）。',
-  '【持久化目录】你运行在 k8s 容器环境中，平台为每个 Agent 分配独立的持久化工作目录（默认 /data/vteam-worker/<agent名称>，可在创建任务时指定）。' +
-    '仅该目录及挂载卷内的内容在容器重启后保留，其余路径（如 /tmp、仓库外任意路径）写入的文件重启后会丢失；' +
-    '工作产物、git clone 的仓库、脚本、产出物文件等请写入该持久化目录，提交产出物（doc/file）时 fileRef 应指向该目录内的文件。',
-  '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息（含 requestId、kind、问题详情）时，调用 vteam MCP 的 question_confirm 工具（参数 {taskId, selfInstanceId, requestId, kind, answers?/response?}）决策——question 传 answers（答案数组，null=拒绝）；permission 传 response（once 允许一次 / always 总是允许 / reject 拒绝）。仅主实例可调用 question_confirm。',
-  '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名] 标记）时，请使用 wecom_reply 工具回复（参数 {taskId, selfInstanceId, text, atUser?}），不要用 group_post；wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到任务群聊，确保用户在企微端收到回复。',
-  '【记忆管理】记忆只存**可复用经验**，不存会话总结。可存：怎么做（有效路径/命令/配置，下次照做）、坑与规避（错误原因+规避动作，下次不再踩）、平台硬约束（工具限制/权限边界/容量上限，下次主动绕开）。禁存：任务流水账、时间线复盘、谁做了什么、当前状态、一次性结论。开始任务/需要历史经验时，调用 memory_search（参数 {taskId, query?, level?, tags?, limit?≤5}）检索（返回含 description 索引，命中后再取 content 正文，可多次翻页）；沉淀时调用 memory_save（参数 {taskId, selfInstanceId, level, content, description?:30字摘要, tags?}）——content 写「场景 + 做法/坑 + 规避动作」，description 概括，跨任务复用写 level=team，平台通用写 level=global，任务专属写 level=task，tags 用 howto/pitfall/constraint 等类型词。遇可用记忆索引时先用 tags 精搜，再用 query 精排，单次≤5条，摘要命中再取正文。',
-].join('\n');
+    '调用 vteam MCP 的 vteam_notify_agent 工具' +
+    '——目标实例会收到你的消息并开始执行；回复时也可用 @用户名 在群聊中定向回复特定成员。\n\n' +
+    '【@用户】需要用户确认/决策或完成后通知时，在 vteam_group_post 的 content 中写 @user 或 @all（系统动态注入当前任务相关用户，无需写死 @admin），也可写 @用户名 精确@某人；命中后消息对该用户高亮（蓝底+左蓝条+★@你）。',
+  '【Issue协作】任务内 issue 协作经 vteam MCP 的 vteam_issue_* 工具（创建/查询/更新/流转），详见 task_context。',
+  '【持久化目录】唯一持久化位置以【运行时工作目录】注入的实际路径为准，仅该目录重启后保留，工作产物与产出物文件请写入该目录。',
+];
+
+export const GLOBAL_SYSTEM_INSTRUCTIONS = [
+  ...GLOBAL_BASE_LINES,
+  MEMORY_INSTRUCTION,
+].join('\n\n');
+
+/**
+ * P0：条件注入段（原 GLOBAL 内【任务状态】/【托管模式】/【企业微信】下沉为独立常量）。
+ * task_transition / question_confirm 仅主实例可调（服务端 403），故仅当
+ * opts.isMainAgent=true 时由 buildSystemInstructions 注入；非主成员改注 NON_MAIN_AGENT_NOTE。
+ * 企微段仅当 opts.isWecomChannel=true 时注入（缺省不注入，字节兼容：不传即无此段）。
+ */
+export const TASK_TRANSITION_INSTRUCTION =
+  '【任务状态】主 Agent 可调用 vteam MCP 的 vteam_task_transition 工具流转任务状态（参数细节查工具 schema）。仅主实例可调用，其余成员调用将返回 403 提示（请知会主实例或由管理员在任务管理界面操作）。';
+
+export const HOSTED_CONFIRM_INSTRUCTION =
+  '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息时，调用 vteam MCP 的 vteam_question_confirm 工具决策（参数细节查工具 schema）。仅主实例可调用 vteam_question_confirm。';
+
+/** 非主成员协作指引（替代【任务状态】/【托管模式】工具段，避免教非主成员调用必 403 的工具）。 */
+export const NON_MAIN_AGENT_NOTE =
+  '【协作说明】状态流转/托管确认由主Agent操作，有事@主Agent（相关工具 vteam_task_transition / vteam_question_confirm 仅主实例可调，误调返回 403）。';
+
+/** 企微系统段（仅企微渠道注入；dispatch 侧按正文 [WeCom:] 标记判定后经 opts.isWecomChannel 传入）。 */
+export const WECOM_SYSTEM_INSTRUCTION =
+  '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名] 标记）时，请使用 vteam_wecom_reply 工具回复，不要用 vteam_group_post；vteam_wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到任务群聊，确保用户在企微端收到回复。';
 
 /**
  * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
@@ -228,18 +249,61 @@ export interface TeamMemberInfo {
 }
 
 /**
- * 产出物提交引导段（dispatch 时对所有任务注入）。
+ * 产出物提交引导段（dispatch 时对所有任务注入；P1 与 GLOBAL 内【产出物声明】合并后的唯一详版）。
  *
  * 计划文档与任意交付物统一走 vteam MCP 既有 `submit_artifact` 工具（type=text 直传
  * content；type=doc/file 传 fileRef，控制面自动从 worker 工作区拉取并归档为产出物版本），
  * 无需专用"提交计划"工具——计划文档只是 doc 类型产出物的一种。
- * 群聊同步另行使用 group_post（仅经该工具发布的内容才会显示在群聊）。
+ * 只有经 group_post 发布的内容才会显示在群聊（群聊同步另行使用 group_post）。
  */
 export const ARTIFACT_SUBMISSION_INSTRUCTION =
-  '【产出物提交】交付物请用 vteam MCP 的 submit_artifact 提交归档：' +
-  '纯文本结论用 {type:"text", title, content}；' +
-  '文件类用 {type:"doc" 或 "file", title, fileRef:"工作目录下的文件路径"}（控制面自动拉取归档）。' +
-  '如需在群聊同步结论，用 group_post 发布（群聊只显示经 group_post 发送的内容）。';
+  '【公开与归档】工作产出用 vteam MCP 的 vteam_submit_artifact 提交归档（text/doc/file 三类，参数细节查工具 schema，文件由控制面自动拉取归档）。' +
+  '只有经 vteam_group_post 发布的内容才会显示在群聊。';
+
+/**
+ * P1：issue 完整版（创建+指派+流转 action 列表），仅 product/tester/developer
+ * 注入（dispatch 按目标角色经 opts.issueDetail 传入，缺省只收 GLOBAL 一句版）。
+ */
+export const ISSUE_FULL_INSTRUCTION =
+  '【Issue管理】任务内 issue 协作：创建 issue 调 vteam MCP 的 vteam_issue_create' +
+  '（参数细节查工具 schema）；' +
+  '查询 vteam_issue_list/vteam_issue_get；更新 vteam_issue_update；' +
+  '状态流转 vteam_issue_transition（action: start/resolve/close/reopen/reject）。' +
+  '产品/测试负责创建需求或缺陷 issue 并指派（assigneeInstanceId 为目标实例 id），' +
+  '研发处理指派给自己的 issue 并流转状态。issue 标签（tags）标识类型（如 需求/缺陷/优化）。';
+
+/**
+ * P1：issue 完整版注入判定——仅 product/tester/developer 需要创建+指派+流转全版；
+ * architect/project_manager/plan 及未知角色只收 GLOBAL 一句版。兼容中文角色名。
+ */
+const ISSUE_DETAIL_ROLE_KEYS = new Set(['product', 'tester', 'developer']);
+export function roleNeedsIssueDetail(
+  role: string | null | undefined,
+): boolean {
+  if (!role) {
+    return false;
+  }
+  const r = role.toLowerCase();
+  if (ISSUE_DETAIL_ROLE_KEYS.has(r)) {
+    return true;
+  }
+  return r.includes('产品') || r.includes('测试') || r.includes('开发');
+}
+
+/**
+ * plan 角色判定（记忆段屏蔽用）——兼容大小写及中文“计划员”，写法参考 roleNeedsIssueDetail。
+ * plan 的 toolAllows 无 vteam_memory_save/search，GLOBAL 内【记忆管理】2 行对其屏蔽。
+ */
+export function isPlanRole(role: string | null | undefined): boolean {
+  if (!role) {
+    return false;
+  }
+  const r = role.toLowerCase();
+  if (r === 'plan' || r === 'vteam-plan') {
+    return true;
+  }
+  return r.includes('计划');
+}
 
 /**
  * 计划编制指令（仅主 Agent + 任务计划模式开启时注入）。
@@ -253,12 +317,13 @@ export const ARTIFACT_SUBMISSION_INSTRUCTION =
 export const PLAN_PRODUCE_INSTRUCTION =
   '【计划编制】本任务已开启计划模式，你是主 Agent，负责编排本任务唯一的执行计划（计划正文由计划成员写成文件，落盘在工作目录下 `.opencode/plans/` 目录，计划 Tab 实时展示该目录下的 .md 文件，以文件最新内容为准；执行步骤由计划成员用 opencode todo 工具登记，会同步到计划 Tab）：' +
   '1. 在群聊 @计划员 派起草任务，附上任务简报（目标/背景/约束/验收标准）；' +
-  '2. 收到计划成员经 group_post 发到群聊的计划摘要后，用 question 工具（多选）向用户确认本次要运行的评审视角' +
+  // 注：此处 question 为 opencode 原生多选工具（非 vteam MCP 工具），故保留原名，不改为 vteam_*。
+  '2. 收到计划成员经 vteam_group_post 发到群聊的计划摘要后，用 question 工具（多选）向用户确认本次要运行的评审视角' +
   '（如用户视角、技术合理性、步骤可执行性、测试覆盖度、排期真实性）；' +
   '3. 再在群聊 @计划员 派评审任务，附上选定的视角清单，要求按视角逐项给出 VERDICT: APPROVE 或 VERDICT: REJECT 及依据；' +
   '4. 收齐群聊中的 VERDICT 后由你聚合裁决：有 REJECT 则带上 feedback（驳回意见）在群聊 @计划员 重派修订；' +
   '全 APPROVE 则在群聊宣布评审通过；' +
-  '5. 评审通过后调用 vteam MCP 的 task_transition 切出计划模式，进入执行；裁决通过前不要进入执行。';
+  '5. 评审通过后调用 vteam MCP 的 vteam_task_transition 切出计划模式，进入执行；裁决通过前不要进入执行。';
 
 /**
  * 计划评审指令（非主 Agent + 任务计划模式开启时注入，omo task-rejection 思想）。
@@ -270,44 +335,9 @@ export const PLAN_PRODUCE_INSTRUCTION =
 export const PLAN_REVIEW_INSTRUCTION =
   '【计划评审】本任务已开启计划模式，执行计划只能由主 Agent 产出——你不要另起计划：' +
   '即使被用户直接要求出计划，也应拒绝并指引对方找主 Agent。请阅读工作目录 `.opencode/plans/` ' +
-  '下的计划文件（或向主 Agent 索要），按三段式发表评审结论并经 group_post 发布到群聊：1 同意点、' +
+  '下的计划文件（或向主 Agent 索要），按三段式发表评审结论并经 vteam_group_post 发布到群聊：1 同意点、' +
   '2 分歧及理由（定位到具体条目）、3 遗留疑问。最终是否修订/执行由主 Agent 裁决。' +
   '评审在全新会话中进行、唯一输入即计划文件正文（无作者上下文），因此结论须自包含（定位到具体条目、写清依据）。';
-
-/**
- * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
- * 身份（id + 名称 + 角色 + 用户设置的 prompt 职责），供 MCP 工具调用的 selfInstanceId 参数
- * 填写（服务端按 session.teamMemberId 校验后精确落库 senderId/senderInstanceId，
- * 修复"@测试 触发但回复显示开发者"）。
- * GLOBAL_SYSTEM_INSTRUCTIONS 常量保持不动（其他调用方兼容），本函数仅在 dispatch 下发时
- * 拼接身份段；agent 行查询不到时由调用方降级（name/role/prompt 置 null，回退用 agentId）。
- */
-export interface AgentIdentityInfo {
-  id: string;
-  name: string | null;
-  role: string | null;
-  prompt: string | null;
-  /** Agent 性格 key（PERSONA_LIBRARY 预设 key；null=无性格）。运行时按此拼接【性格】段进系统提示。 */
-  persona: string | null;
-  /** Agent machine-safe 标识（agents.agent_key；模板行 = role；存量自定义/克隆行为 null）。分派策略候选名即 `vteam-<agentKey>`。 */
-  agentKey: string | null;
-}
-
-/** 团队成员信息（dispatch 时从 TeamMember→Agent 组装，注入全局上下文供 agent 判断与谁协作）。
- *  TeamMember 维度：instanceId 为团队成员 id（tmm_ 前缀，TeamMember.id），alias/seq 来自团队模板；
- *  id/name/role 来自模板 agent。 */
-export interface TeamMemberInfo {
-  /** 模板 agent id（继承 name/role/prompt/model）。 */
-  id: string;
-  name: string | null;
-  role: string | null;
-  /** 团队成员 id（TeamMember.id，tmm_ 前缀）——团队成员唯一身份（@/指派/主实例判定依据）。 */
-  instanceId: string;
-  /** 实例别名（默认「<角色中文名>-<seq>」）；缺省回退 name。 */
-  alias: string | null;
-  /** 同 agent 同团队内序号（服务端生成，唯一键 teamId+agentId+seq）。 */
-  seq: number;
-}
 
 export interface BuildSystemInstructionsOptions {
   /** 当前 agent 是否团队主成员（session.teamMemberId === team.mainAgentMemberId）→ true 时追加主 Agent 职责段。 */
@@ -345,6 +375,25 @@ export interface BuildSystemInstructionsOptions {
    * （系统提示与引入前逐字节一致）。
    */
   boundarySection?: string;
+  /**
+   * 企微渠道标记（P0 条件注入）：true 时追加【企业微信】段（WECOM_SYSTEM_INSTRUCTION）；
+   * false/缺省不注入（默认不注入；可选字段，存量调用不传时行为不变）。
+   * dispatch 侧按触发正文是否含 [WeCom:] 标记判定后传入。
+   */
+  isWecomChannel?: boolean;
+  /**
+   * P1：issue 完整版开关——true 时追加 ISSUE_FULL_INSTRUCTION
+   * （创建+指派+流转 action 列表）；false/缺省只收 GLOBAL【Issue协作】一句版
+   * （兼容存量调用）。dispatch 调用方按目标角色传入
+   * （roleNeedsIssueDetail：product/tester/developer → true）。
+   */
+  issueDetail?: boolean;
+  /**
+   * plan 记忆段屏蔽用角色——dispatch 调用方按目标角色传入（agentIdentity.role）。
+   * isPlanRole 为真时不注入 GLOBAL 内【记忆管理】2 行（MEMORY_INSTRUCTION）；
+   * 缺省回退 agent.role；可选字段，存量调用不传行为不变（向后兼容）。
+   */
+  agentRole?: string | null;
 }
 
 /**
@@ -356,9 +405,8 @@ export interface BuildSystemInstructionsOptions {
 export const MAIN_AGENT_INSTRUCTION =
   '【主 Agent 职责】你是本任务的主 Agent（牵头人）。除角色本职外，还需承担任务组织职责：' +
   '牵头拆解工作并分派给团队成员，协调各角色产出衔接，环节切换或产出完成时主动在群聊提示进度（FR-08）；' +
-  '推进受阻或需要协作时，通过 notify_agent / 群聊 @ 定向协调成员（FR-13，互 @ 不超 3 轮）；' +
-  '收尾时可汇总各角色产出与验收材料，供成员验收判定（FR-11）。' +
-  '任务开启托管模式时，成员的 question/permission 请求由你确认——收到【托管确认】消息时调用 question_confirm 工具决策。';
+  '推进受阻或需要协作时，通过 vteam_notify_agent / 群聊 @ 定向协调成员（FR-13，互 @ 不超 3 轮）；' +
+  '收尾时可汇总各角色产出与验收材料，供成员验收判定（FR-11）。';
 
 /**
  * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
@@ -387,21 +435,29 @@ export function buildSystemInstructions(
     ? `【你的身份】你是本任务的 ${selfName}（团队成员 id: ${selfInstanceId}，任务实例 id: ${taskInstanceId}，角色: ${agent.role ?? ''}）。` +
       `你在本任务团队中的实例就是 ${taskInstanceId}（【团队成员】段中标"主 Agent"的那一位若是你，请直接认领）；` +
       `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的任务实例 id（${taskInstanceId}）。`
-    : `【你的身份】你是本任务的 ${selfName}（实例 id: ${selfInstanceId}，角色: ${agent.role ?? ''}）。`;
+    : `【你的身份】你是本任务的 ${selfName}（实例 id: ${selfInstanceId}，角色: ${agent.role ?? ''}）。` +
+      `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（${selfInstanceId}）。`;
+  // plan 屏蔽记忆段：plan 的 toolAllows 无 memory_save/search，GLOBAL 内【记忆管理】
+  // 2 行（MEMORY_INSTRUCTION）不注入；其余角色照常注入完整 GLOBAL。
+  const effectiveRole = opts?.agentRole ?? agent.role;
+  const globalText = isPlanRole(effectiveRole)
+    ? GLOBAL_BASE_LINES.join('\n\n')
+    : GLOBAL_SYSTEM_INSTRUCTIONS;
   const blocks = [
-    GLOBAL_SYSTEM_INSTRUCTIONS +
-      '\n' +
+    globalText +
+      '\n\n' +
       identityLine +
-      (agent.prompt ? `\n【职责】${agent.prompt}` : '') +
-      '\n调用 vteam MCP 工具时，落库类工具（group_post / notify_agent / submit_artifact）的' +
-      'selfInstanceId 参数必须填写你的任务实例 id' +
-      (taskInstanceId
-        ? `（${taskInstanceId}）`
-        : '（tmm_ 前缀，服务器按此校验归属并精确记录发送者）') +
-      '。',
+      (agent.prompt ? `\n\n【职责】${agent.prompt}` : ''),
     agent.persona ? renderPersonaSection(agent.persona) : '',
+    // P0 条件注入：主 Agent 追加【任务状态】+【托管模式】工具段；非主成员仅给协作指引
+    // （不再教非主成员调用必 403 的 vteam_task_transition / vteam_question_confirm）。
+    opts?.isMainAgent
+      ? `${TASK_TRANSITION_INSTRUCTION}\n\n${HOSTED_CONFIRM_INSTRUCTION}`
+      : NON_MAIN_AGENT_NOTE,
+    // P0 条件注入：企微渠道才追加【企业微信】段，缺省不注入。
+    opts?.isWecomChannel === true ? WECOM_SYSTEM_INSTRUCTION : '',
     opts?.persistentWorkDir
-      ? `\n【运行时工作目录】本任务为你分配的实际持久化工作目录为：${opts.persistentWorkDir}。` +
+      ? `【运行时工作目录】本任务为你分配的实际持久化工作目录为：${opts.persistentWorkDir}。` +
         '工作产物、脚本、中间文件等请写入该目录（提交 doc/file 产出物时 fileRef 使用该目录下的路径）。'
       : '',
     // Todo 4：非空才注入（空串被下方 filter 剔除 → 无边界时输出字节不变）
@@ -419,6 +475,10 @@ export function buildSystemInstructions(
     blocks.push(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
   }
   blocks.push(ARTIFACT_SUBMISSION_INSTRUCTION);
+  // P1：issue 完整版仅显式开关时注入（dispatch 按目标角色传入；缺省一句版，字节兼容）。
+  if (opts?.issueDetail === true) {
+    blocks.push(ISSUE_FULL_INSTRUCTION);
+  }
   // 计划分流：仅任务计划模式开启时注入；主 Agent 出唯一计划，其他成员只评审不起草。
   // taskPlanMode=false/缺省 → 不注入（字节级保持原行为）。
   if (opts?.taskPlanMode === true) {
@@ -439,19 +499,21 @@ export function buildSystemInstructions(
   if (opts?.memoryIndex) {
     blocks.push(opts.memoryIndex);
   }
-  return blocks.filter((b) => b.length > 0).join('\n');
+  return blocks.filter((b) => b.length > 0).join('\n\n');
 }
 
 /**
  * 群聊触发强化指令（dispatch 动态注入，仅来源为群聊频道时）：用户在群聊 @ 你 →
  * 默认应在群聊中公开回复结论（像真人被群聊点名后当众回应）。私聊触发不注入
  * （保持私密独白）。经 group_post 工具发布控制公开内容——模型通过工具发布的内容才会被群聊显示。
+ * 互斥优先级：wecom 优先——同一条触发若已注入企微指令（正文含 [WeCom:] 标记），
+ * 则不再注入本指令（dispatch 组装处实现），避免模型同时走 group_post 与 wecom_reply 双通道。
  */
 export const GROUP_TRIGGER_INSTRUCTION =
   '【群聊回复要求】本条消息来自任务群聊，你被 @ 定向分发。请在群聊中公开回复你的结论' +
-  '——调用 vteam MCP 的 group_post 工具发布到群聊（参数 {taskId, content, fileRef?}）。' +
-  '群聊只会显示你通过 group_post 发布的内容，完整处理过程保留在你的私聊会话。' +
-  '如需向群聊发送文件：直接调用 group_post 并携带 fileRef（{taskId, content, fileRef: "文件路径"}），文件将作为群聊附件并自动归档为产出物。';
+  '——调用 vteam MCP 的 vteam_group_post 工具发布到群聊。' +
+  '群聊只会显示你通过 vteam_group_post 发布的内容，完整处理过程保留在你的私聊会话。' +
+  '如需向群聊发送文件：直接调用 vteam_group_post 并携带 fileRef，文件将作为群聊附件并自动归档为产出物。';
 
 /**
  * 团队直聊群聊触发指令（仅 dispatchForTeamTarget 的 team_group 频道注入）：
@@ -461,17 +523,18 @@ export const GROUP_TRIGGER_INSTRUCTION =
  */
 export const TEAM_GROUP_TRIGGER_INSTRUCTION =
   '【群聊回复要求】本条消息来自团队直聊（无任务），你被 @ 定向分发。请在群聊中公开回复你的结论' +
-  '——调用 vteam MCP 的 group_post 工具发布到群聊（参数 {teamId, selfInstanceId, content, fileRef?}，selfInstanceId 为 system 身份段中的团队成员 id，tmm_ 前缀）。' +
-  '群聊只会显示你通过 group_post 发布的内容，完整处理过程保留在你的私聊会话。' +
-  '如需通知其他成员：调用 notify_agent（参数 {teamId, selfInstanceId, targetInstanceId, content}）；' +
-  '需要群聊历史时调用 chat_history（传 teamId）。' +
+  '——调用 vteam MCP 的 vteam_group_post 工具发布到群聊（selfInstanceId 填写 system 身份段中的团队成员 id，tmm_ 前缀）。' +
+  '群聊只会显示你通过 vteam_group_post 发布的内容，完整处理过程保留在你的私聊会话。' +
+  '如需通知其他成员：调用 vteam_notify_agent；' +
+  '需要群聊历史时调用 vteam_chat_history（传 teamId）。' +
   '团队直聊没有 taskId，禁止传递 taskId 参数（传了必 403）。' +
-  'my_profile、team_view、doclib、issue、plan、task_transition 类工具需要任务上下文，团队直聊下不要调用（如需任务，先调用 task_create 创建真实任务）。' +
-  '如需向群聊发送文件：直接调用 group_post 并携带 fileRef（{teamId, selfInstanceId, content, fileRef: "文件路径"}），文件将作为群聊附件。';
+  'vteam_my_profile、vteam_team_view、vteam_doclib、vteam_issue_*、vteam_plan_mode、vteam_task_transition 类工具需要任务上下文，团队直聊下不要调用（如需任务，先调用 vteam_task_create 创建真实任务）。' +
+  '如需向群聊发送文件：直接调用 vteam_group_post 并携带 fileRef，文件将作为群聊附件。';
 
 export const WECOM_TRIGGER_INSTRUCTION =
-  '【企微消息】此消息来自企业微信用户 via WeCom，请务必使用 wecom_reply 工具回复，不要使用 group_post，以确保用户在企微端收到@回复。' +
-  '参数 {taskId, selfInstanceId, text, atUser?}，text 为回复正文（支持 markdown，≤4000字），atUser 默认 true（群聊@，私聊直回）。回复会同时同步到任务群聊。';
+  '【企微消息】此消息来自企业微信用户 via WeCom，请务必使用 vteam_wecom_reply 工具回复，不要使用 vteam_group_post，以确保用户在企微端收到@回复。' +
+  '回复会同时同步到任务群聊。' +
+  '（互斥优先级：wecom 优先——已注入本指令时不再注入 GROUP_TRIGGER_INSTRUCTION，见 dispatch 组装处。）';
 
 /**
  * team-mode 团队接待话术段（无任务团队直聊，仅 teamMode 分派时注入 system）：
@@ -480,14 +543,14 @@ export const WECOM_TRIGGER_INSTRUCTION =
  */
 export const TEAM_SYSTEM_RECEPTION_INSTRUCTION =
   '【团队接待】你是本团队的主 Agent 接待员（团队直聊，当前无任务上下文）。' +
-  '用户意图明确（含做什么、可执行）→ 直接调用 vteam MCP 的 `task_create` 创建真实任务' +
-  '（参数 {selfInstanceId, title, description?, priority?}，团队由当前会话解析、无需传归属，建好后告知用户）；' +
+  '用户意图明确（含做什么、可执行）→ 直接调用 vteam MCP 的 `vteam_task_create` 创建真实任务' +
+  '（团队由当前会话解析、无需传归属，建好后告知用户）；' +
   '所在团队不明确 → 先问用户用哪个团队，绝不猜测归属、绝不创建任务；' +
   '用户意图不明 → 普通回复追问两件事（做什么/验收标准），禁止创建任务、' +
   '禁止走 QuestionModal（问题确认弹窗仅任务内可用）。' +
-  '参数规则：chat_history、group_post、notify_agent、memory_save、memory_search 这 5 个工具在团队直聊下传 teamId，绝不传 taskId' +
+  '参数规则：vteam_chat_history、vteam_group_post、vteam_notify_agent、vteam_memory_save、vteam_memory_search 这 5 个工具在团队直聊下传 teamId，绝不传 taskId' +
   '（团队直聊没有 taskId，传了必 403）；selfInstanceId 填写 system 身份段中的团队成员 id（tmm_ 前缀）；' +
-  'my_profile、team_view 与 delivery 相关工具需要任务上下文，团队直聊下不可用（如需任务，先 task_create 建任务）。';
+  'vteam_my_profile、vteam_team_view 与 delivery 相关工具需要任务上下文，团队直聊下不可用（如需任务，先 vteam_task_create 建任务）。';
 
 /**
  * 分派后等待回流的默认超时（D8 总超时；F3 MINOR-3：架构师 5 轮 tool 调用实测 72s > 60s，
@@ -1373,7 +1436,7 @@ export class WorkerDispatcher
           `【可用记忆索引 team:${teamCnt} global:${globCnt}${topTags.length ? ` Top tags:${topTags.join(',')}` : ''}】\n` +
           (lines.length
             ? lines.join('\n') +
-              '\n按需 memory_search({teamId, level/tags/query, limit≤5}) 拉正文，摘要命中再取 content。'
+              '\n按需用 vteam_memory_search 拉正文，摘要命中再取 content。'
             : '暂无记忆正文。');
         if (memoryIndex.length > 1200) memoryIndex = memoryIndex.slice(0, 1200);
         return memoryIndex;
@@ -1535,13 +1598,13 @@ export class WorkerDispatcher
     if (taskIdForPrompt) {
       promptBlocks.push(
         `【任务上下文】你的当前任务 ID：${taskIdForPrompt}。` +
-          '需要群聊历史/文档库/任务信息时，调用 vteam 的 chat_history / doclib / task_context 工具（传 taskId）。' +
-          '需要向群聊发布消息时调用 vteam 的 group_post 工具（参数 {taskId, content, fileRef?}）。',
+          '需要群聊历史/文档库/任务信息时，调用 vteam 的 vteam_chat_history / vteam_doclib / vteam_task_context 工具（传 taskId）。' +
+          '需要向群聊发布消息时调用 vteam 的 vteam_group_post 工具。',
       );
     } else {
       promptBlocks.push(
         `【团队上下文】你当前在团队 ${teamId} 直聊（无任务）。` +
-          '需要群聊历史时调用 chat_history（传 teamId）；需要向群聊发布时调用 group_post（传 teamId）。',
+          '需要群聊历史时调用 vteam_chat_history（传 teamId）；需要向群聊发布时调用 vteam_group_post（传 teamId）。',
       );
     }
     const sourceChannel = await this.prisma.chatChannel.findUnique({
@@ -1549,9 +1612,12 @@ export class WorkerDispatcher
       select: { type: true },
     });
     if (
-      sourceChannel?.type === CHANNEL_TYPE.team_group ||
-      sourceChannel?.type === CHANNEL_TYPE.task_group
+      (sourceChannel?.type === CHANNEL_TYPE.team_group ||
+        sourceChannel?.type === CHANNEL_TYPE.task_group) &&
+      !request.text.includes('[WeCom:')
     ) {
+      // 互斥优先级 wecom 优先：企微消息走 wecom_reply 单通道，不再叠加群聊指令
+      //（GROUP/TEAM_GROUP 二选一逻辑保持不变，仅在非企微时注入）。
       promptBlocks.push(
         taskIdForPrompt
           ? GROUP_TRIGGER_INSTRUCTION
@@ -1562,7 +1628,7 @@ export class WorkerDispatcher
       const wecomMatch = /\[WeCom:([^\]]+)\]/.exec(request.text);
       const wecomUserLabel = wecomMatch ? wecomMatch[1].trim() : '';
       const tailored = wecomUserLabel
-        ? `【企微消息】此消息来自企业微信用户 ${wecomUserLabel} via WeCom，请务必使用 wecom_reply 工具回复，不要使用 group_post，以确保用户在企微端收到@回复。`
+        ? `【企微消息】此消息来自企业微信用户 ${wecomUserLabel} via WeCom，请务必使用 vteam_wecom_reply 工具回复，不要使用 vteam_group_post，以确保用户在企微端收到@回复。`
         : WECOM_TRIGGER_INSTRUCTION;
       promptBlocks.push(tailored);
     }
@@ -1693,6 +1759,12 @@ export class WorkerDispatcher
       selfInstanceId: teamMemberId,
       selfAlias,
       persistentWorkDir: teamWorkDir,
+      // P0：企微系统段默认不注入，仅触发正文含 [WeCom:] 标记时注入。
+      isWecomChannel: request.text.includes('[WeCom:'),
+      // P1：issue 完整版仅 product/tester/developer 注入，其余角色只收 GLOBAL 一句版。
+      issueDetail: roleNeedsIssueDetail(agentIdentity.role),
+      // plan 记忆段屏蔽：按目标角色传入，plan 跳过 GLOBAL 内【记忆管理】2 行。
+      agentRole: agentIdentity.role,
     };
     // Todo 13 策略 agent 候选的计划侧输入（与下发 system 的 taskPlanMode 同源，
     // 仅做只读镜像，不改变计划模式指令逻辑）。
