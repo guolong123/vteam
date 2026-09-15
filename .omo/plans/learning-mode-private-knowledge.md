@@ -68,3 +68,23 @@ F1/F2 ← 全部
 5. git-repos.list 未过滤/脱敏/worker 共享 → §3 P6、§4 T6/F2。
 6. DM 全开隐私洞 → 缩为同团队+审计 → D6、§3 P6/P7、§4 T6。
 7. librarian 落地触点不全 + notify/group_post 矛盾 → D5、§3 P7、§4 T7。
+
+## 8. 审计记录（F1/F2，2026-09-15）
+
+- F1 全量回归：server 89 suites / 2103 tests，2074 过，29 败。其中 19 个 stash 实证为 pre-existing（notifications 1、message-channels 13、docs-site 5）；workers 5 例症状吻合 pre-existing 但 stash 不可证（HEAD 缺未跟踪的 mcp-discovery.ts 无法编译，且该 spec 为计划改动，留 diff-review）；models 3 + teams-seed 2 与计划无关（未碰对应模块，症状为 DTO/DI wiring，判 likely pre-existing）。E2E 2 suites / 11 tests 全过。双 SkillsService 实例未观测到 id 冲突。
+- F2 安全审计（High 3）：H1 git 凭证 worker 级共享（已知）+ repoUrl 可能内嵌 token（新建：create 期需剥离）；H2 global 记忆跨团队可改（共享命名空间设计使然，需产品决策）；H3 DM 历史缺 selfInstanceId 绑定（需补或立文档）。Medium 5（M1 skill_create 双上下文主门确认意图；M2 restore 改 artifacts.edit；M3 git_push 单层依赖待验 guard 层②；M4 SkillsService 改由 SkillsModule 导出；M5 REST/MCP 主体差异 + DELETE 补齐 + 空字串校验）。Low 2（L1 seed 缺 git_repos_list 行、builtin-skill 重跑覆盖 enabled、seed 队无 librarian 待确认；L2 并发竞态已接受）。
+- T8 线上验证：T1 走真实 API 闭环（login→上传→启用→content 校验，sk_0000000001）；完整会话级带教循环待重部署后跑。目录 list/search 明确缺口（需 worker 新 HTTP 面，未做）。
+- F2 修补批（已落地，模块 specs 全绿 + tsc 干净）：H1-create 期拒 URL 内嵌凭证（400 REPO_URL_CREDENTIALS）；H3-DM 路径强制 selfInstanceId（缺失/冒充 403）；M2-restore 改 artifacts.edit；M4-SkillsService 由 SkillsModule 导出（消双实例）；M5-DELETE 补团队校验 + 空内容 400；L1-seed 补 git_repos_list 行 + 重跑保留 admin 停用。未动：H2（global 共享语义，待产品决策）、H1 执行隔离（架构级，延后）。F1 增补：修补批后 teams/seed 2 败复现（F1 已记 pre-existing，diff 无 teams 文件）。
+
+## 9. 学习闭环实测问题台账（2026-09-15 群聊实测，t_0000000001）
+
+- ISSUE-1 学习回复落私聊：老师在群里说话后，agent 回复大概率先进私聊频道（c_0000000004：m_0000000387/0390/0394），群里需等很久或只看到部分。老师体感是“群里不回复，私聊推一下才动”。疑点：主 Agent 定向 dispatch private 优先、回退群聊。待查群聊无 @ 路由到主 Agent 后的回复通道选择逻辑。状态：待修。
+- ISSUE-2 chat_history 语义坑：limit 取最早 N 条而非最近，无 order 参数；返回单行 JSON，read 按行截断（2000 字符）、ripgrep 报 record exceeded（64KB），agent 用满 5 次调用仍定位不到末尾，只能停下问老师。行为本身符合学习模式（诚实停下），工具侧可优化：加 order/desc 或 sinceId 双向。状态：待修。
+- ISSUE-3 群聊代码块横向溢出：三件套 ``` 块超出屏幕宽。根因：md-render pre 缺 max-width + 气泡 flex 链缺 min-width:0。状态：已修（chat-bubble minWidth:0/maxWidth 100%/overflow hidden + md-render pre 约束，截图验收：pre 右缘 1624→922，文档横向溢出 0）。
+- 测试备注（非产品问题）：多 agent 共用一个 playwright 会话会互相顶掉页面（about:blank），冒烟时重进一次解决。
+- ISSUE-4 新 MCP 工具对存量会话隐身：部署新增 skill_create/memory_update/git_repos_list 后，老 opencode 会话函数列表里没有它们（工具定义会话启动时冻结），agent 自查以为“没权限”，向老师报卡住（m_0000000405）。profile 的 serverGated 名单是对的。短期：加工具后重启 worker 会话（本次 worker 已重启，新会话自动带新工具）；长期：reload-config 应刷新会话工具定义。状态：已记录，长期修延后。
+- ISSUE-5 确认语歧义导致自动入库：老师说“三件套确认可用”后，agent 把评价语当成沉淀授权，自行 memory_save 两条（me_0000000001/2，03:26），而老师此前明确过“只发文本不要调用”。已修：learning-mode §7 加入库门（仅“可以入库/开始沉淀/调用 skill_create”等明确指令算授权，评价语不算，逐项报备），§4 加工具缺失判据（先查 my_profile serverGated，会话旧则问老师重启或代建）；线上 skill 已更新到 v3。去重验证：agent 用同款内容再调 memory_save 返回 duplicate，记忆总数保持 2。
+- 沉淀闭环结果：chat-history-query（sk_0000000002，默认停用）由老师代建；2 条 team 记忆在库；去重行为线上验证通过。
+- librarian 实测（tmm_0000000007，已加入种子团队）：已知问题（limit 语义）引用 me_0000000001 作答 + 置信度（m_0000000421）；未知问题（线上事故根因）回固定不知话术并列出检索范围（记忆无相关条目、文档库 3 个产出物无关、无授权仓库，m_0000000425）。只读两问皆过。
+- 协作 5 幕剧本实测：Act1 求助接力 ✅（测试→开发→回群，约 13 分钟，请求格式规范、附件交接完整）；Act2 越界转交 ✅（开发拒绝代判验收→转交 PM→PM 组织→点名测试出正式结论，约 3 分钟，全程带证据指针）；Act3 失败升级 ✅（notify 不存在实例报 PLATFORM_MCP_TASK_NOT_FOUND，经 team_view 核对 7 成员，给出替代路径，不伪造成功）；Act4 广播纪律 ❌（@all 私域问题引 6 成员群答：PM/产品/架构/测试/计划各答一遍 + 两条收尾 @all，librarian 按规矩回不知因为无沉淀——对的是它，错的是缺广播纪律机制）；Act5 定向问答 ❌（@开发者-1 问沉淀问题 12 分钟无回复，无超时跟进/升级）。结论：点对点配合顺畅，广播必炸，定向 @ 无 SLA。下一步：写《团队协作规约》（求助三要素/转交落 issue/广播纪律）+ 转交响应度量。
+- F2 修补批（已落地，模块 specs 全绿 + tsc 干净）：H1-create 期拒 URL 内嵌凭证（400 REPO_URL_CREDENTIALS）；H3-DM 路径强制 selfInstanceId（缺失/冒充 403）；M2-restore 改 artifacts.edit；M4-SkillsService 由 SkillsModule 导出（消双实例）；M5-DELETE 补团队校验 + 空内容 400；L1-seed 补 git_repos_list 行 + 重跑保留 admin 停用。未动：H2（global 共享语义，待产品决策）、H1 执行隔离（架构级，延后）。F1 增补：修补批后 teams/seed 2 败复现（F1 已记 pre-existing，diff 无 teams 文件）。
