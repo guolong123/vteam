@@ -89,7 +89,23 @@ describe('防回流：vteam 自造 plan 域已下线（改由 opencode 原生 ag
 
   it('不存在 plan 表读写（prisma.plan / prisma.planTask）', () => {
     const hits = grepSource(/\bprisma\.(plan|planTask)\b/);
-    expect(hits).toEqual([]);
+    // 窄豁免（todo2 plans 复活）：仅 tasks/plan-lifecycle.service.ts 可读写 plans 表
+    // （唯一 choke 点）；planTask 仍全禁——豁免文件内出现即红。
+    const nonExempt = hits.filter(
+      (h) => !h.startsWith('tasks/plan-lifecycle.service.ts:'),
+    );
+    expect(nonExempt).toEqual([]);
+    const exemptPlanTask = hits.filter(
+      (h) =>
+        h.startsWith('tasks/plan-lifecycle.service.ts:') &&
+        /prisma\.planTask\b/.test(h),
+    );
+    expect(exemptPlanTask).toEqual([]);
+    // 豁免有效性：豁免文件必须真实持有 plans 表读写，否则豁免无意义。
+    const exemptHits = hits.filter((h) =>
+      h.startsWith('tasks/plan-lifecycle.service.ts:'),
+    );
+    expect(exemptHits.length).toBeGreaterThan(0);
   });
 
   it('不存在 executionMode 的服务端门禁/切换逻辑（updateExecutionMode）', () => {

@@ -1,10 +1,10 @@
 // ------------------------------------------------------------------
-// AI Agent 协作平台数据模型 — Prisma schema（20 表）
+// AI Agent 协作平台数据模型 — Prisma schema（21 表）
 //
 // 唯一事实来源：docs/agent-platform/15-数据模型细化（ER图）.md
 //   §2  字段类型约定（字符串枚举 + Json 列，规避 SQLite 无原生 enum）
 //   §2.2 主键策略（VARCHAR(64) 域前缀 + 自增序号）
-//   §3  逐表字段定义（20 表全量）
+//   §3  逐表字段定义（21 表全量）
 //   §4/§5 唯一约束与索引
 //
 // 双库兼容说明（08 篇 §6.2 / 15 篇 §2.1）：
@@ -340,6 +340,40 @@ model Message {
   @@index([taskId, createdAt], map: "idx_messages_task_created")
   @@index([channelId, taskId], map: "idx_messages_channel_task")
   @@map("messages")
+}
+
+// ==================================================================
+// 派发回执域（31 篇 §3.1：dispatch 建待回执账，目标回执/完工清账并唤醒派发人一次，
+// 超时催办幂等；mr_ 前缀主键；status/kind 字符串枚举 + 应用层常量，
+// 双库兼容——不声明 Prisma enum；id 列均为逻辑关联（不建 FK），不碰其他表）
+// ==================================================================
+
+// 待回执账本（一派发一账；dedupKey 输入规范 =
+// `from::to::(issueId ?? sha1(内容去空白后前64字符))`，括号必须显式，永不 NULL；
+// kind=wake/round-notify 为保留位，永不写入，仅防未来误用）
+model MessageReceipt {
+  id             String    @id // mr_ 前缀，服务层 IdGeneratorService 生成
+  messageId      String    @map("message_id") // 触发派发的源消息（notify 落库的那条）
+  fromInstanceId String    @map("from_instance_id") // 派发人实例
+  toInstanceId   String    @map("to_instance_id") // 目标实例
+  taskId         String?   @map("task_id") // 归属任务（团队维度可空）
+  teamId         String    @map("team_id") // 归属团队
+  // 事项摘要（派发词前 100 字，展示用）
+  summary        String    @db.Text
+  status         String    @default("pending") // pending|acked|expired
+  dedupKey       String    @unique @map("dedup_key")
+  issueId        String?   @map("issue_id") // 派发宿主 issue（轮次宿主，null=无宿主）
+  nudgeCount     Int       @default(0) @map("nudge_count")
+  lastNudgedAt   DateTime? @map("last_nudged_at")
+  expiresAt      DateTime  @map("expires_at")
+  kind           String    @default("dispatch") // dispatch|wake|round-notify（后两者保留位永不写入）
+  forceReason    String?   @map("force_reason") // force 绕过审计原因
+  createdAt      DateTime  @default(now()) @map("created_at")
+  ackedAt        DateTime? @map("acked_at") // 清账时间
+
+  @@index([toInstanceId, status], map: "idx_message_receipts_to_status")
+  @@index([teamId, status], map: "idx_message_receipts_team_status")
+  @@map("message_receipts")
 }
 
 // ==================================================================
@@ -780,6 +814,10 @@ model Plan {
   createdBy          String   @map("created_by") // 主 Agent 实例 id
   reviewerInstanceId String?  @map("reviewer_instance_id") // 被指派评审者实例（null=用户评审/未指派)
   rejectCount        Int      @default(0) @map("reject_count")
+  // todo2 plans 复活：用户确认审计（加法-only 可空列，todo11 确认门消费，命名锁定勿改）
+  confirmedBy        String?  @map("confirmed_by")
+  confirmedAt        DateTime? @map("confirmed_at")
+  rejectReason       String?  @db.Text @map("reject_reason")
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 

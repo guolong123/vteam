@@ -10,6 +10,7 @@ import { TasksController } from './tasks.controller';
 import { MigrateController } from './migrate.controller';
 import { TaskChannelBindingsController } from './task-channel-bindings.controller';
 import { TasksService } from './tasks.service';
+import { PlanLifecycleService } from './plan-lifecycle.service';
 import { PlanStepsService } from './plan-steps.service';
 import { PlanDocsService } from './plan-docs.service';
 
@@ -42,12 +43,13 @@ import { PlanDocsService } from './plan-docs.service';
   ],
   providers: [
     TasksService,
+    PlanLifecycleService,
     PlanStepsService,
     PlanDocsService,
     TaskProgressionScheduler,
     TeamMembershipGuard,
     PermissionGuard,
   ],
-  exports: [TasksService],
+  exports: [TasksService, PlanLifecycleService],
 })
 export class TasksModule {}

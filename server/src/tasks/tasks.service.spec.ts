@@ -13,6 +13,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import { TaskProgressionScheduler } from './task-progression.scheduler';
+import { PlanLifecycleService } from './plan-lifecycle.service';
 import { TasksService } from './tasks.service';
 import { sanitizeWorkDirName } from './work-dir.util';
 
@@ -59,6 +60,7 @@ describe('TasksService', () => {
   };
   let idGen: { nextId: jest.Mock; seed: jest.Mock };
   let realtime: { broadcast: jest.Mock };
+  let planLifecycle: { autoEnsureRow: jest.Mock };
   let sessionLifecycle: {
     getInstancesByTeamMember: jest.Mock;
     getInstanceBySession: jest.Mock;
@@ -203,6 +205,11 @@ describe('TasksService', () => {
     };
     idGen = { nextId: jest.fn(), seed: jest.fn() };
     realtime = { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
+    planLifecycle = {
+      autoEnsureRow: jest
+        .fn()
+        .mockResolvedValue({ id: 'pl_0000000001', status: 'draft' }),
+    };
     // 团队化默认基线：归属团队存在 + 主成员已定 + 2 成员（start 预检/主门/DTO 组装默认放行；
     // 404/空团队/未设主成员用例各自覆写）。
     prisma.team.findUnique.mockResolvedValue({
@@ -229,6 +236,7 @@ describe('TasksService', () => {
         { provide: IdGeneratorService, useValue: idGen },
         { provide: RealtimeService, useValue: realtime },
         { provide: SessionLifecycleService, useValue: sessionLifecycle },
+        { provide: PlanLifecycleService, useValue: planLifecycle },
         {
           provide: TaskProgressionScheduler,
           useValue: {
@@ -557,6 +565,35 @@ describe('TasksService', () => {
       );
     });
 
+    it('团队有主 Agent 时创建任务继承主实例（无设定则保持 null）', async () => {
+      const taskId = 't_0000000003';
+      const tx = setupTxIdle(taskId);
+      tx.team.findUnique.mockResolvedValue({
+        id: teamId,
+        version: 0,
+        currentTaskId: null,
+        reuseSession: true,
+        mainAgentMemberId: 'tmm_0000000002',
+      } as any);
+      idGen.nextId
+        .mockResolvedValueOnce(taskId)
+        .mockResolvedValueOnce('c_0000000001')
+        .mockResolvedValueOnce('tmm_0000000001')
+        .mockResolvedValueOnce('tmm_0000000002')
+        .mockResolvedValueOnce('te_0000000001');
+
+      await service.create(userId, { title: '继承主 Agent', teamId } as any);
+
+      expect(tx.task.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            mainAgentId: 'a_developer',
+            mainAgentInstanceId: 'tmm_0000000002',
+          }),
+        }),
+      );
+    });
+
     it('忙时团队：创建 queued 任务，写入 TeamQueue position=MAX+1 FOR UPDATE，currentTaskId 不变', async () => {
       const taskId = 't_0000000002';
       const tx = setupTxBusy(taskId, 1);
@@ -728,6 +765,97 @@ describe('TasksService', () => {
       await expect(
         service.create(userId, { title: ' ', teamId } as any),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('plans 兜底建行（todo2 autoEnsureRow 接入创建成功路径）', () => {
+    const teamId = 'tm_0000000001';
+    const setupIdleCreate = (taskId: string) => {
+      prisma.teamUserMember.findUnique.mockResolvedValue({
+        id: 'tum_1',
+      } as any);
+      idGen.nextId.mockImplementation(
+        async (prefix: string) => `${prefix}_0000000001`,
+      );
+      const tx: any = {
+        team: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: teamId,
+            version: 0,
+            currentTaskId: null,
+            reuseSession: true,
+          }),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        teamMember: {
+          findMany: jest.fn().mockResolvedValue([
+            {
+              id: 'tmm_0000000001',
+              agentId: 'a_product',
+              alias: '产品经理-1',
+              seq: 1,
+              agent: { id: 'a_product', name: '产品经理', role: 'product' },
+            },
+          ]),
+        },
+        teamQueue: {
+          create: jest.fn().mockResolvedValue({ id: 'tq_0000000001' }),
+          aggregate: jest.fn().mockResolvedValue({ _max: { position: 0 } }),
+        },
+        task: {
+          create: jest
+            .fn()
+            .mockImplementation(({ data }: any) => Promise.resolve(data)),
+        },
+        chatChannel: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({ id: 'c_0000000001' }),
+        },
+        taskEvent: {
+          create: jest.fn().mockResolvedValue({ id: 'te_0000000001' }),
+        },
+        $queryRawUnsafe: jest
+          .fn()
+          .mockRejectedValue(new Error('mock raw fallback')),
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.task.findUnique.mockResolvedValue(
+        row({ id: taskId, teamId, status: 'pending', title: '新任务' }) as any,
+      );
+      prisma.teamMember.findMany.mockResolvedValue([
+        {
+          id: 'tmm_0000000001',
+          agentId: 'a_product',
+          alias: '产品经理-1',
+          seq: 1,
+          agent: { id: 'a_product', name: '产品经理', role: 'product' },
+        },
+      ] as any);
+    };
+
+    it('创建成功后调用 autoEnsureRow(taskId) 一次', async () => {
+      setupIdleCreate('t_0000000001');
+
+      const result = await service.create(userId, {
+        title: '新任务',
+        teamId,
+      } as any);
+
+      expect(result.id).toBe('t_0000000001');
+      expect(planLifecycle.autoEnsureRow).toHaveBeenCalledTimes(1);
+      expect(planLifecycle.autoEnsureRow).toHaveBeenCalledWith('t_0000000001');
+    });
+
+    it('autoEnsureRow 抛错→创建仍成功（只 warn，不阻断）', async () => {
+      setupIdleCreate('t_0000000001');
+      planLifecycle.autoEnsureRow.mockRejectedValueOnce(new Error('db down'));
+
+      const result = await service.create(userId, {
+        title: '新任务',
+        teamId,
+      } as any);
+
+      expect(result.id).toBe('t_0000000001');
     });
   });
 

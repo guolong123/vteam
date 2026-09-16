@@ -35,6 +35,7 @@ import { RejectTaskDto } from './dto/reject-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { TaskProgressionScheduler } from './task-progression.scheduler';
+import { PlanLifecycleService } from './plan-lifecycle.service';
 import { sanitizeWorkDirName } from './work-dir.util';
 
 /** 任务域主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
@@ -149,6 +150,7 @@ export class TasksService implements OnModuleInit {
     private readonly realtime: RealtimeService,
     private readonly sessionLifecycle: SessionLifecycleService,
     private readonly progression: TaskProgressionScheduler,
+    private readonly planLifecycle: PlanLifecycleService,
   ) {}
 
   /** 进程启动：按库内各前缀纯数字序号最大值对齐 id 生成器（resyncIdPrefix 跳过非数字 id，防主键冲突）。 */
@@ -352,6 +354,12 @@ export class TasksService implements OnModuleInit {
             });
           }
 
+          // 主 Agent 继承团队设定：team.mainAgentMemberId 指向的成员即任务主实例；
+          // 无设定则保持 null（serverGated 工具届时按“未设置”拒绝，与旧行为一致）。
+          const mainMember =
+            (team as any)?.mainAgentMemberId != null
+              ? members.find((m: any) => m.id === (team as any).mainAgentMemberId) ?? null
+              : null;
           const created = await tx.task.create({
             data: {
               id: taskId,
@@ -360,8 +368,8 @@ export class TasksService implements OnModuleInit {
               priority: dto.priority ?? TASK_PRIORITY.medium,
               status,
               teamId,
-              mainAgentId: null,
-              mainAgentInstanceId: null,
+              mainAgentId: mainMember?.agentId ?? null,
+              mainAgentInstanceId: mainMember?.id ?? null,
               // executionMode 列保留但已停用（vteam 自造 plan 域下线，改由 opencode agent 承担）；
               // 不再从 DTO 取值，恒写 direct 以保持列非空默认语义。
               executionMode: 'direct',
@@ -490,6 +498,14 @@ export class TasksService implements OnModuleInit {
         const fresh = await this.prisma.task.findUnique({
           where: { id: taskId },
         });
+        // plans 兜底建行（todo2）：行缺失→建 draft，失败只 warn 永不阻断任务创建。
+        try {
+          await this.planLifecycle.autoEnsureRow(taskId);
+        } catch (err: unknown) {
+          this.logger.warn(
+            `plans 兜底建行失败 taskId=${taskId}（不阻断创建）: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
         return this.toTaskDto(fresh ?? createdTask);
       } catch (e: any) {
         const code = (e?.getResponse?.() as any)?.code;
