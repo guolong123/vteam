@@ -140,9 +140,10 @@ describe('MessageReceiptsService（plan-review-execution-gates Todo 5）', () =>
         .mockResolvedValueOnce(2)
         .mockResolvedValueOnce(5);
 
-      await expect(
-        service.countPending({ taskId: 't_1' }),
-      ).resolves.toEqual({ pending: 2, total: 5 });
+      await expect(service.countPending({ taskId: 't_1' })).resolves.toEqual({
+        pending: 2,
+        total: 5,
+      });
       expect(prisma.messageReceipt.count).toHaveBeenCalledTimes(2);
     });
   });

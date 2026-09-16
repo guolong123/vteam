@@ -8,11 +8,10 @@ export const RECEIPT_ROUND_PLAN_EVENTS: readonly string[] = [
   EVENT_TYPES.RECEIPT_EXPIRED,
   EVENT_TYPES.ROUND_COMPLETE,
   EVENT_TYPES.ROUND_STALE,
-  ...Object.values(PLAN_LIFECYCLE_STATUS).map(
-    (s) => `plan.status.${s}`,
-  ),
+  ...Object.values(PLAN_LIFECYCLE_STATUS).map((s) => `plan.status.${s}`),
 ];
 
-export const EVENT_SUBSCRIBERS: Record<string, EventSubscriberPage[]> = Object.fromEntries(
-  RECEIPT_ROUND_PLAN_EVENTS.map((event) => [event, ['session', 'board']]),
-);
+export const EVENT_SUBSCRIBERS: Record<string, EventSubscriberPage[]> =
+  Object.fromEntries(
+    RECEIPT_ROUND_PLAN_EVENTS.map((event) => [event, ['session', 'board']]),
+  );

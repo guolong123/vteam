@@ -35,9 +35,12 @@ describe('no-tighten machine check（todo 5 loosen-only 审计）', () => {
   });
 
   describe('执行门禁哈希层：缺省即未武装（fail-open，放行侧锁定）', () => {
-    it.each(['', '   ', '\n\t '])('normalizePlanHash(%j) → null（空即未携带，不收紧）', (input) => {
-      expect(normalizePlanHash(input)).toBeNull();
-    });
+    it.each(['', '   ', '\n\t '])(
+      'normalizePlanHash(%j) → null（空即未携带，不收紧）',
+      (input) => {
+        expect(normalizePlanHash(input)).toBeNull();
+      },
+    );
     it.each([null, undefined, 42, {}, []])(
       'normalizePlanHash(%j) → null（非字符串即未携带，不收紧）',
       (input) => {
@@ -84,11 +87,14 @@ describe('no-tighten machine check（todo 5 loosen-only 审计）', () => {
       ['缺 hash', 'R2 · v0.3 · expected: tmm_aaa'],
       ['缺 expected', 'R2 · v0.3#abcd1234'],
       ['空串', ''],
-    ])('%s → !ok（拒绝侧口径不变，不扩大拦截面：missing 非空）', (_label, text) => {
-      const result = parseReviewTriplet(text);
-      expect(result.ok).toBe(false);
-      expect(result.missing?.length).toBeGreaterThan(0);
-    });
+    ])(
+      '%s → !ok（拒绝侧口径不变，不扩大拦截面：missing 非空）',
+      (_label, text) => {
+        const result = parseReviewTriplet(text);
+        expect(result.ok).toBe(false);
+        expect(result.missing?.length).toBeGreaterThan(0);
+      },
+    );
     it('null 输入 → !ok（不抛错，口径不变）', () => {
       expect(parseReviewTriplet(null).ok).toBe(false);
     });

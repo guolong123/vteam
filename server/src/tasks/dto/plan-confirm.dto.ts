@@ -10,7 +10,8 @@ import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
  */
 export class PlanConfirmDto {
   @ApiPropertyOptional({
-    description: '确认动作：finalize=确认定稿，confirm=开始执行，reject=打回重修，revise=修订重评（缺省 confirm）',
+    description:
+      '确认动作：finalize=确认定稿，confirm=开始执行，reject=打回重修，revise=修订重评（缺省 confirm）',
     enum: ['finalize', 'confirm', 'reject', 'revise'],
   })
   @IsOptional()
@@ -18,7 +19,8 @@ export class PlanConfirmDto {
   action?: 'finalize' | 'confirm' | 'reject' | 'revise';
 
   @ApiPropertyOptional({
-    description: '打回/修订原因（action=reject/revise 时必填，落库 rejectReason）',
+    description:
+      '打回/修订原因（action=reject/revise 时必填，落库 rejectReason）',
     maxLength: 512,
   })
   @IsOptional()

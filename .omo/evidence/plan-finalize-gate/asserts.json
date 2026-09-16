@@ -1,0 +1,20 @@
+{
+  "finalizeGate": true,
+  "asserts": {
+    "pending_final": {
+      "badge": "待定稿",
+      "finalizeFlow": "modal→POST finalize→approved",
+      "afterFinalize": "待执行"
+    },
+    "approved": {
+      "badge": "待执行",
+      "finalizeBtn": 0,
+      "confirmBtn": 1
+    },
+    "draft": {
+      "badge": "修订中",
+      "finalizeBtn": 0,
+      "confirmBtn": 0
+    }
+  }
+}

@@ -278,8 +278,11 @@ describe('PlanLifecycleService finalize trio（todo 2：冻结/归档/通告）'
 
       expect(prisma.message.create).toHaveBeenCalledTimes(1);
       const text = String(
-        (prisma.message.create.mock.calls[0][0] as { data: { content: { text: string } } })
-          .data.content?.text ?? '',
+        (
+          prisma.message.create.mock.calls[0][0] as {
+            data: { content: { text: string } };
+          }
+        ).data.content?.text ?? '',
       );
       expect(text).toContain('成员甲');
       expect(text).toContain(FROZEN_VERSION);

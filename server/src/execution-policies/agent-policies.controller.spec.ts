@@ -35,24 +35,8 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
     'vteam-librarian',
   ];
 
-  const REQUIRED_BASH_DENY = [
-    '>',
-    '>>',
-    'tee',
-    'cp',
-    'mv',
-    'sed -i',
-    'truncate',
-    'dd',
-    'ln',
-    'python -c',
-    'node -e',
-    'perl -i',
-    'git apply',
-    'patch',
-    'git push',
-    'rm',
-  ];
+  // 命令级硬化清单已下线（ROLE_BASH_DENY_PATTERNS 为空）：guard.roles bashDeny 应为空数组
+  const REQUIRED_BASH_DENY: string[] = [];
 
   beforeAll(async () => {
     moduleRef = await Test.createTestingModule({
@@ -193,18 +177,16 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
     for (const name of agentNames) {
       const role = guard.roles[name];
       expect(role.tools).toEqual(ROLE_BOUNDARIES[name].toolAllows);
-      for (const pattern of REQUIRED_BASH_DENY) {
-        expect(role.bashDeny).toContain(pattern);
-      }
+      expect(role.bashDeny).toEqual(REQUIRED_BASH_DENY);
       expect(role.correction.scopeSummary).toBe(
         ROLE_BOUNDARIES[name].scopeSummary,
       );
-      expect(role.correction.handoff).toEqual(
-        ROLE_BOUNDARIES[name].handoffTo,
-      );
+      expect(role.correction.handoff).toEqual(ROLE_BOUNDARIES[name].handoffTo);
       expect(typeof role.correction.denyTemplate).toBe('string');
       expect(role.permission).not.toHaveProperty('write');
-      expect(role.permission.task).toBe(name === 'vteam-plan' ? 'allow' : 'deny');
+      expect(role.permission.task).toBe(
+        name === 'vteam-plan' ? 'allow' : 'deny',
+      );
     }
   });
 

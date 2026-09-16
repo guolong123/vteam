@@ -424,11 +424,15 @@ export class AgentsService implements OnModuleInit {
     bundled?: boolean;
     /** 已注册到 serve 的 agent 基底名 + 元数据（描述/mode）。 */
     registered?: string[];
-    runtime?: Record<string, { description?: string; mode?: string; native?: boolean }>;
+    runtime?: Record<
+      string,
+      { description?: string; mode?: string; native?: boolean }
+    >;
     degraded: boolean;
   }> {
     try {
-      const workerId = opts.workerId ?? (await this.workersService.assignWorker());
+      const workerId =
+        opts.workerId ?? (await this.workersService.assignWorker());
       if (!workerId) {
         return { agents: {}, available: [], workerId: null, degraded: true };
       }
@@ -465,9 +469,12 @@ export class AgentsService implements OnModuleInit {
     /** serve 重启结果（配置需重启才生效）：executed / pending / skipped。 */
     restart?: 'executed' | 'pending' | 'skipped';
   }> {
-    const workerId = opts.workerId ?? (await this.workersService.assignWorker());
+    const workerId =
+      opts.workerId ?? (await this.workersService.assignWorker());
     if (!workerId) {
-      throw new ServiceUnavailableException('未定位到可用的 worker（无在线 worker 节点）');
+      throw new ServiceUnavailableException(
+        '未定位到可用的 worker（无在线 worker 节点）',
+      );
     }
     const worker = await this.prisma.worker.findUnique({
       where: { id: workerId },
@@ -491,10 +498,19 @@ export class AgentsService implements OnModuleInit {
   async getOmoAgentPrompt(
     name: string,
     opts: { workerId?: string } = {},
-  ): Promise<{ name: string; description: string; mode?: string; prompt: string; empty: boolean }> {
-    const workerId = opts.workerId ?? (await this.workersService.assignWorker());
+  ): Promise<{
+    name: string;
+    description: string;
+    mode?: string;
+    prompt: string;
+    empty: boolean;
+  }> {
+    const workerId =
+      opts.workerId ?? (await this.workersService.assignWorker());
     if (!workerId) {
-      throw new ServiceUnavailableException('未定位到可用的 worker（无在线 worker 节点）');
+      throw new ServiceUnavailableException(
+        '未定位到可用的 worker（无在线 worker 节点）',
+      );
     }
     // 必须带 capabilities：exec baseUrl 由它解析（同类踩坑见 listOpencodeAgents）
     const worker = await this.prisma.worker.findUnique({
@@ -525,7 +541,8 @@ export class AgentsService implements OnModuleInit {
     directory?: string;
   }): Promise<OpencodeAgentsResult> {
     try {
-      const workerId = opts.workerId ?? (await this.workersService.assignWorker());
+      const workerId =
+        opts.workerId ?? (await this.workersService.assignWorker());
       if (!workerId) {
         return { agents: [], workerId: null, degraded: true };
       }
@@ -601,14 +618,13 @@ export class AgentsService implements OnModuleInit {
   }
 
   private async toAgentDtoList(rows: AgentRow[]) {
-    const permissions =
-      await this.executionPolicyService.resolveManyByAgents(
-        rows.map((agent) => ({
-          policyId: agent.policyId,
-          role: agent.role,
-          agentKey: agent.agentKey,
-        })),
-      );
+    const permissions = await this.executionPolicyService.resolveManyByAgents(
+      rows.map((agent) => ({
+        policyId: agent.policyId,
+        role: agent.role,
+        agentKey: agent.agentKey,
+      })),
+    );
     return rows.map((agent, i) => ({
       id: agent.id,
       name: agent.name,
@@ -696,7 +712,9 @@ export class AgentsService implements OnModuleInit {
         name: `${opts.agentName} 策略`,
         description: opts.description,
         type: 'custom',
-        config: JSON.parse(JSON.stringify(opts.config)) as Prisma.InputJsonValue,
+        config: JSON.parse(
+          JSON.stringify(opts.config),
+        ) as Prisma.InputJsonValue,
       },
     });
     return policy.id;
@@ -727,7 +745,10 @@ export class AgentsService implements OnModuleInit {
     }
     const agentName = `vteam-${role}` as VteamAgentName;
     const boundary = (
-      ROLE_BOUNDARIES as Record<string, (typeof ROLE_BOUNDARIES)[VteamAgentName] | undefined>
+      ROLE_BOUNDARIES as Record<
+        string,
+        (typeof ROLE_BOUNDARIES)[VteamAgentName] | undefined
+      >
     )[agentName];
     if (!boundary) {
       return null;

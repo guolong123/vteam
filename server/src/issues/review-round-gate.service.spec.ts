@@ -1,6 +1,7 @@
 import { createLedger, embedLedger } from './review-round-ledger';
 import { ReviewRoundService } from './review-round.service';
 import {
+  REVIEW_ROUND_GATE_ERRORS,
   REVIEW_ROUND_TIMEOUT_MS,
   type ConvergenceNotifier,
   ReviewRoundGateService,
@@ -33,7 +34,10 @@ const setup = (timeoutAt: string = FUTURE) => {
     timeoutAt,
   });
   const store = new Map<string, string | null>([
-    ['is_0000000007', embedLedger('评审派发 R2（v0.3，架构/开发/测试三视角）', seed)],
+    [
+      'is_0000000007',
+      embedLedger('评审派发 R2（v0.3，架构/开发/测试三视角）', seed),
+    ],
   ]);
   let mutex: Promise<void> = Promise.resolve();
   const lock = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -57,7 +61,13 @@ const setup = (timeoutAt: string = FUTURE) => {
         return { id: where.id, description: store.get(where.id) };
       }),
       update: jest.fn(
-        async ({ where, data }: { where: { id: string }; data: { description: string } }) => {
+        async ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: { description: string };
+        }) => {
           store.set(where.id, data.description);
           return { id: where.id, description: data.description };
         },
@@ -65,7 +75,9 @@ const setup = (timeoutAt: string = FUTURE) => {
     },
   };
   const roundsPrisma = {
-    $transaction: jest.fn((fn: (t: typeof tx) => Promise<unknown>) => lock(() => fn(tx))),
+    $transaction: jest.fn((fn: (t: typeof tx) => Promise<unknown>) =>
+      lock(() => fn(tx)),
+    ),
   };
   const readPrisma = {
     issue: {
@@ -80,7 +92,11 @@ const setup = (timeoutAt: string = FUTURE) => {
     calls: [],
     dispatchAgentMention: jest.fn(async () => undefined),
   };
-  const gate = new ReviewRoundGateService(readPrisma as never, rounds, notifier);
+  const gate = new ReviewRoundGateService(
+    readPrisma as never,
+    rounds,
+    notifier,
+  );
   const notifyOpts = {
     channelId: CHANNEL,
     plannerMemberId: PLANNER,
@@ -99,17 +115,27 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     const { gate, notifyOpts } = setup();
     await gate.recordVerdict(
       'is_0000000007',
-      { member: MEMBERS[0], verdict: 'REJECT', msgId: 'm_446', version: 'v0.3' },
+      {
+        member: MEMBERS[0],
+        verdict: 'REJECT',
+        msgId: 'm_446',
+        version: 'v0.3',
+      },
       notifyOpts,
     );
     await gate.recordVerdict(
       'is_0000000007',
-      { member: MEMBERS[1], verdict: 'APPROVE', msgId: 'm_447', version: 'v0.3' },
+      {
+        member: MEMBERS[1],
+        verdict: 'APPROVE',
+        msgId: 'm_447',
+        version: 'v0.3',
+      },
       notifyOpts,
     );
-    await expect(gate.requestRevision('is_0000000007', PLANNER)).rejects.toThrow(
-      /待 2\/3/,
-    );
+    await expect(
+      gate.requestRevision('is_0000000007', PLANNER),
+    ).rejects.toThrow(/待 2\/3/);
   });
 
   it('缺版本打回： demanding version，本次永不计入 received', async () => {
@@ -130,7 +156,12 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     const { gate, notifier, notifyOpts } = setup();
     const r = await gate.recordVerdict(
       'is_0000000007',
-      { member: MEMBERS[2], verdict: 'REJECT', msgId: 'm_510', version: 'v0.2' },
+      {
+        member: MEMBERS[2],
+        verdict: 'REJECT',
+        msgId: 'm_510',
+        version: 'v0.2',
+      },
       notifyOpts,
     );
     expect(r.outcome).toBe('superseded');
@@ -138,9 +169,9 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     expect(r.ledger.superseded ?? []).toHaveLength(1);
     expect(r.converged).toBe(false);
     expect(notifier.dispatchAgentMention).not.toHaveBeenCalled();
-    await expect(gate.requestRevision('is_0000000007', PLANNER)).rejects.toThrow(
-      /待 0\/3/,
-    );
+    await expect(
+      gate.requestRevision('is_0000000007', PLANNER),
+    ).rejects.toThrow(/待 0\/3/);
   });
 
   it('同轮同人多次 verdicts 取最后一次', async () => {
@@ -224,6 +255,65 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     expect(ok.allowed).toBe(true);
   });
 
+  it('3/3 含 REJECT → complete+通知照发，但计划回 draft（§6.1 REJECT 回流分支）', async () => {
+    const { gate, notifier, notifyOpts } = setup();
+    const planSink = { transition: jest.fn(async () => ({})) };
+    gate.attachPlanSink(planSink);
+    await gate.recordVerdict(
+      'is_0000000007',
+      { member: MEMBERS[0], verdict: 'APPROVE', msgId: 'm_571', version: 'v0.3' },
+      notifyOpts,
+    );
+    await gate.recordVerdict(
+      'is_0000000007',
+      { member: MEMBERS[1], verdict: 'APPROVE', msgId: 'm_572', version: 'v0.3' },
+      notifyOpts,
+    );
+    const last = await gate.recordVerdict(
+      'is_0000000007',
+      { member: MEMBERS[2], verdict: 'REJECT', msgId: 'm_573', version: 'v0.3' },
+      notifyOpts,
+    );
+    expect(last.converged).toBe(true);
+    expect(last.ledger.status).toBe('complete');
+    expect(planSink.transition).toHaveBeenCalledTimes(1);
+    expect(planSink.transition).toHaveBeenCalledWith(
+      't_0000000001',
+      'draft',
+    );
+    for (const call of planSink.transition.mock.calls) {
+      expect((call as unknown[])[1]).not.toBe('pending_final');
+      expect((call as unknown[])[1]).not.toBe('approved');
+      expect((call as unknown[])[1]).not.toBe('executing');
+    }
+    expect(notifier.dispatchAgentMention).toHaveBeenCalledTimes(2);
+    const texts = (notifier.dispatchAgentMention as jest.Mock).mock.calls.map(
+      (c) => (c[0] as { text: string }).text,
+    );
+    expect(texts.join(' ')).toMatch(/REJECT/);
+    const ok = await gate.requestRevision('is_0000000007', PLANNER);
+    expect(ok.allowed).toBe(true);
+  });
+
+  it('全员 REJECT → sink 走 draft（pending_final 永不出现在被否决轮次）', async () => {
+    const { gate, notifier, notifyOpts } = setup();
+    const planSink = { transition: jest.fn(async () => ({})) };
+    gate.attachPlanSink(planSink);
+    for (const [i, m] of MEMBERS.entries()) {
+      await gate.recordVerdict(
+        'is_0000000007',
+        { member: m, verdict: 'REJECT', msgId: `m_58${i}`, version: 'v0.3' },
+        notifyOpts,
+      );
+    }
+    expect(planSink.transition).toHaveBeenCalledTimes(1);
+    expect(planSink.transition).toHaveBeenCalledWith(
+      't_0000000001',
+      'draft',
+    );
+    expect(notifier.dispatchAgentMention).toHaveBeenCalledTimes(2);
+  });
+
   it('stale：超时转人工产出待拍板项，且绝不通知计划员', async () => {
     const { gate, notifier, notifyOpts } = setup(PAST);
     await gate.recordVerdict(
@@ -250,7 +340,9 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     ]);
     const nudge = stale.adjudications.find((a) => a.kind === 'nudge');
     expect(nudge?.absentees).toEqual([MEMBERS[2]]);
-    const degraded = stale.adjudications.find((a) => a.kind === 'degraded-release');
+    const degraded = stale.adjudications.find(
+      (a) => a.kind === 'degraded-release',
+    );
     expect(degraded?.requiresConfirm).toBe(true);
     // 超时绝不自动通知计划员
     expect(notifier.dispatchAgentMention).not.toHaveBeenCalled();
@@ -270,9 +362,9 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     );
     await gate.checkTimeout('is_0000000007', new Date('2026-09-16T00:00:00Z'));
     // 未确认前仍是 stale：修订仍被拒
-    await expect(gate.requestRevision('is_0000000007', PLANNER)).rejects.toThrow(
-      /待 2\/3/,
-    );
+    await expect(
+      gate.requestRevision('is_0000000007', PLANNER),
+    ).rejects.toThrow(/待 2\/3/);
     // 非 stale 轮次确认即抛错（防误调）
     const { gate: fresh } = setup(FUTURE);
     await expect(
@@ -289,5 +381,108 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     expect(done.ledger.status).toBe('complete');
     expect(done.waived).toEqual([MEMBERS[2]]);
     expect(notifier.dispatchAgentMention).toHaveBeenCalledTimes(2);
+  });
+
+  it('F2#2：第二次派发抛错 → recordVerdict 仍 resolve（complete 后通知尽力而为）', async () => {
+    const { gate, notifier, notifyOpts } = setup();
+    const warn = jest
+      .spyOn(
+        (gate as unknown as { logger: { warn: jest.Mock } }).logger,
+        'warn',
+      )
+      .mockImplementation((() => undefined) as unknown as jest.Mock);
+    (notifier.dispatchAgentMention as jest.Mock).mockImplementation(
+      async (input: { targetInstanceId: string }) => {
+        if (input.targetInstanceId === PM) throw new Error('dispatcher 瞬断');
+      },
+    );
+    for (const [i, m] of MEMBERS.slice(0, 2).entries()) {
+      await gate.recordVerdict(
+        'is_0000000007',
+        { member: m, verdict: 'APPROVE', msgId: `m_59${i}`, version: 'v0.3' },
+        notifyOpts,
+      );
+    }
+    const last = await gate.recordVerdict(
+      'is_0000000007',
+      { member: MEMBERS[2], verdict: 'APPROVE', msgId: 'm_592', version: 'v0.3' },
+      notifyOpts,
+    );
+    expect(last.converged).toBe(true);
+    expect(last.ledger.status).toBe('complete');
+    expect(notifier.dispatchAgentMention).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('抄送PM失败'));
+    // 后续重发走终态 early-return，同样 resolve（F2#5 联动：不再写库）
+    await expect(
+      gate.recordVerdict(
+        'is_0000000007',
+        { member: MEMBERS[0], verdict: 'APPROVE', msgId: 'm_594', version: 'v0.3' },
+        notifyOpts,
+      ),
+    ).resolves.toMatchObject({ converged: true });
+    warn.mockRestore();
+  });
+
+  it('F2#3：修订拒绝错误携带稳定 code（message 仍含 exact 待 N/M）', async () => {
+    const { gate, notifyOpts } = setup();
+    await gate.recordVerdict(
+      'is_0000000007',
+      { member: MEMBERS[0], verdict: 'REJECT', msgId: 'm_446', version: 'v0.3' },
+      notifyOpts,
+    );
+    const err = await gate
+      .requestRevision('is_0000000007', PLANNER)
+      .catch((e: unknown) => e);
+    expect((err as { code?: unknown }).code).toBe(
+      REVIEW_ROUND_GATE_ERRORS.REVISION_REFUSED,
+    );
+    expect((err as Error).message).toMatch(/待 1\/3/);
+  });
+
+  it('F2#5：终态账本不再被后续 verdict 改写（received 保持原 msgId）', async () => {
+    const { gate, notifyOpts } = setup();
+    for (const [i, m] of MEMBERS.entries()) {
+      await gate.recordVerdict(
+        'is_0000000007',
+        { member: m, verdict: 'APPROVE', msgId: `m_60${i}`, version: 'v0.3' },
+        notifyOpts,
+      );
+    }
+    // 同版本新 msgId 重发 → 不声称计入，received 原样保留
+    const r = await gate.recordVerdict(
+      'is_0000000007',
+      { member: MEMBERS[0], verdict: 'APPROVE', msgId: 'm_999', version: 'v0.3' },
+      notifyOpts,
+    );
+    expect(r.outcome).not.toBe('received');
+    expect(r.ledger.received[MEMBERS[0]].msgId).toBe('m_600');
+    expect(r.ledger.status).toBe('complete');
+    // 同 msgId 幂等重发 → 无害（outcome received，但内容不变）
+    const same = await gate.recordVerdict(
+      'is_0000000007',
+      { member: MEMBERS[0], verdict: 'APPROVE', msgId: 'm_600', version: 'v0.3' },
+      notifyOpts,
+    );
+    expect(same.outcome).toBe('received');
+    expect(same.ledger.received[MEMBERS[0]].msgId).toBe('m_600');
+  });
+
+  it('F2#5：stale 账本上的 verdict 不写 received 且 converged 为 false', async () => {
+    const { gate, notifyOpts } = setup(PAST);
+    await gate.recordVerdict(
+      'is_0000000007',
+      { member: MEMBERS[0], verdict: 'APPROVE', msgId: 'm_1', version: 'v0.3' },
+      notifyOpts,
+    );
+    await gate.checkTimeout('is_0000000007', new Date('2026-09-16T00:00:00Z'));
+    const r = await gate.recordVerdict(
+      'is_0000000007',
+      { member: MEMBERS[1], verdict: 'APPROVE', msgId: 'm_2', version: 'v0.3' },
+      notifyOpts,
+    );
+    expect(r.ledger.status).toBe('stale');
+    expect(r.ledger.received[MEMBERS[1]]).toBeUndefined();
+    expect(r.outcome).not.toBe('received');
+    expect(r.converged).toBe(false);
   });
 });

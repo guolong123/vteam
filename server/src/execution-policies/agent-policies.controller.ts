@@ -23,7 +23,9 @@ export class AgentPoliciesController {
   @Public()
   @UseGuards(WorkerOrJwtGuard)
   @Get()
-  @ApiOperation({ summary: 'opencode agent 定义 + guard 角色集（worker 拉取）' })
+  @ApiOperation({
+    summary: 'opencode agent 定义 + guard 角色集（worker 拉取）',
+  })
   async getAgentPolicies() {
     return this.policies.buildAgentPolicies();
   }

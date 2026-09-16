@@ -133,8 +133,10 @@ services:
       WORKER_ADVERTISE_HOST: http://worker
       # worker 默认模型兜底（C2 新增，Agent 未配模型时用，C7 模型解析优先级第 3 级）；空 = 不指定（serve 默认）
       WORKER_DEFAULT_MODEL: ${WORKER_DEFAULT_MODEL:-}
-      # 首字超时（worker awaitCompletion）：0 表示禁用（已禁杀死长任务）
-      WORKER_FIRST_TOKEN_TIMEOUT_MS: "0"
+      # 并发上限：worker 上报 capabilities.maxInstances，server 按此算剩余容量派单
+      WORKER_MAX_INSTANCES: "10"
+      # 首字超时（worker awaitCompletion）：120s 内无首字输出即 abort 释放槽位；0 表示禁用（别用，会堆积）
+      WORKER_FIRST_TOKEN_TIMEOUT_MS: "120000"
       # 持久化工作目录：serve cwd + .opencode/tools|skills 注入落点 + agent 工作区
       #（git clone 的仓库、任务文件）。改挂载卷路径，容器重建不丢（worker 启动时
       # installGitTools/injector 会在空卷上自动重建 .opencode；镜像内 /tmp/keta-worker

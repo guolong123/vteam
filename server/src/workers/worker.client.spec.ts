@@ -534,9 +534,7 @@ describe('WorkerClient', () => {
         { name: 'title', mode: 'primary', native: true, hidden: true },
         { name: 'my-agent', mode: 'primary', native: false },
       ];
-      mockFetch.mockResolvedValue(
-        response({ json: async () => ({ agents }) }),
-      );
+      mockFetch.mockResolvedValue(response({ json: async () => ({ agents }) }));
 
       await expect(client.listAgents(execWorker)).resolves.toEqual(agents);
 
@@ -544,9 +542,7 @@ describe('WorkerClient', () => {
       expect(url).toBe('http://worker:4198/agents');
       expect(init.method).toBe('GET');
       // X-Worker-Token 鉴权（与 GET /file 同规格）
-      expect(
-        new Headers(init.headers).get('X-Worker-Token'),
-      ).toBeTruthy();
+      expect(new Headers(init.headers).get('X-Worker-Token')).toBeTruthy();
     });
 
     it('directory 传入 → 作为 query 参数下发（per-directory 隔离依赖它）', async () => {
@@ -594,9 +590,7 @@ describe('WorkerClient', () => {
         { content: '拆解任务', status: 'completed' },
         { content: '写代码', status: 'in_progress' },
       ];
-      mockFetch.mockResolvedValue(
-        response({ json: async () => ({ todos }) }),
-      );
+      mockFetch.mockResolvedValue(response({ json: async () => ({ todos }) }));
 
       await expect(client.listTodos(execWorker, 'ses_1')).resolves.toEqual(
         todos,
@@ -610,9 +604,15 @@ describe('WorkerClient', () => {
 
     it('directory 传入 → 追加 query 参数', async () => {
       const client = makeClient();
-      mockFetch.mockResolvedValue(response({ json: async () => ({ todos: [] }) }));
+      mockFetch.mockResolvedValue(
+        response({ json: async () => ({ todos: [] }) }),
+      );
 
-      await client.listTodos(execWorker, 'ses_1', '/data/vteam-worker/tasks/t_1');
+      await client.listTodos(
+        execWorker,
+        'ses_1',
+        '/data/vteam-worker/tasks/t_1',
+      );
 
       const [url] = mockFetch.mock.calls[0] as [string];
       expect(decodeURIComponent(url)).toBe(
@@ -632,7 +632,6 @@ describe('WorkerClient', () => {
       await expect(client.listTodos(execWorker, 'ses_1')).resolves.toEqual([]);
     });
   });
-
 
   describe('listPlanFiles / writePlanFile（计划文档同步：GET /plan-files + POST /plan-file）', () => {
     const execWorker = {
@@ -667,7 +666,9 @@ describe('WorkerClient', () => {
 
     it('listPlanFiles 未传 directory → 不带 query（worker 侧回落 workDir）', async () => {
       const client = makeClient();
-      mockFetch.mockResolvedValue(response({ json: async () => ({ files: [] }) }));
+      mockFetch.mockResolvedValue(
+        response({ json: async () => ({ files: [] }) }),
+      );
 
       await client.listPlanFiles(execWorker);
 
@@ -692,7 +693,11 @@ describe('WorkerClient', () => {
       // 实现用 res.text() 读体（错误体可能非 JSON，读文本才能保留原文），故这里 mock text。
       mockFetch.mockResolvedValue(
         response({
-          text: async () => JSON.stringify({ name: 'up.md', updatedAt: '2026-03-02T00:00:00.000Z' }),
+          text: async () =>
+            JSON.stringify({
+              name: 'up.md',
+              updatedAt: '2026-03-02T00:00:00.000Z',
+            }),
         }),
       );
 
@@ -702,7 +707,10 @@ describe('WorkerClient', () => {
           name: 'up.md',
           content: '# 正文',
         }),
-      ).resolves.toEqual({ name: 'up.md', updatedAt: '2026-03-02T00:00:00.000Z' });
+      ).resolves.toEqual({
+        name: 'up.md',
+        updatedAt: '2026-03-02T00:00:00.000Z',
+      });
 
       const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
       expect(url).toBe('http://worker:4198/plan-file');
@@ -720,7 +728,8 @@ describe('WorkerClient', () => {
         response({
           ok: false,
           status: 400,
-          text: async () => JSON.stringify({ error: 'name 非法：必须是纯文件名' }),
+          text: async () =>
+            JSON.stringify({ error: 'name 非法：必须是纯文件名' }),
         }),
       );
 
@@ -747,7 +756,6 @@ describe('WorkerClient', () => {
       expect(typeof out.updatedAt).toBe('string');
     });
   });
-
 
   describe('abort', () => {
     it('200 → resolve', async () => {
@@ -888,8 +896,11 @@ describe('WorkerClient', () => {
       );
     });
   });
-    describe('setOmoConfig 错误映射（4xx vs 5xx）', () => {
-    const execWorker = { id: 'w_1', capabilities: { execBaseUrl: 'http://worker:4198' } };
+  describe('setOmoConfig 错误映射（4xx vs 5xx）', () => {
+    const execWorker = {
+      id: 'w_1',
+      capabilities: { execBaseUrl: 'http://worker:4198' },
+    };
 
     it('400（请求不合法）→ 原样 BadRequestException，不误报为 worker 不可用', async () => {
       const client = makeClient();
@@ -903,7 +914,9 @@ describe('WorkerClient', () => {
       );
       // 关键：错误信息保留 worker 侧原因，且**不是** WorkerUnavailableException
       //（否则前端会提示"节点不可用"，把用户引去查节点状态）
-      const err = await client.setOmoConfig(execWorker, {}, true).catch((e) => e);
+      const err = await client
+        .setOmoConfig(execWorker, {}, true)
+        .catch((e) => e);
       expect(String(err.message)).toMatch(/未内置 OmO/);
       expect(err).not.toBeInstanceOf(WorkerUnavailableException);
       expect(err).toBeInstanceOf(BadRequestException);
@@ -914,10 +927,9 @@ describe('WorkerClient', () => {
       mockFetch.mockResolvedValue(
         response({ ok: false, status: 500, text: async () => 'boom' }),
       );
-      await expect(client.setOmoConfig(execWorker, { a: 'b/c' })).rejects.toThrow(
-        WorkerUnavailableException,
-      );
+      await expect(
+        client.setOmoConfig(execWorker, { a: 'b/c' }),
+      ).rejects.toThrow(WorkerUnavailableException);
     });
   });
-
 });

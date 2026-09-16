@@ -175,6 +175,13 @@ export const VTEAM_GIT_TOOL_NAMES: readonly string[] = [
   'git_push',
 ] as const;
 
+/**
+ * worker 注入的浏览器工具真实名（agent-browser 会话隔离）。
+ * 与 git 同属自定义命名空间（不带 `vteam_` 前缀）；worker guard 对它不做
+ * 内置放行，按角色 `tools` allowlist 判定（未列出即 deny）。
+ */
+export const VTEAM_BROWSER_TOOL_NAMES: readonly string[] = ['browser'] as const;
+
 // 角色边界（canonical，驱动提示词/策略/guard/测试）。
 // - writeGlobs：通用根无关形式 `**tasks/*` + `/<subdir>/` + `**`，可解析到任意 worktree 基址
 //   （非 git 时 Instance.worktree='/'，git 时 Instance.worktree=仓库根，相对路径均命中）；
@@ -199,9 +206,7 @@ export interface RoleBoundary {
  * 由 toolAllows 补集推导 `mcpDenies`（MCP 命名空间收窄），保证与 allowlist 恒一致。
  * 纯函数、模块加载期求值，无运行时副作用。
  */
-function defineBoundary(
-  base: Omit<RoleBoundary, 'mcpDenies'>,
-): RoleBoundary {
+function defineBoundary(base: Omit<RoleBoundary, 'mcpDenies'>): RoleBoundary {
   const allowed = new Set(Object.keys(base.toolAllows));
   return {
     ...base,
@@ -252,28 +257,12 @@ export function buildReadPermission(): Record<string, 'allow'> {
 
 /**
  * guard 层② bash 硬化模式清单（vteam-role-behavior-enforcement Todo 12）。
- * worker 注入的 guard 插件 `tool.execute.before` 仅按此清单判定 `bash` 工具：
- * 命令命中任一模式即 deny，未命中即放行（再由层① `permission.bash` 生效）。
- * 纯字符串/子串模式（guard 侧做大小写不敏感的子串匹配），与 Todo 20 判定语义对齐。
+ * 当前为空（经用户确认下线命令级拦截：干活角色处处碰壁成本高于防护收益；
+ * 保留机制与单测，未来如需恢复只需往本数组加条目）。
+ * 非空时语义：worker 注入的 guard 插件 `tool.execute.before` 仅按此清单判定
+ * `bash` 工具，命令命中任一模式即 deny，未命中即放行（再由层① `permission.bash` 生效）。
  */
-export const ROLE_BASH_DENY_PATTERNS: readonly string[] = [
-  '>',
-  '>>',
-  'tee',
-  'cp',
-  'mv',
-  'sed -i',
-  'truncate',
-  'dd',
-  'ln',
-  'python -c',
-  'node -e',
-  'perl -i',
-  'git apply',
-  'patch',
-  'git push',
-  'rm',
-] as const;
+export const ROLE_BASH_DENY_PATTERNS: readonly string[] = [] as const;
 
 /**
  * 越界纠正文案模板（层② guard deny 回传，与 seed.ts ROLE_POLICY_DENY_TEMPLATE 同值）。
@@ -282,7 +271,10 @@ export const ROLE_BASH_DENY_PATTERNS: readonly string[] = [
 export const ROLE_POLICY_DENY_TEMPLATE =
   '【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。' as const;
 
-/** 角色边界映射（key = opencode agent 名，值与 Permission matrix 严格一致）。 */
+/** 角色边界映射（key = opencode agent 名，值与 Permission matrix 严格一致）。
+ * bash 策略：全部 doing 角色 bash allow（headless 会话 ask 无法确认），
+ * 层②命令级硬化清单已下线（空），bash 仅受层① permission.bash 约束；
+ * 仅流程协调角色 vteam-project_manager 保持 bash deny。 */
 export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
   'vteam-product': defineBoundary({
     scopeSummary:
@@ -296,7 +288,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [taskSubdirGlob('prototypes'), taskSubdirGlob('docs')],
     readGlobs: ['*'],
-    bashEffect: 'deny',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_submit_artifact: 'allow',
       vteam_doclib: 'allow',
@@ -317,12 +309,13 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_my_profile: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_channel_send: 'allow',
+      browser: 'allow',
     },
   }),
 
   'vteam-architect': defineBoundary({
     scopeSummary:
-      '技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码、不写仓库。',
+      '技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。',
     deliverables: ['技术方案', '设计文档'],
     handoffTo: {
       requirements: 'vteam-product',
@@ -332,7 +325,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [taskSubdirGlob('docs')],
     readGlobs: ['*'],
-    bashEffect: 'ask',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_submit_artifact: 'allow',
       vteam_doclib: 'allow',
@@ -350,6 +343,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_my_profile: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_channel_send: 'allow',
+      browser: 'allow',
       git_clone: 'allow',
       git_pull: 'allow',
       git_status: 'allow',
@@ -370,7 +364,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [taskAllGlob()],
     readGlobs: ['*'],
-    bashEffect: 'ask',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_submit_artifact: 'allow',
       vteam_read_file: 'allow',
@@ -390,6 +384,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_my_profile: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_channel_send: 'allow',
+      browser: 'allow',
       git_clone: 'allow',
       git_pull: 'allow',
       // fetch 只读远端（不 merge 不改工作区）：读侧核验推送状态用，比 pull 更安全
@@ -397,6 +392,8 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
+      // push 写远端：guard 放行后仍需仓库 write 授权（工具内 pushGuard 校验），无授权照样拒绝
+      git_push: 'allow',
     },
   }),
 
@@ -412,7 +409,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [taskSubdirGlob('tests'), taskSubdirGlob('docs')],
     readGlobs: ['*'],
-    bashEffect: 'ask',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_submit_artifact: 'allow',
       vteam_issue_create: 'allow',
@@ -432,6 +429,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_my_profile: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_channel_send: 'allow',
+      browser: 'allow',
       git_clone: 'allow',
       git_pull: 'allow',
       // fetch 只读远端（不 merge 不改工作区）：读侧核验推送状态用，比 pull 更安全
@@ -444,13 +442,14 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
 
   'vteam-project_manager': defineBoundary({
     scopeSummary:
-      '流程控制：负责任务拆解编排、进度跟踪、风险与阻塞协调；不产出需求/方案/代码/用例、不越权验收。',
-    deliverables: ['任务拆解', '进度与风险', '协调记录'],
+      '流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。',
+    deliverables: ['进度与风险', '协调记录'],
     handoffTo: {
       requirements: 'vteam-product',
       design: 'vteam-architect',
       code: 'vteam-developer',
       test: 'vteam-tester',
+      plan: 'vteam-plan',
     },
     writeGlobs: [],
     readGlobs: ['*'],
@@ -478,8 +477,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
   }),
 
   'vteam-plan': defineBoundary({
-    scopeSummary:
-      '计划职责：只读分析并产出实施计划；不写文件、不执行变更。',
+    scopeSummary: '计划职责：只读分析并产出实施计划；不写文件、不执行变更。',
     deliverables: ['实施计划'],
     handoffTo: {
       requirements: 'vteam-product',
@@ -490,7 +488,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [planDirGlob()],
     readGlobs: ['*'],
-    bashEffect: 'deny',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_task_context: 'allow',
       vteam_read_file: 'allow',
@@ -500,6 +498,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_chat_history: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_group_post: 'allow',
+      browser: 'allow',
     },
   }),
 
@@ -516,7 +515,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [],
     readGlobs: ['*'],
-    bashEffect: 'deny',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_chat_history: 'allow',
       vteam_task_context: 'allow',
@@ -533,6 +532,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
+      browser: 'allow',
     },
   }),
 };

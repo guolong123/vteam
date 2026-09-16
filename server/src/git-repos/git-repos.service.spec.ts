@@ -197,7 +197,8 @@ describe('GitReposService（凭证池分离后：仓库引用凭证+授权按rep
       await expect(
         service.create(
           {
-            repoUrl: 'https://oauth2:glpat-xxxx@gitee.com/xishuhq/test-repo.git',
+            repoUrl:
+              'https://oauth2:glpat-xxxx@gitee.com/xishuhq/test-repo.git',
             credentialId: 'gc_0000000001',
           } as any,
           'u_admin',

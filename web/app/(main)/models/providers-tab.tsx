@@ -19,7 +19,7 @@
  *   revokedAt 软撤销，不依赖模型 id）→ 徽章变「未配置」。
  * - 数据源：GET /models/providers 后端聚合（C9：一次请求返回
  *   [{providerID, modelCount, configured, fingerprint, revokedAt}]）；GET /workers
- *   提供 worker 多选数据源（queryKey=["workers"] 与模型目录 Tab 共享，queryFn 相同
+ *   提供 worker 多选数据源（queryKey=["workers"]
  *   无污染）。
  * - 保存凭据需模型 id（providers 响应不含 id）：保底
  *   GET /models?providerID=xxx 取该 provider 首个模型 id（凭据按 provider 粒度，
@@ -43,6 +43,7 @@ import {
   shadow,
 } from "@/src/theme/tokens";
 import type {
+  ApiModel,
   ApiWorker,
   CredentialView,
   ModelsResponse,
@@ -160,6 +161,170 @@ export function ActionButton({
   );
 }
 
+/* ================================ Provider 下钻模型列表（二级） ================================
+ * 选用 agents 页 EffectivePermissionSection 的行内 expand/collapse 模式（而非 skills 页
+ * McpServerSection + breadcrumb 下钻），原因：
+ * - Provider 行的配置/删除凭据操作必须在 Level 1 常驻可见；breadcrumb 下钻会整 list 替换为
+ *   详情视图，操作入口被藏进二级，回跳成本高；
+ * - ~200 providers 下多行可同时展开对比，breadcrumb 一次只看一个 server；
+ * - 改动最小：保留现有行卡片布局与全部 testids，仅行首加 toggle + 行下挂懒加载面板。
+ * 数据源：GET /models?providerID=<id>（QueryModelsDto 已支持 providerID contains 过滤，
+ * 前端再按 === 精确过滤防前缀误命中；与 resolveModelId 同一查询口径，pageSize 100）。 */
+
+function ProviderModels({ providerID }: { providerID: string }) {
+  const modelsQuery = useQuery({
+    queryKey: ["models", { providerID }],
+    queryFn: () =>
+      api.get<ModelsResponse>("/models", {
+        query: { providerID, page: 1, pageSize: 100 },
+      }),
+    enabled: !!providerID,
+  });
+  const models: ApiModel[] = (modelsQuery.data?.items ?? []).filter(
+    (m) => m.providerID === providerID
+  );
+
+  if (modelsQuery.isPending) {
+    return (
+      <div
+        data-testid="provider-models-loading"
+        style={{ fontSize: fontSize.sm, color: neutral[400], padding: `${space.sm}px 0` }}
+      >
+        模型加载中…
+      </div>
+    );
+  }
+  if (modelsQuery.isError) {
+    return (
+      <div
+        data-testid="provider-models-error"
+        role="alert"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: space.sm,
+          fontSize: fontSize.sm,
+          color: "#DC2626",
+          padding: `${space.sm}px 0`,
+        }}
+      >
+        <span style={{ flex: 1, minWidth: 0 }}>加载该 Provider 的模型失败</span>
+        <button
+          type="button"
+          data-testid="provider-models-retry"
+          onClick={() => modelsQuery.refetch()}
+          style={{
+            padding: `${space.xs}px ${space.md}px`,
+            borderRadius: radius.md,
+            border: `1px solid ${neutral[200]}`,
+            backgroundColor: "var(--color-surface)",
+            color: neutral[600],
+            fontSize: fontSize.sm,
+            cursor: "pointer",
+            fontFamily: fontFamily.body,
+          }}
+        >
+          重试
+        </button>
+      </div>
+    );
+  }
+  if (models.length === 0) {
+    return (
+      <div
+        data-testid="provider-models-empty"
+        style={{ fontSize: fontSize.sm, color: neutral[400], padding: `${space.sm}px 0` }}
+      >
+        该 Provider 下暂无模型
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+      {models.map((m) => {
+        const modelRef = `${m.providerID}/${m.modelID}`;
+        return (
+          <div
+            key={m.id}
+            data-testid="provider-model-item"
+            data-model-id={modelRef}
+            data-provider={m.providerID}
+            data-enabled={m.enabled ? "true" : "false"}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: space.md,
+              padding: `${space.sm}px ${space.md}px`,
+              borderRadius: radius.md,
+              backgroundColor: "var(--color-surface)",
+              border: `1px solid ${neutral[200]}`,
+              ...baseFont,
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: 7,
+                height: 7,
+                flexShrink: 0,
+                borderRadius: "50%",
+                backgroundColor: m.enabled ? activeBlue : neutral[300],
+              }}
+            />
+            <span
+              data-testid="provider-model-name"
+              data-model-id={modelRef}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                fontSize: fontSize.sm,
+                fontWeight: 600,
+                color: neutral[800],
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {m.name}
+            </span>
+            <span
+              data-testid="provider-model-id"
+              data-model-id={modelRef}
+              style={{
+                flexShrink: 0,
+                fontSize: fontSize.xs,
+                fontFamily: fontFamily.mono,
+                color: neutral[500],
+                letterSpacing: "-0.01em",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: 320,
+              }}
+            >
+              {modelRef}
+            </span>
+            <span
+              style={{
+                flexShrink: 0,
+                fontSize: fontSize.xs,
+                color: m.enabled ? activeBlue : neutral[400],
+                backgroundColor: m.enabled ? "rgba(13,148,136,0.10)" : neutral[100],
+                border: `1px solid ${m.enabled ? "rgba(13,148,136,0.22)" : neutral[200]}`,
+                padding: "1px 8px",
+                borderRadius: radius.pill,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {m.enabled ? "已启用" : "已停用"}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ================================ 配置凭据弹窗（admin 专属） ================================ */
 
 interface ConfigureModalProps {
@@ -173,7 +338,7 @@ interface ConfigureModalProps {
   onSubmit: (payload: { token: string; targetWorkerIds?: string[] }) => void;
 }
 
-/** 导出供模型目录 Tab 复用（CFG-04：目录行「配置凭据」直接打开同一弹窗，无需切 Tab）。 */
+/** 凭据配置弹窗（本 Tab 内复用）。 */
 export function ConfigureModal({
   open,
   provider,
@@ -543,6 +708,12 @@ export default function ProvidersTab() {
   const [configureError, setConfigureError] = useState<string | null>(null);
   /* 删除凭据确认弹窗（target=providerID，非空即打开——OBS-003：删除不可恢复，需二次确认） */
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
+  /* 二级下钻：搜索关键字（provider id 大小写不敏感 contains 本地过滤）+ 展开态
+   *（Record<providerID, true>，多行可同时展开，对齐 agents 页 collapsed map 模式） */
+  const [keyword, setKeyword] = useState("");
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggleExpanded = (providerID: string) =>
+    setExpanded((prev) => ({ ...prev, [providerID]: !prev[providerID] }));
   /* 列表级操作错误（删除凭据失败时弹窗未开，configureError 无处渲染——独立 state，
    * 列表顶部渲染错误条；对齐 skills 页 notice 模式） */
   const [providerError, setProviderError] = useState<string | null>(null);
@@ -562,8 +733,11 @@ export default function ProvidersTab() {
     enabled: !!user,
   });
   const providers = providersQuery.data ?? [];
+  const kw = keyword.trim().toLowerCase();
+  const filteredProviders =
+    kw === "" ? providers : providers.filter((p) => p.providerID.toLowerCase().includes(kw));
 
-  /* worker 池：GET /workers（同步目标多选数据源；与模型目录 Tab 共享 queryKey 同 queryFn） */
+  /* worker 池：GET /workers（同步目标多选数据源） */
   const workersQuery = useQuery({
     queryKey: ["workers"],
     queryFn: () => api.get<ApiWorker[]>("/workers"),
@@ -618,7 +792,7 @@ export default function ProvidersTab() {
       setConfigureOpen(false);
       setConfigureError(null);
       queryClient.invalidateQueries({ queryKey: ["model-providers"] });
-      /* 与模型目录 Tab 共享的凭据态缓存一并失效（跨 Tab 一致性） */
+      /* 凭据态缓存一并失效 */
       queryClient.invalidateQueries({ queryKey: ["model-credentials"] });
     },
   });
@@ -648,6 +822,26 @@ export default function ProvidersTab() {
   );
   const configuringProvider = configuringProviderRow?.providerID;
   const configuringProviderType = configuringProviderRow?.providerType ?? null;
+
+  /* 模型同步：POST /models/sync（目录 Tab 下线后迁入本 Tab 头部，admin 专属）——
+   * 按 worker 实时上报校正目录（live 模型补齐、孤儿禁用）；成功后刷新 providers 聚合
+   * 与各 provider 下钻模型列表（["models", {providerID}] 为 ["models"] 前缀，一并失效）。 */
+  const [syncHint, setSyncHint] = useState<string | null>(null);
+  const syncMutation = useMutation({
+    mutationFn: () => api.post<{ synced: number; disabled: number; liveModels: string[] }>("/models/sync", {}),
+    onSuccess: (res) => {
+      setSyncHint(`同步完成：live ${res.liveModels.length} 个，已校正 ${res.synced} 个，禁用孤儿 ${res.disabled} 个`);
+      queryClient.invalidateQueries({ queryKey: ["models"] });
+      queryClient.invalidateQueries({ queryKey: ["model-providers"] });
+      queryClient.invalidateQueries({ queryKey: ["model-credentials"] });
+      queryClient.invalidateQueries({ queryKey: ["workers"] });
+      setTimeout(() => setSyncHint(null), 4000);
+    },
+    onError: (err) => {
+      setSyncHint(isApiError(err) ? err.message : "同步失败");
+      setTimeout(() => setSyncHint(null), 4000);
+    },
+  });
 
   return (
     <div
@@ -705,7 +899,44 @@ export default function ProvidersTab() {
             <span style={{ fontSize: fontSize.xs, color: neutral[400], marginLeft: "auto" }}>
               凭证管理 · 按 Provider 粒度配置，支持同步到节点（worker）
             </span>
+            {isAdmin && (
+              <button
+                type="button"
+                data-testid="sync-models-button"
+                disabled={syncMutation.isPending}
+                onClick={() => syncMutation.mutate()}
+                style={{
+                  padding: `${space.sm}px ${space.lg}px`,
+                  borderRadius: radius.md,
+                  border: `1px solid ${neutral[200]}`,
+                  backgroundColor: "var(--color-surface)",
+                  color: neutral[700],
+                  fontSize: fontSize.md,
+                  fontWeight: 500,
+                  cursor: syncMutation.isPending ? "default" : "pointer",
+                  opacity: syncMutation.isPending ? 0.6 : 1,
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                {syncMutation.isPending ? "同步中…" : "↻ 同步"}
+              </button>
+            )}
           </div>
+          {syncHint && (
+            <div
+              data-testid="sync-hint"
+              style={{
+                fontSize: fontSize.sm,
+                color: neutral[600],
+                backgroundColor: "rgba(13,148,136,0.08)",
+                border: "1px solid rgba(13,148,136,0.15)",
+                borderRadius: radius.md,
+                padding: `${space.sm}px ${space.md}px`,
+              }}
+            >
+              {syncHint}
+            </div>
+          )}
 
           {/* 列表级操作错误条（删除凭据失败；role=alert + 手动关闭，3s 自动消失） */}
           {providerError && (
@@ -824,6 +1055,53 @@ export default function ProvidersTab() {
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
                   凭据按 provider 粒度存储（C4）· 配置后即时下发到节点（C5）
                 </span>
+                <span style={{ fontSize: fontSize.xs, color: neutral[400], marginLeft: "auto" }}>
+                  点击 ▸ 展开查看该 Provider 下的模型
+                </span>
+              </div>
+
+              {/* 搜索框：provider id 大小写不敏感 contains 过滤 */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: space.sm,
+                  padding: `${space.sm}px ${space.md}px`,
+                  borderRadius: radius.md,
+                  backgroundColor: neutral[50],
+                  border: `1px solid ${neutral[200]}`,
+                }}
+              >
+                <span aria-hidden style={{ fontSize: fontSize.lg, color: neutral[400] }}>⌕</span>
+                <input
+                  data-testid="provider-search"
+                  autoComplete="off"
+                  name="provider-search"
+                  value={keyword}
+                  onChange={(e) => setKeyword(e.target.value)}
+                  placeholder="搜索 Provider ID…"
+                  style={{
+                    flex: 1,
+                    border: "none",
+                    background: "transparent",
+                    outline: "none",
+                    fontSize: fontSize.md,
+                    color: neutral[800],
+                    fontFamily: fontFamily.body,
+                  }}
+                />
+                {keyword.trim() !== "" && (
+                  <span
+                    style={{
+                      fontSize: fontSize.xs,
+                      color: neutral[400],
+                      fontFamily: fontFamily.mono,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {filteredProviders.length} / {providers.length}
+                  </span>
+                )}
               </div>
 
               {/* 表头行（列宽与数据行一致） */}
@@ -847,29 +1125,60 @@ export default function ProvidersTab() {
                 <span style={{ width: 200, flexShrink: 0, textAlign: "right" }}>操作</span>
               </div>
 
-              {/* Provider 行 */}
-              {providers.map((p) => {
+              {/* Provider 行（Level 1）+ 模型下钻面板（Level 2，行内展开） */}
+              {filteredProviders.map((p) => {
                 const status = toStatus(p);
                 const fingerprint = p.fingerprint;
+                const isOpen = !!expanded[p.providerID];
                 return (
+                  <div key={p.providerID}>
                   <div
-                    key={p.providerID}
                     data-testid="provider-item"
                     data-provider={p.providerID}
                     data-credential={status}
+                    data-expanded={isOpen ? "true" : "false"}
                     className="pv-provider-row"
                     style={{
                       display: "flex",
                       alignItems: "center",
                       gap: space.lg,
                       padding: `${space.lg}px ${space.xl}px`,
-                      borderRadius: radius.lg,
+                      borderRadius: isOpen ? `${radius.lg} ${radius.lg} 0 0` : radius.lg,
                       backgroundColor: "var(--color-surface)",
                       border: `1px solid ${neutral[200]}`,
+                      borderBottom: isOpen ? "none" : `1px solid ${neutral[200]}`,
                       boxShadow: shadow.sm,
                       ...baseFont,
                     }}
                   >
+                    {/* 展开 toggle（行内 expand/collapse，对齐 agents 页分组模式） */}
+                    <button
+                      type="button"
+                      data-testid="provider-expand-toggle"
+                      data-provider={p.providerID}
+                      data-expanded={isOpen ? "true" : "false"}
+                      aria-expanded={isOpen}
+                      aria-label={isOpen ? `收起 ${p.providerID} 的模型` : `展开 ${p.providerID} 的模型`}
+                      title={isOpen ? "收起模型列表" : "展开模型列表"}
+                      onClick={() => toggleExpanded(p.providerID)}
+                      style={{
+                        width: 22,
+                        height: 22,
+                        flexShrink: 0,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: radius.sm,
+                        border: `1px solid ${neutral[200]}`,
+                        backgroundColor: neutral[50],
+                        color: neutral[500],
+                        fontSize: fontSize.xs,
+                        cursor: "pointer",
+                        fontFamily: fontFamily.body,
+                      }}
+                    >
+                      <span aria-hidden>{isOpen ? "▾" : "▸"}</span>
+                    </button>
                     {/* provider 列 */}
                     <span
                       data-testid="provider-id"
@@ -979,12 +1288,57 @@ export default function ProvidersTab() {
                       )}
                     </div>
                   </div>
+                    {/* Level 2：该 Provider 下的模型（展开时懒加载 GET /models?providerID） */}
+                    {isOpen && (
+                      <div
+                        data-testid="provider-models-panel"
+                        data-provider={p.providerID}
+                        style={{
+                          padding: `0 ${space.xl}px ${space.lg}px ${space.xl}`,
+                          borderRadius: `0 0 ${radius.lg} ${radius.lg}`,
+                          backgroundColor: "var(--color-surface)",
+                          border: `1px solid ${neutral[200]}`,
+                          borderTop: `1px dashed ${neutral[200]}`,
+                          boxShadow: shadow.sm,
+                          ...baseFont,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: space.sm,
+                            padding: `${space.sm}px 0`,
+                          }}
+                        >
+                          <span style={{ fontSize: fontSize.xs, fontWeight: 600, color: neutral[400], letterSpacing: "0.03em" }}>
+                            {p.providerID} 下的模型
+                          </span>
+                          <span
+                            style={{
+                              fontSize: fontSize.xs,
+                              color: neutral[400],
+                              backgroundColor: neutral[100],
+                              padding: "0 7px",
+                              borderRadius: radius.pill,
+                              lineHeight: "16px",
+                              fontFamily: fontFamily.mono,
+                            }}
+                          >
+                            {p.modelCount}
+                          </span>
+                        </div>
+                        <ProviderModels providerID={p.providerID} />
+                      </div>
+                    )}
+                  </div>
                 );
               })}
 
-              {/* 空结果 */}
+              {/* 空结果：无 Provider / 搜索无匹配 */}
               {providers.length === 0 && (
                 <div
+                  data-testid="providers-empty"
                   style={{
                     padding: `${space.xxl}px`,
                     textAlign: "center",
@@ -992,7 +1346,20 @@ export default function ProvidersTab() {
                     color: neutral[400],
                   }}
                 >
-                  暂无 Provider，模型目录为空（worker 上报 capabilities.models 后将自动出现）
+                  暂无 Provider（worker 上报 capabilities.models 后将自动出现）
+                </div>
+              )}
+              {providers.length > 0 && filteredProviders.length === 0 && (
+                <div
+                  data-testid="providers-empty-search"
+                  style={{
+                    padding: `${space.xxl}px`,
+                    textAlign: "center",
+                    fontSize: fontSize.md,
+                    color: neutral[400],
+                  }}
+                >
+                  无匹配的 Provider，换个关键字试试
                 </div>
               )}
             </div>

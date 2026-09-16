@@ -235,7 +235,10 @@ export class ExecutionPolicyService implements OnModuleInit {
       correction?: unknown;
       tools?: unknown;
     } | null;
-    if (!this.isPlainObject(config?.permission) || !this.isPlainObject(config?.correction)) {
+    if (
+      !this.isPlainObject(config?.permission) ||
+      !this.isPlainObject(config?.correction)
+    ) {
       return null;
     }
     const agentName = this.agentNameOf(agent);
@@ -259,7 +262,11 @@ export class ExecutionPolicyService implements OnModuleInit {
    * 返回与入参同序同长的 `(ResolvedExecutionPolicy | null)[]`。
    */
   async resolveManyByAgents(
-    agents: { policyId?: string | null; role?: string | null; agentKey?: string | null }[],
+    agents: {
+      policyId?: string | null;
+      role?: string | null;
+      agentKey?: string | null;
+    }[],
   ): Promise<(ResolvedExecutionPolicy | null)[]> {
     const keys = agents.map((a) => this.policyKeyOf(a));
     const ids = [...new Set(keys.filter((k): k is string => k !== null))];
@@ -308,7 +315,7 @@ export class ExecutionPolicyService implements OnModuleInit {
   /**
    * 构建 opencode agent 定义 + guard 角色集（Todo 12，worker injector 数据源）。
    * - 内置 7 项（`AGENT_POLICIES_ORDER` 顺序）全部值由 `ROLE_BOUNDARIES` 派生——
-   *   `permission`：`{ edit: buildEditPermission(writeGlobs), read: buildReadPermission(), bash, task:'deny', ...mcpDenies:'deny' }`（无 `write` 键）；
+   *   `permission`：`{ edit: buildEditPermission(writeGlobs), read: buildReadPermission(), bash, task:'deny', ...mcpDenies:'deny', ...askTools:'ask' }`（无 `write` 键）；
    *   `guard.roles` key 与 `agents[].name` 完全一致；
    *   `tools` = `toolAllows`（真实暴露名），`bashDeny` = 共享硬化清单，
    *   `correction` = `{ scopeSummary, handoff, denyTemplate }`。
@@ -348,9 +355,7 @@ export class ExecutionPolicyService implements OnModuleInit {
         where: { agentKey: { not: null }, policyId: { not: null } },
         orderBy: { agentKey: 'asc' },
       })
-    ).sort((a, b) =>
-      String(a.agentKey).localeCompare(String(b.agentKey)),
-    );
+    ).sort((a, b) => String(a.agentKey).localeCompare(String(b.agentKey)));
     if (customAgents.length > 0) {
       const policyIds = [
         ...new Set(
@@ -440,9 +445,7 @@ export class ExecutionPolicyService implements OnModuleInit {
   }
 
   private isPlainObject(value: unknown): value is Record<string, unknown> {
-    return (
-      typeof value === 'object' && value !== null && !Array.isArray(value)
-    );
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
   }
 
   private policyKeyOf(agent: {
@@ -481,9 +484,8 @@ export class ExecutionPolicyService implements OnModuleInit {
     tools: Record<string, AgentToolState>;
     bashDeny: string[];
   } {
-    const boundary = (ROLE_BOUNDARIES as Record<string, unknown>)[
-      agentName
-    ] as { toolAllows?: Record<string, AgentToolState> } | undefined;
+    const boundary = (ROLE_BOUNDARIES as Record<string, unknown>)[agentName] as
+      { toolAllows?: Record<string, AgentToolState> } | undefined;
     if (boundary && typeof boundary.toolAllows === 'object') {
       return {
         tools: { ...boundary.toolAllows },
@@ -499,21 +501,19 @@ export class ExecutionPolicyService implements OnModuleInit {
     };
   }
 
-  private filterToolsMatrix(
-    tools: unknown,
-  ): Record<string, AgentToolState> {
+  private filterToolsMatrix(tools: unknown): Record<string, AgentToolState> {
     if (!this.isPlainObject(tools)) {
       return {};
     }
     const states: ReadonlySet<string> = new Set(['allow', 'ask', 'deny']);
-    const entries = Object.entries(tools).filter((entry): entry is [
-      string,
-      AgentToolState,
-    ] => typeof entry[1] === 'string' && states.has(entry[1]));
+    const entries = Object.entries(tools).filter(
+      (entry): entry is [string, AgentToolState] =>
+        typeof entry[1] === 'string' && states.has(entry[1]),
+    );
     return Object.fromEntries(entries);
   }
 
-  /** 层① 原生 permission（与 seed 角色策略同形：edit glob + read + bash + task + MCP deny，无 `write` 键）。 */
+  /** 层① 原生 permission（与 seed 角色策略同形：edit glob + read + bash + task + MCP deny + 外部高危 ask，无 `write` 键）。 */
   private buildRolePermission(name: VteamAgentName): Record<string, unknown> {
     const boundary = ROLE_BOUNDARIES[name];
     return {

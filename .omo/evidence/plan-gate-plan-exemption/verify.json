@@ -1,0 +1,10 @@
+{
+  "task": "plan-gate plan-role exemption",
+  "date": "2026-09-16",
+  "planRoleAgentId": "a_plan (seed.ts role=plan)",
+  "failingFirst": "4 new tests failed pre-fix (2/suite), 36 passed",
+  "jestGateSuites": "2 passed, 40 passed",
+  "jestRelated": "9 suites passed, 506 tests passed (src/platform-mcp + src/chat/worker-dispatcher)",
+  "tsc": "clean (exit 0)",
+  "liveCheck": "GET /api/v1/tasks/t_0000000002/plan -> 200 (admin JWT, read-only, server-only rebuild)"
+}

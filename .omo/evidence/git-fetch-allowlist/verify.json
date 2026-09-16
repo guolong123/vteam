@@ -1,0 +1,15 @@
+{
+  "ts": "2026-09-16T06:14:55.005Z",
+  "liveRolesFrom": "GET /api/v1/agent-policies (server container, rebuilt)",
+  "policyJs": "worker container /app/dist/role-guard/policy.js",
+  "results": {
+    "vteam-developer": "allow",
+    "vteam-tester": "allow",
+    "vteam-architect": "deny"
+  },
+  "expect": {
+    "developer": "allow",
+    "tester": "allow",
+    "architect": "deny"
+  }
+}

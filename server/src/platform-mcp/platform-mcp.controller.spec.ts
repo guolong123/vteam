@@ -765,7 +765,8 @@ describe('PlatformMcpController (HTTP)', () => {
     });
 
     it('skill_create → service.skillCreate 收到 taskId/selfInstanceId/name/content', async () => {
-      const content = '---\nname: git-ops\ndescription: Git ops\n---\n# Git Ops\n';
+      const content =
+        '---\nname: git-ops\ndescription: Git ops\n---\n# Git Ops\n';
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({

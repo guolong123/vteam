@@ -67,10 +67,18 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
 
     const d = createDispatcher();
     loggerWarnSpy = jest
-      .spyOn((d as unknown as { logger: { warn: (...a: unknown[]) => void } }).logger, 'warn')
+      .spyOn(
+        (d as unknown as { logger: { warn: (...a: unknown[]) => void } })
+          .logger,
+        'warn',
+      )
       .mockImplementation(() => undefined);
     loggerErrorSpy = jest
-      .spyOn((d as unknown as { logger: { error: (...a: unknown[]) => void } }).logger, 'error')
+      .spyOn(
+        (d as unknown as { logger: { error: (...a: unknown[]) => void } })
+          .logger,
+        'error',
+      )
       .mockImplementation(() => undefined);
   });
 
@@ -82,7 +90,9 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
   it('execution + approved → 抛错含计划未放行，不调 dispatch/ensureTeamSession', async () => {
     planLifecycle.getStatus.mockResolvedValue('approved');
     const d = createDispatcher();
-    const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+    const dispatchSpy = jest
+      .spyOn(d, 'dispatch')
+      .mockResolvedValue({ replies: [] });
 
     await expect(d.dispatchAgentMention(input)).rejects.toThrow('计划未放行');
     expect(dispatchSpy).not.toHaveBeenCalled();
@@ -92,7 +102,9 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
   it('execution + executing → 放行并透传 kind', async () => {
     planLifecycle.getStatus.mockResolvedValue('executing');
     const d = createDispatcher();
-    const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+    const dispatchSpy = jest
+      .spyOn(d, 'dispatch')
+      .mockResolvedValue({ replies: [] });
 
     await d.dispatchAgentMention(input);
 
@@ -103,7 +115,9 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
     'kind=%s + approved → 豁免放行且不读门禁',
     async (kind: string) => {
       const d = createDispatcher();
-      const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+      const dispatchSpy = jest
+        .spyOn(d, 'dispatch')
+        .mockResolvedValue({ replies: [] });
 
       await d.dispatchAgentMention({
         ...input,
@@ -119,7 +133,9 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
     planLifecycle.getStatus.mockResolvedValue(null);
     planLifecycle.autoEnsureRow.mockResolvedValue({ status: 'draft' });
     const d = createDispatcher();
-    const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+    const dispatchSpy = jest
+      .spyOn(d, 'dispatch')
+      .mockResolvedValue({ replies: [] });
 
     await expect(d.dispatchAgentMention(input)).rejects.toThrow('计划未放行');
     expect(planLifecycle.autoEnsureRow).toHaveBeenCalledWith('t_0000000001');
@@ -129,9 +145,15 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
   it('门禁读错→fail-open 放行 + warn', async () => {
     planLifecycle.getStatus.mockRejectedValue(new Error('db down'));
     const d = createDispatcher();
-    const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+    const dispatchSpy = jest
+      .spyOn(d, 'dispatch')
+      .mockResolvedValue({ replies: [] });
     const warnSpy = jest
-      .spyOn((d as unknown as { logger: { warn: (...a: unknown[]) => void } }).logger, 'warn')
+      .spyOn(
+        (d as unknown as { logger: { warn: (...a: unknown[]) => void } })
+          .logger,
+        'warn',
+      )
       .mockImplementation(() => undefined);
 
     await d.dispatchAgentMention(input);
@@ -156,7 +178,9 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
         onSessionActivity: jest.fn(),
       } as unknown as WorkerEventIngress,
     );
-    const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+    const dispatchSpy = jest
+      .spyOn(d, 'dispatch')
+      .mockResolvedValue({ replies: [] });
 
     await d.dispatchAgentMention(input);
 
@@ -165,7 +189,9 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
 
   it('团队维度（无 taskId）→ 无计划可门禁，直接放行', async () => {
     const d = createDispatcher();
-    const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+    const dispatchSpy = jest
+      .spyOn(d, 'dispatch')
+      .mockResolvedValue({ replies: [] });
 
     await d.dispatchAgentMention({
       teamId: 'tm_0000000001',
@@ -198,7 +224,9 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
       withTargetAgent('a_plan');
       planLifecycle.getStatus.mockResolvedValue('draft');
       const d = createDispatcher();
-      const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+      const dispatchSpy = jest
+        .spyOn(d, 'dispatch')
+        .mockResolvedValue({ replies: [] });
 
       await d.dispatchAgentMention({ ...input, targetInstanceId: 'tmm_plan' });
 
@@ -210,7 +238,9 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
       withTargetAgent('a_plan');
       planLifecycle.getStatus.mockResolvedValue(null);
       const d = createDispatcher();
-      const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+      const dispatchSpy = jest
+        .spyOn(d, 'dispatch')
+        .mockResolvedValue({ replies: [] });
 
       await d.dispatchAgentMention({ ...input, targetInstanceId: 'tmm_plan' });
 
@@ -223,12 +253,129 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
       withTargetAgent('a_developer');
       planLifecycle.getStatus.mockResolvedValue('draft');
       const d = createDispatcher();
-      const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+      const dispatchSpy = jest
+        .spyOn(d, 'dispatch')
+        .mockResolvedValue({ replies: [] });
 
       await expect(
         d.dispatchAgentMention({ ...input, targetInstanceId: 'tmm_dev' }),
       ).rejects.toThrow('计划未放行');
       expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('终态任务门禁：execution 绑定 completed/archived 即拒绝（零副作用）', () => {
+    it.each([['completed'], ['archived']])(
+      'execution + %s → 抛错（含任务 id/终态/task_create），不调 dispatch/ensureTeamSession，不读计划门禁',
+      async (status: string) => {
+        prisma.task.findUnique.mockResolvedValue({
+          teamId: 'tm_0000000001',
+          status,
+        });
+        const d = createDispatcher();
+        const dispatchSpy = jest
+          .spyOn(d, 'dispatch')
+          .mockResolvedValue({ replies: [] });
+
+        const err = await d
+          .dispatchAgentMention(input)
+          .then(() => null)
+          .catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(Error);
+        const message = String((err as Error)?.message ?? err);
+        expect(message).toContain(input.taskId);
+        expect(message).toContain(status);
+        expect(message).toContain('task_create');
+        expect(dispatchSpy).not.toHaveBeenCalled();
+        expect(sessionLifecycle.ensureTeamSession).not.toHaveBeenCalled();
+        expect(planLifecycle.getStatus).not.toHaveBeenCalled();
+        expect(planLifecycle.autoEnsureRow).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([['queued'], ['pending'], ['in_progress'], ['pending_review']])(
+      'execution + %s（活跃态）→ 放行走计划门禁',
+      async (status: string) => {
+        prisma.task.findUnique.mockResolvedValue({
+          teamId: 'tm_0000000001',
+          status,
+        });
+        planLifecycle.getStatus.mockResolvedValue('executing');
+        const d = createDispatcher();
+        const dispatchSpy = jest
+          .spyOn(d, 'dispatch')
+          .mockResolvedValue({ replies: [] });
+
+        await d.dispatchAgentMention(input);
+
+        expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it.each([['review'], ['nudge'], ['wake']])(
+      'kind=%s + completed → 豁免放行（收尾流量）',
+      async (kind: string) => {
+        prisma.task.findUnique.mockResolvedValue({
+          teamId: 'tm_0000000001',
+          status: 'completed',
+        });
+        const d = createDispatcher();
+        const dispatchSpy = jest
+          .spyOn(d, 'dispatch')
+          .mockResolvedValue({ replies: [] });
+
+        await d.dispatchAgentMention({
+          ...input,
+          kind: kind as 'review' | 'nudge' | 'wake',
+        });
+
+        expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it('execution 无 taskId（团队维度）→ 不读任务终态，直接放行', async () => {
+      const d = createDispatcher();
+      const dispatchSpy = jest
+        .spyOn(d, 'dispatch')
+        .mockResolvedValue({ replies: [] });
+
+      await d.dispatchAgentMention({
+        teamId: 'tm_0000000001',
+        channelId: input.channelId,
+        text: input.text,
+        targetInstanceId: input.targetInstanceId,
+      });
+
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      expect(prisma.task.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('execution + 任务行缺失 → 保持今日语义（无团队会话），不报终态拒绝', async () => {
+      prisma.task.findUnique.mockResolvedValue(null);
+      const d = createDispatcher();
+      const dispatchSpy = jest
+        .spyOn(d, 'dispatch')
+        .mockResolvedValue({ replies: [] });
+
+      await expect(d.dispatchAgentMention(input)).rejects.toThrow(
+        '无团队会话',
+      );
+      expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
+    it('execution + 行无 status → 照旧放行（缺行语义归别处）', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        teamId: 'tm_0000000001',
+      });
+      planLifecycle.getStatus.mockResolvedValue('executing');
+      const d = createDispatcher();
+      const dispatchSpy = jest
+        .spyOn(d, 'dispatch')
+        .mockResolvedValue({ replies: [] });
+
+      await d.dispatchAgentMention(input);
+
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
     });
   });
 });

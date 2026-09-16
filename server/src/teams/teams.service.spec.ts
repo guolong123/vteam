@@ -543,12 +543,17 @@ describe('TeamsService', () => {
           deleteMany: jest.fn().mockResolvedValue({}),
         },
         message: { deleteMany: jest.fn().mockResolvedValue({}) },
-        session: { updateMany: jest.fn().mockResolvedValue({}) },
+        session: {
+          updateMany: jest.fn().mockResolvedValue({}),
+          deleteMany: jest.fn().mockResolvedValue({}),
+        },
         taskGroupInstance: { updateMany: jest.fn().mockResolvedValue({}) },
         teamUserMember: { deleteMany: jest.fn().mockResolvedValue({}) },
         teamQueue: { deleteMany: jest.fn().mockResolvedValue({}) },
         taskMessageChannel: { deleteMany: jest.fn().mockResolvedValue({}) },
-        taskNotificationChannel: { deleteMany: jest.fn().mockResolvedValue({}) },
+        taskNotificationChannel: {
+          deleteMany: jest.fn().mockResolvedValue({}),
+        },
         taskEvent: { deleteMany: jest.fn().mockResolvedValue({}) },
         plan: {
           findMany: jest.fn().mockResolvedValue([]),
@@ -683,6 +688,74 @@ describe('TeamsService', () => {
       });
       expect(tx.team.delete).toHaveBeenCalledWith({
         where: { id: 'tm_0000000001' },
+      });
+    });
+
+    it('团队级会话与任务会话并存 → remove 成功：本团队任务会话先删（防 team_member_key P2002），他团队残留再解绑', async () => {
+      prisma.team.findUnique.mockResolvedValue(
+        teamRow({
+          currentTaskId: 't_0000000001',
+          queues: [{ id: 'tq_1', taskId: 't_0000000002', position: 1 }],
+        } as any),
+      );
+      prisma.task.findFirst.mockResolvedValue(null);
+      prisma.task.findMany.mockResolvedValue([
+        { id: 't_0000000001' },
+        { id: 't_0000000002' },
+      ]);
+      const tx = mockCascadeTx();
+
+      const result = await service.remove('tm_0000000001');
+
+      expect(result.deleted).toBe(true);
+      // 本团队任务会话硬删（团队级会话同 (team, member) 键已存在，置空会撞 uk）
+      expect(tx.session.deleteMany).toHaveBeenCalledWith({
+        where: {
+          taskId: { in: ['t_0000000001', 't_0000000002'] },
+          teamId: 'tm_0000000001',
+        },
+      });
+      // 他团队残留行保持原解绑语义
+      expect(tx.session.updateMany).toHaveBeenCalledWith({
+        where: { taskId: { in: ['t_0000000001', 't_0000000002'] } },
+        data: { taskId: null },
+      });
+      // 先删后解绑：顺序即修复本身
+      const delOrder = (tx.session.deleteMany as jest.Mock).mock
+        .invocationCallOrder[0];
+      const updOrder = (tx.session.updateMany as jest.Mock).mock
+        .invocationCallOrder[0];
+      expect(delOrder).toBeLessThan(updOrder);
+      // task_group_instances 无生成列，双生 updateMany 原样保留
+      expect(tx.taskGroupInstance.updateMany).toHaveBeenCalledWith({
+        where: { taskId: { in: ['t_0000000001', 't_0000000002'] } },
+        data: { taskId: null },
+      });
+      expect(tx.task.deleteMany).toHaveBeenCalledWith({
+        where: { id: { in: ['t_0000000001', 't_0000000002'] } },
+      });
+    });
+
+    it('仅任务会话 → 同路径删除，不抛 P2002', async () => {
+      prisma.team.findUnique.mockResolvedValue(
+        teamRow({
+          currentTaskId: 't_0000000001',
+          queues: [],
+        } as any),
+      );
+      prisma.task.findFirst.mockResolvedValue(null);
+      prisma.task.findMany.mockResolvedValue([{ id: 't_0000000001' }]);
+      const tx = mockCascadeTx();
+
+      const result = await service.remove('tm_0000000001');
+
+      expect(result.deleted).toBe(true);
+      expect(tx.session.deleteMany).toHaveBeenCalledWith({
+        where: { taskId: { in: ['t_0000000001'] }, teamId: 'tm_0000000001' },
+      });
+      expect(tx.session.updateMany).toHaveBeenCalledWith({
+        where: { taskId: { in: ['t_0000000001'] } },
+        data: { taskId: null },
       });
     });
   });

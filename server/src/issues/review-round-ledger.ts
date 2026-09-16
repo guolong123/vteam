@@ -293,8 +293,9 @@ function mergePlanVersion(
  * 账本合并（并发合并规则）：
  * - received 按成员覆盖（调用方应先经 `resolveVerdict` 裁决；
  *   本函数对直接传入的 received 条目同样按成员键覆盖）；
- * - round 只升不降；升轮时 received/pending/superseded 清零（新轮次重新收集，
- *   旧轮次明细随 issue_activities / 历史 description 可审计）；
+ * - round 只升不降；升轮时旧轮次整体归档： outgoing `received` 按成员
+ *   折入 `superseded`（条目自带 version，新旧轮次可区分），既有
+ *   `pending`/`superseded` 保留合并，新轮次 `received` 从空开始重新收集；
  * - planVersion.version 只升不降；
  * - expected/expectedRoles/status/timeoutAt/planPath/taskId/issueId 有值则覆盖。
  */
@@ -303,7 +304,9 @@ export function mergeLedger(
   update: RoundUpdate,
 ): ReviewRoundLedger {
   const round =
-    update.round !== undefined ? Math.max(base.round, update.round) : base.round;
+    update.round !== undefined
+      ? Math.max(base.round, update.round)
+      : base.round;
   const roundAdvanced = round > base.round;
   const receivedInputs =
     update.received === undefined
@@ -320,6 +323,29 @@ export function mergeLedger(
       msgId: v.msgId,
       version: v.version ?? '',
     };
+  }
+  let pending: PendingReceipt[] | undefined;
+  let superseded: SupersededReceipt[] | undefined;
+  if (roundAdvanced) {
+    if (base.pending !== undefined) pending = [...base.pending];
+    const merged: SupersededReceipt[] = [...(base.superseded ?? [])];
+    const seen = new Set(merged.map((s) => `${s.member}\u0000${s.msgId}`));
+    for (const [member, r] of Object.entries(base.received ?? {})) {
+      const key = `${member}\u0000${r.msgId}`;
+      if (!seen.has(key)) {
+        merged.push({
+          member,
+          verdict: r.verdict,
+          msgId: r.msgId,
+          version: r.version,
+        });
+        seen.add(key);
+      }
+    }
+    if (merged.length > 0 || base.superseded !== undefined) superseded = merged;
+  } else {
+    if (base.pending !== undefined) pending = [...base.pending];
+    if (base.superseded !== undefined) superseded = [...base.superseded];
   }
   return {
     schemaVersion: REVIEW_ROUND_SCHEMA_VERSION,
@@ -340,17 +366,16 @@ export function mergeLedger(
       : base.issueId !== undefined
         ? { issueId: base.issueId }
         : {}),
-    expected: update.expected !== undefined ? [...update.expected] : [...base.expected],
+    expected:
+      update.expected !== undefined ? [...update.expected] : [...base.expected],
     ...(update.expectedRoles !== undefined
       ? { expectedRoles: [...update.expectedRoles] }
       : base.expectedRoles !== undefined
         ? { expectedRoles: [...base.expectedRoles] }
         : {}),
     received,
-    ...(!roundAdvanced && base.pending !== undefined ? { pending: [...base.pending] } : {}),
-    ...(!roundAdvanced && base.superseded !== undefined
-      ? { superseded: [...base.superseded] }
-      : {}),
+    ...(pending !== undefined ? { pending } : {}),
+    ...(superseded !== undefined ? { superseded } : {}),
     status: update.status ?? base.status,
     timeoutAt: update.timeoutAt ?? base.timeoutAt,
   };

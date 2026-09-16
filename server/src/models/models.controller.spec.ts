@@ -292,24 +292,39 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
     expect(deleteProviderCredIdx).toBeLessThan(deleteIdIdx);
   });
 
-  describe('DTO 校验（class-validator，QA ISSUE-003 token 格式）', () => {
+  describe('DTO 校验（class-validator，当前契约：token 可选、不限 sk- 前缀）', () => {
     const errorsOf = async (obj: object) =>
       validate(plainToInstance(SetModelCredentialDto, obj));
 
-    it('token 非法格式（"abc"）→ 校验失败（需 sk- 前缀）', async () => {
-      expect(await errorsOf({ token: 'abc' })).not.toHaveLength(0);
+    it('token 无 sk- 前缀（"abc"）→ 校验通过（多 provider 不限前缀，仅要求字符串且 ≤4096）', async () => {
+      expect(await errorsOf({ token: 'abc' })).toHaveLength(0);
     });
 
-    it('token 缺 sk- 前缀 → 校验失败', async () => {
-      expect(await errorsOf({ token: 'raw-token-long' })).not.toHaveLength(0);
+    it('token 任意非空字符串（无 sk- 前缀）→ 校验通过', async () => {
+      expect(await errorsOf({ token: 'raw-token-long' })).toHaveLength(0);
     });
 
-    it('token 带 sk- 前缀但过短（<8 位）→ 校验失败', async () => {
-      expect(await errorsOf({ token: 'sk-ab' })).not.toHaveLength(0);
+    it('token 短字符串（"sk-ab"）→ 校验通过（无最小长度约束）', async () => {
+      expect(await errorsOf({ token: 'sk-ab' })).toHaveLength(0);
     });
 
     it('token 合法格式（sk- + 8 位以上）→ 校验通过', async () => {
       expect(await errorsOf({ token: 'sk-raw-token' })).toHaveLength(0);
+    });
+
+    it('token 缺省/空串/纯空白 → 校验通过（本地无鉴权允许空，@ValidateIf 跳过空白）', async () => {
+      expect(await errorsOf({})).toHaveLength(0);
+      expect(await errorsOf({ token: '' })).toHaveLength(0);
+      expect(await errorsOf({ token: '   ' })).toHaveLength(0);
+    });
+
+    it('token 非字符串 → 校验通过（@ValidateIf 仅字符串走后续约束，类型由管道层处理）', async () => {
+      expect(await errorsOf({ token: 12345 })).toHaveLength(0);
+    });
+
+    it('token 4096 边界 → 校验通过，超长（>4096）→ 校验失败（@MaxLength(4096)，DTO 唯一拒绝面）', async () => {
+      expect(await errorsOf({ token: 'x'.repeat(4096) })).toHaveLength(0);
+      expect(await errorsOf({ token: 'x'.repeat(4097) })).not.toHaveLength(0);
     });
   });
 });

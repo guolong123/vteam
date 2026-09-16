@@ -430,11 +430,15 @@ export class ModelsService implements OnModuleInit {
       select: { modelId: true },
     });
     const availSet = new Set(availRows.map((r) => r.modelId));
+    // 凭据即访问证明：已配未吊销凭据的 provider，其 enabled 行即使暂无
+    // availability 行也可见（availability 由 setCredential 成功路径补齐；
+    // live 探针未覆盖凭据模型时不以缺失的探针行隐藏）。opencode 免费与
+    // local/custom 仍要求 availability（语义不变）。
     const filtered = rows.filter((m) => {
-      if (!availSet.has(m.id)) return false;
       const providerType = (m as { providerType?: string | null }).providerType;
-      if (m.providerID === 'opencode') return true;
-      if (providerType === 'local' || providerType === 'custom') return true;
+      if (m.providerID === 'opencode') return availSet.has(m.id);
+      if (providerType === 'local' || providerType === 'custom')
+        return availSet.has(m.id);
       return configuredProviders.has(m.providerID);
     });
     return filtered.map((m) => ({
@@ -567,8 +571,10 @@ export class ModelsService implements OnModuleInit {
     let disabled = 0;
     for (const o of orphans) {
       if (o.providerType === 'local' || o.providerType === 'custom') continue;
-      if (o.providerID !== 'opencode' && configuredSet.has(o.providerID))
-        continue;
+      // 凭据即访问证明，无条件跳过有未吊销凭据的 provider（best-effort live 探针
+      // 未覆盖凭据模型是常态，不以探针缺席剪枝）。opencode 免费模型无凭据行，
+      // 故其剪枝语义不变（特殊-case 保留）。
+      if (configuredSet.has(o.providerID)) continue;
       await this.prisma.model.update({
         where: { id: o.id },
         data: { enabled: false },
@@ -828,6 +834,10 @@ export class ModelsService implements OnModuleInit {
           placeholder,
           targetWorkerIds,
         );
+        await this.enableProviderModelsAfterCredential(
+          modelProviderID,
+          targetWorkerIds,
+        );
         await this.resyncAfterCredentialChange();
         return this.toView(row);
       }
@@ -870,6 +880,10 @@ export class ModelsService implements OnModuleInit {
       trimmedToken,
       targetWorkerIds,
     );
+    await this.enableProviderModelsAfterCredential(
+      modelProviderID,
+      targetWorkerIds,
+    );
     await this.resyncAfterCredentialChange();
     return this.toView(row);
   }
@@ -888,6 +902,60 @@ export class ModelsService implements OnModuleInit {
     } catch (err) {
       this.logger.warn(
         `模型凭据下发失败（凭据已落库，worker 注册回放兜底）: provider=${providerID} ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * 根因诊断（opencode-go 凭据未吊销但 36 行 enabled=false 且零 availability 行）：
+   * 剪枝先于凭据保存执行——syncLiveModels 的 live 集来自 worker executableModels /
+   * /api/model（仅含 live 可执行模型，不含凭据付费模型），剪枝把不在 live 集中的
+   * opencode-go 行置 enabled=false 并删其 availability；configuredSet 守卫只保护
+   * 剪枝时刻已配凭据的 enabled 行。凭据保存后的 resync 仍以同一 live 集为准，
+   * 从不把凭据模型加回 live 集；已禁用的行既不在 orphans 查询（where enabled:true）
+   * 中，也无 availability 行被重建；注册路径复用既有行时亦不碰 enabled——
+   * 双重过滤致 available-models 归零。修复：凭据保存成功后显式回 enable 该
+   * provider 全量目录行，并为在线 worker 补齐 availability 行（与
+   * syncFromWorkerCapabilities upsert 同形）；失败只 warn 不阻断保存。
+   */
+  private async enableProviderModelsAfterCredential(
+    providerID: string,
+    targetWorkerIds?: string[],
+  ): Promise<void> {
+    try {
+      await this.prisma.model.updateMany({
+        where: { providerID, enabled: false },
+        data: { enabled: true },
+      });
+      let workerIds = (targetWorkerIds ?? []).filter(
+        (id) => typeof id === 'string' && id.length > 0,
+      );
+      if (workerIds.length === 0) {
+        const online = await this.prisma.worker.findMany({
+          where: { status: { not: WORKER_STATUS.OFFLINE } },
+          select: { id: true },
+        });
+        workerIds = online.map((w) => w.id);
+      }
+      if (workerIds.length === 0) {
+        return;
+      }
+      const rows = await this.prisma.model.findMany({
+        where: { providerID },
+        select: { id: true },
+      });
+      for (const r of rows as { id: string }[]) {
+        for (const workerId of workerIds) {
+          await this.prisma.workerModelAvailability.upsert({
+            where: { workerId_modelId: { workerId, modelId: r.id } },
+            create: { workerId, modelId: r.id },
+            update: {},
+          });
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `凭据模型可见性回补失败（凭据已落库，手动 POST /models/sync 可补）: provider=${providerID} ${(err as Error).message}`,
       );
     }
   }

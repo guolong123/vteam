@@ -98,7 +98,11 @@ describe('ExecutionPoliciesController', () => {
 
   it('POST /execution-policies：DTO 透传 + 返回创建行', async () => {
     service.create.mockResolvedValue(customRow);
-    const dto = { name: '自定义策略', type: 'custom' as const, config: validConfig };
+    const dto = {
+      name: '自定义策略',
+      type: 'custom' as const,
+      config: validConfig,
+    };
     const result = await controller.create(dto);
     expect(service.create).toHaveBeenCalledWith(dto);
     expect(result).toMatchObject({ type: 'custom' });
@@ -171,7 +175,9 @@ describe('ExecutionPoliciesController', () => {
       }),
     );
     await expect(
-      controller.update('ep_0000000001', { config: { permission: 'deny' } as never }),
+      controller.update('ep_0000000001', {
+        config: { permission: 'deny' } as never,
+      }),
     ).rejects.toMatchObject({
       response: { code: 'POLICY_CONFIG_INVALID' },
     });

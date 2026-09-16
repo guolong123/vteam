@@ -1,7 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import {
-  MESSAGE_STATUS,
-} from '../common/constants/event.constants';
+import { MESSAGE_STATUS } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -43,7 +41,10 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
     issue: { findUnique: jest.Mock };
     messageReceipt: { create: jest.Mock; findFirst: jest.Mock };
   };
-  let workerDispatcher: { dispatchAgentMention: jest.Mock; isAgentExecuting: jest.Mock };
+  let workerDispatcher: {
+    dispatchAgentMention: jest.Mock;
+    isAgentExecuting: jest.Mock;
+  };
   let planLifecycle: { getStatus: jest.Mock; autoEnsureRow: jest.Mock };
 
   const taskId = 't_0000000001';
@@ -79,15 +80,24 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
       issue: { findUnique: jest.fn() },
       messageReceipt: { create: jest.fn(), findFirst: jest.fn() },
     };
-    workerDispatcher = { dispatchAgentMention: jest.fn().mockResolvedValue(undefined), isAgentExecuting: jest.fn().mockReturnValue(null) };
+    workerDispatcher = {
+      dispatchAgentMention: jest.fn().mockResolvedValue(undefined),
+      isAgentExecuting: jest.fn().mockReturnValue(null),
+    };
     planLifecycle = { getStatus: jest.fn(), autoEnsureRow: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PlatformMcpService,
         { provide: PrismaService, useValue: prisma },
-        { provide: IdGeneratorService, useValue: { nextId: jest.fn().mockResolvedValue('m_0000000200') } },
-        { provide: RealtimeService, useValue: { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) } },
+        {
+          provide: IdGeneratorService,
+          useValue: { nextId: jest.fn().mockResolvedValue('m_0000000200') },
+        },
+        {
+          provide: RealtimeService,
+          useValue: { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) },
+        },
         { provide: WorkerClient, useValue: { fetchFile: jest.fn() } },
         { provide: WorkerDispatcher, useValue: workerDispatcher },
         { provide: ArtifactsService, useValue: {} },
@@ -107,15 +117,20 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
 
     service = module.get(PlatformMcpService);
     jest
-      .spyOn((service as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .spyOn(
+        (service as unknown as { logger: { warn: jest.Mock } }).logger,
+        'warn',
+      )
       .mockImplementation((() => undefined) as unknown as jest.Mock);
 
-    prisma.task.findUnique.mockImplementation((args: { where: { id?: string } }) => {
-      if (args.where.id === taskId) {
-        return Promise.resolve({ teamId: 'tm_1' });
-      }
-      return Promise.resolve(null);
-    });
+    prisma.task.findUnique.mockImplementation(
+      (args: { where: { id?: string } }) => {
+        if (args.where.id === taskId) {
+          return Promise.resolve({ teamId: 'tm_1' });
+        }
+        return Promise.resolve(null);
+      },
+    );
     prisma.session.findFirst.mockResolvedValue({
       id: 's_1',
       agentId: 'a_sender',
@@ -170,7 +185,8 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
         text: expect.stringContaining(ROLE_VIEW_FOOTER),
       }),
     );
-    const dispatched = workerDispatcher.dispatchAgentMention.mock.calls[0][0] as {
+    const dispatched = workerDispatcher.dispatchAgentMention.mock
+      .calls[0][0] as {
       text: string;
     };
     expect(dispatched.text).toContain('R2');
@@ -214,16 +230,13 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
       teamMemberId: senderInstanceId,
     });
 
-    const result = await service.notifyAgent(
-      ctx,
-      {
-        teamId: 'tm_1',
-        targetInstanceId: 'tmm_tester',
-        content: '请评审新版计划',
-        selfInstanceId: senderInstanceId,
-        kind: 'review',
-      },
-    );
+    const result = await service.notifyAgent(ctx, {
+      teamId: 'tm_1',
+      targetInstanceId: 'tmm_tester',
+      content: '请评审新版计划',
+      selfInstanceId: senderInstanceId,
+      kind: 'review',
+    });
 
     expect(result.triggered).toBe(false);
     expect(result.reason).toBe('review-triplet');

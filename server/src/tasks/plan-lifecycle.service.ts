@@ -5,11 +5,13 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
   Optional,
 } from '@nestjs/common';
 import { Plan, Prisma } from '@prisma/client';
 import { MessageReceiptsService } from '../chat/message-receipts.service';
 import { IdGeneratorService } from '../common/id-generator';
+import { resyncIdPrefix } from '../common/id-resync';
 import {
   CHANNEL_TYPE,
   EVENT_TYPES,
@@ -98,12 +100,16 @@ export function resolveFrozenAnchor(
 ): FrozenAnchor {
   const version =
     ledger?.planVersion.version?.trim() || PLAN_FROZEN_FALLBACK_VERSION;
-  const hash = ledger?.planVersion.hash?.trim() || computePlanHash(`${taskId}:${version}`);
+  const hash =
+    ledger?.planVersion.hash?.trim() || computePlanHash(`${taskId}:${version}`);
   return { version, hash };
 }
 
 /** 确认门动作（finalize=确认定稿；confirm=开始执行；reject=打回重修；revise=修订重评）。 */
 export type PlanConfirmAction = 'finalize' | 'confirm' | 'reject' | 'revise';
+
+/** 计划域主键前缀（15 篇 §2.2：<prefix>_<零填充序号>，与 autoEnsureRow nextId('pl') 同源）。 */
+const PLAN_ID_PREFIX = 'pl';
 
 /**
  * plans 表唯一读写 choke 点（todo2 复活，守卫窄豁免仅覆盖本文件）。
@@ -112,7 +118,7 @@ export type PlanConfirmAction = 'finalize' | 'confirm' | 'reject' | 'revise';
  * 子任务表读写仍全禁（守卫即红），团队删除级联（teams.service）保持原样不扩散。
  */
 @Injectable()
-export class PlanLifecycleService {
+export class PlanLifecycleService implements OnModuleInit {
   private readonly logger = new Logger(PlanLifecycleService.name);
 
   constructor(
@@ -122,6 +128,11 @@ export class PlanLifecycleService {
     private readonly realtime: RealtimeService,
     @Optional() private readonly rounds: ReviewRoundService | null = null,
   ) {}
+
+  /** 进程启动：按库内 pl_ 前缀纯数字序号最大值对齐 id 生成器（resyncIdPrefix 跳过非数字 id，防 P2002 主键冲突）。 */
+  async onModuleInit(): Promise<void> {
+    await resyncIdPrefix(this.prisma.plan, PLAN_ID_PREFIX, this.idGen);
+  }
 
   /** 校验计划状态枚举值（非法即抛，防脏写）。 */
   verifyEnum(status: string): asserts status is PlanLifecycleStatus {
@@ -187,10 +198,29 @@ export class PlanLifecycleService {
     },
   ) {
     this.verifyEnum(to);
-    const prev = (await this.prisma.plan.findUnique({
+    let prev = (await this.prisma.plan.findUnique({
       where: { taskId },
       select: { status: true },
     })) as unknown as { status: string } | null;
+    if (!prev) {
+      // 自愈缺失行（BUG B：收敛翻转 P2025 丢弃）：先经 autoEnsureRow 建 draft 行
+      // 再翻转到目标态，保证收敛 verdict 必有落库态；verifyEnum 仍在前，非法态不写库。
+      // 并发双建行竞态：taskId @unique 使后者 P2002，此时重读行（首建者已落库）后继续。
+      try {
+        const ensured = (await this.autoEnsureRow(taskId)) as unknown as {
+          status: string;
+        };
+        prev = { status: ensured?.status ?? PLAN_LIFECYCLE_STATUS.draft };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!/P2002/.test(msg)) throw err;
+        prev = (await this.prisma.plan.findUnique({
+          where: { taskId },
+          select: { status: true },
+        })) as unknown as { status: string } | null;
+        if (!prev) throw err;
+      }
+    }
     const updated = await this.prisma.plan.update({
       where: { taskId },
       data: {
@@ -316,18 +346,17 @@ export class PlanLifecycleService {
         details: { current: row.status },
       });
     }
-    const anchor = resolveFrozenAnchor(taskId, await this.readTaskLedger(taskId));
-    const plan = await this.transition(
+    const anchor = resolveFrozenAnchor(
       taskId,
-      PLAN_LIFECYCLE_STATUS.approved,
-      {
-        finalizedBy: actor,
-        finalizedAt: new Date(),
-        rejectReason: null,
-        frozenVersion: anchor.version,
-        frozenHash: anchor.hash,
-      },
+      await this.readTaskLedger(taskId),
     );
+    const plan = await this.transition(taskId, PLAN_LIFECYCLE_STATUS.approved, {
+      finalizedBy: actor,
+      finalizedAt: new Date(),
+      rejectReason: null,
+      frozenVersion: anchor.version,
+      frozenHash: anchor.hash,
+    });
     await this.postPlanSystemMessage(
       taskId,
       task.teamId,
@@ -439,7 +468,11 @@ export class PlanLifecycleService {
 
   async completePlan(
     taskId: string,
-    input: { userId: string; userName?: string | null; instanceId?: string | null },
+    input: {
+      userId: string;
+      userName?: string | null;
+      instanceId?: string | null;
+    },
   ): Promise<{ plan: Plan; idempotent: boolean }> {
     const { task, row } = await this.loadWritablePlan(taskId);
     if (input.instanceId !== undefined && input.instanceId !== null) {
@@ -467,10 +500,7 @@ export class PlanLifecycleService {
         details: { current: row.status },
       });
     }
-    const actor = displayName(
-      input.instanceId ?? input.userName,
-      input.userId,
-    );
+    const actor = displayName(input.instanceId ?? input.userName, input.userId);
     const plan = await this.transition(taskId, 'completed');
     await this.postPlanSystemMessage(
       taskId,
@@ -480,7 +510,9 @@ export class PlanLifecycleService {
     return { plan, idempotent: false };
   }
 
-  private async requireTask(taskId: string): Promise<{ id: string; teamId: string | null }> {
+  private async requireTask(
+    taskId: string,
+  ): Promise<{ id: string; teamId: string | null }> {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: { id: true, teamId: true },
@@ -506,7 +538,9 @@ export class PlanLifecycleService {
    * 读任务轮次账本（todo 2 冻结/归档只读复用）：按更新时间倒序扫任务 issues，
    * 首个可解析账本即宿主；无账本/损坏/DB 异常→null（调用方取回退锚/空归档，永不阻断翻转）。
    */
-  private async readTaskLedger(taskId: string): Promise<ReviewRoundLedger | null> {
+  private async readTaskLedger(
+    taskId: string,
+  ): Promise<ReviewRoundLedger | null> {
     return (await this.findLedgerHost(taskId))?.ledger ?? null;
   }
 

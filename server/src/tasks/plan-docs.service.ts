@@ -1,5 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import {
+  REVIEW_ROUND_GATE_ERRORS,
+  ReviewRoundGateService,
+} from '../issues/review-round-gate.service';
 import { ReviewRoundService } from '../issues/review-round.service';
 import { computePlanHash, tryParseLedger } from '../issues/review-round-ledger';
 import { PrismaService } from '../prisma/prisma.service';
@@ -53,6 +57,12 @@ export class PlanDocsService {
     // todo 2 哈希钩接线：落盘成功后经 applyRoundUpdate 回填 planVersion.hash
     //（TasksModule imports IssuesModule，无 Nest 环：IssuesModule 只依赖 RealtimeModule）。
     private readonly rounds: ReviewRoundService,
+    // G1 修订拦截接线：非 complete 收敛轮次的计划修订一律经 requestRevision 拦下
+    //（@Optional() 缺省可空——单测/旧装配未提供时门禁 fail-open 放行；
+    // 生产装配经 IssuesModule（已 import 并 export）提供，无新增模块边）。
+    @Optional()
+    @Inject(ReviewRoundGateService)
+    private readonly gate?: ReviewRoundGateService | null,
   ) {
     const workDir = config.get<string>('WORK_DIR');
     this.taskWorkDirRoot =
@@ -78,7 +88,10 @@ export class PlanDocsService {
       if (!located) {
         return { files: [], workerId: null, directory, degraded: true };
       }
-      const files = await this.workerClient.listPlanFiles(located.worker, directory);
+      const files = await this.workerClient.listPlanFiles(
+        located.worker,
+        directory,
+      );
       return { files, workerId: located.worker.id, directory, degraded: false };
     } catch (err) {
       this.logger.warn(
@@ -102,8 +115,13 @@ export class PlanDocsService {
     const directory = this.taskDirectory(taskId);
     const located = await this.locateWorker(taskId);
     if (!located) {
-      throw new Error('未定位到可用的 worker（团队无主 Agent / 无会话 / worker 离线）');
+      throw new Error(
+        '未定位到可用的 worker（团队无主 Agent / 无会话 / worker 离线）',
+      );
     }
+    // G1 修订拦截：宿主账本存在即视为"修订"（首写尚无账本，不拦），
+    // 非收敛轮次的修订由门抛 exact `待 N/M` 并原样冒泡；落盘前拦截。
+    await this.enforceRevisionGate(taskId);
     const written = await this.workerClient.writePlanFile(located.worker, {
       directory,
       name: input.name,
@@ -119,7 +137,10 @@ export class PlanDocsService {
    * hash-only 补丁不碰 version（merge 只升不降）；无宿主/回填失败只 warn，
    * 永不阻断上传返回（缺失语义由账本层 pending-hash 承接）。
    */
-  private async backfillPlanHash(taskId: string, content: string): Promise<void> {
+  private async backfillPlanHash(
+    taskId: string,
+    content: string,
+  ): Promise<void> {
     try {
       const hostIssueId = await this.findHostIssueId(taskId);
       if (!hostIssueId) {
@@ -134,6 +155,46 @@ export class PlanDocsService {
     } catch (err) {
       this.logger.warn(
         `[plans] 哈希回填失败 task=${taskId}（上传已落盘）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * G1 修订拦截（docs 33 §3.4“收敛前修订视为违规（被拦）”；§4-1）：
+   * 宿主账本存在 ⇒ 本次写是“修订”，经 `requestRevision` 裁决；
+   * 无宿主 ⇒ 首写，直接放行（门对空账本会判 `待 0/0`，故不能无脑调用）。
+   * 门的业务拒绝（含 exact `待 N/M`）原样抛给调用方；
+   * 门缺席 / 宿主查找失败 / 门抛非业务错（含非 Error）一律 warn 后 fail-open
+   * 放行（sidecar 口径：接线故障不阻断写路径，业务拒绝才阻断）。
+   * requester 取计划员代理 id `a_plan`（本写路径即计划员修订通道）。
+   */
+  private async enforceRevisionGate(taskId: string): Promise<void> {
+    if (!this.gate) {
+      this.logger.warn(
+        `[plans] 修订门缺席 task=${taskId}（ReviewRoundGateService 未装配，fail-open 放行）`,
+      );
+      return;
+    }
+    let hostIssueId: string | null = null;
+    try {
+      hostIssueId = await this.findHostIssueId(taskId);
+    } catch (err) {
+      this.logger.warn(
+        `[plans] 修订门宿主查找失败 task=${taskId}（fail-open 放行）：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    if (!hostIssueId) {
+      return;
+    }
+    try {
+      await this.gate.requestRevision(hostIssueId, 'a_plan');
+    } catch (err) {
+      if (isRevisionRefusal(err)) {
+        throw err;
+      }
+      this.logger.warn(
+        `[plans] 修订门内部异常 task=${taskId} issue=${hostIssueId}（fail-open 放行）：${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -157,9 +218,7 @@ export class PlanDocsService {
    * ⚠️ 必须把 capabilities 一并取出：WorkerClient 的 exec base URL 由 capabilities 决定，
    * 只传 {id} 会静默回落到 localhost:4199（listOpencodeAgents 本地部署踩过同类 bug）。
    */
-  private async locateWorker(
-    taskId: string,
-  ): Promise<{
+  private async locateWorker(taskId: string): Promise<{
     worker: { id: string; capabilities: unknown };
   } | null> {
     const task = await this.prisma.task.findUnique({
@@ -195,4 +254,23 @@ export class PlanDocsService {
     }
     return { worker: { id: worker.id, capabilities: worker.capabilities } };
   }
+}
+
+/**
+ * 门的业务拒绝判定：`requestRevision` 的拒绝错误携带
+ * `REVIEW_ROUND_GATE_ERRORS.REVISION_REFUSED` code（门层唯一指纹）；
+ * 其余一切（无 code 的 Error / 非 Error throw / NotFound/DB 错）都视为内部异常
+ * 走 fail-open。有意不用 message 子串匹配：非 Error 拒绝与内部错误文本
+ * 均可构造出 `修订被拒` + `待 N/M` 双 token，子串指纹双向皆可误判。
+ */
+function isRevisionRefusal(err: unknown): boolean {
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { code?: unknown }).code ===
+      REVIEW_ROUND_GATE_ERRORS.REVISION_REFUSED
+  ) {
+    return true;
+  }
+  return false;
 }

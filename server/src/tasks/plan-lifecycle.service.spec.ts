@@ -176,6 +176,82 @@ describe('PlanLifecycleService', () => {
       });
     });
 
+    it('无行→先 autoEnsureRow 建 draft 行再翻转到目标态（收敛 verdict 必落库）', async () => {
+      prisma.plan.findUnique
+        .mockResolvedValueOnce(null) // transition 探查
+        .mockResolvedValueOnce(null); // autoEnsureRow 探查
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_1',
+        title: '任务标题',
+        createdBy: 'u_admin',
+      });
+      idGen.nextId.mockResolvedValue('pl_0000000001');
+      prisma.plan.create.mockImplementation(({ data }: any) =>
+        Promise.resolve({ ...data }),
+      );
+      prisma.plan.update.mockImplementation(({ data }: any) =>
+        Promise.resolve({ id: 'pl_0000000001', taskId: 't_1', ...data }),
+      );
+
+      const out = await service.transition('t_1', 'pending_final');
+
+      expect(prisma.plan.create).toHaveBeenCalledWith({
+        data: {
+          id: 'pl_0000000001',
+          taskId: 't_1',
+          title: '任务标题',
+          status: 'draft',
+          createdBy: 'u_admin',
+        },
+      });
+      expect(prisma.plan.update).toHaveBeenCalledWith({
+        where: { taskId: 't_1' },
+        data: { status: 'pending_final' },
+      });
+      expect(out).toMatchObject({ status: 'pending_final' });
+      expect(receipts.emitPlanStatusChanged).toHaveBeenCalledWith({
+        taskId: 't_1',
+        from: 'draft',
+        to: 'pending_final',
+      });
+    });
+
+    it('并发双建行竞态（autoEnsureRow P2002）→重读行后继续翻转', async () => {
+      prisma.plan.findUnique
+        .mockResolvedValueOnce(null) // transition 探查
+        .mockResolvedValueOnce(null) // autoEnsureRow 探查
+        .mockResolvedValueOnce({ status: 'draft' }); // P2002 后重读（首建者已落库）
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_1',
+        title: '任务标题',
+        createdBy: 'u_admin',
+      });
+      idGen.nextId.mockResolvedValue('pl_0000000001');
+      prisma.plan.create.mockRejectedValue(
+        new Error(
+          'Unique constraint failed on the constraint: `plans_taskId_key` (P2002)',
+        ),
+      );
+      prisma.plan.update.mockResolvedValue({
+        id: 'pl_0000000001',
+        taskId: 't_1',
+        status: 'draft',
+      });
+
+      const out = await service.transition('t_1', 'draft');
+
+      expect(prisma.plan.update).toHaveBeenCalledWith({
+        where: { taskId: 't_1' },
+        data: { status: 'draft' },
+      });
+      expect(out).toMatchObject({ status: 'draft' });
+      expect(receipts.emitPlanStatusChanged).toHaveBeenCalledWith({
+        taskId: 't_1',
+        from: 'draft',
+        to: 'draft',
+      });
+    });
+
     it('非法目标态→抛错且不写库不广播', async () => {
       await expect(service.transition('t_1', 'archived')).rejects.toThrow();
       expect(prisma.plan.update).not.toHaveBeenCalled();
@@ -307,7 +383,13 @@ describe('PlanLifecycleService', () => {
       expect(receipts.emitPlanStatusChanged).not.toHaveBeenCalled();
     });
 
-    it.each([['draft'], ['reviewing'], ['pending_final'], ['rejected'], ['completed']])(
+    it.each([
+      ['draft'],
+      ['reviewing'],
+      ['pending_final'],
+      ['rejected'],
+      ['completed'],
+    ])(
       '错态 %s 确认→409 精确码 PLAN_CONFIRM_WRONG_STATE（开始执行仍要求 approved）',
       async (status: string) => {
         prisma.plan.findUnique.mockResolvedValue({ status });
@@ -413,7 +495,13 @@ describe('PlanLifecycleService', () => {
       expect(receipts.emitPlanStatusChanged).not.toHaveBeenCalled();
     });
 
-    it.each([['draft'], ['reviewing'], ['rejected'], ['executing'], ['completed']])(
+    it.each([
+      ['draft'],
+      ['reviewing'],
+      ['rejected'],
+      ['executing'],
+      ['completed'],
+    ])(
       '错态 %s 定稿→409 精确码 PLAN_FINALIZE_WRONG_STATE',
       async (status: string) => {
         prisma.plan.findUnique.mockResolvedValue({ status });
@@ -608,6 +696,22 @@ describe('PlanLifecycleService', () => {
 
       await expect(service.getPlan('t_1')).resolves.toBeNull();
       expect(prisma.plan.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onModuleInit（pl_ 前缀续号唯一归属）', () => {
+    it('按库内 pl_ 最大序号对齐 seed（跳过非数字 id）', async () => {
+      (prisma.plan as any).findMany = jest
+        .fn()
+        .mockResolvedValue([{ id: 'pl_0000000007' }]);
+
+      await service.onModuleInit();
+
+      expect((prisma.plan as any).findMany).toHaveBeenCalledWith({
+        where: { id: { startsWith: 'pl_' } },
+        select: { id: true },
+      });
+      expect(idGen.seed).toHaveBeenCalledWith('pl', 7);
     });
   });
 });

@@ -38,7 +38,9 @@ export class ExecutionPoliciesController {
   @Get()
   @UseGuards(PermissionGuard)
   @RequirePermission('agents.view')
-  @ApiOperation({ summary: '策略列表（type 过滤 + 分页，含 template 只读策略）' })
+  @ApiOperation({
+    summary: '策略列表（type 过滤 + 分页，含 template 只读策略）',
+  })
   findAll(@Query() query: QueryExecutionPoliciesDto) {
     return this.policies.findAll(query);
   }

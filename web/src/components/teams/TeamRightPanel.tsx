@@ -425,9 +425,9 @@ interface PlanStatusResponse {
   warning?: string;
 }
 
-/** 计划五态徽标（修订中灰 / 待定稿琥珀闪烁 / 待执行琥珀闪烁 / 执行中蓝 / 完成绿；DB 状态映射）。 */
+/** 计划五态徽标（草稿灰 / 修订中灰 / 待定稿琥珀闪烁 / 待执行琥珀闪烁 / 执行中蓝 / 完成绿；DB 状态映射。draft 为初始行零轮次，用草稿而非修订中，避免未评审即显示修订中误导）。 */
 const PLAN_STATUS_BADGE: Record<string, { label: string; color: string; bg: string; border: string; flash: boolean }> = {
-  draft: { label: "修订中", color: neutral[500], bg: neutral[100], border: neutral[200], flash: false },
+  draft: { label: "草稿", color: neutral[500], bg: neutral[100], border: neutral[200], flash: false },
   reviewing: { label: "修订中", color: neutral[500], bg: neutral[100], border: neutral[200], flash: false },
   rejected: { label: "修订中", color: neutral[500], bg: neutral[100], border: neutral[200], flash: false },
   pending_final: { label: "待定稿", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)", flash: true },
@@ -626,7 +626,12 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
             </div>
           </div>
         ) : (
-          <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无评审轮次账本（派发评审后自动出现）</div>
+          <>
+            <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无评审轮次账本（派发评审后自动出现）</div>
+            {status === "draft" ? (
+              <div data-testid="plan-review-pending" style={{ fontSize: fontSize.xs, color: neutral[500], lineHeight: 1.6, padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.sm, backgroundColor: neutral[50] }}>等待主 Agent 派发评审：首轮评审派发后，评审轮次账本将自动出现</div>
+            ) : null}
+          </>
         )}
         {archived.length > 0 && (
           <div data-testid="plan-archive-block" style={{ display: "flex", flexDirection: "column", gap: space.xs }}>

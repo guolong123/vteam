@@ -16,7 +16,7 @@ describe('DocsMirrorService（is_0000000024 F1 镜像导出层）', () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-mirror-'));
     prisma = {
-      artifactVersion: { findMany: jest.fn() },
+      artifactVersion: { findMany: jest.fn().mockResolvedValue([]) },
       task: { findMany: jest.fn().mockResolvedValue([]) },
     };
     service = new DocsMirrorService(
@@ -456,7 +456,7 @@ describe('DocsMirrorService（is_0000000024 F1 镜像导出层）', () => {
   });
 
   describe('buildRegistry', () => {
-    it('仅当前版本 doc 产出物 → DocDef[]（id=slug、file=<slug>.md、name=title）', async () => {
+    it('当前版本产出物全入注册表 → DocDef[]（md 直渲、png 附 fileExt/fileUrl）', async () => {
       prisma.artifactVersion.findMany.mockResolvedValue([
         {
           version: 2,
@@ -473,7 +473,7 @@ describe('DocsMirrorService（is_0000000024 F1 镜像导出层）', () => {
           contentRef: '/uploads/uuid-2.md',
           artifact: { id: 'art_2', title: 'Architecture', currentVersion: 1 },
         },
-        // file 型非 .md 不入站
+        // 非 md 文件同样入注册表（附 fileExt/fileUrl 供前端决定渲染/下载）
         {
           version: 1,
           contentRef: '/uploads/uuid-3.png',
@@ -481,16 +481,29 @@ describe('DocsMirrorService（is_0000000024 F1 镜像导出层）', () => {
         },
       ]);
       const registry = await service.buildRegistry(taskId);
-      expect(registry).toHaveLength(2);
+      expect(registry).toHaveLength(3);
       expect(registry[0]).toMatchObject({
         id: 'doc-art1',
         name: '需求文档',
         file: 'doc-art1.md',
       });
+      expect(registry[0]).not.toHaveProperty('fileExt');
+      expect(registry[0]).not.toHaveProperty('fileUrl');
       expect(registry[1]).toMatchObject({
         id: 'architecture',
         name: 'Architecture',
         file: 'architecture.md',
+      });
+      expect(registry[1]).not.toHaveProperty('fileExt');
+      expect(registry[2]).toMatchObject({
+        id: 'doc-art3',
+        name: '截图',
+        kind: '任务产出物',
+        file: 'doc-art3',
+        order: 3,
+        artifactId: 'art_3',
+        fileExt: 'png',
+        fileUrl: '/uploads/uuid-3.png',
       });
     });
   });

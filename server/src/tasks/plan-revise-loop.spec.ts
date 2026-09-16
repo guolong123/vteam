@@ -106,14 +106,20 @@ describe('PlanLifecycleService revise-and-rereview mini-loop（todo 4）', () =>
     rounds.applyRoundUpdate.mockImplementation(
       (_issueId: string, update: Record<string, unknown>) =>
         Promise.resolve(
-          mergeLedger(hostLedger(), update as Parameters<typeof mergeLedger>[1]),
+          mergeLedger(
+            hostLedger(),
+            update as Parameters<typeof mergeLedger>[1],
+          ),
         ),
     );
   });
 
   function mockHost(round = 3, version = 'v0.4') {
     prisma.issue.findMany.mockResolvedValue([
-      { id: HOST_ISSUE_ID, description: embedLedger('评审派发', hostLedger({ round, version })) },
+      {
+        id: HOST_ISSUE_ID,
+        description: embedLedger('评审派发', hostLedger({ round, version })),
+      },
     ]);
   }
 
@@ -145,10 +151,9 @@ describe('PlanLifecycleService revise-and-rereview mini-loop（todo 4）', () =>
         where: { taskId: 't_1' },
         data: { status: 'draft', rejectReason: '范围过大，先拆分' },
       });
-      expect(rounds.applyRoundUpdate).toHaveBeenCalledWith(
-        HOST_ISSUE_ID,
-        { planVersion: { version: 'v0.5' } },
-      );
+      expect(rounds.applyRoundUpdate).toHaveBeenCalledWith(HOST_ISSUE_ID, {
+        planVersion: { version: 'v0.5' },
+      });
       const update = rounds.applyRoundUpdate.mock.calls[0][1] as Record<
         string,
         unknown
@@ -170,20 +175,29 @@ describe('PlanLifecycleService revise-and-rereview mini-loop（todo 4）', () =>
 
       expect(out.action).toBe('reject');
       expect(out.plan).toMatchObject({ status: 'draft' });
-      expect(rounds.applyRoundUpdate).toHaveBeenCalledWith(
-        HOST_ISSUE_ID,
-        { planVersion: { version: 'v0.5' } },
-      );
+      expect(rounds.applyRoundUpdate).toHaveBeenCalledWith(HOST_ISSUE_ID, {
+        planVersion: { version: 'v0.5' },
+      });
     });
 
-    it.each([['pending_final'], ['draft'], ['reviewing'], ['executing'], ['completed']])(
+    it.each([
+      ['pending_final'],
+      ['draft'],
+      ['reviewing'],
+      ['executing'],
+      ['completed'],
+    ])(
       '错态 %s 打回→409 精确码 PLAN_REJECT_WRONG_STATE（executing/completed 请走 revise）',
       async (status: string) => {
         prisma.plan.findUnique.mockResolvedValue({ status });
         mockHost();
 
         const err = await service
-          .confirmPlan('t_1', { userId: 'u_1', action: 'reject', reason: '想打回' })
+          .confirmPlan('t_1', {
+            userId: 'u_1',
+            action: 'reject',
+            reason: '想打回',
+          })
           .catch((e) => e);
 
         expect(err?.status ?? err?.getStatus?.()).toBe(409);
@@ -255,14 +269,24 @@ describe('PlanLifecycleService revise-and-rereview mini-loop（todo 4）', () =>
       expect(advanced.received).toEqual({});
     });
 
-    it.each([['approved'], ['rejected'], ['pending_final'], ['draft'], ['reviewing']])(
+    it.each([
+      ['approved'],
+      ['rejected'],
+      ['pending_final'],
+      ['draft'],
+      ['reviewing'],
+    ])(
       '错态 %s 修订→409 精确码 PLAN_REVISE_WRONG_STATE（approved 请走 reject）',
       async (status: string) => {
         prisma.plan.findUnique.mockResolvedValue({ status });
         mockHost();
 
         const err = await service
-          .confirmPlan('t_1', { userId: 'u_1', action: 'revise', reason: '想修订' })
+          .confirmPlan('t_1', {
+            userId: 'u_1',
+            action: 'revise',
+            reason: '想修订',
+          })
           .catch((e) => e);
 
         expect(err?.status ?? err?.getStatus?.()).toBe(409);

@@ -1,0 +1,41 @@
+{
+  "url": "/teams/tm_0000000001/session",
+  "viewport": {
+    "w": 1440,
+    "h": 600,
+    "name": "1440x600"
+  },
+  "report": {
+    "pageScrollY": 0,
+    "docScrollH": 600,
+    "docClientH": 600,
+    "bodyScrollH": 600,
+    "bodyClientH": 600,
+    "columns": {
+      "members-list": {
+        "found": true,
+        "scrollH": 599,
+        "clientH": 385,
+        "scrollable": true,
+        "overflowY": "auto"
+      },
+      "chat-message-list": {
+        "found": true,
+        "scrollH": 9542,
+        "clientH": 276,
+        "scrollable": true,
+        "overflowY": "auto"
+      },
+      "team-subtab-scroll": {
+        "found": true,
+        "scrollH": 501,
+        "clientH": 402,
+        "scrollable": true,
+        "overflowY": "auto"
+      },
+      "task-subtab-scroll": {
+        "found": false
+      }
+    }
+  }
+}

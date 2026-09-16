@@ -46,9 +46,12 @@ describe('plan-hash-gate 纯函数（todo 3）', () => {
       [null, null],
       ['', 'deadbeef'],
       ['a1b2c3d4', ''],
-    ])('任一侧缺失（期望=%p，实际=%p）→ false（fail-open，不收紧）', (expected, actual) => {
-      expect(isStalePlanHash(expected, actual)).toBe(false);
-    });
+    ])(
+      '任一侧缺失（期望=%p，实际=%p）→ false（fail-open，不收紧）',
+      (expected, actual) => {
+        expect(isStalePlanHash(expected, actual)).toBe(false);
+      },
+    );
   });
 
   describe('buildStalePlanHashHint', () => {
@@ -74,13 +77,19 @@ describe('plan-hash-gate 纯函数（todo 3）', () => {
 
     it('多轮次账本取最大 round 者 planVersion.hash', () => {
       expect(
-        selectFrozenPlanHash([ledgerOf(1, 'aaaaaaaa'), ledgerOf(3, 'cccccccc'), ledgerOf(2, 'bbbbbbbb')]),
+        selectFrozenPlanHash([
+          ledgerOf(1, 'aaaaaaaa'),
+          ledgerOf(3, 'cccccccc'),
+          ledgerOf(2, 'bbbbbbbb'),
+        ]),
       ).toBe('cccccccc');
     });
 
     it('无账本/空描述 → null（门禁未武装）', () => {
       expect(selectFrozenPlanHash([])).toBeNull();
-      expect(selectFrozenPlanHash([null, undefined, '纯文本无机器段'])).toBeNull();
+      expect(
+        selectFrozenPlanHash([null, undefined, '纯文本无机器段']),
+      ).toBeNull();
     });
 
     it('机器段损坏 → 跳过不抛（fail-open）', () => {

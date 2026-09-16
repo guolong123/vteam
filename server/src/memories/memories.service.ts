@@ -97,11 +97,7 @@ export class MemoriesService implements OnModuleInit {
    * 已前置，此处叠加团队归属）；global 级行仅管理员可改（AdminGuard 已保证）。
    * content 更新时同步重算 contentHash（去重键与正文一致）。
    */
-  async update(
-    id: string,
-    dto: UpdateMemoryDto,
-    viewer?: { id: string },
-  ) {
+  async update(id: string, dto: UpdateMemoryDto, viewer?: { id: string }) {
     const existing = await this.prisma.memory.findUnique({ where: { id } });
     if (!existing || existing.deletedAt) {
       throw new NotFoundException({

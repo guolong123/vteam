@@ -19,6 +19,7 @@ describe('NotificationDispatcherService', () => {
   };
   let prisma: {
     taskNotificationChannel: { findMany: jest.Mock };
+    teamNotificationChannel: { findMany: jest.Mock };
     notificationChannel: { findMany: jest.Mock };
     task: { findUnique: jest.Mock };
     chatChannel: { findUnique: jest.Mock };
@@ -38,6 +39,7 @@ describe('NotificationDispatcherService', () => {
     };
     prisma = {
       taskNotificationChannel: { findMany: jest.fn().mockResolvedValue([]) },
+      teamNotificationChannel: { findMany: jest.fn().mockResolvedValue([]) },
       notificationChannel: { findMany: jest.fn().mockResolvedValue([]) },
       task: { findUnique: jest.fn().mockResolvedValue(null) },
       chatChannel: { findUnique: jest.fn().mockResolvedValue(null) },
@@ -230,7 +232,8 @@ describe('NotificationDispatcherService', () => {
 
     it('sendToChannelByIdOrName routes to bound channel by id/name', async () => {
       const ch = notificationChannel({ id: 'nc_1', name: 'ch-1' });
-      prisma.taskNotificationChannel.findMany.mockResolvedValue([
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000001' });
+      prisma.teamNotificationChannel.findMany.mockResolvedValue([
         { notificationChannelId: 'nc_1' },
       ]);
       prisma.notificationChannel.findMany.mockResolvedValue([ch]);
@@ -243,11 +246,12 @@ describe('NotificationDispatcherService', () => {
     });
 
     it('sendToChannelByIdOrName throws if channel not bound to task', async () => {
-      prisma.taskNotificationChannel.findMany.mockResolvedValue([]);
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000001' });
+      prisma.teamNotificationChannel.findMany.mockResolvedValue([]);
       prisma.notificationChannel.findMany.mockResolvedValue([]);
       await expect(
         service.sendToChannelByIdOrName('t_1', 'nc_missing', 'hi'),
-      ).rejects.toThrow();
+      ).rejects.toThrow('未绑定任何通知渠道');
     });
 
     it('adapter error logged via finish failed and does not block other channels', async () => {

@@ -472,9 +472,7 @@ export class WorkerClient {
     directory?: string,
   ): Promise<WorkerAgentInfo[]> {
     try {
-      const qs = directory
-        ? `?directory=${encodeURIComponent(directory)}`
-        : '';
+      const qs = directory ? `?directory=${encodeURIComponent(directory)}` : '';
       const res = await this.requestExec(worker, `/agents${qs}`, {
         method: 'GET',
         headers: { 'X-Worker-Token': this.workerToken },
@@ -510,10 +508,14 @@ export class WorkerClient {
       if (directory) {
         params.set('directory', directory);
       }
-      const res = await this.requestExec(worker, `/todos?${params.toString()}`, {
-        method: 'GET',
-        headers: { 'X-Worker-Token': this.workerToken },
-      });
+      const res = await this.requestExec(
+        worker,
+        `/todos?${params.toString()}`,
+        {
+          method: 'GET',
+          headers: { 'X-Worker-Token': this.workerToken },
+        },
+      );
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
@@ -540,9 +542,7 @@ export class WorkerClient {
     directory?: string,
   ): Promise<WorkerPlanFileInfo[]> {
     try {
-      const qs = directory
-        ? `?directory=${encodeURIComponent(directory)}`
-        : '';
+      const qs = directory ? `?directory=${encodeURIComponent(directory)}` : '';
       const res = await this.requestExec(worker, `/plan-files${qs}`, {
         method: 'GET',
         headers: { 'X-Worker-Token': this.workerToken },
@@ -589,7 +589,10 @@ export class WorkerClient {
         `plan-file HTTP ${res.status}: ${detail}`,
       );
     }
-    const body = JSON.parse(raw || '{}') as { name?: string; updatedAt?: string };
+    const body = JSON.parse(raw || '{}') as {
+      name?: string;
+      updatedAt?: string;
+    };
     return {
       name: body.name ?? input.name,
       updatedAt: body.updatedAt ?? new Date().toISOString(),
@@ -618,7 +621,10 @@ export class WorkerClient {
     /** 已注册到 serve 的 agent 基底名（未含者当前模型下不会激活）。 */
     registered?: string[];
     /** agent 元数据（描述/mode/native）；缺失=该 agent 未注册。 */
-    runtime?: Record<string, { description?: string; mode?: string; native?: boolean }>;
+    runtime?: Record<
+      string,
+      { description?: string; mode?: string; native?: boolean }
+    >;
     degraded: boolean;
   }> {
     try {
@@ -644,11 +650,15 @@ export class WorkerClient {
           body.agents && typeof body.agents === 'object'
             ? (body.agents as Record<string, string>)
             : {},
-        available: Array.isArray(body.available) ? (body.available as string[]) : [],
+        available: Array.isArray(body.available)
+          ? (body.available as string[])
+          : [],
         configPath:
           typeof body.configPath === 'string' ? body.configPath : undefined,
         configKind:
-          body.configKind === 'new' || body.configKind === 'legacy' || body.configKind === 'none'
+          body.configKind === 'new' ||
+          body.configKind === 'legacy' ||
+          body.configKind === 'none'
             ? body.configKind
             : undefined,
         enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
@@ -750,7 +760,13 @@ export class WorkerClient {
   async getOmoAgentPrompt(
     worker: WorkerEndpointRef,
     name: string,
-  ): Promise<{ name: string; description: string; mode?: string; prompt: string; empty: boolean }> {
+  ): Promise<{
+    name: string;
+    description: string;
+    mode?: string;
+    prompt: string;
+    empty: boolean;
+  }> {
     const res = await this.requestExec(
       worker,
       `/omo-agent-prompt?name=${encodeURIComponent(name)}`,

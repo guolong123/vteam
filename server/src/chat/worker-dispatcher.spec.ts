@@ -91,6 +91,7 @@ describe('WorkerDispatcher', () => {
     promptAsync: jest.Mock;
     getMessages: jest.Mock;
     execute: jest.Mock;
+    abort: jest.Mock;
   };
   let sessionLifecycle: {
     bindSessionToWorker: jest.Mock;
@@ -197,6 +198,8 @@ describe('WorkerDispatcher', () => {
       getMessages: jest.fn().mockResolvedValue([]),
       // 方案 A：dispatch 调 worker 执行端点 POST /execute（202 即成功，fire-and-forget）
       execute: jest.fn().mockResolvedValue(undefined),
+      // abort-before-restart：空闲判死 stop-first 中止 stuck worker 会话（默认成功）
+      abort: jest.fn().mockResolvedValue(undefined),
     };
     sessionLifecycle = {
       bindSessionToWorker: jest.fn(),
@@ -1271,7 +1274,9 @@ describe('WorkerDispatcher', () => {
         '唯一持久化位置以【运行时工作目录】注入的实际路径为准',
       );
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('仅该目录重启后保留');
-      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('opts.persistentWorkDir');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain(
+        'opts.persistentWorkDir',
+      );
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('work-dir.util');
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('taskDirOf');
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('<WORK_DIR');
@@ -1301,7 +1306,9 @@ describe('WorkerDispatcher', () => {
       }
       // 【公开与归档】引用行已删：GLOBAL 不再提 submit，唯一详版在 ARTIFACT 段
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('vteam_submit_artifact');
-      expect(ARTIFACT_SUBMISSION_INSTRUCTION).toContain('vteam_submit_artifact');
+      expect(ARTIFACT_SUBMISSION_INSTRUCTION).toContain(
+        'vteam_submit_artifact',
+      );
       // P1：issue 完整版下沉为 ISSUE_FULL_INSTRUCTION（仅 product/tester/developer 注入），GLOBAL 只留一句版
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('【Issue协作】');
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('【Issue 管理】');
@@ -1381,7 +1388,9 @@ describe('WorkerDispatcher', () => {
       expect(HOSTED_CONFIRM_INSTRUCTION).toContain('仅主实例可调用');
       expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('禁止传递 taskId 参数');
       expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('tmm_ 前缀');
-      expect(ARTIFACT_SUBMISSION_INSTRUCTION).toContain('vteam_submit_artifact');
+      expect(ARTIFACT_SUBMISSION_INSTRUCTION).toContain(
+        'vteam_submit_artifact',
+      );
       expect(GROUP_TRIGGER_INSTRUCTION).toContain('vteam_group_post');
       expect(GROUP_TRIGGER_INSTRUCTION).toContain('自动归档为产出物');
     });
@@ -1575,7 +1584,11 @@ describe('WorkerDispatcher', () => {
       // 计划模式关闭时无新流程关键字泄漏，且与缺省调用逐字节一致
       // （注：裸词 question 不断言——主 Agent【托管模式】段含 question_confirm）
       expect(s2).toBe(s);
-      for (const kw of ['plan-creation', 'vteam_plan_review', '用 question 工具']) {
+      for (const kw of [
+        'plan-creation',
+        'vteam_plan_review',
+        '用 question 工具',
+      ]) {
         expect(s).not.toContain(kw);
         expect(s2).not.toContain(kw);
       }
@@ -1680,11 +1693,7 @@ describe('WorkerDispatcher', () => {
     });
 
     it('P0 条件注入：非主/缺省仅注协作指引一句，不教必 403 工具', () => {
-      for (const opts of [
-        undefined,
-        {},
-        { isMainAgent: false },
-      ] as const) {
+      for (const opts of [undefined, {}, { isMainAgent: false }] as const) {
         const s = buildSystemInstructions(agent, opts);
         expect(s).toContain(NON_MAIN_AGENT_NOTE);
         expect(s).toContain('状态流转/托管确认由主Agent操作，有事@主Agent');
@@ -3409,6 +3418,148 @@ describe('WorkerDispatcher', () => {
       );
       expect(JSON.stringify(errors)).not.toContain('处理超时（120s');
       jest.useRealTimers();
+    });
+  });
+
+  describe('空闲判死 abort-before-restart（stop-first 恢复链）', () => {
+    const idleDeadRow = (overrides: Record<string, unknown> = {}) => ({
+      status: 'running',
+      taskId: request.taskId,
+      teamId: 'tm_0000000001',
+      teamMemberId: 'tmm_0000000001',
+      agentId: 'a_product',
+      workerId: 'w_0000000001',
+      instanceRef: 'ses_0001',
+      ...overrides,
+    });
+    const idleDeadSetup = () => {
+      prisma.session.findUnique.mockResolvedValue(idleDeadRow());
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        capabilities: { baseUrl: 'http://w1:8080' },
+      });
+    };
+
+    it('plain idle 分支：先 abort（ref+ses_ id）再自动拉起，failed 标记不变', async () => {
+      idleDeadSetup();
+      workerClient.getMessages.mockResolvedValue([]);
+      const d = createDispatcher();
+      const restartSpy = jest
+        .spyOn(d as any, 'tryAutoRestart')
+        .mockResolvedValue(undefined);
+
+      await (d as any).markSessionIdleDead('s_0000000001');
+
+      expect(workerClient.abort).toHaveBeenCalledWith(
+        { id: 'w_0000000001', capabilities: { baseUrl: 'http://w1:8080' } },
+        'ses_0001',
+      );
+      expect(prisma.session.update).toHaveBeenCalledWith({
+        where: { id: 's_0000000001' },
+        data: { status: 'failed' },
+      });
+      expect(restartSpy).toHaveBeenCalledWith(
+        'tm_0000000001',
+        'tmm_0000000001',
+        request.taskId,
+      );
+      expect(workerClient.abort.mock.invocationCallOrder[0]).toBeLessThan(
+        restartSpy.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('abort 失败（reject）：仅记 warn，failed 标记 + 广播 + 自动拉起照常', async () => {
+      idleDeadSetup();
+      workerClient.getMessages.mockResolvedValue([]);
+      workerClient.abort.mockRejectedValueOnce(new Error('worker down'));
+      const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
+      const restartSpy = jest
+        .spyOn(d as any, 'tryAutoRestart')
+        .mockResolvedValue(undefined);
+
+      await (d as any).markSessionIdleDead('s_0000000001');
+
+      expect(workerClient.abort).toHaveBeenCalledTimes(1);
+      expect(prisma.session.update).toHaveBeenCalledWith({
+        where: { id: 's_0000000001' },
+        data: { status: 'failed' },
+      });
+      expect(errors).toEqual([
+        expect.objectContaining({ error: expect.stringMatching(/已判死/) }),
+      ]);
+      const agentError = realtime.broadcast.mock.calls.find(
+        (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
+      );
+      expect(agentError?.[1]).toEqual(
+        expect.objectContaining({ errorType: 'agent_idle_timeout' }),
+      );
+      expect(restartSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('无 workerId/instanceRef：跳过 abort（含 capabilities 查询），自动拉起照常', async () => {
+      prisma.session.findUnique.mockResolvedValue(
+        idleDeadRow({ workerId: null, instanceRef: null }),
+      );
+      workerClient.getMessages.mockResolvedValue([]);
+      const d = createDispatcher();
+      const restartSpy = jest
+        .spyOn(d as any, 'tryAutoRestart')
+        .mockResolvedValue(undefined);
+
+      await (d as any).markSessionIdleDead('s_0000000001');
+
+      expect(workerClient.abort).not.toHaveBeenCalled();
+      expect(prisma.worker.findUnique).not.toHaveBeenCalled();
+      expect(prisma.session.update).toHaveBeenCalledWith({
+        where: { id: 's_0000000001' },
+        data: { status: 'failed' },
+      });
+      expect(restartSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('quota 分支：中止 stuck 运行但不自动拉起，广播 quota_exceeded', async () => {
+      idleDeadSetup();
+      workerClient.getMessages.mockResolvedValue([
+        {
+          info: { role: 'assistant' },
+          parts: [
+            {
+              type: 'step-finish',
+              reason: 'error',
+              error: { message: 'insufficient quota, billing required' },
+            },
+          ],
+        },
+      ]);
+      const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
+      const restartSpy = jest
+        .spyOn(d as any, 'tryAutoRestart')
+        .mockResolvedValue(undefined);
+
+      await (d as any).markSessionIdleDead('s_0000000001');
+
+      expect(workerClient.abort).toHaveBeenCalledWith(
+        { id: 'w_0000000001', capabilities: { baseUrl: 'http://w1:8080' } },
+        'ses_0001',
+      );
+      expect(prisma.session.update).toHaveBeenCalledWith({
+        where: { id: 's_0000000001' },
+        data: { status: 'failed' },
+      });
+      expect(errors).toEqual([
+        expect.objectContaining({ error: expect.stringMatching(/额度不足/) }),
+      ]);
+      const agentError = realtime.broadcast.mock.calls.find(
+        (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
+      );
+      expect(agentError?.[1]).toEqual(
+        expect.objectContaining({ errorType: 'quota_exceeded' }),
+      );
+      expect(restartSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -5903,11 +6054,10 @@ describe('WorkerDispatcher', () => {
     it('opencode agent：成员选了 opencodeAgentName → execute 收到 agent 字段（透传给 opencode 内核执行）', async () => {
       // 两个 resolver（overrideModelId / opencodeAgentName）各查一次同表：
       // 按 select 字段返回，避免互相覆盖。
-      (prisma as any).teamMember.findFirst.mockImplementation(
-        async (q: any) =>
-          q?.select?.opencodeAgentName !== undefined
-            ? { opencodeAgentName: 'plan' }
-            : { overrideModelId: null },
+      (prisma as any).teamMember.findFirst.mockImplementation(async (q: any) =>
+        q?.select?.opencodeAgentName !== undefined
+          ? { opencodeAgentName: 'plan' }
+          : { overrideModelId: null },
       );
       const d = createDispatcher();
       await d.dispatch(
@@ -5958,11 +6108,10 @@ describe('WorkerDispatcher', () => {
         mainAgentMemberId: 'tmm_0000000001',
       });
       // 主成员行选了 plan agent（task.planMode 保持 false：单控件零附加逻辑）
-      (prisma as any).teamMember.findFirst.mockImplementation(
-        async (q: any) =>
-          q?.select?.opencodeAgentName !== undefined
-            ? { opencodeAgentName: 'plan' }
-            : { overrideModelId: null },
+      (prisma as any).teamMember.findFirst.mockImplementation(async (q: any) =>
+        q?.select?.opencodeAgentName !== undefined
+          ? { opencodeAgentName: 'plan' }
+          : { overrideModelId: null },
       );
       const d = createDispatcher();
       await d.dispatch(
@@ -5977,11 +6126,10 @@ describe('WorkerDispatcher', () => {
       (prisma as any).team.findUnique.mockResolvedValue({
         mainAgentMemberId: 'tmm_0000000001',
       });
-      (prisma as any).teamMember.findFirst.mockImplementation(
-        async (q: any) =>
-          q?.select?.opencodeAgentName !== undefined
-            ? { opencodeAgentName: 'build' }
-            : { overrideModelId: null },
+      (prisma as any).teamMember.findFirst.mockImplementation(async (q: any) =>
+        q?.select?.opencodeAgentName !== undefined
+          ? { opencodeAgentName: 'build' }
+          : { overrideModelId: null },
       );
       const d = createDispatcher();
       await d.dispatch(
@@ -6173,9 +6321,9 @@ describe('WorkerDispatcher', () => {
         const d = createDispatcher();
         await d.dispatch(withTask());
         const gated = execPayload();
-        expect(
-          Object.prototype.hasOwnProperty.call(gated, 'agent'),
-        ).toBe(false);
+        expect(Object.prototype.hasOwnProperty.call(gated, 'agent')).toBe(
+          false,
+        );
         // 同角色、无能力位字段的基线 payload 必须逐字节一致
         workerClient.execute.mockClear();
         prisma.worker.findUnique.mockResolvedValue({
@@ -6194,9 +6342,9 @@ describe('WorkerDispatcher', () => {
         const d = createDispatcher();
         await d.dispatch(withTask());
         const fallback = execPayload();
-        expect(
-          Object.prototype.hasOwnProperty.call(fallback, 'agent'),
-        ).toBe(false);
+        expect(Object.prototype.hasOwnProperty.call(fallback, 'agent')).toBe(
+          false,
+        );
         workerClient.execute.mockClear();
         prisma.worker.findUnique.mockResolvedValue({
           id: 'w_0000000001',
@@ -6473,7 +6621,9 @@ describe('WorkerDispatcher', () => {
       expect(prompt).toContain(TEAM_GROUP_TRIGGER_INSTRUCTION);
       expect(prompt).toContain('禁止传递 taskId 参数');
       expect(prompt).not.toContain(GROUP_TRIGGER_INSTRUCTION);
-      expect(prompt).not.toContain('vteam_chat_history / vteam_doclib / vteam_task_context');
+      expect(prompt).not.toContain(
+        'vteam_chat_history / vteam_doclib / vteam_task_context',
+      );
     });
 
     it('触发消息带图片附件 → execute 携带 attachments + prompt 追加图片指引', async () => {

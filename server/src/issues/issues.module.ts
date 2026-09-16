@@ -4,6 +4,7 @@ import { IssuesController } from './issues.controller';
 import { IssuesService } from './issues.service';
 import { ReviewRoundGateService } from './review-round-gate.service';
 import { ReviewRoundService } from './review-round.service';
+import { ReviewVerdictListener } from './review-verdict.listener';
 
 /**
  * Issue 模块（issue-management plan todo 2）。
@@ -20,7 +21,12 @@ import { ReviewRoundService } from './review-round.service';
   // ReviewRoundService（todo 6 串行写）+ ReviewRoundGateService（todo 7 收敛门）：
   // 纯账本/门裁决，不建 review_rounds 表；notifier 缺省 null（生产由调用方
   // 传入 WorkerDispatcher 作 ConvergenceNotifier，kind=wake 复用 todo 4 豁免路径）。
-  providers: [IssuesService, ReviewRoundService, ReviewRoundGateService],
+  providers: [
+    IssuesService,
+    ReviewRoundService,
+    ReviewRoundGateService,
+    ReviewVerdictListener,
+  ],
   exports: [IssuesService, ReviewRoundService, ReviewRoundGateService],
 })
 export class IssuesModule {}

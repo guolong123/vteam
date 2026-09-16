@@ -51,6 +51,7 @@ import { OpencodeServer } from './runtime/opencode-server';
 import { ExecServer } from './exec/exec-server';
 import { InjectReport, ResourceInjector } from './resources/injector';
 import { readOmoEnabled } from './resources/omo-enabled';
+import { seedOmoAgentModels } from './resources/omo-config';
 import {
   RestartCoordinator,
   RestartDecision,
@@ -882,6 +883,17 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       console.log(
         `[worker] 平台资源注入完成: ${report.skills.length} skills, ${report.tools.length} tools, ${report.mcpServers.length} mcp servers`,
       );
+      // omo 子代理模型种子：新数据卷无配置文件时写入内置默认（已有则跳过，用户页面/API 修改优先）
+      try {
+        const seeded = seedOmoAgentModels(config.workDir);
+        if (seeded) {
+          console.log(
+            `[worker] omo 模型种子已写入: ${Object.entries(seeded).map(([k, v]) => `${k}=${v}`).join(', ')}`,
+          );
+        }
+      } catch (err) {
+        console.warn(`[worker] omo 模型种子写入失败（不阻断启动）: ${(err as Error).message}`);
+      }
     } catch (err) {
       console.warn(
         `[worker] 平台资源注入失败（继续启动 serve，心跳命令可重拉）: ${(err as Error).message}`,

@@ -127,7 +127,8 @@ export class ChatController {
   @UseGuards(PermissionGuard)
   @RequirePermission('chats.view')
   @ApiOperation({
-    summary: '待回执查询（taskId/teamId/status 过滤 → {items, pending, total}）',
+    summary:
+      '待回执查询（taskId/teamId/status 过滤 → {items, pending, total}）',
   })
   @ApiQuery({
     name: 'taskId',

@@ -13,7 +13,10 @@ import { IsBoolean, IsObject, IsOptional } from 'class-validator';
 export class UpdateOmoConfigDto {
   @ApiProperty({
     description: 'agent 名 → 模型（providerID/modelID）；空串表示清除该覆盖',
-    example: { sisyphus: 'opencode/big-pickle', prometheus: 'opencode/big-pickle' },
+    example: {
+      sisyphus: 'opencode/big-pickle',
+      prometheus: 'opencode/big-pickle',
+    },
   })
   @IsObject()
   agents!: Record<string, string>;

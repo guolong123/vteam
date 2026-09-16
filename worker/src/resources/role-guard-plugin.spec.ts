@@ -69,6 +69,17 @@ function session(): SessionPolicy {
   return { agent: 'vteam-developer', dir: 'tasks/t_1' };
 }
 
+/** 指定 bashDeny 的 developer 文档（词边界 parity 用）。 */
+function bashRolesDoc(bashDeny: string[]): RolesDoc {
+  const base = rolesDoc();
+  return {
+    enabled: true,
+    roles: {
+      'vteam-developer': { ...base.roles['vteam-developer'], bashDeny },
+    },
+  };
+}
+
 /** vteam-plan 角色文档（task 精确开口 parity 用，与 developer 同形）。 */
 function planRolesDoc(): RolesDoc {
   const base = rolesDoc();
@@ -96,6 +107,18 @@ const PARITY_CASES: Array<{ name: string; params: EvaluateToolCallParams }> = [
   { name: 'edit 无目标路径 → 交层①放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'edit', args: {} } },
   { name: 'bash 命中硬化 deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'bash', args: { command: 'git push origin main' } } },
   { name: 'bash 未命中放行（交层①）', params: { rolesDoc: rolesDoc(), session: session(), tool: 'bash', args: { command: 'ls -la' } } },
+  { name: 'bash 词边界放行 mcp 路径（cp 不误伤）', params: { rolesDoc: bashRolesDoc(['cp']), session: session(), tool: 'bash', args: { command: 'ls -la /data/w/server/mcp/' } } },
+  { name: 'bash 词边界放行 python3 -c import mcp', params: { rolesDoc: bashRolesDoc(['cp', 'python -c']), session: session(), tool: 'bash', args: { command: 'python3 -c "import mcp"' } } },
+  { name: 'bash 词边界放行 firmware（rm 不误伤）', params: { rolesDoc: bashRolesDoc(['rm']), session: session(), tool: 'bash', args: { command: 'firmware flash' } } },
+  { name: 'bash 词边界放行 dispatch（patch 不误伤）', params: { rolesDoc: bashRolesDoc(['patch']), session: session(), tool: 'bash', args: { command: 'dispatch event' } } },
+  { name: 'bash 词边界真实 cp 拦截', params: { rolesDoc: bashRolesDoc(['cp']), session: session(), tool: 'bash', args: { command: 'cp a b' } } },
+  { name: 'bash 词边界真实 rm 拦截', params: { rolesDoc: bashRolesDoc(['rm']), session: session(), tool: 'bash', args: { command: 'rm -rf /' } } },
+  { name: 'bash 符号重定向 2> 拦截', params: { rolesDoc: bashRolesDoc(['>']), session: session(), tool: 'bash', args: { command: '2>err.log' } } },
+  { name: 'bash 2>/dev/null 精确放行（含 mcp 也不拦）', params: { rolesDoc: bashRolesDoc(['>', 'cp']), session: session(), tool: 'bash', args: { command: 'pip list 2>/dev/null | grep mcp' } } },
+  { name: 'bash 其它重定向仍拦截（2>/dev/null 洗不白）', params: { rolesDoc: bashRolesDoc(['>']), session: session(), tool: 'bash', args: { command: 'echo hi > out.txt 2>/dev/null' } } },
+  { name: 'bash 词边界真实 ln 拦截', params: { rolesDoc: bashRolesDoc(['ln']), session: session(), tool: 'bash', args: { command: 'ln -s a b' } } },
+  { name: 'bash 词边界管道 tee 拦截', params: { rolesDoc: bashRolesDoc(['tee']), session: session(), tool: 'bash', args: { command: 'cat f | tee log' } } },
+  { name: 'bash 合成 glob 回归拦截', params: { rolesDoc: bashRolesDoc(['rm *']), session: session(), tool: 'bash', args: { command: 'rm -rf /tmp/x' } } },
   { name: 'task 他角色恒 deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'task', args: { description: 'x' } } },
   { name: 'vteam-plan task + subagent vteam-plan 放行', params: { rolesDoc: planRolesDoc(), session: planSession(), tool: 'task', args: { subagent_type: 'vteam-plan' } } },
   { name: 'vteam-plan task + 他名 subagent deny', params: { rolesDoc: planRolesDoc(), session: planSession(), tool: 'task', args: { subagent_type: 'vteam-developer' } } },
@@ -107,13 +130,25 @@ const PARITY_CASES: Array<{ name: string; params: EvaluateToolCallParams }> = [
   { name: 'server-gated vteam_task_create 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_task_create', args: {} } },
   { name: 'server-gated vteam_plan_mode 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_plan_mode', args: {} } },
   { name: 'server-gated vteam_team_add_member 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_team_add_member', args: {} } },
+  { name: 'server-gated vteam_skill_create 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_skill_create', args: {} } },
   { name: 'vteam_plan_review 不再是 server-gated（deny）', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_plan_review', args: {} } },
   { name: 'question 通行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'question', args: {} } },
   { name: 'browser 未 allowlist deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'browser', args: {} } },
   { name: 'allowlist 内 MCP 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_submit_artifact', args: {} } },
   { name: 'allowlist 外 MCP deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_issue_create', args: {} } },
   { name: 'allowlist 内自定义 git 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'git_clone', args: {} } },
-  { name: '未知自定义工具 deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'jira-query', args: {} } },
+  { name: '未知外部工具放行（黑名单未命中）', params: { rolesDoc: rolesDoc(), session: session(), tool: 'acme-frobnicate-xyz', args: {} } },
+  { name: '外部 call_omo_agent 放行（黑名单未命中）', params: { rolesDoc: rolesDoc(), session: session(), tool: 'call_omo_agent', args: {} } },
+  { name: '外部只读 context7_resolve-library-id 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'context7_resolve-library-id', args: {} } },
+  { name: '外部只读 context7_query-docs 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'context7_query-docs', args: {} } },
+  { name: '外部只读 grep_app_searchGitHub 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'grep_app_searchGitHub', args: {} } },
+  { name: '外部只读 codegraph_codegraph_explore 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'codegraph_codegraph_explore', args: {} } },
+  { name: '外部写类 github_create_pr 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'github_create_pr', args: {} } },
+  { name: '外部写类 github_merge_pr 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'github_merge_pr', args: {} } },
+  { name: '命名空间守卫 vteam_unknown_tool deny', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_unknown_tool', args: {} } },
+  { name: '命名空间守卫 git_fetch 未列入 deny（含读指示器也不启发）', params: { rolesDoc: rolesDoc(), session: session(), tool: 'git_fetch', args: {} } },
+  { name: '外部写类 deny 通用转交（非首值兜底）', params: { rolesDoc: rolesDoc(), session: session(), tool: 'github_create_pr', args: {} } },
+  { name: '平台工具无精确键仍首值兜底', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_unknown_tool', args: {} } },
 ];
 
 describe('renderRoleGuardPlugin（渲染产物 spike）', () => {
@@ -142,13 +177,32 @@ describe('renderRoleGuardPlugin（渲染产物 spike）', () => {
     expect(renderRoleGuardPlugin()).toBe(renderRoleGuardPlugin());
   });
 
-  it('内联判定快照与 policy.ts parity（29 例矩阵逐字节一致）', () => {
+  it('内联判定快照与 policy.ts parity（矩阵逐字节一致）', () => {
     const snapshotEval = extractDecisionFn();
     for (const c of PARITY_CASES) {
       const expected = evaluateToolCall(c.params);
       const actual = snapshotEval(c.params);
       expect({ case: c.name, decision: actual }).toEqual({ case: c.name, decision: expected });
     }
+  });
+
+  it('外部工具一律放行，平台工具保持首值兜底', () => {
+    const snapshotEval = extractDecisionFn();
+    const external = snapshotEval({
+      rolesDoc: rolesDoc(),
+      session: session(),
+      tool: 'github_create_pr',
+      args: {},
+    }) as { action: string; message?: string };
+    expect(external.action).toBe('allow');
+    const platform = snapshotEval({
+      rolesDoc: rolesDoc(),
+      session: session(),
+      tool: 'vteam_unknown_tool',
+      args: {},
+    }) as { action: string; message?: string };
+    expect(platform.action).toBe('deny');
+    expect(platform.message).toContain('vteam-tester');
   });
 });
 

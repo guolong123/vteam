@@ -298,9 +298,7 @@ export const ISSUE_FULL_INSTRUCTION =
  * architect/project_manager/plan 及未知角色只收 GLOBAL 一句版。兼容中文角色名。
  */
 const ISSUE_DETAIL_ROLE_KEYS = new Set(['product', 'tester', 'developer']);
-export function roleNeedsIssueDetail(
-  role: string | null | undefined,
-): boolean {
+export function roleNeedsIssueDetail(role: string | null | undefined): boolean {
   if (!role) {
     return false;
   }
@@ -1270,10 +1268,10 @@ export class WorkerDispatcher
    * 统一返回契约（plan-review todo 3）：本方法内部返回保持 void（不组装
    * triggered——triggered 只在 notifyAgent 层组装）；可选 issueId 由 notifyAgent
    * 透传（派活归属 issue，缺省不阻断；todo 4 消费 issue 锁/去重）。
-    * 执行门禁（plan-review todo 4）：kind 缺省 execution；kind=execution 且任务
-    * 维度（taskId 非空）时要求计划状态为 executing——无行则经计划生命周期服务
-    * 兜底建行后再门禁，仍非 executing 即抛错（含“计划未放行”）；review/nudge/wake
-    * 及计划员目标（agentId=a_plan，计划工作永非执行）豁免；门禁读错/未装配即 fail-open 放行 + warn（永不转 fail-closed）。
+   * 执行门禁（plan-review todo 4）：kind 缺省 execution；kind=execution 且任务
+   * 维度（taskId 非空）时要求计划状态为 executing——无行则经计划生命周期服务
+   * 兜底建行后再门禁，仍非 executing 即抛错（含“计划未放行”）；review/nudge/wake
+   * 及计划员目标（agentId=a_plan，计划工作永非执行）豁免；门禁读错/未装配即 fail-open 放行 + warn（永不转 fail-closed）。
    * 计划表读经 PlanLifecycleService（ModuleRef 懒解析，避免 ChatModule 与
    * TasksModule 静态环；本文件永不直读计划表）。
    */
@@ -1300,10 +1298,11 @@ export class WorkerDispatcher
   }): Promise<void> {
     let teamId: string | null = null;
     let taskIdForDispatch: string | null = null;
+    let taskStatusForDispatch: string | null = null;
     if (input.taskId) {
       const taskRow = await (this.prisma as any).task.findUnique({
         where: { id: input.taskId },
-        select: { teamId: true },
+        select: { teamId: true, status: true },
       });
       teamId = (taskRow as any)?.teamId ?? null;
       if (!teamId) {
@@ -1312,6 +1311,7 @@ export class WorkerDispatcher
         );
       }
       taskIdForDispatch = input.taskId;
+      taskStatusForDispatch = (taskRow as any)?.status ?? null;
     } else if (input.teamId) {
       teamId = input.teamId;
     } else {
@@ -1321,8 +1321,23 @@ export class WorkerDispatcher
     }
     const kind: DispatchExecutionKind = input.kind ?? 'execution';
     if (kind === 'execution' && taskIdForDispatch) {
+      // 终态任务门禁：execution 派发绑定 completed/archived 任务即拒绝（零副作用，
+      // 位于计划门禁/worker 调用/回执记账之前）；review/nudge/wake 豁免（收尾流量），
+      // 缺行（行缺失语义归别处）与无 taskId 照旧放行。终态口径对齐 TASK_STATUS
+      // （terminal = completed + archived），先例见 tryAutoRestart 的 in_progress 前置。
+      if (
+        taskStatusForDispatch === 'completed' ||
+        taskStatusForDispatch === 'archived'
+      ) {
+        throw new Error(
+          `任务 ${taskIdForDispatch} 已终态终止 (terminal, status=${taskStatusForDispatch})：execution 派发已拒绝，请主 Agent 调用 task_create 创建新任务后再派发`,
+        );
+      }
       if (!(await this.isPlanRoleTarget(teamId, input.targetInstanceId))) {
-        await this.assertPlanExecutionAllowed(taskIdForDispatch, input.planHash ?? null);
+        await this.assertPlanExecutionAllowed(
+          taskIdForDispatch,
+          input.planHash ?? null,
+        );
       }
     }
     const ensured = await this.sessionLifecycle.ensureTeamSession(
@@ -1334,7 +1349,9 @@ export class WorkerDispatcher
       channelId: input.channelId,
       taskId: taskIdForDispatch ?? '',
       teamId,
-      ...(taskIdForDispatch ? { taskContext: { taskId: taskIdForDispatch } } : {}),
+      ...(taskIdForDispatch
+        ? { taskContext: { taskId: taskIdForDispatch } }
+        : {}),
       text: input.text,
       targets: [
         {
@@ -1405,9 +1422,7 @@ export class WorkerDispatcher
       if (actual) {
         const expected = await this.resolveFrozenPlanHash(taskId);
         if (isStalePlanHash(expected, actual)) {
-          throw new Error(
-            buildStalePlanHashHint(expected as string, actual),
-          );
+          throw new Error(buildStalePlanHashHint(expected as string, actual));
         }
       }
       return;
@@ -1433,7 +1448,9 @@ export class WorkerDispatcher
         select: { description: true },
       });
       const descriptions: Array<string | null | undefined> = Array.isArray(rows)
-        ? rows.map((row: { description?: string | null }) => row?.description ?? null)
+        ? rows.map(
+            (row: { description?: string | null }) => row?.description ?? null,
+          )
         : [];
       return selectFrozenPlanHash(descriptions);
     } catch (err) {
@@ -3453,9 +3470,7 @@ export class WorkerDispatcher
    * 任务计划模式开关（Task.planMode）。
    * 容错：查询失败不阻断分派，回退 false（同 resolveMemberOpencodeAgentName 的增强特性容错）。
    */
-  private async resolveTaskPlanMode(
-    taskId: string,
-  ): Promise<boolean> {
+  private async resolveTaskPlanMode(taskId: string): Promise<boolean> {
     const repo = (this.prisma as any).task;
     if (!repo || typeof repo.findUnique !== 'function') {
       return false;
@@ -3471,7 +3486,8 @@ export class WorkerDispatcher
     }
   }
 
-  private async resolveAgentModelId(agentId: string): Promise<string | null> {    let currentId: string | null = agentId;
+  private async resolveAgentModelId(agentId: string): Promise<string | null> {
+    let currentId: string | null = agentId;
     for (
       let depth = 0;
       currentId && depth < MAX_BASE_AGENT_CHAIN_DEPTH;
@@ -3675,6 +3691,9 @@ export class WorkerDispatcher
       }
       let forensicsError: string | undefined;
       let forensicsType = 'agent_idle_timeout';
+      // abort-before-restart：尸检 getMessages 与中止 abort 共用一次 capabilities 查询。
+      let abortRef: WorkerEndpointRef | null = null;
+      let abortInstanceRef: string | null = null;
       if (
         row.workerId &&
         row.instanceRef &&
@@ -3686,8 +3705,14 @@ export class WorkerDispatcher
             select: { capabilities: true },
           });
           if (workerRow) {
+            abortRef = {
+              id: row.workerId,
+              capabilities: workerRow.capabilities,
+            };
+            // instanceRef 即 opencode ses_ id（非平台 s_ id），原样透传 workerClient。
+            abortInstanceRef = row.instanceRef;
             const messages = await this.workerClient.getMessages(
-              { id: row.workerId, capabilities: workerRow.capabilities },
+              abortRef,
               row.instanceRef,
             );
             const errText = findError(messages);
@@ -3704,6 +3729,15 @@ export class WorkerDispatcher
       });
       this.failedSessions.add(sessionId);
       this.lastActivityAt.delete(sessionId);
+      // stop-first：best-effort 中止 worker 侧 stuck 执行，释放槽位并防止迟到完成
+      // 事件写入已失败会话；中止失败只记 warn，永不阻断后续恢复链。
+      if (abortRef && abortInstanceRef) {
+        await this.abortStuckWorkerSession(
+          abortRef,
+          abortInstanceRef,
+          sessionId,
+        );
+      }
       // Todo10 团队化：键/广播统一走团队 scope（任务仅归因透传给自动恢复门）。
       const teamId = row.teamId ?? null;
       const teamMemberId = row.teamMemberId ?? null;
@@ -3759,6 +3793,24 @@ export class WorkerDispatcher
     } catch (err) {
       this.logger.error(
         `session ${sessionId} 空闲判死失败: ${this.describeError(err)}`,
+      );
+    }
+  }
+
+  /**
+   * stop-first：空闲判死后 best-effort 中止 worker 侧 stuck 会话。
+   * 失败只记 warn、永不抛错，调用方恢复链（失败标记/广播/自动拉起）照常继续。
+   */
+  private async abortStuckWorkerSession(
+    workerRef: WorkerEndpointRef,
+    instanceRef: string,
+    sessionId: string,
+  ): Promise<void> {
+    try {
+      await this.workerClient.abort(workerRef, instanceRef);
+    } catch (err) {
+      this.logger.warn(
+        `session ${sessionId} 中止 worker 会话 ${instanceRef} 失败，按已失败继续恢复: ${this.describeError(err)}`,
       );
     }
   }

@@ -70,7 +70,9 @@ describe('review-round-ledger', () => {
 
   describe('computePlanHash', () => {
     it('sha1 前 8（与 planner-revise 落盘钩口径一致）', () => {
-      const { createHash } = jest.requireActual('crypto') as typeof import('crypto');
+      const { createHash } = jest.requireActual(
+        'crypto',
+      ) as typeof import('crypto');
       const content = '# plan\n\n- step 1\n';
       expect(computePlanHash(content)).toBe(
         createHash('sha1').update(content, 'utf8').digest('hex').slice(0, 8),
@@ -159,6 +161,99 @@ describe('review-round-ledger', () => {
         lines: 250,
         hash: 'eeeeeeee',
       });
+    });
+
+    it('升轮归档：outgoing received 折入 superseded（member/verdict/version 保留），既有 pending/superseded 不丢', () => {
+      const base = {
+        ...mergeLedger(BASE(), {
+          received: [
+            {
+              member: 'tmm_0000000012',
+              verdict: 'APPROVE',
+              msgId: 'm_540',
+              version: 'v0.3',
+            },
+            {
+              member: 'tmm_0000000009',
+              verdict: 'REJECT',
+              msgId: 'm_541',
+              version: 'v0.3',
+            },
+          ],
+        }),
+        pending: [
+          {
+            member: 'tmm_0000000010',
+            verdict: 'APPROVE',
+            msgId: 'm_9',
+            version: 'v0.3',
+            reason: 'pending-hash',
+          },
+        ],
+        superseded: [
+          {
+            member: 'tmm_0000000010',
+            verdict: 'REJECT',
+            msgId: 'm_510',
+            version: 'v0.2',
+          },
+        ],
+      } as Parameters<typeof mergeLedger>[0];
+      const up = mergeLedger(base, {
+        round: 3,
+        planVersion: { version: 'v0.4', lines: 250, hash: 'eeeeeeee' },
+      });
+      expect(up.round).toBe(3);
+      expect(up.received).toEqual({});
+      expect(up.pending).toHaveLength(1);
+      expect(up.pending?.[0]).toMatchObject({
+        member: 'tmm_0000000010',
+        msgId: 'm_9',
+      });
+      const archived = up.superseded ?? [];
+      expect(archived).toHaveLength(3);
+      expect(archived).toContainEqual({
+        member: 'tmm_0000000010',
+        verdict: 'REJECT',
+        msgId: 'm_510',
+        version: 'v0.2',
+      });
+      expect(archived).toContainEqual({
+        member: 'tmm_0000000012',
+        verdict: 'APPROVE',
+        msgId: 'm_540',
+        version: 'v0.3',
+      });
+      expect(archived).toContainEqual({
+        member: 'tmm_0000000009',
+        verdict: 'REJECT',
+        msgId: 'm_541',
+        version: 'v0.3',
+      });
+      expect(up.schemaVersion).toBe(1);
+    });
+
+    it('升轮去重：与既有 superseded 同 member+msgId 的 received 不重复归档', () => {
+      const base = {
+        ...BASE(),
+        received: {
+          tmm_0000000012: {
+            verdict: 'APPROVE',
+            msgId: 'm_540',
+            version: 'v0.3',
+          },
+        },
+        superseded: [
+          {
+            member: 'tmm_0000000012',
+            verdict: 'APPROVE',
+            msgId: 'm_540',
+            version: 'v0.3',
+          },
+        ],
+      } as unknown as Parameters<typeof mergeLedger>[0];
+      const up = mergeLedger(base, { round: 3 });
+      expect(up.superseded).toHaveLength(1);
     });
   });
 

@@ -5,14 +5,18 @@ import { MessageDeliveryService } from './message-delivery.service';
 import { ChatService } from '../chat/chat.service';
 import { QuestionsService } from '../questions/questions.service';
 import { MessageRegistryService } from './message-registry.service';
-import { SENDER_TYPE } from '../common/constants/event.constants';
+import {
+  SENDER_TYPE,
+  CHANNEL_TYPE,
+} from '../common/constants/event.constants';
 import { QUESTION_PENDING_TTL_MS } from '../questions/questions.constants';
 
 describe('MessageInboundService', () => {
   let service: MessageInboundService;
   let prisma: {
     messageChannel: { findUnique: jest.Mock; update: jest.Mock };
-    taskMessageChannel: { findMany: jest.Mock };
+    teamMessageChannel: { findMany: jest.Mock };
+    task: { findUnique: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
     agentQuestion: { findUnique: jest.Mock };
   };
@@ -33,6 +37,7 @@ describe('MessageInboundService', () => {
 
   const channelId = 'mc_0000000001';
   const taskId = 't_0000000001';
+  const teamId = 'tm_0000000001';
   const groupChannelId = 'c_0000000001';
 
   beforeEach(async () => {
@@ -41,8 +46,11 @@ describe('MessageInboundService', () => {
         findUnique: jest.fn(),
         update: jest.fn().mockResolvedValue({}),
       },
-      taskMessageChannel: {
+      teamMessageChannel: {
         findMany: jest.fn(),
+      },
+      task: {
+        findUnique: jest.fn(),
       },
       chatChannel: {
         findFirst: jest.fn(),
@@ -134,7 +142,7 @@ describe('MessageInboundService', () => {
     });
   });
 
-  describe('submitInbound post_message via TaskMessageChannel', () => {
+  describe('submitInbound post_message via TeamMessageChannel (team-scoped fan-out)', () => {
     const baseChannel = {
       id: channelId,
       name: 'ch',
@@ -144,13 +152,13 @@ describe('MessageInboundService', () => {
       enabled: true,
     };
 
-    it('creates external message in bound task_group channels (fan-out)', async () => {
+    it('creates external message in bound team_group channels (fan-out)', async () => {
       prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
-      prisma.taskMessageChannel.findMany.mockResolvedValue([{ taskId }]);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
       prisma.chatChannel.findFirst.mockResolvedValue({
         id: groupChannelId,
-        type: 'task_group',
-        taskId,
+        type: 'team_group',
+        teamId,
       });
       chatService.createMessage.mockResolvedValue({
         message: { id: 'm_1' },
@@ -161,14 +169,17 @@ describe('MessageInboundService', () => {
         { kind: 'post_message', text: 'hello', dedupKey: 'ext_1' } as any,
       ]);
 
-      expect(prisma.taskMessageChannel.findMany).toHaveBeenCalledWith({
+      expect(prisma.teamMessageChannel.findMany).toHaveBeenCalledWith({
         where: { messageChannelId: channelId },
-        select: { taskId: true },
+        select: { teamId: true },
       });
-      // dedupKey+taskId concatenation
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
+        where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+      });
+      // dedupKey+teamId concatenation (per-team dedup scope)
       expect(delivery.tryBeginIngest).toHaveBeenCalledWith(
         channelId,
-        'ext_1_' + taskId,
+        'ext_1_' + teamId,
       );
       expect(chatService.createMessage).toHaveBeenCalledWith(
         groupChannelId,
@@ -187,23 +198,37 @@ describe('MessageInboundService', () => {
       );
     });
 
-    it('fans out to multiple bound tasks', async () => {
+    it('fans out to multiple bound teams', async () => {
       prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
-      prisma.taskMessageChannel.findMany.mockResolvedValue([
-        { taskId: 't_1' },
-        { taskId: 't_2' },
+      prisma.teamMessageChannel.findMany.mockResolvedValue([
+        { teamId: 'tm_1' },
+        { teamId: 'tm_2' },
       ]);
-      prisma.chatChannel.findFirst
-        .mockResolvedValueOnce({ id: 'c_1', type: 'task_group', taskId: 't_1' })
-        .mockResolvedValueOnce({
-          id: 'c_2',
-          type: 'task_group',
-          taskId: 't_2',
-        });
+      prisma.chatChannel.findFirst.mockImplementation(async ({ where }: any) => {
+        if (where?.teamId === 'tm_1')
+          return { id: 'c_1', type: 'team_group', teamId: 'tm_1' };
+        if (where?.teamId === 'tm_2')
+          return { id: 'c_2', type: 'team_group', teamId: 'tm_2' };
+        return null;
+      });
 
       const res = await service.submitInbound(channelId, [
         { kind: 'post_message', text: 'hi', dedupKey: 'k1' } as any,
       ]);
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
+        where: { teamId: 'tm_1', type: CHANNEL_TYPE.team_group, deletedAt: null },
+      });
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
+        where: { teamId: 'tm_2', type: CHANNEL_TYPE.team_group, deletedAt: null },
+      });
+      expect(delivery.tryBeginIngest).toHaveBeenCalledWith(
+        channelId,
+        'k1_tm_1',
+      );
+      expect(delivery.tryBeginIngest).toHaveBeenCalledWith(
+        channelId,
+        'k1_tm_2',
+      );
       expect(chatService.createMessage).toHaveBeenCalledTimes(2);
       expect(chatService.createMessage).toHaveBeenNthCalledWith(
         1,
@@ -224,11 +249,11 @@ describe('MessageInboundService', () => {
 
     it('wecom directed: prefixes chat text with [WeCom:name] and stores wecom meta', async () => {
       prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
-      prisma.taskMessageChannel.findMany.mockResolvedValue([{ taskId }]);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
       prisma.chatChannel.findFirst.mockResolvedValue({
         id: groupChannelId,
-        type: 'task_group',
-        taskId,
+        type: 'team_group',
+        teamId,
       });
       chatService.createMessage.mockResolvedValue({
         message: { id: 'm_2' },
@@ -262,9 +287,9 @@ describe('MessageInboundService', () => {
       expect(res.results[0].ok).toBe(true);
     });
 
-    it('logs rejected when task_group channel missing', async () => {
+    it('logs rejected when team_group channel missing', async () => {
       prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
-      prisma.taskMessageChannel.findMany.mockResolvedValue([{ taskId }]);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
       prisma.chatChannel.findFirst.mockResolvedValue(null);
 
       const res = await service.submitInbound(channelId, [
@@ -276,25 +301,29 @@ describe('MessageInboundService', () => {
         'post_message',
         'rejected',
         expect.objectContaining({
-          error: expect.stringContaining('task_group'),
+          error: expect.stringContaining('team_group'),
         }),
       );
       expect(res.results[0].ok).toBe(false);
     });
 
-    it('skips duplicate ingest per task (dedupKey_taskId)', async () => {
+    it('skips duplicate ingest per team (dedupKey_teamId)', async () => {
       prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
-      prisma.taskMessageChannel.findMany.mockResolvedValue([{ taskId }]);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
       prisma.chatChannel.findFirst.mockResolvedValue({
         id: groupChannelId,
-        type: 'task_group',
-        taskId,
+        type: 'team_group',
+        teamId,
       });
       delivery.tryBeginIngest.mockResolvedValue({ duplicate: true });
 
       const res = await service.submitInbound(channelId, [
         { kind: 'post_message', text: 'hi', dedupKey: 'dup' } as any,
       ]);
+      expect(delivery.tryBeginIngest).toHaveBeenCalledWith(
+        channelId,
+        'dup_' + teamId,
+      );
       expect(chatService.createMessage).not.toHaveBeenCalled();
       expect(res.results[0].ok).toBe(false);
       expect(delivery.log).toHaveBeenCalledWith(
@@ -305,9 +334,9 @@ describe('MessageInboundService', () => {
       );
     });
 
-    it('logs skipped when no tasks bound', async () => {
+    it('logs skipped when no teams bound', async () => {
       prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
-      prisma.taskMessageChannel.findMany.mockResolvedValue([]);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([]);
 
       const res = await service.submitInbound(channelId, [
         { kind: 'post_message', text: 'hi' } as any,
@@ -317,7 +346,7 @@ describe('MessageInboundService', () => {
         expect.anything(),
         'skipped',
         expect.objectContaining({
-          error: expect.stringContaining('no tasks bound'),
+          error: expect.stringContaining('no teams bound'),
         }),
       );
       expect(res.results[0].ok).toBe(false);
@@ -357,25 +386,28 @@ describe('MessageInboundService', () => {
     it('wecom_aibot does NOT register bad stream correlation (adapter handles it)', async () => {
       const wecomChannel = { ...baseChannel, type: 'wecom_aibot' };
       prisma.messageChannel.findUnique.mockResolvedValue(wecomChannel);
-      prisma.taskMessageChannel.findMany.mockResolvedValue([{ taskId }]);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
       prisma.chatChannel.findFirst.mockResolvedValue({
         id: groupChannelId,
-        type: 'task_group',
-        taskId,
+        type: 'team_group',
+        teamId,
       });
       const mockAdapter = { registerStreamCorrelation: jest.fn() };
       registry.get.mockReturnValue(mockAdapter);
 
-      await service.submitInbound(channelId, [
+      const res = await service.submitInbound(channelId, [
         { kind: 'post_message', text: 'hi' } as any,
       ]);
       expect(mockAdapter.registerStreamCorrelation).not.toHaveBeenCalled();
+      // team-scoped routing actually ran (not short-circuited on 'no teams bound')
+      expect(chatService.createMessage).toHaveBeenCalledTimes(1);
+      expect(res.results[0].ok).toBe(true);
     });
 
     it('does not handle outbound', async () => {
       // post_message is inbound only; outbound kind should be rejected
       prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
-      prisma.taskMessageChannel.findMany.mockResolvedValue([{ taskId }]);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
       const res = await service.submitInbound(channelId, [
         { kind: 'unknown_kind' as any, text: 'hi' } as any,
       ]);
@@ -389,7 +421,7 @@ describe('MessageInboundService', () => {
     });
   });
 
-  describe('submitInbound card_action via TaskMessageChannel', () => {
+  describe('submitInbound card_action via team-scoped binding', () => {
     const baseChannel = {
       id: channelId,
       name: 'ch',
@@ -435,7 +467,11 @@ describe('MessageInboundService', () => {
     };
 
     beforeEach(() => {
-      prisma.taskMessageChannel.findMany.mockResolvedValue([{ taskId }]);
+      // Team-scoped binding: channel bound to teamId, and the question's
+      // task belongs to that bound team.
+      prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
+      prisma.task.findUnique.mockResolvedValue({ id: taskId, teamId });
+      prisma.chatChannel.findFirst.mockResolvedValue(null);
     });
 
     it('permission approve calls reply with once', async () => {
@@ -449,10 +485,14 @@ describe('MessageInboundService', () => {
           action: 'approve',
         } as any,
       ]);
+      expect(prisma.task.findUnique).toHaveBeenCalledWith({
+        where: { id: taskId },
+        select: { teamId: true },
+      });
       expect(questionsService.reply).toHaveBeenCalledWith(
         'aq_0000000001',
         { response: 'once' },
-        expect.any(String),
+        '__external__',
       );
       expect(res.results[0].ok).toBe(true);
     });
@@ -467,7 +507,7 @@ describe('MessageInboundService', () => {
       expect(questionsService.reply).toHaveBeenCalledWith(
         'aq_0000000001',
         { response: 'reject' },
-        expect.any(String),
+        '__external__',
       );
       expect(res.results[0].ok).toBe(true);
     });
@@ -486,7 +526,7 @@ describe('MessageInboundService', () => {
       expect(questionsService.reply).toHaveBeenCalledWith(
         'aq_0000000002',
         { answers: [['Approve']] },
-        expect.any(String),
+        '__external__',
       );
       expect(res.results[0].ok).toBe(true);
     });
@@ -515,10 +555,14 @@ describe('MessageInboundService', () => {
       );
     });
 
-    it('rejected when taskId not bound via TaskMessageChannel', async () => {
+    it('rejected when question team not bound (team mismatch)', async () => {
       prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
-      // bound taskId is t_0000000001, question belongs to t_other
-      prisma.taskMessageChannel.findMany.mockResolvedValue([{ taskId }]);
+      // bound team is tm_0000000001, question's task belongs to tm_other
+      prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_other',
+        teamId: 'tm_other',
+      });
       prisma.agentQuestion.findUnique.mockResolvedValue({
         ...pendingPermission,
         taskId: 't_other',
@@ -538,7 +582,7 @@ describe('MessageInboundService', () => {
         'card_action',
         'rejected',
         expect.objectContaining({
-          error: expect.stringContaining('task mismatch'),
+          error: expect.stringContaining('team mismatch'),
         }),
       );
     });
@@ -560,6 +604,12 @@ describe('MessageInboundService', () => {
       ]);
       expect(questionsService.reply).not.toHaveBeenCalled();
       expect(res.results[0].ok).toBe(false);
+      expect(delivery.log).toHaveBeenCalledWith(
+        expect.any(String),
+        'card_action',
+        'skipped',
+        expect.objectContaining({ error: 'expired' }),
+      );
     });
 
     it('rejected when permission action invalid', async () => {
@@ -575,6 +625,14 @@ describe('MessageInboundService', () => {
       ]);
       expect(questionsService.reply).not.toHaveBeenCalled();
       expect(res.results[0].ok).toBe(false);
+      expect(delivery.log).toHaveBeenCalledWith(
+        expect.any(String),
+        'card_action',
+        'rejected',
+        expect.objectContaining({
+          error: expect.stringContaining('invalid action'),
+        }),
+      );
     });
 
     it('rejected when question not found', async () => {
@@ -586,14 +644,21 @@ describe('MessageInboundService', () => {
       ]);
       expect(questionsService.reply).not.toHaveBeenCalled();
       expect(res.results[0].ok).toBe(false);
+      expect(delivery.log).toHaveBeenCalledWith(
+        expect.any(String),
+        'card_action',
+        'rejected',
+        expect.objectContaining({ error: 'question not found' }),
+      );
     });
 
-    it('allowed when taskId matches bound channel', async () => {
+    it('allowed when question team matches bound team', async () => {
       prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
-      prisma.taskMessageChannel.findMany.mockResolvedValue([
-        { taskId: 't_1' },
-        { taskId: 't_2' },
+      prisma.teamMessageChannel.findMany.mockResolvedValue([
+        { teamId: 'tm_1' },
+        { teamId: 'tm_2' },
       ]);
+      prisma.task.findUnique.mockResolvedValue({ id: 't_2', teamId: 'tm_2' });
       prisma.agentQuestion.findUnique.mockResolvedValue({
         ...pendingPermission,
         taskId: 't_2',
@@ -605,7 +670,11 @@ describe('MessageInboundService', () => {
           action: 'approve',
         } as any,
       ]);
-      expect(questionsService.reply).toHaveBeenCalled();
+      expect(questionsService.reply).toHaveBeenCalledWith(
+        'aq_0000000001',
+        { response: 'once' },
+        '__external__',
+      );
       expect(res.results[0].ok).toBe(true);
     });
   });

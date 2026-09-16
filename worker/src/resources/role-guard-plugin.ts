@@ -93,9 +93,9 @@ const SERVER_GATED_TOOLS = new Set([
   "vteam_task_create",
   "vteam_plan_mode",
   "vteam_team_add_member",
+  "vteam_skill_create",
 ]);
 const BUILTIN_PASSTHROUGH = new Set(["question", "plan_exit", "skill"]);
-
 function evaluateToolCall(params) {
   const rolesDoc = params.rolesDoc;
   const session = params.session;
@@ -142,9 +142,11 @@ function evaluateToolCall(params) {
     }
     const rawPatterns = Array.isArray(policy.bashDeny) ? policy.bashDeny : [];
     const patterns = rawPatterns.filter(function (p) { return typeof p === "string"; });
-    return matchesBashDeny(command, patterns)
-      ? denyWithCorrection(agent, tool, policy.correction)
-      : { action: "allow" };
+    const hit = findBashDenyMatch(command, patterns);
+    if (!hit) {
+      return { action: "allow" };
+    }
+    return { action: "deny", message: buildDenyMessage(agent, tool, policy.correction) + "（命中 shell 硬化规则：" + hit + "）" };
   }
   if (tool === "task" && agent === "vteam-plan" && isPlainObject(args) && args.subagent_type === "vteam-plan") {
     return { action: "allow" };
@@ -162,6 +164,9 @@ function evaluateToolCall(params) {
     return isToolAllowed(policy.tools, tool)
       ? { action: "allow" }
       : denyWithCorrection(agent, tool, policy.correction);
+  }
+  if (!tool.startsWith("vteam_") && !tool.startsWith("git_")) {
+    return { action: "allow" };
   }
   return isToolAllowed(policy.tools, tool)
     ? { action: "allow" }
@@ -185,16 +190,42 @@ function wildcardMatch(input, pattern) {
 }
 
 function matchesBashDeny(command, patterns) {
-  const lower = command.toLowerCase();
-  return patterns.some(function (pattern) {
+  return findBashDenyMatch(command, patterns) !== null;
+}
+
+function findBashDenyMatch(command, patterns) {
+  const scrubbed = command.replace(/2>\\s*\\/dev\\/null/gi, "");
+  const lower = scrubbed.toLowerCase();
+  for (const pattern of patterns) {
     if (typeof pattern !== "string" || pattern.length === 0) {
-      return false;
+      continue;
     }
     if (pattern.includes("*") || pattern.includes("?")) {
-      return wildcardMatch(lower, pattern.toLowerCase());
+      if (wildcardMatch(lower, pattern.toLowerCase())) {
+        return pattern;
+      }
+      continue;
     }
-    return lower.includes(pattern.toLowerCase());
-  });
+    const lowered = pattern.toLowerCase();
+    if (/^[a-z\\s-]+$/.test(lowered)) {
+      let source = "";
+      for (const ch of lowered) {
+        if (/[.+^\${}()|[\]\\]/.test(ch)) {
+          source += "\\\\" + ch;
+        } else {
+          source += ch;
+        }
+      }
+      if (new RegExp("(?:^|[^a-z0-9_])" + source + "(?:$|[^a-z0-9_])").test(lower)) {
+        return pattern;
+      }
+      continue;
+    }
+    if (lower.includes(lowered)) {
+      return pattern;
+    }
+  }
+  return null;
 }
 
 function parsePatchFilePaths(patchText) {
@@ -227,7 +258,8 @@ function parsePatchFilePaths(patchText) {
 
 function buildDenyMessage(agent, tool, correction) {
   const scope = correction && typeof correction.scopeSummary === "string" ? correction.scopeSummary : "";
-  const handoffTarget = resolveHandoffTarget(correction ? correction.handoff : undefined, tool);
+  const resolved = resolveHandoffTarget(correction ? correction.handoff : undefined, tool);
+  const handoffTarget = resolved.length > 0 ? resolved : "对应职责角色";
   const template =
     correction && typeof correction.denyTemplate === "string" && correction.denyTemplate.length > 0
       ? correction.denyTemplate
@@ -331,6 +363,16 @@ function pickString(record, keys) {
   return null;
 }
 
+function isPlatformToolForHandoff(tool) {
+  if (typeof tool !== "string" || tool.length === 0) {
+    return false;
+  }
+  if (tool.startsWith("vteam_") || tool.startsWith("git_")) {
+    return true;
+  }
+  return READ_TOOLS.has(tool) || EDIT_TOOLS.has(tool) || TASK_TOOLS.has(tool) || SERVER_GATED_TOOLS.has(tool) || BUILTIN_PASSTHROUGH.has(tool) || tool === "browser" || tool === "bash";
+}
+
 function resolveHandoffTarget(handoff, tool) {
   if (!isPlainObject(handoff)) {
     return "";
@@ -339,6 +381,9 @@ function resolveHandoffTarget(handoff, tool) {
   const byTool = record[tool];
   if (typeof byTool === "string" && byTool.length > 0) {
     return byTool;
+  }
+  if (!isPlatformToolForHandoff(tool)) {
+    return "";
   }
   for (const value of Object.values(record)) {
     if (typeof value === "string" && value.length > 0) {

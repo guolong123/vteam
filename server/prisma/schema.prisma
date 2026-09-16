@@ -377,6 +377,40 @@ model MessageReceipt {
 }
 
 // ==================================================================
+// 通用定时器域（generic-timer：tmr_ 前缀主键；status/kind 字符串枚举 +
+// 应用层常量 timers/timer.service.ts TIMER_STATUS，双库兼容——不声明
+// Prisma enum；id 列均为逻辑关联（不建 FK），不碰其他表）
+//
+// 用途：任何功能无需自持时钟即可安排未来触发——schedule(kind, fireAt,
+// payload, dedupKey) 落 pending 行，ticker 到期 claim 后按 kind 分发到
+// 注册 handler。首个消费者：receipt-timeout auto-nudge（`receipt_nudge`
+// kind，由 chat 域注册）；第二个计划消费者：定时/cron 型任务
+// （`task_trigger` kind，由 tasks 域拥有）。
+// dedupKey 输入规范 = `kind:scope:id`（如 `receipt_nudge:team_1:mr_2`），
+// 永不 NULL（nullable unique 在部分 DB 下破坏幂等）；调用方显式传 key。
+//
+// 扩展合同（cron/repeat 后续任务）：one-shot `fireAt` 先行；重复触发后续
+// 经新 nullable 列（如 cronExpr/repeatIntervalMs/nextFireAt）+ tasks 域
+// 拥有的 `task_trigger` kind handler 实现——本表与 TimerService 零改动。
+// ==================================================================
+
+model Timer {
+  id             String    @id // tmr_ 前缀，服务层 IdGeneratorService 生成
+  kind           String // handler 注册键（如 receipt_nudge/task_trigger）
+  status         String    @default("pending") // pending|firing|fired|cancelled|failed
+  fireAt         DateTime  @map("fire_at")
+  payload        Json // plain JSON，handler 入参 { id, kind, payload }
+  dedupKey       String    @unique @map("dedup_key") // `kind:scope:id`，幂等重排键
+  attempts       Int       @default(0) @map("attempts")
+  lastError      String?   @map("last_error") // handler 抛错/无 handler 时记录
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, fireAt], map: "idx_timers_status_fire_at")
+  @@map("timers")
+}
+
+// ==================================================================
 // 产出物域
 // ==================================================================
 

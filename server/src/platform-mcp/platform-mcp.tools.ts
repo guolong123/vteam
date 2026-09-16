@@ -64,7 +64,9 @@ const chatHistorySchema = z
     sinceId: z
       .string()
       .optional()
-      .describe('游标：仅返回 id 大于该值的消息（正序续拉；不传游标默认取最近分页）'),
+      .describe(
+        '游标：仅返回 id 大于该值的消息（正序续拉；不传游标默认取最近分页）',
+      ),
     beforeId: z
       .string()
       .optional()
@@ -172,7 +174,9 @@ const notifyAgentSchema = z
     force: z
       .preprocess((v) => v === true || v === 'true', z.boolean())
       .optional()
-      .describe('强行绕过计划门禁/issue 锁（须同时给非空 forceReason 留审计行，否则仍被拦）'),
+      .describe(
+        '强行绕过计划门禁/issue 锁（须同时给非空 forceReason 留审计行，否则仍被拦）',
+      ),
     forceReason: z
       .string()
       .optional()
@@ -182,6 +186,12 @@ const notifyAgentSchema = z
       .optional()
       .describe(
         '调用方携带的计划哈希（planVersion.hash sha1-8 口径；执行认哈希：与冻结正式版哈希不一致即 reason=plan-gated 被拦并提示两边短哈希；缺省不查哈希）',
+      ),
+    receiptTimeoutMin: z
+      .number()
+      .optional()
+      .describe(
+        '回执超时分钟数（缺省 10，对齐被 @ 后 10 分钟回执规则；范围 1-1440，非法输入服务端回落缺省；仅 execution 派发记账并排平台自动催办 timer，review/nudge/wake 永不记账）',
       ),
   })
   .refine((d) => !!d.taskId || !!d.teamId, {
@@ -498,7 +508,9 @@ export const planModeSchema = z.object({
   selfInstanceId: z
     .string()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-  enabled: z.boolean().describe('计划模式开关（true=开启，false=关闭/切回直接执行）'),
+  enabled: z
+    .boolean()
+    .describe('计划模式开关（true=开启，false=关闭/切回直接执行）'),
   agentName: z
     .string()
     .optional()

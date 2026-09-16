@@ -14,6 +14,7 @@ import { TasksService } from './tasks.service';
 import { PlanLifecycleService } from './plan-lifecycle.service';
 import { PlanStepsService } from './plan-steps.service';
 import { PlanDocsService } from './plan-docs.service';
+import { PlanReviewWiring } from './plan-review-wiring';
 
 /**
  * 任务模块（09 篇 §3.4 Tasks；13 篇 §4.1 创建）。
@@ -50,6 +51,7 @@ import { PlanDocsService } from './plan-docs.service';
     PlanLifecycleService,
     PlanStepsService,
     PlanDocsService,
+    PlanReviewWiring,
     TaskProgressionScheduler,
     TeamMembershipGuard,
     PermissionGuard,

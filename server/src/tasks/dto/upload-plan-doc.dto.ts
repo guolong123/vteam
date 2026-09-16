@@ -24,7 +24,8 @@ export class UploadPlanDocDto {
   @IsString()
   @MaxLength(128)
   @Matches(PLAN_DOC_NAME_PATTERN, {
-    message: 'name 必须是 .md 文件名（字母数字开头，仅含字母数字/下划线/点/连字符）',
+    message:
+      'name 必须是 .md 文件名（字母数字开头，仅含字母数字/下划线/点/连字符）',
   })
   name!: string;
 

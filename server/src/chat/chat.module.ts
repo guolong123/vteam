@@ -2,11 +2,13 @@ import { Module } from '@nestjs/common';
 import { ArtifactsModule } from '../artifacts/artifacts.module';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { TimersModule } from '../timers/timers.module';
 import { WorkersModule } from '../workers/workers.module';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 import { MessageDispatcher } from './message-dispatcher';
 import { MessageReceiptsService } from './message-receipts.service';
+import { ReceiptNudgeHandler } from './receipt-nudge.handler';
 import { WorkerDispatcher } from './worker-dispatcher';
 
 /**
@@ -27,11 +29,12 @@ import { WorkerDispatcher } from './worker-dispatcher';
  *   单一 WorkerDispatcher 实例（T9 接线/看门狗仅一份），两个 token 指向它。
  */
 @Module({
-  imports: [RealtimeModule, WorkersModule, ArtifactsModule],
+  imports: [RealtimeModule, WorkersModule, ArtifactsModule, TimersModule],
   controllers: [ChatController],
   providers: [
     ChatService,
     MessageReceiptsService,
+    ReceiptNudgeHandler,
     PermissionGuard,
     WorkerDispatcher,
     { provide: MessageDispatcher, useExisting: WorkerDispatcher },

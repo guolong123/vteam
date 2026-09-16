@@ -258,7 +258,11 @@ describe('TasksController', () => {
     });
 
     it('GET tasks/:id/plan-steps 转发 id 到 planStepsService（计划 Tab 步骤区）', async () => {
-      const planSteps = { listPlanSteps: jest.fn().mockResolvedValue({ steps: [], workerId: null, degraded: true }) };
+      const planSteps = {
+        listPlanSteps: jest
+          .fn()
+          .mockResolvedValue({ steps: [], workerId: null, degraded: true }),
+      };
       (controller as any).planStepsService = planSteps;
 
       const out = await controller.listPlanSteps('t_1');
@@ -286,9 +290,11 @@ describe('TasksController', () => {
 
     it('POST tasks/:id/plan-docs 只把 name/content 透传（directory 由服务端定位，不由前端指定）', async () => {
       const planDocs = {
-        writePlanDoc: jest
-          .fn()
-          .mockResolvedValue({ name: 'up.md', updatedAt: 'x', directory: '/d' }),
+        writePlanDoc: jest.fn().mockResolvedValue({
+          name: 'up.md',
+          updatedAt: 'x',
+          directory: '/d',
+        }),
       };
       (controller as any).planDocsService = planDocs;
 
@@ -308,23 +314,35 @@ describe('TasksController', () => {
       const planDocs = {
         writePlanDoc: jest
           .fn()
-          .mockRejectedValue(new Error('未定位到可用的 worker（团队无主 Agent / 无会话 / worker 离线）')),
+          .mockRejectedValue(
+            new Error(
+              '未定位到可用的 worker（团队无主 Agent / 无会话 / worker 离线）',
+            ),
+          ),
       };
       (controller as any).planDocsService = planDocs;
 
       await expect(
-        controller.uploadPlanDoc('t_1', { name: 'a.md', content: 'x' } as UploadPlanDocDto),
+        controller.uploadPlanDoc('t_1', {
+          name: 'a.md',
+          content: 'x',
+        } as UploadPlanDocDto),
       ).rejects.toThrow(ServiceUnavailableException);
     });
 
     it('POST tasks/:id/plan-docs 其他错误原样抛出（如 worker 侧 400 不伪装成 503）', async () => {
       const planDocs = {
-        writePlanDoc: jest.fn().mockRejectedValue(new Error('plan-file HTTP 400: name 非法')),
+        writePlanDoc: jest
+          .fn()
+          .mockRejectedValue(new Error('plan-file HTTP 400: name 非法')),
       };
       (controller as any).planDocsService = planDocs;
 
       await expect(
-        controller.uploadPlanDoc('t_1', { name: 'a.md', content: 'x' } as UploadPlanDocDto),
+        controller.uploadPlanDoc('t_1', {
+          name: 'a.md',
+          content: 'x',
+        } as UploadPlanDocDto),
       ).rejects.toThrow(/name 非法/);
     });
 
@@ -520,7 +538,10 @@ describe('TasksController', () => {
 
     it('UploadPlanDocDto：合法 .md 通过（与 worker PLAN_DOC_NAME_RE 对齐）', async () => {
       expect(
-        await errorsOf(UploadPlanDocDto, { name: 'plan-v1.2.md', content: '# 正文' }),
+        await errorsOf(UploadPlanDocDto, {
+          name: 'plan-v1.2.md',
+          content: '# 正文',
+        }),
       ).toHaveLength(0);
       expect(
         await errorsOf(UploadPlanDocDto, { name: 'a.md', content: 'x' }),
@@ -546,7 +567,9 @@ describe('TasksController', () => {
     });
 
     it('UploadPlanDocDto：content 缺省/非字符串/空串 → 拒绝（不允许落空文件）', async () => {
-      expect(await errorsOf(UploadPlanDocDto, { name: 'a.md' })).not.toHaveLength(0);
+      expect(
+        await errorsOf(UploadPlanDocDto, { name: 'a.md' }),
+      ).not.toHaveLength(0);
       expect(
         await errorsOf(UploadPlanDocDto, { name: 'a.md', content: 123 }),
       ).not.toHaveLength(0);

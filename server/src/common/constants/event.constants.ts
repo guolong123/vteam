@@ -35,10 +35,11 @@ export const EVENT_TYPES = {
   RECEIPT_EXPIRED: 'receipt.expired',
   ROUND_COMPLETE: 'round.complete',
   ROUND_STALE: 'round.stale',
-  // plan.status.* 后缀与 PLAN_LIFECYCLE_STATUS 六态一一对应
+  // plan.status.* 后缀与 PLAN_LIFECYCLE_STATUS 七态一一对应
   //（tasks/plan-lifecycle.service.ts；event.constants.spec.ts 断言同步）。
   PLAN_STATUS_DRAFT: 'plan.status.draft',
   PLAN_STATUS_REVIEWING: 'plan.status.reviewing',
+  PLAN_STATUS_PENDING_FINAL: 'plan.status.pending_final',
   PLAN_STATUS_APPROVED: 'plan.status.approved',
   PLAN_STATUS_REJECTED: 'plan.status.rejected',
   PLAN_STATUS_EXECUTING: 'plan.status.executing',

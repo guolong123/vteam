@@ -1,5 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { MESSAGE_STATUS, SENDER_TYPE } from '../common/constants/event.constants';
+import {
+  MESSAGE_STATUS,
+  SENDER_TYPE,
+} from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -39,7 +42,10 @@ describe('PlatformMcpService notifyAgent 哈希门禁（todo 3）', () => {
   };
   let idGen: { nextId: jest.Mock };
   let realtime: { broadcast: jest.Mock };
-  let workerDispatcher: { dispatchAgentMention: jest.Mock; isAgentExecuting: jest.Mock };
+  let workerDispatcher: {
+    dispatchAgentMention: jest.Mock;
+    isAgentExecuting: jest.Mock;
+  };
   let planLifecycle: { getStatus: jest.Mock; autoEnsureRow: jest.Mock };
 
   const taskId = 't_0000000001';
@@ -80,7 +86,10 @@ describe('PlatformMcpService notifyAgent 哈希门禁（todo 3）', () => {
     };
     idGen = { nextId: jest.fn() };
     realtime = { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
-    workerDispatcher = { dispatchAgentMention: jest.fn().mockResolvedValue(undefined), isAgentExecuting: jest.fn().mockReturnValue(null) };
+    workerDispatcher = {
+      dispatchAgentMention: jest.fn().mockResolvedValue(undefined),
+      isAgentExecuting: jest.fn().mockReturnValue(null),
+    };
     planLifecycle = { getStatus: jest.fn(), autoEnsureRow: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -108,15 +117,20 @@ describe('PlatformMcpService notifyAgent 哈希门禁（todo 3）', () => {
 
     service = module.get(PlatformMcpService);
     jest
-      .spyOn((service as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .spyOn(
+        (service as unknown as { logger: { warn: jest.Mock } }).logger,
+        'warn',
+      )
       .mockImplementation((() => undefined) as unknown as jest.Mock);
 
-    prisma.task.findUnique.mockImplementation((args: { where: { id?: string } }) => {
-      if (args.where.id === taskId) {
-        return Promise.resolve({ teamId: 'tm_1' });
-      }
-      return Promise.resolve(null);
-    });
+    prisma.task.findUnique.mockImplementation(
+      (args: { where: { id?: string } }) => {
+        if (args.where.id === taskId) {
+          return Promise.resolve({ teamId: 'tm_1' });
+        }
+        return Promise.resolve(null);
+      },
+    );
     prisma.session.findFirst.mockResolvedValue({
       id: 's_1',
       agentId: 'a_sender',
@@ -138,12 +152,17 @@ describe('PlatformMcpService notifyAgent 哈希门禁（todo 3）', () => {
     });
     prisma.issue.findUnique.mockResolvedValue(null);
     prisma.messageReceipt.findFirst.mockResolvedValue(null);
-    prisma.issue.findMany.mockResolvedValue([{ description: frozenDescription }]);
+    prisma.issue.findMany.mockResolvedValue([
+      { description: frozenDescription },
+    ]);
     planLifecycle.getStatus.mockResolvedValue('executing');
   });
 
   it('过期哈希被拦：triggered=false + reason=plan-gated + hint 含两边短哈希', async () => {
-    const result = await service.notifyAgent(ctx, { ...baseArgs, planHash: STALE_HASH });
+    const result = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      planHash: STALE_HASH,
+    });
 
     expect(result.triggered).toBe(false);
     expect(result.reason).toBe('plan-gated');
@@ -154,7 +173,10 @@ describe('PlatformMcpService notifyAgent 哈希门禁（todo 3）', () => {
   });
 
   it('哈希匹配 → 放行透传', async () => {
-    const result = await service.notifyAgent(ctx, { ...baseArgs, planHash: FROZEN_HASH });
+    const result = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      planHash: FROZEN_HASH,
+    });
 
     expect(result.triggered).toBe(true);
     expect(result.reason).toBe('ok');
@@ -173,7 +195,10 @@ describe('PlatformMcpService notifyAgent 哈希门禁（todo 3）', () => {
   it('非 executing 态 + 哈希匹配 → 仍按状态门禁被拦（放行面不变）', async () => {
     planLifecycle.getStatus.mockResolvedValue('approved');
 
-    const result = await service.notifyAgent(ctx, { ...baseArgs, planHash: FROZEN_HASH });
+    const result = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      planHash: FROZEN_HASH,
+    });
 
     expect(result.triggered).toBe(false);
     expect(result.reason).toBe('plan-gated');
@@ -181,8 +206,8 @@ describe('PlatformMcpService notifyAgent 哈希门禁（todo 3）', () => {
   });
 
   it('过期哈希 + force=true/原因 → 绕过并写审计行（不因哈希新增限制）', async () => {
-    prisma.messageReceipt.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
-      Promise.resolve(data),
+    prisma.messageReceipt.create.mockImplementation(
+      ({ data }: { data: Record<string, unknown> }) => Promise.resolve(data),
     );
 
     const result = await service.notifyAgent(ctx, {
@@ -203,7 +228,10 @@ describe('PlatformMcpService notifyAgent 哈希门禁（todo 3）', () => {
   it('账本读错 → fail-open 放行（永不转 fail-closed）', async () => {
     prisma.issue.findMany.mockRejectedValue(new Error('db down'));
 
-    const result = await service.notifyAgent(ctx, { ...baseArgs, planHash: STALE_HASH });
+    const result = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      planHash: STALE_HASH,
+    });
 
     expect(result.triggered).toBe(true);
     expect(result.reason).toBe('ok');

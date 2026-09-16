@@ -528,6 +528,12 @@ export class TeamsService implements OnModuleInit {
           where: { taskId: { in: taskIds } },
         });
         await tx.message.deleteMany({ where: { taskId: { in: taskIds } } });
+        // sessions.team_member_key 为 task_id NULL 时物化的生成列（uk 唯一）：
+        // 先删本团队任务会话（否则 taskId 置空后与已存在的团队级会话键冲突 P2002），
+        // 再对他团队残留行保持原解绑语义（键内嵌各自 team_id，不冲突）。
+        await tx.session.deleteMany({
+          where: { taskId: { in: taskIds }, teamId: id },
+        });
         await tx.session.updateMany({
           where: { taskId: { in: taskIds } },
           data: { taskId: null },
@@ -826,7 +832,8 @@ export class TeamsService implements OnModuleInit {
     const data: any = {};
     if (dto.alias !== undefined) data.alias = dto.alias?.trim() || null;
     if (dto.workDir !== undefined) data.workDir = dto.workDir?.trim() || null;
-    if (dto.overrideModelId !== undefined) data.overrideModelId = dto.overrideModelId?.trim() || null;
+    if (dto.overrideModelId !== undefined)
+      data.overrideModelId = dto.overrideModelId?.trim() || null;
     if (dto.opencodeAgentName !== undefined) {
       // 空串 → null（清除选择，回 opencode 默认 agent）；非空 → 弱校验后落库。
       // 弱校验：worker 可能离线，无法实时核对，故仅在取得清单时告警、不阻断写入

@@ -40,7 +40,10 @@ export function isStalePlanHash(
  * 过期拦截精确 hint（逐字锁定：单测断言全等，改一字即红）。
  * 必须同时命名期望/实际短哈希（todo 3 验收：提示期望/实际短哈希）。
  */
-export function buildStalePlanHashHint(expected: string, actual: string): string {
+export function buildStalePlanHashHint(
+  expected: string,
+  actual: string,
+): string {
   return `计划哈希已过期：期望 #${expected}（冻结正式版），实际 #${actual}（请求携带）；请基于冻结版重新确认后携带新哈希重派`;
 }
 
@@ -55,7 +58,8 @@ export function selectFrozenPlanHash(
   let bestRound = -1;
   let bestHash: string | null = null;
   for (const description of descriptions) {
-    let ledger: { round?: unknown; planVersion?: { hash?: unknown } } | null = null;
+    let ledger: { round?: unknown; planVersion?: { hash?: unknown } } | null =
+      null;
     try {
       ledger = parseLedger(description);
     } catch {

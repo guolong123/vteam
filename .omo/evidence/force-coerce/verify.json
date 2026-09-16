@@ -1,0 +1,30 @@
+{
+  "production_line": "z.preprocess((v) => v === true || v === \"true\", z.boolean()).optional()",
+  "production_verified_present_once": true,
+  "spec_file": "server/src/platform-mcp/platform-mcp.service.spec.ts",
+  "spec_cases": {
+    "true->true": true,
+    "string-true->true": true,
+    "string-false->false": true,
+    "1->false": true,
+    "yes->false": true,
+    "missing->undefined": true
+  },
+  "jest": {
+    "suites": 5,
+    "tests": 265,
+    "status": "passed"
+  },
+  "tsc": "clean",
+  "docker": {
+    "build": "server only",
+    "status": "healthy"
+  },
+  "live": {
+    "login": "admin ok",
+    "plan_endpoint": "GET /api/v1/tasks/t_0000000002/plan",
+    "http": 200,
+    "plan_status": "draft",
+    "plan_id": "pl_0000000001"
+  }
+}

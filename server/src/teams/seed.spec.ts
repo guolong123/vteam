@@ -3,6 +3,8 @@ import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { TeamsService } from './teams.service';
+import { WorkerClient } from '../workers/worker.client';
+import { WorkersService } from '../workers/workers.service';
 
 /**
  * Todo 15 回归：种子 idGen 续号跳过非数字后缀 id。
@@ -57,6 +59,8 @@ describe('TeamsService seed续号（Todo 15：跳过非数字后缀 id）', () =
         { provide: PrismaService, useValue: buildPrisma(rowsByTable) },
         { provide: IdGeneratorService, useValue: idGen },
         { provide: RealtimeService, useValue: { broadcast: jest.fn() } },
+        { provide: WorkerClient, useValue: { listAgents: jest.fn().mockResolvedValue([]) } },
+        { provide: WorkersService, useValue: { assignWorker: jest.fn().mockResolvedValue(null) } },
       ],
     }).compile();
     service = module.get<TeamsService>(TeamsService);

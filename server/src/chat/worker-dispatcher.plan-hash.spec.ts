@@ -88,13 +88,19 @@ describe('WorkerDispatcher dispatchAgentMention 哈希门禁（todo 3）', () =>
 
     const d = createDispatcher();
     jest
-      .spyOn((d as unknown as { logger: { warn: (...a: unknown[]) => void } }).logger, 'warn')
+      .spyOn(
+        (d as unknown as { logger: { warn: (...a: unknown[]) => void } })
+          .logger,
+        'warn',
+      )
       .mockImplementation(() => undefined);
   });
 
   it('过期哈希 → 抛错同时命名期望/实际短哈希，不调 dispatch', async () => {
     const d = createDispatcher();
-    const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+    const dispatchSpy = jest
+      .spyOn(d, 'dispatch')
+      .mockResolvedValue({ replies: [] });
 
     const err = await d
       .dispatchAgentMention({ ...input, planHash: STALE_HASH })
@@ -107,7 +113,9 @@ describe('WorkerDispatcher dispatchAgentMention 哈希门禁（todo 3）', () =>
 
   it('哈希匹配 → 放行', async () => {
     const d = createDispatcher();
-    const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+    const dispatchSpy = jest
+      .spyOn(d, 'dispatch')
+      .mockResolvedValue({ replies: [] });
 
     await d.dispatchAgentMention({ ...input, planHash: FROZEN_HASH });
 
@@ -116,7 +124,9 @@ describe('WorkerDispatcher dispatchAgentMention 哈希门禁（todo 3）', () =>
 
   it('未携带 planHash → 原行为（executing 放行，不读账本）', async () => {
     const d = createDispatcher();
-    const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+    const dispatchSpy = jest
+      .spyOn(d, 'dispatch')
+      .mockResolvedValue({ replies: [] });
 
     await d.dispatchAgentMention(input);
 
@@ -127,7 +137,9 @@ describe('WorkerDispatcher dispatchAgentMention 哈希门禁（todo 3）', () =>
   it('账本读错 → fail-open 放行', async () => {
     prisma.issue.findMany.mockRejectedValue(new Error('db down'));
     const d = createDispatcher();
-    const dispatchSpy = jest.spyOn(d, 'dispatch').mockResolvedValue({ replies: [] });
+    const dispatchSpy = jest
+      .spyOn(d, 'dispatch')
+      .mockResolvedValue({ replies: [] });
 
     await d.dispatchAgentMention({ ...input, planHash: STALE_HASH });
 

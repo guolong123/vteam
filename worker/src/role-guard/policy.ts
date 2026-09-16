@@ -19,9 +19,10 @@
  *        `args.subagent_type === 'vteam-plan'` 时 `task` 放行；`execute` 恒 deny）。
  *      - 内置通行集 `question|plan_exit|skill` → allow；`browser` 仅当列入
  *        角色 `tools` allowlist 才 allow。
- *      - 其余未知/自定义/MCP 工具（真实名，如 `vteam_<action>`、`git_clone`）
- *        → 角色 `tools` allowlist（`allow`/`ask` 放行），未列出即 deny。
- *        **默认拒绝只覆盖未知/自定义/MCP，不覆盖内置通行集。**
+  *      - 其余未知/自定义/MCP 工具 → 先按命名空间分流：`vteam_`/`git_` 前缀仍走
+  *        角色 `tools` allowlist（`allow`/`ask` 放行，未列出即 deny）；
+  *        其余外部工具（第三方 MCP）一律放行（用户决策：未知外部默认允许）。
+  *        平台命名空间白名单与上述拒绝分支不变；外部调用审计靠 serve 工具日志。
  *   5) 纠正文案：有 `correction.denyTemplate` 则做占位符替换，否则用默认格式。
  *
  * 约束（worker 独立进程铁律）：
@@ -105,6 +106,7 @@ const SERVER_GATED_TOOLS = new Set([
   'vteam_task_create',
   'vteam_plan_mode',
   'vteam_team_add_member',
+  'vteam_skill_create',
 ]);
 
 /**
@@ -173,9 +175,15 @@ export function evaluateToolCall(params: EvaluateToolCallParams): GuardDecision 
     const patterns = Array.isArray(policy.bashDeny)
       ? policy.bashDeny.filter((p): p is string => typeof p === 'string')
       : [];
-    return matchesBashDeny(command, patterns)
-      ? denyWithCorrection(agent, tool, policy.correction)
-      : { action: 'allow' };
+    const hit = findBashDenyMatch(command, patterns);
+    if (!hit) {
+      return { action: 'allow' };
+    }
+    // 命中规则名追加进文案：被拦方知道为什么（模板本身不动）。
+    return {
+      action: 'deny',
+      message: `${buildDenyMessage(agent, tool, policy.correction)}（命中 shell 硬化规则：${hit}）`,
+    };
   }
   if (
     tool === 'task' &&
@@ -199,7 +207,12 @@ export function evaluateToolCall(params: EvaluateToolCallParams): GuardDecision 
       ? { action: 'allow' }
       : denyWithCorrection(agent, tool, policy.correction);
   }
-  // 其余未知/自定义/MCP 工具（真实名）：allowlist 默认拒绝。
+  // 其余未知/自定义/MCP 工具：先按命名空间分流 —— vteam_/git_ 走 allowlist；
+  // 其余外部工具（第三方 MCP）一律放行（用户决策：未知外部默认允许，不拒绝；
+  // 审计靠 opencode serve 的工具调用日志；平台命名空间白名单与上述拒绝分支不变）。
+  if (!tool.startsWith('vteam_') && !tool.startsWith('git_')) {
+    return { action: 'allow' };
+  }
   return isToolAllowed(policy.tools, tool)
     ? { action: 'allow' }
     : denyWithCorrection(agent, tool, policy.correction);
@@ -226,20 +239,58 @@ export function wildcardMatch(input: string, pattern: string): boolean {
 }
 
 /**
- * bash 硬化匹配：与服务端 `ROLE_BASH_DENY_PATTERNS` 语义对齐——纯字符串条目做
- * 大小写不敏感的子串匹配；含 `*`/`?` 的条目按 glob（大小写不敏感）匹配。
+ * bash 硬化匹配：与服务端 `ROLE_BASH_DENY_PATTERNS` 语义对齐——仅含字母/空格/
+ * 连字符的纯字符串条目做大小写不敏感的词边界匹配（前后字符须为起止或非
+ * `[a-z0-9_]`；如 `rm` 拦截 `rm -rf /` 但放行 `firmware`）；纯符号条目
+ * （如 `>`）仍做大小写不敏感的子串匹配；含 `*`/`?` 的条目按 glob
+ * （大小写不敏感）匹配。
+ * 匹配前先剔除无害的 `2>/dev/null`（stderr 黑洞，只能往空设备写，不可能落
+ * 文件；命令里若还带别的 `>` 仍会被拦，白名单洗不白）。
  */
 export function matchesBashDeny(command: string, patterns: readonly string[]): boolean {
-  const lower = command.toLowerCase();
-  return patterns.some((pattern) => {
+  return findBashDenyMatch(command, patterns) !== null;
+}
+
+/**
+ * 返回命中的第一条硬化规则原文（按 patterns 顺序），未命中返回 null。
+ * 调用方（bash 分支）把规则名追加进纠正文案，让被拦方知道为什么。
+ */
+export function findBashDenyMatch(
+  command: string,
+  patterns: readonly string[],
+): string | null {
+  const scrubbed = command.replace(/2>\s*\/dev\/null/gi, '');
+  const lower = scrubbed.toLowerCase();
+  for (const pattern of patterns) {
     if (typeof pattern !== 'string' || pattern.length === 0) {
-      return false;
+      continue;
     }
     if (pattern.includes('*') || pattern.includes('?')) {
-      return wildcardMatch(lower, pattern.toLowerCase());
+      if (wildcardMatch(lower, pattern.toLowerCase())) {
+        return pattern;
+      }
+      continue;
     }
-    return lower.includes(pattern.toLowerCase());
-  });
+    const lowered = pattern.toLowerCase();
+    if (/^[a-z\s-]+$/.test(lowered)) {
+      let source = '';
+      for (const ch of lowered) {
+        if (/[.+^${}()|[\]\\]/.test(ch)) {
+          source += `\\${ch}`;
+        } else {
+          source += ch;
+        }
+      }
+      if (new RegExp(`(?:^|[^a-z0-9_])${source}(?:$|[^a-z0-9_])`).test(lower)) {
+        return pattern;
+      }
+      continue;
+    }
+    if (lower.includes(lowered)) {
+      return pattern;
+    }
+  }
+  return null;
 }
 
 /**
@@ -285,7 +336,8 @@ export function buildDenyMessage(
   correction?: RolePolicy['correction'] | null,
 ): string {
   const scope = typeof correction?.scopeSummary === 'string' ? correction.scopeSummary : '';
-  const handoffTarget = resolveHandoffTarget(correction?.handoff, tool);
+  const resolved = resolveHandoffTarget(correction?.handoff, tool);
+  const handoffTarget = resolved.length > 0 ? resolved : '对应职责角色';
   const template =
     typeof correction?.denyTemplate === 'string' && correction.denyTemplate.length > 0
       ? correction.denyTemplate
@@ -410,7 +462,23 @@ function pickString(record: Record<string, unknown>, keys: string[]): string | n
   return null;
 }
 
-/** 转交目标：优先同名工具键，否则 handoff 首个非空值，否则空串（模板占位符落空）。 */
+/** 平台工具判定（handoff 首值兜底仅限此类）：`vteam_`/`git_` 前缀或已知内置/task/browser 名。 */
+function isPlatformToolForHandoff(tool: string): boolean {
+  if (tool.startsWith('vteam_') || tool.startsWith('git_')) {
+    return true;
+  }
+  return (
+    READ_TOOLS.has(tool) ||
+    EDIT_TOOLS.has(tool) ||
+    TASK_TOOLS.has(tool) ||
+    SERVER_GATED_TOOLS.has(tool) ||
+    BUILTIN_PASSTHROUGH.has(tool) ||
+    tool === 'browser' ||
+    tool === 'bash'
+  );
+}
+
+/** 转交目标：优先同名工具键；平台工具无精确命中时用 handoff 首个非空值兜底；外部工具无精确命中返回空串（调用方以通用短语填充，避免误转交）。 */
 function resolveHandoffTarget(handoff: unknown, tool: string): string {
   if (!isPlainObject(handoff)) {
     return '';
@@ -419,6 +487,9 @@ function resolveHandoffTarget(handoff: unknown, tool: string): string {
   const byTool = record[tool];
   if (typeof byTool === 'string' && byTool.length > 0) {
     return byTool;
+  }
+  if (!isPlatformToolForHandoff(tool)) {
+    return '';
   }
   for (const value of Object.values(record)) {
     if (typeof value === 'string' && value.length > 0) {

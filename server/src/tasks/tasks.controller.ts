@@ -196,7 +196,9 @@ export class TasksController {
   @Get('tasks/:id/plan-docs')
   @UseGuards(PermissionGuard)
   @RequirePermission('tasks.view')
-  @ApiOperation({ summary: '计划文档列表（任务目录 .opencode/plans 只读同步）' })
+  @ApiOperation({
+    summary: '计划文档列表（任务目录 .opencode/plans 只读同步）',
+  })
   listPlanDocs(@Param('id') id: string) {
     return this.planDocsService.listPlanDocs(id);
   }
@@ -361,7 +363,10 @@ export class TasksController {
   @Post('tasks/:id/plan/confirm')
   @UseGuards(PermissionGuard)
   @RequirePermission('tasks.edit')
-  @ApiOperation({ summary: '用户确认门（定稿 finalize / 开始执行 confirm 幂等 / 打回 draft / 修订重评 revise）' })
+  @ApiOperation({
+    summary:
+      '用户确认门（定稿 finalize / 开始执行 confirm 幂等 / 打回 draft / 修订重评 revise）',
+  })
   confirmPlan(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -422,7 +427,11 @@ export class TasksController {
       plan,
       status: (plan as { status?: string } | null)?.status ?? null,
       source: 'db' as const,
-      fileDocs: { displayOnly: true, count: fileCount, degraded: fileDocsDegraded },
+      fileDocs: {
+        displayOnly: true,
+        count: fileCount,
+        degraded: fileDocsDegraded,
+      },
       ...(diverged ? { warning: PLAN_FILE_DISPLAY_ONLY_WARNING } : {}),
     };
   }

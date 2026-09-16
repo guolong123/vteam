@@ -207,7 +207,7 @@ const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   issues: { title: "Issue 管理", subtitle: "任务内 issue 协作与状态流转" },
   agents: { title: "Agent 管理", subtitle: "配置角色、技能与权限" },
   workers: { title: "Worker 节点", subtitle: "查看与管理 Worker 节点" },
-  models: { title: "模型管理", subtitle: "模型目录 / Provider 凭证管理" },
+  models: { title: "模型管理", subtitle: "Provider 凭证与模型管理" },
   "git-repos": { title: "仓库管理", subtitle: "git 仓库凭证与 Agent 授权" },
   skills: { title: "技能与工具", subtitle: "管理技能库与工具注册" },
   integrations: { title: "集成渠道", subtitle: "外部渠道双向集成（企微智能机器人 + 通用 Webhook）" },

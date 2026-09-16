@@ -13,7 +13,6 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import { TASK_STATUS } from '../common/constants/task.constants';
 import { MODEL_ERRORS } from '../models/models.constants';
 import { ModelsService } from '../models/models.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -508,10 +507,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 仓库凭证下发（唯一化分发入口，凭证面=worker 级）。
-   * - 活跃 agent 判定：团队成员归属团队当前任务未终态（completed/archived，
-   *   沿用 tasks 模块 TASK_STATUS 常量）——worker 单容器承载多任务多 agent，按活跃
-   *   团队任务关联过滤，避免向已结束任务的 agent 下发凭证；
-   * - 收集这些 agent 被授权且未吊销的 repoUrl 集合 → 过滤未吊销 GitCredential →
+   * - 授权口径：静态配置（Agent 模板绑定的未吊销 GitRepoGrant，直连未吊销 GitRepo），
+   *   与团队任务生命周期无关——仓库授权创建时团队可能尚无当前任务，任务完成/归档后
+   *   授权依然有效，故不得按团队当前任务状态过滤；
+   * - 收集全部被授权且未吊销的 repoUrl 集合 → 过滤未吊销 GitCredential →
    *   解密 key 明文打包 GitCredentialsPayload → 对每个目标 worker enqueueCommand
    *   （**查库 orderBy repoUrl asc 保证幂等对比稳定**）；
    * - 目标 worker：targetWorkerIds 非空 → 定向；空 → 在线 worker（status != offline）；
@@ -531,7 +530,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     if (workerIds.length === 0) {
       return 0;
     }
-    const repoUrls = await this.resolveWorkerActiveRepoUrls();
+    const repoUrls = await this.resolveAuthorizedRepoUrls();
     const credentials = await this.buildGitCredentialsPayload(repoUrls);
     if (credentials === null) {
       // 从未配置任何 git 凭证 → 无命令可下发（对齐模型凭据「无未吊销凭据跳过」语义）
@@ -558,7 +557,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 仓库凭证回放（注册/重注册、offline→online 心跳恢复时调用，仿 replayModelCredentials）。
-   * 定向到单个 worker 复用 dispatchGitCredentials 的活跃 agent 过滤打包逻辑；
+   * 定向到单个 worker 复用 dispatchGitCredentials 的静态授权打包逻辑；
    * 失败不阻断注册/心跳，只打 warn。
    */
   async replayGitCredentials(workerId: string): Promise<void> {
@@ -572,31 +571,14 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * 活跃 agent 授权仓库解析（dispatch/replay 复用，凭证池分离后）：
-   * ① 团队成员（TeamMember）归属团队当前任务未终态（currentTask 非 completed/archived，
-   *   session-unification 后任务实例快照表已删除，活跃口径改由团队维度等价界定）→ 活跃 agent 集合；
-   * ② 这些 agent 的未吊销 GitRepoGrant(repoId) → repoId → 最高权限映射；
-   * ③ GitRepo(repoId→repoUrl) 转换为 repoUrl→permission，供 build 阶段按 repoUrl 过滤。
+   * 授权仓库解析（dispatch/replay 复用，凭证池分离后）：
+   * ① 全部未吊销 GitRepoGrant（静态授权，不查团队/任务状态）→ repoId → 最高权限映射；
+   * ② GitRepo(repoId→repoUrl，仅未吊销）转换为 repoUrl→permission，供 build 阶段按 repoUrl 过滤。
    * 返回空 Map → 无任何授权仓库（打包结果为 credentials=[]，仍下发清 worker 侧条目）。
    */
-  private async resolveWorkerActiveRepoUrls(): Promise<Map<string, string>> {
-    const activeMembers = await this.prisma.teamMember.findMany({
-      where: {
-        team: {
-          currentTask: {
-            status: { notIn: [TASK_STATUS.completed, TASK_STATUS.archived] },
-          },
-        },
-      },
-      select: { agentId: true },
-      distinct: ['agentId'],
-    });
-    if (activeMembers.length === 0) {
-      return new Map();
-    }
-    const agentIds = activeMembers.map((m) => m.agentId);
+  private async resolveAuthorizedRepoUrls(): Promise<Map<string, string>> {
     const grants = await this.prisma.gitRepoGrant.findMany({
-      where: { agentId: { in: agentIds }, revokedAt: null },
+      where: { revokedAt: null },
       select: { repoId: true, permission: true },
     });
     // 同一仓库多 agent 授权时取最高权限（write > read）
@@ -882,7 +864,8 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
   /** JSON 标量（驱动可能给 number/string/BigInt）→ number；非法/缺省回退 fallback。 */
   private jsonScalarToNumber(value: unknown, fallback: number): number {
     if (value === null || value === undefined) return fallback;
-    if (typeof value === 'number') return Number.isFinite(value) ? value : fallback;
+    if (typeof value === 'number')
+      return Number.isFinite(value) ? value : fallback;
     if (typeof value === 'bigint') return Number(value);
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;

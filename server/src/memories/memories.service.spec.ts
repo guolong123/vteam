@@ -392,11 +392,7 @@ describe('MemoriesService', () => {
       prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
       prisma.memory.update.mockResolvedValue({ id: 'me_0000000001' });
 
-      await service.update(
-        'me_0000000001',
-        { tags: ['复盘'] },
-        { id: 'u_1' },
-      );
+      await service.update('me_0000000001', { tags: ['复盘'] }, { id: 'u_1' });
 
       expect(prisma.memory.update).toHaveBeenCalledWith({
         where: { id: 'me_0000000001' },

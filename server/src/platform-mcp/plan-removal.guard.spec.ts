@@ -56,9 +56,11 @@ function grepSource(pattern: RegExp): string[] {
 describe('防回流：vteam 自造 plan 域已下线（改由 opencode 原生 agent 承担）', () => {
   it('plans 模块目录不存在（plans.service / plans.controller / plan.constants 等）', () => {
     expect(fs.existsSync(path.join(SRC_ROOT, 'plans'))).toBe(false);
-    expect(fs.existsSync(path.join(SRC_ROOT, 'platform-mcp', 'plan-quality.guard.ts'))).toBe(
-      false,
-    );
+    expect(
+      fs.existsSync(
+        path.join(SRC_ROOT, 'platform-mcp', 'plan-quality.guard.ts'),
+      ),
+    ).toBe(false);
   });
 
   it('不存在对已删除 plan 模块/常量的 import', () => {
@@ -125,7 +127,9 @@ describe('防回流：vteam 自造 plan 域已下线（改由 opencode 原生 ag
       path.join(SRC_ROOT, 'artifacts', 'artifacts.constants.ts'),
       'utf8',
     );
-    expect(decl).toMatch(/ARTIFACT_TYPES\s*=\s*\[\s*'text'\s*,\s*'doc'\s*,\s*'file'\s*\]/);
+    expect(decl).toMatch(
+      /ARTIFACT_TYPES\s*=\s*\[\s*'text'\s*,\s*'doc'\s*,\s*'file'\s*\]/,
+    );
   });
 
   it('计划提示词只指向 .opencode/plans/ 文件（不再教模型提交 type:"plan"）', () => {

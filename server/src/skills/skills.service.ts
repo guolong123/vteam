@@ -389,7 +389,9 @@ export class SkillsService implements OnModuleInit {
   }
 
   /** fileMeta 旧值读作普通对象（null/数组/标量 → 空对象；update/rollback 透传上传文件字段用）。 */
-  private readFileMetaObject(value: Prisma.JsonValue | null): Prisma.JsonObject {
+  private readFileMetaObject(
+    value: Prisma.JsonValue | null,
+  ): Prisma.JsonObject {
     if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
       return value;
     }

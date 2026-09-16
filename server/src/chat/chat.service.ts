@@ -845,7 +845,7 @@ export class ChatService {
     // 误走 task-mode 分派：任务快照会话 + 回复落群聊，DM processing 悬空）。
     // dtoTaskId 亦忽略（私聊无任务分区语义；DM 页从不发送 taskId）。
     // F-B 降级时同样置空（归档任务 id 不再分区/分派）。
-    let effectiveTaskId: string | null = archivedDegraded
+    const effectiveTaskId: string | null = archivedDegraded
       ? null
       : isTeamPrivate
         ? null

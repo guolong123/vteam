@@ -59,9 +59,7 @@ export const THROTTLE_EXEMPT_KINDS: readonly string[] = [
 ];
 
 /** 指定 kind 是否免节流（null/undefined/空串一律不免，走外部派发预算）。 */
-export function isThrottleExemptKind(
-  kind: string | null | undefined,
-): boolean {
+export function isThrottleExemptKind(kind: string | null | undefined): boolean {
   if (!kind) return false;
   return THROTTLE_EXEMPT_KINDS.includes(kind);
 }
@@ -84,7 +82,9 @@ export function pairKeyOf(a: string, b: string): string {
  * 内容是否含团队级 fan-out 标记（agent-originated `@all` 等）。
  * 命中 → 调用方不得展开为触发（display-only：落库 + 广播保留）。
  */
-export function containsTeamWideMention(content: string | null | undefined): boolean {
+export function containsTeamWideMention(
+  content: string | null | undefined,
+): boolean {
   if (!content || !content.includes('@')) return false;
   return TEAM_WIDE_MARKERS.some((m) => content.includes(m));
 }

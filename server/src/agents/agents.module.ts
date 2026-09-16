@@ -19,7 +19,12 @@ import { AgentsService } from './agents.service';
  * PrismaService + Reflector，本模块注册供编译期解析。
  */
 @Module({
-  imports: [RealtimeModule, WorkersModule, ModelsModule, ExecutionPoliciesModule],
+  imports: [
+    RealtimeModule,
+    WorkersModule,
+    ModelsModule,
+    ExecutionPoliciesModule,
+  ],
   controllers: [AgentsController],
   providers: [AgentsService, PermissionGuard],
 })

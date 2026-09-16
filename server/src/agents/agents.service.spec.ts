@@ -167,13 +167,15 @@ describe('AgentsService', () => {
       // role 命中内置边界时走 ROLE_BOUNDARIES 派生回退；create 回显 data 行。
       executionPolicy: {
         findUnique: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockImplementation(
-          async ({ data }: { data: Record<string, unknown> }) => ({
-            ...data,
-            createdAt: new Date('2026-09-14T00:00:00Z'),
-            updatedAt: new Date('2026-09-14T00:00:00Z'),
-          }),
-        ),
+        create: jest
+          .fn()
+          .mockImplementation(
+            async ({ data }: { data: Record<string, unknown> }) => ({
+              ...data,
+              createdAt: new Date('2026-09-14T00:00:00Z'),
+              updatedAt: new Date('2026-09-14T00:00:00Z'),
+            }),
+          ),
       },
       // listOpencodeAgents / getAvailableModels 需读 worker.capabilities 解析 exec 基址
       worker: { findUnique: jest.fn().mockResolvedValue(null) },
@@ -181,9 +183,7 @@ describe('AgentsService', () => {
     };
     executionPolicyService = {
       resolveManyByAgents: jest.fn(
-        async (
-          agents: { policyId?: string | null; role?: string | null }[],
-        ) =>
+        async (agents: { policyId?: string | null; role?: string | null }[]) =>
           agents.map((a) => {
             const key = a.policyId ?? (a.role ? `ep_${a.role}` : null);
             if (
@@ -199,7 +199,12 @@ describe('AgentsService', () => {
               return null;
             }
             const agentName = a.role ? `vteam-${a.role}` : 'vteam-plan';
-            const boundary = (ROLE_BOUNDARIES as Record<string, { toolAllows?: Record<string, 'allow' | 'ask'> }>)[agentName];
+            const boundary = (
+              ROLE_BOUNDARIES as Record<
+                string,
+                { toolAllows?: Record<string, 'allow' | 'ask'> }
+              >
+            )[agentName];
             return {
               policyId: key,
               policyName: `${key}-name`,
@@ -299,9 +304,12 @@ describe('AgentsService', () => {
         { policyId: 'ep_developer', role: 'developer' },
         { policyId: 'ep_tester', role: 'tester' },
       ]);
-      expect(
-        result.items.map((i) => i.effectivePermission?.policyId),
-      ).toEqual(['ep_product', 'ep_architect', 'ep_developer', 'ep_tester']);
+      expect(result.items.map((i) => i.effectivePermission?.policyId)).toEqual([
+        'ep_product',
+        'ep_architect',
+        'ep_developer',
+        'ep_tester',
+      ]);
     });
 
     it('未绑定策略的行 → effectivePermission=null', async () => {
@@ -1038,7 +1046,12 @@ describe('AgentsService', () => {
     it('getOmoConfig：无在线 worker → degraded=true（不抛错）', async () => {
       workersService.assignWorker.mockResolvedValue(null);
       const result = await service.getOmoConfig({});
-      expect(result).toEqual({ agents: {}, available: [], workerId: null, degraded: true });
+      expect(result).toEqual({
+        agents: {},
+        available: [],
+        workerId: null,
+        degraded: true,
+      });
     });
 
     it('getOmoConfig：worker 抛错 → degraded=true（列表端点不阻断页面）', async () => {
@@ -1059,7 +1072,9 @@ describe('AgentsService', () => {
         agents: { sisyphus: 'opencode/big-pickle' },
       });
 
-      const result = await service.setOmoConfig({ sisyphus: 'opencode/big-pickle' });
+      const result = await service.setOmoConfig({
+        sisyphus: 'opencode/big-pickle',
+      });
 
       // 第三参 enabled 不传时为 undefined（表示不改动开关）
       expect(workerClient.setOmoConfig).toHaveBeenCalledWith(
@@ -1353,7 +1368,9 @@ describe('AgentsService', () => {
       const result = await service.update('a_0000000005', { name: '仅改名' });
 
       expect(prisma.agent.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.not.objectContaining({ policyId: expect.anything() }) }),
+        expect.objectContaining({
+          data: expect.not.objectContaining({ policyId: expect.anything() }),
+        }),
       );
       expect(result).toMatchObject({
         name: '仅改名',
@@ -1591,9 +1608,7 @@ describe('AgentsService', () => {
 
       const result = await service.findOne('a_0000000005');
 
-      expect(
-        executionPolicyService.resolveManyByAgents,
-      ).toHaveBeenCalledWith([
+      expect(executionPolicyService.resolveManyByAgents).toHaveBeenCalledWith([
         { policyId: 'ep_demo', role: 'analyst', agentKey: 'demo-agent' },
       ]);
       expect(result).toMatchObject({ agentKey: 'demo-agent' });

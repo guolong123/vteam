@@ -4,6 +4,7 @@ import {
   ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
   ROLE_SERVER_GATED_TOOLS,
+  VTEAM_BROWSER_TOOL_NAMES,
   VTEAM_GIT_TOOL_NAMES,
   VTEAM_MCP_TOOL_NAMES,
   type VteamAgentName,
@@ -24,6 +25,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
   const AGENT_NAMES = Object.keys(ROLE_BOUNDARIES).sort() as VteamAgentName[];
   const MCP_SET = new Set<string>(VTEAM_MCP_TOOL_NAMES);
   const GIT_SET = new Set<string>(VTEAM_GIT_TOOL_NAMES);
+  const BROWSER_SET = new Set<string>(VTEAM_BROWSER_TOOL_NAMES);
 
   it('7 agents：vteam-plan + 5 角色 + vteam-librarian（key 即 opencode agent 名）', () => {
     expect(AGENT_NAMES).toHaveLength(7);
@@ -40,12 +42,13 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
     );
   });
 
-  it('toolAllows 键 ∈ MCP 注册表 ∪ GIT 注册表——无裸 MCP 名、无未知键', () => {
+  it('toolAllows 键 ∈ MCP 注册表 ∪ GIT 注册表 ∪ 浏览器工具——无裸 MCP 名、无未知键', () => {
     for (const name of AGENT_NAMES) {
       for (const key of Object.keys(ROLE_BOUNDARIES[name].toolAllows)) {
         const inMcp = MCP_SET.has(key);
         const inGit = GIT_SET.has(key);
-        expect(inMcp || inGit).toBe(true);
+        const inBrowser = BROWSER_SET.has(key);
+        expect(inMcp || inGit || inBrowser).toBe(true);
         // MCP 命名空间一律 `vteam_` 前缀；自定义 git 键不强制该前缀但必须在 GIT 注册表内。
         if (inMcp) expect(key).toMatch(/^vteam_/);
         // `task`/`execute` 永不列入 allowlist（guard 默认 deny）。
@@ -74,7 +77,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
     }
   });
 
-  it('层① permission 派生 == Permission matrix：edit/read/bash/task/mcpDenies，无 write', () => {
+  it('层① permission 派生 == Permission matrix：edit/read/bash/task/mcpDenies/ask，无 write', () => {
     for (const name of AGENT_NAMES) {
       const boundary = ROLE_BOUNDARIES[name];
       const expected: Record<string, unknown> = {
@@ -87,9 +90,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
         ),
       };
       // 形状断言：edit/read 由 helper 派生、bash 取自边界、task 恒 deny、无 write 键。
-      expect(expected.edit).toEqual(
-        buildEditPermission(boundary.writeGlobs),
-      );
+      expect(expected.edit).toEqual(buildEditPermission(boundary.writeGlobs));
       expect(expected.read).toEqual(buildReadPermission());
       expect(expected.bash).toBe(boundary.bashEffect);
       expect(expected.task).toBe(name === 'vteam-plan' ? 'allow' : 'deny');
@@ -116,6 +117,24 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
           gated,
         );
       }
+    }
+  });
+
+  it('层① permission 无第三方硬编码键（协议与机制，不针对具体工具适配）', async () => {
+    const service = new ExecutionPolicyService(
+      {
+        agent: { findMany: jest.fn().mockResolvedValue([]) },
+        executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
+      } as never,
+      {} as never,
+    );
+    const policies = await service.buildAgentPolicies();
+    expect(policies.agents).toHaveLength(7);
+    for (const agent of policies.agents) {
+      expect(agent.permission).not.toHaveProperty('github_merge_pr');
+      expect(policies.guard.roles[agent.name].permission).not.toHaveProperty(
+        'github_merge_pr',
+      );
     }
   });
 
@@ -161,7 +180,8 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       }
     });
 
-    it('agent/role permission 与层①派生 map 一致；仅 vteam-plan task allow、无 write', () => {      for (const agent of policies.agents) {
+    it('agent/role permission 与层①派生 map 一致；仅 vteam-plan task allow、无 write', () => {
+      for (const agent of policies.agents) {
         const boundary = ROLE_BOUNDARIES[agent.name];
         const expectedPermission = {
           edit: buildEditPermission(boundary.writeGlobs),
@@ -177,9 +197,9 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
           expectedPermission,
         );
         expect(agent.permission).not.toHaveProperty('write');
-        expect(
-          policies.guard.roles[agent.name].permission,
-        ).not.toHaveProperty('write');
+        expect(policies.guard.roles[agent.name].permission).not.toHaveProperty(
+          'write',
+        );
         expect(agent.permission.task).toBe(
           agent.name === 'vteam-plan' ? 'allow' : 'deny',
         );

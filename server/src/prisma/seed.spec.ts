@@ -76,8 +76,12 @@ const AGENT_NAME_BY_POLICY: Record<string, keyof typeof ROLE_BOUNDARIES> = {
 };
 
 /** 层① task 门期望：运行时先读边界 taskEffect 形状（Todo 1 若落地），否则仅 vteam-plan allow。 */
-const expectedTaskEffect = (agentName: keyof typeof ROLE_BOUNDARIES): string => {
-  const runtime = (ROLE_BOUNDARIES[agentName] as unknown as { taskEffect?: unknown }).taskEffect;
+const expectedTaskEffect = (
+  agentName: keyof typeof ROLE_BOUNDARIES,
+): string => {
+  const runtime = (
+    ROLE_BOUNDARIES[agentName] as unknown as { taskEffect?: unknown }
+  ).taskEffect;
   if (runtime === 'allow' || runtime === 'deny') return runtime;
   return agentName === 'vteam-plan' ? 'allow' : 'deny';
 };
@@ -86,10 +90,14 @@ const expectedTaskEffect = (agentName: keyof typeof ROLE_BOUNDARIES): string => 
  * 裸 MCP 工具名（剥离 vteam_ 前缀）：prompt 中只允许真实暴露名 `vteam_<action>`，
  * 禁止裸名（`agent.constants.ts` VTEAM_MCP_TOOL_NAMES 为命名空间单一来源）。
  */
-const BARE_MCP_NAMES = VTEAM_MCP_TOOL_NAMES.map((name) => name.replace(/^vteam_/, ''));
+const BARE_MCP_NAMES = VTEAM_MCP_TOOL_NAMES.map((name) =>
+  name.replace(/^vteam_/, ''),
+);
 
 const templateAgentCalls = () =>
-  mockPrisma.agent.upsert.mock.calls.filter((call) => String(call[0].where.id).startsWith('a_'));
+  mockPrisma.agent.upsert.mock.calls.filter((call) =>
+    String(call[0].where.id).startsWith('a_'),
+  );
 
 describe('seed（模板 Agent 预置 + 角色策略）', () => {
   beforeEach(() => {
@@ -169,7 +177,9 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
 
       // 层② 纠正配置：越界话术指向真实工具名 + 角色摘要非空
       expect(create.config.correction.scopeSummary.length).toBeGreaterThan(0);
-      expect(create.config.correction.denyTemplate).toContain('vteam_notify_agent');
+      expect(create.config.correction.denyTemplate).toContain(
+        'vteam_notify_agent',
+      );
     }
   });
 
@@ -222,8 +232,10 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
   it('ExecutionPolicy upsert 先于模板 Agent upsert（绑定指向已存在策略行）', async () => {
     await main();
 
-    const policyOrder = mockPrisma.executionPolicy.upsert.mock.invocationCallOrder.slice(-7);
-    const agentOrder = mockPrisma.agent.upsert.mock.invocationCallOrder.slice(-7);
+    const policyOrder =
+      mockPrisma.executionPolicy.upsert.mock.invocationCallOrder.slice(-7);
+    const agentOrder =
+      mockPrisma.agent.upsert.mock.invocationCallOrder.slice(-7);
     expect(policyOrder).toHaveLength(7);
     expect(agentOrder).toHaveLength(7);
     expect(Math.max(...policyOrder)).toBeLessThan(Math.min(...agentOrder));
@@ -237,7 +249,11 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     for (const call of templateCalls) {
       // prompt 为平台出厂默认值，seed 随平台升级同步（16 篇 §8.4）；policyId 为角色策略绑定；
       // agentKey 为模板固定绑定（= role）；其余字段不 touch
-      expect(Object.keys(call[0].update).sort()).toEqual(['agentKey', 'policyId', 'prompt']);
+      expect(Object.keys(call[0].update).sort()).toEqual([
+        'agentKey',
+        'policyId',
+        'prompt',
+      ]);
       expect(typeof call[0].update.prompt).toBe('string');
       expect(call[0].update.prompt.length).toBeGreaterThan(50);
       expect(call[0].update).not.toHaveProperty('permissionScope');
@@ -265,7 +281,12 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
       const prompt = call[0].update.prompt as string;
-      for (const section of ['## 职责', '## 权限', '## 工作方式', '## 协同方式']) {
+      for (const section of [
+        '## 职责',
+        '## 权限',
+        '## 工作方式',
+        '## 协同方式',
+      ]) {
         expect(prompt).toContain(section);
       }
       // 越界拒绝与转交（vteam_notify_agent 为真实暴露名）
@@ -290,7 +311,9 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
   it('计划员 prompt 四方向内容齐全（身份/职责/边界/协同）', async () => {
     await main();
 
-    const planCall = templateAgentCalls().find((call) => String(call[0].where.id) === 'a_plan');
+    const planCall = templateAgentCalls().find(
+      (call) => String(call[0].where.id) === 'a_plan',
+    );
     expect(planCall).toBeDefined();
     const prompt = planCall![0].update.prompt as string;
     // 身份：团队计划专员，群内可见可@，agent 管理可见
@@ -393,7 +416,13 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     expect(where).toEqual({ id: 'me_team_collab_charter' });
     expect(create.level).toBe('team');
     expect(create.teamId).toBe('tm_0000000001');
-    for (const keyword of ['求助三要素', '落 issue', '@all', '10 分钟', '30-团队协作规约']) {
+    for (const keyword of [
+      '求助三要素',
+      '落 issue',
+      '@all',
+      '10 分钟',
+      '30-团队协作规约',
+    ]) {
       expect(create.content).toContain(keyword);
     }
     expect(create.contentHash).toMatch(/^[0-9a-f]{64}$/);
@@ -432,11 +461,36 @@ describe('seed（计划 skills + 评审子句）', () => {
       'chat_history',
       'task',
     ],
-    'plan-review-product': ['read_file', 'task_context', 'chat_history', 'skill'],
-    'plan-review-architect': ['read_file', 'task_context', 'chat_history', 'skill'],
-    'plan-review-developer': ['read_file', 'task_context', 'chat_history', 'skill'],
-    'plan-review-tester': ['read_file', 'task_context', 'chat_history', 'skill'],
-    'plan-review-project_manager': ['read_file', 'task_context', 'chat_history', 'skill'],
+    'plan-review-product': [
+      'read_file',
+      'task_context',
+      'chat_history',
+      'skill',
+    ],
+    'plan-review-architect': [
+      'read_file',
+      'task_context',
+      'chat_history',
+      'skill',
+    ],
+    'plan-review-developer': [
+      'read_file',
+      'task_context',
+      'chat_history',
+      'skill',
+    ],
+    'plan-review-tester': [
+      'read_file',
+      'task_context',
+      'chat_history',
+      'skill',
+    ],
+    'plan-review-project_manager': [
+      'read_file',
+      'task_context',
+      'chat_history',
+      'skill',
+    ],
   };
 
   /** 模板 Agent id → 其角色专属评审 skill 名（下划线原样保留）。 */
@@ -450,7 +504,10 @@ describe('seed（计划 skills + 评审子句）', () => {
 
   const planSkillCalls = () =>
     mockPrisma.skill.upsert.mock.calls.filter((call) =>
-      Object.prototype.hasOwnProperty.call(PLAN_SKILL_TOOLS, String(call[0].where.name)),
+      Object.prototype.hasOwnProperty.call(
+        PLAN_SKILL_TOOLS,
+        String(call[0].where.name),
+      ),
     );
 
   /** 从 skill content 中解析 frontmatter allowed-tools 列表。 */
@@ -535,7 +592,9 @@ describe('seed（计划 skills + 评审子句）', () => {
       expect(content).toContain(`name: ${name}`);
       expect(content).toContain('description:');
       expect(content).toContain('version:');
-      expect(parseAllowedTools(content).sort()).toEqual([...PLAN_SKILL_TOOLS[name]].sort());
+      expect(parseAllowedTools(content).sort()).toEqual(
+        [...PLAN_SKILL_TOOLS[name]].sort(),
+      );
     }
   });
 
@@ -543,7 +602,10 @@ describe('seed（计划 skills + 评审子句）', () => {
     await main();
 
     const byName = new Map(
-      planSkillCalls().map((call) => [String(call[0].where.name), call[0].create.content as string]),
+      planSkillCalls().map((call) => [
+        String(call[0].where.name),
+        call[0].create.content as string,
+      ]),
     );
     const creation = byName.get('plan-creation')!;
     // 计划成员侧：响应主 Agent @ 派活，落盘后群聊摘要、按 feedback 修订
@@ -573,7 +635,9 @@ describe('seed（计划 skills + 评审子句）', () => {
     expect(parseAllowedTools(creation)).not.toContain('vteam_plan_review');
     expect(creation).not.toContain('question');
     expect(creation).not.toContain('vteam_plan_review');
-    for (const name of Object.keys(REVIEW_SKILL_BY_AGENT).map((id) => REVIEW_SKILL_BY_AGENT[id])) {
+    for (const name of Object.keys(REVIEW_SKILL_BY_AGENT).map(
+      (id) => REVIEW_SKILL_BY_AGENT[id],
+    )) {
       const content = byName.get(name)!;
       expect(content).toContain('VERDICT: APPROVE');
       expect(content).toContain('VERDICT: REJECT');
@@ -587,7 +651,10 @@ describe('seed（计划 skills + 评审子句）', () => {
     await main();
 
     const byName = new Map(
-      planSkillCalls().map((call) => [String(call[0].where.name), call[0].create.content as string]),
+      planSkillCalls().map((call) => [
+        String(call[0].where.name),
+        call[0].create.content as string,
+      ]),
     );
     for (const name of Object.values(REVIEW_SKILL_BY_AGENT)) {
       expect(byName.get(name)).toContain('subagent');
@@ -598,7 +665,10 @@ describe('seed（计划 skills + 评审子句）', () => {
     await main();
 
     const byName = new Map(
-      planSkillCalls().map((call) => [String(call[0].where.name), call[0].create.content as string]),
+      planSkillCalls().map((call) => [
+        String(call[0].where.name),
+        call[0].create.content as string,
+      ]),
     );
     const creation = byName.get('plan-creation')!;
     // D1.1 波次结构：Wave 1/2/N + task_context 事实来源
@@ -629,28 +699,41 @@ describe('seed（计划 skills + 评审子句）', () => {
     await main();
 
     const byName = new Map(
-      planSkillCalls().map((call) => [String(call[0].where.name), call[0].create.content as string]),
+      planSkillCalls().map((call) => [
+        String(call[0].where.name),
+        call[0].create.content as string,
+      ]),
     );
-    const reviewContents = Object.values(REVIEW_SKILL_BY_AGENT).map((name) => byName.get(name)!);
+    const reviewContents = Object.values(REVIEW_SKILL_BY_AGENT).map((name) =>
+      byName.get(name)!,
+    );
     for (const content of reviewContents) {
       // D2.1 目的句 + APPROVAL BIAS（存疑放行）
       expect(content).toContain('能否不卡住地执行');
-      expect(content.includes('APPROVAL BIAS') || content.includes('存疑放行')).toBe(true);
+      expect(
+        content.includes('APPROVAL BIAS') || content.includes('存疑放行'),
+      ).toBe(true);
       // D2.2 每条视角补 PASS/FAIL 线
       expect(content).toContain('PASS');
       expect(content).toContain('FAIL');
       // D2.3 反模式 + REJECT 最多 3 条
       expect(content).toContain('## 反模式');
-      expect(content.includes('最多 3 条') || content.includes('不超过 3 条')).toBe(true);
+      expect(
+        content.includes('最多 3 条') || content.includes('不超过 3 条'),
+      ).toBe(true);
       expect(content).toContain('✅');
       expect(content).toContain('❌');
       // D2.4 严格输出格式：VERDICT 首行 + 篇幅上限
       expect(content).toContain('第一行必须是');
       expect(content).toContain('VERDICT: APPROVE');
       expect(content).toContain('VERDICT: REJECT');
-      expect(content.includes('篇幅上限') || content.includes('每条≤2句')).toBe(true);
+      expect(content.includes('篇幅上限') || content.includes('每条≤2句')).toBe(
+        true,
+      );
       // D2.5 范围纪律：不 redesign、不扩面
-      expect(content.includes('范围纪律') || content.includes('不 redesign')).toBe(true);
+      expect(
+        content.includes('范围纪律') || content.includes('不 redesign'),
+      ).toBe(true);
       // D2.6 旧禁令保留：只读不改文件、不执行
       expect(content).toContain('禁止修改计划文件');
       expect(content).toContain('禁止执行计划');
@@ -661,7 +744,10 @@ describe('seed（计划 skills + 评审子句）', () => {
     await main();
 
     const byName = new Map(
-      planSkillCalls().map((call) => [String(call[0].where.name), call[0].create.content as string]),
+      planSkillCalls().map((call) => [
+        String(call[0].where.name),
+        call[0].create.content as string,
+      ]),
     );
     const roleKeyword: Record<string, string> = {
       'plan-review-product': '用户视角',
@@ -670,7 +756,9 @@ describe('seed（计划 skills + 评审子句）', () => {
       'plan-review-tester': '测试覆盖度',
       'plan-review-project_manager': '排期真实性',
     };
-    const reviewContents = Object.values(REVIEW_SKILL_BY_AGENT).map((name) => byName.get(name)!);
+    const reviewContents = Object.values(REVIEW_SKILL_BY_AGENT).map((name) =>
+      byName.get(name)!,
+    );
     for (const [skillName, keyword] of Object.entries(roleKeyword)) {
       const owner = byName.get(skillName)!;
       expect(owner).toContain(keyword);
@@ -707,7 +795,9 @@ describe('seed（计划 skills + 评审子句）', () => {
     await main();
 
     const toolCalls = mockPrisma.tool.upsert.mock.calls;
-    const planReview = toolCalls.find((call) => call[0].where.action === 'plan_review');
+    const planReview = toolCalls.find(
+      (call) => call[0].where.action === 'plan_review',
+    );
     expect(planReview).toBeUndefined();
   });
 
@@ -784,7 +874,8 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
     '回执必@派发人：任务回执消息必须 @ 派发人定向发送，禁止只发群聊消息充当回执；无 @ 的回执视为未送达。';
   const PLAN_NO_EARLY_REVISE =
     '非收敛不修订：轮次回执未达 N/N 收敛前不得修订计划；单份回执的修订请求必须拒绝并回复固定提示';
-  const EARLY_REVISE_HINT = '收敛未达成（n/N），暂不修订——待收敛或教师显式 override 后再改';
+  const EARLY_REVISE_HINT =
+    '收敛未达成（n/N），暂不修订——待收敛或教师显式 override 后再改';
   const TEACHER_OVERRIDE = '仅主 Agent 携 feedback 的显式重派可打破收敛门';
   const REVIEW_VERSION_REF = 'VERDICT 必须引用计划版本号';
   const PRECEDENCE = '平台校验 > 本铁律 > 上文原文风';
@@ -884,7 +975,8 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
   it('探针·被催“怎么样了”不产生新派发', async () => {
     const pm = (await promptsById()).get('a_project_manager')!;
     // 脚本化输入：成员追问“怎么样了”；按 prompt 铁律推导动作
-    const statusFirst = pm.includes(PM_NUDGE_STATUS) && pm.includes('绝不盲目发起新派发');
+    const statusFirst =
+      pm.includes(PM_NUDGE_STATUS) && pm.includes('绝不盲目发起新派发');
     const action = statusFirst ? 'report-status' : 'dispatch-blind';
     const newDispatch = action !== 'report-status';
     expect(action).toBe('report-status');
@@ -894,10 +986,15 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
   it('探针·单份回执修订企图被拒（exact hint）', async () => {
     const plan = (await promptsById()).get('a_plan')!;
     // 脚本化：received 2/3 + 修订请求；按 prompt 铁律推导裁决
-    const gated = plan.includes(PLAN_NO_EARLY_REVISE) && plan.includes(EARLY_REVISE_HINT);
-    const verdict = gated ? { blocked: true, hint: EARLY_REVISE_HINT } : { blocked: false, hint: '' };
+    const gated =
+      plan.includes(PLAN_NO_EARLY_REVISE) && plan.includes(EARLY_REVISE_HINT);
+    const verdict = gated
+      ? { blocked: true, hint: EARLY_REVISE_HINT }
+      : { blocked: false, hint: '' };
     expect(verdict.blocked).toBe(true);
-    expect(verdict.hint).toBe('收敛未达成（n/N），暂不修订——待收敛或教师显式 override 后再改');
+    expect(verdict.hint).toBe(
+      '收敛未达成（n/N），暂不修订——待收敛或教师显式 override 后再改',
+    );
   });
 
   it('探针·优先级：平台校验胜过铁律胜过原文 + 落盘证据', async () => {
@@ -913,15 +1010,24 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
       pm.indexOf('本铁律') < pm.indexOf('上文原文风');
     expect(precedencePass).toBe(true);
 
-    const memberPass = MEMBER_IDS.every((id) => prompts.get(id)!.includes(RECEIPT_AT));
+    const memberPass = MEMBER_IDS.every((id) =>
+      prompts.get(id)!.includes(RECEIPT_AT),
+    );
     const plannerPass =
       plan.includes(PLAN_NO_EARLY_REVISE) && plan.includes(EARLY_REVISE_HINT);
     const reviewerPass = REVIEW_SKILLS.every((name) =>
       contents.get(name)!.includes(REVIEW_VERSION_REF),
     );
-    const nudgeProbe = pm.includes(PM_NUDGE_STATUS) && pm.includes('无新事实不产生新派发');
+    const nudgeProbe =
+      pm.includes(PM_NUDGE_STATUS) && pm.includes('无新事实不产生新派发');
     const reviseProbe = plannerPass;
-    const pass = precedencePass && memberPass && plannerPass && reviewerPass && nudgeProbe && reviseProbe;
+    const pass =
+      precedencePass &&
+      memberPass &&
+      plannerPass &&
+      reviewerPass &&
+      nudgeProbe &&
+      reviseProbe;
     expect(pass).toBe(true);
 
     const evidence = {
@@ -943,7 +1049,8 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
         },
         precedence: {
           order: ['平台校验', '本铁律', '上文原文风'],
-          platformSignal: 'triggered:false / reason=duplicate|throttled|plan-gated',
+          platformSignal:
+            'triggered:false / reason=duplicate|throttled|plan-gated',
           pass: precedencePass,
         },
       },

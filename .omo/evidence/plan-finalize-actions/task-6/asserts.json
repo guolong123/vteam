@@ -1,0 +1,21 @@
+{
+  "todo": 6,
+  "asserts": {
+    "archive": {
+      "versionLine": "v4·R2·2/3",
+      "frozenVersion": "v4",
+      "frozenHash": "e5f6a7b8",
+      "toggle": "归档回执（2）",
+      "items": [
+        {
+          "round": 2,
+          "version": "v3"
+        },
+        {
+          "round": 1,
+          "version": "v2"
+        }
+      ]
+    }
+  }
+}

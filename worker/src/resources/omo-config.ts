@@ -249,5 +249,30 @@ export function writeOmoAgents(
   return absPath;
 }
 
+/**
+ * 内置种子默认模型（新数据卷首次启动、无任何 omo 配置文件时写入一次）。
+ * 注意 hephaestus 上游仅支持 GPT-5.x 系，配此模型时 OmO 侧展示为 Atlas 变体，
+ * 属上游行为（见 OMO_AGENT_NAMES 注释），种子仍统一写，OmO 内部决定生效形态。
+ */
+export const SEEDED_OMO_DEFAULT_MODEL = 'opencode/big-pickle';
+
+/**
+ * 内置种子默认 agent→模型（OMO 清单 14 个全量覆盖；已有任一位置文件一律不动，
+ * 页面/API 的用户修改永远优先）。
+ */
+export const SEEDED_OMO_AGENT_MODELS: Readonly<Record<string, string>> =
+  Object.fromEntries(OMO_AGENT_NAMES.map((n) => [n, SEEDED_OMO_DEFAULT_MODEL]));
+
+/** 种子落盘：无配置文件时写入内置默认，有则跳过；返回写入的映射或 null（跳过）。 */
+export function seedOmoAgentModels(
+  workDir: string,
+): Record<string, string> | null {
+  if (resolveOmoConfigPath(workDir).kind !== 'none') {
+    return null;
+  }
+  writeOmoAgents(workDir, { ...SEEDED_OMO_AGENT_MODELS });
+  return { ...SEEDED_OMO_AGENT_MODELS };
+}
+
 /** 兼容旧导出名（早期版本用单一路径常量）。 */
 export const OMO_CONFIG_REL = OMO_CONFIG_REL_LEGACY;

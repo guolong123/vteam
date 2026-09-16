@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PLAN_LIFECYCLE_STATUS } from '../tasks/plan-lifecycle.service';
 import {
@@ -63,10 +68,7 @@ export interface ConvergenceNotifyOpts {
 
 /** 版本裁决结果（账本层三态 + 门层打回态）。 */
 export type GateVerdictOutcome =
-  | 'received'
-  | 'missing-version'
-  | 'superseded'
-  | 'pending-hash';
+  'received' | 'missing-version' | 'superseded' | 'pending-hash';
 
 export interface RecordVerdictResult {
   outcome: GateVerdictOutcome;
@@ -123,7 +125,7 @@ export class ReviewRoundGateService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly rounds: ReviewRoundService,
-    @Optional() private readonly notifier: ConvergenceNotifier | null = null,
+    @Optional() private notifier: ConvergenceNotifier | null = null,
   ) {}
 
   /**
@@ -133,6 +135,15 @@ export class ReviewRoundGateService {
    */
   attachPlanSink(sink: ConvergencePlanSink | null): void {
     this.planSink = sink;
+  }
+
+  /**
+   * 装配收敛通知器（缺省 null=不通知，收敛照常 complete+翻转）。
+   * 生产由调用方传入 WorkerDispatcher（结构兼容 dispatchAgentMention
+   * 的 `kind='wake'` 分支即可，不直连 ChatModule，无模块循环）。
+   */
+  attachNotifier(notifier: ConvergenceNotifier | null): void {
+    this.notifier = notifier;
   }
 
   /**
@@ -162,6 +173,18 @@ export class ReviewRoundGateService {
           `待 ${receivedCount}/${expectedCount}，本次未计入`,
       };
     }
+    const preLedger = await this.readLedger(issueId);
+    if (preLedger.status === 'complete' || preLedger.status === 'stale') {
+      // F2#5：终态账本不再接受任何 received 写入（同版本新 msgId 重发也不覆盖），
+      // 直接以写前快照返回；outcome 经 outcomeOf 判定（同 msgId 幂等返回 received，
+      // 新 msgId 报 superseded——均不声称本次计入）。
+      const outcome = this.outcomeOf(preLedger, input);
+      return {
+        outcome,
+        ledger: preLedger,
+        converged: preLedger.status === 'complete',
+      };
+    }
     const ledger = await this.rounds.applyRoundUpdate(issueId, {
       received: input,
     });
@@ -173,7 +196,18 @@ export class ReviewRoundGateService {
     const completed = await this.rounds.applyRoundUpdate(issueId, {
       status: 'complete',
     });
-    await this.markPendingFinal(completed, notify);
+    // §6.1 极性门：people-complete（isConverged）只管"人齐→complete+通知"；
+    // 计划翻转另看 verdict 极性——全部 APPROVE → pending_final，
+    // 任一 REJECT → draft（§6.1 REJECT 回流分支）。通知两种情况都发
+    // （计划员需知"可修订"，极性由 buildRoundSummary 的 per-member 明细呈现）。
+    const allApprove = this.isAllApprove(completed);
+    await this.transitionPlanStatus(
+      completed,
+      notify,
+      allApprove
+        ? PLAN_LIFECYCLE_STATUS.pending_final
+        : PLAN_LIFECYCLE_STATUS.draft,
+    );
     await this.notifyConvergence(completed, issueId, notify, null);
     return { outcome, ledger: completed, converged: true };
   }
@@ -192,11 +226,13 @@ export class ReviewRoundGateService {
     }
     const { receivedCount, expectedCount } = this.counts(ledger);
     const absentees = this.absentees(ledger);
-    throw new Error(
+    const err = new Error(
       `修订被拒：成员 ${requester} 请求修订 R${ledger.round} ${ledger.planVersion.version}，` +
         `但待 ${receivedCount}/${expectedCount}` +
         `（缺席：${absentees.join('、') || '无'}），收敛前计划员不得修订`,
-    );
+    ) as Error & { code?: string };
+    err.code = REVIEW_ROUND_GATE_ERRORS.REVISION_REFUSED;
+    throw err;
   }
 
   /**
@@ -260,7 +296,11 @@ export class ReviewRoundGateService {
       confirmer,
       waived: [...opts.waived],
     });
-    return { ledger: completed, waived: [...opts.waived], confirmedBy: confirmer };
+    return {
+      ledger: completed,
+      waived: [...opts.waived],
+      confirmedBy: confirmer,
+    };
   }
 
   /** 收敛判定：期望名单非空且全部已收（同一人多视角按 expected 条目计）。 */
@@ -268,6 +308,14 @@ export class ReviewRoundGateService {
     return (
       ledger.expected.length > 0 &&
       ledger.expected.every((m) => ledger.received[m] !== undefined)
+    );
+  }
+
+  /** 极性判定：人齐且期望名单每条回执均为 APPROVE（§6.1 全 APPROVE 门）。 */
+  isAllApprove(ledger: ReviewRoundLedger): boolean {
+    return (
+      ledger.expected.length > 0 &&
+      ledger.expected.every((m) => ledger.received[m]?.verdict === 'APPROVE')
     );
   }
 
@@ -350,23 +398,37 @@ export class ReviewRoundGateService {
   }
 
   /**
-   * 收敛后计划翻转：N/N 只到 pending_final（待定稿），永不直接 approved。
+   * 收敛后计划翻转：目标状态由调用方携带（全 APPROVE→pending_final 待定稿，
+   * 任一 REJECT→draft 回流修订；永不直接 approved/executing。
+   * 定稿须用户显式 finalize，开始执行另需用户 confirm）。
    * 无 sink / 无 taskId 照常跳过；翻转失败只 warn，永不阻断收敛 complete+通知。
    */
-  private async markPendingFinal(
+  private async transitionPlanStatus(
     ledger: ReviewRoundLedger,
     notify: ConvergenceNotifyOpts,
+    target: string,
   ): Promise<void> {
     if (!this.planSink) return;
     const taskId = ledger.taskId ?? notify.taskId ?? null;
     if (!taskId) return;
     try {
-      await this.planSink.transition(taskId, PLAN_LIFECYCLE_STATUS.pending_final);
+      await this.planSink.transition(taskId, target);
     } catch (err) {
       this.logger.warn(
-        `收敛翻转 pending_final 失败 task=${taskId}（轮次已 complete）：${err instanceof Error ? err.message : String(err)}`,
+        `收敛翻转 ${target} 失败 task=${taskId}（轮次已 complete）：${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  private async markPendingFinal(
+    ledger: ReviewRoundLedger,
+    notify: ConvergenceNotifyOpts,
+  ): Promise<void> {
+    await this.transitionPlanStatus(
+      ledger,
+      notify,
+      PLAN_LIFECYCLE_STATUS.pending_final,
+    );
   }
 
   private async notifyConvergence(
@@ -384,16 +446,28 @@ export class ReviewRoundGateService {
       ...(notify.taskId !== undefined ? { taskId: notify.taskId } : {}),
       ...(notify.teamId !== undefined ? { teamId: notify.teamId } : {}),
     };
-    await this.notifier.dispatchAgentMention({
-      ...base,
-      targetInstanceId: notify.plannerMemberId,
-      text: summary,
-    });
-    await this.notifier.dispatchAgentMention({
-      ...base,
-      targetInstanceId: notify.pmMemberId,
-      text: `【抄送PM】${summary}`,
-    });
+    try {
+      await this.notifier.dispatchAgentMention({
+        ...base,
+        targetInstanceId: notify.plannerMemberId,
+        text: summary,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `收敛通知计划员失败 issue=${issueId}（尽力通知，不阻断收敛）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    try {
+      await this.notifier.dispatchAgentMention({
+        ...base,
+        targetInstanceId: notify.pmMemberId,
+        text: `【抄送PM】${summary}`,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `收敛通知抄送PM失败 issue=${issueId}（尽力通知，不阻断收敛）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private async readLedger(issueId: string): Promise<ReviewRoundLedger> {

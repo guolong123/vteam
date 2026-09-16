@@ -76,7 +76,12 @@ describe('ChatController (GET /messages/receipts)', () => {
         total: 1,
       });
 
-      const res = await controller.findReceipts(user, undefined, 'tm_1', undefined);
+      const res = await controller.findReceipts(
+        user,
+        undefined,
+        'tm_1',
+        undefined,
+      );
 
       expect(receipts.listReceipts).toHaveBeenCalledWith({
         taskId: undefined,
@@ -85,12 +90,7 @@ describe('ChatController (GET /messages/receipts)', () => {
       });
       expect(res).toEqual({ items: [row], pending: 1, total: 1 });
       expect(Object.keys(res.items[0])).toEqual(
-        expect.arrayContaining([
-          'id',
-          'messageId',
-          'status',
-          'createdAt',
-        ]),
+        expect.arrayContaining(['id', 'messageId', 'status', 'createdAt']),
       );
     });
 
@@ -101,12 +101,7 @@ describe('ChatController (GET /messages/receipts)', () => {
         total: 3,
       });
 
-      const res = await controller.findReceipts(
-        user,
-        't_1',
-        'tm_1',
-        'pending',
-      );
+      const res = await controller.findReceipts(user, 't_1', 'tm_1', 'pending');
 
       expect(receipts.listReceipts).toHaveBeenCalledWith({
         taskId: 't_1',

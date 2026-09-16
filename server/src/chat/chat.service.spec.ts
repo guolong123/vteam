@@ -3403,12 +3403,18 @@ describe('ChatService', () => {
         sessionId: 's_team_coldstart',
       });
       idGen.nextId.mockResolvedValue('m_0000000201');
-      prisma.message.create.mockResolvedValue(messageRow({ id: 'm_0000000201' }));
+      prisma.message.create.mockResolvedValue(
+        messageRow({ id: 'm_0000000201' }),
+      );
 
       const result = await service.createMessage(channelId, userId, {
         text: '@开发者-1 冷启动',
         mentions: [
-          { type: 'agent', agentId: 'a_developer', instanceId: 'tmm_0000000009' },
+          {
+            type: 'agent',
+            agentId: 'a_developer',
+            instanceId: 'tmm_0000000009',
+          },
         ],
       } as any);
 
@@ -3462,12 +3468,18 @@ describe('ChatService', () => {
       ]);
       prisma.session.findFirst.mockResolvedValue({ id: 's_team_9' });
       idGen.nextId.mockResolvedValue('m_0000000202');
-      prisma.message.create.mockResolvedValue(messageRow({ id: 'm_0000000202' }));
+      prisma.message.create.mockResolvedValue(
+        messageRow({ id: 'm_0000000202' }),
+      );
 
       const result = await service.createMessage(channelId, userId, {
         text: '@开发者-1 归档后直聊',
         mentions: [
-          { type: 'agent', agentId: 'a_developer', instanceId: 'tmm_0000000009' },
+          {
+            type: 'agent',
+            agentId: 'a_developer',
+            instanceId: 'tmm_0000000009',
+          },
         ],
       } as any);
 
@@ -3506,7 +3518,9 @@ describe('ChatService', () => {
         sessionId: 's_team_9',
       });
       idGen.nextId.mockResolvedValue('m_0000000203');
-      prisma.message.create.mockResolvedValue(messageRow({ id: 'm_0000000203' }));
+      prisma.message.create.mockResolvedValue(
+        messageRow({ id: 'm_0000000203' }),
+      );
 
       const result = await service.createMessage(channelId, userId, {
         text: '@开发者-1 无任务直聊',

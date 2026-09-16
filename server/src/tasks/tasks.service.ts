@@ -358,7 +358,9 @@ export class TasksService implements OnModuleInit {
           // 无设定则保持 null（serverGated 工具届时按“未设置”拒绝，与旧行为一致）。
           const mainMember =
             (team as any)?.mainAgentMemberId != null
-              ? members.find((m: any) => m.id === (team as any).mainAgentMemberId) ?? null
+              ? (members.find(
+                  (m: any) => m.id === (team as any).mainAgentMemberId,
+                ) ?? null)
               : null;
           const created = await tx.task.create({
             data: {
@@ -1032,7 +1034,9 @@ export class TasksService implements OnModuleInit {
                   message: '仅队首任务可启动',
                 });
               }
-              preMainMemberId = (team as any)?.mainAgentMemberId ?? null;
+              preMainMemberId =
+                (team as any)?.mainAgentMemberId ??
+                (await this.resolveTeamFallbackMainId(preTeamId));
               const memberCount = await (this.prisma as any).teamMember.count({
                 where: { teamId: preTeamId },
               });
@@ -1222,8 +1226,33 @@ export class TasksService implements OnModuleInit {
   }
 
   /**
+   * 团队主成员回退（transitionByAgent 门内联；正典实现见
+   * PlatformMcpService.resolveTeamMainMemberId，此处同语义内联以避免跨服务共享改动）：
+   * 显式绑定由调用方优先返回；为 NULL 时取首位成员（seq 升序）；空名册/查询失败 →
+   * null（fail-closed，调用方保持 403，永不放行）。
+   */
+  private async resolveTeamFallbackMainId(
+    teamId: string,
+  ): Promise<string | null> {
+    try {
+      const first = await (this.prisma as any).teamMember.findFirst({
+        where: { teamId },
+        orderBy: { seq: 'asc' },
+        select: { id: true },
+      });
+      return (first as { id: string } | null)?.id ?? null;
+    } catch (err) {
+      this.logger.warn(
+        `resolveTeamFallbackMainId 回退查询失败 teamId=${teamId}：${(err as Error)?.message ?? err}`,
+      );
+      return null;
+    }
+  }
+
+  /**
    * MCP 专用状态流转（task_transition 工具）：仅主 Agent 实例可调用。
-   * 主成员校验：team.mainAgentMemberId === instanceId，否则 403 TASK_STATUS_MAIN_AGENT_ONLY；
+   * 主成员校验：team.mainAgentMemberId 显式绑定优先，否则首位成员回退（seq 升序），
+   * 否则 403 TASK_STATUS_MAIN_AGENT_ONLY；
    * actor 记为 agent/instanceId（task_events.actorType='agent' + TASK_STATUS_CHANGED 广播）；
    * reject 的 reason 经 metadata 透传（transitionOpts 第 3 参）。
    */
@@ -1250,8 +1279,11 @@ export class TasksService implements OnModuleInit {
           select: { mainAgentMemberId: true },
         })
       : null;
-    const mainMemberId = (gateTeam as any)?.mainAgentMemberId ?? null;
-    if (!mainMemberId || mainMemberId !== instanceId) {
+    const explicitMainId = (gateTeam as any)?.mainAgentMemberId ?? null;
+    const mainMemberId =
+      explicitMainId ??
+      (gateTeamId ? await this.resolveTeamFallbackMainId(gateTeamId) : null);
+    if (mainMemberId !== instanceId) {
       // Agent 可读的完整引导：指明主成员 id + 正确操作路径（MCP 由主成员调用 / 知会主成员 / 管理界面人工操作）
       throw new ForbiddenException({
         code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,
@@ -1370,7 +1402,7 @@ export class TasksService implements OnModuleInit {
       select: { id: true },
     });
     // start/accept 私信主成员（13 篇 §4.2；记忆管理 mem-trigger：accept 同路径私信引导记忆总结）：
-    // 解析主成员别名 + private 频道（按 teamMemberId；无团队主成员则跳过）
+    // 解析主成员别名 + private 频道（按 teamMemberId；绑定缺省时回退首位成员，空名册/无团队则跳过）
     let mainAgentName: string | undefined;
     let privateChannel: { id: string } | null = null;
     {
@@ -1381,7 +1413,10 @@ export class TasksService implements OnModuleInit {
             select: { mainAgentMemberId: true },
           })
         : null;
-      const privMainId = (privTeam as any)?.mainAgentMemberId ?? null;
+      const privExplicitId = (privTeam as any)?.mainAgentMemberId ?? null;
+      const privMainId =
+        privExplicitId ??
+        (privTeamId ? await this.resolveTeamFallbackMainId(privTeamId) : null);
       if (
         (action === 'start' ||
           action === 'accept' ||
@@ -1647,8 +1682,7 @@ export class TasksService implements OnModuleInit {
       effectivePlanMode:
         ((task as any).planMode ?? false) ||
         getOpencodeAgentDuty(
-          members.find((m) => m.id === mainMemberId)?.opencodeAgentName ??
-            null,
+          members.find((m) => m.id === mainMemberId)?.opencodeAgentName ?? null,
         ) === 'plan',
       backgroundDocs: task.backgroundDocs ?? [],
       teamId: (task as any).teamId ?? null,

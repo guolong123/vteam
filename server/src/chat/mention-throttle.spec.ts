@@ -14,7 +14,11 @@ import {
 describe('MentionThrottle（agent @ storm 硬节流，纯/确定性/注入时钟）', () => {
   it('同一无序对窗口内最多 3 次（第 4 次 pair_limit；反向同配额）', () => {
     const t = new MentionThrottle();
-    const base = { taskId: 't_1', fromInstanceId: 'tmm_a', toInstanceId: 'tmm_b' };
+    const base = {
+      taskId: 't_1',
+      fromInstanceId: 'tmm_a',
+      toInstanceId: 'tmm_b',
+    };
     expect(t.shouldDispatch({ ...base, now: 1000 })).toEqual({ allow: true });
     expect(t.shouldDispatch({ ...base, now: 2000 })).toEqual({ allow: true });
     expect(t.shouldDispatch({ ...base, now: 3000 })).toEqual({ allow: true });
@@ -36,7 +40,11 @@ describe('MentionThrottle（agent @ storm 硬节流，纯/确定性/注入时钟
 
   it('窗口滑过后配额恢复（60s 窗口）', () => {
     const t = new MentionThrottle();
-    const base = { taskId: 't_1', fromInstanceId: 'tmm_a', toInstanceId: 'tmm_b' };
+    const base = {
+      taskId: 't_1',
+      fromInstanceId: 'tmm_a',
+      toInstanceId: 'tmm_b',
+    };
     t.shouldDispatch({ ...base, now: 0 });
     t.shouldDispatch({ ...base, now: 1000 });
     t.shouldDispatch({ ...base, now: 2000 });
@@ -100,7 +108,8 @@ describe('MentionThrottle（agent @ storm 硬节流，纯/确定性/注入时钟
     expect(pairKeyOf('tmm_a', 'tmm_b')).toBe(pairKeyOf('tmm_b', 'tmm_a'));
   });
 
-  it('用户路径不受影响：chat.service 不得引用 mention-throttle（仅 MCP 路径咨询节流）', () => {    const chatServiceSrc = fs.readFileSync(
+  it('用户路径不受影响：chat.service 不得引用 mention-throttle（仅 MCP 路径咨询节流）', () => {
+    const chatServiceSrc = fs.readFileSync(
       path.join(__dirname, 'chat.service.ts'),
       'utf8',
     );

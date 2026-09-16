@@ -10,13 +10,19 @@ import {
   installGitTools,
   renderGitToolsFile,
   GitToolDef,
+  defaultRepoName,
+  resolveCloneTarget,
+  isSameRepoCheckout,
+  prepareCloneTarget,
   normalizeRepoUrl,
   normalizeSshKey,
   loadCredential,
+  tryLoadCredential,
   writeTempKey,
   writeAskpass,
   buildGitEnv,
   cleanupTemp,
+  runGit,
 } from './git-tools';
 
 // loadCredential 单测需拦截 fs.readFileSync；jest.spyOn 在本环境对 Node 内置 fs 无效
@@ -24,6 +30,13 @@ import {
 jest.mock('fs', () => {
   const actual = jest.requireActual<typeof import('fs')>('fs');
   return { ...actual, readFileSync: jest.fn() };
+});
+
+// child_process 默认透传真实实现（normalizeSshKey 的 ssh-keygen 交叉验证依赖真实 spawnSync），
+// workdir 用例内按需 mockReturnValue 断言 cwd 透传。
+jest.mock('child_process', () => {
+  const actual = jest.requireActual<typeof import('child_process')>('child_process');
+  return { ...actual, spawnSync: jest.fn((...args: unknown[]) => (actual.spawnSync as (...a: never[]) => unknown)(...(args as never[]))) };
 });
 
 const EXPECTED_TOOL_NAMES = [
@@ -131,6 +144,7 @@ describe('渲染产物凭证注入升级（todo 4，自包含 git.ts）', () => 
     const content = renderGitToolsFile();
     expect(content).toContain(normalizeRepoUrl.toString());
     expect(content).toContain(loadCredential.toString());
+    expect(content).toContain(tryLoadCredential.toString());
     expect(content).toContain(writeTempKey.toString());
     expect(content).toContain(writeAskpass.toString());
     expect(content).toContain(buildGitEnv.toString());
@@ -153,20 +167,44 @@ describe('渲染产物凭证注入升级（todo 4，自包含 git.ts）', () => 
       const end = content.indexOf('});', start);
       const toolBody = content.slice(start, end);
       expect(toolBody).not.toContain('loadCredential');
-      expect(toolBody).toContain('runGit(gitArgs);');
+      expect(toolBody).toContain('return runGit(gitArgs, {}, workdir);');
     }
   });
 
-  it('clone/pull/fetch/push execute 走凭证白名单 + try/finally 清理', () => {
+  it('clone/pull/fetch execute 用 tryLoadCredential + 无凭证直接直连分支；push 仍走 loadCredential', () => {
     const content = renderGitToolsFile();
-    for (const tool of ['clone', 'pull', 'fetch', 'push']) {
+    for (const tool of ['pull', 'fetch']) {
       const start = content.indexOf(`export const ${tool} = tool({`);
-      const end = content.indexOf('});', start);
+      const end = content.indexOf('\n});', start);
       const toolBody = content.slice(start, end);
-      expect(toolBody).toContain('loadCredential');
+      expect(toolBody).toContain('tryLoadCredential');
+      expect(toolBody).not.toContain('loadCredential(repoUrl)');
+      expect(toolBody).toContain('if (!entry)');
+      expect(toolBody).toContain('return runGit(_buildGitArgs(');
       expect(toolBody).toContain('buildGitEnv(entry)');
       expect(toolBody).toContain('cleanupTemp(p)');
     }
+    {
+      // clone 独立分支：中央库复用 + 绝对路径回吐，双凭证路径均经 cloneArgs（含解析后 target）
+      const start = content.indexOf('export const clone = tool({');
+      const end = content.indexOf('\n});', start);
+      const toolBody = content.slice(start, end);
+      expect(toolBody).toContain('tryLoadCredential(repoUrl)');
+      expect(toolBody).not.toContain('loadCredential(repoUrl)');
+      expect(toolBody).toContain('if (!entry)');
+      expect(toolBody).toContain('runGit(cloneArgs, {}, workdir)');
+      expect(toolBody).toContain('runGit(cloneArgs, tmp.env, workdir)');
+      expect(toolBody).toContain('buildGitEnv(entry)');
+      expect(toolBody).toContain('cleanupTemp(p)');
+    }
+    const pushStart = content.indexOf('export const push = tool({');
+    const pushEnd = content.indexOf('\n});', pushStart);
+    const pushBody = content.slice(pushStart, pushEnd);
+    expect(pushBody).toContain('loadCredential(repoUrl)');
+    expect(pushBody).not.toContain('tryLoadCredential');
+    expect(pushBody).not.toContain('if (!entry)');
+    expect(pushBody).toContain('buildGitEnv(entry)');
+    expect(pushBody).toContain('cleanupTemp(p)');
   });
 
   it('push execute 含 write 授权校验', () => {
@@ -290,6 +328,90 @@ describe('git 凭证辅助函数（渲染产物内联实现，todo 4）', () => 
     } finally {
       (fs.readFileSync as jest.Mock).mockReset();
     }
+  });
+
+  it('tryLoadCredential：凭证文件缺失/损坏 → 返回 null（不抛错，公开仓库直连）', () => {
+    (fs.readFileSync as jest.Mock).mockImplementation(() => {
+      throw new Error('ENOENT: no such file');
+    });
+    try {
+      expect(tryLoadCredential('https://github.com/guolong123/cliyard')).toBeNull();
+    } finally {
+      (fs.readFileSync as jest.Mock).mockReset();
+    }
+    (fs.readFileSync as jest.Mock).mockReturnValue('not-json{{{');
+    try {
+      expect(tryLoadCredential('https://github.com/guolong123/cliyard')).toBeNull();
+    } finally {
+      (fs.readFileSync as jest.Mock).mockReset();
+    }
+  });
+
+  it('tryLoadCredential：白名单未命中 → 返回 null（不抛错，clone 直连无 throw）', () => {
+    (fs.readFileSync as jest.Mock).mockReturnValue(
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2026-08-12T00:00:00.000Z',
+        credentials: [
+          { repoUrl: 'https://gitee.com/xishuhq/authorized.git', authType: 'https_token', key: 'tok', permission: 'read' },
+        ],
+      }),
+    );
+    try {
+      expect(tryLoadCredential('https://github.com/guolong123/cliyard')).toBeNull();
+    } finally {
+      (fs.readFileSync as jest.Mock).mockReset();
+    }
+  });
+
+  it('tryLoadCredential：规范化匹配命中 → 返回条目（clone 有凭证走注入 env 流程）', () => {
+    (fs.readFileSync as jest.Mock).mockReturnValue(
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2026-08-12T00:00:00.000Z',
+        credentials: [
+          { repoUrl: 'https://gitee.com/xishuhq/authorized.git', authType: 'https_token', key: 'tok', permission: 'read' },
+        ],
+      }),
+    );
+    try {
+      const entry = tryLoadCredential('  HTTPS://gitee.com/xishuhq/authorized.GIT  ');
+      expect(entry).not.toBeNull();
+      expect(entry!.permission).toBe('read');
+      const built = buildGitEnv(entry!);
+      try {
+        expect(built.env.GIT_ASKPASS).toBeTruthy();
+      } finally {
+        for (const p of built.paths) cleanupTemp(p);
+      }
+    } finally {
+      (fs.readFileSync as jest.Mock).mockReset();
+    }
+  });
+
+  it('push 无凭证仍抛错（loadCredential 未命中抛未授权，守卫不变）', () => {
+    (fs.readFileSync as jest.Mock).mockReturnValue(
+      JSON.stringify({ version: 1, updatedAt: '2026-08-12T00:00:00.000Z', credentials: [] }),
+    );
+    try {
+      expect(() => loadCredential('https://github.com/guolong123/cliyard')).toThrow('仓库未授权或凭证缺失');
+      expect(tryLoadCredential('https://github.com/guolong123/cliyard')).toBeNull();
+    } finally {
+      (fs.readFileSync as jest.Mock).mockReset();
+    }
+    const content = renderGitToolsFile();
+    const start = content.indexOf('export const push = tool({');
+    const pushBody = content.slice(start, content.indexOf('});', start));
+    expect(pushBody).toContain('loadCredential(repoUrl)');
+    expect(pushBody).toContain('permission !== "write"');
+  });
+
+  it('渲染产物含 tryLoadCredential 内联实现与双分支（有凭证注入 / 无凭证直接 runGit）', () => {
+    const content = renderGitToolsFile();
+    expect(content).toContain(tryLoadCredential.toString());
+    expect(content).toContain('const entry = tryLoadCredential(repoUrl);');
+    expect(content).toContain('if (!entry) {');
+    expect(content).toContain('return runGit(_buildGitArgs(');
   });
 });
 
@@ -572,5 +694,201 @@ describe('normalizeSshKey（OPENSSH 容器 ssh-rsa → PKCS#1 PEM 格式归一�
     expect(content).toContain(normalizeSshKey.toString());
     expect(content.indexOf(normalizeSshKey.toString())).toBeLessThan(content.indexOf(writeTempKey.toString()));
     expect(writeTempKey.toString()).toContain('normalizeSshKey(');
+  });
+});
+
+describe('workdir 可选参数（仓库子目录执行）', () => {
+  it('7 个工具均含可选 string workdir（描述一致），其他参数/必填性不变', () => {
+    expect(GIT_TOOLS).toHaveLength(7);
+    for (const tool of GIT_TOOLS) {
+      const workdir = tool.args.find((a) => a.name === 'workdir');
+      expect(workdir).toBeDefined();
+      expect(workdir!.type).toBe('string');
+      expect(workdir!.required).toBe(false);
+      expect(workdir!.description).toBe('执行目录（仓库绝对路径，缺省为会话目录）');
+    }
+    const byName = (n: string): GitToolDef => GIT_TOOLS.find((t) => t.name === n)!;
+    expect(byName('git_clone').args.find((a) => a.name === 'repo_url')?.required).toBe(true);
+    expect(byName('git_push').args.find((a) => a.name === 'refspec')?.required).toBe(true);
+    expect(byName('git_push').defaultEffect).toBe('ask');
+  });
+
+  it('runGit：传入 cwd 时 spawnSync options 含 cwd；缺省时无 cwd 键', () => {
+    const spawnSync = child_process.spawnSync as unknown as jest.Mock;
+    const realSpawnSync = (jest.requireActual<typeof import('child_process')>('child_process') as typeof import('child_process')).spawnSync as (...a: never[]) => unknown;
+    spawnSync.mockImplementation(((...args: never[]) => realSpawnSync(...args)) as never);
+    try {
+      spawnSync.mockReturnValue({ status: 0, stdout: 'ok', stderr: '' });
+      runGit(['status'], {}, '/data/vteam-worker/tasks/t1/cliyard');
+      expect(spawnSync).toHaveBeenCalledWith('git', ['status'], expect.objectContaining({ cwd: '/data/vteam-worker/tasks/t1/cliyard' }));
+
+      spawnSync.mockClear();
+      spawnSync.mockReturnValue({ status: 0, stdout: 'ok', stderr: '' });
+      runGit(['status'], {});
+      const opts = spawnSync.mock.calls[0][2] as Record<string, unknown>;
+      expect(opts).not.toHaveProperty('cwd');
+
+      spawnSync.mockClear();
+      spawnSync.mockReturnValue({ status: 0, stdout: 'ok', stderr: '' });
+      runGit(['status']);
+      const optsDefault = spawnSync.mock.calls[0][2] as Record<string, unknown>;
+      expect(optsDefault).not.toHaveProperty('cwd');
+    } finally {
+      spawnSync.mockImplementation(((...args: never[]) => realSpawnSync(...args)) as never);
+      spawnSync.mockClear();
+    }
+  });
+
+  it('渲染产物：远端工具（clone/pull/fetch/push）execute 含 workdir 透传', () => {
+    const content = renderGitToolsFile();
+    for (const tool of ['clone', 'pull', 'fetch', 'push']) {
+      const start = content.indexOf(`export const ${tool} = tool({`);
+      const end = content.indexOf('\n});', start);
+      const toolBody = content.slice(start, end);
+      expect(toolBody).toContain('const workdir = args.workdir ? String(args.workdir) : undefined;');
+      expect(toolBody).toContain('workdir');
+      expect(toolBody).toContain('workdir: tool.schema.string().optional()');
+    }
+    expect(content).toContain('const cloneArgs = _buildGitArgs("clone", { ...args, target: absTarget });');
+    expect(content).toContain('runGit(cloneArgs, {}, workdir)');
+    expect(content).toContain('runGit(cloneArgs, tmp.env, workdir)');
+    expect(content).toContain('return runGit(_buildGitArgs("push", args), tmp.env, workdir);');
+  });
+
+  it('渲染产物：本地工具（status/diff/log）execute 含 workdir 透传', () => {
+    const content = renderGitToolsFile();
+    for (const tool of ['status', 'diff', 'log']) {
+      const start = content.indexOf(`export const ${tool} = tool({`);
+      const end = content.indexOf('\n});', start);
+      const toolBody = content.slice(start, end);
+      expect(toolBody).toContain('const workdir = args.workdir ? String(args.workdir) : undefined;');
+      expect(toolBody).toContain('return runGit(gitArgs, {}, workdir);');
+      expect(toolBody).toContain('workdir: tool.schema.string().optional()');
+    }
+  });
+
+  it('push 守卫 + fallback 语义不变（workdir 仅透传 cwd）', () => {
+    const content = renderGitToolsFile();
+    const pushStart = content.indexOf('export const push = tool({');
+    const pushBody = content.slice(pushStart, content.indexOf('\n});', pushStart));
+    expect(pushBody).toContain('loadCredential(repoUrl)');
+    expect(pushBody).not.toContain('tryLoadCredential');
+    expect(pushBody).toContain('permission !== "write"');
+    expect(pushBody).toContain('禁止 push');
+    expect(pushBody).toContain('tmp.env, workdir');
+    for (const tool of ['clone', 'pull', 'fetch']) {
+      const start = content.indexOf(`export const ${tool} = tool({`);
+      const toolBody = content.slice(start, content.indexOf('\n});', start));
+      expect(toolBody).toContain('tryLoadCredential(repoUrl)');
+      expect(toolBody).toContain('if (!entry)');
+    }
+    expect(content).toContain(runGit.toString());
+  });
+});
+
+describe('git_clone 中央库默认落点与复用（WORK_DIR/repos）', () => {
+  const realFs = jest.requireActual<typeof import('fs')>('fs');
+  const realCp = jest.requireActual<typeof import('child_process')>('child_process');
+  const passthroughSpawn = (): void => {
+    const spawnSync = child_process.spawnSync as unknown as jest.Mock;
+    spawnSync.mockImplementation(((...args: never[]) =>
+      (realCp.spawnSync as (...a: never[]) => unknown)(...(args as never[]))) as never);
+  };
+  const realGit = (args: string[], cwd?: string): void => {
+    const r = realCp.spawnSync('git', args, { encoding: 'utf8', cwd });
+    if (r.status !== 0) {
+      throw new Error(`real git ${args.join(' ')} failed: ${(r.stderr || r.stdout || '').trim()}`);
+    }
+  };
+
+  it('defaultRepoName：去 .git 后缀，取最后 / 或 : 之后一段（scp 兼容）', () => {
+    expect(defaultRepoName('git@gitee.com:xishuhq/ketaops.git')).toBe('ketaops');
+    expect(defaultRepoName('https://gitee.com/xishuhq/ketaops.git')).toBe('ketaops');
+    expect(defaultRepoName('https://github.com/guolong123/cliyard')).toBe('cliyard');
+    expect(defaultRepoName('  https://gitee.com/xishuhq/ketaops.GIT  ')).toBe('ketaops');
+    expect(defaultRepoName('ssh://git@gitee.com/xishuhq/repo.git')).toBe('repo');
+    expect(defaultRepoName('')).toBe('repo');
+  });
+
+  it('resolveCloneTarget：显式 target 优先（绝对直接用，相对按 cwd 解析）；缺省落中央库', () => {
+    const prev = process.env.WORK_DIR;
+    process.env.WORK_DIR = '/data/vteam-worker';
+    try {
+      expect(resolveCloneTarget('https://gitee.com/x/ketaops.git')).toBe('/data/vteam-worker/repos/ketaops');
+      expect(resolveCloneTarget('git@gitee.com:xishuhq/ketaops.git')).toBe('/data/vteam-worker/repos/ketaops');
+      expect(resolveCloneTarget('https://gitee.com/x/ketaops.git', '/tmp/custom/dir')).toBe('/tmp/custom/dir');
+      expect(resolveCloneTarget('https://gitee.com/x/ketaops.git', 'rel/dir')).toBe(
+        path.resolve(process.cwd(), 'rel/dir'),
+      );
+    } finally {
+      if (prev === undefined) delete process.env.WORK_DIR;
+      else process.env.WORK_DIR = prev;
+    }
+  });
+
+  it('resolveCloneTarget：WORK_DIR 未设置回退 <cwd>/repos', () => {
+    const prev = process.env.WORK_DIR;
+    delete process.env.WORK_DIR;
+    try {
+      expect(resolveCloneTarget('https://gitee.com/x/ketaops.git')).toBe(
+        path.join(process.cwd(), 'repos', 'ketaops'),
+      );
+    } finally {
+      if (prev !== undefined) process.env.WORK_DIR = prev;
+    }
+  });
+
+  it('prepareCloneTarget 真仓复用：缺省落中央库（建父目录），同仓二次复用不拉取；异仓/非仓占位抛错提示传 target', () => {
+    passthroughSpawn();
+    const prev = process.env.WORK_DIR;
+    const root = realFs.mkdtempSync(path.join(os.tmpdir(), 'keta-clone-central-'));
+    process.env.WORK_DIR = root;
+    try {
+      const srcA = path.join(root, 'srcA');
+      realFs.mkdirSync(srcA, { recursive: true });
+      realGit(['init'], srcA);
+      realGit(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], srcA);
+      const first = prepareCloneTarget(srcA);
+      expect(first.reused).toBe(false);
+      expect(first.absTarget).toBe(path.join(root, 'repos', 'srcA'));
+      expect(realFs.existsSync(path.join(root, 'repos'))).toBe(true);
+      realGit(['clone', srcA, first.absTarget]);
+      const second = prepareCloneTarget(srcA);
+      expect(second).toEqual({ absTarget: first.absTarget, reused: true });
+      expect(isSameRepoCheckout(first.absTarget, srcA)).toBe(true);
+      const srcB = path.join(root, 'srcB');
+      realFs.mkdirSync(srcB, { recursive: true });
+      realGit(['init'], srcB);
+      realGit(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init'], srcB);
+      expect(() => prepareCloneTarget(srcB, first.absTarget)).toThrow(/已被其他仓库占用/);
+      expect(() => prepareCloneTarget(srcB, first.absTarget)).toThrow(/target/);
+      const plain = path.join(root, 'plain');
+      realFs.mkdirSync(plain, { recursive: true });
+      realFs.writeFileSync(path.join(plain, 'f.txt'), 'x');
+      expect(() => prepareCloneTarget(srcB, plain)).toThrow(/已被其他仓库占用/);
+    } finally {
+      if (prev === undefined) delete process.env.WORK_DIR;
+      else process.env.WORK_DIR = prev;
+      realFs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('渲染产物 clone 分支：中央库复用 + 绝对路径回吐 + 异仓占位报错，不自动拉取', () => {
+    const content = renderGitToolsFile();
+    const start = content.indexOf('export const clone = tool({');
+    const end = content.indexOf('\n});', start);
+    const toolBody = content.slice(start, end);
+    expect(toolBody).toContain('prepareCloneTarget(repoUrl, args.target ? String(args.target) : undefined)');
+    expect(toolBody).toContain('已存在相同仓库，直接复用');
+    expect(toolBody).toContain('未执行拉取');
+    expect(toolBody).toContain('仓库目录：');
+    expect(prepareCloneTarget.toString()).toContain('已被其他仓库占用');
+    expect(toolBody).not.toContain('"pull"');
+    expect(toolBody).not.toContain('"fetch"');
+    expect(content).toContain(defaultRepoName.toString());
+    expect(content).toContain(resolveCloneTarget.toString());
+    expect(content).toContain(isSameRepoCheckout.toString());
+    expect(content).toContain(prepareCloneTarget.toString());
+    expect(content).toContain('process.env.WORK_DIR');
   });
 });

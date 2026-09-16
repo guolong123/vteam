@@ -46,7 +46,10 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
   };
   let idGen: { nextId: jest.Mock };
   let realtime: { broadcast: jest.Mock };
-  let workerDispatcher: { dispatchAgentMention: jest.Mock; isAgentExecuting: jest.Mock };
+  let workerDispatcher: {
+    dispatchAgentMention: jest.Mock;
+    isAgentExecuting: jest.Mock;
+  };
   let planLifecycle: { getStatus: jest.Mock; autoEnsureRow: jest.Mock };
   let loggerWarnSpy: jest.SpyInstance;
 
@@ -81,7 +84,10 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
     };
     idGen = { nextId: jest.fn() };
     realtime = { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
-    workerDispatcher = { dispatchAgentMention: jest.fn().mockResolvedValue(undefined), isAgentExecuting: jest.fn().mockReturnValue(null) };
+    workerDispatcher = {
+      dispatchAgentMention: jest.fn().mockResolvedValue(undefined),
+      isAgentExecuting: jest.fn().mockReturnValue(null),
+    };
     planLifecycle = { getStatus: jest.fn(), autoEnsureRow: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -109,16 +115,21 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
 
     service = module.get(PlatformMcpService);
     loggerWarnSpy = jest
-      .spyOn((service as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .spyOn(
+        (service as unknown as { logger: { warn: jest.Mock } }).logger,
+        'warn',
+      )
       .mockImplementation((() => undefined) as unknown as jest.Mock);
 
     // 归属校验 + 落库前置一律通过（门禁层唯一变量为计划态/issue 态/kind/force）。
-    prisma.task.findUnique.mockImplementation((args: { where: { id?: string } }) => {
-      if (args.where.id === taskId) {
-        return Promise.resolve({ teamId: 'tm_1' });
-      }
-      return Promise.resolve(null);
-    });
+    prisma.task.findUnique.mockImplementation(
+      (args: { where: { id?: string } }) => {
+        if (args.where.id === taskId) {
+          return Promise.resolve({ teamId: 'tm_1' });
+        }
+        return Promise.resolve(null);
+      },
+    );
     prisma.session.findFirst.mockResolvedValue({
       id: 's_1',
       agentId: 'a_sender',
@@ -143,7 +154,13 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
   });
 
   describe('计划门禁（kind=execution）', () => {
-    it.each([['draft'], ['reviewing'], ['approved'], ['rejected'], ['completed']])(
+    it.each([
+      ['draft'],
+      ['reviewing'],
+      ['approved'],
+      ['rejected'],
+      ['completed'],
+    ])(
       '执行派发在 %s 态被拦：triggered=false + reason=plan-gated + 计划未放行 hint，不触发 dispatch',
       async (status: string) => {
         planLifecycle.getStatus.mockResolvedValue(status);
@@ -208,8 +225,8 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
 
     it('force=true + forceReason→绕过门禁并写回执审计行', async () => {
       planLifecycle.getStatus.mockResolvedValue('approved');
-      prisma.messageReceipt.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
-        Promise.resolve(data),
+      prisma.messageReceipt.create.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) => Promise.resolve(data),
       );
 
       const result = await service.notifyAgent(ctx, {

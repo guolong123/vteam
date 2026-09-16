@@ -28,6 +28,7 @@ const COORDINATION_ROLES = [
   'vteam-developer',
   'vteam-tester',
   'vteam-project_manager',
+  'vteam-plan',
 ];
 
 // 复刻 opencode `Wildcard.match`：先转义 regex 特殊字符（不含 * ?），再 *→.*、?→.，锚定 ^...$。
@@ -59,13 +60,24 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     expect(Object.keys(ROLE_BOUNDARIES)).toHaveLength(7);
   });
 
-  it('toolAllows 的 MCP 键必须带 vteam_ 前缀（禁止裸 MCP 名）', () => {
+  it('toolAllows 的 MCP 键必须带 vteam_ 前缀（禁止裸 MCP 名；browser 例外，见下）', () => {
     for (const name of ROLE_NAMES) {
       for (const tool of Object.keys(ROLE_BOUNDARIES[name].toolAllows)) {
         if (tool.startsWith('git_')) continue;
+        if (tool === 'browser') continue;
         expect(VTEAM_MCP_TOOL_NAMES).toContain(tool);
         expect(tool).toMatch(/^vteam_/);
       }
+    }
+  });
+
+  it('browser 仅干活角色放行（项目经理除外）', () => {
+    for (const name of ROLE_NAMES) {
+      const has = Object.prototype.hasOwnProperty.call(
+        ROLE_BOUNDARIES[name].toolAllows,
+        'browser',
+      );
+      expect(has).toBe(name !== 'vteam-project_manager');
     }
   });
 
@@ -125,9 +137,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     for (const name of ROLE_NAMES) {
       const { toolAllows, mcpDenies } = ROLE_BOUNDARIES[name];
       const allowedMcp = new Set(
-        Object.keys(toolAllows).filter((t) =>
-          VTEAM_MCP_TOOL_NAMES.includes(t),
-        ),
+        Object.keys(toolAllows).filter((t) => VTEAM_MCP_TOOL_NAMES.includes(t)),
       );
       const denied = new Set(mcpDenies);
       for (const tool of allowedMcp) {
@@ -195,7 +205,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     expect(buildReadPermission()).toEqual({ '*': 'allow' });
   });
 
-  it('handoffTo 目标 ⊆ 5 协作角色，且无 UI 设计目标', () => {
+  it('handoffTo 目标 ⊆ 协作角色，且无 UI 设计目标', () => {
     for (const name of ROLE_NAMES) {
       const targets = Object.values(ROLE_BOUNDARIES[name].handoffTo);
       expect(targets.length).toBeGreaterThan(0);
@@ -226,9 +236,9 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     ];
     for (const [glob, subdir] of cases) {
       expect(wildcardMatch(`tasks/t_1/${subdir}/x`, glob)).toBe(true);
-      expect(wildcardMatch(`data/vteam-worker/tasks/t_1/${subdir}/x`, glob)).toBe(
-        true,
-      );
+      expect(
+        wildcardMatch(`data/vteam-worker/tasks/t_1/${subdir}/x`, glob),
+      ).toBe(true);
     }
     expect(wildcardMatch('tasks/t_1/prototypes/x', '**tasks/*/docs/**')).toBe(
       false,
@@ -236,13 +246,13 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
   });
 
   it('Permission matrix 精确值（层①/层② 单一口径）', () => {
-    expect(ROLE_BOUNDARIES['vteam-product'].bashEffect).toBe('deny');
-    expect(ROLE_BOUNDARIES['vteam-architect'].bashEffect).toBe('ask');
-    expect(ROLE_BOUNDARIES['vteam-developer'].bashEffect).toBe('ask');
-    expect(ROLE_BOUNDARIES['vteam-tester'].bashEffect).toBe('ask');
+    expect(ROLE_BOUNDARIES['vteam-product'].bashEffect).toBe('allow');
+    expect(ROLE_BOUNDARIES['vteam-architect'].bashEffect).toBe('allow');
+    expect(ROLE_BOUNDARIES['vteam-developer'].bashEffect).toBe('allow');
+    expect(ROLE_BOUNDARIES['vteam-tester'].bashEffect).toBe('allow');
     expect(ROLE_BOUNDARIES['vteam-project_manager'].bashEffect).toBe('deny');
-    expect(ROLE_BOUNDARIES['vteam-plan'].bashEffect).toBe('deny');
-    expect(ROLE_BOUNDARIES['vteam-librarian'].bashEffect).toBe('deny');
+    expect(ROLE_BOUNDARIES['vteam-plan'].bashEffect).toBe('allow');
+    expect(ROLE_BOUNDARIES['vteam-librarian'].bashEffect).toBe('allow');
 
     expect(
       buildEditPermission(ROLE_BOUNDARIES['vteam-architect'].writeGlobs),
@@ -273,6 +283,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       vteam_chat_history: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_group_post: 'allow',
+      browser: 'allow',
     });
     expect(ROLE_BOUNDARIES['vteam-librarian'].toolAllows).toEqual({
       vteam_chat_history: 'allow',
@@ -290,6 +301,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
+      browser: 'allow',
     });
     for (const name of ROLE_NAMES) {
       for (const gated of ROLE_SERVER_GATED_TOOLS) {

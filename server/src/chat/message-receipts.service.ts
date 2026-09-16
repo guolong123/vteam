@@ -15,6 +15,8 @@ export interface ReceiptEventPayload {
   status: 'acked' | 'expired';
   ackedAt?: string | null;
   nudgeCount?: number;
+  /** 自动催办耗尽后的升级提示（expireAfterAutoNudge 填充，dispatcher 见 expired + notice 即升级处理）。 */
+  notice?: string;
 }
 
 export interface RoundEventPayload {
@@ -139,6 +141,48 @@ export class MessageReceiptsService {
     return out;
   }
 
+  async recordAutoNudge(receiptId: string) {
+    return this.prisma.messageReceipt.update({
+      where: { id: receiptId },
+      data: { nudgeCount: { increment: 1 }, lastNudgedAt: new Date() },
+    });
+  }
+
+  async expireAfterAutoNudge(
+    row: {
+      id: string;
+      messageId: string | null;
+      taskId: string | null;
+      teamId: string;
+      fromInstanceId: string;
+      toInstanceId: string;
+      nudgeCount: number;
+    },
+    notice: string,
+  ) {
+    const updated = await this.prisma.messageReceipt.update({
+      where: { id: row.id },
+      data: { status: 'expired' },
+    });
+    await this.emitTeamChannel({
+      teamId: row.teamId,
+      taskId: row.taskId,
+      type: EVENT_TYPES.RECEIPT_EXPIRED,
+      payload: {
+        receiptId: row.id,
+        messageId: row.messageId,
+        taskId: row.taskId,
+        teamId: row.teamId,
+        fromInstanceId: row.fromInstanceId,
+        toInstanceId: row.toInstanceId,
+        status: 'expired',
+        nudgeCount: row.nudgeCount,
+        notice,
+      } satisfies ReceiptEventPayload,
+    });
+    return updated;
+  }
+
   /** n/N 计数（31 篇 §3.4 待回执看板口径：仅计数，不做分析页）。 */
   async countPending(filter: {
     taskId?: string;
@@ -148,7 +192,9 @@ export class MessageReceiptsService {
     if (filter.taskId) where.taskId = filter.taskId;
     if (filter.teamId) where.teamId = filter.teamId;
     const [pending, total] = await Promise.all([
-      this.prisma.messageReceipt.count({ where: { ...where, status: 'pending' } }),
+      this.prisma.messageReceipt.count({
+        where: { ...where, status: 'pending' },
+      }),
       this.prisma.messageReceipt.count({ where }),
     ]);
     return { pending, total };

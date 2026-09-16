@@ -19,9 +19,10 @@ const EVIDENCE_DIR = path.resolve(
 
 type PlanStatus = "draft" | "pending_final" | "approved" | "executing" | "completed";
 
-const scenario: { planStatus: PlanStatus; taskId: string } = {
+const scenario: { planStatus: PlanStatus; taskId: string; noLedger: boolean } = {
   planStatus: "pending_final",
-  taskId: "t_plan_pending_final",
+  taskId: "t_final_pending",
+  noLedger: false,
 };
 
 const LEDGER = {
@@ -89,6 +90,9 @@ function planJson(status: PlanStatus, taskId: string) {
 }
 
 function issuesJson(taskId: string) {
+  if (scenario.noLedger) {
+    return { items: [], total: 0, page: 1, pageSize: 100 };
+  }
   return {
     items: [
       { id: "is_0000000001", taskId, title: "评审派发 R1", status: "open", description: LEDGER_TEXT },
@@ -200,6 +204,7 @@ test.describe("定稿门会话计划 Tab（mock API）", () => {
   test("pending_final 待定稿琥珀徽 + 确认定稿按钮二次确认翻转 approved", async ({ page }) => {
     scenario.planStatus = "pending_final";
     scenario.taskId = "t_final_pending";
+    scenario.noLedger = false;
     await seedMemberAuth(page);
     await mockSessionApis(page);
     const block = await openPlanTab(page);
@@ -229,6 +234,7 @@ test.describe("定稿门会话计划 Tab（mock API）", () => {
   test("approved 态无定稿按钮（仅开始执行按钮）", async ({ page }) => {
     scenario.planStatus = "approved";
     scenario.taskId = "t_final_approved";
+    scenario.noLedger = false;
     await seedMemberAuth(page);
     await mockSessionApis(page);
     await openPlanTab(page);
@@ -241,13 +247,34 @@ test.describe("定稿门会话计划 Tab（mock API）", () => {
   test("draft 态两按钮皆不可见", async ({ page }) => {
     scenario.planStatus = "draft";
     scenario.taskId = "t_final_draft";
+    scenario.noLedger = false;
     await seedMemberAuth(page);
     await mockSessionApis(page);
     await openPlanTab(page);
-    await expect(page.getByTestId("plan-status-badge")).toHaveText("修订中");
+    await expect(page.getByTestId("plan-status-badge")).toHaveText("草稿");
     await expect(page.getByTestId("plan-finalize-btn")).toHaveCount(0);
     await expect(page.getByTestId("plan-confirm-btn")).toHaveCount(0);
-    asserts["draft"] = { badge: "修订中", finalizeBtn: 0, confirmBtn: 0 };
+    await expect(page.getByTestId("plan-review-pending")).toHaveCount(0);
+    asserts["draft"] = { badge: "草稿", finalizeBtn: 0, confirmBtn: 0, reviewPending: 0 };
+  });
+
+  test("draft 零账本态渲染等待派发指引", async ({ page }) => {
+    scenario.planStatus = "draft";
+    scenario.taskId = "t_final_draft_empty";
+    scenario.noLedger = true;
+    await seedMemberAuth(page);
+    await mockSessionApis(page);
+    await openPlanTab(page);
+    await expect(page.getByTestId("plan-status-badge")).toHaveText("草稿");
+    await expect(page.getByTestId("plan-version-line")).toHaveText("暂无评审轮次");
+    const pending = page.getByTestId("plan-review-pending");
+    await expect(pending).toBeVisible();
+    await expect(pending).toContainText("等待主 Agent 派发评审");
+    await expect(pending).toContainText("自动出现");
+    await expect(page.getByTestId("plan-finalize-btn")).toHaveCount(0);
+    await expect(page.getByTestId("plan-confirm-btn")).toHaveCount(0);
+    asserts["draft-empty"] = { badge: "草稿", finalizeBtn: 0, confirmBtn: 0, reviewPending: 1 };
+    scenario.noLedger = false;
   });
 
   test.afterAll(async () => {

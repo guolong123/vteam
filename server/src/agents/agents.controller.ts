@@ -100,7 +100,9 @@ export class AgentsController {
   @Get('omo-agent-prompt')
   @UseGuards(PermissionGuard)
   @RequirePermission('agents.view')
-  @ApiOperation({ summary: 'OmO 单个 agent 的系统提示词（按需拉取，避免列表下发 100KB+）' })
+  @ApiOperation({
+    summary: 'OmO 单个 agent 的系统提示词（按需拉取，避免列表下发 100KB+）',
+  })
   getOmoAgentPrompt(
     @Query('name') name: string,
     @Query('workerId') workerId?: string,
@@ -111,7 +113,9 @@ export class AgentsController {
   @Patch('omo-config')
   @UseGuards(PermissionGuard)
   @RequirePermission('agents.edit')
-  @ApiOperation({ summary: 'OmO agent→模型配置（写，增量合并到 worker 配置文件）' })
+  @ApiOperation({
+    summary: 'OmO agent→模型配置（写，增量合并到 worker 配置文件）',
+  })
   setOmoConfig(
     @Body() dto: UpdateOmoConfigDto,
     @Query('workerId') workerId?: string,
@@ -194,7 +198,9 @@ export class AgentsController {
   @Get(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission('agents.view')
-  @ApiOperation({ summary: 'Agent 详情（含 skills 关联 + effectivePermission）' })
+  @ApiOperation({
+    summary: 'Agent 详情（含 skills 关联 + effectivePermission）',
+  })
   findOne(@Param('id') id: string) {
     return this.agentsService.findOne(id);
   }

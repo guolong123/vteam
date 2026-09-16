@@ -64,11 +64,23 @@ import {
   MESSAGE_RECEIPT_KINDS,
   MESSAGE_RECEIPT_STATUSES,
 } from '../chat/message-receipt.constants';
+import { TimerService } from '../timers/timer.service';
+import {
+  buildReceiptNudgeDedupKey,
+  normalizeReceiptTimeoutMin,
+  RECEIPT_NUDGE_KIND,
+  ReceiptNudgePayload,
+} from '../chat/receipt-nudge.handler';
 import {
   REVIEW_TRIPLET_HINT,
   ensureRoleViewFooter,
   parseReviewTriplet,
+  type ReviewDispatchTriplet,
 } from '../chat/review-dispatch-triplet';
+import {
+  REVIEW_ROUND_TIMEOUT_KIND,
+  buildReviewRoundTimeoutDedupKey,
+} from '../chat/review-round-timeout.handler';
 import {
   buildStalePlanHashHint,
   isStalePlanHash,
@@ -77,6 +89,9 @@ import {
 } from '../issues/plan-hash-gate';
 import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
 import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
+import { REVIEW_ROUND_TIMEOUT_MS } from '../issues/review-round-gate.service';
+import { ReviewRoundService } from '../issues/review-round.service';
+import { tryParseLedger } from '../issues/review-round-ledger';
 
 /**
  * 消息主键前缀：与 ChatService/WorkerDispatcher 共享 IdGeneratorService 的 'm' 计数
@@ -145,11 +160,7 @@ export interface ReadFileResult {
  * todo 4 消费 `duplicate`；本 todo 实际产生 ok|throttled，duplicate|plan-gated 预留词汇位）。
  */
 export type DispatchReason =
-  | 'ok'
-  | 'duplicate'
-  | 'throttled'
-  | 'plan-gated'
-  | 'review-triplet';
+  'ok' | 'duplicate' | 'throttled' | 'plan-gated' | 'review-triplet';
 
 /**
  * notify_agent 统一返回契约（plan-review todo 3）：
@@ -261,6 +272,14 @@ export class PlatformMcpService {
     @Optional()
     @Inject(MessageReceiptsService)
     private readonly receipts?: MessageReceiptsService,
+    @Optional()
+    @Inject(TimerService)
+    private readonly timers?: TimerService,
+    // 评审轮次账本串行写（review-round-open）：缺省可空——单测/旧装配未提供时
+    // 开轮跳过 + warn，派发本身不受影响；生产装配经 IssuesModule（已 import）提供。
+    @Optional()
+    @Inject(ReviewRoundService)
+    private readonly rounds?: ReviewRoundService,
   ) {}
 
   /**
@@ -412,8 +431,7 @@ export class PlatformMcpService {
   }
 
   private enforceHistoryMaxBytes(page: ChatHistoryPage): void {
-    const size = () =>
-      Buffer.byteLength(JSON.stringify(page), 'utf8');
+    const size = () => Buffer.byteLength(JSON.stringify(page), 'utf8');
     while (page.items.length > 1 && size() > CHAT_HISTORY_MAX_BYTES) {
       page.items.shift();
       page.truncated = true;
@@ -426,10 +444,12 @@ export class PlatformMcpService {
         'utf8',
       );
       const envelope =
-        Buffer.byteLength(JSON.stringify({ ...page, items: [] }), 'utf8') -
-        2;
+        Buffer.byteLength(JSON.stringify({ ...page, items: [] }), 'utf8') - 2;
       let budget =
-        CHAT_HISTORY_MAX_BYTES - fixed - envelope - Buffer.byteLength(marker, 'utf8');
+        CHAT_HISTORY_MAX_BYTES -
+        fixed -
+        envelope -
+        Buffer.byteLength(marker, 'utf8');
       budget = Math.max(0, budget);
       let head = only.text.slice(0, budget);
       let guard = 8;
@@ -437,12 +457,18 @@ export class PlatformMcpService {
         head.length > 0 &&
         guard-- > 0 &&
         Buffer.byteLength(
-          JSON.stringify({ ...page, items: [{ ...only, text: head + marker }] }),
+          JSON.stringify({
+            ...page,
+            items: [{ ...only, text: head + marker }],
+          }),
           'utf8',
         ) > CHAT_HISTORY_MAX_BYTES
       ) {
         const cur = Buffer.byteLength(
-          JSON.stringify({ ...page, items: [{ ...only, text: head + marker }] }),
+          JSON.stringify({
+            ...page,
+            items: [{ ...only, text: head + marker }],
+          }),
           'utf8',
         );
         const excess = cur - CHAT_HISTORY_MAX_BYTES;
@@ -483,9 +509,7 @@ export class PlatformMcpService {
     const views: GitRepoView[] = await this.gitRepos.findAll();
     const repos: GitRepoListItem[] = [];
     for (const view of views) {
-      const grant = view.grantedAgents.find(
-        (g) => g.agentId === callerAgentId,
-      );
+      const grant = view.grantedAgents.find((g) => g.agentId === callerAgentId);
       if (!grant) continue;
       repos.push({
         id: view.id,
@@ -659,7 +683,7 @@ export class PlatformMcpService {
         role: r.agent.role,
         main: r.id === ctxMainId,
       })),
-      };
+    };
   }
 
   /**
@@ -981,6 +1005,8 @@ export class PlatformMcpService {
        * 与冻结哈希不一致即 plan-gated 拦截；缺省 → 哈希门禁未武装（原门禁语义不变）。
        */
       planHash?: string;
+      /** 回执超时分钟数（缺省 10，范围 1-1440；仅 execution 派发记账并排平台自动催办）。 */
+      receiptTimeoutMin?: number;
     },
   ): Promise<NotifyAgentResult> {
     const exec = await this.resolveExecContext(ctx, args);
@@ -1094,7 +1120,9 @@ export class PlatformMcpService {
             ? 'nudge'
             : 'wake';
     const forceReason =
-      args.force === true && typeof args.forceReason === 'string' && args.forceReason.trim()
+      args.force === true &&
+      typeof args.forceReason === 'string' &&
+      args.forceReason.trim()
         ? args.forceReason.trim()
         : null;
     if (args.issueId) {
@@ -1112,12 +1140,19 @@ export class PlatformMcpService {
           targetInstanceId: args.targetInstanceId,
           triggered: false,
           reason: 'duplicate',
-          ...(issueGate.origMessageId ? { origMessageId: issueGate.origMessageId } : {}),
+          ...(issueGate.origMessageId
+            ? { origMessageId: issueGate.origMessageId }
+            : {}),
           issueBound: true,
         };
       }
     }
-    if (kind === 'execution' && !isTeam && effTaskId && targetAgentId !== PLAN_AGENT_ID) {
+    if (
+      kind === 'execution' &&
+      !isTeam &&
+      effTaskId &&
+      targetAgentId !== PLAN_AGENT_ID
+    ) {
       const planGate = await this.checkPlanExecutionAllowed(effTaskId);
       const callerHash = normalizePlanHash(args.planHash);
       let staleHash: { expected: string; actual: string } | null = null;
@@ -1180,10 +1215,23 @@ export class PlatformMcpService {
           issueBound: !!args.issueId,
         };
       }
+      if (triplet.triplet) {
+        try {
+          await this.openReviewRound(triplet.triplet, {
+            taskId: effTaskId,
+            teamId: notifyTeamId,
+            issueId: args.issueId,
+            callerInstanceId: args.selfInstanceId,
+          });
+        } catch (err) {
+          this.logger.warn(
+            `[mcp] review-round 开轮失败（不阻断派发） to=${args.targetInstanceId}：${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
     }
     // 放行派发嵌入视角边界（todo 8，docs 33 §3.5；非 review 原样透传）。
-    const dispatchText =
-      kind === 'review' ? ensureRoleViewFooter(text) : text;
+    const dispatchText = kind === 'review' ? ensureRoleViewFooter(text) : text;
     if (isTeam) {
       await this.workerDispatcher.dispatchAgentMention({
         teamId: exec.teamId,
@@ -1201,6 +1249,20 @@ export class PlatformMcpService {
         targetInstanceId: args.targetInstanceId,
         ...(args.issueId ? { issueId: args.issueId } : {}),
         kind,
+      });
+    }
+    if (kind === 'execution') {
+      await this.scheduleReceiptNudge({
+        messageId: message.id,
+        channelId: channel.id,
+        taskId: effTaskId,
+        teamId: notifyTeamId,
+        fromInstanceId: args.selfInstanceId,
+        toInstanceId: args.targetInstanceId,
+        assigneeName: targetName,
+        content: args.content,
+        issueId: args.issueId ?? null,
+        receiptTimeoutMin: args.receiptTimeoutMin,
       });
     }
 
@@ -1362,6 +1424,265 @@ export class PlatformMcpService {
     } catch (err) {
       this.logger.warn(
         `[mcp] force 审计行落库失败 message=${input.messageId}（不阻断派发）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private async openReviewRound(
+    triplet: ReviewDispatchTriplet,
+    opts: {
+      taskId: string | null;
+      teamId: string | null;
+      issueId?: string;
+      callerInstanceId: string;
+    },
+  ): Promise<void> {
+    let hostIssueId: string | null = opts.issueId ?? null;
+    if (!hostIssueId && opts.taskId) {
+      hostIssueId = await this.findReviewRoundHost(opts.taskId);
+    }
+    if (!hostIssueId) {
+      if (!opts.taskId) {
+        this.logger.warn(
+          `[mcp] review-round 开轮跳过（团队维度无 issueId 且无 taskId，无法定位宿主）`,
+        );
+        return;
+      }
+      try {
+        const created = await this.issuesService.createByAgent(
+          opts.callerInstanceId,
+          opts.taskId,
+          {
+            taskId: opts.taskId,
+            title: `计划评审 R${triplet.round} ${triplet.planVersion}`,
+          },
+        );
+        hostIssueId =
+          (created as unknown as { id?: unknown } | null)?.id as string ??
+          null;
+      } catch (err) {
+        this.logger.warn(
+          `[mcp] review-round 宿主 issue 创建失败 task=${opts.taskId}（不阻断派发）：${err instanceof Error ? err.message : String(err)}`,
+        );
+        return;
+      }
+      if (!hostIssueId) {
+        this.logger.warn(
+          `[mcp] review-round 宿主 issue 创建返回缺 id task=${opts.taskId}（不阻断派发）`,
+        );
+        return;
+      }
+    }
+    if (!this.rounds) {
+      this.logger.warn(
+        `[mcp] review-round 开轮跳过 issue=${hostIssueId}（ReviewRoundService 未装配，不阻断派发）`,
+      );
+      return;
+    }
+    let existing: ReturnType<typeof tryParseLedger> = null;
+    try {
+      const host = await this.prisma.issue.findUnique({
+        where: { id: hostIssueId },
+        select: { description: true },
+      });
+      existing = tryParseLedger(
+        (host as unknown as { description?: string | null } | null)
+          ?.description ?? null,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] review-round 账本读取失败 issue=${hostIssueId}（fail-closed 跳过开轮，不覆盖终态，不阻断派发）：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    if (existing) {
+      const terminal =
+        existing.status === 'complete' || existing.status === 'stale';
+      if (terminal && triplet.round <= existing.round) {
+        this.logger.warn(
+          `[mcp] review-round 重派跳过 issue=${hostIssueId} R${triplet.round}（终态 ${existing.status} R${existing.round} 不回退 collecting，不阻断派发）`,
+        );
+        return;
+      }
+      if (triplet.round < existing.round) {
+        this.logger.warn(
+          `[mcp] review-round 旧轮重派跳过 issue=${hostIssueId} R${triplet.round}（当前 R${existing.round}，不覆盖 expected/timeout，不阻断派发）`,
+        );
+        return;
+      }
+    }
+    const timeoutAt = new Date(Date.now() + REVIEW_ROUND_TIMEOUT_MS);
+    try {
+      await this.rounds.applyRoundUpdate(hostIssueId, {
+        round: triplet.round,
+        planVersion: {
+          version: triplet.planVersion,
+          hash: triplet.planHash,
+        },
+        expected: [...triplet.expected],
+        ...(opts.taskId ? { taskId: opts.taskId } : {}),
+        status: 'collecting',
+        timeoutAt: timeoutAt.toISOString(),
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] review-round 账本写入失败 issue=${hostIssueId}（不阻断派发）：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    await this.scheduleReviewRoundTimeout({
+      issueId: hostIssueId,
+      taskId: opts.taskId,
+      teamId: opts.teamId,
+      round: triplet.round,
+      timeoutAt,
+    });
+  }
+
+  private async findReviewRoundHost(taskId: string): Promise<string | null> {
+    try {
+      const rows = (await this.prisma.issue.findMany({
+        where: { taskId },
+        orderBy: { updatedAt: 'desc' },
+        take: 20,
+        select: { id: true, description: true },
+      })) as unknown as Array<{ id: string; description?: string | null }>;
+      for (const row of rows ?? []) {
+        if (tryParseLedger(row?.description ?? null)) return row.id;
+      }
+      return null;
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] review-round 宿主查找失败 task=${taskId}（走创建兜底）：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  private async scheduleReviewRoundTimeout(input: {
+    issueId: string;
+    taskId: string | null;
+    teamId: string | null;
+    round: number;
+    timeoutAt: Date;
+  }): Promise<void> {
+    try {
+      if (!this.timers) {
+        this.logger.warn(
+          `[mcp] review-round 超时 timer 跳过 issue=${input.issueId} R${input.round}（TimerService 未装配，不阻断派发）`,
+        );
+        return;
+      }
+      await this.timers.schedule(
+        REVIEW_ROUND_TIMEOUT_KIND,
+        input.timeoutAt,
+        {
+          issueId: input.issueId,
+          taskId: input.taskId,
+          teamId: input.teamId,
+          round: input.round,
+        },
+        buildReviewRoundTimeoutDedupKey(input.issueId, input.round),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] review-round 超时 timer 排期失败 issue=${input.issueId}（不阻断派发）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private async scheduleReceiptNudge(input: {
+    messageId: string;
+    channelId: string;
+    taskId: string | null;
+    teamId: string | null;
+    fromInstanceId: string;
+    toInstanceId: string;
+    assigneeName: string;
+    content: string;
+    issueId: string | null;
+    receiptTimeoutMin?: number;
+  }): Promise<void> {
+    try {
+      if (!input.teamId) {
+        this.logger.warn(
+          `[mcp] receipt-nudge 缺团队归属 message=${input.messageId}，跳过记账`,
+        );
+        return;
+      }
+      const timeoutMin = normalizeReceiptTimeoutMin(input.receiptTimeoutMin);
+      const dedupKey = buildMessageReceiptDedupKey({
+        fromInstanceId: input.fromInstanceId,
+        toInstanceId: input.toInstanceId,
+        issueId: input.issueId,
+        content: input.content,
+      });
+      let receiptId: string;
+      let fireAt: Date;
+      try {
+        const created = (await this.prisma.messageReceipt.create({
+          data: {
+            id: await this.idGen.nextId('mr'),
+            messageId: input.messageId,
+            fromInstanceId: input.fromInstanceId,
+            toInstanceId: input.toInstanceId,
+            taskId: input.taskId,
+            teamId: input.teamId,
+            summary: input.content.slice(0, 100),
+            status: MESSAGE_RECEIPT_STATUSES.pending,
+            dedupKey,
+            issueId: input.issueId,
+            expiresAt: new Date(Date.now() + timeoutMin * 60 * 1000),
+            kind: MESSAGE_RECEIPT_KINDS.dispatch,
+          },
+        })) as unknown as { id: string; expiresAt: Date };
+        receiptId = created.id;
+        fireAt = new Date(created.expiresAt);
+      } catch (err) {
+        if ((err as { code?: string })?.code !== 'P2002') {
+          throw err;
+        }
+        const existing = (await this.prisma.messageReceipt.findFirst({
+          where: { dedupKey },
+        })) as unknown as {
+          id: string;
+          status?: string;
+          expiresAt: Date;
+        } | null;
+        if (!existing || existing.status !== MESSAGE_RECEIPT_STATUSES.pending) {
+          this.logger.warn(
+            `[mcp] receipt-nudge 记账去重命中非 pending 行 message=${input.messageId}，跳过排期`,
+          );
+          return;
+        }
+        receiptId = existing.id;
+        fireAt = new Date(existing.expiresAt);
+      }
+      if (!this.timers) {
+        this.logger.warn(
+          `[mcp] receipt-nudge TimerService 未装配 receipt=${receiptId}（记账已落库，自动催办缺席）`,
+        );
+        return;
+      }
+      const payload: ReceiptNudgePayload = {
+        receiptId,
+        teamId: input.teamId,
+        taskId: input.taskId,
+        channelId: input.channelId,
+        messageId: input.messageId,
+        fromInstanceId: input.fromInstanceId,
+        toInstanceId: input.toInstanceId,
+        assigneeName: input.assigneeName,
+      };
+      await this.timers.schedule(
+        RECEIPT_NUDGE_KIND,
+        fireAt,
+        payload,
+        buildReceiptNudgeDedupKey(input.teamId, receiptId),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] receipt-nudge 排期失败 message=${input.messageId}（不阻断派发）：${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -1636,11 +1957,40 @@ export class PlatformMcpService {
   }
 
   /**
+   * 团队主成员解析（task_create / skill_create 团队维度门共用，唯一回退点）：
+   * team.mainAgentMemberId 显式绑定优先返回；为 NULL 时回退首位成员（seq 升序，
+   * 对齐 chat.service buildMainAgentTrigger / worker-dispatcher resolveTeamMainMember；
+   * TeamMember 无软删字段，过滤域恒为 { teamId }）。空名册或查询失败 → null
+   * （调用方保持今日 403，失败永不放行）。
+   */
+  private async resolveTeamMainMemberId(
+    teamId: string,
+    explicitMainId: string | null,
+  ): Promise<string | null> {
+    if (explicitMainId) return explicitMainId;
+    try {
+      const first = await (this.prisma as any).teamMember.findFirst({
+        where: { teamId },
+        orderBy: { seq: 'asc' },
+        select: { id: true },
+      });
+      return (first as { id: string } | null)?.id ?? null;
+    } catch (err) {
+      this.logger.warn(
+        `resolveTeamMainMemberId 回退查询失败 teamId=${teamId}：${(err as Error)?.message ?? err}`,
+      );
+      return null;
+    }
+  }
+
+  /**
    * task_create：团队会话无任务时由主 Agent 建任务（team-free-chat todo-4；
    * remove-project-dimension Todo 7 去 pid：团队即归属，无项目防提权门）。
    * 上下文解析：taskId 优先走任务维度（门 = task.mainAgentInstanceId === 调用方，
-   * 对齐 task_transition 的 isMain 语义；建任务目标团队取该任务所属团队）；无 taskId
-   * 走团队维度（门 = session 团队成员 === team.mainAgentMemberId）。
+   * 该字段为 NULL（存量任务）时回退所属团队主成员判定；对齐 task_transition
+   * 的 isMain 语义；建任务目标团队取该任务所属团队）；无 taskId
+   * 走团队维度（门 = session 团队成员 === 团队主成员 id，
+   * 主 id 经 resolveTeamMainMemberId 解析：显式绑定优先，否则首位成员回退）。
    * 成功路径经 TasksService.createByAgent（attribution createdBy = 团队用户成员
    * owner 回填；永不直调 create，其按调用方 userId 的团队成员校验会 403 agent）。
    */
@@ -1668,11 +2018,35 @@ export class PlatformMcpService {
           message: '任务不存在',
         });
       }
-      if (task.mainAgentInstanceId !== exec.callerId) {
-        throw new ForbiddenException({
-          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-          message: `仅主 Agent（${task.mainAgentInstanceId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`,
+      if (task.mainAgentInstanceId != null) {
+        if (task.mainAgentInstanceId !== exec.callerId) {
+          throw new ForbiddenException({
+            code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+            message: `仅主 Agent（${task.mainAgentInstanceId}）可创建任务；请知会主 Agent 调用 task_create`,
+          });
+        }
+      } else {
+        // 兼容：存量任务 mainAgentInstanceId 为空（Todo 6 迁移置空）→ 回退到
+        // 所属团队主成员判定（团队显式绑定优先，否则首位成员；查不到 → 未设置）。
+        if (!task.teamId) {
+          throw new BadRequestException(
+            '当前任务未绑定团队，无法解析建任务目标团队',
+          );
+        }
+        const gateTeam = await this.prisma.team.findUnique({
+          where: { id: task.teamId },
+          select: { mainAgentMemberId: true },
         });
+        const taskDimMainId = await this.resolveTeamMainMemberId(
+          task.teamId,
+          gateTeam?.mainAgentMemberId ?? null,
+        );
+        if (taskDimMainId !== exec.callerId) {
+          throw new ForbiddenException({
+            code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+            message: `仅主 Agent（${taskDimMainId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`,
+          });
+        }
       }
       if (!task.teamId) {
         throw new BadRequestException(
@@ -1688,10 +2062,14 @@ export class PlatformMcpService {
       if (!team) {
         throw new NotFoundException('团队不存在');
       }
-      if (team.mainAgentMemberId !== exec.callerId) {
+      const taskGateMainId = await this.resolveTeamMainMemberId(
+        team.id,
+        team.mainAgentMemberId ?? null,
+      );
+      if (taskGateMainId !== exec.callerId) {
         throw new ForbiddenException({
           code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-          message: `仅主 Agent（${team.mainAgentMemberId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`,
+          message: `仅主 Agent（${taskGateMainId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`,
         });
       }
       teamId = team.id;
@@ -1707,7 +2085,8 @@ export class PlatformMcpService {
   /**
    * skill_create：主 Agent 沉淀新 SKILL.md（learning-mode P2）。
    * 双上下文主门（对齐 task_create）：任务维度门 = task.mainAgentInstanceId
-   * === 调用方，否则 403；团队维度门 = team.mainAgentMemberId === 调用方，
+   * === 调用方（该字段为 NULL 时回退所属团队主成员判定），否则 403；团队维度门 = 调用方 === 团队主成员 id
+   * （经 resolveTeamMainMemberId 解析：显式绑定优先，否则首位成员回退），
    * 否则 403。归属冒充（selfInstanceId 非会话成员）由 resolveExecContext
    * 经 assertWorkerTask/Team 先行 403。
    * 内容门：全文超 100KB → 400；parseSkillMarkdown 先行（frontmatter
@@ -1739,11 +2118,37 @@ export class PlatformMcpService {
           message: '任务不存在',
         });
       }
-      if (task.mainAgentInstanceId !== exec.callerId) {
-        throw new ForbiddenException({
-          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-          message: `仅主 Agent（${task.mainAgentInstanceId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`,
+      if (task.mainAgentInstanceId != null) {
+        if (task.mainAgentInstanceId !== exec.callerId) {
+          throw new ForbiddenException({
+            code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+            message: `仅主 Agent（${task.mainAgentInstanceId}）可沉淀技能；请知会主 Agent 调用 skill_create`,
+          });
+        }
+      } else {
+        // 兼容：存量任务 mainAgentInstanceId 为空（Todo 6 迁移置空）→ 回退到
+        // 所属团队主成员判定（团队显式绑定优先，否则首位成员；查不到 → 未设置）。
+        if (!task.teamId) {
+          throw new ForbiddenException({
+            code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+            message:
+              '仅主 Agent（未设置）可沉淀技能；请知会主 Agent 调用 skill_create',
+          });
+        }
+        const skillGateTeam = await this.prisma.team.findUnique({
+          where: { id: task.teamId },
+          select: { mainAgentMemberId: true },
         });
+        const taskDimSkillMainId = await this.resolveTeamMainMemberId(
+          task.teamId,
+          skillGateTeam?.mainAgentMemberId ?? null,
+        );
+        if (taskDimSkillMainId !== exec.callerId) {
+          throw new ForbiddenException({
+            code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+            message: `仅主 Agent（${taskDimSkillMainId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`,
+          });
+        }
       }
     } else {
       const team = await this.prisma.team.findUnique({
@@ -1753,10 +2158,14 @@ export class PlatformMcpService {
       if (!team) {
         throw new NotFoundException('团队不存在');
       }
-      if (team.mainAgentMemberId !== exec.callerId) {
+      const skillGateMainId = await this.resolveTeamMainMemberId(
+        team.id,
+        team.mainAgentMemberId ?? null,
+      );
+      if (skillGateMainId !== exec.callerId) {
         throw new ForbiddenException({
           code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-          message: `仅主 Agent（${team.mainAgentMemberId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`,
+          message: `仅主 Agent（${skillGateMainId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`,
         });
       }
     }
@@ -2167,8 +2576,7 @@ export class PlatformMcpService {
     }
     if (args.description !== undefined) {
       data.description = (
-        args.description.trim() ||
-        (args.content ?? row.content).slice(0, 120)
+        args.description.trim() || (args.content ?? row.content).slice(0, 120)
       ).slice(0, 255);
     }
     if (args.tags !== undefined) {
@@ -2500,8 +2908,8 @@ export class PlatformMcpService {
     const prompt = profile.agent.prompt;
     const truncated = prompt.length > 500;
     const agentRole = profile.agent.role as string | null;
-    const agentPolicyId = (profile.agent as { policyId?: string | null })
-      .policyId ?? null;
+    const agentPolicyId =
+      (profile.agent as { policyId?: string | null }).policyId ?? null;
     let effectivePermission: {
       policyId: string;
       policyName: string;
@@ -2918,10 +3326,12 @@ export class PlatformMcpService {
       });
       const teamId = task?.teamId ?? null;
       if (teamId) {
-        const bindings = await (this.prisma as any).teamMessageChannel.findMany({
-          where: { teamId },
-          select: { messageChannelId: true },
-        });
+        const bindings = await (this.prisma as any).teamMessageChannel.findMany(
+          {
+            where: { teamId },
+            select: { messageChannelId: true },
+          },
+        );
         for (const b of bindings as Array<{ messageChannelId: string }>) {
           try {
             const ch = await (this.prisma as any).messageChannel.findUnique({

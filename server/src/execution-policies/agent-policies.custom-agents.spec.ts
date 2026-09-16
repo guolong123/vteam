@@ -27,8 +27,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
 
   function builtinFixture() {
     const agents = BUILTIN_ORDER.map((name) => {
-      const boundary =
-        ROLE_BOUNDARIES[name as keyof typeof ROLE_BOUNDARIES];
+      const boundary = ROLE_BOUNDARIES[name as keyof typeof ROLE_BOUNDARIES];
       return {
         name,
         description: boundary.scopeSummary,
@@ -46,8 +45,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
     });
     const roles = Object.fromEntries(
       BUILTIN_ORDER.map((name) => {
-        const boundary =
-          ROLE_BOUNDARIES[name as keyof typeof ROLE_BOUNDARIES];
+        const boundary = ROLE_BOUNDARIES[name as keyof typeof ROLE_BOUNDARIES];
         return [
           name,
           {

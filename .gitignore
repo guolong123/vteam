@@ -39,6 +39,17 @@ coverage/
 .omo/evidence/**/*.png
 .gstack/
 
+# DB backups (deploy-time mysqldump, hundreds of MB — never versioned).
+# NOTE: scoped to .omo/evidence on purpose — prisma migrations (*.sql) MUST stay committable,
+# and several legacy evidence .sql backups are already tracked. Do NOT add a blanket *.sql here.
+.omo/evidence/**/*.sql
+
+# md-docs: standalone git repo (own remote gitee.com/guojongg/mddocs), not part of this tree
+md-docs/
+
+# scratch scripts
+*.tmp.cjs
+
 # session snapshots (run-continuation JSON, not versioned)
 .omo/run-continuation/
 

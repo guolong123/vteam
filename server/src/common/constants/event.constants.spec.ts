@@ -9,7 +9,7 @@ import {
 import { PLAN_LIFECYCLE_STATUS } from '../../tasks/plan-lifecycle.service';
 
 describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 篇；Phase 4 worker 回流扩展，T1）', () => {
-  it('EVENT_TYPES 含 27 个事件，事件名一律点号分隔（无下划线变体）', () => {
+  it('EVENT_TYPES 含 28 个事件，事件名一律点号分隔（无下划线变体）', () => {
     expect(EVENT_TYPES.CHAT_MESSAGE_NEW).toBe('chat.message.new');
     expect(EVENT_TYPES.AGENT_LOADING).toBe('agent.loading');
     expect(EVENT_TYPES.AGENT_ERROR).toBe('agent.error');
@@ -34,19 +34,26 @@ describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 �
     expect(EVENT_TYPES.ROUND_STALE).toBe('round.stale');
     expect(EVENT_TYPES.PLAN_STATUS_DRAFT).toBe('plan.status.draft');
     expect(EVENT_TYPES.PLAN_STATUS_REVIEWING).toBe('plan.status.reviewing');
+    expect(EVENT_TYPES.PLAN_STATUS_PENDING_FINAL).toBe(
+      'plan.status.pending_final',
+    );
     expect(EVENT_TYPES.PLAN_STATUS_APPROVED).toBe('plan.status.approved');
     expect(EVENT_TYPES.PLAN_STATUS_REJECTED).toBe('plan.status.rejected');
     expect(EVENT_TYPES.PLAN_STATUS_EXECUTING).toBe('plan.status.executing');
     expect(EVENT_TYPES.PLAN_STATUS_COMPLETED).toBe('plan.status.completed');
-    expect(Object.values(EVENT_TYPES)).toHaveLength(27);
+    expect(Object.values(EVENT_TYPES)).toHaveLength(28);
     for (const name of Object.values(EVENT_TYPES)) {
-      expect(name.includes('_')).toBe(false);
+      // plan.status.* 后缀逐字取自 PLAN_LIFECYCLE_STATUS（含 pending_final 的下划线），
+      // 由下一单测 1:1 锁定；此处仅对其余事件断言无下划线变体
+      if (!name.startsWith('plan.status.')) {
+        expect(name.includes('_')).toBe(false);
+      }
       // 点号命名：除 global 外一律含点号分隔（无驼峰/下划线变体）
       expect(name.includes('.')).toBe(true);
     }
   });
 
-  it('plan.status.* 后缀与 PLAN_LIFECYCLE_STATUS 六态一一对应', () => {
+  it('plan.status.* 后缀与 PLAN_LIFECYCLE_STATUS 七态一一对应', () => {
     const planEvents = Object.values(EVENT_TYPES).filter((n) =>
       n.startsWith('plan.status.'),
     );

@@ -110,6 +110,30 @@ export function loadCredential(repoUrl: string): GitCredentialEntry {
 }
 
 /**
+ * 非抛出的凭证查找（public-repo fallback，供 clone/pull/fetch 只读操作）：
+ * 匹配逻辑与 loadCredential 完全一致（经 normalizeRepoUrl 规范化），
+ * 但文件缺失/损坏/未命中时返回 null 而非抛错，调用方以 null 表示“直接直连”
+ * （公开仓库零配置克隆）。错误信息不含明文 key（null 路径本身不抛错）。
+ *
+ * 自包含：与 loadCredential 相同约束——不引用模块级 GIT_CREDS_FILE 常量，
+ * 函数内局部求值，可被 renderGitToolsFile toString() 内联进渲染产物 git.ts。
+ */
+export function tryLoadCredential(repoUrl: string): GitCredentialEntry | null {
+  // 自包含：不引用模块级变量/其他模块作用域符号（normalizeRepoUrl 除外，
+  // 其同样被内联进渲染产物），保证渲染产物可独立执行。
+  const credsFile = path.join(os.homedir(), '.keta-git-creds.json');
+  let parsed: { credentials?: GitCredentialEntry[] };
+  try {
+    parsed = JSON.parse(fs.readFileSync(credsFile, 'utf8'));
+  } catch {
+    return null;
+  }
+  const creds = parsed?.credentials ?? [];
+  const normalized = normalizeRepoUrl(repoUrl);
+  const entry = creds.find((c) => normalizeRepoUrl(c.repoUrl) === normalized);
+  return entry ?? null;
+}
+/**
  * SSH 私钥格式归一（OPENSSH 容器格式 ssh-rsa → PKCS#1 PEM）。
  *
  * 背景：部分 OPENSSH 容器格式的 ssh-rsa 私钥在 OpenSSL 3.x（worker 容器
@@ -354,8 +378,11 @@ export function buildGitEnv(entry: GitCredentialEntry): { env: Record<string, st
 }
 
 /** spawn git（合并注入 env），非 0 退出抛错（stderr/stdout，不含 token 明文）。 */
-export function runGit(gitArgs: string[], env: Record<string, string> = {}): string {
-  const result = child_process.spawnSync('git', gitArgs, { encoding: 'utf8', env: { ...process.env, ...env } });
+export function runGit(gitArgs: string[], env: Record<string, string> = {}, cwd?: string): string {
+  const baseEnv = { ...process.env, ...env };
+  const result = cwd
+    ? child_process.spawnSync('git', gitArgs, { encoding: 'utf8', env: baseEnv, cwd })
+    : child_process.spawnSync('git', gitArgs, { encoding: 'utf8', env: baseEnv });
   if (result.status !== 0) {
     const err = (result.stderr || result.stdout || '').trim();
     throw new Error(`git ${gitArgs.join(' ')} failed (exit ${result.status}): ${err}`);
@@ -371,6 +398,82 @@ export function cwdOrigin(): string | null {
   }
   const url = (result.stdout ?? '').trim();
   return url || null;
+}
+
+/**
+ * 从仓库地址派生默认库名（去尾部 .git，取最后 / 或 : 之后一段，scp 形式兼容）。
+ * 自包含：仅用 String，可被 renderGitToolsFile toString() 内联进渲染产物 git.ts。
+ */
+export function defaultRepoName(repoUrl: string): string {
+  const stripped = String(repoUrl || '')
+    .trim()
+    .replace(/\.git$/i, '')
+    .replace(/\/+$/, '');
+  const idx = Math.max(stripped.lastIndexOf('/'), stripped.lastIndexOf(':'));
+  const name = idx >= 0 ? stripped.slice(idx + 1) : stripped;
+  return name || 'repo';
+}
+
+/**
+ * 解析 clone 目标绝对路径：显式 target（绝对直接用，相对按 cwd 解析）优先；
+ * 缺省落中央库 `<WORK_DIR>/repos/<repo-name>`（WORK_DIR 未设置回退 `<cwd>/repos`，
+ * cwd = 运行时会话目录）。
+ * 自包含：仅用 path/process（+ defaultRepoName，同样内联），可内联进渲染产物。
+ */
+export function resolveCloneTarget(repoUrl: string, target?: string): string {
+  if (target) {
+    const t = String(target);
+    if (path.isAbsolute(t)) {
+      return t;
+    }
+    return path.resolve(process.cwd(), t);
+  }
+  const base = process.env.WORK_DIR
+    ? path.join(process.env.WORK_DIR, 'repos')
+    : path.join(process.cwd(), 'repos');
+  return path.join(base, defaultRepoName(repoUrl));
+}
+
+/**
+ * 同仓校验：target 内 `git rev-parse` 成功且 `remote.origin.url` 规范化后
+ * 与请求 repo_url 相等 → true；否则 false（非仓库/origin 缺失/不同仓一律 false，
+ * 调用方按占位抛错）。不自动拉取。
+ * 自包含：经 child_process.spawnSync 直调（不经 runGit 抛错路径），可内联进渲染产物。
+ */
+export function isSameRepoCheckout(target: string, repoUrl: string): boolean {
+  const rev = child_process.spawnSync('git', ['-C', target, 'rev-parse', '--git-dir'], { encoding: 'utf8' });
+  if (rev.status !== 0) {
+    return false;
+  }
+  const cfg = child_process.spawnSync('git', ['-C', target, 'config', '--get', 'remote.origin.url'], { encoding: 'utf8' });
+  if (cfg.status !== 0) {
+    return false;
+  }
+  const origin = (cfg.stdout ?? '').trim();
+  if (!origin) {
+    return false;
+  }
+  return normalizeRepoUrl(origin) === normalizeRepoUrl(repoUrl);
+}
+
+/**
+ * clone 落点准备（本地与渲染产物共用同一实现）：
+ * - 目标已存在且为同仓 → { absTarget, reused: true }（调用方直接复用，不拉取）；
+ * - 目标已存在但非同仓 → 抛错（提示传入明确的 target 另选目录）；
+ * - 目标不存在 → 建父目录，返回 { absTarget, reused: false }（调用方执行 clone）。
+ * 自包含：仅用 fs/path + 上述自包含辅助，可内联进渲染产物。
+ */
+export function prepareCloneTarget(repoUrl: string, target?: string): { absTarget: string; reused: boolean } {
+  const resolved = resolveCloneTarget(repoUrl, target);
+  const absTarget = path.isAbsolute(resolved) ? resolved : path.resolve(process.cwd(), resolved);
+  if (fs.existsSync(absTarget)) {
+    if (isSameRepoCheckout(absTarget, repoUrl)) {
+      return { absTarget, reused: true };
+    }
+    throw new Error(`目标目录 ${absTarget} 已被其他仓库占用，请传入明确的 target 参数指定新目录`);
+  }
+  fs.mkdirSync(path.dirname(absTarget), { recursive: true });
+  return { absTarget, reused: false };
 }
 
 /**
@@ -436,6 +539,7 @@ export const GIT_TOOLS: readonly GitToolDef[] = [
       { name: 'repo_url', type: 'string', required: true, description: '仓库地址，如 git@gitee.com:xishuhq/ketaops.git' },
       { name: 'ref', type: 'string', required: false, description: '分支/标签，缺省取远端默认分支' },
       { name: 'target', type: 'string', required: false, description: '目标目录，缺省取仓库名' },
+      { name: 'workdir', type: 'string', required: false, description: '执行目录（仓库绝对路径，缺省为会话目录）' },
     ],
     executeHint: 'git clone [--branch ref] repo_url [target]',
   },
@@ -446,6 +550,7 @@ export const GIT_TOOLS: readonly GitToolDef[] = [
     defaultEffect: 'allow',
     args: [
       { name: 'repo_url', type: 'string', required: false, description: '仓库地址，缺省取当前目录 origin' },
+      { name: 'workdir', type: 'string', required: false, description: '执行目录（仓库绝对路径，缺省为会话目录）' },
     ],
     executeHint: 'git pull [repo_url]',
   },
@@ -457,6 +562,7 @@ export const GIT_TOOLS: readonly GitToolDef[] = [
     args: [
       { name: 'repo_url', type: 'string', required: false, description: '仓库地址，缺省取当前目录 origin' },
       { name: 'ref', type: 'string', required: false, description: '远端引用/分支' },
+      { name: 'workdir', type: 'string', required: false, description: '执行目录（仓库绝对路径，缺省为会话目录）' },
     ],
     executeHint: 'git fetch [repo_url] [ref]',
   },
@@ -467,6 +573,7 @@ export const GIT_TOOLS: readonly GitToolDef[] = [
     defaultEffect: 'allow',
     args: [
       { name: 'porcelain', type: 'boolean', required: false, description: '以 --porcelain 机器可读格式输出' },
+      { name: 'workdir', type: 'string', required: false, description: '执行目录（仓库绝对路径，缺省为会话目录）' },
     ],
     executeHint: 'git status [--porcelain]',
   },
@@ -479,6 +586,7 @@ export const GIT_TOOLS: readonly GitToolDef[] = [
       { name: 'ref_a', type: 'string', required: false, description: '对比基线提交/引用' },
       { name: 'ref_b', type: 'string', required: false, description: '对比目标提交/引用' },
       { name: 'path', type: 'string', required: false, description: '限定路径（传入 -- path）' },
+      { name: 'workdir', type: 'string', required: false, description: '执行目录（仓库绝对路径，缺省为会话目录）' },
     ],
     executeHint: 'git diff [ref_a] [ref_b] [-- path]',
   },
@@ -490,6 +598,7 @@ export const GIT_TOOLS: readonly GitToolDef[] = [
     args: [
       { name: 'limit', type: 'integer', required: false, description: '限制条数（-n）' },
       { name: 'path', type: 'string', required: false, description: '限定路径（传入 -- path）' },
+      { name: 'workdir', type: 'string', required: false, description: '执行目录（仓库绝对路径，缺省为会话目录）' },
     ],
     executeHint: 'git log [-n limit] [-- path]',
   },
@@ -501,6 +610,7 @@ export const GIT_TOOLS: readonly GitToolDef[] = [
     args: [
       { name: 'repo_url', type: 'string', required: false, description: '仓库地址，缺省取当前目录 origin' },
       { name: 'refspec', type: 'string', required: true, description: '推送引用规格，如 main:main' },
+      { name: 'workdir', type: 'string', required: false, description: '执行目录（仓库绝对路径，缺省为会话目录）' },
     ],
     executeHint: 'git push [repo_url] refspec',
   },
@@ -534,25 +644,65 @@ export function renderGitToolsFile(defs: readonly GitToolDef[] = GIT_TOOLS): str
         def.exportName === 'clone'
           ? 'const repoUrl = String(args.repo_url);'
           : 'const repoUrl = args.repo_url ? String(args.repo_url) : cwdOrigin();';
-      const pushGuard =
-        def.exportName === 'push'
-          ? ['if (entry.permission !== "write") {', '  throw new Error(`仓库 ${repoUrl} 未授予 write 权限，禁止 push`);', '}']
-          : [];
-      executeLines = [
-        repoUrlLine,
-        'const entry = loadCredential(repoUrl);',
-        ...pushGuard,
-        'const tmp = buildGitEnv(entry);',
-        'try {',
-        `  return runGit(_buildGitArgs("${def.exportName}", args), tmp.env);`,
-        '} finally {',
-        '  for (const p of tmp.paths) cleanupTemp(p);',
-        '}',
-      ].filter((line) => line.length > 0);
+      if (def.exportName === 'clone') {
+        executeLines = [
+          repoUrlLine,
+          'const prep = prepareCloneTarget(repoUrl, args.target ? String(args.target) : undefined);',
+          'if (prep.reused) {',
+          '  return `已存在相同仓库，直接复用（未执行拉取）\\n仓库目录：${prep.absTarget}`;',
+          '}',
+          'const absTarget = prep.absTarget;',
+          'const workdir = args.workdir ? String(args.workdir) : undefined;',
+          'const cloneArgs = _buildGitArgs("clone", { ...args, target: absTarget });',
+          'const entry = tryLoadCredential(repoUrl);',
+          'if (!entry) {',
+          '  const out = runGit(cloneArgs, {}, workdir);',
+          '  return `${out}\\n仓库目录：${absTarget}`;',
+          '}',
+          'const tmp = buildGitEnv(entry);',
+          'try {',
+          '  const out = runGit(cloneArgs, tmp.env, workdir);',
+          '  return `${out}\\n仓库目录：${absTarget}`;',
+          '} finally {',
+          '  for (const p of tmp.paths) cleanupTemp(p);',
+          '}',
+        ];
+      } else if (def.exportName === 'push') {
+        executeLines = [
+          repoUrlLine,
+          'const workdir = args.workdir ? String(args.workdir) : undefined;',
+          'const entry = loadCredential(repoUrl);',
+          'if (entry.permission !== "write") {',
+          '  throw new Error(`仓库 ${repoUrl} 未授予 write 权限，禁止 push`);',
+          '}',
+          'const tmp = buildGitEnv(entry);',
+          'try {',
+          `  return runGit(_buildGitArgs("${def.exportName}", args), tmp.env, workdir);`,
+          '} finally {',
+          '  for (const p of tmp.paths) cleanupTemp(p);',
+          '}',
+        ].filter((line) => line.length > 0);
+      } else {
+        executeLines = [
+          repoUrlLine,
+          'const workdir = args.workdir ? String(args.workdir) : undefined;',
+          'const entry = tryLoadCredential(repoUrl);',
+          'if (!entry) {',
+          `  return runGit(_buildGitArgs("${def.exportName}", args), {}, workdir);`,
+          '}',
+          'const tmp = buildGitEnv(entry);',
+          'try {',
+          `  return runGit(_buildGitArgs("${def.exportName}", args), tmp.env, workdir);`,
+          '} finally {',
+          '  for (const p of tmp.paths) cleanupTemp(p);',
+          '}',
+        ].filter((line) => line.length > 0);
+      }
     } else {
       executeLines = [
         `const gitArgs = _buildGitArgs("${def.exportName}", args);`,
-        'return runGit(gitArgs);',
+        'const workdir = args.workdir ? String(args.workdir) : undefined;',
+        'return runGit(gitArgs, {}, workdir);',
       ];
     }
     const executeBody = executeLines.map((line) => `    ${line}`).join('\n');
@@ -575,7 +725,8 @@ export function renderGitToolsFile(defs: readonly GitToolDef[] = GIT_TOOLS): str
     '/**',
     ' * 平台内置 git 工具族（17 篇 §4.1）——由 worker T5 自动注入。',
     ' * 工具名 = <文件名>_<导出名>（如 git_clone），即权限 action。',
-    ' * execute：clone/pull/fetch/push 读取平台下发凭证白名单（~/.keta-git-creds.json），',
+    ' * execute：clone/pull/fetch 无匹配凭证时直接直连（公开仓库零配置），有匹配走凭证白名单',
+    ' * （~/.keta-git-creds.json），push 仍严格要求凭证 + write 授权；',
     ' * SSH 走 GIT_SSH_COMMAND 临时 key / HTTPS 走 GIT_ASKPASS 临时脚本，try/finally 清理；',
     ' * push 额外校验 write 授权；status/diff/log 本地只读不加载凭证。',
     ' * 凭证面由 server 下发白名单控制，错误信息不含明文 key。',
@@ -601,6 +752,8 @@ export function renderGitToolsFile(defs: readonly GitToolDef[] = GIT_TOOLS): str
     '',
     loadCredential.toString(),
     '',
+    tryLoadCredential.toString(),
+    '',
     normalizeSshKey.toString(),
     '',
     writeTempKey.toString(),
@@ -614,6 +767,14 @@ export function renderGitToolsFile(defs: readonly GitToolDef[] = GIT_TOOLS): str
     runGit.toString(),
     '',
     cwdOrigin.toString(),
+    '',
+    defaultRepoName.toString(),
+    '',
+    resolveCloneTarget.toString(),
+    '',
+    isSameRepoCheckout.toString(),
+    '',
+    prepareCloneTarget.toString(),
     '',
     _buildGitArgs.toString(),
     '',

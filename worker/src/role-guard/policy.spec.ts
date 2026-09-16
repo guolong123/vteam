@@ -6,6 +6,7 @@ import {
   SessionPolicy,
   buildDenyMessage,
   evaluateToolCall,
+  findBashDenyMatch,
   matchesBashDeny,
   parsePatchFilePaths,
   wildcardMatch,
@@ -267,12 +268,26 @@ describe('evaluateToolCall 分支优先级', () => {
 
   describe('4d2) server-gated MCP → pass-through（一律 allow，判定权在服务端）', () => {
     const session = sess('vteam-developer');
+    it('门控集合与服务端 ROLE_SERVER_GATED_TOOLS 一致（6 个，增减须两侧同步）', () => {
+      for (const tool of [
+        'vteam_task_transition',
+        'vteam_question_confirm',
+        'vteam_task_create',
+        'vteam_plan_mode',
+        'vteam_team_add_member',
+        'vteam_skill_create',
+      ]) {
+        const unlisted = role({ tools: {} });
+        expectAllow(call(doc({ 'vteam-developer': unlisted }), session, tool, {}));
+      }
+    });
     it.each([
       'vteam_task_transition',
       'vteam_question_confirm',
       'vteam_task_create',
       'vteam_plan_mode',
       'vteam_team_add_member',
+      'vteam_skill_create',
     ])('%s 未列入 tools 仍 allow', (tool) => {
       const unlisted = role({ tools: {} });
       expectAllow(call(doc({ 'vteam-developer': unlisted }), session, tool, {}));
@@ -331,6 +346,58 @@ describe('evaluateToolCall 分支优先级', () => {
     });
   });
 
+  describe('4g) 外部第三方只读 passthrough（非 vteam_/git_ 命名空间）', () => {
+    it('只读外部工具对任意角色放行（含 vteam-architect）', () => {
+      for (const agent of ['vteam-architect', 'vteam-developer']) {
+        const rolesDoc = doc({ [agent]: role({ tools: {} }) });
+        const session = sess(agent);
+        expectAllow(call(rolesDoc, session, 'context7_resolve-library-id', {}));
+        expectAllow(call(rolesDoc, session, 'context7_query-docs', {}));
+        expectAllow(call(rolesDoc, session, 'grep_app_searchGitHub', {}));
+      }
+    });
+    it('外部写类工具同样放行（未知外部默认允许，含 create/merge 语义）', () => {
+      const session = sess('vteam-architect');
+      const rolesDoc = doc({ 'vteam-architect': role({ tools: {} }) });
+      expectAllow(call(rolesDoc, session, 'github_create_pr', {}));
+      expectAllow(call(rolesDoc, session, 'github_merge_pr', {}));
+    });
+    it('命名空间守卫：vteam_/git_ 不走启发式，仍按 allowlist', () => {
+      const session = sess('vteam-architect');
+      const rolesDoc = doc({
+        'vteam-architect': role({ tools: { vteam_submit_artifact: 'allow' } }),
+      });
+      expectDeny(call(rolesDoc, session, 'vteam_unknown_tool', {}));
+      expectDeny(call(rolesDoc, session, 'git_fetch', {}));
+      expectAllow(call(rolesDoc, session, 'vteam_submit_artifact', {}));
+    });
+    it('不可分类外部工具放行（黑名单策略：未命中即 allow）', () => {
+      const session = sess('vteam-architect');
+      const rolesDoc = doc({ 'vteam-architect': role({ tools: {} }) });
+      expectAllow(call(rolesDoc, session, 'acme_frobnicate_xyz', {}));
+      expectAllow(call(rolesDoc, session, 'call_omo_agent', {}));
+    });
+  });
+
+  describe('外部工具一律放行（未知外部默认允许）', () => {
+    it('写类/只读/不可分类外部名全部 allow', () => {
+      const session = sess('vteam-architect');
+      const rolesDoc = doc({ 'vteam-architect': role({ tools: {} }) });
+      for (const tool of [
+        'github_create_pr',
+        'github_merge_pr',
+        'acme_search_and_delete',
+        'context7_resolve-library-id',
+        'grep_app_searchGitHub',
+        'codegraph_codegraph_explore',
+        'call_omo_agent',
+        'acme_frobnicate_xyz',
+      ]) {
+        expectAllow(call(rolesDoc, session, tool, {}));
+      }
+    });
+  });
+
   describe('5) 纠正文案组装', () => {
     it('模板占位符全替换（{role}/<tool>/<scopeSummary>/{handoffTarget}）', () => {
       const message = buildDenyMessage('vteam-tester', 'write', {
@@ -350,13 +417,39 @@ describe('evaluateToolCall 分支优先级', () => {
       });
       expect(message).toBe('vteam-a|task|S|vteam-plan');
     });
-    it('无模板 → 默认格式；handoff 缺失 → 占位符落空', () => {
+    it('无模板 → 默认格式；平台工具 handoff 缺失 → 通用短语兜底', () => {
       expect(buildDenyMessage('vteam-a', 'task', null)).toBe(
         '【越界拦截｜角色：vteam-a】不能调用 task。',
       );
       expect(
         buildDenyMessage('vteam-a', 'task', { denyTemplate: '转交 {handoffTarget}。' }),
-      ).toBe('转交 。');
+      ).toBe('转交 对应职责角色。');
+    });
+    it('外部工具无精确工具键 → 通用短语（不误指 handoff 首值）', () => {
+      const message = buildDenyMessage('vteam-architect', 'github_create_pr', {
+        scopeSummary: 'S',
+        handoff: { requirements: 'vteam-product', code: 'vteam-developer' },
+        denyTemplate: TEMPLATE,
+      });
+      expect(message).toContain('对应职责角色');
+      expect(message).not.toContain('vteam-product');
+      expect(message).not.toContain('转交 ，');
+    });
+    it('平台工具无精确工具键 → 首值兜底不变（vteam_/git_/builtin 字节一致）', () => {
+      const correction = {
+        scopeSummary: 'S',
+        handoff: { design: 'vteam-architect', test: 'vteam-tester' },
+        denyTemplate: TEMPLATE,
+      };
+      expect(buildDenyMessage('vteam-a', 'vteam_issue_create', correction)).toContain(
+        '转交 vteam-architect',
+      );
+      expect(buildDenyMessage('vteam-a', 'git_push', correction)).toContain(
+        '转交 vteam-architect',
+      );
+      expect(buildDenyMessage('vteam-a', 'browser', correction)).toContain(
+        '转交 vteam-architect',
+      );
     });
   });
 });
@@ -387,6 +480,84 @@ describe('matchesBashDeny（大小写不敏感子串 + glob）', () => {
   it('含通配符条目按 glob 匹配', () => {
     expect(matchesBashDeny('rm -rf /tmp/x', ['rm *'])).toBe(true);
     expect(matchesBashDeny('firmware build', ['rm *'])).toBe(false);
+  });
+});
+
+describe('matchesBashDeny 词边界语义（layer-2 hardening）', () => {
+  it('词内子串放行（cp/mcp、ln/clean、rm/firmware、patch/dispatch）', () => {
+    expect(matchesBashDeny('ls -la /data/w/server/mcp/', ['cp'])).toBe(false);
+    expect(matchesBashDeny('python3 -c "import mcp"', ['cp', 'python -c'])).toBe(false);
+    expect(matchesBashDeny('firmware flash', ['rm'])).toBe(false);
+    expect(matchesBashDeny('dispatch event', ['patch'])).toBe(false);
+  });
+  it('真实命中仍拦截（cp/rm/git push/ln/tee/符号>）', () => {
+    expect(matchesBashDeny('cp a b', ['cp'])).toBe(true);
+    expect(matchesBashDeny('rm -rf /', ['rm'])).toBe(true);
+    expect(matchesBashDeny('2>err.log', ['>'])).toBe(true);
+    expect(matchesBashDeny('git push origin main', ['git push'])).toBe(true);
+    expect(matchesBashDeny('ln -s a b', ['ln'])).toBe(true);
+    expect(matchesBashDeny('cat f | tee log', ['tee'])).toBe(true);
+  });
+  it('符号条目保持子串语义（重定向真命中），但 2>/dev/null 精确放行', () => {
+    expect(matchesBashDeny('echo hi > out.txt', ['>'])).toBe(true);
+    expect(matchesBashDeny('pip list 2>/dev/null | grep mcp', ['>', 'cp'])).toBe(false);
+    expect(matchesBashDeny('echo hi > out.txt 2>/dev/null', ['>'])).toBe(true);
+    expect(matchesBashDeny('find / -name x 2>/dev/null', ['>'])).toBe(false);
+  });
+  it('findBashDenyMatch 返回命中规则原文，未命中返回 null', () => {
+    expect(findBashDenyMatch('rm -rf /', ['cp', 'rm'])).toBe('rm');
+    expect(findBashDenyMatch('ls -la', ['cp', 'rm'])).toBe(null);
+    expect(findBashDenyMatch('find / -name x 2>/dev/null', ['>'])).toBe(null);
+  });
+  it('合成 glob 回归（通配符语义不变）', () => {
+    expect(matchesBashDeny('rm -rf /tmp/x', ['rm *'])).toBe(true);
+    expect(matchesBashDeny('firmware build', ['rm *'])).toBe(false);
+  });
+});
+
+describe('bash 词边界端到端（evaluateToolCall）', () => {
+  const session = sess('vteam-developer');
+  function docWithDeny(bashDeny: string[]): RolesDoc {
+    return doc({ 'vteam-developer': role({ bashDeny }) });
+  }
+  it('误伤路径/单词放行（含 2>/dev/null 降噪）', () => {
+    const rolesDoc = docWithDeny(['>', '>>', 'tee', 'cp', 'ln', 'rm', 'patch', 'git push', 'python -c']);
+    expect(call(rolesDoc, session, 'bash', { command: 'ls -la /data/w/server/mcp/' }).action).toBe('allow');
+    expect(call(rolesDoc, session, 'bash', { command: 'python3 -c "import mcp"' }).action).toBe('allow');
+    expect(call(rolesDoc, session, 'bash', { command: 'firmware flash' }).action).toBe('allow');
+    expect(call(rolesDoc, session, 'bash', { command: 'dispatch event' }).action).toBe('allow');
+    expect(call(rolesDoc, session, 'bash', { command: 'git --version' }).action).toBe('allow');
+    expect(call(rolesDoc, session, 'bash', { command: 'find / -name x' }).action).toBe('allow');
+    expect(call(rolesDoc, session, 'bash', { command: 'cat f' }).action).toBe('allow');
+    expect(call(rolesDoc, session, 'bash', { command: 'find / -name x 2>/dev/null | head' }).action).toBe('allow');
+    expect(call(rolesDoc, session, 'bash', { command: 'pip list 2>/dev/null | grep mcp' }).action).toBe('allow');
+  });
+  it('真实危险仍拦截', () => {
+    const rolesDoc = docWithDeny(['>', '>>', 'tee', 'cp', 'ln', 'rm', 'patch', 'git push']);
+    for (const command of [
+      'cp a b',
+      'rm -rf x',
+      'ln -s a b',
+      'echo hi > out.txt',
+      'git push origin main',
+      'patch -p1 < f',
+      'cat f | tee log',
+    ]) {
+      expect(call(rolesDoc, session, 'bash', { command }).action).toBe('deny');
+    }
+  });
+  it('拦截文案带出命中规则名', () => {
+    const rolesDoc = docWithDeny(['>', 'rm']);
+    const r = call(rolesDoc, session, 'bash', { command: 'rm -rf x' });
+    expect(r.action).toBe('deny');
+    if (r.action === 'deny') {
+      expect(r.message).toContain('命中 shell 硬化规则：rm');
+    }
+    const r2 = call(rolesDoc, session, 'bash', { command: 'echo hi > out.txt' });
+    expect(r2.action).toBe('deny');
+    if (r2.action === 'deny') {
+      expect(r2.message).toContain('命中 shell 硬化规则：>');
+    }
   });
 });
 

@@ -45,6 +45,7 @@ describe('TasksService', () => {
     teamMember: {
       findMany: jest.Mock;
       findUnique: jest.Mock;
+      findFirst: jest.Mock;
       create: jest.Mock;
       delete: jest.Mock;
       count: jest.Mock;
@@ -190,6 +191,7 @@ describe('TasksService', () => {
       teamMember: {
         findMany: jest.fn(),
         findUnique: jest.fn(),
+        findFirst: jest.fn(),
         create: jest.fn(),
         delete: jest.fn(),
         count: jest.fn(),
@@ -1591,12 +1593,75 @@ describe('TasksService', () => {
         mainAgentMemberId: null,
         currentTaskId: 't_0000000001',
       } as any);
+      // 空名册：首位回退查无成员 → 仍 400 MAIN_AGENT_NOT_SET
+      prisma.teamMember.findFirst.mockResolvedValue(null);
 
       await assertBadRequestCode(
         () => service.start('t_0000000001', userId),
         TASK_ERRORS.MAIN_AGENT_NOT_SET,
       );
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('start：绑定缺省 + 有成员 → 首位回退放行（不再 400 MAIN_AGENT_NOT_SET）', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(
+          row({
+            status: 'pending',
+            version: 3,
+            mainAgentId: null,
+            mainAgentInstanceId: null,
+          }),
+        )
+        .mockResolvedValue(
+          row({
+            status: 'in_progress',
+            version: 4,
+            mainAgentId: null,
+            mainAgentInstanceId: null,
+            startedAt: new Date(),
+          }),
+        );
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        version: 1,
+        currentTaskId: 't_0000000001',
+        mainAgentMemberId: null,
+      } as any);
+      prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_first' });
+      prisma.teamMember.findUnique.mockResolvedValue({
+        id: 'tmm_first',
+        alias: '开发者-1',
+        agent: { id: 'a_dev', name: '开发者', role: 'developer' },
+      } as any);
+      prisma.chatChannel.findFirst
+        .mockResolvedValueOnce({ id: 'c_0000000001' })
+        .mockResolvedValueOnce({ id: 'c_0000000002' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001')
+        .mockResolvedValueOnce('m_0000000002');
+      const txModels = mockTransitionTx();
+
+      const result = await service.start('t_0000000001', userId);
+
+      expect(result.status).toBe('in_progress');
+      expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { teamId: 'tm_0000000001' },
+          orderBy: { seq: 'asc' },
+        }),
+      );
+      // 私信定位到回退主成员
+      expect(prisma.chatChannel.findFirst).toHaveBeenNthCalledWith(2, {
+        where: {
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_first',
+          type: 'private',
+        },
+        select: { id: true },
+      });
+      expect(txModels.message.create).toHaveBeenCalledTimes(2);
     });
 
     it('start：团队空闲 + 孤儿 pending → 认领队首后启动（取消排队死锁自愈）', async () => {
@@ -1971,6 +2036,8 @@ describe('TasksService', () => {
         mainAgentMemberId: null,
         currentTaskId: 't_0000000001',
       } as any);
+      // 空名册：首位回退查无成员 → 私信路径保持跳过
+      prisma.teamMember.findFirst.mockResolvedValue(null);
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
       idGen.nextId
         .mockResolvedValueOnce('te_0000000001')
@@ -1979,7 +2046,7 @@ describe('TasksService', () => {
 
       const result = await service.accept('t_0000000001', userId);
 
-      // 仅解析 task_group 频道一次（团队主成员=null 不查 private）
+      // 仅解析 task_group 频道一次（回退无成员，不查 private）
       expect(prisma.chatChannel.findFirst).toHaveBeenCalledTimes(1);
       // 仅一条群聊系统消息，无私信落库
       expect(txModels.message.create).toHaveBeenCalledTimes(1);
@@ -1988,6 +2055,60 @@ describe('TasksService', () => {
         'c_0000000001',
         '任务已验收完成，产出物基线已锁定',
         1,
+      );
+      expect(result.status).toBe('completed');
+    });
+
+    it('accept：绑定缺省 + 有成员 → 私信回退主成员（解析 fallback 名）', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ status: 'pending_review', version: 4 }))
+        .mockResolvedValue(
+          row({ status: 'completed', version: 5, completedAt: new Date() }),
+        );
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: null,
+        currentTaskId: 't_0000000001',
+      } as any);
+      prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_first' });
+      prisma.chatChannel.findFirst
+        .mockResolvedValueOnce({ id: 'c_0000000001' }) // task_group 频道
+        .mockResolvedValueOnce({ id: 'c_0000000002' }); // 回退主成员 private 频道
+      prisma.teamMember.findUnique.mockResolvedValue({
+        id: 'tmm_first',
+        alias: '开发者-1',
+        agent: { id: 'a_dev', name: '开发者', role: 'developer' },
+      } as any);
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001') // 群聊系统消息
+        .mockResolvedValueOnce('m_0000000002'); // 私信回退主成员
+      const txModels = mockTransitionTx();
+
+      const result = await service.accept('t_0000000001', userId);
+
+      // 私信定位到回退主成员
+      expect(prisma.chatChannel.findFirst).toHaveBeenNthCalledWith(2, {
+        where: {
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_first',
+          type: 'private',
+        },
+        select: { id: true },
+      });
+      // 群聊 + 私信各一条
+      expect(txModels.message.create).toHaveBeenCalledTimes(2);
+      assertSysMessageCreated(
+        txModels,
+        'c_0000000001',
+        '任务已验收完成，产出物基线已锁定',
+        1,
+      );
+      assertSysMessageCreated(
+        txModels,
+        'c_0000000002',
+        '任务已验收完成，产出物基线已锁定。记忆收集已自动触发（见触发消息），请按其要求只沉淀可复用经验（做法/坑/约束），不要保存会话总结。',
+        2,
       );
       expect(result.status).toBe('completed');
     });
@@ -2434,6 +2555,141 @@ describe('TasksService', () => {
           code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,
           message:
             '仅主 Agent（tmm_0000000001）可流转任务状态；请知会主 Agent 调用 task_transition，或由管理员在任务管理界面操作',
+        });
+      }
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('transitionByAgent：显式绑定保持严格语义（不查首位成员）', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_0000000001',
+        teamId: 'tm_0000000001',
+      });
+
+      try {
+        await service.transitionByAgent(
+          't_0000000001',
+          'tmm_0000000002',
+          'start',
+        );
+        fail('应抛出 ForbiddenException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ForbiddenException);
+      }
+      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('transitionByAgent：绑定缺省 + 首位成员（seq 升序回退）→ 放行', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce({
+          id: 't_0000000001',
+          teamId: 'tm_0000000001',
+        })
+        .mockResolvedValueOnce(
+          row({
+            status: 'in_progress',
+            version: 5,
+            mainAgentId: 'a_product',
+            mainAgentInstanceId: 'tmm_first',
+          }),
+        )
+        .mockResolvedValue(
+          row({
+            status: 'pending_review',
+            version: 6,
+            pendingReviewAt: new Date(),
+          }),
+        );
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: null,
+        currentTaskId: 't_0000000001',
+        version: 1,
+      } as any);
+      prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_first' });
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      const txModels = mockTransitionTx();
+
+      const result = await service.transitionByAgent(
+        't_0000000001',
+        'tmm_first',
+        'mark-pending-review',
+      );
+
+      expect(result.status).toBe('pending_review');
+      expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { teamId: 'tm_0000000001' },
+          orderBy: { seq: 'asc' },
+        }),
+      );
+      expect(txModels.taskEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          actorType: 'agent',
+          actorId: 'tmm_first',
+        }),
+      });
+    });
+
+    it('transitionByAgent：绑定缺省 + 非首位成员 → 403 并点名回退 id', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_0000000001',
+        teamId: 'tm_0000000001',
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: null,
+      } as any);
+      prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_first' });
+
+      try {
+        await service.transitionByAgent(
+          't_0000000001',
+          'tmm_0000000002',
+          'start',
+        );
+        fail('应抛出 ForbiddenException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ForbiddenException);
+        expect((e as ForbiddenException).getResponse()).toMatchObject({
+          code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,
+          message:
+            '仅主 Agent（tmm_first）可流转任务状态；请知会主 Agent 调用 task_transition，或由管理员在任务管理界面操作',
+        });
+      }
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('transitionByAgent：绑定缺省 + 空名册 → 403 沿用“未设置”', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_0000000001',
+        teamId: 'tm_0000000001',
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: null,
+      } as any);
+      prisma.teamMember.findFirst.mockResolvedValue(null);
+
+      try {
+        await service.transitionByAgent(
+          't_0000000001',
+          'tmm_0000000002',
+          'start',
+        );
+        fail('应抛出 ForbiddenException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ForbiddenException);
+        expect((e as ForbiddenException).getResponse()).toMatchObject({
+          code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,
+          message:
+            '仅主 Agent（未设置）可流转任务状态；请知会主 Agent 调用 task_transition，或由管理员在任务管理界面操作',
         });
       }
       expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -3710,7 +3966,7 @@ describe('TasksService', () => {
       expect(attempt).toBe(3);
     });
 
-    it('onModuleInit 按最大 id 对齐 6 前缀 seed（任务实例快照表已删除，不再 seed ta_）', async () => {
+    it('onModuleInit 按最大 id 对齐 6 前缀 seed（任务实例快照表已删除，不再 seed ta_；pl_ 由 PlanLifecycleService 续号）', async () => {
       (prisma.task as any).findMany = jest
         .fn()
         .mockResolvedValue([{ id: 't_0000000009' }]);
@@ -3732,6 +3988,7 @@ describe('TasksService', () => {
       await service.onModuleInit();
       expect(idGen.seed).toHaveBeenCalledWith('t', 9);
       expect(idGen.seed).toHaveBeenCalledWith('c', 3);
+      expect(idGen.seed).not.toHaveBeenCalledWith('pl', expect.anything());
       expect(idGen.seed).not.toHaveBeenCalledWith('ta', expect.anything());
     });
 

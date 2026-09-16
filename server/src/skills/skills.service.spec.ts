@@ -179,9 +179,12 @@ describe('SkillsService', () => {
 
     it('P3：create 同一事务落库 v1 历史行（content/fileMeta 与 live 行一致）', async () => {
       prisma.skill.findUnique.mockResolvedValue(null);
-      prisma.skill.create.mockImplementation(async (args: {
-        data: Record<string, unknown>;
-      }) => ({ ...skillRow, ...args.data }));
+      prisma.skill.create.mockImplementation(
+        async (args: { data: Record<string, unknown> }) => ({
+          ...skillRow,
+          ...args.data,
+        }),
+      );
       prisma.skillVersion.create.mockResolvedValue({ version: 1 });
 
       const input = makeInput();
@@ -463,8 +466,7 @@ describe('SkillsService', () => {
             id: 'skv_0000000001',
             skillId: 'sk_0000000001',
             version: 3,
-            content:
-              '---\nname: git-ops\ndescription: 第三版\n---\n# git-ops',
+            content: '---\nname: git-ops\ndescription: 第三版\n---\n# git-ops',
           }),
         }),
       );

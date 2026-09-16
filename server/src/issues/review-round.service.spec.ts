@@ -8,7 +8,9 @@ import { ReviewRoundService } from './review-round.service';
  * service 确实把"读-改-写"包进同一事务且先取行锁。
  */
 const setup = (initialDescription: string | null = null) => {
-  const store = new Map<string, string | null>([['is_0000000007', initialDescription]]);
+  const store = new Map<string, string | null>([
+    ['is_0000000007', initialDescription],
+  ]);
   let mutex: Promise<void> = Promise.resolve();
   const lock = async <T>(fn: () => Promise<T>): Promise<T> => {
     const prev = mutex;
@@ -32,7 +34,13 @@ const setup = (initialDescription: string | null = null) => {
         return { id: where.id, description: store.get(where.id) };
       }),
       update: jest.fn(
-        async ({ where, data }: { where: { id: string }; data: { description: string } }) => {
+        async ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: { description: string };
+        }) => {
           // 模拟行锁持有下的写：延迟 5ms 放大"读-改-写"竞态窗口——
           // 若实现未串行化，双写必丢其一。
           await new Promise((r) => setTimeout(r, 5));
@@ -43,7 +51,9 @@ const setup = (initialDescription: string | null = null) => {
     },
   };
   const prisma = {
-    $transaction: jest.fn((fn: (t: typeof tx) => Promise<unknown>) => lock(() => fn(tx))),
+    $transaction: jest.fn((fn: (t: typeof tx) => Promise<unknown>) =>
+      lock(() => fn(tx)),
+    ),
   };
   const service = new ReviewRoundService(prisma as never);
   return { service, tx, store };
@@ -100,10 +110,11 @@ describe('ReviewRoundService.applyRoundUpdate', () => {
       'tmm_0000000009',
       'tmm_0000000012',
     ]);
-    expect(Object.keys(parseLedger(store.get('is_0000000007'))?.received ?? {}).sort()).toEqual([
-      'tmm_0000000009',
-      'tmm_0000000012',
-    ]);
+    expect(
+      Object.keys(
+        parseLedger(store.get('is_0000000007'))?.received ?? {},
+      ).sort(),
+    ).toEqual(['tmm_0000000009', 'tmm_0000000012']);
   });
 
   it('同一轮同一人多次回执取最后一次', async () => {
@@ -175,6 +186,8 @@ describe('ReviewRoundService.applyRoundUpdate', () => {
           version: 'v0.3',
         },
       }),
-    ).rejects.toMatchObject({ response: { code: 'REVIEW_ROUND_ISSUE_NOT_FOUND' } });
+    ).rejects.toMatchObject({
+      response: { code: 'REVIEW_ROUND_ISSUE_NOT_FOUND' },
+    });
   });
 });

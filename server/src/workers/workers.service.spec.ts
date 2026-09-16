@@ -54,6 +54,10 @@ describe('WorkersService', () => {
     gitRepoGrant: {
       findMany: jest.Mock;
     };
+    gitRepo: {
+      findMany: jest.Mock;
+      count: jest.Mock;
+    };
     gitCredential: {
       findMany: jest.Mock;
       count: jest.Mock;
@@ -127,6 +131,10 @@ describe('WorkersService', () => {
       gitRepoGrant: {
         findMany: jest.fn(),
       },
+      gitRepo: {
+        findMany: jest.fn(),
+        count: jest.fn(),
+      },
       gitCredential: {
         findMany: jest.fn(),
         count: jest.fn(),
@@ -158,6 +166,8 @@ describe('WorkersService', () => {
       }),
     };
     prisma.modelCredential.findMany.mockResolvedValue([]);
+    prisma.gitRepo.findMany.mockResolvedValue([]);
+    prisma.gitRepo.count.mockResolvedValue(0);
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         WorkersService,
@@ -864,33 +874,47 @@ describe('WorkersService', () => {
     });
   });
 
-  describe('dispatchGitCredentials（git 凭证按活跃 agent 授权仓库过滤下发）', () => {
-    it('全量：在线 worker 逐个入队，只含活跃 agent 授权仓库的凭证，查库 orderBy repoUrl', async () => {
-      prisma.worker.findMany.mockResolvedValue([
-        { id: 'w_0000000001' },
-        { id: 'w_0000000002' },
-      ]);
-      // 活跃 agent：mock 返回「已按团队当前任务未终态过滤后」的 agentId
-      prisma.teamMember.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
+  describe('dispatchGitCredentials（git 凭证按静态授权全量下发，不过滤任务状态）', () => {
+    const seedTwoRepos = () => {
       prisma.gitRepoGrant.findMany.mockResolvedValue([
-        { repoUrl: 'git@gitee.com:xishuhq/repo-a', permission: 'read' },
-        { repoUrl: 'git@gitee.com:xishuhq/repo-b', permission: 'write' },
+        { repoId: 'r_0000000001', agentId: 'a_dev', permission: 'read' },
+        { repoId: 'r_0000000002', agentId: 'a_tester', permission: 'write' },
       ]);
+      prisma.gitRepo.findMany.mockResolvedValue([
+        {
+          id: 'r_0000000001',
+          repoUrl: 'git@gitee.com:xishuhq/repo-a',
+          credentialId: 'c_0000000001',
+        },
+        {
+          id: 'r_0000000002',
+          repoUrl: 'git@gitee.com:xishuhq/repo-b',
+          credentialId: 'c_0000000002',
+        },
+      ]);
+      prisma.gitRepo.count.mockResolvedValue(2);
       prisma.gitCredential.findMany.mockResolvedValue([
         {
-          repoUrl: 'git@gitee.com:xishuhq/repo-a',
+          id: 'c_0000000001',
           authType: 'ssh_key',
           credentialRef: 'enc-a',
           fingerprint: 'fp-a',
         },
         {
-          repoUrl: 'git@gitee.com:xishuhq/repo-b',
+          id: 'c_0000000002',
           authType: 'https_token',
           credentialRef: 'enc-b',
           fingerprint: 'fp-b',
         },
       ]);
-      prisma.gitCredential.count.mockResolvedValue(2);
+    };
+
+    it('全量：在线 worker 逐个入队，下发全部已授权仓库凭证，查库 orderBy repoUrl', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_0000000001' },
+        { id: 'w_0000000002' },
+      ]);
+      seedTwoRepos();
       credentialCrypto.decrypt
         .mockReturnValueOnce('key-a')
         .mockReturnValueOnce('key-b');
@@ -898,27 +922,16 @@ describe('WorkersService', () => {
 
       const n = await service.dispatchGitCredentials();
 
-      expect(prisma.teamMember.findMany).toHaveBeenCalledWith({
-        where: {
-          team: {
-            currentTask: { status: { notIn: ['completed', 'archived'] } },
-          },
-        },
-        select: { agentId: true },
-        distinct: ['agentId'],
+      expect(prisma.teamMember.findMany).not.toHaveBeenCalled();
+      expect(prisma.gitRepoGrant.findMany).toHaveBeenCalledWith({
+        where: { revokedAt: null },
+        select: { repoId: true, permission: true },
       });
-      expect(prisma.gitCredential.findMany).toHaveBeenCalledWith({
+      expect(prisma.gitRepo.findMany).toHaveBeenCalledWith({
         where: { revokedAt: null },
         orderBy: [{ repoUrl: 'asc' }],
-        select: {
-          repoUrl: true,
-          authType: true,
-          credentialRef: true,
-          fingerprint: true,
-        },
+        select: { repoUrl: true, credentialId: true },
       });
-      // 内存过滤：仅活跃 agent 授权仓库的凭证解密打包
-      expect(prisma.gitCredential.findMany).toHaveBeenCalledTimes(1);
       expect(spy).toHaveBeenCalledTimes(2);
       expect(spy).toHaveBeenCalledWith('w_0000000001', {
         type: 'git-credentials',
@@ -946,24 +959,31 @@ describe('WorkersService', () => {
     });
 
     it('定向：targetWorkerIds 逐个精确下发，payload 带 targetWorkerIds', async () => {
-      prisma.teamMember.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
       prisma.gitRepoGrant.findMany.mockResolvedValue([
-        { repoUrl: 'git@gitee.com:xishuhq/repo-a', permission: 'read' },
+        { repoId: 'r_0000000001', agentId: 'a_tester', permission: 'read' },
       ]);
+      prisma.gitRepo.findMany.mockResolvedValue([
+        {
+          id: 'r_0000000001',
+          repoUrl: 'git@gitee.com:xishuhq/repo-a',
+          credentialId: 'c_0000000001',
+        },
+      ]);
+      prisma.gitRepo.count.mockResolvedValue(1);
       prisma.gitCredential.findMany.mockResolvedValue([
         {
-          repoUrl: 'git@gitee.com:xishuhq/repo-a',
+          id: 'c_0000000001',
           authType: 'ssh_key',
           credentialRef: 'enc-a',
           fingerprint: 'fp-a',
         },
       ]);
-      prisma.gitCredential.count.mockResolvedValue(1);
       const spy = jest.spyOn(service, 'enqueueCommand');
 
       const n = await service.dispatchGitCredentials(['w_0000000001']);
 
       expect(prisma.worker.findMany).not.toHaveBeenCalled();
+      expect(prisma.teamMember.findMany).not.toHaveBeenCalled();
       expect(spy).toHaveBeenCalledTimes(1);
       expect(spy).toHaveBeenCalledWith('w_0000000001', {
         type: 'git-credentials',
@@ -984,19 +1004,129 @@ describe('WorkersService', () => {
       expect(n).toBe(1);
     });
 
-    it('无活跃 agent 授权 → credentials=[] 仍下发（吊销/撤权后清 worker 侧条目）', async () => {
+    it('团队无当前任务 → 仍下发全量授权集（静态授权不依赖任务状态）', async () => {
       prisma.worker.findMany.mockResolvedValue([{ id: 'w_0000000001' }]);
-      prisma.teamMember.findMany.mockResolvedValue([]);
-      // 存在未吊销凭证（历史录入）但无活跃 agent 授权 → 下发空 payload 清 worker
+      seedTwoRepos();
+      const spy = jest.spyOn(service, 'enqueueCommand');
+
+      const n = await service.dispatchGitCredentials();
+
+      expect(prisma.teamMember.findMany).not.toHaveBeenCalled();
+      expect(spy).toHaveBeenCalledWith('w_0000000001', {
+        type: 'git-credentials',
+        resourceVersion: 'git-credentials',
+        payload: {
+          credentials: [
+            {
+              repoUrl: 'git@gitee.com:xishuhq/repo-a',
+              authType: 'ssh_key',
+              key: 'sk-raw-token',
+              fingerprint: 'fp-a',
+              permission: 'read',
+            },
+            {
+              repoUrl: 'git@gitee.com:xishuhq/repo-b',
+              authType: 'https_token',
+              key: 'sk-raw-token',
+              fingerprint: 'fp-b',
+              permission: 'write',
+            },
+          ],
+        },
+      });
+      expect(n).toBe(1);
+    });
+
+    it('任务完成/归档后 → 仍下发全量授权集（终态任务不影响静态授权）', async () => {
+      prisma.worker.findMany.mockResolvedValue([{ id: 'w_0000000001' }]);
+      seedTwoRepos();
+      const spy = jest.spyOn(service, 'enqueueCommand');
+
+      const n = await service.dispatchGitCredentials();
+
+      expect(prisma.teamMember.findMany).not.toHaveBeenCalled();
+      expect(credentialCrypto.decrypt).toHaveBeenCalledTimes(2);
+      expect(spy).toHaveBeenCalledWith(
+        'w_0000000001',
+        expect.objectContaining({
+          type: 'git-credentials',
+          payload: expect.objectContaining({
+            credentials: expect.arrayContaining([
+              expect.objectContaining({
+                repoUrl: 'git@gitee.com:xishuhq/repo-a',
+              }),
+              expect.objectContaining({
+                repoUrl: 'git@gitee.com:xishuhq/repo-b',
+              }),
+            ]),
+          }),
+        }),
+      );
+      expect(n).toBe(1);
+    });
+
+    it('同一仓库多 agent 授权 → 取最高权限 write', async () => {
+      prisma.worker.findMany.mockResolvedValue([{ id: 'w_0000000001' }]);
+      prisma.gitRepoGrant.findMany.mockResolvedValue([
+        { repoId: 'r_0000000001', agentId: 'a_dev', permission: 'read' },
+        { repoId: 'r_0000000001', agentId: 'a_tester', permission: 'write' },
+      ]);
+      prisma.gitRepo.findMany.mockResolvedValue([
+        {
+          id: 'r_0000000001',
+          repoUrl: 'git@gitee.com:xishuhq/repo-a',
+          credentialId: 'c_0000000001',
+        },
+      ]);
+      prisma.gitRepo.count.mockResolvedValue(1);
       prisma.gitCredential.findMany.mockResolvedValue([
         {
-          repoUrl: 'git@gitee.com:xishuhq/repo-a',
+          id: 'c_0000000001',
           authType: 'ssh_key',
           credentialRef: 'enc-a',
           fingerprint: 'fp-a',
         },
       ]);
-      prisma.gitCredential.count.mockResolvedValue(1);
+      const spy = jest.spyOn(service, 'enqueueCommand');
+
+      const n = await service.dispatchGitCredentials();
+
+      expect(spy).toHaveBeenCalledWith('w_0000000001', {
+        type: 'git-credentials',
+        resourceVersion: 'git-credentials',
+        payload: {
+          credentials: [
+            {
+              repoUrl: 'git@gitee.com:xishuhq/repo-a',
+              authType: 'ssh_key',
+              key: 'sk-raw-token',
+              fingerprint: 'fp-a',
+              permission: 'write',
+            },
+          ],
+        },
+      });
+      expect(n).toBe(1);
+    });
+
+    it('仓库存在但零未吊销授权 → credentials=[] 仍下发（清 worker 侧条目）', async () => {
+      prisma.worker.findMany.mockResolvedValue([{ id: 'w_0000000001' }]);
+      prisma.gitRepoGrant.findMany.mockResolvedValue([]);
+      prisma.gitRepo.count.mockResolvedValue(1);
+      prisma.gitRepo.findMany.mockResolvedValue([
+        {
+          repoUrl: 'git@gitee.com:xishuhq/repo-a',
+          credentialId: 'c_0000000001',
+        },
+      ]);
+      prisma.gitCredential.findMany.mockResolvedValue([
+        {
+          id: 'c_0000000001',
+          authType: 'ssh_key',
+          credentialRef: 'enc-a',
+          fingerprint: 'fp-a',
+        },
+      ]);
       const spy = jest.spyOn(service, 'enqueueCommand');
 
       const n = await service.dispatchGitCredentials();
@@ -1010,14 +1140,12 @@ describe('WorkersService', () => {
       expect(n).toBe(1);
     });
 
-    it('从未配置任何 git 凭证 → 不下发命令（对齐模型凭据跳过语义）', async () => {
+    it('从未配置任何 git 仓库 → 不下发命令（对齐模型凭据跳过语义）', async () => {
       prisma.worker.findMany.mockResolvedValue([{ id: 'w_0000000001' }]);
-      prisma.teamMember.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
       prisma.gitRepoGrant.findMany.mockResolvedValue([
-        { repoUrl: 'git@gitee.com:xishuhq/repo-a' },
+        { repoId: 'r_0000000001', agentId: 'a_tester', permission: 'read' },
       ]);
-      prisma.gitCredential.findMany.mockResolvedValue([]);
-      prisma.gitCredential.count.mockResolvedValue(0);
+      prisma.gitRepo.count.mockResolvedValue(0);
       const spy = jest.spyOn(service, 'enqueueCommand');
 
       const n = await service.dispatchGitCredentials();
@@ -1037,21 +1165,31 @@ describe('WorkersService', () => {
     });
   });
 
-  describe('replayGitCredentials（注册/offline→online 回放，复用 dispatch 过滤）', () => {
-    it('定向调用 dispatchGitCredentials([workerId])，解密失败 warn 不阻断', async () => {
-      prisma.teamMember.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
+  describe('replayGitCredentials（注册/offline→online 回放，复用 dispatch 静态授权）', () => {
+    const seedSingleRepo = () => {
       prisma.gitRepoGrant.findMany.mockResolvedValue([
-        { repoUrl: 'git@gitee.com:xishuhq/repo-a' },
+        { repoId: 'r_0000000001', agentId: 'a_tester', permission: 'read' },
       ]);
+      prisma.gitRepo.findMany.mockResolvedValue([
+        {
+          id: 'r_0000000001',
+          repoUrl: 'git@gitee.com:xishuhq/repo-a',
+          credentialId: 'c_0000000001',
+        },
+      ]);
+      prisma.gitRepo.count.mockResolvedValue(1);
       prisma.gitCredential.findMany.mockResolvedValue([
         {
-          repoUrl: 'git@gitee.com:xishuhq/repo-a',
+          id: 'c_0000000001',
           authType: 'ssh_key',
           credentialRef: 'enc-a',
           fingerprint: 'fp-a',
         },
       ]);
-      prisma.gitCredential.count.mockResolvedValue(1);
+    };
+
+    it('定向调用 dispatchGitCredentials([workerId])，解密失败 warn 不阻断', async () => {
+      seedSingleRepo();
       credentialCrypto.decrypt.mockImplementation(() => {
         throw new Error('bad ciphertext');
       });
@@ -1064,20 +1202,8 @@ describe('WorkersService', () => {
       expect(service['pendingCommands'].size).toBe(0);
     });
 
-    it('正常回放：凭证入队，payload 不含 targetWorkerIds（定向单 worker 语义）', async () => {
-      prisma.teamMember.findMany.mockResolvedValue([{ agentId: 'a_tester' }]);
-      prisma.gitRepoGrant.findMany.mockResolvedValue([
-        { repoUrl: 'git@gitee.com:xishuhq/repo-a' },
-      ]);
-      prisma.gitCredential.findMany.mockResolvedValue([
-        {
-          repoUrl: 'git@gitee.com:xishuhq/repo-a',
-          authType: 'ssh_key',
-          credentialRef: 'enc-a',
-          fingerprint: 'fp-a',
-        },
-      ]);
-      prisma.gitCredential.count.mockResolvedValue(1);
+    it('正常回放：凭证入队，payload 含 targetWorkerIds（定向单 worker 语义）', async () => {
+      seedSingleRepo();
       const spy = jest.spyOn(service, 'enqueueCommand');
 
       await service.replayGitCredentials('w_0000000001');
@@ -1094,6 +1220,7 @@ describe('WorkersService', () => {
                 authType: 'ssh_key',
                 key: 'sk-raw-token',
                 fingerprint: 'fp-a',
+                permission: 'read',
               },
             ],
             targetWorkerIds: ['w_0000000001'],
@@ -1461,7 +1588,12 @@ describe('WorkersService', () => {
         // 驱动直接回数组（已解析）
         summaryRow({ id: 'w_arr', skills: ['a', 'b'], tools: [] }),
         // 缺列（老引擎/降级）→ 0 与空数组，不得抛错
-        summaryRow({ id: 'w_missing', maxInstances: null, skills: null, tools: null }),
+        summaryRow({
+          id: 'w_missing',
+          maxInstances: null,
+          skills: null,
+          tools: null,
+        }),
       ]);
 
       const rows = await service.findAll();
@@ -1490,7 +1622,7 @@ describe('WorkersService', () => {
 
     it('findAll 降级：摘要查询失败（如 SQLite 无 JSON_EXTRACT）→ 回退 findMany，不 500', async () => {
       prisma.$queryRawUnsafe.mockRejectedValue(
-        new Error("no such function: JSON_EXTRACT"),
+        new Error('no such function: JSON_EXTRACT'),
       );
       prisma.worker.findMany.mockResolvedValue([workerRow()]);
 
@@ -1930,9 +2062,15 @@ describe('WorkersService', () => {
 
     it('capabilities 为 null/缺失 → 原样返回 null，不抛错', async () => {
       prisma.worker.findUnique.mockResolvedValue({
-        id: 'w_2', name: 'w', opencodeVersion: '1.18.30',
-        capabilities: null, load: null, status: 'online',
-        lastHeartbeatAt: null, registeredAt: new Date(), defaultModelId: null,
+        id: 'w_2',
+        name: 'w',
+        opencodeVersion: '1.18.30',
+        capabilities: null,
+        load: null,
+        status: 'online',
+        lastHeartbeatAt: null,
+        registeredAt: new Date(),
+        defaultModelId: null,
       });
       const view = await service.findOne('w_2');
       expect(view.capabilities).toBeNull();
@@ -1940,12 +2078,25 @@ describe('WorkersService', () => {
   });
 
   describe('workerSupportsAgentPolicies（Todo 14 能力位门：enabled && names.includes）', () => {
-    const NAMES = ['vteam-plan', 'vteam-product', 'vteam-architect', 'vteam-developer', 'vteam-tester', 'vteam-project_manager', 'vteam-librarian'];
+    const NAMES = [
+      'vteam-plan',
+      'vteam-product',
+      'vteam-architect',
+      'vteam-developer',
+      'vteam-tester',
+      'vteam-project_manager',
+      'vteam-librarian',
+    ];
 
     it('enabled=true 且 names 含候选 agent → true', () => {
       expect(
         workerSupportsAgentPolicies(
-          { capabilities: { maxInstances: 5, agentPolicies: { enabled: true, names: NAMES } } },
+          {
+            capabilities: {
+              maxInstances: 5,
+              agentPolicies: { enabled: true, names: NAMES },
+            },
+          },
           'vteam-developer',
         ),
       ).toBe(true);
@@ -1954,7 +2105,12 @@ describe('WorkersService', () => {
     it('enabled=true 但 names 不含候选 agent → false（stale-true 防护）', () => {
       expect(
         workerSupportsAgentPolicies(
-          { capabilities: { maxInstances: 5, agentPolicies: { enabled: true, names: NAMES } } },
+          {
+            capabilities: {
+              maxInstances: 5,
+              agentPolicies: { enabled: true, names: NAMES },
+            },
+          },
           'vteam-unknown',
         ),
       ).toBe(false);
@@ -1963,7 +2119,12 @@ describe('WorkersService', () => {
     it('enabled=false（含完整 names）→ false', () => {
       expect(
         workerSupportsAgentPolicies(
-          { capabilities: { maxInstances: 5, agentPolicies: { enabled: false, names: NAMES } } },
+          {
+            capabilities: {
+              maxInstances: 5,
+              agentPolicies: { enabled: false, names: NAMES },
+            },
+          },
           'vteam-developer',
         ),
       ).toBe(false);
@@ -1972,7 +2133,12 @@ describe('WorkersService', () => {
     it('enabled=false + names=[]（中性化）→ false', () => {
       expect(
         workerSupportsAgentPolicies(
-          { capabilities: { maxInstances: 5, agentPolicies: { enabled: false, names: [] } } },
+          {
+            capabilities: {
+              maxInstances: 5,
+              agentPolicies: { enabled: false, names: [] },
+            },
+          },
           'vteam-plan',
         ),
       ).toBe(false);
@@ -1989,14 +2155,20 @@ describe('WorkersService', () => {
 
     it('worker 为 null/undefined 或 capabilities 缺失 → false，不抛错', () => {
       expect(workerSupportsAgentPolicies(null, 'vteam-developer')).toBe(false);
-      expect(workerSupportsAgentPolicies(undefined, 'vteam-developer')).toBe(false);
+      expect(workerSupportsAgentPolicies(undefined, 'vteam-developer')).toBe(
+        false,
+      );
       expect(workerSupportsAgentPolicies({}, 'vteam-developer')).toBe(false);
     });
 
     it('残缺形状（names 非数组 / enabled 非 true）→ false', () => {
       expect(
         workerSupportsAgentPolicies(
-          { capabilities: { agentPolicies: { enabled: true, names: 'vteam-developer' } } },
+          {
+            capabilities: {
+              agentPolicies: { enabled: true, names: 'vteam-developer' },
+            },
+          },
           'vteam-developer',
         ),
       ).toBe(false);
@@ -2008,5 +2180,4 @@ describe('WorkersService', () => {
       ).toBe(false);
     });
   });
-
 });

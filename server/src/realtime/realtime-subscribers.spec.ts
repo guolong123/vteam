@@ -12,13 +12,9 @@ describe('realtime-subscriptions（plan-review-execution-gates Todo 5）', () =>
       EVENT_TYPES.RECEIPT_EXPIRED,
       EVENT_TYPES.ROUND_COMPLETE,
       EVENT_TYPES.ROUND_STALE,
-      ...Object.values(PLAN_LIFECYCLE_STATUS).map(
-        (s) => `plan.status.${s}`,
-      ),
+      ...Object.values(PLAN_LIFECYCLE_STATUS).map((s) => `plan.status.${s}`),
     ];
-    expect([...RECEIPT_ROUND_PLAN_EVENTS].sort()).toEqual(
-      [...expected].sort(),
-    );
+    expect([...RECEIPT_ROUND_PLAN_EVENTS].sort()).toEqual([...expected].sort());
   });
 
   it.each([...RECEIPT_ROUND_PLAN_EVENTS])(
@@ -33,9 +29,10 @@ describe('realtime-subscriptions（plan-review-execution-gates Todo 5）', () =>
 
   it('订阅者清单仅 session/board 两页（不新增分析页）', () => {
     for (const event of RECEIPT_ROUND_PLAN_EVENTS) {
-      expect([...EVENT_SUBSCRIBERS[event]].sort()).toEqual(
-        ['board', 'session'],
-      );
+      expect([...EVENT_SUBSCRIBERS[event]].sort()).toEqual([
+        'board',
+        'session',
+      ]);
     }
   });
 });

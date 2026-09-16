@@ -29,6 +29,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { MessageChannelsModule } from './message-channels/message-channels.module';
 import { NotificationChannelsModule } from './notifications/notification-channels.module';
 import { TeamsModule } from './teams/teams.module';
+import { TimersModule } from './timers/timers.module';
 
 @Module({
   imports: [
@@ -71,6 +72,7 @@ import { TeamsModule } from './teams/teams.module';
     MessageChannelsModule,
     NotificationChannelsModule,
     TeamsModule,
+    TimersModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -19,9 +19,10 @@ const EVIDENCE_DIR = path.resolve(
 
 type PlanStatus = "draft" | "approved" | "executing" | "completed";
 
-const scenario: { planStatus: PlanStatus; taskId: string } = {
+const scenario: { planStatus: PlanStatus; taskId: string; noLedger: boolean } = {
   planStatus: "draft",
   taskId: "t_plan_draft",
+  noLedger: false,
 };
 
 const LEDGER = {
@@ -88,6 +89,9 @@ function planJson(status: PlanStatus, taskId: string) {
 
 function issuesJson(taskId: string) {
   void taskId;
+  if (scenario.noLedger) {
+    return { items: [], total: 0, page: 1, pageSize: 100 };
+  }
   return {
     items: [
       { id: "is_0000000001", taskId: scenario.taskId, title: "评审派发 R1", status: "open", description: LEDGER_TEXT },
@@ -188,27 +192,53 @@ async function openPlanTab(page: import("@playwright/test").Page) {
 const asserts: Record<string, unknown> = {};
 
 test.describe("todo12 会话计划 Tab 状态 UI（mock API）", () => {
-  test("draft 修订中灰徽 + 版本轮次行 + 点名进度，无确认按钮", async ({ page }) => {
+  test("draft 草稿灰徽 + 版本轮次行 + 点名进度，无确认按钮", async ({ page }) => {
     scenario.planStatus = "draft";
     scenario.taskId = "t_plan_draft";
+    scenario.noLedger = false;
     await seedMemberAuth(page);
     await mockSessionApis(page);
     const block = await openPlanTab(page);
     const badge = page.getByTestId("plan-status-badge");
-    await expect(badge).toHaveText("修订中");
+    await expect(badge).toHaveText("草稿");
     await expect(badge).toHaveAttribute("data-status", "draft");
     await expect(page.getByTestId("plan-version-line")).toHaveText("v3·R1·1/3");
     const progress = page.getByTestId("plan-round-progress");
     await expect(progress).toContainText("待 开发者、测试 回执（1/3）");
+    await expect(page.getByTestId("plan-review-pending")).toHaveCount(0);
     await expect(page.getByTestId("plan-confirm-btn")).toHaveCount(0);
     await expect(page.getByTestId("plan-checklist")).toHaveCount(0);
     await block.screenshot({ path: path.join(EVIDENCE_DIR, "plan-draft.png") });
-    asserts["draft"] = { badge: "修订中", versionLine: "v3·R1·1/3", progress: "待 开发者、测试 回执（1/3）", confirmBtn: 0, checklist: 0 };
+    asserts["draft"] = { badge: "草稿", versionLine: "v3·R1·1/3", progress: "待 开发者、测试 回执（1/3）", reviewPending: 0, confirmBtn: 0, checklist: 0 };
+  });
+
+  test("draft 零账本等待派发指引（无评审轮次时提示下一步）", async ({ page }) => {
+    scenario.planStatus = "draft";
+    scenario.taskId = "t_plan_draft_empty";
+    scenario.noLedger = true;
+    await seedMemberAuth(page);
+    await mockSessionApis(page);
+    const block = await openPlanTab(page);
+    const badge = page.getByTestId("plan-status-badge");
+    await expect(badge).toHaveText("草稿");
+    await expect(badge).toHaveAttribute("data-status", "draft");
+    await expect(page.getByTestId("plan-version-line")).toHaveText("暂无评审轮次");
+    await expect(page.getByTestId("plan-round-progress")).toHaveCount(0);
+    const pending = page.getByTestId("plan-review-pending");
+    await expect(pending).toBeVisible();
+    await expect(pending).toContainText("等待主 Agent 派发评审");
+    await expect(pending).toContainText("自动出现");
+    await expect(page.getByTestId("plan-confirm-btn")).toHaveCount(0);
+    await expect(page.getByTestId("plan-checklist")).toHaveCount(0);
+    await block.screenshot({ path: path.join(EVIDENCE_DIR, "plan-draft-empty.png") });
+    asserts["draft-empty"] = { badge: "草稿", versionLine: "暂无评审轮次", reviewPending: 1, confirmBtn: 0, checklist: 0 };
+    scenario.noLedger = false;
   });
 
   test("approved 待执行琥珀徽 + 确认按钮二次确认翻转 executing", async ({ page }) => {
     scenario.planStatus = "approved";
     scenario.taskId = "t_plan_approved";
+    scenario.noLedger = false;
     await seedMemberAuth(page);
     await mockSessionApis(page);
     await openPlanTab(page);
@@ -233,6 +263,7 @@ test.describe("todo12 会话计划 Tab 状态 UI（mock API）", () => {
   test("executing 执行中蓝徽 + 执行清单聚合 issue 状态", async ({ page }) => {
     scenario.planStatus = "executing";
     scenario.taskId = "t_plan_executing";
+    scenario.noLedger = false;
     await seedMemberAuth(page);
     await mockSessionApis(page);
     const block = await openPlanTab(page);
@@ -253,6 +284,7 @@ test.describe("todo12 会话计划 Tab 状态 UI（mock API）", () => {
   test("completed 完成绿徽，无按钮无清单", async ({ page }) => {
     scenario.planStatus = "completed";
     scenario.taskId = "t_plan_completed";
+    scenario.noLedger = false;
     await seedMemberAuth(page);
     await mockSessionApis(page);
     const block = await openPlanTab(page);

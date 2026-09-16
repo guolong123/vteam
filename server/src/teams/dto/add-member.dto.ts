@@ -35,7 +35,9 @@ export class UpdateMemberDto {
   @MaxLength(255)
   workDir?: string;
 
-  @ApiPropertyOptional({ description: '实例覆盖模型 ID（空字符串表示跟随模板）' })
+  @ApiPropertyOptional({
+    description: '实例覆盖模型 ID（空字符串表示跟随模板）',
+  })
   @IsOptional()
   @IsString()
   overrideModelId?: string | null;
