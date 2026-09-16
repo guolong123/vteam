@@ -1,5 +1,8 @@
 import { Module } from '@nestjs/common';
-import { DocsSiteController } from './docs-site.controller';
+import {
+  DocsSiteController,
+  TeamPrototypesController,
+} from './docs-site.controller';
 import { PrototypesService } from './prototypes.service';
 
 /**
@@ -9,10 +12,12 @@ import { PrototypesService } from './prototypes.service';
  *   权威在 DB(artifacts)+uploads，无磁盘写入）；
  * - DocsSiteController：prototypes 纯数据端点（全局 JwtAuthGuard 鉴权 +
  *   团队成员校验）；
+ * - TeamPrototypesController：团队级原型聚合列表（T15，裸挂载
+ *   GET /teams/:id/prototypes）；
  * - 无 JwtModule/cookie 依赖；registry/prd 镜像端点已删除。
  */
 @Module({
-  controllers: [DocsSiteController],
+  controllers: [DocsSiteController, TeamPrototypesController],
   providers: [PrototypesService],
 })
 export class DocsSiteModule {}

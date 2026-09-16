@@ -9,12 +9,13 @@ import {
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../prisma/prisma.service';
+import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import {
   AuthenticatedUser,
   CurrentUser,
 } from '../common/decorators/current-user.decorator';
 import { DOCS_SITE_ERRORS } from './docs-site.constants';
-import { PrototypesService } from './prototypes.service';
+import { PrototypesService, TeamPrototypeListItem } from './prototypes.service';
 
 /**
  * 文档站数据端点（docs-artifacts-merge T11：磁盘镜像层已退役，DB-only）。
@@ -98,6 +99,66 @@ export class DocsSiteController {
       throw new ForbiddenException({
         code: DOCS_SITE_ERRORS.FORBIDDEN,
         message: '您不是该团队成员，无权访问该任务文档站',
+      });
+    }
+  }
+}
+
+/**
+ * 团队级原型聚合端点（docs-artifacts-merge T15：统一文档站跨任务聚合，
+ * 原型也要做成团队级）。
+ *
+ * 类级无前缀（@Controller() 裸挂载，仿 artifacts.controller.ts T5 团队路由）：
+ * - GET /teams/:id/prototypes → { items: [{id, metaId?, name, file,
+ *   artifactId?, taskId, taskName}] }（任务级字段 + 归属任务，按 id 再 taskId 排序）
+ *
+ * 鉴权：全局 JwtAuthGuard + 方法级 assertTeamMember（T5 同链）：
+ * 未知团队 404 TEAM_NOT_FOUND，非成员 403 PERMISSION_TEAM_NOT_MEMBER。
+ * 原型源码仍走任务级 GET /docs-site/:taskId/prototypes/<file>（本任务仅加列表）。
+ */
+@ApiTags('docs-site')
+@Controller()
+export class TeamPrototypesController {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly protoService: PrototypesService,
+  ) {}
+
+  /** 团队原型聚合列表 GET /teams/:id/prototypes → { items: [...] }。 */
+  @Get('teams/:id/prototypes')
+  @ApiOperation({ summary: '团队原型聚合列表（跨任务）' })
+  @Header('Content-Type', 'application/json; charset=utf-8')
+  async teamPrototypes(
+    @Param('id') teamId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<{ items: TeamPrototypeListItem[] }> {
+    await this.assertTeamMember(teamId, user.id);
+    return { items: await this.protoService.listPrototypesByTeam(teamId) };
+  }
+
+  /** 团队成员域校验（artifacts.controller 同链）：未知团队 404，非成员 403。 */
+  private async assertTeamMember(
+    teamId: string,
+    userId: string,
+  ): Promise<void> {
+    const team = await (this.prisma as any).team.findUnique({
+      where: { id: teamId },
+      select: { id: true },
+    });
+    if (!team) {
+      throw new NotFoundException({
+        code: 'TEAM_NOT_FOUND',
+        message: `团队 ${teamId} 不存在`,
+      });
+    }
+    const member = await (this.prisma as any).teamUserMember.findUnique({
+      where: { teamId_userId: { teamId, userId } },
+      select: { id: true },
+    });
+    if (!member) {
+      throw new ForbiddenException({
+        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: '您不是该团队成员',
       });
     }
   }
