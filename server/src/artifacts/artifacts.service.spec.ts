@@ -173,6 +173,7 @@ describe('ArtifactsService', () => {
           type: 'text',
           title: '验收结论',
           currentVersion: 1,
+          category: null,
         },
       });
       expect(prisma.artifactVersion.create).toHaveBeenCalledWith({
@@ -1132,8 +1133,7 @@ describe('ArtifactsService', () => {
       expect(result.fileSize).toBeNull();
     });
 
-    it('FILE-02：text 版本（filePath=null）→ 不附加 fileUrl 派生字段', async () => {
-      prisma.artifactVersion.findFirst.mockResolvedValue({
+    it('FILE-02：text 版本（filePath=null）→ 不附加 fileUrl 派生字段', async () => {      prisma.artifactVersion.findFirst.mockResolvedValue({
         id: 'artv_0000000001',
         artifactId: 'art_0000000001',
         version: 1,
@@ -1155,6 +1155,353 @@ describe('ArtifactsService', () => {
       expect(result.fileName).toBeUndefined();
       expect(result.fileExt).toBeUndefined();
       expect(result.contentRef).toBe('结论正文');
+    });
+  });
+
+  describe('category（docs-artifacts-merge T4：落库/过滤/透出）', () => {
+    it('validate：合法 category 通过；缺省/NULL 通过；未知字段仍忽略', () => {
+      expect(
+        validateArtifactDeclaration({
+          type: 'text',
+          title: '需求说明',
+          content: '正文',
+          category: '需求',
+        }),
+      ).toEqual({ valid: true });
+      expect(
+        validateArtifactDeclaration({
+          type: 'text',
+          title: 'x',
+          content: 'c',
+        }),
+      ).toEqual({ valid: true });
+      expect(
+        validateArtifactDeclaration({
+          type: 'text',
+          title: 'x',
+          content: 'c',
+          category: null,
+        }),
+      ).toEqual({ valid: true });
+      expect(
+        validateArtifactDeclaration({
+          type: 'text',
+          title: 'x',
+          content: 'c',
+          unknownFutureField: '忽略我',
+        } as any),
+      ).toEqual({ valid: true });
+    });
+
+    it('validate：非法 category → {valid:false}（事件与 POST 双路径一致 400）', () => {
+      expect(
+        validateArtifactDeclaration({
+          type: 'text',
+          title: 'x',
+          content: 'c',
+          category: '不存在的类',
+        }).valid,
+      ).toBe(false);
+      expect(
+        validateArtifactDeclaration({
+          type: 'text',
+          title: 'x',
+          content: 'c',
+          category: '',
+        }).valid,
+      ).toBe(false);
+    });
+
+    it('persist-on-create：append 新建行写入 category 并在列表项透出', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue(null);
+      prisma.artifact.create.mockResolvedValue({
+        id: 'art_0000000001',
+        taskId: 't_0000000001',
+        type: 'text',
+        title: '需求说明',
+        category: '需求',
+        currentVersion: 1,
+        createdAt: FIXED_DATE,
+        updatedAt: FIXED_DATE,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000001',
+        artifactId: 'art_0000000001',
+        version: 1,
+        contentRef: '正文',
+        filePath: null,
+        sha256: sha('正文'),
+        acceptedFlag: false,
+        authorAgentId: null,
+        changeNote: null,
+        createdAt: FIXED_DATE,
+      });
+
+      const result = await service.append('t_0000000001', {
+        taskId: 't_0000000001',
+        type: 'text',
+        title: '需求说明',
+        content: '正文',
+        category: '需求',
+      });
+
+      expect(result.status).toBe('archived');
+      expect(prisma.artifact.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ category: '需求' }),
+      });
+      expect(result.artifact).toEqual(
+        expect.objectContaining({ category: '需求' }),
+      );
+    });
+
+    it('persist-on-create：不传 category → NULL（未分类）', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue(null);
+      prisma.artifact.create.mockResolvedValue({
+        id: 'art_0000000001',
+        taskId: 't_0000000001',
+        type: 'text',
+        title: '结论',
+        category: null,
+        currentVersion: 1,
+        createdAt: FIXED_DATE,
+        updatedAt: FIXED_DATE,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000001',
+        artifactId: 'art_0000000001',
+        version: 1,
+        contentRef: '通过',
+        filePath: null,
+        sha256: sha('通过'),
+        acceptedFlag: false,
+        authorAgentId: null,
+        changeNote: null,
+        createdAt: FIXED_DATE,
+      });
+
+      const result = await service.append('t_0000000001', {
+        taskId: 't_0000000001',
+        type: 'text',
+        title: '结论',
+        content: '通过',
+      });
+
+      expect(prisma.artifact.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ category: null }),
+      });
+      expect(result.artifact).toEqual(
+        expect.objectContaining({ category: null }),
+      );
+    });
+
+    it('append-no-overwrite：命中已存在行只递增版本，不覆盖原 category', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue({
+        id: 'art_0000000001',
+        taskId: 't_0000000001',
+        type: 'text',
+        title: '需求说明',
+        category: '需求',
+        currentVersion: 1,
+      });
+      prisma.artifactVersion.findUnique.mockResolvedValue({
+        acceptedFlag: false,
+      });
+      prisma.artifact.update.mockResolvedValue({
+        id: 'art_0000000001',
+        taskId: 't_0000000001',
+        type: 'text',
+        title: '需求说明',
+        category: '需求',
+        currentVersion: 2,
+        createdAt: FIXED_DATE,
+        updatedAt: FIXED_DATE,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000002',
+        artifactId: 'art_0000000001',
+        version: 2,
+        contentRef: '新正文',
+        filePath: null,
+        sha256: sha('新正文'),
+        acceptedFlag: false,
+        authorAgentId: null,
+        changeNote: null,
+        createdAt: FIXED_DATE,
+      });
+
+      const result = await service.append('t_0000000001', {
+        taskId: 't_0000000001',
+        type: 'text',
+        title: '需求说明',
+        content: '新正文',
+        category: '设计',
+      });
+
+      expect(result.status).toBe('archived');
+      expect(prisma.artifact.update).toHaveBeenCalledWith({
+        where: { id: 'art_0000000001' },
+        data: { currentVersion: 2 },
+      });
+      expect(result.artifact).toEqual(
+        expect.objectContaining({ category: '需求', currentVersion: 2 }),
+      );
+    });
+
+    it('invalid-category-400：非法 category → 400 ARTIFACT_INVALID_DECLARATION（不落库）', async () => {
+      await expect(
+        service.append('t_0000000001', {
+          taskId: 't_0000000001',
+          type: 'text',
+          title: 'x',
+          content: 'c',
+          category: '不存在的类',
+        }),
+      ).rejects.toMatchObject({
+        status: 400,
+        response: { code: 'ARTIFACT_INVALID_DECLARATION' },
+      });
+      expect(prisma.artifact.create).not.toHaveBeenCalled();
+      expect(prisma.artifactVersion.create).not.toHaveBeenCalled();
+    });
+
+    it('event-path：onArtifactSubmitted 非法 category → {status:invalid} 不抛错不落库', async () => {
+      const result = await service.onArtifactSubmitted({
+        taskId: 't_0000000001',
+        type: 'text',
+        title: 'x',
+        content: 'c',
+        category: '不存在的类',
+      });
+
+      expect(result.status).toBe('invalid');
+      expect(result.reason).toContain('category');
+      expect(prisma.artifactVersion.create).not.toHaveBeenCalled();
+    });
+
+    it('filter-by-category：findByTask where 透传 category', async () => {
+      prisma.artifact.findMany.mockResolvedValue([
+        {
+          id: 'art_0000000001',
+          taskId: 't_0000000001',
+          type: 'text',
+          title: '需求说明',
+          category: '需求',
+          currentVersion: 1,
+          createdAt: FIXED_DATE,
+          updatedAt: FIXED_DATE,
+        },
+      ]);
+      prisma.artifactVersion.findMany.mockResolvedValue([
+        {
+          id: 'artv_0000000001',
+          artifactId: 'art_0000000001',
+          version: 1,
+          acceptedFlag: false,
+          authorAgentId: null,
+        },
+      ]);
+
+      const result = await service.findByTask('t_0000000001', {
+        category: '需求',
+      });
+
+      expect(prisma.artifact.findMany).toHaveBeenCalledWith({
+        where: { taskId: 't_0000000001', category: '需求' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result.total).toBe(1);
+      expect(result.items[0]).toEqual(
+        expect.objectContaining({ category: '需求' }),
+      );
+    });
+
+    it('expose-in-list：未设 category 的行透出 null', async () => {
+      prisma.artifact.findMany.mockResolvedValue([
+        {
+          id: 'art_0000000001',
+          taskId: 't_0000000001',
+          type: 'text',
+          title: '结论',
+          currentVersion: 1,
+          createdAt: FIXED_DATE,
+          updatedAt: FIXED_DATE,
+        },
+      ]);
+      prisma.artifactVersion.findMany.mockResolvedValue([]);
+
+      const result = await service.findByTask('t_0000000001', {});
+
+      expect(prisma.artifact.findMany).toHaveBeenCalledWith({
+        where: { taskId: 't_0000000001' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result.items[0]).toEqual(
+        expect.objectContaining({ category: null }),
+      );
+    });
+
+    it('archiveFile：新建行写入 category；append 不覆盖原值', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue(null);
+      prisma.artifact.findFirst.mockResolvedValue(null);
+      prisma.artifact.create.mockResolvedValue({
+        id: 'art_0000000001',
+        currentVersion: 1,
+      });
+      prisma.artifactVersion.create.mockResolvedValue({
+        id: 'artv_0000000001',
+      });
+
+      const created = await service.archiveFile(
+        't_0000000001',
+        {
+          fileRef: '报告.docx',
+          storedUrl: '/uploads/uuid-1.docx',
+          storedName: '报告.docx',
+          sha256: sha('文件内容'),
+          title: '需求文档',
+        },
+        '设计',
+      );
+
+      expect(created.status).toBe('created');
+      expect(prisma.artifact.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ category: '设计' }),
+      });
+
+      prisma.artifact.findFirst.mockResolvedValue({
+        id: 'art_0000000001',
+        title: '需求文档',
+        category: '设计',
+        currentVersion: 1,
+      });
+      prisma.artifactVersion.findUnique.mockResolvedValue({
+        acceptedFlag: false,
+      });
+      prisma.artifact.update.mockResolvedValue({
+        id: 'art_0000000001',
+        currentVersion: 2,
+      });
+
+      const appended = await service.archiveFile(
+        't_0000000001',
+        {
+          fileRef: '报告.docx',
+          storedUrl: '/uploads/uuid-2.docx',
+          storedName: '报告.docx',
+          sha256: sha('v2 内容'),
+          title: '需求文档',
+        },
+        '运维',
+      );
+
+      expect(appended.status).toBe('appended');
+      expect(prisma.artifact.update).toHaveBeenCalledWith({
+        where: { id: 'art_0000000001' },
+        data: { currentVersion: 2 },
+      });
     });
   });
 });

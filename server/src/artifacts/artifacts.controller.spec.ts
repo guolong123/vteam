@@ -94,6 +94,33 @@ describe('ArtifactsController', () => {
       title: '验收结论',
       content: '通过',
       fileRef: undefined,
+      category: undefined,
+    });
+  });
+
+  it('POST /tasks/:id/artifacts：category 透传给 append（T4）', async () => {
+    service.append.mockResolvedValue({
+      status: 'archived',
+      artifact: { id: 'art_0000000001', category: '需求' },
+    });
+    await expect(
+      controller.append('t_0000000001', {
+        type: 'text',
+        title: '需求说明',
+        content: '正文',
+        category: '需求',
+      }),
+    ).resolves.toEqual({
+      status: 'archived',
+      artifact: { id: 'art_0000000001', category: '需求' },
+    });
+    expect(service.append).toHaveBeenCalledWith('t_0000000001', {
+      taskId: 't_0000000001',
+      type: 'text',
+      title: '需求说明',
+      content: '正文',
+      fileRef: undefined,
+      category: '需求',
     });
   });
 

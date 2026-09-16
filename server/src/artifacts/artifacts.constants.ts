@@ -7,6 +7,22 @@ export const ARTIFACT_TYPES = ['text', 'doc', 'file'] as const;
 
 export type ArtifactType = (typeof ARTIFACT_TYPES)[number];
 
+/**
+ * 产出物分类词表（docs-artifacts-merge T4，server 唯一源）。
+ * 与 `type` 正交的可空元数据：未分类用 NULL（不写 `其他`，`其他` 留给人/Agent 显式选）。
+ * web 侧镜像见 `web/src/lib/artifact-categories.ts`（同字面量七类，不许各自演进，
+ * 一致性由词表 parity grep 门保证）。
+ */
+export const ARTIFACT_CATEGORIES = [
+  '需求',
+  '设计',
+  '实现',
+  '测试用例',
+  '测试报告',
+  '运维',
+  '其他',
+] as const;
+
 export const ARTIFACT_ERRORS = {
   /** 非法声明：type/title/content/fileRef 不满足协议 → 回退普通消息、不产生归档（12 篇 §3.1）。 */
   INVALID_DECLARATION: 'ARTIFACT_INVALID_DECLARATION',

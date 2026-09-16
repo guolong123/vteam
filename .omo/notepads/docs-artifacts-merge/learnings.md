@@ -35,3 +35,20 @@ Conventions, patterns, and successful approaches discovered during work on this 
   "up to date".
 - Failure QA result: `MODIFY COLUMN category TEXT NOT NULL` fails with MySQL 1138
   "Invalid use of NULL value" on 40 pre-existing NULL rows — nullable-first confirmed necessary.
+
+## 2026-09-16 — T4 category 写路径
+- T1 只做了迁移 + 容器内生效，host 的 `node_modules/.prisma/client` 仍是旧生成物：
+  service 写 `category` 前必须先在 host 跑 `npx prisma generate`（无需 DB），否则 tsc
+  报 `category` 不存在。只改 node_modules，不进 git。
+- 计划的词表 parity 门是 verbatim gate：`sed -n "/ARTIFACT_CATEGORIES/,/] as const/p"`
+  会从**首个**含该串的行开区间、且每个后续匹配行都会**重开**区间直到下一个 `] as const`
+  （无则直达 EOF）。故 `artifacts.constants.ts` 内 `ARTIFACT_CATEGORIES` 字串只许出现两次
+  （doc 注释 1 次无单引号 + `export const` 1 次），`export type ArtifactCategory =
+  (typeof ARTIFACT_CATEGORIES)[number]` 必须删（它在 `] as const` 之后，会把
+  ARTIFACT_ERRORS 的 4 个单引号串卷入左集合导致 diff 失败）。web 侧是全文件
+  `grep -o`，注释/类型别名只要不用 ASCII 单引号就不影响。
+- Live curl 门的前提是部署含 T4 代码：compose server 镜像若构建于 T4 之前，
+  `?category=` 会被静默忽略（200 未过滤、items 无 category 字段）——此时不许伪造输出，
+  应在证据粘贴新旧对照收据并以 jest 同义断言覆盖，live 断言留待重部署后由 T12 统一验证。
+- `rejects.toMatchObject({ status: 400, response: { code } })` 对 HttpException 直接可用
+  （restore 旧用例已确立该模式）；controller 旧期望用精确对象匹配，新增透传字段后记得同步。

@@ -12,7 +12,11 @@ import { resyncIdPrefix } from '../common/id-resync';
 import { RealtimeService } from '../realtime/realtime.service';
 import { ACTOR_TYPE, EVENT_TYPES } from '../common/constants/event.constants';
 import { TASK_STATUS } from '../common/constants/task.constants';
-import { ARTIFACT_ERRORS, ARTIFACT_TYPES } from './artifacts.constants';
+import {
+  ARTIFACT_CATEGORIES,
+  ARTIFACT_ERRORS,
+  ARTIFACT_TYPES,
+} from './artifacts.constants';
 import { QueryArtifactsDto } from './dto/artifact.dto';
 import { FileStorageService } from '../uploads/uploads.service';
 import { DocsMirrorService } from '../docs-site/docs-mirror.service';
@@ -30,6 +34,8 @@ export interface ArtifactSubmittedPayload {
   title: string;
   content: string;
   fileRef?: string;
+  /** 分类标签（可选；缺省 NULL=未分类；T7 MCP 透传同名参数）。 */
+  category?: string;
 }
 
 /** append 元信息（12 篇 §4.1：作者 Agent / 变更说明；T5：force 绕过 sha256 去重）。 */
@@ -52,6 +58,7 @@ export function validateArtifactDeclaration(input: {
   title?: unknown;
   content?: unknown;
   fileRef?: unknown;
+  category?: unknown;
 }): { valid: boolean; reason?: string } {
   if (!input || typeof input !== 'object') {
     return { valid: false, reason: '非法声明：声明必须为对象' };
@@ -82,6 +89,17 @@ export function validateArtifactDeclaration(input: {
         reason: '非法声明：type=doc/file 时 fileRef 必填',
       };
     }
+  }
+  if (
+    input.category !== undefined &&
+    input.category !== null &&
+    (typeof input.category !== 'string' ||
+      !(ARTIFACT_CATEGORIES as readonly string[]).includes(input.category))
+  ) {
+    return {
+      valid: false,
+      reason: '非法声明：category 须为需求/设计/实现/测试用例/测试报告/运维/其他其一',
+    };
   }
   return { valid: true };
 }
@@ -153,6 +171,8 @@ export class ArtifactsService implements OnModuleInit {
     const type = submission.type;
     const title = submission.title.trim();
     const content = submission.content ?? '';
+    // 分类：可选透传；缺省 NULL（未分类）；非法值已在 validateArtifactDeclaration 拦截
+    const category = submission.category ?? null;
     const sha256 = createHash('sha256').update(content).digest('hex');
 
     // 幂等去重（12 篇 §4.3 / 09 §5.4）：同 taskId+type+sha256 已归档 → 跳过，版本不增；
@@ -194,7 +214,7 @@ export class ArtifactsService implements OnModuleInit {
       if (!existing) {
         const id = await this.idGen.nextId(ID_PREFIX.artifact);
         const created = await tx.artifact.create({
-          data: { id, taskId, type, title, currentVersion: 1 },
+          data: { id, taskId, type, title, currentVersion: 1, category },
         });
         const v = await tx.artifactVersion.create({
           data: {
@@ -229,6 +249,7 @@ export class ArtifactsService implements OnModuleInit {
       }
       const updated = await tx.artifact.update({
         where: { id: existing.id },
+        // append 命中已存在行：只递增 currentVersion，不覆盖原 category
         data: { currentVersion: existing.currentVersion + 1 },
       });
       const v = await tx.artifactVersion.create({
@@ -394,7 +415,9 @@ export class ArtifactsService implements OnModuleInit {
       storedName: string;
       sha256: string;
       title?: string;
+      category?: string;
     },
+    category?: string,
   ): Promise<{
     artifactId: string;
     version: number;
@@ -412,6 +435,8 @@ export class ArtifactsService implements OnModuleInit {
       };
     }
     const artifactTitle = args.title ?? args.storedName;
+    // 分类：显式参数优先于 args 透传；仅新建行写入，append 不覆盖原值
+    const artifactCategory = category ?? args.category ?? null;
     const result = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.artifact.findFirst({
         where: { taskId, type: 'file', title: artifactTitle },
@@ -425,6 +450,7 @@ export class ArtifactsService implements OnModuleInit {
             type: 'file',
             title: artifactTitle,
             currentVersion: 1,
+            category: artifactCategory,
           },
         });
         await tx.artifactVersion.create({
@@ -500,7 +526,11 @@ export class ArtifactsService implements OnModuleInit {
       query.accepted === undefined ? undefined : query.accepted === 'true';
 
     const artifacts = await this.prisma.artifact.findMany({
-      where: { taskId, ...(query.type ? { type: query.type } : {}) },
+      where: {
+        taskId,
+        ...(query.type ? { type: query.type } : {}),
+        ...(query.category ? { category: query.category } : {}),
+      },
       orderBy: { createdAt: 'desc' },
     });
     if (artifacts.length === 0) {
@@ -605,6 +635,7 @@ export class ArtifactsService implements OnModuleInit {
       taskId: string;
       type: string;
       title: string;
+      category?: string | null;
       currentVersion: number;
       createdAt: Date;
       updatedAt: Date;
@@ -621,6 +652,7 @@ export class ArtifactsService implements OnModuleInit {
       taskId: artifact.taskId,
       type: artifact.type,
       title: artifact.title,
+      category: artifact.category ?? null,
       currentVersion: artifact.currentVersion,
       acceptedFlag: current?.acceptedFlag ?? false,
       authorAgentId: current?.authorAgentId ?? null,

@@ -8,7 +8,7 @@ import {
   IsString,
   Min,
 } from 'class-validator';
-import { ARTIFACT_TYPES } from '../artifacts.constants';
+import { ARTIFACT_CATEGORIES, ARTIFACT_TYPES } from '../artifacts.constants';
 
 /**
  * POST /tasks/:id/artifacts 旁路提交 body（09 篇 §3.6，P1 辅助入口）。
@@ -38,6 +38,15 @@ export class CreateArtifactDto {
   @IsOptional()
   @IsString()
   fileRef?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '分类标签（需求/设计/实现/测试用例/测试报告/运维/其他，可选；缺省为未分类 NULL）',
+    enum: ARTIFACT_CATEGORIES,
+  })
+  @IsOptional()
+  @IsIn(ARTIFACT_CATEGORIES)
+  category?: string;
 }
 
 /** GET /tasks/:id/artifacts 查询参数（type/accepted 筛选 + 分页，对齐 QueryTasksDto 模式）。 */
@@ -57,6 +66,14 @@ export class QueryArtifactsDto {
   @IsOptional()
   @IsIn(['true', 'false'])
   accepted?: string;
+
+  @ApiPropertyOptional({
+    description: '分类筛选（七类中文词表其一；未传返回全部含未分类）',
+    enum: ARTIFACT_CATEGORIES,
+  })
+  @IsOptional()
+  @IsIn(ARTIFACT_CATEGORIES)
+  category?: string;
 
   @ApiPropertyOptional({
     description: '页码（从 1 起）',

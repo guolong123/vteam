@@ -79,7 +79,7 @@ export class ArtifactsController {
 
   /**
    * 旁路手动补充提交（09 篇 §3.6 P1，12 篇 §5.3）。
-   * POST /api/v1/tasks/:id/artifacts body {type,title,content?,fileRef?}
+   * POST /api/v1/tasks/:id/artifacts body {type,title,content?,fileRef?,category?}
    *   → 201 {status: 'archived'|'duplicate', artifact}；非法声明 → 400
    *   `ARTIFACT_INVALID_DECLARATION`（回退普通消息语义）
    */
@@ -94,6 +94,7 @@ export class ArtifactsController {
       title: dto.title,
       content: dto.content ?? '',
       fileRef: dto.fileRef,
+      category: dto.category,
     });
   }
 
