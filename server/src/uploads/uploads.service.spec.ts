@@ -45,10 +45,9 @@ describe('FileStorageService（文件存储基础：文件名生成 / 白名单 
       'i.jpeg',
       'j.gif',
       'k.webp',
-      'l.svg',
-      'm.md',
-      'n.txt',
-      'o.json',
+      'l.md',
+      'm.txt',
+      'n.json',
     ])('接受白名单文件 %s', (originalname) => {
       expect(() =>
         FileStorageService.assertAllowed({
@@ -58,7 +57,7 @@ describe('FileStorageService（文件存储基础：文件名生成 / 白名单 
       ).not.toThrow();
     });
 
-    it.each(['a.exe', 'b.html', 'c.js', 'd.sh', 'e', 'f.'])(
+    it.each(['a.exe', 'b.html', 'c.js', 'd.sh', 'e', 'f.', 'g.svg'])(
       '拒绝非法/无扩展名文件 %s → 400 UPLOAD_FILE_TYPE_NOT_ALLOWED',
       (originalname) => {
         expect(() =>

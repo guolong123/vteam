@@ -265,3 +265,22 @@ Conventions, patterns, and successful approaches discovered during work on this 
   绝不 `git add` 目标文件（会连带吞掉兄弟波活 hunk）。
 - 脏树 tsc exit 0；新 commit 纯净 worktree（node_modules symlink）tsc exit 0。
   Reconcile：兄弟波落地若同形则合流干净，若改形以其为准；回滚 `git revert <hash>`。
+
+## 2026-09-17 — Final Wave F3 major fix: drop svg from upload allowlist
+- Fix 内容（3 文件 + 本 notepad，共 4 路径提交）：`uploads.constants.ts`
+  删 `'svg',` 行 + 白名单注释同步去 `/svg`；`uploads.service.spec.ts`
+  允许表删 `l.svg`（后项重标号 `l.md/m.txt/n.json` 保字母连续）+
+  非法表追加 `g.svg`；`artifact-slug.ts` 纯注释 2 处（:12
+  `DocsMirrorService.toSlug` → `` `server/src/artifacts/artifact-slug.ts` 的 `toSlug` ``，
+  T11 已删 service；:24 `前 8 位` → `末 8 位`，对齐 `.slice(-8)`）。
+- 有意不动：`message-input.tsx` 客户端白名单本就无 svg（仅 pdf/doc/…/gif/md/txt，
+  webp/json 亦无——历史口径，动它超范围）；`:25` 行 `artId前8位` 同样 stale
+  但任务限定"恰 2 处"故留（F3 重审若问再改）；T9 旧门
+  `grep -q "'svg'" uploads.constants.ts` 按设计翻红（编排器另行改 plan 注解）。
+- 门禁收据：server/web `tsc --noEmit` 双 0；`npm test -- --runInBand src/uploads`
+  2 套件 44 用例全绿；`grep -n "'svg'" uploads.constants.ts` 空；
+  plan 四门 mirror(server) 0 / N+1 0 / preview-deps 仅已知 mermaid-block 1 命中 /
+  `router.push(\`/artifacts` 0（TaskDetailDrawer 的 `/teams/…/session` 跳转不属此门）。
+- 脏树下提交手法：四候选文件事前 `git status --short` 全净 + 事后 `git diff`
+  仅 intended hunks → 选择性 `git add` 四路径 → `git diff --cached --stat` 确认后提交；
+  不碰他波 ~29 脏文件。
