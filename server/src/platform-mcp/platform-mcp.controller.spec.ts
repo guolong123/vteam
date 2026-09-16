@@ -66,6 +66,9 @@ describe('PlatformMcpController (HTTP)', () => {
         messageId: 'm_1',
         channelId: 'c_1',
         targetInstanceId: 'ta_tester',
+        triggered: true,
+        reason: 'ok',
+        issueBound: false,
       }),
       submitArtifact: jest.fn().mockResolvedValue({
         artifactId: 'a_1',
@@ -281,12 +284,16 @@ describe('PlatformMcpController (HTTP)', () => {
         type: 'string',
       });
       // notify_agent：selfInstanceId/targetInstanceId/content 必填，taskId/teamId 双可选
+      // + issueId 可选（统一派发返回契约 todo 3）
       const notifyAgent = tools.find((t) => t.name === 'notify_agent')!;
       expect(notifyAgent.inputSchema.required).toEqual([
         'selfInstanceId',
         'targetInstanceId',
         'content',
       ]);
+      expect(notifyAgent.inputSchema.properties.issueId).toEqual({
+        type: 'string',
+      });
       // submit_artifact：taskId/selfInstanceId/type/title 必填，content/fileRef 可选；type 枚举归为 string
       const submitArtifact = tools.find((t) => t.name === 'submit_artifact')!;
       expect(submitArtifact.inputSchema.required).toEqual([
@@ -581,6 +588,9 @@ describe('PlatformMcpController (HTTP)', () => {
         messageId: 'm_1',
         channelId: 'c_1',
         targetInstanceId: 'ta_tester',
+        triggered: true,
+        reason: 'ok',
+        issueBound: false,
       });
     });
 

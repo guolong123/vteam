@@ -1239,48 +1239,68 @@ export class WorkerDispatcher
 
   /**
    * FR-13：agent 互 @ 触发——MCP `notify_agent` 工具调用入口。
-   * team-only：经任务归属 teamId + targetInstanceId（tmm_）直查团队会话，
-   * 无 task 快照回退（adopt/双实现已删）；复用 dispatch() 单团队入口全链路
-   * （assignWorker → createSession/bind → execute → ingress 回流落库+广播，
-   * 不复制单目标分派逻辑）；单目标失败由 dispatch() 统一 emitError + 广播 agent.error。
+   * 双维度：任务维度（taskId 传任务）经任务归属 teamId 触发；团队维度
+   * （taskId 缺省、teamId 直传，零任务团队）跳过任务查表、用传入 teamId 直接
+   * 触发。两路均经 ensureTeamSession（teamId, targetInstanceId）即建即得团队
+   * 会话，复用 dispatch() 单团队入口全链路（assignWorker → createSession/bind
+   * → execute → ingress 回流落库+广播，不复制单目标分派逻辑）；单目标失败由
+   * dispatch() 统一 emitError + 广播 agent.error。团队路径 taskId 置空 +
+   * taskContext 缺省（对齐用户-@ 团队成员触发的 team-scope 约定：工作目录走
+   * teams/<teamId>，提示词走【团队接待】段）。
+   * 统一返回契约（plan-review todo 3）：本方法内部返回保持 void（不组装
+   * triggered——triggered 只在 notifyAgent 层组装）；可选 issueId 由 notifyAgent
+   * 透传（派活归属 issue，缺省不阻断；todo 4 消费 issue 锁/去重）。
    */
   async dispatchAgentMention(input: {
-    taskId: string;
+    taskId?: string | null;
+    /** 团队维度直传（taskId 缺省时必填，跳过任务查表）。 */
+    teamId?: string | null;
     /** 群聊频道（触发来源：目标 agent 的 group_post 回复落库+广播走此频道）。 */
     channelId: string;
     /** 消息内容（含 @目标，透传给目标 agent 作为触发 prompt）。 */
     text: string;
     /** 被 @ 的目标成员 id（TeamMember.id，tmm_ 前缀）。 */
     targetInstanceId: string;
+    /** 可选 issue 绑定（notify_agent 透传；缺省不阻断，todo 4 消费）。 */
+    issueId?: string | null;
   }): Promise<void> {
-    const taskRow = await (this.prisma as any).task.findUnique({
-      where: { id: input.taskId },
-      select: { teamId: true },
-    });
-    const teamId = (taskRow as any)?.teamId ?? null;
-    const session = teamId
-      ? await (this.prisma.session as any).findFirst({
-          where: { teamId, teamMemberId: input.targetInstanceId },
-          select: { id: true, agentId: true },
-        })
-      : null;
-    if (!session) {
+    let teamId: string | null = null;
+    let taskIdForDispatch: string | null = null;
+    if (input.taskId) {
+      const taskRow = await (this.prisma as any).task.findUnique({
+        where: { id: input.taskId },
+        select: { teamId: true },
+      });
+      teamId = (taskRow as any)?.teamId ?? null;
+      if (!teamId) {
+        throw new Error(
+          `实例 ${input.targetInstanceId} 无团队会话（团队 未知，任务 ${input.taskId}）`,
+        );
+      }
+      taskIdForDispatch = input.taskId;
+    } else if (input.teamId) {
+      teamId = input.teamId;
+    } else {
       throw new Error(
-        `实例 ${input.targetInstanceId} 无团队会话（团队 ${teamId ?? '未知'}，任务 ${input.taskId}）`,
+        `实例 ${input.targetInstanceId} 无团队会话（团队 未知，任务 未知）`,
       );
     }
+    const ensured = await this.sessionLifecycle.ensureTeamSession(
+      teamId,
+      input.targetInstanceId,
+    );
     await this.dispatch({
       messageId: await this.idGen.nextId(MESSAGE_ID_PREFIX),
       channelId: input.channelId,
-      taskId: input.taskId,
-      teamId: taskRow?.teamId ?? null,
-      taskContext: { taskId: input.taskId },
+      taskId: taskIdForDispatch ?? '',
+      teamId,
+      ...(taskIdForDispatch ? { taskContext: { taskId: taskIdForDispatch } } : {}),
       text: input.text,
       targets: [
         {
-          agentId: session.agentId,
+          agentId: ensured.agentId,
           instanceId: input.targetInstanceId,
-          sessionId: session.id,
+          sessionId: ensured.id,
         },
       ],
     });

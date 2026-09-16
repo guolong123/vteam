@@ -106,6 +106,32 @@ export interface ReadFileResult {
 }
 
 /**
+ * 统一派发返回契约 reason 词汇（plan-review todo 3，对齐 docs 31 §3 / 32 §3.1-§3.2，
+ * todo 4 消费 `duplicate`；本 todo 实际产生 ok|throttled，duplicate|plan-gated 预留词汇位）。
+ */
+export type DispatchReason = 'ok' | 'duplicate' | 'throttled' | 'plan-gated';
+
+/**
+ * notify_agent 统一返回契约（plan-review todo 3）：
+ * {triggered, reason, origMessageId?, messageId, issueBound} + 既有 channelId/targetInstanceId。
+ * - reason 与 triggered 恒成对：triggered=true → reason='ok'；false → 具体拦因。
+ * - issueBound：调用带 issueId 即 true；缺省 false（hint，不硬拦）。
+ * - origMessageId 预留给 duplicate 回显原记录（todo 4 填充，本 todo 永不写入）。
+ * - dispatchAgentMention 内部返回保持 void，triggered 只在本层组装。
+ */
+export interface NotifyAgentResult {
+  messageId: string;
+  channelId: string;
+  targetInstanceId: string;
+  triggered: boolean;
+  reason: DispatchReason;
+  /** duplicate 拦因回显的原派发消息 id（todo 4 填充）。 */
+  origMessageId?: string;
+  /** true=本次派发已绑定 issue；false=未带 issueId（提醒，不硬拦）。 */
+  issueBound: boolean;
+}
+
+/**
  * git_repos_list 返回的脱敏仓库行（T6 P6 读取补齐）。
  * - 无任何凭证 key 明文（GitRepoView 本身即脱敏：credentialRef 永不进视图）。
  * - repoUrl 视同敏感：调用方仅凭授权可见，服务端永不打进日志（日志仅记条数/id）。
@@ -505,7 +531,9 @@ export class PlatformMcpService {
   }
 
   /**
-   * group_post：向任务群聊发布消息。
+   * group_post：向任务群聊发布消息（triggerless：仅落库+广播，无 triggered 字段；
+   * 其 @ 提及触发走内部 dispatchAgentMention fire-and-forget，不向调用方返回触发状态。
+   * 需要触发状态的定向派发请用 notify_agent（统一返回契约见 NotifyAgentResult）。
    * - senderType=agent、senderId=发送者 agent id（从 selfInstanceId 实例行解析，角色渲染）、
    *   senderInstanceId=selfInstanceId（精确归属）双写（assertWorkerTask 校验 selfInstanceId
    *   为活跃执行实例后精确落库）。
@@ -764,6 +792,14 @@ export class PlatformMcpService {
    * 2. 落库一条 agent 消息（sender=发送者、@目标）→ 广播 chat.message.new（先落库后广播）。
    * 3. 调 WorkerDispatcher.dispatchAgentMention 触发目标实例的 dispatch 全链路
    *    （assignWorker → createSession/bind → execute → 回复经 task.completed 回流群聊）。
+   *    任务维度传 taskId；团队维度（无任务）传 teamId 直走团队路径（会话即建即得）。
+   *    统一返回契约（plan-review todo 3，见 NotifyAgentResult）：
+   *    {triggered, reason: ok|duplicate|throttled|plan-gated, origMessageId?,
+   *    messageId, issueBound}（+既有 channelId/targetInstanceId）——
+   *    成功 triggered=true+reason=ok；被节流 triggered=false+reason=throttled
+   *    （内部 pair_limit|task_budget 在此收敛，不再透出）；issueId 缺省 →
+   *    issueBound=false（hint，不硬拦），透传时 issueBound=true 并经 dispatchAgentMention
+   *    带给执行链路（todo 4 消费 issue 锁/去重）。
    * 目标实例无会话 → dispatchAgentMention 抛错 → 工具调用返回错误（模型可见）。
    */
   async notifyAgent(
@@ -774,12 +810,10 @@ export class PlatformMcpService {
       selfInstanceId: string;
       targetInstanceId: string;
       content: string;
+      /** 可选 issue 绑定（派活归属 issue；缺省不硬拦，返回 issueBound:false 提醒）。 */
+      issueId?: string;
     },
-  ): Promise<{
-    messageId: string;
-    channelId: string;
-    targetInstanceId: string;
-  }> {
+  ): Promise<NotifyAgentResult> {
     const exec = await this.resolveExecContext(ctx, args);
     const isTeam = exec.kind === 'team';
     const effTaskId: string | null = isTeam ? null : exec.taskId;
@@ -852,36 +886,57 @@ export class PlatformMcpService {
       { type: 'channel', id: channel.id },
     );
 
-    // 团队维度跳过触发：dispatchAgentMention 是任务域执行链路（需 taskId），团队会话
-    // 无任务可执行——@ 消息落库加广播后目标成员经频道可见。
+    // 双维度触发：任务维度按 taskId 触发执行；团队维度（无任务）按 teamId 经
+    // 团队路径触发（ensureTeamSession 即建即得，会话缺失即建，不静默跳过）。
     // @ storm 熔断（仅 agent-originated）：滑动窗口节流——被拦仅 warn，
-    // 不阻断发布（消息已落库广播），返回仍成功。notify_agent 为单显式目标，
-    // 内容含 @all 也不展开 fan-out（仅触发 targetInstanceId）。
-    if (!isTeam) {
-      const decision = this.mentionThrottle.shouldDispatch({
-        taskId: effTaskId as string,
-        fromInstanceId: args.selfInstanceId,
-        toInstanceId: args.targetInstanceId,
-        now: Date.now(),
+    // 不阻断发布（消息已落库广播），返回 triggered:false + reason。notify_agent
+    // 为单显式目标，内容含 @all 也不展开 fan-out（仅触发 targetInstanceId）。
+    // 团队维度节流键取 team:<teamId> 命名空间（与 t_ 任务键永不碰撞）。
+    const throttleKey = isTeam ? `team:${exec.teamId}` : (effTaskId as string);
+    const decision = this.mentionThrottle.shouldDispatch({
+      taskId: throttleKey,
+      fromInstanceId: args.selfInstanceId,
+      toInstanceId: args.targetInstanceId,
+      now: Date.now(),
+    });
+    if (!decision.allow) {
+      this.logger.warn(
+        `[mcp] notify_agent 触发被节流 task=${throttleKey} from=${args.selfInstanceId} to=${args.targetInstanceId} reason=${decision.reason}（消息已发布）`,
+      );
+      return {
+        messageId: message.id,
+        channelId: channel.id,
+        targetInstanceId: args.targetInstanceId,
+        triggered: false,
+        reason: 'throttled',
+        issueBound: !!args.issueId,
+      };
+    }
+    if (isTeam) {
+      await this.workerDispatcher.dispatchAgentMention({
+        teamId: exec.teamId,
+        channelId: channel.id,
+        text,
+        targetInstanceId: args.targetInstanceId,
+        ...(args.issueId ? { issueId: args.issueId } : {}),
       });
-      if (!decision.allow) {
-        this.logger.warn(
-          `[mcp] notify_agent 触发被节流 task=${effTaskId} from=${args.selfInstanceId} to=${args.targetInstanceId} reason=${decision.reason}（消息已发布）`,
-        );
-      } else {
-        await this.workerDispatcher.dispatchAgentMention({
-          taskId: effTaskId as string,
-          channelId: channel.id,
-          text,
-          targetInstanceId: args.targetInstanceId,
-        });
-      }
+    } else {
+      await this.workerDispatcher.dispatchAgentMention({
+        taskId: effTaskId as string,
+        channelId: channel.id,
+        text,
+        targetInstanceId: args.targetInstanceId,
+        ...(args.issueId ? { issueId: args.issueId } : {}),
+      });
     }
 
     return {
       messageId: message.id,
       channelId: channel.id,
       targetInstanceId: args.targetInstanceId,
+      triggered: true,
+      reason: 'ok',
+      issueBound: !!args.issueId,
     };
   }
 

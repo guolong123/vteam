@@ -151,6 +151,12 @@ const notifyAgentSchema = z
         '目标成员 id（tmm_ 前缀，见 task_context agentMembers / 团队提示，@ 定向触发目标）',
       ),
     content: z.string().describe('要发送给目标实例的消息内容'),
+    issueId: z
+      .string()
+      .optional()
+      .describe(
+        '派活归属 issue id（is_ 前缀，可选；缺省不硬拦，返回 issueBound:false 提醒；传则 issueBound:true 并透传执行链路）',
+      ),
   })
   .refine((d) => !!d.taskId || !!d.teamId, {
     message: REQUIRE_TASK_OR_TEAM_MSG,
@@ -714,7 +720,7 @@ export function buildPlatformMcpTools(
     {
       name: 'group_post',
       description:
-        '向任务群聊发布消息（senderType=agent，发送者=你的实例 selfInstanceId）。用于内部群聊沟通，不用于回复企微用户（企微消息请用 wecom_reply）。fileRef 可选：命中该任务已归档产出物文件时作为群聊附件。返回 {messageId, channelId, attachment}。',
+        '向任务群聊发布消息（triggerless：仅落库+广播，返回 {messageId, channelId, attachment}，无 triggered 字段；@ 提及的内部触发不向调用方返回状态，需要触发状态请用 notify_agent）。senderType=agent，发送者=你的实例 selfInstanceId。用于内部群聊沟通，不用于回复企微用户（企微消息请用 wecom_reply）。fileRef 可选：命中该任务已归档产出物文件时作为群聊附件。',
       inputSchema: groupPostSchema,
       handler: (ctx, args) => service.groupPost(ctx, args as GroupPostArgs),
     },
@@ -728,7 +734,7 @@ export function buildPlatformMcpTools(
     {
       name: 'notify_agent',
       description:
-        '向任务内的另一个实例定向发送消息并触发其执行（实例互 @，按 targetInstanceId 精确命中目标实例）。触发后目标实例会收到该消息并开始处理，结论通常经 group_post 发布到群聊。返回 {messageId, channelId, targetInstanceId}。',
+        '向任务内的另一个实例定向发送消息并触发其执行（实例互 @，按 targetInstanceId 精确命中目标实例）。团队维度（teamId、无任务）同样触发目标成员执行。触发后目标实例会收到该消息并开始处理，结论通常经 group_post 发布到群聊。统一返回契约 {messageId, channelId, targetInstanceId, triggered, reason, issueBound, origMessageId?}：reason 词汇 ok|duplicate|throttled|plan-gated（成功 reason=ok；被 @ storm 节流 triggered=false+reason=throttled，消息仍已发布）。issueId 可选：派活归属 issue，缺省返回 issueBound:false（提醒，不硬拦），传则 issueBound:true 并透传执行链路。',
       inputSchema: notifyAgentSchema,
       handler: (ctx, args) => service.notifyAgent(ctx, args as NotifyAgentArgs),
     },

@@ -1857,10 +1857,13 @@ describe('WorkerDispatcher', () => {
     };
 
     it('目标实例有团队会话 → 构造 DispatchRequest 调 dispatch（agentId 从 session 行取）', async () => {
-      prisma.session.findFirst.mockResolvedValue({
-        id: 's_tester',
-        agentId: 'a_tester',
-      });
+      (sessionLifecycle as any).ensureTeamSession = jest
+        .fn()
+        .mockResolvedValue({
+          id: 's_tester',
+          agentId: 'a_tester',
+          reused: true,
+        });
       (prisma.task as any).findUnique = jest
         .fn()
         .mockResolvedValue({ teamId: 'tm_0000000001' });
@@ -1871,15 +1874,13 @@ describe('WorkerDispatcher', () => {
 
       await d.dispatchAgentMention(mention);
 
-      // Todo5 team-only：任务归属 teamId + teamMemberId 直查，无 task 快照回退（单次查询）
-      expect((prisma.session as any).findFirst).toHaveBeenCalledTimes(1);
-      expect((prisma.session as any).findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            teamId: 'tm_0000000001',
-            teamMemberId: 'tmm_tester',
-          }),
-        }),
+      // team-only：任务归属 teamId + teamMemberId 经 ensureTeamSession 即建即得复用
+      expect((sessionLifecycle as any).ensureTeamSession).toHaveBeenCalledTimes(
+        1,
+      );
+      expect((sessionLifecycle as any).ensureTeamSession).toHaveBeenCalledWith(
+        'tm_0000000001',
+        'tmm_tester',
       );
       expect(idGen.nextId).toHaveBeenCalledWith('m');
       expect(dispatchSpy).toHaveBeenCalledWith({
@@ -1899,11 +1900,74 @@ describe('WorkerDispatcher', () => {
       });
     });
 
-    it('目标实例无团队会话 → 抛错（不调 dispatch）', async () => {
-      prisma.session.findFirst.mockResolvedValue(null);
+    it('契约：内部返回保持 void（triggered 只在 notifyAgent 层组装）+ 可选 issueId 透传不破坏既有调用', async () => {
+      (sessionLifecycle as any).ensureTeamSession = jest
+        .fn()
+        .mockResolvedValue({
+          id: 's_tester',
+          agentId: 'a_tester',
+          reused: true,
+        });
       (prisma.task as any).findUnique = jest
         .fn()
         .mockResolvedValue({ teamId: 'tm_0000000001' });
+      const d = createDispatcher();
+      const dispatchSpy = jest
+        .spyOn(d, 'dispatch')
+        .mockResolvedValue({ replies: [] });
+      const withIssue = { ...mention, issueId: 'is_0000000001' };
+
+      const ret = await d.dispatchAgentMention(withIssue);
+
+      expect(ret).toBeUndefined();
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('目标实例无团队会话行 → ensureTeamSession 即建后 dispatch（首触可达）', async () => {
+      (sessionLifecycle as any).ensureTeamSession = jest
+        .fn()
+        .mockResolvedValue({
+          id: 's_tester_new',
+          agentId: 'a_tester',
+          reused: false,
+        });
+      (prisma.task as any).findUnique = jest
+        .fn()
+        .mockResolvedValue({ teamId: 'tm_0000000001' });
+      const d = createDispatcher();
+      const dispatchSpy = jest
+        .spyOn(d, 'dispatch')
+        .mockResolvedValue({ replies: [] });
+
+      await d.dispatchAgentMention(mention);
+
+      expect((sessionLifecycle as any).ensureTeamSession).toHaveBeenCalledWith(
+        'tm_0000000001',
+        'tmm_tester',
+      );
+      expect(dispatchSpy).toHaveBeenCalledWith({
+        messageId: 'm_0000000002',
+        channelId: request.channelId,
+        taskId: request.taskId,
+        teamId: 'tm_0000000001',
+        taskContext: { taskId: request.taskId },
+        text: mention.text,
+        targets: [
+          {
+            agentId: 'a_tester',
+            instanceId: 'tmm_tester',
+            sessionId: 's_tester_new',
+          },
+        ],
+      });
+      expect(idGen.nextId).toHaveBeenCalledWith('m');
+    });
+
+    it('任务无团队归属（teamId 缺失）→ 抛错（不调 dispatch）', async () => {
+      (sessionLifecycle as any).ensureTeamSession = jest.fn();
+      (prisma.task as any).findUnique = jest
+        .fn()
+        .mockResolvedValue({ teamId: null });
       const d = createDispatcher();
       const dispatchSpy = jest
         .spyOn(d, 'dispatch')
@@ -1914,13 +1978,81 @@ describe('WorkerDispatcher', () => {
       );
       expect(dispatchSpy).not.toHaveBeenCalled();
       expect(idGen.nextId).not.toHaveBeenCalled();
+      expect(
+        (sessionLifecycle as any).ensureTeamSession,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('团队维度（taskId 缺省、teamId 直传）→ 跳过任务查表，ensureTeamSession 即建后 dispatch（taskId 置空、无 taskContext）', async () => {
+      (sessionLifecycle as any).ensureTeamSession = jest
+        .fn()
+        .mockResolvedValue({
+          id: 's_dev_new',
+          agentId: 'a_developer',
+          reused: false,
+        });
+      (prisma.task as any).findUnique = jest.fn();
+      const d = createDispatcher();
+      const dispatchSpy = jest
+        .spyOn(d, 'dispatch')
+        .mockResolvedValue({ replies: [] });
+
+      await d.dispatchAgentMention({
+        teamId: 'tm_0000000002',
+        channelId: request.channelId,
+        text: '@tmm_0000000009 请处理',
+        targetInstanceId: 'tmm_0000000009',
+      });
+
+      expect((prisma.task as any).findUnique).not.toHaveBeenCalled();
+      expect((sessionLifecycle as any).ensureTeamSession).toHaveBeenCalledWith(
+        'tm_0000000002',
+        'tmm_0000000009',
+      );
+      expect(dispatchSpy).toHaveBeenCalledWith({
+        messageId: 'm_0000000002',
+        channelId: request.channelId,
+        taskId: '',
+        teamId: 'tm_0000000002',
+        text: '@tmm_0000000009 请处理',
+        targets: [
+          {
+            agentId: 'a_developer',
+            instanceId: 'tmm_0000000009',
+            sessionId: 's_dev_new',
+          },
+        ],
+      });
+    });
+
+    it('双空（无 taskId 无 teamId）→ 抛错（不调 dispatch）', async () => {
+      (sessionLifecycle as any).ensureTeamSession = jest.fn();
+      const d = createDispatcher();
+      const dispatchSpy = jest
+        .spyOn(d, 'dispatch')
+        .mockResolvedValue({ replies: [] });
+
+      await expect(
+        d.dispatchAgentMention({
+          channelId: request.channelId,
+          text: 'x',
+          targetInstanceId: 'tmm_tester',
+        } as any),
+      ).rejects.toThrow(/无团队会话/);
+      expect(dispatchSpy).not.toHaveBeenCalled();
+      expect(
+        (sessionLifecycle as any).ensureTeamSession,
+      ).not.toHaveBeenCalled();
     });
 
     it('dispatch 单目标失败仍返回（emitError 由 dispatch 内部处理，不向上抛）', async () => {
-      prisma.session.findFirst.mockResolvedValue({
-        id: 's_tester',
-        agentId: 'a_tester',
-      });
+      (sessionLifecycle as any).ensureTeamSession = jest
+        .fn()
+        .mockResolvedValue({
+          id: 's_tester',
+          agentId: 'a_tester',
+          reused: true,
+        });
       (prisma.task as any).findUnique = jest
         .fn()
         .mockResolvedValue({ teamId: 'tm_0000000001' });
@@ -5187,7 +5319,7 @@ describe('WorkerDispatcher', () => {
       );
     });
 
-    it('Todo5 dispatchAgentMention 团队直查：命中 team 会话 dispatch；ta_ 快照无回退（抛错精确值）', async () => {
+    it('Todo5 dispatchAgentMention 团队直查：命中 team 会话 dispatch；未知成员即建后 dispatch', async () => {
       const d = createDispatcher();
       const dispatchSpy = jest
         .spyOn(d, 'dispatch')
@@ -5195,20 +5327,30 @@ describe('WorkerDispatcher', () => {
       (prisma as any).task = {
         findUnique: jest.fn().mockResolvedValue({ teamId: 'tm_0000000001' }),
       };
-      (prisma.session as any).findFirst = jest
+      (sessionLifecycle as any).ensureTeamSession = jest
         .fn()
-        .mockResolvedValueOnce({ id: 's_tmm_1', agentId: 'a_developer' });
+        .mockResolvedValueOnce({
+          id: 's_tmm_1',
+          agentId: 'a_developer',
+          reused: true,
+        })
+        .mockResolvedValueOnce({
+          id: 's_ghost_new',
+          agentId: 'a_ghost',
+          reused: false,
+        });
       await d.dispatchAgentMention({
         taskId: 't_0000000001',
         channelId: 'c_1',
         text: '@tmm',
         targetInstanceId: 'tmm_0000000002',
       });
-      expect((prisma.session as any).findFirst).toHaveBeenCalledTimes(1);
-      expect((prisma.session as any).findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { teamId: 'tm_0000000001', teamMemberId: 'tmm_0000000002' },
-        }),
+      expect((sessionLifecycle as any).ensureTeamSession).toHaveBeenCalledTimes(
+        1,
+      );
+      expect((sessionLifecycle as any).ensureTeamSession).toHaveBeenCalledWith(
+        'tm_0000000001',
+        'tmm_0000000002',
       );
       expect(dispatchSpy).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -5221,19 +5363,29 @@ describe('WorkerDispatcher', () => {
           ],
         }),
       );
-      // 任务快照无回退：未知团队会话 → 抛错精确值，不调 dispatch
-      (prisma.session as any).findFirst = jest.fn().mockResolvedValue(null);
-      await expect(
-        d.dispatchAgentMention({
-          taskId: 't_0000000001',
-          channelId: 'c_1',
-          text: '@ta',
-          targetInstanceId: 'tmm_ghost',
-        }),
-      ).rejects.toThrow(
-        '实例 tmm_ghost 无团队会话（团队 tm_0000000001，任务 t_0000000001）',
+      await d.dispatchAgentMention({
+        taskId: 't_0000000001',
+        channelId: 'c_1',
+        text: '@ta',
+        targetInstanceId: 'tmm_ghost',
+      });
+      expect((sessionLifecycle as any).ensureTeamSession).toHaveBeenCalledWith(
+        'tm_0000000001',
+        'tmm_ghost',
       );
-      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      expect(dispatchSpy).toHaveBeenCalledTimes(2);
+      expect(dispatchSpy).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          targets: [
+            {
+              agentId: 'a_ghost',
+              instanceId: 'tmm_ghost',
+              sessionId: 's_ghost_new',
+            },
+          ],
+        }),
+      );
     });
 
     it('reuse=true 场景不重建 TaskGroupInstance：bind 幂等复用（现有行则复用不 create）', async () => {

@@ -1704,6 +1704,49 @@ describe('PlatformMcpService', () => {
         messageId: 'm_0000000200',
         channelId,
         targetInstanceId: 'tmm_tester',
+        triggered: true,
+        reason: 'ok',
+        issueBound: false,
+      });
+    });
+
+    it('团队维度（teamId、无任务）→ 落库广播后经团队路径触发目标成员 + 返回 triggered:true', async () => {
+      prisma.session.findFirst.mockResolvedValue({
+        id: 's_t',
+        teamMemberId: senderInstanceId,
+      });
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      mockTeamMemberRows();
+      idGen.nextId.mockResolvedValue('m_0000000205');
+      prisma.message.create.mockResolvedValue({
+        ...createdMessage,
+        id: 'm_0000000205',
+      });
+
+      const result = await service.notifyAgent(ctx, {
+        teamId: 'tm_1',
+        targetInstanceId: 'tmm_tester',
+        content: '请查看这个文件',
+        selfInstanceId: senderInstanceId,
+      });
+
+      // 团队路径跳过任务查表（零任务团队无 task 可查）
+      expect(prisma.task.findUnique).not.toHaveBeenCalled();
+      expect(prisma.message.create).toHaveBeenCalled();
+      expect(realtime.broadcast).toHaveBeenCalled();
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith({
+        teamId: 'tm_1',
+        channelId,
+        text: '@测试 请查看这个文件',
+        targetInstanceId: 'tmm_tester',
+      });
+      expect(result).toEqual({
+        messageId: 'm_0000000205',
+        channelId,
+        targetInstanceId: 'tmm_tester',
+        triggered: true,
+        reason: 'ok',
+        issueBound: false,
       });
     });
 
@@ -1812,6 +1855,51 @@ describe('PlatformMcpService', () => {
         messageId: 'm_0000000200',
         channelId,
         targetInstanceId: 'tmm_tester',
+        triggered: false,
+        reason: 'throttled',
+        issueBound: false,
+      });
+    });
+
+    it('团队维度被节流 → 消息已发布但不触发，返回 triggered:false + reason', async () => {
+      prisma.session.findFirst.mockResolvedValue({
+        id: 's_t',
+        teamMemberId: senderInstanceId,
+      });
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      mockTeamMemberRows();
+      idGen.nextId.mockResolvedValue('m_0000000210');
+      prisma.message.create.mockResolvedValue({
+        ...createdMessage,
+        id: 'm_0000000210',
+      });
+      const throttle = (service as any).mentionThrottle;
+      for (let i = 0; i < 3; i++) {
+        throttle.shouldDispatch({
+          taskId: 'team:tm_1',
+          fromInstanceId: senderInstanceId,
+          toInstanceId: 'tmm_tester',
+          now: Date.now(),
+        });
+      }
+
+      const result = await service.notifyAgent(ctx, {
+        teamId: 'tm_1',
+        targetInstanceId: 'tmm_tester',
+        content: '请查看这个文件',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(prisma.message.create).toHaveBeenCalled();
+      expect(realtime.broadcast).toHaveBeenCalled();
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        messageId: 'm_0000000210',
+        channelId,
+        targetInstanceId: 'tmm_tester',
+        triggered: false,
+        reason: 'throttled',
+        issueBound: false,
       });
     });
 
@@ -1837,7 +1925,92 @@ describe('PlatformMcpService', () => {
         messageId: 'm_0000000200',
         channelId,
         targetInstanceId: 'tmm_tester',
+        triggered: true,
+        reason: 'ok',
+        issueBound: false,
       });
+    });
+
+    it('契约：成功返回 triggered:true + reason:ok 成对 + issueId 缺省 → issueBound:false（hint，不硬拦）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      mockTeamMemberRows();
+      idGen.nextId.mockResolvedValue('m_0000000200');
+      prisma.message.create.mockResolvedValue(createdMessage);
+
+      const result = await service.notifyAgent(ctx, {
+        taskId,
+        targetInstanceId: 'tmm_tester',
+        content: '请查看这个文件',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(result.triggered).toBe(true);
+      expect(result.reason).toBe('ok');
+      expect(result).toEqual(
+        expect.objectContaining({ issueBound: false, messageId: 'm_0000000200' }),
+      );
+    });
+
+    it('契约：透传 issueId → dispatchAgentMention 收到 issueId + 返回 issueBound:true', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      mockTeamMemberRows();
+      idGen.nextId.mockResolvedValue('m_0000000200');
+      prisma.message.create.mockResolvedValue(createdMessage);
+      const args = {
+        taskId,
+        targetInstanceId: 'tmm_tester',
+        content: '请查看这个文件',
+        selfInstanceId: senderInstanceId,
+        issueId: 'is_0000000001',
+      };
+
+      const result = await service.notifyAgent(ctx, args);
+
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetInstanceId: 'tmm_tester',
+          issueId: 'is_0000000001',
+        }),
+      );
+      expect(result).toEqual(
+        expect.objectContaining({
+          triggered: true,
+          reason: 'ok',
+          issueBound: true,
+        }),
+      );
+    });
+
+    it('契约：节流返回 triggered:false + reason:throttled 成对（pair_limit/task_budget 统一收敛，不再透出内部节流键）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      mockTeamMemberRows();
+      idGen.nextId.mockResolvedValue('m_0000000200');
+      prisma.message.create.mockResolvedValue(createdMessage);
+      const throttle = (service as any).mentionThrottle;
+      for (let i = 0; i < 3; i++) {
+        throttle.shouldDispatch({
+          taskId,
+          fromInstanceId: senderInstanceId,
+          toInstanceId: 'tmm_tester',
+          now: Date.now(),
+        });
+      }
+
+      const result = await service.notifyAgent(ctx, {
+        taskId,
+        targetInstanceId: 'tmm_tester',
+        content: '请查看这个文件',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      expect(result).toEqual(
+        expect.objectContaining({ triggered: false, reason: 'throttled' }),
+      );
+      expect(result).toEqual(expect.objectContaining({ issueBound: false }));
     });
   });
 
@@ -4714,6 +4887,24 @@ describe('PlatformMcpService', () => {
         );
         expect(schema.safeParse(base).success).toBe(false);
       }
+    });
+
+    it('notify_agent input schema 接受可选 issueId（缺省/传值均合法）', () => {
+      const tools = buildPlatformMcpTools(service);
+      const tool = tools.find((t) => t.name === 'notify_agent')!;
+      const schema = tool.inputSchema as unknown as {
+        safeParse: (v: unknown) => { success: boolean };
+      };
+      const base = {
+        selfInstanceId: 'tmm_1',
+        content: 'hi',
+        targetInstanceId: 'tmm_2',
+        teamId: 'tm_1',
+      };
+      expect(schema.safeParse(base).success).toBe(true);
+      expect(
+        schema.safeParse({ ...base, issueId: 'is_0000000001' }).success,
+      ).toBe(true);
     });
   });
 
