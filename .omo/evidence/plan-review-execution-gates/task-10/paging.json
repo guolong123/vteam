@@ -1,0 +1,77 @@
+{
+  "contract": {
+    "defaultLimit": 20,
+    "maxLimit": 100,
+    "cursor": "beforeId (messageId, descending pages; items returned ascending)",
+    "legacyCursor": "sinceId (ascending forward)",
+    "shape": "{items, truncated, total}",
+    "maxBytes": 65536,
+    "summarizer": "none - truncation marker only"
+  },
+  "page1_noLimit": {
+    "items": 20,
+    "firstId": "m_0000000006",
+    "lastId": "m_0000000025",
+    "truncated": true,
+    "total": 25,
+    "bytes": 7895
+  },
+  "page2_beforeId": {
+    "cursor": "m_0000000006",
+    "items": 5,
+    "ids": [
+      "m_0000000001",
+      "m_0000000002",
+      "m_0000000003",
+      "m_0000000004",
+      "m_0000000005"
+    ],
+    "truncated": false,
+    "total": 25,
+    "bytes": 2000
+  },
+  "hugeSingleMessage": {
+    "items": 1,
+    "truncated": true,
+    "total": 1,
+    "bytes": 65535,
+    "bytesOk": true,
+    "marker": "xxxxxxxxxxx[truncated] 单条消息超出 64KB 上限，已截断正文；请用 beforeId 分页追溯"
+  },
+  "assertions": {
+    "noLimitReturns20PlusTruncatedPlusTotal": true,
+    "page2GetsRemainder": true,
+    "pagesCoverAll25": true,
+    "allResponsesWithin64KB": true
+  },
+  "suites": {
+    "baseline_before": {
+      "platformMcp_service_controller": 219
+    },
+    "after": {
+      "platformMcp_service_controller": 223,
+      "chat_seed_mcpServers_dispatcher": 405,
+      "tsc_noEmit": "clean"
+    }
+  },
+  "callers": {
+    "production": [
+      "server/src/platform-mcp/platform-mcp.tools.ts chat_history handler -> service.chatHistory"
+    ],
+    "promptStrings_noCodeChange": [
+      "server/src/chat/worker-dispatcher.ts (vteam_chat_history usage hints)",
+      "server/prisma/seed.ts (PM iron-law prompts; todo 9 scope)"
+    ],
+    "specs": [
+      "platform-mcp.service.spec.ts",
+      "platform-mcp.controller.spec.ts"
+    ],
+    "unaffected": [
+      "chat.service getTriggerResults polling semantics untouched",
+      "retention/partitioning/full-text-search untouched",
+      "no new dependencies",
+      "no summarizer service"
+    ]
+  },
+  "note": "measured against real PlatformMcpService.queryHistoryPage via in-memory prisma stub (25 msgs + single 70KB msg); m_516-style 132KB full pull no longer possible"
+}

@@ -64,14 +64,20 @@ const chatHistorySchema = z
     sinceId: z
       .string()
       .optional()
-      .describe('游标：仅返回 id 大于该值的消息（分页续拉）'),
+      .describe('游标：仅返回 id 大于该值的消息（正序续拉；不传游标默认取最近分页）'),
+    beforeId: z
+      .string()
+      .optional()
+      .describe(
+        '游标：仅返回 id 小于该值的消息（倒序翻页；与 sinceId 同传时 beforeId 决定倒序）',
+      ),
     limit: z
       .number()
       .int()
       .positive()
       .max(100)
       .optional()
-      .describe('返回条数上限（默认 50）'),
+      .describe('返回条数上限（默认 20，最大 100）'),
   })
   .refine((d) => !!d.taskId || !!d.teamId, {
     message: REQUIRE_TASK_OR_TEAM_MSG,
@@ -713,7 +719,7 @@ export function buildPlatformMcpTools(
     {
       name: 'chat_history',
       description:
-        '查询任务群聊的历史消息（按需拉取，替代自动注入的群聊历史）。返回消息数组 [{id, senderType, senderId, text, createdAt}]。',
+        '查询任务群聊的历史消息（按需拉取，替代自动注入的群聊历史）。分页返回 {items, truncated, total}：默认取最近 20 条，beforeId 倒序翻页；响应超 64KB 自动截断并标记 truncated。',
       inputSchema: chatHistorySchema,
       handler: (ctx, args) => service.chatHistory(ctx, args as ChatHistoryArgs),
     },

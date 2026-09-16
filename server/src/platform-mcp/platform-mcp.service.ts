@@ -100,6 +100,12 @@ export interface ChatHistoryItem {
   senderInstanceId?: string | null;
 }
 
+/** chat_history 分页页：items 为本页消息（时间正序），truncated 表示还有未取消息或响应被 64KB 硬上限截断。 */
+export interface ChatHistoryPage {
+  items: ChatHistoryItem[];
+  truncated: boolean;
+  total: number;
+}
 /** group_post 附件挂载（message 表附件三字段，UX-10；attachmentType 为小写 ext）。 */
 export interface GroupPostAttachment {
   attachmentUrl: string;
@@ -165,6 +171,14 @@ export interface GitRepoListItem {
 /** read_file 常量：默认读取上限 256KB，上限 1MB（与 tools.ts inputSchema max 对齐）。 */
 const READ_FILE_DEFAULT_MAX_BYTES = 256 * 1024;
 const READ_FILE_MAX_BYTES = 1024 * 1024;
+
+/** chat_history 分页契约（plan-review todo 10，docs 31 §3.4）：默认 20 条，上限 100 条，响应硬上限 64KB。 */
+export const CHAT_HISTORY_DEFAULT_LIMIT = 20;
+export const CHAT_HISTORY_MAX_LIMIT = 100;
+export const CHAT_HISTORY_MAX_BYTES = 64 * 1024;
+/** 超 64KB 单条截断标记（纯标记，不做 LLM 摘要）。 */
+const CHAT_HISTORY_TRUNCATED_MARKER =
+  '[truncated] 单条消息超出 64KB 上限，已截断正文；请用 beforeId 分页追溯';
 
 /** skill_create 常量：SKILL.md 全文服务端强制上限 100KB（与 skills.controller multipart 上限对齐）。 */
 const SKILL_CREATE_MAX_BYTES = 100 * 1024;
@@ -235,8 +249,8 @@ export class PlatformMcpService {
 
   /**
    * chat_history：任务群聊历史消息（按需拉取，替代自动注入的群聊历史）。
-   * `chatChannel(taskId, task_group)` → `message.findMany({channelId, id>sinceId,
-   * orderBy id asc, take limit??50})` → `[{id, senderType, senderId, text, createdAt}]`。
+   * 分页返回 {items, truncated, total}：无游标取最近 limit 条（默认 20），
+   * beforeId 倒序翻页，sinceId 正序续拉；响应超 64KB 按条截断并标记。
    */
   async chatHistory(
     ctx: PlatformMcpContext,
@@ -248,9 +262,11 @@ export class PlatformMcpService {
       /** 调用方实例 id：DM 模式必填（实例级归属绑定），群聊模式可选。 */
       selfInstanceId?: string;
       sinceId?: string;
+      /** 倒序游标：仅返回 id 小于该值的消息（倒序翻页；与 sinceId 同传时 beforeId 决定倒序）。 */
+      beforeId?: string;
       limit?: number;
     },
-  ): Promise<ChatHistoryItem[]> {
+  ): Promise<ChatHistoryPage> {
     if (args.teamMemberId && !args.selfInstanceId) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
@@ -261,6 +277,7 @@ export class PlatformMcpService {
     if (args.teamMemberId) {
       return this.chatHistoryDm(exec, ctx, args.teamMemberId, {
         sinceId: args.sinceId,
+        beforeId: args.beforeId,
         limit: args.limit,
       });
     }
@@ -274,16 +291,11 @@ export class PlatformMcpService {
         message: '任务群聊频道不存在',
       });
     }
-    const limit = this.normalizeLimit(args.limit);
-    const rows = await this.prisma.message.findMany({
-      where: {
-        channelId: channel.id,
-        ...(args.sinceId ? { id: { gt: args.sinceId } } : {}),
-      },
-      orderBy: { id: 'asc' },
-      take: limit,
+    return this.queryHistoryPage(channel.id, {
+      sinceId: args.sinceId,
+      beforeId: args.beforeId,
+      limit: args.limit,
     });
-    return rows.map((row) => this.toChatHistoryItem(row));
   }
 
   /**
@@ -299,8 +311,8 @@ export class PlatformMcpService {
     exec: ExecContext,
     ctx: PlatformMcpContext,
     peerMemberId: string,
-    opts: { sinceId?: string; limit?: number },
-  ): Promise<ChatHistoryItem[]> {
+    opts: { sinceId?: string; beforeId?: string; limit?: number },
+  ): Promise<ChatHistoryPage> {
     const execTeamId =
       exec.kind === 'team' ? exec.teamId : await this.teamIdOfTask(exec.taskId);
     if (!execTeamId) {
@@ -341,16 +353,86 @@ export class PlatformMcpService {
     this.logger.log(
       `[mcp] chat_history DM 访问 team=${execTeamId} channel=${channel.id} caller=${exec.callerId}`,
     );
+    return this.queryHistoryPage(channel.id, {
+      sinceId: opts.sinceId,
+      beforeId: opts.beforeId,
+      limit: opts.limit,
+    });
+  }
+
+  private async queryHistoryPage(
+    channelId: string,
+    opts: { sinceId?: string; beforeId?: string; limit?: number },
+  ): Promise<ChatHistoryPage> {
     const limit = this.normalizeLimit(opts.limit);
+    const backward = !!opts.beforeId || !opts.sinceId;
+    const idFilter: { gt?: string; lt?: string } = {};
+    if (opts.sinceId) idFilter.gt = opts.sinceId;
+    if (opts.beforeId) idFilter.lt = opts.beforeId;
     const rows = await this.prisma.message.findMany({
       where: {
-        channelId: channel.id,
-        ...(opts.sinceId ? { id: { gt: opts.sinceId } } : {}),
+        channelId,
+        ...(Object.keys(idFilter).length > 0 ? { id: idFilter } : {}),
       },
-      orderBy: { id: 'asc' },
-      take: limit,
+      orderBy: { id: backward ? 'desc' : 'asc' },
+      take: limit + 1,
     });
-    return rows.map((row) => this.toChatHistoryItem(row));
+    const hasMore = rows.length > limit;
+    const window = hasMore ? rows.slice(0, limit) : rows;
+    const items = (backward ? [...window].reverse() : window).map((row) =>
+      this.toChatHistoryItem(row),
+    );
+    const total = await this.prisma.message.count({ where: { channelId } });
+    const page: ChatHistoryPage = { items, truncated: hasMore, total };
+    this.enforceHistoryMaxBytes(page);
+    return page;
+  }
+
+  private enforceHistoryMaxBytes(page: ChatHistoryPage): void {
+    const size = () =>
+      Buffer.byteLength(JSON.stringify(page), 'utf8');
+    while (page.items.length > 1 && size() > CHAT_HISTORY_MAX_BYTES) {
+      page.items.shift();
+      page.truncated = true;
+    }
+    if (page.items.length === 1 && size() > CHAT_HISTORY_MAX_BYTES) {
+      const only = page.items[0];
+      const marker = CHAT_HISTORY_TRUNCATED_MARKER;
+      const fixed = Buffer.byteLength(
+        JSON.stringify({ ...only, text: '' }),
+        'utf8',
+      );
+      const envelope =
+        Buffer.byteLength(JSON.stringify({ ...page, items: [] }), 'utf8') -
+        2;
+      let budget =
+        CHAT_HISTORY_MAX_BYTES - fixed - envelope - Buffer.byteLength(marker, 'utf8');
+      budget = Math.max(0, budget);
+      let head = only.text.slice(0, budget);
+      let guard = 8;
+      while (
+        head.length > 0 &&
+        guard-- > 0 &&
+        Buffer.byteLength(
+          JSON.stringify({ ...page, items: [{ ...only, text: head + marker }] }),
+          'utf8',
+        ) > CHAT_HISTORY_MAX_BYTES
+      ) {
+        const cur = Buffer.byteLength(
+          JSON.stringify({ ...page, items: [{ ...only, text: head + marker }] }),
+          'utf8',
+        );
+        const excess = cur - CHAT_HISTORY_MAX_BYTES;
+        const headBytes = Math.max(1, Buffer.byteLength(head, 'utf8'));
+        const drop = Math.min(
+          head.length,
+          Math.max(1, Math.ceil((excess * head.length) / headBytes)),
+        );
+        head = head.slice(0, head.length - drop);
+      }
+      page.items = [{ ...only, text: head + marker }];
+      page.truncated = true;
+    }
   }
 
   /**
@@ -4709,9 +4791,9 @@ export class PlatformMcpService {
   }
 
   private normalizeLimit(limit?: number): number {
-    const l = Number(limit ?? 50);
-    if (!Number.isFinite(l)) return 50;
-    return Math.min(Math.max(Math.floor(l), 1), 100);
+    const l = Number(limit ?? CHAT_HISTORY_DEFAULT_LIMIT);
+    if (!Number.isFinite(l)) return CHAT_HISTORY_DEFAULT_LIMIT;
+    return Math.min(Math.max(Math.floor(l), 1), CHAT_HISTORY_MAX_LIMIT);
   }
 
   /** memory_search limit 归一：缺省 20，收敛 1~50（与 memorySearchSchema 对齐）。 */

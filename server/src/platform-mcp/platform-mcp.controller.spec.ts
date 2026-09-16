@@ -441,15 +441,19 @@ describe('PlatformMcpController (HTTP)', () => {
 
   describe('tools/call', () => {
     it('chat_history → service.chatHistory 携带 header 解析的 workerId + taskId', async () => {
-      service.chatHistory.mockResolvedValue([
-        {
-          id: 'm_0000000001',
-          senderType: 'user',
-          senderId: 'u_1',
-          text: '你好',
-          createdAt: '2026-08-07T00:00:00.000Z',
-        },
-      ]);
+      service.chatHistory.mockResolvedValue({
+        items: [
+          {
+            id: 'm_0000000001',
+            senderType: 'user',
+            senderId: 'u_1',
+            text: '你好',
+            createdAt: '2026-08-07T00:00:00.000Z',
+          },
+        ],
+        truncated: false,
+        total: 1,
+      });
 
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
@@ -470,15 +474,19 @@ describe('PlatformMcpController (HTTP)', () => {
       );
       // handler 把结果 JSON.stringify 后作为 text 内容返回
       const text = res.body.result.content[0].text as string;
-      expect(JSON.parse(text)).toEqual([
-        {
-          id: 'm_0000000001',
-          senderType: 'user',
-          senderId: 'u_1',
-          text: '你好',
-          createdAt: '2026-08-07T00:00:00.000Z',
-        },
-      ]);
+      expect(JSON.parse(text)).toEqual({
+        items: [
+          {
+            id: 'm_0000000001',
+            senderType: 'user',
+            senderId: 'u_1',
+            text: '你好',
+            createdAt: '2026-08-07T00:00:00.000Z',
+          },
+        ],
+        truncated: false,
+        total: 1,
+      });
     });
 
     it('chat_history sinceId/limit → 透传到 service', async () => {

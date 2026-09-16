@@ -43,7 +43,7 @@ describe('PlatformMcpService', () => {
   let prisma: {
     session: { findFirst: jest.Mock; findMany: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
-    message: { findMany: jest.Mock; create: jest.Mock };
+    message: { findMany: jest.Mock; create: jest.Mock; count: jest.Mock };
     artifact: {
       findMany: jest.Mock;
       findFirst: jest.Mock;
@@ -171,7 +171,7 @@ describe('PlatformMcpService', () => {
     prisma = {
       session: { findFirst: jest.fn(), findMany: jest.fn() },
       chatChannel: { findFirst: jest.fn() },
-      message: { findMany: jest.fn(), create: jest.fn() },
+      message: { findMany: jest.fn(), create: jest.fn(), count: jest.fn() },
       artifact: {
         findMany: jest.fn(),
         findFirst: jest.fn(),
@@ -434,17 +434,10 @@ describe('PlatformMcpService', () => {
   });
 
   describe('chat_history', () => {
-    it('返回群聊历史消息（text 从 content Json 提取，orderBy id asc，缺省 limit 50）', async () => {
+    it('返回群聊历史消息（text 从 content Json 提取，默认取最近 20 条倒序取正序回）', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       prisma.message.findMany.mockResolvedValue([
-        {
-          id: 'm_0000000001',
-          senderType: SENDER_TYPE.user,
-          senderId: 'u_1',
-          content: { text: '你好', parts: [] },
-          createdAt: new Date('2026-08-07T00:00:00Z'),
-        },
         {
           id: 'm_0000000002',
           senderType: SENDER_TYPE.agent,
@@ -452,34 +445,46 @@ describe('PlatformMcpService', () => {
           content: { text: '收到', parts: [] },
           createdAt: new Date('2026-08-07T00:00:01Z'),
         },
+        {
+          id: 'm_0000000001',
+          senderType: SENDER_TYPE.user,
+          senderId: 'u_1',
+          content: { text: '你好', parts: [] },
+          createdAt: new Date('2026-08-07T00:00:00Z'),
+        },
       ]);
+      prisma.message.count.mockResolvedValue(2);
 
       const result = await service.chatHistory(ctx, { taskId });
 
-      expect(result).toEqual([
-        {
-          id: 'm_0000000001',
-          senderType: 'user',
-          senderId: 'u_1',
-          text: '你好',
-          attachmentUrl: null,
-          attachmentName: null,
-          attachmentType: null,
-          senderInstanceId: null,
-          createdAt: '2026-08-07T00:00:00.000Z',
-        },
-        {
-          id: 'm_0000000002',
-          senderType: 'agent',
-          senderId: null,
-          text: '收到',
-          attachmentUrl: null,
-          attachmentName: null,
-          attachmentType: null,
-          senderInstanceId: null,
-          createdAt: '2026-08-07T00:00:01.000Z',
-        },
-      ]);
+      expect(result).toEqual({
+        items: [
+          {
+            id: 'm_0000000001',
+            senderType: 'user',
+            senderId: 'u_1',
+            text: '你好',
+            attachmentUrl: null,
+            attachmentName: null,
+            attachmentType: null,
+            senderInstanceId: null,
+            createdAt: '2026-08-07T00:00:00.000Z',
+          },
+          {
+            id: 'm_0000000002',
+            senderType: 'agent',
+            senderId: null,
+            text: '收到',
+            attachmentUrl: null,
+            attachmentName: null,
+            attachmentType: null,
+            senderInstanceId: null,
+            createdAt: '2026-08-07T00:00:01.000Z',
+          },
+        ],
+        truncated: false,
+        total: 2,
+      });
       expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
         where: {
           teamId: 'tm_1',
@@ -490,8 +495,11 @@ describe('PlatformMcpService', () => {
       });
       expect(prisma.message.findMany).toHaveBeenCalledWith({
         where: { channelId },
-        orderBy: { id: 'asc' },
-        take: 50,
+        orderBy: { id: 'desc' },
+        take: 21,
+      });
+      expect(prisma.message.count).toHaveBeenCalledWith({
+        where: { channelId },
       });
     });
 
@@ -499,17 +507,6 @@ describe('PlatformMcpService', () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       prisma.message.findMany.mockResolvedValue([
-        {
-          id: 'm_0000000020',
-          senderType: SENDER_TYPE.user,
-          senderId: 'u_1',
-          senderInstanceId: null,
-          content: { text: '见附件', parts: [] },
-          attachmentUrl: '/uploads/uuid-1.png',
-          attachmentName: '截图.png',
-          attachmentType: 'png',
-          createdAt: new Date('2026-08-07T00:00:02Z'),
-        },
         {
           id: 'm_0000000021',
           senderType: SENDER_TYPE.agent,
@@ -521,11 +518,22 @@ describe('PlatformMcpService', () => {
           attachmentType: null,
           createdAt: new Date('2026-08-07T00:00:03Z'),
         },
+        {
+          id: 'm_0000000020',
+          senderType: SENDER_TYPE.user,
+          senderId: 'u_1',
+          senderInstanceId: null,
+          content: { text: '见附件', parts: [] },
+          attachmentUrl: '/uploads/uuid-1.png',
+          attachmentName: '截图.png',
+          attachmentType: 'png',
+          createdAt: new Date('2026-08-07T00:00:02Z'),
+        },
       ]);
 
       const result = await service.chatHistory(ctx, { taskId });
 
-      expect(result[0]).toEqual({
+      expect(result.items[0]).toEqual({
         id: 'm_0000000020',
         senderType: 'user',
         senderId: 'u_1',
@@ -536,13 +544,14 @@ describe('PlatformMcpService', () => {
         senderInstanceId: null,
         createdAt: '2026-08-07T00:00:02.000Z',
       });
-      expect(result[1].senderInstanceId).toBe('tmm_1');
+      expect(result.items[1].senderInstanceId).toBe('tmm_1');
     });
 
-    it('sinceId 游标过滤 + limit 分页透传', async () => {
+    it('sinceId 游标过滤 + limit 分页透传（正序续拉，多取 1 条探底）', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       prisma.message.findMany.mockResolvedValue([]);
+      prisma.message.count.mockResolvedValue(0);
 
       await service.chatHistory(ctx, {
         taskId,
@@ -553,26 +562,27 @@ describe('PlatformMcpService', () => {
       expect(prisma.message.findMany).toHaveBeenCalledWith({
         where: { channelId, id: { gt: 'm_0000000010' } },
         orderBy: { id: 'asc' },
-        take: 20,
+        take: 21,
       });
     });
 
-    it('limit 越界收敛（>100 → 100，<=0 → 1，非法 → 50）', async () => {
+    it('limit 越界收敛（>100 → 100，<=0 → 1，非法 → 20）', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       prisma.message.findMany.mockResolvedValue([]);
+      prisma.message.count.mockResolvedValue(0);
 
       await service.chatHistory(ctx, { taskId, limit: 999 });
       expect(prisma.message.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ take: 100 }),
+        expect.objectContaining({ take: 101 }),
       );
       await service.chatHistory(ctx, { taskId, limit: 0 });
       expect(prisma.message.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ take: 1 }),
+        expect.objectContaining({ take: 2 }),
       );
       await service.chatHistory(ctx, { taskId, limit: Number.NaN });
       expect(prisma.message.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ take: 50 }),
+        expect.objectContaining({ take: 21 }),
       );
     });
 
@@ -584,6 +594,110 @@ describe('PlatformMcpService', () => {
         NotFoundException,
         PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
       );
+    });
+  });
+
+  describe('chat_history 分页契约（plan-review todo 10：默认 20/截断标记/64KB 红线）', () => {
+    /** 分页页形态（实现前 service 仍返回数组，此处经 unknown 收窄以便 failing-first 不编译红）。 */
+    type ChatPage = {
+      items: { id: string; text: string }[];
+      truncated: boolean;
+      total: number;
+    };
+    const asPage = (v: unknown) => v as unknown as ChatPage;
+    const pageArgs = (a: object) =>
+      a as unknown as Parameters<typeof service.chatHistory>[1];
+    const histRow = (n: number, text = `消息${n}`) => ({
+      id: `m_${String(n).padStart(10, '0')}`,
+      senderType: SENDER_TYPE.user,
+      senderId: 'u_1',
+      senderInstanceId: null,
+      content: { text, parts: [] },
+      attachmentUrl: null,
+      attachmentName: null,
+      attachmentType: null,
+      createdAt: new Date('2026-08-07T00:00:00Z'),
+    });
+
+    it('无 limit 调用返回 {items, truncated, total} 且默认取最近 20 条', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      prisma.message.findMany.mockResolvedValue(
+        Array.from({ length: 20 }, (_, i) => histRow(i + 1)),
+      );
+      prisma.message.count.mockResolvedValue(20);
+
+      const result = asPage(await service.chatHistory(ctx, { taskId }));
+
+      expect(result.total).toBe(20);
+      expect(result.truncated).toBe(false);
+      expect(result.items).toHaveLength(20);
+      expect(prisma.message.findMany).toHaveBeenCalledWith({
+        where: { channelId },
+        orderBy: { id: 'desc' },
+        take: 21,
+      });
+      expect(prisma.message.count).toHaveBeenCalledWith({
+        where: { channelId },
+      });
+    });
+
+    it('超量时 truncated=true 且 items 截断到 limit（多取 1 条探底，不多查一次）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      prisma.message.findMany.mockResolvedValue(
+        Array.from({ length: 21 }, (_, i) => histRow(i + 1)),
+      );
+      prisma.message.count.mockResolvedValue(25);
+
+      const result = asPage(await service.chatHistory(ctx, { taskId }));
+
+      expect(result.truncated).toBe(true);
+      expect(result.total).toBe(25);
+      expect(result.items).toHaveLength(20);
+    });
+
+    it('beforeId 倒序翻页：仅取 id 小于游标的消息，第二页拿到余量', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      prisma.message.findMany.mockResolvedValue(
+        Array.from({ length: 5 }, (_, i) => histRow(i + 1)),
+      );
+      prisma.message.count.mockResolvedValue(25);
+
+      const result = asPage(
+        await service.chatHistory(
+          ctx,
+          pageArgs({ taskId, beforeId: 'm_0000000021' }),
+        ),
+      );
+
+      expect(prisma.message.findMany).toHaveBeenCalledWith({
+        where: { channelId, id: { lt: 'm_0000000021' } },
+        orderBy: { id: 'desc' },
+        take: 21,
+      });
+      expect(result.items).toHaveLength(5);
+      expect(result.truncated).toBe(false);
+      expect(result.total).toBe(25);
+    });
+
+    it('响应硬上限 64KB：单条超长消息截断文本并打标记，不做 LLM 摘要', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      prisma.message.findMany.mockResolvedValue([
+        histRow(1, 'x'.repeat(70 * 1024)),
+      ]);
+      prisma.message.count.mockResolvedValue(1);
+
+      const result = asPage(await service.chatHistory(ctx, { taskId }));
+
+      const size = Buffer.byteLength(JSON.stringify(result), 'utf8');
+      expect(size).toBeLessThanOrEqual(64 * 1024);
+      expect(result.truncated).toBe(true);
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].text).toContain('[truncated]');
+      expect(result.items[0].text).not.toContain('摘要');
     });
   });
 
@@ -611,6 +725,7 @@ describe('PlatformMcpService', () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue(dmChannel);
       prisma.message.findMany.mockResolvedValue([dmRow()]);
+      prisma.message.count.mockResolvedValue(1);
       const logSpy = jest
         .spyOn(
           (
@@ -628,23 +743,27 @@ describe('PlatformMcpService', () => {
         selfInstanceId: senderInstanceId,
       });
 
-      expect(result).toEqual([
-        {
-          id: 'm_0000000091',
-          senderType: 'user',
-          senderId: 'u_1',
-          text: '私聊你好',
-          attachmentUrl: null,
-          attachmentName: null,
-          attachmentType: null,
-          senderInstanceId: null,
-          createdAt: '2026-08-07T00:00:00.000Z',
-        },
-      ]);
+      expect(result).toEqual({
+        items: [
+          {
+            id: 'm_0000000091',
+            senderType: 'user',
+            senderId: 'u_1',
+            text: '私聊你好',
+            attachmentUrl: null,
+            attachmentName: null,
+            attachmentType: null,
+            senderInstanceId: null,
+            createdAt: '2026-08-07T00:00:00.000Z',
+          },
+        ],
+        truncated: false,
+        total: 1,
+      });
       expect(prisma.message.findMany).toHaveBeenCalledWith({
         where: { channelId: dmChannel.id },
-        orderBy: { id: 'asc' },
-        take: 50,
+        orderBy: { id: 'desc' },
+        take: 21,
       });
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining('[mcp] chat_history DM 访问'),
@@ -731,12 +850,13 @@ describe('PlatformMcpService', () => {
       });
       prisma.chatChannel.findFirst.mockResolvedValue(dmChannel);
       prisma.message.findMany.mockResolvedValue([]);
+      prisma.message.count.mockResolvedValue(0);
       const result = await service.chatHistory(ctx, {
         teamId: 'tm_1',
         teamMemberId: senderInstanceId,
         selfInstanceId: senderInstanceId,
       });
-      expect(result).toEqual([]);
+      expect(result).toEqual({ items: [], truncated: false, total: 0 });
     });
   });
 
@@ -4684,10 +4804,11 @@ describe('PlatformMcpService', () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       prisma.message.findMany.mockResolvedValue([]);
+      prisma.message.count.mockResolvedValue(0);
 
       const result = await service.chatHistory(ctx, { taskId });
 
-      expect(result).toEqual([]);
+      expect(result).toEqual({ items: [], truncated: false, total: 0 });
       expect(prisma.session.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { teamId: 'tm_1', workerId },
@@ -4702,10 +4823,11 @@ describe('PlatformMcpService', () => {
       });
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       prisma.message.findMany.mockResolvedValue([]);
+      prisma.message.count.mockResolvedValue(0);
 
       const result = await service.chatHistory(ctx, { teamId: 'tm_1' });
 
-      expect(result).toEqual([]);
+      expect(result).toEqual({ items: [], truncated: false, total: 0 });
       expect(prisma.session.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({ teamId: 'tm_1', workerId }),
@@ -4773,10 +4895,11 @@ describe('PlatformMcpService', () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       prisma.message.findMany.mockResolvedValue([]);
+      prisma.message.count.mockResolvedValue(0);
 
       const result = await service.chatHistory(ctx, { taskId });
 
-      expect(result).toEqual([]);
+      expect(result).toEqual({ items: [], truncated: false, total: 0 });
       expect(prisma.session.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { teamId: 'tm_1', workerId },
