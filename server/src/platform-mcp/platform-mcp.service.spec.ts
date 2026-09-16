@@ -5107,6 +5107,39 @@ describe('PlatformMcpService', () => {
         schema.safeParse({ ...base, issueId: 'is_0000000001' }).success,
       ).toBe(true);
     });
+
+    it('notify_agent force 字符串 "true" 宽容 coercion（fail-closed）', () => {
+      const tools = buildPlatformMcpTools(service);
+      const tool = tools.find((t) => t.name === 'notify_agent')!;
+      const schema = tool.inputSchema as unknown as {
+        safeParse: (v: unknown) => {
+          success: boolean;
+          data?: { force?: boolean };
+        };
+      };
+      const base = {
+        selfInstanceId: 'tmm_1',
+        content: 'hi',
+        targetInstanceId: 'tmm_2',
+        teamId: 'tm_1',
+      };
+      expect(
+        schema.safeParse({ ...base, force: true }).data?.force,
+      ).toBe(true);
+      expect(
+        schema.safeParse({ ...base, force: 'true' }).data?.force,
+      ).toBe(true);
+      expect(
+        schema.safeParse({ ...base, force: 'false' }).data?.force,
+      ).toBe(false);
+      expect(schema.safeParse({ ...base, force: 1 }).data?.force).toBe(
+        false,
+      );
+      expect(
+        schema.safeParse({ ...base, force: 'yes' }).data?.force,
+      ).toBe(false);
+      expect(schema.safeParse(base).data?.force).toBeUndefined();
+    });
   });
 
   describe('learning-mode P2：skill_create（仅主 Agent，默认停用）', () => {
