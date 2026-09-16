@@ -27,11 +27,15 @@ import {
   WorkerDispatcher,
 } from '../chat/worker-dispatcher';
 import { ArtifactsService } from '../artifacts/artifacts.service';
+import { ARTIFACT_CATEGORIES } from '../artifacts/artifacts.constants';
 import { FileStorageService } from '../uploads/uploads.service';
 import { WorkerClient } from '../workers/worker.client';
 import { IssuesService } from '../issues/issues.service';
 import { IssueStatus, IssueTransitionAction } from '../issues/issues.constants';
-import { TaskTransitionAction } from '../common/constants/task.constants';
+import {
+  TASK_ERRORS,
+  TaskTransitionAction,
+} from '../common/constants/task.constants';
 import { TasksService } from '../tasks/tasks.service';
 import { QuestionsService } from '../questions/questions.service';
 import { AGENT_QUESTION_STATUS } from '../questions/questions.constants';
@@ -540,8 +544,8 @@ export class PlatformMcpService {
 
   /**
    * doclib：任务产出物文档库。
-   * - 无 artifactId → 产出物清单 `{artifacts: [{id, type, title, currentVersion, updatedAt}]}`
-   * - 有 artifactId → 指定版本全文（缺省 currentVersion）；doc/file（filePath 非空）
+   * - 无 artifactId → 产出物清单 `{artifacts: [{id, type, title, category, currentVersion, updatedAt}]}`（category 为空即未分类）
+   * - 有 artifactId → 指定版本全文（缺省 currentVersion），顶层附 `category`；doc/file（filePath 非空）
    *   附 `fileUrl`（contentRef 归一化，FILE-02）。
    */
   async doclib(
@@ -558,6 +562,7 @@ export class PlatformMcpService {
           id: true,
           type: true,
           title: true,
+          category: true,
           currentVersion: true,
           updatedAt: true,
         },
@@ -567,6 +572,7 @@ export class PlatformMcpService {
           id: a.id,
           type: a.type,
           title: a.title,
+          category: a.category ?? null,
           currentVersion: a.currentVersion,
           updatedAt: a.updatedAt.toISOString(),
         })),
@@ -579,6 +585,7 @@ export class PlatformMcpService {
         id: true,
         type: true,
         title: true,
+        category: true,
         currentVersion: true,
         updatedAt: true,
       },
@@ -605,6 +612,7 @@ export class PlatformMcpService {
       id: artifact.id,
       type: artifact.type,
       title: artifact.title,
+      category: artifact.category ?? null,
       currentVersion: artifact.currentVersion,
       updatedAt: artifact.updatedAt.toISOString(),
       version: this.toArtifactVersionDto(version),
@@ -744,7 +752,7 @@ export class PlatformMcpService {
       args.fileRef && !isTeam
         ? await this.resolveAttachment(ctx, effTaskId as string, args.fileRef)
         : undefined;
-    const { mentions, mentionedInstances } = isTeam
+    const { mentions } = isTeam
       ? await this.parseTeamPostMentions(exec.teamId, args.content)
       : await this.parseGroupPostMentions(effTaskId as string, args.content);
 
@@ -771,48 +779,10 @@ export class PlatformMcpService {
       { type: 'channel', id: channel.id },
     );
 
-    // is_0000000015：@ 提及 → 定向分派每个被 @ 实例（含主 Agent），失败不阻断发布。
-    // 团队维度跳过分派：dispatchAgentMention 是任务域执行链路（需 taskId），团队会话
-    // 无任务可执行——被 @ 成员经频道广播可见消息。
-    // @ storm 熔断（仅 agent-originated）：@all/team-wide 内容永不展开为触发
-    // （display-only：落库 + 广播已完成）；其余按滑动窗口节流——被拦仅 warn，
-    // 不阻断发布（消息已落库），返回仍成功。
-    if (!isTeam) {
-      const teamWide = containsTeamWideMention(args.content);
-      for (const target of mentionedInstances) {
-        if (teamWide) {
-          this.logger.warn(
-            `[mcp] group_post @all 抑制触发 task=${effTaskId} from=${instanceId} to=${target}（display-only，消息已发布）`,
-          );
-          continue;
-        }
-        const decision = this.mentionThrottle.shouldDispatch({
-          taskId: effTaskId as string,
-          fromInstanceId: instanceId,
-          toInstanceId: target,
-          now: Date.now(),
-        });
-        if (!decision.allow) {
-          this.logger.warn(
-            `[mcp] group_post 提及触发被节流 task=${effTaskId} from=${instanceId} to=${target} reason=${decision.reason}（消息已发布）`,
-          );
-          continue;
-        }
-        await this.workerDispatcher
-          .dispatchAgentMention({
-            taskId: effTaskId as string,
-            channelId: channel.id,
-            text: args.content,
-            targetInstanceId: target,
-            kind: 'wake',
-          })
-          .catch((err: unknown) =>
-            this.logger.error(
-              `[mcp] group_post 提及分派失败 instance=${target}: ${err instanceof Error ? err.message : String(err)}`,
-            ),
-          );
-      }
-    }
+    // group_post 为「通知/留痕」语义：@ 提及只落库（mentions 列）+ 频道广播，永不自动唤醒。
+    // 2026-09-16 移除多 @ 自动触发：派发携带原文，平台无法理解「请开发修复、测试待命」，
+    // 待命者照样被唤醒开工（实测一条 @3 人消息重发 10+ 次、测试-1 被唤醒 45 次）。
+    // 需唤醒某人请显式调 vteam_notify_agent（可逐个/按依赖顺序）——勿恢复此自动触发。
 
     return {
       messageId: message.id,
@@ -1054,6 +1024,16 @@ export class PlatformMcpService {
           effTaskId as string,
           args.selfInstanceId,
         );
+    const senderMember = notifyTeamId
+      ? await this.prisma.teamMember.findFirst({
+          where: { id: args.selfInstanceId, teamId: notifyTeamId },
+          select: { alias: true, agent: { select: { name: true } } },
+        })
+      : null;
+    const senderName =
+      senderMember?.alias ??
+      senderMember?.agent?.name ??
+      args.selfInstanceId;
     const text = `@${targetName} ${args.content}`;
     const message = await this.prisma.message.create({
       data: {
@@ -1260,6 +1240,7 @@ export class PlatformMcpService {
         fromInstanceId: args.selfInstanceId,
         toInstanceId: args.targetInstanceId,
         assigneeName: targetName,
+        fromName: senderName,
         content: args.content,
         issueId: args.issueId ?? null,
         receiptTimeoutMin: args.receiptTimeoutMin,
@@ -1599,6 +1580,7 @@ export class PlatformMcpService {
     fromInstanceId: string;
     toInstanceId: string;
     assigneeName: string;
+    fromName?: string | null;
     content: string;
     issueId: string | null;
     receiptTimeoutMin?: number;
@@ -1642,6 +1624,18 @@ export class PlatformMcpService {
         if ((err as { code?: string })?.code !== 'P2002') {
           throw err;
         }
+        // 仅 dedupKey 唯一冲突是「同内容重派」的预期幂等路径；
+        // 主键（PRIMARY）冲突是 id 生成器失配的信号，必须上抛而非静默吞掉，
+        // 否则催办会无声消失（见 2026-09-16 mr_ 前缀缺 resync 事故）。
+        // MySQL 下 Prisma 的 meta.target 为字符串（约束名），PG 为数组——两者兼容。
+        const target = (err as { meta?: { target?: unknown } }).meta?.target;
+        const targetList = Array.isArray(target) ? target : [target];
+        const isDedupConflict = targetList.some(
+          (t) => typeof t === 'string' && t.includes('dedup_key'),
+        );
+        if (!isDedupConflict) {
+          throw err;
+        }
         const existing = (await this.prisma.messageReceipt.findFirst({
           where: { dedupKey },
         })) as unknown as {
@@ -1673,6 +1667,7 @@ export class PlatformMcpService {
         fromInstanceId: input.fromInstanceId,
         toInstanceId: input.toInstanceId,
         assigneeName: input.assigneeName,
+        fromName: input.fromName ?? null,
       };
       await this.timers.schedule(
         RECEIPT_NUDGE_KIND,
@@ -1775,6 +1770,7 @@ export class PlatformMcpService {
       title: string;
       content?: string;
       fileRef?: string;
+      category?: string;
     },
   ): Promise<{
     artifactId: string;
@@ -1782,6 +1778,17 @@ export class PlatformMcpService {
     status: 'created' | 'appended' | 'duplicate';
   }> {
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+
+    if (
+      args.category !== undefined &&
+      !(ARTIFACT_CATEGORIES as readonly string[]).includes(args.category)
+    ) {
+      throw new BadRequestException({
+        code: PLATFORM_MCP_ERRORS.ARTIFACT_INVALID,
+        message:
+          'category 须为需求/设计/实现/测试用例/测试报告/运维/其他其一，不传为未分类',
+      });
+    }
 
     if (args.type === 'text') {
       if (!args.content) {
@@ -1795,6 +1802,9 @@ export class PlatformMcpService {
         type: 'text',
         title: args.title,
         content: args.content,
+        ...(args.category !== undefined
+          ? { category: args.category }
+          : {}),
       });
       return this.toSubmitResult(result);
     }
@@ -1805,7 +1815,13 @@ export class PlatformMcpService {
         message: 'type=doc/file 时 fileRef 必填',
       });
     }
-    return this.submitFileArtifact(ctx, args.taskId, args.title, args.fileRef);
+    return this.submitFileArtifact(
+      ctx,
+      args.taskId,
+      args.title,
+      args.fileRef,
+      args.category,
+    );
   }
 
   /**
@@ -1921,6 +1937,13 @@ export class PlatformMcpService {
       reason?: string;
     },
   ) {
+    if (args.action === 'accept' || args.action === 'archive') {
+      throw new ForbiddenException({
+        code: TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,
+        message:
+          '仅人类用户可在管理界面验收完成/归档任务，Agent 不可调用 accept/archive；请向用户报告任务已就绪、等待人工验收，不要重复调用',
+      });
+    }
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
     // 注：已删除旧自造 plan 域的 start 门禁（executionMode 列恒 direct）。
     // 新计划模式（task.planMode）不拦截 start：计划评审通过后的执行确认走
@@ -4842,6 +4865,7 @@ export class PlatformMcpService {
     taskId: string,
     title: string,
     fileRef: string,
+    category?: string,
   ): Promise<{
     artifactId: string;
     version: number;
@@ -4875,13 +4899,17 @@ export class PlatformMcpService {
     const name = fileRef.split(/[\\/]/).pop() || 'artifact';
     const stored = await FileStorageService.saveBufferFile(buffer, name);
     const sha256 = createHash('sha256').update(buffer).digest('hex');
-    return this.artifactsService.archiveFile(taskId, {
-      fileRef,
-      storedUrl: stored.url,
-      storedName: stored.name,
-      sha256,
-      title,
-    });
+    return this.artifactsService.archiveFile(
+      taskId,
+      {
+        fileRef,
+        storedUrl: stored.url,
+        storedName: stored.name,
+        sha256,
+        title,
+      },
+      category,
+    );
   }
 
   /** submit_artifact text 结果归一：append 返回 → {artifactId, version, status}。 */

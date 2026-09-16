@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ARTIFACT_CATEGORIES } from '../artifacts/artifacts.constants';
 import type { PlatformMcpService } from './platform-mcp.service';
 
 /**
@@ -217,6 +218,12 @@ const submitArtifactSchema = z.object({
     .string()
     .optional()
     .describe('文件路径/引用（type=doc/file 必填，自动拉取并归档）'),
+  category: z
+    .enum(ARTIFACT_CATEGORIES)
+    .optional()
+    .describe(
+      '分类标签（可选）：需求/设计/实现/测试用例/测试报告/运维/其他其一；不传为未分类',
+    ),
 });
 
 type SubmitArtifactArgs = z.infer<typeof submitArtifactSchema>;
@@ -301,9 +308,9 @@ const taskTransitionSchema = z.object({
     .string()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   action: z
-    .enum(['start', 'mark-pending-review', 'accept', 'reject', 'archive'])
+    .enum(['start', 'mark-pending-review', 'reject'])
     .describe(
-      '状态流转动作：start 开始 / mark-pending-review 提交验收 / accept 验收通过 / reject 驳回 / archive 归档',
+      '状态流转动作：start 开始 / mark-pending-review 提交验收 / reject 驳回。accept 验收通过与 archive 归档仅人类用户可在管理界面操作，Agent 不可调用（调用将被拒绝）；任务就绪后请向用户报告等待人工验收',
     ),
   reason: z
     .string()
@@ -823,7 +830,7 @@ export function buildPlatformMcpTools(
     {
       name: 'task_transition',
       description:
-        '流转任务状态：start(pending→in_progress)/mark-pending-review(in_progress→pending_review)/accept(pending_review→completed)/reject(pending_review→in_progress，可附 reason)/archive(completed→archived)。仅主 Agent（mainAgentInstanceId）可调用，其余成员调用将被拒绝。返回更新后的任务 DTO；非法迁移返回错误。',
+        '流转任务状态：start(pending→in_progress)/mark-pending-review(in_progress→pending_review)/reject(pending_review→in_progress，可附 reason)。仅主 Agent（mainAgentInstanceId）可调用，其余成员调用将被拒绝。accept 验收通过与 archive 归档仅人类用户可在管理界面操作，Agent 调用将被拒绝（任务就绪后请报告等待人工验收）。返回更新后的任务 DTO；非法迁移返回错误。',
       inputSchema: taskTransitionSchema,
       handler: (ctx, args) =>
         service.taskTransition(ctx, args as TaskTransitionArgs),

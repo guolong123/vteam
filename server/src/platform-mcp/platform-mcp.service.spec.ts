@@ -991,13 +991,14 @@ describe('PlatformMcpService', () => {
   });
 
   describe('doclib', () => {
-    it('无 artifactId → 产出物清单（id/type/title/currentVersion/updatedAt）', async () => {
+    it('无 artifactId → 产出物清单（id/type/title/category/currentVersion/updatedAt）', async () => {
       allowWorker();
       prisma.artifact.findMany.mockResolvedValue([
         {
           id: 'a_1',
           type: 'doc',
           title: '需求文档',
+          category: '需求',
           currentVersion: 2,
           updatedAt: new Date('2026-08-07T00:00:00Z'),
         },
@@ -1014,6 +1015,7 @@ describe('PlatformMcpService', () => {
             id: 'a_1',
             type: 'doc',
             title: '需求文档',
+            category: '需求',
             currentVersion: 2,
             updatedAt: '2026-08-07T00:00:00.000Z',
           },
@@ -1021,12 +1023,42 @@ describe('PlatformMcpService', () => {
       });
     });
 
-    it('有 artifactId 缺省 version → 返回 currentVersion 版本全文', async () => {
+    it('清单：未设 category 的行透出 null（未分类，后向兼容）', async () => {
+      allowWorker();
+      prisma.artifact.findMany.mockResolvedValue([
+        {
+          id: 'a_2',
+          type: 'text',
+          title: '旧产出物',
+          category: null,
+          currentVersion: 1,
+          updatedAt: new Date('2026-08-07T00:00:00Z'),
+        },
+      ]);
+
+      const result = await service.doclib(ctx, { taskId });
+
+      expect(result).toEqual({
+        artifacts: [
+          {
+            id: 'a_2',
+            type: 'text',
+            title: '旧产出物',
+            category: null,
+            currentVersion: 1,
+            updatedAt: '2026-08-07T00:00:00.000Z',
+          },
+        ],
+      });
+    });
+
+    it('有 artifactId 缺省 version → 返回 currentVersion 版本全文（含 category）', async () => {
       allowWorker();
       prisma.artifact.findFirst.mockResolvedValue({
         id: 'a_1',
         type: 'text',
         title: '实现说明',
+        category: '实现',
         currentVersion: 1,
         updatedAt: new Date('2026-08-07T00:00:00Z'),
       });
@@ -1050,8 +1082,37 @@ describe('PlatformMcpService', () => {
       });
       expect(result).toMatchObject({
         id: 'a_1',
+        category: '实现',
         version: { contentRef: '完成报表聚合与 CSV 导出…', filePath: null },
       });
+    });
+
+    it('详情：未设 category 的产出物透出 null（未分类）', async () => {
+      allowWorker();
+      prisma.artifact.findFirst.mockResolvedValue({
+        id: 'a_9',
+        type: 'text',
+        title: '旧产出物',
+        category: null,
+        currentVersion: 1,
+        updatedAt: new Date('2026-08-07T00:00:00Z'),
+      });
+      prisma.artifactVersion.findUnique.mockResolvedValue({
+        id: 'av_9',
+        artifactId: 'a_9',
+        version: 1,
+        contentRef: '旧内容',
+        filePath: null,
+        sha256: null,
+        acceptedFlag: false,
+        authorAgentId: null,
+        changeNote: null,
+        createdAt: new Date('2026-08-07T00:00:00Z'),
+      });
+
+      const result = await service.doclib(ctx, { taskId, artifactId: 'a_9' });
+
+      expect(result).toMatchObject({ id: 'a_9', category: null });
     });
 
     it('显式 version → 返回指定版本', async () => {
@@ -1315,7 +1376,7 @@ describe('PlatformMcpService', () => {
       });
     });
 
-    it('is_0000000015：content 含 @主 Agent → 落库 mentions + 定向分派被 @ 实例（含主 Agent 触发）', async () => {
+    it('2026-09-16 移除多 @ 触发：content 含 @ 成员 → 落库 mentions 但不派发（通知/留痕语义）', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       idGen.nextId.mockResolvedValue('m_0000000100');
@@ -1355,14 +1416,8 @@ describe('PlatformMcpService', () => {
           ],
         }),
       });
-      // 定向分派被 @ 实例（主 Agent）
-      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith({
-        taskId,
-        channelId,
-        text: '@鲍勃 请审核本次方案',
-        targetInstanceId: 'tmm_pm',
-        kind: 'wake',
-      });
+      // 多 @ 自动触发已下线：需唤醒成员须显式调 notify_agent，group_post 不再派发
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
       expect(result).toEqual({
         messageId: 'm_0000000100',
         channelId,
@@ -1431,12 +1486,52 @@ describe('PlatformMcpService', () => {
           name: '开发者-2',
         },
       ]);
-      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith(
-        expect.objectContaining({ targetInstanceId: 'tmm_dev2' }),
-      );
+      // mentions 精确命中（前缀边界不误扩），但多 @ 触发已下线 → 不派发
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
     });
 
-    it('@ storm 熔断：同一对第 4 次 @ 被节流（warn，消息照常落库广播+返回成功）', async () => {
+    it('多 @ 多人 → mentions 全部落库但零派发（本次变更核心契约）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      idGen.nextId.mockResolvedValue('m_0000000100');
+      prisma.message.create.mockResolvedValue(createdMessage);
+      prisma.teamMember.findMany.mockResolvedValue([
+        {
+          id: 'tmm_dev',
+          agentId: 'a_developer',
+          alias: '开发者-1',
+          agent: { name: '开发者' },
+        },
+        {
+          id: 'tmm_test',
+          agentId: 'a_tester',
+          alias: '测试-1',
+          agent: { name: '测试' },
+        },
+        {
+          id: 'tmm_arch',
+          agentId: 'a_architect',
+          alias: '架构师-1',
+          agent: { name: '架构师' },
+        },
+      ]);
+
+      await service.groupPost(ctx, {
+        taskId,
+        content: '@开发者-1 @测试-1 @架构师-1 请开发修复，测试待命',
+        selfInstanceId: senderInstanceId,
+      });
+
+      const mentions = prisma.message.create.mock.calls[0][0].data.mentions;
+      expect(mentions).toHaveLength(3);
+      expect(mentions.map((m: { instanceId: string }) => m.instanceId)).toEqual(
+        ['tmm_dev', 'tmm_test', 'tmm_arch'],
+      );
+      // 关键：即便「测试待命」写在文案里，平台也不得唤醒任何被 @ 者
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+
+    it('多 @ 触发下线后：连发同对消息也不产生任何派发（消息照常落库广播+返回成功）', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       idGen.nextId.mockResolvedValue('m_0000000100');
@@ -1475,7 +1570,7 @@ describe('PlatformMcpService', () => {
       });
     });
 
-    it('@ storm 熔断：agent 内容含 @all → 不展开触发（display-only，消息照常发布）', async () => {
+    it('agent 内容含 @all → 同样不触发（消息照常发布，@ 一律仅通知）', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       idGen.nextId.mockResolvedValue('m_0000000100');
@@ -2488,6 +2583,110 @@ describe('PlatformMcpService', () => {
       });
     });
 
+    it('text：带 category=测试用例 → append 透传 category', async () => {
+      allowWorker();
+      artifactsService.append.mockResolvedValue({
+        status: 'archived',
+        artifact: { id: 'a_2', currentVersion: 1 },
+      });
+
+      const result = await service.submitArtifact(ctx, {
+        taskId,
+        type: 'text',
+        title: '登录用例',
+        content: '用例正文',
+        category: '测试用例',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(artifactsService.append).toHaveBeenCalledWith(taskId, {
+        taskId,
+        type: 'text',
+        title: '登录用例',
+        content: '用例正文',
+        category: '测试用例',
+      });
+      expect(result).toEqual({
+        artifactId: 'a_2',
+        version: 1,
+        status: 'created',
+      });
+    });
+
+    it('text：不带 category → append 不传 category 键（旧调用回归，后向兼容）', async () => {
+      allowWorker();
+      artifactsService.append.mockResolvedValue({
+        status: 'archived',
+        artifact: { id: 'a_1', currentVersion: 1 },
+      });
+
+      await service.submitArtifact(ctx, {
+        taskId,
+        type: 'text',
+        title: '实现说明',
+        content: '已完成',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(artifactsService.append).toHaveBeenCalledWith(taskId, {
+        taskId,
+        type: 'text',
+        title: '实现说明',
+        content: '已完成',
+      });
+    });
+
+    it('category 非法 → 400 PLATFORM_MCP_ARTIFACT_INVALID（不触达 append）', async () => {
+      allowWorker();
+      await expectCode(
+        service.submitArtifact(ctx, {
+          taskId,
+          type: 'text',
+          title: 'x',
+          content: 'c',
+          category: '不存在的类',
+          selfInstanceId: senderInstanceId,
+        }),
+        BadRequestException,
+        PLATFORM_MCP_ERRORS.ARTIFACT_INVALID,
+      );
+      expect(artifactsService.append).not.toHaveBeenCalled();
+    });
+
+    it('doc/file：带 category → archiveFile 第三参数透传 category', async () => {
+      allowWorker();
+      prisma.worker.findUnique.mockResolvedValue({ capabilities: {} });
+      workerClient.fetchFile.mockResolvedValue(Buffer.from('设计稿 bytes'));
+      artifactsService.archiveFile.mockResolvedValue({
+        artifactId: 'art_2',
+        version: 1,
+        status: 'created',
+      });
+
+      const result = await service.submitArtifact(ctx, {
+        taskId,
+        type: 'file',
+        title: '架构设计稿',
+        fileRef: '/tmp/opencode/design.md',
+        category: '设计',
+        selfInstanceId: senderInstanceId,
+      });
+
+      expect(artifactsService.archiveFile).toHaveBeenCalledWith(
+        taskId,
+        expect.objectContaining({
+          fileRef: '/tmp/opencode/design.md',
+          title: '架构设计稿',
+        }),
+        '设计',
+      );
+      expect(result).toEqual({
+        artifactId: 'art_2',
+        version: 1,
+        status: 'created',
+      });
+    });
+
     it('text：append 已存在同内容（duplicate）→ status 透传 duplicate', async () => {
       allowWorker();
       artifactsService.append.mockResolvedValue({
@@ -2593,7 +2792,7 @@ describe('PlatformMcpService', () => {
         },
         '/tmp/opencode/req.md',
       );
-      // 归档公共化：fileRef=fileRef 原文、storedUrl=落盘 URL、title=工具入参
+      // 归档公共化：fileRef=fileRef 原文、storedUrl=落盘 URL、title=工具入参；category 缺省透传 undefined（未分类）
       expect(artifactsService.archiveFile).toHaveBeenCalledWith(
         taskId,
         expect.objectContaining({
@@ -2603,6 +2802,7 @@ describe('PlatformMcpService', () => {
           sha256: expect.any(String),
           title: '需求文档',
         }),
+        undefined,
       );
       expect(result).toEqual({
         artifactId: 'art_1',
@@ -2939,6 +3139,32 @@ describe('PlatformMcpService', () => {
         }),
         ForbiddenException,
         PLATFORM_MCP_ERRORS.FORBIDDEN,
+      );
+      expect(tasksService.transitionByAgent).not.toHaveBeenCalled();
+    });
+
+    it('accept → 403 TASK_AGENT_COMPLETION_FORBIDDEN，不触达 transitionByAgent', async () => {
+      await expectCode(
+        service.taskTransition(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+          action: 'accept',
+        }),
+        ForbiddenException,
+        'TASK_AGENT_COMPLETION_FORBIDDEN',
+      );
+      expect(tasksService.transitionByAgent).not.toHaveBeenCalled();
+    });
+
+    it('archive → 403 TASK_AGENT_COMPLETION_FORBIDDEN，不触达 transitionByAgent', async () => {
+      await expectCode(
+        service.taskTransition(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+          action: 'archive',
+        }),
+        ForbiddenException,
+        'TASK_AGENT_COMPLETION_FORBIDDEN',
       );
       expect(tasksService.transitionByAgent).not.toHaveBeenCalled();
     });

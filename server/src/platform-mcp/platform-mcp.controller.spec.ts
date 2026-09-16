@@ -294,7 +294,7 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(notifyAgent.inputSchema.properties.issueId).toEqual({
         type: 'string',
       });
-      // submit_artifact：taskId/selfInstanceId/type/title 必填，content/fileRef 可选；type 枚举归为 string
+      // submit_artifact：taskId/selfInstanceId/type/title 必填，content/fileRef/category 可选；type/category 枚举归为 string
       const submitArtifact = tools.find((t) => t.name === 'submit_artifact')!;
       expect(submitArtifact.inputSchema.required).toEqual([
         'taskId',
@@ -303,6 +303,9 @@ describe('PlatformMcpController (HTTP)', () => {
         'title',
       ]);
       expect(submitArtifact.inputSchema.properties.type).toEqual({
+        type: 'string',
+      });
+      expect(submitArtifact.inputSchema.properties.category).toEqual({
         type: 'string',
       });
       // issue_create：taskId/selfInstanceId/title 必填，description/tags/assigneeInstanceId 可选；tags 数组归为 array
@@ -629,6 +632,46 @@ describe('PlatformMcpController (HTTP)', () => {
           type: 'text',
           title: '实现说明',
           content: '已完成',
+          selfInstanceId: 'ta_tester',
+        },
+      );
+      const text = res.body.result.content[0].text as string;
+      expect(JSON.parse(text)).toEqual({
+        artifactId: 'a_1',
+        version: 1,
+        status: 'created',
+      });
+    });
+
+    it('submit_artifact 带 category → service.submitArtifact 收到 category（透传）', async () => {
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 111,
+          method: 'tools/call',
+          params: {
+            name: 'submit_artifact',
+            arguments: {
+              taskId: 't_1',
+              type: 'text',
+              title: '登录用例',
+              content: '用例正文',
+              category: '测试用例',
+              selfInstanceId: 'ta_tester',
+            },
+          },
+        })
+        .expect(200);
+
+      expect(service.submitArtifact).toHaveBeenCalledWith(
+        { workerId: 'w_0001' },
+        {
+          taskId: 't_1',
+          type: 'text',
+          title: '登录用例',
+          content: '用例正文',
+          category: '测试用例',
           selfInstanceId: 'ta_tester',
         },
       );

@@ -613,8 +613,11 @@ async function main() {
         '\n' +
         '## 派发铁律（优先级：平台校验 > 本铁律 > 上文原文风）\n' +
         '- 先查后派：任何派发/催办经 vteam_notify_agent 发出前，必须先调 vteam_issue_get 核对 issue 状态，再拉最近 20 条群聊消息（vteam_chat_history）确认在途状态；未查先派一律视为违规。\n' +
+        '- 已通知不重发：拉取群聊后，若同一事项已由他人（架构师/开发者/其他角色）或你自己发给同一目标，**且无新增信息**，则不得再发一条；需要承接时引用原 messageId 并只补充你的新增部分（决策/协调/升级），禁止复述既有内容。\n' +
         '- 被催先报：成员追问“怎么样了”时，先汇报在途状态（已派发给谁/回执 n/N/缺席者名单），绝不盲目发起新派发；无新事实不产生新派发。\n' +
         '- 催办引原文：催办消息必须引用原派发 messageId 并注明第几次催办；无原 messageId 的催办不得发出。\n' +
+        '- 只发增量：群聊消息结论先行、只发增量信息；不逐段复述他人已发的进展与结论（引用 messageId 即可），不重复罗列 issue 清单与已完成项；常规协调控制在几行内，长结构汇总仅用于里程碑（计划定稿/验收/阻塞升级）。\n' +
+        '- 唤醒即派发：群聊 @ 仅作通知（不唤醒成员），需要某人开工时必须显式调 vteam_notify_agent 定向派发；有先后依赖时分次派发（先派上游，收到其完工回执后再派下游），不得在同一条消息里 @ 多人让下游提前开工。\n' +
         '- 冲突裁决：平台校验 > 本铁律 > 上文原文风——平台返回码（triggered:false / reason=duplicate / throttled / plan-gated）优先，其次本铁律，最后原文风格。',
     },
     {
@@ -1455,14 +1458,14 @@ height: 720
 \`\`\`
 TSX 源码 (<kebab-name>/index.tsx)
   → submit_artifact (type=file, 写入 uploads/<uuid>.tsx)
-  → DocsMirrorService.syncTask 提取 *.tsx → docs-root/<taskId>/prototypes/<slug>/index.tsx
-  → GET /docs-site/:taskId/prototypes 列表 + GET /docs-site/:taskId/prototypes/<file> 原文
+  → Artifact 表 (type=file, contentRef=/uploads/<uuid>.tsx, category 选填)
+  → GET /docs-site/:taskId/prototypes 列表 + GET /docs-site/:taskId/prototypes/<file> 原文（DB 直读，无磁盘镜像）
   → PrototypeSandbox 拉取源码 → esbuild-wasm 编译 → iframe srcdoc 渲染
 \`\`\`
 
-- **镜像层**：\`syncTask\` 扫描该任务 \`type=file\` 且 \`contentRef\` 以 \`.tsx\` 结尾的产出物当前版本，按 \`prototypeSlug\` 写入 \`docs-root/<taskId>/prototypes/\`，旧 \`.md\` / \`.prototype.json\` 镜像共存；支持全量重建（\`rebuildAll\`，启动时触发）。
-- **文档注册表**：\`buildRegistry\` 只收录 \`.md\` 产出物，\`listPrototypes\` 扫描 \`prototypes/<name>/index.tsx\` 目录并通过 \`contentRef → artifactId\` 反查关联产出物。
-- **产出物版本**：镜像始终为 \`currentVersion\` 的正文，历史版本不入站；删除产出物后镜像幂等清理。
+- **DB 直读（无镜像层）**：\`listPrototypes\`/\`readPrototype\` 直接查 DB——该任务 \`type=file\` 且 \`contentRef\` 以 \`.tsx\`/\`.prototype.json\` 结尾的产出物当前版本，按 \`prototypeSlug\` 算名，\`readUploadedFile(contentRef)\` 取源码；无 \`docs-root\` 落盘，不做全量重建。
+- **文档库直读**：文档站按 DB \`Artifact\` 直读（全类型覆盖），原型经 \`contentRef → artifactId\` 反查关联产出物。
+- **产出物版本**：原型读取始终为 \`currentVersion\` 的正文，历史版本不入站；删除产出物后列表幂等清理。
 
 ### 编译渲染
 
@@ -1483,8 +1486,8 @@ TSX 源码 (<kebab-name>/index.tsx)
 
 | 组件/模块 | 职责 |
 |---|---|
-| \`DocsMirrorService\` | 镜像导出与重建（\`syncTask\` / \`rebuildAll\` / \`listPrototypes\` / \`readPrototype\`） |
-| \`DocsSiteController\` | \`registry\` / \`prd/:file\` / \`prototypes\` / \`prototypes/*\` 四端点，JWT + 项目成员校验 |
+| \`ArtifactsService\` | 产出物落库与版本（\`append\` / \`archiveFile\` / DB 直读 \`listPrototypes\` / \`readPrototype\`） |
+| \`DocsSiteController\` | \`prototypes\` / \`prototypes/*\` 两端点（DB 直读）+ \`registry\` / \`prd/:file\`（待退役），JWT + 项目成员校验 |
 | \`PrototypePanel\` | 「原型」tab：左侧列表 + 右侧 \`DeviceFrame > PrototypeSandbox\` 预览，支持删除（\`DELETE /artifacts/:id\`） |
 | \`PrototypeSandbox\` | 编译 + iframe 渲染，含 loading / error 态 |
 | \`DeviceFrame\` / \`DeviceSwitcher\` | 设备外壳与切换器 |
