@@ -18,6 +18,7 @@ import { UploadPlanDocDto } from './dto/upload-plan-doc.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { TasksController } from './tasks.controller';
 import { TasksService } from './tasks.service';
+import { PlanLifecycleService } from './plan-lifecycle.service';
 import { PlanStepsService } from './plan-steps.service';
 import { PlanDocsService } from './plan-docs.service';
 
@@ -38,6 +39,12 @@ describe('TasksController', () => {
   let prisma: {
     teamUserMember: { findUnique: jest.Mock; findMany: jest.Mock };
   };
+  let planLifecycle: {
+    confirmPlan: jest.Mock;
+    completePlan: jest.Mock;
+    getPlan: jest.Mock;
+  };
+  let planDocs: { listPlanDocs: jest.Mock; writePlanDoc: jest.Mock };
 
   beforeEach(async () => {
     service = {
@@ -55,6 +62,12 @@ describe('TasksController', () => {
     prisma = {
       teamUserMember: { findUnique: jest.fn(), findMany: jest.fn() },
     };
+    planLifecycle = {
+      confirmPlan: jest.fn(),
+      completePlan: jest.fn(),
+      getPlan: jest.fn(),
+    };
+    planDocs = { listPlanDocs: jest.fn(), writePlanDoc: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [TasksController],
@@ -64,8 +77,9 @@ describe('TasksController', () => {
         { provide: PlanStepsService, useValue: { listPlanSteps: jest.fn() } },
         {
           provide: PlanDocsService,
-          useValue: { listPlanDocs: jest.fn(), writePlanDoc: jest.fn() },
+          useValue: planDocs,
         },
+        { provide: PlanLifecycleService, useValue: planLifecycle },
         TeamMembershipGuard,
       ],
     })
@@ -570,6 +584,118 @@ describe('TasksController', () => {
     it('验收类端点挂 tasks.review（accept/reject）', () => {
       expect(permOf(controller.accept)).toBe('tasks.review');
       expect(permOf(controller.reject)).toBe('tasks.review');
+    });
+
+    it('todo11：确认门挂 tasks.edit（任一成员可点，不限主）/完工挂 tasks.review/状态读挂 tasks.view', () => {
+      expect(permOf(controller.confirmPlan)).toBe('tasks.edit');
+      expect(permOf(controller.completePlan)).toBe('tasks.review');
+      expect(permOf(controller.getPlan)).toBe('tasks.view');
+    });
+  });
+
+  describe('todo11 用户确认门路由（POST confirm / PATCH complete / GET plan）', () => {
+    const user = { id: 'u_1', username: '成员甲', roleId: 'r_member' };
+
+    it('POST tasks/:id/plan/confirm 转发确认人+动作+原因', async () => {
+      const result = { plan: { status: 'executing' }, idempotent: false };
+      planLifecycle.confirmPlan.mockResolvedValue(result);
+
+      const out = await controller.confirmPlan(user, 't_1', {
+        action: 'reject',
+        reason: '范围过大',
+      });
+
+      expect(planLifecycle.confirmPlan).toHaveBeenCalledWith('t_1', {
+        userId: 'u_1',
+        userName: '成员甲',
+        action: 'reject',
+        reason: '范围过大',
+      });
+      expect(out).toEqual(result);
+    });
+
+    it('POST tasks/:id/plan/confirm 缺省动作为 confirm', async () => {
+      planLifecycle.confirmPlan.mockResolvedValue({ idempotent: false });
+
+      await controller.confirmPlan(user, 't_1', {});
+
+      expect(planLifecycle.confirmPlan).toHaveBeenCalledWith('t_1', {
+        userId: 'u_1',
+        userName: '成员甲',
+        action: 'confirm',
+        reason: null,
+      });
+    });
+
+    it('PATCH tasks/:id/plan/complete 转发主实例（缺省用户 PM 路径）', async () => {
+      planLifecycle.completePlan.mockResolvedValue({ idempotent: false });
+
+      await controller.completePlan(user, 't_1', { instanceId: 'tmm_main' });
+      expect(planLifecycle.completePlan).toHaveBeenCalledWith('t_1', {
+        userId: 'u_1',
+        userName: '成员甲',
+        instanceId: 'tmm_main',
+      });
+
+      await controller.completePlan(user, 't_1', {});
+      expect(planLifecycle.completePlan).toHaveBeenCalledWith('t_1', {
+        userId: 'u_1',
+        userName: '成员甲',
+        instanceId: null,
+      });
+    });
+
+    it('GET tasks/:id/plan 状态读DB：文件存在时以DB为准并附展示告警', async () => {
+      planLifecycle.getPlan.mockResolvedValue({
+        id: 'pl_1',
+        taskId: 't_1',
+        status: 'executing',
+      });
+      planDocs.listPlanDocs.mockResolvedValue({
+        files: [{ name: 'plan.md' }],
+        workerId: 'w_1',
+        directory: '.opencode/plans',
+        degraded: false,
+      });
+
+      const out = (await controller.getPlan('t_1')) as {
+        status: string;
+        source: string;
+        warning?: string;
+        fileDocs: { displayOnly: boolean; count: number };
+      };
+
+      expect(out.status).toBe('executing');
+      expect(out.source).toBe('db');
+      expect(out.fileDocs).toMatchObject({ displayOnly: true, count: 1 });
+      expect(out.warning).toContain('仅展示');
+    });
+
+    it('GET tasks/:id/plan 无文件时无告警；文档降级不阻断状态读取', async () => {
+      planLifecycle.getPlan.mockResolvedValue({
+        id: 'pl_1',
+        taskId: 't_1',
+        status: 'draft',
+      });
+      planDocs.listPlanDocs.mockResolvedValue({
+        files: [],
+        workerId: null,
+        directory: '',
+        degraded: true,
+      });
+
+      const out = (await controller.getPlan('t_1')) as {
+        status: string;
+        warning?: string;
+      };
+      expect(out.status).toBe('draft');
+      expect(out.warning).toBeUndefined();
+
+      planDocs.listPlanDocs.mockRejectedValue(new Error('worker down'));
+      const degraded = (await controller.getPlan('t_1')) as {
+        status: string;
+      };
+      expect(degraded.status).toBe('draft');
     });
   });
 });

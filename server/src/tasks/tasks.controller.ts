@@ -28,12 +28,16 @@ import {
 } from '../common/decorators/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTaskDto } from './dto/create-task.dto';
+import { PlanCompleteDto } from './dto/plan-complete.dto';
+import { PlanConfirmDto } from './dto/plan-confirm.dto';
 import { QueryTasksDto } from './dto/query-tasks.dto';
 import { RejectTaskDto } from './dto/reject-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { UpdateInstanceDto } from './dto/update-instance.dto';
 import { TasksService } from './tasks.service';
+import { PlanLifecycleService } from './plan-lifecycle.service';
+import { PLAN_FILE_DISPLAY_ONLY_WARNING } from './plan-lifecycle.service';
 import { PlanStepsService } from './plan-steps.service';
 import { PlanDocsService } from './plan-docs.service';
 import { UploadPlanDocDto } from './dto/upload-plan-doc.dto';
@@ -61,6 +65,7 @@ export class TasksController {
     private readonly prisma: PrismaService,
     private readonly planStepsService: PlanStepsService,
     private readonly planDocsService: PlanDocsService,
+    private readonly planLifecycle: PlanLifecycleService,
   ) {}
 
   /**
@@ -340,6 +345,83 @@ export class TasksController {
   @ApiOperation({ summary: '归档任务（completed → archived，终态）' })
   archive(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.tasksService.archive(id, user.id);
+  }
+
+  /**
+   * 用户确认门（todo11：任一团队成员可点，主确认链仅作模式参照，不照搬主可点规则）。
+   * POST /api/v1/tasks/:id/plan/confirm {action?, reason?}
+   * confirm（缺省）：approved→executing，幂等（已 executing 二次 POST 同结果），
+   *   记 confirmedBy/confirmedAt，落系统消息，plan.status.executing 事件触发 PM 续推 W2；
+   * reject：approved→draft 打回（reason 必填，轮次不变重走收敛）。
+   * 错态 409 精确码（details.current 携带 DB 真值状态）。
+   */
+  @Post('tasks/:id/plan/confirm')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('tasks.edit')
+  @ApiOperation({ summary: '用户确认门（approved→executing 幂等 / 打回 draft）' })
+  confirmPlan(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: PlanConfirmDto,
+  ) {
+    return this.planLifecycle.confirmPlan(id, {
+      userId: user.id,
+      userName: user.username,
+      action: dto.action ?? 'confirm',
+      reason: dto.reason ?? null,
+    });
+  }
+
+  /**
+   * 完工标记（todo11：PM/主实例鉴权）。
+   * PATCH /api/v1/tasks/:id/plan/complete {instanceId?}
+   * executing→completed（已 completed 幂等同结果）；instanceId 须等于团队主成员，
+   * 否则 403；用户路径由 tasks.review 权限守卫（PM 操作）。
+   */
+  @Patch('tasks/:id/plan/complete')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('tasks.review')
+  @ApiOperation({ summary: '完工标记（executing→completed，PM/主实例）' })
+  completePlan(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: PlanCompleteDto,
+  ) {
+    return this.planLifecycle.completePlan(id, {
+      userId: user.id,
+      userName: user.username,
+      instanceId: dto.instanceId ?? null,
+    });
+  }
+
+  /**
+   * 计划状态（todo11 真值源=DB plans.status，文件 plan-docs 仅展示）。
+   * GET /api/v1/tasks/:id/plan → {plan, status, source:'db', fileDocs, warning?}
+   * 徽标/按钮/checklist 一律读本端点 status；文件与 DB 不一致时以 DB 为准并附告警。
+   */
+  @Get('tasks/:id/plan')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('tasks.view')
+  @ApiOperation({ summary: '计划状态（DB 真值源，文件仅展示）' })
+  async getPlan(@Param('id') id: string) {
+    const plan = await this.planLifecycle.getPlan(id);
+    let fileCount = 0;
+    let fileDocsDegraded = false;
+    try {
+      const docs = await this.planDocsService.listPlanDocs(id);
+      fileCount = docs?.files?.length ?? 0;
+      fileDocsDegraded = docs?.degraded ?? false;
+    } catch {
+      fileDocsDegraded = true;
+    }
+    const diverged = fileCount > 0;
+    return {
+      plan,
+      status: (plan as { status?: string } | null)?.status ?? null,
+      source: 'db' as const,
+      fileDocs: { displayOnly: true, count: fileCount, degraded: fileDocsDegraded },
+      ...(diverged ? { warning: PLAN_FILE_DISPLAY_ONLY_WARNING } : {}),
+    };
   }
 
   /** 无 teamId 聚合路径的分页归一化（与 service 侧看板语义一致：page 默认 1）。 */
