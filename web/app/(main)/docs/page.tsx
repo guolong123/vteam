@@ -10,8 +10,8 @@
  * - 数据源只准三处：GET /teams/:id/artifacts（T5 聚合端点，单查询）+
  *   GET /artifacts/:id + GET /artifacts/:id/versions/:version。不做逐任务聚合。
  * - 文档树：聚合端点当前无 parent/children 字段 → 平铺渲染（见 T8 证据的字段核查）。
- * - 内容区：DocContentView 接缝组件（T9 在此文件内扩展/替换为富渲染矩阵；
- *   今日行为：纯文本兜底 + 下载链接，全类型可用）。
+ * - 内容区：FilePreview 富渲染矩阵（`src/features/docs-site/file-preview.tsx`，
+ *   text→md、pdf 沙箱、office 下载卡等全部分支；本页只 import，不内联）。
  * - 版本查看器：全类型可用（artifacts 页切换范式 `‹ vN … ›`，testid 对齐）。
  * - 删除：复用 useDeleteArtifact 语义（hook 本体不动，成功后刷新本页聚合查询）。
  * - SSE：artifact.submitted → refetch（artifacts 页 useRealtimeEvents 模式）。
@@ -36,6 +36,7 @@ import { teamsApi, type TeamDto } from "@/src/api/teams";
 import { ARTIFACT_CATEGORIES } from "@/src/lib/artifact-categories";
 import { docIdFor } from "@/src/lib/artifact-slug";
 import { useDeleteArtifact } from "@/src/features/docs-site/hooks";
+import { FilePreview } from "@/src/features/docs-site/file-preview";
 import { EmptyState, PageWindow } from "@/src/components/ui";
 import {
   roleText,
@@ -171,27 +172,6 @@ function formatTime(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** 字节数 → 人类可读（B/KB/MB）；null/非法 → null（不显示大小徽章）。 */
-function formatBytes(bytes: number | null | undefined): string | null {
-  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return null;
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-/** 从 URL/路径提取小写扩展名（`/uploads/a.PDF` → `pdf`；无扩展名 → 空串）。 */
-function extractExtFromUrl(ref: string): string {
-  const base = ref.split(/[\\/]/).pop() ?? "";
-  const dot = base.lastIndexOf(".");
-  if (dot <= 0 || dot === base.length - 1) return "";
-  return base.slice(dot + 1).toLowerCase();
-}
-
-/** 引用是否可被浏览器访问（控制面静态服务 /uploads/ 或完整 http(s) URL）。 */
-function isAccessibleFileRef(ref: string): boolean {
-  return ref.startsWith("/uploads/") || /^https?:\/\//i.test(ref);
-}
-
 /* ------------------------------ 徽章组件 ------------------------------ */
 /** 产出物类型徽章（text 紫 / doc 蓝 / file 绿）。 */
 function ArtifactTypeBadge({ type }: { type: ArtifactApiType }) {
@@ -243,160 +223,6 @@ function CategoryBadge({ category }: { category: string | null }) {
     >
       {label}
     </span>
-  );
-}
-
-/* ------------------------------ 内容区接缝（T9 扩展点） ------------------------------ */
-/**
- * DocContentView — T9 富渲染矩阵的接缝组件（T9 在此扩展/替换，不另起文件）。
- * 今日行为（全类型可用）：text → 纯文本兜底；doc/file → 下载卡（文件名/大小/类型徽章 +
- * 下载链接）；不可访问引用 → 纯文本降级。T9 在此接入 text→md、pdf 沙箱、office 下载卡等分支。
- */
-function DocContentView({
-  version,
-  type,
-  title,
-}: {
-  version: ArtifactVersionDto;
-  type: ArtifactApiType;
-  title: string;
-}) {
-  if (type === "text") {
-    return (
-      <div data-testid="docs-content-view" data-render="text-fallback" style={{ ...baseFont }}>
-        <pre
-          style={{
-            margin: 0,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            fontSize: fontSize.md,
-            lineHeight: 1.7,
-            color: neutral[700],
-            fontFamily: fontFamily.body,
-          }}
-        >
-          {version.contentRef}
-        </pre>
-      </div>
-    );
-  }
-
-  const fileUrl = version.fileUrl ?? version.contentRef;
-  const ext = version.fileExt || extractExtFromUrl(fileUrl);
-  const displayName = version.fileName || fileUrl.split(/[\\/]/).pop() || title;
-  const sizeLabel = formatBytes(version.fileSize ?? null);
-  // P2 判定（与 artifacts 页同语义）：/uploads/ 前缀 + fileSize==null → 磁盘文件实际不存在 → 纯文本降级
-  const fileMissing = fileUrl.startsWith("/uploads/") && version.fileSize == null;
-  const accessible = isAccessibleFileRef(fileUrl) && !fileMissing;
-  const canDownload = fileUrl.startsWith("/uploads/");
-
-  if (!accessible) {
-    return (
-      <div data-testid="docs-content-view" data-render="inaccessible" style={{ display: "flex", flexDirection: "column", gap: space.sm, ...baseFont }}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, fontSize: fontSize.sm, color: neutral[500] }}>
-          <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>▤</span>
-          文件引用：{version.filePath ?? version.contentRef}
-        </span>
-        {version.sha256 && (
-          <span style={{ fontSize: fontSize.xs, color: neutral[400], fontFamily: fontFamily.mono }}>
-            sha256: {version.sha256.slice(0, 16)}…
-          </span>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div data-testid="docs-content-view" data-render="file-card" style={{ display: "flex", flexDirection: "column", gap: space.md, ...baseFont }}>
-      <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>{title}</div>
-      <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
-        <a
-          data-testid="docs-file-link"
-          href={fileUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: space.xs,
-            color: "#0D9488",
-            fontSize: fontSize.sm,
-            fontWeight: 500,
-            textDecoration: "none",
-            fontFamily: fontFamily.body,
-          }}
-        >
-          <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1 }}>▤</span>
-          {displayName}
-        </a>
-        {ext && (
-          <span
-            data-testid="docs-file-badge"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              padding: `1px ${space.sm}px`,
-              borderRadius: radius.sm,
-              backgroundColor: "rgba(13,148,136,0.10)",
-              border: "1px solid rgba(13,148,136,0.22)",
-              color: "#0D9488",
-              fontSize: fontSize.xs,
-              fontWeight: 500,
-              fontFamily: fontFamily.body,
-            }}
-          >
-            {ext.toUpperCase()}
-          </span>
-        )}
-        {sizeLabel && (
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              padding: `1px ${space.sm}px`,
-              borderRadius: radius.sm,
-              backgroundColor: neutral[50],
-              border: `1px solid ${neutral[200]}`,
-              color: neutral[500],
-              fontSize: fontSize.xs,
-              fontFamily: fontFamily.mono,
-            }}
-          >
-            {sizeLabel}
-          </span>
-        )}
-        <a
-          data-testid="docs-file-download"
-          href={fileUrl}
-          {...(canDownload ? { download: true } : {})}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: space.xs,
-            padding: `3px ${space.md}px`,
-            borderRadius: radius.sm,
-            border: "none",
-            backgroundColor: "#0D9488",
-            color: "#FFFFFF",
-            fontSize: fontSize.sm,
-            fontWeight: 500,
-            textDecoration: "none",
-            cursor: "pointer",
-            fontFamily: fontFamily.body,
-          }}
-        >
-          <span aria-hidden style={{ fontSize: fontSize.sm, lineHeight: 1 }}>↓</span>
-          下载
-        </a>
-      </div>
-      {version.sha256 && (
-        <span style={{ fontSize: fontSize.xs, color: neutral[400], fontFamily: fontFamily.mono }}>
-          sha256: {version.sha256.slice(0, 16)}…
-        </span>
-      )}
-    </div>
   );
 }
 
@@ -546,7 +372,7 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
         </div>
       </div>
 
-      {/* 内容区：经 DocContentView 接缝渲染（T9 在此扩展富矩阵） */}
+      {/* 内容区：经 FilePreview 富矩阵渲染（text→md / pdf 沙箱 / office 下载卡） */}
       <div
         style={{
           minHeight: 96,
@@ -566,7 +392,7 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
         ) : versionQuery.isPending ? (
           <span style={{ color: neutral[400] }}>加载中…</span>
         ) : versionQuery.data ? (
-          <DocContentView version={versionQuery.data} type={type} title={title} />
+          <FilePreview version={versionQuery.data} type={type} title={title} />
         ) : null}
       </div>
 

@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useMemo, type CSSProperties, type ReactNode } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { type Components, type UrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { parsePrdMarkdown } from "./parser";
 import { MermaidBlock } from "./mermaid-block";
@@ -32,9 +32,10 @@ interface DocsMarkdownProps {
   markdown: string;
   prototypes?: PrototypeListItem[];
   taskId?: string;
+  urlTransform?: UrlTransform | null;
 }
 
-export function DocsMarkdown({ markdown, prototypes = [], taskId }: DocsMarkdownProps) {
+export function DocsMarkdown({ markdown, prototypes = [], taskId, urlTransform }: DocsMarkdownProps) {
   const parsed = useMemo(() => parsePrdMarkdown(markdown), [markdown]);
   const components = useMemo(
     () =>
@@ -363,5 +364,5 @@ export function DocsMarkdown({ markdown, prototypes = [], taskId }: DocsMarkdown
     return { type: "element", tagName: "div", properties: { "data-proto": t === "prototype-list" ? "list" : "embed", "data-ph": ph }, children: [] };
   } } as unknown as Record<string, unknown>), []);
 
-  return <ReactMarkdown remarkPlugins={remarkPlugins as never} remarkRehypeOptions={remarkRehypeOptions} components={components}>{parsed.markdown}</ReactMarkdown>;
+  return <ReactMarkdown remarkPlugins={remarkPlugins as never} remarkRehypeOptions={remarkRehypeOptions} components={components} urlTransform={urlTransform}>{parsed.markdown}</ReactMarkdown>;
 }

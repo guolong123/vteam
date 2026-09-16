@@ -35,13 +35,20 @@ describe('FileStorageService（文件存储基础：文件名生成 / 白名单 
   describe('assertAllowed（扩展名白名单）', () => {
     it.each([
       'a.pdf',
-      'b.docx',
-      'c.xlsx',
-      'd.csv',
-      'e.png',
-      'f.jpg',
-      'g.md',
-      'h.txt',
+      'b.doc',
+      'c.docx',
+      'd.xls',
+      'e.xlsx',
+      'f.csv',
+      'g.png',
+      'h.jpg',
+      'i.jpeg',
+      'j.gif',
+      'k.webp',
+      'l.svg',
+      'm.md',
+      'n.txt',
+      'o.json',
     ])('接受白名单文件 %s', (originalname) => {
       expect(() =>
         FileStorageService.assertAllowed({

@@ -106,3 +106,77 @@ Conventions, patterns, and successful approaches discovered during work on this 
   按计划不传 category（回填覆盖→未分类）。
 - seed.ts 的 prototype-designer skill 文本是纯提示词内容改动；`seed.spec.ts`
   不断言该 skill，`src/prisma/seed.spec.ts` 全绿即无回归。
+
+## 2026-09-16 — T5 团队聚合端点
+- `ArtifactsController` 不挂类级 `TeamMembershipGuard`：其 `resolveTeamId`
+  把 `:id` 先按团队解释、回退任务反查——类级挂载会连带改变既有 6 端点行为
+  （`tasks/:id/artifacts` 对非成员突然 403）。团队路由用方法级
+  `assertTeamMember`（仿 questions.controller），未知团队先 404 再 403。
+- `findByTeam` 的 `task.findMany` 一次查询即够 title 映射；`taskId` 参数只在
+  映射内过滤（外团队 id → 空集，不抛错不泄露）。
+- Live 证明沿 T6 harness 模式（新 service 逐字编译 → docker cp → 容器内直驱
+  live MySQL，只读）：category/联合/clamp/404/空团队五断言 `jq -e` 全过；
+  HTTP 路由本身因镜像早于变更而 404（`Cannot GET ...` 收据），重验留 T12。
+- curl 传中文 query 须 URL 编码：裸 `?category=需求` 得空 body 400（非路由问题），
+  编码后正常 404（路由缺失口径）。
+- eslint --fix 的 9 处 prettier 换行全系新增长行；修后重跑 jest 确认仍 80 绿。
+
+## 2026-09-16 — T8 统一文档站页
+
+- Live 镜像早于 T5 时的标准动作（T4/T6 门已确立，升级版）：`git worktree add /tmp/x HEAD`
+  取干净 HEAD → `docker cp` `server/src` + `tsconfig*.json` + `nest-cli.json` 进容器
+  （脏树绝不进容器；他波未提交文件零混入）→ 容器内 `npx prisma generate`（client
+  无 category 即 `Unknown argument`）+ `npx nest build` → `docker restart`（restart
+  保文件系统，`compose up` 会重建丢失补丁）。回滚点：先 `cp -r /app/dist /app/dist.bak-*`。
+- HEAD 全量 `tsc --noEmit` 的 2 errors（platform-mcp.service.ts 1670/1942）是他波合并漂移，
+  非本 todo 门；`nest build` 默认照常 emit（JS 可运行），server 照常 healthy。别顺手修他人模块。
+- Playwright 临时 spec 跑法：正式 `playwright.config.ts` 的 project testMatch 卡死文件名，
+  临时 spec 需配临时 config（`testDir: "."` 相对 config 自身目录，`./e2e` 会错位成 `e2e/e2e`），
+  跑完 spec + config + `test-results/` 全删（T12 才建正式 `docs-unified.spec.ts`）。
+- `getByTestId(..., { hasText: 中文 })` 在 9 枚同 testid pills 上 strict-mode 炸成 9 命中
+  （hasText 子串语义不可靠）；chips 改按 `getByRole("button", { name, exact: true })` 点、
+  `[data-key="..."]` 断言 `data-active`。
+- 聚合端点无 parent/children（server grep 0 + live 全量键并集 0）→ 树平铺是唯一正确渲染，
+  fixture 的 1 parent + 2 children 指 registry 旧结构，与本页无关（证据 §5 贴键集合即交代）。
+- `PageWindow` 支持 `maxWidth`/`testId` 透传：合站双栏用 `maxWidth={1280}` + `testId="docs-shell"`。
+## 2026-09-16 — T10 路由收敛
+
+- T8 组件零 props（`DocsUnifiedPage()`，URL-only，无 teamId 只渲染 picker）→ 别名不能只注
+  `?taskId=`，必须同时经 `GET /tasks/:id` 反查补 `?teamId=`，否则 task 预填/doc 深链双双落空。
+  机制：deferred mount + `window.history.replaceState` 一次性注入（零 router 导航，URL 保持
+  `/docs/:taskId`）；子组件挂载时 search 已完整。反查失败→选择器兜底，绝不 404。
+- userId 水合门：别名 effect 须等 `useAuthStore.user?.id` 就绪再反查（persist 异步水合；
+  未登录由 AppShell 守卫接管）。子 effect（`[]`）只读一次 URL，故注入必须发生在挂载前——
+  挂载后再 `replaceState` 对已挂载实例无效。
+- `router.push(\`/artifacts\`` 全仓零命中门：session 页 `/tasks/${id}/artifacts` 是 REST API
+  路径串，非路由跳转，grep 断言须锚定 `router.push(\`` 前缀，否则误伤。
+- 孤儿判定：`npx playwright test e2e/docs-site.spec.ts --list` 报 `No tests found` +
+  全量 `--list` 中 0 命中 = 不在任何 project（testMatch 无交集），可直接 `git rm`。
+- pages.spec 13/17 的"参数生效"只能用统一页实际消费的参数断言（teamId/taskId/doc；
+  type/category/accepted 走 state 默认 all，不读 URL）——传 `type=text` 只能断言 URL 透传，
+  不能断言 chip 激活。
+- 并行波脏树下提交：`git add` 逐路径显式列出（含 `git rm` 的删除项），`docs/page.tsx` 等
+  T9 脏文件保持 unstaged；`test-results/` gitignored、`.auth/user.json` 被 setup 刷新——两者皆不 stage。
+
+## 2026-09-16 — T9 渲染矩阵
+
+- `DocsMarkdown` 无 `urlTransform` 透传时，T9 的"显式传参"无法满足：加可选
+  `urlTransform?: UrlTransform | null`（3 行，缺省走 react-markdown 默认）是最小
+  合规改法；旧调用零影响（tsc + 旧页行为不变）。
+- 显式白名单比默认更严：`safeUrlTransform` 仅放 `http/https/mailto`，相对路径亦
+  `→ null`；`javascript:` 链接退化为无 `href` 锚点（`a[href]` 计数 0，文本保留），
+  `<script>` 以字面文本展示——XSS 负测应断言 `a[href]==0` 而非 `a==0`。
+- Fixture 经 `POST /tasks/:id/artifacts` 建 file 行时 `content` 必须纯空白：
+  非空 content 触发 append P2 落盘（UUID 文件覆盖 fileRef，ghost 降级也失效）；
+  纯空白 N×space 既互异 sha（过幂等）又 `trim()` 为空（跳过 P2，保留原引用）。
+- 误建 UUID 孤儿的清理法：先 GET 各行 `fileUrl` 记名 → DELETE 行 → 按名 `rm`。
+- Host `HTTP_PROXY` 会让 python urllib 直连 `localhost:13000` 得 502（curl 不受影响）：
+  脚本内用 curl 或 export `NO_PROXY`。
+- Host dev server 需 `API_PROXY_TARGET=http://localhost:13000`（middleware 缺省
+  `:3000` 无服务 → 登录 POST 404 `fetch failed`）；`:3001` 可能被他波占用，
+  启动前先 `lsof -i :3001`，EADDRINUSE 即换端口或等位。
+- `text-fallback` 的 `data-render` 随旧 text `<pre>` 路径退役（text→md 即本 todo
+  主旨）；`file-card/inaccessible` 在回退路径保留原值——T12 e2e 不得断言
+  `text-fallback`。
+- Live 上传 200 沿 T4 先例留 T12：400 收据（旧 allowlist 无新三项）+ jest
+  （assertAllowed/fileFilter 同一 `ALLOWED_EXTENSIONS` 代码路径）即等价证明。

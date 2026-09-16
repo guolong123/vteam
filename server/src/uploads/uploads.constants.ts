@@ -24,7 +24,7 @@ export const UPLOAD_ERRORS = {
 export type UploadErrorCode =
   (typeof UPLOAD_ERRORS)[keyof typeof UPLOAD_ERRORS];
 
-/** 文件类型白名单（扩展名，小写；对齐任务要求：pdf/doc/docx/xlsx/csv/png/jpg/jpeg/gif/md/txt 等）。 */
+/** 文件类型白名单（扩展名，小写；对齐任务要求：pdf/doc/docx/xls/xlsx/csv/png/jpg/jpeg/gif/webp/svg/md/txt/json）。 */
 export const ALLOWED_EXTENSIONS = [
   'pdf',
   'doc',
@@ -36,8 +36,11 @@ export const ALLOWED_EXTENSIONS = [
   'jpg',
   'jpeg',
   'gif',
+  'webp',
+  'svg',
   'md',
   'txt',
+  'json',
 ] as const;
 
 export type AllowedExtension = (typeof ALLOWED_EXTENSIONS)[number];
