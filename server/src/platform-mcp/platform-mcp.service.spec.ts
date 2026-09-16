@@ -1207,6 +1207,7 @@ describe('PlatformMcpService', () => {
         channelId,
         text: '@鲍勃 请审核本次方案',
         targetInstanceId: 'tmm_pm',
+        kind: 'wake',
       });
       expect(result).toEqual({
         messageId: 'm_0000000100',
@@ -1699,6 +1700,7 @@ describe('PlatformMcpService', () => {
         channelId,
         text: '@测试 请查看这个文件',
         targetInstanceId: 'tmm_tester',
+        kind: 'execution',
       });
       expect(result).toEqual({
         messageId: 'm_0000000200',
@@ -1739,6 +1741,7 @@ describe('PlatformMcpService', () => {
         channelId,
         text: '@测试 请查看这个文件',
         targetInstanceId: 'tmm_tester',
+        kind: 'execution',
       });
       expect(result).toEqual({
         messageId: 'm_0000000205',

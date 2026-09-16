@@ -14,6 +14,7 @@ import { Prisma } from '@prisma/client';
 import { validateArtifactDeclaration } from '../artifacts/artifacts.service';
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import { DEFAULT_TASK_WORK_DIR, taskDirOf } from '../tasks/work-dir.util';
+import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
 import { FileStorageService } from '../uploads/uploads.service';
 import {
   CHANNEL_TYPE,
@@ -64,6 +65,16 @@ const MESSAGE_ID_PREFIX = 'm';
 
 /** 首次 bind 的 instanceRef 占位（opencode 会话尚未创建；第二次 bind 写入真实 sessionId）。 */
 export const PENDING_INSTANCE_REF = 'pending';
+
+/**
+ * 派发执行分类（plan-review-execution-gates Todo 4，门禁分类依据）。
+ *
+ * - execution：计划执行派发（默认）——任务维度下要求计划状态为 executing，
+ *   否则抛错（含“计划未放行”）；review/nudge/wake 豁免。
+ * - review：评审派发；nudge：催办；wake：内部唤醒/轮次通知——三者永不经过
+ *   计划门禁，且永不写入账本行。
+ */
+export type DispatchExecutionKind = 'execution' | 'review' | 'nudge' | 'wake';
 
 /**
  * vteam 注册的 opencode agent 名全集（`vteam-<role>` / `vteam-plan`）。
@@ -1250,6 +1261,12 @@ export class WorkerDispatcher
    * 统一返回契约（plan-review todo 3）：本方法内部返回保持 void（不组装
    * triggered——triggered 只在 notifyAgent 层组装）；可选 issueId 由 notifyAgent
    * 透传（派活归属 issue，缺省不阻断；todo 4 消费 issue 锁/去重）。
+   * 执行门禁（plan-review todo 4）：kind 缺省 execution；kind=execution 且任务
+   * 维度（taskId 非空）时要求计划状态为 executing——无行则经计划生命周期服务
+   * 兜底建行后再门禁，仍非 executing 即抛错（含“计划未放行”）；review/nudge/wake
+   * 豁免；门禁读错/未装配即 fail-open 放行 + warn（永不转 fail-closed）。
+   * 计划表读经 PlanLifecycleService（ModuleRef 懒解析，避免 ChatModule 与
+   * TasksModule 静态环；本文件永不直读计划表）。
    */
   async dispatchAgentMention(input: {
     taskId?: string | null;
@@ -1263,6 +1280,8 @@ export class WorkerDispatcher
     targetInstanceId: string;
     /** 可选 issue 绑定（notify_agent 透传；缺省不阻断，todo 4 消费）。 */
     issueId?: string | null;
+    /** 执行分类（缺省 execution；内部唤醒/轮次通知传 wake，评审传 review，催办传 nudge）。 */
+    kind?: DispatchExecutionKind;
   }): Promise<void> {
     let teamId: string | null = null;
     let taskIdForDispatch: string | null = null;
@@ -1285,6 +1304,10 @@ export class WorkerDispatcher
         `实例 ${input.targetInstanceId} 无团队会话（团队 未知，任务 未知）`,
       );
     }
+    const kind: DispatchExecutionKind = input.kind ?? 'execution';
+    if (kind === 'execution' && taskIdForDispatch) {
+      await this.assertPlanExecutionAllowed(taskIdForDispatch);
+    }
     const ensured = await this.sessionLifecycle.ensureTeamSession(
       teamId,
       input.targetInstanceId,
@@ -1304,6 +1327,42 @@ export class WorkerDispatcher
         },
       ],
     });
+  }
+
+  /**
+   * 计划执行门禁（todo4 第二道防线；第一道在 notifyAgent 层组装 plan-gated 返回）。
+   * 非 executing 即抛错（含“计划未放行”）；读错/建行失败/未装配即 fail-open + warn。
+   */
+  private async assertPlanExecutionAllowed(taskId: string): Promise<void> {
+    let planLifecycle: PlanLifecycleService | null = null;
+    try {
+      planLifecycle =
+        this.moduleRef?.get(PlanLifecycleService, { strict: false }) ?? null;
+    } catch {
+      planLifecycle = null;
+    }
+    if (!planLifecycle) {
+      return;
+    }
+    let status: string | null = null;
+    try {
+      status = await planLifecycle.getStatus(taskId);
+      if (status === null) {
+        const ensured = await planLifecycle.autoEnsureRow(taskId);
+        status = ensured?.status ?? null;
+      }
+    } catch (err) {
+      this.logger.warn(
+        `门禁读失败 task=${taskId}，fail-open 放行：${this.describeError(err)}`,
+      );
+      return;
+    }
+    if (status === null || status === 'executing') {
+      return;
+    }
+    throw new Error(
+      `计划未放行：任务 ${taskId} 的计划状态为 ${status}（需 executing，确认开始执行后可派发；review/nudge/wake 类触发不受此限）`,
+    );
   }
 
   // ------------------------------------------------------------------
@@ -3649,6 +3708,7 @@ export class WorkerDispatcher
       channelId: channel.id,
       text: '【自动恢复】检测到会话意外中断，已自动重试，请继续执行未完成的任务',
       targetInstanceId: teamMemberId,
+      kind: 'wake',
     });
   }
 

@@ -157,6 +157,20 @@ const notifyAgentSchema = z
       .describe(
         '派活归属 issue id（is_ 前缀，可选；缺省不硬拦，返回 issueBound:false 提醒；传则 issueBound:true 并透传执行链路）',
       ),
+    kind: z
+      .enum(['execution', 'review', 'nudge', 'wake'])
+      .optional()
+      .describe(
+        '执行分类（缺省 execution：任务维度下要求计划已确认进入 executing，否则 reason=plan-gated 被拦；review/nudge/wake 豁免门禁；内部唤醒传 wake 且永不记账）',
+      ),
+    force: z
+      .boolean()
+      .optional()
+      .describe('强行绕过计划门禁/issue 锁（须同时给非空 forceReason 留审计行，否则仍被拦）'),
+    forceReason: z
+      .string()
+      .optional()
+      .describe('force 绕过的审计原因（落回执行 forceReason 列）'),
   })
   .refine((d) => !!d.taskId || !!d.teamId, {
     message: REQUIRE_TASK_OR_TEAM_MSG,

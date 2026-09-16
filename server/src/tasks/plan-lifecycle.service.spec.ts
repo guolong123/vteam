@@ -112,8 +112,33 @@ describe('PlanLifecycleService', () => {
     });
   });
 
+  describe('getStatus（todo4 门禁读状态）', () => {
+    it('有行→返回 status', async () => {
+      prisma.plan.findUnique.mockResolvedValue({ status: 'executing' });
+
+      await expect(service.getStatus('t_1')).resolves.toBe('executing');
+      expect(prisma.plan.findUnique).toHaveBeenCalledWith({
+        where: { taskId: 't_1' },
+        select: { status: true },
+      });
+    });
+
+    it('无行→返回 null（调用方兜底建行后再门禁）', async () => {
+      prisma.plan.findUnique.mockResolvedValue(null);
+
+      await expect(service.getStatus('t_1')).resolves.toBeNull();
+    });
+
+    it('DB 读失败→上抛（调用方 fail-open + warn，不转 fail-closed）', async () => {
+      prisma.plan.findUnique.mockRejectedValue(new Error('db down'));
+
+      await expect(service.getStatus('t_1')).rejects.toThrow('db down');
+    });
+  });
+
   describe('transition', () => {
-    it('合法目标态→更新', async () => {
+    it('合法目标态→更新并广播 plan.status.<to>（from 取翻转前状态）', async () => {
+      prisma.plan.findUnique.mockResolvedValue({ status: 'approved' });
       prisma.plan.update.mockResolvedValue({
         id: 'pl_1',
         taskId: 't_1',

@@ -329,6 +329,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       channelId: channel.id,
       text,
       targetInstanceId: mainMemberId,
+      kind: 'wake',
     });
   }
 

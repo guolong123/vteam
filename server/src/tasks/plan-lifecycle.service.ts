@@ -73,6 +73,17 @@ export class PlanLifecycleService {
     return created;
   }
 
+  /** 门禁读状态（todo4 执行门禁复用：唯一 plans 表读出口之一）。
+   * 有行→status；无行→null（调用方按需调 autoEnsureRow 兜底建行后再门禁）；
+   * DB 抛错→上抛，由调用方 fail-open + warn（永不转 fail-closed）。 */
+  async getStatus(taskId: string): Promise<string | null> {
+    const row = await this.prisma.plan.findUnique({
+      where: { taskId },
+      select: { status: true },
+    });
+    return row?.status ?? null;
+  }
+
   /** 状态流转（todo11 确认门复用；非法目标态即抛且不写库）。 */
   async transition(
     taskId: string,

@@ -22,7 +22,10 @@ import {
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { WorkerDispatcher } from '../chat/worker-dispatcher';
+import {
+  DispatchExecutionKind,
+  WorkerDispatcher,
+} from '../chat/worker-dispatcher';
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import { FileStorageService } from '../uploads/uploads.service';
 import { WorkerClient } from '../workers/worker.client';
@@ -53,6 +56,12 @@ import {
   containsTeamWideMention,
   MentionThrottle,
 } from '../chat/mention-throttle';
+import {
+  buildMessageReceiptDedupKey,
+  MESSAGE_RECEIPT_KINDS,
+  MESSAGE_RECEIPT_STATUSES,
+} from '../chat/message-receipt.constants';
+import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
 import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
 
 /**
@@ -127,6 +136,8 @@ export interface NotifyAgentResult {
   reason: DispatchReason;
   /** duplicate 拦因回显的原派发消息 id（todo 4 填充）。 */
   origMessageId?: string;
+  /** 阻断时的人读提示（如 plan-gated 的“计划未放行”说明）；成功时缺省。 */
+  hint?: string;
   /** true=本次派发已绑定 issue；false=未带 issueId（提醒，不硬拦）。 */
   issueBound: boolean;
 }
@@ -200,6 +211,11 @@ export class PlatformMcpService {
     @Optional()
     @Inject(SkillsService)
     private readonly skillsService?: SkillsService,
+    // 计划门禁（todo4 执行门禁）：缺省可空——单测/旧装配未提供时门禁 fail-open
+    // 放行；生产装配经 TasksModule（已 import）提供。
+    @Optional()
+    @Inject(PlanLifecycleService)
+    private readonly planLifecycle?: PlanLifecycleService,
   ) {}
 
   /**
@@ -628,6 +644,7 @@ export class PlatformMcpService {
             channelId: channel.id,
             text: args.content,
             targetInstanceId: target,
+            kind: 'wake',
           })
           .catch((err: unknown) =>
             this.logger.error(
@@ -812,6 +829,17 @@ export class PlatformMcpService {
       content: string;
       /** 可选 issue 绑定（派活归属 issue；缺省不硬拦，返回 issueBound:false 提醒）。 */
       issueId?: string;
+      /**
+       * 派发 kind（todo5 节流豁免；todo4 门禁复用同一参数）：
+       * wake/round-notify 为内部派发，免 pair/task 节流预算（预算只约束外部派发）；
+       * 缺省按外部派发计预算。todo4 门禁：仅 'execution'（缺省）走计划门禁，
+       * review/nudge/wake（及 round-notify/未知取值，按内部豁免）不经门禁。
+       */
+      kind?: string;
+      /** 强行绕过门禁（须同时给非空 forceReason 留审计行，否则仍被拦）。 */
+      force?: boolean;
+      /** force 绕过的审计原因（落回执行 forceReason 列）。 */
+      forceReason?: string;
     },
   ): Promise<NotifyAgentResult> {
     const exec = await this.resolveExecContext(ctx, args);
@@ -912,6 +940,67 @@ export class PlatformMcpService {
         issueBound: !!args.issueId,
       };
     }
+    const kind: DispatchExecutionKind =
+      !args.kind || args.kind === 'execution'
+        ? 'execution'
+        : args.kind === 'review'
+          ? 'review'
+          : args.kind === 'nudge'
+            ? 'nudge'
+            : 'wake';
+    const forceReason =
+      args.force === true && typeof args.forceReason === 'string' && args.forceReason.trim()
+        ? args.forceReason.trim()
+        : null;
+    if (args.issueId) {
+      const issueGate = await this.checkIssueDispatchAllowed(
+        args.issueId,
+        args.targetInstanceId,
+      );
+      if (!issueGate.allowed && !forceReason) {
+        this.logger.warn(
+          `[mcp] notify_agent issue 锁拦截 issue=${args.issueId} to=${args.targetInstanceId}（消息已发布）`,
+        );
+        return {
+          messageId: message.id,
+          channelId: channel.id,
+          targetInstanceId: args.targetInstanceId,
+          triggered: false,
+          reason: 'duplicate',
+          ...(issueGate.origMessageId ? { origMessageId: issueGate.origMessageId } : {}),
+          issueBound: true,
+        };
+      }
+    }
+    if (kind === 'execution' && !isTeam && effTaskId) {
+      const planGate = await this.checkPlanExecutionAllowed(effTaskId);
+      if (!planGate.allowed) {
+        if (!forceReason) {
+          this.logger.warn(
+            `[mcp] notify_agent 计划门禁拦截 task=${effTaskId} status=${planGate.status}（消息已发布）`,
+          );
+          return {
+            messageId: message.id,
+            channelId: channel.id,
+            targetInstanceId: args.targetInstanceId,
+            triggered: false,
+            reason: 'plan-gated',
+            hint: `计划未放行：当前计划状态为 ${planGate.status}（需 executing，请确认开始执行后再派发；force=true + 原因可绕过并留审计）`,
+            issueBound: !!args.issueId,
+          };
+        }
+        await this.writeForceAuditReceipt({
+          messageId: message.id,
+          taskId: effTaskId,
+          teamId: notifyTeamId,
+          fromInstanceId: args.selfInstanceId,
+          toInstanceId: args.targetInstanceId,
+          content: args.content,
+          issueId: args.issueId ?? null,
+          forceReason,
+        });
+      }
+    }
     if (isTeam) {
       await this.workerDispatcher.dispatchAgentMention({
         teamId: exec.teamId,
@@ -919,6 +1008,7 @@ export class PlatformMcpService {
         text,
         targetInstanceId: args.targetInstanceId,
         ...(args.issueId ? { issueId: args.issueId } : {}),
+        kind,
       });
     } else {
       await this.workerDispatcher.dispatchAgentMention({
@@ -927,6 +1017,7 @@ export class PlatformMcpService {
         text,
         targetInstanceId: args.targetInstanceId,
         ...(args.issueId ? { issueId: args.issueId } : {}),
+        kind,
       });
     }
 
@@ -938,6 +1029,139 @@ export class PlatformMcpService {
       reason: 'ok',
       issueBound: !!args.issueId,
     };
+  }
+
+  /**
+   * issue 状态锁（todo4 精确语义，对照 issues.constants 五态机）：
+   * open 可派；在途同人（in_progress + 同 assigneeInstanceId）拦并回显原派发消息；
+   * 换人放行；终态（resolved/closed/rejected）视为新一轮放行。
+   * 读错/未知 issue → fail-open 放行 + warn。
+   */
+  private async checkIssueDispatchAllowed(
+    issueId: string,
+    targetInstanceId: string,
+  ): Promise<{ allowed: boolean; origMessageId?: string }> {
+    try {
+      const issue = await this.prisma.issue.findUnique({
+        where: { id: issueId },
+        select: { status: true, assigneeInstanceId: true },
+      });
+      if (
+        !issue ||
+        issue.status !== 'in_progress' ||
+        !issue.assigneeInstanceId ||
+        issue.assigneeInstanceId !== targetInstanceId
+      ) {
+        return { allowed: true };
+      }
+      let origMessageId: string | undefined;
+      try {
+        const prior = await this.prisma.messageReceipt.findFirst({
+          where: { issueId },
+          orderBy: { createdAt: 'desc' },
+          select: { messageId: true },
+        });
+        origMessageId = prior?.messageId ?? undefined;
+      } catch {
+        origMessageId = undefined;
+      }
+      return {
+        allowed: false,
+        ...(origMessageId ? { origMessageId } : {}),
+      };
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] issue 锁读取失败 issue=${issueId}，fail-open 放行：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { allowed: true };
+    }
+  }
+
+  /**
+   * 计划执行门禁读端（todo4 第一道防线；第二道在 dispatchAgentMention 内）。
+   * 仅 plans.status=executing 放行；无行则兜底建行后再门禁；读错/建行失败/
+   * 未装配即 fail-open + warn（永不转 fail-closed）。计划表读写只经计划生命周期服务。
+   */
+  private async checkPlanExecutionAllowed(
+    taskId: string,
+  ): Promise<{ allowed: boolean; status: string | null }> {
+    try {
+      if (!this.planLifecycle) {
+        return { allowed: true, status: null };
+      }
+      let status = await this.planLifecycle.getStatus(taskId);
+      if (status === null) {
+        try {
+          const ensured = await this.planLifecycle.autoEnsureRow(taskId);
+          status = ensured?.status ?? null;
+        } catch (err) {
+          this.logger.warn(
+            `[mcp] plans 兜底建行失败 task=${taskId}，fail-open 放行：${err instanceof Error ? err.message : String(err)}`,
+          );
+          return { allowed: true, status: null };
+        }
+      }
+      if (status === null || status === 'executing') {
+        return { allowed: true, status };
+      }
+      return { allowed: false, status };
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] plans 门禁读取失败 task=${taskId}，fail-open 放行：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { allowed: true, status: null };
+    }
+  }
+
+  /**
+   * force 绕过审计行（todo4）：门禁被 force+原因绕过时记账（kind=dispatch，
+   * forceReason 落库）。wake/round-notify 保留位永不写入——豁免路径不经过本方法。
+   * 写失败仅 warn，不阻断已放行的派发。
+   */
+  private async writeForceAuditReceipt(input: {
+    messageId: string;
+    taskId: string | null;
+    teamId: string | null;
+    fromInstanceId: string;
+    toInstanceId: string;
+    content: string;
+    issueId: string | null;
+    forceReason: string;
+  }): Promise<void> {
+    try {
+      if (!input.teamId) {
+        this.logger.warn(
+          `[mcp] force 审计行缺团队归属 message=${input.messageId}，跳过记账`,
+        );
+        return;
+      }
+      await this.prisma.messageReceipt.create({
+        data: {
+          id: await this.idGen.nextId('mr'),
+          messageId: input.messageId,
+          fromInstanceId: input.fromInstanceId,
+          toInstanceId: input.toInstanceId,
+          taskId: input.taskId,
+          teamId: input.teamId,
+          summary: input.content.slice(0, 100),
+          status: MESSAGE_RECEIPT_STATUSES.pending,
+          dedupKey: buildMessageReceiptDedupKey({
+            fromInstanceId: input.fromInstanceId,
+            toInstanceId: input.toInstanceId,
+            issueId: input.issueId,
+            content: input.content,
+          }),
+          issueId: input.issueId,
+          expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+          kind: MESSAGE_RECEIPT_KINDS.dispatch,
+          forceReason: input.forceReason,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] force 审计行落库失败 message=${input.messageId}（不阻断派发）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
