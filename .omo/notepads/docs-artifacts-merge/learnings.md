@@ -246,3 +246,22 @@ Conventions, patterns, and successful approaches discovered during work on this 
   `t12qa-demo.tsx` 种子保留。
 - web lint 唯一 error 在 gitignored 他波 tmp（`shot-omo3.tmp.cjs`）：查
   `git check-ignore` 定性后不动（删他人 tmp 同样有风险）。
+
+## 2026-09-17 — T13 协议文档增量（orchestrator direct, tiny-doc rationale）
+- 12篇 §10（末尾只增节，不改既有编号）：category 正交声明 + DB-direct 单源 + 原型直读 + 统一站三端点。
+- 09篇 §3.6 表格加 `GET /teams/:id/artifacts` 一行（过滤/分页/taskName 说明，与 T5 实现一致）。
+- 两文件均经 grep 行号复核、无他人写入；保持 uncommitted，随 T13 完成时统一提交。
+- verification.md 必须等 T12 解阻塞（需最终门禁输出 + T12 证据定稿），不可先写。
+
+## 2026-09-17 — T12 adopt in-flight receipt 常量（standalone build 修复）
+- HEAD（2992bca）已含 `platform-mcp.service.ts:1670 fromName:` + `:1942
+  TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN` 两个提交态引用，但定义只活在
+  兄弟波未提交脏文件里 → 干净 HEAD `tsc -p tsconfig.json` 红 2 错（脏树反绿）。
+  修复只抄定义行原文（`task.constants.ts` +68/69、`receipt-nudge.handler.ts`
+  +56/57，各 1 注释 + 1 声明，共 4 行零行为变更），脏文件其余 hunk
+  （如 `TASK_COMPLETION_PREFLIGHT_FAILED`，提交态零引用）一律不动。
+- Stage 手法：`git apply --check`（裸跑以脏树为基必红，属预期）→
+  `git apply --cached --check`（以 index/HEAD 为基）→ `git apply --cached`；
+  绝不 `git add` 目标文件（会连带吞掉兄弟波活 hunk）。
+- 脏树 tsc exit 0；新 commit 纯净 worktree（node_modules symlink）tsc exit 0。
+  Reconcile：兄弟波落地若同形则合流干净，若改形以其为准；回滚 `git revert <hash>`。

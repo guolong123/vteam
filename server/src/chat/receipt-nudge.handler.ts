@@ -41,6 +41,8 @@ export interface ReceiptNudgePayload {
   fromInstanceId: string;
   toInstanceId: string;
   assigneeName?: string | null;
+  /** 发起人显示名（原派发方；缺省回退 fromInstanceId），用于催办文案标明来源。 */
+  fromName?: string | null;
 }
 
 export function buildAutoNudgeText(input: {

@@ -65,6 +65,8 @@ export const TASK_ERRORS = {
   AGENT_NOT_FOUND: 'AGENT_NOT_FOUND',
   /** transitionByAgent：仅主 Agent 实例可流转任务状态（MCP 工具路径，403）。 */
   TASK_STATUS_MAIN_AGENT_ONLY: 'TASK_STATUS_MAIN_AGENT_ONLY',
+  /** transitionByAgent：accept/archive 仅人类用户可执行，Agent 调用直接拒绝（403，fail-closed）。 */
+  TASK_AGENT_COMPLETION_FORBIDDEN: 'TASK_AGENT_COMPLETION_FORBIDDEN',
   TEAM_NOT_FOUND: 'TEAM_NOT_FOUND',
   TEAM_NOT_QUEUE_HEAD: 'TEAM_NOT_QUEUE_HEAD',
   TEAM_REQUIRED: 'TEAM_REQUIRED',
