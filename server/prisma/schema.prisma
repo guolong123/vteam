@@ -821,6 +821,9 @@ model Plan {
   // 定稿门审计（加法-only 可空列，finalize pending_final→approved 消费，命名锁定勿改）
   finalizedBy        String?  @map("finalized_by")
   finalizedAt        DateTime? @map("finalized_at")
+  // 定稿冻结双锚（加法-only 可空列，plan-finalize-actions todo 2 finalize 消费，命名锁定勿改）
+  frozenVersion      String?  @map("frozen_version")
+  frozenHash         String?  @map("frozen_hash")
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 

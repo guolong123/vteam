@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { ReviewRoundService } from '../issues/review-round.service';
+import { computePlanHash, createLedger, embedLedger } from '../issues/review-round-ledger';
 import { WorkerClient } from '../workers/worker.client';
 import { PlanDocsService } from './plan-docs.service';
 
@@ -16,6 +18,7 @@ describe('PlanDocsService', () => {
   let service: PlanDocsService;
   let prisma: any;
   let workerClient: { listPlanFiles: jest.Mock; writePlanFile: jest.Mock };
+  let rounds: { applyRoundUpdate: jest.Mock };
 
   beforeEach(async () => {
     prisma = {
@@ -23,13 +26,16 @@ describe('PlanDocsService', () => {
       team: { findUnique: jest.fn() },
       session: { findFirst: jest.fn() },
       worker: { findUnique: jest.fn() },
+      issue: { findMany: jest.fn() },
     };
     workerClient = { listPlanFiles: jest.fn(), writePlanFile: jest.fn() };
+    rounds = { applyRoundUpdate: jest.fn() };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PlanDocsService,
         { provide: PrismaService, useValue: prisma },
         { provide: WorkerClient, useValue: workerClient },
+        { provide: ReviewRoundService, useValue: rounds },
         {
           provide: ConfigService,
           useValue: { get: jest.fn().mockReturnValue('/data/vteam-worker') },
@@ -192,12 +198,80 @@ describe('PlanDocsService', () => {
     });
   });
 
+  describe('哈希回填钩 writePlanDoc→applyRoundUpdate（todo 2，接线点写死）', () => {
+    it('落盘成功→读内容算 sha1 前 8 写回宿主 issue 账本 planVersion.hash', async () => {
+      happyPath();
+      const content = '# 计划 v0.4\n\n- step\n';
+      workerClient.writePlanFile.mockResolvedValue({
+        name: 'plan.md',
+        updatedAt: '2026-03-02T00:00:00.000Z',
+      });
+      prisma.issue.findMany.mockResolvedValue([
+        {
+          id: 'is_7',
+          description: embedLedger(
+            '派发',
+            createLedger({
+              planVersion: { version: 'v0.4', lines: 10, hash: '' },
+              taskId: 't_1',
+              issueId: 'is_7',
+            }),
+          ),
+        },
+      ]);
+      rounds.applyRoundUpdate.mockResolvedValue({});
+
+      await service.writePlanDoc('t_1', { name: 'plan.md', content });
+
+      expect(prisma.issue.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { taskId: 't_1' } }),
+      );
+      expect(rounds.applyRoundUpdate).toHaveBeenCalledWith('is_7', {
+        planVersion: { hash: computePlanHash(content) },
+      });
+    });
+
+    it('任务无账本宿主→跳过回填但上传仍成功（钩 fail-open）', async () => {
+      happyPath();
+      workerClient.writePlanFile.mockResolvedValue({
+        name: 'plan.md',
+        updatedAt: '2026-03-02T00:00:00.000Z',
+      });
+      prisma.issue.findMany.mockResolvedValue([{ id: 'is_1', description: '纯文本' }]);
+
+      const out = await service.writePlanDoc('t_1', { name: 'plan.md', content: '# x' });
+
+      expect(out.name).toBe('plan.md');
+      expect(rounds.applyRoundUpdate).not.toHaveBeenCalled();
+    });
+
+    it('回填失败→只 warn 不阻断上传返回（钩永不喧宾夺主）', async () => {
+      happyPath();
+      workerClient.writePlanFile.mockResolvedValue({
+        name: 'plan.md',
+        updatedAt: '2026-03-02T00:00:00.000Z',
+      });
+      prisma.issue.findMany.mockResolvedValue([
+        {
+          id: 'is_7',
+          description: embedLedger('派发', createLedger({ issueId: 'is_7' })),
+        },
+      ]);
+      rounds.applyRoundUpdate.mockRejectedValue(new Error('issue down'));
+
+      await expect(
+        service.writePlanDoc('t_1', { name: 'plan.md', content: '# x' }),
+      ).resolves.toMatchObject({ name: 'plan.md' });
+    });
+  });
+
   it('taskDirectory：WORK_DIR 尾斜杠不产生 //tasks（与 worker-dispatcher 拼接一致）', async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PlanDocsService,
         { provide: PrismaService, useValue: prisma },
         { provide: WorkerClient, useValue: workerClient },
+        { provide: ReviewRoundService, useValue: rounds },
         {
           provide: ConfigService,
           useValue: { get: jest.fn().mockReturnValue('/data/vteam-worker/') },

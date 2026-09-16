@@ -3,6 +3,7 @@ import { MessageReceiptsService } from '../chat/message-receipts.service';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { computePlanHash } from '../issues/review-round-ledger';
 import {
   PLAN_LIFECYCLE_ERRORS,
   PLAN_LIFECYCLE_STATUS,
@@ -365,6 +366,7 @@ describe('PlanLifecycleService', () => {
       expect(out.action).toBe('finalize');
       expect(out.idempotent).toBe(false);
       expect(out.plan).toMatchObject({ status: 'approved' });
+      // todo 2 冻结：无账本 mock（prisma.issue 缺省）→回退锚与翻转同行落库
       expect(prisma.plan.update).toHaveBeenCalledWith({
         where: { taskId: 't_1' },
         data: {
@@ -372,6 +374,8 @@ describe('PlanLifecycleService', () => {
           finalizedBy: '成员甲',
           finalizedAt: expect.any(Date),
           rejectReason: null,
+          frozenVersion: 'v0.1',
+          frozenHash: computePlanHash('t_1:v0.1'),
         },
       });
       expect(receipts.emitPlanStatusChanged).toHaveBeenCalledWith({

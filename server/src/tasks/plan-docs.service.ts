@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ReviewRoundService } from '../issues/review-round.service';
+import { computePlanHash, tryParseLedger } from '../issues/review-round-ledger';
 import { PrismaService } from '../prisma/prisma.service';
 import { WorkerClient, WorkerPlanFileInfo } from '../workers/worker.client';
 import { DEFAULT_TASK_WORK_DIR, taskDirOf } from './work-dir.util';
@@ -24,8 +26,11 @@ export interface PlanDocsResult {
 /**
  * 计划文档服务：任务目录 `.opencode/plans/*.md` ↔ opencode agent 的唯一交换点。
  *
- * 设计约束（重要）：**vteam 不维护任何计划状态**。不落库、不建版本、不生成内容；
- * 计划文件是真相，由 opencode agent 自己写（或用户上传），本服务只做搬运：
+ * 设计约束（重要）：**工作区计划文件是起草真相，冻结正式版以 DB+哈希为准**。
+ * 本服务不维护执行态：不落执行状态、不建版本、不生成内容，只做搬运；
+ * 起草阶段计划文件是真相，由 opencode agent 自己写（或用户上传）；
+ * 一经定稿冻结，执行门禁只认冻结版（DB 行 + planVersion.hash 双锚），
+ * 文件侧后续改动须走修订重评小循环并重新冻结方能执行：
  *   - 读：WorkerClient.listPlanFiles → worker GET /plan-files → 任务目录直读
  *   - 写：WorkerClient.writePlanFile → worker POST /plan-file → 落进同一目录
  *
@@ -45,6 +50,9 @@ export class PlanDocsService {
     private readonly prisma: PrismaService,
     private readonly workerClient: WorkerClient,
     config: ConfigService,
+    // todo 2 哈希钩接线：落盘成功后经 applyRoundUpdate 回填 planVersion.hash
+    //（TasksModule imports IssuesModule，无 Nest 环：IssuesModule 只依赖 RealtimeModule）。
+    private readonly rounds: ReviewRoundService,
   ) {
     const workDir = config.get<string>('WORK_DIR');
     this.taskWorkDirRoot =
@@ -101,7 +109,46 @@ export class PlanDocsService {
       name: input.name,
       content: input.content,
     });
+    await this.backfillPlanHash(taskId, input.content);
     return { ...written, directory };
+  }
+
+  /**
+   * 哈希计算钩（todo 2 接线点写死）：计划员修订落盘后读内容算 sha1 前 8，
+   * 经 applyRoundUpdate（串行写唯一入口）回填宿主 issue 账本 planVersion.hash。
+   * hash-only 补丁不碰 version（merge 只升不降）；无宿主/回填失败只 warn，
+   * 永不阻断上传返回（缺失语义由账本层 pending-hash 承接）。
+   */
+  private async backfillPlanHash(taskId: string, content: string): Promise<void> {
+    try {
+      const hostIssueId = await this.findHostIssueId(taskId);
+      if (!hostIssueId) {
+        this.logger.warn(
+          `[plans] 哈希回填跳过 task=${taskId}（无轮次账本宿主 issue，hash 缺失走 pending-hash）`,
+        );
+        return;
+      }
+      await this.rounds.applyRoundUpdate(hostIssueId, {
+        planVersion: { hash: computePlanHash(content) },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[plans] 哈希回填失败 task=${taskId}（上传已落盘）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private async findHostIssueId(taskId: string): Promise<string | null> {
+    const rows = (await this.prisma.issue.findMany({
+      where: { taskId },
+      orderBy: { updatedAt: 'desc' },
+      take: 20,
+      select: { id: true, description: true },
+    })) as unknown as Array<{ id: string; description?: string | null }>;
+    for (const row of rows ?? []) {
+      if (tryParseLedger(row?.description ?? null)) return row.id;
+    }
+    return null;
   }
 
   /**

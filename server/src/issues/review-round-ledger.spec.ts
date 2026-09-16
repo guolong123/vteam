@@ -7,6 +7,7 @@ import {
   mergeLedger,
   parseLedger,
   resolveVerdict,
+  tryParseLedger,
 } from './review-round-ledger';
 
 const BASE = () =>
@@ -75,6 +76,21 @@ describe('review-round-ledger', () => {
         createHash('sha1').update(content, 'utf8').digest('hex').slice(0, 8),
       );
       expect(computePlanHash(content)).toHaveLength(8);
+    });
+  });
+
+  describe('tryParseLedger（todo 2 finalize/hook 只读复用：永不抛错）', () => {
+    it('有账本→解析返回；无账本/null→null', () => {
+      const text = embedLedger('派发', BASE());
+      expect(tryParseLedger(text)?.round).toBe(2);
+      expect(tryParseLedger('纯人类文本')).toBeNull();
+      expect(tryParseLedger(null)).toBeNull();
+      expect(tryParseLedger(undefined)).toBeNull();
+    });
+
+    it('机器段损坏→null（不抛 CORRUPT，调用方跳过该 issue 继续找宿主）', () => {
+      const corrupt = `${REVIEW_ROUND_DELIMITER}\n\`\`\`json\n{broken\n\`\`\``;
+      expect(tryParseLedger(corrupt)).toBeNull();
     });
   });
 

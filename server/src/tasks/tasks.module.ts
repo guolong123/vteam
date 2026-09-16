@@ -1,5 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { ChatModule } from '../chat/chat.module';
+import { IssuesModule } from '../issues/issues.module';
 import { MessageChannelsModule } from '../message-channels/message-channels.module';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { TeamMembershipGuard } from '../common/guards/team-membership.guard';
@@ -27,6 +28,8 @@ import { PlanDocsService } from './plan-docs.service';
  *   权限点，成员过滤之上再按矩阵判定（admin all:true 全放行 / member all:false 写拒）。
  * - ChatModule（功能 1）：TaskProgressionScheduler 注入 WorkerDispatcher（dispatchAgentMention
  *   定向主 Agent 巡检/托管确认）；ChatModule imports Workers/Realtime/Artifacts，不反向依赖本模块，无环。
+ * - IssuesModule（todo 2 哈希钩）：PlanDocsService 注入 ReviewRoundService 做
+ *   writePlanDoc→applyRoundUpdate 回填；IssuesModule 仅依赖 RealtimeModule，不反向依赖本模块，无环。
  * - TaskProgressionScheduler（本模块 provider）：主 Agent 定期巡检调度 + 托管确认路由。
  */
 @Module({
@@ -34,6 +37,7 @@ import { PlanDocsService } from './plan-docs.service';
     RealtimeModule,
     WorkersModule,
     ChatModule,
+    IssuesModule,
     forwardRef(() => MessageChannelsModule),
   ],
   controllers: [

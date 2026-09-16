@@ -18,6 +18,12 @@ import {
 import { TASK_ERRORS } from '../common/constants/task.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import {
+  ReviewRoundLedger,
+  SupersededReceipt,
+  computePlanHash,
+  tryParseLedger,
+} from '../issues/review-round-ledger';
 
 /**
  * 计划生命周期状态（schema.prisma Plan.status 字符串枚举，
@@ -61,6 +67,35 @@ export const PLAN_LIFECYCLE_ERRORS = {
 /** 计划文件仅展示提示（GET plan 真值源声明：状态一律读 DB，文件 divergence 时告警）。 */
 export const PLAN_FILE_DISPLAY_ONLY_WARNING =
   '计划文件仅展示用，状态以数据库 plans.status 为准';
+
+/**
+ * 定稿冻结锚（plan-finalize-actions todo 2，dual-anchor 落库形态）。
+ * version/hash 取自任务轮次账本 planVersion（文档哈希 triplet sha1-8 口径，
+ * 见 review-round-ledger computePlanHash）；无账本时取回退锚（见 resolveFrozenAnchor）。
+ */
+export interface FrozenAnchor {
+  version: string;
+  hash: string;
+}
+
+/** 无账本回退版本（与 createLedger 缺省 version 同口径：首版）。 */
+export const PLAN_FROZEN_FALLBACK_VERSION = 'v0.1';
+
+/**
+ * 解析冻结锚：账本 planVersion.version/hash 非空即用账本值；
+ * 账本缺失/hash 为空则回退——版本取回退常量，哈希取 sha1-8(taskId:version)
+ * 确定性回填（triplet 算法复用，不引入新算法），保证并发双 finalize
+ * 即使同时落库也收敛到同一冻结行。
+ */
+export function resolveFrozenAnchor(
+  taskId: string,
+  ledger: ReviewRoundLedger | null,
+): FrozenAnchor {
+  const version =
+    ledger?.planVersion.version?.trim() || PLAN_FROZEN_FALLBACK_VERSION;
+  const hash = ledger?.planVersion.hash?.trim() || computePlanHash(`${taskId}:${version}`);
+  return { version, hash };
+}
 
 /** 确认门动作（finalize=确认定稿；confirm=开始执行；reject=打回重修）。 */
 export type PlanConfirmAction = 'finalize' | 'confirm' | 'reject';
@@ -129,7 +164,9 @@ export class PlanLifecycleService {
     return row?.status ?? null;
   }
 
-  /** 状态流转（todo11 确认门复用；非法目标态即抛且不写库）。 */
+  /** 状态流转（todo11 确认门复用；非法目标态即抛且不写库）。
+   * frozenVersion/frozenHash 仅 finalize 定稿冻结时携带（加法可选，不传则
+   * data 形态与旧调用完全一致）；收敛门 pending_final 翻转等其他调用方不受影响。 */
   async transition(
     taskId: string,
     to: string,
@@ -139,6 +176,8 @@ export class PlanLifecycleService {
       finalizedBy?: string | null;
       finalizedAt?: Date | null;
       rejectReason?: string | null;
+      frozenVersion?: string | null;
+      frozenHash?: string | null;
     },
   ) {
     this.verifyEnum(to);
@@ -165,6 +204,12 @@ export class PlanLifecycleService {
         ...(opts?.rejectReason !== undefined
           ? { rejectReason: opts.rejectReason }
           : {}),
+        ...(opts?.frozenVersion !== undefined
+          ? { frozenVersion: opts.frozenVersion }
+          : {}),
+        ...(opts?.frozenHash !== undefined
+          ? { frozenHash: opts.frozenHash }
+          : {}),
       },
     });
     try {
@@ -184,6 +229,15 @@ export class PlanLifecycleService {
   async getPlan(taskId: string): Promise<Plan | null> {
     await this.requireTask(taskId);
     return this.prisma.plan.findUnique({ where: { taskId } });
+  }
+
+  /**
+   * 归档查询（todo 2：superseded 回执保留可查，复用轮次账本，不另建表不新写）。
+   * 读任务 issues 取首个可解析账本的 superseded；无账本/DB 异常→空数组（可查语义永不抛错）。
+   */
+  async listArchivedReceipts(taskId: string): Promise<SupersededReceipt[]> {
+    const ledger = await this.readTaskLedger(taskId);
+    return ledger?.superseded ? [...ledger.superseded] : [];
   }
 
   async confirmPlan(
@@ -226,6 +280,13 @@ export class PlanLifecycleService {
     return { plan, idempotent: false, action: 'confirm' };
   }
 
+  /**
+   * 定稿确认（pending_final→approved，用户显式定稿门；已 approved 二次调用幂等）。
+   * todo 2 append-only 三件套（transition 骨架与错态码不动）：
+   * 冻结——读任务轮次账本 planVersion 得冻结锚，与翻转同行写 frozenVersion+frozenHash；
+   * 归档——superseded 回执随账本保留可查（listArchivedReceipts 只读复用，不另建表）；
+   * 通告——系统消息同通道播基线（含版本/哈希/定稿人）+ SSE 基线事件同载荷。
+   */
   async finalizePlan(
     taskId: string,
     input: {
@@ -246,6 +307,7 @@ export class PlanLifecycleService {
         details: { current: row.status },
       });
     }
+    const anchor = resolveFrozenAnchor(taskId, await this.readTaskLedger(taskId));
     const plan = await this.transition(
       taskId,
       PLAN_LIFECYCLE_STATUS.approved,
@@ -253,13 +315,16 @@ export class PlanLifecycleService {
         finalizedBy: actor,
         finalizedAt: new Date(),
         rejectReason: null,
+        frozenVersion: anchor.version,
+        frozenHash: anchor.hash,
       },
     );
     await this.postPlanSystemMessage(
       taskId,
       task.teamId,
-      `计划已由 ${actor} 确认定稿（pending_final → approved）。开始执行另需用户确认，确认前不得派发执行类工作。`,
+      `计划已由 ${actor} 确认定稿（pending_final → approved），冻结基线 ${anchor.version}（hash ${anchor.hash}）。开始执行另需用户确认，确认前不得派发执行类工作。`,
     );
+    await this.broadcastFinalizeNotice(taskId, task.teamId, anchor, actor);
     return { plan, idempotent: false, action: 'finalize' };
   }
 
@@ -361,6 +426,64 @@ export class PlanLifecycleService {
     const task = await this.requireTask(taskId);
     const row = await this.autoEnsureRow(taskId);
     return { task, row: row as unknown as Plan };
+  }
+
+  /**
+   * 读任务轮次账本（todo 2 冻结/归档只读复用）：按更新时间倒序扫任务 issues，
+   * 首个可解析账本即宿主；无账本/损坏/DB 异常→null（调用方取回退锚/空归档，永不阻断翻转）。
+   */
+  private async readTaskLedger(taskId: string): Promise<ReviewRoundLedger | null> {
+    try {
+      const issues = (await this.prisma.issue.findMany({
+        where: { taskId },
+        orderBy: { updatedAt: 'desc' },
+        take: 20,
+        select: { description: true },
+      })) as unknown as Array<{ description?: string | null }>;
+      for (const issue of issues ?? []) {
+        const ledger = tryParseLedger(issue?.description ?? null);
+        if (ledger) return ledger;
+      }
+      return null;
+    } catch (err) {
+      this.logger.warn(
+        `[plans] 轮次账本读取失败 task=${taskId}（取回退冻结锚）：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * 定稿基线 SSE 事件（todo 2 通告一半）：复用 plan.status.approved 通道
+   * （订阅清单与事件数不断言新增，event.constants.spec 零改动），载荷扩展
+   * 冻结版本/哈希/定稿人；无归属团队则跳过，失败只 warn（翻转已落库）。
+   */
+  private async broadcastFinalizeNotice(
+    taskId: string,
+    teamId: string | null,
+    anchor: FrozenAnchor,
+    finalizedBy: string,
+  ): Promise<void> {
+    if (!teamId) return;
+    try {
+      await this.realtime.broadcast(
+        EVENT_TYPES.PLAN_STATUS_APPROVED,
+        {
+          taskId,
+          teamId,
+          from: PLAN_LIFECYCLE_STATUS.pending_final,
+          to: PLAN_LIFECYCLE_STATUS.approved,
+          frozenVersion: anchor.version,
+          frozenHash: anchor.hash,
+          finalizedBy,
+        },
+        { type: 'team', id: teamId },
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[plans] 定稿基线事件广播失败 task=${taskId}（翻转已落库）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private async postPlanSystemMessage(

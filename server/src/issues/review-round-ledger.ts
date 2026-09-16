@@ -218,6 +218,21 @@ export function parseLedger(
   return raw;
 }
 
+/**
+ * 容错账本读取（plan-finalize-actions todo 2 只读复用）：
+ * 无机器段/机器段损坏一律返回 null，永不抛错——finalize 冻结与归档查询
+ * 遍历任务 issues 找宿主时跳过损坏行，不阻断定稿翻转。
+ */
+export function tryParseLedger(
+  description: string | null | undefined,
+): ReviewRoundLedger | null {
+  try {
+    return parseLedger(description);
+  } catch {
+    return null;
+  }
+}
+
 function assertLedger(raw: unknown): asserts raw is ReviewRoundLedger {
   const valid =
     typeof raw === 'object' &&
