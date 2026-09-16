@@ -4,8 +4,9 @@ import React, { useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
+import { useAuthStore } from "@/lib/stores/authStore";
 import { teamsApi, type TeamDto, type TeamQueueDto } from "@/src/api/teams";
-import { AgentAvatar } from "@/src/components/ui";
+import { AgentAvatar, ConfirmDialog } from "@/src/components/ui";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import { PlanDocModal, type PlanDocContent } from "@/src/components/teams/PlanDocModal";
 import {
@@ -414,6 +415,218 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
 }
 
 /* ------------------------------------------------------------------ */
+/* 计划状态块（todo12：DB 真值源 GET /tasks/:id/plan，文件仅展示）       */
+/* ------------------------------------------------------------------ */
+/** GET /tasks/:id/plan 响应（todo11：status 为 DB plans.status 真值）。 */
+interface PlanStatusResponse {
+  plan: { status?: string | null; confirmedBy?: string | null; confirmedAt?: string | null; rejectReason?: string | null } | null;
+  status: string | null;
+  source?: string;
+  warning?: string;
+}
+
+/** 计划四态徽标（修订中灰 / 待执行琥珀闪烁 / 执行中蓝 / 完成绿；DB 状态映射）。 */
+const PLAN_STATUS_BADGE: Record<string, { label: string; color: string; bg: string; border: string; flash: boolean }> = {
+  draft: { label: "修订中", color: neutral[500], bg: neutral[100], border: neutral[200], flash: false },
+  reviewing: { label: "修订中", color: neutral[500], bg: neutral[100], border: neutral[200], flash: false },
+  rejected: { label: "修订中", color: neutral[500], bg: neutral[100], border: neutral[200], flash: false },
+  approved: { label: "待执行", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)", flash: true },
+  executing: { label: "执行中", color: "#0D9488", bg: "rgba(13,148,136,0.08)", border: "rgba(13,148,136,0.22)", flash: false },
+  completed: { label: "完成", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)", flash: false },
+};
+const PLAN_STATUS_UNKNOWN = { label: "未知", color: neutral[500], bg: neutral[100], border: neutral[200], flash: false };
+
+/** 评审轮次账本前端最小镜像（只读解析展示用；写口径见服务端 review-round-ledger.ts）。 */
+interface RoundLedgerView {
+  round: number;
+  version: string;
+  expected: string[];
+  received: Record<string, { verdict?: string; msgId?: string; version?: string }>;
+}
+/** issue 描述内机器段分隔符（逐字节对齐服务端 REVIEW_ROUND_DELIMITER）。 */
+const REVIEW_ROUND_DELIMITER = "<!-- REVIEW-ROUND-JSON -->";
+function parseRoundLedger(description: unknown): RoundLedgerView | null {
+  if (typeof description !== "string" || !description.includes(REVIEW_ROUND_DELIMITER)) return null;
+  const tail = description.slice(description.indexOf(REVIEW_ROUND_DELIMITER) + REVIEW_ROUND_DELIMITER.length);
+  const m = /```json\s*([\s\S]*?)```/.exec(tail);
+  if (!m) return null;
+  try {
+    const raw = JSON.parse(m[1]) as Partial<RoundLedgerView> & { schemaVersion?: unknown; planVersion?: { version?: unknown } };
+    if (raw?.schemaVersion !== 1 || typeof raw?.round !== "number") return null;
+    if (!Array.isArray(raw?.expected) || typeof raw?.received !== "object" || !raw?.received) return null;
+    const version = typeof raw?.planVersion?.version === "string" ? raw.planVersion.version : "v?";
+    return { round: raw.round, version, expected: raw.expected as string[], received: raw.received as RoundLedgerView["received"] };
+  } catch {
+    return null;
+  }
+}
+function shortMemberId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 10)}…` : id;
+}
+
+/**
+ * 计划状态块（计划 Tab 顶部）：状态徽 + 版本轮次行 + 轮次进度条（缺席点名）
+ * + approved 态成员确认按钮（二次确认）+ executing 态执行清单（issue 聚合）。
+ * 状态一律读 GET /tasks/:id/plan（DB 真值）；文件列表仅展示，不参与状态判定。
+ */
+function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
+  taskId: string; team: any; agents: any[]; issuesQuery: any;
+}) {
+  const queryClient = useQueryClient();
+  const viewer = useAuthStore((s: any) => s.user);
+  /** 成员可见性：与会话页成员操作同口径（登录用户即成员上下文；未登录不展示确认入口）。 */
+  const isMember = !!viewer?.id;
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+
+  const planQuery = useQuery({
+    queryKey: ["task", taskId, "plan"],
+    queryFn: () => api.get<PlanStatusResponse>(`/tasks/${taskId}/plan`),
+    enabled: !!taskId && isMember,
+    refetchInterval: 10_000,
+  });
+  const status: string | null = planQuery.data?.status ?? planQuery.data?.plan?.status ?? null;
+  const badge = (status ? PLAN_STATUS_BADGE[status] : undefined) ?? PLAN_STATUS_UNKNOWN;
+
+  const confirmMutation = useMutation({
+    mutationFn: () => api.post(`/tasks/${taskId}/plan/confirm`, {}),
+    onSuccess: () => {
+      setConfirmError(null);
+      setConfirmOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["task", taskId, "plan"] });
+    },
+    onError: (err) => setConfirmError(isApiError(err) ? err.message : "确认失败"),
+  });
+
+  /** 轮次账本：从 issue 描述机器段聚合，取最高轮次（同轮取回执最多者）。 */
+  const issues: any[] = issuesQuery?.data?.items ?? [];
+  let ledger: RoundLedgerView | null = null;
+  for (const it of issues) {
+    const parsed = parseRoundLedger((it as { description?: unknown })?.description);
+    if (!parsed) continue;
+    const parsedN = Object.keys(parsed.received ?? {}).length;
+    const curN = ledger ? Object.keys(ledger.received ?? {}).length : -1;
+    if (!ledger || parsed.round > ledger.round || (parsed.round === ledger.round && parsedN > curN)) ledger = parsed;
+  }
+  const expected: string[] = ledger?.expected ?? [];
+  const receivedKeys = Object.keys(ledger?.received ?? {});
+  const receivedN = receivedKeys.length;
+  const expectedN = expected.length;
+  const missing = expected.filter((m) => !receivedKeys.includes(m));
+  const nameOf = (id: string): string => {
+    const tm = (team?.members ?? []).find((m: any) => m?.id === id);
+    if (tm) return tm.alias ?? tm.agent?.name ?? shortMemberId(id);
+    const ag = (agents ?? []).find((a: any) => (a?.instanceId ?? a?.id) === id);
+    if (ag) return ag.name ?? shortMemberId(id);
+    return shortMemberId(id);
+  };
+  /** 版本轮次行：vX·RX·n/N（版本号/轮次/已收回执/期望评审人）。 */
+  const versionLine = ledger ? `${ledger.version}·R${ledger.round}·${receivedN}/${expectedN}` : "暂无评审轮次";
+  /** 确认按钮仅 approved + 成员上下文渲染（隐藏而非禁用）。 */
+  const showConfirm = status === "approved" && isMember;
+  /** 执行清单仅 executing 态渲染（读 issue 聚合）。 */
+  const showChecklist = status === "executing";
+  const issueCounts: Record<string, number> = { open: 0, in_progress: 0, resolved: 0, closed: 0, rejected: 0 };
+  for (const it of issues) {
+    const st = (it as { status?: string })?.status;
+    if (st && st in issueCounts) issueCounts[st] += 1;
+  }
+  const progressPct = expectedN > 0 ? Math.round((receivedN / expectedN) * 100) : 0;
+
+  return (
+    <>
+      <div data-testid="plan-status-block" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
+        <style>{`@keyframes plan-badge-flash {0%,100%{opacity:1}50%{opacity:.45}}`}</style>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>计划状态</span>
+          {planQuery.isPending ? (
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>加载中…</span>
+          ) : (
+            <span
+              data-testid="plan-status-badge"
+              data-status={status ?? "unknown"}
+              style={{ fontSize: fontSize.xs, fontWeight: 600, color: badge.color, backgroundColor: badge.bg, border: `1px solid ${badge.border}`, padding: "1px 8px", borderRadius: radius.pill, whiteSpace: "nowrap", animation: badge.flash ? "plan-badge-flash 1.2s ease-in-out infinite" : undefined }}
+            >
+              {badge.label}
+            </span>
+          )}
+        </div>
+        {planQuery.isError ? (
+          <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>计划状态暂不可用（文件列表仅展示，不代表状态）</div>
+        ) : (
+          <div data-testid="plan-version-line" style={{ fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono }}>{versionLine}</div>
+        )}
+        {ledger ? (
+          <div data-testid="plan-round-progress" data-received={receivedN} data-expected={expectedN} style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+            <div style={{ height: 6, borderRadius: radius.pill, backgroundColor: neutral[100], overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${progressPct}%`, borderRadius: radius.pill, backgroundColor: "#0D9488" }} />
+            </div>
+            <div style={{ fontSize: fontSize.xs, color: neutral[500], lineHeight: 1.6 }}>
+              {missing.length > 0
+                ? `待 ${missing.map(nameOf).join("、")} 回执（${receivedN}/${expectedN}）`
+                : expectedN > 0 ? `已收齐 ${expectedN}/${expectedN}，可修订` : "暂无评审人"}
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无评审轮次账本（派发评审后自动出现）</div>
+        )}
+        {showConfirm && (
+          <button
+            type="button"
+            data-testid="plan-confirm-btn"
+            disabled={confirmMutation.isPending}
+            onClick={() => { setConfirmError(null); setConfirmOpen(true); }}
+            style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: confirmMutation.isPending ? "default" : "pointer", opacity: confirmMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body }}
+          >
+            {confirmMutation.isPending ? "确认中…" : "确认开始执行"}
+          </button>
+        )}
+        {confirmError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{confirmError}</div>}
+      </div>
+      {showChecklist && (
+        <div data-testid="plan-checklist" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>执行清单</span>
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+              共 {issues.length} 项 · 待处理 {issueCounts.open} · 进行中 {issueCounts.in_progress} · 已解决 {issueCounts.resolved} · 已关闭 {issueCounts.closed} · 已拒绝 {issueCounts.rejected}
+            </span>
+          </div>
+          {issues.length === 0 ? (
+            <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无 Issue（执行项将随派发自动出现）</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+              {issues.map((it: any) => {
+                const st = (it?.status ?? "open") as keyof typeof ISSUE_STATUS_BADGE;
+                const b = ISSUE_STATUS_BADGE[st] ?? ISSUE_STATUS_BADGE.open;
+                return (
+                  <div key={it?.id ?? it?.title} style={{ display: "flex", alignItems: "center", gap: space.sm, fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}>
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it?.title ?? it?.id}</span>
+                    <span style={{ flexShrink: 0, whiteSpace: "nowrap", fontSize: 10, color: b.color, backgroundColor: b.bg, border: `1px solid ${b.border}`, borderRadius: radius.pill, padding: "0 6px", fontWeight: 600 }}>{b.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+      {/* 二次确认：复用 ConfirmDialog（非危险走青色确认），遮罩/Esc 关闭对齐既有模式 */}
+      <ConfirmDialog
+        open={confirmOpen}
+        testid="plan-confirm"
+        danger={false}
+        title="确认开始执行"
+        description="确认后计划进入执行态（approved → executing），PM 将续推执行任务。该操作不可撤销。"
+        confirmLabel="确认开始执行"
+        pendingLabel="确认中…"
+        submitting={confirmMutation.isPending}
+        onClose={() => { if (!confirmMutation.isPending) setConfirmOpen(false); }}
+        onConfirm={() => confirmMutation.mutate()}
+      />
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* 任务子 Tab                                                          */
 /* ------------------------------------------------------------------ */
 /** opencode todo 步骤项（对齐 GET /tasks/:id/plan-steps → steps[]）。 */
@@ -503,7 +716,9 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
           </div>
         )}
         {subTab === "plan" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
+          <div style={{ position: "relative", display: "flex", flexDirection: "column", gap: space.lg }}>
+            {/* 计划状态（DB 真值源 GET tasks/:id/plan；文件列表仅展示，不参与状态判定） */}
+            <PlanStatusBlock taskId={taskId} team={team} agents={agents} issuesQuery={issuesQuery} />
             <div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: space.sm }}>
                 <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>计划文档</span>

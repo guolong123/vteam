@@ -1,0 +1,26 @@
+{
+  "todo": 12,
+  "asserts": {
+    "draft": {
+      "badge": "修订中",
+      "versionLine": "v3·R1·1/3",
+      "progress": "待 开发者、测试 回执（1/3）",
+      "confirmBtn": 0,
+      "checklist": 0
+    },
+    "approved": {
+      "badge": "待执行",
+      "confirmFlow": "modal→POST→executing",
+      "afterConfirm": "执行中"
+    },
+    "executing": {
+      "badge": "执行中",
+      "checklistSummary": "共 3 项 · 待处理 1 · 进行中 1 · 已解决 1 · 已关闭 0 · 已拒绝 0"
+    },
+    "completed": {
+      "badge": "完成",
+      "confirmBtn": 0,
+      "checklist": 0
+    }
+  }
+}
