@@ -17,7 +17,7 @@ import {
   ARTIFACT_ERRORS,
   ARTIFACT_TYPES,
 } from './artifacts.constants';
-import { QueryArtifactsDto } from './dto/artifact.dto';
+import { QueryArtifactsDto, QueryTeamArtifactsDto } from './dto/artifact.dto';
 import { FileStorageService } from '../uploads/uploads.service';
 import { DocsMirrorService } from '../docs-site/docs-mirror.service';
 
@@ -98,7 +98,8 @@ export function validateArtifactDeclaration(input: {
   ) {
     return {
       valid: false,
-      reason: '非法声明：category 须为需求/设计/实现/测试用例/测试报告/运维/其他其一',
+      reason:
+        '非法声明：category 须为需求/设计/实现/测试用例/测试报告/运维/其他其一',
     };
   }
   return { valid: true };
@@ -565,6 +566,91 @@ export class ArtifactsService implements OnModuleInit {
     const items = filtered
       .slice((page - 1) * pageSize, page * pageSize)
       .map((r) => this.toArtifactListItem(r.artifact, r.current));
+
+    return { items, total, page, pageSize };
+  }
+
+  /**
+   * GET /teams/:id/artifacts：团队聚合产出物列表（docs-artifacts-merge T5）。
+   * 团队内全部任务的扁平列表，where/accepted/分页形状与 findByTask 同构
+   * （task.teamId 约束 + 同款 acceptedFlag 内存过滤 + 同款 ordering），
+   * 返回项 = toArtifactListItem + taskName（任务标题一次查询映射，无逐行查询）。
+   * 未知团队 → 404 TEAM_NOT_FOUND；非本团队 taskId 过滤按空集返回。
+   */
+  async findByTeam(teamId: string, query: QueryTeamArtifactsDto = {}) {
+    const team = await (this.prisma as any).team.findUnique({
+      where: { id: teamId },
+      select: { id: true },
+    });
+    if (!team) {
+      throw new NotFoundException({
+        code: 'TEAM_NOT_FOUND',
+        message: `团队 ${teamId} 不存在`,
+      });
+    }
+    const page = this.normalizePage(query.page);
+    const pageSize = this.normalizePageSize(query.pageSize);
+    const accepted =
+      query.accepted === undefined ? undefined : query.accepted === 'true';
+
+    const tasks = await (this.prisma as any).task.findMany({
+      where: { teamId },
+      select: { id: true, title: true },
+    });
+    const titleByTask = new Map<string, string>(
+      (tasks as { id: string; title: string }[]).map((t) => [t.id, t.title]),
+    );
+    let taskIds = [...titleByTask.keys()];
+    if (query.taskId) {
+      taskIds = taskIds.filter((id) => id === query.taskId);
+    }
+    if (taskIds.length === 0) {
+      return { items: [], total: 0, page, pageSize };
+    }
+
+    const artifacts = await this.prisma.artifact.findMany({
+      where: {
+        taskId: { in: taskIds },
+        ...(query.type ? { type: query.type } : {}),
+        ...(query.category ? { category: query.category } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (artifacts.length === 0) {
+      return { items: [], total: 0, page, pageSize };
+    }
+
+    const versions = await this.prisma.artifactVersion.findMany({
+      where: { artifactId: { in: artifacts.map((a) => a.id) } },
+    });
+    const currentByArtifact = new Map<string, (typeof versions)[number]>();
+    for (const v of versions) {
+      const art = artifacts.find((a) => a.id === v.artifactId);
+      if (art && v.version === art.currentVersion) {
+        currentByArtifact.set(v.artifactId, v);
+      }
+    }
+
+    const rows = artifacts.map((artifact) => ({
+      artifact,
+      current: currentByArtifact.get(artifact.id) ?? null,
+    }));
+    const filtered =
+      accepted === undefined
+        ? rows
+        : rows.filter((r) =>
+            accepted
+              ? r.current?.acceptedFlag === true
+              : r.current?.acceptedFlag === false,
+          );
+
+    const total = filtered.length;
+    const items = filtered
+      .slice((page - 1) * pageSize, page * pageSize)
+      .map((r) => ({
+        ...this.toArtifactListItem(r.artifact, r.current),
+        taskName: titleByTask.get(r.artifact.taskId) ?? null,
+      }));
 
     return { items, total, page, pageSize };
   }

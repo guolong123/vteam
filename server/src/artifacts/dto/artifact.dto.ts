@@ -94,6 +94,21 @@ export class QueryArtifactsDto {
   pageSize?: number;
 }
 
+/**
+ * GET /teams/:id/artifacts 查询参数（docs-artifacts-merge T5 团队聚合端点）。
+ * 复用 QueryArtifactsDto 的 type/category/accepted/分页语义（page 默认 1、
+ * pageSize 默认 20 上限 100 超限截断），仅追加可选 taskId（收窄到团队内单任务）。
+ */
+export class QueryTeamArtifactsDto extends QueryArtifactsDto {
+  @ApiPropertyOptional({
+    description:
+      '任务 id（缺省返回团队全部任务产出物；非本团队任务 id 按空集返回）',
+  })
+  @IsOptional()
+  @IsString()
+  taskId?: string;
+}
+
 /** POST /artifacts/:id/restore body（T5 append-as-new：历史版本复制为新当前版本）。 */
 export class RestoreArtifactDto {
   @ApiProperty({ description: '待恢复的历史版本号（从 1 起）', minimum: 1 })

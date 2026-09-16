@@ -2,7 +2,9 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
+  NotFoundException,
   Param,
   ParseIntPipe,
   Post,
@@ -11,11 +13,18 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UseGuards } from '@nestjs/common';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
+import {
+  AuthenticatedUser,
+  CurrentUser,
+} from '../common/decorators/current-user.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
+import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
+import { PrismaService } from '../prisma/prisma.service';
 import { ArtifactsService } from './artifacts.service';
 import {
   CreateArtifactDto,
   QueryArtifactsDto,
+  QueryTeamArtifactsDto,
   RestoreArtifactDto,
 } from './dto/artifact.dto';
 
@@ -33,7 +42,30 @@ import {
 @ApiBearerAuth()
 @Controller()
 export class ArtifactsController {
-  constructor(private readonly artifactsService: ArtifactsService) {}
+  constructor(
+    private readonly artifactsService: ArtifactsService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  /**
+   * 团队聚合产出物列表（docs-artifacts-merge T5，替代前端 per-task fan-out）。
+   * GET /api/v1/teams/:id/artifacts?taskId=&type=&category=&accepted=&page=&pageSize=
+   *   → 200 {items: [列表项 + taskName], total, page, pageSize}
+   * 守卫：PermissionGuard + artifacts.view；成员域校验对齐任务端点反查语义
+   * （团队不存在 → 404 TEAM_NOT_FOUND；非成员 → 403 PERMISSION_TEAM_NOT_MEMBER）。
+   */
+  @Get('teams/:id/artifacts')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('artifacts.view')
+  @ApiOperation({ summary: '团队产出物聚合列表（跨任务 + 筛选 + 分页）' })
+  async findByTeam(
+    @Param('id') id: string,
+    @Query() query: QueryTeamArtifactsDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    await this.assertTeamMember(id, user.id);
+    return this.artifactsService.findByTeam(id, query);
+  }
 
   /**
    * 任务文档库列表（12 篇 §6.1 FR-44）。
@@ -124,5 +156,32 @@ export class ArtifactsController {
   async remove(@Param('id') id: string) {
     await this.artifactsService.remove(id);
     return { deleted: true };
+  }
+
+  /** 团队成员域校验（questions.controller 同链）：未知团队 404，非成员 403。 */
+  private async assertTeamMember(
+    teamId: string,
+    userId: string,
+  ): Promise<void> {
+    const team = await (this.prisma as any).team.findUnique({
+      where: { id: teamId },
+      select: { id: true },
+    });
+    if (!team) {
+      throw new NotFoundException({
+        code: 'TEAM_NOT_FOUND',
+        message: `团队 ${teamId} 不存在`,
+      });
+    }
+    const member = await (this.prisma as any).teamUserMember.findUnique({
+      where: { teamId_userId: { teamId, userId } },
+      select: { id: true },
+    });
+    if (!member) {
+      throw new ForbiddenException({
+        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        message: '您不是该团队成员',
+      });
+    }
   }
 }

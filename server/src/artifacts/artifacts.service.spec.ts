@@ -47,7 +47,11 @@ describe('ArtifactsService', () => {
         findMany: jest.fn(),
         create: jest.fn(),
       },
-      task: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      task: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        findMany: jest.fn(),
+      },
+      team: { findUnique: jest.fn() },
       $transaction: jest.fn((cb: any) => cb(prisma)),
     };
     return new ArtifactsService(prisma as any, idGen as any, realtime as any);
@@ -1133,7 +1137,8 @@ describe('ArtifactsService', () => {
       expect(result.fileSize).toBeNull();
     });
 
-    it('FILE-02：text 版本（filePath=null）→ 不附加 fileUrl 派生字段', async () => {      prisma.artifactVersion.findFirst.mockResolvedValue({
+    it('FILE-02：text 版本（filePath=null）→ 不附加 fileUrl 派生字段', async () => {
+      prisma.artifactVersion.findFirst.mockResolvedValue({
         id: 'artv_0000000001',
         artifactId: 'art_0000000001',
         version: 1,
@@ -1502,6 +1507,254 @@ describe('ArtifactsService', () => {
         where: { id: 'art_0000000001' },
         data: { currentVersion: 2 },
       });
+    });
+  });
+
+  describe('findByTeam（GET /teams/:id/artifacts，docs-artifacts-merge T5）', () => {
+    const teamTasks = [
+      { id: 't_0000000001', title: '任务一' },
+      { id: 't_0000000002', title: '任务二' },
+    ];
+    const artRow = (id: string, taskId: string, extra: object = {}) => ({
+      id,
+      taskId,
+      type: 'text',
+      title: `标题-${id}`,
+      category: null,
+      currentVersion: 1,
+      createdAt: FIXED_DATE,
+      updatedAt: FIXED_DATE,
+      ...extra,
+    });
+    const verRow = (aid: string, acceptedFlag: boolean) => ({
+      id: `artv_${aid}`,
+      artifactId: aid,
+      version: 1,
+      acceptedFlag,
+      authorAgentId: null,
+    });
+    const setupTeam = () => {
+      prisma.team.findUnique.mockResolvedValue({ id: 'tm_0000000001' });
+      prisma.task.findMany.mockResolvedValue(teamTasks);
+    };
+
+    it('happy：跨任务聚合 + 每项带 taskName（一次 task 查询映射标题）', async () => {
+      setupTeam();
+      prisma.artifact.findMany.mockResolvedValue([
+        artRow('art_0000000001', 't_0000000001'),
+        artRow('art_0000000002', 't_0000000002'),
+      ]);
+      prisma.artifactVersion.findMany.mockResolvedValue([
+        verRow('art_0000000001', true),
+        verRow('art_0000000002', false),
+      ]);
+
+      const result = await service.findByTeam('tm_0000000001', {});
+
+      expect(prisma.task.findMany).toHaveBeenCalledWith({
+        where: { teamId: 'tm_0000000001' },
+        select: { id: true, title: true },
+      });
+      expect(prisma.artifact.findMany).toHaveBeenCalledWith({
+        where: { taskId: { in: ['t_0000000001', 't_0000000002'] } },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result.total).toBe(2);
+      expect(result.page).toBe(1);
+      expect(result.pageSize).toBe(20);
+      expect(result.items).toEqual([
+        expect.objectContaining({
+          id: 'art_0000000001',
+          taskId: 't_0000000001',
+          taskName: '任务一',
+        }),
+        expect.objectContaining({
+          id: 'art_0000000002',
+          taskId: 't_0000000002',
+          taskName: '任务二',
+        }),
+      ]);
+    });
+
+    it('taskId 过滤：收窄到团队内单任务', async () => {
+      setupTeam();
+      prisma.artifact.findMany.mockResolvedValue([
+        artRow('art_0000000001', 't_0000000001'),
+      ]);
+      prisma.artifactVersion.findMany.mockResolvedValue([
+        verRow('art_0000000001', false),
+      ]);
+
+      const result = await service.findByTeam('tm_0000000001', {
+        taskId: 't_0000000001',
+      });
+
+      expect(prisma.artifact.findMany).toHaveBeenCalledWith({
+        where: { taskId: { in: ['t_0000000001'] } },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result.total).toBe(1);
+      expect(result.items[0]).toEqual(
+        expect.objectContaining({ taskName: '任务一' }),
+      );
+    });
+
+    it('type 过滤：where 透传 type', async () => {
+      setupTeam();
+      prisma.artifact.findMany.mockResolvedValue([
+        artRow('art_0000000001', 't_0000000001', { type: 'doc' }),
+      ]);
+      prisma.artifactVersion.findMany.mockResolvedValue([
+        verRow('art_0000000001', false),
+      ]);
+
+      await service.findByTeam('tm_0000000001', { type: 'doc' });
+
+      expect(prisma.artifact.findMany).toHaveBeenCalledWith({
+        where: {
+          taskId: { in: ['t_0000000001', 't_0000000002'] },
+          type: 'doc',
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+
+    it('category 过滤：where 透传 category', async () => {
+      setupTeam();
+      prisma.artifact.findMany.mockResolvedValue([
+        artRow('art_0000000001', 't_0000000001', { category: '需求' }),
+      ]);
+      prisma.artifactVersion.findMany.mockResolvedValue([
+        verRow('art_0000000001', false),
+      ]);
+
+      const result = await service.findByTeam('tm_0000000001', {
+        category: '需求',
+      });
+
+      expect(prisma.artifact.findMany).toHaveBeenCalledWith({
+        where: {
+          taskId: { in: ['t_0000000001', 't_0000000002'] },
+          category: '需求',
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result.items[0]).toEqual(
+        expect.objectContaining({ category: '需求' }),
+      );
+    });
+
+    it('accepted 过滤：按当前版本 acceptedFlag 过滤', async () => {
+      setupTeam();
+      prisma.artifact.findMany.mockResolvedValue([
+        artRow('art_0000000001', 't_0000000001'),
+        artRow('art_0000000002', 't_0000000002'),
+      ]);
+      prisma.artifactVersion.findMany.mockResolvedValue([
+        verRow('art_0000000001', true),
+        verRow('art_0000000002', false),
+      ]);
+
+      const accepted = await service.findByTeam('tm_0000000001', {
+        accepted: 'true',
+      });
+      expect(accepted.total).toBe(1);
+      expect(accepted.items[0].id).toBe('art_0000000001');
+
+      const rejected = await service.findByTeam('tm_0000000001', {
+        accepted: 'false',
+      });
+      expect(rejected.total).toBe(1);
+      expect(rejected.items[0].id).toBe('art_0000000002');
+    });
+
+    it('combined：taskId + type + category + accepted 联合过滤', async () => {
+      setupTeam();
+      prisma.artifact.findMany.mockResolvedValue([
+        artRow('art_0000000001', 't_0000000001', {
+          type: 'text',
+          category: '需求',
+        }),
+      ]);
+      prisma.artifactVersion.findMany.mockResolvedValue([
+        verRow('art_0000000001', true),
+      ]);
+
+      const result = await service.findByTeam('tm_0000000001', {
+        taskId: 't_0000000001',
+        type: 'text',
+        category: '需求',
+        accepted: 'true',
+      });
+
+      expect(prisma.artifact.findMany).toHaveBeenCalledWith({
+        where: {
+          taskId: { in: ['t_0000000001'] },
+          type: 'text',
+          category: '需求',
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result.total).toBe(1);
+      expect(result.items[0]).toEqual(
+        expect.objectContaining({
+          id: 'art_0000000001',
+          taskName: '任务一',
+          category: '需求',
+          acceptedFlag: true,
+        }),
+      );
+    });
+
+    it('failure：未知团队 → 404 TEAM_NOT_FOUND（不查任务/产出物）', async () => {
+      prisma.team.findUnique.mockResolvedValue(null);
+
+      await expect(service.findByTeam('tm_missing', {})).rejects.toMatchObject({
+        status: 404,
+        response: { code: 'TEAM_NOT_FOUND' },
+      });
+      expect(prisma.task.findMany).not.toHaveBeenCalled();
+      expect(prisma.artifact.findMany).not.toHaveBeenCalled();
+    });
+
+    it('failure：非本团队 taskId → 空集（不泄露跨团队行）', async () => {
+      setupTeam();
+      prisma.artifact.findMany.mockResolvedValue([]);
+
+      const result = await service.findByTeam('tm_0000000001', {
+        taskId: 't_foreign',
+      });
+
+      expect(result).toEqual({ items: [], total: 0, page: 1, pageSize: 20 });
+      expect(prisma.artifact.findMany).not.toHaveBeenCalled();
+    });
+
+    it('empty：团队无任务 → 空分页（默认 page=1/pageSize=20）', async () => {
+      prisma.team.findUnique.mockResolvedValue({ id: 'tm_empty' });
+      prisma.task.findMany.mockResolvedValue([]);
+
+      const result = await service.findByTeam('tm_empty', {});
+
+      expect(result).toEqual({ items: [], total: 0, page: 1, pageSize: 20 });
+      expect(prisma.artifact.findMany).not.toHaveBeenCalled();
+    });
+
+    it('pagination：pageSize=1000 截断到 100（与任务端点同值）', async () => {
+      setupTeam();
+      prisma.artifact.findMany.mockResolvedValue([
+        artRow('art_0000000001', 't_0000000001'),
+      ]);
+      prisma.artifactVersion.findMany.mockResolvedValue([
+        verRow('art_0000000001', false),
+      ]);
+
+      const result = await service.findByTeam('tm_0000000001', {
+        pageSize: 1000,
+      } as any);
+
+      expect(result.page).toBe(1);
+      expect(result.pageSize).toBe(100);
+      expect(result.total).toBe(1);
     });
   });
 });
