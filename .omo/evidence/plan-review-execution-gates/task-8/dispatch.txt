@@ -1,0 +1,47 @@
+plan-review-execution-gates task-8 评审派发三元组门 — dispatch.txt
+
+基线（动手前）：
+- src/platform-mcp/platform-mcp.service.gate.spec.ts：24 passed
+- src/chat/worker-dispatcher.gate.spec.ts + src/issues/review-round-ledger.spec.ts：22 passed
+
+failing-first（红）：
+- 新建 server/src/chat/review-dispatch-triplet.spec.ts（11 用例）→ 模块缺失 TS2307 红
+- 新建 server/src/platform-mcp/platform-mcp.service.review-dispatch.spec.ts（6 用例）→ DispatchReason 无 review-triplet 红
+- 过程中修 1 真 bug：ensureRoleViewFooter 幂等判断误命中正文“视角边界内”，收紧为全 footer 匹配
+
+实现（唯一 choke 点 = notifyAgent，worker-dispatcher 不加第二道检查）：
+- 新建 server/src/chat/review-dispatch-triplet.ts（纯函数：parseReviewTriplet / REVIEW_TRIPLET_HINT / ROLE_VIEW_FOOTER / ensureRoleViewFooter）
+- server/src/platform-mcp/platform-mcp.service.ts：DispatchReason += review-triplet；kind=review 缺三元组 → triggered:false + 精确 hint，不调 dispatchAgentMention；放行派发词追加视角边界
+- server/src/platform-mcp/platform-mcp.tools.ts：kind/review 描述同步三元组要求与 reason 词汇
+- server/src/platform-mcp/platform-mcp.service.gate.spec.ts：review 豁免断言改用三元组齐全派发词（保“免计划门禁”本意）
+
+精确 hint（逐字）：
+评审派发缺三元组：须携带 round + planVersion(+hash) + expected 名单（例：R2 · v0.3#abcd1234 · expected: tmm_aaa,tmm_bbb）；本次派发已拒绝触发，修订不得开始，补齐三元组后重派
+
+视角边界 footer（逐字）：
+视角边界：架构=方案/边界/状态机；开发=可执行性/依赖/工作量；测试=覆盖/判据可执行性
+
+验证（绿）：
+$ npx jest --runInBand src/platform-mcp src/chat/review-dispatch-triplet.spec.ts src/chat/worker-dispatcher.gate.spec.ts src/issues/review-round-ledger.spec.ts src/issues/review-round.service.spec.ts
+PASS src/platform-mcp/platform-mcp.service.gate.spec.ts
+PASS src/platform-mcp/platform-mcp.service.spec.ts
+PASS src/platform-mcp/platform-mcp.controller.spec.ts
+PASS src/chat/worker-dispatcher.gate.spec.ts
+PASS src/issues/review-round-ledger.spec.ts
+PASS src/issues/review-round.service.spec.ts
+PASS src/platform-mcp/plan-removal.guard.spec.ts
+PASS src/chat/review-dispatch-triplet.spec.ts
+PASS src/platform-mcp/platform-mcp.service.review-dispatch.spec.ts
+Test Suites: 9 passed, 9 total
+Tests:       302 passed, 302 total
+
+$ npx tsc --noEmit → exit 0
+$ grep as any（3 新文件）→ CLEAN
+
+行为矩阵（review-dispatch.spec.ts 断言）：
+- 缺三元组 → triggered:false + reason=review-triplet + hint 全等，dispatch 未调用，消息仍落库（修订不开始）
+- 缺 hash → 同上被拒
+- 三元组齐全 → triggered:true + reason=ok，dispatch 文含 ROLE_VIEW_FOOTER + R2 + v0.3#abcd1234
+- kind=execution 无三元组 → 不受本门影响（executing 放行）
+- kind=nudge/wake 无三元组 → 不受本门影响
+- 团队维度 kind=review 缺三元组 → 同样被拒

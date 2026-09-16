@@ -167,7 +167,7 @@ const notifyAgentSchema = z
       .enum(['execution', 'review', 'nudge', 'wake'])
       .optional()
       .describe(
-        '执行分类（缺省 execution：任务维度下要求计划已确认进入 executing，否则 reason=plan-gated 被拦；review/nudge/wake 豁免门禁；内部唤醒传 wake 且永不记账）',
+        '执行分类（缺省 execution：任务维度下要求计划已确认进入 executing，否则 reason=plan-gated 被拦；review/nudge/wake 豁免门禁；review 派发词须带三元组 round + planVersion(+hash) + expected 名单，否则 reason=review-triplet 被拦；内部唤醒传 wake 且永不记账）',
       ),
     force: z
       .boolean()
@@ -754,7 +754,7 @@ export function buildPlatformMcpTools(
     {
       name: 'notify_agent',
       description:
-        '向任务内的另一个实例定向发送消息并触发其执行（实例互 @，按 targetInstanceId 精确命中目标实例）。团队维度（teamId、无任务）同样触发目标成员执行。触发后目标实例会收到该消息并开始处理，结论通常经 group_post 发布到群聊。统一返回契约 {messageId, channelId, targetInstanceId, triggered, reason, issueBound, origMessageId?}：reason 词汇 ok|duplicate|throttled|plan-gated（成功 reason=ok；被 @ storm 节流 triggered=false+reason=throttled，消息仍已发布）。issueId 可选：派活归属 issue，缺省返回 issueBound:false（提醒，不硬拦），传则 issueBound:true 并透传执行链路。',
+        '向任务内的另一个实例定向发送消息并触发其执行（实例互 @，按 targetInstanceId 精确命中目标实例）。团队维度（teamId、无任务）同样触发目标成员执行。触发后目标实例会收到该消息并开始处理，结论通常经 group_post 发布到群聊。统一返回契约 {messageId, channelId, targetInstanceId, triggered, reason, issueBound, origMessageId?}：reason 词汇 ok|duplicate|throttled|plan-gated|review-triplet（成功 reason=ok；被 @ storm 节流 triggered=false+reason=throttled，消息仍已发布；kind=review 缺三元组 triggered=false+reason=review-triplet+精确 hint，修订不开始）。issueId 可选：派活归属 issue，缺省返回 issueBound:false（提醒，不硬拦），传则 issueBound:true 并透传执行链路。',
       inputSchema: notifyAgentSchema,
       handler: (ctx, args) => service.notifyAgent(ctx, args as NotifyAgentArgs),
     },

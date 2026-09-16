@@ -64,6 +64,11 @@ import {
   MESSAGE_RECEIPT_KINDS,
   MESSAGE_RECEIPT_STATUSES,
 } from '../chat/message-receipt.constants';
+import {
+  REVIEW_TRIPLET_HINT,
+  ensureRoleViewFooter,
+  parseReviewTriplet,
+} from '../chat/review-dispatch-triplet';
 import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
 import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
 
@@ -127,7 +132,12 @@ export interface ReadFileResult {
  * 统一派发返回契约 reason 词汇（plan-review todo 3，对齐 docs 31 §3 / 32 §3.1-§3.2，
  * todo 4 消费 `duplicate`；本 todo 实际产生 ok|throttled，duplicate|plan-gated 预留词汇位）。
  */
-export type DispatchReason = 'ok' | 'duplicate' | 'throttled' | 'plan-gated';
+export type DispatchReason =
+  | 'ok'
+  | 'duplicate'
+  | 'throttled'
+  | 'plan-gated'
+  | 'review-triplet';
 
 /**
  * notify_agent 统一返回契约（plan-review todo 3）：
@@ -135,6 +145,7 @@ export type DispatchReason = 'ok' | 'duplicate' | 'throttled' | 'plan-gated';
  * - reason 与 triggered 恒成对：triggered=true → reason='ok'；false → 具体拦因。
  * - issueBound：调用带 issueId 即 true；缺省 false（hint，不硬拦）。
  * - origMessageId 预留给 duplicate 回显原记录（todo 4 填充，本 todo 永不写入）。
+ * - review-triplet（todo 8）：kind=review 派发词缺三元组时拒绝触发并回精确 hint。
  * - dispatchAgentMention 内部返回保持 void，triggered 只在本层组装。
  */
 export interface NotifyAgentResult {
@@ -1118,11 +1129,36 @@ export class PlatformMcpService {
         });
       }
     }
+    // 评审三元组门（todo 8，docs 33 §3.2：唯一 choke 点选 notifyAgent——
+    // dispatchAgentMention 返回 void 无法回精确 hint，且内部 wake/round-notify
+    // 走 kind=wake 永不命中本门；worker-dispatcher 层不加第二道检查）。
+    // kind=review 派发词须携带 round + planVersion(+hash) + expected 名单，
+    // 缺三元组 → 拒绝触发并回精确 hint（修订不开始）；消息已落库广播不断言回滚。
+    if (kind === 'review') {
+      const triplet = parseReviewTriplet(args.content);
+      if (!triplet.ok) {
+        this.logger.warn(
+          `[mcp] notify_agent 评审三元组缺失 to=${args.targetInstanceId} missing=${triplet.missing?.join(',')}（消息已发布）`,
+        );
+        return {
+          messageId: message.id,
+          channelId: channel.id,
+          targetInstanceId: args.targetInstanceId,
+          triggered: false,
+          reason: 'review-triplet',
+          hint: REVIEW_TRIPLET_HINT,
+          issueBound: !!args.issueId,
+        };
+      }
+    }
+    // 放行派发嵌入视角边界（todo 8，docs 33 §3.5；非 review 原样透传）。
+    const dispatchText =
+      kind === 'review' ? ensureRoleViewFooter(text) : text;
     if (isTeam) {
       await this.workerDispatcher.dispatchAgentMention({
         teamId: exec.teamId,
         channelId: channel.id,
-        text,
+        text: dispatchText,
         targetInstanceId: args.targetInstanceId,
         ...(args.issueId ? { issueId: args.issueId } : {}),
         kind,
@@ -1131,7 +1167,7 @@ export class PlatformMcpService {
       await this.workerDispatcher.dispatchAgentMention({
         taskId: effTaskId as string,
         channelId: channel.id,
-        text,
+        text: dispatchText,
         targetInstanceId: args.targetInstanceId,
         ...(args.issueId ? { issueId: args.issueId } : {}),
         kind,

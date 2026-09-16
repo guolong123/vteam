@@ -246,11 +246,19 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
   });
 
   describe('豁免 kind：review/nudge/wake 在任何计划态下全放行', () => {
+    // todo 8 起 kind=review 须带三元组（round + planVersion(+hash) + expected）：
+    // 以下豁免断言验证“免计划门禁”，故 review 用三元组齐全派发词；
+    // 缺三元组拒绝见 platform-mcp.service.review-dispatch.spec.ts。
+    const reviewArgs = {
+      ...baseArgs,
+      content:
+        '请评审本轮计划 R1 · 计划 v0.1#1234abcd · expected: tmm_arch,tmm_dev，请发表 VERDICT',
+    };
     it.each([['review'], ['nudge'], ['wake']])(
       'kind=%s + approved 态→放行且不查门禁写回执',
       async (kind: string) => {
         const result = await service.notifyAgent(ctx, {
-          ...baseArgs,
+          ...(kind === 'review' ? reviewArgs : baseArgs),
           kind: kind as 'review' | 'nudge' | 'wake',
         });
 
@@ -270,7 +278,7 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
         planLifecycle.getStatus.mockRejectedValue(new Error('db down'));
 
         const result = await service.notifyAgent(ctx, {
-          ...baseArgs,
+          ...(kind === 'review' ? reviewArgs : baseArgs),
           kind: kind as 'review' | 'nudge' | 'wake',
         });
 
