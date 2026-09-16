@@ -354,13 +354,14 @@ export class TasksController {
    *   POST 同结果），记 finalizedBy/finalizedAt，落系统消息；
    * confirm（缺省）：approved→executing，幂等（已 executing 二次 POST 同结果），
    *   记 confirmedBy/confirmedAt，落系统消息，plan.status.executing 事件触发 PM 续推 W2；
-   * reject：approved→draft 打回（reason 必填，轮次不变重走收敛）。
+   * reject：approved/rejected→draft 打回（reason 必填，版本号+1 轮次不变重走收敛）；
+   * revise：executing/completed→draft 修订（reason 必填，版本号+1 轮次+1 重走完整 N/N 复评）。
    * 错态 409 精确码（details.current 携带 DB 真值状态）。
    */
   @Post('tasks/:id/plan/confirm')
   @UseGuards(PermissionGuard)
   @RequirePermission('tasks.edit')
-  @ApiOperation({ summary: '用户确认门（定稿 finalize / 开始执行 confirm 幂等 / 打回 draft）' })
+  @ApiOperation({ summary: '用户确认门（定稿 finalize / 开始执行 confirm 幂等 / 打回 draft / 修订重评 revise）' })
   confirmPlan(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,

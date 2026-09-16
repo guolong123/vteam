@@ -2,22 +2,23 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
 /**
- * POST /tasks/:id/plan/confirm 请求体（todo11 用户确认门 + 定稿门）。
+ * POST /tasks/:id/plan/confirm 请求体（todo11 用户确认门 + 定稿门 + todo4 修订重评）。
  * finalize（pending_final→approved，用户显式定稿，幂等）；
  * confirm（缺省，approved→executing，幂等）；reject 需 reason
- * （approved→draft 打回，rejectReason 落库，版本号+1 轮次不变由轮次账本承接）。
+ * （approved/rejected→draft 打回，rejectReason 落库，版本号+1 轮次不变由轮次账本承接）；
+ * revise 需 reason（executing/completed→draft 修订，版本号+1 轮次+1 重走完整 N/N 复评）。
  */
 export class PlanConfirmDto {
   @ApiPropertyOptional({
-    description: '确认动作：finalize=确认定稿，confirm=开始执行，reject=打回重修（缺省 confirm）',
-    enum: ['finalize', 'confirm', 'reject'],
+    description: '确认动作：finalize=确认定稿，confirm=开始执行，reject=打回重修，revise=修订重评（缺省 confirm）',
+    enum: ['finalize', 'confirm', 'reject', 'revise'],
   })
   @IsOptional()
-  @IsIn(['finalize', 'confirm', 'reject'])
-  action?: 'finalize' | 'confirm' | 'reject';
+  @IsIn(['finalize', 'confirm', 'reject', 'revise'])
+  action?: 'finalize' | 'confirm' | 'reject' | 'revise';
 
   @ApiPropertyOptional({
-    description: '打回原因（action=reject 时必填，落库 rejectReason）',
+    description: '打回/修订原因（action=reject/revise 时必填，落库 rejectReason）',
     maxLength: 512,
   })
   @IsOptional()

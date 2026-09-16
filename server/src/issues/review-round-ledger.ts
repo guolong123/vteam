@@ -145,6 +145,20 @@ export function computePlanHash(content: string): string {
   return createHash('sha1').update(content, 'utf8').digest('hex').slice(0, 8);
 }
 
+/**
+ * 修订版本号+1（plan-finalize-actions todo 4：version 字段即账本 planVersion 字符串）。
+ * vN 数字口径递增（v0.4→v0.5）；尾随数字口径递增；其余原样拼 `-r2` 后缀兜底。
+ * 纯函数，不碰账本并发/合并语义。
+ */
+export function bumpPlanVersion(version: string): string {
+  const trimmed = (version ?? '').trim();
+  const vMatch = /^v(\d+)$/.exec(trimmed);
+  if (vMatch) return `v${Number(vMatch[1]) + 1}`;
+  const tailMatch = /^(.*?)(\d+)$/.exec(trimmed);
+  if (tailMatch) return `${tailMatch[1]}${Number(tailMatch[2]) + 1}`;
+  return `${trimmed}-r2`;
+}
+
 /** 新建空轮次账本（status=collecting，received 为空）。 */
 export function createLedger(init: {
   round?: number;

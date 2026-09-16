@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Plan, Prisma } from '@prisma/client';
 import { MessageReceiptsService } from '../chat/message-receipts.service';
@@ -18,9 +19,11 @@ import {
 import { TASK_ERRORS } from '../common/constants/task.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { ReviewRoundService } from '../issues/review-round.service';
 import {
   ReviewRoundLedger,
   SupersededReceipt,
+  bumpPlanVersion,
   computePlanHash,
   tryParseLedger,
 } from '../issues/review-round-ledger';
@@ -60,6 +63,8 @@ export const PLAN_LIFECYCLE_ERRORS = {
   PLAN_FINALIZE_WRONG_STATE: 'PLAN_FINALIZE_WRONG_STATE',
   PLAN_REJECT_WRONG_STATE: 'PLAN_REJECT_WRONG_STATE',
   PLAN_REJECT_REASON_REQUIRED: 'PLAN_REJECT_REASON_REQUIRED',
+  PLAN_REVISE_WRONG_STATE: 'PLAN_REVISE_WRONG_STATE',
+  PLAN_REVISE_REASON_REQUIRED: 'PLAN_REVISE_REASON_REQUIRED',
   PLAN_COMPLETE_WRONG_STATE: 'PLAN_COMPLETE_WRONG_STATE',
   PLAN_COMPLETE_MAIN_ONLY: 'PLAN_COMPLETE_MAIN_ONLY',
 } as const;
@@ -97,8 +102,8 @@ export function resolveFrozenAnchor(
   return { version, hash };
 }
 
-/** 确认门动作（finalize=确认定稿；confirm=开始执行；reject=打回重修）。 */
-export type PlanConfirmAction = 'finalize' | 'confirm' | 'reject';
+/** 确认门动作（finalize=确认定稿；confirm=开始执行；reject=打回重修；revise=修订重评）。 */
+export type PlanConfirmAction = 'finalize' | 'confirm' | 'reject' | 'revise';
 
 /**
  * plans 表唯一读写 choke 点（todo2 复活，守卫窄豁免仅覆盖本文件）。
@@ -115,6 +120,7 @@ export class PlanLifecycleService {
     private readonly idGen: IdGeneratorService,
     private readonly receipts: MessageReceiptsService,
     private readonly realtime: RealtimeService,
+    @Optional() private readonly rounds: ReviewRoundService | null = null,
   ) {}
 
   /** 校验计划状态枚举值（非法即抛，防脏写）。 */
@@ -255,6 +261,9 @@ export class PlanLifecycleService {
     if (input.action === 'reject') {
       return this.rejectPlan(taskId, input);
     }
+    if (input.action === 'revise') {
+      return this.revisePlan(taskId, input);
+    }
     const actor = displayName(input.userName, input.userId);
     const { task, row } = await this.loadWritablePlan(taskId);
     if (row.status === PLAN_LIFECYCLE_STATUS.executing) {
@@ -328,6 +337,13 @@ export class PlanLifecycleService {
     return { plan, idempotent: false, action: 'finalize' };
   }
 
+  /**
+   * 打回重修（approved/rejected→draft，todo 4 修订入口矩阵前两行）：
+   * reason 必填落库 rejectReason；账本 planVersion version+1、轮次不变
+   * （只传 planVersion 补丁，不碰 round/status/received，重走收敛门）。
+   * 账本写经 ReviewRoundService.applyRoundUpdate（串行写唯一入口）；
+   * 无 rounds 装配/无宿主账本时 warn 跳过（fail-open，翻转已落库）。
+   */
   async rejectPlan(
     taskId: string,
     input: {
@@ -345,22 +361,80 @@ export class PlanLifecycleService {
     }
     const actor = displayName(input.userName, input.userId);
     const { task, row } = await this.loadWritablePlan(taskId);
-    if (row.status !== PLAN_LIFECYCLE_STATUS.approved) {
+    if (
+      row.status !== PLAN_LIFECYCLE_STATUS.approved &&
+      row.status !== PLAN_LIFECYCLE_STATUS.rejected
+    ) {
       throw new ConflictException({
         code: PLAN_LIFECYCLE_ERRORS.PLAN_REJECT_WRONG_STATE,
-        message: `仅已定稿待执行（approved）的计划可打回，当前 ${row.status}`,
+        message: `仅已定稿（approved）或已驳回（rejected）的计划可打回，当前 ${row.status}；执行中/已完成请走 revise 修订`,
         details: { current: row.status },
       });
     }
+    const from = row.status;
+    const host = await this.findLedgerHost(taskId);
     const plan = await this.transition(taskId, 'draft', {
       rejectReason: reason,
     });
+    if (host?.issueId) {
+      await this.bumpLedgerVersion(host.issueId, host.ledger);
+    }
     await this.postPlanSystemMessage(
       taskId,
       task.teamId,
-      `计划已被 ${actor} 打回（approved → draft），原因：${reason}。版本号+1、轮次不变，重走收敛门。`,
+      `计划已被 ${actor} 打回（${from} → draft），原因：${reason}。版本号+1、轮次不变，重走收敛门。`,
     );
     return { plan, idempotent: false, action: 'reject' };
+  }
+
+  /**
+   * 修订重评（executing/completed→draft，todo 4 修订入口矩阵后两行）：
+   * reason 必填落库 rejectReason；账本 version+1 且 round+1 开新轮
+   * （status=collecting，expected 原样保留、received 清零，重走完整 N/N 复评，
+   * quorum 沿收敛门）。在途执行按门禁存量语义自然收敛，不追杀（本服务无执行写口）。
+   * force 口径沿 todo 1：修订入口无 force 面，force 审计只活在执行门禁 forceReason 列。
+   */
+  async revisePlan(
+    taskId: string,
+    input: {
+      userId: string;
+      userName?: string | null;
+      reason?: string | null;
+    },
+  ): Promise<{ plan: Plan; idempotent: boolean; action: PlanConfirmAction }> {
+    const reason = (input.reason ?? '').trim();
+    if (!reason) {
+      throw new BadRequestException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_REVISE_REASON_REQUIRED,
+        message: '修订需携带原因 reason（落库 rejectReason 供重评）',
+      });
+    }
+    const actor = displayName(input.userName, input.userId);
+    const { task, row } = await this.loadWritablePlan(taskId);
+    if (
+      row.status !== PLAN_LIFECYCLE_STATUS.executing &&
+      row.status !== PLAN_LIFECYCLE_STATUS.completed
+    ) {
+      throw new ConflictException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_REVISE_WRONG_STATE,
+        message: `仅执行中（executing）或已完成（completed）的计划可修订，当前 ${row.status}；已定稿待执行请走 reject 打回`,
+        details: { current: row.status },
+      });
+    }
+    const from = row.status;
+    const host = await this.findLedgerHost(taskId);
+    const plan = await this.transition(taskId, 'draft', {
+      rejectReason: reason,
+    });
+    if (host?.issueId) {
+      await this.openNextRound(host.issueId, host.ledger);
+    }
+    await this.postPlanSystemMessage(
+      taskId,
+      task.teamId,
+      `计划已被 ${actor} 修订（${from} → draft，revise），原因：${reason}。版本号+1、轮次+1，重走完整 N/N 复评；在途执行按门禁存量语义自然收敛，不追杀。`,
+    );
+    return { plan, idempotent: false, action: 'revise' };
   }
 
   async completePlan(
@@ -433,16 +507,30 @@ export class PlanLifecycleService {
    * 首个可解析账本即宿主；无账本/损坏/DB 异常→null（调用方取回退锚/空归档，永不阻断翻转）。
    */
   private async readTaskLedger(taskId: string): Promise<ReviewRoundLedger | null> {
+    return (await this.findLedgerHost(taskId))?.ledger ?? null;
+  }
+
+  /**
+   * 找任务轮次账本宿主（todo 4 修订写复用）：返回宿主 issueId + 账本；
+   * 无账本/损坏/DB 异常→null（调用方 warn 跳过账本写，翻转已落库，永不阻断修订）。
+   */
+  private async findLedgerHost(
+    taskId: string,
+  ): Promise<{ issueId: string | null; ledger: ReviewRoundLedger } | null> {
     try {
       const issues = (await this.prisma.issue.findMany({
         where: { taskId },
         orderBy: { updatedAt: 'desc' },
         take: 20,
-        select: { description: true },
-      })) as unknown as Array<{ description?: string | null }>;
+        select: { id: true, description: true },
+      })) as unknown as Array<{ id?: unknown; description?: string | null }>;
       for (const issue of issues ?? []) {
         const ledger = tryParseLedger(issue?.description ?? null);
-        if (ledger) return ledger;
+        if (ledger) {
+          const issueId =
+            typeof issue?.id === 'string' && issue.id ? issue.id : null;
+          return { issueId, ledger };
+        }
       }
       return null;
     } catch (err) {
@@ -450,6 +538,59 @@ export class PlanLifecycleService {
         `[plans] 轮次账本读取失败 task=${taskId}（取回退冻结锚）：${err instanceof Error ? err.message : String(err)}`,
       );
       return null;
+    }
+  }
+
+  /**
+   * 打回账本 version+1（轮次不变）：只传 planVersion 补丁，不碰 round/status/received。
+   * 无 rounds 装配→warn 跳过（单测旧构造与降级路径）；写失败→warn（翻转已落库）。
+   */
+  private async bumpLedgerVersion(
+    issueId: string,
+    ledger: ReviewRoundLedger,
+  ): Promise<void> {
+    if (!this.rounds) {
+      this.logger.warn(
+        `[plans] 账本 version+1 跳过 issue=${issueId}（rounds 未装配，翻转已落库）`,
+      );
+      return;
+    }
+    try {
+      await this.rounds.applyRoundUpdate(issueId, {
+        planVersion: { version: bumpPlanVersion(ledger.planVersion.version) },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[plans] 账本 version+1 失败 issue=${issueId}（翻转已落库）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * 修订开新轮（round+1、version+1、status=collecting）：
+   * 合并层清零 received/pending/superseded、保留 expected，重走完整 N/N 复评。
+   * 无 rounds 装配/写失败→warn（翻转已落库，复评待下轮派发重建）。
+   */
+  private async openNextRound(
+    issueId: string,
+    ledger: ReviewRoundLedger,
+  ): Promise<void> {
+    if (!this.rounds) {
+      this.logger.warn(
+        `[plans] 修订开新轮跳过 issue=${issueId}（rounds 未装配，翻转已落库）`,
+      );
+      return;
+    }
+    try {
+      await this.rounds.applyRoundUpdate(issueId, {
+        round: ledger.round + 1,
+        planVersion: { version: bumpPlanVersion(ledger.planVersion.version) },
+        status: 'collecting',
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[plans] 修订开新轮失败 issue=${issueId}（翻转已落库）：${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
