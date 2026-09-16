@@ -181,6 +181,28 @@ Conventions, patterns, and successful approaches discovered during work on this 
 - Live 上传 200 沿 T4 先例留 T12：400 收据（旧 allowlist 无新三项）+ jest
   （assertAllowed/fileFilter 同一 `ALLOWED_EXTENSIONS` 代码路径）即等价证明。
 
+## 2026-09-16 — T14 原型 tab 回补
+
+- Tab 栏从 `git show 1ed05eb^:.../docs/[taskId]/page.tsx` 逐字抄（pill/active/徽标/SVG/dynamic
+  `ssr:false` 全套）：`surface/border` 只需加进既有 tokens import，不算"动 tokens 基线"。
+- `docs-tab-*` 全仓 grep 事前 0 命中（旧页已随 T10 删除）→ 无碰撞门一次过；T12 可直接断言三 testid。
+- 徽标查询沿旧页 `["docs-proto-count", taskId]` 直调 `api.get`（不用 `usePrototypes` hook）：
+  与 `PrototypePanel` 内查询 key 不同，双请求但零 hook 语义耦合；`enabled` 加
+  `taskKey !== "all"` 即团队级不取数门。
+- `syncUrl` 加 `proto?` 字段是 extend：闭包读 `protoParam` state，旧 handler 不传即保留；
+  只有 team/task 切换显式清 `proto`（跨任务旧 proto 失效）。tab 点击落快照
+  `syncUrl({})`（双参保留）→"共存按最后点击为准 + 切换保筛选/选择"一次满足。
+- `PrototypePanel` 的 `initialProtoId` 只首挂载生效 → 外层 `key={taskKey:proto}` 重挂载
+  覆盖跨深链；tab 内二次选择不回写 URL（组件既有行为，不碰）。
+- tsx fixture 不走 uploads allowlist：`POST /tasks/:id/artifacts {fileRef}` 直写
+  contentRef（append 路径无扩展名校验）+ 手工 `docker cp` 落盘；删时 `DELETE 行 + rm 盘`
+  双清并复查 `prototypes → []`。`tsx` 不必加白名单。
+- 临时 spec 跑法（T8 补充）：project 须显式 `use: { storageState: ".auth/user.json" }`
+  （dependencies 只保序不注态）；`toBeDisabled` + `force:click` 无 throw 即"可见但惰性"门；
+  `docs-tree-item` 首行 `data-doc-id` 现场取 slug 做 `?doc=` 回归（不硬编码）。
+- Host dev server（`:3001` + `API_PROXY_TARGET=http://localhost:13000`）即 T14 新代码
+  的 QA 底座；跑完 `pkill` + `lsof -i :3001` 确认空位（他波共享端口）。
+
 ## 2026-09-16 — T11 删镜像层与原型搬移
 
 - 零引用 grep 门不分注释与代码：`artifact-slug.ts:6`（`DocsMirrorService`）与

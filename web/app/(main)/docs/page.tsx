@@ -18,14 +18,23 @@
  * - ?doc= 深链：经 @/src/lib/artifact-slug docIdFor 逐行计算匹配（与 session 页同输入）；
  *   未知 doc → 内容区空态，绝不 404/throw。
  * - T10 消费：本文件默认导出即合站组件（薄别名直接 import）。
+ * - T14 原型 tab 回补：文档/原型双 tab（tab 栏 testid 沿用旧任务页契约
+ *   `docs-tab-bar/docs-tab-docs/docs-tab-protos`；`?proto=` 存在即激活原型 tab，
+ *   与 `?doc=` 共存时初始以 `?proto=` 为准，挂载后以最后点击为准）：docs tab 为
+ *   上述合站内容整体下移（逻辑/testid 不动）；protos tab 内已选具体任务时渲染
+ *   `PrototypePanel taskId + initialProtoId`（既有组件不动，dynamic ssr:false）
+ *   + 数量徽标（`GET /docs-site/:taskId/prototypes` 计数）；task=all 时原型 tab
+ *   置灰 + `docs-proto-empty`「请先选择任务」空态（tab 栏仍渲染，不取数，不崩）。
  * - data-testid：docs-shell / docs-team-picker / docs-team-option / docs-filter-bar /
  *   team-filter-select / task-filter-select / category-filter-option /
  *   type-filter-option / accepted-filter-option / docs-tree / docs-tree-item /
  *   docs-viewer-empty / docs-doc-missing / artifact-viewer / artifact-version-switch /
  *   artifact-version-timeline / docs-content-view / docs-delete-button /
- *   docs-loading / docs-error / docs-retry。
+ *   docs-loading / docs-error / docs-retry / docs-tab-bar / docs-tab-docs /
+ *   docs-tab-protos / docs-proto-empty。
  */
 import { useEffect, useState, type CSSProperties } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -41,6 +50,8 @@ import { EmptyState, PageWindow } from "@/src/components/ui";
 import {
   roleText,
   neutral,
+  surface,
+  border,
   space,
   radius,
   fontSize,
@@ -49,6 +60,12 @@ import {
 } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
+
+/* ------------------------------ 原型面板（T14：旧任务页同款 dynamic ssr:false，首屏不进包） ------------------------------ */
+const PrototypePanel = dynamic(
+  () => import("@/src/features/docs-site/prototype-panel").then((m) => m.PrototypePanel),
+  { ssr: false, loading: () => <div style={{ padding: space.xl, fontSize: fontSize.md, color: neutral[400], fontFamily: fontFamily.body }}>加载原型…</div> },
+);
 
 /* ------------------------------ 页面内扩展 token（不动 tokens.ts 基线） ------------------------------ */
 /** 产出物 API 类型（对齐 ARTIFACT_TYPES：text/doc/file）。 */
@@ -612,6 +629,10 @@ export default function DocsUnifiedPage() {
   const [acceptedKey, setAcceptedKey] = useState("all");
   // 选中文档（?doc= slug；null = 未选）
   const [docSlug, setDocSlug] = useState<string | null>(null);
+  // 文档/原型双 tab（T14 回补：testid 沿用旧任务页契约；?proto= 存在即激活原型 tab，
+  // 与 ?doc= 共存时初始以 ?proto= 为准，挂载后以最后点击为准）
+  const [tab, setTab] = useState<"docs" | "protos">("docs");
+  const [protoParam, setProtoParam] = useState<string | null>(null);
 
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
@@ -620,11 +641,16 @@ export default function DocsUnifiedPage() {
     if (tk) setTaskKey(tk);
     const d = q.get("doc");
     if (d) setDocSlug(d);
+    const p = q.get("proto");
+    if (p) {
+      setProtoParam(p);
+      setTab("protos");
+    }
     setUrlReady(true);
   }, []);
 
-  /** URL 驱动：筛选/选择变化 → replace 查询串（链接可分享）。 */
-  const syncUrl = (next: { teamId?: string | null; taskId?: string; doc?: string | null }) => {
+  /** URL 驱动：筛选/选择变化 → replace 查询串（链接可分享；proto 透传保留）。 */
+  const syncUrl = (next: { teamId?: string | null; taskId?: string; doc?: string | null; proto?: string | null }) => {
     const q = new URLSearchParams(window.location.search);
     const t = next.teamId !== undefined ? next.teamId : teamId;
     if (t) q.set("teamId", t);
@@ -635,6 +661,9 @@ export default function DocsUnifiedPage() {
     const d = next.doc !== undefined ? next.doc : docSlug;
     if (d) q.set("doc", d);
     else q.delete("doc");
+    const p = next.proto !== undefined ? next.proto : protoParam;
+    if (p) q.set("proto", p);
+    else q.delete("proto");
     const qs = q.toString();
     router.replace(`/docs${qs ? `?${qs}` : ""}`);
   };
@@ -658,6 +687,16 @@ export default function DocsUnifiedPage() {
     enabled: !!userId && !!teamId,
   });
   const tasks = tasksQuery.data?.items ?? [];
+
+  // 原型数量徽标（旧任务页同查询：GET /docs-site/:taskId/prototypes 计数；task=all 时不取）
+  const protoCountQuery = useQuery({
+    queryKey: ["docs-proto-count", taskKey],
+    queryFn: () => api.get<{ items: unknown[] }>(`/docs-site/${taskKey}/prototypes`),
+    enabled: !!userId && taskKey !== "all",
+    retry: false,
+  });
+  const protoCount = Array.isArray(protoCountQuery.data?.items) ? protoCountQuery.data.items.length : undefined;
+  const isProtoDisabled = taskKey === "all";
 
   // 聚合查询：ONE 团队端点查询（分类/类型/验收走请求参数；未分类走前端过滤）
   const teamArtifactsQuery = useQuery({
@@ -696,12 +735,14 @@ export default function DocsUnifiedPage() {
     setTeamId(v || null);
     setTaskKey("all");
     setDocSlug(null);
-    syncUrl({ teamId: v || null, taskId: "all", doc: null });
+    setProtoParam(null);
+    syncUrl({ teamId: v || null, taskId: "all", doc: null, proto: null });
   };
   const handleTaskChange = (v: string) => {
     setTaskKey(v);
     setDocSlug(null);
-    syncUrl({ taskId: v, doc: null });
+    setProtoParam(null);
+    syncUrl({ taskId: v, doc: null, proto: null });
   };
   const handleTypeChange = (v: string) => {
     setTypeKey(v);
@@ -721,6 +762,17 @@ export default function DocsUnifiedPage() {
   const handleSelect = (slug: string) => {
     setDocSlug(slug);
     syncUrl({ doc: slug });
+  };
+  // tab 切换：只切显隐 + 落 URL 快照（?doc=/?proto= 双保留，筛选/选择全保留）；
+  // 团队级（task=all）时原型 tab 不可点，由 disabled 守住，此处再守一层。
+  const handleTabDocs = () => {
+    setTab("docs");
+    syncUrl({});
+  };
+  const handleTabProtos = () => {
+    if (isProtoDisabled) return;
+    setTab("protos");
+    syncUrl({});
   };
   const handleCloseViewer = () => {
     setDocSlug(null);
@@ -811,6 +863,19 @@ export default function DocsUnifiedPage() {
         </div>
       ) : (
         <>
+          <div data-testid="docs-tab-bar" style={{ display: "flex", height: 44, flexShrink: 0, alignItems: "center", gap: 4, borderBottom: `1px solid ${border}`, backgroundColor: surface, padding: `0 ${space.lg}px` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 4, borderRadius: radius.md, border: `1px solid ${border}`, backgroundColor: neutral[100], padding: 2 }} role="tablist" aria-label="文档站内容">
+              <button type="button" role="tab" aria-selected={tab === "docs"} data-testid="docs-tab-docs" data-active={tab === "docs" ? "true" : "false"} onClick={handleTabDocs} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: radius.sm, padding: "6px 12px", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", border: "none", fontFamily: fontFamily.body, transition: "background .15s, color .15s", ...(tab === "docs" ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" } : { backgroundColor: "transparent", color: neutral[500] }) }}>
+                <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16M6 20V8l6-4 6 4v12M10 20v-6h4v6" /></svg>文档
+              </button>
+              <button type="button" role="tab" aria-selected={tab === "protos"} data-testid="docs-tab-protos" data-active={tab === "protos" ? "true" : "false"} disabled={isProtoDisabled} aria-disabled={isProtoDisabled ? "true" : undefined} title={isProtoDisabled ? "请先选择具体任务后查看原型" : undefined} onClick={handleTabProtos} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: radius.sm, padding: "6px 12px", fontSize: fontSize.md, fontWeight: 500, border: "none", fontFamily: fontFamily.body, transition: "background .15s, color .15s", ...(tab === "protos" ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" } : { backgroundColor: "transparent", color: neutral[500] }), ...(isProtoDisabled ? { opacity: 0.5, cursor: "not-allowed" } : { cursor: "pointer" }) }}>
+                <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>原型
+                {typeof protoCount === "number" && protoCount > 0 && <span style={{ borderRadius: radius.pill, backgroundColor: neutral[200], padding: "0 6px", fontSize: 10, fontWeight: 600, lineHeight: "16px", color: neutral[600] }}>{protoCount}</span>}
+              </button>
+            </div>
+          </div>
+          {tab === "docs" ? (
+          <>
           {/* 筛选栏：团队/任务双选择 + 分类/类型/验收 chips */}
           <div
             data-testid="docs-filter-bar"
@@ -1017,6 +1082,20 @@ export default function DocsUnifiedPage() {
               )}
             </div>
           </div>
+          </>
+          ) : isProtoDisabled ? (
+            <div data-testid="docs-proto-empty">
+              <EmptyState
+                title="请先选择任务"
+                description="原型按任务存放，请从上方任务下拉选择一个具体任务后再查看其原型"
+                icon={<span aria-hidden>▦</span>}
+              />
+            </div>
+          ) : (
+            <div style={{ display: "flex", minHeight: 560, flex: 1, flexDirection: "column", overflow: "hidden", border: `1px solid ${neutral[200]}`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)" }}>
+              <PrototypePanel key={`${taskKey}:${protoParam ?? ""}`} taskId={taskKey} initialProtoId={protoParam ?? undefined} />
+            </div>
+          )}
         </>
       )}
     </PageWindow>
