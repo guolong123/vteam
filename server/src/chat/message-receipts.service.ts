@@ -154,6 +154,29 @@ export class MessageReceiptsService {
     return { pending, total };
   }
 
+  /**
+   * 待回执查询（task 13：GET /messages/receipts 的行查询；计数复用 countPending
+   * 同口径——pending/total 按 taskId/teamId 作用域统计，不跟随 status 过滤）。
+   */
+  async listReceipts(filter: {
+    taskId?: string;
+    teamId?: string;
+    status?: string;
+  }) {
+    const where: Record<string, string> = {};
+    if (filter.taskId) where.taskId = filter.taskId;
+    if (filter.teamId) where.teamId = filter.teamId;
+    if (filter.status) where.status = filter.status;
+    const [items, counts] = await Promise.all([
+      this.prisma.messageReceipt.findMany({
+        where,
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.countPending({ taskId: filter.taskId, teamId: filter.teamId }),
+    ]);
+    return { items, pending: counts.pending, total: counts.total };
+  }
+
   /** 轮次收敛：N/N → 广播 round.complete。 */
   async emitRoundComplete(input: RoundEventPayload): Promise<void> {
     await this.emitTeamChannel({

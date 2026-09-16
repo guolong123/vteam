@@ -23,6 +23,7 @@ import {
   CurrentUser,
 } from '../common/decorators/current-user.decorator';
 import { ChatService } from './chat.service';
+import { MessageReceiptsService } from './message-receipts.service';
 import { CreateDmChannelDto } from './dto/create-dm-channel.dto';
 import { CreateMessageDto } from './dto/create-message.dto';
 import { QueryMessagesDto } from './dto/query-messages.dto';
@@ -44,7 +45,10 @@ import { UpdateChannelDto } from './dto/update-channel.dto';
 @ApiBearerAuth()
 @Controller()
 export class ChatController {
-  constructor(private readonly chatService: ChatService) {}
+  constructor(
+    private readonly chatService: ChatService,
+    private readonly receipts: MessageReceiptsService,
+  ) {}
 
   @Get('channels')
   @UseGuards(PermissionGuard)
@@ -110,6 +114,44 @@ export class ChatController {
     @Query() query: QueryMessagesDto,
   ) {
     return this.chatService.findMessages(id, user.id, query);
+  }
+
+  /**
+   * 待回执查询（plan-review-execution-gates Todo 5 缺失的独立端点）。
+   * GET /api/v1/messages/receipts?taskId=&teamId=&status= → {items, pending, total}
+   * - items：回执行（id/messageId/from/to/status/createdAt），按查询参数过滤，
+   *   status 缺省 = 全量；
+   * - pending/total：作用域内 n/N 计数（MessageReceiptsService.countPending 同口径）。
+   */
+  @Get('messages/receipts')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('chats.view')
+  @ApiOperation({
+    summary: '待回执查询（taskId/teamId/status 过滤 → {items, pending, total}）',
+  })
+  @ApiQuery({
+    name: 'taskId',
+    required: false,
+    description: '归属任务过滤',
+  })
+  @ApiQuery({
+    name: 'teamId',
+    required: false,
+    description: '归属团队过滤',
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    description: '回执状态过滤：pending | acked | expired（缺省全量）',
+  })
+  findReceipts(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('taskId') taskId?: string,
+    @Query('teamId') teamId?: string,
+    @Query('status') status?: string,
+  ) {
+    void user;
+    return this.receipts.listReceipts({ taskId, teamId, status });
   }
 
   /**
