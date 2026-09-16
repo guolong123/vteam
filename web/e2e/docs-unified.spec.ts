@@ -5,7 +5,7 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
  * ============================================================================
  * 五组：happy（选择器→chips→树→查看器→版本→删除→原型 tab→深链）
  *       / edge（txt/pdf/docx/ghost 渲染分支）/ failure（未知 doc/无 teamId/
- *       团队级原型禁用）/ XSS（脚本剥离 + 链接白名单）/ prototypes（徽标/tab/深链）。
+ *       团队级原型聚合）/ XSS（脚本剥离 + 链接白名单）/ prototypes（徽标/tab/深链）。
  *
  * Fixture（自给自足，beforeAll 经 API 直写 + afterAll 经 API 全删）：
  * - 任务 t_0000000001（团队 tm_0000000001，seed-admin 可见）上 10 行 `t12qa-*`：
@@ -330,7 +330,7 @@ test.describe("happy：选择器→chips→树→查看器→版本→删除→�
   });
 });
 
-test.describe("prototypes：徽标→tab→深链→团队级禁用（T14 断言移植）", () => {
+test.describe("prototypes：徽标→tab→深链→团队级聚合（T16）", () => {
   test("徽标 + tab：原型非空", async ({ page }) => {
     await page.goto(TASK_URL);
     const tab = page.getByTestId("docs-tab-protos");
@@ -363,12 +363,34 @@ test.describe("prototypes：徽标→tab→深链→团队级禁用（T14 断言
     ).toBeVisible();
   });
 
-  test("团队级（task=all）：原型 tab 禁用 + 空态", async ({ page }) => {
+  test("团队级（task=all）：原型 tab 可用 + 跨任务列表", async ({ page }) => {
+    // T16 起原型为团队级：task=all 下 tab 保持可用（旧 disabled 断言已随需求删除）。
     await page.goto(`/docs?teamId=${TEAM_ID}`);
-    await expect(page.getByTestId("docs-tab-protos")).toBeDisabled();
+    const tab = page.getByTestId("docs-tab-protos");
+    await expect(tab).toBeVisible();
+    await expect(tab).toBeEnabled();
+    await tab.click();
+    const panel = page.getByTestId("docs-prototype-panel");
+    await expect(panel).toBeVisible();
+    // beforeAll 在 t_0000000001 上播种了 t12qa-demo：团队聚合须含该条目及其任务名。
+    await expect(panel).toContainText("t12qa-demo");
+    await expect(panel).toContainText("cliyard MCP 新增");
+    // 旧「请先选择任务」死端已删：非空时无空态。
+    await expect(page.getByTestId("docs-proto-empty")).toHaveCount(0);
+    await expect(panel).not.toContainText("请先选择任务");
+  });
+
+  test("团队级（task=all）：?proto= 深链直达选中", async ({ page }) => {
     await page.goto(`/docs?teamId=${TEAM_ID}&proto=t12qa-demo`);
-    await expect(page.getByTestId("docs-proto-empty")).toBeVisible();
-    await expect(page.getByTestId("docs-proto-empty")).toContainText("请先选择任务");
+    await expect(page.getByTestId("docs-tab-protos")).toHaveAttribute(
+      "data-active",
+      "true",
+    );
+    const panel = page.getByTestId("docs-prototype-panel");
+    await expect(panel).toBeVisible();
+    await expect(
+      panel.locator('button[aria-current="page"]', { hasText: "t12qa-demo" }),
+    ).toBeVisible();
   });
 });
 
