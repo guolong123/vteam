@@ -9,6 +9,12 @@ import { join } from 'path';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { FileStorageService } from '../uploads/uploads.service';
+import {
+  docIdFor as slugDocIdFor,
+  prototypeFileName as slugPrototypeFileName,
+  prototypeSlug as slugPrototypeSlug,
+  toSlug as slugToSlug,
+} from '../artifacts/artifact-slug';
 import { resolveDocsRoot } from './docs-site.constants';
 
 /**
@@ -164,7 +170,7 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
       }
       const body = content.toString('utf8');
       if (isTsxPrototype) {
-        const slug = this.prototypeSlug(cur.title, artifactId, cur.contentRef);
+        const slug = slugPrototypeSlug(cur.title, artifactId, cur.contentRef);
         const tsxDir = join(protoDir, slug);
         await fsp.mkdir(tsxDir, { recursive: true });
         await fsp.writeFile(join(tsxDir, 'index.tsx'), body, 'utf8');
@@ -172,7 +178,7 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
       if (isPrototype) {
-        const fileName = this.prototypeFileName(
+        const fileName = slugPrototypeFileName(
           cur.title,
           artifactId,
           cur.contentRef,
@@ -181,7 +187,7 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         protoCount += 1;
         continue;
       }
-      let slug = this.docIdFor(cur.title, artifactId);
+      let slug = slugDocIdFor(cur.title, artifactId);
       if (seenDocIds.has(slug)) {
         const suffix = String(artifactId)
           .replace(/[^a-z0-9]/gi, '')
@@ -190,7 +196,7 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
         let counter = 1;
         while (seenDocIds.has(slug)) {
           counter += 1;
-          slug = `${this.docIdFor(cur.title, artifactId)}-${suffix}-${counter}`;
+          slug = `${slugDocIdFor(cur.title, artifactId)}-${suffix}-${counter}`;
         }
       }
       seenDocIds.add(slug);
@@ -368,61 +374,27 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * TSX 原型目录名（白名单 [a-z0-9_-]）：
-   * 优先取产出物文件名去 `.tsx` 后缀，不可用时从标题派生；标题弱名追加 artifact 后缀防冲突。
+   * TSX 原型目录名（规范实现见 `../artifacts/artifact-slug`；
+   * 此为兼容透传，T11 随镜像层删除）。
    */
   private prototypeSlug(
     title: string,
     artifactId: string,
     contentRef: string,
   ): string {
-    const base = String(contentRef).split('/').pop() ?? '';
-    let slug = base
-      .replace(/\.tsx$/i, '')
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, '-')
-      .replace(/^-+|-+$/g, '');
-    if (!slug) {
-      slug = this.toSlug(title);
-    }
-    if (!slug || slug === 'doc') {
-      const suffix = String(artifactId)
-        .replace(/[^a-z0-9]/gi, '')
-        .slice(-8);
-      slug = suffix ? `proto-${suffix}` : 'proto';
-    }
-    return slug;
+    return slugPrototypeSlug(title, artifactId, contentRef);
   }
 
   /**
-   * 旧 DSL 原型镜像文件名（白名单 [a-z0-9_-].json）：
-   * 优先取产出物文件名去 `.prototype.json`（my-proto.prototype.json → my-proto.json），
-   * 文件名不可用（中文/空）时从标题派生；标题弱名（doc 兜底）追加 artifact 后缀防冲突。
+   * 旧 DSL 原型镜像文件名（规范实现见 `../artifacts/artifact-slug`；
+   * 此为兼容透传，T11 随镜像层删除）。
    */
   private prototypeFileName(
     title: string,
     artifactId: string,
     contentRef: string,
   ): string {
-    const base = String(contentRef).split('/').pop() ?? '';
-    let slug = base
-      .replace(/\.prototype\.json$/i, '')
-      .replace(/\.json$/i, '')
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, '-')
-      .replace(/^-+|-+$/g, '');
-    if (!slug) {
-      slug = this.toSlug(title);
-    }
-    if (!slug || slug === 'doc') {
-      const suffix = String(artifactId)
-        .replace(/[^a-z0-9]/gi, '')
-        .slice(-8);
-      slug = suffix ? `proto-${suffix}` : 'proto';
-    }
-    return `${slug}.json`;
+    return slugPrototypeFileName(title, artifactId, contentRef);
   }
 
   /**
@@ -466,7 +438,7 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
     }
     const seen = new Set<string>();
     return [...current.values()].map((a, i) => {
-      const base = this.docIdFor(a.title, a.id);
+      const base = slugDocIdFor(a.title, a.id);
       let id = base;
       if (seen.has(base)) {
         const suffix = String(a.id)
@@ -502,25 +474,13 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
     return base.slice(dot + 1).toLowerCase();
   }
 
-  /** 标题 → ASCII slug（文件名/文档 id；规避中文 id hash 路由 bug）。 */
+  /** 标题 → ASCII slug（规范实现见 `../artifacts/artifact-slug`；此为兼容透传，T11 随镜像层删除）。 */
   toSlug(title: string): string {
-    const base = String(title ?? 'doc')
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '');
-    return base || 'doc';
+    return slugToSlug(title);
   }
 
-  /** 文档 id：标题 slug；弱 slug（纯中文/空 → doc）追加 artifact id 防多文档冲突。 */
+  /** 文档 id（规范实现见 `../artifacts/artifact-slug`；此为兼容透传，T11 随镜像层删除）。 */
   docIdFor(title: string, artifactId: string): string {
-    const slug = this.toSlug(title);
-    if (slug === 'doc' && artifactId) {
-      const suffix = String(artifactId)
-        .replace(/[^a-z0-9]/gi, '')
-        .slice(-8);
-      return suffix ? `doc-${suffix}` : 'doc';
-    }
-    return slug;
+    return slugDocIdFor(title, artifactId);
   }
 }

@@ -133,48 +133,9 @@ export const ARTIFACT_TYPE_LABEL: Record<ArtifactApiType, string> = {
   file: "文件",
 };
 
-/** 标题 → ASCII slug（对齐 server DocsMirrorService.toSlug）。 */
-export function toDocSlug(title: string): string {
-  return (
-    String(title ?? "doc")
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "doc"
-  );
-}
-
-/** 产出物 → 文档站 doc id（对齐 server DocsMirrorService.docIdFor + buildRegistry 去重）：
- *  base = ASCII slug；纯中文/空 → 'doc' 追加 artifact id 前 8 位；
- *  同名多文档按 artifact id 序，已占用 → 追加 -<artId前8位>。 */
-export function docIdFor(title: string, artifactId: string, all?: { id: string; title: string }[]): string {
-  const toBase = (t: string, id: string): string => {
-    const slug = toDocSlug(t);
-    if (slug !== "doc") return slug;
-    const suffix = String(id).replace(/[^a-z0-9]/gi, "").slice(-8);
-    return suffix ? `doc-${suffix}` : "doc";
-  };
-  const base = toBase(title, artifactId);
-  if (!all || all.length <= 1) return base;
-  const seen = new Set<string>();
-  const ordered = [...all].sort((a, b) => a.id.localeCompare(b.id));
-  for (const a of ordered) {
-    const b = toBase(a.title, a.id);
-    if (a.id === artifactId) {
-      if (!seen.has(b)) return b;
-      const suffix = String(artifactId).replace(/[^a-z0-9]/gi, "").slice(-8);
-      let cand = suffix ? `${b}-${suffix}` : b;
-      let cnt = 1;
-      while (seen.has(cand)) {
-        cnt += 1;
-        cand = `${b}-${suffix}-${cnt}`;
-      }
-      return cand;
-    }
-    seen.add(b);
-  }
-  return base;
-}
+/** slug 规范实现见 `@/src/lib/artifact-slug`（web 侧唯一定义）；
+ *  此处纯透传重导出，供既有调用方（团队会话页深链）兼容，T11 后按需直引新路径。 */
+export { docIdFor, toDocSlug } from "@/src/lib/artifact-slug";
 
 /** 成员展示项（TeamMembersPanel agents 元素形状）。 */
 export interface MemberView {
