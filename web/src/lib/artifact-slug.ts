@@ -22,7 +22,7 @@ export function toDocSlug(title: string): string {
 
 /** 产出物 → 文档站 doc id（对齐 server DocsMirrorService.docIdFor + buildRegistry 去重）：
  *  base = ASCII slug；纯中文/空 → 'doc' 追加 artifact id 末 8 位；
- *  同名多文档按 artifact id 序，已占用 → 追加 -<artId前8位>。 */
+ *  同名多文档按 artifact id 序，已占用 → 追加 -<artId末8位>。 */
 export function docIdFor(title: string, artifactId: string, all?: { id: string; title: string }[]): string {
   const toBase = (t: string, id: string): string => {
     const slug = toDocSlug(t);

@@ -153,6 +153,7 @@ description: 完整平台控制面对外契约：REST 端点清单、SSE 事件�
 | 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 依据 |
 |------|------|---------|---------|------|------|
 | GET | `/tasks/:id/artifacts` | `type?`（text/doc/file）、`search?` | 文档库列表（类型/标题/版本/作者/时间，FR-44） | `[team]` | FR-44 |
+| GET | `/teams/:id/artifacts` | `taskId?`、`type?`、`category?`、`accepted?`、`page?`、`pageSize?`（默认 20，上限 100） | 团队聚合产出物列表（跨任务扁平 + `taskName`，替代前端 per-task fan-out，FR-44） | `[team]` | FR-44 |
 | GET | `/artifacts/:id` | — | 产出物详情 + 版本列表（FR-45 版本切换入口） | `[team]` | FR-45 |
 | GET | `/artifacts/:id/versions/:version` | — | 指定版本内容（text/doc 返回正文，file 返回下载地址） | `[team]` | FR-43/45 |
 | POST | `/tasks/:id/artifacts` | `{type, title, content?}`（结论文本/文档） | `201` + 新版本（append 递增，FR-43）；**成员/主 Agent 辅助提交入口（P1）** | `[team]` | FR-40/43 |
