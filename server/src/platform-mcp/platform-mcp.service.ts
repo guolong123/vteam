@@ -69,6 +69,12 @@ import {
   ensureRoleViewFooter,
   parseReviewTriplet,
 } from '../chat/review-dispatch-triplet';
+import {
+  buildStalePlanHashHint,
+  isStalePlanHash,
+  normalizePlanHash,
+  selectFrozenPlanHash,
+} from '../issues/plan-hash-gate';
 import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
 import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
 
@@ -970,6 +976,11 @@ export class PlatformMcpService {
       force?: boolean;
       /** force 绕过的审计原因（落回执行 forceReason 列）。 */
       forceReason?: string;
+      /**
+       * 调用方携带的计划哈希（实际值，planVersion.hash sha1-8 口径；todo 3 执行认哈希）。
+       * 与冻结哈希不一致即 plan-gated 拦截；缺省 → 哈希门禁未武装（原门禁语义不变）。
+       */
+      planHash?: string;
     },
   ): Promise<NotifyAgentResult> {
     const exec = await this.resolveExecContext(ctx, args);
@@ -1108,10 +1119,21 @@ export class PlatformMcpService {
     }
     if (kind === 'execution' && !isTeam && effTaskId && targetAgentId !== PLAN_AGENT_ID) {
       const planGate = await this.checkPlanExecutionAllowed(effTaskId);
-      if (!planGate.allowed) {
+      const callerHash = normalizePlanHash(args.planHash);
+      let staleHash: { expected: string; actual: string } | null = null;
+      if (callerHash) {
+        const expected = await this.resolveFrozenPlanHash(effTaskId);
+        if (isStalePlanHash(expected, callerHash)) {
+          staleHash = { expected: expected as string, actual: callerHash };
+        }
+      }
+      if (!planGate.allowed || staleHash) {
         if (!forceReason) {
+          const stale = staleHash;
           this.logger.warn(
-            `[mcp] notify_agent 计划门禁拦截 task=${effTaskId} status=${planGate.status}（消息已发布）`,
+            stale
+              ? `[mcp] notify_agent 哈希门禁拦截 task=${effTaskId} expected=${stale.expected} actual=${stale.actual}（消息已发布）`
+              : `[mcp] notify_agent 计划门禁拦截 task=${effTaskId} status=${planGate.status}（消息已发布）`,
           );
           return {
             messageId: message.id,
@@ -1119,7 +1141,9 @@ export class PlatformMcpService {
             targetInstanceId: args.targetInstanceId,
             triggered: false,
             reason: 'plan-gated',
-            hint: `计划未放行：当前计划状态为 ${planGate.status}（需 executing，请确认开始执行后再派发；force=true + 原因可绕过并留审计）`,
+            hint: stale
+              ? buildStalePlanHashHint(stale.expected, stale.actual)
+              : `计划未放行：当前计划状态为 ${planGate.status}（需 executing，请确认开始执行后再派发；force=true + 原因可绕过并留审计）`,
             issueBound: !!args.issueId,
           };
         }
@@ -1269,6 +1293,25 @@ export class PlatformMcpService {
         `[mcp] plans 门禁读取失败 task=${taskId}，fail-open 放行：${err instanceof Error ? err.message : String(err)}`,
       );
       return { allowed: true, status: null };
+    }
+  }
+
+  private async resolveFrozenPlanHash(taskId: string): Promise<string | null> {
+    try {
+      const rows = await this.prisma.issue.findMany({
+        where: { taskId },
+        select: { description: true },
+      });
+      return selectFrozenPlanHash(
+        (Array.isArray(rows) ? rows : []).map(
+          (row: { description?: string | null }) => row?.description ?? null,
+        ),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] 冻结哈希读取失败 task=${taskId}，哈希门禁未武装：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
     }
   }
 

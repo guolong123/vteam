@@ -419,7 +419,7 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
 /* ------------------------------------------------------------------ */
 /** GET /tasks/:id/plan 响应（todo11：status 为 DB plans.status 真值）。 */
 interface PlanStatusResponse {
-  plan: { status?: string | null; confirmedBy?: string | null; confirmedAt?: string | null; finalizedBy?: string | null; finalizedAt?: string | null; rejectReason?: string | null } | null;
+  plan: { status?: string | null; confirmedBy?: string | null; confirmedAt?: string | null; finalizedBy?: string | null; finalizedAt?: string | null; rejectReason?: string | null; frozenVersion?: string | null; frozenHash?: string | null } | null;
   status: string | null;
   source?: string;
   warning?: string;
@@ -441,6 +441,7 @@ const PLAN_STATUS_UNKNOWN = { label: "未知", color: neutral[500], bg: neutral[
 interface RoundLedgerView {
   round: number;
   version: string;
+  hash: string;
   expected: string[];
   received: Record<string, { verdict?: string; msgId?: string; version?: string }>;
 }
@@ -452,11 +453,12 @@ function parseRoundLedger(description: unknown): RoundLedgerView | null {
   const m = /```json\s*([\s\S]*?)```/.exec(tail);
   if (!m) return null;
   try {
-    const raw = JSON.parse(m[1]) as Partial<RoundLedgerView> & { schemaVersion?: unknown; planVersion?: { version?: unknown } };
+    const raw = JSON.parse(m[1]) as Partial<RoundLedgerView> & { schemaVersion?: unknown; planVersion?: { version?: unknown; hash?: unknown } };
     if (raw?.schemaVersion !== 1 || typeof raw?.round !== "number") return null;
     if (!Array.isArray(raw?.expected) || typeof raw?.received !== "object" || !raw?.received) return null;
     const version = typeof raw?.planVersion?.version === "string" ? raw.planVersion.version : "v?";
-    return { round: raw.round, version, expected: raw.expected as string[], received: raw.received as RoundLedgerView["received"] };
+    const hash = typeof raw?.planVersion?.hash === "string" ? raw.planVersion.hash : "";
+    return { round: raw.round, version, hash, expected: raw.expected as string[], received: raw.received as RoundLedgerView["received"] };
   } catch {
     return null;
   }
@@ -548,6 +550,8 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
     if (st && st in issueCounts) issueCounts[st] += 1;
   }
   const progressPct = expectedN > 0 ? Math.round((receivedN / expectedN) * 100) : 0;
+  const serverFrozenHash = planQuery.data?.plan?.frozenHash;
+  const frozenHash: string | null = (typeof serverFrozenHash === "string" && serverFrozenHash ? serverFrozenHash : null) ?? (ledger?.hash ? ledger.hash : null);
 
   return (
     <>
@@ -558,12 +562,23 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
           {planQuery.isPending ? (
             <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>加载中…</span>
           ) : (
-            <span
-              data-testid="plan-status-badge"
-              data-status={status ?? "unknown"}
-              style={{ fontSize: fontSize.xs, fontWeight: 600, color: badge.color, backgroundColor: badge.bg, border: `1px solid ${badge.border}`, padding: "1px 8px", borderRadius: radius.pill, whiteSpace: "nowrap", animation: badge.flash ? "plan-badge-flash 1.2s ease-in-out infinite" : undefined }}
-            >
-              {badge.label}
+            <span style={{ display: "flex", alignItems: "center", gap: space.xs }}>
+              <span
+                data-testid="plan-status-badge"
+                data-status={status ?? "unknown"}
+                style={{ fontSize: fontSize.xs, fontWeight: 600, color: badge.color, backgroundColor: badge.bg, border: `1px solid ${badge.border}`, padding: "1px 8px", borderRadius: radius.pill, whiteSpace: "nowrap", animation: badge.flash ? "plan-badge-flash 1.2s ease-in-out infinite" : undefined }}
+              >
+                {badge.label}
+              </span>
+              {frozenHash ? (
+                <span
+                  data-testid="plan-frozen-hash"
+                  title={`冻结版本哈希 ${frozenHash}`}
+                  style={{ fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono, whiteSpace: "nowrap" }}
+                >
+                  #{frozenHash}
+                </span>
+              ) : null}
             </span>
           )}
         </div>

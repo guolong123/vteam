@@ -170,13 +170,19 @@ const notifyAgentSchema = z
         '执行分类（缺省 execution：任务维度下要求计划已确认进入 executing，否则 reason=plan-gated 被拦；review/nudge/wake 豁免门禁；review 派发词须带三元组 round + planVersion(+hash) + expected 名单，否则 reason=review-triplet 被拦；内部唤醒传 wake 且永不记账）',
       ),
     force: z
-      .boolean()
+      .preprocess((v) => v === true || v === 'true', z.boolean())
       .optional()
       .describe('强行绕过计划门禁/issue 锁（须同时给非空 forceReason 留审计行，否则仍被拦）'),
     forceReason: z
       .string()
       .optional()
       .describe('force 绕过的审计原因（落回执行 forceReason 列）'),
+    planHash: z
+      .string()
+      .optional()
+      .describe(
+        '调用方携带的计划哈希（planVersion.hash sha1-8 口径；执行认哈希：与冻结正式版哈希不一致即 reason=plan-gated 被拦并提示两边短哈希；缺省不查哈希）',
+      ),
   })
   .refine((d) => !!d.taskId || !!d.teamId, {
     message: REQUIRE_TASK_OR_TEAM_MSG,

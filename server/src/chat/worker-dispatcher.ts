@@ -58,6 +58,12 @@ import {
   MessageDispatcher,
 } from './message-dispatcher';
 import { inferErrorType, isQuotaError } from '../workers/infer-error-type';
+import {
+  buildStalePlanHashHint,
+  isStalePlanHash,
+  normalizePlanHash,
+  selectFrozenPlanHash,
+} from '../issues/plan-hash-gate';
 import { normalizeParts } from './message-parts';
 
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
@@ -1285,6 +1291,12 @@ export class WorkerDispatcher
     issueId?: string | null;
     /** 执行分类（缺省 execution；内部唤醒/轮次通知传 wake，评审传 review，催办传 nudge）。 */
     kind?: DispatchExecutionKind;
+    /**
+     * 调用方携带的计划哈希（实际值，planVersion.hash sha1-8 口径；todo 3 执行认哈希）。
+     * 与冻结哈希不一致即抛错拦截；缺省 → 哈希门禁未武装（原状态门禁语义不变）。
+     * notifyAgent 层不透传本字段（各层以自有输入独立执法）。
+     */
+    planHash?: string | null;
   }): Promise<void> {
     let teamId: string | null = null;
     let taskIdForDispatch: string | null = null;
@@ -1310,7 +1322,7 @@ export class WorkerDispatcher
     const kind: DispatchExecutionKind = input.kind ?? 'execution';
     if (kind === 'execution' && taskIdForDispatch) {
       if (!(await this.isPlanRoleTarget(teamId, input.targetInstanceId))) {
-        await this.assertPlanExecutionAllowed(taskIdForDispatch);
+        await this.assertPlanExecutionAllowed(taskIdForDispatch, input.planHash ?? null);
       }
     }
     const ensured = await this.sessionLifecycle.ensureTeamSession(
@@ -1358,8 +1370,13 @@ export class WorkerDispatcher
    * 计划执行门禁（todo4 第二道防线；第一道在 notifyAgent 层组装 plan-gated 返回）。
    * 非 executing 即抛错（含“计划未放行”）；读错/建行失败/未装配即 fail-open + warn。
    * 计划员目标（agentId=a_plan）由调用方预先豁免，永不进入本方法。
+   * todo 3 执行认哈希：调用方携带 planHash 且冻结哈希齐备时再比对，不一致即抛错
+   * （报错同时命名期望/实际短哈希）；任一侧缺失 → 哈希门禁未武装（状态语义不变）。
    */
-  private async assertPlanExecutionAllowed(taskId: string): Promise<void> {
+  private async assertPlanExecutionAllowed(
+    taskId: string,
+    callerHash?: string | null,
+  ): Promise<void> {
     let planLifecycle: PlanLifecycleService | null = null;
     try {
       planLifecycle =
@@ -1384,11 +1401,47 @@ export class WorkerDispatcher
       return;
     }
     if (status === null || status === 'executing') {
+      const actual = normalizePlanHash(callerHash);
+      if (actual) {
+        const expected = await this.resolveFrozenPlanHash(taskId);
+        if (isStalePlanHash(expected, actual)) {
+          throw new Error(
+            buildStalePlanHashHint(expected as string, actual),
+          );
+        }
+      }
       return;
     }
     throw new Error(
       `计划未放行：任务 ${taskId} 的计划状态为 ${status}（需 executing，确认开始执行后可派发；review/nudge/wake 类触发不受此限）`,
     );
+  }
+
+  /**
+   * 冻结哈希读端（todo 3；todo 2 落 frozenHash 列前过渡口径）：
+   * 任务下各轮次账本取最大 round 者 planVersion.hash。无账本/读错/
+   * 未装配 → null（哈希门禁未武装，fail-open）。只读 issues 表，不碰计划表。
+   */
+  private async resolveFrozenPlanHash(taskId: string): Promise<string | null> {
+    try {
+      const issueRepo = (this.prisma as any)?.issue;
+      if (!issueRepo || typeof issueRepo.findMany !== 'function') {
+        return null;
+      }
+      const rows = await issueRepo.findMany({
+        where: { taskId },
+        select: { description: true },
+      });
+      const descriptions: Array<string | null | undefined> = Array.isArray(rows)
+        ? rows.map((row: { description?: string | null }) => row?.description ?? null)
+        : [];
+      return selectFrozenPlanHash(descriptions);
+    } catch (err) {
+      this.logger.warn(
+        `冻结哈希读取失败 task=${taskId}，哈希门禁未武装：${this.describeError(err)}`,
+      );
+      return null;
+    }
   }
 
   // ------------------------------------------------------------------

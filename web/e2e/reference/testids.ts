@@ -213,6 +213,7 @@ export const PAGES: PageTestidRef[] = [
       "plan-doc-upload-error",
       "plan-status-block",
       "plan-status-badge",
+      "plan-frozen-hash",
       "plan-version-line",
       "plan-round-progress",
       "plan-confirm-btn",
