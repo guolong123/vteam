@@ -180,3 +180,23 @@ Conventions, patterns, and successful approaches discovered during work on this 
   `text-fallback`。
 - Live 上传 200 沿 T4 先例留 T12：400 收据（旧 allowlist 无新三项）+ jest
   （assertAllowed/fileFilter 同一 `ALLOWED_EXTENSIONS` 代码路径）即等价证明。
+
+## 2026-09-16 — T11 删镜像层与原型搬移
+
+- 零引用 grep 门不分注释与代码：`artifact-slug.ts:6`（`DocsMirrorService`）与
+  `artifact-slug.spec.ts:41`（`buildRegistry`）两处纯注释 token 也会让门恒为 2。
+  写新文件注释时即避开门禁 token；旧文件注释 token 必须改（各 1 行，零逻辑）。
+- 注入属性名禁与路由方法名同名：`private readonly prototypes` 遮蔽 `prototypes()`
+  方法（TS2341 + TS2349 双报错）。属性另名（`protoService`），方法/路由名不变。
+- `docker cp src container:/tmp/x` + `cp -r` overlay 不删目标端多余文件：
+  容器内须手动 `rm` 被删文件，否则死代码残留进构建。
+- `nest build` 在 `Found N error(s)` 下照常 emit（沿 T8 结论）：emit 新鲜度以
+  `ls -la` 时间戳 + `grep -c` 内容门为准，不看 exit 文案。本次 2 errors 仍是
+  T8 记录的 `platform-mcp.service.ts:1670/1942` 他波漂移（未顺手修）。
+- 容器 BusyBox `find` 无 `-newermt`：`docs-root` 无写入断言用 `-mmin -N` 窗口
+  （新代码重启后 3 分钟窗口 0 写；旧代码每次启动 `rebuildAll` 必重写，对比即证明）。
+- Live 空 fixture 的标准 fallback（T4 先例）：live 库零 tsx 行时不伪造 fixture
+  污染共享库——`GET prototypes` 空形状 200 + 搬移 spec 13/13（T6 断言原样重过）
+  + `registry`/`prd` 双 404，即完整交代；非空 live 门留 T12 fixture。
+- 回滚/交接惯例：容器内 `/app/dist.bak-<todo>`（循 `dist.bak-t8`），restart 不 stop
+  （compose  infra 为并行他波共享，healthy 即交接态）。

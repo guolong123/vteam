@@ -1,9 +1,9 @@
 /**
  * 产出物 slug 规范源（server 侧唯一定义）。
  *
- * - 从 `server/src/docs-site/docs-mirror.service.ts` 原样搬移（`toSlug`/`docIdFor`/
+ * - 从已退役的磁盘镜像层原样搬移（T3 搬移 `toSlug`/`docIdFor`/
  *   `prototypeSlug`/`prototypeFileName`，算法逐字符一致，深链 `?doc=` 兼容）。
- *   `DocsMirrorService` 内仅保留透传包装，逻辑以此文件为准（T11 删除镜像层时移除旧包装）。
+ *   本文件为唯一逻辑源（T11 起无旧包装残留）。
  * - Web 镜像：`web/src/lib/artifact-slug.ts`（`toDocSlug`/`docIdFor`，双实现 + 互指注释，
  *   跨端一致性由两侧单测 + grep 单定义门保证，不建共享包）。
  *

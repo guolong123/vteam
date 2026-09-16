@@ -1,16 +1,14 @@
 import { PrismaService } from '../prisma/prisma.service';
-import { DocsMirrorService } from './docs-mirror.service';
+import { PrototypesService } from './prototypes.service';
 import { DocsSiteController } from './docs-site.controller';
 
-describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯数据端点）', () => {
+describe('DocsSiteController（docs-artifacts-merge T11：DB-only 原型端点）', () => {
   let controller: DocsSiteController;
   let prisma: {
     task: { findUnique: jest.Mock };
     teamUserMember: { findUnique: jest.Mock };
   };
-  let mirror: {
-    buildRegistry: jest.Mock;
-    readMirrorDoc: jest.Mock;
+  let prototypes: {
     listPrototypes: jest.Mock;
     readPrototype: jest.Mock;
   };
@@ -25,90 +23,23 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
       task: { findUnique: jest.fn() },
       teamUserMember: { findUnique: jest.fn() },
     };
-    mirror = {
-      buildRegistry: jest.fn().mockResolvedValue([]),
-      readMirrorDoc: jest.fn(),
+    prototypes = {
       listPrototypes: jest.fn().mockResolvedValue([]),
       readPrototype: jest.fn(),
     };
-    controller = new DocsSiteController(prisma as never, mirror as never);
+    controller = new DocsSiteController(prisma as never, prototypes as never);
     // 成员校验通过默认
     prisma.task.findUnique.mockResolvedValue({ teamId });
     prisma.teamUserMember.findUnique.mockResolvedValue({ teamId, userId });
   });
 
-  describe('registry 数据端点', () => {
-    it('成员校验通过 → 返回动态 DocDef[]（镜像 buildRegistry）', async () => {
-      mirror.buildRegistry.mockResolvedValue([
-        { id: 'doc1', name: '文档1', file: 'doc1.md' },
-      ]);
-      const result = await controller.registry(taskId, user as never);
-      expect(prisma.task.findUnique).toHaveBeenCalledWith({
-        where: { id: taskId },
-        select: { teamId: true },
-      });
-      expect(prisma.teamUserMember.findUnique).toHaveBeenCalledWith({
-        where: { teamId_userId: { teamId, userId } },
-      });
-      expect(result).toEqual([{ id: 'doc1', name: '文档1', file: 'doc1.md' }]);
-    });
-
-    it('任务不存在 → 404', async () => {
-      prisma.task.findUnique.mockResolvedValue(null);
-      const err = (await controller
-        .registry(taskId, user as never)
-        .catch((e: unknown) => e)) as { response?: { code?: string } };
-      expect(err.response?.code).toBe('DOCS_TASK_NOT_FOUND');
-    });
-
-    it('非团队成员 → 403', async () => {
-      prisma.teamUserMember.findUnique.mockResolvedValue(null);
-      const err = (await controller
-        .registry(taskId, user as never)
-        .catch((e: unknown) => e)) as { response?: { code?: string } };
-      expect(err.response?.code).toBe('DOCS_SITE_FORBIDDEN');
-    });
-
-    it('非法 taskId（路径穿越/非 t_ 前缀）→ 400', async () => {
-      const err = (await controller
-        .registry('../etc', user as never)
-        .catch((e: unknown) => e)) as { response?: { code?: string } };
-      expect(err.response?.code).toBe('DOCS_PATH_OUT_OF_BOUNDS');
-    });
-  });
-
-  describe('prd 内容端点', () => {
-    it('成员校验通过 + 正常读取镜像内容', async () => {
-      mirror.readMirrorDoc.mockResolvedValue('# 正文\n内容');
-      const result = await controller.prd(taskId, 'doc-1.md', user as never);
-      expect(mirror.readMirrorDoc).toHaveBeenCalledWith(taskId, 'doc-1.md');
-      expect(result).toBe('# 正文\n内容');
-    });
-
-    it('文档不存在 → 404', async () => {
-      mirror.readMirrorDoc.mockResolvedValue(null);
-      const err = (await controller
-        .prd(taskId, 'ghost.md', user as never)
-        .catch((e: unknown) => e)) as { response?: { code?: string } };
-      expect(err.response?.code).toBe('DOCS_DOC_NOT_FOUND');
-    });
-
-    it('非团队成员 → 403', async () => {
-      prisma.teamUserMember.findUnique.mockResolvedValue(null);
-      const err = (await controller
-        .prd(taskId, 'doc-1.md', user as never)
-        .catch((e: unknown) => e)) as { response?: { code?: string } };
-      expect(err.response?.code).toBe('DOCS_SITE_FORBIDDEN');
-    });
-  });
-
   describe('prototypes 原型端点（26-原型TSX动态渲染）', () => {
     it('列表：成员校验通过 → { items: [{id, name, file}] }', async () => {
-      mirror.listPrototypes.mockResolvedValue([
+      prototypes.listPrototypes.mockResolvedValue([
         { id: 'my-proto', name: '登录页原型', file: 'my-proto/index.tsx' },
       ]);
       const result = await controller.prototypes(taskId, user as never);
-      expect(mirror.listPrototypes).toHaveBeenCalledWith(taskId);
+      expect(prototypes.listPrototypes).toHaveBeenCalledWith(taskId);
       expect(result).toEqual({
         items: [
           { id: 'my-proto', name: '登录页原型', file: 'my-proto/index.tsx' },
@@ -130,13 +61,15 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
     });
 
     it('内容：TSX 路径 → 返回 TSX 源码', async () => {
-      mirror.readPrototype.mockResolvedValue('export default function P() {}');
+      prototypes.readPrototype.mockResolvedValue(
+        'export default function P() {}',
+      );
       const result = await controller.prototypeContent(
         taskId,
         'my-proto/index.tsx',
         user as never,
       );
-      expect(mirror.readPrototype).toHaveBeenCalledWith(
+      expect(prototypes.readPrototype).toHaveBeenCalledWith(
         taskId,
         'my-proto/index.tsx',
       );
@@ -144,18 +77,18 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
     });
 
     it('内容：旧 JSON 路径 → 返回 JSON', async () => {
-      mirror.readPrototype.mockResolvedValue('{"name":"x"}');
+      prototypes.readPrototype.mockResolvedValue('{"name":"x"}');
       const result = await controller.prototypeContent(
         taskId,
         'old.json',
         user as never,
       );
-      expect(mirror.readPrototype).toHaveBeenCalledWith(taskId, 'old.json');
+      expect(prototypes.readPrototype).toHaveBeenCalledWith(taskId, 'old.json');
       expect(result).toBe('{"name":"x"}');
     });
 
     it('内容：白名单外文件名（穿越）→ 404 复用 DOCS_DOC_NOT_FOUND', async () => {
-      mirror.readPrototype.mockResolvedValue(null);
+      prototypes.readPrototype.mockResolvedValue(null);
       const err = (await controller
         .prototypeContent(taskId, '../../etc/passwd', user as never)
         .catch((e: unknown) => e)) as { response?: { code?: string } };
@@ -163,7 +96,7 @@ describe('DocsSiteController（is_0000000024 v4 深度集成：registry/prd 纯�
     });
 
     it('内容：原型不存在 → 404', async () => {
-      mirror.readPrototype.mockResolvedValue(null);
+      prototypes.readPrototype.mockResolvedValue(null);
       const err = (await controller
         .prototypeContent(taskId, 'ghost.json', user as never)
         .catch((e: unknown) => e)) as { response?: { code?: string } };

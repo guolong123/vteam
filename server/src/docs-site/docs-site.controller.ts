@@ -14,19 +14,16 @@ import {
   CurrentUser,
 } from '../common/decorators/current-user.decorator';
 import { DOCS_SITE_ERRORS } from './docs-site.constants';
-import { DocsMirrorService } from './docs-mirror.service';
+import { PrototypesService } from './prototypes.service';
 
 /**
- * 文档站数据端点（is_0000000024 · art_0000000039 v4 深度集成）。
+ * 文档站数据端点（docs-artifacts-merge T11：磁盘镜像层已退役，DB-only）。
  *
- * 深度集成形态：文档浏览/渲染组件内嵌 web（DocExplorer 移植），server 不再提供
- * 工具页 HTML/代理 upstream/cookie 换 token——web 组件经现有 `api.get`（Authorization
- * 头）直接调用本控制器的**纯数据端点**（registry + prd）。v3 的 query token/Set-Cookie/
- * 302/shell 全部移除，鉴权回归标准 JWT（全局 JwtAuthGuard）+ 团队成员校验。
+ * 形态：web 合站页经现有 `api.get`（Authorization 头）直接调用本控制器的
+ * **纯数据端点**（prototypes 原型列表/源码）。T11 前的 registry/prd 镜像端点
+ * 已删除（T8 合站页只读团队聚合端点 + artifacts 详情/版本端点）。
  *
  * 端点（路径均为 /api/v1 前缀，main.ts 全局前缀）：
- * - GET /docs-site/:taskId/registry     → 动态 DocDef[]（任务 doc 产出物，AC-3 文档树）
- * - GET /docs-site/:taskId/prd/<file>   → 镜像 .md 内容（taskId 子树白名单 + 路径穿越防护）
  * - GET /docs-site/:taskId/prototypes       → 原型列表 { items: [{id, name, file}] }
  * - GET /docs-site/:taskId/prototypes/<file> → 原型源码（TSX / DSL JSON，文件白名单防路径穿越）
  *
@@ -38,40 +35,8 @@ import { DocsMirrorService } from './docs-mirror.service';
 export class DocsSiteController {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly mirror: DocsMirrorService,
+    private readonly protoService: PrototypesService,
   ) {}
-
-  /** 动态注册表 GET /docs-site/:taskId/registry → DocDef[]。 */
-  @Get(':taskId/registry')
-  @ApiOperation({ summary: '文档站注册表：任务文档树' })
-  @Header('Content-Type', 'application/json; charset=utf-8')
-  async registry(
-    @Param('taskId') taskId: string,
-    @CurrentUser() user: AuthenticatedUser,
-  ): Promise<unknown> {
-    await this.assertMember(taskId, user.id);
-    return this.mirror.buildRegistry(taskId);
-  }
-
-  /** 镜像文档内容 GET /docs-site/:taskId/prd/:file。 */
-  @Get(':taskId/prd/:file')
-  @ApiOperation({ summary: '读取任务镜像文档内容' })
-  @Header('Content-Type', 'text/markdown; charset=utf-8')
-  async prd(
-    @Param('taskId') taskId: string,
-    @Param('file') file: string,
-    @CurrentUser() user: AuthenticatedUser,
-  ): Promise<string> {
-    await this.assertMember(taskId, user.id);
-    const content = await this.mirror.readMirrorDoc(taskId, file);
-    if (content === null) {
-      throw new NotFoundException({
-        code: DOCS_SITE_ERRORS.DOC_NOT_FOUND,
-        message: `文档不存在: ${file}`,
-      });
-    }
-    return content;
-  }
 
   /** 原型列表 GET /docs-site/:taskId/prototypes → { items: [{id, name, file}] }。 */
   @Get(':taskId/prototypes')
@@ -82,7 +47,7 @@ export class DocsSiteController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<{ items: Array<{ id: string; name: string; file: string }> }> {
     await this.assertMember(taskId, user.id);
-    return { items: await this.mirror.listPrototypes(taskId) };
+    return { items: await this.protoService.listPrototypes(taskId) };
   }
 
   /** 原型源码内容 GET /docs-site/:taskId/prototypes/<file> → TSX / DSL JSON 文本。 */
@@ -95,7 +60,7 @@ export class DocsSiteController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<string> {
     await this.assertMember(taskId, user.id);
-    const content = await this.mirror.readPrototype(taskId, filePath);
+    const content = await this.protoService.readPrototype(taskId, filePath);
     if (content === null) {
       throw new NotFoundException({
         code: DOCS_SITE_ERRORS.DOC_NOT_FOUND,

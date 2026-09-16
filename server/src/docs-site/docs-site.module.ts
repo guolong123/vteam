@@ -1,20 +1,18 @@
 import { Module } from '@nestjs/common';
 import { DocsSiteController } from './docs-site.controller';
-import { DocsMirrorService } from './docs-mirror.service';
+import { PrototypesService } from './prototypes.service';
 
 /**
- * 文档站模块（is_0000000024 · art_0000000039 v4 深度集成）。
+ * 文档站模块（docs-artifacts-merge T11：磁盘镜像层已退役，DB-only）。
  *
- * - DocsMirrorService（F1）：任务 doc 产出物 → 镜像 .md（幂等导出，派生视图）；
- * - DocsSiteController（F2/F4）：registry/prd 纯数据端点（全局 JwtAuthGuard 鉴权 +
- *   项目成员校验）；
- * - 无 JwtModule/cookie 依赖（v4 移除 query token/Set-Cookie/302/代理）；
- * - ArtifactsService 归档成功后经依赖注入触发 DocsMirrorService.syncTask
- *   （ArtifactsModule 侧可选注入，避免循环依赖）。
+ * - PrototypesService：任务 file 型原型产出物 → DB 直读列表/源码（派生视图，
+ *   权威在 DB(artifacts)+uploads，无磁盘写入）；
+ * - DocsSiteController：prototypes 纯数据端点（全局 JwtAuthGuard 鉴权 +
+ *   团队成员校验）；
+ * - 无 JwtModule/cookie 依赖；registry/prd 镜像端点已删除。
  */
 @Module({
   controllers: [DocsSiteController],
-  providers: [DocsMirrorService],
-  exports: [DocsMirrorService],
+  providers: [PrototypesService],
 })
 export class DocsSiteModule {}

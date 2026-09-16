@@ -19,7 +19,6 @@ import {
 } from './artifacts.constants';
 import { QueryArtifactsDto, QueryTeamArtifactsDto } from './dto/artifact.dto';
 import { FileStorageService } from '../uploads/uploads.service';
-import { DocsMirrorService } from '../docs-site/docs-mirror.service';
 
 /** 产出物域主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
 const ID_PREFIX = {
@@ -123,7 +122,6 @@ export class ArtifactsService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly idGen: IdGeneratorService,
     private readonly realtime: RealtimeService,
-    private readonly docsMirror?: DocsMirrorService,
   ) {}
 
   /** 进程启动：按库内各前缀纯数字序号最大值对齐 id 生成器（resyncIdPrefix 跳过非数字 id，防主键冲突）。 */
@@ -288,13 +286,6 @@ export class ArtifactsService implements OnModuleInit {
       );
     }
 
-    // is_0000000024：doc/file 产出物归档后异步触发文档站镜像同步（幂等覆盖，失败不阻断归档）。
-    // file 型含 .tsx 原型，doSyncTask 内部按后缀过滤（仅镜像 .md / .tsx / .prototype.json）。
-    // DocsMirrorService 可选注入（docs-site 未启用/未接线时不触发）。
-    if ((type === 'doc' || type === 'file') && this.docsMirror) {
-      void this.docsMirror.syncTask(taskId);
-    }
-
     return {
       status: 'archived',
       artifact: this.toArtifactListItem(artifact, current),
@@ -304,8 +295,8 @@ export class ArtifactsService implements OnModuleInit {
   /**
    * 历史版本恢复（T5 append-as-new，15 篇私域 §3-P5/§4-T5/§7-item-4）。
    * 定 append-as-new：指针回退会孤立版本、与 acceptedFlag 审计冲突，明确禁用；
-   * 本方法复用 append 的版本递增事务 + append 后副作用（completed 退回 in_progress、
-   * docsMirror 同步），但显式绕过 sha256 幂等去重（force 语义：恢复相同内容也必须
+   * 本方法复用 append 的版本递增事务 + append 后副作用（completed 退回 in_progress），
+   * 但显式绕过 sha256 幂等去重（force 语义：恢复相同内容也必须
    * 递增，新版本 changeNote=`restore from vX`），内容与源版本逐字段相同。
    * - 产出物不存在 → 404 ARTIFACT_NOT_FOUND；源版本不存在 → 404 ARTIFACT_VERSION_NOT_FOUND
    * - 当前版本 acceptedFlag=true → 409 ARTIFACT_ACCEPTED_IMMUTABLE（与 append 同语义）
@@ -385,13 +376,6 @@ export class ArtifactsService implements OnModuleInit {
         },
         { type: 'global' },
       );
-    }
-
-    if (
-      (artifact.type === 'doc' || artifact.type === 'file') &&
-      this.docsMirror
-    ) {
-      void this.docsMirror.syncTask(artifact.taskId);
     }
 
     return {
@@ -508,9 +492,6 @@ export class ArtifactsService implements OnModuleInit {
       };
     });
 
-    if (this.docsMirror) {
-      void this.docsMirror.syncTask(taskId);
-    }
     return result;
   }
 
@@ -709,9 +690,6 @@ export class ArtifactsService implements OnModuleInit {
       this.prisma.artifactVersion.deleteMany({ where: { artifactId } }),
       this.prisma.artifact.delete({ where: { id: artifactId } }),
     ]);
-    if (this.docsMirror) {
-      void this.docsMirror.syncTask(artifact.taskId);
-    }
   }
 
   /** 文档库列表项 DTO（12 篇 §6.1 展示列 + 验收状态）。 */

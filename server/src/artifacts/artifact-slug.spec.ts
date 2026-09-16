@@ -38,7 +38,7 @@ describe('artifact-slug', () => {
     expect(a).toBe('doc-00000001');
     expect(b).toBe('doc-00000002');
     expect(a).not.toBe(b);
-    // 强 slug 与 artifact 无关（同名强 slug 冲突由 buildRegistry 的 seen 集处理）
+    // 强 slug 与 artifact 无关（同名强 slug 冲突由调用方去重集处理）
     expect(docIdFor('Design Doc', 'art_0000000001')).toBe(
       docIdFor('Design Doc', 'art_0000000002'),
     );
