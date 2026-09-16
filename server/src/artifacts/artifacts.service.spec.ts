@@ -1739,6 +1739,16 @@ describe('ArtifactsService', () => {
       expect(prisma.artifact.findMany).not.toHaveBeenCalled();
     });
 
+    it('empty：团队有任务但零产出物 → 空分页（不查版本表）', async () => {
+      setupTeam();
+      prisma.artifact.findMany.mockResolvedValue([]);
+
+      const result = await service.findByTeam('tm_0000000001', {});
+
+      expect(result).toEqual({ items: [], total: 0, page: 1, pageSize: 20 });
+      expect(prisma.artifactVersion.findMany).not.toHaveBeenCalled();
+    });
+
     it('pagination：pageSize=1000 截断到 100（与任务端点同值）', async () => {
       setupTeam();
       prisma.artifact.findMany.mockResolvedValue([

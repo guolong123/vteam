@@ -222,3 +222,27 @@ Conventions, patterns, and successful approaches discovered during work on this 
   + `registry`/`prd` 双 404，即完整交代；非空 live 门留 T12 fixture。
 - 回滚/交接惯例：容器内 `/app/dist.bak-<todo>`（循 `dist.bak-t8`），restart 不 stop
   （compose  infra 为并行他波共享，healthy 即交接态）。
+
+## 2026-09-17 — T12 测试收尾与 QA sweep
+
+- 镜像重建：`docker compose build server` 在干净 HEAD 上红（`nest build` 2 errors，
+  `platform-mcp.service.ts:1670/1942` 他波漂移；所需符号在他波未提交 hunk 内，
+  脏树 host `tsc -p tsconfig.build.json` 反而绿）。此时正确做法不是修他人模块，
+  而是 `docker commit` 运行容器（其 dist == HEAD 构建产物已验证）→ retag latest →
+  `compose up -d server`，即镜像层对齐。回滚：`pre-t12` backup tag + force-recreate。
+- 永久 e2e 自播种：beforeAll 经 `:13000` 直连 API（login→删残留 t12qa→上传样本
+  Buffer→注册 10 行→断言 prototypes 含 t12qa-demo），afterAll 全删；
+  UI 侧走 `:3001` storageState。tsx 字节永不过白名单：卷内固定种子文件
+  `/app/uploads/t12qa-demo.tsx`（源入库 `web/e2e/fixtures/`）+ 缺失 fail-fast。
+- file 行 content 用 1–6 空格区分（sha 互异防幂等碰撞 + trim 为空跳 P2 保 fileRef）。
+- 原型徽标是异步查询：断言前先 `toContainText(/[1-9]/)` 等待，快照 textContent 必 flake。
+- `page.request`（storageState）调 Bearer API 得 401：测内需显式 login 取 token
+  （pages.spec 4b 同模式）。
+- pages 既有失败判定法：testid 全仓仅 spec 侧存在 + `git grep -c @ HEAD` 同样零命中
+  = pre-existing spec/UI 漂移（team-right-empty、search-input 均属此类）；4b 类
+  seed 缺失失败会自愈（本轮已绿）。
+- 孤儿上传清理：mtime 窗口 + `artifact_versions(content_ref/file_path)` +
+  `messages(attachment_url)` 双表零引用 + 样本尺寸集三重核对后才 `rm`；
+  `t12qa-demo.tsx` 种子保留。
+- web lint 唯一 error 在 gitignored 他波 tmp（`shot-omo3.tmp.cjs`）：查
+  `git check-ignore` 定性后不动（删他人 tmp 同样有风险）。
