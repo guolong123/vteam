@@ -835,6 +835,18 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
     expect(prompts.get('a_librarian')).not.toContain(RECEIPT_AT);
   });
 
+  it('计划员收敛契约：收敛输入=轮次账本+verdicts明细，输出=冻结候选版+归档清单', async () => {
+    const plan = (await promptsById()).get('a_plan')!;
+    expect(plan).toContain('## 收敛契约');
+    expect(plan).toContain('收敛输入=轮次账本+verdicts明细');
+    expect(plan).toContain('轮次账本');
+    expect(plan).toContain('verdicts');
+    expect(plan).toContain('收敛输出=冻结候选版+归档清单');
+    expect(plan).toContain('冻结候选版');
+    expect(plan).toContain('归档清单');
+    expect(plan).toContain('superseded');
+  });
+
   it('计划员修订铁律：非收敛不修订 + exact hint + 教师 override', async () => {
     const plan = (await promptsById()).get('a_plan')!;
     expect(plan).toContain(PLAN_NO_EARLY_REVISE);

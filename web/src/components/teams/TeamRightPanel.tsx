@@ -444,6 +444,8 @@ interface RoundLedgerView {
   hash: string;
   expected: string[];
   received: Record<string, { verdict?: string; msgId?: string; version?: string }>;
+  /** 归档回执（版本 ≠ 当前轮次版本的过期回执，仅备查；UI 归档入口数据源）。 */
+  superseded: Array<{ member?: string; verdict?: string; msgId?: string; version?: string }>;
 }
 /** issue 描述内机器段分隔符（逐字节对齐服务端 REVIEW_ROUND_DELIMITER）。 */
 const REVIEW_ROUND_DELIMITER = "<!-- REVIEW-ROUND-JSON -->";
@@ -453,12 +455,13 @@ function parseRoundLedger(description: unknown): RoundLedgerView | null {
   const m = /```json\s*([\s\S]*?)```/.exec(tail);
   if (!m) return null;
   try {
-    const raw = JSON.parse(m[1]) as Partial<RoundLedgerView> & { schemaVersion?: unknown; planVersion?: { version?: unknown; hash?: unknown } };
+    const raw = JSON.parse(m[1]) as Partial<RoundLedgerView> & { schemaVersion?: unknown; planVersion?: { version?: unknown; hash?: unknown }; superseded?: unknown };
     if (raw?.schemaVersion !== 1 || typeof raw?.round !== "number") return null;
     if (!Array.isArray(raw?.expected) || typeof raw?.received !== "object" || !raw?.received) return null;
     const version = typeof raw?.planVersion?.version === "string" ? raw.planVersion.version : "v?";
     const hash = typeof raw?.planVersion?.hash === "string" ? raw.planVersion.hash : "";
-    return { round: raw.round, version, hash, expected: raw.expected as string[], received: raw.received as RoundLedgerView["received"] };
+    const superseded = Array.isArray(raw?.superseded) ? (raw.superseded as RoundLedgerView["superseded"]) : [];
+    return { round: raw.round, version, hash, expected: raw.expected as string[], received: raw.received as RoundLedgerView["received"], superseded };
   } catch {
     return null;
   }
@@ -484,6 +487,8 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [finalizeOpen, setFinalizeOpen] = useState(false);
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
+  /** 归档入口展开态（默认收起，点击可达旧轮次回执）。 */
+  const [showArchive, setShowArchive] = useState(false);
 
   const planQuery = useQuery({
     queryKey: ["task", taskId, "plan"],
@@ -517,13 +522,24 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
   /** 轮次账本：从 issue 描述机器段聚合，取最高轮次（同轮取回执最多者）。 */
   const issues: any[] = issuesQuery?.data?.items ?? [];
   let ledger: RoundLedgerView | null = null;
+  /** 归档回执聚合：遍历全部 issue 账本的 superseded，按轮次倒序（旧轮次可达）。 */
+  const archived: Array<{ member: string; verdict?: string; msgId?: string; version?: string; round: number }> = [];
+  const seenArchive = new Set<string>();
   for (const it of issues) {
     const parsed = parseRoundLedger((it as { description?: unknown })?.description);
     if (!parsed) continue;
+    for (const s of parsed.superseded ?? []) {
+      const member = typeof s?.member === "string" ? s.member : "";
+      const key = `${parsed.round}:${member}:${s?.msgId ?? ""}`;
+      if (!member || seenArchive.has(key)) continue;
+      seenArchive.add(key);
+      archived.push({ member, verdict: s?.verdict, msgId: s?.msgId, version: s?.version, round: parsed.round });
+    }
     const parsedN = Object.keys(parsed.received ?? {}).length;
     const curN = ledger ? Object.keys(ledger.received ?? {}).length : -1;
     if (!ledger || parsed.round > ledger.round || (parsed.round === ledger.round && parsedN > curN)) ledger = parsed;
   }
+  archived.sort((a, b) => b.round - a.round);
   const expected: string[] = ledger?.expected ?? [];
   const receivedKeys = Object.keys(ledger?.received ?? {});
   const receivedN = receivedKeys.length;
@@ -552,6 +568,8 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
   const progressPct = expectedN > 0 ? Math.round((receivedN / expectedN) * 100) : 0;
   const serverFrozenHash = planQuery.data?.plan?.frozenHash;
   const frozenHash: string | null = (typeof serverFrozenHash === "string" && serverFrozenHash ? serverFrozenHash : null) ?? (ledger?.hash ? ledger.hash : null);
+  const serverFrozenVersion = planQuery.data?.plan?.frozenVersion;
+  const frozenVersion: string | null = typeof serverFrozenVersion === "string" && serverFrozenVersion ? serverFrozenVersion : null;
 
   return (
     <>
@@ -570,6 +588,15 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
               >
                 {badge.label}
               </span>
+              {frozenVersion ? (
+                <span
+                  data-testid="plan-frozen-version"
+                  title={`冻结版本号 ${frozenVersion}`}
+                  style={{ fontSize: fontSize.xs, color: neutral[700], fontFamily: fontFamily.mono, whiteSpace: "nowrap", fontWeight: 600 }}
+                >
+                  {frozenVersion}
+                </span>
+              ) : null}
               {frozenHash ? (
                 <span
                   data-testid="plan-frozen-hash"
@@ -600,6 +627,30 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
           </div>
         ) : (
           <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无评审轮次账本（派发评审后自动出现）</div>
+        )}
+        {archived.length > 0 && (
+          <div data-testid="plan-archive-block" style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+            <button
+              type="button"
+              data-testid="plan-archive-toggle"
+              data-count={archived.length}
+              onClick={() => setShowArchive((v) => !v)}
+              style={{ alignSelf: "flex-start", padding: `2px ${space.sm}px`, borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[500], fontSize: fontSize.xs, cursor: "pointer", fontFamily: fontFamily.body }}
+            >
+              {showArchive ? "收起归档回执" : `归档回执（${archived.length}）`}
+            </button>
+            {showArchive && (
+              <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+                {archived.map((a) => (
+                  <div key={`${a.round}:${a.member}:${a.msgId ?? ""}`} data-testid="plan-archive-item" data-member={a.member} data-version={a.version ?? ""} data-round={a.round} style={{ display: "flex", alignItems: "center", gap: space.sm, fontSize: fontSize.xs, color: neutral[500], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.sm, backgroundColor: neutral[50] }}>
+                    <span style={{ fontFamily: fontFamily.mono, flexShrink: 0 }}>R{a.round}·{a.version ?? "v?"}</span>
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nameOf(a.member)}</span>
+                    <span style={{ flexShrink: 0, fontWeight: 600 }}>{a.verdict ?? ""}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
         {showFinalize && (
           <button
