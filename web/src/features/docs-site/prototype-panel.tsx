@@ -1,6 +1,8 @@
 "use client";
 import { useState, useMemo } from "react";
-import { usePrototypes, useDeleteArtifact } from "./hooks";
+import { useQueryClient } from "@tanstack/react-query";
+import { usePrototypes, useTeamPrototypes, useDeleteArtifact } from "./hooks";
+import type { TeamPrototypeListItem } from "./hooks";
 import { PrototypeSandbox } from "./prototype-sandbox";
 import { DeviceFrame } from "./device-frame";
 import { DeviceSwitcher } from "./device-switcher";
@@ -16,15 +18,39 @@ const TRASH_ICON = (
   </svg>
 );
 
-export function PrototypePanel({ taskId, initialProtoId }: { taskId: string; initialProtoId?: string }) {
-  const { data, isError, error, refetch } = usePrototypes(taskId);
-  const prototypes = data ?? [];
+export interface PrototypePanelProps {
+  /** 具体任务（任务级模式）。缺省或 "all" 时走团队级模式（需 teamId）。 */
+  taskId?: string;
+  /** 团队级模式的团队 id（任务级模式可不传）。 */
+  teamId?: string;
+  /** 团队级回退聚合用的任务名映射（团队任务列表 id/title 即可）。 */
+  tasks?: { id: string; title: string }[];
+  initialProtoId?: string;
+}
+
+export function PrototypePanel({ taskId, teamId, tasks, initialProtoId }: PrototypePanelProps) {
+  const teamMode = !taskId || taskId === "all";
+  const taskResult = usePrototypes(teamMode ? "" : (taskId as string));
+  const teamResult = useTeamPrototypes(teamMode ? (teamId ?? "") : "", tasks);
+  const { isError, error, refetch } = teamMode
+    ? { isError: teamResult.isError, error: teamResult.error, refetch: teamResult.refetch }
+    : { isError: taskResult.isError, error: taskResult.error, refetch: () => { void taskResult.refetch(); } };
+  const prototypes = useMemo(
+    () => (teamMode ? teamResult.items : taskResult.data) ?? [],
+    [teamMode, teamResult.items, taskResult.data],
+  );
   const [selectedId, setSelectedId] = useState<string>(() => initialProtoId ?? "");
   const [device, setDevice] = useState<DeviceType>("desktop");
   const [hoverId, setHoverId] = useState<string | null>(null);
   const selected = useMemo(() => prototypes.find((p) => p.id === selectedId) ?? prototypes[0] ?? null, [prototypes, selectedId]);
   const effectiveId = selected?.id ?? "";
-  const deleteMutation = useDeleteArtifact(taskId);
+  const selectedTaskId = (selected as TeamPrototypeListItem | null)?.taskId ?? taskId ?? "";
+  const queryClient = useQueryClient();
+  const deleteMutation = useDeleteArtifact(selectedTaskId);
+  const itemTaskId = (p: { id: string }) =>
+    (p as Partial<TeamPrototypeListItem>).taskId ?? taskId ?? "";
+  const itemTaskName = (p: { id: string }) =>
+    (p as Partial<TeamPrototypeListItem>).taskName ?? null;
   if (prototypes.length > 0 && !selectedId) {
     const wanted = initialProtoId && prototypes.some((p) => p.id === initialProtoId) ? initialProtoId : prototypes[0].id;
     if (wanted !== selectedId) setSelectedId(wanted);
@@ -32,8 +58,8 @@ export function PrototypePanel({ taskId, initialProtoId }: { taskId: string; ini
   if (prototypes.length === 0) {
     return (
       <div data-testid="docs-prototype-panel" style={{ display: "flex", height: "100%", minHeight: 0, flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: neutral[50], padding: `0 ${space.xl}px`, fontFamily: fontFamily.body }}>
-        <div style={{ maxWidth: 448, borderRadius: radius.md, border: `1px dashed ${neutral[300]}`, backgroundColor: surface, padding: `${space.xxl * 2}px ${space.xl}px`, textAlign: "center" }}>
-          <p style={{ fontSize: fontSize.md, lineHeight: 1.6, color: neutral[500] }}>{isError ? String((error as Error)?.message ?? "原型列表加载失败") : "该任务暂无原型产出物，Agent 提交 <name>/index.tsx 后自动出现"}</p>
+        <div data-testid="docs-proto-empty" style={{ maxWidth: 448, borderRadius: radius.md, border: `1px dashed ${neutral[300]}`, backgroundColor: surface, padding: `${space.xxl * 2}px ${space.xl}px`, textAlign: "center" }}>
+          <p style={{ fontSize: fontSize.md, lineHeight: 1.6, color: neutral[500] }}>{isError ? String((error as Error)?.message ?? "原型列表加载失败") : teamMode ? "该团队暂无原型产出物，Agent 提交 <name>/index.tsx 后自动出现" : "该任务暂无原型产出物，Agent 提交 <name>/index.tsx 后自动出现"}</p>
           {isError && <button type="button" onClick={() => refetch()} style={{ marginTop: space.lg, borderRadius: radius.sm, border: `1px solid ${border}`, backgroundColor: surface, padding: "6px 12px", fontSize: fontSize.xs, cursor: "pointer", color: neutral[700] }}>重试</button>}
         </div>
       </div>
@@ -68,12 +94,12 @@ export function PrototypePanel({ taskId, initialProtoId }: { taskId: string; ini
                     >
                       <button type="button" onClick={() => setSelectedId(proto.id)} aria-current={active ? "page" : undefined} style={{ display: "flex", minWidth: 0, flex: 1, alignItems: "flex-start", gap: 10, borderRadius: radius.sm, padding: `${space.sm}px ${space.md}px`, textAlign: "left", cursor: "pointer", border: "none", fontFamily: fontFamily.body, backgroundColor: "transparent", color: active ? ACCENT : neutral[600] }}>
                         <span style={{ marginTop: 4, width: 6, height: 6, flexShrink: 0, borderRadius: "50%", backgroundColor: active ? "#0D9488" : neutral[300] }} />
-                        <span style={{ minWidth: 0 }}><span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: fontSize.md, fontWeight: 500 }}>{proto.name}</span><span style={{ marginTop: 2, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: fontFamily.mono, fontSize: 11, color: neutral[400] }}>{proto.id}</span></span>
+                        <span style={{ minWidth: 0 }}><span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: fontSize.md, fontWeight: 500 }}>{proto.name}</span><span style={{ marginTop: 2, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: fontFamily.mono, fontSize: 11, color: neutral[400] }}>{teamMode ? (itemTaskName(proto) ?? proto.file) : proto.id}</span></span>
                       </button>
                       {proto.artifactId ? (
                         <button
                           type="button"
-                          onClick={(e) => { e.stopPropagation(); if (confirm(`确定删除原型「${proto.name}」？`)) deleteMutation.mutate(proto.artifactId!); }}
+                          onClick={(e) => { e.stopPropagation(); if (confirm(`确定删除原型「${proto.name}」？`)) deleteMutation.mutate(proto.artifactId!, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["team-prototypes"] }); } }); }}
                           style={{
                             flexShrink: 0, width: 24, height: 24, display: "flex", alignItems: "center", justifyContent: "center",
                             borderRadius: radius.sm, border: "none", cursor: "pointer",
@@ -105,7 +131,7 @@ export function PrototypePanel({ taskId, initialProtoId }: { taskId: string; ini
         {selected ? (
           <div style={{ padding: `${space.xl}px ${space.lg}px` }}>
             <DeviceFrame device={device} label={`prototype.vteam.local/${selected.file}`}>
-              <PrototypeSandbox key={`${selected.file}-${device}`} taskId={taskId} file={selected.file} name={selected.name} device={device} />
+              <PrototypeSandbox key={`${itemTaskId(selected)}:${selected.file}-${device}`} taskId={itemTaskId(selected)} file={selected.file} name={selected.name} device={device} />
             </DeviceFrame>
           </div>
         ) : <div style={{ display: "flex", height: 256, alignItems: "center", justifyContent: "center", fontSize: fontSize.md, color: neutral[400] }}>选择左侧原型查看详情</div>}

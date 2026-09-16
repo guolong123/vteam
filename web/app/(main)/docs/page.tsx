@@ -18,13 +18,13 @@
  * - ?doc= 深链：经 @/src/lib/artifact-slug docIdFor 逐行计算匹配（与 session 页同输入）；
  *   未知 doc → 内容区空态，绝不 404/throw。
  * - T10 消费：本文件默认导出即合站组件（薄别名直接 import）。
- * - T14 原型 tab 回补：文档/原型双 tab（tab 栏 testid 沿用旧任务页契约
- *   `docs-tab-bar/docs-tab-docs/docs-tab-protos`；`?proto=` 存在即激活原型 tab，
- *   与 `?doc=` 共存时初始以 `?proto=` 为准，挂载后以最后点击为准）：docs tab 为
- *   上述合站内容整体下移（逻辑/testid 不动）；protos tab 内已选具体任务时渲染
- *   `PrototypePanel taskId + initialProtoId`（既有组件不动，dynamic ssr:false）
- *   + 数量徽标（`GET /docs-site/:taskId/prototypes` 计数）；task=all 时原型 tab
- *   置灰 + `docs-proto-empty`「请先选择任务」空态（tab 栏仍渲染，不取数，不崩）。
+ * - T16 团队级原型 + 全宽布局：protos tab 常驻可用；已选具体任务时渲染
+ *   `PrototypePanel taskId + initialProtoId`（任务级窄化）；task=all 时渲染
+ *   `PrototypePanel teamId + tasks`（团队级：`GET /teams/:id/prototypes`
+ *   主端点 + 逐任务聚合回退，条目自带 taskId/taskName，沙箱取选中条目 taskId；
+ *   真正为空时面板内 `docs-proto-empty` 空态）。布局：PageWindow fluid 全宽；
+ *   树 440px 两行（标题弹性行 + 任务名次行，分类/版本徽标保留）；
+ *   树/查看器 `calc(100vh - 280px)` 视口填充 + 内部滚动，查看器头尾 pinned。
  * - data-testid：docs-shell / docs-team-picker / docs-team-option / docs-filter-bar /
  *   team-filter-select / task-filter-select / category-filter-option /
  *   type-filter-option / accepted-filter-option / docs-tree / docs-tree-item /
@@ -281,6 +281,8 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
       style={{
         display: "flex",
         flexDirection: "column",
+        flex: 1,
+        minHeight: 0,
         backgroundColor: "var(--color-surface)",
         border: `1px solid ${neutral[200]}`,
         borderRadius: radius.lg,
@@ -295,6 +297,7 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          flexShrink: 0,
           gap: space.md,
           padding: `${space.md}px ${space.xl}px`,
           borderBottom: `1px solid ${neutral[200]}`,
@@ -389,11 +392,11 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
         </div>
       </div>
 
-      {/* 内容区：经 FilePreview 富矩阵渲染（text→md / pdf 沙箱 / office 下载卡） */}
+      {/* 内容区：经 FilePreview 富矩阵渲染（text→md / pdf 沙箱 / office 下载卡）；纵向填充 + 内部滚动，头尾元信息常驻 */}
       <div
         style={{
-          minHeight: 96,
-          maxHeight: 420,
+          flex: 1,
+          minHeight: 0,
           overflow: "auto",
           padding: `${space.xl}px`,
           fontSize: fontSize.md,
@@ -420,6 +423,7 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          flexShrink: 0,
           gap: space.md,
           padding: `${space.md}px ${space.xl}px`,
           borderTop: `1px dashed ${neutral[200]}`,
@@ -495,8 +499,8 @@ function DocTreeRow({ item, docSlug, active, onSelect, onDeleted }: DocTreeRowPr
           display: "flex",
           minWidth: 0,
           flex: 1,
-          alignItems: "center",
-          gap: space.sm,
+          flexDirection: "column",
+          gap: 2,
           border: "none",
           background: "transparent",
           padding: 0,
@@ -505,37 +509,51 @@ function DocTreeRow({ item, docSlug, active, onSelect, onDeleted }: DocTreeRowPr
           fontFamily: fontFamily.body,
         }}
       >
-        <ArtifactTypeBadge type={item.type} />
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            fontSize: fontSize.md,
-            fontWeight: active ? 600 : 500,
-            color: active ? "#0D9488" : neutral[700],
-          }}
-        >
-          {item.title}
+        <span style={{ display: "flex", minWidth: 0, alignItems: "center", gap: space.sm }}>
+          <ArtifactTypeBadge type={item.type} />
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: fontSize.md,
+              fontWeight: active ? 600 : 500,
+              color: active ? "#0D9488" : neutral[700],
+            }}
+          >
+            {item.title}
+          </span>
         </span>
-        <CategoryBadge category={item.category} />
-        <span
-          style={{
-            flexShrink: 0,
-            fontSize: fontSize.xs,
-            fontWeight: 600,
-            color: neutral[500],
-            backgroundColor: neutral[200],
-            padding: "1px 6px",
-            borderRadius: radius.pill,
-          }}
-        >
-          v{item.currentVersion}
-        </span>
-        <span style={{ flexShrink: 0, fontSize: fontSize.xs, color: neutral[400], whiteSpace: "nowrap" }}>
-          {item.taskName ?? ""}
+        <span style={{ display: "flex", minWidth: 0, alignItems: "center", gap: space.sm }}>
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: fontSize.xs,
+              color: neutral[400],
+            }}
+          >
+            {item.taskName ?? ""}
+          </span>
+          <CategoryBadge category={item.category} />
+          <span
+            style={{
+              flexShrink: 0,
+              fontSize: fontSize.xs,
+              fontWeight: 600,
+              color: neutral[500],
+              backgroundColor: neutral[200],
+              padding: "1px 6px",
+              borderRadius: radius.pill,
+            }}
+          >
+            v{item.currentVersion}
+          </span>
         </span>
       </button>
       <button
@@ -688,15 +706,22 @@ export default function DocsUnifiedPage() {
   });
   const tasks = tasksQuery.data?.items ?? [];
 
-  // 原型数量徽标（旧任务页同查询：GET /docs-site/:taskId/prototypes 计数；task=all 时不取）
+  // 原型数量徽标：已选具体任务 → 任务级计数；全团队 → 团队级计数（T16 团队级原型 tab）。
   const protoCountQuery = useQuery({
     queryKey: ["docs-proto-count", taskKey],
     queryFn: () => api.get<{ items: unknown[] }>(`/docs-site/${taskKey}/prototypes`),
     enabled: !!userId && taskKey !== "all",
     retry: false,
   });
-  const protoCount = Array.isArray(protoCountQuery.data?.items) ? protoCountQuery.data.items.length : undefined;
-  const isProtoDisabled = taskKey === "all";
+  const teamProtoCountQuery = useQuery({
+    queryKey: ["team-proto-count", teamId],
+    queryFn: () => api.get<{ items: unknown[] }>(`/teams/${teamId}/prototypes`),
+    enabled: !!userId && !!teamId && taskKey === "all",
+    retry: false,
+  });
+  const taskProtoCount = Array.isArray(protoCountQuery.data?.items) ? protoCountQuery.data.items.length : undefined;
+  const teamProtoCount = Array.isArray(teamProtoCountQuery.data?.items) ? teamProtoCountQuery.data.items.length : undefined;
+  const protoCount = taskKey === "all" ? teamProtoCount : taskProtoCount;
 
   // 聚合查询：ONE 团队端点查询（分类/类型/验收走请求参数；未分类走前端过滤）
   const teamArtifactsQuery = useQuery({
@@ -763,14 +788,13 @@ export default function DocsUnifiedPage() {
     setDocSlug(slug);
     syncUrl({ doc: slug });
   };
-  // tab 切换：只切显隐 + 落 URL 快照（?doc=/?proto= 双保留，筛选/选择全保留）；
-  // 团队级（task=all）时原型 tab 不可点，由 disabled 守住，此处再守一层。
+  // tab 切换：只切显隐 + 落 URL 快照（?doc=/?proto= 双保留，筛选/选择全保留）。
+  // 原型 tab 团队级可用（T16）：task=all 时列全团队原型，不再设 disabled。
   const handleTabDocs = () => {
     setTab("docs");
     syncUrl({});
   };
   const handleTabProtos = () => {
-    if (isProtoDisabled) return;
     setTab("protos");
     syncUrl({});
   };
@@ -793,7 +817,7 @@ export default function DocsUnifiedPage() {
   return (
     <PageWindow
       testId="docs-shell"
-      maxWidth={1280}
+      fluid
       style={{ backgroundColor: neutral[100], ...baseFont }}
     >
       {/* 头部：团队名 + 文档站标题 */}
@@ -868,7 +892,7 @@ export default function DocsUnifiedPage() {
               <button type="button" role="tab" aria-selected={tab === "docs"} data-testid="docs-tab-docs" data-active={tab === "docs" ? "true" : "false"} onClick={handleTabDocs} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: radius.sm, padding: "6px 12px", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", border: "none", fontFamily: fontFamily.body, transition: "background .15s, color .15s", ...(tab === "docs" ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" } : { backgroundColor: "transparent", color: neutral[500] }) }}>
                 <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16M6 20V8l6-4 6 4v12M10 20v-6h4v6" /></svg>文档
               </button>
-              <button type="button" role="tab" aria-selected={tab === "protos"} data-testid="docs-tab-protos" data-active={tab === "protos" ? "true" : "false"} disabled={isProtoDisabled} aria-disabled={isProtoDisabled ? "true" : undefined} title={isProtoDisabled ? "请先选择具体任务后查看原型" : undefined} onClick={handleTabProtos} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: radius.sm, padding: "6px 12px", fontSize: fontSize.md, fontWeight: 500, border: "none", fontFamily: fontFamily.body, transition: "background .15s, color .15s", ...(tab === "protos" ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" } : { backgroundColor: "transparent", color: neutral[500] }), ...(isProtoDisabled ? { opacity: 0.5, cursor: "not-allowed" } : { cursor: "pointer" }) }}>
+              <button type="button" role="tab" aria-selected={tab === "protos"} data-testid="docs-tab-protos" data-active={tab === "protos" ? "true" : "false"} onClick={handleTabProtos} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: radius.sm, padding: "6px 12px", fontSize: fontSize.md, fontWeight: 500, border: "none", fontFamily: fontFamily.body, transition: "background .15s, color .15s", cursor: "pointer", ...(tab === "protos" ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" } : { backgroundColor: "transparent", color: neutral[500] }) }}>
                 <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>原型
                 {typeof protoCount === "number" && protoCount > 0 && <span style={{ borderRadius: radius.pill, backgroundColor: neutral[200], padding: "0 6px", fontSize: 10, fontWeight: 600, lineHeight: "16px", color: neutral[600] }}>{protoCount}</span>}
               </button>
@@ -962,12 +986,13 @@ export default function DocsUnifiedPage() {
             />
           </div>
 
-          {/* 主体：文档树（左）+ 内容查看（右） */}
+          {/* 主体：文档树（左）+ 内容查看（右）；双栏视口填充 + 各自内部滚动 */}
           <div
             style={{
               display: "flex",
               gap: space.lg,
-              alignItems: "flex-start",
+              alignItems: "stretch",
+              flex: 1,
               minHeight: 0,
             }}
           >
@@ -975,13 +1000,13 @@ export default function DocsUnifiedPage() {
             <div
               data-testid="docs-tree"
               style={{
-                width: 360,
+                width: 440,
                 flexShrink: 0,
                 display: "flex",
                 flexDirection: "column",
                 gap: space.sm,
-                minHeight: 0,
-                maxHeight: 640,
+                minHeight: 400,
+                height: "calc(100vh - 280px)",
                 overflow: "auto",
               }}
             >
@@ -1054,7 +1079,7 @@ export default function DocsUnifiedPage() {
             </div>
 
             {/* 内容查看：选中文档 → 版本查看器；未选 → 空态；未知 doc → 空态（不抛错） */}
-            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 400, height: "calc(100vh - 280px)" }}>
               {isPending || isError ? null : docMissing ? (
                 <div data-testid="docs-doc-missing">
                   <EmptyState
@@ -1083,17 +1108,13 @@ export default function DocsUnifiedPage() {
             </div>
           </div>
           </>
-          ) : isProtoDisabled ? (
-            <div data-testid="docs-proto-empty">
-              <EmptyState
-                title="请先选择任务"
-                description="原型按任务存放，请从上方任务下拉选择一个具体任务后再查看其原型"
-                icon={<span aria-hidden>▦</span>}
-              />
-            </div>
           ) : (
-            <div style={{ display: "flex", minHeight: 560, flex: 1, flexDirection: "column", overflow: "hidden", border: `1px solid ${neutral[200]}`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)" }}>
-              <PrototypePanel key={`${taskKey}:${protoParam ?? ""}`} taskId={taskKey} initialProtoId={protoParam ?? undefined} />
+            <div style={{ display: "flex", minHeight: 400, height: "calc(100vh - 280px)", flex: 1, flexDirection: "column", overflow: "hidden", border: `1px solid ${neutral[200]}`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)" }}>
+              {taskKey !== "all" ? (
+                <PrototypePanel key={`${taskKey}:${protoParam ?? ""}`} taskId={taskKey} initialProtoId={protoParam ?? undefined} />
+              ) : (
+                <PrototypePanel key={`team:${teamId}:${protoParam ?? ""}`} teamId={teamId ?? undefined} tasks={tasks} initialProtoId={protoParam ?? undefined} />
+              )}
             </div>
           )}
         </>

@@ -15,19 +15,20 @@ export interface PageWindowProps {
   children: ReactNode;
   /** 内容最大宽度（缺省 1080，对齐既有窗口页）。 */
   maxWidth?: number;
+  /** 全宽模式：内层不限宽、不居中（docs 站等工作区页用；缺省 false，既有页行为不变）。 */
+  fluid?: boolean;
   /** 根节点 testid（缺省 page-window；替换旧根容器时透传原 testid，保 e2e 不变）。 */
   testId?: string;
   style?: CSSProperties;
   className?: string;
 }
 
-export function PageWindow({ children, maxWidth = 1080, testId = "page-window", style, className }: PageWindowProps) {
+export function PageWindow({ children, maxWidth = 1080, fluid = false, testId = "page-window", style, className }: PageWindowProps) {
   return (
     <main data-testid={testId} className={className} style={{ flex: 1, minHeight: 0, padding: `${space.xl}px`, ...style }}>
       <div
         style={{
-          maxWidth,
-          margin: "0 auto",
+          ...(fluid ? { maxWidth: "none", margin: 0 } : { maxWidth, margin: "0 auto" }),
           width: "100%",
           display: "flex",
           flexDirection: "column",
