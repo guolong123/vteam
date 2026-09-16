@@ -291,7 +291,7 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
           </button>
         ))}
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: `${space.md}px ${space.lg}px`, display: "flex", flexDirection: "column", gap: space.lg }}>
+      <div data-testid="team-subtab-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: `${space.md}px ${space.lg}px`, display: "flex", flexDirection: "column", gap: space.lg }}>
         {subTab === "overview" && (
           <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
             <div style={{ padding: `${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}` }}>
@@ -687,7 +687,7 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
           </button>
         ))}
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: `${space.md}px ${space.lg}px`, display: "flex", flexDirection: "column", gap: space.lg }}>
+      <div data-testid="task-subtab-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: `${space.md}px ${space.lg}px`, display: "flex", flexDirection: "column", gap: space.lg }}>
         {subTab === "status" && (
           <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
             <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: isCurrent ? "rgba(13,148,136,0.06)" : waiting > 0 ? "rgba(245,158,11,0.06)" : "var(--color-surface)", border: `1px solid ${isCurrent ? "rgba(13,148,136,0.14)" : waiting > 0 ? "rgba(245,158,11,0.14)" : neutral[200]}` }}>
@@ -932,7 +932,7 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery,
         )}
       </div>
       {/* 内容区 */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: "hidden" }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         {activeMainTab === "team" && <TeamSubTabs team={team} onToggleManagedMode={onToggleManagedMode} />}
         {activeMainTab === "task" && hasTask && (
           <TaskSubTabs

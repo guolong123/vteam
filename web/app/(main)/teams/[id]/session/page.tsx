@@ -1067,7 +1067,7 @@ export default function TeamSessionPage() {
   const teamEditable = !!currentTask && (currentTask.status === "pending" || currentTask.status === "in_progress");
 
   return (
-    <div data-testid="team-session-root" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", ...baseFont }}>
+    <div data-testid="team-session-root" style={{ flex: 1, minHeight: 0, height: "100%", overflow: "hidden", display: "flex", flexDirection: "column", ...baseFont }}>
       {/* 顶栏：团队名 + 当前任务 + 队列 + 刷新 + 头像组 */}
       <header style={{ height: 64, flexShrink: 0, display: "flex", alignItems: "center", gap: space.md, padding: `0 ${space.xl}px`, backgroundColor: "var(--color-surface)", borderBottom: `1px solid ${neutral[200]}` }}>
         <div style={{ minWidth: 0 }}>
@@ -1096,7 +1096,7 @@ export default function TeamSessionPage() {
         </div>
       </header>
 
-      <div style={{ flex: 1, minHeight: 0, display: "flex", position: "relative" }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", position: "relative" }}>
         {/* 左侧完整成员面板 */}
         <TeamMembersPanel
           agents={agentMembers}
@@ -1120,7 +1120,7 @@ export default function TeamSessionPage() {
         <ResizeHandle label="调整成员面板宽度" onResizeStart={membersPanel.onResizeStart} />
 
         {/* 中央聊天区：私聊 Tabs + 消息列表 + 输入 */}
-        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", backgroundColor: neutral[50] }}>
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", backgroundColor: neutral[50] }}>
           <div
             data-testid="dm-tabs"
             style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.xl}px`, borderBottom: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", overflowX: "auto", ...baseFont }}
@@ -1279,7 +1279,7 @@ export default function TeamSessionPage() {
         <ResizeHandle label="调整任务面板宽度" onResizeStart={taskPanel.onResizeStart} />
 
         {/* 右侧双 Tab（团队 / 任务，团队常显，任务有当前任务时显示） */}
-        <div style={{ width: taskPanel.width, flexShrink: 0, display: "flex", flexDirection: "column", overflow: "hidden", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}` }}>
+        <div data-testid="task-panel" style={{ width: taskPanel.width, flexShrink: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", backgroundColor: "var(--color-surface)", borderLeft: `1px solid ${neutral[200]}` }}>
           {/* 计划文件上传：隐藏 input + 错误条（计划 Tab 的"上传"按钮触发） */}
           <input
             ref={planUploadInputRef}

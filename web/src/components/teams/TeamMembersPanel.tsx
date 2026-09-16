@@ -244,6 +244,8 @@ export function TeamMembersPanel({
       style={{
         width: width ?? 224,
         flexShrink: 0,
+        minHeight: 0,
+        overflow: "hidden",
         borderRight: `1px solid ${neutral[200]}`,
         backgroundColor: neutral[50],
         display: "flex",
@@ -262,7 +264,7 @@ export function TeamMembersPanel({
       >
         任务成员 · {agents.length}
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: space.xs, padding: `0 ${space.sm}px ${space.md}px` }}>
+      <div data-testid="members-list" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: space.xs, padding: `0 ${space.sm}px ${space.md}px` }}>
         {agents.map((a) => {
           // T6 实例语义：loading/starting 状态按实例 key 匹配（同 agent 多实例各自 loading），
           // 会话运行状态保留 agentId 维度（session.updated 事件无实例 id，旧协议）
