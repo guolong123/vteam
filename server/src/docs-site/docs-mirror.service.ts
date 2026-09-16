@@ -225,9 +225,13 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * 扫描任务原型镜像目录 → 原型列表（web 原型 tab 契约）。
-   * 支持两种格式：TSX 目录（<name>/index.tsx）和旧 DSL JSON（<name>.json）。
-   * name 优先从 TSX meta 导出 / JSON name 字段读，缺省回退目录名/文件名。
+   * 任务原型列表（DB 直读，T6；web 原型 tab 契约不变）。
+   * 查 type='file' 当前版本且 contentRef 以 .tsx/.prototype.json 结尾的行，
+   * 显示名经 `../artifacts/artifact-slug` 规范 helper 计算，源码经
+   * `readUploadedFile(contentRef)` 读取后按既有 meta 正则解析；
+   * 磁盘 `prototypes/` 目录不再参与（`doSyncTask` 写盘保留到 T11 删除）。
+   * 支持两种格式：TSX（<slug>/index.tsx）和旧 DSL JSON（<slug>.json）。
+   * name 优先从 TSX meta 导出 / JSON name 字段读，缺省回退 slug。
    */
   async listPrototypes(taskId: string): Promise<
     Array<{
@@ -238,7 +242,14 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
       artifactId?: string;
     }>
   > {
-    const protoDir = join(this.docsRoot, taskId, 'prototypes');
+    const rows = await this.prisma.artifactVersion.findMany({
+      where: { artifact: { taskId, type: 'file' } },
+      select: {
+        version: true,
+        contentRef: true,
+        artifact: { select: { id: true, title: true, currentVersion: true } },
+      },
+    });
     const items: Array<{
       id: string;
       metaId?: string;
@@ -247,113 +258,75 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
       artifactId?: string;
     }> = [];
 
-    // 从 DB 获取 file 型产出物映射（contentRef → artifactId），供 slug 反查
-    const fileArtifactVersions = await this.prisma.artifactVersion.findMany({
-      where: { artifact: { taskId, type: 'file' } },
-      select: {
-        contentRef: true,
-        artifact: { select: { id: true, currentVersion: true } },
-        version: true,
-      },
-    });
-    const contentRefToArtifact = new Map<string, string>();
-    for (const r of fileArtifactVersions) {
-      if (r.version === r.artifact.currentVersion && r.contentRef) {
-        contentRefToArtifact.set(r.contentRef, r.artifact.id);
+    for (const r of rows) {
+      if (r.version !== r.artifact.currentVersion) {
+        continue;
       }
-    }
-
-    // 扫描 TSX 目录：prototypes/<name>/index.tsx
-    try {
-      const entries = await fsp.readdir(protoDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const name = entry.name;
-        if (!/^[a-z0-9_-]+$/.test(name)) continue;
-        const tsxFile = join(protoDir, name, 'index.tsx');
+      const contentRef = r.contentRef ?? '';
+      if (!contentRef.startsWith('/uploads/')) {
+        continue;
+      }
+      const artifactId = r.artifact.id;
+      const title = r.artifact.title;
+      if (/\.tsx$/i.test(contentRef)) {
+        const slug = slugPrototypeSlug(title, artifactId, contentRef);
+        let displayName = slug;
+        let metaId: string | undefined;
         try {
-          await fsp.access(tsxFile);
-          let displayName = name;
-          let metaId: string | undefined;
-          try {
-            const content = await fsp.readFile(tsxFile, 'utf8');
-            const metaMatch = content.match(
-              /export\s+const\s+meta\s*=\s*(\{[^}]+\})/s,
+          const content = (
+            await FileStorageService.readUploadedFile(contentRef)
+          ).toString('utf8');
+          const metaMatch = content.match(
+            /export\s+const\s+meta\s*=\s*(\{[^}]+\})/s,
+          );
+          if (metaMatch) {
+            const nameMatch = metaMatch[1].match(
+              /name\s*:\s*["']([^"']+)["']/,
             );
-            if (metaMatch) {
-              const nameMatch = metaMatch[1].match(
-                /name\s*:\s*["']([^"']+)["']/,
-              );
-              if (nameMatch?.[1]) displayName = nameMatch[1];
-              const idMatch = metaMatch[1].match(/id\s*:\s*["']([^"']+)["']/);
-              if (idMatch?.[1]) metaId = idMatch[1].trim();
-            }
-          } catch {
-            /* 读取失败用目录名兜底 */
+            if (nameMatch?.[1]) displayName = nameMatch[1];
+            const idMatch = metaMatch[1].match(/id\s*:\s*["']([^"']+)["']/);
+            if (idMatch?.[1]) metaId = idMatch[1].trim();
           }
-          let artifactId: string | undefined;
-          for (const [ref, aid] of contentRefToArtifact) {
-            if (
-              ref.includes(`/${name}/`) ||
-              ref.endsWith(`/${name}/index.tsx`) ||
-              ref.endsWith(`/${name}.tsx`)
-            ) {
-              artifactId = aid;
-              break;
-            }
-          }
-          items.push({
-            id: name,
-            metaId,
-            name: displayName,
-            file: `${name}/index.tsx`,
-            artifactId,
-          });
         } catch {
-          /* index.tsx 不存在 → 跳过 */
+          /* 读取失败用 slug 兜底 */
         }
+        items.push({
+          id: slug,
+          metaId,
+          name: displayName,
+          file: `${slug}/index.tsx`,
+          artifactId,
+        });
+        continue;
       }
-    } catch {
-      // 目录不存在（该任务无原型产出物）→ 继续扫描 JSON
-    }
-
-    // 扫描旧 DSL JSON：prototypes/<name>.json（向后兼容）
-    try {
-      const files = (await fsp.readdir(protoDir)).filter((f) =>
-        /^[a-z0-9_-]+\.json$/.test(f),
-      );
-      files.sort();
-      for (const f of files) {
-        const id = f.replace(/\.json$/, '');
+      if (/\.prototype\.json$/i.test(contentRef)) {
+        const fileName = slugPrototypeFileName(title, artifactId, contentRef);
+        const id = fileName.replace(/\.json$/, '');
         try {
-          const doc = JSON.parse(
-            await fsp.readFile(join(protoDir, f), 'utf8'),
-          ) as { name?: unknown };
+          const raw = (
+            await FileStorageService.readUploadedFile(contentRef)
+          ).toString('utf8');
+          const doc = JSON.parse(raw) as { name?: unknown };
           const name =
             typeof doc?.name === 'string' && doc.name.trim()
               ? doc.name.trim()
               : id;
-          let artifactId: string | undefined;
-          for (const [ref, aid] of contentRefToArtifact) {
-            if (ref.endsWith(`/${f}`)) {
-              artifactId = aid;
-              break;
-            }
-          }
-          items.push({ id, name, file: f, artifactId });
+          items.push({ id, name, file: fileName, artifactId });
         } catch {
-          this.logger.warn(`[docs-mirror] 原型 ${f} 解析失败，跳过列表`);
+          this.logger.warn(`[docs-mirror] 原型 ${fileName} 解析失败，跳过列表`);
         }
       }
-    } catch {
-      /* 无 JSON 文件 */
     }
 
     items.sort((a, b) => a.id.localeCompare(b.id));
     return items;
   }
 
-  /** 读单个原型文件内容（鉴权在 controller；白名单防路径穿越）。支持 TSX 和旧 DSL JSON。 */
+  /**
+   * 读单个原型文件内容（DB 直读，T6；鉴权在 controller；白名单防路径穿越）。
+   * 支持 TSX（<slug>/index.tsx）和旧 DSL JSON（<slug>.json）；
+   * 文件名经规范 helper 反查到 DB 行后由 `readUploadedFile` 取源码。
+   */
   async readPrototype(
     taskId: string,
     filePath: string,
@@ -365,12 +338,57 @@ export class DocsMirrorService implements OnModuleInit, OnModuleDestroy {
     ) {
       return null;
     }
-    const fullPath = join(this.docsRoot, taskId, 'prototypes', filePath);
-    try {
-      return await fsp.readFile(fullPath, 'utf8');
-    } catch {
-      return null;
+    const rows = await this.prisma.artifactVersion.findMany({
+      where: { artifact: { taskId, type: 'file' } },
+      select: {
+        version: true,
+        contentRef: true,
+        artifact: { select: { id: true, title: true, currentVersion: true } },
+      },
+    });
+    for (const r of rows) {
+      if (r.version !== r.artifact.currentVersion) {
+        continue;
+      }
+      const contentRef = r.contentRef ?? '';
+      if (!contentRef.startsWith('/uploads/')) {
+        continue;
+      }
+      if (/\.tsx$/i.test(contentRef)) {
+        const slug = slugPrototypeSlug(
+          r.artifact.title,
+          r.artifact.id,
+          contentRef,
+        );
+        if (`${slug}/index.tsx` === filePath) {
+          try {
+            return (
+              await FileStorageService.readUploadedFile(contentRef)
+            ).toString('utf8');
+          } catch {
+            return null;
+          }
+        }
+        continue;
+      }
+      if (/\.prototype\.json$/i.test(contentRef)) {
+        const fileName = slugPrototypeFileName(
+          r.artifact.title,
+          r.artifact.id,
+          contentRef,
+        );
+        if (fileName === filePath) {
+          try {
+            return (
+              await FileStorageService.readUploadedFile(contentRef)
+            ).toString('utf8');
+          } catch {
+            return null;
+          }
+        }
+      }
     }
+    return null;
   }
 
   /**
