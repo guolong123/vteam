@@ -419,17 +419,18 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
 /* ------------------------------------------------------------------ */
 /** GET /tasks/:id/plan 响应（todo11：status 为 DB plans.status 真值）。 */
 interface PlanStatusResponse {
-  plan: { status?: string | null; confirmedBy?: string | null; confirmedAt?: string | null; rejectReason?: string | null } | null;
+  plan: { status?: string | null; confirmedBy?: string | null; confirmedAt?: string | null; finalizedBy?: string | null; finalizedAt?: string | null; rejectReason?: string | null } | null;
   status: string | null;
   source?: string;
   warning?: string;
 }
 
-/** 计划四态徽标（修订中灰 / 待执行琥珀闪烁 / 执行中蓝 / 完成绿；DB 状态映射）。 */
+/** 计划五态徽标（修订中灰 / 待定稿琥珀闪烁 / 待执行琥珀闪烁 / 执行中蓝 / 完成绿；DB 状态映射）。 */
 const PLAN_STATUS_BADGE: Record<string, { label: string; color: string; bg: string; border: string; flash: boolean }> = {
   draft: { label: "修订中", color: neutral[500], bg: neutral[100], border: neutral[200], flash: false },
   reviewing: { label: "修订中", color: neutral[500], bg: neutral[100], border: neutral[200], flash: false },
   rejected: { label: "修订中", color: neutral[500], bg: neutral[100], border: neutral[200], flash: false },
+  pending_final: { label: "待定稿", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)", flash: true },
   approved: { label: "待执行", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)", flash: true },
   executing: { label: "执行中", color: "#0D9488", bg: "rgba(13,148,136,0.08)", border: "rgba(13,148,136,0.22)", flash: false },
   completed: { label: "完成", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)", flash: false },
@@ -466,7 +467,8 @@ function shortMemberId(id: string): string {
 
 /**
  * 计划状态块（计划 Tab 顶部）：状态徽 + 版本轮次行 + 轮次进度条（缺席点名）
- * + approved 态成员确认按钮（二次确认）+ executing 态执行清单（issue 聚合）。
+ * + pending_final 态成员定稿按钮（二次确认）+ approved 态成员确认按钮（二次确认）
+ * + executing 态执行清单（issue 聚合）。
  * 状态一律读 GET /tasks/:id/plan（DB 真值）；文件列表仅展示，不参与状态判定。
  */
 function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
@@ -478,6 +480,8 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
   const isMember = !!viewer?.id;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [finalizeOpen, setFinalizeOpen] = useState(false);
+  const [finalizeError, setFinalizeError] = useState<string | null>(null);
 
   const planQuery = useQuery({
     queryKey: ["task", taskId, "plan"],
@@ -496,6 +500,16 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
       queryClient.invalidateQueries({ queryKey: ["task", taskId, "plan"] });
     },
     onError: (err) => setConfirmError(isApiError(err) ? err.message : "确认失败"),
+  });
+
+  const finalizeMutation = useMutation({
+    mutationFn: () => api.post(`/tasks/${taskId}/plan/confirm`, { action: "finalize" }),
+    onSuccess: () => {
+      setFinalizeError(null);
+      setFinalizeOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["task", taskId, "plan"] });
+    },
+    onError: (err) => setFinalizeError(isApiError(err) ? err.message : "确认定稿失败"),
   });
 
   /** 轮次账本：从 issue 描述机器段聚合，取最高轮次（同轮取回执最多者）。 */
@@ -522,6 +536,8 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
   };
   /** 版本轮次行：vX·RX·n/N（版本号/轮次/已收回执/期望评审人）。 */
   const versionLine = ledger ? `${ledger.version}·R${ledger.round}·${receivedN}/${expectedN}` : "暂无评审轮次";
+  /** 定稿按钮仅 pending_final + 成员上下文渲染（隐藏而非禁用）。 */
+  const showFinalize = status === "pending_final" && isMember;
   /** 确认按钮仅 approved + 成员上下文渲染（隐藏而非禁用）。 */
   const showConfirm = status === "approved" && isMember;
   /** 执行清单仅 executing 态渲染（读 issue 聚合）。 */
@@ -570,6 +586,17 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
         ) : (
           <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无评审轮次账本（派发评审后自动出现）</div>
         )}
+        {showFinalize && (
+          <button
+            type="button"
+            data-testid="plan-finalize-btn"
+            disabled={finalizeMutation.isPending}
+            onClick={() => { setFinalizeError(null); setFinalizeOpen(true); }}
+            style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: finalizeMutation.isPending ? "default" : "pointer", opacity: finalizeMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body }}
+          >
+            {finalizeMutation.isPending ? "定稿中…" : "确认定稿"}
+          </button>
+        )}
         {showConfirm && (
           <button
             type="button"
@@ -582,6 +609,7 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
           </button>
         )}
         {confirmError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{confirmError}</div>}
+        {finalizeError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{finalizeError}</div>}
       </div>
       {showChecklist && (
         <div data-testid="plan-checklist" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
@@ -610,6 +638,18 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
         </div>
       )}
       {/* 二次确认：复用 ConfirmDialog（非危险走青色确认），遮罩/Esc 关闭对齐既有模式 */}
+      <ConfirmDialog
+        open={finalizeOpen}
+        testid="plan-finalize"
+        danger={false}
+        title="确认定稿"
+        description="确认后计划进入已定稿待执行态（pending_final → approved）。开始执行另需用户二次确认，该操作不可撤销。"
+        confirmLabel="确认定稿"
+        pendingLabel="定稿中…"
+        submitting={finalizeMutation.isPending}
+        onClose={() => { if (!finalizeMutation.isPending) setFinalizeOpen(false); }}
+        onConfirm={() => finalizeMutation.mutate()}
+      />
       <ConfirmDialog
         open={confirmOpen}
         testid="plan-confirm"

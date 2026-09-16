@@ -799,7 +799,7 @@ model RealtimeEvent {
 // ==================================================================
 
 // 任务执行计划（一任务一计划，taskId 唯一；status 字符串枚举：
-// draft/reviewing/approved/rejected/executing/completed，draft 为预留态）
+// draft/reviewing/pending_final/approved/rejected/executing/completed，draft 为预留态）
 // @deprecated 2026-09：vteam 自造计划域（plan/planTask）已整体下线——计划动作改由 opencode
 // 原生 agent（built-in `plan` 或自定义 agent）在其内核内完成，vteam 只传递 agent 名。
 // 两表保留空置（不读不写、无外部引用），避免破坏性 DROP 迁移；随下次重建库删除。
@@ -810,7 +810,7 @@ model Plan {
   summary            String?  @db.Text
   scopeIn            String?  @db.Text
   scopeOut           String?  @db.Text
-  status             String // draft/reviewing/approved/rejected/executing/completed
+  status             String // draft/reviewing/pending_final/approved/rejected/executing/completed
   createdBy          String   @map("created_by") // 主 Agent 实例 id
   reviewerInstanceId String?  @map("reviewer_instance_id") // 被指派评审者实例（null=用户评审/未指派)
   rejectCount        Int      @default(0) @map("reject_count")
@@ -818,6 +818,9 @@ model Plan {
   confirmedBy        String?  @map("confirmed_by")
   confirmedAt        DateTime? @map("confirmed_at")
   rejectReason       String?  @db.Text @map("reject_reason")
+  // 定稿门审计（加法-only 可空列，finalize pending_final→approved 消费，命名锁定勿改）
+  finalizedBy        String?  @map("finalized_by")
+  finalizedAt        DateTime? @map("finalized_at")
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 

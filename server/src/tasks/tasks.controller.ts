@@ -350,6 +350,8 @@ export class TasksController {
   /**
    * 用户确认门（todo11：任一团队成员可点，主确认链仅作模式参照，不照搬主可点规则）。
    * POST /api/v1/tasks/:id/plan/confirm {action?, reason?}
+   * finalize：pending_final→approved 定稿确认（用户显式定稿，幂等，已 approved 二次
+   *   POST 同结果），记 finalizedBy/finalizedAt，落系统消息；
    * confirm（缺省）：approved→executing，幂等（已 executing 二次 POST 同结果），
    *   记 confirmedBy/confirmedAt，落系统消息，plan.status.executing 事件触发 PM 续推 W2；
    * reject：approved→draft 打回（reason 必填，轮次不变重走收敛）。
@@ -358,7 +360,7 @@ export class TasksController {
   @Post('tasks/:id/plan/confirm')
   @UseGuards(PermissionGuard)
   @RequirePermission('tasks.edit')
-  @ApiOperation({ summary: '用户确认门（approved→executing 幂等 / 打回 draft）' })
+  @ApiOperation({ summary: '用户确认门（定稿 finalize / 开始执行 confirm 幂等 / 打回 draft）' })
   confirmPlan(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,

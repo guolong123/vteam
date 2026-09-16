@@ -189,6 +189,41 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     expect(ok.allowed).toBe(true);
   });
 
+  it('3/3 收敛→计划置 pending_final（永不直接 approved；无 sink 时不抛）', async () => {
+    const { gate, notifyOpts } = setup();
+    const planSink = { transition: jest.fn(async () => ({})) };
+    gate.attachPlanSink(planSink);
+    for (const [i, m] of MEMBERS.entries()) {
+      await gate.recordVerdict(
+        'is_0000000007',
+        { member: m, verdict: 'APPROVE', msgId: `m_55${i}`, version: 'v0.3' },
+        notifyOpts,
+      );
+    }
+    expect(planSink.transition).toHaveBeenCalledTimes(1);
+    expect(planSink.transition).toHaveBeenCalledWith(
+      't_0000000001',
+      'pending_final',
+    );
+    for (const call of planSink.transition.mock.calls) {
+      expect((call as unknown[])[1]).not.toBe('approved');
+    }
+  });
+
+  it('3/3 收敛无 planSink→照常 complete+通知（计划翻转缺席永不阻断收敛）', async () => {
+    const { gate, notifier, notifyOpts } = setup();
+    for (const [i, m] of MEMBERS.entries()) {
+      await gate.recordVerdict(
+        'is_0000000007',
+        { member: m, verdict: 'APPROVE', msgId: `m_56${i}`, version: 'v0.3' },
+        notifyOpts,
+      );
+    }
+    expect(notifier.dispatchAgentMention).toHaveBeenCalledTimes(2);
+    const ok = await gate.requestRevision('is_0000000007', PLANNER);
+    expect(ok.allowed).toBe(true);
+  });
+
   it('stale：超时转人工产出待拍板项，且绝不通知计划员', async () => {
     const { gate, notifier, notifyOpts } = setup(PAST);
     await gate.recordVerdict(

@@ -55,6 +55,7 @@ describe('PlanLifecycleService', () => {
     it.each([
       ['draft'],
       ['reviewing'],
+      ['pending_final'],
       ['approved'],
       ['rejected'],
       ['executing'],
@@ -68,13 +69,14 @@ describe('PlanLifecycleService', () => {
       expect(() => service.verifyEnum('')).toThrow();
     });
 
-    it('状态常量恰为六态 draft/reviewing/approved/rejected/executing/completed', () => {
+    it('状态常量恰为七态 draft/reviewing/pending_final/approved/rejected/executing/completed', () => {
       expect(Object.values(PLAN_LIFECYCLE_STATUS).sort()).toEqual(
         [
           'approved',
           'completed',
           'draft',
           'executing',
+          'pending_final',
           'rejected',
           'reviewing',
         ].sort(),
@@ -304,8 +306,8 @@ describe('PlanLifecycleService', () => {
       expect(receipts.emitPlanStatusChanged).not.toHaveBeenCalled();
     });
 
-    it.each([['draft'], ['reviewing'], ['rejected'], ['completed']])(
-      '错态 %s 确认→409 精确码 PLAN_CONFIRM_WRONG_STATE',
+    it.each([['draft'], ['reviewing'], ['pending_final'], ['rejected'], ['completed']])(
+      '错态 %s 确认→409 精确码 PLAN_CONFIRM_WRONG_STATE（开始执行仍要求 approved）',
       async (status: string) => {
         prisma.plan.findUnique.mockResolvedValue({ status });
 
@@ -333,6 +335,96 @@ describe('PlanLifecycleService', () => {
         plan: { status: 'executing' },
       });
     });
+  });
+
+  describe('finalizePlan（定稿确认 pending_final→approved，用户显式定稿门）', () => {
+    beforeEach(() => {
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
+      prisma.message.create.mockImplementation(({ data }: any) =>
+        Promise.resolve({ id: 'm_4', ...data }),
+      );
+    });
+
+    it('pending_final→approved 翻转一次：记finalizedBy/finalizedAt、落系统消息、幂等标记false', async () => {
+      prisma.plan.findUnique.mockResolvedValue({
+        id: 'pl_1',
+        taskId: 't_1',
+        status: 'pending_final',
+      });
+      prisma.plan.update.mockImplementation(({ data }: any) =>
+        Promise.resolve({ id: 'pl_1', taskId: 't_1', ...data }),
+      );
+
+      const out = await service.confirmPlan('t_1', {
+        userId: 'u_1',
+        userName: '成员甲',
+        action: 'finalize',
+      });
+
+      expect(out.action).toBe('finalize');
+      expect(out.idempotent).toBe(false);
+      expect(out.plan).toMatchObject({ status: 'approved' });
+      expect(prisma.plan.update).toHaveBeenCalledWith({
+        where: { taskId: 't_1' },
+        data: {
+          status: 'approved',
+          finalizedBy: '成员甲',
+          finalizedAt: expect.any(Date),
+          rejectReason: null,
+        },
+      });
+      expect(receipts.emitPlanStatusChanged).toHaveBeenCalledWith({
+        taskId: 't_1',
+        from: 'pending_final',
+        to: 'approved',
+      });
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      const msgData = prisma.message.create.mock.calls[0][0].data;
+      expect(String(msgData.content?.text ?? '')).toContain('成员甲');
+    });
+
+    it('二次finalize（已approved）→幂等同结果：不重写库、不重发系统消息', async () => {
+      const row = {
+        id: 'pl_1',
+        taskId: 't_1',
+        status: 'approved',
+        finalizedBy: '成员甲',
+      };
+      prisma.plan.findUnique.mockResolvedValue(row);
+
+      const out = await service.confirmPlan('t_1', {
+        userId: 'u_2',
+        userName: '成员乙',
+        action: 'finalize',
+      });
+
+      expect(out).toMatchObject({ idempotent: true, action: 'finalize' });
+      expect(out.plan).toMatchObject({
+        status: 'approved',
+        finalizedBy: '成员甲',
+      });
+      expect(prisma.plan.update).not.toHaveBeenCalled();
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(receipts.emitPlanStatusChanged).not.toHaveBeenCalled();
+    });
+
+    it.each([['draft'], ['reviewing'], ['rejected'], ['executing'], ['completed']])(
+      '错态 %s 定稿→409 精确码 PLAN_FINALIZE_WRONG_STATE',
+      async (status: string) => {
+        prisma.plan.findUnique.mockResolvedValue({ status });
+
+        const err = await service
+          .confirmPlan('t_1', { userId: 'u_1', action: 'finalize' })
+          .catch((e) => e);
+
+        expect(err?.status ?? err?.getStatus?.()).toBe(409);
+        expect(err?.response?.code ?? err?.code).toBe(
+          PLAN_LIFECYCLE_ERRORS.PLAN_FINALIZE_WRONG_STATE,
+        );
+        expect(prisma.plan.update).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('rejectPlan（todo11 approved→draft 打回带 reason）', () => {

@@ -21,11 +21,15 @@ import { RealtimeService } from '../realtime/realtime.service';
 
 /**
  * 计划生命周期状态（schema.prisma Plan.status 字符串枚举，
- * draft/reviewing/approved/rejected/executing/completed，双库兼容不声明 Prisma enum）。
+ * draft/reviewing/pending_final/approved/rejected/executing/completed，
+ * 双库兼容不声明 Prisma enum）。
+ * 评审收敛（N/N APPROVE）只到 pending_final（待定稿），定稿须用户显式确认
+ * （finalize→approved），开始执行另需用户二次确认（confirm→executing）。
  */
 export const PLAN_LIFECYCLE_STATUS = {
   draft: 'draft',
   reviewing: 'reviewing',
+  pending_final: 'pending_final',
   approved: 'approved',
   rejected: 'rejected',
   executing: 'executing',
@@ -47,6 +51,7 @@ const PLAN_LIFECYCLE_STATUS_SET: ReadonlySet<string> = new Set(
  */
 export const PLAN_LIFECYCLE_ERRORS = {
   PLAN_CONFIRM_WRONG_STATE: 'PLAN_CONFIRM_WRONG_STATE',
+  PLAN_FINALIZE_WRONG_STATE: 'PLAN_FINALIZE_WRONG_STATE',
   PLAN_REJECT_WRONG_STATE: 'PLAN_REJECT_WRONG_STATE',
   PLAN_REJECT_REASON_REQUIRED: 'PLAN_REJECT_REASON_REQUIRED',
   PLAN_COMPLETE_WRONG_STATE: 'PLAN_COMPLETE_WRONG_STATE',
@@ -57,8 +62,8 @@ export const PLAN_LIFECYCLE_ERRORS = {
 export const PLAN_FILE_DISPLAY_ONLY_WARNING =
   '计划文件仅展示用，状态以数据库 plans.status 为准';
 
-/** 确认门动作（confirm=开始执行；reject=打回重修）。 */
-export type PlanConfirmAction = 'confirm' | 'reject';
+/** 确认门动作（finalize=确认定稿；confirm=开始执行；reject=打回重修）。 */
+export type PlanConfirmAction = 'finalize' | 'confirm' | 'reject';
 
 /**
  * plans 表唯一读写 choke 点（todo2 复活，守卫窄豁免仅覆盖本文件）。
@@ -131,6 +136,8 @@ export class PlanLifecycleService {
     opts?: {
       confirmedBy?: string | null;
       confirmedAt?: Date | null;
+      finalizedBy?: string | null;
+      finalizedAt?: Date | null;
       rejectReason?: string | null;
     },
   ) {
@@ -148,6 +155,12 @@ export class PlanLifecycleService {
           : {}),
         ...(opts?.confirmedAt !== undefined
           ? { confirmedAt: opts.confirmedAt }
+          : {}),
+        ...(opts?.finalizedBy !== undefined
+          ? { finalizedBy: opts.finalizedBy }
+          : {}),
+        ...(opts?.finalizedAt !== undefined
+          ? { finalizedAt: opts.finalizedAt }
           : {}),
         ...(opts?.rejectReason !== undefined
           ? { rejectReason: opts.rejectReason }
@@ -182,6 +195,9 @@ export class PlanLifecycleService {
       reason?: string | null;
     },
   ): Promise<{ plan: Plan; idempotent: boolean; action: PlanConfirmAction }> {
+    if (input.action === 'finalize') {
+      return this.finalizePlan(taskId, input);
+    }
     if (input.action === 'reject') {
       return this.rejectPlan(taskId, input);
     }
@@ -208,6 +224,43 @@ export class PlanLifecycleService {
       `计划已由 ${actor} 确认，开始执行（approved → executing）。PM 请续推 W2 执行任务。`,
     );
     return { plan, idempotent: false, action: 'confirm' };
+  }
+
+  async finalizePlan(
+    taskId: string,
+    input: {
+      userId: string;
+      userName?: string | null;
+      reason?: string | null;
+    },
+  ): Promise<{ plan: Plan; idempotent: boolean; action: PlanConfirmAction }> {
+    const actor = displayName(input.userName, input.userId);
+    const { task, row } = await this.loadWritablePlan(taskId);
+    if (row.status === PLAN_LIFECYCLE_STATUS.approved) {
+      return { plan: row, idempotent: true, action: 'finalize' };
+    }
+    if (row.status !== PLAN_LIFECYCLE_STATUS.pending_final) {
+      throw new ConflictException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_FINALIZE_WRONG_STATE,
+        message: `计划未待定稿（当前 ${row.status}），不可确认定稿`,
+        details: { current: row.status },
+      });
+    }
+    const plan = await this.transition(
+      taskId,
+      PLAN_LIFECYCLE_STATUS.approved,
+      {
+        finalizedBy: actor,
+        finalizedAt: new Date(),
+        rejectReason: null,
+      },
+    );
+    await this.postPlanSystemMessage(
+      taskId,
+      task.teamId,
+      `计划已由 ${actor} 确认定稿（pending_final → approved）。开始执行另需用户确认，确认前不得派发执行类工作。`,
+    );
+    return { plan, idempotent: false, action: 'finalize' };
   }
 
   async rejectPlan(

@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PLAN_LIFECYCLE_STATUS } from '../tasks/plan-lifecycle.service';
 import {
   REVIEW_ROUND_ERRORS,
   ReviewRoundLedger,
@@ -99,6 +100,12 @@ export interface DegradedReleaseResult {
   confirmedBy: string;
 }
 
+/** 收敛后计划翻转槽（N/N 只到 pending_final 待定稿，永不直接 approved；
+ * 定稿须用户显式 finalize，开始执行另需用户 confirm）。 */
+export interface ConvergencePlanSink {
+  transition(taskId: string, to: string): Promise<unknown>;
+}
+
 /** 轮次账本域错误码（复用账本层命名，不碰 issues.constants / task machine）。 */
 export const REVIEW_ROUND_GATE_ERRORS = {
   ...REVIEW_ROUND_ERRORS,
@@ -110,11 +117,23 @@ export const REVIEW_ROUND_GATE_ERRORS = {
 
 @Injectable()
 export class ReviewRoundGateService {
+  private readonly logger = new Logger(ReviewRoundGateService.name);
+  private planSink: ConvergencePlanSink | null = null;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly rounds: ReviewRoundService,
     @Optional() private readonly notifier: ConvergenceNotifier | null = null,
   ) {}
+
+  /**
+   * 装配收敛后计划翻转槽（缺省 null=不翻转，收敛照常 complete+通知）。
+   * 生产由调用方传入 PlanLifecycleService（结构兼容 transition 即可，
+   * 不直连 TasksModule，无模块循环）。
+   */
+  attachPlanSink(sink: ConvergencePlanSink | null): void {
+    this.planSink = sink;
+  }
 
   /**
    * 记录单成员 verdict 并执行收敛门：
@@ -154,6 +173,7 @@ export class ReviewRoundGateService {
     const completed = await this.rounds.applyRoundUpdate(issueId, {
       status: 'complete',
     });
+    await this.markPendingFinal(completed, notify);
     await this.notifyConvergence(completed, issueId, notify, null);
     return { outcome, ledger: completed, converged: true };
   }
@@ -235,6 +255,7 @@ export class ReviewRoundGateService {
     const completed = await this.rounds.applyRoundUpdate(issueId, {
       status: 'complete',
     });
+    await this.markPendingFinal(completed, opts);
     await this.notifyConvergence(completed, issueId, opts, {
       confirmer,
       waived: [...opts.waived],
@@ -326,6 +347,26 @@ export class ReviewRoundGateService {
         requiresConfirm: true,
       },
     ];
+  }
+
+  /**
+   * 收敛后计划翻转：N/N 只到 pending_final（待定稿），永不直接 approved。
+   * 无 sink / 无 taskId 照常跳过；翻转失败只 warn，永不阻断收敛 complete+通知。
+   */
+  private async markPendingFinal(
+    ledger: ReviewRoundLedger,
+    notify: ConvergenceNotifyOpts,
+  ): Promise<void> {
+    if (!this.planSink) return;
+    const taskId = ledger.taskId ?? notify.taskId ?? null;
+    if (!taskId) return;
+    try {
+      await this.planSink.transition(taskId, PLAN_LIFECYCLE_STATUS.pending_final);
+    } catch (err) {
+      this.logger.warn(
+        `收敛翻转 pending_final 失败 task=${taskId}（轮次已 complete）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private async notifyConvergence(

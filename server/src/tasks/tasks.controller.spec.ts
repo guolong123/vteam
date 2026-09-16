@@ -627,6 +627,23 @@ describe('TasksController', () => {
       });
     });
 
+    it('POST tasks/:id/plan/confirm 转发定稿动作 finalize', async () => {
+      const result = { plan: { status: 'approved' }, idempotent: false };
+      planLifecycle.confirmPlan.mockResolvedValue(result);
+
+      const out = await controller.confirmPlan(user, 't_1', {
+        action: 'finalize',
+      });
+
+      expect(planLifecycle.confirmPlan).toHaveBeenCalledWith('t_1', {
+        userId: 'u_1',
+        userName: '成员甲',
+        action: 'finalize',
+        reason: null,
+      });
+      expect(out).toEqual(result);
+    });
+
     it('PATCH tasks/:id/plan/complete 转发主实例（缺省用户 PM 路径）', async () => {
       planLifecycle.completePlan.mockResolvedValue({ idempotent: false });
 
