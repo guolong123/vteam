@@ -220,20 +220,17 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("mcp-tool-item").first()).toBeVisible();
   });
 
-  test("13/17 task-detail /artifacts?teamId=tm_0000000001（产出物聚合页）", async ({ page }) => {
-    await page.goto("/artifacts?teamId=tm_0000000001");
+  test("13/17 task-detail /artifacts?teamId=tm_0000000001 → /docs 重定向（路由收敛 T10）", async ({ page }) => {
+    await page.goto("/artifacts?teamId=tm_0000000001&type=text");
+    // 瘦重定向页：全量透传 searchParams，落地 /docs 且参数保留
+    await expect(page).toHaveURL(/\/docs\?.*teamId=tm_0000000001/);
+    await expect(page).toHaveURL(/type=text/);
     await expectNavShell(page);
-    await expect(page.getByTestId("artifacts-root")).toBeVisible();
-    await expect(page.getByTestId("artifacts-filter-bar")).toBeVisible();
+    // 统一文档站渲染：teamId 生效（团队选择器不出现，直出筛选栏 + 文档树）
+    await expect(page.getByTestId("docs-shell")).toBeVisible();
+    await expect(page.getByTestId("docs-filter-bar")).toBeVisible();
     await expect(page.getByTestId("task-filter-select")).toBeVisible();
-    // 产出物行（若有）→ 版本查看器可展开
-    const rows = page.getByTestId("artifact-row");
-    if ((await rows.count()) > 0) {
-      await rows.first().click();
-      await expect(page.getByTestId("artifact-viewer").first()).toBeVisible();
-    } else {
-      test.info().annotations.push({ type: "note", description: "当前任务无产出物，artifact-row 跳过" });
-    }
+    await expect(page.getByTestId("docs-tree")).toBeVisible();
   });
 
   test("15/17 user-management /users", async ({ page }) => {

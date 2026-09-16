@@ -1,76 +1,84 @@
 "use client";
-import { useState } from "react";
-import Link from "next/link";
-import dynamic from "next/dynamic";
-import { useParams, useSearchParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+
+/**
+ * /docs/[taskId] 薄别名（docs-artifacts-merge T10，路由收敛）
+ * ============================================================
+ * 旧任务级文档站实现（DocExplorer + 原型双 tab + per-task 查询）已删除；
+ * 本页直接渲染 T8 统一文档站默认导出（`../page` 的 DocsUnifiedPage），无二次跳转。
+ *
+ * 别名机制选择（T8 合同核查结论，见 T10 证据）：
+ * T8 组件无 props（`export default function DocsUnifiedPage()`，纯 URL 驱动：
+ * effect 内读 `window.location.search` 的 `?teamId=&taskId=&doc=`，且无 teamId 时只渲染
+ * 团队选择器），故路径 `:taskId` 必须翻译为查询参数，且必须同时补齐 `teamId`
+ * （否则别名页永远落在团队选择器，task 预填/doc 深链双双失效）。
+ * 本别名在挂载统一组件前（deferred mount，SSR-safe）经 `window.history.replaceState`
+ * 一次性注入 `?taskId=` + `?teamId=`（teamId 经 `GET /tasks/:id` 反查；`?doc=` 及其他
+ * 参数原样保留，不覆盖调用方显式给的 teamId）——不经过 Next router、不产生导航、
+ * 不增加历史记录。子组件挂载时读到的 search 已完整 → 任务预填 + doc 选中一次生效。
+ * 任务反查失败（无权限/已删除）→ 仍挂载统一页（团队选择器兜底），绝不 404；
+ * 未知 `?doc=` 由统一页按既有语义渲染 `docs-doc-missing` 空态，绝不 404。
+ */
+import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { DocExplorer } from "@/src/features/docs-site/doc-explorer";
-import { neutral, surface, border, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
+import DocsUnifiedPage from "../page";
 
-const PrototypePanel = dynamic(
-  () => import("@/src/features/docs-site/prototype-panel").then((m) => m.PrototypePanel),
-  { ssr: false, loading: () => <div style={{ padding: space.xl, fontSize: fontSize.md, color: neutral[400], fontFamily: fontFamily.body }}>加载原型…</div> },
-);
-
-/* 品牌蓝（对齐 roleText.product，双主题下保持可读） */
-const ACCENT = "#0D9488";
-const ACCENT_BG = "rgba(13,148,136,0.10)";
-
-export default function DocsPage() {
+export default function DocsTaskAliasPage() {
   const params = useParams<{ taskId: string }>();
   const taskId = params?.taskId ?? "";
-  const user = useAuthStore((s) => s.user);
-  const searchParams = useSearchParams();
-  const initialDocId = searchParams.get("doc") ?? undefined;
-  const initialProtoId = searchParams.get("proto") ?? undefined;
-  const [tab, setTab] = useState<"docs" | "protos">(() => (searchParams.get("proto") ? "protos" : "docs"));
-  const taskQuery = useQuery({
-    queryKey: ["task", taskId],
-    queryFn: () => api.get<{ id: string; title: string; status: string; teamId?: string | null }>(`/tasks/${taskId}`),
-    enabled: !!taskId && !!user?.id,
-    retry: false,
-  });
-  const protoCountQuery = useQuery({
-    queryKey: ["docs-proto-count", taskId],
-    queryFn: () => api.get<{ items: unknown[] }>(`/docs-site/${taskId}/prototypes`),
-    enabled: !!taskId && !!user?.id,
-    retry: false,
-  });
-  const protoCount = Array.isArray(protoCountQuery.data?.items) ? protoCountQuery.data.items.length : undefined;
-  const crumb = tab === "docs" ? "文档" : "原型";
-  return (
-    <div data-testid="docs-shell" style={{ display: "flex", minHeight: 0, flex: 1, flexDirection: "column", overflow: "hidden", backgroundColor: surface, fontFamily: fontFamily.body, WebkitFontSmoothing: "antialiased" }}>
-      <nav aria-label="面包屑" style={{ display: "flex", height: 36, flexShrink: 0, alignItems: "center", gap: 6, borderBottom: `1px solid ${border}`, backgroundColor: surface, padding: `0 ${space.lg}px`, fontSize: fontSize.xs }}>
-        <Link href={taskQuery.data?.teamId ? `/teams/${taskQuery.data.teamId}/session` : `/teams`} data-testid="docs-back-to-task" style={{ display: "flex", alignItems: "center", gap: 4, borderRadius: radius.sm, color: neutral[500], textDecoration: "none", transition: "color .15s", fontFamily: fontFamily.body }}>
-          <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M19 12H5M12 19l-7-7 7-7" />
-          </svg>
-          返回团队会话
-        </Link>
-        <span style={{ color: neutral[300] }} aria-hidden>/</span>
-        <span data-testid="docs-task-title" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500, color: neutral[700] }} title={taskQuery.data?.title ?? taskId}>{taskQuery.data?.title ?? taskId}</span>
-        <span style={{ color: neutral[300] }} aria-hidden>/</span>
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: neutral[500] }}>{crumb}</span>
-        <span className="hidden sm:inline-flex" style={{ marginLeft: "auto", alignItems: "center", gap: 6, borderRadius: radius.pill, border: `1px solid ${border}`, backgroundColor: neutral[50], padding: "2px 10px", fontSize: 11, fontWeight: 500, color: neutral[500] }}>
-          <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "#0D9488" }} />文档站
-        </span>
-      </nav>
-      <div data-testid="docs-tab-bar" style={{ display: "flex", height: 44, flexShrink: 0, alignItems: "center", gap: 4, borderBottom: `1px solid ${border}`, backgroundColor: surface, padding: `0 ${space.lg}px` }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 4, borderRadius: radius.md, border: `1px solid ${border}`, backgroundColor: neutral[100], padding: 2 }} role="tablist" aria-label="文档站内容">
-          <button type="button" role="tab" aria-selected={tab === "docs"} data-testid="docs-tab-docs" data-active={tab === "docs" ? "true" : "false"} onClick={() => setTab("docs")} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: radius.sm, padding: "6px 12px", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", border: "none", fontFamily: fontFamily.body, transition: "background .15s, color .15s", ...(tab === "docs" ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" } : { backgroundColor: "transparent", color: neutral[500] }) }}>
-            <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16M6 20V8l6-4 6 4v12M10 20v-6h4v6" /></svg>文档
-          </button>
-          <button type="button" role="tab" aria-selected={tab === "protos"} data-testid="docs-tab-protos" data-active={tab === "protos" ? "true" : "false"} onClick={() => setTab("protos")} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: radius.sm, padding: "6px 12px", fontSize: fontSize.md, fontWeight: 500, cursor: "pointer", border: "none", fontFamily: fontFamily.body, transition: "background .15s, color .15s", ...(tab === "protos" ? { backgroundColor: surface, color: neutral[900], boxShadow: "0 1px 2px rgba(15,23,42,.06)" } : { backgroundColor: "transparent", color: neutral[500] }) }}>
-            <svg viewBox="0 0 24 24" style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>原型
-            {typeof protoCount === "number" && protoCount > 0 && <span style={{ borderRadius: radius.pill, backgroundColor: neutral[200], padding: "0 6px", fontSize: 10, fontWeight: 600, lineHeight: "16px", color: neutral[600] }}>{protoCount}</span>}
-          </button>
-        </div>
+  const userId = useAuthStore((s) => s.user?.id);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!taskId) {
+      setReady(true);
+      return;
+    }
+    // 等登录水合完成再反查（未登录由 AppShell 守卫跳 /login，本页届时已卸载）。
+    if (!userId) return;
+    let cancelled = false;
+    (async () => {
+      const q = new URLSearchParams(window.location.search);
+      if (!q.get("taskId")) q.set("taskId", taskId);
+      if (!q.get("teamId")) {
+        try {
+          const t = await api.get<{ teamId?: string | null }>(`/tasks/${taskId}`);
+          if (!cancelled && t?.teamId) q.set("teamId", t.teamId);
+        } catch {
+          /* 反查失败 → 统一页团队选择器兜底，不抛错 */
+        }
+      }
+      if (!cancelled) {
+        const qs = q.toString();
+        window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+        setReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [taskId, userId]);
+
+  if (!ready) {
+    return (
+      <div
+        data-testid="docs-loading"
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 14,
+          color: "#94A3B8",
+          fontFamily: "var(--font-body, system-ui, sans-serif)",
+        }}
+      >
+        加载文档站…
       </div>
-      <div style={{ display: "flex", minHeight: 0, flex: 1, flexDirection: "column", overflow: "hidden" }}>
-        {tab === "docs" ? <DocExplorer taskId={taskId} initialDocId={initialDocId} /> : <PrototypePanel taskId={taskId} initialProtoId={initialProtoId} />}
-      </div>
-    </div>
-  );
+    );
+  }
+
+  return <DocsUnifiedPage />;
 }

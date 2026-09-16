@@ -1308,7 +1308,7 @@ export default function TeamSessionPage() {
             issuesQuery={issuesQuery}
             agents={agentMembers}
             onEditTaskInfo={() => setTaskEditOpen(true)}
-            onOpenArtifacts={() => router.push(`/artifacts?teamId=${teamId}`)}
+            onOpenArtifacts={() => router.push(`/docs?teamId=${teamId}`)}
             onOpenIssues={() =>
               router.push(
                 currentTask?.id

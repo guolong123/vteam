@@ -506,7 +506,7 @@ export default function TaskBoardPage() {
             <button
               type="button"
               data-testid="artifacts-entry-button"
-              onClick={() => router.push(`/artifacts?teamId=${teamId}`)}
+              onClick={() => router.push(`/docs?teamId=${teamId}`)}
               style={{
                 display: "inline-flex",
                 alignItems: "center",

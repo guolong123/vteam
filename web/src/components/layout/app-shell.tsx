@@ -124,8 +124,8 @@ const KEY_LOOKUP: Record<string, string> = {
   ...Object.fromEntries(
     Object.entries(KEY_TO_PATH).map(([key, path]) => [path.slice(1), key])
   ),
-  /** Dock 无独立 board/tasks 图标：任务看板/创建/产出物均归属团队上下文
-   * （/board?teamId=、/tasks/new?teamId=、/artifacts?teamId=）→ 高亮「团队管理」入口 */
+  /** Dock 无独立 board/tasks/docs 图标：任务看板/创建/文档站均归属团队上下文
+   * （/board?teamId=、/tasks/new?teamId=、/docs?teamId=；旧 /artifacts?teamId= 已重定向至 /docs）→ 高亮「团队管理」入口 */
   board: "teams",
   tasks: "teams",
   artifacts: "teams",
