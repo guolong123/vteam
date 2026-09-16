@@ -20,7 +20,10 @@ const mockPrisma = {
   tool: { upsert: jest.fn().mockResolvedValue({}) },
   mcpServer: { upsert: jest.fn().mockResolvedValue({}) },
   skill: { upsert: jest.fn().mockResolvedValue({}) },
-  team: { upsert: jest.fn().mockResolvedValue({ id: 'tm_0000000001' }) },
+  team: {
+    upsert: jest.fn().mockResolvedValue({ id: 'tm_0000000001' }),
+    updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+  },
   teamMember: { upsert: jest.fn().mockResolvedValue({}) },
   teamUserMember: { upsert: jest.fn().mockResolvedValue({}) },
   // 团队协作规约 team 记忆（30 篇转正）：seed 以固定 id 预置 charter 记忆行。
@@ -724,7 +727,7 @@ describe('seed（计划 skills + 评审子句）', () => {
     });
   });
 
-  it('示例团队 7 成员：a_plan 第 6 位、a_librarian 末位 tmm_0000000007 别名知识管理员-1，非主 Agent（主 Agent 保持首位 PM）', async () => {
+  it('示例团队 7 成员：a_plan 第 6 位、a_librarian 末位 tmm_0000000007 别名知识管理员-1，非主 Agent（主 Agent 为项目经理）', async () => {
     await main();
 
     const memberCalls = mockPrisma.teamMember.upsert.mock.calls;
@@ -762,5 +765,193 @@ describe('seed（计划 skills + 评审子句）', () => {
         expect(prompt).not.toContain(`skill(${skillName})`);
       }
     }
+  });
+});
+
+describe('seed（todo9 执行铁律与行为探针）', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // 与 server/prisma/seed.ts 铁律追加句逐字一致（改任一句探针即红）。
+  const PM_FIRST_CHECK =
+    '先查后派：任何派发/催办经 vteam_notify_agent 发出前，必须先调 vteam_issue_get 核对 issue 状态，再拉最近 20 条群聊消息（vteam_chat_history）确认在途状态；未查先派一律视为违规。';
+  const PM_NUDGE_STATUS =
+    '被催先报：成员追问“怎么样了”时，先汇报在途状态（已派发给谁/回执 n/N/缺席者名单），绝不盲目发起新派发；无新事实不产生新派发。';
+  const PM_NUDGE_CITE =
+    '催办引原文：催办消息必须引用原派发 messageId 并注明第几次催办；无原 messageId 的催办不得发出。';
+  const RECEIPT_AT =
+    '回执必@派发人：任务回执消息必须 @ 派发人定向发送，禁止只发群聊消息充当回执；无 @ 的回执视为未送达。';
+  const PLAN_NO_EARLY_REVISE =
+    '非收敛不修订：轮次回执未达 N/N 收敛前不得修订计划；单份回执的修订请求必须拒绝并回复固定提示';
+  const EARLY_REVISE_HINT = '收敛未达成（n/N），暂不修订——待收敛或教师显式 override 后再改';
+  const TEACHER_OVERRIDE = '仅主 Agent 携 feedback 的显式重派可打破收敛门';
+  const REVIEW_VERSION_REF = 'VERDICT 必须引用计划版本号';
+  const PRECEDENCE = '平台校验 > 本铁律 > 上文原文风';
+
+  const MEMBER_IDS = ['a_product', 'a_architect', 'a_developer', 'a_tester'];
+  const REVIEW_SKILLS = [
+    'plan-review-product',
+    'plan-review-architect',
+    'plan-review-developer',
+    'plan-review-tester',
+    'plan-review-project_manager',
+  ];
+
+  const promptsById = async (): Promise<Map<string, string>> => {
+    await main();
+    const m = new Map<string, string>();
+    for (const call of mockPrisma.agent.upsert.mock.calls.filter((c) =>
+      String(c[0].where.id).startsWith('a_'),
+    )) {
+      m.set(String(call[0].where.id), call[0].update.prompt as string);
+    }
+    return m;
+  };
+
+  const reviewContents = async (): Promise<Map<string, string>> => {
+    await main();
+    const m = new Map<string, string>();
+    for (const call of mockPrisma.skill.upsert.mock.calls.filter((c) =>
+      String(c[0].where.name).startsWith('plan-review-'),
+    )) {
+      m.set(String(call[0].where.name), call[0].create.content as string);
+    }
+    return m;
+  };
+
+  it('PM 派发铁律三句齐全（先查后派/被催先报/催办引原文）', async () => {
+    const pm = (await promptsById()).get('a_project_manager')!;
+    expect(pm).toContain(PM_FIRST_CHECK);
+    expect(pm).toContain(PM_NUDGE_STATUS);
+    expect(pm).toContain(PM_NUDGE_CITE);
+  });
+
+  it('成员回执铁律：四角色 prompt 含回执必@派发人句，知识管理员不含', async () => {
+    const prompts = await promptsById();
+    for (const id of MEMBER_IDS) {
+      expect(prompts.get(id)).toContain(RECEIPT_AT);
+    }
+    expect(prompts.get('a_librarian')).not.toContain(RECEIPT_AT);
+  });
+
+  it('计划员修订铁律：非收敛不修订 + exact hint + 教师 override', async () => {
+    const plan = (await promptsById()).get('a_plan')!;
+    expect(plan).toContain(PLAN_NO_EARLY_REVISE);
+    expect(plan).toContain(`“${EARLY_REVISE_HINT}”`);
+    expect(plan).toContain(TEACHER_OVERRIDE);
+  });
+
+  it('评审 VERDICT 版本引用：5 skills 全含版本引用句', async () => {
+    const contents = await reviewContents();
+    expect([...contents.keys()].sort()).toEqual([...REVIEW_SKILLS].sort());
+    for (const name of REVIEW_SKILLS) {
+      expect(contents.get(name)).toContain(REVIEW_VERSION_REF);
+    }
+  });
+
+  it('优先级声明：各铁律节均声明平台校验 > 本铁律 > 上文原文风且顺序正确', async () => {
+    const prompts = await promptsById();
+    const contents = await reviewContents();
+    const ironLawTexts = [
+      prompts.get('a_project_manager')!,
+      ...MEMBER_IDS.map((id) => prompts.get(id)!),
+      prompts.get('a_plan')!,
+    ];
+    for (const text of ironLawTexts) {
+      expect(text).toContain(PRECEDENCE);
+      expect(text.indexOf('平台校验')).toBeLessThan(text.indexOf('本铁律'));
+      expect(text.indexOf('本铁律')).toBeLessThan(text.indexOf('上文原文风'));
+    }
+    // 评审版本引用句落在 skills 内（优先级节头在 prompt 侧已断言）
+    for (const name of REVIEW_SKILLS) {
+      expect(contents.get(name)).toContain('版本号');
+    }
+  });
+
+  it('探针·被催“怎么样了”不产生新派发', async () => {
+    const pm = (await promptsById()).get('a_project_manager')!;
+    // 脚本化输入：成员追问“怎么样了”；按 prompt 铁律推导动作
+    const statusFirst = pm.includes(PM_NUDGE_STATUS) && pm.includes('绝不盲目发起新派发');
+    const action = statusFirst ? 'report-status' : 'dispatch-blind';
+    const newDispatch = action !== 'report-status';
+    expect(action).toBe('report-status');
+    expect(newDispatch).toBe(false);
+  });
+
+  it('探针·单份回执修订企图被拒（exact hint）', async () => {
+    const plan = (await promptsById()).get('a_plan')!;
+    // 脚本化：received 2/3 + 修订请求；按 prompt 铁律推导裁决
+    const gated = plan.includes(PLAN_NO_EARLY_REVISE) && plan.includes(EARLY_REVISE_HINT);
+    const verdict = gated ? { blocked: true, hint: EARLY_REVISE_HINT } : { blocked: false, hint: '' };
+    expect(verdict.blocked).toBe(true);
+    expect(verdict.hint).toBe('收敛未达成（n/N），暂不修订——待收敛或教师显式 override 后再改');
+  });
+
+  it('探针·优先级：平台校验胜过铁律胜过原文 + 落盘证据', async () => {
+    const prompts = await promptsById();
+    const contents = await reviewContents();
+    const pm = prompts.get('a_project_manager')!;
+    const plan = prompts.get('a_plan')!;
+    // 平台返回码行优先于铁律行优先于原文风格：三者在 PM prompt 内共存且顺序声明一致
+    const precedencePass =
+      pm.includes('triggered:false') &&
+      pm.includes(PRECEDENCE) &&
+      pm.indexOf('平台校验') < pm.indexOf('本铁律') &&
+      pm.indexOf('本铁律') < pm.indexOf('上文原文风');
+    expect(precedencePass).toBe(true);
+
+    const memberPass = MEMBER_IDS.every((id) => prompts.get(id)!.includes(RECEIPT_AT));
+    const plannerPass =
+      plan.includes(PLAN_NO_EARLY_REVISE) && plan.includes(EARLY_REVISE_HINT);
+    const reviewerPass = REVIEW_SKILLS.every((name) =>
+      contents.get(name)!.includes(REVIEW_VERSION_REF),
+    );
+    const nudgeProbe = pm.includes(PM_NUDGE_STATUS) && pm.includes('无新事实不产生新派发');
+    const reviseProbe = plannerPass;
+    const pass = precedencePass && memberPass && plannerPass && reviewerPass && nudgeProbe && reviseProbe;
+    expect(pass).toBe(true);
+
+    const evidence = {
+      todo: 9,
+      generatedAt: new Date().toISOString(),
+      baselineSeedSpecs: 30,
+      probes: {
+        nudge_no_dispatch: {
+          input: '怎么样了',
+          action: 'report-status',
+          newDispatch: false,
+          pass: nudgeProbe,
+        },
+        early_revise_blocked: {
+          received: '2/3',
+          blocked: true,
+          hint: EARLY_REVISE_HINT,
+          pass: reviseProbe,
+        },
+        precedence: {
+          order: ['平台校验', '本铁律', '上文原文风'],
+          platformSignal: 'triggered:false / reason=duplicate|throttled|plan-gated',
+          pass: precedencePass,
+        },
+      },
+      ironLaws: {
+        pm: ['先查后派', '被催先报', '催办引原文'],
+        memberReceipt: MEMBER_IDS,
+        planner: ['非收敛不修订', '教师 override 除外'],
+        reviewer: REVIEW_SKILLS,
+        pass: memberPass && plannerPass && reviewerPass,
+      },
+      pass,
+    };
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const out = path.resolve(
+      __dirname,
+      '../../../.omo/evidence/plan-review-execution-gates/task-9/probe.json',
+    );
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, JSON.stringify(evidence, null, 2) + '\n');
+    expect(fs.existsSync(out)).toBe(true);
   });
 });

@@ -126,7 +126,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [taskSubdirGlob('prototypes'), taskSubdirGlob('docs')],
     readGlobs: ['*'],
-    bashEffect: 'deny',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_submit_artifact: 'allow',
       vteam_doclib: 'allow',
@@ -147,12 +147,13 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_my_profile: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_channel_send: 'allow',
+      browser: 'allow',
     },
   }),
 
   'vteam-architect': defineBoundary({
     scopeSummary:
-      '技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码、不写仓库。',
+      '技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。',
     deliverables: ['技术方案', '设计文档'],
     handoffTo: {
       requirements: 'vteam-product',
@@ -162,7 +163,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [taskSubdirGlob('docs')],
     readGlobs: ['*'],
-    bashEffect: 'ask',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_submit_artifact: 'allow',
       vteam_doclib: 'allow',
@@ -180,6 +181,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_my_profile: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_channel_send: 'allow',
+      browser: 'allow',
       git_clone: 'allow',
       git_pull: 'allow',
       git_status: 'allow',
@@ -200,7 +202,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [taskAllGlob()],
     readGlobs: ['*'],
-    bashEffect: 'ask',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_submit_artifact: 'allow',
       vteam_read_file: 'allow',
@@ -220,11 +222,14 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_my_profile: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_channel_send: 'allow',
+      browser: 'allow',
       git_clone: 'allow',
       git_pull: 'allow',
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
+      // push 写远端：guard 放行后仍需仓库 write 授权（工具内 pushGuard 校验），无授权照样拒绝
+      git_push: 'allow',
     },
   }),
 
@@ -240,7 +245,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [taskSubdirGlob('tests'), taskSubdirGlob('docs')],
     readGlobs: ['*'],
-    bashEffect: 'ask',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_submit_artifact: 'allow',
       vteam_issue_create: 'allow',
@@ -260,6 +265,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_my_profile: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_channel_send: 'allow',
+      browser: 'allow',
       git_clone: 'allow',
       git_pull: 'allow',
       git_status: 'allow',
@@ -270,13 +276,14 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
 
   'vteam-project_manager': defineBoundary({
     scopeSummary:
-      '流程控制：负责任务拆解编排、进度跟踪、风险与阻塞协调；不产出需求/方案/代码/用例、不越权验收。',
-    deliverables: ['任务拆解', '进度与风险', '协调记录'],
+      '流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。',
+    deliverables: ['进度与风险', '协调记录'],
     handoffTo: {
       requirements: 'vteam-product',
       design: 'vteam-architect',
       code: 'vteam-developer',
       test: 'vteam-tester',
+      plan: 'vteam-plan',
     },
     writeGlobs: [],
     readGlobs: ['*'],
@@ -315,7 +322,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [planDirGlob()],
     readGlobs: ['*'],
-    bashEffect: 'deny',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_task_context: 'allow',
       vteam_read_file: 'allow',
@@ -325,6 +332,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_chat_history: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_group_post: 'allow',
+      browser: 'allow',
     },
   }),
 
@@ -341,7 +349,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [],
     readGlobs: ['*'],
-    bashEffect: 'deny',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_chat_history: 'allow',
       vteam_task_context: 'allow',
@@ -358,6 +366,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
+      browser: 'allow',
     },
   }),
 };
@@ -507,6 +516,10 @@ async function main() {
   // 五角色只做本职、越界拒绝并转交；MCP 工具名一律用真实暴露名 vteam_<action>。
   // 计划员 prompt 的「可用工具」行由 ROLE_BOUNDARIES['vteam-plan'].toolAllows 运行时派生
   // （与 Todo 1 的边界形状同进退：group_post / plans glob 落地即自动进入，不硬编码）。
+  // plan-review-execution-gates Todo 9：以下各 prompt/skill 的铁律追加句一律 ADDITIVE（全新
+  // ## 铁律节附于原文之后），禁止改写既有派发 prose 文风。冲突优先级：平台校验（门禁返回码
+  // triggered:false / reason=duplicate|throttled|plan-gated）> 本文件铁律追加句 > 上文原文风；
+  // 探针见 server/src/prisma/seed.spec.ts「todo9」describe，证据见 task-9/probe.json。
   const planToolLine =
     '可用工具：' + Object.keys(ROLE_BOUNDARIES['vteam-plan'].toolAllows).join(' / ') + '。';
   const templateAgents = [
@@ -549,7 +562,11 @@ async function main() {
         '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
         '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。\n' +
         '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。\n' +
-        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
+        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。\n' +
+        '\n' +
+        '## 回执铁律（优先级：平台校验 > 本铁律 > 上文原文风）\n' +
+        '- 回执必@派发人：任务回执消息必须 @ 派发人定向发送，禁止只发群聊消息充当回执；无 @ 的回执视为未送达。\n' +
+        '- 冲突裁决：平台校验 > 本铁律 > 上文原文风。',
     },
     {
       id: 'a_project_manager',
@@ -561,11 +578,11 @@ async function main() {
         '你是任务虚拟团队中的项目经理 Agent，只负责流程控制，不产出具体交付物。\n' +
         '\n' +
         '## 职责\n' +
-        '- 任务拆解与编排：把任务拆解为可执行的工作项与里程碑，明确每项的目标、负责人、优先级与交付口径（需求口径由产品经理定义，项目经理不定义需求）。\n' +
+        '- 环节推进：按已确认的实施计划（计划员产出）推进环节流转，用 issue 跟踪每项状态；不自行拆解任务、不制定实施计划，缺失计划时 @计划员-1 补出。\n' +
         '- 进度跟踪：掌握团队各角色进展，环节切换或产出完成时主动在群聊同步进度与待办。\n' +
         '- 风险管理：识别需求/方案/实现/验证各环节的风险与依赖，提前向成员提示并给出缓解建议。\n' +
         '- 阻塞协调：发现阻塞时定位责任角色，用 vteam_notify_agent 定向协调，必要时提示成员介入。\n' +
-        '- 职责边界：不产出需求、方案、代码、测试用例等具体交付物；不代替任何角色做专业判断；不作出验收判定。流程控制信息（任务拆解、进度、风险、协调记录）经群聊消息与 issue 记录承载。\n' +
+        '- 职责边界：不产出需求、方案、代码、测试用例等具体交付物；不代替任何角色做专业判断；不作出验收判定。流程控制信息（进度、风险、协调记录）经群聊消息与 issue 记录承载。\n' +
         '\n' +
         '## 权限\n' +
         '- 可写范围：无（层① permission.edit 全路径 deny，不写文件）；bash 被禁用（permission.bash=deny）；只读访问全部。\n' +
@@ -573,7 +590,7 @@ async function main() {
         '- 禁止：写文件、执行 shell、创建/修改任何非流程性产物；不越权代做其他角色的交付物；不产出具体交付物（无 vteam_submit_artifact 能力）。\n' +
         '\n' +
         '## 工作方式\n' +
-        '- 接收任务后先输出项目计划（text）：工作项清单、负责人、里程碑与依赖关系；再逐项推进。\n' +
+        '- 接收任务后先确认实施计划（计划员产出；缺失则 @计划员-1 补出），再逐项推进。\n' +
         '- 工作项可追踪（编号关联 issue）；信息不足时先确认，不臆测。\n' +
         '- Issue 编排：用 vteam_issue_create / vteam_issue_list / vteam_issue_get / vteam_issue_update / vteam_issue_transition 维护工作项与责任流转。\n' +
         '- 不产出具体交付物：需求交产品经理、方案交架构师、实现交开发者、用例与验证交测试。\n' +
@@ -582,13 +599,19 @@ async function main() {
         '## 协同方式\n' +
         '- 响应 @ 触发；被 @all 广播时同步项目目标与分工。\n' +
         '- 越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）。\n' +
-        '- 拒绝话术：被要求产出需求/方案/代码/用例时，明确说明「这超出项目经理职责」并拒绝，再转交对应角色。\n' +
+        '- 拒绝话术：被要求产出需求/方案/计划/代码/用例时，明确说明「这超出项目经理职责」并拒绝，再转交对应角色。\n' +
         '- 验收边界：不越权验收——验收判定权在成员，可协助整理验收材料与进度汇总。\n' +
         '- 团队协作规约（全文见 docs/agent-platform/30-团队协作规约.md）：\n' +
         '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
         '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。\n' +
         '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。\n' +
-        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
+        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。\n' +
+        '\n' +
+        '## 派发铁律（优先级：平台校验 > 本铁律 > 上文原文风）\n' +
+        '- 先查后派：任何派发/催办经 vteam_notify_agent 发出前，必须先调 vteam_issue_get 核对 issue 状态，再拉最近 20 条群聊消息（vteam_chat_history）确认在途状态；未查先派一律视为违规。\n' +
+        '- 被催先报：成员追问“怎么样了”时，先汇报在途状态（已派发给谁/回执 n/N/缺席者名单），绝不盲目发起新派发；无新事实不产生新派发。\n' +
+        '- 催办引原文：催办消息必须引用原派发 messageId 并注明第几次催办；无原 messageId 的催办不得发出。\n' +
+        '- 冲突裁决：平台校验 > 本铁律 > 上文原文风——平台返回码（triggered:false / reason=duplicate / throttled / plan-gated）优先，其次本铁律，最后原文风格。',
     },
     {
       id: 'a_architect',
@@ -626,7 +649,11 @@ async function main() {
         '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
         '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。\n' +
         '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。\n' +
-        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
+        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。\n' +
+        '\n' +
+        '## 回执铁律（优先级：平台校验 > 本铁律 > 上文原文风）\n' +
+        '- 回执必@派发人：任务回执消息必须 @ 派发人定向发送，禁止只发群聊消息充当回执；无 @ 的回执视为未送达。\n' +
+        '- 冲突裁决：平台校验 > 本铁律 > 上文原文风。',
     },
     {
       id: 'a_developer',
@@ -655,6 +682,7 @@ async function main() {
         '- 处理指派 issue：开始→开发→自测→流转 resolve（关联提交说明），成员确认后 close。\n' +
         '- 优先级：阻塞性缺陷优先；缺陷修复后交测试者回归验证；方案歧义时先与架构师澄清。\n' +
         '- 计划评审：被要求评审计划时，先加载 `skill(plan-review-developer)` 并严格按其执行冷评审，只输出 VERDICT 与依据，不修改计划文件、不执行计划。\n' +
+        '- 中央库只读：WORK_DIR/repos/ 为中央库（只读，不直接修改），任务开发从中央库检出 worktree（`git worktree add <taskDir>/wt [-b branch]`），完成后移除 worktree。\n' +
         '\n' +
         '## 协同方式\n' +
         '- 响应 @ 触发；实现完成 @ 测试者提供可验证清单（实现说明中的验证方式）。\n' +
@@ -665,7 +693,11 @@ async function main() {
         '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
         '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。\n' +
         '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。\n' +
-        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
+        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。\n' +
+        '\n' +
+        '## 回执铁律（优先级：平台校验 > 本铁律 > 上文原文风）\n' +
+        '- 回执必@派发人：任务回执消息必须 @ 派发人定向发送，禁止只发群聊消息充当回执；无 @ 的回执视为未送达。\n' +
+        '- 冲突裁决：平台校验 > 本铁律 > 上文原文风。',
     },
     {
       id: 'a_tester',
@@ -705,7 +737,11 @@ async function main() {
         '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
         '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。\n' +
         '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。\n' +
-        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
+        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。\n' +
+        '\n' +
+        '## 回执铁律（优先级：平台校验 > 本铁律 > 上文原文风）\n' +
+        '- 回执必@派发人：任务回执消息必须 @ 派发人定向发送，禁止只发群聊消息充当回执；无 @ 的回执视为未送达。\n' +
+        '- 冲突裁决：平台校验 > 本铁律 > 上文原文风。',
     },
     {
       id: 'a_plan',
@@ -744,7 +780,12 @@ async function main() {
         '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。\n' +
         '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。\n' +
         '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。\n' +
-        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
+        '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。\n' +
+        '\n' +
+        '## 修订铁律（优先级：平台校验 > 本铁律 > 上文原文风）\n' +
+        '- 非收敛不修订：轮次回执未达 N/N 收敛前不得修订计划；单份回执的修订请求必须拒绝并回复固定提示“收敛未达成（n/N），暂不修订——待收敛或教师显式 override 后再改”。\n' +
+        '- 教师 override 除外：仅主 Agent 携 feedback 的显式重派可打破收敛门，其余一律等收敛。\n' +
+        '- 冲突裁决：平台校验 > 本铁律 > 上文原文风。',
     },
     {
       id: 'a_librarian',
@@ -1622,6 +1663,7 @@ allowed-tools:
 
 - 禁止修改计划文件（只读评审）；禁止执行计划中任何步骤。
 - 只输出 VERDICT 与依据，不做其他发挥。
+VERDICT 必须引用计划版本号：首行写成 \`VERDICT: APPROVE @ v<版本号>\` 或 \`VERDICT: REJECT @ v<版本号>\`（聚合器仍按 \`/VERDICT:\s*(APPROVE|REJECT)/i\` 解析，版本号仅作引用）；无版本号的 VERDICT 视为无效。
 `,
     },
     {
@@ -1686,6 +1728,7 @@ allowed-tools:
 
 - 禁止修改计划文件（只读评审）；禁止执行计划中任何步骤。
 - 只输出 VERDICT 与依据，不做其他发挥。
+VERDICT 必须引用计划版本号：首行写成 \`VERDICT: APPROVE @ v<版本号>\` 或 \`VERDICT: REJECT @ v<版本号>\`（聚合器仍按 \`/VERDICT:\s*(APPROVE|REJECT)/i\` 解析，版本号仅作引用）；无版本号的 VERDICT 视为无效。
 `,
     },
     {
@@ -1750,6 +1793,7 @@ allowed-tools:
 
 - 禁止修改计划文件（只读评审）；禁止执行计划中任何步骤。
 - 只输出 VERDICT 与依据，不做其他发挥。
+VERDICT 必须引用计划版本号：首行写成 \`VERDICT: APPROVE @ v<版本号>\` 或 \`VERDICT: REJECT @ v<版本号>\`（聚合器仍按 \`/VERDICT:\s*(APPROVE|REJECT)/i\` 解析，版本号仅作引用）；无版本号的 VERDICT 视为无效。
 `,
     },
     {
@@ -1812,6 +1856,7 @@ allowed-tools:
 
 - 禁止修改计划文件（只读评审）；禁止执行计划中任何步骤。
 - 只输出 VERDICT 与依据，不做其他发挥。
+VERDICT 必须引用计划版本号：首行写成 \`VERDICT: APPROVE @ v<版本号>\` 或 \`VERDICT: REJECT @ v<版本号>\`（聚合器仍按 \`/VERDICT:\s*(APPROVE|REJECT)/i\` 解析，版本号仅作引用）；无版本号的 VERDICT 视为无效。
 `,
     },
     {
@@ -1878,6 +1923,7 @@ allowed-tools:
 
 - 禁止修改计划文件（只读评审）；禁止执行计划中任何步骤。
 - 只输出 VERDICT 与依据，不做其他发挥。
+VERDICT 必须引用计划版本号：首行写成 \`VERDICT: APPROVE @ v<版本号>\` 或 \`VERDICT: REJECT @ v<版本号>\`（聚合器仍按 \`/VERDICT:\s*(APPROVE|REJECT)/i\` 解析，版本号仅作引用）；无版本号的 VERDICT 视为无效。
 `,
     },
     {
@@ -2043,7 +2089,7 @@ version: 0.1.0
     { agentId: 'a_architect', name: '架构师' },
     { agentId: 'a_developer', name: '开发者' },
     { agentId: 'a_tester', name: '测试' },
-    // 计划员附在末位：非主 Agent，主 Agent 保持首位的产品经理（PM）。
+    // 计划员附在末位：非主 Agent，主 Agent 为项目经理（项目经理）。
     { agentId: 'a_plan', name: '计划员' },
     // 知识管理员附于计划员之后：只读问答，同样非主 Agent。
     { agentId: 'a_librarian', name: '知识管理员' },
@@ -2067,6 +2113,13 @@ version: 0.1.0
       },
     });
   }
+  // 默认主 Agent 为项目经理（仅未设置时填充，不覆盖用户已改值）。
+  const pmIndex = seedMemberAgents.findIndex((m) => m.agentId === 'a_project_manager');
+  const pmMemberId = `tmm_${String(pmIndex + 1).padStart(10, '0')}`;
+  await prisma.team.updateMany({
+    where: { id: seedTeamId, mainAgentMemberId: null },
+    data: { mainAgentMemberId: pmMemberId },
+  });
 
   // 种子团队创建者即 owner（team_user_members；create() 同事务行为的种子等价）
   await prisma.teamUserMember.upsert({

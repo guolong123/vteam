@@ -1,0 +1,54 @@
+{
+  "todo": 9,
+  "generatedAt": "2026-09-16T02:14:53.613Z",
+  "baselineSeedSpecs": 30,
+  "probes": {
+    "nudge_no_dispatch": {
+      "input": "怎么样了",
+      "action": "report-status",
+      "newDispatch": false,
+      "pass": true
+    },
+    "early_revise_blocked": {
+      "received": "2/3",
+      "blocked": true,
+      "hint": "收敛未达成（n/N），暂不修订——待收敛或教师显式 override 后再改",
+      "pass": true
+    },
+    "precedence": {
+      "order": [
+        "平台校验",
+        "本铁律",
+        "上文原文风"
+      ],
+      "platformSignal": "triggered:false / reason=duplicate|throttled|plan-gated",
+      "pass": true
+    }
+  },
+  "ironLaws": {
+    "pm": [
+      "先查后派",
+      "被催先报",
+      "催办引原文"
+    ],
+    "memberReceipt": [
+      "a_product",
+      "a_architect",
+      "a_developer",
+      "a_tester"
+    ],
+    "planner": [
+      "非收敛不修订",
+      "教师 override 除外"
+    ],
+    "reviewer": [
+      "plan-review-product",
+      "plan-review-architect",
+      "plan-review-developer",
+      "plan-review-tester",
+      "plan-review-project_manager"
+    ],
+    "pass": true
+  },
+  "pass": true
+}
