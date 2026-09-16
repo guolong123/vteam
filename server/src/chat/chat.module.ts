@@ -6,6 +6,7 @@ import { WorkersModule } from '../workers/workers.module';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 import { MessageDispatcher } from './message-dispatcher';
+import { MessageReceiptsService } from './message-receipts.service';
 import { WorkerDispatcher } from './worker-dispatcher';
 
 /**
@@ -30,10 +31,11 @@ import { WorkerDispatcher } from './worker-dispatcher';
   controllers: [ChatController],
   providers: [
     ChatService,
+    MessageReceiptsService,
     PermissionGuard,
     WorkerDispatcher,
     { provide: MessageDispatcher, useExisting: WorkerDispatcher },
   ],
-  exports: [ChatService, WorkerDispatcher],
+  exports: [ChatService, MessageReceiptsService, WorkerDispatcher],
 })
 export class ChatModule {}

@@ -54,8 +54,11 @@ import { parseSkillMarkdown } from '../skills/skill-frontmatter.util';
 import { ModuleRef } from '@nestjs/core';
 import {
   containsTeamWideMention,
+  isThrottleExemptKind,
   MentionThrottle,
+  MentionThrottleDecision,
 } from '../chat/mention-throttle';
+import { MessageReceiptsService } from '../chat/message-receipts.service';
 import {
   buildMessageReceiptDedupKey,
   MESSAGE_RECEIPT_KINDS,
@@ -216,6 +219,11 @@ export class PlatformMcpService {
     @Optional()
     @Inject(PlanLifecycleService)
     private readonly planLifecycle?: PlanLifecycleService,
+    // 回执计数（todo5 待回执看板口径）：缺省可空——单测/旧装配未提供时计数
+    // 回退 {pending:0,total:0}，不阻断其余字段；生产装配经 ChatModule 提供。
+    @Optional()
+    @Inject(MessageReceiptsService)
+    private readonly receipts?: MessageReceiptsService,
   ) {}
 
   /**
@@ -526,6 +534,8 @@ export class PlatformMcpService {
           })
         : Promise.resolve([]),
     ]);
+    // todo5 待回执看板口径（31 篇 §3.4）：n/N 计数，仅计数不做分析页。
+    const pendingReceipts = await this.pendingReceiptCounts(args.taskId);
     return {
       id: task.id,
       title: task.title,
@@ -535,6 +545,7 @@ export class PlatformMcpService {
       mainAgentInstanceId: task.mainAgentInstanceId,
       backgroundDocs: task.backgroundDocs ?? [],
       channelId: channel?.id ?? null,
+      pendingReceipts,
       agentMembers: agentRows.map((r) => ({
         id: r.id,
         alias: r.alias,
@@ -543,7 +554,27 @@ export class PlatformMcpService {
         role: r.agent.role,
         main: r.id === ctxMainId,
       })),
-    };
+      };
+  }
+
+  /**
+   * 待回执 n/N 计数（todo5，31 篇 §3.4）：receipts 未装配时回退零值，
+   * 查询失败 warn 后回退零值——计数缺席不阻断 task_context/team_view 主体。
+   */
+  private async pendingReceiptCounts(
+    taskId: string,
+  ): Promise<{ pending: number; total: number }> {
+    if (!this.receipts) {
+      return { pending: 0, total: 0 };
+    }
+    try {
+      return await this.receipts.countPending({ taskId });
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] pendingReceipts 查询失败 task=${taskId}（回退零值）：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { pending: 0, total: 0 };
+    }
   }
 
   /**
@@ -920,13 +951,17 @@ export class PlatformMcpService {
     // 不阻断发布（消息已落库广播），返回 triggered:false + reason。notify_agent
     // 为单显式目标，内容含 @all 也不展开 fan-out（仅触发 targetInstanceId）。
     // 团队维度节流键取 team:<teamId> 命名空间（与 t_ 任务键永不碰撞）。
+    // todo5 豁免：内部 wake/round-notify 不咨询不记账（pair/task 预算只约束外部派发）。
     const throttleKey = isTeam ? `team:${exec.teamId}` : (effTaskId as string);
-    const decision = this.mentionThrottle.shouldDispatch({
-      taskId: throttleKey,
-      fromInstanceId: args.selfInstanceId,
-      toInstanceId: args.targetInstanceId,
-      now: Date.now(),
-    });
+    const throttleExempt = isThrottleExemptKind(args.kind);
+    const decision: MentionThrottleDecision = throttleExempt
+      ? { allow: true }
+      : this.mentionThrottle.shouldDispatch({
+          taskId: throttleKey,
+          fromInstanceId: args.selfInstanceId,
+          toInstanceId: args.targetInstanceId,
+          now: Date.now(),
+        });
     if (!decision.allow) {
       this.logger.warn(
         `[mcp] notify_agent 触发被节流 task=${throttleKey} from=${args.selfInstanceId} to=${args.targetInstanceId} reason=${decision.reason}（消息已发布）`,
@@ -2141,6 +2176,7 @@ export class PlatformMcpService {
     args: { taskId: string },
   ): Promise<{
     taskId: string;
+    pendingReceipts: { pending: number; total: number };
     members: Array<{
       id: string;
       agentId: string;
@@ -2203,6 +2239,8 @@ export class PlatformMcpService {
     );
     return {
       taskId: task.id,
+      // todo5 待回执看板口径（31 篇 §3.4）：n/N 计数，仅计数不做分析页。
+      pendingReceipts: await this.pendingReceiptCounts(task.id),
       members: agentRows.map((r) => {
         const vs = viewSessionByMember.get(r.id) as
           { id: string; status: string } | undefined;

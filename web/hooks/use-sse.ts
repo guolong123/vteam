@@ -56,6 +56,8 @@ const pool = new Map<string, SharedConnection>();
  *                    session.updated 例外无条件放行——后端 payload 仅 {sessionId, status, workerId}
  *                    不含 taskId，无法按 id 过滤，由页面经 sessionId→agentId 映射 + 团队成员集合二次过滤
  *   - `global`       → task.status.changed（09 篇 §4.1 全局广播）
+ *   - 回执/轮次/计划事件（receipt、round、plan.status 前缀，Todo 5）→ `team:<id>` 段按
+ *     payload.teamId 匹配，`channel:<id>` 段按 payload.channelId 匹配（后端双帧同载荷）
  * 供 useSSE（传 scope 的调用方，如看板页 'global'）与 useRealtimeEvents（options.scope）共用。
  */
 export function matchesScope(ev: SSEEvent<unknown>, scopeStr?: string): boolean {
@@ -72,6 +74,9 @@ export function matchesScope(ev: SSEEvent<unknown>, scopeStr?: string): boolean 
     }
     if (scope.startsWith("channel:")) {
       const id = scope.slice("channel:".length);
+      if (isReceiptRoundPlanEvent(ev.type)) {
+        return (ev.payload as { channelId?: string | null })?.channelId === id;
+      }
       return (
         (ev.type === "chat.message.new" || ev.type === "message.part.delta") &&
         (ev.payload as { message?: { channelId?: string } })?.message?.channelId === id
@@ -87,6 +92,9 @@ export function matchesScope(ev: SSEEvent<unknown>, scopeStr?: string): boolean 
     }
     if (scope.startsWith("team:")) {
       const id = scope.slice("team:".length);
+      if (isReceiptRoundPlanEvent(ev.type)) {
+        return (ev.payload as { teamId?: string })?.teamId === id;
+      }
       if (ev.type === "chat.message.new" || ev.type === "message.part.delta") {
         const payload = ev.payload as { message?: { channelId?: string }; taskId?: string } & Record<string, unknown>;
         if (payload.message?.channelId) return true;
@@ -105,6 +113,22 @@ export function matchesScope(ev: SSEEvent<unknown>, scopeStr?: string): boolean 
     }
     return false;
   });
+}
+
+/**
+ * 回执/轮次/计划事件名前缀（对齐 server event.constants Todo 5：
+ * receipt.acked/receipt.expired/round.complete/round.stale/plan.status.*）。
+ * 走 team:/channel: 双订阅：team: 段按 payload.teamId 匹配，
+ * channel: 段按 payload.channelId 匹配（后端 emitTeamChannel 双帧同载荷）。
+ */
+export const RECEIPT_ROUND_PLAN_PREFIXES = [
+  "receipt.",
+  "round.",
+  "plan.status.",
+] as const;
+
+export function isReceiptRoundPlanEvent(type: string): boolean {
+  return RECEIPT_ROUND_PLAN_PREFIXES.some((p) => type.startsWith(p));
 }
 
 /** 建立 / 重建连接（首连按 skipHistory 决定是否跳过历史；重连 URL 携带连接级 lastId 补拉断线期事件）。 */

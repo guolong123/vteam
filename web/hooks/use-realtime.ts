@@ -34,7 +34,14 @@ const EVENT = {
   MESSAGE_PART_DELTA: "message.part.delta",
   AGENT_STATUS: "agent.status",
   AGENT_QUESTION: "agent.question",
+  RECEIPT_ACKED: "receipt.acked",
+  RECEIPT_EXPIRED: "receipt.expired",
+  ROUND_COMPLETE: "round.complete",
+  ROUND_STALE: "round.stale",
 } as const;
+
+/** plan.status.* 为动态事件族（后缀对齐后端 PLAN_LIFECYCLE_STATUS 六态），前缀匹配。 */
+export const PLAN_STATUS_PREFIX = "plan.status.";
 
 /* ------------------------------ 事件 payload 类型（对齐后端） ------------------------------ */
 
@@ -170,6 +177,42 @@ export interface AgentStatusEvent {
   status: string;
 }
 
+/** receipt.acked / receipt.expired 事件 payload（对齐后端 ReceiptEventPayload，Todo 5）。 */
+export interface ReceiptEvent {
+  receiptId: string;
+  messageId: string | null;
+  taskId: string | null;
+  teamId: string;
+  channelId?: string | null;
+  fromInstanceId: string;
+  toInstanceId: string;
+  status: "acked" | "expired";
+  ackedAt?: string | null;
+  nudgeCount?: number;
+}
+
+/** round.complete / round.stale 事件 payload（对齐后端 RoundEventPayload，Todo 5）。 */
+export interface RoundEvent {
+  issueId: string;
+  taskId: string | null;
+  teamId: string;
+  channelId?: string | null;
+  round: number;
+  version: number;
+  received: string[];
+  expected: string[];
+  reason?: string;
+}
+
+/** plan.status.* 事件 payload（对齐后端 PlanStatusChangedPayload，Todo 5）。 */
+export interface PlanStatusEvent {
+  taskId: string;
+  teamId: string;
+  channelId?: string | null;
+  from: string | null;
+  to: string;
+}
+
 /** serve question 选项（对齐 worker SessionQuestionOption）。 */
 export interface RealtimeQuestionOption {
   label: string;
@@ -234,6 +277,11 @@ export interface UseRealtimeEventsOptions {
   onAgentStatus?: (payload: AgentStatusEvent, event: SSEEvent<AgentStatusEvent>) => void;
   onMessagePartDelta?: (payload: MessagePartDeltaEvent, event: SSEEvent<MessagePartDeltaEvent>) => void;
   onAgentQuestion?: (payload: RealtimeQuestionEvent, event: SSEEvent<RealtimeQuestionEvent>) => void;
+  onReceiptAcked?: (payload: ReceiptEvent, event: SSEEvent<ReceiptEvent>) => void;
+  onReceiptExpired?: (payload: ReceiptEvent, event: SSEEvent<ReceiptEvent>) => void;
+  onRoundComplete?: (payload: RoundEvent, event: SSEEvent<RoundEvent>) => void;
+  onRoundStale?: (payload: RoundEvent, event: SSEEvent<RoundEvent>) => void;
+  onPlanStatusChanged?: (payload: PlanStatusEvent, event: SSEEvent<PlanStatusEvent>) => void;
 }
 
 /**
@@ -256,6 +304,11 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
     onAgentStatus,
     onMessagePartDelta,
     onAgentQuestion,
+    onReceiptAcked,
+    onReceiptExpired,
+    onRoundComplete,
+    onRoundStale,
+    onPlanStatusChanged,
   } = options;
   const queryClient = useQueryClient();
 
@@ -312,6 +365,24 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
         case EVENT.AGENT_QUESTION:
           onAgentQuestion?.(ev.payload as RealtimeQuestionEvent, ev as SSEEvent<RealtimeQuestionEvent>);
           break;
+        case EVENT.RECEIPT_ACKED:
+          onReceiptAcked?.(ev.payload as ReceiptEvent, ev as SSEEvent<ReceiptEvent>);
+          break;
+        case EVENT.RECEIPT_EXPIRED:
+          onReceiptExpired?.(ev.payload as ReceiptEvent, ev as SSEEvent<ReceiptEvent>);
+          break;
+        case EVENT.ROUND_COMPLETE:
+          onRoundComplete?.(ev.payload as RoundEvent, ev as SSEEvent<RoundEvent>);
+          break;
+        case EVENT.ROUND_STALE:
+          onRoundStale?.(ev.payload as RoundEvent, ev as SSEEvent<RoundEvent>);
+          break;
+        default: {
+          if (ev.type.startsWith(PLAN_STATUS_PREFIX)) {
+            onPlanStatusChanged?.(ev.payload as PlanStatusEvent, ev as SSEEvent<PlanStatusEvent>);
+          }
+          break;
+        }
       }
     },
   });

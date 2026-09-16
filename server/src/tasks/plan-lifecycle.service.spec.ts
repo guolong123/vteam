@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { MessageReceiptsService } from '../chat/message-receipts.service';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -13,6 +14,7 @@ describe('PlanLifecycleService', () => {
     task: { findUnique: jest.Mock };
   };
   let idGen: { nextId: jest.Mock; seed: jest.Mock };
+  let receipts: { emitPlanStatusChanged: jest.Mock };
 
   beforeEach(async () => {
     prisma = {
@@ -24,12 +26,14 @@ describe('PlanLifecycleService', () => {
       task: { findUnique: jest.fn() },
     };
     idGen = { nextId: jest.fn(), seed: jest.fn() };
+    receipts = { emitPlanStatusChanged: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PlanLifecycleService,
         { provide: PrismaService, useValue: prisma },
         { provide: IdGeneratorService, useValue: idGen },
+        { provide: MessageReceiptsService, useValue: receipts },
       ],
     }).compile();
 
@@ -151,11 +155,27 @@ describe('PlanLifecycleService', () => {
         where: { taskId: 't_1' },
         data: { status: 'executing' },
       });
+      expect(receipts.emitPlanStatusChanged).toHaveBeenCalledWith({
+        taskId: 't_1',
+        from: 'approved',
+        to: 'executing',
+      });
     });
 
-    it('非法目标态→抛错且不写库', async () => {
+    it('非法目标态→抛错且不写库不广播', async () => {
       await expect(service.transition('t_1', 'archived')).rejects.toThrow();
       expect(prisma.plan.update).not.toHaveBeenCalled();
+      expect(receipts.emitPlanStatusChanged).not.toHaveBeenCalled();
+    });
+
+    it('广播失败→翻转已落库，仅 warn 不抛', async () => {
+      prisma.plan.findUnique.mockResolvedValue({ status: 'approved' });
+      prisma.plan.update.mockResolvedValue({ status: 'executing' });
+      receipts.emitPlanStatusChanged.mockRejectedValue(new Error('sse down'));
+
+      await expect(
+        service.transition('t_1', 'executing'),
+      ).resolves.toMatchObject({ status: 'executing' });
     });
   });
 });

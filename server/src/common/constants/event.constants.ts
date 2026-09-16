@@ -28,6 +28,21 @@ export const EVENT_TYPES = {
   WORKER_HEARTBEAT: 'worker.heartbeat',
   // 模型提问/工具权限确认待用户处理（worker 检测 serve pending 上送后 broadcast；reply 收敛复用）
   AGENT_QUESTION: 'agent.question',
+  // plan-review-execution-gates Todo 5：派发回执/评审轮次/计划状态事件。
+  // 走 team:/channel: 双订阅（会话页 team:+channel:+global，看板页 global+team:），
+  // 订阅者清单见 realtime/realtime-subscriptions.ts（缺席即红）。
+  RECEIPT_ACKED: 'receipt.acked',
+  RECEIPT_EXPIRED: 'receipt.expired',
+  ROUND_COMPLETE: 'round.complete',
+  ROUND_STALE: 'round.stale',
+  // plan.status.* 后缀与 PLAN_LIFECYCLE_STATUS 六态一一对应
+  //（tasks/plan-lifecycle.service.ts；event.constants.spec.ts 断言同步）。
+  PLAN_STATUS_DRAFT: 'plan.status.draft',
+  PLAN_STATUS_REVIEWING: 'plan.status.reviewing',
+  PLAN_STATUS_APPROVED: 'plan.status.approved',
+  PLAN_STATUS_REJECTED: 'plan.status.rejected',
+  PLAN_STATUS_EXECUTING: 'plan.status.executing',
+  PLAN_STATUS_COMPLETED: 'plan.status.completed',
 } as const;
 
 export type EventType = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];

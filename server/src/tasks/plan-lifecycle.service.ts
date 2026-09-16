@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { MessageReceiptsService } from '../chat/message-receipts.service';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -25,8 +26,8 @@ const PLAN_LIFECYCLE_STATUS_SET: ReadonlySet<string> = new Set(
 /**
  * plans 表唯一读写 choke 点（todo2 复活，守卫窄豁免仅覆盖本文件）。
  *
- * 约束：本文件只碰 plans 表；子任务表读写仍全禁（守卫即红），
- * 团队删除级联（teams.service）保持原样不扩散。
+ * 约束：本文件只写 plans 表（读任务行仅为事件归属团队解析）；
+ * 子任务表读写仍全禁（守卫即红），团队删除级联（teams.service）保持原样不扩散。
  */
 @Injectable()
 export class PlanLifecycleService {
@@ -35,6 +36,7 @@ export class PlanLifecycleService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly idGen: IdGeneratorService,
+    private readonly receipts: MessageReceiptsService,
   ) {}
 
   /** 校验计划状态枚举值（非法即抛，防脏写）。 */
@@ -91,7 +93,11 @@ export class PlanLifecycleService {
     opts?: { confirmedBy?: string | null; rejectReason?: string | null },
   ) {
     this.verifyEnum(to);
-    return this.prisma.plan.update({
+    const prev = (await this.prisma.plan.findUnique({
+      where: { taskId },
+      select: { status: true },
+    })) as unknown as { status: string } | null;
+    const updated = await this.prisma.plan.update({
       where: { taskId },
       data: {
         status: to,
@@ -103,5 +109,17 @@ export class PlanLifecycleService {
           : {}),
       },
     });
+    try {
+      await this.receipts.emitPlanStatusChanged({
+        taskId,
+        from: prev?.status ?? null,
+        to,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `plan.status 事件广播失败 task=${taskId} to=${to}（翻转已落库）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return updated;
   }
 }

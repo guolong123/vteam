@@ -48,6 +48,24 @@ export const DEFAULT_PAIR_WINDOW_MS = 60_000;
 export const DEFAULT_TASK_BUDGET_MAX = 20;
 export const DEFAULT_TASK_WINDOW_MS = 120_000;
 
+/**
+ * 节流豁免 kind（plan-review-execution-gates Todo 5）：
+ * 内部 wake / round-notify 不计 pair/task 预算（不咨询、不记账），
+ * pair/task 预算只约束外部派发。预算常量（上 4 行）字节一致，禁改。
+ */
+export const THROTTLE_EXEMPT_KINDS: readonly string[] = [
+  'wake',
+  'round-notify',
+];
+
+/** 指定 kind 是否免节流（null/undefined/空串一律不免，走外部派发预算）。 */
+export function isThrottleExemptKind(
+  kind: string | null | undefined,
+): boolean {
+  if (!kind) return false;
+  return THROTTLE_EXEMPT_KINDS.includes(kind);
+}
+
 /** 团队级 fan-out 标记（agent 内容命中任一即视为 team-wide，仅展示不触发）。 */
 const TEAM_WIDE_MARKERS = ['@all', '@所有人', '@全体', '@here'] as const;
 

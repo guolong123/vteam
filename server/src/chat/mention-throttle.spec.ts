@@ -2,6 +2,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   containsTeamWideMention,
+  DEFAULT_PAIR_MAX,
+  DEFAULT_PAIR_WINDOW_MS,
+  DEFAULT_TASK_BUDGET_MAX,
+  DEFAULT_TASK_WINDOW_MS,
+  isThrottleExemptKind,
   MentionThrottle,
   pairKeyOf,
 } from './mention-throttle';
@@ -95,8 +100,7 @@ describe('MentionThrottle（agent @ storm 硬节流，纯/确定性/注入时钟
     expect(pairKeyOf('tmm_a', 'tmm_b')).toBe(pairKeyOf('tmm_b', 'tmm_a'));
   });
 
-  it('用户路径不受影响：chat.service 不得引用 mention-throttle（仅 MCP 路径咨询节流）', () => {
-    const chatServiceSrc = fs.readFileSync(
+  it('用户路径不受影响：chat.service 不得引用 mention-throttle（仅 MCP 路径咨询节流）', () => {    const chatServiceSrc = fs.readFileSync(
       path.join(__dirname, 'chat.service.ts'),
       'utf8',
     );
@@ -107,5 +111,54 @@ describe('MentionThrottle（agent @ storm 硬节流，纯/确定性/注入时钟
       'utf8',
     );
     expect(mcpServiceSrc).toContain('mention-throttle');
+  });
+
+  it('预算常量字节一致（Todo 5 不改配额/窗口：pair 3/60s + task 20/120s）', () => {
+    expect(DEFAULT_PAIR_MAX).toBe(3);
+    expect(DEFAULT_PAIR_WINDOW_MS).toBe(60_000);
+    expect(DEFAULT_TASK_BUDGET_MAX).toBe(20);
+    expect(DEFAULT_TASK_WINDOW_MS).toBe(120_000);
+    const src = fs.readFileSync(
+      path.join(__dirname, 'mention-throttle.ts'),
+      'utf8',
+    );
+    const budgetLines = src
+      .split('\n')
+      .filter((l) => l.startsWith('export const DEFAULT_'));
+    expect(budgetLines).toEqual([
+      'export const DEFAULT_PAIR_MAX = 3;',
+      'export const DEFAULT_PAIR_WINDOW_MS = 60_000;',
+      'export const DEFAULT_TASK_BUDGET_MAX = 20;',
+      'export const DEFAULT_TASK_WINDOW_MS = 120_000;',
+    ]);
+  });
+
+  it('内部 wake/round-notify 豁免节流（外部派发才计 pair/task 预算）', () => {
+    expect(isThrottleExemptKind('wake')).toBe(true);
+    expect(isThrottleExemptKind('round-notify')).toBe(true);
+    expect(isThrottleExemptKind('execution')).toBe(false);
+    expect(isThrottleExemptKind('review')).toBe(false);
+    expect(isThrottleExemptKind('nudge')).toBe(false);
+    expect(isThrottleExemptKind(undefined)).toBe(false);
+    expect(isThrottleExemptKind(null)).toBe(false);
+    expect(isThrottleExemptKind('')).toBe(false);
+  });
+
+  it('突发豁免回归：3 评审外部派发占满 pair 预算后，wake + round-notify 仍零丢失', () => {
+    const t = new MentionThrottle();
+    const pair = {
+      taskId: 't_1',
+      fromInstanceId: 'tmm_pm',
+      toInstanceId: 'tmm_arch',
+    };
+    for (const now of [1000, 2000, 3000]) {
+      expect(t.shouldDispatch({ ...pair, now })).toEqual({ allow: true });
+    }
+    expect(t.shouldDispatch({ ...pair, now: 4000 })).toEqual({
+      allow: false,
+      reason: 'pair_limit',
+    });
+    expect(isThrottleExemptKind('wake')).toBe(true);
+    expect(isThrottleExemptKind('round-notify')).toBe(true);
   });
 });

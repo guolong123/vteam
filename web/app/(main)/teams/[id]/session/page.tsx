@@ -726,6 +726,39 @@ export default function TeamSessionPage() {
         queryClient.invalidateQueries({ queryKey: ["issues"] });
       }
     },
+    onReceiptAcked: (payload) => {
+      if (payload.teamId !== teamId) return;
+      if (currentTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["plans", currentTaskId] });
+      }
+    },
+    onReceiptExpired: (payload) => {
+      if (payload.teamId !== teamId) return;
+      if (currentTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["plans", currentTaskId] });
+      }
+    },
+    onRoundComplete: (payload) => {
+      if (payload.teamId !== teamId) return;
+      if (currentTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["plans", currentTaskId] });
+        queryClient.invalidateQueries({ queryKey: ["task-issues", currentTaskId] });
+      }
+    },
+    onRoundStale: (payload) => {
+      if (payload.teamId !== teamId) return;
+      if (currentTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["plans", currentTaskId] });
+        queryClient.invalidateQueries({ queryKey: ["task-issues", currentTaskId] });
+      }
+    },
+    onPlanStatusChanged: (payload) => {
+      if (payload.teamId !== teamId) return;
+      if (currentTaskId && payload.taskId === currentTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["plans", currentTaskId] });
+        queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+      }
+    },
     onAgentQuestion: (payload: RealtimeQuestionEvent) => {
       if (payload.resolved) {
         setPendingQuestion((prev) => (prev && prev.id === payload.question.id ? null : prev));
@@ -1276,7 +1309,13 @@ export default function TeamSessionPage() {
             agents={agentMembers}
             onEditTaskInfo={() => setTaskEditOpen(true)}
             onOpenArtifacts={() => router.push(`/artifacts?teamId=${teamId}`)}
-            onOpenIssues={() => router.push(`/issues?taskId=${currentTask?.id ?? ""}`)}
+            onOpenIssues={() =>
+              router.push(
+                currentTask?.id
+                  ? `/issues?teamId=${teamId}&taskId=${currentTask.id}`
+                  : `/teams/${teamId}/tasks`,
+              )
+            }
             onToggleManagedMode={(v: boolean) => { if (!managedModeMutation.isPending) managedModeMutation.mutate(v); }}
             onOpenIssueDetail={(issueId: string) => setDetailIssueId(issueId)}
             onOpenArtifactDoc={(a: ArtifactItem) => {

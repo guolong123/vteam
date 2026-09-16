@@ -36,6 +36,7 @@ import { TasksService } from '../tasks/tasks.service';
 import { QuestionsService } from '../questions/questions.service';
 import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service';
 import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
+import { MessageReceiptsService } from '../chat/message-receipts.service';
 
 describe('PlatformMcpService', () => {
   let service: PlatformMcpService;
@@ -120,6 +121,7 @@ describe('PlatformMcpService', () => {
   let plansService: { assignReviewer: jest.Mock };
   let outboundDispatcher: { sendToChannelByIdOrName: jest.Mock };
   let executionPolicyService: { resolveByAgent: jest.Mock };
+  let receiptsService: { countPending: jest.Mock };
   const allowPolicy = () => {
     executionPolicyService.resolveByAgent.mockResolvedValue({
       policyId: 'ep_developer',
@@ -254,6 +256,9 @@ describe('PlatformMcpService', () => {
       sendToChannelByIdOrName: jest.fn().mockResolvedValue(undefined),
     };
     executionPolicyService = { resolveByAgent: jest.fn() };
+    receiptsService = {
+      countPending: jest.fn().mockResolvedValue({ pending: 0, total: 0 }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -274,6 +279,7 @@ describe('PlatformMcpService', () => {
         { provide: ExecutionPolicyService, useValue: executionPolicyService },
         { provide: SkillsService, useValue: skillsService },
         { provide: GitReposService, useValue: gitReposService },
+        { provide: MessageReceiptsService, useValue: receiptsService },
       ],
     }).compile();
 
@@ -1067,6 +1073,7 @@ describe('PlatformMcpService', () => {
         mainAgentInstanceId: 'tmm_1',
         backgroundDocs: [{ name: '背景.md' }],
         channelId,
+        pendingReceipts: { pending: 0, total: 0 },
         agentMembers: [
           {
             id: 'tmm_1',
@@ -1096,6 +1103,33 @@ describe('PlatformMcpService', () => {
         NotFoundException,
         PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
       );
+    });
+
+    it('pendingReceipts 返回回执 n/N 计数（按 taskId 查询）', async () => {
+      allowWorker();
+      prisma.task.findUnique.mockResolvedValue({
+        id: taskId,
+        title: '需求分析',
+        description: '描述',
+        status: 'in_progress',
+        mainAgentId: 'ag_1',
+        mainAgentInstanceId: 'tmm_1',
+        backgroundDocs: [],
+        teamId: 'tm_1',
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_1',
+      });
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      prisma.teamMember.findMany.mockResolvedValue([]);
+      receiptsService.countPending.mockResolvedValue({ pending: 2, total: 5 });
+
+      const result = await service.taskContext(ctx, { taskId });
+
+      expect(receiptsService.countPending).toHaveBeenCalledWith({
+        taskId,
+      });
+      expect(result.pendingReceipts).toEqual({ pending: 2, total: 5 });
     });
   });
 
@@ -1860,6 +1894,46 @@ describe('PlatformMcpService', () => {
         targetInstanceId: 'tmm_tester',
         triggered: false,
         reason: 'throttled',
+        issueBound: false,
+      });
+    });
+
+    it('内部 wake 免节流：配额耗尽后 kind=wake 仍触发（不咨询不记账，零丢失）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+      mockTeamMemberRows();
+      idGen.nextId.mockResolvedValue('m_0000000200');
+      prisma.message.create.mockResolvedValue(createdMessage);
+      const throttle = (service as any).mentionThrottle;
+      for (let i = 0; i < 3; i++) {
+        throttle.shouldDispatch({
+          taskId,
+          fromInstanceId: senderInstanceId,
+          toInstanceId: 'tmm_tester',
+          now: Date.now(),
+        });
+      }
+
+      const result = await service.notifyAgent(ctx, {
+        taskId,
+        targetInstanceId: 'tmm_tester',
+        content: '回执摘要：你派发的 1 项已有回音',
+        selfInstanceId: senderInstanceId,
+        kind: 'wake',
+      });
+
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetInstanceId: 'tmm_tester',
+          kind: 'wake',
+        }),
+      );
+      expect(result).toEqual({
+        messageId: 'm_0000000200',
+        channelId,
+        targetInstanceId: 'tmm_tester',
+        triggered: true,
+        reason: 'ok',
         issueBound: false,
       });
     });
@@ -3784,6 +3858,7 @@ describe('PlatformMcpService', () => {
         );
         expect(out).toEqual({
           taskId,
+          pendingReceipts: { pending: 0, total: 0 },
           members: [
             {
               id: mainInstanceId,

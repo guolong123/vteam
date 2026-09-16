@@ -6,9 +6,10 @@ import {
   SESSION_STATUS,
   ACTOR_TYPE,
 } from './event.constants';
+import { PLAN_LIFECYCLE_STATUS } from '../../tasks/plan-lifecycle.service';
 
 describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 篇；Phase 4 worker 回流扩展，T1）', () => {
-  it('EVENT_TYPES 含 13 个事件，事件名一律点号分隔（无下划线变体）', () => {
+  it('EVENT_TYPES 含 27 个事件，事件名一律点号分隔（无下划线变体）', () => {
     expect(EVENT_TYPES.CHAT_MESSAGE_NEW).toBe('chat.message.new');
     expect(EVENT_TYPES.AGENT_LOADING).toBe('agent.loading');
     expect(EVENT_TYPES.AGENT_ERROR).toBe('agent.error');
@@ -26,9 +27,34 @@ describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 �
     expect(EVENT_TYPES.AGENT_STATUS).toBe('agent.status');
     expect(EVENT_TYPES.WORKER_HEARTBEAT).toBe('worker.heartbeat');
     expect(EVENT_TYPES.AGENT_QUESTION).toBe('agent.question');
-    expect(Object.values(EVENT_TYPES)).toHaveLength(17);
+    // plan-review-execution-gates Todo 5：回执/轮次/计划事件（走 team:/channel: 订阅）
+    expect(EVENT_TYPES.RECEIPT_ACKED).toBe('receipt.acked');
+    expect(EVENT_TYPES.RECEIPT_EXPIRED).toBe('receipt.expired');
+    expect(EVENT_TYPES.ROUND_COMPLETE).toBe('round.complete');
+    expect(EVENT_TYPES.ROUND_STALE).toBe('round.stale');
+    expect(EVENT_TYPES.PLAN_STATUS_DRAFT).toBe('plan.status.draft');
+    expect(EVENT_TYPES.PLAN_STATUS_REVIEWING).toBe('plan.status.reviewing');
+    expect(EVENT_TYPES.PLAN_STATUS_APPROVED).toBe('plan.status.approved');
+    expect(EVENT_TYPES.PLAN_STATUS_REJECTED).toBe('plan.status.rejected');
+    expect(EVENT_TYPES.PLAN_STATUS_EXECUTING).toBe('plan.status.executing');
+    expect(EVENT_TYPES.PLAN_STATUS_COMPLETED).toBe('plan.status.completed');
+    expect(Object.values(EVENT_TYPES)).toHaveLength(27);
     for (const name of Object.values(EVENT_TYPES)) {
       expect(name.includes('_')).toBe(false);
+      // 点号命名：除 global 外一律含点号分隔（无驼峰/下划线变体）
+      expect(name.includes('.')).toBe(true);
+    }
+  });
+
+  it('plan.status.* 后缀与 PLAN_LIFECYCLE_STATUS 六态一一对应', () => {
+    const planEvents = Object.values(EVENT_TYPES).filter((n) =>
+      n.startsWith('plan.status.'),
+    );
+    expect(planEvents).toHaveLength(
+      Object.values(PLAN_LIFECYCLE_STATUS).length,
+    );
+    for (const status of Object.values(PLAN_LIFECYCLE_STATUS)) {
+      expect(planEvents).toContain(`plan.status.${status}`);
     }
   });
 

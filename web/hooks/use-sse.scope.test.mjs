@@ -24,11 +24,17 @@ const ts = require("typescript");
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = fs.readFileSync(path.join(here, "use-sse.ts"), "utf8");
 
-function extractMatchesScope(source) {
-  const anchor = "export function matchesScope";
+function extractBlock(source, anchor) {
   const start = source.indexOf(anchor);
-  assert.notEqual(start, -1, "matchesScope not found in use-sse.ts");
+  assert.notEqual(start, -1, `${anchor} not found in use-sse.ts`);
   const braceOpen = source.indexOf("{", start);
+  const bracketOpen = source.indexOf("[", start);
+  // 数组常量（RECEIPT_ROUND_PLAN_PREFIXES）：截到配对 `] as const;`
+  if (bracketOpen !== -1 && (braceOpen === -1 || bracketOpen < braceOpen)) {
+    const end = source.indexOf("] as const;", bracketOpen);
+    assert.notEqual(end, -1, "unbalanced brackets");
+    return source.slice(start, end + "] as const;".length);
+  }
   let depth = 0;
   for (let i = braceOpen; i < source.length; i++) {
     if (source[i] === "{") depth++;
@@ -37,12 +43,22 @@ function extractMatchesScope(source) {
       if (depth === 0) return source.slice(start, i + 1);
     }
   }
-  throw new Error("unbalanced braces in matchesScope");
+  throw new Error("unbalanced braces");
+}
+
+function extractMatchesScope(source) {
+  return extractBlock(source, "export function matchesScope");
 }
 
 function loadMatchesScope() {
-  const fnSrc = extractMatchesScope(src);
-  const { outputText } = ts.transpileModule(fnSrc, {
+  // matchesScope 依赖同文件 helpers（isReceiptRoundPlanEvent + 前缀表）：一并提取进 sandbox，
+  // 测的仍是 shipped 文件本身，非拷贝。
+  const helpers = [
+    extractBlock(src, "export const RECEIPT_ROUND_PLAN_PREFIXES"),
+    extractBlock(src, "export function isReceiptRoundPlanEvent"),
+    extractMatchesScope(src),
+  ].join("\n");
+  const { outputText } = ts.transpileModule(helpers, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   });
   const sandbox = { exports: {} };
@@ -87,4 +103,63 @@ test("channel: scope passes chat.message.new for the subscribed channel", () => 
 // global 分支审计 — task.status.changed 全局广播,无需改
 test("global scope passes task.status.changed", () => {
   assert.equal(matchesScope(ev("task.status.changed", {}), "global"), true);
+});
+
+// Todo 5 回执/轮次/计划事件 — 会话页（team:+channel:+global）与看板页（global+team:）须收到,缺席即红
+const SESSION_SCOPE = "team:tm_0000000001,channel:c_0000000001,global";
+const BOARD_SCOPE = "global,team:tm_0000000001";
+const RECEIPT_ROUND_PLAN = [
+  "receipt.acked",
+  "receipt.expired",
+  "round.complete",
+  "round.stale",
+  "plan.status.draft",
+  "plan.status.reviewing",
+  "plan.status.approved",
+  "plan.status.rejected",
+  "plan.status.executing",
+  "plan.status.completed",
+];
+
+for (const type of RECEIPT_ROUND_PLAN) {
+  test(`session page receives ${type} via team: segment`, () => {
+    assert.equal(
+      matchesScope(ev(type, { teamId: "tm_0000000001", channelId: "c_0000000001" }), SESSION_SCOPE),
+      true,
+    );
+  });
+  test(`board page receives ${type} via team: segment`, () => {
+    assert.equal(
+      matchesScope(ev(type, { teamId: "tm_0000000001", channelId: "c_0000000001" }), BOARD_SCOPE),
+      true,
+    );
+  });
+  test(`other-team ${type} is dropped on both pages (absence of leak)`, () => {
+    assert.equal(
+      matchesScope(ev(type, { teamId: "tm_OTHER", channelId: "c_OTHER" }), SESSION_SCOPE),
+      false,
+    );
+    assert.equal(
+      matchesScope(ev(type, { teamId: "tm_OTHER", channelId: "c_OTHER" }), BOARD_SCOPE),
+      false,
+    );
+  });
+}
+
+test("session page receives receipt.acked via channel: segment", () => {
+  assert.equal(
+    matchesScope(ev("receipt.acked", { teamId: "tm_0000000001", channelId: "c_0000000001" }), "channel:c_0000000001"),
+    true,
+  );
+  assert.equal(
+    matchesScope(ev("receipt.acked", { teamId: "tm_0000000001", channelId: "c_0000000001" }), "channel:c_OTHER"),
+    false,
+  );
+});
+
+test("dot-naming: receipt/round/plan event names contain no underscores", () => {
+  for (const type of RECEIPT_ROUND_PLAN) {
+    assert.equal(type.includes("_"), false);
+    assert.equal(type.includes("."), true);
+  }
 });

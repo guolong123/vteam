@@ -412,11 +412,20 @@ export default function TaskBoardPage() {
     enabled: !!userId && !!teamId,
   });
 
-  // 实时联动：task.status.changed（T7/T6 广播，09 篇 §4.1 全局广播）→ 失效重取看板
+  // 实时联动：task.status.changed（T7/T6 广播，09 篇 §4.1 全局广播）→ 失效重取看板；
+  // 回执/轮次/计划事件（Todo 5，走 team: 段订阅）→ 同样失效重取（仅 n/N 计数层面联动，不做分析页）。
   useSSE({
-    scope: "global",
+    scope: teamId ? `global,team:${teamId}` : "global",
     onEvent: (ev) => {
       if (ev.type === "task.status.changed") {
+        queryClient.invalidateQueries({ queryKey: ["tasks"] });
+        return;
+      }
+      if (
+        ev.type.startsWith("receipt.") ||
+        ev.type.startsWith("round.") ||
+        ev.type.startsWith("plan.status.")
+      ) {
         queryClient.invalidateQueries({ queryKey: ["tasks"] });
       }
     },

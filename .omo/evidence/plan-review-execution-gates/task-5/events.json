@@ -1,0 +1,142 @@
+{
+  "baseSuites": {
+    "notes": "baselines recorded before changes; realtime 73 passed, platform-mcp 227 passed",
+    "platformMcp": 227,
+    "realtime": 73
+  },
+  "burstQa": {
+    "note": "3 reviewer external dispatches saturate pair budget, 4th external blocked, internal wake + round-notify bypass with zero loss",
+    "roundNotify": {
+      "delivery": "emitRoundComplete/emitRoundStale broadcast team: frame + channel: frame (dual delivery asserted)",
+      "exemption": "isThrottleExemptKind('round-notify') === true, never consults pair/task budgets",
+      "loss": 0
+    },
+    "wake": {
+      "delivery": "notifyAgent kind=wake with exhausted pair budget returns triggered:true + reason:ok",
+      "exemption": "isThrottleExemptKind('wake') === true, skips shouldDispatch accounting entirely",
+      "loss": 0
+    },
+    "witnessSpecs": [
+      "src/chat/mention-throttle.spec.ts 突发豁免回归",
+      "src/platform-mcp/platform-mcp.service.spec.ts 内部 wake 免节流",
+      "src/chat/message-receipts.service.spec.ts round 事件双订阅零丢失"
+    ],
+    "zeroLoss": true
+  },
+  "counts": {
+    "consumers": [
+      "task_context.pendingReceipts",
+      "team_view.pendingReceipts"
+    ],
+    "fallback": "receipts 未装配或查询失败时回退 {pending:0,total:0}，不阻断主体",
+    "definition": "n/N = pending/total（31 篇 §3.4 待回执看板口径，仅计数，无分析页）",
+    "sample": {
+      "pending": 2,
+      "total": 5
+    }
+  },
+  "events": {
+    "expandedTotal": 27,
+    "new": [
+      "receipt.acked",
+      "receipt.expired",
+      "round.complete",
+      "round.stale",
+      "plan.status.draft",
+      "plan.status.reviewing",
+      "plan.status.approved",
+      "plan.status.rejected",
+      "plan.status.executing",
+      "plan.status.completed"
+    ]
+  },
+  "payloads": {
+    "planStatusChanged": {
+      "scope": [
+        "{type:'team',id:teamId}",
+        "{type:'channel',id:channelId} if resolvable"
+      ],
+      "shape": {
+        "channelId": "string|null (enriched at emit)",
+        "from": "string|null",
+        "taskId": "string",
+        "teamId": "string",
+        "to": "string"
+      }
+    },
+    "receiptAckedExpired": {
+      "scope": [
+        "{type:'team',id:teamId}",
+        "{type:'channel',id:channelId} if resolvable"
+      ],
+      "shape": {
+        "ackedAt": "ISO8601|null",
+        "channelId": "string|null (enriched at emit)",
+        "fromInstanceId": "string",
+        "messageId": "string|null",
+        "nudgeCount": "number (expired only)",
+        "receiptId": "string",
+        "status": "acked|expired",
+        "taskId": "string|null",
+        "teamId": "string",
+        "toInstanceId": "string"
+      }
+    },
+    "roundCompleteStale": {
+      "scope": [
+        "{type:'team',id:teamId}",
+        "{type:'channel',id:channelId} if resolvable"
+      ],
+      "shape": {
+        "channelId": "string|null (enriched at emit)",
+        "expected": "string[]",
+        "issueId": "string",
+        "reason": "string (stale only)",
+        "received": "string[]",
+        "round": "number",
+        "taskId": "string|null",
+        "teamId": "string",
+        "version": "number"
+      }
+    }
+  },
+  "plan": "plan-review-execution-gates",
+  "regression": {
+    "chatRealtimeTasksConstants": {
+      "suites": 21,
+      "tests": 658
+    },
+    "platformMcpWorkers": {
+      "suites": 12,
+      "tests": 537
+    },
+    "todo5Specs": {
+      "suites": 5,
+      "tests": 53
+    },
+    "webScopeTests": {
+      "fail": 0,
+      "pass": 41
+    }
+  },
+  "subscribers": {
+    "board": "scope global,team:<teamId> → matchesScope team: 段按 payload.teamId 匹配；新事件触发 tasks 缓存失效重取",
+    "matrix": "EVENT_SUBSCRIBERS in server/src/realtime/realtime-subscriptions.ts: every receipt.*/round.*/plan.status.* event maps to ['session','board'] (absence fails, asserted in realtime-subscribers.spec.ts)",
+    "session": "scope team:<teamId>,channel:<...>,global → useRealtimeEvents 回调打到 plans/task-issues 缓存失效"
+  },
+  "throttle": {
+    "budgetsUnchanged": {
+      "DEFAULT_PAIR_MAX": 3,
+      "DEFAULT_PAIR_WINDOW_MS": 60000,
+      "DEFAULT_TASK_BUDGET_MAX": 20,
+      "DEFAULT_TASK_WINDOW_MS": 120000,
+      "diff": "zero (grep-asserted in mention-throttle.spec.ts)"
+    },
+    "exemptKinds": [
+      "wake",
+      "round-notify"
+    ],
+    "rule": "pair/task budgets constrain external dispatches only; internal wake/round-notify skip shouldDispatch (no consult, no accounting)"
+  },
+  "todo": 5
+}
