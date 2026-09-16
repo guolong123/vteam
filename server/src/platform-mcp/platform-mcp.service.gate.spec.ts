@@ -288,6 +288,67 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
     );
   });
 
+  describe('计划角色豁免：kind=execution 派给 a_plan 永不进计划门禁', () => {
+    it('draft 态派给 a_plan → 放行且不读门禁（计划工作永非执行）', async () => {
+      prisma.teamMember.findFirst.mockResolvedValueOnce({
+        agentId: 'a_plan',
+        alias: null,
+        agent: { id: 'a_plan', name: '计划员' },
+      });
+      planLifecycle.getStatus.mockResolvedValue('draft');
+
+      const result = await service.notifyAgent(ctx, {
+        ...baseArgs,
+        targetInstanceId: 'tmm_plan',
+      });
+
+      expect(result.triggered).toBe(true);
+      expect(result.reason).toBe('ok');
+      expect(planLifecycle.getStatus).not.toHaveBeenCalled();
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'execution' }),
+      );
+    });
+
+    it('无 plan 行派给 a_plan → 放行且不兜底建行', async () => {
+      prisma.teamMember.findFirst.mockResolvedValueOnce({
+        agentId: 'a_plan',
+        alias: null,
+        agent: { id: 'a_plan', name: '计划员' },
+      });
+      planLifecycle.getStatus.mockResolvedValue(null);
+
+      const result = await service.notifyAgent(ctx, {
+        ...baseArgs,
+        targetInstanceId: 'tmm_plan',
+      });
+
+      expect(result.triggered).toBe(true);
+      expect(planLifecycle.getStatus).not.toHaveBeenCalled();
+      expect(planLifecycle.autoEnsureRow).not.toHaveBeenCalled();
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalled();
+    });
+
+    it('draft 态派给 a_developer → 仍被拦且 hint 含计划未放行', async () => {
+      prisma.teamMember.findFirst.mockResolvedValueOnce({
+        agentId: 'a_developer',
+        alias: null,
+        agent: { id: 'a_developer', name: '开发者' },
+      });
+      planLifecycle.getStatus.mockResolvedValue('draft');
+
+      const result = await service.notifyAgent(ctx, {
+        ...baseArgs,
+        targetInstanceId: 'tmm_dev',
+      });
+
+      expect(result.triggered).toBe(false);
+      expect(result.reason).toBe('plan-gated');
+      expect(result.hint).toMatch('计划未放行');
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+  });
+
   describe('issue 状态锁', () => {
     beforeEach(() => {
       planLifecycle.getStatus.mockResolvedValue('executing');

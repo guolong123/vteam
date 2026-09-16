@@ -66,6 +66,9 @@ const MESSAGE_ID_PREFIX = 'm';
 /** 首次 bind 的 instanceRef 占位（opencode 会话尚未创建；第二次 bind 写入真实 sessionId）。 */
 export const PENDING_INSTANCE_REF = 'pending';
 
+/** 计划员模板 Agent id（seed.ts 注册，role=plan）：派给该角色即计划工作，永非执行，计划门禁豁免。 */
+const PLAN_AGENT_ID = 'a_plan';
+
 /**
  * 派发执行分类（plan-review-execution-gates Todo 4，门禁分类依据）。
  *
@@ -1261,10 +1264,10 @@ export class WorkerDispatcher
    * 统一返回契约（plan-review todo 3）：本方法内部返回保持 void（不组装
    * triggered——triggered 只在 notifyAgent 层组装）；可选 issueId 由 notifyAgent
    * 透传（派活归属 issue，缺省不阻断；todo 4 消费 issue 锁/去重）。
-   * 执行门禁（plan-review todo 4）：kind 缺省 execution；kind=execution 且任务
-   * 维度（taskId 非空）时要求计划状态为 executing——无行则经计划生命周期服务
-   * 兜底建行后再门禁，仍非 executing 即抛错（含“计划未放行”）；review/nudge/wake
-   * 豁免；门禁读错/未装配即 fail-open 放行 + warn（永不转 fail-closed）。
+    * 执行门禁（plan-review todo 4）：kind 缺省 execution；kind=execution 且任务
+    * 维度（taskId 非空）时要求计划状态为 executing——无行则经计划生命周期服务
+    * 兜底建行后再门禁，仍非 executing 即抛错（含“计划未放行”）；review/nudge/wake
+    * 及计划员目标（agentId=a_plan，计划工作永非执行）豁免；门禁读错/未装配即 fail-open 放行 + warn（永不转 fail-closed）。
    * 计划表读经 PlanLifecycleService（ModuleRef 懒解析，避免 ChatModule 与
    * TasksModule 静态环；本文件永不直读计划表）。
    */
@@ -1306,7 +1309,9 @@ export class WorkerDispatcher
     }
     const kind: DispatchExecutionKind = input.kind ?? 'execution';
     if (kind === 'execution' && taskIdForDispatch) {
-      await this.assertPlanExecutionAllowed(taskIdForDispatch);
+      if (!(await this.isPlanRoleTarget(teamId, input.targetInstanceId))) {
+        await this.assertPlanExecutionAllowed(taskIdForDispatch);
+      }
     }
     const ensured = await this.sessionLifecycle.ensureTeamSession(
       teamId,
@@ -1329,9 +1334,30 @@ export class WorkerDispatcher
     });
   }
 
+  /** 目标实例是否为计划员（agentId=PLAN_AGENT_ID，角色身份判定）：是则跳过计划门禁；查错/查无即不豁免。 */
+  private async isPlanRoleTarget(
+    teamId: string | null,
+    targetInstanceId: string,
+  ): Promise<boolean> {
+    try {
+      const repo = (this.prisma as any)?.teamMember;
+      if (!repo?.findFirst) {
+        return false;
+      }
+      const row = await repo.findFirst({
+        where: { id: targetInstanceId, ...(teamId ? { teamId } : {}) },
+        select: { agentId: true },
+      });
+      return (row as { agentId?: string } | null)?.agentId === PLAN_AGENT_ID;
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * 计划执行门禁（todo4 第二道防线；第一道在 notifyAgent 层组装 plan-gated 返回）。
    * 非 executing 即抛错（含“计划未放行”）；读错/建行失败/未装配即 fail-open + warn。
+   * 计划员目标（agentId=a_plan）由调用方预先豁免，永不进入本方法。
    */
   private async assertPlanExecutionAllowed(taskId: string): Promise<void> {
     let planLifecycle: PlanLifecycleService | null = null;

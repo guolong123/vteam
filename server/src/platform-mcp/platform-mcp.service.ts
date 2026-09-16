@@ -78,6 +78,12 @@ import { ExecutionPolicyService } from '../execution-policies/execution-policy.s
  */
 const MESSAGE_ID_PREFIX = 'm';
 
+/**
+ * 计划员模板 Agent id（seed.ts 注册，role=plan）：计划起草/修订派发永非
+ * “执行”，计划门禁按目标 agentId 豁免（匹配角色身份，不匹配成员别名）。
+ */
+const PLAN_AGENT_ID = 'a_plan';
+
 /** MCP 工具调用上下文：workerId 来自请求 header `x-worker-id`（controller 解析后闭包注入）。 */
 export interface PlatformMcpContext {
   workerId: string;
@@ -1100,7 +1106,7 @@ export class PlatformMcpService {
         };
       }
     }
-    if (kind === 'execution' && !isTeam && effTaskId) {
+    if (kind === 'execution' && !isTeam && effTaskId && targetAgentId !== PLAN_AGENT_ID) {
       const planGate = await this.checkPlanExecutionAllowed(effTaskId);
       if (!planGate.allowed) {
         if (!forceReason) {
