@@ -266,6 +266,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
         "tools": {
           "git_clone": "allow",
           "git_diff": "allow",
+          "git_fetch": "allow",
           "git_log": "allow",
           "git_pull": "allow",
           "git_status": "allow",
@@ -594,6 +595,7 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
         "tools": {
           "git_clone": "allow",
           "git_diff": "allow",
+          "git_fetch": "allow",
           "git_log": "allow",
           "git_pull": "allow",
           "git_status": "allow",

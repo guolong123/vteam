@@ -225,6 +225,8 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       browser: 'allow',
       git_clone: 'allow',
       git_pull: 'allow',
+      // fetch 只读远端（不 merge 不改工作区）：读侧核验推送状态用，比 pull 更安全
+      git_fetch: 'allow',
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
@@ -268,6 +270,8 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       browser: 'allow',
       git_clone: 'allow',
       git_pull: 'allow',
+      // fetch 只读远端（不 merge 不改工作区）：读侧核验推送状态用，比 pull 更安全
+      git_fetch: 'allow',
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
