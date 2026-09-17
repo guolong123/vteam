@@ -1,16 +1,18 @@
 "use client";
 
 /**
- * Agent 管理页（Lane W：生效权限只读展示 + 真实 API 接入）
+ * Agent 管理页（Lane W：生效权限展示与编辑 + 真实 API 接入）
  * =============================================
  * 唯一来源：docs/agent-platform/prototypes/agent-config/index.tsx（布局/间距/文案/data-testid 零改动）。
  * - 左 Agent 列表（320px，data-testid=agent-list-item）+ 右 ConfigPanel 配置面板：
  *   提示词（prompt-editor）/ 默认模型（model-select）/
- *   权限（effective-permission-section 只读：执行策略生效权限）。
+ *   权限（effective-permission-section：执行策略生效权限）。
  * - 数据源：GET /api/v1/agents（type 过滤 + 分页 + 扩展字段）→ TanStack Query；
  *   选中 Agent → GET /api/v1/agents/:id 详情（列表条目已含扩展字段，详情查询保证选中态最新）。
- * - 权限区只读渲染 `effectivePermission`（ExecutionPolicy 解析：edit/read glob + bash/task
- *   + vteam_* MCP 工具 deny），不做任何编辑与保存；未绑定策略时中性提示，不做历史回退。
+ * - 权限区渲染 `effectivePermission`（ExecutionPolicy 解析：edit/read glob + bash/task +
+ *   vteam_* MCP 工具 deny）；层② guard 工具行在策略已绑定时可切换 allow/ask/deny
+ *   （PATCH /execution-policies/:policyId，template 与 custom/clone 同一路径）；
+ *   层① 原生行（edit/read/bash/task）保持只读展示；未绑定策略时中性提示，不做历史回退。
  * - MCP 工具按 `mcpServer` 分组（GET /mcp-servers + GET /tools?source=mcp&includeDisabled=true
  *   解析归属；匹配按工具 name/action 双键，vteam_ 前缀兼容裸名）；
  *   停用 server 的分组默认收起（aria-expanded 可展开），启用 server 默认展开。
@@ -331,7 +333,7 @@ function ServerGatedBadge({ toolName }: { toolName: string }) {
   );
 }
 
-/** 三态分段控制（复刻 ce3edd1^ tool-effect-select 视觉；模板只读时 data-readonly，点击无操作）。 */
+/** 三态分段控制（复刻 ce3edd1^ tool-effect-select 视觉；只读/保存中时 data-readonly，点击无操作）。 */
 function ToolEffectSelect({ toolName, value, readOnly, pending, onChange }: { toolName: string; value: ToolEffect; readOnly: boolean; pending: boolean; onChange: (next: ToolEffect) => void }) {
   return (
     <div
@@ -591,7 +593,7 @@ const ROLE_BORDERS: Record<RoleKey, string> = {
   product: "rgba(13,148,136,0.22)", project_manager: "rgba(14,165,233,0.22)", architect: "rgba(124,58,237,0.22)", developer: "rgba(16,185,129,0.28)", tester: "rgba(245,158,11,0.28)", plan: "rgba(71,85,105,0.22)",
 };
 
-/* ================================ 生效权限（只读，执行策略唯一事实来源） ================================ */
+/* ================================ 生效权限（执行策略唯一事实来源；层②工具行可编辑） ================================ */
 
 /** 原生 permission key → 中文标签（edit/read 为 glob map，其余为三态字符串）。 */
 const NATIVE_PERMISSION_KEYS = [
@@ -607,7 +609,6 @@ const UNKNOWN_MCP_GROUP = "__unknown";
 interface EffectivePermissionSectionProps {
   effective: EffectivePermission | null;
   agentId: string;
-  agentType: string;
   /** GET /mcp-servers 全量（含停用；分组标题 + 默认收起依据）。 */
   mcpServers: ApiMcpServer[];
   /** GET /tools?source=mcp&includeDisabled=true（含停用；解析条目归属 server）。 */
@@ -616,12 +617,14 @@ interface EffectivePermissionSectionProps {
   loading: boolean;
 }
 
-function EffectivePermissionSection({ effective, agentId, agentType, mcpServers, mcpTools, loading }: EffectivePermissionSectionProps) {
+function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, loading }: EffectivePermissionSectionProps) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const queryClient = useQueryClient();
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [policyError, setPolicyError] = useState<string | null>(null);
-  const editable = agentType === "custom" || agentType === "clone";
+  // 可编辑判据 = 策略已绑定（PATCH /execution-policies/:policyId 的入参）：template 绑 ep_<role>
+  // 行（服务端已放开），custom/clone 绑自有行；与 agent.type 无关。
+  const editable = effective !== null;
   const permission = useMemo(() => effective?.permission ?? {}, [effective]);
   const guardTools = useMemo(() => {
     const raw = effective?.tools;
@@ -1085,7 +1088,7 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
 
   const handleSave = () => {
     // is_0000000030：内置（template）agent 设置也可修改（后端已放开，agentId/type 不可改）；
-    // 提交可编辑设置字段（prompt/模型/worker/性格）；权限由服务端执行策略拥有，前端只读
+    // 提交可编辑设置字段（prompt/模型/worker/性格）；层②权限矩阵经执行策略独立提交
     const payload: UpdateAgentPayload = {
       prompt: promptDraft.trim(),
       defaultModelId: modelDraft ?? undefined,
@@ -1673,7 +1676,7 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
         </div>
       </div>
 
-      {/* ④ 权限（执行策略生效权限：原生行只读 + MCP 按 server 分组三态可配；模板只读） */}
+      {/* ④ 权限（执行策略生效权限：原生行只读 + MCP 按 server 分组三态可配，绑定策略即可编辑） */}
       <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
         <div
           style={{
@@ -1686,13 +1689,12 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
             权限
           </span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            {agent.type === "custom" || agent.type === "clone" ? "执行策略 · 可编辑" : "执行策略 · 只读"}
+            {agent.effectivePermission ? "执行策略 · 可编辑" : "执行策略 · 未绑定"}
           </span>
         </div>
         <EffectivePermissionSection
           effective={agent.effectivePermission ?? null}
           agentId={agent.id}
-          agentType={agent.type}
           mcpServers={mcpServers}
           mcpTools={mcpTools}
           loading={mcpLoading}
