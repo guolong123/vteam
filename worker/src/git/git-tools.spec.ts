@@ -16,6 +16,7 @@ import {
   prepareCloneTarget,
   normalizeRepoUrl,
   normalizeSshKey,
+  cwdOrigin,
   loadCredential,
   tryLoadCredential,
   writeTempKey,
@@ -48,6 +49,43 @@ const EXPECTED_TOOL_NAMES = [
   'git_log',
   'git_push',
 ] as const;
+
+describe('cwdOrigin（pull/fetch/push 缺省 repo_url 的 origin 解析）', () => {
+  const spawnSyncMock = child_process.spawnSync as unknown as jest.Mock;
+
+  afterEach(() => {
+    spawnSyncMock.mockClear();
+  });
+
+  it('传 dir → spawnSync 带 cwd（回归：修复前不传 cwd 恒 null → 误报未授权）', () => {
+    spawnSyncMock.mockReturnValueOnce({
+      status: 0,
+      stdout: 'git@gitee.com:xishuhq/custom-apps.git\n',
+    });
+
+    const url = cwdOrigin('/data/vteam-worker/tasks/t_1/custom-apps');
+
+    expect(url).toBe('git@gitee.com:xishuhq/custom-apps.git');
+    const opts = spawnSyncMock.mock.calls[0][2] as { cwd?: string };
+    expect(opts.cwd).toBe('/data/vteam-worker/tasks/t_1/custom-apps');
+  });
+
+  it('不传 dir → 不注入 cwd（保持旧行为，非 git 仓库时 null）', () => {
+    spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: '' });
+
+    expect(cwdOrigin()).toBeNull();
+    const opts = spawnSyncMock.mock.calls[0][2] as { cwd?: string };
+    expect(opts.cwd).toBeUndefined();
+  });
+
+  it('git 失败（非仓库）→ null；空 stdout → null', () => {
+    spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: '' });
+    expect(cwdOrigin('/not/a/repo')).toBeNull();
+
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: '   \n' });
+    expect(cwdOrigin('/some/dir')).toBeNull();
+  });
+});
 
 describe('GIT_TOOLS 工具清单（17 篇 §4.1 七工具）', () => {
   it('含 7 个工具，名称对齐 §4.1', () => {
@@ -110,6 +148,18 @@ describe('installGitTools / renderGitToolsFile（注入机制，17 篇 §4.2）'
       expect(content).toContain(`description: ${JSON.stringify(tool.description)},`);
     }
     expect(content).toContain('function runGit(');
+    // 回归：remote 工具的 origin 解析必须带 workdir（否则 worker cwd 非仓库 → null → 误报未授权）
+    expect(content).toContain('cwdOrigin(workdir)');
+    expect(content).not.toContain('cwdOrigin();');
+    // workdir 必须先于 repoUrl 绑定（cwdOrigin(workdir) 依赖它）
+    for (const name of ['export const push = tool({', 'export const pull = tool({', 'export const fetch = tool({']) {
+      const at = content.indexOf(name);
+      expect(at).toBeGreaterThan(-1);
+      const body = content.slice(at, content.indexOf('});', at));
+      expect(body.indexOf('const workdir =')).toBeLessThan(
+        body.indexOf('cwdOrigin(workdir)'),
+      );
+    }
   });
 
   it('生成内容含全部参数 schema（inputSchema）', () => {

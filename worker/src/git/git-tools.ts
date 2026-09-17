@@ -390,9 +390,18 @@ export function runGit(gitArgs: string[], env: Record<string, string> = {}, cwd?
   return result.stdout ?? '';
 }
 
-/** 取当前 cwd 的 remote.origin.url（pull/fetch/push 缺省 repo_url 时），非 git 仓库返回 null。 */
-export function cwdOrigin(): string | null {
-  const result = child_process.spawnSync('git', ['config', '--get', 'remote.origin.url'], { encoding: 'utf8' });
+/**
+ * 取指定目录（缺省当前 cwd）的 remote.origin.url（pull/fetch/push 缺省 repo_url 时），
+ * 非 git 仓库返回 null。
+ *
+ * `dir` 必须传：worker 进程 cwd（/data/vteam-worker）本身不是 git 仓库，不传 dir 时
+ * git config 必然 exit=1 → 返回 null → 上层 loadCredential(null) 抛「仓库未授权或凭证
+ * 缺失: 」（冒号后为空）。2026-09-16 修复：调用方传 tools 的 workdir（任务仓库根）。
+ */
+export function cwdOrigin(dir?: string): string | null {
+  const result = dir
+    ? child_process.spawnSync('git', ['config', '--get', 'remote.origin.url'], { encoding: 'utf8', cwd: dir })
+    : child_process.spawnSync('git', ['config', '--get', 'remote.origin.url'], { encoding: 'utf8' });
   if (result.status !== 0) {
     return null;
   }
@@ -643,7 +652,10 @@ export function renderGitToolsFile(defs: readonly GitToolDef[] = GIT_TOOLS): str
       const repoUrlLine =
         def.exportName === 'clone'
           ? 'const repoUrl = String(args.repo_url);'
-          : 'const repoUrl = args.repo_url ? String(args.repo_url) : cwdOrigin();';
+          : 'const repoUrl = args.repo_url ? String(args.repo_url) : cwdOrigin(workdir);';
+      // workdir 先于 repoUrl 绑定：cwdOrigin(workdir) 需要在任务仓库根解析 origin
+      //（worker 进程 cwd 非 git 仓库，不传 dir 会恒返回 null → 误报「未授权或凭证缺失: 」）。
+      const workdirLine = 'const workdir = args.workdir ? String(args.workdir) : undefined;';
       if (def.exportName === 'clone') {
         executeLines = [
           repoUrlLine,
@@ -669,8 +681,8 @@ export function renderGitToolsFile(defs: readonly GitToolDef[] = GIT_TOOLS): str
         ];
       } else if (def.exportName === 'push') {
         executeLines = [
+          workdirLine,
           repoUrlLine,
-          'const workdir = args.workdir ? String(args.workdir) : undefined;',
           'const entry = loadCredential(repoUrl);',
           'if (entry.permission !== "write") {',
           '  throw new Error(`仓库 ${repoUrl} 未授予 write 权限，禁止 push`);',
@@ -684,8 +696,8 @@ export function renderGitToolsFile(defs: readonly GitToolDef[] = GIT_TOOLS): str
         ].filter((line) => line.length > 0);
       } else {
         executeLines = [
+          workdirLine,
           repoUrlLine,
-          'const workdir = args.workdir ? String(args.workdir) : undefined;',
           'const entry = tryLoadCredential(repoUrl);',
           'if (!entry) {',
           `  return runGit(_buildGitArgs("${def.exportName}", args), {}, workdir);`,
