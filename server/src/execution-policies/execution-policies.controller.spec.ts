@@ -205,9 +205,9 @@ describe('ExecutionPoliciesController', () => {
 
     const reread = await controller.findOne('ep_product');
     expect(reread.config).toEqual(nextConfig);
-    expect(
-      (reread.config as typeof nextConfig).tools.vteam_group_post,
-    ).toBe('deny');
+    expect((reread.config as typeof nextConfig).tools.vteam_group_post).toBe(
+      'deny',
+    );
   });
 
   it('PATCH 非法 config → 400 POLICY_CONFIG_INVALID 透传', async () => {

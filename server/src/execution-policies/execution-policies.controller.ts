@@ -64,7 +64,9 @@ export class ExecutionPoliciesController {
   @Patch(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission('agents.edit')
-  @ApiOperation({ summary: '更新策略（template 内置可直接编辑；非法 config → 400）' })
+  @ApiOperation({
+    summary: '更新策略（template 内置可直接编辑；非法 config → 400）',
+  })
   update(@Param('id') id: string, @Body() dto: UpdateExecutionPolicyDto) {
     return this.policies.update(id, dto);
   }
