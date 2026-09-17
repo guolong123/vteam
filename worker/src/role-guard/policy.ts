@@ -105,6 +105,7 @@ const SERVER_GATED_TOOLS = new Set([
   'vteam_question_confirm',
   'vteam_task_create',
   'vteam_plan_mode',
+  'vteam_plan_complete',
   'vteam_team_add_member',
   'vteam_skill_create',
 ]);

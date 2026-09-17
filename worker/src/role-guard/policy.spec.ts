@@ -268,12 +268,13 @@ describe('evaluateToolCall 分支优先级', () => {
 
   describe('4d2) server-gated MCP → pass-through（一律 allow，判定权在服务端）', () => {
     const session = sess('vteam-developer');
-    it('门控集合与服务端 ROLE_SERVER_GATED_TOOLS 一致（6 个，增减须两侧同步）', () => {
+    it('门控集合与服务端 ROLE_SERVER_GATED_TOOLS 一致（7 个，增减须两侧同步）', () => {
       for (const tool of [
         'vteam_task_transition',
         'vteam_question_confirm',
         'vteam_task_create',
         'vteam_plan_mode',
+        'vteam_plan_complete',
         'vteam_team_add_member',
         'vteam_skill_create',
       ]) {
@@ -286,6 +287,7 @@ describe('evaluateToolCall 分支优先级', () => {
       'vteam_question_confirm',
       'vteam_task_create',
       'vteam_plan_mode',
+      'vteam_plan_complete',
       'vteam_team_add_member',
       'vteam_skill_create',
     ])('%s 未列入 tools 仍 allow', (tool) => {

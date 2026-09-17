@@ -129,6 +129,7 @@ const PARITY_CASES: Array<{ name: string; params: EvaluateToolCallParams }> = [
   { name: 'server-gated vteam_question_confirm 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_question_confirm', args: {} } },
   { name: 'server-gated vteam_task_create 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_task_create', args: {} } },
   { name: 'server-gated vteam_plan_mode 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_plan_mode', args: {} } },
+  { name: 'server-gated vteam_plan_complete 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_plan_complete', args: {} } },
   { name: 'server-gated vteam_team_add_member 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_team_add_member', args: {} } },
   { name: 'server-gated vteam_skill_create 放行', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_skill_create', args: {} } },
   { name: 'vteam_plan_review 不再是 server-gated（deny）', params: { rolesDoc: rolesDoc(), session: session(), tool: 'vteam_plan_review', args: {} } },
