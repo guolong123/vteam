@@ -6,6 +6,8 @@ import {
 import { Prisma, Trigger } from '@prisma/client';
 import {
   TRIGGER_API_ERRORS,
+  TRIGGER_KIND,
+  TRIGGER_KIND_LABEL,
   TRIGGER_SOURCE,
   triggerSourceOf,
   type TriggerSource,
@@ -38,7 +40,23 @@ export interface TriggerListItem {
   attempts: number;
   createdAt: Date;
   source: TriggerSource;
+  display: TriggerDisplay;
 }
+
+/**
+ * 列表项人类可读展示（triggers-display，一次列表请求内批量解析、内存 join）。
+ * 缺失引用一律降级为 `rawId（已删除）`，永不抛错、永不 500 列表。
+ */
+export interface TriggerDisplay {
+  scopeLabel: string;
+  scopeTeam: string | null;
+  ownerLabel: string;
+  taskLabel: string | null;
+  description: string;
+}
+
+/** 已删除标记（缺失引用的统一降级后缀，行内保留 raw id 可追查）。 */
+const DELETED_MARK = '（已删除）';
 
 /** 已终态：cancel 幂等直返当前行（200，不重写 fired/cancelled 历史）。 */
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set<string>([
@@ -87,8 +105,11 @@ export class TriggersService {
         take: pageSize,
       }),
     ]);
+    const displays = await this.enrichDisplays(rows as Trigger[]);
     return {
-      items: (rows as Trigger[]).map((row) => this.toItem(row)),
+      items: (rows as Trigger[]).map((row, i) =>
+        this.toItem(row, displays[i]),
+      ),
       total,
       page,
       pageSize,
@@ -114,13 +135,15 @@ export class TriggersService {
       await this.assertMemberCancellable(row, viewer);
     }
     if (TERMINAL_STATUSES.has(row.status)) {
-      return this.toItem(row);
+      const [display] = await this.enrichDisplays([row]);
+      return this.toItem(row, display);
     }
     const updated = (await this.prisma.trigger.update({
       where: { id },
       data: { status: TRIGGER_STATUS.CANCELLED },
     })) as Trigger;
-    return this.toItem(updated);
+    const [display] = await this.enrichDisplays([updated]);
+    return this.toItem(updated, display);
   }
 
   /**
@@ -294,8 +317,8 @@ export class TriggersService {
     return usersPerm?.manage === true;
   }
 
-  /** 行 → 列表项（字段白名单 + source 唯一映射入口）。 */
-  private toItem(row: Trigger): TriggerListItem {
+  /** 行 → 列表项（字段白名单 + source 唯一映射入口 + display 展示）。 */
+  private toItem(row: Trigger, display?: TriggerDisplay): TriggerListItem {
     return {
       id: row.id,
       kind: row.kind,
@@ -311,7 +334,349 @@ export class TriggersService {
       attempts: row.attempts,
       createdAt: row.createdAt,
       source: triggerSourceOf(row.kind),
+      display: display ?? this.fallbackDisplay(row),
     };
+  }
+
+  /**
+   * display 批量富化（triggers-display）：每页列表共 8 个 `findMany … where
+   * id in […]`（teams / channels+team / tasks+team / members+agent /
+   * sessions / hooks / receipts / issues），缺席集合直接跳过查询，然后
+   * 内存 join 逐行组装。
+   * sessions 需先行（其 teamMemberId 合并进 memberIds 后再批量查 members），
+   * 其余 7 个并行。任意一步异常 → 整页回退 fallbackDisplay（列表永不 500）。
+   * 查询计数/列表调用：count + findMany（1 个 $transaction）+ ≤8 富化 = ≤10，
+   * 无 N+1。
+   */
+  private async enrichDisplays(rows: Trigger[]): Promise<TriggerDisplay[]> {
+    try {
+      const teamIds = new Set<string>();
+      const channelIds = new Set<string>();
+      const taskIds = new Set<string>();
+      const memberIds = new Set<string>();
+      const sessionIds = new Set<string>();
+      const hookIds = new Set<string>();
+      const receiptIds = new Set<string>();
+      const issueIds = new Set<string>();
+      const payloads = rows.map((row) => this.payloadOf(row));
+      rows.forEach((row, i) => {
+        if (row.scopeType === 'team' && row.scopeId) teamIds.add(row.scopeId);
+        if (row.scopeType === 'channel' && row.scopeId)
+          channelIds.add(row.scopeId);
+        if (row.scopeType === 'task' && row.scopeId) taskIds.add(row.scopeId);
+        if (row.ownerInstanceId) memberIds.add(row.ownerInstanceId);
+        const p = payloads[i];
+        for (const key of ['teamId', 'taskId', 'channelId'] as const) {
+          const v = p[key];
+          if (typeof v === 'string' && v) {
+            if (key === 'teamId') teamIds.add(v);
+            else if (key === 'taskId') taskIds.add(v);
+            else channelIds.add(v);
+          }
+        }
+        for (const key of ['toInstanceId', 'fromInstanceId', 'teamMemberId'] as const) {
+          const v = p[key];
+          if (typeof v === 'string' && v) memberIds.add(v);
+        }
+        const sessionId = p['sessionId'];
+        if (typeof sessionId === 'string' && sessionId) sessionIds.add(sessionId);
+        const hookId = p['hookId'];
+        if (typeof hookId === 'string' && hookId) hookIds.add(hookId);
+        const receiptId = p['receiptId'];
+        if (typeof receiptId === 'string' && receiptId)
+          receiptIds.add(receiptId);
+        const issueId = p['issueId'];
+        if (typeof issueId === 'string' && issueId) issueIds.add(issueId);
+      });
+      // sessions 先行：带 teamMember include（Prisma 内部批处理 join，无 N+1），
+      // 解析出的成员 id 合并进 memberIds 后再走 members 批量，ctx 保持扁平形状
+      const sessions = await this.inIds<{
+        id: string;
+        teamMember:
+          | { id: string; alias: string | null; agent: { name: string; role: string | null } | null }
+          | null;
+      }>(
+        'session',
+        {
+          id: true,
+          teamMember: {
+            select: {
+              id: true,
+              alias: true,
+              agent: { select: { name: true, role: true } },
+            },
+          },
+        },
+        sessionIds,
+      );
+      for (const s of sessions) {
+        if (s.teamMember) memberIds.add(s.teamMember.id);
+      }
+      const [teams, channels, tasks, members, hooks, receipts, issues] =
+        await Promise.all([
+          this.inIds<{ id: string; name: string }>('team', { id: true, name: true }, teamIds),
+          this.inIds<{ id: string; type: string; team: { id: string; name: string } | null }>('chatChannel', { id: true, type: true, team: { select: { id: true, name: true } } }, channelIds),
+          this.inIds<{ id: string; title: string; team: { id: string; name: string } | null }>('task', { id: true, title: true, team: { select: { id: true, name: true } } }, taskIds),
+          this.inIds<{ id: string; alias: string | null; agent: { name: string; role: string | null } | null }>('teamMember', { id: true, alias: true, agent: { select: { name: true, role: true } } }, memberIds),
+          this.inIds<{ id: string; wakeText: string }>('hook', { id: true, wakeText: true }, hookIds),
+          this.inIds<{ id: string; summary: string }>('messageReceipt', { id: true, summary: true }, receiptIds),
+          this.inIds<{ id: string; title: string }>('issue', { id: true, title: true }, issueIds),
+        ]);
+      const byId = <T extends { id: string }>(list: T[]): Map<string, T> =>
+        new Map(list.map((e) => [e.id, e]));
+      const ctx = {
+        teams: byId<{ id: string; name: string }>(teams),
+        channels: byId<{
+          id: string;
+          type: string;
+          team: { id: string; name: string } | null;
+        }>(channels),
+        tasks: byId<{
+          id: string;
+          title: string;
+          team: { id: string; name: string } | null;
+        }>(tasks),
+        members: byId<{
+          id: string;
+          alias: string | null;
+          agent: { name: string; role: string | null } | null;
+        }>(members),
+        sessions: byId<{ id: string; teamMemberId: string | null }>(
+          sessions.map((s) => ({
+            id: s.id,
+            teamMemberId: s.teamMember?.id ?? null,
+          })),
+        ),
+        hooks: byId<{ id: string; wakeText: string }>(hooks),
+        receipts: byId<{ id: string; summary: string }>(receipts),
+        issues: byId<{ id: string; title: string }>(issues),
+      };
+      return rows.map((row, i) => this.buildDisplay(row, payloads[i], ctx));
+    } catch {
+      return rows.map((row) => this.fallbackDisplay(row));
+    }
+  }
+
+  /** 缺席 delegate（旧单测 mock 未挂载）与空集合直接回 []，不抛错。 */
+  private async inIds<T>(
+    delegate: string,
+    select: object,
+    ids: Set<string>,
+  ): Promise<T[]> {
+    if (ids.size === 0) return [];
+    try {
+      const table = (this.prisma as unknown as Record<string, { findMany?: (args: unknown) => Promise<T[]> } | undefined>)[delegate];
+      if (!table?.findMany) return [];
+      return (await table.findMany({
+        where: { id: { in: [...ids] } },
+        select,
+      })) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  private payloadOf(row: Trigger): Record<string, unknown> {
+    const p = row.payload as unknown;
+    return typeof p === 'object' && p !== null
+      ? (p as Record<string, unknown>)
+      : {};
+  }
+
+  private str(v: unknown): string | null {
+    return typeof v === 'string' && v ? v : null;
+  }
+
+  private collapse(v: string, max: number): string {
+    return v.replace(/\s+/g, ' ').trim().slice(0, max);
+  }
+
+  private kindLabel(kind: string): string {
+    return TRIGGER_KIND_LABEL[kind] ?? kind;
+  }
+
+  private fallbackDisplay(row: Trigger): TriggerDisplay {
+    return {
+      scopeLabel:
+        row.scopeType && row.scopeId
+          ? `${row.scopeType}/${row.scopeId}`
+          : '全局',
+      scopeTeam: null,
+      ownerLabel: row.ownerInstanceId ?? '—',
+      taskLabel: null,
+      description: this.kindLabel(row.kind),
+    };
+  }
+
+  private buildDisplay(
+    row: Trigger,
+    p: Record<string, unknown>,
+    ctx: {
+      teams: Map<string, { id: string; name: string }>;
+      channels: Map<string, { id: string; type: string; team: { id: string; name: string } | null }>;
+      tasks: Map<string, { id: string; title: string; team: { id: string; name: string } | null }>;
+      members: Map<string, { id: string; alias: string | null; agent: { name: string; role: string | null } | null }>;
+      sessions: Map<string, { id: string; teamMemberId: string | null }>;
+      hooks: Map<string, { id: string; wakeText: string }>;
+      receipts: Map<string, { id: string; summary: string }>;
+      issues: Map<string, { id: string; title: string }>;
+    },
+  ): TriggerDisplay {
+    const taskId = this.str(p['taskId']);
+    const teamId = this.str(p['teamId']);
+    const channelId = this.str(p['channelId']);
+    const task = taskId ? ctx.tasks.get(taskId) : undefined;
+    const payloadTeam = teamId ? ctx.teams.get(teamId) : undefined;
+    const channel = channelId ? ctx.channels.get(channelId) : undefined;
+
+    let scopeLabel: string;
+    let scopeTeam: string | null = null;
+    let taskLabel: string | null = null;
+    if (row.scopeType === 'team' && row.scopeId) {
+      const t = ctx.teams.get(row.scopeId);
+      scopeLabel = t ? t.name : `${row.scopeId}${DELETED_MARK}`;
+      scopeTeam = t ? t.name : null;
+    } else if (row.scopeType === 'channel' && row.scopeId) {
+      const c = ctx.channels.get(row.scopeId);
+      if (c) {
+        scopeLabel = `${c.team?.name ?? c.type} · ${this.channelLabel(c.type)}`;
+        scopeTeam = c.team?.name ?? null;
+      } else {
+        scopeLabel = `${row.scopeId}${DELETED_MARK}`;
+      }
+    } else if (row.scopeType === 'task' && row.scopeId) {
+      const t = ctx.tasks.get(row.scopeId);
+      if (t) {
+        scopeLabel = t.title;
+        scopeTeam = t.team?.name ?? null;
+        taskLabel = t.title;
+      } else {
+        scopeLabel = `${row.scopeId}${DELETED_MARK}`;
+      }
+    } else if (task) {
+      scopeLabel = task.title;
+      scopeTeam = task.team?.name ?? payloadTeam?.name ?? null;
+      taskLabel = task.title;
+    } else if (taskId) {
+      scopeLabel = `${taskId}${DELETED_MARK}`;
+      scopeTeam = payloadTeam?.name ?? null;
+    } else if (channel) {
+      scopeLabel = `${channel.team?.name ?? channel.type} · ${this.channelLabel(channel.type)}`;
+      scopeTeam = channel.team?.name ?? null;
+    } else if (channelId) {
+      scopeLabel = `${channelId}${DELETED_MARK}`;
+      scopeTeam = payloadTeam?.name ?? null;
+    } else if (payloadTeam) {
+      scopeLabel = payloadTeam.name;
+      scopeTeam = payloadTeam.name;
+    } else if (teamId) {
+      scopeLabel = `${teamId}${DELETED_MARK}`;
+    } else {
+      scopeLabel = '全局';
+    }
+    if (!taskLabel && task) taskLabel = task.title;
+
+    const ownerId =
+      row.ownerInstanceId ??
+      this.str(p['toInstanceId']) ??
+      this.str(p['teamMemberId']) ??
+      this.str(p['fromInstanceId']);
+    let ownerLabel = '—';
+    if (ownerId) {
+      const m = ctx.members.get(ownerId);
+      if (m) {
+        const alias = m.alias ?? m.agent?.name ?? ownerId;
+        const role = m.agent?.role ?? m.agent?.name;
+        ownerLabel = role && alias !== role ? `${alias}（${role}）` : alias;
+      } else {
+        ownerLabel = `${ownerId}${DELETED_MARK}`;
+      }
+    }
+
+    return {
+      scopeLabel,
+      scopeTeam,
+      ownerLabel,
+      taskLabel,
+      description: this.buildDescription(row, p, ctx, task ?? null),
+    };
+  }
+
+  private channelLabel(type: string): string {
+    if (type === 'team_group') return '群聊';
+    if (type === 'private') return '私聊';
+    return type;
+  }
+
+  private buildDescription(
+    row: Trigger,
+    p: Record<string, unknown>,
+    ctx: {
+      hooks: Map<string, { id: string; wakeText: string }>;
+      receipts: Map<string, { id: string; summary: string }>;
+      issues: Map<string, { id: string; title: string }>;
+      members: Map<string, { id: string; alias: string | null; agent: { name: string; role: string | null } | null }>;
+      sessions: Map<string, { id: string; teamMemberId: string | null }>;
+    },
+    task: { id: string; title: string } | null,
+  ): string {
+    const fallback = this.kindLabel(row.kind);
+    if (
+      row.kind === TRIGGER_KIND.HOOK_FIRE ||
+      row.kind === TRIGGER_KIND.HOOK_POLL
+    ) {
+      const hookId = this.str(p['hookId']);
+      const hook = hookId ? ctx.hooks.get(hookId) : undefined;
+      if (hook) return this.collapse(hook.wakeText, 120) || fallback;
+      if (hookId) return `${fallback} · ${hookId}${DELETED_MARK}`;
+      const purpose = this.str(p['purpose']);
+      return purpose ? this.collapse(purpose, 120) : fallback;
+    }
+    if (row.kind === TRIGGER_KIND.RECEIPT_NUDGE) {
+      const receiptId = this.str(p['receiptId']);
+      const receipt = receiptId ? ctx.receipts.get(receiptId) : undefined;
+      if (receipt) return this.collapse(receipt.summary, 100) || fallback;
+      if (receiptId) return `${fallback} · ${receiptId}${DELETED_MARK}`;
+      return fallback;
+    }
+    if (row.kind === TRIGGER_KIND.REVIEW_ROUND_TIMEOUT) {
+      const issueId = this.str(p['issueId']);
+      const round = p['round'];
+      const roundText =
+        typeof round === 'number' || typeof round === 'string'
+          ? ` 第${round}轮`
+          : '';
+      if (issueId) {
+        const issue = ctx.issues.get(issueId);
+        return `评审轮次超时 · issue《${issue?.title ?? `${issueId}${DELETED_MARK}`}》${roundText}`.trim();
+      }
+      return fallback;
+    }
+    if (row.kind === TRIGGER_KIND.PROGRESSION_PATROL) {
+      if (task) return `任务《${task.title}》巡检`;
+      const tid = this.str(p['taskId']);
+      if (tid) return `任务《${tid}${DELETED_MARK}》巡检`;
+      return fallback;
+    }
+    if (row.kind === TRIGGER_KIND.SESSION_IDLE_SCAN) {
+      const sessionId = this.str(p['sessionId']);
+      const suffix = p['reason'] === 'first-token' ? '首字超时看门狗' : '空闲扫描';
+      if (sessionId) {
+        // 会话 → 成员展示（owner join 同镜像：alias，回退 agent 名）；raw id 留括号可追查。
+        // 会话/成员缺失 → 既有 `会话 <id>（已删除） <suffix>` 降级，列表永不 500。
+        const session = ctx.sessions.get(sessionId);
+        const memberId = session?.teamMemberId ?? null;
+        const member = memberId ? ctx.members.get(memberId) : undefined;
+        if (member) {
+          const label = member.alias ?? member.agent?.name ?? memberId;
+          return `${label} 的会话${suffix} (${sessionId})`;
+        }
+        return `会话 ${sessionId}${DELETED_MARK} ${suffix}`;
+      }
+      const scope = this.str(p['scope']);
+      return scope ? `空闲扫描 · ${scope}` : fallback;
+    }
+    return fallback;
   }
 
   private normalizePage(page?: number): number {

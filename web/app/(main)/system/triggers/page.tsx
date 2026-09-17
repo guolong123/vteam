@@ -10,8 +10,14 @@
  *   EmptyState 共享组件。
  * - 数据源：GET /api/v1/triggers（todo-22 已上线，本页只消费不实现）。
  *   item = {id,kind,status,dueAt,nextFireAt,scopeType,scopeId,ownerInstanceId,
- *   fireCount,skipReason,lastError,attempts,createdAt,source}，
- *   source 为服务端派生（system/agent），本页只读不重算。
+ *   fireCount,skipReason,lastError,attempts,createdAt,source,display}，
+ *   source 为服务端派生（system/agent），本页只读不重算；
+ *   display 为服务端批量解析的人类可读展示
+ *   {scopeLabel,scopeTeam,ownerLabel,taskLabel,description}，
+ *   行内范围/归属/描述一律读 display（缺席回退 raw id）。
+ * - 行标题/副标题：标题 = display.description（人话；缺失时回退
+ *   「范围 — 类型标签」，永不用 id）；raw id 降级为小号 mono 副标题
+ *   （trigger-id testid 保留在 id 元素上，既有选择器不动）。
  * - 筛选映射（filter→API）：
  *   - kind Tab：全部 → 不带 kind；定时 → kind=hook_fire；条件 → kind=hook_poll；
  *     事件 → 预留类型（本版本无事件触发器，后端无对应 kind 可查，传任意 kind 会 400，
@@ -59,6 +65,14 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 /* ------------------------------ API 数据模型 ------------------------------ */
 
 /** GET /triggers 条目（对齐 todo-22 契约；source 为服务端派生，只读）。 */
+interface TriggerDisplay {
+  scopeLabel: string;
+  scopeTeam: string | null;
+  ownerLabel: string;
+  taskLabel: string | null;
+  description: string;
+}
+
 interface TriggerItem {
   id: string;
   kind: string;
@@ -74,6 +88,19 @@ interface TriggerItem {
   attempts: number;
   createdAt: string;
   source: "system" | "agent";
+  /** 服务端批量解析的人类可读展示（缺失时回退 raw id，老服务端兼容）。 */
+  display?: TriggerDisplay;
+}
+
+/** display 缺席时的行内回退（raw id 口径，与服务端 fallbackDisplay 同形）。 */
+function scopeTextOf(item: TriggerItem): string {
+  const d = item.display;
+  if (d) return d.scopeTeam ? `${d.scopeTeam} · ${d.scopeLabel}` : d.scopeLabel;
+  return item.scopeType && item.scopeId ? `${item.scopeType}/${item.scopeId}` : "全局";
+}
+
+function ownerTextOf(item: TriggerItem): string {
+  return item.display?.ownerLabel ?? item.ownerInstanceId ?? "—";
 }
 
 /** GET /triggers 分页响应。 */
@@ -126,6 +153,13 @@ const KIND_META: Record<string, { color: string; bg: string; border: string }> =
 };
 
 const KIND_META_FALLBACK = { color: neutral[500], bg: neutral[100], border: neutral[200] };
+
+/** 行标题：display.description（人话，单行省略）；description 缺失回退「范围 — 类型标签」。永不以 id 为标题。 */
+function rowTitleOf(item: TriggerItem): string {
+  const desc = item.display?.description;
+  if (desc) return desc;
+  return `${scopeTextOf(item)} — ${KIND_LABEL[item.kind] ?? item.kind}`;
+}
 
 /** status → 中文 + 配色（共享 StatusBadge 只支持任务四态，故本页用同式本地徽章）。 */
 const STATUS_META: Record<TriggerItem["status"], { label: string; color: string; bg: string; border: string }> = {
@@ -182,8 +216,12 @@ function TriggerDetailDrawer({ item, onClose }: { item: TriggerItem; onClose: ()
     { label: "状态", value: statusMeta.label },
     { label: "来源", value: `${sourceMeta.label}（服务端派生）` },
     { label: "到期 / 下次触发", value: `${item.dueAt ?? "—"} / ${item.nextFireAt ?? "—"}` },
-    { label: "范围", value: `${item.scopeType ?? "—"} / ${item.scopeId ?? "—"}` },
-    { label: "归属实例", value: item.ownerInstanceId ?? "—" },
+    { label: "范围", value: scopeTextOf(item) },
+    { label: "范围 ID", value: `${item.scopeType ?? "—"} / ${item.scopeId ?? "—"}` },
+    { label: "归属", value: ownerTextOf(item) },
+    { label: "归属实例 ID", value: item.ownerInstanceId ?? "—" },
+    ...(item.display?.taskLabel ? [{ label: "任务", value: item.display.taskLabel }] : []),
+    ...(item.display?.description ? [{ label: "描述", value: item.display.description, testid: "trigger-detail-desc" }] : []),
     { label: "触发次数 / 尝试次数", value: `${item.fireCount} / ${item.attempts}` },
     { label: "未触发原因", value: item.skipReason ?? "—", testid: "trigger-detail-skip-reason" },
     { label: "上次错误", value: item.lastError ?? "—", testid: "trigger-detail-last-error" },
@@ -411,7 +449,8 @@ export default function TriggersPage() {
     const filtered = fetched.filter((item) => {
       if (sourceFilter !== "" && item.source !== sourceFilter) return false;
       if (kw) {
-        const hay = [item.id, item.kind, item.scopeType ?? "", item.scopeId ?? "", item.ownerInstanceId ?? "", item.skipReason ?? "", item.lastError ?? ""]
+        const hay = [item.id, item.kind, item.scopeType ?? "", item.scopeId ?? "", item.ownerInstanceId ?? "", item.skipReason ?? "", item.lastError ?? "",
+          item.display?.scopeLabel ?? "", item.display?.scopeTeam ?? "", item.display?.ownerLabel ?? "", item.display?.taskLabel ?? "", item.display?.description ?? ""]
           .join(" ")
           .toLowerCase();
         if (!hay.includes(kw)) return false;
@@ -640,7 +679,8 @@ export default function TriggersPage() {
               const kindMeta = KIND_META[item.kind] ?? KIND_META_FALLBACK;
               const statusMeta = STATUS_META[item.status];
               const sourceMeta = SOURCE_META[item.source];
-              const scopeText = item.scopeType && item.scopeId ? `${item.scopeType}/${item.scopeId}` : "全局";
+              const scopeText = scopeTextOf(item);
+              const ownerText = ownerTextOf(item);
               return (
                 <div
                   key={item.id}
@@ -687,11 +727,12 @@ export default function TriggersPage() {
                   {/* 主体 */}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+                      {/* 标题：display.description（人话，单行省略）；永不用 id */}
                       <span
-                        data-testid="trigger-id"
-                        style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800], fontFamily: fontFamily.mono }}
+                        data-testid="trigger-title"
+                        style={{ flex: 1, minWidth: 0, fontSize: fontSize.md, fontWeight: 600, color: neutral[900], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
                       >
-                        {item.id}
+                        {rowTitleOf(item)}
                       </span>
                       {/* 状态徽章（同 StatusBadge 视觉式；共享组件仅支持任务四态） */}
                       <span
@@ -747,11 +788,36 @@ export default function TriggersPage() {
                         color: neutral[500],
                       }}
                     >
+                      {/* id：降级为小号 mono 副标题（trigger-id 选择器锚在此） */}
+                      <span
+                        data-testid="trigger-id"
+                        style={{ fontSize: fontSize.xs, color: neutral[400], fontFamily: fontFamily.mono }}
+                      >
+                        {item.id}
+                      </span>
                       <span data-testid="trigger-due">⏱ {formatDue(item, now)}</span>
                       <span data-testid="trigger-scope">范围 {scopeText}</span>
-                      <span data-testid="trigger-owner">归属 {item.ownerInstanceId ?? "—"}</span>
+                      <span data-testid="trigger-owner">归属 {ownerText}</span>
                       <span data-testid="trigger-fire-count">触发 {item.fireCount} 次</span>
                     </div>
+                    {/* 描述：服务端 display.description（WHAT 一行摘要） */}
+                    {item.display?.description && (
+                      <div
+                        data-testid="trigger-desc"
+                        style={{
+                          marginTop: space.xs,
+                          fontSize: fontSize.sm,
+                          color: neutral[600],
+                          wordBreak: "break-word",
+                          display: "-webkit-box",
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: "vertical",
+                          overflow: "hidden",
+                        }}
+                      >
+                        {item.display.description}
+                      </div>
+                    )}
                     {/* skipReason：回答「为什么没醒」 */}
                     {item.skipReason && (
                       <div

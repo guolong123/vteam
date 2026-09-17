@@ -20,7 +20,13 @@ function makePrisma() {
     user: { findUnique: jest.fn() },
     teamUserMember: { findUnique: jest.fn() },
     teamMember: { findUnique: jest.fn(), findMany: jest.fn() },
-    task: { findUnique: jest.fn() },
+    team: { findMany: jest.fn().mockResolvedValue([]) },
+    session: { findMany: jest.fn().mockResolvedValue([]) },
+    chatChannel: { findMany: jest.fn().mockResolvedValue([]) },
+    task: { findUnique: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
+    hook: { findMany: jest.fn().mockResolvedValue([]) },
+    messageReceipt: { findMany: jest.fn().mockResolvedValue([]) },
+    issue: { findMany: jest.fn().mockResolvedValue([]) },
   };
 }
 
@@ -107,6 +113,13 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
         attempts: 1,
         createdAt: new Date('2026-09-16T00:00:01.000Z'),
         source: 'system',
+        display: {
+          scopeLabel: 'tm_1（已删除）',
+          scopeTeam: null,
+          ownerLabel: '—',
+          taskLabel: null,
+          description: '催办',
+        },
       });
       // payload/dedupKey 等执行细节不外泄
       expect(out.items[0]).not.toHaveProperty('payload');
@@ -351,5 +364,417 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
         expect(prisma.trigger.update).not.toHaveBeenCalled();
       },
     );
+  });
+
+  describe('enrichDisplays（display 富化：批量 join + 降级 + 描述规则）', () => {
+    function enrichedMocks(prisma: PrismaMock) {
+      prisma.user.findUnique.mockResolvedValue(adminUser());
+      prisma.team.findMany.mockResolvedValue([
+        { id: 'tm_1', name: '电网信号告警优化团队' },
+      ]);
+      prisma.task.findMany.mockResolvedValue([
+        {
+          id: 't_1',
+          title: 'S9 历史数据准确性测试',
+          team: { id: 'tm_1', name: '电网信号告警优化团队' },
+        },
+      ]);
+      prisma.teamMember.findMany.mockResolvedValue([
+        {
+          id: 'tmm_9',
+          alias: '开发者-1',
+          agent: { name: '开发者', role: 'developer' },
+        },
+      ]);
+      prisma.session.findMany.mockResolvedValue([
+        {
+          id: 's_14',
+          teamMember: {
+            id: 'tmm_9',
+            alias: '开发者-1',
+            agent: { name: '开发者', role: 'developer' },
+          },
+        },
+      ]);
+      prisma.chatChannel.findMany.mockResolvedValue([
+        {
+          id: 'c_7',
+          type: 'team_group',
+          team: { id: 'tm_1', name: '电网信号告警优化团队' },
+        },
+      ]);
+      prisma.hook.findMany.mockResolvedValue([
+        { id: 'hks_1', wakeText: '  到点核查\n判据  ' },
+      ]);
+      prisma.messageReceipt.findMany.mockResolvedValue([
+        { id: 'mr_1', summary: '@测试-1 派发摘要' },
+      ]);
+      prisma.issue.findMany.mockResolvedValue([
+        { id: 'is_1', title: '计划评审' },
+      ]);
+      return prisma;
+    }
+
+    it('receipt_nudge：scope/owner/task/description 全解析（payload 口径）', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.trigger.count.mockResolvedValue(1);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({
+          payload: {
+            teamId: 'tm_1',
+            taskId: 't_1',
+            channelId: 'c_7',
+            receiptId: 'mr_1',
+            toInstanceId: 'tmm_9',
+          },
+        }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.items[0].display).toEqual({
+        scopeLabel: 'S9 历史数据准确性测试',
+        scopeTeam: '电网信号告警优化团队',
+        ownerLabel: '开发者-1（developer）',
+        taskLabel: 'S9 历史数据准确性测试',
+        description: '@测试-1 派发摘要',
+      });
+    });
+
+    it('hook_fire：description 取 hook wakeText（空白折叠 + 截断 120）', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.hook.findMany.mockResolvedValue([
+        { id: 'hks_1', wakeText: `x\n\ny${'z'.repeat(200)}` },
+      ]);
+      prisma.trigger.count.mockResolvedValue(1);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({
+          kind: 'hook_fire',
+          scopeType: 'task',
+          scopeId: 't_1',
+          ownerInstanceId: 'tmm_9',
+          payload: { hookId: 'hks_1' },
+        }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.items[0].display.description).toBe(
+        `x y${'z'.repeat(200)}`.slice(0, 120),
+      );
+      expect(out.items[0].display.scopeLabel).toBe('S9 历史数据准确性测试');
+      expect(out.items[0].display.ownerLabel).toBe('开发者-1（developer）');
+    });
+
+    it('review_round_timeout：一行式 issue 标题 + 轮次', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.trigger.count.mockResolvedValue(1);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({
+          kind: 'review_round_timeout',
+          payload: { issueId: 'is_1', round: 2, taskId: 't_1' },
+        }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.items[0].display.description).toBe(
+        '评审轮次超时 · issue《计划评审》 第2轮',
+      );
+      expect(out.items[0].display.taskLabel).toBe('S9 历史数据准确性测试');
+    });
+
+    it('progression_patrol / session_idle_scan：任务巡检 + 首字看门狗', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.trigger.count.mockResolvedValue(2);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({
+          id: 'tmr_patrol',
+          kind: 'progression_patrol',
+          payload: { taskId: 't_1' },
+        }),
+        triggerRow({
+          id: 'tmr_idle',
+          kind: 'session_idle_scan',
+          payload: {
+            reason: 'first-token',
+            sessionId: 's_14',
+            teamMemberId: 'tmm_9',
+            scope: 'team:tm_1',
+          },
+        }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.items[0].display.description).toBe(
+        '任务《S9 历史数据准确性测试》巡检',
+      );
+      // 会话 → 成员解析（s_14→tmm_9→开发者-1），raw id 留括号
+      expect(out.items[1].display.description).toBe(
+        '开发者-1 的会话首字超时看门狗 (s_14)',
+      );
+      expect(out.items[1].display.ownerLabel).toBe('开发者-1（developer）');
+    });
+
+    it('session_idle_scan：会话 → 成员名解析（session findMany 批量 in […]，id 入括号）', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.trigger.count.mockResolvedValue(1);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({
+          kind: 'session_idle_scan',
+          payload: {
+            reason: 'first-token',
+            sessionId: 's_14',
+            scope: 'team:tm_1',
+          },
+        }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.items[0].display.description).toBe(
+        '开发者-1 的会话首字超时看门狗 (s_14)',
+      );
+      expect(prisma.session.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.session.findMany).toHaveBeenCalledWith({
+        where: { id: { in: ['s_14'] } },
+        select: {
+          id: true,
+          teamMember: {
+            select: {
+              id: true,
+              alias: true,
+              agent: { select: { name: true, role: true } },
+            },
+          },
+        },
+      });
+    });
+
+    it('session_idle_scan：非首字载荷 → <成员> 的会话空闲扫描 (s_…)', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.trigger.count.mockResolvedValue(1);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({
+          kind: 'session_idle_scan',
+          payload: { reason: 'idle', sessionId: 's_14' },
+        }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.items[0].display.description).toBe(
+        '开发者-1 的会话空闲扫描 (s_14)',
+      );
+    });
+
+    it('session_idle_scan：会话已删 →（已删除）降级，列表仍 200', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.session.findMany.mockResolvedValue([]);
+      prisma.trigger.count.mockResolvedValue(1);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({
+          kind: 'session_idle_scan',
+          payload: { reason: 'first-token', sessionId: 's_gone' },
+        }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.total).toBe(1);
+      expect(out.items[0].display.description).toBe(
+        '会话 s_gone（已删除） 首字超时看门狗',
+      );
+    });
+
+    it('session_idle_scan：会话在但成员缺失 →（已删除）降级', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.session.findMany.mockResolvedValue([
+        { id: 's_14', teamMember: null },
+      ]);
+      prisma.trigger.count.mockResolvedValue(1);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({
+          kind: 'session_idle_scan',
+          payload: { reason: 'first-token', sessionId: 's_14' },
+        }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.items[0].display.description).toBe(
+        '会话 s_14（已删除） 首字超时看门狗',
+      );
+    });
+
+    it('session_idle_scan：成员无 alias → 回退 agent 名', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.session.findMany.mockResolvedValue([
+        {
+          id: 's_14',
+          teamMember: {
+            id: 'tmm_9',
+            alias: null,
+            agent: { name: '开发者', role: 'developer' },
+          },
+        },
+      ]);
+      prisma.teamMember.findMany.mockResolvedValue([
+        {
+          id: 'tmm_9',
+          alias: null,
+          agent: { name: '开发者', role: 'developer' },
+        },
+      ]);
+      prisma.trigger.count.mockResolvedValue(1);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({
+          kind: 'session_idle_scan',
+          payload: { reason: 'first-token', sessionId: 's_14' },
+        }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.items[0].display.description).toBe(
+        '开发者 的会话首字超时看门狗 (s_14)',
+      );
+    });
+
+    it('批量：同页多行共享 sessionId → session findMany 仅一次（无 N+1）', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.trigger.count.mockResolvedValue(2);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({
+          id: 'tmr_s1',
+          kind: 'session_idle_scan',
+          payload: { reason: 'first-token', sessionId: 's_14' },
+        }),
+        triggerRow({
+          id: 'tmr_s2',
+          kind: 'session_idle_scan',
+          payload: { reason: 'idle', sessionId: 's_14' },
+        }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.items).toHaveLength(2);
+      expect(prisma.session.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.session.findMany).toHaveBeenCalledWith({
+        where: { id: { in: ['s_14'] } },
+        select: {
+          id: true,
+          teamMember: {
+            select: {
+              id: true,
+              alias: true,
+              agent: { select: { name: true, role: true } },
+            },
+          },
+        },
+      });
+    });
+
+    it('未知 kind：description 回退 kind 原样，不崩', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.trigger.count.mockResolvedValue(1);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({ kind: 'future_kind', payload: {} }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.items[0].display.description).toBe('future_kind');
+      expect(out.items[0].display.scopeLabel).toBe('全局');
+    });
+
+    it('缺失引用：raw id +（已删除）标记，列表仍 200', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.trigger.count.mockResolvedValue(1);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({
+          scopeType: 'team',
+          scopeId: 'tm_gone',
+          ownerInstanceId: 'tmm_gone',
+          payload: { taskId: 't_gone', receiptId: 'mr_gone' },
+        }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.total).toBe(1);
+      expect(out.items[0].display).toEqual({
+        scopeLabel: 'tm_gone（已删除）',
+        scopeTeam: null,
+        ownerLabel: 'tmm_gone（已删除）',
+        taskLabel: null,
+        description: '催办 · mr_gone（已删除）',
+      });
+    });
+
+    it('scopeType=channel：群聊标签 + 父团队名', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.trigger.count.mockResolvedValue(1);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({
+          scopeType: 'channel',
+          scopeId: 'c_7',
+          payload: {},
+        }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.items[0].display.scopeLabel).toBe(
+        '电网信号告警优化团队 · 群聊',
+      );
+      expect(out.items[0].display.scopeTeam).toBe('电网信号告警优化团队');
+    });
+
+    it('批量：同页共享 id 只查一次（findMany in […]，无 N+1）', async () => {
+      const { svc, prisma } = makeService();
+      enrichedMocks(prisma);
+      prisma.trigger.count.mockResolvedValue(2);
+      prisma.trigger.findMany.mockResolvedValue([
+        triggerRow({
+          id: 'tmr_a',
+          payload: { teamId: 'tm_1', taskId: 't_1', receiptId: 'mr_1' },
+        }),
+        triggerRow({
+          id: 'tmr_b',
+          payload: { teamId: 'tm_1', taskId: 't_1', receiptId: 'mr_1' },
+        }),
+      ]);
+
+      const out = await svc.findAll({}, ADMIN);
+
+      expect(out.items).toHaveLength(2);
+      expect(prisma.team.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.team.findMany).toHaveBeenCalledWith({
+        where: { id: { in: ['tm_1'] } },
+        select: { id: true, name: true },
+      });
+      expect(prisma.task.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.messageReceipt.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.hook.findMany).not.toHaveBeenCalled();
+      expect(prisma.issue.findMany).not.toHaveBeenCalled();
+      expect(prisma.chatChannel.findMany).not.toHaveBeenCalled();
+      expect(prisma.session.findMany).not.toHaveBeenCalled();
+    });
   });
 });

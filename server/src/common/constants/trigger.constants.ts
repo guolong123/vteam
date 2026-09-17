@@ -80,6 +80,20 @@ export function triggerSourceOf(kind: string): TriggerSource {
 }
 
 /**
+ * kind→中文展示标签（triggers-display：服务端 display.description 回退 +
+ * 列表未知 kind 展示，web 侧 KIND_LABEL 与此同值，改一处须同步另一处）。
+ * 未知 kind 回退原样（调用方 `?? kind`）。
+ */
+export const TRIGGER_KIND_LABEL: Record<string, string> = {
+  [TRIGGER_KIND.RECEIPT_NUDGE]: '催办',
+  [TRIGGER_KIND.REVIEW_ROUND_TIMEOUT]: '评审超时',
+  [TRIGGER_KIND.PROGRESSION_PATROL]: '进度巡检',
+  [TRIGGER_KIND.SESSION_IDLE_SCAN]: '空闲扫描',
+  [TRIGGER_KIND.HOOK_FIRE]: '定时',
+  [TRIGGER_KIND.HOOK_POLL]: '条件',
+};
+
+/**
  * 触发器 REST API 错误码（todo-22 `GET/DELETE /api/v1/triggers`，
  * 对齐 tool.constants.ts 的 TOOL_ERRORS 命名约定：大写 SNAKE，随异常 code 返回）。
  *
