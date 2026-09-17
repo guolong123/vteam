@@ -255,7 +255,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
       expect(resolved?.serverGated).toEqual([...ROLE_SERVER_GATED_TOOLS]);
     });
 
-    it('resolveByAgent 对内置名忽略 config.tools（今日常量不变）', async () => {
+    it('resolveByAgent 对内置名从 config.tools 解析（DB 值胜出，非法值丢弃）', async () => {
       const service = serviceWith({
         agent: { findMany: jest.fn().mockResolvedValue([]) },
         executionPolicy: {
@@ -265,7 +265,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
             config: {
               permission: { task: 'deny' },
               correction: { scopeSummary: 'x' },
-              tools: { vteam_group_post: 'deny', bogus: 'allow' },
+              tools: { vteam_group_post: 'deny', bogus: 'whatever' },
             },
           }),
         },
@@ -275,9 +275,76 @@ describe('agent-policies custom agents (Todo 2)', () => {
         policyId: 'ep_product',
       });
       expect(resolved?.agentName).toBe('vteam-product');
-      expect(resolved?.tools).toEqual(
+      expect(resolved?.tools).toEqual({ vteam_group_post: 'deny' });
+      expect(resolved?.tools).not.toEqual(
         ROLE_BOUNDARIES['vteam-product'].toolAllows,
       );
+    });
+
+    it('resolveByAgent 对内置名 config.tools 缺失/全非法时回退常量 allowlist（绝不 {}）', async () => {
+      for (const tools of [
+        undefined,
+        { bogus: 'whatever' },
+        { another_bad: 42 },
+        [],
+        'nope',
+      ]) {
+        const service = serviceWith({
+          agent: { findMany: jest.fn().mockResolvedValue([]) },
+          executionPolicy: {
+            findUnique: jest.fn().mockResolvedValue({
+              id: 'ep_product',
+              name: 'product',
+              config: {
+                permission: { task: 'deny' },
+                correction: { scopeSummary: 'x' },
+                tools,
+              },
+            }),
+          },
+        });
+        const resolved = await service.resolveByAgent({
+          role: 'product',
+          policyId: 'ep_product',
+        });
+        expect(resolved?.tools).toEqual(
+          ROLE_BOUNDARIES['vteam-product'].toolAllows,
+        );
+        expect(Object.keys(resolved?.tools ?? {}).length).toBeGreaterThan(0);
+      }
+    });
+
+    it('resolveByAgent 对内置名从 config.bashDeny 解析（string[] 过滤，缺失回退常量）', async () => {
+      const withPatterns = await serviceWith({
+        agent: { findMany: jest.fn().mockResolvedValue([]) },
+        executionPolicy: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'ep_product',
+            name: 'product',
+            config: {
+              permission: { task: 'deny' },
+              correction: { scopeSummary: 'x' },
+              bashDeny: ['rm -rf /', 42],
+            },
+          }),
+        },
+      }).resolveByAgent({ role: 'product', policyId: 'ep_product' });
+      expect(withPatterns?.bashDeny).toEqual(['rm -rf /']);
+
+      const fallback = await serviceWith({
+        agent: { findMany: jest.fn().mockResolvedValue([]) },
+        executionPolicy: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'ep_product',
+            name: 'product',
+            config: {
+              permission: { task: 'deny' },
+              correction: { scopeSummary: 'x' },
+            },
+          }),
+        },
+      }).resolveByAgent({ role: 'product', policyId: 'ep_product' });
+      expect(fallback?.bashDeny).toEqual([...ROLE_BASH_DENY_PATTERNS]);
     });
   });
 });

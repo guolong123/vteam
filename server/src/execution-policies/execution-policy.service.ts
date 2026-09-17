@@ -30,9 +30,10 @@ import { UpdateExecutionPolicyDto } from './dto/update-execution-policy.dto';
  * resolveByAgent 返回（Todo 11/12 契约 + agent 详情双层展示）：
  * - `agentName`：opencode agent 名（`vteam-<role>`，无 role 回退 `vteam-plan`）；
  * - `permission`：config 嵌套 `permission`（层① opencode 原生权限）；
- * - `tools`：层② guard allowlist（`ROLE_BOUNDARIES.toolAllows`，按 `agentName` 解析，
- *   与 `/agent-policies` 同源；未知角色 → `{}`）；
- * - `bashDeny`：层② bash 硬化清单（`ROLE_BASH_DENY_PATTERNS` 拷贝；未知角色 → `[]`）；
+ * - `tools`：层② guard allowlist（`config.tools` 合法项胜出，否则按 `agentName` 回退
+ *   `ROLE_BOUNDARIES.toolAllows` 常量，与 `/agent-policies` 同源；未知角色 → `{}`）；
+ * - `bashDeny`：层② bash 硬化清单（`config.bashDeny` 为数组则用之，否则
+ *   `ROLE_BASH_DENY_PATTERNS` 拷贝；未知角色 → `[]`）；
  * - `correction`：config 嵌套 `correction`（层② guard 越界纠正）。
  * - `serverGated`：主实例专属工具（`ROLE_SERVER_GATED_TOOLS` 拷贝，API/UI 展示用，不进 worker wire 格式）；
  */
@@ -227,6 +228,60 @@ export function canonicalizeCorrection(
   return orderKeys(copy, CORRECTION_KEY_ORDER);
 }
 
+/**
+ * 层① `permission.task` 的**派生权威**（唯一规则）：仅 `vteam-plan` 放行 task
+ * （可扇出只读评审 subagent），其余角色 deny。
+ *
+ * 解析优先级（Todo 6）：DB `config.permission.task` 为合法三态值时胜出，否则用本规则
+ * 兜底——保证线上绝不出现 `task === undefined`；未来若新增 DB `mode`/`task` 字段，
+ * 只需改这里，调用点不动。
+ */
+export function resolveTaskEffect(
+  name: string,
+  storedTask?: unknown,
+): 'allow' | 'ask' | 'deny' {
+  if (
+    storedTask === 'allow' ||
+    storedTask === 'ask' ||
+    storedTask === 'deny'
+  ) {
+    return storedTask;
+  }
+  return name === 'vteam-plan' ? 'allow' : 'deny';
+}
+
+/**
+ * opencode agent `mode` 的**派生权威**（唯一规则）：`vteam-plan` 为 `all`（可被调度），
+ * 其余（含自定义）为 `primary`。Todo 6 把它集中为命名函数，便于未来 DB `mode` 字段替换。
+ */
+export function deriveAgentMode(name: string): 'primary' | 'all' {
+  return name === 'vteam-plan' ? 'all' : 'primary';
+}
+
+/**
+ * 层② guard `tools` 的统一解析（唯一回退实现，`resolveBuiltinPolicy` 与 `guardForAgent` 共用）：
+ * `config.tools` 过滤 + canonical 后至少 1 条合法项 → 胜出；否则回退该角色的常量 allowlist
+ * （非内置名无常量 → `{}`）。常量非空时绝不返回 `{}`。
+ */
+export function resolveGuardTools(
+  agentName: string,
+  tools: unknown,
+): Record<string, AgentToolState> {
+  const canonicalTools = canonicalizeTools(tools, agentName);
+  if (Object.keys(canonicalTools).length > 0) {
+    return canonicalTools;
+  }
+  const boundary = boundaryOf(agentName);
+  return boundary ? { ...boundary.toolAllows } : {};
+}
+
+/** 层② guard `bashDeny` 的统一解析：`config.bashDeny` 为数组 → 过滤为 `string[]`；否则常量清单。 */
+export function resolveBashDeny(bashDeny: unknown): string[] {
+  return Array.isArray(bashDeny)
+    ? bashDeny.filter((p): p is string => typeof p === 'string')
+    : [...ROLE_BASH_DENY_PATTERNS];
+}
+
 /** 常量派生的 layer① permission（无 `write` 键；仅 `vteam-plan` task allow）。 */
 export function buildRolePermission(
   name: VteamAgentName,
@@ -238,7 +293,7 @@ export function buildRolePermission(
     bash: boundary.bashEffect,
     // opencode 原生 ctx.ask({permission:'task'}) 先于 guard 生效，两道门须同时打开：
     // 仅 vteam-plan 放行 task（可扇出只读评审 subagent），其余角色保持 deny。
-    task: name === 'vteam-plan' ? 'allow' : 'deny',
+    task: resolveTaskEffect(name),
     ...Object.fromEntries(
       boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
     ),
@@ -279,18 +334,17 @@ export function resolveBuiltinPolicy(
   const cfg: Record<string, unknown> = isPlainObject(config) ? config : {};
 
   const permission = isPlainObject(cfg.permission)
-    ? canonicalizePermission(cfg.permission, name)
+    ? canonicalizePermission(
+        {
+          ...cfg.permission,
+          task: resolveTaskEffect(name, cfg.permission.task),
+        },
+        name,
+      )
     : buildRolePermission(name);
 
-  const canonicalTools = canonicalizeTools(cfg.tools, name);
-  const tools =
-    Object.keys(canonicalTools).length > 0
-      ? canonicalTools
-      : { ...boundary.toolAllows };
-
-  const bashDeny = Array.isArray(cfg.bashDeny)
-    ? cfg.bashDeny.filter((p): p is string => typeof p === 'string')
-    : [...ROLE_BASH_DENY_PATTERNS];
+  const tools = resolveGuardTools(name, cfg.tools);
+  const bashDeny = resolveBashDeny(cfg.bashDeny);
 
   const correction = isPlainObject(cfg.correction)
     ? canonicalizeCorrection(cfg.correction, name)
@@ -303,7 +357,7 @@ export function resolveBuiltinPolicy(
 
   return {
     description,
-    mode: name === 'vteam-plan' ? 'all' : 'primary',
+    mode: deriveAgentMode(name),
     permission,
     tools,
     bashDeny,
@@ -710,7 +764,7 @@ export class ExecutionPolicyService implements OnModuleInit {
             policy.description.length > 0
               ? policy.description
               : custom.name,
-          mode: 'primary' as const,
+          mode: deriveAgentMode(name),
           permission: config.permission as Record<string, unknown>,
         });
         roles[name] = {
@@ -770,36 +824,35 @@ export class ExecutionPolicyService implements OnModuleInit {
   }
 
   /**
-   * 层② guard 数据（与 `buildAgentPolicies()` 同源：`ROLE_BOUNDARIES.toolAllows` +
-   * `ROLE_BASH_DENY_PATTERNS`，按 `agentName` 解析）。
-   * 内置名命中 `ROLE_BOUNDARIES` 即返回今日常量（`config` 参数整体忽略）；
-   * 非内置且带策略 `config` 的自定义 agent 返回其 `config.tools` 三态矩阵
-   * （仅保留值为 `allow`/`ask`/`deny` 的条目，其余防御式丢弃）——bash 硬化清单是
-   * 作用于全部 agent（含自定义）的共享全局底线，故自定义同样返回完整
-   * `ROLE_BASH_DENY_PATTERNS` 拷贝；无 config 的未知名保持旧语义
-   * `{ tools: {}, bashDeny: [] }`（纯展示路径默认 deny）。
+   * 层② guard 数据（与 `buildAgentPolicies()` 同源）：
+   * - 内置名与自定义 agent **同一路径**——`config.tools` 过滤 + canonical 后至少 1 条合法项
+   *   则胜出（DB 可编辑），否则回退该内置角色的 `ROLE_BOUNDARIES.toolAllows` 常量 allowlist；
+   * - `bashDeny`：`config.bashDeny` 为数组则过滤为 `string[]`，否则 `ROLE_BASH_DENY_PATTERNS`；
+   * - 无 config 的未知名（非内置）保持旧语义 `{ tools: {}, bashDeny: [] }`（纯展示路径默认 deny）。
+   *
+   * 内置名不再短路返回常量：Todo 4 移除后，DB 对内置策略 `tools`/`bashDeny` 的编辑
+   * 才真正流经 `resolveByAgent`/`resolveManyByAgents` 与页面/my_profile。
    */
   private guardForAgent(
     agentName: string,
-    config?: { tools?: unknown } | null,
+    config?: { tools?: unknown; bashDeny?: unknown } | null,
   ): {
     tools: Record<string, AgentToolState>;
     bashDeny: string[];
   } {
-    const boundary = (ROLE_BOUNDARIES as Record<string, unknown>)[agentName] as
-      { toolAllows?: Record<string, AgentToolState> } | undefined;
-    if (boundary && typeof boundary.toolAllows === 'object') {
+    if (config === undefined || config === null) {
+      const boundary = boundaryOf(agentName);
+      if (!boundary) {
+        return { tools: {}, bashDeny: [] };
+      }
       return {
         tools: { ...boundary.toolAllows },
         bashDeny: [...ROLE_BASH_DENY_PATTERNS],
       };
     }
-    if (config === undefined || config === null) {
-      return { tools: {}, bashDeny: [] };
-    }
     return {
-      tools: filterToolsMatrix(config.tools),
-      bashDeny: [...ROLE_BASH_DENY_PATTERNS],
+      tools: resolveGuardTools(agentName, config.tools),
+      bashDeny: resolveBashDeny(config.bashDeny),
     };
   }
 
