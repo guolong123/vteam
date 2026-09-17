@@ -176,12 +176,16 @@ export interface ExecServerOptions {
   pollMs?: number;
   /**
    * T17：serve 最近模型错误日志行读取器（数据源 OpencodeServer.recentErrors()，index.ts
-   * 接线注入）。awaitCompletion 每轮轮询调用，serve 对 Rate limit/Free usage 等 APIError
-   * 只写 stderr（`message="stream error" ... error.error="AI_APICallError: ..."`）不透传
-   * message.info.error——匹配关键词时提前 abort + 抛错（错误文本透传前端），不再空等首字超时。
-   * 缺省 = 不检测 serve 日志（保持原行为）。
+   * 接线注入）。awaitCompletion 每轮轮询调用（参数 = 会话 id，剔除其它会话历史错误），
+   * serve 对 Rate limit/Free usage 等 APIError 不透传 message.info.error——匹配关键词时
+   * 提前 abort + 抛错（错误文本透传前端），不再空等首字超时。缺省 = 不检测（保持原行为）。
    */
-  serveErrorReader?: () => string[];
+  serveErrorReader?: (sessionID: string) => string[];
+  /**
+   * 原始 serve 日志尾部读取器（数据源 OpencodeServer.recentLogTail()）。模型错误不可提取时
+   * 把原始行附进失败原因，保证失败始终携带证据。缺省 = 不附证据（保持原行为）。
+   */
+  serveLogReader?: (sessionID: string) => string[];
   /** 请求体大小上限 bytes；默认 1MB。 */
   maxBodyBytes?: number;
   /**
@@ -310,7 +314,8 @@ export class ExecServer {
   private readonly workerToken: string;
   private readonly firstTokenTimeoutMs: number;
   private readonly pollMs: number;
-  private readonly serveErrorReader: (() => string[]) | undefined;
+  private readonly serveErrorReader: ((sessionID: string) => string[]) | undefined;
+  private readonly serveLogReader: ((sessionID: string) => string[]) | undefined;
   private readonly maxBodyBytes: number;
   private readonly serverBaseUrl: string;
   private readonly browserProfileRoot: string;
@@ -329,6 +334,7 @@ export class ExecServer {
     this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? 120_000;
     this.pollMs = options.pollMs ?? 500;
     this.serveErrorReader = options.serveErrorReader;
+    this.serveLogReader = options.serveLogReader;
     this.maxBodyBytes = options.maxBodyBytes ?? 1024 * 1024;
     this.serverBaseUrl = (options.serverBaseUrl ?? '').replace(/\/+$/, '');
     this.browserProfileRoot = options.browserProfileRoot ?? '';
@@ -1454,10 +1460,12 @@ export class ExecServer {
         firstTokenTimeoutMs: this.firstTokenTimeoutMs,
         pollMs: this.pollMs,
         serveErrorReader: this.serveErrorReader,
-        // T17：serve 日志模型错误检测——匹配模型 API 错误关键词（Rate limit/Free usage 等
-        // 只写 serve stderr 不透传 message.info.error）；true=提前失败（abort + 抛错，
-        // 错误文本经 CompletionTimeoutError 透传 agent.status error 事件）
-        onServeError: (text) =>
+        serveLogReader: this.serveLogReader,
+        // T17：serve 日志模型错误检测——匹配模型 API 错误关键词 + 结构化错误门（Rate limit/
+        // Free usage 等不透传 message.info.error）；true=提前失败（abort + 抛错，
+        // 错误文本经 CompletionTimeoutError 透传 agent.status error 事件）。结构化门
+        // （level=ERROR / error.* 字段）杜绝正常 INFO 行误触发提前 abort。
+        onServeError: (text) => /level=ERROR\b|error\.(error|name|message|code)=/.test(text) &&
           /stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i.test(
             text,
           ),

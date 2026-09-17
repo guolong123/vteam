@@ -227,6 +227,36 @@ describe('describeTimeoutReason（首字超时根因诊断）', () => {
     const msgs = [asstErrMsg('a1', { name: 'APIError', data: { message: 'Invalid API key.', statusCode: 401 } })];
     expect(describeTimeoutReason(msgs, '   ')).toBe('模型调用报错：Invalid API key. (HTTP 401)');
   });
+
+  it('serveLogTail 提供且无其它证据 → 兜底原因附原始日志行（失败必带证据，不只一句笼统话）', () => {
+    const tail = [
+      'level=INFO message=loading path=/root/.config/opencode/opencode.json',
+      'level=INFO message=loop',
+    ];
+    const reason = describeTimeoutReason([], undefined, tail);
+    expect(reason).toContain('无任何输出');
+    expect(reason).toContain('level=INFO message=loading path=/root/.config/opencode/opencode.json');
+    expect(reason).toContain('level=INFO message=loop');
+  });
+
+  it('serveLogTail 为空行/空白 → 忽略（回归纯笼统文案，不产生空证据块）', () => {
+    expect(describeTimeoutReason([], undefined, ['', '   '])).toBe(
+      '模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）',
+    );
+  });
+
+  it('serveErrorText 与 serveLogTail 同时存在 → 提取到的错误优先，不附原始证据', () => {
+    const reason = describeTimeoutReason([], 'Rate limit exceeded.', ['level=INFO message=noise']);
+    expect(reason).toBe('模型调用报错：Rate limit exceeded.');
+    expect(reason).not.toContain('level=INFO message=noise');
+  });
+
+  it('info.error 存在时优先于 serveLogTail（证据兜底只在无任何可提取错误时使用）', () => {
+    const msgs = [asstErrMsg('a1', { name: 'APIError', data: { message: 'Invalid API key.' } })];
+    const reason = describeTimeoutReason(msgs, undefined, ['level=INFO message=noise']);
+    expect(reason).toBe('模型调用报错：Invalid API key.');
+    expect(reason).not.toContain('原始证据');
+  });
 });
 
 describe('awaitCompletion', () => {
@@ -482,6 +512,105 @@ describe('awaitCompletion', () => {
     // 首个匹配行触发后 break for 循环，同文本不重复调用
     expect(onServeError).toHaveBeenCalledTimes(1);
     expect(abort).toHaveBeenCalledWith('ses_1');
+  });
+
+  it('serveErrorReader/serveLogReader 收到会话 id（按会话过滤，stale 隔离）', async () => {
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [{ id: 'p1', type: 'step-start' }])]);
+    const serveErrorReader = jest.fn(() => [] as string[]);
+    const serveLogReader = jest.fn(() => [] as string[]);
+
+    const promise = awaitCompletion(driver, 'ses_42', {
+      firstTokenTimeoutMs: 30,
+      pollMs: 5,
+      serveErrorReader,
+      onServeError: () => false,
+      serveLogReader,
+    });
+    await expect(promise).rejects.toBeInstanceOf(CompletionTimeoutError);
+    expect(serveErrorReader).toHaveBeenCalledWith('ses_42');
+    expect(serveLogReader).toHaveBeenCalledWith('ses_42');
+  });
+
+  it('cause= 形态（实测 share subscriber failed）→ 提取最深详情并剥 Cause([Fail( 包装，不整行当原因', async () => {
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [{ id: 'p1', type: 'step-start' }])]);
+    const serveLines = [
+      'timestamp=2026-09-17T13:49:36.059Z level=ERROR run=8227c1d2 message="share subscriber failed" type=message.updated cause="Cause([Fail(ProviderModelNotFoundError: Model not found: opencode/no-such-model-xyz. Did you mean: gpt-5-nano, gpt-5.4-nano?)])"',
+    ];
+
+    const promise = awaitCompletion(driver, 'ses_9', {
+      firstTokenTimeoutMs: 1000,
+      pollMs: 5,
+      serveErrorReader: () => serveLines,
+      onServeError: (text) => /level=ERROR\b/.test(text),
+    });
+    const err = (await promise.catch((e: unknown) => e)) as CompletionTimeoutError;
+    expect(err.serveErrorText).toBe(
+      'Model not found: opencode/no-such-model-xyz. Did you mean: gpt-5-nano, gpt-5.4-nano?',
+    );
+    expect(err.message).not.toContain('Cause([Fail(');
+    expect(err.message).not.toContain('timestamp=');
+  });
+
+  it('无任何可提取错误 + serveLogReader 有原始行 → 抛错原因附原始日志（证据不丢）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [{ id: 'p1', type: 'step-start' }])]);
+    const tail = [
+      'timestamp=t level=INFO message=loading path=/x',
+      'timestamp=t level=INFO message=loop',
+    ];
+
+    const promise = awaitCompletion(driver, 'ses_9', {
+      firstTokenTimeoutMs: 30,
+      pollMs: 5,
+      serveErrorReader: () => [],
+      onServeError: () => false,
+      serveLogReader: () => tail,
+    });
+    await expect(promise).rejects.toBeInstanceOf(CompletionTimeoutError);
+    const err = (await promise.catch((e: unknown) => e)) as CompletionTimeoutError;
+    expect(err.message).toContain('timestamp=t level=INFO message=loop');
+    expect(err.message).toContain('level=INFO message=loading path=/x');
+    expect(abort).toHaveBeenCalledWith('ses_9');
+  });
+
+  it('serveLogTailLines 截断：仅附最近 N 行（默认 20）', async () => {
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [{ id: 'p1', type: 'step-start' }])]);
+    const tail = Array.from({ length: 50 }, (_, i) => `level=INFO message=line-${i}`);
+
+    const promise = awaitCompletion(driver, 'ses_9', {
+      firstTokenTimeoutMs: 30,
+      pollMs: 5,
+      serveErrorReader: () => [],
+      onServeError: () => false,
+      serveLogReader: () => tail,
+      serveLogTailLines: 3,
+    });
+    const err = (await promise.catch((e: unknown) => e)) as CompletionTimeoutError;
+    expect(err.message).toContain('level=INFO message=line-49');
+    expect(err.message).not.toContain('level=INFO message=line-46');
+  });
+
+  it('有可提取错误时不用原始证据兜底（提取优先，证据不冗余）', async () => {
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [{ id: 'p1', type: 'step-start' }])]);
+    const serveLines = [
+      'message="stream error" error.error="AI_APICallError: Rate limit exceeded. Please try again later."',
+    ];
+
+    const promise = awaitCompletion(driver, 'ses_9', {
+      firstTokenTimeoutMs: 1000,
+      pollMs: 5,
+      serveErrorReader: () => serveLines,
+      onServeError: (text) => /Rate limit/.test(text),
+      serveLogReader: () => ['level=INFO message=noise'],
+    });
+    const err = (await promise.catch((e: unknown) => e)) as CompletionTimeoutError;
+    expect(err.message).toContain('模型调用报错：Rate limit exceeded. Please try again later.');
+    expect(err.message).not.toContain('level=INFO message=noise');
+    expect(err.message).not.toContain('模型无任何输出');
   });
 });
 

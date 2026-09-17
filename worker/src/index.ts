@@ -824,10 +824,12 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     // GET /agents 未显式传 directory 时的回落值：与 serve cwd（config.workDir）一致，
     // 保证列出的 opencode agent 集合与实际执行时发现的集合相同
     workDir: config.workDir,
-    // T17：serve 日志模型错误检测数据源——awaitCompletion 每轮轮询读 recentErrors()，
-    // 命中模型 API 错误关键词（Rate limit/Free usage 等只写 stderr 不透传
-    // message.info.error）时提前 abort + 抛错（错误文本透传前端，不再空等首字超时）
-    serveErrorReader: () => serveServer.recentErrors(),
+    // T17：serve 日志模型错误检测数据源——awaitCompletion 每轮轮询读 recentErrors(会话 id)，
+    // 命中模型 API 错误（Rate limit/Free usage 等不透传 message.info.error；已按会话过滤避免
+    // stale 泄漏）时提前 abort + 抛错（错误文本透传前端，不再空等首字超时）
+    serveErrorReader: (sessionID) => serveServer.recentErrors(5, sessionID),
+    // 兜底证据源：模型错误不可提取时，原始 serve 日志尾部随失败原因上报（失败必带证据）
+    serveLogReader: (sessionID) => serveServer.recentLogTail(20, sessionID),
     // OmO 配置保存后重启 serve：opencode 只在启动时读 OmO 配置，不重启则新会话仍用旧模型。
     // 复用 RestartCoordinator（无活跃会话立即重启 / 有则挂起等归零），故不会打断进行中的会话。
     restartServe: (reason: string) => restartCoordinator.requestRestart(reason),

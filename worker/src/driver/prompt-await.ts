@@ -48,9 +48,18 @@ export interface AwaitCompletionOptions {
   onServeError?: (errorText: string) => boolean;
   /**
    * T17 serve 最近错误日志行读取器（数据源：OpencodeServer.recentErrors()，exec-server
-   * 接线注入）。缺省 = 不检测 serve 日志（保持原行为）。与 onServeError 同时缺省/同时存在。
+   * 接线注入）。参数 = 当前 opencode 会话 id（用于剔除其它会话的历史错误，stale 隔离）；
+   * 缺省 = 不检测 serve 日志（保持原行为）。与 onServeError 同时缺省/同时存在。
    */
-  serveErrorReader?: () => string[];
+  serveErrorReader?: (sessionID: string) => string[];
+  /**
+   * 原始 serve 日志尾部读取器（数据源：OpencodeServer.recentLogTail()）。模型错误不可提取时，
+   * 用它把**原始日志行**附进失败原因，使失败始终携带证据（而非只有一句笼统文案）。
+   * 参数 = 当前会话 id；缺省 = 不附证据（保持原行为）。
+   */
+  serveLogReader?: (sessionID: string) => string[];
+  /** 附进失败原因的原始日志行数上限；默认 20。 */
+  serveLogTailLines?: number;
 }
 
 /** 会话完成聚合结果。 */
@@ -141,15 +150,26 @@ function extractMessageError(messages: ServeMessage[]): string | null {
 
 /**
  * 从 serve 日志行提取干净的模型错误文本（onServeError 命中行的展示文本）。
- * serve 日志格式（实测）：`message="stream error" ... error.error="AI_APICallError: Rate limit exceeded. Please try again later."`
- * - 优先提取 `error.error="..."`（承载具体模型调用错误）
- * - 回退 `message="..."`（如 "stream error"）
- * - 再去掉错误类型前缀（`AI_APICallError: ` / `APIError: ` 等），对齐前端展示习惯
+ * 实测两种形态：
+ *   a) `message="stream error" ... error.error="AI_APICallError: Rate limit exceeded. Please try again later."`
+ *   b) `message="share subscriber failed" ... cause="Cause([Fail(ProviderModelNotFoundError: Model not found: …)])"`
+ * 提取优先级（取**最深可用细节**，避免把整行结构化日志当原因）：
+ *   1. `error.error="..."`（APIError 承载具体模型调用错误）
+ *   2. `cause="..."`（流/订阅失败的嵌套原因；剥掉 `Cause([Fail(` / `)])` 包装）
+ *   3. `message="..."`（如 "stream error"）
+ *   4. 整行 trim（结构化字段全缺时的兜底）
+ * 再去掉错误类型前缀（`AI_APICallError: ` / `APIError: ` 等），对齐前端展示习惯。
  */
 function extractServeError(line: string): string {
-  const errorValue = /error\.error="([^"]*)"/.exec(line);
-  const raw = errorValue?.[1]?.trim() ?? /message="([^"]*)"/.exec(line)?.[1]?.trim() ?? line.trim();
-  return raw.replace(/^[A-Za-z_]+:\s*/, '').trim();
+  const errorValue = /error\.error="([^"]*)"/.exec(line)?.[1];
+  const causeValue = /cause="([^"]*)"/.exec(line)?.[1];
+  const messageValue = /message="([^"]*)"/.exec(line)?.[1];
+  const raw = (errorValue ?? causeValue ?? messageValue ?? line).trim();
+  const unwrapped = raw
+    .replace(/^Cause\(\[Fail\(/, '')
+    .replace(/\)\]\)?$/, '')
+    .trim();
+  return unwrapped.replace(/^[A-Za-z_]+:\s*/, '').trim();
 }
 
 /**
@@ -165,15 +185,21 @@ function extractServeError(line: string): string {
  * 3. **卡在工具循环**：assistant 含 step-finish 且 reason==='tool-calls'（完成但循环
  *    调工具不产出正文）。注意：reasoning 已算首字——纯思考（有 reasoning 无 text）场景
  *    不会触发首字超时（会持续轮询到 step-finish），故此处不再诊断「思考阶段」。
- * 4. **完全无响应**：无上述特征 → 凭据缺失/模型不可用/serve 异常等。
+ * 4. **完全无响应**：无上述特征 → 凭据缺失/模型不可用/serve 异常等。**兜底必须带证据**：
+ *    若提供了原始 serve 日志尾部（serveLogTail），把逐行原文附在文案后（用户 mandate：
+ *    拿到信息不该直接丢弃成一句笼统话；有证据就不允许只报「模型无任何输出」）。
  */
-export function describeTimeoutReason(messages: ServeMessage[], serveErrorText?: string): string {
+export function describeTimeoutReason(
+  messages: ServeMessage[],
+  serveErrorText?: string,
+  serveLogTail?: string[],
+): string {
   const assistantParts = messages
     .filter((m) => m.info?.role === 'assistant')
     .flatMap((m) => m.parts ?? []);
 
-  // 0. serve 日志错误（最高优先级）：Rate limit/Free usage 等只写 stderr，不透传
-  //    message.info.error——这是唯一能拿到该错误的通道
+  // 0. serve 日志错误（最高优先级）：Rate limit/Free usage 等不透传 message.info.error——
+  //    这是唯一能拿到该错误的通道
   if (typeof serveErrorText === 'string' && serveErrorText.trim() !== '') {
     return `模型调用报错：${serveErrorText.trim()}`;
   }
@@ -200,7 +226,11 @@ export function describeTimeoutReason(messages: ServeMessage[], serveErrorText?:
     return TOOL_LOOP_REASON;
   }
 
-  // 4. 完全无响应（兜底）
+  // 4. 完全无响应（兜底）：有原始 serve 日志尾部则原文附上（失败必须携带证据）
+  const evidence = (serveLogTail ?? []).map((line) => line.trim()).filter((line) => line !== '');
+  if (evidence.length > 0) {
+    return `模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）；serve 日志尾部（原始证据）:\n${evidence.join('\n')}`;
+  }
   return '模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）';
 }
 
@@ -211,9 +241,15 @@ export class CompletionTimeoutError extends Error {
   /** serve 日志中提取的模型调用错误文本（T17 serveErrorReader 数据源；无则 undefined）。 */
   readonly serveErrorText?: string;
 
-  constructor(sessionID: string, result: CompletionResult, messages?: ServeMessage[], serveErrorText?: string) {
+  constructor(
+    sessionID: string,
+    result: CompletionResult,
+    messages?: ServeMessage[],
+    serveErrorText?: string,
+    serveLogTail?: string[],
+  ) {
     super(
-      `[prompt-await] 会话 ${sessionID} 等待首字超时：${describeTimeoutReason(messages ?? [], serveErrorText)}`,
+      `[prompt-await] 会话 ${sessionID} 等待首字超时：${describeTimeoutReason(messages ?? [], serveErrorText, serveLogTail)}`,
     );
     this.name = 'CompletionTimeoutError';
     this.sessionID = sessionID;
@@ -334,12 +370,14 @@ export async function awaitCompletion(
   sessionID: string,
   options: AwaitCompletionOptions = {},
 ): Promise<CompletionResult> {
-  const { firstTokenTimeoutMs = 120_000, pollMs = 500, onPoll, baselineIds, onServeError, serveErrorReader } = options;
+  const { firstTokenTimeoutMs = 120_000, pollMs = 500, onPoll, baselineIds, onServeError, serveErrorReader, serveLogReader, serveLogTailLines = 20 } = options;
   const startedAt = Date.now();
   let firstTokenAt: number | null = null;
   let collected: ServeMessage[] = [];
   /** T17：serve 日志中提取的模型错误文本（onServeError 命中行）；有值 → 抛错文案用该文本 */
   let serveErrorText: string | null = null;
+  /** 兜底证据：最近一次轮询读到的原始 serve 日志尾部（无模型错误可提取时附进原因） */
+  let serveLogTail: string[] = [];
   /** T17 去重：上次触发过 onServeError 的日志行（同一行不重复触发/抛错） */
   let triggeredServeErrorLine: string | null = null;
   const hasServeErrorDetection = serveErrorReader !== undefined && onServeError !== undefined;
@@ -368,7 +406,7 @@ export async function awaitCompletion(
     // abort + 抛 CompletionTimeoutError，文案用 serve 错误文本而非「模型无任何输出」）。
     // 去重：同一错误行只触发一次（避免每轮重复 break/抛错）。
     if (hasServeErrorDetection) {
-      for (const line of serveErrorReader!()) {
+      for (const line of serveErrorReader!(sessionID)) {
         if (line === triggeredServeErrorLine) {
           continue;
         }
@@ -380,6 +418,13 @@ export async function awaitCompletion(
       }
       if (serveErrorText !== null) {
         break;
+      }
+    }
+    // 兜底证据（每轮刷新，取最新尾部）：模型错误不可提取时，原始行仍进失败原因
+    if (serveLogReader !== undefined) {
+      const tail = serveLogReader(sessionID);
+      if (Array.isArray(tail) && tail.length > 0) {
+        serveLogTail = tail.slice(-serveLogTailLines);
       }
     }
     if (firstTokenAt === null && hasFirstToken(collected)) {
@@ -400,7 +445,7 @@ export async function awaitCompletion(
     } catch {
       // abort 失败不掩盖超时错误（双保险中 HTTP abort 已尽力）
     }
-    throw new CompletionTimeoutError(sessionID, result, collected, serveErrorText ?? undefined);
+    throw new CompletionTimeoutError(sessionID, result, collected, serveErrorText ?? undefined, serveLogTail);
   }
   return result;
 }

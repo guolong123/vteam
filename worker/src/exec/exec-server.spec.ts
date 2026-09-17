@@ -493,6 +493,41 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     }
   });
 
+  it('无模型错误可提取时：原始 serve 日志尾部进 agent.status error + logger.error（失败必带证据，非笼统文案）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    getMessages.mockResolvedValue(STEP_START_ONLY);
+    const { sender, sent } = createSender();
+    const logged: string[] = [];
+    const tail = [
+      'timestamp=t level=INFO message=loading path=/root/.config/opencode/opencode.json',
+      'timestamp=t level=INFO message=loop',
+    ];
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 40,
+      pollMs: 5,
+      // 无匹配错误行（空）+ 原始尾部可读 → 走证据兜底
+      serveErrorReader: () => [],
+      serveLogReader: () => tail,
+      logger: { info: () => undefined, warn: () => undefined, error: (m: string) => logged.push(m) },
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', prompt: 'go' });
+      await waitFor(() => sent.some((s) => s.type === 'agent.status' && s.payload.status === 'error'));
+      const errEvent = sent.find((s) => s.type === 'agent.status' && s.payload.status === 'error')!;
+      expect(String(errEvent.payload.error)).toContain('level=INFO message=loading path=/root/.config/opencode/opencode.json');
+      expect(String(errEvent.payload.error)).toContain('level=INFO message=loop');
+      // 同一证据到达 worker 自身错误日志（durable）
+      expect(logged.join('\n')).toContain('level=INFO message=loop');
+      expect(abort).toHaveBeenCalledWith('ses_1');
+    } finally {
+      await exec.stop();
+    }
+  });
+
   it('createSession 失败 → agent.status(error) + session.updated(failed) + trackInstance 归零（不 unhandled rejection）', async () => {
     const { driver, createSession } = mockDriver();
     createSession.mockRejectedValue(new Error('serve 未就绪'));

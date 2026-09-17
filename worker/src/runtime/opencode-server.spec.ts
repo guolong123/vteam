@@ -14,6 +14,9 @@
 import { spawn, spawnSync } from 'child_process';
 import * as http from 'http';
 import * as net from 'net';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { EventEmitter } from 'events';
 
 jest.mock('child_process', () => ({
@@ -162,6 +165,7 @@ interface NewServerOpts {
   logBufferSize?: number;
   portRetryCount?: number;
   serveHostname?: string;
+  serveLogFilePath?: string;
   logger?: Logger;
 }
 
@@ -175,6 +179,8 @@ function newServer(opts: NewServerOpts): OpencodeServer {
     logBufferSize: opts.logBufferSize ?? 200,
     portRetryCount: opts.portRetryCount ?? 5,
     serveHostname: opts.serveHostname,
+    // 测试默认指向不存在路径：文件次级源必须静默降级，绝不读真实开发机日志（隔离）
+    serveLogFilePath: opts.serveLogFilePath ?? path.join(os.tmpdir(), `absent-opencode-log-${process.pid}`),
     logger: opts.logger,
   });
 }
@@ -201,11 +207,13 @@ describe('OpencodeServer', () => {
     // 默认非 --pure：内置插件（omo）需非 pure 才会加载
     expect(mockedSpawn).toHaveBeenCalledWith(
       'opencode',
-      ['serve', '--port', '4199', '--hostname', '127.0.0.1'],
+      ['serve', '--port', '4199', '--hostname', '127.0.0.1', '--print-logs'],
       expect.objectContaining({ detached: true, stdio: ['ignore', 'pipe', 'pipe'] }),
     );
     const args = mockedSpawn.mock.calls[0][1] as string[];
     expect(args).not.toContain('--pure');
+    // T17 修复：诊断日志默认写文件而非 stderr → 必须带 --print-logs 才会进 this.logs
+    expect(args).toContain('--print-logs');
     // 健康检查使用带鉴权的 GET
     expect(mockedHttpGet).toHaveBeenCalled();
   });
@@ -426,6 +434,116 @@ describe('OpencodeServer', () => {
     expect(clean.recentErrors()).toHaveLength(0);
   });
 
+  it('recentErrors：裸关键词的 INFO 行不入选（结构化错误门防误报：messageID 中的 429 不得触发提前 abort）', async () => {
+    const server = newServer({ port: 4199 });
+    await server.start();
+    fakeProc.stderr.emit(
+      'data',
+      Buffer.from(
+        'timestamp=2026-09-15T08:23:25.825Z level=INFO run=57ba8b84 message=process session.id=ses_other messageID=msg_0a429eb46001rGylqWhDPAJKL6\n',
+      ),
+    );
+    expect(server.recentErrors()).toHaveLength(0);
+    expect(server.recentErrors(5, 'ses_other')).toHaveLength(0);
+  });
+
+  it('recentErrors：按会话过滤——其它会话的错误行不返回给本会话（stale 隔离）', async () => {
+    const server = newServer({ port: 4199 });
+    await server.start();
+    fakeProc.stderr.emit(
+      'data',
+      Buffer.from(
+        'timestamp=t level=ERROR message="stream error" session.id=ses_old error.error="AI_APICallError: Rate limit exceeded."\n' +
+          'timestamp=t level=ERROR message="stream error" session.id=ses_mine error.error="AI_APICallError: Free usage exceeded."\n',
+      ),
+    );
+    const mine = server.recentErrors(5, 'ses_mine');
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toContain('Free usage exceeded');
+    expect(server.recentErrors(5, 'ses_mine').join('\n')).not.toContain('ses_old');
+  });
+
+  it('recentLogTail：无会话过滤时返回原始尾部行（含非错误行，供失败原因附证据）', async () => {
+    const server = newServer({ port: 4199 });
+    await server.start();
+    fakeProc.stderr.emit('data', Buffer.from('level=INFO message=loading path=/x\nlevel=INFO message=loop\n'));
+    const tail = server.recentLogTail(5, 'ses_mine');
+    expect(tail).toHaveLength(2);
+    expect(tail[1]).toContain('message=loop');
+  });
+
+  it('start 清空上一进程日志（serve 重启后旧会话错误不泄漏进新会话原因）', async () => {
+    const server = newServer({ port: 4199 });
+    await server.start();
+    fakeProc.stderr.emit(
+      'data',
+      Buffer.from('timestamp=t level=ERROR message="stream error" session.id=ses_old error.error="AI_APICallError: Rate limit exceeded."\n'),
+    );
+    expect(server.recentErrors()).toHaveLength(1);
+    await server.stop();
+    const restarted = new FakeChild(5252);
+    fakeProc = restarted;
+    mockedSpawn.mockImplementation(() => restarted);
+    await server.start();
+    expect(server.recentLogs).toHaveLength(0);
+    expect(server.recentErrors()).toHaveLength(0);
+  });
+
+  it('缓冲区不驱逐错误行：缓冲上限内，错误行存活到下一次 500ms poll', async () => {
+    const server = newServer({ port: 4199, logBufferSize: 500 });
+    await server.start();
+    // 实测 500ms poll 窗口最多 31 行；注入 31 行噪声后错误行，再补 31 行 → 错误行必须存活
+    const noise = Array.from({ length: 15 }, (_, i) => `level=INFO message=loop n=${i}`).join('\n');
+    const errorLine =
+      'timestamp=t level=ERROR message="stream error" session.id=ses_mine error.error="AI_APICallError: Rate limit exceeded."';
+    fakeProc.stderr.emit('data', Buffer.from(`${noise}\n${errorLine}\n${noise}\n`));
+    const errors = server.recentErrors(5, 'ses_mine');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('Rate limit exceeded');
+  });
+
+  it('缓冲区容量校验：500 行上限下，31 行/500ms 的密度在 16 个 poll 周期内不会驱逐错误行', async () => {
+    const server = newServer({ port: 4199, logBufferSize: 500 });
+    await server.start();
+    for (let round = 0; round < 16; round++) {
+      for (let i = 0; i < 31; i++) {
+        fakeProc.stdout.emit('data', Buffer.from(`level=INFO message=noise r=${round} i=${i}\n`));
+      }
+    }
+    const err =
+      'timestamp=t level=ERROR message="stream error" session.id=ses_x error.error="AI_APICallError: Rate limit exceeded."';
+    fakeProc.stdout.emit('data', Buffer.from(`${err}\n`));
+    for (let i = 0; i < 31; i++) {
+      fakeProc.stdout.emit('data', Buffer.from(`level=INFO message=after i=${i}\n`));
+    }
+    expect(server.recentErrors(5)).toHaveLength(1);
+    expect(server.recentErrors(5)[0]).toContain('Rate limit exceeded');
+  });
+
+  it('日志文件次级源：环形缓冲无匹配时回退读文件尾部；文件缺失静默降级', async () => {
+    const logFile = path.join(os.tmpdir(), `opencode-log-${process.pid}-${Date.now()}.log`);
+    fs.writeFileSync(
+      logFile,
+      'level=INFO message=startup\n' +
+        'timestamp=t level=ERROR message="stream error" session.id=ses_f error.error="AI_APICallError: Rate limit exceeded."\n',
+    );
+    try {
+      const server = newServer({ port: 4199, serveLogFilePath: logFile });
+      await server.start();
+      // 环形缓冲（stderr 管道）为空 → 回退文件
+      const errors = server.recentErrors(5, 'ses_f');
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain('Rate limit exceeded');
+
+      const absent = newServer({ port: 4199, serveLogFilePath: path.join(os.tmpdir(), `absent-${Date.now()}.log`) });
+      await absent.start();
+      expect(absent.recentErrors()).toHaveLength(0);
+      expect(absent.recentLogTail()).toHaveLength(0);
+    } finally {
+      fs.unlinkSync(logFile);
+    }
+  });
+
   it('listening 端口与期望不一致时告警', async () => {
     const logger = makeLogger();
     const server = newServer({ port: 4199, logger });
@@ -446,6 +564,7 @@ describe('OpencodeServer', () => {
       '4199',
       '--hostname',
       '0.0.0.0',
+      '--print-logs',
     ]);
   });
 

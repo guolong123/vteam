@@ -15,12 +15,28 @@
  *    超时 30s；serve 提前退出（exitCode 非 null）即报错。
  * 5. stdout/stderr pipe 收集日志到环形缓冲（保留最近 N 行供 debug）。
  *
+ * **`--print-logs`（T17 修复，2026-09-17 实测）**：opencode serve 默认把诊断日志写
+ * `$HOME/.local/share/opencode/log/opencode.log`（**文件，不是 stderr**），stdout/stderr
+ * 只有启动 banner（`listening on ...` 在 stdout）。因此原实现 `this.logs` 几乎收不到
+ * serve 诊断行 → `recentErrors()` 恒空 → 模型 API 错误（Rate limit/Free usage）无法被
+ * 感知，只能空等首字超时 120s 并记成笼统「模型无任何输出」。修复 = spawn 加
+ * `--print-logs`（`opencode serve --help`：print logs to stderr），诊断行随之进 stderr。
+ * 同时保留日志文件作为**次级**数据源（`serveLogFilePath`，可配；缺失静默降级），
+ * 使捕获不依赖单一传输通道。
+ *
  * 本类不依赖 server 代码、不引入 nestjs（worker 独立进程铁律）。
  */
 
 import { spawn, spawnSync, ChildProcess } from 'child_process';
-import * as http from 'http';
-import * as net from 'net';
+import {
+  defaultServeLogFilePath,
+  isAnyLine,
+  isServeErrorLine,
+  lineBelongsToSession,
+  readFileTailLines,
+} from './serve-log';
+import { getRandomFreePort, httpGetStatus, isPortFree } from './port-probe';
+export { defaultServeLogFilePath, readFileTailLines } from './serve-log';
 
 /** 最小日志接口（默认 console）。 */
 export interface Logger {
@@ -42,8 +58,13 @@ export interface OpencodeServerOptions {
   healthCheckTimeoutMs?: number;
   /** 健康检查轮询间隔 ms；默认 500 */
   healthCheckIntervalMs?: number;
-  /** 日志环形缓冲行数；默认 200 */
+  /** 日志环形缓冲行数；默认 500（实测 500ms 窗口最多 31 行，见 DEFAULT_LOG_BUFFER_SIZE） */
   logBufferSize?: number;
+  /**
+   * serve 日志文件路径（次级错误源；默认 opencode 固定落点
+   * `$XDG_DATA_HOME/opencode/log/opencode.log`）。文件缺失/不可读 → 静默降级（空数组）。
+   */
+  serveLogFilePath?: string;
   /** 端口冲突重试次数；默认 5 */
   portRetryCount?: number;
   /** serve 绑定地址（D2：默认 env OPENCODE_SERVE_HOSTNAME ?? '127.0.0.1' 保住本地铁律；容器内设 0.0.0.0） */
@@ -61,7 +82,13 @@ export interface OpencodeServerOptions {
 const DEFAULT_COMMAND = 'opencode';
 const DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 30_000;
 const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 500;
-const DEFAULT_LOG_BUFFER_SIZE = 200;
+/**
+ * 日志环形缓冲行数。2026-09-17 实测（容器内 opencode.log 34,139 行）：
+ * 任意 500ms 滑动窗口最多 31 行（1s 最多 32，10s 最多 101）——轮询间隔即 500ms，
+ * 一条 ERROR 行必须存活到下一次 poll。200 行仅 6.4x 余量，50-poll 长思考下累积
+ * 亦可能逼近；常量 500 提供 ~16x 余量，代价可忽略（纯内存字符串）。
+ */
+const DEFAULT_LOG_BUFFER_SIZE = 500;
 const DEFAULT_PORT_RETRY_COUNT = 5;
 /** D2 铁律：serve 默认只监听本机回环（容器内经 OPENCODE_SERVE_HOSTNAME=0.0.0.0 覆盖） */
 const DEFAULT_SERVE_HOSTNAME = '127.0.0.1';
@@ -69,53 +96,9 @@ const DEFAULT_SERVE_HOSTNAME = '127.0.0.1';
 const LOOPBACK_HOSTNAME = '127.0.0.1';
 /** serve 日志中实际监听地址的正则（`opencode server listening on http://<host>:<port>`，host 不限定） */
 const LISTENING_RE = /listening on http:\/\/[^:\s/]+:(\d+)/;
-/**
- * T17：serve 日志中的模型调用错误关键词。serve 对部分 APIError（Rate limit exceeded /
- * Free usage exceeded 等）只写 stderr（`message="stream error" ... error.error="AI_APICallError: ..."`）
- * 不透传 message.info.error——worker 靠 recentErrors() 感知提前失败，不再空等首字超时。
- */
-const SERVE_ERROR_KEYWORDS = /stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** 用 net.createServer 探测端口是否空闲（bind 成功即空闲，随即关闭）。 */
-function isPortFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.once('error', () => resolve(false));
-    server.listen(port, LOOPBACK_HOSTNAME, () => {
-      server.close(() => resolve(true));
-    });
-  });
-}
-
-/** 让 OS 分配一个随机空闲端口（bind 0，读回实际端口后关闭）。 */
-function getRandomFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, LOOPBACK_HOSTNAME, () => {
-      const address = server.address();
-      const port = typeof address === 'object' && address !== null ? address.port : 0;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-/** GET 指定 URL，返回 statusCode；网络错/超时抛错。 */
-function httpGetStatus(url: string, authHeader?: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const headers: Record<string, string> = authHeader ? { Authorization: authHeader } : {};
-    const req = http.get(url, { headers, timeout: 2000 }, (res) => {
-      // 必须消费响应体，否则 keep-alive 连接不释放
-      res.resume();
-      resolve(res.statusCode ?? 0);
-    });
-    req.on('timeout', () => req.destroy(new Error('健康检查请求超时')));
-    req.on('error', reject);
-  });
 }
 
 export class OpencodeServer {
@@ -143,6 +126,7 @@ export class OpencodeServer {
       portRetryCount: DEFAULT_PORT_RETRY_COUNT,
       logger: console,
       ...options,
+      serveLogFilePath: options.serveLogFilePath ?? defaultServeLogFilePath(),
       serveHostname: options.serveHostname ?? process.env.OPENCODE_SERVE_HOSTNAME ?? DEFAULT_SERVE_HOSTNAME,
     };
   }
@@ -173,14 +157,48 @@ export class OpencodeServer {
   }
 
   /**
-   * T17：最近模型错误日志（serve stderr 中匹配模型 API 错误关键词的行，环形缓冲副本，
-   * 保留最近 limit 条）。serve 对部分 APIError（Rate limit exceeded / Free usage exceeded
-   * 等）只写 stderr（`message="stream error" ... error.error="AI_APICallError: ..."`）不透传
+   * 最近原始 serve 日志尾部（环形缓冲副本，可按会话过滤）——失败原因兜底证据用：
+   * 模型错误不可提取时，把原始行附进原因，避免只留一句笼统「模型无任何输出」。
+   * 环形缓冲为空时回退读取日志文件尾部（次级源）。
+   */
+  recentLogTail(limit = 20, sessionID?: string): string[] {
+    const ring = this.logs
+      .filter((line) => lineBelongsToSession(line, sessionID))
+      .slice(-limit);
+    if (ring.length > 0) {
+      return ring;
+    }
+    return this.readLogFileErrors(sessionID, isAnyLine).slice(-limit);
+  }
+
+  /**
+   * 最近模型错误日志（环形缓冲副本 + 日志文件次级源；按会话过滤，保留最近 limit 条）。
+   * serve 对部分 APIError（Rate limit exceeded / Free usage exceeded 等）不透传
    * message.info.error——awaitCompletion 经 serveErrorReader 读取本方法结果，匹配时提前
    * abort + 抛错（错误文本透传前端），不再空等首字超时（120s+）。
+   *
+   * 过滤 = 关键词粗筛 + 结构化错误门（level=ERROR / error.* 字段）——正常 INFO 行不入选。
+   * 环形缓冲有匹配即返回；无匹配才回退日志文件（次级源，缺失静默降级）。
    */
-  recentErrors(limit = 5): string[] {
-    return this.logs.filter((line) => SERVE_ERROR_KEYWORDS.test(line)).slice(-limit);
+  recentErrors(limit = 5, sessionID?: string): string[] {
+    const ring = this.logs
+      .filter((line) => isServeErrorLine(line) && lineBelongsToSession(line, sessionID))
+      .slice(-limit);
+    if (ring.length > 0) {
+      return ring;
+    }
+    return this.readLogFileErrors(sessionID, isServeErrorLine).slice(-limit);
+  }
+
+  /** 读日志文件尾部（次级错误源；仅匹配行 + 会话过滤）。文件缺失/不可读 → []。 */
+  private readLogFileErrors(sessionID: string | undefined, accept: (line: string) => boolean): string[] {
+    const filePath = this.options.serveLogFilePath;
+    if (!filePath) {
+      return [];
+    }
+    return readFileTailLines(filePath).filter(
+      (line) => accept(line) && lineBelongsToSession(line, sessionID),
+    );
   }
 
   /** F2 M3：spawn 异步失败错误（如 opencode 不在 PATH 时的 ENOENT）；无失败为 null。 */
@@ -193,6 +211,10 @@ export class OpencodeServer {
     if (this.isRunning && this.baseUrlValue) {
       return this.baseUrlValue;
     }
+    // stale 隔离：新 serve 进程 = 新日志时代——清空上一进程残留（含上个会话的模型错误），
+    // 否则新会话失败原因会引用到旧会话的日志行。
+    this.logs = [];
+    this.spawnErrorValue = null;
     this.versionCache = this.detectVersion();
     const port = await this.resolvePort();
     let proc: ChildProcess;
@@ -329,6 +351,10 @@ export class OpencodeServer {
       String(port),
       '--hostname',
       this.options.serveHostname!,
+      // T17 修复（2026-09-17 实测）：诊断日志默认写 ~/.local/share/opencode/log/opencode.log
+      // （文件，不是 stderr）→ this.logs 收不到 → recentErrors() 恒空。该参数令其同时写 stderr
+      // （`opencode serve --help`: print logs to stderr），启动 banner（listening on …）仍在 stdout。
+      '--print-logs',
     ];
     // --pure = 不加载外部插件。/data/vteam-worker/opencode.json 的 plugin 节（omo）与之互斥：
     // 带 --pure 时 omo 静默不生效。默认不加（让内置插件生效），需要"纯净基线"时用
