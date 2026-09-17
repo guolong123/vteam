@@ -76,7 +76,7 @@ interface AgentItem {
   role: string | null;
   /** 机器安全标识（opencode agent 名 = vteam-<agentKey>；模板回填 role；自定义/克隆必填） */
   agentKey: string | null;
-  /** template（只读）/ custom（自定义）/ clone（克隆副本，可写） */
+  /** 模板（设置可编辑，仅删除受保护）/ custom（自定义）/ clone（克隆副本，可写） */
   type: string;
   prompt: string;
   baseAgentId: string | null;
@@ -429,7 +429,7 @@ function CredentialBadge({ status }: { status: "configured" | "missing" }) {
 
 /** 模型 id → 产品名（目录查询 modelNameById 提供；未知/存量 id 显示原始值）。 */
 
-/** Agent 类型 → 徽章文案（模板只读 / 自定义 / 克隆副本）。 */
+/** Agent 类型 → 徽章文案（模板 / 自定义 / 克隆副本）。 */
 const TYPE_LABEL: Record<string, string> = {
   template: "模板",
   custom: "自定义",
@@ -1024,7 +1024,7 @@ function EffectivePermissionSection({ effective, agentId, agentType, mcpServers,
 
 interface ConfigPanelProps {
   agent: AgentItem;
-  /** 是否只读（type=template） */
+  /** 面板只读开关（调用方传入；不再由 type 推导，template 设置同样可编辑） */
   readOnly: boolean;
   /** 可用模型列表（available-models，目录读取） */
   models: AvailableModel[];
@@ -1171,22 +1171,6 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
               >
                 {TYPE_LABEL[agent.type] ?? agent.type}
               </span>
-              {isTemplate && (
-                <span
-                  data-testid="agent-readonly-badge"
-                  style={{
-                    fontSize: fontSize.xs,
-                    fontWeight: 500,
-                    color: neutral[400],
-                    padding: "1px 7px",
-                    borderRadius: radius.pill,
-                    border: `1px solid ${neutral[200]}`,
-                    flexShrink: 0,
-                  }}
-                >
-                  只读
-                </span>
-              )}
             </div>
             <div
               style={{
@@ -1340,7 +1324,7 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
         </div>
         <textarea
           data-testid="prompt-editor"
-          readOnly={isTemplate}
+          readOnly={readOnly}
           rows={4}
           spellCheck={false}
           value={promptDraft}
@@ -1352,7 +1336,7 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
             resize: "none",
             border: `1px solid ${neutral[200]}`,
             borderRadius: radius.md,
-            backgroundColor: isTemplate ? neutral[50] : "var(--color-surface)",
+            backgroundColor: readOnly ? neutral[50] : "var(--color-surface)",
             padding: space.md,
             fontSize: fontSize.md,
             lineHeight: 1.6,
@@ -2396,7 +2380,7 @@ export default function AgentConfigPage() {
     },
   });
 
-  // 保存：PATCH /agents/:id（template → 403 PERMISSION_AGENT_READONLY，UI 已只读避免触发）
+  // 保存：PATCH /agents/:id（template 设置同样可保存；删除仍对 template 403）
   const saveMutation = useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: UpdateAgentPayload }) =>
       api.patch<AgentItem>(`/agents/${id}`, payload),

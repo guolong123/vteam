@@ -178,7 +178,6 @@ export const PAGES: PageTestidRef[] = [
       "create-agent-close",
       "create-agent-error",
       "save-agent-button",
-      "agent-readonly-badge",
       "agent-detail-loading",
       "agents-loading",
       "agents-error",

@@ -129,7 +129,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     expect(ackValues).toEqual([]);
   });
 
-  it('7 条角色 ExecutionPolicy upsert：type=template、permission 全量派生自 ROLE_BOUNDARIES', async () => {
+  it('7 条角色 ExecutionPolicy upsert：create 分支 type=template、permission 全量派生自 ROLE_BOUNDARIES（update 保留用户编辑）', async () => {
     await main();
 
     const policyCalls = mockPrisma.executionPolicy.upsert.mock.calls;
@@ -141,8 +141,9 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     for (const call of policyCalls) {
       const { create, update } = call[0];
       expect(create.type).toBe('template');
-      expect(update.type).toBe('template');
-      expect(update.config).toEqual(create.config);
+      // create-if-absent：重跑 seed 的 update 为空对象，不回写 config/description/type；
+      // 存量安装的用户编辑不被回滚（出厂值仅首次 create 生效）。
+      expect(update).toEqual({});
 
       const agentName = AGENT_NAME_BY_POLICY[String(call[0].where.id)];
       const boundary = ROLE_BOUNDARIES[agentName];
@@ -183,7 +184,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     }
   });
 
-  it('模板策略 config.tools 为 ROLE_BOUNDARIES allowlist 的拷贝（克隆深拷贝来源）', async () => {
+  it('模板策略 create.config.tools 为 ROLE_BOUNDARIES allowlist 的拷贝（克隆深拷贝来源；update 不覆盖用户编辑）', async () => {
     await main();
 
     const policyCalls = mockPrisma.executionPolicy.upsert.mock.calls;
@@ -198,11 +199,11 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       expect(Object.keys(call[0].create.config.tools).length).toBeGreaterThan(
         0,
       );
-      expect(call[0].update.config).toEqual(call[0].create.config);
+      expect(call[0].update).toEqual({});
     }
   });
 
-  it('模板 Agent create 与 update 均写入 agentKey = role（opencode 注入名 vteam-<agentKey> 与现状一致）', async () => {
+  it('模板 Agent create 分支写入 agentKey = role（update 不覆盖存量绑定，opencode 注入名 vteam-<agentKey> 与现状一致）', async () => {
     await main();
 
     // agentKey='plan' 满足 AGENT_KEY_PATTERN（小写开头，不假设、直接验证）
@@ -213,11 +214,11 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
       expect(call[0].create.agentKey).toBe(ROLE_BY_AGENT[id]);
-      expect(call[0].update.agentKey).toBe(ROLE_BY_AGENT[id]);
+      expect(call[0].update).toEqual({});
     }
   });
 
-  it('模板 Agent create 与 update 均绑定角色策略 policyId', async () => {
+  it('模板 Agent create 分支绑定角色策略 policyId（update 不覆盖存量绑定）', async () => {
     await main();
 
     const templateCalls = templateAgentCalls();
@@ -225,7 +226,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
       expect(call[0].create.policyId).toBe(POLICY_BY_AGENT[id]);
-      expect(call[0].update.policyId).toBe(POLICY_BY_AGENT[id]);
+      expect(call[0].update).toEqual({});
     }
   });
 
@@ -241,25 +242,23 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     expect(Math.max(...policyOrder)).toBeLessThan(Math.min(...agentOrder));
   });
 
-  it('已存在模板 Agent 时 update 分支仅同步出厂默认 prompt 与 policyId，不覆盖用户修改字段', async () => {
+  it('已存在模板 Agent/策略时重跑 seed：update 分支为空、不覆盖用户编辑（出厂值仅首次 create 落库）', async () => {
     await main();
 
     const templateCalls = templateAgentCalls();
     expect(templateCalls).toHaveLength(7);
     for (const call of templateCalls) {
-      // prompt 为平台出厂默认值，seed 随平台升级同步（16 篇 §8.4）；policyId 为角色策略绑定；
-      // agentKey 为模板固定绑定（= role）；其余字段不 touch
-      expect(Object.keys(call[0].update).sort()).toEqual([
-        'agentKey',
-        'policyId',
-        'prompt',
-      ]);
-      expect(typeof call[0].update.prompt).toBe('string');
-      expect(call[0].update.prompt.length).toBeGreaterThan(50);
-      expect(call[0].update).not.toHaveProperty('permissionScope');
-      expect(call[0].update).not.toHaveProperty('name');
-      expect(call[0].update).not.toHaveProperty('persona');
-      expect(call[0].update).not.toHaveProperty('defaultModelId');
+      // create-if-absent：存量行（prompt/policyId/agentKey 可能已被用户编辑）不被回滚；
+      // 出厂默认 prompt 随 create 分支落库，新装环境行为不变。
+      expect(Object.keys(call[0].update)).toEqual([]);
+      expect(typeof call[0].create.prompt).toBe('string');
+      expect((call[0].create.prompt as string).length).toBeGreaterThan(50);
+    }
+    // 策略 upsert 同样为空：用户编辑过的 config/description 在重跑后保留。
+    const policyCalls = mockPrisma.executionPolicy.upsert.mock.calls;
+    expect(policyCalls).toHaveLength(7);
+    for (const call of policyCalls) {
+      expect(Object.keys(call[0].update)).toEqual([]);
     }
   });
 
@@ -280,7 +279,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     expect(templateCalls).toHaveLength(7);
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
-      const prompt = call[0].update.prompt as string;
+      const prompt = call[0].create.prompt as string;
       for (const section of [
         '## 职责',
         '## 权限',
@@ -315,7 +314,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       (call) => String(call[0].where.id) === 'a_plan',
     );
     expect(planCall).toBeDefined();
-    const prompt = planCall![0].update.prompt as string;
+    const prompt = planCall![0].create.prompt as string;
     // 身份：团队计划专员，群内可见可@，agent 管理可见
     expect(prompt).toContain('计划专员');
     expect(prompt).toContain('@');
@@ -342,7 +341,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     expect(templateCalls).toHaveLength(7);
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
-      const prompt = call[0].update.prompt as string;
+      const prompt = call[0].create.prompt as string;
       // 新文案：单一来源 ROLE_BOUNDARIES，映射表由系统提示【职责边界】动态渲染
       expect(prompt).toContain(
         '越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）',
@@ -365,7 +364,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       const id = String(call[0].where.id);
       const agentName = AGENT_NAME_BY_POLICY[POLICY_BY_AGENT[id]];
       expect(agentName).toBeDefined();
-      const prompt = call[0].update.prompt as string;
+      const prompt = call[0].create.prompt as string;
       if (id === 'a_plan') {
         // 计划员：planToolLine 动态派生保留，仍可解析出 toolAllows 键集
         const line = prompt.match(/可用工具：([^。]+)。/);
@@ -402,7 +401,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     const templateCalls = templateAgentCalls();
     expect(templateCalls).toHaveLength(7);
     for (const call of templateCalls) {
-      const prompt = call[0].update.prompt as string;
+      const prompt = call[0].create.prompt as string;
       expect(prompt).toContain('团队协作规约');
       expect(prompt).toContain('docs/agent-platform/30-团队协作规约.md');
       expect(prompt).toContain('求助带三要素');
@@ -782,7 +781,7 @@ describe('seed（计划 skills + 评审子句）', () => {
     expect(templateCalls).toHaveLength(7);
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
-      const prompt = call[0].update.prompt as string;
+      const prompt = call[0].create.prompt as string;
       if (id === 'a_plan') {
         // 计划员无专属评审 skill：协同写明评审视角任务走各 plan-review-<role>、自己需要时加载对应 skill
         expect(prompt).toContain('plan-review-');
@@ -908,7 +907,7 @@ describe('seed（计划 skills + 评审子句）', () => {
     const allSkills = Object.values(REVIEW_SKILL_BY_AGENT);
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
-      const prompt = call[0].update.prompt as string;
+      const prompt = call[0].create.prompt as string;
       for (const skillName of allSkills) {
         if (skillName === REVIEW_SKILL_BY_AGENT[id]) continue;
         expect(prompt).not.toContain(`skill(${skillName})`);
@@ -958,7 +957,7 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
     for (const call of mockPrisma.agent.upsert.mock.calls.filter((c) =>
       String(c[0].where.id).startsWith('a_'),
     )) {
-      m.set(String(call[0].where.id), call[0].update.prompt as string);
+      m.set(String(call[0].where.id), call[0].create.prompt as string);
     }
     return m;
   };
