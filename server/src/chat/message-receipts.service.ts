@@ -1,8 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { EVENT_TYPES } from '../common/constants/event.constants';
 import { CHANNEL_TYPE } from '../common/constants/event.constants';
+import { IdGeneratorService } from '../common/id-generator';
+import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+
+/** 回执主键前缀（mr_；resyncIdPrefix 续号用，防重启后主键冲突）。 */
+const MESSAGE_RECEIPT_ID_PREFIX = 'mr';
 
 export interface ReceiptEventPayload {
   receiptId: string;
@@ -53,13 +58,29 @@ export interface PendingReceiptCounts {
  * 订阅者清单见 realtime/realtime-subscriptions.ts。
  */
 @Injectable()
-export class MessageReceiptsService {
+export class MessageReceiptsService implements OnModuleInit {
   private readonly logger = new Logger(MessageReceiptsService.name);
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimeService,
+    private readonly idGen: IdGeneratorService,
   ) {}
+
+  /**
+   * 进程启动：按库内 mr_ 前缀纯数字序号最大值对齐 id 生成器。
+   *
+   * 缺此 resync 时重启后计数器归零 → nextId('mr') 撞既有主键 P2002，
+   * 而 `scheduleReceiptNudge` 的 P2002 分支按「dedupKey 冲突」回查会落空，
+   * 最终静默跳过排期（催办消失）。与 t/m/s/pl 等前缀同款防冲突对齐。
+   */
+  async onModuleInit(): Promise<void> {
+    await resyncIdPrefix(
+      this.prisma.messageReceipt,
+      MESSAGE_RECEIPT_ID_PREFIX,
+      this.idGen,
+    );
+  }
 
   /**
    * 清账：pending→acked（幂等：非 pending 直接返回，不写库不广播），

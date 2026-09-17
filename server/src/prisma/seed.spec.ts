@@ -929,6 +929,10 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
     '被催先报：成员追问“怎么样了”时，先汇报在途状态（已派发给谁/回执 n/N/缺席者名单），绝不盲目发起新派发；无新事实不产生新派发。';
   const PM_NUDGE_CITE =
     '催办引原文：催办消息必须引用原派发 messageId 并注明第几次催办；无原 messageId 的催办不得发出。';
+  // 2026-09-16 消息风暴治理三铁律（群聊去重 / 去啰嗦 / 唤醒显式化）。
+  const PM_NO_REDUNDANT_RELAY = '已通知不重发：';
+  const PM_INCREMENT_ONLY = '只发增量：';
+  const PM_WAKE_VIA_NOTIFY = '唤醒即派发：';
   const RECEIPT_AT =
     '回执必@派发人：任务回执消息必须 @ 派发人定向发送，禁止只发群聊消息充当回执；无 @ 的回执视为未送达。';
   const PLAN_NO_EARLY_REVISE =
@@ -985,6 +989,22 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
     expect(pm).toContain('DB plans.status');
     expect(pm).toContain('不要 @计划员-1 去改文件');
   });
+
+  it('PM 消息风暴治理三铁律齐全（已通知不重发/只发增量/唤醒即派发），且不泄漏到其他角色', async () => {
+    const prompts = await promptsById();
+    const pm = prompts.get('a_project_manager')!;
+    expect(pm).toContain(PM_NO_REDUNDANT_RELAY);
+    expect(pm).toContain(PM_INCREMENT_ONLY);
+    expect(pm).toContain(PM_WAKE_VIA_NOTIFY);
+    // 仅 PM 承担流程控制，三句不得出现在其他角色提示词（防误扩散）
+    for (const id of ['a_architect', 'a_developer', 'a_tester', 'a_product']) {
+      const other = prompts.get(id)!;
+      expect(other).not.toContain(PM_NO_REDUNDANT_RELAY);
+      expect(other).not.toContain(PM_INCREMENT_ONLY);
+      expect(other).not.toContain(PM_WAKE_VIA_NOTIFY);
+    }
+  });
+
   it('成员回执铁律：四角色 prompt 含回执必@派发人句，知识管理员不含', async () => {
     const prompts = await promptsById();
     for (const id of MEMBER_IDS) {

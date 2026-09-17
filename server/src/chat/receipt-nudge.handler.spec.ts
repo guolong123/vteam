@@ -3,7 +3,7 @@ import { EVENT_TYPES } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { TimerService } from '../timers/timer.service';
+import { TimerService } from '../timers/trigger.service';
 import { MessageReceiptsService } from './message-receipts.service';
 import {
   buildAutoNudgeText,
@@ -17,9 +17,9 @@ import {
 } from './receipt-nudge.handler';
 import { WorkerDispatcher } from './worker-dispatcher';
 
-describe('normalizeReceiptTimeoutMin（缺省 10，夹取 [1,1440]，非法回缺省永不抛）', () => {
+describe('normalizeReceiptTimeoutMin（缺省 30，夹取 [1,1440]，非法回缺省永不抛）', () => {
   it.each([[undefined], [null], [NaN], ['abc'], [{}], [Infinity]])(
-    '非法输入 %p → 缺省 10',
+    '非法输入 %p → 缺省 30',
     (input: unknown) => {
       expect(normalizeReceiptTimeoutMin(input)).toBe(
         RECEIPT_TIMEOUT_DEFAULT_MIN,
@@ -28,7 +28,7 @@ describe('normalizeReceiptTimeoutMin（缺省 10，夹取 [1,1440]，非法回�
   );
 
   it.each([[0], [-1], [-100]])(
-    '非正数 %p → 缺省 10（非夹到 1）',
+    '非正数 %p → 缺省 30（非夹到 1）',
     (n: number) => {
       expect(normalizeReceiptTimeoutMin(n)).toBe(RECEIPT_TIMEOUT_DEFAULT_MIN);
     },
@@ -57,7 +57,13 @@ describe('normalizeReceiptTimeoutMin（缺省 10，夹取 [1,1440]，非法回�
 describe('ReceiptNudgeHandler（平台回执自动催办，chat 域注册）', () => {
   let handler: ReceiptNudgeHandler;
   let prisma: {
-    messageReceipt: { findUnique: jest.Mock; update: jest.Mock };
+    messageReceipt: {
+      findUnique: jest.Mock;
+      findFirst: jest.Mock;
+      // MessageReceiptsService.onModuleInit 的 mr_ 前缀续号扫描
+      findMany: jest.Mock;
+      update: jest.Mock;
+    };
     chatChannel: { findFirst: jest.Mock };
   };
   let timers: { registerHandler: jest.Mock };
@@ -80,7 +86,14 @@ describe('ReceiptNudgeHandler（平台回执自动催办，chat 域注册）', (
 
   beforeEach(async () => {
     prisma = {
-      messageReceipt: { findUnique: jest.fn(), update: jest.fn() },
+      messageReceipt: {
+        findUnique: jest.fn(),
+        // 缺省：无冷却命中、无同消息催办记录（两条防线均放行）
+        findFirst: jest.fn().mockResolvedValue(null),
+        // 缺省：无既有 mr_ 行（续号扫描空结果）
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn(),
+      },
       chatChannel: { findFirst: jest.fn() },
     };
     registeredKind = null;
@@ -229,7 +242,7 @@ describe('ReceiptNudgeHandler（平台回执自动催办，chat 域注册）', (
       receiptId: 'mr_1',
       messageId: 'm_1',
       status: 'expired',
-      notice: '【自动催办】已自动催办1次仍无回执，请升级处理',
+      notice: '【自动催办】tmm_pm → 开发者：已自动催办1次仍无回执，请升级处理',
     });
   });
 
@@ -252,6 +265,81 @@ describe('ReceiptNudgeHandler（平台回执自动催办，chat 域注册）', (
     warnSpy.mockRestore();
   });
 
+  describe('催办去重（按人冷却 + 同消息幂等）', () => {
+    const pendingRow = () => ({
+      id: 'mr_1',
+      messageId: 'm_1',
+      taskId: 't_1',
+      teamId: 'tm_1',
+      fromInstanceId: 'tmm_pm',
+      toInstanceId: 'tmm_dev',
+      status: 'pending',
+      nudgeCount: 0,
+      createdAt: new Date(),
+    });
+
+    it('同被指派人冷却期内已催过 → 跳过（防连环 call）', async () => {
+      prisma.messageReceipt.findUnique.mockResolvedValue(pendingRow());
+      prisma.messageReceipt.findFirst.mockImplementation(
+        ({ where }: { where: Record<string, unknown> }) =>
+          Promise.resolve(
+            where.toInstanceId || where.lastNudgedAt ? { id: 'mr_9' } : null,
+          ),
+      );
+
+      await handler.handle({
+        id: 'tmr_a',
+        kind: RECEIPT_NUDGE_KIND,
+        payload: { ...payload },
+      });
+
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      expect(prisma.messageReceipt.update).not.toHaveBeenCalled();
+    });
+
+    it('冷却窗口外 → 允许新催办（不永久静音）', async () => {
+      prisma.messageReceipt.findUnique.mockResolvedValue(pendingRow());
+      prisma.messageReceipt.findFirst.mockResolvedValue(null);
+
+      await handler.handle({
+        id: 'tmr_b',
+        kind: RECEIPT_NUDGE_KIND,
+        payload: { ...payload },
+      });
+
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
+    });
+
+    it('同 messageId 已被兄弟回执行催办过 → 跳过（同消息永不再推）', async () => {
+      prisma.messageReceipt.findUnique.mockResolvedValue(pendingRow());
+      prisma.messageReceipt.findFirst.mockImplementation(
+        ({ where }: { where: { messageId?: string } }) =>
+          Promise.resolve(where.messageId ? { id: 'mr_sibling' } : null),
+      );
+
+      await handler.handle({
+        id: 'tmr_c',
+        kind: RECEIPT_NUDGE_KIND,
+        payload: { ...payload },
+      });
+
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+
+    it('冷却查询失败 → fail-open（不阻断正常催办）', async () => {
+      prisma.messageReceipt.findUnique.mockResolvedValue(pendingRow());
+      prisma.messageReceipt.findFirst.mockRejectedValue(new Error('db down'));
+
+      await handler.handle({
+        id: 'tmr_d',
+        kind: RECEIPT_NUDGE_KIND,
+        payload: { ...payload },
+      });
+
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('recordAutoNudge 走 receipts-service 模式（increment + lastNudgedAt）', async () => {
     prisma.messageReceipt.update.mockImplementation(
       ({ data }: { data: unknown }) =>
@@ -269,17 +357,22 @@ describe('ReceiptNudgeHandler（平台回执自动催办，chat 域注册）', (
     });
   });
 
-  it('催办文案/升级文案引用 messageId 与次数（平台断言时长，agent 永不自断言）', () => {
-    expect(
-      buildAutoNudgeText({
-        messageId: 'm_42',
-        receiptId: 'mr_7',
-        attempt: 1,
-        elapsedMin: 10,
-      }),
-    ).toContain('m_42');
+  it('催办文案/升级文案引用 messageId、次数与来源→目标（平台断言时长，agent 永不自断言）', () => {
+    const text = buildAutoNudgeText({
+      messageId: 'm_42',
+      receiptId: 'mr_7',
+      attempt: 1,
+      elapsedMin: 10,
+      fromLabel: '项目经理-1',
+      toLabel: '开发者-1',
+    });
+    expect(text).toContain('m_42');
+    expect(text).toContain('项目经理-1 → 开发者-1');
     expect(buildEscalationNotice(1)).toBe(
       '【自动催办】已自动催办1次仍无回执，请升级处理',
+    );
+    expect(buildEscalationNotice(1, '项目经理-1', '开发者-1')).toBe(
+      '【自动催办】项目经理-1 → 开发者-1：已自动催办1次仍无回执，请升级处理',
     );
   });
 });

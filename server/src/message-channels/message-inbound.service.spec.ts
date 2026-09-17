@@ -5,10 +5,7 @@ import { MessageDeliveryService } from './message-delivery.service';
 import { ChatService } from '../chat/chat.service';
 import { QuestionsService } from '../questions/questions.service';
 import { MessageRegistryService } from './message-registry.service';
-import {
-  SENDER_TYPE,
-  CHANNEL_TYPE,
-} from '../common/constants/event.constants';
+import { SENDER_TYPE, CHANNEL_TYPE } from '../common/constants/event.constants';
 import { QUESTION_PENDING_TTL_MS } from '../questions/questions.constants';
 
 describe('MessageInboundService', () => {
@@ -204,22 +201,32 @@ describe('MessageInboundService', () => {
         { teamId: 'tm_1' },
         { teamId: 'tm_2' },
       ]);
-      prisma.chatChannel.findFirst.mockImplementation(async ({ where }: any) => {
-        if (where?.teamId === 'tm_1')
-          return { id: 'c_1', type: 'team_group', teamId: 'tm_1' };
-        if (where?.teamId === 'tm_2')
-          return { id: 'c_2', type: 'team_group', teamId: 'tm_2' };
-        return null;
-      });
+      prisma.chatChannel.findFirst.mockImplementation(
+        async ({ where }: any) => {
+          if (where?.teamId === 'tm_1')
+            return { id: 'c_1', type: 'team_group', teamId: 'tm_1' };
+          if (where?.teamId === 'tm_2')
+            return { id: 'c_2', type: 'team_group', teamId: 'tm_2' };
+          return null;
+        },
+      );
 
       const res = await service.submitInbound(channelId, [
         { kind: 'post_message', text: 'hi', dedupKey: 'k1' } as any,
       ]);
       expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
-        where: { teamId: 'tm_1', type: CHANNEL_TYPE.team_group, deletedAt: null },
+        where: {
+          teamId: 'tm_1',
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
       });
       expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
-        where: { teamId: 'tm_2', type: CHANNEL_TYPE.team_group, deletedAt: null },
+        where: {
+          teamId: 'tm_2',
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
       });
       expect(delivery.tryBeginIngest).toHaveBeenCalledWith(
         channelId,

@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { REQUIRE_PERMISSION_KEY } from '../common/decorators/require-permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { IdGeneratorService } from '../common/id-generator';
 import { RealtimeService } from '../realtime/realtime.service';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
@@ -147,6 +148,10 @@ describe('MessageReceiptsService.listReceipts（task 13 查询实现）', () => 
         MessageReceiptsService,
         { provide: PrismaService, useValue: prisma },
         { provide: RealtimeService, useValue: { broadcast: jest.fn() } },
+        {
+          provide: IdGeneratorService,
+          useValue: { nextId: jest.fn(), seed: jest.fn() },
+        },
       ],
     }).compile();
 

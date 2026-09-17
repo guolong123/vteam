@@ -6,7 +6,7 @@ import {
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { TimerService } from '../timers/timer.service';
+import { TimerService } from '../timers/trigger.service';
 import { WorkerDispatcher } from '../chat/worker-dispatcher';
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import { WorkerClient } from '../workers/worker.client';
@@ -145,7 +145,7 @@ describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudg
     loggerWarnSpy.mockRestore();
   });
 
-  it('缺省超时 10 分钟：记账 expiresAt≈now+10min + timer kind/fireAt/dedupKey/payload', async () => {
+  it('缺省超时 30 分钟：记账 expiresAt≈now+30min + timer kind/fireAt/dedupKey/payload', async () => {
     const before = Date.now();
 
     const result = await service.notifyAgent(ctx, baseArgs);
@@ -168,10 +168,10 @@ describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudg
       expiresAt: Date;
     };
     expect(created.expiresAt.getTime()).toBeGreaterThanOrEqual(
-      before + 10 * 60 * 1000,
+      before + 30 * 60 * 1000,
     );
     expect(created.expiresAt.getTime()).toBeLessThanOrEqual(
-      after + 10 * 60 * 1000,
+      after + 30 * 60 * 1000,
     );
     expect(timers.schedule).toHaveBeenCalledTimes(1);
     const [kind, fireAt, payload, dedupKey] = timers.schedule.mock.calls[0] as [
@@ -228,7 +228,7 @@ describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudg
   });
 
   it.each([[0], [-5], [NaN]])(
-    '非法输入 %p → 回落缺省 10 分钟（永不抛）',
+    '非法输入 %p → 回落缺省 30 分钟（永不抛）',
     async (bad: number) => {
       const before = Date.now();
 
@@ -243,10 +243,10 @@ describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudg
         expiresAt: Date;
       };
       expect(created.expiresAt.getTime()).toBeGreaterThanOrEqual(
-        before + 10 * 60 * 1000,
+        before + 30 * 60 * 1000,
       );
       expect(created.expiresAt.getTime()).toBeLessThanOrEqual(
-        after + 10 * 60 * 1000,
+        after + 30 * 60 * 1000,
       );
     },
   );
@@ -298,7 +298,11 @@ describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudg
 
   it('记账 P2002 去重命中 pending 行 → 复用既有 receipt 排期（fireAt 取既有 expiresAt）', async () => {
     const existingExpires = new Date(Date.now() + 5 * 60 * 1000);
-    prisma.messageReceipt.create.mockRejectedValue({ code: 'P2002' });
+    prisma.messageReceipt.create.mockRejectedValue({
+      code: 'P2002',
+      // 实测形态：MySQL 下 Prisma 的 meta.target 为字符串约束名
+      meta: { target: 'message_receipts_dedup_key_key' },
+    });
     prisma.messageReceipt.findFirst.mockResolvedValue({
       id: 'mr_exist',
       status: 'pending',
