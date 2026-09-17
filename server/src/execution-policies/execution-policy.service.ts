@@ -240,11 +240,7 @@ export function resolveTaskEffect(
   name: string,
   storedTask?: unknown,
 ): 'allow' | 'ask' | 'deny' {
-  if (
-    storedTask === 'allow' ||
-    storedTask === 'ask' ||
-    storedTask === 'deny'
-  ) {
+  if (storedTask === 'allow' || storedTask === 'ask' || storedTask === 'deny') {
     return storedTask;
   }
   return name === 'vteam-plan' ? 'allow' : 'deny';
@@ -564,7 +560,9 @@ export class ExecutionPolicyService implements OnModuleInit {
   }): Promise<ResolvedExecutionPolicy | null> {
     const policyId = this.policyKeyOf(agent);
     const policy = policyId
-      ? await this.prisma.executionPolicy.findUnique({ where: { id: policyId } })
+      ? await this.prisma.executionPolicy.findUnique({
+          where: { id: policyId },
+        })
       : null;
     return this.resolveAgentWithFallback(agent, policy, policyId);
   }
@@ -650,7 +648,10 @@ export class ExecutionPolicyService implements OnModuleInit {
       policyId: policy.id,
       policyName: policy.name,
       agentName,
-      permission: config.permission as Record<string, unknown>,
+      permission: canonicalizePermission(
+        config.permission as Record<string, unknown>,
+        agentName,
+      ),
       tools: guard.tools,
       bashDeny: guard.bashDeny,
       correction: config.correction as Record<string, unknown>,
@@ -760,6 +761,10 @@ export class ExecutionPolicyService implements OnModuleInit {
         const correction = isPlainObject(config?.correction)
           ? (config.correction as Record<string, unknown>)
           : {};
+        const permission = canonicalizePermission(
+          config.permission as Record<string, unknown>,
+          name,
+        );
         agents.push({
           name,
           description:
@@ -768,10 +773,10 @@ export class ExecutionPolicyService implements OnModuleInit {
               ? policy.description
               : custom.name,
           mode: deriveAgentMode(name),
-          permission: config.permission as Record<string, unknown>,
+          permission,
         });
         roles[name] = {
-          permission: config.permission as Record<string, unknown>,
+          permission,
           tools: guard.tools,
           bashDeny: guard.bashDeny,
           correction,
@@ -787,6 +792,11 @@ export class ExecutionPolicyService implements OnModuleInit {
    *（两者均为非数组对象；旧 `{ permissions, writePaths }` 在此被拒绝）。
    * `tools` 可选：缺失合法；显式传入时须为非数组对象（三态矩阵由
    * `guardForAgent` 防御式过滤，非法条目丢弃）。
+   *
+   * 写路径防御（BLOCKER-2）：`permission.write` 在此**就地剥离**（与内置角色
+   * `canonicalizePermission` 的发射前 `delete write` 同策略），使该非法键不落库、
+   * 也不会经自定义策略路径直通 `/agent-policies`——worker 对 `permission.write`
+   * 是抛错并整体中性化 guard，单条坏 PATCH 不得废掉全角色 guard。
    */
   private assertValidConfig(config: unknown): void {
     const cfg = config as {
@@ -805,6 +815,7 @@ export class ExecutionPolicyService implements OnModuleInit {
         message: 'config 非法：permission/correction 均须为对象',
       });
     }
+    delete (cfg.permission as Record<string, unknown>).write;
   }
 
   private policyKeyOf(agent: {

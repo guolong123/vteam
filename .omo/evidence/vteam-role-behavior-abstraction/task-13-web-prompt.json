@@ -1,0 +1,109 @@
+{
+  "_meta": {
+    "kind": "task-13-web-prompt",
+    "plan": "vteam-role-behavior-abstraction",
+    "todo": "[web] Unlock the template prompt editor",
+    "date": "2026-09-17T16:52:00Z",
+    "livePlaywrightQA": "RUN",
+    "stack": {
+      "web": "local `next dev` on http://localhost:3001 (API_PROXY_TARGET=http://localhost:13000)",
+      "server": "docker compose aiagents-compose-server on :13000 (post-Todo-8 build, PATCH /agents/:id permitted)",
+      "browser": "Playwright MCP (system Chrome), logged in as seed-admin",
+      "agentUnderTest": "a_product (type=template, role=product, agentKey=product)"
+    },
+    "screenshot": ".omo/evidence/vteam-role-behavior-abstraction/task-13-web-prompt.png"
+  },
+  "assertions": {
+    "A1_textarea_not_readonly": {
+      "pass": true,
+      "how": "page.getByTestId('prompt-editor').getAttribute('readonly')",
+      "expected": null,
+      "actual": null,
+      "note": "was `\"\"` (forced) before the change because readOnly={isTemplate} pinned it true"
+    },
+    "A2_textarea_is_editable": {
+      "pass": true,
+      "how": "locator.isEditable()",
+      "actual": true
+    },
+    "A3_misleading_readonly_badge_gone": {
+      "pass": true,
+      "how": "locator('[data-testid=\"agent-readonly-badge\"]').count() / getByText('只读', {exact:true}).count()",
+      "badgeCount": 0,
+      "exactOnlyReadTextCount": 0,
+      "typeBadgeStillPresent": "\"模板\" badge count = 1 (type identity kept, only the lock claim removed)"
+    },
+    "A4_typing_changes_draft": {
+      "pass": true,
+      "beforeLen": 1732,
+      "afterTypeLen": 1800,
+      "delta": 68,
+      "typedEditOk": true
+    },
+    "A5_save_returns_200": {
+      "pass": true,
+      "how": "waitForResponse PATCH /api/v1/agents/a_product on save-agent-button click",
+      "patchStatus": 200,
+      "bodyType": "template",
+      "saveErrorVisible": false
+    },
+    "A6_persists_after_reload": {
+      "pass": true,
+      "reload": "page.reload() then re-read prompt-editor",
+      "afterReloadLen": 1798,
+      "containsProbe": true
+    },
+    "A7_persists_via_API": {
+      "pass": true,
+      "how": "in-page fetch GET /api/v1/agents/a_product with the session token",
+      "status": 200,
+      "hasProbe": true,
+      "len": 1798
+    },
+    "A8_console_clean": {
+      "pass": true,
+      "consoleErrorEntries": 0,
+      "pageErrors": 0,
+      "note": "full Playwright MCP session log 39 lines: 32 LOG + 4 INFO + 3 VERBOSE + 3 DOM-verbose; zero ERROR/WARNING"
+    },
+    "A9_no_failed_mutation_responses": {
+      "pass": true,
+      "nonGetAgentsResponsesWithStatusGte400": []
+    },
+    "A10_existing_pages_e2e_agent_config": {
+      "pass": true,
+      "command": "cd web && npx playwright test e2e/pages.spec.ts -g \"agent-config\" --project=pages --reporter=list",
+      "result": "2 passed (setup + 5/17 agent-config /agents)"
+    },
+    "A11_full_pages_project": {
+      "pass": "partial",
+      "command": "cd web && npx playwright test --project=pages --reporter=list",
+      "result": "15 passed, 2 failed",
+      "failed": [
+        "team-session zero-task 零任务直聊（无选择器）",
+        "12/17 skills-tools-manage /skills（双 Tab + 工具三子 Tab）"
+      ],
+      "attribution": "PRE-EXISTING / unrelated: both reproduce identically against the compose web container on :13001 (pre-change image, no task-13 code) via a temp baseURL config; shared-env data drift (team fixture/skills testids), not this change. Neither test touches /agents."
+    }
+  },
+  "cleanup": {
+    "livePromptRestored": true,
+    "restoredLen": 1732,
+    "restoredSha256": "d29275d5715fb981a19908599fd76472d6465d7738f0151811b6c239e4f550f1",
+    "goldenFile": ".omo/evidence/vteam-role-behavior-abstraction/task-13-golden-prompt.json",
+    "note": "the QA probe was removed and the pre-QA seed prompt re-PATCHed; live hash equals the golden hash captured before any write"
+  },
+  "changedFiles": [
+    "web/app/(main)/agents/page.tsx",
+    "web/e2e/reference/testids.ts"
+  ],
+  "typecheck": {
+    "command": "cd web && npx tsc --noEmit",
+    "exit": 0
+  },
+  "lint": {
+    "command": "cd web && npx eslint \"app/(main)/agents/page.tsx\" e2e/reference/testids.ts",
+    "exit": 0,
+    "warning": "pre-existing 'deleting' is defined but never used (ConfigPanel, untouched)"
+  }
+}

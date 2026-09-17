@@ -1,0 +1,57 @@
+{
+  "_meta": {
+    "kind": "task-11-boundary",
+    "plan": "vteam-role-behavior-abstraction",
+    "proves": "boundary section sourced from resolved policy correction; factory output byte-identical; custom agent correction now renders"
+  },
+  "allPass": true,
+  "checks": {
+    "builtin_factory_correction_byte_identical": {
+      "pass": true,
+      "perName": {
+        "vteam-plan": true,
+        "vteam-product": true,
+        "vteam-architect": true,
+        "vteam-developer": true,
+        "vteam-tester": true,
+        "vteam-project_manager": true,
+        "vteam-librarian": true
+      }
+    },
+    "builtin_db_reordered_correction_byte_identical": {
+      "pass": true,
+      "perName": {
+        "vteam-plan": true,
+        "vteam-product": true,
+        "vteam-architect": true,
+        "vteam-developer": true,
+        "vteam-tester": true,
+        "vteam-project_manager": true,
+        "vteam-librarian": true
+      }
+    },
+    "custom_agent_correction_nonempty": {
+      "pass": true,
+      "customCorrection": {
+        "scopeSummary": "自定义职责：只读检索并给出出处，不执行变更。",
+        "handoff": {
+          "review": "vteam-tester",
+          "process": "vteam-project_manager"
+        },
+        "denyTemplate": "【越界拦截｜角色：{role}】"
+      },
+      "customSection": "【职责边界】自定义职责：只读检索并给出出处，不执行变更。\n越界处理：超出上述职责范围的请求必须拒绝（不要执行），说明你的职责边界，并通过 vteam_notify_agent 或群聊 @ 转交对应角色（process→vteam-project_manager、review→vteam-tester）。"
+    },
+    "known_role_missing_policy_falls_back_to_constant": {
+      "pass": true,
+      "fallbackSection": "【职责边界】需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。\n越界处理：超出上述职责范围的请求必须拒绝（不要执行），说明你的职责边界，并通过 vteam_notify_agent 或群聊 @ 转交对应角色（design→vteam-architect、code→vteam-developer、test→vteam-tester、process→vteam-project_manager）。"
+    },
+    "unknown_role_no_correction_returns_empty": {
+      "pass": true,
+      "unknownResolved": null
+    },
+    "empty_correction_renders_empty": {
+      "pass": true
+    }
+  }
+}

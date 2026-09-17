@@ -1,0 +1,17 @@
+roles.tools.vteam_group_post[vteam-product] = 'deny' (want 'deny'): OK
+roles.tools.vteam_memory_search[vteam-product] = 'ask' (want 'ask'): OK
+roles.tools.vteam_hook_cancel[vteam-product] = 'deny' (want 'deny'): OK
+roles.permission.bash[vteam-product] = 'deny' (want 'deny'): OK
+opencode.agent[vteam-product].permission.bash = 'deny' (want 'deny'): OK
+roles[vteam-plan] vs baseline: IDENTICAL
+opencode.agent[vteam-plan] permission vs baseline: IDENTICAL
+roles[vteam-architect] vs baseline: IDENTICAL
+opencode.agent[vteam-architect] permission vs baseline: IDENTICAL
+roles[vteam-developer] vs baseline: IDENTICAL
+opencode.agent[vteam-developer] permission vs baseline: IDENTICAL
+roles[vteam-tester] vs baseline: IDENTICAL
+opencode.agent[vteam-tester] permission vs baseline: IDENTICAL
+roles[vteam-project_manager] vs baseline: IDENTICAL
+opencode.agent[vteam-project_manager] permission vs baseline: IDENTICAL
+roles[vteam-librarian] vs baseline: IDENTICAL
+opencode.agent[vteam-librarian] permission vs baseline: IDENTICAL

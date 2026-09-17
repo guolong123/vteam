@@ -1,0 +1,121 @@
+{
+  "_meta": {
+    "task": "task-4-guard",
+    "plan": "vteam-role-behavior-abstraction",
+    "kind": "builtin-guard-config-provenance",
+    "proof": "guardForAgent() no longer short-circuits on built-in names: (a) a built-in whose bound config.tools equals the constant allowlist emits output byte-identical to before-agent-policies.json; (b) an absent/all-illegal/non-object config.tools falls back to the constant allowlist, never {}; (c) a differing config.tools (one tool flipped to deny) reaches resolveByAgent().tools AND buildAgentPolicies().guard.roles[].tools; (d) config.bashDeny reaches the guard and falls back to ROLE_BASH_DENY_PATTERNS when absent.",
+    "baseline": "before-agent-policies.json (captured at HEAD f0b1924, sha256 793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a)",
+    "note": "No DB connection opened; prisma lookups are stubbed in-process."
+  },
+  "allPass": true,
+  "checks": {
+    "factory_config_equals_baseline": {
+      "pass": true,
+      "emitted_equals_baseline": true,
+      "all_tools_equal_constant_allowlist": true,
+      "agent_order": [
+        "vteam-plan",
+        "vteam-product",
+        "vteam-architect",
+        "vteam-developer",
+        "vteam-tester",
+        "vteam-project_manager",
+        "vteam-librarian"
+      ]
+    },
+    "config_tools_missing_falls_back_to_constant_never_empty": {
+      "pass": true,
+      "cases": [
+        {
+          "name": "vteam-product",
+          "case": "absent",
+          "tool_count": 22,
+          "equals_constant_allowlist": true
+        },
+        {
+          "name": "vteam-product",
+          "case": "all-illegal",
+          "tool_count": 22,
+          "equals_constant_allowlist": true
+        },
+        {
+          "name": "vteam-product",
+          "case": "non-object-array",
+          "tool_count": 22,
+          "equals_constant_allowlist": true
+        },
+        {
+          "name": "vteam-product",
+          "case": "non-object-string",
+          "tool_count": 22,
+          "equals_constant_allowlist": true
+        },
+        {
+          "name": "vteam-tester",
+          "case": "absent",
+          "tool_count": 25,
+          "equals_constant_allowlist": true
+        },
+        {
+          "name": "vteam-tester",
+          "case": "all-illegal",
+          "tool_count": 25,
+          "equals_constant_allowlist": true
+        },
+        {
+          "name": "vteam-tester",
+          "case": "non-object-array",
+          "tool_count": 25,
+          "equals_constant_allowlist": true
+        },
+        {
+          "name": "vteam-tester",
+          "case": "non-object-string",
+          "tool_count": 25,
+          "equals_constant_allowlist": true
+        },
+        {
+          "name": "vteam-librarian",
+          "case": "absent",
+          "tool_count": 16,
+          "equals_constant_allowlist": true
+        },
+        {
+          "name": "vteam-librarian",
+          "case": "all-illegal",
+          "tool_count": 16,
+          "equals_constant_allowlist": true
+        },
+        {
+          "name": "vteam-librarian",
+          "case": "non-object-array",
+          "tool_count": 16,
+          "equals_constant_allowlist": true
+        },
+        {
+          "name": "vteam-librarian",
+          "case": "non-object-string",
+          "tool_count": 16,
+          "equals_constant_allowlist": true
+        }
+      ]
+    },
+    "differing_config_tools_reach_resolveByAgent": {
+      "pass": true,
+      "flipped_tool": "vteam_submit_artifact",
+      "constant_value": "allow",
+      "resolveByAgent_value": "deny",
+      "buildAgentPolicies_value": "deny",
+      "differing_db_tools_win": true
+    },
+    "config_bashDeny_reaches_guard_and_falls_back": {
+      "pass": true,
+      "differing_bashDeny": [
+        "rm -rf /",
+        "dd if="
+      ],
+      "absent_falls_back_to_constant": [],
+      "constant_patterns": []
+    }
+  }
+}

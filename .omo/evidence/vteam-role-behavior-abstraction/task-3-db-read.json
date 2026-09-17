@@ -1,0 +1,85 @@
+{
+  "_meta": {
+    "task": "task-3-db-read",
+    "plan": "vteam-role-behavior-abstraction",
+    "kind": "db-read-builtin-provenance",
+    "proof": "buildAgentPolicies() batch-reads the bound ep_<role> rows (single findMany) and resolves each built-in via resolveBuiltinPolicy; factory rows reproduce before-agent-policies.json byte-for-byte, shuffled row order does not change emission order, missing/partial rows fall back to constants without throwing, and a differing DB value wins.",
+    "baseline": "before-agent-policies.json (captured at HEAD f0b1924)",
+    "note": "No DB connection opened; prisma.executionPolicy.findMany is stubbed in-process."
+  },
+  "allPass": true,
+  "checks": {
+    "factory_rows_equals_baseline": {
+      "pass": true,
+      "emitted_equals_baseline": true,
+      "agent_order": [
+        "vteam-plan",
+        "vteam-product",
+        "vteam-architect",
+        "vteam-developer",
+        "vteam-tester",
+        "vteam-project_manager",
+        "vteam-librarian"
+      ],
+      "guard_role_order": [
+        "vteam-plan",
+        "vteam-product",
+        "vteam-architect",
+        "vteam-developer",
+        "vteam-tester",
+        "vteam-project_manager",
+        "vteam-librarian"
+      ],
+      "guard_enabled": true
+    },
+    "single_batch_findmany": {
+      "pass": true,
+      "findMany_calls": 1,
+      "requested_ids": [
+        "ep_plan",
+        "ep_product",
+        "ep_architect",
+        "ep_developer",
+        "ep_tester",
+        "ep_project_manager",
+        "ep_librarian"
+      ]
+    },
+    "shuffled_rows_keep_constant_order": {
+      "pass": true,
+      "emitted_equals_baseline": true,
+      "agent_order": [
+        "vteam-plan",
+        "vteam-product",
+        "vteam-architect",
+        "vteam-developer",
+        "vteam-tester",
+        "vteam-project_manager",
+        "vteam-librarian"
+      ]
+    },
+    "missing_rows_constant_fallback_no_throw": {
+      "pass": true,
+      "threw": null,
+      "emitted_equals_baseline": true,
+      "agents_emitted": 7
+    },
+    "partial_row_tools_falls_back_non_empty": {
+      "pass": true,
+      "threw": null,
+      "tool_count": 25,
+      "equals_constant_tool_allows": true
+    },
+    "db_value_wins_over_constant": {
+      "pass": true,
+      "emitted_tools": {
+        "vteam_group_post": "deny",
+        "vteam_memory_search": "ask"
+      },
+      "db_tools": {
+        "vteam_group_post": "deny",
+        "vteam_memory_search": "ask"
+      }
+    }
+  }
+}

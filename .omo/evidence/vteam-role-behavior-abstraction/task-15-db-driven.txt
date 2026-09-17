@@ -1,0 +1,198 @@
+================================================================================
+Task 15 — [proof] DB-driven policy test + end-to-end verification
+Plan: vteam-role-behavior-abstraction
+Date: 2026-09-18 (CST)  |  HEAD: eaf3a4178f93beec579cad174283c75a625db1c5
+================================================================================
+
+LIVE E2E: **RUN — PASSED** (scenario f + new scenario f2, exit 0)
+--------------------------------------------------------------------------------
+The live compose stack (server :13000, worker, MySQL, opencode serve) was
+available. The worker work dir is a docker volume (/data/vteam-worker), so both
+the injected artifacts and the container-side poll needed docker compose.
+Server container image was pre-implementation (PATCH template -> 403), so the
+current compiled server artifact was deployed into it for the run:
+
+    docker cp server/dist/. aiagents-compose-server:/app/dist/
+    docker restart aiagents-compose-server      # healthy in 4s
+
+That is the same compiled JS a rebuilt image would carry (both produced from
+this tree by `npx tsc -p tsconfig.build.json`); the only difference is the
+baked image layer. Worker is untouched by this plan and its dist hash equals the
+local build, so its real startup injector ran unmodified.
+
+Command (operator runbook, repo root):
+
+    SERVER_URL=http://localhost:13000 \
+    X_WORKER_TOKEN=compose-worker-token \
+    WORK_DIR=/data/vteam-worker \
+    WORKER_WORK_DIR=/data/vteam-worker \
+    INJECTED_OPENCODE_JSON=/tmp/host-injected-opencode.json \
+    SCENARIOS=f \
+    EVIDENCE_DIR=$PWD/.omo/evidence/vteam-role-behavior-abstraction \
+    RESTART_TIMEOUT_SEC=240 \
+    bash scripts/e2e-role-boundaries.sh
+
+  (INJECTED_OPENCODE_JSON needs a host-side copy of the worker volume file:
+   `docker compose cp worker:/data/vteam-worker/opencode.json /tmp/host-injected-opencode.json`)
+
+Result: SCRIPT_EXIT=0. Full log: .omo/evidence/.../f2-live-run.log
+
+
+1) NEW DISCRIMINATING TEST
+--------------------------------------------------------------------------------
+server/src/execution-policies/agent-policies-db-driven.spec.ts  (NEW, 6 tests)
+
+Why existing specs cannot prove the DB path (per plan Findings): matrix.spec,
+custom-agents.spec and controller.spec all mock `executionPolicy.findMany` to
+`[]`, so they only ever exercise the constant-fallback branch.
+
+This spec seeds bound `ep_<role>` rows whose `config.tools` and
+`config.permission` DIFFER from the constant allowlist (only vteam-product is
+edited; rows returned in reverse order and MySQL JSON key order) and asserts the
+differing values reach:
+  - `buildAgentPolicies()` -> agents[] AND guard.roles[] (Todo 3 DB read);
+  - `resolveByAgent()` / `resolveManyByAgents()` -> guard payload (Todo 4
+    short-circuit removal);
+  - the emitted shape satisfies the worker `buildAgentDefinitions()` strict
+    field contract exactly (agent {name,description,mode,permission};
+    guard role {permission,tools,bashDeny,correction}; tools tri-state;
+    bashDeny string[]; no `write` key);
+  - a no-rows control asserts the edited value is NOT what the constant path
+    yields (proves the assertions are non-vacuous).
+
+Command: cd server && npx jest --runInBand src/execution-policies/agent-policies-db-driven.spec.ts
+Result:  PASS — 6/6 tests green.
+
+
+2) MUTATION CHECK  (proof the test is genuinely discriminating)
+--------------------------------------------------------------------------------
+Mutation A — revert Todo 3 (buildAgentPolicies ignores the bound row, i.e.
+`resolveBuiltinPolicy(name, null)` instead of the row config):
+
+    ✕ buildAgentPolicies(): DB 的 tools/permission 穿透到 agents[] 与 guard.roles[]，非法值丢弃
+    ✓ buildAgentPolicies(): 未编辑的 6 个内置角色与冻结基线逐字节一致
+    ✓ resolveByAgent(): 内置名的 guard payload 反映 DB tools/permission（Todo 4 短路已移除）
+    ✓ resolveManyByAgents(): 与单条解析同源，内置名的 guard payload 同样反映 DB 值
+    ✓ 发射形状满足 worker buildAgentDefinitions 严格字段契约（字段集不可增减）
+    ✓ 行全缺时回退常量（对照：无 DB 行 ≠ 编辑后的值，证明上方断言非空转）
+    Test Suites: 1 failed, 1 total    Tests: 1 failed, 5 passed, 6 total
+
+Mutation B — re-add Todo 4 short-circuit (`guardForAgent` returns the constant
+allowlist for a built-in name before consulting config):
+
+    ✓ buildAgentPolicies(): DB 的 tools/permission 穿透到 agents[] 与 guard.roles[]，非法值丢弃
+    ✓ buildAgentPolicies(): 未编辑的 6 个内置角色与冻结基线逐字节一致
+    ✕ resolveByAgent(): 内置名的 guard payload 反映 DB tools/permission（Todo 4 短路已移除）
+    ✕ resolveManyByAgents(): 与单条解析同源，内置名的 guard payload 同样反映 DB 值
+    ✓ 发射形状满足 worker buildAgentDefinitions 严格字段契约（字段集不可增减）
+    ✓ 行全缺时回退常量（对照：无 DB 行 ≠ 编辑后的值，证明上方断言非空转）
+    Test Suites: 1 failed, 1 total    Tests: 2 failed, 4 passed, 6 total
+
+Both mutations were fully reverted; `git diff -- server/src/execution-policies/execution-policy.service.ts`
+is EMPTY (verified after each restore). Restored spec: 6/6 green.
+
+Raw: .omo/evidence/vteam-role-behavior-abstraction/task-15-mutations.txt
+
+
+3) END-TO-END (LIVE) — scripts/e2e-role-boundaries.sh
+--------------------------------------------------------------------------------
+Scenario (f) — task-tool contract (CORRECTED, not weakened):
+  The pre-existing form asserted EVERY agent permission.task == "deny". That
+  contradicts the frozen baseline (before-agent-policies.json: vteam-plan
+  task=allow) and could never pass against a real stack. Replaced by a strictly
+  more specific role-scoped contract: exactly vteam-plan = allow, all others
+  deny, no `write` key — on /agent-policies AND injected opencode.json.
+  Result:
+    agent-policies: 8 agents, exactly vteam-plan task=allow, others deny, no write key
+    opencode.json: 8 agents, exactly vteam-plan task=allow, others deny
+    PASS f
+
+Scenario (f2) — DB-driven builtin policy proof (NEW):
+  f2a pre-edit integrity gate: baseline sha256 == frozen
+      793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a, and the
+      live 7 built-ins are canonical-JSON-equal to the frozen baseline.
+      PASS f2a (pre-edit live 7 builtins byte-identical to frozen baseline)
+  f2b PATCH ep_product config (tools: group_post=deny, memory_search=ask,
+      hook_cancel=deny; permission.bash=deny) -> HTTP 200, and the control-plane
+      /agent-policies immediately reflects it.  PASS f2b
+  f2c reload worker (docker restart -> start-only injector re-fetches
+      /agent-policies). Injected artifacts after reload:
+        roles.tools.vteam_group_post[vteam-product]   = 'deny'  OK
+        roles.tools.vteam_memory_search[vteam-product]= 'ask'   OK
+        roles.tools.vteam_hook_cancel[vteam-product]  = 'deny'  OK
+        roles.permission.bash[vteam-product]          = 'deny'  OK
+        opencode.agent[vteam-product].permission.bash = 'deny'  OK
+        roles[vteam-plan|architect|developer|tester|project_manager|librarian] vs baseline: IDENTICAL
+        opencode.agent[same 6].permission vs baseline: IDENTICAL
+      PASS f2c
+  f2d restore original config + reload; capture after-agent-policies.json:
+        after-agent-policies.json  sha256 = 793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a
+        before-agent-policies.json sha256 = 793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a
+        byte-identical = True
+      PASS f2d
+
+  ALL SCENARIOS DONE: a/c/d/e/f/f2/g    SCRIPT_EXIT=0
+
+Cleanup receipt (automatic EXIT trap + explicit):
+  - ep_product config restored via PATCH (f2-restore-ep_product.json); re-GET
+    confirms group_post=allow memory_search=allow bash=allow.
+  - worker restarted after restore; live roles.json back to factory values.
+  - before-agent-policies.json is UNMODIFIED (sha256 unchanged).
+  - Service source tree: `git diff` on execution-policy.service.ts EMPTY.
+
+
+4) DISCOVERED OPERATIONAL TRAP (recorded in-script)
+--------------------------------------------------------------------------------
+`docker compose up -d --force-recreate worker` re-runs the `init` dependency.
+On this host the init image is pre-Todo-9, so its seed unconditionally overwrites
+`config` -> the just-made DB edit was silently reverted within ~2s and the proof
+would falsely show "no change". Fix: reload via `docker restart worker` (or
+`docker compose restart worker`), which does NOT re-run init. Implemented as the
+script's `reload_worker()` helper. This is why the naive force-recreate form
+would have produced a misleading INCONCLUSIVE/FAIL.
+
+
+5) GATES
+--------------------------------------------------------------------------------
+  cd server && npx tsc -p tsconfig.json --noEmit   -> exit 0
+  cd server && npx jest --runInBand                -> 130 suites passed, 3015 tests passed, 1 snapshot passed
+     (was 129 suites / 3009 tests at plan HEAD; +1 suite / +6 tests = this spec)
+  cd worker && npx jest                            -> 25 passed / 1 failed (2 tests), see note
+
+  WORKER NOTE (pre-existing, NOT caused by this task): worker/src/driver/v1-driver.spec.ts
+  has 2 failing tests. `git status --porcelain -- worker/` is EMPTY and
+  `git diff f0b1924 HEAD --stat -- worker/` is EMPTY — the worker tree is
+  pristine since the plan baseline. The failures are an environment/system
+  contract mismatch: the spec expects `provider.key === ''` to be filtered out
+  of listModels, but v1-driver.ts has no key filter (its docstrings at :429-436
+  describe key-based collection) and collects every provider. Unrelated to
+  role-behavior abstraction; no worker file is in this task's scope.
+
+
+6) ARTIFACTS
+--------------------------------------------------------------------------------
+  task-15-db-driven.txt            (this file)
+  task-15-mutations.txt            (mutation A/B raw jest output)
+  after-agent-policies.json        (post-restore live capture; sha == baseline)
+  before-agent-policies.json       (frozen baseline; UNMODIFIED)
+  f2-live-run.log                  (full live e2e stdout)
+  f2-pre-builtins.json             (live pre-edit 7 builtins == baseline)
+  f2-original-policy.json          (ep_product pre-edit config snapshot)
+  f2-restore-ep_product.json       (PATCH restore body)
+  f2-edit-ep_product.json          (PATCH edit body)
+  f2-patch.json                    (PATCH 200 response)
+  f2-postedit-agent-policies.json  (control plane after edit)
+  f2-injected-roles.json           (worker roles.json after reload)
+  f2-injected-opencode.json        (worker opencode.json after reload)
+  f2-injected-summary.txt          (f2c check-by-check result)
+  f2-after-raw.json / f2-after-summary.txt (f2d restore proof)
+
+================================================================================
+VERDICT: Todo 15 acceptance criteria met on a LIVE stack.
+  - new DB-driven test fails under reverted Todo 3 (1 test) and reverted Todo 4
+    (2 tests), documented with raw output;
+  - editing a built-in policy changes the worker-injected opencode.json +
+    roles.json after reload, while the other 6 built-ins stay byte-identical to
+    the frozen baseline;
+  - tsc exit 0; full server suite green (130/3015).
+================================================================================

@@ -1,13 +1,17 @@
 import {
-  buildEditPermission,
-  buildReadPermission,
   ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
-  ROLE_POLICY_DENY_TEMPLATE,
   ROLE_SERVER_GATED_TOOLS,
   VTEAM_MCP_TOOL_NAMES,
-  type VteamAgentName,
 } from '../common/constants/agent.constants';
+import {
+  BUILTIN_ORDER,
+  constantDerived,
+  factorySeedConfig,
+  reorderLikeMysql,
+  reverseKeys,
+  storageRoundTrip,
+} from './__fixtures__/policy-fixtures';
 import { resolveBuiltinPolicy } from './execution-policy.service';
 
 /**
@@ -18,109 +22,6 @@ import { resolveBuiltinPolicy } from './execution-policy.service';
  * 期望值一律由 `ROLE_BOUNDARIES` 常量独立派生，不内联字面量（防漂移）。
  */
 describe('policy canonical emission + per-field db resolution (Todo 2)', () => {
-  const BUILTIN_ORDER: readonly VteamAgentName[] = [
-    'vteam-plan',
-    'vteam-product',
-    'vteam-architect',
-    'vteam-developer',
-    'vteam-tester',
-    'vteam-project_manager',
-    'vteam-librarian',
-  ];
-
-  /** 常量派生期望输出（与 `buildAgentPolicies()` 改前逐字节同形）。 */
-  function constantDerived(name: VteamAgentName) {
-    const boundary = ROLE_BOUNDARIES[name];
-    return {
-      description: boundary.scopeSummary,
-      mode: name === 'vteam-plan' ? 'all' : 'primary',
-      permission: {
-        edit: buildEditPermission(boundary.writeGlobs),
-        read: buildReadPermission(),
-        bash: boundary.bashEffect,
-        task: name === 'vteam-plan' ? 'allow' : 'deny',
-        ...Object.fromEntries(
-          boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
-        ),
-      },
-      tools: { ...boundary.toolAllows },
-      bashDeny: [...ROLE_BASH_DENY_PATTERNS],
-      correction: {
-        scopeSummary: boundary.scopeSummary,
-        handoff: { ...boundary.handoffTo },
-        denyTemplate: ROLE_POLICY_DENY_TEMPLATE,
-      },
-    };
-  }
-
-  /** seed.ts:893-929 落库的出厂 config 形状（值全部来自常量，键序即 seed 插入序）。 */
-  function factorySeedConfig(name: VteamAgentName) {
-    const boundary = ROLE_BOUNDARIES[name];
-    return {
-      permission: {
-        edit: buildEditPermission(boundary.writeGlobs),
-        read: buildReadPermission(),
-        bash: boundary.bashEffect,
-        task: name === 'vteam-plan' ? ('allow' as const) : ('deny' as const),
-        ...Object.fromEntries(
-          boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
-        ),
-      },
-      correction: {
-        scopeSummary: boundary.scopeSummary,
-        handoff: { ...boundary.handoffTo },
-        denyTemplate: ROLE_POLICY_DENY_TEMPLATE,
-      },
-      tools: { ...boundary.toolAllows },
-    };
-  }
-
-  /** 递归按 MySQL JSON 列的键序（键长度升序 + 字节序）重排，模拟存储后的键序。 */
-  function reorderLikeMysql(value: unknown): unknown {
-    if (Array.isArray(value)) {
-      return value.map(reorderLikeMysql);
-    }
-    if (typeof value === 'object' && value !== null) {
-      const keys = Object.keys(value as Record<string, unknown>).sort((a, b) =>
-        a.length === b.length
-          ? a < b
-            ? -1
-            : a > b
-              ? 1
-              : 0
-          : a.length - b.length,
-      );
-      const out: Record<string, unknown> = {};
-      for (const key of keys) {
-        out[key] = reorderLikeMysql((value as Record<string, unknown>)[key]);
-      }
-      return out;
-    }
-    return value;
-  }
-
-  /** 递归反转键序（另一种确定性的乱序，验证不依赖单一重排模式）。 */
-  function reverseKeys(value: unknown): unknown {
-    if (Array.isArray(value)) {
-      return value.map(reverseKeys);
-    }
-    if (typeof value === 'object' && value !== null) {
-      const out: Record<string, unknown> = {};
-      for (const [key, val] of Object.entries(
-        value as Record<string, unknown>,
-      ).reverse()) {
-        out[key] = reverseKeys(val);
-      }
-      return out;
-    }
-    return value;
-  }
-
-  /** JSON 存储往返：`JSON.parse(JSON.stringify(x))`。 */
-  function storageRoundTrip(value: unknown): unknown {
-    return JSON.parse(JSON.stringify(value));
-  }
-
   function comparable(resolved: ReturnType<typeof resolveBuiltinPolicy>) {
     const { serverGated: _serverGated, ...rest } = resolved;
     return rest;

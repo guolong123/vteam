@@ -1,0 +1,254 @@
+# F3 — Hands-on Manual QA Verification
+Plan: `.omo/plans/vteam-role-behavior-abstraction.md`
+Date: 2026-09-17 (local) / 2026-09-18 UTC
+Verifier: F3 (independent; no prior evidence trusted; every claim re-reproduced on the live surface)
+Repo root: `/Volumes/SSD-Data/01work/git-project/vteam`
+HEAD: `412de74 test(e2e): prove builtin policies are db-driven end to end`
+
+Verdict: APPROVE
+
+---
+
+Artifacts:
+- Raw JSON/logs: `.omo/evidence/vteam-role-behavior-abstraction/F3-artifacts/`
+- Screenshots: `.omo/evidence/vteam-role-behavior-abstraction/F3-screenshots/`
+
+---
+
+## 0. Environment / stack bring-up (what I actually did)
+
+`docker compose ps` (before any change):
+
+```
+NAME                      IMAGE             COMMAND                   SERVICE   CREATED         STATUS                    PORTS
+aiagents-compose-db       mysql:8           "docker-entrypoint.s…"   db        2 days ago      Up 2 days (healthy)       3306/tcp, 33060/tcp
+aiagents-compose-server   aiagents-server   "docker-entrypoint.s…"   server    4 hours ago     Up 22 minutes (healthy)   0.0.0.0:13000->3000/tcp, [::]:13000->3000/tcp
+aiagents-compose-web      aiagents-web      "docker-entrypoint.s…"   web       5 hours ago     Up 5 hours (healthy)      0.0.0.0:13001->3000/tcp, [::]:13001->3000/tcp
+aiagents-compose-worker   aiagents-worker   "docker-entrypoint.s…"   worker    7 minutes ago   Up 7 minutes              0.0.0.0:14000->4000/tcp, [::]:14000->4000/tcp, 0.0.0.0:14848->4848/tcp, [::]:14848->4848/tcp
+```
+
+The compose stack was already up, so I did NOT run `docker compose up -d --build`. I probed the live contract instead of trusting timestamps (per the known trap):
+
+- Server image was **post-implementation**: `PATCH /api/v1/execution-policies/ep_product` returned **200** (pre-Todo-8 binary returns 403), so no `docker cp server/dist/. …` was needed. I did not rebuild or copy dist.
+- Web container image was **stale** (pre-Todo-13/14): `grep -rl "agent-readonly-badge" /app/.next` matched the running bundle. I therefore ran a local dev server against the compose server, exactly as Todo 13 documented:
+  `cd web && API_PROXY_TARGET=http://localhost:13000 PORT=3001 nohup npx next dev --port 3001 …` → `✓ Ready`, `GET /login -> 200`. Real browser QA (C5) ran against `http://localhost:3001`. I killed it at the end and verified port 3001 is free.
+
+Auth used for all HTTP calls: `POST /api/v1/auth/login {"username":"admin","password":"admin123"}` → JWT.
+
+### Known-trap handling (init re-seed / worker reload)
+- **Worker reload used `docker compose restart worker`** (never `up -d --force-recreate worker`), so the `init` dependency did NOT re-run and did NOT clobber the DB edit.
+- First attempt `docker restart worker` **silently failed** (`Error: No such container: worker` — the container name is `aiagents-compose-worker`); I detected this because the injected file stayed stale and used `docker compose restart worker` instead. Reported here because it matters: a bare `docker restart worker` is a no-op in this environment.
+
+### Frozen baseline integrity (checked at start and at end)
+```
+$ shasum -a 256 .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a   (start)
+793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a   (end, after restore)
+```
+Matches the mandated sha `793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a` — **unmodified**.
+
+---
+
+## 1. C1 — built-in policy editable via PATCH; POST/DELETE blocked
+
+### C1c — `PATCH ep_product` (modified config) → 200 + persists
+Request body (`F3-artifacts/c1-patch-body.json`) = factory `ep_product.config` with `tools.vteam_group_post=deny`, `tools.vteam_doclib=ask`.
+
+```
+$ curl -s -X PATCH .../execution-policies/ep_product -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' -d @c1-patch-body.json -w "HTTP:%{http_code}\n"
+HTTP:200
+response id/type: ep_product template
+group_post: deny doclib: ask
+
+$ curl -s .../execution-policies/ep_product -w "HTTP:%{http_code}\n"
+HTTP:200
+GET group_post: deny doclib: ask
+```
+Raw: `c1-patch-response.json`, `c1-gett-after.json`. **PASS** — 200 and persisted on re-GET.
+
+### C1b — `DELETE ep_product` → 403
+```
+$ curl -s -X DELETE .../execution-policies/ep_product -w "\nHTTP:%{http_code}\n"
+{"code":"POLICY_TEMPLATE_READONLY","message":"模板策略只读（seed 维护），请克隆为 custom 策略再修改"}
+HTTP:403
+```
+Server log: `DELETE /api/v1/execution-policies/ep_product -> 403`. **PASS**.
+
+### C1a — `POST type=template` → rejected
+```
+$ curl -s -X POST .../execution-policies -d '{"name":"forged","type":"template","config":{"permission":{},"correction":{}}}'
+{"message":["type must be one of the following values: custom"],"error":"Bad Request","statusCode":400}
+HTTP:400
+```
+Server log: `POST /api/v1/execution-policies -> 400`.
+
+**C1 nuance (raw, not rationalized away):** the task text says "POST … on a template still return 403". At the HTTP surface the wire status is **400**, not 403: the global `ValidationPipe` + DTO `@IsIn(['custom'])` rejects `type:'template'` before the service runs. The service-level 403 (`POLICY_TEMPLATE_READONLY`) remains as defense-in-depth and is what the pre-existing controller spec pins. This is **pre-existing at HEAD and unchanged by this plan** (Todo 8 learnings already documented it). The security property the claim protects — a client cannot forge a new `type=template` row via POST, and cannot DELETE a built-in row — **holds**: POST is rejected (400) and DELETE is rejected (403). C1 is **PASS** with this literal-status caveat.
+
+---
+
+## 2. C2 — built-in emitted policy is DB-driven; other 6 byte-identical
+
+Pre-QA `/agent-policies` captured: all 7 built-ins byte-equal the frozen baseline; the file-level sha differs only because an unrelated custom agent `vteam-myagent` is present:
+
+```
+pre byte==baseline (whole file): False
+pre agents: ['vteam-plan','vteam-product','vteam-architect','vteam-developer','vteam-tester','vteam-project_manager','vteam-librarian','vteam-myagent']
+  vteam-product byte-equal=True   vteam-project_manager byte-equal=True
+  vteam-architect byte-equal=True vteam-developer byte-equal=True
+  vteam-tester byte-equal=True    vteam-plan byte-equal=True
+  vteam-librarian byte-equal=True
+```
+
+After the C1 PATCH (`F3-artifacts/c2-agent-policies-after-patch.json`):
+
+```
+agent permission vteam_group_post: None        # layer-① native set unchanged (expected)
+guard tools vteam_group_post: deny vteam_doclib: ask
+  vteam-project_manager byte-equal baseline: True
+  vteam-architect       byte-equal baseline: True
+  vteam-developer       byte-equal baseline: True
+  vteam-tester          byte-equal baseline: True
+  vteam-plan            byte-equal baseline: True
+  vteam-librarian       byte-equal baseline: True
+```
+**PASS** — editing the DB row changes the emitted guard payload; the other 6 built-ins are byte-identical to the frozen baseline. (`guard.enabled=true`, no neutralization.)
+
+---
+
+## 3. C3 — worker receives the edit (injected roles.json + opencode.json)
+
+Pre-restart, the in-container worker artifact was stale (proving the edit had not yet propagated):
+```
+c3-roles-pre-restart.json: vteam-product tools group_post: allow
+```
+After `docker compose restart worker` (logged at 17:31:38; first poll t=2s):
+```
+roles.json vteam-product tools group_post: deny doclib: ask
+  roles.json vteam-project_manager == baseline: True
+  roles.json vteam-architect       == baseline: True
+  roles.json vteam-developer       == baseline: True
+  roles.json vteam-tester          == baseline: True
+  roles.json vteam-plan            == baseline: True
+  roles.json vteam-librarian       == baseline: True
+```
+To also exercise the `opencode.json` path (permission, not guard tools), I edited `permission.bash=deny` and restarted:
+```
+PATCH HTTP:200
+t=2s opencode.agent[vteam-product].permission.bash=deny
+opencode.agent[vteam-product].permission.bash: deny
+roles[vteam-product].permission.bash: deny
+roles[vteam-product].tools.vteam_group_post: deny
+```
+Raw: `c3-roles-post-restart.json`, `c3-opencode-post-restart.json`, `c3-opencode-after-bash-edit.json`, `c3-roles-after-bash-edit.json`. **PASS** — after a worker restart the injected `roles.json` and `opencode.json` both carry the DB edit.
+
+---
+
+## 4. C4 — re-seed does NOT clobber user edits
+
+Sentinel edits applied:
+- `PATCH /agents/a_product` prompt += `[F3-C4-SENTINEL-PROMPT]` → 200
+- `PATCH /execution-policies/ep_product` description += `[F3-C4-SENTINEL-DESC]` → 200
+
+Re-ran the real seed **twice** in the server container (`node dist/prisma/seed.js`, both `exit:0`; raw `c4-seed-run1.log`, `c4-seed-run2.log`).
+
+After the two seeds:
+```
+C4 PROMPT sentinel survived 2 seeds: True      (len 1758)
+C4 POLICY desc sentinel survived 2 seeds: True
+C4 POLICY config edit survived (group_post=deny, doclib=ask, bash=deny): deny allow deny
+policyId binding still ep_product: ep_product
+```
+Raw `c4-agent-postseed.json`, `c4-policy-postseed.json`. **PASS** — both prompt and policy config survive re-seed; the config `tools` edit survived too (not just description).
+
+---
+
+## 5. C5 — web page can edit a template agent's prompt and tool matrix, persists across reload
+
+Local dev web (`:3001`, API proxy → compose `:13000`), real Chromium via Playwright.
+
+### C5a — template prompt editable
+```
+promptExists: true  tag: TEXTAREA  readonlyAttr: null  disabled: false
+badgeCount: 0                       (agent-readonly-badge removed)
+footerText: "执行策略 · 可编辑"
+promptLen: 1758  promptTail: "…[F3-C4-SENTINEL-PROMPT]\n"
+```
+Live edit + save:
+```
+beforeLen 1758 → fill + "[F3-C5-UI-PROMPT]" → afterLen 1777  uiSentinel true
+GET /agents/a_product (DB) after save: len 1776, C5 UI sentinel in DB: True
+After reload: reloadedLen 1776, c5SentinelAfterReload True, readonlyAttr null, badgeCount 0
+```
+Raw `c5-agent-after-ui-save.json`; screenshot `F3-screenshots/F3-c5-agents-editable.png`. **PASS**.
+
+### C5b — built-in tool matrix editable
+All 22 built-in `tool-effect-select` controls for `vteam-product` rendered with `data-readonly="false"` (66 tool rows total incl. gitee-* groups). Live toggle of `vteam_channel_send` allow→deny:
+```
+patchStatus: 200   patchBodyDeny: "deny"
+afterReloadDenyAria:  "true"
+afterReloadAllowAria: "false"
+DB re-GET immediately: vteam_channel_send: deny (updatedAt 17:37:35)
+```
+Network log: `PATCH http://localhost:3001/api/v1/execution-policies/ep_product => [200] OK`, request body `config.tools.vteam_channel_send:"deny"`. **PASS** — the control is enabled, the PATCH fires, the state persists across reload.
+
+### C5 note — shared-env concurrent writer (observed, not a product defect)
+During C5 the pinned row `ep_product` was being PATCHed by another actor on the host roughly every ~30s (server access log shows ~30 `PATCH /api/v1/execution-policies/ep_product -> 200` from `::ffff:192.168.97.1` over the session). My first `wecom_reply` toggle was **reverted externally 14 seconds after my 200**, matching the hazard Todo 14 documented. I re-ran the proof atomically (wait-for-PATCH-response → DB re-GET) and it held; the toggle in `c5-policy-channel-send.json` (17:37:35) survived. This is a shared-environment data race, not a failure of the implementation — the UI and server behaved correctly (PATCH 200, response body carried the edit, reload reflected it).
+Console: `Total messages: 2 (Errors: 0, Warnings: 0)` (`F3-console-errors.log`).
+
+---
+
+## 6. Restore — everything I changed reverted, proven byte-identical
+
+- `restore-policy-body.json` = factory config + factory description → PATCH 200 → sentinel desc gone, `group_post=allow doclib=allow channel_send=allow bash=allow`.
+- `restore-prompt-body.json` = golden prompt → PATCH 200 → restored len **1732**, sha256 **d29275d5715fb981a19908599fd76472d6465d7738f0151811b6c239e4f550f1** (matches pre-QA golden), C4/C5 sentinels gone.
+- `docker compose restart worker`; final worker artifacts (`final-roles.json`, `final-opencode.json`) and `/agent-policies` (`final-agent-policies.json`):
+```
+all 7 /agent-policies byte-equal baseline: True
+all 7 worker roles.json byte-equal baseline: True
+all 7 worker opencode.json permission byte-equal baseline: True
+```
+- Final DB spot-check: description = factory, prompt len 1732 sentinel-free.
+- Local dev web server killed; port 3001 free; no stray files added to the tracked worktree.
+
+---
+
+## 7. Automated gates (re-run on the real tree)
+
+```
+$ cd server && npx tsc -p tsconfig.json --noEmit
+SERVER_TSC_EXIT:0      (0 lines of output)
+
+$ cd web && npx tsc --noEmit
+WEB_TSC_EXIT:0         (0 lines of output)
+
+$ cd server && npx jest --runInBand
+Test Suites: 130 passed, 130 total
+Tests:       3015 passed, 3015 total
+Snapshots:   1 passed, 1 total
+JEST_EXIT:0
+```
+
+---
+
+## 8. Claim-by-claim result
+
+| Claim | Result | Basis |
+|-------|--------|-------|
+| C1 PATCH built-in → 200 + persists | PASS | `c1-patch-response.json`, `c1-gett-after.json` |
+| C1 POST template blocked | PASS (403→wire 400 caveat) | raw 400 + service 403; documented nuance |
+| C1 DELETE template → 403 | PASS | raw 403 `POLICY_TEMPLATE_READONLY` |
+| C2 DB-driven `/agent-policies` + guard tools | PASS | `c2-agent-policies-after-patch.json` |
+| C2 other 6 built-ins byte-identical baseline | PASS | per-name deep-equal True |
+| C3 worker roles.json carries edit | PASS | `c3-roles-post-restart.json` |
+| C3 worker opencode.json carries edit | PASS | `c3-opencode-after-bash-edit.json` |
+| C4 re-seed preserves prompt + policy config | PASS | `c4-agent-postseed.json`, `c4-policy-postseed.json` |
+| C5 page edits template prompt, persists | PASS | `c5-agent-after-ui-save.json`, screenshot |
+| C5 page edits built-in tool matrix, persists | PASS | PATCH 200 + reload; `c5-policy-channel-send.json` |
+| Factory-state invariant (7 built-ins == baseline) | PASS | final byte-equality |
+| Frozen baseline unmodified | PASS | sha `793093…bc3a` at start and end |
+| tsc server / web / jest gates | PASS | exit 0; 130 suites / 3015 tests |
+
+No claim was NOT RUN; no environment limitation blocked a step. The only observed anomaly (concurrent external PATCH of `ep_product`) is a shared-environment artifact, disclosed and worked around atomically; it did not require rationalizing any product behavior.
+
+F3 VERDICT: APPROVE

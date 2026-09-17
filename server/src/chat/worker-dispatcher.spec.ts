@@ -10,9 +10,14 @@ import {
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import { ROLE_BOUNDARIES } from '../common/constants/agent.constants';
 import {
+  ExecutionPolicyService,
   resolveConstantPolicySource,
   type ResolvedExecutionPolicy,
 } from '../execution-policies/execution-policy.service';
+import {
+  loadAgentPoliciesBaseline,
+  loadBoundaryBaseline,
+} from '../execution-policies/__fixtures__/policy-fixtures';
 import { TRIGGER_KIND } from '../common/constants/trigger.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import {
@@ -141,7 +146,11 @@ describe('WorkerDispatcher', () => {
     ...overrides,
   });
 
-  const createDispatcher = (policyService?: { resolveByAgent: jest.Mock }) =>
+  type PolicyResolverStub = {
+    resolveByAgent: jest.Mock;
+  };
+
+  const createDispatcher = (policyService?: PolicyResolverStub) =>
     new WorkerDispatcher(
       prisma as any,
       idGen as any,
@@ -154,7 +163,7 @@ describe('WorkerDispatcher', () => {
       ingress as any,
       undefined,
       undefined,
-      policyService as any,
+      policyService as unknown as ExecutionPolicyService,
     );
 
   beforeEach(() => {
@@ -1677,15 +1686,7 @@ describe('WorkerDispatcher', () => {
     });
 
     it('Todo 11：7 内置出厂 correction → boundary 与变更前冻结基线逐字节一致', () => {
-      const fixture = JSON.parse(
-        fs.readFileSync(
-          path.join(
-            __dirname,
-            '../../../.omo/evidence/vteam-role-behavior-abstraction/before-boundary.json',
-          ),
-          'utf8',
-        ),
-      ) as { sections: Record<string, string> };
+      const fixture = loadBoundaryBaseline();
       for (const [name, expected] of Object.entries(fixture.sections)) {
         const correction = resolveConstantPolicySource(name)?.config.correction;
         expect(renderBoundarySection(correction)).toBe(expected);
@@ -1693,24 +1694,8 @@ describe('WorkerDispatcher', () => {
     });
 
     it('Todo 11：/agent-policies 出厂 guard.roles[name].correction → boundary 与冻结基线逐字节一致', () => {
-      const baseline = JSON.parse(
-        fs.readFileSync(
-          path.join(
-            __dirname,
-            '../../../.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json',
-          ),
-          'utf8',
-        ),
-      ) as { guard: { roles: Record<string, { correction: unknown }> } };
-      const boundary = JSON.parse(
-        fs.readFileSync(
-          path.join(
-            __dirname,
-            '../../../.omo/evidence/vteam-role-behavior-abstraction/before-boundary.json',
-          ),
-          'utf8',
-        ),
-      ) as { sections: Record<string, string> };
+      const baseline = loadAgentPoliciesBaseline();
+      const boundary = loadBoundaryBaseline();
       for (const [name, expected] of Object.entries(boundary.sections)) {
         const role = baseline.guard.roles[name];
         expect(role).toBeDefined();
@@ -3912,8 +3897,7 @@ describe('WorkerDispatcher', () => {
       startWatchdog(d);
       await new Promise((r) => setTimeout(r, 0));
       expect(triggers.schedule).toHaveBeenCalledTimes(1);
-      const [kind, dueAt, payload, dedupKey] =
-        triggers.schedule.mock.calls[0];
+      const [kind, dueAt, payload, dedupKey] = triggers.schedule.mock.calls[0];
       expect(kind).toBe(TRIGGER_KIND.SESSION_IDLE_SCAN);
       expect((dueAt as Date).getTime()).toBeGreaterThanOrEqual(
         before + (d as any).firstTokenTimeoutMs,
@@ -4043,9 +4027,9 @@ describe('WorkerDispatcher', () => {
       const triggers = makeTriggers();
       const d = createDispatcherWithTriggers(triggers);
       const handler = triggers.registerHandler.mock.calls[0][1];
-      await expect(handler(fireCtx({ reason: 'idle-scan' }))).resolves.toEqual(
-        { done: true },
-      );
+      await expect(handler(fireCtx({ reason: 'idle-scan' }))).resolves.toEqual({
+        done: true,
+      });
       expect(prisma.session.findUnique).not.toHaveBeenCalled();
       prisma.session.findUnique.mockRejectedValueOnce(new Error('db down'));
       await expect(

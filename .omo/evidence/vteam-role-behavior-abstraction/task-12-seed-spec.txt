@@ -1,0 +1,184 @@
+# task-12 seed.spec.ts rewrite — preservation instead of overwrite (vteam-role-behavior-abstraction)
+
+## 1. BEFORE (seed.ts already fixed by Todos 9/10; spec still encodes OLD overwrite contract)
+
+command: cd server && npx jest --runInBand src/prisma/seed.spec.ts
+exit: 1
+Test Suites: 1 failed, 1 total
+Tests:       22 failed, 22 passed, 44 total
+Snapshots:   0 total
+Time:        1.345 s, estimated 2 s
+
+failing test names (verbatim):
+    ✕ 7 条角色 ExecutionPolicy upsert：type=template、permission 全量派生自 ROLE_BOUNDARIES (3 ms)
+    ✕ 模板策略 config.tools 为 ROLE_BOUNDARIES allowlist 的拷贝（克隆深拷贝来源） (3 ms)
+    ✕ 模板 Agent create 与 update 均写入 agentKey = role（opencode 注入名 vteam-<agentKey> 与现状一致） (2 ms)
+    ✕ 模板 Agent create 与 update 均绑定角色策略 policyId (2 ms)
+    ✕ 已存在模板 Agent 时 update 分支仅同步出厂默认 prompt 与 policyId，不覆盖用户修改字段 (5 ms)
+    ✕ 模板 prompt 四方向齐全、含越界转交，且不含禁用词/裸 MCP 名 (3 ms)
+    ✕ 计划员 prompt 四方向内容齐全（身份/职责/边界/协同） (4 ms)
+    ✕ 模板 prompt 越界转交去重：统一一句以【职责边界】为准，不再手写全量映射（a_plan 保留主 Agent 转交语义） (2 ms)
+    ✕ 模板 prompt「可用工具」去重：旧五角色用统一句，计划员保留 planToolLine 动态派生 (2 ms)
+    ✕ 7 模板 prompt 协同方式含协作规约摘录（求助三要素/转交落 issue/广播纪律/10 分钟升级） (2 ms)
+    ✕ 旧五角色 prompt 点名其专属评审 skill（skill(plan-review-<role>)）；计划员走按需加载 (3 ms)
+    ✕ 评审 skill 名不出现在非属角色的 prompt 中（无交叉污染，含计划员） (3 ms)
+    ✕ PM 派发铁律三句齐全（先查后派/被催先报/催办引原文） (2 ms)
+    ✕ PM 计划完工铁律：交付齐备或待验收时调 vteam_plan_complete 标记完工，不 @计划员改文件 (2 ms)
+    ✕ PM 消息风暴治理三铁律齐全（已通知不重发/只发增量/唤醒即派发），且不泄漏到其他角色 (2 ms)
+    ✕ 成员回执铁律：四角色 prompt 含回执必@派发人句，知识管理员不含 (2 ms)
+    ✕ 计划员收敛契约：收敛输入=轮次账本+verdicts明细，输出=冻结候选版+归档清单 (4 ms)
+    ✕ 计划员修订铁律：非收敛不修订 + exact hint + 教师 override (3 ms)
+    ✕ 优先级声明：各铁律节均声明平台校验 > 本铁律 > 上文原文风且顺序正确 (5 ms)
+    ✕ 探针·被催“怎么样了”不产生新派发 (4 ms)
+    ✕ 探针·单份回执修订企图被拒（exact hint） (2 ms)
+    ✕ 探针·优先级：平台校验胜过铁律胜过原文 + 落盘证据 (6 ms)
+
+## 2. AFTER (spec rewritten: 5 overwrite assertions inverted, 17 prompt reads repointed to create, new preservation contract test)
+
+command: cd server && npx jest --runInBand src/prisma/seed.spec.ts
+exit: 0
+
+Test Suites: 1 passed, 1 total
+Tests:       44 passed, 44 total
+Snapshots:   0 total
+Time:        1.662 s, estimated 2 s
+Ran all test suites matching /src\/prisma\/seed.spec.ts/i.
+
+passing test names (verbatim):
+    ✓ 7 类模板 Agent upsert create 分支均预置为 template 类型（含计划员 a_plan 与知识管理员 a_librarian） (47 ms)
+    ✓ 已移除默认 ACK 文案（收到，正在处理… 机制已下线） (3 ms)
+    ✓ 7 条角色 ExecutionPolicy upsert：create 分支 type=template、permission 全量派生自 ROLE_BOUNDARIES（update 保留用户编辑） (5 ms)
+    ✓ 模板策略 create.config.tools 为 ROLE_BOUNDARIES allowlist 的拷贝（克隆深拷贝来源；update 不覆盖用户编辑） (3 ms)
+    ✓ 模板 Agent create 分支写入 agentKey = role（update 不覆盖存量绑定，opencode 注入名 vteam-<agentKey> 与现状一致） (2 ms)
+    ✓ 模板 Agent create 分支绑定角色策略 policyId（update 不覆盖存量绑定） (2 ms)
+    ✓ ExecutionPolicy upsert 先于模板 Agent upsert（绑定指向已存在策略行） (2 ms)
+    ✓ 已存在模板 Agent/策略时重跑 seed：update 分支为空、不覆盖用户编辑（出厂值仅首次 create 落库） (3 ms)
+    ✓ 首次创建模板 Agent 时 create 分支 defaultModelId 为 null（动态模型目录，不再静态预置） (1 ms)
+    ✓ 模板 prompt 四方向齐全、含越界转交，且不含禁用词/裸 MCP 名 (9 ms)
+    ✓ 计划员 prompt 四方向内容齐全（身份/职责/边界/协同） (3 ms)
+    ✓ 模板 prompt 越界转交去重：统一一句以【职责边界】为准，不再手写全量映射（a_plan 保留主 Agent 转交语义） (2 ms)
+    ✓ 模板 prompt「可用工具」去重：旧五角色用统一句，计划员保留 planToolLine 动态派生 (3 ms)
+    ✓ 7 模板 prompt 协同方式含协作规约摘录（求助三要素/转交落 issue/广播纪律/10 分钟升级） (3 ms)
+    ✓ 团队协作规约 team 记忆：示例团队预置一条 team 级记忆（固定 id 幂等，hash 与 save 语义一致） (2 ms)
+    ✓ 示例团队同时 upsert seed-admin 与 admin(u_admin) 为 owner（fresh deploy 下 admin 开箱可进群） (1 ms)
+    ✓ 6 个计划 skills upsert：create 默认启用；update 不同步 enabled（重跑保留管理员停用） (3 ms)
+    ✓ learning-mode builtin upsert：create 默认启用且 id 固定；update 不同步 enabled（重跑保留管理员停用） (2 ms)
+    ✓ learning-mode 内容与 draft 一致：v3 入库门 + 工具缺失判据 + 单步循环三件套 (2 ms)
+    ✓ 计划 skills frontmatter 含 name/description/version/allowed-tools 且工具集精确匹配 (2 ms)
+    ✓ plan-creation 使用者为计划成员：无 question 交互与送审调用，有扇出纪律节 (2 ms)
+    ✓ 5 个评审 skills 各加一句 subagent 注记（检查清单不动） (2 ms)
+    ✓ plan-creation 含 OmO 编制五要素（波次/证据/假设清单/反模式/送审预判） (2 ms)
+    ✓ 5 个评审 skills 含统一 Momus/Oracle 骨架（目的句/放行偏置/上限/篇幅/范围纪律） (5 ms)
+    ✓ 5 个评审 skills 视角关键词各异（每角色主关键词仅出现一次） (2 ms)
+    ✓ 旧五角色 prompt 点名其专属评审 skill（skill(plan-review-<role>)）；计划员走按需加载 (2 ms)
+    ✓ 工具目录不再 upsert plan_review（D4 单路径：server 编排评审已删，评审走成员子会话） (2 ms)
+    ✓ vteam 工具含 git_repos_list 行（F2-L1：授权仓库只读清单工具注册） (2 ms)
+    ✓ vteam 工具含 plan_complete 行（executing→completed，仅主 Agent） (2 ms)
+    ✓ vteam_plan_complete 为 server-gated（与 plan_mode 同模式）：进 gated 清单，不进任何角色 toolAllows (1 ms)
+    ✓ vteam 工具含 hook_register/hook_cancel 行（trigger-unification todo-13） (2 ms)
+    ✓ 示例团队 7 成员：a_plan 第 6 位、a_librarian 末位 tmm_0000000007 别名知识管理员-1，非主 Agent（主 Agent 为项目经理） (2 ms)
+    ✓ 评审 skill 名不出现在非属角色的 prompt 中（无交叉污染，含计划员） (2 ms)
+    ✓ PM 派发铁律三句齐全（先查后派/被催先报/催办引原文） (2 ms)
+    ✓ PM 计划完工铁律：交付齐备或待验收时调 vteam_plan_complete 标记完工，不 @计划员改文件 (2 ms)
+    ✓ PM 消息风暴治理三铁律齐全（已通知不重发/只发增量/唤醒即派发），且不泄漏到其他角色 (2 ms)
+    ✓ 成员回执铁律：四角色 prompt 含回执必@派发人句，知识管理员不含 (2 ms)
+    ✓ 计划员收敛契约：收敛输入=轮次账本+verdicts明细，输出=冻结候选版+归档清单 (2 ms)
+    ✓ 计划员修订铁律：非收敛不修订 + exact hint + 教师 override (1 ms)
+    ✓ 评审 VERDICT 版本引用：5 skills 全含版本引用句 (3 ms)
+    ✓ 优先级声明：各铁律节均声明平台校验 > 本铁律 > 上文原文风且顺序正确 (4 ms)
+    ✓ 探针·被催“怎么样了”不产生新派发 (1 ms)
+    ✓ 探针·单份回执修订企图被拒（exact hint） (2 ms)
+    ✓ 探针·优先级：平台校验胜过铁律胜过原文 + 落盘证据 (5 ms)
+
+## 3. MUTATION CHECK (agent upsert update temporarily set to { prompt: agent.prompt }; then restored)
+
+mutation diff applied to server/prisma/seed.ts (agent.upsert only, line 944):
+  -      update: {},
+  +      update: { prompt: agent.prompt },
+
+command: cd server && npx jest --runInBand src/prisma/seed.spec.ts
+exit: 1
+Test Suites: 1 failed, 1 total
+Tests:       3 failed, 41 passed, 44 total
+Snapshots:   0 total
+
+failing test names under mutation (3 — proof the preservation assertions are non-vacuous):
+    ✕ 模板 Agent create 分支写入 agentKey = role（update 不覆盖存量绑定，opencode 注入名 vteam-<agentKey> 与现状一致） (4 ms)
+    ✕ 模板 Agent create 分支绑定角色策略 policyId（update 不覆盖存量绑定） (3 ms)
+    ✕ 已存在模板 Agent/策略时重跑 seed：update 分支为空、不覆盖用户编辑（出厂值仅首次 create 落库） (7 ms)
+
+representative failure detail:
+  ● seed（模板 Agent 预置 + 角色策略） › 已存在模板 Agent/策略时重跑 seed：update 分支为空、不覆盖用户编辑（出厂值仅首次 create 落库）
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 1
+    + Received  + 3
+
+    - Array []
+    + Array [
+    +   "prompt",
+    + ]
+
+      251 |       // create-if-absent：存量行（prompt/policyId/agentKey 可能已被用户编辑）不被回滚；
+      252 |       // 出厂默认 prompt 随 create 分支落库，新装环境行为不变。
+    > 253 |       expect(Object.keys(call[0].update)).toEqual([]);
+          |                                           ^
+      254 |       expect(typeof call[0].create.prompt).toBe('string');
+      255 |       expect((call[0].create.prompt as string).length).toBeGreaterThan(50);
+      256 |     }
+
+      at Object.<anonymous> (prisma/seed.spec.ts:253:43)
+
+
+restore verification:
+  git diff -- server/prisma/seed.ts  => (empty)
+  grep -n 'update: { prompt' server/prisma/seed.ts  => no matches
+
+post-restore re-run:
+command: cd server && npx jest --runInBand src/prisma/seed.spec.ts
+exit: 0
+Test Suites: 1 passed, 1 total
+Tests:       44 passed, 44 total
+Snapshots:   0 total
+Time:        1.891 s, estimated 2 s
+
+## 4. FULL SERVER SUITE (after fix, mutation restored)
+
+command: cd server && npx jest --runInBand
+exit: 0
+Test Suites: 129 passed, 129 total
+Tests:       3009 passed, 3009 total
+Snapshots:   1 passed, 1 total
+Time:        13.192 s
+
+command: cd server && npx tsc -p tsconfig.json --noEmit
+exit: 0
+
+## 5. ASSERTION MAPPING (old → new)
+
+inverted (overwrite → preservation):
+  :144-145 expect(update.type).toBe('template'); expect(update.config).toEqual(create.config)  ->  expect(update).toEqual({})            [spec.ts:146]
+  :201     expect(call[0].update.config).toEqual(call[0].create.config)                         ->  expect(call[0].update).toEqual({})   [spec.ts:202]
+  :216     expect(call[0].update.agentKey).toBe(ROLE_BY_AGENT[id])                              ->  expect(call[0].update).toEqual({})   [spec.ts:217]
+  :228     expect(call[0].update.policyId).toBe(POLICY_BY_AGENT[id])                            ->  expect(call[0].update).toEqual({})   [spec.ts:229]
+  :252-262 update key set ['agentKey','policyId','prompt'] + update.prompt length>50            ->  Object.keys(update)==[] + create.prompt length>50  [spec.ts:253-261]
+
+added preservation contract coverage (new, both upserts):
+  spec.ts:245-263 — '已存在模板 Agent/策略时重跑 seed：update 分支为空、不覆盖用户编辑（出厂值仅首次 create 落库）'
+    asserts Object.keys(call[0].update)===[] for all 7 template-agent upserts AND all 7 executionPolicy upserts,
+    while create.prompt still carries the factory prompt (length>50).
+
+mechanical repoints (update.prompt -> create.prompt; factory prompt still lands on create):
+  :283 -> :282   :318 -> :317   :345 -> :344   :368 -> :367   :405 -> :404   :785 -> :784   :911 -> :910   :961 -> :960 (promptsById helper, fixes all 8 todo9 probes)
+
+kept intact / still meaningful:
+  - 7-template count (:136, :191, :212, :224, :248)
+  - ordering assertion policies-before-agents (:239-241)
+  - create-shape assertions: all 7 create.type=template, defaultModelId=null, four-direction prompts, tool-name hygiene, plan-review clauses
+
+## 6. CLEANUP RECEIPT
+  - server/prisma/seed.ts untouched by this todo (git diff empty).
+  - Only server/src/prisma/seed.spec.ts changed.
+  - No TODO/FIXME/skip/only added; no as any / @ts-ignore.
+  - Mutation fully reverted before the final runs above.

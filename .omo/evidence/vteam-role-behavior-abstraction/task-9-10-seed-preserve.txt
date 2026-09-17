@@ -1,0 +1,50 @@
+# task-9-10 seed preserve evidence (vteam-role-behavior-abstraction)
+
+result: ALL PASS
+generated_by: capture-seed-preserve.mjs (runs real main() from server/prisma/seed.ts against an in-process fake prisma with true upsert semantics; no DB connection)
+seed.ts: server/prisma/seed.ts (policy upsert ~line 920, agent upsert ~line 942)
+
+## checks
+- fresh_run_creates_7_policies_7_agents: PASS — policy upserts=7, agent upserts=7
+- create_branch_factory_config_equals_baseline: PASS — ep_product, ep_project_manager, ep_architect, ep_developer, ep_tester, ep_plan, ep_librarian
+- create_branch_factory_prompt_full: PASS — a_product, a_project_manager, a_architect, a_developer, a_tester, a_plan, a_librarian
+- ordering_policies_before_agents: PASS — sequence=policy:ep_product > policy:ep_project_manager > policy:ep_architect > policy:ep_developer > policy:ep_tester > policy:ep_plan > policy:ep_librarian > agent:a_product > agent:a_project_manager > agent:a_architect > agent:a_developer > agent:a_tester > agent:a_plan > agent:a_librarian
+- run2_upserted_existing_rows: PASS — policy upserts=7, agent upserts=7
+- policy_update_payloads_empty: PASS — update key sets = [[],[],[],[],[],[],[]]
+- agent_update_payloads_empty: PASS — update key sets = [[],[],[],[],[],[],[]]
+- user_edited_policy_config_survives_reseed: PASS — tools.vteam_group_post=deny, description=USER-EDITED-POLICY-DESCRIPTION
+- user_edited_agent_prompt_and_bindings_survive_reseed: PASS — prompt=USER-EDITED-PROMPT-USER-..., policyId=ep_user_custom_edit, agentKey=user-edited-key
+- counterfactual_old_payload_would_have_clobbered: PASS — old update payloads (config/prompt/bindings) overwrite edited values; new empty update leaves them intact
+
+## raw policy upsert update payloads (run 2)
+- ep_product: update={}
+- ep_project_manager: update={}
+- ep_architect: update={}
+- ep_developer: update={}
+- ep_tester: update={}
+- ep_plan: update={}
+- ep_librarian: update={}
+
+## raw agent upsert update payloads (run 2)
+- a_product: update={}
+- a_project_manager: update={}
+- a_architect: update={}
+- a_developer: update={}
+- a_tester: update={}
+- a_plan: update={}
+- a_librarian: update={}
+
+## verbatim run log
+=== run 1: fresh store (create branches) ===
+  [PASS] fresh_run_creates_7_policies_7_agents: policy upserts=7, agent upserts=7
+  [PASS] create_branch_factory_config_equals_baseline: ep_product, ep_project_manager, ep_architect, ep_developer, ep_tester, ep_plan, ep_librarian
+  [PASS] create_branch_factory_prompt_full: a_product, a_project_manager, a_architect, a_developer, a_tester, a_plan, a_librarian
+  [PASS] ordering_policies_before_agents: sequence=policy:ep_product > policy:ep_project_manager > policy:ep_architect > policy:ep_developer > policy:ep_tester > policy:ep_plan > policy:ep_librarian > agent:a_product > agent:a_project_manager > agent:a_architect > agent:a_developer > agent:a_tester > agent:a_plan > agent:a_librarian
+
+=== run 2: existing store with user edits (update branches) ===
+  [PASS] run2_upserted_existing_rows: policy upserts=7, agent upserts=7
+  [PASS] policy_update_payloads_empty: update key sets = [[],[],[],[],[],[],[]]
+  [PASS] agent_update_payloads_empty: update key sets = [[],[],[],[],[],[],[]]
+  [PASS] user_edited_policy_config_survives_reseed: tools.vteam_group_post=deny, description=USER-EDITED-POLICY-DESCRIPTION
+  [PASS] user_edited_agent_prompt_and_bindings_survive_reseed: prompt=USER-EDITED-PROMPT-USER-..., policyId=ep_user_custom_edit, agentKey=user-edited-key
+  [PASS] counterfactual_old_payload_would_have_clobbered: old update payloads (config/prompt/bindings) overwrite edited values; new empty update leaves them intact

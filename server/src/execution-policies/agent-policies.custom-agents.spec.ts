@@ -347,4 +347,72 @@ describe('agent-policies custom agents (Todo 2)', () => {
       expect(fallback?.bashDeny).toEqual([...ROLE_BASH_DENY_PATTERNS]);
     });
   });
+
+  describe('BLOCKER-2：DB 自定义策略 permission.write 防御式剥离', () => {
+    const poisonedPermission = {
+      write: { '*': 'allow' },
+      edit: { '*': 'deny' },
+      task: 'deny',
+    };
+
+    function poisonedService() {
+      const policy = {
+        id: 'ep_demo',
+        name: 'Demo policy',
+        description: 'demo',
+        type: 'custom',
+        config: {
+          permission: { ...poisonedPermission },
+          correction: { scopeSummary: 'demo' },
+          tools: { vteam_group_post: 'allow' },
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      return serviceWith({
+        agent: {
+          findMany: jest.fn().mockResolvedValue([
+            {
+              id: 'a_0000000001',
+              name: 'Demo Agent',
+              type: 'custom',
+              agentKey: 'demo-agent',
+              policyId: 'ep_demo',
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            },
+          ]),
+        },
+        executionPolicy: {
+          findMany: jest.fn().mockResolvedValue([policy]),
+          findUnique: jest.fn().mockResolvedValue(policy),
+        },
+      });
+    }
+
+    it('buildAgentPolicies：agents[] 与 guard.roles[] 均不含 permission.write', async () => {
+      const policies = await poisonedService().buildAgentPolicies();
+      const agent = policies.agents.find((a) => a.name === 'vteam-demo-agent');
+      const role = policies.guard.roles['vteam-demo-agent'];
+
+      expect(agent).toBeDefined();
+      expect(agent?.permission).not.toHaveProperty('write');
+      expect(role.permission).not.toHaveProperty('write');
+      expect(JSON.stringify(agent?.permission)).not.toContain('"write"');
+      expect(JSON.stringify(role.permission)).not.toContain('"write"');
+      expect(agent?.permission).toEqual({
+        edit: { '*': 'deny' },
+        task: 'deny',
+      });
+    });
+
+    it('resolveByAgent：permission 不含 write（worker assertAgentShape 不抛错）', async () => {
+      const resolved = await poisonedService().resolveByAgent({
+        agentKey: 'demo-agent',
+        policyId: 'ep_demo',
+      });
+      expect(resolved?.permission).not.toHaveProperty('write');
+      expect(JSON.stringify(resolved?.permission)).not.toContain('"write"');
+    });
+  });
 });

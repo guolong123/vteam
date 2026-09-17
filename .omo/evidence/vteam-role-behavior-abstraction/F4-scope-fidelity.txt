@@ -1,0 +1,220 @@
+================================================================================
+F4 — SCOPE FIDELITY AUDIT
+Plan:   .omo/plans/vteam-role-behavior-abstraction.md
+Base:   f0b1924   Head: 412de74 (+ uncommitted)
+Auditor: independent verifier (no prior claims trusted)
+Date:   2026-09-18
+================================================================================
+
+VERDICT SUMMARY
+--------------------------------------------------------------------------------
+All eight "Must NOT have" guardrails held. Worker tree untouched. Factory-state
+artifact byte-identical (sha256 matches). No test weakness introduced (154 expects
+added vs 17 removed; every removal replaced with equal/stronger assertions; no
+skip/only). No scope creep; nothing the plan deferred was implemented. One
+plan-internal inconsistency (Scope parenthetical breadth vs todo-level UI work) is
+documented as an observation for F1, not a guardrail violation.
+
+================================================================================
+1. CHANGED-FILE INVENTORY & CLASSIFICATION
+================================================================================
+Command: git diff --name-status f0b1924..HEAD
+  M scripts/e2e-role-boundaries.sh
+  M server/prisma/seed.ts
+  M server/src/agents/agents.service.spec.ts
+  M server/src/agents/agents.service.ts
+  M server/src/chat/chat.module.ts
+  M server/src/chat/worker-dispatcher.spec.ts
+  M server/src/chat/worker-dispatcher.ts
+  A server/src/execution-policies/agent-policies-db-builtin.spec.ts
+  A server/src/execution-policies/agent-policies-db-driven.spec.ts
+  M server/src/execution-policies/agent-policies.custom-agents.spec.ts
+  A server/src/execution-policies/agent-policy-derivation.spec.ts
+  A server/src/execution-policies/agent-policy-fallback.spec.ts
+  M server/src/execution-policies/execution-policies.controller.spec.ts
+  M server/src/execution-policies/execution-policies.controller.ts
+  M server/src/execution-policies/execution-policy.service.ts
+  A server/src/execution-policies/policy-canonical.spec.ts
+  M server/src/platform-mcp/platform-mcp.service.spec.ts
+  M server/src/platform-mcp/platform-mcp.service.ts
+  M server/src/prisma/seed.spec.ts
+  M web/app/(main)/agents/page.tsx
+  M web/e2e/reference/testids.ts
+
+Command: git status --porcelain (uncommitted, non-.omo)
+  (only .omo/ bookkeeping + untracked .omo/evidence/ and .omo/notepads/ — no
+   product-code edits outside the committed range)
+
+Classification (all IN SCOPE):
+  scripts/e2e-role-boundaries.sh            IN  — Todo 15 (scenario f extension + f2)
+  server/prisma/seed.ts                     IN  — Todos 9, 10 (update:{} preservation)
+  server/src/agents/agents.service.ts       IN  — Todo 5 (unify fallback)
+  server/src/agents/agents.service.spec.ts  IN  — Todo 5 test
+  server/src/chat/chat.module.ts            IN  — Todo 11 (module wiring)
+  server/src/chat/worker-dispatcher.ts      IN  — Todo 11 (boundary from policy)
+  server/src/chat/worker-dispatcher.spec.ts IN  — Todos 7, 11 tests
+  server/src/execution-policies/*.ts        IN  — Todos 2,3,4,5,6,7,8,15
+  server/src/platform-mcp/platform-mcp.service.ts       IN — Todo 5 (agentKey passthrough)
+  server/src/platform-mcp/platform-mcp.service.spec.ts IN — Todo 5 test
+  server/src/prisma/seed.spec.ts            IN  — Todo 12 (preservation assertions)
+  web/app/(main)/agents/page.tsx            IN  — Todos 13, 14 (prompt + matrix)
+  web/e2e/reference/testids.ts              IN  — Todo 13 (drops stale readonly-badge ref)
+
+No file is a new feature/dimension, an unrelated refactor, or a test-weakness.
+New spec files are additive Todo 2/3/5/6/15 evidence, not replacements.
+
+================================================================================
+2. GUARDRAIL VERIFICATION (raw output)
+================================================================================
+
+[G1] worker/ untouched  — PASS
+  $ git diff f0b1924..HEAD -- worker/
+  (empty)
+  $ git diff f0b1924..HEAD -- worker/ | wc -l
+  0
+  $ git status --porcelain -- worker/
+  (empty)
+  => Wire contract {agents:[{name,description,mode,permission}], guard:{...}}
+     and worker/src/role-guard/policy.ts branch semantics preserved.
+
+[G2] MCP namespace / server-gated set unchanged — PASS
+  $ git diff f0b1924..HEAD -- server/src/common/constants/agent.constants.ts | wc -l
+  0
+  VTEAM_MCP_TOOL_NAMES  at agent.constants.ts:117 (unchanged)
+  ROLE_SERVER_GATED_TOOLS at agent.constants.ts:155 (unchanged)
+  Note: constants file is imported READ-ONLY by the new service code; zero edits.
+
+[G3] No deliverables runtime consumption — PASS
+  $ git diff f0b1924..HEAD | grep -n "deliverables"
+  NO deliverables in diff
+
+[G4] No per-TeamMember prompt/policy override — PASS
+  $ git diff --name-status f0b1924..HEAD -- server/prisma/schema.prisma server/src/teams/
+  (empty)
+  $ git diff f0b1924..HEAD -- server/prisma/schema.prisma server/prisma/migrations | wc -l
+  0
+  No TeamMember model/DTO change, no migration.
+
+[G5] No new behavior-dimension field on identity/dispatch payload — PASS
+  - worker execute() payload keys unchanged (worker-dispatcher.ts:2123-2134:
+    prompt/model/directory/taskId/agentId/channelId/sessionId/agent/attachments/system).
+  - AgentIdentityInfo gained only `policyId?: string | null` (worker-dispatcher.ts:302).
+    This is a server-internal pointer to WHICH policy row to read; it is not a behavior
+    dimension (not prompt/permission/guard/correction/description), is not serialized
+    to the worker, and is not part of any controller/DTO. Confirmed:
+    grep -rn "AgentIdentityInfo" server/src --include='*.controller.ts' --include='*.dto.ts'
+    => NONE in controllers/dtos
+  - No `duty` field added (getOpencodeAgentDuty at worker-dispatcher.ts:975 is a
+    pre-existing import context line, NOT an addition; file exists in both base & head).
+
+[G6] Factory-state values unchanged — PASS
+  $ shasum -a 256 .omo/evidence/.../before-agent-policies.json
+  793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a   (matches required)
+  $ shasum -a 256 .omo/evidence/.../after-agent-policies.json
+  793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a
+  $ cmp before-agent-policies.json after-agent-policies.json
+  IDENTICAL
+  after artifact: 7 agents + 7 guard roles, correct names, task=allow only vteam-plan.
+
+[G7] No A/B dual path / legacy shim / deprecated annotations — PASS
+  $ git diff f0b1924..HEAD | grep -niE "^\+.*(deprecated|legacy shim|dual[- ]?path|@deprecated|retired)"
+  NONE ADDED
+
+[G8] No TeamTemplate / blueprint feature — PASS
+  $ grep -rniE "TeamTemplate|team_blueprint|teamBlueprint" server/src web (excl. node_modules,.next)
+  NONE
+
+Supporting invariant checks:
+  $ cd server && npx tsc -p tsconfig.json --noEmit   => exit 0
+  $ cd web    && npx tsc --noEmit                    => exit 0
+  $ cd server && npx jest --runInBand src/execution-policies src/agents src/prisma src/chat src/platform-mcp
+    => Test Suites: 36 passed, 36 total; Tests: 1126 passed, 1126 total
+
+================================================================================
+3. TEST-WEAKENING CHECK (no assertion deleted to reach green)
+================================================================================
+$ git diff f0b1924..HEAD -- '*.spec.ts' | grep -cE "^\+.*expect\("   => 154
+$ git diff f0b1924..HEAD -- '*.spec.ts' | grep -cE "^-.*expect\("   => 17
+$ git diff f0b1924..HEAD -- '*.spec.ts' | grep -cE "^\+.*(it\(|describe\()" => 65
+$ git diff f0b1924..HEAD -- '*.spec.ts' | grep -cE "^-.*(it\(|describe\()" => 10
+
+Every one of the 17 removed expects maps to a deliberate spec update required by the
+plan, and each is replaced by an equal-or-stronger assertion:
+  - renderBoundarySection('vteam-unknown')/('product')/('vteam-demo-agent') => ''
+    REPLACED by a host of cases incl. null/undefined/{}/handoff-only/scopeSummary:''
+    /scopeSummary:42 AND a new positive custom-agent-correction test. STRONGER.
+  - resolveByAgent "builtin ignores config.tools" (custom-agents.spec.ts:258-281)
+    REPLACED by DB-wins + bogus-dropped + absent/all-invalid-fallback-never-{}
+    + bashDeny cases. STRONGER (Todo 7).
+  - PATCH template -> 403  (controller.spec.ts)
+    REPLACED by 200 + round-trip read-back persistence. Legitimate Todo 8 update.
+    POST template 403 (line 112) and DELETE template 403 (line 235) ASSERTIONS INTACT.
+  - seed `update.config === create.config`, `update.agentKey/policyId`, prompt key set
+    REPLACED by `expect(update).toEqual({})` plus create-branch shape/ordering checks
+    (Todo 12). The spec's ability to catch a missing template seed is preserved.
+  - ordering assertion (seed.spec.ts policy-order < agent-order) PRESERVED.
+
+No assertion was simply removed. Removed lines were all superseded/renamed tests.
+
+$ no skip/only introduced:
+  for each changed spec at HEAD: grep -nE "it\.skip|xit\(|describe\.skip|xdescribe|test\.skip|\.only\("
+  => FOUND: none   ("DONE" with no hits)
+
+e2e scenario (f) task-contract change:
+  Old: "all agents permission.task=deny". New: "exactly vteam-plan task=allow, all
+  others deny". This is a CORRECTION, not a weakening: the old form contradicted the
+  frozen baseline (vteam-plan task=allow) and could never pass on a real stack. The new
+  form is strictly more specific (exactly-one allow + write-key check retained). It is
+  in the plan's Todo 15 remit to extend scenario (f).
+
+$ bash -n scripts/e2e-role-boundaries.sh  => SYNTAX_OK
+
+================================================================================
+4. DEFERRED-WORK IMPLEMENTED? (scope creep in the other direction)
+================================================================================
+  - Plan "Must NOT have" list: no duty, no deliverables, no per-TeamMember override,
+    no worker wire change, no guard semantics change, no factory value change, no
+    dual path/shim/deprecated, no TeamTemplate, no MCP namespace change.
+    => ALL held (see §2). No deferred item was nonetheless implemented.
+  - No package.json / tsconfig dependency changes:
+    $ git diff f0b1924..HEAD -- '**/package.json' '**/tsconfig.json'  => empty
+  - Draft decision C5 (de-hardcode VTEAM_AGENT_NAMES / roleToAgentName / PLAN_AGENT_ID /
+    isPlanRole) was deliberately NOT implemented: VTEAM_AGENT_NAMES/roleToAgentName stay
+    as identity/fallback mapping exactly as Todo 11's scope boundary requires.
+    Confirmed no change to those symbols beyond the boundary-text source.
+
+================================================================================
+5. OBSERVATIONS (not guardrail violations; for F1 plan-compliance)
+================================================================================
+O1. Scope parenthetical vs todo-level UI breadth. The "Must have" enumerates
+    page-editable dimensions: prompt, permission, guard tool matrix, boundary/
+    correction, description. The delivered web work implements:
+      - prompt         : editable (agents/page.tsx readOnly={readOnly}, call-site
+                         readOnly={false} at :2539) — Todo 13.
+      - guard tool matrix: editable for built-in (editable = effective !== null,
+                         agents/page.tsx:625; PATCH :697) — Todo 14.
+      - permission (layer-1 native rows edit/read/bash/task): rendered READ-ONLY.
+      - correction / description: DB-resolved and API-PATCHable (Todo 8), displayed,
+                         but no dedicated page editor.
+    Todo 14 EXPLICITLY mandates "Keep layer-① native rows (edit/read/bash/task)
+    read-only as today", so the layer-1 read-only state is by plan design. However
+    correction/description have no UI control either, and no todo implements one.
+    The delivered work matches the todo list exactly; the Scope parenthetical is
+    broader than the todos. This is a plan-internal inconsistency, not executor drift.
+    Recommend F1 confirm the intended granularity. Runtime behavior dimensions ARE
+    DB-sourced (Todo 2/3/4/11) and editable via the PATCH path (Todo 8).
+O2. `web/e2e/reference/testids.ts` drops "agent-readonly-badge". Consistent with
+    Todo 13 removing the badge; the reference list has no automated consumer in-repo
+    (grep shows only self-reference) so it is a documentation refresh, in scope.
+
+================================================================================
+6. EVIDENCE INDEX
+================================================================================
+- before/after sha256 both = 793093dc...abbc3a; cmp IDENTICAL
+- worker diff 0 lines; worker status clean
+- agent.constants.ts diff 0 lines
+- 21 changed files, each mapped to a plan todo
+- server tsc exit 0; web tsc exit 0; 36/36 suites, 1126/1126 tests green
+- no skip/only; 154 expects added vs 17 removed (all replaced)
+
+F4 VERDICT: APPROVE

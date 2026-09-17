@@ -1,0 +1,19 @@
+===== MUTATION A: revert Todo 3 (buildAgentPolicies ignores bound row) =====
+    ✕ buildAgentPolicies(): DB 的 tools/permission 穿透到 agents[] 与 guard.roles[]，非法值丢弃 (4 ms)
+    ✓ buildAgentPolicies(): 未编辑的 6 个内置角色与冻结基线逐字节一致
+    ✓ resolveByAgent(): 内置名的 guard payload 反映 DB tools/permission（Todo 4 短路已移除） (1 ms)
+    ✓ resolveManyByAgents(): 与单条解析同源，内置名的 guard payload 同样反映 DB 值
+    ✓ 发射形状满足 worker buildAgentDefinitions 严格字段契约（字段集不可增减） (3 ms)
+    ✓ 行全缺时回退常量（对照：无 DB 行 ≠ 编辑后的值，证明上方断言非空转）
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 5 passed, 6 total
+
+===== MUTATION B: re-add Todo 4 builtin short-circuit in guardForAgent =====
+    ✓ buildAgentPolicies(): DB 的 tools/permission 穿透到 agents[] 与 guard.roles[]，非法值丢弃 (2 ms)
+    ✓ buildAgentPolicies(): 未编辑的 6 个内置角色与冻结基线逐字节一致 (1 ms)
+    ✕ resolveByAgent(): 内置名的 guard payload 反映 DB tools/permission（Todo 4 短路已移除） (2 ms)
+    ✕ resolveManyByAgents(): 与单条解析同源，内置名的 guard payload 同样反映 DB 值
+    ✓ 发射形状满足 worker buildAgentDefinitions 严格字段契约（字段集不可增减） (10 ms)
+    ✓ 行全缺时回退常量（对照：无 DB 行 ≠ 编辑后的值，证明上方断言非空转）
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 4 passed, 6 total

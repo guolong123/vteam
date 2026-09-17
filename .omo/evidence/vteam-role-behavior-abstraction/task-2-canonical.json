@@ -1,0 +1,645 @@
+{
+  "_meta": {
+    "task": "task-2-canonical",
+    "plan": "vteam-role-behavior-abstraction",
+    "kind": "canonical-emission-provenance",
+    "proof": "JSON.parse(JSON.stringify(config)) with keys reordered like a MySQL JSON column (and fully reversed) resolves byte-identically (JSON.stringify) to both the constant-derived output and the frozen baseline before-agent-policies.json",
+    "baseline": "before-agent-policies.json (captured at HEAD f0b1924)",
+    "note": "No DB connection opened; resolveBuiltinPolicy is pure."
+  },
+  "allPass": true,
+  "roles": {
+    "vteam-plan": {
+      "pass": true,
+      "expected_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_submit_artifact",
+        "vteam_issue_create",
+        "vteam_issue_list",
+        "vteam_issue_get",
+        "vteam_issue_update",
+        "vteam_issue_transition",
+        "vteam_memory_save",
+        "vteam_memory_update",
+        "vteam_channel_send",
+        "vteam_git_repos_list",
+        "vteam_hook_register",
+        "vteam_hook_cancel"
+      ],
+      "resolved_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_submit_artifact",
+        "vteam_issue_create",
+        "vteam_issue_list",
+        "vteam_issue_get",
+        "vteam_issue_update",
+        "vteam_issue_transition",
+        "vteam_memory_save",
+        "vteam_memory_update",
+        "vteam_channel_send",
+        "vteam_git_repos_list",
+        "vteam_hook_register",
+        "vteam_hook_cancel"
+      ],
+      "variants": {
+        "plain": {
+          "config_key_order": [
+            "edit",
+            "read",
+            "bash",
+            "task",
+            "vteam_submit_artifact",
+            "vteam_issue_create",
+            "vteam_issue_list",
+            "vteam_issue_get",
+            "vteam_issue_update",
+            "vteam_issue_transition",
+            "vteam_memory_save",
+            "vteam_memory_update",
+            "vteam_channel_send",
+            "vteam_git_repos_list",
+            "vteam_hook_register",
+            "vteam_hook_cancel"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "mysqlOrdered": {
+          "config_key_order": [
+            "bash",
+            "edit",
+            "read",
+            "task",
+            "vteam_issue_get",
+            "vteam_issue_list",
+            "vteam_hook_cancel",
+            "vteam_memory_save",
+            "vteam_channel_send",
+            "vteam_issue_create",
+            "vteam_issue_update",
+            "vteam_hook_register",
+            "vteam_memory_update",
+            "vteam_git_repos_list",
+            "vteam_submit_artifact",
+            "vteam_issue_transition"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "reversed": {
+          "config_key_order": [
+            "vteam_hook_cancel",
+            "vteam_hook_register",
+            "vteam_git_repos_list",
+            "vteam_channel_send",
+            "vteam_memory_update",
+            "vteam_memory_save",
+            "vteam_issue_transition",
+            "vteam_issue_update",
+            "vteam_issue_get",
+            "vteam_issue_list",
+            "vteam_issue_create",
+            "vteam_submit_artifact",
+            "task",
+            "bash",
+            "read",
+            "edit"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        }
+      },
+      "normalization": {
+        "write_dropped": true,
+        "illegal_tool_dropped": true,
+        "constant_tools_preserved": true,
+        "bashDeny_coerced_to_string_array": true,
+        "bashDeny_value": [
+          "rm -rf /"
+        ]
+      }
+    },
+    "vteam-product": {
+      "pass": true,
+      "expected_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_git_repos_list"
+      ],
+      "resolved_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_git_repos_list"
+      ],
+      "variants": {
+        "plain": {
+          "config_key_order": [
+            "edit",
+            "read",
+            "bash",
+            "task",
+            "vteam_git_repos_list"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "mysqlOrdered": {
+          "config_key_order": [
+            "bash",
+            "edit",
+            "read",
+            "task",
+            "vteam_git_repos_list"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "reversed": {
+          "config_key_order": [
+            "vteam_git_repos_list",
+            "task",
+            "bash",
+            "read",
+            "edit"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        }
+      },
+      "normalization": {
+        "write_dropped": true,
+        "illegal_tool_dropped": true,
+        "constant_tools_preserved": true,
+        "bashDeny_coerced_to_string_array": true,
+        "bashDeny_value": [
+          "rm -rf /"
+        ]
+      }
+    },
+    "vteam-architect": {
+      "pass": true,
+      "expected_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_issue_create",
+        "vteam_issue_update",
+        "vteam_issue_transition",
+        "vteam_git_repos_list",
+        "vteam_hook_register",
+        "vteam_hook_cancel"
+      ],
+      "resolved_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_issue_create",
+        "vteam_issue_update",
+        "vteam_issue_transition",
+        "vteam_git_repos_list",
+        "vteam_hook_register",
+        "vteam_hook_cancel"
+      ],
+      "variants": {
+        "plain": {
+          "config_key_order": [
+            "edit",
+            "read",
+            "bash",
+            "task",
+            "vteam_issue_create",
+            "vteam_issue_update",
+            "vteam_issue_transition",
+            "vteam_git_repos_list",
+            "vteam_hook_register",
+            "vteam_hook_cancel"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "mysqlOrdered": {
+          "config_key_order": [
+            "bash",
+            "edit",
+            "read",
+            "task",
+            "vteam_hook_cancel",
+            "vteam_issue_create",
+            "vteam_issue_update",
+            "vteam_hook_register",
+            "vteam_git_repos_list",
+            "vteam_issue_transition"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "reversed": {
+          "config_key_order": [
+            "vteam_hook_cancel",
+            "vteam_hook_register",
+            "vteam_git_repos_list",
+            "vteam_issue_transition",
+            "vteam_issue_update",
+            "vteam_issue_create",
+            "task",
+            "bash",
+            "read",
+            "edit"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        }
+      },
+      "normalization": {
+        "write_dropped": true,
+        "illegal_tool_dropped": true,
+        "constant_tools_preserved": true,
+        "bashDeny_coerced_to_string_array": true,
+        "bashDeny_value": [
+          "rm -rf /"
+        ]
+      }
+    },
+    "vteam-developer": {
+      "pass": true,
+      "expected_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_issue_create",
+        "vteam_git_repos_list",
+        "vteam_hook_register",
+        "vteam_hook_cancel"
+      ],
+      "resolved_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_issue_create",
+        "vteam_git_repos_list",
+        "vteam_hook_register",
+        "vteam_hook_cancel"
+      ],
+      "variants": {
+        "plain": {
+          "config_key_order": [
+            "edit",
+            "read",
+            "bash",
+            "task",
+            "vteam_issue_create",
+            "vteam_git_repos_list",
+            "vteam_hook_register",
+            "vteam_hook_cancel"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "mysqlOrdered": {
+          "config_key_order": [
+            "bash",
+            "edit",
+            "read",
+            "task",
+            "vteam_hook_cancel",
+            "vteam_issue_create",
+            "vteam_hook_register",
+            "vteam_git_repos_list"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "reversed": {
+          "config_key_order": [
+            "vteam_hook_cancel",
+            "vteam_hook_register",
+            "vteam_git_repos_list",
+            "vteam_issue_create",
+            "task",
+            "bash",
+            "read",
+            "edit"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        }
+      },
+      "normalization": {
+        "write_dropped": true,
+        "illegal_tool_dropped": true,
+        "constant_tools_preserved": true,
+        "bashDeny_coerced_to_string_array": true,
+        "bashDeny_value": [
+          "rm -rf /"
+        ]
+      }
+    },
+    "vteam-tester": {
+      "pass": true,
+      "expected_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_issue_update",
+        "vteam_git_repos_list",
+        "vteam_hook_register",
+        "vteam_hook_cancel"
+      ],
+      "resolved_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_issue_update",
+        "vteam_git_repos_list",
+        "vteam_hook_register",
+        "vteam_hook_cancel"
+      ],
+      "variants": {
+        "plain": {
+          "config_key_order": [
+            "edit",
+            "read",
+            "bash",
+            "task",
+            "vteam_issue_update",
+            "vteam_git_repos_list",
+            "vteam_hook_register",
+            "vteam_hook_cancel"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "mysqlOrdered": {
+          "config_key_order": [
+            "bash",
+            "edit",
+            "read",
+            "task",
+            "vteam_hook_cancel",
+            "vteam_issue_update",
+            "vteam_hook_register",
+            "vteam_git_repos_list"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "reversed": {
+          "config_key_order": [
+            "vteam_hook_cancel",
+            "vteam_hook_register",
+            "vteam_git_repos_list",
+            "vteam_issue_update",
+            "task",
+            "bash",
+            "read",
+            "edit"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        }
+      },
+      "normalization": {
+        "write_dropped": true,
+        "illegal_tool_dropped": true,
+        "constant_tools_preserved": true,
+        "bashDeny_coerced_to_string_array": true,
+        "bashDeny_value": [
+          "rm -rf /"
+        ]
+      }
+    },
+    "vteam-project_manager": {
+      "pass": true,
+      "expected_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_submit_artifact",
+        "vteam_git_repos_list"
+      ],
+      "resolved_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_submit_artifact",
+        "vteam_git_repos_list"
+      ],
+      "variants": {
+        "plain": {
+          "config_key_order": [
+            "edit",
+            "read",
+            "bash",
+            "task",
+            "vteam_submit_artifact",
+            "vteam_git_repos_list"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "mysqlOrdered": {
+          "config_key_order": [
+            "bash",
+            "edit",
+            "read",
+            "task",
+            "vteam_git_repos_list",
+            "vteam_submit_artifact"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "reversed": {
+          "config_key_order": [
+            "vteam_git_repos_list",
+            "vteam_submit_artifact",
+            "task",
+            "bash",
+            "read",
+            "edit"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        }
+      },
+      "normalization": {
+        "write_dropped": true,
+        "illegal_tool_dropped": true,
+        "constant_tools_preserved": true,
+        "bashDeny_coerced_to_string_array": true,
+        "bashDeny_value": [
+          "rm -rf /"
+        ]
+      }
+    },
+    "vteam-librarian": {
+      "pass": true,
+      "expected_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_notify_agent",
+        "vteam_submit_artifact",
+        "vteam_issue_create",
+        "vteam_issue_list",
+        "vteam_issue_get",
+        "vteam_issue_update",
+        "vteam_issue_transition",
+        "vteam_memory_save",
+        "vteam_memory_update",
+        "vteam_channel_send",
+        "vteam_wecom_reply",
+        "vteam_hook_register",
+        "vteam_hook_cancel"
+      ],
+      "resolved_permission_key_order": [
+        "edit",
+        "read",
+        "bash",
+        "task",
+        "vteam_notify_agent",
+        "vteam_submit_artifact",
+        "vteam_issue_create",
+        "vteam_issue_list",
+        "vteam_issue_get",
+        "vteam_issue_update",
+        "vteam_issue_transition",
+        "vteam_memory_save",
+        "vteam_memory_update",
+        "vteam_channel_send",
+        "vteam_wecom_reply",
+        "vteam_hook_register",
+        "vteam_hook_cancel"
+      ],
+      "variants": {
+        "plain": {
+          "config_key_order": [
+            "edit",
+            "read",
+            "bash",
+            "task",
+            "vteam_notify_agent",
+            "vteam_submit_artifact",
+            "vteam_issue_create",
+            "vteam_issue_list",
+            "vteam_issue_get",
+            "vteam_issue_update",
+            "vteam_issue_transition",
+            "vteam_memory_save",
+            "vteam_memory_update",
+            "vteam_channel_send",
+            "vteam_wecom_reply",
+            "vteam_hook_register",
+            "vteam_hook_cancel"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "mysqlOrdered": {
+          "config_key_order": [
+            "bash",
+            "edit",
+            "read",
+            "task",
+            "vteam_issue_get",
+            "vteam_issue_list",
+            "vteam_hook_cancel",
+            "vteam_memory_save",
+            "vteam_wecom_reply",
+            "vteam_channel_send",
+            "vteam_issue_create",
+            "vteam_issue_update",
+            "vteam_notify_agent",
+            "vteam_hook_register",
+            "vteam_memory_update",
+            "vteam_submit_artifact",
+            "vteam_issue_transition"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        },
+        "reversed": {
+          "config_key_order": [
+            "vteam_hook_cancel",
+            "vteam_hook_register",
+            "vteam_wecom_reply",
+            "vteam_channel_send",
+            "vteam_memory_update",
+            "vteam_memory_save",
+            "vteam_issue_transition",
+            "vteam_issue_update",
+            "vteam_issue_get",
+            "vteam_issue_list",
+            "vteam_issue_create",
+            "vteam_submit_artifact",
+            "vteam_notify_agent",
+            "task",
+            "bash",
+            "read",
+            "edit"
+          ],
+          "equals_constant": true,
+          "equals_baseline": true
+        }
+      },
+      "normalization": {
+        "write_dropped": true,
+        "illegal_tool_dropped": true,
+        "constant_tools_preserved": true,
+        "bashDeny_coerced_to_string_array": true,
+        "bashDeny_value": [
+          "rm -rf /"
+        ]
+      }
+    }
+  },
+  "tools_fallback_probe": {
+    "vteam-plan": {
+      "tools_absent_falls_back_to_constant": true,
+      "tool_count": 11
+    },
+    "vteam-product": {
+      "tools_absent_falls_back_to_constant": true,
+      "tool_count": 22
+    },
+    "vteam-architect": {
+      "tools_absent_falls_back_to_constant": true,
+      "tool_count": 22
+    },
+    "vteam-developer": {
+      "tools_absent_falls_back_to_constant": true,
+      "tool_count": 26
+    },
+    "vteam-tester": {
+      "tools_absent_falls_back_to_constant": true,
+      "tool_count": 25
+    },
+    "vteam-project_manager": {
+      "tools_absent_falls_back_to_constant": true,
+      "tool_count": 20
+    },
+    "vteam-librarian": {
+      "tools_absent_falls_back_to_constant": true,
+      "tool_count": 16
+    }
+  }
+}

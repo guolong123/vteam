@@ -1,0 +1,164 @@
+{
+  "_meta": {
+    "kind": "task-14-web-matrix",
+    "plan": "vteam-role-behavior-abstraction",
+    "todo": "[web] Make the built-in tool matrix editable in the UI",
+    "date": "2026-09-17T17:19:24.009Z",
+    "livePlaywrightQA": "RUN",
+    "stack": {
+      "web": "local `next dev` on http://localhost:3001 (API_PROXY_TARGET=http://localhost:13000)",
+      "server": "docker compose aiagents-compose-server on :13000 (rebuilt post-Todo-8, PATCH template => 200)",
+      "browser": "Playwright MCP (system Chrome), logged in as seed-admin",
+      "agentUnderTest": "a_product (type=template, role=product, agentKey=product, policyId=ep_product)"
+    },
+    "screenshot": ".omo/evidence/vteam-role-behavior-abstraction/task-14-web-matrix.png"
+  },
+  "assertions": {
+    "A1_template_guard_rows_editable": {
+      "pass": true,
+      "how": "page.getByTestId(\"tool-effect-select\") for data-tool=vteam_group_post on a type=template agent",
+      "readOnlyAttr": "false",
+      "radioAriaDisabled": [
+        "false",
+        "false",
+        "false"
+      ],
+      "title": null,
+      "note": "at HEAD the same locator was readonly=true, aria-disabled=true, title=\"模板只读\""
+    },
+    "A2_toggle_patches_bound_policy": {
+      "pass": true,
+      "how": "waitForResponse PATCH /api/v1/execution-policies/ep_product on clicking data-effect=ask",
+      "patchStatus": 200,
+      "responseTools_vteam_group_post": "ask",
+      "requestBodyShape": "{config:{permission,correction,tools}} — unchanged from the pre-existing mutation",
+      "endpoint": "PATCH /execution-policies/ep_product (the bound policy; no new endpoint)"
+    },
+    "A3_persists_after_reload": {
+      "pass": true,
+      "how": "page.reload() then re-select a_product, re-read aria-checked",
+      "afterReloadActive": "ask",
+      "afterReloadReadOnly": "false"
+    },
+    "A4_layer1_native_rows_still_readonly": {
+      "pass": true,
+      "nativeRows": [
+        {
+          "key": "edit",
+          "hasSegmentedControl": false
+        },
+        {
+          "key": "read",
+          "hasSegmentedControl": false
+        },
+        {
+          "key": "bash",
+          "hasSegmentedControl": false
+        },
+        {
+          "key": "task",
+          "hasSegmentedControl": false
+        }
+      ],
+      "note": "native rows are rendered by a separate branch (EffectBadge); they never had a segmented control and still do not"
+    },
+    "A5_server_gated_rows_still_readonly": {
+      "pass": true,
+      "gatedBadgeCount": 7,
+      "gatedTools": [
+        "vteam_task_transition",
+        "vteam_question_confirm",
+        "vteam_task_create",
+        "vteam_plan_mode",
+        "vteam_plan_complete",
+        "vteam_team_add_member",
+        "vteam_skill_create"
+      ],
+      "gatedRowsHaveSegmentedControl": false,
+      "display": "仅主 Agent"
+    },
+    "A6_footer_copy_truthful": {
+      "pass": true,
+      "templateFooter": "执行策略 · 可编辑",
+      "note": "was 执行策略 · 只读 at HEAD"
+    },
+    "A7_custom_agent_unaffected": {
+      "pass": true,
+      "customAgent": "myagent (a_0000000001, type=custom)",
+      "firstSelectReadOnly": "false",
+      "selectCount": 59,
+      "policyMeta": "myagent 策略 · vteam-myagent"
+    },
+    "A8_counterfactual_HEAD_is_readonly": {
+      "pass": true,
+      "how": "temporarily restored HEAD version of page.tsx, reloaded, re-probed, then restored the task-14 file (sha256 12a7ec28…1701 verified)",
+      "headReadOnly": "true",
+      "headAriaDisabled": "true",
+      "headTitle": "模板只读",
+      "headFooter": "执行策略 · 只读",
+      "headClickRefused": "Playwright actionability: element is not enabled (aria-disabled=true) — no PATCH possible"
+    },
+    "A9_console_clean": {
+      "pass": true,
+      "consoleErrors": 0,
+      "consoleWarnings": 0,
+      "totalMessages": 13,
+      "detail": "4x React DevTools INFO + 4x Fast Refresh LOG + 3x VERBOSE DOM notice + 2 INFO; no ERROR/WARNING"
+    },
+    "A10_no_failed_responses": {
+      "pass": true,
+      "non2xxResponses": 0,
+      "requestCount": 65,
+      "note": "all /api/v1/* requests 200; the only PATCH in the session is the intended ep_product one"
+    }
+  },
+  "cleanup": {
+    "livePolicyRestored": true,
+    "restoreMethod": "explicit PATCH /execution-policies/ep_product with the exact golden config (captured before any write)",
+    "restorePatchStatus": 200,
+    "goldenSha256": "2ace11785ade7be442093d35fb54de87386c4fa2e3d0728eb49a1bdd3a6fab61",
+    "restoredSha256": "2ace11785ade7be442093d35fb54de87386c4fa2e3d0728eb49a1bdd3a6fab61",
+    "byteIdentical": true,
+    "fullRowEqualExceptTimestamps": true,
+    "goldenFile": ".omo/evidence/vteam-role-behavior-abstraction/task-14-golden-policy-config.json",
+    "note": "a concurrent actor (unrelated curl PATCHes during the session) also touched/restored ep_product; final state re-verified byte-identical to the golden captured at the start",
+    "workerGuardPayloadRestored": {
+      "checked": true,
+      "how": "docker exec aiagents-compose-worker cat /data/vteam-worker/.vteam-role-guard/roles.json after the restore PATCH + worker re-sync",
+      "enabled": true,
+      "liveRoleCount": 8,
+      "builtinRoles": 7,
+      "allBuiltinToolsDeepEqualBaseline": true,
+      "note": "7 built-ins deep-equal before-agent-policies.json guard.roles[*].tools; the 8th is the unrelated custom agent myagent"
+    },
+    "concurrentActorNote": "Another agent concurrently PATCHed ep_product during QA (server logs: 13 PATCHes from curl within minutes). Final DB config re-verified byte-identical to golden and the worker re-synced to baseline."
+  },
+  "changedFiles": [
+    "web/app/(main)/agents/page.tsx"
+  ],
+  "typecheck": {
+    "command": "cd web && npx tsc --noEmit",
+    "exit": 0
+  },
+  "lint": {
+    "command": "cd web && npx eslint \"app/(main)/agents/page.tsx\"",
+    "exit": 0,
+    "errors": 0,
+    "warning": "pre-existing deleting unused (ConfigPanel, untouched)"
+  },
+  "e2e": {
+    "targeted": {
+      "command": "cd web && npx playwright test e2e/pages.spec.ts -g \"agent-config\" --project=pages --reporter=list",
+      "result": "2 passed"
+    },
+    "fullPages": {
+      "command": "cd web && npx playwright test --project=pages --reporter=list",
+      "result": "15 passed, 2 failed",
+      "failed": [
+        "team-session zero-task 零任务直聊（无选择器）",
+        "12/17 skills-tools-manage /skills（双 Tab + 工具三子 Tab）"
+      ],
+      "attribution": "pre-existing/shared-env drift documented by Todo 13; neither touches /agents"
+    }
+  }
+}

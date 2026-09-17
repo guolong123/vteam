@@ -1,0 +1,122 @@
+task-7-spec-rewrite — mutation check (vteam-role-behavior-abstraction)
+============================================================
+
+Rewritten test: server/src/execution-policies/agent-policies.custom-agents.spec.ts
+  (replaces the old 'resolveByAgent 对内置名忽略 config.tools' test that encoded the removed short-circuit)
+
+MUTATION: temporarily re-add the built-in short-circuit in guardForAgent()
+  - the short-circuit returns { ...ROLE_BOUNDARIES[agentName].toolAllows, bashDeny: [...ROLE_BASH_DENY_PATTERNS] }
+  - EVERY built-in name hits it before config is consulted
+
+----- BEFORE (short-circuit restored) : EXPECTED FAILURE -----
+command: cd server && npx jest --runInBand src/execution-policies/agent-policies.custom-agents.spec.ts
+
+FAIL src/execution-policies/agent-policies.custom-agents.spec.ts
+  agent-policies custom agents (Todo 2)
+    内置字节一致（无自定义 agent）
+      ✓ 7 内置首位输出、顺序固定、全字段与独立推导夹具深一致 (3 ms)
+      ✓ 内置层① permission 对 server-gated 工具无 deny 键（guard pass-through，server 门判定） (2 ms)
+      ✓ policyId 缺失的 agent 行不进入自定义块（仍纯 7 内置） (1 ms)
+    自定义块（mocked DB）
+      ✓ /agent-policies 同时在 agents 与 guard.roles 含 vteam-demo-agent（tools 矩阵透出，非法值丢弃） (1 ms)
+      ✓ resolveByAgent 对自定义 agent 经 agentKey 命名并透出三态 tools（含 deny）
+      ✓ resolveByAgent 返回 serverGated（ROLE_SERVER_GATED_TOOLS 拷贝，API/UI 用）
+      ✕ resolveByAgent 对内置名从 config.tools 解析（DB 值胜出，非法值丢弃） (1 ms)
+      ✓ resolveByAgent 对内置名 config.tools 缺失/全非法时回退常量 allowlist（绝不 {}）
+      ✕ resolveByAgent 对内置名从 config.bashDeny 解析（string[] 过滤，缺失回退常量） (1 ms)
+
+  ● agent-policies custom agents (Todo 2) › 自定义块（mocked DB） › resolveByAgent 对内置名从 config.tools 解析（DB 值胜出，非法值丢弃）
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  -  1
+    + Received  + 22
+
+      Object {
+    -   "vteam_group_post": "deny",
+    +   "browser": "allow",
+    +   "vteam_channel_send": "allow",
+    +   "vteam_chat_history": "allow",
+    +   "vteam_doclib": "allow",
+    +   "vteam_group_post": "allow",
+    +   "vteam_hook_cancel": "allow",
+    +   "vteam_hook_register": "allow",
+    +   "vteam_issue_create": "allow",
+    +   "vteam_issue_get": "allow",
+    +   "vteam_issue_list": "allow",
+    +   "vteam_issue_transition": "allow",
+    +   "vteam_issue_update": "allow",
+    +   "vteam_memory_save": "allow",
+    +   "vteam_memory_search": "allow",
+    +   "vteam_memory_update": "allow",
+    +   "vteam_my_profile": "allow",
+    +   "vteam_notify_agent": "allow",
+    +   "vteam_read_file": "allow",
+    +   "vteam_submit_artifact": "allow",
+    +   "vteam_task_context": "allow",
+    +   "vteam_team_view": "allow",
+    +   "vteam_wecom_reply": "allow",
+      }
+
+      276 |       });
+      277 |       expect(resolved?.agentName).toBe('vteam-product');
+    > 278 |       expect(resolved?.tools).toEqual({ vteam_group_post: 'deny' });
+          |                               ^
+      279 |       expect(resolved?.tools).not.toEqual(
+      280 |         ROLE_BOUNDARIES['vteam-product'].toolAllows,
+      281 |       );
+
+      at Object.<anonymous> (execution-policies/agent-policies.custom-agents.spec.ts:278:31)
+
+  ● agent-policies custom agents (Todo 2) › 自定义块（mocked DB） › resolveByAgent 对内置名从 config.bashDeny 解析（string[] 过滤，缺失回退常量）
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 3
+    + Received  + 1
+
+    - Array [
+    -   "rm -rf /",
+    - ]
+    + Array []
+
+      330 |         },
+      331 |       }).resolveByAgent({ role: 'product', policyId: 'ep_product' });
+    > 332 |       expect(withPatterns?.bashDeny).toEqual(['rm -rf /']);
+          |                                      ^
+      333 |
+      334 |       const fallback = await serviceWith({
+      335 |         agent: { findMany: jest.fn().mockResolvedValue([]) },
+
+      at Object.<anonymous> (execution-policies/agent-policies.custom-agents.spec.ts:332:38)
+
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 7 passed, 9 total
+Snapshots:   1 passed, 1 total
+Time:        1.777 s
+Ran all test suites matching /src\/execution-policies\/agent-policies.custom-agents.spec.ts/i.
+
+----- AFTER (short-circuit removed / restored to real source) : GREEN -----
+command: cd server && npx jest --runInBand src/execution-policies/agent-policies.custom-agents.spec.ts
+
+PASS src/execution-policies/agent-policies.custom-agents.spec.ts
+  agent-policies custom agents (Todo 2)
+    内置字节一致（无自定义 agent）
+      ✓ 7 内置首位输出、顺序固定、全字段与独立推导夹具深一致 (3 ms)
+      ✓ 内置层① permission 对 server-gated 工具无 deny 键（guard pass-through，server 门判定） (2 ms)
+      ✓ policyId 缺失的 agent 行不进入自定义块（仍纯 7 内置）
+    自定义块（mocked DB）
+      ✓ /agent-policies 同时在 agents 与 guard.roles 含 vteam-demo-agent（tools 矩阵透出，非法值丢弃） (1 ms)
+      ✓ resolveByAgent 对自定义 agent 经 agentKey 命名并透出三态 tools（含 deny）
+      ✓ resolveByAgent 返回 serverGated（ROLE_SERVER_GATED_TOOLS 拷贝，API/UI 用）
+      ✓ resolveByAgent 对内置名从 config.tools 解析（DB 值胜出，非法值丢弃）
+      ✓ resolveByAgent 对内置名 config.tools 缺失/全非法时回退常量 allowlist（绝不 {}） (1 ms)
+      ✓ resolveByAgent 对内置名从 config.bashDeny 解析（string[] 过滤，缺失回退常量）
+
+Test Suites: 1 passed, 1 total
+Tests:       9 passed, 9 total
+Snapshots:   1 passed, 1 total
+Time:        1.323 s, estimated 2 s
+Ran all test suites matching /src\/execution-policies\/agent-policies.custom-agents.spec.ts/i.
+
+RESULT: the rewritten test fails when the short-circuit is re-added and passes when it is removed — the new semantics are genuinely pinned, not vacuous.

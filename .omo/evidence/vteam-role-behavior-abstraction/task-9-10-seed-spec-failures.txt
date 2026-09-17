@@ -1,0 +1,4003 @@
+# task-9-10 seed.spec.ts failure capture (vteam-role-behavior-abstraction)
+
+command: cd server && npx jest --runInBand src/prisma/seed.spec.ts
+exit: 1
+summary: Test Suites: 1 failed, 1 total | Tests: 22 failed, 22 passed, 44 total
+cause: seed.ts template policy/agent upserts now use update: {} (create-if-absent).
+       This spec encodes the OLD overwrite behavior and is owned by plan Todo 12
+       (invert to assert empty update + full factory defaults on create).
+
+## failing test names (verbatim, for Todo 12)
+
+1.  seed（模板 Agent 预置 + 角色策略） › 7 条角色 ExecutionPolicy upsert：type=template、permission 全量派生自 ROLE_BOUNDARIES      [spec.ts:144 expect(update.type); :145 expect(update.config)]
+2.  seed（模板 Agent 预置 + 角色策略） › 模板策略 config.tools 为 ROLE_BOUNDARIES allowlist 的拷贝（克隆深拷贝来源）              [spec.ts:201 expect(update.config).toEqual(create.config)]
+3.  seed（模板 Agent 预置 + 角色策略） › 模板 Agent create 与 update 均写入 agentKey = role（opencode 注入名 vteam-<agentKey> 与现状一致） [spec.ts:216 expect(update.agentKey)]
+4.  seed（模板 Agent 预置 + 角色策略） › 模板 Agent create 与 update 均绑定角色策略 policyId                                        [spec.ts:228 expect(update.policyId)]
+5.  seed（模板 Agent 预置 + 角色策略） › 已存在模板 Agent 时 update 分支仅同步出厂默认 prompt 与 policyId，不覆盖用户修改字段        [spec.ts:252 update key set ['agentKey','policyId','prompt']; :257-258 update.prompt string]
+6.  seed（模板 Agent 预置 + 角色策略） › 模板 prompt 四方向齐全、含越界转交，且不含禁用词/裸 MCP 名                                [spec.ts:290 reads update.prompt → undefined]
+7.  seed（模板 Agent 预置 + 角色策略） › 计划员 prompt 四方向内容齐全（身份/职责/边界/协同）                                        [spec.ts:318 reads update.prompt → undefined]
+8.  seed（模板 Agent 预置 + 角色策略） › 模板 prompt 越界转交去重：统一一句以【职责边界】为准，不再手写全量映射（a_plan 保留主 Agent 转交语义） [spec.ts:345 reads update.prompt]
+9.  seed（模板 Agent 预置 + 角色策略） › 模板 prompt「可用工具」去重：旧五角色用统一句，计划员保留 planToolLine 动态派生              [spec.ts:368 reads update.prompt]
+10. seed（模板 Agent 预置 + 角色策略） › 7 模板 prompt 协同方式含协作规约摘录（求助三要素/转交落 issue/广播纪律/10 分钟升级）       [spec.ts:405 reads update.prompt]
+11. seed（计划 skills + 评审子句） › 旧五角色 prompt 点名其专属评审 skill（skill(plan-review-<role>)）；计划员走按需加载              [spec.ts:785 reads update.prompt]
+12. seed（计划 skills + 评审子句） › 评审 skill 名不出现在非属角色的 prompt 中（无交叉污染，含计划员）                              [spec.ts:911 reads update.prompt]
+13. seed（todo9 执行铁律与行为探针） › PM 派发铁律三句齐全（先查后派/被催先报/催办引原文）                                          [promptsById reads update.prompt]
+14. seed（todo9 执行铁律与行为探针） › PM 计划完工铁律：交付齐备或待验收时调 vteam_plan_complete 标记完工，不 @计划员改文件
+15. seed（todo9 执行铁律与行为探针） › PM 消息风暴治理三铁律齐全（已通知不重发/只发增量/唤醒即派发），且不泄漏到其他角色
+16. seed（todo9 执行铁律与行为探针） › 成员回执铁律：四角色 prompt 含回执必@派发人句，知识管理员不含
+17. seed（todo9 执行铁律与行为探针） › 计划员收敛契约：收敛输入=轮次账本+verdicts明细，输出=冻结候选版+归档清单
+18. seed（todo9 执行铁律与行为探针） › 计划员修订铁律：非收敛不修订 + exact hint + 教师 override
+19. seed（todo9 执行铁律与行为探针） › 优先级声明：各铁律节均声明平台校验 > 本铁律 > 上文原文风且顺序正确
+20. seed（todo9 执行铁律与行为探针） › 探针·被催“怎么样了”不产生新派发
+21. seed（todo9 执行铁律与行为探针） › 探针·单份回执修订企图被拒（exact hint）
+22. seed（todo9 执行铁律与行为探针） › 探针·优先级：平台校验胜过铁律胜过原文 + 落盘证据
+
+note: tests 6-22 read `call[0].update.prompt` (now undefined) — Todo 12 must read
+      `call[0].create.prompt` there (the factory prompt still lands on create), while
+      tests 1-5 are the assertions that literally encode overwrite and must invert.
+      The two ordering assertions (:232-242) and create-shape assertions still pass.
+
+## raw jest output (verbatim)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:108:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:108:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:125:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:125:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:133:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:133:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:187:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:187:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:206:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:206:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:221:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:221:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:233:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:233:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:245:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:245:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:267:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:267:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:277:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:277:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:312:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:312:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:339:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:339:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:360:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:360:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:400:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:400:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:417:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:417:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:442:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:442:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:534:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:534:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:551:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:551:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:571:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:571:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:591:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:591:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:608:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:608:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:657:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:657:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:671:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:671:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:705:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:705:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:750:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:750:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:779:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:779:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:801:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:801:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:811:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:811:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:827:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:827:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:843:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:843:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:861:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:861:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:880:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:880:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:904:5)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at Object.<anonymous> (prisma/seed.spec.ts:904:5)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at promptsById (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:956:5)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:978:17)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at promptsById (prisma/seed.spec.ts:956:5)
+      at Object.<anonymous> (prisma/seed.spec.ts:978:17)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at promptsById (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:956:5)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:985:17)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at promptsById (prisma/seed.spec.ts:956:5)
+      at Object.<anonymous> (prisma/seed.spec.ts:985:17)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at promptsById (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:956:5)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:994:21)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at promptsById (prisma/seed.spec.ts:956:5)
+      at Object.<anonymous> (prisma/seed.spec.ts:994:21)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at promptsById (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:956:5)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:1009:21)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at promptsById (prisma/seed.spec.ts:956:5)
+      at Object.<anonymous> (prisma/seed.spec.ts:1009:21)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at promptsById (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:956:5)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:1017:19)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at promptsById (prisma/seed.spec.ts:956:5)
+      at Object.<anonymous> (prisma/seed.spec.ts:1017:19)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at promptsById (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:956:5)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:1029:19)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at promptsById (prisma/seed.spec.ts:956:5)
+      at Object.<anonymous> (prisma/seed.spec.ts:1029:19)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at reviewContents (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:967:5)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:1036:22)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at reviewContents (prisma/seed.spec.ts:967:5)
+      at Object.<anonymous> (prisma/seed.spec.ts:1036:22)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at promptsById (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:956:5)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:1044:21)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at promptsById (prisma/seed.spec.ts:956:5)
+      at Object.<anonymous> (prisma/seed.spec.ts:1044:21)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at reviewContents (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:967:5)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:1045:22)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at reviewContents (prisma/seed.spec.ts:967:5)
+      at Object.<anonymous> (prisma/seed.spec.ts:1045:22)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at promptsById (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:956:5)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:1063:17)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at promptsById (prisma/seed.spec.ts:956:5)
+      at Object.<anonymous> (prisma/seed.spec.ts:1063:17)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at promptsById (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:956:5)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:1074:19)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at promptsById (prisma/seed.spec.ts:956:5)
+      at Object.<anonymous> (prisma/seed.spec.ts:1074:19)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at promptsById (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:956:5)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:1088:21)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at promptsById (prisma/seed.spec.ts:956:5)
+      at Object.<anonymous> (prisma/seed.spec.ts:1088:21)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+  console.warn
+      - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）： TypeError: prisma.mcpServer.findUnique is not a function
+        at main (/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/seed.ts:1043:49)
+        at reviewContents (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:967:5)
+        at Object.<anonymous> (/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts:1089:22)
+
+      1080 |     }
+      1081 |   } catch (e) {
+    > 1082 |     console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+           |             ^
+      1083 |   }
+      1084 |
+      1085 |   await prisma.mcpServer.upsert({
+
+      at main (../prisma/seed.ts:1082:13)
+      at reviewContents (prisma/seed.spec.ts:967:5)
+      at Object.<anonymous> (prisma/seed.spec.ts:1089:22)
+
+  console.log
+    Seed 完成：
+
+      at main (../prisma/seed.ts:2213:11)
+
+  console.log
+      - 角色：undefined / undefined
+
+      at main (../prisma/seed.ts:2214:11)
+
+  console.log
+      - 用户：admin(u_admin) / seed-admin(u_admin) / seed-member(u_seed_member)
+
+      at main (../prisma/seed.ts:2215:11)
+
+  console.log
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+
+      at main (../prisma/seed.ts:2216:11)
+
+  console.log
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+
+      at main (../prisma/seed.ts:2217:11)
+
+  console.log
+      - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+
+      at main (../prisma/seed.ts:2218:11)
+
+  console.log
+      - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+
+      at main (../prisma/seed.ts:2219:11)
+
+  console.log
+      - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+
+      at main (../prisma/seed.ts:2220:11)
+
+  console.log
+      - 模型目录：0 个模型（）
+
+      at main (../prisma/seed.ts:2221:11)
+
+  console.log
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+
+      at main (../prisma/seed.ts:2222:11)
+
+  console.log
+      - 管理员密码：Admin@123456
+
+      at main (../prisma/seed.ts:2223:11)
+
+  console.log
+      - 初始 admin 账号：admin / admin123
+
+      at main (../prisma/seed.ts:2224:11)
+
+FAIL src/prisma/seed.spec.ts
+  seed（模板 Agent 预置 + 角色策略）
+    ✓ 7 类模板 Agent upsert create 分支均预置为 template 类型（含计划员 a_plan 与知识管理员 a_librarian） (31 ms)
+    ✓ 已移除默认 ACK 文案（收到，正在处理… 机制已下线） (3 ms)
+    ✕ 7 条角色 ExecutionPolicy upsert：type=template、permission 全量派生自 ROLE_BOUNDARIES (2 ms)
+    ✕ 模板策略 config.tools 为 ROLE_BOUNDARIES allowlist 的拷贝（克隆深拷贝来源） (3 ms)
+    ✕ 模板 Agent create 与 update 均写入 agentKey = role（opencode 注入名 vteam-<agentKey> 与现状一致） (2 ms)
+    ✕ 模板 Agent create 与 update 均绑定角色策略 policyId (2 ms)
+    ✓ ExecutionPolicy upsert 先于模板 Agent upsert（绑定指向已存在策略行） (2 ms)
+    ✕ 已存在模板 Agent 时 update 分支仅同步出厂默认 prompt 与 policyId，不覆盖用户修改字段 (3 ms)
+    ✓ 首次创建模板 Agent 时 create 分支 defaultModelId 为 null（动态模型目录，不再静态预置） (2 ms)
+    ✕ 模板 prompt 四方向齐全、含越界转交，且不含禁用词/裸 MCP 名 (2 ms)
+    ✕ 计划员 prompt 四方向内容齐全（身份/职责/边界/协同） (2 ms)
+    ✕ 模板 prompt 越界转交去重：统一一句以【职责边界】为准，不再手写全量映射（a_plan 保留主 Agent 转交语义） (2 ms)
+    ✕ 模板 prompt「可用工具」去重：旧五角色用统一句，计划员保留 planToolLine 动态派生 (2 ms)
+    ✕ 7 模板 prompt 协同方式含协作规约摘录（求助三要素/转交落 issue/广播纪律/10 分钟升级） (2 ms)
+    ✓ 团队协作规约 team 记忆：示例团队预置一条 team 级记忆（固定 id 幂等，hash 与 save 语义一致） (2 ms)
+    ✓ 示例团队同时 upsert seed-admin 与 admin(u_admin) 为 owner（fresh deploy 下 admin 开箱可进群） (7 ms)
+  seed（计划 skills + 评审子句）
+    ✓ 6 个计划 skills upsert：create 默认启用；update 不同步 enabled（重跑保留管理员停用） (2 ms)
+    ✓ learning-mode builtin upsert：create 默认启用且 id 固定；update 不同步 enabled（重跑保留管理员停用） (2 ms)
+    ✓ learning-mode 内容与 draft 一致：v3 入库门 + 工具缺失判据 + 单步循环三件套 (2 ms)
+    ✓ 计划 skills frontmatter 含 name/description/version/allowed-tools 且工具集精确匹配 (3 ms)
+    ✓ plan-creation 使用者为计划成员：无 question 交互与送审调用，有扇出纪律节 (2 ms)
+    ✓ 5 个评审 skills 各加一句 subagent 注记（检查清单不动） (2 ms)
+    ✓ plan-creation 含 OmO 编制五要素（波次/证据/假设清单/反模式/送审预判） (2 ms)
+    ✓ 5 个评审 skills 含统一 Momus/Oracle 骨架（目的句/放行偏置/上限/篇幅/范围纪律） (3 ms)
+    ✓ 5 个评审 skills 视角关键词各异（每角色主关键词仅出现一次） (2 ms)
+    ✕ 旧五角色 prompt 点名其专属评审 skill（skill(plan-review-<role>)）；计划员走按需加载 (2 ms)
+    ✓ 工具目录不再 upsert plan_review（D4 单路径：server 编排评审已删，评审走成员子会话） (1 ms)
+    ✓ vteam 工具含 git_repos_list 行（F2-L1：授权仓库只读清单工具注册） (2 ms)
+    ✓ vteam 工具含 plan_complete 行（executing→completed，仅主 Agent） (2 ms)
+    ✓ vteam_plan_complete 为 server-gated（与 plan_mode 同模式）：进 gated 清单，不进任何角色 toolAllows (2 ms)
+    ✓ vteam 工具含 hook_register/hook_cancel 行（trigger-unification todo-13） (2 ms)
+    ✓ 示例团队 7 成员：a_plan 第 6 位、a_librarian 末位 tmm_0000000007 别名知识管理员-1，非主 Agent（主 Agent 为项目经理） (2 ms)
+    ✕ 评审 skill 名不出现在非属角色的 prompt 中（无交叉污染，含计划员） (2 ms)
+  seed（todo9 执行铁律与行为探针）
+    ✕ PM 派发铁律三句齐全（先查后派/被催先报/催办引原文） (2 ms)
+    ✕ PM 计划完工铁律：交付齐备或待验收时调 vteam_plan_complete 标记完工，不 @计划员改文件 (2 ms)
+    ✕ PM 消息风暴治理三铁律齐全（已通知不重发/只发增量/唤醒即派发），且不泄漏到其他角色 (2 ms)
+    ✕ 成员回执铁律：四角色 prompt 含回执必@派发人句，知识管理员不含 (2 ms)
+    ✕ 计划员收敛契约：收敛输入=轮次账本+verdicts明细，输出=冻结候选版+归档清单 (2 ms)
+    ✕ 计划员修订铁律：非收敛不修订 + exact hint + 教师 override (2 ms)
+    ✓ 评审 VERDICT 版本引用：5 skills 全含版本引用句 (2 ms)
+    ✕ 优先级声明：各铁律节均声明平台校验 > 本铁律 > 上文原文风且顺序正确 (10 ms)
+    ✕ 探针·被催“怎么样了”不产生新派发 (2 ms)
+    ✕ 探针·单份回执修订企图被拒（exact hint） (2 ms)
+    ✕ 探针·优先级：平台校验胜过铁律胜过原文 + 落盘证据 (4 ms)
+
+  ● seed（模板 Agent 预置 + 角色策略） › 7 条角色 ExecutionPolicy upsert：type=template、permission 全量派生自 ROLE_BOUNDARIES
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "template"
+    Received: undefined
+
+      142 |       const { create, update } = call[0];
+      143 |       expect(create.type).toBe('template');
+    > 144 |       expect(update.type).toBe('template');
+          |                           ^
+      145 |       expect(update.config).toEqual(create.config);
+      146 |
+      147 |       const agentName = AGENT_NAME_BY_POLICY[String(call[0].where.id)];
+
+      at Object.<anonymous> (prisma/seed.spec.ts:144:27)
+
+  ● seed（模板 Agent 预置 + 角色策略） › 模板策略 config.tools 为 ROLE_BOUNDARIES allowlist 的拷贝（克隆深拷贝来源）
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: {"correction": {"denyTemplate": "【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。", "handoff": {"code": "vteam-developer", "design": "vteam-architect", "process": "vteam-project_manager", "test": "vteam-tester"}, "scopeSummary": "需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。"}, "permission": {"bash": "allow", "edit": {"*": "deny", "**tasks/*/docs/**": "allow", "**tasks/*/prototypes/**": "allow"}, "read": {"*": "allow"}, "task": "deny", "vteam_git_repos_list": "deny"}, "tools": {"browser": "allow", "vteam_channel_send": "allow", "vteam_chat_history": "allow", "vteam_doclib": "allow", "vteam_group_post": "allow", "vteam_hook_cancel": "allow", "vteam_hook_register": "allow", "vteam_issue_create": "allow", "vteam_issue_get": "allow", "vteam_issue_list": "allow", "vteam_issue_transition": "allow", "vteam_issue_update": "allow", "vteam_memory_save": "allow", "vteam_memory_search": "allow", "vteam_memory_update": "allow", "vteam_my_profile": "allow", "vteam_notify_agent": "allow", "vteam_read_file": "allow", "vteam_submit_artifact": "allow", "vteam_task_context": "allow", "vteam_team_view": "allow", "vteam_wecom_reply": "allow"}}
+    Received: undefined
+
+      199 |         0,
+      200 |       );
+    > 201 |       expect(call[0].update.config).toEqual(call[0].create.config);
+          |                                     ^
+      202 |     }
+      203 |   });
+      204 |
+
+      at Object.<anonymous> (prisma/seed.spec.ts:201:37)
+
+  ● seed（模板 Agent 预置 + 角色策略） › 模板 Agent create 与 update 均写入 agentKey = role（opencode 注入名 vteam-<agentKey> 与现状一致）
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "product"
+    Received: undefined
+
+      214 |       const id = String(call[0].where.id);
+      215 |       expect(call[0].create.agentKey).toBe(ROLE_BY_AGENT[id]);
+    > 216 |       expect(call[0].update.agentKey).toBe(ROLE_BY_AGENT[id]);
+          |                                       ^
+      217 |     }
+      218 |   });
+      219 |
+
+      at Object.<anonymous> (prisma/seed.spec.ts:216:39)
+
+  ● seed（模板 Agent 预置 + 角色策略） › 模板 Agent create 与 update 均绑定角色策略 policyId
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "ep_product"
+    Received: undefined
+
+      226 |       const id = String(call[0].where.id);
+      227 |       expect(call[0].create.policyId).toBe(POLICY_BY_AGENT[id]);
+    > 228 |       expect(call[0].update.policyId).toBe(POLICY_BY_AGENT[id]);
+          |                                       ^
+      229 |     }
+      230 |   });
+      231 |
+
+      at Object.<anonymous> (prisma/seed.spec.ts:228:39)
+
+  ● seed（模板 Agent 预置 + 角色策略） › 已存在模板 Agent 时 update 分支仅同步出厂默认 prompt 与 policyId，不覆盖用户修改字段
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 5
+    + Received  + 1
+
+    - Array [
+    -   "agentKey",
+    -   "policyId",
+    -   "prompt",
+    - ]
+    + Array []
+
+      250 |       // prompt 为平台出厂默认值，seed 随平台升级同步（16 篇 §8.4）；policyId 为角色策略绑定；
+      251 |       // agentKey 为模板固定绑定（= role）；其余字段不 touch
+    > 252 |       expect(Object.keys(call[0].update).sort()).toEqual([
+          |                                                  ^
+      253 |         'agentKey',
+      254 |         'policyId',
+      255 |         'prompt',
+
+      at Object.<anonymous> (prisma/seed.spec.ts:252:50)
+
+  ● seed（模板 Agent 预置 + 角色策略） › 模板 prompt 四方向齐全、含越界转交，且不含禁用词/裸 MCP 名
+
+    expect(received).toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      288 |         '## 协同方式',
+      289 |       ]) {
+    > 290 |         expect(prompt).toContain(section);
+          |                        ^
+      291 |       }
+      292 |       // 越界拒绝与转交（vteam_notify_agent 为真实暴露名）
+      293 |       expect(prompt).toContain('转交');
+
+      at Object.<anonymous> (prisma/seed.spec.ts:290:24)
+
+  ● seed（模板 Agent 预置 + 角色策略） › 计划员 prompt 四方向内容齐全（身份/职责/边界/协同）
+
+    expect(received).toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      318 |     const prompt = planCall![0].update.prompt as string;
+      319 |     // 身份：团队计划专员，群内可见可@，agent 管理可见
+    > 320 |     expect(prompt).toContain('计划专员');
+          |                    ^
+      321 |     expect(prompt).toContain('@');
+      322 |     // 职责：响应主 Agent @ 派活起草计划（explore-first，可 fan-out task 子会话）
+      323 |     expect(prompt).toContain('派活');
+
+      at Object.<anonymous> (prisma/seed.spec.ts:320:20)
+
+  ● seed（模板 Agent 预置 + 角色策略） › 模板 prompt 越界转交去重：统一一句以【职责边界】为准，不再手写全量映射（a_plan 保留主 Agent 转交语义）
+
+    expect(received).toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      345 |       const prompt = call[0].update.prompt as string;
+      346 |       // 新文案：单一来源 ROLE_BOUNDARIES，映射表由系统提示【职责边界】动态渲染
+    > 347 |       expect(prompt).toContain(
+          |                      ^
+      348 |         '越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）',
+      349 |       );
+      350 |       // 旧全量映射句已删除
+
+      at Object.<anonymous> (prisma/seed.spec.ts:347:22)
+
+  ● seed（模板 Agent 预置 + 角色策略） › 模板 prompt「可用工具」去重：旧五角色用统一句，计划员保留 planToolLine 动态派生
+
+    expect(received).toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      381 |       }
+      382 |       // 旧五角色：统一一句，不再手写全量工具列表
+    > 383 |       expect(prompt).toContain(
+          |                      ^
+      384 |         '可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝',
+      385 |       );
+      386 |       expect(prompt).not.toMatch(/可用工具：vteam_/);
+
+      at Object.<anonymous> (prisma/seed.spec.ts:383:22)
+
+  ● seed（模板 Agent 预置 + 角色策略） › 7 模板 prompt 协同方式含协作规约摘录（求助三要素/转交落 issue/广播纪律/10 分钟升级）
+
+    expect(received).toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      404 |     for (const call of templateCalls) {
+      405 |       const prompt = call[0].update.prompt as string;
+    > 406 |       expect(prompt).toContain('团队协作规约');
+          |                      ^
+      407 |       expect(prompt).toContain('docs/agent-platform/30-团队协作规约.md');
+      408 |       expect(prompt).toContain('求助带三要素');
+      409 |       expect(prompt).toContain('责任转交落 issue');
+
+      at Object.<anonymous> (prisma/seed.spec.ts:406:22)
+
+  ● seed（计划 skills + 评审子句） › 旧五角色 prompt 点名其专属评审 skill（skill(plan-review-<role>)）；计划员走按需加载
+
+    expect(received).toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      794 |         continue;
+      795 |       }
+    > 796 |       expect(prompt).toContain(`skill(${REVIEW_SKILL_BY_AGENT[id]})`);
+          |                      ^
+      797 |     }
+      798 |   });
+      799 |
+
+      at Object.<anonymous> (prisma/seed.spec.ts:796:22)
+
+  ● seed（计划 skills + 评审子句） › 评审 skill 名不出现在非属角色的 prompt 中（无交叉污染，含计划员）
+
+    expect(received).not.toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      912 |       for (const skillName of allSkills) {
+      913 |         if (skillName === REVIEW_SKILL_BY_AGENT[id]) continue;
+    > 914 |         expect(prompt).not.toContain(`skill(${skillName})`);
+          |                            ^
+      915 |       }
+      916 |     }
+      917 |   });
+
+      at Object.<anonymous> (prisma/seed.spec.ts:914:28)
+
+  ● seed（todo9 执行铁律与行为探针） › PM 派发铁律三句齐全（先查后派/被催先报/催办引原文）
+
+    expect(received).toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      977 |   it('PM 派发铁律三句齐全（先查后派/被催先报/催办引原文）', async () => {
+      978 |     const pm = (await promptsById()).get('a_project_manager')!;
+    > 979 |     expect(pm).toContain(PM_FIRST_CHECK);
+          |                ^
+      980 |     expect(pm).toContain(PM_NUDGE_STATUS);
+      981 |     expect(pm).toContain(PM_NUDGE_CITE);
+      982 |   });
+
+      at Object.<anonymous> (prisma/seed.spec.ts:979:16)
+
+  ● seed（todo9 执行铁律与行为探针） › PM 计划完工铁律：交付齐备或待验收时调 vteam_plan_complete 标记完工，不 @计划员改文件
+
+    expect(received).toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      984 |   it('PM 计划完工铁律：交付齐备或待验收时调 vteam_plan_complete 标记完工，不 @计划员改文件', async () => {
+      985 |     const pm = (await promptsById()).get('a_project_manager')!;
+    > 986 |     expect(pm).toContain('vteam_plan_complete');
+          |                ^
+      987 |     expect(pm).toContain('计划完工');
+      988 |     expect(pm).toContain('executing→completed');
+      989 |     expect(pm).toContain('DB plans.status');
+
+      at Object.<anonymous> (prisma/seed.spec.ts:986:16)
+
+  ● seed（todo9 执行铁律与行为探针） › PM 消息风暴治理三铁律齐全（已通知不重发/只发增量/唤醒即派发），且不泄漏到其他角色
+
+    expect(received).toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      994 |     const prompts = await promptsById();
+      995 |     const pm = prompts.get('a_project_manager')!;
+    > 996 |     expect(pm).toContain(PM_NO_REDUNDANT_RELAY);
+          |                ^
+      997 |     expect(pm).toContain(PM_INCREMENT_ONLY);
+      998 |     expect(pm).toContain(PM_WAKE_VIA_NOTIFY);
+      999 |     // 仅 PM 承担流程控制，三句不得出现在其他角色提示词（防误扩散）
+
+      at Object.<anonymous> (prisma/seed.spec.ts:996:16)
+
+  ● seed（todo9 执行铁律与行为探针） › 成员回执铁律：四角色 prompt 含回执必@派发人句，知识管理员不含
+
+    expect(received).toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      1009 |     const prompts = await promptsById();
+      1010 |     for (const id of MEMBER_IDS) {
+    > 1011 |       expect(prompts.get(id)).toContain(RECEIPT_AT);
+           |                               ^
+      1012 |     }
+      1013 |     expect(prompts.get('a_librarian')).not.toContain(RECEIPT_AT);
+      1014 |   });
+
+      at Object.<anonymous> (prisma/seed.spec.ts:1011:31)
+
+  ● seed（todo9 执行铁律与行为探针） › 计划员收敛契约：收敛输入=轮次账本+verdicts明细，输出=冻结候选版+归档清单
+
+    expect(received).toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      1016 |   it('计划员收敛契约：收敛输入=轮次账本+verdicts明细，输出=冻结候选版+归档清单', async () => {
+      1017 |     const plan = (await promptsById()).get('a_plan')!;
+    > 1018 |     expect(plan).toContain('## 收敛契约');
+           |                  ^
+      1019 |     expect(plan).toContain('收敛输入=轮次账本+verdicts明细');
+      1020 |     expect(plan).toContain('轮次账本');
+      1021 |     expect(plan).toContain('verdicts');
+
+      at Object.<anonymous> (prisma/seed.spec.ts:1018:18)
+
+  ● seed（todo9 执行铁律与行为探针） › 计划员修订铁律：非收敛不修订 + exact hint + 教师 override
+
+    expect(received).toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      1028 |   it('计划员修订铁律：非收敛不修订 + exact hint + 教师 override', async () => {
+      1029 |     const plan = (await promptsById()).get('a_plan')!;
+    > 1030 |     expect(plan).toContain(PLAN_NO_EARLY_REVISE);
+           |                  ^
+      1031 |     expect(plan).toContain(`“${EARLY_REVISE_HINT}”`);
+      1032 |     expect(plan).toContain(TEACHER_OVERRIDE);
+      1033 |   });
+
+      at Object.<anonymous> (prisma/seed.spec.ts:1030:18)
+
+  ● seed（todo9 执行铁律与行为探针） › 优先级声明：各铁律节均声明平台校验 > 本铁律 > 上文原文风且顺序正确
+
+    expect(received).toContain(expected) // indexOf
+
+    Matcher error: received value must not be null nor undefined
+
+    Received has value: undefined
+
+      1050 |     ];
+      1051 |     for (const text of ironLawTexts) {
+    > 1052 |       expect(text).toContain(PRECEDENCE);
+           |                    ^
+      1053 |       expect(text.indexOf('平台校验')).toBeLessThan(text.indexOf('本铁律'));
+      1054 |       expect(text.indexOf('本铁律')).toBeLessThan(text.indexOf('上文原文风'));
+      1055 |     }
+
+      at Object.<anonymous> (prisma/seed.spec.ts:1052:20)
+
+  ● seed（todo9 执行铁律与行为探针） › 探针·被催“怎么样了”不产生新派发
+
+    TypeError: Cannot read properties of undefined (reading 'includes')
+
+      1064 |     // 脚本化输入：成员追问“怎么样了”；按 prompt 铁律推导动作
+      1065 |     const statusFirst =
+    > 1066 |       pm.includes(PM_NUDGE_STATUS) && pm.includes('绝不盲目发起新派发');
+           |          ^
+      1067 |     const action = statusFirst ? 'report-status' : 'dispatch-blind';
+      1068 |     const newDispatch = action !== 'report-status';
+      1069 |     expect(action).toBe('report-status');
+
+      at Object.<anonymous> (prisma/seed.spec.ts:1066:10)
+
+  ● seed（todo9 执行铁律与行为探针） › 探针·单份回执修订企图被拒（exact hint）
+
+    TypeError: Cannot read properties of undefined (reading 'includes')
+
+      1075 |     // 脚本化：received 2/3 + 修订请求；按 prompt 铁律推导裁决
+      1076 |     const gated =
+    > 1077 |       plan.includes(PLAN_NO_EARLY_REVISE) && plan.includes(EARLY_REVISE_HINT);
+           |            ^
+      1078 |     const verdict = gated
+      1079 |       ? { blocked: true, hint: EARLY_REVISE_HINT }
+      1080 |       : { blocked: false, hint: '' };
+
+      at Object.<anonymous> (prisma/seed.spec.ts:1077:12)
+
+  ● seed（todo9 执行铁律与行为探针） › 探针·优先级：平台校验胜过铁律胜过原文 + 落盘证据
+
+    TypeError: Cannot read properties of undefined (reading 'includes')
+
+      1092 |     // 平台返回码行优先于铁律行优先于原文风格：三者在 PM prompt 内共存且顺序声明一致
+      1093 |     const precedencePass =
+    > 1094 |       pm.includes('triggered:false') &&
+           |          ^
+      1095 |       pm.includes(PRECEDENCE) &&
+      1096 |       pm.indexOf('平台校验') < pm.indexOf('本铁律') &&
+      1097 |       pm.indexOf('本铁律') < pm.indexOf('上文原文风');
+
+      at Object.<anonymous> (prisma/seed.spec.ts:1094:10)
+
+Test Suites: 1 failed, 1 total
+Tests:       22 failed, 22 passed, 44 total
+Snapshots:   0 total
+Time:        2.241 s
+Ran all test suites matching /src\/prisma\/seed.spec.ts/i.

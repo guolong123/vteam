@@ -1,0 +1,32 @@
+task-8-patch — PATCH built-in policy allowed, POST/DELETE template stay 403
+plan: vteam-role-behavior-abstraction Todo 8
+run_at: 2026-09-17T16:33:53.117Z
+method: real Nest TestingModule (ExecutionPoliciesController + real ExecutionPolicyService)
+        + supertest + global ValidationPipe; PrismaService stubbed in-memory (no DB)
+
+PASS  PATCH /execution-policies/ep_product (type=template) -> 200
+      status=200 body={"id":"ep_product","name":"产品经理策略","description":"seed builtin","type":"template","config":{"permission":{"edit":{"*":"deny"},"read":{"*":"allow"},"bash":"allow","task":"deny","vteam_group_post":"deny"},"correction":{"sc
+PASS  PATCH response carries the edited tools
+      {"vteam_group_post":"deny","vteam_memory_search":"ask","vteam_notify_agent":"deny"}
+PASS  GET /execution-policies/ep_product -> 200 with persisted change
+      status=200 persisted.tools={"vteam_group_post":"deny","vteam_memory_search":"ask","vteam_notify_agent":"deny"}
+PASS  GET round-trip still type=template (type immutable)
+      type=template
+PASS  HTTP POST type=template rejected at DTO layer (400 'must be one of custom') and forges NO row
+      status=400 message=["type must be one of the following values: custom"] rows_before=1 rows_after=1
+PASS  service.create(type=template) STILL -> 403 POLICY_TEMPLATE_READONLY (defense in depth)
+      status=403 code=POLICY_TEMPLATE_READONLY message=模板策略只读（seed 维护），请创建 type=custom 策略
+PASS  DELETE built-in STILL -> 403 POLICY_TEMPLATE_READONLY
+      status=403 code=POLICY_TEMPLATE_READONLY message=模板策略只读（seed 维护），请克隆为 custom 策略再修改
+PASS  built-in row survives the rejected DELETE
+      row_present=true
+PASS  POST type=custom (control) -> 201
+      status=201 id=ep_0000000001
+PASS  HTTP PATCH template with invalid config -> 400 (DTO PolicyConfigDto)
+      status=400 message=["config.permission must be an object","config.correction must be an object"]
+PASS  service.update invalid config -> 400 POLICY_CONFIG_INVALID
+      status=400 code=POLICY_CONFIG_INVALID
+PASS  rejected invalid PATCH left the persisted config untouched
+      persisted.tools={"vteam_group_post":"deny","vteam_memory_search":"ask","vteam_notify_agent":"deny"}
+
+allPass: true

@@ -1,0 +1,60 @@
+{
+  "_meta": {
+    "task": "task-5-fallback",
+    "plan": "vteam-role-behavior-abstraction",
+    "kind": "unified-fallback-provenance",
+    "proof": "A missing ep_<role> row yields the constant-derived policy (never null) through BOTH resolveByAgent/resolveManyByAgents and AgentsService.resolveTemplateSource; a row present still wins; and a custom agent provisioned by create() always receives its own type=custom policy id, never the ep_<role> template row.",
+    "baseline": "before-agent-policies.json (captured at HEAD f0b1924)",
+    "note": "No DB connection opened; prisma is stubbed in-process."
+  },
+  "allPass": true,
+  "checks": {
+    "resolveByAgent_missing_row_constant_not_null": {
+      "pass": true,
+      "returned_null": false,
+      "policyId": "ep_product",
+      "agentName": "vteam-product",
+      "tool_count": 22,
+      "tools_equal_constant": true
+    },
+    "resolveManyByAgents_missing_rows_constant_not_null": {
+      "pass": true,
+      "plan_null": false,
+      "librarian_null": false,
+      "plan_task": "allow"
+    },
+    "resolveByAgent_present_row_wins": {
+      "pass": true,
+      "policyName": "db-product",
+      "permission": {
+        "edit": {
+          "*": "deny"
+        },
+        "task": "deny"
+      },
+      "correction": {
+        "scopeSummary": "db"
+      }
+    },
+    "resolveTemplateSource_missing_row_constant_not_null": {
+      "pass": true,
+      "returned_null": false,
+      "description": "编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。",
+      "tools_equal_constant": true,
+      "tool_count": 26
+    },
+    "resolveTemplateSource_unknown_role_null": {
+      "pass": true,
+      "returned_null": true
+    },
+    "custom_agent_binds_own_custom_policy_never_template": {
+      "pass": true,
+      "created_policy_count": 1,
+      "created_policy_type": "custom",
+      "created_policy_id": "ep_0000000001",
+      "bound_policy_id": "ep_0000000001",
+      "template_id": "ep_developer",
+      "bound_is_template": false
+    }
+  }
+}

@@ -1,0 +1,296 @@
+================================================================================
+F2 — Code Quality Review (independent)
+Plan: .omo/plans/vteam-role-behavior-abstraction.md
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Range: git diff f0b1924..HEAD + uncommitted (none outside .omo)
+Reviewer: F2 (independent verifier) — did not trust prior claims; inspected diff/code.
+================================================================================
+
+SCOPE COVERED
+-------------
+$ git diff --stat f0b1924..HEAD
+ scripts/e2e-role-boundaries.sh                     | 377 +++++++++++-
+ server/prisma/seed.ts                              |  25 +-
+ server/src/agents/agents.service.spec.ts           |  30 +
+ server/src/agents/agents.service.ts                |  42 +-
+ server/src/chat/chat.module.ts                     |  12 +-
+ server/src/chat/worker-dispatcher.spec.ts          | 173 +++++-
+ server/src/chat/worker-dispatcher.ts               | 119 +++-
+ .../agent-policies-db-builtin.spec.ts              | 206 +++++++
+ .../agent-policies-db-driven.spec.ts               | 298 ++++++++++
+ .../agent-policies.custom-agents.spec.ts           |  73 ++-
+ .../agent-policy-derivation.spec.ts                |  94 +++
+ .../agent-policy-fallback.spec.ts                  | 135 +++++
+ .../execution-policies.controller.spec.ts          |  65 ++-
+ .../execution-policies.controller.ts               |   4 +-
+ .../execution-policies/execution-policy.service.ts | 637 ++++++++++++++++-----
+ .../execution-policies/policy-canonical.spec.ts    | 385 +++++++++++++
+ .../src/platform-mcp/platform-mcp.service.spec.ts  |  32 ++
+ server/src/platform-mcp/platform-mcp.service.ts    |   3 +
+ server/src/prisma/seed.spec.ts                     |  61 +-
+ web/app/(main)/agents/page.tsx                     |  56 +-
+ web/e2e/reference/testids.ts                       |   1 -
+ 21 files changed, 2489 insertions(+), 339 deletions(-)
+
+Uncommitted non-.omo changes: none ($ git status --porcelain -- ':!.omo' → empty).
+
+All 21 files reviewed. Findings below; raw command output pasted inline.
+
+================================================================================
+BLOCKER-1 — New tests read UNTRACKED evidence fixtures → non-reproducible test suite
+================================================================================
+The plan's own commit strategy (plan line 212) requires:
+  "The byte-identity evidence artifacts (`before-agent-policies.json`,
+   `after-agent-policies.json`) are committed under `.omo/evidence/` with the
+   final proof todo."
+
+They are NOT committed. Proof:
+  $ git ls-tree -r HEAD --name-only | grep -i 'evidence/vteam-role-behavior'
+  (NONE tracked)
+  $ git log --all --oneline -- '.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json'
+  (end)   # never existed in ANY commit
+  $ git log --all --oneline -- '.omo/evidence/vteam-role-behavior-abstraction/before-boundary.json'
+  (end)
+  $ git status --porcelain -- .omo/evidence/vteam-role-behavior-abstraction/
+  ?? .omo/evidence/vteam-role-behavior-abstraction/
+
+Runtime reads of these untracked files:
+  server/src/execution-policies/agent-policies-db-builtin.spec.ts:34-45 (readFileSync before-agent-policies.json)
+  server/src/execution-policies/agent-policies-db-driven.spec.ts:44-55 (readFileSync before-agent-policies.json)
+  server/src/chat/worker-dispatcher.spec.ts:1684 (before-boundary.json)
+  server/src/chat/worker-dispatcher.spec.ts:1700 (before-agent-policies.json)
+  server/src/chat/worker-dispatcher.spec.ts:1709 (before-boundary.json)
+
+Reproduced failure on a clean checkout (evidence dir removed, then restored):
+  $ rm -rf .omo/evidence/vteam-role-behavior-abstraction
+  $ cd server && npx jest --runInBand src/execution-policies/agent-policies-db-builtin.spec.ts src/chat/worker-dispatcher.spec.ts
+  FAIL src/chat/worker-dispatcher.spec.ts
+    ● WorkerDispatcher › buildSystemInstructions ... › Todo 11：7 内置出厂 correction → boundary 与变更前冻结基线逐字节一致
+    ● WorkerDispatcher › buildSystemInstructions ... › Todo 11：/agent-policies 出厂 guard.roles[name].correction → boundary 与冻结基线逐字节一致
+  FAIL src/execution-policies/agent-policies-db-builtin.spec.ts
+    ● Test suite failed to run
+  Test Suites: 2 failed, 2 total
+  Tests:       2 failed, 233 passed, 235 total
+
+Impact: CI / a fresh clone fails. The byte-identity and DB-driven proofs are only
+valid on this workstation's dirty tree. The `.gitignore` does NOT exclude these
+files (only `.omo/evidence/**/*.png` and `.omo/evidence/**/*.sql`), so the fix is
+simply to `git add` the evidence dir with the proof commit.
+Status: BLOCKER (test reproducibility / uncommitted required artifact).
+
+================================================================================
+BLOCKER-2 — Missing defensive normalization for DB-sourced CUSTOM-agent permission
+================================================================================
+MUST DO #2 demanded defensive normalization because "the worker THROWS on bad
+payload values and then disables the entire guard". The worker contract indeed
+throws on a `write` key:
+  worker/src/resources/opencode-config-builder.ts:111-115
+    if (Object.prototype.hasOwnProperty.call(agent.permission, 'write')) {
+      throw new Error(`[agent-definitions] agent ${agent.name} permission 非法：不得含 'write' 键 ...`);
+    }
+  worker/src/resources/opencode-config-builder.ts:74-87 — thrown for ANY agent →
+  injector catches and neutralizes the ENTIRE guard.
+
+Built-in rows are normalized (canonicalizePermission strips `write`,
+execution-policy.service.ts:188-204). CUSTOM-agent rows are NOT:
+  server/src/execution-policies/execution-policy.service.ts:653
+      permission: config.permission as Record<string, unknown>,   // resolveByAgent (custom DB row)
+  server/src/execution-policies/execution-policy.service.ts:771
+      permission: config.permission as Record<string, unknown>,   // buildAgentPolicies custom branch
+No canonicalizePermission / write-stripping is applied on either path.
+
+The write-path validator also permits it:
+  server/src/execution-policies/execution-policy.service.ts:791-808 assertValidConfig
+  only checks permission/correction are objects and tools is an object — it does
+  NOT reject/strip `permission.write`.
+
+Reachability: PATCH /execution-policies/:id (now open for template AND custom,
+update() at :517-539) with config.permission.write set → stored → emitted raw in
+/agent-policies → worker `assertAgentShape` throws → guard neutralized for ALL
+agents. This is precisely the failure mode the plan told the executor to defend
+against. Pre-existing shape on the custom branch, but the plan explicitly
+required it normalized and the new canonicalizer was not wired to it.
+Status: BLOCKER (missing normalization for DB-sourced values; safety regression path).
+
+================================================================================
+FINDING-3 — `any` cast added in the diff (MUST DO #2)
+================================================================================
+$ git diff f0b1924..HEAD -U0 | grep -nE '^\+' | grep -E '\bas any\b|@ts-ignore|@ts-expect-error'
+754:+      policyService as any,
+
+Location: server/src/chat/worker-dispatcher.spec.ts:157 (`policyService as any,`
+in the `createDispatcher` constructor call). The file already had 234 pre-existing
+`as any` ($ git show f0b1924:...spec.ts | grep -cE 'as any' → 234), so this is
+house style in that spec, but the review gate prohibits added `any` casts.
+Also added (test-only escapes): 14× `as never` and 1× `as unknown as` in the new
+specs (agent-policies-db-builtin.spec.ts:118,119; agent-policies-db-driven.spec.ts:170,171;
+agent-policy-derivation.spec.ts:57,58; agent-policy-fallback.spec.ts:27,28,111-116,119).
+No `@ts-ignore` / `@ts-expect-error`.
+Non-null assertions (`!.`, `)!`): NONE added. Good.
+
+================================================================================
+FINDING-4 — Lint regressions on changed source files (baseline was clean)
+================================================================================
+Baseline at f0b1924 (verified in a worktree) had 0 messages for the two core
+files; HEAD introduces 3 errors:
+  BASE $ npx eslint src/execution-policies/execution-policy.service.ts src/execution-policies/execution-policies.controller.ts
+  → 0 messages
+  HEAD →
+    src/execution-policies/execution-policies.controller.ts:67  error  prettier/prettier
+    src/execution-policies/execution-policy.service.ts:243       error  prettier/prettier
+    src/execution-policies/execution-policy.service.ts:567       error  prettier/prettier
+New spec files not lint-clean either:
+  agent-policies-db-builtin.spec.ts:107  error  prettier/prettier
+  agent-policies-db-driven.spec.ts:145,146,147,148,149,150,161,163,293  error  prettier/prettier
+All auto-fixable (`--fix`), formatting-only, but the gate requires changed-file
+lint clean. `worker-dispatcher.ts` / `agents.service.ts` / `seed.ts` remain clean.
+
+================================================================================
+FINDING-5 — Unit test for the PATCH-unlock is vacuous (mocks the service)
+================================================================================
+execution-policies.controller.spec.ts:157-197 ("PATCH template 内置策略 → 200 可编辑")
+replaces `service.update` with a mock that always resolves (lines 166-179), then
+asserts the controller passed through. This passes whether or not
+`assertWritable(existing.type)` was removed from the real service. There is NO
+`execution-policy.service.spec.ts`, so the actual `update()` behavior change
+(removal at execution-policy.service.ts:522, previously `this.assertWritable(...)`)
+has zero direct service-level coverage. The only real proof is the e2e f2 scenario
+(scripts/e2e-role-boundaries.sh), which is fine for integration but the unit
+assertion is not meaningful on its own.
+
+================================================================================
+FINDING-6 — Duplicated test helper logic across the three new canonical specs
+================================================================================
+`reorderLikeMysql` is copy-pasted in three new specs:
+  policy-canonical.spec.ts:79-100, agent-policies-db-builtin.spec.ts:70-91,
+  agent-policies-db-driven.spec.ts:108-129
+`factorySeedConfig` / `constantDerived` are likewise re-derived per spec
+(policy-canonical.spec.ts:32-76, db-builtin:48-67, db-driven:72-105). Not
+production duplication, but 3–4 diverging copies of the same fixture logic.
+Minor / maintainability.
+
+================================================================================
+PATTERN CHECKS (MUST DO)
+================================================================================
+[x] `as any` / @ts-ignore / @ts-expect-error / non-null assertions added in diff
+    → one `as any` (worker-dispatcher.spec.ts:157); no ts-ignore; no non-null.
+(x) stubs / TODO / FIXME / HACK / placeholder
+    → NONE. (`git diff | grep -iE 'TODO|FIXME|HACK|XXX'` matched only the literal
+       "Todo N" plan-reference comments, not markers.)
+[x] dead code / unused
+    → No unused vars introduced in production files. 8 helpers are `export`ed but
+      consumed nowhere outside the defining module (see below) — over-export, not
+      dead. `platform-mcp.service.ts:64 containsTeamWideMention` unused is
+      PRE-EXISTING (baseline also had 26 lint messages in that file; HEAD keeps 26).
+[x] duplicated canonicalization/fallback (plan required SINGLE implementation)
+    → PASS. `filterToolsMatrix`, `resolveGuardTools`, `resolveBashDeny`,
+      `canonicalize*` exist ONLY in execution-policy.service.ts (grep outside the
+      file hits only server/dist/*.d.ts). `agents.service.resolveTemplateSource`
+      now reuses `resolveConstantPolicySource` (agents.service.ts:744);
+      worker-dispatcher reuses `canonicalizeCorrection`/`resolveConstantPolicySource`
+      (worker-dispatcher.ts:33-35,3630-3643). No re-derivation found.
+    Over-exported (no external consumer, incl. tests):
+      filterToolsMatrix, resolveGuardTools, resolveBashDeny, canonicalizeTools,
+      canonicalizeEditMap, canonicalizePermission, buildRolePermission,
+      buildRoleCorrection.
+[x] silent failure / swallowed errors / empty catch
+    → worker-dispatcher.ts:3636 `catch { /* 策略解析异常不阻断分派 → 回退常量派生 */ }`
+      — intentional, documented, with explicit fallback. Acceptable.
+      platform-mcp.service.ts:3838 `catch { effectivePermission = null }` — pre-existing.
+      No undocumented silent swallows introduced.
+[x] inconsistent error handling / missing DB normalization
+    → SEE BLOCKER-2 (custom permission.write not normalized; write-path validator
+      accepts it). Builtin guard tools/bashDeny/permission ARE normalized
+      (resolveGuardTools/resolveBashDeny/canonicalizePermission).
+
+================================================================================
+REPO CONVENTION: no A/B dual path / legacy shim / deprecation (MUST DO #3)
+================================================================================
+$ git diff f0b1924..HEAD -U0 | grep -nE '^\+' | grep -iE '兼容|废弃|deprecated|legacy|双轨|dual.path|A/B'
+(none)
+→ PASS. No deprecated/legacy/shim annotations added. The old name-list gate was
+  actually removed (old `renderBoundarySection(agentName)`/`isVteamAgentName`
+  early return replaced; isVteamAgentName remains only for the identity mapping
+  at worker-dispatcher.ts:121,140 — consistent with the plan's scope boundary).
+
+================================================================================
+WIRE CONTRACT (MUST DO #4) — VERIFIED OK
+================================================================================
+Worker consumer (unchanged) enforces exact key sets:
+  worker/src/resources/opencode-config-builder.ts:51  AGENT_ALLOWED_FIELDS = {name,description,mode,permission}
+  worker/src/resources/opencode-config-builder.ts:53  ROLE_ALLOWED_FIELDS  = {permission,tools,bashDeny,correction}
+  :143-153 assertNoUnknownFields throws on any extra key; :111 throws on permission.write.
+
+Producer emission (HEAD):
+  execution-policy.service.ts:698-702 builtin agent object = {name, description, mode, permission}
+  execution-policy.service.ts:704-714 builtin guard role = {permission, tools, bashDeny, correction}
+  execution-policy.service.ts:763-778 custom agent = {name, description, mode, permission}; role same 4 keys
+  (A non-builtin test fixture may carry a `description` inside config; that is not
+   emitted — description is taken from the explicit object key. No extra wire key.)
+
+Independent validation of the actual emitted artifact:
+$ python3 - before-agent-policies.json
+  agents: ['vteam-plan','vteam-product','vteam-architect','vteam-developer','vteam-tester','vteam-project_manager','vteam-librarian']
+  roles:  (same 7)
+  AGENT EXTRA KEYS: (none)
+  ROLE EXTRA KEYS: (none)
+  permission.write present: no
+  WIRE CONTRACT OK
+Also `after-agent-policies.json` sha256 == `before-agent-policies.json` sha256
+(f2-after-summary.txt), and f2-injected-summary.txt shows the edited built-in
+propagated to roles.json/opencode.json while the other 6 are IDENTICAL.
+→ PASS. No extra key → worker will not throw → guard not neutralized.
+
+================================================================================
+TEST QUALITY (MUST DO #5)
+================================================================================
+- `.only` / `.skip` / `xit` / `fit` / `xdescribe` / `it.todo`: NONE
+  (grep across all changed spec files → no matches).
+- Tests are MEANINGFUL (not vacuous) in the critical spots:
+  * agent-policies-db-driven.spec.ts:180-206 — DB tools/permission deliberately
+    differ from constants and are asserted to penetrate agents[] + guard.roles[];
+    line 287-297 is a non-vacuous control (empty DB row → constants, ≠ DB value).
+    This would FAIL if the Todo-3/4 short-circuit were reintroduced.
+  * agent-policy-derivation.spec.ts:62-92 — asserts `mode==='all'` and
+    `task==='allow'` each exactly once, for vteam-plan.
+  * agent-policy-fallback.spec.ts:40-75 — asserts non-null constant fallback for
+    missing builtin rows through BOTH resolveByAgent and resolveManyByAgents.
+  * agent-policies.custom-agents.spec.ts:258-350 — asserts DB tools win + fallback
+    to non-empty allowlist; correctly inverted from the old semantics.
+  * policy-canonical.spec.ts — key-order independent of input permutation
+    (plain / MySQL-reordered / full reverse), write stripped, bogus tools dropped,
+    bashDeny coerced to string[].
+- Test-quality gap: FINDING-5 (controller PATCH test mocks the service).
+- Non-reproducibility: BLOCKER-1 (fixtures untracked).
+
+================================================================================
+OTHER VERIFICATIONS
+================================================================================
+- Typechecks clean: `cd server && npx tsc -p tsconfig.json --noEmit` → exit 0;
+  `cd worker && npx tsc --noEmit` → exit 0; `cd web && npx tsc --noEmit` → exit 0.
+- Suites pass on this (dirty) tree: 13 suites / 728 tests green for
+  src/execution-policies, chat/worker-dispatcher, agents, prisma/seed, platform-mcp.
+- Seed preservation and web prompt-unlock diffs read correctly relative to plan.
+- worker-dispatcher.ts `@Optional() @Inject(ExecutionPolicyService)` with a
+  constant-derived fallback is sound; no circular dep (ExecutionPoliciesModule
+  does not import ChatModule).
+- No new dependencies, no new DB fields, no scope creep observed.
+
+================================================================================
+VERDICT SUMMARY
+================================================================================
+BLOCKER-1: required evidence fixtures uncommitted → 2 suites fail on clean checkout.
+BLOCKER-2: custom-agent permission.write not normalized → worker throws → guard neutralized.
+FINDING-3: one `any` cast added (spec).
+FINDING-4: 3 prettier lint errors in previously-clean source files + spec lint errors.
+FINDING-5: PATCH-unlock unit test is vacuous (mocks service).
+FINDING-6: duplicated test helper logic across 3 specs.
+
+The wire contract is correct and the canonicalization/fallback is genuinely
+single-sourced, but the two blockers above (non-reproducible proof + an
+unguarded worker-throw path for DB-sourced custom permission) are quality-gate
+failures, and the gate explicitly forbids added `any` casts, lint regressions,
+and uncommitted required artifacts.
+
+F2 VERDICT: REJECT
+================================================================================

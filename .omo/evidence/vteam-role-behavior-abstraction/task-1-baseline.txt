@@ -1,0 +1,140 @@
+# Task 1 baseline — pre-change /agent-policies + factory seed policy config
+
+Plan: .omo/plans/vteam-role-behavior-abstraction.md
+Task checkbox: [baseline] Capture the pre-change `/agent-policies` artifact on a clean tree
+Captured at: 2026-09-17 (local)
+
+## HEAD
+
+  commit: f0b192492cebe2c1b6b4a2d583da5f087fd7deea
+  (`git rev-parse HEAD`)
+
+Pre-capture clean-tree gate (ran FIRST, before anything else):
+
+  $ git status --porcelain -- server web worker
+  (empty output — clean)
+
+Post-capture verification (same command, after all artifact writes):
+
+  $ git status --porcelain -- server web worker
+  (empty output — 0 lines; NO product file modified)
+  $ git status --porcelain -- server web worker | wc -l
+  0
+
+## The exact command run
+
+Harness (kept for re-runs so later tasks can re-capture on any tree state), invoked from
+this directory:
+
+  $ node capture-baseline.mjs
+
+from working directory
+  /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/vteam-role-behavior-abstraction
+
+The harness (capture-baseline.mjs) does NOT touch the DB and does NOT import any product
+file that opens a connection. It:
+  1. registers ts-node (transpileOnly, project = server/tsconfig.json) via server/'s
+     node_modules, then requires reflect-metadata;
+  2. requires server/src/execution-policies/execution-policy.service.ts and instantiates it
+     exactly as the plan specifies:
+       new ExecutionPolicyService(
+         { agent: { findMany: async () => [] },
+           executionPolicy: { findMany: async () => [] } } as any,
+         {} as any,
+       )
+     then `await service.buildAgentPolicies()` and writes
+     `JSON.stringify(result, null, 2)` — the RAW serialized output, no key reordering;
+  3. re-derives the seed `ep_<role>` config object literal (see below) and writes it.
+
+No script was placed under server/src. No jest spec was needed (ts-node path worked on the
+first run — no NestJS decorator/import problems).
+
+## Observed 7 agent names, in exact emission order
+
+  vteam-plan
+  vteam-product
+  vteam-architect
+  vteam-developer
+  vteam-tester
+  vteam_project_manager
+  vteam-librarian
+
+Same 7 keys, same order, for `guard.roles`. This matches AGENT_POLICIES_ORDER in
+server/src/execution-policies/execution-policy.service.ts:75-83.
+
+By construction (empty prisma stub → no custom agents), the 7 builtins are derived purely
+from ROLE_BOUNDARIES constants — the CONSTANT path, not a DB read. `guard.enabled === true`.
+
+## Artifacts (in this directory)
+
+1. before-agent-policies.json — 18695 bytes
+   RAW pretty-printed serialization of ExecutionPolicyService.buildAgentPolicies() from the
+   clean tree at HEAD. `agents` has exactly 7 entries; `guard.roles` has exactly 7 keys.
+   sha256: 793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a
+   Later tasks MUST diff their post-change output against this file byte-for-byte.
+
+2. before-seed-policy-config.json — 15031 bytes
+   SOURCE-DERIVED (NOT captured from a live DB — no seed was run; no DB state touched).
+   Documents the factory `config` shape prisma/seed.ts writes to each `ep_<role>` row.
+   `_meta.kind === "source-derived"`. Seed insertion order captured:
+     config keys:        permission, correction, tools            (seed.ts:903-917)
+     permission keys:    edit, read, bash, task, ...mcpDenies     (seed.ts:904-910)
+     correction keys:    scopeSummary, handoff, denyTemplate      (seed.ts:911-915)
+     tools:              ROLE_BOUNDARIES[agentName].toolAllows order
+   Policy row order mirrors seed.ts ROLE_POLICY_BINDINGS (seed.ts:872-883):
+     ep_product, ep_project_manager, ep_architect, ep_developer, ep_tester, ep_plan, ep_librarian
+   sha256: 1828197d9f8e4618bed5cfda86f21846ea7740fbe1189a21b01615678b1d032b
+   WHY source-derived: the DB `config` column is MySQL native JSON (schema.prisma:629),
+   which reorders object keys on storage; only the source literal preserves insertion order.
+   Fidelity argument: seed.ts carries a self-contained mirror of ROLE_BOUNDARIES (seed.ts:1-386)
+   and server/src/prisma/seed.spec.ts asserts the seed upsert payload equals the src-constant
+   derivation item by item. The harness re-derives the payload from the canonical
+   src/common/constants/agent.constants.ts values (read-only), and
+   src/prisma/seed.spec.ts:132 ('7 条角色 ExecutionPolicy upsert…') locks the shape.
+
+3. capture-baseline.mjs — 5985 bytes (KEPT deliberately; re-run the capture with `node capture-baseline.mjs`)
+   sha256: 342ae0c55623d489710e9bc566b826630017c05a7fe7ad48a68f7d624928ec9c
+
+## Commands executed (chronological, exact)
+
+  git status --porcelain -- server web worker          # clean gate
+  git rev-parse HEAD                                   # f0b192492cebe2c1b6b4a2d583da5f087fd7deea
+  mkdir -p .omo/evidence/vteam-role-behavior-abstraction
+  <wrote capture-baseline.mjs>
+  cd .omo/evidence/vteam-role-behavior-abstraction && node capture-baseline.mjs
+  node -e '<readback/assert: 7 agents, 7 role keys>'   # validation
+  shasum -a 256 before-agent-policies.json before-seed-policy-config.json capture-baseline.mjs
+  git status --porcelain -- server web worker          # post-capture: empty
+
+## Readback validation (performed after capture)
+
+  - before-agent-policies.json: agents.length === 7, guard.roles keys === 7, guard.enabled === true
+  - agent order === guard.roles key order === AGENT_POLICIES_ORDER (7 names listed above)
+  - before-seed-policy-config.json: 7 policies (ep_product … ep_librarian)
+  - Cross-check seed config vs /agent-policies builtins for all 7 roles:
+      JSON.stringify equality of config.permission === agents[].permission,
+      config.tools === guard.roles[].tools,
+      config.correction === guard.roles[].correction  →  ALL TRUE
+    (as expected: both sides derive from the same ROLE_BOUNDARIES constants)
+  - task effects: ep_product=deny ep_project_manager=deny ep_architect=deny ep_developer=deny
+    ep_tester=deny ep_plan=allow ep_librarian=deny
+  - ep_plan edit map: {"*":"deny","**.opencode/plans/**":"allow"}
+
+## Cleanup / invariants
+
+- No temp scripts remain besides the three files above (harness intentionally kept).
+- No file under server/, web/ or worker/ was created, modified or deleted.
+- No commit / stash / checkout / reset was performed.
+- `npm run seed` and `prisma migrate` were NOT run; no DB connection was opened.
+- .omo/plans/vteam-role-behavior-abstraction.md was NOT modified.
+
+## Warnings for later tasks (byte-identity invariant)
+
+- Emission order is fixed: vteam-plan first, vteam-librarian last. Do NOT reorder.
+- The builtin 7 are today derived from constants only; the future DB-backed path must emit
+  the same objects with the same key order — diff against before-agent-policies.json.
+- `permission` for builtins has NO `write` key: edit/read/bash/task then mcpDenies spread in
+  VTEAM_MCP_TOOL_NAMES order (filtered by toolAllows / server-gated exclusion).
+- `guard.roles[<name>]` key order is permission, tools, bashDeny, correction; `correction`
+  key order is scopeSummary, handoff, denyTemplate. `tools` follows each role's toolAllows
+  literal order in agent.constants.ts.

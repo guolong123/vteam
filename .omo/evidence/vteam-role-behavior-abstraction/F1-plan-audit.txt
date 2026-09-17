@@ -1,0 +1,363 @@
+================================================================================
+F1 — PLAN COMPLIANCE AUDIT
+Plan:     .omo/plans/vteam-role-behavior-abstraction.md
+Repo:     /Volumes/SSD-Data/01work/git-project/vteam
+Auditor:  F1 (independent; claims reproduced from repo state, not trusted)
+Date:     2026-09-18 (CST)
+HEAD:     412de74ec25320d9c8de84724e6c8c90a4b08d32
+Base:     f0b1924
+Commits:  172041b, b7b03c3, 451ee7f, 5c58e67, eaf3a41, 24b0939, 412de74
+================================================================================
+
+--------------------------------------------------------------------------------
+SECTION 1 — PLAN REFERENCES SPOT-CHECKED (file:line existence)
+--------------------------------------------------------------------------------
+NOTE: The plan states line numbers are known to have drifted. Every referenced
+FILE was checked for existence; every referenced SYMBOL was checked for
+existence and its ACTUAL current line is reported. No reference file is missing.
+
+SERVER
+  server/src/execution-policies/execution-policy.service.ts   EXISTS
+    plan :75-83  AGENT_POLICIES_ORDER          -> actual line 370  (DRIFT)
+    plan :326-420 buildAgentPolicies           -> actual line 681  (DRIFT)
+    plan :480-502 guardForAgent                -> actual line 839  (DRIFT)
+    plan :504-514 filterToolsMatrix            -> actual line 157  (DRIFT)
+    plan :517-530 buildRolePermission          -> actual line 286  (DRIFT)
+    plan :532-540 assertWritable               -> actual line 866  (DRIFT)
+    plan :218-256 resolveByAgent               -> actual line 560  (DRIFT)
+    plan :264-313 resolveManyByAgents          -> actual line 578  (DRIFT)
+    plan :152-157 create 403                   -> actual create() @492 (inline reject)
+    plan :175-199 update                       -> actual update() @517
+    plan :203-210 remove                       -> actual remove() @544 (assertWritable @551)
+  server/src/common/constants/agent.constants.ts              EXISTS
+    plan :117-147 VTEAM_MCP_TOOL_NAMES         -> actual line 117  (EXACT)
+    plan :198-207 RoleBoundary                 -> actual line 198  (EXACT)
+    plan :248-266 buildEditPermission/buildReadPermission -> actual 248/258 (EXACT)
+    plan :282-548 ROLE_BOUNDARIES              -> actual line 282  (EXACT)
+  server/prisma/schema.prisma                                 EXISTS
+    plan :624-634 config Json                  -> actual line 629  (1-line DRIFT)
+  server/prisma/migrations/20260824000001_add_execution_policy/migration.sql  EXISTS
+    plan :10 `config JSON NOT NULL`            -> actual line 10   (EXACT)
+  server/prisma/seed.ts                                       EXISTS
+    plan :539-818 templateAgents order         -> actual `const templateAgents` @539 (EXACT)
+    plan :868-929 policy upsert                -> actual upsert @920 (DRIFT)
+    plan :903-917 config shape                 -> actual ~902-917 (EXACT-ish)
+    plan :929-955 agent upsert                 -> actual upsert @942 (DRIFT)
+  server/src/execution-policies/agent-policies.custom-agents.spec.ts  EXISTS
+    plan :18-26 BUILTIN_ORDER                  -> exists (suite green)
+    plan :79-92 byte locks                     -> exists
+    plan :258-281 old short-circuit assertion  -> REWRITTEN, actual new tests @258/284/317
+  server/src/execution-policies/agent-policies.matrix.spec.ts EXISTS
+  server/src/execution-policies/agent-policies.controller.spec.ts EXISTS
+  server/src/execution-policies/execution-policies.controller.spec.ts EXISTS
+    plan :111-127 POST 403, :156-168 PATCH, :192-202 DELETE -> POST/DELETE intact, PATCH rewritten
+  server/src/agents/agents.service.ts                         EXISTS
+    plan :182-223 create, :233-299 clone, :576-645 DTOs       -> symbols exist (shifted)
+    plan :701-721 provisionCustomPolicy        -> actual @698 (DRIFT)
+    plan :729-776 resolveTemplateSource        -> actual @727 (DRIFT)
+    plan :782-801 buildSkeletonConfig          -> actual @754 (DRIFT)
+  server/src/platform-mcp/platform-mcp.service.ts             EXISTS
+    plan :3830-3833 resolveByAgent missing agentKey -> FIXED; actual @3832-3837
+    plan :404 @Optional()                      -> actual @396/399/403 (DRIFT)
+  server/src/chat/worker-dispatcher.ts                        EXISTS
+    plan :167-185 renderBoundarySection        -> actual @200 (DRIFT; signature changed)
+    plan :102-110 VTEAM_AGENT_NAMES            -> actual @106 (DRIFT)
+    plan :117-136 isVteamAgentName/roleToAgentName -> actual @121/133 (DRIFT)
+    plan :147-155 resolvePolicyAgentCandidate  -> actual @151 (DRIFT)
+    plan :460-546 buildSystemInstructions/boundarySection -> actual @492/534 (DRIFT)
+    plan :2054-2083 dispatch site              -> actual @2107-2121 (DRIFT)
+  server/src/chat/chat.module.ts                              EXISTS (ExecutionPoliciesModule @43)
+  server/src/execution-policies/execution-policies.module.ts  EXISTS
+  server/src/prisma/seed.spec.ts                              EXISTS
+  server/src/execution-policies/dto/create-execution-policy.dto.ts EXISTS (@IsIn(['custom']) @34)
+  server/src/agents/dto/update-agent.dto.ts                   EXISTS (prompt?: string @52)
+WEB
+  web/app/(main)/agents/page.tsx                              EXISTS
+    plan :1343 readOnly={isTemplate}           -> now readOnly={readOnly} @1330 / false @2539
+    plan :1174-1189 badge                      -> badge block REMOVED
+    plan :2553 readOnly={false}                -> actual @2539 (DRIFT)
+    plan :624 editable gate                    -> actual @627 (editable = effective !== null)
+    plan :875 readOnly                         -> actual @878 (readOnly={!editable})
+    plan :660-717 policy mutation              -> exists
+SCRIPTS / WORKER / DRAFT
+  scripts/e2e-role-boundaries.sh                              EXISTS (scenario f @469, f2 @542)
+  worker/src/role-guard/policy.ts                             EXISTS (UNCHANGED)
+  worker/src/resources/injector.ts                            EXISTS (UNCHANGED)
+  worker/src/resources/opencode-config-builder.ts             EXISTS (UNCHANGED)
+  .omo/drafts/vteam-role-behavior-abstraction.md              EXISTS
+
+MISSING REFERENCES: NONE. All drift is line-number only, explicitly allowed.
+
+--------------------------------------------------------------------------------
+SECTION 2 — CENTRAL INVARIANT CLAIMS (raw command output)
+--------------------------------------------------------------------------------
+[2.1] sha256 before/after must be 793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a
+$ shasum -a 256 before-agent-policies.json after-agent-policies.json
+793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a  before-agent-policies.json
+793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a  after-agent-policies.json
+  -> PASS (exact match). Deep-equal of parsed JSON also True (independently parsed).
+
+[2.2] Server typecheck
+$ cd server && npx tsc -p tsconfig.json --noEmit ; echo exit=$?
+SERVER_TSC_EXIT=0    -> PASS
+
+[2.3] Server full test suite
+$ cd server && npx jest --runInBand
+Test Suites: 130 passed, 130 total
+Tests:       3015 passed, 3015 total
+Snapshots:   1 passed, 1 total
+  -> PASS (ALL GREEN). Focused run of src/execution-policies|agents|prisma|chat:
+     26 suites, 748 tests passed.
+
+[2.4] Web typecheck
+$ cd web && npx tsc --noEmit ; echo exit=$?
+WEB_TSC_EXIT=0      -> PASS
+
+[2.5] Worker typecheck / wire contract untouched
+$ cd worker && npx tsc --noEmit ; echo exit=$?
+WORKER_TSC_EXIT=0   -> PASS
+$ git diff f0b1924..HEAD -- worker/ | wc -l
+0
+$ git diff --stat f0b1924..HEAD -- worker/
+(empty)             -> PASS: worker/ byte-identical to base; wire contract untouched.
+
+[2.6] Worker test suite — 2 PRE-EXISTING failures (see note)
+$ cd worker && npx jest --runInBand
+Test Suites: 1 failed, 25 passed, 26 total
+Tests:       2 failed, 651 passed, 653 total
+Failures: driver/v1-driver.spec.ts — listModels expectations
+  (i)  "GET /provider, keyed provider models + opencode free models"
+  (ii) "/provider models item missing name falls back to modelID; empty key = no creds"
+INDEPENDENT ISOLATION on pristine base (git archive f0b1924 → /tmp/wbase, reused node_modules):
+$ cd /tmp/wbase/worker && npx jest src/driver/v1-driver.spec.ts --runInBand
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 43 passed, 45 total
+  -> CONCLUSION: failures reproduce IDENTICALLY on the untouched base f0b1924.
+     They are PRE-EXISTING and ENVIRONMENTAL (live /provider model list vs frozen
+     expectations), NOT caused by this plan (worker diff = 0 lines; role-guard untouched).
+     The plan's own worker contract requirement ("wire contract stays untouched") is MET.
+     The literal plan Success-criteria line "worker: npx jest green" is NOT met on this
+     machine, but the failure set is disjunct from every file this plan touched.
+
+[2.7] 7 built-in roles in AGENT_POLICIES_ORDER; payload = 7 agents + 7 guard roles
+Emitters (execution-policy.service.ts):
+  const AGENT_POLICIES_ORDER = ['vteam-plan','vteam-product','vteam-architect',
+    'vteam-developer','vteam-tester','vteam-project_manager','vteam-librarian']  // 7
+Frozen baseline artifact parse:
+  agents len: 7
+  agent names: ['vteam-plan','vteam-product','vteam-architect','vteam-developer',
+                'vteam-tester','vteam-project_manager','vteam-librarian']
+  guard.enabled: True
+  guard roles len: 7        -> PASS: exactly 7 + 7
+  agent field set (every agent): {description, mode, name, permission}  -> no wire drift
+  mode='all' count = 1 (vteam-plan only); task='allow' count = 1 (vteam-plan only)
+  NOTE: live runtime currently reports 8 agents because a leftover custom test agent
+  (vteam-myagent) exists in the shared dev DB from concurrent F2/F3 verification; the
+  BUILT-IN subset emitted is exactly the 7 in AGENT_POLICIES_ORDER (verified by specs
+  and by f2a pre-gate: "live 7 builtins == frozen baseline (canonical)").
+
+--------------------------------------------------------------------------------
+SECTION 3 — EVIDENCE ARTIFACTS (.omo/evidence/vteam-role-behavior-abstraction/)
+--------------------------------------------------------------------------------
+All plan-claimed artifacts exist and are non-empty EXCEPT three that use a
+different filename than the plan states (content is present under a substitute):
+  Todo 6  claimed task-6-mode-task.json      -> NOT present as that name.
+          Substitute: agent-policy-derivation.spec.ts (94 lines, mode/task contracts)
+          + task-2-canonical.json (mode/task canonical provenance). CONTENT COVERED.
+  Todo 9  claimed task-9-seed-preserve.txt   -> combined into task-9-10-seed-preserve.txt
+  Todo 10 claimed task-10-seed-policy.txt    -> combined into task-9-10-seed-preserve.txt
+          Substitute file is 3,671 B, "result: ALL PASS", covers policy + agent
+          update payloads = {} and user-edit survival. CONTENT COVERED.
+All other claimed files present, non-empty:
+  before-agent-policies.json (18,695 B) / after-agent-policies.json (18,695 B)
+  task-1-baseline.txt, task-2-canonical.json, task-3-db-read.json, task-4-guard.json,
+  task-5-fallback.json, task-7-spec-rewrite.txt, task-8-patch.txt, task-11-boundary.json,
+  task-12-seed-spec.txt, task-13-web-prompt.png (valid PNG 2560x1183),
+  task-14-web-matrix.png (valid PNG), task-15-db-driven.txt, task-15-mutations.txt.
+  Mutation evidence files also present: task-9-10-seed-spec-failures.txt, etc.
+
+DEVIATION (process): the plan's Commit strategy (line 212) says the byte-identity
+artifacts "are committed under .omo/evidence/ with the final proof todo."
+They are NOT committed:
+$ git ls-tree -r --name-only 412de74 -- .omo/evidence/vteam-role-behavior-abstraction/ | wc -l
+0
+$ git status --short
+?? .omo/evidence/vteam-role-behavior-abstraction/
+The tree is dirty; evidence exists on disk (unignored for .json/.txt/.mjs) but was
+never `git add`ed. This is a real deviation from the plan's own commit strategy.
+
+--------------------------------------------------------------------------------
+SECTION 4 — SHORT-CIRCUIT INVERSIONS (verified by reading code, not claims)
+--------------------------------------------------------------------------------
+[4.1] buildAgentPolicies() reads bound ep_<role> DB rows via batched findMany
+  execution-policy.service.ts:681 buildAgentPolicies
+    :682  boundPolicyIds = AGENT_POLICIES_ORDER.map(builtinPolicyIdOf)
+    :685  const boundPolicies = await this.prisma.executionPolicy.findMany({ where:{ id:{ in: boundPolicyIds } } })
+    :689  resolveBuiltinPolicy(name, boundById.get(builtinPolicyIdOf(name))?.config ?? null)
+  -> PASS: single batched findMany (no N+1); order from AGENT_POLICIES_ORDER, not the query.
+     buildAgentPolicies is @681 (plan said :326 — drift only).
+
+[4.2] guardForAgent() no longer short-circuits built-ins to the constant allowlist
+  execution-policy.service.ts:839-864
+    - config == null  -> boundary allowlist (constant fallback)
+    - config present  -> resolveGuardTools(agentName, config.tools) / resolveBashDeny(config.bashDeny)
+  resolveGuardTools @~205: canonicalised non-empty tools win; else constant boundary allowlist.
+  -> PASS: when a config is present for a built-in name, the DB tools are used. The old
+     "built-in name => return constant" early-return is gone.
+
+[4.3] renderBoundarySection() takes a resolved correction, not an agent name
+  worker-dispatcher.ts:200-215
+    export function renderBoundarySection(correction: BoundaryCorrection | null | undefined): string
+    (no agentName parameter; no isVteamAgentName call inside)
+  Dispatch site: worker-dispatcher.ts:2117-2121
+    const boundarySection = renderBoundarySection(await this.resolveBoundaryCorrection(agentIdentity));
+  resolveBoundaryCorrection @3619: prefers ExecutionPolicyService.resolveByAgent(...).correction,
+    falls back to resolveConstantPolicySource(roleToAgentName(role)).
+  isVteamAgentName @121 still EXISTS but is now used ONLY by roleToAgentName @133 (identity
+  mapping), exactly as the plan's scope note (line 163) permits.
+  -> PASS.
+
+[4.4] seed.ts both upserts use `update: {}`
+  server/prisma/seed.ts:920 executionPolicy.upsert, :924 update: {}
+  server/prisma/seed.ts:942 agent.upsert,          :944 update: {}
+  -> PASS. Create branches still carry factory config/prompt.
+
+[4.5] execution-policy.service.ts update() has no assertWritable; create()/remove() still reject templates
+  assertWritable call sites: 551 ONLY (inside remove()).
+  create() @492-515: inline `if (dto.type === 'template') throw ForbiddenException(POLICY_TEMPLATE_READONLY)`.
+  update() @517-540: no assertWritable call (find -> optional config validation -> prisma.update).
+  remove() @544-553: assertWritable(existing.type) @551 -> delete.
+  -> PASS. POST still rejects (also enforced by DTO @IsIn(['custom']) @34);
+     DELETE still rejects; PATCH now permitted for type=template.
+
+[4.6] Controller doc/behavior aligned for PATCH (execution-policies.controller.ts @26/@67)
+  -> PASS.
+
+--------------------------------------------------------------------------------
+SECTION 5 — TODO-BY-TODO ACCEPTANCE vs ACTUAL EVIDENCE
+--------------------------------------------------------------------------------
+1  [baseline] clean-tree capture. PASS. before-agent-policies.json exists, valid JSON,
+   7 agents, sha256 frozen. task-1-baseline.txt documents clean porcelain gate at f0b1924.
+2  Canonical emission + per-field DB resolution + safety validation. PASS.
+   policy-canonical.spec.ts (385 lines) round-trips MySQL-reordered keys to byte-identical
+   output; canonicalizePermission deletes `write`; filterToolsMatrix drops illegal values;
+   server tsc 0.
+3  buildAgentPolicies reads bound DB row (constant fallback). PASS.
+   Code @681-699 (batched findMany), agent-policies-db-builtin.spec.ts; db-driven spec
+   asserts DB tools/permission reach agents[] + guard.roles[] and order == AGENT_POLICIES_ORDER.
+4  guardForAgent resolves builtin tools/bashDeny from config. PASS.
+   Code @839-864; custom-agents.spec.ts rewritten; task-4-guard.json allPass.
+5  Unify fallback (resolveByAgent vs resolveTemplateSource) + platform-mcp agentKey. PASS.
+   resolveConstantPolicySource @406 shared; platform-mcp.service.ts now selects+passes agentKey;
+   task-5-fallback.json allPass (missing row -> constant, not null; custom binds own type=custom).
+6  mode and task derivation explicit/pinned. PASS (content), filename deviation.
+   deriveAgentMode + resolveTaskEffect helpers; agent-policy-derivation.spec.ts asserts
+   mode='all' exactly once (vteam-plan) and task='allow' exactly once.
+7  Rewrite old short-circuit specs. PASS.
+   custom-agents.spec.ts:258/284/317 now assert DB-wins + constant fallback; byte-identity
+   suite retained. INDEPENDENT MUTATION CHECK: re-adding the built-in short-circuit made the
+   suite fail (2 tests) — reproduced by me below.
+8  Allow PATCH of builtin policy (keep POST/DELETE 403). PASS.
+   task-8-patch.txt allPass: PATCH ep_product 200 + persists; POST template 400 at DTO and
+   403 at service (defense in depth); DELETE template 403; row survives.
+9  Seed preserves user-edited prompts. PASS.
+   seed.ts:944 update {}; task-9-10-seed-preserve.txt: agent update key sets all [] and
+   user-edited prompt/policyId/agentKey survive reseed.
+10 Seed preserves user-edited policy config. PASS.
+   seed.ts:924 update {}; same evidence: policy update key sets all [] and edited
+   tools/description survive; counterfactual shows old payload would have clobbered.
+11 Boundary section from resolved policy (drop name-list gate). PASS.
+   Code @200/2117/3619; task-11-boundary.json: factory correction byte-identical to
+   baseline; custom agent now gets non-empty boundary; unknown/missing -> constant/empty.
+12 Rewrite seed specs (preserve not overwrite). PASS.
+   seed.spec.ts:146/202/217/229/253/261 assert update == {}; create still carries factory
+   prompt (>50 chars) and config; ordering assertion retained. server suite 3009→3015 green.
+13 Unlock template prompt editor. PASS.
+   page.tsx:1330 readOnly={readOnly}; :2539 readOnly={false}; badge removed; testid removed.
+   task-13-web-prompt.json (Playwright): textarea not readonly, editable, badge gone;
+   screenshot valid PNG. web tsc 0.
+14 Make built-in tool matrix editable. PASS.
+   page.tsx:627 editable = effective !== null; :878 readOnly={!editable}; layer-① rows
+   stay read-only. task-14-web-matrix.json (Playwright): template guard row editable,
+   toggle persists, network PATCH observed; screenshot valid PNG.
+15 DB-driven proof + e2e. PASS.
+   New agent-policies-db-driven.spec.ts (298 lines) with rows differing from constants.
+   INDEPENDENT MUTATION CHECKS (I re-ran both, not trusting the recorded file):
+     Revert Todo 3 (use null instead of bound row): 1 failed / 5 passed.
+     Re-add Todo 4 short-circuit:                    2 failed / 4 passed.
+   LIVE E2E scenario f2 — I ran it myself in an isolated pass:
+     [e2e] PASS f (task contract on /agent-policies + injected opencode.json)
+     [e2e] PASS f2a (pre-edit live 7 builtins byte-identical to frozen baseline)
+     [e2e] PASS f2b (control-plane /agent-policies reflects the DB edit)
+     [e2e] PASS f2c (DB edit reached injected opencode.json + roles.json; other 6 builtins byte-identical)
+     [e2e] PASS f2d (post-restore after-agent-policies.json byte-identical to frozen baseline)
+     [e2e] ALL SCENARIOS DONE: a/c/d/e/f/f2/g
+   NOTE: a first f2 run failed at the pre-gate because a CONCURRENT F2/F3 verifier had
+   left ep_product edited in the shared live DB (bash=deny, group_post=deny). After I
+   restored the factory config and re-ran, f2 passed end-to-end. Confirms isolation, not defect.
+
+--------------------------------------------------------------------------------
+SECTION 6 — PLAN CHECKBOXES MARKED [x] WHOSE DELIVERABLE WAS NOT FOUND
+--------------------------------------------------------------------------------
+- Todo 6: literal artifact task-6-mode-task.json absent (content covered by
+  agent-policy-derivation.spec.ts + task-2-canonical.json). Cosmetic deviation.
+- Todo 9: literal artifact task-9-seed-preserve.txt absent (combined into
+  task-9-10-seed-preserve.txt). Cosmetic deviation.
+- Todo 10: literal artifact task-10-seed-policy.txt absent (same combined file).
+- Commit strategy line 212 (not a todo checkbox, but a stated deliverable): the
+  byte-identity evidence is NOT committed under .omo/evidence/ with the final proof
+  todo; it is untracked. Process deviation.
+No todo deliverable is substantively missing; all acceptance assertions are covered
+by code, tests, and/or evidence that exists.
+
+--------------------------------------------------------------------------------
+SECTION 7 — SCOPE CREEP
+--------------------------------------------------------------------------------
+Files changed f0b1924..HEAD (21) all map to plan todos:
+  server/src/execution-policies/execution-policy.service.ts      Todos 2,3,4,6,8
+  server/src/execution-policies/{controller,controller.spec}.ts  Todo 8
+  server/src/execution-policies/agent-policies.custom-agents.spec.ts  Todo 7
+  server/src/execution-policies/{policy-canonical,agent-policies-db-builtin,
+    agent-policy-derivation,agent-policy-fallback,agent-policies-db-driven}.spec.ts  Todos 2,3,5,6,15
+  server/src/common/constants/agent.constants.ts                 (NOT changed; reference only)
+  server/src/agents/agents.service.ts + .spec.ts                 Todo 5
+  server/src/platform-mcp/platform-mcp.service.ts + .spec.ts     Todo 5
+  server/src/chat/worker-dispatcher.ts + .spec.ts, chat.module.ts Todo 11
+  server/prisma/seed.ts                                          Todos 9,10
+  server/src/prisma/seed.spec.ts                                 Todo 12
+  web/app/(main)/agents/page.tsx                                 Todos 13,14
+  web/e2e/reference/testids.ts                                   Todo 13 (badge testid removal)
+  scripts/e2e-role-boundaries.sh                                 Todo 15
+No out-of-scope PRODUCT file changed. web/e2e/reference/testids.ts is not named in the
+plan text but is a necessary consequence of removing the badge in Todo 13 — in-scope by
+necessity, not creep. Worker and constants-only files are untouched as required.
+
+--------------------------------------------------------------------------------
+SECTION 8 — VERDICT
+--------------------------------------------------------------------------------
+All 15 todos' acceptance criteria are met by verifiable repository state:
+  - sha256 of before/after byte-identical to the frozen value;
+  - server tsc 0 + (130 suites, 3015 tests) ALL GREEN; web tsc 0; worker tsc 0;
+  - worker/ diff vs base EMPTY (wire contract untouched);
+  - 7 built-ins emitted in AGENT_POLICIES_ORDER with exactly 7 agents + 7 guard roles;
+  - all five short-circuit inversions confirmed by reading the actual code;
+  - two independent mutation checks reproduced (Todo 3 and Todo 4 reverts both fail the
+    new DB-driven spec);
+  - live e2e scenario f + f2a–f2d re-run by the auditor and PASSED end to end.
+
+Documented, non-blocking deviations:
+  (a) Three evidence FILENAMES differ from the plan's literal names (content present;
+      Todos 6/9/10).
+  (b) Evidence artifacts are NOT committed (untracked) despite the plan's commit
+      strategy; tree is dirty.
+  (c) worker `npx jest` shows 2 failures that are PRE-EXISTING and ENVIRONMENTAL —
+      reproduced identically on pristine base f0b1924 with worker/ diff = 0.
+
+None of these invalidate any acceptance criterion: the plan's product changes are
+byte-complete, mutation-proven, and the central invariant holds. Deviations (a)/(b) are
+bookkeeping/process issues that should be corrected before final archive (commit the
+evidence, optionally rename the three artifacts); (c) is outside this plan's blast radius
+and should be tracked separately.
+
+F1 VERDICT: APPROVE
+================================================================================

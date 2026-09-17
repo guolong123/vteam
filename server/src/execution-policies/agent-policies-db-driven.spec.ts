@@ -1,17 +1,16 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
-  buildEditPermission,
-  buildReadPermission,
   ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
-  ROLE_POLICY_DENY_TEMPLATE,
   type VteamAgentName,
 } from '../common/constants/agent.constants';
 import {
-  builtinPolicyIdOf,
-  ExecutionPolicyService,
-} from './execution-policy.service';
+  BUILTIN_ORDER,
+  builtinPolicyRow,
+  factorySeedConfig,
+  loadAgentPoliciesBaseline,
+  reorderLikeMysql,
+} from './__fixtures__/policy-fixtures';
+import { ExecutionPolicyService } from './execution-policy.service';
 
 /**
  * vteam-role-behavior-abstraction Todo 15（收口证明）：DB 行真实驱动内置 7 角色。
@@ -31,28 +30,7 @@ import {
  *   - 还原 Todo 4（`guardForAgent` 对内置名短路）→ 本 spec 的 resolveByAgent 断言失败。
  */
 describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
-  const BUILTIN_ORDER: readonly VteamAgentName[] = [
-    'vteam-plan',
-    'vteam-product',
-    'vteam-architect',
-    'vteam-developer',
-    'vteam-tester',
-    'vteam-project_manager',
-    'vteam-librarian',
-  ];
-
-  const baseline = JSON.parse(
-    readFileSync(
-      join(
-        __dirname,
-        '../../../.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json',
-      ),
-      'utf8',
-    ),
-  ) as {
-    agents: Array<Record<string, unknown>>;
-    guard: { enabled: boolean; roles: Record<string, Record<string, unknown>> };
-  };
+  const baseline = loadAgentPoliciesBaseline();
 
   /** 编辑对象：`vteam-product`——DB `tools` 与 `permission` 都刻意偏离常量。 */
   const EDITED: VteamAgentName = 'vteam-product';
@@ -68,28 +46,6 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
     vteam_hook_cancel: 'deny',
   };
 
-  /** seed.ts:903-917 落库的出厂 config（键序即 seed 插入序）。 */
-  function factorySeedConfig(name: VteamAgentName) {
-    const boundary = ROLE_BOUNDARIES[name];
-    return {
-      permission: {
-        edit: buildEditPermission(boundary.writeGlobs),
-        read: buildReadPermission(),
-        bash: boundary.bashEffect,
-        task: name === 'vteam-plan' ? 'allow' : 'deny',
-        ...Object.fromEntries(
-          boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
-        ),
-      },
-      correction: {
-        scopeSummary: boundary.scopeSummary,
-        handoff: { ...boundary.handoffTo },
-        denyTemplate: ROLE_POLICY_DENY_TEMPLATE,
-      },
-      tools: { ...boundary.toolAllows },
-    };
-  }
-
   /** DB 编辑后的 product config：tools 换成差异矩阵，permission 加 bash=deny + channel_send=deny。 */
   function editedProductConfig() {
     const config = factorySeedConfig(EDITED);
@@ -104,50 +60,24 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
     };
   }
 
-  /** MySQL `JSON` 列键序（键长度升序 + 字节序）——证明输出与 DB 返回键序无关。 */
-  function reorderLikeMysql(value: unknown): unknown {
-    if (Array.isArray(value)) {
-      return value.map(reorderLikeMysql);
-    }
-    if (typeof value === 'object' && value !== null) {
-      const keys = Object.keys(value as Record<string, unknown>).sort((a, b) =>
-        a.length === b.length
-          ? a < b
-            ? -1
-            : a > b
-              ? 1
-              : 0
-          : a.length - b.length,
-      );
-      const out: Record<string, unknown> = {};
-      for (const key of keys) {
-        out[key] = reorderLikeMysql((value as Record<string, unknown>)[key]);
-      }
-      return out;
-    }
-    return value;
-  }
-
-  function policyRow(name: VteamAgentName, config: unknown) {
-    return {
-      id: builtinPolicyIdOf(name),
-      name: `policy-${name}`,
-      description: null,
-      type: 'template',
-      config: JSON.parse(JSON.stringify(reorderLikeMysql(config))),
-      createdAt: new Date(0),
-      updatedAt: new Date(0),
-    };
-  }
-
-  /** 6 个未编辑角色用出厂 config，只有 product 用编辑后的 config。 */
+  /** 6 个未编辑角色用出厂 config，只有 product 用编辑后的 config（行序反转 + MySQL 键序）。 */
   function mixedRows() {
-    return [...BUILTIN_ORDER].reverse().map((name) =>
-      policyRow(
-        name,
-        name === EDITED ? editedProductConfig() : factorySeedConfig(name),
-      ),
-    );
+    return [...BUILTIN_ORDER]
+      .reverse()
+      .map((name) =>
+        builtinPolicyRow(
+          name,
+          JSON.parse(
+            JSON.stringify(
+              reorderLikeMysql(
+                name === EDITED
+                  ? editedProductConfig()
+                  : factorySeedConfig(name),
+              ),
+            ),
+          ),
+        ),
+      );
   }
 
   function serviceWith(rows: unknown[], findUniqueRow?: unknown) {
@@ -158,9 +88,8 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
         Promise.resolve(
           findUniqueRow !== undefined
             ? findUniqueRow
-            : (rows as Array<{ id: string }>).find(
-                (r) => r.id === where.id,
-              ) ?? null,
+            : ((rows as Array<{ id: string }>).find((r) => r.id === where.id) ??
+                null),
         ),
       );
     const service = new ExecutionPolicyService(
@@ -290,9 +219,7 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
     expect(policies.guard.roles[EDITED].tools).toEqual(
       ROLE_BOUNDARIES[EDITED].toolAllows,
     );
-    expect(policies.guard.roles[EDITED].tools).not.toEqual(
-      DB_TOOLS_CANONICAL,
-    );
+    expect(policies.guard.roles[EDITED].tools).not.toEqual(DB_TOOLS_CANONICAL);
     expect(canon(policies)).toBe(canon(baseline));
   });
 });
