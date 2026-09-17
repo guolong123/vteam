@@ -32,6 +32,7 @@ describe('WorkerEventIngress', () => {
     worker: { findUnique: jest.Mock };
     session: {
       updateMany: jest.Mock;
+      update: jest.Mock;
       findFirst: jest.Mock;
       findUnique: jest.Mock;
       findMany: jest.Mock;
@@ -55,6 +56,7 @@ describe('WorkerEventIngress', () => {
       worker: { findUnique: jest.fn().mockResolvedValue({ id: 'registered' }) },
       session: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockResolvedValue({ id: 's_1' }),
         findFirst: jest.fn().mockResolvedValue(null),
         findUnique: jest.fn().mockResolvedValue(null),
         findMany: jest.fn().mockResolvedValue([]),
@@ -1493,6 +1495,23 @@ describe('WorkerEventIngress', () => {
           status: 'running',
         },
       ]);
+      expect(ingress.getLastActivity('s_1')).toBeDefined();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(prisma.session.update).toHaveBeenCalledWith({
+        where: { id: 's_1' },
+        data: { lastActivityAt: expect.any(Date) },
+      });
+    });
+
+    it('todo-7 双写 fail-open：DB 回写失败仍返回 true，内存计时不受影响', async () => {
+      prisma.session.update.mockRejectedValueOnce(new Error('db down'));
+      const e = event('w_1', 'evw_act1b', 'session.updated', {
+        sessionId: 's_1',
+        status: 'running',
+        taskId: 't_1',
+      });
+
+      expect(await ingress.handleEvent(e)).toBe(true);
       expect(ingress.getLastActivity('s_1')).toBeDefined();
     });
 

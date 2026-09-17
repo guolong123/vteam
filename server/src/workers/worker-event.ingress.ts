@@ -237,10 +237,28 @@ export class WorkerEventIngress {
     return this.sessionActivity.get(sessionId);
   }
 
-  /** 刷新会话输出活动时间（空闲判死计时器；有 sessionId 才记录）。 */
+  /** 刷新会话输出活动时间（空闲判死计时器；有 sessionId 才记录）。
+   *  trigger-unification todo-7 双写：内存 sessionActivity map + DB
+   *  Session.lastActivityAt（重启后内存丢失，scanIdleSessions 凭 DB 列判死）。
+   *  DB 写 fail-open（warn + 继续），controller 恒定 202 不受影响。 */
   private touchSessionActivity(payload: SessionActivityPayload): void {
     if (typeof payload.sessionId === 'string' && payload.sessionId) {
       this.sessionActivity.set(payload.sessionId, Date.now());
+      void this.persistSessionActivity(payload.sessionId);
+    }
+  }
+
+  /** 双写 DB 侧：尽力而为，失败只记 warn 永不抛错（sidecar 惯例）。 */
+  private async persistSessionActivity(sessionId: string): Promise<void> {
+    try {
+      await this.prisma.session.update({
+        where: { id: sessionId },
+        data: { lastActivityAt: new Date() },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[ingress] session ${sessionId} lastActivityAt 回写失败（fail-open，内存计时不受影响）: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 

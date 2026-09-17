@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import {
   BadRequestException,
+  Inject,
   Injectable,
   Logger,
   OnModuleDestroy,
@@ -65,6 +66,15 @@ import {
   selectFrozenPlanHash,
 } from '../issues/plan-hash-gate';
 import { normalizeParts } from './message-parts';
+import {
+  TRIGGER_KIND,
+  buildTriggerDedupKey,
+} from '../common/constants/trigger.constants';
+import {
+  TriggerFireContext,
+  TriggerOutcome,
+  TriggerService,
+} from '../timers/trigger.service';
 
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
 const MESSAGE_ID_PREFIX = 'm';
@@ -221,7 +231,7 @@ export const GLOBAL_SYSTEM_INSTRUCTIONS = [
  * 企微段仅当 opts.isWecomChannel=true 时注入（缺省不注入，字节兼容：不传即无此段）。
  */
 export const TASK_TRANSITION_INSTRUCTION =
-  '【任务状态】主 Agent 可调用 vteam MCP 的 vteam_task_transition 工具流转任务状态（参数细节查工具 schema）。仅主实例可调用，其余成员调用将返回 403 提示（请知会主实例或由管理员在任务管理界面操作）。';
+  '【任务状态】主 Agent 可调用 vteam MCP 的 vteam_task_transition 工具流转任务状态（start 开始 / mark-pending-review 提交验收 / reject 驳回，参数细节查工具 schema）。仅主实例可调用，其余成员调用将返回 403 提示（请知会主实例或由管理员在任务管理界面操作）。注意：accept 验收完成与 archive 归档仅人类用户可在管理界面操作，Agent 不可调用（调用将被拒绝）；任务就绪后请向用户报告等待人工验收，不要重复调用。';
 
 export const HOSTED_CONFIRM_INSTRUCTION =
   '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息时，调用 vteam MCP 的 vteam_question_confirm 工具决策（参数细节查工具 schema）。仅主实例可调用 vteam_question_confirm。';
@@ -770,6 +780,39 @@ interface PendingDispatch {
   /** 执行 worker id（首字超时注销活跃执行用）。 */
   workerId: string;
   timer: ReturnType<typeof setTimeout>;
+  /**
+   * 首字 deadline 的 durable trigger 行 dedupKey（trigger-unification todo-9：
+   * per-dispatch 唯一，首字到达/重注册时经 TriggerService.cancel 取消；
+   * 缺省（TriggerService 未装配）时无 durable 行，仅内存 timer 生效）。
+   */
+  triggerDedupKey?: string;
+}
+
+/**
+ * 首字 deadline trigger payload（kind 复用 SESSION_IDLE_SCAN，
+ * reason 作 payload 内鉴别；见 handleFirstTokenTrigger）。
+ */
+interface FirstTokenTriggerPayload {
+  reason: 'first-token';
+  scope: string;
+  agentId: string;
+  sessionId: string;
+  workerId: string;
+  teamMemberId: string;
+  /** watchdog 注册时刻（ms epoch；重启后凭 DB lastActivityAt 是否推进过它判定首字是否已到）。 */
+  dispatchedAt: number;
+}
+
+/** 首字 deadline trigger payload 鉴别（与未来同 kind 的空闲扫描载荷共存）。 */
+function isFirstTokenTriggerPayload(
+  payload: unknown,
+): payload is FirstTokenTriggerPayload {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    (payload as { reason?: unknown }).reason === 'first-token' &&
+    typeof (payload as { sessionId?: unknown }).sessionId === 'string'
+  );
 }
 
 /**
@@ -1134,6 +1177,12 @@ export class WorkerDispatcher
     ingress: WorkerEventIngress,
     @Optional()
     private readonly moduleRef?: ModuleRef,
+    // 首字 watchdog 的 durable deadline（trigger-unification todo-9）：
+    // 缺省可空——单测/旧装配未提供时仅内存 setTimeout 生效，不阻断分派；
+    // 生产装配经 ChatModule（已 import TimersModule）提供。
+    @Optional()
+    @Inject(TriggerService)
+    private readonly triggers?: TriggerService,
   ) {
     super();
     const maxBytes = config.get<number>('DOCLIB_MAX_BYTES');
@@ -1193,6 +1242,21 @@ export class WorkerDispatcher
     ingress.onSessionActivity((payload) => {
       this.handleSessionActivity(payload);
     });
+    // todo-7 重启安全：空闲扫描常驻启动（AGENT_IDLE_TIMEOUT_MS>0 时），重启后即便
+    // 零 dispatch（内存 map 全空），DB 侧检出仍能判死 stuck running 会话。
+    this.startIdleScan();
+    // todo-9 重启安全：首字 deadline 经 TriggerService 注册同 kind handler，
+    // 重启后到期行仍能收割无首字会话（内存 pending 全空时走 DB 侧判定）。
+    try {
+      this.triggers?.registerHandler(
+        TRIGGER_KIND.SESSION_IDLE_SCAN,
+        (trigger) => this.handleFirstTokenTrigger(trigger),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `首字 deadline handler 注册失败（仅内存 watchdog 生效）: ${this.describeError(err)}`,
+      );
+    }
   }
 
   onModuleDestroy(): void {
@@ -3559,39 +3623,236 @@ export class WorkerDispatcher
     if (existing) {
       clearTimeout(existing.timer);
       this.pendingBySession.delete(existing.sessionId);
+      // 同键重注册：旧 durable deadline 一并取消（best-effort），防旧行误收割新一轮。
+      void this.cancelFirstTokenTrigger(existing.triggerDedupKey);
     }
+    const dispatchedAt = Date.now();
     const timer = setTimeout(() => {
-      this.pending.delete(key);
-      this.pendingBySession.delete(sessionId);
-      // F2 MINOR：超时标记失败会话——迟到的回流（ingress/轮询）跳过落库仅记日志
-      this.failedSessions.add(sessionId);
-      this.unregisterExecution(workerId, scope, teamMemberId);
-      this.lastActivityAt.delete(sessionId);
-      const error = `agent 无响应（${this.firstTokenTimeoutMs / 1000}s 无事件回流），请稍后重试或检查 worker 状态`;
-      this.logger.error(`agent ${agentId} ${error}`);
-      this.emitError({ taskId: scope, agentId, error });
-      void this.broadcastAgentError({
-        taskId: scope,
+      const current = this.pending.get(key);
+      // 同键已被更新一轮（session 不同）→ 本 timer 是旧轮残留，不收割。
+      if (!current || current.sessionId !== sessionId) {
+        return;
+      }
+      this.reapFirstTokenDeadline({
+        key,
+        scope,
         agentId,
         sessionId,
-        level: 'retry',
-        errorType: 'first_token_timeout',
-        message: error,
+        workerId,
+        teamMemberId,
       });
     }, this.firstTokenTimeoutMs);
     timer.unref?.();
-    this.pending.set(key, {
+    const entry: PendingDispatch = {
       scope,
       agentId,
       instanceId: teamMemberId,
       sessionId,
       workerId,
       timer,
-    });
+    };
+    this.pending.set(key, entry);
     this.pendingBySession.set(sessionId, key);
-    // 空闲判死追踪起点（活动事件经 handleSessionActivity 刷新）
-    this.lastActivityAt.set(sessionId, Date.now());
+    // 空闲判死追踪起点（活动事件经 handleSessionActivity 刷新）——内存 map +
+    // DB Session.lastActivityAt 双写（todo-7：重启后内存丢失，扫描凭 DB 列判死）。
+    this.lastActivityAt.set(sessionId, dispatchedAt);
+    void this.persistSessionActivity(sessionId, new Date(dispatchedAt));
+    // todo-9：同 deadline 经 TriggerService 落 durable 行（setTimeout 重启即丢，
+    // 此行重启后仍到期触发 handleFirstTokenTrigger）。
+    void this.scheduleFirstTokenTrigger(entry, key, dispatchedAt);
     this.startIdleScan();
+  }
+
+  /**
+   * 首字 deadline 收割（内存 timer 与 durable trigger 共用同一行为）：
+   * pending 删除 + failedSessions 标记 + 活跃执行注销 + 追踪退出 +
+   * emitError + 广播 agent.error（first_token_timeout）。
+   */
+  private reapFirstTokenDeadline(args: {
+    key?: string;
+    scope: string;
+    agentId: string;
+    sessionId: string;
+    workerId: string;
+    teamMemberId: string;
+  }): void {
+    const { key, scope, agentId, sessionId, workerId, teamMemberId } = args;
+    if (key !== undefined) {
+      this.pending.delete(key);
+    }
+    this.pendingBySession.delete(sessionId);
+    // F2 MINOR：超时标记失败会话——迟到的回流（ingress/轮询）跳过落库仅记日志
+    this.failedSessions.add(sessionId);
+    this.unregisterExecution(workerId, scope, teamMemberId);
+    this.lastActivityAt.delete(sessionId);
+    const error = `agent 无响应（${this.firstTokenTimeoutMs / 1000}s 无事件回流），请稍后重试或检查 worker 状态`;
+    this.logger.error(`agent ${agentId} ${error}`);
+    this.emitError({ taskId: scope, agentId, error });
+    void this.broadcastAgentError({
+      taskId: scope,
+      agentId,
+      sessionId,
+      level: 'retry',
+      errorType: 'first_token_timeout',
+      message: error,
+    });
+  }
+
+  /**
+   * 首字 deadline 落 durable 行（one-shot，due = 注册时刻 + firstTokenTimeoutMs）。
+   * kind 复用 SESSION_IDLE_SCAN（白名单内唯一的会话存活类 kind，
+   * 不新增 kind 即不 churn 白名单与 REST source 映射），payload.reason 作鉴别。
+   * dedupKey per-dispatch 唯一（schedule 对既有 dedupKey 是幂等直返，
+   * 同会话多轮分派必须各有新行，旧行由 cancel 显式取消）。
+   * 全程 best-effort：失败只记 warn，内存 timer 照常生效。
+   */
+  private async scheduleFirstTokenTrigger(
+    entry: PendingDispatch,
+    key: string,
+    dispatchedAt: number,
+  ): Promise<void> {
+    if (!this.triggers) {
+      return;
+    }
+    const dedupKey = buildTriggerDedupKey(
+      TRIGGER_KIND.SESSION_IDLE_SCAN,
+      key,
+      `${entry.sessionId}:first-token:${dispatchedAt}:${Math.floor(Math.random() * 1_000_000)}`,
+    );
+    const payload: FirstTokenTriggerPayload = {
+      reason: 'first-token',
+      scope: entry.scope,
+      agentId: entry.agentId,
+      sessionId: entry.sessionId,
+      workerId: entry.workerId,
+      teamMemberId: entry.instanceId,
+      dispatchedAt,
+    };
+    try {
+      await this.triggers.schedule(
+        TRIGGER_KIND.SESSION_IDLE_SCAN,
+        new Date(dispatchedAt + this.firstTokenTimeoutMs),
+        payload,
+        dedupKey,
+      );
+      // 仅落库成功才挂载到内存条目（clear 路径凭此取消；调度失败则无行可取消）。
+      const current = this.pending.get(key);
+      if (current && current.sessionId === entry.sessionId) {
+        current.triggerDedupKey = dedupKey;
+      }
+    } catch (err) {
+      this.logger.warn(
+        `首字 deadline durable 行落库失败（仅内存 watchdog 生效） session=${entry.sessionId}: ${this.describeError(err)}`,
+      );
+    }
+  }
+
+  /** 首字到达/重注册时取消 durable deadline（无行/已终态时 cancel 抛错→吞掉记 warn）。 */
+  private async cancelFirstTokenTrigger(
+    dedupKey: string | undefined,
+  ): Promise<void> {
+    if (!this.triggers || !dedupKey) {
+      return;
+    }
+    try {
+      await this.triggers.cancel(dedupKey);
+    } catch (err) {
+      this.logger.warn(
+        `首字 deadline durable 行取消失败（忽略） ${dedupKey}: ${this.describeError(err)}`,
+      );
+    }
+  }
+
+  /**
+   * durable 首字 deadline 到期处理（TriggerService SESSION_IDLE_SCAN handler）。
+   * - 非本载荷（reason 缺失/它用）→ no-op，{done:true}（同 kind 共存不互伤）。
+   * - 已标记失败 → {done:true}（内存 timer 已收割，不重复广播）。
+   * - pendingBySession 仍命中（本进程等待首字中）→ 复刻内存超时行为收割；
+   *   条目会话漂移（同键新一轮）→ 旧行残留，跳过。
+   * - 命中缺席（重启后内存全空）→ DB 侧判定：行缺失/非 running → 跳过；
+   *   lastActivityAt 已推进过 dispatchedAt（首字到过）→ 跳过，防误杀；
+   *   否则收割（failedSessions + 注销 + 广播），DB 异常时 fail-open 跳过。
+   */
+  private async handleFirstTokenTrigger(
+    trigger: TriggerFireContext,
+  ): Promise<TriggerOutcome> {
+    const payload = trigger?.payload;
+    if (!isFirstTokenTriggerPayload(payload)) {
+      return { done: true };
+    }
+    const { scope, agentId, sessionId, workerId, teamMemberId, dispatchedAt } =
+      payload;
+    if (this.failedSessions.has(sessionId)) {
+      return { done: true };
+    }
+    const key = this.pendingBySession.get(sessionId);
+    if (key !== undefined) {
+      const current = this.pending.get(key);
+      if (!current || current.sessionId !== sessionId) {
+        return { done: true };
+      }
+      clearTimeout(current.timer);
+      const dedupKey = current.triggerDedupKey;
+      this.reapFirstTokenDeadline({
+        key,
+        scope,
+        agentId,
+        sessionId,
+        workerId,
+        teamMemberId,
+      });
+      // 本行正 firing（claim 后回调中），cancel 只影响他行；仍调用以幂等语义兜底。
+      void this.cancelFirstTokenTrigger(dedupKey);
+      return { done: true };
+    }
+    let row: { status: unknown; lastActivityAt: unknown } | null;
+    try {
+      row = (await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { status: true, lastActivityAt: true },
+      })) as { status: unknown; lastActivityAt: unknown } | null;
+    } catch (err) {
+      this.logger.warn(
+        `首字 deadline 重启判定读会话失败（fail-open 跳过） session=${sessionId}: ${this.describeError(err)}`,
+      );
+      return { done: true };
+    }
+    if (!row || row.status !== SESSION_STATUS.running) {
+      return { done: true };
+    }
+    if (
+      row.lastActivityAt instanceof Date &&
+      row.lastActivityAt.getTime() > dispatchedAt
+    ) {
+      return { done: true };
+    }
+    this.reapFirstTokenDeadline({
+      scope,
+      agentId,
+      sessionId,
+      workerId,
+      teamMemberId,
+    });
+    return { done: true };
+  }
+
+  /**
+   * 双写 DB 侧：尽力而为，失败只记 warn 永不抛错（dispatch 主链路不受 DB 抖动影响）。
+   */
+  private async persistSessionActivity(
+    sessionId: string,
+    at?: Date,
+  ): Promise<void> {
+    try {
+      await this.prisma.session.update({
+        where: { id: sessionId },
+        data: { lastActivityAt: at ?? new Date() },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `session ${sessionId} lastActivityAt 回写失败（fail-open，内存计时不受影响）: ${this.describeError(err)}`,
+      );
+    }
   }
 
   /**
@@ -3616,9 +3877,10 @@ export class WorkerDispatcher
       return;
     }
     this.lastActivityAt.set(sessionId, Date.now());
+    void this.persistSessionActivity(sessionId);
   }
 
-  /** 惰性启动空闲判死扫描（0 表示禁用，按需求已禁杀死长任务） */
+  /** 启动空闲判死扫描（0 表示禁用，按需求已禁杀死长任务；构造时常驻启动 + watchdog 惰性兜底） */
   private startIdleScan(): void {
     if (this.agentIdleTimeoutMs <= 0) {
       return;
@@ -3638,6 +3900,9 @@ export class WorkerDispatcher
    * 空闲判死扫描：遍历 lastActivityAt，跳过仍等首事件（pendingBySession 命中）的会话；
    * 超 AGENT_IDLE_TIMEOUT_MS 无活动 → 查 Session.status，仅 running 判死（failed + emitError
    * + 广播 agent.error）；非 running（idle/完成/冻结）→ 退出追踪不判死（防误杀）。
+   * trigger-unification todo-7：追加 DB 侧检出（status='running' AND lastActivityAt <
+   * now - idleTimeout），重启后内存 map 为空仍可判死；本进程内正处首字等待的会话
+   * （pendingBySession 命中）一律否决，不判死。
    */
   private async scanIdleSessions(): Promise<void> {
     if (this.agentIdleTimeoutMs <= 0) {
@@ -3653,6 +3918,31 @@ export class WorkerDispatcher
         continue;
       }
       stale.push(sessionId);
+    }
+    // DB 侧检出：覆盖重启后内存 map 为空的场景（NULL 行不命中 lt，不误杀迁移前存量）。
+    try {
+      const cutoff = new Date(now - this.agentIdleTimeoutMs);
+      const dbStale = await this.prisma.session.findMany({
+        where: {
+          status: SESSION_STATUS.running,
+          lastActivityAt: { lt: cutoff },
+        },
+        select: { id: true },
+        take: 100,
+      });
+      for (const row of dbStale ?? []) {
+        if (stale.includes(row.id)) {
+          continue;
+        }
+        if (this.pendingBySession.has(row.id)) {
+          continue;
+        }
+        stale.push(row.id);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `空闲判死 DB 检出失败（fail-open，仅内存侧继续）: ${this.describeError(err)}`,
+      );
     }
     for (const sessionId of stale) {
       await this.markSessionIdleDead(sessionId);
@@ -3688,6 +3978,20 @@ export class WorkerDispatcher
       if (row.status !== SESSION_STATUS.running) {
         this.lastActivityAt.delete(sessionId);
         return;
+      }
+      // 内存否决（todo-7，Oracle 约束）：本进程仍登记该成员为活跃执行 → 正处轮中，
+      // 跳过判死（isAgentExecuting 只读复用，语义不变；TTL 30min 到期后否决自动失效）。
+      if (row.workerId && row.teamId && row.teamMemberId) {
+        const active = this.isAgentExecuting(
+          row.workerId,
+          toExecutionScope(null, row.teamId),
+        );
+        if (active !== null && active.has(row.teamMemberId)) {
+          this.logger.warn(
+            `session ${sessionId} 仍在活跃执行集合中（内存否决），跳过空闲判死`,
+          );
+          return;
+        }
       }
       let forensicsError: string | undefined;
       let forensicsType = 'agent_idle_timeout';
@@ -4007,6 +4311,8 @@ export class WorkerDispatcher
       clearTimeout(existing.timer);
       this.pending.delete(`${scope}:${agentId}`);
       this.pendingBySession.delete(existing.sessionId);
+      // 首字已到（或本轮结束）：durable deadline 同步取消，防到期误收割。
+      void this.cancelFirstTokenTrigger(existing.triggerDedupKey);
     }
   }
 
@@ -4020,6 +4326,7 @@ export class WorkerDispatcher
     if (existing) {
       clearTimeout(existing.timer);
       this.pending.delete(key);
+      void this.cancelFirstTokenTrigger(existing.triggerDedupKey);
     }
     this.pendingBySession.delete(sessionId);
   }

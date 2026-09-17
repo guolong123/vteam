@@ -733,6 +733,114 @@ const gitReposListSchema = z
 type GitReposListArgs = z.infer<typeof gitReposListSchema>;
 
 /**
+ * hook_register（trigger-unification todo-12：agent 自助"稍后唤醒我"）。
+ * ownerInstanceId 故意不在 schema 内——服务端取自 resolveExecContext 的
+ * callerId（防冒充）；channelId 同理由服务端解析（任务/团队群聊频道）。
+ * targetInstanceId 可选（缺省唤醒调用方自身）；time 需 dueAt/delayMs 二选一，
+ * all_idle 禁止带（refine 在 zod 层保证，失败 → tools/call -32602）。
+ */
+const hookRegisterSchema = z
+  .object({
+    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+    teamId: z.string().optional().describe(TEAM_ID_DESC),
+    selfInstanceId: z
+      .string()
+      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入；服务端以此作为 hook 所有者）'),
+    kind: z
+      .enum(['time', 'all_idle'])
+      .describe(
+        '唤醒类型：time=定时唤醒（需 dueAt/delayMs）/ all_idle=团队静默时唤醒（由全局 poll 评估）',
+      ),
+    wakeText: z
+      .string()
+      .min(1)
+      .describe('唤醒词（下一轮被唤醒时带回的上下文，服务端截断 2000 字符）'),
+    targetInstanceId: z
+      .string()
+      .optional()
+      .describe(
+        '被唤醒成员 id（tmm_ 前缀，须在当前团队；缺省为调用方自身）',
+      ),
+    dueAt: z
+      .string()
+      .optional()
+      .describe('到期时刻（ISO 时间字符串，与 delayMs 二选一，仅 time 有效）'),
+    delayMs: z
+      .number()
+      .positive()
+      .optional()
+      .describe('相对延迟毫秒（与 dueAt 二选一，仅 time 有效）'),
+    expiresInMs: z
+      .number()
+      .positive()
+      .optional()
+      .describe('hook 生命周期毫秒（缺省 24h；到期未触发则 expired）'),
+    graceMs: z
+      .number()
+      .positive()
+      .optional()
+      .describe('静默宽限毫秒（仅 all_idle 有效，缺省服务端 4min）'),
+    dedupKey: z
+      .string()
+      .optional()
+      .describe('幂等注册键（缺省服务端组装；重复注册幂等直返既有行）'),
+  })
+  .refine((d) => !!d.taskId || !!d.teamId, {
+    message: REQUIRE_TASK_OR_TEAM_MSG,
+    path: ['taskId'],
+  })
+  .refine(
+    (d) =>
+      d.kind === 'all_idle' ||
+      (d.dueAt !== undefined || d.delayMs !== undefined),
+    {
+      message: 'time hook 必须带 dueAt 或 delayMs（到期唤醒时刻）',
+      path: ['dueAt'],
+    },
+  )
+  .refine(
+    (d) =>
+      d.kind === 'time' ||
+      (d.dueAt === undefined && d.delayMs === undefined),
+    {
+      message: 'all_idle hook 不接受 dueAt/delayMs（静默由全局 poll 评估）',
+      path: ['dueAt'],
+    },
+  )
+  .refine((d) => d.dueAt === undefined || d.delayMs === undefined, {
+    message: 'dueAt 与 delayMs 二选一，不可同传',
+    path: ['delayMs'],
+  });
+
+type HookRegisterArgs = z.infer<typeof hookRegisterSchema>;
+
+/**
+ * hook_cancel（trigger-unification todo-12：取消自己的 hook）。
+ * hookId 与 dedupKey 至少传一个；服务端复核调用方为 hook 所有者或是执行
+ * 团队主 Agent（否则 403），hook 归属团队必须等于执行团队（跨团队 403）。
+ */
+const hookCancelSchema = z
+  .object({
+    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+    teamId: z.string().optional().describe(TEAM_ID_DESC),
+    selfInstanceId: z
+      .string()
+      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+    hookId: z.string().optional().describe('hook id（hks_ 前缀）'),
+    dedupKey: z.string().optional().describe('注册幂等键（与 hookId 二选一）'),
+  })
+  .refine((d) => !!d.taskId || !!d.teamId, {
+    message: REQUIRE_TASK_OR_TEAM_MSG,
+    path: ['taskId'],
+  })
+  .refine((d) => !!d.hookId || !!d.dedupKey, {
+    message: 'hookId 与 dedupKey 至少传一个',
+    path: ['hookId'],
+  });
+
+type HookCancelArgs = z.infer<typeof hookCancelSchema>;
+
+/**
  * 构建工具集（service 闭包注入，controller 构造时调用一次）。
  * handler 签名 `(ctx, args)`：ctx.workerId 为 controller 透传的 header 值；
  * args 已在 tools/call 内经 inputSchema.safeParse 校验，此处收窄为具体类型。
@@ -930,6 +1038,21 @@ export function buildPlatformMcpTools(
       inputSchema: gitReposListSchema,
       handler: (ctx, args) =>
         service.gitReposList(ctx, args as GitReposListArgs),
+    },
+    {
+      name: 'hook_register',
+      description:
+        '注册稍后唤醒（agent 自助 delay/wake）：time=到期在同会话唤醒（需 dueAt/delayMs 二选一），all_idle=团队静默时唤醒（全局 poll 评估）。所有者=调用方自身（服务端取身份，防冒充）。返回 {hookId, status, kind, dueAt, expiresAt}。',
+      inputSchema: hookRegisterSchema,
+      handler: (ctx, args) =>
+        service.hookRegister(ctx, args as HookRegisterArgs),
+    },
+    {
+      name: 'hook_cancel',
+      description:
+        '取消 hook（按 hookId 或 dedupKey；仅所有者或主 Agent 可取消，已终态行幂等直返）。返回 {hookId, status}。',
+      inputSchema: hookCancelSchema,
+      handler: (ctx, args) => service.hookCancel(ctx, args as HookCancelArgs),
     },
   ];
 }

@@ -35,6 +35,8 @@ describe('PlatformMcpController (HTTP)', () => {
     skillCreate: jest.Mock;
     memoryUpdate: jest.Mock;
     gitReposList: jest.Mock;
+    hookRegister: jest.Mock;
+    hookCancel: jest.Mock;
   };
 
   /** 手写 JSON-RPC 端点：无需 Accept 头，直接 POST JSON 即可。 */
@@ -126,6 +128,17 @@ describe('PlatformMcpController (HTTP)', () => {
         status: 'updated',
       }),
       gitReposList: jest.fn().mockResolvedValue({ repos: [] }),
+      hookRegister: jest.fn().mockResolvedValue({
+        hookId: 'hks_0000000001',
+        status: 'pending',
+        kind: 'time',
+        dueAt: '2026-09-18T00:00:00.000Z',
+        expiresAt: '2026-09-19T00:00:00.000Z',
+      }),
+      hookCancel: jest.fn().mockResolvedValue({
+        hookId: 'hks_0000000001',
+        status: 'cancelled',
+      }),
     };
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -248,6 +261,8 @@ describe('PlatformMcpController (HTTP)', () => {
         'task_create',
         'skill_create',
         'git_repos_list',
+        'hook_register',
+        'hook_cancel',
       ]);
 
       for (const tool of tools) {
@@ -437,6 +452,31 @@ describe('PlatformMcpController (HTTP)', () => {
       });
       // chat_history DM：teamMemberId 可选（传即 DM 模式），仍无必填
       expect(chatHistory.inputSchema.properties.teamMemberId).toEqual({
+        type: 'string',
+      });
+      // hook_register：selfInstanceId/kind/wakeText 必填，taskId/teamId 双可选；kind/delayMs 枚举数字归为 string/number
+      const hookRegister = tools.find((t) => t.name === 'hook_register')!;
+      expect(hookRegister.inputSchema.required).toEqual([
+        'selfInstanceId',
+        'kind',
+        'wakeText',
+      ]);
+      expect(hookRegister.inputSchema.properties.kind).toEqual({
+        type: 'string',
+      });
+      expect(hookRegister.inputSchema.properties.delayMs).toEqual({
+        type: 'number',
+      });
+      expect(hookRegister.inputSchema.properties.taskId).toEqual({
+        type: 'string',
+      });
+      // hook_cancel：selfInstanceId 必填，taskId/teamId 双可选，hookId/dedupKey 双可选（至少一个由 refine 保证）
+      const hookCancel = tools.find((t) => t.name === 'hook_cancel')!;
+      expect(hookCancel.inputSchema.required).toEqual(['selfInstanceId']);
+      expect(hookCancel.inputSchema.properties.hookId).toEqual({
+        type: 'string',
+      });
+      expect(hookCancel.inputSchema.properties.dedupKey).toEqual({
         type: 'string',
       });
     });

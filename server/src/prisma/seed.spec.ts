@@ -817,6 +817,24 @@ describe('seed（计划 skills + 评审子句）', () => {
     });
   });
 
+  it('vteam 工具含 hook_register/hook_cancel 行（trigger-unification todo-13）', async () => {
+    await main();
+
+    const toolCalls = mockPrisma.tool.upsert.mock.calls;
+    for (const [action, name] of [
+      ['hook_register', 'vteam_hook_register'],
+      ['hook_cancel', 'vteam_hook_cancel'],
+    ] as const) {
+      const row = toolCalls.find((call) => call[0].where.action === action);
+      expect(row).toBeDefined();
+      expect(row[0].create).toMatchObject({
+        name,
+        action,
+        source: 'mcp',
+        mcpServer: 'vteam',
+      });
+    }
+  });
   it('示例团队 7 成员：a_plan 第 6 位、a_librarian 末位 tmm_0000000007 别名知识管理员-1，非主 Agent（主 Agent 为项目经理）', async () => {
     await main();
 

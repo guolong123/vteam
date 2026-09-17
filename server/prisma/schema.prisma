@@ -263,6 +263,11 @@ model Session {
   workerId     String?  @map("worker_id")
   instanceRef  String?  @map("instance_ref")
   status       String   @default("created")
+  // trigger-unification todo-7：空闲判死 DB sidecar（ingress touchSessionActivity +
+  // dispatcher handleSessionActivity/watchdog 起点双写；scanIdleSessions 按
+  // status='running' AND lastActivityAt < cutoff 检出，重启后内存 map 为空仍可判死；
+  // NULL = 迁移前存量行（不命中 lt 比较，不误杀）。内存 pending/active 否决保留（todo-21 前不删）。
+  lastActivityAt DateTime? @map("last_activity_at")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -279,6 +284,8 @@ model Session {
   @@unique([taskId, taskAgentId], map: "uk_sessions_task_agent")
   @@unique([teamMemberKey], map: "uk_sessions_team_member")
   @@index([teamId], map: "idx_sessions_team_id")
+  // trigger-unification todo-7：空闲判死扫描谓词（status='running' AND last_activity_at < cutoff）。
+  @@index([status, lastActivityAt], map: "idx_sessions_status_last_activity")
   @@map("sessions")
 }
 
@@ -377,37 +384,93 @@ model MessageReceipt {
 }
 
 // ==================================================================
-// 通用定时器域（generic-timer：tmr_ 前缀主键；status/kind 字符串枚举 +
-// 应用层常量 timers/timer.service.ts TIMER_STATUS，双库兼容——不声明
-// Prisma enum；id 列均为逻辑关联（不建 FK），不碰其他表）
+// 通用触发器域（generic-trigger：前身 generic-timer；tmr_ 前缀主键冻结，
+// 不引入 trg_ 前缀；status/kind 字符串枚举 + 应用层常量
+// timers/trigger.service.ts TRIGGER_STATUS，双库兼容——不声明 Prisma
+// enum；id 列均为逻辑关联（不建 FK），不碰其他表）
 //
-// 用途：任何功能无需自持时钟即可安排未来触发——schedule(kind, fireAt,
-// payload, dedupKey) 落 pending 行，ticker 到期 claim 后按 kind 分发到
-// 注册 handler。首个消费者：receipt-timeout auto-nudge（`receipt_nudge`
-// kind，由 chat 域注册）；第二个计划消费者：定时/cron 型任务
-// （`task_trigger` kind，由 tasks 域拥有）。
+// 用途：任何功能无需自持时钟即可安排未来触发——schedule(kind, dueAt,
+// payload, dedupKey, opts?) 落 pending 行，ticker 到期 claim 后按 kind
+// 分发到注册 handler。消费者：receipt-timeout auto-nudge（`receipt_nudge`
+// kind，由 chat 域注册）；评审轮次超时（`review_round_timeout` kind）。
 // dedupKey 输入规范 = `kind:scope:id`（如 `receipt_nudge:team_1:mr_2`），
 // 永不 NULL（nullable unique 在部分 DB 下破坏幂等）；调用方显式传 key。
 //
-// 扩展合同（cron/repeat 后续任务）：one-shot `fireAt` 先行；重复触发后续
-// 经新 nullable 列（如 cronExpr/repeatIntervalMs/nextFireAt）+ tasks 域
-// 拥有的 `task_trigger` kind handler 实现——本表与 TimerService 零改动。
+// 三形态（todo-2 trigger-unification）：
+// - one-shot：`dueAt` 到期触发一次（历史 `fireAt` 双写保留，后续清理任务再 drop）；
+// - interval：`intervalMs` + `nextFireAt` 周期重排（按 now 重算，不追补 missed 周期）；
+// - condition：`guardKey` 仅接受已注册谓词（registerGuard 白名单，非任意字符串）。
 // ==================================================================
 
-model Timer {
-  id             String    @id // tmr_ 前缀，服务层 IdGeneratorService 生成
-  kind           String // handler 注册键（如 receipt_nudge/task_trigger）
-  status         String    @default("pending") // pending|firing|fired|cancelled|failed
-  fireAt         DateTime  @map("fire_at")
-  payload        Json // plain JSON，handler 入参 { id, kind, payload }
-  dedupKey       String    @unique @map("dedup_key") // `kind:scope:id`，幂等重排键
-  attempts       Int       @default(0) @map("attempts")
-  lastError      String?   @map("last_error") // handler 抛错/无 handler 时记录
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt @map("updated_at")
+model Trigger {
+  id              String    @id // tmr_ 前缀冻结，服务层 IdGeneratorService 生成
+  kind            String // handler 注册键（TRIGGER_KIND 白名单，服务层强制）
+  status          String    @default("pending") // pending|firing|fired|cancelled|failed
+  fireAt          DateTime  @map("fire_at") // 历史列：双写保留，清理前勿删
+  dueAt           DateTime? @map("due_at") // one-shot 到期时刻（读路径唯一真相）
+  scopeType       String?   @map("scope_type") // 归属域（如 team/issue，可空）
+  scopeId         String?   @map("scope_id") // 归属 id（可空）
+  ownerInstanceId String?   @map("owner_instance_id") // 拥有实例（可空）
+  intervalMs      Int?      @map("interval_ms") // interval 周期（ms，可空）
+  nextFireAt      DateTime? @map("next_fire_at") // interval 下次触发（可空）
+  guardKey        String?   @map("guard_key") // condition 谓词键（注册白名单，可空）
+  fireCount       Int       @default(0) @map("fire_count") // 已触发次数
+  maxFires        Int?      @map("max_fires") // 上限（基座强制，handler 不可绕过）
+  expiresAt       DateTime? @map("expires_at") // 过期时刻（基座强制，handler 不可绕过）
+  skipReason      String?   @map("skip_reason") // guard 未通过等跳过原因
+  busyRetries     Int       @default(0) @map("busy_retries") // claim 争用重试计数
+  payload         Json // plain JSON，handler 入参 { id, kind, payload }
+  dedupKey        String    @unique @map("dedup_key") // `kind:scope:id`，幂等重排键
+  attempts        Int       @default(0) @map("attempts")
+  lastError       String?   @map("last_error") // handler 抛错/无 handler 时记录
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
 
   @@index([status, fireAt], map: "idx_timers_status_fire_at")
-  @@map("timers")
+  @@index([status, dueAt], map: "idx_triggers_status_due_at")
+  @@map("triggers")
+}
+
+// ==================================================================
+// Agent hook 域（trigger-unification todo-11：agent 自助"稍后唤醒"，
+// hks_ 前缀主键冻结，经共享 IdGeneratorService 生成；status/kind 字符串
+// 枚举 + 应用层常量 triggers/hook.service.ts HOOK_STATUS，双库兼容——
+// 不声明 Prisma enum；id 列均为逻辑关联（不建 FK），不碰其他表）
+//
+// 用途：agent 注册"wake me in 4 hours"（time）或"wake me when the team
+// goes quiet"（all_idle），结束本轮后由平台在同会话内唤醒（kind:'wake'）。
+// time hook 落 hook_fire 触发器行（dueAt 到期唤醒）；all_idle 由全局
+// hook_poll interval 行统一扫描（非 per-hook 轮询），到期兜底 hook_fire
+// 行定于 expiresAt。血缘：parentHookId 指向上游，rootTaskId 继承不重置。
+// ==================================================================
+
+model Hook {
+  id              String    @id // hks_ 前缀冻结，服务层 IdGeneratorService 生成
+  scopeType       String    @map("scope_type") // 归属域（team/task，all_idle 静默评估域）
+  scopeId         String    @map("scope_id") // 归属 id
+  ownerInstanceId String    @map("owner_instance_id") // 注册实例（tmm_ 前缀，todo-12 hook_register 服务端写入）
+  kind            String // time | all_idle（HOOK_KIND 白名单，服务层强制）
+  wakeText        String    @map("wake_text") @db.Text // 唤醒词（2000 字截断，前缀 [hook:<kind> <id>] 在触发时组装）
+  target          Json // { taskId?, teamId?, channelId, targetInstanceId }（触发时重解析，失效即 expired）
+  status          String    @default("pending") // pending|fired|expired|cancelled
+  dueAt           DateTime? @map("due_at") // time 到期时刻（all_idle 为 NULL，走全局 poll）
+  graceMs         Int?      @map("grace_ms") // all_idle 静默宽限（NULL → HOOK_ALL_IDLE_GRACE_MS_DEFAULT）
+  expiresAt       DateTime  @map("expires_at") // 过期时刻（触发器侧 + handler 侧双重结算）
+  dedupKey        String    @unique @map("dedup_key") // `hook:<scope>:<id>`，幂等注册键
+  fireCount       Int       @default(0) @map("fire_count") // 已唤醒次数
+  busyRetries     Int       @default(0) @map("busy_retries") // busy 否决/分派失败重试计数（todo-19：满 10 次改判 expired）
+  parentHookId    String?   @map("parent_hook_id") // 被唤醒轮内注册的新 hook 指向上游（链不断）
+  rootTaskId      String?   @map("root_task_id") // 链首任务（继承不重置；resetAfterComplete 按此列标 expired）
+  lastError       String?   @map("last_error") // 目标失效/分派失败记录（VARCHAR(191) 上限截断）
+  skipReason      String?   @map("skip_reason") // veto/跳过原因（否决必写）
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, dueAt], map: "idx_hooks_status_due_at")
+  @@index([status, scopeType, scopeId], map: "idx_hooks_status_scope")
+  @@index([status, kind], map: "idx_hooks_status_kind")
+  @@index([rootTaskId, status], map: "idx_hooks_root_task_status")
+  @@map("hooks")
 }
 
 // ==================================================================

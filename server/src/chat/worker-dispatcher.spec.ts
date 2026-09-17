@@ -9,6 +9,7 @@ import {
 } from '../common/constants/event.constants';
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import { ROLE_BOUNDARIES } from '../common/constants/agent.constants';
+import { TRIGGER_KIND } from '../common/constants/trigger.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import {
   WorkerClient,
@@ -66,6 +67,7 @@ describe('WorkerDispatcher', () => {
     session: {
       findUnique: jest.Mock;
       findFirst: jest.Mock;
+      findMany: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
     };
@@ -154,6 +156,8 @@ describe('WorkerDispatcher', () => {
         findUnique: jest.fn(),
         // FR-13：dispatchAgentMention 查目标 agent 会话（uk_sessions_task_agent）
         findFirst: jest.fn(),
+        // todo-7：空闲扫描 DB 侧检出（status=running AND lastActivityAt<cutoff）；默认无
+        findMany: jest.fn().mockResolvedValue([]),
         // 空闲判死路径（scanIdleSessions）会 update(status=failed)；默认未触发
         update: jest.fn().mockResolvedValue({ id: 's_0000000001' }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -1384,6 +1388,8 @@ describe('WorkerDispatcher', () => {
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('vteam_notify_agent');
       expect(TASK_TRANSITION_INSTRUCTION).toContain('vteam_task_transition');
       expect(TASK_TRANSITION_INSTRUCTION).toContain('403');
+      expect(TASK_TRANSITION_INSTRUCTION).toContain('仅人类用户');
+      expect(TASK_TRANSITION_INSTRUCTION).toContain('等待人工验收');
       expect(HOSTED_CONFIRM_INSTRUCTION).toContain('vteam_question_confirm');
       expect(HOSTED_CONFIRM_INSTRUCTION).toContain('仅主实例可调用');
       expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('禁止传递 taskId 参数');
@@ -3392,7 +3398,12 @@ describe('WorkerDispatcher', () => {
       await jest.advanceTimersByTimeAsync(IDLE_SCAN_INTERVAL_MS + 5000);
       await jest.advanceTimersByTimeAsync(0);
 
-      expect(prisma.session.update).not.toHaveBeenCalled();
+      // todo-7 双写：activity 刷新会 update(lastActivityAt)，此处只断言无判死标记
+      const failedMarks = prisma.session.update.mock.calls.filter(
+        (c: unknown[]) =>
+          (c[0] as { data?: { status?: string } })?.data?.status === 'failed',
+      );
+      expect(failedMarks).toHaveLength(0);
       expect(errors).toHaveLength(0);
       const agentError = realtime.broadcast.mock.calls.find(
         (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
@@ -3560,6 +3571,327 @@ describe('WorkerDispatcher', () => {
         expect.objectContaining({ errorType: 'quota_exceeded' }),
       );
       expect(restartSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('todo-7 双写 + DB 侧空闲检出（重启安全）', () => {
+    const staleRow = (overrides: Record<string, unknown> = {}) => ({
+      status: 'running',
+      taskId: null,
+      teamId: null,
+      teamMemberId: null,
+      agentId: 'a_product',
+      workerId: null,
+      instanceRef: null,
+      ...overrides,
+    });
+
+    it('activity 刷新双写 DB：handleSessionActivity → update(lastActivityAt)', async () => {
+      const d = createDispatcher();
+      const activityCb = ingress.onSessionActivity.mock.calls[0][0];
+      activityCb({ type: 'message.part.delta', sessionId: 's_0000000001' });
+
+      await new Promise((r) => setTimeout(r, 0));
+      expect(prisma.session.update).toHaveBeenCalledWith({
+        where: { id: 's_0000000001' },
+        data: { lastActivityAt: expect.any(Date) },
+      });
+      expect(d.getLastActivityAt('s_0000000001')).toBeDefined();
+    });
+
+    it('watchdog 起点双写 DB：startPendingWatchdog → update(lastActivityAt)', async () => {
+      const d = createDispatcher();
+
+      (d as any).startPendingWatchdog(
+        'team:tm_0000000001',
+        'a_product',
+        's_0000000001',
+        'w_0000000001',
+        'tmm_0000000001',
+      );
+
+      await new Promise((r) => setTimeout(r, 0));
+      expect(prisma.session.update).toHaveBeenCalledWith({
+        where: { id: 's_0000000001' },
+        data: { lastActivityAt: expect.any(Date) },
+      });
+      expect(d.getLastActivityAt('s_0000000001')).toBeDefined();
+    });
+
+    it('DB 侧检出：内存 map 为空（重启后）但 DB 有 stale running → 判死', async () => {
+      const d = createDispatcher();
+      expect(d.getLastActivityAt('s_stale_1')).toBeUndefined();
+      prisma.session.findMany.mockResolvedValue([{ id: 's_stale_1' }]);
+      prisma.session.findUnique.mockResolvedValue(staleRow());
+      workerClient.getMessages.mockResolvedValue([]);
+
+      await (d as any).scanIdleSessions();
+
+      expect(prisma.session.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            status: 'running',
+            lastActivityAt: { lt: expect.any(Date) },
+          },
+        }),
+      );
+      expect(prisma.session.update).toHaveBeenCalledWith({
+        where: { id: 's_stale_1' },
+        data: { status: 'failed' },
+      });
+    });
+
+    it('DB 侧检出 + 首字等待否决：pendingBySession 命中的会话不判死', async () => {
+      const d = createDispatcher();
+      (d as any).startPendingWatchdog(
+        'team:tm_0000000001',
+        'a_product',
+        's_0000000001',
+        'w_0000000001',
+        'tmm_0000000001',
+      );
+      expect(d.isSessionPending('s_0000000001')).toBe(true);
+      prisma.session.findMany.mockResolvedValue([{ id: 's_0000000001' }]);
+
+      await (d as any).scanIdleSessions();
+
+      const failedMarks = prisma.session.update.mock.calls.filter(
+        (c: unknown[]) =>
+          (c[0] as { data?: { status?: string } })?.data?.status === 'failed',
+      );
+      expect(failedMarks).toHaveLength(0);
+    });
+
+    it('activeExecutions 否决：轮中成员的 stale 会话跳过判死', async () => {
+      const d = createDispatcher();
+      (d as any).registerExecution('w_1', 'team:tm_1', 'tmm_1');
+      prisma.session.findUnique.mockResolvedValue(
+        staleRow({ workerId: 'w_1', teamId: 'tm_1', teamMemberId: 'tmm_1' }),
+      );
+
+      await (d as any).markSessionIdleDead('s_veto_1');
+
+      expect(prisma.session.update).not.toHaveBeenCalledWith({
+        where: { id: 's_veto_1' },
+        data: { status: 'failed' },
+      });
+    });
+
+    it('DB 检出 fail-open：findMany 抛错 → 扫描不抛，内存侧照常', async () => {
+      const d = createDispatcher();
+      prisma.session.findMany.mockRejectedValueOnce(new Error('db down'));
+
+      await expect((d as any).scanIdleSessions()).resolves.toBeUndefined();
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // trigger-unification todo-9：首字 deadline durable 化（TriggerService 侧车）
+  // ------------------------------------------------------------------
+
+  describe('todo-9：首字 deadline durable 行', () => {
+    const makeTriggers = () => ({
+      registerHandler: jest.fn(),
+      schedule: jest.fn().mockResolvedValue({ id: 'tmr_0000000001' }),
+      cancel: jest.fn().mockResolvedValue({ id: 'tmr_0000000001' }),
+    });
+    const createDispatcherWithTriggers = (triggers: unknown) =>
+      new WorkerDispatcher(
+        prisma as any,
+        idGen as any,
+        realtime as any,
+        workersService as any,
+        workerClient as any,
+        sessionLifecycle as any,
+        artifactsService as any,
+        config as any,
+        ingress as any,
+        undefined as any,
+        triggers as any,
+      );
+    const startWatchdog = (d: any) =>
+      (d as any).startPendingWatchdog(
+        'team:tm_0000000001',
+        'a_product',
+        's_0000000001',
+        'w_0000000001',
+        'tmm_0000000001',
+      );
+    const fireCtx = (payload: unknown) => ({
+      id: 'tmr_0000000001',
+      kind: TRIGGER_KIND.SESSION_IDLE_SCAN,
+      payload,
+    });
+
+    it('构造即注册 SESSION_IDLE_SCAN handler（TriggerService 缺席时不抛）', () => {
+      const triggers = makeTriggers();
+      const d = createDispatcherWithTriggers(triggers);
+      expect(d).toBeDefined();
+      expect(triggers.registerHandler).toHaveBeenCalledWith(
+        TRIGGER_KIND.SESSION_IDLE_SCAN,
+        expect.any(Function),
+      );
+      // 旧装配（无 triggers）构造不抛，内存 watchdog 照常
+      expect(() => createDispatcher()).not.toThrow();
+    });
+
+    it('watchdog 注册即落 durable 行（kind 复用 session_idle_scan，due=注册+60s）', async () => {
+      const triggers = makeTriggers();
+      const d = createDispatcherWithTriggers(triggers);
+      const before = Date.now();
+      startWatchdog(d);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(triggers.schedule).toHaveBeenCalledTimes(1);
+      const [kind, dueAt, payload, dedupKey] =
+        triggers.schedule.mock.calls[0];
+      expect(kind).toBe(TRIGGER_KIND.SESSION_IDLE_SCAN);
+      expect((dueAt as Date).getTime()).toBeGreaterThanOrEqual(
+        before + (d as any).firstTokenTimeoutMs,
+      );
+      expect(payload).toMatchObject({
+        reason: 'first-token',
+        sessionId: 's_0000000001',
+        workerId: 'w_0000000001',
+        teamMemberId: 'tmm_0000000001',
+      });
+      expect(typeof dedupKey).toBe('string');
+      // veto 语义不变：pendingBySession 仍命中
+      expect((d as any).isSessionPending('s_0000000001')).toBe(true);
+    });
+
+    it('首字到达清除内存 timer 的同时取消 durable 行（防误收割）', async () => {
+      const triggers = makeTriggers();
+      const d = createDispatcherWithTriggers(triggers);
+      startWatchdog(d);
+      await new Promise((r) => setTimeout(r, 0));
+      const dedupKey = triggers.schedule.mock.calls[0][3];
+      (d as any).clearPendingWatchdogBySession('s_0000000001');
+      await new Promise((r) => setTimeout(r, 0));
+      expect(triggers.cancel).toHaveBeenCalledWith(dedupKey);
+      expect((d as any).isSessionPending('s_0000000001')).toBe(false);
+    });
+
+    it('同键重注册取消旧 durable 行（防旧行误收割新一轮）', async () => {
+      const triggers = makeTriggers();
+      const d = createDispatcherWithTriggers(triggers);
+      startWatchdog(d);
+      await new Promise((r) => setTimeout(r, 0));
+      const firstKey = triggers.schedule.mock.calls[0][3];
+      startWatchdog(d);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(triggers.cancel).toHaveBeenCalledWith(firstKey);
+      expect(triggers.schedule).toHaveBeenCalledTimes(2);
+      expect(triggers.schedule.mock.calls[1][3]).not.toBe(firstKey);
+    });
+
+    it('handler：本进程等待首字中 → 复刻超时收割（failed 标记 + 注销 + 广播）', async () => {
+      const triggers = makeTriggers();
+      const d = createDispatcherWithTriggers(triggers);
+      startWatchdog(d);
+      await new Promise((r) => setTimeout(r, 0));
+      const handler = triggers.registerHandler.mock.calls[0][1];
+      const out = await handler(
+        fireCtx({
+          reason: 'first-token',
+          scope: 'team:tm_0000000001',
+          agentId: 'a_product',
+          sessionId: 's_0000000001',
+          workerId: 'w_0000000001',
+          teamMemberId: 'tmm_0000000001',
+          dispatchedAt: Date.now(),
+        }),
+      );
+      expect(out).toEqual({ done: true });
+      expect((d as any).failedSessions.has('s_0000000001')).toBe(true);
+      expect((d as any).isSessionPending('s_0000000001')).toBe(false);
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_ERROR,
+        expect.objectContaining({ errorType: 'first_token_timeout' }),
+        expect.anything(),
+      );
+    });
+
+    it('handler：重启后内存全空 + DB 行 stale → 照样收割', async () => {
+      const triggers = makeTriggers();
+      const d = createDispatcherWithTriggers(triggers);
+      const handler = triggers.registerHandler.mock.calls[0][1];
+      const dispatchedAt = Date.now() - 61_000;
+      prisma.session.findUnique.mockResolvedValue({
+        status: 'running',
+        lastActivityAt: new Date(dispatchedAt),
+      });
+      const out = await handler(
+        fireCtx({
+          reason: 'first-token',
+          scope: 'team:tm_0000000001',
+          agentId: 'a_product',
+          sessionId: 's_restart_1',
+          workerId: 'w_0000000001',
+          teamMemberId: 'tmm_0000000001',
+          dispatchedAt,
+        }),
+      );
+      expect(out).toEqual({ done: true });
+      expect(prisma.session.findUnique).toHaveBeenCalledWith({
+        where: { id: 's_restart_1' },
+        select: { status: true, lastActivityAt: true },
+      });
+      expect((d as any).failedSessions.has('s_restart_1')).toBe(true);
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_ERROR,
+        expect.objectContaining({ errorType: 'first_token_timeout' }),
+        expect.anything(),
+      );
+    });
+
+    it('handler：重启后首字已到（lastActivityAt 推进过 dispatchedAt）→ 不误杀', async () => {
+      const triggers = makeTriggers();
+      const d = createDispatcherWithTriggers(triggers);
+      const handler = triggers.registerHandler.mock.calls[0][1];
+      const dispatchedAt = Date.now() - 61_000;
+      prisma.session.findUnique.mockResolvedValue({
+        status: 'running',
+        lastActivityAt: new Date(dispatchedAt + 5_000),
+      });
+      const out = await handler(
+        fireCtx({
+          reason: 'first-token',
+          scope: 'team:tm_0000000001',
+          agentId: 'a_product',
+          sessionId: 's_arrived_1',
+          workerId: 'w_0000000001',
+          teamMemberId: 'tmm_0000000001',
+          dispatchedAt,
+        }),
+      );
+      expect(out).toEqual({ done: true });
+      expect((d as any).failedSessions.has('s_arrived_1')).toBe(false);
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('handler：非首字载荷（同 kind 它用）→ no-op；DB 异常 fail-open 不收割', async () => {
+      const triggers = makeTriggers();
+      const d = createDispatcherWithTriggers(triggers);
+      const handler = triggers.registerHandler.mock.calls[0][1];
+      await expect(handler(fireCtx({ reason: 'idle-scan' }))).resolves.toEqual(
+        { done: true },
+      );
+      expect(prisma.session.findUnique).not.toHaveBeenCalled();
+      prisma.session.findUnique.mockRejectedValueOnce(new Error('db down'));
+      await expect(
+        handler(
+          fireCtx({
+            reason: 'first-token',
+            scope: 'team:tm_0000000001',
+            agentId: 'a_product',
+            sessionId: 's_dbdown_1',
+            workerId: 'w_0000000001',
+            teamMemberId: 'tmm_0000000001',
+            dispatchedAt: Date.now() - 61_000,
+          }),
+        ),
+      ).resolves.toEqual({ done: true });
+      expect((d as any).failedSessions.has('s_dbdown_1')).toBe(false);
     });
   });
 

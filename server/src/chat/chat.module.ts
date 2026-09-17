@@ -9,6 +9,7 @@ import { ChatService } from './chat.service';
 import { MessageDispatcher } from './message-dispatcher';
 import { MessageReceiptsService } from './message-receipts.service';
 import { ReceiptNudgeHandler } from './receipt-nudge.handler';
+import { HookService } from '../triggers/hook.service';
 import { WorkerDispatcher } from './worker-dispatcher';
 
 /**
@@ -35,10 +36,11 @@ import { WorkerDispatcher } from './worker-dispatcher';
     ChatService,
     MessageReceiptsService,
     ReceiptNudgeHandler,
+    HookService,
     PermissionGuard,
     WorkerDispatcher,
     { provide: MessageDispatcher, useExisting: WorkerDispatcher },
   ],
-  exports: [ChatService, MessageReceiptsService, WorkerDispatcher],
+  exports: [ChatService, MessageReceiptsService, WorkerDispatcher, HookService],
 })
 export class ChatModule {}

@@ -44,6 +44,12 @@ export const EVENT_TYPES = {
   PLAN_STATUS_REJECTED: 'plan.status.rejected',
   PLAN_STATUS_EXECUTING: 'plan.status.executing',
   PLAN_STATUS_COMPLETED: 'plan.status.completed',
+  // trigger-unification todo-20：trigger 生命周期可观测事件（HookService 终态/
+  // 否决路径经 RealtimeService.emit 落 realtime_events + 广播，/system/triggers
+  // 回答"why didn't it wake"；命名沿用 trigger.reconcile（todo-3）点号前缀）。
+  TRIGGER_FIRED: 'trigger.fired',
+  TRIGGER_EXPIRED: 'trigger.expired',
+  TRIGGER_SKIPPED: 'trigger.skipped',
 } as const;
 
 export type EventType = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];

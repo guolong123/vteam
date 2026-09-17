@@ -357,9 +357,7 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
         .spyOn(d, 'dispatch')
         .mockResolvedValue({ replies: [] });
 
-      await expect(d.dispatchAgentMention(input)).rejects.toThrow(
-        '无团队会话',
-      );
+      await expect(d.dispatchAgentMention(input)).rejects.toThrow('无团队会话');
       expect(dispatchSpy).not.toHaveBeenCalled();
     });
 

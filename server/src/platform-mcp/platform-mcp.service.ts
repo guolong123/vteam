@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
   Inject,
   Injectable,
   Logger,
@@ -68,9 +69,12 @@ import {
   MESSAGE_RECEIPT_KINDS,
   MESSAGE_RECEIPT_STATUSES,
 } from '../chat/message-receipt.constants';
-import { TimerService } from '../timers/timer.service';
+import { TriggerService } from '../timers/trigger.service';
 import {
-  buildReceiptNudgeDedupKey,
+  TRIGGER_KIND,
+  buildTriggerDedupKey,
+} from '../common/constants/trigger.constants';
+import {
   normalizeReceiptTimeoutMin,
   RECEIPT_NUDGE_KIND,
   ReceiptNudgePayload,
@@ -81,10 +85,7 @@ import {
   parseReviewTriplet,
   type ReviewDispatchTriplet,
 } from '../chat/review-dispatch-triplet';
-import {
-  REVIEW_ROUND_TIMEOUT_KIND,
-  buildReviewRoundTimeoutDedupKey,
-} from '../chat/review-round-timeout.handler';
+import { REVIEW_ROUND_TIMEOUT_KIND } from '../chat/review-round-timeout.handler';
 import {
   buildStalePlanHashHint,
   isStalePlanHash,
@@ -96,6 +97,12 @@ import { ExecutionPolicyService } from '../execution-policies/execution-policy.s
 import { REVIEW_ROUND_TIMEOUT_MS } from '../issues/review-round-gate.service';
 import { ReviewRoundService } from '../issues/review-round.service';
 import { tryParseLedger } from '../issues/review-round-ledger';
+import { HookService } from '../triggers/hook.service';
+import {
+  buildHookDedupKey,
+  HOOK_KIND,
+  isHookKind,
+} from '../triggers/hook.constants';
 
 /**
  * 消息主键前缀：与 ChatService/WorkerDispatcher 共享 IdGeneratorService 的 'm' 计数
@@ -221,6 +228,9 @@ const CHAT_HISTORY_TRUNCATED_MARKER =
 /** skill_create 常量：SKILL.md 全文服务端强制上限 100KB（与 skills.controller multipart 上限对齐）。 */
 const SKILL_CREATE_MAX_BYTES = 100 * 1024;
 
+/** hook_register 缺省生命周期：expiresInMs 未传时 hook 自注册起 24h 过期（无无限 hook）。 */
+const HOOK_DEFAULT_EXPIRES_MS = 24 * 60 * 60 * 1000;
+
 /**
  * 平台 MCP 工具实现（阶段 1）。
  *
@@ -277,13 +287,19 @@ export class PlatformMcpService {
     @Inject(MessageReceiptsService)
     private readonly receipts?: MessageReceiptsService,
     @Optional()
-    @Inject(TimerService)
-    private readonly timers?: TimerService,
+  @Inject(TriggerService)
+  private readonly timers?: TriggerService,
     // 评审轮次账本串行写（review-round-open）：缺省可空——单测/旧装配未提供时
     // 开轮跳过 + warn，派发本身不受影响；生产装配经 IssuesModule（已 import）提供。
     @Optional()
     @Inject(ReviewRoundService)
     private readonly rounds?: ReviewRoundService,
+    // agent-hook（trigger-unification todo-12）：缺省可空——单测/旧装配未提供时
+    // hook_register/hook_cancel 调用抛 503 而非启动期崩溃；生产装配经 ChatModule
+    //（已 import 且 export HookService，本模块单向依赖）提供，无新增模块边。
+    @Optional()
+    @Inject(HookService)
+    private readonly hooks?: HookService,
   ) {}
 
   /**
@@ -540,6 +556,291 @@ export class PlatformMcpService {
       select: { agentId: true },
     });
     return member?.agentId ?? callerId;
+  }
+
+  /**
+   * hook_register：agent 注册"稍后唤醒我"（trigger-unification todo-12）。
+   * task_create 式双上下文 + selfInstanceId：resolveExecContext 解析执行上下文
+   * （未知 scope 400、跨任务/跨团队冒充 403）；ownerInstanceId 服务端取自
+   * exec.callerId（拒绝客户端传入，防冒充）；channelId 服务端按执行上下文解析
+   * 为任务/团队群聊频道（拒绝客户端指定任意频道）；target 目标实例缺省为调用
+   * 方自身，显式传时必须落在执行团队内（否则 403）。
+   * kind/time 语义校验失败（HookService loud throw）统一转 400，不泄漏 500。
+   */
+  async hookRegister(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId?: string;
+      teamId?: string;
+      selfInstanceId: string;
+      kind: string;
+      wakeText: string;
+      targetInstanceId?: string;
+      dueAt?: string;
+      delayMs?: number;
+      expiresInMs?: number;
+      graceMs?: number;
+      dedupKey?: string;
+    },
+  ): Promise<{
+    hookId: string;
+    status: string;
+    kind: string;
+    dueAt: string | null;
+    expiresAt: string;
+  }> {
+    const exec = await this.resolveExecContext(ctx, args);
+    const hooks = this.requireHookService();
+    const ownerInstanceId = exec.callerId;
+    const scopeType = exec.kind;
+    const scopeId = exec.kind === 'task' ? exec.taskId : exec.teamId;
+    if (!isHookKind(args.kind)) {
+      throw new BadRequestException(
+        `未知 hook kind ${args.kind}（v1 白名单：${Object.values(HOOK_KIND).join(',')}）`,
+      );
+    }
+    const now = new Date();
+    let dueAt: Date | null = null;
+    if (args.kind === HOOK_KIND.TIME) {
+      dueAt = this.parseHookDue(args.dueAt, args.delayMs, now);
+    } else if (args.dueAt !== undefined || args.delayMs !== undefined) {
+      throw new BadRequestException(
+        'all_idle hook 不接受 dueAt/delayMs（静默由全局 poll 评估）',
+      );
+    }
+    const expiresInMs = args.expiresInMs ?? HOOK_DEFAULT_EXPIRES_MS;
+    if (!Number.isFinite(expiresInMs) || expiresInMs <= 0) {
+      throw new BadRequestException('expiresInMs 须为正数（毫秒）');
+    }
+    const expiresAt = new Date(now.getTime() + Math.floor(expiresInMs));
+    if (dueAt && dueAt.getTime() >= expiresAt.getTime()) {
+      throw new BadRequestException(
+        'time hook 的 dueAt 必须早于 expiresAt（否则到期即过期，永不唤醒）',
+      );
+    }
+    const execTeamId =
+      exec.kind === 'team' ? exec.teamId : await this.teamIdOfTask(exec.taskId);
+    if (!execTeamId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: '该任务无团队归属，无法注册 hook',
+      });
+    }
+    const channel =
+      exec.kind === 'team'
+        ? await this.findTeamGroupChannel(exec.teamId)
+        : await this.findTaskGroupChannel(exec.taskId);
+    if (!channel) {
+      throw new NotFoundException({
+        code: PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
+        message: '任务群聊频道不存在，无法注册 hook',
+      });
+    }
+    const targetInstanceId = args.targetInstanceId ?? ownerInstanceId;
+    const targetMember = await this.prisma.teamMember.findFirst({
+      where: { id: targetInstanceId, teamId: execTeamId },
+      select: { id: true },
+    });
+    if (!targetMember) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: `目标实例 ${targetInstanceId} 不在当前团队，禁止跨团队注册`,
+      });
+    }
+    const dedupKey =
+      args.dedupKey ??
+      buildHookDedupKey(scopeType, `${scopeId}:${ownerInstanceId}:${now.getTime()}`);
+    let hook: { id: string; status: string; kind: string };
+    try {
+      const created = await hooks.registerHook({
+        scopeType,
+        scopeId,
+        ownerInstanceId,
+        kind: args.kind,
+        wakeText: args.wakeText,
+        target: {
+          taskId: exec.kind === 'task' ? exec.taskId : null,
+          teamId: execTeamId,
+          channelId: channel.id,
+          targetInstanceId,
+        },
+        dueAt,
+        graceMs: args.graceMs ?? null,
+        expiresAt,
+        dedupKey,
+      });
+      hook = created as unknown as {
+        id: string;
+        status: string;
+        kind: string;
+      };
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    const row = (await this.prisma.hook.findUnique({
+      where: { id: hook.id },
+      select: { dueAt: true, expiresAt: true },
+    })) as unknown as { dueAt: Date | null; expiresAt: Date } | null;
+    this.logger.log(
+      `[mcp] hook_register caller=${ownerInstanceId} kind=${hook.kind} hook=${hook.id}`,
+    );
+    return {
+      hookId: hook.id,
+      status: hook.status,
+      kind: hook.kind,
+      dueAt: row?.dueAt ? new Date(row.dueAt).toISOString() : null,
+      expiresAt:
+        row?.expiresAt != null
+          ? new Date(row.expiresAt).toISOString()
+          : expiresAt.toISOString(),
+    };
+  }
+
+  /**
+   * hook_cancel：按 hookId 或 dedupKey 取消（trigger-unification todo-12）。
+   * 服务端复核：hook 归属团队必须等于执行团队（跨团队 403）；调用方须为 hook
+   * 所有者（ownerInstanceId === callerId 逐字相等）或是执行团队的主 Agent
+   *（team.mainAgentMemberId，agent 平面的 admin 等价——MCP 无用户 JWT，
+   * 不能按 REST 那样查用户角色）。已终态行幂等直返（HookService 状态机）。
+   */
+  async hookCancel(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId?: string;
+      teamId?: string;
+      selfInstanceId: string;
+      hookId?: string;
+      dedupKey?: string;
+    },
+  ): Promise<{ hookId: string; status: string }> {
+    const exec = await this.resolveExecContext(ctx, args);
+    const hooks = this.requireHookService();
+    const key = args.hookId ?? args.dedupKey;
+    if (!key) {
+      throw new BadRequestException('hookId 与 dedupKey 至少传一个');
+    }
+    let hook = (await this.prisma.hook.findUnique({
+      where: { id: key },
+    })) as unknown as {
+      id: string;
+      ownerInstanceId: string;
+      scopeType: string;
+      scopeId: string;
+      status: string;
+    } | null;
+    if (!hook) {
+      hook = (await this.prisma.hook.findUnique({
+        where: { dedupKey: key },
+      })) as unknown as {
+        id: string;
+        ownerInstanceId: string;
+        scopeType: string;
+        scopeId: string;
+        status: string;
+      } | null;
+    }
+    if (!hook) {
+      throw new NotFoundException({
+        code: PLATFORM_MCP_ERRORS.HOOK_NOT_FOUND,
+        message: `hook ${key} 不存在`,
+      });
+    }
+    const execTeamId =
+      exec.kind === 'team' ? exec.teamId : await this.teamIdOfTask(exec.taskId);
+    const hookTeamId = await this.resolveHookTeamId({
+      scopeType: hook.scopeType,
+      scopeId: hook.scopeId,
+      ownerInstanceId: hook.ownerInstanceId,
+    });
+    if (!hookTeamId || !execTeamId || hookTeamId !== execTeamId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: 'hook 不属于当前团队，禁止跨团队取消',
+      });
+    }
+    if (hook.ownerInstanceId !== exec.callerId) {
+      const team = await this.prisma.team.findUnique({
+        where: { id: hookTeamId },
+        select: { mainAgentMemberId: true },
+      });
+      if (
+        (team as { mainAgentMemberId?: string | null } | null)
+          ?.mainAgentMemberId !== exec.callerId
+      ) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: '仅 hook 所有者或主 Agent 可取消',
+        });
+      }
+    }
+    const cancelled = (await hooks.cancelHook(hook.id)) as unknown as {
+      id: string;
+      status: string;
+    };
+    this.logger.log(
+      `[mcp] hook_cancel caller=${exec.callerId} hook=${cancelled.id} status=${cancelled.status}`,
+    );
+    return { hookId: cancelled.id, status: cancelled.status };
+  }
+
+  private requireHookService(): HookService {
+    if (!this.hooks) {
+      throw new ServiceUnavailableException(
+        'hook 服务未装配（HookService 缺失），请联系管理员',
+      );
+    }
+    return this.hooks;
+  }
+
+  private parseHookDue(
+    dueAt: string | undefined,
+    delayMs: number | undefined,
+    now: Date,
+  ): Date {
+    if (dueAt !== undefined && delayMs !== undefined) {
+      throw new BadRequestException('dueAt 与 delayMs 二选一，不可同传');
+    }
+    if (dueAt !== undefined) {
+      const parsed = new Date(dueAt);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new BadRequestException('dueAt 非法（须为 ISO 时间字符串）');
+      }
+      return parsed;
+    }
+    if (delayMs !== undefined) {
+      if (!Number.isFinite(delayMs) || delayMs <= 0) {
+        throw new BadRequestException('delayMs 须为正数（毫秒）');
+      }
+      return new Date(now.getTime() + Math.floor(delayMs));
+    }
+    throw new BadRequestException(
+      'time hook 必须带 dueAt 或 delayMs（到期唤醒时刻）',
+    );
+  }
+
+  private async resolveHookTeamId(hook: {
+    scopeType: string;
+    scopeId: string;
+    ownerInstanceId: string;
+  }): Promise<string | null> {
+    if (hook.scopeType === 'team') return hook.scopeId;
+    if (hook.scopeType === 'task') {
+      try {
+        return await this.teamIdOfTask(hook.scopeId);
+      } catch {
+        return null;
+      }
+    }
+    const member = await this.prisma.teamMember.findUnique({
+      where: { id: hook.ownerInstanceId },
+      select: { teamId: true },
+    });
+    return (
+      (member as { teamId?: string | null } | null)?.teamId ?? null
+    );
   }
 
   /**
@@ -1031,9 +1332,7 @@ export class PlatformMcpService {
         })
       : null;
     const senderName =
-      senderMember?.alias ??
-      senderMember?.agent?.name ??
-      args.selfInstanceId;
+      senderMember?.alias ?? senderMember?.agent?.name ?? args.selfInstanceId;
     const text = `@${targetName} ${args.content}`;
     const message = await this.prisma.message.create({
       data: {
@@ -1439,7 +1738,7 @@ export class PlatformMcpService {
           },
         );
         hostIssueId =
-          (created as unknown as { id?: unknown } | null)?.id as string ??
+          ((created as unknown as { id?: unknown } | null)?.id as string) ??
           null;
       } catch (err) {
         this.logger.warn(
@@ -1563,7 +1862,11 @@ export class PlatformMcpService {
           teamId: input.teamId,
           round: input.round,
         },
-        buildReviewRoundTimeoutDedupKey(input.issueId, input.round),
+        buildTriggerDedupKey(
+          TRIGGER_KIND.REVIEW_ROUND_TIMEOUT,
+          input.issueId,
+          input.round,
+        ),
       );
     } catch (err) {
       this.logger.warn(
@@ -1673,7 +1976,7 @@ export class PlatformMcpService {
         RECEIPT_NUDGE_KIND,
         fireAt,
         payload,
-        buildReceiptNudgeDedupKey(input.teamId, receiptId),
+        buildTriggerDedupKey(TRIGGER_KIND.RECEIPT_NUDGE, input.teamId, receiptId),
       );
     } catch (err) {
       this.logger.warn(
@@ -1802,9 +2105,7 @@ export class PlatformMcpService {
         type: 'text',
         title: args.title,
         content: args.content,
-        ...(args.category !== undefined
-          ? { category: args.category }
-          : {}),
+        ...(args.category !== undefined ? { category: args.category } : {}),
       });
       return this.toSubmitResult(result);
     }

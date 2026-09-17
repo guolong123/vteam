@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { ChatModule } from '../chat/chat.module';
 import { IssuesModule } from '../issues/issues.module';
 import { MessageChannelsModule } from '../message-channels/message-channels.module';
+import { TimersModule } from '../timers/timers.module';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { TeamMembershipGuard } from '../common/guards/team-membership.guard';
 import { RealtimeModule } from '../realtime/realtime.module';
@@ -39,6 +40,7 @@ import { PlanReviewWiring } from './plan-review-wiring';
     WorkersModule,
     ChatModule,
     IssuesModule,
+    TimersModule,
     forwardRef(() => MessageChannelsModule),
   ],
   controllers: [

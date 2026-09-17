@@ -141,6 +141,8 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_task_create',
   'vteam_skill_create',
   'vteam_git_repos_list',
+  'vteam_hook_register',
+  'vteam_hook_cancel',
 ] as const;
 
 /**
@@ -309,6 +311,8 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_my_profile: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_channel_send: 'allow',
+      vteam_hook_register: 'allow',
+      vteam_hook_cancel: 'allow',
       browser: 'allow',
     },
   }),
@@ -473,6 +477,8 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_chat_history: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_channel_send: 'allow',
+      vteam_hook_register: 'allow',
+      vteam_hook_cancel: 'allow',
     },
   }),
 

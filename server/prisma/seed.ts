@@ -62,6 +62,8 @@ const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_task_create',
   'vteam_skill_create',
   'vteam_git_repos_list',
+  'vteam_hook_register',
+  'vteam_hook_cancel',
 ] as const;
 
 const ROLE_SERVER_GATED_TOOLS: readonly string[] = [
@@ -147,6 +149,8 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_my_profile: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_channel_send: 'allow',
+      vteam_hook_register: 'allow',
+      vteam_hook_cancel: 'allow',
       browser: 'allow',
     },
   }),
@@ -311,6 +315,8 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_chat_history: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_channel_send: 'allow',
+      vteam_hook_register: 'allow',
+      vteam_hook_cancel: 'allow',
     },
   }),
 
@@ -1151,6 +1157,8 @@ async function main() {
     { action: 'memory_update', name: 'vteam_memory_update', description: '更新平台记忆（团队隔离校验）' },
     { action: 'skill_create', name: 'vteam_skill_create', description: '创建技能（仅主 Agent，默认停用）' },
     { action: 'git_repos_list', name: 'vteam_git_repos_list', description: '查询被授权仓库只读清单（脱敏）' },
+    { action: 'hook_register', name: 'vteam_hook_register', description: '注册稍后唤醒（定时/静默，唤醒回同会话）' },
+    { action: 'hook_cancel', name: 'vteam_hook_cancel', description: '取消 hook（仅所有者或主 Agent）' },
   ];
 
   for (const t of vteamTools) {

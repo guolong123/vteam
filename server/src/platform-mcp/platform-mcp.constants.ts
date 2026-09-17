@@ -22,6 +22,8 @@ export const PLATFORM_MCP_ERRORS = {
   AGENT_ALREADY_IN_TEAM: 'PLATFORM_MCP_AGENT_ALREADY_IN_TEAM',
   /** team_add_member：该 Agent 已有 pending 增员申请未确认 → 409 冲突。 */
   PENDING_APPLICATION: 'PLATFORM_MCP_PENDING_APPLICATION',
+  /** hook_cancel：hook 行不存在（id/dedupKey 双查均 miss）→ 404。 */
+  HOOK_NOT_FOUND: 'PLATFORM_MCP_HOOK_NOT_FOUND',
 } as const;
 
 export type PlatformMcpErrorCode =

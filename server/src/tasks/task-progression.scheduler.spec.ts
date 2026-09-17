@@ -3,9 +3,16 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { WorkerDispatcher } from '../chat/worker-dispatcher';
 import { CHANNEL_TYPE } from '../common/constants/event.constants';
 import { TASK_STATUS } from '../common/constants/task.constants';
+import {
+  TRIGGER_KIND,
+  buildTriggerDedupKey,
+} from '../common/constants/trigger.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { TriggerService } from '../timers/trigger.service';
 import {
+  PROGRESSION_COOLDOWN_GUARD,
+  buildProgressionDedupKey,
   buildProgressionPrompt,
   TaskProgressionScheduler,
 } from './task-progression.scheduler';
@@ -19,7 +26,17 @@ describe('TaskProgressionScheduler', () => {
     team: { findUnique: jest.Mock };
   };
   let realtime: { subscribe: jest.Mock };
-  let workerDispatcher: { dispatchAgentMention: jest.Mock };
+  let workerDispatcher: {
+    dispatchAgentMention: jest.Mock;
+    isSessionPending: jest.Mock;
+    getLastActivityAt: jest.Mock;
+  };
+  let triggers: {
+    schedule: jest.Mock;
+    cancel: jest.Mock;
+    registerHandler: jest.Mock;
+    registerGuard: jest.Mock;
+  };
   let config: { get: jest.Mock };
 
   const inProgressTask = (overrides: Record<string, unknown> = {}) => ({
@@ -51,6 +68,14 @@ describe('TaskProgressionScheduler', () => {
     realtime = { subscribe: jest.fn(() => () => {}) };
     workerDispatcher = {
       dispatchAgentMention: jest.fn().mockResolvedValue(undefined),
+      isSessionPending: jest.fn().mockReturnValue(false),
+      getLastActivityAt: jest.fn().mockReturnValue(undefined),
+    };
+    triggers = {
+      schedule: jest.fn().mockResolvedValue({ id: 'tmr_1' }),
+      cancel: jest.fn().mockResolvedValue({ id: 'tmr_1' }),
+      registerHandler: jest.fn(),
+      registerGuard: jest.fn(),
     };
     config = { get: jest.fn().mockReturnValue(undefined) };
     const module: TestingModule = await Test.createTestingModule({
@@ -59,6 +84,7 @@ describe('TaskProgressionScheduler', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: RealtimeService, useValue: realtime },
         { provide: WorkerDispatcher, useValue: workerDispatcher },
+        { provide: TriggerService, useValue: triggers },
         { provide: ConfigService, useValue: config },
       ],
     }).compile();
@@ -290,6 +316,192 @@ describe('TaskProgressionScheduler', () => {
       expect(text).toContain('标题');
       expect(text).toContain('mark-pending-review');
       expect(text).toContain('notify_agent');
+    });
+  });
+
+  describe('trigger 持久化（todo-8：rounds≡fireCount，maxRounds≡maxFires）', () => {
+    const flush = () => new Promise((r) => setImmediate(r));
+
+    it('register → schedule interval 行（maxFires=maxRounds + 冷却 guard）', async () => {
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      await scheduler.register('t_1');
+      expect(triggers.schedule).toHaveBeenCalledTimes(1);
+      const [kind, dueAt, payload, dedupKey, opts] =
+        triggers.schedule.mock.calls[0];
+      expect(kind).toBe(TRIGGER_KIND.PROGRESSION_PATROL);
+      expect(dueAt.getTime()).toBeGreaterThan(Date.now());
+      expect(payload).toEqual({ taskId: 't_1' });
+      expect(dedupKey).toBe(buildProgressionDedupKey('t_1'));
+      expect(dedupKey).toBe(
+        buildTriggerDedupKey(TRIGGER_KIND.PROGRESSION_PATROL, 'task', 't_1'),
+      );
+      expect(opts.intervalMs).toBe((scheduler as any).progressionIntervalMs);
+      expect(opts.maxFires).toBe((scheduler as any).maxRounds);
+      expect(opts.guardKey).toBe(PROGRESSION_COOLDOWN_GUARD);
+    });
+
+    it('register 幂等：pending 行已存在 → 保留 fireCount（不清零，不重建）', async () => {
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      (prisma as any).trigger = {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'tmr_1', status: 'pending' }),
+      };
+      await scheduler.register('t_1');
+      expect(triggers.schedule).not.toHaveBeenCalled();
+      expect(scheduler.isRegistered('t_1')).toBe(true);
+    });
+
+    it('register 数据修复：终态行 → 删除后重建', async () => {
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      const del = jest.fn().mockResolvedValue({ id: 'tmr_1' });
+      (prisma as any).trigger = {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'tmr_1', status: 'cancelled' }),
+        delete: del,
+      };
+      await scheduler.register('t_1');
+      expect(del).toHaveBeenCalledTimes(1);
+      expect(triggers.schedule).toHaveBeenCalledTimes(1);
+    });
+
+    it('unregister → cancel 触发器（行留 cancelled）', async () => {
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      await scheduler.register('t_1');
+      scheduler.unregister('t_1');
+      await flush();
+      expect(triggers.cancel).toHaveBeenCalledWith(
+        buildProgressionDedupKey('t_1'),
+      );
+      expect(scheduler.isRegistered('t_1')).toBe(false);
+    });
+
+    it('onModuleInit 接线 handler + guard', async () => {
+      prisma.task.findMany.mockResolvedValue([]);
+      await scheduler.onModuleInit();
+      expect(triggers.registerGuard).toHaveBeenCalledWith(
+        PROGRESSION_COOLDOWN_GUARD,
+        expect.any(Function),
+      );
+      expect(triggers.registerHandler).toHaveBeenCalledWith(
+        TRIGGER_KIND.PROGRESSION_PATROL,
+        expect.any(Function),
+      );
+    });
+  });
+
+  describe('handleProgressionFire（todo-8）', () => {
+    const fireCtx = (overrides: Record<string, unknown> = {}) => ({
+      id: 'tmr_1',
+      kind: TRIGGER_KIND.PROGRESSION_PATROL,
+      fireCount: 2,
+      payload: { taskId: 't_1' },
+      ...overrides,
+    });
+
+    const handlerOf = async () => {
+      prisma.task.findMany.mockResolvedValue([]);
+      await scheduler.onModuleInit();
+      return triggers.registerHandler.mock.calls[0][1];
+    };
+
+    it('正常 → dispatch wake 巡检（同 prompt/同链路）+ 返回 void（基座重排+计数）', async () => {
+      const handler = await handlerOf();
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      const out = await handler(fireCtx());
+      expect(out).toBeUndefined();
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
+      const call = workerDispatcher.dispatchAgentMention.mock.calls[0][0];
+      expect(call.taskId).toBe('t_1');
+      expect(call.targetInstanceId).toBe('tmm_0000000001');
+      expect(call.kind).toBe('wake');
+      expect(call.text).toContain('【任务巡检】');
+    });
+
+    it('任务已离场 → {expire:true} 且不 dispatch', async () => {
+      const handler = await handlerOf();
+      prisma.task.findUnique.mockResolvedValue(
+        inProgressTask({ status: TASK_STATUS.pending_review }),
+      );
+      const out = await handler(fireCtx());
+      expect(out).toEqual({ expire: true });
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+
+    it('payload 缺 taskId → {expire:true}', async () => {
+      const handler = await handlerOf();
+      const out = await handler(fireCtx({ payload: {} }));
+      expect(out).toEqual({ expire: true });
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+
+    it('race 窗口否决（主会话忙）→ 跳过 dispatch 但返回 void（保守计轮次）', async () => {
+      const handler = await handlerOf();
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      (prisma as any).session = {
+        findFirst: jest.fn().mockResolvedValue({ id: 's_main' }),
+      };
+      workerDispatcher.isSessionPending.mockReturnValue(true);
+      const out = await handler(fireCtx());
+      expect(out).toBeUndefined();
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('progressionCooldownGuard（todo-8：否决不消耗轮次）', () => {
+    const guardOf = async () => {
+      prisma.task.findMany.mockResolvedValue([]);
+      await scheduler.onModuleInit();
+      return triggers.registerGuard.mock.calls[0][1];
+    };
+    const guardCtx = () => ({
+      id: 'tmr_1',
+      kind: TRIGGER_KIND.PROGRESSION_PATROL,
+      fireCount: 2,
+      payload: { taskId: 't_1' },
+    });
+
+    it('主会话 pending → false', async () => {
+      const guard = await guardOf();
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      (prisma as any).session = {
+        findFirst: jest.fn().mockResolvedValue({ id: 's_main' }),
+      };
+      workerDispatcher.isSessionPending.mockReturnValue(true);
+      await expect(guard(guardCtx())).resolves.toBe(false);
+    });
+
+    it('主会话近期活跃 → false', async () => {
+      const guard = await guardOf();
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      (prisma as any).session = {
+        findFirst: jest.fn().mockResolvedValue({ id: 's_main' }),
+      };
+      workerDispatcher.isSessionPending.mockReturnValue(false);
+      workerDispatcher.getLastActivityAt.mockReturnValue(Date.now());
+      await expect(guard(guardCtx())).resolves.toBe(false);
+    });
+
+    it('空闲 → true', async () => {
+      const guard = await guardOf();
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      await expect(guard(guardCtx())).resolves.toBe(true);
+    });
+
+    it('DB 异常 → true（fail-open）', async () => {
+      const guard = await guardOf();
+      prisma.task.findUnique.mockRejectedValue(new Error('db down'));
+      await expect(guard(guardCtx())).resolves.toBe(true);
     });
   });
 });

@@ -749,7 +749,165 @@ export interface PlanStepItem {
   priority?: string;
 }
 
-type TaskSubTab = "status" | "plan" | "config" | "output";
+type TaskSubTab = "status" | "plan" | "config" | "output" | "triggers";
+
+/** 触发器行（对齐 GET /triggers → items[] 白名单字段 + 派生 source，todo-18 只读消费）。 */
+export interface TriggerItem {
+  id: string;
+  kind: string;
+  status: string;
+  dueAt: string | null;
+  nextFireAt: string | null;
+  scopeType: string | null;
+  scopeId: string | null;
+  ownerInstanceId: string | null;
+  fireCount: number;
+  skipReason: string | null;
+  lastError: string | null;
+  attempts: number;
+  createdAt: string;
+  /** 系统触发器只读，Agent 触发器可取消（plan decision 5，后端二次强制）。 */
+  source: "agent" | "system";
+}
+
+interface TriggersResponse {
+  items: TriggerItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * 触发器列表查询键（todo-18）：任务选中时按 taskId 作用域，否则回退 teamId。
+ * 会话页实时桥尚无 trigger 事件族，沿用 30s 轮询与计划/产出查询同节奏。
+ */
+export function triggersQueryKey(taskId: string, teamId: string): string[] {
+  return taskId ? ["task", taskId, "triggers"] : ["team", teamId, "triggers"];
+}
+
+/** 触发器列表共享查询（badge 与面板同 key，单次请求共享缓存）。 */
+function useTaskTriggers(taskId: string, teamId: string) {
+  return useQuery({
+    queryKey: triggersQueryKey(taskId, teamId),
+    queryFn: () => taskId
+      ? api.get<TriggersResponse>("/triggers", { query: { taskId, page: 1, pageSize: 100 } })
+      : api.get<TriggersResponse>("/triggers", { query: { teamId, page: 1, pageSize: 100 } }),
+    enabled: !!(taskId || teamId),
+    refetchInterval: 30_000,
+    retry: false,
+  });
+}
+
+/** 触发器状态主题（对齐 status ∈ pending|firing|fired|cancelled|failed）。 */
+const TRIGGER_STATUS_THEME: Record<string, { label: string; color: string }> = {
+  pending: { label: "待触发", color: "#F59E0B" },
+  firing: { label: "触发中", color: "#0D9488" },
+  fired: { label: "已触发", color: "#10B981" },
+  cancelled: { label: "已取消", color: neutral[400] },
+  failed: { label: "失败", color: "#DC2626" },
+};
+
+/** 触发时间短标签（nextFireAt 优先，无时间显示"—"）。 */
+function triggerFireLabel(t: TriggerItem): string {
+  const iso = t.nextFireAt ?? t.dueAt;
+  if (!iso) return "—";
+  const ms = new Date(iso).getTime();
+  if (!Number.isFinite(ms)) return "—";
+  return new Date(ms).toLocaleString("zh-CN");
+}
+
+/**
+ * 触发 Tab 面板：当前任务/团队作用域的触发器只读列表。
+ * 系统来源行只读（无取消按钮），Agent 来源行可经 ConfirmDialog 取消。
+ */
+function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string }) {
+  const queryClient = useQueryClient();
+  const triggersQuery = useTaskTriggers(taskId, teamId);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const cancelMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/triggers/${id}`),
+    onSuccess: () => {
+      setConfirmId(null);
+      setCancelError(null);
+      queryClient.invalidateQueries({ queryKey: triggersQueryKey(taskId, teamId) });
+    },
+    onError: (err) => {
+      setCancelError(isApiError(err) ? err.message : "取消失败");
+    },
+  });
+  const items: TriggerItem[] = triggersQuery.data?.items ?? [];
+  const confirmItem = confirmId ? items.find((t) => t.id === confirmId) ?? null : null;
+  return (
+    <div style={{ position: "relative", display: "flex", flexDirection: "column", gap: space.sm }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>触发器</span>
+        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{triggersQuery.data?.total ?? items.length} 个</span>
+      </div>
+      {triggersQuery.isPending ? (
+        <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>加载中…</div>
+      ) : triggersQuery.isError ? (
+        <div data-testid="trigger-list-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+          {isApiError(triggersQuery.error) ? triggersQuery.error.message : "触发器加载失败"}
+        </div>
+      ) : items.length === 0 ? (
+        <div data-testid="trigger-empty" style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无触发器</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+          {items.map((t) => {
+            const st = TRIGGER_STATUS_THEME[t.status] ?? { label: t.status, color: neutral[500] };
+            return (
+              <div
+                key={t.id}
+                data-testid="trigger-row"
+                data-trigger-id={t.id}
+                data-source={t.source}
+                data-status={t.status}
+                style={{ display: "flex", alignItems: "center", gap: space.sm, width: "100%", boxSizing: "border-box", fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}
+              >
+                <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: st.color, flexShrink: 0 }} />
+                <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{t.kind} · <span style={{ color: st.color }}>{st.label}</span></span>
+                  <span style={{ fontSize: 10, color: neutral[400] }}>
+                    {triggerFireLabel(t)} · {t.source === "agent" ? "Agent" : "系统"} · 触发 {t.fireCount} 次
+                  </span>
+                  {t.skipReason && (
+                    <span data-testid="trigger-skip-reason" style={{ fontSize: 10, color: "#D97706", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>跳过原因：{t.skipReason}</span>
+                  )}
+                </span>
+                {t.source === "agent" && (
+                  <button
+                    type="button"
+                    data-testid="trigger-cancel"
+                    data-trigger-id={t.id}
+                    disabled={cancelMutation.isPending}
+                    title="取消该触发器"
+                    onClick={() => { setCancelError(null); setConfirmId(t.id); }}
+                    style={{ padding: "2px 8px", borderRadius: radius.pill, border: "1px solid rgba(239,68,68,0.22)", backgroundColor: "rgba(239,68,68,0.06)", color: "#DC2626", fontSize: 10, fontWeight: 500, cursor: cancelMutation.isPending ? "default" : "pointer", opacity: cancelMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body, flexShrink: 0 }}
+                  >
+                    取消
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {cancelError && <div data-testid="trigger-cancel-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{cancelError}</div>}
+      <ConfirmDialog
+        open={!!confirmItem}
+        testid="trigger-cancel"
+        title="取消触发器"
+        description={confirmItem ? `确定取消触发器 ${confirmItem.kind}（${confirmItem.id}）吗？取消后不再触发。` : undefined}
+        confirmLabel="确认取消"
+        pendingLabel="取消中…"
+        submitting={cancelMutation.isPending}
+        onClose={() => { if (!cancelMutation.isPending) setConfirmId(null); }}
+        onConfirm={() => confirmId && cancelMutation.mutate(confirmId)}
+      />
+    </div>
+  );
+}
 
 function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onOpenIssueDetail, onOpenArtifactDoc, onUploadPlanDoc, planDocsQuery, planStepsQuery }: {
   team: any; task: any; taskId: string; artifactsQuery: any; issuesQuery: any; agents: any[];
@@ -781,6 +939,9 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
   const planModeOn: boolean = !!(task?.effectivePlanMode ?? task?.planMode);
   const waiting = (team?.queue ?? []).filter((q: TeamQueueDto) => q.taskStatus === "queued" || !q.taskStatus).length;
   const isCurrent = team?.currentTaskId === taskId;
+  const teamScopeId: string = team?.id ?? "";
+  const triggersQuery = useTaskTriggers(taskId, teamScopeId);
+  const pendingTriggers = (triggersQuery.data?.items ?? []).filter((t) => t.status === "pending").length;
   const statusLabel = task ? (task.status === "queued" ? "排队中" : task.status === "pending" ? "待开始" : task.status === "in_progress" ? "进行中" : task.status === "pending_review" ? "待验收" : task.status === "completed" ? "已完成" : "已归档") : "";
 
   return (
@@ -791,8 +952,9 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
           { key: "plan" as const, label: "计划", badge: planDocTotal ? String(planDocTotal) : null },
           { key: "config" as const, label: "配置", badge: null },
           { key: "output" as const, label: "产出", badge: artifactsQuery.data?.total ? String(artifactsQuery.data.total) : null },
+          { key: "triggers" as const, label: "触发", badge: pendingTriggers > 0 ? String(pendingTriggers) : null },
         ]).map((tab) => (
-          <button key={tab.key} type="button" onClick={() => setSubTab(tab.key)} style={subTabStyle(subTab === tab.key)}>
+          <button key={tab.key} type="button" data-testid={tab.key === "triggers" ? "task-subtab-triggers" : undefined} onClick={() => setSubTab(tab.key)} style={subTabStyle(subTab === tab.key)}>
             {tab.label}
             {tab.badge && <span style={{ fontSize: 10, color: "#FFF", backgroundColor: subTab === tab.key ? "#0D9488" : "#F59E0B", padding: "0 5px", borderRadius: radius.pill, fontWeight: 700, marginLeft: space.xs }}>{tab.badge}</span>}
           </button>
@@ -986,6 +1148,9 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
               )}
             </div>
           </div>
+        )}
+        {subTab === "triggers" && (
+          <TaskTriggersBlock taskId={taskId} teamId={teamScopeId} />
         )}
       </div>
       {/* 计划文档弹窗：正文随列表已下发，纯展示不取数 */}
