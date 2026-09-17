@@ -11,13 +11,9 @@ import { Prisma } from '@prisma/client';
 import {
   AGENT_ERRORS,
   AGENT_KEY_PATTERN,
-  buildEditPermission,
-  buildReadPermission,
   POLICY_ID_PREFIX,
-  ROLE_BOUNDARIES,
   ROLE_POLICY_DENY_TEMPLATE,
   STATIC_AVAILABLE_MODELS,
-  type VteamAgentName,
 } from '../common/constants/agent.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
@@ -32,6 +28,7 @@ import { UpdateAgentDto } from './dto/update-agent.dto';
 import {
   ExecutionPolicyService,
   ResolvedExecutionPolicy,
+  resolveConstantPolicySource,
 } from '../execution-policies/execution-policy.service';
 
 /** Agent 域主键前缀（对齐 15 篇 §2.2：<prefix>_<零填充序号>）。 */
@@ -723,7 +720,8 @@ export class AgentsService implements OnModuleInit {
   /**
    * 按 role 解析模板策略来源（create 无 policyId / clone 源无绑定时回退）。
    * 优先库内 `ep_<role>` 行的 config（seed 已含 tools 矩阵）；行缺失但 role 命中
-   * `ROLE_BOUNDARIES` 时按同一形状派生（与 seed 同源，保证 tools 非空）；
+   * `ROLE_BOUNDARIES` 时经 `resolveConstantPolicySource` 派生同一形状（与
+   * `resolveByAgent` 的行缺失回退共用常量推导，保证 tools 非空且两路径一致）；
    * 均无 → null（调用方建骨架）。
    */
   private async resolveTemplateSource(
@@ -743,36 +741,10 @@ export class AgentsService implements OnModuleInit {
           typeof stored.description === 'string' ? stored.description : null,
       };
     }
-    const agentName = `vteam-${role}` as VteamAgentName;
-    const boundary = (
-      ROLE_BOUNDARIES as Record<
-        string,
-        (typeof ROLE_BOUNDARIES)[VteamAgentName] | undefined
-      >
-    )[agentName];
-    if (!boundary) {
-      return null;
-    }
-    return {
-      config: {
-        permission: {
-          edit: buildEditPermission(boundary.writeGlobs),
-          read: buildReadPermission(),
-          bash: boundary.bashEffect,
-          task: 'deny',
-          ...Object.fromEntries(
-            boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
-          ),
-        },
-        correction: {
-          scopeSummary: boundary.scopeSummary,
-          handoff: boundary.handoffTo,
-          denyTemplate: ROLE_POLICY_DENY_TEMPLATE,
-        },
-        tools: { ...boundary.toolAllows },
-      },
-      description: boundary.scopeSummary,
-    };
+    const constant = resolveConstantPolicySource(`vteam-${role}`);
+    return constant
+      ? { config: constant.config, description: constant.description }
+      : null;
   }
 
   /**

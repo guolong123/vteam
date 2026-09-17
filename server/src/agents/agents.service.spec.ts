@@ -1777,5 +1777,35 @@ describe('AgentsService', () => {
       );
       expect(result).toMatchObject({ policyId: policyData.id });
     });
+
+    it('create 有内置 role + 库内无 ep_<role> 行：回退常量派生（tools 非空）、策略 id 为自有 custom id', async () => {
+      prisma.executionPolicy.findUnique.mockResolvedValue(null);
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      echoAgentCreate();
+
+      const result = await service.create('u_admin', {
+        name: '外包开发者',
+        type: 'custom',
+        agentKey: 'outsourced-dev-fallback',
+        role: 'developer',
+      });
+
+      const policyData = prisma.executionPolicy.create.mock.calls[0][0].data;
+      expect(policyData.type).toBe('custom');
+      expect(policyData.id).not.toBe('ep_developer');
+      expect(policyData.config.tools).toEqual(
+        ROLE_BOUNDARIES['vteam-developer'].toolAllows,
+      );
+      expect(Object.keys(policyData.config.tools).length).toBeGreaterThan(0);
+      expect(policyData.description).toBe(
+        ROLE_BOUNDARIES['vteam-developer'].scopeSummary,
+      );
+      expect(prisma.agent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ policyId: policyData.id }),
+        }),
+      );
+      expect(result).toMatchObject({ policyId: policyData.id });
+    });
   });
 });

@@ -4659,6 +4659,7 @@ describe('PlatformMcpService', () => {
         expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
           policyId: 'ep_developer',
           role: 'developer',
+          agentKey: null,
         });
         expect(out).toEqual({
           taskId,
@@ -4719,6 +4720,7 @@ describe('PlatformMcpService', () => {
         expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
           policyId: 'ep_developer',
           role: 'developer',
+          agentKey: null,
         });
         expect(out.effectivePermission).toBeNull();
         expect(out.agentName).toBe('vteam-developer');
@@ -4751,8 +4753,38 @@ describe('PlatformMcpService', () => {
         expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
           policyId: null,
           role: null,
+          agentKey: null,
         });
         expect(out.agentName).toBe('vteam-plan');
+      });
+
+      it('自定义 agent 带 agentKey → resolveByAgent 透传 agentKey（解析名与 /agents 视图一致）', async () => {
+        allowWorker();
+        allowPolicy();
+        prisma.teamMember.findFirst.mockResolvedValue(
+          agentRow({
+            agent: {
+              id: senderAgentId,
+              name: '数据分析师',
+              role: null,
+              agentKey: 'data-analyst',
+              prompt: 'p',
+              defaultModelId: null,
+              policyId: 'ep_0000000009',
+            },
+          }),
+        );
+
+        await service.myProfile(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+        });
+
+        expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
+          policyId: 'ep_0000000009',
+          role: null,
+          agentKey: 'data-analyst',
+        });
       });
 
       it('实例不在任务团队 → 404 PLATFORM_MCP_TASK_NOT_FOUND', async () => {

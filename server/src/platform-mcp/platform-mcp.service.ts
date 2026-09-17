@@ -3802,6 +3802,7 @@ export class PlatformMcpService implements OnModuleInit {
             prompt: true,
             defaultModelId: true,
             policyId: true,
+            agentKey: true,
           },
         },
       },
@@ -3816,6 +3817,7 @@ export class PlatformMcpService implements OnModuleInit {
     const prompt = profile.agent.prompt;
     const truncated = prompt.length > 500;
     const agentRole = profile.agent.role as string | null;
+    const agentKey = profile.agent.agentKey ?? null;
     const agentPolicyId =
       (profile.agent as { policyId?: string | null }).policyId ?? null;
     let effectivePermission: {
@@ -3830,6 +3832,7 @@ export class PlatformMcpService implements OnModuleInit {
         (await this.executionPolicyService?.resolveByAgent({
           policyId: agentPolicyId,
           role: agentRole,
+          agentKey,
         })) ?? null;
     } catch {
       effectivePermission = null;
