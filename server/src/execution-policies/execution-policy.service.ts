@@ -424,7 +424,9 @@ export function resolveConstantPolicySource(
 /**
  * 单一 ExecutionPolicy 服务（vteam-role-behavior-enforcement Todo 11 唯一来源）。
  * - CRUD：列表（type 过滤 + 分页）/详情/创建/更新/删除；
- *   `type='template'` 为 seed 维护的平台内置角色策略——写操作（更新/删除）→ 403；
+ *   `type='template'` 为 seed 维护的平台内置角色策略——仅 POST/DELETE → 403
+ *   （禁止伪造内置行、禁止删除使 dispatch 丢失角色边界）；PATCH 允许直接编辑
+ *   内置策略的 config/name/description（vteam-role-behavior-abstraction Todo 8）；
  * - `resolveByAgent`：按 `policyId`（优先）或 `role`（`ep_<role>`）解析策略，
  *   供 ChatModule dispatcher 注入【职责边界】（Todo 4 已预留 boundarySection）与
  *   `/agent-policies`（Todo 12）消费；未绑定/策略缺失/配置残缺 → null（调用方回退现状）。
@@ -508,7 +510,9 @@ export class ExecutionPolicyService implements OnModuleInit {
 
   /**
    * PATCH /execution-policies/:id：`type` 不可改（不在 DTO）。
-   * 目标 `type='template'` → 403；`config` 显式传入时仍须完整合法（不接受半更新残缺）→ 否则 400。
+   * 内置策略（`type='template'`）可直接编辑 config/name/description——
+   * vteam-role-behavior-abstraction Todo 8 起页面可改内置角色行为；
+   * `config` 显式传入时仍须完整合法（不接受半更新残缺）→ 否则 400。
    */
   async update(id: string, dto: UpdateExecutionPolicyDto) {
     const existing = await this.prisma.executionPolicy.findUnique({
@@ -517,7 +521,6 @@ export class ExecutionPolicyService implements OnModuleInit {
     if (!existing) {
       this.throwNotFound(id);
     }
-    this.assertWritable(existing.type);
     if (dto.config !== undefined) {
       this.assertValidConfig(dto.config);
     }
@@ -856,7 +859,10 @@ export class ExecutionPolicyService implements OnModuleInit {
     };
   }
 
-  /** 模板策略写保护（seed 维护的平台内置角色策略只读）。 */
+  /**
+   * 模板策略写保护（仅 POST/DELETE 调用；PATCH 已放开内置策略编辑）：
+   * seed 维护的平台内置角色策略不可伪造/删除。
+   */
   private assertWritable(type: string): void {
     if (type === 'template') {
       throw new ForbiddenException({

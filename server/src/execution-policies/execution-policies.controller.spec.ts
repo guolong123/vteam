@@ -12,7 +12,8 @@ import { ExecutionPolicyService } from './execution-policy.service';
  * ExecutionPoliciesController 单测（Todo 11 证据）：
  * 薄控制器——只断言路由层委托 service + 透传结果/错误语义：
  * - CRUD 委托（findAll/findOne/create/update/remove 参数透传）；
- * - template 写 → 403 POLICY_TEMPLATE_READONLY（service 抛，控制器透传）；
+ * - template 内置策略 PATCH 可编辑 → 200 + GET 回读变更（POST/DELETE 仍 403
+ *   POLICY_TEMPLATE_READONLY，service 抛、控制器透传）；
  * - 非法 config → 400 POLICY_CONFIG_INVALID（service 抛，控制器透传）；
  * - 不存在 → 404 POLICY_NOT_FOUND。
  * service 本体逻辑（glob/校验/403/400 判定）由 service 单测覆盖。
@@ -153,18 +154,60 @@ describe('ExecutionPoliciesController', () => {
     expect(result).toMatchObject({ name: '新名' });
   });
 
-  it('PATCH template 目标 → 403 POLICY_TEMPLATE_READONLY 透传', async () => {
-    service.update.mockRejectedValue(
-      new ForbiddenException({
-        code: 'POLICY_TEMPLATE_READONLY',
-        message: '模板策略只读（seed 维护），请克隆为 custom 策略再修改',
-      }),
+  it('PATCH template 内置策略 → 200 可编辑，GET 回读变更已持久化', async () => {
+    const templateRow = {
+      id: 'ep_product',
+      name: '产品经理',
+      description: null,
+      type: 'template',
+      config: {
+        permission: { edit: { '*': 'deny' }, task: 'deny' },
+        correction: { scopeSummary: 'scope' },
+        tools: { vteam_group_post: 'allow' as const },
+      },
+      createdAt: new Date('2026-09-01T00:00:00Z'),
+      updatedAt: new Date('2026-09-01T00:00:00Z'),
+    };
+    let stored = templateRow;
+    service.update.mockImplementation(
+      (
+        _id: string,
+        dto: { name?: string; description?: string; config?: unknown },
+      ) => {
+        stored = {
+          ...stored,
+          ...(dto.name !== undefined ? { name: dto.name } : {}),
+          ...(dto.config !== undefined
+            ? { config: dto.config as typeof templateRow.config }
+            : {}),
+        };
+        return Promise.resolve(stored);
+      },
     );
-    await expect(
-      controller.update('ep_product', { name: '改模板' }),
-    ).rejects.toMatchObject({
-      response: { code: 'POLICY_TEMPLATE_READONLY' },
+    service.findOne.mockImplementation(() => Promise.resolve(stored));
+
+    const nextConfig = {
+      ...templateRow.config,
+      tools: {
+        vteam_group_post: 'deny' as const,
+        vteam_memory_search: 'ask' as const,
+      },
+    };
+    const patched = await controller.update('ep_product', {
+      config: nextConfig,
     });
+
+    expect(service.update).toHaveBeenCalledWith('ep_product', {
+      config: nextConfig,
+    });
+    expect(patched).toMatchObject({ id: 'ep_product', type: 'template' });
+    expect(patched.config).toEqual(nextConfig);
+
+    const reread = await controller.findOne('ep_product');
+    expect(reread.config).toEqual(nextConfig);
+    expect(
+      (reread.config as typeof nextConfig).tools.vteam_group_post,
+    ).toBe('deny');
   });
 
   it('PATCH 非法 config → 400 POLICY_CONFIG_INVALID 透传', async () => {

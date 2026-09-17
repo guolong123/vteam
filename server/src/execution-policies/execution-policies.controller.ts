@@ -26,7 +26,7 @@ import { ExecutionPolicyService } from './execution-policy.service';
  * - GET /execution-policies：type 过滤 + 分页（含 template 只读策略）
  * - GET /execution-policies/:id：详情（不存在 → 404 POLICY_NOT_FOUND）
  * - POST /execution-policies：仅 type=custom（template → 403；非法 config → 400）
- * - PATCH /execution-policies/:id：template 目标 → 403；非法 config → 400；type 不可改
+ * - PATCH /execution-policies/:id：template 内置策略可直接编辑；非法 config → 400；type 不可改
  * - DELETE /execution-policies/:id：template 目标 → 403
  */
 @ApiTags('execution-policies')
@@ -64,7 +64,7 @@ export class ExecutionPoliciesController {
   @Patch(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission('agents.edit')
-  @ApiOperation({ summary: '更新策略（template → 403；非法 config → 400）' })
+  @ApiOperation({ summary: '更新策略（template 内置可直接编辑；非法 config → 400）' })
   update(@Param('id') id: string, @Body() dto: UpdateExecutionPolicyDto) {
     return this.policies.update(id, dto);
   }
