@@ -27,9 +27,13 @@ import {
 import { IdGeneratorService } from '../common/id-generator';
 import {
   AGENT_KEY_PATTERN,
-  ROLE_BOUNDARIES,
   type VteamAgentName,
 } from '../common/constants/agent.constants';
+import {
+  canonicalizeCorrection,
+  ExecutionPolicyService,
+  resolveConstantPolicySource,
+} from '../execution-policies/execution-policy.service';
 import { getOpencodeAgentDuty } from '../common/opencode-agent-duty';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -155,30 +159,56 @@ export function resolvePolicyAgentCandidate(
 }
 
 /**
- * 由角色边界渲染【职责边界】提示段（Todo 4）。
+ * 解析出的策略 `correction`（层② guard 越界纠正数据）。
  *
- * 纯函数：从 `ROLE_BOUNDARIES`（Todo 2 单一来源）取 `scopeSummary` + `handoffTo`，
- * 输出 `【职责边界】<scopeSummary>\n越界处理：<转交指引>`；未知/空 agent 名返回空串
- * （调用方不注入 → 无边界时系统提示字节不变）。
+ * 字段故意声明为 `unknown`：数据源是 DB `config.correction`（任意 JSON），此处做
+ * 运行时收敛而非信任 DB 形状（与 `execution-policy.service.ts` 的防御式解析一致）。
+ * 形如 `{scopeSummary, handoff, denyTemplate}`——`denyTemplate` 由 worker guard 消费，
+ * 本渲染器只用 `scopeSummary` + `handoff`。
+ */
+export interface BoundaryCorrection {
+  scopeSummary?: unknown;
+  handoff?: unknown;
+  denyTemplate?: unknown;
+}
+
+/** `handoff` 收敛为 `Record<string,string>`：非对象/非字符串值丢弃，保留键声明序。 */
+function normalizeHandoff(value: unknown): Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return {};
+  }
+  const out: Record<string, string> = {};
+  for (const [scope, target] of Object.entries(value)) {
+    if (typeof target === 'string' && target.length > 0) {
+      out[scope] = target;
+    }
+  }
+  return out;
+}
+
+/**
+ * 由解析出的策略 `correction` 渲染【职责边界】提示段（Todo 4，vteam-role-behavior-abstraction
+ * Todo 11 改由策略提供）。
  *
- * // Todo 11/12 will unify the source：ExecutionPolicy 落地后改由解析出的策略提供
- * scopeSummary/转交目标；当前服务器侧直接读 `ROLE_BOUNDARIES`。
+ * 纯函数：`scopeSummary` 缺席/非字符串/空串 → 返回空串（调用方不注入，无边界时系统
+ * 提示字节不变）；否则输出
+ * `【职责边界】<scopeSummary>\n越界处理：超出上述职责范围的请求必须拒绝（不要执行），
+ * 说明你的职责边界，并通过 vteam_notify_agent 或群聊 @ 转交对应角色（<scope→target、…>）。`
+ * 出厂态的 `correction` 与 `ROLE_BOUNDARIES` 常量逐字段相同 → 输出与按名读取常量逐字节一致。
+ * 不再按 agent 名 gating：自定义 agent 的策略 `correction` 同样得到边界段。
  */
 export function renderBoundarySection(
-  agentName: string | null | undefined,
+  correction: BoundaryCorrection | null | undefined,
 ): string {
-  if (!isVteamAgentName(agentName)) {
+  const scopeSummary = correction?.scopeSummary;
+  if (typeof scopeSummary !== 'string' || scopeSummary.length === 0) {
     return '';
   }
-  const boundary = ROLE_BOUNDARIES[agentName];
-  if (!boundary) {
-    return '';
-  }
-  const handoff = Object.entries(boundary.handoffTo)
+  const handoff = Object.entries(normalizeHandoff(correction?.handoff))
     .map(([scope, target]) => `${scope}→${target}`)
     .join('、');
   return (
-    `【职责边界】${boundary.scopeSummary}\n` +
+    `【职责边界】${scopeSummary}\n` +
     `越界处理：超出上述职责范围的请求必须拒绝（不要执行），说明你的职责边界，` +
     `并通过 vteam_notify_agent 或群聊 @ 转交对应角色（${handoff}）。`
   );
@@ -268,6 +298,8 @@ export interface AgentIdentityInfo {
   persona: string | null;
   /** Agent machine-safe 标识（agents.agent_key；模板行 = role；存量自定义/克隆行为 null）。分派策略候选名即 `vteam-<agentKey>`。 */
   agentKey: string | null;
+  /** 绑定策略 id（agents.policy_id，可空）。边界段由该策略的 correction 提供（Todo 11）。 */
+  policyId?: string | null;
 }
 
 /** 团队成员信息（dispatch 时从 TeamMember→Agent 组装，注入全局上下文供 agent 判断与谁协作）。
@@ -1197,6 +1229,12 @@ export class WorkerDispatcher
     @Optional()
     @Inject(TriggerService)
     private readonly triggers?: TriggerService,
+    // 目标策略解析（vteam-role-behavior-abstraction Todo 11：边界段由 resolved policy 的
+    // correction 提供）。缺省可空——单测/旧装配未提供时回退常量派生的边界段，
+    // 不阻断分派；生产装配经 ChatModule（已 import ExecutionPoliciesModule）提供。
+    @Optional()
+    @Inject(ExecutionPolicyService)
+    private readonly executionPolicyService?: ExecutionPolicyService,
   ) {
     super();
     const maxBytes = config.get<number>('DOCLIB_MAX_BYTES');
@@ -1948,6 +1986,7 @@ export class WorkerDispatcher
         prompt: true,
         persona: true,
         agentKey: true,
+        policyId: true,
       },
     });
     const agentIdentity: AgentIdentityInfo = {
@@ -1957,6 +1996,7 @@ export class WorkerDispatcher
       prompt: agentRow?.prompt ?? null,
       persona: agentRow?.persona ?? null,
       agentKey: agentRow?.agentKey ?? null,
+      policyId: agentRow?.policyId ?? null,
     };
     let teamMemberRows: any[] = [];
     try {
@@ -2070,13 +2110,12 @@ export class WorkerDispatcher
       workerSupportsAgentPolicies(worker, policyCandidateAgent)
         ? policyCandidateAgent
         : opencodeAgentName;
-    // Todo 4：目标 Agent 的职责边界段——优先显式 opencode agent 名，否则按模板角色
-    // 回退解析；未知/未绑定 → 空串不注入（system 与引入前逐字节一致）。
-    // Todo 11/12 will unify the source：改由 ExecutionPolicy 解析。
+    // Todo 11：目标 Agent 的职责边界段由解析出的策略 correction 提供（不再按 agent 名
+    // 白名单读取常量）——内置角色走绑定策略（出厂 correction == 常量，输出逐字节一致），
+    // 自定义 agent 的自定义 correction 同样注入。策略解析失败/无服务/无 correction →
+    // 回退 `roleToAgentName` 常量派生，保证基线行为与引入前逐字节一致。
     const boundarySection = renderBoundarySection(
-      isVteamAgentName(opencodeAgentName)
-        ? opencodeAgentName
-        : roleToAgentName(agentIdentity.role),
+      await this.resolveBoundaryCorrection(agentIdentity),
     );
     if (boundarySection) {
       systemOpts.boundarySection = boundarySection;
@@ -3566,6 +3605,44 @@ export class WorkerDispatcher
     } catch {
       return false;
     }
+  }
+
+  /**
+   * 目标 Agent 边界 correction 解析（vteam-role-behavior-abstraction Todo 11）：
+   * 优先其绑定策略（`resolveByAgent`，内置/自定义同路径）——解析成功即采用其 `correction`
+   * （DB 值胜出，含用户清空 `scopeSummary` 的场景 → `renderBoundarySection` 返回空串）；
+   * 策略缺席/无服务/解析异常 → 回退 `roleToAgentName` 常量派生（内置角色出厂态与按名
+   * 读取常量逐字节一致）；均无 → null。返回前经 `canonicalizeCorrection` 按角色
+   * `handoffTo` 声明序重排 handoff（DB MySQL JSON 键序与常量声明序不同，不重排会改变
+   * 渲染出的转交顺序）。
+   */
+  private async resolveBoundaryCorrection(
+    agent: AgentIdentityInfo,
+  ): Promise<BoundaryCorrection | null> {
+    const constantName = roleToAgentName(agent.role);
+    if (this.executionPolicyService) {
+      try {
+        const resolved = await this.executionPolicyService.resolveByAgent({
+          policyId: agent.policyId ?? null,
+          role: agent.role,
+          agentKey: agent.agentKey,
+        });
+        if (resolved) {
+          return canonicalizeCorrection(
+            resolved.correction,
+            constantName ?? resolved.agentName,
+          );
+        }
+      } catch {
+        // 策略解析异常不阻断分派 → 回退常量派生
+      }
+    }
+    if (constantName) {
+      return (
+        resolveConstantPolicySource(constantName)?.config.correction ?? null
+      );
+    }
+    return null;
   }
 
   private async resolveAgentModelId(agentId: string): Promise<string | null> {

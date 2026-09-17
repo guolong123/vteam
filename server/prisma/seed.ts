@@ -861,12 +861,14 @@ async function main() {
   //   `edit` 为唯一写闸门路径 glob（无 `write` 键，edit 同时覆盖 edit/write/apply_patch）；
   //   MCP 工具按真实暴露名 vteam_<action> 显式 deny（未列入该角色 toolAllows 者）。
   // - config.correction：层② guard 越界纠正（scopeSummary / handoff / denyTemplate，Todo 20）。
-  // - config.tools：层② guard 三态矩阵（`ROLE_BOUNDARIES[agentName].toolAllows` 的拷贝，
-  //   供自定义/克隆 agent 深拷贝为可编辑 custom 策略；内置名经 `guardForAgent` 直接取
-  //   `ROLE_BOUNDARIES` 常量，故此处落库不改变内置 `/agent-policies` 输出——字节一致）。
+  // - config.tools：层② guard 三态矩阵（`ROLE_BOUNDARIES[agentName].toolAllows` 的拷贝）。
+  //   内置名经绑定本行的 `/agent-policies` 解析（DB 值胜出，缺失/非法回退常量），
+  //   故落库值即页面可编辑的运行时来源；自定义/克隆 agent 亦深拷贝为可编辑 custom 策略。
   // - 层① task 门：仅 vteam-plan 为 allow（经 task 扇出只读评审子会话，D1）；
   //   读取顺序为边界运行时字段优先（Todo 1 若落地 task 形状）否则按 agent 名分支，其余角色保持 deny。
-  // 幂等：按 id upsert 并同步最新边界；先于模板 Agent upsert（agent.policyId 指向本行）。
+  // 幂等：按 id upsert，update 为空对象——仅对缺失行 create 出厂默认；
+  // 存量行（用户可能已编辑 config/description）重跑 seed 不再被覆盖。
+  // 先于模板 Agent upsert（agent.policyId 指向本行）。
   // ========================================================================
 
   const ROLE_POLICY_BINDINGS: Record<
@@ -917,7 +919,9 @@ async function main() {
     };
     await prisma.executionPolicy.upsert({
       where: { id: policyId },
-      update: { name: agent.name, description: boundary.scopeSummary, type: 'template', config },
+      // update 为空：策略 config/description 已是页面可编辑的运行时来源，
+      // 重跑 seed 不得把用户编辑回滚为出厂默认（升级仅在首次 create 时生效）。
+      update: {},
       create: {
         id: policyId,
         name: agent.name,
@@ -928,17 +932,16 @@ async function main() {
     });
   }
 
-  // update 同步 prompt、policyId 与 agentKey（平台维护的模板出厂默认提示词，16 篇 §8.4「模板提示词随平台版本升级」——
-  // 存量部署重跑 seed 时把「出厂默认」升级为最新版本；用户自定义过 prompt 的模板若想保持定制，
-  // 应在平台上再次修改，seed 不承担保留用户定制的义务）。
-  // agentKey = role（模板固定绑定，opencode 注入名与现状逐字节一致；自定义/克隆行不触碰）。
-  // 其余字段（defaultModelId/name/persona 等）保持 update:{} 语义——不覆盖用户已改配置，
+  // update 为空对象（create-if-absent）：模板 prompt、policyId 与 agentKey 均不再由重跑 seed 同步。
+  // 内置模板的 prompt 已是页面可直接编辑的行为来源（策略同理，见上方 ExecutionPolicy 注释），
+  // 故 re-seed 不再把平台默认升级推送到存量安装；出厂值仅首次 create 生效。
+  // 其余字段（defaultModelId/name/persona 等）本就不覆盖用户已改配置，
   // defaultModelId 与 persona 模板默认值仅首次 create 时生效（存量环境已设 persona 不被 seed 覆盖）。
   for (const agent of templateAgents) {
     const { policyId } = resolvePolicyBinding(agent.role);
     await prisma.agent.upsert({
       where: { id: agent.id },
-      update: { prompt: agent.prompt, policyId, agentKey: agent.role },
+      update: {},
       create: {
         ...agent,
         type: 'template',

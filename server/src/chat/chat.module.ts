@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ArtifactsModule } from '../artifacts/artifacts.module';
 import { PermissionGuard } from '../common/guards/permission.guard';
+import { ExecutionPoliciesModule } from '../execution-policies/execution-policies.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { TimersModule } from '../timers/timers.module';
 import { WorkersModule } from '../workers/workers.module';
@@ -29,9 +30,18 @@ import { WorkerDispatcher } from './worker-dispatcher';
  * - WorkerDispatcher 以类 token 注册并导出（FR-13：platform-mcp 模块注入调用
  *   dispatchAgentMention），MessageDispatcher 抽象经 useExisting 复用同一实例——
  *   单一 WorkerDispatcher 实例（T9 接线/看门狗仅一份），两个 token 指向它。
+ * - ExecutionPoliciesModule（vteam-role-behavior-abstraction Todo 11）：WorkerDispatcher
+ *   经 ExecutionPolicyService 解析目标策略的 correction 渲染【职责边界】。该模块只依赖
+ *   RealtimeModule，不反向依赖 ChatModule，无循环依赖。
  */
 @Module({
-  imports: [RealtimeModule, WorkersModule, ArtifactsModule, TimersModule],
+  imports: [
+    RealtimeModule,
+    WorkersModule,
+    ArtifactsModule,
+    TimersModule,
+    ExecutionPoliciesModule,
+  ],
   controllers: [ChatController],
   providers: [
     ChatService,

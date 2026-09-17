@@ -9,6 +9,10 @@ import {
 } from '../common/constants/event.constants';
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import { ROLE_BOUNDARIES } from '../common/constants/agent.constants';
+import {
+  resolveConstantPolicySource,
+  type ResolvedExecutionPolicy,
+} from '../execution-policies/execution-policy.service';
 import { TRIGGER_KIND } from '../common/constants/trigger.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import {
@@ -137,7 +141,7 @@ describe('WorkerDispatcher', () => {
     ...overrides,
   });
 
-  const createDispatcher = () =>
+  const createDispatcher = (policyService?: { resolveByAgent: jest.Mock }) =>
     new WorkerDispatcher(
       prisma as any,
       idGen as any,
@@ -148,6 +152,9 @@ describe('WorkerDispatcher', () => {
       artifactsService as any,
       config as any,
       ingress as any,
+      undefined,
+      undefined,
+      policyService as any,
     );
 
   beforeEach(() => {
@@ -572,6 +579,98 @@ describe('WorkerDispatcher', () => {
         },
       );
       expect(execArgs.system).toBe(expected);
+    });
+
+    it('Todo 11：自定义 agent 的策略 correction → system 注入【职责边界】（此前为空）', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_demo',
+        name: '示例助手',
+        role: null,
+        prompt: '示例职责。',
+        agentKey: 'demo-agent',
+        policyId: 'ep_custom_demo',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      const policyService = {
+        resolveByAgent: jest.fn().mockResolvedValue({
+          policyId: 'ep_custom_demo',
+          policyName: '示例策略',
+          agentName: 'vteam-demo-agent',
+          permission: {},
+          tools: {},
+          bashDeny: [],
+          correction: {
+            scopeSummary: '示例自定义职责：只做只读核对。',
+            handoff: { review: 'vteam-tester' },
+            denyTemplate: '【越界拦截】',
+          },
+          serverGated: [],
+        } as ResolvedExecutionPolicy),
+      };
+      const d = createDispatcher(policyService);
+      await d.dispatch({
+        ...request,
+        targets: [
+          {
+            agentId: 'a_demo',
+            instanceId: 'tmm_0000000001',
+            sessionId: 's_0000000001',
+          },
+        ],
+      });
+
+      const execArgs = workerClient.execute.mock.calls[0][1] as {
+        system: string;
+      };
+      expect(policyService.resolveByAgent).toHaveBeenCalledWith({
+        policyId: 'ep_custom_demo',
+        role: null,
+        agentKey: 'demo-agent',
+      });
+      expect(execArgs.system).toContain(
+        '【职责边界】示例自定义职责：只做只读核对。',
+      );
+      expect(execArgs.system).toContain('review→vteam-tester');
+    });
+
+    it('Todo 11：策略 correction 清空 scopeSummary → 不注入【职责边界】', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_demo',
+        name: '示例助手',
+        role: null,
+        prompt: '示例职责。',
+        agentKey: 'demo-agent',
+        policyId: 'ep_custom_demo',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      const policyService = {
+        resolveByAgent: jest.fn().mockResolvedValue({
+          policyId: 'ep_custom_demo',
+          policyName: '示例策略',
+          agentName: 'vteam-demo-agent',
+          permission: {},
+          tools: {},
+          bashDeny: [],
+          correction: { scopeSummary: '', handoff: {} },
+          serverGated: [],
+        } as ResolvedExecutionPolicy),
+      };
+      const d = createDispatcher(policyService);
+      await d.dispatch({
+        ...request,
+        targets: [
+          {
+            agentId: 'a_demo',
+            instanceId: 'tmm_0000000001',
+            sessionId: 's_0000000001',
+          },
+        ],
+      });
+
+      const execArgs = workerClient.execute.mock.calls[0][1] as {
+        system: string;
+      };
+      expect(execArgs.system).not.toContain('【职责边界】');
     });
 
     it('主成员目标：system 注入主 Agent 职责段 + 团队成员段（mainAgentMemberId 判定，TeamMember 组装）', async () => {
@@ -1494,8 +1593,10 @@ describe('WorkerDispatcher', () => {
       expect(s).toContain('【持久化目录】');
     });
 
-    it('Todo 4：boundarySection 非空 → 追加【职责边界】段（scopeSummary + 越界处理）', () => {
-      const section = renderBoundarySection('vteam-product');
+    it('Todo 11：boundarySection 非空 → 追加【职责边界】段（scopeSummary + 越界处理）', () => {
+      const section = renderBoundarySection(
+        resolveConstantPolicySource('vteam-product')?.config.correction,
+      );
       expect(section).toContain('【职责边界】');
       expect(section).toContain(ROLE_BOUNDARIES['vteam-product'].scopeSummary);
       expect(section).toContain('越界处理：');
@@ -1516,11 +1617,15 @@ describe('WorkerDispatcher', () => {
       ).toBe(baseline);
     });
 
-    it('Todo 4：renderBoundarySection 未知/空 agent 名 → 空串（不注入）', () => {
-      expect(renderBoundarySection('vteam-unknown')).toBe('');
-      expect(renderBoundarySection('product')).toBe('');
+    it('Todo 11：renderBoundarySection correction 为空/无 scopeSummary → 空串（不注入）', () => {
       expect(renderBoundarySection(null)).toBe('');
       expect(renderBoundarySection(undefined)).toBe('');
+      expect(renderBoundarySection({})).toBe('');
+      expect(
+        renderBoundarySection({ handoff: { code: 'vteam-developer' } }),
+      ).toBe('');
+      expect(renderBoundarySection({ scopeSummary: '' })).toBe('');
+      expect(renderBoundarySection({ scopeSummary: 42 })).toBe('');
     });
 
     it('Todo 4：roleToAgentName / isVteamAgentName 映射（角色 key → vteam-<role>）', () => {
@@ -1561,8 +1666,56 @@ describe('WorkerDispatcher', () => {
       ).toBeNull();
     });
 
-    it('Todo custom-agent：自定义 agent 名不在角色命名空间 → 无【职责边界】段（纠正文案走策略 guard）', () => {
-      expect(renderBoundarySection('vteam-demo-agent')).toBe('');
+    it('Todo 11：自定义 agent 的 correction → 有【职责边界】段（不再按名 gating）', () => {
+      const section = renderBoundarySection({
+        scopeSummary: '自定义职责：只做示例分析。',
+        handoff: { review: 'vteam-tester' },
+      });
+      expect(section).toContain('【职责边界】自定义职责：只做示例分析。');
+      expect(section).toContain('review→vteam-tester');
+      expect(section).toContain('vteam_notify_agent');
+    });
+
+    it('Todo 11：7 内置出厂 correction → boundary 与变更前冻结基线逐字节一致', () => {
+      const fixture = JSON.parse(
+        fs.readFileSync(
+          path.join(
+            __dirname,
+            '../../../.omo/evidence/vteam-role-behavior-abstraction/before-boundary.json',
+          ),
+          'utf8',
+        ),
+      ) as { sections: Record<string, string> };
+      for (const [name, expected] of Object.entries(fixture.sections)) {
+        const correction = resolveConstantPolicySource(name)?.config.correction;
+        expect(renderBoundarySection(correction)).toBe(expected);
+      }
+    });
+
+    it('Todo 11：/agent-policies 出厂 guard.roles[name].correction → boundary 与冻结基线逐字节一致', () => {
+      const baseline = JSON.parse(
+        fs.readFileSync(
+          path.join(
+            __dirname,
+            '../../../.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json',
+          ),
+          'utf8',
+        ),
+      ) as { guard: { roles: Record<string, { correction: unknown }> } };
+      const boundary = JSON.parse(
+        fs.readFileSync(
+          path.join(
+            __dirname,
+            '../../../.omo/evidence/vteam-role-behavior-abstraction/before-boundary.json',
+          ),
+          'utf8',
+        ),
+      ) as { sections: Record<string, string> };
+      for (const [name, expected] of Object.entries(boundary.sections)) {
+        const role = baseline.guard.roles[name];
+        expect(role).toBeDefined();
+        expect(renderBoundarySection(role.correction)).toBe(expected);
+      }
     });
 
     it('persona 拼接：agent.persona=strict 时注入【性格】段（含安全阀文案），不改写 prompt', () => {
@@ -1747,7 +1900,9 @@ describe('WorkerDispatcher', () => {
     });
 
     it('P0 漏网：boundary 越界句用真实暴露名 vteam_notify_agent', () => {
-      const section = renderBoundarySection('vteam-product');
+      const section = renderBoundarySection(
+        resolveConstantPolicySource('vteam-product')?.config.correction,
+      );
       expect(section).toContain('vteam_notify_agent');
       expect(section).not.toMatch(/(?<!vteam_)notify_agent/);
     });
