@@ -1,0 +1,71 @@
+### 0. baseline (expect c_0000000001=62, c_0000000007=<n>, markers=0)
+base_c1
+62
+base_c7
+690
+markers
+0
+### A. review-triplet reject P1 (expect triggered:false reason=review-triplet messageId=null, hint)
+{"jsonrpc":"2.0","id":21,"result":{"content":[{"type":"text","text":"{\"messageId\":null,\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000004\",\"triggered\":false,\"reason\":\"review-triplet\",\"hint\":\"评审派发缺三元组：须携带 round + planVersion(+hash) + expected 名单（例：R2 · v0.3#abcd1234 · expected: tmm_aaa,tmm_bbb）；本次派发已拒绝触发，修订不得开始，补齐三元组后重派；本次调用未在群聊发布任何消息：triggered:false 不是投递失败，请勿重发；请按 reason 处理（throttled 稍后按需重派，plan-gated 待计划放行，review-triplet 补齐三元组，duplicate/dedup 说明已有在途或已发送）。\",\"issueBound\":false}"}]}}
+### A2. counts unchanged + zero A-marker rows
+afterA_c1
+62
+markerA
+0
+### B1. wake P2 first send (expect dispatch-no-session ERROR, but 1 row persisted)
+{"jsonrpc":"2.0","id":22,"result":{"content":[{"type":"text","text":"{\"messageId\":\"m_0000002209\",\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000007\",\"triggered\":true,\"reason\":\"ok\",\"issueBound\":false}"}]}}
+### B1b. marker-B rows (expect 1)
+id	sender_instance_id	text
+m_0000002209	tmm_0000000002	{"text": "@知识管理员-1 ddprobe-20260917-B 请确认收到", "parts": []}
+### B2. identical resend within window (expect triggered:false reason=dedup, SAME messageId)
+{"jsonrpc":"2.0","id":23,"result":{"content":[{"type":"text","text":"{\"messageId\":\"m_0000002209\",\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000007\",\"triggered\":false,\"reason\":\"dedup\",\"hint\":\"本次调用未在群聊发布任何消息：triggered:false 不是投递失败，请勿重发；请按 reason 处理（throttled 稍后按需重派，plan-gated 待计划放行，review-triplet 补齐三元组，duplicate/dedup 说明已有在途或已发送）。\",\"issueBound\":false}"}]}}
+### B2b. marker-B rows still 1 (no new row)
+markerB_rows
+1
+afterB_c1
+63
+### C. content already @-prefixed (expect single @ stored, then dispatch-no-session error)
+{"jsonrpc":"2.0","id":24,"result":{"content":[{"type":"text","text":"{\"messageId\":\"m_0000002211\",\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000007\",\"triggered\":true,\"reason\":\"ok\",\"issueBound\":false}"}]}}
+### C2. stored text has exactly one leading @ (expect 1 row, text == content)
+text	mentions
+{"text": "@知识管理员-1 ddprobe-20260917-C 请确认收到", "parts": []}	[{"name": "知识管理员-1", "type": "agent", "agentId": "a_librarian", "instanceId": "tmm_0000000007"}]
+markerBC_rows
+2
+### W. waiting 70s for dedup window expiry...
+### B3. resend B after window (expect NEW row: triggered path, dispatch-no-session error again)
+{"jsonrpc":"2.0","id":25,"result":{"content":[{"type":"text","text":"{\"messageId\":\"m_0000002215\",\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000007\",\"triggered\":true,\"reason\":\"ok\",\"issueBound\":false}"}]}}
+### B3b. marker-B rows now 2 (window expired, not collapsed)
+id	text
+m_0000002209	{"text": "@知识管理员-1 ddprobe-20260917-B 请确认收到", "parts": []}
+m_0000002213	{"text": "@项目经理-1 收到 ddprobe-20260917-B。知识管理员-1（tmm_0000000007）已确认。", "parts": []}
+m_0000002215	{"text": "@知识管理员-1 ddprobe-20260917-B 请确认收到", "parts": []}
+### D. terminal task t_0000000002 (completed) review-no-triplet (expect clean review-triplet reject, no rows)
+preD_c7
+690
+{"jsonrpc":"2.0","id":26,"result":{"content":[{"type":"text","text":"{\"messageId\":null,\"channelId\":\"c_0000000007\",\"targetInstanceId\":\"tmm_0000000010\",\"triggered\":false,\"reason\":\"review-triplet\",\"hint\":\"评审派发缺三元组：须携带 round + planVersion(+hash) + expected 名单（例：R2 · v0.3#abcd1234 · expected: tmm_aaa,tmm_bbb）；本次派发已拒绝触发，修订不得开始，补齐三元组后重派；本次调用未在群聊发布任何消息：triggered:false 不是投递失败，请勿重发；请按 reason 处理（throttled 稍后按需重派，plan-gated 待计划放行，review-triplet 补齐三元组，duplicate/dedup 说明已有在途或已发送）。\",\"issueBound\":false}"}]}}
+### D2. c_0000000007 unchanged + zero D-marker rows
+afterD_c7
+690
+markerD
+0
+### E. audit: all marker rows + receipts (expect 0, wake never records) + realtime events with marker payload
+id	channel_id	sender_instance_id	text
+m_0000002209	c_0000000001	tmm_0000000002	{"text": "@知识管理员-1 ddprobe-20260917-B 请确认收到", "parts": []}
+m_0000002211	c_0000000001	tmm_0000000002	{"text": "@知识管理员-1 ddprobe-20260917-C 请确认收到", "parts": []}
+m_0000002213	c_0000000001	tmm_0000000007	{"text": "@项目经理-1 收到 ddprobe-20260917-B。知识管理员-1（tmm_0000000007）已确认。", "parts": [
+m_0000002214	c_0000000001	tmm_0000000007	{"text": "@项目经理-1 收到 ddprobe-20260917-C。知识管理员-1（tmm_0000000007）已确认。", "parts": [
+m_0000002215	c_0000000001	tmm_0000000002	{"text": "@知识管理员-1 ddprobe-20260917-B 请确认收到", "parts": []}
+probe_receipts
+0
+marker_events
+5
+### F. CLEANUP: delete probe messages (+ their realtime events), prove 0 remain + c_0000000001 back to baseline
+markers_left
+0
+marker_events_left
+0
+final_c1
+62
+final_c7
+690
+### DONE

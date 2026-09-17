@@ -4,7 +4,7 @@
       "/Users/mac/.nvm/versions/node/v24.14.0/bin/node",
       "/Volumes/SSD-Data/01work/git-project/vteam/web/node_modules/.bin/playwright",
       "test",
-      "--project=pages"
+      "--list"
     ],
     "configFile": "/Volumes/SSD-Data/01work/git-project/vteam/web/playwright.config.ts",
     "rootDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -17,18 +17,14 @@
     "grep": {},
     "grepInvert": null,
     "maxFailures": 0,
-    "metadata": {
-      "actualWorkers": 1
-    },
+    "metadata": {},
     "preserveOutput": "always",
     "projects": [
       {
         "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
         "repeatEach": 1,
         "retries": 0,
-        "metadata": {
-          "actualWorkers": 1
-        },
+        "metadata": {},
         "id": "setup",
         "name": "setup",
         "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -42,9 +38,7 @@
         "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
         "repeatEach": 1,
         "retries": 0,
-        "metadata": {
-          "actualWorkers": 1
-        },
+        "metadata": {},
         "id": "login",
         "name": "login",
         "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -58,9 +52,7 @@
         "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
         "repeatEach": 1,
         "retries": 0,
-        "metadata": {
-          "actualWorkers": 1
-        },
+        "metadata": {},
         "id": "pages",
         "name": "pages",
         "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -74,9 +66,7 @@
         "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
         "repeatEach": 1,
         "retries": 0,
-        "metadata": {
-          "actualWorkers": 1
-        },
+        "metadata": {},
         "id": "docs",
         "name": "docs",
         "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -90,9 +80,7 @@
         "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
         "repeatEach": 1,
         "retries": 0,
-        "metadata": {
-          "actualWorkers": 1
-        },
+        "metadata": {},
         "id": "team-users",
         "name": "team-users",
         "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -106,9 +94,7 @@
         "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
         "repeatEach": 1,
         "retries": 0,
-        "metadata": {
-          "actualWorkers": 1
-        },
+        "metadata": {},
         "id": "perf",
         "name": "perf",
         "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -122,9 +108,7 @@
         "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
         "repeatEach": 1,
         "retries": 0,
-        "metadata": {
-          "actualWorkers": 1
-        },
+        "metadata": {},
         "id": "guard",
         "name": "guard",
         "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -169,7 +153,7 @@
       "specs": [
         {
           "title": "真实表单登录 seed-admin → storageState",
-          "ok": false,
+          "ok": true,
           "tags": [],
           "tests": [
             {
@@ -178,55 +162,151 @@
               "expectedStatus": "passed",
               "projectId": "setup",
               "projectName": "setup",
-              "results": [
-                {
-                  "workerIndex": 0,
-                  "parallelIndex": 0,
-                  "status": "timedOut",
-                  "duration": 30052,
-                  "error": {
-                    "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
-                    "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
-                  },
-                  "errors": [
-                    {
-                      "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
-                    },
-                    {
-                      "location": {
-                        "file": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e/auth.setup.ts",
-                        "column": 38,
-                        "line": 14
-                      },
-                      "message": "Error: locator.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByTestId('username')\u001b[22m\n\n\n  12 | setup(\"真实表单登录 seed-admin → storageState\", async ({ page }) => {\n  13 |   await page.goto(\"/login\");\n> 14 |   await page.getByTestId(\"username\").fill(\"seed-admin\");\n     |                                      ^\n  15 |   await page.getByTestId(\"password\").fill(\"Admin@123456\");\n  16 |   await page.getByTestId(\"login-button\").click();\n  17 |\n    at /Volumes/SSD-Data/01work/git-project/vteam/web/e2e/auth.setup.ts:14:38"
-                    }
-                  ],
-                  "stdout": [],
-                  "stderr": [],
-                  "retry": 0,
-                  "startTime": "2026-09-17T03:56:58.085Z",
-                  "annotations": [],
-                  "attachments": [
-                    {
-                      "name": "error-context",
-                      "contentType": "text/markdown",
-                      "path": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results/auth.setup.ts-真实表单登录-seed-admin-→-storageState-setup/error-context.md"
-                    },
-                    {
-                      "name": "trace",
-                      "contentType": "application/zip",
-                      "path": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results/auth.setup.ts-真实表单登录-seed-admin-→-storageState-setup/trace.zip"
-                    }
-                  ]
-                }
-              ],
-              "status": "unexpected"
+              "results": [],
+              "status": "skipped"
             }
           ],
           "id": "17e3fe6f4d9d8bd79c6b-e1e904a976db5985c890",
           "file": "auth.setup.ts",
           "line": 12,
           "column": 6
+        }
+      ]
+    },
+    {
+      "title": "login.spec.ts",
+      "file": "login.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "1/17 login 登录页",
+          "file": "login.spec.ts",
+          "line": 7,
+          "column": 6,
+          "specs": [
+            {
+              "title": "登录页元素齐全",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "login",
+                  "projectName": "login",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "41d3fd2474a19feb00a1-71fffd8f8178d8947afc",
+              "file": "login.spec.ts",
+              "line": 8,
+              "column": 7
+            },
+            {
+              "title": "错误密码 → 登录失败提示",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "login",
+                  "projectName": "login",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "41d3fd2474a19feb00a1-5a198ebabed71a69e792",
+              "file": "login.spec.ts",
+              "line": 16,
+              "column": 7
+            },
+            {
+              "title": "正确密码 → 跳转 /teams",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "login",
+                  "projectName": "login",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "41d3fd2474a19feb00a1-4312d7ae761b81288c47",
+              "file": "login.spec.ts",
+              "line": 24,
+              "column": 7
+            },
+            {
+              "title": "register-link → 跳转 /register（ISSUE-011 死链修复）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "login",
+                  "projectName": "login",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "41d3fd2474a19feb00a1-4d9e4ccf429adf9ca4ba",
+              "file": "login.spec.ts",
+              "line": 32,
+              "column": 7
+            },
+            {
+              "title": "register 前端校验：空表单 → 提示，不提交",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "login",
+                  "projectName": "login",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "41d3fd2474a19feb00a1-afc3eedb8393ba34415a",
+              "file": "login.spec.ts",
+              "line": 43,
+              "column": 7
+            },
+            {
+              "title": "register 前端校验：密码不足 6 位 → 提示",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "login",
+                  "projectName": "login",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "41d3fd2474a19feb00a1-ad5bb8f1d933580d3ee5",
+              "file": "login.spec.ts",
+              "line": 50,
+              "column": 7
+            }
+          ]
         }
       ]
     },
@@ -566,15 +646,717 @@
           ]
         }
       ]
+    },
+    {
+      "title": "docs-unified.spec.ts",
+      "file": "docs-unified.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "happy：选择器→chips→树→查看器→版本→删除→深链",
+          "file": "docs-unified.spec.ts",
+          "line": 241,
+          "column": 6,
+          "specs": [
+            {
+              "title": "选择器 + 树：任务预填 + 自家 10 行",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-55623f664cd278d1aad4",
+              "file": "docs-unified.spec.ts",
+              "line": 242,
+              "column": 7
+            },
+            {
+              "title": "chips：分类过滤 + data-active 契约",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-79a8287f25064edc55e1",
+              "file": "docs-unified.spec.ts",
+              "line": 251,
+              "column": 7
+            },
+            {
+              "title": "树→查看器：md 渲染 + ?doc= 回写",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-76d6d6c3fb1686e1a81e",
+              "file": "docs-unified.spec.ts",
+              "line": 274,
+              "column": 7
+            },
+            {
+              "title": "版本查看器：v2 默认 + 切 v1",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-4448d2ac8a45acbc17fa",
+              "file": "docs-unified.spec.ts",
+              "line": 286,
+              "column": 7
+            },
+            {
+              "title": "删除：UI 删 scratch 行 + API 404",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-4ac7247bd5512a659e38",
+              "file": "docs-unified.spec.ts",
+              "line": 297,
+              "column": 7
+            },
+            {
+              "title": "?doc= 深链：直达查看器",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-6c3f1da5175118d999b4",
+              "file": "docs-unified.spec.ts",
+              "line": 318,
+              "column": 7
+            }
+          ]
+        },
+        {
+          "title": "prototypes：徽标→tab→深链→团队级聚合（T16）",
+          "file": "docs-unified.spec.ts",
+          "line": 333,
+          "column": 6,
+          "specs": [
+            {
+              "title": "徽标 + tab：原型非空",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-1556e36e605899c5f8d7",
+              "file": "docs-unified.spec.ts",
+              "line": 334,
+              "column": 7
+            },
+            {
+              "title": "?proto= 深链：直达选中",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-1f36b77d5b8a69820283",
+              "file": "docs-unified.spec.ts",
+              "line": 353,
+              "column": 7
+            },
+            {
+              "title": "团队级（task=all）：原型 tab 可用 + 跨任务列表",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-318daa939aaa536ddcf3",
+              "file": "docs-unified.spec.ts",
+              "line": 366,
+              "column": 7
+            },
+            {
+              "title": "团队级（task=all）：?proto= 深链直达选中",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-6ebd4103cb644075b7f8",
+              "file": "docs-unified.spec.ts",
+              "line": 383,
+              "column": 7
+            }
+          ]
+        },
+        {
+          "title": "edge：txt/csv/json 预览 + pdf 沙箱 + docx 下载卡 + ghost",
+          "file": "docs-unified.spec.ts",
+          "line": 397,
+          "column": 6,
+          "specs": [
+            {
+              "title": "txt→<pre> 预览 + 下载兜底",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-01a83c13bb6f309c7a21",
+              "file": "docs-unified.spec.ts",
+              "line": 398,
+              "column": 7
+            },
+            {
+              "title": "pdf→沙箱 iframe（无 allow-scripts）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-028ce64ccc0d9828119e",
+              "file": "docs-unified.spec.ts",
+              "line": 411,
+              "column": 7
+            },
+            {
+              "title": "docx→下载卡 + 零 iframe",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-004dc1346e2c4c42dff6",
+              "file": "docs-unified.spec.ts",
+              "line": 429,
+              "column": 7
+            },
+            {
+              "title": "ghost 不可访问引用→降级",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-ab7c2d1215eb7f912441",
+              "file": "docs-unified.spec.ts",
+              "line": 442,
+              "column": 7
+            }
+          ]
+        },
+        {
+          "title": "failure：未知 doc + 无 teamId",
+          "file": "docs-unified.spec.ts",
+          "line": 455,
+          "column": 6,
+          "specs": [
+            {
+              "title": "未知 ?doc= → 空态（不 404 不崩）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-bde9b97e874f4d82491c",
+              "file": "docs-unified.spec.ts",
+              "line": 456,
+              "column": 7
+            },
+            {
+              "title": "无 teamId → 团队选择器 → 可进站",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-bbc83359c8452208dd2a",
+              "file": "docs-unified.spec.ts",
+              "line": 462,
+              "column": 7
+            }
+          ]
+        },
+        {
+          "title": "XSS：脚本剥离 + 链接白名单 + 零执行",
+          "file": "docs-unified.spec.ts",
+          "line": 473,
+          "column": 6,
+          "specs": [
+            {
+              "title": "text→md：script 零元素 + javascript: 零 href + 安全链接保留",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-4e2293f155c47f93e6ef",
+              "file": "docs-unified.spec.ts",
+              "line": 474,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "team-user-members.spec.ts",
+      "file": "team-user-members.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "team-user-members 团队用户成员管理",
+          "file": "team-user-members.spec.ts",
+          "line": 10,
+          "column": 6,
+          "specs": [
+            {
+              "title": "team-user-members 添加/移除往返",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "team-users",
+                  "projectName": "team-users",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "f89c328cd73c19981185-a733de214656976e0d6c",
+              "file": "team-user-members.spec.ts",
+              "line": 11,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "perf.spec.ts",
+      "file": "perf.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "性能 E2E",
+          "file": "perf.spec.ts",
+          "line": 94,
+          "column": 6,
+          "specs": [
+            {
+              "title": "页面加载性能（/login 与 /teams）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "perf",
+                  "projectName": "perf",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "73ed389be8d3d6a89cdb-480003ad7bec4cfac105",
+              "file": "perf.spec.ts",
+              "line": 95,
+              "column": 7
+            },
+            {
+              "title": "群聊 SSE 计时（无 @ 消息，零模型调用，3 采样中位数）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "perf",
+                  "projectName": "perf",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "73ed389be8d3d6a89cdb-4ab0102127f3606f117e",
+              "file": "perf.spec.ts",
+              "line": 114,
+              "column": 7
+            },
+            {
+              "title": "首字计时 @a_product（1 次真实 opencode 调用，双线记录不阻断）",
+              "ok": true,
+              "tags": [
+                "a_product（1"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "perf",
+                  "projectName": "perf",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "73ed389be8d3d6a89cdb-67aaddc6424d8a7f5c57",
+              "file": "perf.spec.ts",
+              "line": 130,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "guard.spec.ts",
+      "file": "guard.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "未登录守卫",
+          "file": "guard.spec.ts",
+          "line": 7,
+          "column": 6,
+          "specs": [
+            {
+              "title": "未登录访问 /teams → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "744635278ff819b57657-a91ce82f078efeeda0b5",
+              "file": "guard.spec.ts",
+              "line": 21,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /board?teamId=tm_0000000001 → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "744635278ff819b57657-967b8f78268c140a22d8",
+              "file": "guard.spec.ts",
+              "line": 21,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /tasks/new → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "744635278ff819b57657-022dff59c01e5cfceb22",
+              "file": "guard.spec.ts",
+              "line": 21,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /agents → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "744635278ff819b57657-a013d9102f64a2ec4e80",
+              "file": "guard.spec.ts",
+              "line": 21,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /roles → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "744635278ff819b57657-0261840d18ed5d4ad3af",
+              "file": "guard.spec.ts",
+              "line": 21,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /skills → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "744635278ff819b57657-3758e7a2481db20090f9",
+              "file": "guard.spec.ts",
+              "line": 21,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /artifacts?teamId=tm_0000000001 → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "744635278ff819b57657-7b6feaa1269f396aeab7",
+              "file": "guard.spec.ts",
+              "line": 21,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /users → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "744635278ff819b57657-1fca9a180036f3260f98",
+              "file": "guard.spec.ts",
+              "line": 21,
+              "column": 9
+            },
+            {
+              "title": "未登录访问 /workers → /login",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "guard",
+                  "projectName": "guard",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "744635278ff819b57657-aaca7c784fa042380d7b",
+              "file": "guard.spec.ts",
+              "line": 21,
+              "column": 9
+            }
+          ]
+        }
+      ]
     }
   ],
   "errors": [],
   "stats": {
-    "startTime": "2026-09-17T03:56:57.887Z",
-    "duration": 31735.419,
+    "startTime": "2026-09-17T12:51:22.586Z",
+    "duration": 26.236000000000047,
     "expected": 0,
-    "skipped": 16,
-    "unexpected": 1,
+    "skipped": 53,
+    "unexpected": 0,
     "flaky": 0
   }
 }

@@ -1,0 +1,398 @@
+diff --git a/server/src/chat/chat.module.ts b/server/src/chat/chat.module.ts
+index 545b44e..321e9e8 100644
+--- a/server/src/chat/chat.module.ts
++++ b/server/src/chat/chat.module.ts
+@@ -10,6 +10,7 @@ import { MessageDispatcher } from './message-dispatcher';
+ import { MessageReceiptsService } from './message-receipts.service';
+ import { ReceiptNudgeHandler } from './receipt-nudge.handler';
+ import { HookService } from '../triggers/hook.service';
++import { HookFailureListener } from '../triggers/hook-failure.listener';
+ import { WorkerDispatcher } from './worker-dispatcher';
+ 
+ /**
+@@ -37,6 +38,7 @@ import { WorkerDispatcher } from './worker-dispatcher';
+     MessageReceiptsService,
+     ReceiptNudgeHandler,
+     HookService,
++    HookFailureListener,
+     PermissionGuard,
+     WorkerDispatcher,
+     { provide: MessageDispatcher, useExisting: WorkerDispatcher },
+diff --git a/server/src/chat/worker-dispatcher.ts b/server/src/chat/worker-dispatcher.ts
+index 99f0e85..41cb68c 100644
+--- a/server/src/chat/worker-dispatcher.ts
++++ b/server/src/chat/worker-dispatcher.ts
+@@ -200,7 +200,7 @@ export const DEFAULT_CHAT_HISTORY_MAX_BYTES = 32 * 1024;
+  * 经 system 通道注入（非 parts 文本）→ 不进入会话 user 消息，不会出现在聊天记录回复中。
+  *
+  * 【记忆管理】2 行独立为 MEMORY_INSTRUCTION 常量：plan 角色（toolAllows 无
+- * memory_save/search，教了会被 guard 拒）由 buildSystemInstructions 按 role 跳过该块，
++ * vteam_memory_save，教了会被 guard 拒）由 buildSystemInstructions 按 role 跳过该块，
+  * 其余角色照常注入；GLOBAL_SYSTEM_INSTRUCTIONS 导出值保持不变。
+  */
+ export const MEMORY_INSTRUCTION =
+@@ -217,6 +217,10 @@ const GLOBAL_BASE_LINES = [
+     '【@用户】需要用户确认/决策或完成后通知时，在 vteam_group_post 的 content 中写 @user 或 @all（系统动态注入当前任务相关用户，无需写死 @admin），也可写 @用户名 精确@某人；命中后消息对该用户高亮（蓝底+左蓝条+★@你）。',
+   '【Issue协作】任务内 issue 协作经 vteam MCP 的 vteam_issue_* 工具（创建/查询/更新/流转），详见 task_context。',
+   '【持久化目录】唯一持久化位置以【运行时工作目录】注入的实际路径为准，仅该目录重启后保留，工作产物与产出物文件请写入该目录。',
++  '【通知重发】vteam_notify_agent 返回 triggered:false 不是投递失败：该次调用未在群聊发布任何消息，请勿重发；请按 reason 与 hint 处理（节流稍后按需重派，计划门禁待放行，三元组缺失先补齐，重复/幂等说明已有在途或已发送）。',
++  '【@ 定向机制｜回执】vteam_notify_agent 新增 type 与 stage 参数（默认 type=answer、stage=process）：' +
++    'answer+process=常规进度汇报，不唤醒主Agent；answer+end=本次派发完工，清除回执，主Agent在所有派发均完工时一次性唤醒；' +
++    'question/help=需主Agent立即介入，中断唤醒，不计为完工。进度汇报不再按条唤醒，完工必须传 stage=end。',
+ ];
+ 
+ export const GLOBAL_SYSTEM_INSTRUCTIONS = [
+@@ -238,7 +242,10 @@ export const HOSTED_CONFIRM_INSTRUCTION =
+ 
+ /** 非主成员协作指引（替代【任务状态】/【托管模式】工具段，避免教非主成员调用必 403 的工具）。 */
+ export const NON_MAIN_AGENT_NOTE =
+-  '【协作说明】状态流转/托管确认由主Agent操作，有事@主Agent（相关工具 vteam_task_transition / vteam_question_confirm 仅主实例可调，误调返回 403）。';
++  '【协作说明】状态流转/托管确认由主Agent操作，有事@主Agent（相关工具 vteam_task_transition / vteam_question_confirm 仅主实例可调，误调返回 403）。定向通知仅可直达主Agent，需触达其他成员时请主Agent中转，成员间直连调用将被拒绝。' +
++  '回执节奏：进度汇报用 vteam_notify_agent（type=answer, stage=process，不唤醒主Agent）；' +
++  '完工必须传 stage=answer+end（清除回执，主Agent在所有派发完工后一次性唤醒）；' +
++  '遇阻塞/决策/依赖缺失用 type=question 或 help（立即中断唤醒主Agent，不计完工）。';
+ 
+ /** 企微系统段（仅企微渠道注入；dispatch 侧按正文 [WeCom:] 标记判定后经 opts.isWecomChannel 传入）。 */
+ export const WECOM_SYSTEM_INSTRUCTION =
+@@ -321,7 +328,7 @@ export function roleNeedsIssueDetail(role: string | null | undefined): boolean {
+ 
+ /**
+  * plan 角色判定（记忆段屏蔽用）——兼容大小写及中文“计划员”，写法参考 roleNeedsIssueDetail。
+- * plan 的 toolAllows 无 vteam_memory_save/search，GLOBAL 内【记忆管理】2 行对其屏蔽。
++ * plan 的 toolAllows 无 vteam_memory_save，GLOBAL 内【记忆管理】2 行对其屏蔽。
+  */
+ export function isPlanRole(role: string | null | undefined): boolean {
+   if (!role) {
+@@ -435,7 +442,9 @@ export const MAIN_AGENT_INSTRUCTION =
+   '【主 Agent 职责】你是本任务的主 Agent（牵头人）。除角色本职外，还需承担任务组织职责：' +
+   '牵头拆解工作并分派给团队成员，协调各角色产出衔接，环节切换或产出完成时主动在群聊提示进度（FR-08）；' +
+   '推进受阻或需要协作时，通过 vteam_notify_agent / 群聊 @ 定向协调成员（FR-13，互 @ 不超 3 轮）；' +
+-  '收尾时可汇总各角色产出与验收材料，供成员验收判定（FR-11）。';
++  '收尾时可汇总各角色产出与验收材料，供成员验收判定（FR-11）。' +
++  '唤醒节奏：你不在每条进度汇报时被唤醒；仅当某成员传 stage=answer+end（派发完工）且你所有外派均回执完毕时，平台一次性唤醒你确认进度；' +
++  '成员传 type=question/help 则立即中断唤醒你。因此唤醒后先汇总所有已收回报再行动，不要逐条处理。';
+ 
+ /**
+  * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
+@@ -466,7 +475,7 @@ export function buildSystemInstructions(
+       `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的任务实例 id（${taskInstanceId}）。`
+     : `【你的身份】你是本任务的 ${selfName}（实例 id: ${selfInstanceId}，角色: ${agent.role ?? ''}）。` +
+       `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（${selfInstanceId}）。`;
+-  // plan 屏蔽记忆段：plan 的 toolAllows 无 memory_save/search，GLOBAL 内【记忆管理】
++  // plan 屏蔽记忆段：plan 的 toolAllows 无 memory_save，GLOBAL 内【记忆管理】
+   // 2 行（MEMORY_INSTRUCTION）不注入；其余角色照常注入完整 GLOBAL。
+   const effectiveRole = opts?.agentRole ?? agent.role;
+   const globalText = isPlanRole(effectiveRole)
+@@ -503,7 +512,12 @@ export function buildSystemInstructions(
+   if (isTeamMode) {
+     blocks.push(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
+   }
+-  blocks.push(ARTIFACT_SUBMISSION_INSTRUCTION);
++  // plan 屏蔽产出物段：plan 的 toolAllows 无 vteam_submit_artifact（计划正文落盘
++  // `.opencode/plans/` 即交付，教了会被 guard 拒），与 MEMORY_INSTRUCTION 同机制；
++  // 其余角色照常注入（逐字节不变）。
++  if (!isPlanRole(effectiveRole)) {
++    blocks.push(ARTIFACT_SUBMISSION_INSTRUCTION);
++  }
+   // P1：issue 完整版仅显式开关时注入（dispatch 按目标角色传入；缺省一句版，字节兼容）。
+   if (opts?.issueDetail === true) {
+     blocks.push(ISSUE_FULL_INSTRUCTION);
+@@ -1359,7 +1373,7 @@ export class WorkerDispatcher
+      * notifyAgent 层不透传本字段（各层以自有输入独立执法）。
+      */
+     planHash?: string | null;
+-  }): Promise<void> {
++  }): Promise<string> {
+     let teamId: string | null = null;
+     let taskIdForDispatch: string | null = null;
+     let taskStatusForDispatch: string | null = null;
+@@ -1425,6 +1439,10 @@ export class WorkerDispatcher
+         },
+       ],
+     });
++    // 返回被分派的目标会话主键（trigger-unification wake 失败记录）：
++    // HookService 落 hook.target.wakeSessionId 以关联后续 agent.error /
++    // session.updated(failed)；其余调用方忽略返回值，向后兼容。
++    return ensured.id;
+   }
+ 
+   /** 目标实例是否为计划员（agentId=PLAN_AGENT_ID，角色身份判定）：是则跳过计划门禁；查错/查无即不豁免。 */
+diff --git a/server/src/issues/review-round-gate.service.ts b/server/src/issues/review-round-gate.service.ts
+index 0e54da6..e8bf226 100644
+--- a/server/src/issues/review-round-gate.service.ts
++++ b/server/src/issues/review-round-gate.service.ts
+@@ -54,7 +54,7 @@ export interface ConvergenceDispatchInput {
+ 
+ /** 收敛通知器（生产实现为 WorkerDispatcher，结构兼容即可，不直连 ChatModule）。 */
+ export interface ConvergenceNotifier {
+-  dispatchAgentMention(input: ConvergenceDispatchInput): Promise<void>;
++  dispatchAgentMention(input: ConvergenceDispatchInput): Promise<string | void>;
+ }
+ 
+ /** 通知三元组：频道 + 计划员 + PM（收敛自动通知计划员并抄 PM）。 */
+diff --git a/server/src/triggers/hook.constants.ts b/server/src/triggers/hook.constants.ts
+index c170ae1..57afbd0 100644
+--- a/server/src/triggers/hook.constants.ts
++++ b/server/src/triggers/hook.constants.ts
+@@ -166,6 +166,15 @@ export const HOOK_POLL_DEDUP_KEY = buildTriggerDedupKey(
+   'all_idle',
+ );
+ 
++/**
++ * wake 执行失败事件类型（realtime_events 落库 + 广播）。
++ *
++ * 刻意不进 EVENT_TYPES 白名单（与 `trigger.reconcile` 同款：新事件不 churn
++ * 事件表契约与既有长度断言）。语义：hook 已 `fired`（分派被接受）但被唤醒的
++ * 会话随后 `agent.error` —— 记录真实下游原因，不回滚 `fired` 状态。
++ */
++export const TRIGGER_WAKE_FAILED_EVENT_TYPE = 'trigger.wake.failed';
++
+ /**
+  * 组装 hook 注册幂等键：`hook:<scope>:<id>`（如 `hook:team:tm_1:wake-x`）。
+  * 调用方（todo-12 `hook_register`）显式传入，重复注册幂等直返既有行。
+diff --git a/server/src/triggers/hook.service.ts b/server/src/triggers/hook.service.ts
+index 0d0f4ba..9cfdcfd 100644
+--- a/server/src/triggers/hook.service.ts
++++ b/server/src/triggers/hook.service.ts
+@@ -1,5 +1,6 @@
+ import { Injectable, Logger, OnModuleInit, Optional, Inject } from '@nestjs/common';
+ import { ConfigService } from '@nestjs/config';
++import { Prisma } from '@prisma/client';
+ import { IdGeneratorService } from '../common/id-generator';
+ import { EVENT_TYPES } from '../common/constants/event.constants';
+ import {
+@@ -45,6 +46,7 @@ import {
+   HOOK_TASK_WAKE_BUDGET_ENV,
+   HOOK_WAKE_SIMILAR_MIN_LEN,
+   HOOK_WAKE_TEXT_MAX,
++  TRIGGER_WAKE_FAILED_EVENT_TYPE,
+   isHookKind,
+   resolveHookCount,
+   resolveHookMs,
+@@ -105,6 +107,12 @@ export interface HookTarget {
+   teamId?: string | null;
+   channelId: string;
+   targetInstanceId: string;
++  /**
++   * 本次唤醒分派落入的会话主键（fire/poll 成功分派后回写；wake 失败记录
++   * 据此把 `agent.error`/`session.updated(failed)` 关联回本 hook）。
++   * 存量行无此键（parseHookTarget 缺省 null，向后兼容）。
++   */
++  wakeSessionId?: string | null;
+ }
+ 
+ /**
+@@ -576,8 +584,9 @@ export class HookService implements OnModuleInit {
+       }
+       return { rescheduleAt: new Date(now.getTime() + HOOK_BUSY_RETRY_MS_DEFAULT) };
+     }
++    let wakeSessionId: string | undefined;
+     try {
+-      await this.dispatchWake(hook, target);
++      wakeSessionId = await this.dispatchWake(hook, target);
+     } catch (err) {
+       const reason = `wake 分派失败（留 pending 待下轮）：${describeHookError(err)}`;
+       // 分派失败走同一重试梯（busyRetries 共用计数，满 N 次同样改判 expired）。
+@@ -597,7 +606,7 @@ export class HookService implements OnModuleInit {
+       }
+       return { rescheduleAt: new Date(now.getTime() + HOOK_BUSY_RETRY_MS_DEFAULT) };
+     }
+-    await this.markFired(hook.id);
++    await this.markFired(hook.id, wakeSessionId);
+     return { done: true };
+   }
+ 
+@@ -683,8 +692,9 @@ export class HookService implements OnModuleInit {
+         }
+         continue;
+       }
++      let wakeSessionId: string | undefined;
+       try {
+-        await this.dispatchWake(hook, target);
++        wakeSessionId = await this.dispatchWake(hook, target);
+       } catch (err) {
+         await this.prisma.hook.update({
+           where: { id: hook.id },
+@@ -697,7 +707,7 @@ export class HookService implements OnModuleInit {
+         });
+         continue;
+       }
+-      await this.markFired(hook.id);
++      await this.markFired(hook.id, wakeSessionId);
+       wakes += 1;
+     }
+     return { done: true };
+@@ -854,23 +864,25 @@ export class HookService implements OnModuleInit {
+     return null;
+   }
+ 
+-  /** 唤醒分派（`kind: 'wake'` 豁免计划门禁/节流/回执台账，见 worker-dispatcher）。 */
++  /**
++   * 唤醒分派（`kind: 'wake'` 豁免计划门禁/节流/回执台账，见 worker-dispatcher）。
++   * 返回被唤醒的目标会话主键（调用方回写 `target.wakeSessionId`，供后续失败记录关联）。
++   */
+   private async dispatchWake(
+     hook: HookRow,
+     target: Extract<WakeResolution, { ok: true }>,
+-  ): Promise<void> {
++  ): Promise<string> {
+     const text = buildHookWakeText(hook.kind, hook.id, hook.wakeText);
+     if (target.taskId) {
+-      await this.dispatcher.dispatchAgentMention({
++      return await this.dispatcher.dispatchAgentMention({
+         taskId: target.taskId,
+         channelId: target.channelId,
+         text,
+         targetInstanceId: target.targetInstanceId,
+         kind: 'wake',
+       });
+-      return;
+     }
+-    await this.dispatcher.dispatchAgentMention({
++    return await this.dispatcher.dispatchAgentMention({
+       teamId: target.teamId,
+       channelId: target.channelId,
+       text,
+@@ -907,11 +919,29 @@ export class HookService implements OnModuleInit {
+     }
+   }
+ 
+-  private async markFired(hookId: string): Promise<void> {
++  private async markFired(
++    hookId: string,
++    wakeSessionId?: string,
++  ): Promise<void> {
+     const hook = (await this.prisma.hook.update({
+       where: { id: hookId },
+       data: { status: HOOK_STATUS.FIRED, fireCount: { increment: 1 } },
+     })) as unknown as HookRow | null;
++    // wakeSessionId 回写 target Json（无新列/无迁移；parseHookTarget 容忍额外键）：
++    // 供 wake 失败记录按 target.wakeSessionId 关联回本 hook。失败仅 warn——
++    // 分派已接受，hook 照落 fired，不因回写失败回滚。
++    if (wakeSessionId && hook) {
++      try {
++        await this.prisma.hook.update({
++          where: { id: hookId },
++          data: { target: withWakeSessionId(hook.target, wakeSessionId) },
++        });
++      } catch (err) {
++        this.logger.warn(
++          `hook ${hookId} wakeSessionId=${wakeSessionId} 回写 target 失败（fired 状态不受影响，失败记录可能缺关联）: ${describeHookError(err)}`,
++        );
++      }
++    }
+     // poll 唤醒的 all_idle 行：配套 fire 兜底行已无用，cancel 掉（best-effort；
+     // 即便残留，fire handler 见 fired 也 no-op，永不误唤醒）。
+     try {
+@@ -929,6 +959,71 @@ export class HookService implements OnModuleInit {
+     }
+   }
+ 
++  /**
++   * 记录一次 wake 执行失败（trigger-unification 失败记录缝）。
++   *
++   * 背景：`markFired` 语义是「分派被接受」，不是「agent 跑成功」；被唤醒会话
++   * 随后 `agent.error` / `session.updated(failed)` 时，hook 仍是 `fired` 且
++   * lastError/skipReason 为 NULL——真失败与成功在库里不可分辨。本方法把真实
++   * 下游原因**记录**到 hook + 配对 `hook_fire` 触发器行 + 一条 realtime 事件，
++   * **不改 `fired` 状态**（其余分支依赖该语义）。
++   *
++   * 幂等（认领式）：hook 行以 `lastError: null` 为认领谓词 `updateMany`——
++   * 同一会话多次失败事件只有首个（`count === 1`）落库，重复事件零副作用、
++   * 不刷屏。会话已轮转（hook 已易主/wakeSessionId 已更新）或非 fired → no-op。
++   *
++   * 永不抛（调用方为 realtime 订阅者）：失败仅 warn。
++   */
++  async recordWakeFailure(input: {
++    sessionId: string;
++    reason: string;
++  }): Promise<boolean> {
++    const sessionId = input.sessionId;
++    if (!sessionId) {
++      return false;
++    }
++    try {
++      const hook = (await this.prisma.hook.findFirst({
++        where: {
++          status: HOOK_STATUS.FIRED,
++          target: { path: '$.wakeSessionId', equals: sessionId },
++        },
++      })) as unknown as HookRow | null;
++      if (!hook) {
++        return false;
++      }
++      const text = (input.reason || 'wake 执行失败（未携带原因）').slice(0, 191);
++      // 认领：lastError 仍为 NULL 才写（并发/重复事件败者静默）。
++      const claimed = await this.prisma.hook.updateMany({
++        where: { id: hook.id, status: HOOK_STATUS.FIRED, lastError: null },
++        data: { lastError: text, skipReason: text },
++      });
++      if (claimed.count !== 1) {
++        return false;
++      }
++      await this.prisma.trigger.updateMany({
++        where: { dedupKey: buildHookFireDedupKey(hook.id) },
++        data: { lastError: text, skipReason: text },
++      });
++      await this.emitTriggerLifecycle(
++        TRIGGER_WAKE_FAILED_EVENT_TYPE,
++        hook,
++        {
++          status: HOOK_STATUS.FIRED,
++          wakeSessionId: sessionId,
++          lastError: text,
++          skipReason: text,
++        },
++      );
++      return true;
++    } catch (err) {
++      this.logger.warn(
++        `hook wake 失败记录失败 session=${sessionId}（仅观测缺口，不回滚 fired）: ${describeHookError(err)}`,
++      );
++      return false;
++    }
++  }
++
+   private async settleHook(
+     hookId: string,
+     status: string,
+@@ -1148,11 +1243,11 @@ function hookScopeOf(hook: { scopeType: string; scopeId: string }): RealtimeScop
+   return { type: 'global' };
+ }
+ 
+-/** `tmr_` 前缀常量复用（fire 行 id 经同一 IdGeneratorService 生成）。 */
++  /** `tmr_` 前缀常量复用（fire 行 id 经同一 IdGeneratorService 生成）。 */
+ const TRIGGER_ID_PREFIX_VALUE = 'tmr';
+ 
+ /** hook.target JSON 窄化（非法 → null，调用方标 expired）。 */
+-function parseHookTarget(target: unknown): HookTarget | null {
++export function parseHookTarget(target: unknown): HookTarget | null {
+   if (typeof target !== 'object' || target === null) {
+     return null;
+   }
+@@ -1170,9 +1265,25 @@ function parseHookTarget(target: unknown): HookTarget | null {
+       typeof t['teamId'] === 'string' && t['teamId'] ? t['teamId'] : null,
+     channelId: t['channelId'],
+     targetInstanceId: t['targetInstanceId'],
++    wakeSessionId:
++      typeof t['wakeSessionId'] === 'string' && t['wakeSessionId']
++        ? t['wakeSessionId']
++        : null,
+   };
+ }
+ 
++/** 在既有 target Json 上叠加 wakeSessionId（保留其余键，存量行零影响）。 */
++function withWakeSessionId(
++  target: unknown,
++  wakeSessionId: string,
++): Prisma.InputJsonValue {
++  const base =
++    typeof target === 'object' && target !== null
++      ? (target as Record<string, unknown>)
++      : {};
++  return { ...base, wakeSessionId } as Prisma.InputJsonValue;
++}
++
+ /** 血缘回溯：从 hook.target 取 taskId（parent 链首任务兜底）。 */
+ function targetTaskId(target: unknown): string | null {
+   return parseHookTarget(target)?.taskId ?? null;

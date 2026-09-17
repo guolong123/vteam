@@ -1,0 +1,17 @@
+=== BASELINE ===
+Test Suites: 124 passed, 124 total
+Tests:       2886 passed, 2886 total
+Snapshots:   1 passed, 1 total
+Time:        17.692 s, estimated 2148 s
+Ran all test suites.
+JEST_EXIT=0
+
+=== FINAL ===
+Test Suites: 125 passed, 125 total
+Tests:       2905 passed, 2905 total
+Snapshots:   1 passed, 1 total
+Time:        15.959 s, estimated 17 s
+Ran all test suites.
+JEST_EXIT=0
+
+TSC baseline exit 0 / final exit 0

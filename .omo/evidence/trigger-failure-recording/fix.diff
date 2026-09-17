@@ -1,0 +1,614 @@
+diff --git a/worker/src/driver/prompt-await.ts b/worker/src/driver/prompt-await.ts
+index 4e6f63d..60469fb 100644
+--- a/worker/src/driver/prompt-await.ts
++++ b/worker/src/driver/prompt-await.ts
+@@ -48,9 +48,18 @@ export interface AwaitCompletionOptions {
+   onServeError?: (errorText: string) => boolean;
+   /**
+    * T17 serve 最近错误日志行读取器（数据源：OpencodeServer.recentErrors()，exec-server
+-   * 接线注入）。缺省 = 不检测 serve 日志（保持原行为）。与 onServeError 同时缺省/同时存在。
++   * 接线注入）。参数 = 当前 opencode 会话 id（用于剔除其它会话的历史错误，stale 隔离）；
++   * 缺省 = 不检测 serve 日志（保持原行为）。与 onServeError 同时缺省/同时存在。
+    */
+-  serveErrorReader?: () => string[];
++  serveErrorReader?: (sessionID: string) => string[];
++  /**
++   * 原始 serve 日志尾部读取器（数据源：OpencodeServer.recentLogTail()）。模型错误不可提取时，
++   * 用它把**原始日志行**附进失败原因，使失败始终携带证据（而非只有一句笼统文案）。
++   * 参数 = 当前会话 id；缺省 = 不附证据（保持原行为）。
++   */
++  serveLogReader?: (sessionID: string) => string[];
++  /** 附进失败原因的原始日志行数上限；默认 20。 */
++  serveLogTailLines?: number;
+ }
+ 
+ /** 会话完成聚合结果。 */
+@@ -141,15 +150,26 @@ function extractMessageError(messages: ServeMessage[]): string | null {
+ 
+ /**
+  * 从 serve 日志行提取干净的模型错误文本（onServeError 命中行的展示文本）。
+- * serve 日志格式（实测）：`message="stream error" ... error.error="AI_APICallError: Rate limit exceeded. Please try again later."`
+- * - 优先提取 `error.error="..."`（承载具体模型调用错误）
+- * - 回退 `message="..."`（如 "stream error"）
+- * - 再去掉错误类型前缀（`AI_APICallError: ` / `APIError: ` 等），对齐前端展示习惯
++ * 实测两种形态：
++ *   a) `message="stream error" ... error.error="AI_APICallError: Rate limit exceeded. Please try again later."`
++ *   b) `message="share subscriber failed" ... cause="Cause([Fail(ProviderModelNotFoundError: Model not found: …)])"`
++ * 提取优先级（取**最深可用细节**，避免把整行结构化日志当原因）：
++ *   1. `error.error="..."`（APIError 承载具体模型调用错误）
++ *   2. `cause="..."`（流/订阅失败的嵌套原因；剥掉 `Cause([Fail(` / `)])` 包装）
++ *   3. `message="..."`（如 "stream error"）
++ *   4. 整行 trim（结构化字段全缺时的兜底）
++ * 再去掉错误类型前缀（`AI_APICallError: ` / `APIError: ` 等），对齐前端展示习惯。
+  */
+ function extractServeError(line: string): string {
+-  const errorValue = /error\.error="([^"]*)"/.exec(line);
+-  const raw = errorValue?.[1]?.trim() ?? /message="([^"]*)"/.exec(line)?.[1]?.trim() ?? line.trim();
+-  return raw.replace(/^[A-Za-z_]+:\s*/, '').trim();
++  const errorValue = /error\.error="([^"]*)"/.exec(line)?.[1];
++  const causeValue = /cause="([^"]*)"/.exec(line)?.[1];
++  const messageValue = /message="([^"]*)"/.exec(line)?.[1];
++  const raw = (errorValue ?? causeValue ?? messageValue ?? line).trim();
++  const unwrapped = raw
++    .replace(/^Cause\(\[Fail\(/, '')
++    .replace(/\)\]\)?$/, '')
++    .trim();
++  return unwrapped.replace(/^[A-Za-z_]+:\s*/, '').trim();
+ }
+ 
+ /**
+@@ -165,15 +185,21 @@ function extractServeError(line: string): string {
+  * 3. **卡在工具循环**：assistant 含 step-finish 且 reason==='tool-calls'（完成但循环
+  *    调工具不产出正文）。注意：reasoning 已算首字——纯思考（有 reasoning 无 text）场景
+  *    不会触发首字超时（会持续轮询到 step-finish），故此处不再诊断「思考阶段」。
+- * 4. **完全无响应**：无上述特征 → 凭据缺失/模型不可用/serve 异常等。
++ * 4. **完全无响应**：无上述特征 → 凭据缺失/模型不可用/serve 异常等。**兜底必须带证据**：
++ *    若提供了原始 serve 日志尾部（serveLogTail），把逐行原文附在文案后（用户 mandate：
++ *    拿到信息不该直接丢弃成一句笼统话；有证据就不允许只报「模型无任何输出」）。
+  */
+-export function describeTimeoutReason(messages: ServeMessage[], serveErrorText?: string): string {
++export function describeTimeoutReason(
++  messages: ServeMessage[],
++  serveErrorText?: string,
++  serveLogTail?: string[],
++): string {
+   const assistantParts = messages
+     .filter((m) => m.info?.role === 'assistant')
+     .flatMap((m) => m.parts ?? []);
+ 
+-  // 0. serve 日志错误（最高优先级）：Rate limit/Free usage 等只写 stderr，不透传
+-  //    message.info.error——这是唯一能拿到该错误的通道
++  // 0. serve 日志错误（最高优先级）：Rate limit/Free usage 等不透传 message.info.error——
++  //    这是唯一能拿到该错误的通道
+   if (typeof serveErrorText === 'string' && serveErrorText.trim() !== '') {
+     return `模型调用报错：${serveErrorText.trim()}`;
+   }
+@@ -200,7 +226,11 @@ export function describeTimeoutReason(messages: ServeMessage[], serveErrorText?:
+     return TOOL_LOOP_REASON;
+   }
+ 
+-  // 4. 完全无响应（兜底）
++  // 4. 完全无响应（兜底）：有原始 serve 日志尾部则原文附上（失败必须携带证据）
++  const evidence = (serveLogTail ?? []).map((line) => line.trim()).filter((line) => line !== '');
++  if (evidence.length > 0) {
++    return `模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）；serve 日志尾部（原始证据）:\n${evidence.join('\n')}`;
++  }
+   return '模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）';
+ }
+ 
+@@ -211,9 +241,15 @@ export class CompletionTimeoutError extends Error {
+   /** serve 日志中提取的模型调用错误文本（T17 serveErrorReader 数据源；无则 undefined）。 */
+   readonly serveErrorText?: string;
+ 
+-  constructor(sessionID: string, result: CompletionResult, messages?: ServeMessage[], serveErrorText?: string) {
++  constructor(
++    sessionID: string,
++    result: CompletionResult,
++    messages?: ServeMessage[],
++    serveErrorText?: string,
++    serveLogTail?: string[],
++  ) {
+     super(
+-      `[prompt-await] 会话 ${sessionID} 等待首字超时：${describeTimeoutReason(messages ?? [], serveErrorText)}`,
++      `[prompt-await] 会话 ${sessionID} 等待首字超时：${describeTimeoutReason(messages ?? [], serveErrorText, serveLogTail)}`,
+     );
+     this.name = 'CompletionTimeoutError';
+     this.sessionID = sessionID;
+@@ -334,12 +370,14 @@ export async function awaitCompletion(
+   sessionID: string,
+   options: AwaitCompletionOptions = {},
+ ): Promise<CompletionResult> {
+-  const { firstTokenTimeoutMs = 120_000, pollMs = 500, onPoll, baselineIds, onServeError, serveErrorReader } = options;
++  const { firstTokenTimeoutMs = 120_000, pollMs = 500, onPoll, baselineIds, onServeError, serveErrorReader, serveLogReader, serveLogTailLines = 20 } = options;
+   const startedAt = Date.now();
+   let firstTokenAt: number | null = null;
+   let collected: ServeMessage[] = [];
+   /** T17：serve 日志中提取的模型错误文本（onServeError 命中行）；有值 → 抛错文案用该文本 */
+   let serveErrorText: string | null = null;
++  /** 兜底证据：最近一次轮询读到的原始 serve 日志尾部（无模型错误可提取时附进原因） */
++  let serveLogTail: string[] = [];
+   /** T17 去重：上次触发过 onServeError 的日志行（同一行不重复触发/抛错） */
+   let triggeredServeErrorLine: string | null = null;
+   const hasServeErrorDetection = serveErrorReader !== undefined && onServeError !== undefined;
+@@ -368,7 +406,7 @@ export async function awaitCompletion(
+     // abort + 抛 CompletionTimeoutError，文案用 serve 错误文本而非「模型无任何输出」）。
+     // 去重：同一错误行只触发一次（避免每轮重复 break/抛错）。
+     if (hasServeErrorDetection) {
+-      for (const line of serveErrorReader!()) {
++      for (const line of serveErrorReader!(sessionID)) {
+         if (line === triggeredServeErrorLine) {
+           continue;
+         }
+@@ -382,6 +420,13 @@ export async function awaitCompletion(
+         break;
+       }
+     }
++    // 兜底证据（每轮刷新，取最新尾部）：模型错误不可提取时，原始行仍进失败原因
++    if (serveLogReader !== undefined) {
++      const tail = serveLogReader(sessionID);
++      if (Array.isArray(tail) && tail.length > 0) {
++        serveLogTail = tail.slice(-serveLogTailLines);
++      }
++    }
+     if (firstTokenAt === null && hasFirstToken(collected)) {
+       firstTokenAt = Date.now();
+     }
+@@ -400,7 +445,7 @@ export async function awaitCompletion(
+     } catch {
+       // abort 失败不掩盖超时错误（双保险中 HTTP abort 已尽力）
+     }
+-    throw new CompletionTimeoutError(sessionID, result, collected, serveErrorText ?? undefined);
++    throw new CompletionTimeoutError(sessionID, result, collected, serveErrorText ?? undefined, serveLogTail);
+   }
+   return result;
+ }
+diff --git a/worker/src/exec/exec-server.ts b/worker/src/exec/exec-server.ts
+index 112426d..eaca131 100644
+--- a/worker/src/exec/exec-server.ts
++++ b/worker/src/exec/exec-server.ts
+@@ -176,12 +176,16 @@ export interface ExecServerOptions {
+   pollMs?: number;
+   /**
+    * T17：serve 最近模型错误日志行读取器（数据源 OpencodeServer.recentErrors()，index.ts
+-   * 接线注入）。awaitCompletion 每轮轮询调用，serve 对 Rate limit/Free usage 等 APIError
+-   * 只写 stderr（`message="stream error" ... error.error="AI_APICallError: ..."`）不透传
+-   * message.info.error——匹配关键词时提前 abort + 抛错（错误文本透传前端），不再空等首字超时。
+-   * 缺省 = 不检测 serve 日志（保持原行为）。
++   * 接线注入）。awaitCompletion 每轮轮询调用（参数 = 会话 id，剔除其它会话历史错误），
++   * serve 对 Rate limit/Free usage 等 APIError 不透传 message.info.error——匹配关键词时
++   * 提前 abort + 抛错（错误文本透传前端），不再空等首字超时。缺省 = 不检测（保持原行为）。
+    */
+-  serveErrorReader?: () => string[];
++  serveErrorReader?: (sessionID: string) => string[];
++  /**
++   * 原始 serve 日志尾部读取器（数据源 OpencodeServer.recentLogTail()）。模型错误不可提取时
++   * 把原始行附进失败原因，保证失败始终携带证据。缺省 = 不附证据（保持原行为）。
++   */
++  serveLogReader?: (sessionID: string) => string[];
+   /** 请求体大小上限 bytes；默认 1MB。 */
+   maxBodyBytes?: number;
+   /**
+@@ -310,7 +314,8 @@ export class ExecServer {
+   private readonly workerToken: string;
+   private readonly firstTokenTimeoutMs: number;
+   private readonly pollMs: number;
+-  private readonly serveErrorReader: (() => string[]) | undefined;
++  private readonly serveErrorReader: ((sessionID: string) => string[]) | undefined;
++  private readonly serveLogReader: ((sessionID: string) => string[]) | undefined;
+   private readonly maxBodyBytes: number;
+   private readonly serverBaseUrl: string;
+   private readonly browserProfileRoot: string;
+@@ -329,6 +334,7 @@ export class ExecServer {
+     this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? 120_000;
+     this.pollMs = options.pollMs ?? 500;
+     this.serveErrorReader = options.serveErrorReader;
++    this.serveLogReader = options.serveLogReader;
+     this.maxBodyBytes = options.maxBodyBytes ?? 1024 * 1024;
+     this.serverBaseUrl = (options.serverBaseUrl ?? '').replace(/\/+$/, '');
+     this.browserProfileRoot = options.browserProfileRoot ?? '';
+@@ -1454,10 +1460,12 @@ export class ExecServer {
+         firstTokenTimeoutMs: this.firstTokenTimeoutMs,
+         pollMs: this.pollMs,
+         serveErrorReader: this.serveErrorReader,
+-        // T17：serve 日志模型错误检测——匹配模型 API 错误关键词（Rate limit/Free usage 等
+-        // 只写 serve stderr 不透传 message.info.error）；true=提前失败（abort + 抛错，
+-        // 错误文本经 CompletionTimeoutError 透传 agent.status error 事件）
+-        onServeError: (text) =>
++        serveLogReader: this.serveLogReader,
++        // T17：serve 日志模型错误检测——匹配模型 API 错误关键词 + 结构化错误门（Rate limit/
++        // Free usage 等不透传 message.info.error）；true=提前失败（abort + 抛错，
++        // 错误文本经 CompletionTimeoutError 透传 agent.status error 事件）。结构化门
++        // （level=ERROR / error.* 字段）杜绝正常 INFO 行误触发提前 abort。
++        onServeError: (text) => /level=ERROR\b|error\.(error|name|message|code)=/.test(text) &&
+           /stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i.test(
+             text,
+           ),
+diff --git a/worker/src/index.ts b/worker/src/index.ts
+index f45b485..af97482 100644
+--- a/worker/src/index.ts
++++ b/worker/src/index.ts
+@@ -824,10 +824,12 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
+     // GET /agents 未显式传 directory 时的回落值：与 serve cwd（config.workDir）一致，
+     // 保证列出的 opencode agent 集合与实际执行时发现的集合相同
+     workDir: config.workDir,
+-    // T17：serve 日志模型错误检测数据源——awaitCompletion 每轮轮询读 recentErrors()，
+-    // 命中模型 API 错误关键词（Rate limit/Free usage 等只写 stderr 不透传
+-    // message.info.error）时提前 abort + 抛错（错误文本透传前端，不再空等首字超时）
+-    serveErrorReader: () => serveServer.recentErrors(),
++    // T17：serve 日志模型错误检测数据源——awaitCompletion 每轮轮询读 recentErrors(会话 id)，
++    // 命中模型 API 错误（Rate limit/Free usage 等不透传 message.info.error；已按会话过滤避免
++    // stale 泄漏）时提前 abort + 抛错（错误文本透传前端，不再空等首字超时）
++    serveErrorReader: (sessionID) => serveServer.recentErrors(5, sessionID),
++    // 兜底证据源：模型错误不可提取时，原始 serve 日志尾部随失败原因上报（失败必带证据）
++    serveLogReader: (sessionID) => serveServer.recentLogTail(20, sessionID),
+     // OmO 配置保存后重启 serve：opencode 只在启动时读 OmO 配置，不重启则新会话仍用旧模型。
+     // 复用 RestartCoordinator（无活跃会话立即重启 / 有则挂起等归零），故不会打断进行中的会话。
+     restartServe: (reason: string) => restartCoordinator.requestRestart(reason),
+diff --git a/worker/src/runtime/opencode-server.ts b/worker/src/runtime/opencode-server.ts
+index 1ebe378..674c80e 100644
+--- a/worker/src/runtime/opencode-server.ts
++++ b/worker/src/runtime/opencode-server.ts
+@@ -15,12 +15,28 @@
+  *    超时 30s；serve 提前退出（exitCode 非 null）即报错。
+  * 5. stdout/stderr pipe 收集日志到环形缓冲（保留最近 N 行供 debug）。
+  *
++ * **`--print-logs`（T17 修复，2026-09-17 实测）**：opencode serve 默认把诊断日志写
++ * `$HOME/.local/share/opencode/log/opencode.log`（**文件，不是 stderr**），stdout/stderr
++ * 只有启动 banner（`listening on ...` 在 stdout）。因此原实现 `this.logs` 几乎收不到
++ * serve 诊断行 → `recentErrors()` 恒空 → 模型 API 错误（Rate limit/Free usage）无法被
++ * 感知，只能空等首字超时 120s 并记成笼统「模型无任何输出」。修复 = spawn 加
++ * `--print-logs`（`opencode serve --help`：print logs to stderr），诊断行随之进 stderr。
++ * 同时保留日志文件作为**次级**数据源（`serveLogFilePath`，可配；缺失静默降级），
++ * 使捕获不依赖单一传输通道。
++ *
+  * 本类不依赖 server 代码、不引入 nestjs（worker 独立进程铁律）。
+  */
+ 
+ import { spawn, spawnSync, ChildProcess } from 'child_process';
+-import * as http from 'http';
+-import * as net from 'net';
++import {
++  defaultServeLogFilePath,
++  isAnyLine,
++  isServeErrorLine,
++  lineBelongsToSession,
++  readFileTailLines,
++} from './serve-log';
++import { getRandomFreePort, httpGetStatus, isPortFree } from './port-probe';
++export { defaultServeLogFilePath, readFileTailLines } from './serve-log';
+ 
+ /** 最小日志接口（默认 console）。 */
+ export interface Logger {
+@@ -42,8 +58,13 @@ export interface OpencodeServerOptions {
+   healthCheckTimeoutMs?: number;
+   /** 健康检查轮询间隔 ms；默认 500 */
+   healthCheckIntervalMs?: number;
+-  /** 日志环形缓冲行数；默认 200 */
++  /** 日志环形缓冲行数；默认 500（实测 500ms 窗口最多 31 行，见 DEFAULT_LOG_BUFFER_SIZE） */
+   logBufferSize?: number;
++  /**
++   * serve 日志文件路径（次级错误源；默认 opencode 固定落点
++   * `$XDG_DATA_HOME/opencode/log/opencode.log`）。文件缺失/不可读 → 静默降级（空数组）。
++   */
++  serveLogFilePath?: string;
+   /** 端口冲突重试次数；默认 5 */
+   portRetryCount?: number;
+   /** serve 绑定地址（D2：默认 env OPENCODE_SERVE_HOSTNAME ?? '127.0.0.1' 保住本地铁律；容器内设 0.0.0.0） */
+@@ -61,7 +82,13 @@ export interface OpencodeServerOptions {
+ const DEFAULT_COMMAND = 'opencode';
+ const DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 30_000;
+ const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 500;
+-const DEFAULT_LOG_BUFFER_SIZE = 200;
++/**
++ * 日志环形缓冲行数。2026-09-17 实测（容器内 opencode.log 34,139 行）：
++ * 任意 500ms 滑动窗口最多 31 行（1s 最多 32，10s 最多 101）——轮询间隔即 500ms，
++ * 一条 ERROR 行必须存活到下一次 poll。200 行仅 6.4x 余量，50-poll 长思考下累积
++ * 亦可能逼近；常量 500 提供 ~16x 余量，代价可忽略（纯内存字符串）。
++ */
++const DEFAULT_LOG_BUFFER_SIZE = 500;
+ const DEFAULT_PORT_RETRY_COUNT = 5;
+ /** D2 铁律：serve 默认只监听本机回环（容器内经 OPENCODE_SERVE_HOSTNAME=0.0.0.0 覆盖） */
+ const DEFAULT_SERVE_HOSTNAME = '127.0.0.1';
+@@ -69,55 +96,11 @@ const DEFAULT_SERVE_HOSTNAME = '127.0.0.1';
+ const LOOPBACK_HOSTNAME = '127.0.0.1';
+ /** serve 日志中实际监听地址的正则（`opencode server listening on http://<host>:<port>`，host 不限定） */
+ const LISTENING_RE = /listening on http:\/\/[^:\s/]+:(\d+)/;
+-/**
+- * T17：serve 日志中的模型调用错误关键词。serve 对部分 APIError（Rate limit exceeded /
+- * Free usage exceeded 等）只写 stderr（`message="stream error" ... error.error="AI_APICallError: ..."`）
+- * 不透传 message.info.error——worker 靠 recentErrors() 感知提前失败，不再空等首字超时。
+- */
+-const SERVE_ERROR_KEYWORDS = /stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i;
+ 
+ function sleep(ms: number): Promise<void> {
+   return new Promise((resolve) => setTimeout(resolve, ms));
+ }
+ 
+-/** 用 net.createServer 探测端口是否空闲（bind 成功即空闲，随即关闭）。 */
+-function isPortFree(port: number): Promise<boolean> {
+-  return new Promise((resolve) => {
+-    const server = net.createServer();
+-    server.once('error', () => resolve(false));
+-    server.listen(port, LOOPBACK_HOSTNAME, () => {
+-      server.close(() => resolve(true));
+-    });
+-  });
+-}
+-
+-/** 让 OS 分配一个随机空闲端口（bind 0，读回实际端口后关闭）。 */
+-function getRandomFreePort(): Promise<number> {
+-  return new Promise((resolve, reject) => {
+-    const server = net.createServer();
+-    server.once('error', reject);
+-    server.listen(0, LOOPBACK_HOSTNAME, () => {
+-      const address = server.address();
+-      const port = typeof address === 'object' && address !== null ? address.port : 0;
+-      server.close(() => resolve(port));
+-    });
+-  });
+-}
+-
+-/** GET 指定 URL，返回 statusCode；网络错/超时抛错。 */
+-function httpGetStatus(url: string, authHeader?: string): Promise<number> {
+-  return new Promise((resolve, reject) => {
+-    const headers: Record<string, string> = authHeader ? { Authorization: authHeader } : {};
+-    const req = http.get(url, { headers, timeout: 2000 }, (res) => {
+-      // 必须消费响应体，否则 keep-alive 连接不释放
+-      res.resume();
+-      resolve(res.statusCode ?? 0);
+-    });
+-    req.on('timeout', () => req.destroy(new Error('健康检查请求超时')));
+-    req.on('error', reject);
+-  });
+-}
+-
+ export class OpencodeServer {
+   readonly options: OpencodeServerOptions;
+   /** 当前 spawn 的 serve 子进程（未启动/已停止为 null） */
+@@ -143,6 +126,7 @@ export class OpencodeServer {
+       portRetryCount: DEFAULT_PORT_RETRY_COUNT,
+       logger: console,
+       ...options,
++      serveLogFilePath: options.serveLogFilePath ?? defaultServeLogFilePath(),
+       serveHostname: options.serveHostname ?? process.env.OPENCODE_SERVE_HOSTNAME ?? DEFAULT_SERVE_HOSTNAME,
+     };
+   }
+@@ -173,14 +157,48 @@ export class OpencodeServer {
+   }
+ 
+   /**
+-   * T17：最近模型错误日志（serve stderr 中匹配模型 API 错误关键词的行，环形缓冲副本，
+-   * 保留最近 limit 条）。serve 对部分 APIError（Rate limit exceeded / Free usage exceeded
+-   * 等）只写 stderr（`message="stream error" ... error.error="AI_APICallError: ..."`）不透传
++   * 最近原始 serve 日志尾部（环形缓冲副本，可按会话过滤）——失败原因兜底证据用：
++   * 模型错误不可提取时，把原始行附进原因，避免只留一句笼统「模型无任何输出」。
++   * 环形缓冲为空时回退读取日志文件尾部（次级源）。
++   */
++  recentLogTail(limit = 20, sessionID?: string): string[] {
++    const ring = this.logs
++      .filter((line) => lineBelongsToSession(line, sessionID))
++      .slice(-limit);
++    if (ring.length > 0) {
++      return ring;
++    }
++    return this.readLogFileErrors(sessionID, isAnyLine).slice(-limit);
++  }
++
++  /**
++   * 最近模型错误日志（环形缓冲副本 + 日志文件次级源；按会话过滤，保留最近 limit 条）。
++   * serve 对部分 APIError（Rate limit exceeded / Free usage exceeded 等）不透传
+    * message.info.error——awaitCompletion 经 serveErrorReader 读取本方法结果，匹配时提前
+    * abort + 抛错（错误文本透传前端），不再空等首字超时（120s+）。
++   *
++   * 过滤 = 关键词粗筛 + 结构化错误门（level=ERROR / error.* 字段）——正常 INFO 行不入选。
++   * 环形缓冲有匹配即返回；无匹配才回退日志文件（次级源，缺失静默降级）。
+    */
+-  recentErrors(limit = 5): string[] {
+-    return this.logs.filter((line) => SERVE_ERROR_KEYWORDS.test(line)).slice(-limit);
++  recentErrors(limit = 5, sessionID?: string): string[] {
++    const ring = this.logs
++      .filter((line) => isServeErrorLine(line) && lineBelongsToSession(line, sessionID))
++      .slice(-limit);
++    if (ring.length > 0) {
++      return ring;
++    }
++    return this.readLogFileErrors(sessionID, isServeErrorLine).slice(-limit);
++  }
++
++  /** 读日志文件尾部（次级错误源；仅匹配行 + 会话过滤）。文件缺失/不可读 → []。 */
++  private readLogFileErrors(sessionID: string | undefined, accept: (line: string) => boolean): string[] {
++    const filePath = this.options.serveLogFilePath;
++    if (!filePath) {
++      return [];
++    }
++    return readFileTailLines(filePath).filter(
++      (line) => accept(line) && lineBelongsToSession(line, sessionID),
++    );
+   }
+ 
+   /** F2 M3：spawn 异步失败错误（如 opencode 不在 PATH 时的 ENOENT）；无失败为 null。 */
+@@ -193,6 +211,10 @@ export class OpencodeServer {
+     if (this.isRunning && this.baseUrlValue) {
+       return this.baseUrlValue;
+     }
++    // stale 隔离：新 serve 进程 = 新日志时代——清空上一进程残留（含上个会话的模型错误），
++    // 否则新会话失败原因会引用到旧会话的日志行。
++    this.logs = [];
++    this.spawnErrorValue = null;
+     this.versionCache = this.detectVersion();
+     const port = await this.resolvePort();
+     let proc: ChildProcess;
+@@ -329,6 +351,10 @@ export class OpencodeServer {
+       String(port),
+       '--hostname',
+       this.options.serveHostname!,
++      // T17 修复（2026-09-17 实测）：诊断日志默认写 ~/.local/share/opencode/log/opencode.log
++      // （文件，不是 stderr）→ this.logs 收不到 → recentErrors() 恒空。该参数令其同时写 stderr
++      // （`opencode serve --help`: print logs to stderr），启动 banner（listening on …）仍在 stdout。
++      '--print-logs',
+     ];
+     // --pure = 不加载外部插件。/data/vteam-worker/opencode.json 的 plugin 节（omo）与之互斥：
+     // 带 --pure 时 omo 静默不生效。默认不加（让内置插件生效），需要"纯净基线"时用
+
+=== NEW FILE: worker/src/runtime/serve-log.ts ===
+diff --git a/worker/src/runtime/serve-log.ts b/worker/src/runtime/serve-log.ts
+new file mode 100644
+index 0000000..7377837
+--- /dev/null
++++ b/worker/src/runtime/serve-log.ts
+@@ -0,0 +1,99 @@
++/**
++ * serve 日志捕获/解析（从 opencode-server 拆出，单一职责：日志 ≠ 进程生命周期）。
++ *
++ * 背景（2026-09-17 实测）：opencode serve 默认把诊断日志写
++ * `$XDG_DATA_HOME/opencode/log/opencode.log`（**文件，不是 stderr**），stdout/stderr 只有启动
++ * banner（`listening on ...` 在 stdout）。因此必须靠 spawn 参数 `--print-logs` 把诊断行引到
++ * stderr（进环形缓冲），并以日志文件为**次级**源兜底。
++ *
++ * 本模块只做无状态纯函数：错误行判定、会话归属过滤、文件尾部读取、默认路径推导。
++ */
++
++import * as fs from 'fs';
++import * as os from 'os';
++import * as path from 'path';
++
++/**
++ * serve 日志中的模型调用错误关键词（粗筛）。serve 对部分 APIError（Rate limit exceeded /
++ * Free usage exceeded 等）不透传 message.info.error——worker 靠该关键词感知提前失败。
++ *
++ * ⚠️ 粗筛单独用会产生误报：实测 34,139 行日志中裸 `429` 命中 161 条 **INFO** 行
++ * （`messageID=msg_0a429eb…` 里的数字碰巧命中）。故 `isServeErrorLine` 追加**结构化错误门**。
++ */
++export const SERVE_ERROR_KEYWORDS = /stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i;
++
++/** 结构化错误门之一：opencode 日志级别字段（真实模型错误恒为 ERROR）。 */
++const SERVE_ERROR_LEVEL_RE = /\blevel=ERROR\b/;
++/** 结构化错误门之二：显式错误字段（`error.error="AI_APICallError: …"` 等）。 */
++const SERVE_ERROR_FIELD_RE = /\berror\.(error|name|message|code)=/;
++/** serve 会话归属字段（`session.id=ses_…`）；用于剔除其它会话的历史错误（stale 隔离）。 */
++const SESSION_ID_RE = /session\.id=(\S+)/;
++/** 日志文件尾部读取上限（只读最近 64KB，避免把 100MB+ 日志整体载入内存）。 */
++export const SERVE_LOG_TAIL_BYTES = 64 * 1024;
++
++/**
++ * serve 日志文件的默认路径（次级错误源）：opencode 把诊断日志写
++ * `$XDG_DATA_HOME/opencode/log/opencode.log`（XDG_DATA_HOME 缺省 `~/.local/share`）。
++ * 文件缺失 → 读取静默返回空数组（降级不报错）。
++ */
++export function defaultServeLogFilePath(): string {
++  const xdg = process.env.XDG_DATA_HOME?.trim();
++  const base = xdg && xdg !== '' ? xdg : path.join(os.homedir(), '.local', 'share');
++  return path.join(base, 'opencode', 'log', 'opencode.log');
++}
++
++/**
++ * 判断一行 serve 日志是否为**真正的模型调用错误**：关键词粗筛 + 结构化错误门。
++ * 只靠关键词会误伤正常 INFO 行（见 SERVE_ERROR_KEYWORDS 注释）。
++ */
++export function isServeErrorLine(line: string): boolean {
++  if (!SERVE_ERROR_KEYWORDS.test(line)) {
++    return false;
++  }
++  return SERVE_ERROR_LEVEL_RE.test(line) || SERVE_ERROR_FIELD_RE.test(line);
++}
++
++/** 行是否属于指定会话：无 `session.id=` 的全局行与任何会话相关；指定会话时剔除其它会话行。 */
++export function lineBelongsToSession(line: string, sessionID?: string): boolean {
++  if (!sessionID) {
++    return true;
++  }
++  const match = SESSION_ID_RE.exec(line);
++  return match === null || match[1] === sessionID;
++}
++
++/** 无条件接受（原始日志尾部用：不过滤内容，只按会话归属）。 */
++export function isAnyLine(): boolean {
++  return true;
++}
++
++/**
++ * 读取日志文件尾部若干行（最多 maxBytes 字节）。文件缺失/不可读/为空 → []（静默降级）。
++ * 起始位置非 0 时丢弃首行（可能是被截断的半行）。
++ */
++export function readFileTailLines(filePath: string, maxBytes = SERVE_LOG_TAIL_BYTES): string[] {
++  let fd: number | null = null;
++  try {
++    const stat = fs.statSync(filePath);
++    if (!stat.isFile() || stat.size === 0) {
++      return [];
++    }
++    const start = Math.max(0, stat.size - maxBytes);
++    const length = stat.size - start;
++    const buf = Buffer.alloc(length);
++    fd = fs.openSync(filePath, 'r');
++    fs.readSync(fd, buf, 0, length, start);
++    const lines = buf.toString('utf8').split(/\r?\n/);
++    return start > 0 ? lines.slice(1) : lines;
++  } catch {
++    return [];
++  } finally {
++    if (fd !== null) {
++      try {
++        fs.closeSync(fd);
++      } catch {
++        // 关闭失败不影响结果（只读句柄，进程退出即回收）
++      }
++    }
++  }
++}
+
+=== NEW FILE: worker/src/runtime/port-probe.ts ===
+diff --git a/worker/src/runtime/port-probe.ts b/worker/src/runtime/port-probe.ts
+new file mode 100644
+index 0000000..ee3db58
+--- /dev/null
++++ b/worker/src/runtime/port-probe.ts
+@@ -0,0 +1,48 @@
++/**
++ * 端口探测 + 健康检查 HTTP（从 opencode-server 拆出，单一职责：探活 ≠ 进程生命周期）。
++ * 纯函数，无状态；opencode-server 只负责 spawn/stop/日志缓冲编排。
++ */
++
++import * as http from 'http';
++import * as net from 'net';
++
++/** worker 内部访问 serve 的稳定地址：恒回环（serve 绑定 0.0.0.0 时同容器回环仍可达） */
++const LOOPBACK_HOSTNAME = '127.0.0.1';
++
++/** 用 net.createServer 探测端口是否空闲（bind 成功即空闲，随即关闭）。 */
++export function isPortFree(port: number): Promise<boolean> {
++  return new Promise((resolve) => {
++    const server = net.createServer();
++    server.once('error', () => resolve(false));
++    server.listen(port, LOOPBACK_HOSTNAME, () => {
++      server.close(() => resolve(true));
++    });
++  });
++}
++
++/** 让 OS 分配一个随机空闲端口（bind 0，读回实际端口后关闭）。 */
++export function getRandomFreePort(): Promise<number> {
++  return new Promise((resolve, reject) => {
++    const server = net.createServer();
++    server.once('error', reject);
++    server.listen(0, LOOPBACK_HOSTNAME, () => {
++      const address = server.address();
++      const port = typeof address === 'object' && address !== null ? address.port : 0;
++      server.close(() => resolve(port));
++    });
++  });
++}
++
++/** GET 指定 URL，返回 statusCode；网络错/超时抛错。 */
++export function httpGetStatus(url: string, authHeader?: string): Promise<number> {
++  return new Promise((resolve, reject) => {
++    const headers: Record<string, string> = authHeader ? { Authorization: authHeader } : {};
++    const req = http.get(url, { headers, timeout: 2000 }, (res) => {
++      // 必须消费响应体，否则 keep-alive 连接不释放
++      res.resume();
++      resolve(res.statusCode ?? 0);
++    });
++    req.on('timeout', () => req.destroy(new Error('健康检查请求超时')));
++    req.on('error', reject);
++  });
++}

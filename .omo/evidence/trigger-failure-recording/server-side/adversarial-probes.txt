@@ -1,0 +1,9 @@
+id	type	scope_id	wsid	last_error
+ev_0000021540	trigger.wake.failed	tm_0000000002	s_0000000019	执行失败：[prompt-await] 会话 ses_f51fa013affebIYtaSoMJyXhio 等待首字超时：模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）
+ev_0000021562	trigger.wake.failed	tm_0000000002	s_probe_fr_idem	Rate limit exceeded (first)
+id	status	last_error	skip_reason	wsid
+hks_probe_fr_green	fired	NULL	NULL	s_probe_fr_green
+hks_probe_fr_idem	fired	Rate limit exceeded (first)	Rate limit exceeded (first)	s_probe_fr_idem
+hks_probe_fr_stale	cancelled	NULL	NULL	s_probe_fr_stale
+id	status	last_error	skip_reason
+tmr_probe_fr_idem	fired	Rate limit exceeded (first)	Rate limit exceeded (first)

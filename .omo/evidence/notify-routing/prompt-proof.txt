@@ -1,0 +1,9 @@
+plan has artifact block: false
+plan has 公开与归档: false
+plan has submit_artifact: false
+nonplan has artifact block: true
+nonplan has route-via-main: true
+plan has memory block: false
+nonplan has memory block: true
+plan taught notify_agent: true
+NON_MAIN_AGENT_NOTE=【协作说明】状态流转/托管确认由主Agent操作，有事@主Agent（相关工具 vteam_task_transition / vteam_question_confirm 仅主实例可调，误调返回 403）。定向通知仅可直达主Agent，需触达其他成员时请主Agent中转，成员间直连调用将被拒绝。

@@ -1,0 +1,101 @@
+RUN=RJ20260917LIVE5 (run_start_utc=2026-09-17 09:55:43)
+TEAM=tm_0000000001 MAIN=tmm_0000000002 SUB1=tmm_0000000003 SUB2=tmm_0000000004
+--- PRE-CLEANUP (earlier connectivity probe) ---
+after pre-cleanup: m_0000002240=0 mr_0000000035=0
+--- BASELINE ---
+pending(main->subs)=0 main_loadings=157 sub1_loadings=36 sub2_loadings=63 patrol_fires=6 sessions=9 instances(team)=7
+sessions: main=failed sub1=failed sub2=failed
+PASS: B0 baseline pending clean (drain needs pending==0 to converge) (got=0)
+--- wait all three sessions non-running before P1 ---
+  [wait_idle tmm_0000000002] status=failed waited=0s
+  [wait_idle tmm_0000000003] status=failed waited=0s
+  [wait_idle tmm_0000000004] status=failed waited=0s
+--- P1: main -> SUB1 (answer/process, team-dim) ---
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"messageId\":\"m_0000002242\",\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000003\",\"triggered\":true,\"reason\":\"ok\",\"issueBound\":false}"}]}}
+
+PASS: P1 main->sub dispatches (triggered) (got=true)
+PASS: P1 reason ok (got=ok)
+P1 receipts pending(main)=1 (expect 1)
+--- P2: main -> SUB2 (answer/process, team-dim) ---
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"messageId\":\"m_0000002244\",\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000004\",\"triggered\":true,\"reason\":\"ok\",\"issueBound\":false}"}]}}
+
+PASS: P2 main->sub dispatches (triggered) (got=true)
+PASS: P2 reason ok (got=ok)
+P2 receipts pending(main)=2 (expect 2)
+PASS: P1+P2 main_loadings delta (fan-out targets subs, main NOT woken) (got=0)
+--- P3: SUB1 -> main report answer/end (first; 1 still outstanding; must NOT wake, NO execution turn) ---
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"messageId\":\"m_0000002246\",\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000002\",\"triggered\":false,\"reason\":\"join-pending\",\"hint\":\"进度已记录（消息已落库广播、回执照记）：子 Agent 
+PASS: P3 report suppressed (triggered=false, NO execution dispatch) (got=false)
+PASS: P3 report reason join-pending (got=join-pending)
+PASS: P3 report persisted (messageId non-null = persist+broadcast kept) (contains 'm_')
+PASS: P3 pending (SUB1 receipt acked, SUB2 outstanding) (got=2->1)
+PASS: P3 main_loadings delta (NO execution turn, ledger/ack only) (got=0)
+id	to_instance_id	status
+mr_0000000035	tmm_0000000003	acked
+mr_0000000036	tmm_0000000004	pending
+--- wait main idle before P4 (busy-veto determinism: drain needs idle main) ---
+  [wait_idle tmm_0000000002] status=failed waited=0s
+--- P4: SUB2 -> main report answer/end (last; must wake main EXACTLY ONCE via drain kind:wake) ---
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"messageId\":\"m_0000002248\",\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000002\",\"triggered\":false,\"reason\":\"join-pending\",\"hint\":\"进度已记录（消息已落库广播、回执照记）：子 Agent 
+PASS: P4 report suppressed (triggered=false, NO execution dispatch) (got=false)
+PASS: P4 report reason join-pending (got=join-pending)
+P4 main session status after drain window: running
+PASS: P4 pending (join-all converged) (got=1->0)
+PASS: P4 main_loadings delta +3 = EXACTLY ONE kind:wake drain (got=3)
+id	to_instance_id	status
+mr_0000000035	tmm_0000000003	acked
+mr_0000000036	tmm_0000000004	acked
+--- wait main idle before P5 ---
+  [wait_idle tmm_0000000002] status=running waited=0s
+  [wait_idle tmm_0000000002] status=running waited=10s
+  [wait_idle tmm_0000000002] status=running waited=20s
+  [wait_idle tmm_0000000002] status=running waited=30s
+  [wait_idle tmm_0000000002] status=running waited=40s
+  [wait_idle tmm_0000000002] status=running waited=50s
+  [wait_idle tmm_0000000002] status=running waited=60s
+  [wait_idle tmm_0000000002] status=running waited=70s
+  [wait_idle tmm_0000000002] status=running waited=80s
+  [wait_idle tmm_0000000002] status=running waited=90s
+  [wait_idle tmm_0000000002] status=running waited=100s
+  [wait_idle tmm_0000000002] status=running waited=110s
+  [wait_idle tmm_0000000002] status=failed waited=120s
+--- P5: SUB2 -> main question (must wake main IMMEDIATELY, not counted as done) ---
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"messageId\":\"m_0000002251\",\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000002\",\"triggered\":true,\"reason\":\"ok\",\"issueBound\":false}"}]}}
+
+PASS: P5 question dispatches (triggered) (got=true)
+PASS: P5 pending (question never acked/counted) (got=0->0)
+PASS: P5 main_loadings delta (question execution + immediate kind:wake) (got=6)
+--- PATROL CHECK ---
+PASS: patrol fire_count unchanged (trigger is cancelled) (got=6->6)
+patrol-kind triggers created this run: 0
+--- ADV-D: dedup — identical answer/process report inside 60s collapses to same row ---
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"messageId\":\"m_0000002254\",\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000002\",\"triggered\":false,\"reason\":\"join-pending\",\"hint\":\"进度已记录（消息已落库广播、回执照记）：子 Agent 
+PASS: ADV-D first send join-pending (answer/process, no dispatch) (got=join-pending)
+PASS: ADV-D first send created exactly one row (got=0->1)
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"messageId\":\"m_0000002254\",\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000002\",\"triggered\":false,\"reason\":\"dedup\",\"hint\":\"本次调用未在群聊发布任何消息：triggered:false 不是投递失�
+PASS: ADV-D repeat collapses (reason=dedup) (got=dedup)
+PASS: ADV-D repeat reuses same messageId (got=m_0000002254)
+PASS: ADV-D repeat created zero new rows (got=1->1)
+PASS: ADV-D pending untouched (process never acks) (got=0->0)
+--- ADV-M: mention — content already opening with target mention must not double-@ ---
+main display name for mention check: 项目经理-1
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"messageId\":\"m_0000002255\",\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000002\",\"triggered\":false,\"reason\":\"join-pending\",\"hint\":\"进度已记录（消息已落库广播、回执照记）：子 Agent 
+ADV-M stored text head: @项目经理-1 RJ20260917LIVE5-ADV-M mention探针：正文已带目标mention。【探针指令：这是路由测试�
+PASS: ADV-M stored text keeps single leading mention (no double-@)
+--- RESULT LINES (DB + dispatch evidence) ---
+R1 fan-out: P1+P2 main_loadings delta=0 (expect 0)
+R2 first report: pending 2->1, main_loadings delta=0 (expect 2->1, 0 = NO execution turn)
+R3 last report: pending 1->0, main_loadings delta=3 (expect 1->0, +3 = EXACTLY ONE drain wake; main status=running)
+R4 question: pending 0->0, main_loadings delta=6 (expect 0->0, +6 = immediate wake)
+R5 patrol: fire_count 6->6 (expect unchanged)
+R6 dedup: repeat reason=dedup same_row=yes (expect dedup/yes)
+R7 mention: single leading @项目经理-1, no double-@ (see ADV-M above)
+--- CLEANUP (RUN=RJ20260917LIVE5) ---
+before: probe_messages=7 probe_receipts=7 probe_nudge_triggers=7 sessions=9(baseline 9) instances=7(baseline 7)
+probe message ids: m_0000002242,m_0000002244,m_0000002246,m_0000002248,m_0000002251,m_0000002254,m_0000002255
+CLEANUP RECEIPT: messages 7->0, receipts 7->0, nudge_triggers 7->0, preprobe_msg=1 (all expect 0)
+sessions: baseline 9 -> after-run 9; instances(team): baseline 7 -> after-run 7 (dispatches reuse s_*/tmm_* sessions/instances; expect unchanged)
+PASS: cleanup messages all deleted (got=0)
+PASS: cleanup receipts all deleted (got=0)
+NOTE: realtime_events rows (agent.loading etc.) are the append-only event bus log and are intentionally preserved.
+DONE RUN=RJ20260917LIVE5 FAILS=0

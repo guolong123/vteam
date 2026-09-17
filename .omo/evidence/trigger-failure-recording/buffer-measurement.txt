@@ -1,0 +1,19 @@
+## Buffer-safety measurement (decides DEFAULT_LOG_BUFFER_SIZE)
+
+$ docker compose exec -T worker sh -c 'grep -oE "timestamp=2026-09-17T[0-9]{2}:[0-9]{2}:[0-9]{2}" <log> | sort | uniq -c | sort -rn | head'
+```
+max lines per 1s bucket: 23 (2026-09-16T00:46:24)
+max lines per minute : 425 (2026-09-17T02:59)
+```
+
+Sliding-window analysis over all 34,139 timestamped lines:
+```
+max_lines_in_any_500ms = 31
+max_lines_in_any_1s    = 32
+max_lines_in_any_5s    = 59
+max_lines_in_any_10s   = 101
+```
+
+Poll interval = 500ms. An ERROR line must survive ~31 appended lines.
+Old 200-line buffer = 6.4x headroom (200/31). Raised to 500 = ~16x headroom.
+Decision: enlarge, keep as named constant DEFAULT_LOG_BUFFER_SIZE.

@@ -1,0 +1,51 @@
+### 0. baseline: group-channel count + marker rows (expect 0 markers)
+baseline_c1
+62
+markers
+0
+### A. member->member (tmm_0000000004 -> tmm_0000000005) expect -32003 + ROUTING_VIOLATION
+{"jsonrpc":"2.0","id":11,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION 仅主 Agent（tmm_0000000002）可向其他成员派发；请先通知主 Agent 由其中转"}}
+### A2. count unchanged + zero A-marker rows
+afterA_c1
+62
+markerA
+0
+### B. main->member (tmm_0000000002 -> tmm_0000000005) expect triggered:true
+{"jsonrpc":"2.0","id":12,"result":{"content":[{"type":"text","text":"{\"messageId\":\"m_0000002173\",\"channelId\":\"c_0000000001\",\"targetInstanceId\":\"tmm_0000000005\",\"triggered\":true,\"reason\":\"ok\",\"issueBound\":false}"}]}}
+### B2. one B-marker row present
+id	sender_instance_id	text
+m_0000002173	tmm_0000000002	{"text": "@??-1 nrprobe-20260917-B main->tester wake (probe: no reply needed)", "parts": []}
+### C. setup: probe member + session on null-main team tm_0000000007
+ERROR 1364 (HY000) at line 1: Field 'updated_at' doesn't have a default value
+### C2. null-main team member->member (expect NO 403; dispatch-no-session error ok, message IS created)
+{"jsonrpc":"2.0","id":13,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_FORBIDDEN selfInstanceId（tmm_0000000022）不是该团队（tm_0000000007）的会话成员，禁止冒充"}}
+### C3. C-marker row exists (fail-open proof)
+### D. self-notify (tmm_0000000004 -> self) expect -32003
+{"jsonrpc":"2.0","id":14,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION 不能通知自己；需要协作请通知主 Agent 由其中转"}}
+### E. new rows since probe start (audit for stray agent replies)
+id	sender_instance_id	text
+m_0000002173	tmm_0000000002	{"text": "@??-1 nrprobe-20260917-B main->tester wake (probe: no reply needed)", "parts": [
+m_0000000187	tmm_0000000004	{"text": "@user @????-1 ??????????A ??????? / B ?? GITHUB_TOKEN ? SSH key???????????????\\n
+m_0000000186	tmm_0000000002	{"text": "@???-1 ????????????????????????????/???????????????\\n\\n???????? @user?? m_000000
+m_0000000182	tmm_0000000004	{"text": "@????-1 ???????push ??????\\n\\n- ????????`git_push` ??????????\\n- ??????`????????
+m_0000000179	tmm_0000000002	{"text": "?????????????@user ??/? PR ??????????????????\\n\\n**??**??????????????????**?????
+m_0000000176	tmm_0000000004	{"text": "@user @????-1 ????**???????????????????????????/??**?push ???????\\n\\n???????? + 
+### F. CLEANUP: delete probe messages + probe member/session, prove 0 remain
+markers_left
+0
+probe_rows_left
+0
+probe_member_left
+0
+final_c1
+62
+### DONE
+
+### C-retry (session with updated_at) + C2 fail-open result + C3 row
+session s_probe_nr1 created (idle); member tmm_probe_nr2 created
+C2 response: {"messageId":"m_0000002176","channelId":"c_0000000015","targetInstanceId":"tmm_probe_nr2","triggered":true,"reason":"ok","issueBound":false} (NO 403 -> fail-open proven)
+C3 row: m_0000002176 tmm_0000000022 c_0000000015 present
+side effects observed: dispatch auto-created session s_0000000021 + task_group_instances ti_0000000029/30 for probe target; probe-target turn posted m_0000002178; tester B-wake trace m_0000002175 (c_0000000006); 5 realtime_events (ev_0000020606/0611/0612/0616/0621)
+cleanup: messages m_0000002175/76/78 + marker LIKE + 5 events + ti_29/30 + s_0000000021 + s_probe_nr1 + tmm_probe_nr2 deleted
+final: sess 0 / member 0 / tgi 0 / markers 0 / c_0000000001=62 (baseline) / c_0000000015=0 / tm_0000000007 members=1
+note: tools/list strips zod .describe (all fields bare types, pre-existing convention) -> field-description change verified at source level; tool description carries routing rule live (DESC_ROUTING=True)

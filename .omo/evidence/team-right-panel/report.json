@@ -1,0 +1,179 @@
+{
+  "results": [
+    {
+      "name": "login admin",
+      "ok": true,
+      "detail": "http://localhost:13001/teams"
+    },
+    {
+      "name": "session hard-reload + task-panel",
+      "ok": true
+    },
+    {
+      "name": "trigger rows rendered",
+      "ok": true,
+      "detail": "3 rows"
+    },
+    {
+      "name": "no raw-English-kind titles",
+      "ok": true,
+      "detail": "3 titles checked"
+    },
+    {
+      "name": "no undefined/null rendered",
+      "ok": true
+    },
+    {
+      "name": "scope resolved (live DB)",
+      "ok": true,
+      "detail": "3/3 — e.g. 电网信号告警优化团队"
+    },
+    {
+      "name": "owner resolved (live DB)",
+      "ok": true,
+      "detail": "2/3 — e.g. 计划员-1（plan）"
+    },
+    {
+      "name": "screenshot triggers-tab",
+      "ok": true,
+      "detail": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/team-right-panel/triggers-tab.png"
+    },
+    {
+      "name": "config fields rendered",
+      "ok": true,
+      "detail": "标题/优先级/状态/所属团队/创建人/创建时间/计划模式"
+    },
+    {
+      "name": "no dangling empty labels",
+      "ok": true
+    },
+    {
+      "name": "config labels include 标题+状态+创建时间",
+      "ok": true,
+      "detail": "标题,优先级,状态,所属团队,创建人,创建时间,计划模式"
+    },
+    {
+      "name": "screenshot config-tab",
+      "ok": true,
+      "detail": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/team-right-panel/config-tab.png"
+    },
+    {
+      "name": "zero JS errors",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "fallback: empty display → 定时 (kind label)",
+      "ok": true,
+      "detail": "定时"
+    },
+    {
+      "name": "fallback: missing display → 空闲扫描",
+      "ok": true,
+      "detail": "空闲扫描"
+    },
+    {
+      "name": "fallback: no undefined anywhere in probe row text",
+      "ok": true
+    },
+    {
+      "name": "owner falls back to raw instance id when display absent",
+      "ok": true,
+      "detail": "tmm_probe"
+    },
+    {
+      "name": "screenshot adversarial",
+      "ok": true,
+      "detail": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/team-right-panel/adversarial-malformed-display.png"
+    }
+  ],
+  "rowData": [
+    {
+      "id": "tmr_0000000148",
+      "kind": "receipt_nudge",
+      "status": "fired",
+      "source": "system",
+      "title": "@计划员-1 【阻塞项·S10 计划文件补附】巡检发现 S10 计划 v1.0 回执（m_0000002147）无消息附件且任务 doclib 为空，评审角色无法读取计划文件。请确认计划文件落盘路径并",
+      "scope": "电网信号告警优化团队",
+      "owner": "计划员-1（plan）",
+      "task": "T16 docs layout QA task"
+    },
+    {
+      "id": "tmr_0000000142",
+      "kind": "receipt_nudge",
+      "status": "fired",
+      "source": "system",
+      "title": "@计划员-1 请为任务 t_0000000007 起草新一轮测试执行计划，响应 skill(plan-creation)。 【admin 需求原文】 现在进入新一轮测试：① 跑整月30天的数据写入；",
+      "scope": "电网信号告警优化团队",
+      "owner": "计划员-1（plan）",
+      "task": "T16 docs layout QA task"
+    },
+    {
+      "id": "tmr_0000000140",
+      "kind": "progression_patrol",
+      "status": "cancelled",
+      "source": "system",
+      "title": "任务《T16 docs layout QA task》巡检",
+      "scope": "电网信号告警优化团队",
+      "owner": null,
+      "task": "T16 docs layout QA task"
+    }
+  ],
+  "configRows": [
+    {
+      "label": "标题",
+      "value": "T16 docs layout QA task"
+    },
+    {
+      "label": "优先级",
+      "value": "中"
+    },
+    {
+      "label": "状态",
+      "value": "进行中"
+    },
+    {
+      "label": "所属团队",
+      "value": "电网信号告警优化团队"
+    },
+    {
+      "label": "创建人",
+      "value": "u_seed_admin"
+    },
+    {
+      "label": "创建时间",
+      "value": "2026/9/17 07:42:38"
+    },
+    {
+      "label": "计划模式",
+      "value": "已关闭（直接执行）"
+    }
+  ],
+  "probeRows": [
+    {
+      "id": "tr_probe_empty",
+      "kind": "hook_fire",
+      "title": "定时",
+      "scope": "全局",
+      "owner": null,
+      "meta": "2026/9/17 20:41:30 · Agent · 触发 0 次 · 类型 定时 · 范围 全局"
+    },
+    {
+      "id": "tr_probe_missing",
+      "kind": "session_idle_scan",
+      "title": "空闲扫描",
+      "scope": "全局",
+      "owner": "tmm_probe",
+      "meta": "— · 系统 · 触发 1 次 · 类型 空闲扫描 · 范围 全局 · 归属 tmm_probe"
+    },
+    {
+      "id": "tr_probe_unknown",
+      "kind": "brand_new_kind",
+      "title": "brand_new_kind",
+      "scope": "全局",
+      "owner": null,
+      "meta": "— · 系统 · 触发 2 次 · 类型 brand_new_kind · 范围 全局"
+    }
+  ],
+  "jsErrors": []
+}

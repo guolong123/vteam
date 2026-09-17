@@ -1,0 +1,24 @@
+## Production predicate vs REAL captured lines (2026-09-17)
+
+Exact production `onServeError` from worker/src/exec/exec-server.ts, evaluated against
+verbatim lines from the container's opencode.log:
+
+```
+PASS :: REAL rate limit line: isServeErrorLine          => true  (want true)
+PASS :: REAL rate limit line: production onServeError   => true  (want true)
+PASS :: REAL weekly limit line: isServeErrorLine        => true  (want true)
+PASS :: REAL INFO 429 false-positive: isServeErrorLine  => false (want false)
+PASS :: REAL INFO 429 false-positive: onServeError      => false (want false)
+PASS :: startup INFO line: isServeErrorLine             => false (want false)
+PASS :: startup INFO line: production onServeError      => false (want false)
+PREDICATE_FAILURES=0
+```
+
+Real rate-limit line (verbatim):
+timestamp=2026-09-17T12:05:08.870Z level=ERROR run=4ef4852a message="stream error" providerID=opencode modelID=big-pickle session.id=ses_f51d18a48ffeXvmS5DYhwQz1m6 small=false agent=vteam-tester mode=primary error.error="AI_APICallError: Rate limit exceeded. Please try again later."
+
+Real false-positive INFO line (verbatim, bare 429 from messageID — one of 161 measured):
+timestamp=2026-09-15T08:23:25.825Z level=INFO run=57ba8b84 message=process session.id=ses_other messageID=msg_0a429eb46001rGylqWhDPAJKL6
+
+This proves the ORIGINAL failing case (Rate limit exceeded) is now detected by the production
+predicate, while the newly-introduced false-positive risk (from populating the buffer) is gated out.

@@ -1,0 +1,41 @@
+ M .omo/boulder.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/start-work/ledger.jsonl
+ M server/prisma/schema.prisma
+ M server/prisma/seed.ts
+ M server/src/chat/message-receipts.service.ts
+ M server/src/chat/worker-dispatcher.spec.ts
+ M server/src/chat/worker-dispatcher.ts
+ M server/src/common/constants/agent.constants.spec.ts
+ M server/src/common/constants/agent.constants.ts
+ M server/src/common/constants/trigger.constants.ts
+ M server/src/execution-policies/__snapshots__/agent-policies.custom-agents.spec.ts.snap
+ M server/src/execution-policies/agent-policies.matrix.spec.ts
+ M server/src/platform-mcp/platform-mcp.constants.ts
+ M server/src/platform-mcp/platform-mcp.service.gate.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.plan-hash.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.receipt-nudge.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.review-dispatch.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.review-round-open.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M server/src/tasks/task-progression.scheduler.spec.ts
+ M server/src/tasks/task-progression.scheduler.ts
+ M server/src/timers/triggers.service.spec.ts
+ M server/src/timers/triggers.service.ts
+ M web/app/(main)/system/triggers/page.tsx
+ M web/src/components/teams/TeamRightPanel.tsx
+ M worker/src/resources/role-guard-plugin.spec.ts
+ M worker/src/resources/role-guard-plugin.ts
+ M worker/src/role-guard/policy.spec.ts
+ M worker/src/role-guard/policy.ts
+?? .omo/evidence/notify-dedup/
+?? .omo/evidence/notify-routing/
+?? .omo/evidence/reply-join/
+?? .omo/notepads/notify-dedup/
+?? .omo/notepads/notify-routing/
+?? .omo/notepads/reply-join/
+?? .omo/notepads/triggers-display/
+?? server/prisma/migrations/20260919000005_reply_join_receipt_idx/
+?? server/src/platform-mcp/platform-mcp.service.reply-join.spec.ts

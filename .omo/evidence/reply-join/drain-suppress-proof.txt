@@ -1,0 +1,55 @@
+reply-join drain-suppress proof (2026-09-17)
+============================================
+Fix: sub→main `answer` reports no longer start an execution turn on the main.
+The main is woken by the DRAIN (or an explicit question/help interrupt), not by
+each sub-agent report. The drain busy-veto is untouched (it was correct); the fix
+stops arming the veto against ourselves.
+
+Contract change (notifyAgent):
+- caller != main && target == main && type == 'answer' (any stage, any kind):
+  message persisted + broadcast, receipt ledgered (unchanged), ack/drain
+  bookkeeping unchanged, NO dispatchAgentMention execution turn,
+  returns { triggered:false, reason:'join-pending', hint:JOIN_PENDING_HINT }.
+- question/help: unchanged (execution dispatch + immediate interrupt wake).
+- main→sub: unchanged (dispatch + ledger receipts; the join counts these).
+- team without main: fail-open to old behavior (normal dispatch) + warn.
+
+Files:
+- server/src/platform-mcp/platform-mcp.service.ts
+  (routing-gate mainId hoisted to routingMainId, reused pre-dispatch; second
+  team.findUnique in matrix region removed; DispatchReason += 'join-pending')
+- server/src/platform-mcp/platform-mcp.tools.ts
+  (notify_agent description + type/stage describes state the suppression)
+- server/src/platform-mcp/platform-mcp.service.reply-join.spec.ts
+  (12 → 14 tests; answer assertions moved to triggered:false/join-pending)
+- server/src/platform-mcp/platform-mcp.service.spec.ts
+  (ONE assertion updated to the new contract: 普通成员→主成员 answer now
+  join-pending with no execution dispatch; routing-gate pass + persistence kept)
+
+----- tsc --noEmit -----
+tsc_exit=0
+(no output = clean)
+
+----- reply-join spec (14/14) -----
+Test Suites: 1 passed, 1 total
+Tests:       14 passed, 14 total
+jest_exit=0
+(answer+process suppress / answer+end suppress+drain-wake-once /
+ question exec+interrupt / help exec+interrupt /
+ adversarial kind=execution still suppressed / concurrent ends one wake /
+ double-ack idempotent / busy-veto / pending>0 no-wake /
+ sub1 pending=1 no-wake / sub2 pending=0 one wake /
+ ack direction MAIN->reporter / main->sub dispatches normally /
+ no-main fail-open dispatches normally + warns)
+
+----- platform-mcp dir (10/10 suites, 377 tests) -----
+Test Suites: 10 passed, 10 total
+Tests:       377 passed, 377 total
+
+----- full suite -----
+Run 1: 123/124 suites, 2871/2872 (1 fail: swagger-mcp permission test,
+  `read ECONNRESET` — known transient network flake, unrelated to this change;
+  passes in isolation 3/3 suites, 34/34 tests).
+Run 2 (rerun, no code change): 124 passed, 124 total / 2872 passed, 2872 total.
+Baseline was 124/2866; delta +6 tests net new coverage, zero regressions.
+Raw outputs: /tmp/tsc-out.txt, /tmp/join-spec-out.txt (ephemeral).

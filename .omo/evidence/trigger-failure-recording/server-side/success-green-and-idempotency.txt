@@ -1,0 +1,6 @@
+probe	id	status	last_error
+green	hks_probe_fr_green	fired	NULL
+idem	hks_probe_fr_idem	fired	Rate limit exceeded (first)
+stale	hks_probe_fr_stale	cancelled	NULL
+idem_events
+1

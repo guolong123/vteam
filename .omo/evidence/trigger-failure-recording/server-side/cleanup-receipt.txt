@@ -1,0 +1,31 @@
+id	kind	status	payload
+tmr_0000000228	session_idle_scan	cancelled	{"scope": "team:tm_0000000002", "reason": "first-token", "agentId": "a_developer", "worker
+tmr_0000000229	session_idle_scan	cancelled	{"scope": "team:tm_0000000002", "reason": "first-token", "agentId": "a_plan", "workerId": 
+tmr_0000000230	session_idle_scan	cancelled	{"scope": "team:tm_0000000002", "reason": "first-token", "agentId": "a_project_manager", "
+triggers_total
+93
+probe_hooks
+0
+probe_triggers
+0
+probe_sessions
+0
+id	type	sid	wsid
+ev_0000019957	session.updated	s_probe_todo7_dual	NULL
+ev_0000020103	agent.error	s_probe_todo9	NULL
+ev_0000021549	session.updated	s_probe_fr_green	NULL
+ev_0000021560	agent.error	s_probe_fr_idem	NULL
+ev_0000021561	agent.error	s_probe_fr_idem	NULL
+ev_0000021562	trigger.wake.failed	NULL	s_probe_fr_idem
+ev_0000021563	agent.error	s_probe_fr_stale	NULL
+ev_0000021565	agent.error	s_does_not_exist_zzz	NULL
+my_probe_events_left
+0
+hooks_total
+1
+sessions_total
+9
+rt_total
+21392
+triggers_total
+93

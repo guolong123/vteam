@@ -1,0 +1,10 @@
+id	status	fire_count	last_error	skip_reason	target
+hks_probe_tfr1	fired	1	会话执行失败（session.updated status=failed）	会话执行失败（session.updated status=failed）	{"teamId": "tm_0000000002", "channelId": "c_0000000007", "wakeSessionId": "s_0000000017", "targetInstanceId": "tmm_0000000009"}
+id	status	fire_count	last_error	skip_reason
+tmr_probe_tfr1	fired	1	会话执行失败（session.updated status=failed）	会话执行失败（session.updated status=failed）
+id	type	scope_id	payload	created_at
+ev_0000021530	agent.error	NULL	{"error": "执行失败：[prompt-await] 会话 ses_f51d19165ffe0nKjEcuWA7P9XK 等待首字超时：模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）", "agentId": "a_developer", "workerId": "w_compose_worker", "errorType": "model_error", "sessionId": "s_0000000017", "instanceId": "tmm_0000000009"}	2026-09-17 13:49:12.287
+ev_0000021531	session.updated	NULL	{"status": "failed", "workerId": "w_compose_worker", "sessionId": "s_0000000017"}	2026-09-17 13:49:12.355
+ev_0000021532	trigger.wake.failed	tm_0000000002	{"kind": "time", "hookId": "hks_probe_tfr1", "status": "fired", "scopeId": "tm_0000000002", "lastError": "会话执行失败（session.updated status=failed）", "scopeType": "team", "skipReason": "会话执行失败（session.updated status=failed）", "wakeSessionId": "s_0000000017", "ownerInstanceId": "tmm_0000000008"}	2026-09-17 13:49:12.385
+id	status
+s_0000000017	failed

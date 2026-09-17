@@ -1,0 +1,7 @@
+SESSION=ses_f505c92e9ffeOK2nOJ3FMbswG9
+FAILED_FAST_AFTER_MS=575 (baseline was 120000)
+IS_CompletionTimeoutError=true
+--- RECORDED REASON (AFTER FIX, verbatim) ---
+[prompt-await] 会话 ses_f505c92e9ffeOK2nOJ3FMbswG9 等待首字超时：模型调用报错：Model not found: opencode/no-such-model-xyz. Did you mean: gpt-5-nano, gpt-5.4-nano?
+--- serveErrorText ---
+Model not found: opencode/no-such-model-xyz. Did you mean: gpt-5-nano, gpt-5.4-nano?

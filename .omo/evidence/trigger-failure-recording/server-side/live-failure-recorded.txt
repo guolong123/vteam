@@ -1,0 +1,45 @@
+*************************** 1. row ***************************
+          id: hks_probe_tfr2
+      status: fired
+  fire_count: 1
+  last_error: 执行失败：[prompt-await] 会话 ses_f51fa013affebIYtaSoMJyXhio 等待首字超时：模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）
+ skip_reason: 执行失败：[prompt-await] 会话 ses_f51fa013affebIYtaSoMJyXhio 等待首字超时：模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）
+      target: {"teamId": "tm_0000000002", "channelId": "c_0000000007", "wakeSessionId": "s_0000000019", "targetInstanceId": "tmm_0000000011"}
+root_task_id: NULL
+*************************** 1. row ***************************
+         id: tmr_probe_tfr2
+       kind: hook_fire
+     status: fired
+ fire_count: 1
+ last_error: 执行失败：[prompt-await] 会话 ses_f51fa013affebIYtaSoMJyXhio 等待首字超时：模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）
+skip_reason: 执行失败：[prompt-await] 会话 ses_f51fa013affebIYtaSoMJyXhio 等待首字超时：模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）
+*************************** 1. row ***************************
+        id: ev_0000021535
+      type: session.updated
+scope_type: global
+  scope_id: NULL
+   payload: {"status": "running", "workerId": "w_compose_worker", "sessionId": "s_0000000019"}
+created_at: 2026-09-17 13:53:07.240
+*************************** 2. row ***************************
+        id: ev_0000021538
+      type: agent.error
+scope_type: global
+  scope_id: NULL
+   payload: {"error": "执行失败：[prompt-await] 会话 ses_f51fa013affebIYtaSoMJyXhio 等待首字超时：模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）", "agentId": "a_plan", "workerId": "w_compose_worker", "errorType": "model_error", "sessionId": "s_0000000019", "instanceId": "tmm_0000000011"}
+created_at: 2026-09-17 13:55:07.949
+*************************** 3. row ***************************
+        id: ev_0000021539
+      type: session.updated
+scope_type: global
+  scope_id: NULL
+   payload: {"status": "failed", "workerId": "w_compose_worker", "sessionId": "s_0000000019"}
+created_at: 2026-09-17 13:55:08.000
+*************************** 4. row ***************************
+        id: ev_0000021540
+      type: trigger.wake.failed
+scope_type: team
+  scope_id: tm_0000000002
+   payload: {"kind": "time", "hookId": "hks_probe_tfr2", "status": "fired", "scopeId": "tm_0000000002", "lastError": "执行失败：[prompt-await] 会话 ses_f51fa013affebIYtaSoMJyXhio 等待首字超时：模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）", "scopeType": "team", "skipReason": "执行失败：[prompt-await] 会话 ses_f51fa013affebIYtaSoMJyXhio 等待首字超时：模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）", "wakeSessionId": "s_0000000019", "ownerInstanceId": "tmm_0000000008"}
+created_at: 2026-09-17 13:55:08.002
+id	status
+s_0000000019	failed
