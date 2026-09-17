@@ -13,7 +13,7 @@ import {
   HOOK_STATUS,
   HOOK_WAKE_TEXT_MAX,
 } from './hook.constants';
-import { HookService, RegisterHookInput } from './hook.service';
+import { HookService, parseHookTarget, RegisterHookInput } from './hook.service';
 
 describe('hook.constants（dedup/前缀/唤醒词组装）', () => {
   it('fire dedup 形状 hook_fire:hook:<hookId>（todo-3 可回查）', () => {
@@ -36,6 +36,7 @@ describe('HookService（agent-hook 域，todo-11）', () => {
   let prisma: {
     hook: {
       findUnique: jest.Mock;
+      findFirst: jest.Mock;
       findMany: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
@@ -46,6 +47,7 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       findMany: jest.Mock;
       create: jest.Mock;
       delete: jest.Mock;
+      updateMany: jest.Mock;
     };
     task: { findUnique: jest.Mock };
     teamMember: { findUnique: jest.Mock };
@@ -139,6 +141,7 @@ describe('HookService（agent-hook 域，todo-11）', () => {
     prisma = {
       hook: {
         findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
         findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn(),
         update: jest.fn(async ({ data }: { data: unknown }) => data),
@@ -149,6 +152,7 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       findMany: jest.fn().mockResolvedValue([]),
       create: jest.fn(),
       delete: jest.fn(),
+      updateMany: jest.fn(async () => ({ count: 0 })),
     },
       task: { findUnique: jest.fn() },
       teamMember: { findUnique: jest.fn() },
@@ -1248,6 +1252,170 @@ describe('HookService（agent-hook 域，todo-11）', () => {
         data: Record<string, unknown>;
       };
       expect(last.data['status']).toBe(HOOK_STATUS.EXPIRED);
+    });
+  });
+
+  describe('wake 失败记录（wakeSessionId 回写 + recordWakeFailure 认领）', () => {
+    const fireCtx = (hookId: string) => ({
+      id: 'tmr_0000000001',
+      kind: 'hook_fire',
+      payload: { hookId },
+    });
+
+    it('dispatchAgentMention 返回会话主键 → 回写 target.wakeSessionId（保留既有键）', async () => {
+      prisma.hook.findUnique.mockResolvedValue(hookRow());
+      prisma.hook.update.mockResolvedValue(hookRow());
+      mockTargetOk();
+      dispatcher.dispatchAgentMention.mockResolvedValue('s_0000000018');
+
+      await svc.handleHookFire(fireCtx('hks_0000000001'));
+
+      const targetWrite = prisma.hook.update.mock.calls.find(
+        ([args]: [{ data: Record<string, unknown> }]) =>
+          'target' in args.data,
+      );
+      expect(targetWrite).toBeTruthy();
+      expect(
+        (targetWrite as unknown as [{ data: { target: Record<string, unknown> } }])[0]
+          .data.target,
+      ).toEqual({
+        taskId: 't_1',
+        teamId: 'tm_1',
+        channelId: 'c_1',
+        targetInstanceId: 'tmm_1',
+        wakeSessionId: 's_0000000018',
+      });
+    });
+
+    it('分派返回缺失（旧实现/异常路径）→ 不写 target（fired 照落）', async () => {
+      prisma.hook.findUnique.mockResolvedValue(hookRow());
+      prisma.hook.update.mockResolvedValue(hookRow());
+      mockTargetOk();
+      dispatcher.dispatchAgentMention.mockResolvedValue(undefined);
+
+      const out = await svc.handleHookFire(fireCtx('hks_0000000001'));
+
+      expect(out).toEqual({ done: true });
+      const targetWrite = prisma.hook.update.mock.calls.find(
+        ([args]: [{ data: Record<string, unknown> }]) =>
+          'target' in args.data,
+      );
+      expect(targetWrite).toBeUndefined();
+      expect(prisma.hook.update).toHaveBeenCalledWith({
+        where: { id: 'hks_0000000001' },
+        data: { status: HOOK_STATUS.FIRED, fireCount: { increment: 1 } },
+      });
+    });
+
+    it('parseHookTarget 往返：wakeSessionId 生存 + 非法键/存量行安全降级', () => {
+      const parsed = parseHookTarget({
+        taskId: 't_1',
+        teamId: 'tm_1',
+        channelId: 'c_1',
+        targetInstanceId: 'tmm_1',
+        wakeSessionId: 's_1',
+        unknownKey: 'ignored',
+      });
+      expect(parsed).toEqual({
+        taskId: 't_1',
+        teamId: 'tm_1',
+        channelId: 'c_1',
+        targetInstanceId: 'tmm_1',
+        wakeSessionId: 's_1',
+      });
+      expect(parseHookTarget({ channelId: 'c_1', targetInstanceId: 't' }))
+        .toEqual({
+          taskId: null,
+          teamId: null,
+          channelId: 'c_1',
+          targetInstanceId: 't',
+          wakeSessionId: null,
+        });
+      expect(
+        parseHookTarget({
+          channelId: 'c_1',
+          targetInstanceId: 't',
+          wakeSessionId: 42,
+        })?.wakeSessionId,
+      ).toBeNull();
+      expect(parseHookTarget(null)).toBeNull();
+    });
+
+    it('recordWakeFailure：命中 fired hook + wakeSessionId → 记 hook/trigger/事件', async () => {
+      prisma.hook.findFirst.mockResolvedValue(
+        hookRow({ status: HOOK_STATUS.FIRED }),
+      );
+      prisma.hook.updateMany.mockResolvedValue({ count: 1 });
+      prisma.trigger.updateMany.mockResolvedValue({ count: 1 });
+
+      const ok = await svc.recordWakeFailure({
+        sessionId: 's_0000000018',
+        reason: 'Rate limit exceeded',
+      });
+
+      expect(ok).toBe(true);
+      expect(prisma.hook.findFirst).toHaveBeenCalledWith({
+        where: {
+          status: HOOK_STATUS.FIRED,
+          target: { path: '$.wakeSessionId', equals: 's_0000000018' },
+        },
+      });
+      expect(prisma.hook.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 'hks_0000000001',
+          status: HOOK_STATUS.FIRED,
+          lastError: null,
+        },
+        data: { lastError: 'Rate limit exceeded', skipReason: 'Rate limit exceeded' },
+      });
+      expect(prisma.trigger.updateMany).toHaveBeenCalledWith({
+        where: { dedupKey: buildHookFireDedupKey('hks_0000000001') },
+        data: { lastError: 'Rate limit exceeded', skipReason: 'Rate limit exceeded' },
+      });
+      expect(realtime.emit).toHaveBeenCalledWith(
+        'trigger.wake.failed',
+        expect.objectContaining({
+          hookId: 'hks_0000000001',
+          wakeSessionId: 's_0000000018',
+          status: HOOK_STATUS.FIRED,
+        }),
+        { type: 'team', id: 'tm_1' },
+      );
+    });
+
+    it('recordWakeFailure：查无 hook → false，零写库零事件', async () => {
+      prisma.hook.findFirst.mockResolvedValue(null);
+
+      const ok = await svc.recordWakeFailure({
+        sessionId: 's_rotated',
+        reason: 'x',
+      });
+
+      expect(ok).toBe(false);
+      expect(prisma.hook.updateMany).not.toHaveBeenCalled();
+      expect(prisma.trigger.updateMany).not.toHaveBeenCalled();
+      expect(realtime.emit).not.toHaveBeenCalled();
+    });
+
+    it('recordWakeFailure：重复事件（认领 count=0）→ false，不写 trigger/事件', async () => {
+      prisma.hook.findFirst.mockResolvedValue(
+        hookRow({ status: HOOK_STATUS.FIRED }),
+      );
+      prisma.hook.updateMany.mockResolvedValue({ count: 0 });
+
+      const ok = await svc.recordWakeFailure({ sessionId: 's_1', reason: 'x' });
+
+      expect(ok).toBe(false);
+      expect(prisma.trigger.updateMany).not.toHaveBeenCalled();
+      expect(realtime.emit).not.toHaveBeenCalled();
+    });
+
+    it('recordWakeFailure：DB 抛错 → false（永不抛，fired 不回滚）', async () => {
+      prisma.hook.findFirst.mockRejectedValue(new Error('db down'));
+
+      await expect(
+        svc.recordWakeFailure({ sessionId: 's_1', reason: 'x' }),
+      ).resolves.toBe(false);
     });
   });
 });

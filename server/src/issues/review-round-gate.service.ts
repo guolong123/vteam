@@ -54,7 +54,7 @@ export interface ConvergenceDispatchInput {
 
 /** 收敛通知器（生产实现为 WorkerDispatcher，结构兼容即可，不直连 ChatModule）。 */
 export interface ConvergenceNotifier {
-  dispatchAgentMention(input: ConvergenceDispatchInput): Promise<void>;
+  dispatchAgentMention(input: ConvergenceDispatchInput): Promise<string | void>;
 }
 
 /** 通知三元组：频道 + 计划员 + PM（收敛自动通知计划员并抄 PM）。 */

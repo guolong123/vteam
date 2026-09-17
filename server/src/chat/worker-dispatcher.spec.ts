@@ -1915,7 +1915,7 @@ describe('WorkerDispatcher', () => {
       });
     });
 
-    it('契约：内部返回保持 void（triggered 只在 notifyAgent 层组装）+ 可选 issueId 透传不破坏既有调用', async () => {
+    it('契约：返回被分派会话主键（wake 失败记录关联用；其余调用方忽略）+ 可选 issueId 透传不破坏既有调用', async () => {
       (sessionLifecycle as any).ensureTeamSession = jest
         .fn()
         .mockResolvedValue({
@@ -1934,7 +1934,7 @@ describe('WorkerDispatcher', () => {
 
       const ret = await d.dispatchAgentMention(withIssue);
 
-      expect(ret).toBeUndefined();
+      expect(ret).toBe('s_tester');
       expect(dispatchSpy).toHaveBeenCalledTimes(1);
     });
 

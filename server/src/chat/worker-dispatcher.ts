@@ -1359,7 +1359,7 @@ export class WorkerDispatcher
      * notifyAgent 层不透传本字段（各层以自有输入独立执法）。
      */
     planHash?: string | null;
-  }): Promise<void> {
+  }): Promise<string> {
     let teamId: string | null = null;
     let taskIdForDispatch: string | null = null;
     let taskStatusForDispatch: string | null = null;
@@ -1425,6 +1425,10 @@ export class WorkerDispatcher
         },
       ],
     });
+    // 返回被分派的目标会话主键（trigger-unification wake 失败记录）：
+    // HookService 落 hook.target.wakeSessionId 以关联后续 agent.error /
+    // session.updated(failed)；其余调用方忽略返回值，向后兼容。
+    return ensured.id;
   }
 
   /** 目标实例是否为计划员（agentId=PLAN_AGENT_ID，角色身份判定）：是则跳过计划门禁；查错/查无即不豁免。 */

@@ -167,6 +167,15 @@ export const HOOK_POLL_DEDUP_KEY = buildTriggerDedupKey(
 );
 
 /**
+ * wake 执行失败事件类型（realtime_events 落库 + 广播）。
+ *
+ * 刻意不进 EVENT_TYPES 白名单（与 `trigger.reconcile` 同款：新事件不 churn
+ * 事件表契约与既有长度断言）。语义：hook 已 `fired`（分派被接受）但被唤醒的
+ * 会话随后 `agent.error` —— 记录真实下游原因，不回滚 `fired` 状态。
+ */
+export const TRIGGER_WAKE_FAILED_EVENT_TYPE = 'trigger.wake.failed';
+
+/**
  * 组装 hook 注册幂等键：`hook:<scope>:<id>`（如 `hook:team:tm_1:wake-x`）。
  * 调用方（todo-12 `hook_register`）显式传入，重复注册幂等直返既有行。
  */

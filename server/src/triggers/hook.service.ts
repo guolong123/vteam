@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit, Optional, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import { IdGeneratorService } from '../common/id-generator';
 import { EVENT_TYPES } from '../common/constants/event.constants';
 import {
@@ -45,6 +46,7 @@ import {
   HOOK_TASK_WAKE_BUDGET_ENV,
   HOOK_WAKE_SIMILAR_MIN_LEN,
   HOOK_WAKE_TEXT_MAX,
+  TRIGGER_WAKE_FAILED_EVENT_TYPE,
   isHookKind,
   resolveHookCount,
   resolveHookMs,
@@ -105,6 +107,12 @@ export interface HookTarget {
   teamId?: string | null;
   channelId: string;
   targetInstanceId: string;
+  /**
+   * 本次唤醒分派落入的会话主键（fire/poll 成功分派后回写；wake 失败记录
+   * 据此把 `agent.error`/`session.updated(failed)` 关联回本 hook）。
+   * 存量行无此键（parseHookTarget 缺省 null，向后兼容）。
+   */
+  wakeSessionId?: string | null;
 }
 
 /**
@@ -576,8 +584,9 @@ export class HookService implements OnModuleInit {
       }
       return { rescheduleAt: new Date(now.getTime() + HOOK_BUSY_RETRY_MS_DEFAULT) };
     }
+    let wakeSessionId: string | undefined;
     try {
-      await this.dispatchWake(hook, target);
+      wakeSessionId = await this.dispatchWake(hook, target);
     } catch (err) {
       const reason = `wake 分派失败（留 pending 待下轮）：${describeHookError(err)}`;
       // 分派失败走同一重试梯（busyRetries 共用计数，满 N 次同样改判 expired）。
@@ -597,7 +606,7 @@ export class HookService implements OnModuleInit {
       }
       return { rescheduleAt: new Date(now.getTime() + HOOK_BUSY_RETRY_MS_DEFAULT) };
     }
-    await this.markFired(hook.id);
+    await this.markFired(hook.id, wakeSessionId);
     return { done: true };
   }
 
@@ -683,8 +692,9 @@ export class HookService implements OnModuleInit {
         }
         continue;
       }
+      let wakeSessionId: string | undefined;
       try {
-        await this.dispatchWake(hook, target);
+        wakeSessionId = await this.dispatchWake(hook, target);
       } catch (err) {
         await this.prisma.hook.update({
           where: { id: hook.id },
@@ -697,7 +707,7 @@ export class HookService implements OnModuleInit {
         });
         continue;
       }
-      await this.markFired(hook.id);
+      await this.markFired(hook.id, wakeSessionId);
       wakes += 1;
     }
     return { done: true };
@@ -854,23 +864,25 @@ export class HookService implements OnModuleInit {
     return null;
   }
 
-  /** 唤醒分派（`kind: 'wake'` 豁免计划门禁/节流/回执台账，见 worker-dispatcher）。 */
+  /**
+   * 唤醒分派（`kind: 'wake'` 豁免计划门禁/节流/回执台账，见 worker-dispatcher）。
+   * 返回被唤醒的目标会话主键（调用方回写 `target.wakeSessionId`，供后续失败记录关联）。
+   */
   private async dispatchWake(
     hook: HookRow,
     target: Extract<WakeResolution, { ok: true }>,
-  ): Promise<void> {
+  ): Promise<string> {
     const text = buildHookWakeText(hook.kind, hook.id, hook.wakeText);
     if (target.taskId) {
-      await this.dispatcher.dispatchAgentMention({
+      return await this.dispatcher.dispatchAgentMention({
         taskId: target.taskId,
         channelId: target.channelId,
         text,
         targetInstanceId: target.targetInstanceId,
         kind: 'wake',
       });
-      return;
     }
-    await this.dispatcher.dispatchAgentMention({
+    return await this.dispatcher.dispatchAgentMention({
       teamId: target.teamId,
       channelId: target.channelId,
       text,
@@ -907,11 +919,29 @@ export class HookService implements OnModuleInit {
     }
   }
 
-  private async markFired(hookId: string): Promise<void> {
+  private async markFired(
+    hookId: string,
+    wakeSessionId?: string,
+  ): Promise<void> {
     const hook = (await this.prisma.hook.update({
       where: { id: hookId },
       data: { status: HOOK_STATUS.FIRED, fireCount: { increment: 1 } },
     })) as unknown as HookRow | null;
+    // wakeSessionId 回写 target Json（无新列/无迁移；parseHookTarget 容忍额外键）：
+    // 供 wake 失败记录按 target.wakeSessionId 关联回本 hook。失败仅 warn——
+    // 分派已接受，hook 照落 fired，不因回写失败回滚。
+    if (wakeSessionId && hook) {
+      try {
+        await this.prisma.hook.update({
+          where: { id: hookId },
+          data: { target: withWakeSessionId(hook.target, wakeSessionId) },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `hook ${hookId} wakeSessionId=${wakeSessionId} 回写 target 失败（fired 状态不受影响，失败记录可能缺关联）: ${describeHookError(err)}`,
+        );
+      }
+    }
     // poll 唤醒的 all_idle 行：配套 fire 兜底行已无用，cancel 掉（best-effort；
     // 即便残留，fire handler 见 fired 也 no-op，永不误唤醒）。
     try {
@@ -926,6 +956,71 @@ export class HookService implements OnModuleInit {
         status: HOOK_STATUS.FIRED,
         fireCount: hook.fireCount,
       });
+    }
+  }
+
+  /**
+   * 记录一次 wake 执行失败（trigger-unification 失败记录缝）。
+   *
+   * 背景：`markFired` 语义是「分派被接受」，不是「agent 跑成功」；被唤醒会话
+   * 随后 `agent.error` / `session.updated(failed)` 时，hook 仍是 `fired` 且
+   * lastError/skipReason 为 NULL——真失败与成功在库里不可分辨。本方法把真实
+   * 下游原因**记录**到 hook + 配对 `hook_fire` 触发器行 + 一条 realtime 事件，
+   * **不改 `fired` 状态**（其余分支依赖该语义）。
+   *
+   * 幂等（认领式）：hook 行以 `lastError: null` 为认领谓词 `updateMany`——
+   * 同一会话多次失败事件只有首个（`count === 1`）落库，重复事件零副作用、
+   * 不刷屏。会话已轮转（hook 已易主/wakeSessionId 已更新）或非 fired → no-op。
+   *
+   * 永不抛（调用方为 realtime 订阅者）：失败仅 warn。
+   */
+  async recordWakeFailure(input: {
+    sessionId: string;
+    reason: string;
+  }): Promise<boolean> {
+    const sessionId = input.sessionId;
+    if (!sessionId) {
+      return false;
+    }
+    try {
+      const hook = (await this.prisma.hook.findFirst({
+        where: {
+          status: HOOK_STATUS.FIRED,
+          target: { path: '$.wakeSessionId', equals: sessionId },
+        },
+      })) as unknown as HookRow | null;
+      if (!hook) {
+        return false;
+      }
+      const text = (input.reason || 'wake 执行失败（未携带原因）').slice(0, 191);
+      // 认领：lastError 仍为 NULL 才写（并发/重复事件败者静默）。
+      const claimed = await this.prisma.hook.updateMany({
+        where: { id: hook.id, status: HOOK_STATUS.FIRED, lastError: null },
+        data: { lastError: text, skipReason: text },
+      });
+      if (claimed.count !== 1) {
+        return false;
+      }
+      await this.prisma.trigger.updateMany({
+        where: { dedupKey: buildHookFireDedupKey(hook.id) },
+        data: { lastError: text, skipReason: text },
+      });
+      await this.emitTriggerLifecycle(
+        TRIGGER_WAKE_FAILED_EVENT_TYPE,
+        hook,
+        {
+          status: HOOK_STATUS.FIRED,
+          wakeSessionId: sessionId,
+          lastError: text,
+          skipReason: text,
+        },
+      );
+      return true;
+    } catch (err) {
+      this.logger.warn(
+        `hook wake 失败记录失败 session=${sessionId}（仅观测缺口，不回滚 fired）: ${describeHookError(err)}`,
+      );
+      return false;
     }
   }
 
@@ -1148,11 +1243,11 @@ function hookScopeOf(hook: { scopeType: string; scopeId: string }): RealtimeScop
   return { type: 'global' };
 }
 
-/** `tmr_` 前缀常量复用（fire 行 id 经同一 IdGeneratorService 生成）。 */
+  /** `tmr_` 前缀常量复用（fire 行 id 经同一 IdGeneratorService 生成）。 */
 const TRIGGER_ID_PREFIX_VALUE = 'tmr';
 
 /** hook.target JSON 窄化（非法 → null，调用方标 expired）。 */
-function parseHookTarget(target: unknown): HookTarget | null {
+export function parseHookTarget(target: unknown): HookTarget | null {
   if (typeof target !== 'object' || target === null) {
     return null;
   }
@@ -1170,7 +1265,23 @@ function parseHookTarget(target: unknown): HookTarget | null {
       typeof t['teamId'] === 'string' && t['teamId'] ? t['teamId'] : null,
     channelId: t['channelId'],
     targetInstanceId: t['targetInstanceId'],
+    wakeSessionId:
+      typeof t['wakeSessionId'] === 'string' && t['wakeSessionId']
+        ? t['wakeSessionId']
+        : null,
   };
+}
+
+/** 在既有 target Json 上叠加 wakeSessionId（保留其余键，存量行零影响）。 */
+function withWakeSessionId(
+  target: unknown,
+  wakeSessionId: string,
+): Prisma.InputJsonValue {
+  const base =
+    typeof target === 'object' && target !== null
+      ? (target as Record<string, unknown>)
+      : {};
+  return { ...base, wakeSessionId } as Prisma.InputJsonValue;
 }
 
 /** 血缘回溯：从 hook.target 取 taskId（parent 链首任务兜底）。 */
