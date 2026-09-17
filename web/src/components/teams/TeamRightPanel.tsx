@@ -751,6 +751,26 @@ export interface PlanStepItem {
 
 type TaskSubTab = "status" | "plan" | "config" | "output" | "triggers";
 
+/** 任务优先级中文标签（对齐 tasks/new 与 teams/[id]/tasks 既有映射）。 */
+const TASK_PRIORITY_LABEL: Record<string, string> = {
+  high: "高",
+  medium: "中",
+  low: "低",
+};
+
+/**
+ * GET /triggers 服务端展示富化（triggers-display 契约；字段缺失时逐项降级，老服务端兼容）。
+ * 对齐 server `TriggerDisplay`（timers/triggers.service.ts）与
+ * web/app/(main)/system/triggers/page.tsx 的同名接口。
+ */
+export interface TriggerDisplay {
+  scopeLabel?: string | null;
+  scopeTeam?: string | null;
+  ownerLabel?: string | null;
+  taskLabel?: string | null;
+  description?: string | null;
+}
+
 /** 触发器行（对齐 GET /triggers → items[] 白名单字段 + 派生 source，todo-18 只读消费）。 */
 export interface TriggerItem {
   id: string;
@@ -768,6 +788,8 @@ export interface TriggerItem {
   createdAt: string;
   /** 系统触发器只读，Agent 触发器可取消（plan decision 5，后端二次强制）。 */
   source: "agent" | "system";
+  /** 服务端展示富化（缺失/为空时行内逐项降级，老服务端兼容）。 */
+  display?: TriggerDisplay | null;
 }
 
 interface TriggersResponse {
@@ -816,6 +838,55 @@ function triggerFireLabel(t: TriggerItem): string {
   return new Date(ms).toLocaleString("zh-CN");
 }
 
+/** 绝对时间短标签（无效/缺失返回 null，调用方跳过该行）。 */
+function localDateTimeLabel(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const ms = new Date(iso).getTime();
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toLocaleString("zh-CN");
+}
+
+/**
+ * kind → 中文标签（未知 kind 原样，调用方 `?? kind`）。
+ * 必须与 server/src/common/constants/trigger.constants.ts `TRIGGER_KIND_LABEL`
+ * 及 web/app/(main)/system/triggers/page.tsx `KIND_LABEL` 同值，改一处同步另两处。
+ */
+const TRIGGER_KIND_LABEL: Record<string, string> = {
+  receipt_nudge: "催办",
+  review_round_timeout: "评审超时",
+  progression_patrol: "进度巡检",
+  session_idle_scan: "空闲扫描",
+  hook_fire: "定时",
+  hook_poll: "条件",
+};
+
+/** 行标题：display.description（人话）优先，缺失回退中文 kind 标签；永不为空、永不用 raw id/raw kind。 */
+function triggerTitleOf(t: TriggerItem): string {
+  const desc = t.display?.description?.trim();
+  if (desc) return desc;
+  return TRIGGER_KIND_LABEL[t.kind] ?? "触发器";
+}
+
+/** 范围文案：display 优先（team · label），taskLabel 与 scopeLabel 重复时去重；缺 display 回退 scope 列。 */
+function triggerScopeText(t: TriggerItem): string | null {
+  const label = t.display?.scopeLabel ?? (t.scopeType && t.scopeId ? `${t.scopeType}/${t.scopeId}` : "全局");
+  const body = t.display?.taskLabel === label ? null : label;
+  if (!body) return t.display?.scopeTeam ?? null;
+  return t.display?.scopeTeam ? `${t.display.scopeTeam} · ${body}` : body;
+}
+
+/** 归属文案：display.ownerLabel 优先（"—" 视为缺失），缺 display 回退 owner 实例 id。 */
+function triggerOwnerText(t: TriggerItem): string | null {
+  const owner = t.display?.ownerLabel;
+  if (owner && owner !== "—") return owner;
+  return t.ownerInstanceId ?? null;
+}
+
+/** 任务文案：display.taskLabel（与范围重复与否由调用方按需展示）。 */
+function triggerTaskText(t: TriggerItem): string | null {
+  return t.display?.taskLabel ?? null;
+}
+
 /**
  * 触发 Tab 面板：当前任务/团队作用域的触发器只读列表。
  * 系统来源行只读（无取消按钮），Agent 来源行可经 ConfirmDialog 取消。
@@ -856,20 +927,33 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           {items.map((t) => {
             const st = TRIGGER_STATUS_THEME[t.status] ?? { label: t.status, color: neutral[500] };
+            const title = triggerTitleOf(t);
+            const kindLabel = TRIGGER_KIND_LABEL[t.kind] ?? t.kind;
+            const scopeText = triggerScopeText(t);
+            const ownerText = triggerOwnerText(t);
+            const taskText = triggerTaskText(t);
             return (
               <div
                 key={t.id}
                 data-testid="trigger-row"
                 data-trigger-id={t.id}
+                data-kind={t.kind}
                 data-source={t.source}
                 data-status={t.status}
                 style={{ display: "flex", alignItems: "center", gap: space.sm, width: "100%", boxSizing: "border-box", fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}
               >
                 <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: st.color, flexShrink: 0 }} />
                 <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{t.kind} · <span style={{ color: st.color }}>{st.label}</span></span>
+                  <span style={{ display: "flex", alignItems: "baseline", gap: space.xs, minWidth: 0, fontWeight: 500 }}>
+                    <span data-testid="trigger-title" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+                    <span aria-hidden style={{ color: neutral[300], flexShrink: 0 }}>·</span>
+                    <span style={{ color: st.color, flexShrink: 0, whiteSpace: "nowrap" }}>{st.label}</span>
+                  </span>
                   <span style={{ fontSize: 10, color: neutral[400] }}>
-                    {triggerFireLabel(t)} · {t.source === "agent" ? "Agent" : "系统"} · 触发 {t.fireCount} 次
+                    {triggerFireLabel(t)} · {t.source === "agent" ? "Agent" : "系统"} · 触发 {t.fireCount} 次 · 类型 {kindLabel}
+                    {scopeText && <> · 范围 <span data-testid="trigger-scope">{scopeText}</span></>}
+                    {ownerText && <> · 归属 <span data-testid="trigger-owner">{ownerText}</span></>}
+                    {taskText && <> · 任务 <span data-testid="trigger-task">{taskText}</span></>}
                   </span>
                   {t.skipReason && (
                     <span data-testid="trigger-skip-reason" style={{ fontSize: 10, color: "#D97706", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>跳过原因：{t.skipReason}</span>
@@ -898,7 +982,7 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
         open={!!confirmItem}
         testid="trigger-cancel"
         title="取消触发器"
-        description={confirmItem ? `确定取消触发器 ${confirmItem.kind}（${confirmItem.id}）吗？取消后不再触发。` : undefined}
+        description={confirmItem ? `确定取消触发器「${triggerTitleOf(confirmItem)}」（${confirmItem.id}）吗？取消后不再触发。` : undefined}
         confirmLabel="确认取消"
         pendingLabel="取消中…"
         submitting={cancelMutation.isPending}
@@ -943,6 +1027,16 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
   const triggersQuery = useTaskTriggers(taskId, teamScopeId);
   const pendingTriggers = (triggersQuery.data?.items ?? []).filter((t) => t.status === "pending").length;
   const statusLabel = task ? (task.status === "queued" ? "排队中" : task.status === "pending" ? "待开始" : task.status === "in_progress" ? "进行中" : task.status === "pending_review" ? "待验收" : task.status === "completed" ? "已完成" : "已归档") : "";
+  const configRows = [
+    { label: "标题", value: task?.title },
+    { label: "描述", value: task?.description },
+    { label: "优先级", value: task?.priority ? (TASK_PRIORITY_LABEL[task.priority] ?? task.priority) : null },
+    { label: "状态", value: statusLabel || null },
+    { label: "所属团队", value: team?.name ?? task?.teamId ?? null },
+    { label: "创建人", value: task?.createdBy ?? null },
+    { label: "创建时间", value: localDateTimeLabel(task?.createdAt) },
+    { label: "计划模式", value: planModeOn ? "已开启（先出计划后执行）" : "已关闭（直接执行）" },
+  ].filter((r) => r.value);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
@@ -985,6 +1079,14 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
         {subTab === "config" && (
           <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}>
             <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>任务信息</div>
+            <div data-testid="task-config-fields" style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+              {configRows.map((r) => (
+                <div key={r.label} style={{ display: "flex", alignItems: "flex-start", gap: space.sm, fontSize: fontSize.xs }}>
+                  <span style={{ flexShrink: 0, width: 56, color: neutral[400] }}>{r.label}</span>
+                  <span style={{ flex: 1, minWidth: 0, color: neutral[700], whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{r.value}</span>
+                </div>
+              ))}
+            </div>
             <button type="button" onClick={onEditTaskInfo} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>编辑任务信息</button>
           </div>
         )}
