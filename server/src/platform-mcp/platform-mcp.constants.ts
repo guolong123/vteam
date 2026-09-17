@@ -24,10 +24,38 @@ export const PLATFORM_MCP_ERRORS = {
   PENDING_APPLICATION: 'PLATFORM_MCP_PENDING_APPLICATION',
   /** hook_cancel：hook 行不存在（id/dedupKey 双查均 miss）→ 404。 */
   HOOK_NOT_FOUND: 'PLATFORM_MCP_HOOK_NOT_FOUND',
+  /**
+   * notify_agent 主 Agent 路由门：非主成员直呼其他非主成员（含 self-notify）→ 403
+   * 硬拦（消息不落库不广播）。调用方凭 code 与通用 FORBIDDEN 区分。
+   */
+  NOTIFY_ROUTING_VIOLATION: 'PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION',
 } as const;
 
 export type PlatformMcpErrorCode =
   (typeof PLATFORM_MCP_ERRORS)[keyof typeof PLATFORM_MCP_ERRORS];
+
+/**
+ * notify_agent `type` 值集（reply-join）：区分执行答复 / 求助 / 普通通知，
+ * 决定 fan-out JOIN 计数与唤醒策略。未知值 → tools/call -32602。
+ */
+export const NOTIFY_TYPE = {
+  answer: 'answer',
+  question: 'question',
+  help: 'help',
+} as const;
+
+export type NotifyType = (typeof NOTIFY_TYPE)[keyof typeof NOTIFY_TYPE];
+
+/**
+ * notify_agent `stage` 值集（reply-join）：process=执行进行中（仅持久化），
+ * end=已完工（触发 ACK + drain 检查）。未知值 → tools/call -32602。
+ */
+export const NOTIFY_STAGE = {
+  process: 'process',
+  end: 'end',
+} as const;
+
+export type NotifyStage = (typeof NOTIFY_STAGE)[keyof typeof NOTIFY_STAGE];
 
 /**
  * 平台 MCP 工具名（SDK registerTool/tool 注册，tools/list 返回工具清单）。

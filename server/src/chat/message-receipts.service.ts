@@ -50,6 +50,17 @@ export interface PendingReceiptCounts {
 }
 
 /**
+ * 回执离开 pending 状态后的回调（ack / expireDue / expireAfterAutoNudge 均调用）。
+ * 用于 reply-join fan-out drain：当一条 MAIN→SUB 回执过期（而非 ack）时，
+ * 仍需重新检查 MAIN 剩余待回执是否收敛为 0，惟其上帐则过期回执会 strand 主 Agent。
+ * 回调收到离开 pending 的行（row.fromInstanceId 即 MAIN，按回执派发方向固定）。
+ */
+export type ReceiptSettledHook = (row: {
+  fromInstanceId: string;
+  teamId: string;
+}) => Promise<void> | void;
+
+/**
  * 派发回执记账/清账与回执·轮次·计划事件发射
  *（plan-review-execution-gates Todo 5，31 篇 §3.2-§3.4）。
  *
@@ -61,11 +72,29 @@ export interface PendingReceiptCounts {
 export class MessageReceiptsService implements OnModuleInit {
   private readonly logger = new Logger(MessageReceiptsService.name);
 
+  /** reply-join drain hook：回执离开 pending 后由订阅方注册（PlatformMcpService）。 */
+  private settledHook: ReceiptSettledHook | null = null;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimeService,
     private readonly idGen: IdGeneratorService,
   ) {}
+
+  /** 注册回执结算 hook（reply-join fan-out drain）；置空=关闭。 */
+  registerSettledHook(hook: ReceiptSettledHook | null): void {
+    this.settledHook = hook;
+  }
+
+  /** 触发并行执行 settled hook（fire-and-forget，never throw into caller）。 */
+  private fireSettledHook(row: { fromInstanceId: string; teamId: string }): void {
+    if (!this.settledHook) return;
+    void Promise.resolve(this.settledHook(row)).catch((err: unknown) => {
+      this.logger.warn(
+        `[receipts] settled hook 失败 from=${row.fromInstanceId} team=${row.teamId}（不阻断）: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
 
   /**
    * 进程启动：按库内 mr_ 前缀纯数字序号最大值对齐 id 生成器。
@@ -105,6 +134,10 @@ export class MessageReceiptsService implements OnModuleInit {
       where: { id: receiptId },
       data: { status: 'acked', ackedAt },
     });
+    this.fireSettledHook({
+      fromInstanceId: found.fromInstanceId,
+      teamId: found.teamId,
+    });
     await this.emitTeamChannel({
       teamId: found.teamId,
       taskId: found.taskId,
@@ -141,6 +174,10 @@ export class MessageReceiptsService implements OnModuleInit {
       const updated = await this.prisma.messageReceipt.update({
         where: { id: row.id },
         data: { status: 'expired' },
+      });
+      this.fireSettledHook({
+        fromInstanceId: row.fromInstanceId,
+        teamId: row.teamId,
       });
       await this.emitTeamChannel({
         teamId: row.teamId,
@@ -185,6 +222,10 @@ export class MessageReceiptsService implements OnModuleInit {
       where: { id: row.id },
       data: { status: 'expired' },
     });
+    this.fireSettledHook({
+      fromInstanceId: row.fromInstanceId,
+      teamId: row.teamId,
+    });
     await this.emitTeamChannel({
       teamId: row.teamId,
       taskId: row.taskId,
@@ -219,6 +260,50 @@ export class MessageReceiptsService implements OnModuleInit {
       this.prisma.messageReceipt.count({ where }),
     ]);
     return { pending, total };
+  }
+
+  /**
+   * reply-join 口径：按 fromInstanceId + teamId 统计 pending 回执数
+   * （fan-out drain 检查用。fromInstanceId 即主 Agent 成员 id，对应其派发给
+   * 所有子 Agent 的待回执数）。覆盖索引 idx_message_receipts_from_status。
+   */
+  async countPendingFor(filter: {
+    fromInstanceId: string;
+    teamId: string;
+  }): Promise<number> {
+    return this.prisma.messageReceipt.count({
+      where: {
+        fromInstanceId: filter.fromInstanceId,
+        teamId: filter.teamId,
+        status: 'pending',
+      },
+    });
+  }
+
+  /**
+   * reply-jain 清账：ACK 所有 pending 回执（from→to, team），返回本次 ACK 行数。
+   * 幂等：已被 ack/expired 的行跳过（ack() 内部保证）。
+   */
+  async ackPendingFor(filter: {
+    fromInstanceId: string;
+    toInstanceId: string;
+    teamId: string;
+  }): Promise<number> {
+    const rows = (await this.prisma.messageReceipt.findMany({
+      where: {
+        fromInstanceId: filter.fromInstanceId,
+        toInstanceId: filter.toInstanceId,
+        teamId: filter.teamId,
+        status: 'pending',
+      },
+      select: { id: true },
+    })) as unknown as Array<{ id: string }>;
+    let acked = 0;
+    for (const row of rows) {
+      const res = await this.ack(row.id);
+      if (res) acked++;
+    }
+    return acked;
   }
 
   /**

@@ -200,7 +200,7 @@ export const DEFAULT_CHAT_HISTORY_MAX_BYTES = 32 * 1024;
  * 经 system 通道注入（非 parts 文本）→ 不进入会话 user 消息，不会出现在聊天记录回复中。
  *
  * 【记忆管理】2 行独立为 MEMORY_INSTRUCTION 常量：plan 角色（toolAllows 无
- * memory_save/search，教了会被 guard 拒）由 buildSystemInstructions 按 role 跳过该块，
+ * vteam_memory_save，教了会被 guard 拒）由 buildSystemInstructions 按 role 跳过该块，
  * 其余角色照常注入；GLOBAL_SYSTEM_INSTRUCTIONS 导出值保持不变。
  */
 export const MEMORY_INSTRUCTION =
@@ -217,6 +217,10 @@ const GLOBAL_BASE_LINES = [
     '【@用户】需要用户确认/决策或完成后通知时，在 vteam_group_post 的 content 中写 @user 或 @all（系统动态注入当前任务相关用户，无需写死 @admin），也可写 @用户名 精确@某人；命中后消息对该用户高亮（蓝底+左蓝条+★@你）。',
   '【Issue协作】任务内 issue 协作经 vteam MCP 的 vteam_issue_* 工具（创建/查询/更新/流转），详见 task_context。',
   '【持久化目录】唯一持久化位置以【运行时工作目录】注入的实际路径为准，仅该目录重启后保留，工作产物与产出物文件请写入该目录。',
+  '【通知重发】vteam_notify_agent 返回 triggered:false 不是投递失败：该次调用未在群聊发布任何消息，请勿重发；请按 reason 与 hint 处理（节流稍后按需重派，计划门禁待放行，三元组缺失先补齐，重复/幂等说明已有在途或已发送）。',
+  '【@ 定向机制｜回执】vteam_notify_agent 新增 type 与 stage 参数（默认 type=answer、stage=process）：' +
+    'answer+process=常规进度汇报，不唤醒主Agent；answer+end=本次派发完工，清除回执，主Agent在所有派发均完工时一次性唤醒；' +
+    'question/help=需主Agent立即介入，中断唤醒，不计为完工。进度汇报不再按条唤醒，完工必须传 stage=end。',
 ];
 
 export const GLOBAL_SYSTEM_INSTRUCTIONS = [
@@ -238,7 +242,10 @@ export const HOSTED_CONFIRM_INSTRUCTION =
 
 /** 非主成员协作指引（替代【任务状态】/【托管模式】工具段，避免教非主成员调用必 403 的工具）。 */
 export const NON_MAIN_AGENT_NOTE =
-  '【协作说明】状态流转/托管确认由主Agent操作，有事@主Agent（相关工具 vteam_task_transition / vteam_question_confirm 仅主实例可调，误调返回 403）。';
+  '【协作说明】状态流转/托管确认由主Agent操作，有事@主Agent（相关工具 vteam_task_transition / vteam_question_confirm 仅主实例可调，误调返回 403）。定向通知仅可直达主Agent，需触达其他成员时请主Agent中转，成员间直连调用将被拒绝。' +
+  '回执节奏：进度汇报用 vteam_notify_agent（type=answer, stage=process，不唤醒主Agent）；' +
+  '完工必须传 stage=answer+end（清除回执，主Agent在所有派发完工后一次性唤醒）；' +
+  '遇阻塞/决策/依赖缺失用 type=question 或 help（立即中断唤醒主Agent，不计完工）。';
 
 /** 企微系统段（仅企微渠道注入；dispatch 侧按正文 [WeCom:] 标记判定后经 opts.isWecomChannel 传入）。 */
 export const WECOM_SYSTEM_INSTRUCTION =
@@ -321,7 +328,7 @@ export function roleNeedsIssueDetail(role: string | null | undefined): boolean {
 
 /**
  * plan 角色判定（记忆段屏蔽用）——兼容大小写及中文“计划员”，写法参考 roleNeedsIssueDetail。
- * plan 的 toolAllows 无 vteam_memory_save/search，GLOBAL 内【记忆管理】2 行对其屏蔽。
+ * plan 的 toolAllows 无 vteam_memory_save，GLOBAL 内【记忆管理】2 行对其屏蔽。
  */
 export function isPlanRole(role: string | null | undefined): boolean {
   if (!role) {
@@ -435,7 +442,9 @@ export const MAIN_AGENT_INSTRUCTION =
   '【主 Agent 职责】你是本任务的主 Agent（牵头人）。除角色本职外，还需承担任务组织职责：' +
   '牵头拆解工作并分派给团队成员，协调各角色产出衔接，环节切换或产出完成时主动在群聊提示进度（FR-08）；' +
   '推进受阻或需要协作时，通过 vteam_notify_agent / 群聊 @ 定向协调成员（FR-13，互 @ 不超 3 轮）；' +
-  '收尾时可汇总各角色产出与验收材料，供成员验收判定（FR-11）。';
+  '收尾时可汇总各角色产出与验收材料，供成员验收判定（FR-11）。' +
+  '唤醒节奏：你不在每条进度汇报时被唤醒；仅当某成员传 stage=answer+end（派发完工）且你所有外派均回执完毕时，平台一次性唤醒你确认进度；' +
+  '成员传 type=question/help 则立即中断唤醒你。因此唤醒后先汇总所有已收回报再行动，不要逐条处理。';
 
 /**
  * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
@@ -466,7 +475,7 @@ export function buildSystemInstructions(
       `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的任务实例 id（${taskInstanceId}）。`
     : `【你的身份】你是本任务的 ${selfName}（实例 id: ${selfInstanceId}，角色: ${agent.role ?? ''}）。` +
       `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（${selfInstanceId}）。`;
-  // plan 屏蔽记忆段：plan 的 toolAllows 无 memory_save/search，GLOBAL 内【记忆管理】
+  // plan 屏蔽记忆段：plan 的 toolAllows 无 memory_save，GLOBAL 内【记忆管理】
   // 2 行（MEMORY_INSTRUCTION）不注入；其余角色照常注入完整 GLOBAL。
   const effectiveRole = opts?.agentRole ?? agent.role;
   const globalText = isPlanRole(effectiveRole)
@@ -503,7 +512,12 @@ export function buildSystemInstructions(
   if (isTeamMode) {
     blocks.push(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
   }
-  blocks.push(ARTIFACT_SUBMISSION_INSTRUCTION);
+  // plan 屏蔽产出物段：plan 的 toolAllows 无 vteam_submit_artifact（计划正文落盘
+  // `.opencode/plans/` 即交付，教了会被 guard 拒），与 MEMORY_INSTRUCTION 同机制；
+  // 其余角色照常注入（逐字节不变）。
+  if (!isPlanRole(effectiveRole)) {
+    blocks.push(ARTIFACT_SUBMISSION_INSTRUCTION);
+  }
   // P1：issue 完整版仅显式开关时注入（dispatch 按目标角色传入；缺省一句版，字节兼容）。
   if (opts?.issueDetail === true) {
     blocks.push(ISSUE_FULL_INSTRUCTION);

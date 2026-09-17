@@ -7,6 +7,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
   Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -49,6 +50,8 @@ import {
   computeMemoryContentHash,
 } from '../memories/memory.constants';
 import {
+  NOTIFY_STAGE,
+  NOTIFY_TYPE,
   PLATFORM_MCP_ERRORS,
   validateTsxPrototype,
 } from './platform-mcp.constants';
@@ -119,6 +122,93 @@ const MESSAGE_ID_PREFIX = 'm';
  */
 const PLAN_AGENT_ID = 'a_plan';
 
+/**
+ * notify_agent 内容幂等窗口（notify-dedup A2）：同发送者→同目标、
+ * 归一化正文相同且落库时间在窗口内的既有行视为重复发送，直接复用其
+ * messageId，不新建行。窗口与节流 pair 窗口同量级（60s），只防抖、
+ * 不改变节流配额参数。
+ */
+const NOTIFY_DEDUP_WINDOW_MS = 60_000;
+/** 幂等比对单次最多回溯行数（窗口内同对重复发送量极小，20 行足量）。 */
+const NOTIFY_DEDUP_SCAN_LIMIT = 20;
+
+/** 所有 triggered=false 拦截路径的统一人读提示：本次调用未发布，重发无用。 */
+const NOTIFY_NOT_PUBLISHED_HINT =
+  '本次调用未在群聊发布任何消息：triggered:false 不是投递失败，请勿重发；请按 reason 处理（throttled 稍后按需重派，plan-gated 待计划放行，review-triplet 补齐三元组，duplicate/dedup 说明已有在途或已发送）。';
+
+/**
+ * join-pending（reply-join 抑制分支）的人读提示：与拦截不同，本次调用
+ * 已落库已广播、回执照记，只是不在主 Agent 上开执行 turn。
+ */
+const JOIN_PENDING_HINT =
+  '进度已记录（消息已落库广播、回执照记）：子 Agent 回执（answer）永不在主 Agent 上开执行 turn，主 Agent 只在 fan-out 收敛（drain）时被唤醒；需立即打断请用 type=question/help。';
+
+/**
+ * 归一化待比对的派发正文：首尾去空白 + 内部连续空白折叠为单空格。
+ * 大小写/标点逐字比对（不做 lowercase：CJK 别名对大小写不敏感但误伤更小，
+ * 且代理重试多为逐字节重复）。
+ */
+function normalizeNotifyText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/** 从 message.content(JSON {text,parts} 或历史脏数据) 中提取正文，无正文回 null。 */
+function extractNotifyText(content: unknown): string | null {
+  if (typeof content === 'string') return content;
+  if (content && typeof content === 'object') {
+    const text = (content as { text?: unknown }).text;
+    return typeof text === 'string' ? text : null;
+  }
+  return null;
+}
+
+/** @ 前缀后的尾随标点：剥离后仍与目标名相等即视为已带 mention（如 `@测试，…`）。 */
+const MENTION_TRAILING_PUNCT = new Set([
+  ',',
+  '，',
+  '、',
+  ':',
+  '：',
+  ';',
+  '；',
+  '!',
+  '！',
+  '?',
+  '？',
+  '.',
+  '。',
+  '…',
+  ')',
+  '）',
+  ']',
+  '】',
+  '」',
+  '’',
+  "'",
+  '"',
+  '”',
+  '>',
+  '》',
+]);
+
+/**
+ * 内容是否已以目标 mention 开头（notify-dedup B：防 `@名 @名 …` 双前缀）。
+ * 规则：trimStart 后以 `@${targetName}` 开头，且后继字符为串尾/空白/标点
+ * 即视为已带（如 `@测试 …`、`@测试，请看`）。mid-content 的 mention 永不
+ * 剥离；`@测试-2` 之于目标 `测试`（后继 `-` 非边界）仍会补前缀——宁可
+ * 显示层重复，不可指派错人。同理 `@测试你好` 这类无分隔粘连会被补前缀，
+ * 属已知保守偏向（代理重试多为逐字节重复，粘连自写极少）。
+ */
+function startsWithTargetMention(content: string, targetName: string): boolean {
+  const trimmed = content.trimStart();
+  const prefix = `@${targetName}`;
+  if (!trimmed.startsWith(prefix)) return false;
+  const rest = trimmed.slice(prefix.length);
+  if (rest.length === 0) return true;
+  const next = rest[0] as string;
+  return /\s/.test(next) || MENTION_TRAILING_PUNCT.has(next);
+}
+
 /** MCP 工具调用上下文：workerId 来自请求 header `x-worker-id`（controller 解析后闭包注入）。 */
 export interface PlatformMcpContext {
   workerId: string;
@@ -171,22 +261,47 @@ export interface ReadFileResult {
 
 /**
  * 统一派发返回契约 reason 词汇（plan-review todo 3，对齐 docs 31 §3 / 32 §3.1-§3.2，
- * todo 4 消费 `duplicate`；本 todo 实际产生 ok|throttled，duplicate|plan-gated 预留词汇位）。
+ * todo 4 消费 `duplicate`；notify-dedup 新增 `dedup`）。
+ * - ok：已发布并触发。
+ * - duplicate：issue 状态锁拦截（在途同人重复派活），未发布。
+ * - dedup：内容幂等命中（同发送者→同目标、同归一化正文、窗口内已有行），
+ *   未新建行，直接回既有 messageId。
+ * - throttled：@ storm 节流拦截，未发布。
+ * - plan-gated：计划门禁/哈希门禁拦截，未发布。
+ * - review-triplet：评审三元组缺失拦截，未发布。
+ * - join-pending：子 Agent 回执（answer、目标为主 Agent）已落库记账，
+ *   但抑制了本次调用在主 Agent 上的执行 turn（主 Agent 只由 fan-out
+ *   drain 唤醒或 question/help 打断）。已发布，与其他拦截不同。
+ * 拦截语义（notify-dedup 起）：除 join-pending 外，所有 triggered=false 路径均
+ * **未落库未广播**，调用方凭 reason 决策，禁止把 triggered:false 当投递失败重发。
+ * join-pending 是唯一的例外：消息已落库已广播、回执照记，
+ * 只是本次调用不在目标（主 Agent）上开执行 turn。
  */
 export type DispatchReason =
-  'ok' | 'duplicate' | 'throttled' | 'plan-gated' | 'review-triplet';
+  | 'ok'
+  | 'duplicate'
+  | 'dedup'
+  | 'throttled'
+  | 'plan-gated'
+  | 'review-triplet'
+  | 'join-pending';
 
 /**
  * notify_agent 统一返回契约（plan-review todo 3）：
  * {triggered, reason, origMessageId?, messageId, issueBound} + 既有 channelId/targetInstanceId。
- * - reason 与 triggered 恒成对：triggered=true → reason='ok'；false → 具体拦因。
+ * - reason 与 triggered 恒成对：triggered=true → reason='ok'；
+ *   false → 具体拦因，或 'join-pending'（子 Agent 回执抑制分支：
+ *   消息已落库已广播，仅不在主 Agent 上开执行 turn）。
+ * - messageId：成功/dedup 命中时为消息 id；其余拦截路径为 null（该次调用
+ *   未落库，无行可指；notify-dedup 起由非空改为可空）。
  * - issueBound：调用带 issueId 即 true；缺省 false（hint，不硬拦）。
- * - origMessageId 预留给 duplicate 回显原记录（todo 4 填充，本 todo 永不写入）。
+ * - origMessageId：duplicate 拦因回显 issue 锁关联的原派发消息 id；
+ *   dedup 命中时不写 origMessageId（messageId 本身即既有行）。
  * - review-triplet（todo 8）：kind=review 派发词缺三元组时拒绝触发并回精确 hint。
  * - dispatchAgentMention 内部返回保持 void，triggered 只在本层组装。
  */
 export interface NotifyAgentResult {
-  messageId: string;
+  messageId: string | null;
   channelId: string;
   targetInstanceId: string;
   triggered: boolean;
@@ -250,8 +365,22 @@ const HOOK_DEFAULT_EXPIRES_MS = 24 * 60 * 60 * 1000;
  * ArtifactsService（ArtifactsModule 导出，submit_artifact text 类型直接落库归档）。
  */
 @Injectable()
-export class PlatformMcpService {
+export class PlatformMcpService implements OnModuleInit {
   private readonly logger = new Logger(PlatformMcpService.name);
+
+  /**
+   * reply-join：注册回执结算 hook（以回执的 fromInstanceId = 派发方主 Agent 为 drain 轴）。
+   * 必要性：回执若全部走超时过期而非 ack，无其他路径触发 drain，主 Agent 会被永久搁置。
+   */
+  async onModuleInit(): Promise<void> {
+    this.receipts?.registerSettledHook(async (row) => {
+      await this.checkAndDrainFanOut({
+        teamId: row.teamId,
+        mainMemberId: row.fromInstanceId,
+        text: '',
+      });
+    });
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -1240,14 +1369,24 @@ export class PlatformMcpService {
    * senderInstanceId=selfInstanceId；mentions 含目标实例（instanceId+agentId+name）
    * 仅表示 @ 归属，目标实例被 dispatchAgentMention 触发。
    * 1. 归属校验（selfInstanceId 与 session.teamMemberId 一致）+ 定位任务群聊频道（对齐 groupPost）。
-   * 2. 落库一条 agent 消息（sender=发送者、@目标）→ 广播 chat.message.new（先落库后广播）。
-   * 3. 调 WorkerDispatcher.dispatchAgentMention 触发目标实例的 dispatch 全链路
+   * 2. 目标实例校验 + 主 Agent 路由门（403 硬拦，不落库不广播）。
+   * 3. kind 归一 + forceReason 提取 → 节流门 → issue 锁 → 计划门禁+哈希门禁 →
+   *    评审三元组门：任一拦截直接返回 triggered:false + reason（notify-dedup 起
+   *    拦截路径不落库不广播，messageId:null；调用方禁止重发）。
+   * 4. 内容幂等探针（A2）：窗口内同对同文已有行 → 复用既有 messageId，
+   *    reason=dedup，不新建行。
+   * 5. 落库一条 agent 消息（sender=发送者、@目标；内容已带目标 mention 时
+   *    不再补前缀）→ 广播 chat.message.new（先落库后广播）。
+   * 6. 调 WorkerDispatcher.dispatchAgentMention 触发目标实例的 dispatch 全链路
    *    （assignWorker → createSession/bind → execute → 回复经 task.completed 回流群聊）。
    *    任务维度传 taskId；团队维度（无任务）传 teamId 直走团队路径（会话即建即得）。
-   *    统一返回契约（plan-review todo 3，见 NotifyAgentResult）：
-   *    {triggered, reason: ok|duplicate|throttled|plan-gated, origMessageId?,
-   *    messageId, issueBound}（+既有 channelId/targetInstanceId）——
-   *    成功 triggered=true+reason=ok；被节流 triggered=false+reason=throttled
+    *    统一返回契约（plan-review todo 3，见 NotifyAgentResult）：
+    *    {triggered, reason: ok|duplicate|dedup|throttled|plan-gated|review-triplet|join-pending,
+    *    origMessageId?, messageId: string|null, issueBound}（+既有 channelId/targetInstanceId）——
+    *    成功 triggered=true+reason=ok；子 Agent 回执（answer、目标为主 Agent）
+    *    triggered=false+reason=join-pending（消息已落库已广播、回执照记，
+    *    只是本次调用不在主 Agent 上开执行 turn，主 Agent 只由 drain 唤醒
+    *    或 question/help 打断）；被节流 triggered=false+reason=throttled+messageId=null
    *    （内部 pair_limit|task_budget 在此收敛，不再透出）；issueId 缺省 →
    *    issueBound=false（hint，不硬拦），透传时 issueBound=true 并经 dispatchAgentMention
    *    带给执行链路（todo 4 消费 issue 锁/去重）。
@@ -1263,6 +1402,19 @@ export class PlatformMcpService {
       content: string;
       /** 可选 issue 绑定（派活归属 issue；缺省不硬拦，返回 issueBound:false 提醒）。 */
       issueId?: string;
+      /**
+       * 消息类型（reply-join 矩阵）：answer=执行答复/进度；question=子 Agent 反向提问；
+       * help=子 Agent 求助。缺省 answer。answer+stage=process 仅持久化不唤醒；
+       * answer+stage=end 清回执并检查 fan-out drain；question/help 立即唤醒
+       * 主 Agent（不计入 fan-out 计数）。
+       */
+      type?: string;
+      /**
+       * 执行阶段（reply-join 矩阵）：process=执行进行中（仅持久化，不唤醒，计数不变）；
+       * end=已完工（answer 类时 ACK 回执并触发 fan-out drain 检查）。
+       * 缺省 process。
+       */
+      stage?: string;
       /**
        * 派发 kind（todo5 节流豁免；todo4 门禁复用同一参数）：
        * wake/round-notify 为内部派发，免 pair/task 节流预算（预算只约束外部派发）；
@@ -1319,9 +1471,201 @@ export class PlatformMcpService {
         message: `目标实例 ${args.targetInstanceId} 不存在或不在任务团队`,
       });
     }
+    // 主 Agent 路由门（落库前硬拦：本块之后才 create message + broadcast）。
+    // 主 Agent 可通知任何人；任何人可通知主 Agent；非主成员之间互通知
+    // （含 self-notify）一律 403，被拦方请先通知主 Agent 由其中转。
+    // 主身份唯一依据 team.mainAgentMemberId（task.mainAgentInstanceId 已停写，不读）。
+    if (args.selfInstanceId === args.targetInstanceId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,
+        message: '不能通知自己；需要协作请通知主 Agent 由其中转',
+      });
+    }
+    // reply-join 抑制分支复用（dispatch 前判定 sub→main answer 时不再查一次 team）。
+    let routingMainId: string | null = null;
+    if (notifyTeamId) {
+      const team = await this.prisma.team.findUnique({
+        where: { id: notifyTeamId },
+        select: { mainAgentMemberId: true },
+      });
+      routingMainId =
+        (team as { mainAgentMemberId?: string | null } | null)
+          ?.mainAgentMemberId ?? null;
+      if (!routingMainId) {
+        this.logger.warn(
+          `[mcp] notify_agent 团队 ${notifyTeamId} 未绑定主成员，路由门 fail-open 放行 from=${args.selfInstanceId} to=${args.targetInstanceId}`,
+        );
+      } else if (
+        exec.callerId !== routingMainId &&
+        args.targetInstanceId !== routingMainId
+      ) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,
+          message: `仅主 Agent（${routingMainId}）可向其他成员派发；请先通知主 Agent 由其中转`,
+        });
+      }
+    }
     const targetAgentId = targetInstance.agentId;
     const targetName =
       targetInstance.alias ?? targetInstance.agent.name ?? targetAgentId;
+    // B：内容已以目标 mention 开头时不再补前缀（防 `@名 @名 …` 双 @ 显示）。
+    const text = startsWithTargetMention(args.content, targetName)
+      ? args.content
+      : `@${targetName} ${args.content}`;
+    // kind 归一 + force 审计原因提前：后续所有门禁共用（落库前判定）。
+    const kind: DispatchExecutionKind =
+      !args.kind || args.kind === 'execution'
+        ? 'execution'
+        : args.kind === 'review'
+          ? 'review'
+          : args.kind === 'nudge'
+            ? 'nudge'
+            : 'wake';
+    const forceReason =
+      args.force === true &&
+      typeof args.forceReason === 'string' &&
+      args.forceReason.trim()
+        ? args.forceReason.trim()
+        : null;
+
+    // 双维度触发：任务维度按 taskId 触发执行；团队维度（无任务）按 teamId 经
+    // 团队路径触发（ensureTeamSession 即建即得，会话缺失即建，不静默跳过）。
+    // @ storm 熔断（仅 agent-originated）：滑动窗口节流——被拦直接返回
+    // triggered:false + reason（notify-dedup 起：拦截路径不落库不广播，
+    // messageId:null；调用方凭 reason 决策，禁止重发）。
+    // notify_agent 为单显式目标，内容含 @all 也不展开 fan-out（仅触发 targetInstanceId）。
+    // 团队维度节流键取 team:<teamId> 命名空间（与 t_ 任务键永不碰撞）。
+    // todo5 豁免：内部 wake/round-notify 不咨询不记账（pair/task 预算只约束外部派发）。
+    const throttleKey = isTeam ? `team:${exec.teamId}` : (effTaskId as string);
+    const throttleExempt = isThrottleExemptKind(args.kind);
+    const decision: MentionThrottleDecision = throttleExempt
+      ? { allow: true }
+      : this.mentionThrottle.shouldDispatch({
+          taskId: throttleKey,
+          fromInstanceId: args.selfInstanceId,
+          toInstanceId: args.targetInstanceId,
+          now: Date.now(),
+        });
+    if (!decision.allow) {
+      this.logger.warn(
+        `[mcp] notify_agent 触发被节流 task=${throttleKey} from=${args.selfInstanceId} to=${args.targetInstanceId} reason=${decision.reason}（未发布）`,
+      );
+      return {
+        messageId: null,
+        channelId: channel.id,
+        targetInstanceId: args.targetInstanceId,
+        triggered: false,
+        reason: 'throttled',
+        hint: NOTIFY_NOT_PUBLISHED_HINT,
+        issueBound: !!args.issueId,
+      };
+    }
+    if (args.issueId) {
+      const issueGate = await this.checkIssueDispatchAllowed(
+        args.issueId,
+        args.targetInstanceId,
+      );
+      if (!issueGate.allowed && !forceReason) {
+        this.logger.warn(
+          `[mcp] notify_agent issue 锁拦截 issue=${args.issueId} to=${args.targetInstanceId}（未发布）`,
+        );
+        return {
+          messageId: null,
+          channelId: channel.id,
+          targetInstanceId: args.targetInstanceId,
+          triggered: false,
+          reason: 'duplicate',
+          ...(issueGate.origMessageId
+            ? { origMessageId: issueGate.origMessageId }
+            : {}),
+          hint: NOTIFY_NOT_PUBLISHED_HINT,
+          issueBound: true,
+        };
+      }
+    }
+    // force 是否绕过了计划门禁：审计行需 messageId，故只记标记，落库后补写。
+    let forceBypassedPlanGate = false;
+    if (
+      kind === 'execution' &&
+      !isTeam &&
+      effTaskId &&
+      targetAgentId !== PLAN_AGENT_ID
+    ) {
+      const planGate = await this.checkPlanExecutionAllowed(effTaskId);
+      const callerHash = normalizePlanHash(args.planHash);
+      let staleHash: { expected: string; actual: string } | null = null;
+      if (callerHash) {
+        const expected = await this.resolveFrozenPlanHash(effTaskId);
+        if (isStalePlanHash(expected, callerHash)) {
+          staleHash = { expected: expected as string, actual: callerHash };
+        }
+      }
+      if (!planGate.allowed || staleHash) {
+        if (!forceReason) {
+          const stale = staleHash;
+          this.logger.warn(
+            stale
+              ? `[mcp] notify_agent 哈希门禁拦截 task=${effTaskId} expected=${stale.expected} actual=${stale.actual}（未发布）`
+              : `[mcp] notify_agent 计划门禁拦截 task=${effTaskId} status=${planGate.status}（未发布）`,
+          );
+          return {
+            messageId: null,
+            channelId: channel.id,
+            targetInstanceId: args.targetInstanceId,
+            triggered: false,
+            reason: 'plan-gated',
+            hint: stale
+              ? `${buildStalePlanHashHint(stale.expected, stale.actual)}；${NOTIFY_NOT_PUBLISHED_HINT}`
+              : `计划未放行：当前计划状态为 ${planGate.status}（需 executing，请确认开始执行后再派发；force=true + 原因可绕过并留审计）；${NOTIFY_NOT_PUBLISHED_HINT}`,
+            issueBound: !!args.issueId,
+          };
+        }
+        forceBypassedPlanGate = true;
+      }
+    }
+    // 评审三元组门（todo 8，docs 33 §3.2：唯一 choke 点选 notifyAgent——
+    // dispatchAgentMention 返回 void 无法回精确 hint，且内部 wake/round-notify
+    // 走 kind=wake 永不命中本门；worker-dispatcher 层不加第二道检查）。
+    // kind=review 派发词须携带 round + planVersion(+hash) + expected 名单，
+    // 缺三元组 → 拒绝触发并回精确 hint（修订不开始；未落库未广播）。
+    if (kind === 'review') {
+      const triplet = parseReviewTriplet(args.content);
+      if (!triplet.ok) {
+        this.logger.warn(
+          `[mcp] notify_agent 评审三元组缺失 to=${args.targetInstanceId} missing=${triplet.missing?.join(',')}（未发布）`,
+        );
+        return {
+          messageId: null,
+          channelId: channel.id,
+          targetInstanceId: args.targetInstanceId,
+          triggered: false,
+          reason: 'review-triplet',
+          hint: `${REVIEW_TRIPLET_HINT}；${NOTIFY_NOT_PUBLISHED_HINT}`,
+          issueBound: !!args.issueId,
+        };
+      }
+    }
+    // A2 内容幂等：窗口内同发送者→同目标已有同归一化正文行时复用其
+    // messageId，不新建行、不重触发。读错 fail-open（告警后继续落库）。
+    const dedupHit = await this.findRecentIdenticalNotify(
+      channel.id,
+      args.selfInstanceId,
+      text,
+    );
+    if (dedupHit) {
+      this.logger.warn(
+        `[mcp] notify_agent 内容幂等命中 from=${args.selfInstanceId} to=${args.targetInstanceId} reuse=${dedupHit}（未新建行）`,
+      );
+      return {
+        messageId: dedupHit,
+        channelId: channel.id,
+        targetInstanceId: args.targetInstanceId,
+        triggered: false,
+        reason: 'dedup',
+        hint: NOTIFY_NOT_PUBLISHED_HINT,
+        issueBound: !!args.issueId,
+      };
+    }
     const senderAgentId = isTeam
       ? await this.resolveTeamSenderAgentId(exec.teamId, exec.callerId)
       : await this.resolveSenderAgentId(
@@ -1336,7 +1680,6 @@ export class PlatformMcpService {
       : null;
     const senderName =
       senderMember?.alias ?? senderMember?.agent?.name ?? args.selfInstanceId;
-    const text = `@${targetName} ${args.content}`;
     const message = await this.prisma.message.create({
       data: {
         id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
@@ -1363,141 +1706,22 @@ export class PlatformMcpService {
       { type: 'channel', id: channel.id },
     );
 
-    // 双维度触发：任务维度按 taskId 触发执行；团队维度（无任务）按 teamId 经
-    // 团队路径触发（ensureTeamSession 即建即得，会话缺失即建，不静默跳过）。
-    // @ storm 熔断（仅 agent-originated）：滑动窗口节流——被拦仅 warn，
-    // 不阻断发布（消息已落库广播），返回 triggered:false + reason。notify_agent
-    // 为单显式目标，内容含 @all 也不展开 fan-out（仅触发 targetInstanceId）。
-    // 团队维度节流键取 team:<teamId> 命名空间（与 t_ 任务键永不碰撞）。
-    // todo5 豁免：内部 wake/round-notify 不咨询不记账（pair/task 预算只约束外部派发）。
-    const throttleKey = isTeam ? `team:${exec.teamId}` : (effTaskId as string);
-    const throttleExempt = isThrottleExemptKind(args.kind);
-    const decision: MentionThrottleDecision = throttleExempt
-      ? { allow: true }
-      : this.mentionThrottle.shouldDispatch({
-          taskId: throttleKey,
-          fromInstanceId: args.selfInstanceId,
-          toInstanceId: args.targetInstanceId,
-          now: Date.now(),
-        });
-    if (!decision.allow) {
-      this.logger.warn(
-        `[mcp] notify_agent 触发被节流 task=${throttleKey} from=${args.selfInstanceId} to=${args.targetInstanceId} reason=${decision.reason}（消息已发布）`,
-      );
-      return {
+    if (forceBypassedPlanGate && forceReason && effTaskId) {
+      await this.writeForceAuditReceipt({
         messageId: message.id,
-        channelId: channel.id,
-        targetInstanceId: args.targetInstanceId,
-        triggered: false,
-        reason: 'throttled',
-        issueBound: !!args.issueId,
-      };
+        taskId: effTaskId,
+        teamId: notifyTeamId,
+        fromInstanceId: args.selfInstanceId,
+        toInstanceId: args.targetInstanceId,
+        content: args.content,
+        issueId: args.issueId ?? null,
+        forceReason,
+      });
     }
-    const kind: DispatchExecutionKind =
-      !args.kind || args.kind === 'execution'
-        ? 'execution'
-        : args.kind === 'review'
-          ? 'review'
-          : args.kind === 'nudge'
-            ? 'nudge'
-            : 'wake';
-    const forceReason =
-      args.force === true &&
-      typeof args.forceReason === 'string' &&
-      args.forceReason.trim()
-        ? args.forceReason.trim()
-        : null;
-    if (args.issueId) {
-      const issueGate = await this.checkIssueDispatchAllowed(
-        args.issueId,
-        args.targetInstanceId,
-      );
-      if (!issueGate.allowed && !forceReason) {
-        this.logger.warn(
-          `[mcp] notify_agent issue 锁拦截 issue=${args.issueId} to=${args.targetInstanceId}（消息已发布）`,
-        );
-        return {
-          messageId: message.id,
-          channelId: channel.id,
-          targetInstanceId: args.targetInstanceId,
-          triggered: false,
-          reason: 'duplicate',
-          ...(issueGate.origMessageId
-            ? { origMessageId: issueGate.origMessageId }
-            : {}),
-          issueBound: true,
-        };
-      }
-    }
-    if (
-      kind === 'execution' &&
-      !isTeam &&
-      effTaskId &&
-      targetAgentId !== PLAN_AGENT_ID
-    ) {
-      const planGate = await this.checkPlanExecutionAllowed(effTaskId);
-      const callerHash = normalizePlanHash(args.planHash);
-      let staleHash: { expected: string; actual: string } | null = null;
-      if (callerHash) {
-        const expected = await this.resolveFrozenPlanHash(effTaskId);
-        if (isStalePlanHash(expected, callerHash)) {
-          staleHash = { expected: expected as string, actual: callerHash };
-        }
-      }
-      if (!planGate.allowed || staleHash) {
-        if (!forceReason) {
-          const stale = staleHash;
-          this.logger.warn(
-            stale
-              ? `[mcp] notify_agent 哈希门禁拦截 task=${effTaskId} expected=${stale.expected} actual=${stale.actual}（消息已发布）`
-              : `[mcp] notify_agent 计划门禁拦截 task=${effTaskId} status=${planGate.status}（消息已发布）`,
-          );
-          return {
-            messageId: message.id,
-            channelId: channel.id,
-            targetInstanceId: args.targetInstanceId,
-            triggered: false,
-            reason: 'plan-gated',
-            hint: stale
-              ? buildStalePlanHashHint(stale.expected, stale.actual)
-              : `计划未放行：当前计划状态为 ${planGate.status}（需 executing，请确认开始执行后再派发；force=true + 原因可绕过并留审计）`,
-            issueBound: !!args.issueId,
-          };
-        }
-        await this.writeForceAuditReceipt({
-          messageId: message.id,
-          taskId: effTaskId,
-          teamId: notifyTeamId,
-          fromInstanceId: args.selfInstanceId,
-          toInstanceId: args.targetInstanceId,
-          content: args.content,
-          issueId: args.issueId ?? null,
-          forceReason,
-        });
-      }
-    }
-    // 评审三元组门（todo 8，docs 33 §3.2：唯一 choke 点选 notifyAgent——
-    // dispatchAgentMention 返回 void 无法回精确 hint，且内部 wake/round-notify
-    // 走 kind=wake 永不命中本门；worker-dispatcher 层不加第二道检查）。
-    // kind=review 派发词须携带 round + planVersion(+hash) + expected 名单，
-    // 缺三元组 → 拒绝触发并回精确 hint（修订不开始）；消息已落库广播不断言回滚。
+    // review 开轮（best-effort sidecar）：落库成功后执行，失败不阻断派发。
     if (kind === 'review') {
       const triplet = parseReviewTriplet(args.content);
-      if (!triplet.ok) {
-        this.logger.warn(
-          `[mcp] notify_agent 评审三元组缺失 to=${args.targetInstanceId} missing=${triplet.missing?.join(',')}（消息已发布）`,
-        );
-        return {
-          messageId: message.id,
-          channelId: channel.id,
-          targetInstanceId: args.targetInstanceId,
-          triggered: false,
-          reason: 'review-triplet',
-          hint: REVIEW_TRIPLET_HINT,
-          issueBound: !!args.issueId,
-        };
-      }
-      if (triplet.triplet) {
+      if (triplet.ok && triplet.triplet) {
         try {
           await this.openReviewRound(triplet.triplet, {
             taskId: effTaskId,
@@ -1512,26 +1736,47 @@ export class PlatformMcpService {
         }
       }
     }
+    // ---- reply-join 行为矩阵（type/stage）：type/stage 提前解析，
+    // sub→main 的 answer 报告走 join 抑制分支（teamMainId 复用路由门已解析值，不再查库）。
+    // 子 Agent 回执（answer、任意 stage、任意 kind）永不在主 Agent 上开执行 turn：
+    // 每条报告都派发执行会把主会话置忙，drain 计时到期时 busy-veto 合法跳过，
+    // 主 Agent 永远等不到收敛唤醒。主 Agent 的 turn 只来自 drain 唤醒或显式 question/help。
+    const notifyType: string = args.type ?? NOTIFY_TYPE.answer;
+    const notifyStage: string = args.stage ?? NOTIFY_STAGE.process;
+    const teamMainId: string | null = notifyTeamId ? routingMainId : null;
+    const isJoinReport =
+      !!teamMainId &&
+      args.selfInstanceId !== teamMainId &&
+      args.targetInstanceId === teamMainId &&
+      notifyType === NOTIFY_TYPE.answer;
+    if (notifyTeamId && !teamMainId && notifyType === NOTIFY_TYPE.answer) {
+      this.logger.warn(
+        `[mcp] notify_agent join 抑制 fail-open：团队 ${notifyTeamId} 无主成员可判定归属，按普通派发 from=${args.selfInstanceId} to=${args.targetInstanceId}`,
+      );
+    }
     // 放行派发嵌入视角边界（todo 8，docs 33 §3.5；非 review 原样透传）。
+    // join 抑制分支跳过：在主 Agent 上不开执行 turn（消息已落库已广播，回执照记）。
     const dispatchText = kind === 'review' ? ensureRoleViewFooter(text) : text;
-    if (isTeam) {
-      await this.workerDispatcher.dispatchAgentMention({
-        teamId: exec.teamId,
-        channelId: channel.id,
-        text: dispatchText,
-        targetInstanceId: args.targetInstanceId,
-        ...(args.issueId ? { issueId: args.issueId } : {}),
-        kind,
-      });
-    } else {
-      await this.workerDispatcher.dispatchAgentMention({
-        taskId: effTaskId as string,
-        channelId: channel.id,
-        text: dispatchText,
-        targetInstanceId: args.targetInstanceId,
-        ...(args.issueId ? { issueId: args.issueId } : {}),
-        kind,
-      });
+    if (!isJoinReport) {
+      if (isTeam) {
+        await this.workerDispatcher.dispatchAgentMention({
+          teamId: exec.teamId,
+          channelId: channel.id,
+          text: dispatchText,
+          targetInstanceId: args.targetInstanceId,
+          ...(args.issueId ? { issueId: args.issueId } : {}),
+          kind,
+        });
+      } else {
+        await this.workerDispatcher.dispatchAgentMention({
+          taskId: effTaskId as string,
+          channelId: channel.id,
+          text: dispatchText,
+          targetInstanceId: args.targetInstanceId,
+          ...(args.issueId ? { issueId: args.issueId } : {}),
+          kind,
+        });
+      }
     }
     if (kind === 'execution') {
       await this.scheduleReceiptNudge({
@@ -1549,6 +1794,31 @@ export class PlatformMcpService {
       });
     }
 
+    if (teamMainId && args.selfInstanceId !== teamMainId) {
+      await this.handleNotifyMatrix({
+        notifyType,
+        notifyStage,
+        isTeam,
+        effTaskId,
+        notifyTeamId,
+        mainMemberId: teamMainId,
+        reporterInstanceId: args.selfInstanceId,
+        text,
+        kind,
+      });
+    }
+
+    if (isJoinReport) {
+      return {
+        messageId: message.id,
+        channelId: channel.id,
+        targetInstanceId: args.targetInstanceId,
+        triggered: false,
+        reason: 'join-pending',
+        hint: JOIN_PENDING_HINT,
+        issueBound: !!args.issueId,
+      };
+    }
     return {
       messageId: message.id,
       channelId: channel.id,
@@ -1557,6 +1827,317 @@ export class PlatformMcpService {
       reason: 'ok',
       issueBound: !!args.issueId,
     };
+  }
+
+  /**
+   * reply-join 行为矩阵（notify_agent type/stage）。
+   *
+   * | type | stage | behavior |
+   * |---|---|---|
+   * | answer | process | 仅持久化；不唤醒；计数不变 |
+   * | answer | end | 持久化 + ACK 该子 Agent 待回执 → drain 检查 |
+   * | question | any | 立即唤醒主 Agent（interrupt）；不计入 fan-out |
+   * | help | any | 立即唤醒主 Agent（interrupt）；不计入 fan-out |
+   *
+   * 主 Agent 身份 = team.mainAgentMemberId（notifyTeamId 已知时）。
+   * 唤醒走 dispatchAgentMention kind:'wake'（免 throttle / 免计划门禁 / 不记账）。
+   */
+  private async handleNotifyMatrix(input: {
+    notifyType: string;
+    notifyStage: string;
+    isTeam: boolean;
+    effTaskId: string | null;
+    notifyTeamId: string | null;
+    /** 团队主成员 id（fan-out drain 计数/唤醒依据）。 */
+    mainMemberId: string;
+    /** 当前报告的子 Agent 实例 id（从 MAIN 到 SUB 的回执清账方）。 */
+    reporterInstanceId: string;
+    text: string;
+    kind: DispatchExecutionKind;
+  }): Promise<void> {
+    // question/help → 立即唤醒主 Agent（不计入 fan-out 计数）
+    if (
+      input.notifyType === NOTIFY_TYPE.question ||
+      input.notifyType === NOTIFY_TYPE.help
+    ) {
+      await this.wakeMainAgent({
+        isTeam: input.isTeam,
+        taskId: input.effTaskId,
+        teamId: input.notifyTeamId,
+        callerInstanceId: input.reporterInstanceId,
+        reason: input.notifyType === NOTIFY_TYPE.question ? 'question' : 'help',
+        text: input.text,
+      });
+      return;
+    }
+    // answer + end → ACK 该子 Agent 的待回执 + drain 检查
+    if (
+      input.notifyType === NOTIFY_TYPE.answer &&
+      input.notifyStage === NOTIFY_STAGE.end
+    ) {
+      await this.ackAndDrain({
+        teamId: input.notifyTeamId,
+        mainMemberId: input.mainMemberId,
+        reporterInstanceId: input.reporterInstanceId,
+        text: input.text,
+      });
+    }
+    // answer + process → 仅持久化（已在调用方完成），无额外动作
+  }
+
+  /**
+    * ACK 子 Agent 的待回执并触发 fan-out drain 检查。
+    * 幂等：ackPendingFor 内部 ack() 保证 double-ack = no-op。
+    * 并发安全：drain 检查 + 唤醒经 claim 机制保证恰好一次。
+    *
+    * 回执方向固定为 MAIN→REPORTER（主 Agent 派发给子 Agent 的待回执）；
+    * 清账该子 Agent 后按 MAIN 剩余 pending 判收敛。
+    */
+  private async ackAndDrain(input: {
+    teamId: string | null;
+    mainMemberId: string;
+    reporterInstanceId: string;
+    text: string;
+  }): Promise<void> {
+    if (!input.teamId || !this.receipts) {
+      return;
+    }
+    try {
+      await this.receipts.ackPendingFor({
+        fromInstanceId: input.mainMemberId,
+        toInstanceId: input.reporterInstanceId,
+        teamId: input.teamId,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] ackPendingFor 失败 main=${input.mainMemberId} sub=${input.reporterInstanceId}（不阻断派发）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    await this.checkAndDrainFanOut({
+      teamId: input.teamId,
+      mainMemberId: input.mainMemberId,
+      text: input.text,
+    });
+  }
+
+  /**
+   * fan-out drain 检查：主 Agent 所有子 Agent 均已回执（pending==0）→ 唤醒主 Agent 一次。
+   *
+   * 并发安全（防 double-wake）机制：
+   * 1. debounce token（内存 Map<teamId, {timer, generation}>）：
+   *    同一 team 的并发 ack 共享一个短窗口（DRAIN_DEBOUNCE_MS），窗口内只排一个 timer。
+   * 2. atomic claim（内存 Set<teamId>）：timer 到期时先 claim（Set.add 返回 true 才执行），
+   *    未 claim 成功的并发 timer 直接退出。
+   * 3. busy-veto：claim 成功后检查主会话是否 pending/running/executing，
+   *    若忙则跳过本次唤醒（下次 ack 或 receipt_nudge 会再触发）。
+   *
+   * 已知局限：v1 单副本，claim/debounce 均为进程内；多副本需分布式锁（未来）。
+   */
+  private readonly drainTimers = new Map<
+    string,
+    { timer: ReturnType<typeof setTimeout>; generation: number }
+  >();
+  private readonly drainClaims = new Set<string>();
+  private readonly DRAIN_DEBOUNCE_MS = 200;
+
+  private async checkAndDrainFanOut(input: {
+    teamId: string;
+    mainMemberId: string;
+    text: string;
+  }): Promise<void> {
+    const teamId = input.teamId;
+    const existing = this.drainTimers.get(teamId);
+    if (existing) {
+      clearTimeout(existing.timer);
+      existing.generation += 1;
+      const gen = existing.generation;
+      existing.timer = setTimeout(() => {
+        void this.executeDrainWake(teamId, input.mainMemberId, input.text, gen);
+      }, this.DRAIN_DEBOUNCE_MS);
+    } else {
+      const gen = 1;
+      const timer = setTimeout(() => {
+        void this.executeDrainWake(teamId, input.mainMemberId, input.text, gen);
+      }, this.DRAIN_DEBOUNCE_MS);
+      this.drainTimers.set(teamId, { timer, generation: gen });
+    }
+  }
+
+  private async executeDrainWake(
+    teamId: string,
+    mainMemberId: string,
+    text: string,
+    generation: number,
+  ): Promise<void> {
+    // 清理 timer 记录（无论成功与否，防止内存泄漏）
+    const entry = this.drainTimers.get(teamId);
+    if (entry && entry.generation === generation) {
+      this.drainTimers.delete(teamId);
+    } else if (entry) {
+      // 已被更新的 timer 覆盖，本次是过期 timer → 退出
+      return;
+    }
+    // atomic claim：确保并发 timer 只有一个执行唤醒
+    if (this.drainClaims.has(teamId)) {
+      return;
+    }
+    this.drainClaims.add(teamId);
+    try {
+      // 重新计数（ack 后最新状态）——按 MAIN 派发的所有待回执计数
+      if (!this.receipts) {
+        return;
+      }
+      const pending = await this.receipts.countPendingFor({
+        fromInstanceId: mainMemberId,
+        teamId,
+      });
+      if (pending > 0) {
+        return;
+      }
+      // busy-veto：主会话 pending / running / executing → 跳过
+      const mainSession = await this.prisma.session.findFirst({
+        where: { teamMemberId: mainMemberId },
+        select: { id: true, status: true, workerId: true },
+        orderBy: { updatedAt: 'desc' },
+      });
+      if (mainSession) {
+        if (mainSession.status === 'running') {
+          return;
+        }
+        if (this.workerDispatcher.isSessionPending(mainSession.id)) {
+          return;
+        }
+        if (
+          mainSession.workerId &&
+          this.workerDispatcher
+            .isAgentExecuting(mainSession.workerId, `team:${teamId}`)
+            ?.has(mainMemberId)
+        ) {
+          return;
+        }
+      }
+      await this.wakeMainAgent({
+        isTeam: true,
+        taskId: null,
+        teamId,
+        callerInstanceId: mainMemberId,
+        reason: 'drain',
+        text,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] drain wake 失败 team=${teamId}（不阻断）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      this.drainClaims.delete(teamId);
+    }
+  }
+
+  /**
+   * 唤醒主 Agent（interrupt 语义）：dispatchAgentMention kind:'wake'。
+   * 走 private 频道（按成员）优先，回退群聊。
+   * 复用 dispatchToMainAgent 同定位逻辑（但独立方法，避免巡检/ harvest 耦合）。
+   */
+  private async wakeMainAgent(input: {
+    isTeam: boolean;
+    taskId: string | null;
+    teamId: string | null;
+    callerInstanceId: string;
+    reason: string;
+    text: string;
+  }): Promise<void> {
+    if (!input.teamId) {
+      return;
+    }
+    const mainMemberId = await this.mainMemberOfTeam(input.teamId);
+    if (!mainMemberId) {
+      return;
+    }
+    let channel: { id: string } | null = null;
+    channel = await this.prisma.chatChannel.findFirst({
+      where: { teamId: input.teamId, teamMemberId: mainMemberId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!channel) {
+      channel = await this.prisma.chatChannel.findFirst({
+        where: { teamId: input.teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+        select: { id: true },
+      });
+    }
+    if (!channel) {
+      return;
+    }
+    const wakeText =
+      `【子 Agent ${input.reason === 'question' ? '提问' : input.reason === 'help' ? '求助' : 'fan-out 完成'}】` +
+      `来自 ${input.callerInstanceId}：${input.text.slice(0, 200)}`;
+    if (input.isTeam) {
+      await this.workerDispatcher.dispatchAgentMention({
+        teamId: input.teamId,
+        channelId: channel.id,
+        text: wakeText,
+        targetInstanceId: mainMemberId,
+        kind: 'wake',
+      });
+    } else if (input.taskId) {
+      await this.workerDispatcher.dispatchAgentMention({
+        taskId: input.taskId,
+        channelId: channel.id,
+        text: wakeText,
+        targetInstanceId: mainMemberId,
+        kind: 'wake',
+      });
+    }
+  }
+
+  /** 团队主成员 id（team.mainAgentMemberId；无归属/未设置 → null）。 */
+  private async mainMemberOfTeam(teamId: string): Promise<string | null> {
+    const team = await this.prisma.team.findUnique({
+      where: { id: teamId },
+      select: { mainAgentMemberId: true },
+    });
+    return (team as { mainAgentMemberId?: string | null } | null)
+      ?.mainAgentMemberId ?? null;
+  }
+
+  /**
+   * 内容幂等探针（notify-dedup A2）：窗口内同频道同发送者已有归一化正文
+   * 相同的行 → 返回其 id（调用方复用，不新建行）；无命中回 null。
+   * 比对在 JS 侧逐行归一化后精确相等（窗口内行数极少，DB 只做
+   * channel/sender/时间粗筛，避免 JSON path 方言）。读错 fail-open 回
+   * null + warn（永不因探针失败阻断正常派发）。
+   */
+  private async findRecentIdenticalNotify(
+    channelId: string,
+    senderInstanceId: string,
+    text: string,
+  ): Promise<string | null> {
+    try {
+      const since = new Date(Date.now() - NOTIFY_DEDUP_WINDOW_MS);
+      const rows = await this.prisma.message.findMany({
+        where: {
+          channelId,
+          senderInstanceId,
+          createdAt: { gte: since },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: NOTIFY_DEDUP_SCAN_LIMIT,
+        select: { id: true, content: true },
+      });
+      if (!Array.isArray(rows)) return null;
+      const want = normalizeNotifyText(text);
+      for (const row of rows as Array<{ id: string; content: unknown }>) {
+        const got = extractNotifyText(row?.content);
+        if (got !== null && normalizeNotifyText(got) === want) {
+          return row.id;
+        }
+      }
+      return null;
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] notify_agent 幂等探针读错，fail-open 继续派发：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
   }
 
   /**

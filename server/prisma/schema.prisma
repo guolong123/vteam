@@ -380,6 +380,8 @@ model MessageReceipt {
 
   @@index([toInstanceId, status], map: "idx_message_receipts_to_status")
   @@index([teamId, status], map: "idx_message_receipts_team_status")
+  // reply-join drain 检查覆盖索引（countPendingFor: fromInstanceId+teamId+status）
+  @@index([fromInstanceId, teamId, status], map: "idx_message_receipts_from_status")
   @@map("message_receipts")
 }
 

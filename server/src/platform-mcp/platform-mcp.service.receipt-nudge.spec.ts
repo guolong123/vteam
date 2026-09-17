@@ -26,8 +26,9 @@ describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudg
   let prisma: {
     session: { findFirst: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
-    message: { create: jest.Mock };
+    message: { create: jest.Mock; findMany: jest.Mock };
     task: { findUnique: jest.Mock };
+    team: { findUnique: jest.Mock };
     teamMember: { findFirst: jest.Mock; findUnique: jest.Mock };
     issue: { findUnique: jest.Mock };
     messageReceipt: { create: jest.Mock; findFirst: jest.Mock };
@@ -57,8 +58,9 @@ describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudg
     prisma = {
       session: { findFirst: jest.fn() },
       chatChannel: { findFirst: jest.fn() },
-      message: { create: jest.fn() },
+      message: { create: jest.fn(), findMany: jest.fn() },
       task: { findUnique: jest.fn() },
+      team: { findUnique: jest.fn() },
       teamMember: { findFirst: jest.fn(), findUnique: jest.fn() },
       issue: { findUnique: jest.fn() },
       messageReceipt: { create: jest.fn(), findFirst: jest.fn() },
@@ -122,6 +124,9 @@ describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudg
       agent: { id: 'a_tester', name: '测试' },
     });
     prisma.teamMember.findUnique.mockResolvedValue({ agentId: 'a_sender' });
+    prisma.team.findUnique.mockResolvedValue({
+      mainAgentMemberId: senderInstanceId,
+    });
     idGen.nextId.mockImplementation(async (prefix: string) =>
       prefix === 'mr' ? 'mr_0000000001' : 'm_0000000200',
     );
@@ -132,6 +137,7 @@ describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudg
       senderType: SENDER_TYPE.agent,
       createdAt: new Date('2026-08-07T00:00:00Z'),
     });
+    prisma.message.findMany.mockResolvedValue([]);
     prisma.issue.findUnique.mockResolvedValue(null);
     prisma.messageReceipt.findFirst.mockResolvedValue(null);
     planLifecycle.getStatus.mockResolvedValue('executing');
@@ -325,12 +331,14 @@ describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudg
     expect(payload).toMatchObject({ receiptId: 'mr_exist' });
   });
 
-  it('门禁拦截（plan-gated）→ 不记账不排期（只在真实分派后排）', async () => {
+  it('门禁拦截（plan-gated）→ 不落库不记账不排期（只在真实分派后排）', async () => {
     planLifecycle.getStatus.mockResolvedValue('draft');
 
     const result = await service.notifyAgent(ctx, baseArgs);
 
     expect(result.triggered).toBe(false);
+    expect(result.messageId).toBeNull();
+    expect(prisma.message.create).not.toHaveBeenCalled();
     expect(prisma.messageReceipt.create).not.toHaveBeenCalled();
     expect(timers.schedule).not.toHaveBeenCalled();
   });

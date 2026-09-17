@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ARTIFACT_CATEGORIES } from '../artifacts/artifacts.constants';
+import { NOTIFY_STAGE, NOTIFY_TYPE } from './platform-mcp.constants';
 import type { PlatformMcpService } from './platform-mcp.service';
 
 /**
@@ -157,7 +158,7 @@ const notifyAgentSchema = z
     targetInstanceId: z
       .string()
       .describe(
-        '目标成员 id（tmm_ 前缀，见 task_context agentMembers / 团队提示，@ 定向触发目标）',
+        '目标成员 id（tmm_ 前缀，见 task_context agentMembers / 团队提示，@ 定向触发目标）。路由规则：主 Agent 可通知任何人，任何人可通知主 Agent；非主成员之间互通知（含通知自己）会被 403 拒绝，请先通知主 Agent 由其中转',
       ),
     content: z.string().describe('要发送给目标实例的消息内容'),
     issueId: z
@@ -166,11 +167,23 @@ const notifyAgentSchema = z
       .describe(
         '派活归属 issue id（is_ 前缀，可选；缺省不硬拦，返回 issueBound:false 提醒；传则 issueBound:true 并透传执行链路）',
       ),
+    type: z
+      .enum(Object.values(NOTIFY_TYPE) as [string, ...string[]])
+      .optional()
+      .describe(
+        '消息类型（缺省 answer）：answer=执行答复/进度；question=子 Agent 反向提问；help=子 Agent 求助。answer+stage=process 仅持久化不唤醒；answer+stage=end 清回执并检查 fan-out drain；question/help 立即唤醒主 Agent（不计入 fan-out 计数）。子 Agent 回执（answer、目标为主 Agent，任意 stage/kind）永不在主 Agent 上开执行 turn（本次调用 suppressed，返回 triggered:false+reason=join-pending，消息已落库广播、回执照记，主 Agent 只在 fan-out 收敛 drain 时被唤醒）；question/help 照常触发执行并立即打断唤醒',
+      ),
+    stage: z
+      .enum(Object.values(NOTIFY_STAGE) as [string, ...string[]])
+      .optional()
+      .describe(
+        '执行阶段（缺省 process）：process=执行进行中（仅持久化，不唤醒，计数不变）；end=已完工（answer 类时 ACK 回执并触发 fan-out drain 检查；question/help 类同 process）。子 Agent 发往主 Agent 的 answer（任意 stage）均被 join 抑制：不触发主 Agent 执行，返回 triggered:false+reason=join-pending，主 Agent 的 turn 只来自 drain 唤醒',
+      ),
     kind: z
       .enum(['execution', 'review', 'nudge', 'wake'])
       .optional()
       .describe(
-        '执行分类（缺省 execution：任务维度下要求计划已确认进入 executing，否则 reason=plan-gated 被拦；review/nudge/wake 豁免门禁；review 派发词须带三元组 round + planVersion(+hash) + expected 名单，否则 reason=review-triplet 被拦；内部唤醒传 wake 且永不记账）',
+        '执行分类（缺省 execution：任务维度下要求计划已确认进入 executing，否则 reason=plan-gated 被拦（不落库不广播）；review/nudge/wake 豁免门禁；review 派发词须带三元组 round + planVersion(+hash) + expected 名单，否则 reason=review-triplet 被拦（不落库不广播）；内部唤醒传 wake 且永不记账）',
       ),
     force: z
       .preprocess((v) => v === true || v === 'true', z.boolean())
@@ -896,7 +909,7 @@ export function buildPlatformMcpTools(
     {
       name: 'notify_agent',
       description:
-        '向任务内的另一个实例定向发送消息并触发其执行（实例互 @，按 targetInstanceId 精确命中目标实例）。团队维度（teamId、无任务）同样触发目标成员执行。触发后目标实例会收到该消息并开始处理，结论通常经 group_post 发布到群聊。统一返回契约 {messageId, channelId, targetInstanceId, triggered, reason, issueBound, origMessageId?}：reason 词汇 ok|duplicate|throttled|plan-gated|review-triplet（成功 reason=ok；被 @ storm 节流 triggered=false+reason=throttled，消息仍已发布；kind=review 缺三元组 triggered=false+reason=review-triplet+精确 hint，修订不开始）。issueId 可选：派活归属 issue，缺省返回 issueBound:false（提醒，不硬拦），传则 issueBound:true 并透传执行链路。',
+        '向任务内的另一个实例定向发送消息并触发其执行（实例互 @，按 targetInstanceId 精确命中目标实例）。团队维度（teamId、无任务）同样触发目标成员执行。路由规则：主 Agent 可通知任何人，任何人可通知主 Agent；非主成员之间互通知（含通知自己）直接 403（PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION，消息不落库不广播），请先通知主 Agent 由其中转。触发后目标实例会收到该消息并开始处理，结论通常经 group_post 发布到群聊。统一返回契约 {messageId, channelId, targetInstanceId, triggered, reason, issueBound, origMessageId?}：reason 词汇 ok|duplicate|dedup|throttled|plan-gated|review-triplet|join-pending（成功 reason=ok；子 Agent 回执（answer、目标为主 Agent，任意 stage/kind）永不在主 Agent 上开执行 turn，返回 triggered:false+reason=join-pending（消息已落库已广播、回执照记，主 Agent 只在 fan-out 收敛 drain 时被唤醒，需立即打断请用 question/help）；被 @ storm 节流 triggered=false+reason=throttled，kind=review 缺三元组 triggered=false+reason=review-triplet+精确 hint，修订不开始；窗口内重复发送 triggered=false+reason=dedup 并回既有 messageId）。拦截语义：除 join-pending 外任何 triggered=false 都表示本次调用未在群聊发布任何消息（messageId 为 null，dedup 除外），triggered:false 不是投递失败，请勿重发，请按 reason 与 hint 处理。issueId 可选：派活归属 issue，缺省返回 issueBound:false（提醒，不硬拦），传则 issueBound:true 并透传执行链路。',
       inputSchema: notifyAgentSchema,
       handler: (ctx, args) => service.notifyAgent(ctx, args as NotifyAgentArgs),
     },

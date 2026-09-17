@@ -35,8 +35,9 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
   let prisma: {
     session: { findFirst: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
-    message: { create: jest.Mock };
+    message: { create: jest.Mock; findMany: jest.Mock };
     task: { findUnique: jest.Mock };
+    team: { findUnique: jest.Mock };
     teamMember: { findFirst: jest.Mock; findUnique: jest.Mock };
     issue: { findUnique: jest.Mock };
     messageReceipt: { create: jest.Mock; findFirst: jest.Mock };
@@ -74,8 +75,9 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
     prisma = {
       session: { findFirst: jest.fn() },
       chatChannel: { findFirst: jest.fn() },
-      message: { create: jest.fn() },
+      message: { create: jest.fn(), findMany: jest.fn() },
       task: { findUnique: jest.fn() },
+      team: { findUnique: jest.fn() },
       teamMember: { findFirst: jest.fn(), findUnique: jest.fn() },
       issue: { findUnique: jest.fn() },
       messageReceipt: { create: jest.fn(), findFirst: jest.fn() },
@@ -143,12 +145,16 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
       agent: { id: 'a_tester', name: '测试' },
     });
     prisma.teamMember.findUnique.mockResolvedValue({ agentId: 'a_sender' });
+    prisma.team.findUnique.mockResolvedValue({
+      mainAgentMemberId: senderInstanceId,
+    });
     prisma.message.create.mockResolvedValue(createdMessage);
+    prisma.message.findMany.mockResolvedValue([]);
     prisma.issue.findUnique.mockResolvedValue(null);
     prisma.messageReceipt.findFirst.mockResolvedValue(null);
   });
 
-  it('缺三元组 → triggered=false + reason=review-triplet + 精确 hint，不触发 dispatch（修订不开始）', async () => {
+  it('缺三元组 → triggered=false + reason=review-triplet + 精确 hint，不触发 dispatch 不落库（修订不开始）', async () => {
     const result = await service.notifyAgent(ctx, {
       ...baseArgs,
       content: '请评审新版计划，大家看看给个结论',
@@ -156,13 +162,15 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
 
     expect(result.triggered).toBe(false);
     expect(result.reason).toBe('review-triplet');
-    expect(result.hint).toBe(REVIEW_TRIPLET_HINT);
+    expect(result.hint).toContain(REVIEW_TRIPLET_HINT);
+    expect(result.hint).toContain('请勿重发');
+    expect(result.messageId).toBeNull();
     expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
-    // 消息本身仍已落库广播（门只拦触发，不拦发布；与 plan-gated/duplicate 同例）。
-    expect(prisma.message.create).toHaveBeenCalled();
+    expect(prisma.message.create).not.toHaveBeenCalled();
+    expect(prisma.message.findMany).not.toHaveBeenCalled();
   });
 
-  it('缺 hash → 同样被拒（planVersion 必须带 hash 钉定）', async () => {
+  it('缺 hash → 同样被拒（planVersion 必须带 hash 钉定，不落库）', async () => {
     const result = await service.notifyAgent(ctx, {
       ...baseArgs,
       content: '请评审 R2 · v0.3 · expected: tmm_arch,tmm_dev',
@@ -170,8 +178,10 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
 
     expect(result.triggered).toBe(false);
     expect(result.reason).toBe('review-triplet');
-    expect(result.hint).toBe(REVIEW_TRIPLET_HINT);
+    expect(result.hint).toContain(REVIEW_TRIPLET_HINT);
+    expect(result.messageId).toBeNull();
     expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    expect(prisma.message.create).not.toHaveBeenCalled();
   });
 
   it('三元组齐全 → 放行且派发词嵌入视角边界', async () => {
@@ -223,7 +233,7 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
     },
   );
 
-  it('团队维度 kind=review 缺三元组 → 同样被拒', async () => {
+  it('团队维度 kind=review 缺三元组 → 同样被拒（不落库）', async () => {
     prisma.session.findFirst.mockResolvedValueOnce({
       id: 's_team',
       agentId: 'a_sender',
@@ -240,7 +250,9 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
 
     expect(result.triggered).toBe(false);
     expect(result.reason).toBe('review-triplet');
-    expect(result.hint).toBe(REVIEW_TRIPLET_HINT);
+    expect(result.hint).toContain(REVIEW_TRIPLET_HINT);
+    expect(result.messageId).toBeNull();
     expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    expect(prisma.message.create).not.toHaveBeenCalled();
   });
 });

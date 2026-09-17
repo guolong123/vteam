@@ -1879,6 +1879,7 @@ describe('PlatformMcpService', () => {
     /**
      * teamMember 分流：目标成员 tmm_tester → a_tester/别名 测试（@ 目标、mentions
      * 归属依据）；发送者成员 tmm_sender → a_sender（senderId/senderInstanceId 落库归属依据）。
+     * 主 Agent 路由门：缺省调用方即主成员（既有成功路径断言语义不变）。
      */
     const mockTeamMemberRows = () => {
       prisma.teamMember.findFirst.mockImplementation(
@@ -1888,6 +1889,13 @@ describe('PlatformMcpService', () => {
               agentId: 'a_tester',
               alias: null,
               agent: { id: 'a_tester', name: '测试' },
+            });
+          }
+          if (args.where.id === senderInstanceId) {
+            return Promise.resolve({
+              agentId: 'a_sender',
+              alias: null,
+              agent: { id: 'a_sender', name: '发送者' },
             });
           }
           return Promise.resolve(null);
@@ -1901,6 +1909,9 @@ describe('PlatformMcpService', () => {
           return Promise.resolve(null);
         },
       );
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: senderInstanceId,
+      });
     };
 
     it('落库 agent 消息（sender=发送者：senderId=发送者 agent id、senderInstanceId=selfInstanceId、mentions 含目标实例）+ 广播 + 触发目标实例 dispatch + 返回结构', async () => {
@@ -2077,7 +2088,7 @@ describe('PlatformMcpService', () => {
       expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
     });
 
-    it('@ storm 熔断：配额耗尽后不触发但仍返回成功（消息已落库广播）', async () => {
+    it('@ storm 熔断：配额耗尽后不触发不落库（messageId:null + 请勿重发 hint）', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       mockTeamMemberRows();
@@ -2100,15 +2111,17 @@ describe('PlatformMcpService', () => {
         selfInstanceId: senderInstanceId,
       });
 
-      expect(prisma.message.create).toHaveBeenCalled();
-      expect(realtime.broadcast).toHaveBeenCalled();
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+      expect(prisma.message.findMany).not.toHaveBeenCalled();
       expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
       expect(result).toEqual({
-        messageId: 'm_0000000200',
+        messageId: null,
         channelId,
         targetInstanceId: 'tmm_tester',
         triggered: false,
         reason: 'throttled',
+        hint: expect.stringContaining('请勿重发'),
         issueBound: false,
       });
     });
@@ -2153,7 +2166,7 @@ describe('PlatformMcpService', () => {
       });
     });
 
-    it('团队维度被节流 → 消息已发布但不触发，返回 triggered:false + reason', async () => {
+    it('团队维度被节流 → 不发布不触发，返回 triggered:false + reason + messageId:null', async () => {
       prisma.session.findFirst.mockResolvedValue({
         id: 's_t',
         teamMemberId: senderInstanceId,
@@ -2182,15 +2195,16 @@ describe('PlatformMcpService', () => {
         selfInstanceId: senderInstanceId,
       });
 
-      expect(prisma.message.create).toHaveBeenCalled();
-      expect(realtime.broadcast).toHaveBeenCalled();
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
       expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
       expect(result).toEqual({
-        messageId: 'm_0000000210',
+        messageId: null,
         channelId,
         targetInstanceId: 'tmm_tester',
         triggered: false,
         reason: 'throttled',
+        hint: expect.stringContaining('请勿重发'),
         issueBound: false,
       });
     });
@@ -2278,7 +2292,7 @@ describe('PlatformMcpService', () => {
       );
     });
 
-    it('契约：节流返回 triggered:false + reason:throttled 成对（pair_limit/task_budget 统一收敛，不再透出内部节流键）', async () => {
+    it('契约：节流返回 triggered:false + reason:throttled + messageId:null 成对（pair_limit/task_budget 统一收敛，不再透出内部节流键）', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
       mockTeamMemberRows();
@@ -2302,10 +2316,331 @@ describe('PlatformMcpService', () => {
       });
 
       expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
       expect(result).toEqual(
-        expect.objectContaining({ triggered: false, reason: 'throttled' }),
+        expect.objectContaining({
+          triggered: false,
+          reason: 'throttled',
+          messageId: null,
+        }),
       );
       expect(result).toEqual(expect.objectContaining({ issueBound: false }));
+    });
+
+    describe('主 Agent 路由门（落库前硬拦）', () => {
+      const notifyOk = () =>
+        service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: 'tmm_tester',
+          content: '请查看这个文件',
+          selfInstanceId: senderInstanceId,
+        });
+
+      beforeEach(() => {
+        allowWorker();
+        prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+        mockTeamMemberRows();
+        idGen.nextId.mockResolvedValue('m_0000000200');
+        prisma.message.create.mockResolvedValue(createdMessage);
+      });
+
+      it('主成员→普通成员放行（triggered:true，消息落库）', async () => {
+        prisma.team.findUnique.mockResolvedValue({
+          mainAgentMemberId: senderInstanceId,
+        });
+
+        const result = await notifyOk();
+
+        expect(prisma.message.create).toHaveBeenCalled();
+        expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith(
+          expect.objectContaining({ targetInstanceId: 'tmm_tester' }),
+        );
+        expect(result).toEqual(
+          expect.objectContaining({ triggered: true, reason: 'ok' }),
+        );
+      });
+
+      it('普通成员→主成员放行路由门但 join 抑制（缺省 answer：消息落库，不开执行 turn，triggered:false+join-pending）', async () => {
+        prisma.team.findUnique.mockResolvedValue({
+          mainAgentMemberId: 'tmm_tester',
+        });
+
+        const result = await notifyOk();
+
+        expect(prisma.message.create).toHaveBeenCalled();
+        expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+        expect(result).toEqual(
+          expect.objectContaining({ triggered: false, reason: 'join-pending' }),
+        );
+      });
+
+      it('普通成员→普通成员 403 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION（不落库不广播不触发）', async () => {
+        prisma.team.findUnique.mockResolvedValue({
+          mainAgentMemberId: 'tmm_main',
+        });
+
+        await expectCode(
+          notifyOk(),
+          ForbiddenException,
+          PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,
+        );
+        expect(prisma.message.create).not.toHaveBeenCalled();
+        expect(realtime.broadcast).not.toHaveBeenCalled();
+        expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      });
+
+      it('self-notify 403（不落库不触发）', async () => {
+        prisma.team.findUnique.mockResolvedValue({
+          mainAgentMemberId: 'tmm_main',
+        });
+
+        await expectCode(
+          service.notifyAgent(ctx, {
+            taskId,
+            targetInstanceId: senderInstanceId,
+            content: '自言自语',
+            selfInstanceId: senderInstanceId,
+          }),
+          ForbiddenException,
+          PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,
+        );
+        expect(prisma.message.create).not.toHaveBeenCalled();
+        expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      });
+
+      it('团队未绑定主成员 → fail-open 放行 + warn（残留缺口可观测）', async () => {
+        prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
+        const warnSpy = jest
+          .spyOn(
+            (service as unknown as { logger: { warn: jest.Mock } }).logger,
+            'warn',
+          )
+          .mockImplementation((() => undefined) as unknown as jest.Mock);
+
+        const result = await notifyOk();
+
+        expect(result).toEqual(
+          expect.objectContaining({ triggered: true, reason: 'ok' }),
+        );
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('未绑定主成员'),
+        );
+        warnSpy.mockRestore();
+      });
+    });
+
+    describe('内容幂等（同对同文窗口内复用既有行，不新建行）', () => {
+      beforeEach(() => {
+        allowWorker();
+        prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+        mockTeamMemberRows();
+        idGen.nextId.mockResolvedValue('m_0000000200');
+        prisma.message.create.mockResolvedValue(createdMessage);
+      });
+
+      it('窗口内重复发送 → reason=dedup + 回既有 messageId，零新行零触发', async () => {
+        prisma.message.findMany.mockResolvedValue([
+          {
+            id: 'm_0000000199',
+            content: { text: '@测试 请查看这个文件', parts: [] },
+          },
+        ]);
+
+        const result = await service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: 'tmm_tester',
+          content: '请查看这个文件',
+          selfInstanceId: senderInstanceId,
+        });
+
+        expect(prisma.message.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              channelId,
+              senderInstanceId,
+            }),
+            take: 20,
+          }),
+        );
+        expect(result).toEqual({
+          messageId: 'm_0000000199',
+          channelId,
+          targetInstanceId: 'tmm_tester',
+          triggered: false,
+          reason: 'dedup',
+          hint: expect.stringContaining('请勿重发'),
+          issueBound: false,
+        });
+        expect(prisma.message.create).not.toHaveBeenCalled();
+        expect(realtime.broadcast).not.toHaveBeenCalled();
+        expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      });
+
+      it('首尾空白差异归一化后相同 → 同样命中（trim 后比对）', async () => {
+        prisma.message.findMany.mockResolvedValue([
+          {
+            id: 'm_0000000199',
+            content: { text: '@测试 请查看这个文件', parts: [] },
+          },
+        ]);
+
+        const result = await service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: 'tmm_tester',
+          content: '  请查看这个文件 ',
+          selfInstanceId: senderInstanceId,
+        });
+
+        expect(result.reason).toBe('dedup');
+        expect(result.messageId).toBe('m_0000000199');
+        expect(prisma.message.create).not.toHaveBeenCalled();
+      });
+
+      it('正文不同 → 不 collapsed，正常落库触发', async () => {
+        prisma.message.findMany.mockResolvedValue([
+          {
+            id: 'm_0000000199',
+            content: { text: '@测试 请查看那个文件', parts: [] },
+          },
+        ]);
+
+        const result = await service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: 'tmm_tester',
+          content: '请查看这个文件',
+          selfInstanceId: senderInstanceId,
+        });
+
+        expect(result).toEqual(
+          expect.objectContaining({
+            messageId: 'm_0000000200',
+            triggered: true,
+            reason: 'ok',
+          }),
+        );
+        expect(prisma.message.create).toHaveBeenCalled();
+        expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalled();
+      });
+
+      it('窗口谓词：探针只查 channel/发送者/60s 内行（stale 行由查询谓词排除）', async () => {
+        prisma.message.findMany.mockResolvedValue([]);
+
+        await service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: 'tmm_tester',
+          content: '请查看这个文件',
+          selfInstanceId: senderInstanceId,
+        });
+
+        const args = prisma.message.findMany.mock.calls[0][0];
+        expect(args.where.channelId).toBe(channelId);
+        expect(args.where.senderInstanceId).toBe(senderInstanceId);
+        const gte = args.where.createdAt.gte as Date;
+        const ageMs = Date.now() - gte.getTime();
+        expect(ageMs).toBeGreaterThanOrEqual(59_000);
+        expect(ageMs).toBeLessThanOrEqual(61_000);
+      });
+
+      it('探针读错 → fail-open 继续派发（永不因探针失败阻断）', async () => {
+        prisma.message.findMany.mockRejectedValue(new Error('db down'));
+
+        const result = await service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: 'tmm_tester',
+          content: '请查看这个文件',
+          selfInstanceId: senderInstanceId,
+        });
+
+        expect(result).toEqual(
+          expect.objectContaining({ triggered: true, reason: 'ok' }),
+        );
+        expect(prisma.message.create).toHaveBeenCalled();
+      });
+    });
+
+    describe('目标 mention 前缀（已带不再补，不双 @）', () => {
+      beforeEach(() => {
+        allowWorker();
+        prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+        mockTeamMemberRows();
+        idGen.nextId.mockResolvedValue('m_0000000200');
+        prisma.message.create.mockResolvedValue(createdMessage);
+        prisma.message.findMany.mockResolvedValue([]);
+      });
+
+      it('内容已以 @目标 开头 → 原样落库，不双前缀，mentions 仍单条', async () => {
+        const result = await service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: 'tmm_tester',
+          content: '@测试 请查看这个文件',
+          selfInstanceId: senderInstanceId,
+        });
+
+        expect(result.triggered).toBe(true);
+        const data = prisma.message.create.mock.calls[0][0].data;
+        expect(data.content).toEqual({ text: '@测试 请查看这个文件', parts: [] });
+        expect(data.mentions).toHaveLength(1);
+      });
+
+      it('内容以 @目标+标点开头 → 同样视为已带（如 @测试，请看）', async () => {
+        await service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: 'tmm_tester',
+          content: '@测试，请查看这个文件',
+          selfInstanceId: senderInstanceId,
+        });
+
+        const data = prisma.message.create.mock.calls[0][0].data;
+        expect(data.content).toEqual({
+          text: '@测试，请查看这个文件',
+          parts: [],
+        });
+      });
+
+      it('内容未带 mention → 补前缀（原行为不变）', async () => {
+        await service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: 'tmm_tester',
+          content: '请查看这个文件',
+          selfInstanceId: senderInstanceId,
+        });
+
+        const data = prisma.message.create.mock.calls[0][0].data;
+        expect(data.content).toEqual({ text: '@测试 请查看这个文件', parts: [] });
+      });
+
+      it('@目标-2 之于目标 测试 → token 不等仍补前缀（宁可显示重复，不可指派错人）', async () => {
+        await service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: 'tmm_tester',
+          content: '@测试-2 请查看这个文件',
+          selfInstanceId: senderInstanceId,
+        });
+
+        const data = prisma.message.create.mock.calls[0][0].data;
+        expect(data.content).toEqual({
+          text: '@测试 @测试-2 请查看这个文件',
+          parts: [],
+        });
+        expect(data.mentions).toHaveLength(1);
+        expect(data.mentions[0].instanceId).toBe('tmm_tester');
+      });
+
+      it('中间 mention 不动：只判定开头（@目标 在文中不触发剥离）', async () => {
+        await service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: 'tmm_tester',
+          content: '同步一下 @测试 的结论请查收',
+          selfInstanceId: senderInstanceId,
+        });
+
+        const data = prisma.message.create.mock.calls[0][0].data;
+        expect(data.content).toEqual({
+          text: '@测试 同步一下 @测试 的结论请查收',
+          parts: [],
+        });
+      });
     });
   });
 

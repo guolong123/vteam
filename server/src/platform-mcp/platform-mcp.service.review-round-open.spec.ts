@@ -28,8 +28,9 @@ describe('PlatformMcpService notifyAgent review-round-open（开轮 sidecar）',
   let prisma: {
     session: { findFirst: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
-    message: { create: jest.Mock };
+    message: { create: jest.Mock; findMany: jest.Mock };
     task: { findUnique: jest.Mock };
+    team: { findUnique: jest.Mock };
     teamMember: { findFirst: jest.Mock; findUnique: jest.Mock };
     issue: { findUnique: jest.Mock; findMany: jest.Mock };
     messageReceipt: { create: jest.Mock; findFirst: jest.Mock };
@@ -69,8 +70,9 @@ describe('PlatformMcpService notifyAgent review-round-open（开轮 sidecar）',
     prisma = {
       session: { findFirst: jest.fn() },
       chatChannel: { findFirst: jest.fn() },
-      message: { create: jest.fn() },
+      message: { create: jest.fn(), findMany: jest.fn() },
       task: { findUnique: jest.fn() },
+      team: { findUnique: jest.fn() },
       teamMember: { findFirst: jest.fn(), findUnique: jest.fn() },
       issue: { findUnique: jest.fn(), findMany: jest.fn() },
       messageReceipt: { create: jest.fn(), findFirst: jest.fn() },
@@ -150,12 +152,16 @@ describe('PlatformMcpService notifyAgent review-round-open（开轮 sidecar）',
       agent: { id: 'a_tester', name: '测试' },
     });
     prisma.teamMember.findUnique.mockResolvedValue({ agentId: 'a_sender' });
+    prisma.team.findUnique.mockResolvedValue({
+      mainAgentMemberId: senderInstanceId,
+    });
     prisma.message.create.mockResolvedValue({
       id: 'm_0000000200',
       channelId,
       status: MESSAGE_STATUS.sent,
       createdAt: new Date('2026-08-07T00:00:00Z'),
     });
+    prisma.message.findMany.mockResolvedValue([]);
     prisma.issue.findUnique.mockResolvedValue(null);
     prisma.issue.findMany.mockResolvedValue([]);
     prisma.messageReceipt.findFirst.mockResolvedValue(null);
@@ -224,7 +230,7 @@ describe('PlatformMcpService notifyAgent review-round-open（开轮 sidecar）',
     );
   });
 
-  it('三元组非法 → 不写账本、不排 timer（原 review-triplet 返回不变）', async () => {
+  it('三元组非法 → 不写账本、不排 timer、不落库（review-triplet 拦截零新行）', async () => {
     await buildModule();
 
     const result = await service.notifyAgent(ctx, {
@@ -235,9 +241,11 @@ describe('PlatformMcpService notifyAgent review-round-open（开轮 sidecar）',
 
     expect(result.triggered).toBe(false);
     expect(result.reason).toBe('review-triplet');
+    expect(result.messageId).toBeNull();
     expect(rounds.applyRoundUpdate).not.toHaveBeenCalled();
     expect(timers.schedule).not.toHaveBeenCalled();
     expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    expect(prisma.message.create).not.toHaveBeenCalled();
   });
 
   it('TimerService 缺席 → 账本照写，派发仍 triggered:true（best-effort sidecar）', async () => {

@@ -516,7 +516,10 @@ describe('WorkerDispatcher', () => {
       expect(execArgs.system).not.toContain('vteam_memory_save');
       // 非记忆段不受影响
       expect(execArgs.system).toContain('【持久化目录】');
-      expect(execArgs.system).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      // 产出物段 plan-aware：plan 无 submit_artifact（落盘即交付），dispatch 同样跳过
+      expect(execArgs.system).not.toContain('【公开与归档】');
+      expect(execArgs.system).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      expect(execArgs.system).not.toContain('vteam_submit_artifact');
     });
 
     it('Todo 4：角色已知的目标 Agent → system 注入【职责边界】+ 角色 scopeSummary', async () => {
@@ -1401,7 +1404,7 @@ describe('WorkerDispatcher', () => {
       expect(GROUP_TRIGGER_INSTRUCTION).toContain('自动归档为产出物');
     });
 
-    it('plan 屏蔽记忆段：role=plan 不注入【记忆管理】2行（toolAllows 无 memory 工具，防 guard 拒）', () => {
+    it('plan 屏蔽记忆段：role=plan 不注入【记忆管理】2行（toolAllows 无 memory_save，防 guard 拒）', () => {
       const plan: AgentIdentityInfo = {
         id: 'a_plan',
         name: '计划员',
@@ -1418,8 +1421,10 @@ describe('WorkerDispatcher', () => {
       expect(s).not.toContain('vteam_memory_save');
       // 非记忆段不受影响
       expect(s).toContain('【持久化目录】');
-      expect(s).toContain('【公开与归档】');
-      expect(s).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      // 产出物段 plan-aware：plan 无 submit_artifact（落盘即交付），同样跳过
+      expect(s).not.toContain('【公开与归档】');
+      expect(s).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      expect(s).not.toContain('vteam_submit_artifact');
     });
 
     it('plan 角色判定兼容大小写及中文“计划员”（参考 roleNeedsIssueDetail 写法）', () => {
@@ -1644,7 +1649,7 @@ describe('WorkerDispatcher', () => {
       expect(s).toContain('自包含');
     });
 
-    it('产出物提交引导：恒注入 submit_artifact 用法（计划文档/交付物统一走该工具）', () => {
+    it('产出物提交引导：非 plan 恒注入 submit_artifact 用法；plan 跳过（无该工具，落盘即交付）', () => {
       const s = buildSystemInstructions(agent);
       expect(s).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
       expect(s).toContain('vteam_submit_artifact');
@@ -1657,6 +1662,14 @@ describe('WorkerDispatcher', () => {
       expect(s).not.toContain('【计划工作流】');
       // 既有段不受影响
       expect(s).toContain(GLOBAL_SYSTEM_INSTRUCTIONS);
+      // plan-aware：plan 角色不注入该段（role 与 agentRole 覆盖两种路径）
+      const planS = buildSystemInstructions({ ...agent, role: 'plan' });
+      expect(planS).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      expect(planS).not.toContain('【公开与归档】');
+      expect(planS).not.toContain('vteam_submit_artifact');
+      expect(
+        buildSystemInstructions(agent, { agentRole: 'plan' }),
+      ).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
     });
 
     it('短工具名批量改真实名：面向模型的自然语言指引无裸短名（协议/注释除外）', () => {
@@ -1703,6 +1716,8 @@ describe('WorkerDispatcher', () => {
         const s = buildSystemInstructions(agent, opts);
         expect(s).toContain(NON_MAIN_AGENT_NOTE);
         expect(s).toContain('状态流转/托管确认由主Agent操作，有事@主Agent');
+        expect(s).toContain('定向通知仅可直达主Agent');
+        expect(s).toContain('请主Agent中转');
         expect(s).not.toContain(TASK_TRANSITION_INSTRUCTION);
         expect(s).not.toContain(HOSTED_CONFIRM_INSTRUCTION);
         expect(s).not.toContain('【任务状态】');

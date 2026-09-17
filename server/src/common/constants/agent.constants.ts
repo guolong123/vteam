@@ -506,6 +506,8 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_chat_history: 'allow',
       vteam_wecom_reply: 'allow',
       vteam_group_post: 'allow',
+      vteam_notify_agent: 'allow',
+      vteam_memory_search: 'allow',
       browser: 'allow',
     },
   }),
