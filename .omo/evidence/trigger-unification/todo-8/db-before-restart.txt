@@ -1,0 +1,2 @@
+id	kind	status	interval_ms	next_fire_at	fire_count	max_fires	guard_key	dedup_key
+tmr_0000000024	progression_patrol	pending	1200000	2026-09-17 03:07:32.171	0	6	progression_cooldown	progression_patrol:task:t_0000000011

@@ -1,0 +1,51 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+triggers_n
+26
+status	n
+failed	1
+idle	8
+id	team_id	team_member_id	status
+s_0000000001	tm_0000000001	tmm_0000000003	failed
+s_0000000002	tm_0000000001	tmm_0000000002	idle
+s_0000000003	tm_0000000001	tmm_0000000004	idle
+s_0000000004	tm_0000000001	tmm_0000000005	idle
+s_0000000011	tm_0000000002	tmm_0000000008	idle
+s_0000000012	tm_0000000002	tmm_0000000009	idle
+s_0000000013	tm_0000000002	tmm_0000000010	idle
+s_0000000014	tm_0000000002	tmm_0000000011	idle
+s_0000000015	tm_0000000002	tmm_0000000012	idle
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	team_id	type	task_id
+c_0000000001	tm_0000000001	team_group	NULL
+c_0000000003	tm_0000000001	private	NULL
+c_0000000002	tm_0000000001	private	NULL
+c_0000000005	tm_0000000001	private	NULL
+c_0000000006	tm_0000000001	private	NULL
+c_0000000004	tm_0000000001	private	NULL
+id	team_id	status
+t_0000000001	tm_0000000001	pending_review
+t_0000000004	tm_0000000001	queued
+t_0000000005	tm_0000000001	queued
+t_0000000006	tm_0000000001	queued
+t_0000000008	tm_0000000001	queued
+id	team_id
+tmm_0000000003	tm_0000000001
+tmm_0000000004	tm_0000000001
+tmm_0000000007	tm_0000000001
+tmm_0000000006	tm_0000000001
+tmm_0000000001	tm_0000000001
+tmm_0000000002	tm_0000000001
+tmm_0000000005	tm_0000000001
+type	n
+message.part.delta	14684
+agent.loading	2133
+chat.message.new	1474
+session.updated	1429
+issue.changed	126
+agent.error	53
+team.changed	50
+task.status.changed	40
+team.updated	27
+team.queue.changed	27
+team.created	13
+plan.status.approved	6

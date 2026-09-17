@@ -1,0 +1,7 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+ev_wm
+ev_0000020187
+msg_wm
+m_0000002119
+id	status	worker_id
+s_0000000003	idle	w_compose_worker

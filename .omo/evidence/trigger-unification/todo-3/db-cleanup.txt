@@ -1,0 +1,7 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+probe_hooks
+0
+probe_triggers
+0
+probe_events
+0

@@ -1,0 +1,7 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+n	kinds	statuses
+19	receipt_nudge	cancelled,fired
+id	team_id
+tum_0000000002	tm_0000000002
+tum_0000000004	tm_0000000006
+tum_admin_seed	tm_0000000001

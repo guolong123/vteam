@@ -1,0 +1,14 @@
+--- attempt 1 target=tmm_0000000005
+{"jsonrpc":"2.0","id":301,"result":{"content":[{"type":"text","text":"{\"hookId\":\"hks_0000000004\",\"status\":\"pending\",\"kind\":\"time\",\"dueAt\":\"2026-09-17T05:12:39.408Z\",\"expiresAt\":\"2026-09-18T04:12:39.408Z\"}"}]}}
+--- attempt 2 target=tmm_0000000002
+{"jsonrpc":"2.0","id":302,"result":{"content":[{"type":"text","text":"{\"hookId\":\"hks_0000000005\",\"status\":\"pending\",\"kind\":\"time\",\"dueAt\":\"2026-09-17T05:12:39.481Z\",\"expiresAt\":\"2026-09-18T04:12:39.481Z\"}"}]}}
+--- attempt 3 target=tmm_0000000005
+{"jsonrpc":"2.0","id":303,"result":{"content":[{"type":"text","text":"{\"hookId\":\"hks_0000000006\",\"status\":\"pending\",\"kind\":\"time\",\"dueAt\":\"2026-09-17T05:12:39.503Z\",\"expiresAt\":\"2026-09-18T04:12:39.503Z\"}"}]}}
+--- attempt 4 target=tmm_0000000002
+{"jsonrpc":"2.0","id":304,"result":{"content":[{"type":"text","text":"{\"hookId\":\"hks_0000000007\",\"status\":\"pending\",\"kind\":\"time\",\"dueAt\":\"2026-09-17T05:12:39.524Z\",\"expiresAt\":\"2026-09-18T04:12:39.524Z\"}"}]}}
+--- attempt 5 target=tmm_0000000005
+{"jsonrpc":"2.0","id":305,"result":{"content":[{"type":"text","text":"{\"hookId\":\"hks_0000000008\",\"status\":\"pending\",\"kind\":\"time\",\"dueAt\":\"2026-09-17T05:12:39.545Z\",\"expiresAt\":\"2026-09-18T04:12:39.545Z\"}"}]}}
+--- attempt 6 target=tmm_0000000002
+{"jsonrpc":"2.0","id":306,"error":{"code":-32602,"message":"[400] 任务 t_0000000001 wake 预算耗尽（fired+pending=5 >= 预算 5，防无界唤醒环）"}}
+--- attempt 7 target=tmm_0000000005
+{"jsonrpc":"2.0","id":307,"error":{"code":-32602,"message":"[400] 任务 t_0000000001 wake 预算耗尽（fired+pending=5 >= 预算 5，防无界唤醒环）"}}

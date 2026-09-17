@@ -1,0 +1,4 @@
+probe_remaining
+0
+fire_remaining
+0

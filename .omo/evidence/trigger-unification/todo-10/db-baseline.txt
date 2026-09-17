@@ -1,0 +1,2 @@
+teams	members	sessions	channels	messages	events	triggers	max_ev	max_msg
+6	19	9	16	1437	20060	23	ev_0000020164	m_0000002119

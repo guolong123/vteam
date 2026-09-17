@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":6,"error":{"code":-32602,"message":"✖ taskId 与 teamId 至少传一个（taskId 优先，无 taskId 时用 teamId 定位团队会话）\n  → at taskId"}}

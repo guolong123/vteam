@@ -1,0 +1,9 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+hook	hook_status	trigger_id	trigger_status
+hks_probe_t3a	pending	tmr_0000000132	pending
+hks_probe_t3b	pending	tmr_0000000133	pending
+hks_probe_t3c	fired	tmr_probe_t3c	fired
+id	type	payload
+ev_0000020188	trigger.reconcile	{"action": "re-armed-missing", "hookId": "hks_probe_t3a", "direction": "A", "triggerId": "tmr_0000000132", "prevTriggerStatus": "missing"}
+ev_0000020189	trigger.reconcile	{"action": "re-armed", "hookId": "hks_probe_t3b", "direction": "A", "triggerId": "tmr_0000000133", "prevTriggerStatus": "failed"}
+ev_0000020190	trigger.reconcile	{"action": "settled-fired", "hookId": "hks_probe_t3c", "direction": "B", "triggerId": "tmr_probe_t3c", "prevTriggerStatus": "fired"}

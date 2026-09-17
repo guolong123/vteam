@@ -1,0 +1,2 @@
+id	type	p	created_at
+ev_0000020232	trigger.skipped	{"kind": "all_idle", "hookId": "hks_0000000003", "status": "pending", "scopeId": "t_0000000001", "scopeType": "task", "skipReason": "veto: ?? s_probe_f3b1 ? running?mid-turn?????", "busyRetries": 1, "	2026-09-17 04:08:01.273

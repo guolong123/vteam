@@ -1,0 +1,11 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+probe_hooks
+0
+probe_trg
+0
+probe_ev
+0
+probe_msg
+0
+id	status
+s_0000000003	idle

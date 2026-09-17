@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":4,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_FORBIDDEN selfInstanceId（tmm_0000000008）不在该 worker 当前执行任务（t_0000000001）的活跃成员集合中，且该 worker 无绑定团队会话，禁止冒充"}}

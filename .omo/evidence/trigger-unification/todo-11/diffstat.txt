@@ -1,0 +1,12 @@
+ server/src/timers/timers.module.ts                 |  24 +-
+ server/src/workers/worker-event.ingress.spec.ts    |  19 +
+ server/src/workers/worker-event.ingress.ts         |  20 +-
+ web/e2e/pages.spec.ts                              |  21 +-
+ web/e2e/reference/testids.ts                       |   8 +-
+ web/src/components/layout/app-shell.tsx            |  22 +-
+ web/src/components/layout/nav-dock.tsx             |   7 +-
+ web/src/components/tasks/task-status-actions.tsx   | 155 ++++-
+ web/src/components/teams/TeamRightPanel.tsx        | 169 ++++-
+ worker/src/git/git-tools.spec.ts                   |  50 ++
+ worker/src/git/git-tools.ts                        |  24 +-
+ 51 files changed, 3876 insertions(+), 1048 deletions(-)

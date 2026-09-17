@@ -1,0 +1,12 @@
+dedup byte-equivalence (todo-5/6 migration)
+- legacy receipt:    buildReceiptNudgeDedupKey(tm, mr)      == `receipt_nudge:{tm}:{mr}`
+- legacy review:     buildReviewRoundTimeoutDedupKey(is, r) == `review_round_timeout:{is}:{r}`
+- new unified:       buildTriggerDedupKey(kind, scope, id)  == `${kind}:${scope}:${id}`
+- both legacy helpers now DELEGATE to buildTriggerDedupKey (handlers, same export names).
+- platform-mcp call-sites now call buildTriggerDedupKey(TRIGGER_KIND.*) directly.
+- spec locks (all green):
+  receipt-nudge.handler.spec.ts          'receipt_nudge:tm_1:mr_9'
+  review-round-timeout.handler.spec.ts   `review_round_timeout:{issueId}:2`
+  platform-mcp.service.receipt-nudge.spec.ts (via NEW builder at call-site)
+    'receipt_nudge:tm_1:mr_0000000001' and 'receipt_nudge:tm_1:mr_exist'
+- live probe dedup `receipt_nudge:tm_0000000002:mr_0000000001` inserted + fired, then cleaned.

@@ -1,0 +1,9 @@
+id	scope_type	kind	status	fire_count	skip_reason
+hks_0000000002	team	all_idle	fired	1	NULL
+hks_0000000003	task	all_idle	expired	0	?????/????? tm_0000000001 ?? tmm_0000000001 ????????????????
+id	status	last_activity_at
+s_0000000002	idle	2026-09-17 04:09:09.928
+id	type	p	created_at
+ev_0000020236	trigger.fired	{"kind": "all_idle", "hookId": "hks_0000000002", "status": "fired", "scopeId": "tm_0000000001", "fireCount": 1, "scopeType": "team", "ownerInstanceId": "tmm_0000000002"}	2026-09-17 04:09:01.324
+ev_0000020241	chat.message.new	{"message": {"id": "m_0000002125", "status": "sent", "content": {"text": "?? all_idle ???hks_0000000002 / F3 probe B??????????????????? t_0000000001 ?????????????? feat/mcp-slim + 	2026-09-17 04:09:06.455
+ev_0000020247	chat.message.new	{"message": {"id": "m_0000002124", "status": "sent", "content": {"text": "??? all_idle ?????????????", "parts": [{"id": "prt_0ad8dc6600012ujPl0fcTkvg4z", "type": "step-start", "mes	2026-09-17 04:09:09.956

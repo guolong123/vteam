@@ -1,0 +1,5 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	status	fire_count	skip_reason
+hks_probe_t11_veto	pending	0	veto: ?? s_0000000003 ? running?mid-turn?????
+id	status	due_at
+tmr_probe_t11_veto	pending	2026-09-17 03:09:50.029

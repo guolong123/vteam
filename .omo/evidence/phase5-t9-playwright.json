@@ -4,7 +4,7 @@
       "/Users/mac/.nvm/versions/node/v24.14.0/bin/node",
       "/Volumes/SSD-Data/01work/git-project/vteam/web/node_modules/.bin/playwright",
       "test",
-      "e2e/plan-archive.spec.ts"
+      "--project=pages"
     ],
     "configFile": "/Volumes/SSD-Data/01work/git-project/vteam/web/playwright.config.ts",
     "rootDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -17,14 +17,18 @@
     "grep": {},
     "grepInvert": null,
     "maxFailures": 0,
-    "metadata": {},
+    "metadata": {
+      "actualWorkers": 1
+    },
     "preserveOutput": "always",
     "projects": [
       {
         "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
         "repeatEach": 1,
         "retries": 0,
-        "metadata": {},
+        "metadata": {
+          "actualWorkers": 1
+        },
         "id": "setup",
         "name": "setup",
         "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -38,7 +42,9 @@
         "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
         "repeatEach": 1,
         "retries": 0,
-        "metadata": {},
+        "metadata": {
+          "actualWorkers": 1
+        },
         "id": "login",
         "name": "login",
         "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -52,7 +58,9 @@
         "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
         "repeatEach": 1,
         "retries": 0,
-        "metadata": {},
+        "metadata": {
+          "actualWorkers": 1
+        },
         "id": "pages",
         "name": "pages",
         "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -66,7 +74,25 @@
         "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
         "repeatEach": 1,
         "retries": 0,
-        "metadata": {},
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "docs",
+        "name": "docs",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/docs-unified\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
         "id": "team-users",
         "name": "team-users",
         "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -80,7 +106,9 @@
         "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
         "repeatEach": 1,
         "retries": 0,
-        "metadata": {},
+        "metadata": {
+          "actualWorkers": 1
+        },
         "id": "perf",
         "name": "perf",
         "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -94,7 +122,9 @@
         "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
         "repeatEach": 1,
         "retries": 0,
-        "metadata": {},
+        "metadata": {
+          "actualWorkers": 1
+        },
         "id": "guard",
         "name": "guard",
         "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
@@ -130,19 +160,421 @@
     "workers": 1,
     "webServer": null
   },
-  "suites": [],
-  "errors": [
+  "suites": [
     {
-      "message": "Error: No tests found.\nMake sure that arguments are regular expressions matching test files.\nYou may need to escape symbols like \"$\" or \"*\" and quote the arguments.",
-      "stack": "Error: No tests found.\nMake sure that arguments are regular expressions matching test files.\nYou may need to escape symbols like \"$\" or \"*\" and quote the arguments."
+      "title": "auth.setup.ts",
+      "file": "auth.setup.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "真实表单登录 seed-admin → storageState",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "setup",
+              "projectName": "setup",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "timedOut",
+                  "duration": 30052,
+                  "error": {
+                    "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                    "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                  },
+                  "errors": [
+                    {
+                      "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                    },
+                    {
+                      "location": {
+                        "file": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e/auth.setup.ts",
+                        "column": 38,
+                        "line": 14
+                      },
+                      "message": "Error: locator.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByTestId('username')\u001b[22m\n\n\n  12 | setup(\"真实表单登录 seed-admin → storageState\", async ({ page }) => {\n  13 |   await page.goto(\"/login\");\n> 14 |   await page.getByTestId(\"username\").fill(\"seed-admin\");\n     |                                      ^\n  15 |   await page.getByTestId(\"password\").fill(\"Admin@123456\");\n  16 |   await page.getByTestId(\"login-button\").click();\n  17 |\n    at /Volumes/SSD-Data/01work/git-project/vteam/web/e2e/auth.setup.ts:14:38"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-17T03:56:58.085Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results/auth.setup.ts-真实表单登录-seed-admin-→-storageState-setup/error-context.md"
+                    },
+                    {
+                      "name": "trace",
+                      "contentType": "application/zip",
+                      "path": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results/auth.setup.ts-真实表单登录-seed-admin-→-storageState-setup/trace.zip"
+                    }
+                  ]
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "17e3fe6f4d9d8bd79c6b-e1e904a976db5985c890",
+          "file": "auth.setup.ts",
+          "line": 12,
+          "column": 6
+        }
+      ]
+    },
+    {
+      "title": "pages.spec.ts",
+      "file": "pages.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "18 页 testid 断言（seed-admin 登录态）",
+          "file": "pages.spec.ts",
+          "line": 13,
+          "column": 6,
+          "specs": [
+            {
+              "title": "2/17 team-list /teams（项目列表已拆除，主工作台）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-c1102dca3a2ebd867839",
+              "file": "pages.spec.ts",
+              "line": 24,
+              "column": 7
+            },
+            {
+              "title": "3/17 task-create /tasks/new?teamId=tm_0000000001（团队预选，直出 Agent 选项）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-f098a82eb4147708f94c",
+              "file": "pages.spec.ts",
+              "line": 32,
+              "column": 7
+            },
+            {
+              "title": "4/17 task-board /board?teamId=tm_0000000001",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-25cc7dec7bf94dbd31d1",
+              "file": "pages.spec.ts",
+              "line": 43,
+              "column": 7
+            },
+            {
+              "title": "4b/17 board-drawer 看板卡片开抽屉不进聊天",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-1fcacf67bc031ab3b705",
+              "file": "pages.spec.ts",
+              "line": 52,
+              "column": 7
+            },
+            {
+              "title": "5/17 agent-config /agents",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-5305535633ca4fe4e795",
+              "file": "pages.spec.ts",
+              "line": 77,
+              "column": 7
+            },
+            {
+              "title": "7b/17 team-session /teams/tm_0000000001/session（团队唯一聊天入口）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-e4d3dfae9ec75244e277",
+              "file": "pages.spec.ts",
+              "line": 88,
+              "column": 7
+            },
+            {
+              "title": "team-session zero-task 零任务直聊（无选择器）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-c37c3e06cf43776f905a",
+              "file": "pages.spec.ts",
+              "line": 112,
+              "column": 7
+            },
+            {
+              "title": "8-10/17 导航变体（AppShell 融合导航承载）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-354460a1b1dcf28931a3",
+              "file": "pages.spec.ts",
+              "line": 155,
+              "column": 7
+            },
+            {
+              "title": "11/17 role-permission /roles",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-eace5903c3d48852f80e",
+              "file": "pages.spec.ts",
+              "line": 206,
+              "column": 7
+            },
+            {
+              "title": "12/17 skills-tools-manage /skills（双 Tab + 工具三子 Tab）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-15bd86ea8a94085faed2",
+              "file": "pages.spec.ts",
+              "line": 217,
+              "column": 7
+            },
+            {
+              "title": "13/17 task-detail /artifacts?teamId=tm_0000000001 → /docs 重定向（路由收敛 T10）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-bebbaa7e0eb6fdda74cb",
+              "file": "pages.spec.ts",
+              "line": 234,
+              "column": 7
+            },
+            {
+              "title": "15/17 user-management /users",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-759f3f1bdf0c2b71ce1c",
+              "file": "pages.spec.ts",
+              "line": 247,
+              "column": 7
+            },
+            {
+              "title": "16/17 worker-install /workers/install（独立路由 · 3 步安装向导）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-a9f7e36dd7bd564fafd4",
+              "file": "pages.spec.ts",
+              "line": 269,
+              "column": 7
+            },
+            {
+              "title": "17/18 worker-list /workers（列表 + 唯一安装入口）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-700dbc49475b6d46478a",
+              "file": "pages.spec.ts",
+              "line": 296,
+              "column": 7
+            },
+            {
+              "title": "18/18 models-manage /models（模型管理：Provider 单一视图）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-a67cbea6823b240296c2",
+              "file": "pages.spec.ts",
+              "line": 310,
+              "column": 7
+            },
+            {
+              "title": "旧路由 /providers 重定向到 /models（单一入口兼容）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "pages",
+                  "projectName": "pages",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "9bb6bb2ed574bebb3c58-a2954c30060b6d17ebfd",
+              "file": "pages.spec.ts",
+              "line": 335,
+              "column": 7
+            }
+          ]
+        }
+      ]
     }
   ],
+  "errors": [],
   "stats": {
-    "startTime": "2026-09-16T05:48:23.908Z",
-    "duration": 9.76400000000001,
+    "startTime": "2026-09-17T03:56:57.887Z",
+    "duration": 31735.419,
     "expected": 0,
-    "skipped": 0,
-    "unexpected": 0,
+    "skipped": 16,
+    "unexpected": 1,
     "flaky": 0
   }
 }

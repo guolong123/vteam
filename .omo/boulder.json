@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "active_work_id": "plan-finalize-actions-6b627ae7",
+  "active_work_id": "trigger-unification-ba49b2a9",
   "works": {
     "vteam-team-refactor-f2fc70e5": {
       "work_id": "vteam-team-refactor-f2fc70e5",
@@ -1184,71 +1184,320 @@
       },
       "ended_at": "2026-09-16T05:56:59.874Z",
       "elapsed_ms": 3325381
+    },
+    "docs-artifacts-merge-88659ce1": {
+      "work_id": "docs-artifacts-merge-88659ce1",
+      "active_plan": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/docs-artifacts-merge.md",
+      "plan_name": "docs-artifacts-merge",
+      "status": "completed",
+      "started_at": "2026-09-16T14:37:28.928Z",
+      "updated_at": "2026-09-16T17:36:31.020Z",
+      "session_ids": [
+        "opencode:ses_f5570ced9ffeSVUudLTK4HixBr"
+      ],
+      "session_origins": {
+        "opencode:ses_f5570ced9ffeSVUudLTK4HixBr": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "Prisma 加 `Artifact.category` 可空列与迁移",
+          "session_id": "opencode:ses_f5556d7e5ffeNEET9xjQJViD86",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-16T14:47:59.823Z",
+          "started_at": "2026-09-16T14:44:20.407Z",
+          "status": "completed",
+          "ended_at": "2026-09-16T14:47:59.823Z",
+          "elapsed_ms": 219416
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "task_title": "回填脚本（幂等 + dry-run）",
+          "session_id": "opencode:ses_f554e5e99ffe1FsVdYmfy3yDbV",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-16T14:58:03.316Z",
+          "started_at": "2026-09-16T14:54:44.149Z",
+          "status": "completed",
+          "ended_at": "2026-09-16T14:58:03.316Z",
+          "elapsed_ms": 199167
+        },
+        "todo:5": {
+          "task_key": "todo:5",
+          "task_label": "5",
+          "task_title": "新聚合端点 `GET /teams/:id/artifacts`",
+          "session_id": "opencode:ses_f5545aba2ffeJcfgxTHph6VxsC",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-16T15:07:34.816Z",
+          "started_at": "2026-09-16T15:04:43.242Z",
+          "status": "completed",
+          "ended_at": "2026-09-16T15:07:34.816Z",
+          "elapsed_ms": 171574
+        },
+        "todo:8": {
+          "task_key": "todo:8",
+          "task_label": "8",
+          "task_title": "统一文档站页 `/docs`（团队级外壳，DB-only）",
+          "session_id": "opencode:ses_f553d20e1ffeNw2O4IjgeMsCLM",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "updated_at": "2026-09-16T15:26:20.700Z",
+          "started_at": "2026-09-16T15:24:06.509Z",
+          "status": "completed",
+          "ended_at": "2026-09-16T15:26:20.700Z",
+          "elapsed_ms": 134191
+        },
+        "todo:9": {
+          "task_key": "todo:9",
+          "task_label": "9",
+          "task_title": "渲染矩阵扩展（text→md / 预览 / 下载卡）",
+          "session_id": "opencode:ses_f552bde08ffekWd2YAU8DypiR6",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "updated_at": "2026-09-16T15:49:16.943Z",
+          "started_at": "2026-09-16T15:46:23.862Z",
+          "status": "completed",
+          "ended_at": "2026-09-16T15:49:16.943Z",
+          "elapsed_ms": 173081
+        },
+        "todo:11": {
+          "task_key": "todo:11",
+          "task_label": "11",
+          "task_title": "删除镜像层与死端点（零引用门）",
+          "session_id": "opencode:ses_f5516d3deffeABJUJwdAjuQqKt",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-09-16T16:07:34.019Z",
+          "started_at": "2026-09-16T16:02:50.118Z",
+          "status": "completed",
+          "ended_at": "2026-09-16T16:07:34.019Z",
+          "elapsed_ms": 283901
+        },
+        "todo:14": {
+          "task_key": "todo:14",
+          "task_label": "14",
+          "task_title": "原型 tab 回补（T8 遗漏：TL;DR 与 UI QA 均要求原型能力不变）",
+          "session_id": "opencode:ses_f550675f0ffeg464abD2i7JnkH",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "updated_at": "2026-09-16T16:23:34.769Z",
+          "started_at": "2026-09-16T16:22:08.351Z",
+          "status": "completed",
+          "ended_at": "2026-09-16T16:23:34.769Z",
+          "elapsed_ms": 86418
+        },
+        "todo:12": {
+          "task_key": "todo:12",
+          "task_label": "12",
+          "task_title": "测试收尾与 QA fixture",
+          "session_id": "opencode:ses_f54f796b4ffe98hSKuDG3sZhKG",
+          "agent": "Sisyphus-Junior",
+          "started_at": "2026-09-16T16:37:00.443Z",
+          "status": "completed",
+          "updated_at": "2026-09-16T17:07:34.683Z",
+          "ended_at": "2026-09-16T17:07:34.683Z",
+          "elapsed_ms": 1834240
+        },
+        "todo:13": {
+          "task_key": "todo:13",
+          "task_label": "13",
+          "task_title": "证据汇总与文档同步",
+          "session_id": "opencode:ses_f54cf3d9dffeP4M0J1QYiDwFJA",
+          "agent": "Sisyphus-Junior",
+          "category": "writing",
+          "started_at": "2026-09-16T17:03:31.339Z",
+          "status": "completed",
+          "updated_at": "2026-09-16T17:10:56.422Z",
+          "ended_at": "2026-09-16T17:10:56.422Z",
+          "elapsed_ms": 445083
+        }
+      },
+      "ended_at": "2026-09-16T17:36:31.020Z",
+      "elapsed_ms": 10742092
+    },
+    "trigger-unification-ba49b2a9": {
+      "work_id": "trigger-unification-ba49b2a9",
+      "active_plan": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/trigger-unification.md",
+      "plan_name": "trigger-unification",
+      "status": "completed",
+      "started_at": "2026-09-17T01:31:18.330Z",
+      "updated_at": "2026-09-17T04:27:48.934Z",
+      "session_ids": [
+        "opencode:ses_f5337fd3dffe4iwE2hj2kmw1LQ",
+        "opencode:ses_f527e9776ffecjtPAldJO5Rw3m",
+        "opencode:ses_f527e957bffeObR2PyeFHNJ91F",
+        "opencode:ses_f527e9570ffeCQt8beLwfipYvQ",
+        "opencode:ses_f527e9568ffed4aRizrxqlXG6N"
+      ],
+      "session_origins": {
+        "opencode:ses_f5337fd3dffe4iwE2hj2kmw1LQ": "direct",
+        "opencode:ses_f527e9776ffecjtPAldJO5Rw3m": "appended",
+        "opencode:ses_f527e957bffeObR2PyeFHNJ91F": "appended",
+        "opencode:ses_f527e9570ffeCQt8beLwfipYvQ": "appended",
+        "opencode:ses_f527e9568ffed4aRizrxqlXG6N": "appended"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "**Rename the TABLE** `timers` → `triggers` in this ONE migration (single-table direction, keeps the 2 existing business rows; do NOT create a parallel table, do NOT dual-write across two tables).",
+          "session_id": "opencode:ses_f52e12bedffeyESAJ2yy1h8RKS",
+          "agent": "Sisyphus-Junior",
+          "category": "ultrabrain",
+          "started_at": "2026-09-17T01:49:32.361Z",
+          "ended_at": "2026-09-17T02:16:49.214Z",
+          "elapsed_ms": 1636853,
+          "status": "completed",
+          "updated_at": "2026-09-17T02:16:49.214Z"
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "task_title": "`server/prisma/schema.prisma` + 迁移（**expand-contract 三段式，不 rename**）：① 加列 `dueAt?`/`scopeType?`/`scopeId?`/`ownerInstanceId?`/`intervalMs?`/`nextFireAt?`/`guardKey?`/`fireCount`/`maxFires?`/`expiresAt?`/`skipReason?`/`busyRetries`；② **同迁移内 `UPDATE triggers SET dueAt = fireAt WHERE dueAt IS NULL`**；③ 新代码读 `dueAt`（**窗口期双写两列**）；④ 后续迁移删 `fireAt`。**`dueAt` 加索引 `(status, dueAt)`**；`kind` 收敛为后端白名单枚举，未知 kind → `expire`+告警；`guardKey` 仅限注册表白名单；`tmr_` 前缀**冻结不动** — expect `migrate deploy` 可跑、**回填完成前新代码不切读**、旧 2 行业务数据无损、`resyncIdPrefix` 零改动 + 单测覆盖「旧行回填后等价」+「`dueAt IS NULL` 行不被漏选」",
+          "session_id": "opencode:ses_f52e12b8dffe6GtFrV9msU8c6Q",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "updated_at": "2026-09-17T02:18:46.736Z",
+          "started_at": "2026-09-17T02:11:44.587Z",
+          "status": "completed",
+          "ended_at": "2026-09-17T02:18:46.735Z",
+          "elapsed_ms": 422148
+        },
+        "todo:3": {
+          "task_key": "todo:3",
+          "task_label": "3",
+          "task_title": "`server/src/triggers/`: 新增 reconciler —— **启动即跑 + 每 15min 周期兜底**（boot 之间产生的孤儿不等下次重启）；扫「hook pending 但 trigger 行 failed/missing」与「trigger fired 但 hook 仍 pending」两类孤儿，**`LIMIT 500` 分页 + claim 式修复防多副本双修**；**`failed` 行即时告警归属本 todo**（向 `realtime_events` 写 `trigger.reconcile`） — expect 启动自愈可测（预置孤儿 → boot 后被修）+ 周期兜底可测 + 两类方向各一单测",
+          "session_id": "opencode:ses_f52980024ffeC8BVfGc6gmkK44",
+          "agent": "Sisyphus-Junior",
+          "category": "ultrabrain",
+          "started_at": "2026-09-17T02:22:21.680Z",
+          "status": "completed",
+          "updated_at": "2026-09-17T03:42:37.475Z",
+          "ended_at": "2026-09-17T03:42:37.475Z",
+          "elapsed_ms": 4815795
+        },
+        "todo:20": {
+          "task_key": "todo:20",
+          "task_label": "20",
+          "task_title": "`server/src/triggers/` + `server/src/realtime/`: trigger 触发/过期/跳过写 `realtime_events`（`trigger.fired`/`trigger.expired`/`trigger.skipped`）以供 UI 与排查；成本归属记 `ownerInstanceId`；**`skipReason`/`busyRetries` 的写点落在本 todo（todo 16 的展示依赖它）** — expect `/system/triggers` 能看到触发历史与跳过原因 + 单测覆盖事件发射 + `skipReason` 在 veto/超时/目标失效三类路径均有写入",
+          "session_id": "opencode:ses_f5289d23effex5YykADo4bIFNA",
+          "agent": "Sisyphus-Junior",
+          "category": "ultrabrain",
+          "updated_at": "2026-09-17T03:54:59.506Z",
+          "started_at": "2026-09-17T03:54:17.132Z",
+          "status": "completed",
+          "ended_at": "2026-09-17T03:54:59.506Z",
+          "elapsed_ms": 42374
+        },
+        "final-wave:f1": {
+          "task_key": "final-wave:f1",
+          "task_label": "F1",
+          "task_title": "需求符合性审计：逐条对照本文档 Scope / Design decisions（15 条）与 Must NOT have，确认未越界、未收紧任何门禁/权限语义 → 由 oracle 复核",
+          "session_id": "opencode:ses_f527e9776ffecjtPAldJO5Rw3m",
+          "agent": "oracle",
+          "started_at": "2026-09-17T04:20:39.553Z",
+          "status": "completed",
+          "updated_at": "2026-09-17T04:27:48.934Z",
+          "ended_at": "2026-09-17T04:27:48.934Z",
+          "elapsed_ms": 429381
+        }
+      },
+      "ended_at": "2026-09-17T04:28:40.687375Z",
+      "elapsed_ms": 10642357
     }
   },
-  "active_plan": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/plan-finalize-actions.md",
-  "started_at": "2026-09-16T05:01:34.493Z",
+  "active_plan": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/trigger-unification.md",
+  "started_at": "2026-09-17T01:31:18.330Z",
   "status": "completed",
-  "updated_at": "2026-09-16T09:04:12.945Z",
+  "updated_at": "2026-09-17T04:27:48.934Z",
   "session_ids": [
-    "opencode:ses_f5c15b052ffeLJOLgrBBUQVT8V",
-    "opencode:ses_f57428c30ffeug05yH8Ehdmlmz",
-    "opencode:ses_f568a6baaffeyCl8S6Ac8cCEz9",
-    "opencode:ses_f568a69c3ffe8QaonQLUiwmpGB",
-    "opencode:ses_f568a68a0ffeLeJx5EVSccWM2H",
-    "opencode:ses_f568a67c3ffeFqoV0JH3Eqxq8k"
+    "opencode:ses_f5337fd3dffe4iwE2hj2kmw1LQ",
+    "opencode:ses_f527e9776ffecjtPAldJO5Rw3m",
+    "opencode:ses_f527e957bffeObR2PyeFHNJ91F",
+    "opencode:ses_f527e9570ffeCQt8beLwfipYvQ",
+    "opencode:ses_f527e9568ffed4aRizrxqlXG6N"
   ],
   "session_origins": {
-    "opencode:ses_f5c15b052ffeLJOLgrBBUQVT8V": "direct",
-    "opencode:ses_f57428c30ffeug05yH8Ehdmlmz": "appended",
-    "opencode:ses_f568a6baaffeyCl8S6Ac8cCEz9": "appended",
-    "opencode:ses_f568a69c3ffe8QaonQLUiwmpGB": "appended",
-    "opencode:ses_f568a68a0ffeLeJx5EVSccWM2H": "appended",
-    "opencode:ses_f568a67c3ffeFqoV0JH3Eqxq8k": "appended"
+    "opencode:ses_f5337fd3dffe4iwE2hj2kmw1LQ": "direct",
+    "opencode:ses_f527e9776ffecjtPAldJO5Rw3m": "appended",
+    "opencode:ses_f527e957bffeObR2PyeFHNJ91F": "appended",
+    "opencode:ses_f527e9570ffeCQt8beLwfipYvQ": "appended",
+    "opencode:ses_f527e9568ffed4aRizrxqlXG6N": "appended"
   },
-  "plan_name": "plan-finalize-actions",
+  "plan_name": "trigger-unification",
   "task_sessions": {
     "todo:1": {
       "task_key": "todo:1",
       "task_label": "1",
-      "task_title": "锁定dual-anchor载体、哈希钩与修订入口矩阵",
-      "session_id": "opencode:ses_f57653aaaffei07rfNEZWG3ONL",
+      "task_title": "**Rename the TABLE** `timers` → `triggers` in this ONE migration (single-table direction, keeps the 2 existing business rows; do NOT create a parallel table, do NOT dual-write across two tables).",
+      "session_id": "opencode:ses_f52e12bedffeyESAJ2yy1h8RKS",
       "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "started_at": "2026-09-16T05:04:19.949Z",
-      "ended_at": "2026-09-16T05:18:26.400Z",
-      "elapsed_ms": 846451,
+      "category": "ultrabrain",
+      "started_at": "2026-09-17T01:49:32.361Z",
+      "ended_at": "2026-09-17T02:16:49.214Z",
+      "elapsed_ms": 1636853,
       "status": "completed",
-      "updated_at": "2026-09-16T05:18:26.400Z"
+      "updated_at": "2026-09-17T02:16:49.214Z"
     },
     "todo:2": {
       "task_key": "todo:2",
       "task_label": "2",
-      "task_title": "定稿后三件套：冻结版本、旧轮次归档、基线通告",
-      "session_id": "opencode:ses_f57428cf2ffeIuecghZ3XebNav",
+      "task_title": "`server/prisma/schema.prisma` + 迁移（**expand-contract 三段式，不 rename**）：① 加列 `dueAt?`/`scopeType?`/`scopeId?`/`ownerInstanceId?`/`intervalMs?`/`nextFireAt?`/`guardKey?`/`fireCount`/`maxFires?`/`expiresAt?`/`skipReason?`/`busyRetries`；② **同迁移内 `UPDATE triggers SET dueAt = fireAt WHERE dueAt IS NULL`**；③ 新代码读 `dueAt`（**窗口期双写两列**）；④ 后续迁移删 `fireAt`。**`dueAt` 加索引 `(status, dueAt)`**；`kind` 收敛为后端白名单枚举，未知 kind → `expire`+告警；`guardKey` 仅限注册表白名单；`tmr_` 前缀**冻结不动** — expect `migrate deploy` 可跑、**回填完成前新代码不切读**、旧 2 行业务数据无损、`resyncIdPrefix` 零改动 + 单测覆盖「旧行回填后等价」+「`dueAt IS NULL` 行不被漏选」",
+      "session_id": "opencode:ses_f52e12b8dffe6GtFrV9msU8c6Q",
       "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-09-16T05:49:12.917Z",
-      "started_at": "2026-09-16T05:49:12.917Z",
+      "category": "visual-engineering",
+      "updated_at": "2026-09-17T02:18:46.736Z",
+      "started_at": "2026-09-17T02:11:44.587Z",
       "status": "completed",
-      "ended_at": "2026-09-16T05:49:12.917Z",
-      "elapsed_ms": 0
+      "ended_at": "2026-09-17T02:18:46.735Z",
+      "elapsed_ms": 422148
     },
-    "todo:4": {
-      "task_key": "todo:4",
-      "task_label": "4",
-      "task_title": "修订重评小循环（含force口径统一）",
-      "session_id": "opencode:ses_f573abde6ffeiW0R51t7Mhezzg",
+    "todo:3": {
+      "task_key": "todo:3",
+      "task_label": "3",
+      "task_title": "`server/src/triggers/`: 新增 reconciler —— **启动即跑 + 每 15min 周期兜底**（boot 之间产生的孤儿不等下次重启）；扫「hook pending 但 trigger 行 failed/missing」与「trigger fired 但 hook 仍 pending」两类孤儿，**`LIMIT 500` 分页 + claim 式修复防多副本双修**；**`failed` 行即时告警归属本 todo**（向 `realtime_events` 写 `trigger.reconcile`） — expect 启动自愈可测（预置孤儿 → boot 后被修）+ 周期兜底可测 + 两类方向各一单测",
+      "session_id": "opencode:ses_f52980024ffeC8BVfGc6gmkK44",
       "agent": "Sisyphus-Junior",
-      "category": "unspecified-high",
-      "started_at": "2026-09-16T05:50:41.979Z",
-      "ended_at": "2026-09-16T05:52:54.414Z",
-      "elapsed_ms": 132435,
+      "category": "ultrabrain",
+      "started_at": "2026-09-17T02:22:21.680Z",
       "status": "completed",
-      "updated_at": "2026-09-16T05:52:54.414Z"
+      "updated_at": "2026-09-17T03:42:37.475Z",
+      "ended_at": "2026-09-17T03:42:37.475Z",
+      "elapsed_ms": 4815795
+    },
+    "todo:20": {
+      "task_key": "todo:20",
+      "task_label": "20",
+      "task_title": "`server/src/triggers/` + `server/src/realtime/`: trigger 触发/过期/跳过写 `realtime_events`（`trigger.fired`/`trigger.expired`/`trigger.skipped`）以供 UI 与排查；成本归属记 `ownerInstanceId`；**`skipReason`/`busyRetries` 的写点落在本 todo（todo 16 的展示依赖它）** — expect `/system/triggers` 能看到触发历史与跳过原因 + 单测覆盖事件发射 + `skipReason` 在 veto/超时/目标失效三类路径均有写入",
+      "session_id": "opencode:ses_f5289d23effex5YykADo4bIFNA",
+      "agent": "Sisyphus-Junior",
+      "category": "ultrabrain",
+      "updated_at": "2026-09-17T03:54:59.506Z",
+      "started_at": "2026-09-17T03:54:17.132Z",
+      "status": "completed",
+      "ended_at": "2026-09-17T03:54:59.506Z",
+      "elapsed_ms": 42374
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "需求符合性审计：逐条对照本文档 Scope / Design decisions（15 条）与 Must NOT have，确认未越界、未收紧任何门禁/权限语义 → 由 oracle 复核",
+      "session_id": "opencode:ses_f527e9776ffecjtPAldJO5Rw3m",
+      "agent": "oracle",
+      "started_at": "2026-09-17T04:20:39.553Z",
+      "status": "completed",
+      "updated_at": "2026-09-17T04:27:48.934Z",
+      "ended_at": "2026-09-17T04:27:48.934Z",
+      "elapsed_ms": 429381
     }
   },
   "agent": "atlas",
-  "ended_at": "2026-09-16T05:56:59.874Z",
-  "elapsed_ms": 3325381
+  "ended_at": "2026-09-17T04:28:40.687375Z",
+  "elapsed_ms": 10642357
 }

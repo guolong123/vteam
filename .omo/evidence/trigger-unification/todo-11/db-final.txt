@@ -1,0 +1,7 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+hooks_total
+0
+triggers_total
+26
+id	status	fire_count
+tmr_0000000129	pending	7

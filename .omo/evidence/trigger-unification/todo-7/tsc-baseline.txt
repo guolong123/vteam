@@ -1,0 +1,4 @@
+src/platform-mcp/platform-mcp.service.ts(280,13): error TS2552: Cannot find name 'TimerService'. Did you mean 'TriggerService'?
+src/platform-mcp/platform-mcp.service.ts(281,31): error TS2552: Cannot find name 'TimerService'. Did you mean 'TriggerService'?
+src/platform-mcp/platform-mcp.service.ts(1564,9): error TS2304: Cannot find name 'buildReviewRoundTimeoutDedupKey'.
+src/platform-mcp/platform-mcp.service.ts(1674,9): error TS2304: Cannot find name 'buildReceiptNudgeDedupKey'.

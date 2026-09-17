@@ -284,3 +284,106 @@ Conventions, patterns, and successful approaches discovered during work on this 
 - 脏树下提交手法：四候选文件事前 `git status --short` 全净 + 事后 `git diff`
   仅 intended hunks → 选择性 `git add` 四路径 → `git diff --cached --stat` 确认后提交；
   不碰他波 ~29 脏文件。
+
+## 2026-09-17 — Final Wave 关闭：T13 三文件提交（22e8d84）
+- `artifact-slug.ts:25` 末位同类缺陷 `artId前8位` → `artId末8位`（1 词纯注释；
+  事前确认 `:30/:41` 双 `.slice(-8)` 均为末 8，码注一致，无行为变更）。
+- 预检：09 篇 diff 仅 +1 行（`GET /teams/:id/artifacts`）、12 篇仅 +16 行（§10）、
+  slug 预编辑零 diff；三文件均无外来 hunk。他波脏文件（~40 项，含 boulder/ledger/
+  probe.json 等）逐路径显式 `git add` 隔离，事后 `git status` 确认无误吸。
+- `git diff --cached --stat`：3 files，18+/1-（1- 系注释行原位改写）；web
+  `tsc --noEmit` exit 0；未 push（编排器侧复核后统一处理）。
+- 偏差记录：任务 §4.6 要求把本 notepad 同 commit 带走，但 §1/§2/§4.4 要求
+  EXACTLY 3 文件且 cached-stat 恰 3 文件——以后者为准，本文件仅 append 留工作区
+  unstaged，未进 22e8d84。
+- 证据冻结口径（svg 姿态，均为只读引用、未改）：plan T9 注解已翻转为
+  "svg 移出白名单、上传 400"（`.omo/plans/docs-artifacts-merge.md:156,159`）；
+  `task-9-render-matrix.md:46` 的"T12 重验 live 逐个上传 webp/svg/json 断言 200"
+  与 `:33` 的 `grep -q "'svg'"` 门同属 F3 前快照，待编排器改 plan 注解/重验时统一处理。
+
+## 2026-09-17 — T15 团队级原型列表
+- `DocsSiteController` 带 `docs-site` 类前缀，团队路由不能塞进它里面（会变成
+  `/docs-site/teams/...`）：同文件新增裸挂载 `TeamPrototypesController`
+  （`@Controller()` + `@Get('teams/:id/prototypes')`，T5 artifacts 同形），module
+  `controllers` 数组追加注册。T11 注入遮蔽门同样适用：属性另名保持 `protoService`。
+- codegraph 查实 `assertTeamMember` 无共享实现（artifacts/questions/issues 各自私有
+  拷贝 avoiding third copy 不成立），按 T5 先例私有镜像（404 先于 403 的顺序即未知
+  团队判定）；错误码用字面 `TEAM_NOT_FOUND` + `TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER`
+ （`PERMISSION_TEAM_NOT_MEMBER`），不引入 docs-site 常量（冻结契约侧只认此二码）。
+- `listPrototypes` 重构手法：循环体下沉 `mapRowToItems` 时 `continue`→`return items`
+ （TSX 分支 `continue`→`return`，尾部 sort/return 上浮回调用方）；任务级 sort 保持单键
+  `id`，团队级双键 `id || taskId`。旧 spec 零改即过 = 字节一致门。
+- 团队侧 taskName 映射走 `(prisma as any).task.findMany`（T5 同款；`taskId: { in }`
+  进 artifactVersion where，避免嵌套 `artifact.task.taskId` 关系过滤写法）。
+- spec 共享 helper 若定义在内层 describe，新 describe 不可见（tsc TS2304）——放外层
+  describe 作用域；团队行 mock 需 `artifact.taskId`，用条件 spread 只在有值时加键。
+- 路由元数据可单测锁定：`Reflect.getMetadata(PATH_METADATA, TeamPrototypesController)`
+  === `'/'`（裸挂载），方法侧 path + `RequestMethod.GET`；stale-image 下这是 HTTP 门之外
+  最强的接线证明（deferred + jest-equivalence，禁 restart 时的标准姿态）。
+- 脏树注意：`prototypes.service.ts/.spec.ts` 事前各带他波 prettier 空白 hunk（零逻辑）；
+  同文件提交时 absorption 不可避免，在证据 §5 明示即可；`git add` 逐路径显式列出。
+
+## 2026-09-17 — T16 全宽布局 + 团队级原型 tab
+
+- 团队端点 404 下的标准动作（T4 先例升级版）：`useTeamPrototypes(teamId, tasks?)`
+  主查冻结契约端点，报错即 `useQueries` 逐任务聚合回退（`viaFallback` 标记，
+  后端落地零改切换）。after 截图必须声明走哪条路径，绝不伪造 populated 图。
+- `PageWindow` 加全宽只能加可选 `fluid`（15 个他页消费者，缺省 1080 碰不得）；
+  docs 页 `fluid` 后树/查看器用 `calc(100vh - 280px)` 定界 + `flex:1/minHeight:0/overflow:auto`
+  才有内部滚动，头尾 `flexShrink:0` pinned。AppShell 链（100vh→app-content flex:1→main
+  overflow:auto）天然支持，无需动 shell。
+- 树行两行是最小 reflow：标题 flex 行 + 任务名 muted 次行，徽章全留；
+  before 图超长 CJK 在 360px 下只剩 1~2 字，after 440px 显示 ~20 字 + ellipsis（诚实口径，
+  非"零截断"）。
+- `docs-proto-empty` 的"请先选择任务"死端删后，该 testid 移入 panel 真空态内层保契约；
+  但 `docs-unified.spec.ts:366-372` 的禁用断言与本需求天然冲突，下轮 docs project 必红
+  1 用例，已留风险未顺手改 spec（T12 侧所有）。
+- fixture 教训：同 content 建多文触发幂等去重（`duplicate` 同 id），长标题多行须配互异
+  content；`tm_0000000002` 初始 seed-admin 非成员，经 `POST :id/users` 临时入队、
+  事后 `DELETE users + DELETE queue` 双清（tasks 无 DELETE 端点，空任务行残留已记录）。
+- Host dev `:3001` 被他波占用时先 `lsof`，本次空位直起；跑后 `pkill + lsof` 确认，
+  临时 spec/config/test-results 全删（T8/T14 门）。
+
+## 2026-09-17 — docs follow-up: team-level prototype tab spec + stack rebuild (T15/T16 live gates closed)
+
+- 旧断言位置：`web/e2e/docs-unified.spec.ts:366-372`「团队级禁用 + 请先选择任务」已按 T16 新需求重写为两用例：
+  task=all 下 tab `toBeEnabled` + click 后 panel 含 `t12qa-demo` 及其任务名（`cliyard MCP 新增`，
+  t_0000000001 的 live title 硬编码——任务改名即翻红，属有意灵敏）+ `docs-proto-empty` count 0 +
+  `not.toContainText("请先选择任务")`；另加 team 模式 `?proto=` 深链（`data-active` + `aria-current`）。
+  describe 名与文件头注释同步去"禁用"字样。web `tsc --noEmit` exit 0。
+- 镜像 stale 判定法：`docker images` 时间 vs 目标 commit 时间（本次 image 07:25 早于
+  f481d72/6ad6156 07:44/07:48）+ live `GET /teams/:id/prototypes` 404 `Cannot GET`。
+  回滚点：重建前 `docker tag <id> aiagents-{server,web}:pre-docs-followup`
+ （本次 server 292bbc0dfc8e / web 99ed450ee3ec → 新 server 819684ef98d7 / web 08400812fa51）。
+- `docker compose up -d --build` 全栈重建一次过；`init` exit 0（`docker inspect` 查 ExitCode，
+  不 hand-run 迁移）；server/web healthy 即交接。uploads 卷在无 `-v` 重建下持久化，
+  `/app/uploads/t12qa-demo.tsx` 免重播。
+- Live 门收据（token 经 `POST /auth/login` 取，`Bearer` 只进内存/`/tmp` 随手删，容器无 jq 故 jq 跑 host）：
+  health 200；团队端点 200 + `jq -e '.items | length>0 and all(.taskId and .taskName and .file)'` → true
+ （gate 需先经 API 建一行 file 行 `{fileRef:/uploads/t12qa-demo.tsx, content:"      ", category:"设计"}`
+  探针，验后 `DELETE /artifacts/<id>` 200 双清，复查团队端点回 `{"items":[]}`）；
+  任务级回归 200 旧形状（无 taskId）；docs 页 :13001 200；web bundle 含 `team-prototypes`
+  chunk（`grep -rl team-prototypes /app/.next/static`）即 viaFallback=false 路径已部署。
+- e2e 跑法（baseURL=:3001 是 host dev，非 compose :13001）：`lsof -i :3001` 确认空位 →
+  `API_PROXY_TARGET=http://localhost:13000 npx next dev --port 3001`（nohup 后台）→
+  `npx playwright test --project=docs`（含 setup 依赖，共 18 tests 全绿 32.9s，本轮零 stale-drift）→
+  `kill + pkill -f "next dev --port 3001"` + `lsof` 确认 + 删 log。spec 自播种/自清（afterAll 后
+  t12qa 行 0 残留，种子 tsx 保留）。JSON reporter 会重写已脏的 `phase5-t9-playwright.json`——
+  本就 sibling-wave 脏文件，不 stage。
+- 脏树提交：`git diff` 先验 spec 文件零外来 hunk → `git add` 仅该路径 →
+  `git diff --cached --stat` 确认 1 文件后提交，不 push。
+
+## 97 文件 8 主题提交编排（2026-09-17，HEAD 76f0ca0 → docs-artifacts-merge）
+
+- T1 `17f61dc` feat(triggers)：timers→triggers 统一域 + agent hooks + reconciler（50 文件，4 迁移 + schema + HookService/Reconciler + triggers web 页）
+- T2 `2b5236d` feat(plan)：评审轮次接线 dispatch→verdict→convergence（11 文件，含 id-resync.guard.spec）
+- T3 `2b06427` feat(plan)：vteam_plan_complete 工具（11 文件；混装 T3 侧 hunk + 计数 26→29 补齐 + service.spec 格式化随带）
+- T4 `95aad40` fix(nudge)：按人冷却 + messageId 硬去重（7 文件；含 mr_ resync、prettier 纯格式化、PM 风暴三铁律）
+- T5 `51d9aac` feat(tasks)：完工门禁 preflight + force（8 文件）
+- T6 `c5f4e2f` fix(worker)：cwdOrigin 解析 git origin（2 文件）
+- T7 `bfeadad` chore(web)：管理页收拢 /system（10 文件；旧路由改重定向桩；e2e 随带）
+- T8 `d7899ca` chore(omo)：plans/notepads/evidence（155 文件；本条目 amend 进 T8，sha 随之更新，见 git log）
+- 混装 7 文件拆分：service.ts（hook 方法+trigger 调用点→T1，planComplete+ERRORS import→T3；教训：删 `-` 行会断上下文邻接，须把 `-` 行降级为空格上下文，`--recount` 只修计数不修跨 hunk 位移）/ tools.ts（hook schema+条目→T1）/ controller.spec（hook 断言→T1，plan_complete+计数标题→T3）/ agent.constants+seed.ts（hook 行→T1，gated/PM 铁律→T3）/ seed.spec（hook 用例→T1，plan_complete→T3，风暴三铁律→T4）
+- 未能干净拆分：controller.spec 计数标题行（26→29 一行含两组工具名）整体归 T3；agent.constants.spec 计数行同理；service.ts 纯格式化 3 hunk 归 T1（body 注明）。
+- 中途返工：首版 T1 漏暂存 HookService import 块（SPLIT 截断吞掉 hunk 尾部 `+` 行）→ `git reset --soft 76f0ca0` + `git reset` 回到干净起点重做（仅动索引/分支指针，工作区逐字节未动；旧提交在 reflog）。教训：每个混装文件暂存后必须 grep 验证「应有（hook import）」与「应无（plan_complete）」双向断言，不能只查一边。
+- 基线：提交前 `npx tsc --noEmit` exit 0，提交后仍 exit 0；`git status` 干净；未 push。

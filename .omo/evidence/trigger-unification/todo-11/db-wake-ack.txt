@@ -1,0 +1,6 @@
+id	sender_type	sender_id	LEFT(JSON_UNQUOTE(content),120)	created_at
+m_0000002525	agent	a_developer	{"text": "t11probe-ack", "parts": [{"id": "prt_0ad555266001JytmvwPDoF0YbY", "type": "step-start", "messageID": "msg_0ad5	2026-09-17 03:07:25.758
+m_0000002526	agent	a_developer	{"text": "t11probe-ack", "parts": []}	2026-09-17 03:07:29.980
+id	status	updated_at
+s_0000000003	idle	2026-09-17 03:07:34.151
+mysql: [Warning] Using a password on the command line interface can be insecure.

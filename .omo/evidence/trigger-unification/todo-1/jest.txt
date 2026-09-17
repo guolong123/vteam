@@ -1,0 +1,26 @@
+PASS src/timers/timer.service.spec.ts
+  TimerService（通用定时器基础设施，mocked PrismaService，无 DB）
+    schedule
+      ✓ 落 pending 行（tmr_ id + dedupKey + fireAt/payload 透传） (3 ms)
+      ✓ dedup 命中 → 返回既有行且不再 create（幂等重排）
+      ✓ 并发竞态 create 撞 P2002 → 回读返回胜者行（幂等仍成立） (1 ms)
+    cancel
+      ✓ 按 id 取消 → status=cancelled
+      ✓ id 未命中（P2025）→ 回退按 dedupKey 取消
+    fireDue
+      ✓ 只取 due+pending 行并按 fireAt 升序触发（handler 按序调用）
+      ✓ 重叠 claim（updateMany count=0）→ handler 不调用
+      ✓ handler 抛错 → failed + lastError（tick 不抛错）
+      ✓ 无注册 handler → failed + no-handler lastError（大声暴露缺失消费者） (1 ms)
+      ✓ cancelled 行永不触发（查询口径限定 pending）
+      ✓ 单行坏数据不杀死本轮（其余行照常触发）
+    onModuleInit eager ticker（todo-1 重启证明）
+      ✓ 重启场景：onModuleInit 后无需 schedule()，过期 pending 行被 ticker 拾取 → fired (1 ms)
+      ✓ TIMER_SCAN_INTERVAL_MS=0 时 onModuleInit 不创建 interval
+      ✓ onModuleInit 后再 schedule() 不创建第二个 interval（守卫去重）
+
+Test Suites: 1 passed, 1 total
+Tests:       14 passed, 14 total
+Snapshots:   0 total
+Time:        2.166 s
+Ran all test suites matching /src\/timers/i.

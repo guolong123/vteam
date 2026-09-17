@@ -1,0 +1,2 @@
+id	kind	status	interval_ms	next_fire_at	fire_count	max_fires	last_error
+tmr_0000000024	progression_patrol	pending	1200000	2026-09-17 03:08:44.143	1	6	NULL

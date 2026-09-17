@@ -1,0 +1,5 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+ev_wm2
+ev_0000020204
+msg_wm2
+m_0000002119

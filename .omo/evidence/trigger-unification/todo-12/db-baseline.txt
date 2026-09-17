@@ -1,0 +1,23 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	team_id	team_member_id	worker_id	status
+s_0000000001	tm_0000000001	tmm_0000000003	w_compose_worker	failed
+s_0000000002	tm_0000000001	tmm_0000000002	w_compose_worker	idle
+s_0000000003	tm_0000000001	tmm_0000000004	w_compose_worker	idle
+s_0000000004	tm_0000000001	tmm_0000000005	w_compose_worker	idle
+s_0000000011	tm_0000000002	tmm_0000000008	w_compose_worker	idle
+s_0000000012	tm_0000000002	tmm_0000000009	w_compose_worker	idle
+s_0000000013	tm_0000000002	tmm_0000000010	w_compose_worker	idle
+s_0000000014	tm_0000000002	tmm_0000000011	w_compose_worker	idle
+s_0000000015	tm_0000000002	tmm_0000000012	w_compose_worker	idle
+id	team_id	status
+t_0000000001	tm_0000000001	pending_review
+id	team_id	agent_id
+tmm_0000000003	tm_0000000001	a_architect
+tmm_0000000004	tm_0000000001	a_developer
+tmm_0000000007	tm_0000000001	a_librarian
+tmm_0000000006	tm_0000000001	a_plan
+tmm_0000000001	tm_0000000001	a_product
+tmm_0000000002	tm_0000000001	a_project_manager
+tmm_0000000005	tm_0000000001	a_tester
+main_agent_member_id
+tmm_0000000002

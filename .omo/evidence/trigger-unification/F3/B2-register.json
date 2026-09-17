@@ -1,0 +1,6 @@
+--- H1 tgt=tmm_0000000002
+{"jsonrpc":"2.0","id":401,"result":{"content":[{"type":"text","text":"{\"hookId\":\"hks_0000000009\",\"status\":\"pending\",\"kind\":\"time\",\"dueAt\":\"2026-09-17T04:16:36.977Z\",\"expiresAt\":\"2026-09-18T04:15:31.977Z\"}"}]}}
+--- H2 tgt=tmm_0000000001
+{"jsonrpc":"2.0","id":402,"result":{"content":[{"type":"text","text":"{\"hookId\":\"hks_0000000010\",\"status\":\"pending\",\"kind\":\"time\",\"dueAt\":\"2026-09-17T04:16:37.045Z\",\"expiresAt\":\"2026-09-18T04:15:32.045Z\"}"}]}}
+--- H3 tgt=tmm_0000000001
+{"jsonrpc":"2.0","id":403,"result":{"content":[{"type":"text","text":"{\"hookId\":\"hks_0000000011\",\"status\":\"pending\",\"kind\":\"time\",\"dueAt\":\"2026-09-17T04:16:37.071Z\",\"expiresAt\":\"2026-09-18T04:15:32.071Z\"}"}]}}

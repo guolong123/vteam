@@ -1,0 +1,17 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+hooks_left	trg_left	ev_left	msg_left
+0	0	0	0
+id	status	last_activity_at
+s_0000000004	idle	NULL
+triggers_now
+28
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	kind	status	created_at
+tmr_0000000133	session_idle_scan	pending	2026-09-17 03:52:02.491
+tmr_0000000132	session_idle_scan	cancelled	2026-09-17 03:49:03.541
+tmr_0000000131	session_idle_scan	cancelled	2026-09-17 03:10:20.103
+tmr_0000000130	session_idle_scan	fired	2026-09-17 03:07:20.273
+tmr_0000000129	hook_poll	pending	2026-09-17 03:04:49.949
+tmr_0000000027	session_idle_scan	fired	2026-09-17 02:55:21.771
+tmr_0000000026	session_idle_scan	cancelled	2026-09-17 02:49:30.208
+tmr_0000000025	session_idle_scan	cancelled	2026-09-17 02:48:17.040

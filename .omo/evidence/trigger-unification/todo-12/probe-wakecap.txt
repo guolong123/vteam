@@ -1,0 +1,4 @@
+wakeText cap probe (2026-09-17, live server :13000):
+hook_register with 2500-char wakeText -> hks_0000000002 created (200 OK)
+DB ground truth: SELECT CHAR_LENGTH(wake_text) FROM hooks WHERE id='hks_0000000002' -> 2000
+(HOOK_WAKE_TEXT_MAX slice in HookService.registerHook; probe row deleted after, see db-cleanup.txt)

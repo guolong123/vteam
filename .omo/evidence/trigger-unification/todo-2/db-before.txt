@@ -1,0 +1,23 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+timers_before
+19
+id	kind	status	fire_at	dedup_key
+tmr_0000000001	receipt_nudge	fired	2026-09-16 13:01:03.058	receipt_nudge:tm_0000000002:mr_0000000003
+tmr_0000000002	receipt_nudge	fired	2026-09-16 13:01:53.393	receipt_nudge:tm_0000000002:mr_0000000004
+tmr_0000000003	receipt_nudge	fired	2026-09-16 09:42:07.560	receipt_nudge:tm_0000000004:mr_0000000003
+tmr_0000000004	receipt_nudge	fired	2026-09-16 13:12:17.343	receipt_nudge:tm_0000000002:mr_0000000006
+tmr_0000000005	receipt_nudge	fired	2026-09-16 13:10:27.038	receipt_nudge:tm_0000000002:mr_0000000007
+tmr_0000000006	receipt_nudge	fired	2026-09-16 13:15:42.672	receipt_nudge:tm_0000000002:mr_0000000008
+tmr_0000000007	receipt_nudge	cancelled	2026-09-16 13:22:18.279	receipt_nudge:tm_0000000002:mr_0000000009
+tmr_0000000008	receipt_nudge	cancelled	2026-09-16 13:22:21.222	receipt_nudge:tm_0000000002:mr_0000000010
+tmr_0000000009	receipt_nudge	cancelled	2026-09-16 13:21:51.391	receipt_nudge:tm_0000000002:mr_0000000011
+tmr_0000000010	receipt_nudge	cancelled	2026-09-16 13:32:49.202	receipt_nudge:tm_0000000002:mr_0000000012
+tmr_0000000011	receipt_nudge	cancelled	2026-09-16 13:23:14.741	receipt_nudge:tm_0000000002:mr_0000000013
+tmr_0000000012	receipt_nudge	cancelled	2026-09-16 13:34:30.469	receipt_nudge:tm_0000000002:mr_0000000014
+tmr_0000000016	receipt_nudge	fired	2026-09-16 13:56:05.054	receipt_nudge:tm_0000000002:mr_0000000025
+tmr_0000000017	receipt_nudge	fired	2026-09-16 14:06:38.140	receipt_nudge:tm_0000000002:mr_0000000026
+tmr_0000000018	receipt_nudge	fired	2026-09-16 13:58:19.447	receipt_nudge:tm_0000000002:mr_0000000027
+tmr_0000000019	receipt_nudge	fired	2026-09-16 14:03:40.724	receipt_nudge:tm_0000000002:mr_0000000028
+tmr_0000000020	receipt_nudge	fired	2026-09-16 14:22:50.943	receipt_nudge:tm_0000000002:mr_0000000029
+tmr_0000000021	receipt_nudge	fired	2026-09-17 00:22:02.120	receipt_nudge:tm_0000000002:mr_0000000030
+tmr_0000000022	receipt_nudge	fired	2026-09-17 00:27:22.725	receipt_nudge:tm_0000000002:mr_0000000031

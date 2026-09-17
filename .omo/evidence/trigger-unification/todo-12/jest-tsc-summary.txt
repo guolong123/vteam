@@ -1,0 +1,6 @@
+todo-12/13 verification summary (2026-09-17)
+baseline: npx tsc --noEmit exit 0; jest 121 suites / 2771 tests green
+final:    npx tsc --noEmit exit 0; jest 122 suites / 2790 tests green (+19: 18 hook spec + 1 seed.spec)
+matrix spec: agent-policies.matrix.spec.ts green (7 agents, toolAllows keys in registry, mcpDenies mutual exclusion)
+snapshot: agent-policies.custom-agents.spec.ts.snap +24 lines (only vteam_hook_register/cancel deny+allow entries), updated via -u after diff audit
+controller.spec known flake (skill_create Parse Error: Expected HTTP/) NOT seen this round

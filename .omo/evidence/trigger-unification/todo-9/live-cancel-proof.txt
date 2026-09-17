@@ -1,0 +1,4 @@
+id	kind	status	due_at	dedup_key
+tmr_0000000025	session_idle_scan	cancelled	2026-09-17 02:49:17.011	session_idle_scan:team:tm_0000000006:a_project_manager:s_0000000016:first-token:1789613297011:973794
+id	status	last_activity_at
+s_0000000016	idle	2026-09-17 02:48:34.135

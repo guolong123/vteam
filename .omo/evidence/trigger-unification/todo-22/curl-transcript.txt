@@ -1,0 +1,52 @@
+### 1. login admin + member
+admin_jwt_len=221 member_jwt_len=239
+### 2. GET /triggers as admin (expect 200, non-empty, envelope)
+{"items":[{"id":"tmr_probe56_restart","kind":"receipt_nudge","status":"fired","dueAt":"2026-09-17T02:27:43.385Z","nextFireAt":null,"scopeType":null,"scopeId":null,"ownerInstanceId":null,"fireCount":1,"skipReason":null,"lastError":null,"attempts":1,"createdAt":"2026-09-17T02:32:43.385Z","source":"system"},{"id":"tmr_probe56_cancel","kind":"receipt_nudge","status":"cancelled","dueAt":"2026-09-17T02:27:43.385Z","nextFireAt":null,"scopeType":null,"scopeId":null,"ownerInstanceId":null,"fireCount":0,"skipReason":null,"lastError":null,"attempts":0,"createdAt":"2026-09-17T02:32:43.385Z","source":"system"},{"id":"tmr_probe56_bogus","kind":"receipt_nudge","status":"fired","dueAt":"2026-09-17T02:27:43.385Z","nextFireAt":null,"scopeType":null,"scopeId":null,"ownerInstanceId":null,"fireCount":1,"skipReason":null,"lastError":null,"attempts":1,"createdAt":"2026-09-17T02:32:43.385Z","source":"system"},{"id":"tmr_0000000022","kind":"receipt_nudge","status":"fired","dueAt":"2026-09-17T00:27:22.725Z","nextFireAt":null,"scopeType":null,"scopeId":null,"ownerInstanceId":null,"fireCount":0,"skipReason":null,"lastError":null,"attempts":1,"createdAt":"2026-09-17T00:12:22.765Z","source":"system"},{"id":"tmr_0000000021","kind":"receipt_nudge","status":"fired","dueAt":"2026-09-17T00:22:02.120Z","nextFireAt":null,"scopeType":null,"scopeId":null,"ownerInstanceId":null,"fireCount":0,"skipReason":null,"lastError":null,"attempts":1,"createdAt":"2026-09-17T00:07:02.134Z","source":"system"},{"id":"tmr_00000000
+### 3. GET ?status=fired&page=1&pageSize=5 (envelope + item shape + source=system)
+ENVELOPE_OK total=15 items=5 all receipt_nudge/system
+### 4. insert probe agent trigger (pending hook_poll, owner tmm_0000000001 = tm_0000000001)
+### 5. member DELETE probe (other-team agent) -> expect 403 TRIGGER_FORBIDDEN
+{"code":"TRIGGER_FORBIDDEN","message":"仅该触发器归属团队成员或管理员可取消"}
+HTTP:403
+### 6. member DELETE existing system row (receipt_nudge) -> expect 403 TRIGGER_SYSTEM_READONLY
+system_row=tmr_probe56_restart
+{"code":"TRIGGER_SYSTEM_READONLY","message":"系统触发器仅管理员可取消"}
+HTTP:403
+### 7. member GET without teamId -> expect 403 TRIGGER_TEAM_SCOPE_REQUIRED
+{"code":"TRIGGER_TEAM_SCOPE_REQUIRED","message":"成员查看触发器列表必须带 teamId（全局列表仅管理员可见）"}
+HTTP:403
+### 8. member GET teamId=tm_0000000001 (non-member) -> expect 200 empty set
+{"items":[],"total":0,"page":1,"pageSize":20}
+HTTP:200
+### 9. admin DELETE probe -> expect 200 cancelled
+{"id":"tmr_probe_todo22","kind":"hook_poll","status":"cancelled","dueAt":"2026-09-17T02:33:19.000Z","nextFireAt":null,"scopeType":null,"scopeId":null,"ownerInstanceId":"tmm_0000000001","fireCount":0,"skipReason":null,"lastError":null,"attempts":0,"createdAt":"2026-09-17T02:33:19.736Z","source":"agent"}
+HTTP:200
+
+id	status
+tmr_probe_todo22	cancelled
+### 10. admin DELETE probe again (stale_state) -> expect 200, no 500
+{"id":"tmr_probe_todo22","kind":"hook_poll","status":"cancelled","dueAt":"2026-09-17T02:33:19.000Z","nextFireAt":null,"scopeType":null,"scopeId":null,"ownerInstanceId":"tmm_0000000001","fireCount":0,"skipReason":null,"lastError":null,"attempts":0,"createdAt":"2026-09-17T02:33:19.736Z","source":"agent"}
+HTTP:200
+
+### 11. DELETE does_not_exist -> expect 404 TRIGGER_NOT_FOUND
+{"code":"TRIGGER_NOT_FOUND","message":"触发器 does_not_exist 不存在"}
+HTTP:404
+### 12. malformed_input probes (none may 500)
+-- page=abc (expect 400)
+HTTP:400
+-- status=bogus (expect 400)
+HTTP:400
+-- kind=bogus (expect 400)
+HTTP:400
+-- pageSize=9999 (expect 200 clamped pageSize=100)
+pageSize=100
+-- scopeId SQL-ish (expect 200 empty, no 500)
+total=0
+-- status=fired&kind=hook_poll combo (expect 200)
+HTTP:200
+-- unauthenticated (expect 401)
+HTTP:401
+### 13. CLEANUP: delete probe row + prove 0 remain
+probe_left
+0
+### DONE

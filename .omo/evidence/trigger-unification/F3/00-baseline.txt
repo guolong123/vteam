@@ -1,0 +1,11 @@
+hooks
+0
+trg
+28
+id	team_id	team_member_id	worker_id	status	last_activity_at
+s_0000000001	tm_0000000001	tmm_0000000003	w_compose_worker	failed	NULL
+s_0000000002	tm_0000000001	tmm_0000000002	w_compose_worker	idle	2026-09-17 03:52:10.291
+s_0000000003	tm_0000000001	tmm_0000000004	w_compose_worker	idle	2026-09-17 03:10:32.739
+s_0000000004	tm_0000000001	tmm_0000000005	w_compose_worker	idle	NULL
+id	status
+t_0000000001	pending_review

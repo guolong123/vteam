@@ -1,0 +1,4 @@
+id	scope_type	scope_id	owner_instance_id	kind	status	due_at	expires_at	dedup_key
+hks_0000000001	task	t_0000000001	tmm_0000000002	time	pending	2026-09-17 03:59:14.557	2026-09-18 03:56:44.557	hook:task:t_0000000001:tmm_0000000002:1789617404557
+id	kind	status	due_at	dedup_key
+tmr_0000000134	hook_fire	pending	2026-09-17 03:59:14.557	hook_fire:hook:hks_0000000001

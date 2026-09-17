@@ -1,0 +1,6 @@
+id	kind	status	due_at	fire_count	skip_reason	last_error	busy_retries
+hks_0000000001	time	fired	2026-09-17 03:59:14.557	1	NULL	NULL	0
+id	kind	status	due_at	fire_count	attempts	last_error
+tmr_0000000134	hook_fire	fired	2026-09-17 03:59:14.557	1	1	NULL
+id	team_member_id	status	last_activity_at
+s_0000000002	tmm_0000000002	idle	2026-09-17 03:59:43.343

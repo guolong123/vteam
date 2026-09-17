@@ -1,0 +1,4 @@
+id	scope_type	scope_id	owner_instance_id	kind	status	grace_ms	due_at	dedup_key
+hks_0000000002	team	tm_0000000001	tmm_0000000002	all_idle	pending	240000	NULL	hook:team:tm_0000000001:tmm_0000000002:1789617663879
+id	kind	status	fire_count	dedup_key
+tmr_0000000129	hook_poll	pending	55	hook_poll:global:all_idle

@@ -1,0 +1,12 @@
+type	p	created_at
+trigger.fired	{"kind": "time", "hookId": "hks_0000000009", "status": "fired", "scopeId": "t_0000000001", "fireCount": 1, "scopeType": "task", "ownerInstanceId": "tm	2026-09-17 04:16:18.985
+trigger.expired	{"kind": "time", "hookId": "hks_0000000010", "reason": "?????/????? tm_0000000001 ?? tmm_0000000001 ????????????????", "status": "expired", "scopeId":	2026-09-17 04:16:19.024
+trigger.expired	{"kind": "time", "hookId": "hks_0000000011", "reason": "?????/????? tm_0000000001 ?? tmm_0000000001 ????????????????", "status": "expired", "scopeId":	2026-09-17 04:16:19.055
+chat.message.new	{"message": {"id": "m_0000002122", "status": "sent", "content": {"text": "?????????hks_0000000009 / F3 probe B2 H1 valid wake???? t_0000000001 ?????W1	2026-09-17 04:16:23.873
+chat.message.new	{"message": {"id": "m_0000002121", "status": "sent", "content": {"text": "???????????", "parts": [{"id": "prt_0ad94758b001FTWEeVKKJjWm0C", "type": "st	2026-09-17 04:16:26.880
+id	created_at
+m_0000002121	2026-09-17 04:16:23.020
+m_0000002122	2026-09-17 04:16:23.866
+id	kind	status	dedup_key
+tmr_probe_f3b3	hook_poll	pending	hook_poll:probe:f3b3
+tmr_0000000148	session_idle_scan	cancelled	session_idle_scan:team:tm_0000000001:a_project_manager:s_0000000002:first-token:1789618578963:342127

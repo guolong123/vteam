@@ -1,0 +1,13 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	status	fire_count	busy_retries	skip_reason
+hks_probe_t20_exp	expired	0	0	hook ????fire ????
+hks_probe_t20_fire	fired	1	0	
+hks_probe_t20_veto	expired	0	0	?? s_0000000003 ????status=failed?
+id	status	fire_count
+tmr_probe_t20_exp	fired	1
+tmr_probe_t20_fire	fired	1
+tmr_probe_t20_veto	fired	1
+type	scope_type	scope_id	payload
+trigger.expired	team	tm_0000000001	{"kind": "time", "hookId": "hks_probe_t20_veto", "reason": "?? s_0000000003 ????status=failed?", "status": "expired", "scopeId": "tm_0000000001", "scopeType": "team", "skipReason": "?? s_0000000003 ????status=failed?", "
+trigger.fired	team	tm_0000000001	{"kind": "time", "hookId": "hks_probe_t20_fire", "status": "fired", "scopeId": "tm_0000000001", "fireCount": 2, "scopeType": "team", "ownerInstanceId": "tmm_0000000002"}
+trigger.expired	team	tm_0000000001	{"kind": "time", "hookId": "hks_probe_t20_exp", "reason": "hook ????fire ????", "status": "expired", "scopeId": "tm_0000000001", "scopeType": "team", "skipReason": "hook ????fire ????", "ownerInstanceId": "tmm_0000000002

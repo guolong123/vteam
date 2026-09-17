@@ -1,0 +1,8 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	status	worker_id
+s_0000000002	idle	w_compose_worker
+s_0000000003	idle	w_compose_worker
+id	status	skip_reason
+hks_probe_t20_exp	pending	NULL
+hks_probe_t20_fire	pending	NULL
+hks_probe_t20_veto	pending	NULL

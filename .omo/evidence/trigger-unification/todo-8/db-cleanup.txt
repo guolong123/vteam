@@ -1,0 +1,20 @@
+probe_tasks
+0
+probe_triggers
+0
+probe_patrol
+0
+probe_sessions
+0
+probe_msgs
+0
+probe_mem
+0
+id	current_task_id
+tm_0000000006	NULL
+team_id	task_id	position
+tm_0000000001	t_0000000004	1
+tm_0000000001	t_0000000005	2
+tm_0000000001	t_0000000006	3
+tm_0000000001	t_0000000008	4
+tm_0000000001	t_0000000009	5

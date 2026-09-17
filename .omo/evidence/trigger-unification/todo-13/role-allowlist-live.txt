@@ -1,0 +1,5 @@
+vteam-product hook_register= allow hook_cancel= allow
+vteam-project_manager hook_register= allow hook_cancel= allow
+vteam-developer hook_register= ABSENT hook_cancel= ABSENT
+vteam-plan hook_register= ABSENT hook_cancel= ABSENT
+developer permission hook keys: ['vteam_hook_register', 'vteam_hook_cancel']

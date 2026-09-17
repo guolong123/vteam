@@ -1,0 +1,7 @@
+--- probe insert (session stale 70s + trigger due -60s, dispatchedAt=last_activity_at ms) ---
+session s_probe_todo9 running last_activity_at=02:45:14.604 (last_ms=1789613114604)
+trigger tmr_probe_todo9 session_idle_scan pending due=02:45:29.821 dispatchedAt=1789613114604
+--- after 'docker compose restart server' + 45s ---
+tmr_probe_todo9: fired, fire_count=1, attempts=1, last_error=NULL (see db-probe-fired echo below)
+server log: WorkerDispatcher 'agent a_developer agent 无响应（60s 无事件回流）' (see restart-reap-logs.txt)
+cleanup: DELETE both probe rows -> 0/0, no first-token payload rows of mine remain

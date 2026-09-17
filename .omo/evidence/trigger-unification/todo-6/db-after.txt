@@ -1,0 +1,7 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	status	fire_count	attempts	last_error
+tmr_probe56_bogus	fired	1	1	
+tmr_probe56_cancel	cancelled	0	0	
+tmr_probe56_restart	fired	1	1	
+id	nudge_count	last_nudged_at
+mr_0000000001	1	2026-09-17 02:32:48.913

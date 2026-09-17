@@ -1,0 +1,32 @@
+## todo-22 fix verification: payload JSON path prefix (2026-09-17, server rebuilt 2nd time)
+
+Bug: `path: 'teamId'` -> MySQL 3143 "Invalid JSON path expression ... position 1"
+(server log req id 104/105/112, `prisma.trigger.count()` 500). Prisma passes `path`
+verbatim to JSON_EXTRACT; MySQL requires the `$.` prefix.
+Fix: `path: '$.teamId'` / `path: '$.taskId'` (service + spec, 7 occurrences).
+
+Re-proof after rebuild (admin JWT, all HTTP 200):
+- GET /api/v1/triggers?teamId=tm_0000000002&page=1&pageSize=5 -> 200 total=19,
+  items[0] = tmr_0000000023 receipt_nudge/pending source=system
+- GET ?teamId=tm_0000000002&taskId=t_0000000003 -> 200 total=19
+- GET ?taskId=t_0000000003 -> 200 total=19
+- GET ?scopeType=team -> 200 total=0
+- GET ?kind=receipt_nudge&status=pending -> 200 total=1
+- Loop re-check: teamId=tm_0000000002 -> HTTP=200 total=19;
+  teamId+taskId -> 200/19; taskId -> 200/19; scopeType=team -> 200/0;
+  kind+status -> 200/1
+
+DB ground truth (docker compose exec db mysql):
+- JSON_EXTRACT(payload,'$.teamId')='tm_0000000002' -> 19
+- JSON_EXTRACT(payload,'$.taskId')='t_0000000003' -> 19
+- both -> 19  (API totals match exactly; filters genuinely filter)
+- probe residue: WHERE id LIKE 'tmr_probe_todo22%' -> 0; triggers total = 20
+  (19 baseline + 0 mine; +/- sibling tmr_probe56_* rows untouched, not mine)
+- tmr_probe56_restart still fired (member 403 path wrote nothing)
+
+First transcript (curl-transcript.txt) covers: admin list envelope
+(total=15 fired at the time), probe insert, member 403 x3 codes
+(TRIGGER_FORBIDDEN / TRIGGER_SYSTEM_READONLY / TRIGGER_TEAM_SCOPE_REQUIRED),
+member empty-set 200, admin cancel 200 + SELECT cancelled, recancel 200,
+404 TRIGGER_NOT_FOUND, malformed 400 x3, pageSize clamp 100, SQL-ish scopeId
+200/empty, combo 200, unauthenticated 401, cleanup probe_left=0.

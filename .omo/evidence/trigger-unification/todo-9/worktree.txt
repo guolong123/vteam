@@ -1,0 +1,81 @@
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/notepads/docs-artifacts-merge/learnings.md
+ M .omo/start-work/ledger.jsonl
+ M server/prisma/schema.prisma
+ M server/src/chat/chat.controller.spec.ts
+ M server/src/chat/message-receipts.service.ts
+ M server/src/chat/receipt-nudge.handler.spec.ts
+ M server/src/chat/receipt-nudge.handler.ts
+ M server/src/chat/review-round-timeout.handler.spec.ts
+ M server/src/chat/review-round-timeout.handler.ts
+ M server/src/chat/worker-dispatcher.gate.spec.ts
+ M server/src/chat/worker-dispatcher.spec.ts
+ M server/src/chat/worker-dispatcher.ts
+ M server/src/common/constants/task.constants.ts
+ M server/src/issues/review-round-gate.attach-notifier.spec.ts
+ M server/src/issues/review-round-gate.service.spec.ts
+ M server/src/issues/review-verdict.listener.spec.ts
+ M server/src/issues/review-verdict.listener.ts
+ M server/src/message-channels/message-inbound.service.spec.ts
+ M server/src/platform-mcp/plan-removal.guard.spec.ts
+ M server/src/platform-mcp/platform-mcp.module.ts
+ M server/src/platform-mcp/platform-mcp.service.receipt-nudge.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.review-round-open.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/prisma/seed.spec.ts
+ M server/src/tasks/plan-review-wiring.ts
+ M server/src/tasks/task-progression.scheduler.spec.ts
+ M server/src/tasks/task-progression.scheduler.ts
+ M server/src/tasks/tasks.controller.spec.ts
+ M server/src/tasks/tasks.controller.ts
+ M server/src/tasks/tasks.module.ts
+ M server/src/tasks/tasks.service.spec.ts
+ M server/src/tasks/tasks.service.ts
+ M server/src/teams/seed.spec.ts
+ D server/src/timers/timer.service.spec.ts
+ D server/src/timers/timer.service.ts
+ M server/src/timers/timers.module.ts
+ M server/src/workers/worker-event.ingress.spec.ts
+ M server/src/workers/worker-event.ingress.ts
+R  web/app/(main)/memories/page.tsx -> web/app/(main)/system/memories/page.tsx
+R  web/app/(main)/roles/page.tsx -> web/app/(main)/system/roles/page.tsx
+R  web/app/(main)/users/page.tsx -> web/app/(main)/system/users/page.tsx
+ M web/e2e/pages.spec.ts
+ M web/e2e/reference/testids.ts
+ M web/src/components/layout/app-shell.tsx
+ M web/src/components/layout/nav-dock.tsx
+ M web/src/components/tasks/task-status-actions.tsx
+ M web/src/components/teams/TeamRightPanel.tsx
+ M worker/src/git/git-tools.spec.ts
+ M worker/src/git/git-tools.ts
+?? .omo/evidence/trigger-unification/
+?? .omo/notepads/docs-artifacts-merge/decisions.md
+?? .omo/notepads/docs-artifacts-merge/problems.md
+?? .omo/notepads/task-completion-gate/
+?? .omo/notepads/trigger-unification/
+?? .omo/plans/docs-artifacts-merge.md
+?? .omo/plans/trigger-unification.md
+?? server/.omo/
+?? server/prisma/migrations/20260919000001_rename_timers_to_triggers/
+?? server/prisma/migrations/20260919000002_session_last_activity_at/
+?? server/src/common/constants/trigger.constants.spec.ts
+?? server/src/common/constants/trigger.constants.ts
+?? server/src/common/id-resync.guard.spec.ts
+?? server/src/tasks/dto/complete-task.dto.ts
+?? server/src/timers/dto/
+?? server/src/timers/trigger.service.spec.ts
+?? server/src/timers/trigger.service.ts
+?? server/src/timers/triggers.controller.spec.ts
+?? server/src/timers/triggers.controller.ts
+?? server/src/timers/triggers.service.spec.ts
+?? server/src/timers/triggers.service.ts
+?? web/app/(main)/memories/
+?? web/app/(main)/roles/
+?? web/app/(main)/system/layout.tsx
+?? web/app/(main)/system/page.tsx
+?? web/app/(main)/system/triggers/
+?? web/app/(main)/users/
+?? web/src/components/layout/system-sidebar.tsx

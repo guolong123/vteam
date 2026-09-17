@@ -1,0 +1,21 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	kind	status	fire_count	attempts	dedup_key
+tmr_0000000001	receipt_nudge	fired	0	1	receipt_nudge:tm_0000000002:mr_0000000003
+tmr_0000000002	receipt_nudge	fired	0	1	receipt_nudge:tm_0000000002:mr_0000000004
+tmr_0000000003	receipt_nudge	fired	0	1	receipt_nudge:tm_0000000004:mr_0000000003
+tmr_0000000004	receipt_nudge	fired	0	1	receipt_nudge:tm_0000000002:mr_0000000006
+tmr_0000000005	receipt_nudge	fired	0	1	receipt_nudge:tm_0000000002:mr_0000000007
+tmr_0000000006	receipt_nudge	fired	0	1	receipt_nudge:tm_0000000002:mr_0000000008
+tmr_0000000007	receipt_nudge	cancelled	0	0	receipt_nudge:tm_0000000002:mr_0000000009
+tmr_0000000008	receipt_nudge	cancelled	0	0	receipt_nudge:tm_0000000002:mr_0000000010
+tmr_0000000009	receipt_nudge	cancelled	0	0	receipt_nudge:tm_0000000002:mr_0000000011
+tmr_0000000010	receipt_nudge	cancelled	0	0	receipt_nudge:tm_0000000002:mr_0000000012
+tmr_0000000011	receipt_nudge	cancelled	0	0	receipt_nudge:tm_0000000002:mr_0000000013
+tmr_0000000012	receipt_nudge	cancelled	0	0	receipt_nudge:tm_0000000002:mr_0000000014
+tmr_0000000016	receipt_nudge	fired	0	1	receipt_nudge:tm_0000000002:mr_0000000025
+tmr_0000000017	receipt_nudge	fired	0	1	receipt_nudge:tm_0000000002:mr_0000000026
+tmr_0000000018	receipt_nudge	fired	0	1	receipt_nudge:tm_0000000002:mr_0000000027
+tmr_0000000019	receipt_nudge	fired	0	1	receipt_nudge:tm_0000000002:mr_0000000028
+tmr_0000000020	receipt_nudge	fired	0	1	receipt_nudge:tm_0000000002:mr_0000000029
+tmr_0000000021	receipt_nudge	fired	0	1	receipt_nudge:tm_0000000002:mr_0000000030
+tmr_0000000022	receipt_nudge	fired	0	1	receipt_nudge:tm_0000000002:mr_0000000031

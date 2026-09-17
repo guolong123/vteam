@@ -1,0 +1,6 @@
+id	status	due_at	tid	tstat	tdue
+hks_0000000009	pending	2026-09-17 04:13:36.650	tmr_0000000145	pending	2026-09-17 04:13:36.660
+hks_0000000010	pending	2026-09-17 04:13:36.650	tmr_0000000146	pending	2026-09-17 04:13:36.660
+hks_0000000011	pending	2026-09-17 04:13:36.650	tmr_0000000147	pending	2026-09-17 04:13:36.660
+id	kind	status	due_at	next_fire_at	interval_ms	fire_count
+tmr_probe_f3b3	hook_poll	pending	2026-09-17 04:05:36.665	2026-09-17 04:05:36.665	60000	5

@@ -1,0 +1,60 @@
+    ✓ fire dedup 形状 hook_fire:hook:<hookId>（todo-3 可回查） (1 ms)
+    ✓ 全局 poll dedup 一域一行
+    ✓ grace 缺省 4min（plan 3–5min 区间内，todo-10 PoC 定终值）
+      ✓ 未知 kind "timer" → 抛错不落库 (18 ms)
+      ✓ 未知 kind "event" → 抛错不落库 (16 ms)
+      ✓ 未知 kind "" → 抛错不落库
+      ✓ time 缺 dueAt → 抛错
+      ✓ time dueAt >= expiresAt → 抛错（否则到期即过期永不唤醒） (1 ms)
+      ✓ all_idle 带 dueAt → 抛错（静默由全局 poll 评估）
+      ✓ 空 wakeText → 抛错 (1 ms)
+      ✓ wakeText 超 2000 字 → 截断落库（非拒绝） (1 ms)
+      ✓ 缺 expiresAt → 抛错（无无限 hook） (1 ms)
+      ✓ parentHookId 悬空 → 抛错（拒绝悬空血缘） (1 ms)
+      ✓ time：同 $transaction 内落 hook 行 + hook_fire 行
+      ✓ all_idle：hook 行 dueAt=NULL + graceMs 落缺省，fire 行定于 expiresAt (1 ms)
+      ✓ 重复 dedupKey → 幂等直返既有行（事务不跑）
+      ✓ 半写不可能：fire 行抛错 → 事务整体抛，调用方可见（Prisma 原子回滚）
+      ✓ 并发撞 dedup 唯一键（P2002）→ 回读胜者行幂等直返 (1 ms)
+      ✓ 被唤醒轮内续注册：parentHookId 落行 + rootTaskId 继承（不重置）
+      ✓ 首 hook 无 parent：rootTaskId 取 target.taskId
+      ✓ 到点 + 目标完好 + 空闲 → wake 分派（kind:wake，前缀 [hook:time id]），hook 落 fired (1 ms)
+      ✓ 行缺失 / 已 cancelled → no-op（cancelled hook 永不触发）
+      ✓ 已过期（now >= expiresAt）→ expired + lastError，不分派
+      ✓ stale_state：任务归档 → expired（永不抛，永不静默消失）
+      ✓ stale_state：任务删除 → expired（永不抛，永不静默消失）
+      ✓ stale_state：成员删除 → expired（永不抛，永不静默消失）
+      ✓ stale_state：会话重置缺失 → expired（永不抛，永不静默消失）
+      ✓ busy（首字等待中）→ 否决：不分派 + skipReason 落库 + 重排（非 expired）
+      ✓ busy 且重试越过 expiresAt → 改判 expired（触发器基座永不先取消） (1 ms)
+      ✓ all_idle 的 fire 兜底行 → no-op（唤醒权在全局 poll）
+      ✓ wake 分派抛错 → lastError 落库 + 重排（永不抛）
+      ✓ scope 静默 + 目标完好 + 空闲 → 唤醒且同 tick 至多 ONE 个 (1 ms)
+      ✓ scope 内有 running 会话 → 非静默：不唤醒零写库
+      ✓ grace 未满（刚活跃 1s 前，宽限 4min 缺省）→ 不唤醒
+      ✓ 否决：首个 mid-turn（activeExecutions 命中）→ skipReason 落库并继续，第二个被唤醒
+      ✓ 目标失效（任务归档）→ expired 并继续扫下一个 (1 ms)
+      ✓ pending → cancelled + 配套 fire 行 cancel
+      ✓ 已终态行 → 幂等直返（fire 行不动）
+      ✓ 未知 id → 抛错（todo-12 映射 404）
+      ✓ expireTaskHooks：按 rootTaskId 标 expired（只标不删，返回计数）
+      ✓ 注册 hook_fire + hook_poll handler，缺失 poll 行时 schedule interval 行 (1 ms)
+      ✓ poll 行 pending 已存在 → 不重建
+      ✓ guardrail #1：time 延迟 30s（<60s）→ 显式拒绝
+      ✓ malformed_input：dueAt 已过去（负延迟）→ 显式拒绝
+      ✓ guardrail #2a：all_idle expiresAt 已过去 → 显式拒绝 (1 ms)
+      ✓ malformed_input：ttl 8d（>7d 上界）→ 显式拒绝
+      ✓ guardrail #2b：ttl 6d（<7d 上界）→ 放行且 busyRetries=0 落库
+      ✓ guardrail #3：同 scope 20 个 pending → 第 21 个显式拒绝
+      ✓ guardrail #3：不同 scope 不受 cap 牵连 → 放行
+      ✓ guardrail #4：同 task fired+pending 已满 5 → 第 6 个显式拒绝 (1 ms)
+      ✓ guardrail #4：同 task 仅 4 行 → 放行
+      ✓ guardrail #5a：同任务 A↔B 对穿（A 唤 B 后 B 唤 A）→ 显式拒绝
+      ✓ guardrail #5b：跨任务复读（team 域无 task，owner/target 回显 + 唤醒词相似）→ 显式拒绝
+      ✓ no-false-positive：合法新任务（无 parent + 文本不同）不受旧任务预算牵连
+      ✓ stale_state：expired 旧链 + 不同目标 + 不同文本的新注册 → 不误伤 (1 ms)
+      ✓ guardrail #6a：busy 否决递增 busyRetries（0→1）+ skipReason 照写 + 重排
+      ✓ guardrail #6b：busy 重试梯满 10 次（9→10）→ 改判 expired，不重排
+      ✓ guardrail #4-fire 侧：lineage 超预算（6>5）→ 改判 expired，不分派
+      ✓ guardrail #6-poll 侧：busy 梯满 10 次 → 改判 expired（否决仍写 skipReason） (1 ms)
+Tests:       59 passed, 59 total

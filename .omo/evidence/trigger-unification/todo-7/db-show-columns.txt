@@ -1,0 +1,5 @@
+Field	Type	Null	Key	Default	Extra
+last_activity_at	datetime(3)	YES		NULL	
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+sessions	1	idx_sessions_status_last_activity	1	status	A	3	NULL	NULL		BTREE			YES	NULL
+sessions	1	idx_sessions_status_last_activity	2	last_activity_at	A	3	NULL	NULL	YES	BTREE			YES	NULL

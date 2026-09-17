@@ -1,0 +1,2 @@
+id	kind	status	fire_at	dedup_key	attempts
+tmr_qatodo1	receipt_nudge	pending	2026-09-17 01:51:05.000	qa:trigger-unification:todo1	0

@@ -1,0 +1,34 @@
+F1-fix D12-1 — live MySQL proof that the production raw SQL (copied verbatim
+from TriggerService.selectDueDbNow / claimRowDbNow) is valid against the real
+`triggers` table and preserves NULL-safety + atomic-claim semantics.
+DB: docker compose exec -T db mysql -uroot -paiagents-root aiagents
+Date: 2026-09-17Z. Probes cleaned up afterwards (probe_remaining=0).
+
+[1] DB clock sanity
+> SELECT NOW(3) AS dbnow;
+dbnow
+2026-09-17 04:24:33.496
+
+[2] Probe setup: one overdue row + one NULL-dueAt row
+> INSERT INTO triggers (...) VALUES
+>   ('tmr_probe_f1', ..., due_at = NOW(3) - INTERVAL 1 MINUTE, ...),
+>   ('tmr_probe_f1_null', ..., due_at = NULL, ...);
+id                  due_at
+tmr_probe_f1        2026-09-17 04:23:37.621
+tmr_probe_f1_null   NULL
+
+[3] Production select (verbatim from selectDueDbNow, + probe filter):
+only the due row returned, NULL row excluded (decision 15 NULL-safety live)
+id            kind           status   fireAt                   dueAt                    intervalMs nextFireAt guardKey fireCount maxFires expiresAt payload
+tmr_probe_f1  receipt_nudge  pending  2026-09-17 04:23:37.621  2026-09-17 04:23:37.621  NULL       NULL      NULL     0         NULL     NULL      {}
+
+[4] Production claim (verbatim from claimRowDbNow), run twice:
+> UPDATE `triggers` SET `status`='firing' WHERE `id`='tmr_probe_f1'
+>   AND `status`='pending' AND `due_at` IS NOT NULL AND `due_at` <= NOW(3);
+first_claim   = 1   (winner claims)
+second_claim  = 0   (overlap tick gets nothing — atomic-claim semantics live,
+                     equivalent to updateMany count===1)
+
+[5] Cleanup
+> DELETE FROM triggers WHERE id IN ('tmr_probe_f1','tmr_probe_f1_null');
+probe_remaining = 0

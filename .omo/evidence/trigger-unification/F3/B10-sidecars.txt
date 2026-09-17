@@ -1,0 +1,4 @@
+id	kind	status	dedup_key	created_at
+tmr_0000000136	hook_fire	cancelled	hook_fire:hook:hks_0000000002	2026-09-17 04:01:03.900
+tmr_0000000137	hook_fire	pending	hook_fire:hook:hks_0000000003	2026-09-17 04:07:06.356
+tmr_0000000138	session_idle_scan	cancelled	session_idle_scan:team:tm_0000000001:a_project_manager:s_0000000002:first-token:1789618141287:881661	2026-09-17 04:09:01.303

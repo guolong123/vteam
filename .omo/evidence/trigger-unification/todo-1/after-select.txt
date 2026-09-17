@@ -1,0 +1,4 @@
+db_now
+2026-09-17 01:55:14
+id	kind	status	fire_at	attempts	last_error
+tmr_qatodo1	receipt_nudge	fired	2026-09-17 01:51:05.000	1	NULL

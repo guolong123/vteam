@@ -1,0 +1,3 @@
+Test Suites: 120 passed, 120 total
+Tests:       2729 passed, 2729 total
+Snapshots:   1 passed, 1 total

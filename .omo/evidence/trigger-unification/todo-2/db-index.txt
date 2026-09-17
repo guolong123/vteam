@@ -1,0 +1,6 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Visible	Expression
+triggers	1	idx_triggers_status_due_at	1	status	A	2	NULL	NULL		BTREE			YES	NULL
+triggers	1	idx_triggers_status_due_at	2	due_at	A	19	NULL	NULL	YES	BTREE			YES	NULL
+Tables_in_aiagents (triggers)
+triggers

@@ -1,0 +1,2 @@
+28c026a6abd1_aiagents-compose-server  | {"level":50,"time":1789613235907,"pid":1,"hostname":"fc071bb18301","context":"WorkerDispatcher","msg":"agent a_developer agent 无响应（60s 无事件回流），请稍后重试或检查 worker 状态"}
+28c026a6abd1_aiagents-compose-server  | {"level":50,"time":1789613235907,"pid":1,"hostname":"fc071bb18301","context":"ChatService","msg":"agent a_developer reply failed: agent 无响应（60s 无事件回流），请稍后重试或检查 worker 状态 task=team:tm_0000000001"}

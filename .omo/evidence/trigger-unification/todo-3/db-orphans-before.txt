@@ -1,0 +1,5 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+hook	hook_status	trigger_id	trigger_status
+hks_probe_t3a	pending	NULL	NULL
+hks_probe_t3b	pending	tmr_probe_t3b	failed
+hks_probe_t3c	pending	tmr_probe_t3c	fired

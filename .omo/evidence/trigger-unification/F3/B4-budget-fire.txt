@@ -1,0 +1,6 @@
+id	status	fire_count	skip_reason	tid	tstat	tfc
+hks_0000000004	fired	1	NULL	tmr_0000000139	fired	1
+dispatches
+2
+id	type	p
+ev_0000020252	trigger.fired	{"kind": "time", "hookId": "hks_0000000004", "status": "fired", "scopeId": "t_0000000001", "fireCount": 1, "scopeType": "task", "ownerInstanceId": "tmm_00000000

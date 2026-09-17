@@ -1,0 +1,3 @@
+deleted
+1
+RESELECT_AFTER_DELETE: 0 rows (empty result set confirms tmr_qatodo1 is gone)
