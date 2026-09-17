@@ -1,6 +1,20 @@
-import { Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { TimerFireContext, TimerService } from '../timers/timer.service';
+import {
+  TRIGGER_KIND,
+  buildTriggerDedupKey,
+} from '../common/constants/trigger.constants';
+import {
+  TriggerFireContext,
+  TriggerOutcome,
+  TriggerService,
+} from '../timers/trigger.service';
 import { ReviewRoundGateService } from '../issues/review-round-gate.service';
 import { tryParseLedger } from '../issues/review-round-ledger';
 
@@ -21,17 +35,21 @@ export function buildReviewRoundTimeoutDedupKey(
   issueId: string,
   round: number,
 ): string {
-  return `${REVIEW_ROUND_TIMEOUT_KIND}:${issueId}:${round}`;
+  return buildTriggerDedupKey(
+    TRIGGER_KIND.REVIEW_ROUND_TIMEOUT,
+    issueId,
+    round,
+  );
 }
 
 /**
  * 评审轮次超时消费者（timeout→stale 的唯一 timer 消费者）。
  *
- * - `onModuleInit` 经 `TimerService.registerHandler` 接入（receipt-nudge 同款）；
+ * - `onModuleInit` 经 `TriggerService.registerHandler` 接入（receipt-nudge 同款）；
  * - 触发时只读账本做两态判断：非 `collecting`（complete/stale/无账本）一律 no-op；
  * - collecting 且过期与否的判定 + stale 翻转全部委托
  *   `ReviewRoundGateService.checkTimeout`（本文件永不复刻 stale 逻辑）；
- * - 任意失败只 warn（timer 行由 TimerService 记 failed，不阻断其余 timer）。
+ * - 任意失败只 warn（trigger 行由 TriggerService 记 failed，不阻断其余 trigger）。
  */
 @Injectable()
 export class ReviewRoundTimeoutHandler implements OnModuleInit {
@@ -40,8 +58,8 @@ export class ReviewRoundTimeoutHandler implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     @Optional()
-    @Inject(TimerService)
-    private readonly timers?: TimerService,
+    @Inject(TriggerService)
+    private readonly timers?: TriggerService,
     @Optional()
     @Inject(ReviewRoundGateService)
     private readonly gate?: ReviewRoundGateService,
@@ -59,14 +77,15 @@ export class ReviewRoundTimeoutHandler implements OnModuleInit {
     }
   }
 
-  async handle(timer: TimerFireContext): Promise<void> {
-    const payload = (timer?.payload ?? {}) as Partial<ReviewRoundTimeoutPayload>;
+  async handle(timer: TriggerFireContext): Promise<TriggerOutcome> {
+    const payload = (timer?.payload ??
+      {}) as Partial<ReviewRoundTimeoutPayload>;
     const issueId = payload.issueId;
     if (!issueId || typeof issueId !== 'string') {
       this.logger.warn(
         `[review-round-timeout] timer ${timer?.id} 缺 issueId（跳过，不重排）`,
       );
-      return;
+      return { done: true };
     }
     let description: string | null = null;
     try {
@@ -80,26 +99,26 @@ export class ReviewRoundTimeoutHandler implements OnModuleInit {
       this.logger.warn(
         `[review-round-timeout] 读取宿主 issue=${issueId} 失败（跳过）：${err instanceof Error ? err.message : String(err)}`,
       );
-      return;
+      return { done: true };
     }
     const ledger = tryParseLedger(description);
     if (!ledger) {
-      return;
+      return { done: true };
     }
     if (payload.round !== undefined && payload.round !== ledger.round) {
       this.logger.warn(
         `[review-round-timeout] 旧轮 timer 跳过 issue=${issueId}（payload R${payload.round} ≠ 账本 R${ledger.round}，不越权触发）`,
       );
-      return;
+      return { done: true };
     }
     if (ledger.status !== 'collecting') {
-      return;
+      return { done: true };
     }
     if (!this.gate) {
       this.logger.warn(
         `[review-round-timeout] ReviewRoundGateService 未装配 issue=${issueId}（跳过 stale 翻转）`,
       );
-      return;
+      return { done: true };
     }
     try {
       await this.gate.checkTimeout(issueId, new Date());
@@ -108,5 +127,6 @@ export class ReviewRoundTimeoutHandler implements OnModuleInit {
         `[review-round-timeout] checkTimeout 失败 issue=${issueId}（不重排）：${err instanceof Error ? err.message : String(err)}`,
       );
     }
+    return { done: true };
   }
 }

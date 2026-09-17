@@ -38,13 +38,13 @@ import { SkillsModule } from '../skills/skills.module';
  *   IssuesModule 仅依赖 RealtimeModule，无环。
  * - TasksModule 导出 TasksService（task_transition 工具经其做主实例校验与五态状态机流转）；
  *   TasksModule imports RealtimeModule/WorkersModule，不反向依赖本模块，无环。
-  * - QuestionsModule 导出 QuestionsService（question_confirm 工具经其做主实例校验与
-  *   question/permission 确认转发）；QuestionsModule imports RealtimeModule/WorkersModule，
-  *   不反向依赖本模块，无环。
-  * - ReviewRoundTimeoutHandler（review-round-open 超时消费者，文件落 chat 域、
-  *   provider 注册在本模块）：本模块已 import IssuesModule（gate+rounds 导出）与
-  *   TimersModule，无新增模块边（ChatModule 注册则需新增 IssuesModule 依赖）。
-  */
+ * - QuestionsModule 导出 QuestionsService（question_confirm 工具经其做主实例校验与
+ *   question/permission 确认转发）；QuestionsModule imports RealtimeModule/WorkersModule，
+ *   不反向依赖本模块，无环。
+ * - ReviewRoundTimeoutHandler（review-round-open 超时消费者，文件落 chat 域、
+ *   provider 注册在本模块）：本模块已 import IssuesModule（gate+rounds 导出）与
+ *   TimersModule，无新增模块边（ChatModule 注册则需新增 IssuesModule 依赖）。
+ */
 @Module({
   imports: [
     RealtimeModule,
@@ -63,10 +63,6 @@ import { SkillsModule } from '../skills/skills.module';
     SkillsModule,
   ],
   controllers: [PlatformMcpController],
-  providers: [
-    PlatformMcpService,
-    WorkerTokenGuard,
-    ReviewRoundTimeoutHandler,
-  ],
+  providers: [PlatformMcpService, WorkerTokenGuard, ReviewRoundTimeoutHandler],
 })
 export class PlatformMcpModule {}

@@ -1,11 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
-import { TimerService } from '../timers/timer.service';
+import { TimerService } from '../timers/trigger.service';
 import { ReviewRoundGateService } from '../issues/review-round-gate.service';
-import {
-  createLedger,
-  embedLedger,
-} from '../issues/review-round-ledger';
+import { createLedger, embedLedger } from '../issues/review-round-ledger';
 import {
   REVIEW_ROUND_TIMEOUT_KIND,
   ReviewRoundTimeoutHandler,
@@ -75,7 +72,11 @@ describe('ReviewRoundTimeoutHandler（超时→stale 消费者）', () => {
   });
 
   it('payload 缺 issueId → no-op（gate 不调用，不抛错）', async () => {
-    await handler.handle({ id: 'tmr_1', kind: REVIEW_ROUND_TIMEOUT_KIND, payload: {} });
+    await handler.handle({
+      id: 'tmr_1',
+      kind: REVIEW_ROUND_TIMEOUT_KIND,
+      payload: {},
+    });
 
     expect(gate.checkTimeout).not.toHaveBeenCalled();
     expect(prisma.issue.findUnique).not.toHaveBeenCalled();
@@ -127,10 +128,7 @@ describe('ReviewRoundTimeoutHandler（超时→stale 消费者）', () => {
     });
 
     expect(gate.checkTimeout).toHaveBeenCalledTimes(1);
-    expect(gate.checkTimeout).toHaveBeenCalledWith(
-      issueId,
-      expect.any(Date),
-    );
+    expect(gate.checkTimeout).toHaveBeenCalledWith(issueId, expect.any(Date));
   });
 
   it('F2#6：payload.round 与账本轮次不一致 → 不委托 gate（旧 timer 不越权）', async () => {
@@ -161,7 +159,7 @@ describe('ReviewRoundTimeoutHandler（超时→stale 消费者）', () => {
         kind: REVIEW_ROUND_TIMEOUT_KIND,
         payload: { issueId },
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ done: true });
   });
 
   it('gate 未装配 → warn 后 no-op，不抛错', async () => {
@@ -184,6 +182,6 @@ describe('ReviewRoundTimeoutHandler（超时→stale 消费者）', () => {
         kind: REVIEW_ROUND_TIMEOUT_KIND,
         payload: { issueId },
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ done: true });
   });
 });

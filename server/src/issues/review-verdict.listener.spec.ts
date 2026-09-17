@@ -63,11 +63,7 @@ const setup = (opts?: { withLedger?: boolean }) => {
     })),
   };
   const realtime: any = { subscribe: jest.fn(() => () => undefined) };
-  const listener = new ReviewVerdictListener(
-    realtime,
-    prisma,
-    gate as never,
-  );
+  const listener = new ReviewVerdictListener(realtime, prisma, gate as never);
   return { prisma, gate, realtime, listener };
 };
 
@@ -101,7 +97,12 @@ describe('ReviewVerdictListener', () => {
     expect(gate.recordVerdict).toHaveBeenCalledTimes(1);
     expect(gate.recordVerdict).toHaveBeenCalledWith(
       HOST_ISSUE,
-      { member: MEMBER, verdict: 'APPROVE', msgId: 'm_0000000540', version: 'v0.3' },
+      {
+        member: MEMBER,
+        verdict: 'APPROVE',
+        msgId: 'm_0000000540',
+        version: 'v0.3',
+      },
       {
         channelId: CHANNEL,
         plannerMemberId: PLANNER,
@@ -129,7 +130,12 @@ describe('ReviewVerdictListener', () => {
     );
     expect(gate.recordVerdict).toHaveBeenCalledWith(
       HOST_ISSUE,
-      { member: MEMBER, verdict: 'REJECT', msgId: 'm_0000000541', version: 'v0.3' },
+      {
+        member: MEMBER,
+        verdict: 'REJECT',
+        msgId: 'm_0000000541',
+        version: 'v0.3',
+      },
       expect.objectContaining({ channelId: CHANNEL }),
     );
   });
@@ -140,7 +146,8 @@ describe('ReviewVerdictListener', () => {
       chatEvent(agentMessage('VERDICT: APPROVE\n依据充分')),
     );
     expect(gate.recordVerdict).toHaveBeenCalledTimes(1);
-    const input = (gate.recordVerdict as jest.Mock).mock.calls[0]?.[1] as Record<string, unknown>;
+    const input = (gate.recordVerdict as jest.Mock).mock
+      .calls[0]?.[1] as Record<string, unknown>;
     expect(input).toEqual({
       member: MEMBER,
       verdict: 'APPROVE',
@@ -170,9 +177,7 @@ describe('ReviewVerdictListener', () => {
 
   it('任务无账本宿主 → 门层不调用（不建账）', async () => {
     const { gate, prisma, listener } = setup({ withLedger: false });
-    await listener.handle(
-      chatEvent(agentMessage('VERDICT: APPROVE @ v0.3')),
-    );
+    await listener.handle(chatEvent(agentMessage('VERDICT: APPROVE @ v0.3')));
     expect(gate.recordVerdict).not.toHaveBeenCalled();
     expect(prisma.issue.findMany).toHaveBeenCalled();
   });
@@ -210,9 +215,7 @@ describe('ReviewVerdictListener', () => {
     const { gate, prisma, listener } = setup();
     prisma.teamMember.findFirst.mockResolvedValueOnce(null);
     prisma.team.findUnique.mockResolvedValueOnce({ mainAgentMemberId: null });
-    await listener.handle(
-      chatEvent(agentMessage('VERDICT: APPROVE @ v0.3')),
-    );
+    await listener.handle(chatEvent(agentMessage('VERDICT: APPROVE @ v0.3')));
     expect(gate.recordVerdict).toHaveBeenCalledTimes(1);
     expect(gate.recordVerdict).toHaveBeenCalledWith(
       HOST_ISSUE,
@@ -231,9 +234,7 @@ describe('ReviewVerdictListener', () => {
         'warn',
       )
       .mockImplementation((() => undefined) as unknown as jest.Mock);
-    await listener.handle(
-      chatEvent(agentMessage('VERDICT: APPROVE @ v0.3')),
-    );
+    await listener.handle(chatEvent(agentMessage('VERDICT: APPROVE @ v0.3')));
     expect(gate.recordVerdict).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('db 瞬断'));
     warn.mockRestore();
@@ -265,7 +266,10 @@ describe('ReviewVerdictListener', () => {
         message: {
           id: 'm_0000001209',
           status: 'sent',
-          content: { text: 'VERDICT: APPROVE @ v0.3\n依据：设计一致', parts: [] },
+          content: {
+            text: 'VERDICT: APPROVE @ v0.3\n依据：设计一致',
+            parts: [],
+          },
           mentions: [],
           senderId: 'a_architect',
           channelId: teamGroup,
@@ -308,12 +312,11 @@ describe('ReviewVerdictListener', () => {
       taskId: null,
       teamId: TEAM,
     });
-    prisma.team.findUnique.mockImplementation(async (args: {
-      where: { id: string };
-    }) =>
-      args.where.id === TEAM
-        ? { mainAgentMemberId: PM, currentTaskId: activeTask }
-        : null,
+    prisma.team.findUnique.mockImplementation(
+      async (args: { where: { id: string } }) =>
+        args.where.id === TEAM
+          ? { mainAgentMemberId: PM, currentTaskId: activeTask }
+          : null,
     );
     const event = {
       ...(chatEvent({

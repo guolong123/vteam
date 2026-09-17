@@ -1,8 +1,6 @@
 import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { WorkerDispatcher } from '../chat/worker-dispatcher';
-import {
-  ReviewRoundGateService,
-} from '../issues/review-round-gate.service';
+import { ReviewRoundGateService } from '../issues/review-round-gate.service';
 import { PlanLifecycleService } from './plan-lifecycle.service';
 
 /**
@@ -21,8 +19,10 @@ export class PlanReviewWiring implements OnModuleInit {
 
   constructor(
     private readonly gate: ReviewRoundGateService,
-    @Optional() private readonly workerDispatcher: WorkerDispatcher | null = null,
-    @Optional() private readonly planLifecycle: PlanLifecycleService | null = null,
+    @Optional()
+    private readonly workerDispatcher: WorkerDispatcher | null = null,
+    @Optional()
+    private readonly planLifecycle: PlanLifecycleService | null = null,
   ) {}
 
   onModuleInit(): void {

@@ -261,26 +261,38 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     gate.attachPlanSink(planSink);
     await gate.recordVerdict(
       'is_0000000007',
-      { member: MEMBERS[0], verdict: 'APPROVE', msgId: 'm_571', version: 'v0.3' },
+      {
+        member: MEMBERS[0],
+        verdict: 'APPROVE',
+        msgId: 'm_571',
+        version: 'v0.3',
+      },
       notifyOpts,
     );
     await gate.recordVerdict(
       'is_0000000007',
-      { member: MEMBERS[1], verdict: 'APPROVE', msgId: 'm_572', version: 'v0.3' },
+      {
+        member: MEMBERS[1],
+        verdict: 'APPROVE',
+        msgId: 'm_572',
+        version: 'v0.3',
+      },
       notifyOpts,
     );
     const last = await gate.recordVerdict(
       'is_0000000007',
-      { member: MEMBERS[2], verdict: 'REJECT', msgId: 'm_573', version: 'v0.3' },
+      {
+        member: MEMBERS[2],
+        verdict: 'REJECT',
+        msgId: 'm_573',
+        version: 'v0.3',
+      },
       notifyOpts,
     );
     expect(last.converged).toBe(true);
     expect(last.ledger.status).toBe('complete');
     expect(planSink.transition).toHaveBeenCalledTimes(1);
-    expect(planSink.transition).toHaveBeenCalledWith(
-      't_0000000001',
-      'draft',
-    );
+    expect(planSink.transition).toHaveBeenCalledWith('t_0000000001', 'draft');
     for (const call of planSink.transition.mock.calls) {
       expect((call as unknown[])[1]).not.toBe('pending_final');
       expect((call as unknown[])[1]).not.toBe('approved');
@@ -307,10 +319,7 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
       );
     }
     expect(planSink.transition).toHaveBeenCalledTimes(1);
-    expect(planSink.transition).toHaveBeenCalledWith(
-      't_0000000001',
-      'draft',
-    );
+    expect(planSink.transition).toHaveBeenCalledWith('t_0000000001', 'draft');
     expect(notifier.dispatchAgentMention).toHaveBeenCalledTimes(2);
   });
 
@@ -405,7 +414,12 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     }
     const last = await gate.recordVerdict(
       'is_0000000007',
-      { member: MEMBERS[2], verdict: 'APPROVE', msgId: 'm_592', version: 'v0.3' },
+      {
+        member: MEMBERS[2],
+        verdict: 'APPROVE',
+        msgId: 'm_592',
+        version: 'v0.3',
+      },
       notifyOpts,
     );
     expect(last.converged).toBe(true);
@@ -416,7 +430,12 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     await expect(
       gate.recordVerdict(
         'is_0000000007',
-        { member: MEMBERS[0], verdict: 'APPROVE', msgId: 'm_594', version: 'v0.3' },
+        {
+          member: MEMBERS[0],
+          verdict: 'APPROVE',
+          msgId: 'm_594',
+          version: 'v0.3',
+        },
         notifyOpts,
       ),
     ).resolves.toMatchObject({ converged: true });
@@ -427,7 +446,12 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     const { gate, notifyOpts } = setup();
     await gate.recordVerdict(
       'is_0000000007',
-      { member: MEMBERS[0], verdict: 'REJECT', msgId: 'm_446', version: 'v0.3' },
+      {
+        member: MEMBERS[0],
+        verdict: 'REJECT',
+        msgId: 'm_446',
+        version: 'v0.3',
+      },
       notifyOpts,
     );
     const err = await gate
@@ -451,7 +475,12 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     // 同版本新 msgId 重发 → 不声称计入，received 原样保留
     const r = await gate.recordVerdict(
       'is_0000000007',
-      { member: MEMBERS[0], verdict: 'APPROVE', msgId: 'm_999', version: 'v0.3' },
+      {
+        member: MEMBERS[0],
+        verdict: 'APPROVE',
+        msgId: 'm_999',
+        version: 'v0.3',
+      },
       notifyOpts,
     );
     expect(r.outcome).not.toBe('received');
@@ -460,7 +489,12 @@ describe('ReviewRoundGateService（todo 7 收敛门）', () => {
     // 同 msgId 幂等重发 → 无害（outcome received，但内容不变）
     const same = await gate.recordVerdict(
       'is_0000000007',
-      { member: MEMBERS[0], verdict: 'APPROVE', msgId: 'm_600', version: 'v0.3' },
+      {
+        member: MEMBERS[0],
+        verdict: 'APPROVE',
+        msgId: 'm_600',
+        version: 'v0.3',
+      },
       notifyOpts,
     );
     expect(same.outcome).toBe('received');

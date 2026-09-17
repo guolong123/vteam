@@ -126,9 +126,7 @@ describe('ReviewRoundGateService.attachNotifier', () => {
     gate.attachNotifier(notifier);
     await converge(gate, notifyOpts);
     expect(notifier.dispatchAgentMention).toHaveBeenCalledTimes(2);
-    const calls = (
-      notifier.dispatchAgentMention as jest.Mock
-    ).mock.calls.map(
+    const calls = (notifier.dispatchAgentMention as jest.Mock).mock.calls.map(
       (c) => c[0] as { targetInstanceId: string; kind: string; text: string },
     );
     expect(calls.map((c) => c.targetInstanceId).sort()).toEqual(

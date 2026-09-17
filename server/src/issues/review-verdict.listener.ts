@@ -6,10 +6,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  RealtimeEvent,
-  RealtimeService,
-} from '../realtime/realtime.service';
+import { RealtimeEvent, RealtimeService } from '../realtime/realtime.service';
 import { EVENT_TYPES } from '../common/constants/event.constants';
 import { tryParseLedger, VerdictInput } from './review-round-ledger';
 import {
@@ -38,9 +35,7 @@ export const VERDICT_VERSION_PATTERN = /@\s*v(\d+(?:\.\d+)?)/i;
 const PLANNER_AGENT_ID = 'a_plan';
 
 @Injectable()
-export class ReviewVerdictListener
-  implements OnModuleInit, OnModuleDestroy
-{
+export class ReviewVerdictListener implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ReviewVerdictListener.name);
   private unsubscribe: (() => void) | null = null;
 
@@ -92,8 +87,7 @@ export class ReviewVerdictListener
     const parsed = this.parseVerdict(text);
     if (!parsed) return;
     const member =
-      typeof message.senderInstanceId === 'string' &&
-      message.senderInstanceId
+      typeof message.senderInstanceId === 'string' && message.senderInstanceId
         ? message.senderInstanceId
         : null;
     const msgId =
@@ -116,11 +110,7 @@ export class ReviewVerdictListener
           version: parsed.version,
         }
       : { member, verdict: parsed.verdict, msgId };
-    const notify = await this.resolveNotifyOpts(
-      taskId,
-      channelId,
-      event,
-    );
+    const notify = await this.resolveNotifyOpts(taskId, channelId, event);
     await this.gate.recordVerdict(issueId, input, notify);
   }
 
@@ -162,8 +152,7 @@ export class ReviewVerdictListener
   } | null {
     const hit = VERDICT_PATTERN.exec(text);
     if (!hit) return null;
-    const verdict =
-      hit[1].toUpperCase() === 'REJECT' ? 'REJECT' : 'APPROVE';
+    const verdict = hit[1].toUpperCase() === 'REJECT' ? 'REJECT' : 'APPROVE';
     const versionHit = VERDICT_VERSION_PATTERN.exec(text);
     const version = versionHit ? `v${versionHit[1]}` : undefined;
     return version ? { verdict, version } : { verdict };
@@ -235,10 +224,7 @@ export class ReviewVerdictListener
               where: { id: teamId },
               select: { currentTaskId: true },
             });
-            if (
-              typeof team?.currentTaskId === 'string' &&
-              team.currentTaskId
-            ) {
+            if (typeof team?.currentTaskId === 'string' && team.currentTaskId) {
               return team.currentTaskId;
             }
           } catch (err) {
@@ -317,9 +303,7 @@ export class ReviewVerdictListener
           select: { id: true },
         });
         plannerMemberId =
-          typeof planner?.id === 'string' && planner.id
-            ? planner.id
-            : null;
+          typeof planner?.id === 'string' && planner.id ? planner.id : null;
       } catch (err) {
         this.logger.warn(
           `verdict 计划员成员查找失败 task=${taskId} team=${teamId}（尽力而为转发）：${err instanceof Error ? err.message : String(err)}`,
@@ -331,8 +315,7 @@ export class ReviewVerdictListener
           select: { mainAgentMemberId: true },
         });
         pmMemberId =
-          typeof team?.mainAgentMemberId === 'string' &&
-          team.mainAgentMemberId
+          typeof team?.mainAgentMemberId === 'string' && team.mainAgentMemberId
             ? team.mainAgentMemberId
             : null;
       } catch (err) {

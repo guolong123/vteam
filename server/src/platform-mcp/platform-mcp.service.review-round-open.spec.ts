@@ -15,7 +15,7 @@ import { ExecutionPolicyService } from '../execution-policies/execution-policy.s
 import { SkillsService } from '../skills/skills.service';
 import { GitReposService } from '../git-repos/git-repos.service';
 import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
-import { TimerService } from '../timers/timer.service';
+import { TimerService } from '../timers/trigger.service';
 import { REVIEW_ROUND_TIMEOUT_MS } from '../issues/review-round-gate.service';
 import { ReviewRoundService } from '../issues/review-round.service';
 import {
@@ -60,7 +60,10 @@ describe('PlatformMcpService notifyAgent review-round-open（开轮 sidecar）',
     kind: 'review' as const,
   };
 
-  async function buildModule(opts?: { withTimers?: boolean; withRounds?: boolean }) {
+  async function buildModule(opts?: {
+    withTimers?: boolean;
+    withRounds?: boolean;
+  }) {
     const withTimers = opts?.withTimers ?? true;
     const withRounds = opts?.withRounds ?? true;
     prisma = {
@@ -397,9 +400,8 @@ describe('PlatformMcpService notifyAgent review-round-open（开轮 sidecar）',
       prisma.issue.findUnique.mockResolvedValue({
         description: ledgerText('complete', 2),
       });
-      const warn = (
-        service as unknown as { logger: { warn: jest.Mock } }
-      ).logger.warn;
+      const warn = (service as unknown as { logger: { warn: jest.Mock } })
+        .logger.warn;
 
       const result = await service.notifyAgent(ctx, {
         ...baseArgs,
@@ -435,9 +437,8 @@ describe('PlatformMcpService notifyAgent review-round-open（开轮 sidecar）',
     it('F2#4：账本读取失败 → fail-closed 跳过开轮 + warn（不覆盖终态）', async () => {
       await buildModule();
       prisma.issue.findUnique.mockRejectedValue(new Error('db 瞬断'));
-      const warn = (
-        service as unknown as { logger: { warn: jest.Mock } }
-      ).logger.warn;
+      const warn = (service as unknown as { logger: { warn: jest.Mock } })
+        .logger.warn;
 
       const result = await service.notifyAgent(ctx, {
         ...baseArgs,

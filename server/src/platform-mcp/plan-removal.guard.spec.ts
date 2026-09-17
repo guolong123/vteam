@@ -53,6 +53,18 @@ function grepSource(pattern: RegExp): string[] {
   return hits;
 }
 
+/**
+ * plans 表访问模式（2026-09 收紧：旧模式只认字面 `prisma.plan`，
+ * 漏过了 `(this.prisma as any).plan?.findUnique?.` 这类经 `as any` 转型 +
+ * 可选链的写法，completion-preflight 曾借此直读 plans 表而守卫静默通过。
+ * 本次收紧只补两种绕过形态（`as any)` 转型、`prisma?.` 可选链），不放宽任何
+ * 现有断言、不新增豁免；编辑本文件本身即设计评审触发点（见文件头），
+ * 此次编辑是加固而非放松：命中面只增不减。
+ */
+const PLAN_TABLE_ACCESS =
+  /\bprisma\??\.(plan|planTask)\b|as\s+any\)\s*\??\.(plan|planTask)\b/;
+const PLAN_TASK_ACCESS = /\bprisma\??\.planTask\b|as\s+any\)\s*\??\.planTask\b/;
+
 describe('防回流：vteam 自造 plan 域已下线（改由 opencode 原生 agent 承担）', () => {
   it('plans 模块目录不存在（plans.service / plans.controller / plan.constants 等）', () => {
     expect(fs.existsSync(path.join(SRC_ROOT, 'plans'))).toBe(false);
@@ -89,8 +101,8 @@ describe('防回流：vteam 自造 plan 域已下线（改由 opencode 原生 ag
     expect(hits).toEqual([]);
   });
 
-  it('不存在 plan 表读写（prisma.plan / prisma.planTask）', () => {
-    const hits = grepSource(/\bprisma\.(plan|planTask)\b/);
+  it('不存在 plan 表读写（prisma.plan / prisma.planTask，含 as any 转型绕过）', () => {
+    const hits = grepSource(PLAN_TABLE_ACCESS);
     // 窄豁免（todo2 plans 复活）：仅 tasks/plan-lifecycle.service.ts 可读写 plans 表
     // （唯一 choke 点）；planTask 仍全禁——豁免文件内出现即红。
     const nonExempt = hits.filter(
@@ -100,7 +112,7 @@ describe('防回流：vteam 自造 plan 域已下线（改由 opencode 原生 ag
     const exemptPlanTask = hits.filter(
       (h) =>
         h.startsWith('tasks/plan-lifecycle.service.ts:') &&
-        /prisma\.planTask\b/.test(h),
+        PLAN_TASK_ACCESS.test(h),
     );
     expect(exemptPlanTask).toEqual([]);
     // 豁免有效性：豁免文件必须真实持有 plans 表读写，否则豁免无意义。
@@ -108,6 +120,36 @@ describe('防回流：vteam 自造 plan 域已下线（改由 opencode 原生 ag
       h.startsWith('tasks/plan-lifecycle.service.ts:'),
     );
     expect(exemptHits.length).toBeGreaterThan(0);
+  });
+
+  it('守卫模式能捕获 as any 转型绕过写法（合成行回归，不碰生产源码）', () => {
+    // 只断言正则本身：不在生产源码中重引入违例来测探测器。
+    // （本文件为 *.spec.ts，grepSource 明确排除测试文件，故此处出现
+    // 违例文本也不会自举告警。）
+    const offending = [
+      '(this.prisma as any).plan?.findUnique?.({',
+      '(this.prisma as any).plan.findUnique({',
+      'await this.prisma?.plan.findUnique({',
+      'const r = await prisma.plan.findUnique({',
+      'prisma.planTask.findMany({',
+      '(this.prisma as any).planTask.findMany({',
+    ];
+    for (const line of offending) {
+      expect(line).toMatch(PLAN_TABLE_ACCESS);
+    }
+    // 精确性：含 plan 子串但非表访问的标识符必须放行（零误报）。
+    const benign = [
+      'planMode',
+      'planSteps',
+      'PlanLifecycleService',
+      'plan-review-wiring',
+      'autoEnsureRow',
+      'planLifecycle.getStatus(taskId)',
+      "import { PlanLifecycleService } from './plan-lifecycle.service';",
+    ];
+    for (const line of benign) {
+      expect(line).not.toMatch(PLAN_TABLE_ACCESS);
+    }
   });
 
   it('不存在 executionMode 的服务端门禁/切换逻辑（updateExecutionMode）', () => {
