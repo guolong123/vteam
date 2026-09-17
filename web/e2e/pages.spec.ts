@@ -168,8 +168,10 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("nav-item").first()).toBeVisible();
 
     // Dock「导航」↔ Cmd+K「导航」组一致性（防回归）：
-    // 两处曾各自硬编码，命令面板漏掉「团队管理」「记忆管理」→ 搜「记忆」无匹配命令。
+    // 两处曾各自硬编码，命令面板漏掉「团队管理」→ 搜无匹配命令。
     // 现命令面板导航组由 NAV_ITEMS 派生，数量与标签必须逐项相同。
+    // （Todo 14 起「用户管理 / 角色权限 / 记忆管理」有意移出顶级导航，
+    // 收敛至 /system 二级导航；下方断言其缺席 + 导航组以「系统管理」收尾。）
     // nav-item 文本含图标 span，先剥离图标字符（保留标签内部空格）。
     const stripIcon = (s: string) =>
       s.replace(/[^\u4e00-\u9fa5A-Za-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
@@ -184,10 +186,17 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       .filter((l) => l !== "新建任务")
       .sort();
     expect(cmdkNavLabels).toEqual(navLabels);
-    // 报告中的具体回归点：搜「记忆」必须命中「记忆管理」
-    await page.getByTestId("cmdk-search").locator("input").fill("记忆");
+    // Todo 14 起 memories 已移出 NAV_ITEMS：导航组共 8 项、以「系统管理」收尾，
+    // 「用户管理 / 角色权限 / 记忆管理」收敛至 /system 二级导航。
+    // 搜「系统」必须命中「系统管理」；搜「记忆」不再命中任何「记忆管理」项。
+    const navLabelsOrdered = (await page.getByTestId("nav-item").allInnerTexts()).map(stripIcon);
+    expect(navLabelsOrdered).toHaveLength(8);
+    expect(navLabelsOrdered[navLabelsOrdered.length - 1]).toBe("系统管理");
+    await page.getByTestId("cmdk-search").locator("input").fill("系统");
     await expect(page.getByTestId("cmdk-item").first()).toBeVisible();
-    await expect(page.getByTestId("cmdk-item").first()).toContainText("记忆管理");
+    await expect(page.getByTestId("cmdk-item").first()).toContainText("系统管理");
+    await page.getByTestId("cmdk-search").locator("input").fill("记忆");
+    await expect(page.getByTestId("cmdk-item").filter({ hasText: "记忆管理" })).toHaveCount(0);
 
     // 关闭命令面板（Esc）
     await page.keyboard.press("Escape");
@@ -196,6 +205,8 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
 
   test("11/17 role-permission /roles", async ({ page }) => {
     await page.goto("/roles");
+    // Todo 17：/roles 重定向至 /system/roles（旧书签兼容）
+    await expect(page).toHaveURL(/\/system\/roles/);
     await expectNavShell(page);
     await expect(page.getByTestId("role-permission-root")).toBeVisible();
     await expect(page.getByTestId("role-item").first()).toBeVisible();
@@ -235,6 +246,8 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
 
   test("15/17 user-management /users", async ({ page }) => {
     await page.goto("/users");
+    // Todo 17：/users 重定向至 /system/users（旧书签兼容）
+    await expect(page).toHaveURL(/\/system\/users/);
     await expectNavShell(page);
     await expect(page.getByTestId("user-management-root")).toBeVisible();
     await expect(page.getByTestId("user-stats")).toBeVisible();

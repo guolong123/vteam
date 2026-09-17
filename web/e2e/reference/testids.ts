@@ -285,7 +285,7 @@ export const PAGES: PageTestidRef[] = [
   },
   {
     auditPage: "2.7 role-permission（角色与权限）",
-    route: "/roles",
+    route: "/system/roles",
     root: "role-permission-root",
     testids: [
       "role-permission-root",
@@ -367,7 +367,7 @@ export const PAGES: PageTestidRef[] = [
   },
   {
     auditPage: "2.11 user-management（用户管理）",
-    route: "/users",
+    route: "/system/users",
     root: "user-management-root",
     testids: [
       "user-management-root",
@@ -511,10 +511,10 @@ export const PAGE_SMOKE: Record<string, string[]> = {
   "/board": ["task-board-root", "status-filter", "task-card", "status-badge"],
   "/agents": ["agent-config-root", "agent-list-item", "model-select", "clone-template-button", "persona-select"],
   "/teams/[id]/session": ["team-session-root", "members-panel", "member-item", "dm-tabs", "dm-tab-group", "chat-message-list", "chat-load-more", "team-session-refresh", "team-session-current-task", "right-tab-status", "right-tab-config", "right-tab-output", "team-right-empty", "plan-doc-modal"],
-  "/roles": ["role-permission-root", "role-item", "permission-matrix", "add-role-button"],
+  "/system/roles": ["role-permission-root", "role-item", "permission-matrix", "add-role-button"],
   "/skills": ["skills-tools-manage-root", "manage-tabs", "manage-tab", "search-input"],
   "/artifacts": ["artifacts-root", "artifacts-filter-bar", "task-filter-select"],
-  "/users": ["user-management-root", "user-stats", "user-item", "add-user-button"],
+  "/system/users": ["user-management-root", "user-stats", "user-item", "add-user-button"],
   "/workers": ["worker-list-root", "worker-stats", "worker-card", "install-worker-link", "worker-status"],
   "/workers/[id]": ["worker-detail-basic", "worker-detail-runtime", "worker-detail-models", "worker-detail-omo", "omo-toggle"],
   "/workers/install": ["worker-install-root", "install-wizard", "install-config", "install-method-tabs", "install-command", "copy-command-button", "install-footer"],

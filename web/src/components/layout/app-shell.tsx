@@ -108,9 +108,7 @@ const KEY_TO_PATH: Record<string, string> = {
   "git-repos": "/git-repos",
   skills: "/skills",
   integrations: "/integrations",
-  users: "/users",
-  roles: "/roles",
-  memories: "/memories",
+  system: "/system",
 };
 
 /** 路由路径 → 导航 key（pathname 首段） */
@@ -151,16 +149,14 @@ const CMDK_NAV_PATH: Record<string, string> = {
   仓库管理: "/git-repos",
   技能与工具: "/skills",
   集成渠道: "/integrations",
-  用户管理: "/users",
-  角色权限: "/roles",
-  记忆管理: "/memories",
+  系统管理: "/system",
 };
 
 /**
  * 导航 key → 可见性判定（对齐后端守卫语义，ISSUE-005 + Task 14 全局团队）：
  * - 无条目的 key（models）→ 后端无权限点（成员只读），始终显示；
  * - teams/agents/workers/skills → 矩阵 view 权限点（PermissionGuard teams:view 等）；
- * - users/roles → AdminGuard 语义（all:true 或 users.manage）。
+ * - users/roles/memories 已收敛至「系统管理」→ isPlatformAdmin 语义。
  * 全局 team ≠ 开放：仍需 PermissionGuard teams:view，未授权限的不显示入口（后端同 403）。
  */
 const NAV_VISIBLE: Record<string, (perms: RolePermissions) => boolean> = {
@@ -168,14 +164,14 @@ const NAV_VISIBLE: Record<string, (perms: RolePermissions) => boolean> = {
   agents: (p) => hasPermission(p, "agents"),
   workers: (p) => hasPermission(p, "workers"),
   skills: (p) => hasPermission(p, "skills"),
-  users: isPlatformAdmin,
-  roles: isPlatformAdmin,
-  memories: isPlatformAdmin,
+  system: isPlatformAdmin,
 };
 
-/** 路由首段 → 访问所需判定（与导航过滤同源；无条目 = 登录即可，teams 走 teams:view） */
+/** 路由首段 → 访问所需判定（旧管理路由在迁移完成前保留访问守卫） */
 const ROUTE_GUARD: Record<string, (perms: RolePermissions) => boolean> = {
   ...NAV_VISIBLE,
+  users: isPlatformAdmin,
+  roles: isPlatformAdmin,
   memories: isPlatformAdmin,
 };
 
@@ -211,9 +207,7 @@ const PAGE_TITLE: Record<string, { title: string; subtitle: string }> = {
   "git-repos": { title: "仓库管理", subtitle: "git 仓库凭证与 Agent 授权" },
   skills: { title: "技能与工具", subtitle: "管理技能库与工具注册" },
   integrations: { title: "集成渠道", subtitle: "外部渠道双向集成（企微智能机器人 + 通用 Webhook）" },
-  users: { title: "用户管理", subtitle: "管理平台账号与角色分配" },
-  roles: { title: "角色权限", subtitle: "管理平台角色与权限矩阵" },
-  memories: { title: "记忆管理", subtitle: "查看与管理 Agent 记忆" },
+  system: { title: "系统管理", subtitle: "平台管理 · 用户账号 · 角色权限 · Agent 记忆" },
 };
 
 /** 动态段路由优先判定：/workers/:id → Worker 详情 */
