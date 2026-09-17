@@ -27,6 +27,7 @@ import {
   CurrentUser,
 } from '../common/decorators/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
+import { CompleteTaskDto } from './dto/complete-task.dto';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { PlanCompleteDto } from './dto/plan-complete.dto';
 import { PlanConfirmDto } from './dto/plan-confirm.dto';
@@ -315,8 +316,15 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission('tasks.review')
   @ApiOperation({ summary: '验收通过（pending_review → completed）' })
-  accept(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
-    return this.tasksService.accept(id, user.id);
+  accept(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto?: CompleteTaskDto,
+  ) {
+    return this.tasksService.accept(id, user.id, {
+      force: dto?.force === true,
+      forceReason: dto?.reason,
+    });
   }
 
   /**
@@ -345,8 +353,15 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission('tasks.edit')
   @ApiOperation({ summary: '归档任务（completed → archived，终态）' })
-  archive(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
-    return this.tasksService.archive(id, user.id);
+  archive(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto?: CompleteTaskDto,
+  ) {
+    return this.tasksService.archive(id, user.id, {
+      force: dto?.force === true,
+      forceReason: dto?.reason,
+    });
   }
 
   /**

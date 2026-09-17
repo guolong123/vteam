@@ -61,7 +61,7 @@ describe('TasksService', () => {
   };
   let idGen: { nextId: jest.Mock; seed: jest.Mock };
   let realtime: { broadcast: jest.Mock };
-  let planLifecycle: { autoEnsureRow: jest.Mock };
+  let planLifecycle: { autoEnsureRow: jest.Mock; getStatus: jest.Mock };
   let sessionLifecycle: {
     getInstancesByTeamMember: jest.Mock;
     getInstanceBySession: jest.Mock;
@@ -211,6 +211,8 @@ describe('TasksService', () => {
       autoEnsureRow: jest
         .fn()
         .mockResolvedValue({ id: 'pl_0000000001', status: 'draft' }),
+      // 完工预检经 getStatus 读计划状态（choke 点）；默认无计划行→非 blocker。
+      getStatus: jest.fn().mockResolvedValue(null),
     };
     // 团队化默认基线：归属团队存在 + 主成员已定 + 2 成员（start 预检/主门/DTO 组装默认放行；
     // 404/空团队/未设主成员用例各自覆写）。
@@ -2802,6 +2804,345 @@ describe('TasksService', () => {
     });
   });
 
+  describe('完工门禁（agent 禁止 accept/archive + 用户预检 + force 审计）', () => {
+    const mockIssueModel = (
+      rows: { id: string; title: string; status: string }[],
+    ) => {
+      (prisma as any).issue = {
+        findMany: jest.fn().mockResolvedValue(rows),
+      };
+    };
+
+    const expectForbiddenCode = async (
+      fn: () => Promise<unknown>,
+      code: string,
+    ) => {
+      try {
+        await fn();
+        fail('应抛出 ForbiddenException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ForbiddenException);
+        expect((e as ForbiddenException).getResponse()).toMatchObject({
+          code,
+        });
+      }
+    };
+
+    const expectPreflightRejected = async (
+      fn: () => Promise<unknown>,
+      fragments: string[],
+    ) => {
+      try {
+        await fn();
+        fail('应抛出 ConflictException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ConflictException);
+        const body = (e as ConflictException).getResponse() as {
+          code: string;
+          message: string;
+        };
+        expect(body.code).toBe(TASK_ERRORS.TASK_COMPLETION_PREFLIGHT_FAILED);
+        for (const f of fragments) {
+          expect(body.message).toContain(f);
+        }
+      }
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    };
+
+    it('transitionByAgent + accept → 403 TASK_AGENT_COMPLETION_FORBIDDEN（任务不变、无事件）', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_0000000001',
+        teamId: 'tm_0000000001',
+      });
+
+      await expectForbiddenCode(
+        () =>
+          service.transitionByAgent('t_0000000001', 'tmm_0000000001', 'accept'),
+        TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,
+      );
+      expect(prisma.team.findUnique).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('transitionByAgent + archive → 403 TASK_AGENT_COMPLETION_FORBIDDEN（任务不变、无事件）', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_0000000001',
+        teamId: 'tm_0000000001',
+      });
+
+      await expectForbiddenCode(
+        () =>
+          service.transitionByAgent(
+            't_0000000001',
+            'tmm_0000000001',
+            'archive',
+          ),
+        TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('transitionByAgent：start/mark-pending-review/reject 主实例仍放行（完工门禁回归）', async () => {
+      const cases = [
+        { action: 'start' as const, from: 'pending', to: 'in_progress' },
+        {
+          action: 'mark-pending-review' as const,
+          from: 'in_progress',
+          to: 'pending_review',
+        },
+        {
+          action: 'reject' as const,
+          from: 'pending_review',
+          to: 'in_progress',
+        },
+      ];
+      for (const c of cases) {
+        prisma.task.findUnique
+          .mockResolvedValueOnce({
+            id: 't_0000000001',
+            teamId: 'tm_0000000001',
+          })
+          .mockResolvedValueOnce(row({ status: c.from, version: 1 }))
+          .mockResolvedValue(row({ status: c.to, version: 2 }));
+        prisma.chatChannel.findFirst.mockResolvedValue({
+          id: 'c_0000000001',
+        });
+        idGen.nextId.mockResolvedValue('te_0000000001');
+        mockTransitionTx();
+
+        const result = await service.transitionByAgent(
+          't_0000000001',
+          'tmm_0000000001',
+          c.action,
+        );
+        expect(result.status).toBe(c.to);
+      }
+    });
+
+    it('用户 accept：存在 open issue → 409 预检失败并点名 issue（任务不变）', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({ status: 'pending_review', version: 4 }),
+      );
+      mockIssueModel([
+        { id: 'is_0000000001', title: '崩溃 bug', status: 'open' },
+        { id: 'is_0000000002', title: '样式问题', status: 'in_progress' },
+      ]);
+
+      await expectPreflightRejected(
+        () => service.accept('t_0000000001', userId),
+        ['is_0000000001', 'is_0000000002', '2 个未完结 issue'],
+      );
+    });
+
+    it('用户 accept：计划 executing → 409 预检失败并给出计划状态', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({ status: 'pending_review', version: 4 }),
+      );
+      planLifecycle.getStatus.mockResolvedValue('executing');
+      mockIssueModel([]);
+
+      await expectPreflightRejected(
+        () => service.accept('t_0000000001', userId),
+        ['executing', '计划未完成'],
+      );
+    });
+
+    it('用户 accept：计划 draft → 409 预检失败（非 completed 皆 blocker）', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({ status: 'pending_review', version: 4 }),
+      );
+      planLifecycle.getStatus.mockResolvedValue('draft');
+      mockIssueModel([]);
+
+      await expectPreflightRejected(
+        () => service.accept('t_0000000001', userId),
+        ['draft', '计划未完成'],
+      );
+    });
+
+    it('用户 accept：计划 pending_final → 409 预检失败', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({ status: 'pending_review', version: 4 }),
+      );
+      planLifecycle.getStatus.mockResolvedValue('pending_final');
+      mockIssueModel([]);
+
+      await expectPreflightRejected(
+        () => service.accept('t_0000000001', userId),
+        ['pending_final', '计划未完成'],
+      );
+    });
+
+    it('用户 accept：计划读取失败 → warn-and-continue（计划不构成 blocker）', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ status: 'pending_review', version: 4 }))
+        .mockResolvedValue(
+          row({ status: 'completed', version: 5, completedAt: new Date() }),
+        );
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      planLifecycle.getStatus.mockRejectedValueOnce(new Error('db down'));
+      mockIssueModel([]);
+      const txModels = mockTransitionTx();
+
+      const result = await service.accept('t_0000000001', userId);
+
+      expect(result.status).toBe('completed');
+      expect(txModels.taskEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'accept',
+          metadata: undefined,
+        }),
+      });
+    });
+
+    it('用户 accept：计划 completed + 终态 issues → 成功且 metadata 无强制标记', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ status: 'pending_review', version: 4 }))
+        .mockResolvedValue(
+          row({ status: 'completed', version: 5, completedAt: new Date() }),
+        );
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      planLifecycle.getStatus.mockResolvedValue('completed');
+      mockIssueModel([]);
+      const txModels = mockTransitionTx();
+
+      const result = await service.accept('t_0000000001', userId);
+
+      expect(result.status).toBe('completed');
+      expect(txModels.taskEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'accept',
+          actorType: 'user',
+          actorId: userId,
+          metadata: undefined,
+        }),
+      });
+    });
+
+    it('用户 accept + force：未完成项仍成功，事件 metadata 记录强制审计', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ status: 'pending_review', version: 4 }))
+        .mockResolvedValue(
+          row({ status: 'completed', version: 5, completedAt: new Date() }),
+        );
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      planLifecycle.getStatus.mockResolvedValue('executing');
+      mockIssueModel([
+        { id: 'is_0000000001', title: '崩溃 bug', status: 'open' },
+      ]);
+      const txModels = mockTransitionTx();
+
+      const result = await service.accept('t_0000000001', userId, {
+        force: true,
+        forceReason: '已线下确认',
+      });
+
+      expect(result.status).toBe('completed');
+      expect(txModels.taskEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'accept',
+          metadata: {
+            forced: true,
+            forcedBy: userId,
+            forceReason: '已线下确认',
+          },
+        }),
+      });
+    });
+
+    it('用户 accept + force：不绕过 from→to 合法性（错态仍 409 非法迁移）', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({ status: 'in_progress', version: 4 }),
+      );
+
+      await assertInvalidTransition(
+        () => service.accept('t_0000000001', userId, { force: true }),
+        'pending_review',
+        'completed',
+        'in_progress',
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('用户 archive：存在 open issue → 409 预检失败（任务不变）', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        row({ status: 'completed', version: 5 }),
+      );
+      mockIssueModel([
+        { id: 'is_0000000009', title: '回归用例', status: 'open' },
+      ]);
+
+      await expectPreflightRejected(
+        () => service.archive('t_0000000001', userId),
+        ['is_0000000009'],
+      );
+    });
+
+    it('用户 archive + force：成功且事件 metadata 记录强制审计', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ status: 'completed', version: 5 }))
+        .mockResolvedValue(
+          row({ status: 'archived', version: 6, archivedAt: new Date() }),
+        );
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      mockIssueModel([
+        { id: 'is_0000000009', title: '回归用例', status: 'in_progress' },
+      ]);
+      const txModels = mockTransitionTx();
+
+      const result = await service.archive('t_0000000001', userId, {
+        force: true,
+      });
+
+      expect(result.status).toBe('archived');
+      expect(txModels.taskEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'archive',
+          metadata: { forced: true, forcedBy: userId },
+        }),
+      });
+    });
+
+    it('用户 archive：全部完结 → 成功且 metadata 无强制标记', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ status: 'completed', version: 5 }))
+        .mockResolvedValue(
+          row({ status: 'archived', version: 6, archivedAt: new Date() }),
+        );
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      mockIssueModel([]);
+      const txModels = mockTransitionTx();
+
+      const result = await service.archive('t_0000000001', userId);
+
+      expect(result.status).toBe('archived');
+      expect(txModels.taskEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'archive',
+          metadata: undefined,
+        }),
+      });
+    });
+  });
+
   describe('updateTeam（团队调整，14 篇 §5.3 FR-02）', () => {
     /** team 调整事务的 tx mock：团队成员创建（seq/别名）+ 删除 + 会话冻结 + 主成员清空 + 系统消息全部可写，返回 tx 供断言。 */
     const mockTeamTx = () => {
@@ -3347,7 +3688,7 @@ describe('TasksService', () => {
           } as any),
         );
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
-      prisma.plan.findUnique.mockResolvedValue(null);
+      planLifecycle.getStatus.mockResolvedValue(null);
       idGen.nextId
         .mockResolvedValueOnce('te_0000000001')
         .mockResolvedValueOnce('m_0000000001');
@@ -3444,7 +3785,7 @@ describe('TasksService', () => {
           } as any),
         );
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
-      prisma.plan.findUnique.mockResolvedValue(null);
+      planLifecycle.getStatus.mockResolvedValue(null);
       idGen.nextId
         .mockResolvedValueOnce('te_0000000001')
         .mockResolvedValueOnce('m_0000000001');
@@ -3644,7 +3985,7 @@ describe('TasksService', () => {
           } as any),
         );
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
-      prisma.plan.findUnique.mockResolvedValue(null);
+      planLifecycle.getStatus.mockResolvedValue(null);
       idGen.nextId.mockResolvedValue('te_0000000001');
       const tx: any = {
         task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
@@ -3716,7 +4057,7 @@ describe('TasksService', () => {
           } as any),
         );
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
-      prisma.plan.findUnique.mockResolvedValue(null);
+      planLifecycle.getStatus.mockResolvedValue(null);
       idGen.nextId
         .mockResolvedValueOnce('te_0000000001')
         .mockResolvedValueOnce('m_0000000001')
@@ -3798,7 +4139,7 @@ describe('TasksService', () => {
           } as any),
         );
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
-      prisma.plan.findUnique.mockResolvedValue(null);
+      planLifecycle.getStatus.mockResolvedValue(null);
       idGen.nextId
         .mockResolvedValueOnce('te_0000000001')
         .mockResolvedValueOnce('m_0000000001')
@@ -3861,7 +4202,7 @@ describe('TasksService', () => {
           } as any),
         );
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
-      prisma.plan.findUnique.mockResolvedValue(null);
+      planLifecycle.getStatus.mockResolvedValue(null);
       idGen.nextId
         .mockResolvedValueOnce('te_0000000001')
         .mockResolvedValueOnce('m_0000000001');

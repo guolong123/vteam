@@ -383,7 +383,7 @@ describe('TasksController', () => {
       expect(out).toEqual({ id: 't_1', status: 'pending_review' });
     });
 
-    it('POST tasks/:id/accept 转发到 accept', async () => {
+    it('POST tasks/:id/accept 转发到 accept（缺省 body → force=false）', async () => {
       service.accept.mockResolvedValue({ id: 't_1', status: 'completed' });
 
       const out = await controller.accept(
@@ -391,7 +391,26 @@ describe('TasksController', () => {
         't_1',
       );
 
-      expect(service.accept).toHaveBeenCalledWith('t_1', 'u_admin');
+      expect(service.accept).toHaveBeenCalledWith('t_1', 'u_admin', {
+        force: false,
+        forceReason: undefined,
+      });
+      expect(out).toEqual({ id: 't_1', status: 'completed' });
+    });
+
+    it('POST tasks/:id/accept 透传 force + reason 到 accept', async () => {
+      service.accept.mockResolvedValue({ id: 't_1', status: 'completed' });
+
+      const out = await controller.accept(
+        { id: 'u_admin', username: 'admin', roleId: 'r_admin' },
+        't_1',
+        { force: true, reason: '已线下确认' },
+      );
+
+      expect(service.accept).toHaveBeenCalledWith('t_1', 'u_admin', {
+        force: true,
+        forceReason: '已线下确认',
+      });
       expect(out).toEqual({ id: 't_1', status: 'completed' });
     });
 
@@ -409,7 +428,7 @@ describe('TasksController', () => {
       expect(out).toEqual({ id: 't_1', status: 'in_progress' });
     });
 
-    it('POST tasks/:id/archive 转发到 archive', async () => {
+    it('POST tasks/:id/archive 转发到 archive（缺省 body → force=false）', async () => {
       service.archive.mockResolvedValue({ id: 't_1', status: 'archived' });
 
       const out = await controller.archive(
@@ -417,7 +436,26 @@ describe('TasksController', () => {
         't_1',
       );
 
-      expect(service.archive).toHaveBeenCalledWith('t_1', 'u_admin');
+      expect(service.archive).toHaveBeenCalledWith('t_1', 'u_admin', {
+        force: false,
+        forceReason: undefined,
+      });
+      expect(out).toEqual({ id: 't_1', status: 'archived' });
+    });
+
+    it('POST tasks/:id/archive 透传 force 到 archive', async () => {
+      service.archive.mockResolvedValue({ id: 't_1', status: 'archived' });
+
+      const out = await controller.archive(
+        { id: 'u_admin', username: 'admin', roleId: 'r_admin' },
+        't_1',
+        { force: true },
+      );
+
+      expect(service.archive).toHaveBeenCalledWith('t_1', 'u_admin', {
+        force: true,
+        forceReason: undefined,
+      });
       expect(out).toEqual({ id: 't_1', status: 'archived' });
     });
 

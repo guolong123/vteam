@@ -16,7 +16,8 @@
  * Esc 关闭，铁律 T15：无 fixed / 100vh / 100vw）。
  * data-testid 对齐既有约定：start-task-button / start-task-hint / task-submit-review /
  * task-accept / task-reject / task-archive / reject-modal / reject-reason-input /
- * reject-confirm / reject-cancel。
+ * reject-confirm / reject-cancel / force-confirm-modal / force-blockers /
+ * force-confirm / force-cancel。
  */
 import { useEffect, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -124,14 +125,38 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
+  const [forceTarget, setForceTarget] = useState<TaskAction | null>(null);
 
   const actionMutation = useMutation({
-    mutationFn: ({ action, rejectReason }: { action: TaskAction; rejectReason?: string }) =>
-      api.post(`/tasks/${taskId}/${action}`, rejectReason ? { reason: rejectReason } : undefined),
-    onError: (err) => {
+    mutationFn: ({
+      action,
+      rejectReason,
+      force,
+    }: {
+      action: TaskAction;
+      rejectReason?: string;
+      force?: boolean;
+    }) =>
+      api.post(
+        `/tasks/${taskId}/${action}`,
+        force ? { force: true } : rejectReason ? { reason: rejectReason } : undefined,
+      ),
+    onError: (err, vars) => {
       setActionError(isApiError(err) ? err.message : "操作失败，请稍后重试");
+      if (
+        isApiError(err) &&
+        err.code === "TASK_COMPLETION_PREFLIGHT_FAILED" &&
+        (vars.action === "accept" || vars.action === "archive")
+      ) {
+        setForceTarget(vars.action);
+      } else {
+        setForceTarget(null);
+      }
     },
-    onSuccess: () => setActionError(null),
+    onSuccess: () => {
+      setActionError(null);
+      setForceTarget(null);
+    },
     onSettled: () => {
       // 看板（["tasks", ...]）与详情（["task", id]）缓存双失效；SSE task.status.changed 亦失效，双保险
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
@@ -139,15 +164,18 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
     },
   });
 
-  // Esc 关闭驳回弹窗（对齐 CreateProjectModal 模式）
+  // Esc 关闭驳回弹窗 / 强制确认弹窗（对齐 CreateProjectModal 模式）
   useEffect(() => {
-    if (!rejectOpen) return;
+    if (!rejectOpen && !forceTarget) return;
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setRejectOpen(false);
+      if (e.key === "Escape") {
+        setRejectOpen(false);
+        setForceTarget(null);
+      }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [rejectOpen]);
+  }, [rejectOpen, forceTarget]);
 
   // 每次打开驳回弹窗重置原因
   useEffect(() => {
@@ -195,6 +223,7 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
 
   const handleAction = (action: TaskAction) => {
     setActionError(null);
+    setForceTarget(null);
     if (action === "reject") {
       setRejectOpen(true);
       return;
@@ -205,6 +234,12 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
   const handleRejectConfirm = () => {
     setRejectOpen(false);
     actionMutation.mutate({ action: "reject", rejectReason: reason.trim() || undefined });
+  };
+
+  const handleForceConfirm = () => {
+    if (!forceTarget) return;
+    setForceTarget(null);
+    actionMutation.mutate({ action: forceTarget, force: true });
   };
 
   return (
@@ -313,6 +348,108 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
           style={{ fontSize: fontSize.sm, lineHeight: 1.6, color: "#DC2626", fontWeight: 500 }}
         >
           {actionError}
+        </div>
+      )}
+
+      {/* 强制通过确认弹窗（完工预检未通过时展示未完成项，需用户显式确认；样式复用驳回弹窗） */}
+      {forceTarget && (
+        <div
+          data-testid="force-confirm-modal"
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 40,
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            paddingTop: "8%",
+          }}
+        >
+          <div
+            aria-hidden
+            onClick={(e) => {
+              e.stopPropagation();
+              setForceTarget(null);
+            }}
+            style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }}
+          />
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleForceConfirm();
+            }}
+            noValidate
+            style={{
+              position: "relative",
+              width: 360,
+              maxWidth: "calc(100% - 32px)",
+              display: "flex",
+              flexDirection: "column",
+              gap: space.md,
+              padding: `${space.xl}px`,
+              borderRadius: radius.lg,
+              backgroundColor: "var(--color-surface)",
+              border: `1px solid ${neutral[200]}`,
+              boxShadow: shadow.lg,
+              ...baseFont,
+            }}
+          >
+            <div>
+              <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900] }}>
+                {forceTarget === "accept" ? "验收确认" : "归档确认"}
+              </div>
+              <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>
+                存在未完成项，确认仍要强制通过吗？强制记录将写入任务事件
+              </div>
+            </div>
+            <div
+              data-testid="force-blockers"
+              role="alert"
+              style={{ fontSize: fontSize.sm, lineHeight: 1.6, color: "#DC2626", fontWeight: 500 }}
+            >
+              {actionError}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
+              <button
+                type="button"
+                data-testid="force-cancel"
+                onClick={() => setForceTarget(null)}
+                style={{
+                  padding: `${space.sm}px ${space.lg}px`,
+                  borderRadius: radius.md,
+                  border: `1px solid ${neutral[200]}`,
+                  backgroundColor: "var(--color-surface)",
+                  color: neutral[600],
+                  fontSize: fontSize.md,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                data-testid="force-confirm"
+                disabled={pending}
+                style={{
+                  padding: `${space.sm}px ${space.lg}px`,
+                  borderRadius: radius.md,
+                  border: "none",
+                  backgroundColor: "#DC2626",
+                  color: "#FFFFFF",
+                  fontSize: fontSize.md,
+                  fontWeight: 600,
+                  cursor: pending ? "default" : "pointer",
+                  opacity: pending ? 0.65 : 1,
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                确认强制通过
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

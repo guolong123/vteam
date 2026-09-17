@@ -113,6 +113,16 @@ type SysMessageCtx = {
   mainAgentName?: string;
 };
 
+/** 完工类动作（accept/archive）的强制通过选项：force 只绕过完工预检，不绕过 from→to 合法性。 */
+export type CompletionForceOptions = {
+  /** 显式强制通过完工预检（缺省 false）。 */
+  force?: boolean;
+  /** 强制原因（可选，写入 task_events.metadata 审计）。 */
+  forceReason?: string;
+  /** 强制执行者（用户 id，写入 task_events.metadata.forcedBy 审计）。 */
+  forcedBy?: string;
+};
+
 /** 状态迁移动作的可选项（副作用编排，见 transition）。 */
 type TransitionOptions = {
   /** task_events.eventType：status_change / accept / reject / archive（08 篇 §6.1）。 */
@@ -1015,6 +1025,7 @@ export class TasksService implements OnModuleInit {
     id: string,
     action: keyof typeof TASK_TRANSITIONS,
     reason?: string,
+    completion?: CompletionForceOptions,
   ): TransitionOptions {
     switch (action) {
       case 'start': {
@@ -1102,8 +1113,20 @@ export class TasksService implements OnModuleInit {
         return {
           eventType: 'accept',
           fields: { completedAt: new Date() },
+          metadata: completion?.force
+            ? {
+                forced: true,
+                forcedBy: completion.forcedBy ?? null,
+                ...(completion.forceReason
+                  ? { forceReason: completion.forceReason }
+                  : {}),
+              }
+            : undefined,
           preflight: async (task) => {
             acceptTeamId = (task as any).teamId ?? null;
+            if (!completion?.force) {
+              await this.assertCompletionPreflight(id, 'accept');
+            }
           },
           afterCommit: async (tx) => {
             const artifacts = await tx.artifact.findMany({
@@ -1152,8 +1175,20 @@ export class TasksService implements OnModuleInit {
         return {
           eventType: 'archive',
           fields: { archivedAt: new Date() },
+          metadata: completion?.force
+            ? {
+                forced: true,
+                forcedBy: completion.forcedBy ?? null,
+                ...(completion.forceReason
+                  ? { forceReason: completion.forceReason }
+                  : {}),
+              }
+            : undefined,
           preflight: async (task) => {
             archiveTeamId = (task as any).teamId ?? null;
+            if (!completion?.force) {
+              await this.assertCompletionPreflight(id, 'archive');
+            }
           },
           afterCommit: async (tx) => {
             await tx.session.updateMany({
@@ -1196,12 +1231,17 @@ export class TasksService implements OnModuleInit {
    * 验收通过（pending_review → completed，13 篇 §4.4）：写 completedAt（验收基线属 Phase 3）。
    * 12 篇 §7 验收联动：同事务锁定该任务全部产出物当前版本基线（accepted_flag=true）。
    */
-  async accept(id: string, userId: string) {
+  async accept(id: string, userId: string, opts?: CompletionForceOptions) {
     return this.transition(
       id,
       'accept',
       userId,
-      this.transitionOpts(id, 'accept'),
+      this.transitionOpts(
+        id,
+        'accept',
+        undefined,
+        opts ? { ...opts, forcedBy: userId } : undefined,
+      ),
     );
   }
 
@@ -1216,13 +1256,93 @@ export class TasksService implements OnModuleInit {
   }
 
   /** 归档（completed → archived，终态，13 篇 §4.5）：写 archivedAt，sessions 全部置 archived。 */
-  async archive(id: string, userId: string) {
+  async archive(id: string, userId: string, opts?: CompletionForceOptions) {
     return this.transition(
       id,
       'archive',
       userId,
-      this.transitionOpts(id, 'archive'),
+      this.transitionOpts(
+        id,
+        'archive',
+        undefined,
+        opts ? { ...opts, forcedBy: userId } : undefined,
+      ),
     );
+  }
+
+  /**
+   * 完工预检（accept/archive 用户路径共用）：
+   * 计划有行则必须 completed（executing=仍在执行，其余=未执行完；无行=任务无计划，不拦截）；
+   * issue 仅 open/in_progress 算未完结（resolved/closed 为完结，rejected 为已决不再处理）。
+   * 未通过时 409 + 枚举全部未完成项；force=true 由调用方跳过本检查。
+   */
+  private async assertCompletionPreflight(
+    taskId: string,
+    action: 'accept' | 'archive',
+  ): Promise<void> {
+    const { blockers, details } = await this.checkCompletionPreflight(taskId);
+    if (blockers.length === 0) return;
+    throw new ConflictException({
+      code: TASK_ERRORS.TASK_COMPLETION_PREFLIGHT_FAILED,
+      message: `任务存在未完成项，无法${action === 'accept' ? '验收完成' : '归档'}：${blockers.join('；')}。确认无误后可带 force=true 强制通过`,
+      details,
+    });
+  }
+
+  private async checkCompletionPreflight(taskId: string): Promise<{
+    blockers: string[];
+    details: {
+      planStatus: string | null;
+      openIssues: { id: string; title: string | null; status: string }[];
+    };
+  }> {
+    const blockers: string[] = [];
+    let planStatus: string | null = null;
+    try {
+      // plans 表唯一读出口：经 PlanLifecycleService.getStatus（choke 点），
+      // 本文件禁止直读 plans 表（plan-removal 守卫强制）。
+      // 有行→status；无行→null（非 blocker）；DB 抛错→warn-and-continue。
+      // 取舍说明：warn-and-continue（fail-open）与 getStatus 契约及仓库 sidecar
+      // 惯例一致；代价是 DB 抖动瞬间可能放行一次未经计划校验的完工，
+      // 但完工仍需人类显式 accept/archive（agent 禁止）且 force 全程审计，
+      // 故保持 fail-open 而不改为 fail-closed。
+      const raw = await this.planLifecycle.getStatus(taskId);
+      planStatus = typeof raw === 'string' ? raw : null;
+    } catch (err) {
+      this.logger.warn(
+        `完工预检读取计划状态失败 taskId=${taskId}：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (planStatus !== null && planStatus !== 'completed') {
+      blockers.push(`计划未完成（当前状态：${planStatus}，需为 completed）`);
+    }
+    let openIssues: { id: string; title: string | null; status: string }[] = [];
+    try {
+      const issueModel = (this.prisma as any).issue;
+      if (issueModel?.findMany) {
+        openIssues =
+          (await issueModel.findMany({
+            where: {
+              taskId,
+              status: { in: ['open', 'in_progress'] },
+              deletedAt: null,
+            },
+            select: { id: true, title: true, status: true },
+          })) ?? [];
+      }
+    } catch (err) {
+      this.logger.warn(
+        `完工预检读取 issue 失败 taskId=${taskId}：${err instanceof Error ? err.message : String(err)}`,
+      );
+      openIssues = [];
+    }
+    if (openIssues.length > 0) {
+      const list = openIssues
+        .map((i) => `${i.id}（${i.title ?? '无标题'}，${i.status}）`)
+        .join('、');
+      blockers.push(`仍有 ${openIssues.length} 个未完结 issue：${list}`);
+    }
+    return { blockers, details: { planStatus, openIssues } };
   }
 
   /**
@@ -1270,6 +1390,13 @@ export class TasksService implements OnModuleInit {
       throw new NotFoundException({
         code: TASK_ERRORS.TASK_NOT_FOUND,
         message: '任务不存在',
+      });
+    }
+    if (action === 'accept' || action === 'archive') {
+      throw new ForbiddenException({
+        code: TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,
+        message:
+          '仅人类用户可在管理界面验收完成/归档任务，Agent 不可调用 accept/archive；请向用户报告任务已就绪、等待人工验收，不要重复调用',
       });
     }
     const gateTeamId = (task as any).teamId ?? null;
