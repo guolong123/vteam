@@ -3,10 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { WorkerDispatcher } from '../chat/worker-dispatcher';
 import { CHANNEL_TYPE } from '../common/constants/event.constants';
 import { TASK_STATUS } from '../common/constants/task.constants';
-import {
-  TRIGGER_KIND,
-  buildTriggerDedupKey,
-} from '../common/constants/trigger.constants';
+import { TRIGGER_KIND } from '../common/constants/trigger.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { TriggerService } from '../timers/trigger.service';
@@ -322,23 +319,24 @@ describe('TaskProgressionScheduler', () => {
   describe('trigger 持久化（todo-8：rounds≡fireCount，maxRounds≡maxFires）', () => {
     const flush = () => new Promise((r) => setImmediate(r));
 
-    it('register → schedule interval 行（maxFires=maxRounds + 冷却 guard）', async () => {
+    it('register 不再排期周期巡检（periodic patrol 已退役，仅内存镜像）+ unregister 仍 cancel 旧行', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
       allowMainMember();
       await scheduler.register('t_1');
-      expect(triggers.schedule).toHaveBeenCalledTimes(1);
-      const [kind, dueAt, payload, dedupKey, opts] =
-        triggers.schedule.mock.calls[0];
-      expect(kind).toBe(TRIGGER_KIND.PROGRESSION_PATROL);
-      expect(dueAt.getTime()).toBeGreaterThan(Date.now());
-      expect(payload).toEqual({ taskId: 't_1' });
-      expect(dedupKey).toBe(buildProgressionDedupKey('t_1'));
-      expect(dedupKey).toBe(
-        buildTriggerDedupKey(TRIGGER_KIND.PROGRESSION_PATROL, 'task', 't_1'),
+      // 退役契约：内存镜像仍注册，但不再排任何 interval 巡检行
+      expect(scheduler.isRegistered('t_1')).toBe(true);
+      expect(triggers.schedule).not.toHaveBeenCalled();
+      const intervalCalls = triggers.schedule.mock.calls.filter(
+        (call) => call[4]?.intervalMs !== undefined,
       );
-      expect(opts.intervalMs).toBe((scheduler as any).progressionIntervalMs);
-      expect(opts.maxFires).toBe((scheduler as any).maxRounds);
-      expect(opts.guardKey).toBe(PROGRESSION_COOLDOWN_GUARD);
+      expect(intervalCalls).toHaveLength(0);
+      // unregister 仍 cancel 旧行（清扫遗留 pending 行）
+      scheduler.unregister('t_1');
+      await flush();
+      expect(triggers.cancel).toHaveBeenCalledWith(
+        buildProgressionDedupKey('t_1'),
+      );
+      expect(scheduler.isRegistered('t_1')).toBe(false);
     });
 
     it('register 幂等：pending 行已存在 → 保留 fireCount（不清零，不重建）', async () => {
@@ -354,7 +352,7 @@ describe('TaskProgressionScheduler', () => {
       expect(scheduler.isRegistered('t_1')).toBe(true);
     });
 
-    it('register 数据修复：终态行 → 删除后重建', async () => {
+    it('register 数据修复：终态行 → 不删除不重建（退役 no-op，仅重建内存镜像）', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
       allowMainMember();
       const del = jest.fn().mockResolvedValue({ id: 'tmr_1' });
@@ -365,8 +363,9 @@ describe('TaskProgressionScheduler', () => {
         delete: del,
       };
       await scheduler.register('t_1');
-      expect(del).toHaveBeenCalledTimes(1);
-      expect(triggers.schedule).toHaveBeenCalledTimes(1);
+      expect(del).not.toHaveBeenCalled();
+      expect(triggers.schedule).not.toHaveBeenCalled();
+      expect(scheduler.isRegistered('t_1')).toBe(true);
     });
 
     it('unregister → cancel 触发器（行留 cancelled）', async () => {

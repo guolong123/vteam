@@ -136,6 +136,9 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
     // 巡检 handler + 冷却 guard 接线（TriggerService 缺席时 no-op，内存循环照常）。
     this.registerProgressionTrigger();
+    // periodic patrol 已退役：清扫库内遗留的 pending progression_patrol 触发器行
+    //（fan-out JOIN drain 接管唤醒职责，旧 interval 行会重复下发 wake 消息）。
+    await this.cancelStalePatrolTriggers();
     // 数据修复：库内 in_progress 任务逐个 register（pending 触发器行保留 fireCount，
     // 终态/缺失行重建——重启不再清零 rounds）。
     await this.restoreInProgressTasks();
@@ -157,6 +160,9 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 巡检 handler + 冷却 guard 接线（幂等覆盖注册；TriggerService 缺席时 no-op）。
+   *
+   * NOTE: periodic patrol 巡检已退役——fan-out JOIN drain 取代了定期巡检的唤醒职责。
+   * 这里仅注册 handler/guard 的接线（fail-open），不排任何 interval 行。
    */
   private registerProgressionTrigger(): void {
     if (!this.triggers) {
@@ -212,44 +218,12 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * 巡检触发器持久化（fail-open：失败仅 warn，内存循环继续承担巡检）。
-   * - 无行 → schedule interval 行（dueAt=now+interval，maxFires=maxRounds，挂冷却 guard）；
-   * - pending 行已存在 → 保留（重启/重复注册不清零 fireCount）；
-   * - 终态行（cancelled/fired/failed）→ 删除后重建（任务重入 in_progress 重开计数）。
+   * 巡检触发器持久化：periodic patrol 已退役（fan-out JOIN drain 取代）。
+   * 此方法保留为 no-op（历史幂等：pending 行已存在 → 直接保留），仅为避免
+   * 外部 caller 编译报错，保持签名不变。生产不再排任何 interval 行。
    */
-  private async persistPatrolTrigger(taskId: string): Promise<void> {
-    if (!this.triggers) {
-      return;
-    }
-    const dedupKey = buildProgressionDedupKey(taskId);
-    try {
-      const existing = await (this.prisma as any).trigger?.findUnique?.({
-        where: { dedupKey },
-      });
-      if (existing) {
-        if (existing.status === TRIGGER_STATUS.PENDING) {
-          return;
-        }
-        await (this.prisma as any).trigger
-          ?.delete?.({ where: { dedupKey } })
-          .catch(() => null);
-      }
-      await this.triggers.schedule(
-        TRIGGER_KIND.PROGRESSION_PATROL,
-        new Date(Date.now() + this.progressionIntervalMs),
-        { taskId },
-        dedupKey,
-        {
-          intervalMs: this.progressionIntervalMs,
-          maxFires: this.maxRounds,
-          guardKey: PROGRESSION_COOLDOWN_GUARD,
-        },
-      );
-    } catch (err) {
-      this.logger.warn(
-        `[progression] 巡检触发器持久化失败 taskId=${taskId}（内存循环继续）: ${this.describeError(err)}`,
-      );
-    }
+  private async persistPatrolTrigger(_taskId: string): Promise<void> {
+    return;
   }
 
   /**
@@ -692,6 +666,46 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       .filter(Boolean)
       .join('；');
     return text || '（无详细内容）';
+  }
+
+  /**
+   * periodic patrol 退役清扫：取消库内所有 pending progression_patrol 触发器行。
+   * fan-out JOIN drain 接管唤醒；旧 interval 行会重复下发 wake 消息。
+   * fail-open：DB 操作失败仅 warn，memory loop 照常。
+   */
+  private async cancelStalePatrolTriggers(): Promise<void> {
+    try {
+      const stale = await (this.prisma as any).trigger?.findMany?.({
+        where: {
+          kind: TRIGGER_KIND.PROGRESSION_PATROL,
+          status: TRIGGER_STATUS.PENDING,
+        },
+        select: { dedupKey: true },
+      });
+      if (Array.isArray(stale)) {
+        for (const row of stale) {
+          try {
+            await (this.prisma as any).trigger.update({
+              where: { dedupKey: row.dedupKey },
+              data: { status: TRIGGER_STATUS.CANCELLED },
+            });
+          } catch (err) {
+            this.logger.warn(
+              `[progression] 清扫 stale patrol ${row.dedupKey} 失败: ${this.describeError(err)}`,
+            );
+          }
+        }
+        if (stale.length > 0) {
+          this.logger.log(
+            `[progression] 清扫 stale patrol 触发器：${stale.length} 个 pending 行已取消`,
+          );
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[progression] 清扫 stale patrol 失败（忽略）: ${this.describeError(err)}`,
+      );
+    }
   }
 
   /**
