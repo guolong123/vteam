@@ -4821,6 +4821,82 @@ describe('PlatformMcpService', () => {
     });
   });
 
+  describe('plan_complete（标记计划执行完成，仅主 Agent 可调）', () => {
+    const mainInstanceId = 'tmm_main';
+    const ctx = { workerId: 'w_1' } as any;
+
+    const mockGate = (mainId: string | null) => {
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: mainId });
+    };
+
+    const mockLifecycle = (result: {
+      plan: { status: string };
+      idempotent: boolean;
+    }) => {
+      const completePlan = jest.fn().mockResolvedValue(result);
+      (service as any).planLifecycle = { completePlan };
+      return completePlan;
+    };
+
+    it('主实例 + executing → 成功，返回 status:completed，completePlan 以 instanceId=selfInstanceId 调用', async () => {
+      allowWorkerAs(mainInstanceId);
+      mockGate(mainInstanceId);
+      const completePlan = mockLifecycle({
+        plan: { status: 'completed' },
+        idempotent: false,
+      });
+
+      const out = await service.planComplete(ctx, {
+        taskId: 't_1',
+        selfInstanceId: mainInstanceId,
+      });
+
+      expect(completePlan).toHaveBeenCalledWith('t_1', {
+        userId: mainInstanceId,
+        userName: null,
+        instanceId: mainInstanceId,
+      });
+      expect(out).toEqual({
+        taskId: 't_1',
+        status: 'completed',
+        idempotent: false,
+      });
+    });
+
+    it('非主实例 → 403 PLATFORM_MCP_FORBIDDEN（completePlan 不调用）', async () => {
+      allowWorkerAs('tmm_other');
+      mockGate(mainInstanceId);
+      const completePlan = mockLifecycle({
+        plan: { status: 'completed' },
+        idempotent: false,
+      });
+
+      await expectCode(
+        service.planComplete(ctx, {
+          taskId: 't_1',
+          selfInstanceId: 'tmm_other',
+        }),
+        ForbiddenException,
+        PLATFORM_MCP_ERRORS.FORBIDDEN,
+      );
+      expect(completePlan).not.toHaveBeenCalled();
+    });
+
+    it('planLifecycle 缺失（null）→ 503', async () => {
+      allowWorkerAs(mainInstanceId);
+      mockGate(mainInstanceId);
+      (service as any).planLifecycle = undefined;
+
+      await expect(
+        service.planComplete(ctx, {
+          taskId: 't_1',
+          selfInstanceId: mainInstanceId,
+        }),
+      ).rejects.toMatchObject({ status: 503 });
+    });
+  });
+
   describe('channel_send（通知渠道推送，T12）', () => {
     it('成功：解析当前任务上下文并调用 outboundDispatcher → 返回已发送文本，不抛异常', async () => {
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' } as any);
@@ -5719,12 +5795,10 @@ describe('PlatformMcpService', () => {
         mainAgentInstanceId: 'tmm_other',
       });
 
-      const err = await service
-        .skillCreate(ctx, { ...skillArgs })
-        .then(
-          () => null,
-          (e: unknown) => e,
-        );
+      const err = await service.skillCreate(ctx, { ...skillArgs }).then(
+        () => null,
+        (e: unknown) => e,
+      );
       expect(err).toBeInstanceOf(ForbiddenException);
       const resp = (err as { getResponse(): any }).getResponse();
       expect(resp.code).toBe(PLATFORM_MCP_ERRORS.FORBIDDEN);

@@ -92,7 +92,10 @@ import {
   normalizePlanHash,
   selectFrozenPlanHash,
 } from '../issues/plan-hash-gate';
-import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
+import {
+  PLAN_LIFECYCLE_ERRORS,
+  PlanLifecycleService,
+} from '../tasks/plan-lifecycle.service';
 import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
 import { REVIEW_ROUND_TIMEOUT_MS } from '../issues/review-round-gate.service';
 import { ReviewRoundService } from '../issues/review-round.service';
@@ -3474,6 +3477,47 @@ export class PlatformMcpService {
       taskId: args.taskId,
       planMode: updated.planMode,
       agentName: agentName ?? null,
+    };
+  }
+
+  /**
+   * plan_complete：标记计划执行完成（executing→completed，仅主 Agent 可调）。
+   * 归属校验 → 仅主成员（team.mainAgentMemberId===selfInstanceId，否则 403）→
+   * PlanLifecycleService.completePlan（仅 executing 可完工，已 completed 幂等返回）。
+   */
+  async planComplete(
+    ctx: PlatformMcpContext,
+    args: { taskId: string; selfInstanceId: string },
+  ): Promise<{ taskId: string; status: string; idempotent: boolean }> {
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+
+    if (!this.planLifecycle) {
+      throw new ServiceUnavailableException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_UNAVAILABLE,
+        message: '计划服务未装配，暂不可标记完工',
+      });
+    }
+
+    const { mainMemberId } = await this.findTaskTeamGate(args.taskId);
+    if (!mainMemberId || mainMemberId !== args.selfInstanceId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: `仅主 Agent（${mainMemberId ?? '未设置'}）可标记计划完工；请知会主 Agent 调用 plan_complete`,
+      });
+    }
+
+    const result = await this.planLifecycle.completePlan(args.taskId, {
+      userId: args.selfInstanceId,
+      userName: null,
+      instanceId: args.selfInstanceId,
+    });
+    this.logger.log(
+      `[plan-complete] 主 Agent 标记计划完工 task=${args.taskId} status=${result.plan.status} idempotent=${result.idempotent}`,
+    );
+    return {
+      taskId: args.taskId,
+      status: result.plan.status,
+      idempotent: result.idempotent,
     };
   }
 

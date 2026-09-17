@@ -528,6 +528,15 @@ export const planModeSchema = z.object({
 
 type PlanModeArgs = z.infer<typeof planModeSchema>;
 
+export const planCompleteSchema = z.object({
+  taskId: z.string().describe('任务 ID'),
+  selfInstanceId: z
+    .string()
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+});
+
+type PlanCompleteArgs = z.infer<typeof planCompleteSchema>;
+
 const channelSendSchema = z.object({
   // team-free-chat todo-4：channel_send 无 taskId 入参（任务上下文由服务端按 worker 会话
   // 自动解析），不在可选 5 工具之列，保持原样。
@@ -1002,6 +1011,14 @@ export function buildPlatformMcpTools(
         '切换任务计划模式开关（仅主 Agent 可调用）：enabled=true 开启（主 Agent 先出计划文档，其他成员只评审不起草）；enabled=false 关闭切回直接执行。agentName 可选同步指定主 Agent 的执行 agent（如 build；空串=回跟随默认；不传=保持当前）。返回 {taskId, planMode, agentName}。',
       inputSchema: planModeSchema,
       handler: (ctx, args) => service.planMode(ctx, args as PlanModeArgs),
+    },
+    {
+      name: 'plan_complete',
+      description:
+        '标记计划执行完成（executing→completed，仅主 Agent 可调用）。执行交付齐后调用，推动计划状态机闭环；已 completed 幂等返回；非 executing 态报错。返回 {taskId, status, idempotent}。',
+      inputSchema: planCompleteSchema,
+      handler: (ctx, args) =>
+        service.planComplete(ctx, args as PlanCompleteArgs),
     },
     {
       name: 'channel_send',

@@ -57,6 +57,7 @@ const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_my_profile',
   'vteam_team_add_member',
   'vteam_plan_mode',
+  'vteam_plan_complete',
   'vteam_channel_send',
   'vteam_wecom_reply',
   'vteam_task_create',
@@ -71,6 +72,7 @@ const ROLE_SERVER_GATED_TOOLS: readonly string[] = [
   'vteam_question_confirm',
   'vteam_task_create',
   'vteam_plan_mode',
+  'vteam_plan_complete',
   'vteam_team_add_member',
   'vteam_skill_create',
 ] as const;
@@ -589,6 +591,7 @@ async function main() {
         '\n' +
         '## 职责\n' +
         '- 环节推进：按已确认的实施计划（计划员产出）推进环节流转，用 issue 跟踪每项状态；不自行拆解任务、不制定实施计划，缺失计划时 @计划员-1 补出。\n' +
+        '- 计划完工：任务交付齐备或进入待验收时，若计划仍处于执行中，须调 vteam_plan_complete 标记计划完工（executing→completed）；平台真值源是 DB plans.status，改计划文件无效，不要 @计划员-1 去改文件。\n' +
         '- 进度跟踪：掌握团队各角色进展，环节切换或产出完成时主动在群聊同步进度与待办。\n' +
         '- 风险管理：识别需求/方案/实现/验证各环节的风险与依赖，提前向成员提示并给出缓解建议。\n' +
         '- 阻塞协调：发现阻塞时定位责任角色，用 vteam_notify_agent 定向协调，必要时提示成员介入。\n' +
@@ -1151,6 +1154,7 @@ async function main() {
     { action: 'my_profile', name: 'vteam_my_profile', description: '查询自身 Agent 配置' },
     { action: 'team_add_member', name: 'vteam_team_add_member', description: '申请将 Agent 加入团队（仅主 Agent）' },
     { action: 'plan_mode', name: 'vteam_plan_mode', description: '切换任务计划模式开关（仅主 Agent）' },
+    { action: 'plan_complete', name: 'vteam_plan_complete', description: '标记计划执行完成（仅主 Agent）' },
     { action: 'channel_send', name: 'vteam_channel_send', description: 'Agent 主动推送通知到通知渠道（webhook/企微机器人）' },
     { action: 'wecom_reply', name: 'vteam_wecom_reply', description: '回复企业微信用户（仅当消息来自企微时使用）' },
     { action: 'task_create', name: 'vteam_task_create', description: '在团队会话无任务时创建任务（仅主 Agent 可调）' },

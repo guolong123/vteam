@@ -385,6 +385,12 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       );
       expect(prompt).not.toMatch(/可用工具：vteam_/);
       for (const gated of ROLE_SERVER_GATED_TOOLS) {
+        // 例外：PM 职责含计划完工铁律（须点名 vteam_plan_complete），运行时仍由
+        // platform-mcp 主实例门鉴权，prompt 点名不等于越权。
+        if (id === 'a_project_manager' && gated === 'vteam_plan_complete') {
+          expect(prompt).toContain(gated);
+          continue;
+        }
         expect(prompt).not.toContain(gated);
       }
     }
@@ -817,6 +823,40 @@ describe('seed（计划 skills + 评审子句）', () => {
     });
   });
 
+  it('vteam 工具含 plan_complete 行（executing→completed，仅主 Agent）', async () => {
+    await main();
+
+    const toolCalls = mockPrisma.tool.upsert.mock.calls;
+    const row = toolCalls.find(
+      (call) => call[0].where.action === 'plan_complete',
+    );
+    expect(row).toBeDefined();
+    expect(row[0].create).toMatchObject({
+      name: 'vteam_plan_complete',
+      action: 'plan_complete',
+      source: 'mcp',
+      mcpServer: 'vteam',
+    });
+  });
+
+  it('vteam_plan_complete 为 server-gated（与 plan_mode 同模式）：进 gated 清单，不进任何角色 toolAllows', async () => {
+    await main();
+
+    // src 单一来源：工具名清单与 gated 清单均含新工具
+    expect(VTEAM_MCP_TOOL_NAMES).toContain('vteam_plan_complete');
+    expect(ROLE_SERVER_GATED_TOOLS).toContain('vteam_plan_complete');
+    // server-gated 由 platform-mcp 运行时按主实例判定：guard 层不写 allow 也不写 deny，
+    // PM（含计划员 vteam-plan）经 pass-through + 主实例门调用
+    for (const name of [
+      'vteam-project_manager',
+      'vteam-plan',
+    ] as const) {
+      expect(
+        Object.keys(ROLE_BOUNDARIES[name].toolAllows),
+      ).not.toContain('vteam_plan_complete');
+    }
+  });
+
   it('vteam 工具含 hook_register/hook_cancel 行（trigger-unification todo-13）', async () => {
     await main();
 
@@ -835,6 +875,7 @@ describe('seed（计划 skills + 评审子句）', () => {
       });
     }
   });
+
   it('示例团队 7 成员：a_plan 第 6 位、a_librarian 末位 tmm_0000000007 别名知识管理员-1，非主 Agent（主 Agent 为项目经理）', async () => {
     await main();
 
@@ -936,6 +977,14 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
     expect(pm).toContain(PM_NUDGE_CITE);
   });
 
+  it('PM 计划完工铁律：交付齐备或待验收时调 vteam_plan_complete 标记完工，不 @计划员改文件', async () => {
+    const pm = (await promptsById()).get('a_project_manager')!;
+    expect(pm).toContain('vteam_plan_complete');
+    expect(pm).toContain('计划完工');
+    expect(pm).toContain('executing→completed');
+    expect(pm).toContain('DB plans.status');
+    expect(pm).toContain('不要 @计划员-1 去改文件');
+  });
   it('成员回执铁律：四角色 prompt 含回执必@派发人句，知识管理员不含', async () => {
     const prompts = await promptsById();
     for (const id of MEMBER_IDS) {

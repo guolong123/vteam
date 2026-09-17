@@ -136,6 +136,7 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_my_profile',
   'vteam_team_add_member',
   'vteam_plan_mode',
+  'vteam_plan_complete',
   'vteam_channel_send',
   'vteam_wecom_reply',
   'vteam_task_create',
@@ -156,6 +157,7 @@ export const ROLE_SERVER_GATED_TOOLS: readonly string[] = [
   'vteam_question_confirm',
   'vteam_task_create',
   'vteam_plan_mode',
+  'vteam_plan_complete',
   'vteam_team_add_member',
   'vteam_skill_create',
 ] as const;
