@@ -1,0 +1,622 @@
+# task-1 change map — server-gate-removal-tool-authority
+
+Authoritative, READ-ONLY change map for plan `server-gate-removal-tool-authority`.
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Base commit: 7d3b9b0 (branch main)
+Method: every `file:line` below was produced by a recorded command in §7. Line numbers are
+ORIENTATION ONLY — the instruction for every later todo is the error code / message string,
+never a line number (plan §Verification strategy: reference discipline).
+
+Derived counts (re-derived NOW, not copied):
+- removal targets: **7 gated tools at 11 throw sites** — VERIFIED (§7, command V1/V2).
+  task_create ×2, skill_create ×3, plan_complete ×2, team_add_member ×1, plan_mode ×1,
+  task_transition ×1, question_confirm ×1.
+- retained checks: 7 distinct refusal families at 9 physical throw sites (§b).
+- grant-matrix roles present in ROLE_BOUNDARIES: 7 (`vteam-librarian` included); matrix
+  grants touch 5 of them + `vteam-issue_create` on 3 of them (§d).
+
+Terminology note: "throw site" = one `throw new ForbiddenException({ … })` (or
+`throw new Error(…)` for the non-HTTP dispatcher layer). Two error objects sharing one
+predicate (task_transition MCP→service) are counted ONCE per the plan.
+
+---
+
+## (a) THE REMOVAL TARGETS — 7 gated tools across 11 throw sites
+
+Invariant to break: every site below refuses a call solely because the caller is not the
+team's **main member** (`team.mainAgentMemberId`, or its seq-ascending fallback). That is
+the agent-identity gate this plan removes. The identity resolution helper feeding each
+predicate is named per tool.
+
+### A1. `task_create` — 2 throws — `PLATFORM_MCP_ERRORS.FORBIDDEN` = `PLATFORM_MCP_FORBIDDEN`
+Method `PlatformMcpService.taskCreate` (`server/src/platform-mcp/platform-mcp.service.ts`).
+Observed live by command V2.
+
+| # | file:line | predicate | message (exact) |
+|---|-----------|-----------|-----------------|
+| A1a | server/src/platform-mcp/platform-mcp.service.ts:2960–2965 | `taskDimMainId !== exec.callerId` (task dimension) | ``仅主 Agent（${taskDimMainId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`` |
+| A1b | server/src/platform-mcp/platform-mcp.service.ts:2979–2984 | `taskGateMainId !== exec.callerId` (team dimension) | ``仅主 Agent（${taskGateMainId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`` |
+
+Resolution helper: both ids come from `resolveTeamMainMemberId(teamId, explicitMainId)`
+(`server/src/platform-mcp/platform-mcp.service.ts:2889–2907`): explicit
+`team.mainAgentMemberId` wins, else seq-ascending first member
+(`orderBy: [{ seq: 'asc' }, { id: 'asc' }]`), else `null`. The A1a task-dimension gate reads
+`team.mainAgentMemberId` via an inline `team.findUnique` at :2952–2955 then passes it through
+`resolveTeamMainMemberId`; A1b reads team directly at :2968–2971 then same helper.
+
+### A2. `skill_create` — 3 throws — `PLATFORM_MCP_ERRORS.FORBIDDEN`
+Method `PlatformMcpService.skillCreate` (`server/src/platform-mcp/platform-mcp.service.ts`).
+
+| # | file:line | predicate | message (exact) |
+|---|-----------|-----------|-----------------|
+| A2a | server/src/platform-mcp/platform-mcp.service.ts:3032–3038 | `!task.teamId` (no-context guard; refuses when the task has no team, before any main resolution) | `仅主 Agent（未设置）可沉淀技能；请知会主 Agent 调用 skill_create` |
+| A2b | server/src/platform-mcp/platform-mcp.service.ts:3047–3052 | `taskDimSkillMainId !== exec.callerId` (task dimension) | ``仅主 Agent（${taskDimSkillMainId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`` |
+| A2c | server/src/platform-mcp/platform-mcp.service.ts:3065–3070 | `skillGateMainId !== exec.callerId` (team dimension) | ``仅主 Agent（${skillGateMainId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`` |
+
+Resolution helper: `resolveTeamMainMemberId` for A2b/A2c; A2a is the "no team context"
+variant of the same gate (plan calls it the no-context throw).
+
+### A3. `team_add_member` — 1 throw — `PLATFORM_MCP_ERRORS.FORBIDDEN`
+Method `PlatformMcpService.teamAddMember` (`server/src/platform-mcp/platform-mcp.service.ts`).
+
+| # | file:line | predicate | message (exact) |
+|---|-----------|-----------|-----------------|
+| A3a | server/src/platform-mcp/platform-mcp.service.ts:3907–3912 | `!addMainId \|\| addMainId !== args.selfInstanceId` | ``仅主 Agent（${addMainId ?? '未设置'}）可申请增员；请知会主 Agent 调用 team_add_member`` |
+
+Resolution helper: `findTaskTeamGate(taskId)`
+(`server/src/platform-mcp/platform-mcp.service.ts:3854–3879`) → `{ teamId, mainMemberId }`,
+returns `team.mainAgentMemberId ?? null` **with NO seq-ascending fallback**. This is the
+helper whose null-target behavior plan todo 2 must handle for `plan_mode` (see A4a).
+Keep `assertWorkerTask` (:3903) — it is attribution, not identity.
+
+### A4. `plan_mode` — 1 throw — `PLATFORM_MCP_ERRORS.FORBIDDEN`
+Method `PlatformMcpService.planMode` (`server/src/platform-mcp/platform-mcp.service.ts`).
+
+| # | file:line | predicate | message (exact) |
+|---|-----------|-----------|-----------------|
+| A4a | server/src/platform-mcp/platform-mcp.service.ts:4022–4027 | `!mainMemberId \|\| mainMemberId !== args.selfInstanceId` | ``仅主 Agent（${mainMemberId ?? '未设置'}）可切换计划模式；请知会主 Agent 调用 plan_mode`` |
+
+Resolution helper: `findTaskTeamGate` (:4021) — `mainMemberId` may be `null` because this
+helper has no seq fallback. **Downstream hazard (must be fixed in todo 2):** the surviving
+body writes `teamMember.update({ where: { id: mainMemberId }, … })` at :4033–4036 (agentName
+set) and reads `findUnique({ where: { id: mainMemberId } })` at :4038–4041. Removing the
+authorization comparison without resolving the target would write `id: null`. The write
+target stays "the team's main member"; resolve it with the documented fallback
+(`resolveTeamMainMemberId`) or return the documented no-target error.
+
+### A5. `plan_complete` — 2 throws — mixed codes
+Two layers, both matching "只有主实例可标记计划完工":
+
+| # | file:line | code | message (exact) | predicate |
+|---|-----------|------|-----------------|-----------|
+| A5a | server/src/platform-mcp/platform-mcp.service.ts:4078–4083 | `PLATFORM_MCP_ERRORS.FORBIDDEN` | ``仅主 Agent（${mainMemberId ?? '未设置'}）可标记计划完工；请知会主 Agent 调用 plan_complete`` | `!mainMemberId \|\| mainMemberId !== args.selfInstanceId` |
+| A5b | server/src/tasks/plan-lifecycle.service.ts:487–492 | `PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_MAIN_ONLY` = `PLAN_COMPLETE_MAIN_ONLY` (declared :71) | ``仅主实例（${mainMemberId ?? '未设置'}）可标记计划完工；用户路径请经 PM（tasks.review）操作`` | `!mainMemberId \|\| mainMemberId !== input.instanceId` |
+
+Resolution helper: A5a via `findTaskTeamGate` (:4077); A5b inline
+`team.findUnique({ select: { mainAgentMemberId } })` at :480–486 then `team?.mainAgentMemberId ?? null`.
+A5b is guarded by `if (input.instanceId !== undefined && input.instanceId !== null)` (:479) —
+the user path (no instanceId) never hits it; only the agent path does. PLAN_LIFECYCLE_ERRORS
+is declared in the same file at :71.
+
+### A6. `task_transition` — 1 throw (counted ONCE; same predicate as `transitionByAgent` main-only) — `TASK_STATUS_MAIN_AGENT_ONLY`
+The MCP gateway `PlatformMcpService.taskTransition` (:2831–2857) performs NO identity check of
+its own; it delegates to `TasksService.transitionByAgent`. The single physical main-only throw is:
+
+| # | file:line | code | message (exact) | predicate |
+|---|-----------|------|-----------------|-----------|
+| A6a | server/src/tasks/tasks.service.ts:1413–1419 | `TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY` = `TASK_STATUS_MAIN_AGENT_ONLY` (declared `server/src/common/constants/task.constants.ts:67`) | ``仅主 Agent（${mainMemberId ?? '未设置'}）可流转任务状态；请知会主 Agent 调用 task_transition，或由管理员在任务管理界面操作`` | `mainMemberId !== instanceId` |
+
+Resolution helper: `resolveTeamFallbackMainId(teamId)`
+(`server/src/tasks/tasks.service.ts:1354–1370`, seq-ascending `orderBy: [{ seq: 'asc' }, { id: 'asc' }]`),
+fed by explicit `team.mainAgentMemberId` at :1403–1409. NOTE: the accept/archive refusal in the
+same method (:1395–1401, `TASK_AGENT_COMPLETION_FORBIDDEN`) REMAINS (see §b.3). Only the
+main-only predicate at :1413 goes.
+
+### A7. `question_confirm` — 1 throw — `TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY`
+Method `QuestionsService.confirmByAgent` (`server/src/questions/questions.service.ts:260–322`).
+
+| # | file:line | code | message (exact) | predicate |
+|---|-----------|------|-----------------|-----------|
+| A7a | server/src/questions/questions.service.ts:290–295 | `TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY` | ``仅主 Agent（${team.mainAgentMemberId ?? '未设置'}）可确认托管模式下的请求`` | `team.mainAgentMemberId !== input.instanceId` |
+
+Resolution helper: inline `team.findUnique({ select: { mainAgentMemberId } })` at :278–283;
+NO seq fallback (direct column compare). The MCP gateway wrapper
+`PlatformMcpService.questionConfirm` (:2859–2880) calls `assertWorkerTask` then this service.
+Plan todo 2 requires two NEW integrity checks here (confirmer ≠ requester; request belongs to
+caller's task) because this identity gate was the only thing preventing self-approval /
+cross-task confirmation.
+
+### Per-tool throw counts (reviewer checklist — nothing missed)
+
+| tool | throws | sites |
+|------|--------|-------|
+| task_create | 2 | A1a, A1b |
+| skill_create | 3 | A2a, A2b, A2c |
+| team_add_member | 1 | A3a |
+| plan_mode | 1 | A4a |
+| plan_complete | 2 | A5a, A5b |
+| task_transition | 1 | A6a |
+| question_confirm | 1 | A7a |
+| **TOTAL** | **11** | |
+
+---
+
+## (b) THE RETAINED-CHECKS ALLOWLIST
+
+Server-side refusals that STAY, each with its code and why. These are NOT tool-permission
+gates; they enforce flow-state legality, topology routing, human authority, or resource scope.
+
+### b.1 `notify_agent` routing — `PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION`
+Two throws, both `server/src/platform-mcp/platform-mcp.service.ts`:
+- **self-notify** :1479–1484 — `args.selfInstanceId === args.targetInstanceId` → code
+  `PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION`, message `不能通知自己；需要协作请通知主 Agent 由其中转`.
+- **non-main → non-main** :1499–1507 — `exec.callerId !== routingMainId && args.targetInstanceId !== routingMainId`
+  → same code, message ``仅主 Agent（${routingMainId}）可向其他成员派发；请先通知主 Agent 由其中转``.
+Reason: **topology routing** — the collaboration graph (main can reach anyone, anyone can
+reach main, non-main↔non-main is mediated) is a product invariant, not a tool grant. Declared
+`server/src/platform-mcp/platform-mcp.constants.ts:31`.
+
+### b.2 terminal-task execution-dispatch refusal — plain `Error` (no HTTP code)
+`server/src/chat/worker-dispatcher.ts:1444–1451` — when
+`taskStatusForDispatch === 'completed' || 'archived'`, throws
+`任务 … 已终态终止 (terminal, status=…)：execution 派发已拒绝…`.
+Reason: **flow-state legality** — no execution may be dispatched into a terminal task.
+(review/nudge/wake are exempt by design; see the comment at :1440–1443.)
+
+### b.3 accept/archive refusal — `TASK_AGENT_COMPLETION_FORBIDDEN` at BOTH sites
+Declared `server/src/common/constants/task.constants.ts:69`.
+- MCP layer: `server/src/platform-mcp/platform-mcp.service.ts:2840–2846`
+  (`taskTransition`, before `assertWorkerTask`).
+- service layer: `server/src/tasks/tasks.service.ts:1395–1401` (`transitionByAgent`).
+Both: `action === 'accept' || 'archive'` → code `TASK_AGENT_COMPLETION_FORBIDDEN`, message
+`仅人类用户可在管理界面验收完成/归档任务，Agent 不可调用 accept/archive；…`.
+Reason: **human authority** — acceptance/archival is reserved to the human operator.
+
+### b.4 global-memory write scope — `PLATFORM_MCP_ERRORS.FORBIDDEN`
+`memory_save`:
+- `server/src/platform-mcp/platform-mcp.service.ts:3158–3166` — `args.level === global && team.mainAgentMemberId !== memberId`
+  → message `仅主 Agent 可写入全局记忆，禁止普通成员写 global 级`.
+- `server/src/platform-mcp/platform-mcp.service.ts:3282–3298` (task-dimension path in
+  `memorySave`) — `!globalMainId || globalMainId !== args.selfInstanceId` → same message.
+`memory_update`:
+- `server/src/platform-mcp/platform-mcp.service.ts:3437–3449` — `row.level === global &&
+  (!mainTeam || mainTeam.mainAgentMemberId !== exec.callerId)` → message
+  `仅主 Agent 可更新全局记忆，禁止普通成员改 global 级`.
+Reason: **resource-scope** — `global`-level memory is team-shared state whose mutation is
+scoped to the team's main member; this is a data-scope rule, not a tool grant.
+(Team-level cross-team write refusals at :3432–3436 and :3450–3454 also stay — same scope family.)
+
+### b.5 `hook_cancel` owner-or-main — `PLATFORM_MCP_ERRORS.FORBIDDEN` (RESOURCE-OWNERSHIP)
+`server/src/platform-mcp/platform-mcp.service.ts:899–913` — when
+`hook.ownerInstanceId !== exec.callerId`, allow only if `team.mainAgentMemberId === exec.callerId`,
+else throw code `PLATFORM_MCP_ERRORS.FORBIDDEN`, message `仅 hook 所有者或主 Agent 可取消`.
+Reason: **resource ownership** — a hook belongs to the instance that registered it; the main
+member is the escalation owner. Retained per plan guardrail "No removal of the hook_cancel
+owner-or-main check (retained as a resource-ownership rule)".
+(Cross-team hook cancel refusal at :893–898 also stays — same ownership family.)
+
+### Governing invariant (one sentence)
+**The worker guard is the single source for tool permission; the server retains flow-state
+legality, topology routing, human authority, and resource-scope / ownership checks.**
+
+---
+
+## (c) THE FOUR-COPY INVENTORY
+
+One gating concept (`ROLE_SERVER_GATED_TOOLS` / `SERVER_GATED_TOOLS`) exists in four source
+copies plus one compiled artefact; all must agree after the flip.
+
+| copy | path | exact symbol(s) | notes |
+|------|------|-----------------|-------|
+| 1. server canonical | `server/src/common/constants/agent.constants.ts` | `ROLE_SERVER_GATED_TOOLS` :155–163; `SERVER_GATED_SET` :166; `defineBoundary` :213–221 (the exclusion term `&& !SERVER_GATED_SET.has(name)` at :218) | also `VTEAM_MCP_TOOL_NAMES` :117–147 (29 names). `ROLE_BOUNDARIES` :282–548. |
+| 2. server seed mirror | `server/prisma/seed.ts` | own `ROLE_SERVER_GATED_TOOLS` :70–78; own `SERVER_GATED_SET` :80; own `defineBoundary` :82–90 (same exclusion :87); emission `tools: { ...boundary.toolAllows }` :918 | seed.spec.ts asserts byte-equality with copy 1. |
+| 3. worker policy | `worker/src/role-guard/policy.ts` | `SERVER_GATED_TOOLS` :103–111; **passthrough branch** :200–202 (`if (SERVER_GATED_TOOLS.has(tool)) return { action: 'allow' };`); second reference in `isPlatformToolForHandoff` :467–480 (term :475) | remove :200–202 so a formerly-gated tool falls through to the allowlist (:217–219). |
+| 4. worker plugin snapshot | `worker/src/resources/role-guard-plugin.ts` | `SERVER_GATED_TOOLS` :90–98; passthrough branch :158–160; second reference `isPlatformToolForHandoff` :367–375 (term :374) | inline snapshot emitted into `.opencode/plugin/vteam-role-guard.ts`. |
+| + compiled artefact | `worker/dist/resources/role-guard-plugin.js` | contains `SERVER_GATED_TOOLS` (4 occurrences; `grep -c` — command V6) | NOT git-tracked (`git ls-files worker/dist` = 0 files). Rebuild via `worker` `npm run build` (= `tsc`), consumed by `worker/src/resources/injector.ts` (`renderRoleGuardPlugin`, `writeGuardPluginFile` :464+, `ensureGuardPluginEntry` :476+). |
+
+### The two `isPlatformToolForHandoff` call sites (second reference to the same set)
+1. `worker/src/role-guard/policy.ts:475` (fn defined :467).
+2. `worker/src/resources/role-guard-plugin.ts:374` (fn defined :367).
+Plan todo 4 explicitly requires updating BOTH; deleting the constant without editing them
+breaks `worker tsc`. Semantically safe (every gated tool is `vteam_`-prefixed → already
+matched by the prefix branch at policy.ts:468 / plugin.ts:371), but positional deletion of the
+constant leaves a dangling identifier.
+
+### `dist/` build step
+- Build command: `worker/package.json` → `"build": "tsc"` (compiles `src` → `dist`).
+- Consumer: `worker/src/resources/injector.ts` imports `renderRoleGuardPlugin` from
+  `./role-guard-plugin` (:27) and writes the plugin file at :464–497.
+- Confirmation the current compiled plugin is stale-vs-source: `worker/dist/.../role-guard-plugin.js`
+  still contains `SERVER_GATED_TOOLS` (command V6). After the flip the rebuild must show zero.
+
+### Fate decision required by todo 4
+Since no tool is server-gated by identity any more, `ROLE_SERVER_GATED_TOOLS` must either be
+deleted (with the `serverGated` API/UI consumers retired — todo 6) or reduced to empty.
+The plan forbids leaving a misleading non-empty list. Evidence of current consumers:
+`server/src/execution-policies/execution-policy.service.ts:361,632,658` (serverGated emission),
+`web/app/(main)/agents/page.tsx:19,70,291,635,643–645,857` (read-only UI rows).
+
+---
+
+## (d) THE GRANT MATRIX (the decision this plan executes)
+
+Grant rules (plan §(d)):
+- `vteam_task_transition`, `vteam_task_create`, `vteam_plan_mode`, `vteam_team_add_member`,
+  `vteam_question_confirm` → `vteam-product` + `vteam-project_manager`.
+- `vteam_plan_complete` → `vteam-plan` + `vteam-project_manager`.
+- `vteam_skill_create` → `vteam-project_manager`.
+- `vteam_issue_create` → `vteam-product`, `vteam-tester`, `vteam-project_manager`,
+  `vteam-developer`, `vteam-architect`.
+
+Deltas computed from the CURRENT `ROLE_BOUNDARIES` by recorded command V5
+(`toolAllows` added keys only; `mcpDenies` = `VTEAM_MCP_TOOL_NAMES` minus allowlist, after the
+`defineBoundary` exclusion term is dropped). `VTEAM_MCP_TOOL_NAMES` = 29 entries.
+
+### vteam-product (current toolAllows 21 → 26)
+- toolAllows ADDED: `vteam_task_transition`, `vteam_task_create`, `vteam_plan_mode`,
+  `vteam_team_add_member`, `vteam_question_confirm`.
+  (`vteam_issue_create` already present.)
+- mcpDenies REMOVED: (none — all five were previously excluded by the gated-set term).
+- mcpDenies ADDED (because the exclusion is dropped): `vteam_plan_complete`, `vteam_skill_create`.
+- resulting mcpDenies: `vteam_plan_complete`, `vteam_skill_create`, `vteam_git_repos_list`.
+
+### vteam-architect (current toolAllows 16 → 17)
+- toolAllows ADDED: `vteam_issue_create`.
+- mcpDenies REMOVED: `vteam_issue_create`.
+- mcpDenies ADDED: `vteam_task_transition`, `vteam_question_confirm`, `vteam_team_add_member`,
+  `vteam_plan_mode`, `vteam_plan_complete`, `vteam_task_create`, `vteam_skill_create`.
+- resulting mcpDenies: `vteam_issue_update`, `vteam_issue_transition`, `vteam_task_transition`,
+  `vteam_question_confirm`, `vteam_team_add_member`, `vteam_plan_mode`, `vteam_plan_complete`,
+  `vteam_task_create`, `vteam_skill_create`, `vteam_git_repos_list`, `vteam_hook_register`,
+  `vteam_hook_cancel`.
+
+### vteam-developer (current toolAllows 18 → 19)
+- toolAllows ADDED: `vteam_issue_create`.
+- mcpDenies REMOVED: `vteam_issue_create`.
+- mcpDenies ADDED: `vteam_task_transition`, `vteam_question_confirm`, `vteam_team_add_member`,
+  `vteam_plan_mode`, `vteam_plan_complete`, `vteam_task_create`, `vteam_skill_create`.
+- resulting mcpDenies: those seven + `vteam_git_repos_list`, `vteam_hook_register`, `vteam_hook_cancel`.
+
+### vteam-tester (current toolAllows 18 → 18)
+- toolAllows ADDED: (none — `vteam_issue_create` already present).
+- mcpDenies REMOVED: (none).
+- mcpDenies ADDED: `vteam_task_transition`, `vteam_question_confirm`, `vteam_team_add_member`,
+  `vteam_plan_mode`, `vteam_plan_complete`, `vteam_task_create`, `vteam_skill_create`.
+- resulting mcpDenies: those seven + `vteam_issue_update`, `vteam_git_repos_list`,
+  `vteam_hook_register`, `vteam_hook_cancel`.
+
+### vteam-project_manager (current toolAllows 20 → 27)
+- toolAllows ADDED: `vteam_task_transition`, `vteam_task_create`, `vteam_plan_mode`,
+  `vteam_team_add_member`, `vteam_question_confirm`, `vteam_plan_complete`, `vteam_skill_create`.
+  (`vteam_issue_create` already present.)
+- mcpDenies REMOVED: (none).
+- mcpDenies ADDED: (none).
+- resulting mcpDenies: `vteam_submit_artifact`, `vteam_git_repos_list` (unchanged).
+
+### vteam-plan (current toolAllows 10 → 11)
+- toolAllows ADDED: `vteam_plan_complete`.
+- mcpDenies REMOVED: (none).
+- mcpDenies ADDED: `vteam_task_transition`, `vteam_question_confirm`, `vteam_team_add_member`,
+  `vteam_plan_mode`, `vteam_task_create`, `vteam_skill_create`.
+  (`vteam_plan_complete` leaves the deny set by becoming allowed.)
+- resulting mcpDenies: `vteam_submit_artifact`, `vteam_issue_create`, `vteam_issue_list`,
+  `vteam_issue_get`, `vteam_issue_update`, `vteam_issue_transition`, `vteam_task_transition`,
+  `vteam_question_confirm`, `vteam_memory_save`, `vteam_memory_update`, `vteam_team_add_member`,
+  `vteam_plan_mode`, `vteam_channel_send`, `vteam_task_create`, `vteam_skill_create`,
+  `vteam_git_repos_list`, `vteam_hook_register`, `vteam_hook_cancel`.
+
+### vteam-librarian (current toolAllows 9 → 9)
+- toolAllows ADDED: (none — no grant).
+- mcpDenies REMOVED: (none).
+- mcpDenies ADDED: `vteam_task_transition`, `vteam_question_confirm`, `vteam_team_add_member`,
+  `vteam_plan_mode`, `vteam_plan_complete`, `vteam_task_create`, `vteam_skill_create`.
+- resulting mcpDenies: `vteam_notify_agent`, `vteam_submit_artifact`, `vteam_issue_create`,
+  `vteam_issue_list`, `vteam_issue_get`, `vteam_issue_update`, `vteam_issue_transition`,
+  `vteam_task_transition`, `vteam_question_confirm`, `vteam_memory_save`, `vteam_memory_update`,
+  `vteam_team_add_member`, `vteam_plan_mode`, `vteam_plan_complete`, `vteam_channel_send`,
+  `vteam_wecom_reply`, `vteam_task_create`, `vteam_skill_create`, `vteam_hook_register`,
+  `vteam_hook_cancel`.
+
+Matrix totals: 15 toolAllows additions, 2 mcpDenies removals
+(`vteam-architect` + `vteam-developer` lose the `vteam_issue_create` deny). Roles not granted a
+formerly-gated tool gain its explicit deny key. Consequence pinned by plan D9: a main member
+whose ROLE lacks a tool does not hold it (authority = tool grant, not main designation).
+
+---
+
+## (e) THE PLAN-STATUS vs PLAN-HASH SPLIT
+
+### Layer 1 — `server/src/platform-mcp/platform-mcp.service.ts`
+- Predicate to DELETE (status refusal): `checkPlanExecutionAllowed(taskId)`
+  (`:2205–2234`) returns `{ allowed: false, status }` whenever
+  `status !== null && status !== 'executing'` (the block at :2224–2227), and its caller at
+  :1595 + :1604 turns `!planGate.allowed` into `reason: 'plan-gated'` with the
+  hint ``计划未放行：当前计划状态为 ${planGate.status}（需 executing，…）`` (:1620).
+  **DELETE only the status refusal and that hint branch.**
+- Predicate to RETAIN + extract (stale hash): the `callerHash` computation
+  (:1596), `resolveFrozenPlanHash(effTaskId)` (:1599), `isStalePlanHash(expected, callerHash)`
+  (:1600) and the stale hint `buildStalePlanHashHint(stale.expected, stale.actual)` (:1618–1619).
+  Pure functions live in `server/src/issues/plan-hash-gate.ts` (`normalizePlanHash` :18,
+  `isStalePlanHash` :29, `buildStalePlanHashHint` :43, `selectFrozenPlanHash` :55) and MUST NOT
+  be deleted.
+- `autoEnsureRow` preservation: `checkPlanExecutionAllowed` calls
+  `this.planLifecycle.autoEnsureRow(taskId)` at :2215. The plan-row creation must survive the
+  status-plumbing removal (plan guardrail: "No loss of plan-row creation"). Observed side-effect
+  coupling: the ensure call currently lives INSIDE the status read. Either keep the ensure call
+  (without the status refusal) or prove another path creates the row; assert it. `autoEnsureRow`
+  is defined at `server/src/tasks/plan-lifecycle.service.ts:150`.
+
+### Layer 2 — `server/src/chat/worker-dispatcher.ts`
+- Predicate to DELETE (status refusal): inside `assertPlanExecutionAllowed(taskId, callerHash?)`
+  (`:1513–1553`), the final `throw new Error('计划未放行：任务 … 的计划状态为 ${status}（需 executing，…）')`
+  at :1550–1552, and the status read `planLifecycle.getStatus(taskId)` at :1529.
+- Predicate to RETAIN + extract (stale hash): the block under
+  `if (status === null || status === 'executing')` at :1540–1548 — `normalizePlanHash(callerHash)`,
+  `resolveFrozenPlanHash(taskId)` (:1543), `isStalePlanHash(expected, actual)` (:1544),
+  `throw new Error(buildStalePlanHashHint(...))` (:1545). Extract it into its own guard (or
+  otherwise preserve it) so a stale hash still throws with the same both-short-hashes message.
+  The dispatcher's own `resolveFrozenPlanHash` (:1560–1579) uses the same
+  `selectFrozenPlanHash` from `plan-hash-gate.ts`.
+- Exemption to REMOVE ENTIRELY: `isPlanRoleTarget(teamId, targetInstanceId)`
+  (`:1487–1504`, using `PLAN_AGENT_ID = 'a_plan'` at :90) and its call site
+  `if (!(await this.isPlanRoleTarget(...))) { await this.assertPlanExecutionAllowed(...) }`
+  at :1452–1457. Today it skips the ENTIRE guard for a plan-role target; if kept after the
+  status gate is removed, a stale `planHash` sent to a plan-role target would pass. The hash
+  check must run for every target; if `isPlanRoleTarget` has no other caller, delete it.
+- `autoEnsureRow` preservation: `assertPlanExecutionAllowed` calls
+  `planLifecycle.autoEnsureRow(taskId)` at :1531 (inside the status-read try). Preserve per
+  plan guardrail.
+- Terminal-task refusal (:1444–1451) is UNCHANGED (§b.2).
+
+---
+
+## (f) THE BACKFILL TARGETS
+
+DB-beats-constant rule: `resolveGuardTools(agentName, tools)`
+(`server/src/execution-policies/execution-policy.service.ts:262–272`) returns a canonicalized
+`config.tools` when it has ≥1 valid entry; ONLY otherwise does it fall back to
+`ROLE_BOUNDARIES[agentName].toolAllows`. So a stored `ep_<role>` row with the OLD allowlist
+would keep serving the old permission after the constants flip.
+
+### Rows whose `config` must be rewritten (all 7 built-in `ep_<role>` rows)
+Mapping `ROLE_POLICY_BINDINGS` in `server/prisma/seed.ts:874–885`:
+- `product` → `ep_product`
+- `project_manager` → `ep_project_manager`
+- `architect` → `ep_architect`
+- `developer` → `ep_developer`
+- `tester` → `ep_tester`
+- `plan` → `ep_plan`
+- `librarian` → `ep_librarian`
+
+### Fields to rewrite (BOTH)
+- `config.tools` — the layer② guard allowlist (from the new `ROLE_BOUNDARIES[*].toolAllows`).
+- `config.permission` — the layer① emitted permission map; `guardForAgent`
+  (`execution-policy.service.ts:850–871`) and `resolveBuiltinPolicy` (:325–363) read
+  `config.permission` when it is a plain object (:332–340), so a row carrying the old permission
+  map would resolve layer① denies that diverge from the new source of truth (and
+  `my_profile.effectivePermission.permission` would show stale denies).
+- Preserve `config.correction` and `config.description`; do not rewrite unrelated config fields.
+- `config.tools` is currently emitted at `server/prisma/seed.ts:918` (`tools: { ...boundary.toolAllows }`),
+  and `config.permission` at :905–912 (edit/read/bash/task + `...boundary.mcpDenies` deny keys).
+
+### Backfill predicate that proves equality with the constant
+For every built-in role name `n` in `ROLE_BOUNDARIES`:
+```
+resolveGuardTools(n, row.config.tools)  deep-equals  { ...ROLE_BOUNDARIES[n].toolAllows }   // canonicalized
+```
+and for the permission map:
+```
+canonicalizePermission(row.config.permission, n)  deep-equals  buildRolePermission(n)
+```
+A migration is required (not seed alone) because seed's `update: {}` (:924) is create-if-absent
+and CI seeds fresh while production already has rows. Must be idempotent (safe to re-run);
+must not drop/recreate rows. The existing DB-path specs that will prove it:
+`server/src/execution-policies/agent-policies-db-builtin.spec.ts` (already asserts
+`role.tools` equals `ROLE_BOUNDARIES[...].toolAllows` at :127) and
+`agent-policies-db-driven.spec.ts`. Migration precedent for the table:
+`server/prisma/migrations/20260824000001_add_execution_policy/migration.sql` (`config JSON NOT NULL`).
+
+---
+
+## §7 VERIFICATION — every cited file:line produced by a RECORDED command
+
+### V1 — derive the removal-target set by the two exported codes + the `仅主 Agent` message
+Command:
+```
+grep -rn "PLAN_COMPLETE_MAIN_ONLY\|TASK_STATUS_MAIN_AGENT_ONLY" server/src --include="*.ts" | grep -v ".spec.ts"
+```
+Output (excerpt, production):
+```
+server/src/tasks/plan-lifecycle.service.ts:71:  PLAN_COMPLETE_MAIN_ONLY: 'PLAN_COMPLETE_MAIN_ONLY',
+server/src/tasks/plan-lifecycle.service.ts:489:          code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_MAIN_ONLY,
+server/src/tasks/tasks.service.ts:1416:        code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,
+server/src/common/constants/task.constants.ts:67:  TASK_STATUS_MAIN_AGENT_ONLY: 'TASK_STATUS_MAIN_AGENT_ONLY',
+server/src/questions/questions.service.ts:292:        code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,
+```
+
+### V2 — the 11 removal throw sites (the completeness-grade extractor)
+Command:
+```
+grep -rnE "仅主 Agent|仅主实例" server/src --include="*.ts" \
+  | grep -vE "\.spec\.ts|__snapshots__|platform-mcp\.tools\.ts" \
+  | grep -vE "hook 所有者|可向其他成员派发|可写入全局记忆|可更新全局记忆" \
+  | grep -E "message|仅主 Agent（未设置）可沉淀技能"
+```
+Output (verbatim, 11 lines — one per removal site; the retained sites were excluded by the
+4th grep and are listed in V3):
+```
+server/src/tasks/plan-lifecycle.service.ts:490:          message: `仅主实例（${mainMemberId ?? '未设置'}）可标记计划完工；用户路径请经 PM（tasks.review）操作`,
+server/src/tasks/tasks.service.ts:1417:        message: `仅主 Agent（${mainMemberId ?? '未设置'}）可流转任务状态；请知会主 Agent 调用 task_transition，或由管理员在任务管理界面操作`,
+server/src/platform-mcp/platform-mcp.service.ts:2963:          message: `仅主 Agent（${taskDimMainId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`,
+server/src/platform-mcp/platform-mcp.service.ts:2982:          message: `仅主 Agent（${taskGateMainId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`,
+server/src/platform-mcp/platform-mcp.service.ts:3036:            '仅主 Agent（未设置）可沉淀技能；请知会主 Agent 调用 skill_create',
+server/src/platform-mcp/platform-mcp.service.ts:3050:          message: `仅主 Agent（${taskDimSkillMainId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`,
+server/src/platform-mcp/platform-mcp.service.ts:3068:          message: `仅主 Agent（${skillGateMainId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`,
+server/src/platform-mcp/platform-mcp.service.ts:3910:        message: `仅主 Agent（${addMainId ?? '未设置'}）可申请增员；请知会主 Agent 调用 team_add_member`,
+server/src/platform-mcp/platform-mcp.service.ts:4025:        message: `仅主 Agent（${mainMemberId ?? '未设置'}）可切换计划模式；请知会主 Agent 调用 plan_mode`,
+server/src/platform-mcp/platform-mcp.service.ts:4081:        message: `仅主 Agent（${mainMemberId ?? '未设置'}）可标记计划完工；请知会主 Agent 调用 plan_complete`,
+server/src/questions/questions.service.ts:293:        message: `仅主 Agent（${team.mainAgentMemberId ?? '未设置'}）可确认托管模式下的请求`,
+```
+
+### V3 — the retained sites deliberately EXCLUDED by V2's 4th grep
+Command:
+```
+grep -rnE "仅主 Agent|仅主实例|仅 hook 所有者" server/src --include="*.ts" \
+  | grep -vE "\.spec\.ts|__snapshots__|platform-mcp\.tools\.ts" \
+  | grep -E "hook 所有者|可向其他成员派发|可写入全局记忆|可更新全局记忆"
+```
+Output (verbatim, 5 lines):
+```
+server/src/platform-mcp/platform-mcp.service.ts:910:          message: '仅 hook 所有者或主 Agent 可取消',
+server/src/platform-mcp/platform-mcp.service.ts:1505:          message: `仅主 Agent（${routingMainId}）可向其他成员派发；请先通知主 Agent 由其中转`,
+server/src/platform-mcp/platform-mcp.service.ts:3164:        message: '仅主 Agent 可写入全局记忆，禁止普通成员写 global 级',
+server/src/platform-mcp/platform-mcp.service.ts:3296:          message: '仅主 Agent 可写入全局记忆，禁止普通成员写 global 级',
+server/src/platform-mcp/platform-mcp.service.ts:3447:        message: '仅主 Agent 可更新全局记忆，禁止普通成员改 global 级',
+```
+(The notify self-notify message at :1482 does not contain `仅主 Agent` and so is not in this
+text filter; it is cited in §b.1 from the direct code read and the code-bearing grep in V4.)
+
+### V4 — code-bearing refusal throw sites (independent cross-check)
+Command:
+```
+grep -rnE "code: *(TASK_ERRORS|PLAN_LIFECYCLE_ERRORS|PLATFORM_MCP_ERRORS)\.[A-Z_]+" server/src --include="*.ts" \
+  | grep -vE "\.spec\.ts|__snapshots__" \
+  | grep -E "TASK_STATUS_MAIN_AGENT_ONLY|PLAN_COMPLETE_MAIN_ONLY|FORBIDDEN|NOTIFY_ROUTING_VIOLATION|TASK_AGENT_COMPLETION_FORBIDDEN"
+```
+Output (excerpt of the 11 removal + 7 retained code sites):
+```
+server/src/tasks/plan-lifecycle.service.ts:489:          code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_MAIN_ONLY,
+server/src/tasks/tasks.service.ts:1397:        code: TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,   <- RETAINED (b.3 service)
+server/src/tasks/tasks.service.ts:1416:        code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,       <- REMOVED (A6)
+server/src/platform-mcp/platform-mcp.service.ts:909:          code: PLATFORM_MCP_ERRORS.FORBIDDEN,               <- RETAINED (b.5 hook_cancel)
+server/src/platform-mcp/platform-mcp.service.ts:1481:        code: PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,  <- RETAINED (b.1 self)
+server/src/platform-mcp/platform-mcp.service.ts:1504:          code: PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION, <- RETAINED (b.1 non-main)
+server/src/platform-mcp/platform-mcp.service.ts:2842:        code: TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,   <- RETAINED (b.3 MCP)
+server/src/platform-mcp/platform-mcp.service.ts:2962:          code: PLATFORM_MCP_ERRORS.FORBIDDEN,               <- REMOVED (A1a)
+server/src/platform-mcp/platform-mcp.service.ts:2981:          code: PLATFORM_MCP_ERRORS.FORBIDDEN,               <- REMOVED (A1b)
+server/src/platform-mcp/platform-mcp.service.ts:3034:          code: PLATFORM_MCP_ERRORS.FORBIDDEN,               <- REMOVED (A2a)
+server/src/platform-mcp/platform-mcp.service.ts:3049:          code: PLATFORM_MCP_ERRORS.FORBIDDEN,               <- REMOVED (A2b)
+server/src/platform-mcp/platform-mcp.service.ts:3067:          code: PLATFORM_MCP_ERRORS.FORBIDDEN,               <- REMOVED (A2c)
+server/src/platform-mcp/platform-mcp.service.ts:3163:        code: PLATFORM_MCP_ERRORS.FORBIDDEN,                 <- RETAINED (b.4)
+server/src/platform-mcp/platform-mcp.service.ts:3295:          code: PLATFORM_MCP_ERRORS.FORBIDDEN,               <- RETAINED (b.4)
+server/src/platform-mcp/platform-mcp.service.ts:3446:          code: PLATFORM_MCP_ERRORS.FORBIDDEN,               <- RETAINED (b.4)
+server/src/platform-mcp/platform-mcp.service.ts:3909:        code: PLATFORM_MCP_ERRORS.FORBIDDEN,                 <- REMOVED (A3a)
+server/src/platform-mcp/platform-mcp.service.ts:4024:        code: PLATFORM_MCP_ERRORS.FORBIDDEN,                 <- REMOVED (A4a)
+server/src/platform-mcp/platform-mcp.service.ts:4080:        code: PLATFORM_MCP_ERRORS.FORBIDDEN,                 <- REMOVED (A5a)
+server/src/questions/questions.service.ts:292:        code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,       <- REMOVED (A7a)
+```
+(Annotation column added by the analyst; the raw grep output is the lines above. The remaining
+`PLATFORM_MCP_FORBIDDEN` sites at :466/:514/:534/:543/:757/:778/:895/:3433/:3452 and the
+:5891–:6027 block are attribution/scope checks, not main-identity tool gates; the identity
+ones among them are b.5 (:909) and b.4 (:3163/:3295/:3446).)
+
+### V5 — cited-line content capture (misleading_success_output probe)
+Command (excerpt; full command iterated the 11 removal + 7 retained locations):
+```
+for spec in "server/src/platform-mcp/platform-mcp.service.ts:2960" ... "server/src/questions/questions.service.ts:290"; do
+  f=${spec%:*}; l=${spec#*:}; echo "--- $f:$l ---"; sed -n "${l},$((l+4))p" "$f"; done
+```
+Output confirmed EACH cited line contains an actual `throw new ForbiddenException({` (or
+`throw new Error(` at the terminal gate) with the stated code+message — NOT a log line. The
+full verbatim output is reproduced in §a/§b inline tables above (captured from this command run).
+
+### V6 — compiled artefact + copy inventory
+Command:
+```
+git ls-files worker/dist | wc -l ; grep -c "SERVER_GATED_TOOLS" worker/dist/resources/role-guard-plugin.js
+```
+Output:
+```
+0                       # dist is not git-tracked
+4                       # compiled plugin still carries the gating set (stale vs source post-flip)
+```
+Plus `worker/package.json` → `"build": "tsc"`; `worker/src/resources/injector.ts:27,464,476`.
+
+### V7 — DB-vs-constant backfill predicate source
+Command:
+```
+grep -n "resolveGuardTools\|guardForAgent\|config.permission\|tools: { \.\.\.boundary.toolAllows }" \
+  server/src/execution-policies/execution-policy.service.ts server/prisma/seed.ts
+```
+Output confirms: `resolveGuardTools` at service :262–272 (DB-wins rule), `guardForAgent`
+:850–871, `config.permission` read :332–340, `tools: { ...boundary.toolAllows }` seed :918.
+
+### V8 — grant-matrix delta computation (re-derived, not copied)
+Command: a Node script reading `server/src/common/constants/agent.constants.ts` directly,
+extracting `VTEAM_MCP_TOOL_NAMES` (29), `ROLE_SERVER_GATED_TOOLS`, and each role's
+`toolAllows`, then applying the §d grant rules and recomputing `mcpDenies`. Output is the
+per-role delta block in §d (totals: 15 adds / 2 deny removals). Script deleted after run.
+
+---
+
+## §§ Manually-executed QA
+
+### happy path
+The completeness grep (V2) reports ONLY the 11 removal-target sites; the retained sites it
+deliberately excluded are enumerated and printed by V3 (hook_cancel, notify routing non-main,
+two global-memory-save, one global-memory-update; plus self-notify cited in b.1). Result: the
+map covers every removal target and the completeness check reports exactly the removal set,
+zero retained sites leaking into the removal set.
+
+### failure path (scratch copy — product code NEVER touched)
+Scratch root: `/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/sgrta-scratch`
+(created, used, then DELETED). A copy of `platform-mcp.service.ts` was made under
+`<scratch>/server/src/platform-mcp/` and an artificial main-identity denial was APPENDED:
+```ts
+// ARTIFICIAL mainAgentMemberId-derived denial (scratch only)
+async __scratchGate(ctx: any, args: any) {
+  const team = await this.prisma.team.findUnique({ where: { id: args.teamId }, select: { mainAgentMemberId: true } });
+  if (team?.mainAgentMemberId !== args.selfInstanceId) {
+    throw new ForbiddenException({
+      code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+      message: `仅主 Agent（${team?.mainAgentMemberId ?? '未设置'}）可执行 scratch 操作`,
+    });
+  }
+}
+```
+RUN 1 (same grep as V2, rooted at the scratch copy) — verbatim final line proving detection:
+```
+/var/.../sgrta-scratch/server/src/platform-mcp/platform-mcp.service.ts:6539:
+      message: `仅主 Agent（${team?.mainAgentMemberId ?? '未设置'}）可执行 scratch 操作`,
+```
+(11 product sites also matched in the scratch copy, as expected.)
+Then the scratch copy was deleted (`rm -rf <scratch>`; `ls` confirms `scratch deleted`).
+RUN 2 (same pattern against the PRODUCT root) — verbatim:
+```
+$ grep -rnE "__scratchGate|可执行 scratch 操作" server/src --include="*.ts"
+CLEAN: no artificial site in product source
+```
+Both runs recorded. The check detects an artificially added identity denial and is clean again
+after removal.
+
+---
+
+## Adversarial classes — result per class
+
+### misleading_success_output — PASS
+V5 (and the inline citation capture) shows every cited line is an actual refusal `throw`, not a
+log/comment. The false-positive-looking V2 line for skill_create no-context
+(`'仅主 Agent（未设置）可沉淀技能…'`, a bare string continuation of a `new ForbiddenException`
+started at :3033) was verified by V5 as a throw, not a log. No cited line is a `logger.*` call.
+
+### dirty_worktree — PASS
+After scratch deletion and `/tmp` script cleanup, `git status --short` shows only pre-existing
+modified/untracked entries that were present BEFORE this task; the only file this task adds is
+the intended evidence file `.omo/evidence/server-gate-removal-tool-authority/task-1-change-map.txt`.
+No product file was edited. Receipt in DoneClaim.
+
+### stale_state — PASS
+All counts were re-derived now by recorded commands (V1–V8), not copied from the plan. Notably
+the plan's expected 11 throw sites were CONFIRMED by V2/V4; the plan's other cited line ranges
+(e.g. `ROLE_BOUNDARIES :282-548`, `agent.constants.ts:155-163`) were independently re-verified
+via direct read. The grant-matrix deltas were recomputed from the live constants (V8), and the
+compiled `dist` staleness was measured (V6) rather than assumed.
+
+---
+
+## Cleanup receipt
+- Scratch copy tree `/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/sgrta-scratch`:
+  REMOVED (verified `scratch deleted`).
+- Temp analysis scripts `/tmp/sgrta-delta.js`, `/tmp/sgrta-delta2.js`: REMOVED.
+- Product code: UNCHANGED (read-only task).
+- Only added file: this evidence file. See DoneClaim for final `git status --short`.

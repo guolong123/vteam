@@ -297,6 +297,38 @@ All 12 defects (R1-R12) folded into the plan. Key structural changes:
 - `isPlatformToolForHandoff` call sites named.
 - Added an ordering proof (no all-powerful intermediate commit).
 
+## REVIEW ROUND 2 — Oracle APPROVE; Momus APPROVE-leaning (verdict line truncated) → residuals fixed
+
+**Oracle** (`bg_43b9527d`): `INDEPENDENT VERDICT: APPROVE` — all D1-D11 verified RESOLVED against the code, including the re-check of the worker guard branch order (removing the passthrough genuinely routes formerly-gated tools to the role allowlist).
+
+**Momus** (`bg_8c2138c8`): reasoning reached APPROVE (all 5 round-1 defects verified fixed) but its final verdict line was truncated mid-stream. It surfaced **3 residuals** that I then verified and fixed myself:
+1. **Removal count wrong** — I verified by grep: there are **11 throw sites across 7 tools**, not 8 (task_create ×2, skill_create ×3, plan_complete ×2, others ×1). Fixed everywhere (TL;DR machine, Must-have, todo 1(a) with per-tool counts, todo 2, success criteria).
+2. **Transitive/`Blocks` mismatch** — todo 7 inline `Blocks: 8,9,10,11` vs matrix `Blocks: 8` (direct). Normalized inline to direct `Blocks: 8`.
+3. **5↔6 parallel cells** vs the "strictly serial internally" narrative — removed the parallel cells (both `—`).
+Also fixed the TL;DR grant-matrix contradiction (it implied product holds nothing while decision 1 grants it issue_create): now names exactly what a product main lacks (`plan_complete`, `skill_create`).
+
+**Caveat recorded:** Momus's round-2 verdict line was never captured (transcript saved mid-stream). Its reasoning text stated all 5 fixes verified and the residuals were cosmetic/documentation; it explicitly weighed "APPROVE is defensible". A conservative reading requires a fresh Momus round to obtain an unambiguous verdict line before handoff.
+
+## REVIEW ROUND 3 — BOTH APPROVED, then one self-caught error → round 4 dispatched
+
+**Momus** (`bg_8506cc90`, plan sha `a56b82e3…`): `MOMUS VERDICT: APPROVE` (first and last line, unambiguous). Independently re-derived the count from source: 11 removal sites / 7 tools — exactly matching. Verified all 5 round-1 defects fixed, all 4 post-round-2 edits present, matrix ↔ every inline annotation, counts agree, structure exact (12+4 rows), every todo complete. Remaining defects: **none blocking**.
+
+**Oracle** (`bg_007b69e3`): `INDEPENDENT VERDICT: APPROVE` (first and last line). Re-verified D1-D11 against the code, re-checked the worker guard branch order, and re-derived the throw-site count.
+
+**Then I self-caught a defect both reviewers missed:** line 16 claimed a `plan`-role main "will hold none of … `plan_complete`", but the grant matrix grants `plan_complete` TO `vteam-plan`. Fixed to the exact per-role statement (developer/architect/tester/librarian hold none; `plan` holds only `plan_complete`; `product` holds five but not plan_complete/skill_create).
+
+**Because the plan changed after approval, both verdicts are invalidated by the strict rule → round 4 dispatched** (scoped to the one-line correction; both reviewers told to cross-check every role claim against the grant matrix).
+
+## REVIEW ROUND 4 — BOTH APPROVED; HIGH-ACCURACY GATE CLOSED
+
+**Momus** (`bg_2d9c9483`, sha `6cbfe5c8…`): first and last line `MOMUS VERDICT: APPROVE`. Verified line 16 now agrees with the todo-1(d) grant matrix, cross-checked every named role (developer/architect/tester/librarian hold none of the 7; `plan` holds only `plan_complete`; `product` holds five but not plan_complete/skill_create), confirmed counts/matrix/structure unchanged, no new contradiction.
+
+**Oracle** (`bg_530ff594`): first and last line `INDEPENDENT VERDICT: APPROVE`. Independently verified against the real constants and re-derived the throw-site counts (2+3+1+1+2+1+1 = 11 across 7 tools), and confirmed the grant-matrix role claims.
+
+**One honest caveat Oracle raised:** there is no committed round-3 snapshot, so the claim "only line 16 changed since round 3" could not be byte-verified; Oracle instead verified the current file is internally consistent and matches round-3's described properties. The round-4 file (sha `6cbfe5c8…`) is the reviewed and approved artifact.
+
+**GATE CLOSED:** 4 rounds, both reviewers APPROVE the same file, no blocking defects. Plan is decision-complete and ready for handoff.
+
 ## Must-NOT-Have fences discovered (a 5th plan must not "extend" these)
 - `plan-review-execution-gates.md:31` — 不改…任务状态机、群聊分区、throttle限额/窗口、mcpDenies/toolAllows/RBAC
 - `plan-finalize-actions.md:31-35` — 不重建定稿门…不碰throttle配额/RBAC矩阵/任务状态机；不在C3审计里收紧任何现行放行（收紧需单独立项）
