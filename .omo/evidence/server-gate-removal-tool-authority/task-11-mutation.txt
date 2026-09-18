@@ -1,0 +1,407 @@
+# task-11 — mutation proof: both authority failure modes are caught
+plan: server-gate-removal-tool-authority
+todo: 11 (proof) — Record both failure-mode mutation checks
+commit: test(permissions): mutation-prove both authority failure modes
+date: 2026-09-19
+HEAD at record time: f8bbf47
+mutation targets: server/src/common/constants/agent.constants.ts (both experiments), worker/src/role-guard/policy.ts (parity/backup scope)
+
+## 0. Root-cause detector selection (why these assertions catch the mutation)
+The post-flip matrix specs (`agent-policies.matrix.spec.ts`, `platform-mcp.authority-matrix.spec.ts`)
+DERIVE their expectation from `ROLE_BOUNDARIES[*].toolAllows` (the same source they evaluate),
+so a mutation to that source can move both sides and hide itself. The independent, non-vacuous
+detectors are the specs carrying a HARDCODED grant matrix / exact-value snapshot:
+  - server/src/common/constants/agent.constants.spec.ts  (GRANT_MATRIX, lines 110-118; asserts at 121/139/155/156/301)
+  - server/src/prisma/seed.spec.ts                        (hardcoded grant expectation, line 882)
+  - server/src/execution-policies/agent-policies.matrix.spec.ts  (explicit FORMERLY_GATED_TOOLS loop, line 151)
+  - server/src/execution-policies/policy-canonical.spec.ts       (explicit formerlyGated loop, line 311)
+These name the formerly-gated tools explicitly (NOT via the now-empty `ROLE_SERVER_GATED_TOOLS`),
+so they cannot go vacuously green. The vacuous-loop trap is explicitly guarded: the loops iterate
+FORMERLY_GATED_TOOLS (7 tools) x 7 roles and each asserts `assertions > 0`.
+
+## 1. Pre-experiment state (proof of a clean starting point)
+```
+$ shasum -a 256 server/src/common/constants/agent.constants.ts worker/src/role-guard/policy.ts
+94bc3857b01b31c157ed313bba963b57a85dad8bdfb0a1bac9ce5e2c1f9c42fe  server/src/common/constants/agent.constants.ts
+7739af22da457972c59dda5c681b10063b97f030bab77ecb39bb62bbd96a3cc4  worker/src/role-guard/policy.ts
+
+$ git status --short -- server/ worker/     # (empty)
+$ git diff --stat   -- server/ worker/      # (empty)
+```
+Backups taken BEFORE any in-place mutation (revert path; `git checkout --` was never used):
+```
+$ cp server/src/common/constants/agent.constants.ts /tmp/CLEAN-agent.constants.ts
+$ cp worker/src/role-guard/policy.ts               /tmp/CLEAN-policy.ts
+```
+Green baseline (full server suite at pristine HEAD):
+Test Suites: 132 passed, 132 total
+Tests:       3070 passed, 3070 total
+Snapshots:   1 passed, 1 total
+Time:        13.997 s, estimated 167 s
+
+## 2. Experiment (a) — ALL-POWERFUL mode
+Hypothesis: restoring the `SERVER_GATED_SET` exemption in `defineBoundary()` while the server gates
+stay removed must make the "non-granted role is DENIED" assertion fail.
+
+Mutation applied (exemption restored to the pre-flip shape; grants untouched):
+```diff
+diff --git a/server/src/common/constants/agent.constants.ts b/server/src/common/constants/agent.constants.ts
+index 095fa53..23f86ff 100644
+--- a/server/src/common/constants/agent.constants.ts
++++ b/server/src/common/constants/agent.constants.ts
+@@ -158,7 +158,18 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
+  * 本常量保留为空数组以兼容 `/agent-policies` 的 `serverGated` 消费方（todo 6 退休），
+  * 任何非空写入都会使 `mcpDenies` 推导在语义上失真，禁止再向其中添加工具。
+  */
+-export const ROLE_SERVER_GATED_TOOLS: readonly string[] = [] as const;
++export const ROLE_SERVER_GATED_TOOLS: readonly string[] = [
++  'vteam_task_transition',
++  'vteam_question_confirm',
++  'vteam_task_create',
++  'vteam_plan_mode',
++  'vteam_plan_complete',
++  'vteam_team_add_member',
++  'vteam_skill_create',
++] as const;
++
++/** MUTATION(a): restored SERVER_GATED_SET exemption set. */
++const SERVER_GATED_SET: ReadonlySet<string> = new Set(ROLE_SERVER_GATED_TOOLS);
+ 
+ /**
+  * worker 注入的自定义 git 工具真实 action 名（`worker/src/git/git-tools.ts` GIT_TOOLS）。
+@@ -211,7 +222,7 @@ function defineBoundary(base: Omit<RoleBoundary, 'mcpDenies'>): RoleBoundary {
+   const allowed = new Set(Object.keys(base.toolAllows));
+   return {
+     ...base,
+-    mcpDenies: VTEAM_MCP_TOOL_NAMES.filter((name) => !allowed.has(name)),
++    mcpDenies: VTEAM_MCP_TOOL_NAMES.filter((name) => !allowed.has(name) && !SERVER_GATED_SET.has(name)),
+   };
+ }
+```
+Mutated sha256: 34ddbcd99935a25d0957e525634e4aaf8d7bebdf6b54e1c0b987edafc90a7416
+
+### 2.1 Detector — "non-granted role is DENIED" (raw failing assertion)
+Command: `cd server && npx jest src/common/constants/agent.constants.spec.ts --runInBand`
+Test Suites: 1 failed, 1 total
+Tests:       4 failed, 15 passed, 19 total
+Snapshots:   0 total
+Time:        1.753 s
+
+Raw output:
+```
+  ● ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名） › 未获授权的 formerly-gated 工具一律进 mcpDenies（显式 deny，不再放行到服务端判定）
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: false
+
+      154 |         );
+      155 |         expect(allowed).toBe(granted);
+    > 156 |         expect(denied).toBe(!granted);
+          |                        ^
+      157 |         assertions += 2;
+      158 |       }
+      159 |     }
+
+      at Object.<anonymous> (common/constants/agent.constants.spec.ts:156:24)
+```
+The vacated cell is exactly the all-powerful window: `vteam-plan`/`vteam-architect` etc. keep a
+formerly-gated tool ABSENT from `toolAllows`, but the restored exemption drops it out of `mcpDenies`,
+so the non-granted role is no longer denied. The secondary retirement assertion also fires on the
+non-empty constant:
+```
+  ● ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名） › ROLE_SERVER_GATED_TOOLS 已退休为空（语义移交 worker guard allowlist，不再有服务端身份门）
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 1
+    + Received  + 9
+
+    - Array []
+    + Array [
+    +   "vteam_task_transition",
+    +   "vteam_question_confirm",
+    +   "vteam_task_create",
+    +   "vteam_plan_mode",
+    +   "vteam_plan_complete",
+    +   "vteam_team_add_member",
+    +   "vteam_skill_create",
+    + ]
+
+      119 |
+      120 |   it('ROLE_SERVER_GATED_TOOLS 已退休为空（语义移交 worker guard allowlist，不再有服务端身份门）', () => {
+    > 121 |     expect([...ROLE_SERVER_GATED_TOOLS]).toEqual([]);
+          |                                          ^
+      122 |     // 旧门控工具仍存在于 MCP 注册表，只是不再有“服务端专属”标记。
+      123 |     for (const tool of FORMERLY_GATED_TOOLS) {
+      124 |       expect(VTEAM_MCP_TOOL_NAMES).toContain(tool);
+
+      at Object.<anonymous> (common/constants/agent.constants.spec.ts:121:42)
+```
+The layer-① (agent permission map) detector fires identically:
+Command: `cd server && npx jest src/execution-policies/agent-policies.matrix.spec.ts --runInBand`
+```
+  ● agent-policies matrix self-check (Todo 24 anti-drift) › 内置层① permission：未授权 formerly-gated 工具显式 deny，已授权者无 deny 键
+
+    expect(received).toHaveProperty(path, value)
+
+    Expected path: "vteam_task_transition"
+    Received path: []
+
+    Expected value: "deny"
+    Received value: {"bash": "allow", "edit": {"*": "deny", "**.opencode/plans/**": "allow"}, "read": {"*": "allow"}, "task": "allow", "vteam_channel_send": "deny", "vteam_git_repos_list": "deny", "vteam_hook_cancel": "deny", "vteam_hook_register": "deny", "vteam_issue_create": "deny", "vteam_issue_get": "deny", "vteam_issue_list": "deny", "vteam_issue_transition": "deny", "vteam_issue_update": "deny", "vteam_memory_save": "deny", "vteam_memory_update": "deny", "vteam_submit_artifact": "deny"}
+
+      149 |           ).not.toHaveProperty(tool);
+      150 |         } else {
+    > 151 |           expect(agent.permission).toHaveProperty(tool, 'deny');
+          |                                    ^
+      152 |           expect(policies.guard.roles[agent.name].permission).toHaveProperty(
+      153 |             tool,
+      154 |             'deny',
+
+      at Object.<anonymous> (execution-policies/agent-policies.matrix.spec.ts:151:36)
+```
+
+### 2.2 Full-suite impact (mutation (a) is caught suite-wide)
+Command: `cd server && npx jest --runInBand`   -> EXIT=1
+Test Suites: 7 failed, 125 passed, 132 total
+Tests:       18 failed, 3052 passed, 3070 total
+Snapshots:   1 failed, 1 total
+Time:        15.202 s
+
+Failed test names:
+```
+
+  ● ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名） › mcpDenies = 全部 MCP 工具中未列入 toolAllows 者（无 server-gated 例外），且全为 vteam_ 真实名
+
+  ● ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名） › mcpDenies ∪ toolAllows(MCP) 恰覆盖 VTEAM_MCP_TOOL_NAMES（二者互斥、无遗漏）
+
+  ● ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名） › 未获授权的 formerly-gated 工具一律进 mcpDenies（显式 deny，不再放行到服务端判定）
+
+  ● agent-policies custom agents (Todo 2) › 内置字节一致（无自定义 agent） › 内置层① permission 对未授权 formerly-gated 工具显式 deny，对已授权则无 deny 键
+
+  ● agent-policies custom agents (Todo 2) › 自定义块（mocked DB） › resolveByAgent 的 serverGated 恒为空数组（该概念已退休）
+
+  ● agent-policies db-backed builtins (Todo 3) › 绑定行携带出厂 config（DB 路径生效） › DB 返回乱序时输出顺序仍取常量（不得按查询结果排序）
+
+  ● agent-policies db-backed builtins (Todo 3) › 行/字段缺失 → 常量回退（永不抛错、永不残缺） › 全部绑定行缺失 → 输出等于常量派生基线，不抛错
+
+  ● agent-policies db-driven builtins (Todo 15 proof) › 行全缺时回退常量（对照：无 DB 行 ≠ 编辑后的值，证明上方断言非空转）
+
+  ● agent-policies matrix self-check (Todo 24 anti-drift) › 内置层① permission：未授权 formerly-gated 工具显式 deny，已授权者无 deny 键
+
+  ● policy canonical emission + per-field db resolution (Todo 2) › serverGated（API/UI 展示用，不进 worker wire 格式） › tools 层不发射任何 server-gated 概念：未授权 formerly-gated 工具进 deny，授权者进 allow
+
+  ● seed（模板 Agent 预置 + 角色策略） › 7 条角色 ExecutionPolicy upsert：create 分支 type=template、permission 全量派生自 ROLE_BOUNDARIES（update 保留用户编辑）
+
+  ● seed（计划 skills + 评审子句） › vteam_plan_complete 不再 server-gated：按授权矩阵授予 vteam-plan + vteam-project_manager
+  ● ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名） › ROLE_SERVER_GATED_TOOLS 已退休为空（语义移交 worker guard allowlist，不再有服务端身份门）
+  ● agent-policies custom agents (Todo 2) › 内置字节一致（无自定义 agent） › 7 内置首位输出、顺序固定、全字段与独立推导夹具深一致
+  ● agent-policies db-backed builtins (Todo 3) › 绑定行携带出厂 config（DB 路径生效） › 输出与冻结基线逐字节一致（深比较 + JSON.stringify），顺序恒为 AGENT_POLICIES_ORDER
+  ● agent-policies db-driven builtins (Todo 15 proof) › buildAgentPolicies(): 未编辑的 6 个内置角色与冻结基线逐字节一致
+  ● agent-policies matrix self-check (Todo 24 anti-drift) › mcpDenies ∈ MCP 注册表，且与该角色 toolAllows 互斥（补集 = 全集减 allowlist，无例外）
+  ● policy canonical emission + per-field db resolution (Todo 2) › serverGated（API/UI 展示用，不进 worker wire 格式） › ROLE_SERVER_GATED_TOOLS 已退休为空（概念退休后不可再有非空清单）
+  ● seed（模板 Agent 预置 + 角色策略） › 7 条角色 ExecutionPolicy upsert：create 分支 type=template、permission 全量派生自 ROLE_BOUNDARIES（update 保留用户编辑）
+```
+
+## 3. Revert (a) — tree proven byte-identical
+```
+$ cp /tmp/CLEAN-agent.constants.ts server/src/common/constants/agent.constants.ts
+$ shasum -a 256 server/src/common/constants/agent.constants.ts worker/src/role-guard/policy.ts
+94bc3857b01b31c157ed313bba963b57a85dad8bdfb0a1bac9ce5e2c1f9c42fe  server/src/common/constants/agent.constants.ts
+7739af22da457972c59dda5c681b10063b97f030bab77ecb39bb62bbd96a3cc4  worker/src/role-guard/policy.ts
+$ git diff --stat -- server/ worker/   # (empty)
+$ git status --short -- server/ worker/  # (empty)
+```
+Both shas equal the pre-experiment shas; no mutation survives.
+
+## 4. Experiment (b) — DENY-ALL mode
+Hypothesis: removing the exemption WITHOUT adding the per-role grants must make the
+"granted role is ALLOWED" assertion fail.
+
+Mutation applied (exemption removal kept; exactly the 15 flip-added grant cells removed):
+```
+  vteam-product        : -vteam_task_create -vteam_task_transition -vteam_plan_mode -vteam_team_add_member -vteam_question_confirm
+  vteam-architect      : -vteam_issue_create
+  vteam-developer      : -vteam_issue_create
+  vteam-project_manager: -vteam_task_create -vteam_task_transition -vteam_plan_mode -vteam_plan_complete -vteam_team_add_member -vteam_question_confirm -vteam_skill_create
+  vteam-plan           : -vteam_plan_complete
+  (exemption removal left in place: mcpDenies is the pure complement, no SERVER_GATED_SET)
+```
+Mutated sha256: e38cc64c4a5f0700fc2305663254e4a847a2e052c3e50e7f93f3628bb4099e9a
+
+### 4.1 Detector — "granted role is ALLOWED" (raw failing assertion)
+Command: `cd server && npx jest src/common/constants/agent.constants.spec.ts --runInBand`
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 17 passed, 19 total
+Snapshots:   0 total
+Time:        1.947 s, estimated 2 s
+
+Raw output (`expect(allowed).toBe(granted)` — a granted cell is now absent):
+```
+  ● ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名） › 未获授权的 formerly-gated 工具一律进 mcpDenies（显式 deny，不再放行到服务端判定）
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: false
+
+      153 |           tool,
+      154 |         );
+    > 155 |         expect(allowed).toBe(granted);
+          |                         ^
+      156 |         expect(denied).toBe(!granted);
+      157 |         assertions += 2;
+      158 |       }
+
+      at Object.<anonymous> (common/constants/agent.constants.spec.ts:155:25)
+```
+Exact-value detector for a granted tool (`vteam-plan: vteam_plan_complete`):
+```
+  ● ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名） › Permission matrix 精确值（层①/层② 单一口径）
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 1
+    + Received  + 0
+
+    @@ -4,11 +4,10 @@
+        "vteam_doclib": "allow",
+        "vteam_group_post": "allow",
+        "vteam_memory_search": "allow",
+        "vteam_my_profile": "allow",
+        "vteam_notify_agent": "allow",
+    -   "vteam_plan_complete": "allow",
+        "vteam_read_file": "allow",
+        "vteam_task_context": "allow",
+        "vteam_team_view": "allow",
+        "vteam_wecom_reply": "allow",
+      }
+
+      299 |     ).toEqual({ '*': 'deny', [planDirGlob()]: 'allow' });
+      300 |
+    > 301 |     expect(ROLE_BOUNDARIES['vteam-plan'].toolAllows).toEqual({
+          |                                                      ^
+      302 |       vteam_task_context: 'allow',
+      303 |       vteam_read_file: 'allow',
+      304 |       vteam_doclib: 'allow',
+
+      at Object.<anonymous> (common/constants/agent.constants.spec.ts:301:54)
+```
+Directly-named seed detector:
+Command: `cd server && npx jest src/prisma/seed.spec.ts -t "vteam_plan_complete 不再 server-gated" --runInBand`
+```
+  ● seed（计划 skills + 评审子句） › vteam_plan_complete 不再 server-gated：按授权矩阵授予 vteam-plan + vteam-project_manager
+
+    expect(received).toHaveProperty(path, value)
+
+    Expected path: "vteam_plan_complete"
+    Received path: []
+
+    Expected value: "allow"
+    Received value: {"vteam_channel_send": "allow", "vteam_chat_history": "allow", "vteam_doclib": "allow", "vteam_group_post": "allow", "vteam_hook_cancel": "allow", "vteam_hook_register": "allow", "vteam_issue_create": "allow", "vteam_issue_get": "allow", "vteam_issue_list": "allow", "vteam_issue_transition": "allow", "vteam_issue_update": "allow", "vteam_memory_save": "allow", "vteam_memory_search": "allow", "vteam_memory_update": "allow", "vteam_my_profile": "allow", "vteam_notify_agent": "allow", "vteam_read_file": "allow", "vteam_task_context": "allow", "vteam_team_view": "allow", "vteam_wecom_reply": "allow"}
+
+      880 |       'vteam-plan',
+      881 |     ] as const) {
+    > 882 |       expect(ROLE_BOUNDARIES[name].toolAllows).toHaveProperty(
+          |                                                ^
+      883 |         'vteam_plan_complete',
+      884 |         'allow',
+      885 |       );
+
+      at Object.<anonymous> (prisma/seed.spec.ts:882:48)
+```
+
+### 4.2 Full-suite impact (mutation (b) is caught suite-wide)
+Command: `cd server && npx jest --runInBand`   -> EXIT=1
+Test Suites: 5 failed, 127 passed, 132 total
+Tests:       12 failed, 3058 passed, 3070 total
+Snapshots:   1 failed, 1 total
+Time:        14.873 s, estimated 18 s
+
+Failed test names:
+```
+
+  ● ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名） › Permission matrix 精确值（层①/层② 单一口径）
+
+  ● agent-policies db-backed builtins (Todo 3) › 绑定行携带出厂 config（DB 路径生效） › DB 返回乱序时输出顺序仍取常量（不得按查询结果排序）
+
+  ● agent-policies db-backed builtins (Todo 3) › 行/字段缺失 → 常量回退（永不抛错、永不残缺） › 全部绑定行缺失 → 输出等于常量派生基线，不抛错
+
+  ● agent-policies db-driven builtins (Todo 15 proof) › 行全缺时回退常量（对照：无 DB 行 ≠ 编辑后的值，证明上方断言非空转）
+
+  ● seed（模板 Agent 预置 + 角色策略） › 7 条角色 ExecutionPolicy upsert：create 分支 type=template、permission 全量派生自 ROLE_BOUNDARIES（update 保留用户编辑）
+
+  ● seed（模板 Agent 预置 + 角色策略） › 模板 prompt「可用工具」去重：旧五角色用统一句，计划员保留 planToolLine 动态派生
+
+  ● seed（模板 Agent 预置 + 角色策略） › 模板策略 create.config.tools 为 ROLE_BOUNDARIES allowlist 的拷贝（克隆深拷贝来源；update 不覆盖用户编辑）
+
+  ● seed（计划 skills + 评审子句） › vteam_plan_complete 不再 server-gated：按授权矩阵授予 vteam-plan + vteam-project_manager
+  ● ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名） › 未获授权的 formerly-gated 工具一律进 mcpDenies（显式 deny，不再放行到服务端判定）
+  ● agent-policies custom agents (Todo 2) › 内置字节一致（无自定义 agent） › 7 内置首位输出、顺序固定、全字段与独立推导夹具深一致
+  ● agent-policies db-backed builtins (Todo 3) › 绑定行携带出厂 config（DB 路径生效） › 输出与冻结基线逐字节一致（深比较 + JSON.stringify），顺序恒为 AGENT_POLICIES_ORDER
+  ● agent-policies db-driven builtins (Todo 15 proof) › buildAgentPolicies(): 未编辑的 6 个内置角色与冻结基线逐字节一致
+  ● seed（模板 Agent 预置 + 角色策略） › 7 条角色 ExecutionPolicy upsert：create 分支 type=template、permission 全量派生自 ROLE_BOUNDARIES（update 保留用户编辑）
+```
+
+## 5. Revert (b) — tree proven byte-identical AND suite green again
+```
+$ cp /tmp/CLEAN-agent.constants.ts server/src/common/constants/agent.constants.ts
+$ shasum -a 256 server/src/common/constants/agent.constants.ts worker/src/role-guard/policy.ts
+94bc3857b01b31c157ed313bba963b57a85dad8bdfb0a1bac9ce5e2c1f9c42fe  server/src/common/constants/agent.constants.ts
+7739af22da457972c59dda5c681b10063b97f030bab77ecb39bb62bbd96a3cc4  worker/src/role-guard/policy.ts
+$ git diff --stat -- server/ worker/    # (empty)
+$ git status --short -- server/ worker/ # (empty)
+```
+Green run after revert (identical to the pre-experiment baseline):
+Command: `cd server && npx jest --runInBand`   -> EXIT=0
+Test Suites: 132 passed, 132 total
+Tests:       3070 passed, 3070 total
+Snapshots:   1 passed, 1 total
+Time:        14.846 s, estimated 16 s
+Baseline was Test Suites: 132 passed, 132 total; post-revert is Test Suites: 132 passed, 132 total — identical. No mutation survives in the tree.
+
+## 6. Ordering proof — no all-powerful window in the flip range
+The exemption-removal and the server-gate removal must be the SAME commit. Classifier over
+`7d3b9b0..HEAD` (base included), reading each commit's blob for:
+  - `仅主 Agent` refusal count in `server/src/platform-mcp/platform-mcp.service.ts` (17 pre-flip -> 6 retained),
+  - `SERVER_GATED_SET` presence + `ROLE_SERVER_GATED_TOOLS` array item count in `agent.constants.ts`,
+  - `SERVER_GATED_TOOLS` passthrough presence in `worker/src/role-guard/policy.ts`.
+```
+commit    | 仅主Agent | SERVER_GATED_SET | ROLE_SERVER_GATED_TOOLS | exemption_live | worker_pt | gates_removed | ALL-POWERFUL
+----------------------------------------------------------------------------------------------------------------------------
+7d3b9b0   | 17       | True            | 7                      | True           | True      | False         | no
+029bc2e   | 17       | True            | 7                      | True           | True      | False         | no
+0dc2509   | 6        | False           | 0                      | False          | False     | True          | no
+26b2e14   | 6        | False           | 0                      | False          | False     | True          | no
+58bc6f4   | 6        | False           | 0                      | False          | False     | True          | no
+f8bbf47   | 6        | False           | 0                      | False          | False     | True          | no
+
+ALL-POWERFUL commits in range 7d3b9b0..HEAD: 0
+commits with gates removed AND exemption removed: ['0dc2509', '26b2e14', '58bc6f4', 'f8bbf47']
+```
+Conclusion: 0 commits in the range have the server-gate removals present while the exemption is
+still live (all-powerful). The only commit that touched all three files is `0dc2509` (verified by
+`git log --oneline 7d3b9b0..HEAD -- <each file>` returning exactly `0dc2509`), which removed BOTH:
+  - 11 `仅主 Agent` gate throw lines removed in `platform-mcp.service.ts` (git show 0dc2509 -- ... | grep -c),
+  - `SERVER_GATED_SET` deleted and `ROLE_SERVER_GATED_TOOLS` emptied in the SAME commit
+    (`git show 0dc2509 -- server/src/common/constants/agent.constants.ts` shows both the `-` removal
+    of the non-empty array + `SERVER_GATED_SET` and the `-&& !SERVER_GATED_SET.has(name)` term).
+The docs commit `029bc2e` touched neither file, so it cannot open a window. Exemption removal and
+server-gate removal land together in `0dc2509`.
+
+## 7. Vacuity guard (explicitly re-checked)
+- `ROLE_SERVER_GATED_TOOLS === []` post-flip, so a loop over it would assert nothing. The detectors
+  used here iterate `FORMERLY_GATED_TOOLS` (7 explicit tools) x 7 roles and assert
+  `assertions === 7*7*2 = 98 > 0`, plus `allow`/`deny` both non-empty.
+- Mutation (a) flipped 18 suite tests red (the non-granted cells all became un-denied).
+- Mutation (b) flipped 12 suite tests red (the granted cells all became ungranted).
+Neither mutation passed silently; both named their expected-vs-received failure.
+
+## 8. Verdict
+Both catastrophic failure modes are detected by the suite:
+  (a) all-powerful  -> caught by `agent.constants.spec.ts:156` (`expect(denied).toBe(!granted)`) + 17 more tests.
+  (b) deny-all      -> caught by `agent.constants.spec.ts:155` (`expect(allowed).toBe(granted)`) + 11 more tests.
+Both experiments reverted; per-file sha256 + `git diff`/`git status` prove the tree identical to the
+pre-experiment state; the post-revert suite is green (132/3070), identical to baseline.
