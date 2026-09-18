@@ -14,19 +14,17 @@
   "agent": {
     "vteam-plan": {
       "description": "计划职责：只读分析并产出实施计划；不写文件、不执行变更。",
-      "mode": "primary",
+      "mode": "all",
       "permission": {
         "edit": {
-          "*": "deny"
+          "*": "deny",
+          "**.opencode/plans/**": "allow"
         },
         "read": {
           "*": "allow"
         },
-        "bash": "deny",
-        "task": "deny",
-        "vteam_chat_history": "deny",
-        "vteam_group_post": "deny",
-        "vteam_notify_agent": "deny",
+        "bash": "allow",
+        "task": "allow",
         "vteam_submit_artifact": "deny",
         "vteam_issue_create": "deny",
         "vteam_issue_list": "deny",
@@ -36,11 +34,15 @@
         "vteam_task_transition": "deny",
         "vteam_question_confirm": "deny",
         "vteam_memory_save": "deny",
-        "vteam_memory_search": "deny",
+        "vteam_memory_update": "deny",
         "vteam_team_add_member": "deny",
         "vteam_plan_mode": "deny",
         "vteam_channel_send": "deny",
-        "vteam_wecom_reply": "deny"
+        "vteam_task_create": "deny",
+        "vteam_skill_create": "deny",
+        "vteam_git_repos_list": "deny",
+        "vteam_hook_register": "deny",
+        "vteam_hook_cancel": "deny"
       }
     },
     "vteam-product": {
@@ -55,18 +57,15 @@
         "read": {
           "*": "allow"
         },
-        "bash": "deny",
+        "bash": "allow",
         "task": "deny",
-        "vteam_task_transition": "deny",
-        "vteam_question_confirm": "deny",
-        "vteam_team_add_member": "deny",
-        "vteam_plan_mode": "deny",
-        "vteam_channel_send": "deny",
-        "vteam_wecom_reply": "deny"
+        "vteam_plan_complete": "deny",
+        "vteam_skill_create": "deny",
+        "vteam_git_repos_list": "deny"
       }
     },
     "vteam-architect": {
-      "description": "技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码、不写仓库。",
+      "description": "技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。",
       "mode": "primary",
       "permission": {
         "edit": {
@@ -76,17 +75,20 @@
         "read": {
           "*": "allow"
         },
-        "bash": "ask",
+        "bash": "allow",
         "task": "deny",
-        "vteam_issue_create": "deny",
         "vteam_issue_update": "deny",
         "vteam_issue_transition": "deny",
         "vteam_task_transition": "deny",
         "vteam_question_confirm": "deny",
         "vteam_team_add_member": "deny",
         "vteam_plan_mode": "deny",
-        "vteam_channel_send": "deny",
-        "vteam_wecom_reply": "deny"
+        "vteam_plan_complete": "deny",
+        "vteam_task_create": "deny",
+        "vteam_skill_create": "deny",
+        "vteam_git_repos_list": "deny",
+        "vteam_hook_register": "deny",
+        "vteam_hook_cancel": "deny"
       }
     },
     "vteam-developer": {
@@ -100,16 +102,18 @@
         "read": {
           "*": "allow"
         },
-        "bash": "ask",
+        "bash": "allow",
         "task": "deny",
-        "vteam_doclib": "deny",
-        "vteam_issue_create": "deny",
         "vteam_task_transition": "deny",
         "vteam_question_confirm": "deny",
         "vteam_team_add_member": "deny",
         "vteam_plan_mode": "deny",
-        "vteam_channel_send": "deny",
-        "vteam_wecom_reply": "deny"
+        "vteam_plan_complete": "deny",
+        "vteam_task_create": "deny",
+        "vteam_skill_create": "deny",
+        "vteam_git_repos_list": "deny",
+        "vteam_hook_register": "deny",
+        "vteam_hook_cancel": "deny"
       }
     },
     "vteam-tester": {
@@ -124,19 +128,23 @@
         "read": {
           "*": "allow"
         },
-        "bash": "ask",
+        "bash": "allow",
         "task": "deny",
         "vteam_issue_update": "deny",
         "vteam_task_transition": "deny",
         "vteam_question_confirm": "deny",
         "vteam_team_add_member": "deny",
         "vteam_plan_mode": "deny",
-        "vteam_channel_send": "deny",
-        "vteam_wecom_reply": "deny"
+        "vteam_plan_complete": "deny",
+        "vteam_task_create": "deny",
+        "vteam_skill_create": "deny",
+        "vteam_git_repos_list": "deny",
+        "vteam_hook_register": "deny",
+        "vteam_hook_cancel": "deny"
       }
     },
     "vteam-project_manager": {
-      "description": "流程控制：负责任务拆解编排、进度跟踪、风险与阻塞协调；不产出需求/方案/代码/用例、不越权验收。",
+      "description": "流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。",
       "mode": "primary",
       "permission": {
         "edit": {
@@ -147,14 +155,42 @@
         },
         "bash": "deny",
         "task": "deny",
-        "vteam_chat_history": "deny",
         "vteam_submit_artifact": "deny",
+        "vteam_git_repos_list": "deny"
+      }
+    },
+    "vteam-librarian": {
+      "description": "私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。",
+      "mode": "primary",
+      "permission": {
+        "edit": {
+          "*": "deny"
+        },
+        "read": {
+          "*": "allow"
+        },
+        "bash": "allow",
+        "task": "deny",
+        "vteam_notify_agent": "deny",
+        "vteam_submit_artifact": "deny",
+        "vteam_issue_create": "deny",
+        "vteam_issue_list": "deny",
+        "vteam_issue_get": "deny",
+        "vteam_issue_update": "deny",
+        "vteam_issue_transition": "deny",
         "vteam_task_transition": "deny",
         "vteam_question_confirm": "deny",
+        "vteam_memory_save": "deny",
+        "vteam_memory_update": "deny",
         "vteam_team_add_member": "deny",
         "vteam_plan_mode": "deny",
+        "vteam_plan_complete": "deny",
         "vteam_channel_send": "deny",
-        "vteam_wecom_reply": "deny"
+        "vteam_wecom_reply": "deny",
+        "vteam_task_create": "deny",
+        "vteam_skill_create": "deny",
+        "vteam_hook_register": "deny",
+        "vteam_hook_cancel": "deny"
       }
     }
   },

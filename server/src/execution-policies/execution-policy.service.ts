@@ -14,7 +14,6 @@ import {
   ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
   ROLE_POLICY_DENY_TEMPLATE,
-  ROLE_SERVER_GATED_TOOLS,
   VTEAM_MCP_TOOL_NAMES,
   type RoleBoundary,
   type VteamAgentName,
@@ -35,7 +34,9 @@ import { UpdateExecutionPolicyDto } from './dto/update-execution-policy.dto';
  * - `bashDeny`：层② bash 硬化清单（`config.bashDeny` 为数组则用之，否则
  *   `ROLE_BASH_DENY_PATTERNS` 拷贝；未知角色 → `[]`）；
  * - `correction`：config 嵌套 `correction`（层② guard 越界纠正）。
- * - `serverGated`：主实例专属工具（`ROLE_SERVER_GATED_TOOLS` 拷贝，API/UI 展示用，不进 worker wire 格式）；
+ * - `serverGated`：**恒为空数组**（保留仅为兼容既有 API/测试消费方）。工具权限唯一来源为
+ *   角色 `toolAllows`（worker guard 层②），服务端不再按主实例身份做工具级判定；
+ *   该字段直接发射空字面量，任何非空值都表示回归了已删除的服务端身份门。
  */
 /** 层② guard 单个工具三态（可编辑矩阵：allow/ask/deny；内置 allowlist 仅用前两者）。 */
 export type AgentToolState = 'allow' | 'ask' | 'deny';
@@ -48,7 +49,10 @@ export interface ResolvedExecutionPolicy {
   tools: Record<string, AgentToolState>;
   bashDeny: string[];
   correction: Record<string, unknown>;
-  /** 主实例专属工具（API/UI 展示用；不进 worker wire 格式的 guard.roles）。 */
+  /**
+   * 工具权限恒由角色 `toolAllows` 决定（worker guard 层②）；服务端身份门已删除，
+   * 本字段恒为空（API/UI 展示用；不进 worker wire 格式的 guard.roles）。
+   */
   serverGated: string[];
 }
 
@@ -85,6 +89,7 @@ export interface ResolvedBuiltinPolicy {
   tools: Record<string, AgentToolState>;
   bashDeny: string[];
   correction: Record<string, unknown>;
+  /** 恒为空数组（保留仅为兼容既有 API/测试消费方；见 ResolvedExecutionPolicy.serverGated）。 */
   serverGated: string[];
 }
 
@@ -358,7 +363,8 @@ export function resolveBuiltinPolicy(
     tools,
     bashDeny,
     correction,
-    serverGated: [...ROLE_SERVER_GATED_TOOLS],
+    // 恒为空：无工具再由服务端按主实例身份门控（server-gate-removal-tool-authority）。
+    serverGated: [],
   };
 }
 
@@ -629,7 +635,7 @@ export class ExecutionPolicyService implements OnModuleInit {
         tools: resolved.tools,
         bashDeny: resolved.bashDeny,
         correction: resolved.correction,
-        serverGated: resolved.serverGated,
+        serverGated: [],
       };
     }
     const config = policy.config as {
@@ -655,7 +661,7 @@ export class ExecutionPolicyService implements OnModuleInit {
       tools: guard.tools,
       bashDeny: guard.bashDeny,
       correction: config.correction as Record<string, unknown>,
-      serverGated: [...ROLE_SERVER_GATED_TOOLS],
+      serverGated: [],
     };
   }
 

@@ -1,0 +1,36 @@
+=== git status --short (all) ===
+ M .omo/boulder.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/start-work/ledger.jsonl
+ M server/prisma/seed.ts
+ M server/src/chat/worker-dispatcher.ts
+ M server/src/common/constants/agent.constants.ts
+ M server/src/execution-policies/execution-policy.service.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M server/src/questions/questions.constants.ts
+ M server/src/questions/questions.service.ts
+ M server/src/tasks/plan-lifecycle.service.ts
+ M server/src/tasks/tasks.service.ts
+ M web/app/(main)/agents/page.tsx
+ M worker/src/resources/role-guard-plugin.ts
+ M worker/src/role-guard/policy.ts
+?? .omo/evidence/server-gate-removal-tool-authority/task-5-backfill.txt
+?? .omo/evidence/server-gate-removal-tool-authority/task-6/
+?? .omo/explainers/
+?? docs/agent-platform/prototypes/agent-manage/
+?? docs/agent-platform/prototypes/agent-role/
+?? server/prisma/migrations/20260919000006_backfill_builtin_policy_allowlists/
+
+=== FILES TOUCHED BY THIS TASK (todo 6 scope) ===
+server/src/execution-policies/execution-policy.service.ts
+server/src/platform-mcp/platform-mcp.service.ts
+server/src/platform-mcp/platform-mcp.tools.ts
+web/app/(main)/agents/page.tsx
+
+=== DIFFSTAT of my 4 files ===
+ .../execution-policies/execution-policy.service.ts |  18 +-
+ server/src/platform-mcp/platform-mcp.service.ts    | 228 +++++++--------------
+ server/src/platform-mcp/platform-mcp.tools.ts      |  41 ++--
+ web/app/(main)/agents/page.tsx                     | 100 ++-------
+ 4 files changed, 118 insertions(+), 269 deletions(-)

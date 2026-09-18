@@ -273,14 +273,48 @@ describe('policy canonical emission + per-field db resolution (Todo 2)', () => {
   });
 
   describe('serverGated（API/UI 展示用，不进 worker wire 格式）', () => {
+    it('ROLE_SERVER_GATED_TOOLS 已退休为空（概念退休后不可再有非空清单）', () => {
+      expect(ROLE_SERVER_GATED_TOOLS).toEqual([]);
+    });
+
     it.each(BUILTIN_ORDER)(
-      '%s：serverGated == ROLE_SERVER_GATED_TOOLS 拷贝',
+      '%s：serverGated 恒为空数组且与常量隔离（改一处不影响常量）',
       (name) => {
         const resolved = resolveBuiltinPolicy(name, null);
-        expect(resolved.serverGated).toEqual([...ROLE_SERVER_GATED_TOOLS]);
+        expect(resolved.serverGated).toEqual([]);
         resolved.serverGated.push('mutated');
+        expect(resolved.serverGated).toContain('mutated');
         expect(ROLE_SERVER_GATED_TOOLS).not.toContain('mutated');
       },
     );
+
+    it('tools 层不发射任何 server-gated 概念：未授权 formerly-gated 工具进 deny，授权者进 allow', () => {
+      const formerlyGated = [
+        'vteam_task_transition',
+        'vteam_question_confirm',
+        'vteam_task_create',
+        'vteam_plan_mode',
+        'vteam_plan_complete',
+        'vteam_team_add_member',
+        'vteam_skill_create',
+      ] as const;
+      let assertions = 0;
+      for (const name of BUILTIN_ORDER) {
+        const resolved = resolveBuiltinPolicy(name, null);
+        for (const tool of formerlyGated) {
+          const granted = tool in resolved.tools;
+          if (granted) {
+            expect(resolved.tools[tool]).toBe('allow');
+            expect(resolved.permission[tool]).toBeUndefined();
+          } else {
+            expect(resolved.tools[tool]).toBeUndefined();
+            expect(resolved.permission[tool]).toBe('deny');
+          }
+          assertions += 2;
+        }
+      }
+      expect(assertions).toBe(BUILTIN_ORDER.length * formerlyGated.length * 2);
+      expect(assertions).toBeGreaterThan(0);
+    });
   });
 });

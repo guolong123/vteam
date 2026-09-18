@@ -1,0 +1,25 @@
+=== V1. serverGated emission sites (source) ===
+server/src/execution-policies/execution-policy.service.ts:37: * - `serverGated`：**恒为空数组**（保留仅为兼容既有 API/测试消费方）。工具权限唯一来源为
+server/src/execution-policies/execution-policy.service.ts:56:  serverGated: string[];
+server/src/execution-policies/execution-policy.service.ts:92:  /** 恒为空数组（保留仅为兼容既有 API/测试消费方；见 ResolvedExecutionPolicy.serverGated）。 */
+server/src/execution-policies/execution-policy.service.ts:93:  serverGated: string[];
+server/src/execution-policies/execution-policy.service.ts:367:    serverGated: [],
+server/src/execution-policies/execution-policy.service.ts:638:        serverGated: [],
+server/src/execution-policies/execution-policy.service.ts:664:      serverGated: [],
+
+=== V2. any non-empty serverGated emission anywhere in server/src (should be NONE) ===
+NONE (all emissions are literal [])
+
+=== V3. serverGated consumers remaining in production source ===
+server/src/tasks/tasks.service.ts:368:          // 无设定则保持 null（serverGated 工具届时按“未设置”拒绝，与旧行为一致）。
+server/src/common/constants/agent.constants.ts:158: * 本常量保留为空数组以兼容 `/agent-policies` 的 `serverGated` 消费方（todo 6 退休），
+server/src/execution-policies/execution-policy.service.ts:37: * - `serverGated`：**恒为空数组**（保留仅为兼容既有 API/测试消费方）。工具权限唯一来源为
+server/src/execution-policies/execution-policy.service.ts:56:  serverGated: string[];
+server/src/execution-policies/execution-policy.service.ts:92:  /** 恒为空数组（保留仅为兼容既有 API/测试消费方；见 ResolvedExecutionPolicy.serverGated）。 */
+server/src/execution-policies/execution-policy.service.ts:93:  serverGated: string[];
+server/src/execution-policies/execution-policy.service.ts:367:    serverGated: [],
+server/src/execution-policies/execution-policy.service.ts:638:        serverGated: [],
+server/src/execution-policies/execution-policy.service.ts:664:      serverGated: [],
+
+=== V4. ROLE_SERVER_GATED_TOOLS usages in production source ===
+server/src/common/constants/agent.constants.ts:161:export const ROLE_SERVER_GATED_TOOLS: readonly string[] = [] as const;

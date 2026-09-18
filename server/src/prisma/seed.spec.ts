@@ -75,6 +75,34 @@ const AGENT_NAME_BY_POLICY: Record<string, keyof typeof ROLE_BOUNDARIES> = {
   ep_librarian: 'vteam-librarian',
 };
 
+/**
+ * 曾由服务端按主实例身份 gate 的工具（授权矩阵 plan §(d)）。概念已退休：
+ * `ROLE_SERVER_GATED_TOOLS` 恒为空，据此循环会空转假绿，故显式列举。
+ */
+const FORMERLY_GATED_TOOLS = [
+  'vteam_task_transition',
+  'vteam_question_confirm',
+  'vteam_task_create',
+  'vteam_plan_mode',
+  'vteam_plan_complete',
+  'vteam_team_add_member',
+  'vteam_skill_create',
+] as const;
+
+/** 授权矩阵（plan §(d)）：formerly-gated 工具 → 获授权角色集合。 */
+const FORMERLY_GATED_GRANTS: Record<
+  (typeof FORMERLY_GATED_TOOLS)[number],
+  readonly (keyof typeof ROLE_BOUNDARIES)[]
+> = {
+  vteam_task_transition: ['vteam-product', 'vteam-project_manager'],
+  vteam_question_confirm: ['vteam-product', 'vteam-project_manager'],
+  vteam_task_create: ['vteam-product', 'vteam-project_manager'],
+  vteam_plan_mode: ['vteam-product', 'vteam-project_manager'],
+  vteam_team_add_member: ['vteam-product', 'vteam-project_manager'],
+  vteam_plan_complete: ['vteam-plan', 'vteam-project_manager'],
+  vteam_skill_create: ['vteam-project_manager'],
+};
+
 /** 层① task 门期望：运行时先读边界 taskEffect 形状（Todo 1 若落地），否则仅 vteam-plan allow。 */
 const expectedTaskEffect = (
   agentName: keyof typeof ROLE_BOUNDARIES,
@@ -170,11 +198,21 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
         expect(key.startsWith('vteam_')).toBe(true);
         expect(permission[key]).toBe('deny');
       }
-      // 主实例专属工具（server-gated）由 platform-mcp 服务端判定：
-      // 层① permission 不写 deny 键（guard 层② 亦不列入 allowlist）。
-      for (const gated of ROLE_SERVER_GATED_TOOLS) {
-        expect(permission).not.toHaveProperty(gated);
+      // 旧断言为“permission 无 gated 键”；反转为按授权矩阵进 allow 或显式 deny。
+      let gateAssertions = 0;
+      for (const tool of FORMERLY_GATED_TOOLS) {
+        const granted = FORMERLY_GATED_GRANTS[tool].includes(agentName);
+        if (granted) {
+          expect(create.config.tools).toHaveProperty(tool, 'allow');
+          expect(permission).not.toHaveProperty(tool);
+        } else {
+          expect(permission).toHaveProperty(tool, 'deny');
+          expect(create.config.tools).not.toHaveProperty(tool);
+        }
+        gateAssertions += 2;
       }
+      expect(gateAssertions).toBe(FORMERLY_GATED_TOOLS.length * 2);
+      expect(gateAssertions).toBeGreaterThan(0);
 
       // 层② 纠正配置：越界话术指向真实工具名 + 角色摘要非空
       expect(create.config.correction.scopeSummary.length).toBeGreaterThan(0);
@@ -383,15 +421,9 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
         '可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝',
       );
       expect(prompt).not.toMatch(/可用工具：vteam_/);
-      for (const gated of ROLE_SERVER_GATED_TOOLS) {
-        // 例外：PM 职责含计划完工铁律（须点名 vteam_plan_complete），运行时仍由
-        // platform-mcp 主实例门鉴权，prompt 点名不等于越权。
-        if (id === 'a_project_manager' && gated === 'vteam_plan_complete') {
-          expect(prompt).toContain(gated);
-          continue;
-        }
-        expect(prompt).not.toContain(gated);
-      }
+      // PM 职责含计划完工铁律（prompt 点名 vteam_plan_complete，运行时按角色授权）。
+      expect(prompt).not.toContain('vteam_task_create');
+      expect(prompt).not.toContain('vteam_team_add_member');
     }
   });
 
@@ -838,21 +870,34 @@ describe('seed（计划 skills + 评审子句）', () => {
     });
   });
 
-  it('vteam_plan_complete 为 server-gated（与 plan_mode 同模式）：进 gated 清单，不进任何角色 toolAllows', async () => {
+  it('vteam_plan_complete 不再 server-gated：按授权矩阵授予 vteam-plan + vteam-project_manager', async () => {
     await main();
 
-    // src 单一来源：工具名清单与 gated 清单均含新工具
     expect(VTEAM_MCP_TOOL_NAMES).toContain('vteam_plan_complete');
-    expect(ROLE_SERVER_GATED_TOOLS).toContain('vteam_plan_complete');
-    // server-gated 由 platform-mcp 运行时按主实例判定：guard 层不写 allow 也不写 deny，
-    // PM（含计划员 vteam-plan）经 pass-through + 主实例门调用
+    expect(ROLE_SERVER_GATED_TOOLS).toEqual([]);
     for (const name of [
       'vteam-project_manager',
       'vteam-plan',
     ] as const) {
-      expect(
-        Object.keys(ROLE_BOUNDARIES[name].toolAllows),
-      ).not.toContain('vteam_plan_complete');
+      expect(ROLE_BOUNDARIES[name].toolAllows).toHaveProperty(
+        'vteam_plan_complete',
+        'allow',
+      );
+      expect(ROLE_BOUNDARIES[name].mcpDenies).not.toContain(
+        'vteam_plan_complete',
+      );
+    }
+    for (const name of [
+      'vteam-product',
+      'vteam-architect',
+      'vteam-developer',
+      'vteam-tester',
+      'vteam-librarian',
+    ] as const) {
+      expect(ROLE_BOUNDARIES[name].toolAllows).not.toHaveProperty(
+        'vteam_plan_complete',
+      );
+      expect(ROLE_BOUNDARIES[name].mcpDenies).toContain('vteam_plan_complete');
     }
   });
 

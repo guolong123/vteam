@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -13,7 +14,10 @@ import {
   WorkerUnavailableException,
 } from '../workers/worker.client';
 import { ReplyQuestionDto } from './dto/reply-question.dto';
-import { QUESTIONS_ERRORS } from './questions.constants';
+import {
+  QUESTION_CONFIRM_INTEGRITY_ERRORS,
+  QUESTIONS_ERRORS,
+} from './questions.constants';
 import { QuestionsService } from './questions.service';
 
 describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 + emit 收敛）', () => {
@@ -691,7 +695,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       expect(result.status).toBe('resolved');
     });
 
-    it('confirmByAgent 非主成员 → 403（团队主门）', async () => {
+    it('confirmByAgent 非主成员不再被身份门拒绝 → 正常终态落库（原团队主门 403 已移除）', async () => {
       prisma.task.findUnique.mockResolvedValue({
         id: 't_1',
         teamId: 'tm_1',
@@ -701,17 +705,75 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         managedMode: true,
       });
       prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
-      await expect(
-        service.confirmByAgent({
+      prisma.session.findUnique.mockResolvedValue({ teamMemberId: 'tmm_sender' });
+      prisma.agentQuestion.update.mockResolvedValue(
+        platformRow({ status: 'resolved', answers: [['确认']] }),
+      );
+
+      const result = await service.confirmByAgent({
+        taskId: 't_1',
+        instanceId: 'tmm_other',
+        requestId: 'que_platform_0000000001',
+        kind: 'question',
+        answers: [['确认']],
+      });
+
+      expect(result.status).toBe('resolved');
+    });
+
+    it('confirmByAgent 自批（发起者会话成员 == 确认者）→ 403 SELF_CONFIRMATION_FORBIDDEN', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_1',
+        teamId: 'tm_1',
+      });
+      prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
+      prisma.session.findUnique.mockResolvedValue({ teamMemberId: 'tmm_other' });
+
+      const err = await service
+        .confirmByAgent({
           taskId: 't_1',
           instanceId: 'tmm_other',
           requestId: 'que_platform_0000000001',
           kind: 'question',
           answers: [['确认']],
-        }),
-      ).rejects.toMatchObject({
-        response: { code: 'TASK_STATUS_MAIN_AGENT_ONLY' },
+        })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(ForbiddenException);
+      expect((err as ForbiddenException).getResponse()).toMatchObject({
+        code: QUESTION_CONFIRM_INTEGRITY_ERRORS.SELF_CONFIRMATION_FORBIDDEN,
       });
+      expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
+    });
+
+    it('confirmByAgent 跨任务确认（请求归属他任务）→ 403 CROSS_TASK_FORBIDDEN', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_1',
+        teamId: 'tm_1',
+      });
+      prisma.agentQuestion.findUnique.mockResolvedValue(
+        platformRow({ taskId: 't_other' }),
+      );
+
+      const err = await service
+        .confirmByAgent({
+          taskId: 't_1',
+          instanceId: 'tmm_main',
+          requestId: 'que_platform_0000000001',
+          kind: 'question',
+          answers: [['确认']],
+        })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(ForbiddenException);
+      expect((err as ForbiddenException).getResponse()).toMatchObject({
+        code: QUESTION_CONFIRM_INTEGRITY_ERRORS.CROSS_TASK_FORBIDDEN,
+      });
+      expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
     });
 
     it('拒绝（answers=null）→ 终态落库 rejected + hook 收到 answers=null（拒绝不执行）', async () => {

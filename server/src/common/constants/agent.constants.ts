@@ -147,23 +147,18 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
 ] as const;
 
 /**
- * 主实例专属（server-gated）MCP 工具真实名：由 platform-mcp 服务端按
- * `task.mainAgentInstanceId` / `team.mainAgentMemberId` 权威判定（401/403），
- * guard 层② 不参与判定（pass-through）。
- * 因此本清单既不进 `toolAllows`（guard 白名单），也不进 `mcpDenies`（层① deny）。
+ * 主实例专属（server-gated）MCP 工具真实名——**已废弃，语义移交给 worker guard allowlist**。
+ *
+ * 历史：本清单曾标记由 platform-mcp 服务端按 `task.mainAgentInstanceId` /
+ * `team.mainAgentMemberId` 权威判定（401/403）、guard 层② pass-through 的工具；
+ * 该清单既不进 `toolAllows`（guard 白名单），也不进 `mcpDenies`（层① deny）。
+ *
+ * 现状（server-gate-removal-tool-authority）：工具权限唯一来源已收敛到 worker guard
+ * 的角色 `toolAllows`（未列出即 deny）；服务端不再按主实例身份做工具级判定。
+ * 本常量保留为空数组以兼容 `/agent-policies` 的 `serverGated` 消费方（todo 6 退休），
+ * 任何非空写入都会使 `mcpDenies` 推导在语义上失真，禁止再向其中添加工具。
  */
-export const ROLE_SERVER_GATED_TOOLS: readonly string[] = [
-  'vteam_task_transition',
-  'vteam_question_confirm',
-  'vteam_task_create',
-  'vteam_plan_mode',
-  'vteam_plan_complete',
-  'vteam_team_add_member',
-  'vteam_skill_create',
-] as const;
-
-/** server-gated 集合（`defineBoundary` 的 `mcpDenies` 推导用，避免逐次线性扫描）。 */
-const SERVER_GATED_SET: ReadonlySet<string> = new Set(ROLE_SERVER_GATED_TOOLS);
+export const ROLE_SERVER_GATED_TOOLS: readonly string[] = [] as const;
 
 /**
  * worker 注入的自定义 git 工具真实 action 名（`worker/src/git/git-tools.ts` GIT_TOOLS）。
@@ -208,15 +203,15 @@ export interface RoleBoundary {
 
 /**
  * 由 toolAllows 补集推导 `mcpDenies`（MCP 命名空间收窄），保证与 allowlist 恒一致。
+ * 未列入 `toolAllows` 的 MCP 工具一律显式 deny（工具权限唯一来源 = worker guard
+ * allowlist；不再有 server-gated 例外）。
  * 纯函数、模块加载期求值，无运行时副作用。
  */
 function defineBoundary(base: Omit<RoleBoundary, 'mcpDenies'>): RoleBoundary {
   const allowed = new Set(Object.keys(base.toolAllows));
   return {
     ...base,
-    mcpDenies: VTEAM_MCP_TOOL_NAMES.filter(
-      (name) => !allowed.has(name) && !SERVER_GATED_SET.has(name),
-    ),
+    mcpDenies: VTEAM_MCP_TOOL_NAMES.filter((name) => !allowed.has(name)),
   };
 }
 
@@ -301,6 +296,11 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_issue_get: 'allow',
       vteam_issue_update: 'allow',
       vteam_issue_transition: 'allow',
+      vteam_task_create: 'allow',
+      vteam_task_transition: 'allow',
+      vteam_plan_mode: 'allow',
+      vteam_team_add_member: 'allow',
+      vteam_question_confirm: 'allow',
       vteam_group_post: 'allow',
       vteam_notify_agent: 'allow',
       vteam_memory_save: 'allow',
@@ -343,6 +343,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_memory_update: 'allow',
       vteam_task_context: 'allow',
       vteam_chat_history: 'allow',
+      vteam_issue_create: 'allow',
       vteam_issue_list: 'allow',
       vteam_issue_get: 'allow',
       vteam_team_view: 'allow',
@@ -382,6 +383,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_memory_update: 'allow',
       vteam_task_context: 'allow',
       vteam_chat_history: 'allow',
+      vteam_issue_create: 'allow',
       vteam_issue_list: 'allow',
       vteam_issue_get: 'allow',
       vteam_issue_update: 'allow',
@@ -469,6 +471,13 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_issue_get: 'allow',
       vteam_issue_update: 'allow',
       vteam_issue_transition: 'allow',
+      vteam_task_create: 'allow',
+      vteam_task_transition: 'allow',
+      vteam_plan_mode: 'allow',
+      vteam_plan_complete: 'allow',
+      vteam_team_add_member: 'allow',
+      vteam_question_confirm: 'allow',
+      vteam_skill_create: 'allow',
       vteam_memory_save: 'allow',
       vteam_memory_search: 'allow',
       vteam_memory_update: 'allow',
@@ -508,6 +517,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_group_post: 'allow',
       vteam_notify_agent: 'allow',
       vteam_memory_search: 'allow',
+      vteam_plan_complete: 'allow',
       browser: 'allow',
     },
   }),

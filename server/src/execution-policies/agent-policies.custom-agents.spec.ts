@@ -15,6 +15,20 @@ import { ExecutionPolicyService } from './execution-policy.service';
  *   permission 取策略 config，guard.roles tools 取三态矩阵（非法值丢弃）。
  */
 describe('agent-policies custom agents (Todo 2)', () => {
+  /**
+   * 曾由服务端按主实例身份 gate 的工具（授权矩阵 plan §(d)）。概念已退休：
+   * `ROLE_SERVER_GATED_TOOLS` 恒为空，据此循环会空转假绿，故显式列举。
+   */
+  const FORMERLY_GATED_TOOLS = [
+    'vteam_task_transition',
+    'vteam_question_confirm',
+    'vteam_task_create',
+    'vteam_plan_mode',
+    'vteam_plan_complete',
+    'vteam_team_add_member',
+    'vteam_skill_create',
+  ] as const;
+
   const BUILTIN_ORDER = [
     'vteam-plan',
     'vteam-product',
@@ -91,25 +105,38 @@ describe('agent-policies custom agents (Todo 2)', () => {
       expect(policies).toMatchSnapshot();
     });
 
-    it('内置层① permission 对 server-gated 工具无 deny 键（guard pass-through，server 门判定）', async () => {
+    it('内置层① permission 对未授权 formerly-gated 工具显式 deny，对已授权则无 deny 键', async () => {
       const service = serviceWith({
         agent: { findMany: jest.fn().mockResolvedValue([]) },
         executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
       });
       const policies = await service.buildAgentPolicies();
+      let assertions = 0;
       for (const agent of policies.agents) {
-        for (const gated of ROLE_SERVER_GATED_TOOLS) {
-          expect(agent.permission).not.toHaveProperty(gated);
-          expect(
-            policies.guard.roles[agent.name].permission,
-          ).not.toHaveProperty(gated);
+        const boundary =
+          ROLE_BOUNDARIES[agent.name as keyof typeof ROLE_BOUNDARIES];
+        const role = policies.guard.roles[agent.name];
+        for (const tool of FORMERLY_GATED_TOOLS) {
+          const granted = Object.prototype.hasOwnProperty.call(
+            boundary.toolAllows,
+            tool,
+          );
+          if (granted) {
+            expect(agent.permission).not.toHaveProperty(tool);
+            expect(role.permission).not.toHaveProperty(tool);
+            expect(role.tools).toHaveProperty(tool, 'allow');
+          } else {
+            expect(agent.permission).toHaveProperty(tool, 'deny');
+            expect(role.permission).toHaveProperty(tool, 'deny');
+            expect(role.tools).not.toHaveProperty(tool);
+          }
+          assertions += 4;
         }
       }
-      for (const role of Object.values(policies.guard.roles)) {
-        for (const gated of ROLE_SERVER_GATED_TOOLS) {
-          expect(role.tools).not.toHaveProperty(gated);
-        }
-      }
+      expect(assertions).toBe(
+        policies.agents.length * FORMERLY_GATED_TOOLS.length * 4,
+      );
+      expect(assertions).toBeGreaterThan(0);
     });
 
     it('policyId 缺失的 agent 行不进入自定义块（仍纯 7 内置）', async () => {
@@ -234,7 +261,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
       expect(resolved?.bashDeny).toEqual([...ROLE_BASH_DENY_PATTERNS]);
     });
 
-    it('resolveByAgent 返回 serverGated（ROLE_SERVER_GATED_TOOLS 拷贝，API/UI 用）', async () => {
+    it('resolveByAgent 的 serverGated 恒为空数组（该概念已退休）', async () => {
       const service = serviceWith({
         agent: { findMany: jest.fn().mockResolvedValue([]) },
         executionPolicy: {
@@ -252,7 +279,11 @@ describe('agent-policies custom agents (Todo 2)', () => {
         role: 'product',
         policyId: 'ep_product',
       });
-      expect(resolved?.serverGated).toEqual([...ROLE_SERVER_GATED_TOOLS]);
+      expect(ROLE_SERVER_GATED_TOOLS).toEqual([]);
+      expect(resolved?.serverGated).toEqual([]);
+      resolved?.serverGated.push('mutated');
+      expect(resolved?.serverGated).toContain('mutated');
+      expect(ROLE_SERVER_GATED_TOOLS).not.toContain('mutated');
     });
 
     it('resolveByAgent 对内置名从 config.tools 解析（DB 值胜出，非法值丢弃）', async () => {

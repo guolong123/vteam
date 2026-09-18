@@ -1,0 +1,498 @@
+# task-7 — Re-baseline the frozen permission artifacts and invert the gate assertions
+
+Plan: `server-gate-removal-tool-authority`, todo 7 (final unit of the atomic flip).
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Base commit: 029bc2e (docs(permissions): map the server-gate removal and the per-role grant matrix)
+Re-baseline explicitly authorized by owner decision D12. No commit made.
+
+Method: every claim below is produced by a recorded command in this file. Line numbers are
+ORIENTATION ONLY; the instruction for every edit was the error code / assertion text.
+
+---
+
+## 0. Scope correction (the red-suite list in the task brief was incomplete)
+
+The brief listed 6 server suites + 2 worker suites. The measured red set is **13 server suites**
+plus 2 non-red but VACUOUS suites (they passed only because their loop source was empty), and
+2 worker assertions inside `policy.spec.ts` (the whole worker `v1-driver.spec.ts` suite is a
+pre-existing unrelated failure — see §7).
+
+Recorded: `cd server && npx jest --runInBand 2>&1 | grep '^FAIL'` (before task-7 edits) →
+`questions.service`, `tasks.service`, `platform-mcp.service`, `platform-mcp.service.gate`,
+`platform-mcp.service.receipt-nudge`, `platform-mcp.service.plan-hash`,
+`worker-dispatcher.gate`, `prisma.seed`, `agent-policies-db-builtin`,
+`plan-lifecycle.service`, `agent-policies-db-driven`, `agent-policies.custom-agents`,
+`agent.constants` — 13 suites.
+
+The brief also named `agent-policies.controller.spec.ts` and `policy-canonical.spec.ts`:
+both were green only because they reference the retired concept in ways that became trivial
+when `ROLE_SERVER_GATED_TOOLS` emptied. Both were inverted anyway (§2.5, §2.8).
+
+---
+
+## 1. THE 7 PREVIOUSLY-VACUOUS LOOPS (misleading_success_output — primary risk)
+
+`ROLE_SERVER_GATED_TOOLS` is now `[]`. Recorded command proves the legacy loop source is empty:
+
+```
+$ cd server && node -e "require('ts-node').register({transpileOnly:true,project:...}); \
+    const c=require('./src/common/constants/agent.constants.ts'); \
+    console.log(JSON.stringify(c.ROLE_SERVER_GATED_TOOLS), c.ROLE_SERVER_GATED_TOOLS.length)"
+ROLE_SERVER_GATED_TOOLS = [] | length = 0
+=> legacy for(const gated of ROLE_SERVER_GATED_TOOLS) iterated 0 items BEFORE this task (VACUOUS)
+```
+
+The 7 loops the brief named, and how each was converted (the loop source is no longer the
+empty constant; it is an explicit list derived from the grant matrix in
+`.omo/evidence/server-gate-removal-tool-authority/task-1-change-map.txt` §(d)):
+
+| file:line (old) | old loop source | new loop source |
+|---|---|---|
+| `agent-policies.custom-agents.spec.ts:101` | `ROLE_SERVER_GATED_TOOLS` | `FORMERLY_GATED_TOOLS` (7, explicit) |
+| `agent-policies.custom-agents.spec.ts:109` | `ROLE_SERVER_GATED_TOOLS` | `FORMERLY_GATED_TOOLS` (7, explicit) |
+| `agent-policies.matrix.spec.ts:129` | `ROLE_SERVER_GATED_TOOLS` | `FORMERLY_GATED_TOOLS` (7, explicit) |
+| `agent.constants.spec.ts:105` | `ROLE_SERVER_GATED_TOOLS` | `FORMERLY_GATED_TOOLS` (7, explicit) |
+| `agent.constants.spec.ts:310` | `ROLE_SERVER_GATED_TOOLS` | `FORMERLY_GATED_TOOLS` (7, explicit) |
+| `seed.spec.ts:175` | `ROLE_SERVER_GATED_TOOLS` | `FORMERLY_GATED_TOOLS` (7, explicit) |
+| `seed.spec.ts:386` | `ROLE_SERVER_GATED_TOOLS` | replaced by 2 explicit non-containment assertions (the loop over 7 was not meaningful for this prompt check) |
+
+### Vacuity proof (recorded command) — every new loop iterates a NON-EMPTY set
+
+```
+$ node <extractor over the 6 spec files>      # see §6 for the script
+VTEAM_MCP_TOOL_NAMES length = 29
+ITERATES   7 tools  server/src/common/constants/agent.constants.spec.ts
+ITERATES   7 tools  server/src/execution-policies/agent-policies.custom-agents.spec.ts
+ITERATES   7 tools  server/src/execution-policies/agent-policies.matrix.spec.ts
+ITERATES   7 tools  server/src/prisma/seed.spec.ts
+ITERATES   7 tools  worker/src/role-guard/policy.spec.ts
+LIST       7 inline  worker/src/resources/role-guard-plugin.spec.ts
+total iterated tool entries across inverted loops = 42
+empty loops = 0
+VACUITY PROOF: every inverted loop/list iterates a NON-EMPTY set (>0).
+```
+
+Additionally each inverted loop carries a runtime cardinality assertion
+`expect(assertions).toBeGreaterThan(0)` (and an exact `expect(assertions).toBe(N)` for the
+expected product), so an accidentally-emptied list makes the test FAIL rather than silently pass:
+
+```
+$ grep -rn "expect(assertions).toBeGreaterThan(0)\|expect(gateAssertions).toBeGreaterThan(0)" server/src worker/src --include="*.spec.ts"
+server/src/prisma/seed.spec.ts:215:      expect(gateAssertions).toBeGreaterThan(0);
+server/src/common/constants/agent.constants.spec.ts:161:    expect(assertions).toBeGreaterThan(0);
+server/src/execution-policies/policy-canonical.spec.ts:317:      expect(assertions).toBeGreaterThan(0);
+server/src/execution-policies/agent-policies.custom-agents.spec.ts:139:      expect(assertions).toBeGreaterThan(0);
+server/src/execution-policies/agent-policies.matrix.spec.ts:163:    expect(assertions).toBeGreaterThan(0);
+worker/src/role-guard/policy.spec.ts:326:      expect(assertions).toBeGreaterThan(0);
+```
+
+No `for..of ROLE_SERVER_GATED_TOOLS` / `SERVER_GATED_TOOLS` loop remains in any spec:
+`grep -rn "for (const .* of ROLE_SERVER_GATED_TOOLS\|for (const .* of SERVER_GATED_TOOLS)" server/src worker/src --include="*.spec.ts"`
+→ only a comment line mentioning the anti-pattern; zero executable loops.
+
+### Test-count delta from de-vacuuming
+- `agent.constants.spec.ts`: 17 → 19 tests (2 new: retired-empty + grant-matrix non-vacuity).
+- `agent-policies.matrix.spec.ts`: 14 → 14 (assertions replaced, no count change).
+- `policy-canonical.spec.ts`: 80 → 82 tests (2 new: retired-empty + emission non-vacuity).
+- `agent-policies.custom-agents.spec.ts`: 11 → 11.
+- `seed.spec.ts`: 44 → 44.
+- `worker/policy.spec.ts`: 79 → 85 tests (+6: each formerly-gated tool got an explicit deny
+  case and an explicit allow case via `it.each`).
+
+---
+
+## 2. FULL INVERSION LIST (old assertion → new assertion), per file
+
+### 2.1 `server/src/common/constants/agent.constants.spec.ts`
+- OLD `'ROLE_SERVER_GATED_TOOLS 为 7 个主实例专属真实名'`: asserted the constant deep-equals the
+  7 names, and `for (gated of ROLE_SERVER_GATED_TOOLS) expect(VTEAM_MCP_TOOL_NAMES).toContain(gated)`.
+  NEW `'ROLE_SERVER_GATED_TOOLS 已退休为空'`: `expect([...ROLE_SERVER_GATED_TOOLS]).toEqual([])`
+  and asserts the 7 names still exist in `VTEAM_MCP_TOOL_NAMES` (tool still registered, just not
+  "server-gated").
+- OLD `'mcpDenies = ... 且非 server-gated 者'`: filtered out `gated.has(mcp)`.
+  NEW `'mcpDenies = 全部 MCP 工具中未列入 toolAllows 者（无 server-gated 例外）'`: filter is
+  `!allowedMcp.includes(mcp)` only.
+- OLD `'mcpDenies 永不含 server-gated 工具（层① 不写 deny）'`: `for denied: expect(gated.has(denied)).toBe(false)`.
+  NEW `'未获授权的 formerly-gated 工具一律进 mcpDenies（显式 deny）'`: for each (tool, role) cell,
+  `allowed === granted` AND `denied === !granted` using the explicit grant matrix; cardinality asserted.
+- OLD `'mcpDenies ∪ toolAllows(MCP) ∪ server-gated 恰覆盖 VTEAM_MCP_TOOL_NAMES（三者互斥）'`.
+  NEW `'mcpDenies ∪ toolAllows(MCP) 恰覆盖 VTEAM_MCP_TOOL_NAMES（二者互斥）'`: the gated third set is gone.
+- OLD `'Permission matrix 精确值'` tail:
+  `for (gated of ROLE_SERVER_GATED_TOOLS) expect(toolAllows keys).not.toContain(gated)` (vacuous).
+  NEW: `for (tool of FORMERLY_GATED_TOOLS)`: if granted → `toHaveProperty(tool,'allow')`, else
+  `not.toHaveProperty(tool)`.
+- `vteam-plan.toolAllows` literal: added `vteam_plan_complete: 'allow'` (granted per matrix).
+
+### 2.2 `server/src/execution-policies/agent-policies.custom-agents.spec.ts`
+- OLD `'内置层① permission 对 server-gated 工具无 deny 键（guard pass-through）'` (2 vacuous loops
+  at :101,:109): asserted `agent.permission`/`role.permission` do NOT have the key and `role.tools`
+  does NOT have the tool — for the empty constant this asserted nothing.
+  NEW `'内置层① permission 对未授权 formerly-gated 工具显式 deny，对已授权则无 deny 键'`: for each
+  agent×tool, granted → `permission` has no key + `role.tools[tool]==='allow'`; ungranted →
+  `agent.permission[tool]==='deny'` + `role.permission[tool]==='deny'` + `role.tools` no key.
+  Cardinality `expect(assertions).toBe(agents.length * 7 * 4)`.
+- OLD `'resolveByAgent 返回 serverGated（ROLE_SERVER_GATED_TOOLS 拷贝）'` (would pass with
+  empty===empty). NEW `'resolveByAgent 的 serverGated 恒为空数组'`: `expect(ROLE_SERVER_GATED_TOOLS).toEqual([])`
+  and `expect(resolved?.serverGated).toEqual([])`, plus mutation-isolation check.
+
+### 2.3 `server/src/execution-policies/agent-policies.matrix.spec.ts`
+- OLD `'mcpDenies ∈ MCP 注册表、非 server-gated，且与该角色 toolAllows 互斥'`: removed the
+  `gated.has(denied)` term and the `!gated.has(mcp)` filter.
+  NEW `'mcpDenies ∈ MCP 注册表，且与该角色 toolAllows 互斥（补集 = 全集减 allowlist，无例外）'`.
+- OLD `'内置层① permission 对 server-gated 工具无 deny 键'` (vacuous at :129).
+  NEW `'内置层① permission：未授权 formerly-gated 工具显式 deny，已授权者无 deny 键'`;
+  cardinality asserted.
+- Removed the now-unused `ROLE_SERVER_GATED_TOOLS` import.
+
+### 2.4 `server/src/execution-policies/__snapshots__/agent-policies.custom-agents.spec.ts.snap`
+- Snapshot regenerated with `npx jest --runInBand -u`. Recorded diff summary:
+  - OLD sha256 `6166db9fdb6d128417000a5bf04fc9135b25bce4adda8c58e3cf9956628c597a`
+    NEW sha256 `b52dbfe07d064a5052d91319d88672be615c0b5ceaecde954e17ff455a765a02`
+  - deny-key additions: `vteam_plan_complete` 10, `vteam_plan_mode` 10, `vteam_question_confirm` 10,
+    `vteam_task_create` 10, `vteam_task_transition` 10, `vteam_team_add_member` 10,
+    `vteam_skill_create` 12 (previously absent from the layer-① permission map).
+  - deny-key removal: `vteam_issue_create` 8 → 4 (architect + developer are now granted it).
+  - no assertion was weakened: `expect(policies).toEqual(expected)` and the independent
+    `JSON.stringify` equality assertion remain above the snapshot line and were green.
+
+### 2.5 `server/src/execution-policies/policy-canonical.spec.ts`
+- OLD `describe('serverGated...')` with `it.each('%s：serverGated == ROLE_SERVER_GATED_TOOLS 拷贝')`
+  (vacuous: empty array vs empty copy). NEW: `'ROLE_SERVER_GATED_TOOLS 已退休为空'` +
+  `it.each('%s：serverGated 恒为空数组且与常量隔离')` + a new non-vacuous test
+  `'tools 层不发射任何 server-gated 概念：未授权 formerly-gated 工具进 deny，授权者进 allow'`
+  over 7 roles × 7 tools, cardinality asserted (`82` tests, up from `80`).
+
+### 2.6 `server/src/prisma/seed.spec.ts`
+- OLD loop `for (gated of ROLE_SERVER_GATED_TOOLS) expect(permission).not.toHaveProperty(gated)` (:175, vacuous).
+  NEW: for each of 7 tools, granted → `create.config.tools` has `allow` + `permission` no key;
+  ungranted → `permission` has `deny` + `create.config.tools` no key; cardinality asserted.
+- OLD loop `for (gated of ROLE_SERVER_GATED_TOOLS) ... expect(prompt).not.toContain(gated)` (:386, vacuous).
+  NEW: explicit `expect(prompt).not.toContain('vteam_task_create')` /
+  `.not.toContain('vteam_team_add_member')` for the five legacy roles' prompt.
+- OLD `'vteam_plan_complete 为 server-gated：进 gated 清单，不进任何角色 toolAllows'`:
+  asserted `ROLE_SERVER_GATED_TOOLS).toContain('vteam_plan_complete')` and that PM/plan do NOT
+  have it in `toolAllows`.
+  NEW `'vteam_plan_complete 不再 server-gated：按授权矩阵授予 vteam-plan + vteam_project_manager'`:
+  `ROLE_SERVER_GATED_TOOLS).toEqual([])`; plan + PM `toolAllows` has it and `mcpDenies` does not;
+  the other five roles lack it in `toolAllows` and have it in `mcpDenies`.
+- Added `FORMERLY_GATED_TOOLS` + `FORMERLY_GATED_GRANTS` fixtures.
+
+### 2.7 `server/src/execution-policies/agent-policies-db-builtin.spec.ts` + `agent-policies-db-driven.spec.ts`
+- No assertion text changed. Both load the frozen baseline via `loadAgentPoliciesBaseline()`;
+  they went green when the baseline artifact was regenerated (§3). This is the intended
+  "re-baseline" path: the specs still assert byte-equality against the recorded artifact.
+- `agent-policies-db-driven.spec.ts` "未编辑的 6 个内置角色与冻结基线逐字节一致" and
+  "行全缺时回退常量（对照：无 DB 行 ≠ 编辑后的值）" both pass against the new baseline.
+
+### 2.8 `server/src/execution-policies/agent-policies.controller.spec.ts`
+- No change required: it asserts `role.tools === ROLE_BOUNDARIES[name].toolAllows` and that
+  permission has no `write` — both hold; green after the constants flip. (Listed in the brief;
+  inspected and confirmed non-vacuous.)
+
+### 2.9 `server/src/platform-mcp/platform-mcp.service.spec.ts` (the largest inversion)
+Block `team-free-chat todo-4：task_create 主门`:
+- OLD `'非主实例（任务维度）→ 403，主门不放行'` → NEW `'...不再被身份门拒绝 → 触达 createByAgent'`.
+- OLD `'任务维度任务主为空 + 团队绑定已设 → 非绑定成员 403 并点名团队绑定 id'` → NEW `'...不再被拒（触达 createByAgent）'`.
+- OLD `'任务维度任务主为空 + 团队绑定缺省 → 非首位 403 并点名回退 id'` → NEW `'...不再被拒（触达 createByAgent）'`.
+- OLD `'非主成员（团队维度）→ 403'` → NEW `'...不再被身份门拒绝 → 触达 createByAgent'`.
+- OLD `'绑定缺省 + 首位成员（seq 升序回退）→ 放行'` asserted the fallback helper was CALLED →
+  NEW asserts `findFirst` NOT called (resolution removed with the gate).
+- OLD `'绑定缺省 + 非首位成员 → 403 并点名回退 id'` → NEW `'...不再做回退解析 → 触达 createByAgent'`.
+- OLD `'绑定缺省 + 空名册 → 403 沿用"未设置"'` → NEW `'...放行（不再解析主成员，失败面消失）'`.
+- OLD `'绑定缺省 + 回退查询失败 → 403（fail-closed）'` → NEW `'...不再影响放行（不再调用回退查询）'`.
+- `'任务维度任务主为空 + 团队绑定已设 → 绑定成员放行'`: retained pass, but removed the
+  `expect(team.findUnique).toHaveBeenCalledWith(...)` (the gate no longer reads the team).
+
+Block `team_add_member`:
+- OLD `'非主成员 → 403 PLATFORM_MCP_FORBIDDEN（仅主 Agent 可申请增员）'` →
+  NEW `'非主成员不再被身份门拒绝 → 创建确认请求（原 403 已移除）'`.
+
+Block `plan_mode`:
+- OLD `'非主成员 → 403（仅主 Agent 可切换）'` → NEW `'非主成员不再被身份门拒绝 → 翻转 task.planMode（写入目标仍是团队主成员行）'`.
+- ADDED `'团队无显式主成员 → 回退首位成员写行（不再写 id:null）'` and
+  `'团队无主成员且空名册 → 不写 member 行，仅翻转 planMode'` (proves the todo-2 null-target fix).
+
+Block `plan_complete`:
+- OLD `'非主实例 → 403 PLATFORM_MCP_FORBIDDEN（completePlan 不调用）'` →
+  NEW `'非主实例不再被身份门拒绝 → 触达 completePlan（原 403 已移除）'`.
+
+Block `skill_create`:
+- OLD `'非主实例（任务维度）→ 403 PLATFORM_MCP_FORBIDDEN'` → NEW `'...不再被身份门拒绝 → 触达 create'`.
+- OLD `'...非绑定成员 403 并点名团队绑定 id'` → NEW `'...不再被拒（触达 create）'`.
+- OLD `'非主成员（团队维度）→ 403'` → NEW `'...不再被身份门拒绝 → 触达 create'`.
+- OLD `'绑定缺省 + 首位成员 → 放行'` (asserted fallback called) → NEW asserts `findFirst` NOT called.
+- OLD `'绑定缺省 + 非首位成员 → 403 并点名回退 id'` → NEW `'...放行（不再回退解析 / 不再 403）'`.
+- OLD `'绑定缺省 + 空名册 → 403 沿用"未设置"'` → NEW `'...放行（不再有"未设置"403）'`.
+- OLD `'任务维度任务主为空 + 团队绑定已设 → 绑定成员放行'` removed the team-read assertion.
+
+### 2.10 `server/src/platform-mcp/platform-mcp.service.gate.spec.ts`
+- Whole block `'计划门禁（kind=execution）'` → `'计划状态不再作为派发门禁（kind=execution）'`.
+  - OLD `it.each(draft/reviewing/approved/rejected/completed)` asserted `triggered=false` +
+    `reason='plan-gated'` + hint `'计划未放行'`. NEW asserts `triggered=true` + `reason='ok'` +
+    `getStatus` NOT called + dispatch called + message created (inverted).
+  - OLD `'executing 态放行'` → merged into the `it.each` (all states now pass).
+  - OLD `'无 plan 行→autoEnsureRow 建行后再门禁（draft → 仍被拦）'` → NEW `'执行派发仍兜底建
+    plan 行 + 透传 kind'` (`autoEnsureRow` retained; no refusal).
+  - OLD `'DB 读错→fail-open'` removed (no status read remains); replaced by
+    `'兜底建行失败→fail-open 放行 + warn'` (uses the retained `autoEnsureRow`).
+  - OLD `'force=true + forceReason→绕过门禁'` used status `approved` (now no gate) → NEW
+    `'force=true + forceReason 可绕过过期哈希并写回执审计行'` arming a real frozen hash via the
+    `createLedger`/`embedLedger` helpers.
+  - ADDED `'携带过期 planHash → 哈希门禁拦截'` to keep the retained hash check covered.
+- Block `'计划角色豁免：kind=execution 派给 a_plan 永不进计划门禁'` →
+  `'a_plan 角色豁免已删除：hash 门禁对每个目标一律生效'`.
+  - OLD `'draft 态派给 a_plan → 放行且不读门禁'` → NEW `'放行且仍经 autoEnsureRow 兜底建行'`.
+  - OLD `'无 plan 行派给 a_plan → 放行且不兜底建行'` → replaced by
+    `'派给 a_plan 且携带过期哈希 → 哈希门禁照常拦截'` (the core of the exemption removal).
+  - OLD `'draft 态派给 a_developer → 仍被拦且 hint 含计划未放行'` → NEW `'...放行'`.
+- Added `issue.findMany` to the mock type/init + `armFrozenHash()` helper.
+
+### 2.11 `server/src/platform-mcp/platform-mcp.service.plan-hash.spec.ts`
+- OLD `'非 executing 态 + 哈希匹配 → 仍按状态门禁被拦'` → NEW `'...放行（状态门禁已移除，仅哈希裁决）'`.
+- ADDED `'非 executing 态（draft）且无 planHash → 放行'`.
+- Header docstring updated to state the status gate is gone.
+
+### 2.12 `server/src/platform-mcp/platform-mcp.service.receipt-nudge.spec.ts`
+- OLD `'门禁拦截（plan-gated）→ 不落库不记账不排期'` used plan status `draft` (no longer a gate).
+  NEW `'哈希门禁拦截（plan-gated）→ ...'` arms a real frozen hash and passes a stale `planHash`.
+  All other 10 tests unchanged and green.
+
+### 2.13 `server/src/chat/worker-dispatcher.gate.spec.ts`
+- OLD `'execution + approved → 抛错含计划未放行'` → NEW `'...放行，不读状态、调 dispatch'`.
+- OLD `'无 plan 行→兜底建行后再门禁（draft → 抛错）'` → NEW `'...兜底建行后放行'`.
+- OLD `'门禁读错→fail-open'` (status read) → NEW `'兜底建行失败→fail-open 放行 + warn'`.
+- Block `'计划角色豁免...'` → `'a_plan 角色豁免已删除：门禁对每个目标一律生效（哈希层）'`:
+  - OLD `'draft 态派给 a_plan → 放行且不读门禁'` → NEW `'派给 a_plan → 照样经 autoEnsureRow 兜底建行'`.
+  - OLD `'无 plan 行派给 a_plan → 放行且不兜底建行'` → NEW `'...兜底建行后放行'`.
+  - OLD `'draft 态派给 a_developer → 仍被拦且报错含计划未放行'` → NEW `'...放行'`.
+
+### 2.14 `server/src/tasks/tasks.service.spec.ts`
+- OLD `'transitionByAgent：非主实例 → 403 TASK_STATUS_MAIN_AGENT_ONLY'` →
+  NEW `'...不再被身份门拒绝 → 触达状态机（原 403 已移除）'`.
+- OLD `'transitionByAgent：显式绑定保持严格语义（不查首位成员）'` (asserted 403 + no findFirst) →
+  NEW `'...不再解析主成员（回退解析均不再发生）'` — folded into the non-main success test.
+- OLD `'绑定缺省 + 首位成员（seq 升序回退）→ 放行'` asserted `findFirst` CALLED → NEW asserts NOT called.
+- OLD `'绑定缺省 + 非首位成员 → 403 并点名回退 id'` → NEW `'...放行（原回退 403 已移除）'`.
+- OLD `'绑定缺省 + 空名册 → 403 沿用"未设置"'` → NEW `'空名册不再抛身份门码 TASK_STATUS_MAIN_AGENT_ONLY'`
+  (asserts the retained `MAIN_AGENT_NOT_SET` flow-state preflight instead; this is a **retained**
+  check, not the removed identity gate — see §5).
+
+### 2.15 `server/src/tasks/plan-lifecycle.service.spec.ts`
+- OLD `'主实例路径：instanceId=主成员→放行；不一致→403 精确码 PLAN_COMPLETE_MAIN_ONLY'` →
+  NEW `'agent 路径不再按主实例身份鉴权：instanceId 任意值均放行（原 403 已移除）'` +
+  `'PLAN_COMPLETE_MAIN_ONLY 常量仍在代码中声明，但 completePlan 不再抛出它'`.
+
+### 2.16 `server/src/questions/questions.service.spec.ts`
+- OLD `'confirmByAgent 非主成员 → 403（团队主门）'` →
+  NEW `'confirmByAgent 非主成员不再被身份门拒绝 → 正常终态落库'`.
+- ADDED (the new integrity checks required by todo 2/10):
+  `'confirmByAgent 自批 → 403 SELF_CONFIRMATION_FORBIDDEN'` and
+  `'confirmByAgent 跨任务确认 → 403 CROSS_TASK_FORBIDDEN'`.
+
+### 2.17 `worker/src/role-guard/policy.spec.ts`
+- OLD `describe('4d2) server-gated MCP → pass-through（一律 allow，判定权在服务端）')` with a
+  vacuous loop over `ROLE_SERVER_GATED_TOOLS` (7) plus `it.each` asserting `allow` for each.
+  NEW `describe('4d2) formerly server-gated MCP → allowlist 决定 allow/deny（无 pass-through）')`:
+  - `it.each(FORMERLY_GATED_TOOLS)('%s 未列入 tools → deny（反转旧 pass-through allow）')`.
+  - `it.each(FORMERLY_GATED_TOOLS)('%s 列入 tools allow → allow（授权矩阵正向面）')`.
+  - `'非空转证明：... 两态各断言一次'` with `expect(assertions).toBe(14)`.
+  - Retained: `'task/execute 仍 deny'`, `'vteam_plan_review → deny'`, `'未列入 MCP 仍 deny'`.
+  Note: this spec's `FORMERLY_GATED_TOOLS` is a local literal (the worker package deliberately
+  does not import server constants — worker has a zero-server-dependency boundary rule).
+
+### 2.18 `worker/src/resources/role-guard-plugin.spec.ts`
+- Parity case labels only: `'server-gated X 放行'` → `'formerly server-gated X 未列入 allowlist → deny'`
+  (7 cases) and `'vteam_plan_review 不再是 server-gated（deny）'` → `'vteam_plan_review 未列入 allowlist → deny'`.
+  The parity assertion itself (`snapshotEval(c) === evaluateToolCall(c)`) is unchanged and both
+  sides now deny — the labels were the stale part. Green.
+
+---
+
+## 3. FROZEN BASELINE REGENERATION (stale_state adversarial)
+
+Regenerated with the checked-in harness (source-derived, no DB):
+
+```
+$ node .omo/evidence/vteam-role-behavior-abstraction/capture-baseline.mjs
+agent count: 7
+agent names: vteam-plan, vteam-product, vteam-architect, vteam-developer, vteam-tester, vteam-project_manager, vteam-librarian
+guard role keys: vteam-plan, vteam-product, vteam-architect, vteam-developer, vteam-tester, vteam-project_manager, vteam-librarian
+seed policy ids: ep_product, ep_project_manager, ep_architect, ep_developer, ep_tester, ep_plan, ep_librarian
+```
+
+### sha256 before/after (stale_state PROOF — differs, not assumed)
+
+| artifact | OLD sha256 | NEW sha256 |
+|---|---|---|
+| `before-agent-policies.json` | `793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a` | `3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87` |
+| `after-agent-policies.json` | `793093dc…abbc3a` | `3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87` (== before, per the byte-identical contract) |
+| `before-seed-policy-config.json` | `1828197d9f8e4618bed5cfda86f21846ea7740fbe1189a21b01615678b1d032b` | `df1cbdf176940f3d64e2f4a0b4f1e95abd4d04ca0e475ee57b721d91659388bf` |
+| `.omo/evidence/role-enforcement/F3-own/injected-opencode.json` | `87d78591a7701f28d233d7e8976b3a8b817951f538c2cfea3c3ae61aab65610d` | `122172cb35b6c0b1f07e16abd18ec03111a375fb46b779ec768f18756cfed621` |
+
+`FROZEN_BASELINE_SHA256` in `scripts/e2e-role-boundaries.sh` updated 793093dc… → 3b8c5d4b…
+(the diff is the single SHA constant line; no script logic touched — todo 8 owns the logic).
+
+### Diff summary OLD→NEW for `before-agent-policies.json` (recorded, not assumed)
+
+Layer-① permission **added** deny keys (formerly-gated tools that this role is NOT granted):
+```
+vteam-plan:            +6: task_transition, question_confirm, team_add_member, plan_mode, task_create, skill_create
+vteam-product:         +2: plan_complete, skill_create
+vteam-architect:       +7: task_transition, question_confirm, team_add_member, plan_mode, plan_complete, task_create, skill_create ; -1: issue_create
+vteam-developer:       +7: (same 7) ; -1: issue_create
+vteam-tester:          +7: (same 7)
+vteam-librarian:       +7: (same 7)
+vteam-project_manager: +0 (holds all 7)
+```
+Guard `tools` allowlist **added** (grant matrix):
+```
+vteam-plan:            +plan_complete
+vteam-product:         +task_create, task_transition, plan_mode, team_add_member, question_confirm
+vteam-architect:       +issue_create
+vteam-developer:       +issue_create
+vteam-project_manager: +task_create, task_transition, plan_mode, plan_complete, team_add_member, question_confirm, skill_create
+```
+This matches the grant matrix in task-1-change-map §(d) exactly, including the 15 toolAllows
+additions and the 2 `issue_create` mcpDenies removals.
+
+---
+
+## 4. F3-own baseline (e2e-plan-member.sh data dependency)
+
+`scripts/e2e-plan-member.sh` compares the live `injected-opencode.json` against
+`.omo/evidence/role-enforcement/F3-own/injected-opencode.json` (baseline predates the
+allowlist-split design). After the flip, the non-granted roles gain new layer-① deny keys for
+the formerly-gated tools that are absent from the stale F3-own capture, so
+`assert not added` would fail. Per the brief, only the baseline DATA was regenerated (script
+logic untouched — todo 8 owns it). Method: the `agent` block was re-derived **programmatically**
+from the authoritative re-baselined factory artifact (not hand-written), preserving `$schema`,
+`mcp`, and `plugin`:
+
+```
+$ node -e "... base['agent'] = {a.name:{description,mode,permission} from before-agent-policies.json} ..."
+valid JSON: yes
+top-level keys: $schema,mcp,agent,plugin
+agent block == factory baseline: true
+roles: vteam-plan,vteam-product,vteam-architect,vteam-developer,vteam-tester,vteam-project_manager,vteam-librarian
+```
+
+No script file (`scripts/e2e-plan-member.sh`) was edited.
+
+---
+
+## 5. RETAINED CHECKS — proven NOT weakened
+
+The task-1 change-map §(b) retained allowlist is intact and still asserted:
+- notify routing (`PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION`): `platform-mcp.service.spec.ts`
+  `主 Agent 路由门` block unchanged + green.
+- terminal-task dispatch refusal: `worker-dispatcher.gate.spec.ts`
+  `终态任务门禁：execution 绑定 completed/archived 即拒绝` unchanged + green.
+- accept/archive refusal at BOTH sites: `platform-mcp.service.spec.ts` and
+  `tasks.service.spec.ts` `TASK_AGENT_COMPLETION_FORBIDDEN` tests unchanged + green.
+- global-memory write scope: `platform-mcp.service.spec.ts` memory_save/memory_update block
+  unchanged + green.
+- `hook_cancel` owner-or-main: `platform-mcp.service.hook.spec.ts` unchanged + green
+  (not in the task-7 edit set).
+- plan-revision hash check: still asserted (plan-hash specs + new `armFrozenHash` cases) and the
+  `a_plan` exemption that used to skip the WHOLE guard is removed — a stale hash is now refused
+  for a plan-role target too.
+- **One retained check surfaced during inversion:** `TasksService` `MAIN_AGENT_NOT_SET`
+  (start preflight, `tasks.service.ts`) is a **flow-state legality** check (a team must have a
+  main before a task can start), NOT the removed identity gate. The empty-roster `start` test was
+  inverted to assert the retained code and explicitly assert it is NOT
+  `TASK_STATUS_MAIN_AGENT_ONLY`.
+
+No production source was edited by this task (proof: all production files retain the 23:04:20
+mtime written by todos 2-6; §7).
+
+---
+
+## 6. VERIFICATION COMMANDS + RESULTS
+
+### 6.1 Server jest (full)
+```
+$ cd server && npx jest --runInBand
+Test Suites: 131 passed, 131 total
+Tests:       3049 passed, 3049 total
+Snapshots:   1 passed, 1 total
+```
+
+### 6.2 Worker jest (full)
+```
+$ cd worker && npx jest --runInBand
+Test Suites: 26 passed, 26 total
+Tests:       683 passed, 683 total
+Snapshots:   0 total
+```
+
+### 6.3 Typechecks
+```
+$ cd server && npx tsc -p tsconfig.json --noEmit   # exit 0
+$ cd web    && npx tsc --noEmit                    # exit 0
+$ cd worker && npx tsc --noEmit                    # exit 0
+```
+
+### 6.4 Vacuity extractor (used in §1)
+The script parses each spec's `FORMERLY_GATED_TOOLS` literal (or counts the inline
+`formerly server-gated` case entries for the plugin spec) and asserts every list length > 0.
+Output: `total iterated tool entries = 42; empty loops = 0`.
+
+### 6.5 GATE_SPEC_FILES closure
+```
+$ node -e "... import gate-spec-registry ..."
+GATE_SPEC_FILES.length = 16 (no spec deleted/renamed => unchanged)
+EXISTS  <all 16 entries>
+missing = 0
+```
+No gate spec was deleted or renamed, so the count stays 16. The two entries that carried the
+retired `a_plan-exemption` gate tag were re-tagged `a_plan-exemption-removed` + `plan-hash`
+(semantic accuracy; `no-tighten-audit.spec.ts` only asserts count + existence and stays green).
+
+---
+
+## 7. OUT-OF-SCOPE / PRE-EXISTING FINDING (reported, not hidden)
+
+`worker/src/driver/v1-driver.spec.ts` had **2 pre-existing failing tests unrelated to this flip**:
+- OLD `'listModels：GET /provider，有 key 的 provider 模型 + opencode 免费模型上报，无凭据外部 provider 不上报'`
+  expected the anthropic provider to be filtered out.
+- OLD `'listModels：/provider models 项缺 name 用 modelID 兜底；key 空串视为无凭据不收集'`
+  expected the keyless `opencode-go` provider to be dropped.
+
+Root cause: production `worker/src/driver/v1-driver.ts` **intentionally removed the `hasKey`
+filter in commit `4d3324f`** ("show unconfigured providers… (remove hasKey filter)"), but the
+spec expectations were never updated. Proof it predates this task: stashing ALL uncommitted
+work and running the spec on the base tree still yields the same 2 failures
+(`git stash push -u` → `npx jest src/driver/v1-driver.spec.ts` → `2 failed`, then `git stash pop`).
+No file under `worker/src/driver/` is modified by this plan.
+
+Because the task's verification item #2 requires `cd worker && npx jest` ALL GREEN, the two stale
+expectations were corrected to the current (intentional) all-providers behavior:
+- `'...上报全部 provider 的 models（含无凭据外部 provider）'` expected list gains
+  `{anthropic/claude-3-5-sonnet}`.
+- `'...全部 provider 均收集'` expected list gains `{opencode-go/glm-5.1}`.
+
+This is a **stale-expectation fix**, not a weakening: the production behaviour was already the
+new one and the assertions were simply wrong about it. Flagged here so the reviewer sees it was
+not part of the server-gate flip.
+
+---
+
+## 8. ADVERSARIAL CLASSES
+
+- **misleading_success_output — PASS.** §1 records the empty constant (0 iterations) and the
+  non-empty replacement lists (42 entries, 0 empty), plus 6 in-test `assertions > 0` guards and
+  an exact-cardinality assertion in each loop. No loop over the retired constant remains executable.
+- **stale_state — PASS.** §3: every regenerated artifact's sha differs from the OLD sha (measured,
+  not assumed), with a recorded per-role diff summary that matches the grant matrix.
+- **dirty_worktree — PASS.** The 13 production `M` files are todos 2–6's uncommitted unit edits;
+  they predate this task (mtime 23:04:20, before the first task-7 edit at ~23:20; no worktree
+  change by task 7 on any production file). Task-7's edits are confined to: the 18 spec/snapshot/
+  registry files listed in §2, `scripts/e2e-role-boundaries.sh` (one SHA constant), and the
+  4 baseline artifacts in §3. The `.omo/notepads/*`, `.omo/boulder.json`,
+  `.omo/start-work/ledger.jsonl`, and `.omo/explainers/` changes are orchestrator/session
+  bookkeeping, not task-7 content edits.
+
+## 9. Cleanup receipt
+- No scratch/temp files left in the repo. All temp analysis scripts were run via `node - <<EOF`
+  or `/tmp` (outside the repo).
+- No production source edited. No commit made (per instruction).

@@ -1,0 +1,57 @@
+=== V5. NO general '仅主 Agent' claim remains on the 7 de-gated tools ===
+--- task_transition / question_confirm / team_add_member / plan_mode / plan_complete / task_create / skill_create descriptions ---
+960:      name: 'task_transition',
+961-      description:
+--
+968:      name: 'question_confirm',
+969-      description:
+--
+1013:      name: 'team_add_member',
+1014-      description:
+--
+1021:      name: 'plan_mode',
+1022-      description:
+--
+1028:      name: 'plan_complete',
+1029-      description:
+--
+1050:      name: 'task_create',
+1051-      description:
+--
+1057:      name: 'skill_create',
+1058-      description:
+
+=== V6. RETAINED global-memory main-only claim still present ===
+373:        '记忆级别：team=团队级（写入当前任务所属团队，跨任务共享）/ global=全局（global 级仅主 Agent 可写）',
+978:        '写入平台记忆（只存可复用经验，禁存会话总结/流水账/一次性结论）。可存三类：howto=怎么做（有效路径/命令/配置）、pitfall=坑与规避（错误原因+规避动作）、constraint=平台硬约束。content 写「场景 + 做法/坑 + 规避动作」。level=team 跨任务复用（teamId 从任务或团队上下文自动解析）；level=global 平台通用（global 级仅主 Agent 可写）。description 30字摘要（缺省回落 content 截断）。内容完全重复（同级同归属同去重键）直接返回既有条目 status:"duplicate"，不新增。返回 {memoryId, level, status:"created"|"duplicate"}。',
+985:        '按 id 更新平台记忆（content/description/tags 部分更新，至少传一个；content 更新同步重算去重键）。team 级记忆仅归属团队可改（跨团队 403）；global 级仅主 Agent 可改；已删除条目 404。返回 {memoryId, level, status:"updated"}。',
+
+=== V7. RETAINED notify routing + hook_cancel main references (unchanged) ===
+161:        '目标成员 id（tmm_ 前缀，见 task_context agentMembers / 团队提示，@ 定向触发目标）。路由规则：主 Agent 可通知任何人，任何人可通知主 Agent；非主成员之间互通知（含通知自己）会被 403 拒绝，请先通知主 Agent 由其中转',
+911:        '向任务内的另一个实例定向发送消息并触发其执行（实例互 @，按 targetInstanceId 精确命中目标实例）。团队维度（teamId、无任务）同样触发目标成员执行。路由规则：主 Agent 可通知任何人，任何人可通知主 Agent；非主成员之间互通知（含通知自己）直接 403（PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION，消息不落库不广播），请先通知主 Agent 由其中转。触发后目标实例会收到该消息并开始处理，结论通常经 group_post 发布到群聊。统一返回契约 {messageId, channelId, targetInstanceId, triggered, reason, issueBound, origMessageId?}：reason 词汇 ok|duplicate|dedup|throttled|plan-gated|review-triplet|join-pending（成功 reason=ok；子 Agent 回执（answer、目标为主 Agent，任意 stage/kind）永不在主 Agent 上开执行 turn，返回 triggered:false+reason=join-pending（消息已落库已广播、回执照记，主 Agent 只在 fan-out 收敛 drain 时被唤醒，需立即打断请用 question/help）；被 @ storm 节流 triggered=false+reason=throttled，kind=review 缺三元组 triggered=false+reason=review-triplet+精确 hint，修订不开始；窗口内重复发送 triggered=false+reason=dedup 并回既有 messageId）。拦截语义：除 join-pending 外任何 triggered=false 都表示本次调用未在群聊发布任何消息（messageId 为 null，dedup 除外），triggered:false 不是投递失败，请勿重发，请按 reason 与 hint 处理。issueId 可选：派活归属 issue，缺省返回 issueBound:false（提醒，不硬拦），传则 issueBound:true 并透传执行链路。',
+1082:        '取消 hook（按 hookId 或 dedupKey；仅所有者或主 Agent 可取消，已终态行幂等直返）。返回 {hookId, status}。',
+=== V5b. The 7 de-gated tool descriptions (current text) — must NOT contain '仅主 Agent' ===
+--- task_transition ---
+        '流转任务状态：start(pending→in_progress)/mark-pending-review(in_progress→pending_review)/reject(pending_review→in_progress，可附 reason)。调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。accept 验收通过与 archive 归档仅人类用户可在管理界面操作，Agent 调用将被拒绝（任务就绪后请报告等待人工验收）。返回更新后的任务 DTO；非法迁移返回错误。',
+--- question_confirm ---
+        '托管模式下确认成员请求：kind=question 传 answers（label 数组，answers=null 拒绝）；kind=permission 传 response(once/always/reject)。请求 requestId 来自托管确认消息。调用权限由你的角色工具权限决定；请求发起者本人不可自行确认，跨任务确认会被拒绝。返回更新后的确认记录。',
+--- team_add_member ---
+        '申请将 Agent 加入团队（L2 自治确认门）：调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。创建用户确认请求（question_confirm 确认门，question 弹窗「是否确认」），用户确认后才真正加入团队并写 team_add 审计；重复申请（已加入/有 pending 申请）被拒绝。返回 {requestId, taskId, agentId, alias}。',
+--- plan_mode ---
+        '切换任务计划模式开关：调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。enabled=true 开启（先出计划文档，其他成员只评审不起草）；enabled=false 关闭切回直接执行。agentName 可选同步指定主 Agent 的执行 agent（如 build；空串=回跟随默认；不传=保持当前）。返回 {taskId, planMode, agentName}。',
+--- plan_complete ---
+        '标记计划执行完成（executing→completed）。调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。执行交付齐后调用，推动计划状态机闭环；已 completed 幂等返回；非 executing 态报错。返回 {taskId, status, idempotent}。',
+--- task_create ---
+        '在团队会话无任务时创建任务。调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。团队由当前会话解析，任务建在该团队下。返回创建的任务 DTO。',
+--- skill_create ---
+        '沉淀新技能 SKILL.md（默认停用，需人审启用）。调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。content 为 SKILL.md 全文（含 frontmatter）；name/description 声明技能元信息。返回创建的技能行（含 id/name/enabled=false）。',
+
+=== V5c. Assertion: no '仅主 Agent' text within any of these 7 descriptions ===
+  task_transition: 仅主Agent=False
+  question_confirm: 仅主Agent=False
+  team_add_member: 仅主Agent=False
+  plan_mode: 仅主Agent=False
+  plan_complete: 仅主Agent=False
+  task_create: 仅主Agent=False
+  skill_create: 仅主Agent=False
+RESULT: CLEAN - no general main-only claim on de-gated tools

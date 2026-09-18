@@ -86,14 +86,11 @@ const MESSAGE_ID_PREFIX = 'm';
 /** 首次 bind 的 instanceRef 占位（opencode 会话尚未创建；第二次 bind 写入真实 sessionId）。 */
 export const PENDING_INSTANCE_REF = 'pending';
 
-/** 计划员模板 Agent id（seed.ts 注册，role=plan）：派给该角色即计划工作，永非执行，计划门禁豁免。 */
-const PLAN_AGENT_ID = 'a_plan';
-
 /**
  * 派发执行分类（plan-review-execution-gates Todo 4，门禁分类依据）。
  *
- * - execution：计划执行派发（默认）——任务维度下要求计划状态为 executing，
- *   否则抛错（含“计划未放行”）；review/nudge/wake 豁免。
+ * - execution：计划执行派发（默认）——任务维度下比对冻结计划哈希，过期即抛错；
+ *   review/nudge/wake 豁免。
  * - review：评审派发；nudge：催办；wake：内部唤醒/轮次通知——三者永不经过
  *   计划门禁，且永不写入账本行。
  */
@@ -1384,10 +1381,10 @@ export class WorkerDispatcher
    * 统一返回契约（plan-review todo 3）：本方法内部返回保持 void（不组装
    * triggered——triggered 只在 notifyAgent 层组装）；可选 issueId 由 notifyAgent
    * 透传（派活归属 issue，缺省不阻断；todo 4 消费 issue 锁/去重）。
-   * 执行门禁（plan-review todo 4）：kind 缺省 execution；kind=execution 且任务
-   * 维度（taskId 非空）时要求计划状态为 executing——无行则经计划生命周期服务
-   * 兜底建行后再门禁，仍非 executing 即抛错（含“计划未放行”）；review/nudge/wake
-   * 及计划员目标（agentId=a_plan，计划工作永非执行）豁免；门禁读错/未装配即 fail-open 放行 + warn（永不转 fail-closed）。
+   * 执行门禁（plan-review todo 4；server-gate-removal todo 3）：kind 缺省 execution。
+   * 计划状态不再作为派发前提（plan.status 门已移除）。保留：调用方携带 planHash 且冻结
+   * 哈希齐备时比对，不一致即抛错（提示期望/实际短哈希）。review/nudge/wake 豁免。
+   * 门禁读错/未装配即 fail-open 放行 + warn（永不转 fail-closed）。
    * 计划表读经 PlanLifecycleService（ModuleRef 懒解析，避免 ChatModule 与
    * TasksModule 静态环；本文件永不直读计划表）。
    */
@@ -1449,12 +1446,12 @@ export class WorkerDispatcher
           `任务 ${taskIdForDispatch} 已终态终止 (terminal, status=${taskStatusForDispatch})：execution 派发已拒绝，请主 Agent 调用 task_create 创建新任务后再派发`,
         );
       }
-      if (!(await this.isPlanRoleTarget(teamId, input.targetInstanceId))) {
-        await this.assertPlanExecutionAllowed(
-          taskIdForDispatch,
-          input.planHash ?? null,
-        );
-      }
+      // 计划门禁对每个目标一律生效（a_plan 角色豁免已删除）：任一目标携带过期
+      // planHash 都必须被拒，否则过期计划可经计划员目标绕过哈希门禁。
+      await this.assertPlanExecutionAllowed(
+        taskIdForDispatch,
+        input.planHash ?? null,
+      );
     }
     const ensured = await this.sessionLifecycle.ensureTeamSession(
       teamId,
@@ -1483,32 +1480,12 @@ export class WorkerDispatcher
     return ensured.id;
   }
 
-  /** 目标实例是否为计划员（agentId=PLAN_AGENT_ID，角色身份判定）：是则跳过计划门禁；查错/查无即不豁免。 */
-  private async isPlanRoleTarget(
-    teamId: string | null,
-    targetInstanceId: string,
-  ): Promise<boolean> {
-    try {
-      const repo = (this.prisma as any)?.teamMember;
-      if (!repo?.findFirst) {
-        return false;
-      }
-      const row = await repo.findFirst({
-        where: { id: targetInstanceId, ...(teamId ? { teamId } : {}) },
-        select: { agentId: true },
-      });
-      return (row as { agentId?: string } | null)?.agentId === PLAN_AGENT_ID;
-    } catch {
-      return false;
-    }
-  }
-
   /**
    * 计划执行门禁（todo4 第二道防线；第一道在 notifyAgent 层组装 plan-gated 返回）。
-   * 非 executing 即抛错（含“计划未放行”）；读错/建行失败/未装配即 fail-open + warn。
-   * 计划员目标（agentId=a_plan）由调用方预先豁免，永不进入本方法。
-   * todo 3 执行认哈希：调用方携带 planHash 且冻结哈希齐备时再比对，不一致即抛错
-   * （报错同时命名期望/实际短哈希）；任一侧缺失 → 哈希门禁未武装（状态语义不变）。
+   * 计划状态不再作为派发条件（todo 3）：状态门禁已移除，仅保留计划行兜底创建与
+   * 冻结哈希比对。调用方携带 planHash 且冻结哈希齐备时比对，不一致即抛错
+   * （报错同时命名期望/实际短哈希）；任一侧缺失 → 哈希门禁未武装（fail-open）。
+   * 读错/建行失败/未装配即 fail-open + warn。门禁对每个目标一律生效（无角色豁免）。
    */
   private async assertPlanExecutionAllowed(
     taskId: string,
@@ -1524,32 +1501,21 @@ export class WorkerDispatcher
     if (!planLifecycle) {
       return;
     }
-    let status: string | null = null;
     try {
-      status = await planLifecycle.getStatus(taskId);
-      if (status === null) {
-        const ensured = await planLifecycle.autoEnsureRow(taskId);
-        status = ensured?.status ?? null;
-      }
+      await planLifecycle.autoEnsureRow(taskId);
     } catch (err) {
       this.logger.warn(
         `门禁读失败 task=${taskId}，fail-open 放行：${this.describeError(err)}`,
       );
       return;
     }
-    if (status === null || status === 'executing') {
-      const actual = normalizePlanHash(callerHash);
-      if (actual) {
-        const expected = await this.resolveFrozenPlanHash(taskId);
-        if (isStalePlanHash(expected, actual)) {
-          throw new Error(buildStalePlanHashHint(expected as string, actual));
-        }
+    const actual = normalizePlanHash(callerHash);
+    if (actual) {
+      const expected = await this.resolveFrozenPlanHash(taskId);
+      if (isStalePlanHash(expected, actual)) {
+        throw new Error(buildStalePlanHashHint(expected as string, actual));
       }
-      return;
     }
-    throw new Error(
-      `计划未放行：任务 ${taskId} 的计划状态为 ${status}（需 executing，确认开始执行后可派发；review/nudge/wake 类触发不受此限）`,
-    );
   }
 
   /**

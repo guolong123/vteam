@@ -3,7 +3,6 @@ import {
   buildReadPermission,
   ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
-  ROLE_SERVER_GATED_TOOLS,
   VTEAM_BROWSER_TOOL_NAMES,
   VTEAM_GIT_TOOL_NAMES,
   VTEAM_MCP_TOOL_NAMES,
@@ -22,6 +21,20 @@ import { ExecutionPolicyService } from './execution-policy.service';
  *   guard 一致性 + permission 全 `task:'deny'` 且无 `write`。
  */
 describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
+  /**
+   * 曾由服务端按主实例身份 gate 的工具（授权矩阵 plan §(d)）。概念已退休：
+   * `ROLE_SERVER_GATED_TOOLS` 恒为空，据此循环会空转假绿，故显式列举。
+   */
+  const FORMERLY_GATED_TOOLS = [
+    'vteam_task_transition',
+    'vteam_question_confirm',
+    'vteam_task_create',
+    'vteam_plan_mode',
+    'vteam_plan_complete',
+    'vteam_team_add_member',
+    'vteam_skill_create',
+  ] as const;
+
   const AGENT_NAMES = Object.keys(ROLE_BOUNDARIES).sort() as VteamAgentName[];
   const MCP_SET = new Set<string>(VTEAM_MCP_TOOL_NAMES);
   const GIT_SET = new Set<string>(VTEAM_GIT_TOOL_NAMES);
@@ -73,21 +86,17 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
     );
   });
 
-  it('mcpDenies ∈ MCP 注册表、非 server-gated，且与该角色 toolAllows 互斥', () => {
-    const gated = new Set<string>(ROLE_SERVER_GATED_TOOLS);
+  it('mcpDenies ∈ MCP 注册表，且与该角色 toolAllows 互斥（补集 = 全集减 allowlist，无例外）', () => {
     for (const name of AGENT_NAMES) {
       const { toolAllows, mcpDenies } = ROLE_BOUNDARIES[name];
       const allowed = new Set(Object.keys(toolAllows));
       for (const denied of mcpDenies) {
         expect(MCP_SET.has(denied)).toBe(true);
         expect(allowed.has(denied)).toBe(false);
-        expect(gated.has(denied)).toBe(false);
       }
-      // mcpDenies 即 MCP 全集减 allowlist 再减 server-gated（与 defineBoundary 补集语义一致）。
+      // mcpDenies 即 MCP 全集减 allowlist（server-gated 例外已退休）。
       expect([...mcpDenies].sort()).toEqual(
-        VTEAM_MCP_TOOL_NAMES.filter(
-          (mcp) => !allowed.has(mcp) && !gated.has(mcp),
-        ).sort(),
+        VTEAM_MCP_TOOL_NAMES.filter((mcp) => !allowed.has(mcp)).sort(),
       );
     }
   });
@@ -116,7 +125,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
     }
   });
 
-  it('内置层① permission 对 server-gated 工具无 deny 键（仅 platform-mcp 服务端判定）', async () => {
+  it('内置层① permission：未授权 formerly-gated 工具显式 deny，已授权者无 deny 键', async () => {
     const service = new ExecutionPolicyService(
       {
         agent: { findMany: jest.fn().mockResolvedValue([]) },
@@ -125,14 +134,33 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       {} as never,
     );
     const policies = await service.buildAgentPolicies();
+    let assertions = 0;
     for (const agent of policies.agents) {
-      for (const gated of ROLE_SERVER_GATED_TOOLS) {
-        expect(agent.permission).not.toHaveProperty(gated);
-        expect(policies.guard.roles[agent.name].permission).not.toHaveProperty(
-          gated,
+      const boundary = ROLE_BOUNDARIES[agent.name];
+      for (const tool of FORMERLY_GATED_TOOLS) {
+        const granted = Object.prototype.hasOwnProperty.call(
+          boundary.toolAllows,
+          tool,
         );
+        if (granted) {
+          expect(agent.permission).not.toHaveProperty(tool);
+          expect(
+            policies.guard.roles[agent.name].permission,
+          ).not.toHaveProperty(tool);
+        } else {
+          expect(agent.permission).toHaveProperty(tool, 'deny');
+          expect(policies.guard.roles[agent.name].permission).toHaveProperty(
+            tool,
+            'deny',
+          );
+        }
+        assertions += 2;
       }
     }
+    expect(assertions).toBe(
+      policies.agents.length * FORMERLY_GATED_TOOLS.length * 2,
+    );
+    expect(assertions).toBeGreaterThan(0);
   });
 
   it('层① permission 无第三方硬编码键（协议与机制，不针对具体工具适配）', async () => {

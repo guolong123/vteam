@@ -1,0 +1,15 @@
+=== misleading_success_output: before/after quoted ===
+-- task_transition BEFORE: 仅主 Agent（mainAgentInstanceId）可调用，其余成员调用将被拒绝 --
+-- task_transition AFTER:  调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定） --
+
+-- memory_save global claim BEFORE: level=global 平台通用（仅主 Agent 可写） --
+-- memory_save global claim AFTER:  level=global 平台通用（global 级仅主 Agent 可写） --  [RETAINED, scoped]
+
+=== Runtime proof of serverGated empty (stale_state) ===
+GET /api/v1/agent-policies -> agents[] has NO serverGated field; guard.roles[*].serverGated absent
+GET /api/v1/agents -> effectivePermission.serverGated == [] for all 8 agents
+
+=== Playwright (real stack) ===
+effective-mcp-tool rows=29, tool-effect-select=29, rowsWithoutSelect=0
+server-gated-badge=0, [data-server-gated=true]=0, '服务端判定（主实例）'=0
+screenshot: .omo/evidence/server-gate-removal-tool-authority/task-6-servergated.png

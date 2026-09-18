@@ -94,24 +94,7 @@ const EDIT_TOOLS: ReadonlySet<string> = new Set([
 /** 子代理/外部执行：永不列入 allowlist，一律 deny。 */
 const TASK_TOOLS: ReadonlySet<string> = new Set(['task', 'execute']);
 
-/**
- * 主实例专属（server-gated）MCP 工具：判定权在 platform-mcp 服务端
- * （task.mainAgentInstanceId / team.mainAgentMemberId），guard 一律放行、不参与。
- * 与 server `ROLE_SERVER_GATED_TOOLS`（agent.constants.ts）同值，两侧一致性由
- * parity spec + e2e 锁定。
- */
-const SERVER_GATED_TOOLS = new Set([
-  'vteam_task_transition',
-  'vteam_question_confirm',
-  'vteam_task_create',
-  'vteam_plan_mode',
-  'vteam_plan_complete',
-  'vteam_team_add_member',
-  'vteam_skill_create',
-]);
-
-/**
- * 内置通行集（不属上述类别的内置工具）：交层①，guard 不做 allowlist 拦截。
+/** 内置通行集（不属上述类别的内置工具）：交层①，guard 不做 allowlist 拦截。
  * 注意：`browser` 不在此列——它按角色 `tools` allowlist 判定。
  */
 const BUILTIN_PASSTHROUGH: ReadonlySet<string> = new Set(['question', 'plan_exit', 'skill']);
@@ -196,9 +179,6 @@ export function evaluateToolCall(params: EvaluateToolCallParams): GuardDecision 
   }
   if (TASK_TOOLS.has(tool)) {
     return denyWithCorrection(agent, tool, policy.correction);
-  }
-  if (SERVER_GATED_TOOLS.has(tool)) {
-    return { action: 'allow' };
   }
   if (BUILTIN_PASSTHROUGH.has(tool)) {
     return { action: 'allow' };
@@ -472,7 +452,6 @@ function isPlatformToolForHandoff(tool: string): boolean {
     READ_TOOLS.has(tool) ||
     EDIT_TOOLS.has(tool) ||
     TASK_TOOLS.has(tool) ||
-    SERVER_GATED_TOOLS.has(tool) ||
     BUILTIN_PASSTHROUGH.has(tool) ||
     tool === 'browser' ||
     tool === 'bash'

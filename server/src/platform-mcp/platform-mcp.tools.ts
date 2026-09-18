@@ -370,7 +370,7 @@ export const memorySaveSchema = z
     level: z
       .enum(['team', 'global'])
       .describe(
-        '记忆级别：team=团队级（写入当前任务所属团队，跨任务共享）/ global=全局（仅主 Agent 可写）',
+        '记忆级别：team=团队级（写入当前任务所属团队，跨任务共享）/ global=全局（global 级仅主 Agent 可写）',
       ),
     content: z.string().min(1).max(20000).describe('记忆内容（1~20000 字符）'),
     description: z
@@ -500,9 +500,9 @@ export const myProfileSchema = z.object({
 type MyProfileArgs = z.infer<typeof myProfileSchema>;
 
 /**
- * team_add_member：主 Agent 申请将 Agent 加入团队（L2 自治确认门，vteam-team-collaboration
- * Todo 8）。仅主 Agent 可调；创建平台 question 确认请求（question_confirm 确认门），用户
- * 确认后才会真正加入团队并写 team_add 审计。
+ * team_add_member：申请将 Agent 加入团队（L2 自治确认门，vteam-team-collaboration
+ * Todo 8）。调用权限由角色工具权限决定；创建平台 question 确认请求（question_confirm
+ * 确认门），用户确认后才会真正加入团队并写 team_add 审计。
  */
 export const teamAddMemberSchema = z.object({
   taskId: z.string().describe('任务 ID'),
@@ -517,8 +517,8 @@ export const teamAddMemberSchema = z.object({
 type TeamAddMemberArgs = z.infer<typeof teamAddMemberSchema>;
 
 /**
- * plan_mode：切换任务计划模式开关（仅主 Agent 可调）。
- * enabled=true → 主 Agent 先出计划文件（工作目录 `.opencode/plans/*.md`，计划 Tab 直接同步展示），
+ * plan_mode：切换任务计划模式开关。
+ * enabled=true → 先出计划文件（工作目录 `.opencode/plans/*.md`，计划 Tab 直接同步展示），
  * 其他成员只评审不起草；
  * enabled=false → 直接执行。agentName 可选：同步指定主 Agent 的执行 agent
  * （如切到 'build'；空串=回跟随默认；不传=保持当前选择）。
@@ -680,7 +680,7 @@ const wecomReplySchema = z
 type WecomReplyArgs = z.infer<typeof wecomReplySchema>;
 
 /**
- * team-free-chat todo-4：task_create（主 Agent 在团队会话无任务时建任务）。
+ * team-free-chat todo-4：task_create（团队会话无任务时建任务）。
  * 团队由服务端按会话上下文解析（不接收入参，归属即团队，无项目维度）。
  */
 const taskCreateSchema = z
@@ -690,7 +690,7 @@ const taskCreateSchema = z
     selfInstanceId: z
       .string()
       .describe(
-        '调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入；仅主 Agent 可调）',
+        '调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）',
       ),
     title: z.string().min(1).max(128).describe('任务标题（必填）'),
     description: z.string().optional().describe('任务描述（可选）'),
@@ -707,10 +707,9 @@ const taskCreateSchema = z
 type TaskCreateArgs = z.infer<typeof taskCreateSchema>;
 
 /**
- * skill_create（learning-mode P2）：主 Agent 沉淀新 SKILL.md（默认停用，
- * 人审后启用）。团队由双上下文解析（taskId 优先，无 taskId 时 teamId），
- * 主身份门在 service 内按 task.mainAgentInstanceId / team.mainAgentMemberId
- * 判定（对齐 task_create 的双维度主门语义）。
+ * skill_create（learning-mode P2）：沉淀新 SKILL.md（默认停用，人审后启用）。
+ * 团队由双上下文解析（taskId 优先，无 taskId 时 teamId）；调用权限由角色工具权限决定，
+ * 服务端不再按主实例身份判定。
  * content 为 SKILL.md 全文（含 frontmatter，service 先 parse 400 再调
  * SkillsService.create，file 适配由 service 合成）。
  */
@@ -721,7 +720,7 @@ const skillCreateSchema = z
     selfInstanceId: z
       .string()
       .describe(
-        '调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入；仅主 Agent 可调）',
+        '调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）',
       ),
     name: z.string().min(1).describe('技能名（小写字母数字，中划线分段）'),
     description: z.string().optional().describe('技能描述（可选）'),
@@ -960,7 +959,7 @@ export function buildPlatformMcpTools(
     {
       name: 'task_transition',
       description:
-        '流转任务状态：start(pending→in_progress)/mark-pending-review(in_progress→pending_review)/reject(pending_review→in_progress，可附 reason)。仅主 Agent（mainAgentInstanceId）可调用，其余成员调用将被拒绝。accept 验收通过与 archive 归档仅人类用户可在管理界面操作，Agent 调用将被拒绝（任务就绪后请报告等待人工验收）。返回更新后的任务 DTO；非法迁移返回错误。',
+        '流转任务状态：start(pending→in_progress)/mark-pending-review(in_progress→pending_review)/reject(pending_review→in_progress，可附 reason)。调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。accept 验收通过与 archive 归档仅人类用户可在管理界面操作，Agent 调用将被拒绝（任务就绪后请报告等待人工验收）。返回更新后的任务 DTO；非法迁移返回错误。',
       inputSchema: taskTransitionSchema,
       handler: (ctx, args) =>
         service.taskTransition(ctx, args as TaskTransitionArgs),
@@ -968,7 +967,7 @@ export function buildPlatformMcpTools(
     {
       name: 'question_confirm',
       description:
-        '托管模式下确认成员请求（仅主 Agent 可调用）：kind=question 传 answers（label 数组，answers=null 拒绝）；kind=permission 传 response(once/always/reject)。请求 requestId 来自托管确认消息。返回更新后的确认记录；非主实例调用将被拒绝。',
+        '托管模式下确认成员请求：kind=question 传 answers（label 数组，answers=null 拒绝）；kind=permission 传 response(once/always/reject)。请求 requestId 来自托管确认消息。调用权限由你的角色工具权限决定；请求发起者本人不可自行确认，跨任务确认会被拒绝。返回更新后的确认记录。',
       inputSchema: questionConfirmSchema,
       handler: (ctx, args) =>
         service.questionConfirm(ctx, args as QuestionConfirmArgs),
@@ -976,7 +975,7 @@ export function buildPlatformMcpTools(
     {
       name: 'memory_save',
       description:
-        '写入平台记忆（只存可复用经验，禁存会话总结/流水账/一次性结论）。可存三类：howto=怎么做（有效路径/命令/配置）、pitfall=坑与规避（错误原因+规避动作）、constraint=平台硬约束。content 写「场景 + 做法/坑 + 规避动作」。level=team 跨任务复用（teamId 从任务或团队上下文自动解析）；level=global 平台通用（仅主 Agent 可写）。description 30字摘要（缺省回落 content 截断）。内容完全重复（同级同归属同去重键）直接返回既有条目 status:"duplicate"，不新增。返回 {memoryId, level, status:"created"|"duplicate"}。',
+        '写入平台记忆（只存可复用经验，禁存会话总结/流水账/一次性结论）。可存三类：howto=怎么做（有效路径/命令/配置）、pitfall=坑与规避（错误原因+规避动作）、constraint=平台硬约束。content 写「场景 + 做法/坑 + 规避动作」。level=team 跨任务复用（teamId 从任务或团队上下文自动解析）；level=global 平台通用（global 级仅主 Agent 可写）。description 30字摘要（缺省回落 content 截断）。内容完全重复（同级同归属同去重键）直接返回既有条目 status:"duplicate"，不新增。返回 {memoryId, level, status:"created"|"duplicate"}。',
       inputSchema: memorySaveSchema,
       handler: (ctx, args) => service.memorySave(ctx, args as MemorySaveArgs),
     },
@@ -1013,7 +1012,7 @@ export function buildPlatformMcpTools(
     {
       name: 'team_add_member',
       description:
-        '申请将 Agent 加入团队（仅主 Agent 可调用，L2 自治确认门）：创建用户确认请求（question_confirm 确认门，question 弹窗「是否确认」），用户确认后才真正加入团队并写 team_add 审计；重复申请（已加入/有 pending 申请）被拒绝。返回 {requestId, taskId, agentId, alias}。',
+        '申请将 Agent 加入团队（L2 自治确认门）：调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。创建用户确认请求（question_confirm 确认门，question 弹窗「是否确认」），用户确认后才真正加入团队并写 team_add 审计；重复申请（已加入/有 pending 申请）被拒绝。返回 {requestId, taskId, agentId, alias}。',
       inputSchema: teamAddMemberSchema,
       handler: (ctx, args) =>
         service.teamAddMember(ctx, args as TeamAddMemberArgs),
@@ -1021,14 +1020,14 @@ export function buildPlatformMcpTools(
     {
       name: 'plan_mode',
       description:
-        '切换任务计划模式开关（仅主 Agent 可调用）：enabled=true 开启（主 Agent 先出计划文档，其他成员只评审不起草）；enabled=false 关闭切回直接执行。agentName 可选同步指定主 Agent 的执行 agent（如 build；空串=回跟随默认；不传=保持当前）。返回 {taskId, planMode, agentName}。',
+        '切换任务计划模式开关：调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。enabled=true 开启（先出计划文档，其他成员只评审不起草）；enabled=false 关闭切回直接执行。agentName 可选同步指定主 Agent 的执行 agent（如 build；空串=回跟随默认；不传=保持当前）。返回 {taskId, planMode, agentName}。',
       inputSchema: planModeSchema,
       handler: (ctx, args) => service.planMode(ctx, args as PlanModeArgs),
     },
     {
       name: 'plan_complete',
       description:
-        '标记计划执行完成（executing→completed，仅主 Agent 可调用）。执行交付齐后调用，推动计划状态机闭环；已 completed 幂等返回；非 executing 态报错。返回 {taskId, status, idempotent}。',
+        '标记计划执行完成（executing→completed）。调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。执行交付齐后调用，推动计划状态机闭环；已 completed 幂等返回；非 executing 态报错。返回 {taskId, status, idempotent}。',
       inputSchema: planCompleteSchema,
       handler: (ctx, args) =>
         service.planComplete(ctx, args as PlanCompleteArgs),
@@ -1050,14 +1049,14 @@ export function buildPlatformMcpTools(
     {
       name: 'task_create',
       description:
-        '在团队会话无任务时创建任务（仅主 Agent 可调）。团队由当前会话解析，任务建在该团队下。返回创建的任务 DTO。',
+        '在团队会话无任务时创建任务。调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。团队由当前会话解析，任务建在该团队下。返回创建的任务 DTO。',
       inputSchema: taskCreateSchema,
       handler: (ctx, args) => service.taskCreate(ctx, args as TaskCreateArgs),
     },
     {
       name: 'skill_create',
       description:
-        '沉淀新技能 SKILL.md（仅主 Agent 可调，默认停用，需人审启用）。content 为 SKILL.md 全文（含 frontmatter）；name/description 声明技能元信息。返回创建的技能行（含 id/name/enabled=false）。',
+        '沉淀新技能 SKILL.md（默认停用，需人审启用）。调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。content 为 SKILL.md 全文（含 frontmatter）；name/description 声明技能元信息。返回创建的技能行（含 id/name/enabled=false）。',
       inputSchema: skillCreateSchema,
       handler: (ctx, args) => service.skillCreate(ctx, args as SkillCreateArgs),
     },

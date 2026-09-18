@@ -67,25 +67,13 @@ const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_hook_cancel',
 ] as const;
 
-const ROLE_SERVER_GATED_TOOLS: readonly string[] = [
-  'vteam_task_transition',
-  'vteam_question_confirm',
-  'vteam_task_create',
-  'vteam_plan_mode',
-  'vteam_plan_complete',
-  'vteam_team_add_member',
-  'vteam_skill_create',
-] as const;
-
-const SERVER_GATED_SET: ReadonlySet<string> = new Set(ROLE_SERVER_GATED_TOOLS);
+const ROLE_SERVER_GATED_TOOLS: readonly string[] = [] as const;
 
 function defineBoundary(base: Omit<RoleBoundary, 'mcpDenies'>): RoleBoundary {
   const allowed = new Set(Object.keys(base.toolAllows));
   return {
     ...base,
-    mcpDenies: VTEAM_MCP_TOOL_NAMES.filter(
-      (name) => !allowed.has(name) && !SERVER_GATED_SET.has(name),
-    ),
+    mcpDenies: VTEAM_MCP_TOOL_NAMES.filter((name) => !allowed.has(name)),
   };
 }
 
@@ -139,6 +127,11 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_issue_get: 'allow',
       vteam_issue_update: 'allow',
       vteam_issue_transition: 'allow',
+      vteam_task_create: 'allow',
+      vteam_task_transition: 'allow',
+      vteam_plan_mode: 'allow',
+      vteam_team_add_member: 'allow',
+      vteam_question_confirm: 'allow',
       vteam_group_post: 'allow',
       vteam_notify_agent: 'allow',
       vteam_memory_save: 'allow',
@@ -181,6 +174,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_memory_update: 'allow',
       vteam_task_context: 'allow',
       vteam_chat_history: 'allow',
+      vteam_issue_create: 'allow',
       vteam_issue_list: 'allow',
       vteam_issue_get: 'allow',
       vteam_team_view: 'allow',
@@ -220,6 +214,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_memory_update: 'allow',
       vteam_task_context: 'allow',
       vteam_chat_history: 'allow',
+      vteam_issue_create: 'allow',
       vteam_issue_list: 'allow',
       vteam_issue_get: 'allow',
       vteam_issue_update: 'allow',
@@ -307,6 +302,13 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_issue_get: 'allow',
       vteam_issue_update: 'allow',
       vteam_issue_transition: 'allow',
+      vteam_task_create: 'allow',
+      vteam_task_transition: 'allow',
+      vteam_plan_mode: 'allow',
+      vteam_plan_complete: 'allow',
+      vteam_team_add_member: 'allow',
+      vteam_question_confirm: 'allow',
+      vteam_skill_create: 'allow',
       vteam_memory_save: 'allow',
       vteam_memory_search: 'allow',
       vteam_memory_update: 'allow',
@@ -346,6 +348,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_group_post: 'allow',
       vteam_notify_agent: 'allow',
       vteam_memory_search: 'allow',
+      vteam_plan_complete: 'allow',
       browser: 'allow',
     },
   }),

@@ -19,6 +19,10 @@ import { ExecutionPolicyService } from '../execution-policies/execution-policy.s
 import { SkillsService } from '../skills/skills.service';
 import { GitReposService } from '../git-repos/git-repos.service';
 import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
+import {
+  createLedger,
+  embedLedger,
+} from '../issues/review-round-ledger';
 
 /**
  * plan-review-execution-gates Todo 4：执行 kind 分类 + 计划门禁 + issue 锁。
@@ -42,7 +46,7 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
     task: { findUnique: jest.Mock };
     team: { findUnique: jest.Mock };
     teamMember: { findFirst: jest.Mock; findUnique: jest.Mock };
-    issue: { findUnique: jest.Mock };
+    issue: { findUnique: jest.Mock; findMany: jest.Mock };
     messageReceipt: { create: jest.Mock; findFirst: jest.Mock };
   };
   let idGen: { nextId: jest.Mock };
@@ -81,7 +85,7 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
       task: { findUnique: jest.fn() },
       team: { findUnique: jest.fn() },
       teamMember: { findFirst: jest.fn(), findUnique: jest.fn() },
-      issue: { findUnique: jest.fn() },
+      issue: { findUnique: jest.fn(), findMany: jest.fn() },
       messageReceipt: { create: jest.fn(), findFirst: jest.fn() },
     };
     idGen = { nextId: jest.fn() };
@@ -154,6 +158,7 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
     prisma.message.findMany.mockResolvedValue([]);
     // 缺省：无 issue 绑定、无回执行。
     prisma.issue.findUnique.mockResolvedValue(null);
+    prisma.issue.findMany.mockResolvedValue([]);
     prisma.messageReceipt.findFirst.mockResolvedValue(null);
   });
 
@@ -161,7 +166,24 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
     loggerWarnSpy.mockRestore();
   });
 
-  describe('计划门禁（kind=execution）', () => {
+  function armFrozenHash(hash: string): void {
+    prisma.issue.findMany = jest.fn().mockResolvedValue([
+      {
+        description: embedLedger(
+          '派发评审',
+          createLedger({
+            round: 1,
+            planVersion: { version: 'v0.1', lines: 10, hash },
+            expected: ['tmm_tester'],
+            status: 'complete',
+            timeoutAt: '2026-09-16T00:40:00Z',
+          }),
+        ),
+      },
+    ]);
+  }
+
+  describe('计划状态不再作为派发门禁（kind=execution）', () => {
     it.each([
       ['draft'],
       ['reviewing'],
@@ -169,54 +191,34 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
       ['rejected'],
       ['completed'],
     ])(
-      '执行派发在 %s 态被拦：triggered=false + reason=plan-gated + 计划未放行 hint，不触发 dispatch、不落库',
+      '执行派发在 %s 态一律放行：triggered=true + 不读计划状态、不落 plan-gated',
       async (status: string) => {
         planLifecycle.getStatus.mockResolvedValue(status);
 
         const result = await service.notifyAgent(ctx, baseArgs);
 
-        expect(planLifecycle.getStatus).toHaveBeenCalledWith(taskId);
-        expect(result.triggered).toBe(false);
-        expect(result.reason).toBe('plan-gated');
-        expect(result.hint).toMatch('计划未放行');
-        expect(result.hint).toContain('请勿重发');
-        expect(result.messageId).toBeNull();
-        expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
-        expect(prisma.message.create).not.toHaveBeenCalled();
-        expect(realtime.broadcast).not.toHaveBeenCalled();
-        expect(prisma.message.findMany).not.toHaveBeenCalled();
+        expect(result.triggered).toBe(true);
+        expect(result.reason).toBe('ok');
+        expect(planLifecycle.getStatus).not.toHaveBeenCalled();
+        expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: 'execution' }),
+        );
+        expect(prisma.message.create).toHaveBeenCalled();
       },
     );
 
-    it('executing 态放行：kind 透传给 dispatchAgentMention', async () => {
-      planLifecycle.getStatus.mockResolvedValue('executing');
-
+    it('执行派发仍兜底建 plan 行 + 透传 kind 给 dispatchAgentMention', async () => {
       const result = await service.notifyAgent(ctx, baseArgs);
 
       expect(result.triggered).toBe(true);
-      expect(result.reason).toBe('ok');
+      expect(planLifecycle.autoEnsureRow).toHaveBeenCalledWith(taskId);
       expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith(
         expect.objectContaining({ kind: 'execution' }),
       );
     });
 
-    it('无 plan 行→autoEnsureRow 建行后再门禁（新建 draft 行→仍被拦，不落库）', async () => {
-      planLifecycle.getStatus.mockResolvedValue(null);
-      planLifecycle.autoEnsureRow.mockResolvedValue({ status: 'draft' });
-
-      const result = await service.notifyAgent(ctx, baseArgs);
-
-      expect(planLifecycle.autoEnsureRow).toHaveBeenCalledWith(taskId);
-      expect(result.triggered).toBe(false);
-      expect(result.reason).toBe('plan-gated');
-      expect(result.messageId).toBeNull();
-      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
-      expect(prisma.message.create).not.toHaveBeenCalled();
-      expect(realtime.broadcast).not.toHaveBeenCalled();
-    });
-
-    it('DB 读错→fail-open 放行 + warn 日志（永不转 fail-closed）', async () => {
-      planLifecycle.getStatus.mockRejectedValue(new Error('db down'));
+    it('兜底建行失败→fail-open 放行 + warn 日志', async () => {
+      planLifecycle.autoEnsureRow.mockRejectedValue(new Error('db down'));
 
       const result = await service.notifyAgent(ctx, baseArgs);
 
@@ -226,25 +228,31 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
       expect(loggerWarnSpy).toHaveBeenCalled();
     });
 
-    it('兜底建行失败→fail-open 放行 + warn 日志', async () => {
-      planLifecycle.getStatus.mockResolvedValue(null);
-      planLifecycle.autoEnsureRow.mockRejectedValue(new Error('db down'));
+    it('携带过期 planHash → 哈希门禁拦截（triggered=false + reason=plan-gated，不落库）', async () => {
+      armFrozenHash('expected1');
+      const result = await service.notifyAgent(ctx, {
+        ...baseArgs,
+        planHash: 'stalexyz',
+      });
 
-      const result = await service.notifyAgent(ctx, baseArgs);
-
-      expect(result.triggered).toBe(true);
-      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalled();
-      expect(loggerWarnSpy).toHaveBeenCalled();
+      expect(result.triggered).toBe(false);
+      expect(result.reason).toBe('plan-gated');
+      expect(result.hint).toContain('#expected1');
+      expect(result.hint).toContain('#stalexyz');
+      expect(result.messageId).toBeNull();
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      expect(prisma.message.create).not.toHaveBeenCalled();
     });
 
-    it('force=true + forceReason→绕过门禁并写回执审计行', async () => {
-      planLifecycle.getStatus.mockResolvedValue('approved');
+    it('force=true + forceReason 可绕过过期哈希并写回执审计行', async () => {
+      armFrozenHash('expected1');
       prisma.messageReceipt.create.mockImplementation(
         ({ data }: { data: Record<string, unknown> }) => Promise.resolve(data),
       );
 
       const result = await service.notifyAgent(ctx, {
         ...baseArgs,
+        planHash: 'stalexyz',
         force: true,
         forceReason: '线上故障需立即执行',
       });
@@ -259,23 +267,6 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
           kind: 'dispatch',
         }),
       });
-    });
-
-    it('force=true 但缺 forceReason→仍被拦（空原因不算绕过，不落库）', async () => {
-      planLifecycle.getStatus.mockResolvedValue('approved');
-
-      const result = await service.notifyAgent(ctx, {
-        ...baseArgs,
-        force: true,
-      });
-
-      expect(result.triggered).toBe(false);
-      expect(result.reason).toBe('plan-gated');
-      expect(result.messageId).toBeNull();
-      expect(prisma.messageReceipt.create).not.toHaveBeenCalled();
-      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
-      expect(prisma.message.create).not.toHaveBeenCalled();
-      expect(realtime.broadcast).not.toHaveBeenCalled();
     });
   });
 
@@ -322,14 +313,13 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
     );
   });
 
-  describe('计划角色豁免：kind=execution 派给 a_plan 永不进计划门禁', () => {
-    it('draft 态派给 a_plan → 放行且不读门禁（计划工作永非执行）', async () => {
+  describe('a_plan 角色豁免已删除：hash 门禁对每个目标一律生效', () => {
+    it('draft 态派给 a_plan → 放行（状态门禁已移除）且仍经 autoEnsureRow 兜底建行', async () => {
       prisma.teamMember.findFirst.mockResolvedValueOnce({
         agentId: 'a_plan',
         alias: null,
         agent: { id: 'a_plan', name: '计划员' },
       });
-      planLifecycle.getStatus.mockResolvedValue('draft');
 
       const result = await service.notifyAgent(ctx, {
         ...baseArgs,
@@ -338,32 +328,36 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
 
       expect(result.triggered).toBe(true);
       expect(result.reason).toBe('ok');
-      expect(planLifecycle.getStatus).not.toHaveBeenCalled();
+      expect(planLifecycle.autoEnsureRow).toHaveBeenCalledWith(taskId);
       expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith(
         expect.objectContaining({ kind: 'execution' }),
       );
     });
 
-    it('无 plan 行派给 a_plan → 放行且不兜底建行', async () => {
+    it('派给 a_plan 且携带过期哈希 → 哈希门禁照常拦截（豁免删除的核心）', async () => {
       prisma.teamMember.findFirst.mockResolvedValueOnce({
         agentId: 'a_plan',
         alias: null,
         agent: { id: 'a_plan', name: '计划员' },
       });
-      planLifecycle.getStatus.mockResolvedValue(null);
+      armFrozenHash('expected1');
 
       const result = await service.notifyAgent(ctx, {
         ...baseArgs,
         targetInstanceId: 'tmm_plan',
+        planHash: 'stalexyz',
       });
 
-      expect(result.triggered).toBe(true);
-      expect(planLifecycle.getStatus).not.toHaveBeenCalled();
-      expect(planLifecycle.autoEnsureRow).not.toHaveBeenCalled();
-      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalled();
+      expect(result.triggered).toBe(false);
+      expect(result.reason).toBe('plan-gated');
+      expect(result.hint).toContain('#expected1');
+      expect(result.hint).toContain('#stalexyz');
+      expect(result.messageId).toBeNull();
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      expect(prisma.message.create).not.toHaveBeenCalled();
     });
 
-    it('draft 态派给 a_developer → 仍被拦且 hint 含计划未放行（不落库）', async () => {
+    it('draft 态派给 a_developer → 放行（原“计划未放行”拦截已移除）', async () => {
       prisma.teamMember.findFirst.mockResolvedValueOnce({
         agentId: 'a_developer',
         alias: null,
@@ -376,12 +370,9 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
         targetInstanceId: 'tmm_dev',
       });
 
-      expect(result.triggered).toBe(false);
-      expect(result.reason).toBe('plan-gated');
-      expect(result.hint).toMatch('计划未放行');
-      expect(result.messageId).toBeNull();
-      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
-      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(result.triggered).toBe(true);
+      expect(result.reason).toBe('ok');
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalled();
     });
   });
 

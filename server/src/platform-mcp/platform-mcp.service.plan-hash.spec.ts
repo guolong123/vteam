@@ -21,12 +21,13 @@ import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
 import { createLedger, embedLedger } from '../issues/review-round-ledger';
 
 /**
- * plan-finalize-actions todo 3：notifyAgent 执行认哈希门禁。
+ * plan-finalize-actions todo 3 + server-gate-removal-tool-authority todo 3：
+ * notifyAgent 执行认哈希门禁（计划状态不再是门禁）。
  *
- * - executing 态 + 调用方 planHash 与冻结哈希不一致 → triggered:false +
- *   reason=plan-gated + hint 同时命名期望/实际短哈希，不触发 dispatch；
- * - 哈希一致 → 放行（状态门禁语义不变）；
- * - 未携带 planHash → 原行为（门禁未武装，不收紧既有放行面）；
+ * - 调用方 planHash 与冻结哈希不一致 → triggered:false + reason=plan-gated +
+ *   hint 同时命名期望/实际短哈希，不触发 dispatch（任何计划态、任何目标一致）；
+ * - 哈希一致 → 放行；
+ * - 未携带 planHash → 门禁未武装，放行（不收紧既有放行面）；
  * - force=true + 非空 forceReason → 照旧绕过并留审计行（不因哈希新增限制）。
  */
 describe('PlatformMcpService notifyAgent 哈希门禁（todo 3）', () => {
@@ -200,7 +201,7 @@ describe('PlatformMcpService notifyAgent 哈希门禁（todo 3）', () => {
     expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalled();
   });
 
-  it('非 executing 态 + 哈希匹配 → 仍按状态门禁被拦（放行面不变，不落库）', async () => {
+  it('非 executing 态 + 哈希匹配 → 放行（状态门禁已移除，仅哈希裁决）', async () => {
     planLifecycle.getStatus.mockResolvedValue('approved');
 
     const result = await service.notifyAgent(ctx, {
@@ -208,11 +209,20 @@ describe('PlatformMcpService notifyAgent 哈希门禁（todo 3）', () => {
       planHash: FROZEN_HASH,
     });
 
-    expect(result.triggered).toBe(false);
-    expect(result.reason).toBe('plan-gated');
-    expect(result.messageId).toBeNull();
-    expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
-    expect(prisma.message.create).not.toHaveBeenCalled();
+    expect(result.triggered).toBe(true);
+    expect(result.reason).toBe('ok');
+    expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalled();
+    expect(prisma.message.create).toHaveBeenCalled();
+  });
+
+  it('非 executing 态（draft）且无 planHash → 放行（无状态门禁、哈希未武装）', async () => {
+    planLifecycle.getStatus.mockResolvedValue('draft');
+
+    const result = await service.notifyAgent(ctx, baseArgs);
+
+    expect(result.triggered).toBe(true);
+    expect(result.reason).toBe('ok');
+    expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalled();
   });
 
   it('过期哈希 + force=true/原因 → 绕过并写审计行（不因哈希新增限制）', async () => {

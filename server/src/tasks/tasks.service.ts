@@ -1370,9 +1370,10 @@ export class TasksService implements OnModuleInit {
   }
 
   /**
-   * MCP 专用状态流转（task_transition 工具）：仅主 Agent 实例可调用。
-   * 主成员校验：team.mainAgentMemberId 显式绑定优先，否则首位成员回退（seq 升序），
-   * 否则 403 TASK_STATUS_MAIN_AGENT_ONLY；
+   * MCP 专用状态流转（task_transition 工具）。
+   * 身份门禁（原「仅主实例可流转」403 TASK_STATUS_MAIN_AGENT_ONLY）已移除：
+   * 调用权限由调用方 ROLE 的 toolAllows 决定。保留项：accept/archive 人类专属拒绝
+   * （TASK_AGENT_COMPLETION_FORBIDDEN，见下）与状态机合法性（transition 内前置校验）。
    * actor 记为 agent/instanceId（task_events.actorType='agent' + TASK_STATUS_CHANGED 广播）；
    * reject 的 reason 经 metadata 透传（transitionOpts 第 3 参）。
    */
@@ -1397,24 +1398,6 @@ export class TasksService implements OnModuleInit {
         code: TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,
         message:
           '仅人类用户可在管理界面验收完成/归档任务，Agent 不可调用 accept/archive；请向用户报告任务已就绪、等待人工验收，不要重复调用',
-      });
-    }
-    const gateTeamId = (task as any).teamId ?? null;
-    const gateTeam = gateTeamId
-      ? await (this.prisma as any).team.findUnique({
-          where: { id: gateTeamId },
-          select: { mainAgentMemberId: true },
-        })
-      : null;
-    const explicitMainId = (gateTeam as any)?.mainAgentMemberId ?? null;
-    const mainMemberId =
-      explicitMainId ??
-      (gateTeamId ? await this.resolveTeamFallbackMainId(gateTeamId) : null);
-    if (mainMemberId !== instanceId) {
-      // Agent 可读的完整引导：指明主成员 id + 正确操作路径（MCP 由主成员调用 / 知会主成员 / 管理界面人工操作）
-      throw new ForbiddenException({
-        code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,
-        message: `仅主 Agent（${mainMemberId ?? '未设置'}）可流转任务状态；请知会主 Agent 调用 task_transition，或由管理员在任务管理界面操作`,
       });
     }
     return this.transition(taskId, action, instanceId, {

@@ -1,0 +1,38 @@
+=== My ONLY hunk in platform-mcp.service.ts (myProfile effectivePermission) ===
+5:@@ -116,12 +116,6 @@ import {
+18:@@ -1584,15 +1578,13 @@ export class PlatformMcpService implements OnModuleInit {
+40:@@ -1601,13 +1593,11 @@ export class PlatformMcpService implements OnModuleInit {
+56:@@ -1615,9 +1605,7 @@ export class PlatformMcpService implements OnModuleInit {
+67:@@ -2198,38 +2186,21 @@ export class PlatformMcpService implements OnModuleInit {
+114:@@ -2941,47 +2912,24 @@ export class PlatformMcpService implements OnModuleInit {
+167:@@ -3028,46 +2976,16 @@ export class PlatformMcpService implements OnModuleInit {
+217:@@ -3820,12 +3738,20 @@ export class PlatformMcpService implements OnModuleInit {
+244:@@ -3847,9 +3773,9 @@ export class PlatformMcpService implements OnModuleInit {
+257:@@ -3879,10 +3805,11 @@ export class PlatformMcpService implements OnModuleInit {
+273:@@ -3902,14 +3829,7 @@ export class PlatformMcpService implements OnModuleInit {
+289:@@ -3997,11 +3917,15 @@ export class PlatformMcpService implements OnModuleInit {
+308:@@ -4018,25 +3942,26 @@ export class PlatformMcpService implements OnModuleInit {
+348:@@ -4057,9 +3982,10 @@ export class PlatformMcpService implements OnModuleInit {
+362:@@ -4074,14 +4000,6 @@ export class PlatformMcpService implements OnModuleInit {
+
+=== Searching my diff for 'serverGated' (must be none) ===
+0
+0 occurrences of serverGated in my diff
+
+=== The myProfile hunk verbatim ===
++      const resolved = await this.executionPolicyService?.resolveByAgent({
++        policyId: agentPolicyId,
++        role: agentRole,
++        agentKey,
++      });
++      effectivePermission = resolved
++        ? {
++            policyId: resolved.policyId,
++            policyName: resolved.policyName,
++            agentName: resolved.agentName,
++            permission: resolved.permission,
++            correction: resolved.correction,
++          }
++        : null;
+     } catch {
+       effectivePermission = null;

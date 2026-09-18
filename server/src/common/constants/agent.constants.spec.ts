@@ -90,51 +90,78 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     }
   });
 
-  it('ROLE_SERVER_GATED_TOOLS 为 7 个主实例专属真实名（server-gated，guard 层② pass-through）', () => {
-    expect([...ROLE_SERVER_GATED_TOOLS].sort()).toEqual(
-      [
-        'vteam_task_transition',
-        'vteam_question_confirm',
-        'vteam_task_create',
-        'vteam_plan_mode',
-        'vteam_plan_complete',
-        'vteam_team_add_member',
-        'vteam_skill_create',
-      ].sort(),
-    );
-    for (const gated of ROLE_SERVER_GATED_TOOLS) {
-      expect(VTEAM_MCP_TOOL_NAMES).toContain(gated);
+  /**
+   * 曾由服务端按主实例身份 gate 的工具（server-gate-removal-tool-authority）。
+   * 该概念已退休：`ROLE_SERVER_GATED_TOOLS` 恒为空，权限唯一来源 = 角色 `toolAllows`。
+   * 本清单从**授权矩阵**派生（见 plan §(d)），不是旧常量——旧常量为空会使任何
+   * `for (const gated of ROLE_SERVER_GATED_TOOLS)` 变成空转假绿，故此处显式列举。
+   */
+  const FORMERLY_GATED_TOOLS: readonly string[] = [
+    'vteam_task_transition',
+    'vteam_question_confirm',
+    'vteam_task_create',
+    'vteam_plan_mode',
+    'vteam_plan_complete',
+    'vteam_team_add_member',
+    'vteam_skill_create',
+  ];
+
+  /** 授权矩阵（plan §(d)）：每个 formerly-gated 工具被授予的角色集合。 */
+  const GRANT_MATRIX: Record<string, readonly VteamAgentName[]> = {
+    vteam_task_transition: ['vteam-product', 'vteam-project_manager'],
+    vteam_task_create: ['vteam-product', 'vteam-project_manager'],
+    vteam_plan_mode: ['vteam-product', 'vteam-project_manager'],
+    vteam_team_add_member: ['vteam-product', 'vteam-project_manager'],
+    vteam_question_confirm: ['vteam-product', 'vteam-project_manager'],
+    vteam_plan_complete: ['vteam-plan', 'vteam-project_manager'],
+    vteam_skill_create: ['vteam-project_manager'],
+  };
+
+  it('ROLE_SERVER_GATED_TOOLS 已退休为空（语义移交 worker guard allowlist，不再有服务端身份门）', () => {
+    expect([...ROLE_SERVER_GATED_TOOLS]).toEqual([]);
+    // 旧门控工具仍存在于 MCP 注册表，只是不再有“服务端专属”标记。
+    for (const tool of FORMERLY_GATED_TOOLS) {
+      expect(VTEAM_MCP_TOOL_NAMES).toContain(tool);
     }
   });
 
-  it('mcpDenies = 全部 MCP 工具中未列入 toolAllows 且非 server-gated 者，且全为 vteam_ 真实名', () => {
+  it('mcpDenies = 全部 MCP 工具中未列入 toolAllows 者（无 server-gated 例外），且全为 vteam_ 真实名', () => {
     expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(29);
     for (const mcp of VTEAM_MCP_TOOL_NAMES) expect(mcp).toMatch(/^vteam_/);
-    const gated = new Set<string>(ROLE_SERVER_GATED_TOOLS);
     for (const name of ROLE_NAMES) {
       const { toolAllows, mcpDenies } = ROLE_BOUNDARIES[name];
       const allowedMcp = Object.keys(toolAllows).filter((t) =>
         VTEAM_MCP_TOOL_NAMES.includes(t),
       );
       const expectedDenies = VTEAM_MCP_TOOL_NAMES.filter(
-        (mcp) => !allowedMcp.includes(mcp) && !gated.has(mcp),
+        (mcp) => !allowedMcp.includes(mcp),
       );
       expect([...mcpDenies].sort()).toEqual(expectedDenies.sort());
       for (const denied of mcpDenies) expect(denied).toMatch(/^vteam_/);
     }
   });
 
-  it('mcpDenies 永不含 server-gated 工具（层① 不写 deny）', () => {
-    const gated = new Set<string>(ROLE_SERVER_GATED_TOOLS);
-    for (const name of ROLE_NAMES) {
-      for (const denied of ROLE_BOUNDARIES[name].mcpDenies) {
-        expect(gated.has(denied)).toBe(false);
+  it('未获授权的 formerly-gated 工具一律进 mcpDenies（显式 deny，不再放行到服务端判定）', () => {
+    // 非空转证明：清单 7 个 + 角色 7 个，断言数 > 0（旧循环因空常量恒 0 断言）。
+    let assertions = 0;
+    for (const tool of FORMERLY_GATED_TOOLS) {
+      for (const name of ROLE_NAMES) {
+        const granted = GRANT_MATRIX[tool].includes(name);
+        const denied = ROLE_BOUNDARIES[name].mcpDenies.includes(tool);
+        const allowed = Object.prototype.hasOwnProperty.call(
+          ROLE_BOUNDARIES[name].toolAllows,
+          tool,
+        );
+        expect(allowed).toBe(granted);
+        expect(denied).toBe(!granted);
+        assertions += 2;
       }
     }
+    expect(assertions).toBe(FORMERLY_GATED_TOOLS.length * ROLE_NAMES.length * 2);
+    expect(assertions).toBeGreaterThan(0);
   });
 
-  it('mcpDenies ∪ toolAllows(MCP) ∪ server-gated 恰覆盖 VTEAM_MCP_TOOL_NAMES（三者互斥、无遗漏）', () => {
-    const gated = new Set<string>(ROLE_SERVER_GATED_TOOLS);
+  it('mcpDenies ∪ toolAllows(MCP) 恰覆盖 VTEAM_MCP_TOOL_NAMES（二者互斥、无遗漏）', () => {
     for (const name of ROLE_NAMES) {
       const { toolAllows, mcpDenies } = ROLE_BOUNDARIES[name];
       const allowedMcp = new Set(
@@ -143,12 +170,8 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       const denied = new Set(mcpDenies);
       for (const tool of allowedMcp) {
         expect(denied.has(tool)).toBe(false);
-        expect(gated.has(tool)).toBe(false);
       }
-      for (const tool of denied) {
-        expect(gated.has(tool)).toBe(false);
-      }
-      const union = new Set([...allowedMcp, ...denied, ...gated]);
+      const union = new Set([...allowedMcp, ...denied]);
       expect([...union].sort()).toEqual([...VTEAM_MCP_TOOL_NAMES].sort());
     }
   });
@@ -286,6 +309,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       vteam_group_post: 'allow',
       vteam_notify_agent: 'allow',
       vteam_memory_search: 'allow',
+      vteam_plan_complete: 'allow',
       browser: 'allow',
     });
     expect(ROLE_BOUNDARIES['vteam-librarian'].toolAllows).toEqual({
@@ -306,11 +330,18 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       git_log: 'allow',
       browser: 'allow',
     });
+    // 反转旧断言：formerly-gated 工具按授权矩阵进/不进 toolAllows（不再一律不进）。
     for (const name of ROLE_NAMES) {
-      for (const gated of ROLE_SERVER_GATED_TOOLS) {
-        expect(Object.keys(ROLE_BOUNDARIES[name].toolAllows)).not.toContain(
-          gated,
-        );
+      for (const tool of FORMERLY_GATED_TOOLS) {
+        const granted = GRANT_MATRIX[tool].includes(name);
+        if (granted) {
+          expect(ROLE_BOUNDARIES[name].toolAllows).toHaveProperty(
+            tool,
+            'allow',
+          );
+        } else {
+          expect(ROLE_BOUNDARIES[name].toolAllows).not.toHaveProperty(tool);
+        }
       }
       expect(Object.keys(ROLE_BOUNDARIES[name].toolAllows)).not.toContain(
         'execute',

@@ -266,23 +266,14 @@ describe('evaluateToolCall 分支优先级', () => {
     });
   });
 
-  describe('4d2) server-gated MCP → pass-through（一律 allow，判定权在服务端）', () => {
+  describe('4d2) formerly server-gated MCP → allowlist 决定 allow/deny（无 pass-through）', () => {
     const session = sess('vteam-developer');
-    it('门控集合与服务端 ROLE_SERVER_GATED_TOOLS 一致（7 个，增减须两侧同步）', () => {
-      for (const tool of [
-        'vteam_task_transition',
-        'vteam_question_confirm',
-        'vteam_task_create',
-        'vteam_plan_mode',
-        'vteam_plan_complete',
-        'vteam_team_add_member',
-        'vteam_skill_create',
-      ]) {
-        const unlisted = role({ tools: {} });
-        expectAllow(call(doc({ 'vteam-developer': unlisted }), session, tool, {}));
-      }
-    });
-    it.each([
+    /**
+     * 曾由服务端按主实例身份 gate、guard 层② pass-through 的工具。该概念已退休
+     * （server-gate-removal-tool-authority）：未列入 `tools` 即 deny，列入即 allow。
+     * 从授权矩阵显式列举（旧 `SERVER_GATED_TOOLS` 常量已空，不可再作循环源）。
+     */
+    const FORMERLY_GATED_TOOLS = [
       'vteam_task_transition',
       'vteam_question_confirm',
       'vteam_task_create',
@@ -290,22 +281,63 @@ describe('evaluateToolCall 分支优先级', () => {
       'vteam_plan_complete',
       'vteam_team_add_member',
       'vteam_skill_create',
-    ])('%s 未列入 tools 仍 allow', (tool) => {
-      const unlisted = role({ tools: {} });
-      expectAllow(call(doc({ 'vteam-developer': unlisted }), session, tool, {}));
+    ] as const;
+
+    it.each(FORMERLY_GATED_TOOLS)(
+      '%s 未列入 tools → deny（反转旧 pass-through allow）',
+      (tool) => {
+        const unlisted = role({ tools: {} });
+        const message = expectDeny(
+          call(doc({ 'vteam-developer': unlisted }), session, tool, {}),
+        );
+        expect(message).toContain('不能调用');
+        expect(message).toContain(tool);
+      },
+    );
+
+    it.each(FORMERLY_GATED_TOOLS)(
+      '%s 列入 tools allow → allow（授权矩阵正向面）',
+      (tool) => {
+        const granted = role({ tools: { [tool]: 'allow' } });
+        expectAllow(call(doc({ 'vteam-developer': granted }), session, tool, {}));
+      },
+    );
+
+    it('非空转证明：7 个 formerly-gated 工具两态各断言一次（断言数 > 0）', () => {
+      let assertions = 0;
+      for (const tool of FORMERLY_GATED_TOOLS) {
+        const denied = call(
+          doc({ 'vteam-developer': role({ tools: {} }) }),
+          session,
+          tool,
+          {},
+        );
+        const allowed = call(
+          doc({ 'vteam-developer': role({ tools: { [tool]: 'allow' } }) }),
+          session,
+          tool,
+          {},
+        );
+        expect(denied.action).toBe('deny');
+        expect(allowed.action).toBe('allow');
+        assertions += 2;
+      }
+      expect(assertions).toBe(FORMERLY_GATED_TOOLS.length * 2);
+      expect(assertions).toBeGreaterThan(0);
     });
-    it('task/execute 仍 deny（与 server-gated 分支独立）', () => {
+
+    it('task/execute 仍 deny（与 allowlist 分支独立）', () => {
       const unlisted = role({ tools: {} });
       const rolesDoc = doc({ 'vteam-developer': unlisted });
       expectDeny(call(rolesDoc, session, 'task', {}));
       expectDeny(call(rolesDoc, session, 'execute', {}));
     });
-    it('vteam_plan_review 不再是 server-gated（未列入 allowlist → deny）', () => {
+    it('vteam_plan_review 未列入 allowlist → deny', () => {
       const unlisted = role({ tools: {} });
       const rolesDoc = doc({ 'vteam-developer': unlisted });
       expectDeny(call(rolesDoc, session, 'vteam_plan_review', {}));
     });
-    it('非门控未列入 MCP 仍 deny（负对照）', () => {
+    it('未列入 MCP 仍 deny（负对照）', () => {
       const unlisted = role({ tools: {} });
       const rolesDoc = doc({ 'vteam-developer': unlisted });
       expectDeny(call(rolesDoc, session, 'vteam_member_remove', {}));

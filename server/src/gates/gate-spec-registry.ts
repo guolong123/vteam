@@ -24,11 +24,11 @@ export interface GateSpecEntry {
 export const GATE_SPEC_FILES: GateSpecEntry[] = [
   {
     file: 'server/src/chat/worker-dispatcher.gate.spec.ts',
-    gates: ['execution-gate', 'a_plan-exemption'],
+    gates: ['execution-gate', 'plan-hash', 'a_plan-exemption-removed'],
   },
   {
     file: 'server/src/platform-mcp/platform-mcp.service.gate.spec.ts',
-    gates: ['execution-gate', 'issue-lock', 'force', 'a_plan-exemption'],
+    gates: ['execution-gate', 'plan-hash', 'issue-lock', 'force', 'a_plan-exemption-removed'],
   },
   {
     file: 'server/src/issues/review-round-gate.service.spec.ts',

@@ -87,16 +87,18 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
     loggerErrorSpy.mockRestore();
   });
 
-  it('execution + approved → 抛错含计划未放行，不调 dispatch/ensureTeamSession', async () => {
+  it('execution + approved → 放行（计划状态不再是门禁），不读状态、调 dispatch', async () => {
     planLifecycle.getStatus.mockResolvedValue('approved');
     const d = createDispatcher();
     const dispatchSpy = jest
       .spyOn(d, 'dispatch')
       .mockResolvedValue({ replies: [] });
 
-    await expect(d.dispatchAgentMention(input)).rejects.toThrow('计划未放行');
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expect(sessionLifecycle.ensureTeamSession).not.toHaveBeenCalled();
+    await d.dispatchAgentMention(input);
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expect(planLifecycle.getStatus).not.toHaveBeenCalled();
+    expect(sessionLifecycle.ensureTeamSession).toHaveBeenCalled();
   });
 
   it('execution + executing → 放行并透传 kind', async () => {
@@ -129,21 +131,21 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
     },
   );
 
-  it('无 plan 行→兜底建行后再门禁（draft → 抛错）', async () => {
-    planLifecycle.getStatus.mockResolvedValue(null);
+  it('无 plan 行→兜底建行后放行（draft 状态不再拦截）', async () => {
     planLifecycle.autoEnsureRow.mockResolvedValue({ status: 'draft' });
     const d = createDispatcher();
     const dispatchSpy = jest
       .spyOn(d, 'dispatch')
       .mockResolvedValue({ replies: [] });
 
-    await expect(d.dispatchAgentMention(input)).rejects.toThrow('计划未放行');
+    await d.dispatchAgentMention(input);
+
     expect(planLifecycle.autoEnsureRow).toHaveBeenCalledWith('t_0000000001');
-    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('门禁读错→fail-open 放行 + warn', async () => {
-    planLifecycle.getStatus.mockRejectedValue(new Error('db down'));
+  it('兜底建行失败→fail-open 放行 + warn', async () => {
+    planLifecycle.autoEnsureRow.mockRejectedValue(new Error('db down'));
     const d = createDispatcher();
     const dispatchSpy = jest
       .spyOn(d, 'dispatch')
@@ -213,16 +215,15 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
     void PlanLifecycleService;
   });
 
-  describe('计划角色豁免：kind=execution 派给 a_plan 永不进计划门禁', () => {
+  describe('a_plan 角色豁免已删除：门禁对每个目标一律生效（哈希层）', () => {
     const withTargetAgent = (agentId: string) => {
       (prisma as any).teamMember = {
         findFirst: jest.fn().mockResolvedValue({ id: 'tmm_x', agentId }),
       };
     };
 
-    it('draft 态派给 a_plan → 放行且不读门禁（计划工作永非执行）', async () => {
+    it('派给 a_plan → 照样经 autoEnsureRow 兜底建行（豁免删除）', async () => {
       withTargetAgent('a_plan');
-      planLifecycle.getStatus.mockResolvedValue('draft');
       const d = createDispatcher();
       const dispatchSpy = jest
         .spyOn(d, 'dispatch')
@@ -231,12 +232,12 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
       await d.dispatchAgentMention({ ...input, targetInstanceId: 'tmm_plan' });
 
       expect(dispatchSpy).toHaveBeenCalledTimes(1);
-      expect(planLifecycle.getStatus).not.toHaveBeenCalled();
+      expect(planLifecycle.autoEnsureRow).toHaveBeenCalledWith('t_0000000001');
     });
 
-    it('无 plan 行派给 a_plan → 放行且不兜底建行', async () => {
+    it('无 plan 行派给 a_plan → 兜底建行后放行', async () => {
       withTargetAgent('a_plan');
-      planLifecycle.getStatus.mockResolvedValue(null);
+      planLifecycle.autoEnsureRow.mockResolvedValue({ status: 'draft' });
       const d = createDispatcher();
       const dispatchSpy = jest
         .spyOn(d, 'dispatch')
@@ -245,11 +246,10 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
       await d.dispatchAgentMention({ ...input, targetInstanceId: 'tmm_plan' });
 
       expect(dispatchSpy).toHaveBeenCalledTimes(1);
-      expect(planLifecycle.getStatus).not.toHaveBeenCalled();
-      expect(planLifecycle.autoEnsureRow).not.toHaveBeenCalled();
+      expect(planLifecycle.autoEnsureRow).toHaveBeenCalledWith('t_0000000001');
     });
 
-    it('draft 态派给 a_developer → 仍被拦且报错含计划未放行', async () => {
+    it('draft 态派给 a_developer → 放行（原“计划未放行”拦截已移除）', async () => {
       withTargetAgent('a_developer');
       planLifecycle.getStatus.mockResolvedValue('draft');
       const d = createDispatcher();
@@ -257,10 +257,9 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
         .spyOn(d, 'dispatch')
         .mockResolvedValue({ replies: [] });
 
-      await expect(
-        d.dispatchAgentMention({ ...input, targetInstanceId: 'tmm_dev' }),
-      ).rejects.toThrow('计划未放行');
-      expect(dispatchSpy).not.toHaveBeenCalled();
+      await d.dispatchAgentMention({ ...input, targetInstanceId: 'tmm_dev' });
+
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
     });
   });
 

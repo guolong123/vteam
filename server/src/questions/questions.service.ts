@@ -26,6 +26,7 @@ import {
   AGENT_QUESTION_STATUS,
   PermissionResponse,
   PLATFORM_QUESTION_SOURCE,
+  QUESTION_CONFIRM_INTEGRITY_ERRORS,
   QUESTION_PENDING_TTL_MS,
   QUESTIONS_ERRORS,
 } from './questions.constants';
@@ -252,10 +253,16 @@ export class QuestionsService {
   }
 
   /**
-   * 托管确认（question_confirm MCP 工具）：团队托管模式下由主 Agent 确认成员请求。
-   * 仅团队主成员可调（team.mainAgentMemberId === instanceId，复用 task_transition 权限模式）；
+   * 托管确认（question_confirm MCP 工具）：团队托管模式下确认成员请求。
+   * 身份门禁（原「仅主成员」403）已移除：调用权限由调用方 ROLE 的 toolAllows 决定；
+   * 缺口由两道完整性校验补上：
+   *   1) 确认者不得为请求发起者本人（session.teamMemberId === instanceId → 拒绝），防自批；
+   *   2) 请求归属任务须与调用方任务一致（row.taskId === input.taskId），防跨任务确认。
    * requestId 精确命中 AgentQuestion（requestId 唯一键），kind 须与落库一致；
    * 回复语义与用户 reply 相同（question=answers / permission=response，answers=null=拒绝）。
+   * 残余风险：发起者身份经 row.sessionId → Session.teamMemberId 解析；平台 question 的
+   * sessionId 是主成员会话占位、且会话行缺失/无 teamMemberId 时无法断定发起者，此时校验 1
+   * 不武装（fail-open）——但校验 2（任务归属）恒生效。
    */
   async confirmByAgent(input: {
     taskId: string;
@@ -278,19 +285,13 @@ export class QuestionsService {
     const team = task.teamId
       ? await this.prisma.team.findUnique({
           where: { id: task.teamId },
-          select: { mainAgentMemberId: true },
+          select: { id: true },
         })
       : null;
     if (!team) {
       throw new NotFoundException({
         code: QUESTIONS_ERRORS.QUESTION_TEAM_NOT_FOUND,
         message: '团队不存在',
-      });
-    }
-    if (team.mainAgentMemberId !== input.instanceId) {
-      throw new ForbiddenException({
-        code: TASK_ERRORS.TASK_STATUS_MAIN_AGENT_ONLY,
-        message: `仅主 Agent（${team.mainAgentMemberId ?? '未设置'}）可确认托管模式下的请求`,
       });
     }
     const row = await this.prisma.agentQuestion.findUnique({
@@ -300,6 +301,29 @@ export class QuestionsService {
       throw new NotFoundException({
         code: QUESTIONS_ERRORS.QUESTION_NOT_FOUND,
         message: `AgentQuestion requestId ${input.requestId} 不存在`,
+      });
+    }
+    // 完整性校验 2：跨任务确认拒绝（请求须属于调用方任务）。
+    if (row.taskId !== input.taskId) {
+      throw new ForbiddenException({
+        code: QUESTION_CONFIRM_INTEGRITY_ERRORS.CROSS_TASK_FORBIDDEN,
+        message: `请求 ${input.requestId} 归属任务 ${row.taskId}，与调用方任务 ${input.taskId} 不一致，禁止跨任务确认`,
+      });
+    }
+    // 完整性校验 1：自批拒绝（发起者会话的 teamMemberId === 确认者 instanceId）。
+    const requesterSession = row.sessionId
+      ? await this.prisma.session.findUnique({
+          where: { id: row.sessionId },
+          select: { teamMemberId: true },
+        })
+      : null;
+    if (
+      requesterSession?.teamMemberId &&
+      requesterSession.teamMemberId === input.instanceId
+    ) {
+      throw new ForbiddenException({
+        code: QUESTION_CONFIRM_INTEGRITY_ERRORS.SELF_CONFIRMATION_FORBIDDEN,
+        message: `请求 ${input.requestId} 由成员 ${input.instanceId} 本人发起，不可自行确认`,
       });
     }
     if (row.status !== AGENT_QUESTION_STATUS.PENDING) {

@@ -4877,25 +4877,24 @@ describe('PlatformMcpService', () => {
       return () => hook;
     };
 
-    it('非主成员 → 403 PLATFORM_MCP_FORBIDDEN（仅主 Agent 可申请增员）', async () => {
+    it('非主成员不再被身份门拒绝 → 创建确认请求（原 403 已移除）', async () => {
       allowWorker();
-      prisma.task.findUnique.mockResolvedValue({
-        id: taskId,
-        teamId: 'tm_1',
+      mockBaseline();
+      questionsService.createForPlatform.mockResolvedValue({
+        id: 'aq_1',
+        requestId: 'que_platform_0000000001',
       });
-      prisma.team.findUnique.mockResolvedValue({
-        mainAgentMemberId: mainInstanceId,
+      const result = await service.teamAddMember(ctx, {
+        taskId,
+        selfInstanceId: senderInstanceId,
+        agentId: 'a_developer',
       });
-      await expectCode(
-        service.teamAddMember(ctx, {
-          taskId,
-          selfInstanceId: senderInstanceId,
-          agentId: 'a_developer',
-        }),
-        ForbiddenException,
-        PLATFORM_MCP_ERRORS.FORBIDDEN,
-      );
-      expect(questionsService.createForPlatform).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        requestId: 'que_platform_0000000001',
+        taskId,
+        agentId: 'a_developer',
+      });
+      expect(questionsService.createForPlatform).toHaveBeenCalledTimes(1);
     });
 
     it('申请成功：createForPlatform 创建确认请求（question 文案/options/onResolved 注册）→ 返回 requestId', async () => {
@@ -5120,17 +5119,65 @@ describe('PlatformMcpService', () => {
       prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: mainId });
     };
 
-    it('非主成员 → 403（仅主 Agent 可切换）', async () => {
+    it('非主成员不再被身份门拒绝 → 翻转 task.planMode（写入目标仍是团队主成员行）', async () => {
       allowWorkerAs('tmm_other');
       mockGate(mainInstanceId);
-      await expect(
-        service.planMode(ctx, {
-          taskId: 't_1',
-          selfInstanceId: 'tmm_other',
-          enabled: true,
-        }),
-      ).rejects.toMatchObject({ status: 403 });
-      expect(prisma.task.update).not.toHaveBeenCalled();
+      prisma.task.update.mockImplementation(async (q: any) => ({
+        id: 't_1',
+        planMode: q.data.planMode,
+      }));
+      const out = await service.planMode(ctx, {
+        taskId: 't_1',
+        selfInstanceId: 'tmm_other',
+        enabled: true,
+      });
+      expect(out).toEqual({
+        taskId: 't_1',
+        planMode: true,
+        agentName: null,
+      });
+      expect(prisma.task.update).toHaveBeenCalledWith({
+        where: { id: 't_1' },
+        data: { planMode: true },
+      });
+    });
+
+    it('团队无显式主成员 → 回退首位成员写行（不再写 id:null）', async () => {
+      allowWorkerAs('tmm_other');
+      mockGate(null);
+      prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_first' });
+      prisma.task.update.mockImplementation(async (q: any) => ({
+        id: 't_1',
+        planMode: q.data.planMode,
+      }));
+      await service.planMode(ctx, {
+        taskId: 't_1',
+        selfInstanceId: 'tmm_other',
+        enabled: true,
+        agentName: 'build',
+      });
+      expect(prisma.teamMember.update).toHaveBeenCalledWith({
+        where: { id: 'tmm_first' },
+        data: { opencodeAgentName: 'build' },
+      });
+    });
+
+    it('团队无主成员且空名册 → 不写 member 行，仅翻转 planMode（无 id:null 写入）', async () => {
+      allowWorkerAs('tmm_other');
+      mockGate(null);
+      prisma.teamMember.findFirst.mockResolvedValue(null);
+      prisma.task.update.mockImplementation(async (q: any) => ({
+        id: 't_1',
+        planMode: q.data.planMode,
+      }));
+      const out = await service.planMode(ctx, {
+        taskId: 't_1',
+        selfInstanceId: 'tmm_other',
+        enabled: true,
+        agentName: 'build',
+      });
+      expect(prisma.teamMember.update).not.toHaveBeenCalled();
+      expect(out).toEqual({ taskId: 't_1', planMode: true, agentName: 'build' });
     });
 
     it('开启：写 task.planMode=true；不带 agentName 时保持成员选择并回显', async () => {
@@ -5237,7 +5284,7 @@ describe('PlatformMcpService', () => {
       });
     });
 
-    it('非主实例 → 403 PLATFORM_MCP_FORBIDDEN（completePlan 不调用）', async () => {
+    it('非主实例不再被身份门拒绝 → 触达 completePlan（原 403 已移除）', async () => {
       allowWorkerAs('tmm_other');
       mockGate(mainInstanceId);
       const completePlan = mockLifecycle({
@@ -5245,15 +5292,21 @@ describe('PlatformMcpService', () => {
         idempotent: false,
       });
 
-      await expectCode(
-        service.planComplete(ctx, {
-          taskId: 't_1',
-          selfInstanceId: 'tmm_other',
-        }),
-        ForbiddenException,
-        PLATFORM_MCP_ERRORS.FORBIDDEN,
-      );
-      expect(completePlan).not.toHaveBeenCalled();
+      const out = await service.planComplete(ctx, {
+        taskId: 't_1',
+        selfInstanceId: 'tmm_other',
+      });
+
+      expect(completePlan).toHaveBeenCalledWith('t_1', {
+        userId: 'tmm_other',
+        userName: null,
+        instanceId: 'tmm_other',
+      });
+      expect(out).toEqual({
+        taskId: 't_1',
+        status: 'completed',
+        idempotent: false,
+      });
     });
 
     it('planLifecycle 缺失（null）→ 503', async () => {
@@ -5599,29 +5652,26 @@ describe('PlatformMcpService', () => {
   });
 
   describe('team-free-chat todo-4：task_create 主门（remove-project-dimension Todo 7 去 pid）', () => {
-    it('非主实例（任务维度）→ 403，主门不放行', async () => {
+    it('非主实例（任务维度）不再被身份门拒绝 → 触达 createByAgent（原 403 已移除）', async () => {
       allowWorker();
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
         mainAgentInstanceId: 'tmm_other',
       });
+      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
 
-      const err = await service
-        .taskCreate(ctx, {
-          taskId,
-          selfInstanceId: senderInstanceId,
-          title: '新任务',
-        })
-        .then(
-          () => null,
-          (e: unknown) => e,
-        );
-      expect(err).toBeInstanceOf(ForbiddenException);
-      expect((err as { getResponse(): unknown }).getResponse()).toMatchObject({
-        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+      const result = await service.taskCreate(ctx, {
+        taskId,
+        selfInstanceId: senderInstanceId,
+        title: '新任务',
       });
-      expect(tasksService.createByAgent).not.toHaveBeenCalled();
+
+      expect(result).toEqual({ id: 't_new' });
+      expect(tasksService.createByAgent).toHaveBeenCalledWith(
+        senderInstanceId,
+        expect.objectContaining({ teamId: 'tm_1', title: '新任务' }),
+      );
     });
 
     it('任务维度主 Agent → 成功，teamId 取任务所属团队', async () => {
@@ -5690,9 +5740,7 @@ describe('PlatformMcpService', () => {
       });
 
       expect(result).toEqual({ id: 't_new' });
-      expect(prisma.team.findUnique).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'tm_1' } }),
-      );
+      expect(prisma.team.findUnique).not.toHaveBeenCalled();
       expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
       expect(tasksService.createByAgent).toHaveBeenCalledWith(
         'tmm_main',
@@ -5700,7 +5748,7 @@ describe('PlatformMcpService', () => {
       );
     });
 
-    it('任务维度任务主为空 + 团队绑定已设 → 非绑定成员 403 并点名团队绑定 id', async () => {
+    it('任务维度任务主为空 + 团队绑定已设 → 非绑定成员不再被拒（触达 createByAgent）', async () => {
       allowWorkerAs('tmm_other');
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
@@ -5710,23 +5758,19 @@ describe('PlatformMcpService', () => {
       prisma.team.findUnique.mockResolvedValue({
         mainAgentMemberId: 'tmm_main',
       });
+      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
 
-      const err = await service
-        .taskCreate(ctx, {
-          taskId,
-          selfInstanceId: 'tmm_other',
-          title: '新任务',
-        })
-        .then(
-          () => null,
-          (e: unknown) => e,
-        );
-      expect(err).toBeInstanceOf(ForbiddenException);
-      const resp = (err as { getResponse(): any }).getResponse();
-      expect(resp.code).toBe(PLATFORM_MCP_ERRORS.FORBIDDEN);
-      expect(resp.message).toContain('tmm_main');
-      expect(resp.message).not.toContain('未设置');
-      expect(tasksService.createByAgent).not.toHaveBeenCalled();
+      const result = await service.taskCreate(ctx, {
+        taskId,
+        selfInstanceId: 'tmm_other',
+        title: '新任务',
+      });
+
+      expect(result).toEqual({ id: 't_new' });
+      expect(tasksService.createByAgent).toHaveBeenCalledWith(
+        'tmm_other',
+        expect.objectContaining({ teamId: 'tm_1', title: '新任务' }),
+      );
     });
 
     it('任务维度任务主为空 + 团队绑定缺省 → 首位成员回退放行', async () => {
@@ -5747,19 +5791,14 @@ describe('PlatformMcpService', () => {
       });
 
       expect(result).toEqual({ id: 't_new' });
-      expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { teamId: 'tm_1' },
-          orderBy: [{ seq: 'asc' }, { id: 'asc' }],
-        }),
-      );
+      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
       expect(tasksService.createByAgent).toHaveBeenCalledWith(
         'tmm_first',
         expect.objectContaining({ teamId: 'tm_1', title: '新任务' }),
       );
     });
 
-    it('任务维度任务主为空 + 团队绑定缺省 → 非首位 403 并点名回退 id', async () => {
+    it('任务维度任务主为空 + 团队绑定缺省 → 非首位不再被拒（触达 createByAgent）', async () => {
       allowWorkerAs('tmm_other');
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
@@ -5768,23 +5807,19 @@ describe('PlatformMcpService', () => {
       });
       prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
       prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_first' });
+      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
 
-      const err = await service
-        .taskCreate(ctx, {
-          taskId,
-          selfInstanceId: 'tmm_other',
-          title: '新任务',
-        })
-        .then(
-          () => null,
-          (e: unknown) => e,
-        );
-      expect(err).toBeInstanceOf(ForbiddenException);
-      const resp = (err as { getResponse(): any }).getResponse();
-      expect(resp.code).toBe(PLATFORM_MCP_ERRORS.FORBIDDEN);
-      expect(resp.message).toContain('tmm_first');
-      expect(resp.message).not.toContain('未设置');
-      expect(tasksService.createByAgent).not.toHaveBeenCalled();
+      const result = await service.taskCreate(ctx, {
+        taskId,
+        selfInstanceId: 'tmm_other',
+        title: '新任务',
+      });
+
+      expect(result).toEqual({ id: 't_new' });
+      expect(tasksService.createByAgent).toHaveBeenCalledWith(
+        'tmm_other',
+        expect.objectContaining({ teamId: 'tm_1', title: '新任务' }),
+      );
     });
 
     it('团队维度主成员 → 成功，直调 createByAgent（归属即团队）', async () => {
@@ -5811,7 +5846,7 @@ describe('PlatformMcpService', () => {
       );
     });
 
-    it('非主成员（团队维度）→ 403', async () => {
+    it('非主成员（团队维度）不再被身份门拒绝 → 触达 createByAgent', async () => {
       prisma.session.findFirst.mockResolvedValue({
         id: 's_t',
         teamMemberId: 'tmm_other',
@@ -5820,22 +5855,19 @@ describe('PlatformMcpService', () => {
         id: 'tm_1',
         mainAgentMemberId: 'tmm_main',
       });
+      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
 
-      const err = await service
-        .taskCreate(ctx, {
-          teamId: 'tm_1',
-          selfInstanceId: 'tmm_other',
-          title: '新任务',
-        })
-        .then(
-          () => null,
-          (e: unknown) => e,
-        );
-      expect(err).toBeInstanceOf(ForbiddenException);
-      expect((err as { getResponse(): unknown }).getResponse()).toMatchObject({
-        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+      const result = await service.taskCreate(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: 'tmm_other',
+        title: '新任务',
       });
-      expect(tasksService.createByAgent).not.toHaveBeenCalled();
+
+      expect(result).toEqual({ id: 't_new' });
+      expect(tasksService.createByAgent).toHaveBeenCalledWith(
+        'tmm_other',
+        expect.objectContaining({ teamId: 'tm_1', title: '新任务' }),
+      );
     });
 
     it('绑定缺省 + 首位成员（seq 升序回退）→ 放行，不再死锁', async () => {
@@ -5857,19 +5889,14 @@ describe('PlatformMcpService', () => {
       });
 
       expect(result).toEqual({ id: 't_new' });
-      expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { teamId: 'tm_1' },
-          orderBy: [{ seq: 'asc' }, { id: 'asc' }],
-        }),
-      );
+      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
       expect(tasksService.createByAgent).toHaveBeenCalledWith(
         'tmm_first',
         expect.objectContaining({ teamId: 'tm_1', title: '新任务' }),
       );
     });
 
-    it('绑定缺省 + 非首位成员 → 403 并点名回退 id（非“未设置”）', async () => {
+    it('绑定缺省 + 非首位成员不再做回退解析 → 触达 createByAgent', async () => {
       prisma.session.findFirst.mockResolvedValue({
         id: 's_t',
         teamMemberId: 'tmm_other',
@@ -5879,26 +5906,23 @@ describe('PlatformMcpService', () => {
         mainAgentMemberId: null,
       });
       prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_first' });
+      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
 
-      const err = await service
-        .taskCreate(ctx, {
-          teamId: 'tm_1',
-          selfInstanceId: 'tmm_other',
-          title: '新任务',
-        })
-        .then(
-          () => null,
-          (e: unknown) => e,
-        );
-      expect(err).toBeInstanceOf(ForbiddenException);
-      const resp = (err as { getResponse(): any }).getResponse();
-      expect(resp.code).toBe(PLATFORM_MCP_ERRORS.FORBIDDEN);
-      expect(resp.message).toContain('tmm_first');
-      expect(resp.message).not.toContain('未设置');
-      expect(tasksService.createByAgent).not.toHaveBeenCalled();
+      const result = await service.taskCreate(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: 'tmm_other',
+        title: '新任务',
+      });
+
+      expect(result).toEqual({ id: 't_new' });
+      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
+      expect(tasksService.createByAgent).toHaveBeenCalledWith(
+        'tmm_other',
+        expect.objectContaining({ teamId: 'tm_1', title: '新任务' }),
+      );
     });
 
-    it('绑定缺省 + 空名册 → 403 沿用“未设置”', async () => {
+    it('绑定缺省 + 空名册 → 放行（不再解析主成员，失败面消失）', async () => {
       prisma.session.findFirst.mockResolvedValue({
         id: 's_t',
         teamMemberId: 'tmm_other',
@@ -5908,25 +5932,20 @@ describe('PlatformMcpService', () => {
         mainAgentMemberId: null,
       });
       prisma.teamMember.findFirst.mockResolvedValue(null);
+      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
 
-      const err = await service
-        .taskCreate(ctx, {
-          teamId: 'tm_1',
-          selfInstanceId: 'tmm_other',
-          title: '新任务',
-        })
-        .then(
-          () => null,
-          (e: unknown) => e,
-        );
-      expect(err).toBeInstanceOf(ForbiddenException);
-      const resp = (err as { getResponse(): any }).getResponse();
-      expect(resp.code).toBe(PLATFORM_MCP_ERRORS.FORBIDDEN);
-      expect(resp.message).toContain('未设置');
-      expect(tasksService.createByAgent).not.toHaveBeenCalled();
+      const result = await service.taskCreate(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: 'tmm_other',
+        title: '新任务',
+      });
+
+      expect(result).toEqual({ id: 't_new' });
+      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
+      expect(tasksService.createByAgent).toHaveBeenCalled();
     });
 
-    it('绑定缺省 + 回退查询失败 → 403（fail-closed，不放行）', async () => {
+    it('绑定缺省 + 回退查询失败不再影响放行（不再调用回退查询）', async () => {
       prisma.session.findFirst.mockResolvedValue({
         id: 's_t',
         teamMemberId: 'tmm_other',
@@ -5936,22 +5955,17 @@ describe('PlatformMcpService', () => {
         mainAgentMemberId: null,
       });
       prisma.teamMember.findFirst.mockRejectedValue(new Error('db down'));
+      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
 
-      const err = await service
-        .taskCreate(ctx, {
-          teamId: 'tm_1',
-          selfInstanceId: 'tmm_other',
-          title: '新任务',
-        })
-        .then(
-          () => null,
-          (e: unknown) => e,
-        );
-      expect(err).toBeInstanceOf(ForbiddenException);
-      expect((err as { getResponse(): unknown }).getResponse()).toMatchObject({
-        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+      const result = await service.taskCreate(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: 'tmm_other',
+        title: '新任务',
       });
-      expect(tasksService.createByAgent).not.toHaveBeenCalled();
+
+      expect(result).toEqual({ id: 't_new' });
+      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
+      expect(tasksService.createByAgent).toHaveBeenCalled();
     });
   });
 
@@ -6145,20 +6159,23 @@ describe('PlatformMcpService', () => {
       expect(skillsService.create).toHaveBeenCalledTimes(1);
     });
 
-    it('非主实例（任务维度）→ 403 PLATFORM_MCP_FORBIDDEN', async () => {
+    it('非主实例（任务维度）不再被身份门拒绝 → 触达 create（原 403 已移除）', async () => {
       allowWorker();
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
         mainAgentInstanceId: 'tmm_other',
       });
+      skillsService.create.mockResolvedValue({
+        id: 'sk_0000000001',
+        name: 'git-ops',
+        enabled: false,
+      });
 
-      await expectCode(
-        service.skillCreate(ctx, { ...skillArgs }),
-        ForbiddenException,
-        PLATFORM_MCP_ERRORS.FORBIDDEN,
-      );
-      expect(skillsService.create).not.toHaveBeenCalled();
+      const result = await service.skillCreate(ctx, { ...skillArgs });
+
+      expect(result).toMatchObject({ name: 'git-ops' });
+      expect(skillsService.create).toHaveBeenCalledTimes(1);
     });
 
     it('任务维度陈旧标量不参与判定：团队主为准（标量停写，读它会误 403）', async () => {
@@ -6208,14 +6225,12 @@ describe('PlatformMcpService', () => {
       });
 
       expect(result).toMatchObject({ enabled: false });
-      expect(prisma.team.findUnique).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'tm_1' } }),
-      );
+      expect(prisma.team.findUnique).not.toHaveBeenCalled();
       expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
       expect(skillsService.create).toHaveBeenCalledTimes(1);
     });
 
-    it('任务维度任务主为空 + 团队绑定已设 → 非绑定成员 403 并点名团队绑定 id', async () => {
+    it('任务维度任务主为空 + 团队绑定已设 → 非绑定成员不再被拒（触达 create）', async () => {
       allowWorkerAs('tmm_other');
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
@@ -6225,24 +6240,21 @@ describe('PlatformMcpService', () => {
       prisma.team.findUnique.mockResolvedValue({
         mainAgentMemberId: 'tmm_main',
       });
+      skillsService.create.mockResolvedValue({
+        id: 'sk_0000000001',
+        name: 'git-ops',
+        enabled: false,
+      });
 
-      const err = await service
-        .skillCreate(ctx, {
-          taskId,
-          selfInstanceId: 'tmm_other',
-          name: 'git-ops',
-          content: skillContent,
-        })
-        .then(
-          () => null,
-          (e: unknown) => e,
-        );
-      expect(err).toBeInstanceOf(ForbiddenException);
-      const resp = (err as { getResponse(): any }).getResponse();
-      expect(resp.code).toBe(PLATFORM_MCP_ERRORS.FORBIDDEN);
-      expect(resp.message).toContain('tmm_main');
-      expect(resp.message).not.toContain('未设置');
-      expect(skillsService.create).not.toHaveBeenCalled();
+      const result = await service.skillCreate(ctx, {
+        taskId,
+        selfInstanceId: 'tmm_other',
+        name: 'git-ops',
+        content: skillContent,
+      });
+
+      expect(result).toMatchObject({ enabled: false });
+      expect(skillsService.create).toHaveBeenCalledTimes(1);
     });
 
     it('任务维度任务主为空 + 团队绑定缺省 → 首位成员回退放行', async () => {
@@ -6268,16 +6280,11 @@ describe('PlatformMcpService', () => {
       });
 
       expect(result).toMatchObject({ enabled: false });
-      expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { teamId: 'tm_1' },
-          orderBy: [{ seq: 'asc' }, { id: 'asc' }],
-        }),
-      );
+      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
       expect(skillsService.create).toHaveBeenCalledTimes(1);
     });
 
-    it('非主成员（团队维度）→ 403 PLATFORM_MCP_FORBIDDEN', async () => {
+    it('非主成员（团队维度）不再被身份门拒绝 → 触达 create', async () => {
       prisma.session.findFirst.mockResolvedValue({
         id: 's_t',
         teamMemberId: 'tmm_other',
@@ -6286,21 +6293,24 @@ describe('PlatformMcpService', () => {
         id: 'tm_1',
         mainAgentMemberId: 'tmm_main',
       });
+      skillsService.create.mockResolvedValue({
+        id: 'sk_0000000001',
+        name: 'git-ops',
+        enabled: false,
+      });
 
-      await expectCode(
-        service.skillCreate(ctx, {
-          teamId: 'tm_1',
-          selfInstanceId: 'tmm_other',
-          name: 'git-ops',
-          content: skillContent,
-        }),
-        ForbiddenException,
-        PLATFORM_MCP_ERRORS.FORBIDDEN,
-      );
-      expect(skillsService.create).not.toHaveBeenCalled();
+      const result = await service.skillCreate(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: 'tmm_other',
+        name: 'git-ops',
+        content: skillContent,
+      });
+
+      expect(result).toMatchObject({ enabled: false });
+      expect(skillsService.create).toHaveBeenCalledTimes(1);
     });
 
-    it('绑定缺省 + 首位成员（seq 升序回退）→ 放行，不再死锁', async () => {
+    it('绑定缺省 + 首位成员 → 放行且不做回退解析', async () => {
       prisma.session.findFirst.mockResolvedValue({
         id: 's_t',
         teamMemberId: 'tmm_first',
@@ -6324,16 +6334,11 @@ describe('PlatformMcpService', () => {
       });
 
       expect(result).toMatchObject({ enabled: false });
-      expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { teamId: 'tm_1' },
-          orderBy: [{ seq: 'asc' }, { id: 'asc' }],
-        }),
-      );
+      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
       expect(skillsService.create).toHaveBeenCalledTimes(1);
     });
 
-    it('绑定缺省 + 非首位成员 → 403 并点名回退 id（非“未设置”）', async () => {
+    it('绑定缺省 + 非首位成员 → 放行（不再回退解析 / 不再 403）', async () => {
       prisma.session.findFirst.mockResolvedValue({
         id: 's_t',
         teamMemberId: 'tmm_other',
@@ -6343,27 +6348,25 @@ describe('PlatformMcpService', () => {
         mainAgentMemberId: null,
       });
       prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_first' });
+      skillsService.create.mockResolvedValue({
+        id: 'sk_0000000001',
+        name: 'git-ops',
+        enabled: false,
+      });
 
-      const err = await service
-        .skillCreate(ctx, {
-          teamId: 'tm_1',
-          selfInstanceId: 'tmm_other',
-          name: 'git-ops',
-          content: skillContent,
-        })
-        .then(
-          () => null,
-          (e: unknown) => e,
-        );
-      expect(err).toBeInstanceOf(ForbiddenException);
-      const resp = (err as { getResponse(): any }).getResponse();
-      expect(resp.code).toBe(PLATFORM_MCP_ERRORS.FORBIDDEN);
-      expect(resp.message).toContain('tmm_first');
-      expect(resp.message).not.toContain('未设置');
-      expect(skillsService.create).not.toHaveBeenCalled();
+      const result = await service.skillCreate(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: 'tmm_other',
+        name: 'git-ops',
+        content: skillContent,
+      });
+
+      expect(result).toMatchObject({ enabled: false });
+      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
+      expect(skillsService.create).toHaveBeenCalledTimes(1);
     });
 
-    it('绑定缺省 + 空名册 → 403 沿用“未设置”', async () => {
+    it('绑定缺省 + 空名册 → 放行（不再有“未设置”403）', async () => {
       prisma.session.findFirst.mockResolvedValue({
         id: 's_t',
         teamMemberId: 'tmm_other',
@@ -6373,23 +6376,22 @@ describe('PlatformMcpService', () => {
         mainAgentMemberId: null,
       });
       prisma.teamMember.findFirst.mockResolvedValue(null);
+      skillsService.create.mockResolvedValue({
+        id: 'sk_0000000001',
+        name: 'git-ops',
+        enabled: false,
+      });
 
-      const err = await service
-        .skillCreate(ctx, {
-          teamId: 'tm_1',
-          selfInstanceId: 'tmm_other',
-          name: 'git-ops',
-          content: skillContent,
-        })
-        .then(
-          () => null,
-          (e: unknown) => e,
-        );
-      expect(err).toBeInstanceOf(ForbiddenException);
-      const resp = (err as { getResponse(): any }).getResponse();
-      expect(resp.code).toBe(PLATFORM_MCP_ERRORS.FORBIDDEN);
-      expect(resp.message).toContain('未设置');
-      expect(skillsService.create).not.toHaveBeenCalled();
+      const result = await service.skillCreate(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: 'tmm_other',
+        name: 'git-ops',
+        content: skillContent,
+      });
+
+      expect(result).toMatchObject({ enabled: false });
+      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
+      expect(skillsService.create).toHaveBeenCalledTimes(1);
     });
 
     it('冒充（selfInstanceId 非会话成员）→ 403，不触达 create', async () => {

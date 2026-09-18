@@ -117,12 +117,6 @@ import {
 const MESSAGE_ID_PREFIX = 'm';
 
 /**
- * 计划员模板 Agent id（seed.ts 注册，role=plan）：计划起草/修订派发永非
- * “执行”，计划门禁按目标 agentId 豁免（匹配角色身份，不匹配成员别名）。
- */
-const PLAN_AGENT_ID = 'a_plan';
-
-/**
  * notify_agent 内容幂等窗口（notify-dedup A2）：同发送者→同目标、
  * 归一化正文相同且落库时间在窗口内的既有行视为重复发送，直接复用其
  * messageId，不新建行。窗口与节流 pair 窗口同量级（60s），只防抖、
@@ -1584,15 +1578,13 @@ export class PlatformMcpService implements OnModuleInit {
         };
       }
     }
-    // force 是否绕过了计划门禁：审计行需 messageId，故只记标记，落库后补写。
+    // force 是否绕过了计划哈希门禁：审计行需 messageId，故只记标记，落库后补写。
     let forceBypassedPlanGate = false;
-    if (
-      kind === 'execution' &&
-      !isTeam &&
-      effTaskId &&
-      targetAgentId !== PLAN_AGENT_ID
-    ) {
-      const planGate = await this.checkPlanExecutionAllowed(effTaskId);
+    if (kind === 'execution' && !isTeam && effTaskId) {
+      // 计划状态不再作为派发门禁（todo 3）：仅保留计划行兜底创建 + 冻结哈希比对。
+      // a_plan 角色豁免已删除（todo 3）：哈希门禁对每个目标一律生效，否则过期
+      // planHash 可经计划员目标绕过。
+      await this.ensurePlanRowForDispatch(effTaskId);
       const callerHash = normalizePlanHash(args.planHash);
       let staleHash: { expected: string; actual: string } | null = null;
       if (callerHash) {
@@ -1601,13 +1593,11 @@ export class PlatformMcpService implements OnModuleInit {
           staleHash = { expected: expected as string, actual: callerHash };
         }
       }
-      if (!planGate.allowed || staleHash) {
+      if (staleHash) {
         if (!forceReason) {
           const stale = staleHash;
           this.logger.warn(
-            stale
-              ? `[mcp] notify_agent 哈希门禁拦截 task=${effTaskId} expected=${stale.expected} actual=${stale.actual}（未发布）`
-              : `[mcp] notify_agent 计划门禁拦截 task=${effTaskId} status=${planGate.status}（未发布）`,
+            `[mcp] notify_agent 哈希门禁拦截 task=${effTaskId} expected=${stale.expected} actual=${stale.actual}（未发布）`,
           );
           return {
             messageId: null,
@@ -1615,9 +1605,7 @@ export class PlatformMcpService implements OnModuleInit {
             targetInstanceId: args.targetInstanceId,
             triggered: false,
             reason: 'plan-gated',
-            hint: stale
-              ? `${buildStalePlanHashHint(stale.expected, stale.actual)}；${NOTIFY_NOT_PUBLISHED_HINT}`
-              : `计划未放行：当前计划状态为 ${planGate.status}（需 executing，请确认开始执行后再派发；force=true + 原因可绕过并留审计）；${NOTIFY_NOT_PUBLISHED_HINT}`,
+            hint: `${buildStalePlanHashHint(stale.expected, stale.actual)}；${NOTIFY_NOT_PUBLISHED_HINT}`,
             issueBound: !!args.issueId,
           };
         }
@@ -2198,38 +2186,21 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * 计划执行门禁读端（todo4 第一道防线；第二道在 dispatchAgentMention 内）。
-   * 仅 plans.status=executing 放行；无行则兜底建行后再门禁；读错/建行失败/
-   * 未装配即 fail-open + warn（永不转 fail-closed）。计划表读写只经计划生命周期服务。
+   * 计划行兜底建行（原 checkPlanExecutionAllowed 的状态读端）：执行派发前确保 plans 行
+   * 存在（plan_complete → loadWritablePlan 依赖该行；无行则建 draft）。
+   * 计划状态不再作为派发门禁（todo 3）：状态门禁已移除，仅保留行创建副作用；
+   * 读错/建行失败/未装配即 fail-open + warn（永不转 fail-closed）。
    */
-  private async checkPlanExecutionAllowed(
-    taskId: string,
-  ): Promise<{ allowed: boolean; status: string | null }> {
+  private async ensurePlanRowForDispatch(taskId: string): Promise<void> {
     try {
       if (!this.planLifecycle) {
-        return { allowed: true, status: null };
+        return;
       }
-      let status = await this.planLifecycle.getStatus(taskId);
-      if (status === null) {
-        try {
-          const ensured = await this.planLifecycle.autoEnsureRow(taskId);
-          status = ensured?.status ?? null;
-        } catch (err) {
-          this.logger.warn(
-            `[mcp] plans 兜底建行失败 task=${taskId}，fail-open 放行：${err instanceof Error ? err.message : String(err)}`,
-          );
-          return { allowed: true, status: null };
-        }
-      }
-      if (status === null || status === 'executing') {
-        return { allowed: true, status };
-      }
-      return { allowed: false, status };
+      await this.planLifecycle.autoEnsureRow(taskId);
     } catch (err) {
       this.logger.warn(
-        `[mcp] plans 门禁读取失败 task=${taskId}，fail-open 放行：${err instanceof Error ? err.message : String(err)}`,
+        `[mcp] plans 兜底建行失败 task=${taskId}，fail-open 放行：${err instanceof Error ? err.message : String(err)}`,
       );
-      return { allowed: true, status: null };
     }
   }
 
@@ -2941,46 +2912,23 @@ export class PlatformMcpService implements OnModuleInit {
           message: '任务不存在',
         });
       }
-      // 主门唯一依据 task.teamId → team.mainAgentMemberId（对齐 notify/memory 门）。
-      // task.mainAgentInstanceId 是已停写的历史标量：in_progress 任务改主时刻意不同步它，
-      // 读它会把新主误判为「非主」而 403（实测踩坑）。
+      // task_create 不再做「是否主 Agent」的身份门禁：调用方身份由
+      // resolveExecContext（assertWorkerTask，防冒充/跨任务）先行校验，团队成员资格
+      // 由调用方 ROLE 的 toolAllows 授权，建任务目标团队只依据 task.teamId。
+      // task.mainAgentInstanceId 是已停写的历史标量，此处不再读取。
       if (!task.teamId) {
         throw new BadRequestException(
           '当前任务未绑定团队，无法解析建任务目标团队',
         );
       }
-      const gateTeam = await this.prisma.team.findUnique({
-        where: { id: task.teamId },
-        select: { mainAgentMemberId: true },
-      });
-      const taskDimMainId = await this.resolveTeamMainMemberId(
-        task.teamId,
-        gateTeam?.mainAgentMemberId ?? null,
-      );
-      if (taskDimMainId !== exec.callerId) {
-        throw new ForbiddenException({
-          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-          message: `仅主 Agent（${taskDimMainId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`,
-        });
-      }
       teamId = task.teamId;
     } else {
       const team = await this.prisma.team.findUnique({
         where: { id: exec.teamId },
-        select: { id: true, mainAgentMemberId: true },
+        select: { id: true },
       });
       if (!team) {
         throw new NotFoundException('团队不存在');
-      }
-      const taskGateMainId = await this.resolveTeamMainMemberId(
-        team.id,
-        team.mainAgentMemberId ?? null,
-      );
-      if (taskGateMainId !== exec.callerId) {
-        throw new ForbiddenException({
-          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-          message: `仅主 Agent（${taskGateMainId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`,
-        });
       }
       teamId = team.id;
     }
@@ -3028,45 +2976,15 @@ export class PlatformMcpService implements OnModuleInit {
           message: '任务不存在',
         });
       }
-      // 主门唯一依据 task.teamId → team.mainAgentMemberId（同上，不再读已停写的标量）。
-      if (!task.teamId) {
-        throw new ForbiddenException({
-          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-          message:
-            '仅主 Agent（未设置）可沉淀技能；请知会主 Agent 调用 skill_create',
-        });
-      }
-      const skillGateTeam = await this.prisma.team.findUnique({
-        where: { id: task.teamId },
-        select: { mainAgentMemberId: true },
-      });
-      const taskDimSkillMainId = await this.resolveTeamMainMemberId(
-        task.teamId,
-        skillGateTeam?.mainAgentMemberId ?? null,
-      );
-      if (taskDimSkillMainId !== exec.callerId) {
-        throw new ForbiddenException({
-          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-          message: `仅主 Agent（${taskDimSkillMainId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`,
-        });
-      }
+      // skill_create 不做「是否主 Agent」的身份门禁，也不因任务无团队而拒绝：
+      // resolveExecContext（assertWorkerTask）已校验调用方归属；落库不依赖 teamId。
     } else {
       const team = await this.prisma.team.findUnique({
         where: { id: exec.teamId },
-        select: { id: true, mainAgentMemberId: true },
+        select: { id: true },
       });
       if (!team) {
         throw new NotFoundException('团队不存在');
-      }
-      const skillGateMainId = await this.resolveTeamMainMemberId(
-        team.id,
-        team.mainAgentMemberId ?? null,
-      );
-      if (skillGateMainId !== exec.callerId) {
-        throw new ForbiddenException({
-          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-          message: `仅主 Agent（${skillGateMainId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`,
-        });
       }
     }
     const skills = this.skillsService;
@@ -3820,12 +3738,20 @@ export class PlatformMcpService implements OnModuleInit {
       correction: Record<string, unknown>;
     } | null = null;
     try {
-      effectivePermission =
-        (await this.executionPolicyService?.resolveByAgent({
-          policyId: agentPolicyId,
-          role: agentRole,
-          agentKey,
-        })) ?? null;
+      const resolved = await this.executionPolicyService?.resolveByAgent({
+        policyId: agentPolicyId,
+        role: agentRole,
+        agentKey,
+      });
+      effectivePermission = resolved
+        ? {
+            policyId: resolved.policyId,
+            policyName: resolved.policyName,
+            agentName: resolved.agentName,
+            permission: resolved.permission,
+            correction: resolved.correction,
+          }
+        : null;
     } catch {
       effectivePermission = null;
     }
@@ -3847,9 +3773,9 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * 任务团队归属门：任务存在（404 否则）+ 所属团队主成员 id（tmm_，主成员门比较依据）。
-   * 任务无团队/团队无主成员 → 对应 null（调用方按 403 处理）。
-   * 供 team_add_member 等「仅主 Agent 可调」工具复用。
+   * 任务团队归属解析：任务存在（404 否则）+ 所属团队主成员 id（tmm_；teamId 无团队
+   * 或团队无主成员 → 对应 null）。供 team_add_member（仅取 teamId）与 plan_mode
+   * （取 teamId + mainMemberId，缺口由 resolveTeamMainMemberId 回退）复用。
    */
   private async findTaskTeamGate(taskId: string): Promise<{
     teamId: string | null;
@@ -3879,10 +3805,11 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * team_add_member：主 Agent 申请增员（L2 自治确认门，vteam-team-collaboration Todo 8）。
-   * 归属校验 → 仅主成员（team.mainAgentMemberId===selfInstanceId，否则 403）→ 幂等
-   * （已加入 400 / pending 重复申请 409）→ createForPlatform 创建平台确认请求
-   * （question=「是否确认」，options=['确认','拒绝']，content.source='platform'）。
+   * team_add_member：申请增员（L2 自治确认门，vteam-team-collaboration Todo 8）。
+   * 归属校验（assertWorkerTask）→ 任务团队解析（findTaskTeamGate，仅供落库归属与
+   * 幂等判定）→ 幂等（已加入 400 / pending 重复申请 409）→ createForPlatform 创建
+   * 平台确认请求（question=「是否确认」，options=['确认','拒绝']，content.source='platform'）。
+   * 身份门禁（原「仅主成员」403）已移除：调用权限由调用方 ROLE 的 toolAllows 决定。
    * 用户确认后 onResolved 钩子执行 handleTeamAddResolved（校验 + updateTeam + 审计）。
    */
   async teamAddMember(
@@ -3902,14 +3829,7 @@ export class PlatformMcpService implements OnModuleInit {
   }> {
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
 
-    const { teamId: addTeamId, mainMemberId: addMainId } =
-      await this.findTaskTeamGate(args.taskId);
-    if (!addMainId || addMainId !== args.selfInstanceId) {
-      throw new ForbiddenException({
-        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message: `仅主 Agent（${addMainId ?? '未设置'}）可申请增员；请知会主 Agent 调用 team_add_member`,
-      });
-    }
+    const { teamId: addTeamId } = await this.findTaskTeamGate(args.taskId);
 
     const agentRow = await this.prisma.agent.findUnique({
       where: { id: args.agentId },
@@ -3997,11 +3917,15 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * plan_mode：切换任务计划模式开关（仅主 Agent 可调）。
-   * enabled=true → 主 Agent 先出计划文档（写到工作目录 .opencode/plans/ 下），其他成员只评审
-   * 不起草；enabled=false → 直接执行。agentName 可选：同步指定主 Agent 的执行 agent
+   * plan_mode：切换任务计划模式开关。
+   * enabled=true → 计划员先出计划文档（写到工作目录 .opencode/plans/ 下），其他成员只评审
+   * 不起草；enabled=false → 直接执行。agentName 可选：同步指定**团队主成员**的执行 agent
    * （显式名；空串=回跟随默认；不传=保持当前）。agent 名不做存在性强校验（弱校验告警，
    * 执行期由 opencode 报错并经 agent.status error 回流，对齐 teams.updateMember 口径）。
+   * 身份门禁（原「仅主成员」403）已移除：调用权限由调用方 ROLE 的 toolAllows 决定；
+   * 写入目标恒为团队主成员（行为语义是「设置团队的计划执行 agent」，非「设置自己」）。
+   * 团队无主成员时经 resolveTeamMainMemberId 回退首位成员；空名册 → 无目标，
+   * 不写 member 行，只翻转 task.planMode 并回显保持态。
    */
   async planMode(
     ctx: PlatformMcpContext,
@@ -4018,25 +3942,26 @@ export class PlatformMcpService implements OnModuleInit {
   }> {
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
 
-    const { mainMemberId } = await this.findTaskTeamGate(args.taskId);
-    if (!mainMemberId || mainMemberId !== args.selfInstanceId) {
-      throw new ForbiddenException({
-        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message: `仅主 Agent（${mainMemberId ?? '未设置'}）可切换计划模式；请知会主 Agent 调用 plan_mode`,
-      });
-    }
+    const { teamId, mainMemberId } = await this.findTaskTeamGate(args.taskId);
+    // 无团队 → 无目标；有团队但无显式主成员 → seq 升序首位成员回退（与 task_create/
+    // skill_create 同一 helper 口径）。仍无目标（空名册）→ targetMemberId=null，跳过写行。
+    const targetMemberId = teamId
+      ? await this.resolveTeamMainMemberId(teamId, mainMemberId)
+      : null;
 
     let agentName: string | null | undefined;
     if (args.agentName !== undefined) {
       // 空串 → null（回跟随默认）；非空 → 原值透传（弱校验：存在性由执行期裁决）
       agentName = args.agentName?.trim() || null;
-      await this.prisma.teamMember.update({
-        where: { id: mainMemberId },
-        data: { opencodeAgentName: agentName },
-      });
-    } else {
+      if (targetMemberId) {
+        await this.prisma.teamMember.update({
+          where: { id: targetMemberId },
+          data: { opencodeAgentName: agentName },
+        });
+      }
+    } else if (targetMemberId) {
       const row = await this.prisma.teamMember.findUnique({
-        where: { id: mainMemberId },
+        where: { id: targetMemberId },
         select: { opencodeAgentName: true },
       });
       agentName = row?.opencodeAgentName ?? null;
@@ -4057,9 +3982,10 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * plan_complete：标记计划执行完成（executing→completed，仅主 Agent 可调）。
-   * 归属校验 → 仅主成员（team.mainAgentMemberId===selfInstanceId，否则 403）→
-   * PlanLifecycleService.completePlan（仅 executing 可完工，已 completed 幂等返回）。
+   * plan_complete：标记计划执行完成（executing→completed）。
+   * 归属校验（assertWorkerTask）→ PlanLifecycleService.completePlan（仅 executing 可完工，
+   * 已 completed 幂等返回）。身份门禁（原「仅主成员」403）已移除：调用权限由调用方 ROLE
+   * 的 toolAllows 决定。
    */
   async planComplete(
     ctx: PlatformMcpContext,
@@ -4071,14 +3997,6 @@ export class PlatformMcpService implements OnModuleInit {
       throw new ServiceUnavailableException({
         code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_UNAVAILABLE,
         message: '计划服务未装配，暂不可标记完工',
-      });
-    }
-
-    const { mainMemberId } = await this.findTaskTeamGate(args.taskId);
-    if (!mainMemberId || mainMemberId !== args.selfInstanceId) {
-      throw new ForbiddenException({
-        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message: `仅主 Agent（${mainMemberId ?? '未设置'}）可标记计划完工；请知会主 Agent 调用 plan_complete`,
       });
     }
 

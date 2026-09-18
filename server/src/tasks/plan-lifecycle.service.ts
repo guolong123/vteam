@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -476,21 +475,8 @@ export class PlanLifecycleService implements OnModuleInit {
     },
   ): Promise<{ plan: Plan; idempotent: boolean }> {
     const { task, row } = await this.loadWritablePlan(taskId);
-    if (input.instanceId !== undefined && input.instanceId !== null) {
-      const team = task.teamId
-        ? await this.prisma.team.findUnique({
-            where: { id: task.teamId },
-            select: { mainAgentMemberId: true },
-          })
-        : null;
-      const mainMemberId = team?.mainAgentMemberId ?? null;
-      if (!mainMemberId || mainMemberId !== input.instanceId) {
-        throw new ForbiddenException({
-          code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_MAIN_ONLY,
-          message: `仅主实例（${mainMemberId ?? '未设置'}）可标记计划完工；用户路径请经 PM（tasks.review）操作`,
-        });
-      }
-    }
+    // 身份门禁（原「仅主实例可完工」403 PLAN_COMPLETE_MAIN_ONLY）已移除：调用权限
+    // 由调用方 ROLE 的 toolAllows 决定；completePlan 仅保留状态机合法性校验。
     if (row.status === PLAN_LIFECYCLE_STATUS.completed) {
       return { plan: row, idempotent: true };
     }

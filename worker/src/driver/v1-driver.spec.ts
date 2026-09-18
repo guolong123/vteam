@@ -315,7 +315,7 @@ describe('V1Driver.abort / listModels / isHealthy', () => {
     expect(providerCalls).toHaveLength(1);
   });
 
-  it('listModels：GET /provider，有 key 的 provider 模型 + opencode 免费模型上报，无凭据外部 provider 不上报', async () => {
+  it('listModels：GET /provider，上报全部 provider 的 models（含无凭据外部 provider）', async () => {
     mockFetch.mockResolvedValue(
       jsonResponse({
         all: [
@@ -351,11 +351,12 @@ describe('V1Driver.abort / listModels / isHealthy', () => {
       { id: 'opencode-go/deepseek-v4-flash', name: 'DeepSeek V4 Flash', providerID: 'opencode-go', modelID: 'deepseek-v4-flash', status: 'active' },
       { id: 'opencode-go/qwen3.7-plus', name: 'Qwen 3.7 Plus', providerID: 'opencode-go', modelID: 'qwen3.7-plus', status: 'active' },
       { id: 'opencode/deepseek-v4-flash-free', name: 'DeepSeek V4 Flash Free', providerID: 'opencode', modelID: 'deepseek-v4-flash-free', status: 'active' },
+      { id: 'anthropic/claude-3-5-sonnet', name: 'Claude 3.5 Sonnet', providerID: 'anthropic', modelID: 'claude-3-5-sonnet', status: 'active' },
     ]);
     expect(mockFetch.mock.calls[0][0]).toBe('http://127.0.0.1:4199/provider');
   });
 
-  it('listModels：/provider models 项缺 name 用 modelID 兜底；key 空串视为无凭据不收集', async () => {
+  it('listModels：/provider models 项缺 name 用 modelID 兜底；全部 provider 均收集', async () => {
     mockFetch.mockResolvedValue(
       jsonResponse({
         all: [
@@ -375,6 +376,7 @@ describe('V1Driver.abort / listModels / isHealthy', () => {
     const driver = newDriver();
     const models = await driver.listModels();
     expect(models).toEqual([
+      { id: 'opencode-go/glm-5.1', name: 'glm-5.1', providerID: 'opencode-go', modelID: 'glm-5.1', status: 'active' },
       { id: 'ollama-local/qwen3.5', name: 'qwen3.5', providerID: 'ollama-local', modelID: 'qwen3.5', status: 'active' },
     ]);
   });

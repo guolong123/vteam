@@ -1,0 +1,19 @@
+=== V8. git diff execution-policy.service.ts (payload emission) — NON-serverGated lines must be absent ===
+-  ROLE_SERVER_GATED_TOOLS,
+- * - `serverGated`：主实例专属工具（`ROLE_SERVER_GATED_TOOLS` 拷贝，API/UI 展示用，不进 worker wire 格式）；
++ * - `serverGated`：**恒为空数组**（保留仅为兼容既有 API/测试消费方）。工具权限唯一来源为
++ *   角色 `toolAllows`（worker guard 层②），服务端不再按主实例身份做工具级判定；
++ *   该字段直接发射空字面量，任何非空值都表示回归了已删除的服务端身份门。
+-  /** 主实例专属工具（API/UI 展示用；不进 worker wire 格式的 guard.roles）。 */
++  /**
++   * 工具权限恒由角色 `toolAllows` 决定（worker guard 层②）；服务端身份门已删除，
++   * 本字段恒为空（API/UI 展示用；不进 worker wire 格式的 guard.roles）。
++   */
++  /** 恒为空数组（保留仅为兼容既有 API/测试消费方；见 ResolvedExecutionPolicy.serverGated）。 */
+-    serverGated: [...ROLE_SERVER_GATED_TOOLS],
++    // 恒为空：无工具再由服务端按主实例身份门控（server-gate-removal-tool-authority）。
++    serverGated: [],
+-        serverGated: resolved.serverGated,
++        serverGated: [],
+-      serverGated: [...ROLE_SERVER_GATED_TOOLS],
++      serverGated: [],

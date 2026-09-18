@@ -20,6 +20,10 @@ import { SkillsService } from '../skills/skills.service';
 import { GitReposService } from '../git-repos/git-repos.service';
 import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
 import { RECEIPT_NUDGE_KIND } from '../chat/receipt-nudge.handler';
+import {
+  createLedger,
+  embedLedger,
+} from '../issues/review-round-ledger';
 
 describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudge-consumer）', () => {
   let service: PlatformMcpService;
@@ -331,12 +335,32 @@ describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudg
     expect(payload).toMatchObject({ receiptId: 'mr_exist' });
   });
 
-  it('门禁拦截（plan-gated）→ 不落库不记账不排期（只在真实分派后排）', async () => {
-    planLifecycle.getStatus.mockResolvedValue('draft');
+  it('哈希门禁拦截（plan-gated）→ 不落库不记账不排期（只在真实分派后排）', async () => {
+    prisma.issue = {
+      findUnique: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([
+        {
+          description: embedLedger(
+            '派发评审',
+            createLedger({
+              round: 1,
+              planVersion: { version: 'v0.1', lines: 10, hash: 'expected1' },
+              expected: ['tmm_tester'],
+              status: 'complete',
+              timeoutAt: '2026-09-16T00:40:00Z',
+            }),
+          ),
+        },
+      ]),
+    } as never;
 
-    const result = await service.notifyAgent(ctx, baseArgs);
+    const result = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      planHash: 'stalexyz',
+    });
 
     expect(result.triggered).toBe(false);
+    expect(result.reason).toBe('plan-gated');
     expect(result.messageId).toBeNull();
     expect(prisma.message.create).not.toHaveBeenCalled();
     expect(prisma.messageReceipt.create).not.toHaveBeenCalled();

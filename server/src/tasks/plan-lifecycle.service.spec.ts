@@ -623,7 +623,7 @@ describe('PlanLifecycleService', () => {
       });
     });
 
-    it('主实例路径：instanceId=主成员→放行；不一致→403 精确码 PLAN_COMPLETE_MAIN_ONLY', async () => {
+    it('agent 路径不再按主实例身份鉴权：instanceId 任意值均放行（原 403 已移除）', async () => {
       prisma.plan.findUnique.mockResolvedValue({ status: 'executing' });
       prisma.plan.update.mockResolvedValue({ status: 'completed' });
 
@@ -634,12 +634,27 @@ describe('PlanLifecycleService', () => {
         }),
       ).resolves.toMatchObject({ plan: { status: 'completed' } });
 
+      await expect(
+        service.completePlan('t_1', {
+          userId: 'w_1',
+          instanceId: 'tmm_dev',
+        }),
+      ).resolves.toMatchObject({ plan: { status: 'completed' } });
+    });
+
+    it('PLAN_COMPLETE_MAIN_ONLY 常量仍在代码中声明，但 completePlan 不再抛出它', async () => {
+      prisma.plan.findUnique.mockResolvedValue({ status: 'executing' });
+      prisma.plan.update.mockResolvedValue({ status: 'completed' });
+
       const err = await service
         .completePlan('t_1', { userId: 'w_1', instanceId: 'tmm_dev' })
-        .catch((e) => e);
-      expect(err?.status ?? err?.getStatus?.()).toBe(403);
-      expect(err?.response?.code ?? err?.code).toBe(
-        PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_MAIN_ONLY,
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeNull();
+      expect(PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_MAIN_ONLY).toBe(
+        'PLAN_COMPLETE_MAIN_ONLY',
       );
     });
 

@@ -1,0 +1,197 @@
+# task-5 evidence — DB backfill of built-in policy allowlists
+
+Plan: `server-gate-removal-tool-authority`, todo 5
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Base commit: 029bc2e (todo 1 map landed). Lanes A/B edits are UNCOMMITTED and were NOT touched by this task.
+
+## Added file (this task's only source change)
+
+- `server/prisma/migrations/20260919000006_backfill_builtin_policy_allowlists/migration.sql`
+  - sha256 `11087f4ba81895cea688e866d54dfc92042746037523fdd544170733e17b84c0`
+  - 121 lines, 7 `UPDATE` statements, 0 DELETE/INSERT/DROP/ALTER (only comment mentions DELETE).
+  - Prisma record checksum `11087f4b…` — matches the file hash exactly.
+
+NOT touched (other lanes own these): `agent.constants.ts`, `worker/**`, `platform-mcp.service.ts`,
+`tasks.service.ts`, `questions.service.ts`, `worker-dispatcher.ts`, `seed.ts`, any spec.
+No commit was made.
+
+## Approach: pure SQL (no helper script)
+
+Chosen because the target values are a one-shot snapshot of the lane-A constants, and the
+row predicate is expressible as a key-order-insensitive JSON comparison. A Node/ts helper
+was evaluated and rejected: it would need `ts-node` + `@prisma/client` at deploy time
+(the compose runner image ships only compiled `dist/`), whereas the pure-SQL migration is
+applied by `prisma migrate deploy` on every fresh deploy and every existing install, and
+is self-contained in the SQL runner.
+
+The exact target literals were GENERATED from the uncommitted constants via
+`resolveConstantPolicySource(role)` (the same function `seed.ts` mirrors), not hand-typed.
+A later `diff` regeneration confirmed the file still byte-matches the current constants
+(no drift from concurrent lane edits) — see "Anti-drift re-derivation" below.
+
+## The backfill predicate (exact)
+
+Per built-in id (7): `ep_product, ep_architect, ep_developer, ep_tester,
+ep_project_manager, ep_plan, ep_librarian`:
+
+```sql
+WHERE id = '<id>'
+  AND (
+    NOT (JSON_EXTRACT(config, '$.tools')      <=> CAST('<target tools>' AS JSON))
+    OR
+    NOT (JSON_EXTRACT(config, '$.permission') <=> CAST('<target permission>' AS JSON))
+  )
+```
+
+`<=>` is MySQL's NULL-safe equal; for two JSON values it compares semantically and is
+key-order insensitive (verified: reordered object `{"a":1,"b":2}` <=> `{"b":2,"a":1}` = 1;
+nested `edit` map reordered = 1). `JSON_SET(config, '$.tools', …, '$.permission', …)`
+rewrites ONLY those two fields, preserving `correction`/`description`/any other config key.
+The UPDATE only fires when at least one of the two fields already differs — so a re-run
+matches 0 rows. The WHERE also pins the 7 built-in ids exactly, so the user-authored
+`ep_0000000001` (and any other custom row) can never be matched.
+
+## VERIFY 1 — `prisma migrate deploy` on the real DB
+
+No host port was mapped for the compose MySQL. A throwaway socat sidecar published the
+compose DB on 127.0.0.1:33306 (removed afterwards); all deploy/verify commands ran the
+host Prisma/ts-node against the REAL live `aiagents` DB with 58 pre-existing migrations
+and real seed rows.
+
+Command:
+```
+docker run -d --name sgrta-dbproxy --network aiagents_aiagents-net -p 33306:3306 \
+  alpine/socat tcp-listen:3306,fork,reuseaddr tcp:db:3306
+cd server && DATABASE_URL="mysql://root:aiagents-root@127.0.0.1:33306/aiagents" npx prisma migrate deploy
+```
+Result (verbatim excerpt):
+```
+59 migrations found in prisma/migrations
+Applying migration `20260919000006_backfill_builtin_policy_allowlists`
+The following migration(s) have been applied:
+migrations/
+  └─ 20260919000006_backfill_builtin_policy_allowlists/
+    └─ migration.sql
+All migrations have been successfully applied.
+```
+
+Fresh-DB path (acceptance: succeeds on a fresh DB too): a new empty database
+`aiagents_task5fresh` was created and `migrate deploy` applied all 59 migrations including
+this one; the migration is recorded `finished_at IS NOT NULL`. `execution_policies` count
+= 0 (data-only migration; factory values are created by `seed.ts` on a fresh install).
+The scratch DB was dropped afterwards.
+
+## VERIFY 2 — DB row deep-equals constant-derived allowlist (both fields)
+
+Throwaway host verifier (deleted after use) called the REAL exported resolution functions
+`resolveBuiltinPolicy` (the `/agent-policies` path) and `resolveGuardTools` (the
+`resolveByAgent`/`guardForAgent` path) with the live DB row's config, and deep-compared
+against `ROLE_BOUNDARIES[name].toolAllows` and `buildRolePermission(name)`; it also
+compared the raw stored `config.tools`/`config.permission` to the constants.
+
+Command:
+```
+cd server && DATABASE_URL="mysql://root:aiagents-root@127.0.0.1:33306/aiagents" \
+  node -r ts-node/register verify-task5.tmp.js   # temp file, deleted
+```
+Result (verbatim):
+```
+PASS ep_product           tools(resolved==const)=true tools(guard==const)=true perm(resolved==const)=true rawTools==const=true rawPerm==const=true [tools=27 perm=7]
+PASS ep_architect         tools(resolved==const)=true tools(guard==const)=true perm(resolved==const)=true rawTools==const=true rawPerm==const=true [tools=23 perm=16]
+PASS ep_developer         tools(resolved==const)=true tools(guard==const)=true perm(resolved==const)=true rawTools==const=true rawPerm==const=true [tools=27 perm=14]
+PASS ep_tester            tools(resolved==const)=true tools(guard==const)=true perm(resolved==const)=true rawTools==const=true rawPerm==const=true [tools=25 perm=15]
+PASS ep_project_manager   tools(resolved==const)=true tools(guard==const)=true perm(resolved==const)=true rawTools==const=true rawPerm==const=true [tools=27 perm=6]
+PASS ep_plan              tools(resolved==const)=true tools(guard==const)=true perm(resolved==const)=true rawTools==const=true rawPerm==const=true [tools=12 perm=22]
+PASS ep_librarian         tools(resolved==const)=true tools(guard==const)=true perm(resolved==const)=true rawTools==const=true rawPerm==const=true [tools=16 perm=24]
+EQUALITY: ALL PASS
+```
+
+## VERIFY 3 — idempotency proof (two independent records)
+
+(a) Row-hash stability. Hashes of `MD5(CAST(config AS CHAR))` for all 8 rows before and
+after a raw re-run of `migration.sql` are identical (`diff` empty → "NO DIFF").
+
+(b) Per-statement `ROW_COUNT()`. The migration's 7 UPDATEs were re-run with a
+`SELECT ROW_COUNT()` after each; the data was already backfilled, so:
+```
+ep_product          rows_affected=0
+ep_architect        rows_affected=0
+ep_developer        rows_affected=0
+ep_tester           rows_affected=0
+ep_project_manager  rows_affected=0
+ep_plan             rows_affected=0
+ep_librarian        rows_affected=0
+```
+Second run changes nothing. (`updated_at` is application-side `@updatedAt`, not a DB
+trigger, so raw SQL does not bump it; idempotency is therefore proven by the row hash
+and by `ROW_COUNT`, not by `updated_at`.)
+
+## VERIFY 4 — mutation check (stale row must fail)
+
+The exact pre-migration `ep_product` config was reconstructed from `HEAD`'s constants
+(`git show HEAD:server/src/common/constants/agent.constants.ts` → old
+`toolAllows` 22 keys + `buildRolePermission` 5 keys) and injected via `JSON_SET`,
+preserving `correction`/`description`.
+
+- Stale row hash after injection: `53b8f41ccbaea3531ab19d5f453e3f92` — byte-identical to
+  the recorded pre-migration hash in before.txt, confirming a faithful mutation.
+- Equality verifier output (verbatim, exit 1):
+```
+FAIL ep_product           tools(resolved==const)=false tools(guard==const)=false perm(resolved==const)=false rawTools==const=false rawPerm==const=false [tools=22 perm=5]
+  resolved.tools = {...22 keys, missing vteam_task_create/transition/plan_mode/team_add_member/question_confirm...}
+  const.tools    = {...27 keys including the 5 newly granted...}
+  resolved.perm  = {...5 keys, missing vteam_plan_complete/vteam_skill_create deny...}
+  const.perm     = {...7 keys...}
+PASS ep_architect … (other 6 unchanged)
+EQUALITY: FAILURE
+EXIT=1
+```
+- Restore: re-applied `migration.sql` (the same idempotent predicate). Hash returned to
+  `04499438999f0e385f999f5375802024`; verifier returned `EQUALITY: ALL PASS`.
+
+## Adversarial classes
+
+### stale_state — PASS
+Did not trust the migration exit code. Queried the rows directly before/after and recorded
+hashes + `JSON_LENGTH`:
+```
+before: ep_product tools_n=22 perm_n=5  hash=53b8f41c…
+after : ep_product tools_n=27 perm_n=7  hash=04499438…
+```
+All 7 roles' hashes changed; `ep_0000000001` hash unchanged
+(`38b29dee516ac6950834fff2837d7ccc` before and after). `correction` still present
+(`JSON_CONTAINS_PATH(config,'one','$.correction')=1`, scopeSummary length 53).
+
+### misleading_success_output — PASS
+The equality test does not assert "migration ran". It reads the live DB row, runs the real
+`resolveBuiltinPolicy`/`resolveGuardTools` code paths, and deep-compares resolved values
+against the constant-derived authority for BOTH `tools` and `permission`. The mutation run
+proves the test is falsifiable: with a stale row it printed FAIL and exited 1.
+
+### dirty_worktree — PASS (see listed set)
+`git status --short` shows the migration directory as untracked. Other entries belong to
+pre-existing/concurrent lanes and were NOT created by this task. My added path:
+`server/prisma/migrations/20260919000006_backfill_builtin_policy_allowlists/`.
+
+## Anti-drift re-derivation
+After other lanes continued editing concurrently, the generator was re-run against the
+current constants and the output was `diff`ed against the checked-in migration: IDENTICAL
+(tools/perm counts 27/7, 23/16, 27/14, 25/15, 27/6, 12/22, 16/24). The frozen literals
+therefore still equal the lane-A grant matrix.
+
+## Constraint compliance
+- BOTH `config.tools` and `config.permission` rewritten: yes (VERIFY 2).
+- Idempotent: yes (VERIFY 3).
+- Does not touch user-authored custom rows: `ep_0000000001` hash unchanged; WHERE pins 7 ids.
+- Does not drop/recreate rows: only `UPDATE`; no DDL.
+- Does not rewrite unrelated config fields: only `$.tools`/`$.permission` via `JSON_SET`;
+  `correction` preserved.
+- Not reliant on `seed.ts`: it is a migration applied by `prisma migrate deploy`, including
+  on existing installs where seed's `update: {}` is create-if-absent.
+- Live DB reachable: YES (compose MySQL via temporary socat proxy on 127.0.0.1:33306).
+
+## Cleanup receipt
+- socat proxy `sgrta-dbproxy` removed; scratch DB `aiagents_task5fresh` dropped.
+- Host temp verifier `server/verify-task5.tmp.js` deleted.
+- Temp files live only under `/var/folders/.../T/opencode/sgrta-task5/` (outside the repo).
+- No commit made.
